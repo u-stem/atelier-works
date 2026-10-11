@@ -8,7 +8,7 @@ import {
 } from "./guards/workItemDetail.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
-/** 詳細を取り直さない間隔。状態は進むが、開いたまま追うのは再読み込みに任せる。 */
+/** 詳細を取り直さない間隔。状態は進むが、開いたまま追うのは画面の更新ボタンに任せる。 */
 const WORK_ITEM_DETAIL_STALE_MS = 30_000;
 
 export function workItemDetailQueryKey(
@@ -60,7 +60,7 @@ export async function fetchWorkItemDetail(
   return result.value;
 }
 
-/** 作業項目の詳細を取る。自動では取り直さず、画面の再読み込みで取り直す。 */
+/** 作業項目の詳細を取る。自動では取り直さず、画面の更新ボタンで取り直す。 */
 export function useWorkItemDetail(
   workItemId: number,
 ): UseQueryResult<WorkItemDetail | null, Error> {

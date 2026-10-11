@@ -4,14 +4,14 @@ on:
   push:
     # `main`へのpushだけで動かす。ほかのブランチはPRの実行が検査する。
     # タグのpushでは動かさない。`main`という名前のタグで動くと、その実行が
-    # console_fetcherから「mainの最新の成功した実行」に見え、取り込みが止まる。
+    # `scope`ジョブから「mainの最新の成功した実行」に見え、差分の基点を誤る。
     branches: [main]
   # PRはパスで絞らない。lint:docs、文書を読むテスト、docs:gen --check、gitleaksが、
   # `docs/`や`.github/`の文書とテンプレートも対象にするため。
   pull_request:
 
 # 同じ参照の古いPRの実行は止める。`main`の実行は止めず、待機中の取り消しも起こさない。
-# `main`の実行を止めると、console_fetcherが取り込む成功した実行が欠けるため。
+# `main`の実行を止めると、そのcommitの検査が終わらないまま残るため。
 # `main`の実行は実行ごとに別のグループにする。
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -270,10 +270,10 @@ jobs:
         run: mise exec -- docker compose down -v
 
   console:
-    # Consoleを組み立て、mainへのpushのときだけ成果物にする。
-    # console_fetcherは、このワークフロー全体が成功した実行の成果物だけを取り込む。
+    # Consoleを組み立てられることを、PRで確かめる。配布物は上げない。
+    # 配布物を上げるのは`console-dist.yml`だけである。
+    # 手順は`console-dist.yml`と同じ(一致はテストが確かめる)ので、draw.ioのビューアの取得も組み立てと同じに確かめる。
     # 型検査、lint、テストは`check`ジョブの`mise run check`(console:check)が担う。
-    # mainへのpushでは、`scope`ジョブが常に動かす。成果物を毎回上げるため。
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.console != 'false' }}
     runs-on: ubuntu-latest
@@ -340,17 +340,6 @@ jobs:
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: bun run --cwd console write-manifest dist "$SOURCE_SHA"
-
-      - name: Upload the console build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: console-dist
-          path: console/dist/
-          retention-days: 30
-          if-no-files-found: error
-          # 同じ実行の「Re-run all jobs」で上げ直しても、名前の衝突で失敗しないようにする。
-          overwrite: true
 
   caddyfile:
     # Caddyfileを、composeで使うのと同じイメージで検証し、実際に起動して拒否の規則を確かめる。

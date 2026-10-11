@@ -1,23 +1,15 @@
 import { ArrowLeft } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { useAuditDoc } from "../../api/auditQueries.ts";
-import {
-  ApiFailure,
-  describeApiError,
-  isBannerError,
-} from "../../api/errors.ts";
+import { isBannerError } from "../../api/errors.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { ComingSoon } from "../../components/ComingSoon.tsx";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
-import { Button } from "../../components/ui/button.tsx";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { auditProposalTotal, auditReportTitle } from "../../lib/auditView.ts";
 import { workItemRef, workItemStatusLabel } from "../../lib/labels.ts";
+import { apiErrorOf } from "../../lib/queryFailureView.ts";
 import { parseIdParam } from "../../lib/routeParams.ts";
 import { AuditMarkdown } from "./AuditMarkdown.tsx";
 
@@ -35,7 +27,7 @@ function BackToList() {
 
 function Loading() {
   return (
-    <div className="space-y-3 px-8 py-6" role="status">
+    <div className="space-y-3 px-4 py-6 md:px-8" role="status">
       <span className="sr-only">読み込み中</span>
       <Skeleton className="h-8 w-1/2" />
       <Skeleton className="h-4 w-full max-w-3xl" />
@@ -78,8 +70,7 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
   }
 
   if (query.isError) {
-    const apiError =
-      query.error instanceof ApiFailure ? query.error.apiError : null;
+    const apiError = apiErrorOf(query.error);
     return (
       <>
         <PageHeader
@@ -94,19 +85,11 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
               ログインすると、監査レポートを表示します。
             </p>
           ) : (
-            <Alert variant="destructive">
-              <AlertTitle>監査レポートを取得できませんでした</AlertTitle>
-              <AlertDescription>
-                <p>
-                  {apiError === null
-                    ? "原因は不明です。"
-                    : describeApiError(apiError)}
-                </p>
-                <Button size="sm" variant="outline" onClick={refresh.onRefresh}>
-                  もう一度取得する
-                </Button>
-              </AlertDescription>
-            </Alert>
+            <QueryFailureAlert
+              title="監査レポートを取得できませんでした"
+              error={query.error}
+              onRetry={refresh.onRefresh}
+            />
           )}
         </div>
       </>
@@ -139,8 +122,8 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
       >
         <BackToList />
       </PageHeader>
-      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-        <article className="max-w-3xl rounded-xl border border-border bg-card px-8 py-6 text-body">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
+        <article className="max-w-3xl rounded-xl border border-border bg-card px-4 py-6 text-body md:px-8">
           <AuditMarkdown markdown={doc.markdown} />
         </article>
       </div>

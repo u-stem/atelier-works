@@ -1,15 +1,7 @@
 import { LogIn } from "lucide-react";
-import {
-  ApiFailure,
-  describeApiError,
-  isBannerError,
-} from "../../api/errors.ts";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
-import { Button } from "../../components/ui/button.tsx";
+import { isBannerError } from "../../api/errors.ts";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
+import { apiErrorOf } from "../../lib/queryFailureView.ts";
 
 /**
  * 取得に失敗して表示できるデータが無いときの表示。
@@ -31,7 +23,7 @@ export function QueryFailure({
   /** 画面の一部の節に出すときは真にする。画面全体を占めず、ログインの案内も文だけにする。 */
   compact?: boolean;
 }) {
-  const apiError = error instanceof ApiFailure ? error.apiError : null;
+  const apiError = apiErrorOf(error);
   if (apiError !== null && isBannerError(apiError)) {
     if (compact) {
       return <p className="text-small text-muted-foreground">{loginHint}</p>;
@@ -47,17 +39,7 @@ export function QueryFailure({
     );
   }
   const alert = (
-    <Alert variant="destructive">
-      <AlertTitle>{title}</AlertTitle>
-      <AlertDescription>
-        <p>
-          {apiError === null ? "原因は不明です。" : describeApiError(apiError)}
-        </p>
-        <Button size="sm" variant="outline" onClick={onRetry}>
-          もう一度取得する
-        </Button>
-      </AlertDescription>
-    </Alert>
+    <QueryFailureAlert title={title} error={error} onRetry={onRetry} />
   );
   return compact ? alert : <div className="p-8">{alert}</div>;
 }

@@ -1,5 +1,5 @@
 // 書き込みが成功したときに画面へ出す知らせ(トースト)の文。
-// 失敗の文は`describeApiError`が作るので、ここでは作らない。
+// 失敗の文は`describeWriteFailure`が作るので、ここでは作らない。
 
 import type {
   ApprovalDecideResult,

@@ -6,7 +6,12 @@ import {
   noticeSeverityLabel,
   noticeTargets,
   SUMMARY_MESSAGE_LIMIT,
+  shortSha,
+  splitNoticeMessage,
 } from "./noticeView.ts";
+
+const FULL_SHA = "0123456789abcdef0123456789abcdef01234567";
+const OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98";
 
 function notice(overrides: Partial<SummaryNotice> = {}): SummaryNotice {
   return {
@@ -38,8 +43,14 @@ describe("noticeSeverityLabel", () => {
 describe("noticeTargets", () => {
   test("reads a target at the start of the body", () => {
     expect(noticeTargets("o/r#12 (work item 3): reason")).toEqual([
-      { label: "o/r#12", url: "https://github.com/o/r/issues/12" },
+      { label: "o/r#12", url: "https://github.com/o/r/issues/12", index: 0 },
     ]);
+  });
+
+  test("records where each target first appears", () => {
+    expect(
+      noticeTargets("b/y#2 then a/x#1 and b/y#2").map((target) => target.index),
+    ).toEqual([0, 11]);
   });
 
   test("reads a target in the middle of the body", () => {
@@ -81,12 +92,6 @@ describe("noticeTargets", () => {
 describe("describeNotice", () => {
   test("titles the notice with the Japanese kind label", () => {
     expect(describeNotice(notice()).title).toBe("データベースの掃除の失敗");
-  });
-
-  test("labels the severity", () => {
-    expect(describeNotice(notice({ severity: "info" })).severityLabel).toBe(
-      "情報",
-    );
   });
 
   test("lets an unresolved resolvable notice be resolved", () => {
@@ -145,7 +150,9 @@ describe("describeNotice", () => {
   test("lists the targets named in the body", () => {
     expect(
       describeNotice(notice({ message: "o/r#5 (work item 2): x" })).targets,
-    ).toEqual([{ label: "o/r#5", url: "https://github.com/o/r/issues/5" }]);
+    ).toEqual([
+      { label: "o/r#5", url: "https://github.com/o/r/issues/5", index: 0 },
+    ]);
   });
 });
 
@@ -213,5 +220,101 @@ describe("describeNotice for a cut body", () => {
         (target) => target.label,
       ),
     ).toEqual(["o/r#12"]);
+  });
+});
+
+describe("shortSha", () => {
+  test("keeps the first seven characters", () => {
+    expect(shortSha(FULL_SHA)).toBe("0123456");
+  });
+});
+
+describe("splitNoticeMessage", () => {
+  test("leaves a body without a version as one text part", () => {
+    expect(splitNoticeMessage("disk full")).toEqual([{ text: "disk full" }]);
+  });
+
+  test("shortens a full version and keeps the full one", () => {
+    expect(splitNoticeMessage(`deployed(${FULL_SHA}) is behind`)).toEqual([
+      { text: "deployed(" },
+      { text: "0123456", sha: FULL_SHA },
+      { text: ") is behind" },
+    ]);
+  });
+
+  test("does not shorten a hex run longer than a version", () => {
+    expect(splitNoticeMessage(`${FULL_SHA}0`)).toEqual([
+      { text: `${FULL_SHA}0` },
+    ]);
+  });
+
+  test("does not shorten a hex run shorter than a version", () => {
+    expect(splitNoticeMessage("abcdef0")).toEqual([{ text: "abcdef0" }]);
+  });
+
+  test("does not take a version that touches the cut end of the body", () => {
+    expect(splitNoticeMessage(`deployed(${FULL_SHA}`, true)).toEqual([
+      { text: `deployed(${FULL_SHA}` },
+    ]);
+  });
+
+  test("takes a version that ends before the cut end of the body", () => {
+    expect(
+      splitNoticeMessage(`deployed(${FULL_SHA}) is`, true).map(
+        (part) => part.sha,
+      ),
+    ).toEqual([undefined, FULL_SHA, undefined]);
+  });
+
+  test("takes a version at the end of a body that is read in full", () => {
+    expect(
+      splitNoticeMessage(`deployed(${FULL_SHA}`, false).map((part) => part.sha),
+    ).toEqual([undefined, FULL_SHA]);
+  });
+});
+
+describe("describeNotice versions in a cut body", () => {
+  test("does not list a version at the cut end of the summary body", () => {
+    const message = `${"x ".repeat((SUMMARY_MESSAGE_LIMIT - 40) / 2)}${FULL_SHA}`;
+    expect(describeNotice(notice({ message })).shas).toEqual([]);
+  });
+
+  test("lists the same version when the body is read in full", () => {
+    const message = `${"x ".repeat((SUMMARY_MESSAGE_LIMIT - 40) / 2)}${FULL_SHA}`;
+    expect(describeNotice(notice({ message }), "full").shas).toEqual([
+      FULL_SHA,
+    ]);
+  });
+});
+
+describe("describeNotice versions", () => {
+  test("lists each version once, in order of appearance", () => {
+    const message = `${OTHER_SHA} then ${FULL_SHA} ${OTHER_SHA}`;
+    expect(describeNotice(notice({ message })).shas).toEqual([
+      OTHER_SHA,
+      FULL_SHA,
+    ]);
+  });
+
+  test("has no version for an ordinary body", () => {
+    expect(describeNotice(notice()).shas).toEqual([]);
+  });
+
+  test("splits the displayed body into parts", () => {
+    expect(
+      describeNotice(notice({ message: `v ${FULL_SHA}` })).messageParts,
+    ).toEqual([{ text: "v " }, { text: "0123456", sha: FULL_SHA }]);
+  });
+});
+
+describe("describeNotice badge", () => {
+  test("merges the kind and the severity of an action notice", () => {
+    expect(describeNotice(notice()).badgeLabel).toBe("要対応の通知");
+  });
+
+  test("merges the kind and the severity of an info notice", () => {
+    expect(describeNotice(notice({ severity: "info" })).badgeLabel).toBe(
+      "情報の通知",
+    );
   });
 });

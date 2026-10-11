@@ -1,13 +1,12 @@
 import { TriangleAlert } from "lucide-react";
-import { ApiFailure, describeApiError } from "../../api/errors.ts";
 import type { IntakeSnapshot } from "../../api/guards/intakeSnapshot.ts";
 import { useIntakeSnapshot } from "../../api/queries.ts";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import {
   Alert,
   AlertDescription,
   AlertTitle,
 } from "../../components/ui/alert.tsx";
-import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 
@@ -16,7 +15,7 @@ export type IntakeSnapshotViewState =
   | { readonly status: "loading" }
   | {
       readonly status: "error";
-      readonly message: string;
+      readonly error: unknown;
       readonly onRetry: () => void;
     }
   | { readonly status: "empty" }
@@ -124,15 +123,11 @@ export function IntakeSnapshotView({
         </div>
       ) : state.status === "error" ? (
         <div className="px-5 py-4">
-          <Alert variant="destructive">
-            <AlertTitle>取り込み時点のIssueを取得できませんでした</AlertTitle>
-            <AlertDescription>
-              <p>{state.message}</p>
-              <Button size="sm" variant="outline" onClick={state.onRetry}>
-                もう一度取得する
-              </Button>
-            </AlertDescription>
-          </Alert>
+          <QueryFailureAlert
+            title="取り込み時点のIssueを取得できませんでした"
+            error={state.error}
+            onRetry={state.onRetry}
+          />
         </div>
       ) : state.status === "empty" ? (
         <p className="px-5 py-4 text-small text-muted-foreground">
@@ -154,8 +149,6 @@ export function IntakeSnapshotPanel({
   approvalRequestId: number;
 }) {
   const snapshot = useIntakeSnapshot(workItemId, approvalRequestId);
-  const error = snapshot.error;
-  const apiError = error instanceof ApiFailure ? error.apiError : null;
   if (snapshot.isPending) {
     return <IntakeSnapshotView state={{ status: "loading" }} />;
   }
@@ -164,8 +157,7 @@ export function IntakeSnapshotPanel({
       <IntakeSnapshotView
         state={{
           status: "error",
-          message:
-            apiError === null ? "原因は不明です。" : describeApiError(apiError),
+          error: snapshot.error,
           onRetry: () => {
             void snapshot.refetch();
           },

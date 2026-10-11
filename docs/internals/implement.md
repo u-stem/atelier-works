@@ -536,7 +536,7 @@ CIは、人のレビューより前に、Claudeが書いたコードをそのリ
 
 | 種類 | 加えるもの |
 | --- | --- |
-| ディレクトリ | `.github/`全体(PR修正の`.github/workflows/`を広げる)、`infra/`、`.husky/`、`.githooks/`、`.yarn/`、`.devcontainer/` |
+| ディレクトリ | `.github/`全体(PR修正の`.github/workflows/`と`.github/actions/`を広げる)、`infra/`、`.husky/`、`.githooks/`、`.yarn/`、`.devcontainer/` |
 | 環境とgitleaks | `.env`と`.env.*`、`.gitleaksignore`、`.gitleaks.toml` |
 | ランタイムのバージョン | `.tool-versions`、`.node-version`などの`.*-version`、`.nvmrc`、`rust-toolchain` |
 | パッケージマネージャー | `.yarnrc`、`.pnpmfile.cjs`、JavaScriptのlockfile、すべての`package.json` |

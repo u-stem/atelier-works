@@ -4,8 +4,15 @@ import { createHash } from "node:crypto";
 import { isSafeReleasePath } from "./zip.ts";
 
 export const ARTIFACT_NAME = "console-dist";
-export const WORKFLOW_FILE = "ci.yml";
-export const WORKFLOW_PATH = ".github/workflows/ci.yml";
+// 配布物を上げるのは、このワークフローだけにする。
+// ci.ymlのほかのジョブも同名の成果物を上げられるので、取得元をこのワークフローの実行に限る。
+export const WORKFLOW_FILE = "console-dist.yml";
+export const WORKFLOW_PATH = ".github/workflows/console-dist.yml";
+export const WORKFLOW_NAME = "Console dist";
+// 検査の結果を確かめるワークフロー。配布物のcommitは、ここも成功していなければ取り込まない。
+export const CI_WORKFLOW_FILE = "ci.yml";
+export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+export const CI_WORKFLOW_NAME = "CI";
 export const RELEASE_BRANCH = "main";
 export const MANIFEST_FILE = "manifest.json";
 export const HISTORY_LIMIT = 20;
@@ -96,6 +103,7 @@ export type WorkflowRun = {
   readonly event: string;
   readonly status: string | null;
   readonly conclusion: string | null;
+  readonly name: string;
   readonly path: string;
   readonly createdAt: string;
 };
@@ -110,11 +118,12 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] | null {
   const runs: WorkflowRun[] = [];
   for (const item of body.workflow_runs) {
     if (!isRecord(item)) continue;
-    const { id, head_sha, event, path, created_at } = item;
+    const { id, head_sha, event, name, path, created_at } = item;
     if (
       typeof id !== "number" ||
       typeof head_sha !== "string" ||
       typeof event !== "string" ||
+      typeof name !== "string" ||
       typeof path !== "string" ||
       typeof created_at !== "string"
     ) {
@@ -127,6 +136,7 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] | null {
       event,
       status: nullableString(item.status),
       conclusion: nullableString(item.conclusion),
+      name,
       path,
       createdAt: created_at,
     });
@@ -134,38 +144,56 @@ export function parseWorkflowRuns(body: unknown): WorkflowRun[] | null {
   return runs;
 }
 
+function isReleaseRun(run: WorkflowRun, path: string, name: string): boolean {
+  return (
+    run.event === "push" &&
+    run.headBranch === RELEASE_BRANCH &&
+    run.status === "completed" &&
+    run.conclusion === "success" &&
+    run.path === path &&
+    run.name === name &&
+    isCommitSha(run.headSha)
+  );
+}
+
 /**
- * `main`へのpushで動き、全体が成功した`ci.yml`の実行のうち、最も新しく作られたものを返す。
+ * `main`へのpushで動き、全体が成功した`console-dist.yml`の実行を、新しく作られた順に返す。
+ * ワークフローは、ファイルのパスと名前の両方で確かめる。
  * APIの絞り込みに加えてここでも条件を確かめる(APIの仕様が変わっても、別の実行を取り込まないため)。
  */
+export function rankReleaseRuns(runs: readonly WorkflowRun[]): WorkflowRun[] {
+  const ranked: { readonly run: WorkflowRun; readonly time: number }[] = [];
+  for (const run of runs) {
+    if (!isReleaseRun(run, WORKFLOW_PATH, WORKFLOW_NAME)) continue;
+    const time = Date.parse(run.createdAt);
+    if (Number.isNaN(time)) continue;
+    ranked.push({ run, time });
+  }
+  ranked.sort((a, b) => b.time - a.time || b.run.id - a.run.id);
+  return ranked.map((entry) => entry.run);
+}
+
+/** 最も新しく作られた`console-dist.yml`の実行を返す。無ければ`null`。 */
 export function selectLatestRun(
   runs: readonly WorkflowRun[],
 ): WorkflowRun | null {
-  let latest: WorkflowRun | null = null;
-  let latestTime = Number.NEGATIVE_INFINITY;
-  for (const run of runs) {
-    if (
-      run.event !== "push" ||
-      run.headBranch !== RELEASE_BRANCH ||
-      run.status !== "completed" ||
-      run.conclusion !== "success" ||
-      run.path !== WORKFLOW_PATH ||
-      !isCommitSha(run.headSha)
-    ) {
-      continue;
-    }
-    const time = Date.parse(run.createdAt);
-    if (Number.isNaN(time)) continue;
-    if (
-      latest === null ||
-      time > latestTime ||
-      (time === latestTime && run.id > latest.id)
-    ) {
-      latest = run;
-      latestTime = time;
-    }
-  }
-  return latest;
+  return rankReleaseRuns(runs)[0] ?? null;
+}
+
+/**
+ * 同じcommitの`ci.yml`が、`main`へのpushで成功しているかを返す。
+ * 配布物のワークフローは組み立てしか確かめないので、型検査やテストを担うCIの成功も条件にする。
+ * パス、名前、ブランチ、イベント、結論は、APIの絞り込みに頼らずここでも確かめる。
+ */
+export function hasCiSuccess(
+  ciRuns: readonly WorkflowRun[],
+  sha: string,
+): boolean {
+  return ciRuns.some(
+    (run) =>
+      run.headSha === sha &&
+      isReleaseRun(run, CI_WORKFLOW_PATH, CI_WORKFLOW_NAME),
+  );
 }
 
 export function needsDeploy(
@@ -547,13 +575,13 @@ export function parsePinContent(value: unknown): string[] {
  * 後から戻し先に選ばれたり、保持の対象として残ったりしないようにする。
  */
 export type RevokedState = {
-  /** 戻した元の版のsha。消えた版は整理で外す。 */
+  /** 戻した元の版のsha。消えた版も残し、取り込みの候補から外す。 */
   readonly shas: readonly string[];
   /** 戻した元の版の中身(`files`のsha256)。同じ中身の新しい版を見分けるために残す。 */
   readonly digests: readonly string[];
 };
 
-/** 記録する中身のsha256の上限。超えたら古いものから捨てる。 */
+/** 記録する中身のsha256とshaの、それぞれの上限。超えたら古いものから捨てる。 */
 export const REVOKED_DIGEST_LIMIT = 100;
 
 /** `revoked.json`の中身が記録の形(`shas`と`digests`の配列を持つオブジェクト)かを返す。 */
@@ -578,14 +606,17 @@ export function parseRevokedState(value: unknown): RevokedState {
   };
 }
 
-/** 記録に`shas`と`digests`を足す。すでにあるものは重ねず、中身は`REVOKED_DIGEST_LIMIT`個まで残す。 */
+/**
+ * 記録に`shas`と`digests`を足す。すでにあるものは重ねず、それぞれ`REVOKED_DIGEST_LIMIT`個まで残す。
+ * shaは版が消えても記録に残す。消すと、取り込みが戻した元のcommitを候補に戻してしまうため。
+ */
 export function mergeRevokedState(
   state: RevokedState,
   shas: readonly string[],
   digests: readonly string[],
 ): RevokedState {
   return {
-    shas: [...new Set([...state.shas, ...shas])],
+    shas: [...new Set([...state.shas, ...shas])].slice(-REVOKED_DIGEST_LIMIT),
     digests: [...new Set([...state.digests, ...digests])].slice(
       -REVOKED_DIGEST_LIMIT,
     ),
@@ -626,18 +657,6 @@ export function selectRevokedReleases(
   return existing.filter((sha) =>
     isRevokedRelease(sha, manifests.get(sha) ?? null, state),
   );
-}
-
-/** 消えた版のshaを記録から外す。中身は、同じ中身の新しい版を見分けるために残す。 */
-export function pruneRevokedState(
-  state: RevokedState,
-  existing: readonly string[],
-): RevokedState {
-  const present = new Set(existing);
-  return {
-    shas: state.shas.filter((sha) => present.has(sha)),
-    digests: state.digests,
-  };
 }
 
 /**

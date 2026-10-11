@@ -1,7 +1,6 @@
 import { MousePointerClick } from "lucide-react";
-import { ApiFailure, describeApiError } from "../../api/errors.ts";
 import { useNotices } from "../../api/noticeQueries.ts";
-import { Button } from "../../components/ui/button.tsx";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { NoticeDetail } from "./NoticeDetail.tsx";
 
@@ -43,24 +42,15 @@ export function NoticeLookup({
     );
   }
   if (notices.isError || notices.data === undefined) {
-    const apiError =
-      notices.error instanceof ApiFailure ? notices.error.apiError : null;
     return (
-      <div className="flex flex-col items-start gap-3 p-8">
-        <p className="text-small text-muted-foreground">
-          {apiError === null
-            ? "通知を取得できませんでした。"
-            : describeApiError(apiError)}
-        </p>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => {
+      <div className="p-8">
+        <QueryFailureAlert
+          title="通知を取得できませんでした"
+          error={notices.error}
+          onRetry={() => {
             void notices.refetch();
           }}
-        >
-          もう一度取得する
-        </Button>
+        />
       </div>
     );
   }

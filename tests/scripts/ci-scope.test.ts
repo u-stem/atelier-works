@@ -778,7 +778,7 @@ describe("decideScope", () => {
     ).toEqual(allScope());
   });
 
-  test("decides a push by its diff and always runs console", () => {
+  test("decides a push by its diff without forcing console", () => {
     expect(
       decideScope(
         push,
@@ -787,7 +787,7 @@ describe("decideScope", () => {
           readChangedPaths: () => ["docs/a.md"],
         }),
       ),
-    ).toEqual(noneScope({ console: true }));
+    ).toEqual(noneScope({}));
   });
 
   test("keeps the other flags of a push that changed f/", () => {
@@ -799,7 +799,7 @@ describe("decideScope", () => {
           readChangedPaths: () => ["f/a.ts"],
         }),
       ),
-    ).toEqual(noneScope({ console: true, metadata: true }));
+    ).toEqual(noneScope({ metadata: true }));
   });
 
   test("passes the range from the last successful run to the reader", () => {
@@ -1112,7 +1112,7 @@ describe("readChangedPaths", () => {
         isAncestor(ancestor, descendant, dir),
     });
 
-    expect(scope).toEqual(noneScope({ metadata: true, console: true }));
+    expect(scope).toEqual(noneScope({ metadata: true }));
   });
 });
 
@@ -1307,12 +1307,6 @@ describe("ci.yml wiring", () => {
     );
   });
 
-  test("the console job runs the lockfile check as a file", () => {
-    expect(stepNamed("console", "Check the console lockfile policy").run).toBe(
-      "bun ./scripts/check-console-lockfile.ts console/bun.lock",
-    );
-  });
-
   test("the workflow grants only contents: read by default", () => {
     expect(recordAt(workflow(), "permissions")).toEqual({ contents: "read" });
   });
@@ -1375,12 +1369,6 @@ describe("ci.yml wiring", () => {
     expect(
       stepNamed("check", "Test the process lock in the worker image").if,
     ).toBe("needs.scope.outputs.worker != 'false'");
-  });
-
-  test("the console build is uploaded only for pushes to main", () => {
-    expect(stepNamed("console", "Upload the console build").if).toBe(
-      "github.event_name == 'push' && github.ref == 'refs/heads/main'",
-    );
   });
 });
 
@@ -1511,7 +1499,7 @@ describe("running the script", () => {
     runScript(dir, pushEnv(head, output, pathWithFakeGh(`echo '${json}'`)));
 
     expect(readFileSync(output, "utf8")).toBe(
-      formatOutputs(noneScope({ metadata: true, console: true })),
+      formatOutputs(noneScope({ metadata: true })),
     );
   });
 

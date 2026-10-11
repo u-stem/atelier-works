@@ -1,15 +1,24 @@
+import { usePipeline, useRequirementsIndex } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
+import { refreshStatusOfAll } from "../../app/refreshStatus.ts";
 import { PipelineSection } from "./PipelineSection.tsx";
 import { RequirementsSection } from "./RequirementsSection.tsx";
 
-/** 作業項目の画面。進捗と要件定義の節を持つ。節ごとに自分の取得を持つので、見出しには最終更新を出さない。 */
+/**
+ * 作業項目の画面。進捗と要件定義の節を持つ。
+ * 2つの取得は画面が持ち、見出しの更新ボタンが両方を取り直す。
+ * 節は取得の結果を表示するだけで、失敗したときの「もう一度取得する」だけを自分の節に限って持つ。
+ */
 export function ItemsScreen() {
+  const pipeline = usePipeline();
+  const requirements = useRequirementsIndex();
+  const refresh = refreshStatusOfAll([pipeline, requirements]);
   return (
     <>
-      <PageHeader title="作業項目" />
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-8 py-6">
-        <PipelineSection />
-        <RequirementsSection />
+      <PageHeader title="作業項目" refresh={refresh} />
+      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
+        <PipelineSection pipeline={pipeline} />
+        <RequirementsSection index={requirements} />
       </div>
     </>
   );

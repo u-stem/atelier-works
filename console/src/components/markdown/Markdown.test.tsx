@@ -172,3 +172,30 @@ describe("Markdown notes", () => {
     expect(render("> [!WARNING] careful")).toContain("careful");
   });
 });
+
+describe("Markdown table cells", () => {
+  const TABLE =
+    "| ID | Body |\n| --- | --- |\n| FR-001 | Users can sign in |\n";
+
+  test("keeps an id on one line", () => {
+    expect(render(TABLE)).toContain(
+      '<span class="whitespace-nowrap">FR-001</span>',
+    );
+  });
+
+  test("keeps each id of a list on one line", () => {
+    expect(
+      render("| ID | Ref |\n| --- | --- |\n| AC-001 | FR-001, FR-002 |\n"),
+    ).toContain('<span class="whitespace-nowrap">FR-002</span>');
+  });
+
+  test("leaves an id inside emphasis alone", () => {
+    expect(
+      render("| ID | Body |\n| --- | --- |\n| **FR-001** | text |\n"),
+    ).not.toContain("whitespace-nowrap");
+  });
+
+  test("lets a text cell wrap", () => {
+    expect(render(TABLE)).toContain(">Users can sign in</td>");
+  });
+});

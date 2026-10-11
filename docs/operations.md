@@ -1398,11 +1398,14 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 
 ### Console(console/)を反映する・戻す
 
-`console/`の変更は、`main`にマージされてCIが通れば、数分で`console_fetcher`が取り込んで反映する。
+`console/`の変更は、`main`にマージされて`console-dist.yml`が成功すれば、数分で`console_fetcher`が取り込んで反映する。
 `self_update`は関与しない。
-`console`ジョブは、draw.ioのビューアを外部から取得する。
+`console-dist.yml`は、draw.ioのビューアを外部から取得する。
 取得に失敗したときの対応は、[Consoleの配信の仕様](internals/console.md)の「ビューアの取得」にある。
 `infra/console_fetcher/`の変更は、ほかの`infra/`と同じく次の`mise run up`で反映される。
+取得元や検証を変える変更は、マージ後に`mise run up`でfetcherのイメージを作り直すまで反映されない。
+それまでは、古いイメージが新しい取得元の成果物を見つけられず、`artifact_missing`になる。
+配信中の版は変わらない。急ぎではないが、マージしたらすぐ`mise run up`を実行する。
 `infra/Caddyfile`は、`mise run up`と`mise run deploy`が起動の後にCaddyを再起動して反映する。
 composeを直接実行したときは、次のコマンドでCaddyを再起動する。
 Caddyを再起動するまで、`/console/drawio.html`には`frame-ancestors 'none'`のヘッダーが付き、図のページを埋め込めない。
@@ -1411,7 +1414,8 @@ Caddyを再起動するまで、`/console/drawio.html`には`frame-ancestors 'no
 mise exec -- docker compose -f infra/docker-compose.yml restart caddy
 ```
 
-`console_fetcher`は5分ごとに、`main`へのpushで全体が成功した`ci.yml`の最新の実行を探す。
+`console_fetcher`は5分ごとに、`main`へのpushで成功した`console-dist.yml`の最新の実行を探す。
+同じcommitの`ci.yml`も成功していることを確かめ、実行中か失敗していれば、その前の候補を選ぶ。
 その成果物`console-dist`を検証して`factory_console`の`releases/<sha>/`に置き、`current`を付け替える。
 状態は`status.json`に書き、ログにも出す。
 `status.json`には、`state`(`ok`、`failed`、`pinned`)、`sha`、`checked_at`、`error`が入る。
@@ -1447,7 +1451,9 @@ mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50 console_f
 戻した元の版のshaと中身は、`pin`とは別に、ボリュームの`revoked.json`にも記録する。
 この記録は`pin`を外しても残り、記録にある版は、`console:rollback`の戻し先に選ばれない。
 取り込みの整理は、保持の数え方にかかわらず、記録にある版を先に消す(配信中の版は消さない)。
-消えた版のshaは、整理が記録から外す。
+消えた版のshaも記録に残り、その版は取り込みの候補から外れる。
+戻した元のcommitは、`pin`を外した後も再び配信されない。
+shaと中身の記録は、それぞれ100件まで残し、超えると古いものから捨てる。
 `rolled_back_from`を持たない`pin`では、戻した元の版は消えない。
 消した版のページを開いたままのブラウザは、assetsを読み込めなくなる。
 開いたままのタブは、配信中の版の`/console/manifest.json`と`/console/status.json`を読んで、自分の版を確かめる。
@@ -1480,17 +1486,17 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
   同じ内容を`pin`が持ち、`console:unpin`が記録し直すためである。
 - `console:unpin`が記録を書けなかったときは、失敗を出して`pin`を外さない。
   原因を直してやり直す。
-- 戻した元の版と同じ中身が、`main`の最新の成功した実行として配信し直されると、その中身は記録から外れる。
+- 戻した元の版と同じ中身が、別のcommitの最新の成功した実行として配信し直されると、その中身は記録から外れる。
   `console:unpin --force`で外して`console_fetcher`が取り込んだ場合も同じである。
   外れたときは`revoked_digest_cleared`をログに出す。
-  CIを通った中身を意図して配信し直したものとして扱うためで、記録を手で編集する必要は無い。
+  ワークフローを通った中身を意図して配信し直したものとして扱うためで、記録を手で編集する必要は無い。
 - 外す処理が失敗したときは、`revoked_digest_clear_failed`をログに出す。
   記録は残るので、その中身の版は戻し先に選ばれず、配信中の版でなくなると整理が消す。
   原因を直すと、次にその中身が配信されるときに外れる。
 
 戻した元の版のマニフェストを読めないと、その版の中身を`pin`に記録できない。
 このとき`console:rollback`は、`The files of the release rolled back from could not be recorded`で始まる文を出す。
-この`pin`は、`console:unpin`がshaだけを照らすので、外す前に最新のCIの結果を確かめる。
+この`pin`は、`console:unpin`がshaだけを照らすので、外す前に最新の`console-dist.yml`の結果を確かめる。
 
 `pin`を外すと、`console_fetcher`は最新の成功した実行を取り込む。
 その実行が戻した元の版と同じ中身だと、問題の版が再び配信される。
@@ -1498,15 +1504,16 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 `console:unpin`は、最新の成功した実行のshaと、その実行の`files`のsha256を、`pin`の記録と`revoked.json`の記録を合わせたものと照らす。
 `console:rollback`を重ねて`pin`が書き直されても、前に戻した版を落とさないためである。
 `revoked.json`の記録は、その中身が配信し直されるまで残る。
-中身(sha256)の記録は、整理で外れない。
-以前に戻した中身を意図して配信し直すときの出口は、`--force`である。
+shaと中身(sha256)の記録は、整理で外れない。
+以前に戻した中身を、別のcommitで意図して配信し直すときの出口は、`--force`である。
+戻した元のcommit自体は、`--force`で外しても再び配信されない。同じ中身の修正は、新しいcommitで`main`に入れる。
 次の場合は`pin`を外さず、理由を出して止まる。
 
 | 状況 | 人がすること |
 | --- | --- |
-| `pin`を読めない(JSONでない、`rolled_back_from`や`rolled_back_content`の要素がshaやsha256の形でない) | 最新のCIの結果を確かめ、`--force`で外す |
-| 最新の成功した実行のshaが、戻した元の版のshaである | 修正を`main`に入れ、そのCIが成功してからやり直す |
-| 最新の成功した実行の`files`が、戻した元の版と同じである | `console/`を変える修正を`main`に入れ、そのCIが成功してからやり直す |
+| `pin`を読めない(JSONでない、`rolled_back_from`や`rolled_back_content`の要素がshaやsha256の形でない) | 最新の`console-dist.yml`の結果を確かめ、`--force`で外す |
+| 最新の成功した実行のshaが、戻した元の版のshaである | 修正を`main`に入れ、その`console-dist.yml`が成功してからやり直す |
+| 最新の成功した実行の`files`が、戻した元の版と同じである | `console/`を変える修正を`main`に入れ、その`console-dist.yml`が成功してからやり直す |
 | 最新の実行を調べられない(トークンや`CONSOLE_GITHUB_REPO`の不備、ネットワークの失敗) | 原因を直してやり直す |
 | 最新の実行の`files`を調べられない(成果物の取得か検証に失敗) | 原因を直してやり直す |
 | 戻した元の版を消せていない | このコマンドの出力か`console_fetcher`のログの`revoked_cleanup_skipped`、`revoked_cleanup_failed`を確かめ、原因を直してやり直す |
@@ -1520,7 +1527,7 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 
 確認を飛ばすオプションは2つある。
 `mise run console:unpin -- --force`は、`pin`と最新の実行についての確認(上の表の前の5行)を飛ばす。
-問題の版が再び配信されるのを承知の上で使う。
+問題の中身が別のcommitで再び配信されるのを承知の上で使う。
 `mise run console:unpin -- --ignore-cleanup`は、戻した元の版を消せていない確認を飛ばす。
 `--force`だけでは、この確認は飛ばない。
 `--ignore-cleanup`で外しても、消せていない版は`revoked.json`に記録が残る。
@@ -1537,7 +1544,7 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 | `auth_failed` | トークンが失効した | 再発行して投入し、`mise run up`する |
 | `forbidden`、`not_found` | トークンの対象リポジトリか権限(Actions: Read)が違う | トークンと`mise.toml`の`CONSOLE_GITHUB_REPO`を確かめる |
 | `rate_limited` | GitHub APIの呼び出し回数の上限に達した | 何もしなくてよい。5分ごとの次の確認で再試行し、その間も今の版を配信し続ける |
-| `no_successful_run`、`artifact_missing`、`artifact_expired` | 取り込める成果物が無い | CIの結果を確かめ、必要なら`main`にpushしてCIを動かす |
+| `no_successful_run`、`artifact_missing`、`artifact_expired` | 取り込める成果物が無い | `console-dist.yml`の実行の結果を確かめ、必要なら`main`にpushして動かす |
 | `digest_mismatch`、`manifest_mismatch`、`zip_unsafe_entry`、`unexpected_redirect` | 検証に失敗した | 今の版を配信し続けるので急ぎではないが、原因を調べる |
 | `asset_conflict` | 新しい版の`assets/`のファイルが、既にある同じ名前のファイルと中身が違う(`console/public/assets/`の名前の付け替え忘れなど) | 置き換えると配信中の版が壊れるので取り込まない。名前を直したcommitを`main`に入れる |
 
@@ -1554,6 +1561,23 @@ Caddyfileを更新してCaddyを再起動するまでは、`/console/status.json
 固定(`pin`)した状態は、更新が新しければ異常としない。
 
 Discordの通知とConsoleの通知には、上の表の次の操作が載る。詳しい原因は、取り込みのコンテナのログで確かめる。
+
+### タグのrulesetを確かめる
+
+`main`という名前のタグの実行は、`main`のブランチの実行と見分けがつかない。
+そのため、rulesetの`protect-tags`で、すべてのタグの作成、更新、削除を禁止している。
+迂回できるのは、リポジトリの管理者のロールだけである。
+
+設定は、次のコマンドで確かめる。
+
+```bash
+gh api repos/<owner>/<repo>/rulesets
+```
+
+一覧に、名前が`protect-tags`で対象が`tag`のrulesetがあり、有効(`enforcement`が`active`)なことを確かめる。
+詳しい中身は、一覧の`id`を使って`gh api repos/<owner>/<repo>/rulesets/<id>`で読む。
+中身では、作成、更新、削除の規則があり、迂回できる者が管理者のロールだけなことを確かめる。
+無いときは、rulesetを作り直すまで`console_fetcher`の取り込みを信頼しない。
 
 ### Console用workerを確かめる
 

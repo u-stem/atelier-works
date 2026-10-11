@@ -2,10 +2,12 @@ import { type KeyboardEvent, useRef } from "react";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { cn } from "../../lib/cn.ts";
+import { rowDomKey } from "../../lib/inboxPane.ts";
 import type { InboxSelection } from "../../lib/inboxSelection.ts";
 import {
   describeRow,
   type InboxItem,
+  omitsKindLabels,
   selectionOf,
 } from "../../lib/inboxView.ts";
 import { nextNavFocusIndex } from "../../lib/navigation.ts";
@@ -21,14 +23,23 @@ export function InboxList({
   items,
   selected,
   now,
+  allItems,
   onSelect,
 }: {
+  /** 描く行。種類の切り替えで絞り込んだ後の項目である。 */
   items: readonly InboxItem[];
   selected: InboxSelection | null;
   now: number;
+  /**
+   * 絞り込む前の一覧全体。
+   * 種別の語を省くかと、副題で見分ける相手を、この全体で決める。
+   * 切り替えで行の書式が変わらないようにするためである。
+   */
+  allItems: readonly InboxItem[];
   onSelect: (selection: InboxSelection) => void;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
+  const showKind = !omitsKindLabels(allItems);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLUListElement>): void => {
     const rows = Array.from(listRef.current?.querySelectorAll("button") ?? []);
@@ -49,7 +60,7 @@ export function InboxList({
       onKeyDown={handleKeyDown}
     >
       {items.map((item) => {
-        const row = describeRow(item, now);
+        const row = describeRow(item, now, { showKind, peers: allItems });
         const itemSelection = selectionOf(item);
         const isSelected =
           selected !== null &&
@@ -59,6 +70,7 @@ export function InboxList({
           <li key={row.key}>
             <button
               type="button"
+              data-row={rowDomKey(itemSelection)}
               aria-current={isSelected ? "true" : undefined}
               className={cn(
                 "relative block w-full px-6 py-3.5 text-left outline-none transition-colors duration-150 motion-reduce:transition-none",
@@ -79,11 +91,18 @@ export function InboxList({
                 </span>
               </span>
               <span className="mt-1 flex h-6 items-center gap-2.5 overflow-hidden text-small whitespace-nowrap text-subtle">
-                <span className="shrink-0 font-medium text-muted-foreground">
-                  {row.kindLabel}
-                </span>
+                {row.kindLabel === null ? null : (
+                  <span className="shrink-0 font-medium text-muted-foreground">
+                    {row.kindLabel}
+                  </span>
+                )}
                 {row.subLabel === null ? null : (
-                  <span className="shrink-0">{row.subLabel}</span>
+                  <span
+                    className="min-w-0 truncate"
+                    title={row.subTitle ?? undefined}
+                  >
+                    {row.subLabel}
+                  </span>
                 )}
                 {row.expiry === null ? null : (
                   <span
