@@ -102,6 +102,8 @@ export function fillDailyTotals(
   if (truncated && fetched.length > 0) {
     const oldest = Math.min(...fetched);
     byTime.delete(oldest);
+    // 取得した日が最終日の1日だけのときは、始まりが終わりを越えて系列が空になる。
+    // 切れた最古の日しか無く、描ける日が無いので、空のままでよい。
     first = oldest + MS_PER_DAY;
   }
   const filled: DailyTotal[] = [];

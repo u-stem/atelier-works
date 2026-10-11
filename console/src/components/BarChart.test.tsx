@@ -52,6 +52,26 @@ describe("BarChart", () => {
     expect(html).toContain(">d90<");
   });
 
+  test("anchors the label of the newest day to the right edge on a crowded axis", () => {
+    const days: readonly BarChartDatum[] = Array.from(
+      { length: 90 },
+      (_, index) => ({ key: String(index), label: `d${index + 1}`, value: 1 }),
+    );
+    const html = renderToStaticMarkup(
+      <BarChart
+        title="日別実行件数"
+        data={days}
+        axis="sequence"
+        formatValue={String}
+      />,
+    );
+    expect(html).toMatch(/text-anchor="end"[^>]*>d90</);
+  });
+
+  test("keeps the labels centered on a sparse axis", () => {
+    expect(render("sequence")).not.toContain('text-anchor="end"');
+  });
+
   test("caps the width of a category chart", () => {
     expect(render("category")).toContain("max-w-3xl");
   });

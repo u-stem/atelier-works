@@ -2,6 +2,7 @@ import {
   isLabeledIndex,
   labelStride,
   layoutBars,
+  placeAxisLabel,
   resolvePlotWidth,
 } from "../lib/barChart.ts";
 import { cn } from "../lib/cn.ts";
@@ -86,6 +87,7 @@ export function BarChart({
             return null;
           }
           const center = bar.x + bar.width / 2;
+          const labelPlace = placeAxisLabel(center, datum.label, viewWidth);
           return (
             <g key={datum.key}>
               {bar.height > 0 ? (
@@ -110,9 +112,9 @@ export function BarChart({
               ) : null}
               {showAxisLabels && isLabeledIndex(index, data.length, stride) ? (
                 <text
-                  x={center}
+                  x={labelPlace.x}
                   y={LABEL_BASELINE}
-                  textAnchor="middle"
+                  textAnchor={labelPlace.anchor}
                   className="fill-muted-foreground text-[11px] tabular-nums"
                 >
                   {datum.label}

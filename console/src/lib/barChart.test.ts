@@ -5,6 +5,7 @@ import {
   labelStride,
   layoutBars,
   MIN_PLOT_WIDTH,
+  placeAxisLabel,
   resolvePlotWidth,
   VALUE_LABEL_ROOM,
 } from "./barChart.ts";
@@ -107,6 +108,53 @@ describe("labelStride", () => {
     expect(labelStride(days(90), 1200)).toBeLessThan(
       labelStride(days(90), 640),
     );
+  });
+});
+
+describe("placeAxisLabel", () => {
+  test("centers a label that fits inside the plot", () => {
+    expect(placeAxisLabel(50, "10/8", 100)).toEqual({
+      x: 50,
+      anchor: "middle",
+    });
+  });
+
+  test("anchors a label that would pass the right edge to the right edge", () => {
+    expect(placeAxisLabel(98, "10/11", 100)).toEqual({ x: 100, anchor: "end" });
+  });
+
+  test("anchors a label that would pass the left edge to the left edge", () => {
+    expect(placeAxisLabel(2, "10/11", 100)).toEqual({ x: 0, anchor: "start" });
+  });
+
+  test("keeps a label that ends exactly at the right edge centered", () => {
+    const half = estimateLabelWidth("10/11") / 2;
+    expect(placeAxisLabel(100 - half, "10/11", 100).anchor).toBe("middle");
+  });
+
+  test("centers the label of the last of 7 bars at the minimum width", () => {
+    const bars = layoutBars([1, 1, 1, 1, 1, 1, 1], {
+      width: MIN_PLOT_WIDTH,
+      height: 50,
+    });
+    const last = bars.at(-1);
+    const center = last === undefined ? 0 : last.x + last.width / 2;
+    expect(placeAxisLabel(center, "10/11", MIN_PLOT_WIDTH).anchor).toBe(
+      "middle",
+    );
+  });
+
+  test("anchors the label of the last of 90 bars at a width of 1000 to the right edge", () => {
+    const bars = layoutBars(
+      Array.from({ length: 90 }, () => 1),
+      {
+        width: 1000,
+        height: 50,
+      },
+    );
+    const last = bars.at(-1);
+    const center = last === undefined ? 0 : last.x + last.width / 2;
+    expect(placeAxisLabel(center, "10/11", 1000).anchor).toBe("end");
   });
 });
 

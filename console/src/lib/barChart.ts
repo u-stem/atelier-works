@@ -34,6 +34,31 @@ const NARROW_CHAR_RATIO = 0.6;
 /** 隣のラベルとの間に空ける幅(px)。 */
 const LABEL_GAP = 8;
 
+export type AxisLabelPlacement = {
+  readonly x: number;
+  readonly anchor: "start" | "middle" | "end";
+};
+
+/**
+ * 横軸のラベルの置き場所。棒の中心`center`に中央揃えで置く。
+ * ラベルが描画領域の端を越えるときは、その端に寄せて、はみ出して切れるのを防ぐ。
+ * 幅は`estimateLabelWidth`の見積もりで決める。
+ */
+export function placeAxisLabel(
+  center: number,
+  label: string,
+  plotWidth: number,
+): AxisLabelPlacement {
+  const half = estimateLabelWidth(label) / 2;
+  if (center + half > plotWidth) {
+    return { x: plotWidth, anchor: "end" };
+  }
+  if (center - half < 0) {
+    return { x: 0, anchor: "start" };
+  }
+  return { x: center, anchor: "middle" };
+}
+
 /**
  * 横軸のラベルを、`index`番目の棒に付けるか。
  * 間引くときは最後の棒を基準にして`stride`本おきに付ける。
