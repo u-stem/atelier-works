@@ -266,7 +266,7 @@ function approvalVariant(status: string | null): PipelineStatusVariant {
     case "rejected":
       return "failure";
     default:
-      return "outline";
+      return "muted";
   }
 }
 
@@ -403,7 +403,7 @@ export function describeRound(round: WorkItemRound): RoundView {
     modeLabel: ROUND_MODE_LABELS.get(round.mode) ?? unknownLabel(round.mode),
     outcomeLabel:
       ROUND_OUTCOME_LABELS.get(round.outcome) ?? unknownLabel(round.outcome),
-    outcomeVariant: ROUND_OUTCOME_VARIANTS.get(round.outcome) ?? "outline",
+    outcomeVariant: ROUND_OUTCOME_VARIANTS.get(round.outcome) ?? "muted",
     summary: plain(round.summary),
     gapReport: plainOrNull(round.gap_report),
     skippedReason: plainOrNull(round.checks_skipped_reason),
@@ -442,7 +442,7 @@ export function describeReview(review: WorkItemReview): ReviewView {
     shaLabel: plain(review.head_sha).slice(0, SHORT_SHA_LENGTH),
     verdictLabel:
       VERDICT_LABELS.get(review.verdict) ?? unknownLabel(review.verdict),
-    verdictVariant: VERDICT_VARIANTS.get(review.verdict) ?? "outline",
+    verdictVariant: VERDICT_VARIANTS.get(review.verdict) ?? "muted",
     findingLabel: `指摘 ${review.finding_count}件`,
     createdAt: review.created_at,
   };
@@ -477,7 +477,7 @@ export function describeFixRound(fixRound: WorkItemFixRound): FixRoundView {
     outcomeLabel:
       FIX_OUTCOME_LABELS.get(fixRound.outcome) ??
       unknownLabel(fixRound.outcome),
-    outcomeVariant: FIX_OUTCOME_VARIANTS.get(fixRound.outcome) ?? "outline",
+    outcomeVariant: FIX_OUTCOME_VARIANTS.get(fixRound.outcome) ?? "muted",
     countsLabel: `対象のレビュー ${fixRound.trigger_review_count}件・返信 ${fixRound.reply_count}件・コミット ${fixRound.commit_count}件`,
     createdAt: fixRound.created_at,
   };
