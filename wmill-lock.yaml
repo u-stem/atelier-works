@@ -19,7 +19,7 @@ locks:
   f/factory/lib/audit_evidence: ac1ccc03e083e673184500451f40287247023042a52e597954379c12a9e79269
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
   f/factory/lib/check_runner: 9d132a60c76663c3eef2a8c1cfadaceaa61318a590ad435d5f7edafe94309153
-  f/factory/lib/check_sandbox: 363cfaaadbb0f2f2d231a4ac2ecd0a10a3fdf568f1ebe15ed5997dcc7d13a099
+  f/factory/lib/check_sandbox: 614e2cae677790d7d2b3a9abf84879b12a174165ba07aba2e518257ec16e323f
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 37bd94b7315969113b4900f1ad8e82d5b75bcb8619d6ef6722cf610bc378d400
   f/factory/lib/cleanup_db_support: d9ef6bb600246990c3b2c4d3d22419356217fed835fe22499834491ed951138f

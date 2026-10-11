@@ -1120,6 +1120,24 @@ describe("checkImageProblems", () => {
     ]);
   });
 
+  // 深い下のものが多くても、マウントポイントのような浅いパスを件数に隠さない。
+  test("lists shallower runtime paths first so a mount point is not hidden", async () => {
+    const deep = Array.from(
+      { length: 11 },
+      (_, index) => `/tmp/.cache/bun/install/file-${String(index)}`,
+    );
+    expect(
+      (
+        await checkImageProblems(
+          [20000],
+          image({ worldWritable: [...deep, "/workspaces"] }),
+        )
+      ).runtime,
+    ).toEqual([
+      `world-writable paths created at runtime: /workspaces, ${deep.slice(0, 9).join(", ")} and 2 more`,
+    ]);
+  });
+
   test("keeps a path from splitting the reason", async () => {
     expect(
       (
@@ -1163,6 +1181,17 @@ describe("listWorldWritablePaths", () => {
   test("keeps the paths when find exits with 1 for entries that vanished during the walk", async () => {
     const fake = createFakeCommandRunner([
       { ...fail("No such file or directory", 1), stdout: "/tmp/open\n" },
+    ]);
+    expect(await listWorldWritablePaths(fake.run)).toEqual(["/tmp/open"]);
+  });
+
+  // /dev/shmが無い環境では、findが起点の欠落をstderrに出して1で終わる。エラー行をパスとして扱わない。
+  test("ignores the error find prints for a missing /dev/shm", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        ...fail("/usr/bin/find: '/dev/shm': No such file or directory\n", 1),
+        stdout: "/tmp/open\n",
+      },
     ]);
     expect(await listWorldWritablePaths(fake.run)).toEqual(["/tmp/open"]);
   });

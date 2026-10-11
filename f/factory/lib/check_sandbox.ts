@@ -123,8 +123,10 @@ export const SHARED_TMP_DIRS = [
 
 /**
  * ベースのイメージが誰でも書き込めるようにしているディレクトリ。Windmillの実行ファイルと共有ライブラリの置き場と、`/tmp/.cache`である。
- * workerのイメージはビルドで中のものまで閉じるので、このディレクトリそのものが誰でも書き込めれば、閉じる前のイメージで動いている。
- * 下にある誰でも書き込めるものは、ベースのイメージには無く、稼働中にできたものである。
+ * ベースのイメージで誰でも書き込めるのはこのディレクトリそのものだけで、下のものは閉じている。
+ * workerのイメージはビルドでこのディレクトリを閉じ、念のため下のものからも書き込みの権限を落とす。
+ * このディレクトリそのものが誰でも書き込めれば、閉じる前のイメージで動いている。
+ * 下に誰でも書き込めるものがあれば、稼働中にできたものとみなし、実行時の問題として止める。
  */
 export const BASE_IMAGE_OPEN_PATHS = ["/usr/src/app", "/tmp/.cache"] as const;
 
@@ -1071,6 +1073,15 @@ function isBaseImageOpenPath(path: string): boolean {
 }
 
 /**
+ * パスを浅い順に並べる。同じ深さでは`find`の出した順を保つ。
+ * 深い下のものが多くても、マウントポイント(`/workspaces`など)のような浅いパスを、上限を超えた件数の中に隠さないためである。
+ */
+function shallowestFirst(paths: readonly string[]): string[] {
+  const depth = (path: string): number => path.split("/").length;
+  return [...paths].sort((left, right) => depth(left) - depth(right));
+}
+
+/**
  * workerが、`uids`の枠で検査を動かす前提を満たすかを確かめ、満たさない点を返す。
  * イメージの前提は、`REQUIRED_TOOL_PATHS`の道具がすべて実行できることと、`uids`のどれにも`factory-check-N`のユーザーがあることと、
  * ベースのイメージが開いているディレクトリ(`BASE_IMAGE_OPEN_PATHS`)を閉じてあることである。
@@ -1107,7 +1118,9 @@ export async function checkImageProblems(
   try {
     const open = await deps.listWorldWritablePaths();
     const fromImage = open.filter(isBaseImageOpenPath);
-    const atRuntime = open.filter((path) => !isBaseImageOpenPath(path));
+    const atRuntime = shallowestFirst(
+      open.filter((path) => !isBaseImageOpenPath(path)),
+    );
     if (fromImage.length > 0) {
       image.push(
         `world-writable paths the image leaves open: ${listedPaths(fromImage)}`,
