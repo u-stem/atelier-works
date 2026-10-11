@@ -752,6 +752,25 @@ export type PullRequestOrigin = (typeof PULL_REQUEST_ORIGINS)[number];
 /** 反映に記録するPRの題名の長さの上限(文字数)。 */
 export const MAX_PULL_REQUEST_TITLE_LENGTH = 200;
 
+/**
+ * PRの題名として記録、表示してよい形にする。
+ * 制御文字と書字方向の制御文字を空白にし、連続する空白を1つにして、
+ * `MAX_PULL_REQUEST_TITLE_LENGTH`文字で切る。空になれば`null`を返す。
+ * 題名はPRの作者が決める文字列なので、記録するときと読み出すときの両方で通し、
+ * 表示を崩す文字を持ち込ませない。
+ */
+export function sanitizePullRequestTitle(raw: string): string | null {
+  const cleaned = raw
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length === 0) return null;
+  return Array.from(cleaned)
+    .slice(0, MAX_PULL_REQUEST_TITLE_LENGTH)
+    .join("")
+    .trim();
+}
+
 /** 1回の反映に含まれるPR。`factory.deployments.pull_requests`のJSON配列の要素。 */
 export type DeploymentPullRequest = {
   readonly number: number;

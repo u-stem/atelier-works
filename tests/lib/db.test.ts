@@ -1297,7 +1297,25 @@ describe("recordDeployment", () => {
     expect(calls[0]?.values).toContain(JSON.stringify([pull]));
   });
 
-  test("writes the pull_requests column", async () => {
+  test("writes the pull_requests column when there are pull requests", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: false,
+        pull_requests: [
+          { number: 7, title: "fix: a", origin: "human", url: null },
+        ],
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("pull_requests");
+  });
+
+  test("does not name the pull_requests column when there are none", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
     await recordDeployment(
       {
@@ -1310,7 +1328,7 @@ describe("recordDeployment", () => {
       },
       sql,
     );
-    expect(calls[0]?.text).toContain("pull_requests");
+    expect(calls[0]?.text).not.toContain("pull_requests");
   });
 
   test("casts needs_host_action to ::boolean", async () => {

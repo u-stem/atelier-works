@@ -51,10 +51,10 @@ import {
   isOneOf,
   isRecord,
   isString,
-  MAX_PULL_REQUEST_TITLE_LENGTH,
   PULL_REQUEST_ORIGINS,
   type ReviewFinding,
   type ReviewSeverity,
+  sanitizePullRequestTitle,
 } from "../lib/types.ts";
 import { type ReadTextFile, readTextFile } from "../lib/workspace.ts";
 
@@ -1654,9 +1654,7 @@ function parseDeploymentPullRequest(
   }
   return {
     number,
-    title: isString(title)
-      ? Array.from(title).slice(0, MAX_PULL_REQUEST_TITLE_LENGTH).join("")
-      : null,
+    title: isString(title) ? sanitizePullRequestTitle(title) : null,
     origin: isOneOf(origin, PULL_REQUEST_ORIGINS) ? origin : "unknown",
     url: safeUrl,
   };

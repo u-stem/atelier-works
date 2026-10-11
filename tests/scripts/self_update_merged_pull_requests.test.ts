@@ -3,7 +3,10 @@
 // `tests/lib/self_update_pull_requests.test.ts`が確かめる。
 
 import { describe, expect, test } from "bun:test";
-import { listMergedPullRequests } from "../../f/factory/self_update.ts";
+import {
+  listMergedPullRequests,
+  MERGED_PULL_REQUESTS_LOG_MAX_BYTES,
+} from "../../f/factory/self_update.ts";
 import { createFakeCommandRunner, fail, ok } from "../lib/testSupport.ts";
 
 const DIR = "/workspaces/factory/atelier-works";
@@ -31,6 +34,14 @@ describe("listMergedPullRequests", () => {
     await listMergedPullRequests(fake.run, DIR, OLD_SHA, NEW_SHA, REPO);
     expect(fake.calls[0]?.argv).toEqual(
       expect.arrayContaining(["log", "--first-parent", "-z"]),
+    );
+  });
+
+  test("caps the retained output of git log", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await listMergedPullRequests(fake.run, DIR, OLD_SHA, NEW_SHA, REPO);
+    expect(fake.calls[0]?.options?.maxOutputBytes).toBe(
+      MERGED_PULL_REQUESTS_LOG_MAX_BYTES,
     );
   });
 

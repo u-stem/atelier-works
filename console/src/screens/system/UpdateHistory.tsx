@@ -10,6 +10,7 @@ import {
   pullRequestOriginLabel,
 } from "../../lib/labels.ts";
 import {
+  isPullRequestListTruncated,
   pullRequestHref,
   pullRequestTitleText,
   versionText,
@@ -104,6 +105,11 @@ function DeploymentItem({
           ))}
         </ul>
       )}
+      {isPullRequestListTruncated(entry.pull_requests.length) ? (
+        <p className="mt-2 text-small text-muted-foreground">
+          記録するPRは1回の反映につき100件までです。これを超えた分は表示していません。
+        </p>
+      ) : null}
     </li>
   );
 }

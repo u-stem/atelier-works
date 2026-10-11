@@ -131,6 +131,24 @@ describe("runConsoleQuery deployments pull requests", () => {
     });
   });
 
+  test("replaces bidirectional control characters in a title", async () => {
+    const row = await firstRow(
+      deploymentRow({
+        pull_requests: [{ ...PULL, title: "fix:‮evil\u0007 title" }],
+      }),
+    );
+    expect(row).toMatchObject({
+      pull_requests: [{ ...PULL, title: "fix: evil title" }],
+    });
+  });
+
+  test("uses a null title when the title has only control characters", async () => {
+    const row = await firstRow(
+      deploymentRow({ pull_requests: [{ ...PULL, title: "‮\u0007" }] }),
+    );
+    expect(row).toMatchObject({ pull_requests: [{ ...PULL, title: null }] });
+  });
+
   test("uses an empty list when pull_requests is not an array", async () => {
     const row = await firstRow(deploymentRow({ pull_requests: "oops" }));
     expect(row).toMatchObject({ pull_requests: [] });

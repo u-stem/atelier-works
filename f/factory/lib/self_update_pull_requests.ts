@@ -5,8 +5,8 @@
 import {
   assertPullRequestUrl,
   type DeploymentPullRequest,
-  MAX_PULL_REQUEST_TITLE_LENGTH,
   type PullRequestOrigin,
+  sanitizePullRequestTitle,
 } from "./types.ts";
 
 /**
@@ -51,23 +51,6 @@ function buildPullRequestUrl(
   return url;
 }
 
-/**
- * 制御文字と書字方向の制御文字を空白にし、連続する空白を1つにして、長さを切る。
- * 題名はPRの作者が決める文字列なので、表示を崩す文字を持ち込ませない。
- * 空になれば`null`を返す。
- */
-function sanitizeTitle(raw: string): string | null {
-  const cleaned = raw
-    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (cleaned.length === 0) return null;
-  return Array.from(cleaned)
-    .slice(0, MAX_PULL_REQUEST_TITLE_LENGTH)
-    .join("")
-    .trim();
-}
-
 function firstBodyLine(body: string): string {
   return body.split("\n").find((line) => line.trim().length > 0) ?? "";
 }
@@ -82,12 +65,13 @@ function classifyHead(
   head: string,
   repoRef: RepoRef | null,
 ): PullRequestOrigin {
+  // Factoryのリポジトリが分からなければ、ownerを比べられない。確かな情報が無いので振り分けない。
+  if (repoRef === null) return "unknown";
   const slash = head.indexOf("/");
   if (slash <= 0) return "unknown";
   const owner = head.slice(0, slash);
   const branch = head.slice(slash + 1);
-  const sameOwner =
-    repoRef !== null && owner.toLowerCase() === repoRef.owner.toLowerCase();
+  const sameOwner = owner.toLowerCase() === repoRef.owner.toLowerCase();
   return sameOwner && FACTORY_BRANCH.test(branch) ? "factory" : "human";
 }
 
@@ -105,18 +89,18 @@ function parseEntry(
     const number = Number(merge[1]);
     return {
       number,
-      title: sanitizeTitle(firstBodyLine(body)),
+      title: sanitizePullRequestTitle(firstBodyLine(body)),
       origin: classifyHead(merge[2] ?? "", repoRef),
       url: buildPullRequestUrl(repoRef, number),
     };
   }
 
   const squash = SQUASH_SUBJECT.exec(subject);
-  if (squash !== null && !MERGE_SUBJECT.test(subject)) {
+  if (squash !== null && parents.length === 1) {
     const number = Number(squash[2]);
     return {
       number,
-      title: sanitizeTitle(squash[1] ?? ""),
+      title: sanitizePullRequestTitle(squash[1] ?? ""),
       origin: "unknown",
       url: buildPullRequestUrl(repoRef, number),
     };
@@ -132,7 +116,8 @@ function parseEntry(
  * mainの第1親をたどるコミットだけを読む。PRのブランチの中のコミットが、
  * 件名でマージのコミットを装えないようにするためである。
  * 件名`Merge pull request #N from <owner>/<branch>`は、親が2つ以上のコミットだけを読む。
- * 件名の末尾が`(#N)`のコミットは、ブランチが分からないので作り手は`unknown`にする。
+ * 件名の末尾が`(#N)`のコミットは、親が1つのときだけ読み、ブランチが分からないので作り手は`unknown`にする。
+ * mainに直接pushされたコミットも、この形なら記録される。PRの実在は確かめない。
  * `factoryRepoUrl`はPRのURLを組み立てるのに使う。GitHubのHTTPSのURLでなければ、URLは`null`になる。
  */
 export function parseMergedPullRequests(

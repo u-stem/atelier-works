@@ -1074,6 +1074,29 @@ check(
       JSON.stringify([historyPull]),
   historyRecorded,
 );
+// PRを持たない記録は列を指名せずに挿入し、列の既定値(空の配列)が入る。
+await recordDeployment(
+  {
+    sha_from: null,
+    sha_to: "qdb-hist-empty",
+    changed_paths: [],
+    result: "failed",
+    needs_host_action: false,
+    pull_requests: [],
+  },
+  sql,
+);
+const historyEmptyRows = await runConsoleQuery("deployments", 200, 30, sql);
+const historyEmpty = historyEmptyRows.find(
+  (row) => "sha_to" in row && row.sha_to === "qdb-hist-empty",
+);
+check(
+  "deployments: a record without pull requests gets the column default",
+  historyEmpty !== undefined &&
+    "pull_requests" in historyEmpty &&
+    historyEmpty.pull_requests.length === 0,
+  historyEmpty,
+);
 const historyUnrecorded = historyRows.find(
   (row) => "sha_to" in row && row.sha_to === "qdb-sha-boundary",
 );

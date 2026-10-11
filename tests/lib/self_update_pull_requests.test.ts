@@ -72,7 +72,21 @@ describe("parseMergedPullRequests origin", () => {
   });
 });
 
+describe("parseMergedPullRequests without a repository url", () => {
+  test("reports unknown when the repository owner cannot be compared", () => {
+    const output = mergeEntry(7, "octo-owner/fix/something", "fix: y");
+    expect(
+      parseMergedPullRequests(output, "ssh://example.com/o/r.git")[0]?.origin,
+    ).toBe("unknown");
+  });
+});
+
 describe("parseMergedPullRequests selection", () => {
+  test("ignores a merge commit whose subject ends with a pull request number", () => {
+    const output = logEntry(TWO_PARENTS, "Merge branch x (#5)");
+    expect(parseMergedPullRequests(output, FACTORY_REPO)).toEqual([]);
+  });
+
   test("ignores a single parent commit that imitates a merge subject", () => {
     const output = logEntry(
       PARENT_A,

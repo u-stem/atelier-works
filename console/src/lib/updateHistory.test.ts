@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  isPullRequestListTruncated,
+  PULL_REQUEST_RECORD_LIMIT,
   pullRequestHref,
   pullRequestTitleText,
   shortSha,
@@ -80,5 +82,17 @@ describe("pullRequestTitleText", () => {
     expect(pullRequestTitleText({ number: 7, title: null })).toBe(
       "題名なし(#7)",
     );
+  });
+});
+
+describe("isPullRequestListTruncated", () => {
+  test("is false below the record limit", () => {
+    expect(isPullRequestListTruncated(PULL_REQUEST_RECORD_LIMIT - 1)).toBe(
+      false,
+    );
+  });
+
+  test("is true at the record limit", () => {
+    expect(isPullRequestListTruncated(PULL_REQUEST_RECORD_LIMIT)).toBe(true);
   });
 });

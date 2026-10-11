@@ -42,3 +42,11 @@ export function pullRequestTitleText(pull: {
 }): string {
   return pull.title ?? `題名なし(#${String(pull.number)})`;
 }
+
+/** backendが1回の反映に記録するPRの上限。`MAX_PULL_REQUESTS_PER_DEPLOYMENT`と同じ値に保つ。 */
+export const PULL_REQUEST_RECORD_LIMIT = 100;
+
+/** 記録した件数が上限に達していれば、それより古いPRが記録に無いおそれがある。 */
+export function isPullRequestListTruncated(count: number): boolean {
+  return count >= PULL_REQUEST_RECORD_LIMIT;
+}

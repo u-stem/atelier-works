@@ -9,9 +9,15 @@ import {
   pullRequestOriginLabel,
   UNKNOWN_STATUS_LABEL,
 } from "../../console/src/lib/labels.ts";
-import { pullRequestHref } from "../../console/src/lib/updateHistory.ts";
+import {
+  PULL_REQUEST_RECORD_LIMIT,
+  pullRequestHref,
+} from "../../console/src/lib/updateHistory.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
-import { parseMergedPullRequests } from "../../f/factory/lib/self_update_pull_requests.ts";
+import {
+  MAX_PULL_REQUESTS_PER_DEPLOYMENT,
+  parseMergedPullRequests,
+} from "../../f/factory/lib/self_update_pull_requests.ts";
 import { PULL_REQUEST_ORIGINS } from "../../f/factory/lib/types.ts";
 import { runConsoleQuery } from "../../f/factory/steps/console_query.ts";
 
@@ -98,11 +104,24 @@ describe("label tables cover the backend values", () => {
     },
   );
 
+  test.each([...PULL_REQUEST_ORIGINS])(
+    "gives pull request origin %s a label",
+    (origin) => {
+      expect(pullRequestOriginLabel(origin).length).toBeGreaterThan(0);
+    },
+  );
+
   test("labels the origin that could not be read as unknown", () => {
-    expect(PULL_REQUEST_ORIGINS).toContain("unknown");
+    expect(pullRequestOriginLabel("unknown")).toBe("不明");
   });
 
   test.each(["success", "failed"])("labels deployment result %s", (result) => {
     expect(deploymentResultLabel(result)).not.toBe(UNKNOWN_STATUS_LABEL);
+  });
+});
+
+describe("record limit", () => {
+  test("the console knows the number of pull requests that the backend keeps", () => {
+    expect(PULL_REQUEST_RECORD_LIMIT).toBe(MAX_PULL_REQUESTS_PER_DEPLOYMENT);
   });
 });
