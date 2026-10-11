@@ -27,7 +27,15 @@ RUN apt-get update \
         curl \
         git \
         jq \
+        procps \
+        util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+# 検査コマンドを実行するための非特権ユーザー。uidを固定するのは、ボリュームの
+# 所有者や`setpriv`の引数がuidで決まり、再ビルドで変わってはいけないため。
+# ホームもログインシェルも持たせない。`setpriv`(util-linux)で切り替え、
+# 残った子プロセスは`pkill`(procps)で止める。
+RUN useradd -u 10001 -M -s /usr/sbin/nologin factory-check
 
 # gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
 # `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
@@ -87,16 +95,30 @@ RUN set -eux; \
 # 食い違っても`WMILL_VERSION`だけを正とする。
 RUN npm install -g --force "windmill-cli@${WMILL_VERSION}"
 
-# Claude Code CLI。`/root/.local/bin`に入る。
+# Claude Code CLI。インストーラーは`/root/.local/bin`に置くので、名前で起動
+# できるよう`/usr/local/bin`にsymlinkを張る。
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/var/lib/factory/claude \
     GH_CONFIG_DIR=/var/lib/factory/gh \
     GIT_TERMINAL_PROMPT=0
-RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
-ENV PATH="/root/.local/bin:${PATH}"
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}" \
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+
+# workerのPATHから、rootのホームと、誰でも書き込める`/tmp`の下を外す。
+# ベースのイメージのPATHは`/root/.local/bin`と`/tmp/.local/bin`を含むので、
+# 継承せず明示的に書く。`/tmp/.local/bin`は、workerの`windmill`の実行ファイルに
+# 参照が無く、稼働中のコンテナにも存在しない。非特権のuidが同名の実行ファイルを
+# 置いて、rootの名前解決を奪えるので、残さない。
+# 値はベースのイメージのPATHから、この2つを除いたものである。
+# `WM_VERSION`を上げるときは、新しいベースの`docker image inspect`でPATHを確かめ、
+# 必要なディレクトリが増えていないか突き合わせる。
+ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin"
 
 # ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
 # 気づくのではなく、その場でビルドを失敗させる。
-RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version
+# `claude`はPATHの名前で解決して確かめる。
+# `setpriv`は、切り替えた先のuidを出力と比べて確かめる。
+RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
+    && [ "$(setpriv --reuid=10001 --regid=10001 --clear-groups -- id -u)" = 10001 ]
 
 CMD ["windmill"]

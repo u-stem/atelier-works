@@ -222,8 +222,8 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 | キー | 既定値 | 意味 |
 | --- | --- | --- |
 | `implement_enabled` | `false` | 承認の後に実装フローを起動するか |
-| `model` | `claude-sonnet-5-5` | 実装のモデル。同じ要件定義の実装が2回失敗した後は`heavy_model`を使う |
-| `heavy_model` | `claude-opus-5-5` | 要件定義の生成のモデルと、2回失敗した後の実装のモデル |
+| `model` | `claude-sonnet-5-5` | 実装のモデル。同じ要件定義の実装が続けて2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | 要件定義の生成のモデルと、続けて2回失敗した後の実装のモデル |
 | `implement_max_rounds` | `5` | Claudeを実行するラウンドの上限 |
 | `implement_max_turns` | `80` | Claude 1回の実行のターン数の上限 |
 | `implement_max_budget_usd_per_run` | `10` | Claude 1回の実行の費用の上限(USD) |
@@ -236,8 +236,9 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
 
-モデルの昇格に使う失敗の数は、同じ作業項目の同じ試行の`implement_rounds`のうち、結果が`check_failed`、`stalled`、`error`の行である。
-`error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、実際より早く`heavy_model`に上がることがある。損失の上限は`implement_max_rounds`と予算で決まる。
+モデルの昇格に使う失敗の数は、同じ作業項目の同じ試行の`implement_rounds`を新しいほうから見て、結果が`check_failed`、`stalled`、`error`の行が続いた数である。
+ほかの結果(`done`、`checks_skipped`、`requirements_gap`)の行に当たったら、そこで数えるのをやめる。成功が入れば`model`に戻るためである。
+`error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、基盤の失敗が2回続くと`heavy_model`に上がる。損失の上限は`implement_max_rounds`と予算で決まる。
 停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
 数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
 

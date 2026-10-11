@@ -461,19 +461,56 @@ check(
 // モデルの昇格に使う失敗の数
 // ---------------------------------------------------------------------------
 
-// failedAのラウンド: 試行2のdone、試行1のcheck_failed。試行1にstalledとerrorを足す。
+// failedAのラウンド: 試行2のdone、試行1のcheck_failed。試行1にstalled、error、requirements_gap、checks_skippedを足す。
+// 試行1は最後が失敗でないので、失敗は連続していない。
 execPsql(
   target,
   `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) VALUES (${String(failedA)}, 1, 3, 'fix', 'stalled'), (${String(failedA)}, 1, 4, 'fix', 'error'), (${String(failedA)}, 1, 5, 'fix', 'requirements_gap'), (${String(failedA)}, 1, 6, 'fix', 'checks_skipped')`,
 );
 check(
-  "countImplementFailedRounds: check_failed, stalled and error of the attempt are counted",
-  (await countImplementFailedRounds(failedA, 1, sql)) === 3,
+  "countImplementFailedRounds: failures before a round that did not fail are not counted",
+  (await countImplementFailedRounds(failedA, 1, sql)) === 0,
   await countImplementFailedRounds(failedA, 1, sql),
 );
 check(
   "countImplementFailedRounds: another attempt is not counted",
   (await countImplementFailedRounds(failedA, 2, sql)) === 0,
+);
+
+// 連続して失敗したラウンドだけを数える。成功が1回入れば数え直す。
+const implementStreak = await issueWorkItem(
+  960,
+  1,
+  "implementing",
+  "qdb-implement-streak",
+);
+const implementRecovered = await issueWorkItem(
+  961,
+  1,
+  "implementing",
+  "qdb-implement-recovered",
+);
+execPsql(
+  target,
+  `INSERT INTO factory.implement_rounds (work_item_id, attempt, round, mode, outcome) VALUES ${[
+    `(${String(implementStreak)}, 1, 1, 'implement', 'error')`,
+    `(${String(implementStreak)}, 1, 2, 'fix', 'check_failed')`,
+    `(${String(implementStreak)}, 1, 3, 'fix', 'stalled')`,
+    `(${String(implementRecovered)}, 1, 1, 'implement', 'error')`,
+    `(${String(implementRecovered)}, 1, 2, 'fix', 'error')`,
+    `(${String(implementRecovered)}, 1, 3, 'fix', 'checks_skipped')`,
+    `(${String(implementRecovered)}, 1, 4, 'fix', 'check_failed')`,
+  ].join(", ")}`,
+);
+check(
+  "countImplementFailedRounds: consecutive failures of the attempt are counted",
+  (await countImplementFailedRounds(implementStreak, 1, sql)) === 3,
+  await countImplementFailedRounds(implementStreak, 1, sql),
+);
+check(
+  "countImplementFailedRounds: only the failures after the latest success are counted",
+  (await countImplementFailedRounds(implementRecovered, 1, sql)) === 1,
+  await countImplementFailedRounds(implementRecovered, 1, sql),
 );
 
 async function prFixItem(pr: number): Promise<number> {
@@ -547,7 +584,7 @@ const outputRetried = await prFixItem(94);
 const outputRetryFailed = await prFixItem(95);
 // 不正な出力の再試行でも失敗した(1回のrunClaudeなので1回)。
 const failedBeforeDone = await prFixItem(96);
-// applyがタイムアウトし、flowの再試行でdoneで終わった(1回)。
+// applyがタイムアウトし、flowの再試行でdoneで終わった(成功が入ったので0回)。
 execPsql(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
@@ -601,6 +638,67 @@ execPsql(
   ].join(", ")}`,
 );
 
+// 成功(doneのラウンド)が入ると連続は途切れ、その後の失敗だけを数える。
+// recoveredFirstは2回失敗してdoneで終え、recoveredSecondは同じPRの次のラウンドで1回失敗した(1回)。
+// `fix_round`は既定の0のままで、下限は働かない。
+const recoveredFirst = await prFixItem(97);
+const recoveredSecond = await prFixItem(97);
+// repeated*は、Claudeの実行は毎回成功してdoneで終えたが、再レビューが続いて3ラウンド目に入った。
+// 失敗の記録は無いが、`fix_round`の下限で2回と数える。
+const repeatedFirst = await prFixItem(98);
+const repeatedSecond = await prFixItem(98);
+const repeatedThird = await prFixItem(98);
+// 2ラウンド目で3回失敗した(下限は1なので、失敗の3回が勝つ)。
+const roundsBelowFailures = await prFixItem(99);
+// blockedのラウンド、doneのラウンド、blockedのラウンドの順に並ぶ(後のblockedの1回)。
+const doneBetweenBlocked = await prFixItem(100);
+const blockedBeforeDone = await prFixItem(100);
+const blockedAfterDone = await prFixItem(100);
+// 検査の再実行が、doneのラウンドの前と後の作業項目にそれぞれある(後の1回)。
+const retriedBeforeDone = await prFixItem(101);
+const retriedAfterDone = await prFixItem(101);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
+    runRow(recoveredFirst, "pr_fix", 900, "timeout"),
+    runRow(recoveredFirst, "pr_fix", 700, "timeout"),
+    runRow(recoveredSecond, "pr_fix", 100, "timeout"),
+    runRow(repeatedFirst, "pr_fix", 900, null),
+    runRow(repeatedSecond, "pr_fix", 600, null),
+    runRow(roundsBelowFailures, "pr_fix", 900, "timeout"),
+    runRow(roundsBelowFailures, "pr_fix", 700, "timeout"),
+    runRow(roundsBelowFailures, "pr_fix", 500, "timeout"),
+    runRow(blockedBeforeDone, "pr_fix", 950, null),
+    runRow(doneBetweenBlocked, "pr_fix", 750, null),
+    runRow(blockedAfterDone, "pr_fix", 550, null),
+    runRow(retriedBeforeDone, "pr_fix_verify_retry", 900, null),
+    runRow(retriedAfterDone, "pr_fix_verify_retry", 300, null),
+  ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${[
+    roundRow(recoveredFirst, "done", 600),
+    roundRow(repeatedFirst, "done", 800),
+    roundRow(repeatedSecond, "done", 500),
+    roundRow(blockedBeforeDone, "blocked", 900),
+    roundRow(doneBetweenBlocked, "done", 700),
+    roundRow(blockedAfterDone, "blocked", 500),
+    roundRow(retriedBeforeDone, "done", 700),
+  ].join(", ")}`,
+);
+for (const [workItemId, round] of [
+  [repeatedFirst, 1],
+  [repeatedSecond, 2],
+  [repeatedThird, 3],
+  [roundsBelowFailures, 2],
+] as const) {
+  execPsql(
+    target,
+    `UPDATE factory.work_items SET fix_round = ${String(round)} WHERE id = ${String(workItemId)}`,
+  );
+}
+
 const prFixExpectations: readonly (readonly [string, number, number])[] = [
   ["blocked rounds and verify retries of the same PR are counted", fixB, 2],
   ["another PR is counted separately", fixOtherPr, 1],
@@ -618,7 +716,26 @@ const prFixExpectations: readonly (readonly [string, number, number])[] = [
   ],
   ["the discarded attempt of an output retry is not counted", outputRetried, 0],
   ["a failed output retry is counted once", outputRetryFailed, 1],
-  ["a failure before a done round is counted", failedBeforeDone, 1],
+  ["a failure before a done round is not counted", failedBeforeDone, 0],
+  [
+    "only the failures after the latest done round of the PR are counted",
+    recoveredSecond,
+    1,
+  ],
+  ["the first round has no prior round to count", repeatedFirst, 0],
+  ["the second round counts the round before it", repeatedSecond, 1],
+  [
+    "done rounds that were re-reviewed count even without a failure",
+    repeatedThird,
+    2,
+  ],
+  [
+    "failures above the prior rounds are counted as they are",
+    roundsBelowFailures,
+    3,
+  ],
+  ["a blocked round before a done round is not counted", blockedAfterDone, 1],
+  ["a verify retry before a done round is not counted", retriedAfterDone, 1],
 ];
 for (const [name, workItemId, expected] of prFixExpectations) {
   const actual = await countPrFixFailures(workItemId, sql);
