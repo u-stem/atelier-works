@@ -140,3 +140,61 @@ export function expiredRequirementsRequests<
 >(requests: readonly T[]): T[] {
   return requests.filter((request) => request.kind === "requirements");
 }
+
+/**
+ * Issueの確認の結果。
+ * - `match`: 現在のIssueの題名と本文が取り込み時点と同じ。
+ * - `changed`: 取り込み後に題名か本文が変わった。
+ * - `not_applicable`: 承認の対象がIssueに基づく要件定義ではない。
+ * - `unavailable`: GitHubから取得できないなどで、比べられなかった。
+ */
+export type IssueCheckVerdict =
+  | "match"
+  | "changed"
+  | "not_applicable"
+  | "unavailable";
+
+/**
+ * 決定を記録する前に、Issueを取り込み時点と比べる必要があるかを返す。副作用は無い。
+ * 比べるのは、要件定義を承認し、これから決定を記録するときだけである。
+ * 却下は実装に渡る内容を決めない。
+ * 記録済みの決定の再実行(`redispatch`)は、記録のときに確認を済ませている。
+ * Issue提案には取り込み時点の内容が無い。
+ */
+export function needsIssueCheck(
+  action: ExistingDecisionAction,
+  decision: "approve" | "reject",
+  kind: ApprovalRequestKind,
+): boolean {
+  return (
+    action === "record_and_dispatch" &&
+    decision === "approve" &&
+    kind === "requirements"
+  );
+}
+
+/**
+ * Issueの確認の判定から、承認を断る理由を返す。承認してよいときはnullを返す。
+ * 承認者が見た取り込み時点の内容と、実装のClaudeが受け取る内容を一致させるため、
+ * 比べられなかったときも断る(安全側)。
+ * 現在のIssueの内容を使うには、却下する。却下による作り直しは、現在のIssueの内容を取り込み直す。
+ */
+export function issueCheckRefusal(
+  verdict: IssueCheckVerdict,
+  approvalRequestId: number,
+): string | null {
+  switch (verdict) {
+    case "match":
+    case "not_applicable":
+      return null;
+    case "changed":
+      return [
+        `approval_decide: the issue title or body changed after intake, so approval request ${String(approvalRequestId)} was not approved.`,
+        "Claude implements the content captured at intake, which the Inbox of the new Console (/console/) shows.",
+        "To approve it, restore the issue to that content and approve again.",
+        "To use the current issue instead, reject the request; the requirements are regenerated from the current issue and need a new approval.",
+      ].join(" ");
+    case "unavailable":
+      return `approval_decide: the issue could not be compared with the intake content, so approval request ${String(approvalRequestId)} was not approved. Wait a moment and try again. If the issue was transferred or deleted, reject the request.`;
+  }
+}

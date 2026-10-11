@@ -797,6 +797,56 @@ export async function updateStatusIfCurrentClearingFlowJobId(
 }
 
 /**
+ * 作り直しの前に、Issueの作業項目に取り込んだ題名と本文を更新する。
+ * 作り直しのために`requirements_generating`へ移したばかりで、pipelineのリース
+ * (`flow_job_id`)がまだ空の作業項目だけを更新する。
+ * 更新と同じ文で、`factory.work_item_events`に`note`の行を残す(状態は変わらない)。
+ * 更新の記録は、承認者への知らせと、PR本文の注記が読む。
+ * 別の実行がリースを取った後や、作業項目が先に動いた後は何も書かずに`false`を返す。
+ */
+export async function updateIntakeIfRegenerating(
+  id: number,
+  intake: { readonly title: string; readonly body: string },
+  note: string,
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  const rows = await sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET title = ${intake.title}, body = ${intake.body}, updated_at = now()
+      WHERE id = ${id}
+        AND kind = 'issue' AND status = 'requirements_generating' AND flow_job_id IS NULL
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT id, 'requirements_generating', 'requirements_generating', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 作業項目の取り込み内容を、却下や再実行による作り直しで現在のIssueに更新したことがあるかを返す。
+ * 更新の履歴は、`note`が`notePrefix`で始まる`factory.work_item_events`の行である。
+ * PR本文の注記が読む。`intake_snapshot`のビューも同じ条件で導く。
+ */
+export async function hasIntakeRefreshEvent(
+  workItemId: number,
+  notePrefix: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    SELECT 1 AS found FROM factory.work_item_events
+    WHERE work_item_id = ${workItemId}::bigint
+      AND starts_with(note, ${notePrefix})
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * updateStatusIfCurrentと同じ比較と交換に、flow_job_idがexpectedFlowJobIdのままであること
  * (nullならNULLのままであること)を条件として足す。実装フローは自分のルートジョブIDを渡して、
  * リースを失った実行が状態を動かせないようにする。reconcileとon_error_flowは読み取った時点の値を渡す。

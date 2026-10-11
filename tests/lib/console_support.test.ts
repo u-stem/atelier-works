@@ -1,11 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
+  countHiddenCharacters,
+  countHtmlCommentOpeners,
   INFO_NOTICE_KINDS,
   INFO_NOTICE_WINDOW_DAYS,
   isNoticeResolvable,
   NOTICE_SEVERITY,
   noticeSeverity,
+  truncateChars,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../../f/factory/lib/console_support.ts";
 
@@ -149,5 +152,65 @@ describe("operations.md notice table", () => {
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {
     const documented = await documentedNoticeKinds();
     expect(documented.filter((kind) => !(kind in NOTICE_SEVERITY))).toEqual([]);
+  });
+});
+
+describe("truncateChars", () => {
+  test("returns a short text unchanged", () => {
+    expect(truncateChars("abc", 5)).toEqual({ text: "abc", truncated: false });
+  });
+
+  test("returns a text of exactly the limit unchanged", () => {
+    expect(truncateChars("abcde", 5)).toEqual({
+      text: "abcde",
+      truncated: false,
+    });
+  });
+
+  test("cuts a longer text to the limit", () => {
+    expect(truncateChars("abcdef", 5)).toEqual({
+      text: "abcde",
+      truncated: true,
+    });
+  });
+
+  test("counts a surrogate pair as one character", () => {
+    expect(truncateChars("a😀b", 2)).toEqual({ text: "a😀", truncated: true });
+  });
+});
+
+describe("countHiddenCharacters", () => {
+  test("counts nothing in ordinary text with newlines and tabs", () => {
+    expect(countHiddenCharacters("a\r\nb\tc 日本語")).toBe(0);
+  });
+
+  test("counts a zero width space", () => {
+    expect(countHiddenCharacters("a\u200Bb")).toBe(1);
+  });
+
+  test("counts a tag character", () => {
+    expect(countHiddenCharacters("a\u{E0041}b")).toBe(1);
+  });
+
+  test("counts a bidirectional override", () => {
+    expect(countHiddenCharacters("a\u202Eb")).toBe(1);
+  });
+
+  test("counts a variation selector", () => {
+    expect(countHiddenCharacters("a\uFE0F\u{E0100}")).toBe(2);
+  });
+
+  test("counts a control character other than the line break and tab", () => {
+    expect(countHiddenCharacters("a\u0007b")).toBe(1);
+  });
+});
+
+describe("countHtmlCommentOpeners", () => {
+  test("counts nothing without a comment", () => {
+    expect(countHtmlCommentOpeners("a <b> c")).toBe(0);
+  });
+
+  test("counts each opener", () => {
+    expect(countHtmlCommentOpeners("<!-- a --> x <!-- b")).toBe(2);
   });
 });

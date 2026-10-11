@@ -6,6 +6,7 @@
 
 import {
   INFO_NOTICE_KINDS,
+  INTAKE_REFRESHED_NOTE_PREFIX,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../f/factory/lib/console_support.ts";
 import {
@@ -14,6 +15,7 @@ import {
   countPrFixFailures,
   deleteResolvedNoticesBefore,
   getNoticeById,
+  hasIntakeRefreshEvent,
   insertCleanupRun,
   insertWorkItem,
   listUnresolvedNoticesByKind,
@@ -24,6 +26,7 @@ import {
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
+  updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
@@ -1218,6 +1221,127 @@ check(
   "deployed_sha_mismatch: a notice created at the same time as the successful deployment stays open",
   boundaryResolved === 0 && (await isResolved(boundaryNotice)) === false,
   boundaryResolved,
+);
+
+// 取り込み内容の更新: 更新と履歴の行が同じ文で書かれ、Consoleのビューが更新を導く。
+const refreshItem = await issueWorkItem(
+  9001,
+  1,
+  "requirements_generating",
+  "qdb before",
+);
+async function intakeSnapshotOf(id: number) {
+  const row = (await runConsoleQuery("intake_snapshot", 200, 30, sql, id))[0];
+  return row !== undefined && "refreshed" in row ? row : null;
+}
+check(
+  "intake refresh: the snapshot starts as not refreshed",
+  (await intakeSnapshotOf(refreshItem))?.refreshed === false,
+);
+const refreshNote = `${INTAKE_REFRESHED_NOTE_PREFIX}; before: x; after: y`;
+const refreshWritten = await updateIntakeIfRegenerating(
+  refreshItem,
+  { title: "qdb after", body: "new body" },
+  refreshNote,
+  sql,
+);
+check("intake refresh: updates a regenerating work item", refreshWritten);
+const refreshed = await intakeSnapshotOf(refreshItem);
+check(
+  "intake refresh: the snapshot returns the new content and the refreshed flag",
+  refreshed?.refreshed === true && refreshed.title === "qdb after",
+  refreshed,
+);
+check(
+  "intake refresh: the event is found by its prefix",
+  await hasIntakeRefreshEvent(refreshItem, INTAKE_REFRESHED_NOTE_PREFIX, sql),
+);
+const leasedItem = await issueWorkItem(
+  9002,
+  1,
+  "requirements_generating",
+  "qdb leased",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'job-1' WHERE id = ${String(leasedItem)}`,
+);
+check(
+  "intake refresh: does not update a work item whose pipeline holds the lease",
+  (await updateIntakeIfRegenerating(
+    leasedItem,
+    { title: "x", body: "y" },
+    refreshNote,
+    sql,
+  )) === false &&
+    (await hasIntakeRefreshEvent(
+      leasedItem,
+      INTAKE_REFRESHED_NOTE_PREFIX,
+      sql,
+    )) === false,
+);
+
+// 取り込み内容の更新は、承認待ちの作業項目とPRの作業項目には効かない。
+// 題名は変わらず、履歴の行も増えない。
+async function eventCount(id: number): Promise<number> {
+  const rows = await sql`
+    SELECT count(*) AS n FROM factory.work_item_events WHERE work_item_id = ${id}::bigint
+  `.fetch();
+  return Number(rows[0]?.n);
+}
+async function titleOf(id: number): Promise<unknown> {
+  const rows = await sql`
+    SELECT title FROM factory.work_items WHERE id = ${id}::bigint
+  `.fetch();
+  return rows[0]?.title;
+}
+const awaitingItem = await issueWorkItem(
+  9003,
+  1,
+  "awaiting_approval",
+  "qdb awaiting",
+);
+const awaitingEventsBefore = await eventCount(awaitingItem);
+check(
+  "intake refresh: does not update a work item that is awaiting approval",
+  (await updateIntakeIfRegenerating(
+    awaitingItem,
+    { title: "changed", body: "y" },
+    refreshNote,
+    sql,
+  )) === false &&
+    (await titleOf(awaitingItem)) === "qdb awaiting" &&
+    (await eventCount(awaitingItem)) === awaitingEventsBefore,
+);
+const prRefreshItem = await prWorkItem(
+  "pr_review",
+  9004,
+  "requirements_generating",
+  "qdb pr",
+);
+const prEventsBefore = await eventCount(prRefreshItem);
+check(
+  "intake refresh: does not update a pull request work item",
+  (await updateIntakeIfRegenerating(
+    prRefreshItem,
+    { title: "changed", body: "y" },
+    refreshNote,
+    sql,
+  )) === false &&
+    (await titleOf(prRefreshItem)) === "qdb pr" &&
+    (await eventCount(prRefreshItem)) === prEventsBefore,
+);
+
+// 取り込み内容の更新の行は、状態の注記に出さない。却下の理由が押しのけられないようにする。
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(refreshItem)}, 'awaiting_approval', 'requirements_generating', 'qdb reject reason', now() - interval '1 hour')`,
+);
+const refreshDetail = await runWorkItemDetail(refreshItem, sql);
+check(
+  "intake refresh: the status note keeps the earlier transition note",
+  refreshDetail.work_item.status_note === "qdb reject reason",
+  refreshDetail.work_item.status_note,
 );
 
 // 反映の履歴: 記録したPRをjsonbの列から読み戻せる。PRを記録しない行は空の配列になる。

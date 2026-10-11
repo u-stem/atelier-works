@@ -385,15 +385,24 @@ export function truncateCheckOutput(
 export const ISSUE_UPDATED_AFTER_INTAKE_NOTE =
   "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。";
 
+/**
+ * PR本文の「確認して欲しい点」に出す注記。取り込み内容を、却下や再実行による作り直しのときに
+ * 現在のIssueへ更新したことがある作業項目だけに出す。
+ * `ISSUE_UPDATED_AFTER_INTAKE_NOTE`は更新後の内容と比べるので、更新したときの書き換えは拾えない。
+ */
+export const INTAKE_REFRESHED_PR_NOTE =
+  "実装の入力は、却下や再実行による作り直しのときに、取り込み後に書き換えられたIssueの内容で更新されています。更新の前後の題名と本文は、作業項目の履歴に文字数とハッシュで残っています。";
+
 /** 改行コードを`\n`に揃え、前後の空白を除く。GitHubの編集画面は内容を変えずに改行コードを`\r\n`にすることがある。 */
 function normalizeIssueText(text: string | null): string {
-  return (text ?? "").replaceAll("\r\n", "\n").trim();
+  return (text ?? "").replace(/\r\n?/g, "\n").trim();
 }
 
 /**
  * 取り込み時点のIssue(work_items.title / body。要件定義の生成に使った内容)と現在のIssueで、
- * 題名か本文が違えばtrueを返す。実装のプロンプトは常に取り込み時点の内容を使い、
- * この判定はPR本文に注記を足すためだけに使う。
+ * 題名か本文が違えばtrueを返す。実装のプロンプトは常に取り込み時点の内容を使う。
+ * この判定は、PR本文の注記、承認の前の確認(`approval_decide`)、
+ * 作り直しの前の取り込み直し(`refreshIntakeFromIssue`)で使う。
  */
 export function issueChangedSinceIntake(
   snapshot: { readonly title: string | null; readonly body: string | null },
@@ -507,6 +516,8 @@ export type ImplementPrBodyInput = {
   readonly deployChecklist: boolean;
   /** trueなら「確認して欲しい点」のConsoleリンクの直前にISSUE_UPDATED_AFTER_INTAKE_NOTEを出す。 */
   readonly issueUpdatedAfterIntake: boolean;
+  /** trueなら、ISSUE_UPDATED_AFTER_INTAKE_NOTEの直前にINTAKE_REFRESHED_PR_NOTEを出す。 */
+  readonly intakeRefreshed: boolean;
 };
 
 /*
@@ -636,6 +647,7 @@ function renderChecks(checks: ImplementCheckSummary): string {
  * - 受入条件: 要件定義書の表
  * - 動作確認結果: 最後のラウンドの検証結果(実行しなかったときは「検査未実施」と理由)
  * - 確認して欲しい点: 保護対象の変更、レビュアーへの注記、
+ *   取り込み内容を更新した注記(`intakeRefreshed`のときだけ)、
  *   Issueの取り込み後の更新の注記(`issueUpdatedAfterIntake`のときだけ)、
  *   承認済みの要件定義を開くConsoleのリンク
  * - 関連リンク: `Closes #N`。PRの作業項目をIssueに結び付ける。
@@ -648,6 +660,7 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
   const attention = [
     ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
+    ...(input.intakeRefreshed ? [`- ${INTAKE_REFRESHED_PR_NOTE}`] : []),
     ...(input.issueUpdatedAfterIntake
       ? [`- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`]
       : []),

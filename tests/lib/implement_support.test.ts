@@ -16,6 +16,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
   IMPLEMENT_STEP_TIMEOUT_SEC,
+  INTAKE_REFRESHED_PR_NOTE,
   ISSUE_UPDATED_AFTER_INTAKE_NOTE,
   implementDeadlineAt,
   implementOutputProseIssues,
@@ -546,6 +547,7 @@ const PR_BODY_INPUT = {
   changedPaths: ["src/export.ts", "tests/export.test.ts"],
   deployChecklist: true,
   issueUpdatedAfterIntake: false,
+  intakeRefreshed: false,
 };
 
 describe("extractAcceptanceCriteria", () => {
@@ -859,6 +861,30 @@ describe("buildImplementPrBody", () => {
       buildImplementPrBody({ ...PR_BODY_INPUT, issueUpdatedAfterIntake: true }),
     ).toContain(
       `- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}\n- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7`,
+    );
+  });
+
+  test("notes an intake refresh before the Issue-updated note", () => {
+    expect(
+      buildImplementPrBody({
+        ...PR_BODY_INPUT,
+        intakeRefreshed: true,
+        issueUpdatedAfterIntake: true,
+      }),
+    ).toContain(
+      `- ${INTAKE_REFRESHED_PR_NOTE}\n- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`,
+    );
+  });
+
+  test("notes an intake refresh even when the live Issue equals the refreshed content", () => {
+    expect(
+      buildImplementPrBody({ ...PR_BODY_INPUT, intakeRefreshed: true }),
+    ).toContain(`- ${INTAKE_REFRESHED_PR_NOTE}\n- 要件定義(Console):`);
+  });
+
+  test("omits the refresh note when the intake was never refreshed", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).not.toContain(
+      INTAKE_REFRESHED_PR_NOTE,
     );
   });
 
@@ -1217,6 +1243,15 @@ describe("issueChangedSinceIntake", () => {
     ).toBe(false);
   });
 
+  test("ignores a lone CR-only difference", () => {
+    expect(
+      issueChangedSinceIntake(
+        { title: "CSV出力", body: "一行目\n二行目" },
+        { title: "CSV出力", body: "一行目\r二行目" },
+      ),
+    ).toBe(false);
+  });
+
   test("ignores surrounding whitespace", () => {
     expect(
       issueChangedSinceIntake(SNAPSHOT, {
@@ -1233,6 +1268,14 @@ describe("issueChangedSinceIntake", () => {
         { title: "CSV出力", body: "" },
       ),
     ).toBe(false);
+  });
+});
+
+describe("INTAKE_REFRESHED_PR_NOTE", () => {
+  test("says the input was updated by a rework", () => {
+    expect(INTAKE_REFRESHED_PR_NOTE).toContain(
+      "取り込み後に書き換えられたIssueの内容で更新されています",
+    );
   });
 });
 

@@ -49,6 +49,9 @@ function rejectedDeps(overrides: Partial<RejectedRetryDeps> = {}): {
     removeWorktree: async () => {
       calls.push("remove_worktree");
     },
+    refreshIntake: async () => {
+      calls.push("refresh_intake");
+    },
     launchPipeline: async () => {
       calls.push("launch");
       return JOB_A;
@@ -384,9 +387,30 @@ describe("relaunchPipelineAfterRejection", () => {
       "cas",
       "mark_restartable",
       "remove_worktree",
+      "refresh_intake",
       "launch",
       "record",
     ]);
+  });
+
+  test("refreshes the intake after the move and before the launch", async () => {
+    const h = rejectedDeps();
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls.indexOf("refresh_intake")).toBeLessThan(
+      h.calls.indexOf("launch"),
+    );
+  });
+
+  test("does not refresh the intake when the CAS did not match", async () => {
+    const h = rejectedDeps({ casToGenerating: async () => false });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).not.toContain("refresh_intake");
+  });
+
+  test("launches even when the intake refresh throws", async () => {
+    const h = rejectedDeps({ refreshIntake: boom });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).toContain("launch");
   });
 
   test("does not mark restartable when the CAS throws", async () => {

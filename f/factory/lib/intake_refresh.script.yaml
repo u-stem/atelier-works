@@ -1,0 +1,9 @@
+summary: '[LIB] 取り込み内容の更新と記録'
+description: ''
+lock: '!inline f/factory/lib/intake_refresh.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

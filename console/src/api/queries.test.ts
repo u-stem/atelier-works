@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { ApiFailure } from "./errors.ts";
 import {
   fetchDeployments,
+  fetchIntakeSnapshot,
   fetchSummary,
+  INTAKE_SNAPSHOT_STALE_MS,
+  intakeSnapshotQueryKey,
   SUMMARY_REFRESH_MS,
 } from "./queries.ts";
 import type { FetchLike } from "./windmill.ts";
@@ -106,5 +109,87 @@ describe("fetchSummary", () => {
         }),
       ),
     ).toEqual({ kind: "job_failed", message: "db down" });
+  });
+});
+
+const SNAPSHOT_ROW = {
+  work_item_id: 7,
+  owner: "o",
+  repo: "r",
+  issue_number: 42,
+  issue_url: "https://github.com/o/r/issues/42",
+  title: "Add feature",
+  body: "Original body",
+  body_truncated: false,
+  body_tail_html_comments: 0,
+  body_tail_hidden_chars: 0,
+  refreshed: false,
+};
+
+describe("fetchIntakeSnapshot", () => {
+  test("returns the snapshot row", async () => {
+    expect(
+      await fetchIntakeSnapshot(7, {
+        fetchFn: respondWith(JSON.stringify([SNAPSHOT_ROW])),
+      }),
+    ).toEqual(SNAPSHOT_ROW);
+  });
+
+  test("returns null when the work item has no snapshot", async () => {
+    expect(
+      await fetchIntakeSnapshot(7, { fetchFn: respondWith("[]") }),
+    ).toBeNull();
+  });
+
+  test("asks the intake_snapshot view for the work item", async () => {
+    const bodies: string[] = [];
+    const fetchFn: FetchLike = (_input, init) => {
+      bodies.push(String(init.body));
+      return Promise.resolve(new Response("[]"));
+    };
+    await fetchIntakeSnapshot(7, { fetchFn });
+    expect(bodies).toEqual(['{"view":"intake_snapshot","work_item_id":7}']);
+  });
+
+  test("throws invalid_response for a row of the wrong shape", async () => {
+    expect(
+      await failureOf(
+        fetchIntakeSnapshot(7, {
+          fetchFn: respondWith(JSON.stringify([{ title: 1 }])),
+        }),
+      ),
+    ).toEqual({ kind: "invalid_response" });
+  });
+
+  test("throws unauthorized on 401", async () => {
+    expect(
+      await failureOf(
+        fetchIntakeSnapshot(7, { fetchFn: respondWith("Unauthorized", 401) }),
+      ),
+    ).toEqual({ kind: "unauthorized" });
+  });
+});
+
+describe("intakeSnapshotQueryKey", () => {
+  test("changes with the approval request", () => {
+    expect(intakeSnapshotQueryKey(7, 3)).not.toEqual(
+      intakeSnapshotQueryKey(7, 4),
+    );
+  });
+
+  test("changes with the work item", () => {
+    expect(intakeSnapshotQueryKey(7, 3)).not.toEqual(
+      intakeSnapshotQueryKey(8, 3),
+    );
+  });
+
+  test("is the same for the same request", () => {
+    expect(intakeSnapshotQueryKey(7, 3)).toEqual(intakeSnapshotQueryKey(7, 3));
+  });
+});
+
+describe("INTAKE_SNAPSHOT_STALE_MS", () => {
+  test("is finite so that a refreshed snapshot is fetched again", () => {
+    expect(Number.isFinite(INTAKE_SNAPSHOT_STALE_MS)).toBe(true);
   });
 });
