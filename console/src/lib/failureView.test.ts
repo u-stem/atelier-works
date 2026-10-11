@@ -4,6 +4,7 @@ import {
   describeFailure,
   describeRetryPlan,
   FAILURE_TEXT_LIMIT,
+  RETRY_REFUSALS,
   workItemPath,
 } from "./failureView.ts";
 
@@ -20,7 +21,7 @@ function failure(overrides: Partial<SummaryFailure> = {}): SummaryFailure {
     status: "failed",
     updated_at: "2026-10-02T00:00:00.000Z",
     status_note: null,
-    status_changed_at: "2026-10-02T00:00:00.000Z",
+    status_changed_at: "2026-10-01T23:00:30.000Z",
     job_failure_id: 11,
     flow_path: "f/factory/pipeline",
     job_id: "0f5a4a52-6a2c-4b35-8b2a-0d4c6c7f1e11",
@@ -190,6 +191,70 @@ describe("describeFailure record", () => {
     );
   });
 
+  test("treats a record just before the status change as the current one", () => {
+    expect(describeFailure(failure()).recordState).toBe("current");
+  });
+
+  test("treats a missing record as missing", () => {
+    expect(
+      describeFailure(
+        failure({ job_failure_id: null, occurred_at: null, error: null }),
+      ).recordState,
+    ).toBe("missing");
+  });
+
+  test("treats a record from long before the status change as older than the status", () => {
+    expect(
+      describeFailure(
+        failure({ status_changed_at: "2026-10-02T12:00:00.000Z" }),
+      ).recordState,
+    ).toBe("predates_status");
+  });
+
+  test("drops the error of a record older than the status", () => {
+    expect(
+      describeFailure(
+        failure({ status_changed_at: "2026-10-02T12:00:00.000Z" }),
+      ).error,
+    ).toBeNull();
+  });
+
+  test("drops the flow of a record older than the status", () => {
+    expect(
+      describeFailure(
+        failure({ status_changed_at: "2026-10-02T12:00:00.000Z" }),
+      ).flowLabel,
+    ).toBeNull();
+  });
+
+  test("drops the job of a record older than the status", () => {
+    expect(
+      describeFailure(
+        failure({ status_changed_at: "2026-10-02T12:00:00.000Z" }),
+      ).jobId,
+    ).toBeNull();
+  });
+
+  test("uses the time of the status change for a record older than the status", () => {
+    expect(
+      describeFailure(
+        failure({ status_changed_at: "2026-10-02T12:00:00.000Z" }),
+      ).occurredAt,
+    ).toBe("2026-10-02T12:00:00.000Z");
+  });
+
+  test("labels the time as the failure time when the record is current", () => {
+    expect(describeFailure(failure()).occurredLabel).toBe("失敗した時刻");
+  });
+
+  test("labels the time as the status change when the record is older than the status", () => {
+    expect(
+      describeFailure(
+        failure({ status_changed_at: "2026-10-02T12:00:00.000Z" }),
+      ).occurredLabel,
+    ).toBe("状態が変わった時刻");
+  });
+
   test("falls back to the time of the status change without a record", () => {
     expect(
       describeFailure(
@@ -279,6 +344,20 @@ describe("describeFailure status note", () => {
   });
 });
 
+describe("RETRY_REFUSALS", () => {
+  test("names the refusal for an approved requirement with the implementation disabled", () => {
+    expect(RETRY_REFUSALS.some((reason) => reason.includes("実装が無効"))).toBe(
+      true,
+    );
+  });
+
+  test("names the refusal for a flow that is still running", () => {
+    expect(
+      RETRY_REFUSALS.some((reason) => reason.includes("フローがまだ動いて")),
+    ).toBe(true);
+  });
+});
+
 describe("describeRetryPlan", () => {
   test("restarts a review work item at the reviewing state", () => {
     expect(describeRetryPlan(failure({ kind: "pr_review" })).toLabel).toBe(
@@ -300,7 +379,7 @@ describe("describeRetryPlan", () => {
 
   test("explains how an Issue chooses where to restart", () => {
     expect(describeRetryPlan(failure()).note).toBe(
-      "承認済みの要件定義があれば実装から、なければ要件定義の作り直しから始めます。",
+      "承認済みの要件定義があれば実装から、なければ要件定義の作り直しから始めます。要件定義を作り直す場合は、GitHubの現在のIssueの題名と本文を取り込み直します。",
     );
   });
 

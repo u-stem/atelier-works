@@ -22,6 +22,20 @@ export function workItemPath(workItemId: number): string {
   return `/items/${workItemId}`;
 }
 
+/**
+ * 失敗の記録と、今の状態へ遷移した時刻の許容する差(ミリ秒)。
+ * 失敗の処理は、記録を書いてから状態を更新するので、正常な記録も状態の時刻より少し前になる。
+ * この差より前の記録は、今の状態になる前のものとみなす。
+ */
+const RECORD_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * 失敗の記録の状態。
+ * `missing`は記録が無い。`predates_status`は、記録が今の状態になる前のもので、
+ * 前の失敗の記録を今の失敗と取り違えないよう、内容として扱わない。
+ */
+export type FailureRecordState = "current" | "missing" | "predates_status";
+
 export type FailureDescription = {
   readonly title: string;
   readonly kindLabel: string;
@@ -34,15 +48,18 @@ export type FailureDescription = {
   readonly targetLabel: string | null;
   /** リンクにしてよい対象のURL。GitHubのIssueかPRのURLの形でなければ`null`。 */
   readonly targetUrl: string | null;
-  /** 失敗の記録のフローとステップ。失敗の記録が無ければ`null`。 */
+  readonly recordState: FailureRecordState;
+  /** `occurredAt`の見出し。今の失敗の記録があれば「失敗した時刻」、無ければ「状態が変わった時刻」。 */
+  readonly occurredLabel: string;
+  /** 失敗の記録のフローとステップ。今の失敗の記録が無ければ`null`。 */
   readonly flowLabel: string | null;
   /** 失敗の記録のジョブID。ジョブIDの形のものだけで、そうでなければ`null`。 */
   readonly jobId: string | null;
-  /** 失敗の時刻(ISO文字列)。記録が無ければ状態が変わった時刻、それも無ければ最後の更新の時刻。 */
+  /** 失敗の時刻(ISO文字列)。今の失敗の記録が無ければ状態が変わった時刻、それも無ければ最後の更新の時刻。 */
   readonly occurredAt: string;
   /** 作業項目の最終更新の時刻(ISO文字列)。一覧はこの時刻の新しい順に並ぶ。 */
   readonly updatedAt: string;
-  /** 失敗の記録の文。記録が無ければ`null`。 */
+  /** 失敗の記録の文。今の失敗の記録が無ければ`null`。 */
   readonly error: { readonly text: string; readonly truncated: boolean } | null;
   /** 今の状態へ遷移したときの注記。 */
   readonly statusNote: string | null;
@@ -91,9 +108,30 @@ function describeError(error: string | null): FailureDescription["error"] {
   };
 }
 
-/** 失敗の1行を、詳細のペインに出す内容にする。起票者や実行ログに由来する文字は、隠れた文字を置き換える。 */
+function recordStateOf(failure: SummaryFailure): FailureRecordState {
+  if (failure.job_failure_id === null || failure.occurred_at === null) {
+    return "missing";
+  }
+  if (failure.status_changed_at === null) {
+    return "current";
+  }
+  const recorded = Date.parse(failure.occurred_at);
+  const changed = Date.parse(failure.status_changed_at);
+  return Number.isNaN(recorded) ||
+    Number.isNaN(changed) ||
+    recorded >= changed - RECORD_SKEW_MS
+    ? "current"
+    : "predates_status";
+}
+
+/**
+ * 失敗の1行を、詳細のペインに出す内容にする。起票者や実行ログに由来する文字は、隠れた文字を置き換える。
+ * 今の状態になる前の失敗の記録は、内容と時刻に使わない。
+ */
 export function describeFailure(failure: SummaryFailure): FailureDescription {
   const target = targetOf(failure);
+  const recordState = recordStateOf(failure);
+  const record = recordState === "current";
   return {
     title: displayableIssueText(
       failure.title ?? workItemRef(failure.work_item_id),
@@ -105,17 +143,21 @@ export function describeFailure(failure: SummaryFailure): FailureDescription {
     repoLabel: `${failure.owner}/${failure.repo}`,
     targetLabel: target?.label ?? null,
     targetUrl: target?.url ?? null,
+    recordState,
+    occurredLabel: record ? "失敗した時刻" : "状態が変わった時刻",
     flowLabel:
-      failure.flow_path === null
+      !record || failure.flow_path === null
         ? null
         : failure.step === null
           ? failure.flow_path
           : `${failure.flow_path} / ${failure.step}`,
-    jobId: isJobId(failure.job_id) ? failure.job_id : null,
+    jobId: record && isJobId(failure.job_id) ? failure.job_id : null,
     occurredAt:
-      failure.occurred_at ?? failure.status_changed_at ?? failure.updated_at,
+      (record ? failure.occurred_at : null) ??
+      failure.status_changed_at ??
+      failure.updated_at,
     updatedAt: failure.updated_at,
-    error: describeError(failure.error),
+    error: record ? describeError(failure.error) : null,
     statusNote:
       failure.status_note === null
         ? null
@@ -134,7 +176,19 @@ export type RetryPlan = {
 };
 
 const ISSUE_RESTART_NOTE =
-  "承認済みの要件定義があれば実装から、なければ要件定義の作り直しから始めます。";
+  "承認済みの要件定義があれば実装から、なければ要件定義の作り直しから始めます。要件定義を作り直す場合は、GitHubの現在のIssueの題名と本文を取り込み直します。";
+
+/**
+ * scriptが再実行を断る場合。確認の画面で事前に伝える。
+ * 断りは、ジョブの失敗として返る。画面は、断りと、途中まで進んだ失敗を区別できない。
+ * `f/factory/retry_work_item.ts`の断りに合わせる。
+ */
+export const RETRY_REFUSALS: readonly string[] = [
+  "記録されたフローがまだ動いている、または動いているか読めないとき",
+  "同じIssueに、より新しいサイクルがあるとき",
+  "要件定義が承認済みで、実装が無効のとき(実装を有効にすると再実行できます)",
+  "確認から更新までの間に、作業項目の状態が変わったとき",
+];
 
 /**
  * 再実行の確認に出す、状態の遷移の説明。

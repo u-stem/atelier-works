@@ -1,6 +1,7 @@
 import { ExternalLink, RotateCw } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
+import { toast } from "sonner";
 import type { SummaryFailure } from "../../api/guards/summary.ts";
 import { JobLink } from "../../components/JobLink.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
@@ -11,6 +12,7 @@ import {
   FAILURE_TEXT_LIMIT,
   workItemPath,
 } from "../../lib/failureView.ts";
+import { workItemRef } from "../../lib/labels.ts";
 import { formatAbsoluteWithRelative } from "../../lib/relativeTime.ts";
 import { RetryConfirmDialog } from "./RetryConfirmDialog.tsx";
 import { useRetryWorkItem } from "./useRetryWorkItem.ts";
@@ -34,7 +36,13 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
  * ボタンの状態は作業項目のロックから決める。ほかの失敗の行の再実行には影響されない。
  * 再実行できない種類(監査)には、理由だけを出す。
  */
-function RetrySection({ failure }: { failure: SummaryFailure }) {
+function RetrySection({
+  failure,
+  now,
+}: {
+  failure: SummaryFailure;
+  now: number;
+}) {
   const [confirming, setConfirming] = useState(false);
   const { submit, isLocked } = useRetryWorkItem();
   const description = describeFailure(failure);
@@ -42,6 +50,8 @@ function RetrySection({ failure }: { failure: SummaryFailure }) {
   const input = { workItemId: failure.work_item_id };
   const locked = isLocked(input);
   const [requested, setRequested] = useState(false);
+  const confirmingRef = useRef(false);
+  confirmingRef.current = confirming;
   const statusRef = useRef<HTMLParagraphElement>(null);
 
   // 確定すると、再実行のボタンは処理中で無効になり、フォーカスが文書の先頭へ落ちる。
@@ -52,6 +62,19 @@ function RetrySection({ failure }: { failure: SummaryFailure }) {
       setRequested(false);
     }
   }, [locked, requested]);
+
+  // 確認を開いている間に、この作業項目が一覧から外れると、この部品ごと消える。
+  // 確認が黙って消えると、押した結果が分からなくなるので、知らせる。
+  useEffect(
+    () => () => {
+      if (confirmingRef.current) {
+        toast.info("再実行の確認を閉じました", {
+          description: `${workItemRef(failure.work_item_id)}が、確認を開いている間に一覧から外れました。`,
+        });
+      }
+    },
+    [failure.work_item_id],
+  );
 
   return (
     <section
@@ -87,8 +110,9 @@ function RetrySection({ failure }: { failure: SummaryFailure }) {
           </div>
           <RetryConfirmDialog
             open={confirming}
-            title={description.workItemLabel}
+            description={description}
             plan={plan}
+            now={now}
             onCancel={() => {
               setConfirming(false);
             }}
@@ -158,7 +182,7 @@ export function FailureOverview({
             )}
           </Row>
         )}
-        <Row label="失敗した時刻">
+        <Row label={description.occurredLabel}>
           <time dateTime={description.occurredAt} className="tabular-nums">
             {formatAbsoluteWithRelative(description.occurredAt, now)}
           </time>
@@ -191,7 +215,9 @@ export function FailureOverview({
         <div className="flex flex-col gap-3 px-5 py-4">
           {description.error === null ? (
             <p className="text-small text-muted-foreground">
-              この作業項目に、失敗の記録はありません。
+              {description.recordState === "predates_status"
+                ? "この状態になってからの失敗の記録はありません。"
+                : "この作業項目に、失敗の記録はありません。"}
             </p>
           ) : (
             <>
@@ -222,7 +248,7 @@ export function FailureOverview({
           )}
         </div>
       </section>
-      <RetrySection failure={failure} />
+      <RetrySection failure={failure} now={now} />
     </article>
   );
 }

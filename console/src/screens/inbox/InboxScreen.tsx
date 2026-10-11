@@ -23,6 +23,7 @@ import {
   withSelection,
 } from "../../lib/inboxSelection.ts";
 import {
+  auditFailureCount,
   buildInboxItems,
   chipCounts,
   effectiveChip,
@@ -153,7 +154,11 @@ export function InboxScreen() {
     );
   }
 
-  const unlisted = unlistedCounts(summary.data.counts, items);
+  const unlisted = unlistedCounts(
+    summary.data.counts,
+    items,
+    auditFailureCount(summary.data),
+  );
   const header = (
     <PageHeader
       title="要対応"
