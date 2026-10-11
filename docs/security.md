@@ -293,30 +293,62 @@ workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resou
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
 信頼できないIssueを読むClaudeは、このworkerでは動かさない。
 このworkerの境界が守るのは、ファイルシステムだけである。
+以下で「ボリューム全体」と書くのは、`factory_state`の最上位を指す。`claude`、`gh`、`audits`、`requirements`などが並ぶ層である。
 絞り方は次のとおりである。
 
 | 項目 | 設定 |
 | --- | --- |
-| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`factory_state`と`factory_console`は読み取り専用でマウントする。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| `factory_state` | ボリューム全体はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeとghの設定は、ボリューム全体の直下にあるので届かない |
+| `factory_console` | 読み取り専用でマウントする |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
 | `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
 | `docker.sock` | マウントしない |
 | 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは1024Mに絞る |
 
-`factory_state`を読めるのは、要件定義書と図のファイルを返すためである。
+`requirements`を読めるのは、要件定義書と図のファイルを返すためである。
+監査レポートは本文をDBから読むので、`audits`はマウントしない。
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
 読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
+
+サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
+1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。
+このサービスは`factory_state`を書き込みでマウントするが、ネットワークを持たず、権限もすべて落とし、固定の短いシェルのコマンドだけを実行して終わる。
+`requirements`がsymlinkならディレクトリを作らずに失敗で終わり、そうでなければ`mkdir -p -m 0755`を実行する。
+defaultのworkerで動くものが置いたsymlinkの先を、Console用のworkerにマウントさせないためである。
+`requirements`がsymlinkだと`factory_state_init`が失敗し、`mise run deploy`は`wmill sync push`とmigrationの前で止まる。
+
+`volume.subpath`は、古いEngineでは気づかないうちに無視され、`factory_state`のボリューム全体がマウントされうる。
+そのため、スタックを起動するmiseのタスク(`up`、`deploy`)は、起動の前にEngineが26.0(API 1.45)以上、Composeが2.26.0以上かを確かめ、満たさなければ止まる。
+この強制が止めるのは、`mise run up`と`mise run deploy`を通した起動だけである。
+`mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
+`doctor`は同じ検査に加えて、起動中のConsole用workerの中から、`factory_state`のボリューム全体がマウントされている証拠が見えないことを確かめる。
+証拠は、`/var/lib/factory`の直下の`claude`、`gh`、`audits`と、`requirements/requirements`である。
+対象リポジトリのowner名が`requirements`だと、サブパスだけが付いていても`requirements/requirements`が見える。
+そのため、この証拠だけではボリューム全体のマウントを見分けられない。
+Podmanは対象外である。
 
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
-- `factory_state`には、`requirements/`と`audits/`のほかに、次のものも入っていて、Console用のworkerから読める。
-  - Claude Codeの設定と履歴(`CLAUDE_CONFIG_DIR=/var/lib/factory/claude`)
-  - ghの設定(`GH_CONFIG_DIR=/var/lib/factory/gh`)
+- tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
+  読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
+  マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
+  トークンそのものは守らない。
+- scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
+- 要件定義書と図は読める。Consoleが表示するのと同じ内容である。
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
-  tag`console`を付けたscriptは、上の設定と履歴を読める。書けるのはdefaultのworkerだけである。
-  読めると、Claude Codeとghの認証情報が漏れうる。
+  tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
+- `factory_state_init`の確認の後にも隙がある。
+  Console用のworkerは、`factory_state_init`を経ない起動のたびに、サブパスを解決し直す。
+  契機は、restart policy、Dockerデーモンの再起動、ホストの再起動、手動の`docker compose restart windmill_worker_console`である。
+  その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、symlinkの先がマウントされうる。
+  隙は、`factory_state_init`を経ずにworkerが起動するたびに開く。
+  誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。`mise run up`は、設定の変わらない、動いているworkerを作り直さないためである。
+  `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
+  [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
+  突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
 
 ## 自己更新の依存インストール
 
