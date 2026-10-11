@@ -41,19 +41,39 @@ function headerCells(html: string): string[] {
   return html.match(/<th [^>]*>.*?<\/th>/g) ?? [];
 }
 
-/** 見出しの開始タグ。中の飾りのアイコンが持つ`aria-hidden`を、列を隠す指定と取り違えないため。 */
-function headerTag(html: string, label: string): string {
+/** 開始タグの`class`をクラス名の配列にする。中の飾りのアイコンが持つ`aria-hidden`を、列を隠す指定と取り違えないため。 */
+function classesOf(tag: string): string[] {
+  const value = /\sclass="([^"]*)"/.exec(tag)?.[1] ?? "";
+  return value.split(/\s+/);
+}
+
+function openingTag(cell: string): string {
+  return /^<(?:th|td) [^>]*>/.exec(cell)?.[0] ?? "";
+}
+
+function headerClasses(html: string, label: string): string[] {
   const cell = headerCells(html).find((c) => c.includes(label)) ?? "";
-  return /^<th [^>]*>/.exec(cell)?.[0] ?? "";
+  return classesOf(openingTag(cell));
 }
 
 function bodyCells(html: string): string[] {
   return html.match(/<td [^>]*>.*?<\/td>/g) ?? [];
 }
 
+// 本文の列の並び: 作業項目、題名、種別、状態、リポジトリ、Issue/PR、ブランチ、試行、修正回数、更新、書類。
+const BRANCH_CELL = 6;
+const ATTEMPT_CELL = 7;
+const FIX_ROUND_CELL = 8;
+const UPDATED_CELL = 9;
+const SHOWN_FROM_WIDE = "@[80rem]:table-cell";
+
+function bodyClasses(html: string, index: number): string[] {
+  return classesOf(openingTag(bodyCells(html)[index] ?? ""));
+}
+
 describe("PipelineTable columns", () => {
   test("gives the title column a minimum width", () => {
-    expect(headerTag(render([row()]), "題名")).toContain("min-w-");
+    expect(headerClasses(render([row()]), "題名")).toContain("min-w-64");
   });
 
   test("merges the issue and pull request links into one column", () => {
@@ -68,24 +88,66 @@ describe("PipelineTable columns", () => {
     expect(cell).toContain("PR #12");
   });
 
-  test("hides the branch column when the width is short", () => {
-    expect(headerTag(render([row()]), "ブランチ")).toContain("hidden");
-  });
+  test.each([["ブランチ"], ["試行"], ["修正回数"]])(
+    "hides the %s header until the area is wide",
+    (label) => {
+      const classes = headerClasses(render([row()]), label);
+      expect([
+        classes.includes("hidden"),
+        classes.includes(SHOWN_FROM_WIDE),
+      ]).toEqual([true, true]);
+    },
+  );
 
-  test("hides the attempt column when the width is short", () => {
-    expect(headerTag(render([row()]), "試行")).toContain("hidden");
-  });
-
-  test("hides the fix round column when the width is short", () => {
-    expect(headerTag(render([row()]), "修正回数")).toContain("hidden");
+  test.each([
+    ["branch", BRANCH_CELL],
+    ["attempt", ATTEMPT_CELL],
+    ["fix round", FIX_ROUND_CELL],
+  ])("hides the %s cell until the area is wide", (_name, index) => {
+    const classes = bodyClasses(render([row()]), index);
+    expect([
+      classes.includes("hidden"),
+      classes.includes(SHOWN_FROM_WIDE),
+    ]).toEqual([true, true]);
   });
 
   test("keeps the status column visible", () => {
-    expect(headerTag(render([row()]), "状態")).not.toContain("hidden");
+    expect(headerClasses(render([row()]), "状態")).not.toContain("hidden");
   });
 
-  test("keeps the updated column visible", () => {
-    expect(headerTag(render([row()]), "更新")).not.toContain("hidden");
+  test("keeps the updated header visible", () => {
+    expect(headerClasses(render([row()]), "更新")).not.toContain("hidden");
+  });
+
+  test("keeps the updated cell visible", () => {
+    expect(bodyClasses(render([row()]), UPDATED_CELL)).not.toContain("hidden");
+  });
+
+  test("limits the title width inside the cell", () => {
+    const html = render([row()]);
+    expect(bodyCells(html)[1]).toContain('class="max-w-lg break-words"');
+  });
+});
+
+describe("PipelineTable filter labels", () => {
+  /** `label`の`for`が指す要素が、同じ`id`を持つ`select`か`input`として描かれているか。 */
+  function controlOf(html: string, text: string, element: string): string {
+    const label = new RegExp(`<label for="([^"]+)"[^>]*>${text}`).exec(html);
+    const id = label?.[1] ?? "";
+    const control = new RegExp(`<${element} [^>]*id="${id}"`).exec(html);
+    return id === "" || control === null ? "" : id;
+  }
+
+  test("ties the status label to its select", () => {
+    expect(controlOf(render([row()]), "状態", "select")).not.toBe("");
+  });
+
+  test("ties the repository label to its select", () => {
+    expect(controlOf(render([row()]), "リポジトリ", "select")).not.toBe("");
+  });
+
+  test("ties the search label to its input", () => {
+    expect(controlOf(render([row()]), "検索", "input")).not.toBe("");
   });
 });
 

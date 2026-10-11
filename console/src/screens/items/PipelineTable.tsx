@@ -36,8 +36,10 @@ import {
  * 表の幅が足りないときに隠す列。題名、状態、更新を先に確保するため、
  * 補助の情報であるブランチ、試行、修正回数をここに置く。
  * 幅は画面ではなく表を包む領域で測る。サイドバーの有無で使える幅が変わるためである。
+ * 全列を出した表の最小幅は約80rem(題名16rem、ブランチ最大16rem、試行と修正回数で約8rem、残りで約40rem)になる。
+ * 閾値がこれより低いと、列が戻った直後に横スクロールが出るため、閾値を80remにしている。
  */
-const NARROW_HIDDEN = "hidden @6xl:table-cell";
+const NARROW_HIDDEN = "hidden @[80rem]:table-cell";
 
 /** 題名の列が潰れないための最小幅。表と見出しの両方に付ける。 */
 const TITLE_MIN_WIDTH = "min-w-64";
@@ -152,6 +154,7 @@ function FilterBar({
   filter: PipelineFilter;
   onChange: (next: PipelineFilter) => void;
 }) {
+  // 自作の部品を包む`label`は、静的検査が入力欄と結べないと見なすので、`htmlFor`でも結ぶ。
   const id = useId();
   return (
     <div className="flex flex-wrap items-end gap-4">
@@ -240,8 +243,10 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
           #{row.work_item_id}
         </Link>
       </td>
-      <td className={cn("max-w-lg break-words px-3 py-2", TITLE_MIN_WIDTH)}>
-        <PlainText value={row.title} />
+      <td className={cn("px-3 py-2", TITLE_MIN_WIDTH)}>
+        <div className="max-w-lg break-words">
+          <PlainText value={row.title} />
+        </div>
       </td>
       <td className="whitespace-nowrap px-3 py-2">
         {workItemKindLabel(row.kind)}
@@ -338,7 +343,8 @@ export function PipelineTable({
         </p>
       ) : (
         <div className="@container overflow-x-auto rounded-xl border border-border bg-card">
-          <table className="w-full min-w-[40rem] border-collapse text-body">
+          {/* 3列を隠した表の最小幅は約56rem(題名16rem、残りで約40rem)。これを下回る領域では横にスクロールする。 */}
+          <table className="w-full min-w-[56rem] border-collapse text-body">
             <thead className="text-small text-muted-foreground">
               <tr>
                 <SortableHeader

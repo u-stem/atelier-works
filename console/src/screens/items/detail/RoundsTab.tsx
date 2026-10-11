@@ -24,7 +24,7 @@ function RoundCard({ round, now }: { round: RoundView; now: number }) {
     <li className="flex flex-col gap-2 rounded-xl border border-border bg-card px-5 py-4">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-semibold">{round.roundLabel}</span>
-        <Badge variant="outline">{round.modeLabel}</Badge>
+        <Badge variant="muted">{round.modeLabel}</Badge>
         <Badge variant={round.outcomeVariant}>{round.outcomeLabel}</Badge>
         {round.diffLabel === null ? null : (
           <span className="text-small text-muted-foreground tabular-nums">

@@ -97,8 +97,8 @@ export function requirementsStatusTone(status: string): StatusTone {
 /** 色の系統に対応するバッジの種類。色だけに頼らず、バッジの文字でも状態を伝える。 */
 export function toneBadgeVariant(
   tone: StatusTone,
-): "success" | "warning" | "failure" | "outline" {
-  return tone === "neutral" ? "outline" : tone;
+): "success" | "warning" | "failure" | "muted" {
+  return tone === "neutral" ? "muted" : tone;
 }
 
 /**

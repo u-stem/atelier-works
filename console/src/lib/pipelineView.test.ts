@@ -462,6 +462,19 @@ describe("relatedLinks", () => {
     ).toEqual([{ label: "PR #13", url: "https://github.com/o/r/pull/13" }]);
   });
 
+  test("builds the pull request link from the number when the recorded url is broken", () => {
+    expect(
+      relatedLinks(
+        row({
+          issue_url: null,
+          issue_number: null,
+          pr_number: 12,
+          pr_url: "https://example.com/o/r/pull/13",
+        }),
+      ),
+    ).toEqual([{ label: "PR #12", url: "https://github.com/o/r/pull/12" }]);
+  });
+
   test("returns an empty list without an issue or a pull request", () => {
     expect(relatedLinks(row({ issue_url: null, issue_number: null }))).toEqual(
       [],
