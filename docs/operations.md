@@ -1309,6 +1309,10 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 | `gtr` | `GTR_REF` |
 | `wmill` | `WMILL_VERSION` |
 
+`WM_VERSION`を上げるときは、新しいベースのイメージのPATHを`docker image inspect`で調べる。
+それを`infra/worker/Dockerfile`の`ENV PATH`と突き合わせる。
+ベースのPATHに必要なディレクトリが増えていれば、`ENV PATH`に足す。
+
 ツールの追加やバージョンの変更には、workerのイメージの再ビルドが要る。`gitleaks`は、実装フローが毎ラウンドの固定の検査として`--redact`付きで実行するために入れている。版はホスト側のpre-commitのフックと同じである。
 
 ### 同期されない変数とリソース

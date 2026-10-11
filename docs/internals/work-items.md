@@ -158,6 +158,61 @@ Issueの新しいサイクルの作業項目を挿入すると、同じIssueの�
 `poll_issues`のreconcileは終端の作業項目を照合の対象から外す(`listActive`)。片方だけを更新すると、完了した作業項目が孤児と判定されて失敗にされる。
 例外は、要対応の終端の作業項目を取り消す専用の照合だけである。詳しくは「要対応の終端の取り消し」に書く。
 
+## ジョブの記録
+
+状態の遷移と失敗は、動いたWindmillのジョブに結び付ける。
+Consoleは、このIDからジョブの画面(`/run/<job_id>`)へのリンクを作る。
+
+| 記録先 | 列 | 値 |
+| --- | --- | --- |
+| `work_item_events` | `job_id` | 遷移を起こしたステップ(またはscript)のジョブID。環境変数`WM_JOB_ID` |
+| `work_item_events` | `root_job_id` | そのステップを含むフローのルートジョブID。環境変数`WM_ROOT_FLOW_JOB_ID` |
+| `job_failures` | `root_job_id` | 失敗を記録したジョブのルートジョブID。環境変数`WM_ROOT_FLOW_JOB_ID` |
+
+`job_failures.job_id`は既存の列で、呼び出し側が渡す値を持つ。出どころによって指す先が違う。
+
+- フローの失敗(`on_error_flow`)の行は、ルートのフローを指す。どのフローも`failure_module`から`job_id`を渡さないので、`root_job_id`と同じ値になり、失敗したステップのジョブIDは取れない。
+- ステップやscriptの中で記録した行は、そのジョブのID(`WM_JOB_ID`)を持つ。該当のジョブの画面へ辿れる。
+  記録するのは`poll_issues`、`poll_prs`、`requirements_apply`、`pr_fix_finish`、`issue_proposal_apply`などである。
+- スケジュールの失敗(`on_error_schedule`)の行は、引数で渡されたジョブIDを持つ。
+
+取れなかったときは`unknown`が入り、Consoleには`null`で返す。
+
+遷移を記録する`lib/db.ts`の関数が、入口で環境変数から読んで同じ文に書く。
+呼び出し側は何も渡さない。
+対象は、`updateStatus`と、`updateStatusIf`で始まる4つの比較交換と、新しいサイクルによる取り消し(`supersedeApprovedIssueWorkItems`)である。
+失敗の記録(`recordFailure`)も同じ仕組みでルートジョブIDを書く。
+
+読んだ値がUUIDの形でなければ、記録せずNULLにする。
+フローの外のジョブでの`WM_ROOT_FLOW_JOB_ID`の値は、確かめていない。
+未設定、空、UUIDの形でない値のどれでもNULLになるので、記録は壊れない。
+migrationが書く行も、NULLになる。
+`console_query`の`work_item_detail`は、DBから読んだ値がUUIDの形でなければNULLにして返す。
+失敗の`job_id`の`unknown`も、NULLで返す。
+値がリンクの一部になるため、書くときと読むときの両方で形を確かめる。
+
+`work_item_detail`は、遷移を`transitions`に新しい順で最大100件返す。
+要件定義の試行や実装のラウンドの行は、ジョブIDを持たない。
+試行やラウンドの境は、遷移の時刻と、各行の`created_at`を突き合わせて読む。
+
+### 反映の順序とリスク
+
+`self_update`は、`f/`を反映した後にmigrationを流す。
+列を足すmigrationが遅れるか失敗すると、新しいコードは存在しない列を指名してしまう。
+失敗の記録(`recordFailure`)は、列が無いエラー(PostgreSQLのundefined_column)のときだけ、新しい列を含まない文で記録し直す。
+失敗の記録が消えると、反映の遅れに気づけないためである。ほかのエラーは握らない。
+状態の遷移の関数は、同じ回避を持たない。
+その間は、遷移が列の欠落で失敗し、migrationが流れるまで作業項目の状態が進まない。
+関数ごとに新旧2つの文を持つと、状態を移す文が重複して保守しにくくなるためである。
+`console_query`の`work_item_detail`も新しい列を読むので、migrationが遅れる間は失敗する。作業項目の詳細の画面がまだ無いので、実害は無い。
+
+記録したジョブは、Windmillの保持期間を過ぎると画面が開けなくなる。
+DBの記録の保持期間は[運用](../operations.md)の「保持期間」にある。
+Windmillの保持期間のほうが短いと、古い行のリンクは開けない。
+
+残る作業として、フローの失敗の行から該当のステップのジョブへ辿る仕組みがある。
+失敗したステップのジョブIDを`failure_module`から渡す設計が要る。
+
 ## リース
 
 作業項目の`flow_job_id`は、その作業項目を書き換えてよいフローの実行を表すリースである。値はフローのルートジョブID(`WM_ROOT_FLOW_JOB_ID`)で、起動側が記録する`runFlowAsync`の戻り値と一致する。リースは要件定義のフロー(pipeline)と実装フローが使う。
