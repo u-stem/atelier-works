@@ -9,7 +9,7 @@
 | 起動元 | `source` | 作業項目の`claimed_by` |
 | --- | --- | --- |
 | 毎週月曜09:30のスケジュール | `schedule` | 空 |
-| Consoleの監査タブの**今すぐ監査** | `manual` | 実行したユーザー(`WM_USERNAME`) |
+| Consoleの**レポート**の**今すぐ監査** | `manual` | 実行したユーザー(`WM_USERNAME`) |
 
 `audit_kickoff`は対象期間を決め、次の順に起動を見送るかを判定する(`decideAuditKickoff`)。見送りは戻り値とログに残すだけで、通知しない。人の対応は要らないためである。
 

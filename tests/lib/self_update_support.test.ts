@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertBranchMatches,
-  buildNpmCiArgv,
   buildWmillArgv,
   buildWmillEnv,
   CallTimeoutError,
@@ -10,7 +9,6 @@ import {
   extractMiseHostSections,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
-  RAW_APP_RELATIVE_DIR,
   readDeployedSha,
   recordSuccessDeployment,
   resolveWmillCliContext,
@@ -301,8 +299,7 @@ describe("buildWmillEnv", () => {
     ]);
   });
 
-  // `wmill sync push`のバンドルがraw appに対して走らせるnpmも、
-  // 依存のinstall scriptを動かさないようにする。
+  // `wmill`のサブプロセスがnpmを走らせても、依存のinstall scriptを動かさない。
   test("tells npm run by wmill to skip install scripts", () => {
     const env = buildWmillEnv({});
     expect(env.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
@@ -317,59 +314,6 @@ describe("truncateOutput", () => {
   test("truncates to exactly max characters when over the max", () => {
     const text = "a".repeat(20);
     expect(truncateOutput(text, 10)).toBe("a".repeat(10));
-  });
-});
-
-describe("buildNpmCiArgv", () => {
-  test("runs npm ci against the raw app dir without touching the lockfile", () => {
-    expect(buildNpmCiArgv("/clone/f/factory/factory_console__raw_app")).toEqual(
-      [
-        "npm",
-        "ci",
-        "--prefix",
-        "/clone/f/factory/factory_console__raw_app",
-        "--no-audit",
-        "--no-fund",
-        "--ignore-scripts",
-      ],
-    );
-  });
-});
-
-describe("raw app dependencies", () => {
-  async function readLockPackages(): Promise<Record<string, unknown>> {
-    const lock: unknown = await Bun.file(
-      `${import.meta.dir}/../../${RAW_APP_RELATIVE_DIR}/package-lock.json`,
-    ).json();
-    if (typeof lock !== "object" || lock === null || !("packages" in lock)) {
-      throw new Error("package-lock.json has no packages field");
-    }
-    const packages = lock.packages;
-    if (typeof packages !== "object" || packages === null) {
-      throw new Error("package-lock.json packages is not an object");
-    }
-    return Object.fromEntries(Object.entries(packages));
-  }
-
-  // `buildNpmCiArgv`は`--ignore-scripts`で依存のinstall scriptを動かさない。
-  // install scriptが無いと組み立てが壊れる依存が入ったら、ここで気づけるようにする。
-  test("lockfile has a packages object", async () => {
-    const packages = await readLockPackages();
-    expect(Object.keys(packages).length).toBeGreaterThan(0);
-  });
-
-  test("contain no package that needs an install script", async () => {
-    const packages = await readLockPackages();
-    const withInstallScript = Object.entries(packages)
-      .filter(
-        ([, entry]) =>
-          typeof entry === "object" &&
-          entry !== null &&
-          "hasInstallScript" in entry &&
-          entry.hasInstallScript === true,
-      )
-      .map(([path]) => path);
-    expect(withInstallScript).toEqual([]);
   });
 });
 

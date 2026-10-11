@@ -82,7 +82,8 @@ routerの基準は`/console`で、Caddyが`/console/`の下のパスに`index.ht
 
 ### 旧Consoleのリンク
 
-過去のDiscordの通知、Issueのコメント、PRの本文には、旧Console(Windmillのraw app)のリンクが残る。
+旧Console(Windmillのraw app)は廃止した。
+過去のDiscordの通知、Issueのコメント、PRの本文には、旧Consoleのリンクが残る。
 旧ConsoleのURLを開くと、Caddyが固定の`/console/`へ302で飛ばす。規則は「配信の経路」にある。
 URLのフラグメントはブラウザが保つので、新しいConsoleが読み替える。
 `main.tsx`が、routerを作る前に`history.replaceState`で置き換える。
@@ -106,9 +107,6 @@ routerが先に`/console/`の画面を描くと、その画面が一瞬動いて
 | 要件定義書 | `buildConsoleUrl` | `/console/items/<id>/requirements`。試行が分かるときは`?attempt=<k>`を付ける |
 | 承認の詳細 | `buildApprovalConsoleUrl` | `/console/?approval=<id>` |
 | 監査レポート | `buildAuditConsoleUrl` | `/console/reports/audit/<id>` |
-
-サイドバーと件数のカードは、旧Consoleへのリンクを持たない。
-旧Consoleの入口は`/console/`に飛ぶので、リンクを置いても新しいConsoleに戻るだけである。
 
 ## API層
 
@@ -676,7 +674,7 @@ backendの型との一致は、`tests/scripts/console_requirements_contract.test
 選択肢は新しいほうから50件までに絞る。
 却下による作り直しは、試行が増えることで現れる。
 却下の理由と承認の履歴は、`work_item_detail`の`approvals`が持つが、この画面は読まない。
-`requirements_doc`が持たず、旧Consoleの要件定義タブも出さないためである。
+`requirements_doc`が持たないためである。
 
 ### 本文の描画
 
@@ -1169,8 +1167,8 @@ Caddyは、`/console/`の下を次の経路で返す。
 
 旧Consoleへの規則は、`/console/`の経路より先に評価する。
 旧Consoleの編集画面(`/apps/edit/...`)とAPIは飛ばさない。
-旧Consoleのraw appを削除した後も、この規則は残す。過去のリンクが残り続けるためである。
-302にするのは、ブラウザに転送を覚えさせないためである。Caddyfileを戻したときに、旧Consoleへ届かなくなるのを防ぐ。
+この規則は、過去のリンクが残り続けるため、旧Consoleのappを消した後も残す。
+302にするのは、ブラウザに転送を覚えさせないためである。転送を覚えると、規則を変えたときに古い行き先へ飛び続ける。
 
 `/console/manifest.json`は、`current/`の`manifest.json`である。
 `status.json`は`state`、`sha`、`checked_at`、`error`の4項目だけを持つ。
@@ -1280,8 +1278,6 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 要件定義書の図は、最上位のページではなく、隔離したiframeの中で描く。
 何を守るかは、[セキュリティ](../security.md)の「draw.ioの図の描画」にある。
 要件定義書の画面が、本文の図ごとに`DrawioFrame`で描く。
-旧Consoleのraw appは、同じ`/console/drawio.html`をiframeで読み込んで図を描く。
-そのため、旧Consoleで図を見るには、このConsoleの配信が動いている必要がある。
 
 | ファイル | 役割 |
 | --- | --- |
@@ -1290,7 +1286,7 @@ IPv4のアドレス(`127.0.0.1`など)かホスト名で開く。
 | `console/scripts/fetch-drawio-viewer.ts` | CIが呼ぶ。取得して照合し、`dist/drawio/`に書く |
 | `console/public/drawio.html` | 図を描くページ。scriptはすべて外部のファイルで、通常のscriptとして読む |
 | `console/public/drawio/drawio-frame-*.js` | ページの中の受け口。素のJavaScriptで、ビルドを通らない |
-| `console/src/lib/drawioMessages.ts` | 親が送るメッセージの組み立てと、iframeから届いたメッセージ(高さ、失敗の種類)の検査。純粋関数。raw appの`lib/drawioMessages.ts`が、同じ`DRAWIO_FRAME_SRC`と`MAX_XML_BYTES`を持つ |
+| `console/src/lib/drawioMessages.ts` | 親が送るメッセージの組み立てと、iframeから届いたメッセージ(高さ、失敗の種類)の検査。純粋関数 |
 | `console/src/lib/drawioFrameState.ts` | iframeの状態の遷移(load、メッセージ、応答なし、XMLの差し替え)を`(state, event) => state`で表す。純粋関数 |
 | `console/src/components/drawio/DrawioFrame.tsx` | 親の部品。どの画面からも使える |
 
@@ -1417,8 +1413,6 @@ Consoleの本体のCSPは`/console/assets/`だけを許すので、本体のペ�
 
 - Windmillのフロントエンドからの要求には、ブラウザが`Sec-Fetch-Site: same-origin`を付ける。
 - CLI(`wmill`)は、`Sec-Fetch-*`、`Origin`、`Cookie`のどれも送らない。
-- Windmill 1.817.0のraw app(旧Console)には、既定でsandboxが無い。`backend.*`の呼び出しは、`parent.postMessage`を通して同じオリジンの親(WindmillのSPA)が行うので、これも`same-origin`になる。
-- raw appのsandboxを有効にすると、バンドルの取得(`GET /api/w/*/apps_u/get_data/v/*`)がcross-siteになって403になる。`Origin: null`も止めるので、`Origin`を付ける要求も同じである。そのときは、この経路を例外にする必要がある。
 
 ### Originの検査
 

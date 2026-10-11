@@ -184,7 +184,7 @@ Issueがopenかを確かめるために取得したIssueの題名か本文が、
 
 却下や再実行による作り直しで、取り込み内容を現在のIssueで更新したことのある作業項目では、「確認して欲しい点」に別の1行を必ず書く。更新後の値と現在のIssueを比べる上の注記では、更新のときの書き換えを拾えないためである。更新の有無は、`work_item_events`の更新の履歴から読む。
 
-Consoleの**パイプライン**タブは、作業項目のブランチとPRを列に表示する。
+Consoleの**作業項目**の表は、作業項目のブランチとPRを列に表示する。
 
 ### 途中の変更の扱い
 
@@ -299,8 +299,8 @@ Windmillのtimeoutで打ち切られたステップのClaudeは、`--max-turns`�
 ## 再実行と中断
 
 実装フローの再実行には`retry_work_item`を使う。
-ジョブが失敗した作業項目はConsoleの**失敗**タブから実行し、それ以外はWindmillで`f/factory/retry_work_item`を作業項目のIDで実行する。
-人の対応待ちの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ないためである。
+失敗した作業項目と人の対応待ちの作業項目はConsoleの**要対応**から実行し、ブロックの作業項目はWindmillで`f/factory/retry_work_item`を作業項目のIDで実行する。
+ブロックの作業項目は、失敗ではないので**要対応**に出ないためである。
 Windmillでフローを直接動かすと、リースの確認で何もせずに終わる。
 
 | 操作 | 挙動 |
@@ -460,7 +460,7 @@ workerには`CAP_SYS_PTRACE`が無い。そのため、uidを変えたプロセ�
 ### ロックファイルの掃除
 
 ロックファイルは確かめるたびにworktreeの隣に作られ、worktreeを消しても残る。`cleanup_workspaces`は、ロックが持たれているか、タグを持つプロセスが残っているworktreeを消さない。
-そのworktreeごとに、Consoleの**通知**タブへ`cleanup_worktree_busy`のnoticeを残す。
+そのworktreeごとに、Consoleの**要対応**へ`cleanup_worktree_busy`のnoticeを残す。
 noticeは1回の掃除でパスごとに1件で、Discordには通知しない。
 
 `cleanup_workspaces`がロックファイルを探す場所は次の2つの直下である。

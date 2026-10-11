@@ -24,11 +24,7 @@ const OWN_SKILL_PATTERN =
 /** 自作のsubagentの定義。 */
 const OWN_AGENT_PATTERN = /^\.claude\/agents\/[^/]+\.md$/;
 
-const EXCLUDED_PREFIXES = [
-  ".agents/",
-  "tests/fixtures/",
-  "f/factory/factory_console__raw_app/",
-];
+const EXCLUDED_PREFIXES = [".agents/", "tests/fixtures/"];
 
 const EXCLUDED_FILES = new Set(["AGENTS.wmill.md"]);
 

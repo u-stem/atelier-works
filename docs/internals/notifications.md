@@ -9,8 +9,8 @@ Factoryは、知らせる内容によって経路を使い分ける。
 | 経路 | 載せるもの | 実装 |
 | --- | --- | --- |
 | Discordの通知 | 人の行動が要るイベントと、日次サマリー | `f/factory/lib/discord.ts` |
-| Consoleの**通知**タブ | Discordに送らない要対応の事項(notice) | `factory.notices`、`addNotice` |
-| Consoleの**失敗**タブ | フローとスケジュールの失敗の記録 | `factory.job_failures`、`recordFailure` |
+| Consoleの**要対応**と**システム** | Discordに送らない事項(notice)。要対応の通知は**要対応**に、情報の通知は**システム**に出る | `factory.notices`、`addNotice` |
+| Consoleの**要対応**と**システム** | フローとスケジュールの失敗の記録。作業項目の失敗は**要対応**に、作業項目に紐づかない失敗は**システム**に出る | `factory.job_failures`、`recordFailure` |
 | GitHub | 成果物だけ | Issueへの承認のコメントと、承認を取り消したときのコメント、PRのレビューと返信 |
 
 GitHubには成果物だけを書く。Issueに自動で投稿するのは、要件定義が承認されたときのConsoleへのリンクと、新しいサイクルが始まって承認済みの要件定義を取り消したときの説明の、2種類のコメントだけである。着手、承認待ち、却下、期限切れ、失敗、人の対応待ちといった運用上の状態は、Issue・PRに書かない。DiscordとConsoleで知らせる。
@@ -76,7 +76,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `issue_claimed` | Issue | リポジトリ |
 | `approval_requested` | Consoleの承認の画面 | リポジトリ、Issue |
 | `requirements_approved` | Consoleの要件定義のページ | リポジトリ、Issue |
-| `intake_refreshed` | Issue | リポジトリ。説明に、新しいConsoleで更新後の内容を確かめる旨 |
+| `intake_refreshed` | Issue | リポジトリ。説明に、Consoleで更新後の内容を確かめる旨 |
 | `needs_human` | 対象のIssueかPR | 説明に理由、「次の操作」、リポジトリ |
 | `pr_reviewed` | PR | 説明に指摘の件数と状態 |
 | `pr_fixed` | PR | 再レビュー依頼のAPIが失敗したときだけ「補足」 |
@@ -94,8 +94,8 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 次の操作は、理由の文から`pr_workflow_support.ts`の`nextActionFor`が決める。
 
 - 同じ理由でも、実装フローとPRの修正で次の操作が変わるものは、フロー(`NextActionFlow`)を渡して選ぶ。
-- 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く。人の対応待ちとブロックの作業項目は、`job_failures`の行が無ければConsoleの**失敗**タブに出ないためである。
-- どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**通知**タブで原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
+- 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く(`RETRY_WORK_ITEM_ACTION`)。どの種別と状態の作業項目にも使えるためである。
+- どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**システム**で原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
 
 ### 理由の区切りを無効にする
 
@@ -178,7 +178,7 @@ DiscordがHTTP 429を返したら、待ってから1回だけ再送する。待�
 
 ### 届かなかったことを残す通知
 
-承認待ちの通知が届かなかったときは、**通知**タブに`approval_notify_failed`のnoticeを1件残す。通知が無いと、人が承認依頼に気づけないためである。webhookを設定していないときは、Consoleを見る運用なので残さない。noticeの記録が失敗しても、warnを残すだけで例外は投げない。
+承認待ちの通知が届かなかったときは、Consoleの**システム**の「情報の通知」に`approval_notify_failed`のnoticeを1件残す。通知が無いと、人が承認依頼に気づけないためである。webhookを設定していないときは、Consoleを見る運用なので残さない。noticeの記録が失敗しても、warnを残すだけで例外は投げない。
 
 ### 通知を送らない場合
 
@@ -198,7 +198,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | --- | --- | --- |
 | `approval_notify_failed` | `pipeline_request_approval` | 対象、送れなかった理由 |
 | `approval_comment_failed` | `requirements_apply` | 対象、理由、要件定義を開くConsoleのリンク |
-| `intake_refreshed` | `requirements_apply`、`retry_work_item` | 対象、新しいConsoleで更新後の内容を確かめる旨 |
+| `intake_refreshed` | `requirements_apply`、`retry_work_item` | 対象、Consoleで更新後の内容を確かめる旨 |
 | `implement_launch_failed` | `requirements_apply` | 対象、理由、次の操作 |
 | `implement_needs_human` | `implement_finish` | 対象、止まった理由 |
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |
@@ -384,9 +384,9 @@ RESTのrate limitでは、解除まで待って1回だけ再試行する。待�
 
 メッセージは`GitHub rate limit on <endpoint>: ... (rerun after the limit resets)`の形である。投げるのは要求がGitHubに拒まれた後なので、その要求の副作用は起きていない。
 
-ジョブが失敗した作業項目は、解除を待ってからConsoleの**失敗**タブで再実行する。
+失敗した作業項目と人の対応待ちの作業項目は、解除を待ってからConsoleの**要対応**で再実行する。
 人の対応待ちの通知でも、rate limitが原因のときは、次の操作に解除を待ってから再実行するよう表示する。
-人の対応待ちの作業項目は、`job_failures`の行が無ければ**失敗**タブに出ないので、Windmillで`retry_work_item`を実行する。rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
+rate limitで失敗したときに各ステップが何を済ませているかは、[実装フローの仕様](implement.md)と[PRワークフローの仕様](pr-workflow.md)にある。
 
 ## GitHub APIの一時的な失敗
 

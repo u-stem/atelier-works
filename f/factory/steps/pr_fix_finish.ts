@@ -490,16 +490,16 @@ export async function main(
    * `factory.issue_proposals`の行を登録する。
    * 登録が失敗したら、その返信は投稿せず、`issue_proposal_record_failed`のnoticeを記録する。
    * どこにも記録されていないIssueの検討を約束するPRコメントを出さず、
-   * ConsoleのNoticesタブで人に失敗を知らせるため。
+   * Consoleの要対応で人に失敗を知らせるため。
    * 行を登録した後に返信の投稿が失敗しても、致命的ではない。
-   * GitHubに返信が出るかどうかに関わらず、提案はConsoleのInboxに見えている。
+   * GitHubに返信が出るかどうかに関わらず、提案はConsoleの要対応に見えている。
    * `thread_id`は、このラウンドの全提案で共有する1回の`listReviewThreads`から
    * ベストエフォートで求める。取得に失敗したら(rate limitを含む)`thread_id`を付けずに続ける。
    * 通常のIssueコメントにはレビュースレッドが無いので、
    * インラインの提案が1つ以上あるときだけ取得する。
    * 返信の投稿に失敗しても(rate limitを含む)ステップは止めず、残りの返信を続ける。
    * 失敗が1件以上あれば、最後に`fix_reply_post_failed`のnoticeを1件だけ記録し、
-   * ConsoleのNoticesタブでPRに人が返信するよう知らせる。Discordには通知しない。
+   * Consoleの要対応でPRに人が返信するよう知らせる。Discordには通知しない。
    * noticeの記録に失敗しても、警告を残して続ける。
    */
   async function postFixReplies(newSha: string | null): Promise<void> {
@@ -751,7 +751,7 @@ export async function main(
     // push成功の経路だけでなくここでも`propose_issue`の返信を記録する。
     // `factory.issue_proposals`の行は、上の`postFixReplies`が返信の投稿前に登録済み。
     // 1件以上記録したときは、Discordの理由に汎用の「commitするものが無い」ではなく
-    // 提案を挙げ、ConsoleのInboxへ案内する。
+    // 提案を挙げ、Consoleの要対応へ案内する。
     const nothingToCommitProposals = selectProposeIssueReplies(repliesToPost);
     await finalizeTerminal(
       "needs_human",
@@ -792,7 +792,7 @@ export async function main(
   }
 
   // このラウンドで`propose_issue`の返信を1件以上記録したら、PRはまだ再レビューに進めない。
-  // 人が先にConsoleのInboxで提案したIssueを承認か却下する必要がある
+  // 人が先にConsoleの要対応で提案したIssueを承認か却下する必要がある
   // (`approval_decide.ts`が`steps/issue_proposal_apply.ts`へ渡す)。
   // そのためrereview_requestedではなくneeds_humanで終え、下のレビュアー依頼も飛ばす。
   // この作業項目の全提案が判断されると、`issue_proposal_apply.ts`が

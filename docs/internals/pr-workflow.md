@@ -76,7 +76,7 @@ PRのheadが対象のリポジトリにないとき(forkのPRと、headのリポ
 
 ### ラベルを外した後の追跡
 
-Factoryが扱ったPRには、トリガーのラベルのほかにラベルを付けない。状態は作業項目の状態(`work_items.status`)だけで表し、Consoleの**パイプライン**タブに表示する。
+Factoryが扱ったPRには、トリガーのラベルのほかにラベルを付けない。状態は作業項目の状態(`work_items.status`)だけで表し、Consoleの**作業項目**に表示する。
 
 ラベルが外れた後も追跡を続けるため、`poll_prs`はDBからPRを見つけ直す。`f/factory/lib/db.ts`の`listTrackedPrs`が、次の条件をすべて満たす作業項目を返す。
 
@@ -318,7 +318,7 @@ Claudeは`propose_issue`を選んだとき、修正を強行せず、Issueの`ti
 
 ### 承認と却下の反映
 
-人がConsoleの**承認**タブで決定すると、`f/factory/approval_decide`が決定を記録し、`f/factory/steps/issue_proposal_apply`を起動する。承認依頼の種類(`kind`)は`issue_proposal`である。要件定義の承認と同じく、人が判断してから進む仕組みである。
+人がConsoleの**要対応**で決定すると、`f/factory/approval_decide`が決定を記録し、`f/factory/steps/issue_proposal_apply`を起動する。承認依頼の種類(`kind`)は`issue_proposal`である。要件定義の承認と同じく、人が判断してから進む仕組みである。
 
 | 決定 | 処理 |
 | --- | --- |
@@ -343,7 +343,7 @@ Claudeは`propose_issue`を選んだとき、修正を強行せず、Issueの`ti
 - Issueを作る前に、`claimIssueCreation`が提案の行の印を条件付きのUPDATEで取る。取れた呼び出しだけがIssueを作り、取れなかった呼び出しは何もせずに終える。GitHubの検索は索引の反映が遅れ、同時の呼び出しがどちらも目印の検索を空振りしうるためである。印は15分で切れる。例外で終わった呼び出しの印も、期限まで残す。Windmillの同時実行の制限(`concurrent_limit`)は設定しない。有償版でしか効かず、印だけで直列化する。
 - 決定済みの提案に違う決定を送ると、上書きせずにエラーで拒否する。
 
-起票に失敗した提案は**承認**タブに残る。Issueの作成自体が失敗したときは、決定の前の`pending`に戻す。Issueの作成の後の返信、スレッドの解決、状態の遷移が失敗したときは、「承認済み・起票未完了」として残す。どちらも、もう一度承認すれば続きから起票する。
+起票に失敗した提案は**要対応**に残る。Issueの作成自体が失敗したときは、決定の前の`pending`に戻す。Issueの作成の後の返信、スレッドの解決、状態の遷移が失敗したときは、「承認済み・起票未完了」として残す。どちらも、もう一度承認すれば続きから起票する。
 
 ## watermark
 
@@ -576,7 +576,7 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
 - 配信の設定: `infra/Caddyfile`
-- 旧Consoleのraw appが図を隔離して描く部品: `DrawioViewer.tsx`、`lib/drawioMessages.ts`、`lib/drawioFrameState.ts`と、照合するテスト
+- 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
@@ -586,7 +586,8 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
 `infra/console_fetcher/`は、配信物を検証して配信する。
 どちらも書き換えられると、検証や隔離をすり抜けた内容が運用者のブラウザで動く。
-旧Consoleのraw appが図を隔離して描く部品は、書き換えられると、sandboxを外したり、別のページをiframeに読ませたりできる。
+図を隔離して描くiframeの検査は、書き換えられると役目を果たさなくなる。
+sandboxを外したり、別のページをiframeに読ませたりしても、検査を通るためである。
 
 markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
 textlintの設定は、`rules`の名前からモジュールを解決して読み込む。
