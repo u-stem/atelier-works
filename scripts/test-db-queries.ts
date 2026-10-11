@@ -1544,9 +1544,13 @@ execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
 // ---------------------------------------------------------------------------
 
 const dedupRecord = {
-  kind: INFO_NOTICE_KINDS[0] ?? "claim_race_lost",
+  kind: "claim_race_lost",
   message: "qdb dedup same body",
 };
+check(
+  "notice dedup: the kind used by the refresh check is an info kind",
+  INFO_NOTICE_KINDS.includes(dedupRecord.kind),
+);
 const dedupFirst = await addNoticeUnlessUnresolved(dedupRecord, sql);
 check(
   "notice dedup: the first insert returns the id",

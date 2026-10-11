@@ -208,7 +208,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     "cleanup_worktree_busy",
     guide(
       "残ったプロセスが使っているので、終端の作業項目のworktreeを消しませんでした。",
-      "本文に載ったプロセスを止めてください。止めない限り、毎日残ります。",
+      "本文に載ったプロセスを止めてください。止めない限り、同じ通知が1件残り続けます。",
     ),
   ],
   [
