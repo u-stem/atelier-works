@@ -49,16 +49,20 @@ function IssueLink({ doc }: { doc: RequirementsDoc }) {
 /**
  * 要件定義書1件の本文。メタ情報、試行の切り替え、要約、本文、未確定事項を左に、目次を右に置く。
  * 本文と要約と未確定事項はIssueの内容に由来するので、`prepared`(見えない文字を置き換え済み)だけを描く。
+ * `embedded`のときは、承認の画面の中に置くため、メタ情報、試行の切り替え、目次を省き、幅も親に合わせる。
+ * 承認の画面は、承認する試行を固定して出すので、試行を切り替えさせない。
  */
 export function RequirementsDocumentView({
   doc,
   prepared,
   latestAttempt,
+  embedded = false,
 }: {
   doc: RequirementsDoc;
   prepared: PreparedDoc;
   /** 最新の試行の番号。確かめられていないときは`null`。 */
   latestAttempt: number | null;
+  embedded?: boolean;
 }) {
   const repo = useMemo(
     () => ({ owner: doc.owner, repo: doc.repo }),
@@ -66,33 +70,47 @@ export function RequirementsDocumentView({
   );
   const sourceNotice = docSourceNotice(doc.doc_dir_source);
   return (
-    <div className="mx-auto flex w-full max-w-[75rem] items-start gap-10 px-8 py-6">
-      <article className="flex min-w-0 max-w-[47.5rem] flex-1 flex-col gap-6">
-        <dl className="divide-y divide-border rounded-xl border border-border bg-card">
-          <Row label="状態">
-            <Badge
-              variant={toneBadgeVariant(
-                requirementsStatusTone(doc.work_item_status),
-              )}
-            >
-              {workItemStatusLabel(doc.work_item_status)}
-            </Badge>
-          </Row>
-          <Row label="リポジトリ">
-            {doc.owner}/{doc.repo}
-          </Row>
-          <Row label="Issue">
-            <IssueLink doc={doc} />
-          </Row>
-          <Row label="作業項目">{workItemRef(doc.work_item_id)}</Row>
-          <Row label="試行">
-            <AttemptSwitcher
-              workItemId={doc.work_item_id}
-              current={doc.attempt}
-              latest={latestAttempt}
-            />
-          </Row>
-        </dl>
+    <div
+      className={
+        embedded
+          ? "flex w-full items-start"
+          : "mx-auto flex w-full max-w-[75rem] items-start gap-10 px-8 py-6"
+      }
+    >
+      <article
+        className={
+          embedded
+            ? "flex min-w-0 flex-1 flex-col gap-6"
+            : "flex min-w-0 max-w-[47.5rem] flex-1 flex-col gap-6"
+        }
+      >
+        {embedded ? null : (
+          <dl className="divide-y divide-border rounded-xl border border-border bg-card">
+            <Row label="状態">
+              <Badge
+                variant={toneBadgeVariant(
+                  requirementsStatusTone(doc.work_item_status),
+                )}
+              >
+                {workItemStatusLabel(doc.work_item_status)}
+              </Badge>
+            </Row>
+            <Row label="リポジトリ">
+              {doc.owner}/{doc.repo}
+            </Row>
+            <Row label="Issue">
+              <IssueLink doc={doc} />
+            </Row>
+            <Row label="作業項目">{workItemRef(doc.work_item_id)}</Row>
+            <Row label="試行">
+              <AttemptSwitcher
+                workItemId={doc.work_item_id}
+                current={doc.attempt}
+                latest={latestAttempt}
+              />
+            </Row>
+          </dl>
+        )}
         {sourceNotice === null ? null : (
           <Alert variant="warning">
             <Info aria-hidden="true" />
@@ -107,7 +125,7 @@ export function RequirementsDocumentView({
           </p>
         ) : null}
         {/* 目次は、狭い幅では本文の前に畳んで置く。 */}
-        {prepared.headings.length === 0 ? null : (
+        {embedded || prepared.headings.length === 0 ? null : (
           <details className="rounded-xl border border-border bg-card px-5 py-3 min-[1100px]:hidden">
             <summary className="cursor-pointer text-small font-semibold text-muted-foreground">
               目次
@@ -151,7 +169,7 @@ export function RequirementsDocumentView({
           </section>
         )}
       </article>
-      {prepared.headings.length === 0 ? null : (
+      {embedded || prepared.headings.length === 0 ? null : (
         <aside className="sticky top-6 hidden w-56 shrink-0 min-[1100px]:block">
           <RequirementsToc headings={prepared.headings} />
         </aside>

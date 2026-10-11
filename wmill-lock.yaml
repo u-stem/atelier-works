@@ -5,7 +5,7 @@ locks:
   f/factory/_smoke_suspend__flow+__flow_hash: c642c40389574e98140d74c6a555ab5e6eeade0d1462c8bb7cfffa3205ecdc37
   f/factory/_smoke_suspend__flow+report_what_resume_produced.ts: dbb0ef9c729a74523bae031d57667cb2595c867000eecba39c033e08e0dd7ae8
   f/factory/_smoke_suspend__flow+request_approval.ts: c56881749f5785c8546f4e79e0f78c7a069735c17873845b4234251c5e9b9729
-  f/factory/approval_decide: b616d71343c040a71abd0715f05300c58ef977d273121624ab68630cbf96a8ab
+  f/factory/approval_decide: d52f7fabbf776f5ddb78d61e7454b122266b80f3ce0cc7e30f30d635160fe583
   f/factory/audit__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
   f/factory/cleanup_db: 365fb8b2a9a410c2bc5e6e6cf42af1e56330b2c2b5a42bcffa9ab4e1fd9f7aa3
@@ -26,7 +26,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: ae4ff97b62fd84c9f356136fd0463bc167c35b29e2b06e9b394c1e7833616e81
   f/factory/lib/console_worker: 5aa1f64ef4c0f327c902d4e92c5bc7c7a2af50aac860ce4d288e993cf0bd5b83
-  f/factory/lib/db: 1d455c1533a080f25c49f2b7262e1dd5e6a07188cb0213d99abec427e8b1e8b8
+  f/factory/lib/db: bc9871560b3321e834799767ce76eb4c28e9dd125c5db91f34944d5c5bbc97c4
   f/factory/lib/discord: 4d23948f3559a9ad4b7f128bdf37e001205ec73dfb5380c62acbe51e8577d890
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/github: c5a6125b82fbda2d01ed8020e970b5b46f3337f885319a1faab09dc458cd1c0b
@@ -73,7 +73,7 @@ locks:
   f/factory/steps/implement_generate: 0671a360eef104568c2efaf753c42348a779005d3185c64e26fea5aeb15a36c1
   f/factory/steps/implement_prepare: 60514bac16abed09f5fde091c46292f16fae6ba1c9e2380fd80a8ff65eb224ac
   f/factory/steps/implement_verify: ad630baff6b0cc154a7922644c99bccb3730e111e6e401085bbdfafd5b07955a
-  f/factory/steps/issue_proposal_apply: e7feb9557056e6ef83affbf659fabd148e91f04fdc9b5c1ac49f0322de12a66c
+  f/factory/steps/issue_proposal_apply: d3e46074b398ae9b57befbedd5580f0880787a107f89a496857658ee2efb27db
   f/factory/steps/manual_intake_create_issue: 4c3a8f47d45e9844b5b2ff91fc191d45631067c3324e0dd9e9227841ee2a6155
   f/factory/steps/manual_intake_register: 7a70e5311cee44ebc6f7e33646a4c826fc7a96ea2a2b98cbb44130c0f8673fa8
   f/factory/steps/pipeline_generate: 973f492a16e67829d266611d3f91bbcf5eafd46f7f8fbff36bed7ed98ffbda1d

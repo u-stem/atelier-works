@@ -131,6 +131,29 @@ export async function assertIssueMatchesIntake(
   }
 }
 
+/**
+ * 承認依頼が無いときの例外の文。Consoleは、この文を日本語の固定文に直す。
+ * 文を変えたら`tests/scripts/console_approval_refusal_contract.test.ts`が落ちる。
+ */
+export function missingApprovalRequestMessage(
+  approvalRequestId: number,
+): string {
+  return `approval_decide: no approval request with id ${approvalRequestId}`;
+}
+
+/**
+ * 記録済みの決定が今回の決定と違うか、期限が切れているときに、上書きを断る例外の文。
+ * Consoleは、この文を日本語の固定文に直す。
+ * 文を変えたら`tests/scripts/console_approval_refusal_contract.test.ts`が落ちる。
+ */
+export function recordedDecisionRefusalMessage(
+  approvalRequestId: number,
+  status: string,
+  recordedStatus: string,
+): string {
+  return `approval_decide: approval request ${approvalRequestId} already has a recorded decision (${status}) that differs from this request (${recordedStatus}), or has expired — refusing to overwrite it`;
+}
+
 export type ApprovalDecideResult = {
   readonly ok: boolean;
   readonly status: string;
@@ -166,9 +189,7 @@ export async function main(
 
   const request = await getApprovalRequest(approval_request_id);
   if (request === null) {
-    throw new Error(
-      `approval_decide: no approval request with id ${approval_request_id}`,
-    );
+    throw new Error(missingApprovalRequestMessage(approval_request_id));
   }
 
   const recordedStatus = recordedStatusFor(decision);
@@ -177,7 +198,11 @@ export async function main(
     const action = classifyExistingDecision(status, recordedStatus);
     if (action === "refuse") {
       throw new Error(
-        `approval_decide: approval request ${approval_request_id} already has a recorded decision (${status}) that differs from this request (${recordedStatus}), or has expired — refusing to overwrite it`,
+        recordedDecisionRefusalMessage(
+          approval_request_id,
+          status,
+          recordedStatus,
+        ),
       );
     }
     return action;
