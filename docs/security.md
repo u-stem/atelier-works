@@ -43,6 +43,29 @@ headless Claudeの起動には、次のフラグと環境変数で防御を足�
 PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リポジトリのworktreeに書き込み、その変更をpushする。
 そのための追加の安全策は[PR修正の安全策](#pr修正の安全策)と[実装の安全策](#実装の安全策)に書く。
 
+### mainの保護とリポジトリの公開
+
+このリポジトリは公開している。
+`main`はrulesetの`protect-main`で保護し、次の制限をかける。
+
+- `main`の削除とforce pushを禁止する。
+- `main`への変更はPRを必須にする。承認は0件でよく、人のレビューをGitHubが強制するわけではない。
+- 必須チェックは`scope`、`check`、`test-db`、`metadata`、`console`、`caddyfile`、`console-fetcher-image`である。条件付きのジョブは、スキップされると通過として扱われる。
+- 設定を迂回できるのは、管理者のロールだけである。迂回のモードは`pull_request`なので、直接pushはできず、PRを経由する迂回に限られる。
+
+公開に伴い、外部からの操作は次のように絞る。
+
+- GitHubのinteraction-limitsを`collaborators_only`にしている。期限付きの設定で、切れると外部の利用者もIssueやPRを作れるようになる。期限はGitHubの設定画面で確かめる。
+- forkのPRのワークフローは、すべての外部の投稿者について、承認があるまで動かさない。
+- secret scanningとpush protection、Dependabot security updatesを有効にしている。
+- 脆弱性は、非公開の報告で受ける。窓口は[SECURITY.md](../SECURITY.md)にある。
+
+FactoryはPAT(`f/factory/github_token`)で、人と同じアカウントとしてGitHubを操作する。
+`f/factory`にはPRをマージするAPIの呼び出しが無い。
+ただし、PATが`main`へのマージの権限を持つかは確かめていない。
+承認が0件なので、PATで開いたPRを人の確認なしにマージできるかも確かめていない。
+どちらも確かめるまでは、残るリスクとして扱う。
+
 ### CIで走査されないコミット
 
 atelier-worksのCIは、gitleaksでPRのコミットを走査する。
@@ -243,7 +266,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 残るリスクは次のとおりである。
 
-- `main`にpushできる者(FactoryのPATを含む)が書いたコードは、人のレビューを経ずに運用者のブラウザで動きうる。今のGitHubのプランではこのリポジトリにbranch protection(rulesets)を設定できず、`main`へのpushを人のレビュー済みのものに限れない。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
+- `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブとそこで動くツールや依存に及ぶ。同じ実行のほかのジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるためである。成果物は`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
 - draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console`ジョブが取得して、同じ成果物に入れるためである。
@@ -254,8 +277,8 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - `console_fetcher`の外への通信はnetworkでは絞れない。コードが侵害されれば、任意の宛先へ出られる。
 - `console_egress`は通常のbridgeで、ホストのloopbackから切り離されない。既定の`WM_BIND=127.0.0.1`のままでも、`host.docker.internal`経由でホストのCaddy、つまりWindmillに届く(OrbStackで確認)。`WM_BIND`を外向きにすると、ホストのゲートウェイのIP経由でも届く。`console_fetcher`はWindmillの資格情報を持たないが、認証の要らない経路には届く。
 - `CONSOLE_GITHUB_TOKEN`は、ホストのdockerを使える人には`docker inspect`で見える。
-- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パスで、マージは人が行うことで抑えている。
-- 成果物の保持は30日である。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない。そのときは`main`に何かをpushしてCIを動かす。
+- 成果物を取りに行くリポジトリ`CONSOLE_GITHUB_REPO`は、コミットされた`mise.toml`にある。これを書き換える変更がマージされると、任意のpublicリポジトリの成果物を取り込みうる。`mise.toml`は保護パスで、マージは人が行うことで抑えている。ただしPATのマージ権限は未確認である。
+- 成果物の保持は30日である。30日以上`main`へのpushが無いと、新しく立ち上げた環境は取り込めない。そのときは`main`に何かをマージしてCIを動かす。
 
 ## workerコンテナの権限
 
