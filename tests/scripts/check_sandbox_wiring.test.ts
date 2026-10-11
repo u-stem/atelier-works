@@ -41,3 +41,68 @@ describe("check sandbox wiring", () => {
     });
   }
 });
+
+// 実装とPR修正の準備のステップが、worktreeを用意する前に、workerが検査を実行できるかを確かめることを確かめる。
+// 関門を外すか後ろへ動かす変更は、Claudeの1回分を使ってから検証のステップで止まるので、ここで落とす。
+const FLOWS_DIR = join(import.meta.dir, "../../f/factory");
+
+function flowSource(name: string): string {
+  return readFileSync(join(FLOWS_DIR, name, "flow.yaml"), "utf8");
+}
+
+/** 両方が見つかり、`first`が`second`より前にあるかを返す。 */
+function inOrder(first: number, second: number): boolean {
+  return first >= 0 && second >= 0 && first < second;
+}
+
+const GATES = [
+  {
+    step: "implement_prepare.ts",
+    hasCheckCommands: /checkImageGate\(\s*checkCommands\.length > 0,/,
+    worktree: "prepareImplementWorktree(",
+    flow: "implement__flow",
+    claudeStep: "f/factory/steps/implement_generate",
+  },
+  {
+    step: "pr_fix_prepare.ts",
+    hasCheckCommands:
+      /checkImageGate\(\s*config\.allowed_check_commands\.length > 0,/,
+    worktree: "createGtrWorktree(",
+    flow: "pr_fix__flow",
+    claudeStep: "f/factory/steps/pr_fix_apply",
+  },
+] as const;
+
+describe("check image gate wiring", () => {
+  for (const gate of GATES) {
+    test(`${gate.step} calls checkImageGate`, () => {
+      expect(source(gate.step)).toContain("checkImageGate(");
+    });
+
+    test(`${gate.step} gates only when the repository has check commands`, () => {
+      expect(source(gate.step)).toMatch(gate.hasCheckCommands);
+    });
+
+    test(`${gate.step} gates before it prepares the worktree`, () => {
+      const text = source(gate.step);
+      expect(
+        inOrder(text.indexOf("checkImageGate("), text.indexOf(gate.worktree)),
+      ).toBe(true);
+    });
+
+    test(`${gate.step} does not start Claude itself`, () => {
+      expect(source(gate.step)).not.toMatch(/\brunClaude\b|\binvokeClaude\b/);
+    });
+
+    test(`${gate.flow} runs ${gate.step} before the step that starts Claude`, () => {
+      const text = flowSource(gate.flow);
+      const prepare = `f/factory/steps/${gate.step.replace(/\.ts$/, "")}`;
+      expect(
+        inOrder(
+          text.indexOf(`path: ${prepare}\n`),
+          text.indexOf(`path: ${gate.claudeStep}\n`),
+        ),
+      ).toBe(true);
+    });
+  }
+});
