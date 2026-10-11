@@ -1,14 +1,8 @@
 import type { ReactNode } from "react";
-import { ApiFailure, describeApiError } from "../../api/errors.ts";
 import type { InboxProposal } from "../../api/guards/inboxProposals.ts";
 import type { SummaryApproval } from "../../api/guards/summary.ts";
 import { useInboxProposals } from "../../api/inboxQueries.ts";
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from "../../components/ui/alert.tsx";
-import { Button } from "../../components/ui/button.tsx";
+import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import {
   factoryLabelChoice,
@@ -90,28 +84,14 @@ export function ProposalReview({
     );
   }
   if (proposals.isError) {
-    const apiError =
-      proposals.error instanceof ApiFailure ? proposals.error.apiError : null;
     return (
-      <Alert variant="destructive">
-        <AlertTitle>提案の内容を取得できませんでした</AlertTitle>
-        <AlertDescription>
-          <p>
-            {apiError === null
-              ? "原因は不明です。"
-              : describeApiError(apiError)}
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {
-              void proposals.refetch();
-            }}
-          >
-            もう一度取得する
-          </Button>
-        </AlertDescription>
-      </Alert>
+      <QueryFailureAlert
+        title="提案の内容を取得できませんでした"
+        error={proposals.error}
+        onRetry={() => {
+          void proposals.refetch();
+        }}
+      />
     );
   }
   const proposal = proposals.data.find(
