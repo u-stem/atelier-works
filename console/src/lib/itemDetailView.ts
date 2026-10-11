@@ -197,15 +197,18 @@ export function formatDiffStat(stat: WorkItemDiffStat | null): string | null {
     : `${stat.files}ファイル・追加${stat.added}行・削除${stat.deleted}行`;
 }
 
-const BARE_URL_PATTERN = /^https?:\/\/\S+$/;
-
 /**
- * 状態や遷移の注記。URLだけの注記は`null`にする。
- * PRとIssueのリンクは別の行に出ており、同じURLを生の文字で重ねる必要がないためである。
+ * 状態の注記。注記がこの項目のPRかIssueのURLだけなら`null`にする。
+ * 同じリンクが「PR」「Issue」の行に出ており、生の文字で重ねる必要がないためである。
+ * 別のURLは、その行のどこにも出ていないので残す。
  */
-function noteOrNull(text: string | null): string | null {
-  const note = plainOrNull(text);
-  return note !== null && BARE_URL_PATTERN.test(note.trim()) ? null : note;
+function statusNoteOf(item: WorkItemOverview): string | null {
+  const note = plainOrNull(item.status_note);
+  if (note === null) return null;
+  const shown = [item.pr_url, item.issue_url, pullTarget(item)?.url]
+    .filter((url) => url !== null && url !== undefined)
+    .map((url) => url.trim());
+  return shown.includes(note.trim()) ? null : note;
 }
 
 export function describeOverview(item: WorkItemOverview): OverviewView {
@@ -214,7 +217,7 @@ export function describeOverview(item: WorkItemOverview): OverviewView {
     kindLabel: workItemKindLabel(item.kind),
     statusLabel: pipelineStatusLabel(item.status),
     statusVariant: pipelineStatusVariant(item.status),
-    statusNote: noteOrNull(item.status_note),
+    statusNote: statusNoteOf(item),
     repoLabel: `${item.owner}/${item.repo}`,
     issue: issueTarget(item),
     pr: pullTarget(item),
@@ -577,7 +580,7 @@ export function describeTransition(
         ? null
         : pipelineStatusLabel(transition.from_status),
     toLabel: pipelineStatusLabel(transition.to_status),
-    note: noteOrNull(transition.note),
+    note: plainOrNull(transition.note),
     occurredAt: transition.occurred_at,
     jobs: jobLinks(
       transition.job_id,

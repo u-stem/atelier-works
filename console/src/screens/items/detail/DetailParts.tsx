@@ -80,8 +80,8 @@ export function EmptyNote({ children }: { children: ReactNode }) {
   );
 }
 
-/** Issueの起票者や実行ログに由来する文字を、改行を保ったままプレーンテキストで描く。 */
-export function PlainBlock({ children }: { children: string }) {
+/** 信頼できない文字を描く段落。書字方向を左から右に固定し、改行を保つ。 */
+function TextParagraph({ children }: { children: ReactNode }) {
   return (
     <p
       dir="ltr"
@@ -92,6 +92,11 @@ export function PlainBlock({ children }: { children: string }) {
   );
 }
 
+/** Issueの起票者や実行ログに由来する文字を、改行を保ったままプレーンテキストで描く。 */
+export function PlainBlock({ children }: { children: string }) {
+  return <TextParagraph>{children}</TextParagraph>;
+}
+
 /**
  * `で囲んだ範囲だけをコードの書式で描き、残りは改行を保ったままプレーンテキストで描く。
  * Markdownは解析しない。`<T>`や`*.ts`のような記号も、そのまま文字で出る。
@@ -99,10 +104,7 @@ export function PlainBlock({ children }: { children: string }) {
 export function CodeSpanBlock({ children }: { children: string }) {
   let offset = 0;
   return (
-    <p
-      dir="ltr"
-      className="text-body break-words whitespace-pre-wrap [unicode-bidi:isolate]"
-    >
+    <TextParagraph>
       {splitCodeSpans(children).map((part) => {
         // 位置は文字数の累計で決まり、並びは変わらないのでキーに使える。
         const key = offset;
@@ -118,7 +120,7 @@ export function CodeSpanBlock({ children }: { children: string }) {
           <Fragment key={key}>{part.text}</Fragment>
         );
       })}
-    </p>
+    </TextParagraph>
   );
 }
 

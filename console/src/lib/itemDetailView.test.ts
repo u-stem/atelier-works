@@ -289,12 +289,28 @@ describe("describeOverview", () => {
     );
   });
 
-  test("drops a status note that is only a URL", () => {
+  test("drops a status note that is only the pull request URL", () => {
     expect(
       describeOverview(
         overview({ status_note: "https://github.com/o/r/pull/12" }),
       ).statusNote,
     ).toBeNull();
+  });
+
+  test("drops a status note that is only the issue URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "https://github.com/o/r/issues/9" }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("keeps a status note that is only another URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "https://github.com/o/r/pull/3" }),
+      ).statusNote,
+    ).toBe("https://github.com/o/r/pull/3");
   });
 
   test("keeps a status note that has a sentence around a URL", () => {
@@ -665,11 +681,11 @@ describe("describeTransition", () => {
     expect(describeTransition(transition({ note: "a‮b" })).note).toBe("a�b");
   });
 
-  test("drops a note that is only a URL", () => {
+  test("keeps a note that is only a URL", () => {
     expect(
       describeTransition(transition({ note: "https://github.com/o/r/pull/12" }))
         .note,
-    ).toBeNull();
+    ).toBe("https://github.com/o/r/pull/12");
   });
 });
 

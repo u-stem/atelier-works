@@ -3,7 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import type {
   WorkItemDetail,
+  WorkItemFixRound,
   WorkItemOverview,
+  WorkItemReview,
   WorkItemRound,
 } from "../../../api/guards/workItemDetail.ts";
 import { OverviewTab } from "./OverviewTab.tsx";
@@ -50,6 +52,31 @@ const ROUND: WorkItemRound = {
   diff_stat: { files: 2, added: 17, deleted: 0 },
   created_at: T0,
 };
+
+const REVIEW: WorkItemReview = {
+  review_id: 1,
+  head_sha: "abc1234",
+  verdict: "comment",
+  finding_count: 2,
+  posted_review_id: null,
+  created_at: T0,
+};
+
+const FIX_ROUND: WorkItemFixRound = {
+  fix_round_id: 1,
+  round: 1,
+  outcome: "done",
+  trigger_review_count: 1,
+  reply_count: 1,
+  commit_count: 1,
+  created_at: T0,
+};
+
+// 空の区画の1行。見出しの直後に、この文言の段落が続く。
+const EMPTY_LINE =
+  '</h2><p class="text-small text-muted-foreground">まだありません。</p>';
+const REVIEW_EMPTY = `PRのレビュー${EMPTY_LINE}`;
+const FIX_EMPTY = `PRの修正${EMPTY_LINE}`;
 
 function detail(overrides: Partial<WorkItemDetail> = {}): WorkItemDetail {
   return {
@@ -163,13 +190,45 @@ describe("RoundsTab", () => {
   });
 
   test("shows an empty review section as one line", () => {
-    const html = render(<RoundsTab detail={detail()} now={NOW} />);
-    expect(html).toContain("PRのレビュー</h2><p");
+    const html = render(
+      <RoundsTab detail={detail({ fix_rounds: [FIX_ROUND] })} now={NOW} />,
+    );
+    expect(html).toContain(REVIEW_EMPTY);
+  });
+
+  test("shows the fix section list when only the reviews are empty", () => {
+    const html = render(
+      <RoundsTab detail={detail({ fix_rounds: [FIX_ROUND] })} now={NOW} />,
+    );
+    expect(html).not.toContain(FIX_EMPTY);
   });
 
   test("shows an empty fix section as one line", () => {
-    const html = render(<RoundsTab detail={detail()} now={NOW} />);
-    expect(html).toContain("PRの修正</h2><p");
+    const html = render(
+      <RoundsTab detail={detail({ reviews: [REVIEW] })} now={NOW} />,
+    );
+    expect(html).toContain(FIX_EMPTY);
+  });
+
+  test("shows the review list when only the fixes are empty", () => {
+    const html = render(
+      <RoundsTab detail={detail({ reviews: [REVIEW] })} now={NOW} />,
+    );
+    expect(html).not.toContain(REVIEW_EMPTY);
+  });
+
+  test("renders the backticked gap report as code", () => {
+    const html = render(
+      <RoundsTab
+        detail={detail({
+          implement_rounds: [
+            { ...ROUND, summary: "x", gap_report: "see `a.ts`" },
+          ],
+        })}
+        now={NOW}
+      />,
+    );
+    expect(html).toContain("<code");
   });
 
   test("gives the empty review and fix sections no card", () => {

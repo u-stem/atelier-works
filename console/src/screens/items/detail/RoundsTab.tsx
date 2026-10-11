@@ -46,7 +46,7 @@ function RoundCard({ round, now }: { round: RoundView; now: number }) {
       {round.gapReport === null ? null : (
         <div className="flex flex-col gap-1">
           <p className="text-small text-subtle">要件の不足の報告</p>
-          <PlainBlock>{round.gapReport}</PlainBlock>
+          <CodeSpanBlock>{round.gapReport}</CodeSpanBlock>
         </div>
       )}
       {round.skippedReason === null ? null : (

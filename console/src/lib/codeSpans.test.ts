@@ -31,6 +31,16 @@ describe("splitCodeSpans", () => {
     ]);
   });
 
+  test("keeps every non-backtick character around a double backtick fence", () => {
+    const parts = splitCodeSpans("x ``ab`` y");
+    expect(
+      parts
+        .map((part) => part.text)
+        .join("")
+        .replaceAll("`", ""),
+    ).toBe("x ab y");
+  });
+
   test("returns nothing for an empty string", () => {
     expect(splitCodeSpans("")).toEqual([]);
   });
