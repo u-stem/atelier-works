@@ -92,7 +92,10 @@ describe("describeAuditResult", () => {
 
   test.each([
     ["audit_in_progress", "別の監査が進行中のため、起動しませんでした。"],
-    ["empty_period", "対象期間が空のため、起動しませんでした。"],
+    [
+      "empty_period",
+      "前回の監査以降の対象期間がまだないため、起動しませんでした。",
+    ],
     [
       "no_new_records",
       "監査の対象になる新しい記録が無いため、起動しませんでした。",
