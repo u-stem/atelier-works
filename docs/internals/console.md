@@ -65,8 +65,8 @@ routerの基準は`/console`で、Caddyが`/console/`の下のパスに`index.ht
 | `/console/` | 要対応 | 承認の一覧 |
 | `/console/items` | 作業項目 | 準備中の枠 |
 | `/console/items/:id/requirements` | 要件定義書 | 準備中の枠。`?attempt=<k>`で試行を指す |
-| `/console/reports` | レポート | 準備中の枠 |
-| `/console/reports/audit/:id` | 監査レポート | 準備中の枠 |
+| `/console/reports` | レポート | 監査レポートの一覧と手動起動 |
+| `/console/reports/audit/:id` | 監査レポート | 作業項目`:id`の本文 |
 | `/console/system` | システム | 準備中の枠 |
 
 どの経路にも当たらないパスは、「ページが見つかりません」の画面で受ける。
@@ -392,6 +392,59 @@ IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
 並び、絞り込み、行の表示内容、副題、件数のカードは`src/lib/inboxView.ts`の純関数が決める。
 次の自動更新までの時間と時刻の表示は`src/lib/refreshTiming.ts`が決める。
 相対時刻の表示は、`src/app/clock.ts`の共有の時計が30秒ごとに進める。
+
+## レポートの画面
+
+レポートの画面は、監査レポートの一覧を出す。
+一覧は`console_query`の`audit_index`viewから、直近3650日を新しい順に100件まで取る。
+型ガードは`src/api/guards/audit.ts`、取得は`src/api/auditQueries.ts`にある。
+画面の部品は`AuditReports`で、レポートの画面は部品を並べるだけにする。
+`tests/scripts/console_audit_contract.test.ts`が、backendの変換結果が型ガードを通ることを確かめる。
+
+一覧の1行は、対象期間、要約、提案の判断の内訳、作業項目の状態、作業項目の番号、作成の時刻である。
+要約は監査のClaudeが書いた文字列なので、`displayableIssueText`を通してプレーンテキストで描く。
+行を選ぶと、本文の画面へ移る。
+レポートが1件も無いときは、毎週月曜09:30に自動で実行されることと、「今すぐ監査」で前倒しできることを出す。
+
+本文の画面は、`audit_doc`viewから作業項目の番号で1件を取り、Markdownを描く。
+`audit_doc`は本文の重い列を持つので、一覧とは分けて、画面を開いたときに取る。
+番号が正の整数でないときと、レポートが無いときは、その旨を出す。
+レポートが無いのは、監査がまだ終わっていないか、監査の作業項目でないときである。
+
+本文のMarkdownは`AuditMarkdown`(`src/screens/reports/AuditMarkdown.tsx`)が描く。
+`react-markdown`と`remark-gfm`で描き、`rehype-sanitize`でHTMLを無害化する。
+`dangerouslySetInnerHTML`は使わない。
+描く前に、`displayableIssueText`で見えない文字を代替文字に置き換える。
+リンクと画像の扱いは、[セキュリティ](../security.md)の「監査レポートの本文」にある。
+
+### 手動の起動
+
+「今すぐ監査」を押すと、確認のダイアログを出す。
+ダイアログは、ブラウザ標準の`dialog`要素をモーダルで開く。
+確認すると、`kickoffAudit`で`audit_kickoff`を起動する。
+起動の前にダイアログを閉じるので、確認のボタンを二重に押しても、起動は1回になる。
+
+起動の設定は`src/api/auditKickoffConfig.ts`にあり、書き込みの共通の流れに載せる。
+
+- ロックのキーは1つに固定する(`AUDIT_WRITE_KEY`)。起動が実行中のあいだ、ボタンは押せない
+- 同じ瞬間に2回呼ばれても、実行は1回になる
+- 結果が分かったら、監査レポートの一覧を読み直す
+- 読み直せなかったときは、一覧が古いことを知らせ、一覧が更新されるまでボタンを押せないままにする
+
+`force`は渡さない。
+`force`を付けると、対象の記録が無くても起動するので、画面からは出さない。
+
+結果は、一覧の上に次の起動まで残す(`src/lib/auditKickoff.ts`)。
+トーストは数秒で消え、見送りの理由を読み落とすおそれがあるためである。
+
+| 結果 | 表示 |
+| --- | --- |
+| 起動した | 成功の色で、対象期間を添える |
+| 見送った | 通常の色で、理由を日本語で出す。理由は`writeNotices.ts`の対応表にある |
+| 失敗した | 失敗の色で、書き込みの失敗の文を出す |
+| 一覧を読み直せなかった | 警告の色で、一覧が古いことを出す |
+
+見送りは失敗ではなく、何も変えなかった正常な結果である。
 
 ## システムの画面
 
