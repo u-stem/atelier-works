@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useRef } from "react";
 import { cn } from "../../../lib/cn.ts";
 import {
+  hasModifierKey,
   ITEM_DETAIL_TABS,
   type ItemDetailTabId,
   nextTabIndex,
@@ -35,6 +36,10 @@ export function ItemDetailTabs({
     event: KeyboardEvent<HTMLButtonElement>,
     index: number,
   ): void => {
+    // Alt+矢印などはブラウザの操作なので、タブの移動で奪わない。
+    if (hasModifierKey(event)) {
+      return;
+    }
     const next = nextTabIndex(index, event.key, ITEM_DETAIL_TABS.length);
     const target = next === null ? undefined : ITEM_DETAIL_TABS[next];
     if (next === null || target === undefined) {

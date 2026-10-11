@@ -95,6 +95,17 @@ describe("fetchWorkItemDetail", () => {
     ).toBeNull();
   });
 
+  test("throws job_failed when the missing id is not the requested one", async () => {
+    expect(
+      await failureOf(
+        fetchWorkItemDetail(7, { fetchFn: respondWith(NOT_FOUND_BODY, 500) }),
+      ),
+    ).toEqual({
+      kind: "job_failed",
+      message: "console_query: no work item with id 99",
+    });
+  });
+
   test("throws job_failed for another failure of the script", async () => {
     expect(
       await failureOf(
@@ -125,21 +136,45 @@ describe("fetchWorkItemDetail", () => {
 describe("isWorkItemNotFound", () => {
   test("accepts the message of the missing work item", () => {
     expect(
-      isWorkItemNotFound({
-        kind: "job_failed",
-        message: "console_query: no work item with id 99",
-      }),
+      isWorkItemNotFound(
+        {
+          kind: "job_failed",
+          message: "console_query: no work item with id 99",
+        },
+        99,
+      ),
     ).toBe(true);
   });
 
+  test("rejects the message of another work item", () => {
+    expect(
+      isWorkItemNotFound(
+        {
+          kind: "job_failed",
+          message: "console_query: no work item with id 70",
+        },
+        7,
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects the same sentence from another script", () => {
+    expect(
+      isWorkItemNotFound(
+        { kind: "job_failed", message: "other: no work item with id 7" },
+        7,
+      ),
+    ).toBe(false);
+  });
+
   test("rejects another job failure", () => {
-    expect(isWorkItemNotFound({ kind: "job_failed", message: "db down" })).toBe(
-      false,
-    );
+    expect(
+      isWorkItemNotFound({ kind: "job_failed", message: "db down" }, 7),
+    ).toBe(false);
   });
 
   test("rejects a failure of another kind", () => {
-    expect(isWorkItemNotFound({ kind: "network" })).toBe(false);
+    expect(isWorkItemNotFound({ kind: "network" }, 7)).toBe(false);
   });
 });
 

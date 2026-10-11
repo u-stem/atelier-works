@@ -18,14 +18,21 @@ export function workItemDetailQueryKey(
 }
 
 /**
- * 作業項目が無いときにbackendが投げる例外の文。
- * backendは「無い」を専用の応答で返さず、ジョブの失敗にするので、本文の文で見分ける。
+ * 失敗が「作業項目`workItemId`が存在しない」か。他のジョブの失敗や通信の失敗は含めない。
+ * backendは「無い」を専用の応答で返さず、`console_query: no work item with id <番号>`の例外にする。
+ * そのため、接頭辞と要求した番号まで合わせて、本文の文で見分ける。
+ * 番号の後ろは単語の境目に限り、別の番号(`7`と`70`)を取り違えない。
  */
-const NOT_FOUND_MESSAGE = /\bno work item with id \d+/;
-
-/** 失敗が「作業項目が存在しない」か。他のジョブの失敗や通信の失敗は含めない。 */
-export function isWorkItemNotFound(error: ApiError): boolean {
-  return error.kind === "job_failed" && NOT_FOUND_MESSAGE.test(error.message);
+export function isWorkItemNotFound(
+  error: ApiError,
+  workItemId: number,
+): boolean {
+  return (
+    error.kind === "job_failed" &&
+    new RegExp(`console_query: no work item with id ${workItemId}\\b`).test(
+      error.message,
+    )
+  );
 }
 
 /**
@@ -42,7 +49,7 @@ export async function fetchWorkItemDetail(
     options,
   );
   if (!result.ok) {
-    if (isWorkItemNotFound(result.error)) {
+    if (isWorkItemNotFound(result.error, workItemId)) {
       return null;
     }
     throw new ApiFailure(result.error);

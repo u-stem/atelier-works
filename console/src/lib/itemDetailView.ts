@@ -23,15 +23,13 @@ import {
   workItemRef,
 } from "./labels.ts";
 import {
+  type PipelineStatusVariant,
   pipelineStatusLabel,
   pipelineStatusVariant,
   prLink,
 } from "./pipelineView.ts";
 import { requirementsPath } from "./requirementsView.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
-
-/** `Badge`の`variant`の名前に合わせた色の系統。 */
-export type ToneVariant = "success" | "warning" | "failure" | "outline";
 
 function plain(text: string): string {
   return displayableIssueText(text).text;
@@ -91,6 +89,43 @@ export function nextTabIndex(
   }
 }
 
+/**
+ * キー操作に修飾キーが付いているか。
+ * Alt+矢印(戻る・進む)やCtrl+Homeなどのブラウザの操作を、タブの移動で奪わないために使う。
+ */
+export function hasModifierKey(event: {
+  readonly altKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly metaKey: boolean;
+}): boolean {
+  return event.altKey || event.ctrlKey || event.metaKey;
+}
+
+// ---------------------------------------------------------------------------
+// 件数の上限
+// ---------------------------------------------------------------------------
+
+/**
+ * `work_item_detail`が1つの履歴に載せる件数の上限。新しい順に切る。
+ * `console_query`の`DETAIL_FAILURE_LIMIT`、`DETAIL_TRANSITION_LIMIT`、`DETAIL_LIST_LIMIT`に合わせる。
+ */
+export const DETAIL_LIMITS = {
+  failures: 20,
+  transitions: 100,
+  reviews: 50,
+  fixRounds: 50,
+} as const;
+
+/**
+ * 履歴の件数が上限に届いたときの注記。届いていなければ`null`。
+ * 上限に届いた履歴は、古い記録がbackendで切られている可能性がある。
+ */
+export function detailLimitNote(count: number, limit: number): string | null {
+  return count >= limit
+    ? `新しい順に${limit}件まで表示しています。それより古い記録は表示していません。`
+    : null;
+}
+
 // ---------------------------------------------------------------------------
 // 概要
 // ---------------------------------------------------------------------------
@@ -105,7 +140,7 @@ export type OverviewView = {
   readonly title: string;
   readonly kindLabel: string;
   readonly statusLabel: string;
-  readonly statusVariant: ToneVariant;
+  readonly statusVariant: PipelineStatusVariant;
   readonly statusNote: string | null;
   readonly repoLabel: string;
   readonly issue: TargetLink | null;
@@ -195,7 +230,7 @@ export type AttemptView = {
   readonly createdAt: string;
   /** 承認依頼があるときの状態の名前。無ければ`null`。 */
   readonly approvalLabel: string | null;
-  readonly approvalVariant: ToneVariant;
+  readonly approvalVariant: PipelineStatusVariant;
   /** この試行の要件定義書の経路。 */
   readonly path: string;
 };
@@ -222,7 +257,7 @@ export function describeAttempt(
 // 承認の履歴
 // ---------------------------------------------------------------------------
 
-function approvalVariant(status: string | null): ToneVariant {
+function approvalVariant(status: string | null): PipelineStatusVariant {
   switch (status) {
     case "pending":
       return "warning";
@@ -239,7 +274,7 @@ export type ApprovalView = {
   readonly key: number;
   readonly kindLabel: string;
   readonly statusLabel: string;
-  readonly statusVariant: ToneVariant;
+  readonly statusVariant: PipelineStatusVariant;
   /** 要件定義なら対象の試行、Issue提案なら提案の題名。どちらも無ければ`null`。 */
   readonly subject: string | null;
   readonly requestedAt: string;
@@ -276,7 +311,8 @@ export function describeApproval(approval: WorkItemApproval): ApprovalView {
 
 /**
  * 承認依頼を依頼が新しい順に並べた新しい配列を返す。同じ時刻は番号が大きい方を先にする。
- * backendの並びに頼らず、画面が順序を保証する。
+ * 並べ方はbackendの`ORDER BY requested_at DESC, id DESC`と同じである。
+ * 画面の順序がbackendの問い合わせの並びに左右されないよう、画面側でも並べる。
  */
 export function sortApprovalsNewestFirst(
   approvals: readonly WorkItemApproval[],
@@ -310,14 +346,15 @@ const ROUND_OUTCOME_LABELS: ReadonlyMap<string, string> = new Map([
   ["error", "エラー"],
 ]);
 
-const ROUND_OUTCOME_VARIANTS: ReadonlyMap<string, ToneVariant> = new Map([
-  ["done", "success"],
-  ["requirements_gap", "warning"],
-  ["check_failed", "failure"],
-  ["checks_skipped", "warning"],
-  ["stalled", "warning"],
-  ["error", "failure"],
-]);
+const ROUND_OUTCOME_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> =
+  new Map([
+    ["done", "success"],
+    ["requirements_gap", "warning"],
+    ["check_failed", "failure"],
+    ["checks_skipped", "warning"],
+    ["stalled", "warning"],
+    ["error", "failure"],
+  ]);
 
 export type RoundGroup = {
   readonly attempt: number;
@@ -350,7 +387,7 @@ export type RoundView = {
   readonly roundLabel: string;
   readonly modeLabel: string;
   readonly outcomeLabel: string;
-  readonly outcomeVariant: ToneVariant;
+  readonly outcomeVariant: PipelineStatusVariant;
   readonly summary: string;
   readonly gapReport: string | null;
   readonly skippedReason: string | null;
@@ -382,7 +419,7 @@ const VERDICT_LABELS: ReadonlyMap<string, string> = new Map([
   ["request_changes", "修正を依頼"],
 ]);
 
-const VERDICT_VARIANTS: ReadonlyMap<string, ToneVariant> = new Map([
+const VERDICT_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> = new Map([
   ["approve", "success"],
   ["request_changes", "warning"],
 ]);
@@ -394,7 +431,7 @@ export type ReviewView = {
   readonly key: number;
   readonly shaLabel: string;
   readonly verdictLabel: string;
-  readonly verdictVariant: ToneVariant;
+  readonly verdictVariant: PipelineStatusVariant;
   readonly findingLabel: string;
   readonly createdAt: string;
 };
@@ -417,17 +454,18 @@ const FIX_OUTCOME_LABELS: ReadonlyMap<string, string> = new Map([
   ["blocked", "ブロック"],
 ]);
 
-const FIX_OUTCOME_VARIANTS: ReadonlyMap<string, ToneVariant> = new Map([
-  ["done", "success"],
-  ["requirements_gap", "warning"],
-  ["blocked", "failure"],
-]);
+const FIX_OUTCOME_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> =
+  new Map([
+    ["done", "success"],
+    ["requirements_gap", "warning"],
+    ["blocked", "failure"],
+  ]);
 
 export type FixRoundView = {
   readonly key: number;
   readonly roundLabel: string;
   readonly outcomeLabel: string;
-  readonly outcomeVariant: ToneVariant;
+  readonly outcomeVariant: PipelineStatusVariant;
   readonly countsLabel: string;
   readonly createdAt: string;
 };
@@ -451,27 +489,53 @@ export function describeFixRound(fixRound: WorkItemFixRound): FixRoundView {
 
 export type JobLinkView = { readonly label: string; readonly jobId: string };
 
+type JobLinkLabels = {
+  /** `jobId`のリンクの文言。 */
+  readonly job: string;
+  /** `rootJobId`のリンクの文言。 */
+  readonly root: string;
+  /** 2つが同じジョブのときに出す1つのリンクの文言。 */
+  readonly same: string;
+};
+
+/** 遷移の`job_id`は遷移を起こしたステップのジョブ、`root_job_id`はそのステップを含むフローのジョブである。 */
+const TRANSITION_JOB_LABELS: JobLinkLabels = {
+  job: "ステップのジョブ",
+  root: "フローのジョブ",
+  same: "ジョブ",
+};
+
 /**
- * ジョブのリンクを決める。`jobId`は動いたステップ(または失敗を記録したジョブ)、
- * `rootJobId`はそれを含むフローのルートジョブである。
- * 同じジョブなら1つだけ出し、片方しか無ければその1つを出す。UUIDの形でないIDは出さない。
+ * 失敗の`job_id`は失敗の記録に渡されたジョブで、フローの失敗ではフローのルート、ステップの中の記録ではそのステップである。
+ * `root_job_id`は、失敗を記録したジョブのルートジョブである。遷移とは意味が違うので、文言を分ける。
+ */
+const FAILURE_JOB_LABELS: JobLinkLabels = {
+  job: "失敗したジョブ",
+  root: "記録したジョブのフロー",
+  same: "失敗したジョブ",
+};
+
+/**
+ * ジョブのリンクを決める。同じジョブなら1つだけ出し、片方しか無ければその1つを出す。
+ * UUIDの形でないIDは出さない。文言は`labels`で、`jobId`と`rootJobId`の意味に合わせる。
  */
 function jobLinks(
   jobId: string | null,
   rootJobId: string | null,
+  labels: JobLinkLabels,
 ): JobLinkView[] {
   const step = isJobId(jobId) ? jobId : null;
   const root = isJobId(rootJobId) ? rootJobId : null;
   if (step !== null && root !== null) {
     return step.toLowerCase() === root.toLowerCase()
-      ? [{ label: "ジョブ", jobId: step }]
+      ? [{ label: labels.same, jobId: step }]
       : [
-          { label: "ステップのジョブ", jobId: step },
-          { label: "フローのジョブ", jobId: root },
+          { label: labels.job, jobId: step },
+          { label: labels.root, jobId: root },
         ];
   }
-  if (step !== null) return [{ label: "ジョブ", jobId: step }];
-  if (root !== null) return [{ label: "フローのジョブ", jobId: root }];
+  if (step !== null) return [{ label: labels.job, jobId: step }];
+  if (root !== null) return [{ label: labels.root, jobId: root }];
   return [];
 }
 
@@ -496,7 +560,11 @@ export function describeTransition(
     toLabel: pipelineStatusLabel(transition.to_status),
     note: plainOrNull(transition.note),
     occurredAt: transition.occurred_at,
-    jobs: jobLinks(transition.job_id, transition.root_job_id),
+    jobs: jobLinks(
+      transition.job_id,
+      transition.root_job_id,
+      TRANSITION_JOB_LABELS,
+    ),
   };
 }
 
@@ -529,6 +597,6 @@ export function describeFailureRecord(
       truncated: [...failure.error].length >= FAILURE_ERROR_LIMIT,
     },
     occurredAt: failure.occurred_at,
-    jobs: jobLinks(failure.job_id, failure.root_job_id),
+    jobs: jobLinks(failure.job_id, failure.root_job_id, FAILURE_JOB_LABELS),
   };
 }

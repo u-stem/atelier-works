@@ -1,14 +1,23 @@
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
 import { Badge } from "../../../components/ui/badge.tsx";
 import {
+  DETAIL_LIMITS,
   describeFixRound,
   describeReview,
   describeRound,
+  detailLimitNote,
   groupRoundsByAttempt,
   type RoundView,
 } from "../../../lib/itemDetailView.ts";
 import { attemptRef } from "../../../lib/labels.ts";
 import { EmptyNote, Panel, PlainBlock, TimeLabel } from "./DetailParts.tsx";
+
+/** 新しい順の履歴の注記。上限に届いたときは、古い記録を表示していないと添える。 */
+function limitedNote(count: number, limit: number): string {
+  return ["新しい順です。", detailLimitNote(count, limit)]
+    .filter((text) => text !== null)
+    .join("");
+}
 
 function RoundCard({ round, now }: { round: RoundView; now: number }) {
   return (
@@ -43,8 +52,9 @@ function RoundCard({ round, now }: { round: RoundView; now: number }) {
         <div className="flex flex-col gap-1">
           <p className="text-small text-subtle">保護対象の変更</p>
           <ul className="font-mono text-small break-all">
-            {round.protectedChanges.map((path) => (
-              <li key={path}>{path}</li>
+            {round.protectedChanges.map((path, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: 同じパスが重なりうるので、位置を添えてキーを一意にする。並びは変わらない。
+              <li key={`${index}:${path}`}>{path}</li>
             ))}
           </ul>
         </div>
@@ -99,7 +109,10 @@ function ImplementRounds({
 function Reviews({ detail, now }: { detail: WorkItemDetail; now: number }) {
   const reviews = detail.reviews.map(describeReview);
   return (
-    <Panel heading="PRのレビュー" note="新しい順です。">
+    <Panel
+      heading="PRのレビュー"
+      note={limitedNote(detail.reviews.length, DETAIL_LIMITS.reviews)}
+    >
       {reviews.length === 0 ? (
         <EmptyNote>PRのレビューはまだありません。</EmptyNote>
       ) : (
@@ -132,7 +145,10 @@ function Reviews({ detail, now }: { detail: WorkItemDetail; now: number }) {
 function FixRounds({ detail, now }: { detail: WorkItemDetail; now: number }) {
   const fixRounds = detail.fix_rounds.map(describeFixRound);
   return (
-    <Panel heading="PRの修正" note="新しい順です。">
+    <Panel
+      heading="PRの修正"
+      note={limitedNote(detail.fix_rounds.length, DETAIL_LIMITS.fixRounds)}
+    >
       {fixRounds.length === 0 ? (
         <EmptyNote>PRの修正はまだありません。</EmptyNote>
       ) : (

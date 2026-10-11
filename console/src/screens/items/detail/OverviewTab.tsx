@@ -2,9 +2,11 @@ import { Link } from "react-router";
 import type { WorkItemDetail } from "../../../api/guards/workItemDetail.ts";
 import { Badge } from "../../../components/ui/badge.tsx";
 import {
+  DETAIL_LIMITS,
   describeFailureRecord,
   describeOverview,
   describeTransition,
+  detailLimitNote,
   FAILURE_ERROR_LIMIT,
 } from "../../../lib/itemDetailView.ts";
 import {
@@ -77,7 +79,9 @@ function Failures({ detail, now }: { detail: WorkItemDetail; now: number }) {
       heading="失敗"
       note={
         <>
-          新しい順の記録です。再実行は
+          新しい順の記録です。
+          {detailLimitNote(detail.failures.length, DETAIL_LIMITS.failures)}
+          再実行は
           <Link to="/" className={LINK_CLASS}>
             要対応の画面
           </Link>
@@ -116,7 +120,10 @@ function Failures({ detail, now }: { detail: WorkItemDetail; now: number }) {
 function Transitions({ detail, now }: { detail: WorkItemDetail; now: number }) {
   const transitions = detail.transitions.map(describeTransition);
   return (
-    <Panel heading="状態の遷移" note="新しい順です。">
+    <Panel
+      heading="状態の遷移"
+      note={`新しい順です。${detailLimitNote(detail.transitions.length, DETAIL_LIMITS.transitions) ?? ""}`}
+    >
       {transitions.length === 0 ? (
         <EmptyNote>状態の遷移の記録はありません。</EmptyNote>
       ) : (

@@ -18,9 +18,11 @@ import {
   describeReview,
   describeRound,
   describeTransition,
+  detailLimitNote,
   formatCostUsd,
   formatDiffStat,
   groupRoundsByAttempt,
+  hasModifierKey,
   ITEM_DETAIL_TABS,
   nextTabIndex,
   parseDetailTab,
@@ -657,9 +659,64 @@ describe("describeFailureRecord", () => {
     expect(describeFailureRecord(failure()).error.truncated).toBe(false);
   });
 
-  test("links the job of the record", () => {
-    expect(describeFailureRecord(failure()).jobs).toEqual([
-      { label: "ジョブ", jobId: JOB_A },
+  test("labels the recorded job and its flow apart from a transition", () => {
+    expect(
+      describeFailureRecord(failure({ job_id: JOB_A, root_job_id: JOB_B }))
+        .jobs,
+    ).toEqual([
+      { label: "失敗したジョブ", jobId: JOB_A },
+      { label: "記録したジョブのフロー", jobId: JOB_B },
     ]);
+  });
+
+  test("shows one link when the failed job is its own root", () => {
+    expect(
+      describeFailureRecord(failure({ job_id: JOB_A, root_job_id: JOB_A }))
+        .jobs,
+    ).toEqual([{ label: "失敗したジョブ", jobId: JOB_A }]);
+  });
+
+  test("links only the failed job when the root is not recorded", () => {
+    expect(describeFailureRecord(failure()).jobs).toEqual([
+      { label: "失敗したジョブ", jobId: JOB_A },
+    ]);
+  });
+});
+
+describe("detailLimitNote", () => {
+  test("says nothing below the limit", () => {
+    expect(detailLimitNote(19, 20)).toBeNull();
+  });
+
+  test("warns that older records are not shown at the limit", () => {
+    expect(detailLimitNote(20, 20)).toBe(
+      "新しい順に20件まで表示しています。それより古い記録は表示していません。",
+    );
+  });
+});
+
+describe("hasModifierKey", () => {
+  test("is true while Alt is held", () => {
+    expect(
+      hasModifierKey({ altKey: true, ctrlKey: false, metaKey: false }),
+    ).toBe(true);
+  });
+
+  test("is true while Ctrl is held", () => {
+    expect(
+      hasModifierKey({ altKey: false, ctrlKey: true, metaKey: false }),
+    ).toBe(true);
+  });
+
+  test("is true while Meta is held", () => {
+    expect(
+      hasModifierKey({ altKey: false, ctrlKey: false, metaKey: true }),
+    ).toBe(true);
+  });
+
+  test("is false for a plain key", () => {
+    expect(
+      hasModifierKey({ altKey: false, ctrlKey: false, metaKey: false }),
+    ).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ import { runWorkItemDetail } from "../../f/factory/steps/console_query.ts";
 
 const T0 = "2026-10-01T00:00:00.000Z";
 const JOB_ID = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b";
+const ROOT_JOB_ID = "0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c";
 
 const OVERVIEW_ROW: SqlRow = {
   work_item_id: "7",
@@ -111,7 +112,7 @@ const FAILURE_ROWS: SqlRow[] = [
     job_failure_id: "12",
     flow_path: "f/factory/implement",
     job_id: JOB_ID,
-    root_job_id: JOB_ID,
+    root_job_id: ROOT_JOB_ID,
     step: "verify",
     error: "boom",
     occurred_at: new Date(T0),
@@ -149,7 +150,7 @@ const TRANSITION_ROWS: SqlRow[] = [
     note: "opened",
     occurred_at: new Date(T0),
     job_id: JOB_ID,
-    root_job_id: JOB_ID,
+    root_job_id: ROOT_JOB_ID,
   },
 ];
 
@@ -200,15 +201,34 @@ describe("work_item_detail contract", () => {
     });
   });
 
+  test("a failure keeps its job_id apart from its root_job_id", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(FULL_RESPONSES));
+    expect(detail.failures[0]).toMatchObject({
+      job_id: JOB_ID,
+      root_job_id: ROOT_JOB_ID,
+    });
+  });
+
+  test("a transition keeps its job_id apart from its root_job_id", async () => {
+    const detail = await runWorkItemDetail(7, detailSql(FULL_RESPONSES));
+    expect(detail.transitions[0]).toMatchObject({
+      job_id: JOB_ID,
+      root_job_id: ROOT_JOB_ID,
+    });
+  });
+
   test("the error of a missing work item is recognized as not found", async () => {
     const error = await runWorkItemDetail(99, detailSql([[]])).catch(
       (caught: unknown) => caught,
     );
     expect(
-      isWorkItemNotFound({
-        kind: "job_failed",
-        message: error instanceof Error ? error.message : "",
-      }),
+      isWorkItemNotFound(
+        {
+          kind: "job_failed",
+          message: error instanceof Error ? error.message : "",
+        },
+        99,
+      ),
     ).toBe(true);
   });
 });
