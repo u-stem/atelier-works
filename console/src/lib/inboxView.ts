@@ -9,7 +9,7 @@ import type {
   SummaryFailure,
   SummaryNotice,
 } from "../api/guards/summary.ts";
-import { SCREENS } from "../app/screens.ts";
+import { SYSTEM_PATH } from "../app/paths.ts";
 import {
   INBOX_KINDS,
   type InboxKind,
@@ -342,17 +342,39 @@ const EXCERPT_LENGTH = 36;
 /** 本文の食い違いを、抜粋の先頭からこの文字数だけ手前に置く。前後の言葉で違いを読めるようにする。 */
 const EXCERPT_LEAD = 8;
 
+/** 通知の行に出す副題と、その全文。 */
+type NoticeRowText = {
+  readonly subLabel: string | null;
+  readonly subTitle: string | null;
+};
+
+type NoticeEntry = {
+  readonly notice: SummaryNotice;
+  readonly description: NoticeDescription;
+};
+
+/** 本文の全体。版は先頭7桁に縮めてある。 */
+function shortenedMessage(description: NoticeDescription): string {
+  return description.messageParts.map((part) => part.text).join("");
+}
+
 /**
- * 副題に出す本文。版は先頭7桁に縮めてあり、副題に別に出す対象は除く。
- * 空白と改行は1つの空白にまとめる。
+ * 副題の抜粋の元になる本文。版は先頭7桁に縮め、空白と改行は1つの空白にまとめる。
+ * `cutTarget`が真のとき、副題に出す先頭の対象を、現れた位置で切り出す。
+ * ほかの対象と、先頭の対象と同じ文字列の一部は残す。
  */
-function excerptSource(description: NoticeDescription): string {
-  const joined = description.messageParts.map((part) => part.text).join("");
-  const labels = description.targets
-    .map((target) => target.label)
-    .sort((a, b) => b.length - a.length);
-  return labels
-    .reduce((text, label) => text.split(label).join(""), joined)
+function excerptSource(
+  description: NoticeDescription,
+  cutTarget: boolean,
+): string {
+  const target = description.targets[0];
+  const text =
+    cutTarget && target !== undefined
+      ? description.message.slice(0, target.index) +
+        description.message.slice(target.index + target.label.length)
+      : description.message;
+  return description.shas
+    .reduce((shortened, sha) => shortened.split(sha).join(shortSha(sha)), text)
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -368,20 +390,52 @@ function commonPrefixLength(
   return length;
 }
 
+/** コードポイントの並びの辞書順。 */
+function compareChars(a: readonly string[], b: readonly string[]): number {
+  const shared = commonPrefixLength(a, b);
+  const left = a[shared];
+  const right = b[shared];
+  if (left === undefined || right === undefined) {
+    return a.length - b.length;
+  }
+  return left < right ? -1 : 1;
+}
+
 /**
- * 本文の抜粋を1行で返す。同じ種類の通知(`peers`)があるときは、最も近い通知と食い違う所から出す。
+ * 同じ種類の通知それぞれについて、ほかの通知と本文が食い違う位置(共通する先頭の文字数)を返す。
+ * 辞書順に並べると、最も長く先頭が重なる通知は隣にあるので、隣とだけ比べる。
+ * 本文が同じ通知は、見分けようがないので比べない。
+ */
+function divergences(sources: readonly string[]): Map<string, number> {
+  const distinct = [...new Set(sources)].map((text) => ({
+    text,
+    chars: Array.from(text),
+  }));
+  distinct.sort((a, b) => compareChars(a.chars, b.chars));
+  return new Map(
+    distinct.map((entry, index) => {
+      const previous = distinct[index - 1];
+      const next = distinct[index + 1];
+      return [
+        entry.text,
+        Math.max(
+          previous === undefined
+            ? 0
+            : commonPrefixLength(entry.chars, previous.chars),
+          next === undefined ? 0 : commonPrefixLength(entry.chars, next.chars),
+        ),
+      ];
+    }),
+  );
+}
+
+/**
+ * 本文の抜粋を1行で返す。`divergence`は、同じ種類のほかの通知と食い違う位置で、そこから少し手前を出す。
  * 同じ種類の通知は書き出しがそろうので、先頭だけでは見分けられないためである。
  * 前後が省かれたときは省略記号を付ける。
  */
-function excerpt(text: string, peers: readonly string[]): string {
+function excerpt(text: string, divergence: number): string {
   const chars = Array.from(text);
-  const divergence = peers
-    .filter((peer) => peer !== text)
-    .reduce(
-      (longest, peer) =>
-        Math.max(longest, commonPrefixLength(chars, Array.from(peer))),
-      0,
-    );
   const start = Math.max(0, divergence - EXCERPT_LEAD);
   const end = start + EXCERPT_LENGTH;
   return [
@@ -391,23 +445,74 @@ function excerpt(text: string, peers: readonly string[]): string {
   ].join("");
 }
 
+/** 値が全員で同じか。1件だけのときは、比べる相手がいないので偽にする。 */
+function allShare(values: readonly (string | undefined)[]): boolean {
+  return values.length > 1 && new Set(values).size === 1;
+}
+
 /**
- * 通知の行の副題。同じ題名の通知を見分ける値として、対象、版、本文の抜粋をこの順に並べる。
- * 対象と版は本文にあるときだけ出す。本文が空でなければ、副題は空にならない。
+ * 同じ種類の通知の副題を作る。副題は、対象、版、本文の抜粋を「・」でつなぐ。
+ * 対象と版は、同じ種類の通知の間で違うときだけ出す。全員が同じ値なら見分ける役に立たず、
+ * 狭い一覧では抜粋の食い違いを押し出すので省く。通知が1件だけのときは、本文にあれば出す。
+ * 本文が空でなければ、副題は空にならない。
  */
-function noticeSubLabel(
-  description: NoticeDescription,
-  peers: readonly string[],
-): string | null {
-  const target = description.targets[0];
-  const sha = description.shas[0];
-  const text = excerptSource(description);
-  const parts = [
-    ...(target === undefined ? [] : [target.label]),
-    ...(sha === undefined ? [] : [`版 ${shortSha(sha)}`]),
-    ...(text === "" ? [] : [excerpt(text, peers)]),
-  ];
-  return parts.length === 0 ? null : parts.join("・");
+function groupTexts(group: readonly NoticeEntry[]): [number, NoticeRowText][] {
+  const showTarget = !allShare(
+    group.map((e) => e.description.targets[0]?.label),
+  );
+  const showSha = !allShare(group.map((e) => e.description.shas[0]));
+  const sources = group.map((e) => excerptSource(e.description, showTarget));
+  const positions = divergences(sources);
+  return group.map((entry, index): [number, NoticeRowText] => {
+    const { description } = entry;
+    const target = description.targets[0];
+    const sha = description.shas[0];
+    const source = sources[index] ?? "";
+    const parts = [
+      ...(!showTarget || target === undefined ? [] : [target.label]),
+      ...(!showSha || sha === undefined ? [] : [`版 ${shortSha(sha)}`]),
+      ...(source === "" ? [] : [excerpt(source, positions.get(source) ?? 0)]),
+    ];
+    const full = shortenedMessage(description);
+    return [
+      entry.notice.notice_id,
+      {
+        subLabel: parts.length === 0 ? null : parts.join("・"),
+        subTitle: full === "" ? null : full,
+      },
+    ];
+  });
+}
+
+/** 一覧ごとに通知の副題を1回だけ作るための記憶。一覧の配列が同じなら、行ごとに作り直さない。 */
+const NOTICE_TEXTS = new WeakMap<
+  readonly InboxItem[],
+  ReadonlyMap<number, NoticeRowText>
+>();
+
+function noticeRowTexts(
+  items: readonly InboxItem[],
+): ReadonlyMap<number, NoticeRowText> {
+  const cached = NOTICE_TEXTS.get(items);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const groups = new Map<string, NoticeEntry[]>();
+  for (const item of items) {
+    if (item.type === "notice") {
+      const entries = groups.get(item.notice.kind) ?? [];
+      entries.push({
+        notice: item.notice,
+        description: describeNotice(item.notice),
+      });
+      groups.set(item.notice.kind, entries);
+    }
+  }
+  const texts = new Map(
+    [...groups.values()].flatMap((group) => groupTexts(group)),
+  );
+  NOTICE_TEXTS.set(items, texts);
+  return texts;
 }
 
 export type RowOptions = {
@@ -416,20 +521,6 @@ export type RowOptions = {
   /** 同じ一覧の項目。通知の副題が、同じ種類の通知と見分けられるようにするために使う。 */
   readonly peers?: readonly InboxItem[];
 };
-
-/** `item`と同じ種類の、ほかの通知の抜粋の元になる本文。 */
-function peerSources(
-  item: { readonly notice: SummaryNotice },
-  peers: readonly InboxItem[],
-): string[] {
-  return peers.flatMap((peer) =>
-    peer.type === "notice" &&
-    peer.notice.kind === item.notice.kind &&
-    peer.notice.notice_id !== item.notice.notice_id
-      ? [excerptSource(describeNotice(peer.notice))]
-      : [],
-  );
-}
 
 /**
  * 一覧の1行に出す内容。期限は`nowMs`からの残りで決める。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。
@@ -471,14 +562,16 @@ export function describeRow(
       };
     case "notice": {
       const description = describeNotice(item.notice);
-      const full = description.messageParts.map((part) => part.text).join("");
+      const texts =
+        noticeRowTexts(peers).get(item.notice.notice_id) ??
+        noticeRowTexts([item]).get(item.notice.notice_id);
       return {
         key,
         title: description.title,
         kindLabel: showKind ? "通知" : null,
         statusLabel: description.resolved ? "解決済み" : null,
-        subLabel: noticeSubLabel(description, peerSources(item, peers)),
-        subTitle: full === "" ? null : full,
+        subLabel: texts?.subLabel ?? null,
+        subTitle: texts?.subTitle ?? null,
         iso: item.notice.created_at,
         expiry: null,
       };
@@ -521,10 +614,7 @@ export function unlistedNote(entry: UnlistedCount): string {
  * 取得の上限を超えた承認、失敗、通知は、その画面に載らないので`null`にする。
  */
 export function unlistedPath(entry: UnlistedCount): string | null {
-  if (entry.cause !== "audit") {
-    return null;
-  }
-  return SCREENS.find((screen) => screen.id === "system")?.path ?? null;
+  return entry.cause === "audit" ? SYSTEM_PATH : null;
 }
 
 /**

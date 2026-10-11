@@ -6,6 +6,7 @@ import type { InboxSelection } from "../../lib/inboxSelection.ts";
 import {
   describeRow,
   type InboxItem,
+  omitsKindLabels,
   selectionOf,
 } from "../../lib/inboxView.ts";
 import { nextNavFocusIndex } from "../../lib/navigation.ts";
@@ -21,17 +22,23 @@ export function InboxList({
   items,
   selected,
   now,
-  showKind,
+  allItems,
   onSelect,
 }: {
+  /** 描く行。種類の切り替えで絞り込んだ後の項目である。 */
   items: readonly InboxItem[];
   selected: InboxSelection | null;
   now: number;
-  /** 通知と失敗の固定の種別の語を出すか。絞り込む前の一覧全体で決め、切り替えで行の書式が変わらないようにする。 */
-  showKind: boolean;
+  /**
+   * 絞り込む前の一覧全体。
+   * 種別の語を省くかと、副題で見分ける相手を、この全体で決める。
+   * 切り替えで行の書式が変わらないようにするためである。
+   */
+  allItems: readonly InboxItem[];
   onSelect: (selection: InboxSelection) => void;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
+  const showKind = !omitsKindLabels(allItems);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLUListElement>): void => {
     const rows = Array.from(listRef.current?.querySelectorAll("button") ?? []);
@@ -52,7 +59,7 @@ export function InboxList({
       onKeyDown={handleKeyDown}
     >
       {items.map((item) => {
-        const row = describeRow(item, now, { showKind, peers: items });
+        const row = describeRow(item, now, { showKind, peers: allItems });
         const itemSelection = selectionOf(item);
         const isSelected =
           selected !== null &&

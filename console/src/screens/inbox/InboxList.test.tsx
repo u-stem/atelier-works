@@ -48,14 +48,18 @@ function approval(): InboxItem {
   return { type: "approval", approval: row };
 }
 
-function render(items: readonly InboxItem[], showKind = true): string {
+/** `items`を描く。`allItems`は絞り込む前の全体で、省くと`items`と同じにする。 */
+function render(
+  items: readonly InboxItem[],
+  allItems: readonly InboxItem[] = items,
+): string {
   return renderToStaticMarkup(
     <TooltipProvider>
       <InboxList
         items={items}
         selected={null}
         now={NOW}
-        showKind={showKind}
+        allItems={allItems}
         onSelect={() => {}}
       />
     </TooltipProvider>,
@@ -63,18 +67,31 @@ function render(items: readonly InboxItem[], showKind = true): string {
 }
 
 describe("InboxList", () => {
-  test("omits the kind of notices when told not to show it", () => {
-    expect(render([notice(1, SHA_A), notice(2, SHA_B)], false)).not.toContain(
+  test("omits the kind of a list that holds only notices", () => {
+    expect(render([notice(1, SHA_A), notice(2, SHA_B)])).not.toContain(
       ">通知<",
     );
   });
 
-  test("shows the kind of notices by default", () => {
-    expect(render([notice(1, SHA_A), notice(2, SHA_B)])).toContain(">通知<");
+  test("keeps the kind of notices filtered out of a mixed list", () => {
+    const notices = [notice(1, SHA_A), notice(2, SHA_B)];
+    expect(render(notices, [approval(), ...notices])).toContain(">通知<");
   });
 
-  test("keeps the kind of an approval even when told not to show kinds", () => {
-    expect(render([approval()], false)).toContain(">要件定義<");
+  test("keeps the kind of an approval in a list of approvals", () => {
+    expect(render([approval()])).toContain(">要件定義<");
+  });
+
+  test("compares a notice with the notices filtered out of the list", () => {
+    const first = notice(1, `deployed(${SHA_A}) cause a`);
+    const second = notice(2, `deployed(${SHA_A}) cause b`);
+    expect(render([first], [first, second])).not.toContain("版 ");
+  });
+
+  test("shows the version of a notice that has no peers", () => {
+    expect(render([notice(1, `deployed(${SHA_A}) cause a`)])).toContain(
+      "版 0123456",
+    );
   });
 
   test("shows the version that tells same-titled notices apart", () => {

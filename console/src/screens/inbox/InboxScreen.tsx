@@ -31,7 +31,6 @@ import {
   findInboxItem,
   type InboxChip,
   inboxSubtitle,
-  omitsKindLabels,
   selectionAfterFilter,
   sortInboxItems,
   unlistedCounts,
@@ -220,7 +219,7 @@ export function InboxScreen() {
             items={visible}
             selected={selection}
             now={now}
-            showKind={!omitsKindLabels(items)}
+            allItems={items}
             onSelect={select}
           />
         </section>

@@ -43,8 +43,14 @@ describe("noticeSeverityLabel", () => {
 describe("noticeTargets", () => {
   test("reads a target at the start of the body", () => {
     expect(noticeTargets("o/r#12 (work item 3): reason")).toEqual([
-      { label: "o/r#12", url: "https://github.com/o/r/issues/12" },
+      { label: "o/r#12", url: "https://github.com/o/r/issues/12", index: 0 },
     ]);
+  });
+
+  test("records where each target first appears", () => {
+    expect(
+      noticeTargets("b/y#2 then a/x#1 and b/y#2").map((target) => target.index),
+    ).toEqual([0, 11]);
   });
 
   test("reads a target in the middle of the body", () => {
@@ -144,7 +150,9 @@ describe("describeNotice", () => {
   test("lists the targets named in the body", () => {
     expect(
       describeNotice(notice({ message: "o/r#5 (work item 2): x" })).targets,
-    ).toEqual([{ label: "o/r#5", url: "https://github.com/o/r/issues/5" }]);
+    ).toEqual([
+      { label: "o/r#5", url: "https://github.com/o/r/issues/5", index: 0 },
+    ]);
   });
 });
 

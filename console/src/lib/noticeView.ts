@@ -17,6 +17,8 @@ export type NoticeTarget = {
   readonly label: string;
   /** リンクにしてよいGitHubのURL。安全な形でなければ`null`。 */
   readonly url: string | null;
+  /** 本文で最初に現れた位置(UTF-16の添字)。本文からこの対象を切り出すときに使う。 */
+  readonly index: number;
 };
 
 /** 詳細に並べる対象の最大数。本文が多くの対象を挙げても、詳細が長くならないようにする。 */
@@ -61,6 +63,7 @@ export function noticeTargets(
       url: safeGitHubUrl(
         `https://github.com/${owner}/${repo}/issues/${number}`,
       ),
+      index: match.index,
     });
     if (targets.length >= MAX_NOTICE_TARGETS) {
       break;
