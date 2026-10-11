@@ -1,4 +1,5 @@
 import { labelStride, layoutBars, resolvePlotWidth } from "../lib/barChart.ts";
+import { cn } from "../lib/cn.ts";
 import { useElementWidth } from "../lib/useElementWidth.ts";
 
 export type BarChartDatum = {
@@ -20,6 +21,7 @@ const VALUE_LABEL_GAP = 4;
  * 空の`data`は描かない。空の表示は呼び出し側が決める。
  *
  * 幅は置かれた領域に合わせて測り、文字の大きさを変えずに棒の間隔だけを広げる。
+ * `sequence`は領域いっぱいに広げる。`category`は項目が少なく、広げると棒が離れすぎるので、幅に上限を置く。
  * 棒の上の値と横軸のラベルは、文字の幅の見積もりが1本分の幅に収まるときだけ出す。
  * 収まらないとき、`axis`が`sequence`(日のような連続する並び)なら横軸のラベルを間引く。
  * `category`(状態のような別々の項目)では、間引くと棒が何か分からなくなるので、
@@ -54,7 +56,10 @@ export function BarChart({
       viewWidth,
     ) === 1;
   return (
-    <div ref={ref} className="w-full min-w-0">
+    <div
+      ref={ref}
+      className={cn("w-full min-w-0", axis === "category" && "max-w-3xl")}
+    >
       <svg
         width={viewWidth}
         height={VIEW_HEIGHT}
@@ -78,14 +83,16 @@ export function BarChart({
           const center = bar.x + bar.width / 2;
           return (
             <g key={datum.key}>
-              <rect
-                x={bar.x}
-                y={bar.y}
-                width={bar.width}
-                height={bar.height}
-                rx={2}
-                className="fill-primary"
-              />
+              {bar.height > 0 ? (
+                <rect
+                  x={bar.x}
+                  y={bar.y}
+                  width={bar.width}
+                  height={bar.height}
+                  rx={2}
+                  className="fill-primary"
+                />
+              ) : null}
               {showValues ? (
                 <text
                   x={center}

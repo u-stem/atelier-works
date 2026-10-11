@@ -67,11 +67,17 @@ function CostReport({
   days,
 }: {
   rows: readonly AgentCostDailyRow[];
-  days: number;
+  days: AnalyticsPeriodDays;
 }) {
   const totals = dailyTotals(rows);
   // グラフは実行の無い日も0で並べ、間隔を日数に比例させる。表は実行のあった日だけを出す。
-  const chartDays = fillDailyTotals(totals, days, new Date());
+  // 行数が上限に届いたときは古い日が切れているので、取れた最古の日より前は補わない。
+  const chartDays = fillDailyTotals(
+    totals,
+    days,
+    new Date(),
+    hitsRowLimit(rows.length, ANALYTICS_ROW_LIMIT),
+  );
   const costData = chartDays.map((total) => ({
     key: total.day,
     label: formatMonthDay(total.day),
@@ -85,17 +91,17 @@ function CostReport({
   return (
     <>
       <TruncationNote rowCount={rows.length} />
-      <ChartBlock title="日別コスト(USD)">
+      <ChartBlock title="日別コスト(USD・UTC)">
         <BarChart
-          title="日別コスト"
+          title="日別コスト(UTC)"
           data={costData}
           axis="sequence"
           formatValue={formatUsd}
         />
       </ChartBlock>
-      <ChartBlock title="日別実行件数">
+      <ChartBlock title="日別実行件数(UTC)">
         <BarChart
-          title="日別実行件数"
+          title="日別実行件数(UTC)"
           data={countData}
           axis="sequence"
           formatValue={formatCount}

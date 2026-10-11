@@ -76,11 +76,14 @@ function dayStartMs(day: string): number | null {
  * 期間は`now`の日(UTC)を最後とする`days`日で、棒の間隔を日数に比例させるために使う。
  * 期間の外の日の合計は捨てず、範囲を広げて含める。端末の時計とbackendの時刻はずれうるため。
  * 日付として読めない日は、並べる位置が決まらないので除く。
+ * `truncated`が真のとき、取得した最も古い日より前は補わない。
+ * 行数の上限で古い日が切れているので、その前を0で補うと、実際にはあった実行を無いものとして描くためである。
  */
 export function fillDailyTotals(
   totals: readonly DailyTotal[],
-  days: number,
+  days: AnalyticsPeriodDays,
   now: Date,
+  truncated = false,
 ): DailyTotal[] {
   const byTime = new Map<number, DailyTotal>();
   for (const total of totals) {
@@ -90,8 +93,11 @@ export function fillDailyTotals(
     }
   }
   const today = Math.floor(now.getTime() / MS_PER_DAY) * MS_PER_DAY;
-  const times = [today - (days - 1) * MS_PER_DAY, today, ...byTime.keys()];
-  const first = Math.min(...times);
+  const windowStart = today - (days - 1) * MS_PER_DAY;
+  const fetched = [...byTime.keys()];
+  const times = [windowStart, today, ...fetched];
+  const first =
+    truncated && fetched.length > 0 ? Math.min(...fetched) : Math.min(...times);
   const last = Math.max(...times);
   const filled: DailyTotal[] = [];
   for (let time = first; time <= last; time += MS_PER_DAY) {

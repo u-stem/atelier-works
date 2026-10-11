@@ -19,7 +19,7 @@ const MAX_BAR_WIDTH = 36;
 /** 1本分の幅のうち、棒が占める割合。残りは隣との間隔になる。 */
 const BAR_FILL_RATIO = 0.7;
 
-/** 値が0でも棒が見えるようにする、最小の高さ。 */
+/** 0より大きい値の棒が、最大との差が大きくても見えるようにする、最小の高さ。 */
 const MIN_BAR_HEIGHT = 1;
 
 /** 最大の棒の上に残す、値のラベルの置き場の高さ。 */
@@ -51,7 +51,8 @@ export function resolvePlotWidth(measured: number): number {
 /**
  * 値の並びを、描画領域に収まる棒の座標にする。
  * 最大の値の棒は、領域の高さから`VALUE_LABEL_ROOM`を引いた高さになり、その上に値のラベルが入る。
- * ほかの値はその比で決まる。値が0の棒も、細い線として残す。値はすべて0以上を前提にする。
+ * ほかの値はその比で決まる。値が0の棒は高さ0にし、軸の線だけが残る。
+ * 0より大きい値は、最小の高さを確保する。値はすべて0以上を前提にする。
  */
 export function layoutBars(
   values: readonly number[],
@@ -66,9 +67,9 @@ export function layoutBars(
   const tallest = Math.max(plot.height - VALUE_LABEL_ROOM, MIN_BAR_HEIGHT);
   return values.map((value, index) => {
     const height =
-      max > 0
+      value > 0 && max > 0
         ? Math.max((value / max) * tallest, MIN_BAR_HEIGHT)
-        : MIN_BAR_HEIGHT;
+        : 0;
     return {
       x: index * slot + (slot - width) / 2,
       y: plot.height - height,

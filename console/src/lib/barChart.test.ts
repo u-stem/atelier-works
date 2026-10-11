@@ -25,12 +25,20 @@ describe("layoutBars", () => {
     expect(bars.map((bar) => bar.y + bar.height)).toEqual([50, 50]);
   });
 
-  test("keeps a zero value visible as a thin line", () => {
-    expect(layoutBars([10, 0], PLOT)[1]?.height).toBe(1);
+  test("draws no bar for a zero value", () => {
+    expect(layoutBars([10, 0], PLOT)[1]?.height).toBe(0);
   });
 
-  test("draws a thin line for every bar when all values are zero", () => {
-    expect(layoutBars([0, 0], PLOT).map((bar) => bar.height)).toEqual([1, 1]);
+  test("draws no bar at all when every value is zero", () => {
+    expect(layoutBars([0, 0], PLOT).map((bar) => bar.height)).toEqual([0, 0]);
+  });
+
+  test("keeps a value far below the tallest one visible", () => {
+    expect(layoutBars([100000, 1], PLOT)[1]?.height).toBe(1);
+  });
+
+  test("rests a zero value on the bottom of the plot", () => {
+    expect(layoutBars([10, 0], PLOT)[1]?.y).toBe(PLOT.height);
   });
 
   test("places the bars side by side without overlap", () => {
