@@ -123,7 +123,7 @@ describe("self_update timeout", () => {
     );
     const single = count(
       source,
-      /(readSelfCloneBranch|readSelfCloneHeadSha|resolveChangedPaths)\(\s*runCommand,/g,
+      /(readSelfCloneBranch|readSelfCloneHeadSha|resolveChangedPaths|listMergedPullRequests)\(\s*runCommand,/g,
     );
     // ホストの印の確認: コミットの有無は1回、祖先の確認は通知の解決の上限の数と、この回の通知の判断の1回。
     const hostCommit = count(source, /isCommitInClone\(\s*runCommand,/g);

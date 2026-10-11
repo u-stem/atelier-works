@@ -1,0 +1,9 @@
+summary: '[LIB] 反映に含まれるPRの解析'
+description: 内部ライブラリです。直接実行するものではありません。自己更新処理が、マージのコミットからPRの番号・題名・作り手を取り出す純粋ロジックです。
+lock: '!inline f/factory/lib/self_update_pull_requests.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -1127,16 +1127,32 @@ export async function recordFailure(
 // deployments
 // ---------------------------------------------------------------------------
 
-/** `factory.deployments`に行を挿入し、そのIDを返す。 */
+/**
+ * `factory.deployments`に行を挿入し、そのIDを返す。
+ * `pull_requests`が空のときは、その列を指名しない文で挿入し、列の既定値(空の配列)を使う。
+ * migrationが当たる前に新しいコードが動いても、PRを持たない記録(失敗の記録を含む)は
+ * 書けるようにするためである。
+ */
 export async function recordDeployment(
   record: DeploymentRecord,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  const statement = sql`
+  const statement =
+    record.pull_requests.length === 0
+      ? sql`
     INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action)
     VALUES (
       ${record.sha_from}, ${record.sha_to}, ${JSON.stringify(record.changed_paths)}::jsonb,
       ${record.result}, ${record.needs_host_action}::boolean
+    )
+    RETURNING id
+  `
+      : sql`
+    INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, pull_requests)
+    VALUES (
+      ${record.sha_from}, ${record.sha_to}, ${JSON.stringify(record.changed_paths)}::jsonb,
+      ${record.result}, ${record.needs_host_action}::boolean,
+      ${JSON.stringify(record.pull_requests)}::jsonb
     )
     RETURNING id
   `;

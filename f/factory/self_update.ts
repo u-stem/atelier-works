@@ -49,6 +49,10 @@ import {
 } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
+  MERGED_PULL_REQUESTS_LOG_FORMAT,
+  parseMergedPullRequests,
+} from "./lib/self_update_pull_requests.ts";
+import {
   assertBranchMatches,
   buildNpmCiArgv,
   buildWmillArgv,
@@ -67,7 +71,7 @@ import {
   truncateOutput,
   withCallTimeout,
 } from "./lib/self_update_support.ts";
-import { assertSha } from "./lib/types.ts";
+import { assertSha, type DeploymentPullRequest } from "./lib/types.ts";
 import {
   type CommandResult,
   type CommandRunner,
@@ -215,6 +219,52 @@ export async function diffPaths(
     );
   }
   return parseNulSeparatedPaths(result.stdout);
+}
+
+/**
+ * `git log`の出力の保持量の上限(バイト)。マージのコミットの本文は信頼できない文字列なので、
+ * 長い期間の履歴や大きな本文でも、メモリに載せる量を決めておく。
+ * 超えたときは先頭(新しい側)と末尾が残り、間が省かれる。
+ */
+export const MERGED_PULL_REQUESTS_LOG_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * `oldSha`から`newSha`の間でmainにマージされたPRを新しい順に返す。
+ * 第1親だけをたどる(`--first-parent`)ので、PRのブランチの中のコミットは読まない。
+ * `oldSha`が空(前回の反映が無い)ときは、履歴の全体を数えないよう、gitを呼ばずに空配列を返す。
+ * 解析は`parseMergedPullRequests`が行う。gitが失敗したら例外を投げる。
+ */
+export async function listMergedPullRequests(
+  run: CommandRunner,
+  dir: string,
+  oldSha: string,
+  newSha: string,
+  factoryRepoUrl: string,
+): Promise<DeploymentPullRequest[]> {
+  if (oldSha.length === 0) return [];
+  assertSha(oldSha);
+  assertSha(newSha);
+  const result = await run(
+    [
+      ...GIT_BASE_ARGV,
+      "log",
+      "--first-parent",
+      "-z",
+      `--format=${MERGED_PULL_REQUESTS_LOG_FORMAT}`,
+      `${oldSha}..${newSha}`,
+    ],
+    {
+      cwd: dir,
+      env: selfCloneGitEnv(),
+      maxOutputBytes: MERGED_PULL_REQUESTS_LOG_MAX_BYTES,
+    },
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(
+      maskSecrets(`git log failed in ${dir}: ${result.stderr.trim()}`),
+    );
+  }
+  return parseMergedPullRequests(result.stdout, factoryRepoUrl);
 }
 
 /**
@@ -401,12 +451,12 @@ async function runWmillCli(
 /**
  * 1回の実行で走るgitの最大回数。
  * cloneの更新(`FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT`回)、HEADとブランチの確認で2回、
- * 変更パスの列挙で1回、`mise.toml`の比較(`git show`)で最大2回。
+ * 変更パスの列挙で1回、反映に含まれるPRの列挙(`git log`)で1回、`mise.toml`の比較(`git show`)で最大2回。
  * `git show`は時間切れでも失敗として続くので、最大回数まで走りうる。
  * 上限は`DEFAULT_TIMEOUT_MS`である。ホストの印の確認は`SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT`に数える。
  */
 export const SELF_UPDATE_GIT_COMMAND_COUNT =
-  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT + 2 + 1 + 2;
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT + 2 + 1 + 1 + 2;
 
 /**
  * 1回の実行で走る、ローカルだけのgit(上限は`SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS`)の最大回数。
@@ -702,6 +752,22 @@ async function updateSelf(
       : false;
     const classification = classifyChangedPaths(changedPaths, miseChanged);
 
+    // PRの一覧は表示のための付随情報なので、取れなくても反映の成功を失敗にしない。
+    let pullRequests: DeploymentPullRequest[] = [];
+    try {
+      pullRequests = await listMergedPullRequests(
+        runCommand,
+        factoryClone.dir,
+        deployedSha,
+        currentSha,
+        config.factory_repo,
+      );
+    } catch (err) {
+      log.warn("failed to list merged pull requests", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+
     const shaFrom = deployedSha.length > 0 ? deployedSha : null;
     // 記録の時間切れは、反映が済んでいるので失敗にせず、警告だけ残す。
     await recordSuccessDeployment(
@@ -712,6 +778,7 @@ async function updateSelf(
           changed_paths: changedPaths,
           result: "success",
           needs_host_action: classification.needs_host_action,
+          pull_requests: pullRequests,
         }),
       (timeout) => {
         log.warn("recording the successful deployment timed out", {
@@ -779,6 +846,7 @@ async function updateSelf(
           changed_paths: [],
           result: "failed",
           needs_host_action: false,
+          pull_requests: [],
         }),
       );
     } catch (recordErr) {

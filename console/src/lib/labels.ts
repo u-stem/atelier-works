@@ -116,6 +116,35 @@ export function noticeKindLabel(kind: string): string {
   return NOTICE_KIND_LABELS.get(kind) ?? UNKNOWN_NOTICE_LABEL;
 }
 
+const DEPLOYMENT_RESULT_LABELS: ReadonlyMap<string, string> = new Map([
+  ["success", "反映済み"],
+  ["failed", "失敗"],
+]);
+
+const PULL_REQUEST_ORIGIN_LABELS: ReadonlyMap<string, string> = new Map([
+  ["factory", "Software Factory"],
+  ["human", "人"],
+]);
+
+/** 反映の結果の日本語。表に無い結果は`UNKNOWN_STATUS_LABEL`にする。 */
+export function deploymentResultLabel(result: string): string {
+  return DEPLOYMENT_RESULT_LABELS.get(result) ?? UNKNOWN_STATUS_LABEL;
+}
+
+/**
+ * PRを作ったのが誰かの日本語。
+ * マージのコミットからブランチを読めなかったPRと、表に無い値は「不明」にする。
+ * 確かな情報が無いのに、どちらかに振り分けないためである。
+ */
+export function pullRequestOriginLabel(origin: string): string {
+  return PULL_REQUEST_ORIGIN_LABELS.get(origin) ?? "不明";
+}
+
+/** 反映にホスト側の作業(`infra/`と`mise.toml`の変更の反映)が要るかの日本語。 */
+export function hostActionLabel(needsHostAction: boolean): string {
+  return needsHostAction ? "ホストの作業が必要" : "ホストの作業は不要";
+}
+
 /** 「作業項目 #27」の形。 */
 export function workItemRef(workItemId: number): string {
   return `作業項目 #${workItemId}`;

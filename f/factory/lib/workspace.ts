@@ -251,6 +251,14 @@ export function omittedMarker(bytes: number): string {
 }
 
 /**
+ * `readStreamCapped`が間を捨てたときの`omittedMarker`の位置(文字数)を返す。無ければ-1。
+ * 位置より前が、保持した先頭である。
+ */
+export function omittedMarkerIndex(text: string): number {
+  return text.search(OMITTED_MARKER_PATTERN);
+}
+
+/**
  * `readStreamCapped`が`text`の途中を捨てたかを返す。
  * 途中を捨てた機械可読のレポートは解析してはいけない。
  */
