@@ -667,6 +667,13 @@ textarea:focus-visible {
   font-size: 12px;
 }
 
+/* リンクにしなかった文字と、リンクの文字に添える行き先のURL。 */
+.markdown .md-link-url {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 /* ---------------------------------------------------------------------- */
 /* Responsive                                                             */
 /* ---------------------------------------------------------------------- */

@@ -230,6 +230,12 @@
   background: var(--surface);
 }
 
+.diagram-viewer-caption {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .diagram-viewer-error {
   color: var(--danger);
   font-size: 13px;

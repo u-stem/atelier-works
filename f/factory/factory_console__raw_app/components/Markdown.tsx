@@ -4,6 +4,13 @@
 // 内容をClaudeが要約したものに由来するため、HTMLでスクリプトや危険な
 // プロトコルの`href`・`src`を差し込めないようにする
 // (同種の注意は`f/factory/lib/drawio.ts`にもある)。
+// リンクは`a`の差し替えで絞る。`rehype-sanitize`の既定は任意の`http(s)`の
+// URLを通すので、リンクにするのは、作業項目と同じリポジトリのIssueとPRのURLと、
+// 同じページの見出しへのフラグメントだけにする(`lib/markdownLink.ts`)。
+// リポジトリを渡されない呼び出し元では、GitHubのURLもリンクにしない。
+// それ以外はリンクにせず文字で出す。リンクの文字とURLが違うときは、読み手が
+// 行き先を判断できるようにURLも添える。添えたURLは、文字の向きを変える
+// 制御文字で周りの表示を崩さないよう、`<bdi>`で包む。
 // `dangerouslySetInnerHTML`は使わない。`react-markdown`が無害化済みの
 // hastの木を直接Reactの要素にする。
 //
@@ -12,7 +19,8 @@
 // `img`の差し替えで受け取り、壊れた`<img>`ではなく`DrawioViewer`で描く。
 // `name.drawio`はworkerのディスクにだけあるファイル名で、URLとして取得できない。
 // XMLは`diagrams`から名前で引き、一覧に無い名前は、空や壊れた画像ではなく
-// 「見つからない」という表示にする。
+// 「見つからない」という表示にする。安全の検査を通らず読み戻しで落とされた図は、
+// 名前が`rejectedDiagrams`にあり、「見つからない」とは別の文で「表示しません」と出す。
 
 import React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -20,6 +28,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { slugify } from "../lib/extractHeadings";
 import { ALERT_LABELS, stripAlertMarker } from "../lib/markdownAlerts";
+import { type RepoRef, resolveMarkdownLink } from "../lib/markdownLink";
 import type { RequirementsDiagram } from "../lib/types";
 import { DrawioViewer } from "./DrawioViewer";
 
@@ -82,7 +91,56 @@ function childrenText(children: React.ReactNode): string {
     .join("");
 }
 
+/**
+ * `Markdown`に渡された`repo`を、リンクの判定に届けるcontext。
+ * `diagrams`と同じく、`components`を描画のたびに作り直さないために使う。
+ */
+const RepoContext = React.createContext<RepoRef | null>(null);
+
+function MarkdownAnchor({
+  href,
+  children,
+}: {
+  href: string | undefined;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const repo = React.useContext(RepoContext);
+  const link = resolveMarkdownLink(href, childrenText(children), repo);
+  const note =
+    link.note === null ? null : (
+      <span className="md-link-url">
+        {" ("}
+        <bdi>{link.note}</bdi>
+        {")"}
+      </span>
+    );
+  if (link.kind === "text") {
+    return (
+      <span className="md-link-disabled">
+        {children}
+        {note}
+      </span>
+    );
+  }
+  return (
+    <>
+      <a
+        href={link.href}
+        {...(link.external
+          ? { target: "_blank", rel: "noopener noreferrer" }
+          : {})}
+      >
+        {children}
+      </a>
+      {note}
+    </>
+  );
+}
+
 const components: Components = {
+  a: ({ href, children }) => (
+    <MarkdownAnchor href={href}>{children}</MarkdownAnchor>
+  ),
   h1: ({ children }) => <h1>{children}</h1>,
   h2: ({ children }) => {
     const id = slugify(childrenText(children));
@@ -128,7 +186,7 @@ const components: Components = {
   },
   p: ({ node, children }) => {
     // 図の画像だけを含む段落は、`<p>`で包まず(上の`img`の差し替えで)
-    // ビューアを直接描く。`DrawioViewer`の入れ物は`<div>`で、DOMでは
+    // ビューアを直接描く。`DrawioViewer`の入れ物は`<figure>`か`<div>`で、DOMでは
     // `<p>`の中に`<div>`を置けないため。
     const soleChild = node?.children.length === 1 ? node.children[0] : null;
     if (
@@ -151,33 +209,57 @@ const components: Components = {
  */
 const DiagramsContext = React.createContext<readonly RequirementsDiagram[]>([]);
 
+/** 安全の検査を通らなかった図の名前を、`img`の図の検索に届けるcontext。 */
+const RejectedDiagramsContext = React.createContext<readonly string[]>([]);
+
 function DiagramSlot({ name }: { name: string }): React.ReactElement {
   const diagrams = React.useContext(DiagramsContext);
+  const rejected = React.useContext(RejectedDiagramsContext);
   const diagram = diagrams.find((candidate) => candidate.name === name);
+  if (diagram === undefined && rejected.includes(name)) {
+    return (
+      <p className="md-diagram-missing" role="alert">
+        図 {name} は安全の検査を通らなかったので表示しません
+      </p>
+    );
+  }
   if (diagram === undefined) {
     return <p className="md-diagram-missing">図 {name} が見つかりません</p>;
   }
   return <DrawioViewer name={diagram.name} xml={diagram.xml} />;
 }
 
+/**
+ * `repo`は、本文が属する作業項目のリポジトリ。渡すと、そのリポジトリのIssueとPRの
+ * URLだけをリンクにする。渡さないと、GitHubのURLも文字で出す。
+ */
 export function Markdown({
   markdown,
   diagrams = [],
+  rejectedDiagrams = [],
+  repo = null,
 }: {
   markdown: string;
   diagrams?: readonly RequirementsDiagram[];
+  /** 安全の検査を通らず、表示しない図の名前。 */
+  rejectedDiagrams?: readonly string[];
+  repo?: RepoRef | null;
 }): React.ReactElement {
   return (
-    <DiagramsContext.Provider value={diagrams}>
-      <div className="markdown">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[[rehypeSanitize, schema]]}
-          components={components}
-        >
-          {markdown}
-        </ReactMarkdown>
-      </div>
-    </DiagramsContext.Provider>
+    <RepoContext.Provider value={repo}>
+      <DiagramsContext.Provider value={diagrams}>
+        <RejectedDiagramsContext.Provider value={rejectedDiagrams}>
+          <div className="markdown">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[[rehypeSanitize, schema]]}
+              components={components}
+            >
+              {markdown}
+            </ReactMarkdown>
+          </div>
+        </RejectedDiagramsContext.Provider>
+      </DiagramsContext.Provider>
+    </RepoContext.Provider>
   );
 }

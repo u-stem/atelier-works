@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { toNoticeRow, toPipelineRow } from "./types";
+import { toNoticeRow, toPipelineRow, toRequirementsDocRow } from "./types";
 
 const PIPELINE_ROW = {
   work_item_id: 1,
@@ -63,5 +63,18 @@ describe("toNoticeRow", () => {
       resolved: false,
       created_at: "2026-10-01T00:00:00.000Z",
     });
+  });
+});
+
+describe("toRequirementsDocRow", () => {
+  test("reads the names of the diagrams that failed the safety check", () => {
+    expect(
+      toRequirementsDocRow({ rejected_diagrams: ["flow", 3, "arch"] })
+        .rejected_diagrams,
+    ).toEqual(["flow", "arch"]);
+  });
+
+  test("falls back to no rejected diagrams when the column is missing", () => {
+    expect(toRequirementsDocRow({}).rejected_diagrams).toEqual([]);
   });
 });

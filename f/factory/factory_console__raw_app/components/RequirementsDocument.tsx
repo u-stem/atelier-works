@@ -3,7 +3,7 @@
 // どちらも`console_query`の`requirements_doc`ビューで`RequirementsDocRow`を
 // 取得して、このコンポーネントで描く。
 
-import React from "react";
+import React, { useMemo } from "react";
 import { extractHeadings, extractTitle } from "../lib/extractHeadings";
 import { safeGitHubUrl } from "../lib/githubLink";
 import { type RequirementsDocRow, toRequirementsDocRow } from "../lib/types";
@@ -74,6 +74,11 @@ export function RequirementsDocument({
 }): React.ReactElement {
   const title = extractTitle(doc.markdown) ?? doc.title ?? "(無題)";
   const issueUrl = safeGitHubUrl(doc.issue_url);
+  // `Markdown`のcontextの値になるので、描画のたびに作り直さない。
+  const repo = useMemo(
+    () => ({ owner: doc.owner, repo: doc.repo }),
+    [doc.owner, doc.repo],
+  );
 
   return (
     <div className="confluence-doc">
@@ -119,7 +124,12 @@ export function RequirementsDocument({
       <div className="confluence-doc-body">
         <div className="confluence-doc-content">
           <p className="confluence-doc-summary">{doc.summary}</p>
-          <Markdown markdown={doc.markdown} diagrams={doc.diagrams} />
+          <Markdown
+            markdown={doc.markdown}
+            diagrams={doc.diagrams}
+            rejectedDiagrams={doc.rejected_diagrams}
+            repo={repo}
+          />
           {doc.open_questions.length > 0 && (
             <section className="confluence-doc-open-questions">
               <h2>未確定事項</h2>
