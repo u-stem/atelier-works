@@ -1,5 +1,5 @@
 import { ExternalLink, RotateCw } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { SummaryFailure } from "../../api/guards/summary.ts";
 import { JobLink } from "../../components/JobLink.tsx";
@@ -41,6 +41,17 @@ function RetrySection({ failure }: { failure: SummaryFailure }) {
   const plan = describeRetryPlan(failure);
   const input = { workItemId: failure.work_item_id };
   const locked = isLocked(input);
+  const [requested, setRequested] = useState(false);
+  const statusRef = useRef<HTMLParagraphElement>(null);
+
+  // 確定すると、再実行のボタンは処理中で無効になり、フォーカスが文書の先頭へ落ちる。
+  // 処理中の行へフォーカスを移して、読み上げと次の操作の起点を残す。
+  useEffect(() => {
+    if (locked && requested) {
+      statusRef.current?.focus();
+      setRequested(false);
+    }
+  }, [locked, requested]);
 
   return (
     <section
@@ -64,7 +75,12 @@ function RetrySection({ failure }: { failure: SummaryFailure }) {
               {locked ? "処理中" : "再実行"}
             </Button>
             {locked ? (
-              <p className="text-small text-muted-foreground" role="status">
+              <p
+                ref={statusRef}
+                tabIndex={-1}
+                className="text-small text-muted-foreground outline-none"
+                role="status"
+              >
                 この作業項目の処理が終わり、一覧が更新されるまで、押せません。
               </p>
             ) : null}
@@ -78,7 +94,7 @@ function RetrySection({ failure }: { failure: SummaryFailure }) {
             }}
             onConfirm={() => {
               setConfirming(false);
-              submit(input);
+              setRequested(submit(input));
             }}
           />
         </>
@@ -145,6 +161,11 @@ export function FailureOverview({
         <Row label="失敗した時刻">
           <time dateTime={description.occurredAt} className="tabular-nums">
             {formatAbsoluteWithRelative(description.occurredAt, now)}
+          </time>
+        </Row>
+        <Row label="最終更新(一覧の並び順)">
+          <time dateTime={description.updatedAt} className="tabular-nums">
+            {formatAbsoluteWithRelative(description.updatedAt, now)}
           </time>
         </Row>
         {description.flowLabel === null ? null : (

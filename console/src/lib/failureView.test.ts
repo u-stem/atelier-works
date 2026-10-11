@@ -184,6 +184,12 @@ describe("describeFailure record", () => {
     );
   });
 
+  test("keeps the last update, which orders the list, apart from the failure time", () => {
+    expect(describeFailure(failure()).updatedAt).toBe(
+      "2026-10-02T00:00:00.000Z",
+    );
+  });
+
   test("falls back to the time of the status change without a record", () => {
     expect(
       describeFailure(
@@ -236,6 +242,13 @@ describe("describeFailure error", () => {
     expect(
       describeFailure(failure({ error: "e".repeat(FAILURE_TEXT_LIMIT) })).error
         ?.truncated,
+    ).toBe(true);
+  });
+
+  test("measures the limit on the received text, before line breaks are normalised", () => {
+    expect(
+      describeFailure(failure({ error: "\r\n".repeat(FAILURE_TEXT_LIMIT / 2) }))
+        .error?.truncated,
     ).toBe(true);
   });
 

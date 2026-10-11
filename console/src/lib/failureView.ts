@@ -40,6 +40,8 @@ export type FailureDescription = {
   readonly jobId: string | null;
   /** 失敗の時刻(ISO文字列)。記録が無ければ状態が変わった時刻、それも無ければ最後の更新の時刻。 */
   readonly occurredAt: string;
+  /** 作業項目の最終更新の時刻(ISO文字列)。一覧はこの時刻の新しい順に並ぶ。 */
+  readonly updatedAt: string;
   /** 失敗の記録の文。記録が無ければ`null`。 */
   readonly error: { readonly text: string; readonly truncated: boolean } | null;
   /** 今の状態へ遷移したときの注記。 */
@@ -82,8 +84,11 @@ function describeError(error: string | null): FailureDescription["error"] {
   if (error === null) {
     return null;
   }
-  const { text } = displayableIssueText(error);
-  return { text, truncated: [...text].length >= FAILURE_TEXT_LIMIT };
+  // 切られたかは、改行の正規化や文字の置き換えの前の、受け取った文の長さで決める。
+  return {
+    text: displayableIssueText(error).text,
+    truncated: [...error].length >= FAILURE_TEXT_LIMIT,
+  };
 }
 
 /** 失敗の1行を、詳細のペインに出す内容にする。起票者や実行ログに由来する文字は、隠れた文字を置き換える。 */
@@ -109,6 +114,7 @@ export function describeFailure(failure: SummaryFailure): FailureDescription {
     jobId: isJobId(failure.job_id) ? failure.job_id : null,
     occurredAt:
       failure.occurred_at ?? failure.status_changed_at ?? failure.updated_at,
+    updatedAt: failure.updated_at,
     error: describeError(failure.error),
     statusNote:
       failure.status_note === null
