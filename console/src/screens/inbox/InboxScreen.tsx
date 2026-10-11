@@ -2,7 +2,7 @@ import { ArrowLeft, LogIn } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { isBannerError } from "../../api/errors.ts";
-import { useSummary } from "../../api/queries.ts";
+import { SUMMARY_REFRESH_MS, useSummary } from "../../api/queries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { refreshStatusOf } from "../../app/refreshStatus.ts";
 import { useMediaQuery } from "../../app/useMediaQuery.ts";
@@ -44,6 +44,7 @@ import { InboxDetail } from "./InboxDetail.tsx";
 import { InboxEmpty } from "./InboxEmpty.tsx";
 import { InboxList } from "./InboxList.tsx";
 import { KindChips } from "./KindChips.tsx";
+import { refreshFailureOf } from "./refreshFailure.ts";
 import { UnlistedCards } from "./UnlistedCards.tsx";
 
 /** 一覧と詳細を並べる幅(Tailwindのlg)。これ未満では1画面ずつ出す。 */
@@ -112,6 +113,9 @@ function FailureState({
   );
 }
 
+/** 見出しの更新は一覧だけを取り直し、詳細ペインの取得は含まないので、そう読める名前にする。 */
+const INBOX_REFRESH_LABEL = "一覧を更新";
+
 /**
  * 要対応の画面。項目を新しい順に並べ、種類のチップで絞り込む。
  * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない(幅が狭いときの項目の選択を除く)。
@@ -128,7 +132,9 @@ export function InboxScreen() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [chip, setChip] = useState<InboxChip>("all");
   const selection = parseSelection(searchParams);
-  const refresh = refreshStatusOf(summary);
+  const refresh = refreshStatusOf(summary, {
+    autoRefreshMs: SUMMARY_REFRESH_MS,
+  });
   const location = useLocation();
   const navigate = useNavigate();
   const wide = useMediaQuery(WIDE_QUERY);
@@ -209,7 +215,11 @@ export function InboxScreen() {
   if (summary.data === undefined) {
     return (
       <>
-        <PageHeader title="要対応" refresh={refresh} />
+        <PageHeader
+          title="要対応"
+          refresh={refresh}
+          refreshLabel={INBOX_REFRESH_LABEL}
+        />
         {summary.isError ? (
           <FailureState error={summary.error} onRetry={refresh.onRefresh} />
         ) : (
@@ -229,6 +239,7 @@ export function InboxScreen() {
       title="要対応"
       subtitle={inboxSubtitle(items, unlisted)}
       refresh={refresh}
+      refreshLabel={INBOX_REFRESH_LABEL}
     />
   );
 
@@ -237,9 +248,8 @@ export function InboxScreen() {
       <>
         {header}
         <InboxEmpty
-          updatedAt={summary.dataUpdatedAt}
-          now={now}
           unlisted={unlisted}
+          refreshFailure={refreshFailureOf(summary, refresh.onRefresh)}
         />
       </>
     );

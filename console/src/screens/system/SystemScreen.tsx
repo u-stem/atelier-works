@@ -4,6 +4,7 @@ import {
   useSystemStatus,
 } from "../../api/systemQueries.ts";
 import { PageHeader } from "../../app/PageHeader.tsx";
+import { refreshStatusOfAll } from "../../app/refreshStatus.ts";
 import {
   auditFailureLimitNote,
   auditFailuresOf,
@@ -26,8 +27,9 @@ function LimitNote({ count }: { count: number }) {
   return <Note text={listLimitNote(count, SYSTEM_STATUS_LIMIT)} />;
 }
 
-function ReleaseSection() {
-  const status = useSystemStatus();
+type StatusQuery = ReturnType<typeof useSystemStatus>;
+
+function ReleaseSection({ status }: { status: StatusQuery }) {
   return (
     <SystemSection
       id="release-heading"
@@ -41,8 +43,11 @@ function ReleaseSection() {
   );
 }
 
-function UpdateHistorySection() {
-  const deployments = useDeployments();
+function UpdateHistorySection({
+  deployments,
+}: {
+  deployments: ReturnType<typeof useDeployments>;
+}) {
   return (
     <SystemSection
       id="update-history-heading"
@@ -61,8 +66,7 @@ function UpdateHistorySection() {
   );
 }
 
-function InfoNoticeSection() {
-  const status = useSystemStatus();
+function InfoNoticeSection({ status }: { status: StatusQuery }) {
   return (
     <SystemSection
       id="info-notices-heading"
@@ -81,8 +85,7 @@ function InfoNoticeSection() {
   );
 }
 
-function ResolvedNoticeSection() {
-  const status = useSystemStatus();
+function ResolvedNoticeSection({ status }: { status: StatusQuery }) {
   return (
     <SystemSection
       id="resolved-notices-heading"
@@ -101,8 +104,11 @@ function ResolvedNoticeSection() {
   );
 }
 
-function AuditFailureSection() {
-  const summary = useSummary();
+function AuditFailureSection({
+  summary,
+}: {
+  summary: ReturnType<typeof useSummary>;
+}) {
   return (
     <SystemSection
       id="audit-failures-heading"
@@ -129,8 +135,7 @@ function AuditFailureSection() {
   );
 }
 
-function OrphanFailureSection() {
-  const status = useSystemStatus();
+function OrphanFailureSection({ status }: { status: StatusQuery }) {
   return (
     <SystemSection
       id="orphan-failures-heading"
@@ -151,20 +156,25 @@ function OrphanFailureSection() {
 
 /**
  * システムの画面。Software Factoryの自分自身の状態を、節に分けて出す。
- * 節ごとに自分の取得と再読み込みを持つので、見出しには最終更新を出さない。
+ * 3つの取得は画面が持ち、同じ取得を読む節は結果を分け合う。
+ * 見出しの更新ボタンが3つを取り直し、節は失敗したときの「もう一度取得する」だけを持つ。
  * 読み取り専用で、操作は起こさない。通知の解決は、要対応の画面の詳細で行う。
  */
 export function SystemScreen() {
+  const status = useSystemStatus();
+  const deployments = useDeployments();
+  const summary = useSummary();
+  const refresh = refreshStatusOfAll([status, deployments, summary]);
   return (
     <>
-      <PageHeader title="システム" />
+      <PageHeader title="システム" refresh={refresh} />
       <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
-        <ReleaseSection />
-        <UpdateHistorySection />
-        <InfoNoticeSection />
-        <ResolvedNoticeSection />
-        <AuditFailureSection />
-        <OrphanFailureSection />
+        <ReleaseSection status={status} />
+        <UpdateHistorySection deployments={deployments} />
+        <InfoNoticeSection status={status} />
+        <ResolvedNoticeSection status={status} />
+        <AuditFailureSection summary={summary} />
+        <OrphanFailureSection status={status} />
       </div>
     </>
   );

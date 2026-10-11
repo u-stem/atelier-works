@@ -1,7 +1,8 @@
-import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { isBannerError } from "../../api/errors.ts";
+import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { QueryFailureAlert } from "../../components/QueryFailureAlert.tsx";
+import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { apiErrorOf } from "../../lib/queryFailureView.ts";
 
@@ -49,7 +50,7 @@ function FailureState({
 /**
  * 分析の1区画。取得中、失敗、空、値ありの4つを区別して出す。
  * 取得中は値が無いので、空の表示を出さない。
- * 再取得に失敗しても前回の値が残っているときは、値を出したまま、古いことを添える。
+ * 再取得に失敗しても前回の値が残っているときは、空かどうかによらず、値を出したまま、古いことと再取得の操作を添える。
  */
 export function AnalyticsSection<T>({
   id,
@@ -63,7 +64,7 @@ export function AnalyticsSection<T>({
   title: string;
   failureTitle: string;
   emptyMessage: string;
-  query: UseQueryResult<T[], Error>;
+  query: SectionQuery<T[]>;
   children: (rows: T[]) => ReactNode;
 }) {
   const rows = query.data;
@@ -84,18 +85,24 @@ export function AnalyticsSection<T>({
         ) : (
           <LoadingState />
         )
-      ) : rows.length === 0 ? (
-        <p className="max-w-3xl rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
-          {emptyMessage}
-        </p>
       ) : (
         <div className="flex flex-col gap-6">
           {query.isError ? (
-            <p className="text-small text-warning">
-              最新の取得に失敗したため、前回取得した値を表示しています。
-            </p>
+            <StaleDataNotice
+              error={query.error}
+              isFetching={query.isFetching}
+              onRetry={() => {
+                void query.refetch();
+              }}
+            />
           ) : null}
-          {children(rows)}
+          {rows.length === 0 ? (
+            <p className="max-w-3xl rounded-xl border border-border bg-card p-5 text-small text-muted-foreground">
+              {emptyMessage}
+            </p>
+          ) : (
+            children(rows)
+          )}
         </div>
       )}
     </section>
