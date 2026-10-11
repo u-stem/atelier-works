@@ -533,7 +533,8 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 検査コマンドは、対象リポジトリのコードをworkerのコンテナ内でrootとして実行する。環境変数を最小にしても隔離にはならず、同じuidなので`/proc`を経由してジョブのトークンに届きうる。そのため、サンドボックス(別のコンテナ、非root、network none)ができるまで、既定値の`[]`を保つ。空でなければ、実行のたびにnoticeの`unsandboxed_check_commands`を記録する。
 
-検査コマンドには、`PATH`と、実行ごとに作る非公開の`HOME`だけを渡し、秘密情報は引き継がない。終わったら`HOME`のディレクトリを消す。
+検査コマンドには、固定の`PATH`と、実行ごとに作る非公開の`HOME`だけを渡し、秘密情報は引き継がない。終わったら`HOME`のディレクトリを消す。
+`PATH`の値と、workerの値を使わない理由は、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)にある。
 
 検査コマンドが指す先(対象リポジトリの`mise.toml`や`package.json`のscriptsなど)は、信頼できない内容として扱う。workerのmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`をしない)。`mise.toml`に頼るコマンドと、`MISE_TRUSTED_CONFIG_PATHS`を使わずには実行できないコマンドは、実行せずにブロックとして報告する。
 

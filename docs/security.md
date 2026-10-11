@@ -303,6 +303,29 @@ workerは`privileged`にせず、`FAVOR_UNSHARE_PID`も有効にしない。Wind
 
 workerには`no-new-privileges:true`と、プロセス数の上限(`deploy.resources.limits.pids`)を設定する。`cap_drop`によるケーパビリティの削減と、rootでないユーザーでの実行はしない。ベースのWindmill公式イメージがrootでの実行を前提にしているためである。
 
+workerのPATHには、rootのホームの`/root/.local/bin`と、誰でも書き込める`/tmp`の下の`/tmp/.local/bin`を入れない。
+ベースのイメージのPATHは、この2つを含む。
+`/tmp/.local/bin`は、Windmillの`windmill`の実行ファイルに参照が無く、稼働中のworkerにも存在しない。
+非特権のuidがそこに`git`などを置くと、rootのworkerの名前解決を奪えるため、外している。
+`claude`は`/usr/local/bin`のsymlinkから名前で起動する。
+
+イメージには、固定のuid 10001のユーザー`factory-check`を作ってある。
+`useradd -M`でホームのディレクトリは作らず、passwdに記録されるホームのパスも実在しない。
+`HOME`は、このuidで何かを動かす側が、書き込めるディレクトリを渡す。
+ログインシェルは使えない。
+uidの切り替えに使う`setpriv`と、残ったプロセスを止める`pkill`も入っている。
+検査コマンドを含め、このuidで動く処理はまだ無い。
+検査コマンドは、[検査コマンドはフローが実行する](#検査コマンドはフローが実行する)のとおりrootで動く。
+
+`factory-check`で何かを動かす前に、次を満たす。
+
+- `/tmp/windmill`の下は、`cache`などが誰でも書き込めるディレクトリ(0777)である。
+  rootのworkerが実行する依存のバンドルを、`factory-check`が差し替えられないよう、書き込めない状態にする。
+- main cloneとworktreeの`.git`(`config`、`hooks/`、`info/attributes`)を、`factory-check`が書き換えられないようにする。
+  検査の前後でハッシュを比べる方法は、別のジョブが`git worktree add`で`.git/config`に追跡の設定を書くため、正規の操作で誤検知する。
+- `/var/lib/factory`の下で、`factory-check`が読めるものを確かめる。
+  `claude`、`requirements`、`audits`のディレクトリは0755で、一覧を読める。
+
 ## Console用workerの境界
 
 Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと操作の受付だけを処理する。
@@ -859,6 +882,9 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 ### 検査コマンドはフローが実行する
 
 対象リポジトリのlintやテストは、Claudeではなくフローのステップが`factory_config`の`allowed_check_commands`を実行する。検査コマンドは対象リポジトリのコードをworkerの中でrootとして、隔離なしに実行する。そのため既定値は空の配列にし、空でなければ実行のたびに隔離していないことを知らせる記録(notice)を残す。
+検査コマンドに渡す`PATH`は固定の`/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin`で、workerの`PATH`は引き継がない。
+どのディレクトリもrootが所有し、非特権のuidは書き込めない。
+rootのホームと`/tmp`の下は入れない。そこに置かれた実行ファイルを、名前の解決で拾わないようにするためである。
 
 ### 対象リポジトリの設定を信頼しない
 
