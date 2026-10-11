@@ -303,6 +303,7 @@ Podmanは対象外である。
 
 次のことは、この境界では守れない。
 
+- `factory_state`の`requirements`がsymlinkだと、`factory_state_init`が失敗する。`mise run deploy`は、`wmill sync push`とmigrationの前で止まる。止める向きに倒れる設計である。
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。

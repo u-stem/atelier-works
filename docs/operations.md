@@ -1120,6 +1120,8 @@ Discordの通知とConsoleの通知には、上の表の次の操作が載る。
 Console用のworker(`windmill_worker_console`)は、`mise run up`で作られる。
 ワーカーグループ`console`に属し、tag`console`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
+まず`mise run doctor`を実行する。起動の状態に加えて、マウントの判定も表示する。
+Claudeのセッションでは、フックが`docker compose exec ... sh -c`を拒否する。そのため、`exec`を使う手順は、人が実行するか`mise run doctor`を通して行う。
 動いていることは、コンテナの状態とログで確かめる。
 
 ```bash
@@ -1216,11 +1218,15 @@ mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_
 mise exec -- docker compose -f infra/docker-compose.yml exec -T windmill_worker_console ls -la /var/lib/factory/requirements
 ```
 
-1つめの`ls`で`requirements`のほかに`claude`、`gh`、`audits`のどれかが並べば、根が`/var/lib/factory`に付いている。
-2つめの`ls`には、要件定義書の所有者ごとのディレクトリが並ぶ。
-ここに`requirements`、`audits`、`claude`、`gh`の4つが揃って並んだときだけ、根が`/var/lib/factory/requirements`に付いていると判断する。
-この4つはowner名と同じ名前になりうるので、1つだけでは根の証拠にならない。
-どちらでもなければ、owner名が`requirements`であるための誤検知である。
+`mise run doctor`の判定が10なら、根を付けた状態とみなす。10は、根を付けた状態を表す値である。
+正常なのは、11を返したときと、10でも`/var/lib/factory/requirements/requirements`だけが見えたときの2つである。後者は、対象リポジトリのowner名が`requirements`で、サブパスだけが正しく付いているときに限る。
+上の2つの`ls`で、どちらの証拠が見えたかを確かめる。
+
+- 1つめの`ls`に`claude`、`gh`、`audits`のどれかが並べば、根が`/var/lib/factory`に付いている。
+- 2つめの`ls`に`requirements`が並ぶのは、根が付いているときと、owner名が`requirements`のときである。このため、`requirements`1つだけでは根の証拠にならない。
+- `audits`は監査を1回実行するまで作られず、`gh`はトークンを環境変数で渡す運用では作られない。4つの名前が揃わなくても、根が付いていることがある。名前が揃うことを、根が付いている条件にしない。
+
+owner名が`requirements`で、1つめの`ls`にも該当する名前が無いときは、正常とみなす。ただし、Docker EngineとComposeが下限以上で、`mise run up`の後にworkerが作り直されていることを`mise run doctor`で確かめる。
 根が付く原因として考えられるのは、根を付ける設定で作られたworkerが残っていることと、DockerのEngineかComposeが下限に届いていないことである。`mise run doctor`で版を確かめる。
 
 ### adminsワークスペースの組み込み項目
