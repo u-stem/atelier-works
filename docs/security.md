@@ -293,7 +293,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | ブラウザ側で制限する | `/console/*`の応答だけに、scriptの読み込み先を`/console/assets/`に絞ったCSPと、埋め込みを禁じるヘッダーを付ける |
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
 | 他のサイトからAPIを呼ばせない | `/api/*`への要求で`Sec-Fetch-Site`が`cross-site`か`same-site`のものは、Caddyが403にする |
-| 書き込みを絞る | 呼べるscriptは、許可リストの5つ(読み取りの1つと、承認、再実行、監査の起動、通知の解決)だけである。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。書き込みは、同一オリジンの`fetch`によるPOSTに限る |
+| Console自身の誤りを防ぐ | 呼べるscriptは、許可リストの5つ(読み取りの1つと、承認、再実行、監査の起動、通知の解決)だけである。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。Consoleの書き込みは、同一オリジンの`fetch`によるPOSTで送る |
 | 配信する状態を絞る | `/console/status.json`で配信するのは、`console_fetcher`の状態の4項目(`state`、`sha`、`checked_at`、`error`)だけである。`checked_at`と`error`から、自動の配信が止まっていることなど運用の状態が外から見える。`error`には分類した失敗の種類だけを書き、トークンや応答の本文などの秘密は含まない。ボリュームの他のファイルは配信しない |
 | 秘密を配信物に入れない | Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない |
 
@@ -304,6 +304,8 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 
 残るリスクは次のとおりである。
 
+- 許可リストと型付きの関数が防ぐのは、Console自身の誤りだけである。ConsoleのXSSや、運用者のCookieを持つ攻撃者は防げない。Cookieがあれば、許可リストの外のscriptも、Windmillのapiから直に呼べる。
+- 書き込みをPOSTに限ることは、Caddyでは強制していない。Consoleは常にPOSTで送るが、同一オリジンのGETでも`/api/w/*/jobs/run_wait_result*`は動き、承認を通せる。他のサイトからの要求は`Sec-Fetch-Site`で止めているが、同一オリジンからのGETは止めていない。
 - `main`へのマージは、承認0件のPRで済む。PRの必須チェックは通る必要があるが、人のレビューは強制されない。FactoryのPATが`main`へマージできるか、人の確認なしにマージできるかは確かめていない([mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開))。そのため、マージされたコードは人のレビューを経ずに運用者のブラウザで動きうる。Consoleの変更のレビューは、Windmillの管理者権限を持つコードのレビューとして行う。
 - CIの組み立ての途中で動くもの(miseが入れるbunなどのツール、Viteのプラグインなどの依存)が侵害されると、出力が改ざんされうる。`digest`とマニフェストが保証するのは、GitHubのCIが作ったものであることまでである。
 - 信頼の境界は`console`ジョブだけでなく、`ci.yml`のすべてのジョブとそこで動くツールや依存に及ぶ。同じ実行のほかのジョブも、ランナーから取れるトークンで成果物`console-dist`を上げ直せるためである。成果物は`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。
@@ -377,6 +379,8 @@ Consoleから押せる書き込みには、読むsecret変数の上限を決め�
 `audit_kickoff`と`notice_resolve`は、どのsecret変数も読まない。
 Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
 tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
+許可した2つも、`github_token`以外のsecret変数は読まない。
+走査がたどれない形(importの引数が変数、`require`)が現れたら、テストが落ちる。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
 1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。
@@ -404,7 +408,8 @@ Podmanは対象外である。
   取り消された作業項目の再開のときの、対象の状態の確認。
   Issueの要件定義を作り直す再実行のときの、取り込み内容の更新。
   `approval_decide`が読むのは、要件定義の承認のときの`github_token`である。
-  Console用のworkerで動くscriptから`github_token`を読むのは、この2つのscriptに限る取り決めである。強制はしない。
+  Console用のworkerで動くscriptから`github_token`を読むのは、この2つのscriptに限る取り決めである。
+  この取り決めは、tag`console`のscriptがたどれるソースを数える契約テストで確かめる。強制する仕組みは無い。
   マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
   トークンそのものは守らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
