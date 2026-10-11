@@ -1890,15 +1890,13 @@ export function createCheckSandbox(opts: {
   const indices = opts.uids.map((_, index) => index);
   let active: { identity: CheckIdentity; handle: SlotHandle } | null = null;
   let baseline: LinkMap = new Map();
-  /** 控えを取った後の枠と記録。`release`が記録を残し、走査の後始末が終わったときに消す。 */
-  let armedScan: {
-    readonly index: number;
-    readonly record: SlotRecord;
-  } | null = null;
-  let pendingScan: {
-    readonly index: number;
-    readonly record: SlotRecord;
-  } | null = null;
+  /** 控えを取った後か。`release`が走査をするかを決める。 */
+  let scanArmed = false;
+  /** `release`の中で済ませた走査の結果。`escapingSymlinks`が返す。 */
+  let heldScan:
+    | { readonly ok: true; readonly report: EscapingSymlinksReport }
+    | { readonly ok: false; readonly error: unknown }
+    | null = null;
   // 前提を満たした結果は部品の寿命(1回の実行)の間覚える。動いているコンテナのイメージは変わらないためである。
   let imageReady = false;
   const assertImageReady = async (): Promise<void> => {
@@ -1968,6 +1966,87 @@ export function createCheckSandbox(opts: {
       }
     }
   };
+  /**
+   * 外を指すsymlinkの走査と後始末。取り戻しの後の、枠のロックを持つ間に呼ぶ。
+   * 枠を手放した後に呼ぶと、ほかの実行が同じ枠を取り、残った記録をこの実行のものとは知らずに回復してしまうためである。
+   */
+  const runSymlinkScan = async (
+    dirs: CheckDirs,
+  ): Promise<EscapingSymlinksReport> => {
+    const scan = await collectEscapingLinks(deps, dirs.worktreeDir, log);
+    const removed: string[] = [];
+    const problems: string[] = [];
+    let removeFailed = false;
+    for (const [path, content] of scan.links) {
+      const before = baseline.get(path);
+      try {
+        if (before === undefined) {
+          await deps.removeLink(path);
+          removed.push(path);
+        } else if (before !== content) {
+          await deps.replaceLink(path, before);
+          problems.push(
+            `a symlink that existed before the check was changed, so it was restored: ${JSON.stringify(path)}`,
+          );
+        }
+      } catch (error) {
+        removeFailed = true;
+        problems.push(
+          `could not remove or restore ${JSON.stringify(path)}: ${errorCode(error) || "unknown"}`,
+        );
+      }
+    }
+    for (const path of scan.unreadable) {
+      problems.push(
+        `could not inspect a symlink, so it was left: ${JSON.stringify(path)}`,
+      );
+    }
+    if (scan.truncated) {
+      problems.push(
+        "the list of symlinks was cut short, so some symlinks were not checked",
+      );
+    }
+    if (
+      scan.truncated ||
+      scan.incomplete ||
+      scan.unreadable.length > 0 ||
+      removeFailed
+    ) {
+      // 全部を調べ切れていないので、外を指すかもしれないものを、名前の文字コードや長さによらずに消す。
+      // 失敗したら投げて、rootのClaudeのラウンドに進ませない。
+      await runTool(
+        deps,
+        sweepLinksArgv(dirs.worktreeDir),
+        `removing symlinks in ${dirs.worktreeDir}`,
+      );
+      problems.push(
+        "the symlink scan was incomplete, so every symlink whose content is an absolute path or contains .. was removed",
+      );
+    }
+    const suspicious = removed.filter((path) => {
+      const content = scan.links.get(path) ?? "";
+      return (
+        !content.startsWith(`${dirs.homeDir}/`) &&
+        !SYSTEM_BIN_PREFIXES.some((prefix) => content.startsWith(prefix))
+      );
+    });
+    if (suspicious.length > 0) {
+      log.warn("removed suspicious outward symlinks", {
+        count: suspicious.length,
+        paths: suspicious.slice(0, 20),
+      });
+    }
+    if (removed.length > 0) {
+      log.warn(
+        "removed symlinks the check left pointing outside the worktree",
+        {
+          count: removed.length,
+          paths: removed.slice(0, 20),
+        },
+      );
+    }
+    return { removed, problems };
+  };
   return {
     wrap: (argv) => checkCommandArgv(current(), argv),
     prepare: async (dirs) => {
@@ -1988,7 +2067,7 @@ export function createCheckSandbox(opts: {
       // 渡す前の、rootの所有の木で控える。投げても枠は`active`にあるので、`release`が手放して取り戻す。
       baseline = (await collectEscapingLinks(deps, dirs.worktreeDir, log))
         .links;
-      armedScan = { index: handle.index, record };
+      scanArmed = true;
       await handOver(
         deps,
         identity,
@@ -2012,8 +2091,9 @@ export function createCheckSandbox(opts: {
       if (active === null) return;
       const { identity, handle } = active;
       active = null;
-      const scan = armedScan;
-      armedScan = null;
+      const armed = scanArmed;
+      scanArmed = false;
+      heldScan = null;
       try {
         stoppedOrThrow(await reapUidProcesses(identity.uid, deps.reap));
         await takeBackDirs(deps, identity, dirs, false);
@@ -2027,105 +2107,33 @@ export function createCheckSandbox(opts: {
             error: errorMessage(error),
           });
         }
-        // 走査の前に取り消されても、次の回復で後始末できるよう、控えを取った実行の記録は残す。
-        // 消すのは、`escapingSymlinks`が終わったときである。
-        if (scan === null) {
+        if (!armed) {
           await deps.slotRecords.clear(handle.index);
         } else {
-          pendingScan = scan;
+          // 走査と後始末は、枠のロックを持つ間に済ませる。
+          // 投げたときは記録を残し、次の回復に掃かせる。例外は`escapingSymlinks`が投げ直す。
+          try {
+            const report = await runSymlinkScan(dirs);
+            await deps.slotRecords.clear(handle.index);
+            heldScan = { ok: true, report };
+          } catch (error) {
+            log.warn("the symlink scan failed, so the record is kept", {
+              slot: handle.index,
+              code: errorCode(error) || "unknown",
+            });
+            heldScan = { ok: false, error };
+          }
         }
       } finally {
         await handle.release();
       }
     },
     escapingSymlinks: async (dirs) => {
-      const scan = await collectEscapingLinks(deps, dirs.worktreeDir, log);
-      const removed: string[] = [];
-      const problems: string[] = [];
-      let removeFailed = false;
-      for (const [path, content] of scan.links) {
-        const before = baseline.get(path);
-        try {
-          if (before === undefined) {
-            await deps.removeLink(path);
-            removed.push(path);
-          } else if (before !== content) {
-            await deps.replaceLink(path, before);
-            problems.push(
-              `a symlink that existed before the check was changed, so it was restored: ${JSON.stringify(path)}`,
-            );
-          }
-        } catch (error) {
-          removeFailed = true;
-          problems.push(
-            `could not remove or restore ${JSON.stringify(path)}: ${errorCode(error) || "unknown"}`,
-          );
-        }
-      }
-      for (const path of scan.unreadable) {
-        problems.push(
-          `could not inspect a symlink, so it was left: ${JSON.stringify(path)}`,
-        );
-      }
-      if (scan.truncated) {
-        problems.push(
-          "the list of symlinks was cut short, so some symlinks were not checked",
-        );
-      }
-      if (
-        scan.truncated ||
-        scan.incomplete ||
-        scan.unreadable.length > 0 ||
-        removeFailed
-      ) {
-        // 全部を調べ切れていないので、外を指すかもしれないものを、名前の文字コードや長さによらずに消す。
-        // 失敗したら投げて、rootのClaudeのラウンドに進ませない。
-        await runTool(
-          deps,
-          sweepLinksArgv(dirs.worktreeDir),
-          `removing symlinks in ${dirs.worktreeDir}`,
-        );
-        problems.push(
-          "the symlink scan was incomplete, so every symlink whose content is an absolute path or contains .. was removed",
-        );
-      }
-      const suspicious = removed.filter((path) => {
-        const content = scan.links.get(path) ?? "";
-        return (
-          !content.startsWith(`${dirs.homeDir}/`) &&
-          !SYSTEM_BIN_PREFIXES.some((prefix) => content.startsWith(prefix))
-        );
-      });
-      if (suspicious.length > 0) {
-        log.warn("removed suspicious outward symlinks", {
-          count: suspicious.length,
-          paths: suspicious.slice(0, 20),
-        });
-      }
-      if (removed.length > 0) {
-        log.warn(
-          "removed symlinks the check left pointing outside the worktree",
-          {
-            count: removed.length,
-            paths: removed.slice(0, 20),
-          },
-        );
-      }
-      // 走査と後始末が終わったので、記録を消す。投げた場合は記録が残り、次の回復が掃く。
-      // 枠は`release`で手放されているので、同じ記録のときだけ消す。
-      const pending = pendingScan;
-      pendingScan = null;
-      if (pending !== null) {
-        const held = await deps.slotRecords.read(pending.index);
-        if (
-          held !== null &&
-          held.worktreeDir === pending.record.worktreeDir &&
-          held.homeDir === pending.record.homeDir
-        ) {
-          await deps.slotRecords.clear(pending.index);
-        }
-      }
-      return { removed, problems };
+      const held = heldScan;
+      heldScan = null;
+      if (held === null) return await runSymlinkScan(dirs);
+      if (!held.ok) throw held.error;
+      return held.report;
     },
     kernelWarnings: () =>
       KERNEL_PROTECTIONS.filter((name) => deps.readSysctl(name) !== "1").map(

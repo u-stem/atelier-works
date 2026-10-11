@@ -3119,43 +3119,116 @@ describe("createCheckSandbox", () => {
     ).toEqual([]);
   });
 
-  test("release keeps the record until the symlink scan is done", async () => {
+  test("release clears the record after the symlink scan", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(fake.records.has(0)).toBe(true);
-  });
-
-  test("the symlink scan clears the record after the slot is given back", async () => {
-    const fake = fakeSandboxDeps();
-    const { sandbox } = await prepared(fake);
-    await sandbox.release(DIRS);
-    await sandbox.escapingSymlinks(DIRS);
-    expect(fake.events.indexOf("release-slot 0")).toBeLessThan(
-      fake.events.indexOf("record-clear 0"),
-    );
-  });
-
-  test("the symlink scan clears the record", async () => {
-    const fake = fakeSandboxDeps();
-    const { sandbox } = await prepared(fake);
-    await sandbox.release(DIRS);
-    await sandbox.escapingSymlinks(DIRS);
     expect(fake.records.has(0)).toBe(false);
   });
 
-  test("the record stays when the symlink scan throws", async () => {
+  test("release scans the symlinks before it gives the slot back", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
     await sandbox.release(DIRS);
+    expect(
+      fake.events.lastIndexOf(ran(symlinksArgv(DIRS.worktreeDir))),
+    ).toBeLessThan(fake.events.indexOf("release-slot 0"));
+  });
+
+  test("release clears the record before it gives the slot back", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(fake.events.indexOf("record-clear 0")).toBeLessThan(
+      fake.events.indexOf("release-slot 0"),
+    );
+  });
+
+  test("no other run can take the slot while the symlink scan runs", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    let probe: SlotHandle | null | undefined;
+    Object.assign(fake.deps, {
+      run: async (argv: readonly string[]) => {
+        if (matches(symlinksArgv(DIRS.worktreeDir))(argv)) {
+          probe = await fake.deps.slots.tryAcquire(0);
+        }
+        return ok();
+      },
+    });
+    await sandbox.release(DIRS);
+    expect(probe).toBeNull();
+  });
+
+  test("the slot can be taken once release is done", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(await fake.deps.slots.tryAcquire(0)).not.toBeNull();
+  });
+
+  test("escapingSymlinks returns the report release kept", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    fake.symlinks.set(`${DIRS.worktreeDir}/evil`, {
+      content: "/etc/passwd",
+      resolved: "/etc/passwd",
+    });
+    await sandbox.release(DIRS);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
+      `${DIRS.worktreeDir}/evil`,
+    ]);
+  });
+
+  test("escapingSymlinks does not scan again after release did", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    const before = fake.calls.length;
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.calls.length).toBe(before);
+  });
+
+  function failingScan(fake: ReturnType<typeof fakeSandboxDeps>) {
     Object.assign(fake.deps, {
       run: async (argv: readonly string[]) =>
         matches(symlinksArgv(DIRS.worktreeDir))(argv)
           ? fail("find failed", 1)
           : ok(),
     });
-    await sandbox.escapingSymlinks(DIRS).catch(() => {});
+  }
+
+  test("release does not throw when the symlink scan throws", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    failingScan(fake);
+    await expect(sandbox.release(DIRS)).resolves.toBeUndefined();
+  });
+
+  test("release gives the slot back when the symlink scan throws", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    failingScan(fake);
+    await sandbox.release(DIRS);
+    expect(fake.events).toContain("release-slot 0");
+  });
+
+  test("the record stays when the symlink scan throws", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    failingScan(fake);
+    await sandbox.release(DIRS);
     expect(fake.records.has(0)).toBe(true);
+  });
+
+  test("escapingSymlinks throws what the scan in release threw", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    failingScan(fake);
+    await sandbox.release(DIRS);
+    await expect(sandbox.escapingSymlinks(DIRS)).rejects.toThrow(
+      "listing symlinks",
+    );
   });
 
   test("the record stays when the sweep fails", async () => {
@@ -3172,24 +3245,21 @@ describe("createCheckSandbox", () => {
       resolved: "/etc/passwd",
     });
     await sandbox.release(DIRS);
-    await sandbox.escapingSymlinks(DIRS).catch(() => {});
     expect(fake.records.has(0)).toBe(true);
   });
 
-  test("the scan does not clear a record that points to another worktree", async () => {
+  test("a recovery sweeps the symlinks of a run whose scan was cut off", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
-    await sandbox.release(DIRS);
-    fake.records.set(0, OLD);
-    await sandbox.escapingSymlinks(DIRS);
-    expect(fake.records.get(0)).toEqual(OLD);
-  });
-
-  test("a recovery sweeps the symlinks of a run that was cancelled before its scan", async () => {
-    const fake = fakeSandboxDeps();
-    const { sandbox } = await prepared(fake);
+    failingScan(fake);
     await sandbox.release(DIRS);
     const next = sandboxOf(fake.deps);
+    Object.assign(fake.deps, {
+      run: async (argv: readonly string[]) => {
+        fake.calls.push({ argv, options: undefined });
+        return ok();
+      },
+    });
     await next.prepare({
       worktreeDir: "/workspaces/acme/other/wt-2",
       homeDir: "/tmp/factory-check-home-next",

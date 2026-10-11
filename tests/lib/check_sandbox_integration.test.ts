@@ -2067,12 +2067,13 @@ suite("restoring the worktree of a run that never reached the scan", () => {
   });
 });
 
-suite("a run cancelled between the release and the symlink scan", () => {
+suite("a run whose symlink scan was cut off", () => {
   const fx = makeRepo();
   const lockDir = join(fx.base, "slots");
   let first = "";
   let second = "";
   let recordKept = false;
+  let lockHeldDuringScan = false;
   let names: string[] = [];
 
   beforeAll(async () => {
@@ -2081,20 +2082,36 @@ suite("a run cancelled between the release and the symlink scan", () => {
     second = fx.addWorktree("next");
     const homeA = makeHome();
     const homeB = makeHome();
-    const deps = defaultSandboxDeps(lockDir);
-    const sandbox = sandboxIn(lockDir, POOL);
+    const base = defaultSandboxDeps(lockDir);
+    let scanning = false;
+    // 走査の間だけ、別の取得がブロックされることを確かめ、走査を打ち切る。
+    const sandbox = createCheckSandbox({
+      uids: POOL,
+      pollMs: 100,
+      deps: {
+        ...base,
+        run: async (argv, options) => {
+          if (scanning && argv.includes("-print0")) {
+            const handle = await base.slots.tryAcquire(0);
+            lockHeldDuringScan = handle === null;
+            await handle?.release();
+            return { ...(await base.run(["/bin/false"], options)) };
+          }
+          return base.run(argv, options);
+        },
+      },
+    });
     await sandbox.prepare({ worktreeDir: first, homeDir: homeA });
     // 検査コマンドの代わりに、枠のuidで外向きのsymlinkを置く。
-    const uid = POOL[0] ?? 0;
-    runAsUid(uid, "ln -s /etc/passwd evil; touch ok", first);
-    // 取り戻しまで終えて、走査の前に打ち切られた状態にする。
+    runAsUid(POOL[0] ?? 0, "ln -s /etc/passwd evil; touch ok", first);
+    scanning = true;
     await sandbox.release({ worktreeDir: first, homeDir: homeA });
-    recordKept = (await deps.slotRecords.read(0)) !== null;
+    scanning = false;
+    recordKept = (await base.slotRecords.read(0)) !== null;
     // 次の実行が同じ枠を取り、回復の経路で掃く。
     const next = sandboxIn(lockDir, POOL);
     await next.prepare({ worktreeDir: second, homeDir: homeB });
     await next.release({ worktreeDir: second, homeDir: homeB });
-    await next.escapingSymlinks({ worktreeDir: second, homeDir: homeB });
     names = readdirSync(first);
     rmSync(homeA, { recursive: true, force: true });
     rmSync(homeB, { recursive: true, force: true });
@@ -2104,7 +2121,11 @@ suite("a run cancelled between the release and the symlink scan", () => {
     fx.cleanup();
   });
 
-  test("the record was kept after the release", () => {
+  test("another acquisition is blocked while the scan runs", () => {
+    expect(lockHeldDuringScan).toBe(true);
+  });
+
+  test("the record was kept when the scan was cut off", () => {
     expect(recordKept).toBe(true);
   });
 
