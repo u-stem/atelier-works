@@ -343,7 +343,7 @@ jobs:
           overwrite: true
 
   caddyfile:
-    # Caddyfileを、composeで使うのと同じイメージで検証する。
+    # Caddyfileを、composeで使うのと同じイメージで検証し、実際に起動して拒否の規則を確かめる。
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.caddy != 'false' }}
     runs-on: ubuntu-latest
@@ -360,6 +360,9 @@ jobs:
           docker run --rm -e BASE_URL=:80 \
             -v "$PWD/infra/Caddyfile:/etc/caddy/Caddyfile:ro" \
             "$image" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Check the origin rules against a running Caddy
+        run: bash scripts/check-caddy-origin.sh
 
   console-fetcher-image:
     # console_fetcherのイメージを組み立て、composeと同じ制限(読み取り専用のルート、tmpfs、
