@@ -27,5 +27,4 @@ description: 本リポジトリ(atelier-works)のMarkdown文書(README、AGENTS.
 - 次のファイルは`wmill`が生成するか外から取り込んだものなので、編集しない。
   - `AGENTS.wmill.md`
   - 管理スキル: `.agents/skills/`のすべてと、`.claude/skills/`のうち自作でないもの(`write-*`や`cli-commands`など)
-  - raw appの`AGENTS.md`と`DATATABLES.md`
   - `.claude/skills/yomiyasu/`

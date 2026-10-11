@@ -1,6 +1,5 @@
-// factory_consoleのraw appが読む、読み取り専用のデータ源。
-// Appの各タブが読む`factory.v_*`ビューを1つのスクリプトの背後にまとめ、
-// AppのバックエンドのrunnableをインラインSQLの無い`type: script`の参照のままにする。
+// Console(`console/`のSPA)が読む、読み取り専用のデータ源。
+// 各画面が読む`factory.v_*`ビューを、`view`の名前で引く1つのscriptの背後にまとめる。
 
 import * as wmill from "windmill-client@1.817.0";
 import { isAbsolute, resolve } from "node:path";
@@ -349,7 +348,7 @@ export type InboxRowBase = {
 /**
  * 要件定義の承認依頼のInboxの行。
  * 文書の全体(markdown、図、open_questions)はこの行に持たせず、行を選んだときに
- * "requirements_doc"ビューで取得する(`RequirementsTab.tsx` / `InboxTab.tsx`)。
+ * "requirements_doc"ビューで取得する(要件定義書の画面と要対応の画面)。
  * 数KBの図のXMLを含みうる文書を、Inboxの一覧の全行について取らないため。
  */
 export type RequirementsInboxRow = InboxRowBase & {
@@ -726,7 +725,7 @@ function asIssueProposalStatus(value: unknown): IssueProposalStatus {
 }
 
 /**
- * "requirements_index"ビュー(要件定義タブの一覧)の1行。
+ * "requirements_index"ビュー(作業項目の画面の要件定義の一覧)の1行。
  * 要件定義の下書きが1つ以上ある`kind = 'issue'`の作業項目と、その最新の試行回数。
  */
 export type RequirementsIndexRow = {
@@ -773,7 +772,7 @@ export type RequirementsDiagramContent = {
  */
 export type DocDirSource = "file" | "db_fallback";
 
-/** "requirements_doc"ビューの1行。要件定義タブの詳細と、Inboxタブの要件定義の詳細が使う。 */
+/** "requirements_doc"ビューの1行。要件定義書の画面の本文と、要対応の要件定義の詳細が使う。 */
 export type RequirementsDocRow = {
   readonly work_item_id: number;
   readonly owner: string;
@@ -973,7 +972,7 @@ function toIntakeSnapshotRow(row: SqlRow): IntakeSnapshotRow {
 }
 
 /**
- * "audit_index"ビュー(監査タブの一覧)の1行。
+ * "audit_index"ビュー(レポートの画面の監査の一覧)の1行。
  * `factory.v_audit_reports`から、`factory.audit_reports`の各行に、
  * 持ち主の作業項目と提案の判断の件数を合わせたもの。
  */
@@ -1022,7 +1021,7 @@ function toAuditIndexRow(row: SqlRow): AuditIndexRow {
 }
 
 /**
- * "audit_doc"ビュー(監査タブの詳細)の1行。
+ * "audit_doc"ビュー(監査レポートの画面の本文)の1行。
  * `AuditIndexRow`に、`factory.audit_reports`のレポート本文を加えたもの。
  * 数KBのMarkdownは行を選んだときだけ取るよう、"audit_index"の一覧の行には持たせない
  * ("requirements_doc"と"requirements_index"の関係と同じ)。
@@ -2019,7 +2018,7 @@ export type ConsoleQueryRow =
  *
  * `days`は、履歴として増え続けるビューの時刻の列を直近N日に絞る。
  * inbox(未決の承認依頼に絞り済み)とnotices(未解決に絞り済み)は期間で絞らない。
- * 古い未決の承認依頼や未解決のnoticeが、それを見せるためのタブから黙って消えてはならないため。
+ * 古い未決の承認依頼や未解決のnoticeが、それを見せる画面から黙って消えてはならないため。
  *
  * "requirements_doc"と"intake_snapshot"と"audit_doc"で`workItemId`が無ければ例外を投げる。
  * テストで偽の`SqlClient`を渡し、実際のDBなしでクエリ文と行の解析を確かめられるよう、
@@ -2038,7 +2037,7 @@ export async function runConsoleQuery(
 
   switch (view) {
     case "inbox": {
-      // 期間では絞らない。未決の承認依頼が、それを見せるためのタブから黙って消えてはならない。
+      // 期間では絞らない。未決の承認依頼が、それを見せる画面から黙って消えてはならない。
       // Issueがまだ作られていない"approved"のIssue提案も含める。
       // 承認の記録はIssueの作成より先に行うため、その間で失敗する(GitHubがエラーを返すなど)と、
       // `status = 'pending'`だけを選ぶ条件では、その行が人から永久に見えなくなる。
