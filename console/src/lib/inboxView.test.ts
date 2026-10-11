@@ -114,15 +114,28 @@ describe("buildInboxItems", () => {
     ).toEqual([["approval", 5]]);
   });
 
-  test("does not list failures or notices yet", () => {
+  test("wraps each notice as a notice item keyed by its notice id", () => {
     expect(
       buildInboxItems(
-        summaryOf({
-          failures: [failure()],
-          notices: [notice()],
-        }),
-      ).map((item) => item.type),
-    ).toEqual(["approval"]);
+        summaryOf({ approvals: [], notices: [notice({ notice_id: 9 })] }),
+      ).map((item) => [item.type, itemId(item)]),
+    ).toEqual([["notice", 9]]);
+  });
+
+  test("lists approvals before notices", () => {
+    expect(
+      buildInboxItems(summaryOf({ notices: [notice()] })).map(
+        (item) => item.type,
+      ),
+    ).toEqual(["approval", "notice"]);
+  });
+
+  test("does not list failures yet", () => {
+    expect(
+      buildInboxItems(summaryOf({ approvals: [], failures: [failure()] })).map(
+        (item) => item.type,
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -428,6 +441,31 @@ describe("describeRow", () => {
   });
 });
 
+describe("describeRow for a notice", () => {
+  test("marks an info notice in the kind label", () => {
+    expect(
+      describeRow({ type: "notice", notice: notice({ severity: "info" }) }, NOW)
+        .kindLabel,
+    ).toBe("通知(情報)");
+  });
+
+  test("marks a resolved notice in the status label", () => {
+    expect(
+      describeRow({ type: "notice", notice: notice({ resolved: true }) }, NOW)
+        .statusLabel,
+    ).toBe("解決済み");
+  });
+
+  test("names the first target of the body in the sub label", () => {
+    expect(
+      describeRow(
+        { type: "notice", notice: notice({ message: "o/r#12 (work item 3)" }) },
+        NOW,
+      ).subLabel,
+    ).toBe("o/r#12");
+  });
+});
+
 describe("unlistedCounts", () => {
   test("is empty when every count is listed", () => {
     expect(
@@ -441,7 +479,7 @@ describe("unlistedCounts", () => {
     ).toEqual([{ type: "approval", label: "承認", count: 249 }]);
   });
 
-  test("reports failures and notices that the list does not show yet", () => {
+  test("reports failures that the list does not show yet and notices cut by the limit", () => {
     expect(
       unlistedCounts({ approvals: 1, failures: 5, notices: 4 }, [A1]),
     ).toEqual([
@@ -553,9 +591,9 @@ describe("missingSelectionMessage", () => {
     );
   });
 
-  test("says a notice list is not ready", () => {
-    expect(missingSelectionMessage({ type: "notice", id: 3 })).toBe(
-      "この種類の一覧は準備中です。",
+  test("says a notice may already be resolved", () => {
+    expect(missingSelectionMessage({ type: "notice", id: 3 })).toContain(
+      "すでに解決された",
     );
   });
 });

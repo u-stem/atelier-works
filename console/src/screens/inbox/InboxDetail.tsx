@@ -5,6 +5,8 @@ import {
   missingSelectionMessage,
 } from "../../lib/inboxView.ts";
 import { ApprovalOverview } from "./ApprovalOverview.tsx";
+import { NoticeDetail } from "./NoticeDetail.tsx";
+import { NoticeLookup } from "./NoticeLookup.tsx";
 
 function Message({ children }: { children: string }) {
   return (
@@ -19,7 +21,8 @@ function Message({ children }: { children: string }) {
 
 /**
  * 要対応の詳細のペイン。選んだ項目の種類ごとに、描く部品を1か所で振り分ける。
- * 承認は概要を描く。失敗と通知は、詳細を描く部品がないので、準備中である旨の文だけを出す。
+ * 承認は概要、通知は詳細と解決の操作を描く。失敗は、詳細を描く部品がないので、準備中である旨の文だけを出す。
+ * 選んだ通知が一覧に無いときは、未解決の通知の一覧から探す。
  */
 export function InboxDetail({
   item,
@@ -31,6 +34,15 @@ export function InboxDetail({
   now: number;
 }) {
   if (item === null) {
+    if (selection?.type === "notice") {
+      return (
+        <NoticeLookup
+          noticeId={selection.id}
+          now={now}
+          missing={missingSelectionMessage(selection)}
+        />
+      );
+    }
     return <Message>{missingSelectionMessage(selection)}</Message>;
   }
   switch (item.type) {
@@ -39,6 +51,6 @@ export function InboxDetail({
     case "failure":
       return <Message>失敗の詳細は準備中です。</Message>;
     case "notice":
-      return <Message>通知の詳細は準備中です。</Message>;
+      return <NoticeDetail notice={item.notice} now={now} />;
   }
 }

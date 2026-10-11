@@ -18,11 +18,11 @@ import {
   approvalKindLabel,
   approvalStatusLabel,
   attemptRef,
-  noticeKindLabel,
   workItemKindLabel,
   workItemRef,
   workItemStatusLabel,
 } from "./labels.ts";
+import { describeNotice } from "./noticeView.ts";
 import { formatRemainingTime } from "./relativeTime.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
@@ -65,13 +65,16 @@ const CHIP_LABELS: Readonly<Record<InboxChip, string>> = {
 };
 
 /**
- * summaryから一覧の項目を作る。
- * 失敗と通知は、詳細を描く画面ができるまで含めない。件数は`unlistedCounts`で知らせる。
+ * summaryから一覧の項目を作る。承認、通知の順に並べる。
+ * 失敗は、詳細を描く画面ができるまで含めない。件数は`unlistedCounts`で知らせる。
  */
 export function buildInboxItems(summary: ConsoleSummary): InboxItem[] {
-  return summary.approvals.map(
-    (approval): InboxItem => ({ type: "approval", approval }),
-  );
+  return [
+    ...summary.approvals.map(
+      (approval): InboxItem => ({ type: "approval", approval }),
+    ),
+    ...summary.notices.map((notice): InboxItem => ({ type: "notice", notice })),
+  ];
 }
 
 export function selectionOf(item: InboxItem): InboxSelection {
@@ -162,7 +165,7 @@ export function effectiveChip(
 
 /**
  * 選んだ項目が一覧に無いときに、詳細のペインに出す文。
- * 失敗と通知は一覧に載せない種類なので、処理済みとは言わない。
+ * 失敗は一覧に載せない種類なので、処理済みとは言わない。
  */
 export function missingSelectionMessage(
   selection: InboxSelection | null,
@@ -170,9 +173,14 @@ export function missingSelectionMessage(
   if (selection === null) {
     return "一覧から項目を選んでください。";
   }
-  return selection.type === "approval"
-    ? "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。"
-    : "この種類の一覧は準備中です。";
+  switch (selection.type) {
+    case "approval":
+      return "選んだ項目は一覧にありません。すでに処理されたか、まだ取得できていません。";
+    case "notice":
+      return "選んだ通知は一覧にありません。すでに解決されたか、まだ取得できていません。";
+    case "failure":
+      return "この種類の一覧は準備中です。";
+  }
 }
 
 /** 選択に当たる項目を返す。選んでいないとき、または一覧に無いときは`null`。 */
@@ -315,16 +323,18 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
         iso: item.failure.updated_at,
         expiry: null,
       };
-    case "notice":
+    case "notice": {
+      const description = describeNotice(item.notice);
       return {
         key,
-        title: noticeKindLabel(item.notice.kind),
-        kindLabel: "通知",
-        statusLabel: null,
-        subLabel: null,
+        title: description.title,
+        kindLabel: description.severity === "info" ? "通知(情報)" : "通知",
+        statusLabel: description.resolved ? "解決済み" : null,
+        subLabel: description.targets[0]?.label ?? null,
         iso: item.notice.created_at,
         expiry: null,
       };
+    }
   }
 }
 
@@ -337,7 +347,7 @@ export type UnlistedCount = {
 /**
  * 一覧に出ていない要対応の件数を、種類ごとに返す。無ければ空の配列。
  * 件数(`counts`)は取得の上限を超えた分も数える。種類ごとに、件数から一覧にある項目を引いた差を返す。
- * 承認は上限を超えた分、失敗と通知は一覧に載せていない分である。
+ * 承認と通知は上限を超えた分、失敗は一覧に載せていない分である。
  */
 export function unlistedCounts(
   counts: SummaryCounts,

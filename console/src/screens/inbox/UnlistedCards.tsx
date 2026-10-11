@@ -8,8 +8,40 @@ const LINK_CLASS =
   "inline-flex items-center gap-1 rounded-sm font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring";
 
 /**
+ * 一覧に出していない分の行き先。
+ * 通知は一覧に出しているので、残りは取得の上限を超えた分である。行き先が無いので、リンクにしない。
+ * 一覧が無い種類だけ、旧Consoleの一覧へのリンクにする。
+ */
+function LegacyLink({
+  type,
+  className,
+}: {
+  type: UnlistedCount["type"];
+  className?: string;
+}) {
+  if (type === "notice") {
+    return (
+      <span className={cn("text-small text-subtle", className)}>
+        一覧の上限を超えた分
+      </span>
+    );
+  }
+  return (
+    <a
+      className={cn(LINK_CLASS, className)}
+      href={LEGACY_CONSOLE_PATH}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      旧Consoleで見る
+      <ExternalLink aria-hidden="true" className="size-3" />
+    </a>
+  );
+}
+
+/**
  * 一覧に出していない要対応の件数を、種類ごとのカードで示す。
- * この画面にはまだ一覧が無いので、旧Consoleの一覧へのリンクにする。
+ * 一覧がまだ無い種類は、旧Consoleの一覧へのリンクにする。
  * `compact`は、一覧の上の帯に収める1行の形である。
  */
 export function UnlistedCards({
@@ -41,15 +73,7 @@ export function UnlistedCards({
                 件
               </span>
             </span>
-            <a
-              className={LINK_CLASS}
-              href={LEGACY_CONSOLE_PATH}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              旧Consoleで見る
-              <ExternalLink aria-hidden="true" className="size-3" />
-            </a>
+            <LegacyLink type={entry.type} />
           </li>
         ) : (
           <li
@@ -66,15 +90,7 @@ export function UnlistedCards({
                 件
               </span>
             </p>
-            <a
-              className={cn(LINK_CLASS, "mt-1 text-small")}
-              href={LEGACY_CONSOLE_PATH}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              旧Consoleで見る
-              <ExternalLink aria-hidden="true" className="size-3" />
-            </a>
+            <LegacyLink type={entry.type} className="mt-1 text-small" />
           </li>
         ),
       )}

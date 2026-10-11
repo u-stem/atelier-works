@@ -1,0 +1,259 @@
+// 通知の種類ごとの、起きたことと次の操作の説明。
+// 内容は`docs/operations.md`の通知の表に合わせる。
+// 種類を足したときは、ここと表の両方に足す。
+// 足し忘れは、`tests/scripts/console_notices_contract.test.ts`が落として知らせる。
+
+export type NoticeGuide = {
+  /** 何が起きたか。 */
+  readonly meaning: string;
+  /** 人がすること。 */
+  readonly action: string;
+  /** 人が順に入力するコマンド。要らない種類は空。 */
+  readonly commands: readonly string[];
+  /** 解決の扱いなど、操作の補足。無ければ`null`。 */
+  readonly note: string | null;
+};
+
+/** 表に無い種類(backendが先に足した新しい種類)に出す説明。 */
+export const GENERIC_NOTICE_GUIDE: NoticeGuide = {
+  meaning: "この種類の説明はまだありません。",
+  action: "本文を確かめ、対応を終えたら解決してください。",
+  commands: [],
+  note: null,
+};
+
+function guide(
+  meaning: string,
+  action: string,
+  extra: { commands?: readonly string[]; note?: string } = {},
+): NoticeGuide {
+  return {
+    meaning,
+    action,
+    commands: extra.commands ?? [],
+    note: extra.note ?? null,
+  };
+}
+
+const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
+  [
+    "approval_notify_failed",
+    guide(
+      "承認待ちの通知がDiscordに届きませんでした。",
+      "承認依頼は記録済みです。要対応の一覧で承認を判断してください。",
+    ),
+  ],
+  [
+    "claim_race_lost",
+    guide(
+      "ほかのインスタンスか人が先にトリガーラベルを外したか、別の取得が同じIssueを先に取得しました。",
+      "ラベルを先に外されたのなら、人が意図して外したのか確かめてください。意図していなければ、何もしなくてかまいません。",
+    ),
+  ],
+  [
+    "supersede_failed",
+    guide(
+      "新しいサイクルを始めましたが、古い承認済みの作業項目を取り消せませんでした。",
+      "操作は要りません。古い承認は再開できず、次の新しいサイクルで取り消されます。",
+    ),
+  ],
+  [
+    "cleanup_worktrees_skipped",
+    guide(
+      "動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送りました。",
+      "次の日の掃除を待ってください。",
+    ),
+  ],
+  [
+    "workspace_disk_usage",
+    guide(
+      "作業領域の掃除が記録したディスク使用量です。",
+      "増え続けていないか見てください。",
+    ),
+  ],
+  [
+    "fix_feedback_association_excluded",
+    guide(
+      "許可されていない関係の人のコメントを、修正の材料から除きました。",
+      "必要なら、許可された人が指示を書き直してください。",
+    ),
+  ],
+  [
+    "labeler_denied",
+    guide(
+      "許可されていない人が、または付与者を特定できないまま、トリガーラベルを付けました。",
+      "拾わせるなら、ラベルを外して、許可された人が付け直してください。付ける人を増やすなら、allowed_labeler_loginsに足します。",
+    ),
+  ],
+  [
+    "fork_head_denied",
+    guide(
+      "PRのheadのリポジトリがこのリポジトリと同一でないため、レビューを始めませんでした。",
+      "同じリポジトリにブランチを作って、PRを出し直してください。止めるなら、factory:reviewラベル、assignee、レビュー依頼を外すか、PRを閉じます。",
+      { note: "外すまでは、解決しても同じ通知が出直します。" },
+    ),
+  ],
+  [
+    "unsandboxed_check_commands",
+    guide(
+      "検査コマンドをサンドボックスなしで実行しました。",
+      "設定が意図どおりか確かめてください。",
+    ),
+  ],
+  [
+    "implement_needs_human",
+    guide(
+      "実装フローが人の対応待ちで止まりました。",
+      "作業項目の状態を確かめ、原因を取り除いてから、再実行してください。",
+    ),
+  ],
+  [
+    "approval_comment_failed",
+    guide(
+      "承認のコメントをIssueに投稿できませんでした。",
+      "承認と実装の起動は進んでいます。必要なら、本文のリンクを載せたコメントを、人がIssueに投稿してください。",
+    ),
+  ],
+  [
+    "intake_refreshed",
+    guide(
+      "却下や再実行による作り直しで、Issueが取り込み後に書き換えられていたので、取り込み内容を現在のIssueで更新しました。",
+      "承認を選んで、更新後の取り込み内容を確かめてから承認してください。確かめたら、この通知を解決します。",
+    ),
+  ],
+  [
+    "implement_launch_failed",
+    guide(
+      "承認の後、実装フローへ進める処理がDBの失敗で例外になりました。",
+      "Windmillでf/factory/retry_work_itemを作業項目のIDで実行して、再開してください。",
+    ),
+  ],
+  [
+    "fix_reply_post_failed",
+    guide("修正の返信の投稿に失敗しました。", "PRで人が返信してください。"),
+  ],
+  [
+    "pr_fix_reviewer_request_failed",
+    guide(
+      "再レビューの依頼のAPIが失敗しました。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含みます。",
+      "GitHubのPRで、人がレビュアーを依頼してください。",
+    ),
+  ],
+  [
+    "issue_proposal_record_failed",
+    guide(
+      "Issue化の提案を記録できませんでした。",
+      "PRのスレッドを確かめ、必要なら人がIssueを起票してください。",
+    ),
+  ],
+  [
+    "claim_assignee_missing",
+    guide(
+      "Issueを取得しましたが、FactoryのGitHubユーザーをassigneeにできませんでした。作業は続いています。",
+      "そのユーザーが、リポジトリのpush権限を持つcollaboratorか確かめてください。",
+    ),
+  ],
+  [
+    "labeler_check_limit",
+    guide(
+      "トリガーラベルの付与者を判定できません。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っています。",
+      "ラベルを外して、許可された人が付け直してください。",
+      { note: "対応した後に、この通知を解決します。" },
+    ),
+  ],
+  [
+    "pr_trigger_label_left_removed",
+    guide(
+      "PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままで作業項目もありません。",
+      "ラベルが付いていないか、サイクルが始まっていないかを確かめてから、ラベルを付け直してください。",
+      {
+        note: "そのPRとラベルで次に作業を始めると、自動で解決されます。取得が不要なら、人が解決します。",
+      },
+    ),
+  ],
+  [
+    "deployed_sha_mismatch",
+    guide(
+      "自己更新が反映した版が、self cloneのHEADに30分を超えて追いついていません。反映が遅れただけでも出ることがあります。",
+      "自己更新のジョブのログを確かめてください。",
+      {
+        note: "自己更新が反映に成功すると、自動で解決されます。本文が名指しする版が今の反映済みの版と違い、自己更新が成功しているときは、人が解決してかまいません。反映が止まっている間は、解決しても出直します。",
+      },
+    ),
+  ],
+  [
+    "host_action_required",
+    guide(
+      "自己更新が反映した版に、worker自身では反映できない変更(infra/、mise.tomlの[tools]・[env])が含まれています。ホストで作業するまで、新しい構成は動きません。",
+      "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。",
+      {
+        commands: ["git pull", "mise install", "mise run up"],
+        note: "通知の版がホストのHEADと同じか祖先なら、自己更新(10分ごと)が自動で解決します。HEADを書けなかったときは自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
+      },
+    ),
+  ],
+  [
+    "cleanup_db_failed",
+    guide(
+      "保持期間を過ぎたレコードの削除に失敗しました。",
+      "内容を確かめてください。次の日の掃除でやり直します。",
+    ),
+  ],
+  [
+    "cleanup_worktree_busy",
+    guide(
+      "残ったプロセスが使っているので、終端の作業項目のworktreeを消しませんでした。",
+      "本文に載ったプロセスを止めてください。止めない限り、毎日残ります。",
+    ),
+  ],
+  [
+    "console_fetch_failed",
+    guide(
+      "Consoleの取り込みが失敗しました。",
+      "本文の「次の操作」に従ってください。",
+    ),
+  ],
+  [
+    "console_fetch_stale",
+    guide(
+      "Consoleの取り込みの結果が30分以上更新されていません。",
+      "取り込みのコンテナ(console_fetcher)が動いているか確かめてください。",
+    ),
+  ],
+  [
+    "console_worker_missing",
+    guide(
+      "tag consoleのジョブが、予定時刻から5分以上実行されずに待っています。Console用のworkerが居ないか、塞がっているか、tagの設定がずれています。",
+      "本文の「次の操作」に従い、コンテナの状態、再起動、Windmillの画面での実行中のジョブとワーカーグループのtagの順に確かめてください。",
+      {
+        note: "mise run upでConsole用のworkerを作り直している間にも出ます。作り直しが終われば、人が解決します。",
+      },
+    ),
+  ],
+  [
+    "console_worker_check_failed",
+    guide(
+      "Console用のworkerがジョブを受けているかを、1時間続けて確かめられませんでした。workerが止まっていても気づけない状態です。",
+      "自己更新のジョブログの警告を確かめて、原因を直してください。console_fetch_watchのスケジュールが有効かも確かめます。",
+    ),
+  ],
+  [
+    "schedule_failing",
+    guide(
+      "同じスケジュールの直近3回の実行が、続けて失敗しました。",
+      "ジョブのログで失敗の内容を確かめて、原因を直してください。GitHubのPATの失効が原因なら、PATを再発行します。",
+    ),
+  ],
+  [
+    "schedule_failing_check_failed",
+    guide(
+      "スケジュールが続けて失敗しているかを、ジョブ履歴から判定できませんでした。失敗が続いても気づけない状態です。",
+      "on_error_scheduleのジョブのログで、failed to read the schedule historyのエラーを確かめ、ジョブ履歴を読む権限があるかを確かめてください。",
+    ),
+  ],
+]);
+
+/** `kind`の説明。表に無い種類は`GENERIC_NOTICE_GUIDE`を返す。 */
+export function noticeGuide(kind: string): NoticeGuide {
+  return NOTICE_GUIDES.get(kind) ?? GENERIC_NOTICE_GUIDE;
+}
