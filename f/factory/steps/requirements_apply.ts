@@ -11,12 +11,18 @@ import {
   getWorkItem,
   recordFailure,
   setFlowJobIdIfUnset,
+  updateIntakeIfRegenerating,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notify, notifyBestEffort } from "../lib/discord.ts";
-import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
+import {
+  commentIssue,
+  type GhClient,
+  getIssue,
+  getViewer,
+} from "../lib/github.ts";
 import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
 import {
   parseFlowJobId,
@@ -24,6 +30,11 @@ import {
   startImplement,
 } from "../lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
+import {
+  buildIntakeRefreshedNoticeMessage,
+  INTAKE_REFRESHED_NOTICE_KIND,
+  refreshIntakeFromIssue,
+} from "../lib/intake_refresh.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
@@ -195,6 +206,12 @@ export type RejectedRetryDeps = {
    * 失敗してもwarnを残すだけで投げない約束だが、約束が破られても起動を止めないよう、呼び出し側でも捕まえる。
    */
   readonly removeWorktree: () => Promise<void>;
+  /**
+   * 作業項目に取り込んだ題名と本文を、現在のIssueの内容に更新する(`refreshIntakeFromIssue`)。
+   * 比較交換の後、pipelineを起動する前に呼ぶ。pipelineは起動後に作業項目を読むので、新しい内容で作り直される。
+   * 更新できなくても作り直しは止めないので、投げない約束だが、約束が破られても起動を止めないよう、呼び出し側でも捕まえる。
+   */
+  readonly refreshIntake: () => Promise<unknown>;
   /** `runFlowAsync(PIPELINE_FLOW_PATH, ...)`の戻り値をそのまま返す。ジョブIDの解析は呼び出し先が行う。 */
   readonly launchPipeline: () => Promise<string>;
   /** `setFlowJobIdIfUnset`でジョブIDを記録する。別の実行が先にリースを取っていれば`false`を返す。 */
@@ -216,6 +233,7 @@ export type RejectedRetryDeps = {
 /**
  * 却下された要件定義を作り直すため、作業項目を`requirements_generating`へ移してpipelineを起動する。
  * 比較交換が一致しなければ何もせずに`not_moved`を返す。
+ * 移した後、起動の前に、取り込んだ題名と本文を現在のIssueの内容に更新する(`refreshIntake`)。
  *
  * 比較交換で`flow_job_id`(pipelineのリース)を空にし、起動したジョブIDは空のときだけ記録する。
  * pipelineは起動するとすぐ準備ステップで作業項目を読み直すので、worktreeの片付けは起動より先に行う。
@@ -234,6 +252,14 @@ export async function relaunchPipelineAfterRejection(
     await deps.removeWorktree();
   } catch (err) {
     deps.log("failed to remove requirements worktree", {
+      error: messageOf(err),
+    });
+  }
+
+  try {
+    await deps.refreshIntake();
+  } catch (err) {
+    deps.log("failed to refresh the intake content", {
       error: messageOf(err),
     });
   }
@@ -548,6 +574,7 @@ async function run(
   // ここからは却下のとき。
   const rejectedOutcome = decideRejectedOutcome(attempt, config.max_attempts);
   if (rejectedOutcome === "retry") {
+    const intakeIssueNumber = workItem.issue_number;
     const relaunched = await relaunchPipelineAfterRejection({
       casToGenerating: () =>
         updateStatusIfCurrentClearingFlowJobId(
@@ -557,6 +584,48 @@ async function run(
           request.reason,
         ),
       removeWorktree: () => removeReqWorktree(workItem),
+      refreshIntake: () =>
+        refreshIntakeFromIssue({
+          snapshot: workItem,
+          getIssue: () =>
+            getIssue(client, workItem.owner, workItem.repo, intakeIssueNumber),
+          writeIntake: (intake, note) =>
+            updateIntakeIfRegenerating(workItem.id, intake, note),
+          announce: async (updated) => {
+            // noticeの失敗でDiscordへの通知を止めない。どちらも承認者に知らせる手段である。
+            try {
+              await addNotice({
+                kind: INTAKE_REFRESHED_NOTICE_KIND,
+                message: buildIntakeRefreshedNoticeMessage({
+                  owner: workItem.owner,
+                  repo: workItem.repo,
+                  issue_number: intakeIssueNumber,
+                  work_item_id: workItem.id,
+                }),
+              });
+            } catch (err) {
+              log.warn("failed to record the intake refresh notice", {
+                work_item_id: workItem.id,
+                error: messageOf(err),
+              });
+            }
+            await notifyBestEffort(
+              webhookUrl,
+              {
+                kind: "intake_refreshed",
+                instance_name: config.instance_name,
+                owner: workItem.owner,
+                repo: workItem.repo,
+                issue_number: intakeIssueNumber,
+                issue_url: workItem.issue_url ?? "",
+                title: updated.title,
+              },
+              log,
+            );
+          },
+          log: (message, fields) =>
+            log.warn(message, { work_item_id: workItem.id, ...fields }),
+        }),
       launchPipeline: () =>
         wmill.runFlowAsync(PIPELINE_FLOW_PATH, {
           work_item_id: workItem.id,

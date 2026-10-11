@@ -9,6 +9,8 @@ import {
   expiredRequirementsRequests,
   handlerPathFor,
   isExpired,
+  issueCheckRefusal,
+  needsIssueCheck,
 } from "../../f/factory/lib/approval_support.ts";
 
 describe("computeExpiresAt", () => {
@@ -150,5 +152,75 @@ describe("expiredRequirementsRequests", () => {
   test("returns an empty array when none are requirements-kind", () => {
     const requests = [{ kind: "issue_proposal" as const, id: 2 }];
     expect(expiredRequirementsRequests(requests)).toEqual([]);
+  });
+});
+
+describe("needsIssueCheck", () => {
+  test("checks a new approval of requirements", () => {
+    expect(
+      needsIssueCheck("record_and_dispatch", "approve", "requirements"),
+    ).toBe(true);
+  });
+
+  test("does not check a rejection", () => {
+    expect(
+      needsIssueCheck("record_and_dispatch", "reject", "requirements"),
+    ).toBe(false);
+  });
+
+  test("does not check the rerun of a recorded decision", () => {
+    expect(needsIssueCheck("redispatch", "approve", "requirements")).toBe(
+      false,
+    );
+  });
+
+  test("does not check a refused decision", () => {
+    expect(needsIssueCheck("refuse", "approve", "requirements")).toBe(false);
+  });
+
+  test("does not check an issue proposal", () => {
+    expect(
+      needsIssueCheck("record_and_dispatch", "approve", "issue_proposal"),
+    ).toBe(false);
+  });
+});
+
+describe("issueCheckRefusal", () => {
+  test("allows approval when the issue matches the intake snapshot", () => {
+    expect(issueCheckRefusal("match", 7)).toBeNull();
+  });
+
+  test("allows approval when the check does not apply", () => {
+    expect(issueCheckRefusal("not_applicable", 7)).toBeNull();
+  });
+
+  test("refuses approval when the issue changed after intake", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain("changed after intake");
+  });
+
+  test("tells the approver that rejecting regenerates from the current issue", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain(
+      "reject the request; the requirements are regenerated from the current issue",
+    );
+  });
+
+  test("names the screen that shows the intake content", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain(
+      "Inbox of the new Console",
+    );
+  });
+
+  test("refuses approval when the issue could not be fetched", () => {
+    expect(issueCheckRefusal("unavailable", 7)).toContain("try again");
+  });
+
+  test("tells the approver to reject when the issue was moved or deleted", () => {
+    expect(issueCheckRefusal("unavailable", 7)).toContain(
+      "If the issue was transferred or deleted, reject the request.",
+    );
+  });
+
+  test("names the approval request in the refusal", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain("approval request 7");
   });
 });

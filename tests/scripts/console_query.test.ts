@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
+import { INTAKE_BODY_MAX_CHARS } from "../../f/factory/lib/console_support.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
   main,
@@ -845,6 +846,140 @@ describe("runConsoleQuery", () => {
     const { sql } = createFakeSqlClient([[]]);
 
     const rows = await runConsoleQuery("requirements_doc", 200, 30, sql, 1);
+
+    expect(rows).toEqual([]);
+  });
+});
+
+describe("runConsoleQuery intake_snapshot", () => {
+  const ROW: SqlRow = {
+    work_item_id: "7",
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 42,
+    issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+    title: "Add feature",
+    body: "Original body",
+    refreshed: false,
+  };
+
+  test("requires a work_item_id", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+
+    await expect(
+      runConsoleQuery("intake_snapshot", 200, 30, sql),
+    ).rejects.toThrow('"work_item_id" is required');
+  });
+
+  test("returns the title and body captured at intake", async () => {
+    const { sql } = createFakeSqlClient([[ROW]]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows).toEqual([
+      {
+        work_item_id: 7,
+        owner: "octo-owner",
+        repo: "atelier-works",
+        issue_number: 42,
+        issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+        title: "Add feature",
+        body: "Original body",
+        body_truncated: false,
+        body_tail_html_comments: 0,
+        body_tail_hidden_chars: 0,
+        refreshed: false,
+      },
+    ]);
+  });
+
+  test("cuts a body longer than the limit and says so", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, body: "x".repeat(INTAKE_BODY_MAX_CHARS + 1) }],
+    ]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({
+      body: "x".repeat(INTAKE_BODY_MAX_CHARS),
+      body_truncated: true,
+    });
+  });
+
+  test("counts HTML comment openers in the part that was cut off", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...ROW,
+          body: `${"x".repeat(INTAKE_BODY_MAX_CHARS)}<!-- a --><!-- b`,
+        },
+      ],
+    ]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({ body_tail_html_comments: 2 });
+  });
+
+  test("counts hidden characters in the part that was cut off", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...ROW,
+          body: `${"x".repeat(INTAKE_BODY_MAX_CHARS)}a\u200Bb\u{E0041}`,
+        },
+      ],
+    ]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({ body_tail_hidden_chars: 2 });
+  });
+
+  test("does not count the part that was returned", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, body: "<!-- shown --> a\u200Bb" }],
+    ]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({
+      body_tail_html_comments: 0,
+      body_tail_hidden_chars: 0,
+    });
+  });
+
+  test("returns whether the intake content was refreshed", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, refreshed: true }]]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(rows[0]).toMatchObject({ refreshed: true });
+  });
+
+  test("looks for the refresh note by its prefix", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+
+    await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(calls[0]?.values).toEqual([
+      "intake refreshed from the current issue",
+      7,
+    ]);
+  });
+
+  test("reads only issue work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+
+    await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
+
+    expect(calls[0]?.text).toContain("kind = 'issue'");
+  });
+
+  test("returns no rows when the work item does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+
+    const rows = await runConsoleQuery("intake_snapshot", 200, 30, sql, 7);
 
     expect(rows).toEqual([]);
   });

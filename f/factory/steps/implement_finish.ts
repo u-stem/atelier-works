@@ -8,9 +8,11 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
+import { INTAKE_REFRESHED_NOTE_PREFIX } from "../lib/console_support.ts";
 import {
   addNotice,
   getWorkItem,
+  hasIntakeRefreshEvent,
   setFlowJobId,
   setWorkItemPrUrl,
   updateStatusIfLeaseHolder,
@@ -458,6 +460,13 @@ async function finishImplement(
     (context !== null && context.existing_pr_number !== null) ||
     recordedPrUrl !== null;
 
+  // 取り込み内容を作り直しのときに更新した作業項目は、更新後の値と現在のIssueを比べても
+  // 書き換えを拾えないので、更新の履歴からPR本文に注記する。
+  const intakeRefreshed = await hasIntakeRefreshEvent(
+    work_item_id,
+    INTAKE_REFRESHED_NOTE_PREFIX,
+  );
+
   // openの再確認で取得したIssueを、取り込み時点との比較にも使う(追加のAPI呼び出しをしない)。
   let issueUpdatedAfterIntake = false;
   if (context !== null) {
@@ -700,6 +709,7 @@ async function finishImplement(
         changedPaths: loop.changed_paths,
         deployChecklist: ctx.is_factory_repo,
         issueUpdatedAfterIntake,
+        intakeRefreshed,
       });
       let pr: PullRequestRef;
       await confirmLease();

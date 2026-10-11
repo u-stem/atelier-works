@@ -26,6 +26,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   unsandboxed_check_commands: "info",
   implement_needs_human: "info",
   approval_comment_failed: "action",
+  intake_refreshed: "action",
   implement_launch_failed: "action",
   fix_reply_post_failed: "action",
   pr_fix_reviewer_request_failed: "action",
@@ -91,3 +92,59 @@ export function noticeSeverity(kind: string): NoticeSeverity {
 export function isNoticeResolvable(kind: string): boolean {
   return !UNRESOLVABLE_NOTICE_KINDS.includes(kind);
 }
+
+/** Consoleに返す、取り込み時点のIssueの題名の最大の文字数。GitHubの題名の上限は256文字だが、DBの値を信用せずに切る。 */
+export const INTAKE_TITLE_MAX_CHARS = 300;
+
+/**
+ * Consoleに返す、取り込み時点のIssueの本文の最大の文字数。
+ * GitHubの本文の上限(65,536文字)より小さくして、承認画面の応答を肥大させない。
+ * 超えた分は返さないので、Consoleは切った旨を承認者に示す。
+ */
+export const INTAKE_BODY_MAX_CHARS = 20_000;
+
+/**
+ * `text`を最大`max`文字(サロゲートペアは1文字)に切る。
+ * 切ったかどうかを`truncated`で返す。副作用は無い。
+ */
+export function truncateChars(
+  text: string,
+  max: number,
+): { readonly text: string; readonly truncated: boolean } {
+  const chars = Array.from(text);
+  if (chars.length <= max) return { text, truncated: false };
+  return { text: chars.slice(0, max).join(""), truncated: true };
+}
+
+/**
+ * 画面に出せない文字。書式の制御文字(Unicodeの分類Cf)、制御文字(Cc)、行と段落の区切り(Zl、Zp)、異体字セレクタ。
+ * Consoleの`src/lib/intakeText.ts`が代替文字に置き換える対象と同じ分類である。
+ * 改行、キャリッジリターン、タブは、見える空白なので数えない。
+ */
+const HIDDEN_CHARACTERS =
+  /\p{Cf}|\p{Cc}|\p{Zl}|\p{Zp}|\p{Variation_Selector}/gu;
+
+/** `text`に含まれる、画面に出せない文字の数を返す。 */
+export function countHiddenCharacters(text: string): number {
+  let count = 0;
+  for (const match of text.matchAll(HIDDEN_CHARACTERS)) {
+    if (match[0] !== "\n" && match[0] !== "\r" && match[0] !== "\t") count += 1;
+  }
+  return count;
+}
+
+/**
+ * `text`に含まれる、HTMLのコメントの開始(`<!--`)の数を返す。
+ * GitHubはIssueの本文をMarkdownとして描き、コメントの中身を画面に出さない。
+ */
+export function countHtmlCommentOpeners(text: string): number {
+  return text.split("<!--").length - 1;
+}
+
+/**
+ * 取り込み内容を更新したときに、`work_item_events.note`の先頭に置く文。
+ * 更新の有無を、この先頭の文で読み取る(`hasIntakeRefreshEvent`、`intake_snapshot`のビュー)。
+ * Consoleのビューが、更新の処理(`intake_refresh.ts`)の依存を引かずに読めるよう、ここに置く。
+ */
+export const INTAKE_REFRESHED_NOTE_PREFIX =
+  "intake refreshed from the current issue";

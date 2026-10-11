@@ -351,6 +351,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |
 | `f/factory/lib/types` | script | [LIB] 共通型 |
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
+| `f/factory/lib/intake_refresh` | script | [LIB] 取り込み内容の更新と記録 |
 | `f/factory/lib/implement_finish_support` | script | [LIB] 実装フローの完了処理の判定 |
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |

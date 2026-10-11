@@ -972,18 +972,22 @@ export type FetchLike = (
 const FETCH_ISSUE_TIMEOUT_MS = 10_000;
 
 /**
- * IssueまたはPRの`state`(`open`か`closed`)を、`fetch`で`GET /repos/.../issues/<番号>`から読む。
+ * `GET /repos/.../issues/<番号>`を`fetch`で読み、JSONのオブジェクトを返す。
  * `gh`を起動できないworker(Console用のworker)から使うためのもので、
- * 資格情報は`Authorization`ヘッダだけに載せ、エラーの文には含めない。
+ * 宛先は`api.github.com`に固定し、資格情報は`Authorization`ヘッダだけに載せる。
+ * リダイレクトは辿らない。移したIssueの新しい宛先へ`Authorization`を送らず、
+ * 確かめられないものとして扱うためである。
+ * 10秒の締め切りを付け、超えると`fetch`が拒否される。
  * 応答が2xxでなければ`GitHubHttpError`を、形が違えば`Error`を投げる。
+ * エラーの文に、資格情報とIssueの内容は含めない。
  */
-export async function fetchIssueState(
+async function fetchIssueObject(
   fetchFn: FetchLike,
   ghToken: string,
   owner: string,
   repo: string,
   number: number,
-): Promise<string> {
+): Promise<{ readonly context: string; readonly body: object }> {
   validateOwnerRepo(owner, repo);
   const context = `GET issue ${owner}/${repo}#${number}`;
   const response = await fetchFn(
@@ -994,8 +998,6 @@ export async function fetchIssueState(
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
-      // リダイレクトは辿らない。移したIssueの新しい宛先へ`Authorization`を送らず、
-      // 状態を確かめられないものとして扱うため。
       redirect: "manual",
       signal: AbortSignal.timeout(FETCH_ISSUE_TIMEOUT_MS),
     },
@@ -1007,14 +1009,64 @@ export async function fetchIssueState(
     );
   }
   const body: unknown = await response.json();
-  if (typeof body !== "object" || body === null || !("state" in body)) {
+  if (typeof body !== "object" || body === null) {
     throw new Error(`${context}: unexpected response shape`);
   }
+  return { context, body };
+}
+
+/**
+ * IssueまたはPRの`state`(`open`か`closed`)を、`fetch`で読む。
+ * 通信の決まりは`fetchIssueObject`にある。
+ */
+export async function fetchIssueState(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string> {
+  const { context, body } = await fetchIssueObject(
+    fetchFn,
+    ghToken,
+    owner,
+    repo,
+    number,
+  );
   const state = Reflect.get(body, "state");
   if (typeof state !== "string") {
     throw new Error(`${context}: unexpected response shape`);
   }
   return state;
+}
+
+/**
+ * Issueの題名と本文を、`fetch`で読む。本文が無い(`null`)Issueは空文字にする。
+ * 通信の決まりは`fetchIssueObject`にある。
+ */
+export async function fetchIssueContent(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{ readonly title: string; readonly body: string }> {
+  const { context, body } = await fetchIssueObject(
+    fetchFn,
+    ghToken,
+    owner,
+    repo,
+    number,
+  );
+  const title = Reflect.get(body, "title");
+  const text = Reflect.get(body, "body");
+  if (
+    typeof title !== "string" ||
+    (text !== null && typeof text !== "string")
+  ) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return { title, body: text ?? "" };
 }
 
 type LabelEventPayload = {

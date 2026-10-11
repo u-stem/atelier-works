@@ -65,6 +65,15 @@ export type NotifyEvent =
       console_url: string;
     }
   | {
+      kind: "intake_refreshed";
+      instance_name: string;
+      owner: string;
+      repo: string;
+      issue_number: number;
+      issue_url: string;
+      title: string;
+    }
+  | {
       kind: "needs_human";
       instance_name: string;
       owner: string;
@@ -302,6 +311,17 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           instanceField(event.instance_name),
           repoField(event.owner, event.repo),
           { name: "Issue", value: event.issue_url },
+        ],
+      };
+    case "intake_refreshed":
+      return {
+        title: `取り込み内容を更新: #${event.issue_number} ${event.title}`,
+        description:
+          "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。新しいConsoleの要対応で更新後の内容を確かめてから承認してください。",
+        url: event.issue_url,
+        fields: [
+          instanceField(event.instance_name),
+          repoField(event.owner, event.repo),
         ],
       };
     case "needs_human": {
