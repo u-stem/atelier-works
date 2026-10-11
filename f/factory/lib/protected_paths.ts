@@ -50,6 +50,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 更新だけが使うGitHubの読み取りの`lib/drawio_viewer_bump_github.ts`、14日の待ちの根拠になる
  * 観測の記録の`lib/drawio_viewer_observations.ts`、スケジュールとscriptの定義(`*.schedule.yaml`、
  * `*.script.yaml`)も同じ理由で守る。書き換えられると、人の確認なしに別の取得元や版を固定のPRにできる。
+ * 部品のscript定義と依存のlock(`lib/drawio_viewer_bump*.script.{yaml,lock}`、`lib/drawio_viewer_observations.script.yaml`)も守る。
+ * これらは、依存の版の更新で書き換わらないので、正当な変更を止めない。
+ * 一方、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は守らない。
+ * `windmill-client`の版を上げる変更で、全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
  * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
  * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
@@ -70,6 +74,11 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/drawio_viewer_bump.ts",
   "f/factory/lib/drawio_viewer_bump_github.ts",
   "f/factory/lib/drawio_viewer_observations.ts",
+  "f/factory/lib/drawio_viewer_bump.script.yaml",
+  "f/factory/lib/drawio_viewer_bump.script.lock",
+  "f/factory/lib/drawio_viewer_bump_github.script.yaml",
+  "f/factory/lib/drawio_viewer_bump_github.script.lock",
+  "f/factory/lib/drawio_viewer_observations.script.yaml",
   "f/factory/drawio_viewer_bump.script.yaml",
   "f/factory/drawio_viewer_bump.schedule.yaml",
   "console/scripts/drawio-viewer.ts",

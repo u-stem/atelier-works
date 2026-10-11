@@ -39,7 +39,8 @@ PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信�
 トリガーのラベルは、着手(claim)したときに消費して外す。レビューの依頼とassigneeの経路には、消費するラベルが無い。ラベル名は`factory_config`の`review_label`と`fix_label`で決める。
 
 ブランチ名が`factory/drawio-viewer-`で始まるPR(draw.ioのビューアの固定を上げるPR)には、`factory:fix`ラベルが付いていてもPR修正を始めない。
-`decidePrActions`が`headRef`で判定し、ラベルは消費せずに残す。
+`decidePrActions`が`headRef`で判定し、ラベルは消費せずに残す。ラベルは外れず、修正は人が行う。
+判定はブランチ名だけで行うので、`factory_repo`に限らず、担当するすべてのリポジトリに効く。
 `pr_fix_prepare`も同じ判定(`evaluateHumanOnlyBranchGuard`)で止め、作業項目をblockedにする。
 修正を許すと、固定のファイル以外も書き換えたcommitを、人が気づかずにマージするおそれがある。このPRは人が直す。レビューは動く。
 

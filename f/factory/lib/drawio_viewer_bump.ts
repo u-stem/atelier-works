@@ -366,19 +366,25 @@ export type BranchVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };
 
+/** 基点との差分に載る1ファイル。名前の変更(rename)かどうかも持つ。 */
+export type ChangedFile = {
+  readonly path: string;
+  readonly renamed: boolean;
+};
+
 /**
  * PRの無い既存のブランチを、そのままPRの元にしてよいかを確かめる。
  * 同じ名前のブランチを他の人が作っておくと、中身を確かめずにPRにすれば、
  * 想定していない変更が更新のPRに混ざるためである。
  * - 各ファイルのgit blobのIDが、今回作る内容のIDと一致する。
- * - 基点のブランチとの差分が、今回書き換えるファイルだけである。
+ * - 基点のブランチとの差分が、今回書き換えるファイルだけで、名前の変更を含まない。
  * `readBlobSha`は、ブランチ上のファイルのgit blobのIDを返す(無ければ`null`)。
- * `listChangedPaths`は、基点との差分のパスを返す。
+ * `listChangedFiles`は、基点との差分のファイルを返す。
  */
 export async function verifyBranchContents(
   files: readonly { readonly path: string; readonly content: string }[],
   readBlobSha: (path: string) => Promise<string | null>,
-  listChangedPaths: () => Promise<readonly string[]>,
+  listChangedFiles: () => Promise<readonly ChangedFile[]>,
 ): Promise<BranchVerdict> {
   for (const file of files) {
     const actual = await readBlobSha(file.path);
@@ -390,7 +396,15 @@ export async function verifyBranchContents(
       };
     }
   }
-  const changed = [...(await listChangedPaths())].sort();
+  const changedFiles = await listChangedFiles();
+  const renamed = changedFiles.find((file) => file.renamed);
+  if (renamed !== undefined) {
+    return {
+      ok: false,
+      reason: `the branch renames ${renamed.path}`,
+    };
+  }
+  const changed = changedFiles.map((file) => file.path).sort();
   const expectedPaths = files.map((file) => file.path).sort();
   if (
     changed.length !== expectedPaths.length ||
@@ -410,6 +424,14 @@ export async function verifyBranchContents(
 
 export function bumpBranchPrefix(): string {
   return BRANCH_PREFIX;
+}
+
+/**
+ * ブランチが、固定の更新のPRのものか。
+ * 更新のPRには、PR修正を始めない。`poll_prs`と`pr_fix_prepare`が同じ述語を使う。
+ */
+export function isViewerBumpBranch(branch: string): boolean {
+  return branch.startsWith(BRANCH_PREFIX);
 }
 
 /** 版ごとのブランチ名。同じ版のPRを重ねて作らないための目印になる。 */

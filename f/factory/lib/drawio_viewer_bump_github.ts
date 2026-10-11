@@ -266,8 +266,14 @@ export async function listOpenPullRequestHeads(
   return items.filter((ref): ref is string => ref !== null);
 }
 
+/** 比較の結果の1ファイル。名前の変更は、`status`が`renamed`か、`previous_filename`がある。 */
+export type ComparedFile = {
+  readonly path: string;
+  readonly renamed: boolean;
+};
+
 /**
- * `base`と`head`の差分(`base...head`)で変わるファイルのパスを、並べ替えて返す。
+ * `base`と`head`(ブランチ名かcommitのID)の差分(`base...head`)で変わるファイルを、パスの順に返す。
  * 3つのドットの比較は、分岐点からの`head`側の変更だけを数える。
  */
 export async function compareChangedFiles(
@@ -276,7 +282,7 @@ export async function compareChangedFiles(
   repo: string,
   base: string,
   head: string,
-): Promise<string[]> {
+): Promise<ComparedFile[]> {
   validateOwnerRepo(owner, repo);
   assertBranchName(base);
   assertBranchName(head);
@@ -290,13 +296,16 @@ export async function compareChangedFiles(
   if (!isRecord(parsed) || !Array.isArray(parsed.files)) {
     throw new Error(`${context}: unexpected response shape`);
   }
-  const paths = parsed.files.map((file) => {
+  const files = parsed.files.map((file): ComparedFile => {
     if (!isRecord(file) || typeof file.filename !== "string") {
       throw new Error(`${context}: unexpected response shape`);
     }
-    return file.filename;
+    return {
+      path: file.filename,
+      renamed: file.status === "renamed" || "previous_filename" in file,
+    };
   });
-  return paths.sort();
+  return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 export type BranchFile = {

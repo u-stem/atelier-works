@@ -13,7 +13,6 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import { addNoticeUnlessUnresolved } from "./lib/db.ts";
 import {
-  type BranchVerdict,
   buildBumpCommitMessage,
   buildBumpPrBody,
   buildBumpTitle,
@@ -61,10 +60,10 @@ import {
   createPullRequest,
   type GhClient,
   GitHubHttpError,
+  getPr,
   getViewer,
   gitIdentityForViewer,
   listPullRequestNumbersByHead,
-  type PullRequestRef,
   parseGitHubRepoUrl,
 } from "./lib/github.ts";
 import { type Logger, logger } from "./lib/log.ts";
@@ -83,6 +82,24 @@ export type BumpPullRequestInput = {
   readonly files: readonly BranchFile[];
   /** `false`のときは、既にあるブランチからPRだけを作る。 */
   readonly createBranch: boolean;
+  /** 既にあるブランチを照合したときの先頭のcommit。ブランチを新しく作るときは`null`。 */
+  readonly verifiedHeadSha: string | null;
+};
+
+/** 既存のブランチの照合の結果。通ったときは、照合した先頭のcommitを返す。 */
+export type BranchCheck =
+  | { readonly ok: true; readonly headSha: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * 作ったPR。`expectedHeadSha`は、こちらが作った(または照合した)ブランチの先頭のcommitで、
+ * `headSha`はPRができた後にGitHubが返したheadのcommitである。
+ */
+export type PublishedPullRequest = {
+  readonly number: number;
+  readonly htmlUrl: string;
+  readonly headSha: string;
+  readonly expectedHeadSha: string;
 };
 
 /** `runBump`が使う外部の操作。テストでは差し替える。 */
@@ -104,12 +121,20 @@ export type BumpDeps = {
   readonly branchExists: (branch: string) => Promise<boolean>;
   /** ブランチをheadにしたPRの数(閉じたものを含む)。 */
   readonly countPullRequests: (branch: string) => Promise<number>;
-  /** PRの無い既存のブランチの中身が、`files`と一致し、差分がそのファイルだけかを確かめる。 */
+  /**
+   * PRの無い既存のブランチの中身が、`files`と一致し、差分がそのファイルだけかを確かめる。
+   * 先頭のcommitを1回だけ取り、そのcommitに対して照合する。
+   */
   readonly verifyBranch: (
     branch: string,
     files: readonly BranchFile[],
-  ) => Promise<BranchVerdict>;
-  readonly publish: (input: BumpPullRequestInput) => Promise<PullRequestRef>;
+  ) => Promise<BranchCheck>;
+  /** ブランチ(無ければ作る)をheadにしたPRを開く。自動レビューのラベルは付けない。 */
+  readonly publish: (
+    input: BumpPullRequestInput,
+  ) => Promise<PublishedPullRequest>;
+  /** PRに自動レビューのラベルを付ける。 */
+  readonly requestReview: (pullRequestNumber: number) => Promise<void>;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
 };
@@ -267,9 +292,12 @@ export async function runBump(
   ];
 
   const branchExists = await deps.branchExists(branch);
+  let verifiedHeadSha: string | null = null;
   if (branchExists) {
     const branchVerdict = await deps.verifyBranch(branch, files);
-    if (!branchVerdict.ok) {
+    if (branchVerdict.ok) {
+      verifiedHeadSha = branchVerdict.headSha;
+    } else {
       await deps.addNotice(
         rejectedNotice(
           target.tag,
@@ -300,7 +328,25 @@ export async function runBump(
     }),
     files,
     createBranch: !branchExists,
+    verifiedHeadSha,
   });
+  // 照合してからPRを作るまでの間に、ブランチが書き換えられていないかを確かめる。
+  // 書き換えられていたら、自動レビューのラベルを付けずに止める。
+  if (pr.headSha !== pr.expectedHeadSha) {
+    await deps.addNotice(
+      rejectedNotice(
+        target.tag,
+        `PR #${String(pr.number)}を作る間に、ブランチ${branch}の先頭が変わりました`,
+        "PRとブランチの内容を確かめ、不要ならPRを閉じてブランチを削除してください",
+      ),
+    );
+    deps.log.warn("the bump branch changed while the pull request was opened", {
+      branch,
+      pr: pr.htmlUrl,
+    });
+    return { outcome: "rejected", tag: target.tag };
+  }
+  await deps.requestReview(pr.number);
   deps.log.info("opened a draw.io viewer bump pull request", {
     branch,
     pr: pr.htmlUrl,
@@ -376,8 +422,19 @@ export async function main(approved_version = ""): Promise<BumpResult> {
             branch,
           )
         ).length,
-      verifyBranch: (branch, files) =>
-        verifyBranchContents(
+      verifyBranch: async (branch, files) => {
+        // 先頭のcommitを1回だけ取り、以降の読み取りと比較はすべてそのcommitに対して行う。
+        // 照合の途中でブランチが書き換えられても、別の内容を読まないためである。
+        const headSha = await getBranchHeadSha(
+          client,
+          repoRef.owner,
+          repoRef.repo,
+          branch,
+        );
+        if (headSha === null) {
+          return { ok: false, reason: "the branch disappeared" };
+        }
+        const verdict = await verifyBranchContents(
           files,
           async (path) => {
             try {
@@ -387,7 +444,7 @@ export async function main(approved_version = ""): Promise<BumpResult> {
                   repoRef.owner,
                   repoRef.repo,
                   path,
-                  branch,
+                  headSha,
                 )
               ).sha;
             } catch (error) {
@@ -403,20 +460,32 @@ export async function main(approved_version = ""): Promise<BumpResult> {
               repoRef.owner,
               repoRef.repo,
               baseBranch,
-              branch,
+              headSha,
             ),
-        ),
+        );
+        return verdict.ok ? { ok: true, headSha } : verdict;
+      },
       publish: async (input) => {
+        let expectedHeadSha: string;
         if (input.createBranch) {
-          await createBranchWithFiles(client, repoRef.owner, repoRef.repo, {
-            baseBranch,
-            branch: input.branch,
-            message: input.message,
-            files: input.files,
-            identity: gitIdentityForViewer(viewer),
-          });
+          expectedHeadSha = await createBranchWithFiles(
+            client,
+            repoRef.owner,
+            repoRef.repo,
+            {
+              baseBranch,
+              branch: input.branch,
+              message: input.message,
+              files: input.files,
+              identity: gitIdentityForViewer(viewer),
+            },
+          );
+        } else if (input.verifiedHeadSha !== null) {
+          expectedHeadSha = input.verifiedHeadSha;
+        } else {
+          throw new Error("an existing branch must be verified before use");
         }
-        const pr = await createPullRequest(
+        const created = await createPullRequest(
           client,
           repoRef.owner,
           repoRef.repo,
@@ -427,11 +496,23 @@ export async function main(approved_version = ""): Promise<BumpResult> {
             body: input.body,
           },
         );
-        await addLabels(client, repoRef.owner, repoRef.repo, pr.number, [
-          config.review_label,
-        ]);
-        return pr;
+        const pr = await getPr(
+          client,
+          repoRef.owner,
+          repoRef.repo,
+          created.number,
+        );
+        return {
+          number: created.number,
+          htmlUrl: created.htmlUrl,
+          headSha: pr.headSha,
+          expectedHeadSha,
+        };
       },
+      requestReview: (pullRequestNumber) =>
+        addLabels(client, repoRef.owner, repoRef.repo, pullRequestNumber, [
+          config.review_label,
+        ]),
       addNotice: (record) => addNoticeUnlessUnresolved(record),
     },
     approvedTag,

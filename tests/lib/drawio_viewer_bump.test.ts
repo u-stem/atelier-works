@@ -16,6 +16,7 @@ import {
   gitBlobSha1,
   isMajorBump,
   isOldEnough,
+  isViewerBumpBranch,
   MAX_VIEWER_BYTES,
   MIN_RELEASE_AGE_DAYS,
   parsePinText,
@@ -650,7 +651,9 @@ describe("verifyBranchContents", () => {
     const file = files.find((candidate) => candidate.path === path);
     return file === undefined ? null : blobOf(file.content);
   };
-  const samePaths = async () => files.map((file) => file.path);
+  const changed = (paths: readonly string[], renamed = false) =>
+    paths.map((path) => ({ path, renamed }));
+  const samePaths = async () => changed(files.map((file) => file.path));
 
   test("accepts a branch with the expected content and only those files", async () => {
     const verdict = await verifyBranchContents(
@@ -687,10 +690,11 @@ describe("verifyBranchContents", () => {
     const verdict = await verifyBranchContents(
       files,
       async (path) => shaFor(path),
-      async () => [
-        ...files.map((file) => file.path),
-        ".github/workflows/ci.yml",
-      ],
+      async () =>
+        changed([
+          ...files.map((file) => file.path),
+          ".github/workflows/ci.yml",
+        ]),
     );
     expect(verdict.ok).toBe(false);
   });
@@ -699,7 +703,7 @@ describe("verifyBranchContents", () => {
     const verdict = await verifyBranchContents(
       files,
       async (path) => shaFor(path),
-      async () => ["console/drawio-viewer.json"],
+      async () => changed(["console/drawio-viewer.json"]),
     );
     expect(verdict.ok).toBe(false);
   });
@@ -708,8 +712,48 @@ describe("verifyBranchContents", () => {
     const verdict = await verifyBranchContents(
       files,
       async (path) => shaFor(path),
-      async () => files.map((file) => file.path).reverse(),
+      async () => changed(files.map((file) => file.path).reverse()),
     );
     expect(verdict).toEqual({ ok: true });
+  });
+
+  test("rejects a branch that renames one of the files", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) => shaFor(path),
+      async () =>
+        changed(
+          files.map((file) => file.path),
+          true,
+        ),
+    );
+    expect(verdict.ok).toBe(false);
+  });
+
+  test("names the renamed file in the reason", async () => {
+    const verdict = await verifyBranchContents(
+      files,
+      async (path) => shaFor(path),
+      async () =>
+        changed(
+          files.map((file) => file.path),
+          true,
+        ),
+    );
+    expect(!verdict.ok && verdict.reason).toContain("renames");
+  });
+});
+
+describe("isViewerBumpBranch", () => {
+  test("is true for a viewer pin update branch", () => {
+    expect(isViewerBumpBranch("factory/drawio-viewer-32.5.0")).toBe(true);
+  });
+
+  test("is false for an implementation branch", () => {
+    expect(isViewerBumpBranch("factory/issue-7-wi-3")).toBe(false);
+  });
+
+  test("is false for a branch that only contains the prefix", () => {
+    expect(isViewerBumpBranch("feat/factory/drawio-viewer-1.0.0")).toBe(false);
   });
 });

@@ -23,6 +23,9 @@ const NEW_BYTES = new TextEncoder().encode("b".repeat(1050));
 const OLD_SHA = sha256Hex(OLD_BYTES);
 const NEW_SHA = sha256Hex(NEW_BYTES);
 
+const VERIFIED_SHA = "2".repeat(40);
+const CREATED_SHA = "3".repeat(40);
+
 const PIN_TEXT = renderPin({
   version: "32.4.1",
   commit: OLD_COMMIT,
@@ -44,11 +47,13 @@ type Harness = {
   readonly deps: BumpDeps;
   readonly published: BumpPullRequestInput[];
   readonly notices: NoticeRecord[];
+  readonly reviewed: number[];
 };
 
 function harness(overrides: Partial<BumpDeps> = {}): Harness {
   const published: BumpPullRequestInput[] = [];
   const notices: NoticeRecord[] = [];
+  const reviewed: number[] = [];
   const deps: BumpDeps = {
     now: () => NOW,
     log: logger("drawio_viewer_bump_test", { sink: () => {} }),
@@ -65,10 +70,19 @@ function harness(overrides: Partial<BumpDeps> = {}): Harness {
     listOpenHeads: async () => [],
     branchExists: async () => false,
     countPullRequests: async () => 0,
-    verifyBranch: async () => ({ ok: true }),
+    verifyBranch: async () => ({ ok: true, headSha: VERIFIED_SHA }),
     publish: async (input) => {
       published.push(input);
-      return { number: 7, htmlUrl: "https://github.com/acme/widgets/pull/7" };
+      const sha = input.verifiedHeadSha ?? CREATED_SHA;
+      return {
+        number: 7,
+        htmlUrl: "https://github.com/acme/widgets/pull/7",
+        headSha: sha,
+        expectedHeadSha: sha,
+      };
+    },
+    requestReview: async (number) => {
+      reviewed.push(number);
     },
     addNotice: async (record) => {
       notices.push(record);
@@ -76,7 +90,7 @@ function harness(overrides: Partial<BumpDeps> = {}): Harness {
     },
     ...overrides,
   };
-  return { deps, published, notices };
+  return { deps, published, notices, reviewed };
 }
 
 describe("runBump nothing to do", () => {
@@ -278,7 +292,9 @@ describe("runBump reusing an existing branch", () => {
   });
 
   test("opens the pull request from a branch that matches", async () => {
-    const { deps, published } = harness(existing(async () => ({ ok: true })));
+    const { deps, published } = harness(
+      existing(async () => ({ ok: true, headSha: VERIFIED_SHA })),
+    );
     await runBump(deps, null);
     expect(published[0]?.createBranch).toBe(false);
   });
@@ -304,7 +320,7 @@ describe("runBump reusing an existing branch", () => {
     const { deps } = harness(
       existing(async (_branch, files) => {
         checked = files.map((file) => file.path);
-        return { ok: true };
+        return { ok: true, headSha: VERIFIED_SHA };
       }),
     );
     await runBump(deps, null);
@@ -319,11 +335,60 @@ describe("runBump reusing an existing branch", () => {
     const { deps } = harness({
       verifyBranch: async () => {
         checks += 1;
-        return { ok: true };
+        return { ok: true, headSha: VERIFIED_SHA };
       },
     });
     await runBump(deps, null);
     expect(checks).toBe(0);
+  });
+});
+
+describe("runBump opening and reviewing", () => {
+  test("asks for a review of the opened pull request", async () => {
+    const { deps, reviewed } = harness();
+    await runBump(deps, null);
+    expect(reviewed).toEqual([7]);
+  });
+
+  test("passes the verified head commit to the publication", async () => {
+    const { deps, published } = harness({
+      branchExists: async () => true,
+      countPullRequests: async () => 0,
+    });
+    await runBump(deps, null);
+    expect(published[0]?.verifiedHeadSha).toBe(VERIFIED_SHA);
+  });
+
+  test("passes no verified commit when it creates the branch", async () => {
+    const { deps, published } = harness();
+    await runBump(deps, null);
+    expect(published[0]?.verifiedHeadSha).toBeNull();
+  });
+
+  const moved: Partial<BumpDeps> = {
+    publish: async () => ({
+      number: 9,
+      htmlUrl: "https://github.com/acme/widgets/pull/9",
+      headSha: "4".repeat(40),
+      expectedHeadSha: VERIFIED_SHA,
+    }),
+  };
+
+  test("does not ask for a review when the branch changed meanwhile", async () => {
+    const { deps, reviewed } = harness(moved);
+    await runBump(deps, null);
+    expect(reviewed).toEqual([]);
+  });
+
+  test("records a notice naming the pull request when the branch changed meanwhile", async () => {
+    const { deps, notices } = harness(moved);
+    await runBump(deps, null);
+    expect(notices[0]?.message).toContain("PR #9");
+  });
+
+  test("rejects when the branch changed meanwhile", async () => {
+    const { deps } = harness(moved);
+    expect((await runBump(deps, null)).outcome).toBe("rejected");
   });
 });
 

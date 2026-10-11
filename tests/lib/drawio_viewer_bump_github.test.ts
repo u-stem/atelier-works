@@ -240,13 +240,65 @@ describe("listOpenPullRequestHeads", () => {
 });
 
 describe("compareChangedFiles", () => {
-  test("returns the changed paths in sorted order", async () => {
+  test("returns the changed files in path order", async () => {
     const { client } = clientFor([
-      ghApiOk({ files: [{ filename: "b.json" }, { filename: "a.html" }] }),
+      ghApiOk({
+        files: [
+          { filename: "b.json", status: "modified" },
+          { filename: "a.html", status: "modified" },
+        ],
+      }),
     ]);
     expect(
       await compareChangedFiles(client, "acme", "widgets", "main", "feat/x"),
-    ).toEqual(["a.html", "b.json"]);
+    ).toEqual([
+      { path: "a.html", renamed: false },
+      { path: "b.json", renamed: false },
+    ]);
+  });
+
+  test("marks a file whose status is renamed", async () => {
+    const { client } = clientFor([
+      ghApiOk({ files: [{ filename: "new.json", status: "renamed" }] }),
+    ]);
+    const files = await compareChangedFiles(
+      client,
+      "acme",
+      "widgets",
+      "main",
+      "feat/x",
+    );
+    expect(files[0]?.renamed).toBe(true);
+  });
+
+  test("marks a file that has a previous filename", async () => {
+    const { client } = clientFor([
+      ghApiOk({
+        files: [
+          {
+            filename: "new.json",
+            status: "modified",
+            previous_filename: "old.json",
+          },
+        ],
+      }),
+    ]);
+    const files = await compareChangedFiles(
+      client,
+      "acme",
+      "widgets",
+      "main",
+      "feat/x",
+    );
+    expect(files[0]?.renamed).toBe(true);
+  });
+
+  test("accepts a commit id as the head", async () => {
+    const { client, fake } = clientFor([ghApiOk({ files: [] })]);
+    await compareChangedFiles(client, "acme", "widgets", "main", SHA_A);
+    expect(fake.calls[0]?.argv).toContain(
+      `repos/acme/widgets/compare/main...${SHA_A}`,
+    );
   });
 
   test("compares from the base to the head with three dots", async () => {

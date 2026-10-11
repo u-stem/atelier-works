@@ -2,6 +2,7 @@
 // `drawio_viewer_bump`が、「同じcommitを14日以上前から見ている」ことを確かめるのに使う。
 // 公開日はリリースを作る側が書き換えられるため、待ちの根拠にはこちらの時刻を使う。
 // 保護パスで、人のレビューを経ずには変えられない。観測の時刻を偽れると、14日の待ちを回避できるため。
+// DBを直接触る変更(migration、WindmillのSQL)は、この保護の外にある。
 
 import { defaultSqlClient, type SqlClient } from "./db.ts";
 import { isString } from "./types.ts";
