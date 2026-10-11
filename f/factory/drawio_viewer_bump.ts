@@ -1,10 +1,11 @@
 // draw.ioのビューアの固定(console/drawio-viewer.json)を、新しい公式のリリースへ上げるPRを作る。
 // 週に1回動く。判断は`lib/drawio_viewer_bump.ts`の純関数が行い、ここは取得、重複の確認、PRの作成だけを担う。
 //
-// 上げるのは、公開から14日以上たち、今と同じメジャー版の最新のリリースだけである。
+// 上げるのは、公開から14日以上たった最新のリリースだけである。
 // 取得したバイト列は、GitHubのAPIが返すgit blobのIDと大きさに照合する。
-// メジャー版が違う版と、大きさが大きく変わる版は上げず、noticeに残す。
-// 人は、noticeの手順で`approved_version`にその版を指定して、この処理を手で実行する。
+// メジャー版が変わる版もPRにする。題名の`[major]`と本文の先頭の文で、人の確認を求める。
+// 大きさが大きく変わる版と、照合に通らない版は上げず、noticeに残す。
+// 人は、noticeの手順で`approved_version`にその版を指定して、大きさの制限を外して手で実行できる。
 // PRはDraftにせず、`factory:review`ラベルで自動レビューに回す。マージは人が行う。
 
 import * as wmill from "windmill-client@1.817.0";
@@ -98,7 +99,6 @@ export type BumpDeps = {
 export type BumpResult =
   | { readonly outcome: "up_to_date" }
   | { readonly outcome: "waiting" }
-  | { readonly outcome: "held"; readonly tag: string }
   | { readonly outcome: "pull_request_pending"; readonly branch: string }
   | { readonly outcome: "already_proposed"; readonly branch: string }
   | { readonly outcome: "rejected"; readonly tag: string }
@@ -110,13 +110,6 @@ export type BumpResult =
 
 function approvalCommand(tag: string): string {
   return `Windmillで${SCRIPT_PATH}を、approved_versionに${tag}を指定して実行してください`;
-}
-
-function heldMajorNotice(tag: string): NoticeRecord {
-  return {
-    kind: NOTICE_KIND,
-    message: `draw.ioのビューアの新しいメジャー版${tag}は、自動では上げません。次の操作: 変更内容を確かめ、上げてよければ、${approvalCommand(tag)}`,
-  };
 }
 
 function rejectedNotice(
@@ -135,6 +128,7 @@ function rejectedNotice(
  * - 重複の防止: 未完了の更新のPRがあるあいだは何もしない。同じ版のブランチにPRがあれば作らない。
  * - 照合: 取得したバイト列の大きさとgit blobのIDが、GitHubのAPIの値と違えば、PRを作らずnoticeに残す。
  * - 大きさ: 今の大きさから2割を超えて増減した版は、`approvedTag`の指名が無ければ、PRを作らずnoticeに残す。
+ * - メジャー版: 変わる版も、他の確認を通ればPRにする。題名と本文で人の確認を求める。
  * 失敗はすべて例外にして、ジョブを失敗させる(スケジュールの失敗の通知に流れる)。次の週に再び試す。
  */
 export async function runBump(
@@ -145,15 +139,8 @@ export async function runBump(
   const releases = parseReleases(await deps.listReleases());
   const decision = decideBump(pin.version, releases, deps.now(), approvedTag);
 
-  let heldTag: string | null = null;
-  if (decision.held !== null) {
-    heldTag = decision.held.tag;
-    await deps.addNotice(heldMajorNotice(heldTag));
-    deps.log.warn("a new major draw.io release is held", { tag: heldTag });
-  }
   const target = decision.target;
   if (target === null) {
-    if (heldTag !== null) return { outcome: "held", tag: heldTag };
     return { outcome: decision.waiting ? "waiting" : "up_to_date" };
   }
 
@@ -235,8 +222,8 @@ export async function runBump(
   ];
   const pr = await deps.publish({
     branch,
-    title: buildBumpTitle(toVersion),
-    message: buildBumpCommitMessage(pin.version, toVersion),
+    title: buildBumpTitle(pin.version, target.version),
+    message: buildBumpCommitMessage(pin.version, target.version),
     body: buildBumpPrBody({
       from: pin.version,
       to: target,

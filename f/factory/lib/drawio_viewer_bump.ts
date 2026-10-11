@@ -2,9 +2,10 @@
 // どの関数も、GitHubへの書き込みやDBに触れない。呼び出し側(`drawio_viewer_bump.ts`)が、
 // 取得した値をここへ渡し、返ってきた内容をPRにする。
 //
-// 上げてよいのは、公式のjgraph/drawioのリリースのうち、公開から`MIN_RELEASE_AGE_DAYS`日以上たち、
-// 今の固定と同じメジャー版のものだけである。欠陥のある版を公開直後に取り込まないための待ち時間と、
-// 大きな変更を人の確認なしに取り込まないための制限である。
+// 上げてよいのは、公式のjgraph/drawioのリリースのうち、公開から`MIN_RELEASE_AGE_DAYS`日以上たったものだけである。
+// 欠陥のある版を公開直後に取り込まないための待ち時間である。
+// メジャー版が変わる版も、同じ待ち時間と照合を満たせばPRにする。PRの題名と本文で、人に確認を求める。
+// ビューアの大きさが急に変わる版は、人の指名が無い限り上げない。
 // ここで作る固定のファイルは、`console/scripts/drawio-viewer.ts`の検査を通る形に限る。
 
 import { createHash } from "node:crypto";
@@ -113,8 +114,6 @@ export function isOldEnough(release: DrawioRelease, now: Date): boolean {
 export type BumpDecision = {
   /** 上げる版。上げるものが無ければ`null`。 */
   readonly target: DrawioRelease | null;
-  /** 公開から十分たっているが、メジャー版が違うので上げない最新の版。無ければ`null`。 */
-  readonly held: DrawioRelease | null;
   /** 今より新しいが、公開から日が浅く待っている版があるか。 */
   readonly waiting: boolean;
 };
@@ -131,8 +130,8 @@ function newest(releases: readonly DrawioRelease[]): DrawioRelease | null {
 
 /**
  * 上げる版を決める。
- * 今より新しく、公開から十分たった版のうち、今と同じメジャー版の最新を選ぶ。
- * メジャー版が上がった版は`held`に挙げ、`approvedTag`で人が指名した版だけを選ぶ。
+ * 今より新しく、公開から十分たった版のうち、メジャー版を問わず最新を選ぶ。
+ * `approvedTag`で人が指名した版が、その条件を満たすなら、最新でなくてもその版を選ぶ。
  * 指名した版にも、公開からの待ち時間は課す。
  * `currentVersion`が`32.4.1`の形でなければ、固定が壊れているので例外を投げる。
  */
@@ -159,19 +158,20 @@ export function decideBump(
       ? undefined
       : eligible.find((release) => release.tag === approvedTag);
   if (approved !== undefined) {
-    return { target: approved, held: null, waiting };
+    return { target: approved, waiting };
   }
-  const sameMajor = eligible.filter(
-    (release) => release.version.major === current.major,
-  );
-  const otherMajor = eligible.filter(
-    (release) => release.version.major !== current.major,
-  );
-  return {
-    target: newest(sameMajor),
-    held: newest(otherMajor),
-    waiting,
-  };
+  return { target: newest(eligible), waiting };
+}
+
+/** 固定の版`currentVersion`から`to`への更新が、メジャー版の変更か。 */
+export function isMajorBump(currentVersion: string, to: Version): boolean {
+  const current = parseReleaseVersion(currentVersion);
+  if (current === null) {
+    throw new Error(
+      `the pinned version is not a plain version: ${currentVersion}`,
+    );
+  }
+  return current.major !== to.major;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,12 +335,22 @@ export function bumpBranchName(tag: string): string {
   return `${BRANCH_PREFIX}${formatVersion(version)}`;
 }
 
-export function buildBumpTitle(version: string): string {
-  return `chore: draw.ioのビューアを${version}へ上げる`;
+const MAJOR_TITLE_PREFIX = "[major] ";
+
+/** PRの題名。メジャー版の更新は、一覧で目に付くよう`[major]`を先頭に付ける。 */
+export function buildBumpTitle(from: string, to: Version): string {
+  const subject = `chore: draw.ioのビューアを${formatVersion(to)}へ上げる`;
+  return isMajorBump(from, to) ? `${MAJOR_TITLE_PREFIX}${subject}` : subject;
 }
 
-export function buildBumpCommitMessage(from: string, to: string): string {
-  return `${buildBumpTitle(to)}\n\n固定を${from}から${to}へ自動で更新した。`;
+/** commitのメッセージ。題名の接頭辞は付けず、conventional commitsの形にする。 */
+export function buildBumpCommitMessage(from: string, to: Version): string {
+  const version = formatVersion(to);
+  return `chore: draw.ioのビューアを${version}へ上げる\n\n固定を${from}から${version}へ自動で更新した。`;
+}
+
+function majorWarning(from: string, to: string): string {
+  return `メジャー版の更新(${from} → ${to})。破壊的変更の可能性があるため、リリースノートとCSP / sandbox / drawio_frame_isolationの確認を人が行う`;
 }
 
 export type BumpPrBodyInput = {
@@ -375,7 +385,11 @@ export function buildBumpPrBody(input: BumpPrBodyInput): string {
       ? ["- 大きさの変化の制限は、人の指名で外しています。"]
       : []),
   ];
+  const warning = isMajorBump(input.from, input.to.version)
+    ? [majorWarning(input.from, to), ""]
+    : [];
   return [
+    ...warning,
     "## 概要",
     "",
     `Consoleが同梱するdraw.ioのビューアの固定を、${input.from}から${to}へ上げます。`,

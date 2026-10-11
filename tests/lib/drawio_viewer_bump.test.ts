@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parseDrawioViewerPin } from "../../console/scripts/drawio-viewer.ts";
 import {
   buildBumpPrBody,
+  buildBumpTitle,
   bumpBranchName,
   bumpBranchPrefix,
   compareVersions,
@@ -13,6 +14,7 @@ import {
   type FetchLike,
   formatVersion,
   gitBlobSha1,
+  isMajorBump,
   isOldEnough,
   MAX_VIEWER_BYTES,
   MIN_RELEASE_AGE_DAYS,
@@ -160,7 +162,7 @@ describe("decideBump", () => {
 
   test("does nothing when no release is newer", () => {
     const decision = decideBump(current, [release("v32.4.1", 30)], NOW, null);
-    expect(decision).toEqual({ target: null, held: null, waiting: false });
+    expect(decision).toEqual({ target: null, waiting: false });
   });
 
   test("ignores releases older than the current version", () => {
@@ -170,7 +172,7 @@ describe("decideBump", () => {
 
   test("waits when every newer release is too young", () => {
     const decision = decideBump(current, [release("v32.5.0", 3)], NOW, null);
-    expect(decision).toEqual({ target: null, held: null, waiting: true });
+    expect(decision).toEqual({ target: null, waiting: true });
   });
 
   test("picks the newest release that is old enough", () => {
@@ -193,49 +195,39 @@ describe("decideBump", () => {
     expect(decision.waiting).toBe(true);
   });
 
-  test("holds a newer major and still bumps within the current major", () => {
+  test("takes a newer major release that is old enough", () => {
+    const decision = decideBump(current, [release("v33.0.0", 20)], NOW, null);
+    expect(decision.target?.tag).toBe("v33.0.0");
+  });
+
+  test("picks the newest release across majors", () => {
     const decision = decideBump(
       current,
-      [release("v33.0.0", 20), release("v32.6.0", 20)],
+      [release("v33.0.0", 20), release("v32.6.0", 25)],
+      NOW,
+      null,
+    );
+    expect(decision.target?.tag).toBe("v33.0.0");
+  });
+
+  test("skips a newer major release that is too young", () => {
+    const decision = decideBump(
+      current,
+      [release("v33.0.0", 2), release("v32.6.0", 25)],
       NOW,
       null,
     );
     expect(decision.target?.tag).toBe("v32.6.0");
   });
 
-  test("names the held major release", () => {
+  test("takes the approved release even when a newer one exists", () => {
     const decision = decideBump(
       current,
-      [release("v33.0.0", 20), release("v32.6.0", 20)],
+      [release("v33.0.0", 20), release("v32.6.0", 25)],
       NOW,
-      null,
+      "v32.6.0",
     );
-    expect(decision.held?.tag).toBe("v33.0.0");
-  });
-
-  test("bumps nothing when only a newer major is old enough", () => {
-    const decision = decideBump(current, [release("v33.0.0", 20)], NOW, null);
-    expect(decision.target).toBeNull();
-  });
-
-  test("takes an approved major release", () => {
-    const decision = decideBump(
-      current,
-      [release("v33.0.0", 20)],
-      NOW,
-      "v33.0.0",
-    );
-    expect(decision.target?.tag).toBe("v33.0.0");
-  });
-
-  test("does not hold anything once the major release is approved", () => {
-    const decision = decideBump(
-      current,
-      [release("v33.0.0", 20)],
-      NOW,
-      "v33.0.0",
-    );
-    expect(decision.held).toBeNull();
+    expect(decision.target?.tag).toBe("v32.6.0");
   });
 
   test("still refuses an approved release that is too young", () => {
@@ -260,6 +252,24 @@ describe("decideBump", () => {
 
   test("throws when the current version is not a plain version", () => {
     expect(() => decideBump("latest", [], NOW, null)).toThrow();
+  });
+});
+
+describe("isMajorBump", () => {
+  test("is true when the major version changes", () => {
+    expect(isMajorBump("32.4.1", { major: 33, minor: 0, patch: 0 })).toBe(true);
+  });
+
+  test("is false within the same major version", () => {
+    expect(isMajorBump("32.4.1", { major: 32, minor: 5, patch: 0 })).toBe(
+      false,
+    );
+  });
+
+  test("throws when the current version is not a plain version", () => {
+    expect(() =>
+      isMajorBump("latest", { major: 1, minor: 0, patch: 0 }),
+    ).toThrow();
   });
 });
 
@@ -404,6 +414,10 @@ describe("buildBumpPrBody", () => {
     expect(body).toContain(NEW_SHA);
   });
 
+  test("starts with the template heading for a same-major bump", () => {
+    expect(body.startsWith("## 概要")).toBe(true);
+  });
+
   test("links the upstream release", () => {
     expect(body).toContain(
       "https://github.com/jgraph/drawio/releases/tag/v32.5.0",
@@ -466,5 +480,43 @@ describe("downloadViewer", () => {
 describe("formatVersion", () => {
   test("joins the three numbers", () => {
     expect(formatVersion({ major: 32, minor: 4, patch: 1 })).toBe("32.4.1");
+  });
+});
+
+describe("major bump pull request", () => {
+  const majorBody = buildBumpPrBody({
+    from: "32.4.1",
+    to: release("v33.0.0", 20),
+    commit: COMMIT,
+    sha256: NEW_SHA,
+    oldSize: 4_360_162,
+    newSize: 4_400_000,
+    now: NOW,
+    sizeApproved: false,
+  });
+
+  test("opens the body with the major version warning", () => {
+    expect(majorBody.split("\n")[0]).toBe(
+      "メジャー版の更新(32.4.1 → 33.0.0)。破壊的変更の可能性があるため、リリースノートとCSP / sandbox / drawio_frame_isolationの確認を人が行う",
+    );
+  });
+
+  test("keeps the template headings after the warning", () => {
+    const headings = majorBody
+      .split("\n")
+      .filter((line) => line.startsWith("## "));
+    expect(headings[0]).toBe("## 概要");
+  });
+
+  test("prefixes the title with [major]", () => {
+    expect(buildBumpTitle("32.4.1", { major: 33, minor: 0, patch: 0 })).toBe(
+      "[major] chore: draw.ioのビューアを33.0.0へ上げる",
+    );
+  });
+
+  test("leaves the title plain within the same major", () => {
+    expect(buildBumpTitle("32.4.1", { major: 32, minor: 5, patch: 0 })).toBe(
+      "chore: draw.ioのビューアを32.5.0へ上げる",
+    );
   });
 });

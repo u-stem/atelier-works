@@ -193,40 +193,69 @@ describe("runBump avoiding duplicates", () => {
   });
 });
 
-describe("runBump held major releases", () => {
-  const releases = async () => [release("v33.0.0", 20), release("v32.5.0", 20)];
+describe("runBump major releases", () => {
+  const major = async () => [release("v33.0.0", 20)];
 
-  test("still bumps within the current major", async () => {
-    const { deps } = harness({ listReleases: releases });
+  test("opens a pull request for a newer major release", async () => {
+    const { deps } = harness({ listReleases: major });
     expect((await runBump(deps, null)).outcome).toBe("opened");
   });
 
-  test("records a notice for the held major release", async () => {
-    const { deps, notices } = harness({ listReleases: releases });
+  test("prefixes the title with [major]", async () => {
+    const { deps, published } = harness({ listReleases: major });
     await runBump(deps, null);
-    expect(notices[0]?.kind).toBe("drawio_viewer_bump_held");
+    expect(published[0]?.title).toBe(
+      "[major] chore: draw.ioのビューアを33.0.0へ上げる",
+    );
   });
 
-  test("names the held release and the way to approve it", async () => {
-    const { deps, notices } = harness({ listReleases: releases });
+  test("opens the body with the warning for a person", async () => {
+    const { deps, published } = harness({ listReleases: major });
     await runBump(deps, null);
-    expect(notices[0]?.message).toContain("v33.0.0");
+    expect(published[0]?.body.split("\n")[0]).toBe(
+      "メジャー版の更新(32.4.1 → 33.0.0)。破壊的変更の可能性があるため、リリースノートとCSP / sandbox / drawio_frame_isolationの確認を人が行う",
+    );
   });
 
-  test("records the notice even when nothing else can be bumped", async () => {
-    const { deps, notices } = harness({
-      listReleases: async () => [release("v33.0.0", 20)],
+  test("records no notice for a major release", async () => {
+    const { deps, notices } = harness({ listReleases: major });
+    await runBump(deps, null);
+    expect(notices).toEqual([]);
+  });
+
+  test("keeps the commit message free of the prefix", async () => {
+    const { deps, published } = harness({ listReleases: major });
+    await runBump(deps, null);
+    expect(published[0]?.message.startsWith("chore: ")).toBe(true);
+  });
+
+  test("leaves the title plain for a same-major release", async () => {
+    const { deps, published } = harness();
+    await runBump(deps, null);
+    expect(published[0]?.title).toBe(
+      "chore: draw.ioのビューアを32.5.0へ上げる",
+    );
+  });
+
+  test("does not propose a major release that is too young", async () => {
+    const { deps } = harness({
+      listReleases: async () => [release("v33.0.0", 3)],
+    });
+    expect((await runBump(deps, null)).outcome).toBe("waiting");
+  });
+
+  test("still rejects a major release whose size jumps", async () => {
+    const bytes = new TextEncoder().encode("e".repeat(2000));
+    const { deps, published } = harness({
+      listReleases: major,
+      download: async () => bytes,
+      getViewerMeta: async (commit) =>
+        commit === OLD_COMMIT
+          ? { sha: gitBlobSha1(OLD_BYTES), size: OLD_BYTES.length }
+          : { sha: gitBlobSha1(bytes), size: bytes.length },
     });
     const result = await runBump(deps, null);
-    expect([result.outcome, notices.length]).toEqual(["held", 1]);
-  });
-
-  test("bumps to the approved major release without a notice", async () => {
-    const { deps, notices } = harness({
-      listReleases: async () => [release("v33.0.0", 20)],
-    });
-    await runBump(deps, "v33.0.0");
-    expect(notices).toEqual([]);
+    expect([result.outcome, published.length]).toEqual(["rejected", 0]);
   });
 });
 
