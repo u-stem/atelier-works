@@ -1,23 +1,36 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  aclLeftoverArgv,
   acquireSlot,
   CHECK_ENV_KEYS,
   type CheckDirs,
   type CheckIdentity,
   type CheckSandboxDeps,
+  CheckSlotInUseError,
+  type CheckSlotNotice,
   CheckSlotsBusyError,
   checkEnv,
   chownToArgv,
   createCheckSandbox,
   DEFAULT_CHECK_UID,
   DEFAULT_POOL_SIZE,
+  defaultSandboxDeps,
   dropWriteBitsArgv,
   formatSlotRecord,
   gatherArgv,
   type IpcEntry,
   ipcrmArgv,
-  isTaggedProcess,
   kernelWarningText,
+  killAllArgv,
   leftoverArgv,
   newCheckIdentity,
   openDirsArgv,
@@ -29,11 +42,12 @@ import {
   parseSysvIpc,
   purgeDirsArgv,
   purgeFilesArgv,
+  REAP_MAX_WAIT_MS,
   type ReapDeps,
-  reapCheckProcesses,
   reapUidProcesses,
   reclaimArgv,
   remainingOfUidArgv,
+  removeAclArgv,
   removeTreeArgv,
   resolveCheckPool,
   restoreCheckOwnership,
@@ -44,9 +58,12 @@ import {
   type SlotRecord,
   type SlotSkip,
   setprivArgv,
+  slotRecordUnreadableNoticeText,
   slotSkipNoticeText,
+  UnreadableSlotRecordError,
   WINDMILL_TMP_DIR,
 } from "../../f/factory/lib/check_sandbox.ts";
+import { logger } from "../../f/factory/lib/log.ts";
 import type {
   CommandResult,
   CommandRunOptions,
@@ -545,6 +562,48 @@ describe("removeTreeArgv", () => {
   });
 });
 
+describe("aclLeftoverArgv", () => {
+  test("lists the entries with extended ACLs without following symlinks", () => {
+    expect(aclLeftoverArgv(DIRS.worktreeDir)).toEqual([
+      "/usr/bin/getfacl",
+      "-R",
+      "-P",
+      "-s",
+      "-p",
+      "--",
+      DIRS.worktreeDir,
+    ]);
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => aclLeftoverArgv("/workspaces")).toThrow();
+  });
+});
+
+describe("removeAclArgv", () => {
+  test("removes the ACLs of every entry but symlinks, from the parent directory", () => {
+    expect(removeAclArgv(DIRS.worktreeDir)).toEqual([
+      "/usr/bin/find",
+      "-P",
+      DIRS.worktreeDir,
+      "-xdev",
+      "!",
+      "-type",
+      "l",
+      "-execdir",
+      "/usr/bin/setfacl",
+      "-b",
+      "-k",
+      "{}",
+      "+",
+    ]);
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => removeAclArgv("/workspaces")).toThrow();
+  });
+});
+
 describe("shared temporary directories", () => {
   test("cover /tmp, /var/tmp, /dev/shm and the POSIX message queues", () => {
     expect(SHARED_TMP_DIRS).toEqual([
@@ -662,6 +721,86 @@ describe("slot records", () => {
   });
 });
 
+describe("the slot record files", () => {
+  const tempDirs: string[] = [];
+  const lockDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-check-slots-"));
+    tempDirs.push(dir);
+    return join(dir, "slots");
+  };
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("round-trips a record through the file", async () => {
+    const records = defaultSandboxDeps(lockDir()).slotRecords;
+    await records.write(0, DIRS);
+    expect(await records.read(0)).toEqual(DIRS);
+  });
+
+  test("reading a record that does not parse throws UnreadableSlotRecordError", async () => {
+    const dir = lockDir();
+    const records = defaultSandboxDeps(dir).slotRecords;
+    await records.write(0, DIRS);
+    writeFileSync(join(dir, "slot-0.state"), "{");
+    await expect(records.read(0)).rejects.toBeInstanceOf(
+      UnreadableSlotRecordError,
+    );
+  });
+
+  test("setting a record aside leaves no record behind", async () => {
+    const dir = lockDir();
+    const records = defaultSandboxDeps(dir).slotRecords;
+    await records.write(0, DIRS);
+    writeFileSync(join(dir, "slot-0.state"), "{");
+    await records.setAside(0);
+    expect(await records.read(0)).toBeNull();
+  });
+
+  test("setting a record aside keeps its text at the returned path", async () => {
+    const dir = lockDir();
+    const records = defaultSandboxDeps(dir).slotRecords;
+    await records.write(0, DIRS);
+    writeFileSync(join(dir, "slot-0.state"), "{");
+    const path = await records.setAside(0);
+    expect(readFileSync(path, "utf8")).toBe("{");
+  });
+
+  test("setting a record aside twice keeps both texts", async () => {
+    const dir = lockDir();
+    const records = defaultSandboxDeps(dir).slotRecords;
+    await records.write(0, DIRS);
+    writeFileSync(join(dir, "slot-0.state"), "first");
+    const first = await records.setAside(0);
+    writeFileSync(join(dir, "slot-0.state"), "second");
+    await records.setAside(0);
+    expect(existsSync(first)).toBe(true);
+  });
+});
+
+describe("slotRecordUnreadableNoticeText", () => {
+  const text = slotRecordUnreadableNoticeText({
+    index: 2,
+    uid: 10003,
+    path: "/var/lib/factory/check-slots/slot-2.state.corrupt-1",
+  });
+
+  test("names the slot and its uid", () => {
+    expect(text).toContain("factory-check-2(uid 10003)");
+  });
+
+  test("names where the record was moved", () => {
+    expect(text).toContain("slot-2.state.corrupt-1");
+  });
+
+  test("tells the operator to check the worktree the record named", () => {
+    expect(text).toContain("rootに戻");
+  });
+});
+
 describe("slotSkipNoticeText", () => {
   const skip: SlotSkip = { index: 2, uid: 10003, reason: "pid 77 survived" };
 
@@ -704,147 +843,125 @@ describe("parseProcStatus", () => {
   });
 });
 
-describe("isTaggedProcess", () => {
-  const parsed = (text: string) => {
-    const result = parseProcStatus(text);
-    if (result === null) throw new Error("fixture must parse");
-    return result;
-  };
-
-  test("accepts a live process with the check uid and the tag gid", () => {
-    expect(isTaggedProcess(parsed(status({})), IDENTITY)).toBe(true);
-  });
-
-  test("rejects a process of another uid even with the tag gid", () => {
-    expect(isTaggedProcess(parsed(status({ uid: 0 })), IDENTITY)).toBe(false);
-  });
-
-  test("rejects a check-uid process of another run", () => {
-    expect(
-      isTaggedProcess(parsed(status({ groups: [999999] })), IDENTITY),
-    ).toBe(false);
-  });
-
-  test("rejects a zombie", () => {
-    expect(
-      isTaggedProcess(parsed(status({ state: "Z (zombie)" })), IDENTITY),
-    ).toBe(false);
-  });
-
-  test("accepts a process whose group list holds the tag among others", () => {
-    expect(
-      isTaggedProcess(parsed(status({ groups: [1, 424242, 3] })), IDENTITY),
-    ).toBe(true);
-  });
-});
-
-/** 時間とともに消えるプロセス表の偽物。`killedBy`の回数だけ殺されると消える。 */
+/**
+ * 時間とともに消えるプロセス表の偽物。`killAll`は、そのuidの生きたプロセスをすべて消す。
+ * `sleep`の分だけ時計を進める。
+ */
 function fakeReapDeps(table: Record<number, string>) {
   const live = new Map<number, string>(
     Object.entries(table).map(([pid, text]) => [Number(pid), text]),
   );
   const killed: number[] = [];
+  const signalled: number[] = [];
+  let clock = 0;
   const deps: ReapDeps = {
     listPids: async () => [...live.keys()],
     readStatus: async (pid) => live.get(pid) ?? null,
-    kill: (pid) => {
-      killed.push(pid);
-      live.delete(pid);
+    killAll: async (uid) => {
+      signalled.push(uid);
+      for (const [pid, text] of live) {
+        if (parseProcStatus(text)?.uid !== uid) continue;
+        killed.push(pid);
+        live.delete(pid);
+      }
     },
-    sleep: async () => {},
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
   };
-  return { deps, killed, live };
+  return { deps, killed, signalled, live, elapsed: () => clock };
 }
 
-describe("reapCheckProcesses", () => {
-  test("kills a process carrying the run's tag", async () => {
+describe("killAllArgv", () => {
+  test("sends SIGKILL to every process of the uid as that uid", () => {
+    expect(killAllArgv(10001)).toEqual([
+      SETPRIV_PATH,
+      "--reuid=10001",
+      "--regid=10001",
+      "--clear-groups",
+      "--bounding-set=-all",
+      "--inh-caps=-all",
+      "--no-new-privs",
+      "--",
+      "/usr/bin/kill",
+      "-9",
+      "--",
+      "-1",
+    ]);
+  });
+});
+
+describe("reapUidProcesses", () => {
+  test("signals every process of the slot uid at once", async () => {
+    const fake = fakeReapDeps({ 50: status({}), 51: status({ groups: [] }) });
+    await reapUidProcesses(IDENTITY.uid, fake.deps);
+    expect(fake.killed).toEqual([50, 51]);
+  });
+
+  test("signals as the slot uid", async () => {
     const fake = fakeReapDeps({ 50: status({}) });
-    await reapCheckProcesses(IDENTITY, fake.deps);
-    expect(fake.killed).toEqual([50]);
+    await reapUidProcesses(IDENTITY.uid, fake.deps);
+    expect(fake.signalled).toEqual([IDENTITY.uid]);
   });
 
-  test("leaves a check-uid process of another run alone", async () => {
-    const fake = fakeReapDeps({ 50: status({ groups: [999999] }) });
-    await reapCheckProcesses(IDENTITY, fake.deps);
+  test("leaves a process of another uid alone", async () => {
+    const fake = fakeReapDeps({ 50: status({ uid: 10002 }) });
+    await reapUidProcesses(IDENTITY.uid, fake.deps);
     expect(fake.killed).toEqual([]);
   });
 
-  test("leaves a root process alone", async () => {
-    const fake = fakeReapDeps({ 1: status({ uid: 0, groups: [] }) });
-    await reapCheckProcesses(IDENTITY, fake.deps);
-    expect(fake.killed).toEqual([]);
+  test("sends nothing when no process of the uid is left", async () => {
+    const fake = fakeReapDeps({});
+    await reapUidProcesses(IDENTITY.uid, fake.deps);
+    expect(fake.signalled).toEqual([]);
+  });
+
+  test("does not count a zombie", async () => {
+    const fake = fakeReapDeps({ 50: status({ state: "Z (zombie)" }) });
+    await reapUidProcesses(IDENTITY.uid, fake.deps);
+    expect(fake.signalled).toEqual([]);
   });
 
   test("returns no remaining pid once everything is gone", async () => {
     const fake = fakeReapDeps({ 50: status({}), 51: status({}) });
-    expect(await reapCheckProcesses(IDENTITY, fake.deps)).toEqual([]);
+    expect(await reapUidProcesses(IDENTITY.uid, fake.deps)).toEqual([]);
   });
 
-  test("kills a descendant that appears after the first sweep", async () => {
+  test("keeps signalling while the processes fork new ones", async () => {
     const fake = fakeReapDeps({ 50: status({}) });
-    let sweeps = 0;
+    let forks = 0;
     const deps: ReapDeps = {
       ...fake.deps,
-      sleep: async () => {
-        sweeps += 1;
-        if (sweeps === 1) fake.live.set(60, status({}));
+      killAll: async (uid) => {
+        await fake.deps.killAll(uid);
+        // 止める間に子を作るプロセス(fork爆弾)を、20回まで真似る。
+        if (forks < 20) {
+          forks += 1;
+          fake.live.set(100 + forks, status({}));
+        }
       },
     };
-    await reapCheckProcesses(IDENTITY, deps);
-    expect(fake.killed).toEqual([50, 60]);
+    expect(await reapUidProcesses(IDENTITY.uid, deps)).toEqual([]);
   });
 
-  test("reports a process that survives every sweep", async () => {
+  test("reports a process that survives until the deadline", async () => {
     const fake = fakeReapDeps({ 50: status({}) });
-    const deps: ReapDeps = { ...fake.deps, kill: () => {} };
-    expect(await reapCheckProcesses(IDENTITY, deps)).toEqual([50]);
+    const deps: ReapDeps = { ...fake.deps, killAll: async () => {} };
+    expect(await reapUidProcesses(IDENTITY.uid, deps)).toEqual([50]);
   });
 
-  test("does not kill a pid whose status no longer matches at kill time", async () => {
+  test("gives up on a surviving process only after the deadline", async () => {
     const fake = fakeReapDeps({ 50: status({}) });
-    let reads = 0;
-    const deps: ReapDeps = {
-      ...fake.deps,
-      // 一覧のときは対象に見え、殺す直前の確認では別のプロセスに変わっている。
-      readStatus: async () => {
-        reads += 1;
-        return reads === 1 ? status({}) : status({ uid: 0, groups: [] });
-      },
-    };
-    await reapCheckProcesses(IDENTITY, deps);
-    expect(fake.killed).toEqual([]);
+    const deps: ReapDeps = { ...fake.deps, killAll: async () => {} };
+    await reapUidProcesses(IDENTITY.uid, deps);
+    expect(fake.elapsed()).toBeGreaterThanOrEqual(REAP_MAX_WAIT_MS);
   });
 
   test("ignores a pid that vanished while listing", async () => {
     const fake = fakeReapDeps({});
     const deps: ReapDeps = { ...fake.deps, listPids: async () => [77] };
-    expect(await reapCheckProcesses(IDENTITY, deps)).toEqual([]);
-  });
-});
-
-describe("reapUidProcesses", () => {
-  test("kills a process of the slot uid whatever its tag", async () => {
-    const fake = fakeReapDeps({ 50: status({ groups: [] }) });
-    await reapUidProcesses(IDENTITY.uid, fake.deps);
-    expect(fake.killed).toEqual([50]);
-  });
-
-  test("leaves a process of another uid alone", async () => {
-    const fake = fakeReapDeps({ 50: status({ uid: 10002, groups: [] }) });
-    await reapUidProcesses(IDENTITY.uid, fake.deps);
-    expect(fake.killed).toEqual([]);
-  });
-
-  test("leaves a zombie alone", async () => {
-    const fake = fakeReapDeps({ 50: status({ state: "Z (zombie)" }) });
-    await reapUidProcesses(IDENTITY.uid, fake.deps);
-    expect(fake.killed).toEqual([]);
-  });
-
-  test("reports a process that survives every sweep", async () => {
-    const fake = fakeReapDeps({ 50: status({}) });
-    const deps: ReapDeps = { ...fake.deps, kill: () => {} };
-    expect(await reapUidProcesses(IDENTITY.uid, deps)).toEqual([50]);
+    expect(await reapUidProcesses(IDENTITY.uid, deps)).toEqual([]);
   });
 });
 
@@ -1002,6 +1119,9 @@ function fakeSandboxDeps(opts?: {
   );
   let ipc = [...(opts?.ipc ?? [])];
   const killed: number[] = [];
+  const corrupt = new Set<number>(opts?.corruptRecords ?? []);
+  const notices: CheckSlotNotice[] = [];
+  let reapClock = 0;
   const deps: CheckSandboxDeps = {
     run: async (argv, options) => {
       calls.push({ argv, options });
@@ -1022,11 +1142,18 @@ function fakeSandboxDeps(opts?: {
         const uid = stuck.get(pid);
         return uid === undefined ? null : status({ uid, groups: [1_000_000] });
       },
-      kill: (pid) => {
-        killed.push(pid);
-        live.delete(pid);
+      killAll: async (uid) => {
+        events.push(`kill-all ${String(uid)}`);
+        for (const [pid, text] of live) {
+          if (parseProcStatus(text)?.uid !== uid) continue;
+          killed.push(pid);
+          live.delete(pid);
+        }
       },
-      sleep: async () => {},
+      sleep: async (ms) => {
+        reapClock += ms;
+      },
+      now: () => reapClock,
     },
     slots: {
       ...slots.deps,
@@ -1045,9 +1172,7 @@ function fakeSandboxDeps(opts?: {
     },
     slotRecords: {
       read: async (index) => {
-        if ((opts?.corruptRecords ?? []).includes(index)) {
-          throw new Error(`unreadable record ${String(index)}`);
-        }
+        if (corrupt.has(index)) throw new UnreadableSlotRecordError(index);
         return records.get(index) ?? null;
       },
       write: async (index, record) => {
@@ -1057,6 +1182,12 @@ function fakeSandboxDeps(opts?: {
       clear: async (index) => {
         events.push(`record-clear ${String(index)}`);
         records.delete(index);
+      },
+      setAside: async (index) => {
+        events.push(`record-set-aside ${String(index)}`);
+        corrupt.delete(index);
+        records.delete(index);
+        return `/var/lib/factory/check-slots/slot-${String(index)}.state.corrupt-1`;
       },
     },
     listIpc: async () => ipc,
@@ -1069,7 +1200,10 @@ function fakeSandboxDeps(opts?: {
     pathKind: async (path) => opts?.pathKinds?.[path] ?? "directory",
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
   };
-  return { deps, events, calls, killed, records };
+  const onNotice = async (notice: CheckSlotNotice): Promise<void> => {
+    notices.push(notice);
+  };
+  return { deps, events, calls, killed, records, notices, onNotice };
 }
 
 const POOL = [20000, 20001];
@@ -1080,11 +1214,11 @@ const OLD: SlotRecord = {
   homeDir: "/tmp/factory-check-home-old",
 };
 
-/** 止めても消えない、枠0の実行の目印を持つプロセスだけがいる`ReapDeps`の差し替え。 */
-const STUCK_TAGGED: Partial<ReapDeps> = {
+/** 止めても消えない、枠0のuidのプロセスだけがいる`ReapDeps`の差し替え。 */
+const STUCK_PROCESS: Partial<ReapDeps> = {
   listPids: async () => [50],
   readStatus: async () => status({ uid: 20000, groups: [1_000_000] }),
-  kill: () => {},
+  killAll: async () => {},
 };
 
 const ran = (argv: readonly string[]): string => `run ${argv.join(" ")}`;
@@ -1109,7 +1243,18 @@ function takeBackSequence(identity: CheckIdentity, dir: string): string[][] {
     dropWriteBitsArgv(identity, dir),
     reclaimArgv(dir),
     leftoverArgv(dir),
+    aclLeftoverArgv(dir),
   ];
+}
+
+/** `dir`のACLを探す1回目だけ見つかったと答え、2回目からは無いと答える`respond`。 */
+function aclFoundOnce(dir: string) {
+  let looks = 0;
+  return (argv: readonly string[]): CommandResult | undefined => {
+    if (!matches(aclLeftoverArgv(dir))(argv)) return undefined;
+    looks += 1;
+    return looks === 1 ? ok(`# file: ${dir}/shared\n`) : ok("");
+  };
 }
 
 function sandboxOf(
@@ -1117,7 +1262,8 @@ function sandboxOf(
   extra?: {
     readonly maxWaitMs?: number;
     readonly pollMs?: number;
-    readonly onSlotSkipped?: (skip: SlotSkip) => Promise<void>;
+    readonly onNotice?: (notice: CheckSlotNotice) => Promise<void>;
+    readonly log?: ReturnType<typeof logger>;
   },
 ) {
   return createCheckSandbox({ uids: POOL, deps, random: () => 0, ...extra });
@@ -1283,7 +1429,7 @@ describe("createCheckSandbox", () => {
   test("prepare takes back the worktree a dead run recorded in the slot", async () => {
     const fake = fakeSandboxDeps({ records: { 0: OLD } });
     await sandboxOf(fake.deps).prepare(DIRS);
-    expect(argvOf(fake.calls).slice(0, 5)).toEqual(
+    expect(argvOf(fake.calls).slice(0, 6)).toEqual(
       takeBackSequence(SLOT0, OLD.worktreeDir),
     );
   });
@@ -1291,7 +1437,7 @@ describe("createCheckSandbox", () => {
   test("prepare removes the home a dead run recorded in the slot", async () => {
     const fake = fakeSandboxDeps({ records: { 0: OLD } });
     await sandboxOf(fake.deps).prepare(DIRS);
-    expect(fake.calls[5]?.argv).toEqual(removeTreeArgv(OLD.homeDir));
+    expect(fake.calls[6]?.argv).toEqual(removeTreeArgv(OLD.homeDir));
   });
 
   test("prepare replaces the stale record with its own", async () => {
@@ -1378,13 +1524,40 @@ describe("createCheckSandbox", () => {
 
   test("prepare reports a skipped slot", async () => {
     const fake = fakeSandboxDeps({ stuck: { 50: 20000 } });
-    const skips: SlotSkip[] = [];
-    await sandboxOf(fake.deps, {
-      onSlotSkipped: async (skip) => {
-        skips.push(skip);
+    await sandboxOf(fake.deps, { onNotice: fake.onNotice }).prepare(DIRS);
+    expect(fake.notices.map((notice) => notice.kind)).toEqual([
+      "check_slot_skipped",
+    ]);
+  });
+
+  test("prepare names the skipped slot in its notice", async () => {
+    const fake = fakeSandboxDeps({ stuck: { 50: 20000 } });
+    await sandboxOf(fake.deps, { onNotice: fake.onNotice }).prepare(DIRS);
+    expect(fake.notices[0]?.message).toContain("factory-check-0(uid 20000)");
+  });
+
+  test("prepare goes on with the next slot when the notice cannot be recorded", async () => {
+    const fake = fakeSandboxDeps({ stuck: { 50: 20000 } });
+    const sandbox = sandboxOf(fake.deps, {
+      onNotice: async () => {
+        throw new Error("db down");
       },
+      log: logger("check_sandbox", { sink: () => {} }),
+    });
+    await sandbox.prepare(DIRS);
+    expect(sandbox.wrap(["true"])).toContain("--reuid=20001");
+  });
+
+  test("prepare logs a notice it could not record", async () => {
+    const fake = fakeSandboxDeps({ stuck: { 50: 20000 } });
+    const lines: string[] = [];
+    await sandboxOf(fake.deps, {
+      onNotice: async () => {
+        throw new Error("db down");
+      },
+      log: logger("check_sandbox", { sink: (line) => lines.push(line) }),
     }).prepare(DIRS);
-    expect(skips.map((skip) => [skip.index, skip.uid])).toEqual([[0, 20000]]);
+    expect(lines.join("\n")).toContain("db down");
   });
 
   test("prepare keeps the record of a skipped slot", async () => {
@@ -1425,11 +1598,54 @@ describe("createCheckSandbox", () => {
     expect(sandbox.wrap(["true"])).toContain("--reuid=20001");
   });
 
-  test("prepare skips a slot whose record cannot be read", async () => {
+  test("prepare sets aside a record that cannot be read", async () => {
+    const fake = fakeSandboxDeps({ corruptRecords: [0] });
+    await sandboxOf(fake.deps).prepare(DIRS);
+    expect(fake.events).toContain("record-set-aside 0");
+  });
+
+  test("prepare keeps using a slot whose unreadable record it set aside", async () => {
     const fake = fakeSandboxDeps({ corruptRecords: [0] });
     const sandbox = sandboxOf(fake.deps);
     await sandbox.prepare(DIRS);
-    expect(sandbox.wrap(["true"])).toContain("--reuid=20001");
+    expect(sandbox.wrap(["true"])).toContain("--reuid=20000");
+  });
+
+  test("prepare still clears the shared directories of a slot whose record it set aside", async () => {
+    const fake = fakeSandboxDeps({ corruptRecords: [0] });
+    await sandboxOf(fake.deps).prepare(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(purgeDirsArgv(20000, "/tmp"));
+  });
+
+  test("prepare reports a record it set aside", async () => {
+    const fake = fakeSandboxDeps({ corruptRecords: [0] });
+    await sandboxOf(fake.deps, { onNotice: fake.onNotice }).prepare(DIRS);
+    expect(fake.notices.map((notice) => notice.kind)).toEqual([
+      "check_slot_record_unreadable",
+    ]);
+  });
+
+  test("prepare names the moved record in its notice", async () => {
+    const fake = fakeSandboxDeps({ corruptRecords: [0] });
+    await sandboxOf(fake.deps, { onNotice: fake.onNotice }).prepare(DIRS);
+    expect(fake.notices[0]?.message).toContain("slot-0.state.corrupt-1");
+  });
+
+  test("prepare refuses a home that a record cannot hold", async () => {
+    const fake = fakeSandboxDeps();
+    await expect(
+      sandboxOf(fake.deps).prepare({ ...DIRS, homeDir: "/tmp" }),
+    ).rejects.toThrow("cannot be recorded");
+  });
+
+  test("prepare takes no slot for a worktree that a record cannot hold", async () => {
+    const fake = fakeSandboxDeps();
+    await sandboxOf(fake.deps)
+      .prepare({ ...DIRS, worktreeDir: "/workspaces/acme/../wt" })
+      .catch(() => {});
+    expect(fake.events.filter((event) => event.startsWith("acquire"))).toEqual(
+      [],
+    );
   });
 
   test("prepare skips a slot whose recorded worktree cannot be taken back", async () => {
@@ -1481,15 +1697,30 @@ describe("createCheckSandbox", () => {
     );
   });
 
-  test("settle passes when no tagged process is left", async () => {
+  test("settle passes when no process of the slot uid is left", async () => {
     const { sandbox } = await prepared(fakeSandboxDeps());
     await expect(sandbox.settle()).resolves.toBeUndefined();
   });
 
-  test("settle fails when a tagged process cannot be stopped", async () => {
+  test("settle stops every process of the slot uid, whatever its groups", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
-    Object.assign(fake.deps.reap, STUCK_TAGGED);
+    // 準備の後に、補助グループを持たない枠のuidのプロセスが残っている。
+    Object.assign(fake.deps.reap, {
+      listPids: async () => (fake.killed.includes(60) ? [] : [60]),
+      readStatus: async () => status({ uid: 20000, groups: [] }),
+      killAll: async () => {
+        fake.killed.push(60);
+      },
+    });
+    await sandbox.settle();
+    expect(fake.killed).toEqual([60]);
+  });
+
+  test("settle fails when a process of the slot uid cannot be stopped", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    Object.assign(fake.deps.reap, STUCK_PROCESS);
     await expect(sandbox.settle()).rejects.toThrow("could not be stopped");
   });
 
@@ -1519,6 +1750,72 @@ describe("createCheckSandbox", () => {
     const { sandbox } = await prepared(fake);
     await sandbox.release(DIRS);
     expect(fake.events.slice(-2)).toEqual(["record-clear 0", "release-slot 0"]);
+  });
+
+  test("release removes no ACL when none is found", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls)).not.toContainEqual(
+      removeAclArgv(DIRS.worktreeDir),
+    );
+  });
+
+  test("release removes the ACLs it finds once the worktree is back with root", async () => {
+    const fake = fakeSandboxDeps({ respond: aclFoundOnce(DIRS.worktreeDir) });
+    const { sandbox, before } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls.slice(before))).toEqual([
+      ...takeBackSequence(SLOT0, DIRS.worktreeDir),
+      removeAclArgv(DIRS.worktreeDir),
+      leftoverArgv(DIRS.worktreeDir),
+      aclLeftoverArgv(DIRS.worktreeDir),
+      removeTreeArgv(DIRS.homeDir),
+    ]);
+  });
+
+  test("release clears the record once the ACLs it found are gone", async () => {
+    const fake = fakeSandboxDeps({ respond: aclFoundOnce(DIRS.worktreeDir) });
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(fake.records.has(0)).toBe(false);
+  });
+
+  test("release fails when ACLs remain after removing them", async () => {
+    const fake = fakeSandboxDeps({
+      respond: (argv) =>
+        matches(aclLeftoverArgv(DIRS.worktreeDir))(argv)
+          ? ok(`# file: ${DIRS.worktreeDir}/shared\n`)
+          : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    await expect(sandbox.release(DIRS)).rejects.toThrow("ACL");
+  });
+
+  test("release keeps the record when ACLs remain", async () => {
+    const fake = fakeSandboxDeps({
+      respond: (argv) =>
+        matches(aclLeftoverArgv(DIRS.worktreeDir))(argv)
+          ? ok(`# file: ${DIRS.worktreeDir}/shared\n`)
+          : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS).catch(() => {});
+    expect(fake.records.get(0)).toEqual(DIRS);
+  });
+
+  test("release does not remove ACLs while entries of others remain", async () => {
+    const fake = fakeSandboxDeps({
+      respond: (argv) =>
+        matches(leftoverArgv(DIRS.worktreeDir))(argv)
+          ? ok(`${DIRS.worktreeDir}/x\n`)
+          : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS).catch(() => {});
+    expect(argvOf(fake.calls)).not.toContainEqual(
+      removeAclArgv(DIRS.worktreeDir),
+    );
   });
 
   test("release does not take back a worktree that is gone", async () => {
@@ -1581,7 +1878,7 @@ describe("createCheckSandbox", () => {
   test("release does not take ownership back while a process survives", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox, before } = await prepared(fake);
-    Object.assign(fake.deps.reap, STUCK_TAGGED);
+    Object.assign(fake.deps.reap, STUCK_PROCESS);
     await sandbox.release(DIRS).catch(() => {});
     expect(fake.calls.length).toBe(before);
   });
@@ -1589,7 +1886,7 @@ describe("createCheckSandbox", () => {
   test("release keeps the record while a process survives", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
-    Object.assign(fake.deps.reap, STUCK_TAGGED);
+    Object.assign(fake.deps.reap, STUCK_PROCESS);
     await sandbox.release(DIRS).catch(() => {});
     expect(fake.records.get(0)).toEqual(DIRS);
   });
@@ -1597,14 +1894,14 @@ describe("createCheckSandbox", () => {
   test("release fails loudly while a process survives", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
-    Object.assign(fake.deps.reap, STUCK_TAGGED);
+    Object.assign(fake.deps.reap, STUCK_PROCESS);
     await expect(sandbox.release(DIRS)).rejects.toThrow("could not be stopped");
   });
 
   test("release still gives the slot back while a process survives", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
-    Object.assign(fake.deps.reap, STUCK_TAGGED);
+    Object.assign(fake.deps.reap, STUCK_PROCESS);
     await sandbox.release(DIRS).catch(() => {});
     expect(fake.events).toContain("release-slot 0");
   });
@@ -1662,7 +1959,7 @@ describe("restoreCheckOwnership", () => {
   test("takes back the worktree a slot recorded", async () => {
     const fake = fakeSandboxDeps({ records: RECORDED });
     await restoreCheckOwnership(WT, POOL, fake.deps);
-    expect(withoutTag(argvOf(fake.calls).slice(0, 5))).toEqual(
+    expect(withoutTag(argvOf(fake.calls).slice(0, 6))).toEqual(
       withoutTag(takeBackSequence(SLOT1, WT)),
     );
   });
@@ -1699,25 +1996,35 @@ describe("restoreCheckOwnership", () => {
     expect(fake.events.at(-1)).toBe("release-slot 1");
   });
 
-  test("does nothing when a live run holds the slot", async () => {
+  test("fails with CheckSlotInUseError when another run holds the slot", async () => {
     const fake = fakeSandboxDeps({ records: RECORDED, busySlots: [1] });
-    await restoreCheckOwnership(WT, POOL, fake.deps, 100);
+    await expect(
+      restoreCheckOwnership(WT, POOL, fake.deps, 100),
+    ).rejects.toBeInstanceOf(CheckSlotInUseError);
+  });
+
+  test("runs nothing when another run holds the slot", async () => {
+    const fake = fakeSandboxDeps({ records: RECORDED, busySlots: [1] });
+    await restoreCheckOwnership(WT, POOL, fake.deps, 100).catch(() => {});
     expect(fake.calls).toEqual([]);
   });
 
-  test("does not stop processes when a live run holds the slot", async () => {
+  test("does not stop processes when another run holds the slot", async () => {
     const fake = fakeSandboxDeps({
       records: RECORDED,
       busySlots: [1],
       processes: { 90: status({ uid: 20001, groups: [] }) },
     });
-    await restoreCheckOwnership(WT, POOL, fake.deps, 100);
+    await restoreCheckOwnership(WT, POOL, fake.deps, 100).catch(() => {});
     expect(fake.killed).toEqual([]);
   });
 
-  test("returns false when a live run holds the slot", async () => {
-    const fake = fakeSandboxDeps({ records: RECORDED, busySlots: [1] });
-    expect(await restoreCheckOwnership(WT, POOL, fake.deps, 100)).toBe(false);
+  test("ignores a held slot whose record names another worktree", async () => {
+    const fake = fakeSandboxDeps({
+      records: { 0: OLD, 1: DIRS },
+      busySlots: [0],
+    });
+    expect(await restoreCheckOwnership(WT, POOL, fake.deps, 100)).toBe(true);
   });
 
   test("does nothing when the record changed before the slot was taken", async () => {

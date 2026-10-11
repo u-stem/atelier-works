@@ -6,6 +6,7 @@
 // 並行して動く検査どうしが同じuidを共有しないよう、実行ごとにuidの枠を1つ取る。
 // 枠は後の実行で別のリポジトリに使い回すので、枠を取るたびに前の実行の残り(プロセス、所有権、一時ファイル、IPC)を消す。
 
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   chmod,
@@ -18,7 +19,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import { maskSecrets } from "./log.ts";
+import { type Logger, logger, maskSecrets } from "./log.ts";
 import { isRecord, isString } from "./types.ts";
 import { type CommandRunner, runCommand } from "./workspace.ts";
 
@@ -46,12 +47,16 @@ const MAX_CHECK_UID = 2 ** 31 - 1;
 /**
  * 実行ごとの目印にする補助グループのgidの範囲。実在するグループと重ならない大きな値にする。
  * 補助グループは子孫に受け継がれ、検査用のuidが自分では外せない(`CAP_SETGID`を落とす)。
- * 同じ枠の前の実行が残したプロセスと区別して、この実行のプロセスだけを止めるために使う。
+ * 別のセッションに抜けたプロセスも、`/proc/<pid>/status`の`Groups`で、どの実行が起動したかを見分けられる。
+ * 止めるときは目印ではなく枠のuidで選ぶ。枠のロックを持つ間、枠のuidのプロセスはこの実行のものだけだからである。
  */
 const TAG_GID_MIN = 1_000_000;
 const TAG_GID_MAX = 2_000_000_000;
 
-/** PATHに頼らず、絶対パスで呼ぶ道具。イメージでは`util-linux`と`findutils`、`coreutils`が入れる。 */
+/**
+ * PATHに頼らず、絶対パスで呼ぶ道具。
+ * イメージでは`util-linux`、`findutils`、`coreutils`、`procps`(`kill`)、`acl`(`getfacl`、`setfacl`)が入れる。
+ */
 export const SETPRIV_PATH = "/usr/bin/setpriv";
 export const FIND_PATH = "/usr/bin/find";
 export const CHOWN_PATH = "/usr/bin/chown";
@@ -59,6 +64,9 @@ export const CHMOD_PATH = "/usr/bin/chmod";
 export const FLOCK_PATH = "/usr/bin/flock";
 export const RM_PATH = "/usr/bin/rm";
 export const IPCRM_PATH = "/usr/bin/ipcrm";
+export const KILL_PATH = "/usr/bin/kill";
+export const GETFACL_PATH = "/usr/bin/getfacl";
+export const SETFACL_PATH = "/usr/bin/setfacl";
 
 /**
  * Windmillの実行時のディレクトリ。依存のキャッシュ(`cache`)とログ(`logs`)が、
@@ -110,8 +118,14 @@ const TOOL_PATH = "/usr/bin:/bin";
  */
 const TOOL_CWD = "/";
 
-const REAP_ROUNDS = 5;
+/**
+ * 枠のuidのプロセスを止め続ける上限(ミリ秒)。止める間に子を作り続けるプロセス(fork爆弾)も、
+ * 1回のシグナルで今あるものがすべて止まるので、普通は数回で尽きる。
+ * 上限は、止まらないプロセス(D状態など)が残ったときに、待ち続けないためにある。
+ */
+export const REAP_MAX_WAIT_MS = 30_000;
 const REAP_POLL_MS = 100;
+const KILL_TIMEOUT_MS = 10_000;
 
 /**
  * 検査用のuidの設定値を検証して返す。値が無いか空なら既定値を返す。
@@ -434,6 +448,42 @@ export function leftoverArgv(dir: string): string[] {
 }
 
 /**
+ * 取り戻しの確かめ。`dir`の下に、拡張のACL(名前付きのエントリかデフォルトのACL)を持つものがあれば、その一覧を出す。
+ * ACLは`chown`と`chmod`では消えない。枠のuidがディレクトリに付けたデフォルトのACLが残ると、
+ * 後でrootが作るファイルに、他の枠が書ける権限が付くためである。
+ * `-P`でsymlinkをたどらず、`-s`で基本のエントリだけのものを飛ばす。ACLの無いファイルシステムでは何も出さない。
+ */
+export function aclLeftoverArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [GETFACL_PATH, "-R", "-P", "-s", "-p", "--", dir];
+}
+
+/**
+ * `dir`の下の、symlinkでないものすべてから拡張のACLを消すargv。rootで実行する。
+ * 権限のビットは変わらない(グループのビットはマスクの値のまま残る)。
+ * 取り戻しの確かめに通り、`dir`の下がすべてrootの所有で、グループとその他が書き込めない状態のときだけ呼ぶ。
+ * その状態では、ほかのユーザーはエントリを差し替えられないので、rootの`-execdir`がworktreeの外に及ばない。
+ */
+export function removeAclArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "!",
+    "-type",
+    "l",
+    "-execdir",
+    SETFACL_PATH,
+    "-b",
+    "-k",
+    "{}",
+    "+",
+  ];
+}
+
+/**
  * `dir`を中身ごと消すargv。GNUの`rm`は`openat`で降り、symlinkをたどらない。
  * 消している間に別の枠のプロセスがsymlinkへ差し替えても、外のファイルを消さないためである。
  */
@@ -577,6 +627,14 @@ export function parseSlotRecord(text: string): SlotRecord | null {
   return { worktreeDir, homeDir };
 }
 
+/** 枠の記録の本文が読めない(形が違う)。 */
+export class UnreadableSlotRecordError extends Error {
+  constructor(index: number) {
+    super(`check sandbox: the record of slot ${String(index)} is unreadable`);
+    this.name = "UnreadableSlotRecordError";
+  }
+}
+
 /** 回復できずに飛ばした枠。 */
 export type SlotSkip = {
   readonly index: number;
@@ -588,6 +646,21 @@ export type SlotSkip = {
 export function slotSkipNoticeText(skip: SlotSkip): string {
   return `検査の枠${CHECK_USER_PREFIX}${String(skip.index)}(uid ${String(skip.uid)})を、前の実行の残りを片付けられないため飛ばし、別の枠で検査しました。理由: ${skip.reason}。止まらないプロセスが残っているときは、workerを再起動してください。`;
 }
+
+/** 読めない記録を退避した枠を知らせるnoticeの本文。`path`は退避した先。 */
+export function slotRecordUnreadableNoticeText(opts: {
+  readonly index: number;
+  readonly uid: number;
+  readonly path: string;
+}): string {
+  return `検査の枠${CHECK_USER_PREFIX}${String(opts.index)}(uid ${String(opts.uid)})の記録が読めないため、${opts.path}へ退避して、この枠の片付けを続けました。記録の中身を確かめ、記録が指すworktreeが枠のuidの所有のまま残っていればrootに戻し、HOMEが残っていれば消してから、退避した記録を消してください。`;
+}
+
+/** 枠について運用者に知らせるnotice。`kind`は`factory.notices`の種類になる。 */
+export type CheckSlotNotice = {
+  readonly kind: "check_slot_skipped" | "check_slot_record_unreadable";
+  readonly message: string;
+};
 
 export type ProcStatus = {
   /** プロセスの状態の1文字(`R` / `S` / `Z`など)。 */
@@ -617,87 +690,72 @@ export function parseProcStatus(text: string): ProcStatus | null {
   return { state, uid: Number(uidField), groups };
 }
 
-/** この実行が起動した検査用のプロセス(実uidが検査用で、目印のgidを持つ生きたもの)かを返す。 */
-export function isTaggedProcess(
-  status: ProcStatus,
-  identity: CheckIdentity,
-): boolean {
-  return (
-    status.state !== "Z" &&
-    status.uid === identity.uid &&
-    status.groups.includes(identity.tagGid)
-  );
-}
-
 export type ReapDeps = {
   /** `/proc`の下のpidの一覧。 */
   readonly listPids: () => Promise<readonly number[]>;
   /** `/proc/<pid>/status`の本文。プロセスが無ければnull。 */
   readonly readStatus: (pid: number) => Promise<string | null>;
-  /** SIGKILLを送る。既に無いプロセスへの失敗は呼び出し側で無視する。 */
-  readonly kill: (pid: number) => void;
+  /** `uid`のプロセスすべてにSIGKILLを送る(`killAllArgv`)。対象が無いときの失敗は無視する。 */
+  readonly killAll: (uid: number) => Promise<void>;
   readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => number;
 };
 
-async function matchingPids(
-  match: (status: ProcStatus) => boolean,
-  deps: ReapDeps,
-): Promise<number[]> {
+/**
+ * `uid`として、そのuidのプロセスすべてにSIGKILLを送るargv。`kill -1`は、送り手が送れるすべてのプロセスに送り、送り手自身には送らない。
+ * 枠のuidとして送るので、rootのプロセスや別の枠のプロセスには届かない。
+ * pidを1つずつ選んで送る形と違い、1回のシグナルで、その時点で生きているものすべてが止まる。止める間に子を作り続けるプロセスにも追い越されない。
+ * procps-ngの`kill`は、`-1`を`--`の後に置かないとオプションとして読み、送らずに失敗する。
+ */
+export function killAllArgv(uid: number): string[] {
+  return [
+    SETPRIV_PATH,
+    `--reuid=${String(uid)}`,
+    `--regid=${String(uid)}`,
+    "--clear-groups",
+    "--bounding-set=-all",
+    "--inh-caps=-all",
+    "--no-new-privs",
+    "--",
+    KILL_PATH,
+    "-9",
+    "--",
+    "-1",
+  ];
+}
+
+/** 実uidが`uid`の、生きた(ゾンビでない)プロセスのpidを返す。 */
+async function livePidsOf(uid: number, deps: ReapDeps): Promise<number[]> {
   const found: number[] = [];
   for (const pid of await deps.listPids()) {
     const text = await deps.readStatus(pid);
     const status = text === null ? null : parseProcStatus(text);
-    if (status !== null && match(status)) found.push(pid);
+    if (status !== null && status.state !== "Z" && status.uid === uid)
+      found.push(pid);
   }
   return found;
 }
 
 /**
- * `match`に当たるプロセスをすべてSIGKILLで止め、止まらずに残ったpidを返す。
- * 殺す直前にもう一度状態を読み、pidが別のプロセスに再利用されていないことを確かめる。
- * 止めた直後に子孫が増えうるので、何も見つからなくなるまで最大`REAP_ROUNDS`回くり返す。
- */
-async function reapMatching(
-  match: (status: ProcStatus) => boolean,
-  deps: ReapDeps,
-): Promise<number[]> {
-  for (let round = 0; round < REAP_ROUNDS; round += 1) {
-    const pids = await matchingPids(match, deps);
-    if (pids.length === 0) return [];
-    for (const pid of pids) {
-      const text = await deps.readStatus(pid);
-      const status = text === null ? null : parseProcStatus(text);
-      if (status !== null && match(status)) deps.kill(pid);
-    }
-    await deps.sleep(REAP_POLL_MS);
-  }
-  return matchingPids(match, deps);
-}
-
-/**
- * この実行の目印を持つプロセスをすべて止め、止まらずに残ったpidを返す。
- * 検査のコマンドは新しいセッションに抜けても補助グループを受け継ぐので、
- * プロセスグループへのkillが届かない子孫も止められる。
- */
-export function reapCheckProcesses(
-  identity: CheckIdentity,
-  deps: ReapDeps,
-): Promise<number[]> {
-  return reapMatching((status) => isTaggedProcess(status, identity), deps);
-}
-
-/**
  * 枠のuidで動くプロセスをすべて止め、止まらずに残ったpidを返す。
- * 枠のロックを持っている間だけ呼ぶ。ロックが空いている枠のuidのプロセスは、終わった実行が残したものだけだからである。
+ * 枠のuidのプロセスが見つからなくなるまで、枠のuidとして`kill -1`を送り続ける。
+ * `maxWaitMs`を過ぎても残れば、そのpidを返す。
+ * 枠のロックを持っている間だけ呼ぶ。枠を取るときに前の実行の残りを止めるので、ロックを持つ間の枠のuidのプロセスは、
+ * ロックを持つ実行が起動したものか、終わった実行が残したものだけだからである。
  */
-export function reapUidProcesses(
+export async function reapUidProcesses(
   uid: number,
   deps: ReapDeps,
+  maxWaitMs: number = REAP_MAX_WAIT_MS,
 ): Promise<number[]> {
-  return reapMatching(
-    (status) => status.state !== "Z" && status.uid === uid,
-    deps,
-  );
+  const startedAt = deps.now();
+  for (;;) {
+    const pids = await livePidsOf(uid, deps);
+    if (pids.length === 0) return [];
+    if (deps.now() - startedAt >= maxWaitMs) return pids;
+    await deps.killAll(uid);
+    await deps.sleep(REAP_POLL_MS);
+  }
 }
 
 /**
@@ -773,12 +831,14 @@ export type SlotDeps = {
   readonly now: () => number;
 };
 
-/** 枠の記録の読み書き。枠のロックを持っている間だけ、書くか消す。 */
+/** 枠の記録の読み書き。枠のロックを持っている間だけ、書くか消すか退避する。 */
 export type SlotRecordDeps = {
-  /** 記録が無ければnullを返す。読めないか形が違えば例外を投げる。 */
+  /** 記録が無ければnullを返す。形が違えば`UnreadableSlotRecordError`を、読めなければその例外を投げる。 */
   readonly read: (index: number) => Promise<SlotRecord | null>;
   readonly write: (index: number, record: SlotRecord) => Promise<void>;
   readonly clear: (index: number) => Promise<void>;
+  /** 記録を、同じディレクトリの別の名前へ移し、移した先のパスを返す。 */
+  readonly setAside: (index: number) => Promise<string>;
 };
 
 /** 枠が`maxWaitMs`の間に空かなかった。同時実行が枠の数を超え続けている。 */
@@ -788,6 +848,16 @@ export class CheckSlotsBusyError extends Error {
       `no check slot became free within ${String(Math.round(waitedMs / 1000))}s`,
     );
     this.name = "CheckSlotsBusyError";
+  }
+}
+
+/** worktreeを指す記録の枠を、別の実行が持っている。その実行が、worktreeを使っているか片付けている。 */
+export class CheckSlotInUseError extends Error {
+  constructor(index: number, uid: number) {
+    super(
+      `check slot ${CHECK_USER_PREFIX}${String(index)} (uid ${String(uid)}) that recorded the worktree is held by another run`,
+    );
+    this.name = "CheckSlotInUseError";
   }
 }
 
@@ -842,7 +912,7 @@ export type CheckSandbox = {
    * 片付けられない枠は手放して次の枠を試す。
    */
   readonly prepare: (dirs: CheckDirs) => Promise<void>;
-  /** コマンド1つの後に。目印を持つプロセスを止める。止められなければ例外を投げる。 */
+  /** コマンド1つの後に。枠のuidのプロセスを止める。止められなければ例外を投げる。 */
   readonly settle: () => Promise<void>;
   /**
    * 検査の後に1回。`prepare`が途中で投げた後にも呼ぶ。
@@ -895,10 +965,40 @@ function firstLine(output: string): string {
   return maskSecrets(output.split("\n")[0] ?? "");
 }
 
+/** `dir`の下に、rootでないものか書き込めるものが残っていれば例外を投げる。 */
+async function assertNoLeftover(
+  deps: CheckSandboxDeps,
+  dir: string,
+): Promise<void> {
+  const leftover = await runToolOutput(
+    deps,
+    leftoverArgv(dir),
+    `checking ${dir}`,
+  );
+  if (leftover.trim() !== "") {
+    throw new Error(
+      `check sandbox: entries owned by others or writable by others remain: ${firstLine(leftover)}`,
+    );
+  }
+}
+
+/** `dir`の下で拡張のACLを持つものの一覧を返す。無ければ空の文字列を返す。 */
+async function aclLeftover(
+  deps: CheckSandboxDeps,
+  dir: string,
+): Promise<string> {
+  return (
+    await runToolOutput(deps, aclLeftoverArgv(dir), `checking ACLs in ${dir}`)
+  ).trim();
+}
+
 /**
  * `dir`を枠のuidからrootに戻す。枠のuidのプロセスが止まった後に呼ぶ。
  * 権限のビットは枠のuidとして落とし、rootは`chown -h`だけを行う。
  * 戻した後、rootでないものか書き込めるものが残っていれば例外を投げる。
+ * 拡張のACLが残っていれば、rootで消してから、もう一度確かめる。
+ * rootが消すのは、すべてrootの所有で書き込めない状態を確かめた後なので、ほかのユーザーがエントリを差し替えられない。
+ * 消した後もACLか書き込めるものが残っていれば例外を投げる。
  */
 async function takeBack(
   deps: CheckSandboxDeps,
@@ -913,14 +1013,14 @@ async function takeBack(
     `dropping write bits in ${dir}`,
   );
   await runTool(deps, reclaimArgv(dir), `taking ${dir} back`);
-  const leftover = await runToolOutput(
-    deps,
-    leftoverArgv(dir),
-    `checking ${dir}`,
-  );
-  if (leftover.trim() !== "") {
+  await assertNoLeftover(deps, dir);
+  if ((await aclLeftover(deps, dir)) === "") return;
+  await runTool(deps, removeAclArgv(dir), `removing ACLs in ${dir}`);
+  await assertNoLeftover(deps, dir);
+  const remaining = await aclLeftover(deps, dir);
+  if (remaining !== "") {
     throw new Error(
-      `check sandbox: entries owned by others or writable by others remain: ${firstLine(leftover)}`,
+      `check sandbox: entries with an ACL remain: ${firstLine(remaining)}`,
     );
   }
 }
@@ -985,6 +1085,30 @@ async function purgeShared(
 }
 
 /**
+ * 枠の記録を読む。形が違って読めない記録は退避し、`notify`で1回知らせてから、記録が無いものとして扱う。
+ * 読めない記録を残すと、その枠を取るたびに片付けが失敗し、枠をずっと使えなくなるためである。
+ * 記録が指していたworktreeは取り戻せないので、noticeで運用者に任せる。
+ */
+async function readOrSetAside(
+  deps: CheckSandboxDeps,
+  index: number,
+  uid: number,
+  notify: (notice: CheckSlotNotice) => Promise<void>,
+): Promise<SlotRecord | null> {
+  try {
+    return await deps.slotRecords.read(index);
+  } catch (error) {
+    if (!(error instanceof UnreadableSlotRecordError)) throw error;
+  }
+  const path = await deps.slotRecords.setAside(index);
+  await notify({
+    kind: "check_slot_record_unreadable",
+    message: slotRecordUnreadableNoticeText({ index, uid, path }),
+  });
+  return null;
+}
+
+/**
  * 枠のロックを持った状態で、前の実行が残したものを片付ける。
  * 枠のuidのプロセスを止め、記録があればそのworktreeを取り戻してHOMEを消し、記録を消す。
  * 最後に共有の一時ディレクトリとIPCから枠のuidのものを消す。
@@ -994,15 +1118,25 @@ async function recoverSlot(
   index: number,
   uid: number,
   random: (() => number) | undefined,
+  notify: (notice: CheckSlotNotice) => Promise<void>,
 ): Promise<void> {
   stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
   const identity = newCheckIdentity(uid, random);
-  const record = await deps.slotRecords.read(index);
+  const record = await readOrSetAside(deps, index, uid, notify);
   if (record !== null) {
     await takeBackDirs(deps, identity, record);
     await deps.slotRecords.clear(index);
   }
   await purgeShared(deps, identity);
+}
+
+/** 記録に書けるパス(正規化された2段以上の絶対パス)でなければ例外を投げる。読み直せない記録を書かないためである。 */
+function assertRecordable(record: SlotRecord): void {
+  if (parseSlotRecord(formatSlotRecord(record)) === null) {
+    throw new Error(
+      `check sandbox: the directories cannot be recorded: ${record.worktreeDir}, ${record.homeDir}`,
+    );
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -1026,7 +1160,8 @@ export function kernelWarningText(warnings: readonly string[]): string {
  * `uids`が枠で、実行(`prepare`から`release`まで)ごとに空いている1つを取る。
  * 所有権の受け渡しは`prepare`と`release`の対で行い、`release`はプロセスが残っている間は
  * 所有権を戻さない(生きている検査のプロセスが、戻した後のworktreeを書き換えうるため)。
- * 枠を片付けられなかったときは`onSlotSkipped`で知らせ、別の枠を使う。
+ * 枠を片付けられなかったときと、読めない枠の記録を退避したときは`onNotice`で知らせる。
+ * 知らせるのに失敗しても、検査は止めずに`log`へ残す。
  * 1つの部品は、同時に1つの実行だけに使う。
  */
 export function createCheckSandbox(opts: {
@@ -1035,11 +1170,25 @@ export function createCheckSandbox(opts: {
   readonly random?: () => number;
   readonly maxWaitMs?: number;
   readonly pollMs?: number;
-  readonly onSlotSkipped?: (skip: SlotSkip) => Promise<void>;
+  readonly onNotice?: (notice: CheckSlotNotice) => Promise<void>;
+  readonly log?: Logger;
 }): CheckSandbox {
   const deps = opts.deps ?? defaultSandboxDeps();
+  const log = opts.log ?? logger("check_sandbox");
   const indices = opts.uids.map((_, index) => index);
   let active: { identity: CheckIdentity; handle: SlotHandle } | null = null;
+  const notify = async (notice: CheckSlotNotice): Promise<void> => {
+    if (opts.onNotice === undefined) return;
+    try {
+      await opts.onNotice(notice);
+    } catch (error) {
+      log.warn("check slot notice could not be recorded", {
+        kind: notice.kind,
+        notice: notice.message,
+        error: errorMessage(error),
+      });
+    }
+  };
   const current = (): CheckIdentity => {
     if (active === null) {
       throw new Error("check sandbox: no slot is held; call prepare first");
@@ -1070,16 +1219,19 @@ export function createCheckSandbox(opts: {
         throw new Error("check sandbox: slot index out of range");
       }
       try {
-        await recoverSlot(deps, handle.index, uid, opts.random);
+        await recoverSlot(deps, handle.index, uid, opts.random, notify);
         return { handle, uid };
       } catch (error) {
         await handle.release();
         skipped.add(handle.index);
         lastReason = errorMessage(error);
-        await opts.onSlotSkipped?.({
-          index: handle.index,
-          uid,
-          reason: lastReason,
+        await notify({
+          kind: "check_slot_skipped",
+          message: slotSkipNoticeText({
+            index: handle.index,
+            uid,
+            reason: lastReason,
+          }),
         });
       }
     }
@@ -1087,16 +1239,18 @@ export function createCheckSandbox(opts: {
   return {
     wrap: (argv) => setprivArgv(current(), argv),
     prepare: async (dirs) => {
+      const record: SlotRecord = {
+        worktreeDir: dirs.worktreeDir,
+        homeDir: dirs.homeDir,
+      };
+      assertRecordable(record);
       await deps.lockDownRuntimeDir(WINDMILL_TMP_DIR);
       await deps.assertDirectory(dirs.worktreeDir);
       const { handle, uid } = await takeUsableSlot();
       const identity = newCheckIdentity(uid, opts.random);
       active = { identity, handle };
       // 渡す前に記録する。後始末が走らなくても、次にこの枠を取る実行が戻せるようにするためである。
-      await deps.slotRecords.write(handle.index, {
-        worktreeDir: dirs.worktreeDir,
-        homeDir: dirs.homeDir,
-      });
+      await deps.slotRecords.write(handle.index, record);
       await runTool(
         deps,
         chownToArgv(identity, dirs.worktreeDir),
@@ -1108,15 +1262,16 @@ export function createCheckSandbox(opts: {
         "handing the home directory over",
       );
     },
+    // 枠のロックを持つ間なので、枠のuidのプロセスはすべてこの実行のものである。
     settle: async () => {
-      stoppedOrThrow(await reapCheckProcesses(current(), deps.reap));
+      stoppedOrThrow(await reapUidProcesses(current().uid, deps.reap));
     },
     release: async (dirs) => {
       if (active === null) return;
       const { identity, handle } = active;
       active = null;
       try {
-        stoppedOrThrow(await reapCheckProcesses(identity, deps.reap));
+        stoppedOrThrow(await reapUidProcesses(identity.uid, deps.reap));
         await takeBackDirs(deps, identity, dirs);
         await deps.slotRecords.clear(handle.index);
       } finally {
@@ -1137,8 +1292,9 @@ export function createCheckSandbox(opts: {
  * そのままだとrootのgitが所有者の違いで実行を拒み、次の作業項目が止まる。
  * ロックを取れた枠は、その枠のuidのプロセスを止め、worktreeを取り戻し、HOMEを消し、記録を消す。
  * 記録はロックを取った後に読み直し、まだ`dir`を指すときだけ片付ける。
- * `maxWaitMs`待ってもロックを取れない枠には何もしない。ロックを持つ実行が、その枠を取ったときに片付けるためである。
- * 読めない記録は飛ばす。その枠は次に取る実行が片付けるか、飛ばして知らせる。
+ * `maxWaitMs`待ってもロックを取れなければ、`CheckSlotInUseError`を投げる。
+ * ロックを持つのは、そのworktreeで検査している実行か、その枠を取って片付けている実行なので、worktreeに触れずに引き返すためである。
+ * 読めない記録は、どのworktreeを指すか分からないので飛ばす。その枠を次に取る実行が退避して知らせる。
  */
 export async function restoreCheckOwnership(
   dir: string,
@@ -1146,14 +1302,16 @@ export async function restoreCheckOwnership(
   deps: CheckSandboxDeps,
   maxWaitMs: number = RESTORE_MAX_WAIT_MS,
 ): Promise<boolean> {
+  const readOrNull = async (index: number): Promise<SlotRecord | null> => {
+    try {
+      return await deps.slotRecords.read(index);
+    } catch {
+      return null;
+    }
+  };
   let restored = false;
   for (const [index, uid] of uids.entries()) {
-    let record: SlotRecord | null;
-    try {
-      record = await deps.slotRecords.read(index);
-    } catch {
-      continue;
-    }
+    const record = await readOrNull(index);
     if (record?.worktreeDir !== dir) continue;
     let handle: SlotHandle;
     try {
@@ -1162,11 +1320,12 @@ export async function restoreCheckOwnership(
         pollMs: SLOT_POLL_MS,
       });
     } catch (error) {
-      if (error instanceof CheckSlotsBusyError) continue;
+      if (error instanceof CheckSlotsBusyError)
+        throw new CheckSlotInUseError(index, uid);
       throw error;
     }
     try {
-      const held = await deps.slotRecords.read(index);
+      const held = await readOrNull(index);
       if (held?.worktreeDir !== dir) continue;
       stoppedOrThrow(await reapUidProcesses(uid, deps.reap));
       await takeBackDirs(deps, newCheckIdentity(uid), held);
@@ -1249,6 +1408,7 @@ function flockSlotDeps(lockDir: string): SlotDeps {
 /**
  * 枠の記録を、ロックファイルの隣の`slot-N.state`(0600)に置く。
  * 書くときは一時ファイルに書いてから置き換え、途中で止まっても壊れた記録を残さない。
+ * 退避した記録は`slot-N.state.corrupt-<時刻>-<乱数>`になり、退避を重ねても前のものを上書きしない。
  */
 function fileSlotRecordDeps(lockDir: string): SlotRecordDeps {
   const pathOf = (index: number): string =>
@@ -1263,12 +1423,13 @@ function fileSlotRecordDeps(lockDir: string): SlotRecordDeps {
         throw error;
       }
       const record = parseSlotRecord(text);
-      if (record === null) {
-        throw new Error(
-          `check sandbox: the record of slot ${String(index)} is unreadable`,
-        );
-      }
+      if (record === null) throw new UnreadableSlotRecordError(index);
       return record;
+    },
+    setAside: async (index) => {
+      const destination = `${pathOf(index)}.corrupt-${String(Date.now())}-${randomUUID().slice(0, 8)}`;
+      await rename(pathOf(index), destination);
+      return destination;
     },
     write: async (index, record) => {
       await mkdir(lockDir, { recursive: true, mode: 0o700 });
@@ -1315,14 +1476,17 @@ export function defaultSandboxDeps(
           return null;
         }
       },
-      kill: (pid) => {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {
-          // 既に終わっている。
-        }
+      killAll: async (uid) => {
+        // 送る先が1つも無いと`kill`は0以外で終わるので、終了コードは見ない。止まったかは呼び出し側が`/proc`で確かめる。
+        await runCommand(killAllArgv(uid), {
+          cwd: TOOL_CWD,
+          env: { PATH: TOOL_PATH },
+          timeoutMs: KILL_TIMEOUT_MS,
+          maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
+        });
       },
       sleep: (ms) => Bun.sleep(ms),
+      now: () => Date.now(),
     },
     slots: flockSlotDeps(lockDir),
     slotRecords: fileSlotRecordDeps(lockDir),
@@ -1364,11 +1528,11 @@ const readPasswd = (): string => readFileSync("/etc/passwd", "utf8");
 /** 本番の検査用の部品を作る。枠のuidは`resolveCheckPool`で決める。 */
 export function checkSandboxFromEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
-  onSlotSkipped?: (skip: SlotSkip) => Promise<void>,
+  onNotice?: (notice: CheckSlotNotice) => Promise<void>,
 ): CheckSandbox {
   return createCheckSandbox({
     uids: resolveCheckPool(env, readPasswd),
-    ...(onSlotSkipped === undefined ? {} : { onSlotSkipped }),
+    ...(onNotice === undefined ? {} : { onNotice }),
   });
 }
 

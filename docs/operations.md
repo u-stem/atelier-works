@@ -488,9 +488,9 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 - 検査の前に毎回`git clean -fdX`で無視ファイル(`node_modules/`など)を消す。そのため先頭で依存関係をインストールする。
 - workerのイメージにmiseは無い。worker内で直接動くコマンドにする。例は`bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`である。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
-- 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`)だけである。main cloneの`.git`に書けないので、検査コマンドの中の`git add`と`git commit`は失敗する。
+- 検査コマンドが書き込めるのは、worktree、その`HOME`、共有の一時ディレクトリ(`/tmp`、`/var/tmp`、`/dev/shm`、`/dev/mqueue`)だけである。main cloneの`.git`に書けないので、`git add`、`git commit`、`git stash`、lint-stagedのように`.git`へ書き込む検査コマンドは失敗する。検査コマンドには使わない。
 - 検査コマンドの`TMPDIR`は`HOME`の下を指す。共有の一時ディレクトリに置いたものは、並行して動く別の検査から読めることがある。
-- 取り消しやworkerの再起動で後始末が走らなかった検査の残りは、次にその枠を取る検査か、次にそのworktreeを使うステップが片付ける。片付けられない枠は飛ばされ、`check_slot_skipped`が残る。
+- 取り消しやworkerの再起動で後始末が走らなかった検査の残りは、次にその枠を取る検査か、次にそのworktreeを使うステップが片付ける。片付けられない枠は飛ばされ、`check_slot_skipped`が残る。人が片付ける手順は[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)にある。
 - worktreeのディレクトリが50万個を超えると、所有権の受け渡しが300秒の上限で打ち切られ、検査が失敗する。目安は、9,000個のディレクトリで1回あたり約5秒である。
 - 同時に動く検査が枠の数(8)を超えると、検査は空くのを最大5分待つ。待っても取れなければ「no check slot became free」で失敗し、作業項目は失敗になる。`retry_work_item`で再実行する。
 - 検査コマンドに常駐のデーモンを残させない。ロックのファイル記述子を持ったまま残ると、以降のラウンドがロックを取れずに失敗する。記述子を閉じて残ったものも、次の準備やPRの修正を止める。
@@ -501,6 +501,60 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 実装ブランチのpushとPRの作成で、人のレビューの前に対象リポジトリ自身のCIも動く。atelier-worksのCIはPRの作成から動く。そのCIが使えるsecretsの範囲を確かめておく。
 
 検査コマンドを実行するたびに、Consoleの**システム**の「情報の通知」にコンテナの分離が無い検査コマンドの実行(`unsandboxed_check_commands`)が記録される。秘密情報の検査(gitleaks)は、設定に関わらず毎ラウンド実行する。
+
+### 検査の枠の記録を片付ける
+
+検査は、worktreeを枠のユーザーへ渡す前に、worktreeと`HOME`のパスを枠の記録に書く。
+記録はworkerの`/var/lib/factory/check-slots/slot-<N>.state`である。
+記録は、所有権をrootに戻し終えたときだけ消える。
+残った記録は、次にその枠を取る検査か、次にそのworktreeを使うステップが使って片付ける。
+仕組みは[セキュリティ](security.md#枠の記録と片付け)にある。
+
+人が片付けるのは、次の3つの場合である。
+
+- `check_slot_record_unreadable`が残った。
+  読めない記録は`slot-<N>.state.corrupt-<時刻>-<乱数>`へ退避されていて、それが指していたworktreeは自動では戻らない。
+- `check_slot_skipped`が、worktreeを取り戻せない理由で続く。
+- 枠の数(`FACTORY_CHECK_POOL_SIZE`)を減らすか、先頭のuid(`FACTORY_CHECK_UID`)を変える。
+  または、検査を枠のユーザーで動かす前の版へ`f/`を戻す。
+  範囲の外になった枠の記録と、前の版が読まない記録は、どの実行も片付けないためである。
+
+片付けは、実装フローとPR修正のフローが動いていないときに、次の順で行う。
+
+1. 記録の一覧を見る。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ls -l /var/lib/factory/check-slots
+   ```
+
+   枠の数を変える前と`f/`を戻す前は、`slot-<N>.state`が1つも無ければ片付けは要らない。
+
+2. 記録の中身を読み、worktreeと`HOME`のパスを確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker cat /var/lib/factory/check-slots/<記録のファイル>
+   ```
+
+3. worktreeが残っていれば、rootに戻し、グループとその他の書き込みと、拡張のACLを消す。
+   ACLは`chown`と`chmod`では消えず、残ると後でrootが作るファイルに、ほかの枠から書ける権限が付くためである。
+   `HOME`が残っていれば消す。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chown -R -h 0:0 <worktree>
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod -R go-w,ug-s <worktree>
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker setfacl -R -P -b -k <worktree>
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker rm -rf --one-file-system <HOME>
+   ```
+
+4. 記録のファイルを消す。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker rm /var/lib/factory/check-slots/<記録のファイル>
+   ```
+
+`check_slot_skipped`のときは、4を飛ばしてもよい。
+記録が残っていれば、次にその枠を取る検査が、同じworktreeを取り戻し直してから記録を消す。
+止まらないプロセスが理由なら、片付けの前にworkerを再起動する。
 
 ### PRができたら
 
@@ -925,7 +979,8 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `implement_launch_failed` | 承認の後、実装フローへ進める処理がDBの失敗で例外になった | Windmillで`f/factory/retry_work_item`を作業項目のIDで実行して再開する |
 | `implement_needs_human` | 実装フローが人の対応待ちで止まった。作業項目はConsoleの**要対応**の失敗に出る | [人の対応待ちになったら](#人の対応待ちになったら)で原因を取り除いてから、**要対応**の失敗で**再実行**を押す |
 | `unsandboxed_check_commands` | 検査コマンドをコンテナの分離なしで実行した | 設定が意図どおりか確かめる |
-| `check_slot_skipped` | 検査の枠を、前の実行の残り(止まらないプロセス、消せないファイルやIPC、読めない枠の記録)を片付けられないため飛ばし、別の枠で検査した。本文に枠のユーザーと理由が載る | 理由が止まらないプロセスなら、workerを再起動する。残ったファイルなら、本文のパスを確かめて消す。片付くまでは、その枠を取る検査のたびに残る |
+| `check_slot_skipped` | 検査の枠を、前の実行の残り(止まらないプロセス、消せないファイルやIPC、取り戻せないworktree)を片付けられないため飛ばし、別の枠で検査した。本文に枠のユーザーと理由が載る。同じ本文の未解決のnoticeがあれば足さない | 理由が止まらないプロセスなら、workerを再起動する。残ったファイルなら、本文のパスを確かめて消す。worktreeを取り戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で、記録を確かめ、worktreeが枠のユーザーの所有のままならrootに戻す。片付くまでは、その枠を取る検査が失敗し続ける |
+| `check_slot_record_unreadable` | 検査の枠の記録が読めないため、記録を退避して、その枠の片付けを続けた。本文に枠のユーザーと退避した先のパスが載る | [検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で、退避した記録が指すworktreeとHOMEを片付け、退避した記録を消す |
 | `fix_reply_post_failed` | 修正の返信の投稿に失敗した | PRで人が返信する |
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |

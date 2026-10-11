@@ -103,11 +103,18 @@ describe("infra/worker/Dockerfile check user", () => {
     expect(installed).toBe(true);
   });
 
-  test("does not install procps, which nothing uses", () => {
+  test("installs procps for kill", () => {
     const installed = startingWith("RUN").some(
       (line) => line.includes("apt-get install") && /\sprocps\b/.test(line),
     );
-    expect(installed).toBe(false);
+    expect(installed).toBe(true);
+  });
+
+  test("installs acl for getfacl and setfacl", () => {
+    const installed = startingWith("RUN").some(
+      (line) => line.includes("apt-get install") && /\sacl\b/.test(line),
+    );
+    expect(installed).toBe(true);
   });
 
   const verification = (): string =>
@@ -131,6 +138,12 @@ describe("infra/worker/Dockerfile check user", () => {
 
   test("verifies at build time that no_new_privs is set", () => {
     expect(verification()).toContain("'^NoNewPrivs:[[:space:]]*1$'");
+  });
+
+  test("verifies at build time that the tools the takeback calls by path exist", () => {
+    expect(verification()).toContain(
+      "test -x /usr/bin/kill && test -x /usr/bin/getfacl && test -x /usr/bin/setfacl",
+    );
   });
 
   test("fails the build when a slot does not verify", () => {

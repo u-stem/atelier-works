@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   CHECK_COMMAND_MAX_OUTPUT_BYTES,
   CHECK_COMMAND_PATH,
@@ -205,6 +206,20 @@ describe("runAllowedCheckCommands", () => {
     };
     await runAllowedCheckCommands(run, "/work", ["true"], 1000);
     expect(mode).toBe(0o700);
+  });
+
+  test("the real default createHomeDir puts the HOME under /tmp whatever TMPDIR says", async () => {
+    const { run, calls } = createFakeCommandRunner([ok("")]);
+    const before = process.env.TMPDIR;
+    // Windmillのジョブの一時ディレクトリは、検査用のuidが入れない`/tmp/windmill`の下にありうる。
+    process.env.TMPDIR = "/tmp/windmill/wk-default-x/job-y";
+    try {
+      await runAllowedCheckCommands(run, "/work", ["true"], 1000);
+    } finally {
+      if (before === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = before;
+    }
+    expect(dirname(calls[0]?.options?.env?.HOME ?? "")).toBe("/tmp");
   });
 
   test("two runs using the real default createHomeDir get different HOME dirs", async () => {

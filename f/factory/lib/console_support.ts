@@ -39,6 +39,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   cleanup_db_failed: "action",
   cleanup_worktree_busy: "action",
   check_slot_skipped: "action",
+  check_slot_record_unreadable: "action",
   console_fetch_failed: "action",
   console_fetch_stale: "action",
   console_worker_missing: "action",

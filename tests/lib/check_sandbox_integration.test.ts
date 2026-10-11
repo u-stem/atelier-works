@@ -18,15 +18,22 @@ import { runAllowedCheckCommands } from "../../f/factory/lib/check_runner.ts";
 import {
   CHECK_ENV_KEYS,
   type CheckSandbox,
+  type CheckSlotNotice,
   createCheckSandbox,
   defaultSandboxDeps,
   parsePasswdUsers,
   resolveCheckPool,
   restoreCheckOwnership,
+  type SlotHandle,
   WINDMILL_TMP_DIR,
 } from "../../f/factory/lib/check_sandbox.ts";
 import {
+  defaultLockReleaseDeps,
+  ensureWorktreeLockFree,
   FLOCK_PATH,
+  probeWorktreeLock,
+  restoreOwnershipStep,
+  WorktreeBusyError,
   withWorktreeProcessLock,
   worktreeLockFor,
 } from "../../f/factory/lib/process_lock.ts";
@@ -95,6 +102,15 @@ function mustRun(argv: string[], cwd: string): void {
   const code = runSync(argv, cwd);
   if (code !== 0)
     throw new Error(`${argv.join(" ")} exited with ${String(code)}`);
+}
+
+/** `dir`の下で拡張のACLを持つものを、`getfacl`の出力で返す。無ければ空の文字列を返す。 */
+function extendedAcls(dir: string): string {
+  const proc = Bun.spawnSync({
+    cmd: ["/usr/bin/getfacl", "-R", "-P", "-s", "-p", "--", dir],
+    env: { PATH: "/usr/bin:/bin" },
+  });
+  return proc.stdout.toString().trim();
 }
 
 suite("check commands in the worker image", () => {
@@ -812,6 +828,98 @@ process.kill(process.pid, "SIGKILL");`,
     );
     expect(modes).toEqual([0, 0, 0]);
   }, 60_000);
+
+  test("a check that keeps forking in its own session is stopped", async () => {
+    writeFileSync(
+      join(dir(3), "fork.sh"),
+      "setsid sh -c 'while :; do sleep 300 & sleep 0.01; done' >/dev/null 2>&1 &\nsleep 1\n",
+    );
+    await runChecks(
+      dir(3),
+      ["sh ./fork.sh"],
+      sandboxIn(lockDir, [POOL[6] ?? 0]),
+    );
+    expect(processesOf(POOL)).toEqual([]);
+  }, 120_000);
+
+  test("a run sets aside a slot record it cannot read and still uses the slot", async () => {
+    const corruptDir = join(fx.base, "slots-corrupt");
+    mkdirSync(corruptDir, { mode: 0o700 });
+    writeFileSync(join(corruptDir, "slot-0.state"), "{");
+    const notices: CheckSlotNotice[] = [];
+    const sandbox = createCheckSandbox({
+      uids: [POOL[7] ?? 0],
+      deps: defaultSandboxDeps(corruptDir),
+      pollMs: 100,
+      onNotice: async (notice) => {
+        notices.push(notice);
+      },
+    });
+    const run = await runChecks(dir(5), ["true"], sandbox);
+    const setAside = readdirSync(corruptDir).filter((name) =>
+      name.startsWith("slot-0.state.corrupt-"),
+    );
+    expect([
+      run[0]?.ok,
+      notices.map((notice) => notice.kind),
+      setAside.length,
+    ]).toEqual([true, ["check_slot_record_unreadable"], 1]);
+  }, 60_000);
+});
+
+suite("ACLs a check leaves in the worktree", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[1] ?? 0;
+  const other = POOL[2] ?? 0;
+  let worktree = "";
+  let set = "";
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("acl");
+    writeFileSync(
+      join(worktree, "acl.sh"),
+      [
+        "mkdir open-default",
+        "setfacl -d -m o::rwx open-default",
+        "touch named",
+        `setfacl -m u:${String(other)}:rwx named`,
+        `getfacl -s -p open-default named | grep -c '^# file'`,
+        "",
+      ].join("\n"),
+    );
+    const [result] = await runChecks(
+      worktree,
+      ["sh ./acl.sh"],
+      sandboxIn(lockDir, [uid]),
+    );
+    set = result?.output.trim() ?? "";
+    // 取り戻した後に、rootが同じディレクトリにファイルを作る(次のラウンドのClaudeやgitに当たる)。
+    writeFileSync(join(worktree, "open-default", "by-root"), "x\n");
+  }, 60_000);
+
+  afterAll(() => fx.cleanup());
+
+  test("the check could set a default ACL and a named entry", () => {
+    expect(set).toBe("2");
+  });
+
+  test("a file root creates later in that directory is not writable by others", () => {
+    expect(
+      statSync(join(worktree, "open-default", "by-root")).mode & 0o022,
+    ).toBe(0);
+  });
+
+  test("no entry of the worktree keeps an extended ACL", () => {
+    expect(extendedAcls(worktree)).toBe("");
+  });
+
+  test("the slot record is cleared once the ACLs are gone", () => {
+    expect(
+      readdirSync(lockDir).filter((name) => name.endsWith(".state")),
+    ).toEqual([]);
+  });
 });
 
 /** `setpriv`で`uid`に落としてシェルのスクリプトを実行し、終了コードを返す。 */
@@ -1124,10 +1232,12 @@ suite("entries another slot adds during a check", () => {
         "mkdir shared/b-dir && chmod 777 shared/b-dir",
         "touch shared/b-file && chmod 666 shared/b-file",
         `ln -s ${victim} shared/b-link`,
+        "mkdir shared/b-acl && setfacl -d -m o::rwx shared/b-acl",
       ].join(" && "),
       worktree,
     );
     await running;
+    writeFileSync(join(worktree, "shared", "b-acl", "by-root"), "x\n");
   }, 60_000);
 
   afterAll(() => fx.cleanup());
@@ -1154,5 +1264,133 @@ suite("entries another slot adds during a check", () => {
 
   test("the target of that symlink keeps its mode", () => {
     expect(statSync(victim).mode & 0o777).toBe(0o666);
+  });
+
+  test("a file root creates later in a directory the other slot gave a default ACL is not writable by others", () => {
+    expect(
+      statSync(join(worktree, "shared", "b-acl", "by-root")).mode & 0o022,
+    ).toBe(0);
+  });
+});
+
+/**
+ * 取り消された実行のうち、worktreeのロックの下で検査コマンドを起動し、別のセッションに抜けたプロセスを残したものを再現する。
+ * 残ったプロセスは枠のuidで動き、worktreeのロックを受け継いで持ち続ける。
+ */
+async function cancelledLockedRun(opts: {
+  readonly lockDir: string;
+  readonly worktreeDir: string;
+  readonly homeDir: string;
+}): Promise<string> {
+  const module = (name: string): string =>
+    JSON.stringify(join(import.meta.dir, `../../f/factory/lib/${name}`));
+  const child = Bun.spawn(
+    [
+      "bun",
+      "-e",
+      `import { createCheckSandbox, defaultSandboxDeps } from ${module("check_sandbox.ts")};
+import { withWorktreeProcessLock, worktreeLockFor } from ${module("process_lock.ts")};
+import { runCommand } from ${module("workspace.ts")};
+const sandbox = createCheckSandbox({ uids: ${JSON.stringify(POOL)}, deps: defaultSandboxDeps(${JSON.stringify(opts.lockDir)}) });
+const dirs = { worktreeDir: ${JSON.stringify(opts.worktreeDir)}, homeDir: ${JSON.stringify(opts.homeDir)} };
+await sandbox.prepare(dirs);
+const run = withWorktreeProcessLock(runCommand, worktreeLockFor(dirs.worktreeDir), { kind: "implement", workItemId: 1, jobId: "cancelled" });
+await run(sandbox.wrap(["/bin/sh", "-c", "setsid sleep 300 </dev/null >/dev/null 2>&1 & sleep 0.3"]), { cwd: dirs.worktreeDir, env: { PATH: "/usr/bin:/bin", HOME: dirs.homeDir } });
+console.log("prepared");
+process.kill(process.pid, "SIGKILL");`,
+    ],
+    { stdout: "pipe", env: { PATH: "/usr/local/bin:/usr/bin:/bin" } },
+  );
+  const said = await new Response(child.stdout).text();
+  await child.exited;
+  // 殺したプロセスの下で枠のロックを持っていた`flock`が、パイプの終わりを見て抜けるのを待つ。
+  await Bun.sleep(300);
+  return said.trim();
+}
+
+suite("a worktree lock a cancelled check keeps", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  const uid = POOL[0] ?? 0;
+  let worktree = "";
+  let staleHome = "";
+  let said = "";
+  let heldBefore = "";
+  let whileSlotHeld: unknown = null;
+  let afterRestore: unknown = null;
+  let heldAfter = "";
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("locked");
+    staleHome = makeHome();
+    said = await cancelledLockedRun({
+      lockDir,
+      worktreeDir: worktree,
+      homeDir: staleHome,
+    });
+    const lock = worktreeLockFor(worktree);
+    heldBefore = await probeWorktreeLock({ run: runCommand, lock });
+    const ensure = () =>
+      ensureWorktreeLockFree({
+        run: runCommand,
+        lock,
+        policy: null,
+        deps: {
+          ...defaultLockReleaseDeps(200),
+          restoreOwnership: restoreOwnershipStep((dir) =>
+            restoreCheckOwnership(dir, POOL, defaultSandboxDeps(lockDir), 500),
+          ),
+        },
+      });
+    // 別の実行が枠を持っている間は、worktreeに触れずに引き返す。
+    const slot: SlotHandle | null =
+      await defaultSandboxDeps(lockDir).slots.tryAcquire(0);
+    try {
+      whileSlotHeld = await ensure().then(
+        () => "returned",
+        (error: unknown) => error,
+      );
+    } finally {
+      await slot?.release();
+    }
+    afterRestore = await ensure().then(
+      (stopped) => stopped,
+      (error: unknown) => error,
+    );
+    heldAfter = await probeWorktreeLock({ run: runCommand, lock });
+  }, 120_000);
+
+  afterAll(() => {
+    rmSync(staleHome, { recursive: true, force: true });
+    fx.cleanup();
+  });
+
+  test("the cancelled run left a process holding the worktree lock", () => {
+    expect([said, heldBefore]).toEqual(["prepared", "held"]);
+  });
+
+  test("the worktree stays busy while another run holds the slot", () => {
+    expect(whileSlotHeld).toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("the next step goes on once the slot is free", () => {
+    expect(afterRestore).toEqual([]);
+  });
+
+  test("the worktree lock is free afterwards", () => {
+    expect(heldAfter).toBe("free");
+  });
+
+  test("the process the cancelled run left is stopped", () => {
+    expect(processesOf([uid])).toEqual([]);
+  });
+
+  test("the worktree is owned by root again", () => {
+    expect(lstatSync(worktree).uid).toBe(0);
+  });
+
+  test("root can run git in the worktree again", () => {
+    expect(runSync(["git", "status", "--porcelain"], worktree)).toBe(0);
   });
 });

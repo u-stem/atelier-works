@@ -4,7 +4,6 @@
 // 呼び出し側(`implement_verify`、`pr_fix_verify`)は、実行するコマンドのランナーを注入する。
 
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type CheckSandbox, checkEnv, checkTmpDir } from "./check_sandbox.ts";
 import { maskSecrets } from "./log.ts";
@@ -40,6 +39,9 @@ export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
 export const CHECK_COMMAND_PATH =
   "/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin";
 
+/** 検査コマンドのHOMEを作るディレクトリ。誰でも入れる(sticky付きの1777)、rootが所有するディレクトリである。 */
+const CHECK_HOME_PARENT = "/tmp";
+
 export type CheckHomeDir = {
   readonly path: string;
   readonly cleanup: () => Promise<void>;
@@ -57,9 +59,11 @@ export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
  * mkdtempと後始末の形にしている。
  * 中に検査コマンドの`TMPDIR`(`checkTmpDir`、0700)も作る。共有の`/tmp`に置かれたファイルは、
  * 同じuidを次に使う別のリポジトリの検査から読めるためである。
+ * 置き場所は`os.tmpdir()`(`TMPDIR`)ではなく、固定の`/tmp`にする。
+ * ジョブの`TMPDIR`が`/tmp/windmill`の下を指すと、準備がそこを0700にするので、検査用のuidがHOMEにたどり着けないためである。
  */
 const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
-  const dir = await mkdtemp(join(tmpdir(), "factory-check-home-"));
+  const dir = await mkdtemp(join(CHECK_HOME_PARENT, "factory-check-home-"));
   await mkdir(checkTmpDir(dir), { mode: 0o700 });
   return {
     path: dir,

@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CheckSlotInUseError } from "../../f/factory/lib/check_sandbox.ts";
 import {
   defaultLockReleaseDeps,
   defaultOrphanLockFileDeps,
@@ -40,6 +41,7 @@ import {
   removeLockFileArgv,
   removeLockFileUnderLock,
   removeOrphanLockFiles,
+  restoreOwnershipStep,
   type SignalDeps,
   scanLockProcesses,
   stopProcesses,
@@ -1887,16 +1889,76 @@ describe("ensureWorktreeLockFree restoring ownership", () => {
     expect(events).toEqual(["probe", "scan", "restore"]);
   });
 
-  test("does not restore the ownership while the lock is held", async () => {
+  test("does not restore the ownership while a holder it can see keeps the lock", async () => {
     const events: string[] = [];
     const fake = createFakeCommandRunner(busyTimes(4));
     await ensureWorktreeLockFree({
       run: fake.run,
       lock: LOCK,
       policy: null,
-      deps: restoringDeps(events),
+      deps: restoringDeps(events, undefined, [entry()]),
     }).catch(() => {});
     expect(events).not.toContain("restore");
+  });
+
+  test("restores the ownership when the lock is held but no holder can be seen", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([...busyTimes(4), ok()]);
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps(events),
+    });
+    expect(events).toEqual(["scan", "restore"]);
+  });
+
+  test("goes on once the lock frees after restoring the ownership", async () => {
+    const fake = createFakeCommandRunner([...busyTimes(4), ok()]);
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([]),
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  test("stays busy when the lock is still held after restoring the ownership", async () => {
+    const fake = createFakeCommandRunner(busyTimes(20));
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([]),
+      }),
+    ).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("restores the ownership for an invisible holder even when stopping is allowed", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([...busyTimes(4), ok()]);
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: { self: THIS_JOB, recheck: async () => {} },
+      deps: restoringDeps(events),
+    });
+    expect(events).toContain("restore");
+  });
+
+  test("passes on a WorktreeBusyError from restoring the ownership", async () => {
+    const fake = createFakeCommandRunner(busyTimes(4));
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([], new WorktreeBusyError([], "slot held")),
+      }),
+    ).rejects.toThrow("slot held");
   });
 
   test("does not restore the ownership while a related process remains", async () => {
@@ -1959,6 +2021,51 @@ describe("ensureWorktreeLockFree restoring ownership", () => {
         deps: withoutRestore,
       }),
     ).resolves.toEqual([]);
+  });
+});
+
+describe("restoreOwnershipStep", () => {
+  test("turns a slot that another run holds into WorktreeBusyError", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckSlotInUseError(2, 10003);
+    });
+    await expect(step(LOCK)).rejects.toBeInstanceOf(WorktreeBusyError);
+  });
+
+  test("names the held slot in the busy reason", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new CheckSlotInUseError(2, 10003);
+    });
+    await expect(step(LOCK)).rejects.toThrow("factory-check-2");
+  });
+
+  test("passes another error through", async () => {
+    const step = restoreOwnershipStep(async () => {
+      throw new Error("chown failed");
+    });
+    await expect(step(LOCK)).rejects.toThrow("chown failed");
+  });
+
+  test("restores the worktree of the lock", async () => {
+    const dirs: string[] = [];
+    const step = restoreOwnershipStep(async (dir) => {
+      dirs.push(dir);
+      return true;
+    });
+    await step(LOCK);
+    expect(dirs).toEqual([LOCK.worktreeDir]);
+  });
+});
+
+describe("WorktreeBusyError", () => {
+  test("carries a detail when no holder is known", () => {
+    expect(new WorktreeBusyError([], "slot held").message).toBe(
+      `${WORKTREE_BUSY_REASON}: slot held`,
+    );
+  });
+
+  test("keeps the plain reason without holders or detail", () => {
+    expect(new WorktreeBusyError([]).message).toBe(WORKTREE_BUSY_REASON);
   });
 });
 

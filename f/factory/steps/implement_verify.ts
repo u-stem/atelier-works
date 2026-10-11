@@ -7,7 +7,6 @@ import { runAllowedCheckCommands } from "../lib/check_runner.ts";
 import {
   checkSandboxFromEnv,
   kernelWarningText,
-  slotSkipNoticeText,
 } from "../lib/check_sandbox.ts";
 import {
   buildSystemPrompt,
@@ -17,6 +16,7 @@ import {
 import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
 import {
   addNotice,
+  addNoticeUnlessUnresolved,
   countImplementFailedRounds,
   getWorkItem,
   insertImplementRound,
@@ -149,14 +149,12 @@ export async function main(
     context.repo,
   );
   // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
-  // 片付けられずに飛ばした枠は、検査を止めずにnoticeで知らせる。
+  // 枠を片付けられずに飛ばしたときと、読めない枠の記録を退避したときは、検査を止めずにnoticeで知らせる。
+  // 同じ状況が続いても検査のたびに積み上がらないよう、同じ本文の未解決のnoticeがあれば足さない。
   const checkSandbox =
     commands.length > 0
-      ? checkSandboxFromEnv(process.env, async (skip) => {
-          await addNotice({
-            kind: "check_slot_skipped",
-            message: slotSkipNoticeText(skip),
-          });
+      ? checkSandboxFromEnv(process.env, async (notice) => {
+          await addNoticeUnlessUnresolved(notice);
         })
       : null;
   // `pr_fix_verify`と同じ常設リスクの告知。

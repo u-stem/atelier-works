@@ -27,12 +27,17 @@ ARG WMILL_VERSION
 
 # ベースのイメージにはbun・node・npm・git・curl・jqが入っている。
 # 以降の手順で実際に足りないパッケージだけを足す。
+# 検査コマンドの後始末は、`util-linux`の`setpriv`と`flock`、`procps`の`kill`、
+# `acl`の`getfacl`と`setfacl`を絶対パスで呼ぶ。`acl`は、検査用のユーザーが
+# worktreeに付けたACLを、所有権を取り戻すときに消すために使う。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        acl \
         ca-certificates \
         curl \
         git \
         jq \
+        procps \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
 
@@ -129,7 +134,9 @@ ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/loca
 # `claude`はPATHの名前で解決して確かめる。
 # `setpriv`は、検査の実行と同じ引数で、すべての枠について、切り替えた先のuidと、
 # ケーパビリティの上限が空であること、`no_new_privs`が立つことを確かめる。
+# 検査の後始末が絶対パスで呼ぶ`kill`、`getfacl`、`setfacl`があることも確かめる。
 RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
+    && test -x /usr/bin/kill && test -x /usr/bin/getfacl && test -x /usr/bin/setfacl \
     && for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1))); do \
         uid="$((FACTORY_CHECK_UID + i))"; \
         [ "$(setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${uid}" ] \
