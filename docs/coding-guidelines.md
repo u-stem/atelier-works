@@ -187,7 +187,8 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 Opusで起動できないときの扱いは、review-loopスキルにある。
 
 Factoryも同じ方針で、`f/factory/factory_config`の`model`(既定はSonnet)と`heavy_model`(既定はOpus)を使い分ける。
-実装とPR修正は、同じ作業でSonnetが2回失敗したら、以後は`heavy_model`で動く。
+実装とPR修正は、同じ作業でSonnetが続けて2回失敗したら、`heavy_model`で動く。
+Sonnetが成功すれば、失敗の数を数え直す。PR修正は、再レビューが続いて3ラウンド目に入っても`heavy_model`で動く。
 FactoryのPRのレビューは、失敗の数にかかわらず`heavy_model`で動く。
 工程ごとの割り当てと、既存のリソースの書き換えは[運用](operations.md)の「モデルを使い分ける」にある。
 
