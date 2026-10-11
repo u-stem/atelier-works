@@ -296,7 +296,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | スケジュール | 処理の対象 |
 | --- | --- |
 | `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける。閉じたIssueやPRの失敗、人の対応待ち、期限切れの作業項目は、閉じた人を確かめて取り消し、要対応の一覧から外す |
-| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
+| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数 |
 
@@ -349,6 +349,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
+| `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |

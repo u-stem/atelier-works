@@ -1,0 +1,9 @@
+summary: '[LIB] ジョブごとの一時ディレクトリ'
+description: 内部ライブラリです。直接実行するものではありません。ジョブごとの0700の一時ディレクトリを作り、子プロセスのTMPDIRに渡し、残ったものを掃除します。
+lock: '!inline f/factory/lib/job_tmp.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

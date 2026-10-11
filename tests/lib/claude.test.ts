@@ -522,6 +522,38 @@ describe("runClaude", () => {
     );
   });
 
+  test("points TMPDIR at the given job directory", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      tmpDir: "/run/factory-tmp/fj-x",
+    });
+    expect(fake.calls[0]?.options?.env?.TMPDIR).toBe("/run/factory-tmp/fj-x");
+  });
+
+  test("points CLAUDE_CODE_TMPDIR at the same job directory", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      tmpDir: "/run/factory-tmp/fj-x",
+    });
+    expect(fake.calls[0]?.options?.env?.CLAUDE_CODE_TMPDIR).toBe(
+      "/run/factory-tmp/fj-x",
+    );
+  });
+
+  test("leaves CLAUDE_CODE_TMPDIR unset outside a job", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude(baseOptions(fake.run));
+    expect(fake.calls[0]?.options?.env?.CLAUDE_CODE_TMPDIR).toBeUndefined();
+  });
+
   test("turns off the git status snapshot so claude runs no git at startup", async () => {
     const fake = createFakeCommandRunner([
       { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },

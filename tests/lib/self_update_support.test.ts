@@ -286,6 +286,11 @@ describe("buildWmillEnv", () => {
     expect(env).toMatchObject({ HOME: "/home/factory", PATH: "/usr/bin:/bin" });
   });
 
+  test("carries TMPDIR through when set", () => {
+    const env = buildWmillEnv({ TMPDIR: "/run/factory-tmp/fj-x" });
+    expect(env.TMPDIR).toBe("/run/factory-tmp/fj-x");
+  });
+
   test("omits HOME and PATH when unset", () => {
     const env = buildWmillEnv({});
     expect(Object.keys(env)).toEqual(["NPM_CONFIG_IGNORE_SCRIPTS"]);

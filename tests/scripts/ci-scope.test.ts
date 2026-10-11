@@ -1170,6 +1170,10 @@ describe("import closure of the CI tests", () => {
     expect(uncovered).toEqual([]);
   });
 
+  test("the test preload file triggers worker", () => {
+    expect(scopeOfPaths(["tests/preload.ts"]).worker).toBe(true);
+  });
+
   test("the traced files use no dynamic import or require", () => {
     const files = [
       ...importClosure("scripts/test-db-queries.ts"),

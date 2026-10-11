@@ -65,7 +65,7 @@ export type CreateCheckHomeDir = () => Promise<CheckHomeDir>;
  * 中に検査コマンドの`TMPDIR`(`checkTmpDir`、0700)も作る。共有の`/tmp`に置かれたファイルは、
  * 同じuidを次に使う別のリポジトリの検査から読めるためである。
  * 置き場所は`os.tmpdir()`(`TMPDIR`)ではなく、固定の`/tmp`にする。
- * ジョブの`TMPDIR`が`/tmp/windmill`の下を指すと、準備がそこを0700にするので、検査用のuidがHOMEにたどり着けないためである。
+ * ジョブの`TMPDIR`は検査用のuidが入れない0700の下を指し、そこに作るとHOMEにたどり着けないためである。
  */
 const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
   const dir = await mkdtemp(join(CHECK_HOME_PARENT, "factory-check-home-"));

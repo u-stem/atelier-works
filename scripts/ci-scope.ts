@@ -91,6 +91,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/drawio.ts",
   "f/factory/lib/drawio_viewer_observations.ts",
   "f/factory/lib/job_ids.ts",
+  "f/factory/lib/job_tmp.ts",
   "f/factory/lib/log.ts",
   "f/factory/lib/requirements_template.ts",
   "f/factory/lib/summary_support.ts",
@@ -102,10 +103,13 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
 // workerイメージの中で動かすプロセスロックのテストの、テストとlib側の依存。
 // 一覧の網羅は、テストがimportの連鎖から確かめる。
 export const WORKER_DEPENDENCY_FILES: readonly string[] = [
+  "f/factory/lib/job_ids.ts",
+  "f/factory/lib/job_tmp.ts",
   "f/factory/lib/log.ts",
   "f/factory/lib/types.ts",
   "f/factory/lib/workspace.ts",
   "tests/lib/testSupport.ts",
+  "tests/preload.ts",
 ];
 
 const ZERO_SHA = /^0+$/;

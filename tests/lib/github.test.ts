@@ -144,6 +144,22 @@ describe("isFactoryPost", () => {
 });
 
 describe("getViewer", () => {
+  test("points TMPDIR at the given job directory", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
+    await getViewer({
+      run: fake.run,
+      ghToken: "tok",
+      tmpDir: "/run/factory-tmp/fj-x",
+    });
+    expect(fake.calls[0]?.options?.env?.TMPDIR).toBe("/run/factory-tmp/fj-x");
+  });
+
+  test("leaves TMPDIR unset outside a job", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
+    await getViewer({ run: fake.run, ghToken: "tok" });
+    expect(fake.calls[0]?.options?.env?.TMPDIR).toBeUndefined();
+  });
+
   test("returns the authenticated login", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({ login: "factory-bot", id: 12345 }),

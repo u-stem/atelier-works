@@ -7,6 +7,7 @@ import {
   loadConfig,
   parseFactoryConfig,
 } from "../../f/factory/lib/config.ts";
+import { JOB_TMP_MAX_AGE_SEC } from "../../f/factory/lib/job_tmp.ts";
 
 /**
  * 9つの設定項目を追加する前に作られたリソースと同じ形の値。
@@ -80,6 +81,30 @@ describe("model settings", () => {
 
   test("throws when heavy_model is not a string", () => {
     const raw = { ...LEGACY_RAW_CONFIG, heavy_model: 5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("parseFactoryConfig timeouts against the job temp directory age limit", () => {
+  const limit = JOB_TMP_MAX_AGE_SEC;
+
+  test("rejects a claude_timeout_sec above the limit", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, claude_timeout_sec: limit + 1 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts a claude_timeout_sec at the limit", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, claude_timeout_sec: limit };
+    expect(parseFactoryConfig(raw).claude_timeout_sec).toBe(limit);
+  });
+
+  test("accepts an implement_timeout_sec at the limit", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_timeout_sec: limit };
+    expect(parseFactoryConfig(raw).implement_timeout_sec).toBe(limit);
+  });
+
+  test("rejects an implement_timeout_sec above the limit", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, implement_timeout_sec: limit + 1 };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 });

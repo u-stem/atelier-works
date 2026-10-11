@@ -53,6 +53,7 @@ import {
   searchIssues,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
+import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   actionableCancelNote,
@@ -111,7 +112,10 @@ export async function readRepoHeadSha(
   home?: string,
   path?: string,
 ): Promise<string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  const env: Record<string, string> = {
+    GIT_TERMINAL_PROMPT: "0",
+    ...jobTmpEnv(),
+  };
   const resolvedHome = home ?? process.env.HOME;
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
   const resolvedPath = path ?? process.env.PATH;

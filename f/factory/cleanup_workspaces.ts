@@ -15,6 +15,7 @@
 // `implement_timeout_sec`の長い方に猶予を足した時間を過ぎたものだけ。
 // プロセスのロックがまだ持たれているか、そのロックの下で起動されたプロセスが残っているworktreeは消さず、noticeを残す。
 // 掃除したリポジトリでは、worktreeが無くなったロックファイルも、ロックを取ったまま消す(`removeOrphanLockFiles`)。
+// ジョブの終了時に消されなかったジョブごとの一時ディレクトリも、期限を過ぎたものを消す(`sweepStaleJobTmpDirs`)。
 
 import * as wmill from "windmill-client@1.817.0";
 import { CheckEnvironmentError } from "./lib/check_sandbox.ts";
@@ -43,6 +44,7 @@ import {
 } from "./lib/db.ts";
 import { type GhClient, getPr } from "./lib/github.ts";
 import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
+import { sweepStaleJobTmpDirs } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   defaultLockReleaseDeps,
@@ -418,6 +420,34 @@ async function terminateOrphanClaudeProcesses(
 }
 
 // ---------------------------------------------------------------------------
+// ジョブごとの一時ディレクトリの残り
+// ---------------------------------------------------------------------------
+
+/**
+ * ジョブの終了時に消されなかった一時ディレクトリ(取り消されたジョブなどが残したもの)を消し、消した数を返す。
+ * 失敗しても掃除全体は止めない。
+ */
+function removeStaleJobTmpDirs(log: Logger): number {
+  try {
+    const result = sweepStaleJobTmpDirs({ nowMs: Date.now() });
+    if (result.failed.length > 0) {
+      log.warn("cleanup: failed to remove some job temp directories", {
+        paths: result.failed,
+        ...(result.rootError !== undefined
+          ? { root_error: maskSecrets(result.rootError) }
+          : {}),
+      });
+    }
+    return result.removed.length;
+  } catch (err) {
+    log.warn("cleanup: failed to sweep job temp directories", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ディスク使用量
 // ---------------------------------------------------------------------------
 
@@ -446,6 +476,7 @@ export type CleanupWorkspacesResult = {
   readonly removed_lock_files: number;
   readonly terminated_claude_processes: number;
   readonly killed_claude_processes: number;
+  readonly removed_job_tmp_dirs: number;
   readonly disk_usage_kb: number;
 };
 
@@ -467,6 +498,8 @@ export async function main(): Promise<CleanupWorkspacesResult> {
     log,
   );
 
+  const removedJobTmpDirs = removeStaleJobTmpDirs(log);
+
   const diskUsageKb = await recordDiskUsage(log);
 
   const result: CleanupWorkspacesResult = {
@@ -474,6 +507,7 @@ export async function main(): Promise<CleanupWorkspacesResult> {
     removed_lock_files: removed.lockFiles,
     terminated_claude_processes: claudeResult.terminated,
     killed_claude_processes: claudeResult.killed,
+    removed_job_tmp_dirs: removedJobTmpDirs,
     disk_usage_kb: diskUsageKb,
   };
   log.info("cleanup_workspaces done", result);
