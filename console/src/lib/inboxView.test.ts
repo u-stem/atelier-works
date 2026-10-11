@@ -17,11 +17,11 @@ import {
   emptyStateTone,
   filterInboxItems,
   findInboxItem,
-  hasSingleKind,
   type InboxItem,
   inboxSubtitle,
   itemId,
   missingSelectionMessage,
+  omitsKindLabels,
   selectionAfterFilter,
   selectionOf,
   sortInboxItems,
@@ -32,7 +32,6 @@ import {
 } from "./inboxView.ts";
 
 const SHA_A = "0123456789abcdef0123456789abcdef01234567";
-const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
 
 function approval(overrides: Partial<SummaryApproval> = {}): SummaryApproval {
   return {
@@ -102,6 +101,17 @@ const A1: InboxItem = {
 };
 const F7: InboxItem = { type: "failure", failure: failure() };
 const N21: InboxItem = { type: "notice", notice: notice() };
+
+function noticeItem(id: number, message: string, kind?: string): InboxItem {
+  return {
+    type: "notice",
+    notice: notice({
+      notice_id: id,
+      message,
+      ...(kind === undefined ? {} : { kind }),
+    }),
+  };
+}
 
 function summaryOf(overrides: Partial<ConsoleSummary> = {}): ConsoleSummary {
   return {
@@ -424,6 +434,7 @@ describe("describeRow", () => {
       kindLabel: "要件定義",
       statusLabel: null,
       subLabel: "作業項目 #10",
+      subTitle: null,
       iso: "2026-10-01T00:00:00.000Z",
       expiry: null,
     });
@@ -436,6 +447,7 @@ describe("describeRow", () => {
       kindLabel: "失敗",
       statusLabel: "失敗",
       subLabel: "Issue・作業項目 #7",
+      subTitle: null,
       iso: "2026-10-02T00:00:00.000Z",
       expiry: null,
     });
@@ -466,7 +478,8 @@ describe("describeRow", () => {
       title: "データベースの掃除の失敗",
       kindLabel: "通知",
       statusLabel: null,
-      subLabel: null,
+      subLabel: "disk full",
+      subTitle: "disk full",
       iso: "2026-10-03T00:00:00.000Z",
       expiry: null,
     });
@@ -474,13 +487,6 @@ describe("describeRow", () => {
 });
 
 describe("describeRow for a notice", () => {
-  test("marks an info notice in the kind label", () => {
-    expect(
-      describeRow({ type: "notice", notice: notice({ severity: "info" }) }, NOW)
-        .kindLabel,
-    ).toBe("通知(情報)");
-  });
-
   test("marks a resolved notice in the status label", () => {
     expect(
       describeRow({ type: "notice", notice: notice({ resolved: true }) }, NOW)
@@ -490,79 +496,142 @@ describe("describeRow for a notice", () => {
 
   test("names the first target of the body in the sub label", () => {
     expect(
-      describeRow(
-        { type: "notice", notice: notice({ message: "o/r#12 (work item 3)" }) },
-        NOW,
-      ).subLabel,
-    ).toBe("o/r#12");
+      describeRow(noticeItem(1, "o/r#12 (work item 3)"), NOW).subLabel,
+    ).toBe("o/r#12・(work item 3)");
   });
 
   test("names the first version of the body in the sub label", () => {
-    expect(
-      describeRow(
-        { type: "notice", notice: notice({ message: `deployed(${SHA_A})` }) },
-        NOW,
-      ).subLabel,
-    ).toBe("版 0123456");
-  });
-
-  test("joins the version and the first target in the sub label", () => {
-    expect(
-      describeRow(
-        {
-          type: "notice",
-          notice: notice({ message: `${SHA_A} for o/r#12 and p/q#3` }),
-        },
-        NOW,
-      ).subLabel,
-    ).toBe("版 0123456・o/r#12");
-  });
-
-  test("tells two notices of one kind apart by their versions", () => {
-    const labels = [SHA_A, SHA_B].map(
-      (sha) =>
-        describeRow(
-          { type: "notice", notice: notice({ message: `deployed(${sha})` }) },
-          NOW,
-        ).subLabel,
+    expect(describeRow(noticeItem(1, `deployed(${SHA_A})`), NOW).subLabel).toBe(
+      "版 0123456・deployed(0123456)",
     );
+  });
+
+  test("puts the target before the version and drops the target from the excerpt", () => {
+    expect(
+      describeRow(noticeItem(1, `${SHA_A} for o/r#12 and p/q#3`), NOW).subLabel,
+    ).toBe("o/r#12・版 0123456・0123456 for and");
+  });
+
+  test("cuts a long body to one line with an ellipsis", () => {
+    expect(describeRow(noticeItem(1, "a".repeat(60)), NOW).subLabel).toBe(
+      `${"a".repeat(36)}…`,
+    );
+  });
+
+  test("joins the lines of the body into one", () => {
+    expect(describeRow(noticeItem(1, "first\n  second"), NOW).subLabel).toBe(
+      "first second",
+    );
+  });
+
+  test("carries the whole body in the sub title", () => {
+    expect(describeRow(noticeItem(1, "a".repeat(60)), NOW).subTitle).toBe(
+      "a".repeat(60),
+    );
+  });
+
+  test("keeps the whole body, with shortened versions, in the sub title", () => {
+    expect(describeRow(noticeItem(1, `deployed(${SHA_A})`), NOW).subTitle).toBe(
+      "deployed(0123456)",
+    );
+  });
+
+  test("has no sub label for an empty body", () => {
+    expect(describeRow(noticeItem(1, ""), NOW).subLabel).toBeNull();
+  });
+});
+
+describe("describeRow for notices of one kind", () => {
+  const mismatchBase = `f/factory/deployed_sha(${SHA_A})から、self cloneのHEADへの反映が進んでいません`;
+  const failedHint = `${mismatchBase}。原因の候補: self_updateの反映が、今のself cloneのHEADで失敗しています`;
+  const stalledHint = `${mismatchBase}。原因の候補: self_updateのスケジュールが止まっているか、今のself cloneのHEADをまだ試していません`;
+
+  function subLabelsOf(messages: readonly string[]): (string | null)[] {
+    const items = messages.map((message, index) =>
+      noticeItem(index + 1, message, "schedule_failing"),
+    );
+    return items.map(
+      (item) => describeRow(item, NOW, { peers: items }).subLabel,
+    );
+  }
+
+  test("tells apart bodies whose versions agree and whose causes differ", () => {
+    const labels = subLabelsOf([failedHint, stalledHint]);
     expect(new Set(labels).size).toBe(2);
+  });
+
+  test("shows the part where the cause differs", () => {
+    expect(subLabelsOf([failedHint, stalledHint])[0]).toContain("の反映が、");
+  });
+
+  test("tells apart bodies that differ only in a path", () => {
+    const labels = subLabelsOf([
+      "schedule f/factory/poll_issues keeps failing since 10:00",
+      "schedule f/factory/cleanup_db keeps failing since 10:00",
+    ]);
+    expect(new Set(labels).size).toBe(2);
+  });
+
+  test("tells apart bodies when one is the start of the other", () => {
+    const labels = subLabelsOf([
+      "schedule f/factory/a keeps failing",
+      "schedule f/factory/a keeps failing since 10:00",
+    ]);
+    expect(new Set(labels).size).toBe(2);
+  });
+
+  test("gives every notice a sub label even without a version or a target", () => {
+    expect(subLabelsOf(["disk full", "network down"])).toEqual([
+      "disk full",
+      "network down",
+    ]);
+  });
+
+  test("does not compare notices of different kinds", () => {
+    const body = "shared body that is longer than the excerpt limit allows";
+    const first = noticeItem(1, body, "schedule_failing");
+    const other = noticeItem(2, `${body}!`, "cleanup_db_failed");
+    expect(describeRow(first, NOW, { peers: [first, other] }).subLabel).toBe(
+      "shared body that is longer than the…",
+    );
   });
 });
 
 describe("describeRow without the kind", () => {
-  test("drops the kind label of an action notice", () => {
-    expect(describeRow(N21, NOW, false).kindLabel).toBeNull();
-  });
-
-  test("keeps the information mark of an info notice", () => {
-    expect(
-      describeRow(
-        { type: "notice", notice: notice({ severity: "info" }) },
-        NOW,
-        false,
-      ).kindLabel,
-    ).toBe("情報");
+  test("drops the kind label of a notice", () => {
+    expect(describeRow(N21, NOW, { showKind: false }).kindLabel).toBeNull();
   });
 
   test("drops the kind label of a failure", () => {
-    expect(describeRow(F7, NOW, false).kindLabel).toBeNull();
+    expect(describeRow(F7, NOW, { showKind: false }).kindLabel).toBeNull();
+  });
+
+  test("keeps the kind label of an approval", () => {
+    expect(describeRow(A1, NOW, { showKind: false }).kindLabel).toBe(
+      "要件定義",
+    );
   });
 });
 
-describe("hasSingleKind", () => {
-  test("is true when every item has the same type", () => {
-    expect(hasSingleKind([N21, { type: "notice", notice: notice() }])).toBe(
-      true,
-    );
+describe("omitsKindLabels", () => {
+  test("is true when every item is a notice", () => {
+    expect(omitsKindLabels([N21, noticeItem(22, "x")])).toBe(true);
+  });
+
+  test("is true when every item is a failure", () => {
+    expect(omitsKindLabels([F7])).toBe(true);
+  });
+
+  test("is false when only approvals are listed", () => {
+    expect(omitsKindLabels([A1])).toBe(false);
   });
 
   test("is false when the types differ", () => {
-    expect(hasSingleKind([A1, N21])).toBe(false);
+    expect(omitsKindLabels([A1, N21])).toBe(false);
   });
 
   test("is false for an empty list", () => {
-    expect(hasSingleKind([])).toBe(false);
+    expect(omitsKindLabels([])).toBe(false);
   });
 });
 
@@ -578,10 +647,16 @@ describe("unlistedPath", () => {
     ).toBe("/system");
   });
 
-  test("points the notices over the limit to the system screen", () => {
-    expect(unlistedPath({ type: "notice", label: "通知", count: 2 })).toBe(
-      "/system",
-    );
+  test("has no destination for notices over the limit", () => {
+    expect(
+      unlistedPath({ type: "notice", label: "通知", count: 2 }),
+    ).toBeNull();
+  });
+
+  test("has no destination for failures over the limit", () => {
+    expect(
+      unlistedPath({ type: "failure", label: "失敗", count: 2 }),
+    ).toBeNull();
   });
 
   test("has no destination for approvals over the limit", () => {

@@ -86,11 +86,21 @@ export type NoticeMessagePart = {
   readonly sha?: string;
 };
 
-/** 本文を、版とそれ以外に分ける。版は先頭7桁の表示にし、全体を`sha`に残す。 */
-export function splitNoticeMessage(message: string): NoticeMessagePart[] {
+/**
+ * 本文を、版とそれ以外に分ける。版は先頭7桁の表示にし、全体を`sha`に残す。
+ * `truncated`が真のとき、本文の末尾に接する40桁は版にしない。
+ * 長い16進数の途中で切れていると、別の値の一部を版と見間違えるためである。
+ */
+export function splitNoticeMessage(
+  message: string,
+  truncated = false,
+): NoticeMessagePart[] {
   const parts: NoticeMessagePart[] = [];
   let cursor = 0;
   for (const match of message.matchAll(SHA_PATTERN)) {
+    if (truncated && match.index + match[0].length === message.length) {
+      continue;
+    }
     if (match.index > cursor) {
       parts.push({ text: message.slice(cursor, match.index) });
     }
@@ -106,7 +116,6 @@ export function splitNoticeMessage(message: string): NoticeMessagePart[] {
 export type NoticeDescription = {
   readonly title: string;
   readonly severity: "action" | "info";
-  readonly severityLabel: string;
   /** 詳細の先頭に出すタグ。種別と重要度を1つにする。 */
   readonly badgeLabel: string;
   readonly resolved: boolean;
@@ -142,7 +151,7 @@ export function describeNotice(
   const message = displayableIssueText(notice.message);
   const truncated =
     source === "summary" && [...notice.message].length >= SUMMARY_MESSAGE_LIMIT;
-  const parts = splitNoticeMessage(message.text);
+  const parts = splitNoticeMessage(message.text, truncated);
   const shas = [
     ...new Set(
       parts.flatMap((part) => (part.sha === undefined ? [] : [part.sha])),
@@ -151,7 +160,6 @@ export function describeNotice(
   return {
     title: noticeKindLabel(notice.kind),
     severity: notice.severity === "info" ? "info" : "action",
-    severityLabel: noticeSeverityLabel(notice.severity),
     badgeLabel: `${noticeSeverityLabel(notice.severity)}の通知`,
     resolved: notice.resolved,
     canResolve: !notice.resolved && notice.resolvable,

@@ -88,12 +88,6 @@ describe("describeNotice", () => {
     expect(describeNotice(notice()).title).toBe("データベースの掃除の失敗");
   });
 
-  test("labels the severity", () => {
-    expect(describeNotice(notice({ severity: "info" })).severityLabel).toBe(
-      "情報",
-    );
-  });
-
   test("lets an unresolved resolvable notice be resolved", () => {
     expect(describeNotice(notice()).canResolve).toBe(true);
   });
@@ -248,6 +242,40 @@ describe("splitNoticeMessage", () => {
 
   test("does not shorten a hex run shorter than a version", () => {
     expect(splitNoticeMessage("abcdef0")).toEqual([{ text: "abcdef0" }]);
+  });
+
+  test("does not take a version that touches the cut end of the body", () => {
+    expect(splitNoticeMessage(`deployed(${FULL_SHA}`, true)).toEqual([
+      { text: `deployed(${FULL_SHA}` },
+    ]);
+  });
+
+  test("takes a version that ends before the cut end of the body", () => {
+    expect(
+      splitNoticeMessage(`deployed(${FULL_SHA}) is`, true).map(
+        (part) => part.sha,
+      ),
+    ).toEqual([undefined, FULL_SHA, undefined]);
+  });
+
+  test("takes a version at the end of a body that is read in full", () => {
+    expect(
+      splitNoticeMessage(`deployed(${FULL_SHA}`, false).map((part) => part.sha),
+    ).toEqual([undefined, FULL_SHA]);
+  });
+});
+
+describe("describeNotice versions in a cut body", () => {
+  test("does not list a version at the cut end of the summary body", () => {
+    const message = `${"x ".repeat((SUMMARY_MESSAGE_LIMIT - 40) / 2)}${FULL_SHA}`;
+    expect(describeNotice(notice({ message })).shas).toEqual([]);
+  });
+
+  test("lists the same version when the body is read in full", () => {
+    const message = `${"x ".repeat((SUMMARY_MESSAGE_LIMIT - 40) / 2)}${FULL_SHA}`;
+    expect(describeNotice(notice({ message }), "full").shas).toEqual([
+      FULL_SHA,
+    ]);
   });
 });
 

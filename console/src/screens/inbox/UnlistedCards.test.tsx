@@ -11,6 +11,8 @@ const AUDIT: UnlistedCount = {
   cause: "audit",
 };
 const APPROVAL: UnlistedCount = { type: "approval", label: "承認", count: 2 };
+const NOTICE: UnlistedCount = { type: "notice", label: "通知", count: 2 };
+const FAILURE: UnlistedCount = { type: "failure", label: "失敗", count: 2 };
 
 function render(entries: readonly UnlistedCount[], compact: boolean): string {
   return renderToStaticMarkup(
@@ -29,13 +31,25 @@ describe("UnlistedCards", () => {
     expect(render([AUDIT], false)).toContain('href="/system"');
   });
 
-  test("tells where the link leads", () => {
+  test("names the link by the visible note", () => {
     expect(render([AUDIT], true)).toContain(
-      "監査の失敗 3件。システムの画面で確認する",
+      "再実行できません。システムの画面で確認してください",
     );
+  });
+
+  test("gives the link no label that hides the visible note", () => {
+    expect(render([AUDIT], true)).not.toContain("aria-label");
   });
 
   test("does not link approvals, which the system screen lacks", () => {
     expect(render([APPROVAL], true)).not.toContain("<a ");
+  });
+
+  test("does not link notices over the limit, which the system screen lacks", () => {
+    expect(render([NOTICE], true)).not.toContain("<a ");
+  });
+
+  test("does not link failures over the limit, which the system screen lacks", () => {
+    expect(render([FAILURE], false)).not.toContain("<a ");
   });
 });

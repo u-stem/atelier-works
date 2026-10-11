@@ -9,6 +9,7 @@ import type {
   SummaryFailure,
   SummaryNotice,
 } from "../api/guards/summary.ts";
+import { SCREENS } from "../app/screens.ts";
 import {
   INBOX_KINDS,
   type InboxKind,
@@ -312,51 +313,134 @@ export type RowDescription = {
   /** 一覧の行の識別子。`type:id`の形。 */
   readonly key: string;
   readonly title: string;
-  /** 種別の語。種別を省くとき(`showKind`が偽)は`null`。ただし情報の通知は「情報」を残す。 */
+  /** 種別の語。通知と失敗の固定の語は、省くとき(`showKind`が偽)に`null`になる。 */
   readonly kindLabel: string | null;
   readonly statusLabel: string | null;
   readonly subLabel: string | null;
+  /** 副題の全文。副題が本文を省いたときに、省いた分も読めるようにする。無ければ`null`。 */
+  readonly subTitle: string | null;
   readonly iso: string;
   readonly expiry: ExpiryDescription | null;
 };
 
-/** 一覧の項目がすべて同じ種類か。空の一覧は、種類が無いので偽にする。 */
-export function hasSingleKind(items: readonly InboxItem[]): boolean {
-  return items.length > 0 && new Set(items.map((item) => item.type)).size === 1;
+/**
+ * 通知と失敗の固定の語(「通知」「失敗」)を省いてよい一覧か。
+ * すべて通知、またはすべて失敗のとき、全行に同じ語が付いて情報にならない。
+ * 承認の語は要件定義、Issue化提案、改善提案などの区別を担うので、省かない。
+ */
+export function omitsKindLabels(items: readonly InboxItem[]): boolean {
+  return (
+    items.length > 0 &&
+    (items.every((item) => item.type === "notice") ||
+      items.every((item) => item.type === "failure"))
+  );
+}
+
+/** 副題に出す本文の文字数(コードポイント)。 */
+const EXCERPT_LENGTH = 36;
+
+/** 本文の食い違いを、抜粋の先頭からこの文字数だけ手前に置く。前後の言葉で違いを読めるようにする。 */
+const EXCERPT_LEAD = 8;
+
+/**
+ * 副題に出す本文。版は先頭7桁に縮めてあり、副題に別に出す対象は除く。
+ * 空白と改行は1つの空白にまとめる。
+ */
+function excerptSource(description: NoticeDescription): string {
+  const joined = description.messageParts.map((part) => part.text).join("");
+  const labels = description.targets
+    .map((target) => target.label)
+    .sort((a, b) => b.length - a.length);
+  return labels
+    .reduce((text, label) => text.split(label).join(""), joined)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function commonPrefixLength(
+  a: readonly string[],
+  b: readonly string[],
+): number {
+  let length = 0;
+  while (length < a.length && length < b.length && a[length] === b[length]) {
+    length += 1;
+  }
+  return length;
 }
 
 /**
- * 通知の行の副題。同じ題名の通知を見分ける値として、本文の最初の版と最初の対象を並べる。
- * どちらも本文に無いときは`null`にする。
+ * 本文の抜粋を1行で返す。同じ種類の通知(`peers`)があるときは、最も近い通知と食い違う所から出す。
+ * 同じ種類の通知は書き出しがそろうので、先頭だけでは見分けられないためである。
+ * 前後が省かれたときは省略記号を付ける。
  */
-function noticeSubLabel(description: NoticeDescription): string | null {
+function excerpt(text: string, peers: readonly string[]): string {
+  const chars = Array.from(text);
+  const divergence = peers
+    .filter((peer) => peer !== text)
+    .reduce(
+      (longest, peer) =>
+        Math.max(longest, commonPrefixLength(chars, Array.from(peer))),
+      0,
+    );
+  const start = Math.max(0, divergence - EXCERPT_LEAD);
+  const end = start + EXCERPT_LENGTH;
+  return [
+    start > 0 ? "…" : "",
+    chars.slice(start, end).join("").trim(),
+    end < chars.length ? "…" : "",
+  ].join("");
+}
+
+/**
+ * 通知の行の副題。同じ題名の通知を見分ける値として、対象、版、本文の抜粋をこの順に並べる。
+ * 対象と版は本文にあるときだけ出す。本文が空でなければ、副題は空にならない。
+ */
+function noticeSubLabel(
+  description: NoticeDescription,
+  peers: readonly string[],
+): string | null {
+  const target = description.targets[0];
   const sha = description.shas[0];
+  const text = excerptSource(description);
   const parts = [
+    ...(target === undefined ? [] : [target.label]),
     ...(sha === undefined ? [] : [`版 ${shortSha(sha)}`]),
-    ...(description.targets[0] === undefined
-      ? []
-      : [description.targets[0].label]),
+    ...(text === "" ? [] : [excerpt(text, peers)]),
   ];
   return parts.length === 0 ? null : parts.join("・");
 }
 
-/** 通知の行の種別の語。種別を省いても、情報の通知は要対応と区別できるよう「情報」を残す。 */
-function noticeKindMark(info: boolean, showKind: boolean): string | null {
-  if (showKind) {
-    return info ? "通知(情報)" : "通知";
-  }
-  return info ? "情報" : null;
+export type RowOptions = {
+  /** 通知と失敗の固定の種別の語を出すか。既定は出す。 */
+  readonly showKind?: boolean;
+  /** 同じ一覧の項目。通知の副題が、同じ種類の通知と見分けられるようにするために使う。 */
+  readonly peers?: readonly InboxItem[];
+};
+
+/** `item`と同じ種類の、ほかの通知の抜粋の元になる本文。 */
+function peerSources(
+  item: { readonly notice: SummaryNotice },
+  peers: readonly InboxItem[],
+): string[] {
+  return peers.flatMap((peer) =>
+    peer.type === "notice" &&
+    peer.notice.kind === item.notice.kind &&
+    peer.notice.notice_id !== item.notice.notice_id
+      ? [excerptSource(describeNotice(peer.notice))]
+      : [],
+  );
 }
 
 /**
  * 一覧の1行に出す内容。期限は`nowMs`からの残りで決める。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。
- * `showKind`が偽のとき、種別の語を省く。一覧が1種類だけで、種別が情報にならないときに使う。
+ * `options.showKind`が偽のとき、通知と失敗の固定の種別の語を省く。承認の種別の語は省かない。
  */
 export function describeRow(
   item: InboxItem,
   nowMs: number,
-  showKind = true,
+  options: RowOptions = {},
 ): RowDescription {
+  const { showKind = true, peers = [] } = options;
   const key = `${item.type}:${itemId(item)}`;
   switch (item.type) {
     case "approval": {
@@ -364,9 +448,10 @@ export function describeRow(
       return {
         key,
         title: description.title,
-        kindLabel: showKind ? description.kindLabel : null,
+        kindLabel: description.kindLabel,
         statusLabel: description.statusLabel,
         subLabel: description.workItemLabel,
+        subTitle: null,
         iso: item.approval.requested_at,
         expiry: describeExpiry(item.approval, nowMs),
       };
@@ -380,18 +465,20 @@ export function describeRow(
         kindLabel: showKind ? "失敗" : null,
         statusLabel: workItemStatusLabel(item.failure.status),
         subLabel: `${workItemKindLabel(item.failure.kind)}・${workItemRef(item.failure.work_item_id)}`,
+        subTitle: null,
         iso: item.failure.updated_at,
         expiry: null,
       };
     case "notice": {
       const description = describeNotice(item.notice);
-      const info = description.severity === "info";
+      const full = description.messageParts.map((part) => part.text).join("");
       return {
         key,
         title: description.title,
-        kindLabel: noticeKindMark(info, showKind),
+        kindLabel: showKind ? "通知" : null,
         statusLabel: description.resolved ? "解決済み" : null,
-        subLabel: noticeSubLabel(description),
+        subLabel: noticeSubLabel(description, peerSources(item, peers)),
+        subTitle: full === "" ? null : full,
         iso: item.notice.created_at,
         expiry: null,
       };
@@ -428,15 +515,16 @@ export function unlistedNote(entry: UnlistedCount): string {
   }
 }
 
-/** システムの画面のパス。ルーターのbasenameは含まない。 */
-const SYSTEM_PATH = "/system";
-
 /**
  * 一覧に出ていない件数から、続きを見る画面のパス。
- * 失敗と通知はシステムの画面で読める。承認はシステムの画面に無いので`null`にする。
+ * システムの画面が読めるのは、再実行できない監査の失敗だけである。
+ * 取得の上限を超えた承認、失敗、通知は、その画面に載らないので`null`にする。
  */
 export function unlistedPath(entry: UnlistedCount): string | null {
-  return entry.type === "approval" ? null : SYSTEM_PATH;
+  if (entry.cause !== "audit") {
+    return null;
+  }
+  return SCREENS.find((screen) => screen.id === "system")?.path ?? null;
 }
 
 /**

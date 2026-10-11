@@ -1,15 +1,16 @@
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
+import { type CopyNotifier, copySha } from "../../lib/copySha.ts";
 import type { NoticeMessagePart } from "../../lib/noticeView.ts";
 
-async function copySha(sha: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(sha);
-    toast.success("版を複製しました");
-  } catch {
-    toast.error("版を複製できませんでした");
-  }
-}
+const TOAST_NOTIFIER: CopyNotifier = {
+  success: (message) => {
+    toast.success(message);
+  },
+  error: (message) => {
+    toast.error(message);
+  },
+};
 
 /** 先頭7桁で示す版。全体はtitleに載せ、複製のボタンで取り出せる。 */
 function ShaChip({ shortText, sha }: { shortText: string; sha: string }) {
@@ -26,7 +27,8 @@ function ShaChip({ shortText, sha }: { shortText: string; sha: string }) {
         aria-label={`版${shortText}の全体を複製`}
         className="inline-flex size-5 items-center justify-center self-center rounded-sm text-subtle outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         onClick={() => {
-          void copySha(sha);
+          // 安全でない接続ではnavigator.clipboardが無く、型は有ると見なす。
+          void copySha(sha, navigator.clipboard, TOAST_NOTIFIER);
         }}
       >
         <Copy aria-hidden="true" className="size-3.5" />

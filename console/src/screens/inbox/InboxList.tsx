@@ -5,7 +5,6 @@ import { cn } from "../../lib/cn.ts";
 import type { InboxSelection } from "../../lib/inboxSelection.ts";
 import {
   describeRow,
-  hasSingleKind,
   type InboxItem,
   selectionOf,
 } from "../../lib/inboxView.ts";
@@ -22,16 +21,17 @@ export function InboxList({
   items,
   selected,
   now,
+  showKind,
   onSelect,
 }: {
   items: readonly InboxItem[];
   selected: InboxSelection | null;
   now: number;
+  /** 通知と失敗の固定の種別の語を出すか。絞り込む前の一覧全体で決め、切り替えで行の書式が変わらないようにする。 */
+  showKind: boolean;
   onSelect: (selection: InboxSelection) => void;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
-  // 1種類だけの一覧では、どの行にも同じ種別が付いて情報にならないので省く。
-  const showKind = !hasSingleKind(items);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLUListElement>): void => {
     const rows = Array.from(listRef.current?.querySelectorAll("button") ?? []);
@@ -52,7 +52,7 @@ export function InboxList({
       onKeyDown={handleKeyDown}
     >
       {items.map((item) => {
-        const row = describeRow(item, now, showKind);
+        const row = describeRow(item, now, { showKind, peers: items });
         const itemSelection = selectionOf(item);
         const isSelected =
           selected !== null &&
@@ -88,7 +88,12 @@ export function InboxList({
                   </span>
                 )}
                 {row.subLabel === null ? null : (
-                  <span className="min-w-0 truncate">{row.subLabel}</span>
+                  <span
+                    className="min-w-0 truncate"
+                    title={row.subTitle ?? undefined}
+                  >
+                    {row.subLabel}
+                  </span>
                 )}
                 {row.expiry === null ? null : (
                   <span

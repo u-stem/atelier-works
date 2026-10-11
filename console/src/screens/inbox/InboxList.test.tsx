@@ -48,28 +48,44 @@ function approval(): InboxItem {
   return { type: "approval", approval: row };
 }
 
-function render(items: readonly InboxItem[]): string {
+function render(items: readonly InboxItem[], showKind = true): string {
   return renderToStaticMarkup(
     <TooltipProvider>
-      <InboxList items={items} selected={null} now={NOW} onSelect={() => {}} />
+      <InboxList
+        items={items}
+        selected={null}
+        now={NOW}
+        showKind={showKind}
+        onSelect={() => {}}
+      />
     </TooltipProvider>,
   );
 }
 
 describe("InboxList", () => {
-  test("omits the kind of a list with one kind", () => {
-    expect(render([notice(1, SHA_A), notice(2, SHA_B)])).not.toContain(
+  test("omits the kind of notices when told not to show it", () => {
+    expect(render([notice(1, SHA_A), notice(2, SHA_B)], false)).not.toContain(
       ">通知<",
     );
   });
 
-  test("keeps the kind of a list with several kinds", () => {
-    expect(render([notice(1, SHA_A), approval()])).toContain(">通知<");
+  test("shows the kind of notices by default", () => {
+    expect(render([notice(1, SHA_A), notice(2, SHA_B)])).toContain(">通知<");
+  });
+
+  test("keeps the kind of an approval even when told not to show kinds", () => {
+    expect(render([approval()], false)).toContain(">要件定義<");
   });
 
   test("shows the version that tells same-titled notices apart", () => {
     expect(render([notice(1, SHA_A), notice(2, SHA_B)])).toContain(
       "版 fedcba9",
+    );
+  });
+
+  test("carries the whole body of a notice in the title of the sub label", () => {
+    expect(render([notice(1, `deployed(${SHA_A}) is behind`)])).toContain(
+      'title="deployed(0123456) is behind"',
     );
   });
 });

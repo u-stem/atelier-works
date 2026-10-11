@@ -12,7 +12,7 @@ import {
 const LINK_HOVER =
   "outline-none transition-colors duration-150 hover:bg-accent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring motion-reduce:transition-none";
 
-/** 移動先があるカードは全体を1つのリンクにし、押せると分かる矢印を添える。 */
+/** 移動先があるカードは全体を1つのリンクにし、押せると分かる矢印を添える。リンクの名前は、カードに見える文になる。 */
 function CardBody({
   entry,
   className,
@@ -27,11 +27,7 @@ function CardBody({
     return <div className={className}>{children}</div>;
   }
   return (
-    <Link
-      to={path}
-      aria-label={`${entry.label} ${entry.count}件。システムの画面で確認する`}
-      className={cn(className, LINK_HOVER)}
-    >
+    <Link to={path} className={cn(className, LINK_HOVER)}>
       {children}
       <ChevronRight
         aria-hidden="true"
@@ -44,7 +40,7 @@ function CardBody({
 /**
  * 一覧に出していない要対応の件数を、種類ごとのカードで示す。
  * 一覧にない分は、取得の上限を超えた分と、再実行できない監査の失敗なので、その旨を添える。
- * 失敗と通知のカードは、続きを読めるシステムの画面へのリンクにする。
+ * システムの画面で読める監査の失敗のカードだけ、その画面へのリンクにする。
  * `compact`は、一覧の上の帯に収める1行の形である。
  */
 export function UnlistedCards({
