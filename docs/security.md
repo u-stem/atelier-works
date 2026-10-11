@@ -292,6 +292,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 | ブラウザ側で制限する | `/console/*`の応答だけに、scriptの読み込み先を`/console/assets/`に絞ったCSPと、埋め込みを禁じるヘッダーを付ける |
 | CSPとCaddyのパスの解釈の違いを塞ぐ | パーセント符号を戻した元のパスが`/console/`で始まる要求は、Windmillへ転送しない。Consoleの経路では、生のパスに`%2f`か`%5c`があれば400にする |
 | 他のサイトからAPIを呼ばせない | `/api/*`への要求で`Sec-Fetch-Site`が`cross-site`か`same-site`のものは、Caddyが403にする |
+| 書き込みを絞る | 呼べるscriptは、許可リストの5つ(読み取りの1つと、承認、再実行、監査の起動、通知の解決)だけである。認可はWindmillのログインに任せる。承認者と解決者は、画面から渡さず、ジョブの実行文脈からscriptが導き、導けなければ拒否する。書き込みは、同一オリジンの`fetch`によるPOSTに限る |
 | 配信する状態を絞る | `/console/status.json`で配信するのは、`console_fetcher`の状態の4項目(`state`、`sha`、`checked_at`、`error`)だけである。`checked_at`と`error`から、自動の配信が止まっていることなど運用の状態が外から見える。`error`には分類した失敗の種類だけを書き、トークンや応答の本文などの秘密は含まない。ボリュームの他のファイルは配信しない |
 | 秘密を配信物に入れない | Consoleのバンドルは認証なしで配信されるので、`VITE_*`の変数に秘密を入れない |
 
@@ -369,6 +370,12 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 監査レポートは本文をDBから読むので、`audits`はマウントしない。
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
 読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
+
+Consoleから押せる書き込みには、読むsecret変数の上限を決める。
+`github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。
+`audit_kickoff`と`notice_resolve`は、どのsecret変数も読まない。
+Consoleの操作で、外向きの資格情報が動く範囲を広げないためである。
+tag`console`のscriptがimportでたどれるソースを数える契約テスト(`tests/scripts/console_worker_boundary.test.ts`)が、この上限を確かめる。
 
 サブパスのマウントは、ディレクトリが無いとコンテナが起動しない。
 1回限りのサービス`factory_state_init`が、起動の前に`requirements`を作る。

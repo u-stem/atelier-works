@@ -103,10 +103,24 @@ Consoleは、`src/api/windmill.ts`の`runScript`だけを通してWindmillのscr
 `POST /api/w/factory/jobs/run_wait_result/p/<path>`を、`credentials: "same-origin"`と`cache: "no-store"`で呼ぶ。
 ログインのCookieだけで動くので、トークンは持たない。
 
-呼べるscriptは、`SCRIPT_PATHS`の許可リストにある`console_query`だけである。
-読み取り専用の画面だけを持つので、書き込みのscriptは許可リストに入れない。操作の画面を足すときに、そのscriptを足す。
+`runScript`は`src/api/`の中にとどめる。
+画面は、取得の`queries.ts`と書き込みの`writes.ts`にある型付きの関数だけを使う。
+`src/api/`の外が`windmill.ts`をimportしないことは、契約テストが確かめる。
+
+呼べるscriptは、`SCRIPT_PATHS`の許可リストにある次の5つだけである。
+どれもtag`console`を持ち、Console用のworkerで動く。
+
+| 名前 | 用途 | 型付きの関数 |
+| --- | --- | --- |
+| `console_query` | 読み取り | `fetchSummary`など(`queries.ts`) |
+| `approval_decide` | 承認依頼への承認か却下の記録 | `decideApproval` |
+| `retry_work_item` | 止まった作業項目の再開 | `retryWorkItem` |
+| `audit_kickoff` | 監査の手動起動 | `kickoffAudit` |
+| `notice_resolve` | 通知1件の解決 | `resolveNotice` |
+
 パスは呼び出し側の名前から引き、外から受け取った文字列では呼ばない。
 Consoleは管理者のCookieで動くので、呼べる範囲を固定する。
+許可リストに足すscriptは、tag`console`を付け、秘密値を読む範囲を[Console用workerの境界](../security.md#console用workerの境界)に合わせる。
 
 `runScript`は例外を投げず、応答を`classifyRunResponse`で分類して返す。
 中断(`AbortSignal`)だけは、取り消しとして扱えるよう例外を再び投げる。
@@ -186,6 +200,47 @@ backendが先に新しい値を反映した間や、配信を前の版に固定�
 
 1つのタブが`summary`を取り直すと、1日に720件のジョブができる(120秒ごと)。
 ジョブの保持期間は、#138で扱う。
+
+### 書き込み
+
+書き込みのscriptは、`src/api/writes.ts`の型付きの関数だけから呼ぶ。
+関数は失敗を`ApiFailure`で投げ、戻りを`src/api/guards/writeResults.ts`の型ガードに通してから返す。
+形が違う戻りは`invalid_response`にする。
+
+| 決まり | 理由 |
+| --- | --- |
+| 認可はWindmillのログインに任せる | Consoleは独自の認可を持たない。ログインしていない呼び出しは、Windmillが401にする |
+| 承認者と解決者は引数に取らない | 画面から渡した名前は信用できない。scriptがジョブの実行文脈(`WM_USERNAME`、無ければ`WM_EMAIL`)から導き、導けなければ拒否する |
+| 同一オリジンの`fetch`でPOSTし、本文はJSONにする | 他のサイトから運用者のCookieで操作させないため。Caddyの`Sec-Fetch-Site`の検査とあわせて守る |
+| 操作の値をConsole側で固定する | 監査は`force: false`、`source: "manual"`で起動する。承認の補足(`note`)は固定の文にする。画面から変えさせない |
+| 再試行しない | 結果が分からないまま2回実行しないため |
+
+承認は、同じ決定が記録済みの行にもう一度呼ぶと、ハンドラの起動をやり直す。
+二重の送信は、画面側で止める。
+
+共通のフック`useWriteMutation`(`src/api/mutations.ts`)が、次を行う。
+実行の流れは`executeWrite`、ロックは`writeLocks`に切り出してあり、`bun test`で確かめる。
+
+- 対象のキー単位でボタンをロックする。キーは`writeTargetKey`が作り、承認の承認と却下のように、同じ対象への操作は同じキーで止める。一覧と詳細のボタンは、同じロックを共有する
+- 成功と、結果が分からない失敗の後に、関連する取得(既定はsummary)を読み直す。読み直しが終わるまでロックを残し、古い一覧で同じ操作を押させない
+- 結果が分からない失敗は、ジョブの失敗(`job_failed`)、待ちの上限(`timeout_or_unknown`)、形が違う戻り、通信の失敗である。文は`describeApiError`の書き込みの文言を使い、一覧を読み直して確かめるよう案内する
+- 401、403、4xxは、ジョブが動いていないので読み直さない
+- 401は取得と同じ経路でログインの帯に流す
+- 成功の知らせの文は、`src/lib/writeNotices.ts`の純関数が作る。解決済みだった通知の解決は成功として扱う
+
+Issueに由来する文字は、`src/lib/sanitizeDisplayText.ts`を通してプレーンテキストで描く。
+この関数は、書字方向の制御文字、ゼロ幅文字、タグ文字、制御文字を落とす。
+改行、タブ、絵文字をつなぐZWJは残す。
+文字の並びを入れ替える文字や見えない文字で、書かれていない文に見せかけられるためである。
+backendのPR題名の整形が落とす書式文字は、すべて落とす。
+`tests/scripts/console_sanitize_contract.test.ts`で確かめる。
+リンクは`safeGitHubUrl`を通したものだけにする。
+
+契約テスト`tests/scripts/console_write_contract.test.ts`は、次を確かめる。
+
+- 許可リストの行き先が、tag`console`を持つ実在のscriptであること
+- 型付きの関数の引数は、scriptの入力の項目と必須の項目に合うこと
+- 各scriptの戻りが、型ガードを通ること
 
 ## ログイン切れの扱い
 
