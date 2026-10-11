@@ -17,6 +17,7 @@ import {
   insertCleanupRun,
   insertWorkItem,
   listUnresolvedNoticesByKind,
+  recordDeployment,
   recordFailure,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
@@ -27,6 +28,7 @@ import {
 import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
 import {
+  runConsoleQuery,
   runConsoleSummary,
   runSystemStatus,
   runWorkItemDetail,
@@ -1216,6 +1218,70 @@ check(
   "deployed_sha_mismatch: a notice created at the same time as the successful deployment stays open",
   boundaryResolved === 0 && (await isResolved(boundaryNotice)) === false,
   boundaryResolved,
+);
+
+// 反映の履歴: 記録したPRをjsonbの列から読み戻せる。PRを記録しない行は空の配列になる。
+const historyPull = {
+  number: 77,
+  title: "feat: qdb history",
+  origin: "factory" as const,
+  url: "https://github.com/qdb/repo/pull/77",
+};
+await recordDeployment(
+  {
+    sha_from: "qdb-hist-from",
+    sha_to: "qdb-hist-to",
+    changed_paths: [],
+    result: "success",
+    needs_host_action: false,
+    pull_requests: [historyPull],
+  },
+  sql,
+);
+const historyRows = await runConsoleQuery("deployments", 200, 30, sql);
+const historyRecorded = historyRows.find(
+  (row) => "sha_to" in row && row.sha_to === "qdb-hist-to",
+);
+check(
+  "deployments: a recorded pull request is read back",
+  historyRecorded !== undefined &&
+    "pull_requests" in historyRecorded &&
+    JSON.stringify(historyRecorded.pull_requests) ===
+      JSON.stringify([historyPull]),
+  historyRecorded,
+);
+// PRを持たない記録は列を指名せずに挿入し、列の既定値(空の配列)が入る。
+await recordDeployment(
+  {
+    sha_from: null,
+    sha_to: "qdb-hist-empty",
+    changed_paths: [],
+    result: "failed",
+    needs_host_action: false,
+    pull_requests: [],
+  },
+  sql,
+);
+const historyEmptyRows = await runConsoleQuery("deployments", 200, 30, sql);
+const historyEmpty = historyEmptyRows.find(
+  (row) => "sha_to" in row && row.sha_to === "qdb-hist-empty",
+);
+check(
+  "deployments: a record without pull requests gets the column default",
+  historyEmpty !== undefined &&
+    "pull_requests" in historyEmpty &&
+    historyEmpty.pull_requests.length === 0,
+  historyEmpty,
+);
+const historyUnrecorded = historyRows.find(
+  (row) => "sha_to" in row && row.sha_to === "qdb-sha-boundary",
+);
+check(
+  "deployments: a row without recorded pull requests reads as an empty list",
+  historyUnrecorded !== undefined &&
+    "pull_requests" in historyUnrecorded &&
+    historyUnrecorded.pull_requests.length === 0,
+  historyUnrecorded,
 );
 
 // 種類で絞った未解決のnotice一覧: 解決済みと別の種類は含めず、古い順に返す。

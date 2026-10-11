@@ -3,7 +3,10 @@ import {
   approvalKindLabel,
   approvalStatusLabel,
   attemptRef,
+  deploymentResultLabel,
+  hostActionLabel,
   noticeKindLabel,
+  pullRequestOriginLabel,
   UNKNOWN_NOTICE_LABEL,
   UNKNOWN_STATUS_LABEL,
   workItemKindLabel,
@@ -118,6 +121,52 @@ describe("noticeKindLabel", () => {
 
   test("does not leak an unknown notice kind", () => {
     expect(noticeKindLabel("future_kind")).toBe(UNKNOWN_NOTICE_LABEL);
+  });
+});
+
+describe("deploymentResultLabel", () => {
+  test("translates a successful deployment", () => {
+    expect(deploymentResultLabel("success")).toBe("反映済み");
+  });
+
+  test("translates a failed deployment", () => {
+    expect(deploymentResultLabel("failed")).toBe("失敗");
+  });
+
+  test("does not leak an unknown result", () => {
+    expect(deploymentResultLabel("partial")).toBe(UNKNOWN_STATUS_LABEL);
+  });
+});
+
+describe("pullRequestOriginLabel", () => {
+  test("names the factory", () => {
+    expect(pullRequestOriginLabel("factory")).toBe("Software Factory");
+  });
+
+  test("names a person", () => {
+    expect(pullRequestOriginLabel("human")).toBe("人");
+  });
+
+  test("says unknown for an origin that could not be read", () => {
+    expect(pullRequestOriginLabel("unknown")).toBe("不明");
+  });
+
+  test("says unknown for an origin that is not in the table", () => {
+    expect(pullRequestOriginLabel("bot")).toBe("不明");
+  });
+
+  test("does not read inherited object keys", () => {
+    expect(pullRequestOriginLabel("constructor")).toBe("不明");
+  });
+});
+
+describe("hostActionLabel", () => {
+  test("says the host work is needed", () => {
+    expect(hostActionLabel(true)).toBe("ホストの作業が必要");
+  });
+
+  test("says the host work is not needed", () => {
+    expect(hostActionLabel(false)).toBe("ホストの作業は不要");
   });
 });
 

@@ -40,6 +40,8 @@ import {
   APPROVAL_REQUEST_STATUSES,
   type ApprovalRequestKind,
   type ApprovalRequestStatus,
+  assertPullRequestUrl,
+  type DeploymentPullRequest,
   type Diagram,
   type FixReply,
   ISSUE_PROPOSAL_ORIGINS,
@@ -50,8 +52,10 @@ import {
   isOneOf,
   isRecord,
   isString,
+  PULL_REQUEST_ORIGINS,
   type ReviewFinding,
   type ReviewSeverity,
+  sanitizePullRequestTitle,
 } from "../lib/types.ts";
 import { type ReadTextFile, readTextFile } from "../lib/workspace.ts";
 
@@ -69,6 +73,7 @@ const CONSOLE_ROW_VIEWS = [
   "requirements_doc",
   "audit_index",
   "audit_doc",
+  "deployments",
 ] as const;
 
 /** 1つのオブジェクトを返すビュー。行の配列を返す`CONSOLE_ROW_VIEWS`とは返り値の形が違う。 */
@@ -1676,6 +1681,74 @@ function toDeploymentRow(row: SqlRow): DeploymentRow {
   };
 }
 
+/** "deployments"ビューの1行。反映1回と、それに含まれるPR。 */
+export type DeploymentHistoryRow = {
+  readonly deployment_id: number;
+  readonly sha_from: string | null;
+  readonly sha_to: string;
+  readonly result: string;
+  readonly needs_host_action: boolean;
+  readonly occurred_at: string;
+  readonly pull_requests: DeploymentPullRequest[];
+};
+
+/**
+ * `deployments.pull_requests`の1要素を解析する。形が違えば`null`を返す。
+ * 値はコミットメッセージ由来でDBに入っているが、画面にリンクと文字として出るので、
+ * 読むたびに型と長さとURLの形を確かめ直す。
+ * 作り手が知らない値なら`unknown`に、URLが同じ形でなければ`null`にする。
+ */
+function parseDeploymentPullRequest(
+  value: unknown,
+): DeploymentPullRequest | null {
+  if (!isRecord(value)) return null;
+  const { number, title, origin, url } = value;
+  if (!isNumber(number) || !Number.isSafeInteger(number) || number < 1) {
+    return null;
+  }
+  let safeUrl: string | null = null;
+  if (isString(url)) {
+    try {
+      assertPullRequestUrl(url);
+      safeUrl = url;
+    } catch {
+      safeUrl = null;
+    }
+  }
+  return {
+    number,
+    title: isString(title) ? sanitizePullRequestTitle(title) : null,
+    origin: isOneOf(origin, PULL_REQUEST_ORIGINS) ? origin : "unknown",
+    url: safeUrl,
+  };
+}
+
+/** 配列でない値や、解析できない要素は捨てる。1つの壊れた記録で、反映の履歴の全体を落とさないため。 */
+function parseDeploymentPullRequests(value: unknown): DeploymentPullRequest[] {
+  let array: unknown[];
+  try {
+    array = asJsonArray(value, "pull_requests");
+  } catch {
+    return [];
+  }
+  return array.flatMap((item) => {
+    const parsed = parseDeploymentPullRequest(item);
+    return parsed === null ? [] : [parsed];
+  });
+}
+
+function toDeploymentHistoryRow(row: SqlRow): DeploymentHistoryRow {
+  return {
+    deployment_id: asId(row.deployment_id, "deployment_id"),
+    sha_from: asNullableStr(row.sha_from, "sha_from"),
+    sha_to: asStr(row.sha_to, "sha_to"),
+    result: asStr(row.result, "result"),
+    needs_host_action: asBool(row.needs_host_action, "needs_host_action"),
+    occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+    pull_requests: parseDeploymentPullRequests(row.pull_requests),
+  };
+}
+
 /**
  * Consoleの取り込み(`console_fetcher`)の状態。
  * `status.json`を読めないか形が違えば`unavailable`で、読めれば判定を添える。
@@ -1876,7 +1949,8 @@ export type ConsoleQueryRow =
   | RequirementsIndexRow
   | RequirementsDocRow
   | AuditIndexRow
-  | AuditDocRow;
+  | AuditDocRow
+  | DeploymentHistoryRow;
 
 /**
  * `view`に対応する許可済みのクエリを`sql`(既定は実際のdatatableクライアント)で実行し、
@@ -2091,6 +2165,19 @@ export async function runConsoleQuery(
         WHERE v.work_item_id = ${workItemId}::bigint
       `.fetch();
       return rows.map(toAuditDocRow);
+    }
+    case "deployments": {
+      // 変更したパスの一覧は大きくなりうるので選ばない。画面が使うのは版とPRだけである。
+      const rows = await sql`
+        SELECT
+          id AS deployment_id, sha_from, sha_to, result, needs_host_action,
+          occurred_at, pull_requests
+        FROM factory.deployments
+        WHERE occurred_at >= ${since}::timestamptz
+        ORDER BY occurred_at DESC, id DESC
+        LIMIT ${limit}::integer
+      `.fetch();
+      return rows.map(toDeploymentHistoryRow);
     }
   }
 }
