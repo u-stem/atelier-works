@@ -49,6 +49,22 @@ describe("PipelineCards", () => {
     expect(render()).toContain('href="https://github.com/acme/widgets/pull/9"');
   });
 
+  test("leaves the branch to the detail screen", () => {
+    expect(render()).not.toContain("fix/narrow-layout");
+  });
+
+  test("links to the requirements of an issue item", () => {
+    expect(render([{ ...ROW, kind: "issue" }])).toContain(
+      'href="/items/42/requirements"',
+    );
+  });
+
+  test("omits the requirements link for other kinds", () => {
+    expect(render([{ ...ROW, kind: "pr_review" }])).not.toContain(
+      "/requirements",
+    );
+  });
+
   test("renders one card per row", () => {
     expect(
       render([ROW, { ...ROW, work_item_id: 43 }]).split("<li").length - 1,

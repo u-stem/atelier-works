@@ -35,7 +35,7 @@ function BackToList() {
 
 function Loading() {
   return (
-    <div className="space-y-3 px-8 py-6" role="status">
+    <div className="space-y-3 px-4 py-6 md:px-8" role="status">
       <span className="sr-only">読み込み中</span>
       <Skeleton className="h-8 w-1/2" />
       <Skeleton className="h-4 w-full max-w-3xl" />
@@ -139,8 +139,8 @@ function AuditReportView({ workItemId }: { workItemId: number }) {
       >
         <BackToList />
       </PageHeader>
-      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-        <article className="max-w-3xl rounded-xl border border-border bg-card px-8 py-6 text-body">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
+        <article className="max-w-3xl rounded-xl border border-border bg-card px-4 py-6 text-body md:px-8">
           <AuditMarkdown markdown={doc.markdown} />
         </article>
       </div>

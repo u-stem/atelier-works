@@ -272,11 +272,11 @@ export function PipelineTable({
           条件に合う作業項目はありません
         </p>
       ) : (
-        <>
-          <div className="md:hidden">
+        <div className="@container">
+          <div className="@4xl:hidden">
             <PipelineCards rows={visible} now={now} />
           </div>
-          <div className="hidden overflow-x-auto rounded-xl border border-border bg-card md:block">
+          <div className="hidden overflow-x-auto rounded-xl border border-border bg-card @4xl:block">
             <table className="w-full min-w-[72rem] border-collapse text-body">
               <thead className="text-small text-muted-foreground">
                 <tr>
@@ -333,7 +333,7 @@ export function PipelineTable({
               </tbody>
             </table>
           </div>
-        </>
+        </div>
       )}
     </div>
   );

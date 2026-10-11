@@ -14,6 +14,7 @@ import { describeRelease } from "../lib/consoleStatus.ts";
 import { actionableCounts } from "../lib/inboxView.ts";
 import {
   formatBadgeCount,
+  menuButtonLabel,
   navLinkClass,
   nextNavFocusIndex,
   parseSidebarCollapsed,
@@ -176,8 +177,15 @@ function BrandTitle() {
  * md未満は、上部のバーのボタンからドロワーを開く。たたむ操作は無く、常に広げた形で出す。
  */
 export function Sidebar() {
+  const summary = useSummary();
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const counts =
+    summary.data === undefined ? undefined : actionableCounts(summary.data);
+  const actionableTotal = SCREENS.reduce(
+    (total, screen) => total + screen.badge(counts),
+    0,
+  );
 
   const toggle = (): void => {
     const next = !collapsed;
@@ -196,13 +204,19 @@ export function Sidebar() {
           type="button"
           aria-haspopup="dialog"
           aria-expanded={drawerOpen}
-          aria-label="メニューを開く"
-          className="inline-flex size-9 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+          aria-label={menuButtonLabel(actionableTotal)}
+          className="relative inline-flex size-9 min-h-11 min-w-11 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
           onClick={() => {
             setDrawerOpen(true);
           }}
         >
           <Menu aria-hidden="true" className="size-5" />
+          {formatBadgeCount(actionableTotal) === null ? null : (
+            <span
+              aria-hidden="true"
+              className="absolute top-1.5 right-1.5 size-2.5 rounded-full bg-primary ring-2 ring-sidebar"
+            />
+          )}
         </button>
         <BrandMark className="size-7" />
         <p className="truncate text-body font-semibold tracking-tight">
@@ -216,7 +230,7 @@ export function Sidebar() {
           <button
             type="button"
             aria-label="メニューを閉じる"
-            className="ml-auto inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
+            className="ml-auto inline-flex size-8 min-h-11 min-w-11 shrink-0 items-center justify-center rounded-lg text-subtle outline-none transition-colors duration-150 hover:bg-sidebar-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none"
             onClick={closeDrawer}
           >
             <X aria-hidden="true" className="size-4" />

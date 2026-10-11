@@ -1,4 +1,9 @@
 import { type ReactNode, useEffect, useRef } from "react";
+import {
+  isOutsideRect,
+  shouldCloseOnWide,
+  shouldReportClose,
+} from "../lib/navDrawer.ts";
 
 /** 横並びのメニューへ切り替わる幅(Tailwindのmd)。ドロワーはこの幅以上では閉じる。 */
 const WIDE_QUERY = "(min-width: 48rem)";
@@ -8,6 +13,7 @@ const WIDE_QUERY = "(min-width: 48rem)";
  * Escと背景の押下で閉じ、背面の操作を止め、フォーカスを中に留める。
  * 閉じる操作はすべて`onClose`を呼ぶ。`open`を偽にして閉じたときは呼ばない。
  * 画面が広がって横並びのメニューに切り替わったら、背面を操作できるよう自分で閉じる。
+ * 中身は`dialog`の高さいっぱいの枠で包む。中の空きを押しても、背景の押下と見分けられるようにするためである。
  */
 export function NavDrawer({
   open,
@@ -42,7 +48,7 @@ export function NavDrawer({
     }
     const query = window.matchMedia(WIDE_QUERY);
     const closeWhenWide = (): void => {
-      if (query.matches) {
+      if (shouldCloseOnWide(query.matches)) {
         onClose();
       }
     };
@@ -58,20 +64,24 @@ export function NavDrawer({
       ref={ref}
       aria-label={label}
       onClose={() => {
-        // 親からの閉じ込みでは、すでに開いていない。閉じる副作用を二重に走らせない。
-        if (openRef.current) {
+        if (shouldReportClose(openRef.current)) {
           onClose();
         }
       }}
       onClick={(event) => {
-        // 背景(::backdrop)の押下は、dialog自身が対象になる。中身の押下は対象が子になる。
-        if (event.target === event.currentTarget) {
+        // 背景(::backdrop)の押下は、dialog自身が対象になり、座標がdialogの外になる。
+        // キーボード操作が起こす押下の座標は(0, 0)で、dialogの中にあるので閉じない。
+        if (event.target !== event.currentTarget) {
+          return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (isOutsideRect({ x: event.clientX, y: event.clientY }, rect)) {
           onClose();
         }
       }}
-      className="fixed inset-y-0 left-0 m-0 h-dvh max-h-none w-64 max-w-[85vw] flex-col border-r border-sidebar-border bg-sidebar p-0 text-sidebar-foreground backdrop:bg-black/50 open:flex"
+      className="fixed inset-y-0 left-0 m-0 h-dvh max-h-none w-64 max-w-[85vw] border-r border-sidebar-border bg-sidebar p-0 text-sidebar-foreground backdrop:bg-black/50"
     >
-      {children}
+      <div className="flex h-full flex-col">{children}</div>
     </dialog>
   );
 }

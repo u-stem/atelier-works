@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   formatBadgeCount,
+  menuButtonLabel,
   navLinkClass,
   nextNavFocusIndex,
   parseSidebarCollapsed,
@@ -25,6 +26,20 @@ describe("formatBadgeCount", () => {
 
   test("hides a negative count", () => {
     expect(formatBadgeCount(-1)).toBeNull();
+  });
+});
+
+describe("menuButtonLabel", () => {
+  test("names the button plainly when nothing needs action", () => {
+    expect(menuButtonLabel(0)).toBe("メニューを開く");
+  });
+
+  test("includes the count that needs action", () => {
+    expect(menuButtonLabel(3)).toBe("メニューを開く(要対応3件)");
+  });
+
+  test("caps a large count like the badge", () => {
+    expect(menuButtonLabel(150)).toBe("メニューを開く(要対応99+件)");
   });
 });
 

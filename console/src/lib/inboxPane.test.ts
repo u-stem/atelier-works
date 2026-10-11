@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { inboxDetailClass, inboxListClass, inboxPane } from "./inboxPane.ts";
+import {
+  inboxDetailClass,
+  inboxListClass,
+  inboxPane,
+  selectionPushesHistory,
+} from "./inboxPane.ts";
 
 describe("inboxPane", () => {
   test("shows the list while nothing is selected", () => {
@@ -27,6 +32,10 @@ describe("inboxListClass", () => {
   test("fixes the list width on a wide screen", () => {
     expect(inboxListClass("list")).toContain("lg:w-80");
   });
+
+  test("widens the list on an extra wide screen", () => {
+    expect(inboxListClass("list")).toContain("xl:w-[28rem]");
+  });
 });
 
 describe("inboxDetailClass", () => {
@@ -36,5 +45,21 @@ describe("inboxDetailClass", () => {
 
   test("keeps the detail visible on a narrow screen while it is the pane", () => {
     expect(inboxDetailClass("detail")).not.toContain("hidden");
+  });
+});
+
+describe("selectionPushesHistory", () => {
+  const SELECTION = { type: "failure", id: 5 } as const;
+
+  test("pushes when an item is selected on a narrow screen", () => {
+    expect(selectionPushesHistory(true, SELECTION)).toBe(true);
+  });
+
+  test("replaces when an item is selected on a wide screen", () => {
+    expect(selectionPushesHistory(false, SELECTION)).toBe(false);
+  });
+
+  test("replaces when the selection is cleared on a narrow screen", () => {
+    expect(selectionPushesHistory(true, null)).toBe(false);
   });
 });
