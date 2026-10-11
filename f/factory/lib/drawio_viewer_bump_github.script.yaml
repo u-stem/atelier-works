@@ -1,0 +1,9 @@
+summary: '[LIB] draw.ioのビューアの更新のGitHub操作'
+description: 内部ライブラリです。直接実行するものではありません。ビューアの固定を上げる処理だけが使う、リリースの一覧、タグの解決、ファイルの読み取り、ブランチの作成を行います。
+lock: '!inline f/factory/lib/drawio_viewer_bump_github.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

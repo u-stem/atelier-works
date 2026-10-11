@@ -210,6 +210,16 @@ describe("buildPrCandidate author", () => {
   });
 });
 
+describe("buildPrCandidate head branch", () => {
+  test("carries the head branch name", async () => {
+    const { candidate } = await build({
+      labels: [],
+      events: labelEventsOk([]),
+    });
+    expect(candidate.headRef).toBe("feature");
+  });
+});
+
 describe("buildPrCandidate head repository", () => {
   test("marks a head in the base repository", async () => {
     const { candidate } = await build({

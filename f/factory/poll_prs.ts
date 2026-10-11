@@ -255,6 +255,7 @@ export async function buildPrCandidate(
     number: found.number,
     title: pr.title,
     headSha: pr.headSha,
+    headRef: pr.headRef,
     labels: asIssue.labels,
     authorLogin: pr.authorLogin === "" ? null : pr.authorLogin,
     headInBaseRepo: evaluateSameRepoHeadGuard(

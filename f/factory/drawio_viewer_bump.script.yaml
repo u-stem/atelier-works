@@ -1,0 +1,15 @@
+summary: '[SYS-8] draw.ioのビューアの固定を最新化'
+description: draw.ioの公式のリリースを確かめ、固定を上げるPRを作ります。approved_versionに版(例
+  v33.0.0)を指定すると、大きさの変化の制限をその版だけ外します。公開から14日の待ちは外れません。
+lock: '!inline f/factory/drawio_viewer_bump.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    approved_version:
+      type: string
+      description: 人が確かめた版。大きさの変化の制限をその版だけ外す。空なら外さない
+      default: ''
+      originalType: string
+  required: []

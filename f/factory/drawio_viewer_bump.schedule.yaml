@@ -1,0 +1,13 @@
+summary: '[SYS-8] draw.ioのビューアの固定を最新化'
+description: >-
+  毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 0 10 * * 1
+script_path: f/factory/drawio_viewer_bump
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

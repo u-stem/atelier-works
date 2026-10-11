@@ -122,6 +122,82 @@ describe("matchesForbiddenPath", () => {
     expect(matchesForbiddenPath("console/drawio-viewer.json")).toBe(true);
   });
 
+  test("matches the script that proposes a new viewer pin", () => {
+    expect(matchesForbiddenPath("f/factory/drawio_viewer_bump.ts")).toBe(true);
+  });
+
+  test("matches the library that rewrites the viewer pin", () => {
+    expect(matchesForbiddenPath("f/factory/lib/drawio_viewer_bump.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matches the GitHub module used only by the viewer pin update", () => {
+    expect(
+      matchesForbiddenPath("f/factory/lib/drawio_viewer_bump_github.ts"),
+    ).toBe(true);
+  });
+
+  test("matches the observation record of the viewer pin update", () => {
+    expect(
+      matchesForbiddenPath("f/factory/lib/drawio_viewer_observations.ts"),
+    ).toBe(true);
+  });
+
+  test("matches the script definition of the viewer pin update", () => {
+    expect(
+      matchesForbiddenPath("f/factory/drawio_viewer_bump.script.yaml"),
+    ).toBe(true);
+  });
+
+  test("matches the schedule definition of the viewer pin update", () => {
+    expect(
+      matchesForbiddenPath("f/factory/drawio_viewer_bump.schedule.yaml"),
+    ).toBe(true);
+  });
+
+  test("matches the lock of the library that rewrites the viewer pin", () => {
+    expect(
+      matchesForbiddenPath("f/factory/lib/drawio_viewer_bump.script.lock"),
+    ).toBe(true);
+  });
+
+  test("matches the script definition of the library that rewrites the viewer pin", () => {
+    expect(
+      matchesForbiddenPath("f/factory/lib/drawio_viewer_bump.script.yaml"),
+    ).toBe(true);
+  });
+
+  test("matches the lock of the GitHub module of the viewer pin update", () => {
+    expect(
+      matchesForbiddenPath(
+        "f/factory/lib/drawio_viewer_bump_github.script.lock",
+      ),
+    ).toBe(true);
+  });
+
+  test("matches the script definition of the observation record", () => {
+    expect(
+      matchesForbiddenPath(
+        "f/factory/lib/drawio_viewer_observations.script.yaml",
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match the lock of the update script, which changes with every windmill-client bump", () => {
+    expect(
+      matchesForbiddenPath("f/factory/drawio_viewer_bump.script.lock"),
+    ).toBe(false);
+  });
+
+  test("does not match the lock of the observation record, which pins windmill-client", () => {
+    expect(
+      matchesForbiddenPath(
+        "f/factory/lib/drawio_viewer_observations.script.lock",
+      ),
+    ).toBe(false);
+  });
+
   test("matches console/scripts/drawio-viewer.ts", () => {
     expect(matchesForbiddenPath("console/scripts/drawio-viewer.ts")).toBe(true);
   });

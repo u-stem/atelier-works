@@ -807,7 +807,7 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 | --- | --- |
 | ビューアを同梱する | CDNからは読まない。CIが、版を固定したURLからビューアを取得し、固定のsha256と照合してから、配信物の`drawio/`に置く。照合に失敗すると、CIが止まる |
 | 本体から読めない場所に置く | ビューアと受け口は、Console本体のscriptの置き場所`/console/assets/`ではなく`/console/drawio/`に置く。本体のCSPは`/console/assets/`だけを許すので、本体にHTMLが注入されても、信頼されたオリジンでビューアを動かせない |
-| 取得元を固定する | 固定する値は`console/drawio-viewer.json`にある。URLはbranchやtagではなくcommitを指す。この固定ファイルと、固定を強制するスクリプトは保護パスで、人のレビューを経ずには変えられない |
+| 取得元を固定する | 固定する値は`console/drawio-viewer.json`にある。URLはbranchやtagではなくcommitを指す。この固定ファイルと、固定を書き換えるPRを作るscriptとその部品、固定を強制するスクリプトは保護パスで、人のレビューを経ずには変えられない。一覧は[保護パスの変更を止める](#保護パスの変更を止める)にある |
 | 不透明なオリジンで動かす | iframeの`sandbox`は`allow-scripts`だけにする。`allow-same-origin`が無いので、iframeはCookieにも、Windmillにも、親のDOMにも届かない。ポップアップと最上位のページの遷移も許さない。`/console/drawio.html`のCSPにも`sandbox allow-scripts`を付け、ページを直接開いても不透明なオリジンで動かす |
 | 外への取得をCSPで止める | `/console/drawio.html`だけに、別のCSPを付ける。scriptは`/console/drawio/`の同梱のファイル(ビューアと受け口)に限り、`connect-src`、画像、フォント、フォームの送信先は外を許さない。XMLが外部の画像やフォントを指していても、取得されない |
 | XMLを1回だけ送る | 親は、XMLごとにiframeを作り直す。1つのiframeに送るのは、最初のloadの後の1回だけである。2回目のloadは、iframeが別の文書へ遷移したことを表す。親はiframeを`about:blank`にして表示を止め、以後そのiframeのメッセージを受けない。遷移した先へ、次のXMLは渡らない。この停止は最善の努力で、loadが起きない遷移は止められない。その場合も、親が受ける値は、数値と固定の失敗の種類だけである |
@@ -815,8 +815,8 @@ ConsoleのSPAは、図を最上位のページでは描かず、隔離したifra
 | リンクを開かない | ツールバー、lightbox、図のリンクを無効にする。ページ内のクリックとauxclickの既定の動作は、押された要素を問わず止める |
 
 固定するsha256は、commit固定のURLから取得したバイト列の値である。
-版を上げるときは、新しいcommitのURLから同じ手順で取り直す。
-手順は[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
+版の更新は、[ビューアの更新](#ビューアの更新)で自動のPRにする。
+手で上げる手順は[Consoleの配信の仕様](internals/console.md)の「draw.ioの図」にある。
 
 XMLをiframeへ送るときの`targetOrigin`は`"*"`にする。
 不透明なオリジンには、送り先のオリジンを指定する方法が他に無いためである。
@@ -834,7 +834,8 @@ iframeの中で動くscriptが取れるのは、そのiframeが受け取った�
   送った1回のXMLは外へ出せる。
   次のXMLを渡さないので、被害は、そのiframeが受け取った図1枚に限る。
   CookieとWindmillの資格情報には届かない。
-- `'unsafe-eval'`は許さない。根拠は、固定した版(32.4.1)のビューアの調査と、ヘッドレスのChromeでの確認である。
+- `'unsafe-eval'`は許さない。根拠は、32.4.1のビューアのコードの読解と、ヘッドレスのChromeでの確認である。
+  自動で上げた版は、この調査を経ていない。`eval`が要る版は、図が描かれなくなるだけで、CSPが評価を止める。
   - ビューアが`eval`を呼ぶ箇所は2つある。図のスタイルや定義に書かれた式を評価する経路は、評価を許すフラグがどれも既定で無効である。外部の図形ライブラリのscriptを取得して評価する経路は、取得をCSPの`connect-src 'none'`が止める。`new Function`は無い。
   - `'unsafe-eval'`を付けずに、普通の図と、リンク、外部の画像、フォント、図形ライブラリ、評価を許す式を含む図を描いた。`eval`の違反は出なかった。
 - 外部の図形ライブラリ(AWSなどのアイコン集)を使う図は、その図形が描かれない。外部への取得をCSPが止めるためである。
@@ -894,6 +895,46 @@ ConsoleのSPAの親のページは、iframeから高さと失敗の種類だけ�
 
 - 図が描かれ、高さが図に追従すること。
 - リンクを含む図を描いても、クリックで遷移しないこと。
+
+### ビューアの更新
+
+固定は、Windmillの`f/factory/drawio_viewer_bump`が週に1回確かめ、新しい版があればPRにして上げる。
+GitHub Actionsではなく、Windmillで動かす。
+ActionsでPRを作るには、PRに書ける長期のトークンをActionsのsecretに足す必要があるためである。
+Actionsの既定のトークンで作ったPRは、CIを起動しない。
+このリポジトリは、`ci.yml`の権限を読み取りだけに保つ。
+Windmillは、実装とPR修正が使う`f/factory/github_token`で足りる。このトークンはWorkflowsの権限が無いので、`.github/workflows/`には書けない。
+
+| 守ること | 内容 |
+| --- | --- |
+| 取得元を絞る | 公式のjgraph/drawioのGitHubのリリースだけを読む。下書きとプレリリースは読まない。タグが指すcommitは、GitHubのAPIでたどって決める。ビューアのURLはcommit固定で、リダイレクトは許さない |
+| 2つの時計で待つ | 公開日(`published_at`)から14日以上たち、かつ、同じcommitを14日以上前から見ている版だけを上げる。公開日はリリースを作る側が書き換えられるので、それだけを根拠にしない。見始めた時刻は、タグごとにDBの`factory.drawio_viewer_observations`へ記録する。記録は、Factoryの通常の経路からは書き換えない。DBを直接触る変更(migration、WindmillのSQL)は、この保護の外にある |
+| 付け替えで待ちを数え直す | タグが別のcommitに付け替えられたら、記録の時刻を今に取り直す。付け替えた版は、取り直した時刻から14日待つ |
+| 正式版から数える | プレリリースは読まず、記録もしない。プレリリースから正式版に切り替わった版は、正式版として初めて見た時刻から14日を数える |
+| メジャー版に目印を付ける | メジャー版が変わる版も、他の確認を通ればPRにする。固定のファイルは保護パスで、マージは人が行うため、メジャー版で止めても安全は増えない。題名を`[major]`で始め、本文の先頭に、リリースノートとCSP、sandbox、図の隔離のテスト(`drawio_frame_isolation`)の確認を人が行うと書く |
+| 大きさの急変を上げない | 今のビューアの大きさから2割を超えて増減した版は上げない。noticeに残し、人が版を指名したときだけ上げる。空のファイルと、CIの取得の上限(10MB)を超えるファイルは、指名しても上げない |
+| 2つの経路で照合する | 取得したバイト列の大きさとgit blobのIDを、GitHubのAPIが返す同じcommitのファイルの値と照合する。違えばPRを作らず、noticeに残す。sha256はこのバイト列から計算して固定ファイルに書く。CIは別の経路(`raw.githubusercontent.com`)で取得し直して照合する |
+| 書き込みを絞る | PRのブランチを1つ作るだけで、`main`には書かない。変えるのは固定のファイルと、ビューアを読むページ(`console/public/drawio.html`)の2つだけである。commitの名義はGitHubのnoreplyにする |
+| 重複を作らない | 同じ版のブランチをheadにしたPRが、閉じたものを含めて1件でもあれば、ブランチが消えていても作らない。未完了の更新のPRがあるあいだも、新しいPRを作らない。数えるのは、このリポジトリのブランチをheadにしたPRだけで、forkに同じ名前のブランチを作られても更新は止まらない |
+| 既存のブランチを確かめる | PRの無いブランチが既にあれば、先頭のcommitを1回だけ取り、そのcommitに対して確かめる。各ファイルのgit blobのIDが作るはずの内容と一致し、`main`との差分がその2ファイルだけで、名前の変更を含まないことを確かめる。合わなければPRを作らず、noticeに残す。PRを作った後に、PRのheadのcommitが確かめたcommitと同じかを確かめ、違えば自動レビューのラベルを付けずに止めて、noticeに残す |
+| 自動でマージしない | PRはDraftにせず、自動レビューのラベルを付ける。マージは人が行う |
+| 修正を人に限る | ブランチ名が`factory/drawio-viewer-`で始まるPRには、PR修正を始めない。修正の準備のステップも止める。修正を許すと、固定のファイル以外も書き換えたcommitを、人が気づかずにマージするおそれがある。自動レビューは動く。`factory:fix`ラベルは消費されず残る。修正は人が行う。判定はブランチ名だけで行うので、`factory_repo`に限らず、担当するすべてのリポジトリのPRに効く |
+| 部品を保護パスにする | 更新のscript、判断、GitHubの読み取り、観測の記録、scriptとスケジュールの定義を保護パスにする。書き換えられると、別の版や取得元の更新を人の確認なしに提案できるためである。一覧は[保護パスの変更を止める](#保護パスの変更を止める)にある |
+
+更新のPRは、通常のCIを通る。
+`console`ジョブが固定のURLからビューアを取得してsha256を照合し、`public-assets`のテストがページの参照と固定の一致を、CSPと図の隔離のテストが設定を確かめる。
+
+残るリスクは次のとおりである。
+
+- 新しい版が図を描けるかは、自動では確かめない。描けない版は、iframeが固定の失敗の文を出す。PR本文が、マージ後にConsoleで図を開いて確かめるよう求める。
+- 上流のリポジトリが侵害され、2つの待ちと大きさの確認をすり抜けた版は、PRになる。マージの前に人が見る。マージ後も、iframeの隔離とCSPが被害を限る。
+- 観測の時刻は、こちらが見た時刻である。公開日を古く偽られても、こちらが初めて見た時刻から数えるので、14日の待ちは回避されない。
+- 観測は週に1回なので、観測の間にタグを付け替えて元に戻されると、気づけない。
+- 最初に動かした週は、すべての版の観測が始まったばかりなので、14日間は何も上げない。記録が消えたときも、同じように待ちを数え直す。
+- 上げる版に選んだ最新の版を保留している間は、それより古い版も上げない。保留の理由はnoticeに出る。
+- 保護するのは更新に専用の部品である。汎用の層(`github.ts`、`db.ts`、`types.ts`、`workspace.ts`)は保護していない。更新はこれらの関数を呼ぶので、挙動を変える変更は通常のレビューで確かめる。
+- script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。他の部品のscript定義とlockは保護する。
+- ブランチ名が`factory/drawio-viewer-`で始まる未完了のPRが残ると、更新は止まる。そのPRを閉じるかマージすると、次の週に再開する。
 
 ## 要件定義書のリンク
 
@@ -1091,6 +1132,17 @@ CIのワークフローとcomposite action(`.github/workflows/`と`.github/actio
 markdownlint-cli2とtextlintの設定(`.markdownlint-cli2.jsonc`、`.textlintrc.json`など)も止める。どちらも設定から任意のモジュールを読み込め、pre-commitと`mise run check`が読むためである。
 Consoleでバンドルを通らずに配信される`console/public/`と`console/index.html`も止める。
 配信するdraw.ioのビューアを固定する`console/drawio-viewer.json`も止める。
+固定を書き換えるPRを作る側も止める。
+対象は、`f/factory/drawio_viewer_bump`のscript、スケジュール、script定義(`.script.yaml`)である。
+`f/factory/lib/`では、次の3つが対象である。
+
+- `drawio_viewer_bump.ts`
+- `drawio_viewer_bump_github.ts`
+- `drawio_viewer_observations.ts`
+
+この3つのscript定義(`.script.yaml`)と、観測の記録を除く2つのlock(`.script.lock`)も対象である。
+lockの保護を限る理由は、残るリスクに書いた。
+
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
