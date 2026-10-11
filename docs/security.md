@@ -818,6 +818,26 @@ Windmillのraw appは、これをWindmillと同じオリジンで描く。
 同じページの見出しへのリンクは、行き先を取り違えようがないので、URLを添えない。
 GitHubへのリンクは、`rel="noopener noreferrer"`を付けて新しいタブで開く。
 
+## 更新履歴のPR
+
+Consoleの更新履歴は、反映に含まれるPRの題名と番号を出す。
+FactoryのPRの題名は、信頼できないIssueに由来する。
+題名は、マージのコミットの本文として`self_update`が読み、`deployments.pull_requests`に記録する。
+そのため、記録から画面までの各段で、値の形を確かめ直す。
+
+| 段 | 守ること |
+| --- | --- |
+| 取り出し | self cloneの`git log --first-parent`だけを読む。PRのブランチの中のコミットが、件名でマージのコミットを装えないようにするためである。件名`Merge pull request #<N> from <owner>/<branch>`は、親が2つ以上のコミットだけを読む |
+| 取り出し | 題名は本文の1行目だけを取る。制御文字と書字方向の制御文字を空白にし、200字で切る |
+| 取り出し | リンクは、Factoryのリポジトリから`https://github.com/<owner>/<repo>/pull/<N>`の形に組み立てる。GitHubのAPIは呼ばない。呼ぶと、Console用のworkerのネットワークとトークンの権限が広がる |
+| 読み出し | `console_query`が、番号が正の整数であること、URLがPRのURLの形であること、題名が200字以内であることを確かめ直す。形が違う要素は捨てる |
+| 画面 | 題名は文字としてだけ描く。リンクにするのは、GitHubのPRのURLの形で、末尾の番号がPRの番号と一致するものだけである。それ以外は番号を文字で出す |
+
+作り手のバッジは、確かな証明ではなく、ブランチの名前から決めた印である。
+ownerがFactoryのリポジトリと同じで、ブランチが実装ブランチ(`factory/issue-<N>-wi-<id>`)のときだけ「Software Factory」にする。
+同じ名前のブランチを作れるのは、リポジトリに書ける人だけである。forkのブランチは「人」になる。
+マージの方式がsquashのPRはブランチが分からないので、「不明」にする。
+
 ## PR修正の安全策
 
 PR修正のフロー(`pr_fix`)は、Claudeに書き込みのツールを与える。次の安全策で、信頼できないPRの内容やコメントから、Factoryの設定やworkerを書き換えられないようにする。仕組みの詳細は[PRワークフローの仕様](internals/pr-workflow.md)にある。

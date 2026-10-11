@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { ApiFailure } from "./errors.ts";
-import { fetchSummary, SUMMARY_REFRESH_MS } from "./queries.ts";
+import {
+  fetchDeployments,
+  fetchSummary,
+  SUMMARY_REFRESH_MS,
+} from "./queries.ts";
 import type { FetchLike } from "./windmill.ts";
 
 const EMPTY_SUMMARY = {
@@ -26,6 +30,48 @@ async function failureOf(promise: Promise<unknown>): Promise<unknown> {
 describe("SUMMARY_REFRESH_MS", () => {
   test("refetches every 120 seconds", () => {
     expect(SUMMARY_REFRESH_MS).toBe(120_000);
+  });
+});
+
+const DEPLOYMENT = {
+  deployment_id: 12,
+  sha_from: null,
+  sha_to: "b".repeat(40),
+  result: "success",
+  needs_host_action: false,
+  occurred_at: "2026-10-08T00:00:00.000Z",
+  pull_requests: [],
+};
+
+describe("fetchDeployments", () => {
+  test("returns a valid list of deployments", async () => {
+    expect(
+      await fetchDeployments({
+        fetchFn: respondWith(JSON.stringify([DEPLOYMENT])),
+      }),
+    ).toEqual([DEPLOYMENT]);
+  });
+
+  test("asks for the deployments view", async () => {
+    let body = "";
+    const fetchFn: FetchLike = (_input, init) => {
+      body = String(init.body);
+      return Promise.resolve(new Response("[]"));
+    };
+    await fetchDeployments({ fetchFn });
+    expect(JSON.parse(body)).toMatchObject({ view: "deployments" });
+  });
+
+  test("throws invalid_response for an object instead of a list", async () => {
+    expect(
+      await failureOf(fetchDeployments({ fetchFn: respondWith("{}") })),
+    ).toEqual({ kind: "invalid_response" });
+  });
+
+  test("throws forbidden on 403", async () => {
+    expect(
+      await failureOf(fetchDeployments({ fetchFn: respondWith("no", 403) })),
+    ).toEqual({ kind: "forbidden" });
   });
 });
 
