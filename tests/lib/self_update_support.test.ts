@@ -4,14 +4,20 @@ import {
   buildNpmCiArgv,
   buildWmillArgv,
   buildWmillEnv,
+  CallTimeoutError,
   classifyChangedPaths,
   decideUpdate,
   extractMiseHostSections,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
+  readDeployedSha,
+  recordSuccessDeployment,
   resolveWmillCliContext,
+  SELF_UPDATE_CALL_TIMEOUT_MS,
+  setDeployedSha,
   truncateOutput,
+  withCallTimeout,
 } from "../../f/factory/lib/self_update_support.ts";
 
 describe("decideUpdate", () => {
@@ -417,5 +423,278 @@ describe("extractMiseHostSections", () => {
     expect(extractMiseHostSections(MISE_BASE)).toBe(
       'tools:bun = "1.4.2"\nenv:WM_VERSION = "1.817.0"',
     );
+  });
+});
+
+describe("withCallTimeout", () => {
+  test("returns the value of work that finishes in time", async () => {
+    const result = await withCallTimeout("call", async () => 42, 50);
+
+    expect(result).toBe(42);
+  });
+
+  test("rejects with the label when work does not finish in time", async () => {
+    const pending = withCallTimeout(
+      "getVariable",
+      () => new Promise<never>(() => {}),
+      10,
+    );
+
+    await expect(pending).rejects.toThrow("getVariable timed out after 10ms");
+  });
+
+  test("passes through the error of work that fails in time", async () => {
+    const pending = withCallTimeout(
+      "call",
+      async () => {
+        throw new Error("boom");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("boom");
+  });
+
+  test("turns a synchronous throw of work into a rejection", async () => {
+    const pending = withCallTimeout(
+      "call",
+      () => {
+        throw new Error("sync boom");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("sync boom");
+  });
+
+  test("uses SELF_UPDATE_CALL_TIMEOUT_MS by default", () => {
+    expect(SELF_UPDATE_CALL_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+const NEVER = (): Promise<never> => new Promise<never>(() => {});
+
+describe("CallTimeoutError", () => {
+  test("is what withCallTimeout rejects with on a time out", async () => {
+    const pending = withCallTimeout("call", NEVER, 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+});
+
+describe("readDeployedSha", () => {
+  const FAILS_READ = async (): Promise<string> => {
+    throw new Error("Variable not found at f/factory/deployed_sha");
+  };
+
+  test("returns the value of the variable", async () => {
+    const sha = await readDeployedSha(
+      async () => "abc1234",
+      async () => true,
+      50,
+    );
+
+    expect(sha).toBe("abc1234");
+  });
+
+  test("does not check the existence when the read succeeds", async () => {
+    let checks = 0;
+
+    await readDeployedSha(
+      async () => "abc1234",
+      async () => {
+        checks += 1;
+        return true;
+      },
+      50,
+    );
+
+    expect(checks).toBe(0);
+  });
+
+  test("returns an empty string when the read fails and the variable does not exist", async () => {
+    const sha = await readDeployedSha(FAILS_READ, async () => false, 50);
+
+    expect(sha).toBe("");
+  });
+
+  test("rejects when the read fails and the variable exists", async () => {
+    const pending = readDeployedSha(FAILS_READ, async () => true, 50);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check fails", async () => {
+    const pending = readDeployedSha(
+      FAILS_READ,
+      async () => {
+        throw new Error("500");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check times out", async () => {
+    const pending = readDeployedSha(FAILS_READ, NEVER, 10);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check is not a boolean", async () => {
+    const pending = readDeployedSha(FAILS_READ, async () => "no", 50);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read times out instead of treating it as not deployed", async () => {
+    const pending = readDeployedSha(NEVER, async () => false, 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+});
+
+describe("setDeployedSha", () => {
+  test("does not read back when the write succeeds", async () => {
+    let reads = 0;
+
+    await setDeployedSha(
+      {
+        set: async () => {},
+        get: async () => {
+          reads += 1;
+          return "";
+        },
+      },
+      "abc1234",
+      50,
+    );
+
+    expect(reads).toBe(0);
+  });
+
+  test("succeeds when the write times out but the variable holds the sha", async () => {
+    const pending = setDeployedSha(
+      { set: NEVER, get: async () => "abc1234" },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  test("rejects when the write times out and the variable holds another value", async () => {
+    const pending = setDeployedSha(
+      { set: NEVER, get: async () => "old0000" },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rejects with the write time out when the read back fails", async () => {
+    const pending = setDeployedSha(
+      {
+        set: NEVER,
+        get: async () => {
+          throw new Error("down");
+        },
+      },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).rejects.toThrow("setVariable deployed_sha");
+  });
+
+  test("rejects when the read back times out", async () => {
+    const pending = setDeployedSha({ set: NEVER, get: NEVER }, "abc1234", 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rejects with the original error when the write fails for another reason", async () => {
+    const pending = setDeployedSha(
+      {
+        set: async () => {
+          throw new Error("forbidden");
+        },
+        get: async () => "abc1234",
+      },
+      "abc1234",
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("forbidden");
+  });
+
+  test("does not read back when the write fails for another reason", async () => {
+    let reads = 0;
+
+    await setDeployedSha(
+      {
+        set: async () => {
+          throw new Error("forbidden");
+        },
+        get: async () => {
+          reads += 1;
+          return "abc1234";
+        },
+      },
+      "abc1234",
+      50,
+    ).catch(() => {});
+
+    expect(reads).toBe(0);
+  });
+});
+
+describe("recordSuccessDeployment", () => {
+  test("does not report a timeout when the record succeeds", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(
+      async () => {},
+      (err) => timeouts.push(err),
+      50,
+    );
+
+    expect(timeouts).toEqual([]);
+  });
+
+  test("reports a timeout instead of throwing when the record times out", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(NEVER, (err) => timeouts.push(err), 10);
+
+    expect(timeouts[0]).toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rethrows a failure other than a timeout", async () => {
+    const pending = recordSuccessDeployment(
+      async () => {
+        throw new Error("db down");
+      },
+      () => {},
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("db down");
+  });
+
+  test("does not report a timeout when the record fails for another reason", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(
+      async () => {
+        throw new Error("db down");
+      },
+      (err) => timeouts.push(err),
+      50,
+    ).catch(() => {});
+
+    expect(timeouts).toEqual([]);
   });
 });

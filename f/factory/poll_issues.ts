@@ -24,8 +24,10 @@ import {
   expireApprovalRequestIfPending,
   getLatestDeployment,
   getWorkItem,
+  hasNonTerminalPrWorkItem,
   type InsertedIssueWorkItem,
   insertIssueWorkItemUnlessActive,
+  listActionableWorkItems,
   listActive,
   listExpiredPendingApprovalRequests,
   nextCycleForIssue,
@@ -41,6 +43,8 @@ import {
   ClaimOwnershipUnknownError,
   claimIssue,
   type GhClient,
+  GitHubHttpError,
+  GitHubRateLimitError,
   getIssue,
   getLabelerLogin,
   getViewer,
@@ -51,11 +55,15 @@ import {
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
+  actionableCancelNote,
+  type ClosedTargetInfo,
   confirmLabeler,
+  decideCloser,
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
   filterByRepoAllowlist,
+  groupActionableTargets,
   type IssueCandidate,
   type IssueDecision,
   isWaitingForHuman,
@@ -63,16 +71,23 @@ import {
   LABELER_DENIED_KIND,
   labelerDeniedMessage,
   labelerPolicyFor,
+  parseActionableCursor,
   type ReconcileGithubState,
   readJobState,
   recordLabelerCheckLimit,
+  rotateTargets,
   runDeployedShaCheck,
 } from "./lib/poll_support.ts";
 import { postSupersededComments } from "./lib/supersede_support.ts";
-import type { FactoryConfig, WorkItem } from "./lib/types.ts";
+import type {
+  FactoryConfig,
+  LabelerAssociation,
+  WorkItem,
+} from "./lib/types.ts";
 import {
   type CommandRunner,
   ensureFactoryClone,
+  isReviewWorktreeOf,
   listWorktrees,
   pathExists,
   removeWorktree,
@@ -253,8 +268,15 @@ async function removePrWorktrees(
   if (!(await pathExists(repoDir))) return;
   try {
     const entries = await listWorktrees({ run: runCommand, repoDir });
+    if (!entries.some((entry) => entry.path === repoDir)) {
+      // 列挙されたパスが`repoDir`と違う綴りだと、レビューのworktreeを1つも選べず、無言で残る。
+      log.warn(
+        "reconcile: listed worktree paths differ from the repo dir spelling",
+        { repo_dir: repoDir },
+      );
+    }
     const targets = entries.filter((entry) =>
-      entry.path.includes(`/review-${prNumber}-`),
+      isReviewWorktreeOf(repoDir, prNumber, entry),
     );
     for (const target of targets) {
       try {
@@ -403,6 +425,253 @@ async function reconcileActiveItems(
     }
   }
   return count;
+}
+
+// ---------------------------------------------------------------------------
+// 要対応の終端の作業項目の照合
+// ---------------------------------------------------------------------------
+
+/**
+ * 1回の実行でGitHubに問い合わせる、IssueまたはPRの最大の数。
+ * 対象ごとに、Issue(PR)の取得を1回だけ行う。閉じた人も、この応答で確かめる。
+ * 開いたままの対象は毎回調べ直すので、要対応の行が増えても
+ * 実行の時間とAPIの消費が膨らまないように抑える。
+ * 上限に達したら、残りの対象を次の実行に回す。
+ */
+export const ACTIONABLE_RECONCILE_LIMIT = 30;
+
+export type ActionableReconcileDeps = {
+  readonly listItems: () => Promise<readonly WorkItem[]>;
+  /**
+   * IssueまたはPRの`state`(`open`か`closed`)と、閉じた人の確認に使う項目を返す。
+   * PRの番号もissues APIで引ける。
+   */
+  readonly getTarget: (
+    owner: string,
+    repo: string,
+    number: number,
+  ) => Promise<ClosedTargetInfo & { readonly state: string }>;
+  readonly updateStatus: typeof updateStatusIfLeaseHolder;
+  /** 同じPRに終端でない`pr_review`か`pr_fix`の作業項目があるかを返す。 */
+  readonly hasActivePrWorkItem: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<boolean>;
+  readonly removePrWorktrees: typeof removePrWorktrees;
+  /**
+   * 失敗を記録する。作業項目のIDは付けない。IDを付けると、
+   * 要対応の一覧が最新の失敗として表示し、元の失敗の理由を上書きするため。
+   * 対象は`step`のキーで追える。
+   */
+  readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+  /** 前回の実行が保存したカーソル(`parseActionableCursor`が読む)を返す。 */
+  readonly getCursor: () => Promise<unknown>;
+  readonly setCursor: (cursor: number | null) => Promise<void>;
+};
+
+/** 対象が削除されたか、アクセスを失ったことを示す応答か。 */
+function isGoneFromGithub(err: unknown): boolean {
+  return (
+    err instanceof GitHubHttpError && (err.status === 404 || err.status === 410)
+  );
+}
+
+/**
+ * 要対応の終端の作業項目(`failed`、`needs_human`、`expired`)のうち、
+ * 対象のIssueかPRが閉じているものを`cancelled`にして、Consoleの要対応から外す。
+ * `reconcileActiveItems`は終端でない作業項目しか見ないので、閉じた後の終端の行は
+ * これが取り消さない限り、保持期間のあいだ要対応に残る。
+ *
+ * - 判定は`decideClosureOnly`で、注記は`actionableCancelNote`にする。
+ * - 閉じた人を`decideCloser`で確かめ、許されたときだけ取り消す。
+ *   `decideCloser`が許さないときは取り消さず、
+ *   理由をinfoのログに残して要対応に残す。
+ *   第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を一覧から消せないようにするため。
+ * - 遷移は`updateStatusIfLeaseHolder`で、読み取った状態とflow_job_idのままのときだけ行う。
+ *   `retry_work_item`が先に再開していれば更新は失敗し、何もしない。
+ * - `cancelJob`は呼ばない。終端の状態は、フローの最後の工程かエラー処理が書くので、
+ *   止めるべき動いているジョブが無い。
+ * - PRのレビューのworktreeは、同じPRに終端でない作業項目が無いときだけ消す。
+ * - 人が対応しないと決めた後の片付けなので、Discordには通知しない。
+ * - 問い合わせは対象`limit`件までで、前回の続きから回す(`rotateTargets`)。
+ *   上限に達して一部を次の実行に回すときは警告を出す。
+ * 1件の失敗では例外を投げず、次へ進む。
+ * 失敗は1回の実行につき1行だけ`recordFailure`に渡す(最初の対象のキーで、2件目以降は件数にする)。
+ * GitHubの障害の間に、同じ原因の行が対象の数だけ増えて、Consoleのシステム画面を埋めないため。
+ * 対象の削除やアクセスの喪失(404、410)は、失敗として記録せず警告のログだけを残す。
+ * rate limitを受けたら、残りを調べずに打ち切り、カーソルをその対象の直前に戻して次の実行で続ける。
+ * 制限の間も問い合わせを続けず、後ろの承認の期限切れを遅らせないため。
+ */
+export async function reconcileClosedActionableItems(
+  input: {
+    readonly log: Logger;
+    readonly allowedAssociations: readonly LabelerAssociation[];
+    readonly limit?: number;
+  },
+  deps: ActionableReconcileDeps,
+): Promise<{ cancelled: number; checked: number }> {
+  const { log } = input;
+  const limit = input.limit ?? ACTIONABLE_RECONCILE_LIMIT;
+  let items: readonly WorkItem[];
+  try {
+    items = await deps.listItems();
+  } catch (err) {
+    await deps.recordFailure("reconcile_actionable:list", err);
+    return { cancelled: 0, checked: 0 };
+  }
+
+  let cursor: number | null = null;
+  try {
+    cursor = parseActionableCursor(await deps.getCursor());
+  } catch (err) {
+    log.warn("reconcile: failed to read the actionable cursor", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+  const ordered = rotateTargets(groupActionableTargets(items), cursor);
+
+  let cancelled = 0;
+  let checked = 0;
+  let lastId: number | null = cursor;
+  let rateLimited = false;
+  const failedTargets: { readonly key: string; readonly err: unknown }[] = [];
+  const noteFailure = (key: string, err: unknown): void => {
+    failedTargets.push({ key, err });
+  };
+  for (const target of ordered) {
+    if (checked >= limit) break;
+    const previousId = lastId;
+    checked += 1;
+    lastId = target.id;
+    try {
+      const info = await deps.getTarget(
+        target.owner,
+        target.repo,
+        target.number,
+      );
+      if (info.state === "open") continue;
+
+      const closer = decideCloser(info, input.allowedAssociations);
+      if (!closer.allowed) {
+        // 取り消されないまま毎回調べ直されるので、前提が崩れたとき(GitHubの応答が
+        // 閉じた人を返さないなど)に気づけるよう、infoで残す。
+        log.info(
+          "reconcile: kept actionable items of a closed target because the closer is not trusted",
+          {
+            target: target.key,
+            reason: closer.reason,
+            closed_by: info.closedByLogin,
+            work_item_ids: target.items.map((item) => item.id),
+          },
+        );
+        continue;
+      }
+
+      let worktreesHandled = false;
+      for (const item of target.items) {
+        const decision = decideClosureOnly(
+          item.kind === "issue"
+            ? { kind: "issue", open: false }
+            : { kind: "pr", open: false },
+        );
+        if (decision.action !== "cancel") continue;
+        const note = actionableCancelNote(decision.reason);
+        const updated = await deps.updateStatus(
+          item.id,
+          item.status,
+          "cancelled",
+          item.flow_job_id,
+          note,
+        );
+        if (!updated) continue;
+        cancelled += 1;
+        log.info("reconcile: cancelled a closed actionable item", {
+          work_item_id: item.id,
+          from_status: item.status,
+          note,
+          closer_basis: closer.basis,
+        });
+        if (decision.reason === "pr_closed" && !worktreesHandled) {
+          worktreesHandled = true;
+          if (
+            await deps.hasActivePrWorkItem(
+              target.owner,
+              target.repo,
+              target.number,
+            )
+          ) {
+            log.info(
+              "reconcile: kept the pr worktrees used by an active work item",
+              {
+                target: target.key,
+              },
+            );
+          } else {
+            await deps.removePrWorktrees(
+              target.owner,
+              target.repo,
+              target.number,
+              log,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        checked -= 1;
+        lastId = previousId;
+        rateLimited = true;
+        noteFailure(target.key, err);
+        break;
+      }
+      if (isGoneFromGithub(err)) {
+        log.warn("reconcile: an actionable target is gone or inaccessible", {
+          target: target.key,
+          error: maskSecrets(err instanceof Error ? err.message : String(err)),
+        });
+      } else {
+        noteFailure(target.key, err);
+      }
+    }
+  }
+
+  const [firstFailure] = failedTargets;
+  if (firstFailure !== undefined) {
+    const { key, err } = firstFailure;
+    const message = err instanceof Error ? err.message : String(err);
+    await deps.recordFailure(
+      `reconcile_actionable:${key}`,
+      failedTargets.length === 1
+        ? err
+        : new Error(
+            `${message} (and ${String(failedTargets.length - 1)} more failures in this run)`,
+          ),
+    );
+  }
+
+  if (rateLimited || checked < ordered.length) {
+    if (rateLimited) {
+      log.warn("reconcile: stopped at the GitHub rate limit", {
+        targets: ordered.length,
+        checked,
+      });
+    } else {
+      log.warn("reconcile: actionable items exceed the per-run limit", {
+        targets: ordered.length,
+        checked,
+        limit,
+      });
+    }
+    try {
+      await deps.setCursor(lastId);
+    } catch (err) {
+      log.warn("reconcile: failed to store the actionable cursor", {
+        error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      });
+    }
+  }
+  return { cancelled, checked };
 }
 
 // ---------------------------------------------------------------------------
@@ -1058,6 +1327,7 @@ export async function main(): Promise<{
   claimed: number;
   skipped: number;
   reconciled: number;
+  actionable_cancelled: number;
   expired: number;
   failed: number;
 }> {
@@ -1162,7 +1432,29 @@ export async function main(): Promise<{
     log,
   );
 
+  const actionable = await reconcileClosedActionableItems(
+    { log, allowedAssociations: config.allowed_labeler_associations },
+    {
+      listItems: () => listActionableWorkItems(),
+      getTarget: (owner, repo, number) => getIssue(client, owner, repo, number),
+      updateStatus: updateStatusIfLeaseHolder,
+      hasActivePrWorkItem: (owner, repo, prNumber) =>
+        hasNonTerminalPrWorkItem(owner, repo, prNumber),
+      removePrWorktrees,
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      getCursor: () => wmill.getState(),
+      setCursor: (cursor) => wmill.setState({ cursor }),
+    },
+  );
+
   const expired = await expirePendingApprovals(config, discordWebhookUrl, log);
 
-  return { claimed, skipped, reconciled, expired, failed };
+  return {
+    claimed,
+    skipped,
+    reconciled,
+    actionable_cancelled: actionable.cancelled,
+    expired,
+    failed,
+  };
 }
