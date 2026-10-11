@@ -21,7 +21,6 @@ const ROW = {
   attempt: 1,
   claimed_by: null,
   flow_job_id: null,
-  created_at: "2026-10-08T00:00:00.000Z",
   updated_at: "2026-10-08T00:00:00.000Z",
   kind: "issue",
   pr_number: 12,

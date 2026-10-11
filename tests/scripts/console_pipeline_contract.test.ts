@@ -131,7 +131,6 @@ describe("label tables cover the backend values", () => {
       fix_round: 0,
       branch: null,
       pr_url: null,
-      created_at: T0,
       updated_at: T0,
     }));
     const sorted = sortPipelineRows(rows, { key: "status", direction: "asc" });

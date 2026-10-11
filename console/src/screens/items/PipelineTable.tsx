@@ -6,7 +6,7 @@ import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { displayableIssueText } from "../../lib/intakeText.ts";
-import { workItemKindLabel, workItemStatusLabel } from "../../lib/labels.ts";
+import { workItemKindLabel } from "../../lib/labels.ts";
 import {
   DEFAULT_PIPELINE_SORT,
   EMPTY_PIPELINE_FILTER,
@@ -20,8 +20,10 @@ import {
   type PipelineLink,
   type PipelineSort,
   type PipelineSortKey,
+  pipelineStatusLabel,
   pipelineStatusVariant,
   prLink,
+  reconcilePipelineFilter,
   repoOptions,
   showsRequirementsLink,
   sortPipelineRows,
@@ -142,7 +144,7 @@ function FilterBar({
           <option value="">すべて</option>
           {statusOptions(rows).map((status) => (
             <option key={status} value={status}>
-              {workItemStatusLabel(status)}
+              {pipelineStatusLabel(status)}
             </option>
           ))}
         </select>
@@ -211,7 +213,7 @@ function PipelineRowView({ row, now }: { row: PipelineRow; now: number }) {
       </td>
       <td className="px-3 py-2">
         <Badge variant={pipelineStatusVariant(row.status)}>
-          {workItemStatusLabel(row.status)}
+          {pipelineStatusLabel(row.status)}
         </Badge>
       </td>
       <td className="whitespace-nowrap px-3 py-2">
@@ -260,7 +262,13 @@ export function PipelineTable({
   rows: readonly PipelineRow[];
   now: number;
 }) {
-  const [filter, setFilter] = useState<PipelineFilter>(EMPTY_PIPELINE_FILTER);
+  const [chosen, setFilter] = useState<PipelineFilter>(EMPTY_PIPELINE_FILTER);
+  const filter = reconcilePipelineFilter(chosen, rows);
+  if (filter !== chosen) {
+    // 選んだ状態やリポジトリが再読み込みで消えたら、状態も「すべて」に揃える。
+    // 描画だけを戻すと、同じ値の行が戻ったときに、操作なしで絞り込みへ戻ってしまう。
+    setFilter(filter);
+  }
   const [sort, setSort] = useState<PipelineSort>(DEFAULT_PIPELINE_SORT);
   const visible = sortPipelineRows(filterPipelineRows(rows, filter), sort);
   const onSort = (key: PipelineSortKey): void => {

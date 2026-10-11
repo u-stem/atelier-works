@@ -33,7 +33,6 @@ export type PipelineRow = {
   readonly fix_round: number;
   readonly branch: string | null;
   readonly pr_url: string | null;
-  readonly created_at: string;
   readonly updated_at: string;
 };
 
@@ -55,7 +54,6 @@ function isPipelineRow(value: unknown): value is PipelineRow {
     isNonNegativeInteger(value.fix_round) &&
     isNullableString(value.branch) &&
     isNullableString(value.pr_url) &&
-    isIsoTimestamp(value.created_at) &&
     isIsoTimestamp(value.updated_at)
   );
 }

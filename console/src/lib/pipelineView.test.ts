@@ -10,8 +10,10 @@ import {
   itemRequirementsPath,
   nextPipelineSort,
   pipelineScopeNote,
+  pipelineStatusLabel,
   pipelineStatusVariant,
   prLink,
+  reconcilePipelineFilter,
   repoOptions,
   showsRequirementsLink,
   sortPipelineRows,
@@ -35,7 +37,6 @@ function row(overrides: Partial<PipelineRow> = {}): PipelineRow {
     fix_round: 0,
     branch: "factory/issue-9-wi-1",
     pr_url: null,
-    created_at: T0,
     updated_at: T0,
     ...overrides,
   };
@@ -150,10 +151,83 @@ describe("filterPipelineRows", () => {
     ).toEqual([]);
   });
 
+  test.each(["\u200B", "\u202E"])(
+    "does not match a hidden character %j in the title",
+    (hidden) => {
+      const hiddenTitle = [row({ title: `a${hidden}b` })];
+      const filter = { ...EMPTY_PIPELINE_FILTER, text: hidden };
+      expect(filterPipelineRows(hiddenTitle, filter)).toEqual([]);
+    },
+  );
+
+  test("does not match a hidden character in the branch", () => {
+    const hiddenBranch = [row({ branch: "a\u202Eb" })];
+    const filter = { ...EMPTY_PIPELINE_FILTER, text: "\u202E" };
+    expect(filterPipelineRows(hiddenBranch, filter)).toEqual([]);
+  });
+
+  test("matches the raw value of a status that is not known yet", () => {
+    const unknown = [row({ status: "merged" })];
+    const filter = { ...EMPTY_PIPELINE_FILTER, text: "merged" };
+    expect(filterPipelineRows(unknown, filter)).toEqual(unknown);
+  });
+
   test("does not mutate the input", () => {
     const filter = { ...EMPTY_PIPELINE_FILTER, status: "failed" };
     filterPipelineRows(rows, filter);
     expect(rows.length).toBe(3);
+  });
+});
+
+describe("reconcilePipelineFilter", () => {
+  const rows = [
+    row({ status: "failed", owner: "o", repo: "r" }),
+    row({ status: "picked", owner: "o", repo: "other" }),
+  ];
+
+  test("keeps a filter whose choices are still present", () => {
+    const filter = { status: "failed", repo: "o/r", text: "x" };
+    expect(reconcilePipelineFilter(filter, rows)).toBe(filter);
+  });
+
+  test("resets a status that is no longer in the rows", () => {
+    const filter = { status: "implementing", repo: null, text: "" };
+    expect(reconcilePipelineFilter(filter, rows).status).toBeNull();
+  });
+
+  test("resets a repository that is no longer in the rows", () => {
+    const filter = { status: null, repo: "o/gone", text: "" };
+    expect(reconcilePipelineFilter(filter, rows).repo).toBeNull();
+  });
+
+  test("resets only the choice that disappeared", () => {
+    const filter = { status: "implementing", repo: "o/r", text: "x" };
+    expect(reconcilePipelineFilter(filter, rows)).toEqual({
+      status: null,
+      repo: "o/r",
+      text: "x",
+    });
+  });
+
+  test("keeps the text when no rows are left", () => {
+    const filter = { status: "failed", repo: "o/r", text: "x" };
+    expect(reconcilePipelineFilter(filter, []).text).toBe("x");
+  });
+});
+
+describe("pipelineStatusLabel", () => {
+  test("uses the Japanese name of a known status", () => {
+    expect(pipelineStatusLabel("failed")).toBe("失敗");
+  });
+
+  test("adds the raw value to a status that is not known yet", () => {
+    expect(pipelineStatusLabel("merged")).toBe("不明な状態(merged)");
+  });
+
+  test("drops hidden characters from the raw value", () => {
+    expect(pipelineStatusLabel("mer\u202Eged")).toBe(
+      "不明な状態(mer\uFFFDged)",
+    );
   });
 });
 
@@ -265,6 +339,28 @@ describe("sortPipelineRows", () => {
     expect(
       ids(sortPipelineRows(rows, { key: "attempt", direction: "asc" })),
     ).toEqual([2, 1]);
+  });
+
+  test("orders by status in reverse workflow order", () => {
+    const rows = [
+      row({ work_item_id: 1, status: "picked" }),
+      row({ work_item_id: 2, status: "failed" }),
+      row({ work_item_id: 3, status: "implementing" }),
+    ];
+    expect(
+      ids(sortPipelineRows(rows, { key: "status", direction: "desc" })),
+    ).toEqual([2, 3, 1]);
+  });
+
+  test("keeps a status that is not known yet last in reverse order", () => {
+    const rows = [
+      row({ work_item_id: 1, status: "zeta" }),
+      row({ work_item_id: 2, status: "audited" }),
+      row({ work_item_id: 3, status: "picked" }),
+    ];
+    expect(
+      ids(sortPipelineRows(rows, { key: "status", direction: "desc" })),
+    ).toEqual([2, 3, 1]);
   });
 
   test("breaks ties with the newer work item first", () => {
@@ -425,6 +521,12 @@ describe("pipelineScopeNote", () => {
   test("states the period and the limit when the list may be cut", () => {
     expect(pipelineScopeNote(500, 500, 90)).toBe(
       "直近90日に更新された作業項目を、新しい順に500件まで取得しています。",
+    );
+  });
+
+  test("states only the period one below the limit", () => {
+    expect(pipelineScopeNote(499, 500, 90)).toBe(
+      "直近90日に更新された作業項目を表示しています。",
     );
   });
 

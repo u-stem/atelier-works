@@ -1,7 +1,7 @@
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { PipelineSection } from "./PipelineSection.tsx";
 
-/** 作業項目の画面。節ごとに自分の取得を持つので、見出しには最終更新を出さない。 */
+/** 作業項目の画面。進捗の節を持つ。節ごとに自分の取得を持つので、見出しには最終更新を出さない。 */
 export function ItemsScreen() {
   return (
     <>
