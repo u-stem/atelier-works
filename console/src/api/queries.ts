@@ -11,6 +11,12 @@ import {
   isIntakeSnapshotRows,
 } from "./guards/intakeSnapshot.ts";
 import { isPipelineRows, type PipelineRow } from "./guards/pipeline.ts";
+import {
+  isRequirementsDocRows,
+  isRequirementsIndexRows,
+  type RequirementsDoc,
+  type RequirementsIndexRow,
+} from "./guards/requirements.ts";
 import { type ConsoleSummary, isConsoleSummary } from "./guards/summary.ts";
 import { type RunScriptOptions, runScript } from "./windmill.ts";
 
@@ -176,5 +182,100 @@ export function usePipeline(): UseQueryResult<PipelineRow[], Error> {
     queryKey: pipelineQueryKey,
     queryFn: ({ signal }) => fetchPipeline({ signal }),
     staleTime: PIPELINE_STALE_MS,
+  });
+}
+
+/** 要件定義の一覧が見る期間(日)と件数の上限。backendの上限と同じにして、古い作業項目も開けるようにする。 */
+const REQUIREMENTS_INDEX_DAYS = 3650;
+const REQUIREMENTS_INDEX_LIMIT = 500;
+
+/** 要件定義の一覧と本文を取り直さない間隔。承認や作り直しで変わるが、開いている間の変化は小さい。 */
+const REQUIREMENTS_STALE_MS = 30_000;
+
+export const requirementsIndexQueryKey = [
+  "console",
+  "requirements_index",
+] as const;
+
+/** 要件定義がある作業項目を新しい順に取り、型ガードを通してから返す。失敗は`ApiFailure`で投げる。 */
+export async function fetchRequirementsIndex(
+  options: RunScriptOptions = {},
+): Promise<readonly RequirementsIndexRow[]> {
+  const result = await runScript(
+    "console_query",
+    {
+      view: "requirements_index",
+      limit: REQUIREMENTS_INDEX_LIMIT,
+      days: REQUIREMENTS_INDEX_DAYS,
+    },
+    options,
+  );
+  if (!result.ok) {
+    throw new ApiFailure(result.error);
+  }
+  if (!isRequirementsIndexRows(result.value)) {
+    throw new ApiFailure({ kind: "invalid_response" });
+  }
+  return result.value;
+}
+
+/** 要件定義の一覧を取る。自動では取り直さず、画面の再読み込みで取り直す。 */
+export function useRequirementsIndex(): UseQueryResult<
+  readonly RequirementsIndexRow[],
+  Error
+> {
+  return useQuery({
+    queryKey: requirementsIndexQueryKey,
+    queryFn: ({ signal }) => fetchRequirementsIndex({ signal }),
+    staleTime: REQUIREMENTS_STALE_MS,
+  });
+}
+
+/**
+ * 要件定義書のキャッシュのキー。`attempt`が`null`のときは最新の試行である。
+ * 最新の試行と、番号で指した試行は、別のキャッシュにする。
+ */
+export function requirementsDocQueryKey(
+  workItemId: number,
+  attempt: number | null,
+): readonly ["console", "requirements_doc", number, number | null] {
+  return ["console", "requirements_doc", workItemId, attempt];
+}
+
+/**
+ * 作業項目の要件定義書1件を取り、型ガードを通してから返す。`attempt`が`null`なら最新の試行を取る。
+ * 作業項目か試行が無いときは`null`を返す。失敗は`ApiFailure`で投げる。
+ */
+export async function fetchRequirementsDoc(
+  workItemId: number,
+  attempt: number | null,
+  options: RunScriptOptions = {},
+): Promise<RequirementsDoc | null> {
+  const result = await runScript(
+    "console_query",
+    attempt === null
+      ? { view: "requirements_doc", work_item_id: workItemId }
+      : { view: "requirements_doc", work_item_id: workItemId, attempt },
+    options,
+  );
+  if (!result.ok) {
+    throw new ApiFailure(result.error);
+  }
+  if (!isRequirementsDocRows(result.value)) {
+    throw new ApiFailure({ kind: "invalid_response" });
+  }
+  return result.value[0] ?? null;
+}
+
+/** 要件定義書を取る。取得から30秒を過ぎていれば、画面を開くたびに取り直す。 */
+export function useRequirementsDoc(
+  workItemId: number,
+  attempt: number | null,
+): UseQueryResult<RequirementsDoc | null, Error> {
+  return useQuery({
+    queryKey: requirementsDocQueryKey(workItemId, attempt),
+    queryFn: ({ signal }) =>
+      fetchRequirementsDoc(workItemId, attempt, { signal }),
+    staleTime: REQUIREMENTS_STALE_MS,
   });
 }

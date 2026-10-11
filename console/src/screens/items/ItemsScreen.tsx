@@ -1,13 +1,15 @@
 import { PageHeader } from "../../app/PageHeader.tsx";
 import { PipelineSection } from "./PipelineSection.tsx";
+import { RequirementsSection } from "./RequirementsSection.tsx";
 
-/** 作業項目の画面。進捗の節を持つ。節ごとに自分の取得を持つので、見出しには最終更新を出さない。 */
+/** 作業項目の画面。進捗と要件定義の節を持つ。節ごとに自分の取得を持つので、見出しには最終更新を出さない。 */
 export function ItemsScreen() {
   return (
     <>
       <PageHeader title="作業項目" />
-      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-8 py-6">
         <PipelineSection />
+        <RequirementsSection />
       </div>
     </>
   );
