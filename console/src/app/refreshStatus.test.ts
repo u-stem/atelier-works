@@ -160,6 +160,40 @@ describe("refreshStatusOfAll", () => {
     expect(calls).toBe(3);
   });
 
+  test("reports an error for a 401 mixed with an ordinary failure", () => {
+    const status = refreshStatusOfAll([
+      fakeQuery({
+        isError: true,
+        error: new ApiFailure({ kind: "unauthorized" }),
+      }),
+      fakeQuery({ isError: true, error: new ApiFailure({ kind: "network" }) }),
+    ]);
+    expect(status.isError).toBe(true);
+  });
+
+  test("does not report an error for a 401 next to a success", () => {
+    const status = refreshStatusOfAll([
+      fakeQuery({
+        isError: true,
+        error: new ApiFailure({ kind: "unauthorized" }),
+      }),
+      fakeQuery(),
+    ]);
+    expect(status.isError).toBe(false);
+  });
+
+  test("has no update time without queries", () => {
+    expect(refreshStatusOfAll([]).updatedAt).toBe(0);
+  });
+
+  test("is not fetching without queries", () => {
+    expect(refreshStatusOfAll([]).isFetching).toBe(false);
+  });
+
+  test("reports no error without queries", () => {
+    expect(refreshStatusOfAll([]).isError).toBe(false);
+  });
+
   test("has no auto-refresh interval unless one is given", () => {
     expect(refreshStatusOfAll([fakeQuery()]).autoRefreshMs).toBeNull();
   });

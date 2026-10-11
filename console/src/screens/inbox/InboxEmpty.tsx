@@ -1,24 +1,18 @@
 import { CircleCheck, Inbox } from "lucide-react";
-import { SUMMARY_REFRESH_MS } from "../../api/queries.ts";
 import { emptyStateTone, type UnlistedCount } from "../../lib/inboxView.ts";
-import { formatClockTime, formatNextRefresh } from "../../lib/refreshTiming.ts";
 import { UnlistedCards } from "./UnlistedCards.tsx";
 
 /**
  * 一覧が空のときの画面。画面を二つに割らず、中央に一枚の面を置く。
  * 何も残っていないときだけ成功の印を出し、ほかの種類が残っているときは中立の印にする。
- * あわせて、最後に確かめた時刻、次の自動更新、ほかの種類に残る件数を伝える。
+ * あわせて、ほかの種類に残る件数を伝える。
+ * 最終更新と自動更新の間隔は、画面の見出しが示す。
  */
 export function InboxEmpty({
-  updatedAt,
-  now,
   unlisted,
 }: {
-  updatedAt: number;
-  now: number;
   unlisted: readonly UnlistedCount[];
 }) {
-  const next = formatNextRefresh(updatedAt, now, SUMMARY_REFRESH_MS);
   return (
     <div className="flex flex-1 items-center justify-center overflow-y-auto p-8">
       <section
@@ -38,13 +32,6 @@ export function InboxEmpty({
           <h2 className="text-title font-semibold tracking-tight">
             対応が必要な承認・失敗・通知はありません
           </h2>
-          <p className="text-small text-muted-foreground tabular-nums">
-            {updatedAt > 0
-              ? `${formatClockTime(updatedAt)}に確認しました`
-              : null}
-            {updatedAt > 0 && next !== null ? "・" : null}
-            {next === null ? null : `次の自動更新は${next}`}
-          </p>
         </div>
         {unlisted.length === 0 ? null : (
           <div className="mt-6 border-t border-border pt-5">

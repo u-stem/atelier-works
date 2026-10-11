@@ -9,6 +9,7 @@ import {
   type usePipeline,
 } from "../../api/queries.ts";
 import { useNow } from "../../app/useNow.ts";
+import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import {
   Alert,
   AlertDescription,
@@ -104,7 +105,17 @@ export function PipelineSection({
           <LoadingState />
         )
       ) : (
-        <PipelineTable rows={pipeline.data} now={now} />
+        <>
+          {pipeline.isError ? (
+            <StaleDataNotice
+              error={pipeline.error}
+              onRetry={() => {
+                void pipeline.refetch();
+              }}
+            />
+          ) : null}
+          <PipelineTable rows={pipeline.data} now={now} />
+        </>
       )}
     </section>
   );

@@ -1,6 +1,6 @@
 // システムの画面が読む状態の取得。反映の状態、情報の通知、解決済みの通知、
 // 作業項目に紐づかない失敗は、`system_status`の1回の取得で揃う。
-// 自動では取り直さず、画面の再読み込みで取り直す。
+// 自動では取り直さず、画面の更新ボタンで取り直す。
 
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { ApiFailure } from "./errors.ts";
@@ -34,7 +34,7 @@ export async function fetchSystemStatus(
 }
 
 /**
- * システムの状態を取る。定期には取り直さず、画面の再読み込みで取り直す。
+ * システムの状態を取る。定期には取り直さず、画面の更新ボタンで取り直す。
  * 要対応の画面で通知を解決した後に戻っても、解決した通知を未解決のまま出さないよう、画面を開くたびに取り直す。
  */
 export function useSystemStatus(): UseQueryResult<SystemStatus, Error> {

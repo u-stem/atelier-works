@@ -8,9 +8,12 @@ export type RefreshStatus = {
   readonly isFetching: boolean;
   /** バナーが知らせる失敗(401)を除いた、見出しで知らせる失敗があるか。 */
   readonly isError: boolean;
-  /** 画面全体を取得し直す。 */
+  /**
+   * 見出しに渡した取得を取り直す。
+   * 要対応の画面は一覧(summary)だけで、詳細ペインの取得は含まない。
+   */
   readonly onRefresh: () => void;
-  /** 画面全体が自動で取り直される間隔(ミリ秒)。自動で取り直さなければ`null`。 */
+  /** 見出しに渡した取得のすべてが自動で取り直される間隔(ミリ秒)。そうでなければ`null`。 */
   readonly autoRefreshMs: number | null;
 };
 
@@ -23,7 +26,7 @@ type RefreshableQuery = {
 };
 
 type RefreshOptions = {
-  /** 画面のすべての取得が、この間隔で自動で取り直されるときに渡す。 */
+  /** 見出しに渡す取得のすべてが、この間隔で自動で取り直されるときだけ渡す。 */
   readonly autoRefreshMs?: number;
 };
 

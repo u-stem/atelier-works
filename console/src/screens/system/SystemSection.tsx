@@ -1,6 +1,7 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useNow } from "../../app/useNow.ts";
+import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { QueryFailure } from "../items/QueryFailure.tsx";
 
@@ -63,7 +64,17 @@ export function SystemSection<T>({
           <LoadingState />
         )
       ) : (
-        children(query.data, now)
+        <>
+          {query.isError ? (
+            <StaleDataNotice
+              error={query.error}
+              onRetry={() => {
+                void query.refetch();
+              }}
+            />
+          ) : null}
+          {children(query.data, now)}
+        </>
       )}
     </section>
   );

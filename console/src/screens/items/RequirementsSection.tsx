@@ -1,5 +1,6 @@
 import type { useRequirementsIndex } from "../../api/queries.ts";
 import { useNow } from "../../app/useNow.ts";
+import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
 import { QueryFailure } from "./QueryFailure.tsx";
 import { RequirementsIndexList } from "./RequirementsIndexList.tsx";
@@ -43,7 +44,17 @@ export function RequirementsSection({
         </p>
       </div>
       {rows !== undefined ? (
-        <RequirementsIndexList rows={rows} now={now} />
+        <>
+          {index.isError ? (
+            <StaleDataNotice
+              error={index.error}
+              onRetry={() => {
+                void index.refetch();
+              }}
+            />
+          ) : null}
+          <RequirementsIndexList rows={rows} now={now} />
+        </>
       ) : index.isError ? (
         <QueryFailure
           compact

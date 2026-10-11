@@ -173,11 +173,7 @@ export function InboxScreen() {
     return (
       <>
         {header}
-        <InboxEmpty
-          updatedAt={summary.dataUpdatedAt}
-          now={now}
-          unlisted={unlisted}
-        />
+        <InboxEmpty unlisted={unlisted} />
       </>
     );
   }
