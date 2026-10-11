@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -1806,6 +1807,16 @@ suite("symlinks a check leaves pointing outside the worktree", () => {
         "ln -s /etc/passwd evil",
         "ln -s ../ok a/inside",
         "touch ok",
+        // 名前の上限(255)を超える1要素。
+        'ln -s "$(printf "x%.0s" $(seq 1 300))" long300',
+        // 道具が置く、外を指す正当なsymlink。
+        "mkdir -p .venv/bin",
+        "ln -s /usr/bin/python3 .venv/bin/python3",
+        // 準備の時点にあったsymlinkの中身を書き換える。
+        "rm keep",
+        "ln -s /etc/shadow keep",
+        // UTF-8でない名前。
+        'ln -s /etc/passwd "$(printf "bad\\377")"',
         "",
       ].join("\n"),
     );
@@ -1821,42 +1832,85 @@ suite("symlinks a check leaves pointing outside the worktree", () => {
   }, 60_000);
 
   afterAll(() => {
-    fx.cleanup();
+    // UTF-8でない名前は、Node由来の`rmSync`では消せない。
+    Bun.spawnSync(["rm", "-rf", fx.base]);
   });
 
-  test("the scan is added as a failed check", () => {
-    expect(scanCommand).toBe("check sandbox: symlinks outside the worktree");
+  test("the scan is added as a failed check because a tracked symlink changed", () => {
+    expect(scanCommand).toBe("check sandbox: symlink scan");
   });
 
-  test("a symlink to an existing file outside is reported", () => {
-    expect(detected).toContain(join(worktree, "evil"));
+  test("the changed symlink is named", () => {
+    expect(detected).toContain(join(worktree, "keep"));
   });
 
-  test("a dangling symlink through another symlink and .. is reported", () => {
-    expect(detected).toContain(join(worktree, "a/b/x"));
+  test("the changed symlink is restored to its original content", () => {
+    expect(readlinkSync(join(worktree, "keep"))).toBe("/etc/hostname");
   });
 
-  test("a symlink that was already there is not reported", () => {
-    expect(detected).not.toContain(join(worktree, "keep"));
+  test("a symlink the check could not name is reported as a problem", () => {
+    expect(detected).toContain("could not inspect a symlink");
   });
 
-  test("a symlink that stays inside the worktree is not reported", () => {
-    expect(detected).not.toContain(join(worktree, "a/inside"));
-  });
-
-  test("the reported symlink is removed", () => {
+  test("a symlink to an existing file outside is removed", () => {
     expect(existsSync(join(worktree, "evil"))).toBe(false);
   });
 
-  test("the dangling symlink is removed", () => {
+  test("a symlink to an existing file outside is not named in the failure", () => {
+    expect(detected).not.toContain(join(worktree, "evil"));
+  });
+
+  test("a dangling symlink through another symlink and .. is removed", () => {
     expect(() => lstatSync(join(worktree, "a/b/x"))).toThrow();
   });
 
-  test("the symlink that was already there is kept", () => {
-    expect(lstatSync(join(worktree, "keep")).isSymbolicLink()).toBe(true);
+  test("a symlink with a component beyond the name limit is removed", () => {
+    expect(() => lstatSync(join(worktree, "long300"))).toThrow();
+  });
+
+  test("a symlink a tool places to a system file is removed", () => {
+    expect(() => lstatSync(join(worktree, ".venv/bin/python3"))).toThrow();
+  });
+
+  test("a symlink that stays inside the worktree is kept", () => {
+    expect(lstatSync(join(worktree, "a/inside")).isSymbolicLink()).toBe(true);
   });
 
   test("the file with a hard link is owned by root afterwards", () => {
     expect(ownerOfHardLinkedFile).toBe(0);
+  });
+});
+
+suite("a tool's symlink to a system file", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let worktree = "";
+  let resultCount = -1;
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("venv");
+    writeFileSync(
+      join(worktree, "venv.sh"),
+      "mkdir -p .venv/bin\nln -s /usr/bin/python3 .venv/bin/python3\n",
+    );
+    const results = await runChecks(
+      worktree,
+      ["sh ./venv.sh"],
+      sandboxIn(lockDir, POOL),
+    );
+    resultCount = results.length;
+  }, 60_000);
+
+  afterAll(() => {
+    fx.cleanup();
+  });
+
+  test("does not add a failed check", () => {
+    expect(resultCount).toBe(1);
+  });
+
+  test("is removed", () => {
+    expect(() => lstatSync(join(worktree, ".venv/bin/python3"))).toThrow();
   });
 });

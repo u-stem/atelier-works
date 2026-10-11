@@ -19,6 +19,7 @@ import {
   realpath,
   rename,
   rm,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -30,7 +31,7 @@ import {
   maskSecrets,
 } from "./log.ts";
 import { isRecord, isString } from "./types.ts";
-import { type CommandRunner, runCommand } from "./workspace.ts";
+import { type CommandRunner, isCappedOutput, runCommand } from "./workspace.ts";
 
 /** 枠の先頭のuid。`FACTORY_CHECK_UID`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。 */
 export const DEFAULT_CHECK_UID = 10001;
@@ -1352,6 +1353,16 @@ export type CheckSandboxDeps = ImageDeps & {
   readonly realPath: (path: string) => Promise<string | null>;
   /** symlink自身を消す。たどらない。 */
   readonly removeLink: (path: string) => Promise<void>;
+  /** symlinkを消して、`content`を指すものに張り直す。 */
+  readonly replaceLink: (path: string, content: string) => Promise<void>;
+};
+
+/** `escapingSymlinks`の結果。 */
+export type EscapingSymlinksReport = {
+  /** 消した、外を指すsymlink。失敗にはしない。 */
+  readonly removed: readonly string[];
+  /** 検出が不完全だった理由と、追跡されているsymlinkが書き換えられたこと。あれば失敗にする。 */
+  readonly problems: readonly string[];
 };
 
 export type CheckSandbox = {
@@ -1375,13 +1386,17 @@ export type CheckSandbox = {
    */
   readonly release: (dirs: CheckDirs) => Promise<void>;
   /**
-   * `release`の後に呼ぶ。`prepare`の時点には無かった、worktreeの外を指すsymlinkを消し、消したパスを返す。
+   * `release`の後に呼ぶ。`prepare`の時点には無かった、worktreeの外を指すsymlinkを消し、消したパスを`removed`で返す。
    * 検査が置いたsymlinkは取り戻しの後も残り、次のラウンドでrootのClaudeがたどると外に書きうるためである。
+   * `python3 -m venv`のような正当な道具も外を指すsymlinkを置くので、消しただけでは失敗にしない。
+   * `prepare`の時点にあった組の中身が変わっていたら、消さずに元の中身へ張り直し、`problems`に書く。
+   * 一覧が上限で切れた、中身を読めない、消せない、のときも`problems`に書く。検出が不完全だからである。
    * 消すのは、木がrootの所有になり、枠のuidが書けなくなった後なので、差し替えられない。消すのはsymlink自身だけで、たどらない。
-   * `prepare`の時点にあった組(名前と中身が同じもの)は、追跡されているものなので数えない。
-   * 失敗にするかは呼び出し側が決める。`release`の中では呼ばない。片付けを止めないためである。
+   * `release`の中では呼ばない。片付けを止めないためである。
    */
-  readonly escapingSymlinks: (dirs: CheckDirs) => Promise<string[]>;
+  readonly escapingSymlinks: (
+    dirs: CheckDirs,
+  ) => Promise<EscapingSymlinksReport>;
   /** ホストのカーネルの設定が前提を満たさないときの警告。空なら前提を満たす。 */
   readonly kernelWarnings: () => string[];
 };
@@ -1466,12 +1481,18 @@ async function handOver(
   identity: CheckIdentity,
   dir: string,
   what: string,
+  log: Logger,
 ): Promise<void> {
   const linked = await runToolOutput(
     deps,
     hardLinkedArgv(dir),
     `looking for hard links in ${dir}`,
   );
+  if (linked.trim() !== "") {
+    log.warn("handing over per directory because the tree has a hard link", {
+      dir,
+    });
+  }
   const argv =
     linked.trim() === ""
       ? handOverArgv(identity, dir)
@@ -1482,7 +1503,20 @@ async function handOver(
 /** symlinkの名前と、その中身(読んだままの文字列)。 */
 type LinkMap = ReadonlyMap<string, string>;
 
-/** `path`がsymlinkか。symlinkでない、または無ければfalse。 */
+/** `error`の`code`。無ければ空の文字列。 */
+function errorCode(error: unknown): string {
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : "";
+}
+
+/**
+ * `path`がsymlinkか。symlinkでない、または無いと分かったときだけfalseを返す。
+ * それ以外の失敗は、symlinkかもしれないものとして扱う。
+ */
 async function isSymlink(
   deps: CheckSandboxDeps,
   path: string,
@@ -1490,24 +1524,34 @@ async function isSymlink(
   try {
     await deps.readLink(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    return !["EINVAL", "ENOENT", "ENOTDIR"].includes(errorCode(error));
   }
 }
 
+/** `current`が、`root`の中か、`root`の祖先か。 */
+function inAllowedRegion(current: string, root: string): boolean {
+  return (
+    current === root ||
+    current.startsWith(`${root}/`) ||
+    current === "/" ||
+    root.startsWith(`${current}/`)
+  );
+}
+
 /**
- * symlinkの指す先の正規のパスを決める。決められなければnullを返し、呼び出し側は外とみなす。
- * `realpath`で解けなければ、中身を1要素ずつたどる。存在する要素は`realpath`で解き、`..`は解いた後の親に進む。
- * `..`を含むパスを`realpath`に渡さないのは、実行系によって途中のsymlinkを経由する`..`の解き方が違うためである。
+ * symlinkの指す先の正規のパスを決める。決められないか、途中で`root`の中とその祖先から出たらnullを返し、呼び出し側は外とみなす。
+ * 中身を1要素ずつたどる。存在する要素は`realpath`で解き、`..`は解いた後の親に進む。
+ * `..`を含むパスは`realpath`に渡さない。実行系によって、途中のsymlinkを経由する`..`の解き方が違うためである。
+ * 途中で外を通るものは、戻ってくるとしても外とみなす。外のディレクトリは、検査が差し替えた可能性があるためである。
  * 先が無い要素に当たったら、その後ろに`.`か`..`が続くとき、または先が無い要素がsymlinkのときは、決められないものとする。
  */
 async function resolveLinkTarget(
   deps: CheckSandboxDeps,
   path: string,
   content: string,
+  root: string,
 ): Promise<string | null> {
-  const whole = await deps.realPath(path);
-  if (whole !== null) return whole;
   const start = isAbsolute(content) ? "/" : await deps.realPath(dirname(path));
   if (start === null) return null;
   let current = start;
@@ -1516,31 +1560,47 @@ async function resolveLinkTarget(
     if (segment === ".") continue;
     if (segment === "..") {
       current = dirname(current);
+      if (!inAllowedRegion(current, root)) return null;
       continue;
     }
     const next = join(current, segment);
     const resolved = await deps.realPath(next);
     if (resolved !== null) {
+      if (!inAllowedRegion(resolved, root)) return null;
       current = resolved;
       continue;
     }
+    if (!inAllowedRegion(next, root)) return null;
     if (await isSymlink(deps, next)) return null;
     const rest = segments.slice(index + 1);
     if (rest.some((part) => part === "." || part === "..")) return null;
-    return join(next, ...rest);
+    const target = join(next, ...rest);
+    return target === root || target.startsWith(`${root}/`) ? target : null;
   }
-  return current;
+  return current === root || current.startsWith(`${root}/`) ? current : null;
 }
+
+/** 走査の結果。 */
+type LinkScan = {
+  /** 外を指すsymlinkの名前と中身。 */
+  readonly links: LinkMap;
+  /** 中身を読めなかったパス。壊れた名前や長すぎる名前で、消せない。 */
+  readonly unreadable: readonly string[];
+  /** 一覧が出力の上限で途中を省かれたか。 */
+  readonly truncated: boolean;
+};
 
 /**
  * `dir`の下の、`dir`の外を指すsymlinkを、名前と中身の組で集める。
  * 指す先は`resolveLinkTarget`で決め、決められないものは外とみなす。
+ * 1件の失敗で全体を止めない。中身を読めないものは`unreadable`に、解く途中で失敗したものは外として集める。
  * rootの所有で書き込めない木に対して呼ぶので、決める間にsymlinkが差し替わらない。
  */
 async function collectEscapingLinks(
   deps: CheckSandboxDeps,
   dir: string,
-): Promise<LinkMap> {
+  warn: Logger,
+): Promise<LinkScan> {
   const root = await deps.realPath(dir);
   if (root === null) throw new Error(`check sandbox: cannot resolve ${dir}`);
   const listed = await runToolOutput(
@@ -1549,19 +1609,31 @@ async function collectEscapingLinks(
     `listing symlinks in ${dir}`,
     { maxOutputBytes: LINK_LIST_MAX_OUTPUT_BYTES },
   );
-  const found = new Map<string, string>();
+  const links = new Map<string, string>();
+  const unreadable: string[] = [];
   for (const path of listed.split("\0")) {
-    if (path === "") continue;
-    const content = await deps.readLink(path);
-    const target = await resolveLinkTarget(deps, path, content);
-    if (
-      target === null ||
-      (target !== root && !target.startsWith(`${root}/`))
-    ) {
-      found.set(path, content);
+    // 途中を省いた印を含む要素は、前後が欠けた壊れたパスなので読まない。省いたことは`truncated`で伝える。
+    if (path === "" || isCappedOutput(path)) continue;
+    let content: string;
+    try {
+      content = await deps.readLink(path);
+    } catch {
+      unreadable.push(path);
+      continue;
     }
+    let target: string | null;
+    try {
+      target = await resolveLinkTarget(deps, path, content, root);
+    } catch (error) {
+      warn.warn("a symlink could not be resolved, so it counts as outside", {
+        path,
+        error: errorMessage(error),
+      });
+      target = null;
+    }
+    if (target === null) links.set(path, content);
   }
-  return found;
+  return { links, unreadable, truncated: isCappedOutput(listed) };
 }
 
 /**
@@ -1842,18 +1914,21 @@ export function createCheckSandbox(opts: {
       // 渡す前に記録する。後始末が走らなくても、次にこの枠を取る実行が戻せるようにするためである。
       await deps.slotRecords.write(handle.index, record);
       // 渡す前の、rootの所有の木で控える。投げても枠は`active`にあるので、`release`が手放して取り戻す。
-      baseline = await collectEscapingLinks(deps, dirs.worktreeDir);
+      baseline = (await collectEscapingLinks(deps, dirs.worktreeDir, log))
+        .links;
       await handOver(
         deps,
         identity,
         dirs.worktreeDir,
         "handing the worktree over",
+        log,
       );
       await handOver(
         deps,
         identity,
         dirs.homeDir,
         "handing the home directory over",
+        log,
       );
     },
     // 枠のロックを持つ間なので、枠のuidのプロセスはすべてこの実行のものである。
@@ -1883,12 +1958,45 @@ export function createCheckSandbox(opts: {
       }
     },
     escapingSymlinks: async (dirs) => {
-      const now = await collectEscapingLinks(deps, dirs.worktreeDir);
-      const placed = [...now]
-        .filter(([path, content]) => baseline.get(path) !== content)
-        .map(([path]) => path);
-      for (const path of placed) await deps.removeLink(path);
-      return placed;
+      const scan = await collectEscapingLinks(deps, dirs.worktreeDir, log);
+      const removed: string[] = [];
+      const problems: string[] = [];
+      for (const [path, content] of scan.links) {
+        const before = baseline.get(path);
+        try {
+          if (before === undefined) {
+            await deps.removeLink(path);
+            removed.push(path);
+          } else if (before !== content) {
+            await deps.replaceLink(path, before);
+            problems.push(
+              `a symlink that existed before the check was changed, so it was restored: ${path}`,
+            );
+          }
+        } catch (error) {
+          problems.push(
+            `could not remove or restore ${path}: ${errorMessage(error)}`,
+          );
+        }
+      }
+      for (const path of scan.unreadable) {
+        problems.push(`could not inspect a symlink, so it was left: ${path}`);
+      }
+      if (scan.truncated) {
+        problems.push(
+          "the list of symlinks was cut short, so some symlinks were not checked",
+        );
+      }
+      if (removed.length > 0) {
+        log.warn(
+          "removed symlinks the check left pointing outside the worktree",
+          {
+            count: removed.length,
+            paths: removed.slice(0, 20),
+          },
+        );
+      }
+      return { removed, problems };
     },
     kernelWarnings: () =>
       KERNEL_PROTECTIONS.filter((name) => deps.readSysctl(name) !== "1").map(
@@ -1991,7 +2099,7 @@ export async function restoreCheckOwnership(
   return restored;
 }
 
-/** `realpath`が解決できないことを示す失敗(存在しない、ディレクトリでない、輪になっている)か。 */
+/** `realpath`が解決できないことを示す失敗(存在しない、ディレクトリでない、名前が長すぎる、輪になっている)か。 */
 function isUnresolvable(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -1999,6 +2107,7 @@ function isUnresolvable(error: unknown): boolean {
     "code" in error &&
     (error.code === "ENOENT" ||
       error.code === "ENOTDIR" ||
+      error.code === "ENAMETOOLONG" ||
       error.code === "ELOOP")
   );
 }
@@ -2190,6 +2299,10 @@ export function defaultSandboxDeps(
       }
     },
     removeLink: (path) => unlink(path),
+    replaceLink: async (path, content) => {
+      await unlink(path);
+      await symlink(content, path);
+    },
     readSysctl: (name) => {
       try {
         return readFileSync(`/proc/sys/${name}`, "utf8").trim();

@@ -1724,6 +1724,12 @@ function fakeSandboxDeps(opts?: {
   readonly realPathFails?: string;
   /** symlinkを列挙するコマンドを失敗させる。 */
   readonly failSymlinkListing?: boolean;
+  /** `readLink`が読めない(ENOENT)パス。 */
+  readonly unreadablePaths?: readonly string[];
+  /** `removeLink`が失敗するパス。 */
+  readonly removeFails?: string;
+  /** symlinkの一覧の出力の末尾に足す文字列。 */
+  readonly listingTail?: string;
 }) {
   const removedLinks: string[] = [];
   const symlinks = new Map(Object.entries(opts?.symlinks ?? {}));
@@ -1766,7 +1772,10 @@ function fakeSandboxDeps(opts?: {
       if (argv.includes("-print0") && opts?.failSymlinkListing === true)
         return fail("listing failed", 1);
       if (argv.includes("-print0"))
-        return ok([...symlinks.keys()].map((path) => `${path}\0`).join(""));
+        return ok(
+          [...symlinks.keys()].map((path) => `${path}\0`).join("") +
+            (opts?.listingTail ?? ""),
+        );
       if (argv.includes("-links") && argv.includes("+1"))
         return ok(opts?.hardLinked ?? "");
       return ok();
@@ -1844,7 +1853,14 @@ function fakeSandboxDeps(opts?: {
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
     readLink: async (path) => {
       const found = symlinks.get(path);
-      if (found === undefined) throw new Error("EINVAL: not a symlink");
+      if (opts?.unreadablePaths?.includes(path) === true)
+        throw Object.assign(new Error("ENOENT: no such file"), {
+          code: "ENOENT",
+        });
+      if (found === undefined)
+        throw Object.assign(new Error("EINVAL: not a symlink"), {
+          code: "EINVAL",
+        });
       return found.content;
     },
     realPath: async (path) => {
@@ -1856,8 +1872,12 @@ function fakeSandboxDeps(opts?: {
         : resolve(path);
     },
     removeLink: async (path) => {
+      if (path === opts?.removeFails) throw new Error("EPERM: not permitted");
       removedLinks.push(path);
       symlinks.delete(path);
+    },
+    replaceLink: async (path, content) => {
+      symlinks.set(path, { content, resolved: content });
     },
     listWorldWritablePaths: async () => opts?.worldWritable ?? [],
     isExecutable: async (path) => {
@@ -1964,117 +1984,117 @@ async function prepared(fake: ReturnType<typeof fakeSandboxDeps>) {
 
 describe("escapingSymlinks", () => {
   const WT = DIRS.worktreeDir;
+  const PARENT = WT.slice(0, WT.lastIndexOf("/"));
   const OUT = { content: "/etc/passwd", resolved: "/etc/passwd" };
 
-  test("reports a symlink placed by the check that points outside", async () => {
-    const fake = fakeSandboxDeps();
+  /** 準備を終えたサンドボックスを返す。 */
+  async function preparedWith(opts?: Parameters<typeof fakeSandboxDeps>[0]) {
+    const fake = fakeSandboxDeps(opts);
     const sandbox = sandboxOf(fake.deps);
     await sandbox.prepare(DIRS);
+    return { fake, sandbox };
+  }
+
+  test("removes a symlink the check placed that points outside", async () => {
+    const { fake, sandbox } = await preparedWith();
     fake.symlinks.set(`${WT}/node_modules/.bin/evil`, OUT);
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
       `${WT}/node_modules/.bin/evil`,
     ]);
   });
 
-  test("ignores a symlink that points inside the worktree", async () => {
-    const fake = fakeSandboxDeps();
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
-    fake.symlinks.set(`${WT}/a`, { content: "b", resolved: `${WT}/b` });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([]);
+  test("does not call a removed symlink a problem", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/.venv/bin/python3`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([]);
   });
 
-  test("ignores a symlink that was already there with the same content", async () => {
-    const fake = fakeSandboxDeps({ symlinks: { [`${WT}/tracked`]: OUT } });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([]);
-  });
-
-  test("reports a symlink that was already there but now has other content", async () => {
-    const fake = fakeSandboxDeps({ symlinks: { [`${WT}/tracked`]: OUT } });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
-    fake.symlinks.set(`${WT}/tracked`, {
-      content: "/root/.ssh",
-      resolved: "/root/.ssh",
-    });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([`${WT}/tracked`]);
-  });
-
-  test("resolves a dangling symlink from its own directory", async () => {
-    const fake = fakeSandboxDeps();
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
-    fake.symlinks.set(`${WT}/sub/dangling`, {
-      content: "../../../outside",
-      resolved: null,
-    });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([
-      `${WT}/sub/dangling`,
-    ]);
-  });
-
-  test("ignores a dangling symlink that stays inside the worktree", async () => {
-    const fake = fakeSandboxDeps();
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
-    fake.symlinks.set(`${WT}/sub/dangling`, {
-      content: "../missing",
-      resolved: null,
-    });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([]);
-  });
-
-  test("removes the symlink it reports", async () => {
-    const fake = fakeSandboxDeps();
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
+  test("unlinks the symlink it reports", async () => {
+    const { fake, sandbox } = await preparedWith();
     fake.symlinks.set(`${WT}/evil`, OUT);
     await sandbox.escapingSymlinks(DIRS);
     expect(fake.removedLinks).toEqual([`${WT}/evil`]);
   });
 
-  test("removes nothing that was already there", async () => {
-    const fake = fakeSandboxDeps({ symlinks: { [`${WT}/tracked`]: OUT } });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
+  test("ignores a symlink that points inside the worktree", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/a`, { content: "b", resolved: `${WT}/b` });
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([]);
+  });
+
+  test("ignores a symlink that was already there with the same content", async () => {
+    const { sandbox, fake } = await preparedWith({
+      symlinks: { [`${WT}/tracked`]: OUT },
+    });
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.removedLinks).toEqual([]);
+  });
+
+  test("restores a symlink that was already there but now has other content", async () => {
+    const { fake, sandbox } = await preparedWith({
+      symlinks: { [`${WT}/tracked`]: OUT },
+    });
+    fake.symlinks.set(`${WT}/tracked`, {
+      content: "/root/.ssh",
+      resolved: "/root/.ssh",
+    });
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.symlinks.get(`${WT}/tracked`)?.content).toBe("/etc/passwd");
+  });
+
+  test("reports a symlink that was already there but now has other content as a problem", async () => {
+    const { fake, sandbox } = await preparedWith({
+      symlinks: { [`${WT}/tracked`]: OUT },
+    });
+    fake.symlinks.set(`${WT}/tracked`, {
+      content: "/root/.ssh",
+      resolved: "/root/.ssh",
+    });
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
+      `a symlink that existed before the check was changed, so it was restored: ${WT}/tracked`,
+    ]);
+  });
+
+  test("does not unlink a symlink that was already there but changed", async () => {
+    const { fake, sandbox } = await preparedWith({
+      symlinks: { [`${WT}/tracked`]: OUT },
+    });
+    fake.symlinks.set(`${WT}/tracked`, {
+      content: "/root/.ssh",
+      resolved: "/root/.ssh",
+    });
     await sandbox.escapingSymlinks(DIRS);
     expect(fake.removedLinks).toEqual([]);
   });
 
   // w/a/b/il -> ../.. はwを指し、w/a/b/x -> il/../outside/new.txt はwの外の新しいファイルを指す。
-  test("reports a dangling symlink whose target goes through another symlink and ..", async () => {
-    const parent = WT.slice(0, WT.lastIndexOf("/"));
-    const fake = fakeSandboxDeps({
+  test("removes a dangling symlink whose target goes through another symlink and ..", async () => {
+    const { fake, sandbox } = await preparedWith({
       realPathOf: (path) => {
         if (path === `${WT}/a/b/il`) return WT;
-        if (path.startsWith(`${parent}/outside`)) return null;
+        if (path.startsWith(`${PARENT}/outside`)) return null;
         return undefined;
       },
     });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
     fake.symlinks.set(`${WT}/a/b/x`, {
       content: "il/../outside/new.txt",
       resolved: null,
     });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([`${WT}/a/b/x`]);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
+      `${WT}/a/b/x`,
+    ]);
   });
 
   test("never passes a path with .. to realpath", async () => {
-    const parent = WT.slice(0, WT.lastIndexOf("/"));
     const asked: string[] = [];
-    const fake = fakeSandboxDeps({
+    const { fake, sandbox } = await preparedWith({
       realPathOf: (path) => {
         asked.push(path);
         if (path === `${WT}/a/b/il`) return WT;
-        if (path.startsWith(`${parent}/outside`)) return null;
+        if (path.startsWith(`${PARENT}/outside`)) return null;
         return undefined;
       },
     });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
     fake.symlinks.set(`${WT}/a/b/x`, {
       content: "il/../outside/new.txt",
       resolved: null,
@@ -2083,58 +2103,152 @@ describe("escapingSymlinks", () => {
     expect(asked.filter((path) => path.includes(".."))).toEqual([]);
   });
 
-  test("treats a missing component that is itself a symlink as outside", async () => {
-    const fake = fakeSandboxDeps({
-      realPathOf: (path) => (path === `${WT}/loop` ? null : undefined),
+  test("treats a target that leaves the worktree and comes back as outside", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/x`, {
+      content: `/tmp/zz/d/../../..${WT}/src`,
+      resolved: `${WT}/src`,
     });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
-    fake.symlinks.set(`${WT}/loop`, { content: "/nowhere", resolved: null });
-    fake.symlinks.set(`${WT}/via`, { content: "loop/f", resolved: null });
-    expect(await sandbox.escapingSymlinks(DIRS)).toContain(`${WT}/via`);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([`${WT}/x`]);
+  });
+
+  test("keeps an absolute symlink that goes straight down to a path inside", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/x`, {
+      content: `${WT}/src`,
+      resolved: `${WT}/src`,
+    });
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([]);
+  });
+
+  test("keeps a relative symlink that goes up and comes back into the worktree", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/sub/x`, {
+      content: `../../${WT.split("/").at(-1)}/src`,
+      resolved: `${WT}/src`,
+    });
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([]);
   });
 
   test("treats a remainder with .. as outside because it cannot be resolved", async () => {
-    const fake = fakeSandboxDeps({
+    const { fake, sandbox } = await preparedWith({
       realPathOf: (path) => (path.includes("/missing") ? null : undefined),
     });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
     fake.symlinks.set(`${WT}/gone`, {
       content: "missing/../ok",
       resolved: null,
     });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([`${WT}/gone`]);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
+      `${WT}/gone`,
+    ]);
   });
 
-  test("keeps a dangling symlink inside the worktree whose existing ancestor is inside", async () => {
-    const fake = fakeSandboxDeps();
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
+  test("treats a missing component that is itself a symlink as outside", async () => {
+    const { fake, sandbox } = await preparedWith({
+      realPathOf: (path) => (path === `${WT}/loop` ? null : undefined),
+    });
+    fake.symlinks.set(`${WT}/loop`, { content: "/nowhere", resolved: null });
+    fake.symlinks.set(`${WT}/via`, { content: "loop/f", resolved: null });
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toContain(
+      `${WT}/via`,
+    );
+  });
+
+  test("keeps a dangling symlink inside the worktree", async () => {
+    const { fake, sandbox } = await preparedWith();
     fake.symlinks.set(`${WT}/sub/new`, {
       content: "later/file.txt",
       resolved: null,
     });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([]);
-  });
-
-  test("throws when realpath fails for a reason other than a missing path", async () => {
-    const fake = fakeSandboxDeps({ realPathFails: `${WT}/denied` });
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
-    fake.symlinks.set(`${WT}/denied`, OUT);
-    await expect(sandbox.escapingSymlinks(DIRS)).rejects.toThrow("EACCES");
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([]);
   });
 
   test("does not count a sibling directory whose name starts with the worktree name", async () => {
-    const fake = fakeSandboxDeps();
-    const sandbox = sandboxOf(fake.deps);
-    await sandbox.prepare(DIRS);
+    const { fake, sandbox } = await preparedWith();
     fake.symlinks.set(`${WT}/x`, {
       content: `${WT}-other`,
       resolved: `${WT}-other`,
     });
-    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([`${WT}/x`]);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([`${WT}/x`]);
+  });
+
+  test("treats a symlink as outside when resolving it fails for another reason", async () => {
+    const { fake, sandbox } = await preparedWith({
+      realPathFails: `${WT}/sub`,
+    });
+    fake.symlinks.set(`${WT}/denied`, {
+      content: "sub/file",
+      resolved: null,
+    });
+    fake.symlinks.set(`${WT}/other`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
+      `${WT}/denied`,
+      `${WT}/other`,
+    ]);
+  });
+
+  test("still removes the other symlinks when one cannot be read", async () => {
+    const { fake, sandbox } = await preparedWith({
+      unreadablePaths: [`${WT}/bad`],
+    });
+    fake.symlinks.set(`${WT}/bad`, OUT);
+    fake.symlinks.set(`${WT}/evil`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
+      `${WT}/evil`,
+    ]);
+  });
+
+  test("reports a symlink that cannot be read as a problem", async () => {
+    const { fake, sandbox } = await preparedWith({
+      unreadablePaths: [`${WT}/bad`],
+    });
+    fake.symlinks.set(`${WT}/bad`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
+      `could not inspect a symlink, so it was left: ${WT}/bad`,
+    ]);
+  });
+
+  test("reports a symlink that cannot be removed and still removes the others", async () => {
+    const { fake, sandbox } = await preparedWith({
+      removeFails: `${WT}/stuck`,
+    });
+    fake.symlinks.set(`${WT}/stuck`, OUT);
+    fake.symlinks.set(`${WT}/evil`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([
+      `${WT}/evil`,
+    ]);
+  });
+
+  test("reports a symlink that cannot be removed as a problem", async () => {
+    const { fake, sandbox } = await preparedWith({
+      removeFails: `${WT}/stuck`,
+    });
+    fake.symlinks.set(`${WT}/stuck`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
+      `could not remove or restore ${WT}/stuck: EPERM: not permitted`,
+    ]);
+  });
+
+  test("reports a cut-short listing as a problem", async () => {
+    const { fake, sandbox } = await preparedWith({
+      listingTail: "\n[... 99 bytes omitted ...]\n",
+    });
+    fake.symlinks.set(`${WT}/evil`, OUT);
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([
+      "the list of symlinks was cut short, so some symlinks were not checked",
+    ]);
+  });
+
+  test("logs the removed symlinks", async () => {
+    const warnings: string[] = [];
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps, {
+      log: logger("check_sandbox", { sink: (line) => warnings.push(line) }),
+    });
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/evil`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(warnings.some((line) => line.includes(`${WT}/evil`))).toBe(true);
   });
 });
 
@@ -2319,6 +2433,17 @@ describe("createCheckSandbox", () => {
     expect(argvOf(fake.calls)).toContainEqual(
       chownToArgv(SLOT0, DIRS.worktreeDir),
     );
+  });
+
+  test("prepare logs when it falls back to the per-directory handover", async () => {
+    const lines: string[] = [];
+    const fake = fakeSandboxDeps({
+      hardLinked: `${DIRS.worktreeDir}/linked\n`,
+    });
+    await sandboxOf(fake.deps, {
+      log: logger("check_sandbox", { sink: (line) => lines.push(line) }),
+    }).prepare(DIRS);
+    expect(lines.some((line) => line.includes("per directory"))).toBe(true);
   });
 
   test("prepare does not hand a worktree with a hard link over in bulk", async () => {
