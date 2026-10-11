@@ -51,8 +51,16 @@ PRの修正(`pr_fix`)と実装(`implement`)のフローは、Claudeが対象リ�
 - `main`の削除とforce pushを禁止する。
 - `main`への変更はPRを必須にする。承認は0件でよく、人のレビューをGitHubが強制するわけではない。
 - 必須チェックは`scope`、`check`、`test-db`、`metadata`、`console`、`caddyfile`、`console-fetcher-image`である。条件付きのジョブは、スキップされると通過として扱われる。
-- タグの作成と更新は、管理者に限るrulesetを設定する(運用の前提)。`main`という名前のタグの実行は、`main`のブランチの実行と見分けがつかないためである。設定の確認は[運用](operations.md)の「タグのrulesetを確かめる」にある。
 - 設定を迂回できるのは、管理者のロールだけである。迂回のモードは`pull_request`なので、直接pushはできず、PRを経由する迂回に限られる。
+
+タグはrulesetの`protect-tags`で保護する。
+対象はすべてのタグで、作成、更新、削除を禁止する。
+迂回できるのは、リポジトリの管理者のロールだけで、常に迂回できる。
+`main`という名前のタグの実行は、`main`のブランチの実行と見分けがつかない。
+`protect-tags`は、このタグを経由してConsoleの配布物(`console-dist`)をすり替える経路を塞ぐ。
+このリポジトリはタグを使わないので、運用には影響しない。
+タグを使うようにするときは、rulesetを見直す。
+設定の確認は[運用](operations.md)の「タグのrulesetを確かめる」にある。
 
 公開に伴い、外部からの操作は次のように絞る。
 
@@ -327,7 +335,7 @@ ConsoleでXSSが起きると、運用者のCookieでWindmillのAPIを管理者�
 - 同じ実行の中では、成果物を`overwrite: true`で上げ、`console_fetcher`はその名前の`id`が最大の成果物を取り込む。`console-dist.yml`のジョブは1つなので、同じ実行にほかの上げ手はいない。
 - `console-dist.yml`の成功が示すのは、組み立てが通ったことだけである。型検査、lint、テストを担う`ci.yml`の成功も、同じcommitについて取り込みの条件にする。`ci.yml`が実行中のcommitは、成功するまで取り込まない。
 - `main`という名前のタグの実行は、ブランチ名が`main`で現れる。`console_fetcher`は同じcommitで、`console-dist.yml`と`ci.yml`のどちらも`main`へのpushとして成功していることを要る。FactoryのPATはWorkflowsの権限が無く、ワークフローのファイルを書き換えたcommitを作れない。現在のワークフローは`main`のブランチのpushでしか動かないので、PATによるタグでは実行が作られない。
-- 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、この照合を通せる。タグの作成と更新を管理者に限るrulesetを設定することが、運用の前提である。管理者は迂回できるので、管理者のアカウントの侵害は防げない。取り込むcommitが`main`の履歴に含まれるかは、確かめていない。
+- 両方のワークフローを書き換えたcommitに`main`というタグを付けられる人は、この照合を通せる。タグの作成と更新は、rulesetの`protect-tags`で管理者に限っている。管理者は迂回できるので、管理者のアカウントの侵害は防げない。取り込むcommitが`main`の履歴に含まれるかは、確かめていない。
 - draw.ioのビューアも、この成果物の差し替えの範囲に入る。ビューアは`console-dist.yml`が取得して、同じ成果物に入れるためである。
 - `Sec-Fetch-Site`をブラウザが送るのは、信頼できるオリジン(localhostかHTTPS)のときだけである。`WM_BIND`を外向きにしてHTTPで公開すると、この防御は効かない。外向きにするならHTTPSで公開する。
 - `Origin`の検査が比べる相手は、要求の`Host`ヘッダーから作ったオリジンである。DNSリバインディングで`Host`が攻撃者のホスト名になると、`Origin`も一致して通る。ただしCookieはホスト名ごとに付くので、運用者のCookieは付かない。

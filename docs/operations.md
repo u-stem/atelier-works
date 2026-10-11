@@ -1563,8 +1563,8 @@ Discordの通知とConsoleの通知には、上の表の次の操作が載る。
 ### タグのrulesetを確かめる
 
 `main`という名前のタグの実行は、`main`のブランチの実行と見分けがつかない。
-そのため、タグの作成と更新を管理者に限るrulesetを設定しておく。
-これは運用の前提で、リポジトリの管理者が設定する。
+そのため、rulesetの`protect-tags`で、すべてのタグの作成、更新、削除を禁止している。
+迂回できるのは、リポジトリの管理者のロールだけである。
 
 設定は、次のコマンドで確かめる。
 
@@ -1572,10 +1572,10 @@ Discordの通知とConsoleの通知には、上の表の次の操作が載る。
 gh api repos/<owner>/<repo>/rulesets
 ```
 
-一覧に、対象が`tag`のrulesetがあり、有効(`enforcement`が`active`)なことを確かめる。
+一覧に、名前が`protect-tags`で対象が`tag`のrulesetがあり、有効(`enforcement`が`active`)なことを確かめる。
 詳しい中身は、一覧の`id`を使って`gh api repos/<owner>/<repo>/rulesets/<id>`で読む。
-中身では、タグの作成と更新の制限があり、迂回できる者が管理者だけなことを確かめる。
-無いときは、設定するまで`console_fetcher`の取り込みを信頼しない。
+中身では、作成、更新、削除の規則があり、迂回できる者が管理者のロールだけなことを確かめる。
+無いときは、rulesetを作り直すまで`console_fetcher`の取り込みを信頼しない。
 
 ### Console用workerを確かめる
 
