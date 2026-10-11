@@ -1,11 +1,13 @@
 import { PageHeader } from "../../app/PageHeader.tsx";
-import { ComingSoon } from "../../components/ComingSoon.tsx";
+import { AnalyticsReports } from "./AnalyticsReports.tsx";
 
 export function ReportsScreen() {
   return (
     <>
       <PageHeader title="レポート" />
-      <ComingSoon>監査と分析のレポートは、ここに表示する予定です。</ComingSoon>
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+        <AnalyticsReports />
+      </div>
     </>
   );
 }
