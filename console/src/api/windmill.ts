@@ -1,12 +1,17 @@
 // Windmillのscriptを同じオリジンから呼ぶ唯一の入口。
 // ログインのCookieだけで`run_wait_result`が動くので、トークンは持たない。
 // 呼べるscriptは`SCRIPT_PATHS`の許可リストだけで、パスを外から受け取らない。
+// 画面は`runScript`を直接呼ばず、`queries.ts`と`writes.ts`の型付きの関数を通す。
 
 import { classifyRunResponse, type RunResult } from "./errors.ts";
 
 /** Consoleが呼んでよいscript。キーが呼び出し側の名前、値がWindmillのパス。 */
 export const SCRIPT_PATHS = {
   console_query: "f/factory/steps/console_query",
+  approval_decide: "f/factory/approval_decide",
+  retry_work_item: "f/factory/retry_work_item",
+  audit_kickoff: "f/factory/audit_kickoff",
+  notice_resolve: "f/factory/notice_resolve",
 } as const;
 
 export type ScriptName = keyof typeof SCRIPT_PATHS;
