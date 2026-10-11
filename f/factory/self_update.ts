@@ -47,6 +47,7 @@ import {
   reconcileHostActionNotices,
   recordHostAction,
 } from "./lib/host_action.ts";
+import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   MERGED_PULL_REQUESTS_LOG_FORMAT,
@@ -105,7 +106,10 @@ const GIT_BASE_ARGV: readonly string[] = [
 ];
 
 function selfCloneGitEnv(): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  const env: Record<string, string> = {
+    GIT_TERMINAL_PROMPT: "0",
+    ...jobTmpEnv(),
+  };
   if (process.env.HOME !== undefined) env.HOME = process.env.HOME;
   if (process.env.PATH !== undefined) env.PATH = process.env.PATH;
   return env;
@@ -675,6 +679,7 @@ async function updateSelf(
     const env = buildWmillEnv({
       HOME: process.env.HOME,
       PATH: process.env.PATH,
+      TMPDIR: jobTmpEnv().TMPDIR,
     });
 
     await assertWmillYamlExists(factoryClone.dir);

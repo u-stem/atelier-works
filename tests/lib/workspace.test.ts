@@ -40,6 +40,7 @@ import {
   isReviewWorktreeOf,
   type LockFs,
   listWorktrees,
+  localGitEnv,
   mapDiffLineToFile,
   mergeBaseSha,
   OUTPUT_ABANDONED_NOTE,
@@ -669,6 +670,20 @@ describe("git config isolation", () => {
   test("network git allows only https, so GH_TOKEN never reaches another transport", async () => {
     const { network } = await fetchAndConfigCalls();
     expect(network?.options?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test("local git points TMPDIR at the given job directory", () => {
+    const env = localGitEnv(
+      "/home/x",
+      "/usr/bin",
+      "/tmp/windmill/factory-job-x",
+    );
+    expect(env.TMPDIR).toBe("/tmp/windmill/factory-job-x");
+  });
+
+  test("local git leaves TMPDIR unset outside a job", () => {
+    const env = localGitEnv("/home/x", "/usr/bin");
+    expect(env.TMPDIR).toBeUndefined();
   });
 
   test("keeps the global config off when HOME is unset", async () => {

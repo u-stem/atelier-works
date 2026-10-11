@@ -19,6 +19,7 @@
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
+import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type {
   FactoryOwnerKind,
@@ -74,6 +75,8 @@ export type GhClient = {
   readonly ghToken: string;
   readonly home?: string;
   readonly path?: string;
+  /** ghの一時ファイルの置き場。既定はジョブごとの0700のディレクトリで、ジョブの外では渡さない。 */
+  readonly tmpDir?: string;
   /**
    * レート制限で1回だけ再試行する前の待機。既定は`setTimeout`による実際の待機。
    * 待つ時間は`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えない。
@@ -93,6 +96,8 @@ function buildGhEnv(client: GhClient): Record<string, string> {
   if (home !== undefined) env.HOME = home;
   const path = client.path ?? process.env.PATH;
   if (path !== undefined) env.PATH = path;
+  const tmpDir = client.tmpDir ?? jobTmpEnv().TMPDIR;
+  if (tmpDir !== undefined) env.TMPDIR = tmpDir;
   return env;
 }
 

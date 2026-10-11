@@ -5,7 +5,6 @@
 // 変更の一覧、シンボリックリンクの検出)はverifyのstepが`ImplementLoopDeps`に渡す。
 
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CheckEnvironmentError } from "./check_sandbox.ts";
 import {
@@ -27,6 +26,7 @@ import {
   truncateCheckOutput,
   validateImplementOutput,
 } from "./implement_support.ts";
+import { jobTmpBase } from "./job_tmp.ts";
 import { escapeReasonSeparator } from "./log.ts";
 import { modelFor } from "./model_policy.ts";
 import {
@@ -275,7 +275,7 @@ export const defaultDocDirCopyDeps: DocDirCopyDeps = {
       () => true,
       () => false,
     ),
-  makeTempDir: () => mkdtemp(join(tmpdir(), "factory-requirements-")),
+  makeTempDir: () => mkdtemp(join(jobTmpBase(), "factory-requirements-")),
   copyDir: (source, destination) =>
     cp(source, destination, {
       recursive: true,

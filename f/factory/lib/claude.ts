@@ -7,9 +7,9 @@
 // (`mise.toml`の`[env]`とDockerfileの`ARG`)から取る。
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultSqlClient, type SqlClient, sumAgentCostSince } from "./db.ts";
+import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   type AgentRunRecord,
@@ -53,7 +53,7 @@ const defaultReadFile = (path: string): Promise<string> =>
  * 共有の`/tmp`にある推測できるパスは使わない。
  */
 const defaultWriteTempFile: WriteTempFile = async (content) => {
-  const dir = await mkdtemp(join(tmpdir(), "factory-system-prompt-"));
+  const dir = await mkdtemp(join(jobTmpBase(), "factory-system-prompt-"));
   const path = join(dir, "system-prompt.md");
   await writeFile(path, content, { mode: 0o600 });
   return {
@@ -271,6 +271,11 @@ export type RunClaudeOptions<T> = {
   readonly claudeConfigDir?: string;
   readonly home?: string;
   readonly path?: string;
+  /**
+   * Claudeの一時ファイルの置き場。`TMPDIR`と`CLAUDE_CODE_TMPDIR`に同じ値を渡す。
+   * 既定はジョブごとの0700のディレクトリで、ジョブの外では渡さない。
+   */
+  readonly tmpDir?: string;
   /** 既定は`process.env.CLAUDE_VERSION`(worker imageが設定する)。 */
   readonly claudeVersion?: string;
   readonly timeoutMs: number;
@@ -348,6 +353,7 @@ type ClaudeEnvInputs = {
   readonly claudeConfigDir?: string;
   readonly home?: string;
   readonly path?: string;
+  readonly tmpDir?: string;
 };
 
 function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
@@ -364,6 +370,12 @@ function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
   if (home !== undefined) env.HOME = home;
   const path = opts.path ?? process.env.PATH;
   if (path !== undefined) env.PATH = path;
+  // Claude Codeが`TMPDIR`に従うかは確かめていないので、専用の変数にも同じ場所を渡す。
+  const tmpDir = opts.tmpDir ?? jobTmpEnv().TMPDIR;
+  if (tmpDir !== undefined) {
+    env.TMPDIR = tmpDir;
+    env.CLAUDE_CODE_TMPDIR = tmpDir;
+  }
   return env;
 }
 

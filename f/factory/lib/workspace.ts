@@ -21,8 +21,8 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   assertBranchName,
@@ -571,6 +571,7 @@ function remoteTrackingRef(branch: string): string {
 export function localGitEnv(
   home?: string,
   path?: string,
+  tmpDir?: string,
 ): Record<string, string> {
   const env: Record<string, string> = {
     GIT_TERMINAL_PROMPT: "0",
@@ -595,6 +596,8 @@ export function localGitEnv(
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
   const resolvedPath = path ?? process.env.PATH;
   if (resolvedPath !== undefined) env.PATH = resolvedPath;
+  const resolvedTmp = tmpDir ?? jobTmpEnv().TMPDIR;
+  if (resolvedTmp !== undefined) env.TMPDIR = resolvedTmp;
   return env;
 }
 
@@ -3428,7 +3431,7 @@ const GITLEAKS_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const GITLEAKS_MAX_DIFF_BYTES = 32 * 1024 * 1024;
 
 const defaultCreateGitleaksConfigDir = async (): Promise<GitleaksConfigDir> => {
-  const dir = await mkdtemp(join(tmpdir(), "factory-gitleaks-"));
+  const dir = await mkdtemp(join(jobTmpBase(), "factory-gitleaks-"));
   try {
     await writeFile(
       join(dir, GITLEAKS_CONFIG_FILE),
