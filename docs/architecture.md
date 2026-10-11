@@ -123,6 +123,8 @@ stateDiagram-v2
     implementing --> requirements_generating: requirements_gap(attempt+1)
     implementing --> needs_human
     implementing --> cancelled: Issueがclosed
+    needs_human --> cancelled: Issueがclosed
+    expired --> cancelled: Issueがclosed
     pr_open --> requirements_generating: pr_fixのrequirements_gap
 ```
 
@@ -140,6 +142,7 @@ stateDiagram-v2
     fixing --> blocked: 準備の確認で停止、headの移動、または親Issueへ差し戻し
     fixing --> needs_human: 安全策で停止、Issue化の提案がある、または差し戻せない
     fixing --> cancelled: PRがclosedかmerged
+    needs_human --> cancelled: PRがclosedかmerged
     needs_human --> rereview_requested: 提案がすべて決定し、pushしていた
     needs_human --> reviewed: 提案がすべて決定し、pushしていない
 ```
@@ -155,7 +158,14 @@ stateDiagram-v2
     awaiting_approval --> audited: すべての提案を決定
 ```
 
-図に描いていない遷移が2つある。終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
+図に描いていない遷移が3つある。
+終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。
+Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
+失敗の作業項目も、IssueかPRが閉じられると取り消しになる。
+この取り消しは、図に描いた人の対応待ちと期限切れからの取り消しと同じで、Consoleの要対応の一覧から外すためのものである。
+閉じた人が許されるときだけ取り消す。
+許されるのは、PRがマージされたとき、作者以外の人が閉じたとき、作者が閉じて作者の関係が許可する関係(`allowed_labeler_associations`)に当たるときである。
+Botが閉じたときは取り消さない。
 
 終端の作業項目は、Consoleからの再実行で再び動き出す。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 
@@ -271,7 +281,7 @@ Consoleの一覧と集計は次のviewを読む。
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数を集計し、Discordへ日次サマリを投稿します。 |
-| poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。 |
+| poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
 | self_update | `0 */10 * * * *` | `f/factory/self_update` | 10分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更は次にホストで起動したときに反映されるため、通知はしません。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 <!-- /generated:schedules -->
@@ -282,7 +292,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 
 | スケジュール | 処理の対象 |
 | --- | --- |
-| `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける |
+| `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける。閉じたIssueやPRの失敗、人の対応待ち、期限切れの作業項目は、閉じた人を確かめて取り消し、要対応の一覧から外す |
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数 |

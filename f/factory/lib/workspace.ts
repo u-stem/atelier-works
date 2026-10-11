@@ -1829,6 +1829,26 @@ export type WorktreeEntry = {
 };
 
 /**
+ * `entry`が、PR番号`prNumber`のレビューのworktree(`buildReviewWorktreeDir`が作るパス)かを返す。
+ * `repoDir`と同じ親の直下にある`review-<PR番号>-<sha7>`というdetachedのworktreeだけを対象にする。
+ * パスの一部が一致しただけで選ぶと、別の場所のdirectoryやブランチのworktreeまで消しうるためである。
+ * パスは文字列の前方一致で比べるので、列挙されたパスと`repoDir`が同じ綴りでなければ、
+ * 何も選ばれない。workerの`/workspaces`はボリュームのマウント先そのものでsymlinkを挟まないので、
+ * `/workspaces/<owner>/<repo>/main`のcloneのworktreeは、同じ綴りで列挙される。
+ */
+export function isReviewWorktreeOf(
+  repoDir: string,
+  prNumber: number,
+  entry: Pick<WorktreeEntry, "path" | "detached">,
+): boolean {
+  if (!entry.detached) return false;
+  const prefix = `${repoDir.replace(/\/main$/, "")}/`;
+  if (!entry.path.startsWith(prefix)) return false;
+  const name = entry.path.slice(prefix.length);
+  return new RegExp(`^review-${String(prNumber)}-[0-9a-f]{7}$`).test(name);
+}
+
+/**
  * `git worktree list --porcelain -z`の出力を読む。
  * -zの形式は、各行をNULで終え、各レコードの後にもう1つNULを置く。
  * 改行はレコードの区切りにならないので、改行を含むパスを1つのパスとして読める。

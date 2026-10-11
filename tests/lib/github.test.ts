@@ -9,6 +9,8 @@ import {
   createPrReview,
   createPullRequest,
   ensureLabel,
+  type FetchLike,
+  fetchIssueState,
   findIssueByMarker,
   findOpenPullRequestByHead,
   type GhClient,
@@ -438,6 +440,7 @@ describe("transient failure retry", () => {
     body: "b",
     html_url: "https://github.com/acme/widgets/issues/5",
     state: "open",
+    user: { login: "factory-bot" },
     labels: [],
     assignees: [],
   });
@@ -974,6 +977,209 @@ describe("getIssue", () => {
     await expect(
       getIssue({ run: fake.run, ghToken: "tok" }, "../etc", "widgets", 5),
     ).rejects.toThrow();
+  });
+});
+
+describe("fetchIssueState", () => {
+  function fakeFetch(status: number, body: unknown) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchFn: FetchLike = async (url, init) => {
+      calls.push({ url, init });
+      return { status, json: async () => body };
+    };
+    return { fetchFn, calls };
+  }
+
+  test("returns the state of the issue", async () => {
+    const { fetchFn } = fakeFetch(200, { state: "closed" });
+    expect(await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5)).toBe(
+      "closed",
+    );
+  });
+
+  test("reads the issues endpoint", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.url).toBe(
+      "https://api.github.com/repos/acme/widgets/issues/5",
+    );
+  });
+
+  test("sends the token in the authorization header", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.init.headers).toMatchObject({
+      Authorization: "Bearer tok",
+    });
+  });
+
+  test("throws an http error carrying the status", async () => {
+    const { fetchFn } = fakeFetch(404, { message: "Not Found" });
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => err);
+    expect(error instanceof GitHubHttpError && error.status).toBe(404);
+  });
+
+  test("does not follow redirects", async () => {
+    const { fetchFn, calls } = fakeFetch(200, { state: "open" });
+    await fetchIssueState(fetchFn, "tok", "acme", "widgets", 5);
+    expect(calls[0]?.init.redirect).toBe("manual");
+  });
+
+  test("treats a redirect as a failed check", async () => {
+    const { fetchFn } = fakeFetch(301, {});
+    const error = await fetchIssueState(
+      fetchFn,
+      "tok",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => err);
+    expect(error instanceof GitHubHttpError && error.status).toBe(301);
+  });
+
+  test("does not put the token in the error message", async () => {
+    const { fetchFn } = fakeFetch(500, {});
+    const error = await fetchIssueState(
+      fetchFn,
+      "secret-token",
+      "acme",
+      "widgets",
+      5,
+    ).catch((err: unknown) => err);
+    expect(String(error)).not.toContain("secret-token");
+  });
+
+  test("rejects a response without a state", async () => {
+    const { fetchFn } = fakeFetch(200, { title: "x" });
+    await expect(
+      fetchIssueState(fetchFn, "tok", "acme", "widgets", 5),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects an owner that isn't a valid GitHub name", async () => {
+    const { fetchFn } = fakeFetch(200, { state: "open" });
+    await expect(
+      fetchIssueState(fetchFn, "tok", "../etc", "widgets", 5),
+    ).rejects.toThrow();
+  });
+});
+
+describe("getIssue closing fields", () => {
+  const closedIssue = {
+    number: 5,
+    title: "t",
+    body: "b",
+    html_url: "https://github.com/acme/widgets/issues/5",
+    state: "closed",
+    user: { login: "alice" },
+    author_association: "CONTRIBUTOR",
+    closed_by: { login: "maintainer", type: "User" },
+    labels: [],
+    assignees: [],
+  };
+  const read = (payload: unknown) =>
+    getIssue(
+      { run: createFakeCommandRunner([ghApiOk(payload)]).run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+    );
+
+  test("reads who closed the issue", async () => {
+    expect((await read(closedIssue)).closedByLogin).toBe("maintainer");
+  });
+
+  test("reads the association of the author", async () => {
+    expect((await read(closedIssue)).authorAssociation).toBe("CONTRIBUTOR");
+  });
+
+  test("reads the closer of a merged pull request", async () => {
+    const merged = {
+      ...closedIssue,
+      pull_request: { merged_at: "2026-10-01T00:00:00Z" },
+      closed_by: { login: "maintainer" },
+    };
+    expect((await read(merged)).closedByLogin).toBe("maintainer");
+  });
+
+  test("reads the type of the closer", async () => {
+    expect((await read(closedIssue)).closedByType).toBe("User");
+  });
+
+  test("reads a bot closer", async () => {
+    const bot = {
+      ...closedIssue,
+      closed_by: { login: "github-actions[bot]", type: "Bot" },
+    };
+    expect((await read(bot)).closedByType).toBe("Bot");
+  });
+
+  test("reads the merge time of a merged pull request", async () => {
+    const merged = {
+      ...closedIssue,
+      pull_request: { merged_at: "2026-10-01T00:00:00Z" },
+      closed_by: null,
+    };
+    expect((await read(merged)).mergedAt).toBe("2026-10-01T00:00:00Z");
+  });
+
+  test("reads a pull request closed without merging as not merged", async () => {
+    const closed = { ...closedIssue, pull_request: { merged_at: null } };
+    expect((await read(closed)).mergedAt).toBeNull();
+  });
+
+  test("reads an issue as not merged", async () => {
+    expect((await read(closedIssue)).mergedAt).toBeNull();
+  });
+
+  test("reads an empty closed_by login as no closer", async () => {
+    const empty = { ...closedIssue, closed_by: { login: "", type: "User" } };
+    expect((await read(empty)).closedByLogin).toBeNull();
+  });
+
+  test("accepts a null user", async () => {
+    expect((await read({ ...closedIssue, user: null })).authorLogin).toBe("");
+  });
+
+  test("rejects a response without a user", async () => {
+    const { user: _omitted, ...withoutUser } = closedIssue;
+    await expect(read(withoutUser)).rejects.toThrow(
+      "unexpected response shape",
+    );
+  });
+
+  test("rejects a user of the wrong shape", async () => {
+    await expect(read({ ...closedIssue, user: "alice" })).rejects.toThrow(
+      "unexpected response shape",
+    );
+  });
+
+  test("reads a null closed_by as no closer", async () => {
+    expect(
+      (await read({ ...closedIssue, closed_by: null })).closedByLogin,
+    ).toBeNull();
+  });
+
+  test("reads a missing closed_by as no closer", async () => {
+    const { closed_by: _omitted, ...withoutCloser } = closedIssue;
+    expect((await read(withoutCloser)).closedByLogin).toBeNull();
+  });
+
+  test("ignores a closed_by that is not a user object", async () => {
+    expect(
+      (await read({ ...closedIssue, closed_by: "maintainer" })).closedByLogin,
+    ).toBeNull();
+  });
+
+  test("reads a missing association as null", async () => {
+    const { author_association: _omitted, ...without } = closedIssue;
+    expect((await read(without)).authorAssociation).toBeNull();
   });
 });
 

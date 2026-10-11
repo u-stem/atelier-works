@@ -135,6 +135,10 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/discord_webhook_url`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
+親プロセスが`fetch`で使う秘密値は、次の2か所である。
+
+- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
+- Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。URLそのものが秘密なので、エラーメッセージとログには含めない。
 
 エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。マスクの関数はテストで検証する。
 
@@ -344,6 +348,7 @@ Podmanは対象外である。
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
+  `retry_work_item`が実際に読むのは、取り消された作業項目の再開のときの`github_token`だけである。
   マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
   トークンそのものは守らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
@@ -1246,3 +1251,43 @@ PRのレビューとコメントは、投稿者で絞る。
 許可する関係は`allowed_labeler_associations`で、既定値は`["OWNER", "MEMBER", "COLLABORATOR"]`である。
 コメントとレビューの応答は`author_association`を持つので、この関係で判定できる。
 これに当たらない投稿者のレビューコメントと新しいコメントは、`pr_review`と`pr_fix`の起動に使わない。
+
+## 閉じた人の確認
+
+`poll_issues`は、対象のIssueやPRが閉じられた作業項目を取り消し、Consoleの要対応の一覧から外す。
+対象は、失敗、人の対応待ち、期限切れの作業項目である。
+このとき、IssueまたはPRの取得の応答から、閉じた人を確かめる。
+使うのは、`GET /repos/{owner}/{repo}/issues/{番号}`の次の項目である。
+
+- `pull_request.merged_at`
+- `closed_by`
+- 作者(`user`)
+- 作者の`author_association`
+
+タイムラインの`closed`と`merged`のイベントには`author_association`が無いので、使わない。
+判定は次の順に行う。ログイン名は大文字と小文字を区別せずに比べる。
+
+| 順 | 状況 | 判定 |
+| --- | --- | --- |
+| 1 | PRで`merged_at`がある | 取り消す。マージにもmerge queueへの投入にも、write権限が要るため |
+| 2 | `closed_by`が無い、またはログイン名が空 | 取り消さない |
+| 3 | `closed_by`がBot(`type`が`Bot`、またはログイン名が`[bot]`で終わる) | 取り消さない。BotやActionsは、第三者のイベントを受けて閉じることがあるため |
+| 4 | 作者が分からない | 取り消さない |
+| 5 | 作者以外の人が閉じた | 取り消す。他人のIssueやPRを閉じるには、triage以上の権限が要るため |
+| 6 | 作者が閉じ、作者の`author_association`が`allowed_labeler_associations`に含まれる | 取り消す |
+| 7 | 作者が閉じ、作者の関係が含まれないか分からない | 取り消さない |
+
+取り消さなかった対象は、一覧に残る。理由と対象は`poll_issues`のログにinfoで残す。
+
+第三者が自分のIssueやPRを閉じて、安全策で止まった作業項目を一覧から消せないようにするためである。
+publicのリポジトリでは、誰でもIssueを作れ、作者は自分のIssueやPRを閉じられる。
+確認が無いと、安全策で止まった作業項目を、人が気づかないうちに一覧から外されてしまう。
+
+この確認は、要対応の一覧から外す取り消しにだけかける。
+取り消した作業項目は`retry_work_item`で再開できるので、権限のある人が元に戻せる。
+
+残るリスクは次のとおり。
+
+- PRのheadブランチやforkを消してPRが閉じたときの`closed_by`は、実機で確かめる。作者と別のアカウントが消すと、作者以外の人が閉じた扱いで取り消されうる。
+- 人のアカウント(`type`が`User`)のPATで閉じる自動化は、Botとして扱われない。作者と別のアカウントなら、作者以外の人が閉じた扱いになり、取り消される。第三者のイベントで閉じる自動化は、`GITHUB_TOKEN`かGitHub Appのinstallation tokenで動かす。
+- 判定は、要対応の一覧の取り消しにだけかかる。承認待ちなど終端でない作業項目は、既存のreconcileが閉じた人を確かめずに取り消す。
