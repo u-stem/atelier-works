@@ -12,6 +12,7 @@ import type { WorkItemTransition } from "../api/guards/workItemTransitions.ts";
 import {
   describeApproval,
   describeAttempt,
+  describeDiffStat,
   describeFailureRecord,
   describeFixRound,
   describeOverview,
@@ -289,6 +290,22 @@ describe("describeOverview", () => {
     );
   });
 
+  test("drops a status note that is only a URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "https://github.com/o/r/pull/12" }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("keeps a status note that has a sentence around a URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "opened https://github.com/o/r/pull/12" }),
+      ).statusNote,
+    ).toBe("opened https://github.com/o/r/pull/12");
+  });
+
   test("formats the cost", () => {
     expect(describeOverview(overview()).costLabel).toBe("$1.25(3回の実行)");
   });
@@ -321,6 +338,16 @@ describe("formatDiffStat", () => {
 
   test("returns null without a stat", () => {
     expect(formatDiffStat(null)).toBeNull();
+  });
+
+  test("explains the signs in words", () => {
+    expect(describeDiffStat({ files: 3, added: 17, deleted: 0 })).toBe(
+      "追加17行・削除0行",
+    );
+  });
+
+  test("has no explanation without a stat", () => {
+    expect(describeDiffStat(null)).toBeNull();
   });
 });
 
@@ -522,6 +549,13 @@ describe("describeRound", () => {
       describeRound(round({ diff_stat: { files: 1, added: 2, deleted: 3 } }))
         .diffLabel,
     ).toBe("1ファイル +2 -3");
+  });
+
+  test("explains the diff stat in words", () => {
+    expect(
+      describeRound(round({ diff_stat: { files: 1, added: 2, deleted: 3 } }))
+        .diffHint,
+    ).toBe("追加2行・削除3行");
   });
 });
 

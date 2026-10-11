@@ -7,25 +7,46 @@ import { formatAbsoluteWithRelative } from "../../../lib/relativeTime.ts";
 export const LINK_CLASS =
   "inline-flex items-center gap-1 rounded-sm font-medium text-primary underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
-/** 見出し付きの区画。 */
+/**
+ * 見出し付きの区画。
+ * タブの名前と同じ見出しは重なるので、`heading`を省くと見出しも注記も出さない。
+ */
 export function Panel({
   heading,
   note,
   children,
 }: {
-  heading: string;
+  heading?: string;
   note?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-3">
-      <div>
-        <h2 className="text-lead font-semibold">{heading}</h2>
-        {note === undefined ? null : (
-          <p className="text-small text-muted-foreground">{note}</p>
-        )}
-      </div>
+      {heading === undefined ? null : (
+        <div>
+          <h2 className="text-lead font-semibold">{heading}</h2>
+          {note === undefined ? null : (
+            <p className="text-small text-muted-foreground">{note}</p>
+          )}
+        </div>
+      )}
       {children}
+    </section>
+  );
+}
+
+/** 中身が空の区画を、見出しと一文の1行で出す。空のカードで高さを取らないために使う。 */
+export function CompactEmpty({
+  heading,
+  children,
+}: {
+  heading: string;
+  children: string;
+}) {
+  return (
+    <section className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+      <h2 className="text-lead font-semibold">{heading}</h2>
+      <p className="text-small text-muted-foreground">{children}</p>
     </section>
   );
 }

@@ -197,13 +197,29 @@ export function formatDiffStat(stat: WorkItemDiffStat | null): string | null {
     : `${stat.files}ファイル +${stat.added} -${stat.deleted}`;
 }
 
+/** 差分の規模の補助文。「+17 -0」の符号が何の数かを言葉で示す。記録が無ければ`null`。 */
+export function describeDiffStat(stat: WorkItemDiffStat | null): string | null {
+  return stat === null ? null : `追加${stat.added}行・削除${stat.deleted}行`;
+}
+
+const BARE_URL_PATTERN = /^https?:\/\/\S+$/;
+
+/**
+ * 状態の注記。URLだけの注記は`null`にする。
+ * PRとIssueのリンクは別の行に出ており、同じURLを生の文字で重ねる必要がないためである。
+ */
+function statusNoteOf(item: WorkItemOverview): string | null {
+  const note = plainOrNull(item.status_note);
+  return note !== null && BARE_URL_PATTERN.test(note.trim()) ? null : note;
+}
+
 export function describeOverview(item: WorkItemOverview): OverviewView {
   return {
     title: overviewTitle(item),
     kindLabel: workItemKindLabel(item.kind),
     statusLabel: pipelineStatusLabel(item.status),
     statusVariant: pipelineStatusVariant(item.status),
-    statusNote: plainOrNull(item.status_note),
+    statusNote: statusNoteOf(item),
     repoLabel: `${item.owner}/${item.repo}`,
     issue: issueTarget(item),
     pr: pullTarget(item),
@@ -393,6 +409,8 @@ export type RoundView = {
   readonly skippedReason: string | null;
   readonly protectedChanges: string[];
   readonly diffLabel: string | null;
+  /** `diffLabel`の符号を言葉にした補助文。 */
+  readonly diffHint: string | null;
   readonly createdAt: string;
 };
 
@@ -409,6 +427,7 @@ export function describeRound(round: WorkItemRound): RoundView {
     skippedReason: plainOrNull(round.checks_skipped_reason),
     protectedChanges: round.protected_changes.map(plain),
     diffLabel: formatDiffStat(round.diff_stat),
+    diffHint: describeDiffStat(round.diff_stat),
     createdAt: round.created_at,
   };
 }
