@@ -271,12 +271,15 @@ Consoleを使えないときは、Windmillで`f/factory/approval_decide`を開�
 
 Consoleの**要件定義**タブで、要件定義書を一覧から選んで読める。承認待ちのものに限らず、これまでに生成したすべての試行が並ぶ。本文は見出し・表・図を含む文書ページの形で表示され、draw.ioの図もページ内に描かれる。
 
-Issueの承認のコメントとDiscordの通知のリンクは、末尾に`#requirements/<work_item_id>`を付けている。このリンクを開くと、要件定義タブがその作業項目を選んだ状態で開く。
+Issueの承認のコメントと、Discordの承認済みの通知のリンクは、要件定義書のページを開く。
+ページは承認した試行のもの(`/console/items/<work_item_id>/requirements?attempt=<k>`)である。
+承認待ちのDiscordの通知のリンクは、Consoleの要対応でその承認依頼を選んだ状態(`/console/?approval=<id>`)で開く。
 
-ConsoleはWindmillの管理画面の中で別オリジンのアプリとして動く。そのため、環境によってはリンク先の作業項目を選べないことがある。その場合は、次のどちらかで探す。
-
-- リンクの文に書かれた`work_item_id`を、要件定義タブの一覧の上の絞り込み欄に入れる。一覧の各行にも`work_item_id`が表示されている。
-- ブラウザのアドレスバーで、開いたConsoleのURLの末尾に`#requirements/<work_item_id>`を足す。
+過去に投稿された旧Consoleのリンクは、Caddyが`/console/`へ飛ばす。
+例は`/apps/get/f/factory/factory_console#requirements/<work_item_id>`である。
+新しいConsoleは、そのフラグメントを同じ要件定義書のページに読み替える。
+フラグメントの形に合わないリンクは、要対応の画面に着く。
+その場合は、リンクの文に書かれた`work_item_id`で作業項目を探す。
 
 ### 承認の前後でIssueを直したいとき
 
@@ -731,7 +734,7 @@ Factory自身の運用記録の監査は、毎週月曜09:30に自動で走る(`
 
 監査レポートは**監査**タブで読む。一覧から選ぶと、本文と提案の決定の状況が表示される。
 
-Discordの監査完了の通知(`audit_completed`)のリンクは、末尾に`#audit/<work_item_id>`を付けている。要件定義タブと同じ理由で選ばれないときは、一覧から選ぶ。
+Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポートのページ(`/console/reports/audit/<work_item_id>`)を開く。旧Consoleの`#audit/<work_item_id>`のリンクも、同じページに読み替える。
 
 改善提案は、**承認**タブに「改善提案」として並ぶ。承認すると、Factory自身のリポジトリにIssueを起票する。「起票と同時にfactoryラベルを付けて要件定義に進める」は、改善提案では既定でオンである。外せば起票だけになる。Factory自身のリポジトリは常に対象なので、ラベルを付けたIssueはそのまま要件定義に進む。
 

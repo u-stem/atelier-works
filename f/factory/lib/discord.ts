@@ -41,7 +41,8 @@ export type NotifyEvent =
       issue_url: string;
       title: string;
       /**
-       * 認証付きのAppのInboxのURLだけを入れる。
+       * 承認依頼を選んだ状態の、ログインを求めるConsoleのURLだけを入れる
+       * (`lib/approval_support.ts`の`buildApprovalConsoleUrl`)。
        * `getResumeUrls()`の署名付き`approvalPage`のURLは入れない。
        * そのURLを見た人は誰でも`approval_decide.ts`を通さずに停止中のフローを
        * 再開・取消でき、承認の記録が残らないため。
@@ -58,7 +59,7 @@ export type NotifyEvent =
       title: string;
       /**
        * Consoleの要件定義ページへのリンク(`lib/approval_support.ts`の
-       * `buildConsoleUrl`に`{work_item_id}`を渡したもの)。
+       * `buildConsoleUrl`に作業項目と承認した試行を渡したもの)。
        * Discordから開いたときに承認済みの文書が表示されるよう、
        * 埋め込みのリンク先はIssueではなくこちらにする(Issueはフィールドに出す)。
        */
@@ -444,7 +445,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         fields: [
           {
             name: "次の操作",
-            value: "Consoleの承認タブで提案を承認または却下してください",
+            value: "Consoleの要対応で提案を承認または却下してください",
           },
           instanceField(event.instance_name),
           { name: "work_item_id", value: String(event.work_item_id) },

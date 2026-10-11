@@ -504,7 +504,7 @@ export type ImplementPrBodyInput = {
   readonly protectedChanges: readonly string[];
   /** Claudeの`notes_for_reviewer`。呼び出し側が先に正規化する。 */
   readonly notesForReviewer: readonly string[];
-  /** `approval_support.ts`の`buildConsoleUrl(url, { work_item_id })`の値。 */
+  /** `approval_support.ts`の`buildConsoleUrl`に作業項目と承認した試行を渡した値。 */
   readonly requirementsConsoleUrl: string;
   readonly issueNumber: number;
   readonly changedPaths: readonly string[];

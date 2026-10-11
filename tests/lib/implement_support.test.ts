@@ -541,8 +541,7 @@ const PR_BODY_INPUT = {
   },
   protectedChanges: [],
   notesForReviewer: ["区切り文字はカンマ固定と仮置きしました。"],
-  requirementsConsoleUrl:
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+  requirementsConsoleUrl: "http://127.0.0.1:8080/console/items/7/requirements",
   issueNumber: 42,
   changedPaths: ["src/export.ts", "tests/export.test.ts"],
   deployChecklist: true,
@@ -693,7 +692,7 @@ describe("buildImplementPrBody", () => {
         "",
         "- 保護パスを変更: infra/worker/Dockerfile",
         "- 区切り文字はカンマ固定と仮置きしました。",
-        "- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+        "- 要件定義(Console): http://127.0.0.1:8080/console/items/7/requirements",
         "",
       ].join("\n"),
     );
@@ -860,7 +859,7 @@ describe("buildImplementPrBody", () => {
     expect(
       buildImplementPrBody({ ...PR_BODY_INPUT, issueUpdatedAfterIntake: true }),
     ).toContain(
-      `- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}\n- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7`,
+      `- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}\n- 要件定義(Console): http://127.0.0.1:8080/console/items/7/requirements`,
     );
   });
 

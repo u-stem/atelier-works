@@ -23,6 +23,7 @@ const INPUT: BuildImplementContextInput = {
     htmlUrl: "https://github.com/acme/widgets/issues/7",
   },
   draft: {
+    attempt: 2,
     markdown: "# 要件定義",
     diagrams: [],
     doc_dir:
@@ -90,7 +91,7 @@ describe("buildImplementContext", () => {
 
   test("links the approved requirements in the Console", () => {
     expect(buildImplementContext(INPUT).requirements_console_url).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/3",
+      "http://127.0.0.1:8080/console/items/3/requirements?attempt=2",
     );
   });
 
