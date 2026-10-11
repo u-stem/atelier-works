@@ -537,6 +537,67 @@ describe("ensureRepo", () => {
   });
 });
 
+describe("git config isolation", () => {
+  /** `ensureRepo`が、fetch(ネットワーク)と`git config`(ローカル)の順に実行したgitの呼び出しを返す。 */
+  async function fetchAndConfigCalls() {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureRepo({
+      run: fake.run,
+      owner: "acme",
+      repo: "widgets",
+      ghToken: "gh-token",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    return { network: fake.calls[1], local: fake.calls[2] };
+  }
+
+  test("local git does not read the global config", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+  });
+
+  test("local git does not read the system config (GIT_CONFIG_NOSYSTEM)", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  test("local git does not read the system config (GIT_CONFIG_SYSTEM)", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_SYSTEM).toBe("/dev/null");
+  });
+
+  test("local git does not read the system attributes", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_ATTR_NOSYSTEM).toBe("1");
+  });
+
+  test("network git does not read the global config", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+  });
+
+  test("network git does not read the system config", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  test("forces core.symlinks=false on every call, over .git/config and config.worktree", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.argv.join(" ")).toContain("-c core.symlinks=false");
+  });
+
+  test("forces commit.gpgsign=false on every call, so a repo config cannot run gpg.program", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.argv.join(" ")).toContain("-c commit.gpgsign=false");
+  });
+
+  test("forces core.askPass to empty on every call", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.argv.join(" ")).toContain("-c core.askPass=");
+  });
+});
+
 describe("factoryCloneLockPath", () => {
   test("is the sibling <dir>.lock file, not the worktree helpers' lock", () => {
     // 準備
@@ -1246,6 +1307,33 @@ describe("listWorktrees (real git)", () => {
     });
     expect(entries.map((entry) => entry.branch)).toEqual(["main", null]);
   });
+
+  /**
+   * HOMEのグローバル設定が、gitの実行に効かないことを確かめる。
+   * `safe.bareRepository=explicit`はグローバル設定からだけ読まれ、
+   * 暗黙に見つけたbareリポジトリでのgitを拒否するため、読まれたかどうかが結果に出る。
+   */
+  test("does not read the global config under HOME", async () => {
+    const root = mkdtempSync(join(tmpdir(), "list-worktrees-global-"));
+    roots.push(root);
+    const bare = join(root, "bare.git");
+    const home = join(root, "home");
+    mkdirSync(home);
+    writeFileSync(
+      join(home, ".gitconfig"),
+      "[safe]\n\tbareRepository = explicit\n",
+    );
+    const init = await runCommand(["git", "init", "-q", "--bare", bare], {
+      env: { PATH: process.env.PATH ?? "", HOME: root },
+    });
+    expect(init.exitCode).toBe(0);
+    const entries = await listWorktrees({
+      run: runCommand,
+      repoDir: bare,
+      home,
+    });
+    expect(entries).toHaveLength(1);
+  });
 });
 
 /** 別のworktreeが`contract-smoke-branch`をcheckoutしている`git worktree list --porcelain -z`の出力。 */
@@ -1940,6 +2028,27 @@ describe("createGtrWorktree", () => {
     expect(env.GIT_CONFIG_COUNT).toBe("1");
     expect(env.GIT_CONFIG_KEY_0).toBe("core.symlinks");
     expect(env.GIT_CONFIG_VALUE_0).toBe("false");
+  });
+
+  test("git gtr new does not read the global config either", async () => {
+    const gtrPorcelain =
+      "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(""),
+      ok(gtrPorcelain),
+      ok(`${NEW_HEAD_SHA}\n`),
+      ok(`${NEW_HEAD_SHA}\n`), // refs/remotes/origin/<branch>
+    ]);
+    await createGtrWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      branch: "new-branch",
+      ghToken: "gh-token",
+      assertProcessesIdle: idle,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[2]?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
   });
 
   describe("processes left by an earlier run", () => {
@@ -6069,7 +6178,8 @@ describe("runGitleaksOnWorktree", () => {
   test("diffs the scanned tree against the base sha as text, without drivers or context", async () => {
     const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[2]?.argv.slice(7)).toEqual([
+    const argv = fake.calls[2]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("diff"))).toEqual([
       "diff",
       "--text",
       "--no-ext-diff",

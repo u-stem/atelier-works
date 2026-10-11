@@ -593,6 +593,34 @@ symlinkの作成・変更・削除、入れ子のリポジトリ、`.git`とい�
 
 worktreeの`.git`ファイルは、準備のときに検証して中身を記録する。以降、Claudeを起動する前とgitを実行する前に、記録と一致することを確かめる。参照先を別のディレクトリに向けられると、そこのconfigの設定を次のgitがrootで実行するためである。この安全策は実装のフローでも同じように働く。
 
+### gitが読む設定を限る
+
+`f/factory/lib/workspace.ts`が実行するgitは、システムとグローバルの設定を読まない。
+環境変数`GIT_CONFIG_NOSYSTEM`、`GIT_CONFIG_SYSTEM`、`GIT_CONFIG_GLOBAL`、`GIT_ATTR_NOSYSTEM`を設定して読ませない。
+workerのHOMEやホストの設定が、検証の前提を変えないためである。
+コミットのauthorは環境変数で、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
+
+main cloneの`.git/config`は、gitがremoteやブランチの設定を読むので、読ませないことはできない。
+`extensions.worktreeConfig`が有効なときは、worktreeごとの`config.worktree`も読まれる。
+どちらも検査コマンドが書き換えられ、`-c`では`config.worktree`の読み込みを止められない。
+そこで、プログラムの実行と検証の前提に関わる設定を、コマンドラインの`-c`で固定する。
+`-c`はどの設定ファイルよりも優先されるので、設定ファイルに別の値を書かれても効かない。
+
+| 設定 | 固定する値 | 防ぐこと |
+| --- | --- | --- |
+| `core.hooksPath` | `/dev/null` | 設定のフックの実行 |
+| `core.fsmonitor` | `false` | 設定のfsmonitorのヘルパーの実行 |
+| `core.askPass` | 空 | 設定のaskpassのプログラムの実行 |
+| `commit.gpgsign` | `false` | `gpg.program`に書かれたプログラムの実行 |
+| `core.symlinks` | `false` | symlinkの検出が前提にする値の巻き戻し |
+| `credential.helper` | 空 | 設定のcredential helperの実行 |
+
+ネットワーク操作では、この後にghのcredential helperを加える。
+
+固定していない設定は、そのまま読まれる。
+`url.*.insteadOf`、`http.*`、`filter.*`、`diff.*`などは、キーが対象ごとに変わり、名前で固定できないためである。
+remoteのURLを書き換えられても、ghのcredential helperはGitHub以外のホストにトークンを返さない。
+
 ### コミットの直前の再検査
 
 完了のステップは検証とは別のジョブなので、commitの前にもう一度確かめる。worktreeを使うプロセスが残っていないこと、ブランチとHEADが記録どおりであること、ステージした内容に保護パスやsymlinkが無いことを見る。1つでも通らなければ、commitとpushをしない。

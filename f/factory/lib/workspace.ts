@@ -452,11 +452,33 @@ export type GitCommandOptions = {
 };
 
 /**
+ * 設定ファイルの値にかかわらず、すべてのgitの実行に固定する設定。
+ * `-c`はコマンドラインの設定で、`.git/config`、`config.worktree`、
+ * グローバル、システムのどの設定ファイルよりも優先される。
+ * `extensions.worktreeConfig`は`-c`では無効にできず、`config.worktree`は
+ * 有効にされると読まれる。だから、読まれて困る項目は設定ファイルの側ではなく、ここで固定する。
+ * - `core.hooksPath`、`core.fsmonitor`、`core.askPass`、`commit.gpgsign`:
+ *   設定ファイルに書かれたプログラムを、gitに実行させない。
+ *   `core.askPass`は空にすると、環境変数`SSH_ASKPASS`も読まれなくなる。
+ * - `core.symlinks`: worktreeの検証が前提にする値。
+ *   `.git/config`や`config.worktree`で`true`に戻させない。
+ * - `credential.helper`: 空にして、設定ファイルのcredential helperを消す。
+ */
+const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
+  ["core.hooksPath", "/dev/null"],
+  ["core.fsmonitor", "false"],
+  ["core.askPass", ""],
+  ["core.symlinks", "false"],
+  ["commit.gpgsign", "false"],
+  ["credential.helper", ""],
+];
+
+/**
  * `args`の前に共通の安全策のオプションを付けた、gitのargvを返す。
- * `credential.helper`を空にしてシステムやグローバルの設定を消し、
- * フックとfsmonitorを無効にする。
- * 悪意のあるcloneに、任意のフックやfsmonitorのヘルパーを実行させないため。
+ * `FIXED_GIT_CONFIG`の設定を`-c`で固定する。
+ * 悪意のあるcloneや検査コマンドが書いた設定で、任意のプログラムを実行させないため。
  * ネットワーク操作のときだけ、ghのcredential helperを加え直す。
+ * システムとグローバルの設定は、`localGitEnv`の環境変数で読まない。
  *
  * このモジュールのgitの実行では、ほかに次を守る。
  * - `GH_TOKEN`は、ネットワーク操作(clone、fetch、push)の
@@ -498,12 +520,7 @@ function buildGitArgv(
 ): string[] {
   return [
     "git",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "credential.helper=",
+    ...FIXED_GIT_CONFIG.flatMap(([key, value]) => ["-c", `${key}=${value}`]),
     ...(options.network === true
       ? ["-c", "credential.helper=!gh auth git-credential"]
       : []),
@@ -526,13 +543,24 @@ function remoteTrackingRef(branch: string): string {
   return `${REMOTE_TRACKING_PREFIX}${branch}`;
 }
 
-/** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
+/**
+ * ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。
+ * 渡す環境変数は、ここで挙げるものとHOMEとPATHだけである。
+ */
 function localGitEnv(home?: string, path?: string): Record<string, string> {
-  // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
-  // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
   const env: Record<string, string> = {
     GIT_TERMINAL_PROMPT: "0",
+    // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
+    // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
     GIT_NO_REPLACE_OBJECTS: "1",
+    // システム、グローバル、XDGの設定と、システムのgitattributesを読まない。
+    // 実行する環境ごとに値が違い、リポジトリの設定と検証の前提が食い違うため。
+    // コミットのauthorは`GIT_AUTHOR_*`、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
+    // `GIT_CONFIG_GLOBAL`を指定すると、`$HOME/.gitconfig`と`$XDG_CONFIG_HOME/git/config`の両方が読まれなくなる。
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
   };
   const resolvedHome = home ?? process.env.HOME;
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
@@ -648,7 +676,9 @@ export function assertOutputComplete(
  * worktreeはどれもメインのcloneの`.git/config`を読むため、
  * メインのcloneに書けば全worktreeに効く。
  * `ensureRepo`がclone・fetchの成功のたびに呼ぶ。
- * 他の箇所の実行ごとの`-c`や`GIT_CONFIG_*`も残してある(今は重複するが害は無い)。
+ * `buildGitArgv`の`-c core.symlinks=false`は、`.git/config`や`config.worktree`の値より優先される。
+ * 検査コマンドが書き換えた設定を無効にするのは`-c`で、
+ * ここで書く値は、このモジュールを通さずにClaudeや検査コマンドが実行するgitにも効かせる既定である。
  */
 async function persistNoSymlinksConfig(
   run: CommandRunner,
