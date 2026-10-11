@@ -1016,6 +1016,32 @@ check(
   again,
 );
 
+// 境界: noticeの`created_at`と成功の行の`occurred_at`が同時刻なら、noticeは解決しない。
+// 比較は「より前」であり、「以下」ではない。
+// 時刻は、ほかのnoticeより古くし、その版の判定が他を解決しないようにする。
+// 上の普通の反映の判定(30分前)で解決されないよう、「もう一度呼んでも」の後に置く。
+const boundaryTime = new Date(Date.now() - 40 * 60 * 1000).toISOString();
+execPsql(
+  target,
+  `INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, occurred_at) VALUES (NULL, 'qdb-sha-boundary', '[]'::jsonb, 'success', false, '${boundaryTime}'::timestamptz)`,
+);
+const boundaryNotice = await mismatchNotice("qdb boundary", "0 seconds");
+execPsql(
+  target,
+  `UPDATE factory.notices SET created_at = '${boundaryTime}'::timestamptz WHERE id = ${String(boundaryNotice)}`,
+);
+const boundaryResolved = await resolveNoticesBeforeSuccessfulDeployment(
+  MISMATCH_KIND,
+  "qdb-sha-boundary",
+  MISMATCH_RESOLVER,
+  sql,
+);
+check(
+  "deployed_sha_mismatch: a notice created at the same time as the successful deployment stays open",
+  boundaryResolved === 0 && (await isResolved(boundaryNotice)) === false,
+  boundaryResolved,
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);
