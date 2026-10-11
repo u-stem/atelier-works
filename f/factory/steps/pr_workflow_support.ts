@@ -2891,7 +2891,7 @@ export type RerouteGapDeps = {
   /** `setFlowJobIdIfUnset`で親にジョブIDを記録する。別の実行が先に書いていれば`false`を返す。 */
   readonly recordFlowJobId: (jobId: string) => Promise<boolean>;
   readonly cancelJob: (jobId: string, reason: string) => Promise<void>;
-  /** `job_failures`に記録し、ConsoleのFailuresタブから見えるようにする。 */
+  /** `job_failures`に記録し、Consoleの要対応から見えるようにする。 */
   readonly recordFailure: (reason: string) => Promise<void>;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
@@ -3071,7 +3071,7 @@ export function filterKnownReplies(
  * `reply.decision`が`"propose_issue"`なら、本文には代わりに、提案するIssueのタイトル
  * (`提案するIssue: <title>`)と、その本文の先頭3行の引用を載せ、
  * `対応: Issue化を提案(承認待ち)`で終える。
- * Issueを実際に作るかは人がConsoleのInboxで承認か却下し(`issue_proposal_apply.ts`)、
+ * Issueを実際に作るかは人がConsoleの要対応で承認か却下し(`issue_proposal_apply.ts`)、
  * 決まった後にそちらが続きの返信を投稿する。
  * `issue_proposal`の無い`"propose_issue"`の返信は、例外にせず空のタイトルと本文にする。
  * `isFixReplyShape`の検査を通っていれば起きないが、
@@ -3151,7 +3151,7 @@ export type ReplyPostFailure = {
 };
 
 /**
- * `pr_fix_finish.ts`の返信の投稿で失敗したものをまとめ、ConsoleのNoticesタブに出す
+ * `pr_fix_finish.ts`の返信の投稿で失敗したものをまとめ、Consoleの要対応に出す
  * noticeを1件作る。失敗が無ければnullを返す。
  * 返信の投稿は失敗してもステップを止めない(pushの後なので)。そのままだと失敗は
  * ログにしか残らず、人は返信が無いことに気づけないため、件数・id・最初のエラーを載せ、
@@ -3205,7 +3205,7 @@ export function matchReviewThreadForComment(
  * Discordと`status_reason`に使う文。
  * 下の`REASON_RULES`の項目に一致するので、他の`needs_human`の理由と同じく
  * `describeReason`(この文はすでに日本語なので変えない)と
- * `nextActionFor`(ConsoleのInboxを案内する)が扱う。
+ * `nextActionFor`(Consoleの要対応を案内する)が扱う。
  */
 export function buildIssueProposalReason(count: number): string {
   return `Issue化の提案が${String(count)}件あります`;
@@ -3771,7 +3771,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   },
   // pr_fix_finish.tsの`buildIssueProposalReason`。すでに日本語なので、
   // `describe()`はそのまま返す。この規則は、`nextActionFor`が汎用の既定ではなく
-  // ConsoleのInboxを案内するためにある。
+  // Consoleの要対応を案内するためにある。
   {
     pattern: /^Issue化の提案が(\d+)件あります$/,
     describe: (m) => `Issue化の提案が${m[1]}件あります`,
