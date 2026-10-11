@@ -4206,7 +4206,7 @@ describe("listAutoRetryCandidates", () => {
   test("excludes an item that used up its restarts", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listAutoRetryCandidates(params, sql);
-    expect(calls[0]?.text).toContain("starts_with(");
+    expect(calls[0]?.text).toContain("c.work_item_id = w.id");
   });
 
   test("passes the restart cap as a parameter", async () => {
@@ -4244,7 +4244,7 @@ describe("restartStoppedWorkItem", () => {
   test("guards the update with the latest event note of the expected status", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
-    expect(calls[0]?.text).toContain("starts_with(");
+    expect(calls[0]?.text).toContain("e.to_status = ");
   });
 
   test("passes the reason prefixes as a parameter", async () => {

@@ -43,9 +43,6 @@ export const AUTO_RETRY_LIMIT_PER_RUN = 5;
  */
 export const AUTO_RETRY_LIST_LIMIT = 50;
 
-/** 解決したnoticeのうち、イメージが古いことを知らせるものを見分ける本文の一部。 */
-export { STALE_IMAGE_NOTICE_MARKER } from "./host_action.ts";
-
 const PR_FIX_FLOW_PATH = "f/factory/pr_fix";
 
 export type AutoRetryPlan = {
