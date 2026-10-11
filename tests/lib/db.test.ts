@@ -4,7 +4,9 @@ import {
   addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
+  countImplementFailedRounds,
   countPendingIssueProposals,
+  countPrFixFailures,
   decideApprovalRequestIfPending,
   decideIssueProposal,
   deleteDeploymentsBefore,
@@ -50,6 +52,8 @@ import {
   recordFailure,
   resolveNoticeIfUnresolved,
   resolveStaleInfoNoticesBefore,
+  resolveUnresolvedNoticesByMessage,
+  resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -1772,6 +1776,98 @@ describe("countPendingIssueProposals", () => {
   });
 });
 
+describe("countImplementFailedRounds", () => {
+  test("returns the failed round count for the attempt", async () => {
+    const { sql } = createFakeSqlClient([[{ failed_rounds: "3" }]]);
+    expect(await countImplementFailedRounds(1, 2, sql)).toBe(3);
+  });
+
+  test("counts only check_failed, stalled and error rounds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain(
+      "outcome IN ('check_failed', 'stalled', 'error')",
+    );
+  });
+
+  test("filters by the attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain("attempt = ");
+  });
+
+  test("returns 0 when no row is returned", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await countImplementFailedRounds(1, 1, sql)).toBe(0);
+  });
+});
+
+describe("countPrFixFailures", () => {
+  const ZERO = {
+    blocked_rounds: 0,
+    verify_retry_items: 0,
+    failed_runs: 0,
+  };
+
+  test("adds blocked rounds, verify retries and failed runs", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ blocked_rounds: "1", verify_retry_items: 1, failed_runs: "3" }],
+    ]);
+    expect(await countPrFixFailures(1, sql)).toBe(5);
+  });
+
+  test("counts only blocked rounds in which Claude ran", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("ar.stage = 'pr_fix'");
+  });
+
+  test("counts verify retries once per work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("COUNT(DISTINCT ar.work_item_id)");
+  });
+
+  test("counts failed runs by the error column of both Claude stages", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "ar.stage IN ('pr_fix', 'pr_fix_verify_retry')",
+    );
+  });
+
+  test("counts every failed run instead of one per work item and stage", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).not.toContain("SELECT DISTINCT");
+  });
+
+  test("leaves out a failed run only when a blocked round comes after it", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("fr.created_at >= ar.created_at");
+  });
+
+  test("leaves out a failed run only when no other run comes before the blocked round", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("later.created_at <= fr.created_at");
+  });
+
+  test("leaves out the discarded first attempt of an output retry", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "next_run.created_at <= ar.created_at + interval '10 seconds'",
+    );
+  });
+
+  test("returns 0 when no row is returned", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await countPrFixFailures(1, sql)).toBe(0);
+  });
+});
+
 describe("toAuditReport", () => {
   function auditReportRow(overrides: Partial<SqlRow> = {}): SqlRow {
     return {
@@ -2987,6 +3083,109 @@ describe("resolveStaleInfoNoticesBefore", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     expect(await resolveStaleInfoNoticesBefore(NOW, [], sql)).toBe(0);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("resolveUnresolvedNoticesByMessage", () => {
+  const MESSAGE = "octo-owner/atelier-works#7: factory:review";
+
+  test("updates only unresolved notices of the given kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).toMatch(
+      /UPDATE factory\.notices[\s\S]*resolved = false[\s\S]*kind =\s*\?/,
+    );
+  });
+
+  test("matches the message exactly", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).toMatch(/message =\s*\?/);
+  });
+
+  test("does not use a prefix match or LIKE", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).not.toMatch(/starts_with|LIKE/);
+  });
+
+  test("passes the kind, message and resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.values).toEqual(["poll_prs", "k", MESSAGE]);
+  });
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(
+      await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql),
+    ).toBe(2);
+  });
+});
+
+describe("resolveUnresolvedNoticesByPrefix", () => {
+  const PREFIX = "octo-owner/atelier-works#12: ";
+
+  test("updates factory.notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("UPDATE factory.notices");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+
+  test("records the given resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain("poll_issues");
+  });
+
+  test("only touches unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("only touches the given kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain("k");
+  });
+
+  test("matches the message prefix with starts_with", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toMatch(/starts_with\(message,\s*\?\s*\)/);
+  });
+
+  test("passes the prefix as is, without LIKE wildcards", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain(PREFIX);
+  });
+
+  test("does not use LIKE", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).not.toContain("LIKE");
+  });
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(
+      await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql),
+    ).toBe(2);
+  });
+
+  test("returns 0 when nothing matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql),
+    ).toBe(0);
   });
 });
 

@@ -348,9 +348,9 @@ describe("notices", () => {
     );
   });
 
-  test("the missing notice tells the operator to restart the container", () => {
+  test("the missing notice tells the operator to run up and then recreate the container", () => {
     expect(CONSOLE_WORKER_MISSING_NOTICE.message).toContain(
-      "docker compose restart windmill_worker_console",
+      "mise run upを実行し、続けてmise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_consoleで作り直す",
     );
   });
 

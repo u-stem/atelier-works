@@ -626,7 +626,7 @@ export async function readExactRef(opts: {
  * 出力を値として判断に使うコマンドで、出力の読み取りを打ち切っていれば(`outputAbandoned`)例外を投げる。
  * 打ち切った出力は途中で切れていることがあり、終了コードが0でも、検査や照合に使うと見落としになるため。
  * 対象は、秘密情報の検査に渡す差分とそのレポート、保護パス・symlink・`package.json`のscriptsの判定に使う変更の一覧と中身、
- * 差分の大きさ、検証したツリーの照合に使う`write-tree`である。
+ * 差分の大きさ、検証したツリーの照合に使う`write-tree`、worktreeの一覧である。
  */
 export function assertOutputComplete(
   context: string,
@@ -1808,45 +1808,85 @@ export type WorktreeEntry = {
   readonly detached: boolean;
 };
 
+/**
+ * `git worktree list --porcelain -z`の出力を読む。
+ * -zの形式は、各行をNULで終え、各レコードの後にもう1つNULを置く。
+ * 改行はレコードの区切りにならないので、改行を含むパスを1つのパスとして読める。
+ * 出力が空(worktreeが無い)でない限り、末尾が完全なレコードの終わりでなければ、
+ * 途中で切れた出力として例外を投げる。
+ * 使用中のworktreeを読み落とすと、別のworktreeが使うブランチを確かめずに通してしまうため。
+ */
 function parseWorktreeListPorcelain(stdout: string): WorktreeEntry[] {
-  const blocks = stdout
-    .split("\n\n")
-    .map((block) => block.trim())
-    .filter((block) => block.length > 0);
+  if (stdout === "") return [];
 
-  return blocks.map((block) => {
-    let path: string | null = null;
-    let headSha: string | null = null;
-    let branch: string | null = null;
-    let bare = false;
-    let detached = false;
+  const fields = stdout.split("\0");
+  // NULで終わる出力を分けると、最後に空の要素が残る。残らなければ、最後の行が終わっていない。
+  if (fields.pop() !== "") {
+    throw new Error(
+      "unexpected 'git worktree list --porcelain -z' output: truncated",
+    );
+  }
 
-    for (const line of block.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        path = line.slice("worktree ".length);
-      } else if (line.startsWith("HEAD ")) {
-        headSha = line.slice("HEAD ".length);
-      } else if (line.startsWith("branch ")) {
-        const ref = line.slice("branch ".length);
-        branch = ref.startsWith("refs/heads/")
-          ? ref.slice("refs/heads/".length)
-          : ref;
-      } else if (line === "bare") {
-        bare = true;
-      } else if (line === "detached") {
-        detached = true;
-      }
+  const entries: WorktreeEntry[] = [];
+  let lines: string[] = [];
+  for (const field of fields) {
+    if (field !== "") {
+      lines.push(field);
+      continue;
     }
-
-    if (path === null) {
+    if (lines.length === 0) {
       throw new Error(
-        `unexpected 'git worktree list --porcelain' block: ${block}`,
+        "unexpected 'git worktree list --porcelain -z' output: empty record",
       );
     }
-    return { path, headSha, branch, bare, detached };
-  });
+    entries.push(parseWorktreeRecord(lines));
+    lines = [];
+  }
+  // 最後のレコードを終えるNULが無い。
+  if (lines.length > 0) {
+    throw new Error(
+      "unexpected 'git worktree list --porcelain -z' output: truncated",
+    );
+  }
+  return entries;
 }
 
+function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
+  let path: string | null = null;
+  let headSha: string | null = null;
+  let branch: string | null = null;
+  let bare = false;
+  let detached = false;
+
+  for (const line of lines) {
+    if (line.startsWith("worktree ")) {
+      path = line.slice("worktree ".length);
+    } else if (line.startsWith("HEAD ")) {
+      headSha = line.slice("HEAD ".length);
+    } else if (line.startsWith("branch ")) {
+      const ref = line.slice("branch ".length);
+      branch = ref.startsWith("refs/heads/")
+        ? ref.slice("refs/heads/".length)
+        : ref;
+    } else if (line === "bare") {
+      bare = true;
+    } else if (line === "detached") {
+      detached = true;
+    }
+  }
+
+  if (path === null) {
+    throw new Error(
+      `unexpected 'git worktree list --porcelain -z' record: ${lines.join(" | ")}`,
+    );
+  }
+  return { path, headSha, branch, bare, detached };
+}
+
+/**
+ * `repoDir`の`git worktree list --porcelain -z`を読む。
+ * -zはgit 2.36以上が要る。失敗したときと、出力が途中で切れたときは例外を投げる。
+ */
 export async function listWorktrees(opts: {
   readonly run: CommandRunner;
   readonly repoDir: string;
@@ -1854,7 +1894,7 @@ export async function listWorktrees(opts: {
   readonly path?: string;
 }): Promise<WorktreeEntry[]> {
   const result = await opts.run(
-    buildGitArgv(["worktree", "list", "--porcelain"]),
+    buildGitArgv(["worktree", "list", "--porcelain", "-z"]),
     {
       cwd: opts.repoDir,
       env: localGitEnv(opts.home, opts.path),
@@ -1863,6 +1903,7 @@ export async function listWorktrees(opts: {
   if (result.exitCode !== 0) {
     throw gitError("git worktree list failed", result);
   }
+  assertOutputComplete("git worktree list", result);
   return parseWorktreeListPorcelain(result.stdout);
 }
 

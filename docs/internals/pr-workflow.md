@@ -46,7 +46,27 @@ PR修正はラベルからしか起動しない。コメントやcommitのpush�
 
 レビューとコメントの投稿者の`author_association`が`allowed_labeler_associations`に含まれないとき、その投稿は起動の対象から外す。既定値は`OWNER`、`MEMBER`、`COLLABORATOR`である。
 
-`factory:review`と`factory:fix`のラベル自体は、タイムラインを照会しない。ラベルを付けるにはGitHubでtriage以上の権限が要るので、その制約だけに頼る。この制約はラベルを付ける操作に対するものなので、ラベルが消費された後も弱まらない。
+### ラベルの付与者の確認
+
+`poll_prs`は、`factory:review`と`factory:fix`のそれぞれについて、そのラベルを最後に付けた人を、ラベルの`labeled`イベントの`actor`で確かめる。
+許可されるのは、FactoryのPATのアカウントと、`allowed_labeler_logins`に挙げたアカウントである。
+許可されない人が付けたラベルと、付与者を特定できないラベルは、外さずに残し、起動しない。
+取得の直前にも、同じ確認をもう一度行う。
+イベントを取得できなかったPRは、そのポーリングでは対象にしない。
+付与者を判定できないPR(直近100件のラベルのイベントにトリガーラベルのイベントが無い)は、`labeler_check_limit`のnoticeを残し、ラベルを外して付け直すまで対象にしない。
+仕組みの全体は[ラベル付与の制限](../security.md#ラベル付与の制限)にある。
+
+レビュー依頼かassigneeによる起動と、追跡中のPRの新しいcommitによる再レビューは、ラベルを介さない。
+この2つは、PRの作成者が許可されたアカウントのときに限る。
+トリガーラベルが拒否された状態で付いているPRでも、始めない。
+同じリポジトリのブランチから出した第三者のPRは、許可されたアカウントがラベルを付けたときだけレビューされ、新しいcommitのたびにラベルの付け直しが要る。
+
+PRのheadが対象のリポジトリにないとき(forkのPRと、headのリポジトリを取得できないPR)は、ラベルの経路もラベルを介さない経路も、レビューを始めない。
+`decidePrActions`が、始めるはずだったレビューを見送りとして返し、`poll_prs`が`fork_head_denied`のnoticeを残す。
+ラベルは外さない。
+`pr_review_prepare`も、作業項目を手で作るなどの経路に備えて、clone、fetch、worktreeの前に同じ確認をする。
+通らなければ、作業項目を終端の`blocked`にして理由を残し、Discordで人に知らせてから、処理を飛ばす。
+同じ判定は、PR修正の準備のステップの「forkからでない」確認と共有する。
 
 ### 対象のリポジトリ
 
@@ -374,7 +394,8 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | --- | --- | --- |
 | `review_label` | `factory:review` | PRレビューを起動するラベル |
 | `fix_label` | `factory:fix` | PR修正を起動するラベル |
-| `allowed_labeler_associations` | `["OWNER", "MEMBER", "COLLABORATOR"]` | 起動の対象にする投稿者の関係 |
+| `allowed_labeler_logins` | `[]` | ラベルを付けてよいアカウント。FactoryのPATのアカウントに加えて許可する |
+| `allowed_labeler_associations` | `["OWNER", "MEMBER", "COLLABORATOR"]` | 修正の材料にする投稿者の関係 |
 | `repo_allowlist` | `[]` | 対象のリポジトリ。空なら`owners`のすべて |
 | `tracked_pr_days` | `30` | ラベルが外れた後もPRを追跡する日数 |
 | `review_post_mode` | `comment_only` | `gated`ならレビューを投稿しない |
@@ -387,6 +408,17 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `default_reviewers` | `[]` | 再レビューを依頼する人 |
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
+| `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、2回失敗した後のPR修正のモデル |
+
+モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数える。
+次の3つを足す。
+
+- Claudeが動いて`blocked`で終えた`fix_rounds`の行
+- 検査の再実行(`pr_fix_verify_retry`)をした作業項目
+- `agent_runs.error`がある失敗した実行の行
+
+除く条件と数の理由は、[運用](../operations.md)の「モデルを使い分ける」にある。
 
 PR修正のラウンドが`max_fix_rounds`を超えると、準備のステップが止め、作業項目は人の対応待ちになる。ラウンドの番号(`fix_round`)は、`poll_prs`が作業項目を作るときに入れる。PR修正の各ラウンドは別の作業項目になり、完了のステップは番号を増やさない。
 
@@ -459,6 +491,7 @@ PR修正の完了のステップで、pushの後のGitHub APIの呼び出しは�
 ## 再実行と中断
 
 `retry_work_item`は、失敗、人の対応待ち、ブロックのPR修正の作業項目を再実行できる。watermarkはpushの成功か差し戻しでしか進まないので、それ以外の終わり方から再実行すると、前回と同じフィードバックを集め直す。
+headがforkのPRのレビューが`blocked`になったときは、再実行すると、準備のステップが同じ理由でまた止め、Discordにも再通知する。PRを同一リポジトリのブランチから出し直す。
 
 人の対応待ちとブロックの通知の次の操作は、修正のどこで止めたかで分ける(`nextAction`に渡すフロー`pr_fix`)。
 
@@ -534,16 +567,18 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
 個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
-一覧には、次の4種類が入る。
+一覧には、次の5種類が入る。
 
 - Consoleのページの入口: `console/index.html`
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
 - 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
 - 配信の設定: `infra/Caddyfile`
+- CIの実行の範囲を決める側: `scripts/ci-scope.ts`
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。
 固定を強制する側のスクリプトは、書き換えられると、検査をすり抜けた内容が配信物に混ざる。
+`scripts/ci-scope.ts`は、書き換えられると、検査のジョブを黙って飛ばせる。
 `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
 `infra/console_fetcher/`は、配信物を検証して配信する。
 どちらも書き換えられると、検証や隔離をすり抜けた内容が運用者のブラウザで動く。

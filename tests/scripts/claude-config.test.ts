@@ -25,6 +25,17 @@ const READ_ONLY_AGENTS = [
 const FACTORY_DOCS_PRELOADED = ["implementer", "code-reviewer", "doc-writer"];
 const OWNED_DIRS = [".claude/agents", ".claude/skills/review-loop"];
 const MODELS = ["sonnet", "opus", "haiku", "fable", "inherit"];
+// 方針: 設計・判断・反証・監査と、その仕分けはopus。実装・コードレビュー・文書の追従はsonnet。
+const EXPECTED_MODELS: [string, string][] = [
+  ["implementer", "sonnet"],
+  ["code-reviewer", "sonnet"],
+  ["doc-writer", "sonnet"],
+  ["design-reviewer", "opus"],
+  ["requirements-reviewer", "opus"],
+  ["devil-advocate", "opus"],
+  ["security-auditor", "opus"],
+  ["triage", "opus"],
+];
 const WRITE_TOOL = /^(Edit|MultiEdit|Write|NotebookEdit)(\(|$)/;
 
 // 外部の設定リポジトリの名前は、このテスト自身が検出されないよう、部品から組み立てる。
@@ -94,6 +105,10 @@ describe(".claude/agents", () => {
   test.each(AGENTS)("pins the model of %s to a known value", (name) => {
     const model = frontmatter(name).model;
     expect(typeof model === "string" && MODELS.includes(model)).toBe(true);
+  });
+
+  test.each(EXPECTED_MODELS)("runs %s on %s", (name, model) => {
+    expect(frontmatter(name).model).toBe(model);
   });
 
   test.each(AGENTS)("lists at least one tool for %s", (name) => {
@@ -228,6 +243,13 @@ describe(".claude/agents", () => {
 });
 
 describe("repository-owned Claude config", () => {
+  test("sets the default model to opusplan in .claude/settings.json", () => {
+    const parsed: unknown = JSON.parse(
+      readFileSync(join(ROOT, ".claude/settings.json"), "utf8"),
+    );
+    expect(isRecord(parsed) ? parsed.model : undefined).toBe("opusplan");
+  });
+
   test("contains no machine-specific paths or external config names", () => {
     const offenders = OWNED_DIRS.flatMap(listFiles).filter((path) =>
       FORBIDDEN.test(readFileSync(join(ROOT, path), "utf8")),

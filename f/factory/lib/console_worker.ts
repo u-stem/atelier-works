@@ -39,7 +39,7 @@ export const CONSOLE_WORKER_UNKNOWN_LIMIT = 6;
 
 const MISSING_CAUSE = `Consoleのジョブが${CONSOLE_JOB_WAIT_SECONDS / 60}分以上待たされています。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、ジョブを受けていません。Consoleのジョブがqueueに溜まり、Consoleが止まります`;
 const MISSING_ACTION =
-  "docker compose ps windmill_worker_consoleでコンテナの状態を確かめ、無ければmise run upで起動し、動いていればdocker compose restart windmill_worker_consoleで再起動する。再起動しても直らなければ、Windmillの画面でtag consoleの実行中のジョブと、ワーカーグループconsoleのtagを確かめる";
+  "docker compose ps windmill_worker_consoleでコンテナの状態を確かめ、無ければmise run upで起動する。動いていれば、mise run upを実行し、続けてmise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_consoleで作り直す。作り直しても直らなければ、Windmillの画面でtag consoleの実行中のジョブと、ワーカーグループconsoleのtagを確かめる";
 
 const CHECK_FAILED_CAUSE =
   "Console用のworkerがジョブを受けているかを、1時間続けて確かめられていません。workerが止まっていても気づけません";

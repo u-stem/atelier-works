@@ -45,6 +45,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   type ImplementClaudeOutput,
 } from "../../f/factory/lib/implement_support.ts";
+import { modelChangesAfterFailure } from "../../f/factory/lib/model_policy.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
 import type {
   AgentRunRecord,
@@ -55,6 +56,8 @@ import {
   type WorktreeFingerprint,
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
+
+const MODEL_CONFIG = { model: "light-model", heavy_model: "heavy-model" };
 
 const DONE: ImplementClaudeOutput = {
   outcome: "done",
@@ -158,12 +161,14 @@ const RUN_INPUT: ImplementClaudeRunInput = {
   run: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
   config: {
     model: "claude-test",
+    heavy_model: "claude-test-heavy",
     implement_max_turns: 80,
     implement_max_budget_usd_per_run: 10,
     implement_timeout_sec: 3600,
   },
   workItemId: 3,
   attempt: 1,
+  sonnetFailures: 0,
   stage: "implement",
   prompt: "prompt",
   systemPromptPath: "/tmp/system-prompt.md",
@@ -449,6 +454,28 @@ describe("toImplementClaudeRound", () => {
 });
 
 describe("buildImplementClaudeOptions", () => {
+  test("uses model when no round has failed", () => {
+    expect(buildImplementClaudeOptions(RUN_INPUT).model).toBe("claude-test");
+  });
+
+  test("uses model after one failed round", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, sonnetFailures: 1 }).model,
+    ).toBe("claude-test");
+  });
+
+  test("uses heavy_model after two failed rounds", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, sonnetFailures: 2 }).model,
+    ).toBe("claude-test-heavy");
+  });
+
+  test("does not escalate on the attempt number alone", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, attempt: 3 }).model,
+    ).toBe("claude-test");
+  });
+
   test("passes the flow deadline to runClaude", () => {
     expect(buildImplementClaudeOptions(RUN_INPUT).deadlineAt).toBe(
       1_900_000_000_000,
@@ -670,6 +697,8 @@ type HarnessOptions = {
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
+  /** `modelChangesAfterFailure`が、呼び出しの順に返す値。最後の値を繰り返す。既定はfalse。 */
+  readonly modelChangesNext?: readonly boolean[];
   /** `holdsLease`が、0始まりで`from`回目以降の呼び出しでfalseを返す(リースを失った)。 */
   readonly leaseLostFrom?: number;
   /** `assertGitPointer`が、0始まりで`from`回目以降の呼び出しで投げる例外。 */
@@ -682,14 +711,24 @@ type Harness = {
   readonly deps: ImplementLoopDeps;
   readonly recorded: ImplementRoundRecord[];
   readonly fixRequests: FixRoundRequest[];
-  readonly calls: { gitleaks: number; checks: number; fingerprint: number };
+  readonly calls: {
+    gitleaks: number;
+    checks: number;
+    fingerprint: number;
+    modelChange: number;
+  };
   readonly events: string[];
 };
 
 function harness(options: HarnessOptions = {}): Harness {
   const recorded: ImplementRoundRecord[] = [];
   const fixRequests: FixRoundRequest[] = [];
-  const calls = { gitleaks: 0, checks: 0, fingerprint: 0 };
+  const calls = {
+    gitleaks: 0,
+    checks: 0,
+    fingerprint: 0,
+    modelChange: 0,
+  };
   const events: string[] = [];
   let lastTreeSha = "";
   const deps: ImplementLoopDeps = {
@@ -737,6 +776,14 @@ function harness(options: HarnessOptions = {}): Harness {
       recorded.push(record);
     },
     dailyBudgetExceeded: async () => options.budgetExceeded ?? false,
+    modelChangesAfterFailure: async () => {
+      const value = pick(
+        options.modelChangesNext ?? [false],
+        calls.modelChange,
+      );
+      calls.modelChange += 1;
+      return value;
+    },
     holdsLease: async () => {
       const index = events.filter((event) => event === "lease").length;
       events.push("lease");
@@ -997,6 +1044,106 @@ describe("runImplementVerifyLoop", () => {
     expect(
       (await run(harness({ checks: [[FAIL]], fingerprints: [FP_1] }))).exit,
     ).toBe("stalled");
+  });
+
+  test("runs a fix round past a stall when the next failure changes the model", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    expect((await run(h)).rounds).toBe(3);
+  });
+
+  test("tells the fix round the previous round stalled when the stall check was skipped", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    await run(h);
+    expect(
+      h.fixRequests.map((request) => request.previousRoundStalled),
+    ).toEqual([false, true]);
+  });
+
+  test("does not flag a stall when the model changes but the round made progress", async () => {
+    const h = harness({
+      checks: [[FAIL], [LINT_FAIL]],
+      fingerprints: [FP_1, FP_2],
+      modelChangesNext: [true],
+    });
+    await run(h);
+    expect(h.fixRequests[0]?.previousRoundStalled).toBe(false);
+  });
+
+  test("exits stalled once the model no longer changes", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    expect((await run(h)).exit).toBe("stalled");
+  });
+
+  test("skips the stall check only once when the model changes from the recorded failures", async () => {
+    const h = harness({ checks: [[FAIL]], fingerprints: [FP_1] });
+    const failedOutcomes: readonly string[] = [
+      "check_failed",
+      "stalled",
+      "error",
+    ];
+    const deps: ImplementLoopDeps = {
+      ...h.deps,
+      modelChangesAfterFailure: async () =>
+        modelChangesAfterFailure(
+          MODEL_CONFIG,
+          "implement",
+          h.recorded.filter((record) => failedOutcomes.includes(record.outcome))
+            .length,
+        ),
+    };
+    const result = await runImplementVerifyLoop(deps, loopInput());
+    expect({ exit: result.exit, rounds: result.rounds }).toEqual({
+      exit: "stalled",
+      rounds: 3,
+    });
+  });
+
+  test("still exits max_rounds when the next failure changes the model", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [true],
+    });
+    expect(
+      (await run(h, loopInput(outputRound(), { maxRounds: 2 }))).exit,
+    ).toBe("max_rounds");
+  });
+
+  test("asks whether the model changes only for a failed round", async () => {
+    const h = harness({ checks: [[PASS]] });
+    await run(h);
+    expect(h.calls.modelChange).toBe(0);
+  });
+
+  test("asks whether the model changes before recording the failed round", async () => {
+    const order: string[] = [];
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    const base = h.deps;
+    const deps: ImplementLoopDeps = {
+      ...base,
+      modelChangesAfterFailure: async () => {
+        order.push("count");
+        return base.modelChangesAfterFailure();
+      },
+      recordRound: async (record) => {
+        order.push("record");
+        await base.recordRound(record);
+      },
+    };
+    await runImplementVerifyLoop(deps, loopInput());
+    expect(order).toEqual(["count", "record", "record"]);
   });
 
   test("exits daily_budget when the budget is spent", async () => {

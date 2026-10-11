@@ -22,6 +22,7 @@ import { notifyBestEffort } from "../lib/discord.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import {
   holdsPipelineLease,
   PIPELINE_LEASE_LOST_REASON,
@@ -380,7 +381,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "generate_requirements",
       attempt,
-      model: config.model,
+      model: modelFor(config, "requirements", 0),
       prompt,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: REQUIREMENTS_SCHEMA,

@@ -156,6 +156,7 @@ Claudeの出力は、記録の前に型ガードで検査する。
 | 読み取り専用で渡すもの | self cloneのスナップショット(`--add-dir`) |
 | スキル | `factory-audit` |
 | 構造化出力 | `{summary, proposals}`。提案は`{title, body}`の配列 |
+| モデル | `heavy_model` |
 | 上限 | `max_turns`、`max_budget_usd_per_run`、`claude_timeout_sec` |
 
 ### スナップショット

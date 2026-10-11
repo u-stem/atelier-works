@@ -80,6 +80,16 @@ export type GitIdentity = {
  */
 const GITHUB_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/**
+ * `labels`に`label`が付いているかを返す。
+ * GitHubのラベル名は大文字小文字を区別せず、検索もイベントも区別しないので、
+ * 比較も区別しない。
+ */
+export function hasLabel(labels: readonly string[], label: string): boolean {
+  const wanted = label.toLowerCase();
+  return labels.some((name) => name.toLowerCase() === wanted);
+}
+
 export function assertGitHubName(name: string): void {
   if (name === "." || name === "..") {
     throw new Error(`invalid GitHub name: ${JSON.stringify(name)}`);
@@ -791,8 +801,19 @@ export type ReviewPostMode = "comment_only" | "gated";
 export type FactoryConfig = {
   owners: FactoryOwner[];
   trigger_label: string;
+  /**
+   * PRのレビューと修正のコメントの投稿者を、GitHubの`author_association`で絞る。
+   * トリガーラベルの付与者の確認には使わない(ラベルの`labeled`イベントは
+   * `author_association`を持たないため)。
+   */
   allowed_labeler_associations: LabelerAssociation[];
+  /**
+   * トリガーラベルを付けてよい、FactoryのPATのアカウント以外のGitHubのログイン名。
+   * 空なら、PATのアカウントが付けたラベルだけに反応する。大文字小文字は区別しない。
+   */
+  allowed_labeler_logins: string[];
   model: string;
+  heavy_model: string;
   max_attempts: number;
   max_turns: number;
   max_budget_usd_per_run: number;

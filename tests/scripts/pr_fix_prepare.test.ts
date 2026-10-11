@@ -14,6 +14,7 @@ import {
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
+  evaluateSameRepoHeadGuard,
   nextActionFor,
   PR_COMMAND_STOP_OVERHEAD_SEC,
   prFixTimeoutMisfit,
@@ -73,6 +74,34 @@ describe("evaluatePrFixSafetyGuards", () => {
       draft: true,
     });
     expect(!result.ok && result.reason).toContain("open");
+  });
+});
+
+describe("evaluateSameRepoHeadGuard", () => {
+  test("passes when the head repo is the base repo", () => {
+    const result = evaluateSameRepoHeadGuard(
+      "octo-owner/atelier-works",
+      "octo-owner/atelier-works",
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  test("fails when the head repo differs from the base repo", () => {
+    const result = evaluateSameRepoHeadGuard(
+      "someone-else/atelier-works",
+      "octo-owner/atelier-works",
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("fails when the head repo is unavailable", () => {
+    const result = evaluateSameRepoHeadGuard(null, "octo-owner/atelier-works");
+    expect(result.ok).toBe(false);
+  });
+
+  test("explains the fork in the reason", () => {
+    const result = evaluateSameRepoHeadGuard(null, "octo-owner/atelier-works");
+    expect(!result.ok && result.reason).toContain("fork PR");
   });
 });
 

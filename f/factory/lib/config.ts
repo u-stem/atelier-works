@@ -31,6 +31,12 @@ const LABELER_ASSOCIATIONS: readonly LabelerAssociation[] = [
 const REVIEW_POST_MODES: readonly ReviewPostMode[] = ["comment_only", "gated"];
 const OWNER_KINDS = ["user", "org"];
 /**
+ * `model`と`heavy_model`に許す形。`claude --model`の引数に渡すので、
+ * 先頭が`-`の値(オプションとして読まれる)や空白、シェルの特殊文字を通さない。
+ * `claude-opus-5-5`や`claude-opus-5-5[1m]`のような名前は通る。
+ */
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._[\]-]*$/;
+/**
  * `check_commands_by_repo`のキーを正規化した結果が従う形。
  * スキームとホストを含まず、スラッシュが1つだけの`owner/repo`。
  */
@@ -44,7 +50,9 @@ const OWNER_SLASH_REPO = /^[^/\s]+\/[^/\s]+$/;
 type DefaultableField =
   | "trigger_label"
   | "allowed_labeler_associations"
+  | "allowed_labeler_logins"
   | "model"
+  | "heavy_model"
   | "max_attempts"
   | "max_turns"
   | "max_budget_usd_per_run"
@@ -85,7 +93,9 @@ type DefaultableField =
 const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   trigger_label: "factory",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
-  model: "claude-opus-5-5",
+  allowed_labeler_logins: [],
+  model: "claude-sonnet-5-5",
+  heavy_model: "claude-opus-5-5",
   max_attempts: 3,
   max_turns: 40,
   max_budget_usd_per_run: 5,
@@ -158,6 +168,24 @@ function isReviewPostMode(value: unknown): value is ReviewPostMode {
 }
 
 /**
+ * `stringField`の値が、`MODEL_NAME`の許可リストに合うことまで検証して返す。
+ * 合わなければ例外を投げる。
+ */
+function modelField(
+  raw: Record<string, unknown>,
+  field: "model" | "heavy_model",
+  fallback: string,
+): string {
+  const value = stringField(raw, field, fallback);
+  if (!MODEL_NAME.test(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must match ${String(MODEL_NAME)}`,
+    );
+  }
+  return value;
+}
+
+/**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、文字列でなければ例外を投げる。
  */
 function stringField(
@@ -221,6 +249,28 @@ function stringArrayField(
     throw new ConfigValidationError(`"${field}" must be an array of strings`);
   }
   return value;
+}
+
+/**
+ * `allowed_labeler_logins`を返す。値が無ければ既定値を返す。
+ * `[bot]`で終わるログイン名はGitHub Appのアカウントで、第三者の入力に応じて
+ * ラベルを付ける自動化になりうる。そのアカウントが付けたラベルを許可すると、
+ * 付与者の確認が素通りになるため、例外を投げる。
+ */
+function labelerLoginsField(raw: Record<string, unknown>): string[] {
+  const logins = stringArrayField(
+    raw,
+    "allowed_labeler_logins",
+    DEFAULTS.allowed_labeler_logins,
+  );
+  for (const login of logins) {
+    if (login.toLowerCase().endsWith("[bot]")) {
+      throw new ConfigValidationError(
+        `"allowed_labeler_logins" must not contain an automation account: ${JSON.stringify(login)}`,
+      );
+    }
+  }
+  return logins;
 }
 
 /**
@@ -345,7 +395,9 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     owners,
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
-    model: stringField(raw, "model", DEFAULTS.model),
+    allowed_labeler_logins: labelerLoginsField(raw),
+    model: modelField(raw, "model", DEFAULTS.model),
+    heavy_model: modelField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),
     max_turns: numberField(raw, "max_turns", DEFAULTS.max_turns),
     max_budget_usd_per_run: numberField(
