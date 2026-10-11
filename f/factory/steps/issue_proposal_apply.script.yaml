@@ -2,9 +2,6 @@ summary: '[SF-3-3] Issue化提案の承認結果を反映'
 description: 決定済みのIssue化提案・改善提案の承認依頼(kind =
   issue_proposal)を受け取り、承認ならIssueを作成します(監査由来の提案はfactory自身のリポジトリに作成し、レビュースレッドへの返信・解決はpr_fix由来の提案のみに行います)。却下なら理由を返信します。作業項目の全提案が決定すると作業項目を次に進めます。
 lock: '!inline f/factory/steps/issue_proposal_apply.script.lock'
-concurrency_key: $args[approval_request_id]
-concurrency_time_window_s: 0
-concurrent_limit: 1
 kind: script
 schema:
   $schema: https://json-schema.org/draft/2020-12/schema

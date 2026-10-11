@@ -1,6 +1,6 @@
-// Issueを作るscriptが、同じ承認依頼では同時に1つしか動かない設定を固定する。
-// 設定が外れると、承認のやり直しが重なったときに、Issueが2件できうる。
-// この設定が効くのはWindmillのEnterprise版だけなので、印の取得(claimIssueCreation)が主な防御である。
+// Issueを作るscriptの同時実行は、DBの印(claimIssueCreation)だけで直列化する。
+// Windmillの同時実行の制限は、有償版でしか効かない。
+// Community版に設定を入れると、自動の反映(wmill sync push)が拒否されるおそれがあるので、yamlに書かせない。
 
 import { describe, expect, test } from "bun:test";
 
@@ -11,17 +11,15 @@ async function yamlText(): Promise<string> {
 }
 
 describe("issue_proposal_apply concurrency settings", () => {
-  test("allows one run at a time", async () => {
-    expect(await yamlText()).toMatch(/^concurrent_limit: 1$/m);
+  test("sets no concurrent limit", async () => {
+    expect(await yamlText()).not.toContain("concurrent_limit");
   });
 
-  test("counts the limit per approval request", async () => {
-    expect(await yamlText()).toMatch(
-      /^concurrency_key: \$args\[approval_request_id\]$/m,
-    );
+  test("sets no concurrency key", async () => {
+    expect(await yamlText()).not.toContain("concurrency_key");
   });
 
-  test("limits the concurrency itself, not the rate within a window", async () => {
-    expect(await yamlText()).toMatch(/^concurrency_time_window_s: 0$/m);
+  test("sets no concurrency time window", async () => {
+    expect(await yamlText()).not.toContain("concurrency_time_window_s");
   });
 });
