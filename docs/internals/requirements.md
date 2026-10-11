@@ -175,7 +175,7 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 `unavailable`はしばらく待ってからやり直す。
 
 確認から決定の記録までの間のIssueの書き換えは防げない。
-承認者が見た内容のハッシュに結び付ければ防げるが、承認の操作は旧Consoleにあり、旧Consoleは取り込み時点の内容を出さないので、今は採れない。
+承認者が見た内容のハッシュに結び付ければ防げるが、承認の操作が2つのConsoleにあり、旧Consoleの承認タブは取り込み時点の内容を出さないので、今は採れない。
 実装を終えたときの、PR本文の注記が残りを拾う。
 
 Console用のworkerで動くscriptのうち、`github_token`を読むのは、`retry_work_item`と`approval_decide`である。

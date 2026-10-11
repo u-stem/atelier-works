@@ -10,32 +10,17 @@ import {
 } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
-import { factoryLabelChoice } from "../../lib/approvalDecision.ts";
+import {
+  factoryLabelChoice,
+  proposalOrigin,
+} from "../../lib/approvalDecision.ts";
 import { displayableIssueText } from "../../lib/intakeText.ts";
 import { ApprovalBar } from "./ApprovalBar.tsx";
-
-/** 提案の出どころ。監査の提案は期間、PRの提案はPRの番号と担当を添える。 */
-function originText(proposal: InboxProposal): string {
-  const parts: string[] = [];
-  if (proposal.origin === "audit") {
-    parts.push(
-      proposal.period_label === null
-        ? "監査"
-        : `監査 ${displayableIssueText(proposal.period_label).text}`,
-    );
-  } else if (proposal.pr_number !== null) {
-    parts.push(`PR #${String(proposal.pr_number)}`);
-  }
-  if (proposal.claimed_by !== null) {
-    parts.push(`担当: ${displayableIssueText(proposal.claimed_by).text}`);
-  }
-  return parts.join(" ・ ");
-}
 
 function ProposalBody({ proposal }: { proposal: InboxProposal }) {
   const title = displayableIssueText(proposal.proposal_title);
   const body = displayableIssueText(proposal.proposal_body);
-  const origin = originText(proposal);
+  const origin = proposalOrigin(proposal);
   return (
     <section
       aria-labelledby="proposal-heading"
@@ -45,12 +30,12 @@ function ProposalBody({ proposal }: { proposal: InboxProposal }) {
         <h3 id="proposal-heading" className="text-lead font-semibold">
           提案内容
         </h3>
-        {origin === "" ? null : (
-          <p className="text-small text-muted-foreground">{origin}</p>
+        {origin.text === "" ? null : (
+          <p className="text-small text-muted-foreground">{origin.text}</p>
         )}
       </header>
       <div className="flex flex-col gap-3 px-5 py-4">
-        {title.replaced || body.replaced ? (
+        {title.replaced || body.replaced || origin.replaced ? (
           <p className="text-small text-warning">
             不可視の文字を含みます。見えない文字や、並びの見た目を入れ替える文字は、代替文字(U+FFFD)に置き換えて表示しています。
           </p>
@@ -150,6 +135,7 @@ export function ProposalReview({
         factoryLabel={factoryLabelChoice(proposal)}
         approveBlockedReason={null}
         refreshed={false}
+        fullCheckRequired={false}
       />
     </>
   );

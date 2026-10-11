@@ -10,12 +10,15 @@ const BLOCKED_REASONS = {
     "取り込み時点のIssueを読み込み中です。表示されるまで承認できません。",
   failed:
     "取り込み時点のIssueを取得できていません。取得し直して内容を確かめるまで承認できません。",
+  empty:
+    "この作業項目に、取り込み時点のIssueがありません。確かめる内容が無いため、承認できません。",
 } as const;
 
 /**
  * 要件定義の承認。取り込み時点のIssueのパネルの直下に承認バーを置く。
  * 実装のClaudeが受け取るのはこの内容なので、承認者がそれを見られる状態でだけ承認を押せる。
  * 却下は、内容を見られなくても押せる。
+ * 本文が長く切られているときは、GitHubで全文を確かめるまで承認を止める。
  * パネルと同じ取得(キーが同じ)を読むので、取得は1回で済む。
  */
 export function RequirementsReview({
@@ -47,6 +50,7 @@ export function RequirementsReview({
           readiness === "ready" ? null : BLOCKED_REASONS[readiness]
         }
         refreshed={snapshot.data?.refreshed === true}
+        fullCheckRequired={snapshot.data?.body_truncated === true}
       />
     </>
   );

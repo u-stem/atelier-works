@@ -3,6 +3,7 @@
 
 import type { SummaryApproval } from "../api/guards/summary.ts";
 import { MAX_REASON_LENGTH } from "../api/writes.ts";
+import { displayableIssueText } from "./intakeText.ts";
 
 /**
  * 承認と却下の操作を出してよい依頼か。承認待ち(pending)で、期限内のものに限る。
@@ -60,16 +61,86 @@ export function rejectProblem(reason: string): string | null {
 /**
  * 取り込み時点のIssueを承認者が見られる状態か。
  * 読み込み中と取得の失敗では、承認者が内容を確かめられないので`ready`にしない。
- * 作業項目に取り込み内容が無いときは、取得が成功しているので、見るものが無いまま`ready`にする。
+ * 作業項目に取り込み内容が無いとき(`data`が`null`)は`empty`にする。確かめる内容が無いまま承認させない。
  */
 export function snapshotReadiness(query: {
   readonly isPending: boolean;
   readonly isError: boolean;
-}): "loading" | "failed" | "ready" {
+  readonly data: unknown;
+}): "loading" | "failed" | "empty" | "ready" {
   if (query.isError) {
     return "failed";
   }
-  return query.isPending ? "loading" : "ready";
+  if (query.isPending) {
+    return "loading";
+  }
+  return query.data === null ? "empty" : "ready";
+}
+
+/** 期限を過ぎた依頼に出す文。 */
+export const EXPIRED_MESSAGE = "期限を過ぎているため、承認も却下もできません。";
+
+/** 本文が長いとき、承認の前にGitHubで全文を確かめるよう求める文。 */
+export const FULL_CHECK_MESSAGE =
+  "本文が長いため、GitHubで全文を確かめるまで承認できません。";
+
+type DecisionSurface = "decide" | "expired" | "redo_issue" | "waiting" | "none";
+
+/**
+ * 詳細に出す操作の面。
+ * 承認待ちで期限内なら`decide`(承認と却下)、期限切れなら`expired`。
+ * 承認済みでIssueをまだ作っていないIssue提案は`redo_issue`(Issueの作成のやり直し)。
+ * それ以外の承認済みは`waiting`、他は`none`にする。
+ */
+export function decisionSurface(
+  approval: Pick<
+    SummaryApproval,
+    "status" | "expires_at" | "kind" | "created_issue_number"
+  >,
+  nowMs: number,
+): DecisionSurface {
+  if (approval.status === "pending") {
+    return isDecidable(approval, nowMs) ? "decide" : "expired";
+  }
+  if (approval.status === "approved") {
+    return approval.kind === "issue_proposal" &&
+      approval.created_issue_number === null
+      ? "redo_issue"
+      : "waiting";
+  }
+  return "none";
+}
+
+/** 承認済みで、操作の要らない依頼に出す文。 */
+export function waitingMessage(kind: string): string {
+  return kind === "issue_proposal"
+    ? "承認済みです。起票を待っています。"
+    : "承認済みです。処理の完了を待っています。";
+}
+
+/**
+ * 承認を送ってよいかの確認。送れない理由の文を返し、送ってよければ`null`。
+ * 承認の確認ダイアログで「承認する」を押した時点にも、同じ確認をやり直す。
+ * ダイアログを開いている間に、期限を過ぎたり、前提が変わったりするためである。
+ */
+export function approveGateProblem(input: {
+  readonly approval: Pick<SummaryApproval, "status" | "expires_at">;
+  readonly nowMs: number;
+  /** 取り込み内容を見られないなど、承認を止める理由。無ければ`null`。 */
+  readonly blockedReason: string | null;
+  readonly fullCheckRequired: boolean;
+  readonly fullChecked: boolean;
+}): string | null {
+  if (input.blockedReason !== null) {
+    return input.blockedReason;
+  }
+  if (!isDecidable(input.approval, input.nowMs)) {
+    return EXPIRED_MESSAGE;
+  }
+  if (input.fullCheckRequired && !input.fullChecked) {
+    return FULL_CHECK_MESSAGE;
+  }
+  return null;
 }
 
 type FactoryLabelChoice = {
@@ -145,6 +216,80 @@ export function approvalConfirmation(input: {
     idLabel,
     consequence: "承認すると、Claudeによる実装が始まります。取り消せません。",
   };
+}
+
+/**
+ * 要件定義の却下の確認ダイアログの文。却下は作り直しになる。
+ * 要件定義以外の却下は確認を求めないので`null`にする。
+ */
+export function rejectConfirmation(input: {
+  readonly kind: string;
+  readonly subject: string;
+  readonly approvalRequestId: number;
+}): ApprovalConfirmation | null {
+  if (input.kind !== "requirements") {
+    return null;
+  }
+  return {
+    subject: input.subject,
+    idLabel: `承認依頼 #${String(input.approvalRequestId)}`,
+    consequence:
+      "却下すると、要件定義を作り直します。作り直しでは、その時点の現在のIssueで、取り込み時点の内容が更新されます。",
+  };
+}
+
+/** Issueの作成のやり直しの確認ダイアログの文。 */
+export function redoConfirmation(input: {
+  readonly subject: string;
+  readonly approvalRequestId: number;
+}): {
+  readonly subject: string;
+  readonly idLabel: string;
+  readonly notes: readonly string[];
+} {
+  return {
+    subject: input.subject,
+    idLabel: `承認依頼 #${String(input.approvalRequestId)}`,
+    notes: [
+      "記録済みのラベルの選択で、Issueの作成をやり直します。",
+      "すでに作られたIssueは、マーカーで見つけて再利用します。",
+      "起票の処理に数分かかることがあるため、承認の直後は押さないでください。",
+    ],
+  };
+}
+
+type ProposalOriginText = {
+  readonly text: string;
+  /** 隠れた文字を置き換えたか。 */
+  readonly replaced: boolean;
+};
+
+/** Issue提案の出どころの文。監査は期間、PRはPRの番号を出し、担当があれば添える。 */
+export function proposalOrigin(proposal: {
+  readonly origin: string;
+  readonly period_label: string | null;
+  readonly pr_number: number | null;
+  readonly claimed_by: string | null;
+}): ProposalOriginText {
+  const parts: string[] = [];
+  let replaced = false;
+  if (proposal.origin === "audit") {
+    if (proposal.period_label === null) {
+      parts.push("監査");
+    } else {
+      const period = displayableIssueText(proposal.period_label);
+      replaced = replaced || period.replaced;
+      parts.push(`監査 ${period.text}`);
+    }
+  } else if (proposal.pr_number !== null) {
+    parts.push(`PR #${String(proposal.pr_number)}`);
+  }
+  if (proposal.claimed_by !== null) {
+    const claimedBy = displayableIssueText(proposal.claimed_by);
+    replaced = replaced || claimedBy.replaced;
+    parts.push(`担当: ${claimedBy.text}`);
+  }
+  return { text: parts.join(" ・ "), replaced };
 }
 
 type ApprovalLinks = {

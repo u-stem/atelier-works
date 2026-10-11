@@ -3,11 +3,19 @@ import { MAX_REASON_LENGTH } from "../api/writes.ts";
 import {
   approvalConfirmation,
   approvalLinks,
+  approveGateProblem,
+  decisionSurface,
+  EXPIRED_MESSAGE,
+  FULL_CHECK_MESSAGE,
   factoryLabelChoice,
   isDecidable,
+  proposalOrigin,
   reasonCounter,
+  redoConfirmation,
+  rejectConfirmation,
   rejectProblem,
   snapshotReadiness,
+  waitingMessage,
   withFactoryLabelArg,
 } from "./approvalDecision.ts";
 
@@ -108,21 +116,27 @@ describe("rejectProblem", () => {
 
 describe("snapshotReadiness", () => {
   test("is loading while the snapshot is pending", () => {
-    expect(snapshotReadiness({ isPending: true, isError: false })).toBe(
-      "loading",
-    );
+    expect(
+      snapshotReadiness({ isPending: true, isError: false, data: undefined }),
+    ).toBe("loading");
   });
 
   test("is failed when the snapshot could not be read", () => {
-    expect(snapshotReadiness({ isPending: false, isError: true })).toBe(
-      "failed",
-    );
+    expect(
+      snapshotReadiness({ isPending: false, isError: true, data: undefined }),
+    ).toBe("failed");
+  });
+
+  test("is empty when the work item has no snapshot", () => {
+    expect(
+      snapshotReadiness({ isPending: false, isError: false, data: null }),
+    ).toBe("empty");
   });
 
   test("is ready when the snapshot is read", () => {
-    expect(snapshotReadiness({ isPending: false, isError: false })).toBe(
-      "ready",
-    );
+    expect(
+      snapshotReadiness({ isPending: false, isError: false, data: {} }),
+    ).toBe("ready");
   });
 });
 
@@ -279,5 +293,214 @@ describe("approvalLinks", () => {
         origin: "pr_fix",
       }).auditReport,
     ).toBeNull();
+  });
+});
+
+const PENDING = {
+  status: "pending",
+  expires_at: null,
+  kind: "issue_proposal",
+  created_issue_number: null,
+};
+
+describe("decisionSurface", () => {
+  test("offers a decision for a pending request in time", () => {
+    expect(decisionSurface(PENDING, NOW)).toBe("decide");
+  });
+
+  test("reports a pending request past its deadline as expired", () => {
+    expect(
+      decisionSurface(
+        { ...PENDING, expires_at: "2026-10-10T00:00:00.000Z" },
+        NOW,
+      ),
+    ).toBe("expired");
+  });
+
+  test("offers to redo an approved proposal without an issue", () => {
+    expect(decisionSurface({ ...PENDING, status: "approved" }, NOW)).toBe(
+      "redo_issue",
+    );
+  });
+
+  test("waits for an approved proposal whose issue exists", () => {
+    expect(
+      decisionSurface(
+        { ...PENDING, status: "approved", created_issue_number: 5 },
+        NOW,
+      ),
+    ).toBe("waiting");
+  });
+
+  test("waits for an approved request of requirements", () => {
+    expect(
+      decisionSurface(
+        { ...PENDING, status: "approved", kind: "requirements" },
+        NOW,
+      ),
+    ).toBe("waiting");
+  });
+
+  test("shows nothing for a rejected request", () => {
+    expect(decisionSurface({ ...PENDING, status: "rejected" }, NOW)).toBe(
+      "none",
+    );
+  });
+});
+
+describe("approveGateProblem", () => {
+  const OPEN = {
+    approval: { status: "pending", expires_at: null },
+    nowMs: NOW,
+    blockedReason: null,
+    fullCheckRequired: false,
+    fullChecked: false,
+  };
+
+  test("lets an open request through", () => {
+    expect(approveGateProblem(OPEN)).toBeNull();
+  });
+
+  test("stops when the snapshot cannot be seen", () => {
+    expect(approveGateProblem({ ...OPEN, blockedReason: "blocked" })).toBe(
+      "blocked",
+    );
+  });
+
+  test("stops a request whose deadline has passed", () => {
+    expect(
+      approveGateProblem({
+        ...OPEN,
+        approval: { status: "pending", expires_at: "2026-10-10T00:00:00.000Z" },
+      }),
+    ).toBe(EXPIRED_MESSAGE);
+  });
+
+  test("stops until a long body is checked on GitHub", () => {
+    expect(approveGateProblem({ ...OPEN, fullCheckRequired: true })).toBe(
+      FULL_CHECK_MESSAGE,
+    );
+  });
+
+  test("lets a long body through once it is checked", () => {
+    expect(
+      approveGateProblem({
+        ...OPEN,
+        fullCheckRequired: true,
+        fullChecked: true,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("rejectConfirmation", () => {
+  test("asks to confirm rejecting requirements", () => {
+    expect(
+      rejectConfirmation({
+        kind: "requirements",
+        subject: "Add feature",
+        approvalRequestId: 7,
+      })?.consequence,
+    ).toContain("現在のIssue");
+  });
+
+  test("does not ask to confirm rejecting a proposal", () => {
+    expect(
+      rejectConfirmation({
+        kind: "issue_proposal",
+        subject: "Fix",
+        approvalRequestId: 7,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("redoConfirmation", () => {
+  const confirmation = redoConfirmation({
+    subject: "Fix flaky test",
+    approvalRequestId: 8,
+  });
+
+  test("says that the recorded label choice is reused", () => {
+    expect(confirmation.notes.join("")).toContain("記録済みのラベルの選択");
+  });
+
+  test("says that an existing issue is reused by its marker", () => {
+    expect(confirmation.notes.join("")).toContain("マーカー");
+  });
+
+  test("warns not to press it right after approving", () => {
+    expect(confirmation.notes.join("")).toContain("直後は押さないで");
+  });
+});
+
+describe("proposalOrigin", () => {
+  test("names the audit period", () => {
+    expect(
+      proposalOrigin({
+        origin: "audit",
+        period_label: "2026-10-01〜2026-10-07",
+        pr_number: null,
+        claimed_by: null,
+      }).text,
+    ).toBe("監査 2026-10-01〜2026-10-07");
+  });
+
+  test("names the pull request and the assignee", () => {
+    expect(
+      proposalOrigin({
+        origin: "pr_fix",
+        period_label: null,
+        pr_number: 12,
+        claimed_by: "worker",
+      }).text,
+    ).toBe("PR #12 ・ 担当: worker");
+  });
+
+  test("reports a hidden character in the period label", () => {
+    expect(
+      proposalOrigin({
+        origin: "audit",
+        period_label: "a\u200Bb",
+        pr_number: null,
+        claimed_by: null,
+      }).replaced,
+    ).toBe(true);
+  });
+
+  test("reports a hidden character in the assignee", () => {
+    expect(
+      proposalOrigin({
+        origin: "pr_fix",
+        period_label: null,
+        pr_number: null,
+        claimed_by: "a\u202Eb",
+      }).replaced,
+    ).toBe(true);
+  });
+
+  test("does not report plain text", () => {
+    expect(
+      proposalOrigin({
+        origin: "pr_fix",
+        period_label: null,
+        pr_number: 1,
+        claimed_by: "worker",
+      }).replaced,
+    ).toBe(false);
+  });
+});
+
+describe("waitingMessage", () => {
+  test("says that the issue creation is awaited for a proposal", () => {
+    expect(waitingMessage("issue_proposal")).toBe(
+      "承認済みです。起票を待っています。",
+    );
+  });
+
+  test("says that the processing is awaited for other kinds", () => {
+    expect(waitingMessage("requirements")).toBe(
+      "承認済みです。処理の完了を待っています。",
+    );
   });
 });

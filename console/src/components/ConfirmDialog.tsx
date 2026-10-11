@@ -4,12 +4,13 @@ import { Button } from "./ui/button.tsx";
 /**
  * 取り消せない操作の確認ダイアログ。ブラウザ標準の`<dialog>`をモーダルで開く。
  * Escで閉じ、背面の操作を止め、フォーカスをダイアログの中に留める。
- * 最初のフォーカスは取り消しのボタンに置く。Enterの押し間違いで実行させないためである。
+ * 開いたら、取り消しのボタンにフォーカスを置く。Enterの押し間違いで実行させないためである。
  */
 export function ConfirmDialog({
   open,
   title,
   confirmLabel,
+  destructive = false,
   busy,
   onConfirm,
   onCancel,
@@ -18,6 +19,8 @@ export function ConfirmDialog({
   open: boolean;
   title: string;
   confirmLabel: string;
+  /** 確認のボタンを、破壊的な操作の色にする。 */
+  destructive?: boolean;
   /** 実行中。確認のボタンを押せなくする。 */
   busy: boolean;
   onConfirm: () => void;
@@ -25,6 +28,7 @@ export function ConfirmDialog({
   children: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const dialog = ref.current;
@@ -33,6 +37,7 @@ export function ConfirmDialog({
     }
     if (open && !dialog.open) {
       dialog.showModal();
+      cancelRef.current?.focus();
     } else if (!open && dialog.open) {
       dialog.close();
     }
@@ -51,10 +56,14 @@ export function ConfirmDialog({
         </h2>
         <div className="flex flex-col gap-2 text-body">{children}</div>
         <div className="flex justify-end gap-2">
-          <Button variant="outline" autoFocus onClick={onCancel}>
+          <Button ref={cancelRef} variant="outline" onClick={onCancel}>
             取り消す
           </Button>
-          <Button disabled={busy} onClick={onConfirm}>
+          <Button
+            variant={destructive ? "destructive" : "default"}
+            disabled={busy}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </Button>
         </div>
