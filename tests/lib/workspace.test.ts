@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -29,6 +30,7 @@ import {
   ensureFactoryClone,
   ensureHeadOnBranch,
   ensureRepo,
+  FIXED_GIT_CONFIG,
   factoryCloneLockPath,
   fetchPrHeadRef,
   formatGitleaksReport,
@@ -428,7 +430,7 @@ describe("ensureRepo", () => {
     expect(dashDashIndex).toBeGreaterThan(-1);
   });
 
-  test("resets credential.helper and disables hooks/fsmonitor on every call", async () => {
+  test("disables hooks with core.hooksPath on the fetch call", async () => {
     const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
       run: fake.run,
@@ -534,6 +536,192 @@ describe("ensureRepo", () => {
     expect(argv).toEqual(
       expect.arrayContaining(["config", "core.symlinks", "false"]),
     );
+  });
+});
+
+/** gitのargvにある`-c key=value`の`key=value`を、並んだ順に返す。 */
+function commandLineConfig(argv: readonly string[]): string[] {
+  return argv.flatMap((arg, index) =>
+    arg === "-c" && argv[index + 1] !== undefined
+      ? [argv[index + 1] ?? ""]
+      : [],
+  );
+}
+
+describe("git config isolation", () => {
+  /** `ensureRepo`が、fetch(ネットワーク)と`git config`(ローカル)の順に実行したgitの呼び出しを返す。 */
+  async function fetchAndConfigCalls() {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureRepo({
+      run: fake.run,
+      owner: "acme",
+      repo: "widgets",
+      ghToken: "gh-token",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    return { network: fake.calls[1], local: fake.calls[2] };
+  }
+
+  test("local git does not read the global config", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+  });
+
+  test("local git does not read the system config (GIT_CONFIG_NOSYSTEM)", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  test("local git does not read the system config (GIT_CONFIG_SYSTEM)", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_SYSTEM).toBe("/dev/null");
+  });
+
+  test("local git does not read the system attributes", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_ATTR_NOSYSTEM).toBe("1");
+  });
+
+  test("network git does not read the global config", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+  });
+
+  test("network git does not read the system config", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  test("fixes exactly these config keys", () => {
+    expect(FIXED_GIT_CONFIG.map(([key]) => key).sort()).toEqual([
+      "commit.gpgsign",
+      "core.askPass",
+      "core.attributesFile",
+      "core.excludesFile",
+      "core.fsmonitor",
+      "core.hooksPath",
+      "core.symlinks",
+      "credential.helper",
+      "push.gpgSign",
+    ]);
+  });
+
+  test.each([...FIXED_GIT_CONFIG])(
+    "local git fixes %s=%s on the command line",
+    async (key, value) => {
+      const { local } = await fetchAndConfigCalls();
+      expect(commandLineConfig(local?.argv ?? [])).toContain(`${key}=${value}`);
+    },
+  );
+
+  test.each([...FIXED_GIT_CONFIG])(
+    "network git fixes %s=%s on the command line",
+    async (key, value) => {
+      const { network } = await fetchAndConfigCalls();
+      expect(commandLineConfig(network?.argv ?? [])).toContain(
+        `${key}=${value}`,
+      );
+    },
+  );
+
+  test("network git adds the gh credential helper after the fixed empty one", async () => {
+    const { network } = await fetchAndConfigCalls();
+    const config = commandLineConfig(network?.argv ?? []);
+    expect(config.slice(-2)).toEqual([
+      "credential.helper=",
+      "credential.helper=!gh auth git-credential",
+    ]);
+  });
+
+  test("local git allows only https, over protocol.*.allow in the repo config", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test("network git allows only https, so GH_TOKEN never reaches another transport", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test("keeps the global config off when HOME is unset", async () => {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      const fake = createFakeCommandRunner([ok("abc\n")]);
+      await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
+      expect(fake.calls[0]?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    } finally {
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+    }
+  });
+
+  test("does not pass HOME when HOME is unset", async () => {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      const fake = createFakeCommandRunner([ok("abc\n")]);
+      await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
+      expect(fake.calls[0]?.options?.env).not.toHaveProperty("HOME");
+    } finally {
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+    }
+  });
+});
+
+describe("git config isolation (real git)", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** 一時ディレクトリに空のリポジトリを作る。`HOME`は別の空のディレクトリにする。 */
+  async function initRepo(prefix: string) {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    roots.push(root);
+    const repo = join(root, "repo");
+    const home = join(root, "home");
+    mkdirSync(repo);
+    mkdirSync(home);
+    const env = { PATH: process.env.PATH ?? "", HOME: root };
+    const init = await runCommand(["git", "init", "-q", repo], { env });
+    expect(init.exitCode).toBe(0);
+    return { root, repo, home };
+  }
+
+  /**
+   * `$HOME/.config/git/ignore`は設定ファイルではないので、`GIT_CONFIG_GLOBAL`では止まらない。
+   * 読まれると、`git clean -fdX`が、リポジトリの`.gitignore`にないファイルを消す。
+   */
+  test("does not read the ignore file under HOME", async () => {
+    const { repo, home } = await initRepo("git-isolation-ignore-");
+    mkdirSync(join(home, ".config", "git"), { recursive: true });
+    writeFileSync(join(home, ".config", "git", "ignore"), "*.cache\n");
+    writeFileSync(join(repo, "work.cache"), "x");
+    await removeIgnoredFiles({ run: runCommand, worktreeDir: repo, home });
+    expect(existsSync(join(repo, "work.cache"))).toBe(true);
+  });
+
+  /**
+   * 検査コマンドが`.git/config`に`protocol.ext.allow=always`と`ext::`のURLを書いても、
+   * `GIT_ALLOW_PROTOCOL`が優先され、コマンドは実行されない。
+   */
+  test("does not run an ext:: remote even if the repo config allows it", async () => {
+    const { root, repo, home } = await initRepo("git-isolation-ext-");
+    const marker = join(root, "marker");
+    const script = join(root, "evil.sh");
+    writeFileSync(script, `#!/bin/sh\ntouch ${marker}\n`);
+    chmodSync(script, 0o755);
+    const config = (args: readonly string[]) =>
+      runCommand(["git", "-C", repo, "config", ...args], {
+        env: { PATH: process.env.PATH ?? "", HOME: root },
+      });
+    await config(["protocol.ext.allow", "always"]);
+    await config(["remote.origin.url", `ext::${script}`]);
+    await fetchPrHeadRef(runCommand, repo, 1, "gh-token", home).catch(
+      () => undefined,
+    );
+    expect(existsSync(marker)).toBe(false);
   });
 });
 
@@ -1246,6 +1434,33 @@ describe("listWorktrees (real git)", () => {
     });
     expect(entries.map((entry) => entry.branch)).toEqual(["main", null]);
   });
+
+  /**
+   * HOMEのグローバル設定が、gitの実行に効かないことを確かめる。
+   * `safe.bareRepository=explicit`はグローバル設定からだけ読まれ、
+   * 暗黙に見つけたbareリポジトリでのgitを拒否するため、読まれたかどうかが結果に出る。
+   */
+  test("does not read the global config under HOME", async () => {
+    const root = mkdtempSync(join(tmpdir(), "list-worktrees-global-"));
+    roots.push(root);
+    const bare = join(root, "bare.git");
+    const home = join(root, "home");
+    mkdirSync(home);
+    writeFileSync(
+      join(home, ".gitconfig"),
+      "[safe]\n\tbareRepository = explicit\n",
+    );
+    const init = await runCommand(["git", "init", "-q", "--bare", bare], {
+      env: { PATH: process.env.PATH ?? "", HOME: root },
+    });
+    expect(init.exitCode).toBe(0);
+    const entries = await listWorktrees({
+      run: runCommand,
+      repoDir: bare,
+      home,
+    });
+    expect(entries).toHaveLength(1);
+  });
 });
 
 /** 別のworktreeが`contract-smoke-branch`をcheckoutしている`git worktree list --porcelain -z`の出力。 */
@@ -1918,7 +2133,7 @@ describe("createGtrWorktree", () => {
     ]);
   });
 
-  test("passes core.symlinks=false to git gtr new via GIT_CONFIG_* env vars (gtr's own argv can't carry -c)", async () => {
+  test("passes core.symlinks=false to git gtr new with -c, which reaches gtr's child gits through the environment", async () => {
     const gtrPorcelain =
       "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
     const fake = createFakeCommandRunner([
@@ -1936,10 +2151,31 @@ describe("createGtrWorktree", () => {
       assertProcessesIdle: idle,
       lockFs: createInMemoryLockFs(),
     });
-    const env = fake.calls[2]?.options?.env ?? {};
-    expect(env.GIT_CONFIG_COUNT).toBe("1");
-    expect(env.GIT_CONFIG_KEY_0).toBe("core.symlinks");
-    expect(env.GIT_CONFIG_VALUE_0).toBe("false");
+    const argv = fake.calls[2]?.argv ?? [];
+    expect(argv.slice(0, argv.indexOf("gtr")).join(" ")).toContain(
+      "-c core.symlinks=false",
+    );
+  });
+
+  test("git gtr new does not read the global config either", async () => {
+    const gtrPorcelain =
+      "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(""),
+      ok(gtrPorcelain),
+      ok(`${NEW_HEAD_SHA}\n`),
+      ok(`${NEW_HEAD_SHA}\n`), // refs/remotes/origin/<branch>
+    ]);
+    await createGtrWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      branch: "new-branch",
+      ghToken: "gh-token",
+      assertProcessesIdle: idle,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[2]?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
   });
 
   describe("processes left by an earlier run", () => {
@@ -4046,6 +4282,8 @@ describe("remote ref reads (real git)", () => {
           PATH: process.env.PATH ?? "",
           HOME: home,
           GIT_CONFIG_NOSYSTEM: "1",
+          // モジュールのgitは本番のhttpsだけを許す。テストのoriginはローカルのパスなので、fileも許す。
+          GIT_ALLOW_PROTOCOL: "https:file",
         },
       });
     const git = async (
@@ -4852,6 +5090,8 @@ describe("pushNewBranch (real git)", () => {
           PATH: process.env.PATH ?? "",
           HOME: home,
           GIT_CONFIG_NOSYSTEM: "1",
+          // モジュールのgitは本番のhttpsだけを許す。テストのoriginはローカルのパスなので、fileも許す。
+          GIT_ALLOW_PROTOCOL: "https:file",
         },
       });
     const git = async (
@@ -6069,7 +6309,8 @@ describe("runGitleaksOnWorktree", () => {
   test("diffs the scanned tree against the base sha as text, without drivers or context", async () => {
     const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[2]?.argv.slice(7)).toEqual([
+    const argv = fake.calls[2]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("diff"))).toEqual([
       "diff",
       "--text",
       "--no-ext-diff",
