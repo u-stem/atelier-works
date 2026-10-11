@@ -49,7 +49,7 @@ function Message({ children }: { children: string }) {
 function LoadingState() {
   return (
     <div
-      className="mx-auto w-full max-w-[75rem] space-y-4 px-8 py-6"
+      className="mx-auto w-full max-w-[75rem] space-y-4 px-4 py-6 md:px-8"
       role="status"
     >
       <span className="sr-only">読み込み中</span>
@@ -128,7 +128,7 @@ function ItemDetail({ workItemId }: { workItemId: number }) {
         id={ITEM_DETAIL_PANEL_ID}
         role="tabpanel"
         aria-labelledby={panelLabelledBy(tab)}
-        className="min-h-0 flex-1 overflow-y-auto px-8 py-6"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8"
       >
         {tab === "overview" ? <OverviewTab detail={detail} now={now} /> : null}
         {tab === "requirements" ? (

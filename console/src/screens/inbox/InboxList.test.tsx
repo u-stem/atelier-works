@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type {
   SummaryApproval,
+  SummaryFailure,
   SummaryNotice,
 } from "../../api/guards/summary.ts";
 import { TooltipProvider } from "../../components/ui/tooltip.tsx";
@@ -25,9 +26,9 @@ function notice(id: number, message: string): InboxItem {
   return { type: "notice", notice: row };
 }
 
-function approval(): InboxItem {
+function approval(id = 1): InboxItem {
   const row: SummaryApproval = {
-    approval_request_id: 1,
+    approval_request_id: id,
     kind: "requirements",
     status: "pending",
     work_item_id: 10,
@@ -46,6 +47,30 @@ function approval(): InboxItem {
     origin: null,
   };
   return { type: "approval", approval: row };
+}
+
+function failure(): InboxItem {
+  const row: SummaryFailure = {
+    work_item_id: 7,
+    kind: "issue",
+    owner: "o",
+    repo: "r",
+    issue_number: 9,
+    issue_url: null,
+    pr_number: null,
+    title: "Fix bug",
+    status: "failed",
+    updated_at: "2026-10-02T00:00:00.000Z",
+    status_note: null,
+    status_changed_at: null,
+    job_failure_id: null,
+    flow_path: null,
+    job_id: null,
+    step: null,
+    error: null,
+    occurred_at: null,
+  };
+  return { type: "failure", failure: row };
 }
 
 /** `items`を描く。`allItems`は絞り込む前の全体で、省くと`items`と同じにする。 */
@@ -104,5 +129,17 @@ describe("InboxList", () => {
     expect(render([notice(1, `deployed(${SHA_A}) is behind`)])).toContain(
       'title="deployed(0123456) is behind"',
     );
+  });
+
+  test("marks an approval row so that the focus can return to it", () => {
+    expect(render([approval(3)])).toContain('data-row="approval:3"');
+  });
+
+  test("marks a failure row so that the focus can return to it", () => {
+    expect(render([failure()])).toContain('data-row="failure:7"');
+  });
+
+  test("marks a notice row so that the focus can return to it", () => {
+    expect(render([notice(21, SHA_A)])).toContain('data-row="notice:21"');
   });
 });

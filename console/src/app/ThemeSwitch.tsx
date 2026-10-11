@@ -6,6 +6,7 @@ import {
   TooltipTrigger,
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
+import { SELECTED_STYLE } from "../lib/selectedStyle.ts";
 import {
   parseThemePreference,
   THEME_OPTIONS,
@@ -45,6 +46,14 @@ function applyPreference(preference: ThemePreference): void {
   }
 }
 
+/** テーマの選択肢のボタンのクラス。選択中は、他の切り替えと同じ表し方にする。 */
+export function themeOptionClass(pressed: boolean): string {
+  return cn(
+    "inline-flex size-7 items-center justify-center rounded-md border border-transparent text-subtle outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-muted motion-reduce:transition-none",
+    pressed && SELECTED_STYLE,
+  );
+}
+
 /** ライト、ダーク、OSに合わせるの3つを、アイコンの切り替えで選ぶ。 */
 export function ThemeSwitch() {
   const [preference, setPreference] =
@@ -62,10 +71,7 @@ export function ThemeSwitch() {
                 type="button"
                 aria-pressed={pressed}
                 aria-label={option.label}
-                className={cn(
-                  "inline-flex size-7 items-center justify-center rounded-md text-subtle outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                  pressed && "bg-card text-foreground shadow-sm",
-                )}
+                className={themeOptionClass(pressed)}
                 onClick={() => {
                   applyPreference(option.value);
                   setPreference(option.value);

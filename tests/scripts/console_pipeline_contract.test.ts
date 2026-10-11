@@ -10,8 +10,8 @@ import {
   workItemStatusLabel,
 } from "../../console/src/lib/labels.ts";
 import {
-  issueOrPrLink,
   prLink,
+  relatedLinks,
   sortPipelineRows,
 } from "../../console/src/lib/pipelineView.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
@@ -92,7 +92,7 @@ describe("pipeline contract between console_query and the console guard", () => 
   test("keeps the issue link that the console accepts", async () => {
     const delivered = await pipelineAsDelivered([PIPELINE_ROW]);
     const first = isPipelineRows(delivered) ? delivered[0] : undefined;
-    expect(first === undefined ? null : issueOrPrLink(first)?.url).toBe(
+    expect(first === undefined ? null : relatedLinks(first)[0]?.url).toBe(
       "https://github.com/o/r/issues/9",
     );
   });

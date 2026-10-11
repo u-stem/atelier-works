@@ -289,6 +289,69 @@ describe("describeOverview", () => {
     );
   });
 
+  test("drops a status note that is only the pull request URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "https://github.com/o/r/pull/12" }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("drops a status note that is only the issue URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "https://github.com/o/r/issues/9" }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("drops a status note that is the pull request URL built from the number", () => {
+    expect(
+      describeOverview(
+        overview({
+          pr_url: null,
+          status_note: "https://github.com/o/r/pull/12",
+        }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("drops a status note that matches the URL apart from surrounding whitespace", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: " https://github.com/o/r/pull/12\n" }),
+      ).statusNote,
+    ).toBeNull();
+  });
+
+  test("keeps a status note that equals a pull request URL that is not shown", () => {
+    expect(
+      describeOverview(
+        overview({
+          pr_number: null,
+          pr_url: "https://evil.example/pull/12",
+          status_note: "https://evil.example/pull/12",
+        }),
+      ).statusNote,
+    ).toBe("https://evil.example/pull/12");
+  });
+
+  test("keeps a status note that is only another URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "https://github.com/o/r/pull/3" }),
+      ).statusNote,
+    ).toBe("https://github.com/o/r/pull/3");
+  });
+
+  test("keeps a status note that has a sentence around a URL", () => {
+    expect(
+      describeOverview(
+        overview({ status_note: "opened https://github.com/o/r/pull/12" }),
+      ).statusNote,
+    ).toBe("opened https://github.com/o/r/pull/12");
+  });
+
   test("formats the cost", () => {
     expect(describeOverview(overview()).costLabel).toBe("$1.25(3回の実行)");
   });
@@ -313,9 +376,9 @@ describe("formatCostUsd", () => {
 });
 
 describe("formatDiffStat", () => {
-  test("shows the files and the lines", () => {
-    expect(formatDiffStat({ files: 3, added: 10, deleted: 2 })).toBe(
-      "3ファイル +10 -2",
+  test("shows the files and the lines in words", () => {
+    expect(formatDiffStat({ files: 3, added: 17, deleted: 0 })).toBe(
+      "3ファイル・追加17行・削除0行",
     );
   });
 
@@ -325,14 +388,32 @@ describe("formatDiffStat", () => {
 });
 
 describe("describeAttempt", () => {
-  test("links the requirements document of the attempt", () => {
-    expect(describeAttempt(7, attempt()).path).toBe(
+  test("links the requirements document of an older attempt by its number", () => {
+    expect(describeAttempt(7, attempt(), false).path).toBe(
       "/items/7/requirements?attempt=2",
     );
   });
 
+  test("links the latest attempt without a number", () => {
+    expect(describeAttempt(7, attempt(), true).path).toBe(
+      "/items/7/requirements",
+    );
+  });
+
+  test("marks the link of the latest attempt", () => {
+    expect(describeAttempt(7, attempt(), true).linkLabel).toBe(
+      "要件定義書を開く(試行 2・最新)",
+    );
+  });
+
+  test("names the attempt in the link of an older attempt", () => {
+    expect(describeAttempt(7, attempt(), false).linkLabel).toBe(
+      "要件定義書を開く(試行 2)",
+    );
+  });
+
   test("labels the approval status", () => {
-    expect(describeAttempt(7, attempt()).approvalLabel).toBe("承認済み");
+    expect(describeAttempt(7, attempt(), false).approvalLabel).toBe("承認済み");
   });
 
   test("has no approval label without an approval request", () => {
@@ -340,12 +421,15 @@ describe("describeAttempt", () => {
       describeAttempt(
         7,
         attempt({ approval_request_id: null, approval_status: null }),
+        false,
       ).approvalLabel,
     ).toBeNull();
   });
 
   test("replaces hidden characters in the summary", () => {
-    expect(describeAttempt(7, attempt({ summary: "a‮b" })).summary).toBe("a�b");
+    expect(describeAttempt(7, attempt({ summary: "a‮b" }), false).summary).toBe(
+      "a�b",
+    );
   });
 });
 
@@ -376,6 +460,12 @@ describe("describeApproval", () => {
     expect(
       describeApproval(approval({ status: "approved" })).statusVariant,
     ).toBe("success");
+  });
+
+  test("leaves an approval status that is not known yet plain", () => {
+    expect(describeApproval(approval({ status: "zeta" })).statusVariant).toBe(
+      "muted",
+    );
   });
 
   test("labels the kind", () => {
@@ -497,6 +587,12 @@ describe("describeRound", () => {
     ).toBe("failure");
   });
 
+  test("leaves an outcome that is not known yet plain", () => {
+    expect(describeRound(round({ outcome: "zeta" })).outcomeVariant).toBe(
+      "muted",
+    );
+  });
+
   test("shows the raw value of an unknown outcome", () => {
     expect(describeRound(round({ outcome: "new_one" })).outcomeLabel).toBe(
       "不明(new_one)",
@@ -521,7 +617,7 @@ describe("describeRound", () => {
     expect(
       describeRound(round({ diff_stat: { files: 1, added: 2, deleted: 3 } }))
         .diffLabel,
-    ).toBe("1ファイル +2 -3");
+    ).toBe("1ファイル・追加2行・削除3行");
   });
 });
 
@@ -550,6 +646,12 @@ describe("describeReview", () => {
     ).toBe("修正を依頼");
   });
 
+  test("leaves a verdict that is not known yet plain", () => {
+    expect(describeReview(review({ verdict: "zeta" })).verdictVariant).toBe(
+      "muted",
+    );
+  });
+
   test("counts the findings", () => {
     expect(describeReview(review({ finding_count: 3 })).findingLabel).toBe(
       "指摘 3件",
@@ -574,6 +676,12 @@ describe("describeFixRound", () => {
 
   test("labels the outcome", () => {
     expect(describeFixRound(fixRound).outcomeLabel).toBe("ブロック");
+  });
+
+  test("leaves a fix outcome that is not known yet plain", () => {
+    expect(
+      describeFixRound({ ...fixRound, outcome: "zeta" }).outcomeVariant,
+    ).toBe("muted");
   });
 
   test("counts the reviews, replies and commits", () => {
@@ -626,6 +734,13 @@ describe("describeTransition", () => {
 
   test("replaces hidden characters in the note", () => {
     expect(describeTransition(transition({ note: "a‮b" })).note).toBe("a�b");
+  });
+
+  test("keeps a note that is only a URL", () => {
+    expect(
+      describeTransition(transition({ note: "https://github.com/o/r/pull/12" }))
+        .note,
+    ).toBe("https://github.com/o/r/pull/12");
   });
 });
 

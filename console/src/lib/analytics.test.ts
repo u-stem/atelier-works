@@ -1,11 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type {
   AgentCostDailyRow,
   ApprovalStatsRow,
   LeadTimeRow,
 } from "../api/guards/analytics.ts";
 import {
+  chartSeries,
   dailyTotals,
+  fillDailyTotals,
   firstTryApprovalRate,
   formatHours,
   formatIsoDate,
@@ -14,8 +16,10 @@ import {
   formatUsd,
   hitsRowLimit,
   leadTimeByStatus,
+  periodButtonClass,
   rejectionsByAttempt,
 } from "./analytics.ts";
+import { SELECTED_STYLE } from "./selectedStyle.ts";
 
 function costRow(overrides: Partial<AgentCostDailyRow>): AgentCostDailyRow {
   return {
@@ -93,6 +97,223 @@ describe("dailyTotals", () => {
 
   test("returns an empty list for no rows", () => {
     expect(dailyTotals([])).toEqual([]);
+  });
+});
+
+describe("fillDailyTotals", () => {
+  const NOW = new Date("2026-10-11T15:30:00.000Z");
+  const total = (day: string, runCount: number) => ({
+    day,
+    costUsd: runCount,
+    runCount,
+  });
+
+  test("lists every day of the period, ending today", () => {
+    const filled = fillDailyTotals([], 7, NOW);
+    expect(filled.map((entry) => entry.day)).toEqual([
+      "2026-10-05",
+      "2026-10-06",
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11",
+    ]);
+  });
+
+  test("fills a day without runs with zero", () => {
+    const filled = fillDailyTotals([total("2026-10-08", 3)], 7, NOW);
+    expect(filled.find((entry) => entry.day === "2026-10-09")).toEqual({
+      day: "2026-10-09",
+      costUsd: 0,
+      runCount: 0,
+    });
+  });
+
+  test("keeps the totals of a day with runs", () => {
+    const filled = fillDailyTotals([total("2026-10-08", 3)], 7, NOW);
+    expect(filled.find((entry) => entry.day === "2026-10-08")).toEqual(
+      total("2026-10-08", 3),
+    );
+  });
+
+  test("keeps the gap between distant days", () => {
+    const filled = fillDailyTotals(
+      [total("2026-09-28", 1), total("2026-10-08", 1)],
+      30,
+      NOW,
+    );
+    expect(filled.length).toBe(30);
+  });
+
+  test("fills the days between distant days with zero", () => {
+    const filled = fillDailyTotals(
+      [total("2026-09-28", 1), total("2026-10-08", 1)],
+      30,
+      NOW,
+    );
+    expect(filled.find((entry) => entry.day === "2026-10-03")?.runCount).toBe(
+      0,
+    );
+  });
+
+  describe("in a time zone far from UTC", () => {
+    const originalTimeZone = process.env.TZ;
+    beforeEach(() => {
+      process.env.TZ = "Asia/Tokyo";
+    });
+    afterEach(() => {
+      // 未設定のときは`delete`しても実行時の時刻帯が戻らないので、UTCを明示して戻す。
+      process.env.TZ = originalTimeZone ?? "UTC";
+    });
+
+    test("counts the days in UTC rather than the local time zone", () => {
+      // 東京では翌日の朝になる時刻。端末の暦で数えると最後の日が1日進む。
+      const lateInUtcDay = new Date("2026-10-11T23:59:59.000Z");
+      expect(fillDailyTotals([], 7, lateInUtcDay).at(-1)?.day).toBe(
+        "2026-10-11",
+      );
+    });
+  });
+
+  test("crosses a month boundary", () => {
+    const filled = fillDailyTotals([], 7, new Date("2026-11-01T00:00:00.000Z"));
+    expect(filled.slice(-3).map((entry) => entry.day)).toEqual([
+      "2026-10-30",
+      "2026-10-31",
+      "2026-11-01",
+    ]);
+  });
+
+  test("extends the range to a day after today", () => {
+    const filled = fillDailyTotals([total("2026-10-12", 2)], 7, NOW);
+    expect(filled.at(-1)?.day).toBe("2026-10-12");
+  });
+
+  test("extends the range to a day just before the period", () => {
+    const filled = fillDailyTotals([total("2026-10-03", 2)], 7, NOW);
+    expect(filled[0]?.day).toBe("2026-10-03");
+  });
+
+  test("does not list a day far after today", () => {
+    const filled = fillDailyTotals([total("9999-12-31", 2)], 7, NOW);
+    expect(filled.some((entry) => entry.day === "9999-12-31")).toBe(false);
+  });
+
+  test("keeps the number of days bounded for a day far after today", () => {
+    const filled = fillDailyTotals([total("9999-12-31", 2)], 7, NOW);
+    expect(filled.length).toBeLessThanOrEqual(7 + 7);
+  });
+
+  test("does not list a day far before the period", () => {
+    const filled = fillDailyTotals([total("1970-01-01", 2)], 7, NOW);
+    expect(filled.some((entry) => entry.day === "1970-01-01")).toBe(false);
+  });
+
+  test("keeps the number of days bounded when the clock is years behind", () => {
+    const filled = fillDailyTotals(
+      [total("2026-10-08", 2)],
+      7,
+      new Date("2020-01-01T00:00:00.000Z"),
+    );
+    expect(filled.length).toBeLessThanOrEqual(7 + 7);
+  });
+
+  test("keeps the number of days bounded when truncated with a far day", () => {
+    const filled = fillDailyTotals([total("9999-12-31", 2)], 7, NOW, true);
+    expect(filled.length).toBeLessThanOrEqual(7 + 7);
+  });
+
+  test("drops a day that is not a date", () => {
+    const filled = fillDailyTotals([total("unknown", 2)], 7, NOW);
+    expect(filled.some((entry) => entry.day === "unknown")).toBe(false);
+  });
+
+  test("returns the period of zero days for no rows", () => {
+    const filled = fillDailyTotals([], 7, NOW);
+    expect(filled.map((entry) => entry.runCount)).toEqual([
+      0, 0, 0, 0, 0, 0, 0,
+    ]);
+  });
+
+  test("starts after the oldest fetched day when truncated", () => {
+    const filled = fillDailyTotals(
+      [total("2026-10-08", 1), total("2026-10-09", 1)],
+      30,
+      NOW,
+      true,
+    );
+    expect(filled[0]?.day).toBe("2026-10-09");
+  });
+
+  test("leaves out the oldest fetched day when truncated", () => {
+    const filled = fillDailyTotals(
+      [total("2026-10-08", 1), total("2026-10-09", 1)],
+      30,
+      NOW,
+      true,
+    );
+    expect(filled.some((entry) => entry.day === "2026-10-08")).toBe(false);
+  });
+
+  test("keeps the newer fetched days when truncated", () => {
+    const filled = fillDailyTotals(
+      [total("2026-10-08", 1), total("2026-10-09", 5)],
+      30,
+      NOW,
+      true,
+    );
+    expect(filled.find((entry) => entry.day === "2026-10-09")?.runCount).toBe(
+      5,
+    );
+  });
+
+  test("still fills up to today when truncated", () => {
+    const filled = fillDailyTotals([total("2026-10-08", 1)], 30, NOW, true);
+    expect(filled.at(-1)?.day).toBe("2026-10-11");
+  });
+
+  test("fills the whole period when truncated but no day was fetched", () => {
+    expect(fillDailyTotals([], 7, NOW, true).length).toBe(7);
+  });
+});
+
+describe("chartSeries", () => {
+  const NOW = new Date("2026-10-11T15:30:00.000Z");
+  const rows = [
+    costRow({ day: "2026-10-08T00:00:00.000Z", run_count: 2 }),
+    costRow({ day: "2026-10-09T00:00:00.000Z", run_count: 4 }),
+  ];
+
+  test("fills every day of the period when the rows are under the limit", () => {
+    expect(chartSeries(rows, 7, NOW, 3).countData.length).toBe(7);
+  });
+
+  test("starts after the oldest day when the rows reach the limit exactly", () => {
+    expect(chartSeries(rows, 7, NOW, 2).countData[0]?.key).toBe("2026-10-09");
+  });
+
+  test("labels each day for the axis", () => {
+    expect(chartSeries(rows, 7, NOW, 3).countData[3]?.label).toBe("10/8");
+  });
+
+  test("takes the run count of a day as its count value", () => {
+    expect(chartSeries(rows, 7, NOW, 3).countData[4]?.value).toBe(4);
+  });
+
+  test("takes the cost of a day as its cost value", () => {
+    expect(
+      chartSeries([costRow({ total_cost_usd: 1.5 })], 7, NOW, 3).costData[3]
+        ?.value,
+    ).toBe(1.5);
+  });
+
+  test("returns the series of the period for the requested number of days", () => {
+    expect(chartSeries(rows, 30, NOW, 3).costData.length).toBe(30);
+  });
+
+  test("returns empty series for no rows", () => {
+    expect(chartSeries([], 7, NOW, 3)).toEqual({ costData: [], countData: [] });
   });
 });
 
@@ -228,5 +449,15 @@ describe("hitsRowLimit", () => {
 
   test("is false below the limit", () => {
     expect(hitsRowLimit(1999, 2000)).toBe(false);
+  });
+});
+
+describe("periodButtonClass", () => {
+  test("marks the selected period like the other switches", () => {
+    expect(periodButtonClass(true)).toBe(SELECTED_STYLE);
+  });
+
+  test("leaves the other periods plain", () => {
+    expect(periodButtonClass(false)).toBe("");
   });
 });
