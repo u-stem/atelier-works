@@ -67,8 +67,11 @@ export type RefreshIntakeDeps = {
     intake: { readonly title: string; readonly body: string },
     note: string,
   ) => Promise<boolean>;
-  /** 更新できたときに、noticeとDiscordで承認者に知らせる。失敗しても更新は戻さない。 */
-  readonly announce: () => Promise<void>;
+  /** 更新できたときに、noticeとDiscordで承認者に知らせる。更新後の内容を受け取る。失敗しても更新は戻さない。 */
+  readonly announce: (updated: {
+    readonly title: string;
+    readonly body: string;
+  }) => Promise<void>;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
 };
 
@@ -113,7 +116,7 @@ export async function refreshIntakeFromIssue(
     return "write_failed";
   }
   try {
-    await deps.announce();
+    await deps.announce({ title: live.title, body: live.body });
   } catch (err) {
     deps.log("could not announce the intake refresh", {
       error: messageOf(err),

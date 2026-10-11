@@ -1279,6 +1279,69 @@ check(
     )) === false,
 );
 
+// 取り込み内容の更新は、承認待ちの作業項目とPRの作業項目には効かない。
+// 題名は変わらず、履歴の行も増えない。
+async function eventCount(id: number): Promise<number> {
+  const rows = await sql`
+    SELECT count(*) AS n FROM factory.work_item_events WHERE work_item_id = ${id}::bigint
+  `.fetch();
+  return Number(rows[0]?.n);
+}
+async function titleOf(id: number): Promise<unknown> {
+  const rows = await sql`
+    SELECT title FROM factory.work_items WHERE id = ${id}::bigint
+  `.fetch();
+  return rows[0]?.title;
+}
+const awaitingItem = await issueWorkItem(
+  9003,
+  1,
+  "awaiting_approval",
+  "qdb awaiting",
+);
+const awaitingEventsBefore = await eventCount(awaitingItem);
+check(
+  "intake refresh: does not update a work item that is awaiting approval",
+  (await updateIntakeIfRegenerating(
+    awaitingItem,
+    { title: "changed", body: "y" },
+    refreshNote,
+    sql,
+  )) === false &&
+    (await titleOf(awaitingItem)) === "qdb awaiting" &&
+    (await eventCount(awaitingItem)) === awaitingEventsBefore,
+);
+const prRefreshItem = await prWorkItem(
+  "pr_review",
+  9004,
+  "requirements_generating",
+  "qdb pr",
+);
+const prEventsBefore = await eventCount(prRefreshItem);
+check(
+  "intake refresh: does not update a pull request work item",
+  (await updateIntakeIfRegenerating(
+    prRefreshItem,
+    { title: "changed", body: "y" },
+    refreshNote,
+    sql,
+  )) === false &&
+    (await titleOf(prRefreshItem)) === "qdb pr" &&
+    (await eventCount(prRefreshItem)) === prEventsBefore,
+);
+
+// 取り込み内容の更新の行は、状態の注記に出さない。却下の理由が押しのけられないようにする。
+execPsql(
+  target,
+  `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(refreshItem)}, 'awaiting_approval', 'requirements_generating', 'qdb reject reason', now() - interval '1 hour')`,
+);
+const refreshDetail = await runWorkItemDetail(refreshItem, sql);
+check(
+  "intake refresh: the status note keeps the earlier transition note",
+  refreshDetail.work_item.status_note === "qdb reject reason",
+  refreshDetail.work_item.status_note,
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);

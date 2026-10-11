@@ -591,16 +591,24 @@ async function run(
             getIssue(client, workItem.owner, workItem.repo, intakeIssueNumber),
           writeIntake: (intake, note) =>
             updateIntakeIfRegenerating(workItem.id, intake, note),
-          announce: async () => {
-            await addNotice({
-              kind: INTAKE_REFRESHED_NOTICE_KIND,
-              message: buildIntakeRefreshedNoticeMessage({
-                owner: workItem.owner,
-                repo: workItem.repo,
-                issue_number: intakeIssueNumber,
+          announce: async (updated) => {
+            // noticeの失敗でDiscordへの通知を止めない。どちらも承認者に知らせる手段である。
+            try {
+              await addNotice({
+                kind: INTAKE_REFRESHED_NOTICE_KIND,
+                message: buildIntakeRefreshedNoticeMessage({
+                  owner: workItem.owner,
+                  repo: workItem.repo,
+                  issue_number: intakeIssueNumber,
+                  work_item_id: workItem.id,
+                }),
+              });
+            } catch (err) {
+              log.warn("failed to record the intake refresh notice", {
                 work_item_id: workItem.id,
-              }),
-            });
+                error: messageOf(err),
+              });
+            }
             await notifyBestEffort(
               webhookUrl,
               {
@@ -610,7 +618,7 @@ async function run(
                 repo: workItem.repo,
                 issue_number: intakeIssueNumber,
                 issue_url: workItem.issue_url ?? "",
-                title: workItem.title ?? "",
+                title: updated.title,
               },
               log,
             );

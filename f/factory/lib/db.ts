@@ -809,6 +809,7 @@ export async function updateIntakeIfRegenerating(
   intake: { readonly title: string; readonly body: string },
   note: string,
   sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
 ): Promise<boolean> {
   const rows = await sql`
     WITH updated AS (
@@ -818,8 +819,8 @@ export async function updateIntakeIfRegenerating(
         AND kind = 'issue' AND status = 'requirements_generating' AND flow_job_id IS NULL
       RETURNING id
     )
-    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-    SELECT id, 'requirements_generating', 'requirements_generating', ${note}
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT id, 'requirements_generating', 'requirements_generating', ${note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
     FROM updated
     RETURNING work_item_id
   `.fetch();

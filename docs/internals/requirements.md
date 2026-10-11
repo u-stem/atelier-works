@@ -178,7 +178,8 @@ raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer
 承認者が見た内容のハッシュに結び付ければ防げるが、承認の操作は旧Consoleにあり、旧Consoleは取り込み時点の内容を出さないので、今は採れない。
 実装を終えたときの、PR本文の注記が残りを拾う。
 
-`github_token`を読むのは、Console用のworkerの`retry_work_item`に続いて2つ目の例外である([セキュリティ](../security.md)の「Console用workerの境界」を参照)。
+Console用のworkerで動くscriptのうち、`github_token`を読むのは、`retry_work_item`と`approval_decide`である。
+`approval_decide`は2つ目の例外にあたる([セキュリティ](../security.md)の「Console用workerの境界」を参照)。
 
 ### 要件定義の承認の反映
 

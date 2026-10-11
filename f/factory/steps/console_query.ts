@@ -1210,6 +1210,7 @@ export async function runConsoleSummary(
       SELECT e.note, e.occurred_at
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+        AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true
@@ -1599,6 +1600,7 @@ export async function runWorkItemDetail(
       SELECT e.note
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+        AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true

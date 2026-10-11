@@ -121,6 +121,18 @@ describe("refreshIntakeFromIssue", () => {
     expect(await refreshIntakeFromIssue(refreshDeps().deps)).toBe("updated");
   });
 
+  test("hands the updated content to the announcement", async () => {
+    const seen: { title: string; body: string }[] = [];
+    const h = refreshDeps({
+      getIssue: async () => ({ title: "New title", body: "New body" }),
+      announce: async (updated) => {
+        seen.push(updated);
+      },
+    });
+    await refreshIntakeFromIssue(h.deps);
+    expect(seen).toEqual([{ title: "New title", body: "New body" }]);
+  });
+
   test("announces after writing", async () => {
     const h = refreshDeps();
     await refreshIntakeFromIssue(h.deps);

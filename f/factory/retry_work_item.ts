@@ -597,7 +597,7 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   const issueNumber = workItem.issue_number;
   if (shouldRefreshIntakeOnRestart(workItem, plan) && issueNumber !== null) {
     // Console用のworkerには`gh`が無いので、`fetch`で読む。
-    // 通知はnoticeだけにする。Discordのwebhookは、このworkerに読ませない。
+    // 通知はnoticeだけにする。このscriptは`discord_webhook_url`を読まない。
     await refreshIntakeFromIssue({
       snapshot: workItem,
       getIssue: async () =>

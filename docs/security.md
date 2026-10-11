@@ -137,7 +137,7 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
 親プロセスが`fetch`で使う秘密値は、次の3か所である。
 
-- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
+- Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
 - Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
 - Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。URLそのものが秘密なので、エラーメッセージとログには含めない。
 
@@ -372,9 +372,11 @@ Podmanは対象外である。
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - tag`console`のscriptは、管理者の`DATABASE_URL`か`wmill.getVariable()`で、Windmillのsecret変数を読める。
   読める変数には`f/factory/claude_oauth_token`と`f/factory/github_token`がある。
-  `retry_work_item`が実際に読むのは、取り消された作業項目の再開のときの`github_token`である。
+  `retry_work_item`が実際に読むのは、次の2つのときの`github_token`である。
+  取り消された作業項目の再開のときの、対象の状態の確認。
+  Issueの要件定義を作り直す再実行のときの、取り込み内容の更新。
   `approval_decide`が読むのは、要件定義の承認のときの`github_token`である。
-  Console用のworkerで動くscriptから`github_token`を読むのは、この2つに限る取り決めである。強制はしない。
+  Console用のworkerで動くscriptから`github_token`を読むのは、この2つのscriptに限る取り決めである。強制はしない。
   マウントの制限で守るのは、Claude Codeとghの設定と履歴のファイルだけである。
   トークンそのものは守らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
@@ -1285,6 +1287,8 @@ forkの内容は第三者が書いたもので、信頼してレビューに渡�
   起票者を信頼せず、ラベルを付ける人が内容を確かめる前提は、却下を挟むと弱まる。
   更新を承認者に知らせる通知(Discordとnotice)、Consoleの承認画面の警告、PR本文の注記で緩和している。
   旧Consoleの承認タブには、警告が出ない。
+- 却下の理由が`intake refreshed from the current issue`で始まると、更新していなくても、取り込み直しの印として数えられ、警告とPR本文の注記が出る。
+  警告が増える方向だけの誤りなので、許容する。
 - 起票者がIssueを書き換え続けると、承認を止め続けられる。
   書き換えのたびに承認が断られ、却下で作り直すとClaudeの実行と試行が1回ずつ減り、`max_attempts`に達すると人の対応待ちになる。
   起票者を信頼できないリポジトリ、特に公開リポジトリを対象とする前には、ラベルを付けた後のIssueをロックし、編集を止める運用を決める。
