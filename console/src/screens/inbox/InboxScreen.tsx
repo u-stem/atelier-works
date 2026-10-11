@@ -1,4 +1,4 @@
-import { LogIn } from "lucide-react";
+import { ArrowLeft, LogIn } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import {
@@ -17,6 +17,11 @@ import {
 } from "../../components/ui/alert.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Skeleton } from "../../components/ui/skeleton.tsx";
+import {
+  inboxDetailClass,
+  inboxListClass,
+  inboxPane,
+} from "../../lib/inboxPane.ts";
 import {
   type InboxSelection,
   parseSelection,
@@ -46,7 +51,7 @@ function LoadingState() {
   return (
     <div className="flex min-h-0 flex-1" role="status">
       <span className="sr-only">読み込み中</span>
-      <div className="w-80 shrink-0 border-r border-border min-[1280px]:w-[28rem]">
+      <div className="w-full shrink-0 border-border lg:w-80 lg:border-r min-[1280px]:w-[28rem]">
         {["a", "b", "c", "d"].map((key) => (
           <div
             key={key}
@@ -60,7 +65,7 @@ function LoadingState() {
           </div>
         ))}
       </div>
-      <div className="flex-1 space-y-4 p-8">
+      <div className="hidden flex-1 space-y-4 p-8 lg:block">
         <Skeleton className="h-5 w-20" />
         <Skeleton className="h-8 w-2/3" />
         <Skeleton className="h-40 w-full max-w-3xl rounded-xl" />
@@ -117,6 +122,7 @@ function FailureState({
  * 要対応の画面。項目を新しい順に並べ、種類のチップで絞り込む。
  * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない。
  * 一覧が空のときは、画面を割らずに状況の面を出す。
+ * 幅が狭いとき(lg未満)は一覧と詳細を1画面ずつ出し、詳細の「一覧へ戻る」で選択を外して一覧へ戻る。
  * 一覧と詳細は別々にスクロールする。一覧の行は選ぶだけで、承認・却下、再実行、通知の解決などの操作は詳細のペインに置く。
  */
 export function InboxScreen() {
@@ -182,12 +188,13 @@ export function InboxScreen() {
 
   const visible = filterInboxItems(items, activeChip);
   const chips = visibleChips(items);
+  const pane = inboxPane(selection);
 
   return (
     <>
       {header}
       {chips.length === 0 && unlisted.length === 0 ? null : (
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-8 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-4 py-3 md:px-8">
           {chips.length === 0 ? (
             <span className="text-small font-medium text-muted-foreground">
               ほかに対応が必要なもの
@@ -211,10 +218,7 @@ export function InboxScreen() {
         </div>
       )}
       <div className="flex min-h-0 flex-1">
-        <section
-          aria-label="要対応の一覧"
-          className="w-80 shrink-0 overflow-y-auto border-r border-border bg-card min-[1280px]:w-[28rem]"
-        >
+        <section aria-label="要対応の一覧" className={inboxListClass(pane)}>
           <InboxList
             items={visible}
             selected={selection}
@@ -224,8 +228,20 @@ export function InboxScreen() {
         </section>
         <section
           aria-label="選んだ項目の概要"
-          className="min-w-0 flex-1 overflow-y-auto"
+          className={inboxDetailClass(pane)}
         >
+          <div className="border-b border-border px-4 py-2 lg:hidden">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                select(null);
+              }}
+            >
+              <ArrowLeft aria-hidden="true" />
+              一覧へ戻る
+            </Button>
+          </div>
           <InboxDetail
             item={findInboxItem(items, selection)}
             selection={selection}

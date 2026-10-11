@@ -5,7 +5,6 @@ import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import { displayableIssueText } from "../../lib/intakeText.ts";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import {
   DEFAULT_PIPELINE_SORT,
@@ -17,7 +16,6 @@ import {
   itemRequirementsPath,
   nextPipelineSort,
   type PipelineFilter,
-  type PipelineLink,
   type PipelineSort,
   type PipelineSortKey,
   pipelineStatusLabel,
@@ -29,33 +27,11 @@ import {
   sortPipelineRows,
   statusOptions,
 } from "../../lib/pipelineView.ts";
+import { PipelineCards } from "./PipelineCards.tsx";
+import { ExternalLink, PlainText } from "./PipelineParts.tsx";
 
 const FIELD_CLASS =
   "h-9 rounded-md border border-input bg-card px-2 text-body text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring";
-
-function ExternalLink({ link }: { link: PipelineLink | null }) {
-  if (link === null) {
-    return <span className="text-subtle">-</span>;
-  }
-  return (
-    <a
-      href={link.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="rounded-sm tabular-nums underline underline-offset-2"
-    >
-      {link.label}
-    </a>
-  );
-}
-
-/** 題名やブランチのように、Issueの起票者や外のコードが決める文字。見えない文字を落としてから文字として出す。 */
-function PlainText({ value }: { value: string | null }) {
-  if (value === null || value.length === 0) {
-    return <span className="text-subtle">-</span>;
-  }
-  return <>{displayableIssueText(value).text}</>;
-}
 
 function sortIcon(sort: PipelineSort, key: PipelineSortKey) {
   if (sort.key !== key) {
@@ -296,63 +272,68 @@ export function PipelineTable({
           条件に合う作業項目はありません
         </p>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-border bg-card">
-          <table className="w-full min-w-[72rem] border-collapse text-body">
-            <thead className="text-small text-muted-foreground">
-              <tr>
-                <SortableHeader
-                  label="作業項目"
-                  sortKey="work_item_id"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <PlainHeader label="題名" />
-                <PlainHeader label="種別" />
-                <SortableHeader
-                  label="状態"
-                  sortKey="status"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <SortableHeader
-                  label="リポジトリ"
-                  sortKey="repo"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <PlainHeader label="Issue/PR" />
-                <PlainHeader label="ブランチ" />
-                <PlainHeader label="PR" />
-                <SortableHeader
-                  label="試行"
-                  sortKey="attempt"
-                  sort={sort}
-                  onSort={onSort}
-                  numeric
-                />
-                <SortableHeader
-                  label="修正回数"
-                  sortKey="fix_round"
-                  sort={sort}
-                  onSort={onSort}
-                  numeric
-                />
-                <SortableHeader
-                  label="更新"
-                  sortKey="updated_at"
-                  sort={sort}
-                  onSort={onSort}
-                />
-                <PlainHeader label="書類" />
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((row) => (
-                <PipelineRowView key={row.work_item_id} row={row} now={now} />
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="md:hidden">
+            <PipelineCards rows={visible} now={now} />
+          </div>
+          <div className="hidden overflow-x-auto rounded-xl border border-border bg-card md:block">
+            <table className="w-full min-w-[72rem] border-collapse text-body">
+              <thead className="text-small text-muted-foreground">
+                <tr>
+                  <SortableHeader
+                    label="作業項目"
+                    sortKey="work_item_id"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <PlainHeader label="題名" />
+                  <PlainHeader label="種別" />
+                  <SortableHeader
+                    label="状態"
+                    sortKey="status"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <SortableHeader
+                    label="リポジトリ"
+                    sortKey="repo"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <PlainHeader label="Issue/PR" />
+                  <PlainHeader label="ブランチ" />
+                  <PlainHeader label="PR" />
+                  <SortableHeader
+                    label="試行"
+                    sortKey="attempt"
+                    sort={sort}
+                    onSort={onSort}
+                    numeric
+                  />
+                  <SortableHeader
+                    label="修正回数"
+                    sortKey="fix_round"
+                    sort={sort}
+                    onSort={onSort}
+                    numeric
+                  />
+                  <SortableHeader
+                    label="更新"
+                    sortKey="updated_at"
+                    sort={sort}
+                    onSort={onSort}
+                  />
+                  <PlainHeader label="書類" />
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((row) => (
+                  <PipelineRowView key={row.work_item_id} row={row} now={now} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
