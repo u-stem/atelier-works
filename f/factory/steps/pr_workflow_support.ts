@@ -2580,6 +2580,17 @@ const CHECK_OUTPUT_TAIL_CHARS = 2000;
 
 export const CHECK_COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
 
+/**
+ * 検査コマンドに渡す`PATH`。workerのPATHは引き継がず、この固定値を使う。
+ * workerのPATHに、rootのホームや書き込める一時ディレクトリが入っていても、
+ * そこに置かれた実行ファイルを検査コマンドが名前の解決で拾わないようにするため。
+ * workerのイメージでは、bun・node・git・wmillが`/usr/bin`に、ghとgitleaksが`/usr/local/bin`に、
+ * goが`/usr/local/go/bin`にある。どれもrootが所有する。
+ * 値の説明は`docs/security.md`の「検査コマンドはフローが実行する」にある。
+ */
+export const CHECK_COMMAND_PATH =
+  "/usr/local/bin:/usr/bin:/bin:/usr/local/go/bin";
+
 export type CheckHomeDir = {
   readonly path: string;
   readonly cleanup: () => Promise<void>;
@@ -2608,7 +2619,7 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
 
 /**
  * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
- * 環境変数は最小限を明示的に渡し(PATHと新しい非公開のHOMEだけで、秘密は引き継がない。
+ * 環境変数は最小限を明示的に渡し(固定のPATH(`CHECK_COMMAND_PATH`)と新しい非公開のHOMEだけで、秘密は引き継がない。
  * `docs/internals/pr-workflow.md`の「検査コマンドの実行」)、終わったらHOMEのディレクトリを消す。
  * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
  * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
@@ -2629,12 +2640,11 @@ export async function runAllowedCheckCommands(
   commands: readonly string[],
   timeoutMs: number,
   createHomeDir: CreateCheckHomeDir = defaultCreateCheckHomeDir,
-  path: string | undefined = process.env.PATH,
+  path: string = CHECK_COMMAND_PATH,
 ): Promise<CheckCommandResult[]> {
   const homeDir = await createHomeDir();
   try {
-    const env: Record<string, string> = { HOME: homeDir.path };
-    if (path !== undefined) env.PATH = path;
+    const env: Record<string, string> = { HOME: homeDir.path, PATH: path };
 
     const results: CheckCommandResult[] = [];
     for (const command of commands) {
