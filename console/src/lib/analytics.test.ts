@@ -14,8 +14,10 @@ import {
   formatUsd,
   hitsRowLimit,
   leadTimeByStatus,
+  periodButtonClass,
   rejectionsByAttempt,
 } from "./analytics.ts";
+import { SELECTED_STYLE } from "./selectedStyle.ts";
 
 function costRow(overrides: Partial<AgentCostDailyRow>): AgentCostDailyRow {
   return {
@@ -228,5 +230,15 @@ describe("hitsRowLimit", () => {
 
   test("is false below the limit", () => {
     expect(hitsRowLimit(1999, 2000)).toBe(false);
+  });
+});
+
+describe("periodButtonClass", () => {
+  test("marks the selected period like the other switches", () => {
+    expect(periodButtonClass(true)).toBe(SELECTED_STYLE);
+  });
+
+  test("leaves the other periods plain", () => {
+    expect(periodButtonClass(false)).toBe("");
   });
 });

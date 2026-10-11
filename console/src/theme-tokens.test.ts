@@ -125,8 +125,21 @@ const PAIRS: Pair[] = [
   { fg: "ring", bg: "card", min: 3 },
   { fg: "ring", bg: "sidebar", min: 3 },
   { fg: "primary", bg: "sidebar", min: 3 },
+  // 選択中の切り替え(期間、種類、テーマ)の枠線は、トラック(muted)の上に載る。
+  // 選択中の面(selected)はトラックとの明るさの差が小さいので、藍の枠線が未選択との違いを担う。
+  // 面(card、selected)の上は、上の4.5の検査に含まれる。
+  { fg: "primary", bg: "muted", min: 3 },
   ...MEANING_SURFACES.map((bg): Pair => ({ fg: "notice-mark", bg, min: 3 })),
 ];
+
+// 「X-foreground」は、対になる「X」の面に載せる文字色である。
+// PAIRSへの書き漏らしを防ぐため、定義されたすべての組を検査する。
+const FOREGROUND_PAIRS: Pair[] = [...TOKENS.keys()].flatMap((name): Pair[] => {
+  const base = name.slice(0, -"-foreground".length);
+  return name.endsWith("-foreground") && TOKENS.has(base)
+    ? [{ fg: name, bg: base, min: 4.5 }]
+    : [];
+});
 
 describe("theme tokens", () => {
   test("keeps the muted badge background at the tint the pairs assume", () => {
@@ -138,6 +151,23 @@ describe("theme tokens", () => {
   test("defines the tokens that the pairs use", () => {
     expect(TOKENS.size).toBeGreaterThan(30);
   });
+
+  test("finds the foreground pairs in index.css", () => {
+    expect(FOREGROUND_PAIRS.length).toBeGreaterThanOrEqual(10);
+  });
+
+  for (const [scheme, slot] of [
+    ["light", 0],
+    ["dark", 1],
+  ] as const) {
+    describe(`${scheme} foreground pairs`, () => {
+      test.each(FOREGROUND_PAIRS)("$fg on $bg keeps its contrast", (pair) => {
+        expect(
+          contrastRatio(color(pair.fg, slot), color(pair.bg, slot)),
+        ).toBeGreaterThanOrEqual(pair.min);
+      });
+    });
+  }
 
   for (const [index, scheme] of (["light", "dark"] as const).entries()) {
     const slot = index === 0 ? 0 : 1;

@@ -27,6 +27,7 @@ import {
   formatUsd,
   hitsRowLimit,
   leadTimeByStatus,
+  periodButtonClass,
   rejectionsByAttempt,
 } from "../../lib/analytics.ts";
 import { cn } from "../../lib/cn.ts";
@@ -213,7 +214,8 @@ export function AnalyticsReports() {
               <Button
                 key={option}
                 size="sm"
-                variant={option === days ? "secondary" : "outline"}
+                variant="outline"
+                className={periodButtonClass(option === days)}
                 aria-pressed={option === days}
                 onClick={() => setDays(option)}
               >

@@ -6,6 +6,7 @@ import type {
   ApprovalStatsRow,
   LeadTimeRow,
 } from "../api/guards/analytics.ts";
+import { SELECTED_STYLE } from "./selectedStyle.ts";
 
 /** 集計の期間(日)の選択肢。 */
 export const ANALYTICS_PERIOD_DAYS = [7, 30, 90] as const;
@@ -13,6 +14,11 @@ export const ANALYTICS_PERIOD_DAYS = [7, 30, 90] as const;
 export type AnalyticsPeriodDays = (typeof ANALYTICS_PERIOD_DAYS)[number];
 
 export const DEFAULT_ANALYTICS_DAYS: AnalyticsPeriodDays = 30;
+
+/** 期間切替のボタン(outline)に足すクラス。選択中は、他の切り替えと同じ表し方にする。 */
+export function periodButtonClass(selected: boolean): string {
+  return selected ? SELECTED_STYLE : "";
+}
 
 /** 1日分の費用と実行件数。`day`は`YYYY-MM-DD`(UTC)。 */
 export type DailyTotal = {
