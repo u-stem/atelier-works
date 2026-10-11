@@ -291,6 +291,7 @@ function fakeSandbox(opts?: {
   readonly settleError?: Error;
   readonly prepareError?: Error;
   readonly releaseError?: Error;
+  readonly escaping?: readonly string[];
 }) {
   const events: string[] = [];
   const identity = newCheckIdentity(10001, () => 0);
@@ -308,6 +309,7 @@ function fakeSandbox(opts?: {
       events.push(`release ${dirs.worktreeDir} ${dirs.homeDir}`);
       if (opts?.releaseError !== undefined) throw opts.releaseError;
     },
+    escapingSymlinks: async () => [...(opts?.escaping ?? [])],
     kernelWarnings: () => [],
   };
   return { sandbox, events, identity };
@@ -327,6 +329,70 @@ function recordingRunner(
 }
 
 describe("runAllowedCheckCommands with a sandbox", () => {
+  test("adds a failed result when a symlink points outside the worktree", async () => {
+    const { sandbox, events } = fakeSandbox({
+      escaping: ["/work/node_modules/.bin/evil"],
+    });
+    const { run } = recordingRunner(events, [ok("")]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    );
+    expect(results.at(-1)?.ok).toBe(false);
+  });
+
+  test("names the escaping symlink in the added result", async () => {
+    const { sandbox, events } = fakeSandbox({
+      escaping: ["/work/node_modules/.bin/evil"],
+    });
+    const { run } = recordingRunner(events, [ok("")]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    );
+    expect(results.at(-1)?.output).toContain("/work/node_modules/.bin/evil");
+  });
+
+  test("keeps the results of the commands before the added one", async () => {
+    const { sandbox, events } = fakeSandbox({ escaping: ["/work/x"] });
+    const { run } = recordingRunner(events, [ok("")]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    );
+    expect(results).toHaveLength(2);
+  });
+
+  test("adds nothing when no symlink points outside the worktree", async () => {
+    const { sandbox, events } = fakeSandbox();
+    const { run } = recordingRunner(events, [ok("")]);
+    const results = await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    );
+    expect(results).toHaveLength(1);
+  });
+
   test("runs the command through setpriv for the sandbox identity", async () => {
     const { sandbox, events, identity } = fakeSandbox();
     const { run, calls } = recordingRunner(events, [ok("")]);

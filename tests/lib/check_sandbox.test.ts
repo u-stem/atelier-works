@@ -38,6 +38,8 @@ import {
   dropWriteBitsArgv,
   formatSlotRecord,
   gatherArgv,
+  handOverArgv,
+  hardLinkedArgv,
   type IpcEntry,
   ipcrmArgv,
   isCheckEnvironmentReason,
@@ -62,6 +64,7 @@ import {
   type ReapDeps,
   reapUidProcesses,
   reclaimArgv,
+  reclaimBulkArgv,
   remainingOfUidArgv,
   removeAclArgv,
   removeTreeArgv,
@@ -76,6 +79,7 @@ import {
   setprivArgv,
   slotRecordUnreadableNoticeText,
   slotSkipNoticeText,
+  symlinksArgv,
   UnreadableSlotRecordError,
   WINDMILL_TMP_DIR,
   worldWritablePathsArgv,
@@ -440,6 +444,74 @@ describe("chownToArgv", () => {
 
   test("refuses a path that is not normalized", () => {
     expect(() => chownToArgv(IDENTITY, "/workspaces/a/../b")).toThrow();
+  });
+});
+
+describe("handOverArgv", () => {
+  const argv = handOverArgv(IDENTITY, DIRS.worktreeDir);
+
+  test("descends in one chown without following symlinks", () => {
+    expect(argv.slice(0, 4)).toEqual(["/usr/bin/chown", "-R", "-P", "-h"]);
+  });
+
+  test("hands over only entries that root owns", () => {
+    expect(argv).toContain("--from=0:0");
+  });
+
+  test("hands over to the check uid and gid", () => {
+    expect(argv).toContain("10001:10001");
+  });
+
+  test("ends with the directory after a separator", () => {
+    expect(argv.slice(-2)).toEqual(["--", DIRS.worktreeDir]);
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => handOverArgv(IDENTITY, "/workspaces")).toThrow();
+  });
+});
+
+describe("hardLinkedArgv", () => {
+  test("looks for non-directories with more than one link and stops at the first", () => {
+    expect(hardLinkedArgv(DIRS.worktreeDir).join(" ")).toBe(
+      `/usr/bin/find -P ${DIRS.worktreeDir} -xdev ! -type d -links +1 -print -quit`,
+    );
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => hardLinkedArgv("/workspaces")).toThrow();
+  });
+});
+
+describe("reclaimBulkArgv", () => {
+  const argv = reclaimBulkArgv(IDENTITY, DIRS.worktreeDir);
+
+  test("descends in one chown without following symlinks", () => {
+    expect(argv.slice(0, 4)).toEqual(["/usr/bin/chown", "-R", "-P", "-h"]);
+  });
+
+  test("selects the entries of the check uid whatever their group", () => {
+    expect(argv).toContain("--from=10001");
+  });
+
+  test("gives them to root", () => {
+    expect(argv.slice(-3)).toEqual(["0:0", "--", DIRS.worktreeDir]);
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => reclaimBulkArgv(IDENTITY, "/workspaces")).toThrow();
+  });
+});
+
+describe("symlinksArgv", () => {
+  test("lists symlinks without following them", () => {
+    expect(symlinksArgv(DIRS.worktreeDir).join(" ")).toBe(
+      `/usr/bin/find -P ${DIRS.worktreeDir} -xdev -type l -print0`,
+    );
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => symlinksArgv("/workspaces")).toThrow();
   });
 });
 
@@ -1635,7 +1707,15 @@ function fakeSandboxDeps(opts?: {
   readonly failingRecordReads?: readonly number[];
   /** 誰でも書き込めるパスとして見つかるもの。 */
   readonly worldWritable?: readonly string[];
+  /** worktreeにあるsymlink。パスから、中身と`realpath`の結果(先が無ければnull)への対応。 */
+  readonly symlinks?: Record<
+    string,
+    { readonly content: string; readonly resolved: string | null }
+  >;
+  /** ハードリンクのあるファイルとして見つかるパス。 */
+  readonly hardLinked?: string;
 }) {
+  const symlinks = new Map(Object.entries(opts?.symlinks ?? {}));
   const events: string[] = [];
   const calls: FakeCall[] = [];
   let imageChecks = 0;
@@ -1670,7 +1750,13 @@ function fakeSandboxDeps(opts?: {
         const removed = new Set(flags.filter((_, i) => i % 2 === 1));
         ipc = ipc.filter((entry) => !removed.has(String(entry.id)));
       }
-      return opts?.respond?.(argv) ?? ok();
+      const responded = opts?.respond?.(argv);
+      if (responded !== undefined) return responded;
+      if (argv.includes("-print0"))
+        return ok([...symlinks.keys()].map((path) => `${path}\0`).join(""));
+      if (argv.includes("-links") && argv.includes("+1"))
+        return ok(opts?.hardLinked ?? "");
+      return ok();
     },
     reap: {
       listPids: async () => [...live.keys(), ...stuck.keys()],
@@ -1743,6 +1829,9 @@ function fakeSandboxDeps(opts?: {
     },
     pathKind: async (path) => opts?.pathKinds?.[path] ?? "directory",
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
+    readLink: async (path) => symlinks.get(path)?.content ?? "",
+    realPath: async (path) =>
+      symlinks.has(path) ? (symlinks.get(path)?.resolved ?? null) : path,
     listWorldWritablePaths: async () => opts?.worldWritable ?? [],
     isExecutable: async (path) => {
       imageChecks += 1;
@@ -1767,6 +1856,7 @@ function fakeSandboxDeps(opts?: {
     records,
     notices,
     onNotice,
+    symlinks,
     imageChecks: () => imageChecks,
   };
 }
@@ -1806,6 +1896,7 @@ function takeBackSequence(identity: CheckIdentity, dir: string): string[][] {
     gatherArgv(identity, dir),
     openDirsArgv(identity, dir),
     dropWriteBitsArgv(identity, dir),
+    reclaimBulkArgv(identity, dir),
     reclaimArgv(dir),
     leftoverArgv(dir),
     aclLeftoverArgv(dir),
@@ -1840,6 +1931,82 @@ async function prepared(fake: ReturnType<typeof fakeSandboxDeps>) {
   await sandbox.prepare(DIRS);
   return { sandbox, before: fake.calls.length };
 }
+
+describe("escapingSymlinks", () => {
+  const WT = DIRS.worktreeDir;
+  const OUT = { content: "/etc/passwd", resolved: "/etc/passwd" };
+
+  test("reports a symlink placed by the check that points outside", async () => {
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/node_modules/.bin/evil`, OUT);
+    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([
+      `${WT}/node_modules/.bin/evil`,
+    ]);
+  });
+
+  test("ignores a symlink that points inside the worktree", async () => {
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/a`, { content: "b", resolved: `${WT}/b` });
+    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([]);
+  });
+
+  test("ignores a symlink that was already there with the same content", async () => {
+    const fake = fakeSandboxDeps({ symlinks: { [`${WT}/tracked`]: OUT } });
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([]);
+  });
+
+  test("reports a symlink that was already there but now has other content", async () => {
+    const fake = fakeSandboxDeps({ symlinks: { [`${WT}/tracked`]: OUT } });
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/tracked`, {
+      content: "/root/.ssh",
+      resolved: "/root/.ssh",
+    });
+    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([`${WT}/tracked`]);
+  });
+
+  test("resolves a dangling symlink from its own directory", async () => {
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/sub/dangling`, {
+      content: "../../../outside",
+      resolved: null,
+    });
+    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([
+      `${WT}/sub/dangling`,
+    ]);
+  });
+
+  test("ignores a dangling symlink that stays inside the worktree", async () => {
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/sub/dangling`, {
+      content: "../missing",
+      resolved: null,
+    });
+    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([]);
+  });
+
+  test("does not count a sibling directory whose name starts with the worktree name", async () => {
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.prepare(DIRS);
+    fake.symlinks.set(`${WT}/x`, {
+      content: `${WT}-other`,
+      resolved: `${WT}-other`,
+    });
+    expect(await sandbox.escapingSymlinks(DIRS)).toEqual([`${WT}/x`]);
+  });
+});
 
 describe("createCheckSandbox", () => {
   test("refuses to wrap a command before a slot is held", () => {
@@ -2006,10 +2173,32 @@ describe("createCheckSandbox", () => {
   test("prepare hands the worktree and then the home over last", async () => {
     const fake = fakeSandboxDeps();
     await sandboxOf(fake.deps).prepare(DIRS);
-    expect(argvOf(fake.calls).slice(-2)).toEqual([
-      chownToArgv(SLOT0, DIRS.worktreeDir),
-      chownToArgv(SLOT0, DIRS.homeDir),
+    expect(argvOf(fake.calls).slice(-4)).toEqual([
+      hardLinkedArgv(DIRS.worktreeDir),
+      handOverArgv(SLOT0, DIRS.worktreeDir),
+      hardLinkedArgv(DIRS.homeDir),
+      handOverArgv(SLOT0, DIRS.homeDir),
     ]);
+  });
+
+  test("prepare hands the worktree over per directory when a file has a hard link", async () => {
+    const fake = fakeSandboxDeps({
+      hardLinked: `${DIRS.worktreeDir}/linked\n`,
+    });
+    await sandboxOf(fake.deps).prepare(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(
+      chownToArgv(SLOT0, DIRS.worktreeDir),
+    );
+  });
+
+  test("prepare does not hand a worktree with a hard link over in bulk", async () => {
+    const fake = fakeSandboxDeps({
+      hardLinked: `${DIRS.worktreeDir}/linked\n`,
+    });
+    await sandboxOf(fake.deps).prepare(DIRS);
+    expect(argvOf(fake.calls)).not.toContainEqual(
+      handOverArgv(SLOT0, DIRS.worktreeDir),
+    );
   });
 
   test("prepare hands over to the uid of the held slot", async () => {
@@ -2028,14 +2217,14 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps();
     await sandboxOf(fake.deps).prepare(DIRS);
     expect(fake.events.indexOf("record-write 0")).toBeLessThan(
-      fake.events.indexOf(ran(chownToArgv(SLOT0, DIRS.worktreeDir))),
+      fake.events.indexOf(ran(handOverArgv(SLOT0, DIRS.worktreeDir))),
     );
   });
 
   test("prepare fails when the handover fails", async () => {
     const fake = fakeSandboxDeps({
       respond: (argv) =>
-        matches(chownToArgv(SLOT0, DIRS.worktreeDir))(argv)
+        matches(handOverArgv(SLOT0, DIRS.worktreeDir))(argv)
           ? fail("denied", 1)
           : undefined,
     });
@@ -2046,7 +2235,7 @@ describe("createCheckSandbox", () => {
     const secret = `sk-ant-${"x".repeat(20)}`;
     const fake = fakeSandboxDeps({
       respond: (argv) =>
-        matches(chownToArgv(SLOT0, DIRS.worktreeDir))(argv)
+        matches(handOverArgv(SLOT0, DIRS.worktreeDir))(argv)
           ? fail(`leaked ${secret}`)
           : undefined,
     });
@@ -2062,7 +2251,7 @@ describe("createCheckSandbox", () => {
   test("prepare takes back the worktree a dead run recorded in the slot", async () => {
     const fake = fakeSandboxDeps({ records: { 0: OLD } });
     await sandboxOf(fake.deps).prepare(DIRS);
-    expect(argvOf(fake.calls).slice(0, 6)).toEqual(
+    expect(argvOf(fake.calls).slice(0, 7)).toEqual(
       takeBackSequence(SLOT0, OLD.worktreeDir),
     );
   });
@@ -2070,7 +2259,7 @@ describe("createCheckSandbox", () => {
   test("prepare removes the home a dead run recorded in the slot", async () => {
     const fake = fakeSandboxDeps({ records: { 0: OLD } });
     await sandboxOf(fake.deps).prepare(DIRS);
-    expect(fake.calls[6]?.argv).toEqual(removeTreeArgv(OLD.homeDir));
+    expect(fake.calls[7]?.argv).toEqual(removeTreeArgv(OLD.homeDir));
   });
 
   test("prepare replaces the stale record with its own", async () => {
@@ -2305,7 +2494,7 @@ describe("createCheckSandbox", () => {
   test("release after a failed prepare gives the slot back", async () => {
     const fake = fakeSandboxDeps({
       respond: (argv) =>
-        matches(chownToArgv(SLOT0, DIRS.worktreeDir))(argv)
+        matches(handOverArgv(SLOT0, DIRS.worktreeDir))(argv)
           ? fail("denied", 1)
           : undefined,
     });
@@ -2318,7 +2507,7 @@ describe("createCheckSandbox", () => {
   test("release after a failed prepare takes the worktree back", async () => {
     const fake = fakeSandboxDeps({
       respond: (argv) =>
-        matches(chownToArgv(SLOT0, DIRS.worktreeDir))(argv)
+        matches(handOverArgv(SLOT0, DIRS.worktreeDir))(argv)
           ? fail("denied", 1)
           : undefined,
     });
@@ -2361,7 +2550,7 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps();
     const { sandbox, before } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(argvOf(fake.calls.slice(before)).slice(0, 7)).toEqual([
+    expect(argvOf(fake.calls.slice(before)).slice(0, 8)).toEqual([
       ...takeBackSequence(SLOT0, DIRS.worktreeDir),
       removeTreeArgv(DIRS.homeDir),
     ]);
@@ -2383,7 +2572,7 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps();
     const { sandbox, before } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(argvOf(fake.calls.slice(before))[7]).toEqual(
+    expect(argvOf(fake.calls.slice(before))[8]).toEqual(
       purgeDirsArgv(20000, "/tmp"),
     );
   });
@@ -2470,7 +2659,7 @@ describe("createCheckSandbox", () => {
     const fake = fakeSandboxDeps({ respond: aclFoundOnce(DIRS.worktreeDir) });
     const { sandbox, before } = await prepared(fake);
     await sandbox.release(DIRS);
-    expect(argvOf(fake.calls.slice(before)).slice(0, 10)).toEqual([
+    expect(argvOf(fake.calls.slice(before)).slice(0, 11)).toEqual([
       ...takeBackSequence(SLOT0, DIRS.worktreeDir),
       removeAclArgv(DIRS.worktreeDir),
       leftoverArgv(DIRS.worktreeDir),
@@ -2664,7 +2853,7 @@ describe("restoreCheckOwnership", () => {
   test("takes back the worktree a slot recorded", async () => {
     const fake = fakeSandboxDeps({ records: RECORDED });
     await restoreCheckOwnership(WT, POOL, fake.deps);
-    expect(withoutTag(argvOf(fake.calls).slice(0, 6))).toEqual(
+    expect(withoutTag(argvOf(fake.calls).slice(0, 7))).toEqual(
       withoutTag(takeBackSequence(SLOT1, WT)),
     );
   });

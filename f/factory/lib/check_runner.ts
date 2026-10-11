@@ -73,6 +73,30 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
   };
 };
 
+const ESCAPING_SYMLINKS_COMMAND =
+  "check sandbox: symlinks outside the worktree";
+const ESCAPING_SYMLINKS_LISTED = 20;
+
+/** worktreeの外を指すsymlinkが残ったことを、失敗した検査として表す。 */
+function escapingSymlinksResult(paths: readonly string[]): CheckCommandResult {
+  const listed = paths.slice(0, ESCAPING_SYMLINKS_LISTED).join("\n");
+  const more =
+    paths.length > ESCAPING_SYMLINKS_LISTED
+      ? `\n... and ${String(paths.length - ESCAPING_SYMLINKS_LISTED)} more`
+      : "";
+  const output = maskSecrets(
+    `the check left symlinks that point outside the worktree:\n${listed}${more}`,
+  );
+  return {
+    command: ESCAPING_SYMLINKS_COMMAND,
+    ok: false,
+    exitCode: 1,
+    timedOut: false,
+    outputTail: output.slice(-CHECK_OUTPUT_TAIL_CHARS),
+    output,
+  };
+}
+
 /**
  * `allowed_check_commands`の各項目を、`cwd`で順に実行する。
  * 環境変数は許可リスト(`checkEnv`。固定のPATH(`CHECK_COMMAND_PATH`)、新しい非公開のHOMEとその下のTMPDIR、ロケール、
@@ -83,6 +107,7 @@ const defaultCreateCheckHomeDir: CreateCheckHomeDir = async () => {
  * 実行の後(失敗しても)所有権をrootに戻してからHOMEを消す。
  * 戻すのに失敗したときはHOMEを消さない。止まらないプロセスが書き換えている木をrootでたどらないためで、
  * HOMEは枠の記録に残り、次にその枠を取る実行が片付ける。
+ * 取り戻しの後に、検査が置いたworktreeの外を指すsymlinkを調べ、あれば失敗した検査として結果に足す。
  * `sandbox`が無いと、コマンドはworkerのuidのまま動く。本番の呼び出し(`implement_verify`、`pr_fix_verify`)は必ず渡す。
  * miseの設定の信頼(trust)は決して与えない(`MISE_TRUSTED_CONFIG_PATHS`も
  * `mise --yes trust`も使わない)。信頼が無いと動かない検査コマンド
@@ -108,13 +133,13 @@ export async function runAllowedCheckCommands(
 ): Promise<CheckCommandResult[]> {
   const homeDir = await createHomeDir();
   const dirs = { worktreeDir: cwd, homeDir: homeDir.path };
+  const results: CheckCommandResult[] = [];
   let released = true;
   try {
     try {
       if (sandbox !== null) await sandbox.prepare(dirs);
       const env = checkEnv({ path, home: homeDir.path, worktreeDir: cwd });
 
-      const results: CheckCommandResult[] = [];
       for (const command of commands) {
         const argv = command
           .trim()
@@ -141,7 +166,6 @@ export async function runAllowedCheckCommands(
           output: masked,
         });
       }
-      return results;
     } finally {
       if (sandbox !== null) {
         released = false;
@@ -149,6 +173,12 @@ export async function runAllowedCheckCommands(
         released = true;
       }
     }
+    // 取り戻しの後に調べる。片付けの中で失敗させると、取り戻しの記録が残って次の実行を止めるためである。
+    if (sandbox !== null) {
+      const escaping = await sandbox.escapingSymlinks(dirs);
+      if (escaping.length > 0) results.push(escapingSymlinksResult(escaping));
+    }
+    return results;
   } finally {
     if (released) await homeDir.cleanup();
   }

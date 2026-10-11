@@ -15,11 +15,13 @@ import {
   mkdir,
   readdir,
   readFile,
+  readlink,
+  realpath,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   escapeReasonSeparator,
   type Logger,
@@ -222,6 +224,8 @@ const SLOT_RELEASE_WAIT_MS = 5_000;
 /** 所有権の受け渡しにかける時間の上限(ミリ秒)。`node_modules`が大きいworktreeでも収まる値にする。 */
 const CHOWN_TIMEOUT_MS = 300_000;
 const CHOWN_MAX_OUTPUT_BYTES = 16 * 1024;
+/** symlinkの一覧の出力の上限(バイト)。`node_modules/.bin`のように多いものがあっても切れない大きさにする。 */
+const LINK_LIST_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 /**
  * 所有権の受け渡しに使う道具が見つかるPATH。実行ファイルは絶対パスで呼ぶ。
  * `find -execdir`は、PATHに相対のディレクトリ(`.`や空の要素)があると実行を拒むので、絶対パスだけにする。
@@ -432,6 +436,77 @@ export function chownToArgv(identity: CheckIdentity, dir: string): string[] {
 }
 
 /**
+ * ハードリンクが2つ以上ある、ディレクトリでないものが`dir`の下にあれば、最初の1つのパスを出すargv。
+ * 一括の受け渡し(`handOverArgv`)は、リンク先がworktreeの外にあるファイルも渡してしまうので、無いときだけ使う。
+ */
+export function hardLinkedArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "-xdev",
+    "!",
+    "-type",
+    "d",
+    "-links",
+    "+1",
+    "-print",
+    "-quit",
+  ];
+}
+
+/**
+ * `dir`の下の、rootが所有するものすべてを検査用のuidに渡すargv。
+ * `chown -R -P`は`fts`でfdを起点に降り、symlinkをたどらない。`-h`でsymlink自身を変える。
+ * ディレクトリごとに`chown`を起動する`chownToArgv`より、ディレクトリが多いほど桁違いに速い。
+ * ハードリンクのあるファイルを除けないので、`hardLinkedArgv`が何も出さないときだけ使う。
+ * 渡す時点では検査用のuidのプロセスは動いておらず、木はrootの所有で、列挙の間に差し替える者はいない。
+ */
+export function handOverArgv(identity: CheckIdentity, dir: string): string[] {
+  assertChownableDir(dir);
+  return [
+    CHOWN_PATH,
+    "-R",
+    "-P",
+    "-h",
+    "--from=0:0",
+    `${String(identity.uid)}:${String(identity.gid)}`,
+    "--",
+    dir,
+  ];
+}
+
+/**
+ * 取り戻しの4段目の前半。rootで、`dir`の下の検査用のuidが所有するものを、まとめてrootに戻す。
+ * 一括で降りるので、`reclaimArgv`だけでディレクトリごとに`chown`を起動するより桁違いに速い。
+ * グループは問わず、所有者だけで選ぶ。検査コマンドがグループを変えたものも戻すためである。
+ * ほかのユーザーのものは次の`reclaimArgv`が戻す。
+ */
+export function reclaimBulkArgv(
+  identity: CheckIdentity,
+  dir: string,
+): string[] {
+  assertChownableDir(dir);
+  return [
+    CHOWN_PATH,
+    "-R",
+    "-P",
+    "-h",
+    `--from=${String(identity.uid)}`,
+    "0:0",
+    "--",
+    dir,
+  ];
+}
+
+/** `dir`の下のsymlinkをNUL区切りで列挙するargv。 */
+export function symlinksArgv(dir: string): string[] {
+  assertChownableDir(dir);
+  return [FIND_PATH, "-P", dir, "-xdev", "-type", "l", "-print0"];
+}
+
+/**
  * 取り戻しの1段目。rootで、`dir`の下のうち、枠のuidが所有していないディレクトリすべてと、
  * ほかの非rootのユーザー(並行して動く別の枠など)のもの、書き込みかsetidのビットが立ったrootの単独のファイルを、枠のuidに集める。
  * 権限のビットは次の段で枠のuidとして落とす。rootのまま`chmod`すると、差し替えられたsymlinkの先を変えうるためである。
@@ -535,7 +610,10 @@ export function dropWriteBitsArgv(
   ]);
 }
 
-/** 取り戻しの4段目。rootで、`dir`の下のrootでないものをすべてrootに戻す。権限のビットは変えない。 */
+/**
+ * 取り戻しの4段目の後半。rootで、`dir`の下のrootでないものをすべてrootに戻す。権限のビットは変えない。
+ * 検査用のuidのものは前半(`reclaimBulkArgv`)で戻っているので、ここで触れるのは残りの少数である。
+ */
 export function reclaimArgv(dir: string): string[] {
   assertChownableDir(dir);
   return [
@@ -1267,6 +1345,10 @@ export type CheckSandboxDeps = ImageDeps & {
   ) => Promise<"missing" | "directory" | "other">;
   /** カーネルの設定`/proc/sys/...`の値。読めなければnull。 */
   readonly readSysctl: (name: string) => string | null;
+  /** symlinkの中身(読んだままの文字列)。 */
+  readonly readLink: (path: string) => Promise<string>;
+  /** `path`をたどった先の正規のパス。先が無ければnull。 */
+  readonly realPath: (path: string) => Promise<string | null>;
 };
 
 export type CheckSandbox = {
@@ -1289,6 +1371,13 @@ export type CheckSandbox = {
    * 共有の一時ディレクトリとIPCを消し切れないときは、ログに残すだけで失敗にしない。次にその枠を取る実行が消し直すためである。
    */
   readonly release: (dirs: CheckDirs) => Promise<void>;
+  /**
+   * `release`の後に呼ぶ。`prepare`の時点には無かった、worktreeの外を指すsymlinkのパスを返す。
+   * 検査が置いたsymlinkは取り戻しの後も残り、次のラウンドでrootのClaudeがたどると外に書きうるためである。
+   * `prepare`の時点にあった組(名前と中身が同じもの)は、追跡されているものなので数えない。
+   * 失敗にするかは呼び出し側が決める。`release`の中では投げない。片付けを止めないためである。
+   */
+  readonly escapingSymlinks: (dirs: CheckDirs) => Promise<string[]>;
   /** ホストのカーネルの設定が前提を満たさないときの警告。空なら前提を満たす。 */
   readonly kernelWarnings: () => string[];
 };
@@ -1297,13 +1386,16 @@ async function runToolOutput(
   deps: CheckSandboxDeps,
   argv: string[],
   what: string,
-  opts?: { readonly ignoreExitCode?: boolean },
+  opts?: {
+    readonly ignoreExitCode?: boolean;
+    readonly maxOutputBytes?: number;
+  },
 ): Promise<string> {
   const result = await deps.run(argv, {
     cwd: TOOL_CWD,
     env: { PATH: TOOL_PATH },
     timeoutMs: CHOWN_TIMEOUT_MS,
-    maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
+    maxOutputBytes: opts?.maxOutputBytes ?? CHOWN_MAX_OUTPUT_BYTES,
   });
   if (!result.timedOut && (result.exitCode === 0 || opts?.ignoreExitCode))
     return result.stdout;
@@ -1362,6 +1454,61 @@ async function aclLeftover(
 }
 
 /**
+ * `dir`の下のrootのものを、検査用のuidに渡す。
+ * ハードリンクのあるファイルが無ければ一括で渡し、あればディレクトリごとに、リンクのあるファイルを除いて渡す。
+ */
+async function handOver(
+  deps: CheckSandboxDeps,
+  identity: CheckIdentity,
+  dir: string,
+  what: string,
+): Promise<void> {
+  const linked = await runToolOutput(
+    deps,
+    hardLinkedArgv(dir),
+    `looking for hard links in ${dir}`,
+  );
+  const argv =
+    linked.trim() === ""
+      ? handOverArgv(identity, dir)
+      : chownToArgv(identity, dir);
+  await runTool(deps, argv, what);
+}
+
+/** symlinkの名前と、その中身(読んだままの文字列)。 */
+type LinkMap = ReadonlyMap<string, string>;
+
+/**
+ * `dir`の下の、`dir`の外を指すsymlinkを、名前と中身の組で集める。
+ * 指す先は`realpath`で決める。先が無いときは、中身をsymlinkのあるディレクトリから字面で解く。
+ * rootの所有で書き込めない木に対して呼ぶので、決める間にsymlinkが差し替わらない。
+ */
+async function collectEscapingLinks(
+  deps: CheckSandboxDeps,
+  dir: string,
+): Promise<LinkMap> {
+  const root = await deps.realPath(dir);
+  if (root === null) throw new Error(`check sandbox: cannot resolve ${dir}`);
+  const listed = await runToolOutput(
+    deps,
+    symlinksArgv(dir),
+    `listing symlinks in ${dir}`,
+    { maxOutputBytes: LINK_LIST_MAX_OUTPUT_BYTES },
+  );
+  const found = new Map<string, string>();
+  for (const path of listed.split("\0")) {
+    if (path === "") continue;
+    const content = await deps.readLink(path);
+    const target =
+      (await deps.realPath(path)) ?? resolve(dirname(path), content);
+    if (target !== root && !target.startsWith(`${root}/`)) {
+      found.set(path, content);
+    }
+  }
+  return found;
+}
+
+/**
  * `dir`を枠のuidからrootに戻す。枠のuidのプロセスが止まった後に呼ぶ。
  * 権限のビットは枠のuidとして落とし、rootは`chown -h`だけを行う。
  * 戻した後、rootでないものか書き込めるものが残っていれば例外を投げる。
@@ -1380,6 +1527,11 @@ async function takeBack(
     deps,
     dropWriteBitsArgv(identity, dir),
     `dropping write bits in ${dir}`,
+  );
+  await runTool(
+    deps,
+    reclaimBulkArgv(identity, dir),
+    `taking ${dir} back in bulk`,
   );
   await runTool(deps, reclaimArgv(dir), `taking ${dir} back`);
   await assertNoLeftover(deps, dir);
@@ -1546,6 +1698,7 @@ export function createCheckSandbox(opts: {
   const log = opts.log ?? logger("check_sandbox");
   const indices = opts.uids.map((_, index) => index);
   let active: { identity: CheckIdentity; handle: SlotHandle } | null = null;
+  let baseline: LinkMap = new Map();
   // 前提を満たした結果は部品の寿命(1回の実行)の間覚える。動いているコンテナのイメージは変わらないためである。
   let imageReady = false;
   const assertImageReady = async (): Promise<void> => {
@@ -1628,18 +1781,21 @@ export function createCheckSandbox(opts: {
       await deps.lockDownRuntimeDir(WINDMILL_TMP_DIR);
       await deps.assertDirectory(dirs.worktreeDir);
       const { handle, uid } = await takeUsableSlot();
+      baseline = await collectEscapingLinks(deps, dirs.worktreeDir);
       const identity = newCheckIdentity(uid, opts.random);
       active = { identity, handle };
       // 渡す前に記録する。後始末が走らなくても、次にこの枠を取る実行が戻せるようにするためである。
       await deps.slotRecords.write(handle.index, record);
-      await runTool(
+      await handOver(
         deps,
-        chownToArgv(identity, dirs.worktreeDir),
+        identity,
+        dirs.worktreeDir,
         "handing the worktree over",
       );
-      await runTool(
+      await handOver(
         deps,
-        chownToArgv(identity, dirs.homeDir),
+        identity,
+        dirs.homeDir,
         "handing the home directory over",
       );
     },
@@ -1668,6 +1824,12 @@ export function createCheckSandbox(opts: {
       } finally {
         await handle.release();
       }
+    },
+    escapingSymlinks: async (dirs) => {
+      const now = await collectEscapingLinks(deps, dirs.worktreeDir);
+      return [...now]
+        .filter(([path, content]) => baseline.get(path) !== content)
+        .map(([path]) => path);
     },
     kernelWarnings: () =>
       KERNEL_PROTECTIONS.filter((name) => deps.readSysctl(name) !== "1").map(
@@ -1944,6 +2106,15 @@ export function defaultSandboxDeps(
       } catch (error) {
         if (isNotFound(error)) return "missing";
         throw error;
+      }
+    },
+    readLink: (path) => readlink(path),
+    realPath: async (path) => {
+      try {
+        return await realpath(path);
+      } catch {
+        // 先が無い、輪になっている、ディレクトリでないものを通る、のどれでも解決できない。
+        return null;
       }
     },
     readSysctl: (name) => {
