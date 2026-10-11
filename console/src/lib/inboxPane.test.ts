@@ -3,6 +3,9 @@ import {
   inboxDetailClass,
   inboxListClass,
   inboxPane,
+  LIST_ORIGIN_STATE,
+  listBackAction,
+  rowDomKey,
   selectionPushesHistory,
 } from "./inboxPane.ts";
 
@@ -40,7 +43,11 @@ describe("inboxListClass", () => {
 
 describe("inboxDetailClass", () => {
   test("hides the detail on a narrow screen while the list is shown", () => {
-    expect(inboxDetailClass("list")).toContain("hidden lg:block");
+    expect(inboxDetailClass("list")).toContain("hidden lg:flex");
+  });
+
+  test("lays the detail out as a column so that its content can fill the height", () => {
+    expect(inboxDetailClass("detail")).toContain("flex-col");
   });
 
   test("keeps the detail visible on a narrow screen while it is the pane", () => {
@@ -61,5 +68,39 @@ describe("selectionPushesHistory", () => {
 
   test("replaces when the selection is cleared on a narrow screen", () => {
     expect(selectionPushesHistory(true, null)).toBe(false);
+  });
+});
+
+describe("listBackAction", () => {
+  test("goes back in history when the entry was pushed from the list", () => {
+    expect(listBackAction(LIST_ORIGIN_STATE)).toBe("pop");
+  });
+
+  test("clears the selection when the page was opened with a selection", () => {
+    expect(listBackAction(null)).toBe("clear");
+  });
+
+  test("clears the selection for a state without the mark", () => {
+    expect(listBackAction({ other: true })).toBe("clear");
+  });
+
+  test("clears the selection when the mark is not exactly true", () => {
+    expect(listBackAction({ fromList: "yes" })).toBe("clear");
+  });
+
+  test("clears the selection when there is no state", () => {
+    expect(listBackAction(undefined)).toBe("clear");
+  });
+});
+
+describe("rowDomKey", () => {
+  test("joins the kind and the id", () => {
+    expect(rowDomKey({ type: "notice", id: 12 })).toBe("notice:12");
+  });
+
+  test("tells the kinds of the same id apart", () => {
+    expect(rowDomKey({ type: "approval", id: 1 })).not.toBe(
+      rowDomKey({ type: "failure", id: 1 }),
+    );
   });
 });

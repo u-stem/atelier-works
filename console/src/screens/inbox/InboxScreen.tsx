@@ -1,6 +1,6 @@
 import { ArrowLeft, LogIn } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
 import {
   ApiFailure,
   describeApiError,
@@ -23,6 +23,9 @@ import {
   inboxDetailClass,
   inboxListClass,
   inboxPane,
+  LIST_ORIGIN_STATE,
+  listBackAction,
+  rowDomKey,
   selectionPushesHistory,
 } from "../../lib/inboxPane.ts";
 import {
@@ -129,8 +132,9 @@ function FailureState({
  * 選んだ行は`?approval=<id>`などに持つ(同時に1つだけ)。選択の変更は履歴を積まない(幅が狭いときの項目の選択を除く)。
  * 一覧が空のときは、画面を割らずに状況の面を出す。
  * 幅が狭いとき(lg未満)は一覧と詳細を1画面ずつ出す。
- * 項目を選ぶ操作だけは履歴を積み、ブラウザの戻る操作と、詳細の「一覧へ戻る」で一覧へ戻れる。
- * 面が切り替わると、新しく出た面へフォーカスを移し、一覧へ戻るときはスクロール位置を戻す。
+ * 項目を選ぶ操作だけは履歴に印を付けて積む。ブラウザの戻る操作と、詳細の「一覧へ戻る」は、印のある履歴を戻って取り除く。
+ * 選択つきのURLを直接開いたときは、「一覧へ戻る」が選択を外して置き換える。
+ * 面が切り替わると、新しく出た面へフォーカスを移す。一覧へ戻るときは、スクロール位置と直前に選んでいた行を戻す。
  * 一覧と詳細は別々にスクロールする。一覧の行は選ぶだけで、承認・却下、再実行、通知の解決などの操作は詳細のペインに置く。
  */
 export function InboxScreen() {
@@ -140,12 +144,29 @@ export function InboxScreen() {
   const [chip, setChip] = useState<InboxChip>("all");
   const selection = parseSelection(searchParams);
   const refresh = refreshStatusOf(summary);
+  const location = useLocation();
+  const navigate = useNavigate();
   const wide = useMediaQuery(WIDE_QUERY);
   const pane = inboxPane(selection);
   const listRef = useRef<HTMLElement>(null);
   const detailRef = useRef<HTMLElement>(null);
   const listScrollTop = useRef(0);
+  const lastSelection = useRef<InboxSelection | null>(null);
   const previousPane = useRef(pane);
+  useLayoutEffect(() => {
+    // display:noneの間にスクロール位置が失われるので、一覧へ戻るときは最初の描画の前に復元する。
+    if (previousPane.current !== pane && pane === "list" && !wide) {
+      const list = listRef.current;
+      if (list !== null) {
+        list.scrollTop = listScrollTop.current;
+      }
+    }
+  }, [pane, wide]);
+  useEffect(() => {
+    if (selection !== null) {
+      lastSelection.current = selection;
+    }
+  });
   useEffect(() => {
     if (previousPane.current === pane) {
       return;
@@ -155,13 +176,17 @@ export function InboxScreen() {
       return;
     }
     // 面が切り替わったら、新しく出た面へフォーカスを移す。隠れた面に残すと、読み上げと操作が迷子になる。
+    // 一覧へ戻るときは、直前に選んでいた行へ戻す。
     if (pane === "list") {
       const list = listRef.current;
-      if (list !== null) {
-        // display:noneの間にスクロール位置が失われるので、戻るときに復元する。
-        list.scrollTop = listScrollTop.current;
-        list.focus({ preventScroll: true });
-      }
+      const previous = lastSelection.current;
+      const row =
+        previous === null
+          ? null
+          : list?.querySelector<HTMLElement>(
+              `[data-row="${rowDomKey(previous)}"]`,
+            );
+      (row ?? list)?.focus({ preventScroll: true });
     } else {
       detailRef.current?.focus();
     }
@@ -178,9 +203,20 @@ export function InboxScreen() {
   }
 
   const select = (next: InboxSelection | null): void => {
+    const push = selectionPushesHistory(!wide, next);
     setSearchParams(withSelection(searchParams, next), {
-      replace: !selectionPushesHistory(!wide, next),
+      replace: !push,
+      state: push ? LIST_ORIGIN_STATE : null,
     });
+  };
+
+  // 一覧から選んで積んだ履歴は、戻って取り除く。置き換えると、画面の変わらない履歴が残る。
+  const clearSelection = (): void => {
+    if (listBackAction(location.state) === "pop") {
+      navigate(-1);
+    } else {
+      select(null);
+    }
   };
 
   if (summary.data === undefined) {
@@ -242,7 +278,7 @@ export function InboxScreen() {
               onChange={(next) => {
                 setChip(next);
                 if (selectionAfterFilter(selection, next) === null) {
-                  select(null);
+                  clearSelection();
                 }
               }}
             />
@@ -277,24 +313,24 @@ export function InboxScreen() {
           tabIndex={-1}
           className={cn(inboxDetailClass(pane), "outline-none")}
         >
-          <div className="border-b border-border px-4 py-2 lg:hidden">
+          <div className="shrink-0 border-b border-border px-4 py-2 lg:hidden">
             <Button
               variant="ghost"
               size="sm"
               className="min-h-11 min-w-11"
-              onClick={() => {
-                select(null);
-              }}
+              onClick={clearSelection}
             >
               <ArrowLeft aria-hidden="true" />
               一覧へ戻る
             </Button>
           </div>
-          <InboxDetail
-            item={findInboxItem(items, selection)}
-            selection={selection}
-            now={now}
-          />
+          <div className="min-h-0 flex-1">
+            <InboxDetail
+              item={findInboxItem(items, selection)}
+              selection={selection}
+              now={now}
+            />
+          </div>
         </section>
       </div>
     </>

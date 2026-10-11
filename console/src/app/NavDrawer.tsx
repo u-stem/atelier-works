@@ -1,9 +1,6 @@
 import { type ReactNode, useEffect, useRef } from "react";
-import {
-  isOutsideRect,
-  shouldCloseOnWide,
-  shouldReportClose,
-} from "../lib/navDrawer.ts";
+import { isOutsideRect } from "../lib/navDrawer.ts";
+import { useMediaQuery } from "./useMediaQuery.ts";
 
 /** 横並びのメニューへ切り替わる幅(Tailwindのmd)。ドロワーはこの幅以上では閉じる。 */
 const WIDE_QUERY = "(min-width: 48rem)";
@@ -42,21 +39,12 @@ export function NavDrawer({
     }
   }, [open]);
 
+  const wide = useMediaQuery(WIDE_QUERY);
   useEffect(() => {
-    if (!open) {
-      return;
+    if (open && wide) {
+      onClose();
     }
-    const query = window.matchMedia(WIDE_QUERY);
-    const closeWhenWide = (): void => {
-      if (shouldCloseOnWide(query.matches)) {
-        onClose();
-      }
-    };
-    query.addEventListener("change", closeWhenWide);
-    return () => {
-      query.removeEventListener("change", closeWhenWide);
-    };
-  }, [open, onClose]);
+  }, [open, wide, onClose]);
 
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: 背景の押下で閉じる操作は補助である。キーボードではEscと閉じるボタンで同じことができる。
@@ -64,7 +52,8 @@ export function NavDrawer({
       ref={ref}
       aria-label={label}
       onClose={() => {
-        if (shouldReportClose(openRef.current)) {
+        // 親が`open`を偽にして閉じたときは、親がすでに知っているので知らせない。
+        if (openRef.current) {
           onClose();
         }
       }}

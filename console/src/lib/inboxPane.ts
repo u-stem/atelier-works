@@ -19,11 +19,11 @@ export function inboxListClass(pane: InboxPane): string {
   );
 }
 
-/** 詳細のペインのクラス。狭い画面では一覧の面のあいだは隠す。 */
+/** 詳細のペインのクラス。中身を縦に並べて高さを分け合う。狭い画面では一覧の面のあいだは隠す。 */
 export function inboxDetailClass(pane: InboxPane): string {
   return cn(
-    "min-w-0 flex-1 overflow-y-auto",
-    pane === "list" && "hidden lg:block",
+    "flex min-w-0 flex-1 flex-col overflow-y-auto",
+    pane === "list" && "hidden lg:flex",
   );
 }
 
@@ -37,4 +37,26 @@ export function selectionPushesHistory(
   next: InboxSelection | null,
 ): boolean {
   return narrow && next !== null;
+}
+
+/** 狭い画面で一覧から項目を選んで積んだ履歴の印。`location.state`に載せる。 */
+export const LIST_ORIGIN_STATE = { fromList: true };
+
+/**
+ * 詳細から一覧へ戻る方法。
+ * 一覧から選んで積んだ履歴(印あり)は、戻る操作で一覧へ戻る。履歴が空の項目を残さないためである。
+ * 選択つきのURLを直接開いたとき(印なし)は戻る先が一覧とは限らないので、選択を外して置き換える。
+ */
+export function listBackAction(state: unknown): "pop" | "clear" {
+  return typeof state === "object" &&
+    state !== null &&
+    "fromList" in state &&
+    state.fromList === true
+    ? "pop"
+    : "clear";
+}
+
+/** 一覧の行を探すための属性の値。種類とidで行を見分ける。 */
+export function rowDomKey(selection: InboxSelection): string {
+  return `${selection.type}:${selection.id}`;
 }

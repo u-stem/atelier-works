@@ -65,6 +65,18 @@ describe("PipelineCards", () => {
     );
   });
 
+  test("orders the cards by the default sort, newest update first", () => {
+    const older = {
+      ...ROW,
+      work_item_id: 41,
+      updated_at: "2026-10-10T00:00:00.000Z",
+    };
+    const html = render([older, ROW]);
+    expect(html.indexOf('href="/items/42"')).toBeLessThan(
+      html.indexOf('href="/items/41"'),
+    );
+  });
+
   test("renders one card per row", () => {
     expect(
       render([ROW, { ...ROW, work_item_id: 43 }]).split("<li").length - 1,

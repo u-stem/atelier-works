@@ -17,17 +17,3 @@ export function isOutsideRect(
     point.y > rect.bottom
   );
 }
-
-/**
- * ブラウザが閉じたことを、親へ知らせるか。
- * 親が`open`を偽にして閉じたときは、すでに親が知っているので知らせない。
- * Escや背景の押下など、親の知らないところで閉じたときだけ知らせる。
- */
-export function shouldReportClose(parentOpen: boolean): boolean {
-  return parentOpen;
-}
-
-/** 画面の幅が横並びのメニューに切り替わる幅に達したとき、ドロワーを閉じるか。 */
-export function shouldCloseOnWide(matchesWide: boolean): boolean {
-  return matchesWide;
-}

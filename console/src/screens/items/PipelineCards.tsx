@@ -4,6 +4,7 @@ import { TimeText } from "../../components/TimeText.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import { workItemKindLabel } from "../../lib/labels.ts";
 import {
+  DEFAULT_PIPELINE_SORT,
   issueOrPrLink,
   itemDetailPath,
   itemRequirementsPath,
@@ -11,6 +12,7 @@ import {
   pipelineStatusVariant,
   prLink,
   showsRequirementsLink,
+  sortPipelineRows,
 } from "../../lib/pipelineView.ts";
 import { ExternalLink, PlainText } from "./PipelineParts.tsx";
 
@@ -66,7 +68,7 @@ function PipelineCard({ row, now }: { row: PipelineRow; now: number }) {
 /**
  * 作業項目の進捗のカードの並び。幅の狭い画面で、横にスクロールする表の代わりに出す。
  * 狭い画面で要る列(状態、題名、リポジトリ、Issue/PR、更新)に絞り、ブランチと回数は詳細に任せる。
- * 取得も並び替えも持たず、渡された順に描く。
+ * 取得は持たない。並びは表の並び替えによらず、常に既定の順(更新が新しい順)にする。
  */
 export function PipelineCards({
   rows,
@@ -77,7 +79,7 @@ export function PipelineCards({
 }) {
   return (
     <ul className="divide-y divide-border rounded-xl border border-border bg-card">
-      {rows.map((row) => (
+      {sortPipelineRows(rows, DEFAULT_PIPELINE_SORT).map((row) => (
         <PipelineCard key={row.work_item_id} row={row} now={now} />
       ))}
     </ul>
