@@ -602,7 +602,11 @@ worktreeの`.git`ファイルは、準備のときに検証して中身を記録
 workerのホストの設定が、検証の前提を変えないためである。
 コミットのauthorは環境変数で、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
 workerのイメージは、グローバルのgit設定もgtrのグローバル設定も持たない。
-HOMEは、gitではなく、gitが起動するghなどの子プロセスが使うので渡す。
+HOMEは、ghなどの子プロセスと、gitの`~`の展開(`.git/config`のパスの`~`、httpsの`$HOME/.netrc`)のために渡す。
+workerのHOMEには`.netrc`を置かない。イメージにも置いていない。
+`safe.directory`は設定しない。
+workerとcloneはどちらもrootで動き、`/workspaces`のボリュームの所有者が同じになるためである。
+Dockerfileとworkerの`docker-compose.yml`に、`USER`と`user:`の指定は無い。
 
 転送はhttpsだけを許す。環境変数`GIT_ALLOW_PROTOCOL`を`https`にする。
 `.git/config`に`protocol.ext.allow=always`と`ext::`のremoteを書かれると、`GH_TOKEN`を持つ環境でコマンドを実行されうる。
@@ -622,10 +626,11 @@ main cloneの`.git/config`は、gitがremoteやブランチの設定を読むの
 | `core.fsmonitor` | `false` | 設定のfsmonitorのヘルパーの実行 |
 | `core.askPass` | 空 | 設定のaskpassのプログラムの実行 |
 | `commit.gpgsign` | `false` | commitの署名で`gpg.program`を実行させること |
+| `push.gpgSign` | `false` | pushの署名で`gpg.program`を実行させること |
 | `core.symlinks` | `false` | symlinkの検出が前提にする値の巻き戻し |
 | `core.excludesFile` | `/dev/null` | `$HOME/.config/git/ignore`の読み込み |
 | `core.attributesFile` | `/dev/null` | `$HOME/.config/git/attributes`の読み込み |
-| `credential.helper` | 空 | 設定のcredential helperの実行 |
+| `credential.helper` | 空 | 設定のcredential helperの実行。`credential.<URL>.helper`も一覧ごと消える |
 
 `ignore`と`attributes`は設定ファイルではないので、`GIT_CONFIG_GLOBAL`では止まらない。
 ネットワーク操作では、この後にghのcredential helperを加える。
@@ -635,7 +640,14 @@ Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のフ�
 
 固定していない設定は、そのまま読まれる。
 `url.*.insteadOf`、`remote.*.pushurl`、`http.*`、`filter.*`、`diff.*`などは、キーが対象ごとに変わり、名前で固定できない。
-これは残るリスクである。
+名前が決まっていて、プログラムを実行できたり作業ツリーを変えたりする設定にも、固定していないものがある。
+`core.alternateRefsCommand`は、`objects/info/alternates`があるcloneのfetchで、シェルから実行される。
+`core.worktree`は、`config.worktree`に書くと、`status`、`clean`、`add -A`が見る作業ツリーを別のディレクトリに変える。
+どちらも実際のgitで確かめた。
+これらは残るリスクである。
+`git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動く。
+そのため、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。
+根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことである。
 検査コマンドはworkerのrootとして隔離なしに動く([検査コマンドはフローが実行する](#検査コマンドはフローが実行する))。
 そのため、`.git/config`を書き換えなくても、gitプロセスの環境変数を読むなど、同じことができる。
 この隔離は、設定の誤動作への備えである。

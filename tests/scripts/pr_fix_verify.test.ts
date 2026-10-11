@@ -16,6 +16,7 @@ import { fixPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import {
   type CommandRunner,
+  FIXED_GIT_CONFIG,
   runCommand,
 } from "../../f/factory/lib/workspace.ts";
 import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -1621,11 +1622,18 @@ describe("listUncommittedChangedPaths", () => {
     expect(calls[0]?.options?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
   });
 
-  test("runs git with core.symlinks=false fixed on the command line", async () => {
-    const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
-    await listUncommittedChangedPaths(run, "/wt");
-    expect(calls[0]?.argv.join(" ")).toContain("-c core.symlinks=false");
-  });
+  test.each([...FIXED_GIT_CONFIG])(
+    "runs git with %s=%s fixed on the command line",
+    async (key, value) => {
+      const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+      await listUncommittedChangedPaths(run, "/wt");
+      const argv = calls[0]?.argv ?? [];
+      const pairs = argv.flatMap((arg, index) =>
+        arg === "-c" ? [argv[index + 1]] : [],
+      );
+      expect(pairs).toContain(`${key}=${value}`);
+    },
+  );
 
   test("runs git without replace objects", async () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);

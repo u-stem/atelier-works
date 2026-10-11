@@ -30,6 +30,7 @@ import {
   ensureFactoryClone,
   ensureHeadOnBranch,
   ensureRepo,
+  FIXED_GIT_CONFIG,
   factoryCloneLockPath,
   fetchPrHeadRef,
   formatGitleaksReport,
@@ -429,7 +430,7 @@ describe("ensureRepo", () => {
     expect(dashDashIndex).toBeGreaterThan(-1);
   });
 
-  test("resets credential.helper and disables hooks/fsmonitor on every call", async () => {
+  test("disables hooks with core.hooksPath on the fetch call", async () => {
     const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
       run: fake.run,
@@ -538,6 +539,15 @@ describe("ensureRepo", () => {
   });
 });
 
+/** gitのargvにある`-c key=value`の`key=value`を、並んだ順に返す。 */
+function commandLineConfig(argv: readonly string[]): string[] {
+  return argv.flatMap((arg, index) =>
+    arg === "-c" && argv[index + 1] !== undefined
+      ? [argv[index + 1] ?? ""]
+      : [],
+  );
+}
+
 describe("git config isolation", () => {
   /** `ensureRepo`が、fetch(ネットワーク)と`git config`(ローカル)の順に実行したgitの呼び出しを返す。 */
   async function fetchAndConfigCalls() {
@@ -583,29 +593,45 @@ describe("git config isolation", () => {
     expect(network?.options?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
   });
 
-  test("forces core.symlinks=false on every call, over .git/config and config.worktree", async () => {
-    const { local } = await fetchAndConfigCalls();
-    expect(local?.argv.join(" ")).toContain("-c core.symlinks=false");
+  test("fixes exactly these config keys", () => {
+    expect(FIXED_GIT_CONFIG.map(([key]) => key).sort()).toEqual([
+      "commit.gpgsign",
+      "core.askPass",
+      "core.attributesFile",
+      "core.excludesFile",
+      "core.fsmonitor",
+      "core.hooksPath",
+      "core.symlinks",
+      "credential.helper",
+      "push.gpgSign",
+    ]);
   });
 
-  test("forces commit.gpgsign=false on every call, so a repo config cannot run gpg.program", async () => {
-    const { local } = await fetchAndConfigCalls();
-    expect(local?.argv.join(" ")).toContain("-c commit.gpgsign=false");
-  });
+  test.each([...FIXED_GIT_CONFIG])(
+    "local git fixes %s=%s on the command line",
+    async (key, value) => {
+      const { local } = await fetchAndConfigCalls();
+      expect(commandLineConfig(local?.argv ?? [])).toContain(`${key}=${value}`);
+    },
+  );
 
-  test("forces core.askPass to empty on every call", async () => {
-    const { local } = await fetchAndConfigCalls();
-    expect(local?.argv.join(" ")).toContain("-c core.askPass=");
-  });
+  test.each([...FIXED_GIT_CONFIG])(
+    "network git fixes %s=%s on the command line",
+    async (key, value) => {
+      const { network } = await fetchAndConfigCalls();
+      expect(commandLineConfig(network?.argv ?? [])).toContain(
+        `${key}=${value}`,
+      );
+    },
+  );
 
-  test("forces core.excludesFile to /dev/null, which GIT_CONFIG_GLOBAL does not stop", async () => {
-    const { local } = await fetchAndConfigCalls();
-    expect(local?.argv.join(" ")).toContain("-c core.excludesFile=/dev/null");
-  });
-
-  test("forces core.attributesFile to /dev/null, which GIT_CONFIG_GLOBAL does not stop", async () => {
-    const { local } = await fetchAndConfigCalls();
-    expect(local?.argv.join(" ")).toContain("-c core.attributesFile=/dev/null");
+  test("network git adds the gh credential helper after the fixed empty one", async () => {
+    const { network } = await fetchAndConfigCalls();
+    const config = commandLineConfig(network?.argv ?? []);
+    expect(config.slice(-2)).toEqual([
+      "credential.helper=",
+      "credential.helper=!gh auth git-credential",
+    ]);
   });
 
   test("local git allows only https, over protocol.*.allow in the repo config", async () => {

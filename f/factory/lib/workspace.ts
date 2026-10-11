@@ -460,7 +460,7 @@ export type GitCommandOptions = {
  * - `core.hooksPath`、`core.fsmonitor`、`core.askPass`:
  *   設定ファイルに書かれたプログラムを、gitに実行させない。
  *   `core.askPass`は空にすると、環境変数`SSH_ASKPASS`も読まれなくなる。
- * - `commit.gpgsign`: commitの署名で、`gpg.program`に書かれたプログラムを実行させない。
+ * - `commit.gpgsign`、`push.gpgSign`: commitとpushの署名で、`gpg.program`に書かれたプログラムを実行させない。
  * - `core.symlinks`: worktreeの検証が前提にする値。
  *   `.git/config`や`config.worktree`で`true`に戻させない。
  * - `core.excludesFile`、`core.attributesFile`: `/dev/null`にして、
@@ -476,6 +476,7 @@ export const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
   ["core.excludesFile", "/dev/null"],
   ["core.attributesFile", "/dev/null"],
   ["commit.gpgsign", "false"],
+  ["push.gpgSign", "false"],
   ["credential.helper", ""],
 ];
 
@@ -552,8 +553,10 @@ function remoteTrackingRef(branch: string): string {
 /**
  * ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。
  * 渡す環境変数は、ここで挙げるものとHOMEとPATHだけである。
- * HOMEは、gitではなく、gitが起動するghなどの子プロセスが使うために渡す。
- * gitの設定ファイルとして読まれないことは、下の環境変数と`FIXED_GIT_CONFIG`で保っている。
+ * HOMEは、gitが起動するghなどの子プロセスと、gitの`~`の展開
+ * (`.git/config`のパスの`~`、httpsの`$HOME/.netrc`)のために渡す。
+ * workerのHOMEには`.netrc`を置かない前提である。
+ * グローバルの設定としては、下の環境変数と`FIXED_GIT_CONFIG`で読ませない。
  * `pr_workflow_support.ts`も、gitの実行にこの関数と`buildGitArgv`を使う。
  */
 export function localGitEnv(

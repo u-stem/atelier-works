@@ -893,6 +893,10 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 `mise.toml`の`[tasks.*]`だけの変更、`scripts/`の変更、`mise.local.toml.example`の変更は記録しない。workerの動作に影響しないためである。
 
+`f/factory/lib/workspace.ts`のgitの実行(`buildGitArgv`と`localGitEnv`)を変えたときは、反映の後に、sandboxの実装フローで確かめる。
+clone、fetch、push、`git gtr new`が1回ずつ成功することを見る。
+テストのoriginはローカルのパスで、`GIT_ALLOW_PROTOCOL`を上書きしているので、httpsでの動作はテストでは確かめられない。
+
 ### ホスト側で反映するもの
 
 `infra/`と`mise.toml`の`[tools]`・`[env]`の変更は、次の手順で反映する。ビルドはホスト側のcheckoutから行うので、先にmainを取り込む。
