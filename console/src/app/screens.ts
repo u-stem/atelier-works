@@ -51,9 +51,13 @@ export const SCREENS: readonly Screen[] = [
     path: "/",
     label: "要対応",
     icon: Inbox,
-    // 通知の一覧ができるまでは、一覧に出る承認と失敗の件数だけを数える。
+    // 一覧に出る承認、再実行できる失敗、通知の件数を数える。
     // 数えた件数と一覧の件数が食い違うと、最初に見る数字を信用できなくなるためである。
-    badge: (counts) => (counts?.approvals ?? 0) + (counts?.failures ?? 0),
+    // 件数の取り方は、サイドバーが渡す`actionableCounts`の結果に合わせる。
+    badge: (counts) =>
+      (counts?.approvals ?? 0) +
+      (counts?.failures ?? 0) +
+      (counts?.notices ?? 0),
     lazy: () =>
       import("../screens/inbox/InboxScreen.tsx").then((module) => ({
         Component: module.InboxScreen,
