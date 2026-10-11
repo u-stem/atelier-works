@@ -11,6 +11,7 @@ import {
 } from "../components/ui/tooltip.tsx";
 import { cn } from "../lib/cn.ts";
 import { describeRelease } from "../lib/consoleStatus.ts";
+import { actionableCounts } from "../lib/inboxView.ts";
 import {
   formatBadgeCount,
   navLinkClass,
@@ -126,7 +127,13 @@ export function Sidebar() {
       >
         {SCREENS.map((screen) => {
           const Icon = screen.icon;
-          const badge = formatBadgeCount(screen.badge(summary.data?.counts));
+          const badge = formatBadgeCount(
+            screen.badge(
+              summary.data === undefined
+                ? undefined
+                : actionableCounts(summary.data),
+            ),
+          );
           return (
             <Tooltip key={screen.id}>
               <TooltipTrigger asChild>
