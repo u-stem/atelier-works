@@ -7,7 +7,10 @@ import {
   type CheckCommandResult,
   runAllowedCheckCommands,
 } from "../lib/check_runner.ts";
-import { checkSandboxFromEnv } from "../lib/check_sandbox.ts";
+import {
+  checkSandboxFromEnv,
+  kernelWarningText,
+} from "../lib/check_sandbox.ts";
 import {
   buildSystemPrompt,
   type DailyBudgetStatus,
@@ -71,7 +74,7 @@ export type PrFixRetryResult =
 
 /** `runPrFixVerify`が使うI/O。テストでは偽物に差し替える。 */
 export type PrFixVerifyDeps = {
-  /** 検査コマンドをサンドボックスなしで実行することをnoticeに記録する。 */
+  /** 検査コマンドをコンテナの分離なしで実行することをnoticeに記録する。 */
   readonly announceChecks: () => Promise<void>;
   /** worktreeの`.git`を`expected`と比べ、違えば`WorktreeGitPointerModifiedError`を投げる。 */
   readonly assertGitPointer: (expected: string) => Promise<void>;
@@ -362,7 +365,7 @@ export async function main(
       announceChecks: async () => {
         await addNotice({
           kind: "unsandboxed_check_commands",
-          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
         });
       },
       assertGitPointer: (expected) =>

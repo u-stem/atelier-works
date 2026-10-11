@@ -11,10 +11,12 @@ ARG WM_VERSION=1.817.0
 FROM ghcr.io/windmill-labs/windmill:${WM_VERSION}
 
 ARG CLAUDE_VERSION
-# 検査コマンドを動かす非特権ユーザーのuid。`mise.toml`の`[env]`と同じ値を
-# `docker-compose.yml`が渡す。既定値は、`--build-arg`無しの`docker build`でも
+# 検査コマンドを動かす非特権ユーザーの先頭のuidと、その数。`mise.toml`の`[env]`と
+# 同じ値を`docker-compose.yml`が渡す。既定値は、`--build-arg`無しの`docker build`でも
 # 検査用のuidが決まるようにするためだけにある。
+# 数は、workerの同時実行数(`NUM_WORKERS`)以上にする。
 ARG FACTORY_CHECK_UID=10001
+ARG FACTORY_CHECK_POOL_SIZE=8
 ARG GH_VERSION
 ARG GITLEAKS_VERSION
 ARG GTR_REF
@@ -31,16 +33,19 @@ RUN apt-get update \
         curl \
         git \
         jq \
-        procps \
         util-linux \
     && rm -rf /var/lib/apt/lists/*
 
-# 検査コマンドを実行するための非特権ユーザー。uidを固定するのは、worktreeの
-# 所有者や`setpriv`の引数がuidで決まり、再ビルドで変わってはいけないため。
-# ホームもログインシェルも持たせない。`setpriv`(util-linux)で切り替える。
-# Windmillのジョブには、workerの環境変数がほとんど渡らない。workerのscriptは
-# このユーザーのuidを`/etc/passwd`から読み、同じ値でworktreeの所有権を渡して`setpriv`を呼ぶ。
-RUN useradd -u "${FACTORY_CHECK_UID}" -M -s /usr/sbin/nologin factory-check
+# 検査コマンドを実行するための非特権ユーザー`factory-check-0`、`factory-check-1`、…。
+# 並行して動く検査が同じuidを共有しないよう、実行ごとに空いている1つを使う。
+# uidを固定するのは、worktreeの所有者や`setpriv`の引数がuidで決まり、再ビルドで
+# 変わってはいけないため。ホームもログインシェルも持たせない。
+# `setpriv`(util-linux)で切り替える。Windmillのジョブには、workerの環境変数が
+# ほとんど渡らない。workerのscriptはこのユーザーのuidを`/etc/passwd`から読む。
+RUN set -eux; \
+    for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1))); do \
+        useradd -u "$((FACTORY_CHECK_UID + i))" -M -s /usr/sbin/nologin "factory-check-${i}"; \
+    done
 
 # gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
 # `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
@@ -122,11 +127,15 @@ ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/loca
 # ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
 # 気づくのではなく、その場でビルドを失敗させる。
 # `claude`はPATHの名前で解決して確かめる。
-# `setpriv`は、検査の実行と同じ引数で、切り替えた先のuidと、ケーパビリティの上限が
-# 空であること、`no_new_privs`が立つことを確かめる。
+# `setpriv`は、検査の実行と同じ引数で、すべての枠について、切り替えた先のuidと、
+# ケーパビリティの上限が空であること、`no_new_privs`が立つことを確かめる。
 RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
-    && [ "$(setpriv --reuid="${FACTORY_CHECK_UID}" --regid="${FACTORY_CHECK_UID}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${FACTORY_CHECK_UID}" ] \
-    && setpriv --reuid="${FACTORY_CHECK_UID}" --regid="${FACTORY_CHECK_UID}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- grep -Eq '^CapBnd:[[:space:]]*0+$' /proc/self/status \
-    && setpriv --reuid="${FACTORY_CHECK_UID}" --regid="${FACTORY_CHECK_UID}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/self/status
+    && for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1))); do \
+        uid="$((FACTORY_CHECK_UID + i))"; \
+        [ "$(setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${uid}" ] \
+        && setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- grep -Eq '^CapBnd:[[:space:]]*0+$' /proc/self/status \
+        && setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/self/status \
+        || exit 1; \
+    done
 
 CMD ["windmill"]

@@ -4,7 +4,10 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { runAllowedCheckCommands } from "../lib/check_runner.ts";
-import { checkSandboxFromEnv } from "../lib/check_sandbox.ts";
+import {
+  checkSandboxFromEnv,
+  kernelWarningText,
+} from "../lib/check_sandbox.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -112,7 +115,7 @@ async function inspectChanges(
  * リースの値は、フローのルートジョブID(`rootFlowJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
  * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。
- * 検査コマンドがあるときは、サンドボックスなしで実行することを
+ * 検査コマンドがあるときは、コンテナの分離なしで非特権のuidにより実行することを
  * noticeとして記録する。
  * `first_round.kind`が想定外なら例外を投げる。
  */
@@ -153,7 +156,7 @@ export async function main(
   if (commands.length > 0 && first_round.kind !== "lease_lost") {
     await addNotice({
       kind: "unsandboxed_check_commands",
-      message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+      message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
     });
   }
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");

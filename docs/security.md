@@ -359,14 +359,12 @@ workerのPATHには、rootのホームの`/root/.local/bin`と、誰でも書き
 非特権のuidがそこに`git`などを置くと、rootのworkerの名前解決を奪えるため、外している。
 `claude`は`/usr/local/bin`のsymlinkから名前で起動する。
 
-イメージには、検査コマンドを動かす非特権のユーザー`factory-check`を作ってある。
-uidは環境変数`FACTORY_CHECK_UID`で決まり、既定は10001である。
-uidはイメージのビルドと、worktreeの所有権の受け渡しと、`setpriv`の引数で同じ値を使うので、`mise.toml`の`[env]`に置く。
+イメージには、検査コマンドを動かす非特権のユーザー`factory-check-0`から`factory-check-7`を作ってある。
 `useradd -M`でホームのディレクトリは作らず、passwdに記録されるホームのパスも実在しない。
 `HOME`は、実行のたびに作る非公開のディレクトリを渡す。
 ログインシェルは使えない。
-uidの切り替えに使う`setpriv`も入っている。
-イメージのビルドは、検査の実行と同じ引数の`setpriv`で、uid、ケーパビリティの上限が空であること、`no_new_privs`を確かめる。
+uidの切り替えに使う`setpriv`と、枠のロックに使う`flock`も入っている。
+イメージのビルドは、検査の実行と同じ引数の`setpriv`で、すべてのユーザーについて、uid、ケーパビリティの上限が空であること、`no_new_privs`を確かめる。
 使い方は[検査コマンドの権限](#検査コマンドの権限)に書く。
 
 ## Console用workerの境界
@@ -964,7 +962,7 @@ Claudeに渡すツールは`Read`、`Glob`、`Grep`、`Edit`、`Write`だけで�
 
 対象リポジトリのlintやテストは、Claudeではなくフローのステップが`factory_config`の`allowed_check_commands`として実行する。
 実装フローは、`check_commands_by_repo`に明示したコマンドを実行する。
-検査コマンドは対象リポジトリのコードを実行するので、workerのrootではなく、非特権のユーザー`factory-check`で動かす([検査コマンドの権限](#検査コマンドの権限))。
+検査コマンドは対象リポジトリのコードを実行するので、workerのrootではなく、非特権のユーザー(`factory-check-N`)で動かす([検査コマンドの権限](#検査コマンドの権限))。
 ただしコンテナ、network、CPUとメモリはworkerと共有する。
 そのため既定値は空の配列にし、空でなければ実行のたびにコンテナの分離が無いことを知らせる記録(notice)を残す。
 
@@ -974,64 +972,92 @@ rootのホームと`/tmp`の下は入れない。そこに置かれた実行フ�
 
 ### 検査コマンドの権限
 
-検査コマンドは、実uidと実gidを`factory-check`にして実行する。
+検査コマンドは、実uidと実gidを検査用のユーザー`factory-check-N`にして実行する。
 対象リポジトリのコードから、workerの秘密と、workerが後で実行するファイルを守るためである。
 実装は`f/factory/lib/check_runner.ts`と`f/factory/lib/check_sandbox.ts`にある。
-uidはイメージのビルド引数`FACTORY_CHECK_UID`(`mise.toml`の`[env]`)で決まる。
-ジョブにはworkerの環境変数がほとんど渡らないので、scriptは`/etc/passwd`の`factory-check`からuidを読む。
-読んだ値が1000未満(rootを含む)なら、検査を始めずに失敗させる。
+
+検査用のユーザーは、並行して動く検査どうしが同じuidを共有しないよう、複数ある(枠)。
+実行ごとに、空いている枠を1つ取り、終わったら手放す。
+枠の数は`FACTORY_CHECK_POOL_SIZE`で、既定は8である。workerの同時実行数(`NUM_WORKERS`、3)以上にする。
+先頭のuidは`FACTORY_CHECK_UID`で、既定は10001である。
+どちらもイメージのビルド引数で、`mise.toml`の`[env]`が値を持つ。
+ジョブにはworkerの環境変数がほとんど渡らないので、scriptは`/etc/passwd`の`factory-check-N`から枠のuidを読む。
+読んだuidが1000未満(rootを含む)なら、検査を始めずに失敗させる。
 
 | 守るもの | 仕組み |
 | --- | --- |
-| 権限 | `setpriv`で、実uidと実gidを切り替え、補助グループを実行ごとの目印の1つだけにし、ケーパビリティの上限と継承を空にし、`no_new_privs`を立てる。setuidのバイナリやファイルのケーパビリティで特権を戻せない |
+| 権限 | `setpriv`で、実uidと実gidを枠のuidにし、補助グループを実行ごとの目印の1つだけにし、ケーパビリティの上限と継承を空にし、`no_new_privs`を立てる。setuidのバイナリやファイルのケーパビリティで特権を戻せない |
+| 並行する検査 | 枠ごとにuidが違うので、並行して動く別の検査のworktreeとHOMEに書き込めない。枠は`/var/lib/factory/check-slots`のロックファイル(`flock`)で取る。ロックを持つプロセスの標準入力のパイプが閉じると解放されるので、ジョブが殺されても枠は塞がったままにならない |
 | 環境変数 | 許可リストの`PATH`、`HOME`、`LANG`と、worktreeだけを`safe.directory`にするgitの設定(`GIT_CONFIG_COUNT`など)だけを渡す。workerの環境変数は1つも引き継がない |
-| workerの秘密 | 別のuidのプロセスは、rootのプロセスの`/proc/<pid>/environ`とfdを読めない。`DATABASE_URL`や`WM_TOKEN`などの環境変数と、0600のファイルに届かない |
+| workerの秘密 | 別のuidのプロセスは、rootのプロセスの`/proc/<pid>/environ`とfdを読めない。`DATABASE_URL`や`WM_TOKEN`などの環境変数と、0600のファイルに届かない。枠のロックファイルのディレクトリは0700である |
 | 書き込める場所 | worktree、実行ごとの`HOME`、`/tmp`である。main cloneの`.git`、worktreeの隣、システムのディレクトリ、`/var/lib/factory`には書けない |
-| Windmillの実行時のディレクトリ | `/tmp/windmill`の下の`cache`などは、Windmillが誰でも書き込める権限(0777)で作る。rootのworkerが実行する依存のバンドルを`factory-check`が差し替えられないよう、検査の前に`/tmp/windmill`を所有者以外が入れない権限(0700)にする |
+| Windmillの実行時のディレクトリ | `/tmp/windmill`の下の`cache`などは、Windmillが誰でも書き込める権限(0777)で作る。rootのworkerが実行する依存のバンドルを検査用のユーザーが差し替えられないよう、検査の前に`/tmp/windmill`を所有者以外が入れない権限(0700)にする |
 | 後始末 | コマンドごとと実行の最後に、この実行の目印を持つプロセスをSIGKILLで止める。止まらないプロセスが残れば、所有権を戻さずに失敗させる |
 
 実行の順序は次のとおりである。
 
 1. `/tmp/windmill`を0700にする。
-2. worktreeと`HOME`のうち、rootが所有するものを`factory-check`に渡す。
-3. コマンドを、worktreeのロック(`flock`)の下の`setpriv`で実行する。コマンドごとに、残ったプロセスを止める。
-4. 目印を持つプロセスがいないことを確かめてから、`factory-check`が所有するものをrootに戻す。
-5. `HOME`のディレクトリを消す。
+2. 空いている枠を取る。全部埋まっていれば、2秒おきに取り直し、最大5分待つ。待っても取れなければ「検査の枠が空かない」という失敗にする。
+3. その枠のuidで動くプロセスを止める。枠のロックを持つ間、残っているのは、終わった実行が残したものだけだからである。
+4. worktreeと`HOME`のうち、rootが所有するものを枠のuidに渡す。
+5. コマンドを、worktreeのロック(`flock`)の下の`setpriv`で実行する。コマンドごとに、残ったプロセスを止める。
+6. 目印を持つプロセスがいないことを確かめてから、枠のuidが所有するものをrootに戻す。
+7. 戻した範囲から、グループとその他の書き込みと、setuidとsetgidのビットを落とす。
+8. 枠を手放し、`HOME`のディレクトリを消す。
+
+待つのは、同時実行が枠の数を超えても開発を止めないためである。
+実行を直列にはしない。
 
 所有権の受け渡しは、symlinkをたどらない。
 `find -P`はsymlinkに入らず、`chown -h`はsymlink自身の所有者を変える。
-そのため、worktreeの中のsymlinkが指すファイルは、worktreeの外でも中でも所有者が変わらない。
+`-execdir`は、見つけたエントリの親ディレクトリを起点に`./名前`だけを渡す。
+列挙と変更の間に、親のパスがsymlinkに差し替えられても、worktreeの外のファイルの所有者は変わらない。
 ハードリンクが2つ以上あるファイルは渡さない。worktreeの外のファイルへのリンクの所有者を変えないためである。
 渡さなかったファイルはrootの所有のままで、検査コマンドは書き換えられない。
 戻すときは、検査の間にできたファイルをすべて戻す。
+戻した後に書き込みのビットを落とすのは、他の枠の検査がroot所有のものへ書き込めないようにするためである。
 
 実行ごとの目印は、補助グループの大きなgidである。
-子孫に受け継がれ、`factory-check`は`CAP_SETGID`が無いので外せない。
+子孫に受け継がれ、検査用のユーザーは`CAP_SETGID`が無いので外せない。
 別のセッションに抜けたプロセスも、`/proc/<pid>/status`の`Groups`行で見つかる。
-`factory-check`のプロセスをすべて止める`pkill -u`は使わない。並行して動く別の作業項目の検査を巻き込むためである。
+枠のuidのプロセスをすべて止める操作(`pkill -u`と同じ効果)は、枠のロックを持つ間にだけ行う。ロックを持たずに行うと、並行して動く別の検査を巻き込むためである。
 
 workerには`CAP_SYS_PTRACE`が無いので、別のuidのプロセスの環境変数とfdは読めない。
-プロセスロックの走査は、ロックを持つ`flock`と同じプロセスグループにいる、読めないプロセスを、その`flock`の子として扱う([実装フロー](internals/implement.md#調べられないプロセス))。
-`flock`はworkerのuidで残るので、取り消されたジョブが残した検査コマンドも、次の実行がグループごと止められる。
+プロセスロックの走査は、枠のuidで動くプロセスを一覧に入れない。
+どのworktreeの検査かを特定できず、一覧に入れると無関係なworktreeの走査まで塞ぐためである。
+検査が取り消されて後始末が走らなかった場合は、次にそのworktreeを使う前に、残った所有権を戻す。
+worktreeの所有者の枠のロックを取れれば、その枠のuidのプロセスを止めてから戻す。
+取れなければ、プロセスは止めずに所有権だけ戻す。書き込みのビットを落とすので、残ったプロセスはworktreeを書き換えられない。
+この確認は、worktreeを使うステップの準備と完了の前と、掃除が行う([実装フロー](internals/implement.md#調べられないプロセス))。
 
 main cloneの`.git`はrootが所有する。
-`factory-check`は、`config`、`hooks/`、`info/attributes`、worktreeごとの`config.worktree`を書き換えられない。
+検査用のユーザーは、`config`、`hooks/`、`info/attributes`、worktreeごとの`config.worktree`を書き換えられない。
 そのため、検査コマンドがgitの設定を書き換えて、rootのgitに実行させる経路は無い。
 検査コマンドの中のgitは、indexを書けないので`git add`と`git commit`が失敗する。`git status`と`git diff`は動く。
 
+前提は次のとおりである。
+
+- ホストのカーネルで`fs.protected_hardlinks`と`fs.protected_symlinks`が1である。他のユーザーのファイルへのリンクを作らせないためである。1でなければ、検査の実行のたびにnoticeへ警告を足す。検査は止めない。
+- Docker Engineがuser namespaceの再マップ(userns-remap)やrootlessで動いていない。再マップがあると、目印の補助グループが設定できず、検査が失敗する。検査が失敗するだけで、安全側に倒れる。
+
 残るリスクは次のとおりである。
 
+- 検査用のユーザーは、`/workspaces`の下の他のリポジトリのcloneとworktreeを読める。cloneのURLにトークンは無い。`/workspaces/<owner>/<repo>`を0700にすると、worktreeの受け渡しと衝突しやすいので、今は受け入れる。
+- 並行して動く検査の間でも、worktreeのファイルは読める。枠ごとにuidが違うので、書き換えはできない。HOMEは実行ごとに非公開のディレクトリで、他の枠は書けないが、0755なら読める。
 - 検査コマンドは、workerと同じコンテナとnetworkで動く。DBとWindmillの宛先に届く。認証に使う秘密には届かないが、認証が要らない経路には届く。
 - メモリ、CPU、プロセス数はworkerと共有する。検査コマンドがworkerのジョブを枯渇させうる。
-- `/tmp`と`/dev/shm`は共有する。並行して動く別の検査と、同じuidでファイルを読み書きできる。
+- `/tmp`と`/dev/shm`は共有する。並行して動く別の検査と、ファイルを読み書きできる。
 - `/proc/<pid>/cmdline`は誰でも読める。workerのプロセスの引数に秘密を載せない。
-- `/var/lib/factory`の`requirements`と`audits`は0755で、`factory-check`が読める。`claude`は一覧を読めるが、中のファイルは0600である。
+- `/var/lib/factory`の`requirements`と`audits`は0755で、検査用のユーザーが読める。`claude`は一覧を読めるが、中のファイルは0600である。
 - Windmillが`/tmp/windmill`の権限を戻す契機は確かめていない。戻ると、その間だけ上の保護が外れる。検査の前には、毎回0700へ直す。
-- 取り消されたジョブが、別のセッションに抜けた検査コマンドを残すと、次の実行はworktreeが使用中として止まる。人がそのプロセスを止める。
+- 取り消されたジョブが残した、枠のuidの孤児プロセスは、同じ枠が次に使われるか、そのworktreeが次に使われるまで残る。worktreeは書き換えられない。
 - コンテナで共有するカーネルの脆弱性による脱出は防げない。
 
 これらは、検査コマンドを別のコンテナで、networkなしに動かすまで残る。
 `scripts/verify-check-sandbox.sh`(`mise run test:check-sandbox`)が、上の表の項目を確かめる。
+成功、失敗、タイムアウトする検査も確かめる。
+`git status`、`git diff`、`bun test`を使う検査も確かめる。
+さらに、枠の取得と待ちと解放を確かめる。
 workerと同じ制限の使い捨てのコンテナで、実際のsetpriv、flock、chown、`/proc`を使う。
 
 ### 対象リポジトリの設定を信頼しない
@@ -1118,7 +1144,7 @@ Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のフ�
 `git gtr new`のcheckoutは`GH_TOKEN`を持つ環境で動く。
 そのため、`.git/config`の`filter.<名前>.smudge`や`process`を、PRの内容の`.gitattributes`が指名すると、`GH_TOKEN`を読めるプログラムが動く。
 根本の対処は、ネットワーク操作とcheckoutを分け、checkoutを`localGitEnv`で行うことである。
-検査コマンドは`factory-check`のuidで動き、main cloneの`.git`に書き込めない([検査コマンドの権限](#検査コマンドの権限))。
+検査コマンドは検査用のユーザーで動き、main cloneの`.git`に書き込めない([検査コマンドの権限](#検査コマンドの権限))。
 そのため、検査コマンドが`.git/config`を書き換えて、`GH_TOKEN`を持つgitにプログラムを実行させる経路は無い。
 検査コマンドが書き換えられるworktreeの`.git`ファイルは、記録との照合で止める。
 

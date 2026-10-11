@@ -153,7 +153,8 @@ jobs:
               --build-arg GTR_REF=$GTR_REF \
               --build-arg GTR_COMMIT=$GTR_COMMIT \
               --build-arg WMILL_VERSION=$WMILL_VERSION \
-              --build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID
+              --build-arg FACTORY_CHECK_UID=$FACTORY_CHECK_UID \
+              --build-arg FACTORY_CHECK_POOL_SIZE=$FACTORY_CHECK_POOL_SIZE
           '
 
       - name: Test the process lock in the worker image

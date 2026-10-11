@@ -472,6 +472,15 @@ describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
     expect(args.FACTORY_CHECK_UID).toBe("${FACTORY_CHECK_UID:?run via mise}");
   });
 
+  test("passes the number of check slots to the image build", () => {
+    const build = service("windmill_worker").build;
+    const args = isRecord(build) && isRecord(build.args) ? build.args : {};
+
+    expect(args.FACTORY_CHECK_POOL_SIZE).toBe(
+      "${FACTORY_CHECK_POOL_SIZE:?run via mise}",
+    );
+  });
+
   test("drops the capabilities no job of the worker uses", () => {
     expect(stringList(service("windmill_worker"), "cap_drop")).toEqual([
       "NET_RAW",
@@ -523,18 +532,34 @@ describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
     expect(listed).toEqual(stringList(service("windmill_worker"), "cap_drop"));
   });
 
-  test("mise.toml sets the same default uid as the Dockerfile", () => {
+  const miseEnv = (): Json => {
     const parsed: unknown = Bun.TOML.parse(
       readFileSync(join(REPO_ROOT, "mise.toml"), "utf8"),
     );
-    const env = isRecord(parsed) && isRecord(parsed.env) ? parsed.env : {};
-    const dockerfile = readFileSync(
-      join(REPO_ROOT, "infra/worker/Dockerfile"),
-      "utf8",
-    );
+    return isRecord(parsed) && isRecord(parsed.env) ? parsed.env : {};
+  };
+  const dockerfileDefault = (name: string): string | undefined =>
+    new RegExp(`^ARG ${name}=(\\S+)$`, "m").exec(
+      readFileSync(join(REPO_ROOT, "infra/worker/Dockerfile"), "utf8"),
+    )?.[1];
 
-    expect(/^ARG FACTORY_CHECK_UID=(\S+)$/m.exec(dockerfile)?.[1]).toBe(
-      String(env.FACTORY_CHECK_UID),
+  test("mise.toml sets the same default uid as the Dockerfile", () => {
+    expect(dockerfileDefault("FACTORY_CHECK_UID")).toBe(
+      String(miseEnv().FACTORY_CHECK_UID),
+    );
+  });
+
+  test("mise.toml sets the same default slot count as the Dockerfile", () => {
+    expect(dockerfileDefault("FACTORY_CHECK_POOL_SIZE")).toBe(
+      String(miseEnv().FACTORY_CHECK_POOL_SIZE),
+    );
+  });
+
+  test("there are at least as many slots as worker processes", () => {
+    const workers = envEntries(service("windmill_worker"), "NUM_WORKERS=")[0];
+
+    expect(Number(miseEnv().FACTORY_CHECK_POOL_SIZE)).toBeGreaterThanOrEqual(
+      Number(workers?.slice("NUM_WORKERS=".length)),
     );
   });
 });

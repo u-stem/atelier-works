@@ -20,8 +20,10 @@ GITLEAKS_VERSION = "8.30.1"
 GTR_REF = "v2.11.1"
 GTR_COMMIT = "f4df6344a362303e6b47bc92955fef3bba468426"
 WMILL_VERSION = "1.817.0"
-# 検査コマンドを動かす非特権ユーザー`factory-check`のuid。workerのイメージのビルドが使い、イメージの環境変数としてscriptにも渡る。
+# 検査コマンドを動かす非特権ユーザー`factory-check-N`の先頭のuidと数。workerのイメージのビルド引数になる。
+# workerのscriptは、ユーザーのuidを`/etc/passwd`から読む。数は`NUM_WORKERS`以上にする。
 FACTORY_CHECK_UID = "10001"
+FACTORY_CHECK_POOL_SIZE = "8"
 LOG_MAX_SIZE = "20m"
 LOG_MAX_FILE = "10"
 

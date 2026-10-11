@@ -73,39 +73,55 @@ describe("infra/worker/Dockerfile PATH", () => {
 });
 
 describe("infra/worker/Dockerfile check user", () => {
-  test("creates factory-check with the configured uid, no home and no login shell", () => {
-    const created = startingWith("RUN").some((line) =>
-      line.includes(
-        'useradd -u "${FACTORY_CHECK_UID}" -M -s /usr/sbin/nologin factory-check',
-      ),
+  const userCreation = (): string =>
+    startingWith("RUN").find((line) => line.includes("useradd")) ?? "";
+
+  test("creates one numbered user per slot with no home and no login shell", () => {
+    expect(userCreation()).toContain(
+      'useradd -u "$((FACTORY_CHECK_UID + i))" -M -s /usr/sbin/nologin "factory-check-${i}"',
     );
-    expect(created).toBe(true);
+  });
+
+  test("loops over every slot when creating the users", () => {
+    expect(userCreation()).toContain(
+      "for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1)))",
+    );
   });
 
   test("defaults the check uid to 10001", () => {
     expect(startingWith("ARG")).toContain("ARG FACTORY_CHECK_UID=10001");
   });
 
-  test("installs util-linux for setpriv", () => {
+  test("defaults the number of slots to 8", () => {
+    expect(startingWith("ARG")).toContain("ARG FACTORY_CHECK_POOL_SIZE=8");
+  });
+
+  test("installs util-linux for setpriv and flock", () => {
     const installed = startingWith("RUN").some(
       (line) => line.includes("apt-get install") && /\sutil-linux\b/.test(line),
     );
     expect(installed).toBe(true);
   });
 
-  test("installs procps for pkill", () => {
+  test("does not install procps, which nothing uses", () => {
     const installed = startingWith("RUN").some(
       (line) => line.includes("apt-get install") && /\sprocps\b/.test(line),
     );
-    expect(installed).toBe(true);
+    expect(installed).toBe(false);
   });
 
   const verification = (): string =>
     startingWith("RUN").find((line) => line.includes("claude --version")) ?? "";
 
-  test("verifies at build time that setpriv drops to the check uid", () => {
+  test("verifies every slot at build time", () => {
     expect(verification()).toContain(
-      '[ "$(setpriv --reuid="${FACTORY_CHECK_UID}" --regid="${FACTORY_CHECK_UID}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${FACTORY_CHECK_UID}" ]',
+      "for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1)))",
+    );
+  });
+
+  test("verifies at build time that setpriv drops to the slot's uid", () => {
+    expect(verification()).toContain(
+      '[ "$(setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${uid}" ]',
     );
   });
 
@@ -115,6 +131,10 @@ describe("infra/worker/Dockerfile check user", () => {
 
   test("verifies at build time that no_new_privs is set", () => {
     expect(verification()).toContain("'^NoNewPrivs:[[:space:]]*1$'");
+  });
+
+  test("fails the build when a slot does not verify", () => {
+    expect(verification()).toContain("|| exit 1");
   });
 
   test("does not switch the image to a non-root USER", () => {

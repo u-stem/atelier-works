@@ -3,9 +3,14 @@
 // Windmillでジョブを取り消しても新しいセッションで起動したプロセスは止まらないので、
 // 次の実行はworktreeに触れる前にロックが空いているかを確かめ、塞がっていれば保持者を/procから特定する。
 
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
+import {
+  parseProcStatus,
+  resolveCheckPool,
+  restoreCheckOwnershipFromEnv,
+} from "./check_sandbox.ts";
 import { maskSecrets } from "./log.ts";
 import type { CommandResult, CommandRunner } from "./workspace.ts";
 
@@ -493,6 +498,25 @@ async function readStatOf(fs: ProcFs, pid: number): Promise<ProcStat | null> {
   return parseProcStat(await readTextOr(fs, `/proc/${String(pid)}/stat`, ""));
 }
 
+/** `/proc/<pid>/status`の実uid。読めないか形が違えば-1を返す。 */
+async function realUidOf(fs: ProcFs, pid: string): Promise<number> {
+  const status = parseProcStatus(
+    await readTextOr(fs, `/proc/${pid}/status`, ""),
+  );
+  return status === null ? -1 : status.uid;
+}
+
+/** 検査コマンドの枠のuidの集合。passwdか環境変数が読めなければ、既定の範囲になる。 */
+function defaultSlotUids(): ReadonlySet<number> {
+  try {
+    return new Set(
+      resolveCheckPool(process.env, () => readFileSync("/etc/passwd", "utf8")),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
 /** PID 1、自分、自分の祖先の連鎖を返す。どれも止める対象にしない。 */
 async function selfAndAncestors(
   fs: ProcFs,
@@ -542,6 +566,10 @@ async function lockFdState(
  * `/proc`を走査し、ロックファイルにflockを持つプロセスと、持ち主タグかロックファイルのタグを持つプロセスを返す。
  * 保持者の照合はパスではなくdev/inoとfdinfoのFLOCKの行で行う。
  * PID 1、自分と祖先、ゾンビ、statが読めないか走査中に終わったプロセスは返さない。
+ * 検査コマンドの枠のuid(`slotUids`)で動くプロセスも返さない。workerは別のuidのenvironとfdを読めず、
+ * どのworktreeの検査かを特定できないので、読めないまま返すと、無関係なworktreeの走査まで塞ぐためである。
+ * 枠のuidのプロセスは、検査の実行が終わるときに止め、取り消された実行が残したものは次の実行が枠を取るときか
+ * `restoreCheckOwnership`が止める。所有権をrootに戻したworktreeは、そのuidのプロセスから書き込めない。
  * 生きているのにenvironかfdの情報を読めないプロセスは、`uninspectable`を付けて返す(タグもロックとの関係も分からないため)。
  * ロックファイルが無ければ、保持者は探さずにタグだけで探す(ロックファイルを消されても残りを見逃さない)。
  */
@@ -549,6 +577,7 @@ export async function scanLockProcesses(
   lock: WorktreeLock,
   fs: ProcFs = defaultProcFs,
   selfPid: number = process.pid,
+  slotUids: ReadonlySet<number> = defaultSlotUids(),
 ): Promise<LockProcess[]> {
   let lockId: string | null;
   try {
@@ -567,6 +596,7 @@ export async function scanLockProcesses(
     if (excluded.has(pid)) continue;
     const procStat = await readStatOf(fs, pid);
     if (procStat === null || procStat.state === "Z") continue;
+    if (slotUids.has(await realUidOf(fs, name))) continue;
     const environ = await readProc(() => fs.readText(`/proc/${name}/environ`));
     if (environ.kind === "gone") continue;
     const fdState =
@@ -608,37 +638,7 @@ export async function scanLockProcesses(
       uninspectable,
     });
   }
-  return coverUninspectableByGroup(found);
-}
-
-/**
- * 読めなかったプロセスのうち、タグを持つ保持者と同じプロセスグループにいるものを、その保持者の子として扱う。
- * 検査コマンドは別のuidで動き、`CAP_SYS_PTRACE`の無いworkerはそのenvironとfdを読めない。
- * ロックを持つflockはworkerのuidで、検査コマンドの親として同じグループの先頭に残る。
- * グループへのkillは別のuidのプロセスにも届くので、保持者と一緒に止められる。
- * 保持者に持ち主のタグがなければ(タグの無い別の実行の確かめなど)、持ち主が分からないので読めないままにする。
- * 別のセッションへ抜けた読めないプロセスは、グループに含まれないので読めないままで、止めない。
- */
-function coverUninspectableByGroup(
-  entries: readonly LockProcess[],
-): LockProcess[] {
-  const anchors = new Map<number, LockProcess>();
-  for (const item of entries) {
-    if (item.uninspectable || (item.owner === null && item.lockPath === null))
-      continue;
-    if (!anchors.has(item.pgid)) anchors.set(item.pgid, item);
-  }
-  return entries.map((item) => {
-    const anchor = item.uninspectable ? anchors.get(item.pgid) : undefined;
-    return anchor === undefined
-      ? item
-      : {
-          ...item,
-          uninspectable: false,
-          owner: anchor.owner,
-          lockPath: anchor.lockPath,
-        };
-  });
+  return found;
 }
 
 /**
@@ -780,6 +780,12 @@ export type StopPolicy = {
 };
 
 export type LockReleaseDeps = {
+  /**
+   * worktreeに残った検査用のuidの所有を、rootへ戻す。走査の前に1回呼ぶ。
+   * 取り消された検査が後始末せずに残すと、rootのgitが所有者の違いで実行を拒むためである。
+   * 指定しなければ何もしない。
+   */
+  readonly restoreOwnership?: (lock: WorktreeLock) => Promise<void>;
   readonly scan: (lock: WorktreeLock) => Promise<readonly LockProcess[]>;
   readonly stop: (targets: readonly LockProcess[]) => Promise<void>;
   readonly sleep: (ms: number) => Promise<void>;
@@ -790,6 +796,9 @@ export function defaultLockReleaseDeps(
   graceMs: number = HOLDER_KILL_GRACE_MS,
 ): LockReleaseDeps {
   return {
+    restoreOwnership: async (lock) => {
+      await restoreCheckOwnershipFromEnv(lock.worktreeDir);
+    },
     scan: (lock) => scanLockProcesses(lock),
     stop: (targets) => stopProcesses(targets, defaultSignalDeps, graceMs),
     sleep: (ms) => Bun.sleep(ms),
@@ -899,6 +908,7 @@ async function releasedWithin(opts: {
 
 /**
  * worktreeを前の実行のプロセスが使っていないことを確かめる。止めたプロセスを返す(何も止めなければ空)。
+ * 最初に、検査用のuidの所有が残っていればrootへ戻す(`deps.restoreOwnership`)。
  * ロックを確かめ(塞がっていれば確かめ直し)、ロックが空いていても必ず`/proc`を走査して、`planLockRelease`で決める。
  * `policy`がnullなら何も止めず、関係するプロセス(保持者か、このロックファイルのタグを持つ残り)がいれば`WorktreeBusyError`を投げる。
  * `policy`があり、関係するプロセスがすべて止めてよいものなら、`policy.recheck`を呼んでから止め、ロックが空くのを確かめて走査し直す。
@@ -913,6 +923,7 @@ export async function ensureWorktreeLockFree(opts: {
   readonly policy: StopPolicy | null;
   readonly deps: LockReleaseDeps;
 }): Promise<readonly LockProcess[]> {
+  await opts.deps.restoreOwnership?.(opts.lock);
   let lockHeld = await heldAfterRetries(opts);
   const self = opts.policy?.self ?? null;
   let plan = await scanAndPlan({ lock: opts.lock, self, deps: opts.deps });

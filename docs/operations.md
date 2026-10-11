@@ -489,6 +489,7 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 - workerのイメージにmiseは無い。worker内で直接動くコマンドにする。例は`bun install --frozen-lockfile`、`bun test`、`bunx --bun tsc --noEmit`、`bunx --bun biome check .`である。
 - 1つのリポジトリの検査コマンドは4件までを目安にする。検査コマンドが多いほど、修正のラウンドを始められる時間が短くなるためである。
 - 検査コマンドは、worktreeとその`HOME`と`/tmp`にだけ書き込める。main cloneの`.git`に書けないので、検査コマンドの中の`git add`と`git commit`は失敗する。
+- 同時に動く検査が枠の数(8)を超えると、検査は空くのを最大5分待つ。待っても取れなければ「no check slot became free」で失敗し、作業項目は失敗になる。`retry_work_item`で再実行する。
 - 検査コマンドに常駐のデーモンを残させない。ロックのファイル記述子を持ったまま残ると、以降のラウンドがロックを取れずに失敗する。記述子を閉じて残ったものも、次の準備やPRの修正を止める。
 
 > [!WARNING]

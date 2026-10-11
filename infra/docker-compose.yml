@@ -78,6 +78,7 @@ services:
         GTR_COMMIT: ${GTR_COMMIT:?run via mise}
         WMILL_VERSION: ${WMILL_VERSION:?run via mise}
         FACTORY_CHECK_UID: ${FACTORY_CHECK_UID:?run via mise}
+        FACTORY_CHECK_POOL_SIZE: ${FACTORY_CHECK_POOL_SIZE:?run via mise}
     deploy:
       replicas: 1
       resources:

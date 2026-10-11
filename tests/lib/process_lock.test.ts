@@ -102,6 +102,7 @@ function entry(overrides: Partial<LockProcess> = {}): LockProcess {
 
 type FakeProc = {
   readonly stat: string;
+  readonly status?: string;
   readonly environ?: string;
   readonly cmdline?: string;
   readonly fds?: Record<
@@ -134,6 +135,10 @@ function fakeProcFs(procs: Record<string, FakeProc>): ProcFs {
       if (kind === "stat") return p.stat;
       if (kind === "environ") return p.environ ?? "";
       if (kind === "cmdline") return p.cmdline ?? "";
+      if (kind === "status") {
+        if (p.status !== undefined) return p.status;
+        throw errno("ENOENT");
+      }
       const info = p.fds?.[fd]?.fdinfo;
       if (kind === "fdinfo" && info !== undefined) return info;
       throw errno("ENOENT");
@@ -1672,15 +1677,16 @@ describe("a process that cannot be inspected", () => {
     expect(entries[0]?.uninspectable).toBe(true);
   });
 
-  // 検査コマンドは別のuidで動くので、rootのworkerはそのenvironを読めない。
-  // ロックを持つflock(root)と同じプロセスグループの中なら、そのflockの持ち主として扱う。
-  /** pid 10(ロックを持つflock)の子で、同じプロセスグループのpid 11。environは読めない。 */
-  const CHECK_CHILD: FakeProc = {
+  // 検査コマンドは枠のuidで動き、rootのworkerはそのenvironを読めない。
+  // どのworktreeの検査かを特定できず、読めないまま返すと無関係なworktreeの走査を塞ぐので、走査から外す。
+  const SLOT_CHILD: FakeProc = {
     stat: statLine(11, 10, 10, 2),
     environ: "",
+    status:
+      "Name:\tbun\nState:\tS (sleeping)\nUid:\t20000\t20000\t20000\t20000\nGroups:\t1000000 \n",
   };
 
-  const scanWithCheckChild = (child: FakeProc = CHECK_CHILD) =>
+  const scanWithSlotChild = (child: FakeProc = SLOT_CHILD, slots = [20000]) =>
     scanLockProcesses(
       LOCK,
       failingProcFs(
@@ -1690,56 +1696,33 @@ describe("a process that cannot be inspected", () => {
         errno("EACCES"),
       ),
       900,
+      new Set(slots),
     );
 
-  test("covers an unreadable process in the group of a tagged holder", async () => {
-    const entries = await scanWithCheckChild();
-    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(
-      false,
-    );
+  test("does not list an unreadable process that runs as a slot uid", async () => {
+    const entries = await scanWithSlotChild();
+    expect(entries.map((found) => found.pid)).toEqual([10]);
   });
 
-  test("gives the covered process the holder's owner tag", async () => {
-    const entries = await scanWithCheckChild();
-    expect(entries.find((found) => found.pid === 11)?.owner).toEqual(OTHER_JOB);
+  test("still lists an unreadable process that runs as another uid", async () => {
+    const entries = await scanWithSlotChild(SLOT_CHILD, [20001]);
+    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(true);
   });
 
-  test("gives the covered process the holder's lock file tag", async () => {
-    const entries = await scanWithCheckChild();
-    expect(entries.find((found) => found.pid === 11)?.lockPath).toBe(
-      LOCK.lockPath,
-    );
-  });
-
-  test("does not cover an unreadable process outside every tagged group", async () => {
-    const entries = await scanWithCheckChild({
-      stat: statLine(11, 1, 11, 2),
+  test("still lists an unreadable process whose uid cannot be read", async () => {
+    const entries = await scanWithSlotChild({
+      stat: statLine(11, 10, 10, 2),
       environ: "",
     });
     expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(true);
   });
 
-  test("does not cover an unreadable process by a holder that has no tag", async () => {
-    const entries = await scanLockProcesses(
-      LOCK,
-      failingProcFs(
-        {
-          "10": { ...TAGGED_HOLDER, environ: "" },
-          "11": CHECK_CHILD,
-        },
-        "readText",
-        "/proc/11/environ",
-        errno("EACCES"),
-      ),
-      900,
-    );
-    expect(entries.find((found) => found.pid === 11)?.uninspectable).toBe(true);
-  });
-
-  test("plans to stop a holder together with its covered check processes", async () => {
-    const entries = await scanWithCheckChild();
-    const plan = planLockRelease(entries, LOCK, THIS_JOB);
-    expect(plan.kind).toBe("stop");
+  test("an unreadable slot process outside every tagged group does not make the worktree busy", async () => {
+    const entries = await scanWithSlotChild({
+      ...SLOT_CHILD,
+      stat: statLine(11, 1, 11, 2),
+    });
+    expect(planLockRelease(entries, LOCK, THIS_JOB).kind).toBe("stop");
   });
 
   test("skips a process whose environment is gone", async () => {
@@ -1862,6 +1845,73 @@ describe("a process that cannot be inspected", () => {
       },
     );
     expect(stopped).toHaveLength(0);
+  });
+});
+
+describe("ensureWorktreeLockFree restoring ownership", () => {
+  function restoringDeps(events: string[], failure?: Error): LockReleaseDeps {
+    return {
+      restoreOwnership: async () => {
+        events.push("restore");
+        if (failure !== undefined) throw failure;
+      },
+      scan: async () => [],
+      stop: async () => {},
+      sleep: async () => {},
+    };
+  }
+
+  test("restores the ownership before probing the lock", async () => {
+    const events: string[] = [];
+    const fake = createFakeCommandRunner([ok()]);
+    const run: typeof fake.run = async (argv, options) => {
+      events.push("probe");
+      return fake.run(argv, options);
+    };
+    await ensureWorktreeLockFree({
+      run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps(events),
+    });
+    expect(events).toEqual(["restore", "probe"]);
+  });
+
+  test("does not probe the lock when restoring the ownership fails", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureWorktreeLockFree({
+      run: fake.run,
+      lock: LOCK,
+      policy: null,
+      deps: restoringDeps([], new Error("chown failed")),
+    }).catch(() => {});
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("fails with the restore error", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: restoringDeps([], new Error("chown failed")),
+      }),
+    ).rejects.toThrow("chown failed");
+  });
+
+  test("works with dependencies that have no restore step", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    const deps = restoringDeps([]);
+    const { restoreOwnership: _unused, ...withoutRestore } = deps;
+    await expect(
+      ensureWorktreeLockFree({
+        run: fake.run,
+        lock: LOCK,
+        policy: null,
+        deps: withoutRestore,
+      }),
+    ).resolves.toEqual([]);
   });
 });
 

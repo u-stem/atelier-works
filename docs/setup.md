@@ -284,7 +284,7 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 | 環境の診断 | `mise run doctor` | すべての項目が`OK`で、最後に`=== 全項目OK ===`が出る。終了コードは0 |
 | Windmillサーバーの応答 | `curl http://127.0.0.1:8080/api/version` | `CE v`に続いて、`mise.toml`の`WM_VERSION`の値が出る |
 | ローカルとリモートの一致 | `mise exec -- wmill sync push --dry-run` | `0 changes` |
-| 検査コマンドの境界 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査用のuidに落ちること、workerの秘密に届かないこと、所有権が戻ることなど、すべてのテストが通る。`mise run up`や`mise run build`でイメージを作った後に実行する |
+| 検査コマンドの境界 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査用のuidに落ちること、workerの秘密に届かないこと、所有権が戻ること、枠の取得と待ちなど、すべてのテストが通る。`mise run up`や`mise run build`でイメージを作った後に実行する |
 | Data Tableのmigration | `mise run test:db` | すべてのview(`v_inbox`など)のSELECTと、down migrationでの戻しが成功し、最後に`[test-db] OK`が出る |
 | Consoleの取り込み | `mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 console_fetcher` | `"event":"status","state":"ok"`の行が出る。初回は`"event":"deployed"`も出る。`config_missing`なら、`CONSOLE_GITHUB_TOKEN`の投入と`mise run up`を確かめる |
 | Consoleの配信 | `curl -sI http://127.0.0.1:8080/console/` | `HTTP/1.1 200`と`Content-Security-Policy`が出る。`/`と`/api/version`には`Content-Security-Policy`が付かない |

@@ -39,7 +39,6 @@ for cap in "${CAP_DROP[@]}"; do
 done
 args+=(
   -e FACTORY_CHECK_SANDBOX_IT=1
-  -e "FACTORY_CHECK_UID=${FACTORY_CHECK_UID:-10001}"
   --entrypoint bun
   -v "${REPO_ROOT}:/src:ro"
   -w /src

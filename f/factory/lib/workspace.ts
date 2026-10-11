@@ -2898,7 +2898,7 @@ function parseLsRemoteSymref(stdout: string): LsRemoteRefs {
  * - リモートの`HEAD`が`refs/heads/<baseBranch>`でない。
  * - リモートに`refs/heads/<baseBranch>`が無い。
  * - ローカルの追跡ref(`refs/remotes/origin/<baseBranch>`)が、リモートの既定のブランチの先頭と違う。
- * ローカルの`origin/HEAD`と追跡refは、隔離せずrootで動く検査コマンドが書き換えうるためである。
+ * ローカルの`origin/HEAD`と追跡refは、検査コマンドが別のuidで動き書けない前提が崩れても、書き換えを検出するためである。
  * `--prune`なしのfetchは、書き換えられた`origin/HEAD`を直さない。
  * 照合は、リモートにブランチがあるときもする。返す`baseSha`から準備が比較の基準を求めるので、
  * そのcommitがローカルにあり(追跡refと同じ)、検査コマンドに差し替えられていないことを確かめるためである。

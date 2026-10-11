@@ -250,14 +250,18 @@ describe("runAllowedCheckCommands", () => {
 });
 
 /** 呼び出しの順序を記録する偽の`CheckSandbox`。 */
-function fakeSandbox(opts?: { readonly settleError?: Error }) {
+function fakeSandbox(opts?: {
+  readonly settleError?: Error;
+  readonly prepareError?: Error;
+  readonly releaseError?: Error;
+}) {
   const events: string[] = [];
   const identity = newCheckIdentity(10001, () => 0);
   const sandbox: CheckSandbox = {
-    identity,
     wrap: (argv) => setprivArgv(identity, argv),
     prepare: async (dirs: CheckDirs) => {
       events.push(`prepare ${dirs.worktreeDir} ${dirs.homeDir}`);
+      if (opts?.prepareError !== undefined) throw opts.prepareError;
     },
     settle: async () => {
       events.push("settle");
@@ -265,7 +269,9 @@ function fakeSandbox(opts?: { readonly settleError?: Error }) {
     },
     release: async (dirs: CheckDirs) => {
       events.push(`release ${dirs.worktreeDir} ${dirs.homeDir}`);
+      if (opts?.releaseError !== undefined) throw opts.releaseError;
     },
+    kernelWarnings: () => [],
   };
   return { sandbox, events, identity };
 }
@@ -366,6 +372,112 @@ describe("runAllowedCheckCommands with a sandbox", () => {
       sandbox,
     ).catch(() => {});
     expect(events.some((event) => event.startsWith("release"))).toBe(true);
+  });
+
+  test("takes the worktree back even when handing it over fails midway", async () => {
+    const { sandbox, events } = fakeSandbox({
+      prepareError: new Error("handover failed"),
+    });
+    const { run } = recordingRunner(events, []);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    ).catch(() => {});
+    expect(events.some((event) => event.startsWith("release"))).toBe(true);
+  });
+
+  test("does not run a command when handing the worktree over fails", async () => {
+    const { sandbox, events } = fakeSandbox({
+      prepareError: new Error("handover failed"),
+    });
+    const { run } = recordingRunner(events, []);
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      fakeCheckHomeDir().factory,
+      "/usr/bin",
+      sandbox,
+    ).catch(() => {});
+    expect(events.some((event) => event.startsWith("run"))).toBe(false);
+  });
+
+  test("fails with the handover error", async () => {
+    const { sandbox, events } = fakeSandbox({
+      prepareError: new Error("handover failed"),
+    });
+    const { run } = recordingRunner(events, []);
+    await expect(
+      runAllowedCheckCommands(
+        run,
+        "/work",
+        ["true"],
+        1000,
+        fakeCheckHomeDir().factory,
+        "/usr/bin",
+        sandbox,
+      ),
+    ).rejects.toThrow("handover failed");
+  });
+
+  test("removes the home when handing the worktree over fails", async () => {
+    const { sandbox, events } = fakeSandbox({
+      prepareError: new Error("handover failed"),
+    });
+    const { run } = recordingRunner(events, []);
+    const home = fakeCheckHomeDir();
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      home.factory,
+      "/usr/bin",
+      sandbox,
+    ).catch(() => {});
+    expect(home.state.cleanupCalls).toBe(1);
+  });
+
+  test("removes the home even when taking the worktree back fails", async () => {
+    const { sandbox, events } = fakeSandbox({
+      releaseError: new Error("take back failed"),
+    });
+    const { run } = recordingRunner(events, [ok("")]);
+    const home = fakeCheckHomeDir();
+    await runAllowedCheckCommands(
+      run,
+      "/work",
+      ["true"],
+      1000,
+      home.factory,
+      "/usr/bin",
+      sandbox,
+    ).catch(() => {});
+    expect(home.state.cleanupCalls).toBe(1);
+  });
+
+  test("fails with the release error when taking the worktree back fails", async () => {
+    const { sandbox, events } = fakeSandbox({
+      releaseError: new Error("take back failed"),
+    });
+    const { run } = recordingRunner(events, [ok("")]);
+    await expect(
+      runAllowedCheckCommands(
+        run,
+        "/work",
+        ["true"],
+        1000,
+        fakeCheckHomeDir().factory,
+        "/usr/bin",
+        sandbox,
+      ),
+    ).rejects.toThrow("take back failed");
   });
 
   test("fails the run when stray processes cannot be stopped", async () => {
