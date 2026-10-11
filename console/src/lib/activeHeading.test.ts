@@ -108,6 +108,21 @@ describe("activeHeadingId with a hash target", () => {
     ).toBe("c");
   });
 
+  test("picks the last heading when the hash heading is exactly on the frame bottom", () => {
+    expect(
+      activeHeadingId(
+        [
+          { id: "a", top: 100 },
+          { id: "b", top: 600 },
+          { id: "c", top: 800 },
+        ],
+        120,
+        true,
+        { ...VIEW, hashId: "b" },
+      ),
+    ).toBe("c");
+  });
+
   test("ignores the hash target when not at the end", () => {
     expect(
       activeHeadingId(

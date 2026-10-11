@@ -189,6 +189,12 @@ describe("Markdown table cells", () => {
     ).toContain('<span class="whitespace-nowrap">FR-002</span>');
   });
 
+  test("leaves an id inside emphasis alone", () => {
+    expect(
+      render("| ID | Body |\n| --- | --- |\n| **FR-001** | text |\n"),
+    ).not.toContain("whitespace-nowrap");
+  });
+
   test("lets a text cell wrap", () => {
     expect(render(TABLE)).toContain(">Users can sign in</td>");
   });

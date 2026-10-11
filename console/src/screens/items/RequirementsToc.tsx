@@ -26,7 +26,7 @@ export function RequirementsToc({
               href={`#${heading.id}`}
               aria-current={heading.id === activeId ? "location" : undefined}
               className={cn(
-                "-ml-[calc(1rem+1px)] block rounded-sm border-l-2 border-transparent text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring aria-[current=location]:border-primary aria-[current=location]:font-medium aria-[current=location]:text-foreground",
+                "-ml-[calc(1rem+1px)] block rounded-sm border-l-2 border-transparent text-muted-foreground outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring aria-[current=location]:border-primary aria-[current=location]:text-foreground",
                 heading.level === 3
                   ? "pl-[calc(1rem+0.75rem-1px)]"
                   : "pl-[calc(1rem-1px)]",
