@@ -1021,12 +1021,13 @@ export async function recordAgentRun(
 // ---------------------------------------------------------------------------
 
 const JOB_LINK_COLUMN_PATTERN =
-  /column "(?:job_id|root_job_id)" of relation "(?:work_item_events|job_failures)" does not exist/;
+  /column "root_job_id" of relation "job_failures" does not exist/;
 
 /**
- * 例外が、ジョブIDの列が無いことによるもの(PostgreSQLのundefined_column、コード42703)かを返す。
- * コードか、列と表の名前を含む文で判定する。windmill-clientは、500以外のAPIのエラーでは
- * サーバーの文を`body`に入れる。
+ * 例外が、`job_failures.root_job_id`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 今の呼び出し元は`recordFailure`だけである。その文が指名する列のうち、新しい列は`root_job_id`だけなので、
+ * エラーコード42703か、列と表の名前を含む文のどちらかで判定する。
+ * windmill-clientは、500以外のAPIのエラーではサーバーの文を`body`に入れる。
  */
 export function isMissingJobLinkColumnError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -1046,6 +1047,7 @@ export async function recordFailure(
   record: FailureRecord,
   sql: SqlClient = defaultSqlClient,
   jobIds: JobIds = jobIdsFromEnv(process.env),
+  log: Logger = logger("db"),
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error, root_job_id)
@@ -1057,6 +1059,10 @@ export async function recordFailure(
     row = await fetchOneRow(statement, "recordFailure");
   } catch (err) {
     if (!isMissingJobLinkColumnError(err)) throw err;
+    log.warn(
+      "job_failures.root_job_id is missing; recorded the failure without it (the datatable migration has not run yet)",
+      { flow_path: record.flow_path },
+    );
     const legacy = sql`
       INSERT INTO factory.job_failures (work_item_id, flow_path, job_id, step, error)
       VALUES (${record.work_item_id}::bigint, ${record.flow_path}, ${record.job_id}, ${record.step}, ${record.error})

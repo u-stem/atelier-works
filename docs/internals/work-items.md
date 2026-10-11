@@ -147,11 +147,14 @@ Consoleは、このIDからジョブの画面(`/run/<job_id>`)へのリンクを
 | `work_item_events` | `root_job_id` | そのステップを含むフローのルートジョブID。環境変数`WM_ROOT_FLOW_JOB_ID` |
 | `job_failures` | `root_job_id` | 失敗を記録したジョブのルートジョブID。環境変数`WM_ROOT_FLOW_JOB_ID` |
 
-`job_failures.job_id`は既存の列で、呼び出し側が渡す値を持つ。
-フローの失敗(`on_error_flow`)では、どのフローも`failure_module`から`job_id`を渡さないので、`root_job_id`と同じフローのルートのジョブIDになる。
-失敗したステップのジョブIDは取れない。
-そのため、失敗の行から辿れるのはフローの画面までで、該当のステップへは辿れない。
-スケジュールの失敗(`on_error_schedule`)は、引数で渡されたジョブIDを持つ。渡されなかったときは`unknown`が入る。
+`job_failures.job_id`は既存の列で、呼び出し側が渡す値を持つ。出どころによって指す先が違う。
+
+- フローの失敗(`on_error_flow`)の行は、ルートのフローを指す。どのフローも`failure_module`から`job_id`を渡さないので、`root_job_id`と同じ値になり、失敗したステップのジョブIDは取れない。
+- ステップやscriptの中で記録した行は、そのジョブのID(`WM_JOB_ID`)を持つ。該当のジョブの画面へ辿れる。
+  記録するのは`poll_issues`、`poll_prs`、`requirements_apply`、`pr_fix_finish`、`issue_proposal_apply`などである。
+- スケジュールの失敗(`on_error_schedule`)の行は、引数で渡されたジョブIDを持つ。
+
+取れなかったときは`unknown`が入り、Consoleには`null`で返す。
 
 遷移を記録する`lib/db.ts`の関数が、入口で環境変数から読んで同じ文に書く。
 呼び出し側は何も渡さない。
@@ -179,11 +182,13 @@ migrationが書く行も、NULLになる。
 状態の遷移の関数は、同じ回避を持たない。
 その間は、遷移が列の欠落で失敗し、migrationが流れるまで作業項目の状態が進まない。
 関数ごとに新旧2つの文を持つと、状態を移す文が重複して保守しにくくなるためである。
+`console_query`の`work_item_detail`も新しい列を読むので、migrationが遅れる間は失敗する。作業項目の詳細の画面がまだ無いので、実害は無い。
 
-記録したジョブは、Windmillが完了したジョブを消す期間(Community Editionでは90日より短いことがある)を過ぎると、画面が開けなくなる。
-DBの記録は長く残るので、古い行のリンクは開けないことがある。
+記録したジョブは、Windmillの保持期間を過ぎると画面が開けなくなる。
+DBの記録の保持期間は[運用](../operations.md)の「保持期間」にある。
+Windmillの保持期間のほうが短いと、古い行のリンクは開けない。
 
-残る作業として、失敗の行から該当のステップのジョブへ辿る仕組みがある。
+残る作業として、フローの失敗の行から該当のステップのジョブへ辿る仕組みがある。
 失敗したステップのジョブIDを`failure_module`から渡す設計が要る。
 
 ## リース

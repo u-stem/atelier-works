@@ -276,8 +276,8 @@ IssueのリンクはGitHubのIssueのURLの形のときだけ張る。
 作業項目の遷移と失敗は、動いたジョブのIDを持つ([作業項目の状態とリース](work-items.md)の「ジョブの記録」)。
 `src/lib/jobLink.ts`の`jobRunUrl`が、IDからWindmillのジョブの画面のURLを作る。
 `src/components/JobLink.tsx`の`JobLink`が、そのURLへのリンクを描く。リンクは別のタブで開く。
-`work_item_detail`の遷移の型ガードは`src/api/guards/workItemTransitions.ts`にある。
-`tests/scripts/console_work_item_jobs_contract.test.ts`が、backendの変換結果が型ガードを通ることを確かめる。
+`work_item_detail`の遷移と失敗の行の型ガードは、`src/api/guards/workItemTransitions.ts`と`workItemFailures.ts`にある。
+`tests/scripts/console_work_item_jobs_contract.test.ts`が、backendの変換結果がこれらの型ガードを通ることを確かめる。
 
 IDはDBに記録された値で、信頼できない入力として扱う。
 UUIDの形のものだけを、固定の形のパス`/run/<job_id>`に入れる。形が違えばリンクを出さない。

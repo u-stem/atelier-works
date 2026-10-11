@@ -1,7 +1,8 @@
-// backendの"work_item_detail"ビューが返す状態の遷移が、Console(console/)の型ガードを通ることを確かめる。
+// backendの"work_item_detail"ビューが返す状態の遷移と失敗の行が、Console(console/)の型ガードを通ることを確かめる。
 // 両者の型は別々に書かれているので、片方だけを変えたときにここで落とす。
 
 import { describe, expect, test } from "bun:test";
+import { isWorkItemFailureList } from "../../console/src/api/guards/workItemFailures.ts";
 import { isWorkItemTransitionList } from "../../console/src/api/guards/workItemTransitions.ts";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import { runWorkItemDetail } from "../../f/factory/steps/console_query.ts";
@@ -53,13 +54,34 @@ const TRANSITION_ROWS: SqlRow[] = [
   },
 ];
 
+const FAILURE_ROWS: SqlRow[] = [
+  {
+    job_failure_id: "12",
+    flow_path: "f/factory/pipeline",
+    job_id: JOB_ID,
+    root_job_id: JOB_ID,
+    step: "generate",
+    error: "boom",
+    occurred_at: new Date(T0),
+  },
+  {
+    job_failure_id: 11,
+    flow_path: "f/factory/poll_issues",
+    job_id: "unknown",
+    root_job_id: null,
+    step: null,
+    error: "boom",
+    occurred_at: new Date(T0),
+  },
+];
+
 function detailSql(): SqlClient {
   const responses: SqlRow[][] = [
     [OVERVIEW_ROW],
     [],
     [],
     [],
-    [],
+    FAILURE_ROWS,
     [],
     [],
     TRANSITION_ROWS,
@@ -75,9 +97,14 @@ function detailSql(): SqlClient {
   };
 }
 
-describe("work_item_detail transitions and the Console guard", () => {
+describe("work_item_detail rows and the Console guards", () => {
   test("the transitions returned by the backend pass the guard", async () => {
     const detail = await runWorkItemDetail(7, detailSql());
     expect(isWorkItemTransitionList(detail.transitions)).toBe(true);
+  });
+
+  test("the failures returned by the backend pass the guard", async () => {
+    const detail = await runWorkItemDetail(7, detailSql());
+    expect(isWorkItemFailureList(detail.failures)).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ import {
   updateStatusIfLeaseHolder,
   updateStatusIfLeaseHolderClearingFlowJobId,
 } from "../../f/factory/lib/db.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -215,6 +216,19 @@ function createFailingFirstSqlClient(firstError: Error): {
   return { sql, calls };
 }
 
+/** 警告の文を集める`Logger`。 */
+function createWarnCollector(): { log: Logger; warnings: string[] } {
+  const warnings: string[] = [];
+  const log: Logger = {
+    info: () => undefined,
+    warn: (message) => {
+      warnings.push(message);
+    },
+    error: () => undefined,
+  };
+  return { log, warnings };
+}
+
 const FAILURE: Parameters<typeof recordFailure>[0] = {
   work_item_id: null,
   flow_path: "f/factory/pipeline",
@@ -230,19 +244,57 @@ describe("recordFailure before the job link migration", () => {
 
   test("retries once with an insert that names no new column", async () => {
     const { sql, calls } = createFailingFirstSqlClient(MISSING_COLUMN);
-    await recordFailure(FAILURE, sql, JOBS);
+    await recordFailure(FAILURE, sql, JOBS, createWarnCollector().log);
     expect(calls[1]?.text).not.toContain("root_job_id");
+  });
+
+  test("passes the same five values to the insert of the retry", async () => {
+    const { sql, calls } = createFailingFirstSqlClient(MISSING_COLUMN);
+    await recordFailure(FAILURE, sql, JOBS, createWarnCollector().log);
+    expect(calls[1]?.values).toEqual([
+      null,
+      "f/factory/pipeline",
+      "unknown",
+      null,
+      "boom",
+    ]);
+  });
+
+  test("warns once when it falls back", async () => {
+    const { sql } = createFailingFirstSqlClient(MISSING_COLUMN);
+    const { log, warnings } = createWarnCollector();
+    await recordFailure(FAILURE, sql, JOBS, log);
+    expect(warnings).toHaveLength(1);
   });
 
   test("returns the id of the row written by the retry", async () => {
     const { sql } = createFailingFirstSqlClient(MISSING_COLUMN);
-    expect(await recordFailure(FAILURE, sql, JOBS)).toBe(11);
+    expect(
+      await recordFailure(FAILURE, sql, JOBS, createWarnCollector().log),
+    ).toBe(11);
+  });
+
+  test("does not retry a missing column other than root_job_id", async () => {
+    const { sql, calls } = createFailingFirstSqlClient(
+      new Error('column "foo" of relation "job_failures" does not exist'),
+    );
+    await recordFailure(FAILURE, sql, JOBS).catch(() => undefined);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("rethrows a missing column other than root_job_id", async () => {
+    const { sql } = createFailingFirstSqlClient(
+      new Error('column "foo" of relation "job_failures" does not exist'),
+    );
+    await expect(recordFailure(FAILURE, sql, JOBS)).rejects.toThrow(
+      'column "foo"',
+    );
   });
 
   test("recognizes an undefined_column error by its code", async () => {
     const error = Object.assign(new Error("failed"), { code: "42703" });
     const { sql, calls } = createFailingFirstSqlClient(error);
-    await recordFailure(FAILURE, sql, JOBS);
+    await recordFailure(FAILURE, sql, JOBS, createWarnCollector().log);
     expect(calls).toHaveLength(2);
   });
 
@@ -251,7 +303,7 @@ describe("recordFailure before the job link migration", () => {
       body: 'column "root_job_id" of relation "job_failures" does not exist',
     });
     const { sql, calls } = createFailingFirstSqlClient(error);
-    await recordFailure(FAILURE, sql, JOBS);
+    await recordFailure(FAILURE, sql, JOBS, createWarnCollector().log);
     expect(calls).toHaveLength(2);
   });
 
@@ -280,16 +332,22 @@ describe("recordFailure before the job link migration", () => {
 });
 
 describe("job ids from a malformed environment", () => {
-  test("updateStatus binds no value taken from an invalid WM_JOB_ID", async () => {
-    const saved = process.env.WM_JOB_ID;
+  test("updateStatus binds null for both ids when WM_JOB_ID is invalid", async () => {
+    const saved = {
+      job: process.env.WM_JOB_ID,
+      root: process.env.WM_ROOT_FLOW_JOB_ID,
+    };
     process.env.WM_JOB_ID = "not-a-uuid";
+    delete process.env.WM_ROOT_FLOW_JOB_ID;
     try {
       const { sql, calls } = createFakeSqlClient([[{ from_status: "picked" }]]);
       await updateStatus(1, "failed", null, sql);
-      expect(calls[0]?.values).not.toContain("not-a-uuid");
+      expect(calls[0]?.values.slice(-2)).toEqual([null, null]);
     } finally {
-      if (saved === undefined) delete process.env.WM_JOB_ID;
-      else process.env.WM_JOB_ID = saved;
+      if (saved.job === undefined) delete process.env.WM_JOB_ID;
+      else process.env.WM_JOB_ID = saved.job;
+      if (saved.root === undefined) delete process.env.WM_ROOT_FLOW_JOB_ID;
+      else process.env.WM_ROOT_FLOW_JOB_ID = saved.root;
     }
   });
 });
