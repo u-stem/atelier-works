@@ -5,7 +5,6 @@ import {
   EMPTY_PIPELINE_FILTER,
   filterPipelineRows,
   isPipelineFilterActive,
-  issueOrPrLink,
   itemDetailPath,
   itemRequirementsPath,
   nextPipelineSort,
@@ -14,6 +13,7 @@ import {
   pipelineStatusVariant,
   prLink,
   reconcilePipelineFilter,
+  relatedLinks,
   repoOptions,
   showsRequirementsLink,
   sortPipelineRows,
@@ -419,49 +419,81 @@ describe("pipelineStatusVariant", () => {
   );
 
   test("leaves a running status plain", () => {
-    expect(pipelineStatusVariant("implementing")).toBe("outline");
+    expect(pipelineStatusVariant("implementing")).toBe("muted");
   });
 
   test("leaves a status that is not known yet plain", () => {
-    expect(pipelineStatusVariant("zeta")).toBe("outline");
+    expect(pipelineStatusVariant("zeta")).toBe("muted");
   });
 });
 
-describe("issueOrPrLink", () => {
+describe("relatedLinks", () => {
   test("links the issue when the url and number are present", () => {
-    expect(issueOrPrLink(row())).toEqual({
-      label: "#9",
-      url: "https://github.com/o/r/issues/9",
-    });
+    expect(relatedLinks(row())).toEqual([
+      { label: "#9", url: "https://github.com/o/r/issues/9" },
+    ]);
   });
 
-  test("builds the pull request link from the number without an issue", () => {
+  test("lists the issue before the pull request", () => {
     expect(
-      issueOrPrLink(
-        row({ issue_url: null, issue_number: null, pr_number: 12 }),
+      relatedLinks(row({ pr_url: "https://github.com/o/r/pull/12" })),
+    ).toEqual([
+      { label: "#9", url: "https://github.com/o/r/issues/9" },
+      { label: "PR #12", url: "https://github.com/o/r/pull/12" },
+    ]);
+  });
+
+  test("builds the pull request link from the number without a url", () => {
+    expect(
+      relatedLinks(row({ issue_url: null, issue_number: null, pr_number: 12 })),
+    ).toEqual([{ label: "PR #12", url: "https://github.com/o/r/pull/12" }]);
+  });
+
+  test("prefers the recorded pull request url over the number", () => {
+    expect(
+      relatedLinks(
+        row({
+          issue_url: null,
+          issue_number: null,
+          pr_number: 12,
+          pr_url: "https://github.com/o/r/pull/13",
+        }),
       ),
-    ).toEqual({ label: "PR #12", url: "https://github.com/o/r/pull/12" });
+    ).toEqual([{ label: "PR #13", url: "https://github.com/o/r/pull/13" }]);
   });
 
-  test("returns null without an issue or a pull request", () => {
+  test("builds the pull request link from the number when the recorded url is broken", () => {
     expect(
-      issueOrPrLink(row({ issue_url: null, issue_number: null })),
-    ).toBeNull();
+      relatedLinks(
+        row({
+          issue_url: null,
+          issue_number: null,
+          pr_number: 12,
+          pr_url: "https://example.com/o/r/pull/13",
+        }),
+      ),
+    ).toEqual([{ label: "PR #12", url: "https://github.com/o/r/pull/12" }]);
+  });
+
+  test("returns an empty list without an issue or a pull request", () => {
+    expect(relatedLinks(row({ issue_url: null, issue_number: null }))).toEqual(
+      [],
+    );
   });
 
   test("does not link an issue url that is not a GitHub url", () => {
-    expect(issueOrPrLink(row({ issue_url: "javascript:alert(1)" }))).toBeNull();
+    expect(relatedLinks(row({ issue_url: "javascript:alert(1)" }))).toEqual([]);
   });
 
-  test("does not hide a broken issue url behind the pull request link", () => {
+  test("keeps the pull request link beside a broken issue url", () => {
     expect(
-      issueOrPrLink(row({ issue_url: "https://example.com/x", pr_number: 12 })),
-    ).toBeNull();
+      relatedLinks(row({ issue_url: "https://example.com/x", pr_number: 12 })),
+    ).toEqual([{ label: "PR #12", url: "https://github.com/o/r/pull/12" }]);
   });
 
   test("does not link an owner that cannot be in a url", () => {
     expect(
-      issueOrPrLink(
+      relatedLinks(
         row({
           issue_url: null,
           issue_number: null,
@@ -469,7 +501,7 @@ describe("issueOrPrLink", () => {
           owner: "o/../x",
         }),
       ),
-    ).toBeNull();
+    ).toEqual([]);
   });
 });
 

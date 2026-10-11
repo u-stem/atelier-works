@@ -378,6 +378,12 @@ describe("describeApproval", () => {
     ).toBe("success");
   });
 
+  test("leaves an approval status that is not known yet plain", () => {
+    expect(describeApproval(approval({ status: "zeta" })).statusVariant).toBe(
+      "muted",
+    );
+  });
+
   test("labels the kind", () => {
     expect(describeApproval(approval()).kindLabel).toBe("要件定義");
   });
@@ -497,6 +503,12 @@ describe("describeRound", () => {
     ).toBe("failure");
   });
 
+  test("leaves an outcome that is not known yet plain", () => {
+    expect(describeRound(round({ outcome: "zeta" })).outcomeVariant).toBe(
+      "muted",
+    );
+  });
+
   test("shows the raw value of an unknown outcome", () => {
     expect(describeRound(round({ outcome: "new_one" })).outcomeLabel).toBe(
       "不明(new_one)",
@@ -550,6 +562,12 @@ describe("describeReview", () => {
     ).toBe("修正を依頼");
   });
 
+  test("leaves a verdict that is not known yet plain", () => {
+    expect(describeReview(review({ verdict: "zeta" })).verdictVariant).toBe(
+      "muted",
+    );
+  });
+
   test("counts the findings", () => {
     expect(describeReview(review({ finding_count: 3 })).findingLabel).toBe(
       "指摘 3件",
@@ -574,6 +592,12 @@ describe("describeFixRound", () => {
 
   test("labels the outcome", () => {
     expect(describeFixRound(fixRound).outcomeLabel).toBe("ブロック");
+  });
+
+  test("leaves a fix outcome that is not known yet plain", () => {
+    expect(
+      describeFixRound({ ...fixRound, outcome: "zeta" }).outcomeVariant,
+    ).toBe("muted");
   });
 
   test("counts the reviews, replies and commits", () => {

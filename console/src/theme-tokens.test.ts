@@ -66,6 +66,13 @@ const MEANING_SURFACES = [
 
 const BADGE_TINT = 0.14;
 const BANNER_TINT = 0.07;
+/** `Badge`のmuted(`bg-foreground/10`)が背景に重ねる割合。 */
+const MUTED_BADGE_TINT = 0.1;
+
+const BADGE_SOURCE = readFileSync(
+  new URL("./components/ui/badge.tsx", import.meta.url),
+  "utf8",
+);
 
 const PAIRS: Pair[] = [
   ...TEXT_SURFACES.flatMap((bg): Pair[] => [
@@ -88,6 +95,16 @@ const PAIRS: Pair[] = [
     (["selected", "accent"] as const).map(
       (bg): Pair => ({ fg, bg, min: 4.5, tint: fg }),
     ),
+  ),
+  // 面の上に載せる、灰色のバッジ(背景に主の文字色を薄く重ねる)。
+  ...(["background", "card", "selected", "accent"] as const).map(
+    (bg): Pair => ({
+      fg: "foreground",
+      bg,
+      min: 4.5,
+      tint: "foreground",
+      tintAmount: MUTED_BADGE_TINT,
+    }),
   ),
   // AuthBannerの帯(warningを`BANNER_TINT`で重ねた面)の上の文字。
   ...(["foreground", "muted-foreground"] as const).map(
@@ -112,6 +129,12 @@ const PAIRS: Pair[] = [
 ];
 
 describe("theme tokens", () => {
+  test("keeps the muted badge background at the tint the pairs assume", () => {
+    expect(BADGE_SOURCE).toContain(
+      'muted: "border-transparent bg-foreground/10 text-foreground"',
+    );
+  });
+
   test("defines the tokens that the pairs use", () => {
     expect(TOKENS.size).toBeGreaterThan(30);
   });
