@@ -1,6 +1,5 @@
-// factory_consoleのraw appが読む、読み取り専用のデータ源。
-// Appの各タブが読む`factory.v_*`ビューを1つのスクリプトの背後にまとめ、
-// AppのバックエンドのrunnableをインラインSQLの無い`type: script`の参照のままにする。
+// Console(`console/`のSPA)が読む、読み取り専用のデータ源。
+// 各画面が読む`factory.v_*`ビューを、`view`の名前で引く1つのscriptの背後にまとめる。
 
 import * as wmill from "windmill-client@1.817.0";
 import { isAbsolute, resolve } from "node:path";

@@ -1498,10 +1498,8 @@ export async function ensureFactoryClone(
           );
         }
         // 先にローカルの変更をすべて捨てる。Factoryはこのcloneを読むだけだが、
-        // `wmill sync push`がその場でraw appをバンドルし、その`npm install`が
-        // `package-lock.json`を書き換える。実際のworkerでは、これで`checkout -B`が
-        // 切り替えを拒み(「Your local changes ... would be overwritten」)、
-        // `self_update`がずっと進まなくなった。
+        // 作業ツリーに変更が残ると`checkout -B`が切り替えを拒み
+        // (「Your local changes ... would be overwritten」)、`self_update`が進まなくなる。
         const resetResult = await opts.run(buildGitArgv(["reset", "--hard"]), {
           cwd: dir,
           env: localGitEnv(opts.home, opts.path),
