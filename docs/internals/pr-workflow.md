@@ -401,22 +401,23 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `review_post_mode` | `comment_only` | `gated`ならレビューを投稿しない |
 | `diff_max_lines` | `3000` | レビューに渡す差分の行数の上限 |
 | `claude_timeout_sec` | `1800` | Claude 1回の実行と、PR修正の検査コマンド1件を打ち切る秒数 |
-| `max_fix_rounds` | `3` | PR修正のラウンドの上限 |
+| `max_fix_rounds` | `3` | PR修正のラウンドの上限。上げると、失敗の下限により3ラウンド目以降は`heavy_model`で動く |
 | `allowed_check_commands` | `[]` | PR修正の検査コマンド |
 | `max_fix_changed_files` | `30` | PR修正で変えてよいファイル数の上限 |
 | `max_fix_diff_lines` | `1500` | PR修正の追加と削除の行数の上限 |
 | `default_reviewers` | `[]` | 再レビューを依頼する人 |
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
-| `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が2回失敗した後は`heavy_model`を使う |
-| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、2回失敗した後のPR修正のモデル |
+| `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が続けて2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、続けて2回失敗した後のPR修正のモデル |
 
-モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数える。
-次の3つを足す。
+モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数え、次の2つの大きいほうにする。
 
-- Claudeが動いて`blocked`で終えた`fix_rounds`の行
-- 検査の再実行(`pr_fix_verify_retry`)をした作業項目
-- `agent_runs.error`がある失敗した実行の行
+- 直近に連続した失敗。`blocked`でないラウンド(`done`か`requirements_gap`)で最後に終えた時刻より後の、次の3つの合計である。
+  - Claudeが動いて`blocked`で終えた`fix_rounds`の行
+  - 検査の再実行(`pr_fix_verify_retry`)をした作業項目
+  - `agent_runs.error`がある失敗した実行の行
+- 作業項目の`fix_round`から1を引いた値。毎回`done`で終えても再レビューが続くと、失敗の記録が残らないためである。
 
 除く条件と数の理由は、[運用](../operations.md)の「モデルを使い分ける」にある。
 
