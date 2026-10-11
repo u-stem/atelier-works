@@ -1,6 +1,7 @@
 import { CircleCheck, Inbox } from "lucide-react";
 import { StaleDataNotice } from "../../components/StaleDataNotice.tsx";
 import { emptyStateTone, type UnlistedCount } from "../../lib/inboxView.ts";
+import type { RefreshFailure } from "./refreshFailure.ts";
 import { UnlistedCards } from "./UnlistedCards.tsx";
 
 /**
@@ -17,11 +18,7 @@ export function InboxEmpty({
 }: {
   unlisted: readonly UnlistedCount[];
   /** 一覧の取り直しが失敗しているときに渡す。 */
-  refreshFailure?: {
-    error: unknown;
-    isFetching: boolean;
-    onRetry: () => void;
-  } | null;
+  refreshFailure?: RefreshFailure | null;
 }) {
   const failed = refreshFailure !== null;
   return (

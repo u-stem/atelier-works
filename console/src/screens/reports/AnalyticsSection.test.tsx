@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../../api/errors.ts";
-import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.ts";
+import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
 import type { SectionQuery } from "../../api/sectionQuery.ts";
 import { AnalyticsSection } from "./AnalyticsSection.tsx";
 

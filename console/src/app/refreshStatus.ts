@@ -15,7 +15,7 @@ export type RefreshStatus = {
   readonly onRefresh: () => void;
   /**
    * 見出しに渡した取得のすべてが自動で取り直される間隔(ミリ秒)。そうでなければ`null`。
-   * 取得が失敗している間は`null`にする。自動更新が成功しているように読めるためである。
+   * 取得が失敗していても自動の取り直しは続くので、失敗の間も値を保つ。
    */
   readonly autoRefreshMs: number | null;
 };
@@ -62,16 +62,15 @@ export function refreshStatusOfAll(
   const fetched = queries
     .map((query) => query.dataUpdatedAt)
     .filter((updatedAt) => updatedAt > 0);
-  const isError = queries.some(isHeaderError);
   return {
     updatedAt: fetched.length === 0 ? 0 : Math.min(...fetched),
     isFetching: queries.some((query) => query.isFetching),
-    isError,
+    isError: queries.some(isHeaderError),
     onRefresh: () => {
       for (const query of queries) {
         void query.refetch();
       }
     },
-    autoRefreshMs: isError ? null : (options.autoRefreshMs ?? null),
+    autoRefreshMs: options.autoRefreshMs ?? null,
   };
 }

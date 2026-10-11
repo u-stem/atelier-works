@@ -40,6 +40,26 @@ describe("InboxEmpty", () => {
     expect(html).not.toContain("text-success");
   });
 
+  test("changes the heading for a 401 too", () => {
+    const html = renderToStaticMarkup(
+      <InboxEmpty
+        unlisted={[]}
+        refreshFailure={failure(new ApiFailure({ kind: "unauthorized" }))}
+      />,
+    );
+    expect(html).toContain("最後に取得できた時点では");
+  });
+
+  test("leaves the 401 notice to the banner", () => {
+    const html = renderToStaticMarkup(
+      <InboxEmpty
+        unlisted={[]}
+        refreshFailure={failure(new ApiFailure({ kind: "unauthorized" }))}
+      />,
+    );
+    expect(html).not.toContain("もう一度取得する");
+  });
+
   test("offers a retry after a failed refresh", () => {
     const html = renderToStaticMarkup(
       <InboxEmpty

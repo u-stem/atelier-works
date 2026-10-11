@@ -40,6 +40,7 @@ import { InboxDetail } from "./InboxDetail.tsx";
 import { InboxEmpty } from "./InboxEmpty.tsx";
 import { InboxList } from "./InboxList.tsx";
 import { KindChips } from "./KindChips.tsx";
+import { refreshFailureOf } from "./refreshFailure.ts";
 import { UnlistedCards } from "./UnlistedCards.tsx";
 
 function LoadingState() {
@@ -183,15 +184,7 @@ export function InboxScreen() {
         {header}
         <InboxEmpty
           unlisted={unlisted}
-          refreshFailure={
-            summary.isError
-              ? {
-                  error: summary.error,
-                  isFetching: summary.isFetching,
-                  onRetry: refresh.onRefresh,
-                }
-              : null
-          }
+          refreshFailure={refreshFailureOf(summary, refresh.onRefresh)}
         />
       </>
     );

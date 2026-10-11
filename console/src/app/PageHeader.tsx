@@ -61,7 +61,10 @@ export function PageHeader({
           ) : (
             <span>まだ取得していません</span>
           )}
-          <AutoRefreshNote intervalMs={refresh.autoRefreshMs} />
+          <AutoRefreshNote
+            intervalMs={refresh.autoRefreshMs}
+            failed={refresh.isError}
+          />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

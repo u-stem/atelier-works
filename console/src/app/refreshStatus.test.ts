@@ -182,7 +182,7 @@ describe("refreshStatusOfAll", () => {
     expect(status.isError).toBe(false);
   });
 
-  test("drops the auto-refresh interval while a fetch has failed", () => {
+  test("keeps the auto-refresh interval while a fetch has failed", () => {
     const status = refreshStatusOfAll(
       [
         fakeQuery({
@@ -192,7 +192,7 @@ describe("refreshStatusOfAll", () => {
       ],
       { autoRefreshMs: 60_000 },
     );
-    expect(status.autoRefreshMs).toBeNull();
+    expect(status.autoRefreshMs).toBe(60_000);
   });
 
   test("keeps the auto-refresh interval when only a 401 failed", () => {

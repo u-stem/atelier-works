@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ApiFailure } from "../../api/errors.ts";
-import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.ts";
+import { freshQuery, staleQuery } from "../../api/fakeSectionQuery.testing.ts";
 import type { PipelineRow } from "../../api/guards/pipeline.ts";
 import { PipelineSection } from "./PipelineSection.tsx";
 
