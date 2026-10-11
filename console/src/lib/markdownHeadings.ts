@@ -87,13 +87,26 @@ function scanHeadings(markdown: string): RawHeading[] {
   return found;
 }
 
+export type Title = {
+  readonly text: string;
+  /** Markdown上のタイトルの行(1から数える)。 */
+  readonly line: number;
+};
+
 /**
- * 文書の`# `で始まるタイトル行を返す。最初のものを使い、無ければ`null`を返す。
+ * 文書の`# `で始まる最初の行をタイトルとして返す。無いか、文字が残らないときは`null`を返す。
  * 呼び出し側は、無いときに作業項目のIssueの題名で代える。
  */
-export function extractTitle(markdown: string): string | null {
+export function findTitle(markdown: string): Title | null {
   const title = scanHeadings(markdown).find((heading) => heading.level === 1);
-  return title === undefined || title.text === "" ? null : title.text;
+  return title === undefined || title.text === ""
+    ? null
+    : { text: title.text, line: title.line };
+}
+
+/** `findTitle`の文字だけを返す。 */
+export function extractTitle(markdown: string): string | null {
+  return findTitle(markdown)?.text ?? null;
 }
 
 /**

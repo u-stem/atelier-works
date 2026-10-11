@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type {
   RequirementsDiagram,
+  RequirementsDoc,
   RequirementsIndexRow,
 } from "../api/guards/requirements.ts";
 import {
@@ -8,8 +9,10 @@ import {
   DRAWIO_IMAGE_SRC,
   diagramSlotState,
   docSourceNotice,
+  emptyFilterMessage,
   filterRequirementsRows,
   parseWorkItemFilter,
+  prepareDoc,
   requirementsPath,
   requirementsRowSummary,
   requirementsRowTitle,
@@ -251,5 +254,95 @@ describe("docSourceNotice", () => {
 
   test("is empty for an unknown source", () => {
     expect(docSourceNotice("something_new")).toBeNull();
+  });
+});
+
+describe("emptyFilterMessage", () => {
+  test("names the work item that has no document", () => {
+    expect(emptyFilterMessage("12")).toBe(
+      "作業項目 #12 の要件定義はありません。",
+    );
+  });
+
+  test("asks for a number when the input is not a number", () => {
+    expect(emptyFilterMessage("abc")).toBe(
+      "作業項目の番号は、数字で入力してください。",
+    );
+  });
+});
+
+function doc(overrides: Partial<RequirementsDoc> = {}) {
+  return {
+    work_item_id: 7,
+    owner: "o",
+    repo: "r",
+    issue_number: 42,
+    issue_url: "https://github.com/o/r/issues/42",
+    title: "Issue title",
+    work_item_status: "awaiting_approval",
+    attempt: 2,
+    summary: "Summary",
+    markdown: "# Doc title\n\n## Section",
+    diagrams: [],
+    rejected_diagrams: [],
+    open_questions: ["Which one?"],
+    doc_dir_source: "file",
+    ...overrides,
+  } satisfies RequirementsDoc;
+}
+
+describe("prepareDoc", () => {
+  test("takes the title from the first heading of the document", () => {
+    expect(prepareDoc(doc()).title).toBe("Doc title");
+  });
+
+  test("takes the title from the issue when the document has no title", () => {
+    expect(prepareDoc(doc({ markdown: "## Section" })).title).toBe(
+      "Issue title",
+    );
+  });
+
+  test("names an untitled document", () => {
+    expect(prepareDoc(doc({ markdown: "text", title: null })).title).toBe(
+      "(無題)",
+    );
+  });
+
+  test("records the line of the title", () => {
+    expect(prepareDoc(doc()).titleLine).toBe(1);
+  });
+
+  test("lists the headings of the document", () => {
+    expect(prepareDoc(doc()).headings.map((heading) => heading.id)).toEqual([
+      "h-section",
+    ]);
+  });
+
+  test("replaces hidden characters in the body", () => {
+    expect(prepareDoc(doc({ markdown: "a\u202Eb" })).markdown).toBe("a\uFFFDb");
+  });
+
+  test("reports that it replaced a hidden character", () => {
+    expect(prepareDoc(doc({ markdown: "a\u202Eb" })).replaced).toBe(true);
+  });
+
+  test("reports no replacement for an ordinary document", () => {
+    expect(prepareDoc(doc()).replaced).toBe(false);
+  });
+
+  test("reports a hidden character in the summary", () => {
+    expect(prepareDoc(doc({ summary: "a\u200Bb" })).replaced).toBe(true);
+  });
+
+  test("reports a hidden character in an open question", () => {
+    expect(prepareDoc(doc({ open_questions: ["a\u200Bb"] })).replaced).toBe(
+      true,
+    );
+  });
+
+  test("replaces hidden characters in the open questions", () => {
+    expect(
+      prepareDoc(doc({ open_questions: ["a\u200Bb"] })).openQuestions,
+    ).toEqual(["a\uFFFDb"]);
   });
 });

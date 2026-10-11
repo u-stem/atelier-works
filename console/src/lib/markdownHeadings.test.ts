@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   extractHeadings,
   extractTitle,
+  findTitle,
   headingIdAtLine,
   slugify,
 } from "./markdownHeadings.ts";
@@ -149,5 +150,23 @@ describe("extractTitle", () => {
 
   test("strips emphasis marks", () => {
     expect(extractTitle("# **Bold** title")).toBe("Bold title");
+  });
+});
+
+describe("findTitle", () => {
+  test("returns the line of the title", () => {
+    expect(findTitle("\n# My Title\n## Section")?.line).toBe(2);
+  });
+
+  test("returns the text of the title", () => {
+    expect(findTitle("# My Title")?.text).toBe("My Title");
+  });
+
+  test("returns null without a title", () => {
+    expect(findTitle("## Section")).toBeNull();
+  });
+
+  test("uses the first of several titles", () => {
+    expect(findTitle("# One\n# Two")?.text).toBe("One");
   });
 });

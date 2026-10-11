@@ -2,10 +2,16 @@
 
 import type {
   RequirementsDiagram,
+  RequirementsDoc,
   RequirementsIndexRow,
 } from "../api/guards/requirements.ts";
 import { displayableIssueText } from "./intakeText.ts";
 import { attemptRef, workItemRef, workItemStatusLabel } from "./labels.ts";
+import {
+  extractHeadings,
+  findTitle,
+  type Heading,
+} from "./markdownHeadings.ts";
 import { parseIdParam } from "./routeParams.ts";
 
 /**
@@ -156,4 +162,53 @@ export function docSourceNotice(source: string): string | null {
   return source === "db_fallback"
     ? "元のファイルを読めなかったので、データベースの控えを表示しています。図は表示しません。"
     : null;
+}
+
+/** 絞り込みに当たる行が無いときの文。入力は空でないものを渡す。 */
+export function emptyFilterMessage(input: string): string {
+  const workItemId = parseWorkItemFilter(input);
+  return workItemId === null
+    ? "作業項目の番号は、数字で入力してください。"
+    : `${workItemRef(workItemId)} の要件定義はありません。`;
+}
+
+export type PreparedDoc = {
+  /** ページの見出しに出す題名。 */
+  readonly title: string;
+  /** 題名にした行。本文では描かない。題名が文書に無ければ`null`。 */
+  readonly titleLine: number | null;
+  readonly summary: string;
+  readonly markdown: string;
+  readonly headings: readonly Heading[];
+  readonly openQuestions: readonly string[];
+  /** Issueに由来する文字のうち、見えない文字を置き換えたものがあるか。 */
+  readonly replaced: boolean;
+};
+
+/**
+ * 要件定義書の文字を、画面に出せる形にする。
+ * 本文、要約、未確定事項、題名はIssueの内容に由来するので、見えない文字を置き換える。
+ * 目次と見出しの行は、置き換えた後の本文から取る。
+ * 題名は本文の最初の`# `の行、無ければIssueの題名、それも無ければ「(無題)」にする。
+ */
+export function prepareDoc(doc: RequirementsDoc): PreparedDoc {
+  const markdown = displayableIssueText(doc.markdown);
+  const summary = displayableIssueText(doc.summary);
+  const questions = doc.open_questions.map(displayableIssueText);
+  const issueTitle = displayableIssueText(doc.title ?? "");
+  const title = findTitle(markdown.text);
+  const fallback = issueTitle.text.trim() === "" ? "(無題)" : issueTitle.text;
+  return {
+    title: title?.text ?? fallback,
+    titleLine: title?.line ?? null,
+    summary: summary.text,
+    markdown: markdown.text,
+    headings: extractHeadings(markdown.text),
+    openQuestions: questions.map((question) => question.text),
+    replaced:
+      markdown.replaced ||
+      summary.replaced ||
+      issueTitle.replaced ||
+      questions.some((question) => question.replaced),
+  };
 }
