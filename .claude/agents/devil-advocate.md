@@ -2,7 +2,7 @@
 name: devil-advocate
 description: 計画、設計、主張を独立したコンテキストで反証し、代わりの案を出す役で、review-loopスキルがcode-reviewerと並べて起動するほか、重い判断の前に親が単独で起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
-model: fable
+model: opus
 effort: high
 ---
 
@@ -15,7 +15,7 @@ effort: high
 作業の前に、`.claude/skills/review-loop/rules.md`を読む。
 指摘の形、重さ、種類、原因の分類は、その文書に従う。
 `Edit`と`Write`は持たないが、`Bash`は持つので、読み取り専用であることはこの指示で守る。
-固定したモデルで起動できないときは、親が呼び出しごとに`model: opus`、次に`model: sonnet`を指定して起動し直し、記録する。
+固定したモデルで起動できないときは、親が呼び出しごとに`model: sonnet`を指定して起動し直し、記録する。
 
 ## Bashの使い方
 

@@ -3,14 +3,19 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  associationFromLabeledEvent,
   decideIssueActions,
   filterByRepoAllowlist,
   type IssueCandidate,
+  isAllowedLabeler,
+  type LabelerPolicy,
+  labelerDeniedMessage,
 } from "../../f/factory/lib/poll_support.ts";
-import type { LabelerAssociation } from "../../f/factory/lib/types.ts";
 
-const ALLOWED: LabelerAssociation[] = ["OWNER", "MEMBER", "COLLABORATOR"];
+/** Factoryを動かすアカウントだけを許可する、許可リストが空の設定。 */
+const VIEWER_ONLY: LabelerPolicy = {
+  viewerLogin: "octo-owner",
+  allowedLogins: [],
+};
 
 function candidate(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
   return {
@@ -20,7 +25,7 @@ function candidate(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
     title: "Add a thing",
     body: "please add a thing",
     htmlUrl: "https://github.com/octo-owner/atelier-works/issues/1",
-    labelerAssociation: "OWNER",
+    labelerLogin: "octo-owner",
     hasActiveWorkItem: false,
     ...overrides,
   };
@@ -64,15 +69,59 @@ describe("filterByRepoAllowlist", () => {
   });
 });
 
-describe("associationFromLabeledEvent", () => {
-  test("returns null when there is no labeled event", () => {
-    expect(associationFromLabeledEvent(null)).toBeNull();
+describe("isAllowedLabeler", () => {
+  test("allows the viewer account", () => {
+    expect(isAllowedLabeler("octo-owner", VIEWER_ONLY)).toBe(true);
   });
 
-  test("returns the event's authorAssociation when present", () => {
+  test("denies a login that is neither the viewer nor listed", () => {
+    expect(isAllowedLabeler("mallory", VIEWER_ONLY)).toBe(false);
+  });
+
+  test("compares the viewer login case-insensitively", () => {
+    expect(isAllowedLabeler("Octo-Owner", VIEWER_ONLY)).toBe(true);
+  });
+
+  test("allows a listed login besides the viewer", () => {
+    const policy = { ...VIEWER_ONLY, allowedLogins: ["alice"] };
+    expect(isAllowedLabeler("alice", policy)).toBe(true);
+  });
+
+  test("compares a listed login case-insensitively", () => {
+    const policy = { ...VIEWER_ONLY, allowedLogins: ["Alice"] };
+    expect(isAllowedLabeler("aLICE", policy)).toBe(true);
+  });
+
+  test("still allows the viewer when the list names other logins", () => {
+    const policy = { ...VIEWER_ONLY, allowedLogins: ["alice"] };
+    expect(isAllowedLabeler("octo-owner", policy)).toBe(true);
+  });
+
+  test("denies when the actor is unknown", () => {
+    expect(isAllowedLabeler(null, VIEWER_ONLY)).toBe(false);
+  });
+
+  test("denies when the viewer could not be fetched", () => {
+    const policy = { viewerLogin: null, allowedLogins: [] };
+    expect(isAllowedLabeler("octo-owner", policy)).toBe(false);
+  });
+
+  test("denies a listed login when the viewer could not be fetched", () => {
+    const policy = { viewerLogin: null, allowedLogins: ["alice"] };
+    expect(isAllowedLabeler("alice", policy)).toBe(false);
+  });
+});
+
+describe("labelerDeniedMessage", () => {
+  test("names the target and the label only", () => {
     expect(
-      associationFromLabeledEvent({ authorAssociation: "COLLABORATOR" }),
-    ).toBe("COLLABORATOR");
+      labelerDeniedMessage(
+        { owner: "octo-owner", repo: "atelier-works", number: 7 },
+        "factory:review",
+      ),
+    ).toBe(
+      "octo-owner/atelier-works#7: factory:reviewラベルを付けたのは許可されていないユーザーです",
+    );
   });
 });
 
@@ -80,40 +129,45 @@ describe("decideIssueActions", () => {
   test("skips an issue that already has an active work item", () => {
     const decisions = decideIssueActions(
       [candidate({ hasActiveWorkItem: true })],
-      ALLOWED,
+      VIEWER_ONLY,
     );
     expect(decisions[0]?.action).toBe("skip_active");
   });
 
-  test("skips an issue whose labeler association is not allowed", () => {
+  test("skips an issue whose labeler is not allowed", () => {
     const decisions = decideIssueActions(
-      [candidate({ labelerAssociation: "NONE" })],
-      ALLOWED,
+      [candidate({ labelerLogin: "mallory" })],
+      VIEWER_ONLY,
     );
-    expect(decisions[0]?.action).toBe("skip_association");
+    expect(decisions[0]?.action).toBe("skip_labeler");
   });
 
-  test("reports the disallowed association on a skip_association decision", () => {
+  test("skips an issue whose labeler is unknown", () => {
     const decisions = decideIssueActions(
-      [candidate({ labelerAssociation: "NONE" })],
-      ALLOWED,
+      [candidate({ labelerLogin: null })],
+      VIEWER_ONLY,
     );
-    const decision = decisions[0];
-    expect(
-      decision?.action === "skip_association" ? decision.association : null,
-    ).toBe("NONE");
+    expect(decisions[0]?.action).toBe("skip_labeler");
   });
 
-  test("does not block on a null labeler association (secondary check only)", () => {
-    const decisions = decideIssueActions(
-      [candidate({ labelerAssociation: null })],
-      ALLOWED,
-    );
+  test("skips every issue when the viewer is unknown", () => {
+    const decisions = decideIssueActions([candidate()], {
+      viewerLogin: null,
+      allowedLogins: [],
+    });
+    expect(decisions[0]?.action).toBe("skip_labeler");
+  });
+
+  test("claims an issue labeled by the viewer", () => {
+    const decisions = decideIssueActions([candidate()], VIEWER_ONLY);
     expect(decisions[0]?.action).toBe("claim");
   });
 
-  test("claims an issue with an allowed association and no active work item", () => {
-    const decisions = decideIssueActions([candidate()], ALLOWED);
+  test("claims an issue labeled by a listed login", () => {
+    const decisions = decideIssueActions(
+      [candidate({ labelerLogin: "alice" })],
+      { ...VIEWER_ONLY, allowedLogins: ["alice"] },
+    );
     expect(decisions[0]?.action).toBe("claim");
   });
 });

@@ -109,9 +109,15 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。リースを失�
 | `max_rounds` | ラウンドが`implement_max_rounds`に達した | `check_failed` |
 | `daily_budget` | 日次予算を超えた | `check_failed` |
 | `deadline` | 期限までの残りが修正ラウンドの最悪の所要時間に足りない | `check_failed` |
-| `stalled` | 差分か検査の出力が前のラウンドと同じ | `stalled` |
+| `stalled` | 差分か検査の出力が前のラウンドと同じ。ただし、この失敗で`heavy_model`に上がるときは除く | `stalled` |
 
-検査コマンドを動かさなかったラウンドは、GitHub側のCIに検査を任せる。停滞(`stalled`)で止めるのは、同じ状態でもう1回直させても予算を使うだけになるからである。期限の判定は、ラウンドの上限や日次予算と同じく、修正ラウンドの前のリースの確認より先に行う。
+検査コマンドを動かさなかったラウンドは、GitHub側のCIに検査を任せる。停滞(`stalled`)で止めるのは、同じ状態でもう1回直させても予算を使うだけになるからである。
+ただし、そのラウンドの失敗でモデルが`model`から`heavy_model`に変わるときは、停滞で止めず、`heavy_model`で修正ラウンドを1回回す。
+同じ失敗でも、上位のモデルなら直せる場合があるためである。
+このとき、修正ラウンドのプロンプトで、前のラウンドが進まなかったことを伝え、同じ直し方を繰り返さないようにする。
+`model`と`heavy_model`が同じ設定なら変わらないので、停滞で止める。
+ラウンドの上限、日次予算、期限の判定は、この場合も停滞の判定より先に行う。
+期限の判定は、ラウンドの上限や日次予算と同じく、修正ラウンドの前のリースの確認より先に行う。
 
 ループは、検査の前にも次の理由で止まる。
 
@@ -216,6 +222,8 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 | キー | 既定値 | 意味 |
 | --- | --- | --- |
 | `implement_enabled` | `false` | 承認の後に実装フローを起動するか |
+| `model` | `claude-sonnet-5-5` | 実装のモデル。同じ要件定義の実装が2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | 要件定義の生成のモデルと、2回失敗した後の実装のモデル |
 | `implement_max_rounds` | `5` | Claudeを実行するラウンドの上限 |
 | `implement_max_turns` | `80` | Claude 1回の実行のターン数の上限 |
 | `implement_max_budget_usd_per_run` | `10` | Claude 1回の実行の費用の上限(USD) |
@@ -227,6 +235,11 @@ Claudeが要件の不足を返すと、完了のステップは次の順に処�
 | `check_commands_by_repo` | `{}` | リポジトリごとの検査コマンド |
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
+
+モデルの昇格に使う失敗の数は、同じ作業項目の同じ試行の`implement_rounds`のうち、結果が`check_failed`、`stalled`、`error`の行である。
+`error`と`check_failed`には、トークンの失効やAPIの障害、期限切れ、`.git`ポインタの不一致など、モデルの失敗でないものも入るので、実際より早く`heavy_model`に上がることがある。損失の上限は`implement_max_rounds`と予算で決まる。
+停滞したラウンドの扱いは「[ループの終わり方](#ループの終わり方)」にある。
+数え方の全体は[運用](../operations.md)の「モデルを使い分ける」にある。
 
 `check_commands_by_repo`は、`{"<owner>/<repo>": ["bun install --frozen-lockfile", "bun test"]}`の形で書く。workerで直接動く例は`bunx --bun tsc --noEmit`や`bunx --bun biome check .`である。実装フローは`allowed_check_commands`を使わない。
 
@@ -478,7 +491,9 @@ lockfileは保護パスなので、Claudeが書き換えたラウンドでは検
 
 ### 対象リポジトリのCI
 
-実装ブランチのpushとPRの作成で、対象リポジトリ自身の`push`と`pull_request`のCIが動く。CIは、人のレビューより前に、Claudeが書いたコードをそのリポジトリのsecretsを使える状態で実行しうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
+実装ブランチのpushとPRの作成で、対象リポジトリ自身の`push`と`pull_request`のCIが動く。
+atelier-worksのCIは`main`のpushと`pull_request`でだけ動くので、実装ブランチのpushでは動かず、PRの作成から動く。
+CIは、人のレビューより前に、Claudeが書いたコードをそのリポジトリのsecretsを使える状態で実行しうる。対象リポジトリのCIの権限とsecretsの範囲は、この前提で設定する。
 
 ### 保護パスの記録
 

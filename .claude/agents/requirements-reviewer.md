@@ -2,7 +2,7 @@
 name: requirements-reviewer
 description: 要件定義書を独立したコンテキストでレビューし、規則の正本の形で指摘を返す役で、review-loopスキルが要件定義の後に反証役と並べて起動する。
 tools: [Read, Grep, Glob, Bash, Skill]
-model: sonnet
+model: opus
 effort: high
 ---
 

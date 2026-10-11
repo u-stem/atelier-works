@@ -134,7 +134,7 @@ describe("resolveNotice", () => {
   });
 
   test("does not update an unresolvable kind", async () => {
-    const h = harness([notice({ kind: "labeler_association_denied" })], true);
+    const h = harness([notice({ kind: "labeler_denied" })], true);
     await resolveNotice(5, h.deps).catch(() => undefined);
     expect(h.updates).toEqual([]);
   });

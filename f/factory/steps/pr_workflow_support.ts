@@ -835,6 +835,25 @@ export type PrFixGuardResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * PRのheadがbaseと同じリポジトリにあるかを判定する。
+ * forkのPRと、headのリポジトリを取得できないPR(forkの削除など)は通さない。
+ * forkの内容は第三者が書いたもので、レビューにもpushにも信頼して渡せないためである。
+ * レビューを始める判定(`poll_prs`)と、レビューと修正の準備のステップで同じ判定を使う。
+ */
+export function evaluateSameRepoHeadGuard(
+  headRepoFullName: string | null,
+  baseRepoFullName: string,
+): PrFixGuardResult {
+  if (headRepoFullName === null || headRepoFullName !== baseRepoFullName) {
+    return {
+      ok: false,
+      reason: "head repository differs from base repository (fork PR)",
+    };
+  }
+  return { ok: true };
+}
+
 export type PrFixSafetyGuardInput = {
   readonly open: boolean;
   readonly headRepoFullName: string | null;
@@ -857,14 +876,12 @@ export function evaluatePrFixSafetyGuards(
   if (!input.open) {
     return { ok: false, reason: "pull request is not open" };
   }
-  if (
-    input.headRepoFullName === null ||
-    input.headRepoFullName !== input.baseRepoFullName
-  ) {
-    return {
-      ok: false,
-      reason: "head repository differs from base repository (fork PR)",
-    };
+  const sameRepo = evaluateSameRepoHeadGuard(
+    input.headRepoFullName,
+    input.baseRepoFullName,
+  );
+  if (!sameRepo.ok) {
+    return sameRepo;
   }
   if (input.draft) {
     return { ok: false, reason: "pull request is a draft" };
@@ -3828,6 +3845,17 @@ const REASON_RULES: readonly ReasonRule[] = [
       "ラベルの削除の結果を確かめられず、Issueを取得できたか分かりません",
     nextAction: () =>
       "Consoleの作業項目で、このIssueの作業が始まっているか確かめてください。始まっていなければ、Issueに`factory`ラベルを付け直してください",
+  },
+  // poll_prs.tsの`claimPr`。トリガーラベルを外した後に取得を確認できず、
+  // ラベルを付け直せなかったか、レート制限で付け直さなかった。ラベルは外れたままで、作業項目も無い。
+  // 作業項目が無いので、再実行ではなくラベルの付け直しで拾い直す。
+  // ラベル名は`factory:review`と`factory:fix`の既定で書く(ほかの行と同じ)。
+  {
+    pattern: /^claimed pr trigger label was left removed$/,
+    describe: () =>
+      "PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままです",
+    nextAction: () =>
+      "PRにラベルが既に付いていないか、Consoleで同じPRのpr_reviewかpr_fixが始まっていないかを確かめてください。始まっていなければ、GitHubのレート制限などが解けるのを待ってから、外れたほうの`factory:review`か`factory:fix`ラベルを付け直してください",
   },
   {
     pattern: /^approval timed out$/,

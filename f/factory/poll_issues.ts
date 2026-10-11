@@ -31,6 +31,7 @@ import {
   nextCycleForIssue,
   recordFailure,
   resolveNoticesBeforeSuccessfulDeployment,
+  resolveUnresolvedNoticesByPrefix,
   setFlowJobId,
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
@@ -41,15 +42,16 @@ import {
   claimIssue,
   type GhClient,
   getIssue,
-  getIssueTimeline,
+  getLabelerLogin,
   getViewer,
   type IssueSearchItem,
+  LabelerCheckLimitError,
   searchIssues,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
-  associationFromLabeledEvent,
+  confirmLabeler,
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
@@ -58,8 +60,12 @@ import {
   type IssueDecision,
   isWaitingForHuman,
   type JobState,
+  LABELER_DENIED_KIND,
+  labelerDeniedMessage,
+  labelerPolicyFor,
   type ReconcileGithubState,
   readJobState,
+  recordLabelerCheckLimit,
   runDeployedShaCheck,
 } from "./lib/poll_support.ts";
 import { postSupersededComments } from "./lib/supersede_support.ts";
@@ -403,20 +409,37 @@ async function reconcileActiveItems(
 // 新しいIssueの取得
 // ---------------------------------------------------------------------------
 
-async function buildIssueCandidates(
+/**
+ * 見つかったIssueを、着手の判定にかける候補にする。
+ * 付与者はトリガーラベルの最後の`labeled`イベントから取る。
+ * イベントを取得できないIssueは候補に加えず、`recordFailure`に渡す。
+ * 付与者を確かめられないまま着手しないためで、次のポーリングで取得し直す。
+ * 付与者を判定できないIssue(直近のラベルのイベントにトリガーラベルが無い)も候補に加えず、
+ * `recordCheckLimit`でnoticeに残す。記録に失敗しても、警告のログだけにして次のIssueへ進む。
+ */
+export async function buildIssueCandidates(
   client: GhClient,
   found: readonly IssueSearchItem[],
   activeIssueKeys: ReadonlySet<string>,
-  log: Logger,
+  triggerLabel: string,
+  handlers: {
+    readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+    readonly recordCheckLimit: (
+      item: IssueSearchItem,
+      label: string,
+    ) => Promise<void>;
+    readonly log: Logger;
+  },
 ): Promise<IssueCandidate[]> {
   const candidates: IssueCandidate[] = [];
   for (const item of found) {
     try {
-      const timelineEvent = await getIssueTimeline(
+      const labelerLogin = await getLabelerLogin(
         client,
         item.owner,
         item.repo,
         item.number,
+        triggerLabel,
       );
       candidates.push({
         owner: item.owner,
@@ -425,16 +448,34 @@ async function buildIssueCandidates(
         title: item.title,
         body: item.body,
         htmlUrl: item.htmlUrl,
-        labelerAssociation: associationFromLabeledEvent(timelineEvent),
+        labelerLogin,
         hasActiveWorkItem: activeIssueKeys.has(
           `${item.owner}/${item.repo}#${item.number}`,
         ),
       });
     } catch (err) {
-      await recordFailureSafe(
-        `fetch_timeline:${item.owner}/${item.repo}#${item.number}`,
+      if (err instanceof LabelerCheckLimitError) {
+        // 判定できない対象は、失敗ではなく人の操作を求めるnoticeにする。
+        try {
+          await handlers.recordCheckLimit(item, err.label);
+        } catch (recordErr) {
+          handlers.log.warn(
+            "labeler_check_limit notice could not be recorded",
+            {
+              target: `${item.owner}/${item.repo}#${String(item.number)}`,
+              error: maskSecrets(
+                recordErr instanceof Error
+                  ? recordErr.message
+                  : String(recordErr),
+              ),
+            },
+          );
+        }
+        continue;
+      }
+      await handlers.recordFailure(
+        `fetch_labeler:${item.owner}/${item.repo}#${item.number}`,
         err,
-        log,
       );
     }
   }
@@ -473,7 +514,7 @@ const defaultRegisterDeps: RegisterClaimedIssueDeps = {
  * 見に行かない限り気づけず、失敗タブには再実行できる作業項目も無い。
  * 取得を自動で戻さないのは、次の2つの害があるためである。
  * Factory自身のPATがラベルを付け直すと、直近のラベル付与者がFactoryになり、
- * 付与者の関係の検査が人ではなくFactoryに対して行われる。
+ * 付与者の確認が人ではなくFactoryに対して行われる。
  * また、DBの障害が続く間は、取得と失敗をポーリングのたびに繰り返す。
  * 通知はベストエフォートで、失敗しても元の例外を隠さない。
  */
@@ -553,12 +594,53 @@ const CLAIM_OWNERSHIP_UNKNOWN_REASON =
 export type ClaimNoticeDeps = {
   readonly claimIssue: typeof claimIssue;
   readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
+  readonly resolveUnresolvedNoticesByPrefix: typeof resolveUnresolvedNoticesByPrefix;
 };
 
 const defaultClaimNoticeDeps: ClaimNoticeDeps = {
   claimIssue,
   addNoticeUnlessUnresolved,
+  resolveUnresolvedNoticesByPrefix,
 };
+
+/** `poll_issues`がnoticeを解決済みにしたときに、`resolved_by`へ記録する名前。 */
+export const POLL_ISSUES_RESOLVER = "poll_issues";
+
+/**
+ * 付与者の確認で見送ったIssueのnoticeの本文の先頭を返す。
+ * 記録(`recordLabelerDenied`)と解決(`claimIssueWithNotice`)が同じ関数から作り、
+ * 両者がずれて解決できなくなるのを防ぐ。
+ * 末尾の`: `までを含めるので、`#1`の接頭辞は`#12`のnoticeに当たらない。
+ */
+export function labelerDeniedMessagePrefix(
+  candidate: Pick<IssueCandidate, "owner" | "repo" | "number">,
+): string {
+  return `${candidate.owner}/${candidate.repo}#${String(candidate.number)}: `;
+}
+
+/**
+ * 取得できたIssueの、見送りのnoticeを解決済みにする。
+ * 許可された人がラベルを付け直して取得できたので、見送りの記録はもう対応を要しない。
+ * 解決に失敗しても、取得は成否を変えない(ラベルは既に外れている)。警告をログに残すだけにする。
+ */
+async function resolveLabelerDenied(
+  candidate: IssueCandidate,
+  resolve: typeof resolveUnresolvedNoticesByPrefix,
+  log: Logger,
+): Promise<void> {
+  try {
+    await resolve(
+      LABELER_DENIED_KIND,
+      labelerDeniedMessagePrefix(candidate),
+      POLL_ISSUES_RESOLVER,
+    );
+  } catch (err) {
+    log.warn("labeler_denied notices could not be resolved", {
+      target: `${candidate.owner}/${candidate.repo}#${String(candidate.number)}`,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
 
 /**
  * Issueを取得し、作業を始めてよいか(取得できたか)を返す。
@@ -567,6 +649,9 @@ const defaultClaimNoticeDeps: ClaimNoticeDeps = {
  *   付いていないときだけ、確認の手がかりを`claim_assignee_missing`のnoticeに残す。
  *   このnoticeの記録は、失敗しても取得を妨げない。ラベルは既に外れているので、
  *   ここで例外にすると、ラベルも作業項目も無いIssueが残る。
+ * - 取得できたときは、そのIssueの`labeler_denied`のnoticeを解決済みにする。
+ *   許可された人がラベルを付け直した結果なので、見送りの記録は残さない。
+ *   解決の失敗は取得を妨げず、警告をログに残す。
  * - ほかが先にラベルを外したときは、`claim_race_lost`のnoticeを残して引く。
  * - ラベルの削除が失敗してラベルが残っているときは、次のポーリングが拾い直すので、
  *   通知もnoticeもなく引く。
@@ -608,6 +693,11 @@ export async function claimIssueWithNotice(
     } else if (claimResult.assignee === "unknown") {
       log.warn("claim assignee could not be confirmed", { target });
     }
+    await resolveLabelerDenied(
+      candidate,
+      deps.resolveUnresolvedNoticesByPrefix,
+      log,
+    );
     return true;
   }
 
@@ -708,28 +798,31 @@ const defaultLabelerDeniedDeps: LabelerDeniedDeps = {
 };
 
 /**
- * 関係の検査で見送ったIssueのnoticeを残す。
+ * 付与者の確認で見送ったIssueのnoticeを残す。
  * 見送りではラベルを外さないので、ラベルが付いている間はポーリングのたびに
- * 同じ状況になる。本文は対象と関係だけで決まり、時刻などの揺れる値を含まないため、
+ * 同じ状況になる。本文は対象とラベルだけで決まり、時刻などの揺れる値を含まないため、
  * 同じ本文の未解決のnoticeがあれば登録しない。
  */
-export async function recordLabelerAssociationDenied(
+export async function recordLabelerDenied(
   candidate: IssueCandidate,
-  association: string | null,
+  triggerLabel: string,
   deps: LabelerDeniedDeps = defaultLabelerDeniedDeps,
 ): Promise<void> {
   await deps.addNoticeUnlessUnresolved({
-    kind: "labeler_association_denied",
-    message: `${candidate.owner}/${candidate.repo}#${candidate.number}: 直近のラベル付与者のassociation "${association ?? "unknown"}" はallowed_labeler_associationsに含まれていません`,
+    kind: LABELER_DENIED_KIND,
+    message: labelerDeniedMessage(candidate, triggerLabel),
   });
 }
 
 export type DecisionHandlers = {
+  /**
+   * 取得の直前に、ラベルの付与者がまだ許可された人かを確かめ直す。
+   * 判定の後にラベルが付け直されていることがあるためである。
+   * 取得できなかったときは例外を投げ、取得に進まない。
+   */
+  readonly confirmLabeler: (candidate: IssueCandidate) => Promise<boolean>;
   readonly claim: (candidate: IssueCandidate) => Promise<"claimed" | "skipped">;
-  readonly recordDenied: (
-    candidate: IssueCandidate,
-    association: string | null,
-  ) => Promise<void>;
+  readonly recordDenied: (candidate: IssueCandidate) => Promise<void>;
   readonly recordFailure: (step: string, err: unknown) => Promise<void>;
   readonly notifyOwnershipUnknown: (
     candidates: readonly IssueCandidate[],
@@ -738,7 +831,7 @@ export type DecisionHandlers = {
 
 /**
  * 判定した各Issueを順に処理し、結果の件数を返す。
- * 1件の失敗は`recordFailure`に渡して次へ進む。関係の検査で見送るIssueのnotice記録も、
+ * 1件の失敗は`recordFailure`に渡して次へ進む。付与者の確認で見送るIssueのnotice記録も、
  * 同じ扱いにする。
  * 所有を判断できなかったIssueは集め、ループを抜けるときに必ず1回だけ
  * `notifyOwnershipUnknown`へ渡す。`recordFailure`などが想定外に例外を投げて
@@ -755,6 +848,19 @@ export async function processIssueDecisions(
   let skipped = 0;
   let failed = 0;
   const ownershipUnknown: IssueCandidate[] = [];
+  // 付与者が許可されていないIssueをnoticeに残し、見送りとして数える。
+  const countDenied = async (
+    candidate: IssueCandidate,
+    where: string,
+  ): Promise<void> => {
+    try {
+      await handlers.recordDenied(candidate);
+      skipped += 1;
+    } catch (err) {
+      failed += 1;
+      await handlers.recordFailure(`labeler_denied:${where}`, err);
+    }
+  };
   let loopFailure: { readonly error: unknown } | null = null;
   try {
     for (const decision of decisions) {
@@ -764,14 +870,22 @@ export async function processIssueDecisions(
         skipped += 1;
         continue;
       }
-      if (decision.action === "skip_association") {
-        try {
-          await handlers.recordDenied(candidate, decision.association);
-          skipped += 1;
-        } catch (err) {
-          failed += 1;
-          await handlers.recordFailure(`labeler_denied:${where}`, err);
-        }
+      if (decision.action === "skip_labeler") {
+        await countDenied(candidate, where);
+        continue;
+      }
+      // 取得の直前の確認は、取得の前の失敗として別に記録する。
+      // この時点でラベルは外れておらず、次のポーリングが拾い直す。
+      let confirmed: boolean;
+      try {
+        confirmed = await handlers.confirmLabeler(candidate);
+      } catch (err) {
+        failed += 1;
+        await handlers.recordFailure(`confirm_labeler:${where}`, err);
+        continue;
+      }
+      if (!confirmed) {
+        await countDenied(candidate, where);
         continue;
       }
       try {
@@ -996,17 +1110,23 @@ export async function main(): Promise<{
     client,
     allowed,
     activeIssueKeys,
-    log,
+    config.trigger_label,
+    {
+      log,
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      recordCheckLimit: (item, label) =>
+        recordLabelerCheckLimit(addNoticeUnlessUnresolved, item, label),
+    },
   );
-  const decisions = decideIssueActions(
-    candidates,
-    config.allowed_labeler_associations,
-  );
+  const labelerPolicy = labelerPolicyFor(viewer.login, config);
+  const decisions = decideIssueActions(candidates, labelerPolicy);
 
   // 所有を判断できなかったIssueの通知は、`processIssueDecisions`がループを抜けるときに送る。
   const processed = await processIssueDecisions(
     decisions,
     {
+      confirmLabeler: (candidate) =>
+        confirmLabeler(client, candidate, config.trigger_label, labelerPolicy),
       claim: (candidate) =>
         claimAndStart(
           client,
@@ -1016,8 +1136,8 @@ export async function main(): Promise<{
           discordWebhookUrl,
           log,
         ),
-      recordDenied: (candidate, association) =>
-        recordLabelerAssociationDenied(candidate, association),
+      recordDenied: (candidate) =>
+        recordLabelerDenied(candidate, config.trigger_label),
       recordFailure: (step, err) => recordFailureSafe(step, err, log),
       notifyOwnershipUnknown: (unknown) =>
         notifyClaimOwnershipUnknown({

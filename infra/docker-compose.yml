@@ -146,14 +146,68 @@ services:
       - worker_logs:/tmp/windmill/logs
     logging: *default-logging
 
+  ## `factory_state`にConsole用workerがマウントするサブパスのディレクトリを作って終わる、
+  ## 1回限りのサービス。サブパスのディレクトリが無いと、Console用workerは起動しない。
+  ## defaultのworkerは、ジョブが初めて動くまでこのディレクトリを作らないので、
+  ## 起動の前に作れるのはこのサービスだけである。
+  ## defaultのworkerはrootで動き、umask 022でディレクトリを作る。
+  ## このサービスもrootで`mkdir -p -m 0755`を実行し、同じ所有者と権限で作る。
+  ## どちらが先に作っても、defaultのworkerは書ける。
+  ## `requirements`がsymlinkのときは、何も作らず失敗で終わる。
+  ## defaultのworkerで動くものが`factory_state`の下にsymlinkを置いていても、
+  ## その先をConsole用workerにマウントさせないため。
+  ## 確認からマウントまでの間にsymlinkへ置き換わる隙は、これでは塞げない。
+  ## 引数は固定の文字列にし、変数を展開しない。
+  ## `sh`は、同じイメージを土台にする`infra/worker/Dockerfile`の`RUN`も使うので、入っている。
+  ## ネットワークを持たず、権限もすべて落とし、`factory_state`以外は何もマウントしない。
+  ## 終了後のコンテナが残るのは、`depends_on`の判定に使うため。
+  factory_state_init:
+    image: ghcr.io/windmill-labs/windmill:${WM_VERSION:?run via mise}
+    pull_policy: always
+    entrypoint:
+      - sh
+      - -c
+      - 'if [ -L /var/lib/factory/requirements ]; then echo "/var/lib/factory/requirements is a symlink" >&2; exit 1; fi; mkdir -p -m 0755 /var/lib/factory/requirements'
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+          pids: 16
+    volumes:
+      - factory_state:/var/lib/factory
+    logging: *default-logging
+
   ## Consoleの問い合わせと操作の受付専用のworker。Claudeの長いジョブがdefaultの枠を
   ## 埋めても、これらの受付を止めないために、tagで分けた別のworkerグループに置く。
   ## 受け付けたscriptが起動するフローとハンドラ(承認のハンドラ、再実行したpipeline、
   ## 監査のフロー)はdefaultのworkerで動く。
   ## 書き込めるマウントは`worker_logs`と専用の依存キャッシュだけにする。
   ## 依存のキャッシュはdefaultの`worker_dependency_cache`とは共有しない。
-  ## `factory_state`を読み取り専用で付けるのは、
-  ## `requirements_doc`が要件定義書と図のファイルをここから読むため。
+  ## `factory_state`はボリューム全体ではなく、`requirements`のサブパスだけを読み取り専用で付ける。
+  ## ボリューム全体とは、`claude`、`gh`、`audits`、`requirements`などが並ぶ`factory_state`の最上位を指す。
+  ## `requirements_doc`が要件定義書と図のファイルをここから読むためで、
+  ## ボリューム全体を付けると、`claude`と`gh`の設定(`CLAUDE_CONFIG_DIR`と`GH_CONFIG_DIR`)まで読めてしまう。
+  ## 監査レポートは本文をDBから読むので、`audits`は付けない。
+  ## `volume.subpath`はDocker Engine 26.0以上とDocker Compose 2.26.0以上が要る。
+  ## サブパスのディレクトリが無いとコンテナが起動しないので、
+  ## `factory_state_init`が作ってから起動する。
+  ## このworkerが`factory_state_init`を経ずに起動するたびに(restart policy、daemonの再起動、
+  ## ホストの再起動、手動の`docker compose restart`)、Dockerはサブパスを解決し直す。
+  ## その前にdefaultのworkerが`requirements`をsymlinkに置き換えると、先がマウントされうる。
+  ## 隙は、`factory_state_init`を経ずにworkerが起動するたびに開く。
+  ## 誤ったマウントは、symlinkを消してworkerを起動し直すまで残る。`mise run up`は、
+  ## 設定の変わらない、動いているworkerを作り直さないため。`factory_state_init`の失敗で
+  ## `up`が止まったら、その時点のworkerのマウントを疑い、docs/operations.mdの手順で直す。
+  ## 突くにはdefaultのworkerでのコード実行が要り、
+  ## その権限があればボリューム全体を直接読めるので、実害は増えない。
   ## `factory_console`を読み取り専用で付けるのは、取り込みの失敗を見張るscriptが
   ## `status.json`を読むため。`factory_workspaces`は付けない。
   ## 2つのworkerプロセスは、1件のjobが止まっても全体を止めないためで、
@@ -181,11 +235,18 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      factory_state_init:
+        condition: service_completed_successfully
     volumes:
       - worker_console_dependency_cache:/tmp/windmill/cache
       - worker_logs:/tmp/windmill/logs
       - factory_console:/srv/console:ro
-      - factory_state:/var/lib/factory:ro
+      - type: volume
+        source: factory_state
+        target: /var/lib/factory/requirements
+        read_only: true
+        volume:
+          subpath: requirements
     logging: *default-logging
 
   ## LSPだけを有効にする。multiplayerとdebuggerは、Enterprise向けか攻撃面を
