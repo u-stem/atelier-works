@@ -6,9 +6,9 @@ export type TextPiece = {
   readonly id: boolean;
 };
 
-// 前後が英数字かハイフンの並びは、IDの一部とみなさない。
-const ID_TOKEN =
-  /(?<![A-Za-z0-9-])[A-Za-z]+(?:-[A-Za-z0-9]+)*-\d+(?![A-Za-z0-9-])/g;
+// IDは大文字の接頭辞で始まる。前後が英数字かハイフンの並びは、IDの一部とみなさない。
+// 小文字を含む長い語(`Cross-Site-Request-Forgery-2024`など)は包まない。
+const ID_TOKEN = /(?<![A-Za-z0-9-])[A-Z]+(?:-[A-Z0-9]+)*-\d+(?![A-Za-z0-9-])/g;
 
 /**
  * 文字を、IDとそれ以外の断片に分けて、元の順に返す。

@@ -37,6 +37,34 @@ describe("splitIdTokens", () => {
     ]);
   });
 
+  test("does not mark an id followed by a letter", () => {
+    expect(splitIdTokens("FR-001a")).toEqual([{ text: "FR-001a", id: false }]);
+  });
+
+  test("does not mark an id followed by a hyphen", () => {
+    expect(splitIdTokens("FR-001-")).toEqual([{ text: "FR-001-", id: false }]);
+  });
+
+  test("does not mark an id preceded by a digit", () => {
+    expect(splitIdTokens("1FR-001")).toEqual([{ text: "1FR-001", id: false }]);
+  });
+
+  test("does not mark an id preceded by a hyphen", () => {
+    expect(splitIdTokens("x-FR-001")).toEqual([
+      { text: "x-FR-001", id: false },
+    ]);
+  });
+
+  test("does not mark a long hyphenated word ending in a year", () => {
+    expect(splitIdTokens("Cross-Site-Request-Forgery-2024")).toEqual([
+      { text: "Cross-Site-Request-Forgery-2024", id: false },
+    ]);
+  });
+
+  test("marks a version-like name made of capitals", () => {
+    expect(splitIdTokens("UTF-8")).toEqual([{ text: "UTF-8", id: true }]);
+  });
+
   test("returns no pieces for an empty text", () => {
     expect(splitIdTokens("")).toEqual([]);
   });

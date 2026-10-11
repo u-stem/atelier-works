@@ -64,8 +64,12 @@ describe("RequirementsDocumentView page", () => {
     expect(renderPage()).toContain("試行の切り替え");
   });
 
-  test("shows the table of contents", () => {
-    expect(renderPage()).toContain("目次");
+  test("shows the table of contents in the folded list and the side column", () => {
+    expect(renderPage().split('nav aria-label="目次"').length - 1).toBe(2);
+  });
+
+  test("puts the side table of contents in an aside", () => {
+    expect(renderPage()).toMatch(/<aside[^>]*><nav aria-label="目次"/);
   });
 });
 
