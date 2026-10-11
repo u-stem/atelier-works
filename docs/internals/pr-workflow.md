@@ -401,7 +401,7 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `review_post_mode` | `comment_only` | `gated`ならレビューを投稿しない |
 | `diff_max_lines` | `3000` | レビューに渡す差分の行数の上限 |
 | `claude_timeout_sec` | `1800` | Claude 1回の実行と、PR修正の検査コマンド1件を打ち切る秒数 |
-| `max_fix_rounds` | `3` | PR修正のラウンドの上限 |
+| `max_fix_rounds` | `3` | PR修正のラウンドの上限。上げると、失敗の下限により3ラウンド目以降は`heavy_model`で動く |
 | `allowed_check_commands` | `[]` | PR修正の検査コマンド |
 | `max_fix_changed_files` | `30` | PR修正で変えてよいファイル数の上限 |
 | `max_fix_diff_lines` | `1500` | PR修正の追加と削除の行数の上限 |

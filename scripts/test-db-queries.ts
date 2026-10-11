@@ -637,17 +637,24 @@ execPsql(
 );
 
 // 成功(doneのラウンド)が入ると連続は途切れ、その後の失敗だけを数える。
+// recoveredFirstは2回失敗してdoneで終え、recoveredSecondは同じPRの次のラウンドで1回失敗した(1回)。
+// `fix_round`は既定の0のままで、下限は働かない。
 const recoveredFirst = await prFixItem(97);
 const recoveredSecond = await prFixItem(97);
-// 前のラウンドで2回失敗してdoneで終え、次のラウンドで1回失敗した(1回)。
-// `fix_round`は既定の0のままで、下限は働かない。
+// repeated*は、Claudeの実行は毎回成功してdoneで終えたが、再レビューが続いて3ラウンド目に入った。
+// 失敗の記録は無いが、`fix_round`の下限で2回と数える。
 const repeatedFirst = await prFixItem(98);
 const repeatedSecond = await prFixItem(98);
 const repeatedThird = await prFixItem(98);
-// Claudeの実行は毎回成功し、doneで終えたが、再レビューが続いて3ラウンド目に入った。
-// 失敗の記録は無いが、`fix_round`の下限で2回と数える。
-const roundsBelowFailures = await prFixItem(99);
 // 2ラウンド目で3回失敗した(下限は1なので、失敗の3回が勝つ)。
+const roundsBelowFailures = await prFixItem(99);
+// blockedのラウンド、doneのラウンド、blockedのラウンドの順に並ぶ(後のblockedの1回)。
+const doneBetweenBlocked = await prFixItem(100);
+const blockedBeforeDone = await prFixItem(100);
+const blockedAfterDone = await prFixItem(100);
+// 検査の再実行が、doneのラウンドの前と後の作業項目にそれぞれある(後の1回)。
+const retriedBeforeDone = await prFixItem(101);
+const retriedAfterDone = await prFixItem(101);
 execPsql(
   target,
   `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
@@ -659,6 +666,11 @@ execPsql(
     runRow(roundsBelowFailures, "pr_fix", 900, "timeout"),
     runRow(roundsBelowFailures, "pr_fix", 700, "timeout"),
     runRow(roundsBelowFailures, "pr_fix", 500, "timeout"),
+    runRow(blockedBeforeDone, "pr_fix", 950, null),
+    runRow(doneBetweenBlocked, "pr_fix", 750, null),
+    runRow(blockedAfterDone, "pr_fix", 550, null),
+    runRow(retriedBeforeDone, "pr_fix_verify_retry", 900, null),
+    runRow(retriedAfterDone, "pr_fix_verify_retry", 300, null),
   ].join(", ")}`,
 );
 execPsql(
@@ -667,6 +679,10 @@ execPsql(
     roundRow(recoveredFirst, "done", 600),
     roundRow(repeatedFirst, "done", 800),
     roundRow(repeatedSecond, "done", 500),
+    roundRow(blockedBeforeDone, "blocked", 900),
+    roundRow(doneBetweenBlocked, "done", 700),
+    roundRow(blockedAfterDone, "blocked", 500),
+    roundRow(retriedBeforeDone, "done", 700),
   ].join(", ")}`,
 );
 for (const [workItemId, round] of [
@@ -716,6 +732,8 @@ const prFixExpectations: readonly (readonly [string, number, number])[] = [
     roundsBelowFailures,
     3,
   ],
+  ["a blocked round before a done round is not counted", blockedAfterDone, 1],
+  ["a verify retry before a done round is not counted", retriedAfterDone, 1],
 ];
 for (const [name, workItemId, expected] of prFixExpectations) {
   const actual = await countPrFixFailures(workItemId, sql);
