@@ -108,6 +108,14 @@ describe("self_update host action wiring", () => {
     );
   });
 
+  test("compares the host content in the self clone", async () => {
+    const source = await selfUpdateSource();
+
+    expect(source).toMatch(
+      /differingPaths: \(from, to\) =>\s*listDifferingPaths\(runCommand, factoryClone\.dir, from, to\),/,
+    );
+  });
+
   test("reads the current HEAD from the self clone", async () => {
     const source = await selfUpdateSource();
 

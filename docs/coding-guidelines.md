@@ -136,6 +136,22 @@ PRを出す前に必ず通す。
 どちらも`--ignore-scripts`を必ず付ける。
 bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
 
+### 依存の脆弱性
+
+ルートで`bun audit`を実行し、指摘が出たら更新で解消できるかを先に確かめる。
+修正版が出ているのに親のパッケージが古い版を求めるときは、ルートの`package.json`の`overrides`で修正版に固定する。
+親が修正版を取り込んだら、`overrides`を外す。
+固定したままだと、親が新しい版へ移っても古い版に留まるためである。
+
+今、`overrides`で固定しているのは次の2つである。
+
+| パッケージ | 固定する理由 |
+| --- | --- |
+| `katex` | micromark-extension-mathが`^0.16.0`を求め、0.16系に修正版が無い |
+| `smol-toml` | markdownlint-cli2が1.8.0に厳密固定している |
+
+修正版が無い指摘の受け入れと、その確認の手順は[セキュリティ](security.md#依存の脆弱性)に書く。
+
 ## PRとコミット
 
 PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。

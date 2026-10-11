@@ -20,8 +20,8 @@ locks:
   f/factory/lib/audit_evidence: ac1ccc03e083e673184500451f40287247023042a52e597954379c12a9e79269
   f/factory/lib/audit_support: 7e3a1a0e9b438c651812eee365575dbcba2c789388dec74458106c39b3a0d032
   f/factory/lib/auto_retry: 891d3c0a3fdbfe5e802802c13cf25f73393ed6498c32d2e184516288bfe09b29
-  f/factory/lib/check_runner: 9d132a60c76663c3eef2a8c1cfadaceaa61318a590ad435d5f7edafe94309153
-  f/factory/lib/check_sandbox: 614e2cae677790d7d2b3a9abf84879b12a174165ba07aba2e518257ec16e323f
+  f/factory/lib/check_runner: 6302610177ad9d2471f669daccb4946bd705df4e4f2bf48e595891267ff97228
+  f/factory/lib/check_sandbox: 509f15f5cc467bb56f74ba89fd2fb004b02184d075a198cffca855940b115fae
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 37bd94b7315969113b4900f1ad8e82d5b75bcb8619d6ef6722cf610bc378d400
   f/factory/lib/cleanup_db_support: d9ef6bb600246990c3b2c4d3d22419356217fed835fe22499834491ed951138f
@@ -37,7 +37,7 @@ locks:
   f/factory/lib/drawio_viewer_bump_github: 15b3ba986a6ece3a53dda277ec91680765319fce1137707e5c65e32ba6b8c124
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/github: e343bd8515e62bbc56f05ffab8c9fa417702d9e195b3a329a5400772c58d6818
-  f/factory/lib/host_action: 0de9962b36e49b8382276026048174af51cce90f7829ec4d93afcf3e532d4d7b
+  f/factory/lib/host_action: 1bcf98c461a263226a949d0e113fe24a3901d1d46a7bb7480efaf46702463382
   f/factory/lib/implement_finish_support: 650e75bc3c8f4568472a5d94a06d86aac9ec5ec2151a1b4b8679956ab544d4c5
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77
   f/factory/lib/implement_loop: 9bfef0f4127c99575febe30587a91355ac5d7cb8666d9a182a1e97b1e478f98e
@@ -72,7 +72,7 @@ locks:
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: a0447d41cd130badc451ccb28574a947426c62d18a60e2f09ddfa82208fbbc4a
-  f/factory/self_update: 9a6e3bb6fdf6cf5c8f8eb4b91cc433db520a14a57f29704ea6966494b6f5c326
+  f/factory/self_update: cdeddfe17b5a702516e502af8399562d79a38efccbdb05aa5c603293de97e19e
   f/factory/steps/audit_generate: 23f909e777c1593ac09022dc5efa8c892f982b3b6639d9de3e0c29e55919d60d
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
   f/factory/steps/console_query: 138970a4c7a416e1fb534a16538ed14d6ac30349930287d2d02d6de65959c9f8
