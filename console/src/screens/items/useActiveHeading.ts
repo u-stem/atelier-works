@@ -1,17 +1,17 @@
 import { type RefObject, useEffect, useState } from "react";
 import { activeHeadingId } from "../../lib/activeHeading.ts";
-
-/** スクロールする親に付ける属性の選択子。目次は、この要素を基準に表示中の節を測る。 */
-const SCROLL_ROOT_SELECTOR = "[data-scroll-root]";
+import { SCROLL_ROOT_SELECTOR } from "../../lib/scrollRoot.ts";
 
 /** 基準線を、スクロールする枠の上端から何%の位置に置くか。 */
 const LINE_PERCENT = 20;
 
 /**
  * 本文で読んでいる節の見出しの`id`を返す。判定は`activeHeadingId`に任せ、ここは要素の測定と購読だけを行う。
- * 枠の上から一定の割合までの帯に見出しが出入りするたびに、見出しの位置を測り直す。
- * 帯の下端が基準線なので、見出しの上端が基準線を越える瞬間に測り直しが走る。
- * `anchor`は、スクロールする親を探す起点にする。親が見つからなければ、ウィンドウを枠にする。
+ * 枠のスクロールと大きさの変化を購読し、描画の1コマにつき1回、見出しの位置と底までの距離を測り直す。
+ * スクロールバーのドラッグ、Home/End、ページ内検索でも、スクロールの通知は必ず出る。
+ * `anchor`は、スクロールする枠(`SCROLL_ROOT_PROPS`を付けた要素)を探す起点にする。
+ * 枠が見つからないときは、枠を推測せず、何も強調しない。
+ * `ids`が空のときも何もしない。
  */
 export function useActiveHeading(
   ids: readonly string[],
@@ -20,39 +20,55 @@ export function useActiveHeading(
   const [activeId, setActiveId] = useState<string | null>(null);
 
   useEffect(() => {
+    const root = anchor.current?.closest(SCROLL_ROOT_SELECTOR) ?? null;
     const targets = ids.flatMap((id) => {
       const element = document.getElementById(id);
       return element === null ? [] : [{ id, element }];
     });
-    if (targets.length === 0 || typeof IntersectionObserver === "undefined") {
+    if (root === null || targets.length === 0) {
+      setActiveId(null);
       return;
     }
-    const root = anchor.current?.closest(SCROLL_ROOT_SELECTOR) ?? null;
     const measure = () => {
-      const frame = root?.getBoundingClientRect();
-      const frameTop = frame?.top ?? 0;
-      const frameHeight = frame?.height ?? window.innerHeight;
+      const frame = root.getBoundingClientRect();
+      const scrollable = root.scrollHeight > root.clientHeight;
       setActiveId(
         activeHeadingId(
           targets.map(({ id, element }) => ({
             id,
             top: element.getBoundingClientRect().top,
           })),
-          frameTop + frameHeight * (LINE_PERCENT / 100),
+          frame.top + frame.height * (LINE_PERCENT / 100),
+          scrollable &&
+            root.scrollTop + root.clientHeight >= root.scrollHeight - 1,
         ),
       );
     };
-    const observer = new IntersectionObserver(measure, {
-      root,
-      rootMargin: `0px 0px -${String(100 - LINE_PERCENT)}% 0px`,
-    });
-    for (const { element } of targets) {
-      observer.observe(element);
-    }
-    window.addEventListener("resize", measure);
+    let pending = 0;
+    const schedule = () => {
+      if (pending !== 0) {
+        return;
+      }
+      pending = requestAnimationFrame(() => {
+        pending = 0;
+        measure();
+      });
+    };
+    measure();
+    root.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(schedule);
+    resizeObserver?.observe(root);
     return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", measure);
+      root.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      resizeObserver?.disconnect();
+      if (pending !== 0) {
+        cancelAnimationFrame(pending);
+      }
     };
   }, [ids, anchor]);
 

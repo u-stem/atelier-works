@@ -1,13 +1,11 @@
-import { useMemo, useRef } from "react";
 import { cn } from "../../lib/cn.ts";
 import type { Heading } from "../../lib/markdownHeadings.ts";
-import { useActiveHeading } from "./useActiveHeading.ts";
 
 /**
- * 目次の一覧。`activeId`の見出しを、読んでいる節として強調する。
+ * 要件定義書の目次。`activeId`の見出しを、読んでいる節として強調する。
  * 見出しのリンクは、本文の見出しの`id`を指す。見出しが無いときは何も描かない。
  */
-export function RequirementsTocList({
+export function RequirementsToc({
   headings,
   activeId,
 }: {
@@ -40,24 +38,5 @@ export function RequirementsTocList({
         ))}
       </ul>
     </nav>
-  );
-}
-
-/**
- * 要件定義書の目次。本文をスクロールすると、読んでいる節を強調する。
- * 強調する節は、本文の見出しの位置から決める。
- */
-export function RequirementsToc({
-  headings,
-}: {
-  headings: readonly Heading[];
-}) {
-  const anchor = useRef<HTMLDivElement>(null);
-  const ids = useMemo(() => headings.map((heading) => heading.id), [headings]);
-  const activeId = useActiveHeading(ids, anchor);
-  return (
-    <div ref={anchor}>
-      <RequirementsTocList headings={headings} activeId={activeId} />
-    </div>
   );
 }

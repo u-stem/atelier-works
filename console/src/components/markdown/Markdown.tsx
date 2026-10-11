@@ -39,7 +39,7 @@ import {
   DRAWIO_IMAGE_SRC,
   diagramSlotState,
 } from "../../lib/requirementsView.ts";
-import { isIdCellText } from "../../lib/tableCell.ts";
+import { splitIdTokens } from "../../lib/tableCell.ts";
 import { DrawioFrame } from "../drawio/DrawioFrame.tsx";
 
 /**
@@ -81,6 +81,30 @@ function childrenText(children: ReactNode): string {
       return "";
     })
     .join("");
+}
+
+/**
+ * セルの文字に含まれるIDを、折り返さない`<span>`で包む。IDはハイフンで折り返されると読めなくなる。
+ * 文字以外の子(強調やコードなど)は、そのまま返す。
+ */
+function keepIdsTogether(child: ReactNode): ReactNode {
+  if (typeof child !== "string") {
+    return child;
+  }
+  const pieces = splitIdTokens(child);
+  if (!pieces.some((piece) => piece.id)) {
+    return child;
+  }
+  return pieces.map((piece, index) =>
+    piece.id ? (
+      // biome-ignore lint/suspicious/noArrayIndexKey: 断片の並びは文字から決まり、入れ替わらないため。
+      <span key={index} className="whitespace-nowrap">
+        {piece.text}
+      </span>
+    ) : (
+      piece.text
+    ),
+  );
 }
 
 type MarkdownContextValue = {
@@ -313,14 +337,8 @@ const components: Components = {
     </th>
   ),
   td: ({ children }) => (
-    <td
-      className={cn(
-        "border border-border px-3 py-1.5 align-top",
-        // IDはハイフンで折り返されると読めなくなる。
-        isIdCellText(childrenText(children)) && "whitespace-nowrap",
-      )}
-    >
-      {children}
+    <td className="border border-border px-3 py-1.5 align-top">
+      {Children.map(children, keepIdsTogether)}
     </td>
   ),
   blockquote: ({ children }) => {

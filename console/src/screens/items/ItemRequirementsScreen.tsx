@@ -12,6 +12,7 @@ import {
   prepareDoc,
 } from "../../lib/requirementsView.ts";
 import { parseIdParam } from "../../lib/routeParams.ts";
+import { SCROLL_ROOT_PROPS } from "../../lib/scrollRoot.ts";
 import { QueryFailure } from "./QueryFailure.tsx";
 import { RequirementsDocumentView } from "./RequirementsDocumentView.tsx";
 
@@ -45,7 +46,7 @@ function LoadingState() {
       role="status"
     >
       <span className="sr-only">読み込み中</span>
-      <Skeleton className="h-40 w-full max-w-[47.5rem] rounded-xl" />
+      <Skeleton className="h-8 w-full max-w-[47.5rem] rounded-md" />
       <Skeleton className="h-5 w-2/3 max-w-[47.5rem]" />
       <Skeleton className="h-32 w-full max-w-[47.5rem]" />
     </div>
@@ -116,7 +117,7 @@ function ItemRequirements({
       >
         <BackLink />
       </PageHeader>
-      <div data-scroll-root="" className="min-h-0 flex-1 overflow-y-auto">
+      <div {...SCROLL_ROOT_PROPS} className="min-h-0 flex-1 overflow-y-auto">
         <RequirementsDocumentView
           doc={doc}
           prepared={prepared}

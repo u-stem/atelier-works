@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Heading } from "../../lib/markdownHeadings.ts";
-import { RequirementsTocList } from "./RequirementsToc.tsx";
+import { RequirementsToc } from "./RequirementsToc.tsx";
 
 const HEADINGS: readonly Heading[] = [
   { level: 2, text: "Background", id: "h-background", line: 3 },
@@ -10,11 +10,11 @@ const HEADINGS: readonly Heading[] = [
 
 function render(activeId: string | null): string {
   return renderToStaticMarkup(
-    <RequirementsTocList headings={HEADINGS} activeId={activeId} />,
+    <RequirementsToc headings={HEADINGS} activeId={activeId} />,
   );
 }
 
-describe("RequirementsTocList", () => {
+describe("RequirementsToc", () => {
   test("marks the active section as the current location", () => {
     expect(render("h-scope")).toContain(
       'href="#h-scope" aria-current="location"',

@@ -1,5 +1,5 @@
 import { ExternalLink, Info } from "lucide-react";
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo, useRef } from "react";
 import type { RequirementsDoc } from "../../api/guards/requirements.ts";
 import { Markdown } from "../../components/markdown/Markdown.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
@@ -14,6 +14,7 @@ import {
 import { safeGitHubUrl } from "../../lib/safeUrl.ts";
 import { AttemptSwitcher } from "./AttemptSwitcher.tsx";
 import { RequirementsToc } from "./RequirementsToc.tsx";
+import { useActiveHeading } from "./useActiveHeading.ts";
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -70,8 +71,16 @@ export function RequirementsDocumentView({
     [doc.owner, doc.repo],
   );
   const sourceNotice = docSourceNotice(doc.doc_dir_source);
+  // 目次は2か所(畳んだ目次と右の目次)に出すので、強調する節は1か所で決める。
+  const anchor = useRef<HTMLDivElement>(null);
+  const tocIds = useMemo(
+    () => (embedded ? [] : prepared.headings.map((heading) => heading.id)),
+    [embedded, prepared.headings],
+  );
+  const activeId = useActiveHeading(tocIds, anchor);
   return (
     <div
+      ref={anchor}
       className={
         embedded
           ? "flex w-full items-start"
@@ -132,7 +141,10 @@ export function RequirementsDocumentView({
               目次
             </summary>
             <div className="mt-3">
-              <RequirementsToc headings={prepared.headings} />
+              <RequirementsToc
+                headings={prepared.headings}
+                activeId={activeId}
+              />
             </div>
           </details>
         )}
@@ -172,7 +184,7 @@ export function RequirementsDocumentView({
       </article>
       {embedded || prepared.headings.length === 0 ? null : (
         <aside className="sticky top-6 hidden w-56 shrink-0 min-[1100px]:block">
-          <RequirementsToc headings={prepared.headings} />
+          <RequirementsToc headings={prepared.headings} activeId={activeId} />
         </aside>
       )}
     </div>

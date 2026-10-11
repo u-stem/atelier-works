@@ -1,36 +1,43 @@
 import { describe, expect, test } from "bun:test";
-import { isIdCellText } from "./tableCell.ts";
+import { splitIdTokens } from "./tableCell.ts";
 
-describe("isIdCellText", () => {
-  test("accepts a requirement id", () => {
-    expect(isIdCellText("FR-001")).toBe(true);
+describe("splitIdTokens", () => {
+  test("marks a requirement id", () => {
+    expect(splitIdTokens("FR-001")).toEqual([{ text: "FR-001", id: true }]);
   });
 
-  test("accepts an id with a longer prefix", () => {
-    expect(isIdCellText("NFR-12")).toBe(true);
+  test("marks an id with a longer prefix", () => {
+    expect(splitIdTokens("NFR-12")).toEqual([{ text: "NFR-12", id: true }]);
   });
 
-  test("accepts an id with a middle segment", () => {
-    expect(isIdCellText("AC-FR-003")).toBe(true);
+  test("marks an id with a middle segment", () => {
+    expect(splitIdTokens("AC-FR-003")).toEqual([
+      { text: "AC-FR-003", id: true },
+    ]);
   });
 
-  test("ignores surrounding whitespace", () => {
-    expect(isIdCellText(" FR-001 ")).toBe(true);
+  test("splits several ids in one cell", () => {
+    expect(splitIdTokens("FR-001, FR-002")).toEqual([
+      { text: "FR-001", id: true },
+      { text: ", ", id: false },
+      { text: "FR-002", id: true },
+    ]);
   });
 
-  test("rejects a sentence", () => {
-    expect(isIdCellText("Users can sign in")).toBe(false);
+  test("marks an id next to Japanese text", () => {
+    expect(splitIdTokens("FR-001に対応")).toEqual([
+      { text: "FR-001", id: true },
+      { text: "に対応", id: false },
+    ]);
   });
 
-  test("rejects several ids in one cell", () => {
-    expect(isIdCellText("FR-001, FR-002")).toBe(false);
+  test("leaves a sentence as one plain piece", () => {
+    expect(splitIdTokens("Users can sign in")).toEqual([
+      { text: "Users can sign in", id: false },
+    ]);
   });
 
-  test("rejects a Japanese cell", () => {
-    expect(isIdCellText("ログインできる")).toBe(false);
-  });
-
-  test("rejects an empty cell", () => {
-    expect(isIdCellText("")).toBe(false);
+  test("returns no pieces for an empty text", () => {
+    expect(splitIdTokens("")).toEqual([]);
   });
 });
