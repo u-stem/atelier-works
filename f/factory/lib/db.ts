@@ -1265,6 +1265,22 @@ export async function resolveNoticesBeforeSuccessfulDeployment(
   return rows.length;
 }
 
+/** `kind`の未解決のnoticeのIDと本文を、古い順に返す。 */
+export async function listUnresolvedNoticesByKind(
+  kind: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ id: number; message: string }[]> {
+  const rows = await sql`
+    SELECT id, message FROM factory.notices
+    WHERE kind = ${kind} AND resolved = false
+    ORDER BY id
+  `.fetch();
+  return rows.map((row) => ({
+    id: parseId(row.id, "id"),
+    message: parseRequiredString(row.message, "message"),
+  }));
+}
+
 /**
  * 未解決のnoticeを1件だけ解決済みにし、解決者と解決時刻を記録する。
  * 実際に解決したら`true`、条件に合う行が無ければ`false`を返す。

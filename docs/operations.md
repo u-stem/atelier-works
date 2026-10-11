@@ -870,6 +870,7 @@ Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕
 | PRレビュー完了(`pr_reviewed`) | レビューを投稿した | 指摘を確かめる。指摘が無ければApproveを判断する |
 | PR修正適用(`pr_fixed`) | 修正をpushし、再レビューを依頼した | 再レビューを待つ。補足に依頼の失敗が載っていれば、GitHubのPRで人がレビュアーを依頼する |
 | Consoleの取り込みの問題(`console_fetch_problem`) | Consoleの取り込みが失敗したか、結果が30分以上更新されていないか、状態を読めない | 通知の「次の操作」に従う。通知を新しく残したときだけ届く |
+| ホスト側の作業が必要(`host_action_required`) | 自己更新が反映した版に、ホスト側の作業が要る変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。通知を新しく残したときだけ届く | [ホスト側で反映するもの](#ホスト側で反映するもの)の手順で、`mise run up`を実行する |
 | 日次サマリー(`daily_summary`) | 前日のコスト、件数、失敗、DBの掃除の件数 | 異常が無いか見る |
 | 監査レポート(`audit_completed`) | 監査で改善提案が1件以上できた | **承認**タブで提案を承認か却下する |
 
@@ -916,6 +917,7 @@ Consoleの**通知**タブには、Discordに送らない事項と、Discordに�
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |
 | `supersede_failed` | 新しいサイクルを始めたが、古い承認済みの作業項目を取り消せなかった | なし。古い承認は再開できず、次の新しいサイクルで取り消される |
 | `deployed_sha_mismatch` | 自己更新が反映した版(`f/factory/deployed_sha`)が、self cloneのHEADに30分を超えて追いついていない。mergeの直後に反映を待つ間は通知しない。本文に、直近の反映の記録から読んだ原因の候補が付く。Windmillのdefaultのworkerが埋まって自己更新が待たされたときや、自己更新の実行が長引いて次の回が飛ばされたときは、反映が遅れただけでも通知されうる | 自己更新のジョブのログを確かめる。自己更新が反映に成功すると、その記録より前に作られたnoticeを、`poll_issues`が自動で解決する。人が解決しても、反映が止まっている限り、次の`poll_issues`で再び残る。本文が名指しする版が今の`f/factory/deployed_sha`と違い、自己更新が成功しているときは、反映と判定が重なって残ったnoticeなので、人が解決してよい。人が`f/factory/deployed_sha`を今のHEADへ手で書き換えて版を一致させたときや、自己更新が変数を更新した後に失敗して成功の行が作られなかったときも、止まっていた版を名指しするnoticeは自動では解決されないので、人が解決してよい([通知](internals/notifications.md)) |
+| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡す。自己更新(10分ごと)が、通知の版がそのHEADと同じか祖先なら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの)) |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
 | `cleanup_worktree_busy` | 残ったプロセスが使っているので、終端の作業項目のworktreeを消さなかった。作業項目のID、worktreeのパス、使っているプロセスが載る | 載ったプロセスを止める。止めない限り毎日残る |
@@ -1007,13 +1009,13 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(2700秒)がある。
+`self_update`のジョブには、全体の上限(2900秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
 通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
 全体の上限は、それでも止まったときの最後の砦である。
 
 上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
-打ち切られるまでの最大45分は、10分ごとの次の4回が飛ばされる。
+打ち切られるまでの最大約48分は、10分ごとの次の4回が飛ばされる。
 この間は、自己更新の反映とConsole用のworkerの停止の検知が止まる。
 
 気づく経路は2つある。
@@ -1053,9 +1055,9 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 手順は次のとおりである。
 
 1. `self_update`の上限が反映されていることを確かめる。
-   `wmill script get f/factory/self_update`の出力で、`timeout`が2700であることを見る。
-   2700秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
-   `job_default_timeout`は21600秒以上にする決まりなので、2700秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が2900であることを見る。
+   2900秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、2900秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
 2. `u/<user>/timeout_probe`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。
@@ -1251,7 +1253,10 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker git
 
 `f/`、`migrations/`、`.claude/skills/`の変更は、自己更新のスケジュール(`self_update`、10分ごと)が自動で反映する。ホスト側の操作は要らない。
 
-自己更新は`infra/`の変更と、`mise.toml`の`[tools]`・`[env]`の変更を検知すると、ログとデプロイの記録(`deployments.needs_host_action`)に残す。通知はしない。これらは、次にホスト側で`mise run up`したときに反映される。
+自己更新は、`infra/`か`mise.toml`の`[tools]`・`[env]`の変更を検知すると、デプロイの記録(`deployments.needs_host_action`)に残す。
+続けて、要対応の通知`host_action_required`とDiscordで知らせる。
+これらは、ホスト側で`mise run up`するまで反映されない。
+人が気づかないと、古い構成で動き続けるためである。
 
 `mise.toml`の`[tasks.*]`だけの変更、`scripts/`の変更、`mise.local.toml.example`の変更は記録しない。workerの動作に影響しないためである。
 
@@ -1264,19 +1269,51 @@ clone、fetch、push、`git gtr new`が1回ずつ成功することを見る。
 `infra/`と`mise.toml`の`[tools]`・`[env]`の変更は、次の手順で反映する。ビルドはホスト側のcheckoutから行うので、先にmainを取り込む。
 
 1. ホスト側のcheckoutで`git pull`する。
-2. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成まで行う。
+2. `mise install`で、`mise.toml`の`[tools]`のツールを入れる。
+3. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成、Caddyの再起動まで行う。
+
+`mise install`は、すでに入っているツールには何もしない。
+miseの自動インストールが`mise run`の前に不足分を入れるかは、確かめていない。そのため、通知の手順に`mise install`を含める。
 
 workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
+
+`mise run up`と`mise run deploy`は、`up -d`の前に、一時コンテナで`caddy validate`を実行し、Caddyfileを確かめる。
+不正なら、そこで止まり、何も起動し直さない。
+不正なCaddyfileのまま、Caddyの作り直しや再起動をすると、Caddyが落ちて再起動を繰り返し、公開の入口が止まるためである。
+続けて、`up -d`の後に、Caddyを再起動する。
+再起動の後に、動いているCaddyでも`caddy validate`を実行し、失敗したら止まる。
+`restart`はコンテナを起動できれば成功を返し、直後に落ちても気づけないためである。
+止まったときは、HEADを書かないので、通知は解決されない。
+`infra/Caddyfile`は単一ファイルのbind mountで、`up -d`はcomposeの設定が変わらない限りCaddyを作り直さず、再読み込みもしないためである。
+再起動しないと、古いCaddyfileのまま、次に書くHEADが反映済みを表してしまう。
+`mise run up`を使わずにcomposeを直接実行したときは、Caddyの再起動もHEADの記録も行われない。
+
+続けて、起動の最後に`scripts/record-host-applied.sh`を呼ぶ。
+このスクリプトは、ホストのcheckoutのHEADを、workerの共有ボリュームの`/var/lib/factory/host_applied_sha`に書く。
+自己更新は10分ごとにこの値を読む。
+通知`host_action_required`の版が、この値と同じか祖先であれば、通知を自動で解決する。
+ホストのcheckoutがその版を含んで起動し直されたことを、確かめられるためである。
+値を書けなかったときは警告が出るが、起動は成功のまま終わる。
+値のファイルが無いとき、通常のファイルでない(symlinkなど)か128バイトを超えるとき、版として読めないとき、self cloneに無い版のときは、通知を解決しない。
+1回の実行で調べる未解決の通知は、版を読めたものの古い順に3件までである。残りは次の回に調べる。
+自己更新が反映した時点で、ホストがその版を反映済みなら、通知とDiscordのどちらも出さない。
+運用者が先に`mise run deploy`などで反映した場合に、操作の要らない通知を送らないためである。
+その場合は、`mise run up`が済んでいることを確かめたうえで、人がConsoleの**通知**タブで解決してよい。
+このスクリプトを持たない版から取り込む最初の1回は、先に`git pull`を済ませてから`mise run up`を実行する。
+`mise run deploy`はpullの前のタスク定義で動くので、HEADを書かないためである。
 
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
 1. ホスト側のcheckoutで`git pull --ff-only`
 2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
 3. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
-4. `docker compose up -d`
-5. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
-6. migrationの実行
+4. 一時コンテナでの`caddy validate`。不正なら止まる
+5. `docker compose up -d`
+6. Caddyの再起動と、動いているCaddyでの`caddy validate`
+7. Consoleのraw appの依存の`npm ci --ignore-scripts`と`wmill sync push`
+8. migrationの実行
+9. 反映したHEADの記録
 
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
 この検査を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
@@ -1292,7 +1329,7 @@ raw appのバンドルに依存が要るためである。
 
 | 変更 | 反映のしかた |
 | --- | --- |
-| `infra/Caddyfile` | bind mountしたファイルなので、`up -d`はコンテナを作り直さない。`mise exec -- docker compose -f infra/docker-compose.yml restart caddy`でCaddyを再起動する |
+| `infra/Caddyfile`(composeを直接実行したとき) | bind mountしたファイルなので、`up -d`はコンテナを作り直さない。`mise run up`と`mise run deploy`は起動の後にCaddyを再起動するが、composeを直接実行したときは、`mise exec -- docker compose -f infra/docker-compose.yml restart caddy`で再起動する |
 | `mise.toml`の`[tools]`のうちホスト側のCLI | `mise install`か`mise run setup`で反映する |
 
 `mise run up`が反映するのは、`[env]`に書いたworkerのイメージのツールのバージョンである。
@@ -1334,7 +1371,8 @@ Factory Console(`f/factory/factory_console__raw_app/`)は、raw appとしてリ�
 `console`ジョブは、draw.ioのビューアを外部から取得する。
 取得に失敗したときの対応は、[Consoleの配信の仕様](internals/console.md)の「ビューアの取得」にある。
 `infra/console_fetcher/`の変更は、ほかの`infra/`と同じく次の`mise run up`で反映される。
-`infra/Caddyfile`は`mise run up`では反映されないので、Caddyを再起動する。
+`infra/Caddyfile`は、`mise run up`と`mise run deploy`が起動の後にCaddyを再起動して反映する。
+composeを直接実行したときは、次のコマンドでCaddyを再起動する。
 Caddyを再起動するまで、`/console/drawio.html`には`frame-ancestors 'none'`のヘッダーが付き、図のページを埋め込めない。
 
 ```bash

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { HOST_ACTION_RECONCILE_LIMIT } from "../../f/factory/lib/host_action.ts";
 import { FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT } from "../../f/factory/lib/workspace.ts";
 import {
   SELF_UPDATE_BOUNDED_CALL_COUNT,
   SELF_UPDATE_CLI_COMMAND_COUNT,
   SELF_UPDATE_GIT_COMMAND_COUNT,
+  SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT,
   SELF_UPDATE_WORST_CASE_MS,
 } from "../../f/factory/self_update.ts";
 
@@ -43,7 +45,7 @@ const WRAPPERS = [
 // 例外は`wmill.JobService.`で、Console用workerの確認(`watchConsoleWorker`)が
 // 自前の上限(`CONSOLE_WORKER_CHECK_TIMEOUT_MS`)で区切る。
 const UNBOUNDED_CALL =
-  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(/g;
+  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(|\blistUnresolvedNoticesByKind\(|\bresolveNoticeIfUnresolved\(|\breadHostAppliedSha\(/g;
 /** 区切りの呼び出しの開きから、その中の呼び出しまでの、最も長い距離。 */
 const WRAPPER_REACH = 700;
 
@@ -87,9 +89,15 @@ describe("self_update timeout", () => {
   test("the bounded call count matches the call sites", async () => {
     const source = await selfUpdateSource();
     const notify = count(source, /withCallTimeout\(\s*"notify"/g);
+    // 通知の解決は、1か所の呼び出しが上限の数まで繰り返される。
+    const resolveSites = count(
+      source,
+      /withCallTimeout\(\s*"resolve host action notice"/g,
+    );
     const sites =
       count(source, /withCallTimeout\(/g) -
       notify +
+      (HOST_ACTION_RECONCILE_LIMIT - 1) * resolveSites +
       2 * count(source, /readDeployedSha\(/g) +
       2 * count(source, /setDeployedSha\(/g) +
       count(source, /recordSuccessDeployment\(/g);
@@ -117,6 +125,9 @@ describe("self_update timeout", () => {
       source,
       /(readSelfCloneBranch|readSelfCloneHeadSha|resolveChangedPaths)\(\s*runCommand,/g,
     );
+    // ホストの印の確認: コミットの有無は1回、祖先の確認は通知の解決の上限の数と、この回の通知の判断の1回。
+    const hostCommit = count(source, /isCommitInClone\(\s*runCommand,/g);
+    const hostAncestor = count(source, /isAncestorSha\(\s*runCommand,/g);
     const passed = count(source, /\(\s*runCommand,/g);
 
     expect({
@@ -125,9 +136,12 @@ describe("self_update timeout", () => {
         FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT * cloneUpdate +
         2 * miseCompare +
         single,
+      localCommands:
+        hostCommit + (HOST_ACTION_RECONCILE_LIMIT + 1) * hostAncestor,
     }).toEqual({
-      passed: miseCompare + single,
+      passed: miseCompare + single + hostCommit + hostAncestor,
       commands: SELF_UPDATE_GIT_COMMAND_COUNT,
+      localCommands: SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT,
     });
   });
 

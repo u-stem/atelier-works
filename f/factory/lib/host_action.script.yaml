@@ -1,0 +1,9 @@
+summary: '[LIB] ホスト側の作業が要る反映の通知'
+description: 内部ライブラリです。直接実行するものではありません。infraやmise.tomlの変更を反映したときに通知を残してDiscordにも知らせ、ホストで反映が済んだら通知を解決します。
+lock: '!inline f/factory/lib/host_action.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

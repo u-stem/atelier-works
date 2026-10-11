@@ -137,6 +137,14 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "host_action_required";
+      instance_name: string;
+      /** 反映した版と、ホスト側の作業が要る理由。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
       kind: "console_worker_missing";
       instance_name: string;
       /** Console用のworkerがtag `console`のジョブを受けていないこと。 */
@@ -372,6 +380,16 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "console_fetch_problem":
       return {
         title: "Consoleの取り込みに問題があります",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "host_action_required":
+      return {
+        title: "ホスト側の作業が必要です",
         description: event.cause,
         url: null,
         fields: [

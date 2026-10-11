@@ -439,8 +439,8 @@ export type DeployNeeds = {
   readonly autoApply: boolean;
   /**
    * `infra/`か`mise.toml`が変わった。
-   * `self_update`は反映せず、次にホストで`mise run up`して起動したときに
-   * 反映される(通知はしない)。
+   * `self_update`は反映せず、ホストで`mise run up`して起動したときに反映される。
+   * 反映した版は、`self_update`が要対応の通知で知らせる。
    */
   readonly onNextUp: boolean;
   /**

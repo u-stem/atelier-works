@@ -50,6 +50,7 @@ import {
   listPendingIssueProposals,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  listUnresolvedNoticesByKind,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   nextCycleForIssue,
@@ -3181,6 +3182,32 @@ describe("getNoticeById", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await getNoticeById(5, sql);
     expect(calls[0]?.text).toContain("FROM factory.notices WHERE id =");
+  });
+});
+
+describe("listUnresolvedNoticesByKind", () => {
+  test("returns the id and message of each row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "5", message: "m" }]]);
+    expect(await listUnresolvedNoticesByKind("k", sql)).toEqual([
+      { id: 5, message: "m" },
+    ]);
+  });
+
+  test("returns an empty list when nothing is unresolved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await listUnresolvedNoticesByKind("k", sql)).toEqual([]);
+  });
+
+  test("selects only unresolved rows of the kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnresolvedNoticesByKind("k", sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("passes the kind as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnresolvedNoticesByKind("k", sql);
+    expect(calls[0]?.values).toContain("k");
   });
 });
 
