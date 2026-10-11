@@ -494,7 +494,7 @@ export type FixOutcome = "done" | "requirements_gap" | "blocked";
  * - `"fixed"`: コードを変更して対応した。
  * - `"skipped"`: 意図して変更しなかった。
  * - `"propose_issue"`: 妥当だがこのPRの範囲外。修正も見送りもせず、
- *   ClaudeがGitHub Issueの候補を下書きし、人がConsoleのInboxから
+ *   ClaudeがGitHub Issueの候補を下書きし、人がConsoleの要対応から
  *   `issue_proposal_apply.ts`を通して承認・却下する。
  *
  * `pr_workflow_support.ts`の`renderFixReply`の最終行がこれで決まる
@@ -637,7 +637,7 @@ export type ImplementRound = ImplementRoundRecord & {
 };
 
 // ---------------------------------------------------------------------------
-// issue_proposals: GitHub Issueの候補。人がConsoleのInboxから
+// issue_proposals: GitHub Issueの候補。人がConsoleの要対応から
 // (`issue_proposal_apply.ts`を通して)承認・却下するのを待つ。
 // ---------------------------------------------------------------------------
 

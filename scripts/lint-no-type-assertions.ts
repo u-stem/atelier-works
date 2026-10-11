@@ -831,10 +831,8 @@ export function findTypeAssertions(
 /**
  * パスが`node_modules`の下にあるかを返す。
  * `Bun.Glob.scan`は(ripgrepなどと違い)`.gitignore`や`node_modules`を
- * 考慮しない。`wmill app lint`・`wmill app dev`がraw appのフロントエンドの
- * 依存を入れると`f/**`の下に`node_modules`ができ、そのままでは
- * サードパーティの`.d.ts`が`f/`配下のglobに拾われて誤検知する
- * (このリポジトリのコードではなく、gitignore済みでもある)。
+ * 考慮しない。globの対象の下に依存が入ると、そのままではサードパーティの
+ * `.d.ts`が拾われて誤検知する(このリポジトリのコードではなく、gitignore済みでもある)。
  */
 function isUnderNodeModules(path: string): boolean {
   return path.split("/").includes("node_modules");
