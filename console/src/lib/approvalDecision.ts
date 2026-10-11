@@ -77,6 +77,81 @@ export function snapshotReadiness(query: {
   return query.data === null ? "empty" : "ready";
 }
 
+export type DocReadiness =
+  | "unidentified"
+  | "failed"
+  | "loading"
+  | "missing"
+  | "mismatch"
+  | "ready";
+
+/**
+ * 承認する試行の要件定義書を、承認者が見られる状態か。
+ * 承認の試行が分からないとき(`expectedAttempt`が`null`)は、最新の試行で代えず、`unidentified`にする。
+ * 最新の試行は、承認する試行と違うことがあるためである。
+ * 取得した書の試行が承認の試行と違うときは、`mismatch`にして、別の試行を見たまま承認させない。
+ */
+export function docReadiness(input: {
+  readonly expectedAttempt: number | null;
+  readonly query: {
+    readonly isPending: boolean;
+    readonly isError: boolean;
+    readonly data: { readonly attempt: number } | null | undefined;
+  };
+}): DocReadiness {
+  if (input.expectedAttempt === null) {
+    return "unidentified";
+  }
+  if (input.query.isError) {
+    return "failed";
+  }
+  if (input.query.isPending) {
+    return "loading";
+  }
+  if (input.query.data === null || input.query.data === undefined) {
+    return "missing";
+  }
+  return input.query.data.attempt === input.expectedAttempt
+    ? "ready"
+    : "mismatch";
+}
+
+const SNAPSHOT_BLOCKED = {
+  loading:
+    "取り込み時点のIssueを読み込み中です。表示されるまで承認できません。",
+  failed:
+    "取り込み時点のIssueを取得できていません。取得し直して内容を確かめるまで承認できません。",
+  empty:
+    "この作業項目に、取り込み時点のIssueがありません。確かめる内容が無いため、承認できません。",
+} as const;
+
+const DOC_BLOCKED = {
+  unidentified:
+    "承認する試行が特定できないため、要件定義書を表示できません。承認できません。",
+  loading: "要件定義書を読み込み中です。表示されるまで承認できません。",
+  failed:
+    "要件定義書を取得できていません。取得し直して内容を確かめるまで承認できません。",
+  missing:
+    "承認する試行の要件定義書が見つかりません。内容を確かめられないため、承認できません。",
+  mismatch:
+    "表示している要件定義書の試行が、承認する試行と違います。承認できません。",
+} as const;
+
+/**
+ * 要件定義の承認を止める理由。取り込み時点のIssueと要件定義書の、どちらかが見られないときに返す。
+ * 両方が見られるときは`null`。承認者が、実装の入力と承認の対象の両方を確かめてから押せるようにする。
+ * 両方が見られないときは、取り込み時点のIssueの理由を先に返す。
+ */
+export function requirementsBlockedReason(
+  snapshot: "loading" | "failed" | "empty" | "ready",
+  doc: DocReadiness,
+): string | null {
+  if (snapshot !== "ready") {
+    return SNAPSHOT_BLOCKED[snapshot];
+  }
+  return doc === "ready" ? null : DOC_BLOCKED[doc];
+}
+
 /** 期限を過ぎた依頼に出す文。 */
 export const EXPIRED_MESSAGE = "期限を過ぎているため、承認も却下もできません。";
 

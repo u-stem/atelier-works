@@ -5,6 +5,7 @@ import {
   approvalLinks,
   approveGateProblem,
   decisionSurface,
+  docReadiness,
   EXPIRED_MESSAGE,
   FULL_CHECK_MESSAGE,
   factoryLabelChoice,
@@ -14,6 +15,7 @@ import {
   redoConfirmation,
   rejectConfirmation,
   rejectProblem,
+  requirementsBlockedReason,
   snapshotReadiness,
   waitingMessage,
   withFactoryLabelArg,
@@ -501,6 +503,99 @@ describe("waitingMessage", () => {
   test("says that the processing is awaited for other kinds", () => {
     expect(waitingMessage("requirements")).toBe(
       "承認済みです。処理の完了を待っています。",
+    );
+  });
+});
+
+describe("docReadiness", () => {
+  const loaded = { isPending: false, isError: false, data: { attempt: 2 } };
+
+  test("cannot identify the attempt when the approval has none", () => {
+    expect(docReadiness({ expectedAttempt: null, query: loaded })).toBe(
+      "unidentified",
+    );
+  });
+
+  test("is loading while the document is pending", () => {
+    expect(
+      docReadiness({
+        expectedAttempt: 2,
+        query: { isPending: true, isError: false, data: undefined },
+      }),
+    ).toBe("loading");
+  });
+
+  test("is failed when the document could not be read", () => {
+    expect(
+      docReadiness({
+        expectedAttempt: 2,
+        query: { isPending: false, isError: true, data: undefined },
+      }),
+    ).toBe("failed");
+  });
+
+  test("is missing when there is no document for the attempt", () => {
+    expect(
+      docReadiness({
+        expectedAttempt: 2,
+        query: { isPending: false, isError: false, data: null },
+      }),
+    ).toBe("missing");
+  });
+
+  test("is a mismatch when the shown attempt differs from the approved one", () => {
+    expect(docReadiness({ expectedAttempt: 3, query: loaded })).toBe(
+      "mismatch",
+    );
+  });
+
+  test("is ready when the document of the approved attempt is shown", () => {
+    expect(docReadiness({ expectedAttempt: 2, query: loaded })).toBe("ready");
+  });
+});
+
+describe("requirementsBlockedReason", () => {
+  test("lets approval through when both are ready", () => {
+    expect(requirementsBlockedReason("ready", "ready")).toBeNull();
+  });
+
+  test("blocks while the snapshot is loading", () => {
+    expect(requirementsBlockedReason("loading", "ready")).toContain(
+      "取り込み時点のIssue",
+    );
+  });
+
+  test("blocks when the snapshot is empty", () => {
+    expect(requirementsBlockedReason("empty", "ready")).toContain("ありません");
+  });
+
+  test("blocks while the document is loading", () => {
+    expect(requirementsBlockedReason("ready", "loading")).toContain(
+      "要件定義書",
+    );
+  });
+
+  test("blocks when the document failed to load", () => {
+    expect(requirementsBlockedReason("ready", "failed")).toContain("取得");
+  });
+
+  test("blocks when the attempt cannot be identified", () => {
+    expect(requirementsBlockedReason("ready", "unidentified")).toContain(
+      "承認する試行が特定できない",
+    );
+  });
+
+  test("blocks when the document of the attempt is missing", () => {
+    expect(requirementsBlockedReason("ready", "missing")).toContain("見つかり");
+  });
+
+  test("blocks when the shown attempt differs", () => {
+    expect(requirementsBlockedReason("ready", "mismatch")).toContain("試行");
+  });
+
+  test("reports the snapshot first when both are not ready", () => {
+    expect(requirementsBlockedReason("failed", "loading")).toContain(
+      "取り込み時点のIssue",
     );
   });
 });
