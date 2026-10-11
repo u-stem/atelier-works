@@ -60,6 +60,57 @@ shopt -u nullglob
 [ ${#up_files[@]} -gt 0 ] || die "no migrations found in ${MIGRATIONS_DIR}"
 
 ACTIVE_ISSUE_MIGRATION="20261009120000_active_issue_key.up.sql"
+NOTICES_DEDUP_MIGRATION="20261011170000_notices_unresolved_dedup.up.sql"
+
+# 未解決の通知の部分一意索引を足す前に、重複した未解決の通知を入れておく。
+# migrationが最古の1件だけを残して解決済みにし、索引を作れることを確かめるため。
+seed_notice_duplicates() {
+  psql_exec "${SCRATCH_DB}" <<'SQL' >/dev/null
+INSERT INTO factory.notices (kind, message, resolved, created_at) VALUES
+  ('dup_probe', 'same', false, '2026-10-01 00:00:00+00'),
+  ('dup_probe', 'same', false, '2026-10-02 00:00:00+00'),
+  ('dup_probe', 'same', false, '2026-10-02 00:00:00+00'),
+  ('dup_probe', 'other', false, '2026-10-03 00:00:00+00'),
+  ('dup_probe', 'done', true, '2026-10-01 00:00:00+00'),
+  ('dup_probe', 'done', false, '2026-10-02 00:00:00+00');
+SQL
+}
+
+# migrationが最古の1件だけを残し、残りを解決者migrationで解決済みにし、
+# 解決済みの履歴には触れず、索引が2件目の未解決を拒み、ON CONFLICT DO NOTHINGでは挿入しないことを確かめる。
+verify_notice_dedup_index() {
+  local kept
+  kept="$(printf "SELECT string_agg(message || ':' || resolved || ':' || COALESCE(resolved_by, '-'), ',' ORDER BY message, id) FROM factory.notices WHERE kind = 'dup_probe';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the deduplicated notices"
+  [ "${kept}" = "done:true:-,done:false:-,other:false:-,same:false:-,same:true:migration,same:true:migration" ] \
+    || die "unexpected notices after the dedup migration: ${kept}"
+  local oldest
+  oldest="$(printf "SELECT created_at::date FROM factory.notices WHERE kind = 'dup_probe' AND message = 'same' AND resolved = false;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the kept notice"
+  [ "$(printf '%s' "${oldest}" | tr -d '[:space:]')" = "2026-10-01" ] \
+    || die "expected the oldest notice to be kept, got '${oldest}'"
+  local rejected
+  if rejected="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('dup_probe', 'same');\n" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+    die "a second unresolved notice with the same kind and message was accepted"
+  fi
+  case "${rejected}" in
+    *notices_unresolved_key*) ;;
+    *) die "the duplicate notice was rejected, but not by notices_unresolved_key: ${rejected}" ;;
+  esac
+  local skipped
+  skipped="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('dup_probe', 'same') ON CONFLICT DO NOTHING RETURNING id;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "ON CONFLICT DO NOTHING failed instead of skipping the notice insert"
+  [ -z "$(printf '%s' "${skipped}" | tr -d '[:space:]')" ] \
+    || die "ON CONFLICT DO NOTHING inserted a second unresolved notice"
+  printf "INSERT INTO factory.notices (kind, message, resolved) VALUES ('dup_probe', 'same', true);\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "a resolved notice with the same kind and message was rejected"
+  printf "DELETE FROM factory.notices WHERE kind = 'dup_probe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "unresolved notices are unique per kind and message"
+}
 
 # 稼働中のIssueの作業項目の部分一意インデックスを足す前に、重複した稼働中の行を入れておく。
 # migrationが古い方を取り消し、インデックスを作れることを確かめるため。
@@ -243,10 +294,16 @@ for up_file in "${up_files[@]}"; do
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
     seed_active_issue_duplicates
   fi
+  if [ "${up_name}" = "${NOTICES_DEDUP_MIGRATION}" ]; then
+    seed_notice_duplicates
+  fi
   log "applying ${up_name}"
   psql_exec "${SCRATCH_DB}" <"${up_file}"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
     verify_active_issue_index
+  fi
+  if [ "${up_name}" = "${NOTICES_DEDUP_MIGRATION}" ]; then
+    verify_notice_dedup_index
   fi
 done
 

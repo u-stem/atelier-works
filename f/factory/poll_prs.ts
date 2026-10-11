@@ -22,7 +22,6 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
-  addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
   findApprovedWorkItemForIssue,
@@ -608,21 +607,18 @@ async function restoreTriggerLabel(
 }
 
 export type ClaimNotClaimedDeps = {
-  readonly addNotice: typeof addNotice;
   readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
 };
 
 const defaultClaimNotClaimedDeps: ClaimNotClaimedDeps = {
-  addNotice,
   addNoticeUnlessUnresolved,
 };
 
 /**
  * `claimPr`が引いた理由を、`claim_race_lost`のnoticeに残す。
  * ラベルを付け直して引いたときは、読み取りが続けて失敗する間、ポーリングのたびに
- * 同じ本文になる。そのため、同じ本文の未解決のnoticeがあれば追加しない。
+ * 同じ本文になる。そのため、理由を問わず、同じ本文の未解決のnoticeがあれば追加しない。
  * 本文は対象と固定の理由だけで決まり、エラーの文を含まない(エラーは警告のログに残る)。
- * ほかの理由は、毎回追加する。
  */
 export async function recordPrClaimNotClaimed(
   target: {
@@ -637,11 +633,7 @@ export async function recordPrClaimNotClaimed(
     kind: "claim_race_lost",
     message: prClaimNoticeMessage(target, result.reason),
   };
-  if (result.restored === true) {
-    await deps.addNoticeUnlessUnresolved(record);
-  } else {
-    await deps.addNotice(record);
-  }
+  await deps.addNoticeUnlessUnresolved(record);
 }
 
 export type LabelerDeniedDeps = {

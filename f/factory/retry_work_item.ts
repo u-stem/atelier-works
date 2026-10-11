@@ -19,7 +19,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   getWorkItem,
   isActiveIssueUniqueViolation,
   latestRequirementsApproval,
@@ -611,7 +611,7 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
       writeIntake: (intake, note) =>
         updateIntakeIfRegenerating(work_item_id, intake, note),
       announce: async () => {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: INTAKE_REFRESHED_NOTICE_KIND,
           message: buildIntakeRefreshedNoticeMessage({
             owner: workItem.owner,

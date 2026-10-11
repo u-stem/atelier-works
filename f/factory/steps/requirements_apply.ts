@@ -6,7 +6,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   getApprovalRequest,
   getWorkItem,
   recordFailure,
@@ -487,7 +487,7 @@ async function run(
           });
         },
         addNotice: async (reason) => {
-          await addNotice({
+          await addNoticeUnlessUnresolved({
             kind: "implement_launch_failed",
             message: buildImplementLaunchNoticeMessage(
               {
@@ -533,7 +533,7 @@ async function run(
         );
       },
       addCommentFailedNotice: async (reason) => {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: "approval_comment_failed",
           message: buildApprovalCommentFailedMessage(
             {
@@ -593,7 +593,7 @@ async function run(
           announce: async (updated) => {
             // noticeの失敗でDiscordへの通知を止めない。どちらも承認者に知らせる手段である。
             try {
-              await addNotice({
+              await addNoticeUnlessUnresolved({
                 kind: INTAKE_REFRESHED_NOTICE_KIND,
                 message: buildIntakeRefreshedNoticeMessage({
                   owner: workItem.owner,

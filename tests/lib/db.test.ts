@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   acquireImplementLease,
-  addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
   claimIssueCreation,
@@ -1371,20 +1370,6 @@ describe("recordDeployment", () => {
   });
 });
 
-describe("addNotice", () => {
-  test("inserts into factory.notices", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
-    await addNotice(
-      {
-        kind: "sha_mismatch",
-        message: "self clone SHA does not match deployed_sha",
-      },
-      sql,
-    );
-    expect(calls[0]?.text).toContain("INSERT INTO factory.notices");
-  });
-});
-
 describe("addNoticeUnlessUnresolved", () => {
   const record = {
     kind: "deployed_sha_mismatch",
@@ -1412,6 +1397,12 @@ describe("addNoticeUnlessUnresolved", () => {
       record.kind,
       record.message,
     ]);
+  });
+
+  test("skips the insert on a unique violation from a concurrent insert", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
   });
 
   test("returns the new id when a row was inserted", async () => {

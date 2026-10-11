@@ -9,7 +9,7 @@ import {
 } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
   getWorkItem,
   insertApprovalRequest,
@@ -211,7 +211,7 @@ export async function main(
   await reportApprovalNotifyFailure(
     notifyResult,
     async (reason) => {
-      await addNotice({
+      await addNoticeUnlessUnresolved({
         kind: "approval_notify_failed",
         message: buildApprovalNotifyFailedMessage(
           {

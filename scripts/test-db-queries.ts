@@ -10,7 +10,7 @@ import {
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../f/factory/lib/console_support.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
@@ -41,6 +41,18 @@ import {
   runWorkItemDetail,
 } from "../f/factory/steps/console_query.ts";
 import { createPsqlClient, execPsql, type PsqlTarget } from "./test-db-sql.ts";
+
+/** 通知を挿入してIDを返す。同じ種類と本文の未解決の通知が既にあるときは、場面の設定の誤りなので失敗させる。 */
+async function addNotice(
+  record: Parameters<typeof addNoticeUnlessUnresolved>[0],
+  sql?: Parameters<typeof addNoticeUnlessUnresolved>[1],
+): Promise<number> {
+  const id = await addNoticeUnlessUnresolved(record, sql);
+  if (id === null) {
+    throw new Error(`notice already open: ${record.kind}: ${record.message}`);
+  }
+  return id;
+}
 
 const composeFile = process.env.COMPOSE_FILE;
 const database = process.env.SCRATCH_DB;
