@@ -1194,7 +1194,7 @@ describe("runConsoleQuery notices severity", () => {
     expect(rows[0]).toMatchObject({ resolvable: true });
   });
 
-  test("keeps the fields the legacy app reads", async () => {
+  test("keeps the notice fields the Console reads", async () => {
     const { sql } = createFakeSqlClient([[noticeRow("cleanup_db_failed")]]);
     const rows = await runConsoleQuery("notices", 200, 30, sql);
     expect(rows[0]).toMatchObject({

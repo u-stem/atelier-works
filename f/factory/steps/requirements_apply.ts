@@ -222,7 +222,7 @@ export type RejectedRetryDeps = {
   /**
    * 比較交換が一致した直後に呼ぶ。以降の失敗は作業項目のIDを付けて記録させる。
    * 以降の失敗では作業項目が`needs_human`に戻るか、reconcileが`failed`にするので、
-   * ConsoleのFailuresタブから`retry_work_item`で再開できるため。
+   * Consoleの要対応から`retry_work_item`で再開できるため。
    */
   readonly markRestartable: () => void;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
@@ -694,7 +694,7 @@ async function run(
  * そのため例外はここで捕まえ、`factory.job_failures`に記録して
  * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
  * 作業項目のIDを付けて記録するのは、却下の作り直しで`requirements_generating`へ移した後の失敗だけである。
- * その作業項目は`retry_work_item`で再開できる状態で終わるので、ConsoleのFailuresタブから再実行できる。
+ * その作業項目は`retry_work_item`で再開できる状態で終わるので、Consoleの要対応から再実行できる。
  * 比較交換より前の失敗では作業項目が`awaiting_approval`のままで、`retry_work_item`では再開できないため、IDを付けない。
  * その場合は同じ判断で`approval_decide`を実行し直す。
  * 承認後のimplementフローの起動の失敗は、`startImplement`が作業項目のIDを付けて記録する。

@@ -26,17 +26,5 @@
     "scripts/**/*.ts",
     "infra/console_fetcher/**/*.ts",
     "rt.d.ts"
-  ],
-  // f/factory/factory_console__raw_app/** (M8) is excluded: it is a
-  // structurally separate frontend package (its own package.json — react /
-  // react-dom / @types — installed into its own node_modules, bundled by
-  // Windmill's own esbuild pipeline via `wmill app dev`/`wmill app bundle`,
-  // not by this repo's bun.lock), and its code imports `./wmill` /
-  // `../wmill`, a binding Windmill generates/virtualizes at bundle time —
-  // not a module this root tsconfig's `moduleResolution` can ever resolve.
-  // Verified instead via `wmill app lint` / `wmill app bundle` (a real
-  // esbuild build) and biome (style/lint, which needs no module
-  // resolution) — see the M8 implementer's final report for the full
-  // reasoning.
-  "exclude": ["f/factory/factory_console__raw_app/**"]
+  ]
 }
