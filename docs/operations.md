@@ -798,7 +798,7 @@ Consoleの**通知**タブには、Discordに送らない事項と、Discordに�
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
-| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
+| `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
 
 ### Console用のworkerの検知を確かめる
@@ -864,7 +864,7 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 スケジュールの直近3回の実行が続けて失敗したかどうかは、失敗のハンドラ(`on_error_schedule`)がジョブ履歴を読んで判定する。
 飛ばされた回(前回の実行中で見送った回)と、人が取り消した回は、失敗として数えず、連続も切らない。
 ジョブの上限(`timeout`)で打ち切られた回は、失敗として数える。
-時間切れの取り消しは、ジョブ履歴で`canceled_by`が`timeout`になる想定で判定する。
+時間切れの取り消しは、ジョブ履歴で`canceled_by`が`timeout`になる想定で判定する。この値は実機で未確認である。
 マージの後は、次の手順で検知が動いていることを確かめる。
 
 1. 失敗する状態を作る。たとえば、あるスケジュールのscriptを一時的に失敗させるか、直近3回が失敗の状態を用意する。
@@ -891,11 +891,13 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 気づく経路は2つある。
 
-- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`が届く。これが主な経路である。
-- 打ち切りが3回続くと、通知`schedule_failing`が残る。補助の経路である。
+- `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`が届く。これが主な経路になる想定である。
+- 打ち切りが3回続くと、通知`schedule_failing`が残る想定である。補助の経路になる。
 
-どちらも、次の2点を実機で確かめるまでは、頼れる経路とみなさない。
+どちらも、次の2点を実機で確かめていない。
+確かめるまでは、頼れる経路とみなさない。
 確かめていなければ、自己更新が止まっても気づけない。
+なお、ユーザー名が`timeout`の人が取り消した回は、時間切れと見分けられず、失敗に数えられる。
 
 - 時間切れの取り消しが、ジョブ履歴で`canceled_by`が`timeout`になること。違う値なら、打ち切られた回が失敗として数えられず、`schedule_failing`が出ない。
 - `on_error_schedule`が、打ち切られた回でも呼ばれること。呼ばれなければ、`job_failed`と`schedule_failing`のどちらも出ない。
@@ -1002,6 +1004,20 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 出力から`wmill`、`npm`、`git`を探し、経過時間(`etime`)が打ち切りより長いものがあれば残っている。
 内容を確かめてから、`kill <pid>`で止める。
 
+### 自己更新が繰り返し打ち切られるとき
+
+自己更新が打ち切られ続けると、反映とConsole用のworkerの停止の検知が止まる。
+次の順で復旧する。
+
+1. `wmill job list --script-path f/factory/self_update`で、打ち切りが続いているかを見る。
+   原因はジョブのログで確かめる。
+2. 上の「打ち切りで残ったプロセスを確かめる」で、残った`wmill`、`npm`、`git`を探して止める。
+3. ホスト側のcheckoutで`git pull --ff-only`を実行する。
+   続けて`mise run push`と`mise run migrate`を実行し、自己更新が済ませるはずだった反映を手で行う。
+   `mise run push`は`--keep-deleted`付きなので、削除は反映しない。
+4. 次の回で自己更新が成功することを見る。
+   次の「打ち切られた回の記録を確かめる」の見比べで、`deployed_sha`がself cloneのHEADと同じになっていることを確かめる。
+
 ### 区切った呼び出しが時間切れになったとき
 
 `self_update`の区切った呼び出しが30秒で終わらないと、例外にする。
@@ -1011,6 +1027,8 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
   記録されない範囲は[アーキテクチャ](architecture.md)の「自己更新」に書く。
   ジョブの失敗は、Discordの`job_failed`と、3回続いたときの`schedule_failing`で知る。
   ただし`deployed_sha`の更新が時間切れのときは、変数を読み直し、書けていれば成功として続ける。
+  成功の記録そのものが時間切れのときは、反映が済んでいるので失敗にしない。ログに警告を残し、成功として終わる。
+  この回の`deployments`の行は欠けることがある。後から成功の行が入ることもある。
 - `deployed_sha`の読み取りが時間切れのときは、未デプロイとは扱わず、更新を失敗にする。
   読み取りがそれ以外で失敗したときは、区切った`existsVariable`で変数の有無を確かめる。
   `false`のときだけ未デプロイとして全体を反映し直す。

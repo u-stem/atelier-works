@@ -29,6 +29,7 @@ import {
   ensureFactoryClone,
   ensureHeadOnBranch,
   ensureRepo,
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT,
   factoryCloneLockPath,
   fetchPrHeadRef,
   formatGitleaksReport,
@@ -624,6 +625,24 @@ describe("ensureFactoryClone", () => {
         "refs/remotes/origin/main",
       ]),
     );
+  });
+
+  test("runs FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT git commands when the clone dir already exists", async () => {
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls).toHaveLength(FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT);
   });
 
   test("discards local modifications (reset --hard) between fetch and checkout -B", async () => {

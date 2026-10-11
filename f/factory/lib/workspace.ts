@@ -1397,6 +1397,14 @@ export type EnsureFactoryCloneResult = {
 };
 
 /**
+ * 既存のcloneを更新するとき、`ensureFactoryClone`が走らせるgitの回数。
+ * fetch、reset、追跡refの確認(show-ref)、checkoutの4回。
+ * `self_update`のジョブの上限の見積もりが使う。gitの呼び出しを増減したら、この値も直す
+ * (`tests/lib/workspace.test.ts`が、更新での呼び出しの回数と一致することを確かめる)。
+ */
+export const FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT = 4;
+
+/**
  * `dir`にあるFactory自身のcloneを守るロックのパス(隣の`<dir>.lock`)を返す。
  * `ensureRepo`の`<baseDir>/<owner>/<repo>/main`と違い、同じリポジトリのものを
  * まとめる共通の親ディレクトリが無く、守る対象は`dir`そのものだけである。

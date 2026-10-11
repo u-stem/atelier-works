@@ -414,6 +414,25 @@ export async function readDeployedSha(
 }
 
 /**
+ * 成功した反映を`deployments`に記録する。記録が時間切れになったときは`onTimeout`を呼び、例外にしない。
+ * 区切りは記録を中断しないので、後から成功の行が入りうる。時間切れを失敗として扱って失敗の行を足すと、
+ * 同じコミットに成功と失敗の行が並び、件数に誤った失敗が混ざる。反映は済んでいて、
+ * `deployed_sha`も更新済みなので、次の回は記録し直さない。時間切れ以外の失敗はそのまま投げる。
+ */
+export async function recordSuccessDeployment(
+  record: () => Promise<unknown>,
+  onTimeout: (err: CallTimeoutError) => void,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await withCallTimeout("recordDeployment success", record, timeoutMs);
+  } catch (err) {
+    if (!(err instanceof CallTimeoutError)) throw err;
+    onTimeout(err);
+  }
+}
+
+/**
  * デプロイしたコミットのshaを変数に書く。書き込みが時間切れになったときは、書き込みが後から
  * 済んでいることがあるので、変数を読み直し、`sha`と同じなら成功として扱う。
  * 読み直せないとき、値が違うときは、最初の時間切れを投げる。時間切れ以外の失敗はそのまま投げる。

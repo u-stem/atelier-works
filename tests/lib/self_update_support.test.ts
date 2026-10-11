@@ -12,6 +12,7 @@ import {
   parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
   readDeployedSha,
+  recordSuccessDeployment,
   resolveWmillCliContext,
   SELF_UPDATE_CALL_TIMEOUT_MS,
   setDeployedSha,
@@ -647,5 +648,53 @@ describe("setDeployedSha", () => {
     ).catch(() => {});
 
     expect(reads).toBe(0);
+  });
+});
+
+describe("recordSuccessDeployment", () => {
+  test("does not report a timeout when the record succeeds", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(
+      async () => {},
+      (err) => timeouts.push(err),
+      50,
+    );
+
+    expect(timeouts).toEqual([]);
+  });
+
+  test("reports a timeout instead of throwing when the record times out", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(NEVER, (err) => timeouts.push(err), 10);
+
+    expect(timeouts[0]).toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rethrows a failure other than a timeout", async () => {
+    const pending = recordSuccessDeployment(
+      async () => {
+        throw new Error("db down");
+      },
+      () => {},
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("db down");
+  });
+
+  test("does not report a timeout when the record fails for another reason", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(
+      async () => {
+        throw new Error("db down");
+      },
+      (err) => timeouts.push(err),
+      50,
+    ).catch(() => {});
+
+    expect(timeouts).toEqual([]);
   });
 });

@@ -43,6 +43,7 @@ import {
   parseNulSeparatedPaths,
   RAW_APP_RELATIVE_DIR,
   readDeployedSha,
+  recordSuccessDeployment,
   resolveWmillCliContext,
   SELF_UPDATE_CALL_TIMEOUT_MS,
   setDeployedSha,
@@ -55,6 +56,7 @@ import {
   type CommandRunner,
   DEFAULT_TIMEOUT_MS,
   ensureFactoryClone,
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT,
   pathExists,
   REPO_LOCK_MAX_WAIT_MS,
   REPO_LOCK_POLL_MS,
@@ -320,11 +322,12 @@ async function runWmillCli(
 
 /**
  * 1回の実行で走るgitの最大回数。
- * cloneの更新で4回(fetch、reset、show-ref、checkout)、HEADとブランチの確認で2回、
+ * cloneの更新(`FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT`回)、HEADとブランチの確認で2回、
  * 変更パスの列挙で1回、`mise.toml`の比較(`git show`)で最大2回。
  * `git show`は時間切れでも失敗として続くので、最大回数まで走りうる。
  */
-export const SELF_UPDATE_GIT_COMMAND_COUNT = 9;
+export const SELF_UPDATE_GIT_COMMAND_COUNT =
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT + 2 + 1 + 2;
 
 /** 1回の実行で走る`npm ci`、`wmill sync push`、`wmill datatable migrate up`の回数。 */
 export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
@@ -334,7 +337,8 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 3;
  * - config(`getResource`): 1
  * - 更新: github_token、deployed_sha、deployed_shaの読み取りが失敗したときの存在の確認、wmill_token、
  *   `setVariable`、`setVariable`が時間切れのときの読み直し、
- *   `recordDeployment`の成功、`recordDeployment`の失敗(成功の記録が時間切れになり、失敗側へ進む場合): 8
+ *   `recordDeployment`の成功、`recordDeployment`の失敗: 8
+ *   (成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので両方を数える)
  * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
  */
 export const SELF_UPDATE_BOUNDED_CALL_COUNT = 13;
@@ -363,6 +367,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - コマンド: 上限に、停止の上乗せ(`RUNNER_MAX_STOP_OVERHEAD_MS`)を足した時間の、回数分
  * - 区切った呼び出し: 上限の回数分
  * - finallyの通知とConsole用workerの確認
+ * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
 export const SELF_UPDATE_WORST_CASE_MS =
   REPO_LOCK_MAX_WAIT_MS +
@@ -583,14 +588,22 @@ async function updateSelf(
     }
 
     const shaFrom = deployedSha.length > 0 ? deployedSha : null;
-    await withCallTimeout("recordDeployment success", () =>
-      recordDeployment({
-        sha_from: shaFrom,
-        sha_to: currentSha,
-        changed_paths: changedPaths,
-        result: "success",
-        needs_host_action: classification.needs_host_action,
-      }),
+    // 記録の時間切れは、反映が済んでいるので失敗にせず、警告だけ残す。
+    await recordSuccessDeployment(
+      () =>
+        recordDeployment({
+          sha_from: shaFrom,
+          sha_to: currentSha,
+          changed_paths: changedPaths,
+          result: "success",
+          needs_host_action: classification.needs_host_action,
+        }),
+      (timeout) => {
+        log.warn("recording the successful deployment timed out", {
+          error: timeout.message,
+          sha_to: currentSha,
+        });
+      },
     );
 
     return {

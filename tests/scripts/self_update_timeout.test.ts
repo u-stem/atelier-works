@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT } from "../../f/factory/lib/workspace.ts";
 import {
   SELF_UPDATE_BOUNDED_CALL_COUNT,
   SELF_UPDATE_CLI_COMMAND_COUNT,
@@ -32,9 +33,17 @@ function count(source: string, pattern: RegExp): number {
   return source.match(pattern)?.length ?? 0;
 }
 
-const WRAPPERS = ["withCallTimeout(", "readDeployedSha(", "setDeployedSha("];
+const WRAPPERS = [
+  "withCallTimeout(",
+  "readDeployedSha(",
+  "setDeployedSha(",
+  "recordSuccessDeployment(",
+];
+// `wmill.`のSDK呼び出しはすべて対象にする(`wmill.foo(`と`wmill.XxxService.foo(`)。
+// 例外は`wmill.JobService.`で、Console用workerの確認(`watchConsoleWorker`)が
+// 自前の上限(`CONSOLE_WORKER_CHECK_TIMEOUT_MS`)で区切る。
 const UNBOUNDED_CALL =
-  /wmill\.(getVariable|setVariable|getResource|getState|setState)\(|wmill\.VariableService\.existsVariable\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(/g;
+  /\bwmill\.(?!JobService\.)[A-Za-z]+(?:\.[A-Za-z]+)*\(|\brecordDeployment\(|\baddNoticeUnlessUnresolved\(|\bnotifyBestEffort\(/g;
 /** 区切りの呼び出しの開きから、その中の呼び出しまでの、最も長い距離。 */
 const WRAPPER_REACH = 700;
 
@@ -66,7 +75,8 @@ describe("self_update timeout", () => {
       count(source, /withCallTimeout\(/g) -
       notify +
       2 * count(source, /readDeployedSha\(/g) +
-      2 * count(source, /setDeployedSha\(/g);
+      2 * count(source, /setDeployedSha\(/g) +
+      count(source, /recordSuccessDeployment\(/g);
 
     expect(sites).toBe(SELF_UPDATE_BOUNDED_CALL_COUNT);
   });
@@ -81,7 +91,7 @@ describe("self_update timeout", () => {
 
   test("the git command count matches the call sites", async () => {
     const source = await selfUpdateSource();
-    // 1か所あたりのgitの回数: cloneの更新は4回、`mise.toml`の比較は最大2回、そのほかは1回。
+    // 1か所あたりのgitの回数: cloneの更新は定数の回数、`mise.toml`の比較は最大2回、そのほかは1回。
     const cloneUpdate = count(source, /\brun: runCommand,/g);
     const miseCompare = count(
       source,
@@ -95,10 +105,19 @@ describe("self_update timeout", () => {
 
     expect({
       passed,
-      commands: 4 * cloneUpdate + 2 * miseCompare + single,
+      commands:
+        FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT * cloneUpdate +
+        2 * miseCompare +
+        single,
     }).toEqual({
       passed: miseCompare + single,
       commands: SELF_UPDATE_GIT_COMMAND_COUNT,
     });
+  });
+
+  test("runCommand is called directly only from runWmillCli", async () => {
+    const source = await selfUpdateSource();
+
+    expect(count(source, /\brunCommand\(/g)).toBe(1);
   });
 });
