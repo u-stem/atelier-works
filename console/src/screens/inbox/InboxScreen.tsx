@@ -1,5 +1,5 @@
 import { LogIn } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   ApiFailure,
@@ -126,10 +126,12 @@ export function InboxScreen() {
   const [chip, setChip] = useState<InboxChip>("all");
   const selection = parseSelection(searchParams);
   const refresh = refreshStatusOf(summary);
-  const items =
-    summary.data === undefined
-      ? []
-      : sortInboxItems(buildInboxItems(summary.data));
+  // 一覧の配列が同じなら、通知の副題を作り直さない。時刻の更新や選択の変更のたびに、全通知を解析し直さないためである。
+  const data = summary.data;
+  const items = useMemo(
+    () => (data === undefined ? [] : sortInboxItems(buildInboxItems(data))),
+    [data],
+  );
   const activeChip = effectiveChip(items, chip);
   if (activeChip !== chip) {
     // 選んだ種類の項目がなくなったら、状態も「すべて」に揃える。

@@ -360,21 +360,41 @@ function shortenedMessage(description: NoticeDescription): string {
 
 /**
  * 副題の抜粋の元になる本文。版は先頭7桁に縮め、空白と改行は1つの空白にまとめる。
- * `cutTarget`が真のとき、副題に出す先頭の対象を、現れた位置で切り出す。
- * ほかの対象と、先頭の対象と同じ文字列の一部は残す。
+ * `cutTarget`が真のとき、副題に出す先頭の対象を、`cutSha`が真のとき、副題に出す最初の版を、
+ * 最初に現れた位置で切り出す。副題に同じ値を2回出さないためである。
+ * ほかの対象や版と、先頭の対象と同じ文字列の一部は残す。
  */
 function excerptSource(
   description: NoticeDescription,
   cutTarget: boolean,
+  cutSha: boolean,
 ): string {
   const target = description.targets[0];
-  const text =
-    cutTarget && target !== undefined
-      ? description.message.slice(0, target.index) +
-        description.message.slice(target.index + target.label.length)
-      : description.message;
+  const sha = description.shas[0];
+  const { message } = description;
+  const ranges: { start: number; end: number }[] = [];
+  if (cutTarget && target !== undefined) {
+    ranges.push({
+      start: target.index,
+      end: target.index + target.label.length,
+    });
+  }
+  const shaStart = sha === undefined ? -1 : message.indexOf(sha);
+  if (cutSha && sha !== undefined && shaStart >= 0) {
+    ranges.push({ start: shaStart, end: shaStart + sha.length });
+  }
+  // 後ろから切り出し、前の範囲の位置がずれないようにする。
+  const text = ranges
+    .sort((a, b) => b.start - a.start)
+    .reduce(
+      (rest, range) => rest.slice(0, range.start) + rest.slice(range.end),
+      message,
+    );
   return description.shas
-    .reduce((shortened, sha) => shortened.split(sha).join(shortSha(sha)), text)
+    .reduce(
+      (shortened, each) => shortened.split(each).join(shortSha(each)),
+      text,
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -429,14 +449,23 @@ function divergences(sources: readonly string[]): Map<string, number> {
   );
 }
 
+/** 語の区切りになる文字。抜粋が語の途中から始まらないようにする。 */
+const WORD_BOUNDARY = /[\s(「、。:/_]/u;
+
 /**
  * 本文の抜粋を1行で返す。`divergence`は、同じ種類のほかの通知と食い違う位置で、そこから少し手前を出す。
  * 同じ種類の通知は書き出しがそろうので、先頭だけでは見分けられないためである。
+ * 手前の範囲に語の区切りがあれば、その直後から始める。開始位置は食い違う位置を越えない。
  * 前後が省かれたときは省略記号を付ける。
  */
 function excerpt(text: string, divergence: number): string {
   const chars = Array.from(text);
-  const start = Math.max(0, divergence - EXCERPT_LEAD);
+  const lead = Math.max(0, divergence - EXCERPT_LEAD);
+  const boundary =
+    lead === 0
+      ? -1
+      : chars.slice(lead, divergence).findIndex((c) => WORD_BOUNDARY.test(c));
+  const start = boundary === -1 ? lead : lead + boundary + 1;
   const end = start + EXCERPT_LENGTH;
   return [
     start > 0 ? "…" : "",
@@ -461,7 +490,9 @@ function groupTexts(group: readonly NoticeEntry[]): [number, NoticeRowText][] {
     group.map((e) => e.description.targets[0]?.label),
   );
   const showSha = !allShare(group.map((e) => e.description.shas[0]));
-  const sources = group.map((e) => excerptSource(e.description, showTarget));
+  const sources = group.map((e) =>
+    excerptSource(e.description, showTarget, showSha),
+  );
   const positions = divergences(sources);
   return group.map((entry, index): [number, NoticeRowText] => {
     const { description } = entry;

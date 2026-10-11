@@ -503,14 +503,14 @@ describe("describeRow for a notice", () => {
 
   test("names the first version of the body in the sub label", () => {
     expect(describeRow(noticeItem(1, `deployed(${SHA_A})`), NOW).subLabel).toBe(
-      "版 0123456・deployed(0123456)",
+      "版 0123456・deployed()",
     );
   });
 
   test("puts the target before the version and drops only the first target from the excerpt", () => {
     expect(
       describeRow(noticeItem(1, `${SHA_A} for o/r#12 and p/q#3`), NOW).subLabel,
-    ).toBe("o/r#12・版 0123456・0123456 for and p/q#3");
+    ).toBe("o/r#12・版 0123456・for and p/q#3");
   });
 
   test("cuts a long body to one line with an ellipsis", () => {
@@ -565,17 +565,14 @@ describe("describeRow for notices of one kind", () => {
     expect(subLabelsOf([failedHint, stalledHint])[0]).toContain("の反映が、");
   });
 
-  test("starts the excerpt a few characters before where the bodies differ", () => {
+  test("starts the excerpt after a path separator before where the bodies differ", () => {
     const head = "the scheduled run has failed several times in a row for";
     expect(
       subLabelsOf([
         `${head} f/factory/poll_issues since 10:00`,
         `${head} f/factory/cleanup_db since 10:00`,
       ]),
-    ).toEqual([
-      "…factory/poll_issues since 10:00",
-      "…factory/cleanup_db since 10:00",
-    ]);
+    ).toEqual(["…poll_issues since 10:00", "…cleanup_db since 10:00"]);
   });
 
   test("leaves out the target and the version that every notice shares", () => {
@@ -584,7 +581,7 @@ describe("describeRow for notices of one kind", () => {
         `o/r#1 ${SHA_A} failed at 10:00`,
         `o/r#1 ${SHA_A} failed at 11:00`,
       ]),
-    ).toEqual(["…led at 10:00", "…led at 11:00"]);
+    ).toEqual(["…at 10:00", "…at 11:00"]);
   });
 
   test("keeps the target when the targets differ", () => {
@@ -596,8 +593,46 @@ describe("describeRow for notices of one kind", () => {
 
   test("keeps the version when the versions differ", () => {
     expect(subLabelsOf([`v ${SHA_A}`, `v ${SHA_B}`])).toEqual([
-      "版 0123456・v 0123456",
-      "版 fedcba9・v fedcba9",
+      "版 0123456・v",
+      "版 fedcba9・v",
+    ]);
+  });
+
+  test("shows the target of every notice when only some of them share it", () => {
+    expect(
+      subLabelsOf(["o/r#1 failed", "o/r#1 failed again", "o/r#2 failed"]),
+    ).toEqual(["o/r#1・failed", "o/r#1・failed again", "o/r#2・failed"]);
+  });
+
+  test("shows the version only on the notice that has one", () => {
+    expect(subLabelsOf([`v ${SHA_A}`, "v none"])).toEqual([
+      "版 0123456・v",
+      "v none",
+    ]);
+  });
+
+  test("starts the excerpt at a word boundary before the difference", () => {
+    expect(
+      subLabelsOf([
+        "check item 12): requested review",
+        "check item 12): requested revert",
+      ]),
+    ).toEqual(["…review", "…revert"]);
+  });
+
+  test("starts at the word that holds the difference", () => {
+    expect(
+      subLabelsOf([
+        "check item 12): requested review of the change",
+        "check item 12): requested changes to the change",
+      ]),
+    ).toEqual(["…review of the change", "…changes to the change"]);
+  });
+
+  test("keeps the plain lead when no boundary falls inside it", () => {
+    expect(subLabelsOf([`${"a".repeat(20)}1`, `${"a".repeat(20)}2`])).toEqual([
+      `…${"a".repeat(8)}1`,
+      `…${"a".repeat(8)}2`,
     ]);
   });
 
@@ -606,7 +641,7 @@ describe("describeRow for notices of one kind", () => {
       "o/r#1 and p/q#2 failed",
       "o/r#1 and p/q#3 failed",
     ]);
-    expect(labels).toEqual(["…and p/q#2 failed", "…and p/q#3 failed"]);
+    expect(labels).toEqual(["…p/q#2 failed", "…p/q#3 failed"]);
   });
 
   test("cuts a target by its position, not by its text", () => {
