@@ -9,6 +9,7 @@ import type {
   SummaryFailure,
   SummaryNotice,
 } from "../api/guards/summary.ts";
+import { SYSTEM_PATH } from "../app/paths.ts";
 import {
   INBOX_KINDS,
   type InboxKind,
@@ -23,7 +24,11 @@ import {
   workItemRef,
   workItemStatusLabel,
 } from "./labels.ts";
-import { describeNotice } from "./noticeView.ts";
+import {
+  describeNotice,
+  type NoticeDescription,
+  shortSha,
+} from "./noticeView.ts";
 import { formatRemainingTime } from "./relativeTime.ts";
 import { safeGitHubUrl } from "./safeUrl.ts";
 
@@ -308,15 +313,256 @@ export type RowDescription = {
   /** 一覧の行の識別子。`type:id`の形。 */
   readonly key: string;
   readonly title: string;
-  readonly kindLabel: string;
+  /** 種別の語。通知と失敗の固定の語は、省くとき(`showKind`が偽)に`null`になる。 */
+  readonly kindLabel: string | null;
   readonly statusLabel: string | null;
   readonly subLabel: string | null;
+  /** 副題の全文。副題が本文を省いたときに、省いた分も読めるようにする。無ければ`null`。 */
+  readonly subTitle: string | null;
   readonly iso: string;
   readonly expiry: ExpiryDescription | null;
 };
 
-/** 一覧の1行に出す内容。期限は`nowMs`からの残りで決める。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。 */
-export function describeRow(item: InboxItem, nowMs: number): RowDescription {
+/**
+ * 通知と失敗の固定の語(「通知」「失敗」)を省いてよい一覧か。
+ * すべて通知、またはすべて失敗のとき、全行に同じ語が付いて情報にならない。
+ * 承認の語は要件定義、Issue化提案、改善提案などの区別を担うので、省かない。
+ */
+export function omitsKindLabels(items: readonly InboxItem[]): boolean {
+  return (
+    items.length > 0 &&
+    (items.every((item) => item.type === "notice") ||
+      items.every((item) => item.type === "failure"))
+  );
+}
+
+/** 副題に出す本文の文字数(コードポイント)。 */
+const EXCERPT_LENGTH = 36;
+
+/** 本文の食い違いを、抜粋の先頭からこの文字数だけ手前に置く。前後の言葉で違いを読めるようにする。 */
+const EXCERPT_LEAD = 8;
+
+/** 通知の行に出す副題と、その全文。 */
+type NoticeRowText = {
+  readonly subLabel: string | null;
+  readonly subTitle: string | null;
+};
+
+type NoticeEntry = {
+  readonly notice: SummaryNotice;
+  readonly description: NoticeDescription;
+};
+
+/** 本文の全体。版は先頭7桁に縮めてある。 */
+function shortenedMessage(description: NoticeDescription): string {
+  return description.messageParts.map((part) => part.text).join("");
+}
+
+/**
+ * 副題の抜粋の元になる本文。版は先頭7桁に縮め、空白と改行は1つの空白にまとめる。
+ * `cutTarget`が真のとき、副題に出す先頭の対象を、`cutSha`が真のとき、副題に出す最初の版を、
+ * 最初に現れた位置で切り出す。副題に同じ値を2回出さないためである。
+ * ほかの対象や版と、先頭の対象と同じ文字列の一部は残す。
+ */
+function excerptSource(
+  description: NoticeDescription,
+  cutTarget: boolean,
+  cutSha: boolean,
+): string {
+  const target = description.targets[0];
+  const sha = description.shas[0];
+  const { message } = description;
+  const ranges: { start: number; end: number }[] = [];
+  if (cutTarget && target !== undefined) {
+    ranges.push({
+      start: target.index,
+      end: target.index + target.label.length,
+    });
+  }
+  const shaStart = sha === undefined ? -1 : message.indexOf(sha);
+  if (cutSha && sha !== undefined && shaStart >= 0) {
+    ranges.push({ start: shaStart, end: shaStart + sha.length });
+  }
+  // 後ろから切り出し、前の範囲の位置がずれないようにする。
+  const text = ranges
+    .sort((a, b) => b.start - a.start)
+    .reduce(
+      (rest, range) => rest.slice(0, range.start) + rest.slice(range.end),
+      message,
+    );
+  return description.shas
+    .reduce(
+      (shortened, each) => shortened.split(each).join(shortSha(each)),
+      text,
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function commonPrefixLength(
+  a: readonly string[],
+  b: readonly string[],
+): number {
+  let length = 0;
+  while (length < a.length && length < b.length && a[length] === b[length]) {
+    length += 1;
+  }
+  return length;
+}
+
+/** コードポイントの並びの辞書順。 */
+function compareChars(a: readonly string[], b: readonly string[]): number {
+  const shared = commonPrefixLength(a, b);
+  const left = a[shared];
+  const right = b[shared];
+  if (left === undefined || right === undefined) {
+    return a.length - b.length;
+  }
+  return left < right ? -1 : 1;
+}
+
+/**
+ * 同じ種類の通知それぞれについて、ほかの通知と本文が食い違う位置(共通する先頭の文字数)を返す。
+ * 辞書順に並べると、最も長く先頭が重なる通知は隣にあるので、隣とだけ比べる。
+ * 本文が同じ通知は、見分けようがないので比べない。
+ */
+function divergences(sources: readonly string[]): Map<string, number> {
+  const distinct = [...new Set(sources)].map((text) => ({
+    text,
+    chars: Array.from(text),
+  }));
+  distinct.sort((a, b) => compareChars(a.chars, b.chars));
+  return new Map(
+    distinct.map((entry, index) => {
+      const previous = distinct[index - 1];
+      const next = distinct[index + 1];
+      return [
+        entry.text,
+        Math.max(
+          previous === undefined
+            ? 0
+            : commonPrefixLength(entry.chars, previous.chars),
+          next === undefined ? 0 : commonPrefixLength(entry.chars, next.chars),
+        ),
+      ];
+    }),
+  );
+}
+
+/** 語の区切りになる文字。抜粋が語の途中から始まらないようにする。 */
+const WORD_BOUNDARY = /[\s(「、。:/_]/u;
+
+/**
+ * 本文の抜粋を1行で返す。`divergence`は、同じ種類のほかの通知と食い違う位置で、そこから少し手前を出す。
+ * 同じ種類の通知は書き出しがそろうので、先頭だけでは見分けられないためである。
+ * 手前の範囲に語の区切りがあれば、その直後から始める。開始位置は食い違う位置を越えない。
+ * 前後が省かれたときは省略記号を付ける。
+ */
+function excerpt(text: string, divergence: number): string {
+  const chars = Array.from(text);
+  const lead = Math.max(0, divergence - EXCERPT_LEAD);
+  const boundary =
+    lead === 0
+      ? -1
+      : chars.slice(lead, divergence).findIndex((c) => WORD_BOUNDARY.test(c));
+  const start = boundary === -1 ? lead : lead + boundary + 1;
+  const end = start + EXCERPT_LENGTH;
+  return [
+    start > 0 ? "…" : "",
+    chars.slice(start, end).join("").trim(),
+    end < chars.length ? "…" : "",
+  ].join("");
+}
+
+/** 値が全員で同じか。1件だけのときは、比べる相手がいないので偽にする。 */
+function allShare(values: readonly (string | undefined)[]): boolean {
+  return values.length > 1 && new Set(values).size === 1;
+}
+
+/**
+ * 同じ種類の通知の副題を作る。副題は、対象、版、本文の抜粋を「・」でつなぐ。
+ * 対象と版は、同じ種類の通知の間で違うときだけ出す。全員が同じ値なら見分ける役に立たず、
+ * 狭い一覧では抜粋の食い違いを押し出すので省く。通知が1件だけのときは、本文にあれば出す。
+ * 本文が空でなければ、副題は空にならない。
+ */
+function groupTexts(group: readonly NoticeEntry[]): [number, NoticeRowText][] {
+  const showTarget = !allShare(
+    group.map((e) => e.description.targets[0]?.label),
+  );
+  const showSha = !allShare(group.map((e) => e.description.shas[0]));
+  const sources = group.map((e) =>
+    excerptSource(e.description, showTarget, showSha),
+  );
+  const positions = divergences(sources);
+  return group.map((entry, index): [number, NoticeRowText] => {
+    const { description } = entry;
+    const target = description.targets[0];
+    const sha = description.shas[0];
+    const source = sources[index] ?? "";
+    const parts = [
+      ...(!showTarget || target === undefined ? [] : [target.label]),
+      ...(!showSha || sha === undefined ? [] : [`版 ${shortSha(sha)}`]),
+      ...(source === "" ? [] : [excerpt(source, positions.get(source) ?? 0)]),
+    ];
+    const full = shortenedMessage(description);
+    return [
+      entry.notice.notice_id,
+      {
+        subLabel: parts.length === 0 ? null : parts.join("・"),
+        subTitle: full === "" ? null : full,
+      },
+    ];
+  });
+}
+
+/** 一覧ごとに通知の副題を1回だけ作るための記憶。一覧の配列が同じなら、行ごとに作り直さない。 */
+const NOTICE_TEXTS = new WeakMap<
+  readonly InboxItem[],
+  ReadonlyMap<number, NoticeRowText>
+>();
+
+function noticeRowTexts(
+  items: readonly InboxItem[],
+): ReadonlyMap<number, NoticeRowText> {
+  const cached = NOTICE_TEXTS.get(items);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const groups = new Map<string, NoticeEntry[]>();
+  for (const item of items) {
+    if (item.type === "notice") {
+      const entries = groups.get(item.notice.kind) ?? [];
+      entries.push({
+        notice: item.notice,
+        description: describeNotice(item.notice),
+      });
+      groups.set(item.notice.kind, entries);
+    }
+  }
+  const texts = new Map(
+    [...groups.values()].flatMap((group) => groupTexts(group)),
+  );
+  NOTICE_TEXTS.set(items, texts);
+  return texts;
+}
+
+export type RowOptions = {
+  /** 通知と失敗の固定の種別の語を出すか。既定は出す。 */
+  readonly showKind?: boolean;
+  /** 同じ一覧の項目。通知の副題が、同じ種類の通知と見分けられるようにするために使う。 */
+  readonly peers?: readonly InboxItem[];
+};
+
+/**
+ * 一覧の1行に出す内容。期限は`nowMs`からの残りで決める。種類ごとの違いはここに閉じ込め、行の部品は種類を知らずに描く。
+ * `options.showKind`が偽のとき、通知と失敗の固定の種別の語を省く。承認の種別の語は省かない。
+ */
+export function describeRow(
+  item: InboxItem,
+  nowMs: number,
+  options: RowOptions = {},
+): RowDescription {
+  const { showKind = true, peers = [] } = options;
   const key = `${item.type}:${itemId(item)}`;
   switch (item.type) {
     case "approval": {
@@ -327,6 +573,7 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
         kindLabel: description.kindLabel,
         statusLabel: description.statusLabel,
         subLabel: description.workItemLabel,
+        subTitle: null,
         iso: item.approval.requested_at,
         expiry: describeExpiry(item.approval, nowMs),
       };
@@ -337,20 +584,25 @@ export function describeRow(item: InboxItem, nowMs: number): RowDescription {
         title: displayableIssueText(
           item.failure.title ?? workItemRef(item.failure.work_item_id),
         ).text,
-        kindLabel: "失敗",
+        kindLabel: showKind ? "失敗" : null,
         statusLabel: workItemStatusLabel(item.failure.status),
         subLabel: `${workItemKindLabel(item.failure.kind)}・${workItemRef(item.failure.work_item_id)}`,
+        subTitle: null,
         iso: item.failure.updated_at,
         expiry: null,
       };
     case "notice": {
       const description = describeNotice(item.notice);
+      const texts =
+        noticeRowTexts(peers).get(item.notice.notice_id) ??
+        noticeRowTexts([item]).get(item.notice.notice_id);
       return {
         key,
         title: description.title,
-        kindLabel: description.severity === "info" ? "通知(情報)" : "通知",
+        kindLabel: showKind ? "通知" : null,
         statusLabel: description.resolved ? "解決済み" : null,
-        subLabel: description.targets[0]?.label ?? null,
+        subLabel: texts?.subLabel ?? null,
+        subTitle: texts?.subTitle ?? null,
         iso: item.notice.created_at,
         expiry: null,
       };
@@ -385,6 +637,15 @@ export function unlistedNote(entry: UnlistedCount): string {
     case "failure":
       return "取得の上限を超えた分は、更新の古いものから表示されません";
   }
+}
+
+/**
+ * 一覧に出ていない件数から、続きを見る画面のパス。
+ * システムの画面が読めるのは、再実行できない監査の失敗だけである。
+ * 取得の上限を超えた承認、失敗、通知は、その画面に載らないので`null`にする。
+ */
+export function unlistedPath(entry: UnlistedCount): string | null {
+  return entry.cause === "audit" ? SYSTEM_PATH : null;
 }
 
 /**

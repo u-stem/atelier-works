@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type ApiError, ApiFailure, describeApiError } from "./errors.ts";
+import { type ApiError, ApiFailure, describeWriteFailure } from "./errors.ts";
 import {
   executeWrite,
   isResultUnknown,
@@ -82,9 +82,9 @@ describe("isResultUnknown and the write wording", () => {
   ] satisfies ApiError[];
 
   test.each(EVERY_KIND)("agree for %o", (error) => {
-    expect(
-      describeApiError(error, "write").includes("結果が分かりません"),
-    ).toBe(isResultUnknown(error));
+    expect(describeWriteFailure(error).includes("結果が分かりません")).toBe(
+      isResultUnknown(error),
+    );
   });
 });
 

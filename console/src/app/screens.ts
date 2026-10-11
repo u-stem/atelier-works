@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { ComponentType } from "react";
 import type { SummaryCounts } from "../api/guards/summary.ts";
+import { SYSTEM_PATH } from "./paths.ts";
 
 /** 画面の部品を必要になってから読み込む関数。react-routerの`lazy`にそのまま渡す。 */
 export type LazyScreen = () => Promise<{ Component: ComponentType }>;
@@ -113,7 +114,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     id: "system",
-    path: "/system",
+    path: SYSTEM_PATH,
     label: "システム",
     icon: Server,
     badge: noBadge,
