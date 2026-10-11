@@ -55,8 +55,9 @@ RUN set -eux; \
 # ベースのイメージは、Windmillの実行ファイルと共有ライブラリを置く`/usr/src/app`と、
 # `/tmp/.cache`を、誰でも書き込めてstickyでない(0777)ようにしている。
 # 開いたままだと、検査用のユーザーがrootの実行するファイルを差し替えられるので、
-# 所有者だけが書き込めるようにする。workerはrootで動くので、書き込みに困らない。
-RUN chmod 0755 /usr/src/app /tmp/.cache
+# 中のファイルも含めて、グループとその他が書き込めないようにする。
+# workerはrootで動くので、書き込みに困らない。
+RUN chmod -R go-w /usr/src/app /tmp/.cache
 
 # gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
 # `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
@@ -141,12 +142,12 @@ ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/loca
 # `setpriv`は、検査の実行と同じ引数で、すべての枠について、切り替えた先のuidと、
 # ケーパビリティの上限が空であること、`no_new_privs`が立つことを確かめる。
 # 検査の後始末が絶対パスで呼ぶ`kill`、`getfacl`、`setfacl`があることも確かめる。
-# 誰でも書き込めるディレクトリが、検査の後始末が片付ける共有の一時ディレクトリ
-# (`f/factory/lib/check_sandbox.ts`の`SHARED_TMP_DIRS`)だけであることも確かめる。
+# 誰でも書き込めるもの(symlinkを除く、ファイルを含む)が、検査の後始末が片付ける共有の一時ディレクトリ
+# (`f/factory/lib/check_sandbox.ts`の`SHARED_TMP_DIRS`)そのものだけであることも確かめる。
 # `/tmp/windmill`は、検査の前に所有者だけが入れるように閉じるので除く。
 RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
     && test -x /usr/bin/kill && test -x /usr/bin/getfacl && test -x /usr/bin/setfacl \
-    && test -z "$(find / -xdev -path /tmp/windmill -prune -o -type d -perm -0002 -print | grep -vxE '/tmp|/var/tmp|/dev/shm|/dev/mqueue|/run/lock')" \
+    && test -z "$(find / -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 -print | grep -vxE '/tmp|/var/tmp|/dev/shm|/dev/mqueue|/run/lock')" \
     && for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1))); do \
         uid="$((FACTORY_CHECK_UID + i))"; \
         [ "$(setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${uid}" ] \

@@ -204,6 +204,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |
 | `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
 | `check_slot_record_unreadable` | `implement_verify`、`pr_fix_verify` | 枠のユーザーとuid、読めない記録を退避した先のパス |
+| `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
@@ -304,11 +305,12 @@ stateは、このキーだけを書き換え、消すときもこのキーだけ
 Discordには、noticeを新しく残したときだけ送る。noticeの記録とDiscordの送信が失敗しても、反映は成功のまま終わり、警告のログだけを残す。
 
 実装とPR修正の準備と検証のステップと、作業領域の掃除も、workerのイメージが古く検査コマンドを実行できないときに`host_action_required`を残す。
-本文には、自己更新が反映した版(`f/factory/deployed_sha`)と、イメージの満たさない前提(足りない道具、枠のユーザー、誰でも書き込めるディレクトリ)が載る。
+本文には、自己更新が反映した版(`f/factory/deployed_sha`)と、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。
 同じ本文の未解決のnoticeがあるあいだは追加しない。
 版を40桁で読めたときは、下の判定で自己更新が自動で解決する。読めないときは本文に版を含めず、人が解決する。
 Discordには送らない。止まった作業項目の通知が、別に届くためである。
 noticeを記録できなくても、作業項目は止まり、警告のログだけを残す。
+
 解決は、`self_update`が反映の要否によらず毎回、反映の判断と記録の後に行う(`resolved_by`は`self_update`)。
 解決の処理が遅れても、反映を遅らせないためである。
 判定の入力は、ホストのcheckoutのHEADである。
@@ -337,6 +339,13 @@ self cloneにあるかは、実行ごとに1回だけ`git cat-file -e`で確か�
 
 印はworkerのジョブが書ける場所にあるので、ホストの反映の証明にはならない。
 偽の印で黙らせられるのは、この通知だけである。影響は、ホストでの反映の遅れに気づけなくなるところまでで、突くにはdefaultのworkerでのコード実行が要る([セキュリティ](../security.md)の「ホストの反映の印」)。
+
+実装とPR修正の準備と検証のステップと、作業領域の掃除は、`check_runtime_unsafe`も残す。
+イメージは前提を満たすが、稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられなかったときである。
+本文には、パスか確かめられなかった理由と、パスを閉じるかworkerを作り直す手順が載り、版は載せない。
+`mise run up`では直らないので、自己更新は解決せず、人が解決する。
+同じ本文の未解決のnoticeがあるあいだは追加しない。
+Discordには送らない。止まった作業項目の通知が、別に届くためである。
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。

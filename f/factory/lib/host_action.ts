@@ -4,6 +4,7 @@
 // 自己更新はworkerの中でしか動かないので、これらの変更を自分では反映できない。
 // 人が`mise run up`を実行するまで古い構成で動き続けるため、気づく手段として通知を出す。
 // 古いイメージのまま検査コマンドを実行できなかったことも、同じ種類の通知で知らせる(`buildCheckImageStaleNotice`)。
+// 稼働中のworkerが検査の前提を満たさなくなったことは、別の種類の通知で知らせる(`buildCheckRuntimeUnsafeNotice`)。
 //
 // 反映が済んだ印は、`mise run up`が終わりに共有ボリューム(`factory_state`)へ書く
 // ホストのcheckoutのHEAD(`HOST_APPLIED_SHA_PATH`)である。
@@ -15,6 +16,10 @@
 
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
+import {
+  type CheckEnvironmentError,
+  CheckRuntimeUnsafeError,
+} from "./check_sandbox.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type { NoticeRecord } from "./types.ts";
@@ -130,7 +135,25 @@ export function buildCheckImageStaleNotice(
   };
 }
 
-export type CheckImageStaleDeps = {
+/** 稼働中のworkerが検査の前提を満たさないことを示すnoticeの種類。 */
+export const CHECK_RUNTIME_NOTICE_KIND = "check_runtime_unsafe";
+
+const RUNTIME_NEXT_ACTION =
+  "本文のパスを、ホストのcheckoutからmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直す。直したら、止まった作業項目を再実行し、この通知を解決する";
+
+/**
+ * 稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられず、検査コマンドを枠のユーザーで実行できないことを知らせるnoticeを作る。
+ * イメージの問題ではないので、`mise run up`を求めず、自己更新が自動で解決する版も載せない。人が直して解決する。
+ * 本文は、`detail`が同じなら同じ文になる。`addNoticeUnlessUnresolved`が重ねて記録しないためである。
+ */
+export function buildCheckRuntimeUnsafeNotice(detail: string): NoticeRecord {
+  return {
+    kind: CHECK_RUNTIME_NOTICE_KIND,
+    message: `workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(${printablePath(detail)})。直すまで、検査コマンドのある実装とPR修正は止まります。次の操作: ${RUNTIME_NEXT_ACTION}`,
+  };
+}
+
+export type CheckEnvironmentNoticeDeps = {
   /** 自己更新が反映した版(`f/factory/deployed_sha`)。読めなければ例外を投げる。 */
   readonly readDeployedSha: () => Promise<string>;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
@@ -139,13 +162,20 @@ export type CheckImageStaleDeps = {
 };
 
 /**
- * `buildCheckImageStaleNotice`のnoticeを残す。版が読めないか40桁でなければ、版を含めずに残す。
- * 呼び出し側は、続けて作業項目を人の対応待ちにするので、記録に失敗しても例外を投げず、警告ログに残す。
+ * 検査の前提を満たさないことをnoticeに残す。
+ * イメージの問題(`CheckImageStaleError`)は`buildCheckImageStaleNotice`で残す。版が読めないか40桁でなければ、版を含めずに残す。
+ * 稼働中のworkerの問題(`CheckRuntimeUnsafeError`)は`buildCheckRuntimeUnsafeNotice`で残す。
+ * 呼び出し側は、続けて作業項目を止めるので、記録に失敗しても例外を投げず、警告ログに残す。
  */
-export async function recordCheckImageStaleNotice(
-  deps: CheckImageStaleDeps,
-  detail: string,
+export async function recordCheckEnvironmentNotice(
+  deps: CheckEnvironmentNoticeDeps,
+  error: CheckEnvironmentError,
 ): Promise<void> {
+  const detail = error.problems.join(", ");
+  if (error instanceof CheckRuntimeUnsafeError) {
+    await addNoticeOrWarn(deps, buildCheckRuntimeUnsafeNotice(detail));
+    return;
+  }
   let deployedSha: string | null = null;
   try {
     const raw = (await deps.readDeployedSha()).trim();
@@ -155,10 +185,18 @@ export async function recordCheckImageStaleNotice(
       error: errorMessage(err),
     });
   }
+  await addNoticeOrWarn(deps, buildCheckImageStaleNotice(deployedSha, detail));
+}
+
+async function addNoticeOrWarn(
+  deps: CheckEnvironmentNoticeDeps,
+  notice: NoticeRecord,
+): Promise<void> {
   try {
-    await deps.addNotice(buildCheckImageStaleNotice(deployedSha, detail));
+    await deps.addNotice(notice);
   } catch (err) {
-    deps.log.warn("stale image notice could not be recorded", {
+    deps.log.warn("check environment notice could not be recorded", {
+      kind: notice.kind,
       error: errorMessage(err),
     });
   }

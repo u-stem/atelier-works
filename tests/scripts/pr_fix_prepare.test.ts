@@ -5,6 +5,7 @@
 // GitHubのコメントやDiscordの通知を作るときに使う。
 
 import { describe, expect, test } from "bun:test";
+import { CheckRuntimeUnsafeError } from "../../f/factory/lib/check_sandbox.ts";
 import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
 import {
   describeReason,
@@ -1042,6 +1043,24 @@ describe("describeReason / nextActionFor (stale worker image)", () => {
   test("asks to rebuild the image with mise run up and then rerun", () => {
     expect(nextActionFor(STALE)).toBe(
       "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+});
+
+describe("describeReason / nextActionFor (a running worker unsafe for checks)", () => {
+  const RUNTIME = new CheckRuntimeUnsafeError([
+    "world-writable paths created at runtime: /tmp/open",
+  ]).message;
+
+  test("translates the runtime problem with its paths", () => {
+    expect(describeReason(RUNTIME)).toBe(
+      "workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(world-writable paths created at runtime: /tmp/open)",
+    );
+  });
+
+  test("asks to close the paths or recreate the worker, not to rebuild the image", () => {
+    expect(nextActionFor(RUNTIME)).toBe(
+      "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 });

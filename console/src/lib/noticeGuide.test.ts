@@ -78,6 +78,19 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells to close the paths or recreate the worker when the running worker is unsafe for checks", () => {
+    expect(noticeGuide("check_runtime_unsafe").commands).toEqual([
+      "mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>",
+      "mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker",
+    ]);
+  });
+
+  test("says the runtime problem does not need mise run up", () => {
+    expect(noticeGuide("check_runtime_unsafe").note).toContain(
+      "mise run upは要りません",
+    );
+  });
+
   test("asks the operator to check the body for an unknown kind", () => {
     expect(GENERIC_NOTICE_GUIDE.action).toContain("本文");
   });

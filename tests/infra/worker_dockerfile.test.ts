@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { SHARED_TMP_DIRS } from "../../f/factory/lib/check_sandbox.ts";
+import {
+  BASE_IMAGE_OPEN_PATHS,
+  SHARED_TMP_DIRS,
+} from "../../f/factory/lib/check_sandbox.ts";
 
 // workerのイメージの構成を静的に確かめる。
 // workerのPATHにrootのホームを入れないこと、検査コマンド用の非特権ユーザーを
@@ -151,15 +154,15 @@ describe("infra/worker/Dockerfile check user", () => {
     expect(verification()).toContain("|| exit 1");
   });
 
-  test("closes the world-writable directories of the base image that no slot cleanup purges", () => {
+  test("closes the places the base image opens, with the files in them, to the group and others", () => {
     expect(startingWith("RUN")).toContain(
-      "RUN chmod 0755 /usr/src/app /tmp/.cache",
+      `RUN chmod -R go-w ${BASE_IMAGE_OPEN_PATHS.join(" ")}`,
     );
   });
 
-  test("fails the build on a world-writable directory other than the shared temporary ones", () => {
+  test("fails the build on a world-writable file or directory other than the shared temporary ones", () => {
     expect(verification()).toContain(
-      `test -z "$(find / -xdev -path /tmp/windmill -prune -o -type d -perm -0002 -print | grep -vxE '${SHARED_TMP_DIRS.join("|")}')"`,
+      `test -z "$(find / -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 -print | grep -vxE '${SHARED_TMP_DIRS.join("|")}')"`,
     );
   });
 

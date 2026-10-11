@@ -20,7 +20,12 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import { type Logger, logger, maskSecrets } from "./log.ts";
+import {
+  escapeReasonSeparator,
+  type Logger,
+  logger,
+  maskSecrets,
+} from "./log.ts";
 import { isRecord, isString } from "./types.ts";
 import { type CommandRunner, runCommand } from "./workspace.ts";
 
@@ -106,7 +111,7 @@ export const WINDMILL_TMP_DIR = "/tmp/windmill";
  * 誰でも書き込める共有の一時ディレクトリ。POSIXの共有メモリとセマフォは`/dev/shm`に、
  * メッセージキューは`/dev/mqueue`に置かれる。`/run/lock`(`/var/lock`の実体)はロックファイルの置き場である。
  * 枠を取るたびに、そのuidのものをここから消す。同じuidを次に使う実行が、前の実行の残したファイルを読めないようにするためである。
- * これ以外に誰でも書き込めるディレクトリがあると、イメージの前提を満たさないとして検査を始めない(`checkImageProblems`)。
+ * これ以外に誰でも書き込めるものがあると、検査を始めない(`checkImageProblems`)。
  */
 export const SHARED_TMP_DIRS = [
   "/tmp",
@@ -117,28 +122,62 @@ export const SHARED_TMP_DIRS = [
 ] as const;
 
 /**
- * 共有の一時ディレクトリの外で、誰でも書き込めるディレクトリを列挙するargv。rootで実行する。
- * `/`から、ほかのマウント(`/workspaces`などのボリューム、`/proc`)に入らずにたどり、共有の一時ディレクトリの下は見ない。
- * 共有の一時ディレクトリの下のものは、枠を取るたびに枠のuidのものを消すためである。
+ * ベースのイメージが誰でも書き込めるようにしている場所。Windmillの実行ファイルと共有ライブラリの置き場と、`/tmp/.cache`である。
+ * workerのイメージはビルドで閉じるので、ここに誰でも書き込めるものがあれば、閉じる前のイメージで動いている。
  */
-export function worldWritableDirsArgv(): string[] {
-  const prune = SHARED_TMP_DIRS.flatMap((dir, index) =>
-    index === 0 ? ["-path", dir] : ["-o", "-path", dir],
+export const BASE_IMAGE_OPEN_PATHS = ["/usr/src/app", "/tmp/.cache"] as const;
+
+/** `-path`の条件を`-o`でつないだもの。 */
+function anyPath(patterns: readonly string[]): string[] {
+  return patterns.flatMap((pattern, index) =>
+    index === 0 ? ["-path", pattern] : ["-o", "-path", pattern],
   );
+}
+
+/**
+ * 誰でも書き込めるもの(symlinkを除く)を列挙するargv。rootで実行する。
+ * `/`から、ほかのマウント(`/workspaces`などのボリューム、`/proc`)に入らずにたどる。マウントポイントそのものは見る。
+ * `/tmp/windmill`の下は見ない。検査の前に所有者だけが入れるように閉じるためである。
+ * 共有の一時ディレクトリそのものは数えない。
+ * 共有の一時ディレクトリの下では、rootが所有し、stickyでない、誰でも書き込めるディレクトリだけを数える。
+ * 枠のuidのものは、枠を取るたびに消すので数えない。
+ * rootの開いたディレクトリは、検査用のuidがrootの使う名前を差し替えられる場所になるので数える。
+ */
+export function worldWritablePathsArgv(): string[] {
   return [
     FIND_PATH,
     "-P",
     "/",
     "-xdev",
-    "(",
-    ...prune,
-    ")",
+    "-path",
+    WINDMILL_TMP_DIR,
     "-prune",
     "-o",
+    "!",
     "-type",
-    "d",
+    "l",
     "-perm",
     "-0002",
+    "!",
+    "(",
+    ...anyPath(SHARED_TMP_DIRS),
+    ")",
+    "(",
+    "!",
+    "(",
+    ...anyPath(SHARED_TMP_DIRS.map((dir) => `${dir}/*`)),
+    ")",
+    "-o",
+    "(",
+    "-uid",
+    "0",
+    "-type",
+    "d",
+    "!",
+    "-perm",
+    "-1000",
+    ")",
+    ")",
     "-print",
   ];
 }
@@ -727,18 +766,56 @@ export class UnreadableSlotRecordError extends Error {
 export const CHECK_IMAGE_STALE_REASON =
   "worker image is stale: run mise run up";
 
+/** 稼働中のworkerが検査の前提を満たさないときの理由の先頭。運用者が取る操作を含める。 */
+export const CHECK_RUNTIME_UNSAFE_REASON =
+  "worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker";
+
 /**
- * workerのイメージが、検査を枠のuidで動かす前提(`checkImageProblems`)を満たさない。
- * `f/`の変更がイメージの作り直しより先に反映されたときに起きる。検査の失敗ではなく、検査を実行できない環境の問題である。
+ * workerが、検査を枠のuidで動かす前提(`checkImageProblems`)を満たさない。検査の失敗ではなく、検査を実行できない環境の問題である。
  * 問題は`, `でつなぐ。理由の区切り(`; `)で別の理由に見えないようにするためである。
+ * 呼び出し側は、イメージの問題(`CheckImageStaleError`)と実行時の問題(`CheckRuntimeUnsafeError`)を同じに扱い、
+ * ラウンドを記録せず、モデルの失敗にも数えずに止める。違うのは運用者が取る操作だけである。
  */
-export class CheckImageStaleError extends Error {
+export class CheckEnvironmentError extends Error {
   readonly problems: readonly string[];
-  constructor(problems: readonly string[]) {
-    super(`${CHECK_IMAGE_STALE_REASON}: ${problems.join(", ")}`);
-    this.name = "CheckImageStaleError";
+  constructor(reason: string, problems: readonly string[]) {
+    super(`${reason}: ${problems.join(", ")}`);
+    this.name = "CheckEnvironmentError";
     this.problems = problems;
   }
+}
+
+/**
+ * workerのイメージが、検査の前提を満たさない。`f/`の変更がイメージの作り直しより先に反映されたときに起きる。
+ * イメージを作り直せば(`mise run up`)直る。
+ */
+export class CheckImageStaleError extends CheckEnvironmentError {
+  constructor(problems: readonly string[]) {
+    super(CHECK_IMAGE_STALE_REASON, problems);
+    this.name = "CheckImageStaleError";
+  }
+}
+
+/**
+ * イメージは前提を満たすが、稼働中のworkerに誰でも書き込めるパスができたか、それを確かめられなかった。
+ * パスを閉じるか、workerのコンテナを作り直せば直る。イメージを作り直す必要は無い。
+ */
+export class CheckRuntimeUnsafeError extends CheckEnvironmentError {
+  constructor(problems: readonly string[]) {
+    super(CHECK_RUNTIME_UNSAFE_REASON, problems);
+    this.name = "CheckRuntimeUnsafeError";
+  }
+}
+
+/**
+ * 止める理由が`CheckEnvironmentError`のメッセージかを返す。
+ * 理由の文字列だけを受け取る終端の処理が、ラウンドを記録せずに止めるかを決めるために使う。
+ */
+export function isCheckEnvironmentReason(reason: string): boolean {
+  return (
+    reason.startsWith(`${CHECK_IMAGE_STALE_REASON}: `) ||
+    reason.startsWith(`${CHECK_RUNTIME_UNSAFE_REASON}: `)
+  );
 }
 
 /** worktreeに残った枠のuidの所有を、rootへ戻せなかった。メッセージに枠と理由が載る。 */
@@ -929,75 +1006,129 @@ export function resolveCheckPool(
 
 /** イメージの前提を確かめるための読み取り。 */
 export type ImageDeps = {
-  /** 共有の一時ディレクトリの外で、誰でも書き込めるディレクトリ(`worldWritableDirsArgv`)。列挙できなければ例外を投げる。 */
-  readonly listWorldWritableDirs: () => Promise<readonly string[]>;
+  /** 誰でも書き込めるもの(`worldWritablePathsArgv`)。列挙できなければ例外を投げる。 */
+  readonly listWorldWritablePaths: () => Promise<readonly string[]>;
   /** `path`が実行できるファイルかを返す。 */
   readonly isExecutable: (path: string) => Promise<boolean>;
   /** `/etc/passwd`の本文。読めなければ例外を投げる。 */
   readonly readPasswd: () => Promise<string>;
 };
 
+/** 検査の前提を満たさない点。どちらも空なら満たす。 */
+export type CheckEnvironmentProblems = {
+  /** イメージを作り直せば直る点。 */
+  readonly image: readonly string[];
+  /** 稼働中のworkerにできた点。パスを閉じるか、コンテナを作り直せば直る。 */
+  readonly runtime: readonly string[];
+};
+
+/** 問題の文に並べるパスの数の上限。残りは件数で示す。 */
+const MAX_LISTED_OPEN_PATHS = 10;
+
+/** パスを並べた文。理由の区切り(`; `)を含めない。 */
+function listedPaths(paths: readonly string[]): string {
+  const listed = paths.slice(0, MAX_LISTED_OPEN_PATHS).join(", ");
+  const rest = paths.length - MAX_LISTED_OPEN_PATHS;
+  return escapeReasonSeparator(
+    rest > 0 ? `${listed} and ${String(rest)} more` : listed,
+  );
+}
+
+function isUnderBaseImageOpenPath(path: string): boolean {
+  return BASE_IMAGE_OPEN_PATHS.some(
+    (open) => path === open || path.startsWith(`${open}/`),
+  );
+}
+
 /**
- * workerのイメージが、`uids`の枠で検査を動かす前提を満たすかを確かめ、満たさない点を返す。空なら満たす。
- * 前提は、`REQUIRED_TOOL_PATHS`の道具がすべて実行できることと、`uids`のどれにも`factory-check-N`のユーザーがあることと、
- * 共有の一時ディレクトリの外に、誰でも書き込めるディレクトリが無いことである。
+ * workerが、`uids`の枠で検査を動かす前提を満たすかを確かめ、満たさない点を返す。
+ * イメージの前提は、`REQUIRED_TOOL_PATHS`の道具がすべて実行できることと、`uids`のどれにも`factory-check-N`のユーザーがあることと、
+ * ベースのイメージが開いている場所(`BASE_IMAGE_OPEN_PATHS`)を閉じてあることである。
  * 古いイメージには、番号の無い`factory-check`のユーザーしか無く、`acl`も入っていない。
- * ベースのイメージは`/usr/src/app`(Windmillの実行ファイルと共有ライブラリの置き場)を誰でも書き込めるようにしている。
- * 開いたままだと、検査用のユーザーがrootの実行するファイルを差し替えられるので、イメージが閉じていなければ検査を始めない。
+ * 開いたままだと、検査用のユーザーがrootの実行するファイルを差し替えられる。
+ * 実行時の前提は、それ以外に誰でも書き込めるもの(`worldWritablePathsArgv`)が無いことである。
+ * イメージのビルドが同じことを確かめるので、見つかれば稼働中にできたものである。
+ * 列挙できなかったときも、実行時の点とする。
  */
 export async function checkImageProblems(
   uids: readonly number[],
   deps: ImageDeps,
-): Promise<string[]> {
-  const problems: string[] = [];
+): Promise<CheckEnvironmentProblems> {
+  const image: string[] = [];
+  const runtime: string[] = [];
   for (const path of REQUIRED_TOOL_PATHS) {
-    if (!(await deps.isExecutable(path))) problems.push(`${path} is missing`);
+    if (!(await deps.isExecutable(path))) image.push(`${path} is missing`);
   }
   let passwd = "";
   try {
     passwd = await deps.readPasswd();
   } catch {
-    problems.push("/etc/passwd is unreadable");
+    image.push("/etc/passwd is unreadable");
   }
   const known = new Set(
     parsePasswdUsers(passwd, CHECK_USER_PREFIX).map((user) => user.uid),
   );
   const absent = uids.filter((uid) => !known.has(uid));
   if (absent.length > 0) {
-    problems.push(
+    image.push(
       `no ${CHECK_USER_PREFIX}N user for uid ${absent.map(String).join(", ")}`,
     );
   }
   try {
-    const open = await deps.listWorldWritableDirs();
-    if (open.length > 0) {
-      problems.push(
-        `world-writable directories outside the shared temporary directories: ${open.join(", ")}`,
+    const open = await deps.listWorldWritablePaths();
+    const fromImage = open.filter(isUnderBaseImageOpenPath);
+    const atRuntime = open.filter((path) => !isUnderBaseImageOpenPath(path));
+    if (fromImage.length > 0) {
+      image.push(
+        `world-writable paths the image leaves open: ${listedPaths(fromImage)}`,
       );
     }
-  } catch {
-    problems.push("world-writable directories could not be listed");
+    if (atRuntime.length > 0) {
+      runtime.push(
+        `world-writable paths created at runtime: ${listedPaths(atRuntime)}`,
+      );
+    }
+  } catch (error) {
+    runtime.push(
+      `world-writable paths could not be listed: ${escapeReasonSeparator(errorMessage(error))}`,
+    );
   }
-  return problems;
+  return { image, runtime };
 }
 
 /**
- * 検査コマンドがあるときだけ、workerのイメージが検査の前提を満たすかを`problems`で確かめる。
- * 満たさなければ`CheckImageStaleError`を`report`で1回知らせ、そのメッセージを止める理由として返す。満たせばnullを返す。
- * 実装とPR修正の準備が、Claudeを動かす前に呼ぶ。古いイメージのまま進むと、Claudeの1回分の実行が検査の前に無駄になるためである。
- * 検査コマンドが無ければイメージを見ない。検査の無いリポジトリは、古いイメージでも止めない。
+ * 満たさない点から、止める例外を作る。満たしていればnullを返す。
+ * イメージの点があれば`CheckImageStaleError`にし、実行時の点も並べる。イメージを作り直すとコンテナも作り直され、実行時の点も消えるためである。
+ * 実行時の点だけなら`CheckRuntimeUnsafeError`にする。
+ */
+export function checkEnvironmentError(
+  problems: CheckEnvironmentProblems,
+): CheckEnvironmentError | null {
+  if (problems.image.length > 0) {
+    return new CheckImageStaleError([...problems.image, ...problems.runtime]);
+  }
+  if (problems.runtime.length > 0) {
+    return new CheckRuntimeUnsafeError(problems.runtime);
+  }
+  return null;
+}
+
+/**
+ * 検査コマンドがあるときだけ、workerが検査の前提を満たすかを`problems`で確かめる。
+ * 満たさなければ`checkEnvironmentError`の例外を`report`で1回知らせ、そのメッセージを止める理由として返す。満たせばnullを返す。
+ * 実装とPR修正の準備が、Claudeを動かす前に呼ぶ。前提を満たさないまま進むと、Claudeの1回分の実行が検査の前に無駄になるためである。
+ * 検査コマンドが無ければ確かめない。検査の無いリポジトリは、古いイメージでも止めない。
  */
 export async function checkImageGate(
   hasCheckCommands: boolean,
   deps: {
-    readonly problems: () => Promise<readonly string[]>;
-    readonly report: (error: CheckImageStaleError) => Promise<void>;
+    readonly problems: () => Promise<CheckEnvironmentProblems>;
+    readonly report: (error: CheckEnvironmentError) => Promise<void>;
   },
 ): Promise<string | null> {
   if (!hasCheckCommands) return null;
-  const problems = await deps.problems();
-  if (problems.length === 0) return null;
-  const error = new CheckImageStaleError(problems);
+  const error = checkEnvironmentError(await deps.problems());
+  if (error === null) return null;
   await deps.report(error);
   return error.message;
 }
@@ -1098,7 +1229,7 @@ export type CheckSandbox = {
   /** 検査コマンドのargvを、取った枠のuidで実行するargvにする。`prepare`の後に呼ぶ。 */
   readonly wrap: (argv: readonly string[]) => string[];
   /**
-   * 検査の前に1回。最初にイメージの前提を確かめ、満たさなければ何にも触れずに`CheckImageStaleError`を投げる。
+   * 検査の前に1回。最初にイメージと実行時の前提を確かめ、満たさなければ何にも触れずに`CheckEnvironmentError`を投げる。
    * 続けてWindmillの実行時のディレクトリを閉じ、空いている枠を取り、
    * 前の実行が残したその枠のものを片付け、枠の記録を書いてから、worktreeとHOMEを枠のuidに渡す。
    * 片付けられない枠は手放して次の枠を試す。
@@ -1371,12 +1502,14 @@ export function createCheckSandbox(opts: {
   const log = opts.log ?? logger("check_sandbox");
   const indices = opts.uids.map((_, index) => index);
   let active: { identity: CheckIdentity; handle: SlotHandle } | null = null;
-  // 動いているコンテナのイメージは変わらないので、前提を満たした結果は部品の寿命の間覚える。
+  // 前提を満たした結果は部品の寿命(1回の実行)の間覚える。動いているコンテナのイメージは変わらないためである。
   let imageReady = false;
   const assertImageReady = async (): Promise<void> => {
     if (imageReady) return;
-    const problems = await checkImageProblems(opts.uids, deps);
-    if (problems.length > 0) throw new CheckImageStaleError(problems);
+    const error = checkEnvironmentError(
+      await checkImageProblems(opts.uids, deps),
+    );
+    if (error !== null) throw error;
     imageReady = true;
   };
   const notify = async (notice: CheckSlotNotice): Promise<void> => {
@@ -1514,9 +1647,9 @@ export function createCheckSandbox(opts: {
  * ただし、読めない記録があり、`dir`の下にrootでないものが残っていれば、その記録が`dir`を指していたとみなし、記録のパスを載せた`CheckOwnershipRestoreError`を投げる。
  * rootでないものが残ったworktreeでは、rootのgitが所有者の違いで実行を拒み、理由の分からない失敗になるためである。
  * 記録の読み取りのそれ以外の失敗は、そのまま投げる。
- * 記録がworktreeを指すと分かったら、枠のロックを取る前にイメージの前提(`checkImageProblems`)を確かめる。
- * 満たさなければ、所有権にも記録にも触れずに`CheckImageStaleError`を投げる。
- * 古いイメージには取り戻しの道具が無く、途中で失敗すると取り戻しの失敗に見えるためである。記録は残るので、イメージを作り直した後の準備が取り戻す。
+ * 記録がworktreeを指すと分かったら、枠のロックを取る前にイメージと実行時の前提(`checkImageProblems`)を確かめる。
+ * 満たさなければ、所有権にも記録にも触れずに`CheckEnvironmentError`を投げる。
+ * 古いイメージには取り戻しの道具が無く、途中で失敗すると取り戻しの失敗に見えるためである。記録は残るので、前提を満たした後の準備が取り戻す。
  */
 export async function restoreCheckOwnership(
   dir: string,
@@ -1539,8 +1672,8 @@ export async function restoreCheckOwnership(
   let imageReady = false;
   const assertImageReady = async (): Promise<void> => {
     if (imageReady) return;
-    const problems = await checkImageProblems(uids, deps);
-    if (problems.length > 0) throw new CheckImageStaleError(problems);
+    const error = checkEnvironmentError(await checkImageProblems(uids, deps));
+    if (error !== null) throw error;
     imageReady = true;
   };
   let restored = false;
@@ -1785,19 +1918,36 @@ export function defaultSandboxDeps(
       }
     },
     readPasswd: () => readFile("/etc/passwd", "utf8"),
-    listWorldWritableDirs: async () => {
-      // 走査の間に消えたディレクトリでは`find`が0以外で終わるので、終了コードは見ず、出力で判断する。
-      const result = await runCommand(worldWritableDirsArgv(), {
-        cwd: TOOL_CWD,
-        env: { PATH: TOOL_PATH },
-        timeoutMs: CHOWN_TIMEOUT_MS,
-        maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
-      });
-      if (result.timedOut)
-        throw new Error("listing world-writable directories timed out");
-      return result.stdout.split("\n").filter((line) => line !== "");
-    },
+    listWorldWritablePaths: () => listWorldWritablePaths(runCommand),
   };
+}
+
+/** 一部のエントリを読めなかったときの`find`の終了コード。走査は最後まで続く。 */
+const FIND_PARTIAL_EXIT_CODE = 1;
+
+/**
+ * 誰でも書き込めるもの(`worldWritablePathsArgv`)をrootで列挙する。
+ * 走査の間に消えたエントリでは`find`が1で終わるので、1は出力で判断する。
+ * それ以外の終了コード(シグナルでの終了を含む)とタイムアウトは、走査を終えられなかったとして例外を投げる。
+ * 途中までの出力が空でも、見落としていないとは言えないためである。起動の失敗も例外のまま投げる。
+ */
+export async function listWorldWritablePaths(
+  run: CommandRunner,
+): Promise<string[]> {
+  const result = await run(worldWritablePathsArgv(), {
+    cwd: TOOL_CWD,
+    env: { PATH: TOOL_PATH },
+    timeoutMs: CHOWN_TIMEOUT_MS,
+    maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
+  });
+  if (result.timedOut)
+    throw new Error("listing world-writable paths timed out");
+  if (result.exitCode !== 0 && result.exitCode !== FIND_PARTIAL_EXIT_CODE) {
+    throw new Error(
+      `listing world-writable paths failed (exit ${String(result.exitCode)}): ${firstLine(result.stderr)}`,
+    );
+  }
+  return result.stdout.split("\n").filter((line) => line !== "");
 }
 
 const readPasswd = (): string => readFileSync("/etc/passwd", "utf8");
@@ -1816,7 +1966,7 @@ export function checkSandboxFromEnv(
 /** 本番の設定の枠とイメージで、`checkImageProblems`を呼ぶ。 */
 export function checkImageProblemsFromEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
-): Promise<string[]> {
+): Promise<CheckEnvironmentProblems> {
   return checkImageProblems(
     resolveCheckPool(env, readPasswd),
     defaultSandboxDeps(),

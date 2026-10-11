@@ -14,15 +14,20 @@ import {
   CHECK_ENV_KEYS,
   CHECK_IMAGE_STALE_REASON,
   CHECK_NPROC_LIMIT,
+  CHECK_RUNTIME_UNSAFE_REASON,
   type CheckDirs,
+  type CheckEnvironmentError,
+  type CheckEnvironmentProblems,
   type CheckIdentity,
   CheckImageStaleError,
   CheckOwnershipRestoreError,
+  CheckRuntimeUnsafeError,
   type CheckSandboxDeps,
   CheckSlotInUseError,
   type CheckSlotNotice,
   CheckSlotsBusyError,
   checkEnv,
+  checkEnvironmentError,
   checkImageGate,
   checkImageProblems,
   chownToArgv,
@@ -35,9 +40,11 @@ import {
   gatherArgv,
   type IpcEntry,
   ipcrmArgv,
+  isCheckEnvironmentReason,
   kernelWarningText,
   killAllArgv,
   leftoverArgv,
+  listWorldWritablePaths,
   newCheckIdentity,
   notRootOwnedArgv,
   openDirsArgv,
@@ -71,14 +78,14 @@ import {
   slotSkipNoticeText,
   UnreadableSlotRecordError,
   WINDMILL_TMP_DIR,
-  worldWritableDirsArgv,
+  worldWritablePathsArgv,
 } from "../../f/factory/lib/check_sandbox.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type {
   CommandResult,
   CommandRunOptions,
 } from "../../f/factory/lib/workspace.ts";
-import { fail, ok } from "./testSupport.ts";
+import { createFakeCommandRunner, fail, ok, timeout } from "./testSupport.ts";
 
 const IDENTITY: CheckIdentity = { uid: 10001, gid: 10001, tagGid: 424242 };
 const DIRS: CheckDirs = {
@@ -629,9 +636,9 @@ describe("shared temporary directories", () => {
     ]);
   });
 
-  test("the world-writable directories outside them are listed from the root without crossing mounts", () => {
-    expect(worldWritableDirsArgv().join(" ")).toBe(
-      "/usr/bin/find -P / -xdev ( -path /tmp -o -path /var/tmp -o -path /dev/shm -o -path /dev/mqueue -o -path /run/lock ) -prune -o -type d -perm -0002 -print",
+  test("world-writable paths are listed from the root without crossing mounts, counting only root's open directories inside them", () => {
+    expect(worldWritablePathsArgv().join(" ")).toBe(
+      "/usr/bin/find -P / -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 ! ( -path /tmp -o -path /var/tmp -o -path /dev/shm -o -path /dev/mqueue -o -path /run/lock ) ( ! ( -path /tmp/* -o -path /var/tmp/* -o -path /dev/shm/* -o -path /dev/mqueue/* -o -path /run/lock/* ) -o ( -uid 0 -type d ! -perm -1000 ) ) -print",
     );
   });
 
@@ -953,10 +960,10 @@ describe("checkImageProblems", () => {
     readonly passwd?: string | null;
     readonly worldWritable?: readonly string[] | null;
   }) => ({
-    listWorldWritableDirs: async () => {
-      const dirs = opts?.worldWritable === undefined ? [] : opts.worldWritable;
-      if (dirs === null) throw new Error("find failed");
-      return dirs;
+    listWorldWritablePaths: async () => {
+      const paths = opts?.worldWritable === undefined ? [] : opts.worldWritable;
+      if (paths === null) throw new Error("listing timed out");
+      return paths;
     },
     isExecutable: async (path: string) => !(opts?.missing ?? []).includes(path),
     readPasswd: async () => {
@@ -967,61 +974,220 @@ describe("checkImageProblems", () => {
   });
 
   test("finds nothing on an image that has every tool and user", async () => {
-    expect(await checkImageProblems([20000, 20001], image())).toEqual([]);
+    expect(await checkImageProblems([20000, 20001], image())).toEqual({
+      image: [],
+      runtime: [],
+    });
   });
 
   test.each([...REQUIRED_TOOL_PATHS])("reports a missing %s", async (path) => {
     expect(
-      await checkImageProblems([20000], image({ missing: [path] })),
+      (await checkImageProblems([20000], image({ missing: [path] }))).image,
     ).toEqual([`${path} is missing`]);
   });
 
   test("reports the uids no numbered check user has", async () => {
-    expect(await checkImageProblems([20000, 20002, 20003], image())).toEqual([
-      "no factory-check-N user for uid 20002, 20003",
-    ]);
+    expect(
+      (await checkImageProblems([20000, 20002, 20003], image())).image,
+    ).toEqual(["no factory-check-N user for uid 20002, 20003"]);
   });
 
   test("does not count the unnumbered user of an older image", async () => {
     expect(
-      await checkImageProblems(
-        [10001],
-        image({
-          passwd:
-            "factory-check:x:10001:10001::/home/factory-check:/usr/sbin/nologin\n",
-        }),
-      ),
+      (
+        await checkImageProblems(
+          [10001],
+          image({
+            passwd:
+              "factory-check:x:10001:10001::/home/factory-check:/usr/sbin/nologin\n",
+          }),
+        )
+      ).image,
     ).toEqual(["no factory-check-N user for uid 10001"]);
   });
 
-  test("reports a world-writable directory that no slot cleanup purges", async () => {
+  test("reports a directory the base image leaves open as an image problem", async () => {
     expect(
-      await checkImageProblems(
-        [20000],
-        image({ worldWritable: ["/usr/src/app"] }),
-      ),
+      (
+        await checkImageProblems(
+          [20000],
+          image({ worldWritable: ["/usr/src/app"] }),
+        )
+      ).image,
+    ).toEqual(["world-writable paths the image leaves open: /usr/src/app"]);
+  });
+
+  test("reports a file under a directory the base image opens as an image problem", async () => {
+    expect(
+      (
+        await checkImageProblems(
+          [20000],
+          image({ worldWritable: ["/usr/src/app/windmill"] }),
+        )
+      ).image,
     ).toEqual([
-      "world-writable directories outside the shared temporary directories: /usr/src/app",
+      "world-writable paths the image leaves open: /usr/src/app/windmill",
     ]);
   });
 
-  test("reports world-writable directories that cannot be listed", async () => {
+  test("does not count a path that only shares a prefix with a base image directory", async () => {
     expect(
-      await checkImageProblems([20000], image({ worldWritable: null })),
-    ).toEqual(["world-writable directories could not be listed"]);
+      (
+        await checkImageProblems(
+          [20000],
+          image({ worldWritable: ["/usr/src/application"] }),
+        )
+      ).image,
+    ).toEqual([]);
+  });
+
+  test("reports a path opened while the worker runs as a runtime problem", async () => {
+    expect(
+      (
+        await checkImageProblems(
+          [20000],
+          image({ worldWritable: ["/tmp/open"] }),
+        )
+      ).runtime,
+    ).toEqual(["world-writable paths created at runtime: /tmp/open"]);
+  });
+
+  test("does not count a path opened while the worker runs as an image problem", async () => {
+    expect(
+      (
+        await checkImageProblems(
+          [20000],
+          image({ worldWritable: ["/tmp/open"] }),
+        )
+      ).image,
+    ).toEqual([]);
+  });
+
+  test("lists at most ten runtime paths and counts the rest", async () => {
+    const paths = Array.from(
+      { length: 12 },
+      (_, index) => `/tmp/open-${String(index)}`,
+    );
+    expect(
+      (await checkImageProblems([20000], image({ worldWritable: paths })))
+        .runtime,
+    ).toEqual([
+      `world-writable paths created at runtime: ${paths.slice(0, 10).join(", ")} and 2 more`,
+    ]);
+  });
+
+  test("keeps a path from splitting the reason", async () => {
+    expect(
+      (
+        await checkImageProblems(
+          [20000],
+          image({ worldWritable: ["/tmp/a; b"] }),
+        )
+      ).runtime.join(""),
+    ).not.toContain("; ");
+  });
+
+  test("reports paths that cannot be listed as a runtime problem with the cause", async () => {
+    expect(
+      (await checkImageProblems([20000], image({ worldWritable: null })))
+        .runtime,
+    ).toEqual(["world-writable paths could not be listed: listing timed out"]);
   });
 
   test("reports an unreadable passwd", async () => {
     expect(
-      await checkImageProblems([20000], image({ passwd: null })),
+      (await checkImageProblems([20000], image({ passwd: null }))).image,
     ).toContain("/etc/passwd is unreadable");
+  });
+});
+
+describe("listWorldWritablePaths", () => {
+  test("lists the paths find printed", async () => {
+    const fake = createFakeCommandRunner([ok("/tmp/open\n/etc/open\n")]);
+    expect(await listWorldWritablePaths(fake.run)).toEqual([
+      "/tmp/open",
+      "/etc/open",
+    ]);
+  });
+
+  test("runs the listing as root from /", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    await listWorldWritablePaths(fake.run);
+    expect(fake.calls[0]?.argv).toEqual(worldWritablePathsArgv());
+  });
+
+  test("keeps the paths when find exits with 1 for entries that vanished during the walk", async () => {
+    const fake = createFakeCommandRunner([
+      { ...fail("No such file or directory", 1), stdout: "/tmp/open\n" },
+    ]);
+    expect(await listWorldWritablePaths(fake.run)).toEqual(["/tmp/open"]);
+  });
+
+  test("fails when find exits with another code", async () => {
+    const fake = createFakeCommandRunner([fail("find: invalid predicate", 2)]);
+    await expect(listWorldWritablePaths(fake.run)).rejects.toThrow(
+      "listing world-writable paths failed (exit 2)",
+    );
+  });
+
+  test("fails when find was killed by a signal", async () => {
+    const fake = createFakeCommandRunner([fail("", 137)]);
+    await expect(listWorldWritablePaths(fake.run)).rejects.toThrow("exit 137");
+  });
+
+  test("fails when the listing timed out", async () => {
+    const fake = createFakeCommandRunner([timeout()]);
+    await expect(listWorldWritablePaths(fake.run)).rejects.toThrow(
+      "listing world-writable paths timed out",
+    );
+  });
+
+  test("fails when find cannot be started", async () => {
+    const fake = createFakeCommandRunner([new Error("ENOENT")]);
+    await expect(listWorldWritablePaths(fake.run)).rejects.toThrow("ENOENT");
+  });
+});
+
+describe("checkEnvironmentError", () => {
+  test("returns nothing when the image and the runtime are ready", () => {
+    expect(checkEnvironmentError({ image: [], runtime: [] })).toBeNull();
+  });
+
+  test("blames the image when the image misses something", () => {
+    expect(
+      checkEnvironmentError({
+        image: ["/usr/bin/getfacl is missing"],
+        runtime: [],
+      }),
+    ).toBeInstanceOf(CheckImageStaleError);
+  });
+
+  test("lists the runtime problems too when it blames the image", () => {
+    expect(
+      checkEnvironmentError({
+        image: ["/usr/bin/getfacl is missing"],
+        runtime: ["world-writable paths created at runtime: /tmp/open"],
+      })?.problems,
+    ).toEqual([
+      "/usr/bin/getfacl is missing",
+      "world-writable paths created at runtime: /tmp/open",
+    ]);
+  });
+
+  test("blames the runtime when only the running worker has a problem", () => {
+    expect(
+      checkEnvironmentError({
+        image: [],
+        runtime: ["world-writable paths created at runtime: /tmp/open"],
+      }),
+    ).toBeInstanceOf(CheckRuntimeUnsafeError);
   });
 });
 
 describe("checkImageGate", () => {
   /** 確かめた回数と知らせた例外を記録する、`checkImageGate`の依存。 */
-  function gate(problems: readonly string[]) {
-    const reported: string[] = [];
+  function gate(problems: CheckEnvironmentProblems) {
+    const reported: CheckEnvironmentError[] = [];
     const seen = { checks: 0, reported };
     return {
       seen,
@@ -1030,42 +1196,63 @@ describe("checkImageGate", () => {
           seen.checks += 1;
           return problems;
         },
-        report: async (error: CheckImageStaleError) => {
-          seen.reported.push(error.message);
+        report: async (error: CheckEnvironmentError) => {
+          seen.reported.push(error);
         },
       },
     };
   }
+  const STALE: CheckEnvironmentProblems = {
+    image: ["/usr/bin/getfacl is missing"],
+    runtime: [],
+  };
+  const RUNTIME: CheckEnvironmentProblems = {
+    image: [],
+    runtime: ["world-writable paths created at runtime: /tmp/open"],
+  };
 
   test("does not look at the image when there are no check commands", async () => {
-    const g = gate(["/usr/bin/getfacl is missing"]);
+    const g = gate(STALE);
     await checkImageGate(false, g.deps);
     expect(g.seen.checks).toBe(0);
   });
 
   test("lets a run without check commands go on", async () => {
-    const g = gate(["/usr/bin/getfacl is missing"]);
+    const g = gate(STALE);
     expect(await checkImageGate(false, g.deps)).toBeNull();
   });
 
   test("lets a run go on when the image can run the checks", async () => {
-    const g = gate([]);
+    const g = gate({ image: [], runtime: [] });
     expect(await checkImageGate(true, g.deps)).toBeNull();
   });
 
   test("stops with the stale image as the reason", async () => {
-    const g = gate(["/usr/bin/getfacl is missing"]);
+    const g = gate(STALE);
     expect(await checkImageGate(true, g.deps)).toBe(
       `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
     );
   });
 
   test("reports the stale image once", async () => {
-    const g = gate(["/usr/bin/getfacl is missing"]);
+    const g = gate(STALE);
     await checkImageGate(true, g.deps);
-    expect(g.seen.reported).toEqual([
+    expect(g.seen.reported.map((error) => error.message)).toEqual([
       `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
     ]);
+  });
+
+  test("stops with the runtime problem as the reason", async () => {
+    const g = gate(RUNTIME);
+    expect(await checkImageGate(true, g.deps)).toBe(
+      `${CHECK_RUNTIME_UNSAFE_REASON}: world-writable paths created at runtime: /tmp/open`,
+    );
+  });
+
+  test("reports a runtime problem as such", async () => {
+    const g = gate(RUNTIME);
+    await checkImageGate(true, g.deps);
+    expect(g.seen.reported[0]).toBeInstanceOf(CheckRuntimeUnsafeError);
   });
 });
 
@@ -1078,6 +1265,42 @@ describe("CheckImageStaleError", () => {
 
   test("joins the problems without the reason separator", () => {
     expect(new CheckImageStaleError(["a", "b"]).message).not.toContain("; ");
+  });
+});
+
+describe("CheckRuntimeUnsafeError", () => {
+  test("starts with the reason that tells the operator to close the paths or recreate the worker", () => {
+    expect(new CheckRuntimeUnsafeError(["x"]).message).toBe(
+      `${CHECK_RUNTIME_UNSAFE_REASON}: x`,
+    );
+  });
+
+  test("is not a stale image", () => {
+    expect(new CheckRuntimeUnsafeError(["x"])).not.toBeInstanceOf(
+      CheckImageStaleError,
+    );
+  });
+});
+
+describe("isCheckEnvironmentReason", () => {
+  test("recognizes a stale image", () => {
+    expect(
+      isCheckEnvironmentReason(new CheckImageStaleError(["x"]).message),
+    ).toBe(true);
+  });
+
+  test("recognizes a runtime problem", () => {
+    expect(
+      isCheckEnvironmentReason(new CheckRuntimeUnsafeError(["x"]).message),
+    ).toBe(true);
+  });
+
+  test("does not take a busy worktree for an environment problem", () => {
+    expect(
+      isCheckEnvironmentReason(
+        "worktree is still used by processes from an earlier run",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -1309,6 +1532,8 @@ function fakeSandboxDeps(opts?: {
   readonly passwd?: string;
   /** 記録を読むと、形の違いではない例外になる枠。 */
   readonly failingRecordReads?: readonly number[];
+  /** 誰でも書き込めるパスとして見つかるもの。 */
+  readonly worldWritable?: readonly string[];
 }) {
   const events: string[] = [];
   const calls: FakeCall[] = [];
@@ -1417,7 +1642,7 @@ function fakeSandboxDeps(opts?: {
     },
     pathKind: async (path) => opts?.pathKinds?.[path] ?? "directory",
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
-    listWorldWritableDirs: async () => [],
+    listWorldWritablePaths: async () => opts?.worldWritable ?? [],
     isExecutable: async (path) => {
       imageChecks += 1;
       return !(opts?.missingTools ?? []).includes(path);
@@ -1579,6 +1804,21 @@ describe("createCheckSandbox", () => {
     await expect(sandboxOf(fake.deps).prepare(DIRS)).rejects.toBeInstanceOf(
       CheckImageStaleError,
     );
+  });
+
+  test("prepare fails with CheckRuntimeUnsafeError when the running worker has an open path", async () => {
+    const fake = fakeSandboxDeps({ worldWritable: ["/tmp/open"] });
+    await expect(sandboxOf(fake.deps).prepare(DIRS)).rejects.toBeInstanceOf(
+      CheckRuntimeUnsafeError,
+    );
+  });
+
+  test("prepare runs nothing when the running worker has an open path", async () => {
+    const fake = fakeSandboxDeps({ worldWritable: ["/tmp/open"] });
+    await sandboxOf(fake.deps)
+      .prepare(DIRS)
+      .catch(() => {});
+    expect(fake.calls).toEqual([]);
   });
 
   test("prepare on a stale image runs nothing", async () => {
@@ -2539,6 +2779,16 @@ describe("restoreCheckOwnership", () => {
     await expect(
       restoreCheckOwnership(WT, POOL, fake.deps),
     ).rejects.toBeInstanceOf(CheckImageStaleError);
+  });
+
+  test("fails with CheckRuntimeUnsafeError when the running worker has an open path", async () => {
+    const fake = fakeSandboxDeps({
+      records: RECORDED,
+      worldWritable: ["/tmp/open"],
+    });
+    await expect(
+      restoreCheckOwnership(WT, POOL, fake.deps),
+    ).rejects.toBeInstanceOf(CheckRuntimeUnsafeError);
   });
 
   test("runs nothing on a stale image", async () => {

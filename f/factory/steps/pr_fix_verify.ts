@@ -8,7 +8,7 @@ import {
   runAllowedCheckCommands,
 } from "../lib/check_runner.ts";
 import {
-  CheckImageStaleError,
+  CheckEnvironmentError,
   checkSandboxFromEnv,
   kernelWarningText,
 } from "../lib/check_sandbox.ts";
@@ -28,7 +28,7 @@ import {
   recordAgentRun,
 } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
-import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
+import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { escapeReasonSeparator, logger } from "../lib/log.ts";
 import { prFixRetryModel } from "../lib/model_policy.ts";
 import {
@@ -59,7 +59,7 @@ import {
 
 export type PrFixVerifyResult = {
   /**
-   * `guard_blocked`は、workerのイメージが古く検査を実行できなかったときだけ返す。
+   * `guard_blocked`は、workerが検査の前提を満たさず検査を実行できなかったときだけ返す。
    * 完了のステップが修正のラウンドを記録せずに`blocked`にするので、モデルの失敗に数えない。
    */
   readonly outcome: FixOutcome | "guard_blocked";
@@ -100,9 +100,9 @@ export type PrFixVerifyDeps = {
     failures: readonly CheckFailure[],
   ) => Promise<PrFixRetryResult>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
-  /** `runChecks`が`CheckImageStaleError`を投げたときに1回呼ぶ。運用者に`mise run up`を求める通知を残す。 */
+  /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
   readonly reportCheckImageStale: (
-    error: CheckImageStaleError,
+    error: CheckEnvironmentError,
   ) => Promise<void>;
 };
 
@@ -136,7 +136,7 @@ export type PrFixVerifyInput = {
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
  * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
- * workerのイメージが古く検査を実行できなければ(`CheckImageStaleError`)、`reportCheckImageStale`で知らせ、
+ * workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
  * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
  * 準備の関門と同じく修正のラウンドを記録させず、モデルの失敗に数えないためである。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
@@ -211,22 +211,22 @@ export async function runPrFixVerify(
   };
   if (!input.hasCheckCommands) return applyDone;
 
-  /** 検査コマンドを実行する。イメージが古くて実行できなければ、知らせてからその例外を返す。 */
+  /** 検査コマンドを実行する。workerが前提を満たさず実行できなければ、知らせてからその例外を返す。 */
   const runChecks = async (): Promise<
-    readonly CheckCommandResult[] | CheckImageStaleError
+    readonly CheckCommandResult[] | CheckEnvironmentError
   > => {
     try {
       return await deps.runChecks();
     } catch (error) {
-      if (!(error instanceof CheckImageStaleError)) throw error;
+      if (!(error instanceof CheckEnvironmentError)) throw error;
       await deps.reportCheckImageStale(error);
       return error;
     }
   };
 
-  /** イメージが古くて検査を実行できなかったときの結果。 */
+  /** workerが前提を満たさず検査を実行できなかったときの結果。 */
   const staleImage = (
-    error: CheckImageStaleError,
+    error: CheckEnvironmentError,
     summary: string,
     replies: FixReply[],
   ): PrFixVerifyResult => ({
@@ -235,7 +235,7 @@ export async function runPrFixVerify(
   });
 
   const firstChecks = await runChecks();
-  if (firstChecks instanceof CheckImageStaleError) {
+  if (firstChecks instanceof CheckEnvironmentError) {
     return staleImage(firstChecks, input.apply.summary, input.apply.replies);
   }
   if (firstChecks.every((result) => result.ok)) {
@@ -314,7 +314,7 @@ export async function runPrFixVerify(
     return blocked(afterRetryReason, output.summary, output.replies);
   }
   const secondChecks = await runChecks();
-  if (secondChecks instanceof CheckImageStaleError) {
+  if (secondChecks instanceof CheckEnvironmentError) {
     return staleImage(secondChecks, output.summary, output.replies);
   }
   if (!secondChecks.every((result) => result.ok)) {
@@ -514,13 +514,13 @@ export async function main(
       },
       warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
       reportCheckImageStale: (error) =>
-        recordCheckImageStaleNotice(
+        recordCheckEnvironmentNotice(
           {
             readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
             addNotice: addNoticeUnlessUnresolved,
             log,
           },
-          error.problems.join(", "),
+          error,
         ),
     },
     {

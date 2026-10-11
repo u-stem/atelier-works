@@ -549,15 +549,21 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 コマンドごとに、枠のユーザーの残りのプロセスを止める。止まらなければ、所有権を戻さずにステップを失敗させる。
 戻せなかった所有権と`HOME`は、枠の記録を通して、次にその枠を取る検査が片付ける。
 
-準備のステップは、`allowed_check_commands`を設定していれば、Claudeより前に、イメージの前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
-無ければ、関門と同じ`guard_blocked`で止め、作業項目は`blocked`になる。
-古いイメージのまま進むと、Claudeの修正を1回使ってから検証で止まるためである。
+準備のステップは、`allowed_check_commands`を設定していれば、Claudeより前に、イメージと実行時の前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
+満たさなければ、関門と同じ`guard_blocked`で止め、作業項目は`blocked`になる。
+前提を満たさないまま進むと、Claudeの修正を1回使ってから検証で止まるためである。
 検証のステップも検査の前に確かめ直し、満たさなければClaudeの修正を再実行せずに`guard_blocked`を返す。
-準備から検証までの間に、イメージは変わりうるためである。
-どちらも修正のラウンド(`fix_rounds`)を記録しない。
+準備から検証までの間に、イメージも稼働中のworkerも変わりうるためである。
+完了のステップが、commitの前に残った所有権を同じ理由で取り戻せずに止まったときも、`blocked`にする。
+どれも修正のラウンド(`fix_rounds`)を記録しない。
 Claudeが直せる検査の失敗ではないので、Sonnetの失敗として数え(`countPrFixFailures`)、`heavy_model`への切り替えを早めないためである。
-理由は`worker image is stale: run mise run up`で始まる。
-要対応の通知`host_action_required`も1件残す([運用](../operations.md#fとworkerのイメージを両方変えたとき))。
+理由と要対応の通知は、原因によって次のとおりである。
+
+| 原因 | 理由の先頭 | 要対応の通知 |
+| --- | --- | --- |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
+
 `PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 
 検査コマンドが指す先(対象リポジトリの`mise.toml`や`package.json`のscriptsなど)は、信頼できない内容として扱う。workerのmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`をしない)。`mise.toml`に頼るコマンドと、`MISE_TRUSTED_CONFIG_PATHS`を使わずには実行できないコマンドは、実行せずにブロックとして報告する。

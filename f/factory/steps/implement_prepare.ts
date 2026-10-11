@@ -8,7 +8,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import {
-  CheckImageStaleError,
+  CheckEnvironmentError,
   checkImageGate,
   checkImageProblemsFromEnv,
 } from "../lib/check_sandbox.ts";
@@ -35,7 +35,7 @@ import {
   listPullRequestNumbersByHead,
   type PullRequestRef,
 } from "../lib/github.ts";
-import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
+import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { isFactoryRepo } from "../lib/implement_finish_support.ts";
 import {
   assertImplementLease,
@@ -198,7 +198,7 @@ function stop(
 
 /**
  * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、
- * 時間設定がflow.yamlのstep timeoutに収まるか、検査コマンドがあればworkerのイメージが検査を実行できるか、Issueがopenか、
+ * 時間設定がflow.yamlのstep timeoutに収まるか、検査コマンドがあればworkerが検査を実行できるか、Issueがopenか、
  * 作業項目のattemptに承認済みの要件定義があるか、
  * ブランチのPR(閉じたものを含む)で終端でないpr_fix / pr_reviewが無いか)を確かめ直す。
  * 満たさなければ`outcome`と理由を返し、状態の遷移は`implement_finish`に任せる。
@@ -207,8 +207,8 @@ function stop(
  *
  * worktreeを前の実行のプロセスがまだ使っていれば、同じ作業項目の前のジョブのものだけを、リースとブランチのPRの修正・レビューを確かめ直してから止める。
  * それ以外のプロセスがいるか、止めても空かなければ、worktreeに触れずに`needs_human`を返す。
- * イメージが検査を実行できないと分かったとき(枠の記録が指すworktreeを取り戻せないときを含む)は、
- * 要対応の通知`host_action_required`を残して`needs_human`を返す。
+ * workerが検査を実行できないと分かったとき(枠の記録が指すworktreeを取り戻せないときを含む)は、
+ * 要対応の通知を残して`needs_human`を返す。通知は、イメージが古ければ`host_action_required`、稼働中のworkerの問題なら`check_runtime_unsafe`である。
  * 満たせば、実装用のブランチと`git gtr`のworktreeを用意し、
  * リモートにブランチが無ければ、既定のブランチの先頭だけを載せた空のブランチとしてpushしておく。
  * 先にpushしておくのは、後のpushをすべて`commitAndPush`のまま行えるようにするため。
@@ -281,16 +281,16 @@ export async function main(
   );
   const misfit = implementTimeoutMisfit(config, checkCommands.length);
   if (misfit !== null) return stop("needs_human", misfit);
-  // 古いイメージのまま進むと、Claudeの1ラウンド分を使ってから検証のステップで止まるので、Claudeより前に確かめる。
-  // 検証のステップも検査の前に確かめ直す。準備と検証の間にイメージが変わることがあるためである。
-  const reportStaleImage = (error: CheckImageStaleError): Promise<void> =>
-    recordCheckImageStaleNotice(
+  // 前提を満たさないまま進むと、Claudeの1ラウンド分を使ってから検証のステップで止まるので、Claudeより前に確かめる。
+  // 検証のステップも検査の前に確かめ直す。準備と検証の間に、イメージも稼働中のworkerも変わることがあるためである。
+  const reportStaleImage = (error: CheckEnvironmentError): Promise<void> =>
+    recordCheckEnvironmentNotice(
       {
         readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
         addNotice: addNoticeUnlessUnresolved,
         log: logger("implement_prepare"),
       },
-      error.problems.join(", "),
+      error,
     );
   const staleImage = await checkImageGate(checkCommands.length > 0, {
     problems: () => checkImageProblemsFromEnv(),
@@ -440,8 +440,8 @@ export async function main(
     // 公開の後に再利用の経路で確かめ直す場合があるので、空のブランチがpush済みのことはある。
     if (err instanceof WorktreeBusyError)
       return stop("needs_human", err.message);
-    // 枠の記録がworktreeを指すのに、イメージが古くて取り戻せない。worktreeには触れていない。
-    if (err instanceof CheckImageStaleError) {
+    // 枠の記録がworktreeを指すのに、workerが検査の前提を満たさず取り戻せない。worktreeには触れていない。
+    if (err instanceof CheckEnvironmentError) {
       await reportStaleImage(err);
       return stop("needs_human", err.message);
     }

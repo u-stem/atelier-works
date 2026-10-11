@@ -87,7 +87,8 @@ Claudeは実装中に要件や設計を書き換えてはならない。要件�
 9. ループを終えるかを判定する。
 10. 修正ラウンドの前にリースと`.git`を確かめ、どちらかに通らなければ止める。
 
-Claudeの実行ごとに`implement_rounds`へ1行記録する。リースを失って止まったラウンドは記録しない。
+Claudeの実行ごとに`implement_rounds`へ1行記録する。
+リースを失って止まったラウンドと、workerが検査の前提を満たさず検査できなかったラウンドは記録しない。
 
 ### 検査コマンド
 
@@ -125,25 +126,29 @@ Claudeの実行ごとに`implement_rounds`へ1行記録する。リースを失�
 - 差分の超過(`diff_too_large`)
 - `.git`の書き換え(`git_pointer_modified`)
 - 変更の判定とgitleaksの検査の間のworktreeの変化(`worktree_changed`)
-- workerのイメージが古く、検査コマンドを実行できない(`check_image_stale`)
+- workerが検査の前提を満たさず、検査コマンドを実行できない(`check_image_stale`)。イメージが古いときと、稼働中のworkerの問題のときの両方である
 - Claudeの実行の失敗(`claude_error`)
 - リースの喪失(`lease_lost`)
 
 `worktree_changed`で止めるのは、変更の判定とgitleaksの検査の両方を経たツリーだけを、検証済みとして記録するためである。
 理由は`worktree changed before the secret scan in round <N>`になる。
 
-準備のステップ(`implement_prepare`)は、検査コマンドを設定したリポジトリでは、Claudeより前に、イメージの前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
-無ければ、Claudeを動かさずに人の対応待ちで止まる。
-古いイメージのまま進むと、Claudeの1ラウンド分を使ってから検証で止まるためである。
+準備のステップ(`implement_prepare`)は、検査コマンドを設定したリポジトリでは、Claudeより前に、イメージと実行時の前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
+満たさなければ、Claudeを動かさずに人の対応待ちで止まる。
+前提を満たさないまま進むと、Claudeの1ラウンド分を使ってから検証で止まるためである。
 
-ループも、検査コマンドの準備がイメージの前提を確かめ直し、満たさなければ`check_image_stale`で止まる。
-準備から検証までの間に、イメージは変わりうるためである。
+ループも、検査コマンドの準備が同じ前提を確かめ直し、満たさなければ`check_image_stale`で止まる。
+準備から検証までの間に、イメージも稼働中のworkerも変わりうるためである。
 検査の準備は所有権にも枠の記録にも触れる前に止まり、ループはそのラウンドを記録しない。
 記録すると、Sonnetの失敗として数えられ(`countImplementFailedRounds`)、`heavy_model`への切り替えを早めるためである。
 Claudeが直せる検査の失敗ではないので、修正のラウンドに進まず、作業項目は人の対応待ちになる。
 
-どちらで止まっても、理由は`worker image is stale: run mise run up`で始まる。
-要対応の通知`host_action_required`も1件残す([運用](../operations.md#fとworkerのイメージを両方変えたとき))。
+どちらで止まっても、理由と要対応の通知は次のとおりである。
+
+| 原因 | 理由の先頭 | 要対応の通知 |
+| --- | --- | --- |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
 
 ### 期限と修正ラウンド
 
@@ -478,9 +483,10 @@ workerには`CAP_SYS_PTRACE`が無い。そのため、uidを変えたプロセ�
 読めない記録が残っていて、worktreeにrootでないものがあるときも同じである。
 準備は人の対応待ちになり、詳細に枠のユーザーと理由が載る。
 取り戻せなかった理由は`check sandbox:`で始まり、通知の次の操作は、プロセスを止める案内ではなく、[枠の記録を片付ける手順](../operations.md#検査の枠の記録を片付ける)になる。
-取り戻す前には、イメージの前提を確かめる。
-満たさなければ、所有権と記録のどちらにも触れずに`CheckImageStaleError`を投げる。
-準備のステップは`host_action_required`を残して人の対応待ちになり、完了のステップは理由に載せてpushせずに止まる。掃除はそのworktreeを飛ばす。
+取り戻す前には、イメージと実行時の前提を確かめる。
+満たさなければ、所有権と記録のどちらにも触れずに`CheckEnvironmentError`を投げる。
+準備のステップは要対応の通知を残して人の対応待ちになり、完了のステップは理由に載せてpushせずに止まる。掃除はそのworktreeを飛ばす。
+通知は、イメージが古ければ`host_action_required`、稼働中のworkerの問題なら`check_runtime_unsafe`である。
 
 ロックが塞がっているのに保持者が見えないときも、この復旧を先に行う。
 取り消された検査が別のセッションに残したプロセスは、枠のuidで動くので走査に見えず、worktreeのロックを受け継いで持ち続けるためである。

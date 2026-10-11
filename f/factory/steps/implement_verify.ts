@@ -22,7 +22,7 @@ import {
   insertImplementRound,
   recordAgentRun,
 } from "../lib/db.ts";
-import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
+import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import {
   rootFlowJobId,
   stillHoldsImplementLease,
@@ -116,7 +116,7 @@ async function inspectChanges(
  * 失敗すれば、リースを確かめてから(失っていれば止める)`implementFixPrompt`で修正ラウンドを走らせる。
  * リースの値は、フローのルートジョブID(`rootFlowJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
- * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。workerのイメージが古く検査を実行できなかったラウンドは記録しない。
+ * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。workerが検査の前提を満たさず検査を実行できなかったラウンドは記録しない。
  * 検査コマンドがあるときは、コンテナの分離なしで非特権のuidにより実行することを
  * noticeとして記録する。
  * `first_round.kind`が想定外なら例外を投げる。
@@ -281,14 +281,14 @@ export async function main(
         now: Date.now,
         log: (message, fields) => log.info(message, fields),
         reportCheckImageStale: (error) =>
-          recordCheckImageStaleNotice(
+          recordCheckEnvironmentNotice(
             {
               readDeployedSha: () =>
                 wmill.getVariable("f/factory/deployed_sha"),
               addNotice: addNoticeUnlessUnresolved,
               log,
             },
-            error.problems.join(", "),
+            error,
           ),
       },
       {

@@ -7,7 +7,7 @@
 import { access, cp, lstat, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CheckImageStaleError } from "./check_sandbox.ts";
+import { CheckEnvironmentError } from "./check_sandbox.ts";
 import {
   type RunClaudeOptions,
   type RunClaudeResult,
@@ -670,11 +670,11 @@ export type ImplementLoopDeps = {
   readonly now: () => number;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
   /**
-   * `runChecks`が`CheckImageStaleError`を投げたときに1回呼ぶ。運用者に`mise run up`を求める通知を残す。
+   * `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。
    * ループはそのラウンドで止まる。
    */
   readonly reportCheckImageStale: (
-    error: CheckImageStaleError,
+    error: CheckEnvironmentError,
   ) => Promise<void>;
 };
 
@@ -897,8 +897,8 @@ export async function gitPointerStopReason(
  *    差があれば、gitleaks、次に検証コマンドを実行する。検証コマンドは、
  *    保護パスが変わったときと未設定のときは実行しない。
  *    実行する直前に、gitが無視するファイルを削除する。検査コマンドは期限で切らない。
- *    workerのイメージが古く検査を実行できなければ(`CheckImageStaleError`)、`reportCheckImageStale`で知らせ、
- *    そのラウンドを記録せず、修正ラウンドに進まずに`check_image_stale`で止める。
+ *    workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
+ *    そのラウンドを記録せず、修正ラウンドに進まずに`check_image_stale`で止める。イメージが古いときと、稼働中のworkerの問題のときの両方である。
  * 8. 終了を判定する(`decideImplementRoundExit`)。検査に失敗し、期限までの残りが修正ラウンドの最悪の所要時間に足りなければ`deadline`で止める。
  *    差分の指紋には、ステージしたツリーのshaを使う。
  * 9. 修正ラウンドに進む前にリースを確かめ、失っていれば止める。続けて`.git`ポインタを確かめ、変わっていれば止める。
@@ -1055,9 +1055,9 @@ export async function runImplementVerifyLoop(
         inspectedTreeSha: fingerprint.treeSha,
       });
     } catch (err) {
-      // イメージが古く検査を実行できないのは、Claudeが直せる検査の失敗ではない。修正ラウンドに進まず、人に`mise run up`を求めて止まる。
+      // workerが前提を満たさず検査を実行できないのは、Claudeが直せる検査の失敗ではない。修正ラウンドに進まず、人に直し方を示して止まる。
       // ラウンドは記録しない。記録すると、モデルの失敗として数えられ、`heavy_model`への切り替えを早めるためである。
-      if (!(err instanceof CheckImageStaleError)) throw err;
+      if (!(err instanceof CheckEnvironmentError)) throw err;
       await deps.reportCheckImageStale(err);
       return stopped({
         exit: "check_image_stale",

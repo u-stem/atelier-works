@@ -41,9 +41,14 @@ args=(run --rm --init --security-opt no-new-privileges:true)
 for cap in "${CAP_DROP[@]}"; do
   args+=(--cap-drop "${cap}")
 done
+# workerと同じく、`/workspaces`と`/var/lib/factory`にボリュームをマウントする。
+# 誰でも書き込めるものの走査は、マウントポイントそのものも見るので、その権限を確かめるためである。
+# 名前の無いボリュームは`--rm`でコンテナと一緒に消える。
 args+=(
   -e FACTORY_CHECK_SANDBOX_IT=1
   --entrypoint bun
+  -v /workspaces
+  -v /var/lib/factory
   -v "${REPO_ROOT}:/src:ro"
   -w /src
   "${IMAGE}"

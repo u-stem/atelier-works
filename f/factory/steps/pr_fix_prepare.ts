@@ -3,14 +3,14 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import {
-  CheckImageStaleError,
+  CheckEnvironmentError,
   checkImageGate,
   checkImageProblemsFromEnv,
 } from "../lib/check_sandbox.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
 import { type GhClient, getBranchProtected, getPr } from "../lib/github.ts";
-import { recordCheckImageStaleNotice } from "../lib/host_action.ts";
+import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
 import {
@@ -78,8 +78,8 @@ export type PrFixPrepareResult = {
  * 検証に通らなければ例外を投げる。
  * PRのブランチ名から引いた実装の作業項目が`implementing`なら`guard_blocked`を返す。
  * worktreeを前の実行のプロセスがまだ使っていれば、何も止めずに保持者を理由に載せて`guard_blocked`を返す。
- * `allowed_check_commands`があり、workerのイメージが検査を実行できないときと、枠の記録が指すworktreeをイメージが古くて取り戻せないときは、
- * 要対応の通知`host_action_required`を残して`guard_blocked`を返す。
+ * `allowed_check_commands`があり、workerが検査を実行できないときと、枠の記録が指すworktreeを同じ理由で取り戻せないときは、
+ * 要対応の通知を残して`guard_blocked`を返す。通知は、イメージが古ければ`host_action_required`、稼働中のworkerの問題なら`check_runtime_unsafe`である。
  * 作業項目が無い、またはPR番号が無いときは例外を投げる。
  */
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
@@ -145,16 +145,16 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     };
   }
 
-  // 古いイメージのまま進むと、Claudeの修正を1回使ってから検証のステップで止まるので、Claudeより前に確かめる。
+  // 前提を満たさないまま進むと、Claudeの修正を1回使ってから検証のステップで止まるので、Claudeより前に確かめる。
   // 関門と同じ`guard_blocked`で止め、修正のラウンドを記録しない。
-  const reportStaleImage = (error: CheckImageStaleError): Promise<void> =>
-    recordCheckImageStaleNotice(
+  const reportStaleImage = (error: CheckEnvironmentError): Promise<void> =>
+    recordCheckEnvironmentNotice(
       {
         readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
         addNotice: addNoticeUnlessUnresolved,
         log: logger("pr_fix_prepare"),
       },
-      error.problems.join(", "),
+      error,
     );
   const staleImage = await checkImageGate(
     config.allowed_check_commands.length > 0,
@@ -281,8 +281,8 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
         ...earlyExitBase(workItem),
       };
     }
-    // 枠の記録がworktreeを指すのに、イメージが古くて取り戻せない。worktreeには触れていない。
-    if (err instanceof CheckImageStaleError) {
+    // 枠の記録がworktreeを指すのに、workerが検査の前提を満たさず取り戻せない。worktreeには触れていない。
+    if (err instanceof CheckEnvironmentError) {
       await reportStaleImage(err);
       return {
         outcome: "guard_blocked",

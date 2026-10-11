@@ -18,11 +18,14 @@ import { runAllowedCheckCommands } from "../../f/factory/lib/check_runner.ts";
 import {
   CHECK_ENV_KEYS,
   CHECK_NPROC_LIMIT,
+  CheckRuntimeUnsafeError,
   type CheckSandbox,
   type CheckSlotNotice,
+  checkEnvironmentError,
   checkImageProblems,
   createCheckSandbox,
   defaultSandboxDeps,
+  listWorldWritablePaths,
   parsePasswdUsers,
   resolveCheckPool,
   restoreCheckOwnership,
@@ -671,7 +674,7 @@ suite("check slots in the worker image", () => {
 
   test("the worker image meets every prerequisite of the sandbox", async () => {
     expect(await checkImageProblems(POOL, defaultSandboxDeps(lockDir))).toEqual(
-      [],
+      { image: [], runtime: [] },
     );
   });
 
@@ -681,11 +684,57 @@ suite("check slots in the worker image", () => {
     );
   });
 
+  test("nothing in the Windmill directory is writable by the group or others", () => {
+    const proc = Bun.spawnSync({
+      cmd: [
+        "/usr/bin/find",
+        "/usr/src/app",
+        "-xdev",
+        "!",
+        "-type",
+        "l",
+        "-perm",
+        "/022",
+      ],
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(proc.stdout.toString()).toBe("");
+  });
+
+  test("a slot cannot open the Windmill binary for writing", () => {
+    expect(
+      runAsUid(POOL[0] ?? 0, "exec 3>>/usr/src/app/windmill", "/"),
+    ).not.toBe(0);
+  });
+
+  test("a slot cannot open the library Windmill loads from its directory for writing", () => {
+    expect(
+      runAsUid(
+        POOL[0] ?? 0,
+        "exec 3>>/usr/src/app/libwindmill_duckdb_ffi_internal.so",
+        "/",
+      ),
+    ).not.toBe(0);
+  });
+
   test("a slot can write only into the shared temporary directories outside the worktree and its home", async () => {
-    expect(await defaultSandboxDeps(lockDir).listWorldWritableDirs()).toEqual(
+    expect(await defaultSandboxDeps(lockDir).listWorldWritablePaths()).toEqual(
       [],
     );
   });
+
+  // `scripts/verify-check-sandbox.sh`は、workerと同じくボリュームをマウントする。
+  // `-xdev`でもマウントポイントそのものは走査に当たるので、誰でも書ける権限なら毎回止まる。
+  test.each(["/workspaces", "/var/lib/factory"])(
+    "the volume mounted at %s is root's and closed to others",
+    (path) => {
+      const stat = statSync(path);
+      expect({ uid: stat.uid, mode: stat.mode & 0o7777 }).toEqual({
+        uid: 0,
+        mode: 0o755,
+      });
+    },
+  );
 
   test("there are at least as many slots as the worker's processes", () => {
     expect(POOL.length).toBeGreaterThanOrEqual(3);
@@ -1629,5 +1678,82 @@ suite("the slot lock of a run killed while its check escaped", () => {
 
   test("restoring the worktree stops the escaped process", () => {
     expect(processesOf([uid])).toEqual([]);
+  });
+});
+
+suite("world-writable paths created while the worker runs", () => {
+  const slot = POOL[0] ?? 0;
+  const created: string[] = [];
+  /** rootで作り、`mode`にする。 */
+  const rootDir = (path: string, mode: number): string => {
+    mkdirSync(path);
+    chmodSync(path, mode);
+    created.push(path);
+    return path;
+  };
+  let listed: readonly string[] = [];
+
+  beforeAll(async () => {
+    rootDir("/tmp/factory-it-root-open", 0o777);
+    rootDir("/tmp/factory-it-root-sticky", 0o1777);
+    rootDir("/var/tmp/factory-it-root-open", 0o777);
+    const slotDir = "/tmp/factory-it-slot-open";
+    mustRun(
+      [
+        SETPRIV,
+        `--reuid=${String(slot)}`,
+        `--regid=${String(slot)}`,
+        "--clear-groups",
+        "--",
+        "/bin/sh",
+        "-c",
+        `mkdir ${slotDir} && chmod 0777 ${slotDir}`,
+      ],
+      "/",
+    );
+    created.push(slotDir);
+    const openFile = "/etc/factory-it-open";
+    writeFileSync(openFile, "");
+    chmodSync(openFile, 0o666);
+    created.push(openFile);
+    listed = await listWorldWritablePaths(runCommand);
+  });
+
+  afterAll(() => {
+    for (const path of created) rmSync(path, { recursive: true, force: true });
+  });
+
+  test("a directory root left open under /tmp is listed", () => {
+    expect(listed).toContain("/tmp/factory-it-root-open");
+  });
+
+  test("a directory root left open under /var/tmp is listed", () => {
+    expect(listed).toContain("/var/tmp/factory-it-root-open");
+  });
+
+  test("a sticky directory of root under /tmp is not listed", () => {
+    expect(listed).not.toContain("/tmp/factory-it-root-sticky");
+  });
+
+  test("a directory a slot opened under /tmp is not listed", () => {
+    expect(listed).not.toContain("/tmp/factory-it-slot-open");
+  });
+
+  test("a world-writable file outside the shared directories is listed", () => {
+    expect(listed).toContain("/etc/factory-it-open");
+  });
+
+  test("the shared temporary directories themselves are not listed", () => {
+    expect(
+      listed.filter((path) => path === "/tmp" || path === "/var/tmp"),
+    ).toEqual([]);
+  });
+
+  test("a runtime path stops the checks as a runtime problem, not a stale image", async () => {
+    expect(
+      checkEnvironmentError(
+        await checkImageProblems(POOL, defaultSandboxDeps()),
+      ),
+    ).toBeInstanceOf(CheckRuntimeUnsafeError);
   });
 });

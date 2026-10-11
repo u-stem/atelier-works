@@ -7,7 +7,10 @@
 
 import { lstat, readlink } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
-import { CheckImageStaleError } from "../lib/check_sandbox.ts";
+import {
+  CheckEnvironmentError,
+  isCheckEnvironmentReason,
+} from "../lib/check_sandbox.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import {
   isOwnPost,
@@ -2491,14 +2494,20 @@ export async function recordedGitPointerStopReason(
  * pr_fixの完了ステップがcommitの前に止めたとき(`prFixPushGateReason`か`CommitBlockedError`)の遷移を返す。
  * `statusNote`(`work_items.status_reason`に記録する値)にも止めた理由を入れる。
  * このとき直前のステップの`reason`はdoneでnullなので、それを使うと理由が記録に残らないため。
+ * 理由が、workerが検査の前提を満たさないこと(`isCheckEnvironmentReason`)なら、準備と検証のステップの関門と同じく、
+ * `blocked`にして修正のラウンドを記録しない(`recordsRound`がfalse)。Claudeの修正の失敗ではないので、モデルの失敗に数えないためである。
+ * それ以外は`needs_human`にして、止めたラウンドを記録する。
  */
 export function stopBeforeCommitTerminal(stopReason: string): {
-  readonly toStatus: "needs_human";
+  readonly toStatus: "needs_human" | "blocked";
+  readonly recordsRound: boolean;
   readonly discordReason: string;
   readonly statusNote: string;
 } {
+  const environment = isCheckEnvironmentReason(stopReason);
   return {
-    toStatus: "needs_human",
+    toStatus: environment ? "blocked" : "needs_human",
+    recordsRound: !environment,
     discordReason: stopReason,
     statusNote: stopReason,
   };
@@ -2516,7 +2525,7 @@ export type PrFixPushGateDeps = {
  * pr_fixの完了ステップがcommitとpushの前に、worktreeに触れてよいかを確かめ、止める理由を返す(問題が無ければnull)。
  * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
  * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
- * 残った所有権をworkerのイメージが古くて取り戻せないとき(`CheckImageStaleError`)も、そのmessageを返す。
+ * 残った所有権を、workerが検査の前提を満たさず取り戻せないとき(`CheckEnvironmentError`)も、そのmessageを返す。
  * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
  * 最後に、準備ステップの結果にPRのブランチ(`recordedBranch`)があることを確かめ、無ければ`PR_HEAD_NOT_RECORDED_REASON`を返す。
  * `commitAndPush`の`expectedBranch`に渡す値で、無いとpushする先を確かめられないため。
@@ -2530,7 +2539,10 @@ export async function prFixPushGateReason(
   try {
     await deps.ensureLockFree();
   } catch (err) {
-    if (err instanceof WorktreeBusyError || err instanceof CheckImageStaleError)
+    if (
+      err instanceof WorktreeBusyError ||
+      err instanceof CheckEnvironmentError
+    )
       return err.message;
     throw err;
   }
@@ -4033,6 +4045,15 @@ const REASON_RULES: readonly ReasonRule[] = [
       `workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${m[1]})`,
     nextAction: () =>
       `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  // `lib/check_sandbox.ts`の`CheckRuntimeUnsafeError`(同じステップ)。イメージは作り直さず、パスを閉じるかworkerを作り直す。
+  {
+    pattern:
+      /^worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: ([\s\S]+)$/,
+    describe: (m) =>
+      `workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(${m[1]})`,
+    nextAction: () =>
+      `理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
     pattern: /^implementation of the branch's work item is running$/,

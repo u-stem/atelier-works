@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
   buildCheckImageStaleNotice,
+  buildCheckRuntimeUnsafeNotice,
   buildHostActionNotice,
+  CHECK_RUNTIME_NOTICE_KIND,
   extractNoticeSha,
   HOST_ACTION_NOTICE_KIND,
   HOST_ACTION_RECONCILE_LIMIT,
@@ -15,7 +21,7 @@ import {
   type ReconcileDeps,
   readHostAppliedSha,
   reconcileHostActionNotices,
-  recordCheckImageStaleNotice,
+  recordCheckEnvironmentNotice,
   recordHostAction,
 } from "../../f/factory/lib/host_action.ts";
 import { logger } from "../../f/factory/lib/log.ts";
@@ -616,7 +622,7 @@ describe("buildCheckImageStaleNotice", () => {
   });
 });
 
-describe("recordCheckImageStaleNotice", () => {
+describe("recordCheckEnvironmentNotice", () => {
   const harness = (overrides: {
     readonly sha?: () => Promise<string>;
     readonly addNotice?: (record: NoticeRecord) => Promise<number | null>;
@@ -639,9 +645,12 @@ describe("recordCheckImageStaleNotice", () => {
     };
   };
 
+  const STALE = new CheckImageStaleError(["x"]);
+  const RUNTIME = new CheckRuntimeUnsafeError(["/tmp/open", "y"]);
+
   test("adds the notice with the deployed sha", async () => {
     const h = harness({});
-    await recordCheckImageStaleNotice(h.deps, "x");
+    await recordCheckEnvironmentNotice(h.deps, STALE);
     expect(h.notices).toEqual([buildCheckImageStaleNotice(SHA_A, "x")]);
   });
 
@@ -651,13 +660,13 @@ describe("recordCheckImageStaleNotice", () => {
         throw new Error("variable not found");
       },
     });
-    await recordCheckImageStaleNotice(h.deps, "x");
+    await recordCheckEnvironmentNotice(h.deps, STALE);
     expect(h.notices).toEqual([buildCheckImageStaleNotice(null, "x")]);
   });
 
   test("adds the notice without a sha when the deployed value is not a sha", async () => {
     const h = harness({ sha: async () => "main" });
-    await recordCheckImageStaleNotice(h.deps, "x");
+    await recordCheckEnvironmentNotice(h.deps, STALE);
     expect(h.notices).toEqual([buildCheckImageStaleNotice(null, "x")]);
   });
 
@@ -667,7 +676,73 @@ describe("recordCheckImageStaleNotice", () => {
         throw new Error("db down");
       },
     });
-    await recordCheckImageStaleNotice(h.deps, "x");
+    await recordCheckEnvironmentNotice(h.deps, STALE);
     expect(h.lines.join("\n")).toContain("db down");
+  });
+
+  test("adds the runtime notice for a problem of the running worker", async () => {
+    const h = harness({});
+    await recordCheckEnvironmentNotice(h.deps, RUNTIME);
+    expect(h.notices).toEqual([buildCheckRuntimeUnsafeNotice("/tmp/open, y")]);
+  });
+
+  test("does not read the deployed sha for a problem of the running worker", async () => {
+    let reads = 0;
+    const h = harness({
+      sha: async () => {
+        reads += 1;
+        return SHA_A;
+      },
+    });
+    await recordCheckEnvironmentNotice(h.deps, RUNTIME);
+    expect(reads).toBe(0);
+  });
+
+  test("does not throw when the runtime notice cannot be recorded", async () => {
+    const h = harness({
+      addNotice: async () => {
+        throw new Error("db down");
+      },
+    });
+    await recordCheckEnvironmentNotice(h.deps, RUNTIME);
+    expect(h.lines.join("\n")).toContain("db down");
+  });
+});
+
+describe("buildCheckRuntimeUnsafeNotice", () => {
+  test("uses its own notice kind, not the host action one the self update resolves", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").kind).toBe(
+      CHECK_RUNTIME_NOTICE_KIND,
+    );
+  });
+
+  test("carries the paths", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").message).toContain(
+      "/tmp/open",
+    );
+  });
+
+  test("names no version, so that nothing resolves it by itself", () => {
+    expect(
+      extractNoticeSha(buildCheckRuntimeUnsafeNotice(`/tmp/${SHA_A}`).message),
+    ).toBeNull();
+  });
+
+  test("tells the operator to close the paths", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").message).toContain(
+      "chmod o-w",
+    );
+  });
+
+  test("tells the operator how to recreate the worker", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/open").message).toContain(
+      "docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker",
+    );
+  });
+
+  test("escapes Markdown in the paths", () => {
+    expect(buildCheckRuntimeUnsafeNotice("/tmp/[a](b)").message).toContain(
+      "/tmp/\\[a\\]\\(b\\)",
+    );
   });
 });
