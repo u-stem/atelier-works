@@ -187,6 +187,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "factory_repo_id_mismatch",
+    guide(
+      "設定したfactory_repo_idが、factory_repoのGitHubの現在のIDと食い違うか、そのリポジトリが見つかりません。リポジトリが削除されたか、オーナーが改名して別の人がその名前を取得した可能性があります。自己更新は、リポジトリを取得も反映もしていません。",
+      "GitHubで、そのリポジトリが意図した持ち主のものか確かめ、factory_configのfactory_repoとfactory_repo_idを見直してください。",
+      {
+        note: "名前とIDが合うと、次の回から反映が再開します。見直した後に、この通知を解決してください。",
+      },
+    ),
+  ],
+  [
     "deployed_sha_mismatch",
     guide(
       "自己更新が反映した版が、self cloneのHEADに30分を超えて追いついていません。反映が遅れただけでも出ることがあります。",

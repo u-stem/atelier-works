@@ -20,6 +20,12 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells the factory repo id mismatch is fixed in factory_repo and factory_repo_id", () => {
+    expect(noticeGuide("factory_repo_id_mismatch").action).toContain(
+      "factory_repo_id",
+    );
+  });
+
   test("falls back to the generic guide for an unknown kind", () => {
     expect(noticeGuide("future_kind")).toBe(GENERIC_NOTICE_GUIDE);
   });

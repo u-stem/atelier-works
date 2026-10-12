@@ -21,6 +21,7 @@ schema:
     - retention_work_items_days
     - retention_logs_days
     - factory_repo
+    - factory_repo_id
     - factory_branch
     - instance_name
     - windmill_public_url
@@ -115,6 +116,11 @@ schema:
       description: >-
         このSoftware Factory自身のリポジトリのURLです。自分自身を最新化する処理の対象になります。
       format: uri
+    factory_repo_id:
+      type: integer
+      minimum: 1
+      description: >-
+        `factory_repo`のGitHubリポジトリの数値IDです。指定すると、自分自身を最新化する処理が取得の前にGitHubの現在のIDと照合し、食い違うときは反映しません。オーナーが改名して別の人がその名前を取得した場合に、その人のリポジトリを反映しないためです。省略すると名前だけで取得します。
     fix_label:
       type: string
       description: このラベルが付いたPRは修正処理の対象になります。

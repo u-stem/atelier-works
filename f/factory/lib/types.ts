@@ -897,6 +897,13 @@ export type FactoryConfig = {
   retention_logs_days: number;
   factory_repo: string;
   /**
+   * `factory_repo`のGitHubリポジトリの数値ID(正の整数)。
+   * 指定すると、`self_update.ts`が取得の前に現在のIDと照合し、食い違うときは反映しない。
+   * オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを反映しないため。
+   * 省略すると、名前だけで取得する。
+   */
+  factory_repo_id?: number;
+  /**
    * `self_update.ts`がこのSoftware Factory自身のリポジトリから更新するときに
    * 追う`factory_repo`のブランチ。`ensureFactoryClone`が毎回fetchし、
    * `checkout -B`でこのブランチのリモートの状態に合わせる。

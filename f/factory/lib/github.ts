@@ -725,6 +725,29 @@ export async function getAccountId(
 }
 
 /**
+ * リポジトリの現在の数値IDを取得する。
+ * 改名したリポジトリの旧名は、GitHubが新しい名前へ転送するので同じIDが返る。
+ * 名前を別の人が取得したときは、その人のリポジトリのIDが返る。
+ */
+export async function getRepositoryId(
+  client: GhClient,
+  owner: string,
+  repo: string,
+): Promise<number> {
+  const context = "GET /repos/{owner}/{repo}";
+  const response = await callGhApi(
+    client,
+    `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isIdPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.id;
+}
+
+/**
  * Factoryが作るコミットのauthorとcommitterの名義を、viewer
  * (PATが指すGitHubアカウント)から作る。
  * 個人のメールアドレスをコミットに書かないよう、GitHubのnoreplyの形
