@@ -23,6 +23,8 @@ import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
   assertCommitSha,
+  WORKFLOW_RUNS_BY_SHA_MAX_PAGES,
+  WORKFLOW_RUNS_BY_SHA_PER_PAGE,
   WORKFLOW_RUNS_PER_PAGE,
   type WorkflowRun,
 } from "./main_ci_support.ts";
@@ -3218,26 +3220,11 @@ function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
   return typeof value.html_url === "string";
 }
 
-/**
- * `branch`へのpushで始まったworkflowの実行を、新しい順に1ページ(`WORKFLOW_RUNS_PER_PAGE`件)だけ読む。
- * ページ送りはしない。呼び出し側は、1ページが埋まったときの最も古いコミットを、
- * 実行の一部が欠けているものとして扱う(`dropTruncatedTail`)。
- * 応答の形が違う実行や、`head_sha`が完全なコミットshaでない実行があれば例外を投げる。
- * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
- */
-export async function listWorkflowRuns(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  branch: string,
-): Promise<WorkflowRun[]> {
-  validateOwnerRepo(owner, repo);
-  assertBranchName(branch);
-  const endpoint = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}&event=push&per_page=${String(WORKFLOW_RUNS_PER_PAGE)}`;
-  const context = `GET workflow runs ${owner}/${repo}@${branch}`;
-  const response = await callGhApi(client, endpoint);
-  ensureSuccess(response, context);
-  const parsed = parseJsonBody(response, context);
+function toWorkflowRuns(
+  parsed: unknown,
+  context: string,
+  expectedSha: string | undefined,
+): WorkflowRun[] {
   if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
     throw new Error(`${context}: unexpected response shape`);
   }
@@ -3246,6 +3233,9 @@ export async function listWorkflowRuns(
       throw new Error(`${context}: unexpected response shape`);
     }
     assertCommitSha(raw.head_sha);
+    if (expectedSha !== undefined && raw.head_sha !== expectedSha) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
     return {
       id: raw.id,
       name: raw.name ?? "",
@@ -3256,6 +3246,53 @@ export async function listWorkflowRuns(
       htmlUrl: raw.html_url,
     };
   });
+}
+
+/**
+ * `branch`へのpushで始まったworkflowの実行を読む。使い方は2つある。
+ * - `headSha`なし: ブランチの最新の実行を、新しい順に1ページ(`WORKFLOW_RUNS_PER_PAGE`件)だけ読む。
+ *   新しいコミットを見つけるための一覧で、1つのコミットの実行が全部そろっているとは限らない。
+ * - `headSha`あり: そのコミットの実行を、1ページ`WORKFLOW_RUNS_BY_SHA_PER_PAGE`件で最大
+ *   `WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読む。判定に使うのはこちらである。
+ *   上限のページまで埋まったら、実行の一部を読めていないので例外を投げる。
+ *   ブランチも条件に付けるのは、同じコミットを別のブランチにpushした実行を混ぜないため。
+ * `headSha`と、応答の各実行の`head_sha`は、完全なコミットshaでなければ例外を投げる。
+ * 応答の形が違えば例外を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRuns(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+  headSha?: string,
+): Promise<WorkflowRun[]> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const base = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}`;
+  if (headSha === undefined) {
+    const context = `GET workflow runs ${owner}/${repo}@${branch}`;
+    const endpoint = `${base}&event=push&per_page=${String(WORKFLOW_RUNS_PER_PAGE)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    return toWorkflowRuns(parseJsonBody(response, context), context, undefined);
+  }
+  assertCommitSha(headSha);
+  const context = `GET workflow runs ${owner}/${repo}@${headSha}`;
+  const runs: WorkflowRun[] = [];
+  for (let page = 1; page <= WORKFLOW_RUNS_BY_SHA_MAX_PAGES; page += 1) {
+    const endpoint = `${base}&head_sha=${headSha}&event=push&per_page=${String(WORKFLOW_RUNS_BY_SHA_PER_PAGE)}&page=${String(page)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    const items = toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      headSha,
+    );
+    runs.push(...items);
+    if (items.length < WORKFLOW_RUNS_BY_SHA_PER_PAGE) return runs;
+  }
+  throw new Error(`${context}: the runs may be incomplete (too many runs)`);
 }
 
 export type PullRequestUpdate = {

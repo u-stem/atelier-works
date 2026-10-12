@@ -4410,6 +4410,83 @@ describe("listWorkflowRuns", () => {
     ).rejects.toThrow("unexpected response shape");
   });
 
+  describe("by head sha", () => {
+    const page = (count: number, firstId = 1) =>
+      ghApiOk({
+        workflow_runs: Array.from({ length: count }, (_, i) =>
+          rawRun({ id: firstId + i }),
+        ),
+      });
+
+    test("asks for the push runs of that sha on the branch", async () => {
+      const fake = createFakeCommandRunner([page(1)]);
+      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      expect(fake.calls[0]?.argv).toContain(
+        `repos/acme/widgets/actions/runs?branch=main&head_sha=${SHA}&event=push&per_page=100&page=1`,
+      );
+    });
+
+    test("reads one page when it is not full", async () => {
+      const fake = createFakeCommandRunner([page(99)]);
+      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    test("reads the next page when a page is full", async () => {
+      const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
+      const runs = await listWorkflowRuns(
+        client(fake),
+        "acme",
+        "widgets",
+        "main",
+        SHA,
+      );
+      expect(runs).toHaveLength(105);
+    });
+
+    test("asks for the second page with page=2", async () => {
+      const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
+      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      expect(fake.calls[1]?.argv.some((arg) => arg.endsWith("&page=2"))).toBe(
+        true,
+      );
+    });
+
+    test("throws when three pages are all full", async () => {
+      const fake = createFakeCommandRunner([
+        page(100),
+        page(100, 1000),
+        page(100, 2000),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.toThrow("may be incomplete");
+    });
+
+    test("returns an empty list when the sha has no run", async () => {
+      const fake = createFakeCommandRunner([page(0)]);
+      expect(
+        await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).toEqual([]);
+    });
+
+    test("rejects non 40-hex sha before calling the API", async () => {
+      const fake = createFakeCommandRunner([]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", "abc1234"),
+      ).rejects.toThrow("invalid commit sha");
+    });
+
+    test("throws when a run belongs to another sha", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk({ workflow_runs: [rawRun({ head_sha: "b".repeat(40) })] }),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.toThrow("unexpected response shape");
+    });
+  });
+
   test("rejects an invalid owner before calling the API", async () => {
     const fake = createFakeCommandRunner([]);
     await expect(

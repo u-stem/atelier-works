@@ -43,6 +43,7 @@ import {
   isActiveIssueUniqueViolation,
   latestDraft,
   latestFixRound,
+  latestMainCiRunCreatedAt,
   latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
@@ -4437,6 +4438,43 @@ describe("hasMainCiRuns", () => {
     await hasMainCiRuns("acme", "widgets", sql);
     expect(calls[0]?.text).toContain("LIMIT 1");
   });
+
+  test("rejects an invalid owner or repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasMainCiRuns("a b", "widgets", sql).catch(() => undefined);
+    await hasMainCiRuns("acme", "..", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("latestMainCiRunCreatedAt", () => {
+  test("returns the newest recorded run time", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ latest: "2026-10-12T03:00:00.000Z" }],
+    ]);
+    expect(await latestMainCiRunCreatedAt("acme", "widgets", sql)).toEqual(
+      new Date("2026-10-12T03:00:00.000Z"),
+    );
+  });
+
+  test("returns null when no row has a run time", async () => {
+    const { sql } = createFakeSqlClient([[{ latest: null }]]);
+    expect(await latestMainCiRunCreatedAt("acme", "widgets", sql)).toBeNull();
+  });
+
+  test("takes the maximum over every state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ latest: null }]]);
+    await latestMainCiRunCreatedAt("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain("max(run_created_at)");
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestMainCiRunCreatedAt("a b", "widgets", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("listMainCiRunsBySha", () => {
@@ -4445,6 +4483,14 @@ describe("listMainCiRunsBySha", () => {
     await expect(
       listMainCiRunsBySha("acme", "widgets", ["abc"], sql),
     ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listMainCiRunsBySha("a b", "widgets", [CI_SHA], sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
   });
 
   test("returns nothing without querying when no sha is given", async () => {
@@ -4574,6 +4620,14 @@ describe("deleteMainCiRunsBefore", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await deleteMainCiRunsBefore(cutoff, sql);
     expect(calls[0]?.text).toContain("state <> 'pending'");
+  });
+
+  test("keeps the newest row of each repository", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteMainCiRunsBefore(cutoff, sql);
+    expect(calls[0]?.text).toMatch(
+      /EXISTS[\s\S]*newer\.first_seen_at[\s\S]*r\.first_seen_at/,
+    );
   });
 
   test("ages a row by its updated_at", async () => {

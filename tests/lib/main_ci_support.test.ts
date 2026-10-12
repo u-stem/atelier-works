@@ -5,7 +5,6 @@ import {
   buildFailureSummary,
   classifyRuns,
   decideState,
-  dropTruncatedTail,
   groupRunsBySha,
   isCommitSha,
   isMainCiState,
@@ -171,29 +170,62 @@ describe("settle", () => {
 });
 
 describe("decideState", () => {
-  test("deadline expires pending", () => {
-    const stuck = run({ status: "in_progress", conclusion: null });
+  const stuck = run({ status: "in_progress", conclusion: null });
+
+  test("deadline expires pending, counted from the oldest run", () => {
     const state = decideState({
-      runs: [stuck],
+      runs: [
+        {
+          ...stuck,
+          createdAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
+        },
+      ],
+      runCreatedAt: null,
+      firstSeenAt: minutesBefore(1),
+      now: NOW,
+    });
+    expect(state).toBe("expired");
+  });
+
+  test("stays pending before the deadline of the oldest run", () => {
+    const state = decideState({
+      runs: [
+        {
+          ...stuck,
+          createdAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS + 1000),
+        },
+      ],
+      runCreatedAt: null,
+      firstSeenAt: minutesBefore(24 * 60),
+      now: NOW,
+    });
+    expect(state).toBe("pending");
+  });
+
+  test("counts the deadline from the recorded run time when no runs were read", () => {
+    const state = decideState({
+      runs: null,
+      runCreatedAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
+      firstSeenAt: minutesBefore(1),
+      now: NOW,
+    });
+    expect(state).toBe("expired");
+  });
+
+  test("counts the deadline from the first seen time when no run time is known", () => {
+    const state = decideState({
+      runs: null,
+      runCreatedAt: null,
       firstSeenAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
       now: NOW,
     });
     expect(state).toBe("expired");
   });
 
-  test("stays pending before the deadline", () => {
-    const stuck = run({ status: "in_progress", conclusion: null });
-    const state = decideState({
-      runs: [stuck],
-      firstSeenAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS + 1000),
-      now: NOW,
-    });
-    expect(state).toBe("pending");
-  });
-
   test("a verdict from the latest runs wins over the deadline", () => {
     const state = decideState({
-      runs: [run({ conclusion: "failure" })],
+      runs: [run({ conclusion: "failure", createdAt: minutesBefore(24 * 60) })],
+      runCreatedAt: null,
       firstSeenAt: minutesBefore(24 * 60),
       now: NOW,
     });
@@ -203,6 +235,7 @@ describe("decideState", () => {
   test("no runs becomes no_ci", () => {
     const state = decideState({
       runs: [],
+      runCreatedAt: null,
       firstSeenAt: new Date(NOW.getTime() - NO_CI_AFTER_MS),
       now: NOW,
     });
@@ -212,7 +245,18 @@ describe("decideState", () => {
   test("no runs stays pending before the no_ci wait", () => {
     const state = decideState({
       runs: [],
+      runCreatedAt: null,
       firstSeenAt: new Date(NOW.getTime() - NO_CI_AFTER_MS + 1000),
+      now: NOW,
+    });
+    expect(state).toBe("pending");
+  });
+
+  test("runs that were not read never become no_ci", () => {
+    const state = decideState({
+      runs: null,
+      runCreatedAt: null,
+      firstSeenAt: minutesBefore(60),
       now: NOW,
     });
     expect(state).toBe("pending");
@@ -221,6 +265,7 @@ describe("decideState", () => {
   test("passed once every run completed and settled", () => {
     const state = decideState({
       runs: [run()],
+      runCreatedAt: null,
       firstSeenAt: minutesBefore(3),
       now: NOW,
     });
@@ -246,32 +291,6 @@ describe("groupRunsBySha", () => {
   });
 });
 
-describe("dropTruncatedTail", () => {
-  test("keeps every group when the page is not full", () => {
-    const groups = groupRunsBySha([
-      run({ headSha: SHA_A }),
-      run({ id: 2, headSha: SHA_B, createdAt: minutesBefore(20) }),
-    ]);
-    expect(dropTruncatedTail(groups, 3).map((g) => g.headSha)).toEqual([
-      SHA_A,
-      SHA_B,
-    ]);
-  });
-
-  test("drops the oldest group when the page is full", () => {
-    const groups = groupRunsBySha([
-      run({ headSha: SHA_A }),
-      run({ id: 2, headSha: SHA_B, createdAt: minutesBefore(20) }),
-    ]);
-    expect(dropTruncatedTail(groups, 2).map((g) => g.headSha)).toEqual([SHA_A]);
-  });
-
-  test("returns nothing when one group fills the page", () => {
-    const groups = groupRunsBySha([run(), run({ id: 2 })]);
-    expect(dropTruncatedTail(groups, 2)).toEqual([]);
-  });
-});
-
 describe("previousShaOf", () => {
   const groups = groupRunsBySha([
     run({ headSha: SHA_A, createdAt: minutesBefore(5) }),
@@ -293,22 +312,62 @@ describe("previousShaOf", () => {
 });
 
 describe("planNewShas", () => {
+  const candidate = (headSha: string, minutes: number) => ({
+    headSha,
+    runCreatedAt: minutesBefore(minutes),
+  });
+
   test("first observation records baseline without notice", () => {
-    const plan = planNewShas([SHA_A, SHA_B], new Set(), false);
-    expect(plan).toEqual([
-      { headSha: SHA_A, state: "baseline" },
-      { headSha: SHA_B, state: "baseline" },
+    const plan = planNewShas(
+      [candidate(SHA_A, 5), candidate(SHA_B, 20)],
+      new Set(),
+      false,
+      null,
+    );
+    expect(plan.map((p) => [p.headSha, p.state])).toEqual([
+      [SHA_A, "baseline"],
+      [SHA_B, "baseline"],
     ]);
   });
 
   test("a sha seen after the first observation is pending", () => {
-    const plan = planNewShas([SHA_A, SHA_B], new Set([SHA_B]), true);
-    expect(plan).toEqual([{ headSha: SHA_A, state: "pending" }]);
+    const plan = planNewShas(
+      [candidate(SHA_A, 5), candidate(SHA_B, 20)],
+      new Set([SHA_B]),
+      true,
+      minutesBefore(20),
+    );
+    expect(plan.map((p) => [p.headSha, p.state])).toEqual([[SHA_A, "pending"]]);
   });
 
-  test("a repo with recorded shas never baselines a new sha", () => {
-    const plan = planNewShas([SHA_A], new Set(), true);
+  test("a sha older than the newest recorded run is baseline", () => {
+    const plan = planNewShas(
+      [candidate(SHA_A, 60)],
+      new Set(),
+      true,
+      minutesBefore(20),
+    );
+    expect(plan[0]?.state).toBe("baseline");
+  });
+
+  test("a sha as new as the newest recorded run is pending", () => {
+    const plan = planNewShas(
+      [candidate(SHA_A, 20)],
+      new Set(),
+      true,
+      minutesBefore(20),
+    );
     expect(plan[0]?.state).toBe("pending");
+  });
+
+  test("a repo whose rows have no run time pends a new sha", () => {
+    const plan = planNewShas([candidate(SHA_A, 60)], new Set(), true, null);
+    expect(plan[0]?.state).toBe("pending");
+  });
+
+  test("carries the run time of each planned sha", () => {
+    const plan = planNewShas([candidate(SHA_A, 5)], new Set(), false, null);
+    expect(plan[0]?.runCreatedAt).toEqual(minutesBefore(5));
   });
 });
 
@@ -319,6 +378,10 @@ describe("isPrevFailed", () => {
         isPrevFailed,
       ),
     ).toEqual([true, false, false, false, false, false, false]);
+  });
+
+  test("does not count a previous commit that is still pending", () => {
+    expect(isPrevFailed("pending")).toBe(false);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   hasMainCiRuns,
   insertCleanupRun,
   insertWorkItem,
+  latestMainCiRunCreatedAt,
   listMainCiRunsBySha,
   listPendingMainCiRuns,
   listUnresolvedNoticesByKind,
@@ -1688,6 +1689,57 @@ check(
       )
     ).length === 1,
   ciDeleted,
+);
+// 掃除は、リポジトリごとの最新の行を残す。保持期間の後も、初回の観測に戻らない。
+const KEEP_REPO = { owner: "qdb", repo: "keep" };
+const CI_SHA_D = "d".repeat(40);
+const CI_SHA_E = "e".repeat(40);
+await recordMainCiRun(
+  {
+    ...KEEP_REPO,
+    head_sha: CI_SHA_D,
+    state: "baseline",
+    run_created_at: new Date("2026-10-11T00:00:00Z"),
+  },
+  sql,
+);
+await recordMainCiRun(
+  {
+    ...KEEP_REPO,
+    head_sha: CI_SHA_E,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'keep'",
+);
+await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+const keptRows = await listMainCiRunsBySha(
+  KEEP_REPO.owner,
+  KEEP_REPO.repo,
+  [CI_SHA_D, CI_SHA_E],
+  sql,
+);
+check(
+  "main_ci_runs: cleanup keeps the newest row of the repository",
+  keptRows.map((row) => row.head_sha).join(",") === CI_SHA_E,
+  keptRows,
+);
+check(
+  "main_ci_runs: the repository is not a first observation after the cleanup",
+  (await hasMainCiRuns(KEEP_REPO.owner, KEEP_REPO.repo, sql)) === true,
+);
+check(
+  "main_ci_runs: the newest run time survives the cleanup",
+  (
+    await latestMainCiRunCreatedAt(KEEP_REPO.owner, KEEP_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z",
 );
 execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
 

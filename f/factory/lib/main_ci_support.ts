@@ -59,7 +59,10 @@ export function isMainCiState(value: unknown): value is MainCiState {
 // 実行の判定
 // ---------------------------------------------------------------------------
 
-/** GitHub Actionsのworkflowの実行1件。`listWorkflowRuns`が検証してから返す。 */
+/**
+ * GitHub Actionsのworkflowの実行1件。`listWorkflowRuns`が形を検証してから返す。
+ * `headSha`は完全なコミットshaに検証済み。`htmlUrl`は未検証で、通知に載せる前に`parseRunUrl`を通す。
+ */
 export type WorkflowRun = {
   readonly id: number;
   readonly name: string;
@@ -86,8 +89,17 @@ export const NO_CI_AFTER_MS = 15 * 60_000;
 /** 未完了のまま、最初に見てからこの時間がたったら`expired`にする。 */
 export const PENDING_EXPIRES_AFTER_MS = 2 * 60 * 60_000;
 
-/** `listWorkflowRuns`が1回に読む件数。 */
+/** 新しいコミットを見つけるために、ブランチの実行を読む件数(1ページだけ)。 */
 export const WORKFLOW_RUNS_PER_PAGE = 20;
+
+/** 1つのコミットの実行を読むときの、1ページの件数。 */
+export const WORKFLOW_RUNS_BY_SHA_PER_PAGE = 100;
+
+/**
+ * 1つのコミットの実行を読むときの、ページ数の上限。
+ * 上限まで埋まったら、実行の一部を読めていないので、判定せずに例外にする。
+ */
+export const WORKFLOW_RUNS_BY_SHA_MAX_PAGES = 3;
 
 const PASSING_CONCLUSIONS: readonly string[] = [
   "success",
@@ -141,8 +153,14 @@ export function settle(runs: readonly WorkflowRun[], now: Date): RunVerdict {
 }
 
 export type DecideStateInput = {
-  /** 直前に取り直した、そのコミットの実行。 */
-  readonly runs: readonly WorkflowRun[];
+  /**
+   * そのコミットについて取り直した実行。
+   * 空の配列は「照会して0件だった」ことを表す。`null`は「照会できなかった」ことを表し、
+   * 実行が無いとは判断しない(`no_ci`にしない)。
+   */
+  readonly runs: readonly WorkflowRun[] | null;
+  /** 行に記録している最古の実行の作成時刻。`runs`を読めなかったときの期限の起点に使う。 */
+  readonly runCreatedAt: Date | null;
   /** そのコミットを最初に見た時刻(`first_seen_at`)。 */
   readonly firstSeenAt: Date;
   readonly now: Date;
@@ -152,18 +170,32 @@ export type DecideStateInput = {
  * 保留中のコミットの、今の状態を決める。
  * 実行から確定できるなら、期限より先にその結果を返す。期限で落とす前に、
  * 取り直した最新の実行で最後の判定をするため。
- * 確定できず、実行が無いまま`NO_CI_AFTER_MS`がたてば`no_ci`、
- * 最初に見てから`PENDING_EXPIRES_AFTER_MS`がたてば`expired`、それまでは`pending`。
+ * 確定できないとき:
+ * - 照会して実行が0件のまま、最初に見てから`NO_CI_AFTER_MS`がたてば`no_ci`。
+ * - 最古の実行の作成時刻から`PENDING_EXPIRES_AFTER_MS`がたてば`expired`。
+ *   実行を読めていなければ、記録した最古の実行の作成時刻、それも無ければ最初に見た時刻から数える。
+ *   実行がpushの直後に作られるので、見つけるのが遅れたコミットも、実行の開始から数えて期限を決められる。
+ * - それ以外は`pending`。
  */
 export function decideState(
   input: DecideStateInput,
 ): "pending" | MainCiSettledState {
-  const verdict = settle(input.runs, input.now);
-  if (verdict !== "pending") return verdict;
-  const waitedMs = input.now.getTime() - input.firstSeenAt.getTime();
-  if (input.runs.length === 0 && waitedMs >= NO_CI_AFTER_MS) return "no_ci";
-  if (waitedMs >= PENDING_EXPIRES_AFTER_MS) return "expired";
-  return "pending";
+  const { runs, now } = input;
+  if (runs !== null) {
+    const verdict = settle(runs, now);
+    if (verdict !== "pending") return verdict;
+  }
+  const seenMs = now.getTime() - input.firstSeenAt.getTime();
+  if (runs !== null && runs.length === 0 && seenMs >= NO_CI_AFTER_MS) {
+    return "no_ci";
+  }
+  const startedAt =
+    runs !== null && runs.length > 0
+      ? new Date(Math.min(...runs.map((run) => run.createdAt.getTime())))
+      : (input.runCreatedAt ?? input.firstSeenAt);
+  return now.getTime() - startedAt.getTime() >= PENDING_EXPIRES_AFTER_MS
+    ? "expired"
+    : "pending";
 }
 
 // ---------------------------------------------------------------------------
@@ -203,31 +235,6 @@ export function groupRunsBySha(runs: readonly WorkflowRun[]): ShaGroup[] {
   );
 }
 
-/**
- * 1ページが埋まっているとき、最も古いコミットのグループを外して返す。
- * 一覧は1ページ分しか読まないので、最も古いコミットは、実行の一部がページの外にあるかもしれない。
- * 一部だけを見て`passed`と決めると、見えていない失敗を見逃す。
- * 1ページに満たなければ、すべての実行を読めているので、そのまま返す。
- */
-export function dropTruncatedTail(
-  groups: readonly ShaGroup[],
-  perPage: number,
-): ShaGroup[] {
-  const total = groups.reduce((sum, group) => sum + group.runs.length, 0);
-  if (total < perPage) return [...groups];
-  let oldestIndex = -1;
-  for (const [index, group] of groups.entries()) {
-    const current = groups[oldestIndex];
-    if (
-      current === undefined ||
-      group.oldestCreatedAt.getTime() <= current.oldestCreatedAt.getTime()
-    ) {
-      oldestIndex = index;
-    }
-  }
-  return groups.filter((_, index) => index !== oldestIndex);
-}
-
 /** 新しい順の`groups`で、`headSha`の1つ前(次に古い)コミットのshaを返す。無ければnull。 */
 export function previousShaOf(
   groups: readonly ShaGroup[],
@@ -238,29 +245,50 @@ export function previousShaOf(
   return groups[index + 1]?.headSha ?? null;
 }
 
+/** 一覧で見つけたコミットと、その最古の実行の作成時刻。 */
+export type CandidateSha = {
+  readonly headSha: string;
+  readonly runCreatedAt: Date;
+};
+
 export type PlannedSha = {
   readonly headSha: string;
   readonly state: "baseline" | "pending";
+  readonly runCreatedAt: Date;
 };
 
 /**
- * 一覧に現れたshaのうち、まだ記録していないものを、どの状態で記録するか決める。
- * そのリポジトリに記録が1件も無い(初回の観測)ときは、すべて`baseline`にして通知しない。
- * 既存の履歴を一度に失敗として通知しないため。
- * 記録が1件でもあれば、新しいshaは`pending`で記録する。
+ * 一覧で見つけたコミットのうち、まだ記録していないものを、どの状態で記録するか決める。
+ * 次のコミットは`baseline`にして、通知しない。
+ * - そのリポジトリに記録が1件も無い(初回の観測)。既存の履歴を一度に失敗として通知しないため。
+ * - 記録済みの最新の実行(`latestRunCreatedAt`)より古い。掃除で消えた行のコミットが
+ *   一覧に残っていて、古い失敗を新しく通知するのを防ぐため。
+ * それ以外の新しいコミットは`pending`で記録する。
  */
 export function planNewShas(
-  shas: readonly string[],
+  candidates: readonly CandidateSha[],
   known: ReadonlySet<string>,
   repoHasRows: boolean,
+  latestRunCreatedAt: Date | null,
 ): PlannedSha[] {
-  const state = repoHasRows ? "pending" : "baseline";
-  return shas
-    .filter((headSha) => !known.has(headSha))
-    .map((headSha) => ({ headSha, state }));
+  return candidates
+    .filter((candidate) => !known.has(candidate.headSha))
+    .map((candidate) => ({
+      ...candidate,
+      state:
+        !repoHasRows ||
+        (latestRunCreatedAt !== null &&
+          candidate.runCreatedAt.getTime() < latestRunCreatedAt.getTime())
+          ? "baseline"
+          : "pending",
+    }));
 }
 
-/** 1つ前のコミットが失敗だったか。`baseline`など、失敗と分からない状態は`false`にする。 */
+/**
+ * 1つ前のコミットが失敗だったか。
+ * `baseline`など、失敗と分からない状態は`false`にする。
+ * 1つ前のコミットがまだ`pending`のときも`false`で、その後に失敗が確定しても、記録済みの値は更新しない。
+ */
 export function isPrevFailed(prevState: string | null): boolean {
   return prevState === "failed";
 }

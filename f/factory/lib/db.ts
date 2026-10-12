@@ -3138,19 +3138,44 @@ export async function recordMainCiRun(
 
 /**
  * そのリポジトリに記録が1件でもあるか。
- * 無ければ初回の観測なので、見えている既存のコミットを`baseline`で記録する。
+ * 無ければ初回の観測なので、見つけた既存のコミットを`baseline`で記録する。
+ * 掃除は各リポジトリの最新の行を残すので、保持期間がたっても`false`には戻らない。
  */
 export async function hasMainCiRuns(
   owner: string,
   repo: string,
   sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
   const rows = await sql`
     SELECT id FROM factory.main_ci_runs
     WHERE owner = ${owner} AND repo = ${repo}
     LIMIT 1
   `.fetch();
   return rows.length > 0;
+}
+
+/**
+ * そのリポジトリの記録済みの行のうち、最も新しい`run_created_at`を返す。
+ * どの状態の行も数える。実行の時刻を持つ行が無ければnull。
+ * これより古いコミットは、新しく見つけても通知の対象にしない(`planNewShas`)。
+ */
+export async function latestMainCiRunCreatedAt(
+  owner: string,
+  repo: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<Date | null> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT max(run_created_at) AS latest FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+  `.fetch();
+  const latest = rows[0]?.latest;
+  return latest === null || latest === undefined
+    ? null
+    : parseDate(latest, "latest");
 }
 
 /** `shas`のうち、記録済みのコミットの行を返す。`shas`が空ならDBに触れない。 */
@@ -3160,6 +3185,8 @@ export async function listMainCiRunsBySha(
   shas: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<MainCiRun[]> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
   for (const sha of shas) assertCommitSha(sha);
   if (shas.length === 0) return [];
   const rows = await sql`
@@ -3174,7 +3201,7 @@ export async function listMainCiRunsBySha(
 
 /**
  * 判定を待っていて、次の照会の時刻が来ている行を、最初に見た順に最大`limit`件返す。
- * 権限エラーの後に`deferMainCiRun`で先送りした行は、その時刻まで返さない。
+ * `next_check_at`が未来の行(`deferMainCiRun`で先送りした行)は返さない。
  */
 export async function listPendingMainCiRuns(
   limit: number,
@@ -3229,8 +3256,9 @@ export type MainCiDeferral = {
 };
 
 /**
- * 判定を待っている行の、次の照会の時刻を先に延ばす。移したら`true`を返す。
- * 権限エラーの後に照会の間隔を広げるのに使う。待ちの行は止めない。
+ * 判定を待っている行の、次の照会の時刻を先に延ばす。延ばしたら`true`を返す。
+ * 行は`pending`のままで、延ばした時刻までは`listPendingMainCiRuns`が返さない。
+ * 条件は`state = 'pending'`なので、判定が済んだ行は書き換えない。
  */
 export async function deferMainCiRun(
   id: number,
@@ -3251,16 +3279,24 @@ export async function deferMainCiRun(
 /**
  * 判定が済んだ(`pending`以外の)行のうち、`updated_at`が`olderThan`以前のものを削除し、行数を返す。
  * 判定を待っている行は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
+ * 各リポジトリで`first_seen_at`が最も新しい1行(同時刻なら`id`が大きい行)は、判定済みでも削除しない。
+ * リポジトリの記録を空に戻すと、初回の観測と見なして既存のコミットを`baseline`で記録し直すため、
+ * `hasMainCiRuns`と`latestMainCiRunCreatedAt`が保持期間の後も値を保てるようにする。
  */
 export async function deleteMainCiRunsBefore(
   olderThan: Date,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const rows = await sql`
-    DELETE FROM factory.main_ci_runs
-    WHERE state <> 'pending'
-      AND updated_at <= ${olderThan.toISOString()}::timestamptz
-    RETURNING id
+    DELETE FROM factory.main_ci_runs AS r
+    WHERE r.state <> 'pending'
+      AND r.updated_at <= ${olderThan.toISOString()}::timestamptz
+      AND EXISTS (
+        SELECT 1 FROM factory.main_ci_runs AS newer
+        WHERE newer.owner = r.owner AND newer.repo = r.repo
+          AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
+      )
+    RETURNING r.id
   `.fetch();
   return rows.length;
 }
