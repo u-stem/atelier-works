@@ -20,8 +20,10 @@ import {
   dependabotReason,
   dependabotTimeoutMisfit,
   evaluatePostInstallStatus,
+  fencedBlockMaxLength,
   fenceUntrustedBlock,
   POST_INSTALL_STATUS_ARGV,
+  sanitizedProseMaxLength,
   sanitizeUntrustedProse,
   UNTRUSTED_PROSE_TRUNCATION_MARK,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
@@ -572,6 +574,12 @@ describe("sanitizeUntrustedProse", () => {
   test("replaces an uppercase scheme URL", () => {
     expect(sanitizeUntrustedProse("see HTTPS://EVIL.example now", 100)).toBe(
       "see \\[URL\\] now",
+    );
+  });
+
+  test("replaces an ftp URL", () => {
+    expect(sanitizeUntrustedProse("get ftp://evil.example/x now", 100)).toBe(
+      "get \\[URL\\] now",
     );
   });
 
@@ -1921,7 +1929,7 @@ describe("fenceUntrustedBlock", () => {
   ].join("\n");
 
   test("puts the sanitized text between fences with newlines around them", () => {
-    expect(fenceUntrustedBlock("hello", 100)).toBe("\n```\nhello\n```\n");
+    expect(fenceUntrustedBlock("hello", 100)).toBe("\n\n```\nhello\n```\n");
   });
 
   test("returns an empty string for an empty text", () => {
@@ -1941,7 +1949,9 @@ describe("fenceUntrustedBlock", () => {
   });
 
   test("starts with the opening fence", () => {
-    expect(fenceUntrustedBlock(HOSTILE, 1000).startsWith("\n```\n")).toBe(true);
+    expect(fenceUntrustedBlock(HOSTILE, 1000).startsWith("\n\n```\n")).toBe(
+      true,
+    );
   });
 
   test("ends with the closing fence", () => {
@@ -1957,7 +1967,7 @@ describe("fenceUntrustedBlock", () => {
   test("has only the sanitized text between the fences", () => {
     const block = fenceUntrustedBlock(HOSTILE, 1000);
 
-    expect(block.slice(5, -5)).toBe(sanitizeUntrustedProse(HOSTILE, 1000));
+    expect(block.slice(6, -5)).toBe(sanitizeUntrustedProse(HOSTILE, 1000));
   });
 
   test("does not let a text with a backtick fence close the block", () => {
@@ -1998,11 +2008,94 @@ describe("fenceUntrustedBlock", () => {
 
   test("cuts the text at the limit inside the block", () => {
     expect(fenceUntrustedBlock("a".repeat(100), 10)).toBe(
-      `\n\`\`\`\n${"a".repeat(10)}${UNTRUSTED_PROSE_TRUNCATION_MARK}\n\`\`\`\n`,
+      `\n\n\`\`\`\n${"a".repeat(10)}${UNTRUSTED_PROSE_TRUNCATION_MARK}\n\`\`\`\n`,
     );
   });
 
   test("carries no info string after the opening fence", () => {
-    expect(fenceUntrustedBlock("x", 100).split("\n")[1]).toBe("```");
+    expect(fenceUntrustedBlock("x", 100).split("\n")[2]).toBe("```");
   });
+});
+
+describe("fenceUntrustedBlock after an HTML block", () => {
+  const BLOCK = fenceUntrustedBlock("[a](javascript:x)\n@everyone", 100);
+
+  test("puts an empty line between the preceding HTML line and the opening fence", () => {
+    const lines = `<details><summary>s</summary>${BLOCK}`.split("\n");
+
+    expect(lines.slice(0, 3)).toEqual([
+      "<details><summary>s</summary>",
+      "",
+      "```",
+    ]);
+  });
+
+  test("puts an empty line before the opening fence when the caller adds a newline", () => {
+    const lines = `<details><summary>s</summary>\n${BLOCK}`.split("\n");
+
+    expect(lines.slice(1, 3)).toEqual(["", ""]);
+  });
+
+  test("lets the caller close the HTML block right after the closing fence", () => {
+    expect(`${BLOCK}</details>`.endsWith("\n```\n</details>")).toBe(true);
+  });
+});
+
+// ---- 出力の長さの上限 ----
+
+describe("sanitizedProseMaxLength and fencedBlockMaxLength", () => {
+  const WORST_CASES: [string, string][] = [
+    ["fences and tildes", "```~~~".repeat(1000)],
+    ["fences after backslashes", "\\```".repeat(1000)],
+    ["brackets", "[]".repeat(1000)],
+    ["angle brackets", "<".repeat(5000)],
+    ["mentions", "@a".repeat(3000)],
+    ["issue references", "#1".repeat(3000)],
+    ["URLs", "https://e.example/x ".repeat(1000)],
+    ["plain text", "a".repeat(5000)],
+    ["emoji", "😀".repeat(5000)],
+  ];
+
+  test("counts a placeholder as at most fourteen characters", () => {
+    expect(sanitizeUntrustedProse("```", 1).length).toBe(14);
+  });
+
+  test.each(WORST_CASES)(
+    "keeps the sanitized text within the bound for %s",
+    (_label, input) => {
+      expect(sanitizeUntrustedProse(input, 50).length).toBeLessThanOrEqual(
+        sanitizedProseMaxLength(50),
+      );
+    },
+  );
+
+  test.each(WORST_CASES)(
+    "keeps the fenced block within the bound for %s",
+    (_label, input) => {
+      expect(fenceUntrustedBlock(input, 50).length).toBeLessThanOrEqual(
+        fencedBlockMaxLength(50),
+      );
+    },
+  );
+
+  test("reaches the bound for the worst case, so that the bound is not loose", () => {
+    expect(fenceUntrustedBlock("```~~~".repeat(1000), 50).length).toBe(
+      fencedBlockMaxLength(50),
+    );
+  });
+
+  test("allows for the fences and newlines", () => {
+    expect(fencedBlockMaxLength(1) - sanitizedProseMaxLength(1)).toBe(11);
+  });
+
+  test("grows with the limit", () => {
+    expect(fencedBlockMaxLength(100)).toBeGreaterThan(fencedBlockMaxLength(50));
+  });
+
+  test.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "is zero when the limit is %p, where nothing is returned",
+    (limit) => {
+      expect(fencedBlockMaxLength(limit)).toBe(0);
+    },
+  );
 });

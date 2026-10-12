@@ -32,7 +32,7 @@ locks:
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
   f/factory/lib/db: 211b54c11a7bf2524abb6268af8edd1ddf5190e72b3a2319fb29d1cd7397a7e0
   f/factory/lib/dependabot_collect: 7c972e73e6b83436a5ac0e4ef9debf0480c545ce5619426efc31e5a64892f016
-  f/factory/lib/dependabot_flow_support: 0d5f0d28712ae2997d73d06d6edf6db7343d25d139ffb27784ea96d5bbb864ff
+  f/factory/lib/dependabot_flow_support: db3a8b4062a3d73be9eaf736566e0ef3cf80ff9741b1dbca447c4b478c7cd115
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
   f/factory/lib/dependabot_registry: 4d5befcd7003bcf4af33b4909718a618899132874dd656bbdfde93ab128e7fca
   f/factory/lib/dependabot_support: c778f65309eda258518db01372a7d341e7c41871982dfe3e557a5f780663289a

@@ -296,7 +296,7 @@ export const UNTRUSTED_PROSE_TRUNCATION_MARK = " [truncated]";
 const MAX_PROSE_INPUT_UNITS = 1_000_000;
 
 const CODE_FENCE = /`{3,}|~{3,}/g;
-const URL_PATTERN = /https?:\/\/\S+/gi;
+const URL_PATTERN = /(?:https?|ftp):\/\/\S+/gi;
 // GFMは、スキームの無い`www.`で始まる語もリンクとして描く。
 // 直前が空白、`*`、`_`、`~`、`(`、行頭のときに成り立つので、直前が英数字でないことだけを条件にする。
 // `\b`では、`_`が単語文字のため`_www.`を取りこぼす。
@@ -307,7 +307,7 @@ const HTML_COMMENT = /<!--[\s\S]*?(?:-->|--!>|$)/g;
 const COMMENT_REMOVAL_PASSES = 3;
 
 // 置き換えの途中で、本文に現れた文字列と区別するための印。私用領域の文字なので、入力からは先に取り除く。
-// 角括弧のエスケープを終えた後に、`[URL]`と`[code fence]`へ戻す。
+// 角括弧のエスケープを終えた後に、角括弧をエスケープした`\[URL\]`と`\[code fence\]`へ戻す。
 const URL_TOKEN = "\ue000";
 const FENCE_TOKEN = "\ue001";
 
@@ -350,10 +350,19 @@ function escapeLinkBrackets(text: string): string {
 }
 
 // 戻した印は角括弧をエスケープする。後ろに`(`や`:`が続いても、リンクと参照リンクの定義にならない。
+const URL_PLACEHOLDER = "\\[URL\\]";
+const FENCE_PLACEHOLDER = "\\[code fence\\]";
+
+/** 印1つが、戻した後に占める文字数の最大。切り詰めは印を1文字として数えるので、結果の長さの上限に効く。 */
+const MAX_PLACEHOLDER_LENGTH = Math.max(
+  URL_PLACEHOLDER.length,
+  FENCE_PLACEHOLDER.length,
+);
+
 function restoreTokens(text: string): string {
   return text
-    .replaceAll(URL_TOKEN, "\\[URL\\]")
-    .replaceAll(FENCE_TOKEN, "\\[code fence\\]");
+    .replaceAll(URL_TOKEN, URL_PLACEHOLDER)
+    .replaceAll(FENCE_TOKEN, FENCE_PLACEHOLDER);
 }
 
 /** コメントの開き`<!--`が1つも残らないように取り除く。取り除いた後につながって現れたものも取り除く。 */
@@ -444,7 +453,7 @@ function takeCodePoints(
  * 6. `maxChars`コードポイントでの切り詰め。切ったときは末尾に`UNTRUSTED_PROSE_TRUNCATION_MARK`を付ける。
  *    `\[URL\]`と`\[code fence\]`は1文字として数え、途中では切らない。
  * 7. `<!--`が残らないことの最終確認と、`sanitizePrProse`による`<`、`#<数字>`、`@<英数字>`、見出しの行の中和。
- * 切り詰めの後にエスケープするので、結果は`maxChars`をエスケープと印の分だけ超えうる。
+ * 切り詰めの後にエスケープと印の展開をするので、結果は`maxChars`を超えうる。上限は`sanitizedProseMaxLength`が返す。
  * 結果には`<!--`が1つも残らず、`<`もエスケープされるので、
  * 本文の最後の行がFactoryの目印として読まれることはない。
  * `maxChars`が1未満か有限でないときは、空文字を返す。
@@ -476,6 +485,37 @@ export function sanitizeUntrustedProse(text: string, maxChars: number): string {
 }
 
 /**
+ * `sanitizeUntrustedProse(text, maxChars)`が返す文字列の長さの上限を返す。
+ * 切り詰めは、角括弧のエスケープの後の文字を数え、置き換えの印は1文字として数える。
+ * そのため、結果は`maxChars`を、次の分だけ超える。
+ * - 印の展開: 1文字が最大で`MAX_PLACEHOLDER_LENGTH`(14)文字になる。
+ * - 切り詰めの印`UNTRUSTED_PROSE_TRUNCATION_MARK`。
+ * 切り詰めの後のエスケープ(`\<`、`\#`、`\@`)は1文字を最大で2文字にするが、展開の上限に収まる。
+ * `maxChars`が`sanitizeUntrustedProse`の空文字を返す値(1未満か有限でない)のときは0を返す。
+ */
+export function sanitizedProseMaxLength(maxChars: number): number {
+  if (!Number.isFinite(maxChars) || maxChars < 1) return 0;
+  return (
+    Math.floor(maxChars) * MAX_PLACEHOLDER_LENGTH +
+    UNTRUSTED_PROSE_TRUNCATION_MARK.length
+  );
+}
+
+/** 囲みの前の改行2つ、囲み、本文の前後の改行、閉じる囲み、最後の改行を合わせた長さ。囲みは3つのバッククォートである。 */
+const FENCED_BLOCK_OVERHEAD = 2 + 3 + 1 + 1 + 3 + 1;
+
+/**
+ * `fenceUntrustedBlock(text, maxChars)`が返す文字列の長さの上限を返す。
+ * `sanitizedProseMaxLength`に、囲みと改行の分(11文字)を足す。
+ * 無害化した本文には3つ以上のバッククォートの連続が残らないので、囲みは3つになる。
+ * 呼び出し側は、この値をGitHubの本文の長さの制限と比べて、上限を決める。
+ */
+export function fencedBlockMaxLength(maxChars: number): number {
+  const prose = sanitizedProseMaxLength(maxChars);
+  return prose === 0 ? 0 : prose + FENCED_BLOCK_OVERHEAD;
+}
+
+/**
  * `text`に含まれるバッククォートの最長の連続より1つ長い、コードブロックの囲みを返す(最低でも3つ)。
  * 本文の中の連続が囲み以上に長いと、本文が囲みを閉じて外に出るため。チルダの囲みは使わない。
  */
@@ -495,7 +535,13 @@ export function codeFenceFor(text: string): string {
  * 無害化だけでは構文の取りこぼしが残りうるので、PRのレビューやコメントに信頼できない文章を載せるときは、
  * 無害化に加えて必ずこの関数を通す。ClaudeのevidenceとsupplyChainConcernsとunverifiedの項目が当たる。
  * 囲みは本文のバッククォートの最長の連続より長くし、本文から閉じられない。情報文字列(言語名)は付けない。
- * 囲みの前後に改行を入れる。本文が空になるときは、空文字を返す。
+ * 囲みの前に空行を入れる。直前がHTMLブロック(`<details><summary>根拠</summary>`など)のとき、
+ * 空行が無いと囲みがHTMLブロックの一部になり、本文が生のHTMLとして描かれる
+ * (HTMLブロックの中では、バックスラッシュのエスケープが効かない)。
+ * そのため、直前のHTMLブロックを閉じるため空行から始める。囲みの後にも改行を入れる。
+ * 本文が空になるときは、空文字を返す。
+ * 結果は`maxChars`を超える。囲みと改行、エスケープ、印の展開の分で、上限は`fencedBlockMaxLength`が返す。
+ * 印の展開は、1文字あたり最大14文字である。
  * Discordの通知には、このような本文を載せない。固定の文と件数だけを載せる。
  * 通知はリンクとメンションを描画し、囲みで包んでも本文の内容がそのまま人の目に入るため。
  */
@@ -503,7 +549,7 @@ export function fenceUntrustedBlock(text: string, maxChars: number): string {
   const body = sanitizeUntrustedProse(text, maxChars);
   if (body === "") return "";
   const fence = codeFenceFor(body);
-  return `\n${fence}\n${body}\n${fence}\n`;
+  return `\n\n${fence}\n${body}\n${fence}\n`;
 }
 
 // ---- 影響調査のプロンプトに渡す要約 ----
