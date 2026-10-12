@@ -5,6 +5,7 @@ import {
   MAX_PACKUMENT_BYTES,
   parsePackument,
   RegistryHttpError,
+  RegistryUnavailableError,
 } from "../../f/factory/lib/dependabot_registry.ts";
 
 // 実在するレジストリの応答(packument)の形を、このテストに要る項目まで絞ったもの。
@@ -195,6 +196,10 @@ describe("fetchPackument name validation", () => {
     expect(await callsFor("left/pad")).toBe(0);
   });
 
+  test("rejects a name with a percent-encoded slash", async () => {
+    expect(await callsFor("left%2fpad")).toBe(0);
+  });
+
   test("rejects a scope without a package", async () => {
     expect(await callsFor("@scope")).toBe(0);
   });
@@ -221,10 +226,46 @@ describe("fetchPackument failures", () => {
   test("carries the status of a non-2xx response", async () => {
     const result = fetchPackument(
       "left-pad",
+      fakeFetch(() => new Response("gone", { status: 410 })),
+    );
+
+    await expect(result).rejects.toMatchObject({ status: 410 });
+  });
+
+  test("treats HTTP 429 as unavailable", async () => {
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response("slow down", { status: 429 })),
+    );
+
+    await expect(result).rejects.toBeInstanceOf(RegistryUnavailableError);
+  });
+
+  test("treats HTTP 503 as unavailable", async () => {
+    const result = fetchPackument(
+      "left-pad",
       fakeFetch(() => new Response("busy", { status: 503 })),
     );
 
-    await expect(result).rejects.toMatchObject({ status: 503 });
+    await expect(result).rejects.toBeInstanceOf(RegistryUnavailableError);
+  });
+
+  test("keeps the HTTP status of an unavailable response as the cause", async () => {
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response("busy", { status: 502 })),
+    );
+
+    await expect(result).rejects.toMatchObject({ cause: { status: 502 } });
+  });
+
+  test("does not treat HTTP 404 as unavailable", async () => {
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response("missing", { status: 404 })),
+    );
+
+    await expect(result).rejects.not.toBeInstanceOf(RegistryUnavailableError);
   });
 
   test("treats a redirect response as an error", async () => {
@@ -297,12 +338,139 @@ describe("fetchPackument failures", () => {
     await expect(result).rejects.toThrow("not valid JSON");
   });
 
-  test("propagates a network failure", async () => {
+  test("treats a network failure as unavailable", async () => {
     const result = fetchPackument("left-pad", () =>
       Promise.reject(new Error("socket hang up")),
     );
 
-    await expect(result).rejects.toThrow("socket hang up");
+    await expect(result).rejects.toBeInstanceOf(RegistryUnavailableError);
+  });
+
+  test("keeps the network failure as the cause", async () => {
+    const result = fetchPackument("left-pad", () =>
+      Promise.reject(new Error("socket hang up")),
+    );
+
+    await expect(result).rejects.toMatchObject({
+      cause: { message: "socket hang up" },
+    });
+  });
+
+  test("aborts the request when the timeout passes", async () => {
+    const hanging = (_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () =>
+          reject(init.signal?.reason),
+        );
+      });
+
+    const result = fetchPackument("left-pad", hanging, 20);
+
+    await expect(result).rejects.toBeInstanceOf(RegistryUnavailableError);
+  });
+
+  test("stops reading a body that stalls past the timeout", async () => {
+    const stalled = new ReadableStream<Uint8Array>({
+      pull: () => new Promise(() => undefined),
+    });
+
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response(stalled, { status: 200 })),
+      20,
+    );
+
+    await expect(result).rejects.toBeInstanceOf(RegistryUnavailableError);
+  });
+
+  test("treats a body stream that fails as unavailable", async () => {
+    const broken = new ReadableStream<Uint8Array>({
+      pull: () => {
+        throw new Error("connection reset");
+      },
+    });
+
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response(broken, { status: 200 })),
+    );
+
+    await expect(result).rejects.toBeInstanceOf(RegistryUnavailableError);
+  });
+
+  test("releases the body of a non-2xx response", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response(body, { status: 404 })),
+    ).catch(() => undefined);
+
+    expect(cancelled).toBe(true);
+  });
+
+  test("releases the body of a response that declares too much", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await fetchPackument(
+      "left-pad",
+      fakeFetch(
+        () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-length": String(MAX_PACKUMENT_BYTES + 1) },
+          }),
+      ),
+    ).catch(() => undefined);
+
+    expect(cancelled).toBe(true);
+  });
+
+  test("still throws the original error when releasing the body fails", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        throw new Error("cancel failed");
+      },
+    });
+
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response(body, { status: 404 })),
+    );
+
+    await expect(result).rejects.toBeInstanceOf(RegistryHttpError);
+  });
+
+  test("accepts a body of exactly the limit", async () => {
+    const padded = `{}${" ".repeat(MAX_PACKUMENT_BYTES - 2)}`;
+
+    const result = await fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response(padded, { status: 200 })),
+    );
+
+    expect(result).toEqual({});
+  });
+
+  test("rejects a body one byte over the limit", async () => {
+    const padded = `{}${" ".repeat(MAX_PACKUMENT_BYTES - 1)}`;
+
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response(padded, { status: 200 })),
+    );
+
+    await expect(result).rejects.toThrow("too large");
   });
 });
 
@@ -335,6 +503,16 @@ describe("parsePackument structure", () => {
 });
 
 // ---- parsePackument: 公開日時 ----
+
+describe("parsePackument identity", () => {
+  test("carries the package name", () => {
+    expect(facts().name).toBe("left-pad");
+  });
+
+  test("carries the target version", () => {
+    expect(facts().version).toBe("1.3.1");
+  });
+});
 
 describe("parsePackument publishedAtIso", () => {
   test("reads the publish time of the target version", () => {
@@ -618,6 +796,22 @@ describe("parsePackument registryMetadata", () => {
     );
   });
 
+  test("removes tag characters that hide text", () => {
+    const to = version({ _npmUser: { name: "a\u{E0069}\u{E0067}b" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
+  test("removes invisible joiners and soft hyphens", () => {
+    const to = version({ _npmUser: { name: "a\uFEFFb\u2060c\u2064d\u00ADe" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: abcde\n",
+    );
+  });
+
   test("keeps every item on one line", () => {
     const to = version({ _npmUser: { name: "a\r\nb c" } });
 
@@ -649,6 +843,29 @@ describe("parsePackument registryMetadata", () => {
     ).toBeLessThanOrEqual(4000);
   });
 
+  test("ends the cut text on a whole line", () => {
+    const name = "\u{1F600}".repeat(40);
+    const many = Array.from({ length: 500 }, () => ({ name }));
+    const to = version({ maintainers: many });
+
+    const lines = facts(versionsWith(version(), to)).registryMetadata.split(
+      "\n",
+    );
+
+    expect(lines.at(-1)).toBe(`after maintainer: ${name}`);
+  });
+
+  test("does not leave half of a surrogate pair after the cut", () => {
+    const many = Array.from({ length: 500 }, () => ({
+      name: "\u{1F600}".repeat(39),
+    }));
+    const to = version({ maintainers: many });
+
+    expect(
+      facts(versionsWith(version(), to)).registryMetadata.isWellFormed(),
+    ).toBe(true);
+  });
+
   test("states the package and the update range", () => {
     expect(facts().registryMetadata).toContain("update: 1.3.0 -> 1.3.1");
   });
@@ -673,7 +890,7 @@ describe("getRegistryFacts", () => {
       "left-pad",
       "1.3.0",
       "1.3.1",
-      fakeFetch(() => new Response("", { status: 500 })),
+      fakeFetch(() => new Response("", { status: 404 })),
     );
 
     await expect(result).rejects.toBeInstanceOf(RegistryHttpError);

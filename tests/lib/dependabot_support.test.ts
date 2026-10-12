@@ -661,6 +661,11 @@ function passingChecks(): GateInput["checks"] {
   }));
 }
 
+// レジストリの事実として、対象の名前と更新先の版に、指定の整合性を付けたもの。
+function registryOf(integrity: string): NonNullable<GateInput["registry"]> {
+  return { name: TARGET.name, version: TARGET.to, integrity };
+}
+
 function validInput(overrides: Partial<GateInput> = {}): GateInput {
   const changedPaths = overrides.changedPaths ?? ["package.json", "bun.lock"];
   return {
@@ -684,7 +689,7 @@ function validInput(overrides: Partial<GateInput> = {}): GateInput {
     minPublishedDays: 7,
     commits: [DEPENDABOT_COMMIT],
     installScripts: { before: {}, after: {} },
-    registryIntegrity: INTEGRITY_B,
+    registry: registryOf(INTEGRITY_B),
     ...overrides,
   };
 }
@@ -1364,26 +1369,54 @@ describe("evaluateGate", () => {
   });
 
   test("passes when the registry integrity matches the lockfile", () => {
-    expect(verdictOf({ registryIntegrity: INTEGRITY_B })).toBe("ok");
+    expect(verdictOf({ registry: registryOf(INTEGRITY_B) })).toBe("ok");
   });
 
   test("needs a human when the registry integrity differs from the lockfile", () => {
-    expect(verdictOf({ registryIntegrity: INTEGRITY_A })).toBe("needs_human");
+    expect(verdictOf({ registry: registryOf(INTEGRITY_A) })).toBe(
+      "needs_human",
+    );
   });
 
   test("needs a human when the registry integrity is unknown", () => {
-    expect(verdictOf({ registryIntegrity: null })).toBe("needs_human");
+    expect(verdictOf({ registry: null })).toBe("needs_human");
+  });
+
+  test("needs a human when the registry fact is for another package", () => {
+    expect(
+      verdictOf({
+        registry: { ...registryOf(INTEGRITY_B), name: "other" },
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the registry fact is for another version", () => {
+    expect(
+      verdictOf({
+        registry: { ...registryOf(INTEGRITY_B), version: "1.3.0" },
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("explains a registry fact for another package", () => {
+    const result = evaluateGate(
+      validInput({ registry: { ...registryOf(INTEGRITY_B), name: "other" } }),
+    );
+
+    expect(result.ok ? "" : result.reason).toContain("registry");
   });
 
   test("explains an integrity mismatch", () => {
-    const result = evaluateGate(validInput({ registryIntegrity: INTEGRITY_A }));
+    const result = evaluateGate(
+      validInput({ registry: registryOf(INTEGRITY_A) }),
+    );
 
     expect(result.ok ? "" : result.reason).toContain("integrity");
   });
 
   test("shortens the integrity values in the reason", () => {
     const result = evaluateGate(
-      validInput({ registryIntegrity: `sha512-${"x".repeat(500)}` }),
+      validInput({ registry: registryOf(`sha512-${"x".repeat(500)}`) }),
     );
 
     expect(result.ok ? "" : result.reason.length).toBeLessThan(300);
@@ -1391,7 +1424,7 @@ describe("evaluateGate", () => {
 
   test("keeps a registry integrity from breaking the reason into items", () => {
     const result = evaluateGate(
-      validInput({ registryIntegrity: "sha512-a; injected" }),
+      validInput({ registry: registryOf("sha512-a; injected") }),
     );
 
     expect(result.ok ? "" : result.reason).not.toContain("; injected");
@@ -1400,7 +1433,7 @@ describe("evaluateGate", () => {
   test("needs a human, not a wait, when the integrity differs and checks are pending", () => {
     expect(
       verdictOf({
-        registryIntegrity: INTEGRITY_A,
+        registry: registryOf(INTEGRITY_A),
         checks: passingChecks().map((check) => ({
           ...check,
           conclusion: null,
@@ -1412,16 +1445,14 @@ describe("evaluateGate", () => {
   test("needs a human, not a wait, when the integrity differs and the version is recent", () => {
     expect(
       verdictOf({
-        registryIntegrity: INTEGRITY_A,
+        registry: registryOf(INTEGRITY_A),
         publishedAtIso: "2026-10-18T00:00:00.000Z",
       }),
     ).toBe("needs_human");
   });
 
   test("needs a human, not a wait, when the integrity is unknown and mergeable is null", () => {
-    expect(verdictOf({ registryIntegrity: null, mergeable: null })).toBe(
-      "needs_human",
-    );
+    expect(verdictOf({ registry: null, mergeable: null })).toBe("needs_human");
   });
 
   test("passes when both lockfiles hold the registry integrity", () => {

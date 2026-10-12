@@ -570,7 +570,7 @@ export type GateInput = {
   /**
    * 更新先パッケージのscriptsのうち、preinstall、install、postinstall、prepareだけを抜き出したもの。
    * 取得に失敗したときは`null`にする。
-   * binding.gypによる暗黙のinstallは、呼び出し側(後続のタスク)が扱う。
+   * `gypfile`が真でinstallが無い版は、`parsePackument`が暗黙のinstallを足して渡す。
    * ルートのpackage.jsonのscriptsは`checkPackageJsonDiff`が止めるので、
    * ここは更新先パッケージ自身のスクリプトを指す。
    */
@@ -579,11 +579,13 @@ export type GateInput = {
     after: Record<string, string> | null;
   };
   /**
-   * レジストリが報告する、更新先の版の`dist.integrity`。
+   * レジストリが報告する、更新先の版の整合性(`dist.integrity`)。
    * 取得できなかったときと形が不正なときは`null`にする。
-   * 更新後のロックファイルの対象のエントリが、これと一致することを要る。
+   * `name`と`version`は、整合性がどのパッケージのどの版のものかを示し、
+   * `target`の名前と更新後の版に一致することを要る。
+   * 更新後のロックファイルの対象のエントリが、`integrity`と一致することを要る。
    */
-  registryIntegrity: string | null;
+  registry: { name: string; version: string; integrity: string } | null;
 };
 
 export type GateResult =
@@ -668,8 +670,11 @@ function fileProblem(input: GateInput): string | null {
  * 変更されたロックファイルのすべてで、対象のエントリが1件以上あり、すべてが一致することを要る。
  */
 function integrityProblem(input: GateInput): string | null {
-  const { registryIntegrity, files, changedPaths, target } = input;
-  if (registryIntegrity === null) return "registry integrity is not available";
+  const { registry, files, changedPaths, target } = input;
+  if (registry === null) return "registry integrity is not available";
+  if (registry.name !== target.name || registry.version !== target.to) {
+    return `registry fact is for ${detail(registry.name)}@${detail(registry.version)}, expected ${detail(target.name)}@${detail(target.to)}`;
+  }
   for (const { lockfile } of MANIFEST_LOCKFILES) {
     if (!changedPaths.includes(lockfile)) continue;
     const after = files.find((file) => file.path === lockfile)?.after;
@@ -680,15 +685,16 @@ function integrityProblem(input: GateInput): string | null {
     if (found === null || found.length === 0) {
       return `target entry was not found in ${detail(lockfile)}`;
     }
-    const mismatch = found.find((value) => value !== registryIntegrity);
+    const mismatch = found.find((value) => value !== registry.integrity);
     if (mismatch !== undefined) {
-      return `integrity in ${detail(lockfile)} differs from the registry: ${detail(mismatch)} / ${detail(registryIntegrity)}`;
+      return `integrity in ${detail(lockfile)} differs from the registry: ${detail(mismatch)} / ${detail(registry.integrity)}`;
     }
   }
   return null;
 }
 
-const INSTALL_SCRIPT_NAMES: readonly string[] = [
+/** 更新先パッケージの、install時に実行されるスクリプトの名前。 */
+export const INSTALL_SCRIPT_NAMES: readonly string[] = [
   "preinstall",
   "install",
   "postinstall",
