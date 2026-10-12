@@ -147,6 +147,9 @@ PR修正は、`git gtr new`で作るPRのブランチのworktreeを使う。PR�
 
 生成のステップ(`pr_review_generate`)は、`factory-review`スキルと読み取り専用のツールで、headless Claudeを実行する。作業ディレクトリはレビュー用のworktreeである。
 
+レビューの観点は、`factory-review`スキルの「レビューの観点」にある。
+依存の宣言か取得を変えるPRには、サプライチェーン攻撃の観点も当てる([依存の変更のレビュー](../security.md#依存の変更のレビュー))。
+
 Claudeへの入力は次のとおりである。
 
 - PRの本文
