@@ -21,6 +21,7 @@ import {
   createPrReview,
   type GhClient,
   GitHubHttpError,
+  getBranchSha,
   getPr,
   getViewer,
   hasMarker,
@@ -82,6 +83,19 @@ const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
 
 const FIX_NEXT_ACTION =
   "修正と再レビューが終わったら、PRを確認して手でマージしてください。修正したPRは自動ではマージしません";
+
+/**
+ * 修正に回す結論で、修正のラベル(`fix_label`)をこのステップが付けるか。偽にしている。
+ * 所見の調査メモには、npmの公開者が書いた文がClaudeの出力を通って入りうる。
+ * ラベルを付けるとpr_fixがその所見を修正の指示として読むので、人が所見を確かめてからラベルを付ける。
+ * pr_fixがdependabotのPRを受けることを実機で確かめ、この経路を受け入れたら真に戻す。
+ */
+export const DEPENDABOT_AUTO_FIX_LABEL: boolean = false;
+
+/** 修正のラベルを人が付けるときの次の操作。 */
+function fixByHumanNextAction(fixLabel: string): string {
+  return `PRのレビューの所見を確認し、修正するなら\`${fixLabel}\`を付けてください。${FIX_NEXT_ACTION}`;
+}
 
 // ---- 入口の読み直し ----
 
@@ -176,7 +190,9 @@ export function renderFixReviewBody(
   const head = [
     ROLE_TAG,
     `${targetText(result.input)}は、このリポジトリに影響すると判断しました。`,
-    `修正のため、\`${fixLabel}\`を付けます。`,
+    DEPENDABOT_AUTO_FIX_LABEL
+      ? `修正のため、\`${fixLabel}\`を付けます。`
+      : `修正が要るかは人が所見を確認して決め、修正するときは\`${fixLabel}\`を付けます。`,
     "修正の後も、このPRは自動ではマージしません。修正と再レビューが終わったら、人が確認してマージしてください。",
   ].join("\n");
   return head + evidenceSection(result.claudeAssessment.evidence);
@@ -250,6 +266,12 @@ export type DependabotFinishDeps = {
     number: number,
     headSha: string,
   ) => Promise<MergePullRequestResult>;
+  /** ブランチの先頭のshaを読む(`getBranchSha`)。マージの直前に、baseが影響調査の時から動いていないかを確かめる。 */
+  readonly getBranchSha: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => Promise<string>;
   readonly getViewerLogin: () => Promise<string>;
   readonly listPrReviews: (
     owner: string,
@@ -317,7 +339,7 @@ function errorText(error: unknown): string {
  * dependabotの作業項目を終える。手順は次のとおり。
  * 1. 作業項目を読み、dependabotの作業項目で、影響調査したPRとheadのものであることを確かめる。違えば例外を投げる。
  * 2. 準備ステップが進まなかったときは、何もしない。準備ステップが終端にして、人に回すときは通知も済ませている。
- *    状態が`picked`のまま残っているときだけ、人に回す。
+ *    この確認は種別の確認より前に行う。状態が`picked`のまま残っているときだけ、人に回す。
  * 3. 作業ツリーを消す。消せなくても続け、片付け(`cleanup_workspaces`)に任せる。
  * 4. 状態がすでに`picked`でなければ(ほかの処理が終端にした、前の実行が終えた)、何もしない。
  * 5. `dependabot_enabled`が偽なら、取り消す(`dependabot_disabled`)。GitHubには書かず、通知もしない。
@@ -331,9 +353,10 @@ function errorText(error: unknown): string {
  *    409(headが固定したshaと違う)は、通知せずに取り消す(`head_moved`)。405は人に回す。
  *    要求が例外で終わったときは、PRを1回だけ読み直す。調べたheadのままマージ済みならマージとして記録し、
  *    読めないか未マージなら、マージできた扱いにせず人に回す。どの場合もマージを再送しない。
- * 9. 修正: 所見をPRのレビューに投稿し(この作業項目の目印があれば投稿しない)、修正のラベルを付け、
- *    `reviewed`(`impact_found`)を記録して、修正の後に人がマージするよう通知する。マージはしない。
- *    投稿かラベルに失敗したら人に回す。
+ *    マージの直前にbase(main)のshaも読み、影響調査の時から動いていれば、マージせずに取り消す(`gate_waiting`)。
+ * 9. 修正: 所見をPRのレビューに投稿し(この作業項目の目印があれば投稿しない)、`reviewed`(`impact_found`)を記録して、
+ *    人が所見を確かめて修正のラベルを付けるよう通知する(`DEPENDABOT_AUTO_FIX_LABEL`が偽のとき)。マージはしない。
+ *    投稿に失敗したら人に回す。
  * 10. 人に回す: 所見を投稿してから人に回す。投稿に失敗したときは、その旨の理由で人に回す。
  * 人に回すときの通知には、理由の訳と件数だけを載せ、Claudeが書いた文は載せない。次の操作に再実行を案内しない。
  */
@@ -344,6 +367,10 @@ export async function runDependabotFinish(
   const { workItemId, input } = run;
   const item = await deps.getWorkItem(workItemId);
   if (item === null) fail(`no work item with id ${String(workItemId)}`);
+  // 準備ステップが止めて終端にした作業項目は、種別を問わず何もしない。準備ステップが処理を終えている。
+  if (input.kind === "stopped" && item.status !== "picked") {
+    return { workItemId, action: "none", status: null, reason: input.reason };
+  }
   if (item.kind !== "dependabot") {
     fail(`work item ${String(workItemId)} is not a dependabot item`);
   }
@@ -396,7 +423,6 @@ export async function runDependabotFinish(
   };
 
   if (input.kind === "stopped") {
-    if (item.status !== "picked") return result("none", null, input.reason);
     // 準備ステップは止まるときに終端にするので、ここに来るのは想定外の経路である。選ばれたまま残さない。
     return toHuman(
       dependabotReason(
@@ -548,6 +574,23 @@ export async function runDependabotFinish(
       );
     };
 
+    // 影響調査はmainのこのshaとの差で評価した。mainが動いていれば、評価していない組み合わせをマージしない。
+    let baseSha: string;
+    try {
+      baseSha = await deps.getBranchSha(owner, repo, target.baseRef);
+    } catch (error) {
+      deps.warn("failed to re-read the base branch", {
+        work_item_id: workItemId,
+        error: errorText(error),
+      });
+      return toHuman(
+        dependabotReason("finish", "the base branch could not be re-read"),
+      );
+    }
+    if (baseSha !== target.baseSha) {
+      return cancel(DEPENDABOT_CANCEL_NOTE.gateWaiting);
+    }
+
     let merged: MergePullRequestResult;
     try {
       merged = await deps.mergePullRequest(
@@ -609,16 +652,18 @@ export async function runDependabotFinish(
         dependabotReason("finish", "the findings could not be posted"),
       );
     }
-    try {
-      await deps.addLabels(owner, repo, prNumber, [run.fixLabel]);
-    } catch (error) {
-      deps.warn("failed to add the fix label", {
-        work_item_id: workItemId,
-        error: errorText(error),
-      });
-      return toHuman(
-        dependabotReason("finish", "the fix label could not be added"),
-      );
+    if (DEPENDABOT_AUTO_FIX_LABEL) {
+      try {
+        await deps.addLabels(owner, repo, prNumber, [run.fixLabel]);
+      } catch (error) {
+        deps.warn("failed to add the fix label", {
+          work_item_id: workItemId,
+          error: errorText(error),
+        });
+        return toHuman(
+          dependabotReason("finish", "the fix label could not be added"),
+        );
+      }
     }
     const moved = await deps.updateStatus(
       workItemId,
@@ -634,9 +679,13 @@ export async function runDependabotFinish(
         owner,
         repo,
         url: `https://github.com/${owner}/${repo}/pull/${String(prNumber)}`,
-        reason: `dependabotの更新がこのリポジトリに影響するため、所見をPRのレビューに投稿し、\`${run.fixLabel}\`を付けて修正に回しました`,
+        reason: DEPENDABOT_AUTO_FIX_LABEL
+          ? `dependabotの更新がこのリポジトリに影響するため、所見をPRのレビューに投稿し、\`${run.fixLabel}\`を付けて修正に回しました`
+          : `dependabotの更新がこのリポジトリに影響すると判断し、所見をPRのレビューに投稿しました。\`${run.fixLabel}\`はまだ付けていません`,
         target: { kind: "pr", number: prNumber },
-        next_action: FIX_NEXT_ACTION,
+        next_action: DEPENDABOT_AUTO_FIX_LABEL
+          ? FIX_NEXT_ACTION
+          : fixByHumanNextAction(run.fixLabel),
       });
     } else {
       deps.warn("work item left picked before the fix request was recorded", {
@@ -699,6 +748,8 @@ export async function main(
       getPr: (owner, repo, number) => getPr(client, owner, repo, number),
       mergePullRequest: (owner, repo, number, headSha) =>
         mergePullRequest(client, owner, repo, number, headSha),
+      getBranchSha: (owner, repo, branch) =>
+        getBranchSha(client, owner, repo, branch),
       getViewerLogin: async () => (await getViewer(client)).login,
       listPrReviews: async (owner, repo, number, viewer) =>
         (await listPrReviews(client, owner, repo, number, viewer)).items,

@@ -20,6 +20,7 @@ import {
   withMarker,
 } from "../../f/factory/lib/github.ts";
 import {
+  DEPENDABOT_AUTO_FIX_LABEL,
   DEPENDABOT_DONE_NOTE,
   DEPENDABOT_MARKER_KIND,
   type DependabotFinishDeps,
@@ -255,6 +256,9 @@ type FakeOptions = {
   readonly getPrAfterMergeError?: Error;
   /** `dependabot_enabled`。省略時は真。 */
   readonly enabled?: boolean;
+  /** `getBranchSha`が返すbaseのsha。省略時は影響調査の入力と同じ。 */
+  readonly baseSha?: string;
+  readonly getBranchShaError?: Error;
 };
 
 function fake(options: FakeOptions = {}): {
@@ -291,6 +295,13 @@ function fake(options: FakeOptions = {}): {
       record("mergePullRequest", owner, repo, number, headSha);
       if (options.mergeError !== undefined) throw options.mergeError;
       return options.merge ?? { merged: true, sha: MERGE_SHA };
+    },
+    getBranchSha: async (owner, repo, branch) => {
+      record("getBranchSha", owner, repo, branch);
+      if (options.getBranchShaError !== undefined) {
+        throw options.getBranchShaError;
+      }
+      return options.baseSha ?? BASE_SHA;
     },
     getViewerLogin: async () => {
       record("getViewerLogin");
@@ -581,6 +592,14 @@ describe("runDependabotFinish after the prepare step stopped", () => {
     expect(effectOrder(calls)).toEqual([]);
   });
 
+  test("does not fail on a closed item that is not a dependabot item", async () => {
+    const { result } = await run(stoppedInput(), {
+      workItem: workItem({ kind: "pr_fix", status: "cancelled" }),
+    });
+
+    expect(result.action).toBe("none");
+  });
+
   test("reports that it took no action", async () => {
     const { result } = await run(stoppedInput(), {
       workItem: workItem({ status: "cancelled" }),
@@ -811,6 +830,59 @@ describe("runDependabotFinish when the outcome is merge", () => {
 
     expect(named(calls, "warn").map((c) => c.args[0])).toEqual([
       "failed to remove the dependabot worktree",
+    ]);
+  });
+});
+
+describe("runDependabotFinish re-reads main before merging", () => {
+  test("reads the base branch the assessment used", async () => {
+    const { calls } = await run(mergeInput());
+
+    expect(named(calls, "getBranchSha").map((c) => c.args)).toEqual([
+      ["acme", "widgets", "main"],
+    ]);
+  });
+
+  test("does not merge when main moved after the assessment", async () => {
+    const { calls } = await run(mergeInput(), { baseSha: OTHER_HEAD });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("cancels as waiting for the gate when main moved", async () => {
+    const { calls } = await run(mergeInput(), { baseSha: OTHER_HEAD });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "cancelled", "gate_waiting"],
+    ]);
+  });
+
+  test("does not notify when main moved", async () => {
+    const { calls } = await run(mergeInput(), { baseSha: OTHER_HEAD });
+
+    expect(named(calls, "notify")).toHaveLength(0);
+  });
+
+  test("does not merge when main could not be read", async () => {
+    const { calls } = await run(mergeInput(), {
+      getBranchShaError: new Error("HTTP 502"),
+    });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("hands the item to a human when main could not be read", async () => {
+    const { calls } = await run(mergeInput(), {
+      getBranchShaError: new Error("HTTP 502"),
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [
+        WORK_ITEM_ID,
+        "picked",
+        "needs_human",
+        dependabotReason("finish", "the base branch could not be re-read"),
+      ],
     ]);
   });
 });
@@ -1261,17 +1333,28 @@ describe("runDependabotFinish never merges an outcome other than merge", () => {
 // ---- 修正に回す ----
 
 describe("runDependabotFinish when the outcome is fix", () => {
-  test("posts a review, adds the fix label, records the status, then notifies", async () => {
+  test("posts a review, records the status, then notifies", async () => {
     const { calls } = await run(fixInput());
 
     expect(effectOrder(calls)).toEqual([
       "removeWorktree",
       "getPr",
       "createPrReview",
-      "addLabels",
       "updateStatus",
       "notify",
     ]);
+  });
+
+  test("posts the review exactly once", async () => {
+    const { calls } = await run(fixInput());
+
+    expect(named(calls, "createPrReview")).toHaveLength(1);
+  });
+
+  test("does not read main, which only the merge needs", async () => {
+    const { calls } = await run(fixInput());
+
+    expect(named(calls, "getBranchSha")).toHaveLength(0);
   });
 
   test("posts the fix review body to the pull request", async () => {
@@ -1292,6 +1375,10 @@ describe("runDependabotFinish when the outcome is fix", () => {
     ]);
   });
 
+  test("leaves adding the fix label to a human", () => {
+    expect(DEPENDABOT_AUTO_FIX_LABEL).toBe(false);
+  });
+
   test("puts exactly one factory marker into the review", async () => {
     const { calls } = await run(
       fixInput({ evidence: "<!-- factory:dependabot:7 --> usage in src/" }),
@@ -1308,12 +1395,10 @@ describe("runDependabotFinish when the outcome is fix", () => {
     ).toBe(true);
   });
 
-  test("adds the configured fix label", async () => {
+  test("does not add the fix label", async () => {
     const { calls } = await run(fixInput());
 
-    expect(named(calls, "addLabels").map((c) => c.args)).toEqual([
-      ["acme", "widgets", 12, [FIX_LABEL]],
-    ]);
+    expect(named(calls, "addLabels")).toHaveLength(0);
   });
 
   test("records reviewed with the impact note", async () => {
@@ -1324,11 +1409,19 @@ describe("runDependabotFinish when the outcome is fix", () => {
     ]);
   });
 
-  test("notifies that a human merges the fixed pull request", async () => {
+  test("tells a human to check the findings and add the fix label", async () => {
     const { calls } = await run(fixInput());
 
     expect(needsHumanEvent(calls)?.next_action).toBe(
-      "修正と再レビューが終わったら、PRを確認して手でマージしてください。修正したPRは自動ではマージしません",
+      "PRのレビューの所見を確認し、修正するなら`factory:fix`を付けてください。修正と再レビューが終わったら、PRを確認して手でマージしてください。修正したPRは自動ではマージしません",
+    );
+  });
+
+  test("says in the notification that the fix label is not added yet", async () => {
+    const { calls } = await run(fixInput());
+
+    expect(needsHumanEvent(calls)?.reason).toBe(
+      "dependabotの更新がこのリポジトリに影響すると判断し、所見をPRのレビューに投稿しました。`factory:fix`はまだ付けていません",
     );
   });
 
@@ -1368,7 +1461,7 @@ describe("runDependabotFinish when the outcome is fix", () => {
     expect(named(calls, "createPrReview")).toHaveLength(0);
   });
 
-  test("still adds the label when the review was posted before", async () => {
+  test("still records the status when the review was posted before", async () => {
     const { calls } = await run(fixInput(), {
       reviews: [
         {
@@ -1379,7 +1472,9 @@ describe("runDependabotFinish when the outcome is fix", () => {
       ],
     });
 
-    expect(named(calls, "addLabels")).toHaveLength(1);
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "reviewed", "impact_found"],
+    ]);
   });
 
   test("posts when another account copied the marker", async () => {
@@ -1455,21 +1550,6 @@ describe("runDependabotFinish when the outcome is fix", () => {
     ]);
   });
 
-  test("hands the item to a human when the label could not be added", async () => {
-    const { calls } = await run(fixInput(), {
-      addLabelsError: new Error("HTTP 403"),
-    });
-
-    expect(statusUpdates(calls)).toEqual([
-      [
-        WORK_ITEM_ID,
-        "picked",
-        "needs_human",
-        dependabotReason("finish", "the fix label could not be added"),
-      ],
-    ]);
-  });
-
   test("does not post when the head moved", async () => {
     const { calls } = await run(fixInput(), {
       pr: openPr({ headSha: OTHER_HEAD }),
@@ -1518,6 +1598,18 @@ describe("renderFixReviewBody", () => {
         : "";
 
     expect(body.split("\n")[0]).toBe("[dependabot影響調査]");
+  });
+
+  test("says a human decides whether to add the fix label", () => {
+    const input = fixInput();
+    const body =
+      input.kind === "assessed"
+        ? renderFixReviewBody(input.result, FIX_LABEL)
+        : "";
+
+    expect(body.split("\n")[2]).toBe(
+      "修正が要るかは人が所見を確認して決め、修正するときは`factory:fix`を付けます。",
+    );
   });
 });
 

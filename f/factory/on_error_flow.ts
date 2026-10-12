@@ -233,7 +233,15 @@ export async function handleFlowFailure(
 
   if (item !== null && !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)) {
     try {
-      if (!shouldMarkFailed(item.flow_job_id, input.rootJobId, path ?? null)) {
+      if (path === DEPENDABOT_FLOW_PATH && item.kind !== "dependabot") {
+        // dependabotのフローに渡された作業項目の種別が違う。ほかのフローの作業項目を終端にしない。
+        log.warn(
+          "on_error_flow: skipping status transition — the dependabot flow ran for a work item of another kind",
+          { work_item_id, kind: item.kind },
+        );
+      } else if (
+        !shouldMarkFailed(item.flow_job_id, input.rootJobId, path ?? null)
+      ) {
         log.warn(
           "on_error_flow: skipping status transition — work item's flow_job_id does not match this run (a newer run replaced it, or a pipeline run was never recorded)",
           {

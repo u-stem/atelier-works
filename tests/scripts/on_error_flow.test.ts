@@ -210,6 +210,14 @@ describe("handleFlowFailure for the dependabot flow", () => {
     expect(fake.statusCalls).toHaveLength(0);
   });
 
+  test("does not mark a work item of another kind failed", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({ kind: "pr_fix", status: "fixing" }),
+    });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
   test("records the failure against the work item", async () => {
     const fake = fakeFailureDeps();
     await handleFlowFailure(fake.deps, failureInput());
@@ -328,6 +336,17 @@ describe("handleFlowFailure for other flows", () => {
       failureInput({ path: "f/factory/pr_fix" }),
     );
     expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
+  test("marks an item failed without checking its kind", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({ kind: "pr_fix", status: "fixing" }),
+    });
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({ path: "f/factory/pr_fix" }),
+    );
+    expect(fake.statusCalls.map((call) => call.to)).toEqual(["failed"]);
   });
 
   test("does not mark a pipeline failed while no flow_job_id is recorded", async () => {
