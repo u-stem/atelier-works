@@ -141,6 +141,55 @@ describe("buildEmbed host_action_required", () => {
   });
 });
 
+describe("buildEmbed main_ci_failed", () => {
+  const event: Extract<NotifyEvent, { kind: "main_ci_failed" }> = {
+    kind: "main_ci_failed",
+    instance_name: "local",
+    owner: "acme",
+    repo: "widgets",
+    sha7: "abc1234",
+    url: "https://github.com/acme/widgets/actions/runs/9",
+    prev_failed: false,
+    next_action: "実行のログを確かめて、原因を直す",
+  };
+
+  test("names the repository and the commit in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "mainのCIが失敗しました: acme/widgets@abc1234",
+    );
+  });
+
+  test("links to the run", () => {
+    expect(buildEmbed(event).url).toBe(
+      "https://github.com/acme/widgets/actions/runs/9",
+    );
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "実行のログを確かめて、原因を直す",
+    });
+  });
+
+  test("includes the repository field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "リポジトリ",
+      value: "acme/widgets",
+    });
+  });
+
+  test("does not mention a continuing failure for a first failure", () => {
+    expect(buildEmbed(event).description).not.toContain("続いて");
+  });
+
+  test("says the failure continues from the previous commit", () => {
+    expect(buildEmbed({ ...event, prev_failed: true }).description).toContain(
+      "前のコミットから失敗が続いています",
+    );
+  });
+});
+
 describe("buildEmbed console_worker_missing", () => {
   const event: NotifyEvent = {
     kind: "console_worker_missing",

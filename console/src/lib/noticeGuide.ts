@@ -203,7 +203,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。イメージが古くて止まった作業項目は、mise run upの後に通知が自動で解決されると、自動で再開します。自動の再開が3回の上限に達したときと、版が載らない通知のときだけ、Windmillでf/factory/retry_work_itemを作業項目のIDで実行して再開してください。",
       {
         commands: ["git pull", "mise install", "mise run up"],
-        note: "通知の版がホストのHEADと同じか祖先なら、自己更新(10分ごと)が自動で解決します。HEADを書けなかったときと、版が載らない通知(イメージが古いと分かったときに、反映した版を読めなかったもの)は自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
+        note: "通知の版がホストのHEADと同じか祖先なら、自己更新(2分ごと)が自動で解決します。HEADを書けなかったときと、版が載らない通知(イメージが古いと分かったときに、反映した版を読めなかったもの)は自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
       },
     ),
   ],
@@ -304,6 +304,26 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "本文の「次の操作」に従ってください。既存のブランチが原因なら、ブランチを確かめ、不要なら削除します。大きさの変化が正当なら、Windmillでf/factory/drawio_viewer_bumpをapproved_versionにその版を指定して実行します。",
       {
         note: "解決しても、原因が続けば次の週に同じ通知が出直します。新しい版が出れば、その版を自動で試します。",
+      },
+    ),
+  ],
+  [
+    "main_ci_failed",
+    guide(
+      "対象リポジトリの既定のブランチで、コミットのCI(GitHub Actionsのpushの実行)が失敗しました。本文に、リポジトリ、コミットの先頭7文字、失敗した実行のリンクが載ります。",
+      "リンク先の実行のログで原因を確かめ、直す修正を入れるか、原因のコミットを取り消してください。",
+      {
+        note: "同じリポジトリで、より新しいコミットのCIが通ると自動で解決されます。同じコミットの実行をやり直して通っても失敗は取り消されず、次のコミットが通ったときに解決されます。",
+      },
+    ),
+  ],
+  [
+    "main_ci_check_denied",
+    guide(
+      "対象リポジトリの既定のブランチのCIの実行を、GitHubから読めませんでした。GITHUB_TOKENにActionsの読み取りの権限が無いか、リポジトリにアクセスできません。権限が足りない間は、そのリポジトリのmainのCIの失敗に気づけません。",
+      "GitHubのfine-grained PATの設定で、対象のリポジトリにRepository permissionsのActions: Read-onlyを付けてください。PATの値は変わらないので、Windmillの変数を更新する必要はありません。組織のリポジトリでは、組織の承認が再び要ることがあります。",
+      {
+        note: "権限を足して読めるようになると、次の回に自動で解決されます。",
       },
     ),
   ],

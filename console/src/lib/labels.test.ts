@@ -97,6 +97,16 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the failed main CI", () => {
+    expect(noticeKindLabel("main_ci_failed")).toBe("mainのCIの失敗");
+  });
+
+  test("names the denied main CI check", () => {
+    expect(noticeKindLabel("main_ci_check_denied")).toBe(
+      "mainのCIを読む権限の不足",
+    );
+  });
+
   test("translates a known notice kind", () => {
     expect(noticeKindLabel("console_fetch_failed")).toBe(
       "Consoleの取り込みの失敗",
