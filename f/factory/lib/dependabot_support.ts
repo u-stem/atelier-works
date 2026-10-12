@@ -40,7 +40,7 @@ const MAX_DETAIL_CHARS = 80;
  * 理由の文字列に埋め込む、ファイルやGitHubが書ける文字列を整える。
  * 長い値で理由が膨らまないよう切り詰め、`"; "`で理由が別の項目に割れないようにする。
  */
-function detail(text: string): string {
+export function detail(text: string): string {
   const shortened =
     text.length > MAX_DETAIL_CHARS
       ? `${text.slice(0, MAX_DETAIL_CHARS)}...`
@@ -224,7 +224,8 @@ function splitPackageId(id: string): { name: string; version: string } | null {
   return { name: id.slice(0, at), version: id.slice(at + 1) };
 }
 
-function entryIdentity(
+/** packagesの表の1件から、パッケージ名と版を読む。形が違うときは`null`にする。 */
+export function entryIdentity(
   entry: unknown,
 ): { name: string; version: string } | null {
   if (!Array.isArray(entry)) return null;
@@ -435,6 +436,17 @@ export function checkLockfileDiff(
     return { ok: false, reason: "target was not updated in the lockfile" };
   }
   return { ok: true };
+}
+
+/**
+ * bun.lockのpackagesの表を返す。キーは、入れ子のコピーを区別する場所の名前である。
+ * 解釈できないとき、重複したキーがあるとき、表が無いときは`null`にする。
+ */
+export function lockfilePackages(text: string): Record<string, unknown> | null {
+  const parsed = parseJsonObject(text, true);
+  if (!parsed.ok) return null;
+  const packages = parsed.value.packages;
+  return isRecord(packages) ? packages : null;
 }
 
 /**

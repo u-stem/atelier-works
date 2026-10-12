@@ -6,6 +6,7 @@ import {
   ClaimOwnershipUnknownError,
   claimIssue,
   commentIssue,
+  compareCommits,
   createIssue,
   createPrReview,
   createPullRequest,
@@ -20,6 +21,7 @@ import {
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
   GitHubRateLimitError,
+  GitHubResponseError,
   getAccountId,
   getBranchProtected,
   getFileAtRef,
@@ -5835,6 +5837,352 @@ describe("listPrCommits", () => {
         12,
       ),
     ).rejects.toThrow(/truncated/);
+  });
+});
+
+function compareBody(
+  overrides: { mergeBase?: unknown; files?: unknown; commits?: unknown } = {},
+) {
+  const body: Record<string, unknown> = {
+    status: "ahead",
+    merge_base_commit: { sha: overrides.mergeBase ?? SHA_B },
+    commits: overrides.commits ?? [
+      commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT),
+    ],
+  };
+  if (overrides.files !== null) {
+    body.files = overrides.files ?? [
+      { filename: "bun.lock", status: "modified" },
+    ];
+  }
+  return body;
+}
+
+const COMPARE_CLIENT = (fake: { run: GhClient["run"] }): GhClient => ({
+  run: fake.run,
+  ghToken: CLIENT_TOKEN,
+});
+
+describe("compareCommits", () => {
+  test("requests the three-dot comparison from the base to the head sha", async () => {
+    const fake = createFakeCommandRunner([ghApiOk(compareBody())]);
+    await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "release/1.0",
+      SHA_A,
+    );
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining([
+        `repos/acme/widgets/compare/release%2F1.0...${SHA_A}?per_page=100`,
+      ]),
+    );
+  });
+
+  test("returns the merge base sha", async () => {
+    const fake = createFakeCommandRunner([ghApiOk(compareBody())]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+      SHA_A,
+    );
+    expect(result.mergeBaseSha).toBe(SHA_B);
+  });
+
+  test("returns the filename and status of each file", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          files: [
+            { filename: "package.json", status: "modified" },
+            { filename: "bun.lock", status: "modified" },
+          ],
+        }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+      SHA_A,
+    );
+    expect(result.files).toEqual([
+      { filename: "package.json", previousFilename: null, status: "modified" },
+      { filename: "bun.lock", previousFilename: null, status: "modified" },
+    ]);
+  });
+
+  test("returns the previous filename of a renamed file", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          files: [
+            {
+              filename: "docs/a.md",
+              previous_filename: ".github/workflows/a.yml",
+              status: "renamed",
+            },
+          ],
+        }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+      SHA_A,
+    );
+    expect(result.files[0]?.previousFilename).toBe(".github/workflows/a.yml");
+  });
+
+  test("throws when previous_filename is not a string", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          files: [
+            { filename: "a.ts", previous_filename: 5, status: "renamed" },
+          ],
+        }),
+      ),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("returns commits in the shape the gate takes", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          commits: [
+            commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT, {
+              parentCount: 2,
+            }),
+          ],
+        }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+      SHA_A,
+    );
+    const gateCommits: GateInput["commits"] = result.commits;
+    expect(
+      gateCommits.map((commit) => [
+        commit.authorLogin,
+        commit.committerLogin,
+        commit.verified,
+        commit.parentCount,
+      ]),
+    ).toEqual([["dependabot[bot]", "web-flow", true, 2]]);
+  });
+
+  test("reads the commits of every page", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(
+          200,
+          compareBody({ commits: [commitEntry(SHA_A, null, null)] }),
+          {
+            link: `<https://api.github.com/repos/acme/widgets/compare/main...${SHA_A}?per_page=100&page=2>; rel="next"`,
+          },
+        ),
+      ),
+      ghApiOk(
+        compareBody({ commits: [commitEntry(SHA_B, null, null)], files: null }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+      SHA_A,
+    );
+    expect(result.commits.map((commit) => commit.sha)).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("keeps the files of the first page when later pages have none", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(200, compareBody(), {
+          link: `<https://api.github.com/repos/acme/widgets/compare/main...${SHA_A}?per_page=100&page=2>; rel="next"`,
+        }),
+      ),
+      ghApiOk(
+        compareBody({ commits: [commitEntry(SHA_B, null, null)], files: null }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+      SHA_A,
+    );
+    expect(result.files.map((file) => file.filename)).toEqual(["bun.lock"]);
+  });
+
+  test("throws when the first page has no files", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(compareBody({ files: null })),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the file list reaches the 300-file cap of the API", async () => {
+    const files = Array.from({ length: 300 }, (_, index) => ({
+      filename: `f${String(index)}.ts`,
+      status: "added",
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ files }))]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("accepts a file list just under the cap", async () => {
+    const files = Array.from({ length: 299 }, (_, index) => ({
+      filename: `f${String(index)}.ts`,
+      status: "added",
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ files }))]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+      SHA_A,
+    );
+    expect(result.files).toHaveLength(299);
+  });
+
+  test("throws when the commit list reaches the 250-commit cap of the API", async () => {
+    const commits = Array.from({ length: 250 }, (_, index) =>
+      commitEntry(index.toString(16).padStart(40, "0"), null, null),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ commits }))]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("reports a truncated list as a response error", async () => {
+    const commits = Array.from({ length: 250 }, (_, index) =>
+      commitEntry(index.toString(16).padStart(40, "0"), null, null),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ commits }))]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("stops following pages after the pages the 250-commit cap allows", async () => {
+    const next = {
+      link: `<https://api.github.com/repos/acme/widgets/compare/main...${SHA_A}?per_page=100&page=2>; rel="next"`,
+    };
+    const page = () =>
+      ok(
+        ghApiStdout(
+          200,
+          compareBody({ commits: [commitEntry(SHA_A, null, null)] }),
+          next,
+        ),
+      );
+    const fake = createFakeCommandRunner([
+      page(),
+      page(),
+      page(),
+      page(),
+      ghApiOk(compareBody({ commits: [], files: null })),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/pagination exceeded/);
+  });
+
+  test("throws when the merge base sha is not a full sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(compareBody({ mergeBase: "abc123" })),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the merge base commit is missing", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ files: [], commits: [commitEntry(SHA_A, null, null)] }),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when a commit has no verification", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          commits: [
+            {
+              sha: SHA_A,
+              author: null,
+              committer: null,
+              commit: { message: "m" },
+              parents: [],
+            },
+          ],
+        }),
+      ),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when parents is not an array", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          commits: [
+            {
+              sha: SHA_A,
+              author: null,
+              committer: null,
+              commit: { verification: { verified: true } },
+              parents: 1,
+            },
+          ],
+        }),
+      ),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a head that is not a full sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", "main"),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+
+  test("rejects a base that is not a branch name", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "a...b", SHA_A),
+    ).rejects.toThrow(/invalid branch name/);
   });
 });
 
