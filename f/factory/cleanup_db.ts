@@ -2,7 +2,8 @@
 // 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
-// 解決済みのnoticeで、作業項目とは別々に掃除する。同じ期間を過ぎた未解決の`info`のnoticeは、
+// 解決済みのnotice・判定済みの`main_ci_runs`で、作業項目とは別々に掃除する。
+// 判定を待つ`main_ci_runs`の行は、古くても削除しない。同じ期間を過ぎた未解決の`info`のnoticeは、
 // 削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
@@ -32,6 +33,7 @@ import {
   type DeletedWorkItemRef,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
+  deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
   insertCleanupRun,
@@ -138,6 +140,21 @@ async function cleanupDeployments(cutoff: Date, log: Logger): Promise<number> {
   }
 }
 
+/** 判定済みのmainのCIの記録を、最後の更新から保持期間を過ぎたものだけ削除する。判定を待つ行は消さない。 */
+async function cleanupMainCiRuns(cutoff: Date, log: Logger): Promise<number> {
+  try {
+    return await deleteMainCiRunsBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete main_ci_runs", { error: message });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `mainのCIの記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
 /** 解決済みの通知を、解決の時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
   try {
@@ -211,6 +228,7 @@ export async function main(): Promise<CleanupCounts> {
   const deploymentsDeleted = await cleanupDeployments(cutoffs.logsBefore, log);
   const noticesDeleted = await cleanupNotices(cutoffs.logsBefore, log);
   const infoNoticesResolved = await cleanupInfoNotices(cutoffs.logsBefore, log);
+  const mainCiRunsDeleted = await cleanupMainCiRuns(cutoffs.logsBefore, log);
 
   const counts: CleanupCounts = {
     work_items_deleted: workItems.work_items_deleted,
@@ -219,6 +237,7 @@ export async function main(): Promise<CleanupCounts> {
     deployments_deleted: deploymentsDeleted,
     notices_deleted: noticesDeleted,
     info_notices_resolved: infoNoticesResolved,
+    main_ci_runs_deleted: mainCiRunsDeleted,
     doc_dirs_deleted: docDirsDeleted,
   };
 

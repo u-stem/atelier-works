@@ -138,6 +138,7 @@ describe("getCleanupSummary", () => {
           deployments_deleted: 5,
           notices_deleted: 2,
           info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -157,6 +158,7 @@ describe("getCleanupSummary", () => {
           deployments_deleted: "5",
           notices_deleted: "2",
           info_notices_resolved: "0",
+          main_ci_runs_deleted: "0",
           doc_dirs_deleted: "0",
         },
       ],
@@ -169,6 +171,7 @@ describe("getCleanupSummary", () => {
       deployments_deleted: 5,
       notices_deleted: 2,
       info_notices_resolved: 0,
+      main_ci_runs_deleted: 0,
       doc_dirs_deleted: 0,
     });
   });
@@ -184,12 +187,39 @@ describe("getCleanupSummary", () => {
           deployments_deleted: 0,
           notices_deleted: 0,
           info_notices_resolved: "4",
+          main_ci_runs_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
     ]);
     const summary = await getCleanupSummary(RANGE, sql);
     expect(summary?.info_notices_resolved).toBe(4);
+  });
+
+  test("sums the deleted main ci records", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          info_notices_resolved: 0,
+          main_ci_runs_deleted: "9",
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary?.main_ci_runs_deleted).toBe(9);
+  });
+
+  test("selects the main_ci_runs_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("sum(main_ci_runs_deleted)");
   });
 
   test("selects the info_notices_resolved column", async () => {
@@ -209,6 +239,7 @@ describe("getCleanupSummary", () => {
           deployments_deleted: 0,
           notices_deleted: 0,
           info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],

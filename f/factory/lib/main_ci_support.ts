@@ -1,0 +1,383 @@
+// mainのCI(GitHub Actionsのpushの実行)を、コミット単位で判定する純粋関数群。
+// I/Oは持たない。GitHubの呼び出しは`github.ts`の`listWorkflowRuns`、記録は`db.ts`の
+// `factory.main_ci_runs`の関数が行う。
+// 外部から来た文字列(workflow名、実行のURL、結論)は、ここで検証・整形してから記録と表示に使う。
+
+import { assertGitHubName, sanitizePullRequestTitle } from "./types.ts";
+
+// ---------------------------------------------------------------------------
+// コミットのsha
+// ---------------------------------------------------------------------------
+
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+/** gitの完全なコミットsha(小文字の16進数40桁)か。 */
+export function isCommitSha(value: unknown): value is string {
+  return typeof value === "string" && COMMIT_SHA_PATTERN.test(value);
+}
+
+/**
+ * 完全なコミットshaでなければ例外を投げる。
+ * 受け取った値をそのままエラーに載せないよう、先頭の50文字までにする。
+ */
+export function assertCommitSha(sha: string): void {
+  if (!COMMIT_SHA_PATTERN.test(sha)) {
+    throw new Error(`invalid commit sha: ${JSON.stringify(sha.slice(0, 50))}`);
+  }
+}
+
+/** 通知に載せる、shaの先頭7文字。完全なshaでなければ例外を投げる。 */
+export function shortSha(sha: string): string {
+  assertCommitSha(sha);
+  return sha.slice(0, 7);
+}
+
+// ---------------------------------------------------------------------------
+// 状態
+// ---------------------------------------------------------------------------
+
+export const MAIN_CI_STATES = [
+  "pending",
+  "passed",
+  "failed",
+  "expired",
+  "no_ci",
+  "baseline",
+] as const;
+
+/** `factory.main_ci_runs.state`の値。 */
+export type MainCiState = (typeof MAIN_CI_STATES)[number];
+
+/** 判定が確定した後の状態。`pending`から遷移できる行き先で、`baseline`は含まない。 */
+export type MainCiSettledState = "passed" | "failed" | "expired" | "no_ci";
+
+export function isMainCiState(value: unknown): value is MainCiState {
+  return MAIN_CI_STATES.some((state) => state === value);
+}
+
+// ---------------------------------------------------------------------------
+// 実行の判定
+// ---------------------------------------------------------------------------
+
+/** GitHub Actionsのworkflowの実行1件。`listWorkflowRuns`が検証してから返す。 */
+export type WorkflowRun = {
+  readonly id: number;
+  readonly name: string;
+  readonly headSha: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly createdAt: Date;
+  readonly htmlUrl: string;
+};
+
+/** 実行の一覧から見た、コミットの判定。 */
+export type RunVerdict = "pending" | "passed" | "failed";
+
+/**
+ * 最古の実行が作られてから、この時間がたつまでは確定しない。
+ * 実行はpushの直後に作られるが、すべてのworkflowが出揃う前に判定すると、
+ * 後から出る失敗を見逃すため。
+ */
+export const SETTLE_MIN_AGE_MS = 2 * 60_000;
+
+/** 実行が1件も現れないまま、この時間がたったら`no_ci`にする。 */
+export const NO_CI_AFTER_MS = 15 * 60_000;
+
+/** 未完了のまま、最初に見てからこの時間がたったら`expired`にする。 */
+export const PENDING_EXPIRES_AFTER_MS = 2 * 60 * 60_000;
+
+/** `listWorkflowRuns`が1回に読む件数。 */
+export const WORKFLOW_RUNS_PER_PAGE = 20;
+
+const PASSING_CONCLUSIONS: readonly string[] = [
+  "success",
+  "skipped",
+  "neutral",
+];
+
+/**
+ * 結論として表示してよい値。
+ * これ以外(GitHubが将来足す値や、想定外の文字列)は`unknown`と表示する。
+ * 判定では、`PASSING_CONCLUSIONS`以外はすべて失敗側に倒す。
+ */
+const KNOWN_CONCLUSIONS: readonly string[] = [
+  ...PASSING_CONCLUSIONS,
+  "failure",
+  "cancelled",
+  "timed_out",
+  "action_required",
+  "stale",
+  "startup_failure",
+];
+
+function isPassing(run: WorkflowRun): boolean {
+  return (
+    run.conclusion !== null && PASSING_CONCLUSIONS.includes(run.conclusion)
+  );
+}
+
+/**
+ * 1つのコミットの実行をまとめて判定する。
+ * 実行が無いか、1件でも`completed`でなければ`pending`。
+ * すべて完了していて、結論がsuccess、skipped、neutralだけなら`passed`、それ以外は`failed`。
+ * 結論が無い、または未知の値は失敗側に倒す。見逃すより、人に見せるほうが安全なため。
+ */
+export function classifyRuns(runs: readonly WorkflowRun[]): RunVerdict {
+  if (runs.length === 0) return "pending";
+  if (runs.some((run) => run.status !== "completed")) return "pending";
+  return runs.every(isPassing) ? "passed" : "failed";
+}
+
+/**
+ * `classifyRuns`に、確定を待つ時間を加える。
+ * 最古の実行が作られてから`SETTLE_MIN_AGE_MS`未満なら、判定せず`pending`を返す。
+ */
+export function settle(runs: readonly WorkflowRun[], now: Date): RunVerdict {
+  const oldest = Math.min(...runs.map((run) => run.createdAt.getTime()));
+  if (runs.length === 0 || now.getTime() - oldest < SETTLE_MIN_AGE_MS) {
+    return "pending";
+  }
+  return classifyRuns(runs);
+}
+
+export type DecideStateInput = {
+  /** 直前に取り直した、そのコミットの実行。 */
+  readonly runs: readonly WorkflowRun[];
+  /** そのコミットを最初に見た時刻(`first_seen_at`)。 */
+  readonly firstSeenAt: Date;
+  readonly now: Date;
+};
+
+/**
+ * 保留中のコミットの、今の状態を決める。
+ * 実行から確定できるなら、期限より先にその結果を返す。期限で落とす前に、
+ * 取り直した最新の実行で最後の判定をするため。
+ * 確定できず、実行が無いまま`NO_CI_AFTER_MS`がたてば`no_ci`、
+ * 最初に見てから`PENDING_EXPIRES_AFTER_MS`がたてば`expired`、それまでは`pending`。
+ */
+export function decideState(
+  input: DecideStateInput,
+): "pending" | MainCiSettledState {
+  const verdict = settle(input.runs, input.now);
+  if (verdict !== "pending") return verdict;
+  const waitedMs = input.now.getTime() - input.firstSeenAt.getTime();
+  if (input.runs.length === 0 && waitedMs >= NO_CI_AFTER_MS) return "no_ci";
+  if (waitedMs >= PENDING_EXPIRES_AFTER_MS) return "expired";
+  return "pending";
+}
+
+// ---------------------------------------------------------------------------
+// コミットごとのまとめ
+// ---------------------------------------------------------------------------
+
+export type ShaGroup = {
+  readonly headSha: string;
+  readonly runs: readonly WorkflowRun[];
+  readonly newestCreatedAt: Date;
+  readonly oldestCreatedAt: Date;
+};
+
+/**
+ * 実行を`headSha`ごとにまとめ、最新の実行が新しいコミットから順に返す。
+ * 並びはAPIの返す順に頼らず、作成時刻で決める。
+ */
+export function groupRunsBySha(runs: readonly WorkflowRun[]): ShaGroup[] {
+  const bySha = new Map<string, WorkflowRun[]>();
+  for (const run of runs) {
+    const list = bySha.get(run.headSha);
+    if (list === undefined) bySha.set(run.headSha, [run]);
+    else list.push(run);
+  }
+  const groups: ShaGroup[] = [];
+  for (const [headSha, list] of bySha) {
+    const times = list.map((run) => run.createdAt.getTime());
+    groups.push({
+      headSha,
+      runs: list,
+      newestCreatedAt: new Date(Math.max(...times)),
+      oldestCreatedAt: new Date(Math.min(...times)),
+    });
+  }
+  return groups.sort(
+    (a, b) => b.newestCreatedAt.getTime() - a.newestCreatedAt.getTime(),
+  );
+}
+
+/**
+ * 1ページが埋まっているとき、最も古いコミットのグループを外して返す。
+ * 一覧は1ページ分しか読まないので、最も古いコミットは、実行の一部がページの外にあるかもしれない。
+ * 一部だけを見て`passed`と決めると、見えていない失敗を見逃す。
+ * 1ページに満たなければ、すべての実行を読めているので、そのまま返す。
+ */
+export function dropTruncatedTail(
+  groups: readonly ShaGroup[],
+  perPage: number,
+): ShaGroup[] {
+  const total = groups.reduce((sum, group) => sum + group.runs.length, 0);
+  if (total < perPage) return [...groups];
+  let oldestIndex = -1;
+  for (const [index, group] of groups.entries()) {
+    const current = groups[oldestIndex];
+    if (
+      current === undefined ||
+      group.oldestCreatedAt.getTime() <= current.oldestCreatedAt.getTime()
+    ) {
+      oldestIndex = index;
+    }
+  }
+  return groups.filter((_, index) => index !== oldestIndex);
+}
+
+/** 新しい順の`groups`で、`headSha`の1つ前(次に古い)コミットのshaを返す。無ければnull。 */
+export function previousShaOf(
+  groups: readonly ShaGroup[],
+  headSha: string,
+): string | null {
+  const index = groups.findIndex((group) => group.headSha === headSha);
+  if (index < 0) return null;
+  return groups[index + 1]?.headSha ?? null;
+}
+
+export type PlannedSha = {
+  readonly headSha: string;
+  readonly state: "baseline" | "pending";
+};
+
+/**
+ * 一覧に現れたshaのうち、まだ記録していないものを、どの状態で記録するか決める。
+ * そのリポジトリに記録が1件も無い(初回の観測)ときは、すべて`baseline`にして通知しない。
+ * 既存の履歴を一度に失敗として通知しないため。
+ * 記録が1件でもあれば、新しいshaは`pending`で記録する。
+ */
+export function planNewShas(
+  shas: readonly string[],
+  known: ReadonlySet<string>,
+  repoHasRows: boolean,
+): PlannedSha[] {
+  const state = repoHasRows ? "pending" : "baseline";
+  return shas
+    .filter((headSha) => !known.has(headSha))
+    .map((headSha) => ({ headSha, state }));
+}
+
+/** 1つ前のコミットが失敗だったか。`baseline`など、失敗と分からない状態は`false`にする。 */
+export function isPrevFailed(prevState: string | null): boolean {
+  return prevState === "failed";
+}
+
+// ---------------------------------------------------------------------------
+// 外部由来の文字列
+// ---------------------------------------------------------------------------
+
+/**
+ * 実行のURLが`https://github.com/<owner>/<repo>/`の下にあれば、正規化したURLを返す。
+ * そうでなければnull。大文字小文字は区別しない。GitHubが返す名前の綴りと設定が違うことがあるため。
+ * 空白や制御文字を含む値、ユーザー情報、クエリ、フラグメントは受け付けない。
+ * 通知の本文に載せるリンクなので、別のリポジトリや別のホストへ誘導されないようにする。
+ */
+export function parseRunUrl(
+  value: string,
+  owner: string,
+  repo: string,
+): string | null {
+  if (/[\s\p{Cc}]/u.test(value)) return null;
+  try {
+    assertGitHubName(owner);
+    assertGitHubName(repo);
+  } catch {
+    return null;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.host !== "github.com") return null;
+  if (url.username !== "" || url.password !== "") return null;
+  if (url.search !== "" || url.hash !== "") return null;
+  const prefix = `/${owner}/${repo}/`.toLowerCase();
+  if (!url.pathname.toLowerCase().startsWith(prefix)) return null;
+  return url.href;
+}
+
+const RUN_NAME_MAX_LENGTH = 60;
+const UNNAMED_RUN = "(unnamed)";
+
+/**
+ * workflow名を、表示してよい形にする。
+ * 制御文字、書字方向の制御文字、改行を空白にして詰め、60文字で切る。空なら`(unnamed)`。
+ * workflow名はリポジトリへ書ける人が決める文字列で、表示にだけ使う。
+ */
+export function sanitizeRunName(raw: string): string {
+  const cleaned = sanitizePullRequestTitle(raw);
+  if (cleaned === null) return UNNAMED_RUN;
+  const cut = Array.from(cleaned).slice(0, RUN_NAME_MAX_LENGTH).join("").trim();
+  return cut === "" ? UNNAMED_RUN : cut;
+}
+
+const SUMMARY_MAX_LENGTH = 400;
+const SUMMARY_PREFIX = "失敗したworkflow: ";
+const SUMMARY_CONTINUING = "。前のコミットから失敗が続いています";
+/** 省略した件数の注記(` ほか99件`)のために空けておく文字数。 */
+const SUMMARY_OMITTED_RESERVE = 10;
+
+function displayConclusion(run: WorkflowRun): string {
+  return run.conclusion !== null && KNOWN_CONCLUSIONS.includes(run.conclusion)
+    ? run.conclusion
+    : "unknown";
+}
+
+/**
+ * 失敗したコミットの要約を作る。`factory.main_ci_runs.summary`に記録する文字列である。
+ * 失敗したworkflowの名前(`sanitizeRunName`)と結論(既知の値だけ。それ以外は`unknown`)を並べ、
+ * 全体を400文字までにする。入りきらない分は件数で示す。
+ * 前のコミットも失敗していれば、その旨を添える。原因のPRは断定しない。
+ */
+export function buildFailureSummary(
+  runs: readonly WorkflowRun[],
+  prevFailed: boolean,
+): string {
+  const entries = runs
+    .filter((run) => run.status === "completed" && !isPassing(run))
+    .map((run) => `${sanitizeRunName(run.name)} (${displayConclusion(run)})`);
+  const note = prevFailed ? SUMMARY_CONTINUING : "";
+  const budget =
+    SUMMARY_MAX_LENGTH -
+    SUMMARY_PREFIX.length -
+    note.length -
+    SUMMARY_OMITTED_RESERVE;
+  let body = "";
+  let shown = 0;
+  for (const entry of entries) {
+    const candidate = shown === 0 ? entry : `${body}, ${entry}`;
+    if (candidate.length > budget) break;
+    body = candidate;
+    shown += 1;
+  }
+  const omitted = entries.length - shown;
+  const omittedNote = omitted > 0 ? ` ほか${String(omitted)}件` : "";
+  return `${SUMMARY_PREFIX}${body}${omittedNote}${note}`;
+}
+
+// ---------------------------------------------------------------------------
+// 権限エラーの後の待ち
+// ---------------------------------------------------------------------------
+
+const BACKOFF_BASE_MS = 10 * 60_000;
+const BACKOFF_MAX_MS = 6 * 60 * 60_000;
+
+/**
+ * 照会が続けて拒まれたときの、次の照会までの待ち(ミリ秒)。
+ * 10分から始めて失敗のたびに2倍にし、6時間で止める。
+ * 1未満や数でない回数は、1回目として扱う。権限を足せば、次の照会で自動に戻る。
+ */
+export function backoffMs(consecutiveFailures: number): number {
+  const count = Number.isFinite(consecutiveFailures)
+    ? Math.max(1, Math.floor(consecutiveFailures))
+    : 1;
+  return Math.min(
+    BACKOFF_BASE_MS * 2 ** Math.min(count - 1, 30),
+    BACKOFF_MAX_MS,
+  );
+}

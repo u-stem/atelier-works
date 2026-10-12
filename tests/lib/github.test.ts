@@ -36,6 +36,7 @@ import {
   listPrReviews,
   listPullRequestNumbersByHead,
   listReviewThreads,
+  listWorkflowRuns,
   parseGitHubRepoUrl,
   postIssueComment,
   removeLabel,
@@ -4301,5 +4302,131 @@ describe("ensureLabel", () => {
         LABEL_OPTS,
       ),
     ).rejects.toThrow(/HTTP 500/);
+  });
+});
+
+describe("listWorkflowRuns", () => {
+  const SHA = "a".repeat(40);
+  const rawRun = (overrides: Record<string, unknown> = {}) => ({
+    id: 101,
+    name: "CI",
+    head_sha: SHA,
+    status: "completed",
+    conclusion: "success",
+    created_at: "2026-10-12T03:00:00Z",
+    html_url: "https://github.com/acme/widgets/actions/runs/101",
+    ...overrides,
+  });
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  test("reads one page of push runs on the branch", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ workflow_runs: [] })]);
+    await listWorkflowRuns(client(fake), "acme", "widgets", "main");
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=20",
+    );
+  });
+
+  test("encodes the branch name", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ workflow_runs: [] })]);
+    await listWorkflowRuns(client(fake), "acme", "widgets", "release/v1");
+    expect(
+      fake.calls[0]?.argv.some((arg) => arg.includes("release%2Fv1")),
+    ).toBe(true);
+  });
+
+  test("returns the runs with their fields parsed", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [rawRun({ conclusion: null, status: "queued" })],
+      }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(runs).toEqual([
+      {
+        id: 101,
+        name: "CI",
+        headSha: SHA,
+        status: "queued",
+        conclusion: null,
+        createdAt: new Date("2026-10-12T03:00:00Z"),
+        htmlUrl: "https://github.com/acme/widgets/actions/runs/101",
+      },
+    ]);
+  });
+
+  test("treats a null name as an empty name", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ name: null })] }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(runs[0]?.name).toBe("");
+  });
+
+  test("rejects non 40-hex sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_sha: "abc1234" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("throws when a run has an unexpected shape", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ status: 7 })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws when created_at is not a timestamp", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ created_at: "yesterday" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws when the body has no workflow_runs array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ total_count: 0 })]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects an invalid owner before calling the API", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listWorkflowRuns(client(fake), "ac me", "widgets", "main"),
+    ).rejects.toThrow("invalid GitHub name");
+  });
+
+  test("surfaces a permission error with its status", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(403, {
+          message: "Resource not accessible by personal access token",
+        }),
+      ),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toMatchObject({ status: 403 });
   });
 });

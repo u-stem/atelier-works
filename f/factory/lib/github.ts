@@ -21,6 +21,11 @@
 
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
+import {
+  assertCommitSha,
+  WORKFLOW_RUNS_PER_PAGE,
+  type WorkflowRun,
+} from "./main_ci_support.ts";
 import type {
   FactoryOwnerKind,
   GitIdentity,
@@ -3186,6 +3191,70 @@ export async function listPullRequestNumbersByHead(
       throw new Error(`${context}: unexpected response shape`);
     }
     return item.number;
+  });
+}
+
+type WorkflowRunPayload = {
+  id: number;
+  name: string | null;
+  head_sha: string;
+  status: string;
+  conclusion: string | null;
+  created_at: string;
+  html_url: string;
+};
+
+function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "number") return false;
+  if (value.name !== null && typeof value.name !== "string") return false;
+  if (typeof value.head_sha !== "string") return false;
+  if (typeof value.status !== "string") return false;
+  if (value.conclusion !== null && typeof value.conclusion !== "string") {
+    return false;
+  }
+  if (typeof value.created_at !== "string") return false;
+  if (Number.isNaN(new Date(value.created_at).getTime())) return false;
+  return typeof value.html_url === "string";
+}
+
+/**
+ * `branch`へのpushで始まったworkflowの実行を、新しい順に1ページ(`WORKFLOW_RUNS_PER_PAGE`件)だけ読む。
+ * ページ送りはしない。呼び出し側は、1ページが埋まったときの最も古いコミットを、
+ * 実行の一部が欠けているものとして扱う(`dropTruncatedTail`)。
+ * 応答の形が違う実行や、`head_sha`が完全なコミットshaでない実行があれば例外を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRuns(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<WorkflowRun[]> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const endpoint = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}&event=push&per_page=${String(WORKFLOW_RUNS_PER_PAGE)}`;
+  const context = `GET workflow runs ${owner}/${repo}@${branch}`;
+  const response = await callGhApi(client, endpoint);
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.workflow_runs.map((raw: unknown): WorkflowRun => {
+    if (!isWorkflowRunPayload(raw)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    return {
+      id: raw.id,
+      name: raw.name ?? "",
+      headSha: raw.head_sha,
+      status: raw.status,
+      conclusion: raw.conclusion,
+      createdAt: new Date(raw.created_at),
+      htmlUrl: raw.html_url,
+    };
   });
 }
 

@@ -14,14 +14,20 @@ import {
   claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
+  deferMainCiRun,
+  deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   getNoticeById,
   hasIntakeRefreshEvent,
+  hasMainCiRuns,
   insertCleanupRun,
   insertWorkItem,
+  listMainCiRunsBySha,
+  listPendingMainCiRuns,
   listUnresolvedNoticesByKind,
   recordDeployment,
   recordFailure,
+  recordMainCiRun,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -29,6 +35,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  transitionMainCiRun,
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -1080,6 +1087,7 @@ await insertCleanupRun(
     deployments_deleted: 0,
     notices_deleted: 2,
     info_notices_resolved: 3,
+    main_ci_runs_deleted: 4,
     doc_dirs_deleted: 0,
   },
   sql,
@@ -1095,6 +1103,7 @@ const cleanupSummary = await getCleanupSummary(
 check(
   "cleanup_runs: the resolved info notices count is recorded and summed",
   cleanupSummary?.info_notices_resolved === 3 &&
+    cleanupSummary.main_ci_runs_deleted === 4 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
 );
@@ -1538,6 +1547,149 @@ check(
   viewerSeenMoved,
 );
 execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
+
+// mainのCIの記録: 重複は入れず、移すのは判定待ちの行だけで、掃除は判定待ちの行を消さない。
+const CI_SHA_A = "a".repeat(40);
+const CI_SHA_B = "b".repeat(40);
+const CI_REPO = { owner: "qdb", repo: "ci" };
+check(
+  "main_ci_runs: a repository without rows is a first observation",
+  (await hasMainCiRuns(CI_REPO.owner, CI_REPO.repo, sql)) === false,
+);
+check(
+  "main_ci_runs: the first record is inserted",
+  (await recordMainCiRun(
+    { ...CI_REPO, head_sha: CI_SHA_A, state: "pending", run_created_at: null },
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: the same sha is not recorded twice",
+  (await recordMainCiRun(
+    { ...CI_REPO, head_sha: CI_SHA_A, state: "baseline", run_created_at: null },
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    ...CI_REPO,
+    head_sha: CI_SHA_B,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+const ciRows = await listMainCiRunsBySha(
+  CI_REPO.owner,
+  CI_REPO.repo,
+  [CI_SHA_A, CI_SHA_B],
+  sql,
+);
+check(
+  "main_ci_runs: the recorded rows are read back with their states",
+  ciRows
+    .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
+    .sort()
+    .join(",") === "a:pending,b:baseline",
+  ciRows,
+);
+check(
+  "main_ci_runs: only the pending row is due",
+  (await listPendingMainCiRuns(100, sql))
+    .filter((row) => row.owner === CI_REPO.owner)
+    .map((row) => row.head_sha)
+    .join(",") === CI_SHA_A,
+);
+const ciPending = ciRows.find((row) => row.head_sha === CI_SHA_A);
+if (ciPending === undefined) throw new Error("main_ci_runs row is missing");
+check(
+  "main_ci_runs: a deferred row is not due",
+  (await deferMainCiRun(
+    ciPending.id,
+    { nextCheckAt: new Date(Date.now() + 60 * 60 * 1000), runCreatedAt: null },
+    sql,
+  )) === true &&
+    (await listPendingMainCiRuns(100, sql)).filter(
+      (row) => row.owner === CI_REPO.owner,
+    ).length === 0,
+);
+const ciSettled = {
+  state: "failed" as const,
+  summary: "失敗したworkflow: CI (failure)",
+  prevFailed: true,
+  runCreatedAt: new Date("2026-10-12T00:00:00Z"),
+};
+check(
+  "main_ci_runs: transition moves a pending row once",
+  (await transitionMainCiRun(ciPending.id, ciSettled, sql)) === true &&
+    (await transitionMainCiRun(ciPending.id, ciSettled, sql)) === false,
+);
+const ciAfter = (
+  await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_A], sql)
+)[0];
+check(
+  "main_ci_runs: the transition stored the summary, prev_failed and run time",
+  ciAfter?.state === "failed" &&
+    ciAfter.prev_failed === true &&
+    ciAfter.summary === ciSettled.summary &&
+    ciAfter.run_created_at?.toISOString() === "2026-10-12T00:00:00.000Z",
+  ciAfter,
+);
+let ciRejectedSha = false;
+try {
+  await recordMainCiRun(
+    { ...CI_REPO, head_sha: "abc1234", state: "pending", run_created_at: null },
+    sql,
+  );
+} catch {
+  ciRejectedSha = true;
+}
+check(
+  "main_ci_runs: a short sha is rejected before the database",
+  ciRejectedSha,
+);
+let ciCheckRejected = false;
+try {
+  execPsql(
+    target,
+    `INSERT INTO factory.main_ci_runs (owner, repo, head_sha) VALUES ('qdb', 'ci', 'ABC')`,
+  );
+} catch {
+  ciCheckRejected = true;
+}
+check("main_ci_runs: the table rejects a malformed sha", ciCheckRejected);
+const ciPendingOther = "c".repeat(40);
+await recordMainCiRun(
+  {
+    ...CI_REPO,
+    head_sha: ciPendingOther,
+    state: "pending",
+    run_created_at: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
+);
+const ciDeleted = await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+check(
+  "main_ci_runs: cleanup deletes the settled rows and keeps the pending row",
+  ciDeleted >= 2 &&
+    (
+      await listMainCiRunsBySha(
+        CI_REPO.owner,
+        CI_REPO.repo,
+        [ciPendingOther],
+        sql,
+      )
+    ).length === 1,
+  ciDeleted,
+);
+execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
 
 // ---------------------------------------------------------------------------
 // 未解決の通知の重複の抑止
