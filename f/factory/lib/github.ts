@@ -2192,9 +2192,7 @@ export async function getPr(
   ensureSuccess(response, `GET pr ${owner}/${repo}#${number}`);
   const parsed = parseJsonBody(response, `GET pr ${owner}/${repo}#${number}`);
   if (!isPrPayload(parsed)) {
-    throw new Error(
-      `GET pr ${owner}/${repo}#${number}: unexpected response shape`,
-    );
+    throw unexpectedShape(`GET pr ${owner}/${repo}#${number}`);
   }
   const headRepoFullName =
     parsed.head.repo !== null && typeof parsed.head.repo.full_name === "string"
@@ -2568,7 +2566,7 @@ export async function listPrFiles(
     },
   );
   if (paths.length >= PR_FILES_API_CAP) {
-    throw new Error(
+    throw new GitHubResponseError(
       `GET pr files ${owner}/${repo}#${number}: the file list may be truncated at ${String(PR_FILES_API_CAP)} files`,
     );
   }
@@ -2658,7 +2656,7 @@ export async function listPrCommits(
     PR_COMMITS_MAX_PAGES,
   );
   if (commits.length >= PR_COMMITS_API_CAP) {
-    throw new Error(
+    throw new GitHubResponseError(
       `GET pr commits ${owner}/${repo}#${number}: the commit list may be truncated at ${String(PR_COMMITS_API_CAP)} commits`,
     );
   }

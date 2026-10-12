@@ -16,6 +16,7 @@ import {
 } from "../../f/factory/lib/dependabot_support.ts";
 import {
   GitHubHttpError,
+  GitHubPaginationLimitError,
   GitHubRateLimitError,
   GitHubResponseError,
   type PrCommit,
@@ -295,6 +296,33 @@ describe("deriveTarget", () => {
     expect(result.kind).toBe("needs_human");
   });
 
+  test("needs a human when only a nested copy changed and the top-level entry stayed", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@1.2.0" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(deriveTarget([lockFile(before, after)])).toEqual({
+      kind: "needs_human",
+      reason: "the top-level entry of the target did not change: left-pad",
+    });
+  });
+
+  test("needs a human when only the integrity of the top-level entry changed", () => {
+    const after = lockText({ "left-pad": "1.3.0", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0", integrity: INTEGRITY_B },
+      OTHER,
+    ]);
+
+    const result = deriveTarget([lockFile(LOCK_BEFORE, after)]);
+
+    expect(result.kind).toBe("needs_human");
+  });
+
   test("needs a human when a changed entry is malformed", () => {
     const after = LOCK_AFTER.replace('"left-pad@1.3.1"', "42");
 
@@ -523,6 +551,25 @@ describe("collectGateInput", () => {
       "2026-09-01T00:00:00.000Z",
       { before: {}, after: { postinstall: "x" } },
     ]);
+  });
+
+  test("returns the version before the update", async () => {
+    const result = await collectGateInput(setup().deps, PR_REF);
+
+    expect(result.kind === "ready" ? result.from : null).toBe("1.3.0");
+  });
+
+  test("returns the registry metadata for the impact assessment", async () => {
+    const result = await collectGateInput(
+      setup({
+        registry: async () => facts({ registryMetadata: "package: left-pad" }),
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind === "ready" ? result.registryMetadata : null).toBe(
+      "package: left-pad",
+    );
   });
 
   test("passes the registry fact as is", async () => {
@@ -778,6 +825,39 @@ describe("collectGateInput", () => {
     expect(result.kind).toBe("wait");
   });
 
+  test("waits when the head repository changed while collecting", async () => {
+    const result = await collectGateInput(
+      setup({
+        prs: [pullRequest(), pullRequest({ headRepoFullName: "evil/widgets" })],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
+  });
+
+  test("waits when the author changed while collecting", async () => {
+    const result = await collectGateInput(
+      setup({
+        prs: [pullRequest(), pullRequest({ authorLogin: "someone" })],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
+  });
+
+  test("waits when the author type changed while collecting", async () => {
+    const result = await collectGateInput(
+      setup({
+        prs: [pullRequest(), pullRequest({ authorType: "User" })],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
+  });
+
   test("waits when the base repository changed while collecting", async () => {
     const result = await collectGateInput(
       setup({
@@ -848,7 +928,19 @@ describe("collectGateInput", () => {
 
     expect(result).toEqual({
       kind: "needs_human",
-      reason: "pull request is not open",
+      reason: "base ref is not a branch name",
+    });
+  });
+
+  test("needs a human when the head sha is not a full sha", async () => {
+    const result = await collectGateInput(
+      setup({ prs: [pullRequest({ headSha: "abc123" })] }).deps,
+      PR_REF,
+    );
+
+    expect(result).toEqual({
+      kind: "needs_human",
+      reason: "head sha is not a full sha",
     });
   });
 
@@ -1003,6 +1095,45 @@ describe("collectGateInput", () => {
         PR_REF,
       ),
     ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("needs a human when a pull request response has an unexpected shape", async () => {
+    const result = await collectGateInput(
+      setup({
+        getPr: async () => {
+          throw new GitHubResponseError("unexpected response shape");
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("needs_human");
+  });
+
+  test("needs a human when pagination exceeds its limit", async () => {
+    const result = await collectGateInput(
+      setup({
+        compare: async () => {
+          throw new GitHubPaginationLimitError(4);
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("needs_human");
+  });
+
+  test("waits when GitHub fails with a server error while reading a file", async () => {
+    const result = await collectGateInput(
+      setup({
+        getFile: async () => {
+          throw new GitHubHttpError("file failed with HTTP 503", 503);
+        },
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
   });
 
   test("needs a human when the comparison is truncated", async () => {

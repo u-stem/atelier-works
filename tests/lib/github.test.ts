@@ -2925,6 +2925,13 @@ describe("searchPrs", () => {
 });
 
 describe("getPr", () => {
+  test("reports an unexpected response shape as a response error", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: "12" })]);
+    await expect(
+      getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 12),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
   test("parses head/base/draft/mergeable_state/state/merged", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({
@@ -5515,6 +5522,22 @@ describe("listPrFiles", () => {
     ).rejects.toThrow(/unexpected response shape/);
   });
 
+  test("reports a list at the 3000-file cap as a response error", async () => {
+    const entries = Array.from({ length: 3000 }, (_, index) => ({
+      filename: `f${String(index)}.ts`,
+      status: "added",
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(entries)]);
+    await expect(
+      listPrFiles(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
   test("throws when the list reaches the 3000-file cap of the API", async () => {
     const entries = Array.from({ length: 3000 }, (_, index) => ({
       filename: `f${String(index)}.ts`,
@@ -5822,6 +5845,21 @@ describe("listPrCommits", () => {
         12,
       ),
     ).rejects.toThrow(/pagination exceeded/);
+  });
+
+  test("reports a list at the 250-commit cap as a response error", async () => {
+    const entries = Array.from({ length: 250 }, (_, index) =>
+      commitEntry(index.toString(16).padStart(40, "0"), null, null),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(entries)]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 
   test("throws when the list reaches the 250-commit cap of the API", async () => {

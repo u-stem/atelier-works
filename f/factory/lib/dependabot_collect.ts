@@ -172,6 +172,12 @@ export function deriveTarget(files: GateInput["files"]): DeriveResult {
         `the target has no top-level entry in ${detail(change.path)}: ${detail(name)}`,
       );
     }
+    // 入れ子のコピーだけが変わると、トップレベルの版が更新後の版を表さない。
+    if (from === to) {
+      return humanStop(
+        `the top-level entry of the target did not change: ${detail(name)}`,
+      );
+    }
     if (versions !== null && (versions.from !== from || versions.to !== to)) {
       return humanStop("the lockfiles resolve the target differently");
     }
@@ -230,6 +236,10 @@ export type CollectResult =
       headSha: string;
       /** `files[].before`を読んだmerge-baseのsha。 */
       mergeBaseSha: string;
+      /** 更新前の版。影響調査に渡す。 */
+      from: string;
+      /** registryから読んだ、更新の前後の公開者などの要約。影響調査に渡す。 */
+      registryMetadata: string;
     }
   | { kind: "wait"; reason: string }
   | { kind: "needs_human"; reason: string };
@@ -340,6 +350,8 @@ type Gathered = {
   kind: "gathered";
   input: Omit<GateInput, "mergeable">;
   mergeBaseSha: string;
+  from: string;
+  registryMetadata: string;
 };
 
 /** パスの重複を除く。最初に現れた順を保つ。 */
@@ -394,6 +406,8 @@ async function gather(
     return {
       kind: "gathered",
       mergeBaseSha,
+      from,
+      registryMetadata: facts.registryMetadata,
       input: {
         authorLogin: first.authorLogin,
         authorType: first.authorType ?? "",
@@ -444,7 +458,7 @@ async function collect(
   pr: { owner: string; repo: string; number: number },
 ): Promise<CollectResult> {
   const first = await deps.getPr(pr.owner, pr.repo, pr.number);
-  if (first.state !== "open" || first.merged || first.baseRef === "") {
+  if (first.state !== "open" || first.merged) {
     return { kind: "needs_human", reason: NOT_OPEN };
   }
   if (!isCommitSha(first.headSha)) {
@@ -473,6 +487,8 @@ async function collect(
     input: { ...gathered.input, mergeable: last.mergeable },
     headSha: first.headSha,
     mergeBaseSha: gathered.mergeBaseSha,
+    from: gathered.from,
+    registryMetadata: gathered.registryMetadata,
   };
 }
 
