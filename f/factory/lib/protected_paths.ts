@@ -66,6 +66,16 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * このテストは、`DrawioFrame.tsx`のsandboxとiframeの受け口のメッセージを固定値と照合する。
  * 書き換えられると、図を描くiframeにsandboxを外したり別のページを読ませたりしても、検査を通る。
  * sandboxは、HTTPのCSP(`infra/Caddyfile`)も後ろ盾になる。
+ * dependabotのセキュリティ更新PRを自動でマージするフローも守る。マージの判定(`lib/dependabot_support.ts`)、
+ * 影響調査のプロンプト(`lib/dependabot_prompt.ts`)、npm registryの取得(`lib/dependabot_registry.ts`)、
+ * ゲート入力の組み立て(`lib/dependabot_collect.ts`)、取得(`poll_dependabot.ts`)とそのスケジュール、
+ * フロー(`dependabot__flow/flow.yaml`)、3つのステップ(`steps/dependabot_prepare.ts`、
+ * `dependabot_assess.ts`、`dependabot_finish.ts`)と、それぞれのscript定義(`*.script.yaml`)である。
+ * 書き換えられると、人の確認なしに、許可していない更新をマージできる。
+ * まだ存在しないファイルも先に守る。名前を先に押さえ、後から置かれたファイルが保護の外に出ないようにするためである。
+ * 依存のlock(`*.script.lock`)は守らない。`windmill-client`の版を上げる変更で、全scriptのlockと
+ * 一緒に書き換わり、その変更を止めてしまうためである。
+ * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
@@ -91,6 +101,24 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/vite.config.ts",
   "infra/Caddyfile",
   "tests/lib/drawio_frame_isolation.test.ts",
+  "f/factory/lib/dependabot_support.ts",
+  "f/factory/lib/dependabot_support.script.yaml",
+  "f/factory/lib/dependabot_prompt.ts",
+  "f/factory/lib/dependabot_prompt.script.yaml",
+  "f/factory/lib/dependabot_registry.ts",
+  "f/factory/lib/dependabot_registry.script.yaml",
+  "f/factory/lib/dependabot_collect.ts",
+  "f/factory/lib/dependabot_collect.script.yaml",
+  "f/factory/poll_dependabot.ts",
+  "f/factory/poll_dependabot.script.yaml",
+  "f/factory/poll_dependabot.schedule.yaml",
+  "f/factory/dependabot__flow/flow.yaml",
+  "f/factory/steps/dependabot_prepare.ts",
+  "f/factory/steps/dependabot_prepare.script.yaml",
+  "f/factory/steps/dependabot_assess.ts",
+  "f/factory/steps/dependabot_assess.script.yaml",
+  "f/factory/steps/dependabot_finish.ts",
+  "f/factory/steps/dependabot_finish.script.yaml",
 ];
 
 /**

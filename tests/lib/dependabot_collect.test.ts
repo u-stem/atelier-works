@@ -3,6 +3,7 @@ import {
   type CollectDeps,
   collectGateInput,
   deriveTarget,
+  LOCKFILE_PATHS,
   NOT_OPEN,
 } from "../../f/factory/lib/dependabot_collect.ts";
 import {
@@ -1306,5 +1307,15 @@ describe("collectGateInput", () => {
     );
 
     expect(result.kind).toBe("needs_human");
+  });
+});
+
+describe("LOCKFILE_PATHS", () => {
+  test("is frozen so that the paths read as lockfiles cannot be replaced", () => {
+    expect(Object.isFrozen(LOCKFILE_PATHS)).toBe(true);
+  });
+
+  test("an element cannot be appended", () => {
+    expect(Reflect.set(LOCKFILE_PATHS, LOCKFILE_PATHS.length, "x")).toBe(false);
   });
 });

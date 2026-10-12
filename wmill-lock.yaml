@@ -31,10 +31,10 @@ locks:
   f/factory/lib/console_support: 0ea4c516c831db8f53410d1b8d51d327360277520b86ad3c2df23a36ca1f731a
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
   f/factory/lib/db: 7221c99680d0a9779549ac40942f5db1d9fc6a5ff5c527ee2c7f8abc7eedcdb0
-  f/factory/lib/dependabot_collect: 36b50f57cd798407b4582e228bd4c2e9d857fad057b7fa2b6abd8e07ee5ba2fc
+  f/factory/lib/dependabot_collect: 7c972e73e6b83436a5ac0e4ef9debf0480c545ce5619426efc31e5a64892f016
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
   f/factory/lib/dependabot_registry: 42029d80c1167e6329190dc55f3c3d8697c6f34f3d24008ebee6be2f8a98a299
-  f/factory/lib/dependabot_support: a09f7ed237c11f801d65da72d8e738ed27c2687f4ed39fdf8b4b168953a09297
+  f/factory/lib/dependabot_support: 7589e8f2743395d96a9e1cbba20817a58489b173afa7283db39eb41dd7e43c14
   f/factory/lib/discord: 1c5a8eab48c28cc5133d49a8c1bb903d4c432e7a7ed95d7df238c2f736018c55
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
@@ -59,7 +59,7 @@ locks:
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: bae7e3b08acef43ca6534d770f4e010631843850fffab408ff7566c66f5c6ad9
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 330409b3b7ada24f4e7036555e54ef4dcb45e16dc84212720ff92938974d2b62
+  f/factory/lib/protected_paths: 161b9c2a8e8c8648f8df08f8f3a14be6927ca8b60d002be5dbc4bc1d51f73ad6
   f/factory/lib/requirements_doc: 6ae93ca66b45fdffcd1f2722bdaf51ebbda80452631d219d69ddfe58ac68e4d2
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955
   f/factory/lib/schedule_failing: 59730fe317dcc36bfa832053ced4f7273d4af8fa0644940df1db9b08c869b29f

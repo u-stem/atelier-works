@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  FORBIDDEN_EXACT_PATHS,
   FORBIDDEN_PATH_PREFIXES,
+  IMPLEMENT_PROTECTED_EXACT_PATHS,
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
   isNewShellScript,
   matchesForbiddenPath,
@@ -536,5 +538,100 @@ describe("drawio isolation test", () => {
 
   test("matchesImplementProtectedPath matches the test", () => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+});
+
+// dependabotの自動マージの判定とフローは、書き換えられると、人の確認なしに
+// 任意の更新をマージできる。そのため、まだ存在しないファイルも含めて、完全一致で守る。
+// 「理由」は、保護が完全一致の一覧から来ていることである。ディレクトリや
+// ファイル名の規則に当たって守られているのでは、同名の別のファイルまで巻き込む。
+describe("dependabot flow files", () => {
+  const SCRIPTS = [
+    "f/factory/lib/dependabot_support",
+    "f/factory/lib/dependabot_prompt",
+    "f/factory/lib/dependabot_registry",
+    "f/factory/lib/dependabot_collect",
+    "f/factory/poll_dependabot",
+    "f/factory/steps/dependabot_prepare",
+    "f/factory/steps/dependabot_assess",
+    "f/factory/steps/dependabot_finish",
+  ];
+  const PROTECTED = [
+    ...SCRIPTS.flatMap((base) => [`${base}.ts`, `${base}.script.yaml`]),
+    "f/factory/poll_dependabot.schedule.yaml",
+    "f/factory/dependabot__flow/flow.yaml",
+  ];
+  const LOCKS = SCRIPTS.map((base) => `${base}.script.lock`);
+  const NEAR_MISSES = [
+    "f/factory/steps/dependabot_support.ts",
+    "f/factory/lib/dependabot_support.test.ts",
+    "f/factory/lib/dependabot_support.ts.orig",
+    "f/factory/lib/dependabot_other.ts",
+    "f/factory/dependabot__flow/other.yaml",
+    "f/factory/poll_dependabot.ts.bak",
+    "f/factory/steps/dependabot_prepare.test.ts",
+  ];
+
+  test.each(PROTECTED)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(PROTECTED)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(PROTECTED)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PROTECTED)("IMPLEMENT_PROTECTED_EXACT_PATHS lists %s", (path) => {
+    expect(IMPLEMENT_PROTECTED_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(PROTECTED)(
+    "%s is protected even when the leading ./ is kept",
+    (path) => {
+      expect(matchesForbiddenPath(`./${path}`)).toBe(true);
+    },
+  );
+
+  test.each(LOCKS)(
+    "matchesForbiddenPath does not match %s, which changes with every windmill-client bump",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
+
+  test.each(LOCKS)(
+    "matchesImplementProtectedPath does not match %s, which changes with every windmill-client bump",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
+
+  test.each(NEAR_MISSES)(
+    "matchesForbiddenPath does not match the near miss %s, so the protection is an exact match",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(false);
+    },
+  );
+
+  test.each(NEAR_MISSES)(
+    "matchesImplementProtectedPath does not match the near miss %s, so the protection is an exact match",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(false);
+    },
+  );
+
+  test("does not protect the shared GitHub module", () => {
+    expect(matchesForbiddenPath("f/factory/lib/github.ts")).toBe(false);
+  });
+
+  test("lists no lock of the dependabot flow among the exact paths", () => {
+    expect(
+      FORBIDDEN_EXACT_PATHS.filter(
+        (path) => path.includes("dependabot") && path.endsWith(".script.lock"),
+      ),
+    ).toEqual([]);
   });
 });

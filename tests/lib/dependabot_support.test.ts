@@ -5,6 +5,7 @@ import type {
   ImpactAssessment,
 } from "../../f/factory/lib/dependabot_support.ts";
 import {
+  ALLOWED_PATHS,
   checkLockfileDiff,
   checkPackageJsonDiff,
   classifyUpdate,
@@ -1816,5 +1817,32 @@ describe("decideImpactOutcome", () => {
       decideImpactOutcome({ ...clean, unverified: ["runtime behavior"] })
         .reason,
     ).toContain("unverified");
+  });
+});
+
+// 判定の基準になる一覧は、実行時にも書き換えられないようにする。
+// 型の`readonly`はコンパイル時にしか効かず、`as`や`any`を通ると書き換えられる。
+describe("frozen gate constants", () => {
+  test("ALLOWED_PATHS is frozen", () => {
+    expect(Object.isFrozen(ALLOWED_PATHS)).toBe(true);
+  });
+
+  test("REQUIRED_CHECKS is frozen", () => {
+    expect(Object.isFrozen(REQUIRED_CHECKS)).toBe(true);
+  });
+
+  test("an element of ALLOWED_PATHS cannot be replaced", () => {
+    expect(Reflect.set(ALLOWED_PATHS, 0, "evil/package.json")).toBe(false);
+  });
+
+  test("an element cannot be appended to REQUIRED_CHECKS", () => {
+    expect(Reflect.set(REQUIRED_CHECKS, REQUIRED_CHECKS.length, "x")).toBe(
+      false,
+    );
+  });
+
+  test("ALLOWED_PATHS keeps its first element after an attempt to replace it", () => {
+    Reflect.set(ALLOWED_PATHS, 0, "evil/package.json");
+    expect(ALLOWED_PATHS[0]).toBe("package.json");
   });
 });

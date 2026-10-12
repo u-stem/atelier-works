@@ -54,8 +54,12 @@ const UPDATE_WEIGHT: Record<UpdateKind, number> = {
   unknown: 3,
 };
 
-const LOCKFILE_PATHS: readonly string[] = ALLOWED_PATHS.filter((path) =>
-  path.endsWith("bun.lock"),
+/**
+ * 許可したファイルのうち、ロックファイルとして読むもの。
+ * 読み込み時に作る写しなので、元の一覧と同じく凍結する。
+ */
+export const LOCKFILE_PATHS: readonly string[] = Object.freeze(
+  ALLOWED_PATHS.filter((path) => path.endsWith("bun.lock")),
 );
 
 const MAX_LISTED_NAMES = 5;

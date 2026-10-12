@@ -7,8 +7,11 @@ import { escapeReasonSeparator } from "./log.ts";
 import { matchesForbiddenPath } from "./protected_paths.ts";
 
 // 値の出典は、.github/workflows/ci.ymlのジョブIDと、docs/security.mdの必須チェックの節である。
-/** mainのrulesetが必須にするチェック名。 */
-export const REQUIRED_CHECKS: readonly string[] = [
+/**
+ * mainのrulesetが必須にするチェック名。
+ * 判定の基準なので、実行時にも書き換えられないよう凍結する。
+ */
+export const REQUIRED_CHECKS: readonly string[] = Object.freeze([
   "scope",
   "check",
   "test-db",
@@ -16,18 +19,19 @@ export const REQUIRED_CHECKS: readonly string[] = [
   "console",
   "caddyfile",
   "console-fetcher-image",
-];
+]);
 
 /**
  * 更新を許すファイル。依存の版を変えるのは、マニフェストとロックファイルだけである。
  * リポジトリ直下とconsole/配下の2か所に限り、それ以外の階層は許さない。
+ * 判定の基準なので、実行時にも書き換えられないよう凍結する。
  */
-export const ALLOWED_PATHS: readonly string[] = [
+export const ALLOWED_PATHS: readonly string[] = Object.freeze([
   "package.json",
   "bun.lock",
   "console/package.json",
   "console/bun.lock",
-];
+]);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
