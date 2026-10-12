@@ -3670,6 +3670,37 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "factory_configのowners / repo_allowlistを見直してください",
   },
+  // `lib/repo_owner_gate.ts`の`verifyRepoOwnerId`。各準備のステップが、リポジトリを取得する前に止める。
+  {
+    pattern:
+      /^repository owner id differs from factory_config owners: (\S+) \(expected (\d+), actual (\d+)\)$/,
+    describe: (m) =>
+      `リポジトリ${m[1]}のオーナーのIDが、factory_configのownersのID ${m[2]}と食い違います(現在のID ${m[3]})`,
+    nextAction: () =>
+      `GitHubでそのオーナーが意図した持ち主か確かめ、factory_configのownersの名前かidを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  {
+    pattern: /^repository owner is not in factory_config owners: (\S+)$/,
+    describe: (m) =>
+      `リポジトリ${m[1]}のオーナーが、factory_configのownersにありません`,
+    nextAction: () =>
+      `factory_configのownersを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  {
+    pattern: /^factory repository id check failed: (\S+)$/,
+    describe: (m) =>
+      `Factory自身のリポジトリ${m[1]}のIDを、factory_configのfactory_repo_idと照合できません`,
+    nextAction: () =>
+      `factory_configのfactory_repoとfactory_repo_idを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  {
+    pattern:
+      /^repository not found while checking the owner id in factory_config owners: (\S+) \(expected (\d+)\)$/,
+    describe: (m) =>
+      `リポジトリ${m[1]}がGitHubで見つかりません(factory_configのownersのID ${m[2]})`,
+    nextAction: () =>
+      `リポジトリの削除、オーナーの改名、PATの権限を確かめ、factory_configのownersの名前とidを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
   // pr_fix_prepare.tsの`evaluateFixRoundGuard`(round_exhausted)
   {
     pattern: /^fix_round (\d+) exceeds max_fix_rounds (\d+)$/,

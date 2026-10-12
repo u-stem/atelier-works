@@ -215,8 +215,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `labeler_denied` | `poll_issues`、`poll_prs` | 対象、許可されていないトリガーラベル |
 | `fork_head_denied` | `poll_prs` | 対象のPR |
 | `labeler_check_limit` | `poll_issues`、`poll_prs` | 対象、付与者を判定できないトリガーラベル、付け直す操作 |
-| `owner_id_mismatch` | `poll_issues`、`poll_prs` | オーナー名、設定のID、食い違いのときはGitHubの現在のID、`owners`を見直す操作 |
-| `factory_repo_id_mismatch` | `self_update`、`poll_issues`、各フローのprepare、`pipeline_generate` | リポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`factory_repo`と`factory_repo_id`を見直す操作 |
+| `owner_id_mismatch` | `poll_issues`、`poll_prs`、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`、`manual_intake_create_issue`、`issue_proposal_apply` | オーナー名かリポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`owners`を見直す操作 |
+| `factory_repo_id_mismatch` | `self_update`、`poll_issues`、各フローのprepare、`pipeline_generate`、`manual_intake_create_issue`、`issue_proposal_apply` | リポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`factory_repo`と`factory_repo_id`を見直す操作 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |

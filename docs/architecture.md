@@ -68,6 +68,17 @@ flowchart TD
 
 承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
 
+`owners`に`id`があるオーナーは、GitHubの現在のIDと2か所で照合する。
+1つは、検索の入口である`poll_issues`と`poll_prs`である。
+もう1つは、作業項目を進める処理である。
+準備のステップは、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`である。
+ほかに、フォームからのIssueの作成(`manual_intake_create_issue`)と、Issue化の提案の処理(`issue_proposal_apply`)がある。
+どれも、cloneやGitHubへの書き込みの前に、リポジトリのオーナーを`owners`と照合する。
+`owners`に無いオーナーのリポジトリは、`factory_repo`でなければ止める。
+`factory_repo`と一致するリポジトリは、`factory_repo_id`があれば、同じ関門がそのIDも照合する。
+オーナーが改名して別の人がその名前を取得した場合に、その人のリポジトリを取得したり、実行したりしないためである。
+設定と限界は[運用](operations.md)の「オーナーの数値IDを固定する」に書く。
+
 ## 状態遷移
 
 作業項目(`work_items`)の状態は`status`列だけが持つ。GitHubのラベルは人からFactoryへのトリガーに限り、状態を表さない。
@@ -382,6 +393,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
+| `f/factory/lib/repo_owner_gate` | script | [LIB] 対象リポジトリのオーナーIDの照合 |
 | `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |

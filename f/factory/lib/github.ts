@@ -767,6 +767,33 @@ export async function getRepositoryId(
 }
 
 /**
+ * `GET repos/{owner}/{repo}`で、リポジトリを持つオーナー(ユーザーか組織)の現在の数値IDを取得する。
+ * 名前を別の人が取得していれば、その人のIDが返る。
+ * リポジトリの存在の確認と同じ1回の呼び出しで取れるので、オーナーのIDだけを別に引かない。
+ */
+export async function getRepositoryOwnerId(
+  client: GhClient,
+  owner: string,
+  repo: string,
+): Promise<number> {
+  const context = "GET /repos/{owner}/{repo}";
+  const response = await callGhApi(
+    client,
+    `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  const ownerPayload: unknown =
+    typeof parsed === "object" && parsed !== null
+      ? Reflect.get(parsed, "owner")
+      : undefined;
+  if (!isIdPayload(ownerPayload)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return ownerPayload.id;
+}
+
+/**
  * Factoryが作るコミットのauthorとcommitterの名義を、viewer
  * (PATが指すGitHubアカウント)から作る。
  * 個人のメールアドレスをコミットに書かないよう、GitHubのnoreplyの形
