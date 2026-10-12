@@ -14,14 +14,22 @@ import {
   claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
+  deferMainCiRun,
+  deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   getNoticeById,
+  getPreviousMainCiRun,
   hasIntakeRefreshEvent,
+  hasMainCiRuns,
   insertCleanupRun,
   insertWorkItem,
+  latestMainCiRunCreatedAt,
+  listMainCiRunsBySha,
+  listPendingMainCiRuns,
   listUnresolvedNoticesByKind,
   recordDeployment,
   recordFailure,
+  recordMainCiRun,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -29,6 +37,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  transitionMainCiRun,
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -1080,6 +1089,7 @@ await insertCleanupRun(
     deployments_deleted: 0,
     notices_deleted: 2,
     info_notices_resolved: 3,
+    main_ci_runs_deleted: 4,
     doc_dirs_deleted: 0,
   },
   sql,
@@ -1095,6 +1105,7 @@ const cleanupSummary = await getCleanupSummary(
 check(
   "cleanup_runs: the resolved info notices count is recorded and summed",
   cleanupSummary?.info_notices_resolved === 3 &&
+    cleanupSummary.main_ci_runs_deleted === 4 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
 );
@@ -1538,6 +1549,313 @@ check(
   viewerSeenMoved,
 );
 execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
+
+// mainのCIの記録: 重複は入れず、移すのは判定待ちの行だけで、掃除は判定待ちの行を消さない。
+const CI_SHA_A = "a".repeat(40);
+const CI_SHA_B = "b".repeat(40);
+const CI_REPO = { owner: "qdb", repo: "ci" };
+check(
+  "main_ci_runs: a repository without rows is a first observation",
+  (await hasMainCiRuns(CI_REPO.owner, CI_REPO.repo, sql)) === false,
+);
+check(
+  "main_ci_runs: the first record is inserted",
+  (await recordMainCiRun(
+    {
+      ...CI_REPO,
+      head_sha: CI_SHA_A,
+      state: "pending",
+      run_created_at: new Date("2026-10-09T00:00:00Z"),
+    },
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: the same sha is not recorded twice",
+  (await recordMainCiRun(
+    {
+      ...CI_REPO,
+      head_sha: CI_SHA_A,
+      state: "baseline",
+      run_created_at: new Date("2026-10-09T00:00:00Z"),
+    },
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    ...CI_REPO,
+    head_sha: CI_SHA_B,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+const ciRows = await listMainCiRunsBySha(
+  CI_REPO.owner,
+  CI_REPO.repo,
+  [CI_SHA_A, CI_SHA_B],
+  sql,
+);
+check(
+  "main_ci_runs: the recorded rows are read back with their states",
+  ciRows
+    .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
+    .sort()
+    .join(",") === "a:pending,b:baseline",
+  ciRows,
+);
+check(
+  "main_ci_runs: only the pending row is due",
+  (await listPendingMainCiRuns(100, sql))
+    .filter((row) => row.owner === CI_REPO.owner)
+    .map((row) => row.head_sha)
+    .join(",") === CI_SHA_A,
+);
+const ciPending = ciRows.find((row) => row.head_sha === CI_SHA_A);
+if (ciPending === undefined) throw new Error("main_ci_runs row is missing");
+check(
+  "main_ci_runs: a deferred row is not due",
+  (await deferMainCiRun(
+    ciPending.id,
+    { nextCheckAt: new Date(Date.now() + 60 * 60 * 1000) },
+    sql,
+  )) === true &&
+    (await listPendingMainCiRuns(100, sql)).filter(
+      (row) => row.owner === CI_REPO.owner,
+    ).length === 0,
+);
+const ciSettled = {
+  state: "failed" as const,
+  summary: "失敗したworkflow: CI (failure)",
+  prevFailed: true,
+};
+check(
+  "main_ci_runs: transition moves a pending row once",
+  (await transitionMainCiRun(ciPending.id, ciSettled, sql)) === true &&
+    (await transitionMainCiRun(ciPending.id, ciSettled, sql)) === false,
+);
+const ciAfter = (
+  await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_A], sql)
+)[0];
+check(
+  "main_ci_runs: the transition stored the summary and prev_failed, and kept the run time",
+  ciAfter?.state === "failed" &&
+    ciAfter.prev_failed === true &&
+    ciAfter.summary === ciSettled.summary &&
+    ciAfter.run_created_at?.toISOString() === "2026-10-09T00:00:00.000Z",
+  ciAfter,
+);
+let ciRejectedSha = false;
+try {
+  await recordMainCiRun(
+    {
+      ...CI_REPO,
+      head_sha: "abc1234",
+      state: "pending",
+      run_created_at: new Date("2026-10-12T00:00:00Z"),
+    },
+    sql,
+  );
+} catch {
+  ciRejectedSha = true;
+}
+check(
+  "main_ci_runs: a short sha is rejected before the database",
+  ciRejectedSha,
+);
+let ciCheckRejected = false;
+try {
+  execPsql(
+    target,
+    `INSERT INTO factory.main_ci_runs (owner, repo, head_sha) VALUES ('qdb', 'ci', 'ABC')`,
+  );
+} catch {
+  ciCheckRejected = true;
+}
+check("main_ci_runs: the table rejects a malformed sha", ciCheckRejected);
+let ciLongSummaryRejected = false;
+try {
+  execPsql(
+    target,
+    `UPDATE factory.main_ci_runs SET summary = repeat('x', 401) WHERE owner = 'qdb' AND head_sha = '${CI_SHA_B}'`,
+  );
+} catch {
+  ciLongSummaryRejected = true;
+}
+check(
+  "main_ci_runs: the table rejects a summary over 400 characters",
+  ciLongSummaryRejected,
+);
+const ciPendingOther = "c".repeat(40);
+await recordMainCiRun(
+  {
+    ...CI_REPO,
+    head_sha: ciPendingOther,
+    state: "pending",
+    run_created_at: new Date("2026-10-12T01:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
+);
+const ciDeleted = await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+check(
+  "main_ci_runs: cleanup deletes the settled rows and keeps the pending row",
+  ciDeleted >= 2 &&
+    (
+      await listMainCiRunsBySha(
+        CI_REPO.owner,
+        CI_REPO.repo,
+        [ciPendingOther],
+        sql,
+      )
+    ).length === 1,
+  ciDeleted,
+);
+// 初回の観測の記録が最新のコミットだけで止まっても、高水位線はその最新の時刻まで上がる。
+const FIRST_REPO = { owner: "qdb", repo: "first" };
+await recordMainCiRun(
+  {
+    ...FIRST_REPO,
+    head_sha: CI_SHA_A,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main_ci_runs: recording only the newest baseline raises the watermark to it",
+  (
+    await latestMainCiRunCreatedAt(FIRST_REPO.owner, FIRST_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z",
+);
+
+// 掃除は、リポジトリごとの最新の行を残す。保持期間の後も、初回の観測に戻らない。
+const KEEP_REPO = { owner: "qdb", repo: "keep" };
+const CI_SHA_D = "d".repeat(40);
+const CI_SHA_E = "e".repeat(40);
+await recordMainCiRun(
+  {
+    ...KEEP_REPO,
+    head_sha: CI_SHA_D,
+    state: "baseline",
+    run_created_at: new Date("2026-10-11T00:00:00Z"),
+  },
+  sql,
+);
+await recordMainCiRun(
+  {
+    ...KEEP_REPO,
+    head_sha: CI_SHA_E,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+const keepPrevious = await getPreviousMainCiRun(
+  KEEP_REPO.owner,
+  KEEP_REPO.repo,
+  new Date("2026-10-12T00:00:00Z"),
+  sql,
+);
+check(
+  "main_ci_runs: the previous row is the newest one older than the run time",
+  keepPrevious?.head_sha === CI_SHA_D && keepPrevious.state === "baseline",
+  keepPrevious,
+);
+check(
+  "main_ci_runs: no row is older than the oldest run time",
+  (await getPreviousMainCiRun(
+    KEEP_REPO.owner,
+    KEEP_REPO.repo,
+    new Date("2026-10-11T00:00:00Z"),
+    sql,
+  )) === null,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'keep'",
+);
+await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+const keptRows = await listMainCiRunsBySha(
+  KEEP_REPO.owner,
+  KEEP_REPO.repo,
+  [CI_SHA_D, CI_SHA_E],
+  sql,
+);
+check(
+  "main_ci_runs: cleanup keeps the newest row of the repository",
+  keptRows.map((row) => row.head_sha).join(",") === CI_SHA_E,
+  keptRows,
+);
+check(
+  "main_ci_runs: the repository is not a first observation after the cleanup",
+  (await hasMainCiRuns(KEEP_REPO.owner, KEEP_REPO.repo, sql)) === true,
+);
+check(
+  "main_ci_runs: the newest run time survives the cleanup",
+  (
+    await latestMainCiRunCreatedAt(KEEP_REPO.owner, KEEP_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z",
+);
+// 新しいコミットを先に記録しても(小さいid)、実行の時刻が最新の行を残す。
+const LATE_REPO = { owner: "qdb", repo: "late" };
+const CI_SHA_F = "f".repeat(40);
+const CI_SHA_G = "1".repeat(40);
+await recordMainCiRun(
+  {
+    ...LATE_REPO,
+    head_sha: CI_SHA_F,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+await recordMainCiRun(
+  {
+    ...LATE_REPO,
+    head_sha: CI_SHA_G,
+    state: "baseline",
+    run_created_at: new Date("2026-10-11T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'late'",
+);
+await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+const lateRows = await listMainCiRunsBySha(
+  LATE_REPO.owner,
+  LATE_REPO.repo,
+  [CI_SHA_F, CI_SHA_G],
+  sql,
+);
+check(
+  "main_ci_runs: cleanup keeps the row with the newest run time, not the newest id",
+  lateRows.map((row) => row.head_sha).join(",") === CI_SHA_F,
+  lateRows,
+);
+check(
+  "main_ci_runs: the watermark is unchanged after the cleanup",
+  (
+    await latestMainCiRunCreatedAt(LATE_REPO.owner, LATE_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z" &&
+    (await hasMainCiRuns(LATE_REPO.owner, LATE_REPO.repo, sql)) === true,
+);
+execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
 
 // ---------------------------------------------------------------------------
 // 未解決の通知の重複の抑止

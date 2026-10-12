@@ -36,6 +36,7 @@ describe("summarizeCleanup", () => {
       deployments_deleted: 5,
       notices_deleted: 2,
       info_notices_resolved: 0,
+      main_ci_runs_deleted: 0,
       doc_dirs_deleted: 0,
     });
     expect(summary).toBe(
@@ -51,6 +52,7 @@ describe("summarizeCleanup with resolved info notices", () => {
     job_failures_deleted: 12,
     deployments_deleted: 5,
     notices_deleted: 2,
+    main_ci_runs_deleted: 0,
     doc_dirs_deleted: 0,
   };
 

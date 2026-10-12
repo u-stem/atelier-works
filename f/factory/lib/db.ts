@@ -19,6 +19,14 @@ import {
 import { type JobIds, jobIdsFromEnv } from "./job_ids.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
+  assertCommitSha,
+  isMainCiSettledState,
+  MAIN_CI_STATES,
+  MAIN_CI_SUMMARY_MAX_LENGTH,
+  type MainCiSettledState,
+  type MainCiState,
+} from "./main_ci_support.ts";
+import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
   APPROVAL_REQUEST_STATUSES,
@@ -28,6 +36,7 @@ import {
   type AuditIssueProposal,
   type AuditReport,
   assertBranchName,
+  assertGitHubName,
   assertPullRequestUrl,
   type DeploymentRecord,
   type Diagram,
@@ -3040,17 +3049,295 @@ export async function insertCleanupRun(
   const statement = sql`
     INSERT INTO factory.cleanup_runs (
       work_items_deleted, approval_requests_deleted, job_failures_deleted,
-      deployments_deleted, notices_deleted, info_notices_resolved, doc_dirs_deleted
+      deployments_deleted, notices_deleted, info_notices_resolved,
+      main_ci_runs_deleted, doc_dirs_deleted
     ) VALUES (
       ${counts.work_items_deleted}::integer, ${counts.approval_requests_deleted}::integer,
       ${counts.job_failures_deleted}::integer, ${counts.deployments_deleted}::integer,
       ${counts.notices_deleted}::integer, ${counts.info_notices_resolved}::integer,
-      ${counts.doc_dirs_deleted}::integer
+      ${counts.main_ci_runs_deleted}::integer, ${counts.doc_dirs_deleted}::integer
     )
     RETURNING id
   `;
   const row = await fetchOneRow(statement, "insertCleanupRun");
   return parseId(row.id, "id");
+}
+
+// ---------------------------------------------------------------------------
+// main_ci_runs
+// ---------------------------------------------------------------------------
+
+/** `factory.main_ci_runs`の1行。 */
+export type MainCiRun = {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly head_sha: string;
+  readonly state: MainCiState;
+  readonly summary: string;
+  readonly prev_failed: boolean;
+  readonly first_seen_at: Date;
+  /** そのコミットの最も古い実行の作成時刻。実行をまだ見ていなければnull。 */
+  readonly run_created_at: Date | null;
+  readonly next_check_at: Date;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+};
+
+export type NewMainCiRun = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly head_sha: string;
+  /** 初回の観測で既存のコミットを記録するときは`baseline`、新しいコミットは`pending`。 */
+  readonly state: "pending" | "baseline";
+  /** そのコミットの最古の実行の作成時刻。判定の期限と高水位線の基準になるので、記録時に必ず入れる。 */
+  readonly run_created_at: Date;
+};
+
+function toMainCiRun(row: SqlRow): MainCiRun {
+  return {
+    id: parseId(row.id, "id"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    head_sha: parseRequiredString(row.head_sha, "head_sha"),
+    state: parseEnum(row.state, MAIN_CI_STATES, "state"),
+    summary: parseRequiredString(row.summary, "summary"),
+    prev_failed: parseBoolean(row.prev_failed, "prev_failed"),
+    first_seen_at: parseDate(row.first_seen_at, "first_seen_at"),
+    run_created_at:
+      row.run_created_at === null || row.run_created_at === undefined
+        ? null
+        : parseDate(row.run_created_at, "run_created_at"),
+    next_check_at: parseDate(row.next_check_at, "next_check_at"),
+    created_at: parseDate(row.created_at, "created_at"),
+    updated_at: parseDate(row.updated_at, "updated_at"),
+  };
+}
+
+/**
+ * コミットを`factory.main_ci_runs`に記録する。新しく入れたら`true`、記録済みなら`false`を返す。
+ * 記録済みの行は書き換えない。同じコミットを何度見ても、状態を巻き戻さないため。
+ * `head_sha`は完全なコミットshaでなければ、DBに触れる前に例外を投げる。
+ * `owner`と`repo`もGitHubの名前の形でなければ例外を投げる。
+ */
+export async function recordMainCiRun(
+  record: NewMainCiRun,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(record.owner);
+  assertGitHubName(record.repo);
+  assertCommitSha(record.head_sha);
+  const rows = await sql`
+    INSERT INTO factory.main_ci_runs (owner, repo, head_sha, state, run_created_at)
+    VALUES (
+      ${record.owner}, ${record.repo}, ${record.head_sha}, ${record.state},
+      ${record.run_created_at.toISOString()}::timestamptz
+    )
+    ON CONFLICT (owner, repo, head_sha) DO NOTHING
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * そのリポジトリに記録が1件でもあるか。
+ * 無ければ初回の観測なので、見つけた既存のコミットを`baseline`で記録する。
+ * 掃除は各リポジトリの最新の行を残すので、保持期間がたっても`false`には戻らない。
+ */
+export async function hasMainCiRuns(
+  owner: string,
+  repo: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * そのリポジトリの記録済みの行のうち、最も新しい実行の作成時刻を返す。行が無ければnull。
+ * どの状態の行も数える。実行の時刻(`run_created_at`)が無い行は、最初に見た時刻で数える。
+ * この並びの鍵は、掃除が残す最新の行(`deleteMainCiRunsBefore`)と
+ * 1つ前の行(`getPreviousMainCiRun`)の鍵と同じで、掃除の後も値が変わらない。
+ * これより古いコミットは、新しく見つけても通知の対象にしない(`planNewShas`)。
+ */
+export async function latestMainCiRunCreatedAt(
+  owner: string,
+  repo: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<Date | null> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT max(COALESCE(run_created_at, first_seen_at)) AS latest FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+  `.fetch();
+  const latest = rows[0]?.latest;
+  return latest === null || latest === undefined
+    ? null
+    : parseDate(latest, "latest");
+}
+
+/** `shas`のうち、記録済みのコミットの行を返す。`shas`が空ならDBに触れない。 */
+export async function listMainCiRunsBySha(
+  owner: string,
+  repo: string,
+  shas: readonly string[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<MainCiRun[]> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  for (const sha of shas) assertCommitSha(sha);
+  if (shas.length === 0) return [];
+  const rows = await sql`
+    SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
+           run_created_at, next_check_at, created_at, updated_at
+    FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND head_sha = ANY(${[...shas]}::text[])
+  `.fetch();
+  return rows.map(toMainCiRun);
+}
+
+/**
+ * 判定を待っていて、次の照会の時刻が来ている行を、最初に見た順に最大`limit`件返す。
+ * `next_check_at`が未来の行(`deferMainCiRun`で先送りした行)は返さない。
+ */
+export async function listPendingMainCiRuns(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<MainCiRun[]> {
+  const rows = await sql`
+    SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
+           run_created_at, next_check_at, created_at, updated_at
+    FROM factory.main_ci_runs
+    WHERE state = 'pending' AND next_check_at <= now()
+    ORDER BY first_seen_at ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toMainCiRun);
+}
+
+export type MainCiTransition = {
+  readonly state: MainCiSettledState;
+  readonly summary: string;
+  readonly prevFailed: boolean;
+};
+
+/**
+ * 判定を待っている行を、確定した状態に移す。この呼び出しで移したら`true`を返す。
+ * 条件は`state = 'pending'`なので、別の実行が先に移した行は書き換えず、`false`を返す。
+ * `state`が移れる状態でないか、`summary`が`MAIN_CI_SUMMARY_MAX_LENGTH`を超えるときは、DBに触れずに例外を投げる。
+ * 呼び出し側は、通知の登録を先にし、この更新を後にする。
+ * 更新が先に成功して通知が失敗すると、通知が永久に出ないため。
+ * 通知の重複は、通知側の部分一意索引が防ぐ。
+ */
+export async function transitionMainCiRun(
+  id: number,
+  to: MainCiTransition,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  if (!isMainCiSettledState(to.state)) {
+    throw new Error("transitionMainCiRun: state is not a settled state");
+  }
+  if (to.summary.length > MAIN_CI_SUMMARY_MAX_LENGTH) {
+    throw new Error(
+      `transitionMainCiRun: summary is too long (max ${String(MAIN_CI_SUMMARY_MAX_LENGTH)} characters)`,
+    );
+  }
+  const rows = await sql`
+    UPDATE factory.main_ci_runs
+    SET state = ${to.state}, summary = ${to.summary}, prev_failed = ${to.prevFailed}::boolean,
+        updated_at = now()
+    WHERE id = ${id}::bigint AND state = 'pending'
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+export type MainCiDeferral = {
+  readonly nextCheckAt: Date;
+};
+
+/**
+ * 判定を待っている行の、次の照会の時刻を先に延ばす。延ばしたら`true`を返す。
+ * 行は`pending`のままで、延ばした時刻までは`listPendingMainCiRuns`が返さない。
+ * 条件は`state = 'pending'`なので、判定が済んだ行は書き換えない。
+ */
+export async function deferMainCiRun(
+  id: number,
+  deferral: MainCiDeferral,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.main_ci_runs
+    SET next_check_at = ${deferral.nextCheckAt.toISOString()}::timestamptz,
+        updated_at = now()
+    WHERE id = ${id}::bigint AND state = 'pending'
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 判定が済んだ(`pending`以外の)行のうち、`updated_at`が`olderThan`以前のものを削除し、行数を返す。
+ * 判定を待っている行は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
+ * 各リポジトリで、実行の作成時刻が最も新しい1行は、判定済みでも削除しない。
+ * 鍵は`(COALESCE(run_created_at, first_seen_at), id)`の最大で、`latestMainCiRunCreatedAt`が
+ * 返す値の行と必ず同じになる。見つけた順ではなく実行の時刻で選ぶのは、新しいコミットを先に記録しても
+ * 高水位線が変わらないようにするため。
+ * リポジトリの記録を空に戻すと、初回の観測と見なして既存のコミットを`baseline`で記録し直すため、
+ * `hasMainCiRuns`と`latestMainCiRunCreatedAt`が保持期間の後も値を保てるようにする。
+ */
+export async function deleteMainCiRunsBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.main_ci_runs AS r
+    WHERE r.state <> 'pending'
+      AND r.updated_at <= ${olderThan.toISOString()}::timestamptz
+      AND EXISTS (
+        SELECT 1 FROM factory.main_ci_runs AS newer
+        WHERE newer.owner = r.owner AND newer.repo = r.repo
+          AND (COALESCE(newer.run_created_at, newer.first_seen_at), newer.id)
+            > (COALESCE(r.run_created_at, r.first_seen_at), r.id)
+      )
+    RETURNING r.id
+  `.fetch();
+  return rows.length;
+}
+
+/**
+ * `runCreatedAt`より前の実行の作成時刻を持つ行のうち、最も新しい1行を返す。無ければnull。
+ * 「1つ前のコミット」の状態を引くのに使う(`isPrevFailed`)。
+ * 並びの鍵は`latestMainCiRunCreatedAt`と同じで、時刻が同じ行は`id`の大きい方を返す。
+ * 判定を待っている行や`baseline`の行も返すので、呼び出し側が`state`を見て扱う。
+ */
+export async function getPreviousMainCiRun(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<MainCiRun | null> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
+           run_created_at, next_check_at, created_at, updated_at
+    FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND COALESCE(run_created_at, first_seen_at) < ${runCreatedAt.toISOString()}::timestamptz
+    ORDER BY COALESCE(run_created_at, first_seen_at) DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toMainCiRun(row);
 }
 
 // ---------------------------------------------------------------------------
