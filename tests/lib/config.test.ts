@@ -549,6 +549,124 @@ describe("pr_ci_watch_enabled", () => {
   });
 });
 
+describe("pr_ci_fix_enabled", () => {
+  test("defaults pr_ci_fix_enabled to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_ci_fix_enabled).toBe(false);
+  });
+
+  test("passes through an explicit pr_ci_fix_enabled true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_enabled: true,
+    });
+    expect(config.pr_ci_fix_enabled).toBe(true);
+  });
+
+  test("throws when pr_ci_fix_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_enabled: "true" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("pr_ci_fix_max_rounds", () => {
+  test("defaults pr_ci_fix_max_rounds to 2 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_ci_fix_max_rounds).toBe(2);
+  });
+
+  test("passes through an explicit pr_ci_fix_max_rounds", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_max_rounds: 1,
+    });
+    expect(config.pr_ci_fix_max_rounds).toBe(1);
+  });
+
+  test("accepts 10 as pr_ci_fix_max_rounds", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_max_rounds: 10,
+    });
+    expect(config.pr_ci_fix_max_rounds).toBe(10);
+  });
+
+  test("throws when pr_ci_fix_max_rounds is 11", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_max_rounds: 11 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_ci_fix_max_rounds is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_max_rounds: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_ci_fix_max_rounds is negative", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_max_rounds: -1 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_ci_fix_max_rounds is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_max_rounds: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_ci_fix_max_rounds is a string", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_max_rounds: "2" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("pr_ci_fix_enabled_since", () => {
+  test("defaults pr_ci_fix_enabled_since to null when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_ci_fix_enabled_since).toBeNull();
+  });
+
+  test("passes through an explicit null", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_enabled_since: null,
+    });
+    expect(config.pr_ci_fix_enabled_since).toBeNull();
+  });
+
+  test("returns a UTC time as a Date", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_enabled_since: "2026-10-13T03:00:00Z",
+    });
+    expect(config.pr_ci_fix_enabled_since).toEqual(
+      new Date("2026-10-13T03:00:00Z"),
+    );
+  });
+
+  test("returns a time with an offset and fractional seconds as the same instant", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_enabled_since: "2026-10-13T12:00:00.250+09:00",
+    });
+    expect(config.pr_ci_fix_enabled_since?.toISOString()).toBe(
+      "2026-10-13T03:00:00.250Z",
+    );
+  });
+
+  test.each([
+    ["an empty string", ""],
+    ["a date without a time", "2026-10-13"],
+    ["a time without an offset", "2026-10-13T03:00:00"],
+    ["a time without seconds", "2026-10-13T03:00Z"],
+    ["text", "yesterday"],
+    ["a month that does not exist", "2026-13-01T00:00:00Z"],
+    ["a day that does not exist", "2026-02-30T00:00:00Z"],
+    ["a number", 1760000000],
+    ["a boolean", false],
+  ])("throws when pr_ci_fix_enabled_since is %s", (_name, value) => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_enabled_since: value };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("implement settings (工程3)", () => {
   test("defaults the seven scalar implement settings when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

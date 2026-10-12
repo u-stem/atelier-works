@@ -9,7 +9,7 @@ locks:
   f/factory/audit__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
   f/factory/auto_retry_stale_image: 15eaa61b9b60bcc931598f5fa94694eb68d4f7a05ed35b5c0f7319981263fe5c
-  f/factory/cleanup_db: db65b8aaf566594a6f94a9ebdfa8e052789138be9ea811a459c31a9b2b364c38
+  f/factory/cleanup_db: 3d5abd0f9c1dad38593cfb2eb80ff426d586ac5cb6a4a776811a39bdea0b05a7
   f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
   f/factory/dependabot__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -25,13 +25,13 @@ locks:
   f/factory/lib/check_sandbox: cda5c9e171572ef81113d3748eb988f968e103fc0aab0feebe5d142bd1f9bf57
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 0da701e30c732878371ee7b96d96d343173e230deef982fad82300a201c9fa0c
-  f/factory/lib/cleanup_db_support: 8d37ad70b7260e2f834d556262cf1ffe1b4ef18ad26092fb4563301929c90979
+  f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 81d98d59d095338a46ffc844fbb47254e89c113652498cfbe39c38cad3bf37da
-  f/factory/lib/config: 97519116495116ba2cf571970b7f7ead87cd1c19e506e5616221813a5a8ad0af
+  f/factory/lib/config: 46bf1b435937e9c6266ea5192e0e65d0e0f6b5675ed30be003f9ef6a109bbf71
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d1a31969da1507c7e0d959f55897dec7360835451e901fdc84bd984c6b195e53
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
-  f/factory/lib/db: 579e0e54bf6087f42fd8edb4c80fcc2d91af8355d35d4433b8234e68180945d1
+  f/factory/lib/db: 5706c93d05d80c0b4aa5f822ff6ed150860519c02110d684d681314eb8eb185f
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -59,8 +59,8 @@ locks:
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: 64a0543f1d628ee92270a939a06f0eab81d7eed0b133f363b9f35692cd7f5004
-  f/factory/lib/pr_ci_support: e0a7f9c994875dab151231533c402f83897818c9e9d3b8c62e1f3323912c2ca6
-  f/factory/lib/pr_ci_watch: bb8ad9c66d426d180cb161cb3ca21cb7440648ae5a6153fd147c36482054f582
+  f/factory/lib/pr_ci_support: 0c77ea3b731b7a412938dda584f756c0995592448b2581b6ef25555c5f4c31a7
+  f/factory/lib/pr_ci_watch: 86db34f8de9fd3d7620a0ca8ba5b9ebd513ae1125340ace009651924a793d361
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: bae7e3b08acef43ca6534d770f4e010631843850fffab408ff7566c66f5c6ad9
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
@@ -73,7 +73,7 @@ locks:
   f/factory/lib/self_update_support: 67c7b658a660af759976cf14ba5f2cf41921074e4f71916760a97bfd0475159c
   f/factory/lib/summary_support: 032b4c68ad4412f890724532423d8c81d8a6da7f2186e3cfe4d84999c56484a9
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: a2ba5a1bf2f8ede8d9f6403afefe5907f5a4171dfe89863876cfda49a3e279a8
+  f/factory/lib/types: 892bc1b48b25decab5eb8d3feea4b4b4d9294629df4f79c324d922f8120237c4
   f/factory/lib/worker_load_support: b6ae51b478860e07a4da1c130a793c619e524f9f400301bc881451810dbc6153
   f/factory/lib/workspace: 16038cdadec2989579173c50eabef29edc4caf25d59414e63a00b7cd79026692
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a

@@ -12,16 +12,20 @@ import {
 import {
   addNoticeUnlessUnresolved,
   claimIssueCreation,
+  claimPrCiCheckForFix,
   countImplementFailedRounds,
+  countPrCiFixRounds,
   countPrFixFailures,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
   deleteWorkerSamplesBefore,
   dependabotGateWaitingCancels,
+  findOrphanFixingPrCiChecks,
   getLatestPrCiCheck,
   getNoticeById,
   getPreviousMainCiRun,
+  getWorkItem,
   hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
@@ -33,10 +37,12 @@ import {
   insertWorkerSample,
   insertWorkItem,
   isActivePrFixUniqueViolation,
+  isLatestMainCiRunFailed,
   latestMainCiRunCreatedAt,
   listActivePrFixWorkItems,
   listAutoRetryCandidates,
   listFailedPrCiChecks,
+  listFixingPrCiChecks,
   listMainCiRunsBySha,
   listNoCiPrCiChecksToRecheck,
   listPendingMainCiRuns,
@@ -52,6 +58,7 @@ import {
   recordMainCiRun,
   recordPrCiCheck,
   recordWorkspaceDiskUsageNotice,
+  releaseFixingPrCiCheck,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -60,6 +67,7 @@ import {
   restartStoppedWorkItem,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  setPrCiFixHold,
   setWorkItemPrUrl,
   touchPrCiCheck,
   transitionMainCiRun,
@@ -858,6 +866,52 @@ for (const [name, workItemId, expected] of prFixExpectations) {
   const actual = await countPrFixFailures(workItemId, sql);
   check(`countPrFixFailures: ${name}`, actual === expected, actual);
 }
+
+// CIの失敗を直すラウンド(ci_check_id を持つ作業項目)の失敗は、同じPRの指摘の対応の失敗に数えない。
+const ciRoundItem = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    owner: OWNER,
+    repo: "r",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 110,
+    title: "qdb ci round",
+    body: null,
+    status: "needs_human",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+    ci_check_id: 424242,
+  },
+  sql,
+);
+const reviewRoundItem = await prFixItem(110);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
+    runRow(ciRoundItem, "pr_fix", 900, "timeout"),
+    runRow(ciRoundItem, "pr_fix_verify_retry", 800, null),
+  ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${roundRow(ciRoundItem, "blocked", 700)}`,
+);
+check(
+  "countPrFixFailures: the failures of a round that fixes a CI failure are not counted",
+  (await countPrFixFailures(reviewRoundItem, sql)) === 0,
+);
+check(
+  "countPrFixFailures: a round that fixes a CI failure counts nothing for itself either",
+  (await countPrFixFailures(ciRoundItem, sql)) === 0,
+);
 
 // ---------------------------------------------------------------------------
 // 通知の解決
@@ -2719,6 +2773,599 @@ check(
     (await listPrCiChecksForPr("QDB", "PRCI", 71, sql)).length === 1,
 );
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// 失敗を直す作業項目: 起動は1つの文で行の更新と作業項目の挿入を行い、条件に合わなければ何も書かない。
+const FIX = { owner: "qfix", repo: "app" };
+const FIX_SHA_1 = "4".repeat(40);
+const FIX_SHA_2 = "5".repeat(40);
+const fixRowNew = (prNumber: number, sha: string) => ({
+  ...FIX,
+  pr_number: prNumber,
+  head_sha: sha,
+  work_item_id: null,
+  run_created_at: null,
+});
+/** 行を記録して`failed`にし、その行を返す。 */
+async function failedFixRow(prNumber: number, sha: string) {
+  await recordPrCiCheck(fixRowNew(prNumber, sha), sql);
+  const row = (
+    await listPrCiChecksForPr(FIX.owner, FIX.repo, prNumber, sql)
+  ).find((item) => item.head_sha === sha);
+  if (row === undefined) throw new Error("pr_ci_checks row is missing");
+  await transitionPrCiCheck(row.id, "pending", { state: "failed" }, sql);
+  return row;
+}
+const fixRowOf = async (id: number) => {
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks WHERE id = ${id}::bigint
+  `.fetch();
+  return rows[0];
+};
+const fixClaim = (
+  id: number,
+  headSha: string,
+  names: { owner: string; repo: string } = FIX,
+) =>
+  claimPrCiCheckForFix(
+    {
+      id,
+      ...names,
+      headSha,
+      title: "fix title",
+      claimedBy: "qfix-bot",
+    },
+    sql,
+  );
+const fixWorkItemCount = async (prNumber: number) =>
+  (
+    await sql`
+      SELECT id FROM factory.work_items
+      WHERE lower(owner) = 'qfix' AND kind = 'pr_fix' AND pr_number = ${prNumber}::integer
+    `.fetch()
+  ).length;
+
+// 成功した起動は、行をfixingにし、作業項目を同じ文で入れる。
+const fixOk = await failedFixRow(501, FIX_SHA_1);
+const fixOkId = await fixClaim(fixOk.id, FIX_SHA_1);
+check(
+  "claim: a failed row of the current head is claimed and returns the new work item id",
+  typeof fixOkId === "number",
+  fixOkId,
+);
+const fixOkRow = await fixRowOf(fixOk.id);
+check(
+  "claim: the row moves to fixing and points at the new work item",
+  fixOkRow?.state === "fixing" && Number(fixOkRow.fix_work_item_id) === fixOkId,
+  fixOkRow,
+);
+check(
+  "claim: the attempt of the row is counted",
+  Number(fixOkRow?.fix_attempts) === 1,
+  fixOkRow,
+);
+const fixOkItem = fixOkId === null ? null : await getWorkItem(fixOkId, sql);
+check(
+  "claim: the work item is a pr_fix that is already fixing, tied to the row",
+  fixOkItem?.kind === "pr_fix" &&
+    fixOkItem.status === "fixing" &&
+    fixOkItem.ci_check_id === fixOk.id &&
+    fixOkItem.pr_number === 501 &&
+    fixOkItem.head_sha === FIX_SHA_1,
+  fixOkItem,
+);
+check(
+  "claim: the work item carries the title and the claimant",
+  fixOkItem?.title === "fix title" && fixOkItem.claimed_by === "qfix-bot",
+  fixOkItem,
+);
+check(
+  "claim: without an earlier pr_fix the round and the watermarks start at zero",
+  fixOkItem?.fix_round === 0 &&
+    fixOkItem.last_review_id === 0 &&
+    fixOkItem.last_comment_id === 0 &&
+    fixOkItem.last_review_comment_id === 0,
+  fixOkItem,
+);
+check(
+  "claim: the same row cannot be claimed twice",
+  (await fixClaim(fixOk.id, FIX_SHA_1)) === null &&
+    (await fixWorkItemCount(501)) === 1,
+);
+
+// 条件に合わない起動は、何も書かない。
+const fixHeadMoved = await failedFixRow(502, FIX_SHA_1);
+check(
+  "claim: a head that is no longer the current head is not claimed",
+  (await fixClaim(fixHeadMoved.id, FIX_SHA_2)) === null &&
+    (await fixRowOf(fixHeadMoved.id))?.state === "failed" &&
+    (await fixWorkItemCount(502)) === 0,
+);
+await recordPrCiCheck(fixRowNew(503, FIX_SHA_1), sql);
+const fixPending = (
+  await listPrCiChecksForPr(FIX.owner, FIX.repo, 503, sql)
+)[0];
+if (fixPending === undefined) throw new Error("pr_ci_checks row is missing");
+check(
+  "claim: a row that is not failed is not claimed",
+  (await fixClaim(fixPending.id, FIX_SHA_1)) === null &&
+    (await fixRowOf(fixPending.id))?.state === "pending" &&
+    (await fixWorkItemCount(503)) === 0,
+);
+check(
+  "claim: another repository does not match the row",
+  (await fixClaim(fixHeadMoved.id, FIX_SHA_1, {
+    owner: "qfix",
+    repo: "other",
+  })) === null && (await fixRowOf(fixHeadMoved.id))?.state === "failed",
+);
+
+// 同じPRに終端でないpr_fixがあれば、綴りの大文字小文字が違っても起動しない。
+const fixBlocked = await failedFixRow(504, FIX_SHA_1);
+const blockingItem = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    owner: "Qfix",
+    repo: "App",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 504,
+    title: "running fix",
+    body: null,
+    status: "fixing",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+check(
+  "claim: a running pr_fix of the same pull request blocks the claim",
+  (await fixClaim(fixBlocked.id, FIX_SHA_1)) === null &&
+    (await fixRowOf(fixBlocked.id))?.state === "failed" &&
+    (await fixWorkItemCount(504)) === 1,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'rereview_requested' WHERE id = ${String(blockingItem)}`,
+);
+check(
+  "claim: once that pr_fix is terminal the claim goes through",
+  typeof (await fixClaim(fixBlocked.id, FIX_SHA_1)) === "number",
+);
+
+// 直近のpr_fixのラウンドと処理済みの位置を写す。写すのは作成が最も新しい行からである。
+const fixSeed = await failedFixRow(505, FIX_SHA_1);
+const seedOlder = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    owner: FIX.owner,
+    repo: FIX.repo,
+    issue_number: null,
+    issue_url: null,
+    pr_number: 505,
+    title: "older",
+    body: null,
+    status: "rereview_requested",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+const seedNewer = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    owner: FIX.owner,
+    repo: FIX.repo,
+    issue_number: null,
+    issue_url: null,
+    pr_number: 505,
+    title: "newer",
+    body: null,
+    status: "rereview_requested",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET fix_round = 1, last_review_id = 11, last_comment_id = 12, last_review_comment_id = 13, created_at = now() - interval '2 hours' WHERE id = ${String(seedOlder)}`,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET fix_round = 3, last_review_id = 101, last_comment_id = 202, last_review_comment_id = 303 WHERE id = ${String(seedNewer)}`,
+);
+const fixSeedId = await fixClaim(fixSeed.id, FIX_SHA_1);
+const fixSeedItem =
+  fixSeedId === null ? null : await getWorkItem(fixSeedId, sql);
+check(
+  "claim: the round and the watermarks are copied from the latest pr_fix",
+  fixSeedItem?.fix_round === 3 &&
+    fixSeedItem.last_review_id === 101 &&
+    fixSeedItem.last_comment_id === 202 &&
+    fixSeedItem.last_review_comment_id === 303,
+  fixSeedItem,
+);
+check(
+  "claim: the observed watermarks of the new work item stay empty",
+  fixSeedItem?.observed_review_id === null &&
+    fixSeedItem.observed_comment_id === null &&
+    fixSeedItem.observed_review_comment_id === null,
+  fixSeedItem,
+);
+
+// 保留した行は起動しない。解除すれば起動できる。
+const fixHold = await failedFixRow(506, FIX_SHA_1);
+check(
+  "hold: a failed row gets a hold reason once",
+  (await setPrCiFixHold(fixHold.id, "main_ci_failed", sql)) === true &&
+    (await setPrCiFixHold(fixHold.id, "main_ci_failed", sql)) === false,
+);
+check(
+  "hold: a row on hold is not claimed",
+  (await fixClaim(fixHold.id, FIX_SHA_1)) === null &&
+    (await fixRowOf(fixHold.id))?.fix_hold_reason === "main_ci_failed",
+);
+check(
+  "hold: clearing the hold reason is written once",
+  (await setPrCiFixHold(fixHold.id, null, sql)) === true &&
+    (await setPrCiFixHold(fixHold.id, null, sql)) === false,
+);
+check(
+  "hold: after the hold is cleared the row is claimed",
+  typeof (await fixClaim(fixHold.id, FIX_SHA_1)) === "number",
+);
+check(
+  "hold: a row that is not failed gets no hold reason",
+  (await setPrCiFixHold(fixHold.id, "main_ci_failed", sql)) === false,
+);
+check(
+  "hold: an empty reason is refused before the database",
+  await setPrCiFixHold(fixHold.id, "", sql)
+    .then(() => false)
+    .catch(() => true),
+);
+check(
+  "hold: a reason of 65 characters is refused before the database",
+  await setPrCiFixHold(fixHold.id, "x".repeat(65), sql)
+    .then(() => false)
+    .catch(() => true),
+);
+check(
+  "hold: the table refuses an empty hold reason",
+  (() => {
+    try {
+      execPsql(
+        target,
+        `UPDATE factory.pr_ci_checks SET fix_hold_reason = '' WHERE id = ${String(fixHold.id)}`,
+      );
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+);
+
+// owner と repo の綴りが違っても行に当たり、作業項目には渡した綴りを書く。
+const fixCase = await failedFixRow(507, FIX_SHA_1);
+const fixCaseId = await fixClaim(fixCase.id, FIX_SHA_1, {
+  owner: "QFix",
+  repo: "App",
+});
+const fixCaseItem =
+  fixCaseId === null ? null : await getWorkItem(fixCaseId, sql);
+check(
+  "claim: the work item keeps the spelling that was passed, and the row is found by any case",
+  fixCaseItem?.owner === "QFix" && fixCaseItem.repo === "App",
+  fixCaseItem,
+);
+
+// ラウンドの数: 直近のpassedの行より後の、CIの回だけを数える。
+check(
+  "rounds: a round that was claimed is counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 1,
+);
+check(
+  "rounds: the owner and repo are found by any case",
+  (await countPrCiFixRounds("QFIX", "APP", 507, sql)) === 1,
+);
+check(
+  "rounds: a pull request without a round counts zero",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 502, sql)) === 0,
+);
+check(
+  "rounds: a pr_fix that does not fix a CI failure is not counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 505, sql)) === 1,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'rereview_requested' WHERE id = ${String(fixOkId)}`,
+);
+check(
+  "release: a fixing row goes back to failed once and keeps its attempts",
+  (await releaseFixingPrCiCheck(fixOk.id, {}, sql)) === true &&
+    (await releaseFixingPrCiCheck(fixOk.id, {}, sql)) === false &&
+    (await fixRowOf(fixOk.id))?.state === "failed" &&
+    Number((await fixRowOf(fixOk.id))?.fix_attempts) === 1,
+  await fixRowOf(fixOk.id),
+);
+check(
+  "release: the row no longer points at a work item",
+  (await fixRowOf(fixOk.id))?.fix_work_item_id === null,
+  await fixRowOf(fixOk.id),
+);
+const fixSecondId = await fixClaim(fixOk.id, FIX_SHA_1);
+check(
+  "claim: a released row is claimed again and counts the second attempt",
+  typeof fixSecondId === "number" &&
+    Number((await fixRowOf(fixOk.id))?.fix_attempts) === 2,
+  await fixRowOf(fixOk.id),
+);
+check(
+  "rounds: the second round of the pull request is counted",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 2,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'rereview_requested' WHERE id = ${String(fixSecondId)}`,
+);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET state = 'passed', fix_work_item_id = NULL, updated_at = now() WHERE id = ${String(fixOk.id)}`,
+);
+check(
+  "rounds: a passed row after the rounds starts the count again",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 0,
+);
+const fixAfterPass = await failedFixRow(501, FIX_SHA_2);
+check(
+  "rounds: a failure after the passed row is counted from one",
+  typeof (await fixClaim(fixAfterPass.id, FIX_SHA_2)) === "number" &&
+    (await countPrCiFixRounds(FIX.owner, FIX.repo, 501, sql)) === 1,
+);
+
+// 戻す相手を作業項目で絞れる。
+const fixGuard = await failedFixRow(508, FIX_SHA_1);
+const fixGuardId = await fixClaim(fixGuard.id, FIX_SHA_1);
+check(
+  "release: a row that points at another work item is not released",
+  (await releaseFixingPrCiCheck(
+    fixGuard.id,
+    { fixWorkItemId: (fixGuardId ?? 0) + 1000 },
+    sql,
+  )) === false && (await fixRowOf(fixGuard.id))?.state === "fixing",
+);
+check(
+  "release: the row of that work item is released with a hold reason",
+  (await releaseFixingPrCiCheck(
+    fixGuard.id,
+    { fixWorkItemId: fixGuardId ?? 0, holdReason: "no_push" },
+    sql,
+  )) === true && (await fixRowOf(fixGuard.id))?.fix_hold_reason === "no_push",
+  await fixRowOf(fixGuard.id),
+);
+
+// 修正中の行の一覧は、PRの発見やリポジトリに頼らない。
+check(
+  "listFixing: the fixing rows are listed whatever their repository",
+  (await listFixingPrCiChecks(1000, sql))
+    .filter((row) => row.owner === FIX.owner)
+    .map((row) => row.pr_number)
+    .sort((a, b) => a - b)
+    .join(",") === "501,504,505,506,507",
+  (await listFixingPrCiChecks(1000, sql)).map((row) => row.pr_number),
+);
+const fixListed = (await listFixingPrCiChecks(1000, sql)).find(
+  (row) => row.pr_number === 501,
+);
+check(
+  "listFixing: a listed row carries the work item and the attempts",
+  fixListed?.fix_work_item_id !== null && fixListed?.fix_attempts === 1,
+  fixListed,
+);
+
+// 取り残した修正中の行: 作業項目に結ばれていない、または結んだ作業項目が無い。
+await recordPrCiCheck(fixRowNew(521, FIX_SHA_1), sql);
+await recordPrCiCheck(fixRowNew(522, FIX_SHA_1), sql);
+await recordPrCiCheck(fixRowNew(523, FIX_SHA_1), sql);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'fixing', fix_work_item_id = NULL, updated_at = now() - interval '5 minutes' WHERE owner = 'qfix' AND pr_number = 521",
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'fixing', fix_work_item_id = NULL, updated_at = now() - interval '11 minutes' WHERE owner = 'qfix' AND pr_number = 522",
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'fixing', fix_work_item_id = 987654321, updated_at = now() WHERE owner = 'qfix' AND pr_number = 523",
+);
+const fixOrphans = (await findOrphanFixingPrCiChecks(1000, sql))
+  .filter((row) => row.owner === FIX.owner)
+  .map((row) => row.pr_number)
+  .sort((a, b) => a - b)
+  .join(",");
+check(
+  "orphan: a row without a work item after ten minutes, and a row whose work item is gone, are found",
+  fixOrphans === "522,523",
+  fixOrphans,
+);
+check(
+  "orphan: a fixing row with a work item is not an orphan",
+  !fixOrphans.split(",").includes("501"),
+  fixOrphans,
+);
+const fixOrphanRow = (await findOrphanFixingPrCiChecks(1000, sql)).find(
+  (row) => row.pr_number === 523,
+);
+check(
+  "orphan: releasing the orphan moves it back to failed",
+  fixOrphanRow !== undefined &&
+    (await releaseFixingPrCiCheck(fixOrphanRow.id, {}, sql)) === true &&
+    (await fixRowOf(fixOrphanRow.id))?.state === "failed",
+);
+
+// 見直しの時刻と掃除は、修正中の行を扱う。
+const fixTouch = (await listFixingPrCiChecks(1000, sql)).find(
+  (row) => row.pr_number === 504,
+);
+if (fixTouch === undefined) throw new Error("fixing row is missing");
+check(
+  "touch: a fixing row is touched",
+  (await touchPrCiCheck(fixTouch.id, sql)) === true,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '150 days' WHERE owner = 'qfix'",
+);
+await deletePrCiChecksBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  new Date(Date.now() - 120 * 24 * 60 * 60 * 1000),
+  sql,
+);
+check(
+  "cleanup: fixing rows survive however old they are",
+  (await listFixingPrCiChecks(1000, sql))
+    .filter((row) => row.owner === FIX.owner)
+    .map((row) => row.pr_number)
+    .sort((a, b) => a - b)
+    .join(",") === "501,504,505,506,507,521,522",
+  (await listFixingPrCiChecks(1000, sql)).map((row) => row.pr_number),
+);
+
+// 修正中の行から出る移行は、作業項目への参照を外す。fixing へは起動の関数でしか入れない。
+check(
+  "transition: a fixing row moves to superseded and forgets its work item",
+  (await transitionPrCiCheck(
+    fixTouch.id,
+    "fixing",
+    { state: "superseded" },
+    sql,
+  )) === true &&
+    (await fixRowOf(fixTouch.id))?.state === "superseded" &&
+    (await fixRowOf(fixTouch.id))?.fix_work_item_id === null,
+  await fixRowOf(fixTouch.id),
+);
+check(
+  "transition: a row cannot be moved to fixing by a plain transition",
+  await transitionPrCiCheck(fixTouch.id, "failed", { state: "fixing" }, sql)
+    .then(() => false)
+    .catch(() => true),
+);
+const fixReopen = await failedFixRow(509, FIX_SHA_1);
+await setPrCiFixHold(fixReopen.id, "log_unavailable", sql);
+await transitionPrCiCheck(fixReopen.id, "failed", { state: "superseded" }, sql);
+await transitionPrCiCheck(
+  fixReopen.id,
+  "superseded",
+  { state: "pending", reopen: true },
+  sql,
+);
+check(
+  "transition: reopening a row forgets its hold reason",
+  (await fixRowOf(fixReopen.id))?.fix_hold_reason === null,
+  await fixRowOf(fixReopen.id),
+);
+check(
+  "table: a negative number of attempts is refused",
+  (() => {
+    try {
+      execPsql(
+        target,
+        `UPDATE factory.pr_ci_checks SET fix_attempts = -1 WHERE id = ${String(fixReopen.id)}`,
+      );
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+);
+
+// mainが赤いか: 最新の1行の状態で決める。
+const MAIN_RED = { owner: "qfix", repo: "mainred" };
+check(
+  "main red: a repository without a row is not red",
+  (await isLatestMainCiRunFailed(MAIN_RED.owner, MAIN_RED.repo, sql)) === false,
+);
+await recordMainCiRun(
+  {
+    ...MAIN_RED,
+    head_sha: FIX_SHA_1,
+    state: "pending",
+    run_created_at: new Date("2026-10-13T01:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main red: a pending latest row is not red",
+  (await isLatestMainCiRunFailed(MAIN_RED.owner, MAIN_RED.repo, sql)) === false,
+);
+const mainRedRow = (
+  await listMainCiRunsBySha(MAIN_RED.owner, MAIN_RED.repo, [FIX_SHA_1], sql)
+)[0];
+if (mainRedRow === undefined) throw new Error("main_ci_runs row is missing");
+await transitionMainCiRun(
+  mainRedRow.id,
+  { state: "failed", summary: "", prevFailed: false },
+  sql,
+);
+check(
+  "main red: a failed latest row is red, whatever the case of the names",
+  (await isLatestMainCiRunFailed("QFIX", "MainRed", sql)) === true,
+);
+await recordMainCiRun(
+  {
+    ...MAIN_RED,
+    head_sha: FIX_SHA_2,
+    state: "pending",
+    run_created_at: new Date("2026-10-13T02:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main red: a newer pending row hides the older failure",
+  (await isLatestMainCiRunFailed(MAIN_RED.owner, MAIN_RED.repo, sql)) === false,
+);
+const mainRedNewer = (
+  await listMainCiRunsBySha(MAIN_RED.owner, MAIN_RED.repo, [FIX_SHA_2], sql)
+)[0];
+if (mainRedNewer === undefined) throw new Error("main_ci_runs row is missing");
+await transitionMainCiRun(
+  mainRedNewer.id,
+  { state: "passed", summary: "", prevFailed: true },
+  sql,
+);
+check(
+  "main red: a passed latest row is not red even after a failure",
+  (await isLatestMainCiRunFailed(MAIN_RED.owner, MAIN_RED.repo, sql)) === false,
+);
+execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qfix'");
+
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'");
+execPsql(target, "DELETE FROM factory.work_items WHERE lower(owner) = 'qfix'");
 
 // ---------------------------------------------------------------------------
 // 未解決の通知の重複の抑止

@@ -90,6 +90,9 @@ type DefaultableField =
   | "dependabot_merge_enabled"
   | "dependabot_min_published_days"
   | "pr_ci_watch_enabled"
+  | "pr_ci_fix_enabled"
+  | "pr_ci_fix_max_rounds"
+  | "pr_ci_fix_enabled_since"
   | "check_commands_by_repo";
 
 /**
@@ -149,6 +152,10 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   dependabot_min_published_days: 7,
   // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
   pr_ci_watch_enabled: true,
+  // CIの失敗を直す作業項目はPRにpushするので、既定で無効にし、リモートのリソースで有効にする。
+  pr_ci_fix_enabled: false,
+  pr_ci_fix_max_rounds: 2,
+  pr_ci_fix_enabled_since: null,
   check_commands_by_repo: {},
 };
 
@@ -316,6 +323,86 @@ function positiveIntegerField(
   }
   if (!isNumber(value) || !Number.isInteger(value) || value <= 0) {
     throw new ConfigValidationError(`"${field}" must be a positive integer`);
+  }
+  return value;
+}
+
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/;
+
+/**
+ * 秒まで書いたタイムゾーン付きのRFC 3339の日時か。
+ * `Date.parse`は存在しない日(2月30日)や24時を黙って繰り上げるので、成分を自分で確かめる。
+ */
+function isIsoDateTime(value: string): boolean {
+  const match = ISO_DATE_TIME.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const [year, month, day, hour, minute, second, offsetHour, offsetMinute] =
+    match.slice(1).map((part) => (part === undefined ? 0 : Number(part)));
+  if (
+    year === undefined ||
+    month === undefined ||
+    day === undefined ||
+    hour === undefined ||
+    minute === undefined ||
+    second === undefined ||
+    offsetHour === undefined ||
+    offsetMinute === undefined
+  ) {
+    return false;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59
+  );
+}
+
+/**
+ * `raw[field]`を`Date`にして返す。値が無ければ`fallback`を返す。
+ * `null`は値無しとして`null`を返す。文字列は、秒まで書いたタイムゾーン付きの
+ * RFC 3339の日時だけを通す。それ以外は例外を投げる。
+ */
+function isoDateTimeOrNullField(
+  raw: Record<string, unknown>,
+  field: string,
+  fallback: Date | null,
+): Date | null {
+  const value = raw[field];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (!isString(value) || !isIsoDateTime(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must be an RFC 3339 date-time with seconds and a time zone, or null`,
+    );
+  }
+  return new Date(value);
+}
+
+/**
+ * `pr_ci_fix_max_rounds`の上限。直す作業項目はPRにpushするので、設定の書き損じで
+ * 回数が際限なく増えないようにする。
+ */
+const PR_CI_FIX_MAX_ROUNDS_LIMIT = 10;
+
+/** `value`が`limit`を超えるときは例外を投げる。 */
+function atMost(field: string, value: number, limit: number): number {
+  if (value > limit) {
+    throw new ConfigValidationError(
+      `"${field}" must not exceed ${String(limit)}`,
+    );
   }
   return value;
 }
@@ -631,6 +718,25 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "pr_ci_watch_enabled",
       DEFAULTS.pr_ci_watch_enabled,
+    ),
+    pr_ci_fix_enabled: booleanField(
+      raw,
+      "pr_ci_fix_enabled",
+      DEFAULTS.pr_ci_fix_enabled,
+    ),
+    pr_ci_fix_max_rounds: atMost(
+      "pr_ci_fix_max_rounds",
+      positiveIntegerField(
+        raw,
+        "pr_ci_fix_max_rounds",
+        DEFAULTS.pr_ci_fix_max_rounds,
+      ),
+      PR_CI_FIX_MAX_ROUNDS_LIMIT,
+    ),
+    pr_ci_fix_enabled_since: isoDateTimeOrNullField(
+      raw,
+      "pr_ci_fix_enabled_since",
+      DEFAULTS.pr_ci_fix_enabled_since,
     ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,

@@ -29,6 +29,7 @@ export const PR_CI_STATES = [
   "expired",
   "no_ci",
   "observed",
+  "fixing",
 ] as const;
 
 /** `factory.pr_ci_checks.state`の値。 */
@@ -48,15 +49,19 @@ export const PR_CI_SUMMARY_MAX_LENGTH = MAIN_CI_SUMMARY_MAX_LENGTH;
  * - `no_ci`も終端にしない。実行が遅れて作られた場合に、読み直して判定し直せるようにする。
  *   実行が現れれば`pending`、判定が確定していれば`passed`か`failed`に移る。
  * - `superseded`から`pending`へは、headが以前の値に戻ったときに限る。
+ * - `fixing`は、失敗を直す作業項目の結果待ちである。`failed`からだけ入る。
+ *   直す作業項目が失敗や停止で終わったときは`failed`に戻し、headが進んだら`superseded`にし、
+ *   同じheadのCIが通ったと分かったら`passed`にする。
  */
 const PR_CI_TRANSITIONS: Readonly<Record<PrCiState, readonly PrCiState[]>> = {
   pending: ["passed", "failed", "superseded", "expired", "no_ci", "observed"],
-  failed: ["passed", "superseded", "observed"],
+  failed: ["passed", "superseded", "observed", "fixing"],
   superseded: ["pending"],
   passed: [],
   expired: [],
   no_ci: ["pending", "failed", "passed", "superseded"],
   observed: [],
+  fixing: ["failed", "superseded", "passed"],
 };
 
 export function canTransitionPrCi(from: PrCiState, to: PrCiState): boolean {
@@ -198,10 +203,10 @@ export type PrCiPlanRow = {
 export type PrHeadPlan = {
   /** PRの今のheadの行が無いので、新しく記録する。 */
   readonly record: boolean;
-  /** 古いheadの未確定の行(`pending`、`failed`、`no_ci`)と、その今の状態。`superseded`にする。 */
+  /** 古いheadの未確定の行(`pending`、`failed`、`no_ci`、`fixing`)と、その今の状態。`superseded`にする。 */
   readonly supersede: readonly {
     readonly id: number;
-    readonly from: "pending" | "failed" | "no_ci";
+    readonly from: "pending" | "failed" | "no_ci" | "fixing";
   }[];
   /** headが以前の値に戻り、今のheadの行が`superseded`のままなら、その行。`pending`に戻す。 */
   readonly reopenId: number | null;
@@ -210,6 +215,8 @@ export type PrHeadPlan = {
 /**
  * PRの今のheadを見つけたときに、記録と旧行の整理を決める。
  * 通った旧行(`passed`)などの終わった行は、記録として残すので触らない。
+ * headが進んだ`fixing`の行は`superseded`にする。headが進んだなら、その行のheadのCIを直す意味が無くなるためである。
+ * headが同じ`fixing`の行は触らない。
  */
 export function planPrHead(
   headSha: string,
@@ -222,7 +229,8 @@ export function planPrHead(
       row.headSha !== headSha &&
       (row.state === "pending" ||
         row.state === "failed" ||
-        row.state === "no_ci")
+        row.state === "no_ci" ||
+        row.state === "fixing")
         ? [{ id: row.id, from: row.state }]
         : [],
     ),

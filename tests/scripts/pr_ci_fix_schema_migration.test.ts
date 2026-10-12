@@ -41,9 +41,9 @@ describe("20261013100400_pr_ci_fix_schema.up.sql", () => {
     );
   });
 
-  test("accepts only the known states and fixing", async () => {
+  test("accepts exactly the states the code knows", async () => {
     const states = stateCheckStates(await Bun.file(UP).text());
-    expect([...states].sort()).toEqual([...PR_CI_STATES, "fixing"].sort());
+    expect([...states].sort()).toEqual([...PR_CI_STATES].sort());
   });
 
   test("drops the old state check before adding the new one", async () => {

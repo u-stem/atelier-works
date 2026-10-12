@@ -333,6 +333,11 @@ export type WorkItem = {
    * Issue側の行には持たせず、意図してURLで記録する。
    */
   pr_url: string | null;
+  /**
+   * この作業項目が直しているCIの判定(`pr_ci_checks`の行)のID。
+   * CIの失敗を直す`pr_fix`の作業項目だけが持ち、それ以外は`null`。外部キーは持たない。
+   */
+  ci_check_id: number | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -997,6 +1002,22 @@ export type FactoryConfig = {
    * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。
    */
   pr_ci_watch_enabled: boolean;
+  /**
+   * CIの失敗を直す作業項目を起動してよいか。既定は`false`で、偽の間は何も起動しない。
+   */
+  pr_ci_fix_enabled: boolean;
+  /**
+   * 1つのPRで、CIの失敗を直すラウンドを起動できる回数の上限。1以上10以下の整数。既定は2。
+   * 直近に通ったheadより後のラウンドを数え、通ると数え直す。
+   */
+  pr_ci_fix_max_rounds: number;
+  /**
+   * この時刻より前に見つけた失敗は、直す対象にしない。「見つけた時刻」は`pr_ci_checks.first_seen_at`で、
+   * 比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
+   * 設定には秒まで書いたRFC 3339の日時(タイムゾーン付き)を書き、読み込み後は`Date`になる。
+   * `null`は、時刻で絞らないことを表す。既定は`null`。
+   */
+  pr_ci_fix_enabled_since: Date | null;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の

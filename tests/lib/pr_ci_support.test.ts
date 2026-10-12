@@ -50,7 +50,7 @@ function run(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
 }
 
 describe("PR_CI_STATES", () => {
-  test("lists the seven states", () => {
+  test("lists the eight states", () => {
     expect([...PR_CI_STATES]).toEqual([
       "pending",
       "passed",
@@ -59,6 +59,7 @@ describe("PR_CI_STATES", () => {
       "expired",
       "no_ci",
       "observed",
+      "fixing",
     ]);
   });
 });
@@ -66,6 +67,10 @@ describe("PR_CI_STATES", () => {
 describe("isPrCiState", () => {
   test("accepts a known state", () => {
     expect(isPrCiState("superseded")).toBe(true);
+  });
+
+  test("accepts the fixing state", () => {
+    expect(isPrCiState("fixing")).toBe(true);
   });
 
   test("rejects a state of the main ci", () => {
@@ -134,6 +139,42 @@ describe("canTransitionPrCi", () => {
 
   test("does not let an expired row move", () => {
     expect(canTransitionPrCi("expired", "passed")).toBe(false);
+  });
+
+  test("lets a failed row start being fixed", () => {
+    expect(canTransitionPrCi("failed", "fixing")).toBe(true);
+  });
+
+  test("lets a fixing row go back to failed", () => {
+    expect(canTransitionPrCi("fixing", "failed")).toBe(true);
+  });
+
+  test("lets a fixing row be superseded", () => {
+    expect(canTransitionPrCi("fixing", "superseded")).toBe(true);
+  });
+
+  test("lets a fixing row settle as passed", () => {
+    expect(canTransitionPrCi("fixing", "passed")).toBe(true);
+  });
+
+  test("does not let a fixing row expire", () => {
+    expect(canTransitionPrCi("fixing", "expired")).toBe(false);
+  });
+
+  test("does not let a fixing row stay in the same state", () => {
+    expect(canTransitionPrCi("fixing", "fixing")).toBe(false);
+  });
+
+  test("does not let a pending row start being fixed", () => {
+    expect(canTransitionPrCi("pending", "fixing")).toBe(false);
+  });
+
+  test("does not let a no_ci row start being fixed", () => {
+    expect(canTransitionPrCi("no_ci", "fixing")).toBe(false);
+  });
+
+  test("does not let a superseded row become fixing", () => {
+    expect(canTransitionPrCi("superseded", "fixing")).toBe(false);
   });
 
   test("does not let a row stay in the same state", () => {
@@ -567,6 +608,24 @@ describe("planPrHead", () => {
       { id: 2, headSha: SHA_B, state: "pending" },
     ]);
     expect([afterSupersede.supersede[0]?.id, backToA.reopenId]).toEqual([1, 1]);
+  });
+
+  test("supersedes the fixing row of an old head", () => {
+    expect(
+      planPrHead(SHA_B, [{ id: 1, headSha: SHA_A, state: "fixing" }]).supersede,
+    ).toEqual([{ id: 1, from: "fixing" }]);
+  });
+
+  test("leaves the fixing row of the current head alone", () => {
+    expect(
+      planPrHead(SHA_A, [{ id: 1, headSha: SHA_A, state: "fixing" }]).supersede,
+    ).toEqual([]);
+  });
+
+  test("does not reopen a fixing row of the current head", () => {
+    expect(
+      planPrHead(SHA_A, [{ id: 1, headSha: SHA_A, state: "fixing" }]).reopenId,
+    ).toBeNull();
   });
 
   test("leaves the passed row of an old head alone", () => {

@@ -35,23 +35,91 @@
 | `expired` | 未完了のまま最古の実行から2時間たったか、読めないまま24時間たった。終端 | しない |
 | `no_ci` | 実行が現れないまま15分たった。実行が現れれば読み直す | しない |
 | `observed` | 遷移表にはあるが、この監視は使わない | しない |
-| `fixing` | 失敗を直す作業項目の結果待ち。DBの制約が受け入れる値。この監視は書かず、読みもしない | しない |
+| `fixing` | 失敗を直す作業項目の結果待ち。`claimPrCiCheckForFix`だけが`failed`から移す。この監視は判定で読まない | しない |
 
 遷移は`canTransitionPrCi`が定める。更新は`WHERE state = <移る前の状態>`の条件付きで、別の実行が先に移した行は書き換えない。
+`transitionPrCiCheck`は`fixing`への移行を拒否し、`claimPrCiCheckForFix`だけが行う。
+作業項目の挿入と同じ1つのSQL文で行う必要があるためである。
+`fixing`からは、`failed`、`superseded`、`passed`へ移れる。
+`fixing`から出る移行は、`fix_work_item_id`を空にする。
 
-## 修正のための列と索引
+## 失敗を直すための状態と関数
 
-`pr_ci_checks`は、列`fix_work_item_id`(bigint、NULL可)を持つ。
-同じく`fix_attempts`(integer、既定0、0以上)と、`fix_hold_reason`(text、NULL可、空でなく64字まで)を持つ。
+失敗を直す作業項目のために、`pr_ci_checks`は次の3列を持つ。
+外部キーは無い。作業項目は行の削除に連なって消えず、行も作業項目の削除に連なって消えない。
+
+| 列 | 意味 |
+| --- | --- |
+| `fix_work_item_id` | いま直している作業項目のID。`fixing`の間だけ値を持つ |
+| `fix_attempts` | 同じheadで、直す作業項目を起動した回数。既定は0 |
+| `fix_hold_reason` | 起動を保留している理由コード。保留していなければNULL。空でなく、64字まで |
+
 `work_items`は、列`ci_check_id`(bigint、NULL可)と、値のある行だけの部分索引を持つ。
-いずれも外部キーは無い。
+直す作業項目だけが、直す行のIDを入れる。それ以外の作業項目はNULLである。
+
+`lib/db.ts`の関数の責務は次のとおりである。
+
+| 関数 | 責務 |
+| --- | --- |
+| `claimPrCiCheckForFix` | `failed`の行を`fixing`にし、直す`pr_fix`の作業項目を挿入して、そのIDを返す。起動できなければNULLを返す |
+| `countPrCiFixRounds` | そのPRで、直近の`passed`の行より後に起動した、直す作業項目の数を返す |
+| `listFixingPrCiChecks` | `fixing`の行を、リポジトリの発見に頼らず、読み直していない順に返す |
+| `findOrphanFixingPrCiChecks` | 直す作業項目に結ばれていない`fixing`の行を返す |
+| `releaseFixingPrCiCheck` | `fixing`の行を`failed`に戻す。保留の理由も書ける |
+| `setPrCiFixHold` | `failed`の行の保留の理由を設定する。NULLで解除する |
+| `isLatestMainCiRunFailed` | そのリポジトリのmainのCIの最新の記録が、失敗かを返す |
+
+`claimPrCiCheckForFix`は、行の更新と作業項目の挿入を1つの文で行う。
+同じ行を1つの文で2回更新できないので、作業項目のIDを先にシーケンスから取り、行の`fix_work_item_id`と作業項目の主キーの両方に使う。
+次のどれかなら、何も書かずにNULLを返す。
+
+- 行が`failed`でない。
+- 行の`head_sha`が、呼び出し側が読んだPRのheadと違う。
+- 行が保留されている。
+- 同じPRに、終端でない`pr_fix`の作業項目がある。同じブランチへ別々にpushして競合するのを防ぐためである。
+
+確認をすり抜けた並行する起動は、部分一意索引`work_items_active_pr_fix_key`が拒む。
+違反は文全体を取り消すので、行は変わらずNULLを返す。
+作業項目は、種別`pr_fix`、状態`fixing`、サイクルと試行は1で挿入する。
+ラウンドの番号(`fix_round`)と処理済みの位置は、同じPRの直近の`pr_fix`から写す。
+処理済みの位置は、`last_review_id`、`last_comment_id`、`last_review_comment_id`の3列である。
+直近の`pr_fix`が無ければ、すべて0にする。直す作業項目は、ラウンドの番号も処理済みの位置も進めない。
+ownerとrepoは、行との照合では小文字で比べる。
+作業項目には、`poll_prs`が`startFix`に渡すownerとrepo(検索結果の`repository_url`由来)と同じ綴りを渡す。
+一意索引と既存の照合が大文字小文字を区別するためである。
+
+`countPrFixFailures`は、`ci_check_id`を持つ作業項目を数えない。
+指摘への対応の失敗から、モデルを`heavy_model`に上げるかを決める。この判定に、CIの失敗を直す作業項目の失敗を混ぜないためである。
+
+`fixing`の行は、掃除(`deletePrCiChecksBefore`)が削除しない。
+`touchPrCiCheck`は`fixing`の行も読み直した時刻を進める。
+
+## 失敗を直す設定
+
+次の3項目は`factory_config`で決める。既存のリソースにこれらの項目が無くても、既定値で動く。
+この3項目を読んで起動を決める処理はまだ無い。設定の読み込みと検証だけがある。
+
+| 項目 | 既定値 | 判定が読む値 |
+| --- | --- | --- |
+| `pr_ci_fix_enabled` | `false` | 直す作業項目を起動してよいか |
+| `pr_ci_fix_max_rounds` | `2` | 1つのPRで起動できる、直す作業項目の数の上限。1以上10以下の整数。直近の`passed`の行より後を数え、通ると数え直す。数えるのは`countPrCiFixRounds` |
+| `pr_ci_fix_enabled_since` | 無し | 最初に見た時刻(`first_seen_at`)がこの時刻より前の失敗を、直す対象にしない。無ければ時刻では絞らない |
+
+`pr_ci_fix_enabled_since`は、秒まで書いたタイムゾーン付きのRFC 3339の日時にする(例: `2026-10-13T03:00:00Z`)。
+読み込みの後は`Date`になる。
+比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
+有効にした時点で判定待ちだった失敗も、最初に見た時刻が前なら対象外になる。
+直す対象を絞る側に倒すためである。
+日時の形が違う値や、`pr_ci_fix_max_rounds`が範囲を外れた値は、既定値に倒さず設定の読み込みで拒否する。
+設定を書き損じると、設定の読み込み全体が設定エラーで止まり、Factoryのほかの処理も動かなくなる。
 
 ## 発見
 
 対象のPRごとに、PRを読み、今のheadの行を整える(`planPrHead`)。
 
 - 今のheadの行が無ければ、`pending`で記録する。
-- 古いheadの`pending`、`failed`、`no_ci`の行は、`superseded`にする。通知しない。
+- 古いheadの`pending`、`failed`、`no_ci`、`fixing`の行は、`superseded`にする。通知しない。headが進んだなら、その行のheadのCIを直す意味が無くなるためである。
+- 今のheadの`fixing`の行は触らない。
 - 今のheadの行が`superseded`なら、`pending`に戻す。headが以前の値に戻ったときである。
 - `passed`などの終わった行は、記録として残す。
 
@@ -63,7 +131,7 @@
 PRが閉じていたら(マージを含む)、次の順に整理する。
 
 1. そのPRの失敗のnoticeを、種類`pr_ci_failed`と、本文の接頭辞`<owner>/<repo>#<PR番号>:`で選んで解決する。
-2. `pending`、`failed`、`no_ci`の行を`superseded`にする。
+2. `pending`、`failed`、`no_ci`、`fixing`の行を`superseded`にする。
 
 接頭辞は、コロンの後の空白まで含めて照合する。`acme/app#1:`で始まる通知は、`acme/app#12:`で始まる通知と取り違えない。解決は冪等なので、行の更新より先に行う。
 行が1件も無いPRには何もしない。解決者は`watch_pr_ci`で、Consoleは「PRのCIの監視(自動)」と表示する。
