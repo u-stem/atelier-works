@@ -3,10 +3,12 @@ import {
   type CollectDeps,
   collectGateInput,
   deriveTarget,
+  NOT_OPEN,
 } from "../../f/factory/lib/dependabot_collect.ts";
 import {
   type RegistryFacts,
   RegistryHttpError,
+  RegistryResponseError,
   RegistryUnavailableError,
 } from "../../f/factory/lib/dependabot_registry.ts";
 import {
@@ -355,6 +357,8 @@ describe("deriveTarget", () => {
 const HEAD = "a".repeat(40);
 const MERGE_BASE = "b".repeat(40);
 const OTHER_HEAD = "c".repeat(40);
+const BASE_SHA = "d".repeat(40);
+const OTHER_BASE_SHA = "e".repeat(40);
 const PR_REF = { owner: "acme", repo: "widgets", number: 12 };
 const NOW = Date.parse("2026-10-20T00:00:00Z");
 
@@ -396,6 +400,7 @@ function facts(overrides: Partial<RegistryFacts> = {}): RegistryFacts {
     installScripts: { before: {}, after: {} },
     integrity: INTEGRITY_B,
     registryMetadata: "",
+    missing: [],
     ...overrides,
   };
 }
@@ -418,11 +423,15 @@ type Setup = {
   checks?: { name: string; appId: number | null; conclusion: string | null }[];
   getFile?: (path: string, ref: string) => Promise<string | null>;
   getPr?: () => Promise<PullRequest>;
+  /** `getBranchSha`が順に返すsha。使い切ったら最後の値を返す。 */
+  baseShas?: string[];
+  branchSha?: () => Promise<string>;
 };
 
 type Calls = {
   getPr: number;
-  compare: { base: string; headSha: string }[];
+  compare: { baseSha: string; headSha: string }[];
+  branch: string[];
   files: { path: string; ref: string }[];
   checks: string[];
   registry: { name: string; from: string; to: string }[];
@@ -432,6 +441,7 @@ function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
   const calls: Calls = {
     getPr: 0,
     compare: [],
+    branch: [],
     files: [],
     checks: [],
     registry: [],
@@ -454,8 +464,15 @@ function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
       if (pr === undefined) throw new Error("no pull request in the setup");
       return pr;
     },
-    compareCommits: async (_owner, _repo, base, headSha) => {
-      calls.compare.push({ base, headSha });
+    getBranchSha: async (_owner, _repo, branch) => {
+      const index = calls.branch.length;
+      calls.branch.push(branch);
+      if (options.branchSha !== undefined) return options.branchSha();
+      const shas = options.baseShas ?? [BASE_SHA];
+      return shas[Math.min(index, shas.length - 1)] ?? BASE_SHA;
+    },
+    compareCommits: async (_owner, _repo, baseSha, headSha) => {
+      calls.compare.push({ baseSha, headSha });
       if (options.compare !== undefined) return options.compare();
       return {
         mergeBaseSha: MERGE_BASE,
@@ -492,6 +509,7 @@ function setup(options: Setup = {}): { deps: CollectDeps; calls: Calls } {
     },
     now: () => NOW,
     minPublishedDays: 7,
+    expectedBaseRef: "main",
   };
   return { deps, calls };
 }
@@ -572,6 +590,26 @@ describe("collectGateInput", () => {
     );
   });
 
+  test("has no unverified inputs when the registry metadata is complete", async () => {
+    const result = await collectGateInput(setup().deps, PR_REF);
+
+    expect(result).toMatchObject({ kind: "ready", unverifiedInputs: [] });
+  });
+
+  test("marks the registry metadata as unverified when an item is missing", async () => {
+    const result = await collectGateInput(
+      setup({
+        registry: async () => facts({ missing: ["after publisher"] }),
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      unverifiedInputs: ["registry metadata"],
+    });
+  });
+
   test("passes the registry fact as is", async () => {
     const input = await readyInput();
 
@@ -600,12 +638,62 @@ describe("collectGateInput", () => {
     ]);
   });
 
-  test("compares the base ref with the fixed head sha", async () => {
+  test("compares the base sha with the fixed head sha", async () => {
     const { deps, calls } = setup();
 
     await collectGateInput(deps, PR_REF);
 
-    expect(calls.compare).toEqual([{ base: "main", headSha: HEAD }]);
+    expect(calls.compare).toEqual([{ baseSha: BASE_SHA, headSha: HEAD }]);
+  });
+
+  test("reads the sha of the base branch before and after collecting", async () => {
+    const { deps, calls } = setup();
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.branch).toEqual(["main", "main"]);
+  });
+
+  test("returns the base ref and the base sha it fixed", async () => {
+    const result = await collectGateInput(setup().deps, PR_REF);
+
+    expect(result).toMatchObject({
+      kind: "ready",
+      baseRef: "main",
+      baseSha: BASE_SHA,
+    });
+  });
+
+  test("waits when the base branch moved while collecting", async () => {
+    const result = await collectGateInput(
+      setup({ baseShas: [BASE_SHA, OTHER_BASE_SHA] }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
+  });
+
+  test("waits instead of stopping when the base branch moved and the target cannot be derived", async () => {
+    const result = await collectGateInput(
+      setup({
+        baseShas: [BASE_SHA, OTHER_BASE_SHA],
+        contents: { "bun.lock": { before: LOCK_BEFORE, after: LOCK_BEFORE } },
+        changed: [{ filename: "bun.lock" }],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
+  });
+
+  test("does not read the base branch again when the head moved", async () => {
+    const { deps, calls } = setup({
+      prs: [pullRequest(), pullRequest({ headSha: OTHER_HEAD })],
+    });
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.branch).toEqual(["main"]);
   });
 
   test("reads the checks of the fixed head sha", async () => {
@@ -884,39 +972,60 @@ describe("collectGateInput", () => {
     expect(result.kind).toBe("wait");
   });
 
-  test("needs a human when the pull request was closed while collecting", async () => {
+  test("reports closed when the pull request was closed while collecting", async () => {
     const result = await collectGateInput(
       setup({ prs: [pullRequest(), pullRequest({ state: "closed" })] }).deps,
       PR_REF,
     );
 
-    expect(result).toEqual({
-      kind: "needs_human",
-      reason: "pull request is not open",
-    });
+    expect(result).toEqual({ kind: "closed", reason: NOT_OPEN });
   });
 
-  test("needs a human when the pull request is closed", async () => {
+  test("reports closed when the pull request is closed", async () => {
     const result = await collectGateInput(
       setup({ prs: [pullRequest({ state: "closed" })] }).deps,
       PR_REF,
     );
 
-    expect(result).toEqual({
-      kind: "needs_human",
-      reason: "pull request is not open",
-    });
+    expect(result).toEqual({ kind: "closed", reason: NOT_OPEN });
   });
 
-  test("needs a human when the pull request is merged", async () => {
+  test("reports closed when the pull request is merged", async () => {
     const result = await collectGateInput(
       setup({ prs: [pullRequest({ state: "closed", merged: true })] }).deps,
       PR_REF,
     );
 
+    expect(result).toEqual({ kind: "closed", reason: NOT_OPEN });
+  });
+
+  test("reports closed instead of waiting when the pull request closed and the head moved", async () => {
+    const result = await collectGateInput(
+      setup({
+        prs: [
+          pullRequest(),
+          pullRequest({ state: "closed", headSha: OTHER_HEAD }),
+        ],
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("closed");
+  });
+
+  test("states that a pull request is not open", () => {
+    expect(NOT_OPEN).toBe("pull request is not open");
+  });
+
+  test("needs a human when the base ref is not the expected branch", async () => {
+    const result = await collectGateInput(
+      setup({ prs: [pullRequest({ baseRef: "release" })] }).deps,
+      PR_REF,
+    );
+
     expect(result).toEqual({
       kind: "needs_human",
-      reason: "pull request is not open",
+      reason: "base branch is not the expected one",
     });
   });
 
@@ -928,8 +1037,27 @@ describe("collectGateInput", () => {
 
     expect(result).toEqual({
       kind: "needs_human",
-      reason: "base ref is not a branch name",
+      reason: "base branch is not the expected one",
     });
+  });
+
+  test("does not read the base branch for an unexpected base ref", async () => {
+    const { deps, calls } = setup({
+      prs: [pullRequest({ baseRef: "release" })],
+    });
+
+    await collectGateInput(deps, PR_REF);
+
+    expect(calls.branch).toEqual([]);
+  });
+
+  test("waits when the base ref changed to an unexpected branch while collecting", async () => {
+    const result = await collectGateInput(
+      setup({ prs: [pullRequest(), pullRequest({ baseRef: "release" })] }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind).toBe("wait");
   });
 
   test("needs a human when the head sha is not a full sha", async () => {
@@ -942,15 +1070,6 @@ describe("collectGateInput", () => {
       kind: "needs_human",
       reason: "head sha is not a full sha",
     });
-  });
-
-  test("needs a human when the base ref is not a branch name", async () => {
-    const result = await collectGateInput(
-      setup({ prs: [pullRequest({ baseRef: "a..b" })] }).deps,
-      PR_REF,
-    );
-
-    expect(result.kind).toBe("needs_human");
   });
 
   test("does not call the comparison for a closed pull request", async () => {
@@ -1019,13 +1138,26 @@ describe("collectGateInput", () => {
     const result = await collectGateInput(
       setup({
         registry: async () => {
-          throw new Error("packument is not an object");
+          throw new RegistryResponseError("packument is not an object");
         },
       }).deps,
       PR_REF,
     );
 
     expect(result.kind).toBe("needs_human");
+  });
+
+  test("rethrows a plain Error from the registry as a bug", async () => {
+    await expect(
+      collectGateInput(
+        setup({
+          registry: async () => {
+            throw new Error("bug");
+          },
+        }).deps,
+        PR_REF,
+      ),
+    ).rejects.toThrow("bug");
   });
 
   test("rethrows an unexpected error from the registry", async () => {

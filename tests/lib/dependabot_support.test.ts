@@ -500,6 +500,96 @@ describe("checkPackageJsonDiff", () => {
     expect(checkPackageJsonDiff(before, after, TARGET)).toEqual({ ok: true });
   });
 
+  test("accepts a bump of the target in optionalDependencies", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.1" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("accepts a bump of the target in peerDependencies", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.1" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("rejects a changed version of another optional dependency", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.0", fsevents: "2.0.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.1", fsevents: "2.0.1" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a changed version of another peer dependency", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.0", react: "18.0.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.1", react: "19.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a manifest whose top-level keys were only reordered", () => {
+    const after = JSON.stringify(
+      {
+        dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+        devDependencies: { tool: "3.0.0" },
+        scripts: { test: "bun test" },
+        version: "1.0.0",
+        name: "fixture",
+      },
+      null,
+      2,
+    );
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a manifest whose other dependencies were only reordered", () => {
+    const before = manifest({
+      devDependencies: { extra: "1.0.0", tool: "3.0.0" },
+    });
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      devDependencies: { tool: "3.0.0", extra: "1.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a changed workspaces section", () => {
+    const before = manifest({ workspaces: ["packages/a"] });
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      workspaces: ["packages/a", "packages/b"],
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
+  });
+
   test("rejects a changed scripts section", () => {
     const after = manifest({
       dependencies: { "left-pad": "1.3.1", other: "2.0.0" },

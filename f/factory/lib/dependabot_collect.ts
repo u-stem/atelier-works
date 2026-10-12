@@ -2,12 +2,15 @@
 // ゲート(`evaluateGate`)の入力を組み立てる。
 // ここは事実を集めるだけで、作者、fork、種別などの判定はゲートが行う。
 // 更新の対象と種別は、PRのタイトル、本文、ブランチ名に頼らず、ロックファイルの差分から導く。
-// 取得はすべて、最初に読んだheadのshaに固定する。最後にPRを読み直し、集めている間に
-// headやbaseが動いていれば、古い事実で判定しないよう待ちにする。
+// 取得はすべて、最初に読んだheadとbaseのshaに固定する。最後にPRとbaseのshaを読み直し、
+// 集めている間にheadやbaseが動いていれば、古い事実で判定しないよう待ちにする。
+// baseは期待したブランチに限り、比較にはブランチ名でなくshaを使う。
 
+import type { UnverifiedInputName } from "./dependabot_prompt.ts";
 import {
   type RegistryFacts,
   RegistryHttpError,
+  RegistryResponseError,
   RegistryUnavailableError,
 } from "./dependabot_registry.ts";
 import {
@@ -29,7 +32,6 @@ import {
   type PullRequest,
 } from "./github.ts";
 import { isCommitSha } from "./main_ci_support.ts";
-import { assertBranchName } from "./types.ts";
 
 // ---- 更新の対象の導出 ----
 
@@ -136,7 +138,7 @@ function topLevelVersion(
  * ロックファイルの前後でエントリが変わったパッケージの名前を集め、ちょうど1つのときだけ対象にする。
  * 0個、2個以上(グループ更新)、版を決められないとき、ロックファイルを読めないときは止める。
  * `to`と`from`は、トップレベルのエントリ(`packages[name]`)の更新後と更新前の版で、
- * ロックファイルが複数あるときは、すべてで一致することを要る。
+ * ロックファイルが複数あるときは、すべてで一致することを求める。
  * `update`は、変わった全エントリの種別のうち最も重いものである。
  * マニフェストの中身は読まない。マニフェストの検査はゲートが行う。
  */
@@ -202,10 +204,15 @@ export function deriveTarget(files: GateInput["files"]): DeriveResult {
  */
 export type CollectDeps = {
   getPr: (owner: string, repo: string, number: number) => Promise<PullRequest>;
+  getBranchSha: (
+    owner: string,
+    repo: string,
+    branch: string,
+  ) => Promise<string>;
   compareCommits: (
     owner: string,
     repo: string,
-    base: string,
+    baseSha: string,
     headSha: string,
   ) => Promise<CommitComparison>;
   getFileAtRef: (
@@ -226,6 +233,8 @@ export type CollectDeps = {
   ) => Promise<RegistryFacts>;
   now: () => number;
   minPublishedDays: number;
+  /** PRのbaseに期待するブランチ名。これと違うPRは人に回す。 */
+  expectedBaseRef: string;
 };
 
 export type CollectResult =
@@ -234,17 +243,28 @@ export type CollectResult =
       input: GateInput;
       /** 事実を固定したheadのsha。 */
       headSha: string;
+      /** PRのbaseのブランチ名。`expectedBaseRef`と一致する。 */
+      baseRef: string;
+      /** 比較に使ったbaseのブランチの先頭のsha。 */
+      baseSha: string;
       /** `files[].before`を読んだmerge-baseのsha。 */
       mergeBaseSha: string;
       /** 更新前の版。影響調査に渡す。 */
       from: string;
       /** registryから読んだ、更新の前後の公開者などの要約。影響調査に渡す。 */
       registryMetadata: string;
+      /** 取得できなかった入力。registryの要約に欠けた項目があれば"registry metadata"を含む。 */
+      unverifiedInputs: UnverifiedInputName[];
     }
   | { kind: "wait"; reason: string }
-  | { kind: "needs_human"; reason: string };
+  | { kind: "needs_human"; reason: string }
+  /** PRが閉じたかmergeされた。人に通知する対象ではない。 */
+  | { kind: "closed"; reason: string };
 
-const NOT_OPEN = "pull request is not open";
+/** PRがopenでないときの`closed`の理由。 */
+export const NOT_OPEN = "pull request is not open";
+
+const BASE_NOT_EXPECTED = "base branch is not the expected one";
 
 /** 収集を打ち切って、待つか人に回すかを返すための内部の例外。 */
 class Stop extends Error {
@@ -292,15 +312,6 @@ function toStop(error: unknown): Stop | null {
   return null;
 }
 
-function isBranchName(name: string): boolean {
-  try {
-    assertBranchName(name);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** 4xxは、待っても読めないファイルとして人に回す。 */
 async function readFile(
   deps: CollectDeps,
@@ -324,8 +335,8 @@ async function readFile(
 
 /**
  * registryの事実を読む。`dependabot_registry`は、名前の不正、大きすぎる応答、JSONでない応答、
- * packumentの形の不正を素の`Error`で投げるので、これを人に回す。
- * 派生した`Error`(`TypeError`など)は不具合なので、そのまま投げる。
+ * packumentの形の不正を`RegistryResponseError`で投げるので、これを人に回す。
+ * それ以外の`Error`(`TypeError`など)は不具合なので、そのまま投げる。
  */
 async function readRegistryFacts(
   deps: CollectDeps,
@@ -336,10 +347,7 @@ async function readRegistryFacts(
   try {
     return await deps.getRegistryFacts(name, from, to);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      Object.getPrototypeOf(error) === Error.prototype
-    ) {
+    if (error instanceof RegistryResponseError) {
       throw new Stop("needs_human", "npm registry response could not be used");
     }
     throw error;
@@ -352,6 +360,7 @@ type Gathered = {
   mergeBaseSha: string;
   from: string;
   registryMetadata: string;
+  unverifiedInputs: UnverifiedInputName[];
 };
 
 /** パスの重複を除く。最初に現れた順を保つ。 */
@@ -360,20 +369,21 @@ function unique(paths: readonly string[]): string[] {
 }
 
 /**
- * headのshaに固定して事実を集める。人に回す失敗は`needs_human`の結果として返し、
+ * headとbaseのshaに固定して事実を集める。人に回す失敗は`needs_human`の結果として返し、
  * 待つ失敗と知らない失敗は投げる。人に回す前にも、PRを読み直して動いていないかを確かめるため。
  */
 async function gather(
   deps: CollectDeps,
   pr: { owner: string; repo: string; number: number },
   first: PullRequest,
+  baseSha: string,
 ): Promise<Gathered | { kind: "needs_human"; reason: string }> {
   const headSha = first.headSha;
   try {
     const comparison = await deps.compareCommits(
       pr.owner,
       pr.repo,
-      first.baseRef,
+      baseSha,
       headSha,
     );
     const { mergeBaseSha } = comparison;
@@ -408,6 +418,7 @@ async function gather(
       mergeBaseSha,
       from,
       registryMetadata: facts.registryMetadata,
+      unverifiedInputs: facts.missing.length === 0 ? [] : ["registry metadata"],
       input: {
         authorLogin: first.authorLogin,
         authorType: first.authorType ?? "",
@@ -459,25 +470,34 @@ async function collect(
 ): Promise<CollectResult> {
   const first = await deps.getPr(pr.owner, pr.repo, pr.number);
   if (first.state !== "open" || first.merged) {
-    return { kind: "needs_human", reason: NOT_OPEN };
+    return { kind: "closed", reason: NOT_OPEN };
   }
   if (!isCommitSha(first.headSha)) {
     return { kind: "needs_human", reason: "head sha is not a full sha" };
   }
-  if (!isBranchName(first.baseRef)) {
-    return { kind: "needs_human", reason: "base ref is not a branch name" };
+  if (first.baseRef !== deps.expectedBaseRef) {
+    return { kind: "needs_human", reason: BASE_NOT_EXPECTED };
   }
+  const baseSha = await deps.getBranchSha(pr.owner, pr.repo, first.baseRef);
 
-  const gathered = await gather(deps, pr, first);
+  const gathered = await gather(deps, pr, first, baseSha);
 
   const last = await deps.getPr(pr.owner, pr.repo, pr.number);
   if (last.state !== "open" || last.merged) {
-    return { kind: "needs_human", reason: NOT_OPEN };
+    return { kind: "closed", reason: NOT_OPEN };
   }
+  // `moved`はbaseのブランチ名の変化も見る。通ったあとの`last.baseRef`は`first.baseRef`と同じである。
   if (moved(first, last)) {
     return {
       kind: "wait",
       reason: "pull request changed while its facts were collected",
+    };
+  }
+  const lastBaseSha = await deps.getBranchSha(pr.owner, pr.repo, last.baseRef);
+  if (lastBaseSha !== baseSha) {
+    return {
+      kind: "wait",
+      reason: "base branch moved while the facts were collected",
     };
   }
   if (gathered.kind === "needs_human") return gathered;
@@ -486,18 +506,22 @@ async function collect(
     // 計算が遅れることのある値なので、最後に読み直した値を使う。真偽に丸めない。
     input: { ...gathered.input, mergeable: last.mergeable },
     headSha: first.headSha,
+    baseRef: first.baseRef,
+    baseSha,
     mergeBaseSha: gathered.mergeBaseSha,
     from: gathered.from,
     registryMetadata: gathered.registryMetadata,
+    unverifiedInputs: gathered.unverifiedInputs,
   };
 }
 
 /**
  * PR1件について、GitHubとnpm registryから事実を集め、ゲートの入力を作る。
- * 手順は、PRを読んでheadのshaを固定し、そのshaで比較、ファイル、チェックを読み、
- * registryの事実を読み、PRを読み直して動いていないことを確かめる。
- * PRが閉じているかmergeされている場合は、何も集めずに`needs_human`にする。
- * 集めている間にheadかbaseが動いたときは、`wait`にして次の周回でやり直す。
+ * 手順は、PRを読んでheadのshaとbaseのブランチのshaを固定し、そのshaで比較、ファイル、
+ * チェックを読み、registryの事実を読み、PRとbaseのshaを読み直して動いていないことを確かめる。
+ * PRが閉じているかmergeされている場合は、何も集めずに`closed`にする。
+ * baseが期待したブランチでないときは、`needs_human`にする。
+ * 集めている間にheadかbaseのshaが動いたときは、`wait`にして次の周回でやり直す。
  * 一時的な失敗は`wait`、応答を読めない失敗とregistryが拒んだ失敗は`needs_human`にし、
  * 知らない失敗は握りつぶさずに投げる。
  */

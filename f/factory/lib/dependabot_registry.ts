@@ -35,6 +35,17 @@ export class RegistryUnavailableError extends Error {
   }
 }
 
+/**
+ * 取得先の名前が規則に合わない、応答が大きすぎる、JSONでない、packumentの形が違うなど、
+ * 待っても直らず、応答を使えないときの例外。メッセージに応答の本文は載せない。
+ */
+export class RegistryResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RegistryResponseError";
+  }
+}
+
 const REGISTRY_ORIGIN = "https://registry.npmjs.org";
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -55,7 +66,7 @@ function assertPackageName(name: string): void {
     name.includes("..") ||
     !PACKAGE_NAME.test(name)
   ) {
-    throw new Error("invalid package name");
+    throw new RegistryResponseError("invalid package name");
   }
 }
 
@@ -121,7 +132,8 @@ function discardBody(response: Response): void {
  * 締め切りは`timeoutMs`(既定は10秒)で、リダイレクトは辿らない。
  * 応答の大きさは、宣言された`content-length`と読み込みの両方で`MAX_PACKUMENT_BYTES`に抑える。
  * 締め切り、ネットワークの失敗、HTTP 429と5xxは`RegistryUnavailableError`、
- * それ以外の2xx以外は`RegistryHttpError`、大きすぎる応答とJSONでない応答は`Error`を投げる。
+ * それ以外の2xx以外は`RegistryHttpError`、名前の不正、大きすぎる応答、JSONでない応答は
+ * `RegistryResponseError`を投げる。
  * 再試行はしない。
  */
 export async function fetchPackument(
@@ -153,7 +165,7 @@ export async function fetchPackument(
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (declared > MAX_PACKUMENT_BYTES) {
     discardBody(response);
-    throw new Error(
+    throw new RegistryResponseError(
       `npm registry response is too large: ${String(declared)} bytes`,
     );
   }
@@ -164,14 +176,14 @@ export async function fetchPackument(
     throw new RegistryUnavailableError("npm registry read failed", error);
   }
   if (bytes === null) {
-    throw new Error(
+    throw new RegistryResponseError(
       `npm registry response is too large: over ${String(MAX_PACKUMENT_BYTES)} bytes`,
     );
   }
   try {
     return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
-    throw new Error("npm registry response is not valid JSON");
+    throw new RegistryResponseError("npm registry response is not valid JSON");
   }
 }
 
@@ -191,6 +203,11 @@ export type RegistryFacts = {
   };
   integrity: string | null;
   registryMetadata: string;
+  /**
+   * `registryMetadata`で"unknown"と書いた項目の名前(例: "after publisher")。
+   * 取れた項目は含めない。空でなければ、要約は一部が欠けている。
+   */
+  missing: string[];
 };
 
 // gypfileを持つ版は、installが無ければnpmが`node-gyp rebuild`を実行する。
@@ -242,33 +259,43 @@ const UNKNOWN = "unknown";
 const MAX_ITEM_CHARS = 200;
 export const MAX_METADATA_CHARS = 4000;
 
-/** 改行、制御文字、行や向きを変える文字、幅を持たない文字、タグ文字。 */
-function isHiddenCodePoint(code: number): boolean {
+// 一般カテゴリでは拾えない、幅を持たない文字や詰め物の文字。
+const HIDDEN_FILLERS: ReadonlySet<number> = new Set([
+  0x34f, // combining grapheme joiner
+  0x115f, // Hangul choseong filler
+  0x1160, // Hangul jungseong filler
+  0x3164, // Hangul filler
+  0xffa0, // halfwidth Hangul filler
+]);
+
+// 絵文字の表示を壊さないよう、U+FE0Fだけは残す。
+const EMOJI_VARIATION_SELECTOR = 0xfe0f;
+
+// 制御文字(改行とタブを含む)、書式文字、行と段落の区切り、私用領域、未割り当て、単独のサロゲート。
+const HIDDEN_CATEGORIES = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Cs}]/u;
+
+/** 文字の並びを組み替える、または見えなくする文字か。1項目を1行に保つため、改行も除く。 */
+function isHiddenChar(char: string): boolean {
+  const code = char.codePointAt(0) ?? 0;
+  if (code === EMOJI_VARIATION_SELECTOR) return false;
   return (
-    code < 0x20 ||
-    (code >= 0x7f && code <= 0x9f) ||
-    code === 0xad ||
-    code === 0x34f ||
-    code === 0x115f ||
-    code === 0x1160 ||
-    code === 0x180e ||
-    code === 0x3164 ||
-    (code >= 0x200b && code <= 0x200f) ||
-    code === 0x2028 ||
-    code === 0x2029 ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2060 && code <= 0x206f) ||
-    code === 0xfeff ||
-    (code >= 0xe0000 && code <= 0xe007f) ||
+    HIDDEN_CATEGORIES.test(char) ||
+    HIDDEN_FILLERS.has(code) ||
+    (code >= 0x180b && code <= 0x180d) ||
+    (code >= 0xfe00 && code <= 0xfe0f) ||
     (code >= 0xe0100 && code <= 0xe01ef)
   );
 }
 
+// 1文字がUTF-16で最大2単位なので、見る範囲は上限の文字数の4倍までにする。
+// 隠れた文字が多く続く文字列は、後ろを読まずに切る。
+const MAX_SCANNED_UNITS = MAX_ITEM_CHARS * 4;
+
 /** 外部由来の文字列から制御文字を除き、1項目の上限に切る。文字列でないか、空になれば`null`にする。 */
 function cleanText(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const kept = Array.from(value)
-    .filter((char) => !isHiddenCodePoint(char.codePointAt(0) ?? 0))
+  const kept = Array.from(value.slice(0, MAX_SCANNED_UNITS))
+    .filter((char) => !isHiddenChar(char))
     .slice(0, MAX_ITEM_CHARS)
     .join("")
     .trim();
@@ -279,26 +306,27 @@ function cleanItem(value: unknown): string {
   return cleanText(value) ?? UNKNOWN;
 }
 
+/** 読めたメンテナの名前。読めなければ空の配列。 */
 function maintainerNames(entry: Record<string, unknown> | null): string[] {
   const maintainers = entry?.maintainers;
-  if (!Array.isArray(maintainers)) return [UNKNOWN];
+  if (!Array.isArray(maintainers)) return [];
   const names: string[] = [];
   for (const maintainer of maintainers) {
     const name = isRecord(maintainer) ? cleanText(maintainer.name) : null;
     if (name !== null) names.push(name);
   }
-  return names.length === 0 ? [UNKNOWN] : names;
+  return names;
 }
 
-function repositoryUrl(entry: Record<string, unknown> | null): string {
+function repositoryUrl(entry: Record<string, unknown> | null): string | null {
   const repository = entry?.repository;
-  if (typeof repository === "string") return cleanItem(repository);
-  return isRecord(repository) ? cleanItem(repository.url) : UNKNOWN;
+  if (typeof repository === "string") return cleanText(repository);
+  return isRecord(repository) ? cleanText(repository.url) : null;
 }
 
-function publisherName(entry: Record<string, unknown> | null): string {
+function publisherName(entry: Record<string, unknown> | null): string | null {
   const user = entry?._npmUser;
-  return isRecord(user) ? cleanItem(user.name) : UNKNOWN;
+  return isRecord(user) ? cleanText(user.name) : null;
 }
 
 /** 行を先頭から、全体が`limit`文字に収まるところまで積む。行や文字の途中では切らない。 */
@@ -316,7 +344,7 @@ function fitLines(lines: readonly string[], limit: number): string {
 
 /**
  * 更新の前後の公開者、リポジトリ、メンテナを、1行1項目の文字列にする。
- * メンテナはメールを含めず名前だけを載せる。取れない項目は"unknown"と書く。
+ * メンテナはメールを含めず名前だけを載せる。取れない項目は"unknown"と書き、その名前を`missing`に入れる。
  * 公開者とリポジトリを先に並べ、全体を上限で切るときに先に失われるのをメンテナにする。
  */
 function buildMetadata(
@@ -325,24 +353,46 @@ function buildMetadata(
   to: string,
   fromEntry: Record<string, unknown> | null,
   toEntry: Record<string, unknown> | null,
-): string {
+): { text: string; missing: string[] } {
+  const missing: string[] = [];
+  const orUnknown = (label: string, value: string | null): string => {
+    if (value !== null) return value;
+    missing.push(label);
+    return UNKNOWN;
+  };
+  const maintainerLines = (
+    side: "before" | "after",
+    entry: Record<string, unknown> | null,
+  ): string[] => {
+    const names = maintainerNames(entry);
+    if (names.length === 0) {
+      missing.push(`${side} maintainers`);
+      return [`${side} maintainer: ${UNKNOWN}`];
+    }
+    return names.map((maintainer) => `${side} maintainer: ${maintainer}`);
+  };
+
+  const packageText = orUnknown("package", cleanText(name));
+  const fromText = cleanText(from);
+  const toText = cleanText(to);
+  if (fromText === null || toText === null) missing.push("update");
   const lines = [
-    `package: ${cleanItem(name)}`,
-    `update: ${cleanItem(from)} -> ${cleanItem(to)}`,
-    `before publisher: ${publisherName(fromEntry)}`,
-    `after publisher: ${publisherName(toEntry)}`,
-    `before repository: ${repositoryUrl(fromEntry)}`,
-    `after repository: ${repositoryUrl(toEntry)}`,
-    ...maintainerNames(fromEntry).map((n) => `before maintainer: ${n}`),
-    ...maintainerNames(toEntry).map((n) => `after maintainer: ${n}`),
+    `package: ${packageText}`,
+    `update: ${fromText ?? UNKNOWN} -> ${toText ?? UNKNOWN}`,
+    `before publisher: ${orUnknown("before publisher", publisherName(fromEntry))}`,
+    `after publisher: ${orUnknown("after publisher", publisherName(toEntry))}`,
+    `before repository: ${orUnknown("before repository", repositoryUrl(fromEntry))}`,
+    `after repository: ${orUnknown("after repository", repositoryUrl(toEntry))}`,
+    ...maintainerLines("before", fromEntry),
+    ...maintainerLines("after", toEntry),
   ];
-  return fitLines(lines, MAX_METADATA_CHARS);
+  return { text: fitLines(lines, MAX_METADATA_CHARS), missing };
 }
 
 /**
  * packumentから、ゲートと影響調査に要る事実を読む。
  * `time`、`versions`、`name`が期待どおりでないとき、更新先の版の公開日時が無いか、
- * 時差つきのISO 8601でないときは例外を投げる。
+ * 時差つきのISO 8601でないときは`RegistryResponseError`を投げる。
  * install時のスクリプトと整合性は、読めなければ`null`にして、ゲートに止めさせる。
  */
 export function parsePackument(
@@ -351,19 +401,26 @@ export function parsePackument(
   from: string,
   to: string,
 ): RegistryFacts {
-  if (!isRecord(raw)) throw new Error("packument is not an object");
-  if (raw.name !== name) throw new Error("packument name does not match");
+  if (!isRecord(raw))
+    throw new RegistryResponseError("packument is not an object");
+  if (raw.name !== name)
+    throw new RegistryResponseError("packument name does not match");
   const { time, versions } = raw;
-  if (!isRecord(time)) throw new Error("packument has no time table");
-  if (!isRecord(versions)) throw new Error("packument has no versions table");
+  if (!isRecord(time))
+    throw new RegistryResponseError("packument has no time table");
+  if (!isRecord(versions))
+    throw new RegistryResponseError("packument has no versions table");
 
   const published = Object.hasOwn(time, to) ? time[to] : undefined;
   if (typeof published !== "string" || parsePublishedAt(published) === null) {
-    throw new Error(`packument has no valid publish time for ${cleanItem(to)}`);
+    throw new RegistryResponseError(
+      `packument has no valid publish time for ${cleanItem(to)}`,
+    );
   }
 
   const fromEntry = versionEntry(versions, from);
   const toEntry = versionEntry(versions, to);
+  const metadata = buildMetadata(name, from, to, fromEntry, toEntry);
   return {
     name,
     version: to,
@@ -373,7 +430,8 @@ export function parsePackument(
       after: installScriptsOf(toEntry),
     },
     integrity: integrityOf(toEntry),
-    registryMetadata: buildMetadata(name, from, to, fromEntry, toEntry),
+    registryMetadata: metadata.text,
+    missing: metadata.missing,
   };
 }
 

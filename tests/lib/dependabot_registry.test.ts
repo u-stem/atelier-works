@@ -5,6 +5,7 @@ import {
   MAX_PACKUMENT_BYTES,
   parsePackument,
   RegistryHttpError,
+  RegistryResponseError,
   RegistryUnavailableError,
 } from "../../f/factory/lib/dependabot_registry.ts";
 
@@ -338,6 +339,39 @@ describe("fetchPackument failures", () => {
     await expect(result).rejects.toThrow("not valid JSON");
   });
 
+  test("throws a response error for a body that is not JSON", async () => {
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(() => new Response("<html>oops</html>", { status: 200 })),
+    );
+
+    await expect(result).rejects.toBeInstanceOf(RegistryResponseError);
+  });
+
+  test("throws a response error for a declared content-length over the limit", async () => {
+    const result = fetchPackument(
+      "left-pad",
+      fakeFetch(
+        () =>
+          new Response("{}", {
+            status: 200,
+            headers: { "content-length": String(MAX_PACKUMENT_BYTES + 1) },
+          }),
+      ),
+    );
+
+    await expect(result).rejects.toBeInstanceOf(RegistryResponseError);
+  });
+
+  test("throws a response error for an invalid package name", async () => {
+    const result = fetchPackument(
+      "Left Pad",
+      fakeFetch(() => jsonResponse({})),
+    );
+
+    await expect(result).rejects.toBeInstanceOf(RegistryResponseError);
+  });
+
   test("treats a network failure as unavailable", async () => {
     const result = fetchPackument("left-pad", () =>
       Promise.reject(new Error("socket hang up")),
@@ -481,6 +515,28 @@ describe("parsePackument structure", () => {
     expect(() => parsePackument([], "left-pad", "1.3.0", "1.3.1")).toThrow(
       "not an object",
     );
+  });
+
+  test("throws a response error when the document is not an object", () => {
+    expect(() => parsePackument([], "left-pad", "1.3.0", "1.3.1")).toThrow(
+      RegistryResponseError,
+    );
+  });
+
+  test("throws a response error when the package name differs", () => {
+    expect(() =>
+      parsePackument(packument(), "other-pkg", "1.3.0", "1.3.1"),
+    ).toThrow(RegistryResponseError);
+  });
+
+  test("throws a response error when time is missing", () => {
+    expect(() => facts({ time: undefined })).toThrow(RegistryResponseError);
+  });
+
+  test("throws a response error when the publish time is missing", () => {
+    expect(() =>
+      facts({ time: { "1.3.0": "2018-04-09T01:10:45.796Z" } }),
+    ).toThrow(RegistryResponseError);
   });
 
   test("throws when the package name differs", () => {
@@ -822,6 +878,81 @@ describe("parsePackument registryMetadata", () => {
     );
   });
 
+  test("removes Arabic letter marks and Mongolian variation selectors", () => {
+    const to = version({ _npmUser: { name: "a\u061C\u180B\u180C\u180Db" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
+  test("removes interlinear annotation and musical formatting characters", () => {
+    const hidden = "\uFFF9\uFFFA\uFFFB\u{1D173}\u{1D17A}";
+    const to = version({ _npmUser: { name: `a${hidden}b` } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
+  test("removes the variation selectors other than the emoji one", () => {
+    const to = version({ _npmUser: { name: "a\uFE00\uFE0Eb\u{E0100}c" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: abc\n",
+    );
+  });
+
+  test("removes private use and unassigned code points", () => {
+    const to = version({ _npmUser: { name: "a\uE000\u0378\u{10FFFF}b" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
+  test("removes a lone surrogate", () => {
+    const to = version({ _npmUser: { name: "a\uD800b" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
+  test("removes the halfwidth Hangul filler", () => {
+    const to = version({ _npmUser: { name: "a\uFFA0b" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
+  test("removes line and paragraph separators", () => {
+    const to = version({ _npmUser: { name: "a\u2028b\u2029c\u0085d" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: abcd\n",
+    );
+  });
+
+  test("does not read past the head of an oversized string", () => {
+    const to = version({ _npmUser: { name: `${"\u200B".repeat(800)}x` } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: unknown\n",
+    );
+  });
+
+  test("keeps an item short when the input is huge", () => {
+    const to = version({ _npmUser: { name: "x".repeat(10_000_000) } });
+
+    const line = facts(versionsWith(version(), to))
+      .registryMetadata.split("\n")
+      .find((entry) => entry.startsWith("after publisher:"));
+
+    expect(line?.length).toBeLessThanOrEqual("after publisher: ".length + 200);
+  });
+
   test("keeps the emoji variation selector", () => {
     const to = version({ _npmUser: { name: "a\u2764\uFE0Fb" } });
 
@@ -886,6 +1017,58 @@ describe("parsePackument registryMetadata", () => {
 
   test("states the package and the update range", () => {
     expect(facts().registryMetadata).toContain("update: 1.3.0 -> 1.3.1");
+  });
+});
+
+describe("parsePackument missing", () => {
+  test("is empty when every item is present", () => {
+    expect(facts().missing).toEqual([]);
+  });
+
+  test("names a publisher that cannot be read", () => {
+    const to = version({ _npmUser: undefined });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([
+      "after publisher",
+    ]);
+  });
+
+  test("names a repository that cannot be read", () => {
+    const from = version({ repository: undefined });
+
+    expect(facts(versionsWith(from, version())).missing).toEqual([
+      "before repository",
+    ]);
+  });
+
+  test("names maintainers that cannot be read", () => {
+    const to = version({ maintainers: undefined });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([
+      "after maintainers",
+    ]);
+  });
+
+  test("names maintainers whose names are all unusable", () => {
+    const from = version({ maintainers: [{ email: "a@example.test" }, 5] });
+
+    expect(facts(versionsWith(from, version())).missing).toEqual([
+      "before maintainers",
+    ]);
+  });
+
+  test("names every item of a missing version", () => {
+    expect(facts({ versions: { "1.3.1": version() } }).missing).toEqual([
+      "before publisher",
+      "before repository",
+      "before maintainers",
+    ]);
+  });
+
+  test("does not count a publisher that is literally named unknown", () => {
+    const to = version({ _npmUser: { name: "unknown" } });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([]);
   });
 });
 

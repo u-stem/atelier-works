@@ -2670,6 +2670,40 @@ export async function listPrCommits(
  */
 const COMPARE_FILES_API_CAP = 300;
 
+/**
+ * `GET repos/{owner}/{repo}/git/ref/heads/{branch}`で、ブランチの先頭のshaを返す。
+ * `heads/`で名前空間を固定するので、同名のタグがあっても取り違えない。
+ * ブランチ名の`/`は残し、区切りごとにエンコードする。
+ * ブランチでないref、commitでないオブジェクト、小文字40桁でないshaは`GitHubResponseError`にする。
+ */
+export async function getBranchSha(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<string> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const context = `GET branch ref ${owner}/${repo}@${branch}`;
+  const encoded = branch.split("/").map(encodeURIComponent).join("/");
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/git/ref/heads/${encoded}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (
+    !isRecord(parsed) ||
+    parsed.ref !== `refs/heads/${branch}` ||
+    !isRecord(parsed.object) ||
+    parsed.object.type !== "commit" ||
+    !isCommitSha(parsed.object.sha)
+  ) {
+    throw unexpectedShape(context);
+  }
+  return parsed.object.sha;
+}
+
 export type CompareFile = {
   readonly filename: string;
   /** 名前の変更の移動元。名前の変更でなければ`null`。 */
@@ -2708,9 +2742,11 @@ function parseCompareFile(entry: unknown, context: string): CompareFile {
 }
 
 /**
- * `GET .../compare/{base}...{headSha}`(三点: merge-baseからheadまで)を最後のページまで読む。
- * baseはブランチ名、headは小文字40桁のshaに限る。shaに固定するので、PR番号で引く
- * `listPrFiles`と`listPrCommits`と違い、比較の途中でheadが動いても結果は変わらない。
+ * `GET .../compare/{baseSha}...{headSha}`(三点: merge-baseからheadまで)を最後のページまで読む。
+ * baseとheadはどちらも小文字40桁のshaに限る。短いブランチ名は同名のタグと曖昧になり、
+ * merge-baseを偽られうるので受け付けない。ブランチのshaは`getBranchSha`で読む。
+ * shaに固定するので、PR番号で引く`listPrFiles`と`listPrCommits`と違い、
+ * 比較の途中でheadが動いても結果は変わらない。
  * ファイルは最初のページにだけ載る。ファイルが`COMPARE_FILES_API_CAP`件、commitが250件に達したときは、
  * 切り詰められた可能性があるので`GitHubResponseError`にする。
  * 応答の形が違うとき(merge baseのshaが40桁でない、`verified`が無い、`parents`が配列でないなど)も例外にする。
@@ -2719,11 +2755,11 @@ export async function compareCommits(
   client: GhClient,
   owner: string,
   repo: string,
-  base: string,
+  baseSha: string,
   headSha: string,
 ): Promise<CommitComparison> {
   validateOwnerRepo(owner, repo);
-  assertBranchName(base);
+  assertCommitSha(baseSha);
   assertCommitSha(headSha);
   const found: { mergeBaseSha: string | null; pages: number } = {
     mergeBaseSha: null,
@@ -2732,7 +2768,7 @@ export async function compareCommits(
   const files: CompareFile[] = [];
   const commits = await paginateGhApi<PrCommit>(
     client,
-    `repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${headSha}?per_page=100`,
+    `repos/${owner}/${repo}/compare/${baseSha}...${headSha}?per_page=100`,
     (parsed, context) => {
       if (!isRecord(parsed) || !Array.isArray(parsed.commits)) {
         throw unexpectedShape(context);

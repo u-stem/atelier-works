@@ -303,7 +303,7 @@ function dependencyFieldProblem(
 
 /**
  * ロックファイルのworkspacesを比べ、対象の依存の指定以外が変わっていれば理由を返す。
- * 対象の指定は、前と同じ欄にあり、変えるなら新しい版を指していることを要る。
+ * 対象の指定は、前と同じ欄にあり、変えるなら新しい版を指していることを求める。
  * 作業場所のキーは`Object.keys`で比べる。`__proto__`は`JSON.parse`が持ち主のキーとして作るので、
  * 値を組み立て直さずに比べて、足された作業場所を見逃さない。
  */
@@ -598,8 +598,8 @@ export type GateInput = {
    * レジストリが報告する、更新先の版の整合性(`dist.integrity`)。
    * 取得できなかったときと形が不正なときは`null`にする。
    * `name`と`version`は、整合性がどのパッケージのどの版のものかを示し、
-   * `target`の名前と更新後の版に一致することを要る。
-   * 更新後のロックファイルの対象のエントリが、`integrity`と一致することを要る。
+   * `target`の名前と更新後の版に一致することを求める。
+   * 更新後のロックファイルの対象のエントリが、`integrity`と一致することを求める。
    */
   registry: { name: string; version: string; integrity: string } | null;
 };
@@ -641,8 +641,8 @@ const MANIFEST_LOCKFILES: readonly { manifest: string; lockfile: string }[] = [
 
 /**
  * 変更されたファイルの中身を検査し、止める理由を返す。無ければ`null`。
- * 変更されたパスのすべてが`files`に現れ、追加と削除でなく、検査を通ることを要る。
- * マニフェストが変わったときは、同じディレクトリのロックファイルも変わっていることを要る。
+ * 変更されたパスのすべてが`files`に現れ、追加と削除でなく、検査を通ることを求める。
+ * マニフェストが変わったときは、同じディレクトリのロックファイルも変わっていることを求める。
  * ロックファイルだけが変わるとき(推移的な依存だけの更新)は、ロックファイルの検査だけで通す。
  */
 function fileProblem(input: GateInput): string | null {
@@ -683,7 +683,7 @@ function fileProblem(input: GateInput): string | null {
 /**
  * 更新後のロックファイルの対象のエントリが、レジストリの整合性と一致しないときの理由を返す。無ければ`null`。
  * ロックファイルが差し替えた取得物ではなく、レジストリが公開したものを入れていることを確かめる。
- * 変更されたロックファイルのすべてで、対象のエントリが1件以上あり、すべてが一致することを要る。
+ * 変更されたロックファイルのすべてで、対象のエントリが1件以上あり、すべてが一致することを求める。
  */
 function integrityProblem(input: GateInput): string | null {
   const { registry, files, changedPaths, target } = input;
@@ -743,7 +743,7 @@ const WEB_FLOW_LOGIN = "web-flow";
 
 /**
  * PRのcommitを調べ、止める理由を返す。無ければ`null`。
- * 全commitが次のどちらかを満たし、通常のcommitが1件以上あることを要る。
+ * 全commitが次のどちらかを満たし、通常のcommitが1件以上あることを求める。
  * - 通常のcommit(親が1つ): 作者が`dependabot[bot]`、コミッターが`dependabot[bot]`か`web-flow`、署名が検証済み。
  * - mergeのcommit(親が2つ以上): コミッターが`web-flow`で、署名が検証済み。ブランチの更新は人やFactoryも行うので、作者は問わない。
  * 親の数が1以上の整数でないcommitは止める。
