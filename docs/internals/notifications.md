@@ -26,7 +26,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `approval_requested` | 承認待ち | `pipeline_request_approval` | 要件定義の承認依頼を記録した |
 | `requirements_approved` | 要件定義承認 | `requirements_apply` | 要件定義が承認された |
 | `intake_refreshed` | 取り込み内容を更新 | `requirements_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した |
-| `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった |
+| `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった。または、Factoryが作ったPRのCIが失敗した |
 | `pr_reviewed` | PRレビュー完了 | `pr_review_post` | レビューを投稿した |
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
 | `job_failed` | ジョブ失敗 | 下の表を参照 | フローやスケジュールが失敗した |
@@ -50,6 +50,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
+| `watch_pr_ci` | Factoryが作ったPRのCIが失敗し、通知を新しく残した(理由は`ci_failure`か`ci_other_conclusion`) |
 
 `poll_issues`が、1回のポーリングで複数のIssueについてラベルを外した結果を判断できなかったときは、Issueごとに送らず、リンクを並べた1件の通知にまとめる。
 各行は`owner/repo#番号`とリンクで、タイトルとリンクの先は先頭のIssueである。
@@ -228,6 +229,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 | `main_ci_failed` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、コミットの先頭7文字、失敗した実行のリンク、次の操作 |
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
+| `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、失敗した実行のリンク、次の操作 |
+| `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
 `check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。
@@ -245,6 +248,12 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 同じリポジトリのより新しいコミットが通ると、`watch_main_ci`が種類と接頭辞で選んで解決する。
 `main_ci_check_denied`は、実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
 詳細は[mainのCI監視の仕様](main-ci.md)にある。
+
+`pr_ci_failed`は、失敗を確定したPRのheadごとに1件残す。Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。リンクはPRのページで、説明に理由コード、「次の操作」を載せる。
+本文は固定文で、workflowの名前、結論、ログは載せない。外部の文字列は、`pr_ci_checks`の`summary`列にだけ残す。
+同じheadの再実行が通ったとき、新しいheadが通ったとき、PRが閉じたときに、`watch_pr_ci`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
+`pr_ci_check_denied`は、PRか実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
+詳細は[PRのCI監視の仕様](pr-ci.md)にある。
 
 ### 重複の抑止
 

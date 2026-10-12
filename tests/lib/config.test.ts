@@ -529,6 +529,26 @@ describe("max_lookback_days", () => {
   });
 });
 
+describe("pr_ci_watch_enabled", () => {
+  test("defaults pr_ci_watch_enabled to true when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_ci_watch_enabled).toBe(true);
+  });
+
+  test("passes through an explicit pr_ci_watch_enabled false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_watch_enabled: false,
+    });
+    expect(config.pr_ci_watch_enabled).toBe(false);
+  });
+
+  test("throws when pr_ci_watch_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_watch_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("implement settings (工程3)", () => {
   test("defaults the seven scalar implement settings when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
@@ -644,6 +664,54 @@ describe("implement settings (工程3)", () => {
     expect(config.check_commands_by_repo).toEqual({
       "octo-owner/atelier-works.git": ["bun test"],
     });
+  });
+});
+
+describe("dependabot settings", () => {
+  test("defaults dependabot_enabled to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_enabled).toBe(false);
+  });
+
+  test("defaults dependabot_min_published_days to 7 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_min_published_days).toBe(7);
+  });
+
+  test("passes through an explicit dependabot_enabled true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_enabled: true,
+    });
+    expect(config.dependabot_enabled).toBe(true);
+  });
+
+  test("throws when dependabot_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("passes through an explicit dependabot_min_published_days", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_min_published_days: 14,
+    });
+    expect(config.dependabot_min_published_days).toBe(14);
+  });
+
+  test("throws when dependabot_min_published_days is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when dependabot_min_published_days is negative", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: -1 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when dependabot_min_published_days is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 });
 

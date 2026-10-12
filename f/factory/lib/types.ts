@@ -976,6 +976,16 @@ export type FactoryConfig = {
   implement_max_changed_files: number;
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
+  // dependabotのセキュリティ更新PRの自動処理。リソース型ではどちらも省略可能で、既定値がある。
+  /** dependabotのセキュリティ更新PRを自動で処理するか。既定は`false`。 */
+  dependabot_enabled: boolean;
+  /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
+  dependabot_min_published_days: number;
+  /**
+   * `watch_pr_ci`がFactoryのPRのCIを観測して通知するか。
+   * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。
+   */
+  pr_ci_watch_enabled: boolean;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
@@ -985,3 +995,10 @@ export type FactoryConfig = {
    */
   check_commands_by_repo: Record<string, string[]>;
 };
+
+/** 実装ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを返す。形が違えばnull。pr_fixが、親の行が無くても同じブランチの実装フローを見つけるのに使う。PRのCIの判定も、Factoryのブランチかの照合に使う。 */
+export function parseImplementBranchWorkItemId(branch: string): number | null {
+  const match = /^factory\/issue-[1-9]\d*-wi-([1-9]\d*)$/.exec(branch);
+  const id = match?.[1] === undefined ? Number.NaN : Number(match[1]);
+  return Number.isSafeInteger(id) ? id : null;
+}

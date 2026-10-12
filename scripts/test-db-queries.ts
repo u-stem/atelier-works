@@ -15,27 +15,38 @@ import {
   countImplementFailedRounds,
   countPrFixFailures,
   deleteMainCiRunsBefore,
+  deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
   deleteWorkerSamplesBefore,
+  getLatestPrCiCheck,
   getNoticeById,
   getPreviousMainCiRun,
+  hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
   hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
   insertCleanupRun,
+  insertDependabotWorkItemUnlessActive,
   insertWorkerSample,
   insertWorkItem,
   latestMainCiRunCreatedAt,
+  listFailedPrCiChecks,
   listMainCiRunsBySha,
+  listNoCiPrCiChecksToRecheck,
   listPendingMainCiRuns,
+  listPendingPrCiChecks,
+  listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
+  markPrCiNotified,
   type NewWorkerSample,
   recordDeployment,
   recordFailure,
   recordMainCiRun,
+  recordPrCiCheck,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -43,7 +54,10 @@ import {
   resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  setWorkItemPrUrl,
+  touchPrCiCheck,
   transitionMainCiRun,
+  transitionPrCiCheck,
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -1100,6 +1114,7 @@ await insertCleanupRun(
     info_notices_resolved: 3,
     main_ci_runs_deleted: 4,
     worker_samples_deleted: 5,
+    pr_ci_checks_deleted: 6,
     doc_dirs_deleted: 0,
   },
   sql,
@@ -1117,6 +1132,7 @@ check(
   cleanupSummary?.info_notices_resolved === 3 &&
     cleanupSummary.main_ci_runs_deleted === 4 &&
     cleanupSummary.worker_samples_deleted === 5 &&
+    cleanupSummary.pr_ci_checks_deleted === 6 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
 );
@@ -2171,6 +2187,501 @@ check(
 );
 execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
 
+// PRのCIの記録: headごとに1行で、移すのは期待する状態の行だけ、掃除は判定待ちの行と各PRの最新の行を消さない。
+const PR_CI = { owner: "qdb", repo: "prci" };
+const PR_SHA_1 = "1".repeat(40);
+const PR_SHA_2 = "2".repeat(40);
+const prCiNew = (prNumber: number, sha: string) => ({
+  ...PR_CI,
+  pr_number: prNumber,
+  head_sha: sha,
+  work_item_id: null,
+  run_created_at: null,
+});
+check(
+  "pr_ci_checks: the first record is inserted",
+  (await recordPrCiCheck(prCiNew(11, PR_SHA_1), sql)) === true,
+);
+check(
+  "pr_ci_checks: the same head of the same pull request is not recorded twice",
+  (await recordPrCiCheck(prCiNew(11, PR_SHA_1), sql)) === false,
+);
+check(
+  "pr_ci_checks: the same sha on another pull request is a separate row",
+  (await recordPrCiCheck(prCiNew(12, PR_SHA_1), sql)) === true,
+);
+check(
+  "pr_ci_checks: a work item id and a run time are stored",
+  (await recordPrCiCheck(
+    {
+      ...prCiNew(13, PR_SHA_1),
+      work_item_id: 4242,
+      run_created_at: new Date("2026-10-13T00:00:00Z"),
+    },
+    sql,
+  )) === true &&
+    (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 13, sql))
+      ?.work_item_id === 4242,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '2 hours' WHERE owner = 'qdb' AND pr_number = 11",
+);
+await recordPrCiCheck(prCiNew(11, PR_SHA_2), sql);
+const prCiRows = await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, 11, sql);
+check(
+  "pr_ci_checks: the rows of a pull request are listed from the newest head",
+  prCiRows.map((row) => row.head_sha.slice(0, 1)).join(",") === "2,1",
+  prCiRows,
+);
+check(
+  "pr_ci_checks: the latest row is the newest head",
+  (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 11, sql))?.head_sha ===
+    PR_SHA_2,
+);
+check(
+  "pr_ci_checks: a pull request without a row has no latest row",
+  (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 99, sql)) === null,
+);
+check(
+  "pr_ci_checks: pending rows are listed",
+  (await listPendingPrCiChecks(100, sql)).filter(
+    (row) => row.owner === PR_CI.owner,
+  ).length === 4,
+);
+const prCiOld = prCiRows.find((row) => row.head_sha === PR_SHA_1);
+if (prCiOld === undefined) throw new Error("pr_ci_checks row is missing");
+check(
+  "pr_ci_checks: a pending row moves once, keeping the summary of the move",
+  (await transitionPrCiCheck(
+    prCiOld.id,
+    "pending",
+    {
+      state: "failed",
+      summary: "失敗したworkflow: CI (failure)",
+      runCreatedAt: new Date("2026-10-13T01:00:00Z"),
+    },
+    sql,
+  )) === true &&
+    (await transitionPrCiCheck(
+      prCiOld.id,
+      "pending",
+      { state: "failed" },
+      sql,
+    )) === false,
+);
+check(
+  "pr_ci_checks: failed rows are listed",
+  (await listFailedPrCiChecks(100, sql)).filter(
+    (row) => row.owner === PR_CI.owner,
+  ).length === 1,
+);
+check(
+  "pr_ci_checks: a notified reason is written once",
+  (await markPrCiNotified(prCiOld.id, "ci_failure", sql)) === true &&
+    (await markPrCiNotified(prCiOld.id, "ci_failure", sql)) === false,
+);
+check(
+  "pr_ci_checks: a failed row goes back to passed",
+  (await transitionPrCiCheck(
+    prCiOld.id,
+    "failed",
+    { state: "passed" },
+    sql,
+  )) === true,
+);
+const prCiAfter = (
+  await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, 11, sql)
+).find((row) => row.id === prCiOld.id);
+check(
+  "pr_ci_checks: the move to passed kept the summary, the run time and the notified reason",
+  prCiAfter?.state === "passed" &&
+    prCiAfter.summary === "失敗したworkflow: CI (failure)" &&
+    prCiAfter.run_created_at?.toISOString() === "2026-10-13T01:00:00.000Z" &&
+    prCiAfter.notified_reason === "ci_failure",
+  prCiAfter,
+);
+let prCiTransitionRefused = false;
+try {
+  await transitionPrCiCheck(prCiOld.id, "passed", { state: "failed" }, sql);
+} catch {
+  prCiTransitionRefused = true;
+}
+check(
+  "pr_ci_checks: a transition that is not allowed is refused before the database",
+  prCiTransitionRefused,
+);
+for (const [name, statement] of [
+  [
+    "a malformed sha",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha) VALUES ('qdb', 'prci', 50, 'ABC')`,
+  ],
+  [
+    "a pull request number of zero",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha) VALUES ('qdb', 'prci', 0, '${PR_SHA_1}')`,
+  ],
+  [
+    "an unknown state",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha, state) VALUES ('qdb', 'prci', 51, '${PR_SHA_1}', 'baseline')`,
+  ],
+  [
+    "a summary over 400 characters",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha, summary) VALUES ('qdb', 'prci', 52, '${PR_SHA_1}', repeat('x', 401))`,
+  ],
+] as const) {
+  let rejected = false;
+  try {
+    execPsql(target, statement);
+  } catch {
+    rejected = true;
+  }
+  check(`pr_ci_checks: the table rejects ${name}`, rejected);
+}
+
+// 巡回の順は、読み直していない順(checked_at)で、読み直した行は後ろに回る。
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+for (const prNumber of [41, 42, 43]) {
+  await recordPrCiCheck(prCiNew(prNumber, PR_SHA_1), sql);
+}
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET checked_at = now() - (50 - pr_number) * interval '1 hour' WHERE owner = 'qdb'",
+);
+const prCiOrder = async () =>
+  (await listPendingPrCiChecks(100, sql))
+    .filter((row) => row.owner === PR_CI.owner)
+    .map((row) => row.pr_number)
+    .join(",");
+check(
+  "pr_ci_checks: pending rows are listed from the one checked longest ago",
+  (await prCiOrder()) === "41,42,43",
+  await prCiOrder(),
+);
+const prCiFirst = await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 41, sql);
+if (prCiFirst === null) throw new Error("pr_ci_checks row is missing");
+check(
+  "pr_ci_checks: touching a pending row moves it to the back of the line",
+  (await touchPrCiCheck(prCiFirst.id, sql)) === true &&
+    (await prCiOrder()) === "42,43,41",
+  await prCiOrder(),
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'failed', checked_at = now() - (50 - pr_number) * interval '1 hour' WHERE owner = 'qdb'",
+);
+const prCiFailedOrder = async () =>
+  (await listFailedPrCiChecks(100, sql))
+    .filter((row) => row.owner === PR_CI.owner)
+    .map((row) => row.pr_number)
+    .join(",");
+await touchPrCiCheck(prCiFirst.id, sql);
+check(
+  "pr_ci_checks: failed rows are listed from the one checked longest ago",
+  (await prCiFailedOrder()) === "42,43,41",
+  await prCiFailedOrder(),
+);
+check(
+  "pr_ci_checks: touching does not move the update time",
+  (
+    await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 41, sql)
+  )?.updated_at.getTime() === prCiFirst.updated_at.getTime(),
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'passed' WHERE owner = 'qdb'",
+);
+check(
+  "pr_ci_checks: a row that is neither pending nor failed is not touched",
+  (await touchPrCiCheck(prCiFirst.id, sql)) === false,
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// headがA、B、Aと戻ったとき、Aの行はやり直しの行になる。
+const PR_BACK = 61;
+await recordPrCiCheck(prCiNew(PR_BACK, PR_SHA_1), sql);
+const prCiBackA = await getLatestPrCiCheck(
+  PR_CI.owner,
+  PR_CI.repo,
+  PR_BACK,
+  sql,
+);
+if (prCiBackA === null) throw new Error("pr_ci_checks row is missing");
+await transitionPrCiCheck(
+  prCiBackA.id,
+  "pending",
+  { state: "failed", summary: "失敗したworkflow: CI (failure)" },
+  sql,
+);
+await markPrCiNotified(prCiBackA.id, "ci_failure", sql);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number = 61",
+);
+await transitionPrCiCheck(prCiBackA.id, "failed", { state: "superseded" }, sql);
+await recordPrCiCheck(prCiNew(PR_BACK, PR_SHA_2), sql);
+const prCiBackB = await getLatestPrCiCheck(
+  PR_CI.owner,
+  PR_CI.repo,
+  PR_BACK,
+  sql,
+);
+if (prCiBackB === null) throw new Error("pr_ci_checks row is missing");
+check(
+  "pr_ci_checks: before the head comes back, the newest head is the latest row",
+  prCiBackB.head_sha === PR_SHA_2,
+);
+await transitionPrCiCheck(
+  prCiBackB.id,
+  "pending",
+  { state: "superseded" },
+  sql,
+);
+check(
+  "pr_ci_checks: leaving superseded without the reopen flag is refused",
+  await transitionPrCiCheck(
+    prCiBackA.id,
+    "superseded",
+    { state: "pending" },
+    sql,
+  )
+    .then(() => false)
+    .catch(() => true),
+);
+check(
+  "pr_ci_checks: a superseded row is reopened once",
+  (await transitionPrCiCheck(
+    prCiBackA.id,
+    "superseded",
+    { state: "pending", reopen: true },
+    sql,
+  )) === true &&
+    (await transitionPrCiCheck(
+      prCiBackA.id,
+      "superseded",
+      { state: "pending", reopen: true },
+      sql,
+    )) === false,
+);
+const prCiReopened = await getLatestPrCiCheck(
+  PR_CI.owner,
+  PR_CI.repo,
+  PR_BACK,
+  sql,
+);
+check(
+  "pr_ci_checks: after the head comes back, its row is the latest row",
+  prCiReopened?.id === prCiBackA.id,
+  prCiReopened,
+);
+check(
+  "pr_ci_checks: the reopened row forgets the notified reason and the summary",
+  prCiReopened?.state === "pending" &&
+    prCiReopened.notified_reason === null &&
+    prCiReopened.summary === "",
+  prCiReopened,
+);
+check(
+  "pr_ci_checks: the reopened row can be notified again",
+  (await markPrCiNotified(prCiBackA.id, "ci_failure", sql)) === true,
+);
+await transitionPrCiCheck(prCiBackA.id, "pending", { state: "failed" }, sql);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
+);
+await deletePrCiChecksBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  new Date(Date.now() - 120 * 24 * 60 * 60 * 1000),
+  sql,
+);
+check(
+  "pr_ci_checks: cleanup keeps the failed row of the head that came back and deletes the old head's row",
+  (await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, PR_BACK, sql))
+    .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
+    .join(",") === "1:failed",
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// 掃除は、判定待ちの行を残す。各PRの最新の行は保持期間の4倍まで残し、最新でない行は保持期間で消す。
+const PR_SHA_3 = "3".repeat(40);
+await recordPrCiCheck(prCiNew(21, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(21, PR_SHA_2), sql);
+await recordPrCiCheck(prCiNew(22, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(23, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(23, PR_SHA_3), sql);
+await recordPrCiCheck(prCiNew(24, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(24, PR_SHA_2), sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number IN (21, 23, 24) AND head_sha = '${PR_SHA_1}'`,
+);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET state = 'superseded' WHERE pr_number = 21 AND head_sha = '${PR_SHA_1}'`,
+);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET state = 'passed' WHERE (pr_number = 21 AND head_sha = '${PR_SHA_2}') OR pr_number = 22`,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'failed' WHERE pr_number = 24",
+);
+const prCiCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+const prCiLatestCutoff = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
+);
+const prCiDeleted = await deletePrCiChecksBefore(
+  prCiCutoff,
+  prCiLatestCutoff,
+  sql,
+);
+const prCiLeft = async (prNumber: number) =>
+  (await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, prNumber, sql))
+    .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
+    .join(",");
+check(
+  "pr_ci_checks: cleanup deletes the old superseded row and keeps the newest passed row for now",
+  (await prCiLeft(21)) === "2:passed",
+  await prCiLeft(21),
+);
+check(
+  "pr_ci_checks: cleanup keeps the only row of a pull request for now",
+  (await prCiLeft(22)) === "1:passed",
+  await prCiLeft(22),
+);
+check(
+  "pr_ci_checks: cleanup keeps the pending rows",
+  (await prCiLeft(23)) === "3:pending,1:pending",
+  await prCiLeft(23),
+);
+check(
+  "pr_ci_checks: cleanup keeps the newest failed row and deletes the older failed row",
+  (await prCiLeft(24)) === "2:failed",
+  await prCiLeft(24),
+);
+check(
+  "pr_ci_checks: cleanup counted the two rows that were not the newest",
+  prCiDeleted === 2,
+  prCiDeleted,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '150 days' WHERE owner = 'qdb'",
+);
+const prCiDeletedLatest = await deletePrCiChecksBefore(
+  prCiCutoff,
+  prCiLatestCutoff,
+  sql,
+);
+check(
+  "pr_ci_checks: after four times the retention, the newest rows are deleted whatever their state",
+  (await prCiLeft(21)) === "" &&
+    (await prCiLeft(22)) === "" &&
+    (await prCiLeft(24)) === "",
+  [await prCiLeft(21), await prCiLeft(22), await prCiLeft(24)],
+);
+check(
+  "pr_ci_checks: the pending rows survive however old they are",
+  (await prCiLeft(23)) === "3:pending,1:pending",
+  await prCiLeft(23),
+);
+check(
+  "pr_ci_checks: the second sweep counted the three newest rows",
+  prCiDeletedLatest === 3,
+  prCiDeletedLatest,
+);
+check(
+  "pr_ci_checks: a latest cutoff later than the cutoff is refused",
+  await deletePrCiChecksBefore(prCiLatestCutoff, prCiCutoff, sql)
+    .then(() => false)
+    .catch(() => true),
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// no_ci の行は、実行が遅れて作られた場合のために、今のheadの行だけを遅い間隔で読み直す。
+const PR_NO_CI = [81, 82, 83];
+for (const prNumber of PR_NO_CI) {
+  await recordPrCiCheck(prCiNew(prNumber, PR_SHA_1), sql);
+}
+await recordPrCiCheck(prCiNew(82, PR_SHA_2), sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number = 82 AND head_sha = '${PR_SHA_1}'`,
+);
+for (const prNumber of PR_NO_CI) {
+  const row = (
+    await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, prNumber, sql)
+  ).find((item) => item.head_sha === PR_SHA_1);
+  if (row === undefined) throw new Error("pr_ci_checks row is missing");
+  await transitionPrCiCheck(row.id, "pending", { state: "no_ci" }, sql);
+}
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET checked_at = now() - interval '3 hours' WHERE pr_number IN (81, 82)",
+);
+const prCiNoCi = await listNoCiPrCiChecksToRecheck(
+  new Date(Date.now() - 60 * 60 * 1000),
+  100,
+  sql,
+);
+check(
+  "pr_ci_checks: only the newest no_ci row of a pull request that was not checked lately is rechecked",
+  prCiNoCi
+    .filter((row) => row.owner === PR_CI.owner)
+    .map((row) => row.pr_number)
+    .join(",") === "81",
+  prCiNoCi.map((row) => `${row.pr_number}:${row.head_sha.slice(0, 1)}`),
+);
+const prCiNoCiRow = prCiNoCi.find((row) => row.pr_number === 81);
+if (prCiNoCiRow === undefined) throw new Error("no_ci row is missing");
+check(
+  "pr_ci_checks: touching a no_ci row takes it out of the recheck list",
+  (await touchPrCiCheck(prCiNoCiRow.id, sql)) === true &&
+    (
+      await listNoCiPrCiChecksToRecheck(
+        new Date(Date.now() - 60 * 60 * 1000),
+        100,
+        sql,
+      )
+    ).every((row) => row.pr_number !== 81),
+);
+check(
+  "pr_ci_checks: a no_ci row can be judged again once its runs appear",
+  (await transitionPrCiCheck(
+    prCiNoCiRow.id,
+    "no_ci",
+    { state: "passed", runCreatedAt: new Date("2026-10-13T05:00:00Z") },
+    sql,
+  )) === true,
+);
+check(
+  "pr_ci_checks: a no_ci row cannot expire",
+  await transitionPrCiCheck(
+    (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 83, sql))?.id ?? 0,
+    "no_ci",
+    { state: "expired" },
+    sql,
+  )
+    .then(() => false)
+    .catch(() => true),
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// owner と repo は小文字で記録し、大文字で引いても同じ行に当たる。
+check(
+  "pr_ci_checks: the owner and repo are stored in lower case and found by any case",
+  (await recordPrCiCheck(
+    { ...prCiNew(71, PR_SHA_1), owner: "QDB", repo: "PrCi" },
+    sql,
+  )) === true &&
+    (await recordPrCiCheck(prCiNew(71, PR_SHA_1), sql)) === false &&
+    (await listPrCiChecksForPr("QDB", "PRCI", 71, sql)).length === 1,
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
 // ---------------------------------------------------------------------------
 // 未解決の通知の重複の抑止
 // ---------------------------------------------------------------------------
@@ -2300,6 +2811,107 @@ check(
   "kind: a dependabot work item can be inserted",
   dependabotItem > 0,
   dependabotItem,
+);
+
+// dependabotの作業項目の部分一意インデックス(`work_items_active_dependabot_key`)は、
+// 同じPRの終端でない2件目を拒み、終端になれば同じPRに入れ、ほかの種類の行には影響しない。
+const DEPENDABOT_SHA_A = "a".repeat(40);
+const DEPENDABOT_SHA_B = "b".repeat(40);
+function dependabotCandidate(pr: number, headSha: string) {
+  return {
+    owner: OWNER,
+    repo: "r",
+    pr_number: pr,
+    title: "qdb dependabot candidate",
+    status: "picked" as const,
+    claimed_by: null,
+    head_sha: headSha,
+  };
+}
+const dependabotFirst = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: the first insert for a pull request returns the id",
+  dependabotFirst !== null && dependabotFirst > 0,
+  dependabotFirst,
+);
+const dependabotSecond = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_B),
+  sql,
+);
+check(
+  "dependabot intake: a second active work item for the same pull request returns null",
+  dependabotSecond === null,
+  dependabotSecond,
+);
+const dependabotOtherPr = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9102, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: another pull request is not blocked",
+  dependabotOtherPr !== null && dependabotOtherPr > 0,
+  dependabotOtherPr,
+);
+await prWorkItem("pr_review", 9103, "reviewing", "qdb-dependabot-other-kind");
+const dependabotNextToReview = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9103, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: an active review of the same pull request does not block",
+  dependabotNextToReview !== null && dependabotNextToReview > 0,
+  dependabotNextToReview,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'needs_human' WHERE id = ${String(dependabotFirst)}`,
+);
+const dependabotAfterTerminal = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_B),
+  sql,
+);
+check(
+  "dependabot intake: a pull request whose work item is terminal can start again",
+  dependabotAfterTerminal !== null && dependabotAfterTerminal > 0,
+  dependabotAfterTerminal,
+);
+check(
+  "dependabot head: a terminal row for the head counts",
+  (await hasDependabotItemForHead(OWNER, "r", 9101, DEPENDABOT_SHA_A, sql)) ===
+    true,
+);
+check(
+  "dependabot head: an active row for the head counts",
+  (await hasDependabotItemForHead(OWNER, "r", 9101, DEPENDABOT_SHA_B, sql)) ===
+    true,
+);
+check(
+  "dependabot head: a head without a row does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9102, DEPENDABOT_SHA_B, sql)) ===
+    false,
+);
+check(
+  "dependabot head: a row of another pull request does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9104, DEPENDABOT_SHA_A, sql)) ===
+    false,
+);
+const reviewWithHead = await prWorkItem(
+  "pr_review",
+  9105,
+  "reviewing",
+  "qdb-dependabot-review-head",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET head_sha = '${DEPENDABOT_SHA_A}' WHERE id = ${String(reviewWithHead)}`,
+);
+check(
+  "dependabot head: a row of another kind does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9105, DEPENDABOT_SHA_A, sql)) ===
+    false,
 );
 
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
@@ -2754,6 +3366,60 @@ check(
   stopAtStartSummary?.gap_longest_to?.toISOString() ===
     "2026-10-22T23:00:30.000Z",
   stopAtStartSummary,
+);
+
+// PRのCI監視は、PRを作って`pr_open`のままの`issue`の作業項目だけを巡回する。
+const prOpenWithUrl = await issueWorkItem(951, 1, "pr_open", "qdb-pr-open-url");
+await setWorkItemPrUrl(prOpenWithUrl, "https://github.com/qdb/r/pull/951", sql);
+await issueWorkItem(952, 1, "pr_open", "qdb-pr-open-no-url");
+const cancelledWithUrl = await issueWorkItem(
+  953,
+  1,
+  "cancelled",
+  "qdb-cancelled",
+);
+await setWorkItemPrUrl(
+  cancelledWithUrl,
+  "https://github.com/qdb/r/pull/953",
+  sql,
+);
+check(
+  "pr_open work items: only the issue item that is pr_open and has a pull request url is listed",
+  (await listPrOpenIssueWorkItems(new Date(Date.now() - 60_000), 100, sql))
+    .filter((item) => item.owner === OWNER)
+    .map((item) => item.id)
+    .join(",") === String(prOpenWithUrl),
+);
+check(
+  "pr_open work items: an item not updated since the cutoff is not listed",
+  (
+    await listPrOpenIssueWorkItems(new Date(Date.now() + 60_000), 100, sql)
+  ).every((item) => item.owner !== OWNER),
+);
+
+// 権限の不足のnoticeは、リポジトリごとに同じ本文なので、未解決のものがあれば新しく挿入しない。
+const prCiDeniedNotice = {
+  kind: "pr_ci_check_denied",
+  message: "qdb/prci: PRのCIの実行をGitHubから読めません",
+};
+const prCiDeniedFirst = await addNoticeUnlessUnresolved(prCiDeniedNotice, sql);
+check(
+  "pr_ci_check_denied: a second notice of the same repository is not inserted while one is unresolved",
+  prCiDeniedFirst !== null &&
+    (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) === null,
+);
+check(
+  "pr_ci_check_denied: the notice is resolved by the kind and the repository prefix",
+  (await resolveUnresolvedNoticesByPrefix(
+    "pr_ci_check_denied",
+    "qdb/prci: ",
+    "watch_pr_ci",
+    sql,
+  )) === 1 && (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) !== null,
+);
+execPsql(
+  target,
+  "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

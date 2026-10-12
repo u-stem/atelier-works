@@ -10,7 +10,7 @@ import {
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
-import { type GhClient, getBranchProtected, getPr } from "../lib/github.ts";
+import { type GhClient, getPr } from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
@@ -36,8 +36,11 @@ import {
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
+  fetchPrFixHeadBranchState,
   type PrFixGateOutcome,
+  type PrFixHeadBranchState,
   prFixTimeoutMisfit,
+  shouldReadPrFixHeadState,
 } from "./pr_workflow_support.ts";
 
 export type PrFixPrepareResult = {
@@ -67,7 +70,7 @@ export type PrFixPrepareResult = {
  * 作業項目を読み、対象リポジトリの許可、修正ラウンドの上限、
  * 時間設定が修正・検証ステップのtimeoutに収まること、
  * 親Issueの再実装中でないこと、PRの安全条件
- * (open、headとbaseが同じリポジトリ、draftでない、baseブランチが保護されていない)
+ * (open、headとbaseが同じリポジトリ、draftでない、headブランチが保護ブランチでもデフォルトブランチでもない)
  * を順に検査する。
  * 検査に通らなければ`outcome`に理由を入れて返し、worktreeは作らない。
  * すべて通ったときだけ、Factoryのself cloneと対象リポジトリのcloneを用意し、
@@ -219,19 +222,28 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
       ...earlyExitBase(workItem),
     };
   }
-  const baseProtected = await getBranchProtected(
-    client,
-    workItem.owner,
-    workItem.repo,
-    pr.baseRef,
-  );
+  // 読まないPRは、先に判定する関門(open、同一リポジトリ、draft)が理由を残して止める。
+  const headBranch: PrFixHeadBranchState | null = shouldReadPrFixHeadState(
+    pr.state === "open",
+    pr.draft,
+    pr.headRepoFullName,
+    pr.baseRepoFullName,
+  )
+    ? await fetchPrFixHeadBranchState(
+        client,
+        workItem.owner,
+        workItem.repo,
+        pr.headRef,
+      )
+    : null;
 
   const safety = evaluatePrFixSafetyGuards({
     open: pr.state === "open",
     headRepoFullName: pr.headRepoFullName,
     baseRepoFullName: pr.baseRepoFullName,
     draft: pr.draft,
-    baseProtected,
+    autoMergeEnabled: pr.autoMergeEnabled,
+    headBranch,
   });
   if (!safety.ok) {
     return {
