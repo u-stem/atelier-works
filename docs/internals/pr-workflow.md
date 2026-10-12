@@ -441,6 +441,7 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、続けて2回失敗した後のPR修正のモデル |
 
 モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数え、次の2つの大きいほうにする。
+CIの失敗を直す作業項目(`ci_check_id`を持つもの)は、どちらにも数えない。
 
 - 直近に連続した失敗。`blocked`でないラウンド(`done`か`requirements_gap`)で最後に終えた時刻より後の、次の3つの合計である。
   - Claudeが動いて`blocked`で終えた`fix_rounds`の行

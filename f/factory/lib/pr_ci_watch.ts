@@ -543,7 +543,7 @@ async function discoverPr(
 }
 
 /**
- * 閉じた(マージされた)PRの行を整理する。判定待ち、失敗、実行なしの行を`superseded`にし、
+ * 閉じた(マージされた)PRの行を整理する。判定待ち、失敗、修正中、実行なしの行を`superseded`にし、
  * そのPRの失敗のnoticeを解決する。通ったPRなどの終わった行は、記録として残す。
  * 解決は冪等なので、行の更新より先に行う。更新に失敗した回は、次の回にやり直せる。
  * 行が1件も無いPRには何もしない。
@@ -563,7 +563,8 @@ async function closePr(context: Context, ref: PullRequestRef): Promise<void> {
       if (
         row.state !== "pending" &&
         row.state !== "failed" &&
-        row.state !== "no_ci"
+        row.state !== "no_ci" &&
+        row.state !== "fixing"
       ) {
         continue;
       }

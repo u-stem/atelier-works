@@ -119,6 +119,7 @@ function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
     parent_work_item_id: null,
     branch: null,
     pr_url: null,
+    ci_check_id: null,
     created_at: DATE,
     updated_at: DATE,
     ...overrides,

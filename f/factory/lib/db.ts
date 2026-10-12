@@ -337,6 +337,7 @@ function toWorkItem(row: SqlRow): WorkItem {
     ),
     branch: parseNullableString(row.branch, "branch"),
     pr_url: parseNullableString(row.pr_url, "pr_url"),
+    ci_check_id: parseNullableId(row.ci_check_id, "ci_check_id"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -377,6 +378,8 @@ export type NewWorkItem = {
   cancel_url: string | null;
   head_sha: string | null;
   parent_work_item_id: number | null;
+  /** この作業項目が直しているCIの判定(`pr_ci_checks`の行)のID。省略するとNULL。 */
+  ci_check_id?: number | null;
 };
 
 /** `factory.work_items`に新しい行を挿入し、そのIDを返す。 */
@@ -388,13 +391,13 @@ export async function insertWorkItem(
     INSERT INTO factory.work_items (
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
-      cancel_url, head_sha, parent_work_item_id
+      cancel_url, head_sha, parent_work_item_id, ci_check_id
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
-      ${item.parent_work_item_id}::bigint
+      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint
     )
     RETURNING id
   `;
@@ -493,13 +496,13 @@ export async function insertIssueWorkItemUnlessActive(
     INSERT INTO factory.work_items (
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
-      cancel_url, head_sha, parent_work_item_id
+      cancel_url, head_sha, parent_work_item_id, ci_check_id
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
-      ${item.parent_work_item_id}::bigint
+      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -3777,6 +3780,12 @@ export type PrCiCheck = {
   readonly notified_reason: string | null;
   /** PRを作ったFactoryの作業項目のID。外部キーは持たない。 */
   readonly work_item_id: number | null;
+  /** いま失敗を直している作業項目のID。`fixing`の間だけ値を持つ。外部キーは持たない。 */
+  readonly fix_work_item_id: number | null;
+  /** 同じheadで、失敗を直す作業項目を起動した回数。 */
+  readonly fix_attempts: number;
+  /** 失敗を直す作業項目を起動せず保留している理由コード。保留していなければnull。空文字は持たない。 */
+  readonly fix_hold_reason: string | null;
   /** 最後に実行を読み直した時刻。巡回の順に使う。 */
   readonly checked_at: Date;
   /** そのheadを最初に見た時刻。headが以前の値に戻ったときは、戻った時刻。 */
@@ -3795,6 +3804,15 @@ export type NewPrCiCheck = {
   readonly run_created_at: Date | null;
 };
 
+/** `fix_hold_reason`列の値。NULLは保留なし。空文字はDBの制約が拒むので、来たら不正な行として扱う。 */
+function parseFixHoldReason(value: unknown): string | null {
+  const reason = parseNullableString(value, "fix_hold_reason");
+  if (reason === "") {
+    throw new Error('db: row field "fix_hold_reason" is empty');
+  }
+  return reason;
+}
+
 function toPrCiCheck(row: SqlRow): PrCiCheck {
   return {
     id: parseId(row.id, "id"),
@@ -3810,6 +3828,9 @@ function toPrCiCheck(row: SqlRow): PrCiCheck {
       "notified_reason",
     ),
     work_item_id: parseNullableId(row.work_item_id, "work_item_id"),
+    fix_work_item_id: parseNullableId(row.fix_work_item_id, "fix_work_item_id"),
+    fix_attempts: parseNumericLike(row.fix_attempts, "fix_attempts"),
+    fix_hold_reason: parseFixHoldReason(row.fix_hold_reason),
     checked_at: parseDate(row.checked_at, "checked_at"),
     first_seen_at: parseDate(row.first_seen_at, "first_seen_at"),
     created_at: parseDate(row.created_at, "created_at"),
@@ -3871,8 +3892,8 @@ export async function listPrCiChecksForPr(
   assertPrCiTarget(owner, repo, prNumber);
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
-           updated_at
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE owner = ${owner.toLowerCase()} AND repo = ${repo.toLowerCase()} AND pr_number = ${prNumber}::integer
     ORDER BY first_seen_at DESC, id DESC
@@ -3893,8 +3914,8 @@ export async function getLatestPrCiCheck(
   assertPrCiTarget(owner, repo, prNumber);
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
-           updated_at
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE owner = ${owner.toLowerCase()} AND repo = ${repo.toLowerCase()} AND pr_number = ${prNumber}::integer
     ORDER BY first_seen_at DESC, id DESC
@@ -3916,8 +3937,8 @@ export async function listPendingPrCiChecks(
 ): Promise<PrCiCheck[]> {
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
-           updated_at
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'pending'
     ORDER BY checked_at ASC
@@ -3938,8 +3959,8 @@ export async function listFailedPrCiChecks(
 ): Promise<PrCiCheck[]> {
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
-           updated_at
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'failed'
     ORDER BY checked_at ASC
@@ -3957,7 +3978,7 @@ export type PrCiTransition = {
   /**
    * `superseded`から`pending`に戻すときに、必ず`true`にする。それ以外の移行では`true`にできない。
    * 戻した行は、新しく見つけたheadと同じに扱う。`first_seen_at`を今にしてPRの最新の行にし、
-   * 通知した理由(`notified_reason`)と要約を空にして、前の失敗の通知済みの記録を引き継がない。
+   * 通知した理由(`notified_reason`)、保留の理由(`fix_hold_reason`)、要約を空にして、前の失敗の記録を引き継がない。
    * `run_created_at`は残る。判定は読み直した実行から求めるので、影響しない。
    */
   readonly reopen?: boolean;
@@ -3966,9 +3987,11 @@ export type PrCiTransition = {
 /**
  * 行を`from`の状態から`to.state`に移す。この呼び出しで移したら`true`を返す。
  * 条件は`state = from`なので、別の実行が先に移した行は書き換えず、`false`を返す。
- * 許されない移行(`canTransitionPrCi`)、`superseded`から`pending`への移行で`reopen`が無いとき、
+ * 許されない移行(`canTransitionPrCi`)、`fixing`への移行(`claimPrCiCheckForFix`だけが行う)、
+ * `superseded`から`pending`への移行で`reopen`が無いとき、
  * それ以外の移行に`reopen`があるとき、`summary`が長すぎるときは、DBに触れずに例外を投げる。
  * 移すたびに`checked_at`も今にする。
+ * `fixing`から出る移行は、いま直している作業項目を指す`fix_work_item_id`をNULLにする。
  * 呼び出し側は、通知の登録を先にし、この更新を後にする。
  * 更新が先に成功して通知が失敗すると、通知が永久に出ないため。
  * 通知の重複は、通知側の部分一意索引が防ぐ。
@@ -3985,6 +4008,11 @@ export async function transitionPrCiCheck(
   if (!canTransitionPrCi(from, to.state)) {
     throw new Error(
       `transitionPrCiCheck: transition is not allowed (${from} -> ${to.state})`,
+    );
+  }
+  if (to.state === "fixing") {
+    throw new Error(
+      "transitionPrCiCheck: use claimPrCiCheckForFix to move a row to fixing",
     );
   }
   const reopen = to.reopen === true;
@@ -4008,6 +4036,8 @@ export async function transitionPrCiCheck(
         run_created_at = COALESCE(${to.runCreatedAt === undefined ? null : to.runCreatedAt.toISOString()}::timestamptz, run_created_at),
         first_seen_at = CASE WHEN ${reopen}::boolean THEN now() ELSE first_seen_at END,
         notified_reason = CASE WHEN ${reopen}::boolean THEN NULL ELSE notified_reason END,
+        fix_hold_reason = CASE WHEN ${reopen}::boolean THEN NULL ELSE fix_hold_reason END,
+        fix_work_item_id = CASE WHEN state = 'fixing' THEN NULL ELSE fix_work_item_id END,
         checked_at = now(),
         updated_at = now()
     WHERE id = ${id}::bigint AND state = ${from}
@@ -4029,8 +4059,8 @@ export async function listNoCiPrCiChecksToRecheck(
 ): Promise<PrCiCheck[]> {
   const rows = await sql`
     SELECT r.id, r.owner, r.repo, r.pr_number, r.head_sha, r.state, r.run_created_at, r.summary,
-           r.notified_reason, r.work_item_id, r.checked_at, r.first_seen_at, r.created_at,
-           r.updated_at
+           r.notified_reason, r.work_item_id, r.fix_work_item_id, r.fix_attempts, r.fix_hold_reason,
+           r.checked_at, r.first_seen_at, r.created_at, r.updated_at
     FROM factory.pr_ci_checks AS r
     WHERE r.state = 'no_ci'
       AND r.checked_at <= ${checkedBefore.toISOString()}::timestamptz
@@ -4047,7 +4077,7 @@ export async function listNoCiPrCiChecksToRecheck(
 }
 
 /**
- * 実行を読み直した時刻(`checked_at`)を今にする。判定待ち、失敗、実行なし(`no_ci`)の行だけを更新し、更新したら`true`を返す。
+ * 実行を読み直した時刻(`checked_at`)を今にする。判定待ち、失敗、修正中(`fixing`)、実行なし(`no_ci`)の行だけを更新し、更新したら`true`を返す。
  * 状態を変えずに読み直したときに呼ぶ。次の巡回で、ほかの行が先に読み直される。
  * `updated_at`は変えない。保持期間を延ばさないため。
  */
@@ -4058,7 +4088,7 @@ export async function touchPrCiCheck(
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET checked_at = now()
-    WHERE id = ${id}::bigint AND state IN ('pending', 'failed', 'no_ci')
+    WHERE id = ${id}::bigint AND state IN ('pending', 'failed', 'no_ci', 'fixing')
     RETURNING id
   `.fetch();
   return rows.length > 0;
@@ -4086,8 +4116,9 @@ export async function markPrCiNotified(
 }
 
 /**
- * `pending`以外の行のうち、`updated_at`が基準以前のものを削除し、行数を返す。
+ * `pending`と`fixing`以外の行のうち、`updated_at`が基準以前のものを削除し、行数を返す。
  * - 判定を待っている行(`pending`)は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
+ * - 失敗を直している行(`fixing`)も削除しない。直す作業項目の結果を受けて、`failed`などに移すため。
  * - 各PRで最新の行は、`latestOlderThan`以前になるまで削除する。状態は問わない。
  *   最新かどうかは`(first_seen_at, id)`の大きさで決め、`getLatestPrCiCheck`が返す行と同じになる。
  *   最新の行を長く残すのは、失敗の行を読み直し続け、PRの今のheadの記録を保つため。
@@ -4107,7 +4138,7 @@ export async function deletePrCiChecksBefore(
   }
   const rows = await sql`
     DELETE FROM factory.pr_ci_checks AS r
-    WHERE r.state <> 'pending'
+    WHERE r.state NOT IN ('pending', 'fixing')
       AND r.updated_at <= ${olderThan.toISOString()}::timestamptz
       AND (
         EXISTS (
@@ -4121,6 +4152,305 @@ export async function deletePrCiChecksBefore(
     RETURNING r.id
   `.fetch();
   return rows.length;
+}
+
+// ---------------------------------------------------------------------------
+// pr_ci_checks: 失敗を直す作業項目
+// ---------------------------------------------------------------------------
+
+/** `fix_hold_reason`列の長さの上限。DBのCHECK制約と同じ値にする。 */
+const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
+
+function assertPositiveId(id: number, what: string): void {
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new Error(`invalid ${what}: ${String(id)}`);
+  }
+}
+
+function assertFixHoldReason(reason: string): void {
+  if (reason === "" || reason.length > PR_CI_FIX_HOLD_REASON_MAX_LENGTH) {
+    throw new Error(
+      `invalid fix hold reason: must be 1 to ${String(PR_CI_FIX_HOLD_REASON_MAX_LENGTH)} characters`,
+    );
+  }
+}
+
+export type ClaimPrCiCheckInput = {
+  /** 直す行(`pr_ci_checks`)のID。 */
+  readonly id: number;
+  /** PRのowner。作業項目に書く綴りで、行の照合には小文字にして使う。 */
+  readonly owner: string;
+  readonly repo: string;
+  /** 呼び出し側がいま読んだPRのhead。行の`head_sha`と同じでなければ起動しない。 */
+  readonly headSha: string;
+  /** 作業項目の`title`。PRの題名。 */
+  readonly title: string | null;
+  /** 作業項目の`claimed_by`。 */
+  readonly claimedBy: string | null;
+};
+
+/**
+ * 失敗の行を`fixing`に移し、直す`pr_fix`の作業項目を挿入して、そのIDを返す。
+ * 起動できなかったら`null`を返す。1つの文で、行の更新と作業項目の挿入を不可分に行う。
+ * 同じ行を1つの文で2回更新できないので、作業項目のIDは先に`nextval`で取り、行の`fix_work_item_id`にも書く。
+ *
+ * 次のどれかなら、何も書かず`null`を返す。
+ * - 行が`failed`でない。別の実行が先に移した場合である。
+ * - 行の`head_sha`が`headSha`と違う。PRのheadが進んだ場合である。
+ * - 行が保留(`fix_hold_reason`)されている。
+ * - 同じPRに、終端でない`pr_fix`の作業項目がある。同じブランチへ別々にpushして競合するのを防ぐ。
+ * 上の確認をすり抜けた並行する起動は、一意索引`work_items_active_pr_fix_key`が拒む。
+ * その違反は、文全体が取り消されるので、行も変わらず`null`を返す。
+ *
+ * 作業項目は、`startFix`と同じく状態`fixing`、サイクルと試行は1で挿入する。
+ * `fix_round`と、処理済みの位置(`last_review_id`、`last_comment_id`、`last_review_comment_id`)は、
+ * 同じPRの直近の`pr_fix`から写す。無ければ0にする。CIの回は、ラウンドの番号も位置も進めない。
+ * `ci_check_id`には直す行のIDを入れ、CIの回を見分ける印にする。
+ */
+export async function claimPrCiCheckForFix(
+  input: ClaimPrCiCheckInput,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  assertPositiveId(input.id, "pr ci check id");
+  assertGitHubName(input.owner);
+  assertGitHubName(input.repo);
+  assertCommitSha(input.headSha);
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  try {
+    const rows = await sql`
+      WITH nid AS (
+        SELECT nextval(pg_get_serial_sequence('factory.work_items', 'id')) AS id
+      ),
+      c AS (
+        UPDATE factory.pr_ci_checks AS r
+        SET state = 'fixing',
+            fix_work_item_id = (SELECT id FROM nid),
+            fix_attempts = r.fix_attempts + 1,
+            updated_at = now()
+        WHERE r.id = ${input.id}::bigint AND r.state = 'failed' AND r.head_sha = ${input.headSha}
+          AND r.owner = ${input.owner.toLowerCase()} AND r.repo = ${input.repo.toLowerCase()}
+          AND r.fix_hold_reason IS NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.work_items AS active
+            WHERE active.kind = 'pr_fix'
+              AND lower(active.owner) = r.owner AND lower(active.repo) = r.repo
+              AND active.pr_number = r.pr_number
+              AND active.status != ALL(${terminal})
+          )
+        RETURNING r.id, r.pr_number, r.head_sha
+      ),
+      prev AS (
+        SELECT previous.fix_round, previous.last_review_id, previous.last_comment_id,
+               previous.last_review_comment_id
+        FROM factory.work_items AS previous
+        WHERE previous.kind = 'pr_fix'
+          AND lower(previous.owner) = ${input.owner.toLowerCase()}
+          AND lower(previous.repo) = ${input.repo.toLowerCase()}
+          AND previous.pr_number = (SELECT pr_number FROM c)
+        ORDER BY previous.created_at DESC, previous.id DESC
+        LIMIT 1
+      ),
+      w AS (
+        INSERT INTO factory.work_items (
+          id, cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+          title, body, status, attempt, claimed_by, head_sha, ci_check_id,
+          fix_round, last_review_id, last_comment_id, last_review_comment_id
+        )
+        SELECT (SELECT id FROM nid), 1, 'issue', 'pr_fix', ${input.owner}, ${input.repo},
+               NULL, NULL, c.pr_number,
+               ${input.title}::text, NULL, 'fixing', 1, ${input.claimedBy}::text, c.head_sha, c.id,
+               COALESCE((SELECT fix_round FROM prev), 0),
+               COALESCE((SELECT last_review_id FROM prev), 0),
+               COALESCE((SELECT last_comment_id FROM prev), 0),
+               COALESCE((SELECT last_review_comment_id FROM prev), 0)
+        FROM c
+        RETURNING id
+      )
+      SELECT id FROM w
+    `.fetch();
+    const row = rows[0];
+    return row === undefined ? null : parseId(row.id, "id");
+  } catch (err) {
+    if (isActivePrFixUniqueViolation(err)) return null;
+    throw err;
+  }
+}
+
+/**
+ * そのPRで、直近の`passed`の行より後に起動した、CIの失敗を直すラウンドの数を返す。
+ * `ci_check_id`を持つ`pr_fix`の作業項目を、作成時刻で数える。`passed`の行が無ければ、すべてを数える。
+ * 上限(`pr_ci_fix_max_rounds`)に達したかを見るのに使う。
+ * 通った後は数え直すので、別のheadの新しい失敗には、また上限までの回数が使える。
+ * ownerとrepoは小文字で照合する。
+ */
+export async function countPrCiFixRounds(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  assertPrCiTarget(owner, repo, prNumber);
+  const lowerOwner = owner.toLowerCase();
+  const lowerRepo = repo.toLowerCase();
+  const rows = await sql`
+    SELECT COUNT(*) AS rounds
+    FROM factory.work_items AS wi
+    WHERE wi.kind = 'pr_fix' AND wi.ci_check_id IS NOT NULL
+      AND lower(wi.owner) = ${lowerOwner} AND lower(wi.repo) = ${lowerRepo}
+      AND wi.pr_number = ${prNumber}::integer
+      AND wi.created_at > COALESCE(
+        (
+          SELECT MAX(p.updated_at) FROM factory.pr_ci_checks AS p
+          WHERE p.owner = ${lowerOwner} AND p.repo = ${lowerRepo}
+            AND p.pr_number = ${prNumber}::integer AND p.state = 'passed'
+        ),
+        '-infinity'::timestamptz
+      )
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? 0 : parseNumericLike(row.rounds, "rounds");
+}
+
+/**
+ * 失敗を直している行(`fixing`)を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
+ * PRの発見やリポジトリの設定に頼らないので、リポジトリが設定から外れた後の行も返す。
+ * 後ろの行が飢えないためには、呼び出し側が、見るたびに`checked_at`を進める必要がある(`touchPrCiCheck`)。
+ */
+export async function listFixingPrCiChecks(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE state = 'fixing'
+    ORDER BY checked_at ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
+/**
+ * 直す作業項目に結ばれていない`fixing`の行を、最大`limit`件返す。回復の対象である。
+ * 次のどちらかである。
+ * - `fix_work_item_id`が空のまま、`updated_at`から10分以上たった行。
+ * - `fix_work_item_id`が指す作業項目の行が、存在しない行。
+ * 起動の文は行と作業項目を同時に書くので、どちらも通常は起きない。起きたら`releaseFixingPrCiCheck`で`failed`に戻す。
+ */
+export async function findOrphanFixingPrCiChecks(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  const rows = await sql`
+    SELECT r.id, r.owner, r.repo, r.pr_number, r.head_sha, r.state, r.run_created_at, r.summary,
+           r.notified_reason, r.work_item_id, r.fix_work_item_id, r.fix_attempts, r.fix_hold_reason,
+           r.checked_at, r.first_seen_at, r.created_at, r.updated_at
+    FROM factory.pr_ci_checks AS r
+    WHERE r.state = 'fixing'
+      AND (
+        (r.fix_work_item_id IS NULL AND r.updated_at <= now() - interval '10 minutes')
+        OR (
+          r.fix_work_item_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM factory.work_items AS wi WHERE wi.id = r.fix_work_item_id
+          )
+        )
+      )
+    ORDER BY r.checked_at ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
+export type ReleaseFixingPrCiCheckOptions = {
+  /** 渡せば、保留の理由として書く。渡さなければ今の値を残す。1〜64字。 */
+  readonly holdReason?: string;
+  /** 渡せば、`fix_work_item_id`がこの作業項目の行だけを戻す。別の作業項目に起動し直された行を戻さないため。 */
+  readonly fixWorkItemId?: number;
+};
+
+/**
+ * `fixing`の行を`failed`に戻し、いま直している作業項目(`fix_work_item_id`)を空にする。
+ * この呼び出しで戻したら`true`を返す。条件は`state = 'fixing'`なので、別の実行が先に移した行は
+ * 書き換えず、`false`を返す。同じ呼び出しを繰り返しても結果は変わらない。
+ * `fix_attempts`は減らさない。
+ * `holdReason`が空か64字を超えるときは、DBに触れずに例外を投げる。
+ */
+export async function releaseFixingPrCiCheck(
+  id: number,
+  options: ReleaseFixingPrCiCheckOptions = {},
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPositiveId(id, "pr ci check id");
+  if (options.holdReason !== undefined) assertFixHoldReason(options.holdReason);
+  if (options.fixWorkItemId !== undefined) {
+    assertPositiveId(options.fixWorkItemId, "work item id");
+  }
+  const holdReason = options.holdReason ?? null;
+  const fixWorkItemId = options.fixWorkItemId ?? null;
+  const rows = await sql`
+    UPDATE factory.pr_ci_checks
+    SET state = 'failed',
+        fix_work_item_id = NULL,
+        fix_hold_reason = COALESCE(${holdReason}::text, fix_hold_reason),
+        updated_at = now()
+    WHERE id = ${id}::bigint AND state = 'fixing'
+      AND (${fixWorkItemId}::bigint IS NULL OR fix_work_item_id = ${fixWorkItemId}::bigint)
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * `failed`の行の、失敗を直す作業項目を起動しない理由(`fix_hold_reason`)を設定する。`null`で解除する。
+ * 今の値と違うときだけ書き、書いたら`true`を返す。`failed`でない行は書き換えない。
+ * 保留の間は、`claimPrCiCheckForFix`が起動しない。
+ * `reason`が空か64字を超えるときは、DBに触れずに例外を投げる。
+ */
+export async function setPrCiFixHold(
+  id: number,
+  reason: string | null,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPositiveId(id, "pr ci check id");
+  if (reason !== null) assertFixHoldReason(reason);
+  const rows = await sql`
+    UPDATE factory.pr_ci_checks
+    SET fix_hold_reason = ${reason}::text, updated_at = now()
+    WHERE id = ${id}::bigint AND state = 'failed'
+      AND fix_hold_reason IS DISTINCT FROM ${reason}::text
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * そのリポジトリのmainのCIが、いま赤いかを返す。
+ * `main_ci_runs`の最新の1行の状態が`failed`なら`true`。行が無ければ`false`。
+ * 最新かどうかは`(COALESCE(run_created_at, first_seen_at), id)`の大きさで決める。
+ * 掃除が残す行(`deleteMainCiRunsBefore`)と同じ鍵である。
+ * 最新の行が判定待ちや`baseline`なら、赤いとは見なさない。
+ * ownerとrepoは、PRの記録(小文字)と綴りが違っても当たるよう、小文字で照合する。
+ */
+export async function isLatestMainCiRunFailed(
+  owner: string,
+  repo: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT state FROM factory.main_ci_runs
+    WHERE lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+    ORDER BY COALESCE(run_created_at, first_seen_at) DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return (
+    row !== undefined &&
+    parseEnum(row.state, MAIN_CI_STATES, "state") === "failed"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -4369,6 +4699,10 @@ export async function countImplementFailedRounds(
  *     別の実行の行は、flowの再試行の60秒の待ちか、flowとClaudeの実行のやり直しを経てから
  *     書かれるので、10秒以内には来ない。
  *
+ * CIの失敗を直すラウンド(`ci_check_id`を持つ作業項目)は、数える対象に入れない。
+ * 回数の上限は`countPrCiFixRounds`で別に見るので、指摘の対応の失敗に混ぜると、
+ * レビューの修正に使うモデルの昇格を、CIの失敗の回数が早めてしまう。
+ *
  * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
  * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
  * Claudeを起動しなかった後の`blocked`も数える。
@@ -4389,6 +4723,7 @@ export async function countPrFixFailures(
       JOIN factory.work_items wi
         ON wi.owner = cur.owner AND wi.repo = cur.repo AND wi.pr_number = cur.pr_number
       WHERE cur.id = ${workItemId}::bigint AND wi.kind = 'pr_fix'
+        AND wi.ci_check_id IS NULL
     ),
     last_success AS (
       SELECT MAX(fr.created_at) AS at

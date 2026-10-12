@@ -3,7 +3,7 @@
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
 // 解決済みのnotice・判定済みの`main_ci_runs`・`pr_ci_checks`・`worker_samples`で、作業項目とは別々に掃除する。
-// 判定を待つ`main_ci_runs`と`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行は、古くても削除しない。
+// 判定を待つ`main_ci_runs`の行、判定を待つか修正中の`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行は、古くても削除しない。
 // 各PRの最新の`pr_ci_checks`の行は、保持期間の4倍まで残す。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
@@ -160,7 +160,7 @@ async function cleanupMainCiRuns(cutoff: Date, log: Logger): Promise<number> {
 
 /**
  * 判定済みのPRのCIの記録を、最後の更新から保持期間を過ぎたものだけ削除する。
- * 判定を待つ行は消さない。各PRの最新の行は、保持期間の4倍を過ぎるまで消さない。
+ * 判定を待つ行と修正中の行は消さない。各PRの最新の行は、保持期間の4倍を過ぎるまで消さない。
  */
 async function cleanupPrCiChecks(
   cutoff: Date,

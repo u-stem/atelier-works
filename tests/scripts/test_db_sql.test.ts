@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { renderLiteral, renderSql } from "../../scripts/test-db-sql.ts";
+import {
+  parseCsvRows,
+  renderLiteral,
+  renderSql,
+} from "../../scripts/test-db-sql.ts";
 
 function template(strings: readonly string[]): TemplateStringsArray {
   return Object.assign([...strings], { raw: [...strings] });
@@ -69,5 +73,45 @@ describe("renderSql", () => {
 
   test("keeps a statement without values as is", () => {
     expect(renderSql(template(["SELECT 1"]), [])).toBe("SELECT 1");
+  });
+});
+
+describe("parseCsvRows", () => {
+  test("keys the values of a row by the header", () => {
+    expect(parseCsvRows("id,state\n31,fixing")).toEqual([
+      { id: "31", state: "fixing" },
+    ]);
+  });
+
+  test("returns every row", () => {
+    expect(parseCsvRows("id\n1\n2")).toEqual([{ id: "1" }, { id: "2" }]);
+  });
+
+  test("returns no row for a header only", () => {
+    expect(parseCsvRows("id")).toEqual([]);
+  });
+
+  test("returns no row for an empty output", () => {
+    expect(parseCsvRows("")).toEqual([]);
+  });
+
+  test("reads an empty unquoted value as null", () => {
+    expect(parseCsvRows("a,b\n1,")).toEqual([{ a: "1", b: null }]);
+  });
+
+  test("reads an empty quoted value as an empty string", () => {
+    expect(parseCsvRows('a,b\n1,""')).toEqual([{ a: "1", b: "" }]);
+  });
+
+  test("keeps a comma inside quotes", () => {
+    expect(parseCsvRows('a\n"x,y"')).toEqual([{ a: "x,y" }]);
+  });
+
+  test("keeps a line break inside quotes", () => {
+    expect(parseCsvRows('a\n"x\ny"')).toEqual([{ a: "x\ny" }]);
+  });
+
+  test("reads two quotes inside quotes as one quote", () => {
+    expect(parseCsvRows('a\n"say ""hi"""')).toEqual([{ a: 'say "hi"' }]);
   });
 });

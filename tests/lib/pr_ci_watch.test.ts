@@ -124,6 +124,9 @@ function row(overrides: Partial<PrCiCheck> = {}): PrCiCheck {
     summary: "",
     notified_reason: null,
     work_item_id: 33,
+    fix_work_item_id: null,
+    fix_attempts: 0,
+    fix_hold_reason: null,
     checked_at: minutesBefore(10),
     first_seen_at: minutesBefore(10),
     created_at: minutesBefore(10),
@@ -532,6 +535,30 @@ describe("discovery of a new head", () => {
     ]);
   });
 
+  test("supersedes the fixing row of an old head", async () => {
+    const h = harness(
+      trackedSetup({
+        prs: { [PR_KEY]: pr({ headSha: SHA_B }) },
+        rowsForPr: { 12: [row({ id: 5, state: "fixing" })] },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([
+      { id: 5, from: "fixing", to: { state: "superseded" } },
+    ]);
+  });
+
+  test("leaves the fixing row of the current head alone", async () => {
+    const h = harness(
+      trackedSetup({
+        prs: { [PR_KEY]: pr({ headSha: SHA_A }) },
+        rowsForPr: { 12: [row({ id: 5, state: "fixing", head_sha: SHA_A })] },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
   test("keeps a passed row of an old head", async () => {
     const h = harness(
       trackedSetup({
@@ -657,6 +684,19 @@ describe("closed pull requests", () => {
       [1, "pending", "superseded"],
       [2, "failed", "superseded"],
       [3, "no_ci", "superseded"],
+    ]);
+  });
+
+  test("supersedes the fixing row of a closed pull request", async () => {
+    const h = harness(
+      trackedSetup({
+        prs: { [PR_KEY]: closed },
+        rowsForPr: { 12: [row({ id: 4, state: "fixing" })] },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((t) => [t.id, t.from, t.to.state])).toEqual([
+      [4, "fixing", "superseded"],
     ]);
   });
 

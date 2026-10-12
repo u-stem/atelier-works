@@ -50,6 +50,9 @@ schema:
     - dependabot_merge_enabled
     - dependabot_min_published_days
     - pr_ci_watch_enabled
+    - pr_ci_fix_enabled
+    - pr_ci_fix_max_rounds
+    - pr_ci_fix_enabled_since
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -261,6 +264,22 @@ schema:
         required:
           - name
           - kind
+    pr_ci_fix_enabled:
+      type: boolean
+      description: >-
+        FactoryのPRのCIの失敗を直す作業項目を起動するかどうかです。falseの間は、何も起動しません。
+      default: false
+    pr_ci_fix_enabled_since:
+      type: string
+      format: date-time
+      description: >-
+        タイムゾーン付きのISO 8601の日時です(例: 2026-10-13T03:00:00Z)。指定すると、この時刻より前に見つけた失敗は直す対象にしません。省略すると、時刻では絞りません。
+    pr_ci_fix_max_rounds:
+      type: integer
+      minimum: 1
+      description: >-
+        1つのPRで、CIの失敗を直すラウンドを起動できる回数の上限です。直近に通ったコミットより後のラウンドを数えます。1以上の整数にします。
+      default: 2
     pr_ci_watch_enabled:
       type: boolean
       description: >-
