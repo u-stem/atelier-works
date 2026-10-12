@@ -107,6 +107,27 @@ describe("runGitleaksOnText", () => {
     expect((await scan(fake)).output).toBe("- github-pat");
   });
 
+  test("says a leak was reported when exit 1 comes with an empty report", async () => {
+    const fake = createFakeCommandRunner([exit("[]", 1)]);
+    expect((await scan(fake)).output).toBe("gitleaks reported a leak");
+  });
+
+  test("counts a finding of an unexpected shape", async () => {
+    const report = JSON.stringify([
+      { RuleID: "github-pat", File: "", StartLine: 1 },
+      { unexpected: true },
+    ]);
+    const fake = createFakeCommandRunner([exit(report, 1)]);
+    expect((await scan(fake)).output).toBe(
+      "- github-pat\n- (1 more finding(s) in an unexpected shape)",
+    );
+  });
+
+  test("still reports not ok when every finding has an unexpected shape", async () => {
+    const fake = createFakeCommandRunner([exit('[{"unexpected":true}]', 1)]);
+    expect((await scan(fake)).ok).toBe(false);
+  });
+
   test("throws on a timeout", async () => {
     const fake = createFakeCommandRunner([timeout()]);
     await expect(scan(fake)).rejects.toThrow("timed out");

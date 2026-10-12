@@ -19,6 +19,7 @@
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
+import { VolatileCiLog } from "./ci_log_support.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
@@ -43,7 +44,6 @@ import {
 import {
   type CommandResult,
   type CommandRunner,
-  isCappedOutput,
   SpawnError,
 } from "./workspace.ts";
 
@@ -122,6 +122,12 @@ export type GhApiResponse = {
   /** ヘッダー名は小文字にそろえる。 */
   readonly headers: ReadonlyMap<string, string>;
   readonly bodyText: string;
+  /**
+   * `maxOutputBytes`を指定した要求で、出力が上限を超えた(runnerが間を捨てた)ときだけ真になる。
+   * 判定は出力全体のバイト数で行う。保持する量は上限に省略の注記を足した分なので、
+   * 上限を超えたかを、本文に書かれた注記の文字列には頼らずに決められる。
+   */
+  readonly capped?: true;
 };
 
 function parseGhApiOutput(stdout: string): GhApiResponse {
@@ -346,7 +352,11 @@ async function attemptGhApi(
     if (isTransientSpawnError(error)) return { kind: "spawn_failed", error };
     throw error;
   }
-  const response = parseGhApiOutput(commandResult.stdout);
+  const parsed = parseGhApiOutput(commandResult.stdout);
+  const capped =
+    options.maxOutputBytes !== undefined &&
+    Buffer.byteLength(commandResult.stdout) > options.maxOutputBytes;
+  const response: GhApiResponse = capped ? { ...parsed, capped: true } : parsed;
   return {
     kind: "completed",
     response,
@@ -4446,8 +4456,9 @@ export const CI_JOB_LOG_MAX_BYTES = 8 * 1024 * 1024;
 export type WorkflowJobLogResult =
   | {
       readonly kind: "ok";
-      readonly log: string;
-      /** 上限を超えて間を捨てたか。 */
+      /** 生のログ本文。揮発する値で、`buildCiExcerpt`に渡す直前に`reveal`する。 */
+      readonly log: VolatileCiLog;
+      /** 上限を超えて間を捨てたか。出力のバイト数で決め、本文の文字列は見ない。 */
       readonly truncated: boolean;
     }
   | { readonly kind: "forbidden" }
@@ -4471,7 +4482,8 @@ export class GitHubCiLogError extends Error {
  * ジョブ(`jobId`)のログを読む。ログはJSONではないので、本文をそのまま文字列で返す。
  * 取得先は署名付きURLへの302で、`gh`が内部でたどる。URLは受け取らず、エラーにも戻り値にも出さない。
  * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
- * 本文は`CI_JOB_LOG_MAX_BYTES`で切る。
+ * 本文は`CI_JOB_LOG_MAX_BYTES`で切り、切ったかは`truncated`で返す。
+ * 本文は`VolatileCiLog`で包んで返す。
  * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
  * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
  * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
@@ -4492,8 +4504,8 @@ export async function getWorkflowJobLog(
   if (response.status >= 200 && response.status < 300) {
     return {
       kind: "ok",
-      log: response.bodyText,
-      truncated: isCappedOutput(response.bodyText),
+      log: VolatileCiLog.of(response.bodyText),
+      truncated: response.capped === true,
     };
   }
   if (response.status === 403) return { kind: "forbidden" };

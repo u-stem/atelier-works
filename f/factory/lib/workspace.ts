@@ -3603,6 +3603,31 @@ export function dropRemovedDiffLines(diffText: string): string {
 }
 
 /**
+ * gitleaksの`stdin`のJSONのレポートを、検出1件につき`describe`が返す1行にして返す。
+ * 形の違う検出は件数をまとめた1行にする。一致した文字列は出さない。
+ * `stdout`がJSONの配列でなければ`null`を返す。
+ */
+function formatGitleaksFindings(
+  stdout: string,
+  describe: (finding: GitleaksFinding) => string,
+): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const lines = parsed.filter(isGitleaksFinding).map(describe);
+  const unexpected = parsed.length - lines.length;
+  if (unexpected > 0)
+    lines.push(
+      `- (${String(unexpected)} more finding(s) in an unexpected shape)`,
+    );
+  return lines.join("\n");
+}
+
+/**
  * gitleaksの`stdin`のJSONのレポートを、検出1件につき`- <rule>: <file>`の1行にして返す。
  * ファイルは、検出の行番号から`diffText`で引く(`mapDiffLineToFile`)。
  * 差分の中の行番号は読み手にとって意味が無いので出さない。
@@ -3613,25 +3638,11 @@ export function formatGitleaksReport(
   stdout: string,
   diffText: string,
 ): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  const lines = parsed
-    .filter(isGitleaksFinding)
-    .map(
-      (finding) =>
-        `- ${finding.RuleID}: ${mapDiffLineToFile(diffText, finding.StartLine) ?? "(unknown file)"}`,
-    );
-  const unexpected = parsed.length - lines.length;
-  if (unexpected > 0)
-    lines.push(
-      `- (${String(unexpected)} more finding(s) in an unexpected shape)`,
-    );
-  return lines.join("\n");
+  return formatGitleaksFindings(
+    stdout,
+    (finding) =>
+      `- ${finding.RuleID}: ${mapDiffLineToFile(diffText, finding.StartLine) ?? "(unknown file)"}`,
+  );
 }
 
 /**
@@ -3794,27 +3805,7 @@ export async function runGitleaksOnText(
   opts: GitleaksStdinOptions,
   text: string,
 ): Promise<GitleaksResult> {
-  return runGitleaksStdin(opts, text, formatGitleaksTextReport);
-}
-
-/**
- * gitleaksの`stdin`のJSONのレポートを、検出1件につき`- <rule>`の1行にして返す。
- * 文字列の検査にはファイルが無いので、規則の名前だけを出す。一致した文字列は出さない。
- * `stdout`がJSONの配列でなければ`null`を返す。
- */
-function formatGitleaksTextReport(stdout: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  const lines = parsed.filter(isGitleaksFinding).map((f) => `- ${f.RuleID}`);
-  const unexpected = parsed.length - lines.length;
-  if (unexpected > 0)
-    lines.push(
-      `- (${String(unexpected)} more finding(s) in an unexpected shape)`,
-    );
-  return lines.join("\n");
+  return runGitleaksStdin(opts, text, (stdout) =>
+    formatGitleaksFindings(stdout, (finding) => `- ${finding.RuleID}`),
+  );
 }

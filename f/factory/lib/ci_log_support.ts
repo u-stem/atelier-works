@@ -16,7 +16,7 @@ export const CI_LOG_TOTAL_MAX_CHARS = 9000;
 export const CI_LOG_MAX_JOBS = 3;
 /** ジョブごとに示す失敗したstepの数の上限。 */
 export const CI_LOG_MAX_FAILED_STEPS = 5;
-/** 1行の文字数の上限。超えた分は捨てる。 */
+/** 1行の文字数の上限。省略記号を含めてこの長さに収める。 */
 const CI_LOG_LINE_MAX_CHARS = 300;
 
 // ---------------------------------------------------------------------------
@@ -29,14 +29,16 @@ const BEL = String.fromCharCode(0x07);
 
 /**
  * 端末の制御列。CSI(`ESC [`)、OSC(`ESC ]`、リンクの偽装に使われる)、
- * 終端のあるDCS・PM・APC・SOS、1文字で終わるESCの列、8ビットのCSI(U+009B)である。
- * OSCは行をまたがせない。終端が無いときに残りのログ全体を飲み込まないため。
+ * DCS・PM・APC・SOS、1文字で終わるESCの列、8ビットのCSI(U+009B)である。
+ * OSCとDCS系は、本文の文字クラスから改行、ESC、BELを除き、終端を省略可にする。
+ * 終端が無い入力で、残りのログ全体を飲み込んだり、ESCをまたいで照合し直したりせず、
+ * 入力の長さに比例した時間で終わらせるため。
  */
 const TERMINAL_SEQUENCE = new RegExp(
   [
     `${ESC}\\[[0-?]*[ -/]*[@-~]`,
     `${ESC}\\][^${BEL}${ESC}\\n]*(?:${BEL}|${ESC}\\\\)?`,
-    `${ESC}[P^_X][^\\n]*?(?:${BEL}|${ESC}\\\\)`,
+    `${ESC}[P^_X][^${BEL}${ESC}\\n]*(?:${BEL}|${ESC}\\\\)?`,
     `${ESC}[@-Z\\\\^_]`,
     "\\u009b[0-?]*[ -/]*[@-~]",
   ].join("|"),
@@ -59,10 +61,16 @@ const LINE_BREAK_LIKE = /[\u0085\u2028\u2029]/g;
  * 異体字選択子、字を結合する記号、ハングルの詰め文字、点字の空白である。
  */
 const REMOVED_CHARS =
-  /(?!\n)(?:[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u115F\u1160\u3164\uFFA0\u2800]|[\uFE00-\uFE0F]|[\u{E0100}-\u{E01EF}]|\u034F)/gu;
+  /(?!\n)(?:[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u115F\u1160\u3164\uFFA0\u2800]|[\uFE00-\uFE0F]|[\u180B-\u180D\u180F]|[\u17B4\u17B5]|[\u{E0100}-\u{E01EF}]|\u034F)/gu;
 
 /** Actionsのログの行頭にあるタイムスタンプ。 */
 const TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/gm;
+
+/**
+ * 正規表現にかける前に1行を切る長さ。
+ * 改行の無い巨大な入力で、どの正規表現の最悪の計算量も有界にするため。
+ */
+const RAW_LINE_MAX_CHARS = 2000;
 
 /**
  * ログの本文から、端末の制御列、タイムスタンプの接頭辞、制御文字、書字方向の制御文字、
@@ -72,6 +80,9 @@ const TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/gm;
  */
 export function cleanLogText(raw: string): string {
   return raw
+    .split("\n")
+    .map((line) => cutChars(line, RAW_LINE_MAX_CHARS))
+    .join("\n")
     .replace(TERMINAL_SEQUENCE, "")
     .replace(/\r\n?/g, "\n")
     .replace(LINE_BREAK_LIKE, "\n")
@@ -129,7 +140,7 @@ function squeezeLines(cleaned: string): string[] {
     if (trimmed === "" || NOISE_LINE.test(trimmed)) continue;
     const line =
       trimmed.length > CI_LOG_LINE_MAX_CHARS
-        ? `${cutChars(trimmed, CI_LOG_LINE_MAX_CHARS)}…`
+        ? `${cutChars(trimmed, CI_LOG_LINE_MAX_CHARS - 1)}…`
         : trimmed;
     if (line === previous) {
       repeats += 1;
@@ -279,6 +290,28 @@ export class VolatileCiExcerpt extends VolatileValue {
   /** プロンプトを作る側が中身を読む。 */
   read(): readonly CiFailureExcerpt[] {
     return this.#jobs;
+  }
+}
+
+/**
+ * 取得した生のログ本文を包む、揮発する値。
+ * 整形と検査の前の本文なので、抜粋と同じく、stepの結果、DB、ログ、通知に載せない。
+ * `buildCiExcerpt`に渡す直前に`reveal`で取り出す。
+ */
+export class VolatileCiLog extends VolatileValue {
+  readonly #text: string;
+
+  private constructor(text: string) {
+    super();
+    this.#text = text;
+  }
+
+  static of(text: string): VolatileCiLog {
+    return new VolatileCiLog(text);
+  }
+
+  reveal(): string {
+    return this.#text;
   }
 }
 

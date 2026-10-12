@@ -20,8 +20,12 @@ export type CiFixChange = {
   /** リポジトリのルートからの相対パス。 */
   readonly path: string;
   readonly status: ChangedPathStatus;
-  /** gitのモードがシンボリックリンクか。 */
-  readonly symlink: boolean;
+  /**
+   * gitのモード(`100644`、`100755`、`120000`、`160000`など)。変更後のモードで、削除では変更前のモード。
+   * 通常のファイル(`100644`と`100755`)以外は拒否する。
+   * シンボリックリンクの真偽値は別に持たない。モードが唯一の情報源なら、食い違う入力が起きない。
+   */
+  readonly mode: string;
   /** 変更後に追加された行(先頭の`+`は除く)。バイナリなら空。 */
   readonly addedLines: readonly string[];
   /** 削除された行の数。 */
@@ -37,8 +41,8 @@ export type CiFixPathInput = {
 /**
  * 違反の理由。
  * - `unsafe_path`: 絶対パス、`..`、制御文字や不可視文字、Unicodeの正規化が異なる綴りなど。
- * - `symlink`: シンボリックリンク、または種別の変更。
- * - `unsupported_change`: 種別を判定できない変更。
+ * - `symlink`: シンボリックリンク(モード`120000`)、または種別の変更。
+ * - `unsupported_change`: 種別を判定できない、または通常のファイル以外のモード(サブモジュールなど)。
  * - `protected_path`: 保護パスかFactoryの安全装置。
  * - `case_variant_path`: PRが変更したファイルと大文字小文字だけが違うパス。
  * - `not_in_pull_request`: PRが変更しておらず、新規のテストファイルでもない。
@@ -82,7 +86,7 @@ const UNSAFE_PATH_CHARS = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]|(?! )\p{Zs}/u;
  * NFKCに正規化しても変わらない綴りだけを許す。互換文字や分解した文字で、
  * 保護パスの照合をすり抜けさせないため。
  */
-function isSafeRepoPath(path: string): boolean {
+export function isSafeRepoPath(path: string): boolean {
   if (path === "" || path.length > PATH_MAX_CHARS) return false;
   if (UNSAFE_PATH_CHARS.test(path)) return false;
   if (path.includes("\\") || path.startsWith("/")) return false;
@@ -129,7 +133,8 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * 拡張子の違うファイル(`.ts`、`.script.yaml`、`.script.lock`)をまとめて拒否するため、
  * ステムで終わらせる。
  * Claudeの実行、保護パスの判定、ログの機密保持、作業ディレクトリ、検査の隔離、pr_fixのstep、
- * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動である。
+ * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、
+ * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)である。
  */
 const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/claude.",
@@ -137,10 +142,14 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/log.",
   "f/factory/lib/workspace.",
   "f/factory/lib/check_sandbox.",
+  "f/factory/lib/check_runner.",
+  "f/factory/lib/prompts.",
+  "f/factory/lib/github.",
   "f/factory/lib/ci_",
   "f/factory/lib/pr_ci_",
   "f/factory/lib/main_ci_",
   "f/factory/watch_pr_ci.",
+  "f/factory/watch_main_ci.",
   "f/factory/steps/pr_fix_",
   "f/factory/steps/pr_workflow_support.",
 ];
@@ -154,7 +163,8 @@ const CI_DENIED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^biome\.jsonc?$/,
   /^wmill(-lock)?\.yaml$/,
   /\.script\.lock$/,
-  /\.(?:schedule|variable|resource|trigger)\.yaml$/,
+  /\.(?:schedule|variable|resource|resource-type|trigger)\.yaml$/,
+  /^\.mcp\.json$/,
 ];
 
 /** 実装フローの保護ファイル名を、大文字小文字を問わない形にしたもの。 */
@@ -233,17 +243,25 @@ function isTestPath(path: string): boolean {
 
 /**
  * 追加行に入ると検査を弱める記述。大文字小文字を区別しない。
- * 警告やエラーの抑制、型検査の無効化、テストの除外と保留、カバレッジの除外、秘密値の検査の許可である。
+ * 警告やエラーの抑制、型検査の無効化、テストの除外と保留、テスト実行の中断、モジュールの差し替え、
+ * カバレッジの除外、秘密値の検査の許可である。
+ * 追加行を1行ずつ見る照合なので、囲みによる無効化(`if (false)`や、コメントアウトした行)は検出しない。
  */
 const WEAKENING_PATTERNS: readonly RegExp[] = [
   /biome-ignore/i,
   /@ts-(?:ignore|expect-error|nocheck)/i,
   /eslint-disable/i,
   /tslint:disable/i,
-  /\.\s*(?:skip|only|failing)\s*\(/i,
-  /\.\s*(?:skipIf|todoIf)\s*\(/i,
-  /\.\s*todo\b/i,
+  // `.skip`、`.only`、`.todo`、`.failing`は、呼び出しの括弧を要求しない。
+  // `test.skip.each(...)`や、変数に取り出した`const t = describe.skip`も除外にあたるため。
+  /\.\s*(?:skip|only|todo|failing)\b/i,
+  /\.\s*(?:if|runIf|skipIf|todoIf)\s*\(/i,
+  // `test["skip"]`などの括弧記法。
+  /\[\s*["'`](?:skip|only|todo|failing|if|runIf|skipIf|todoIf)["'`]\s*\]/i,
+  /\bskip\s*:\s*true\b/i,
   /\b(?:xit|xtest|xdescribe|fit|fdescribe)\s*\(/i,
+  /\bprocess\s*\.\s*exit\s*\(/i,
+  /\bmock\s*\.\s*module\s*\(/i,
   /istanbul\s+ignore/i,
   /\bc8\s+ignore/i,
   /\bv8\s+ignore/i,
@@ -265,6 +283,10 @@ function weakensChecks(lines: readonly string[]): boolean {
 // 検査
 // ---------------------------------------------------------------------------
 
+const SYMLINK_MODE = "120000";
+/** 通常のファイルのモード。実行権限の有無だけが違う。 */
+const REGULAR_FILE_MODES: readonly string[] = ["100644", "100755"];
+
 /** 1件の変更の最初の違反の理由。違反が無ければnull。 */
 function violationOf(
   change: CiFixChange,
@@ -273,8 +295,11 @@ function violationOf(
 ): CiFixViolationCode | null {
   const { path } = change;
   if (!isSafeRepoPath(path)) return "unsafe_path";
-  if (change.symlink || change.status === "typechange") return "symlink";
+  if (change.mode === SYMLINK_MODE || change.status === "typechange") {
+    return "symlink";
+  }
   if (change.status === "unknown") return "unsupported_change";
+  if (!REGULAR_FILE_MODES.includes(change.mode)) return "unsupported_change";
   if (isDeniedPath(path)) return "protected_path";
 
   const changedByPr = prPaths.has(path);

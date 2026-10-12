@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildCiFixPrompt,
+  CI_FIX_PROMPT_MAX_CHANGED_PATHS,
   CI_FIX_SCHEMA,
   type CiFixPromptInput,
 } from "../../f/factory/lib/ci_fix_prompt.ts";
@@ -27,6 +28,7 @@ const input = (
     runUrl: "https://github.com/acme/widgets/actions/runs/555",
   },
   excerpt: excerptOf(),
+  prChangedPaths: ["f/factory/lib/feature.ts", "tests/lib/feature.test.ts"],
   ...overrides,
 });
 
@@ -212,7 +214,80 @@ describe("buildCiFixPrompt", () => {
   });
 });
 
+describe("buildCiFixPrompt changed files", () => {
+  test("lists the files the pull request changed", () => {
+    expect(prompt()).toContain("f/factory/lib/feature.ts");
+  });
+
+  test("puts the changed file paths inside the fence", () => {
+    const text = prompt({ prChangedPaths: ["src/UNIQUE-PATH.ts"] });
+    expect(outsideFences(text)).not.toContain("UNIQUE-PATH");
+  });
+
+  test("labels the list as pull request changed files", () => {
+    expect(prompt()).toContain("(pull request changed files)");
+  });
+
+  test("leaves out an unsafe path", () => {
+    const text = prompt({
+      prChangedPaths: [
+        "ok/file.ts",
+        "../escape.ts",
+        "/abs/path.ts",
+        "a\u202Eb.ts",
+      ],
+    });
+    expect(text).not.toMatch(/escape\.ts|abs\/path|a.b\.ts/);
+  });
+
+  test("keeps a safe path next to unsafe ones", () => {
+    const text = prompt({ prChangedPaths: ["../escape.ts", "ok/file.ts"] });
+    expect(text).toContain("ok/file.ts");
+  });
+
+  test("lists each path once", () => {
+    const text = prompt({ prChangedPaths: ["dup/file.ts", "dup/file.ts"] });
+    expect(text.split("dup/file.ts").length - 1).toBe(1);
+  });
+
+  test("caps the number of listed paths", () => {
+    const many = Array.from(
+      { length: CI_FIX_PROMPT_MAX_CHANGED_PATHS + 25 },
+      (_, i) => `src/file-${String(i)}.ts`,
+    );
+    const text = prompt({ prChangedPaths: many });
+    expect(text.match(/src\/file-\d+\.ts/g)?.length).toBe(
+      CI_FIX_PROMPT_MAX_CHANGED_PATHS,
+    );
+  });
+
+  test("says how many paths were left out", () => {
+    const many = Array.from(
+      { length: CI_FIX_PROMPT_MAX_CHANGED_PATHS + 25 },
+      (_, i) => `src/file-${String(i)}.ts`,
+    );
+    expect(prompt({ prChangedPaths: many })).toContain("(25 more not shown)");
+  });
+
+  test("says there are none when no path is left", () => {
+    expect(prompt({ prChangedPaths: [] })).toContain("(none)");
+  });
+
+  test("draws a new nonce when the first one appears in a path", () => {
+    const uuids = [NONCE, "22222222-2222-4222-8222-222222222222"];
+    const text = buildCiFixPrompt(
+      input({ prChangedPaths: [`dir/${NONCE}.ts`] }),
+      { uuid: () => uuids.shift() ?? NONCE },
+    ).reveal();
+    expect(text).toContain("<<<DATA-22222222-2222-4222-8222-222222222222");
+  });
+});
+
 describe("CI_FIX_SCHEMA", () => {
+  test("rejects extra properties", () => {
+    expect(CI_FIX_SCHEMA.additionalProperties).toBe(false);
+  });
+
   test("allows only the done and blocked outcomes", () => {
     expect(CI_FIX_SCHEMA.properties.outcome.enum).toEqual(["done", "blocked"]);
   });

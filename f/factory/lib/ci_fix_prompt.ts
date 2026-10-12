@@ -5,6 +5,7 @@
 // Claudeには、シェルを持たせない前提で書く。ツールの許可は呼び出し側が決める。
 // 抜粋を含むプロンプトは`VolatileCiPrompt`で返し、stepの結果やDBに載せられないようにする。
 
+import { isSafeRepoPath } from "./ci_fix_paths.ts";
 import {
   type CiFailureExcerpt,
   type VolatileCiExcerpt,
@@ -27,7 +28,15 @@ export type CiFixPromptPr = {
 export type CiFixPromptInput = {
   readonly pr: CiFixPromptPr;
   readonly excerpt: VolatileCiExcerpt;
+  /**
+   * PRがすでに変更したファイルのパス。Claudeが編集してよい範囲を示す。
+   * 外部由来なので、`isSafeRepoPath`を通るものだけを、重複を除いて載せる。
+   */
+  readonly prChangedPaths: readonly string[];
 };
+
+/** プロンプトに載せるPRの変更ファイルの数の上限。超えた分は件数だけを示す。 */
+export const CI_FIX_PROMPT_MAX_CHANGED_PATHS = 100;
 
 const MAX_NONCE_ATTEMPTS = 5;
 
@@ -60,6 +69,20 @@ function validatePr(pr: CiFixPromptPr): void {
   }
 }
 
+/**
+ * 囲みの中に入れる、PRの変更ファイルの一覧。
+ * 安全でないパスと重複を除き、上限を超えた分は件数にする。1件も無ければ`(none)`。
+ */
+function changedPathsBody(paths: readonly string[]): string {
+  const safe = [...new Set(paths.filter(isSafeRepoPath))];
+  if (safe.length === 0) return "(none)";
+  const shown = safe.slice(0, CI_FIX_PROMPT_MAX_CHANGED_PATHS);
+  const omitted = safe.length - shown.length;
+  return omitted > 0
+    ? [...shown, `(${String(omitted)} more not shown)`].join("\n")
+    : shown.join("\n");
+}
+
 /** 囲みの中に入れる、ジョブ1件分の文字列。名前は引用符で括り、1行に収める。 */
 function failureBody(failure: CiFailureExcerpt): string {
   return [
@@ -87,8 +110,9 @@ export function buildCiFixPrompt(
   if (failures.length === 0) throw new Error("no log excerpt to fix from");
 
   const bodies = failures.map(failureBody);
+  const changedPaths = changedPathsBody(input.prChangedPaths);
   const uuid = deps.uuid ?? (() => crypto.randomUUID());
-  const nonce = pickNonce(uuid, bodies);
+  const nonce = pickNonce(uuid, [...bodies, changedPaths]);
 
   const sections: string[] = [
     "You are the fix stage of a Software Factory PR-fix pipeline, in a CI round.",
@@ -114,7 +138,11 @@ export function buildCiFixPrompt(
     `Head SHA: ${pr.headSha}`,
   ];
   if (pr.runUrl !== null) sections.push(`Run: ${pr.runUrl}`);
-  sections.push("");
+  sections.push(
+    "",
+    dataFence(nonce, "pull request changed files", changedPaths),
+    "",
+  );
   bodies.forEach((body, index) => {
     sections.push(
       dataFence(nonce, `ci failure ${String(index + 1)}`, body),
@@ -128,8 +156,8 @@ export function buildCiFixPrompt(
     "- Do not weaken tests: do not skip, delete, or loosen a test or its expected values to make it pass.",
     "- Do not add suppression comments such as biome-ignore, @ts-ignore, @ts-expect-error, or eslint-disable.",
     "- Do not change the CI definition, the configuration files, the lock files, package.json, the scripts directory, or the agent settings.",
-    "- Edit only files that this pull request already changes. You may add a",
-    "  new test file when the fix needs one.",
+    '- Edit only the files listed in the "pull request changed files" block.',
+    "  You may add a new test file when the fix needs one.",
     "- Use only what the log excerpt and the files show. When the excerpt is",
     "  not enough to find the cause, or the failure does not come from the",
     "  source (a flaky test, the environment, a dependency, generated files),",

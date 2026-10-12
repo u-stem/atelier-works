@@ -10,6 +10,7 @@ import {
   condenseJobLog,
   guardCiRoundText,
   VolatileCiExcerpt,
+  VolatileCiLog,
   VolatileCiPrompt,
 } from "../../f/factory/lib/ci_log_support.ts";
 
@@ -105,6 +106,14 @@ describe("cleanLogText", () => {
     expect(cleanLogText("a\uFE0Fb\u{E0100}c")).toBe("abc");
   });
 
+  test("removes Khmer inherent vowels, which render as nothing", () => {
+    expect(cleanLogText("a\u17B4b\u17B5c")).toBe("abc");
+  });
+
+  test("removes Mongolian free variation selectors", () => {
+    expect(cleanLogText("a\u180Bb\u180Cc\u180Dd\u180Fe")).toBe("abcde");
+  });
+
   test("removes blank-looking filler characters", () => {
     expect(cleanLogText("a\u3164b\u2800c")).toBe("abc");
   });
@@ -119,6 +128,51 @@ describe("cleanLogText", () => {
 
   test("keeps Japanese text", () => {
     expect(cleanLogText("エラー: 失敗しました")).toBe("エラー: 失敗しました");
+  });
+});
+
+describe("cleanLogText worst-case input", () => {
+  const ESC = String.fromCharCode(0x1b);
+  const BEL = String.fromCharCode(0x07);
+  // 時間の上限は緩くする。線形なら数十ミリ秒、2乗なら数分かかる入力である。
+  const LIMIT_MS = 5000;
+  const elapsedMs = (raw: string): number => {
+    const started = Date.now();
+    cleanLogText(raw);
+    return Date.now() - started;
+  };
+
+  test.each([
+    ["DCS starts without a terminator", `${ESC}P`],
+    ["OSC starts without a terminator", `${ESC}]`],
+    ["CSI starts without a final byte", `${ESC}[`],
+    ["APC starts without a terminator", `${ESC}_`],
+    ["DCS starts with a BEL", `${ESC}P${BEL}`],
+    ["a lone ESC", ESC],
+  ])("finishes quickly when %s repeats on one line", (_label, unit) => {
+    expect(elapsedMs(unit.repeat(500_000))).toBeLessThan(LIMIT_MS);
+  });
+
+  test("finishes quickly for a DCS start followed by many ESC characters", () => {
+    expect(elapsedMs(`${ESC}P${ESC}x`.repeat(300_000))).toBeLessThan(LIMIT_MS);
+  });
+
+  test("finishes quickly for many short lines of unterminated sequences", () => {
+    expect(elapsedMs(`${ESC}P abc\n`.repeat(300_000))).toBeLessThan(LIMIT_MS);
+  });
+
+  test("a DCS sequence does not swallow text after the next ESC", () => {
+    expect(cleanLogText(`${ESC}Pabc${ESC}[31mred${ESC}[0m tail`)).toBe(
+      "red tail",
+    );
+  });
+
+  test("cuts a very long single line before the matching", () => {
+    expect(cleanLogText("x".repeat(100_000)).length).toBeLessThanOrEqual(2000);
+  });
+
+  test("keeps the lines after a very long line", () => {
+    expect(cleanLogText(`${"x".repeat(100_000)}\nnext`)).toEndWith("\nnext");
   });
 });
 
@@ -202,6 +256,16 @@ describe("condenseJobLog", () => {
     expect(condenseJobLog(lines.join("\n"), 3000)).toContain("line 2999");
   });
 
+  test("keeps a long line within the line limit including the ellipsis", () => {
+    const out = condenseJobLog(`${"x".repeat(1000)}\nnext`, 3000);
+    expect(out.split("\n")[0]?.length).toBe(300);
+  });
+
+  test("marks a cut line with an ellipsis", () => {
+    const out = condenseJobLog(`${"x".repeat(1000)}\nnext`, 3000);
+    expect(out.split("\n")[0]).toEndWith("…");
+  });
+
   test("cuts a very long single line", () => {
     const out = condenseJobLog(`${"x".repeat(100_000)}\nnext`, 3000);
     expect(out.length).toBeLessThan(1000);
@@ -263,6 +327,26 @@ describe("VolatileCiPrompt", () => {
 
   test("reveals the text for the caller that starts Claude", () => {
     expect(prompt.reveal()).toBe("PROMPT-WITH-LOG-TEXT");
+  });
+});
+
+describe("VolatileCiLog", () => {
+  const log = VolatileCiLog.of("RAW-LOG-TEXT");
+
+  test("refuses to be serialized to JSON", () => {
+    expect(() => JSON.stringify({ log })).toThrow("must not be serialized");
+  });
+
+  test("does not show its content when converted to a string", () => {
+    expect(`${log}`).not.toContain("RAW-LOG-TEXT");
+  });
+
+  test("does not show its content when inspected", () => {
+    expect(inspect(log)).not.toContain("RAW-LOG-TEXT");
+  });
+
+  test("reveals the text for the caller that builds the excerpt", () => {
+    expect(log.reveal()).toBe("RAW-LOG-TEXT");
   });
 });
 

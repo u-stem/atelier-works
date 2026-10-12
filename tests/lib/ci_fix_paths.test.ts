@@ -11,7 +11,7 @@ const change = (
 ): CiFixChange => ({
   path,
   status: "modified",
-  symlink: false,
+  mode: "100644",
   addedLines: ["const x = 1;"],
   removedLineCount: 1,
   ...overrides,
@@ -157,32 +157,44 @@ describe("unsafe paths", () => {
   });
 });
 
-describe("symlinks and unsupported changes", () => {
+describe("file modes and unsupported changes", () => {
+  const PATH = "f/factory/lib/feature.ts";
+  const codeWithMode = (mode: string) =>
+    codeOf([change(PATH, { mode })], [PATH]);
+
   test("rejects a symbolic link", () => {
-    expect(
-      codeOf(
-        [change("f/factory/lib/feature.ts", { symlink: true })],
-        ["f/factory/lib/feature.ts"],
-      ),
-    ).toBe("symlink");
+    expect(codeWithMode("120000")).toBe("symlink");
   });
 
   test("rejects a type change", () => {
-    expect(
-      codeOf(
-        [change("f/factory/lib/feature.ts", { status: "typechange" })],
-        ["f/factory/lib/feature.ts"],
-      ),
-    ).toBe("symlink");
+    expect(codeOf([change(PATH, { status: "typechange" })], [PATH])).toBe(
+      "symlink",
+    );
+  });
+
+  test("rejects a submodule", () => {
+    expect(codeWithMode("160000")).toBe("unsupported_change");
+  });
+
+  test.each(["100664", "040000", "000000", "", "abc", "100644 "])(
+    "rejects the mode %p",
+    (mode) => {
+      expect(codeWithMode(mode)).toBe("unsupported_change");
+    },
+  );
+
+  test("allows an executable file", () => {
+    expect(allowed(PATH, { mode: "100755" })).toBe(true);
+  });
+
+  test("allows a regular file", () => {
+    expect(allowed(PATH, { mode: "100644" })).toBe(true);
   });
 
   test("rejects an unknown status", () => {
-    expect(
-      codeOf(
-        [change("f/factory/lib/feature.ts", { status: "unknown" })],
-        ["f/factory/lib/feature.ts"],
-      ),
-    ).toBe("unsupported_change");
+    expect(codeOf([change(PATH, { status: "unknown" })], [PATH])).toBe(
+      "unsupported_change",
+    );
   });
 });
 
@@ -247,6 +259,16 @@ describe("protected paths", () => {
     "f/factory/poll_prs.schedule.yaml",
     "f/factory/github_token.variable.yaml",
     "console/index.html",
+    "f/factory/lib/prompts.ts",
+    "f/factory/lib/prompts.script.yaml",
+    "f/factory/lib/github.ts",
+    "f/factory/lib/github.script.lock",
+    "f/factory/lib/check_runner.ts",
+    "f/factory/watch_main_ci.ts",
+    "f/factory/watch_main_ci.script.yaml",
+    ".mcp.json",
+    "sub/.mcp.json",
+    "f/factory/foo.resource-type.yaml",
   ])("rejects %s even when the pull request changed it", (path) => {
     expect(codeOf([change(path)], [path])).toBe("protected_path");
   });
@@ -337,12 +359,30 @@ describe("weakening checks", () => {
     "describe.skip('x', () => {})",
     "it.only('x', () => {})",
     "test .only ('x', () => {})",
+    "test.only",
+    "const t = describe.skip;",
+    "test.skip.each([1])('x', () => {})",
     "test.todo('x')",
     "it.todo",
+    "it.failing('x', () => {})",
+    "test.failing",
+    "test.if(cond)('x', () => {})",
+    "test.runIf(cond)('x', () => {})",
     "test.skipIf(cond)('x', () => {})",
+    "test.todoIf(cond)('x', () => {})",
+    "test['skip']('x', () => {})",
+    'describe["only"]("x", () => {})',
+    "test[`todo`]('x')",
+    "{ skip: true }",
+    "defineTest({ skip:true })",
     "xit('x', () => {})",
+    "xtest('x', () => {})",
     "xdescribe('x', () => {})",
     "fit('x', () => {})",
+    "fdescribe('x', () => {})",
+    "process.exit(0)",
+    "process .exit (1)",
+    "mock.module('./x.ts', () => ({}))",
     "/* eslint-disable */",
     "// eslint-disable-next-line no-console",
     "/* istanbul ignore next */",
@@ -390,11 +430,17 @@ describe("weakening checks", () => {
     ).toBe(true);
   });
 
-  test("allows a property access named only", () => {
+  test("allows identifiers that only start with a skipping word", () => {
     expect(
       allowed("f/factory/lib/feature.ts", {
-        addedLines: ["const onlyOne = list.only;"],
+        addedLines: ["const onlyOne = list.onlyOne; items.skipped();"],
       }),
+    ).toBe(true);
+  });
+
+  test("does not flag a bare if (false) because it is too noisy", () => {
+    expect(
+      allowed("f/factory/lib/feature.ts", { addedLines: ["if (false) {"] }),
     ).toBe(true);
   });
 });
