@@ -17,6 +17,7 @@ import {
   deferMainCiRun,
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
+  deleteWorkerSamplesBefore,
   getNoticeById,
   getPreviousMainCiRun,
   hasIntakeRefreshEvent,
@@ -1092,6 +1093,7 @@ await insertCleanupRun(
     notices_deleted: 2,
     info_notices_resolved: 3,
     main_ci_runs_deleted: 4,
+    worker_samples_deleted: 5,
     doc_dirs_deleted: 0,
   },
   sql,
@@ -1108,6 +1110,7 @@ check(
   "cleanup_runs: the resolved info notices count is recorded and summed",
   cleanupSummary?.info_notices_resolved === 3 &&
     cleanupSummary.main_ci_runs_deleted === 4 &&
+    cleanupSummary.worker_samples_deleted === 5 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
 );
@@ -2051,6 +2054,30 @@ for (const [name, statement] of [
   }
   check(`worker_samples: the table rejects ${name}`, rejected);
 }
+
+// worker_samples: 掃除は期限ちょうどの行も含めて削除し、期限より新しい行を残す。
+const workerCutoff = new Date("2026-10-12T03:10:00.000Z");
+const boundaryWorkerSampleId = await insertWorkerSample(
+  { ...nullWorkerSample, sampled_at: workerCutoff },
+  sql,
+);
+const deletedWorkerSamples = await deleteWorkerSamplesBefore(workerCutoff, sql);
+const keptWorkerSampleIds = (await listRecentWorkerSamples(10, sql)).map(
+  (row) => row.id,
+);
+check(
+  "worker_samples: cleanup deletes the rows at or before the cutoff",
+  deletedWorkerSamples === 2 &&
+    !keptWorkerSampleIds.includes(fullWorkerSampleId) &&
+    !keptWorkerSampleIds.includes(boundaryWorkerSampleId),
+  { deletedWorkerSamples, keptWorkerSampleIds },
+);
+check(
+  "worker_samples: cleanup keeps the row newer than the cutoff",
+  keptWorkerSampleIds.length === 1 &&
+    keptWorkerSampleIds[0] === nullWorkerSampleId,
+  keptWorkerSampleIds,
+);
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。

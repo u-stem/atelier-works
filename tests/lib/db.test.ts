@@ -16,6 +16,7 @@ import {
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
+  deleteWorkerSamplesBefore,
   expireApprovalRequestIfPending,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
@@ -3555,6 +3556,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 2,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3574,6 +3576,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 0,
         info_notices_resolved: 4,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3592,6 +3595,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 0,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3610,6 +3614,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 2,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -4311,6 +4316,32 @@ describe("restartStoppedWorkItem", () => {
   });
 });
 
+describe("insertCleanupRun worker_samples_deleted", () => {
+  const counts = {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 0,
+    info_notices_resolved: 0,
+    main_ci_runs_deleted: 0,
+    worker_samples_deleted: 8,
+    doc_dirs_deleted: 0,
+  };
+
+  test("inserts into the worker_samples_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.text).toContain("worker_samples_deleted");
+  });
+
+  test("records the deleted count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.values).toContain(8);
+  });
+});
+
 describe("insertCleanupRun main_ci_runs_deleted", () => {
   const counts = {
     work_items_deleted: 0,
@@ -4320,6 +4351,7 @@ describe("insertCleanupRun main_ci_runs_deleted", () => {
     notices_deleted: 0,
     info_notices_resolved: 0,
     main_ci_runs_deleted: 6,
+    worker_samples_deleted: 0,
     doc_dirs_deleted: 0,
   };
 
@@ -4722,6 +4754,33 @@ describe("deleteMainCiRunsBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
     expect(await deleteMainCiRunsBefore(cutoff, sql)).toBe(2);
+  });
+});
+
+describe("deleteWorkerSamplesBefore", () => {
+  const cutoff = new Date("2026-09-12T00:00:00.000Z");
+
+  test("deletes from factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.worker_samples");
+  });
+
+  test("ages a row by its sampled_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("sampled_at <=");
+  });
+
+  test("binds the cutoff as a timestamp", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.values).toEqual([cutoff.toISOString()]);
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }, { id: 3 }]]);
+    expect(await deleteWorkerSamplesBefore(cutoff, sql)).toBe(3);
   });
 });
 

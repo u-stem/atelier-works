@@ -139,6 +139,7 @@ describe("getCleanupSummary", () => {
           notices_deleted: 2,
           info_notices_resolved: 0,
           main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -159,6 +160,7 @@ describe("getCleanupSummary", () => {
           notices_deleted: "2",
           info_notices_resolved: "0",
           main_ci_runs_deleted: "0",
+          worker_samples_deleted: "0",
           doc_dirs_deleted: "0",
         },
       ],
@@ -172,6 +174,7 @@ describe("getCleanupSummary", () => {
       notices_deleted: 2,
       info_notices_resolved: 0,
       main_ci_runs_deleted: 0,
+      worker_samples_deleted: 0,
       doc_dirs_deleted: 0,
     });
   });
@@ -188,6 +191,7 @@ describe("getCleanupSummary", () => {
           notices_deleted: 0,
           info_notices_resolved: "4",
           main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -208,12 +212,40 @@ describe("getCleanupSummary", () => {
           notices_deleted: 0,
           info_notices_resolved: 0,
           main_ci_runs_deleted: "9",
+          worker_samples_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
     ]);
     const summary = await getCleanupSummary(RANGE, sql);
     expect(summary?.main_ci_runs_deleted).toBe(9);
+  });
+
+  test("sums the deleted worker samples", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
+          worker_samples_deleted: "1440",
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary?.worker_samples_deleted).toBe(1440);
+  });
+
+  test("selects the worker_samples_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("sum(worker_samples_deleted)");
   });
 
   test("selects the main_ci_runs_deleted column", async () => {
@@ -240,6 +272,7 @@ describe("getCleanupSummary", () => {
           notices_deleted: 0,
           info_notices_resolved: 0,
           main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],

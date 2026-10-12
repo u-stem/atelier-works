@@ -2,7 +2,7 @@
 // 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
-// 解決済みのnotice・判定済みの`main_ci_runs`で、作業項目とは別々に掃除する。
+// 解決済みのnotice・判定済みの`main_ci_runs`・`worker_samples`で、作業項目とは別々に掃除する。
 // 判定を待つ`main_ci_runs`の行と、各リポジトリの最新の行は、古くても削除しない。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
@@ -36,6 +36,7 @@ import {
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
+  deleteWorkerSamplesBefore,
   insertCleanupRun,
   resolveStaleInfoNoticesBefore,
 } from "./lib/db.ts";
@@ -155,6 +156,26 @@ async function cleanupMainCiRuns(cutoff: Date, log: Logger): Promise<number> {
   }
 }
 
+/** workerの負荷の記録を、測った時刻から保持期間を過ぎたものだけ削除する。 */
+async function cleanupWorkerSamples(
+  cutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await deleteWorkerSamplesBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete worker_samples", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `workerの負荷の記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
 /** 解決済みの通知を、解決の時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
   try {
@@ -229,6 +250,10 @@ export async function main(): Promise<CleanupCounts> {
   const noticesDeleted = await cleanupNotices(cutoffs.logsBefore, log);
   const infoNoticesResolved = await cleanupInfoNotices(cutoffs.logsBefore, log);
   const mainCiRunsDeleted = await cleanupMainCiRuns(cutoffs.logsBefore, log);
+  const workerSamplesDeleted = await cleanupWorkerSamples(
+    cutoffs.logsBefore,
+    log,
+  );
 
   const counts: CleanupCounts = {
     work_items_deleted: workItems.work_items_deleted,
@@ -238,6 +263,7 @@ export async function main(): Promise<CleanupCounts> {
     notices_deleted: noticesDeleted,
     info_notices_resolved: infoNoticesResolved,
     main_ci_runs_deleted: mainCiRunsDeleted,
+    worker_samples_deleted: workerSamplesDeleted,
     doc_dirs_deleted: docDirsDeleted,
   };
 
