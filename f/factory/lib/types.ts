@@ -969,6 +969,11 @@ export type FactoryConfig = {
   implement_max_changed_files: number;
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
+  // dependabotのセキュリティ更新PRの自動処理。リソース型ではどちらも省略可能で、既定値がある。
+  /** dependabotのセキュリティ更新PRを自動で処理するか。既定は`false`。 */
+  dependabot_enabled: boolean;
+  /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
+  dependabot_min_published_days: number;
   /**
    * `watch_pr_ci`がFactoryのPRのCIを観測して通知するか。
    * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。

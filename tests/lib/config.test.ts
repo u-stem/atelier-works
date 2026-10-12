@@ -643,6 +643,54 @@ describe("implement settings (工程3)", () => {
   });
 });
 
+describe("dependabot settings", () => {
+  test("defaults dependabot_enabled to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_enabled).toBe(false);
+  });
+
+  test("defaults dependabot_min_published_days to 7 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_min_published_days).toBe(7);
+  });
+
+  test("passes through an explicit dependabot_enabled true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_enabled: true,
+    });
+    expect(config.dependabot_enabled).toBe(true);
+  });
+
+  test("throws when dependabot_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("passes through an explicit dependabot_min_published_days", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_min_published_days: 14,
+    });
+    expect(config.dependabot_min_published_days).toBe(14);
+  });
+
+  test("throws when dependabot_min_published_days is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when dependabot_min_published_days is negative", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: -1 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when dependabot_min_published_days is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("checkCommandsFor", () => {
   const BASE = {
     allowed_check_commands: ["mise run check"],

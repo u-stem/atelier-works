@@ -345,6 +345,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/console_worker` | script | [LIB] Console用workerの停止の検知 |
 | `f/factory/lib/db` | script | [LIB] Data Tableアクセス |
 | `f/factory/lib/cleanup_db_support` | script | [LIB] DB掃除の純粋ロジック |
+| `f/factory/lib/dependabot_registry` | script | [LIB] dependabot更新のnpm registry取得 |
+| `f/factory/lib/dependabot_collect` | script | [LIB] dependabot更新のゲート入力の収集 |
 | `f/factory/lib/dependabot_support` | script | [LIB] dependabot更新のゲート判定 |
 | `f/factory/lib/dependabot_prompt` | script | [LIB] dependabot更新の影響調査のプロンプト |
 | `f/factory/lib/discord` | script | [LIB] Discord通知 |

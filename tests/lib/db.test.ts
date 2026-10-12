@@ -28,6 +28,7 @@ import {
   getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
+  hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
   hasNewerMainCiRun,
@@ -40,6 +41,7 @@ import {
   insertAuditReport,
   insertAuditWorkItem,
   insertCleanupRun,
+  insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertImplementRound,
   insertIssueProposal,
@@ -314,6 +316,219 @@ describe("insertIssueWorkItemUnlessActive", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
     expect(calls).toHaveLength(1);
+  });
+});
+
+const DEPENDABOT_SHA = "0123456789abcdef0123456789abcdef01234567";
+
+const NEW_DEPENDABOT_ITEM = {
+  owner: "octo-owner",
+  repo: "atelier-works",
+  pr_number: 77,
+  title: "Bump left-pad from 1.0.0 to 1.0.1",
+  status: "picked" as const,
+  claimed_by: "factory-local",
+  head_sha: DEPENDABOT_SHA,
+};
+
+describe("insertDependabotWorkItemUnlessActive", () => {
+  test("inserts into factory.work_items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
+  });
+
+  test("skips the insert on any unique violation", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
+  });
+
+  test("inserts the dependabot kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.text).toContain("1, 'issue', 'dependabot',");
+  });
+
+  test("binds only the fields of the pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      77,
+      "Bump left-pad from 1.0.0 to 1.0.1",
+      "picked",
+      "factory-local",
+      DEPENDABOT_SHA,
+    ]);
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(
+      await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql),
+    ).toBe(5);
+  });
+
+  test("returns null when an active work item already exists for the pull request", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql),
+    ).toBeNull();
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await insertDependabotWorkItemUnlessActive(
+      { ...NEW_DEPENDABOT_ITEM, owner: "a b" },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a pull request number that is not positive", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      insertDependabotWorkItemUnlessActive(
+        { ...NEW_DEPENDABOT_ITEM, pr_number: 0 },
+        sql,
+      ),
+    ).rejects.toThrow("invalid pull request number");
+  });
+
+  test("rejects a terminal status without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    // 型は開始の状態だけを受け付けるので、型を通らない値はJSONから作る。
+    const terminal = {
+      ...NEW_DEPENDABOT_ITEM,
+      ...JSON.parse('{"status":"needs_human"}'),
+    };
+    await insertDependabotWorkItemUnlessActive(terminal, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("names the status in the error for a status that cannot start", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const terminal = {
+      ...NEW_DEPENDABOT_ITEM,
+      ...JSON.parse('{"status":"needs_human"}'),
+    };
+    await expect(
+      insertDependabotWorkItemUnlessActive(terminal, sql),
+    ).rejects.toThrow("invalid dependabot start status: needs_human");
+  });
+
+  test("rejects a head sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      insertDependabotWorkItemUnlessActive(
+        { ...NEW_DEPENDABOT_ITEM, head_sha: "abc1234" },
+        sql,
+      ),
+    ).rejects.toThrow("invalid commit sha");
+  });
+});
+
+describe("hasDependabotItemForHead", () => {
+  test("returns true when a row exists for the pull request and the head", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(
+      await hasDependabotItemForHead(
+        "octo-owner",
+        "atelier-works",
+        77,
+        DEPENDABOT_SHA,
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("returns false when no row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await hasDependabotItemForHead(
+        "octo-owner",
+        "atelier-works",
+        77,
+        DEPENDABOT_SHA,
+        sql,
+      ),
+    ).toBe(false);
+  });
+
+  test("looks only at dependabot work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.text).toContain("kind = 'dependabot'");
+  });
+
+  test("does not filter by status so that terminal rows count", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.text).not.toContain("status");
+  });
+
+  test("binds the owner, repo, pull request number and head sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+    ]);
+  });
+
+  test("limits the lookup to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.text).toContain("LIMIT 1");
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "..",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a head sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      hasDependabotItemForHead("octo-owner", "atelier-works", 77, "abc", sql),
+    ).rejects.toThrow("invalid commit sha");
   });
 });
 

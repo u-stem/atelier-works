@@ -45,6 +45,8 @@ schema:
     - implement_flow_timeout_sec
     - implement_max_changed_files
     - implement_max_diff_lines
+    - dependabot_enabled
+    - dependabot_min_published_days
     - pr_ci_watch_enabled
     - check_commands_by_repo
   properties:
@@ -101,6 +103,16 @@ schema:
       default: []
       items:
         type: string
+    dependabot_enabled:
+      type: boolean
+      description: >-
+        dependabotのセキュリティ更新PRを自動で処理するかどうかです。falseの間は、dependabotのPRに何もしません。
+      default: false
+    dependabot_min_published_days:
+      type: integer
+      description: >-
+        dependabotの更新先の版が公開されてから、マージしてよくなるまでの日数です。この日数に満たない版は自動でマージしません。1以上の整数にします。
+      default: 7
     diff_max_lines:
       type: integer
       description: >-

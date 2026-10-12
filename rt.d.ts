@@ -43,6 +43,8 @@ declare namespace RT {
     implement_flow_timeout_sec: number,
     implement_max_changed_files: number,
     implement_max_diff_lines: number,
+    dependabot_enabled: boolean,
+    dependabot_min_published_days: number,
     pr_ci_watch_enabled: boolean,
     check_commands_by_repo: object
   }

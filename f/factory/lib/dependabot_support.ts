@@ -7,8 +7,11 @@ import { escapeReasonSeparator } from "./log.ts";
 import { matchesForbiddenPath } from "./protected_paths.ts";
 
 // 値の出典は、.github/workflows/ci.ymlのジョブIDと、docs/security.mdの必須チェックの節である。
-/** mainのrulesetが必須にするチェック名。 */
-export const REQUIRED_CHECKS: readonly string[] = [
+/**
+ * mainのrulesetが必須にするチェック名。
+ * 判定の基準なので、実行時にも書き換えられないよう凍結する。
+ */
+export const REQUIRED_CHECKS: readonly string[] = Object.freeze([
   "scope",
   "check",
   "test-db",
@@ -16,18 +19,19 @@ export const REQUIRED_CHECKS: readonly string[] = [
   "console",
   "caddyfile",
   "console-fetcher-image",
-];
+]);
 
 /**
  * 更新を許すファイル。依存の版を変えるのは、マニフェストとロックファイルだけである。
  * リポジトリ直下とconsole/配下の2か所に限り、それ以外の階層は許さない。
+ * 判定の基準なので、実行時にも書き換えられないよう凍結する。
  */
-export const ALLOWED_PATHS: readonly string[] = [
+export const ALLOWED_PATHS: readonly string[] = Object.freeze([
   "package.json",
   "bun.lock",
   "console/package.json",
   "console/bun.lock",
-];
+]);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -40,7 +44,7 @@ const MAX_DETAIL_CHARS = 80;
  * 理由の文字列に埋め込む、ファイルやGitHubが書ける文字列を整える。
  * 長い値で理由が膨らまないよう切り詰め、`"; "`で理由が別の項目に割れないようにする。
  */
-function detail(text: string): string {
+export function detail(text: string): string {
   const shortened =
     text.length > MAX_DETAIL_CHARS
       ? `${text.slice(0, MAX_DETAIL_CHARS)}...`
@@ -99,7 +103,8 @@ export function classifyUpdate(from: string, to: string): UpdateKind {
 const ISO_WITH_ZONE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-function parsePublishedAt(publishedAtIso: string): number | null {
+/** 時差つきのISO 8601の日時をミリ秒にする。形が違うか、日時として読めないときは`null`にする。 */
+export function parsePublishedAt(publishedAtIso: string): number | null {
   if (!ISO_WITH_ZONE.test(publishedAtIso)) return null;
   const ms = Date.parse(publishedAtIso);
   return Number.isNaN(ms) ? null : ms;
@@ -223,7 +228,8 @@ function splitPackageId(id: string): { name: string; version: string } | null {
   return { name: id.slice(0, at), version: id.slice(at + 1) };
 }
 
-function entryIdentity(
+/** packagesの表の1件から、パッケージ名と版を読む。形が違うときは`null`にする。 */
+export function entryIdentity(
   entry: unknown,
 ): { name: string; version: string } | null {
   if (!Array.isArray(entry)) return null;
@@ -231,7 +237,11 @@ function entryIdentity(
   return typeof id === "string" ? splitPackageId(id) : null;
 }
 
-const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+/**
+ * sha512の整合性の形。sha512は64バイトで、base64では86文字と`==`になる。
+ * ロックファイルの値とレジストリの値のどちらも、この形でなければ使わない。
+ */
+export const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 const DEPENDENCY_FIELDS: readonly string[] = [
   "dependencies",
@@ -297,7 +307,7 @@ function dependencyFieldProblem(
 
 /**
  * ロックファイルのworkspacesを比べ、対象の依存の指定以外が変わっていれば理由を返す。
- * 対象の指定は、前と同じ欄にあり、変えるなら新しい版を指していることを要る。
+ * 対象の指定は、前と同じ欄にあり、変えるなら新しい版を指していることを求める。
  * 作業場所のキーは`Object.keys`で比べる。`__proto__`は`JSON.parse`が持ち主のキーとして作るので、
  * 値を組み立て直さずに比べて、足された作業場所を見逃さない。
  */
@@ -432,6 +442,47 @@ export function checkLockfileDiff(
   return { ok: true };
 }
 
+/**
+ * bun.lockのpackagesの表を返す。キーは、入れ子のコピーを区別する場所の名前である。
+ * 解釈できないとき、重複したキーがあるとき、表が無いときは`null`にする。
+ */
+export function lockfilePackages(text: string): Record<string, unknown> | null {
+  const parsed = parseJsonObject(text, true);
+  if (!parsed.ok) return null;
+  const packages = parsed.value.packages;
+  return isRecord(packages) ? packages : null;
+}
+
+/**
+ * ロックファイルに入っている、対象の更新後の版のすべてのエントリの整合性を返す。
+ * 入れ子のコピーも含める。整合性が文字列でないエントリは、どの値とも一致しない`""`にする。
+ * 解釈できないとき、重複したキーがあるとき、packagesの表が無いときは`null`にする。
+ * `text`はbun.lockのテキストである。
+ */
+export function lockfileIntegrity(
+  text: string,
+  target: { name: string; to: string },
+): string[] | null {
+  const parsed = parseJsonObject(text, true);
+  if (!parsed.ok) return null;
+  const packages = parsed.value.packages;
+  if (!isRecord(packages)) return null;
+  const found: string[] = [];
+  for (const entry of Object.values(packages)) {
+    const identity = entryIdentity(entry);
+    if (
+      identity === null ||
+      identity.name !== target.name ||
+      identity.version !== target.to
+    ) {
+      continue;
+    }
+    const integrity: unknown = Array.isArray(entry) ? entry[3] : undefined;
+    found.push(typeof integrity === "string" ? integrity : "");
+  }
+  return found;
+}
+
 // ---- package.jsonの差分 ----
 
 export type PackageJsonVerdict = { ok: true } | { ok: false; reason: string };
@@ -539,7 +590,7 @@ export type GateInput = {
   /**
    * 更新先パッケージのscriptsのうち、preinstall、install、postinstall、prepareだけを抜き出したもの。
    * 取得に失敗したときは`null`にする。
-   * binding.gypによる暗黙のinstallは、呼び出し側(後続のタスク)が扱う。
+   * `gypfile`が真でinstallが無い版は、`parsePackument`が暗黙のinstallを足して渡す。
    * ルートのpackage.jsonのscriptsは`checkPackageJsonDiff`が止めるので、
    * ここは更新先パッケージ自身のスクリプトを指す。
    */
@@ -547,6 +598,14 @@ export type GateInput = {
     before: Record<string, string> | null;
     after: Record<string, string> | null;
   };
+  /**
+   * レジストリが報告する、更新先の版の整合性(`dist.integrity`)。
+   * 取得できなかったときと形が不正なときは`null`にする。
+   * `name`と`version`は、整合性がどのパッケージのどの版のものかを示し、
+   * `target`の名前と更新後の版に一致することを求める。
+   * 更新後のロックファイルの対象のエントリが、`integrity`と一致することを求める。
+   */
+  registry: { name: string; version: string; integrity: string } | null;
 };
 
 export type GateResult =
@@ -586,8 +645,8 @@ const MANIFEST_LOCKFILES: readonly { manifest: string; lockfile: string }[] = [
 
 /**
  * 変更されたファイルの中身を検査し、止める理由を返す。無ければ`null`。
- * 変更されたパスのすべてが`files`に現れ、追加と削除でなく、検査を通ることを要る。
- * マニフェストが変わったときは、同じディレクトリのロックファイルも変わっていることを要る。
+ * 変更されたパスのすべてが`files`に現れ、追加と削除でなく、検査を通ることを求める。
+ * マニフェストが変わったときは、同じディレクトリのロックファイルも変わっていることを求める。
  * ロックファイルだけが変わるとき(推移的な依存だけの更新)は、ロックファイルの検査だけで通す。
  */
 function fileProblem(input: GateInput): string | null {
@@ -625,7 +684,43 @@ function fileProblem(input: GateInput): string | null {
   return null;
 }
 
-const INSTALL_SCRIPT_NAMES: readonly string[] = [
+/**
+ * 更新後のロックファイルの対象のエントリが、レジストリの整合性と一致しないときの理由を返す。無ければ`null`。
+ * ロックファイルが差し替えた取得物ではなく、レジストリが公開したものを入れていることを確かめる。
+ * 変更されたロックファイルのすべてで、対象のエントリが1件以上あり、すべてが一致することを求める。
+ */
+function integrityProblem(input: GateInput): string | null {
+  const { registry, files, changedPaths, target } = input;
+  if (registry === null) return "registry integrity is not available";
+  if (!SHA512_INTEGRITY.test(registry.integrity)) {
+    return "registry integrity is malformed";
+  }
+  if (registry.name !== target.name || registry.version !== target.to) {
+    return `registry fact is for ${detail(registry.name)}@${detail(registry.version)}, expected ${detail(target.name)}@${detail(target.to)}`;
+  }
+  for (const { lockfile } of MANIFEST_LOCKFILES) {
+    if (!changedPaths.includes(lockfile)) continue;
+    const after = files.find((file) => file.path === lockfile)?.after;
+    if (after === null || after === undefined) {
+      return `lockfile has no content to check: ${detail(lockfile)}`;
+    }
+    const found = lockfileIntegrity(after, target);
+    if (found === null || found.length === 0) {
+      return `target entry was not found in ${detail(lockfile)}`;
+    }
+    if (found.some((value) => !SHA512_INTEGRITY.test(value))) {
+      return `a target entry in ${detail(lockfile)} has no valid integrity`;
+    }
+    const mismatch = found.find((value) => value !== registry.integrity);
+    if (mismatch !== undefined) {
+      return `integrity in ${detail(lockfile)} differs from the registry: ${detail(mismatch)} / ${detail(registry.integrity)}`;
+    }
+  }
+  return null;
+}
+
+/** 更新先パッケージの、install時に実行されるスクリプトの名前。 */
+export const INSTALL_SCRIPT_NAMES: readonly string[] = [
   "preinstall",
   "install",
   "postinstall",
@@ -652,7 +747,7 @@ const WEB_FLOW_LOGIN = "web-flow";
 
 /**
  * PRのcommitを調べ、止める理由を返す。無ければ`null`。
- * 全commitが次のどちらかを満たし、通常のcommitが1件以上あることを要る。
+ * 全commitが次のどちらかを満たし、通常のcommitが1件以上あることを求める。
  * - 通常のcommit(親が1つ): 作者が`dependabot[bot]`、コミッターが`dependabot[bot]`か`web-flow`、署名が検証済み。
  * - mergeのcommit(親が2つ以上): コミッターが`web-flow`で、署名が検証済み。ブランチの更新は人やFactoryも行うので、作者は問わない。
  * 親の数が1以上の整数でないcommitは止める。
@@ -749,6 +844,8 @@ export function evaluateGate(input: GateInput): GateResult {
   if (input.mergeable === false) return stop("pull request is not mergeable");
   const files = fileProblem(input);
   if (files !== null) return stop(files);
+  const integrity = integrityProblem(input);
+  if (integrity !== null) return stop(integrity);
   const scripts = installScriptProblem(input);
   if (scripts !== null) return stop(scripts);
   if (parsePublishedAt(input.publishedAtIso) === null) {

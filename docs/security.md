@@ -1587,6 +1587,20 @@ Consoleでバンドルを通らずに配信される`console/public/`と`console
 この3つのscript定義(`.script.yaml`)と、観測の記録を除く2つのlock(`.script.lock`)も対象である。
 lockの保護を限る理由は、残るリスクに書いた。
 
+dependabotのセキュリティ更新PRを自動で処理するフローも止める。
+対象は、次のscriptと定義である。
+
+- マージの判定、影響調査のプロンプト、npm registryの取得、ゲート入力の組み立て
+- PRの取得、スケジュール、3つのステップ
+- 上のscriptそれぞれの定義(`.script.yaml`)
+- フローのディレクトリ(`f/factory/dependabot__flow/`)の全体。フローに埋め込むモジュールも含む
+
+書き換えられると、許可していない更新を人の確認なしにマージできるためである。
+まだ存在しないファイルも、名前を先に止める。後から置かれたファイルが、保護から漏れないようにするためである。
+依存の無い`f/factory/lib/`の4つのscriptのlock(`.script.lock`)も止める。中身は空の依存で、`windmill-client`の版を上げる変更では書き換わらないためである。
+PRの取得とステップのlockは止めない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
+共有のGitHub取得(`f/factory/lib/github.ts`)は、ほかのフローも使うので止めない。
+
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
