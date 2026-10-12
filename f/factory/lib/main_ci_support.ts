@@ -82,6 +82,14 @@ export type WorkflowRun = {
   readonly conclusion: string | null;
   readonly createdAt: Date;
   readonly htmlUrl: string;
+  /** 実行を始めたevent(`push`、`pull_request`など)。`listPrHeadWorkflowRuns`だけが入れる。 */
+  readonly event?: string;
+  /** 実行のheadがあるリポジトリの`owner/repo`。削除されたforkならnull。`listPrHeadWorkflowRuns`だけが入れる。 */
+  readonly headRepositoryFullName?: string | null;
+  /** 実行が結び付いているPRの番号。空なら、GitHubがPRを結び付けていない。`listPrHeadWorkflowRuns`だけが入れる。 */
+  readonly pullRequestNumbers?: readonly number[];
+  /** 再実行の通し番号。`listPrHeadWorkflowRuns`だけが入れる。 */
+  readonly runAttempt?: number;
 };
 
 /** 実行の一覧から見た、コミットの判定。 */
