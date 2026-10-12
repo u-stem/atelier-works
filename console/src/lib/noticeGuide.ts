@@ -179,7 +179,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "owner_id_mismatch",
     guide(
-      "設定したオーナーの数値IDと、GitHubの現在のIDが食い違っています。オーナーが改名して、別の人がその名前を取得した可能性があります。このオーナーの検索は飛ばしています。",
+      "設定したオーナーの数値IDが、GitHubの現在のIDと食い違うか、その名前のアカウントが見つかりません。オーナーが改名または削除された可能性があります。このオーナーの検索は飛ばしています。",
       "GitHubで、そのアカウントが意図した持ち主か確かめ、factory_configのownersの名前とIDを見直してください。",
       {
         note: "名前とIDが合うと、次の回から検索が再開します。見直した後に、この通知を解決します。",

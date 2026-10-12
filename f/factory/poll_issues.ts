@@ -65,7 +65,7 @@ import {
   decideIssueActions,
   decideReconcileAction,
   filterByRepoAllowlist,
-  gateOwnerId,
+  filterVerifiedOwners,
   groupActionableTargets,
   type IssueCandidate,
   type IssueDecision,
@@ -1367,16 +1367,13 @@ export async function main(): Promise<{
   );
 
   const rawCandidates: IssueSearchItem[] = [];
-  for (const owner of config.owners) {
-    const proceed = await gateOwnerId(owner, {
-      getAccountId: (name) => getAccountId(client, name),
-      recordFailure: (step, err) => recordFailureSafe(step, err, log),
-      addNotice: (record) => addNoticeUnlessUnresolved(record),
-    });
-    if (!proceed) {
-      failed += 1;
-      continue;
-    }
+  const verified = await filterVerifiedOwners(config.owners, {
+    getAccountId: (name) => getAccountId(client, name),
+    recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+  });
+  failed += verified.failed;
+  for (const owner of verified.owners) {
     try {
       const found = await searchIssues(client, {
         owner: owner.name,

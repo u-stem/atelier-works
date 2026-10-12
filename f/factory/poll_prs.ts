@@ -62,8 +62,8 @@ import {
   decidePrActions,
   FORK_HEAD_DENIED_KIND,
   filterByRepoAllowlist,
+  filterVerifiedOwners,
   forkHeadDeniedMessage,
-  gateOwnerId,
   LABELER_DENIED_KIND,
   labelerDeniedMessage,
   labelerPolicyFor,
@@ -1074,16 +1074,13 @@ export async function main(): Promise<{
   const byPr = activeItemsByPr(active);
 
   const rawCandidates: PrSearchItem[] = [];
-  for (const owner of config.owners) {
-    const proceed = await gateOwnerId(owner, {
-      getAccountId: (name) => getAccountId(client, name),
-      recordFailure: (step, err) => recordFailureSafe(step, err, log),
-      addNotice: (record) => addNoticeUnlessUnresolved(record),
-    });
-    if (!proceed) {
-      failed += 1;
-      continue;
-    }
+  const verified = await filterVerifiedOwners(config.owners, {
+    getAccountId: (name) => getAccountId(client, name),
+    recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+  });
+  failed += verified.failed;
+  for (const owner of verified.owners) {
     try {
       const found = await searchPrs(client, {
         owner: owner.name,

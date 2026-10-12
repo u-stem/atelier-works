@@ -384,7 +384,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
   const owners = raw.owners;
   if (!isFactoryOwnerArray(owners)) {
     throw new ConfigValidationError(
-      '"owners" is required and must be an array of { name: string, kind: "user" | "org" }',
+      '"owners" is required and must be an array of { name: string, kind: "user" | "org", id?: positive integer }',
     );
   }
 

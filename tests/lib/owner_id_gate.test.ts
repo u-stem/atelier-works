@@ -1,10 +1,13 @@
 // 数値IDを持つオーナーを、検索の前にGitHubの現在のIDと照合する判定のテスト。
 
 import { describe, expect, test } from "bun:test";
+import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import {
+  filterVerifiedOwners,
   gateOwnerId,
   OWNER_ID_MISMATCH_KIND,
   ownerIdMismatchMessage,
+  ownerNotFoundMessage,
 } from "../../f/factory/lib/poll_support.ts";
 import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
 
@@ -105,6 +108,44 @@ describe("gateOwnerId", () => {
     expect(recorded.notices).toEqual([]);
   });
 
+  test("skips the owner when the account is not found", async () => {
+    const { deps } = setup(() =>
+      Promise.reject(new GitHubHttpError("not found", 404)),
+    );
+    expect(await gateOwnerId(WITH_ID, deps)).toBe(false);
+  });
+
+  test("records a failure when the account is not found", async () => {
+    const { deps, recorded } = setup(() =>
+      Promise.reject(new GitHubHttpError("not found", 404)),
+    );
+    await gateOwnerId(WITH_ID, deps);
+    expect(recorded.failures.map((f) => f.step)).toEqual([
+      "verify_owner_id:octo-owner",
+    ]);
+  });
+
+  test("records an actionable notice when the account is not found", async () => {
+    const { deps, recorded } = setup(() =>
+      Promise.reject(new GitHubHttpError("not found", 404)),
+    );
+    await gateOwnerId(WITH_ID, deps);
+    expect(recorded.notices).toEqual([
+      {
+        kind: OWNER_ID_MISMATCH_KIND,
+        message: ownerNotFoundMessage("octo-owner", 4242),
+      },
+    ]);
+  });
+
+  test("records no notice for a server error", async () => {
+    const { deps, recorded } = setup(() =>
+      Promise.reject(new GitHubHttpError("boom", 500)),
+    );
+    await gateOwnerId(WITH_ID, deps);
+    expect(recorded.notices).toEqual([]);
+  });
+
   test("still skips the owner when recording the notice fails", async () => {
     const { deps } = setup(() => Promise.resolve(9999));
     const failing = {
@@ -132,5 +173,52 @@ describe("ownerIdMismatchMessage", () => {
 
   test("names the next action", () => {
     expect(message).toContain("owners");
+  });
+});
+
+describe("ownerNotFoundMessage", () => {
+  const message = ownerNotFoundMessage("octo-owner", 4242);
+
+  test("names the owner", () => {
+    expect(message).toContain("octo-owner");
+  });
+
+  test("says the account was not found", () => {
+    expect(message).toContain("見つかりません");
+  });
+
+  test("names the next action", () => {
+    expect(message).toContain("owners");
+  });
+});
+
+describe("filterVerifiedOwners", () => {
+  const OTHER: FactoryOwner = { name: "octo-org", kind: "org" };
+  const IDS: Record<string, number> = { "octo-owner": 9999 };
+
+  test("returns only the owners that passed the gate", async () => {
+    const { deps } = setup(() => Promise.resolve(9999));
+    const result = await filterVerifiedOwners([WITH_ID, OTHER], deps);
+    expect(result.owners).toEqual([OTHER]);
+  });
+
+  test("counts the owners that were skipped", async () => {
+    const { deps } = setup(() => Promise.resolve(9999));
+    const result = await filterVerifiedOwners([WITH_ID, OTHER], deps);
+    expect(result.failed).toBe(1);
+  });
+
+  test("keeps every owner when all pass", async () => {
+    const { deps } = setup(() => Promise.resolve(4242));
+    const result = await filterVerifiedOwners([WITH_ID, OTHER], deps);
+    expect(result.owners).toEqual([WITH_ID, OTHER]);
+  });
+
+  test("looks up only the owners that have an id", async () => {
+    const { deps, recorded } = setup(() =>
+      Promise.resolve(IDS["octo-owner"] ?? 0),
+    );
+    await filterVerifiedOwners([WITH_ID, OTHER], deps);
+    expect(recorded.lookups).toEqual(["octo-owner"]);
   });
 });
