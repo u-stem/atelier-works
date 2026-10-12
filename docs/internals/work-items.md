@@ -19,7 +19,7 @@
 
 PRは終端になってもラベルが変わらないので、GitHubの検索では追跡中のPRを見つけられない。そのため`poll_prs`は、DBの作業項目から追跡中のPRを見つけ直す(`listTrackedPrs`)。
 
-対象は次の条件をすべて満たす作業項目のPRである。見つけたPRは、まだopenであることを`getPr`で確かめてから候補にする。
+対象は次の条件をすべて満たす作業項目のPRである。見つけたPRは、`owners`(`id`の照合を通ったオーナー)と`repo_allowlist`で絞り、まだopenであることを`getPr`で確かめてから候補にする。
 
 - 種別が`pr_review`か`pr_fix`である。
 - 状態が取り消し(`cancelled`)でない。
@@ -123,6 +123,7 @@ Consoleに出る取り込み時点の内容は更新後の値で、実装に渡�
 | pr_review | なし | レビュー中 | `f/factory/pr_review` |
 | pr_fix | なし | 修正中 | `f/factory/pr_fix` |
 | audit | なし | 拒否する | なし |
+| dependabot | なし | 拒否する | なし |
 
 承認済みの要件定義があるのに実装フローが無効なとき、pipelineで再開すると人が承認した要件定義を作り直してしまう。そのため状態を問わず拒否する。
 
@@ -287,7 +288,7 @@ rerunとrestartのどちらも、元の実行で進行中のClaudeの実行や�
 
 ## reconcileと孤児の検出
 
-`poll_issues`は5分ごとに、終端でないすべての作業項目を照合する(reconcile)。対象の種別は、issue、pr_review、pr_fix、auditのすべてである。
+`poll_issues`は5分ごとに、終端でないすべての作業項目を照合する(reconcile)。対象の種別は、issue、pr_review、pr_fix、audit、dependabotのすべてである。
 
 ジョブの状態は`JobService.getJob`で読む。読んだ結果と、それに応じた判定は次のとおり。
 

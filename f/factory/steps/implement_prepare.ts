@@ -27,6 +27,7 @@ import {
   latestRequirementsApproval,
   setWorkItemBranch,
 } from "../lib/db.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import {
   findOpenPullRequestByHead,
   type GhClient,
@@ -67,6 +68,10 @@ import {
   worktreeLockFor,
 } from "../lib/process_lock.ts";
 import {
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
+import {
   assertGitHubName,
   type FactoryConfig,
   type RequirementDraft,
@@ -75,7 +80,6 @@ import {
 import {
   createGtrWorktree,
   currentRemoteHeadSha,
-  ensureFactoryClone,
   ensureRepo,
   listWorktrees,
   mergeBaseSha,
@@ -198,6 +202,7 @@ function stop(
 
 /**
  * 承認時の前提(作業項目の状態、日次予算、リポジトリの許可、
+ * リポジトリのオーナーの数値IDの照合(`verifyRepoOwnerId`)、
  * 時間設定がflow.yamlのstep timeoutに収まるか、検査コマンドがあればworkerが検査を実行できるか、Issueがopenか、
  * 作業項目のattemptに承認済みの要件定義があるか、
  * ブランチのPR(閉じたものを含む)で終端でないpr_fix / pr_reviewが無いか)を確かめ直す。
@@ -272,6 +277,17 @@ export async function main(
     isRepoAllowed(config, workItem.owner, workItem.repo),
   );
   if (!repoGuard.ok) return stop("needs_human", repoGuard.reason);
+  // リポジトリのcloneと検査コマンドの前に、オーナーの数値IDを`owners`と照合する。
+  // 要件定義の承認を待つ間に名前が別の人に渡っていても、他人のコードの上で動かさない。
+  const ghToken = await wmill.getVariable("f/factory/github_token");
+  const client: GhClient = { run: runCommand, ghToken };
+  const ownerGuard = await verifyRepoOwnerId(
+    config,
+    workItem.owner,
+    workItem.repo,
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+  );
+  if (!ownerGuard.ok) return stop("needs_human", ownerGuard.reason);
   // 時間設定がflow.yamlのstep timeoutに収まらなければ、Windmillがアプリ側の期限より先にステップを打ち切りうるので始めない。
   // 設定全体ではなく実装フローの入口で確かめるのは、検査コマンド数がリポジトリごとに違い、他のスクリプトを止めないためである。
   const checkCommands = implementCheckCommandsFor(
@@ -298,8 +314,6 @@ export async function main(
   });
   if (staleImage !== null) return stop("needs_human", staleImage);
 
-  const ghToken = await wmill.getVariable("f/factory/github_token");
-  const client: GhClient = { run: runCommand, ghToken };
   const issue = await getIssue(
     client,
     workItem.owner,
@@ -342,11 +356,9 @@ export async function main(
   if (await hasPrRunOnBranch())
     return stop("needs_human", ACTIVE_PR_RUN_REASON);
 
-  const factoryClone = await ensureFactoryClone({
+  const factoryClone = await openFactoryClone(config, {
     run: runCommand,
-    repoUrl: config.factory_repo,
     ghToken,
-    branch: config.factory_branch,
   });
   const { dir: repoDir } = await ensureRepo({
     run: runCommand,

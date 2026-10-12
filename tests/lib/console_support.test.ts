@@ -43,6 +43,22 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("drawio_viewer_bump_held")).toBe("action");
   });
 
+  test("treats a failed main CI as action", () => {
+    expect(noticeSeverity("main_ci_failed")).toBe("action");
+  });
+
+  test("treats a denied main CI check as action", () => {
+    expect(noticeSeverity("main_ci_check_denied")).toBe("action");
+  });
+
+  test("treats a failed pull request CI as action", () => {
+    expect(noticeSeverity("pr_ci_failed")).toBe("action");
+  });
+
+  test("treats a denied pull request CI check as action", () => {
+    expect(noticeSeverity("pr_ci_check_denied")).toBe("action");
+  });
+
   test("returns action for an unknown kind", () => {
     expect(noticeSeverity("some_future_kind")).toBe("action");
   });

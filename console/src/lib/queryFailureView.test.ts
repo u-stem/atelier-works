@@ -98,7 +98,7 @@ describe("describeQueryFailure for a view mismatch", () => {
 
   test("tells the operator to wait for the next update first", () => {
     expect(describeQueryFailure(VIEW_MISMATCH).nextStep).toContain(
-      "反映は10分ごとなので、しばらく待ってから開き直してください",
+      "反映は2分ごとなので、しばらく待ってから開き直してください",
     );
   });
 

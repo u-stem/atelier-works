@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import type { GateInput } from "../../f/factory/lib/dependabot_support.ts";
 import {
   addLabels,
   type ClaimIssueResult,
   ClaimOwnershipUnknownError,
   claimIssue,
   commentIssue,
+  compareCommits,
   createIssue,
   createPrReview,
   createPullRequest,
@@ -19,12 +21,19 @@ import {
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
   GitHubRateLimitError,
+  GitHubResponseError,
+  getAccountId,
   getBranchProtected,
+  getBranchRuleCount,
+  getBranchSha,
+  getFileAtRef,
   getIssue,
   getLabelerLogin,
   getPr,
   getPrDiff,
   getPrFiles,
+  getRepositoryId,
+  getRepositoryOwnerId,
   getViewer,
   gitIdentityForViewer,
   hasMarker,
@@ -32,10 +41,16 @@ import {
   isOwnPost,
   LabelerCheckLimitError,
   listIssueComments,
+  listPrChecks,
+  listPrCommits,
+  listPrFiles,
+  listPrHeadWorkflowRuns,
   listPrReviewComments,
   listPrReviews,
   listPullRequestNumbersByHead,
   listReviewThreads,
+  listWorkflowRuns,
+  mergePullRequest,
   parseGitHubRepoUrl,
   postIssueComment,
   removeLabel,
@@ -47,6 +62,7 @@ import {
   setLabels,
   updatePullRequest,
   updatePullRequestBody,
+  WorkflowRunsIncompleteError,
   withMarker,
 } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
@@ -206,6 +222,152 @@ describe("getViewer", () => {
     await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
       /unexpected response shape/,
     );
+  });
+});
+
+describe("getAccountId", () => {
+  test("returns the numeric id of the account", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "octo-owner", id: 4242 }),
+    ]);
+    const id = await getAccountId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+    );
+    expect(id).toBe(4242);
+  });
+
+  test("requests the users endpoint, which also serves organizations", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "octo-org", id: 7 }),
+    ]);
+    await getAccountId({ run: fake.run, ghToken: "tok" }, "octo-org");
+    expect(fake.calls[0]?.argv).toContain("users/octo-org");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getAccountId({ run: fake.run, ghToken: "tok" }, "gone"),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response whose id is not a number", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "octo-owner", id: "4242" }),
+    ]);
+    await expect(
+      getAccountId({ run: fake.run, ghToken: "tok" }, "octo-owner"),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("getRepositoryId", () => {
+  test("returns the numeric id of the repository", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ name: "factory", id: 777 }),
+    ]);
+    const id = await getRepositoryId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(id).toBe(777);
+  });
+
+  test("requests the repository endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 777 })]);
+    await getRepositoryId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(fake.calls[0]?.argv).toContain("repos/octo-owner/factory");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getRepositoryId({ run: fake.run, ghToken: "tok" }, "octo-owner", "gone"),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response whose id is not a number", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: "777" })]);
+    await expect(
+      getRepositoryId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("getRepositoryOwnerId", () => {
+  test("returns the numeric id of the owner of the repository", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { login: "octo-owner", id: 4242 } }),
+    ]);
+    const id = await getRepositoryOwnerId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(id).toBe(4242);
+  });
+
+  test("requests the repository endpoint", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { id: 4242 } }),
+    ]);
+    await getRepositoryOwnerId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(fake.calls[0]?.argv).toContain("repos/octo-owner/factory");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "gone",
+      ),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response without the owner", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 777 })]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a response whose owner id is not a number", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { id: "4242" } }),
+    ]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
   });
 });
 
@@ -2875,6 +3037,13 @@ describe("searchPrs", () => {
 });
 
 describe("getPr", () => {
+  test("reports an unexpected response shape as a response error", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: "12" })]);
+    await expect(
+      getPr({ run: fake.run, ghToken: "tok" }, "acme", "widgets", 12),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
   test("parses head/base/draft/mergeable_state/state/merged", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({
@@ -2889,9 +3058,11 @@ describe("getPr", () => {
           ref: "feature-x",
           repo: { full_name: "acme/widgets-fork" },
         },
-        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets", id: 99 } },
+        mergeable: true,
         mergeable_state: "clean",
-        user: { login: "alice" },
+        user: { login: "alice", type: "User" },
+        auto_merge: null,
       }),
     ]);
     const pr = await getPr(
@@ -2911,10 +3082,224 @@ describe("getPr", () => {
       headRef: "feature-x",
       headRepoFullName: "acme/widgets-fork",
       baseRepoFullName: "acme/widgets",
+      baseRepoId: 99,
       baseRef: "main",
+      mergeable: true,
       mergeableState: "clean",
       authorLogin: "alice",
+      authorType: "User",
+      autoMergeEnabled: false,
     });
+  });
+
+  // 実行のheadのリポジトリとIDで比べるために使うので、安全な正の整数でなければnullにする。
+  async function baseRepoIdFor(repo: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 18,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        auto_merge: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      18,
+    );
+    return pr.baseRepoId;
+  }
+
+  test("reads the base repository id", async () => {
+    expect(await baseRepoIdFor({ full_name: "acme/widgets", id: 7 })).toBe(7);
+  });
+
+  test("returns null when the base repository has no id", async () => {
+    expect(await baseRepoIdFor({ full_name: "acme/widgets" })).toBeNull();
+  });
+
+  test("returns null when the base repository id is not a positive integer", async () => {
+    expect(
+      await baseRepoIdFor({ full_name: "acme/widgets", id: -1 }),
+    ).toBeNull();
+  });
+
+  test("reports auto-merge as enabled when auto_merge is an object", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 15,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        auto_merge: { merge_method: "squash" },
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      15,
+    );
+    expect(pr.autoMergeEnabled).toBe(true);
+  });
+
+  // `auto_merge`が読めない形のときは、無効と決めつけず有効として扱い、修正を止める。
+  async function autoMergeFor(extra: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 17,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        ...extra,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      17,
+    );
+    return pr.autoMergeEnabled;
+  }
+
+  test("treats a missing auto_merge key as enabled", async () => {
+    expect(await autoMergeFor({})).toBe(true);
+  });
+
+  test("treats a boolean auto_merge as enabled", async () => {
+    expect(await autoMergeFor({ auto_merge: true })).toBe(true);
+  });
+
+  test("treats a string auto_merge as enabled", async () => {
+    expect(await autoMergeFor({ auto_merge: "squash" })).toBe(true);
+  });
+
+  test("treats an array auto_merge as enabled", async () => {
+    expect(await autoMergeFor({ auto_merge: [] })).toBe(true);
+  });
+
+  test("reports auto-merge as disabled when auto_merge is null", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 16,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        auto_merge: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      16,
+    );
+    expect(pr.autoMergeEnabled).toBe(false);
+  });
+
+  test("keeps mergeable null while GitHub has not computed it", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 14,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: null,
+        mergeable_state: "unknown",
+        user: { login: "dependabot[bot]", type: "Bot" },
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      14,
+    );
+    expect(pr.mergeable).toBeNull();
+  });
+
+  test("reports a Bot author type", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 14,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: false,
+        mergeable_state: "dirty",
+        user: { login: "dependabot[bot]", type: "Bot" },
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      14,
+    );
+    expect(pr.authorType).toBe("Bot");
+  });
+
+  test("returns null authorType when the author is missing", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 14,
+        title: "t",
+        body: null,
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: null },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable_state: null,
+        user: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      14,
+    );
+    expect(pr.authorType).toBeNull();
   });
 
   test("parses a merged, closed PR", async () => {
@@ -3423,6 +3808,71 @@ describe("getBranchProtected", () => {
       "main",
     );
     expect(protectedFlag).toBe(false);
+  });
+});
+
+describe("getBranchRuleCount", () => {
+  test("returns the number of rules that apply to the branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ type: "deletion" }, { type: "pull_request" }]),
+    ]);
+    const count = await getBranchRuleCount(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(count).toBe(2);
+  });
+
+  test("returns 0 when no rule applies", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    const count = await getBranchRuleCount(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(count).toBe(0);
+  });
+
+  test("encodes the branch name in the endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await getBranchRuleCount(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(fake.calls[0]?.argv[2]).toBe(
+      "repos/acme/widgets/rules/branches/feature%2Fx",
+    );
+  });
+
+  test("throws GitHubHttpError when the API answers 403", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "Resource not accessible" })),
+    ]);
+    await expect(
+      getBranchRuleCount(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "main",
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("throws when the response is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ message: "x" })]);
+    await expect(
+      getBranchRuleCount(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "main",
+      ),
+    ).rejects.toThrow("unexpected response shape");
   });
 });
 
@@ -4301,5 +4751,2500 @@ describe("ensureLabel", () => {
         LABEL_OPTS,
       ),
     ).rejects.toThrow(/HTTP 500/);
+  });
+});
+
+describe("listWorkflowRuns", () => {
+  const SHA = "a".repeat(40);
+  const rawRun = (overrides: Record<string, unknown> = {}) => ({
+    id: 101,
+    name: "CI",
+    head_sha: SHA,
+    head_branch: "main",
+    event: "push",
+    status: "completed",
+    conclusion: "success",
+    created_at: "2026-10-12T03:00:00Z",
+    html_url: "https://github.com/acme/widgets/actions/runs/101",
+    ...overrides,
+  });
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  test("reads one page of push runs on the branch", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ workflow_runs: [] })]);
+    await listWorkflowRuns(client(fake), "acme", "widgets", "main");
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=20",
+    );
+  });
+
+  test("encodes the branch name", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ workflow_runs: [] })]);
+    await listWorkflowRuns(client(fake), "acme", "widgets", "release/v1");
+    expect(
+      fake.calls[0]?.argv.some((arg) => arg.includes("release%2Fv1")),
+    ).toBe(true);
+  });
+
+  test("returns the runs with their fields parsed", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [rawRun({ conclusion: null, status: "queued" })],
+      }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(runs).toEqual([
+      {
+        id: 101,
+        name: "CI",
+        headSha: SHA,
+        status: "queued",
+        conclusion: null,
+        createdAt: new Date("2026-10-12T03:00:00Z"),
+        htmlUrl: "https://github.com/acme/widgets/actions/runs/101",
+      },
+    ]);
+  });
+
+  test("treats a null name as an empty name", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ name: null })] }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(runs[0]?.name).toBe("");
+  });
+
+  test("rejects non 40-hex sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_sha: "abc1234" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("throws when a run has an unexpected shape", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ status: 7 })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws when created_at is not a timestamp", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ created_at: "yesterday" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws when the body has no workflow_runs array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ total_count: 0 })]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  describe("by head sha", () => {
+    const page = (count: number, firstId = 1) =>
+      ghApiOk({
+        workflow_runs: Array.from({ length: count }, (_, i) =>
+          rawRun({ id: firstId + i }),
+        ),
+      });
+
+    test("asks for the push runs of that sha on the branch", async () => {
+      const fake = createFakeCommandRunner([page(1)]);
+      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      expect(fake.calls[0]?.argv).toContain(
+        `repos/acme/widgets/actions/runs?branch=main&head_sha=${SHA}&event=push&per_page=100&page=1`,
+      );
+    });
+
+    test("reads one page when it is not full", async () => {
+      const fake = createFakeCommandRunner([page(99)]);
+      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      expect(fake.calls).toHaveLength(1);
+    });
+
+    test("reads the next page when a page is full", async () => {
+      const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
+      const runs = await listWorkflowRuns(
+        client(fake),
+        "acme",
+        "widgets",
+        "main",
+        SHA,
+      );
+      expect(runs).toHaveLength(105);
+    });
+
+    test("asks for the second page with page=2", async () => {
+      const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
+      await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA);
+      expect(fake.calls[1]?.argv.some((arg) => arg.endsWith("&page=2"))).toBe(
+        true,
+      );
+    });
+
+    test("throws when three pages are all full", async () => {
+      const fake = createFakeCommandRunner([
+        page(100),
+        page(100, 1000),
+        page(100, 2000),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.toThrow("may be incomplete");
+    });
+
+    test("throws a WorkflowRunsIncompleteError when three pages are all full", async () => {
+      const fake = createFakeCommandRunner([
+        page(100),
+        page(100, 1000),
+        page(100, 2000),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+    });
+
+    test("returns an empty list when the sha has no run", async () => {
+      const fake = createFakeCommandRunner([page(0)]);
+      expect(
+        await listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).toEqual([]);
+    });
+
+    test("rejects non 40-hex sha before calling the API", async () => {
+      const fake = createFakeCommandRunner([]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", "abc1234"),
+      ).rejects.toThrow("invalid commit sha");
+    });
+
+    test("throws a WorkflowRunsIncompleteError when a run belongs to another sha", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk({ workflow_runs: [rawRun({ head_sha: "b".repeat(40) })] }),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+    });
+
+    test("does not treat a malformed run as a WorkflowRunsIncompleteError", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk({ workflow_runs: [rawRun({ status: 7 })] }),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.not.toBeInstanceOf(WorkflowRunsIncompleteError);
+    });
+  });
+
+  test("drops a run of another branch when listing the branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_branch: "feature" }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(runs.map((item) => item.id)).toEqual([2]);
+  });
+
+  test("drops a run without a branch when listing the branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_branch: null }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(runs.map((item) => item.id)).toEqual([2]);
+  });
+
+  test("drops a run that a pull request started when listing the branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, event: "pull_request" }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(runs.map((item) => item.id)).toEqual([2]);
+  });
+
+  test("still rejects the sha of a dropped run", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [rawRun({ head_branch: "feature", head_sha: "abc" })],
+      }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("checks the branch and the event when reading by head sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_branch: "v1" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+    ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+  });
+
+  test("throws an unexpected-shape error when head_branch or event is missing", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ event: undefined })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects an invalid owner before calling the API", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listWorkflowRuns(client(fake), "ac me", "widgets", "main"),
+    ).rejects.toThrow("invalid GitHub name");
+  });
+
+  test("surfaces a permission error with its status", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(403, {
+          message: "Resource not accessible by personal access token",
+        }),
+      ),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe("listPrHeadWorkflowRuns", () => {
+  const SHA = "a".repeat(40);
+  const REF = "factory/issue-3-wi-7";
+  const rawRun = (overrides: Record<string, unknown> = {}) => ({
+    id: 101,
+    workflow_id: 7,
+    name: "CI",
+    head_sha: SHA,
+    head_branch: REF,
+    event: "pull_request",
+    status: "completed",
+    conclusion: "success",
+    created_at: "2026-10-13T03:00:00Z",
+    html_url: "https://github.com/acme/widgets/actions/runs/101",
+    run_attempt: 1,
+    head_repository: { id: 55, full_name: "acme/widgets" },
+    pull_requests: [{ number: 12 }],
+    ...overrides,
+  });
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+  const listAll = (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    options: { baseRepoId?: number; prNumber?: number } = {},
+  ) =>
+    listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, REF, {
+      baseRepoId: 55,
+      ...options,
+    });
+  const list = async (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    options: { baseRepoId?: number; prNumber?: number } = {},
+  ) => (await listAll(fake, options)).runs;
+  const page = (count: number, firstId = 1) =>
+    ghApiOk({
+      workflow_runs: Array.from({ length: count }, (_, i) =>
+        rawRun({ id: firstId + i }),
+      ),
+    });
+
+  test("asks for the runs of that sha on the head branch", async () => {
+    const fake = createFakeCommandRunner([page(1)]);
+    await list(fake);
+    expect(fake.calls[0]?.argv).toContain(
+      `repos/acme/widgets/actions/runs?branch=${encodeURIComponent(REF)}&head_sha=${SHA}&per_page=100&page=1`,
+    );
+  });
+
+  test("returns the runs with the extra fields parsed", async () => {
+    const fake = createFakeCommandRunner([page(1)]);
+    expect(await list(fake, { baseRepoId: 55, prNumber: 12 })).toEqual([
+      {
+        id: 1,
+        workflowId: 7,
+        name: "CI",
+        headSha: SHA,
+        status: "completed",
+        conclusion: "success",
+        createdAt: new Date("2026-10-13T03:00:00Z"),
+        htmlUrl: "https://github.com/acme/widgets/actions/runs/101",
+        event: "pull_request",
+        headRepositoryFullName: "acme/widgets",
+        pullRequestNumbers: [12],
+        runAttempt: 1,
+      },
+    ]);
+  });
+
+  test("accepts the runs of the push event", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ event: "push" })] }),
+    ]);
+    expect((await list(fake)).map((item) => item.event)).toEqual(["push"]);
+  });
+
+  test("drops a run of another event", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, event: "workflow_dispatch" }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+  });
+
+  test("counts a dropped run when it decides the page is full", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: Array.from({ length: 100 }, (_, i) =>
+          rawRun({ id: i + 1, event: i === 0 ? "schedule" : "pull_request" }),
+        ),
+      }),
+      page(0),
+    ]);
+    await list(fake);
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  test("throws a WorkflowRunsIncompleteError for a run of another sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_sha: "b".repeat(40) })] }),
+    ]);
+    await expect(list(fake)).rejects.toBeInstanceOf(
+      WorkflowRunsIncompleteError,
+    );
+  });
+
+  test("throws a WorkflowRunsIncompleteError for a run of another branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_branch: "other" })] }),
+    ]);
+    await expect(list(fake)).rejects.toBeInstanceOf(
+      WorkflowRunsIncompleteError,
+    );
+  });
+
+  test("drops a run whose head repository has another id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({
+            id: 1,
+            head_repository: { id: 99, full_name: "acme/widgets" },
+          }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+  });
+
+  test("does not trust the repository name when the id matches", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ head_repository: { id: 55, full_name: "renamed/widgets" } }),
+        ],
+      }),
+    ]);
+    expect(await list(fake)).toHaveLength(1);
+  });
+
+  test("drops a run whose head repository is gone", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_repository: null }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+  });
+
+  test("drops a run whose head repository has no id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_repository: { full_name: "acme/widgets" } }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+  });
+
+  test("reports how many runs of another repository were dropped", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_repository: null }),
+          rawRun({
+            id: 2,
+            head_repository: { id: 99, full_name: "evil/widgets" },
+          }),
+          rawRun({ id: 3 }),
+        ],
+      }),
+    ]);
+    expect((await listAll(fake)).droppedOtherRepository).toBe(2);
+  });
+
+  test("reports no dropped run when every run is the base repository's", async () => {
+    const fake = createFakeCommandRunner([page(2)]);
+    expect(await listAll(fake)).toMatchObject({
+      droppedOtherRepository: 0,
+      droppedOtherPullRequest: 0,
+    });
+  });
+
+  test("throws a WorkflowRunsIncompleteError when every run was another repository's", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_repository: null }),
+          rawRun({
+            id: 2,
+            head_repository: { id: 99, full_name: "evil/widgets" },
+          }),
+        ],
+      }),
+    ]);
+    await expect(list(fake)).rejects.toBeInstanceOf(
+      WorkflowRunsIncompleteError,
+    );
+  });
+
+  test("throws a WorkflowRunsIncompleteError when the base repository id is wrong for every run", async () => {
+    const fake = createFakeCommandRunner([page(1)]);
+    await expect(list(fake, { baseRepoId: 56 })).rejects.toBeInstanceOf(
+      WorkflowRunsIncompleteError,
+    );
+  });
+
+  test("does not throw when the only runs dropped were of another pull request", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
+    ]);
+    expect(await list(fake, { prNumber: 12 })).toEqual([]);
+  });
+
+  test("does not throw when the only runs dropped were of another event", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ event: "schedule" })] }),
+    ]);
+    expect(await list(fake)).toEqual([]);
+  });
+
+  test("counts a dropped run when it decides the page is full", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: Array.from({ length: 100 }, (_, i) =>
+          rawRun(i === 0 ? { id: 1 } : { id: i + 1, head_repository: null }),
+        ),
+      }),
+      page(0),
+    ]);
+    await list(fake);
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  test("adopts a run whose pull_requests is empty", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ pull_requests: [] })] }),
+    ]);
+    expect(await list(fake, { baseRepoId: 55, prNumber: 12 })).toHaveLength(1);
+  });
+
+  test("drops a run whose pull_requests lacks the pull request", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
+    ]);
+    expect(await list(fake, { baseRepoId: 55, prNumber: 12 })).toEqual([]);
+  });
+
+  test("reports how many runs of another pull request were dropped", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
+    ]);
+    expect(
+      (await listAll(fake, { prNumber: 12 })).droppedOtherPullRequest,
+    ).toBe(1);
+  });
+
+  test("does not check pull_requests when no pull request number is given", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
+    ]);
+    expect(await list(fake, { baseRepoId: 55 })).toHaveLength(1);
+  });
+
+  test("throws when the run id is not a positive safe integer", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ id: 0 })] }),
+    ]);
+    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws when the run id is beyond the safe integer range", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ id: 2 ** 60 })] }),
+    ]);
+    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+  });
+
+  test("leaves workflowId out when the run has no workflow_id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ workflow_id: undefined })] }),
+    ]);
+    expect((await list(fake))[0]?.workflowId).toBeUndefined();
+  });
+
+  test("throws when workflow_id is not a positive safe integer", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ workflow_id: -1 })] }),
+    ]);
+    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+  });
+
+  test("throws when pull_requests is not an array", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ pull_requests: "none" })] }),
+    ]);
+    await expect(list(fake)).rejects.toThrow("unexpected response shape");
+  });
+
+  test("reads the next page when a page is full", async () => {
+    const fake = createFakeCommandRunner([page(100), page(5, 1000)]);
+    expect(await list(fake)).toHaveLength(105);
+  });
+
+  test("throws a WorkflowRunsIncompleteError when three pages are all full", async () => {
+    const fake = createFakeCommandRunner([
+      page(100),
+      page(100, 1000),
+      page(100, 2000),
+    ]);
+    await expect(list(fake)).rejects.toBeInstanceOf(
+      WorkflowRunsIncompleteError,
+    );
+  });
+
+  test("returns an empty list when the sha has no run", async () => {
+    const fake = createFakeCommandRunner([page(0)]);
+    expect(await list(fake)).toEqual([]);
+  });
+
+  test("rejects a short sha before calling the API", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", "abc1234", REF, {
+        baseRepoId: 55,
+      }),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("rejects a branch name that git would take as an option", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, "-x", {
+        baseRepoId: 55,
+      }),
+    ).rejects.toThrow("invalid branch name");
+  });
+
+  test("surfaces a permission error with its status", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "Resource not accessible" })),
+    ]);
+    await expect(list(fake)).rejects.toMatchObject({ status: 403 });
+  });
+
+  test("does not change what listWorkflowRuns returns", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          {
+            id: 101,
+            name: "CI",
+            head_sha: SHA,
+            head_branch: "main",
+            event: "push",
+            status: "completed",
+            conclusion: "success",
+            created_at: "2026-10-13T03:00:00Z",
+            html_url: "https://github.com/acme/widgets/actions/runs/101",
+          },
+        ],
+      }),
+    ]);
+    const runs = await listWorkflowRuns(
+      client(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(Object.keys(runs[0] ?? {}).sort()).toEqual([
+      "conclusion",
+      "createdAt",
+      "headSha",
+      "htmlUrl",
+      "id",
+      "name",
+      "status",
+    ]);
+  });
+});
+
+const CLIENT_TOKEN = "tok";
+const SHA_A = "a".repeat(40);
+const SHA_B = "b".repeat(40);
+const SHA_C = "c".repeat(40);
+
+describe("mergePullRequest", () => {
+  test("PUTs the merge endpoint of the pull request", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ sha: "merged-sha", merged: true, message: "ok" }),
+    ]);
+    await mergePullRequest(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+      SHA_A,
+    );
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["repos/acme/widgets/pulls/12/merge", "PUT"]),
+    );
+  });
+
+  test("squashes with the expected head sha and a fixed commit message", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ sha: "merged-sha", merged: true, message: "ok" }),
+    ]);
+    await mergePullRequest(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+      SHA_A,
+    );
+    expect(fake.calls[0]?.options?.stdin).toBe(
+      JSON.stringify({
+        merge_method: "squash",
+        sha: SHA_A,
+        commit_title: "chore: dependabotの依存更新をマージ(#12)",
+        commit_message: "",
+      }),
+    );
+  });
+
+  test("puts the pull request number in the commit title", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ sha: "merged-sha", merged: true, message: "ok" }),
+    ]);
+    await mergePullRequest(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      34,
+      SHA_A,
+    );
+    expect(fake.calls[0]?.options?.stdin).toContain("(#34)");
+  });
+
+  test("returns the merge commit sha on success", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ sha: "merged-sha", merged: true, message: "ok" }),
+    ]);
+    const result = await mergePullRequest(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+      SHA_A,
+    );
+    expect(result).toEqual({ merged: true, sha: "merged-sha" });
+  });
+
+  test("returns the status and message on 409", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(409, { message: "Head branch was modified." })),
+    ]);
+    const result = await mergePullRequest(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+      SHA_A,
+    );
+    expect(result).toEqual({
+      merged: false,
+      status: 409,
+      message: "Head branch was modified.",
+    });
+  });
+
+  test("returns the status and message on 405", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(405, { message: "Pull Request is not mergeable" })),
+    ]);
+    const result = await mergePullRequest(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+      SHA_A,
+    );
+    expect(result).toEqual({
+      merged: false,
+      status: 405,
+      message: "Pull Request is not mergeable",
+    });
+  });
+
+  test("returns an empty message when the 405 body has none", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(405, "not json"))]);
+    const result = await mergePullRequest(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+      SHA_A,
+    );
+    expect(result).toEqual({ merged: false, status: 405, message: "" });
+  });
+
+  test("throws GitHubHttpError with the status on 403", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "Resource not accessible" })),
+    ]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        SHA_A,
+      ),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 403 });
+  });
+
+  test("throws GitHubHttpError on 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        SHA_A,
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("throws when a 200 response has an unexpected shape", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ message: "ok" })]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws GitHubHttpError with the status on 422", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(422, { message: "Validation Failed" })),
+    ]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        SHA_A,
+      ),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 422 });
+  });
+
+  test("throws when a 200 response says not merged", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ sha: "x", merged: false, message: "no" }),
+    ]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        SHA_A,
+      ),
+    ).rejects.toThrow(/did not merge/);
+  });
+
+  test("rejects an abbreviated expected sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        "abc1234",
+      ),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+
+  test("rejects an expected sha that is not hexadecimal", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        "not a sha",
+      ),
+    ).rejects.toThrow(/sha/);
+  });
+});
+
+function checkRun(
+  name: string,
+  conclusion: string | null,
+  startedAt: string | null,
+  completedAt: string | null,
+  status = conclusion === null ? "in_progress" : "completed",
+  appId = 1,
+) {
+  return {
+    name,
+    app: { id: appId },
+    status,
+    conclusion,
+    started_at: startedAt,
+    completed_at: completedAt,
+  };
+}
+
+describe("listPrChecks", () => {
+  test("requests the check runs of the head sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ total_count: 0, check_runs: [] }),
+    ]);
+    await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining([
+        `repos/acme/widgets/commits/${SHA_A}/check-runs?per_page=100`,
+      ]),
+    );
+  });
+
+  test("returns the name and conclusion of each check", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 2,
+        check_runs: [
+          checkRun(
+            "lint",
+            "success",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+          ),
+          checkRun(
+            "test",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:02:00Z",
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([
+      { name: "lint", appId: 1, conclusion: "success" },
+      { name: "test", appId: 1, conclusion: "failure" },
+    ]);
+  });
+
+  test("keeps only the latest run of a rerun check", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 2,
+        check_runs: [
+          checkRun(
+            "test",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+          ),
+          checkRun(
+            "test",
+            "success",
+            "2026-10-01T00:05:00Z",
+            "2026-10-01T00:06:00Z",
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: "success" }]);
+  });
+
+  test("keeps the latest run when the newer one is listed first", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 2,
+        check_runs: [
+          checkRun(
+            "test",
+            "success",
+            "2026-10-01T00:05:00Z",
+            "2026-10-01T00:06:00Z",
+          ),
+          checkRun(
+            "test",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: "success" }]);
+  });
+
+  test("prefers the non-success run when two runs have identical times", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 2,
+        check_runs: [
+          checkRun(
+            "test",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+          ),
+          checkRun(
+            "test",
+            "success",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: "failure" }]);
+  });
+
+  test("treats an unfinished rerun as the latest with a null conclusion", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 2,
+        check_runs: [
+          checkRun(
+            "test",
+            "success",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+          ),
+          checkRun("test", null, null, null, "queued"),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: null }]);
+  });
+
+  test("does not hide a failure of another app's check with the same name", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 2,
+        check_runs: [
+          checkRun(
+            "test",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+            "completed",
+            1,
+          ),
+          checkRun(
+            "test",
+            "success",
+            "2026-10-01T00:05:00Z",
+            "2026-10-01T00:06:00Z",
+            "completed",
+            2,
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([
+      { name: "test", appId: 1, conclusion: "failure" },
+      { name: "test", appId: 2, conclusion: "success" },
+    ]);
+  });
+
+  test("folds check runs whose app is null by name", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 3,
+        check_runs: [
+          {
+            ...checkRun(
+              "old",
+              "failure",
+              "2026-10-01T00:00:00Z",
+              "2026-10-01T00:01:00Z",
+            ),
+            app: null,
+          },
+          {
+            ...checkRun(
+              "old",
+              "success",
+              "2026-10-01T00:05:00Z",
+              "2026-10-01T00:06:00Z",
+            ),
+            app: null,
+          },
+          checkRun(
+            "old",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+            "completed",
+            2,
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([
+      { name: "old", appId: null, conclusion: "success" },
+      { name: "old", appId: 2, conclusion: "failure" },
+    ]);
+  });
+
+  test("throws when a check run app is not an object", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 1,
+        check_runs: [
+          { ...checkRun("a", "success", null, null), app: "github-actions" },
+        ],
+      }),
+    ]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when a check run has no app id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 1,
+        check_runs: [
+          {
+            name: "a",
+            status: "completed",
+            conclusion: "success",
+            started_at: null,
+            completed_at: null,
+          },
+        ],
+      }),
+    ]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("reports a null conclusion for an unfinished check", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 1,
+        check_runs: [checkRun("build", null, "2026-10-01T00:00:00Z", null)],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([{ name: "build", appId: 1, conclusion: null }]);
+  });
+
+  test("reads every page of check runs", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(
+          200,
+          {
+            total_count: 2,
+            check_runs: [
+              checkRun(
+                "a",
+                "success",
+                "2026-10-01T00:00:00Z",
+                "2026-10-01T00:01:00Z",
+              ),
+            ],
+          },
+          {
+            link: `<https://api.github.com/repos/acme/widgets/commits/${SHA_A}/check-runs?per_page=100&page=2>; rel="next"`,
+          },
+        ),
+      ),
+      ghApiOk({
+        total_count: 2,
+        check_runs: [
+          checkRun(
+            "b",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks.map((check) => check.name)).toEqual(["a", "b"]);
+  });
+
+  test("rejects an abbreviated head sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "abc1234",
+      ),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+
+  test("rejects an uppercase head sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "A".repeat(40),
+      ),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+
+  test("throws when check_runs is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ check_runs: "none" })]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when a check run has no name", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 1,
+        check_runs: [
+          {
+            status: "completed",
+            conclusion: "success",
+            started_at: null,
+            completed_at: null,
+          },
+        ],
+      }),
+    ]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when a completed check run has no conclusion", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 1,
+        check_runs: [
+          checkRun(
+            "a",
+            null,
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+            "completed",
+          ),
+        ],
+      }),
+    ]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when a timestamp is not a date", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 1,
+        check_runs: [checkRun("a", "success", "yesterday", null)],
+      }),
+    ]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a head sha that is not hexadecimal", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "../x",
+      ),
+    ).rejects.toThrow(/sha/);
+  });
+});
+
+describe("listPrFiles", () => {
+  test("returns the filenames", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        { filename: "package.json", status: "modified" },
+        { filename: "bun.lock", status: "modified" },
+      ]),
+    ]);
+    const files = await listPrFiles(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files).toEqual(["package.json", "bun.lock"]);
+  });
+
+  test("includes the previous filename of a renamed file", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          filename: "docs/a.md",
+          status: "renamed",
+          previous_filename: ".github/workflows/a.yml",
+        },
+      ]),
+    ]);
+    const files = await listPrFiles(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files).toEqual(["docs/a.md", ".github/workflows/a.yml"]);
+  });
+
+  test("throws when previous_filename is not a string", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ filename: "a.ts", status: "renamed", previous_filename: 5 }]),
+    ]);
+    await expect(
+      listPrFiles(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("reads every page", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(200, [{ filename: "a.ts", status: "added" }], {
+          link: '<https://api.github.com/repos/acme/widgets/pulls/12/files?per_page=100&page=2>; rel="next"',
+        }),
+      ),
+      ghApiOk([{ filename: "b.ts", status: "added" }]),
+    ]);
+    const files = await listPrFiles(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(files).toEqual(["a.ts", "b.ts"]);
+  });
+
+  test("throws when an entry has no filename", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([{ status: "added" }])]);
+    await expect(
+      listPrFiles(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("reports a list at the 3000-file cap as a response error", async () => {
+    const entries = Array.from({ length: 3000 }, (_, index) => ({
+      filename: `f${String(index)}.ts`,
+      status: "added",
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(entries)]);
+    await expect(
+      listPrFiles(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("throws when the list reaches the 3000-file cap of the API", async () => {
+    const entries = Array.from({ length: 3000 }, (_, index) => ({
+      filename: `f${String(index)}.ts`,
+      status: "added",
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(entries)]);
+    await expect(
+      listPrFiles(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/truncated/);
+  });
+});
+
+function commitEntry(
+  sha: string,
+  author: { login: string; type: string } | null,
+  committer: { login: string; type: string } | null,
+  options: { verified?: boolean; parentCount?: number } = {},
+) {
+  const parentCount = options.parentCount ?? 1;
+  return {
+    sha,
+    author,
+    committer,
+    commit: {
+      message: "m",
+      verification: {
+        verified: options.verified ?? true,
+        reason: "valid",
+      },
+    },
+    parents: Array.from({ length: parentCount }, (_, index) => ({
+      sha: index.toString(16).padStart(40, "1"),
+    })),
+  };
+}
+
+const DEPENDABOT_ACCOUNT = { login: "dependabot[bot]", type: "Bot" };
+const WEB_FLOW_ACCOUNT = { login: "web-flow", type: "User" };
+
+describe("listPrCommits", () => {
+  test("returns the sha and the GitHub accounts of each commit", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        commitEntry(
+          SHA_A,
+          { login: "dependabot[bot]", type: "Bot" },
+          { login: "web-flow", type: "User" },
+        ),
+      ]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits).toEqual([
+      {
+        sha: SHA_A,
+        authorLogin: "dependabot[bot]",
+        authorType: "Bot",
+        committerLogin: "web-flow",
+        verified: true,
+        parentCount: 1,
+      },
+    ]);
+  });
+
+  test("reads a Dependabot commit as signed with one parent", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT, {
+          verified: true,
+          parentCount: 1,
+        }),
+      ]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits[0]).toMatchObject({
+      authorLogin: "dependabot[bot]",
+      committerLogin: "web-flow",
+      verified: true,
+      parentCount: 1,
+    });
+  });
+
+  test("reads a branch update merge commit as having two parents", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        commitEntry(SHA_A, WEB_FLOW_ACCOUNT, WEB_FLOW_ACCOUNT, {
+          verified: true,
+          parentCount: 2,
+        }),
+      ]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits[0]?.parentCount).toBe(2);
+  });
+
+  test("reports an unverified commit as not verified", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        commitEntry(SHA_A, DEPENDABOT_ACCOUNT, DEPENDABOT_ACCOUNT, {
+          verified: false,
+        }),
+      ]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits[0]?.verified).toBe(false);
+  });
+
+  test("returns commits in the shape the gate takes", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT)]),
+    ]);
+    const gateCommits: GateInput["commits"] = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(
+      gateCommits.map((commit) => [
+        commit.authorLogin,
+        commit.committerLogin,
+        commit.verified,
+        commit.parentCount,
+      ]),
+    ).toEqual([["dependabot[bot]", "web-flow", true, 1]]);
+  });
+
+  test("throws when a commit has no verification", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          sha: SHA_A,
+          author: null,
+          committer: null,
+          commit: { message: "m" },
+          parents: [],
+        },
+      ]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when verified is not a boolean", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          sha: SHA_A,
+          author: null,
+          committer: null,
+          commit: { verification: { verified: "true" } },
+          parents: [],
+        },
+      ]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when parents is not an array", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          sha: SHA_A,
+          author: null,
+          committer: null,
+          commit: { verification: { verified: true } },
+          parents: 1,
+        },
+      ]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("returns nulls for a commit without a GitHub account", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([commitEntry(SHA_A, null, null)]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits).toEqual([
+      {
+        sha: SHA_A,
+        authorLogin: null,
+        authorType: null,
+        committerLogin: null,
+        verified: true,
+        parentCount: 1,
+      },
+    ]);
+  });
+
+  test("reads every page", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(200, [commitEntry(SHA_A, null, null)], {
+          link: '<https://api.github.com/repos/acme/widgets/pulls/12/commits?per_page=100&page=2>; rel="next"',
+        }),
+      ),
+      ghApiOk([commitEntry(SHA_B, null, null)]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits.map((commit) => commit.sha)).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("throws when a commit has no sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ author: null, committer: null }]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when an author is not an object", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ sha: SHA_A, author: "alice", committer: null }]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("stops following pages after the pages the 250-commit cap allows", async () => {
+    const next = {
+      link: '<https://api.github.com/repos/acme/widgets/pulls/12/commits?per_page=100&page=2>; rel="next"',
+    };
+    const page = () =>
+      ok(ghApiStdout(200, [commitEntry(SHA_A, null, null)], next));
+    const fake = createFakeCommandRunner([
+      page(),
+      page(),
+      page(),
+      page(),
+      page(),
+      ghApiOk([]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/pagination exceeded/);
+  });
+
+  test("reports a list at the 250-commit cap as a response error", async () => {
+    const entries = Array.from({ length: 250 }, (_, index) =>
+      commitEntry(index.toString(16).padStart(40, "0"), null, null),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(entries)]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("throws when the list reaches the 250-commit cap of the API", async () => {
+    const entries = Array.from({ length: 250 }, (_, index) =>
+      commitEntry(index.toString(16).padStart(40, "0"), null, null),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(entries)]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/truncated/);
+  });
+});
+
+function compareBody(
+  overrides: { mergeBase?: unknown; files?: unknown; commits?: unknown } = {},
+) {
+  const body: Record<string, unknown> = {
+    status: "ahead",
+    merge_base_commit: { sha: overrides.mergeBase ?? SHA_B },
+    commits: overrides.commits ?? [
+      commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT),
+    ],
+  };
+  if (overrides.files !== null) {
+    body.files = overrides.files ?? [
+      { filename: "bun.lock", status: "modified" },
+    ];
+  }
+  return body;
+}
+
+const COMPARE_CLIENT = (fake: { run: GhClient["run"] }): GhClient => ({
+  run: fake.run,
+  ghToken: CLIENT_TOKEN,
+});
+
+describe("compareCommits", () => {
+  test("requests the three-dot comparison from the base sha to the head sha", async () => {
+    const fake = createFakeCommandRunner([ghApiOk(compareBody())]);
+    await compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A);
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining([
+        `repos/acme/widgets/compare/${SHA_C}...${SHA_A}?per_page=100`,
+      ]),
+    );
+  });
+
+  test("returns the merge base sha", async () => {
+    const fake = createFakeCommandRunner([ghApiOk(compareBody())]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      SHA_C,
+      SHA_A,
+    );
+    expect(result.mergeBaseSha).toBe(SHA_B);
+  });
+
+  test("returns the filename and status of each file", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          files: [
+            { filename: "package.json", status: "modified" },
+            { filename: "bun.lock", status: "modified" },
+          ],
+        }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      SHA_C,
+      SHA_A,
+    );
+    expect(result.files).toEqual([
+      { filename: "package.json", previousFilename: null, status: "modified" },
+      { filename: "bun.lock", previousFilename: null, status: "modified" },
+    ]);
+  });
+
+  test("returns the previous filename of a renamed file", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          files: [
+            {
+              filename: "docs/a.md",
+              previous_filename: ".github/workflows/a.yml",
+              status: "renamed",
+            },
+          ],
+        }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      SHA_C,
+      SHA_A,
+    );
+    expect(result.files[0]?.previousFilename).toBe(".github/workflows/a.yml");
+  });
+
+  test("throws when previous_filename is not a string", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          files: [
+            { filename: "a.ts", previous_filename: 5, status: "renamed" },
+          ],
+        }),
+      ),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("returns commits in the shape the gate takes", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          commits: [
+            commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT, {
+              parentCount: 2,
+            }),
+          ],
+        }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      SHA_C,
+      SHA_A,
+    );
+    const gateCommits: GateInput["commits"] = result.commits;
+    expect(
+      gateCommits.map((commit) => [
+        commit.authorLogin,
+        commit.committerLogin,
+        commit.verified,
+        commit.parentCount,
+      ]),
+    ).toEqual([["dependabot[bot]", "web-flow", true, 2]]);
+  });
+
+  test("reads the commits of every page", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(
+          200,
+          compareBody({ commits: [commitEntry(SHA_A, null, null)] }),
+          {
+            link: `<https://api.github.com/repos/acme/widgets/compare/${SHA_C}...${SHA_A}?per_page=100&page=2>; rel="next"`,
+          },
+        ),
+      ),
+      ghApiOk(
+        compareBody({ commits: [commitEntry(SHA_B, null, null)], files: null }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      SHA_C,
+      SHA_A,
+    );
+    expect(result.commits.map((commit) => commit.sha)).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("keeps the files of the first page when later pages have none", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(200, compareBody(), {
+          link: `<https://api.github.com/repos/acme/widgets/compare/${SHA_C}...${SHA_A}?per_page=100&page=2>; rel="next"`,
+        }),
+      ),
+      ghApiOk(
+        compareBody({ commits: [commitEntry(SHA_B, null, null)], files: null }),
+      ),
+    ]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      SHA_C,
+      SHA_A,
+    );
+    expect(result.files.map((file) => file.filename)).toEqual(["bun.lock"]);
+  });
+
+  test("throws when the first page has no files", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(compareBody({ files: null })),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the file list reaches the 300-file cap of the API", async () => {
+    const files = Array.from({ length: 300 }, (_, index) => ({
+      filename: `f${String(index)}.ts`,
+      status: "added",
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ files }))]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("accepts a file list just under the cap", async () => {
+    const files = Array.from({ length: 299 }, (_, index) => ({
+      filename: `f${String(index)}.ts`,
+      status: "added",
+    }));
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ files }))]);
+    const result = await compareCommits(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      SHA_C,
+      SHA_A,
+    );
+    expect(result.files).toHaveLength(299);
+  });
+
+  test("throws when the commit list reaches the 250-commit cap of the API", async () => {
+    const commits = Array.from({ length: 250 }, (_, index) =>
+      commitEntry(index.toString(16).padStart(40, "0"), null, null),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ commits }))]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("reports a truncated list as a response error", async () => {
+    const commits = Array.from({ length: 250 }, (_, index) =>
+      commitEntry(index.toString(16).padStart(40, "0"), null, null),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(compareBody({ commits }))]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("stops following pages after the pages the 250-commit cap allows", async () => {
+    const next = {
+      link: `<https://api.github.com/repos/acme/widgets/compare/${SHA_C}...${SHA_A}?per_page=100&page=2>; rel="next"`,
+    };
+    const page = () =>
+      ok(
+        ghApiStdout(
+          200,
+          compareBody({ commits: [commitEntry(SHA_A, null, null)] }),
+          next,
+        ),
+      );
+    const fake = createFakeCommandRunner([
+      page(),
+      page(),
+      page(),
+      page(),
+      ghApiOk(compareBody({ commits: [], files: null })),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/pagination exceeded/);
+  });
+
+  test("throws when the merge base sha is not a full sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(compareBody({ mergeBase: "abc123" })),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the merge base commit is missing", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ files: [], commits: [commitEntry(SHA_A, null, null)] }),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when a commit has no verification", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          commits: [
+            {
+              sha: SHA_A,
+              author: null,
+              committer: null,
+              commit: { message: "m" },
+              parents: [],
+            },
+          ],
+        }),
+      ),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when parents is not an array", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        compareBody({
+          commits: [
+            {
+              sha: SHA_A,
+              author: null,
+              committer: null,
+              commit: { verification: { verified: true } },
+              parents: 1,
+            },
+          ],
+        }),
+      ),
+    ]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, SHA_A),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a head that is not a full sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", SHA_C, "main"),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+
+  test("rejects a base that is a branch name instead of a sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      compareCommits(COMPARE_CLIENT(fake), "acme", "widgets", "main", SHA_A),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+});
+
+function branchRefBody(
+  branch: string,
+  overrides: { ref?: unknown; sha?: unknown; type?: unknown } = {},
+) {
+  return {
+    ref: overrides.ref ?? `refs/heads/${branch}`,
+    object: { sha: overrides.sha ?? SHA_B, type: overrides.type ?? "commit" },
+  };
+}
+
+describe("getBranchSha", () => {
+  test("reads the exact branch ref, not a name that tags can share", async () => {
+    const fake = createFakeCommandRunner([ghApiOk(branchRefBody("main"))]);
+    await getBranchSha(COMPARE_CLIENT(fake), "acme", "widgets", "main");
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining(["repos/acme/widgets/git/ref/heads/main"]),
+    );
+  });
+
+  test("keeps the slash of a branch name and encodes each segment", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(branchRefBody("release/1.0#beta")),
+    ]);
+    await getBranchSha(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "release/1.0#beta",
+    );
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining([
+        "repos/acme/widgets/git/ref/heads/release/1.0%23beta",
+      ]),
+    );
+  });
+
+  test("returns the sha of the branch", async () => {
+    const fake = createFakeCommandRunner([ghApiOk(branchRefBody("main"))]);
+    const sha = await getBranchSha(
+      COMPARE_CLIENT(fake),
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(sha).toBe(SHA_B);
+  });
+
+  test("throws a response error when the sha is not a full lowercase sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(branchRefBody("main", { sha: "B".repeat(40) })),
+    ]);
+    await expect(
+      getBranchSha(COMPARE_CLIENT(fake), "acme", "widgets", "main"),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("throws a response error when the ref is another ref", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(branchRefBody("main", { ref: "refs/tags/main" })),
+    ]);
+    await expect(
+      getBranchSha(COMPARE_CLIENT(fake), "acme", "widgets", "main"),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("throws a response error when the object is not a commit", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(branchRefBody("main", { type: "tag" })),
+    ]);
+    await expect(
+      getBranchSha(COMPARE_CLIENT(fake), "acme", "widgets", "main"),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("throws a response error when the response is a list", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([branchRefBody("main")])]);
+    await expect(
+      getBranchSha(COMPARE_CLIENT(fake), "acme", "widgets", "main"),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("throws an HTTP error for a branch that does not exist", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getBranchSha(COMPARE_CLIENT(fake), "acme", "widgets", "main"),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("rejects a name that is not a branch name", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      getBranchSha(COMPARE_CLIENT(fake), "acme", "widgets", "a...b"),
+    ).rejects.toThrow(/invalid branch name/);
+  });
+});
+
+function contentsResponse(
+  text: string,
+  path: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const base64 = Buffer.from(text, "utf8").toString("base64");
+  // GitHubは60桁ごとに改行を入れて返す。
+  const wrapped = base64.replace(/(.{60})/g, "$1\n");
+  return {
+    type: "file",
+    path,
+    encoding: "base64",
+    size: text.length,
+    content: wrapped,
+    ...overrides,
+  };
+}
+
+describe("getFileAtRef", () => {
+  test("requests the contents endpoint with the encoded ref", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(contentsResponse("x", ".github/dependabot.yml")),
+    ]);
+    await getFileAtRef(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      ".github/dependabot.yml",
+      "release/1.0",
+    );
+    expect(fake.calls[0]?.argv).toEqual(
+      expect.arrayContaining([
+        "repos/acme/widgets/contents/.github/dependabot.yml?ref=release%2F1.0",
+      ]),
+    );
+  });
+
+  test("decodes base64 content that contains line breaks and multibyte text", async () => {
+    const text = "version: 2\n# 日本語のコメント\n".repeat(10);
+    const fake = createFakeCommandRunner([
+      ghApiOk(contentsResponse(text, ".github/dependabot.yml")),
+    ]);
+    const content = await getFileAtRef(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      ".github/dependabot.yml",
+      SHA_A,
+    );
+    expect(content).toBe(text);
+  });
+
+  test("returns an empty string for an empty file", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(contentsResponse("", "empty.txt", { size: 0 })),
+    ]);
+    const content = await getFileAtRef(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      "empty.txt",
+      SHA_A,
+    );
+    expect(content).toBe("");
+  });
+
+  test("returns null when the file does not exist", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    const content = await getFileAtRef(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      "missing.yml",
+      SHA_A,
+    );
+    expect(content).toBeNull();
+  });
+
+  test("throws when the content is not returned (file over 1MB)", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        type: "file",
+        path: "big.json",
+        encoding: "none",
+        size: 2_000_000,
+        content: "",
+      }),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "big.json",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/content is not returned/);
+  });
+
+  test("throws when the response path differs from the requested path", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(contentsResponse("x", "other.yml")),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "a.yml",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the entry is a symlink", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(contentsResponse("x", "a.yml", { type: "symlink" })),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "a.yml",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the entry is a submodule", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ type: "submodule", path: "a.yml", sha: SHA_A }),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "a.yml",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the content is not valid base64", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(contentsResponse("x", "a.yml", { content: "!!not base64!!" })),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "a.yml",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when the content is not valid UTF-8", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        contentsResponse("x", "a.yml", {
+          content: Buffer.from([0xff, 0xfe, 0xfd]).toString("base64"),
+        }),
+      ),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "a.yml",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/not valid UTF-8/);
+  });
+
+  test("throws when the path is a directory", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ type: "file", name: "a" }]),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        ".github",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws GitHubHttpError on 403", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "forbidden" })),
+    ]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "a.yml",
+        SHA_A,
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+
+  test("rejects a path that climbs out of the repository", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      getFileAtRef(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "../secret",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/path/);
   });
 });

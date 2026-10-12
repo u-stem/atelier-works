@@ -1,15 +1,15 @@
-// `20261012120000_disk_usage_notice_single`のmigrationが、ディスク使用量の未解決の通知を最も新しい1件だけ残して解決し、
+// `20261013100200_disk_usage_notice_single`のmigrationが、ディスク使用量の未解決の通知を最も新しい1件だけ残して解決し、
 // その種類の未解決の通知を1件までにする部分一意索引を作ることを静的に確かめる。
 // 実際に重複が解決され、索引が2件目を拒むことは`mise run test:db`が確かめる。
 
 import { describe, expect, test } from "bun:test";
 
 const UP =
-  "migrations/datatable/main/20261012120000_disk_usage_notice_single.up.sql";
+  "migrations/datatable/main/20261013100200_disk_usage_notice_single.up.sql";
 const DOWN =
-  "migrations/datatable/main/20261012120000_disk_usage_notice_single.down.sql";
+  "migrations/datatable/main/20261013100200_disk_usage_notice_single.down.sql";
 
-describe("20261012120000_disk_usage_notice_single.up.sql", () => {
+describe("20261013100200_disk_usage_notice_single.up.sql", () => {
   test("keeps the newest open disk usage notice", async () => {
     expect(await Bun.file(UP).text()).toContain(
       "row_number() OVER (ORDER BY created_at DESC, id DESC) AS rn",
@@ -55,7 +55,7 @@ describe("20261012120000_disk_usage_notice_single.up.sql", () => {
   });
 });
 
-describe("20261012120000_disk_usage_notice_single.down.sql", () => {
+describe("20261013100200_disk_usage_notice_single.down.sql", () => {
   test("drops the index", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
       "DROP INDEX factory.notices_unresolved_disk_usage_key;",

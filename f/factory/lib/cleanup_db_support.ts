@@ -7,6 +7,9 @@ import { assertGitHubName, type FactoryConfig } from "./types.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/** 各PRの最新の記録を、保持期間の何倍まで残すか。 */
+const LATEST_RETENTION_FACTOR = 4;
+
 export type RetentionCutoffs = {
   /**
    * `updated_at`がこの時刻以前の、終端状態のwork_itemsを削除する。
@@ -18,12 +21,17 @@ export type RetentionCutoffs = {
    * 解決済みのnoticesの行を、work_itemsとは独立に削除する。
    */
   readonly logsBefore: Date;
+  /**
+   * 各PRの最新の`pr_ci_checks`の行を削除する基準。保持期間(`retention_logs_days`)の4倍前の時刻。
+   * 最新の行は、読み直しと今のheadの記録のために、ほかの行より長く残す。
+   */
+  readonly latestLogsBefore: Date;
 };
 
 /**
- * `cleanup_db.ts`が削除の基準にする2つの時刻を返す。
- * それぞれ`now`から設定の保持日数
- * (`retention_work_items_days`、`retention_logs_days`)を引いた時刻になる。
+ * `cleanup_db.ts`が削除の基準にする3つの時刻を返す。
+ * `now`から設定の保持日数(`retention_work_items_days`、`retention_logs_days`)を引いた時刻と、
+ * `retention_logs_days`の4倍を引いた時刻(`latestLogsBefore`)である。
  */
 export function computeRetentionCutoffs(
   now: Date,
@@ -37,6 +45,10 @@ export function computeRetentionCutoffs(
       now.getTime() - config.retention_work_items_days * DAY_MS,
     ),
     logsBefore: new Date(now.getTime() - config.retention_logs_days * DAY_MS),
+    latestLogsBefore: new Date(
+      now.getTime() -
+        config.retention_logs_days * LATEST_RETENTION_FACTOR * DAY_MS,
+    ),
   };
 }
 
@@ -53,6 +65,12 @@ export type CleanupCounts = {
   readonly notices_deleted: number;
   /** 保持期間を過ぎた「情報」の未解決の通知を、削除せず解決済みにした件数。 */
   readonly info_notices_resolved: number;
+  /** 保持期間を過ぎた、判定済みのmainのCIの記録(`main_ci_runs`)の削除件数。判定を待つ行と、各リポジトリの最新の行は消さない。 */
+  readonly main_ci_runs_deleted: number;
+  /** 保持期間を過ぎた、workerの負荷の記録(`worker_samples`)の削除件数。期限を過ぎた行はすべて消す。 */
+  readonly worker_samples_deleted: number;
+  /** 保持期間を過ぎた、PRのCIの判定済みの記録(`pr_ci_checks`)の削除件数。判定を待つ行は消さない。各PRの最新の行は保持期間の4倍まで残す。 */
+  readonly pr_ci_checks_deleted: number;
   /** 作業項目の削除に合わせて消した要件定義書のディレクトリ(`docDirsFor`)。 */
   readonly doc_dirs_deleted: number;
 };
@@ -65,6 +83,7 @@ export type CleanupCounts = {
  * `approval_requests_deleted`はwork_items削除のカスケードによる副作用、
  * `doc_dirs_deleted`は同じ削除に伴うファイルシステム上の副作用で、
  * どちらも独立した掃除ではないため意図的に省く。
+ * `main_ci_runs_deleted`、`worker_samples_deleted`、`pr_ci_checks_deleted`は、運用者が気にする対象ではない内部の記録の掃除なので省く。
  */
 export function summarizeCleanup(counts: CleanupCounts): string {
   const deleted =

@@ -14,6 +14,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAllowedCheckCommands } from "../../f/factory/lib/check_runner.ts";
 import {
@@ -31,6 +32,7 @@ import {
   resolveCheckPool,
   restoreCheckOwnership,
   type SlotHandle,
+  symlinksArgv,
   WINDMILL_TMP_DIR,
 } from "../../f/factory/lib/check_sandbox.ts";
 import {
@@ -1908,7 +1910,105 @@ suite("a tool's symlink to a system file", () => {
   });
 });
 
-suite("an incomplete symlink scan", () => {
+suite("symlinks with names that are not plain text", () => {
+  const fx = makeRepo();
+  const lockDir = join(fx.base, "slots");
+  let worktree = "";
+  let detected = "";
+  let names: string[] = [];
+  let nameBytes: string[] = [];
+  let underOddDir: string[] = [];
+
+  beforeAll(async () => {
+    mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
+    worktree = fx.addWorktree("names");
+    // 準備の時点にある、追跡されている内向きのsymlink。名前は`a`と`U+FFFD`。
+    writeFileSync(join(worktree, "ok"), "x\n");
+    Bun.spawnSync(["sh", "-c", 'ln -s ok "$(printf "a\\357\\277\\275")"'], {
+      cwd: worktree,
+    });
+    writeFileSync(
+      join(worktree, "names.sh"),
+      [
+        "ln -s /etc/passwd evil",
+        "ln -s ../ok dotdot",
+        "ln -s ok inside",
+        // 省いた印を、名前にしたもの。
+        "ln -s /etc/passwd '[... 5 bytes omitted ...]'",
+        // 追跡されている`a`+U+FFFDと同じ見た目になる、UTF-8でない外向きの名前。
+        'ln -s /etc/passwd "$(printf "a\\377")"',
+        // 名前の上限(255)に近い長い名前。
+        'ln -s /etc/passwd "$(printf "n%.0s" $(seq 1 250))"',
+        // UTF-8でない名前のディレクトリの下の外向きのsymlinkと、それを経由して外を指すsymlink。
+        'odd="$(printf "d\\377")"',
+        'mkdir "$odd"',
+        'ln -s /etc "$odd/x"',
+        'ln -s "$odd/x/passwd" y',
+        "",
+      ].join("\n"),
+    );
+    const results = await runChecks(
+      worktree,
+      ["sh ./names.sh"],
+      sandboxIn(lockDir, POOL),
+    );
+    detected = results.at(-1)?.output ?? "";
+    names = readdirSync(worktree);
+    nameBytes = readdirSync(worktree, { encoding: "buffer" }).map((name) =>
+      name.toString("hex"),
+    );
+    underOddDir = readdirSync(
+      Buffer.concat([Buffer.from(`${worktree}/`), Buffer.from([0x64, 0xff])]),
+    );
+  }, 60_000);
+
+  afterAll(() => {
+    // UTF-8でない名前は、Node由来の`rmSync`では消せない。
+    Bun.spawnSync(["rm", "-rf", fx.base]);
+  });
+
+  test("the scan is not called incomplete", () => {
+    expect(detected).not.toContain("was incomplete");
+  });
+
+  test("a symlink to an absolute path is removed", () => {
+    expect(names).not.toContain("evil");
+  });
+
+  test("a symlink with .. in its content is removed", () => {
+    expect(names).not.toContain("dotdot");
+  });
+
+  test("a relative symlink that stays inside is kept", () => {
+    expect(names).toContain("inside");
+  });
+
+  test("a symlink named like the omission marker is removed", () => {
+    expect(names.filter((name) => name.includes("omitted"))).toEqual([]);
+  });
+
+  test("a symlink with a long name is removed", () => {
+    expect(names.filter((name) => name.startsWith("nnnn"))).toEqual([]);
+  });
+
+  test("of a pair that looks the same, the tracked inward one is kept", () => {
+    expect(nameBytes).toContain("61efbfbd");
+  });
+
+  test("of a pair that looks the same, the non-UTF-8 outward one is removed", () => {
+    expect(nameBytes).not.toContain("61ff");
+  });
+
+  test("an outward symlink under a directory whose name is not UTF-8 is removed", () => {
+    expect(underOddDir).toEqual([]);
+  });
+
+  test("a symlink that reaches outside through it is removed", () => {
+    expect(names).not.toContain("y");
+  });
+});
+
+suite("a symlink scan that cannot read a symlink", () => {
   const fx = makeRepo();
   const lockDir = join(fx.base, "slots");
   let worktree = "";
@@ -1917,34 +2017,40 @@ suite("an incomplete symlink scan", () => {
 
   beforeAll(async () => {
     mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
-    worktree = fx.addWorktree("incomplete");
+    worktree = fx.addWorktree("unreadable");
     writeFileSync(
-      join(worktree, "incomplete.sh"),
+      join(worktree, "unreadable.sh"),
       [
-        "touch ok",
         "ln -s /etc/passwd evil",
         "ln -s ../ok dotdot",
         "ln -s ok inside",
-        // 省いた印を、名前にしたもの。
-        "ln -s /etc/passwd '[... 5 bytes omitted ...]'",
-        // 同じ見た目の名前の組。UTF-8でない外向きのものと、U+FFFDそのものを名前にした内向きのおとり。
-        'ln -s /etc/passwd "$(printf "a\\377")"',
-        'ln -s ok "$(printf "a\\357\\277\\275")"',
         "",
       ].join("\n"),
     );
+    const base = defaultSandboxDeps(lockDir);
+    // 中身を読めないsymlinkがあった場合に、全消しの後始末へ倒れることを確かめる。
     const results = await runChecks(
       worktree,
-      ["sh ./incomplete.sh"],
-      sandboxIn(lockDir, POOL),
+      ["sh ./unreadable.sh"],
+      createCheckSandbox({
+        uids: POOL,
+        deps: {
+          ...base,
+          readLink: async (path) => {
+            if (path.toString() === join(worktree, "evil")) {
+              throw new Error("ENAMETOOLONG");
+            }
+            return base.readLink(path);
+          },
+        },
+      }),
     );
     detected = results.at(-1)?.output ?? "";
     names = readdirSync(worktree);
   }, 60_000);
 
   afterAll(() => {
-    // UTF-8でない名前は、Node由来の`rmSync`では消せない。
-    Bun.spawnSync(["rm", "-rf", fx.base]);
+    fx.cleanup();
   });
 
   test("the failed check says every symlink with an absolute or .. content was removed", () => {
@@ -1958,21 +2064,62 @@ suite("an incomplete symlink scan", () => {
   test("a symlink with .. in its content is removed", () => {
     expect(names).not.toContain("dotdot");
   });
+});
 
-  test("a symlink named like the omission marker is removed", () => {
-    expect(names.filter((name) => name.includes("omitted"))).toEqual([]);
+suite("the file size limit of the symlink listing", () => {
+  const LINKS = 300;
+  const LIMIT = 1024;
+  let base = "";
+  let limited = { exitCode: 0, size: 0 };
+  let unlimited = { exitCode: -1, marks: "" };
+
+  const list = (file: string, limit?: number) => {
+    const dir = join(base, "tree");
+    const result = Bun.spawnSync(symlinksArgv(dir, file, limit));
+    return { exitCode: result.exitCode, marks: result.stdout.toString() };
+  };
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), "link-fsize-"));
+    mkdirSync(join(base, "tree"));
+    for (let i = 0; i < LINKS; i += 1) {
+      symlinkSync(
+        "/etc/passwd",
+        join(base, "tree", `${String(i).padStart(4, "0")}${"x".repeat(60)}`),
+      );
+    }
+    // 一覧は1件が70バイト近くになり、300件で`LIMIT`を大きく超える。
+    const small = list(join(base, "small.list"), LIMIT);
+    limited = {
+      exitCode: small.exitCode,
+      size: statSync(join(base, "small.list")).size,
+    };
+    const roomy = list(join(base, "roomy.list"));
+    unlimited = { exitCode: roomy.exitCode, marks: roomy.marks };
   });
 
-  test("a relative symlink that stays inside is kept", () => {
-    expect(names).toContain("inside");
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
   });
 
-  test("of a pair that looks the same, the non-UTF-8 outward one is removed and the decoy is kept", () => {
-    expect(names.filter((name) => name.startsWith("a"))).toEqual(["a\uFFFD"]);
+  test("find fails when it would write past the limit", () => {
+    expect(limited.exitCode).not.toBe(0);
+  });
+
+  test("the file does not grow past the limit", () => {
+    expect(limited.size).toBeLessThanOrEqual(LIMIT);
+  });
+
+  test("find succeeds within the default limit", () => {
+    expect(unlimited.exitCode).toBe(0);
+  });
+
+  test("find prints one mark per symlink", () => {
+    expect(unlimited.marks).toBe(".".repeat(LINKS));
   });
 });
 
-suite("a symlink list longer than the output limit", () => {
+suite("a symlink list of about 10 MiB", () => {
   const fx = makeRepo();
   const lockDir = join(fx.base, "slots");
   let worktree = "";
@@ -2008,8 +2155,8 @@ suite("a symlink list longer than the output limit", () => {
     fx.cleanup();
   });
 
-  test("the failed check says the list was cut short", () => {
-    expect(detected).toContain("cut short");
+  test("the scan is not called incomplete", () => {
+    expect(detected).not.toContain("was incomplete");
   });
 
   test("no symlink with an absolute content remains", () => {
@@ -2091,7 +2238,7 @@ suite("a run whose symlink scan was cut off", () => {
       deps: {
         ...base,
         run: async (argv, options) => {
-          if (scanning && argv.includes("-print0")) {
+          if (scanning && argv.includes("-fprint0")) {
             const handle = await base.slots.tryAcquire(0);
             lockHeldDuringScan = handle === null;
             await handle?.release();

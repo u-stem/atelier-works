@@ -203,6 +203,8 @@ const RESOLVER_LABELS: ReadonlyMap<string, string> = new Map([
   ["self_update", "自己更新(自動)"],
   ["poll_issues", "Issueの取得(自動)"],
   ["poll_prs", "PRの取得(自動)"],
+  ["watch_main_ci", "mainのCIの監視(自動)"],
+  ["watch_pr_ci", "PRのCIの監視(自動)"],
 ]);
 
 /**

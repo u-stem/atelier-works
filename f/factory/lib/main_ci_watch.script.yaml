@@ -1,0 +1,9 @@
+summary: '[LIB] mainのCI監視の流れ'
+description: 内部ライブラリです。直接実行するものではありません。対象リポジトリの新しいコミットの記録、判定、失敗の通知、通ったときの自動解決の流れを、外部の操作を注入して組み立てます。
+lock: '!inline f/factory/lib/main_ci_watch.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -39,12 +39,14 @@ import {
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import { openFactoryClone } from "./lib/factory_clone.ts";
 import {
   ClaimOwnershipUnknownError,
   claimIssue,
   type GhClient,
   GitHubHttpError,
   GitHubRateLimitError,
+  getAccountId,
   getIssue,
   getLabelerLogin,
   getViewer,
@@ -64,6 +66,7 @@ import {
   decideIssueActions,
   decideReconcileAction,
   filterByRepoAllowlist,
+  filterVerifiedOwners,
   groupActionableTargets,
   type IssueCandidate,
   type IssueDecision,
@@ -87,7 +90,6 @@ import type {
 } from "./lib/types.ts";
 import {
   type CommandRunner,
-  ensureFactoryClone,
   isReviewWorktreeOf,
   listWorktrees,
   pathExists,
@@ -189,11 +191,9 @@ async function checkDeployedSha(
   log: Logger,
 ): Promise<void> {
   try {
-    const factoryClone = await ensureFactoryClone({
+    const factoryClone = await openFactoryClone(config, {
       run: runCommand,
-      repoUrl: config.factory_repo,
       ghToken,
-      branch: config.factory_branch,
     });
     const selfSha = await readRepoHeadSha(runCommand, factoryClone.dir);
 
@@ -1365,7 +1365,15 @@ export async function main(): Promise<{
   );
 
   const rawCandidates: IssueSearchItem[] = [];
-  for (const owner of config.owners) {
+  const verified = await filterVerifiedOwners(config.owners, {
+    getAccountId: (name) => getAccountId(client, name),
+    recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+  });
+  failed += verified.failed;
+  // 照合を通ったオーナーだけを対象にする。
+  const scope = { ...config, owners: verified.owners };
+  for (const owner of verified.owners) {
     try {
       const found = await searchIssues(client, {
         owner: owner.name,
@@ -1379,7 +1387,7 @@ export async function main(): Promise<{
     }
   }
 
-  const allowed = filterByRepoAllowlist(rawCandidates, config);
+  const allowed = filterByRepoAllowlist(rawCandidates, scope);
   const candidates = await buildIssueCandidates(
     client,
     allowed,

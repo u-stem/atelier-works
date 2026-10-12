@@ -97,6 +97,26 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the failed main CI", () => {
+    expect(noticeKindLabel("main_ci_failed")).toBe("mainのCIの失敗");
+  });
+
+  test("names the denied main CI check", () => {
+    expect(noticeKindLabel("main_ci_check_denied")).toBe(
+      "mainのCIを読む権限の不足",
+    );
+  });
+
+  test("names the failed pull request CI", () => {
+    expect(noticeKindLabel("pr_ci_failed")).toBe("PRのCIの失敗");
+  });
+
+  test("names the denied pull request CI check", () => {
+    expect(noticeKindLabel("pr_ci_check_denied")).toBe(
+      "PRのCIを読む権限の不足",
+    );
+  });
+
   test("translates a known notice kind", () => {
     expect(noticeKindLabel("console_fetch_failed")).toBe(
       "Consoleの取り込みの失敗",
@@ -110,6 +130,12 @@ describe("noticeKindLabel", () => {
   test("translates the fork head denied notice kind", () => {
     expect(noticeKindLabel("fork_head_denied")).toBe(
       "forkのPRのレビューの見送り",
+    );
+  });
+
+  test("translates the factory repo id mismatch notice kind", () => {
+    expect(noticeKindLabel("factory_repo_id_mismatch")).toBe(
+      "Factory自身のリポジトリの照合の失敗",
     );
   });
 

@@ -7,14 +7,24 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
-import { getWorkItem, setHeadSha, updateStatusIfCurrent } from "../lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  getWorkItem,
+  setHeadSha,
+  updateStatusIfCurrent,
+} from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import {
+  type RepoOwnerGateResult,
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import { assertGitHubName, assertSha } from "../lib/types.ts";
 import {
   addDetachedWorktree,
-  ensureFactoryClone,
   ensureRepo,
   fetchPrHeadRef,
   runCommand,
@@ -115,14 +125,16 @@ export async function main(
       attempt: workItem.attempt,
     },
     {
+      checkRepoOwner: () =>
+        verifyRepoOwnerId(
+          config,
+          workItem.owner,
+          workItem.repo,
+          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
       getPr: (owner, repo, number) => getPr(client, owner, repo, number),
       ensureFactoryClone: () =>
-        ensureFactoryClone({
-          run: runCommand,
-          repoUrl: config.factory_repo,
-          ghToken,
-          branch: config.factory_branch,
-        }),
+        openFactoryClone(config, { run: runCommand, ghToken }),
       ensureRepo: (owner, repo) =>
         ensureRepo({ run: runCommand, owner, repo, ghToken }),
       fetchPrHeadRef: (repoDir, number) =>
@@ -131,8 +143,8 @@ export async function main(
         await addDetachedWorktree({ run: runCommand, ghToken, ...input });
       },
       setHeadSha,
-      blockForkHead: async (reason) => {
-        await blockReviewForForkHead(
+      blockReview: async (reason) => {
+        await blockReview(
           {
             work_item_id,
             owner: workItem.owner,
@@ -172,12 +184,13 @@ export type BlockReviewDeps = {
 };
 
 /**
- * 準備の関門で見送った`pr_review`を、終端の`blocked`にして理由を残し、人にDiscordで知らせる。
+ * 準備の関門(オーナーの数値IDの照合、forkのPR)で見送った`pr_review`を、
+ * 終端の`blocked`にして理由を残し、人にDiscordで知らせる。
  * `pr_fix`の準備の関門(`guard_blocked`)と同じ扱いである。
  * `reviewing`のまま残すと、reconcileが理由の分からない失敗として扱うためである。
  * すでにほかの処理が状態を進めていたときは、何も記録も通知もしない。
  */
-export async function blockReviewForForkHead(
+export async function blockReview(
   input: BlockReviewInput,
   deps: BlockReviewDeps,
 ): Promise<void> {
@@ -211,6 +224,11 @@ export type ReviewPrepareTarget = {
 
 /** `prepareReviewWorktree`が使う入出力。テストで差し替える。 */
 export type ReviewPrepareDeps = {
+  /**
+   * リポジトリのオーナーの数値IDを、設定の`owners`と照合する(`verifyRepoOwnerId`)。
+   * 通らなければ、PRの読み取りより前に止める。
+   */
+  readonly checkRepoOwner: () => Promise<RepoOwnerGateResult>;
   readonly getPr: (
     owner: string,
     repo: string,
@@ -228,16 +246,19 @@ export type ReviewPrepareDeps = {
     readonly dir: string;
   }) => Promise<void>;
   readonly setHeadSha: (id: number, sha: string) => Promise<void>;
-  /** forkのPRを見送るとき、作業項目を終端にして人に知らせる。 */
-  readonly blockForkHead: (reason: string) => Promise<void>;
+  /** 準備の関門でPRのレビューを見送るとき、作業項目を終端にして人に知らせる。 */
+  readonly blockReview: (reason: string) => Promise<void>;
 };
 
 /**
- * 多層防御のため、PRのheadがbaseと同じリポジトリにあるかを最初に確かめる。
+ * 多層防御のため、まずリポジトリのオーナーの数値IDを設定の`owners`と照合する。
+ * 通らないときは、PRの読み取りもcloneもfetchもworktreeの作成もせずに、
+ * 作業項目を`blockReview`で終端にして、理由つきで`skip`を返す。
+ * 次に、PRのheadがbaseと同じリポジトリにあるかを確かめる。
  * `poll_prs.ts`は、headがbaseと同じリポジトリにないPRのレビューを始めないが、
  * 作業項目を手で追加するなどの経路は止められない。
  * 通らないときは、forkの内容をcloneにもfetchにも入れず、worktreeも作らずに、
- * 作業項目を`blockForkHead`で終端にして飛ばす。
+ * 同じく作業項目を`blockReview`で終端にして飛ばす。
  */
 export async function prepareReviewWorktree(
   target: ReviewPrepareTarget,
@@ -245,13 +266,19 @@ export async function prepareReviewWorktree(
 ): Promise<PrReviewPrepareResult> {
   const { owner, repo, pr_number } = target;
 
+  const ownerGate = await deps.checkRepoOwner();
+  if (!ownerGate.ok) {
+    await deps.blockReview(ownerGate.reason);
+    return { skip: true, reason: ownerGate.reason, ...SKIPPED_BASE };
+  }
+
   const prForRepoCheck = await deps.getPr(owner, repo, pr_number);
   const sameRepoHead = evaluateSameRepoHeadGuard(
     prForRepoCheck.headRepoFullName,
     prForRepoCheck.baseRepoFullName,
   );
   if (!sameRepoHead.ok) {
-    await deps.blockForkHead(sameRepoHead.reason);
+    await deps.blockReview(sameRepoHead.reason);
     return { skip: true, reason: sameRepoHead.reason, ...SKIPPED_BASE };
   }
 

@@ -5,10 +5,11 @@
 import { describe, expect, test } from "bun:test";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type { PullRequest } from "../../f/factory/lib/github.ts";
+import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
 import {
   type BlockReviewDeps,
   type BlockReviewInput,
-  blockReviewForForkHead,
+  blockReview,
   buildReviewWorktreeDir,
   prepareReviewWorktree,
   type ReviewPrepareDeps,
@@ -59,6 +60,8 @@ describe("decideReviewPrepare", () => {
 });
 
 const HEAD_SHA = "a".repeat(40);
+const OWNER_REASON =
+  "repository owner id differs from factory_config owners: octo-owner/atelier-works (expected 1, actual 2)";
 const FORK_REASON = "head repository differs from base repository (fork PR)";
 
 function pullRequest(headRepoFullName: string | null): PullRequest {
@@ -73,9 +76,13 @@ function pullRequest(headRepoFullName: string | null): PullRequest {
     headRef: "feature",
     headRepoFullName,
     baseRepoFullName: "octo-owner/atelier-works",
+    baseRepoId: 1,
     baseRef: "main",
+    mergeable: null,
     mergeableState: null,
     authorLogin: "octo-owner",
+    authorType: null,
+    autoMergeEnabled: false,
   };
 }
 
@@ -89,10 +96,17 @@ const TARGET: ReviewPrepareTarget = {
 };
 
 /** 呼ばれた入出力の名前を`calls`に順に記録する。 */
-function recordingDeps(headRepoFullName: string | null) {
+function recordingDeps(
+  headRepoFullName: string | null,
+  ownerGate: RepoOwnerGateResult = { ok: true },
+) {
   const calls: string[] = [];
   const blocked: string[] = [];
   const deps: ReviewPrepareDeps = {
+    checkRepoOwner: async () => {
+      calls.push("checkRepoOwner");
+      return ownerGate;
+    },
     getPr: async () => {
       calls.push("getPr");
       return pullRequest(headRepoFullName);
@@ -114,14 +128,14 @@ function recordingDeps(headRepoFullName: string | null) {
     setHeadSha: async () => {
       calls.push("setHeadSha");
     },
-    blockForkHead: async (reason) => {
+    blockReview: async (reason) => {
       blocked.push(reason);
     },
   };
   return { deps, calls, blocked };
 }
 
-describe("blockReviewForForkHead", () => {
+describe("blockReview", () => {
   const INPUT: BlockReviewInput = {
     work_item_id: 11,
     owner: "octo-owner",
@@ -148,13 +162,13 @@ describe("blockReviewForForkHead", () => {
 
   test("moves the work item from reviewing to blocked with the reason", async () => {
     const { deps, transitions } = blockDeps(true);
-    await blockReviewForForkHead(INPUT, deps);
+    await blockReview(INPUT, deps);
     expect(transitions).toEqual([[11, "reviewing", "blocked", FORK_REASON]]);
   });
 
   test("notifies a person that the PR needs a human", async () => {
     const { deps, events } = blockDeps(true);
-    await blockReviewForForkHead(INPUT, deps);
+    await blockReview(INPUT, deps);
     expect(events[0]).toMatchObject({
       kind: "needs_human",
       url: "https://github.com/octo-owner/atelier-works/pull/7",
@@ -164,7 +178,7 @@ describe("blockReviewForForkHead", () => {
 
   test("does not notify when another process already moved the work item", async () => {
     const { deps, events } = blockDeps(false);
-    await blockReviewForForkHead(INPUT, deps);
+    await blockReview(INPUT, deps);
     expect(events).toEqual([]);
   });
 });
@@ -179,7 +193,7 @@ describe("prepareReviewWorktree", () => {
   test("does not clone, fetch, or create a worktree for a fork PR", async () => {
     const { deps, calls } = recordingDeps("mallory/atelier-works");
     await prepareReviewWorktree(TARGET, deps);
-    expect(calls).toEqual(["getPr"]);
+    expect(calls).toEqual(["checkRepoOwner", "getPr"]);
   });
 
   test("blocks the work item of a fork PR with the reason", async () => {
@@ -208,5 +222,38 @@ describe("prepareReviewWorktree", () => {
     const { deps, blocked } = recordingDeps("octo-owner/atelier-works");
     await prepareReviewWorktree(TARGET, deps);
     expect(blocked).toEqual([]);
+  });
+
+  test("skips with the reason when the owner id check stops it", async () => {
+    const { deps } = recordingDeps("octo-owner/atelier-works", {
+      ok: false,
+      reason: OWNER_REASON,
+    });
+    const result = await prepareReviewWorktree(TARGET, deps);
+    expect(result).toMatchObject({ skip: true, reason: OWNER_REASON });
+  });
+
+  test("touches nothing but the owner id check when it stops the review", async () => {
+    const { deps, calls } = recordingDeps("octo-owner/atelier-works", {
+      ok: false,
+      reason: OWNER_REASON,
+    });
+    await prepareReviewWorktree(TARGET, deps);
+    expect(calls).toEqual(["checkRepoOwner"]);
+  });
+
+  test("blocks the work item with the reason when the owner id check stops it", async () => {
+    const { deps, blocked } = recordingDeps("octo-owner/atelier-works", {
+      ok: false,
+      reason: OWNER_REASON,
+    });
+    await prepareReviewWorktree(TARGET, deps);
+    expect(blocked).toEqual([OWNER_REASON]);
+  });
+
+  test("checks the owner id before reading the pull request", async () => {
+    const { deps, calls } = recordingDeps("octo-owner/atelier-works");
+    await prepareReviewWorktree(TARGET, deps);
+    expect(calls[0]).toBe("checkRepoOwner");
   });
 });

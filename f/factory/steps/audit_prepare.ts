@@ -13,9 +13,10 @@ import {
 import { parsePeriodArgs } from "../lib/audit_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import { getWorkItem, updateStatusIfCurrent } from "../lib/db.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { logger } from "../lib/log.ts";
 import type { WorkItemStatus } from "../lib/types.ts";
-import { ensureFactoryClone, runCommand } from "../lib/workspace.ts";
+import { runCommand } from "../lib/workspace.ts";
 
 export type AuditPrepareResult = {
   readonly skip: boolean;
@@ -122,11 +123,9 @@ export async function main(
     instanceName: config.instance_name,
   });
   const ghToken = await wmill.getVariable("f/factory/github_token");
-  const clone = await ensureFactoryClone({
+  const clone = await openFactoryClone(config, {
     run: runCommand,
-    repoUrl: config.factory_repo,
     ghToken,
-    branch: config.factory_branch,
   });
 
   return {

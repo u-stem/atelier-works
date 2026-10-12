@@ -14,14 +14,39 @@ import {
   claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
+  deleteMainCiRunsBefore,
+  deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
+  deleteWorkerSamplesBefore,
+  getLatestPrCiCheck,
   getNoticeById,
+  getPreviousMainCiRun,
+  hasDependabotItemForHead,
   hasIntakeRefreshEvent,
+  hasMainCiRuns,
+  hasNewerMainCiRun,
+  hasNewerUnsettledOrFailedMainCiRun,
+  hasPassedMainCiRunAfter,
   insertCleanupRun,
+  insertDependabotWorkItemUnlessActive,
+  insertWorkerSample,
   insertWorkItem,
+  latestMainCiRunCreatedAt,
+  listFailedPrCiChecks,
+  listMainCiRunsBySha,
+  listNoCiPrCiChecksToRecheck,
+  listPendingMainCiRuns,
+  listPendingPrCiChecks,
+  listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
+  listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
+  markPrCiNotified,
+  type NewWorkerSample,
   recordDeployment,
   recordFailure,
+  recordMainCiRun,
+  recordPrCiCheck,
   recordWorkspaceDiskUsageNotice,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
@@ -30,10 +55,17 @@ import {
   resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  setWorkItemPrUrl,
+  touchPrCiCheck,
+  transitionMainCiRun,
+  transitionPrCiCheck,
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
-import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
+import {
+  getCleanupSummary,
+  getWorkerLoadSummary,
+} from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
 import {
   runConsoleQuery,
@@ -1081,6 +1113,9 @@ await insertCleanupRun(
     deployments_deleted: 0,
     notices_deleted: 2,
     info_notices_resolved: 3,
+    main_ci_runs_deleted: 4,
+    worker_samples_deleted: 5,
+    pr_ci_checks_deleted: 6,
     doc_dirs_deleted: 0,
   },
   sql,
@@ -1096,6 +1131,9 @@ const cleanupSummary = await getCleanupSummary(
 check(
   "cleanup_runs: the resolved info notices count is recorded and summed",
   cleanupSummary?.info_notices_resolved === 3 &&
+    cleanupSummary.main_ci_runs_deleted === 4 &&
+    cleanupSummary.worker_samples_deleted === 5 &&
+    cleanupSummary.pr_ci_checks_deleted === 6 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
 );
@@ -1540,6 +1578,1111 @@ check(
 );
 execPsql(target, "DELETE FROM factory.drawio_viewer_observations");
 
+// mainのCIの記録: 重複は入れず、移すのは判定待ちの行だけで、掃除は判定待ちの行を消さない。
+const CI_SHA_A = "a".repeat(40);
+const CI_SHA_B = "b".repeat(40);
+const CI_REPO = { owner: "qdb", repo: "ci" };
+check(
+  "main_ci_runs: a repository without rows is a first observation",
+  (await hasMainCiRuns(CI_REPO.owner, CI_REPO.repo, sql)) === false,
+);
+check(
+  "main_ci_runs: the first record is inserted",
+  (await recordMainCiRun(
+    {
+      ...CI_REPO,
+      head_sha: CI_SHA_A,
+      state: "pending",
+      run_created_at: new Date("2026-10-09T00:00:00Z"),
+    },
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: the same sha is not recorded twice",
+  (await recordMainCiRun(
+    {
+      ...CI_REPO,
+      head_sha: CI_SHA_A,
+      state: "baseline",
+      run_created_at: new Date("2026-10-09T00:00:00Z"),
+    },
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    ...CI_REPO,
+    head_sha: CI_SHA_B,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+const ciRows = await listMainCiRunsBySha(
+  CI_REPO.owner,
+  CI_REPO.repo,
+  [CI_SHA_A, CI_SHA_B],
+  sql,
+);
+check(
+  "main_ci_runs: the recorded rows are read back with their states",
+  ciRows
+    .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
+    .sort()
+    .join(",") === "a:pending,b:baseline",
+  ciRows,
+);
+check(
+  "main_ci_runs: only the pending row is due",
+  (await listPendingMainCiRuns(100, sql))
+    .filter((row) => row.owner === CI_REPO.owner)
+    .map((row) => row.head_sha)
+    .join(",") === CI_SHA_A,
+);
+const ciPending = ciRows.find((row) => row.head_sha === CI_SHA_A);
+if (ciPending === undefined) throw new Error("main_ci_runs row is missing");
+const ciSettled = {
+  state: "failed" as const,
+  summary: "失敗したworkflow: CI (failure)",
+  prevFailed: true,
+};
+check(
+  "main_ci_runs: transition moves a pending row once",
+  (await transitionMainCiRun(ciPending.id, ciSettled, sql)) === true &&
+    (await transitionMainCiRun(ciPending.id, ciSettled, sql)) === false,
+);
+const ciAfter = (
+  await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_A], sql)
+)[0];
+check(
+  "main_ci_runs: the transition stored the summary and prev_failed, and kept the run time",
+  ciAfter?.state === "failed" &&
+    ciAfter.prev_failed === true &&
+    ciAfter.summary === ciSettled.summary &&
+    ciAfter.run_created_at?.toISOString() === "2026-10-09T00:00:00.000Z",
+  ciAfter,
+);
+let ciRejectedSha = false;
+try {
+  await recordMainCiRun(
+    {
+      ...CI_REPO,
+      head_sha: "abc1234",
+      state: "pending",
+      run_created_at: new Date("2026-10-12T00:00:00Z"),
+    },
+    sql,
+  );
+} catch {
+  ciRejectedSha = true;
+}
+check(
+  "main_ci_runs: a short sha is rejected before the database",
+  ciRejectedSha,
+);
+let ciCheckRejected = false;
+try {
+  execPsql(
+    target,
+    `INSERT INTO factory.main_ci_runs (owner, repo, head_sha) VALUES ('qdb', 'ci', 'ABC')`,
+  );
+} catch {
+  ciCheckRejected = true;
+}
+check("main_ci_runs: the table rejects a malformed sha", ciCheckRejected);
+let ciLongSummaryRejected = false;
+try {
+  execPsql(
+    target,
+    `UPDATE factory.main_ci_runs SET summary = repeat('x', 401) WHERE owner = 'qdb' AND head_sha = '${CI_SHA_B}'`,
+  );
+} catch {
+  ciLongSummaryRejected = true;
+}
+check(
+  "main_ci_runs: the table rejects a summary over 400 characters",
+  ciLongSummaryRejected,
+);
+const ciPendingOther = "c".repeat(40);
+await recordMainCiRun(
+  {
+    ...CI_REPO,
+    head_sha: ciPendingOther,
+    state: "pending",
+    run_created_at: new Date("2026-10-12T01:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
+);
+const ciDeleted = await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+check(
+  "main_ci_runs: cleanup deletes the settled rows and keeps the pending row",
+  ciDeleted >= 2 &&
+    (
+      await listMainCiRunsBySha(
+        CI_REPO.owner,
+        CI_REPO.repo,
+        [ciPendingOther],
+        sql,
+      )
+    ).length === 1,
+  ciDeleted,
+);
+// 初回の観測の記録が最新のコミットだけで止まっても、高水位線はその最新の時刻まで上がる。
+const FIRST_REPO = { owner: "qdb", repo: "first" };
+await recordMainCiRun(
+  {
+    ...FIRST_REPO,
+    head_sha: CI_SHA_A,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main_ci_runs: recording only the newest baseline raises the watermark to it",
+  (
+    await latestMainCiRunCreatedAt(FIRST_REPO.owner, FIRST_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z",
+);
+
+// 掃除は、リポジトリごとの最新の行を残す。保持期間の後も、初回の観測に戻らない。
+const KEEP_REPO = { owner: "qdb", repo: "keep" };
+const CI_SHA_D = "d".repeat(40);
+const CI_SHA_E = "e".repeat(40);
+await recordMainCiRun(
+  {
+    ...KEEP_REPO,
+    head_sha: CI_SHA_D,
+    state: "baseline",
+    run_created_at: new Date("2026-10-11T00:00:00Z"),
+  },
+  sql,
+);
+await recordMainCiRun(
+  {
+    ...KEEP_REPO,
+    head_sha: CI_SHA_E,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+const keepPrevious = await getPreviousMainCiRun(
+  KEEP_REPO.owner,
+  KEEP_REPO.repo,
+  new Date("2026-10-12T00:00:00Z"),
+  sql,
+);
+check(
+  "main_ci_runs: the previous row is the newest one older than the run time",
+  keepPrevious?.head_sha === CI_SHA_D && keepPrevious.state === "baseline",
+  keepPrevious,
+);
+check(
+  "main_ci_runs: no row is older than the oldest run time",
+  (await getPreviousMainCiRun(
+    KEEP_REPO.owner,
+    KEEP_REPO.repo,
+    new Date("2026-10-11T00:00:00Z"),
+    sql,
+  )) === null,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'keep'",
+);
+await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+const keptRows = await listMainCiRunsBySha(
+  KEEP_REPO.owner,
+  KEEP_REPO.repo,
+  [CI_SHA_D, CI_SHA_E],
+  sql,
+);
+check(
+  "main_ci_runs: cleanup keeps the newest row of the repository",
+  keptRows.map((row) => row.head_sha).join(",") === CI_SHA_E,
+  keptRows,
+);
+check(
+  "main_ci_runs: the repository is not a first observation after the cleanup",
+  (await hasMainCiRuns(KEEP_REPO.owner, KEEP_REPO.repo, sql)) === true,
+);
+check(
+  "main_ci_runs: the newest run time survives the cleanup",
+  (
+    await latestMainCiRunCreatedAt(KEEP_REPO.owner, KEEP_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z",
+);
+// 新しいコミットを先に記録しても(小さいid)、実行の時刻が最新の行を残す。
+const LATE_REPO = { owner: "qdb", repo: "late" };
+const CI_SHA_F = "f".repeat(40);
+const CI_SHA_G = "1".repeat(40);
+await recordMainCiRun(
+  {
+    ...LATE_REPO,
+    head_sha: CI_SHA_F,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+await recordMainCiRun(
+  {
+    ...LATE_REPO,
+    head_sha: CI_SHA_G,
+    state: "baseline",
+    run_created_at: new Date("2026-10-11T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'late'",
+);
+await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+const lateRows = await listMainCiRunsBySha(
+  LATE_REPO.owner,
+  LATE_REPO.repo,
+  [CI_SHA_F, CI_SHA_G],
+  sql,
+);
+check(
+  "main_ci_runs: cleanup keeps the row with the newest run time, not the newest id",
+  lateRows.map((row) => row.head_sha).join(",") === CI_SHA_F,
+  lateRows,
+);
+check(
+  "main_ci_runs: the watermark is unchanged after the cleanup",
+  (
+    await latestMainCiRunCreatedAt(LATE_REPO.owner, LATE_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z" &&
+    (await hasMainCiRuns(LATE_REPO.owner, LATE_REPO.repo, sql)) === true,
+);
+
+// より新しいコミットの判定。並びの鍵は(実行の時刻、id)で、時刻が同じなら大きいidが後になる。
+const NEWER_REPO = { owner: "qdb", repo: "newer" };
+const newerShas = ["1", "2", "3", "4"].map((c) => c.repeat(40));
+const newerTimes = [
+  "2026-10-10T00:00:00Z",
+  "2026-10-11T00:00:00Z",
+  "2026-10-12T00:00:00Z",
+  "2026-10-12T00:00:00Z",
+];
+for (const [index, sha] of newerShas.entries()) {
+  await recordMainCiRun(
+    {
+      ...NEWER_REPO,
+      head_sha: sha,
+      state: "pending",
+      run_created_at: new Date(newerTimes[index] ?? ""),
+    },
+    sql,
+  );
+}
+const newerRows = await listMainCiRunsBySha(
+  NEWER_REPO.owner,
+  NEWER_REPO.repo,
+  newerShas,
+  sql,
+);
+const newerRow = (sha: string) => {
+  const found = newerRows.find((row) => row.head_sha === sha);
+  if (found === undefined) throw new Error("newer row is missing");
+  return found;
+};
+const [newerP, newerF, newerT1, newerT2] = newerShas.map(newerRow);
+if (
+  newerP === undefined ||
+  newerF === undefined ||
+  newerT1 === undefined ||
+  newerT2 === undefined
+) {
+  throw new Error("newer rows are missing");
+}
+const passedTransition = {
+  state: "passed" as const,
+  summary: "",
+  prevFailed: false,
+};
+await transitionMainCiRun(newerP.id, passedTransition, sql);
+await transitionMainCiRun(
+  newerF.id,
+  { state: "failed", summary: "x", prevFailed: false },
+  sql,
+);
+await transitionMainCiRun(newerT1.id, passedTransition, sql);
+await transitionMainCiRun(newerT2.id, passedTransition, sql);
+const at = (iso: string) => new Date(iso);
+check(
+  "main_ci_runs: a newer passed row is found",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-09T00:00:00Z"),
+    0,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: no newer passed row is found after the newest one",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-13T00:00:00Z"),
+    0,
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    owner: "qdb",
+    repo: "onlyfail",
+    head_sha: newerShas[0] ?? "",
+    state: "pending",
+    run_created_at: at("2026-10-10T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET state = 'failed' WHERE repo = 'onlyfail'",
+);
+check(
+  "main_ci_runs: a newer row of any state is found",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-11T00:00:00Z"),
+    newerF.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: the newest row has no newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT2.id,
+    sql,
+  )) === false,
+);
+check(
+  "main_ci_runs: at the same time, a larger id is a newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT1.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: a failed row is not a newer passed row",
+  (await hasPassedMainCiRunAfter(
+    "qdb",
+    "onlyfail",
+    at("2026-10-09T00:00:00Z"),
+    0,
+    sql,
+  )) === false &&
+    (await hasNewerUnsettledOrFailedMainCiRun(
+      "qdb",
+      "onlyfail",
+      at("2026-10-09T00:00:00Z"),
+      0,
+      sql,
+    )) === true,
+);
+check(
+  "main_ci_runs: at the same time, the larger id is the newer passed row",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT1.id,
+    sql,
+  )) === true &&
+    (await hasPassedMainCiRunAfter(
+      NEWER_REPO.owner,
+      NEWER_REPO.repo,
+      at("2026-10-12T00:00:00Z"),
+      newerT2.id,
+      sql,
+    )) === false,
+);
+
+// 通ったコミットが失敗の通知を解決してよいかの判断。新しい行が判定待ちか失敗なら、解決を待つ。
+const SAME_REPO = { owner: "qdb", repo: "sametime" };
+const sameShas = ["5", "6"].map((c) => c.repeat(40));
+for (const sha of sameShas) {
+  await recordMainCiRun(
+    {
+      ...SAME_REPO,
+      head_sha: sha,
+      state: "pending",
+      run_created_at: at("2026-10-12T00:00:00Z"),
+    },
+    sql,
+  );
+}
+const sameRows = await listMainCiRunsBySha(
+  SAME_REPO.owner,
+  SAME_REPO.repo,
+  sameShas,
+  sql,
+);
+const sameB = sameRows.find((row) => row.head_sha === sameShas[0]);
+const sameC = sameRows.find((row) => row.head_sha === sameShas[1]);
+if (sameB === undefined || sameC === undefined) {
+  throw new Error("sametime rows are missing");
+}
+await transitionMainCiRun(sameB.id, passedTransition, sql);
+await transitionMainCiRun(
+  sameC.id,
+  { state: "failed", summary: "x", prevFailed: false },
+  sql,
+);
+check(
+  "main_ci_runs: at the same time, a smaller id does not resolve the failure of a larger id",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    SAME_REPO.owner,
+    SAME_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    sameB.id,
+    sql,
+  )) === true &&
+    (await hasNewerUnsettledOrFailedMainCiRun(
+      SAME_REPO.owner,
+      SAME_REPO.repo,
+      at("2026-10-12T00:00:00Z"),
+      sameC.id,
+      sql,
+    )) === false,
+);
+const OTHERS_REPO = { owner: "qdb", repo: "settledothers" };
+const otherShas = ["7", "8", "9", "a", "b"].map((c) => c.repeat(40));
+const otherStates = ["passed", "expired", "no_ci", "baseline", "passed"];
+for (const [index, sha] of otherShas.entries()) {
+  await recordMainCiRun(
+    {
+      ...OTHERS_REPO,
+      head_sha: sha,
+      state: "baseline",
+      run_created_at: new Date(Date.UTC(2026, 9, 10 + index)),
+    },
+    sql,
+  );
+  execPsql(
+    target,
+    `UPDATE factory.main_ci_runs SET state = '${otherStates[index] ?? "baseline"}' WHERE repo = 'settledothers' AND head_sha = '${sha}'`,
+  );
+}
+const othersBase = (
+  await listMainCiRunsBySha(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    [otherShas[0] ?? ""],
+    sql,
+  )
+)[0];
+if (othersBase === undefined) throw new Error("settledothers row is missing");
+check(
+  "main_ci_runs: newer passed, expired, no_ci and baseline rows do not block the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    othersBase.id,
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    ...OTHERS_REPO,
+    head_sha: "c".repeat(40),
+    state: "pending",
+    run_created_at: at("2026-10-20T00:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main_ci_runs: a newer pending row blocks the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    othersBase.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: a newer failed row blocks the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    newerP.id,
+    sql,
+  )) === true,
+);
+await recordMainCiRun(
+  {
+    owner: "qdb",
+    repo: "othernewer",
+    head_sha: newerShas[0] ?? "",
+    state: "pending",
+    run_created_at: at("2026-10-20T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET state = 'passed' WHERE repo = 'othernewer'",
+);
+check(
+  "main_ci_runs: a passed row of another repository does not count",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-13T00:00:00Z"),
+    0,
+    sql,
+  )) === false,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.main_ci_runs (owner, repo, head_sha, state, first_seen_at, run_created_at)
+   VALUES ('qdb', 'nullrun', '${newerShas[1] ?? ""}', 'passed', '2026-10-13T00:00:00Z', NULL)`,
+);
+check(
+  "main_ci_runs: a row without a run time is ordered by its first seen time",
+  (await hasPassedMainCiRunAfter(
+    "qdb",
+    "nullrun",
+    at("2026-10-12T00:00:00Z"),
+    0,
+    sql,
+  )) === true &&
+    (await hasPassedMainCiRunAfter(
+      "qdb",
+      "nullrun",
+      at("2026-10-14T00:00:00Z"),
+      0,
+      sql,
+    )) === false,
+);
+execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
+
+// PRのCIの記録: headごとに1行で、移すのは期待する状態の行だけ、掃除は判定待ちの行と各PRの最新の行を消さない。
+const PR_CI = { owner: "qdb", repo: "prci" };
+const PR_SHA_1 = "1".repeat(40);
+const PR_SHA_2 = "2".repeat(40);
+const prCiNew = (prNumber: number, sha: string) => ({
+  ...PR_CI,
+  pr_number: prNumber,
+  head_sha: sha,
+  work_item_id: null,
+  run_created_at: null,
+});
+check(
+  "pr_ci_checks: the first record is inserted",
+  (await recordPrCiCheck(prCiNew(11, PR_SHA_1), sql)) === true,
+);
+check(
+  "pr_ci_checks: the same head of the same pull request is not recorded twice",
+  (await recordPrCiCheck(prCiNew(11, PR_SHA_1), sql)) === false,
+);
+check(
+  "pr_ci_checks: the same sha on another pull request is a separate row",
+  (await recordPrCiCheck(prCiNew(12, PR_SHA_1), sql)) === true,
+);
+check(
+  "pr_ci_checks: a work item id and a run time are stored",
+  (await recordPrCiCheck(
+    {
+      ...prCiNew(13, PR_SHA_1),
+      work_item_id: 4242,
+      run_created_at: new Date("2026-10-13T00:00:00Z"),
+    },
+    sql,
+  )) === true &&
+    (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 13, sql))
+      ?.work_item_id === 4242,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '2 hours' WHERE owner = 'qdb' AND pr_number = 11",
+);
+await recordPrCiCheck(prCiNew(11, PR_SHA_2), sql);
+const prCiRows = await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, 11, sql);
+check(
+  "pr_ci_checks: the rows of a pull request are listed from the newest head",
+  prCiRows.map((row) => row.head_sha.slice(0, 1)).join(",") === "2,1",
+  prCiRows,
+);
+check(
+  "pr_ci_checks: the latest row is the newest head",
+  (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 11, sql))?.head_sha ===
+    PR_SHA_2,
+);
+check(
+  "pr_ci_checks: a pull request without a row has no latest row",
+  (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 99, sql)) === null,
+);
+check(
+  "pr_ci_checks: pending rows are listed",
+  (await listPendingPrCiChecks(100, sql)).filter(
+    (row) => row.owner === PR_CI.owner,
+  ).length === 4,
+);
+const prCiOld = prCiRows.find((row) => row.head_sha === PR_SHA_1);
+if (prCiOld === undefined) throw new Error("pr_ci_checks row is missing");
+check(
+  "pr_ci_checks: a pending row moves once, keeping the summary of the move",
+  (await transitionPrCiCheck(
+    prCiOld.id,
+    "pending",
+    {
+      state: "failed",
+      summary: "失敗したworkflow: CI (failure)",
+      runCreatedAt: new Date("2026-10-13T01:00:00Z"),
+    },
+    sql,
+  )) === true &&
+    (await transitionPrCiCheck(
+      prCiOld.id,
+      "pending",
+      { state: "failed" },
+      sql,
+    )) === false,
+);
+check(
+  "pr_ci_checks: failed rows are listed",
+  (await listFailedPrCiChecks(100, sql)).filter(
+    (row) => row.owner === PR_CI.owner,
+  ).length === 1,
+);
+check(
+  "pr_ci_checks: a notified reason is written once",
+  (await markPrCiNotified(prCiOld.id, "ci_failure", sql)) === true &&
+    (await markPrCiNotified(prCiOld.id, "ci_failure", sql)) === false,
+);
+check(
+  "pr_ci_checks: a failed row goes back to passed",
+  (await transitionPrCiCheck(
+    prCiOld.id,
+    "failed",
+    { state: "passed" },
+    sql,
+  )) === true,
+);
+const prCiAfter = (
+  await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, 11, sql)
+).find((row) => row.id === prCiOld.id);
+check(
+  "pr_ci_checks: the move to passed kept the summary, the run time and the notified reason",
+  prCiAfter?.state === "passed" &&
+    prCiAfter.summary === "失敗したworkflow: CI (failure)" &&
+    prCiAfter.run_created_at?.toISOString() === "2026-10-13T01:00:00.000Z" &&
+    prCiAfter.notified_reason === "ci_failure",
+  prCiAfter,
+);
+let prCiTransitionRefused = false;
+try {
+  await transitionPrCiCheck(prCiOld.id, "passed", { state: "failed" }, sql);
+} catch {
+  prCiTransitionRefused = true;
+}
+check(
+  "pr_ci_checks: a transition that is not allowed is refused before the database",
+  prCiTransitionRefused,
+);
+for (const [name, statement] of [
+  [
+    "a malformed sha",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha) VALUES ('qdb', 'prci', 50, 'ABC')`,
+  ],
+  [
+    "a pull request number of zero",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha) VALUES ('qdb', 'prci', 0, '${PR_SHA_1}')`,
+  ],
+  [
+    "an unknown state",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha, state) VALUES ('qdb', 'prci', 51, '${PR_SHA_1}', 'baseline')`,
+  ],
+  [
+    "a summary over 400 characters",
+    `INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha, summary) VALUES ('qdb', 'prci', 52, '${PR_SHA_1}', repeat('x', 401))`,
+  ],
+] as const) {
+  let rejected = false;
+  try {
+    execPsql(target, statement);
+  } catch {
+    rejected = true;
+  }
+  check(`pr_ci_checks: the table rejects ${name}`, rejected);
+}
+
+// 巡回の順は、読み直していない順(checked_at)で、読み直した行は後ろに回る。
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+for (const prNumber of [41, 42, 43]) {
+  await recordPrCiCheck(prCiNew(prNumber, PR_SHA_1), sql);
+}
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET checked_at = now() - (50 - pr_number) * interval '1 hour' WHERE owner = 'qdb'",
+);
+const prCiOrder = async () =>
+  (await listPendingPrCiChecks(100, sql))
+    .filter((row) => row.owner === PR_CI.owner)
+    .map((row) => row.pr_number)
+    .join(",");
+check(
+  "pr_ci_checks: pending rows are listed from the one checked longest ago",
+  (await prCiOrder()) === "41,42,43",
+  await prCiOrder(),
+);
+const prCiFirst = await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 41, sql);
+if (prCiFirst === null) throw new Error("pr_ci_checks row is missing");
+check(
+  "pr_ci_checks: touching a pending row moves it to the back of the line",
+  (await touchPrCiCheck(prCiFirst.id, sql)) === true &&
+    (await prCiOrder()) === "42,43,41",
+  await prCiOrder(),
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'failed', checked_at = now() - (50 - pr_number) * interval '1 hour' WHERE owner = 'qdb'",
+);
+const prCiFailedOrder = async () =>
+  (await listFailedPrCiChecks(100, sql))
+    .filter((row) => row.owner === PR_CI.owner)
+    .map((row) => row.pr_number)
+    .join(",");
+await touchPrCiCheck(prCiFirst.id, sql);
+check(
+  "pr_ci_checks: failed rows are listed from the one checked longest ago",
+  (await prCiFailedOrder()) === "42,43,41",
+  await prCiFailedOrder(),
+);
+check(
+  "pr_ci_checks: touching does not move the update time",
+  (
+    await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 41, sql)
+  )?.updated_at.getTime() === prCiFirst.updated_at.getTime(),
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'passed' WHERE owner = 'qdb'",
+);
+check(
+  "pr_ci_checks: a row that is neither pending nor failed is not touched",
+  (await touchPrCiCheck(prCiFirst.id, sql)) === false,
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// headがA、B、Aと戻ったとき、Aの行はやり直しの行になる。
+const PR_BACK = 61;
+await recordPrCiCheck(prCiNew(PR_BACK, PR_SHA_1), sql);
+const prCiBackA = await getLatestPrCiCheck(
+  PR_CI.owner,
+  PR_CI.repo,
+  PR_BACK,
+  sql,
+);
+if (prCiBackA === null) throw new Error("pr_ci_checks row is missing");
+await transitionPrCiCheck(
+  prCiBackA.id,
+  "pending",
+  { state: "failed", summary: "失敗したworkflow: CI (failure)" },
+  sql,
+);
+await markPrCiNotified(prCiBackA.id, "ci_failure", sql);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number = 61",
+);
+await transitionPrCiCheck(prCiBackA.id, "failed", { state: "superseded" }, sql);
+await recordPrCiCheck(prCiNew(PR_BACK, PR_SHA_2), sql);
+const prCiBackB = await getLatestPrCiCheck(
+  PR_CI.owner,
+  PR_CI.repo,
+  PR_BACK,
+  sql,
+);
+if (prCiBackB === null) throw new Error("pr_ci_checks row is missing");
+check(
+  "pr_ci_checks: before the head comes back, the newest head is the latest row",
+  prCiBackB.head_sha === PR_SHA_2,
+);
+await transitionPrCiCheck(
+  prCiBackB.id,
+  "pending",
+  { state: "superseded" },
+  sql,
+);
+check(
+  "pr_ci_checks: leaving superseded without the reopen flag is refused",
+  await transitionPrCiCheck(
+    prCiBackA.id,
+    "superseded",
+    { state: "pending" },
+    sql,
+  )
+    .then(() => false)
+    .catch(() => true),
+);
+check(
+  "pr_ci_checks: a superseded row is reopened once",
+  (await transitionPrCiCheck(
+    prCiBackA.id,
+    "superseded",
+    { state: "pending", reopen: true },
+    sql,
+  )) === true &&
+    (await transitionPrCiCheck(
+      prCiBackA.id,
+      "superseded",
+      { state: "pending", reopen: true },
+      sql,
+    )) === false,
+);
+const prCiReopened = await getLatestPrCiCheck(
+  PR_CI.owner,
+  PR_CI.repo,
+  PR_BACK,
+  sql,
+);
+check(
+  "pr_ci_checks: after the head comes back, its row is the latest row",
+  prCiReopened?.id === prCiBackA.id,
+  prCiReopened,
+);
+check(
+  "pr_ci_checks: the reopened row forgets the notified reason and the summary",
+  prCiReopened?.state === "pending" &&
+    prCiReopened.notified_reason === null &&
+    prCiReopened.summary === "",
+  prCiReopened,
+);
+check(
+  "pr_ci_checks: the reopened row can be notified again",
+  (await markPrCiNotified(prCiBackA.id, "ci_failure", sql)) === true,
+);
+await transitionPrCiCheck(prCiBackA.id, "pending", { state: "failed" }, sql);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
+);
+await deletePrCiChecksBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  new Date(Date.now() - 120 * 24 * 60 * 60 * 1000),
+  sql,
+);
+check(
+  "pr_ci_checks: cleanup keeps the failed row of the head that came back and deletes the old head's row",
+  (await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, PR_BACK, sql))
+    .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
+    .join(",") === "1:failed",
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// 掃除は、判定待ちの行を残す。各PRの最新の行は保持期間の4倍まで残し、最新でない行は保持期間で消す。
+const PR_SHA_3 = "3".repeat(40);
+await recordPrCiCheck(prCiNew(21, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(21, PR_SHA_2), sql);
+await recordPrCiCheck(prCiNew(22, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(23, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(23, PR_SHA_3), sql);
+await recordPrCiCheck(prCiNew(24, PR_SHA_1), sql);
+await recordPrCiCheck(prCiNew(24, PR_SHA_2), sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number IN (21, 23, 24) AND head_sha = '${PR_SHA_1}'`,
+);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET state = 'superseded' WHERE pr_number = 21 AND head_sha = '${PR_SHA_1}'`,
+);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET state = 'passed' WHERE (pr_number = 21 AND head_sha = '${PR_SHA_2}') OR pr_number = 22`,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET state = 'failed' WHERE pr_number = 24",
+);
+const prCiCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+const prCiLatestCutoff = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
+);
+const prCiDeleted = await deletePrCiChecksBefore(
+  prCiCutoff,
+  prCiLatestCutoff,
+  sql,
+);
+const prCiLeft = async (prNumber: number) =>
+  (await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, prNumber, sql))
+    .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
+    .join(",");
+check(
+  "pr_ci_checks: cleanup deletes the old superseded row and keeps the newest passed row for now",
+  (await prCiLeft(21)) === "2:passed",
+  await prCiLeft(21),
+);
+check(
+  "pr_ci_checks: cleanup keeps the only row of a pull request for now",
+  (await prCiLeft(22)) === "1:passed",
+  await prCiLeft(22),
+);
+check(
+  "pr_ci_checks: cleanup keeps the pending rows",
+  (await prCiLeft(23)) === "3:pending,1:pending",
+  await prCiLeft(23),
+);
+check(
+  "pr_ci_checks: cleanup keeps the newest failed row and deletes the older failed row",
+  (await prCiLeft(24)) === "2:failed",
+  await prCiLeft(24),
+);
+check(
+  "pr_ci_checks: cleanup counted the two rows that were not the newest",
+  prCiDeleted === 2,
+  prCiDeleted,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '150 days' WHERE owner = 'qdb'",
+);
+const prCiDeletedLatest = await deletePrCiChecksBefore(
+  prCiCutoff,
+  prCiLatestCutoff,
+  sql,
+);
+check(
+  "pr_ci_checks: after four times the retention, the newest rows are deleted whatever their state",
+  (await prCiLeft(21)) === "" &&
+    (await prCiLeft(22)) === "" &&
+    (await prCiLeft(24)) === "",
+  [await prCiLeft(21), await prCiLeft(22), await prCiLeft(24)],
+);
+check(
+  "pr_ci_checks: the pending rows survive however old they are",
+  (await prCiLeft(23)) === "3:pending,1:pending",
+  await prCiLeft(23),
+);
+check(
+  "pr_ci_checks: the second sweep counted the three newest rows",
+  prCiDeletedLatest === 3,
+  prCiDeletedLatest,
+);
+check(
+  "pr_ci_checks: a latest cutoff later than the cutoff is refused",
+  await deletePrCiChecksBefore(prCiLatestCutoff, prCiCutoff, sql)
+    .then(() => false)
+    .catch(() => true),
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// no_ci の行は、実行が遅れて作られた場合のために、今のheadの行だけを遅い間隔で読み直す。
+const PR_NO_CI = [81, 82, 83];
+for (const prNumber of PR_NO_CI) {
+  await recordPrCiCheck(prCiNew(prNumber, PR_SHA_1), sql);
+}
+await recordPrCiCheck(prCiNew(82, PR_SHA_2), sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number = 82 AND head_sha = '${PR_SHA_1}'`,
+);
+for (const prNumber of PR_NO_CI) {
+  const row = (
+    await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, prNumber, sql)
+  ).find((item) => item.head_sha === PR_SHA_1);
+  if (row === undefined) throw new Error("pr_ci_checks row is missing");
+  await transitionPrCiCheck(row.id, "pending", { state: "no_ci" }, sql);
+}
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET checked_at = now() - interval '3 hours' WHERE pr_number IN (81, 82)",
+);
+const prCiNoCi = await listNoCiPrCiChecksToRecheck(
+  new Date(Date.now() - 60 * 60 * 1000),
+  100,
+  sql,
+);
+check(
+  "pr_ci_checks: only the newest no_ci row of a pull request that was not checked lately is rechecked",
+  prCiNoCi
+    .filter((row) => row.owner === PR_CI.owner)
+    .map((row) => row.pr_number)
+    .join(",") === "81",
+  prCiNoCi.map((row) => `${row.pr_number}:${row.head_sha.slice(0, 1)}`),
+);
+const prCiNoCiRow = prCiNoCi.find((row) => row.pr_number === 81);
+if (prCiNoCiRow === undefined) throw new Error("no_ci row is missing");
+check(
+  "pr_ci_checks: touching a no_ci row takes it out of the recheck list",
+  (await touchPrCiCheck(prCiNoCiRow.id, sql)) === true &&
+    (
+      await listNoCiPrCiChecksToRecheck(
+        new Date(Date.now() - 60 * 60 * 1000),
+        100,
+        sql,
+      )
+    ).every((row) => row.pr_number !== 81),
+);
+check(
+  "pr_ci_checks: a no_ci row can be judged again once its runs appear",
+  (await transitionPrCiCheck(
+    prCiNoCiRow.id,
+    "no_ci",
+    { state: "passed", runCreatedAt: new Date("2026-10-13T05:00:00Z") },
+    sql,
+  )) === true,
+);
+check(
+  "pr_ci_checks: a no_ci row cannot expire",
+  await transitionPrCiCheck(
+    (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 83, sql))?.id ?? 0,
+    "no_ci",
+    { state: "expired" },
+    sql,
+  )
+    .then(() => false)
+    .catch(() => true),
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// owner と repo は小文字で記録し、大文字で引いても同じ行に当たる。
+check(
+  "pr_ci_checks: the owner and repo are stored in lower case and found by any case",
+  (await recordPrCiCheck(
+    { ...prCiNew(71, PR_SHA_1), owner: "QDB", repo: "PrCi" },
+    sql,
+  )) === true &&
+    (await recordPrCiCheck(prCiNew(71, PR_SHA_1), sql)) === false &&
+    (await listPrCiChecksForPr("QDB", "PRCI", 71, sql)).length === 1,
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
 // ---------------------------------------------------------------------------
 // 未解決の通知の重複の抑止
 // ---------------------------------------------------------------------------
@@ -1720,6 +2863,646 @@ check(
 execPsql(
   target,
   `DELETE FROM factory.notices WHERE kind = '${DISK_USAGE_KIND}'`,
+);
+
+// dependabotの作業項目は、kindのCHECK制約を通り、アプリの挿入の関数で入る。
+// 戻せることは、後で適用するdown migrationが確かめる。
+const dependabotItem = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "dependabot",
+    owner: OWNER,
+    repo: "r",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 9001,
+    title: "qdb dependabot item",
+    body: null,
+    status: "picked",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+check(
+  "kind: a dependabot work item can be inserted",
+  dependabotItem > 0,
+  dependabotItem,
+);
+
+// dependabotの作業項目の部分一意インデックス(`work_items_active_dependabot_key`)は、
+// 同じPRの終端でない2件目を拒み、終端になれば同じPRに入れ、ほかの種類の行には影響しない。
+const DEPENDABOT_SHA_A = "a".repeat(40);
+const DEPENDABOT_SHA_B = "b".repeat(40);
+function dependabotCandidate(pr: number, headSha: string) {
+  return {
+    owner: OWNER,
+    repo: "r",
+    pr_number: pr,
+    title: "qdb dependabot candidate",
+    status: "picked" as const,
+    claimed_by: null,
+    head_sha: headSha,
+  };
+}
+const dependabotFirst = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: the first insert for a pull request returns the id",
+  dependabotFirst !== null && dependabotFirst > 0,
+  dependabotFirst,
+);
+const dependabotSecond = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_B),
+  sql,
+);
+check(
+  "dependabot intake: a second active work item for the same pull request returns null",
+  dependabotSecond === null,
+  dependabotSecond,
+);
+const dependabotOtherPr = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9102, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: another pull request is not blocked",
+  dependabotOtherPr !== null && dependabotOtherPr > 0,
+  dependabotOtherPr,
+);
+await prWorkItem("pr_review", 9103, "reviewing", "qdb-dependabot-other-kind");
+const dependabotNextToReview = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9103, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: an active review of the same pull request does not block",
+  dependabotNextToReview !== null && dependabotNextToReview > 0,
+  dependabotNextToReview,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'needs_human' WHERE id = ${String(dependabotFirst)}`,
+);
+const dependabotAfterTerminal = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_B),
+  sql,
+);
+check(
+  "dependabot intake: a pull request whose work item is terminal can start again",
+  dependabotAfterTerminal !== null && dependabotAfterTerminal > 0,
+  dependabotAfterTerminal,
+);
+check(
+  "dependabot head: a terminal row for the head counts",
+  (await hasDependabotItemForHead(OWNER, "r", 9101, DEPENDABOT_SHA_A, sql)) ===
+    true,
+);
+check(
+  "dependabot head: an active row for the head counts",
+  (await hasDependabotItemForHead(OWNER, "r", 9101, DEPENDABOT_SHA_B, sql)) ===
+    true,
+);
+check(
+  "dependabot head: a head without a row does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9102, DEPENDABOT_SHA_B, sql)) ===
+    false,
+);
+check(
+  "dependabot head: a row of another pull request does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9104, DEPENDABOT_SHA_A, sql)) ===
+    false,
+);
+const reviewWithHead = await prWorkItem(
+  "pr_review",
+  9105,
+  "reviewing",
+  "qdb-dependabot-review-head",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET head_sha = '${DEPENDABOT_SHA_A}' WHERE id = ${String(reviewWithHead)}`,
+);
+check(
+  "dependabot head: a row of another kind does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9105, DEPENDABOT_SHA_A, sql)) ===
+    false,
+);
+
+// worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
+const fullWorkerSample = {
+  sampled_at: new Date("2026-10-12T03:09:00.000Z"),
+  scheduled_for: new Date("2026-10-12T03:08:30.000Z"),
+  slots: 3,
+  running_jobs: 2,
+  running_by_script: { "f/factory/poll_prs": 1, other: 1 },
+  waiting_jobs: 1,
+  max_wait_seconds: 90,
+  lag_seconds: 2,
+  mem_current_bytes: 4_000_000_000,
+  mem_anon_bytes: 80_125_952,
+  mem_working_set_bytes: 273_625_088,
+  mem_peak_bytes: 4_294_967_296,
+  mem_limit_bytes: 4_294_967_296,
+  mem_events_max: 4,
+  mem_oom: 0,
+  mem_oom_kill: 0,
+  mem_pressure_total_us: null,
+};
+const nullWorkerSample = {
+  sampled_at: new Date("2026-10-12T03:11:00.000Z"),
+  scheduled_for: null,
+  slots: 3,
+  running_jobs: null,
+  running_by_script: null,
+  waiting_jobs: null,
+  max_wait_seconds: null,
+  lag_seconds: null,
+  mem_current_bytes: null,
+  mem_anon_bytes: null,
+  mem_working_set_bytes: null,
+  mem_peak_bytes: null,
+  mem_limit_bytes: null,
+  mem_events_max: null,
+  mem_oom: null,
+  mem_oom_kill: null,
+  mem_pressure_total_us: null,
+};
+const fullWorkerSampleId = await insertWorkerSample(fullWorkerSample, sql);
+const nullWorkerSampleId = await insertWorkerSample(nullWorkerSample, sql);
+const recentWorkerSamples = await listRecentWorkerSamples(2, sql);
+const nullWorkerRow = recentWorkerSamples.find(
+  (row) => row.id === nullWorkerSampleId,
+);
+const fullWorkerRow = recentWorkerSamples.find(
+  (row) => row.id === fullWorkerSampleId,
+);
+check(
+  "worker_samples: a row with every value unreadable is inserted as nulls",
+  nullWorkerRow !== undefined &&
+    nullWorkerRow.slots === 3 &&
+    nullWorkerRow.running_jobs === null &&
+    nullWorkerRow.running_by_script === null &&
+    nullWorkerRow.scheduled_for === null &&
+    nullWorkerRow.mem_current_bytes === null,
+  nullWorkerRow,
+);
+check(
+  "worker_samples: the bigint, jsonb, and timestamp columns read back",
+  fullWorkerRow !== undefined &&
+    fullWorkerRow.mem_current_bytes === 4_000_000_000 &&
+    fullWorkerRow.mem_limit_bytes === 4_294_967_296 &&
+    fullWorkerRow.running_by_script?.["f/factory/poll_prs"] === 1 &&
+    fullWorkerRow.scheduled_for?.toISOString() === "2026-10-12T03:08:30.000Z" &&
+    fullWorkerRow.sampled_at.toISOString() === "2026-10-12T03:09:00.000Z",
+  fullWorkerRow,
+);
+check(
+  "worker_samples: the newest row comes first",
+  recentWorkerSamples[0]?.id === nullWorkerSampleId,
+  recentWorkerSamples.map((row) => row.id),
+);
+for (const [name, statement] of [
+  [
+    "a negative memory value",
+    "INSERT INTO factory.worker_samples (slots, mem_oom) VALUES (3, -1)",
+  ],
+  ["zero slots", "INSERT INTO factory.worker_samples (slots) VALUES (0)"],
+  [
+    "a running_by_script that is not an object",
+    "INSERT INTO factory.worker_samples (slots, running_by_script) VALUES (3, '[]'::jsonb)",
+  ],
+] as const) {
+  let rejected = false;
+  try {
+    execPsql(target, statement);
+  } catch {
+    rejected = true;
+  }
+  check(`worker_samples: the table rejects ${name}`, rejected);
+}
+
+// worker_samples: 掃除は期限ちょうどの行も含めて削除し、期限より新しい行を残す。
+const workerCutoff = new Date("2026-10-12T03:10:00.000Z");
+const boundaryWorkerSampleId = await insertWorkerSample(
+  { ...nullWorkerSample, sampled_at: workerCutoff },
+  sql,
+);
+const deletedWorkerSamples = await deleteWorkerSamplesBefore(workerCutoff, sql);
+const keptWorkerSampleIds = (await listRecentWorkerSamples(10, sql)).map(
+  (row) => row.id,
+);
+check(
+  "worker_samples: cleanup deletes the rows at or before the cutoff",
+  deletedWorkerSamples === 2 &&
+    !keptWorkerSampleIds.includes(fullWorkerSampleId) &&
+    !keptWorkerSampleIds.includes(boundaryWorkerSampleId),
+  { deletedWorkerSamples, keptWorkerSampleIds },
+);
+check(
+  "worker_samples: cleanup keeps the row newer than the cutoff",
+  keptWorkerSampleIds.length === 1 &&
+    keptWorkerSampleIds[0] === nullWorkerSampleId,
+  keptWorkerSampleIds,
+);
+
+// この日次集計のブロックは掃除テストの後に置く。掃除テストが`factory.worker_samples`の残り行数を数えるため。
+// worker_samples: 日次のまとめの集計は、範囲の行だけを数え、値の読めた行の間の差でOOMの増分を求める。
+// 範囲は2026-10-10(JST)。範囲の外の行(10分前の行と終端ちょうどの行)は数えず、前の行は差と空白の起点にだけ使う。
+// 空白は、隣り合う行の間隔に加えて、日の両端(始端から最初の行、最後の行から終端)も数える。
+const MIB = 1024 * 1024;
+const loadRange = {
+  start: new Date("2026-10-09T15:00:00.000Z"),
+  end: new Date("2026-10-10T15:00:00.000Z"),
+  label: "2026-10-10",
+};
+function loadSample(
+  sampledAt: string,
+  overrides: Partial<NewWorkerSample> = {},
+): NewWorkerSample {
+  return {
+    ...nullWorkerSample,
+    sampled_at: new Date(sampledAt),
+    ...overrides,
+  };
+}
+for (const sample of [
+  loadSample("2026-10-09T14:55:00.000Z", { mem_oom: 1, mem_oom_kill: 0 }),
+  loadSample("2026-10-09T15:00:00.000Z", {
+    running_jobs: 3,
+    lag_seconds: 45,
+    max_wait_seconds: 100,
+    mem_anon_bytes: 100 * MIB,
+    mem_working_set_bytes: 200 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+    mem_oom: 3,
+    mem_oom_kill: 1,
+  }),
+  // 累積が戻った行。OOMは1(現在値を数える)、killは0。
+  loadSample("2026-10-09T15:02:00.000Z", {
+    running_jobs: 0,
+    lag_seconds: 2,
+    max_wait_seconds: 0,
+    mem_anon_bytes: 200 * MIB,
+    mem_working_set_bytes: 300 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+    mem_oom: 1,
+    mem_oom_kill: 0,
+  }),
+  // 値が全部NULLの行。次の行の差は、この行ではなくその前の非NULLの行から取る。
+  loadSample("2026-10-09T15:04:00.000Z"),
+  loadSample("2026-10-09T15:06:00.000Z", {
+    running_jobs: 1,
+    lag_seconds: 30,
+    max_wait_seconds: 5,
+    mem_anon_bytes: 50 * MIB,
+    mem_oom: 10,
+    mem_oom_kill: 9,
+  }),
+  loadSample("2026-10-10T15:00:00.000Z", {
+    running_jobs: 3,
+    lag_seconds: 999,
+    max_wait_seconds: 999,
+    mem_oom: 99,
+    mem_oom_kill: 99,
+  }),
+]) {
+  await insertWorkerSample(sample, sql);
+}
+const loadSummary = await getWorkerLoadSummary(loadRange, sql);
+check(
+  "worker_samples: the daily summary counts only the rows inside the range",
+  loadSummary?.sample_count === 4,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the largest lag",
+  loadSummary?.lag_max_seconds === 45,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary counts the laggy rows",
+  loadSummary?.lag_over_count === 2,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary totals the lag of the laggy rows",
+  loadSummary?.lag_over_total_seconds === 75,
+  loadSummary,
+);
+// 空白は、始端の前の行から最初の行まで(300秒)と、最後の行(15:06)から終端まで(86040秒)の2回である。
+check(
+  "worker_samples: the daily summary counts the gap that ends at the first row and the gap to the end",
+  loadSummary?.gap_count === 2,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the longest gap in seconds",
+  loadSummary?.gap_longest_seconds === 86040,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the start of the longest gap",
+  loadSummary?.gap_longest_from?.toISOString() === "2026-10-09T15:06:00.000Z",
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the end of the longest gap",
+  loadSummary?.gap_longest_to?.toISOString() === "2026-10-10T15:00:00.000Z",
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the most running jobs",
+  loadSummary?.running_jobs_max === 3,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the slots",
+  loadSummary?.slots_max === 3,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the anon peak",
+  loadSummary?.mem_anon_max_bytes === 200 * MIB,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the working set peak",
+  loadSummary?.mem_working_set_max_bytes === 300 * MIB,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the largest share of the limit",
+  Math.abs((loadSummary?.mem_anon_max_ratio ?? 0) - 0.2) < 1e-9,
+  loadSummary,
+);
+// OOMは、2(1から3)、1(3から戻って1)、9(1から10。全NULLの行をまたぐ)の合計で12である。
+check(
+  "worker_samples: the daily summary sums the OOM increases across a reset and a NULL row",
+  loadSummary?.mem_oom_increase === 12,
+  loadSummary,
+);
+// killは、1(0から1)、0(1から戻って0)、9(0から9)の合計で10である。
+check(
+  "worker_samples: the daily summary sums the OOM kill increases across a reset and a NULL row",
+  loadSummary?.mem_oom_kill_increase === 10,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the longest wait",
+  loadSummary?.max_wait_max_seconds === 100,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary is null for a day without rows",
+  (await getWorkerLoadSummary(
+    {
+      start: new Date("2026-10-07T15:00:00.000Z"),
+      end: new Date("2026-10-08T15:00:00.000Z"),
+      label: "2026-10-08",
+    },
+    sql,
+  )) === null,
+);
+
+// 全部の値がNULLの日と、行が1行だけで10分前にも行が無い日は、OOMの増分が求められないのでNULLで返る。
+// 「OOMなし」(0)と区別するため。2026-10-05(JST)が全NULL、2026-10-04(JST)が1行だけである。
+for (const sample of [
+  loadSample("2026-10-04T15:00:00.000Z"),
+  loadSample("2026-10-04T15:02:00.000Z"),
+  loadSample("2026-10-03T15:00:00.000Z", { mem_oom: 5, mem_oom_kill: 5 }),
+]) {
+  await insertWorkerSample(sample, sql);
+}
+const allNullSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-04T15:00:00.000Z"),
+    end: new Date("2026-10-05T15:00:00.000Z"),
+    label: "2026-10-05",
+  },
+  sql,
+);
+const singleRowSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-03T15:00:00.000Z"),
+    end: new Date("2026-10-04T15:00:00.000Z"),
+    label: "2026-10-04",
+  },
+  sql,
+);
+check(
+  "worker_samples: the OOM increase is null for a day whose rows are all NULL",
+  allNullSummary?.mem_oom_increase === null,
+  allNullSummary,
+);
+check(
+  "worker_samples: the OOM kill increase is null for a day whose rows are all NULL",
+  allNullSummary?.mem_oom_kill_increase === null,
+  allNullSummary,
+);
+check(
+  "worker_samples: the OOM increase is null for a day with one row and no row before it",
+  singleRowSummary?.mem_oom_increase === null,
+  singleRowSummary,
+);
+check(
+  "worker_samples: the OOM kill increase is null for a day with one row and no row before it",
+  singleRowSummary?.mem_oom_kill_increase === null,
+  singleRowSummary,
+);
+// 行が始端ちょうどの1行だけの日は、始端側の空白は0秒で、最後の行から終端までの1日分だけを数える。
+check(
+  "worker_samples: a day with one row at the start counts the gap to the end",
+  singleRowSummary?.gap_count === 1,
+  singleRowSummary,
+);
+check(
+  "worker_samples: a day with one row at the start takes the gap to the end as the longest",
+  singleRowSummary?.gap_longest_seconds === 86400,
+  singleRowSummary,
+);
+
+// 通常の2分おきの日は、両端の空白(30秒と90秒)を数えない。
+// 始端の11分前にも行を置き、範囲の10分前までの行だけを前の行に使うことを確かめる。
+// 11分前の行を前の行に使うと、最初の行との間の11分30秒が空白に数えられ、最初の行のOOMの増分も求まってしまう。
+// 2026-10-21(JST)が通常の日である。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at, mem_oom)
+   VALUES (3, '2026-10-20T14:49:00Z', 50);
+   INSERT INTO factory.worker_samples (slots, sampled_at, mem_oom)
+   SELECT 3, timestamptz '2026-10-20T15:00:30Z' + n * interval '2 minutes',
+     CASE WHEN n = 0 THEN 2 END
+   FROM generate_series(0, 719) AS n`,
+);
+const normalDaySummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-20T15:00:00.000Z"),
+    end: new Date("2026-10-21T15:00:00.000Z"),
+    label: "2026-10-21",
+  },
+  sql,
+);
+check(
+  "worker_samples: a normal day counts no gap at either end",
+  normalDaySummary?.gap_count === 0,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a normal day has no longest gap",
+  normalDaySummary?.gap_longest_seconds === null,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a normal day has no time of the longest gap",
+  normalDaySummary?.gap_longest_from === null &&
+    normalDaySummary?.gap_longest_to === null,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a row 11 minutes before the start is not the previous value of the first row",
+  normalDaySummary?.mem_oom_increase === null,
+  normalDaySummary,
+);
+
+// 夜間の停止の前半。2026-10-22(JST)は、0:00:30から2分おきに記録され、22:58:30の行を最後に止まる。
+// 最後の行から終端までの空白(1時間1分30秒)が、日の終わり側の空白として1回数えられる。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at)
+   SELECT 3, timestamptz '2026-10-21T15:00:30Z' + n * interval '2 minutes'
+   FROM generate_series(0, 689) AS n`,
+);
+const stopAtEndSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-21T15:00:00.000Z"),
+    end: new Date("2026-10-22T15:00:00.000Z"),
+    label: "2026-10-22",
+  },
+  sql,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day counts one gap",
+  stopAtEndSummary?.gap_count === 1,
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day takes its length",
+  stopAtEndSummary?.gap_longest_seconds === 3690,
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day starts at the last row",
+  stopAtEndSummary?.gap_longest_from?.toISOString() ===
+    "2026-10-22T13:58:30.000Z",
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day ends at the end of the range",
+  stopAtEndSummary?.gap_longest_to?.toISOString() ===
+    "2026-10-22T15:00:00.000Z",
+  stopAtEndSummary,
+);
+
+// 夜間の停止の後半。2026-10-23(JST)は、前日の最後の行が1時間以上前なので、始端からの空白になる。
+// 8:00:30の行から2分おきに記録され、始端から最初の行までの空白(8時間30秒)が、日の始まり側の空白として1回数えられる。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at)
+   SELECT 3, timestamptz '2026-10-22T23:00:30Z' + n * interval '2 minutes'
+   FROM generate_series(0, 479) AS n`,
+);
+const stopAtStartSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-22T15:00:00.000Z"),
+    end: new Date("2026-10-23T15:00:00.000Z"),
+    label: "2026-10-23",
+  },
+  sql,
+);
+check(
+  "worker_samples: a stop from the start of the day counts one gap",
+  stopAtStartSummary?.gap_count === 1,
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day takes its length",
+  stopAtStartSummary?.gap_longest_seconds === 28830,
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day starts at the start of the range",
+  stopAtStartSummary?.gap_longest_from?.toISOString() ===
+    "2026-10-22T15:00:00.000Z",
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day ends at the first row",
+  stopAtStartSummary?.gap_longest_to?.toISOString() ===
+    "2026-10-22T23:00:30.000Z",
+  stopAtStartSummary,
+);
+
+// PRのCI監視は、PRを作って`pr_open`のままの`issue`の作業項目だけを巡回する。
+const prOpenWithUrl = await issueWorkItem(951, 1, "pr_open", "qdb-pr-open-url");
+await setWorkItemPrUrl(prOpenWithUrl, "https://github.com/qdb/r/pull/951", sql);
+await issueWorkItem(952, 1, "pr_open", "qdb-pr-open-no-url");
+const cancelledWithUrl = await issueWorkItem(
+  953,
+  1,
+  "cancelled",
+  "qdb-cancelled",
+);
+await setWorkItemPrUrl(
+  cancelledWithUrl,
+  "https://github.com/qdb/r/pull/953",
+  sql,
+);
+check(
+  "pr_open work items: only the issue item that is pr_open and has a pull request url is listed",
+  (await listPrOpenIssueWorkItems(new Date(Date.now() - 60_000), 100, sql))
+    .filter((item) => item.owner === OWNER)
+    .map((item) => item.id)
+    .join(",") === String(prOpenWithUrl),
+);
+check(
+  "pr_open work items: an item not updated since the cutoff is not listed",
+  (
+    await listPrOpenIssueWorkItems(new Date(Date.now() + 60_000), 100, sql)
+  ).every((item) => item.owner !== OWNER),
+);
+
+// 権限の不足のnoticeは、リポジトリごとに同じ本文なので、未解決のものがあれば新しく挿入しない。
+const prCiDeniedNotice = {
+  kind: "pr_ci_check_denied",
+  message: "qdb/prci: PRのCIの実行をGitHubから読めません",
+};
+const prCiDeniedFirst = await addNoticeUnlessUnresolved(prCiDeniedNotice, sql);
+check(
+  "pr_ci_check_denied: a second notice of the same repository is not inserted while one is unresolved",
+  prCiDeniedFirst !== null &&
+    (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) === null,
+);
+check(
+  "pr_ci_check_denied: the notice is resolved by the kind and the repository prefix",
+  (await resolveUnresolvedNoticesByPrefix(
+    "pr_ci_check_denied",
+    "qdb/prci: ",
+    "watch_pr_ci",
+    sql,
+  )) === 1 && (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) !== null,
+);
+execPsql(
+  target,
+  "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
