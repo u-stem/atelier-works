@@ -2115,6 +2115,8 @@ export type PullRequest = {
   readonly authorLogin: string;
   /** 作者のアカウント種別(`User` / `Bot`など)。作者が無いか不明なら`null`。 */
   readonly authorType: string | null;
+  /** PRにauto-mergeが設定されているか。有効なら、条件が揃った時点でGitHubがマージする。 */
+  readonly autoMergeEnabled: boolean;
 };
 
 type PrPayload = {
@@ -2136,6 +2138,7 @@ type PrPayload = {
   readonly mergeable: unknown;
   readonly mergeable_state: unknown;
   readonly user: unknown;
+  readonly auto_merge?: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -2217,6 +2220,9 @@ export async function getPr(
       isRecord(parsed.user) && typeof parsed.user.type === "string"
         ? parsed.user.type
         : null,
+    // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
+    // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
+    autoMergeEnabled: parsed.auto_merge !== null,
   };
 }
 
@@ -3062,6 +3068,30 @@ export async function getBranchProtected(
     );
   }
   return parsed.protected;
+}
+
+/**
+ * `GET repos/{owner}/{repo}/rules/branches/{branch}`が返す、ブランチに効くrulesetの規則の数を返す。
+ * globで対象を指定したrulesetも含む。`getBranchProtected`の`protected`に反映されない場合に備えて併用する。
+ */
+export async function getBranchRuleCount(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<number> {
+  validateOwnerRepo(owner, repo);
+  const context = `GET branch rules ${owner}/${repo}@${branch}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/rules/branches/${encodeURIComponent(branch)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.length;
 }
 
 // ---------------------------------------------------------------------------
