@@ -1,0 +1,10 @@
+summary: '[SYS-10] workerの負荷を記録'
+description: 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを1行記録します。読めなかった値は空のまま残し、ほかの値は記録します。完全には記録できない状態が続いたときだけ、通知に残します。
+lock: '!inline f/factory/sample_worker_load.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+timeout: 30

@@ -42,6 +42,7 @@ import {
   insertIssueProposal,
   insertIssueWorkItemUnlessActive,
   insertReview,
+  insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
   latestDraft,
@@ -59,6 +60,7 @@ import {
   listMainCiRunsBySha,
   listPendingIssueProposals,
   listPendingMainCiRuns,
+  listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
   listUnresolvedNoticesByKind,
@@ -4812,5 +4814,189 @@ describe("deleteMainCiRunsBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
     expect(await deleteMainCiRunsBefore(cutoff, sql)).toBe(2);
+  });
+});
+
+describe("insertWorkerSample", () => {
+  const sample = {
+    sampled_at: new Date("2026-10-12T03:10:30.000Z"),
+    scheduled_for: new Date("2026-10-12T03:08:30.000Z"),
+    slots: 3,
+    running_jobs: 2,
+    running_by_script: { "f/factory/poll_prs": 2 },
+    waiting_jobs: 0,
+    max_wait_seconds: 0,
+    lag_seconds: 1,
+    mem_current_bytes: 323907584,
+    mem_anon_bytes: 80125952,
+    mem_working_set_bytes: 273625088,
+    mem_peak_bytes: 1371127808,
+    mem_limit_bytes: 4294967296,
+    mem_events_max: 0,
+    mem_oom: 0,
+    mem_oom_kill: 0,
+    mem_pressure_total_us: null,
+  };
+
+  test("inserts into factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.worker_samples");
+  });
+
+  test("returns the id of the inserted row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "41" }]]);
+    expect(await insertWorkerSample(sample, sql)).toBe(41);
+  });
+
+  test("casts the running_by_script value to jsonb", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text).toContain("::jsonb");
+  });
+
+  test("passes running_by_script as a JSON string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain('{"f/factory/poll_prs":2}');
+  });
+
+  test("casts the scheduled_for and sampled_at values to timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::timestamptz/g)).toHaveLength(2);
+  });
+
+  test("passes scheduled_for as an ISO string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain("2026-10-12T03:08:30.000Z");
+  });
+
+  test("inserts into the sampled_at column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text).toContain("sampled_at");
+  });
+
+  test("passes sampled_at as an ISO string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain("2026-10-12T03:10:30.000Z");
+  });
+
+  test("casts the byte counts to bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::bigint/g)).toHaveLength(9);
+  });
+
+  test("casts the job counts to smallint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::smallint/g)).toHaveLength(2);
+  });
+
+  test("casts the other counts to integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::integer/g)).toHaveLength(3);
+  });
+
+  test("passes an unreadable value as null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("passes a missing running_by_script as null, not as a string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample({ ...sample, running_by_script: null }, sql);
+    expect(calls[0]?.values).not.toContain("null");
+  });
+
+  test("rejects a response without a row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(insertWorkerSample(sample, sql)).rejects.toThrow(
+      "insertWorkerSample",
+    );
+  });
+});
+
+describe("listRecentWorkerSamples", () => {
+  const row = {
+    id: "9",
+    sampled_at: "2026-10-12T03:10:31.000Z",
+    scheduled_for: "2026-10-12T03:10:30.000Z",
+    slots: 3,
+    running_jobs: 1,
+    running_by_script: { "f/factory/poll_prs": 1 },
+    waiting_jobs: 0,
+    max_wait_seconds: 0,
+    lag_seconds: 1,
+    mem_current_bytes: "323907584",
+    mem_anon_bytes: "80125952",
+    mem_working_set_bytes: "273625088",
+    mem_peak_bytes: "1371127808",
+    mem_limit_bytes: "4294967296",
+    mem_events_max: "0",
+    mem_oom: "0",
+    mem_oom_kill: "0",
+    mem_pressure_total_us: null,
+  };
+
+  test("selects from factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listRecentWorkerSamples(30, sql);
+    expect(calls[0]?.text).toContain("FROM factory.worker_samples");
+  });
+
+  test("selects the newest rows first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listRecentWorkerSamples(30, sql);
+    expect(calls[0]?.text).toContain("ORDER BY sampled_at DESC");
+  });
+
+  test("passes the limit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listRecentWorkerSamples(30, sql);
+    expect(calls[0]?.values).toEqual([30]);
+  });
+
+  test("reads a bigint column returned as a string", async () => {
+    const { sql } = createFakeSqlClient([[row]]);
+    expect((await listRecentWorkerSamples(1, sql))[0]?.mem_current_bytes).toBe(
+      323907584,
+    );
+  });
+
+  test("reads a null column as null", async () => {
+    const { sql } = createFakeSqlClient([[row]]);
+    expect(
+      (await listRecentWorkerSamples(1, sql))[0]?.mem_pressure_total_us,
+    ).toBeNull();
+  });
+
+  test("reads running_by_script returned as a JSON string", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...row, running_by_script: '{"f/factory/a":2}' }],
+    ]);
+    expect(
+      (await listRecentWorkerSamples(1, sql))[0]?.running_by_script,
+    ).toEqual({ "f/factory/a": 2 });
+  });
+
+  test("reads sampled_at as a date", async () => {
+    const { sql } = createFakeSqlClient([[row]]);
+    expect(
+      (await listRecentWorkerSamples(1, sql))[0]?.sampled_at.toISOString(),
+    ).toBe("2026-10-12T03:10:31.000Z");
+  });
+
+  test("rejects a row with a column that is not a number", async () => {
+    const { sql } = createFakeSqlClient([[{ ...row, waiting_jobs: "many" }]]);
+    await expect(listRecentWorkerSamples(1, sql)).rejects.toThrow(
+      "waiting_jobs",
+    );
   });
 });

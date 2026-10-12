@@ -284,6 +284,13 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "worker_sample_failed",
+    guide(
+      "defaultのworkerの負荷を、10分以上続けて完全には記録できませんでした。枠の占有かメモリのどちらかが欠けた行ができています。",
+      "sample_worker_loadの直近のジョブログの警告を確かめてください。queueの取得、cgroupの読み取り、DBへの記録のどれが失敗しているかが出ます。",
+    ),
+  ],
+  [
     "schedule_failing",
     guide(
       "同じスケジュールの直近3回の実行が、続けて失敗しました。",

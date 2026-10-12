@@ -24,10 +24,12 @@ import {
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
   insertCleanupRun,
+  insertWorkerSample,
   insertWorkItem,
   latestMainCiRunCreatedAt,
   listMainCiRunsBySha,
   listPendingMainCiRuns,
+  listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
   recordDeployment,
   recordFailure,
@@ -2261,6 +2263,99 @@ execPsql(
   target,
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
 );
+
+// worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
+const fullWorkerSample = {
+  sampled_at: new Date("2026-10-12T03:09:00.000Z"),
+  scheduled_for: new Date("2026-10-12T03:08:30.000Z"),
+  slots: 3,
+  running_jobs: 2,
+  running_by_script: { "f/factory/poll_prs": 1, other: 1 },
+  waiting_jobs: 1,
+  max_wait_seconds: 90,
+  lag_seconds: 2,
+  mem_current_bytes: 4_000_000_000,
+  mem_anon_bytes: 80_125_952,
+  mem_working_set_bytes: 273_625_088,
+  mem_peak_bytes: 4_294_967_296,
+  mem_limit_bytes: 4_294_967_296,
+  mem_events_max: 4,
+  mem_oom: 0,
+  mem_oom_kill: 0,
+  mem_pressure_total_us: null,
+};
+const nullWorkerSample = {
+  sampled_at: new Date("2026-10-12T03:11:00.000Z"),
+  scheduled_for: null,
+  slots: 3,
+  running_jobs: null,
+  running_by_script: null,
+  waiting_jobs: null,
+  max_wait_seconds: null,
+  lag_seconds: null,
+  mem_current_bytes: null,
+  mem_anon_bytes: null,
+  mem_working_set_bytes: null,
+  mem_peak_bytes: null,
+  mem_limit_bytes: null,
+  mem_events_max: null,
+  mem_oom: null,
+  mem_oom_kill: null,
+  mem_pressure_total_us: null,
+};
+const fullWorkerSampleId = await insertWorkerSample(fullWorkerSample, sql);
+const nullWorkerSampleId = await insertWorkerSample(nullWorkerSample, sql);
+const recentWorkerSamples = await listRecentWorkerSamples(2, sql);
+const nullWorkerRow = recentWorkerSamples.find(
+  (row) => row.id === nullWorkerSampleId,
+);
+const fullWorkerRow = recentWorkerSamples.find(
+  (row) => row.id === fullWorkerSampleId,
+);
+check(
+  "worker_samples: a row with every value unreadable is inserted as nulls",
+  nullWorkerRow !== undefined &&
+    nullWorkerRow.slots === 3 &&
+    nullWorkerRow.running_jobs === null &&
+    nullWorkerRow.running_by_script === null &&
+    nullWorkerRow.scheduled_for === null &&
+    nullWorkerRow.mem_current_bytes === null,
+  nullWorkerRow,
+);
+check(
+  "worker_samples: the bigint, jsonb, and timestamp columns read back",
+  fullWorkerRow !== undefined &&
+    fullWorkerRow.mem_current_bytes === 4_000_000_000 &&
+    fullWorkerRow.mem_limit_bytes === 4_294_967_296 &&
+    fullWorkerRow.running_by_script?.["f/factory/poll_prs"] === 1 &&
+    fullWorkerRow.scheduled_for?.toISOString() === "2026-10-12T03:08:30.000Z" &&
+    fullWorkerRow.sampled_at.toISOString() === "2026-10-12T03:09:00.000Z",
+  fullWorkerRow,
+);
+check(
+  "worker_samples: the newest row comes first",
+  recentWorkerSamples[0]?.id === nullWorkerSampleId,
+  recentWorkerSamples.map((row) => row.id),
+);
+for (const [name, statement] of [
+  [
+    "a negative memory value",
+    "INSERT INTO factory.worker_samples (slots, mem_oom) VALUES (3, -1)",
+  ],
+  ["zero slots", "INSERT INTO factory.worker_samples (slots) VALUES (0)"],
+  [
+    "a running_by_script that is not an object",
+    "INSERT INTO factory.worker_samples (slots, running_by_script) VALUES (3, '[]'::jsonb)",
+  ],
+] as const) {
+  let rejected = false;
+  try {
+    execPsql(target, statement);
+  } catch {
+    rejected = true;
+  }
+  check(`worker_samples: the table rejects ${name}`, rejected);
+}
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
