@@ -61,7 +61,7 @@ shopt -u nullglob
 
 ACTIVE_ISSUE_MIGRATION="20261009120000_active_issue_key.up.sql"
 NOTICES_DEDUP_MIGRATION="20261011170000_notices_unresolved_dedup.up.sql"
-DISK_USAGE_NOTICE_MIGRATION="20261013100200_disk_usage_notice_single.up.sql"
+DISK_USAGE_NOTICE_MIGRATION="20261013100300_disk_usage_notice_single.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
