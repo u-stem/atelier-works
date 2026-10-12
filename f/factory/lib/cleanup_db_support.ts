@@ -55,6 +55,8 @@ export type CleanupCounts = {
   readonly info_notices_resolved: number;
   /** 保持期間を過ぎた、判定済みのmainのCIの記録(`main_ci_runs`)の削除件数。判定を待つ行と、各リポジトリの最新の行は消さない。 */
   readonly main_ci_runs_deleted: number;
+  /** 保持期間を過ぎた、workerの負荷の記録(`worker_samples`)の削除件数。期限を過ぎた行はすべて消す。 */
+  readonly worker_samples_deleted: number;
   /** 作業項目の削除に合わせて消した要件定義書のディレクトリ(`docDirsFor`)。 */
   readonly doc_dirs_deleted: number;
 };
@@ -67,7 +69,7 @@ export type CleanupCounts = {
  * `approval_requests_deleted`はwork_items削除のカスケードによる副作用、
  * `doc_dirs_deleted`は同じ削除に伴うファイルシステム上の副作用で、
  * どちらも独立した掃除ではないため意図的に省く。
- * `main_ci_runs_deleted`は運用者が気にする対象ではない内部の記録の掃除なので省く。
+ * `main_ci_runs_deleted`と`worker_samples_deleted`は、運用者が気にする対象ではない内部の記録の掃除なので省く。
  */
 export function summarizeCleanup(counts: CleanupCounts): string {
   const deleted =

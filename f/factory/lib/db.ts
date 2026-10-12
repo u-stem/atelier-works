@@ -3050,12 +3050,13 @@ export async function insertCleanupRun(
     INSERT INTO factory.cleanup_runs (
       work_items_deleted, approval_requests_deleted, job_failures_deleted,
       deployments_deleted, notices_deleted, info_notices_resolved,
-      main_ci_runs_deleted, doc_dirs_deleted
+      main_ci_runs_deleted, worker_samples_deleted, doc_dirs_deleted
     ) VALUES (
       ${counts.work_items_deleted}::integer, ${counts.approval_requests_deleted}::integer,
       ${counts.job_failures_deleted}::integer, ${counts.deployments_deleted}::integer,
       ${counts.notices_deleted}::integer, ${counts.info_notices_resolved}::integer,
-      ${counts.main_ci_runs_deleted}::integer, ${counts.doc_dirs_deleted}::integer
+      ${counts.main_ci_runs_deleted}::integer, ${counts.worker_samples_deleted}::integer,
+      ${counts.doc_dirs_deleted}::integer
     )
     RETURNING id
   `;
@@ -3935,6 +3936,22 @@ export async function insertWorkerSample(
   `;
   const row = await fetchOneRow(statement, "insertWorkerSample");
   return parseId(row.id, "id");
+}
+
+/**
+ * `sampled_at`が`olderThan`以前の`factory.worker_samples`の行を削除し、行数を返す。
+ * このテーブルは外部キーを持たず、残すべき行も無いので、期限を過ぎた行をすべて削除する。
+ */
+export async function deleteWorkerSamplesBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.worker_samples
+    WHERE sampled_at <= ${olderThan.toISOString()}::timestamptz
+    RETURNING id
+  `.fetch();
+  return rows.length;
 }
 
 /** 新しい順に`limit`件の`factory.worker_samples`の行を返す。 */

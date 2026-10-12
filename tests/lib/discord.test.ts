@@ -367,6 +367,7 @@ describe("buildEmbed", () => {
         notices_deleted: 2,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
     });
