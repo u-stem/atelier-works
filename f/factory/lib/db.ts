@@ -551,6 +551,83 @@ export async function insertIssueWorkItemUnlessActive(
 }
 
 /**
+ * dependabotのセキュリティ更新PRの作業項目の入力。
+ * 残りの列は固定する。サイクルは1、取得元は`issue`(PRの作業項目と同じ)、
+ * Issueと本文は無し、試行は1である。
+ */
+export type NewDependabotWorkItem = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly title: string | null;
+  readonly status: WorkItemStatus;
+  readonly claimed_by: string | null;
+  /** 処理を始めたheadの完全なコミットsha。 */
+  readonly head_sha: string;
+};
+
+/**
+ * dependabotの作業項目を挿入し、そのIDを返す。
+ * 同じPRに終端でない作業項目が既にあるときは、
+ * 部分一意インデックス`work_items_active_dependabot_key`により挿入せず、`null`を返す。
+ * `ON CONFLICT DO NOTHING`は対象を指定しない。
+ * 同じPRの別の取得が先に作業項目を作った場合に、DBを共有するインスタンスの間でも二重に始めないための、最後の防御である。
+ * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないとき、
+ * `head_sha`が完全なコミットshaでないときは、DBに触れる前に例外を投げる。
+ */
+export async function insertDependabotWorkItemUnlessActive(
+  item: NewDependabotWorkItem,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  assertGitHubName(item.owner);
+  assertGitHubName(item.repo);
+  assertPrNumber(item.pr_number);
+  assertCommitSha(item.head_sha);
+  const rows = await sql`
+    INSERT INTO factory.work_items (
+      cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+      title, body, status, attempt, claimed_by, flow_job_id, resume_url,
+      cancel_url, head_sha, parent_work_item_id
+    ) VALUES (
+      1, 'issue', 'dependabot', ${item.owner}, ${item.repo}, NULL, NULL, ${item.pr_number}::integer,
+      ${item.title}, NULL, ${item.status}, 1, ${item.claimed_by}, NULL, NULL,
+      NULL, ${item.head_sha}, NULL
+    )
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return null;
+  return parseId(row.id, "id");
+}
+
+/**
+ * 同じPRの同じheadのdependabotの作業項目が、終端でも終端でなくても1件でもあるか。
+ * マージの後や人に回した後に、同じheadを処理し直さないために使う。
+ * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないとき、
+ * `head_sha`が完全なコミットshaでないときは、DBに触れる前に例外を投げる。
+ */
+export async function hasDependabotItemForHead(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  assertPrNumber(prNumber);
+  assertCommitSha(headSha);
+  const rows = await sql`
+    SELECT id FROM factory.work_items
+    WHERE kind = 'dependabot' AND owner = ${owner} AND repo = ${repo}
+      AND pr_number = ${prNumber}::integer AND head_sha = ${headSha}
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * 同じIssueで、`cycle`より大きい`issue`の作業項目のうち、サイクルが最大のものを返す。無ければ`null`。
  * あれば、`cycle`の作業項目は新しいサイクルに置き換えられている。
  * `retry_work_item`が古い作業項目を再開せず、最新のサイクルの状態に合う案内を返すために使う。
