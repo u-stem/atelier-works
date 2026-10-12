@@ -370,6 +370,7 @@ describe("buildEmbed", () => {
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
         worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       worker_load: { kind: "no_record" },

@@ -10,6 +10,7 @@ import {
   isImplementDiffStat,
   isImplementRoundMode,
   isImplementRoundOutcome,
+  parseImplementBranchWorkItemId,
   TERMINAL_WORK_ITEM_STATUSES,
   WORK_ITEM_KINDS,
   WORK_ITEM_SOURCES,
@@ -259,5 +260,17 @@ describe("capToDeadline", () => {
 
   test("returns 0 for a deadline that is not a finite number", () => {
     expect(capToDeadline(1_000, Number.NaN, 0)).toBe(0);
+  });
+});
+
+describe("parseImplementBranchWorkItemId", () => {
+  test("reads the work item id of a factory branch", () => {
+    expect(parseImplementBranchWorkItemId("factory/issue-7-wi-3")).toBe(3);
+  });
+
+  test("returns null for a branch of another form", () => {
+    expect(
+      parseImplementBranchWorkItemId("factory/issue-7-wi-3-old"),
+    ).toBeNull();
   });
 });

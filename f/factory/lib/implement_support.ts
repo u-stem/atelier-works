@@ -31,6 +31,8 @@ import {
 } from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
+export { parseImplementBranchWorkItemId } from "./types.ts";
+
 /**
  * Claude自身が返す2つの結果(`IMPLEMENT_SCHEMA`)。
  * `implement_rounds.outcome`のそれ以外の値(`check_failed` / `checks_skipped` /
@@ -278,13 +280,6 @@ export function buildImplementBranchName(
   const branch = `factory/issue-${String(issueNumber)}-wi-${String(workItemId)}`;
   assertBranchName(branch);
   return branch;
-}
-
-/** 実装ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを返す。形が違えばnull。pr_fixが、親の行が無くても同じブランチの実装フローを見つけるのに使う。 */
-export function parseImplementBranchWorkItemId(branch: string): number | null {
-  const match = /^factory\/issue-[1-9]\d*-wi-([1-9]\d*)$/.exec(branch);
-  const id = match?.[1] === undefined ? Number.NaN : Number(match[1]);
-  return Number.isSafeInteger(id) ? id : null;
 }
 
 // ---------------------------------------------------------------------------
