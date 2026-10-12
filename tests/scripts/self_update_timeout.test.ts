@@ -35,6 +35,7 @@ function count(source: string, pattern: RegExp): number {
   return source.match(pattern)?.length ?? 0;
 }
 
+// `recordFailedDeployment(`の区切りが効くのは`record`だけで`onRecordError`には届かないので、`onRecordError`には外部呼び出しを足さない。
 const WRAPPERS = [
   "withCallTimeout(",
   "readDeployedSha(",
