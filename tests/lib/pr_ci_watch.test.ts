@@ -158,6 +158,10 @@ type Setup = {
   failed?: PrCiCheck[];
   noCi?: PrCiCheck[];
   allowed?: (owner: string, repo: string) => boolean;
+  /** 照合前の設定に合うか。省略すると、`allowed`と同じ結果にする。 */
+  configured?: (owner: string, repo: string) => boolean;
+  /** 解決に失敗させるnoticeの種類。 */
+  resolveFailsFor?: string[];
   duplicateKinds?: string[];
   recordFails?: boolean;
   noticeFails?: boolean;
@@ -239,6 +243,8 @@ function harness(setup: Setup = {}): Harness {
     log,
     instanceName: "local",
     isRepoAllowed: (owner, repo) => setup.allowed?.(owner, repo) ?? true,
+    isRepoConfigured: (owner, repo) =>
+      setup.configured?.(owner, repo) ?? setup.allowed?.(owner, repo) ?? true,
     listTrackedItems: async () => setup.items ?? [],
     getPr: async (owner, repo, number) => {
       const key = `${owner}/${repo}#${String(number)}`;
@@ -307,6 +313,9 @@ function harness(setup: Setup = {}): Harness {
         : notices.length;
     },
     resolveNotices: async (kind, prefix, by) => {
+      if (setup.resolveFailsFor?.includes(kind) === true) {
+        throw new Error("resolve failed");
+      }
       events.push(kind === PR_CI_FAILED_KIND ? "resolve_failure" : "resolve");
       resolved.push({ kind, prefix, by });
       return 1;
@@ -1513,6 +1522,76 @@ describe("unreadable runs", () => {
     expect(h.transitions).toEqual([]);
   });
 
+  test("keeps a day-old failed row of an owner whose verification failed", async () => {
+    const h = harness({
+      allowed: () => false,
+      configured: () => true,
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("does not resolve the failure notices of an owner whose verification failed", async () => {
+    const h = harness({
+      allowed: () => false,
+      configured: () => true,
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(failureNoticeResolutions(h)).toEqual([]);
+  });
+
+  test("keeps a day-old no_ci row of an owner whose verification failed", async () => {
+    const h = harness({
+      allowed: () => false,
+      configured: () => true,
+      noCi: [row({ state: "no_ci", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("touches a failed row of an owner whose verification failed", async () => {
+    const h = harness({
+      allowed: () => false,
+      configured: () => true,
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toEqual([1]);
+  });
+
+  test("expires a day-old pending row of an owner whose verification failed", async () => {
+    const h = harness({
+      allowed: () => false,
+      configured: () => true,
+      pending: [row({ first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((t) => t.to.state)).toEqual(["expired"]);
+  });
+
+  test("supersedes a day-old failed row of a repository that left the configuration", async () => {
+    const h = harness({
+      allowed: () => false,
+      configured: () => false,
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((t) => t.to.state)).toEqual(["superseded"]);
+  });
+
+  test("does not notify a failed row that is readable after the verification recovered", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+      runs: { [SHA_A]: [failingRun()] },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
   test("keeps a no_ci row that is unreadable within a day", async () => {
     const h = harness({
       prs: { [PR_KEY]: pr() },
@@ -1855,6 +1934,32 @@ describe("exceptions", () => {
     });
     await runPrCiWatch(h.deps);
     expect(h.transitions.map((t) => t.to.state)).toEqual(["expired"]);
+  });
+
+  test("does not expire a day-old pending row whose denied notice could not be resolved", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      pending: [
+        row({
+          first_seen_at: new Date(NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS),
+        }),
+      ],
+      runs: { [SHA_A]: [run({ status: "in_progress", conclusion: null })] },
+      resolveFailsFor: [PR_CI_CHECK_DENIED_KIND],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("touches a row whose denied notice could not be resolved", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      pending: [row()],
+      runs: { [SHA_A]: [run()] },
+      resolveFailsFor: [PR_CI_CHECK_DENIED_KIND],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toEqual([1]);
   });
 
   test("touches a row whose expiry failed", async () => {

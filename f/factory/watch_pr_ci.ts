@@ -99,6 +99,16 @@ export async function main(): Promise<PrCiWatchResult> {
     log,
     instanceName: config.instance_name,
     isRepoAllowed: (owner, repo) => isRepoAllowed(allowConfig, owner, repo),
+    isRepoConfigured: (owner, repo) =>
+      isRepoAllowed(
+        {
+          owners: config.owners,
+          repo_allowlist: config.repo_allowlist,
+          factory_repo: config.factory_repo,
+        },
+        owner,
+        repo,
+      ),
     listTrackedItems: async () => {
       const items = await listPrOpenIssueWorkItems(
         new Date(Date.now() - config.tracked_pr_days * DAY_MS),

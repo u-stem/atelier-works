@@ -73,12 +73,12 @@ export const NO_CI_RECHECK_INTERVAL_MS = 60 * 60_000;
  * 読めない条件は、次の4つである。
  * - 実行の多さ(`WorkflowRunsIncompleteError`)で、実行を読み切れない。
  * - 実行かPRを読む権限が無い(403、404)。
- * - リポジトリが対象から外れた。
+ * - リポジトリが対象から外れた(設定から外れた場合と、オーナーの照合に失敗した場合)。
  * - 読み取りの段階で、分類できない例外(サーバーの5xxを含む)が出た。
  * rate limitは、以降の読み取りを止めるだけで数えない。
  * 読めないまま判定を待ち続けても、人に知らせる手段が無いので、行を終わらせる。
  * 失敗の行と実行なしの行は、期限切れにしない。失敗の通知は、読めなくなっても残す。
- * 対象から外れたリポジトリの失敗と実行なしの行だけは、`superseded`にする。
+ * 設定から外れたリポジトリの失敗と実行なしの行だけは、`superseded`にする。
  */
 export const UNREADABLE_EXPIRES_AFTER_MS = 24 * 60 * 60_000;
 
@@ -125,6 +125,12 @@ export type PrCiWatchDeps = {
   readonly instanceName: string;
   /** 許可リストと、照合済みのオーナーに合うリポジトリか。 */
   readonly isRepoAllowed: (owner: string, repo: string) => boolean;
+  /**
+   * 照合前の設定に合うリポジトリか。`factory_repo`、`repo_allowlist`の項目、
+   * `owners`のオーナーのいずれかに合えば`true`で、照合に失敗したオーナーも含める。
+   * `isRepoAllowed`が`false`でも、こちらが`true`なら、照合が一時的に失敗しているだけかもしれない。
+   */
+  readonly isRepoConfigured: (owner: string, repo: string) => boolean;
   /** PRを作ったまま`pr_open`の作業項目。新しい順に、最大`TRACKED_PR_LIMIT`件。 */
   readonly listTrackedItems: () => Promise<FactoryWorkItemRef[]>;
   readonly getPr: (
@@ -629,7 +635,12 @@ async function judgeRow(context: Context, row: PrCiCheck): Promise<void> {
   const ref = rowRef(row);
   if (state.closedPrs.has(prKey(ref))) return;
   if (!deps.isRepoAllowed(ref.owner, ref.repo)) {
-    await settleUnreadable(context, row, true);
+    // 設定から外れたときだけ、恒久的に対象外とみなす。オーナーの照合の失敗は、次の回に戻りうる。
+    await settleUnreadable(
+      context,
+      row,
+      !deps.isRepoConfigured(ref.owner, ref.repo),
+    );
     return;
   }
   if (state.rateLimited) return;
@@ -653,6 +664,8 @@ async function judgeRow(context: Context, row: PrCiCheck): Promise<void> {
       await settleUnreadable(context, row, false);
       return;
     case "runs":
+      // 読んだ後の段階なので、例外は`judgeRowSafely`に任せる(読めない行として終わらせない)。
+      await noteReadable(context, ref);
       await applyRuns(context, row, ref, read.runs, read.headIsCurrent);
   }
 }
@@ -698,7 +711,6 @@ async function readRow(
         other_pull_request: result.droppedOtherPullRequest,
       });
     }
-    await noteReadable(context, ref);
     const latest = await readPr(context, ref);
     if (latest.state === "closed") return { kind: "closed" };
     return {
@@ -842,10 +854,11 @@ async function expireStalePending(
 }
 
 /**
- * 読めない行を扱う。`removed`は、リポジトリが対象から外れた(許可リストや、オーナーの照合から外れた)ことを表す。
+ * 読めない行を扱う。`removed`は、リポジトリが設定から外れた(`factory_repo`にも`repo_allowlist`にも`owners`にも合わない)ことを表す。
+ * オーナーの照合に失敗しているだけの回は含まない。
  * 最初に見てから`UNREADABLE_EXPIRES_AFTER_MS`たつと、判定待ちの行は、どちらの条件でも通知せずに`expired`にする。
  * 失敗と実行なしの行は、`removed`のときだけ`superseded`にし、そのPRの失敗のnoticeを解決する。
- * 対象から外れたリポジトリの失敗は、人が確かめる手段が無いためである。
+ * 設定から外れたリポジトリの失敗は、人が確かめる手段が無いためである。
  * 権限の不足(403、404)や実行の多さで読めない回は、失敗の行を`superseded`にせず、noticeも解決しない。
  * 一時的な不通で、今も続く失敗の通知を消さないためである。
  * 解決は冪等なので、行の更新より先に行う。

@@ -54,7 +54,7 @@ locks:
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: 1b270a250c7b1336139d05793e6415e43db538b36069498a8cdf48f4a09cab5f
   f/factory/lib/pr_ci_support: 4de1e28a43a65ee886949c0b9044b5a78175f878b01b7e35f36a9adfaf2d5caf
-  f/factory/lib/pr_ci_watch: a64bc354fccb83ca9906c7b05b342bebcf91782df2526d32e0c0e9f52c93e069
+  f/factory/lib/pr_ci_watch: 5720ebddfad4d715955344961f7b62c7b5c8a4b8246f2497681fe1210d7227d1
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: bae7e3b08acef43ca6534d770f4e010631843850fffab408ff7566c66f5c6ad9
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
@@ -106,4 +106,4 @@ locks:
   f/factory/steps/pr_workflow_support: 11829a1f4502e46adbf97bc6f0ebe83d21cb63a855d9f170ca4c52da02254a07
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: 6b197f8bf7a2689c8f1906fcae64b328c9815890b6344796ab0e6cff6585e958
-  f/factory/watch_pr_ci: d907146faa3abc52fc2ceaa46c8e290c18b48d7e0a392c44d30be8dcd82c48fc
+  f/factory/watch_pr_ci: f5f87bbea6aa2ca0719f5ed7d8e3039950ee434259aac166c59b518786405454
