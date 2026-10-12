@@ -38,12 +38,15 @@
 | `fixing` | 失敗を直す作業項目の結果待ち。`claimPrCiCheckForFix`だけが`failed`から移す。この監視は判定で読まない | しない |
 
 遷移は`canTransitionPrCi`が定める。更新は`WHERE state = <移る前の状態>`の条件付きで、別の実行が先に移した行は書き換えない。
-`transitionPrCiCheck`は`fixing`への移行を拒否し、`claimPrCiCheckForFix`だけが行う。作業項目の挿入と同じ1つのSQL文で行う必要があるためである。
-`fixing`からは、`failed`、`superseded`、`passed`へ移れる。`fixing`から出る移行は、`fix_work_item_id`を空にする。
+`transitionPrCiCheck`は`fixing`への移行を拒否し、`claimPrCiCheckForFix`だけが行う。
+作業項目の挿入と同じ1つのSQL文で行う必要があるためである。
+`fixing`からは、`failed`、`superseded`、`passed`へ移れる。
+`fixing`から出る移行は、`fix_work_item_id`を空にする。
 
 ## 失敗を直すための状態と関数
 
-失敗を直す作業項目のために、`pr_ci_checks`は次の3列を持つ。外部キーは無い。作業項目は行の削除に連なって消えず、行も作業項目の削除に連なって消えない。
+失敗を直す作業項目のために、`pr_ci_checks`は次の3列を持つ。
+外部キーは無い。作業項目は行の削除に連なって消えず、行も作業項目の削除に連なって消えない。
 
 | 列 | 意味 |
 | --- | --- |
@@ -75,31 +78,38 @@
 - 行が保留されている。
 - 同じPRに、終端でない`pr_fix`の作業項目がある。同じブランチへ別々にpushして競合するのを防ぐためである。
 
-確認をすり抜けた並行する起動は、部分一意索引`work_items_active_pr_fix_key`が拒む。違反は文全体を取り消すので、行は変わらずNULLを返す。
+確認をすり抜けた並行する起動は、部分一意索引`work_items_active_pr_fix_key`が拒む。
+違反は文全体を取り消すので、行は変わらずNULLを返す。
 作業項目は、種別`pr_fix`、状態`fixing`、サイクルと試行は1で挿入する。
 ラウンドの番号(`fix_round`)と処理済みの位置は、同じPRの直近の`pr_fix`から写す。
 処理済みの位置は、`last_review_id`、`last_comment_id`、`last_review_comment_id`の3列である。
 直近の`pr_fix`が無ければ、すべて0にする。直す作業項目は、ラウンドの番号も処理済みの位置も進めない。
-ownerとrepoは、行との照合では小文字で比べる。作業項目には、GitHubの正規の綴り(PRのAPIが返す`base.repo.owner.login`と`name`)を、`poll_prs`と同じ綴りで渡す。一意索引と既存の照合が大文字小文字を区別するためである。
+ownerとrepoは、行との照合では小文字で比べる。
+作業項目には、`poll_prs`が`startFix`に渡すownerとrepo(検索結果の`repository_url`由来)と同じ綴りを渡す。
+一意索引と既存の照合が大文字小文字を区別するためである。
 
 `countPrFixFailures`は、`ci_check_id`を持つ作業項目を数えない。
 指摘への対応の失敗から、モデルを`heavy_model`に上げるかを決める。この判定に、CIの失敗を直す作業項目の失敗を混ぜないためである。
 
-`fixing`の行は、掃除(`deletePrCiChecksBefore`)が削除しない。`touchPrCiCheck`は`fixing`の行も読み直した時刻を進める。
+`fixing`の行は、掃除(`deletePrCiChecksBefore`)が削除しない。
+`touchPrCiCheck`は`fixing`の行も読み直した時刻を進める。
 
-### 設定
+## 失敗を直す設定
 
 次の3項目は`factory_config`で決める。既存のリソースにこれらの項目が無くても、既定値で動く。
+この3項目を読んで起動を決める処理はまだ無い。設定の読み込みと検証だけがある。
 
-| 項目 | 既定値 | 意味 |
+| 項目 | 既定値 | 判定が読む値 |
 | --- | --- | --- |
-| `pr_ci_fix_enabled` | `false` | 直す作業項目を起動してよいか。`false`の間は起動しない |
+| `pr_ci_fix_enabled` | `false` | 直す作業項目を起動してよいか |
 | `pr_ci_fix_max_rounds` | `2` | 1つのPRで起動できる、直す作業項目の数の上限。1以上10以下の整数。直近の`passed`の行より後を数え、通ると数え直す。数えるのは`countPrCiFixRounds` |
 | `pr_ci_fix_enabled_since` | 無し | 最初に見た時刻(`first_seen_at`)がこの時刻より前の失敗を、直す対象にしない。無ければ時刻では絞らない |
 
 `pr_ci_fix_enabled_since`は、秒まで書いたタイムゾーン付きのRFC 3339の日時にする(例: `2026-10-13T03:00:00Z`)。
-読み込みの後は`Date`になる。比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
-有効にした時点で判定待ちだった失敗も、最初に見た時刻が前なら対象外になる。直す対象を絞る側に倒すためである。
+読み込みの後は`Date`になる。
+比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
+有効にした時点で判定待ちだった失敗も、最初に見た時刻が前なら対象外になる。
+直す対象を絞る側に倒すためである。
 日時の形が違う値や、`pr_ci_fix_max_rounds`が範囲を外れた値は、既定値に倒さず設定の読み込みで拒否する。
 設定を書き損じると、設定の読み込み全体が設定エラーで止まり、Factoryのほかの処理も動かなくなる。
 
@@ -108,7 +118,8 @@ ownerとrepoは、行との照合では小文字で比べる。作業項目に�
 対象のPRごとに、PRを読み、今のheadの行を整える(`planPrHead`)。
 
 - 今のheadの行が無ければ、`pending`で記録する。
-- 古いheadの`pending`、`failed`、`no_ci`、`fixing`の行は、`superseded`にする。通知しない。今のheadの`fixing`の行は触らない。headが進んだなら、その行のheadのCIを直す意味が無くなるためである。
+- 古いheadの`pending`、`failed`、`no_ci`、`fixing`の行は、`superseded`にする。通知しない。headが進んだなら、その行のheadのCIを直す意味が無くなるためである。
+- 今のheadの`fixing`の行は触らない。
 - 今のheadの行が`superseded`なら、`pending`に戻す。headが以前の値に戻ったときである。
 - `passed`などの終わった行は、記録として残す。
 

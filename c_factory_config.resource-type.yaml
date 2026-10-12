@@ -267,7 +267,7 @@ schema:
     pr_ci_fix_enabled:
       type: boolean
       description: >-
-        FactoryのPRのCIの失敗を直す作業項目を起動するかどうかです。falseの間は、何も起動しません。
+        FactoryのPRのCIの失敗を直す作業項目を、起動してよいかを表す値です。この値を読んで起動を決める処理はまだ無く、設定の読み込みと検証だけがあります。
       default: false
     pr_ci_fix_enabled_since:
       type: string
