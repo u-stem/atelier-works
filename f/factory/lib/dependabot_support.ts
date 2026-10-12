@@ -22,7 +22,7 @@ export const REQUIRED_CHECKS: readonly string[] = [
  * 更新を許すファイル。依存の版を変えるのは、マニフェストとロックファイルだけである。
  * リポジトリ直下とconsole/配下の2か所に限り、それ以外の階層は許さない。
  */
-const ALLOWED_PATHS: readonly string[] = [
+export const ALLOWED_PATHS: readonly string[] = [
   "package.json",
   "bun.lock",
   "console/package.json",
@@ -512,7 +512,11 @@ export type GateInput = {
     verified: boolean;
     parentCount: number;
   }[];
-  checks: { name: string; conclusion: string | null }[];
+  /**
+   * `appId`はチェックを作ったAppのid。削除されたAppのチェックでは`null`にする。
+   * 必須のチェックは、GitHub Actions(`GITHUB_ACTIONS_APP_ID`)から来たものだけを出揃ったと見なす。
+   */
+  checks: { name: string; appId: number | null; conclusion: string | null }[];
   requiredChecks: readonly string[];
   update: UpdateKind;
   /** PRで変更されたすべてのパス。`files`に現れないパスがあれば止める。 */
@@ -527,7 +531,8 @@ export type GateInput = {
   files: { path: string; before: string | null; after: string | null }[];
   /** 更新の対象のパッケージと、更新後の版。 */
   target: { name: string; to: string };
-  mergeable: boolean;
+  /** GitHubがまだ計算していないときは`null`。 */
+  mergeable: boolean | null;
   publishedAtIso: string;
   nowMs: number;
   minPublishedDays: number;
@@ -686,18 +691,20 @@ function commitProblem(input: GateInput): string | null {
 
 const PASSING_CONCLUSIONS: readonly string[] = ["success", "skipped"];
 
+/** GitHub Actionsが作るチェックの`app.id`。必須チェックの主体を、このAppに限る。 */
+export const GITHUB_ACTIONS_APP_ID = 15368;
+
 /**
  * 必須チェックの状態を見る。失敗は止め、未完了と未出現は待つ。
  * 同じ名前のチェックが複数あるときは、すべてが合格するまで通さない。
+ * 出揃ったと見なすには、GitHub Actionsから来たチェックが1件以上要る。
+ * ほかのAppが同じ名前で成功を報告しても、出揃った証拠にしない。
+ * ほかのAppの同名の失敗は止める。成功で失敗を隠さないため。
  */
 function checkProblem(input: GateInput): GateResult | null {
   let pending: string | null = null;
   for (const name of input.requiredChecks) {
     const runs = input.checks.filter((check) => check.name === name);
-    if (runs.length === 0) {
-      pending ??= `required check has not appeared: ${detail(name)}`;
-      continue;
-    }
     for (const run of runs) {
       if (run.conclusion === null) {
         pending ??= `required check is not completed: ${detail(name)}`;
@@ -707,13 +714,16 @@ function checkProblem(input: GateInput): GateResult | null {
         );
       }
     }
+    if (!runs.some((run) => run.appId === GITHUB_ACTIONS_APP_ID)) {
+      pending ??= `required check has not appeared from GitHub Actions: ${detail(name)}`;
+    }
   }
   return pending === null ? null : wait(pending);
 }
 
 /**
  * 自動でmergeしてよいかを判定する。
- * fork、作者、種別、パスなどの止める条件を先に見て、待つ条件(チェックの未完了、公開日数の不足)を後に見る。
+ * fork、作者、種別、パスなどの止める条件を先に見て、待つ条件(mergeableの未計算、チェックの未完了、公開日数の不足)を後に見る。
  * 止める条件が1つでもあれば、待つ条件より優先して`needs_human`を返す。
  * 理由に埋め込むファイルやGitHub由来の文字列は、切り詰めて区切りを除いてある。
  */
@@ -736,7 +746,7 @@ export function evaluateGate(input: GateInput): GateResult {
   }
   const pathReason = pathProblem(input.changedPaths);
   if (pathReason !== null) return stop(pathReason);
-  if (!input.mergeable) return stop("pull request is not mergeable");
+  if (input.mergeable === false) return stop("pull request is not mergeable");
   const files = fileProblem(input);
   if (files !== null) return stop(files);
   const scripts = installScriptProblem(input);
@@ -754,6 +764,9 @@ export function evaluateGate(input: GateInput): GateResult {
   const checks = checkProblem(input);
   if (checks !== null && !checks.ok && checks.kind === "needs_human") {
     return checks;
+  }
+  if (input.mergeable === null) {
+    return wait("mergeability has not been computed yet");
   }
   if (
     !isPublishedLongEnough(
@@ -778,9 +791,10 @@ export type ImpactAssessment = {
   unverified: string[];
 };
 
-const MAX_EVIDENCE_CHARS = 4000;
-const MAX_LIST_ITEMS = 20;
-const MAX_ITEM_CHARS = 500;
+// 構造化出力のJSON schemaも、同じ値を上限に使う。
+export const MAX_EVIDENCE_CHARS = 4000;
+export const MAX_LIST_ITEMS = 20;
+export const MAX_ITEM_CHARS = 500;
 
 function isBoundedStringArray(value: unknown): value is string[] {
   return (
