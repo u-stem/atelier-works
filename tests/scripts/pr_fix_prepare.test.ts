@@ -6,7 +6,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { CheckRuntimeUnsafeError } from "../../f/factory/lib/check_sandbox.ts";
-import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
+import {
+  type CommandRunner,
+  RUNNER_MAX_STOP_OVERHEAD_MS,
+} from "../../f/factory/lib/workspace.ts";
 import {
   describeReason,
   earlyExitBase,
@@ -17,17 +20,20 @@ import {
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   evaluateSameRepoHeadGuard,
+  fetchPrFixHeadBranchState,
   nextActionFor,
   PR_COMMAND_STOP_OVERHEAD_SEC,
   prFixTimeoutMisfit,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+import { ghApiOk } from "../lib/testSupport.ts";
 
 const SAFE_INPUT = {
   open: true,
   headRepoFullName: "octo-owner/atelier-works",
   baseRepoFullName: "octo-owner/atelier-works",
   draft: false,
-  baseProtected: false,
+  headProtected: false,
+  headIsDefaultBranch: false,
 };
 
 describe("evaluatePrFixSafetyGuards", () => {
@@ -61,12 +67,33 @@ describe("evaluatePrFixSafetyGuards", () => {
     expect(result.ok).toBe(false);
   });
 
-  test("fails when the base branch is protected", () => {
+  test("fails when the head branch is protected", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      baseProtected: true,
+      headProtected: true,
     });
-    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toBe("head branch is protected");
+  });
+
+  test("fails when the head branch is the default branch", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headIsDefaultBranch: true,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "head branch is the default branch",
+    );
+  });
+
+  test("reports the default-branch reason when the default branch is also protected", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headProtected: true,
+      headIsDefaultBranch: true,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "head branch is the default branch",
+    );
   });
 
   test("reports the not-open reason first when multiple guards fail", () => {
@@ -76,6 +103,94 @@ describe("evaluatePrFixSafetyGuards", () => {
       draft: true,
     });
     expect(!result.ok && result.reason).toContain("open");
+  });
+});
+
+// リポジトリのAPIの応答を、問い合わせ先のendpointごとに返す偽のコマンド実行。
+// 保護されたbase(`main`)向けのPRのheadが、保護されていない普通のブランチである状況を作る。
+function createBranchApiRunner(headProtected: boolean) {
+  const endpoints: string[] = [];
+  const run: CommandRunner = async (argv) => {
+    const endpoint = argv[2] ?? "";
+    endpoints.push(endpoint);
+    if (endpoint === "repos/acme/widgets") {
+      return ghApiOk({ default_branch: "main" });
+    }
+    if (endpoint === "repos/acme/widgets/branches/main") {
+      return ghApiOk({ protected: true });
+    }
+    return ghApiOk({ protected: headProtected });
+  };
+  return { run, endpoints };
+}
+
+describe("fetchPrFixHeadBranchState", () => {
+  test("reads the protection of the head branch, not the base branch", async () => {
+    const api = createBranchApiRunner(false);
+    await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(api.endpoints).toContain("repos/acme/widgets/branches/feature%2Fx");
+  });
+
+  test("never reads the base branch", async () => {
+    const api = createBranchApiRunner(false);
+    await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(api.endpoints).not.toContain("repos/acme/widgets/branches/main");
+  });
+
+  test("reports a protected head branch", async () => {
+    const api = createBranchApiRunner(true);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(state.headProtected).toBe(true);
+  });
+
+  test("reports a head branch that is the default branch", async () => {
+    const api = createBranchApiRunner(true);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(state.headIsDefaultBranch).toBe(true);
+  });
+
+  test("reports a head branch that is not the default branch", async () => {
+    const api = createBranchApiRunner(false);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(state.headIsDefaultBranch).toBe(false);
+  });
+
+  test("lets a PR to the protected main through when its head is not protected", async () => {
+    const api = createBranchApiRunner(false);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(evaluatePrFixSafetyGuards({ ...SAFE_INPUT, ...state })).toEqual({
+      ok: true,
+    });
   });
 });
 
@@ -284,6 +399,24 @@ describe("describeReason", () => {
 
   test("translates a static safety-guard reason", () => {
     expect(describeReason("pull request is a draft")).toBe("PRがドラフトです");
+  });
+
+  test("translates the protected head branch reason", () => {
+    expect(describeReason("head branch is protected")).toBe(
+      "headブランチが保護されています",
+    );
+  });
+
+  test("translates the default head branch reason", () => {
+    expect(describeReason("head branch is the default branch")).toBe(
+      "headブランチがデフォルトブランチです",
+    );
+  });
+
+  test("still translates the base branch reason kept in earlier records", () => {
+    expect(describeReason("base branch is protected")).toBe(
+      "baseブランチが保護されています",
+    );
   });
 
   test("translates a dynamic fix-round-exhausted reason, keeping the numbers", () => {

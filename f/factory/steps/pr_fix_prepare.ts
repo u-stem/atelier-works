@@ -9,7 +9,7 @@ import {
 } from "../lib/check_sandbox.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
-import { type GhClient, getBranchProtected, getPr } from "../lib/github.ts";
+import { type GhClient, getPr } from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
@@ -36,7 +36,10 @@ import {
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
+  evaluateSameRepoHeadGuard,
+  fetchPrFixHeadBranchState,
   type PrFixGateOutcome,
+  type PrFixHeadBranchState,
   prFixTimeoutMisfit,
 } from "./pr_workflow_support.ts";
 
@@ -67,7 +70,7 @@ export type PrFixPrepareResult = {
  * 作業項目を読み、対象リポジトリの許可、修正ラウンドの上限、
  * 時間設定が修正・検証ステップのtimeoutに収まること、
  * 親Issueの再実装中でないこと、PRの安全条件
- * (open、headとbaseが同じリポジトリ、draftでない、baseブランチが保護されていない)
+ * (open、headとbaseが同じリポジトリ、draftでない、headブランチが保護ブランチでもデフォルトブランチでもない)
  * を順に検査する。
  * 検査に通らなければ`outcome`に理由を入れて返し、worktreeは作らない。
  * すべて通ったときだけ、Factoryのself cloneと対象リポジトリのcloneを用意し、
@@ -219,19 +222,26 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
       ...earlyExitBase(workItem),
     };
   }
-  const baseProtected = await getBranchProtected(
-    client,
-    workItem.owner,
-    workItem.repo,
-    pr.baseRef,
-  );
+  // forkやクローズ済みのPRのheadはこのリポジトリに無いことがある。その場合は
+  // 先に判定する関門(open、同一リポジトリ)が止めるので、headの状態は読まない。
+  const headReadable =
+    pr.state === "open" &&
+    evaluateSameRepoHeadGuard(pr.headRepoFullName, pr.baseRepoFullName).ok;
+  const headState: PrFixHeadBranchState = headReadable
+    ? await fetchPrFixHeadBranchState(
+        client,
+        workItem.owner,
+        workItem.repo,
+        pr.headRef,
+      )
+    : { headProtected: false, headIsDefaultBranch: false };
 
   const safety = evaluatePrFixSafetyGuards({
     open: pr.state === "open",
     headRepoFullName: pr.headRepoFullName,
     baseRepoFullName: pr.baseRepoFullName,
     draft: pr.draft,
-    baseProtected,
+    ...headState,
   });
   if (!safety.ok) {
     return {

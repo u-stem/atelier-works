@@ -12,7 +12,10 @@ import {
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
+import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import {
+  type GhClient,
+  getBranchProtected,
   isOwnPost,
   type PrReview,
   type ReviewThread,
@@ -883,13 +886,37 @@ export type PrFixSafetyGuardInput = {
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
   readonly draft: boolean;
-  readonly baseProtected: boolean;
+  readonly headProtected: boolean;
+  readonly headIsDefaultBranch: boolean;
 };
+
+export type PrFixHeadBranchState = Pick<
+  PrFixSafetyGuardInput,
+  "headProtected" | "headIsDefaultBranch"
+>;
+
+/**
+ * PRのheadブランチが保護ブランチか、リポジトリのデフォルトブランチかを読む。
+ * pr_fixがpushするのはheadブランチなので、baseの保護は見ない。
+ * `protected`はrulesetsによる保護も含む。
+ * forkのPRやクローズ済みのPRのheadは、このリポジトリに無いことがあるので、
+ * 呼び出し側は、同一リポジトリのopenなPRにだけ使う。
+ */
+export async function fetchPrFixHeadBranchState(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  headRef: string,
+): Promise<PrFixHeadBranchState> {
+  const headProtected = await getBranchProtected(client, owner, repo, headRef);
+  const defaultBranch = await getDefaultBranch(client, owner, repo);
+  return { headProtected, headIsDefaultBranch: headRef === defaultBranch };
+}
 
 /**
  * 修正を試みる前の4つの安全のための関門を判定する。
  * PRがopenであること、head.repoとbase.repoが同じであること(forkへpushしない)、
- * draftでないこと、baseブランチが保護されていないこと。
+ * draftでないこと、headブランチが保護ブランチでもデフォルトブランチでもないこと。
  * worktreeを作る前、Claudeを実行する前に確かめる。
  * 実際にpushする直前には、`workspace.ts`の`commitAndPush`が
  * headのshaが動いていないことを別に確かめ直す。
@@ -910,8 +937,12 @@ export function evaluatePrFixSafetyGuards(
   if (input.draft) {
     return { ok: false, reason: "pull request is a draft" };
   }
-  if (input.baseProtected) {
-    return { ok: false, reason: "base branch is protected" };
+  // デフォルトブランチは保護されていることが多いので、区別できるように先に判定する。
+  if (input.headIsDefaultBranch) {
+    return { ok: false, reason: "head branch is the default branch" };
+  }
+  if (input.headProtected) {
+    return { ok: false, reason: "head branch is protected" };
   }
   return { ok: true };
 }
@@ -3551,9 +3582,22 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => `ドラフトを解除してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
+    pattern: /^head branch is the default branch$/,
+    describe: () => "headブランチがデフォルトブランチです",
+    nextAction: () =>
+      "デフォルトブランチにはFactoryがpushしません。作業用のブランチからPRを作り直してください",
+  },
+  {
+    pattern: /^head branch is protected$/,
+    describe: () => "headブランチが保護されています",
+    nextAction: () =>
+      "保護ブランチにはFactoryがpushしません。作業用のブランチからPRを作り直してください",
+  },
+  // 現在の関門は返さないが、DBに残る過去の理由を表示するために残す。
+  {
     pattern: /^base branch is protected$/,
     describe: () => "baseブランチが保護されています",
-    nextAction: () => "baseブランチの保護設定を確認してください",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern:
