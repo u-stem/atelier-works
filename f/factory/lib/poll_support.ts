@@ -54,6 +54,69 @@ export function filterByRepoAllowlist<
 }
 
 // ---------------------------------------------------------------------------
+// オーナーの数値IDの照合
+// ---------------------------------------------------------------------------
+
+/** オーナーの数値IDが食い違ったことを知らせるnoticeの種類。 */
+export const OWNER_ID_MISMATCH_KIND = "owner_id_mismatch";
+
+/**
+ * 数値IDが食い違ったオーナーのnoticeの本文。
+ * オーナーと2つのIDだけで決まるので、同じ食い違いが続くあいだは
+ * 同じ本文の未解決のnoticeが重ならない。
+ */
+export function ownerIdMismatchMessage(
+  name: string,
+  expectedId: number,
+  actualId: number,
+): string {
+  return `${name}: GitHubの現在のIDが${String(actualId)}で、設定のID${String(expectedId)}と食い違うため、このオーナーの検索を飛ばしました。オーナーが改名して別の人がその名前を取得した可能性があります。factory_configのownersを見直してください`;
+}
+
+export type OwnerIdGateDeps = {
+  readonly getAccountId: (name: string) => Promise<number>;
+  readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+  readonly addNotice: (record: NoticeRecord) => Promise<unknown>;
+};
+
+/**
+ * `id`を持つオーナーだけ、GitHubの現在のIDと照合し、検索してよいかを返す。
+ * `id`の無いオーナーは名前だけで動かすので、取得せずに`true`を返す。
+ * 食い違いと取得の失敗は、検索を飛ばす(`false`)うえで、失敗として記録する。
+ * noticeは食い違いのときだけ残す。取得の失敗は一時的な障害でありうるし、
+ * 人が取る操作が無いので、失敗の記録だけにする。
+ * 記録の失敗でポーリング全体を止めないよう、記録の例外は握りつぶす。
+ */
+export async function gateOwnerId(
+  owner: { readonly name: string; readonly id?: number },
+  deps: OwnerIdGateDeps,
+): Promise<boolean> {
+  const expectedId = owner.id;
+  if (expectedId === undefined) {
+    return true;
+  }
+  const step = `verify_owner_id:${owner.name}`;
+  let actualId: number;
+  try {
+    actualId = await deps.getAccountId(owner.name);
+  } catch (err) {
+    await deps.recordFailure(step, err);
+    return false;
+  }
+  if (actualId === expectedId) {
+    return true;
+  }
+  const message = ownerIdMismatchMessage(owner.name, expectedId, actualId);
+  await deps.recordFailure(step, new Error(message));
+  try {
+    await deps.addNotice({ kind: OWNER_ID_MISMATCH_KIND, message });
+  } catch (err) {
+    await deps.recordFailure(`${step}:notice`, err);
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // デプロイ版の不一致
 // ---------------------------------------------------------------------------
 

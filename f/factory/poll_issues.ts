@@ -45,6 +45,7 @@ import {
   type GhClient,
   GitHubHttpError,
   GitHubRateLimitError,
+  getAccountId,
   getIssue,
   getLabelerLogin,
   getViewer,
@@ -64,6 +65,7 @@ import {
   decideIssueActions,
   decideReconcileAction,
   filterByRepoAllowlist,
+  gateOwnerId,
   groupActionableTargets,
   type IssueCandidate,
   type IssueDecision,
@@ -1366,6 +1368,15 @@ export async function main(): Promise<{
 
   const rawCandidates: IssueSearchItem[] = [];
   for (const owner of config.owners) {
+    const proceed = await gateOwnerId(owner, {
+      getAccountId: (name) => getAccountId(client, name),
+      recordFailure: (step, err) => recordFailureSafe(step, err, log),
+      addNotice: (record) => addNoticeUnlessUnresolved(record),
+    });
+    if (!proceed) {
+      failed += 1;
+      continue;
+    }
     try {
       const found = await searchIssues(client, {
         owner: owner.name,

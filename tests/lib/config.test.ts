@@ -207,6 +207,26 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("keeps the numeric id of an owner", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: 4242 }],
+    };
+    expect(parseFactoryConfig(raw).owners[0]?.id).toBe(4242);
+  });
+
+  test("leaves the id of an owner undefined when omitted", () => {
+    expect(parseFactoryConfig(LEGACY_RAW_CONFIG).owners[0]?.id).toBeUndefined();
+  });
+
+  test.each([0, -1, 1.5, "42", null])("throws when an owner id is %p", (id) => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id }],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("throws when max_turns is present but not a number", () => {
     const raw = { ...LEGACY_RAW_CONFIG, max_turns: "forty" };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);

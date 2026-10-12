@@ -144,6 +144,12 @@ function isFactoryOwner(value: unknown): value is FactoryOwner {
   if (!isRecord(value)) {
     return false;
   }
+  if (
+    "id" in value &&
+    (!isNumber(value.id) || !Number.isInteger(value.id) || value.id <= 0)
+  ) {
+    return false;
+  }
   return (
     isString(value.name) &&
     isString(value.kind) &&
