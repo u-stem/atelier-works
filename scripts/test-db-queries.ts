@@ -29,6 +29,7 @@ import {
   listPendingMainCiRuns,
   listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
+  type NewWorkerSample,
   recordDeployment,
   recordFailure,
   recordMainCiRun,
@@ -43,7 +44,10 @@ import {
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
-import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
+import {
+  getCleanupSummary,
+  getWorkerLoadSummary,
+} from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
 import {
   runConsoleQuery,
@@ -2051,6 +2055,112 @@ for (const [name, statement] of [
   }
   check(`worker_samples: the table rejects ${name}`, rejected);
 }
+
+// worker_samples: 日次のまとめの集計は、範囲の行だけを数え、前の行との差でOOMの増分を求める。
+// 範囲は2026-10-10(JST)。範囲の外の行(10分前の行と終端ちょうどの行)は数えず、前の行は差の起点にだけ使う。
+const MIB = 1024 * 1024;
+const loadRange = {
+  start: new Date("2026-10-09T15:00:00.000Z"),
+  end: new Date("2026-10-10T15:00:00.000Z"),
+  label: "2026-10-10",
+};
+function loadSample(
+  sampledAt: string,
+  overrides: Partial<NewWorkerSample> = {},
+): NewWorkerSample {
+  return {
+    ...nullWorkerSample,
+    sampled_at: new Date(sampledAt),
+    ...overrides,
+  };
+}
+for (const sample of [
+  loadSample("2026-10-09T14:55:00.000Z", { mem_oom: 1, mem_oom_kill: 0 }),
+  loadSample("2026-10-09T15:00:00.000Z", {
+    running_jobs: 3,
+    lag_seconds: 45,
+    max_wait_seconds: 100,
+    mem_anon_bytes: 100 * MIB,
+    mem_working_set_bytes: 200 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+    mem_oom: 3,
+    mem_oom_kill: 1,
+  }),
+  loadSample("2026-10-09T15:02:00.000Z", {
+    running_jobs: 0,
+    lag_seconds: 2,
+    max_wait_seconds: 0,
+    mem_anon_bytes: 200 * MIB,
+    mem_working_set_bytes: 300 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+    mem_oom: 0,
+    mem_oom_kill: 0,
+  }),
+  loadSample("2026-10-09T15:04:00.000Z"),
+  loadSample("2026-10-09T15:06:00.000Z", {
+    running_jobs: 1,
+    lag_seconds: 30,
+    max_wait_seconds: 5,
+    mem_anon_bytes: 50 * MIB,
+    mem_oom: 9,
+    mem_oom_kill: 9,
+  }),
+  loadSample("2026-10-10T15:00:00.000Z", {
+    running_jobs: 3,
+    lag_seconds: 999,
+    max_wait_seconds: 999,
+    mem_oom: 99,
+    mem_oom_kill: 99,
+  }),
+]) {
+  await insertWorkerSample(sample, sql);
+}
+const loadSummary = await getWorkerLoadSummary(loadRange, sql);
+check(
+  "worker_samples: the daily summary counts only the rows inside the range",
+  loadSummary?.sample_count === 4,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the largest lag and counts the laggy rows",
+  loadSummary?.lag_max_seconds === 45 && loadSummary.lag_over_count === 2,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary averages the running share over the rows that have it",
+  loadSummary?.running_ratio_max === 1 &&
+    Math.abs((loadSummary.running_ratio_avg ?? 0) - 4 / 9) < 1e-9,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the memory peaks and the share of the limit",
+  loadSummary?.mem_anon_max_bytes === 200 * MIB &&
+    loadSummary.mem_working_set_max_bytes === 300 * MIB &&
+    Math.abs((loadSummary.mem_anon_max_ratio ?? 0) - 0.2) < 1e-9,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary sums the counter increases and ignores a reset",
+  loadSummary?.mem_oom_increase === 2 &&
+    loadSummary.mem_oom_kill_increase === 1,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the longest wait",
+  loadSummary?.max_wait_max_seconds === 100,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary is null for a day without rows",
+  (await getWorkerLoadSummary(
+    {
+      start: new Date("2026-10-07T15:00:00.000Z"),
+      end: new Date("2026-10-08T15:00:00.000Z"),
+      label: "2026-10-08",
+    },
+    sql,
+  )) === null,
+);
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。

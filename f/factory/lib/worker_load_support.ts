@@ -527,3 +527,130 @@ export function parseFailureCount(state: unknown): number {
 export function nextFailureCount(previous: number, complete: boolean): number {
   return complete ? 0 : previous + 1;
 }
+
+// ---------------------------------------------------------------------------
+// 日次のまとめ
+// ---------------------------------------------------------------------------
+
+/** 1日に記録される行の数。2分ごとの記録がすべて残ったときの数で、欠けの割合の分母になる。 */
+export const WORKER_SAMPLES_PER_DAY = (24 * 60) / SAMPLE_INTERVAL_MINUTES;
+
+/** 日次のまとめで「遅れた記録」に数える`lag_seconds`の下限(秒)。 */
+export const DAILY_LAG_THRESHOLD_SECONDS = 30;
+
+/**
+ * 1日分の`factory.worker_samples`の集計。`null`は、その日のどの行にも値が無かったことを表す。
+ * 0は、読めて0だったことを表す。
+ */
+export type WorkerLoadSummary = {
+  /** 範囲内の行の数。 */
+  readonly sample_count: number;
+  /** 範囲で期待する行の数(`WORKER_SAMPLES_PER_DAY`)。 */
+  readonly expected_count: number;
+  /** `lag_seconds`の最大。 */
+  readonly lag_max_seconds: number | null;
+  /** `lag_seconds`が`DAILY_LAG_THRESHOLD_SECONDS`以上の行の数。 */
+  readonly lag_over_count: number;
+  /** 行ごとの`running_jobs / slots`の最大。記録のジョブ自身は含まない。 */
+  readonly running_ratio_max: number | null;
+  /** 行ごとの`running_jobs / slots`の平均。 */
+  readonly running_ratio_avg: number | null;
+  /** `mem_anon_bytes`の最大(バイト)。 */
+  readonly mem_anon_max_bytes: number | null;
+  /** 行ごとの`mem_anon_bytes / mem_limit_bytes`の最大。上限が読めた行だけで求める。 */
+  readonly mem_anon_max_ratio: number | null;
+  /** `mem_working_set_bytes`の最大(バイト)。 */
+  readonly mem_working_set_max_bytes: number | null;
+  /** `mem_oom`が行の間で増えた回数の合計。コンテナの再起動で戻った分は数えない。 */
+  readonly mem_oom_increase: number | null;
+  /** `mem_oom_kill`が行の間で増えた回数の合計。 */
+  readonly mem_oom_kill_increase: number | null;
+  /** `max_wait_seconds`の最大。記録のジョブ自身の遅れで打ち切られるので、下限である。 */
+  readonly max_wait_max_seconds: number | null;
+};
+
+const BYTES_PER_MIB = 1024 * 1024;
+
+function percent(ratio: number): string {
+  return `${String(Math.round(ratio * 100))}%`;
+}
+
+function mib(bytes: number): string {
+  return `${String(Math.round(bytes / BYTES_PER_MIB))}MiB`;
+}
+
+function missingLine(summary: WorkerLoadSummary): string {
+  const missing =
+    summary.expected_count > 0
+      ? Math.min(
+          1,
+          Math.max(0, 1 - summary.sample_count / summary.expected_count),
+        )
+      : 0;
+  return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${percent(missing)})`;
+}
+
+function lagLine(summary: WorkerLoadSummary): string {
+  return summary.lag_max_seconds === null
+    ? "遅れ: 不明"
+    : `遅れ: 最大${String(summary.lag_max_seconds)}秒、${String(DAILY_LAG_THRESHOLD_SECONDS)}秒以上${String(summary.lag_over_count)}件`;
+}
+
+function runningLine(summary: WorkerLoadSummary): string {
+  return summary.running_ratio_max === null ||
+    summary.running_ratio_avg === null
+    ? "他のジョブの枠の使用: 不明"
+    : `他のジョブの枠の使用: 最大${percent(summary.running_ratio_max)}、平均${percent(summary.running_ratio_avg)}`;
+}
+
+function oomText(summary: WorkerLoadSummary): string {
+  const { mem_oom_increase: oom, mem_oom_kill_increase: kill } = summary;
+  if (oom === null || kill === null) {
+    return "OOMの増分は不明";
+  }
+  return oom === 0 && kill === 0
+    ? "OOMなし"
+    : `OOMあり(OOM ${String(oom)}回、kill ${String(kill)}回)`;
+}
+
+function memoryLine(summary: WorkerLoadSummary): string {
+  if (
+    summary.mem_anon_max_bytes === null &&
+    summary.mem_working_set_max_bytes === null
+  ) {
+    return `メモリ: 不明、${oomText(summary)}`;
+  }
+  const anon =
+    summary.mem_anon_max_bytes === null
+      ? "anon最大不明"
+      : `anon最大${mib(summary.mem_anon_max_bytes)}${
+          summary.mem_anon_max_ratio === null
+            ? ""
+            : `(上限の${percent(summary.mem_anon_max_ratio)})`
+        }`;
+  const workingSet =
+    summary.mem_working_set_max_bytes === null
+      ? "working set最大不明"
+      : `working set最大${mib(summary.mem_working_set_max_bytes)}`;
+  return `メモリ: ${anon}、${workingSet}、${oomText(summary)}`;
+}
+
+function waitLine(summary: WorkerLoadSummary): string {
+  return summary.max_wait_max_seconds === null
+    ? "待ちの最長: 不明"
+    : `待ちの最長: ${String(summary.max_wait_max_seconds)}秒以上`;
+}
+
+/**
+ * 1日分の集計を、日次のまとめのDiscordの欄に載せる複数行の文にする。
+ * 見方は`docs/operations.md`の「workerの負荷の記録を確かめる」にある。
+ */
+export function summarizeWorkerLoad(summary: WorkerLoadSummary): string {
+  return [
+    missingLine(summary),
+    lagLine(summary),
+    runningLine(summary),
+    memoryLine(summary),
+    waitLine(summary),
+  ].join("\n");
+}

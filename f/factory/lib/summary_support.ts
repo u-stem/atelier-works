@@ -8,6 +8,11 @@
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
 import { isNumber, isString } from "./types.ts";
+import {
+  DAILY_LAG_THRESHOLD_SECONDS,
+  WORKER_SAMPLES_PER_DAY,
+  type WorkerLoadSummary,
+} from "./worker_load_support.ts";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -63,6 +68,13 @@ function parseNumericLike(value: unknown, field: string): number {
   throw new Error(`summary_support: row field "${field}" is not numeric`);
 }
 
+/** `parseNumericLike`と同じだが、NULL(集計に使える値が無かったこと)は`null`で返す。 */
+function parseNullableNumeric(value: unknown, field: string): number | null {
+  return value === null || value === undefined
+    ? null
+    : parseNumericLike(value, field);
+}
+
 export type AgentRunSummary = {
   readonly run_count: number;
   readonly total_cost_usd: number;
@@ -99,6 +111,107 @@ export async function getAgentRunSummary(
       AND created_at < ${range.end.toISOString()}
   `.fetch();
   return toAgentRunSummary(rows[0]);
+}
+
+/**
+ * `range`内の`factory.worker_samples`を1回のクエリで集計し、workerの負荷のまとめを返す。
+ * 範囲に行が無いとき(記録を始める前や、記録が止まっていた日)は、
+ * すべて0の集計ではなく`null`を返す。
+ * 日次サマリーのDiscord埋め込みで、「負荷が0だった」と「記録が無い」を区別するため。
+ *
+ * - `mem_oom`と`mem_oom_kill`は起動からの累積なので、行の間の差を足す。
+ *   コンテナが再起動して累積が戻った分は負の差になり、0として扱う。
+ *   範囲の最初の行の差は、範囲の始端の10分前まで読んだ直近の行との差で求める。
+ * - 割合は行ごとに求めてから最大と平均を取る。上限が読めない行は、メモリの割合に使わない。
+ * - 集計は`(sampled_at)`の索引で範囲を絞る。
+ */
+export async function getWorkerLoadSummary(
+  range: DayRange,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkerLoadSummary | null> {
+  const rows = await sql`
+    WITH samples AS (
+      SELECT
+        sampled_at,
+        slots,
+        running_jobs,
+        lag_seconds,
+        max_wait_seconds,
+        mem_anon_bytes,
+        mem_working_set_bytes,
+        mem_limit_bytes,
+        mem_oom - lag(mem_oom) OVER w AS oom_delta,
+        mem_oom_kill - lag(mem_oom_kill) OVER w AS oom_kill_delta
+      FROM factory.worker_samples
+      WHERE sampled_at >= ${range.start.toISOString()}::timestamptz - interval '10 minutes'
+        AND sampled_at < ${range.end.toISOString()}
+      WINDOW w AS (ORDER BY sampled_at, id)
+    )
+    SELECT
+      count(*) AS sample_count,
+      max(lag_seconds) AS lag_max_seconds,
+      count(*) FILTER (WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}) AS lag_over_count,
+      max(running_jobs::float8 / slots) AS running_ratio_max,
+      avg(running_jobs::float8 / slots) AS running_ratio_avg,
+      max(mem_anon_bytes) AS mem_anon_max_bytes,
+      max(mem_anon_bytes::float8 / mem_limit_bytes)
+        FILTER (WHERE mem_limit_bytes > 0) AS mem_anon_max_ratio,
+      max(mem_working_set_bytes) AS mem_working_set_max_bytes,
+      sum(greatest(oom_delta, 0)) AS mem_oom_increase,
+      sum(greatest(oom_kill_delta, 0)) AS mem_oom_kill_increase,
+      max(max_wait_seconds) AS max_wait_max_seconds
+    FROM samples
+    WHERE sampled_at >= ${range.start.toISOString()}
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const sampleCount = parseNumericLike(row.sample_count, "sample_count");
+  if (sampleCount === 0) {
+    return null;
+  }
+  return {
+    sample_count: sampleCount,
+    expected_count: WORKER_SAMPLES_PER_DAY,
+    lag_max_seconds: parseNullableNumeric(
+      row.lag_max_seconds,
+      "lag_max_seconds",
+    ),
+    lag_over_count: parseNumericLike(row.lag_over_count, "lag_over_count"),
+    running_ratio_max: parseNullableNumeric(
+      row.running_ratio_max,
+      "running_ratio_max",
+    ),
+    running_ratio_avg: parseNullableNumeric(
+      row.running_ratio_avg,
+      "running_ratio_avg",
+    ),
+    mem_anon_max_bytes: parseNullableNumeric(
+      row.mem_anon_max_bytes,
+      "mem_anon_max_bytes",
+    ),
+    mem_anon_max_ratio: parseNullableNumeric(
+      row.mem_anon_max_ratio,
+      "mem_anon_max_ratio",
+    ),
+    mem_working_set_max_bytes: parseNullableNumeric(
+      row.mem_working_set_max_bytes,
+      "mem_working_set_max_bytes",
+    ),
+    mem_oom_increase: parseNullableNumeric(
+      row.mem_oom_increase,
+      "mem_oom_increase",
+    ),
+    mem_oom_kill_increase: parseNullableNumeric(
+      row.mem_oom_kill_increase,
+      "mem_oom_kill_increase",
+    ),
+    max_wait_max_seconds: parseNullableNumeric(
+      row.max_wait_max_seconds,
+      "max_wait_max_seconds",
+    ),
+  };
 }
 
 export type ApprovalSummary = {

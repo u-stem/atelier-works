@@ -85,7 +85,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
-| `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除 |
+| `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除、workerの負荷 |
 | `audit_completed` | Consoleの監査のページ | 「次の操作」、`work_item_id` |
 | `pr_opened` | PR | 「次の操作」、Issue、「確認して欲しい点」、ラウンドと費用、差分 |
 

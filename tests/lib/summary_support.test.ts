@@ -5,7 +5,12 @@ import {
   getAgentRunSummary,
   getApprovalSummary,
   getCleanupSummary,
+  getWorkerLoadSummary,
 } from "../../f/factory/lib/summary_support.ts";
+import {
+  DAILY_LAG_THRESHOLD_SECONDS,
+  WORKER_SAMPLES_PER_DAY,
+} from "../../f/factory/lib/worker_load_support.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -252,5 +257,129 @@ describe("getCleanupSummary", () => {
     const { sql } = createFakeSqlClient([[]]);
     const summary = await getCleanupSummary(RANGE, sql);
     expect(summary).toBeNull();
+  });
+});
+
+describe("getWorkerLoadSummary", () => {
+  const FULL_ROW: SqlRow = {
+    sample_count: "718",
+    lag_max_seconds: 45,
+    lag_over_count: "3",
+    running_ratio_max: 0.6666666666666666,
+    running_ratio_avg: "0.27",
+    mem_anon_max_bytes: "83886080",
+    mem_anon_max_ratio: 0.0195,
+    mem_working_set_max_bytes: "272629760",
+    mem_oom_increase: "0",
+    mem_oom_kill_increase: "1",
+    max_wait_max_seconds: 120,
+  };
+
+  const NULL_ROW: SqlRow = {
+    sample_count: 2,
+    lag_max_seconds: null,
+    lag_over_count: 0,
+    running_ratio_max: null,
+    running_ratio_avg: null,
+    mem_anon_max_bytes: null,
+    mem_anon_max_ratio: null,
+    mem_working_set_max_bytes: null,
+    mem_oom_increase: null,
+    mem_oom_kill_increase: null,
+    max_wait_max_seconds: null,
+  };
+
+  test("queries factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("FROM factory.worker_samples");
+  });
+
+  test("aggregates in a single query", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("takes the increase of the oom counters between consecutive samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("lag(mem_oom_kill)");
+  });
+
+  test("ignores a counter that dropped after a restart", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("greatest(oom_kill_delta, 0)");
+  });
+
+  test("passes the range start, the range end and the lag threshold", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls[0]?.values).toEqual([
+      RANGE.start.toISOString(),
+      RANGE.end.toISOString(),
+      DAILY_LAG_THRESHOLD_SECONDS,
+      RANGE.start.toISOString(),
+    ]);
+  });
+
+  test("reads the aggregates, accepting numeric strings", async () => {
+    const { sql } = createFakeSqlClient([[FULL_ROW]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toEqual({
+      sample_count: 718,
+      expected_count: WORKER_SAMPLES_PER_DAY,
+      lag_max_seconds: 45,
+      lag_over_count: 3,
+      running_ratio_max: 0.6666666666666666,
+      running_ratio_avg: 0.27,
+      mem_anon_max_bytes: 83886080,
+      mem_anon_max_ratio: 0.0195,
+      mem_working_set_max_bytes: 272629760,
+      mem_oom_increase: 0,
+      mem_oom_kill_increase: 1,
+      max_wait_max_seconds: 120,
+    });
+  });
+
+  test("keeps null for values that no sample could read", async () => {
+    const { sql } = createFakeSqlClient([[NULL_ROW]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toEqual({
+      sample_count: 2,
+      expected_count: WORKER_SAMPLES_PER_DAY,
+      lag_max_seconds: null,
+      lag_over_count: 0,
+      running_ratio_max: null,
+      running_ratio_avg: null,
+      mem_anon_max_bytes: null,
+      mem_anon_max_ratio: null,
+      mem_working_set_max_bytes: null,
+      mem_oom_increase: null,
+      mem_oom_kill_increase: null,
+      max_wait_max_seconds: null,
+    });
+  });
+
+  test("returns null when no sample falls in range", async () => {
+    const { sql } = createFakeSqlClient([[{ ...NULL_ROW, sample_count: 0 }]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toBeNull();
+  });
+
+  test("returns null when the query returns no row at all", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toBeNull();
+  });
+
+  test("throws when an aggregate is not numeric", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...FULL_ROW, mem_anon_max_bytes: "many" }],
+    ]);
+    await expect(getWorkerLoadSummary(RANGE, sql)).rejects.toThrow(
+      'row field "mem_anon_max_bytes" is not numeric',
+    );
   });
 });

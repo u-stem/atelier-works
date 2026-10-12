@@ -4,6 +4,10 @@
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import type { ImplementDiffStat } from "./types.ts";
+import {
+  summarizeWorkerLoad,
+  type WorkerLoadSummary,
+} from "./worker_load_support.ts";
 
 export type DiscordEmbedField = {
   name: string;
@@ -175,6 +179,11 @@ export type NotifyEvent =
        * (立ち上げ直後でまだ一度も動いていないときなど)は`null`。
        */
       cleanup: CleanupCounts | null;
+      /**
+       * 前日のdefaultのworkerの負荷の集計。その日の記録が無いとき、
+       * または集計を読めなかったときは`null`。
+       */
+      worker_load: WorkerLoadSummary | null;
     }
   | {
       kind: "audit_completed";
@@ -434,6 +443,13 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
               event.cleanup === null
                 ? "前日の掃除記録なし"
                 : summarizeCleanup(event.cleanup),
+          },
+          {
+            name: "workerの負荷",
+            value:
+              event.worker_load === null
+                ? "前日の記録なし"
+                : summarizeWorkerLoad(event.worker_load),
           },
         ],
       };

@@ -283,6 +283,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
+      worker_load: null,
     });
     expect(embed.description).toBe("エージェント実行3件、$1.50消費。");
   });
@@ -298,6 +299,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
+      worker_load: null,
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
@@ -325,11 +327,69 @@ describe("buildEmbed", () => {
         main_ci_runs_deleted: 0,
         doc_dirs_deleted: 0,
       },
+      worker_load: null,
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
       value:
         "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
+    });
+  });
+
+  test("shows a 'no record' worker load field when worker_load is null", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: null,
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value: "前日の記録なし",
+    });
+  });
+
+  test("summarizes the worker load in its own field when present", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: {
+        sample_count: 700,
+        expected_count: 720,
+        lag_max_seconds: 5,
+        lag_over_count: 0,
+        running_ratio_max: 1 / 3,
+        running_ratio_avg: 0.1,
+        mem_anon_max_bytes: 100 * 1024 * 1024,
+        mem_anon_max_ratio: 0.025,
+        mem_working_set_max_bytes: 200 * 1024 * 1024,
+        mem_oom_increase: 0,
+        mem_oom_kill_increase: 0,
+        max_wait_max_seconds: 0,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value: [
+        "記録700/720件(欠け3%)",
+        "遅れ: 最大5秒、30秒以上0件",
+        "他のジョブの枠の使用: 最大33%、平均10%",
+        "メモリ: anon最大100MiB(上限の3%)、working set最大200MiB、OOMなし",
+        "待ちの最長: 0秒以上",
+      ].join("\n"),
     });
   });
 
