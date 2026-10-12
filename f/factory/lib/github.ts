@@ -2341,8 +2341,9 @@ function readErrorMessage(bodyText: string): string {
  * 405(マージできない状態)と409(headの不一致)は、マージしなかった結果として
  * `status`と応答の`message`つきで返す。理由は呼び出し側が見分ける。
  * 403(権限不足)や404などは`GitHubHttpError`を投げる。呼び出し側が権限不足を見分けて先送りできるようにするため。
- * `merged: false`の場合と、通信断や5xxの`GitHubHttpError`の場合は、
- * 要求がGitHubに届いてマージされた可能性が残る。呼び出し側は`getPr`で`merged`を読み直してから判断する。
+ * マージ要求の送信後に投げられる例外はすべて(`GitHubHttpError`、200で形が不正な場合や
+ * 200で`merged: false`の場合の通常の`Error`)、要求がGitHubに届いてマージされた可能性が残る。
+ * `merged: false`を返す場合も同じである。呼び出し側は`getPr`で`merged`を読み直してから判断する。
  */
 export async function mergePullRequest(
   client: GhClient,
@@ -2388,7 +2389,8 @@ export async function mergePullRequest(
 }
 
 type CheckRunRow = {
-  readonly appId: number;
+  /** 削除されたAppが作ったチェックでは`null`。 */
+  readonly appId: number | null;
   readonly name: string;
   readonly conclusion: string | null;
   readonly unfinished: boolean;
@@ -2409,8 +2411,12 @@ function parseCheckRun(value: unknown, context: string): CheckRunRow {
   if (typeof name !== "string" || typeof status !== "string") {
     throw unexpectedShape(context);
   }
-  if (!isRecord(app) || typeof app.id !== "number") {
-    throw unexpectedShape(context);
+  let appId: number | null = null;
+  if (app !== null) {
+    if (!isRecord(app) || typeof app.id !== "number") {
+      throw unexpectedShape(context);
+    }
+    appId = app.id;
   }
   if (conclusion !== null && typeof conclusion !== "string") {
     throw unexpectedShape(context);
@@ -2423,7 +2429,7 @@ function parseCheckRun(value: unknown, context: string): CheckRunRow {
     throw unexpectedShape(context);
   }
   return {
-    appId: app.id,
+    appId,
     name,
     conclusion: unfinished ? null : conclusion,
     unfinished,
@@ -2456,6 +2462,7 @@ function isNewerCheckRun(
  * チェックを作ったApp(`app.id`)と名前の組ごとに、最新の1件の結論を返す。
  * 再実行された古い結果で判定しないためである。
  * 別のAppが同じ名前で作ったチェックは畳まず、すべて返す。一方の成功で他方の失敗を隠さないため。
+ * 削除されたAppが作ったチェックは`app`が`null`になる。`app`が無い応答は不正として例外にする。
  * 未完了のチェックの`conclusion`は`null`にする。
  */
 export async function listPrChecks(

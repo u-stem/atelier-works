@@ -697,6 +697,18 @@ describe("evaluateGate", () => {
     );
   });
 
+  test("needs a human when mergeability is not computed and a required check failed", () => {
+    expect(
+      verdictOf({
+        mergeable: null,
+        checks: REQUIRED_CHECKS.map((name) => ({
+          name,
+          conclusion: name === "check" ? "failure" : "success",
+        })),
+      }),
+    ).toBe("needs_human");
+  });
+
   test("needs a human when the lockfile diff is rejected", () => {
     expect(
       verdictOf({ lockfile: { ok: false, reason: "extra package" } }),

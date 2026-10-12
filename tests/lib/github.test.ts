@@ -4806,6 +4806,71 @@ describe("listPrChecks", () => {
     ]);
   });
 
+  test("folds check runs whose app is null by name", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 3,
+        check_runs: [
+          {
+            ...checkRun(
+              "old",
+              "failure",
+              "2026-10-01T00:00:00Z",
+              "2026-10-01T00:01:00Z",
+            ),
+            app: null,
+          },
+          {
+            ...checkRun(
+              "old",
+              "success",
+              "2026-10-01T00:05:00Z",
+              "2026-10-01T00:06:00Z",
+            ),
+            app: null,
+          },
+          checkRun(
+            "old",
+            "failure",
+            "2026-10-01T00:00:00Z",
+            "2026-10-01T00:01:00Z",
+            "completed",
+            2,
+          ),
+        ],
+      }),
+    ]);
+    const checks = await listPrChecks(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      SHA_A,
+    );
+    expect(checks).toEqual([
+      { name: "old", conclusion: "success" },
+      { name: "old", conclusion: "failure" },
+    ]);
+  });
+
+  test("throws when a check run app is not an object", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        total_count: 1,
+        check_runs: [
+          { ...checkRun("a", "success", null, null), app: "github-actions" },
+        ],
+      }),
+    ]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        SHA_A,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
   test("throws when a check run has no app id", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({
