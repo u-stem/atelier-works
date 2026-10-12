@@ -1088,6 +1088,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
+| `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、`memory.current`の読み取り、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。Discordには届かない |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
 | `drawio_viewer_bump_held` | draw.ioのビューアの固定を、自動では上げなかった。原因は3つある。ビューアの大きさが2割を超えて変わった。取得したファイルがGitHubの記録と一致しない。PRの無い既存のブランチの中身が作るはずの内容と違う。本文に版と理由が載る。上げる版に選んだ最新の版を保留している間は、古い版も上げない。メジャー版の更新は、このお知らせではなく、題名が[major]で始まるPRになる | 本文の「次の操作」に従う。大きさの変化が正当なら、Windmillで`f/factory/drawio_viewer_bump`を`approved_version`にその版を指定して実行する。既存のブランチが原因なら、ブランチを確かめ、不要なら削除する。原因が続けば、解決しても次の週に出直す([draw.ioのビューアの更新](internals/console.md#ビューアの更新)) |
@@ -1149,6 +1150,63 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 4. `start`で戻し、通知を解決する。
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
+
+### workerの負荷の記録を確かめる
+
+`sample_worker_load`が2分ごとに、defaultのworkerの負荷を1行ずつ`factory.worker_samples`に記録する。
+workerの並列数やポーリングの間隔を見直すとき、枠の占有とメモリのどちらが先に効くかを、この記録で判断する。
+記録の行を読むコマンドは次のとおりである。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT sampled_at, running_jobs, waiting_jobs, max_wait_seconds, lag_seconds, mem_working_set_bytes, mem_anon_bytes FROM factory.worker_samples ORDER BY sampled_at DESC LIMIT 10"
+```
+
+反映の後は、次の順で動いていることを確かめる。
+
+1. 反映の数分後に、行が2分おきに増えていることを見る。
+2. 最新の行で、`memory.pressure`を読む列(`mem_pressure_total_us`)以外が空でないことを見る。
+3. Claudeのジョブが走っているときの行で、`running_jobs`が増え、`running_by_script`にそのscriptが載ることを見る。
+
+列の意味は次のとおりである。
+
+- 枠の占有は`running_jobs`である。実行中のジョブから、記録するジョブ自身、フローの親ジョブ、tag `console`のジョブ、`native`で始まるtagのジョブを除いて数える。フローの親ジョブは枠を使い続けず、実際の処理は子のscriptが枠を使うためである。内訳は`running_by_script`に、件数の多い10件のscriptのパスと、残りをまとめた`other`で載る。
+- queueの待ちは`waiting_jobs`と`max_wait_seconds`である。予定時刻を過ぎても開始していないジョブを、古いものから100件まで読んで数える。予定時刻が未来のジョブは数えない。待つジョブが無ければ`max_wait_seconds`は0になる。
+- 開始の遅れは`lag_seconds`で、記録するジョブ自身の予定時刻(`scheduled_for`)から開始までの秒数である。
+- 枠の数は`slots`で、設定値の`NUM_WORKERS`を記録する。workerから読んだ値ではない。`DEFAULT_WORKER_SLOTS`と`infra/docker-compose.yml`の`NUM_WORKERS`が食い違うとテストが落ちる。
+- メモリの現在値は`mem_current_bytes`で、ページキャッシュを含む。上限に近くても、回収できるキャッシュなら逼迫ではない。逼迫の判断には、プロセスが確保した`mem_anon_bytes`と、キャッシュの一部を除いた`mem_working_set_bytes`を使う。
+作業セットが引くのは非アクティブなファイルキャッシュだけなので、実機の値は現在値とほとんど変わらない。
+両方を見て、`mem_anon_bytes`を主に読む。
+- `mem_peak_bytes`は、コンテナの起動からの累積の最大値で、キャッシュも含む。判断には使わず、前の行より増えたかどうかを見る印にだけ使う。
+- 上限への到達は、`mem_events_max`、`mem_oom`、`mem_oom_kill`で見る。どれもコンテナの起動からの累積の回数なので、前の行との差を取る。
+- 読めなかった値は空のまま残る。0は、読めて0だったことを表す。
+
+予定の欠けは、行の`scheduled_for`の間隔で数える。
+間隔が2分より開いていれば、その間の予定が実行されていない。
+枠が塞がると、予定時刻から開始までが遅れ、さらに塞がると予定そのものが飛ばされる。
+塞がりの割合は、行数ではなく、遅れの合計か、欠けた予定の回数を窓の長さで割った値から求める。
+
+次の限界がある。
+
+- 2分より短い塞がりは見えない。値は、記録した瞬間の様子である。
+- 記録は毎回、毎分の0秒ではなく30秒に始まるが、5分と10分ごとのスケジュールは0秒に始まる。偶数分に始まる記録のうち、5回に1回は、それらのジョブが始まった30秒後になる。その回は`running_jobs`が高めに出うる。
+- `waiting_jobs`は100件で頭打ちになる。`max_wait_seconds`は古い順に読むので、頭打ちでも正しい。
+- 実行中のジョブの一覧が100件を超えると、全件を読めない。
+- メモリはコンテナ全体の値で、ジョブごとの内訳は取れない。内訳は`running_by_script`の件数から推す。
+- `memory.pressure`が無いカーネルでは、`mem_pressure_total_us`は空になる。この環境のworkerでは、`memory.pressure`が無い。
+- tagが`native`で始まるジョブを、nativeのworkerのジョブとして除く。別のtagでnativeのworkerを動かす構成にしたときは、除く条件を直す。
+- Windmillのジョブ履歴は、Community版では最大30日までしか残らない。それより前の枠の占有と待ちは、この記録がなければ取り戻せない。
+
+記録が取れない状態は、ジョブが成功のまま続く。
+`sample_worker_load`は例外を投げないので、スケジュールの失敗の通知(`schedule_failing`)は出ない。
+代わりに、完全には記録できない回を数え、5回(10分)続くと通知`worker_sample_failed`を残す。
+完全に記録できた回は、queueの2つの応答が一覧で、`memory.current`が読め、行の挿入が成功した回である。
+`memory.peak`と`memory.pressure`が読めなくても、完全な回として数える。
+回数はWindmillのstateに持つ。stateを読めなかった回は、数えず、stateも書かない。
+警告は、ジョブログに次の文で残る。
+
+- `could not read the running jobs`、`could not read the waiting jobs`: queueを読むAPIが失敗した。`could not read the sampling job`は、自分のジョブの情報を直接読むAPIが失敗したことを表し、`lag_seconds`だけが空になる。
+- `could not read memory.current`: cgroupのファイルを読めなかった。`memory.max`、`memory.stat`、`memory.events`も同じ形の文になる。
+- `could not record the worker sample`: DBへの挿入が失敗した。この回は行が残らない。
 
 ### 続けて失敗するスケジュールの検知を確かめる
 
@@ -2042,6 +2100,8 @@ DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間�
 | 監査の作業項目とレポート・提案 | 監査完了(`audited`)から90日 | `retention_work_items_days` |
 | 失敗の記録、デプロイの記録、解決済みの通知(解決の時刻から数える) | 30日 | `retention_logs_days` |
 | 判定済みのmainのCIの記録(最後の更新から数える。判定を待つ記録と、各リポジトリの最新の記録は消さない) | 30日 | `retention_logs_days` |
+
+workerの負荷の記録(`worker_samples`)は、この掃除の対象に含まれず、消えずに溜まる。1日に720行で、1行は数百バイトである。
 
 「情報」の未解決の通知は、作成から30日たつと削除せず解決済みにする。
 Consoleの**システム**の「情報の通知」から7日で外れて誰も解決しないので、溜まり続けないようにするためである。
