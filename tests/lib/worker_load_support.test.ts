@@ -3,6 +3,7 @@ import { noticeSeverity } from "../../f/factory/lib/console_support.ts";
 import {
   type CgroupTexts,
   combineUnknownTags,
+  describeWorkerLoad,
   findJobById,
   nextFailureCount,
   parseCgroupMemory,
@@ -12,10 +13,14 @@ import {
   runningQueueQuery,
   summarizeRunning,
   summarizeWaiting,
+  summarizeWorkerLoad,
   timingOf,
   WORKER_SAMPLE_FAILED_NOTICE,
   WORKER_SAMPLE_FAILURE_LIMIT,
   WORKER_SAMPLE_QUEUE_PER_PAGE,
+  WORKER_SAMPLES_PER_DAY,
+  type WorkerLoadReport,
+  type WorkerLoadSummary,
   waitingQueueQuery,
 } from "../../f/factory/lib/worker_load_support.ts";
 
@@ -722,5 +727,264 @@ describe("constants", () => {
 
   test("waits for more than one failure before the notice", () => {
     expect(WORKER_SAMPLE_FAILURE_LIMIT).toBeGreaterThan(1);
+  });
+});
+
+const MIB = 1024 * 1024;
+
+function loadSummary(
+  overrides: Partial<WorkerLoadSummary> = {},
+): WorkerLoadSummary {
+  return {
+    sample_count: 720,
+    expected_count: 720,
+    lag_max_seconds: 5,
+    lag_over_count: 0,
+    lag_over_total_seconds: 0,
+    gap_count: 0,
+    gap_longest_seconds: null,
+    gap_longest_from: null,
+    gap_longest_to: null,
+    running_jobs_max: 2,
+    slots_max: 3,
+    mem_anon_max_bytes: 80 * MIB,
+    mem_anon_max_ratio: 0.02,
+    mem_working_set_max_bytes: 260 * MIB,
+    mem_oom_increase: 0,
+    mem_oom_kill_increase: 0,
+    max_wait_max_seconds: 120,
+    ...overrides,
+  };
+}
+
+describe("summarizeWorkerLoad", () => {
+  test("shows the sample count against the expected count", () => {
+    expect(summarizeWorkerLoad(loadSummary())).toContain(
+      "記録720/720件(欠け0%)",
+    );
+  });
+
+  test("shows the share of missing samples", () => {
+    expect(summarizeWorkerLoad(loadSummary({ sample_count: 540 }))).toContain(
+      "記録540/720件(欠け25%)",
+    );
+  });
+
+  test("shows the share of missing samples with one decimal when whole percent would round to zero", () => {
+    expect(summarizeWorkerLoad(loadSummary({ sample_count: 717 }))).toContain(
+      "記録717/720件(欠け0.4%)",
+    );
+  });
+
+  test("does not show a negative share when there are more samples than expected", () => {
+    expect(summarizeWorkerLoad(loadSummary({ sample_count: 721 }))).toContain(
+      "欠け0%",
+    );
+  });
+
+  test("shows the largest lag, the laggy samples and their total", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({
+          lag_max_seconds: 45,
+          lag_over_count: 3,
+          lag_over_total_seconds: 120,
+        }),
+      ),
+    ).toContain("遅れ: 最大45秒、30秒以上3件(計120秒)");
+  });
+
+  test("says the lag is unknown when no sample has one", () => {
+    expect(
+      summarizeWorkerLoad(loadSummary({ lag_max_seconds: null })),
+    ).toContain("遅れ: 不明");
+  });
+
+  test("says there was no long gap between samples", () => {
+    expect(summarizeWorkerLoad(loadSummary())).toContain("空白: 4分超なし");
+  });
+
+  test("shows the number of long gaps, the longest one in minutes and when it was", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({
+          gap_count: 2,
+          gap_longest_seconds: 5400,
+          gap_longest_from: new Date("2026-10-09T17:10:00.000Z"),
+          gap_longest_to: new Date("2026-10-09T18:40:00.000Z"),
+        }),
+      ),
+    ).toContain("空白: 4分超2回、最長90分(02:10〜03:40)");
+  });
+
+  test("shows the end of the day as 00:00 when the longest gap runs to the end", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({
+          gap_count: 1,
+          gap_longest_seconds: 3600,
+          gap_longest_from: new Date("2026-10-10T14:00:00.000Z"),
+          gap_longest_to: new Date("2026-10-10T15:00:00.000Z"),
+        }),
+      ),
+    ).toContain("最長60分(23:00〜00:00)");
+  });
+
+  test("omits the time of the longest gap when it is unknown", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ gap_count: 1, gap_longest_seconds: 300 }),
+      ),
+    ).toContain("空白: 4分超1回、最長5分\n");
+  });
+
+  test("rounds the longest gap up to whole minutes", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ gap_count: 1, gap_longest_seconds: 241 }),
+      ),
+    ).toContain("最長5分");
+  });
+
+  test("does not assert a stop when there is a gap", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ gap_count: 1, gap_longest_seconds: 300 }),
+      ),
+    ).toContain(
+      "読み方: 長い空白は、停止か、長いジョブによる枠の塞がり。その時刻にジョブが動いていたかで見分ける",
+    );
+  });
+
+  test("omits the reading hint when there are laggy samples but no gap", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ lag_over_count: 1, lag_over_total_seconds: 40 }),
+      ),
+    ).not.toContain("読み方");
+  });
+
+  test("omits the reading hint when there is no gap", () => {
+    expect(summarizeWorkerLoad(loadSummary())).not.toContain("読み方");
+  });
+
+  test("shows the most other jobs seen against the slots left for them", () => {
+    expect(summarizeWorkerLoad(loadSummary())).toContain(
+      "他のジョブの枠の使用: 最大2件(記録の枠を除く、上限2)",
+    );
+  });
+
+  test("says the running count is unknown when no sample has it", () => {
+    expect(
+      summarizeWorkerLoad(loadSummary({ running_jobs_max: null })),
+    ).toContain("他のジョブの枠の使用: 不明");
+  });
+
+  test("shows the anon peak in MiB with its share of the limit", () => {
+    expect(summarizeWorkerLoad(loadSummary())).toContain(
+      "メモリ: anon最大80MiB(上限の2%)",
+    );
+  });
+
+  test("omits the share of the limit when there is no limit", () => {
+    expect(
+      summarizeWorkerLoad(loadSummary({ mem_anon_max_ratio: null })),
+    ).toContain("メモリ: anon最大80MiB、");
+  });
+
+  test("shows the working set peak in MiB", () => {
+    expect(summarizeWorkerLoad(loadSummary())).toContain(
+      "working set最大260MiB",
+    );
+  });
+
+  test("says the memory is unknown when no sample has it", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({
+          mem_anon_max_bytes: null,
+          mem_anon_max_ratio: null,
+          mem_working_set_max_bytes: null,
+        }),
+      ),
+    ).toContain("メモリ: 不明、OOMなし");
+  });
+
+  test("does not say there was no OOM when nothing about the memory could be read", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({
+          mem_anon_max_bytes: null,
+          mem_anon_max_ratio: null,
+          mem_working_set_max_bytes: null,
+          mem_oom_increase: null,
+          mem_oom_kill_increase: null,
+        }),
+      ),
+    ).toContain("メモリ: 不明、OOMの増分は不明");
+  });
+
+  test("says there was no OOM when both counters did not grow", () => {
+    expect(summarizeWorkerLoad(loadSummary())).toContain("OOMなし");
+  });
+
+  test("shows the OOM and kill counts when a counter grew", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ mem_oom_increase: 2, mem_oom_kill_increase: 1 }),
+      ),
+    ).toContain("OOMあり(OOM 2回、kill 1回)");
+  });
+
+  test("says the OOM is unknown when a counter could not be read and the other is zero", () => {
+    expect(
+      summarizeWorkerLoad(loadSummary({ mem_oom_increase: null })),
+    ).toContain("OOMの増分は不明");
+  });
+
+  test("shows the OOM that grew even when the other counter is unknown", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ mem_oom_increase: 3, mem_oom_kill_increase: null }),
+      ),
+    ).toContain("OOMあり(OOM 3回、kill 不明)");
+  });
+
+  test("shows the longest wait as a lower bound", () => {
+    expect(summarizeWorkerLoad(loadSummary())).toContain(
+      "待ちの最長: 120秒以上",
+    );
+  });
+
+  test("says the wait is unknown when no sample has it", () => {
+    expect(
+      summarizeWorkerLoad(loadSummary({ max_wait_max_seconds: null })),
+    ).toContain("待ちの最長: 不明");
+  });
+
+  test("expects one sample every two minutes", () => {
+    expect(WORKER_SAMPLES_PER_DAY).toBe(720);
+  });
+});
+
+describe("describeWorkerLoad", () => {
+  test("summarizes a summary report", () => {
+    const report: WorkerLoadReport = {
+      kind: "summary",
+      summary: loadSummary(),
+    };
+    expect(describeWorkerLoad(report)).toBe(summarizeWorkerLoad(loadSummary()));
+  });
+
+  test("points to the schedule when there is no record", () => {
+    expect(describeWorkerLoad({ kind: "no_record" })).toBe(
+      "前日の記録なし(sample_worker_loadのスケジュールを確かめる)",
+    );
+  });
+
+  test("points to the job log when the summary could not be read", () => {
+    expect(describeWorkerLoad({ kind: "read_failed" })).toBe(
+      "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)",
+    );
   });
 });

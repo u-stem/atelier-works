@@ -327,6 +327,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.description).toBe("エージェント実行3件、$1.50消費。");
   });
@@ -342,6 +343,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
@@ -370,11 +372,98 @@ describe("buildEmbed", () => {
         worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
+      worker_load: { kind: "no_record" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
       value:
         "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
+    });
+  });
+
+  test("shows a 'no record' worker load field when there is no record", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value: "前日の記録なし(sample_worker_loadのスケジュールを確かめる)",
+    });
+  });
+
+  test("shows a 'read failed' worker load field when the summary could not be read", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "read_failed" },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value:
+        "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)",
+    });
+  });
+
+  test("summarizes the worker load in its own field when present", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: {
+        kind: "summary",
+        summary: {
+          sample_count: 700,
+          expected_count: 720,
+          lag_max_seconds: 5,
+          lag_over_count: 0,
+          lag_over_total_seconds: 0,
+          gap_count: 0,
+          gap_longest_seconds: null,
+          gap_longest_from: null,
+          gap_longest_to: null,
+          running_jobs_max: 1,
+          slots_max: 3,
+          mem_anon_max_bytes: 100 * 1024 * 1024,
+          mem_anon_max_ratio: 0.025,
+          mem_working_set_max_bytes: 200 * 1024 * 1024,
+          mem_oom_increase: 0,
+          mem_oom_kill_increase: 0,
+          max_wait_max_seconds: 0,
+        },
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value: [
+        "記録700/720件(欠け3%)",
+        "遅れ: 最大5秒、30秒以上0件(計0秒)",
+        "空白: 4分超なし",
+        "他のジョブの枠の使用: 最大1件(記録の枠を除く、上限2)",
+        "メモリ: anon最大100MiB(上限の3%)、working set最大200MiB、OOMなし",
+        "待ちの最長: 0秒以上",
+      ].join("\n"),
     });
   });
 

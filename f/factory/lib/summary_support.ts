@@ -8,6 +8,12 @@
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
 import { isNumber, isString } from "./types.ts";
+import {
+  DAILY_GAP_THRESHOLD_SECONDS,
+  DAILY_LAG_THRESHOLD_SECONDS,
+  WORKER_SAMPLES_PER_DAY,
+  type WorkerLoadSummary,
+} from "./worker_load_support.ts";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -63,6 +69,34 @@ function parseNumericLike(value: unknown, field: string): number {
   throw new Error(`summary_support: row field "${field}" is not numeric`);
 }
 
+/** 日時を`Date`にして返す。`Date`でも日時の文字列でもなければ例外を投げる。 */
+function parseDate(value: unknown, field: string): Date {
+  if (value instanceof Date) {
+    return value;
+  }
+  if (isString(value)) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  throw new Error(
+    `summary_support: row field "${field}" is not a valid timestamp`,
+  );
+}
+
+/** `parseDate`と同じだが、NULLは`null`で返す。 */
+function parseNullableDate(value: unknown, field: string): Date | null {
+  return value === null || value === undefined ? null : parseDate(value, field);
+}
+
+/** `parseNumericLike`と同じだが、NULL(集計に使える値が無かったこと)は`null`で返す。 */
+function parseNullableNumeric(value: unknown, field: string): number | null {
+  return value === null || value === undefined
+    ? null
+    : parseNumericLike(value, field);
+}
+
 export type AgentRunSummary = {
   readonly run_count: number;
   readonly total_cost_usd: number;
@@ -99,6 +133,169 @@ export async function getAgentRunSummary(
       AND created_at < ${range.end.toISOString()}
   `.fetch();
   return toAgentRunSummary(rows[0]);
+}
+
+/**
+ * `range`内の`factory.worker_samples`を1回のクエリで集計し、workerの負荷のまとめを返す。
+ * 範囲に行が無いとき(記録を始める前や、記録が止まっていた日)は、
+ * すべて0の集計ではなく`null`を返す。
+ * 日次サマリーのDiscord埋め込みで、「負荷が0だった」と「記録が無い」を区別するため。
+ *
+ * - `mem_oom`と`mem_oom_kill`は起動からの累積なので、値の読めた行だけを並べ、
+ *   その隣り合う行の差を足す。列ごとに別の窓で並べるのは、
+ *   片方がNULLの行をまたいでも、その間の増分を取りこぼさないためである。
+ *   差が負なら累積が戻った(コンテナの再起動)ので、現在値を増分とする。
+ *   範囲の最初の行の差は、範囲の始端の10分前まで読んだ直近の行との差で求める。
+ *   差を1つも求められないときの合計はNULLで、「OOMなし」とは区別される。
+ * - 空白は、`sampled_at`の間隔が`DAILY_GAP_THRESHOLD_SECONDS`を超えた回数である。
+ *   隣り合う行の間隔に加えて、日の両端も数える。
+ *   範囲の最初の行は、始端の10分前までの直近の行との間隔で、その行が無ければ始端との間隔で数える。
+ *   最後の行は、終端との間隔で数える。夜間にまたぐ停止は、両端の空白として前日と当日に分かれて出る。
+ *   長い1回の空白は、停止でも長いジョブによる枠の塞がりでも出るので、ここでは区別しない。
+ *   最長の空白は、開始と終了の時刻も返す。
+ * - 割合は行ごとに求めてから最大を取る。上限が読めない行は、メモリの割合に使わない。
+ * - 集計は`(sampled_at)`の索引で範囲を絞る。
+ */
+export async function getWorkerLoadSummary(
+  range: DayRange,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkerLoadSummary | null> {
+  const rows = await sql`
+    WITH base AS (
+      SELECT
+        id,
+        sampled_at,
+        sampled_at >= ${range.start.toISOString()}::timestamptz AS in_range,
+        slots,
+        running_jobs,
+        lag_seconds,
+        max_wait_seconds,
+        mem_anon_bytes,
+        mem_working_set_bytes,
+        mem_limit_bytes,
+        mem_oom,
+        mem_oom_kill
+      FROM factory.worker_samples
+      WHERE sampled_at >= ${range.start.toISOString()}::timestamptz - interval '10 minutes'
+        AND sampled_at < ${range.end.toISOString()}
+    ),
+    timed AS (
+      SELECT
+        *,
+        coalesce(
+          lag(sampled_at) OVER (ORDER BY sampled_at, id),
+          ${range.start.toISOString()}::timestamptz
+        ) AS gap_from
+      FROM base
+    ),
+    gaps AS (
+      SELECT gap_from, sampled_at AS gap_to FROM timed WHERE in_range
+      UNION ALL
+      SELECT max(sampled_at), ${range.end.toISOString()}::timestamptz
+      FROM base
+      WHERE in_range
+      HAVING count(*) > 0
+    ),
+    long_gaps AS (
+      SELECT gap_from, gap_to, extract(epoch FROM gap_to - gap_from) AS gap_seconds
+      FROM gaps
+      WHERE extract(epoch FROM gap_to - gap_from) > ${DAILY_GAP_THRESHOLD_SECONDS}
+    ),
+    oom AS (
+      SELECT sampled_at, in_range, mem_oom AS current_value,
+        lag(mem_oom) OVER (ORDER BY sampled_at, id) AS previous_value
+      FROM base
+      WHERE mem_oom IS NOT NULL
+    ),
+    oom_kill AS (
+      SELECT sampled_at, in_range, mem_oom_kill AS current_value,
+        lag(mem_oom_kill) OVER (ORDER BY sampled_at, id) AS previous_value
+      FROM base
+      WHERE mem_oom_kill IS NOT NULL
+    )
+    SELECT
+      count(*) AS sample_count,
+      max(lag_seconds) AS lag_max_seconds,
+      count(*) FILTER (WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}) AS lag_over_count,
+      coalesce(sum(lag_seconds) FILTER (WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}), 0) AS lag_over_total_seconds,
+      (SELECT count(*) FROM long_gaps) AS gap_count,
+      (SELECT max(gap_seconds) FROM long_gaps) AS gap_longest_seconds,
+      (SELECT gap_from FROM long_gaps ORDER BY gap_seconds DESC, gap_from LIMIT 1) AS gap_longest_from,
+      (SELECT gap_to FROM long_gaps ORDER BY gap_seconds DESC, gap_from LIMIT 1) AS gap_longest_to,
+      max(running_jobs) AS running_jobs_max,
+      max(slots) AS slots_max,
+      max(mem_anon_bytes) AS mem_anon_max_bytes,
+      max(mem_anon_bytes::float8 / mem_limit_bytes)
+        FILTER (WHERE mem_limit_bytes > 0) AS mem_anon_max_ratio,
+      max(mem_working_set_bytes) AS mem_working_set_max_bytes,
+      (SELECT sum(CASE WHEN current_value < previous_value THEN current_value ELSE current_value - previous_value END)
+        FROM oom WHERE in_range) AS mem_oom_increase,
+      (SELECT sum(CASE WHEN current_value < previous_value THEN current_value ELSE current_value - previous_value END)
+        FROM oom_kill WHERE in_range) AS mem_oom_kill_increase,
+      max(max_wait_seconds) AS max_wait_max_seconds
+    FROM timed
+    WHERE in_range
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return null;
+  }
+  const sampleCount = parseNumericLike(row.sample_count, "sample_count");
+  if (sampleCount === 0) {
+    return null;
+  }
+  return {
+    sample_count: sampleCount,
+    expected_count: WORKER_SAMPLES_PER_DAY,
+    lag_max_seconds: parseNullableNumeric(
+      row.lag_max_seconds,
+      "lag_max_seconds",
+    ),
+    lag_over_count: parseNumericLike(row.lag_over_count, "lag_over_count"),
+    lag_over_total_seconds: parseNumericLike(
+      row.lag_over_total_seconds,
+      "lag_over_total_seconds",
+    ),
+    gap_count: parseNumericLike(row.gap_count, "gap_count"),
+    gap_longest_seconds: parseNullableNumeric(
+      row.gap_longest_seconds,
+      "gap_longest_seconds",
+    ),
+    gap_longest_from: parseNullableDate(
+      row.gap_longest_from,
+      "gap_longest_from",
+    ),
+    gap_longest_to: parseNullableDate(row.gap_longest_to, "gap_longest_to"),
+    running_jobs_max: parseNullableNumeric(
+      row.running_jobs_max,
+      "running_jobs_max",
+    ),
+    slots_max: parseNullableNumeric(row.slots_max, "slots_max"),
+    mem_anon_max_bytes: parseNullableNumeric(
+      row.mem_anon_max_bytes,
+      "mem_anon_max_bytes",
+    ),
+    mem_anon_max_ratio: parseNullableNumeric(
+      row.mem_anon_max_ratio,
+      "mem_anon_max_ratio",
+    ),
+    mem_working_set_max_bytes: parseNullableNumeric(
+      row.mem_working_set_max_bytes,
+      "mem_working_set_max_bytes",
+    ),
+    mem_oom_increase: parseNullableNumeric(
+      row.mem_oom_increase,
+      "mem_oom_increase",
+    ),
+    mem_oom_kill_increase: parseNullableNumeric(
+      row.mem_oom_kill_increase,
+      "mem_oom_kill_increase",
+    ),
+    max_wait_max_seconds: parseNullableNumeric(
+      row.max_wait_max_seconds,
+      "max_wait_max_seconds",
+    ),
+  };
 }
 
 export type ApprovalSummary = {

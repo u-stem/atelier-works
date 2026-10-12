@@ -97,6 +97,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/requirements_template.ts",
   "f/factory/lib/summary_support.ts",
   "f/factory/lib/types.ts",
+  "f/factory/lib/worker_load_support.ts",
   "f/factory/lib/workspace.ts",
   "f/factory/steps/console_query.ts",
 ];
