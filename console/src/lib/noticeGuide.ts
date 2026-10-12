@@ -203,7 +203,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       "ホストのcheckoutで、次のコマンドを順に実行してください。mise run upは、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡します。イメージが古くて止まった作業項目は、mise run upの後に通知が自動で解決されると、自動で再開します。自動の再開が3回の上限に達したときと、版が載らない通知のときだけ、Windmillでf/factory/retry_work_itemを作業項目のIDで実行して再開してください。",
       {
         commands: ["git pull", "mise install", "mise run up"],
-        note: "通知の版がホストのHEADと同じか祖先なら、自己更新(10分ごと)が自動で解決します。HEADを書けなかったときと、版が載らない通知(イメージが古いと分かったときに、反映した版を読めなかったもの)は自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
+        note: "通知の版がホストのHEADと同じか祖先なら、自己更新(2分ごと)が自動で解決します。HEADを書けなかったときと、版が載らない通知(イメージが古いと分かったときに、反映した版を読めなかったもの)は自動では解決されないので、mise run upが済んでいれば人が解決してかまいません。",
       },
     ),
   ],

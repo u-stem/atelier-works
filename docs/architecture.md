@@ -287,7 +287,7 @@ Consoleの一覧と集計は次のviewを読む。
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数を集計し、Discordへ日次サマリを投稿します。 |
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
-| self_update | `0 */10 * * * *` | `f/factory/self_update` | 10分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
+| self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -453,7 +453,7 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 
 ## 自己更新
 
-`self_update`はFactory自身のリポジトリを10分ごとに取り込み、Windmillに反映する。
+`self_update`はFactory自身のリポジトリを2分ごとに取り込み、Windmillに反映する。
 
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
 2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
@@ -543,8 +543,8 @@ Discordへの通知の2回は、ホスト側の作業の通知と、最後の確
 ジョブの上限で打ち切られた回の扱いは次のとおりである。
 
 - 最後に行うConsole用のworkerの確認が走らず、`deployments`にも記録が残らない。
-- 打ち切られるまでの最大約45分、実行が終わらない。
-  10分ごとの次の4回は多重実行の防止で飛ばされる。
+- 打ち切られるまでの最大約47分、実行が終わらない。
+  2分ごとの次の約23回は多重実行の防止で飛ばされる。
   この間は、自己更新の反映とConsole用のworkerの確認が止まる。
 - `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`で即時に気づける。
   これが主な経路になる想定だが、呼ばれるかは実機で未確認である([運用](operations.md)の「自己更新の打ち切りを確かめる」)。
