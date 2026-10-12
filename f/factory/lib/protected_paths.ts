@@ -82,6 +82,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 一方、窓口の`poll_dependabot.script.lock`と`steps/dependabot_*.script.lock`は守らない。
  * `windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
+ * dependabotのフローが使うほかの共有lib(`lib/claude.ts`、`lib/check_runner.ts`、`lib/check_sandbox.ts`、
+ * `lib/workspace.ts`、`lib/config.ts`、`lib/db.ts`、`lib/implement_support.ts`、`lib/log.ts`)も守らない。
+ * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
+ * これらを書き換えてdependabotのフローの判断を変える変更は、PRのレビューで差分を確かめて止める。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/index.html",
