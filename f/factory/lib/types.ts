@@ -985,6 +985,11 @@ export type FactoryConfig = {
   // dependabotのセキュリティ更新PRの自動処理。リソース型ではどちらも省略可能で、既定値がある。
   /** dependabotのセキュリティ更新PRを自動で処理するか。既定は`false`。 */
   dependabot_enabled: boolean;
+  /**
+   * dependabotのフローがマージしてよいか。既定は`false`。
+   * 偽の間は、マージできると判断したPRもマージせず、人に回す(試運転)。
+   */
+  dependabot_merge_enabled: boolean;
   /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
   dependabot_min_published_days: number;
   /**

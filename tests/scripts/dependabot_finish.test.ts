@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
@@ -33,7 +34,11 @@ import {
   renderHumanReviewBody,
   runDependabotFinish,
 } from "../../f/factory/steps/dependabot_finish.ts";
-import type { DependabotAssessInput } from "../../f/factory/steps/dependabot_prepare.ts";
+import {
+  DEPENDABOT_CANCEL_NOTE,
+  type DependabotAssessInput,
+} from "../../f/factory/steps/dependabot_prepare.ts";
+import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
 
 // ---- 前段の結果 ----
 
@@ -257,6 +262,8 @@ type FakeOptions = {
   readonly getPrAfterMergeError?: Error;
   /** `dependabot_enabled`。省略時は真。 */
   readonly enabled?: boolean;
+  /** `dependabot_merge_enabled`。省略時は真。 */
+  readonly mergeEnabled?: boolean;
   /** `getBranchSha`が返すbaseのsha。省略時は影響調査の入力と同じ。 */
   readonly baseSha?: string;
   readonly getBranchShaError?: Error;
@@ -355,6 +362,7 @@ function run(
     instanceName: INSTANCE,
     fixLabel: FIX_LABEL,
     enabled: options.enabled ?? true,
+    mergeEnabled: options.mergeEnabled ?? true,
   }).then((result) => ({ result, calls }));
 }
 
@@ -371,6 +379,7 @@ async function callsOfFailingRun(
       instanceName: INSTANCE,
       fixLabel: FIX_LABEL,
       enabled: options.enabled ?? true,
+      mergeEnabled: options.mergeEnabled ?? true,
     });
   } catch {
     // 例外で終わることは別のテストが確かめる。
@@ -832,6 +841,47 @@ describe("runDependabotFinish when the outcome is merge", () => {
     expect(named(calls, "warn").map((c) => c.args[0])).toEqual([
       "failed to remove the dependabot worktree",
     ]);
+  });
+});
+
+describe("runDependabotFinish in the dry run", () => {
+  test("does not merge when merging is disabled", async () => {
+    const { calls } = await run(mergeInput(), { mergeEnabled: false });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("hands a mergeable pull request to a person with the dry run reason", async () => {
+    const { calls } = await run(mergeInput(), { mergeEnabled: false });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "needs_human", DEPENDABOT_DRY_RUN_REASON],
+    ]);
+  });
+
+  test("tells the person to merge by hand or to enable merging", async () => {
+    const { calls } = await run(mergeInput(), { mergeEnabled: false });
+
+    expect(needsHumanEvent(calls)?.next_action).toBe(
+      nextActionFor(DEPENDABOT_DRY_RUN_REASON, "dependabot"),
+    );
+  });
+
+  test("still checks main before deciding in the dry run", async () => {
+    const { calls } = await run(mergeInput(), {
+      mergeEnabled: false,
+      baseSha: "f".repeat(40),
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "cancelled", DEPENDABOT_CANCEL_NOTE.gateWaiting],
+    ]);
+  });
+
+  test("merges as before when merging is enabled", async () => {
+    const { calls } = await run(mergeInput(), { mergeEnabled: true });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(1);
   });
 });
 

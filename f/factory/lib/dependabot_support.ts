@@ -609,12 +609,18 @@ export type GateInput = {
   registry: { name: string; version: string; integrity: string } | null;
 };
 
+/**
+ * ゲートの結論。止める結論の`notMergeable`は、GitHubがマージできないと判定したことだけが理由のとき真になる。
+ * 競合はdependabotがrebaseで直しうるので、取得はこれを待ちとして扱い、フローの準備は人に回す。
+ * 理由の文字列で見分けさせないため、種別として返す。
+ */
 export type GateResult =
   | { ok: true }
-  | { ok: false; kind: "wait" | "needs_human"; reason: string };
+  | { ok: false; kind: "wait"; reason: string }
+  | { ok: false; kind: "needs_human"; reason: string; notMergeable: boolean };
 
 function stop(reason: string): GateResult {
-  return { ok: false, kind: "needs_human", reason };
+  return { ok: false, kind: "needs_human", reason, notMergeable: false };
 }
 
 function wait(reason: string): GateResult {
@@ -845,7 +851,14 @@ export function evaluateGate(input: GateInput): GateResult {
   }
   const pathReason = pathProblem(input.changedPaths);
   if (pathReason !== null) return stop(pathReason);
-  if (input.mergeable === false) return stop("pull request is not mergeable");
+  if (input.mergeable === false) {
+    return {
+      ok: false,
+      kind: "needs_human",
+      reason: "pull request is not mergeable",
+      notMergeable: true,
+    };
+  }
   const files = fileProblem(input);
   if (files !== null) return stop(files);
   const integrity = integrityProblem(input);

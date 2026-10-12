@@ -3,6 +3,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
@@ -89,6 +90,21 @@ const CASES: {
     described:
       "dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(the pull request could not be re-read)",
     nextAction: MANUAL_ACTION,
+  },
+  {
+    label: "poll",
+    reason: dependabotReason("poll", "the flow could not be started"),
+    described:
+      "dependabotの更新を、PRを取得する処理で人に回しました(the flow could not be started)",
+    nextAction: MANUAL_ACTION,
+  },
+  {
+    label: "dry run",
+    reason: DEPENDABOT_DRY_RUN_REASON,
+    described:
+      "dry run: dependabotの更新をマージ可と判定しました。試運転のため、マージしていません",
+    nextAction:
+      "このPRは、確認して手でマージしてください。dependabot_merge_enabledを有効にしても、このPRは再評価されません。この作業項目は再実行できません",
   },
   {
     label: "merge forbidden",

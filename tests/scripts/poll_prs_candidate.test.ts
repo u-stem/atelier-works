@@ -8,6 +8,10 @@ import {
   LabelerCheckLimitError,
   type PrSearchItem,
 } from "../../f/factory/lib/github.ts";
+import {
+  decidePrActions,
+  type LabelerPolicy,
+} from "../../f/factory/lib/poll_support.ts";
 import type { WorkItem } from "../../f/factory/lib/types.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
@@ -323,6 +327,120 @@ describe("buildPrCandidate with dependabot work items", () => {
   // dependabotが作ったPRでは、この値がレビューを起こさない(poll_prs_decisions.test.tsで確かめる)。
   test("reads the head of the latest row even when it is a dependabot row", async () => {
     expect((await buildWithDependabot()).lastKnownHeadSha).toBe("b".repeat(40));
+  });
+});
+
+// `poll_dependabot`が作る行(取得したアカウントの名義、PRの題名、取得したhead)があっても、
+// 人が付けたトリガーラベルによるレビューと修正は始まり、dependabotが作ったPRの自動検出は変わらない。
+describe("pr_review and pr_fix decisions with a row created by poll_dependabot", () => {
+  const POLICY: LabelerPolicy = {
+    viewerLogin: "octo-owner",
+    allowedLogins: [],
+  };
+  const HEAD_OF_WORLD = "aaaaaaa";
+
+  function pollRow(status: WorkItem["status"]): WorkItem {
+    return {
+      id: 60,
+      cycle: 1,
+      source: "issue",
+      kind: "dependabot",
+      owner: FOUND.owner,
+      repo: FOUND.repo,
+      issue_number: null,
+      issue_url: null,
+      pr_number: FOUND.number,
+      title: "Bump left-pad from 1.3.0 to 1.3.1",
+      body: null,
+      status,
+      attempt: 1,
+      claimed_by: "octo-owner",
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: HEAD_OF_WORLD,
+      last_review_id: null,
+      last_comment_id: null,
+      last_review_comment_id: null,
+      observed_review_id: null,
+      observed_comment_id: null,
+      observed_review_comment_id: null,
+      fix_round: 0,
+      parent_work_item_id: null,
+      branch: null,
+      pr_url: null,
+      created_at: new Date("2026-10-12T00:00:00Z"),
+      updated_at: new Date("2026-10-12T00:00:00Z"),
+    };
+  }
+
+  async function decide(options: {
+    readonly row: WorkItem | null;
+    readonly labels: readonly string[];
+    readonly author?: string;
+  }) {
+    const fake = world({
+      labels: options.labels,
+      ...(options.author === undefined ? {} : { author: options.author }),
+      headRepo: "octo-owner/atelier-works",
+      baseRepo: "octo-owner/atelier-works",
+      events: labelEventsOk(
+        options.labels.map((label) => labeled("octo-owner", label)),
+      ),
+    });
+    const row = options.row;
+    const context = await buildPrCandidate(
+      { run: fake.run, ghToken: "tok" },
+      FOUND,
+      "octo-owner",
+      row !== null && row.status === "picked" ? [row] : [],
+      LABELS,
+      {
+        latestPrWorkItem: async (_owner, _repo, _number, opts) =>
+          opts?.kind === undefined || opts.kind === "dependabot" ? row : null,
+        findApprovedWorkItemForIssue: async () => null,
+      },
+    );
+    const [decision] = decidePrActions(
+      [context.candidate],
+      LABELS.reviewLabel,
+      LABELS.fixLabel,
+      POLICY,
+    );
+    return decision;
+  }
+
+  test("starts a review by the label while the dependabot flow runs", async () => {
+    const decision = await decide({
+      row: pollRow("picked"),
+      labels: ["factory:review"],
+    });
+
+    expect(decision?.review.kind).toBe("trigger_review");
+  });
+
+  test("starts a fix by the label after the dependabot flow handed the pull request to a person", async () => {
+    const decision = await decide({
+      row: pollRow("needs_human"),
+      labels: ["factory:fix"],
+    });
+
+    expect(decision?.fix.kind).toBe("trigger_fix");
+  });
+
+  test("keeps the detection of a dependabot pull request the same as without the row", async () => {
+    const withRow = await decide({
+      row: pollRow("needs_human"),
+      labels: [],
+      author: "dependabot[bot]",
+    });
+    const withoutRow = await decide({
+      row: null,
+      labels: [],
+      author: "dependabot[bot]",
+    });
+
+    expect(withRow?.review).toEqual(withoutRow?.review);
   });
 });
 

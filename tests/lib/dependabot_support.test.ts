@@ -1035,6 +1035,22 @@ describe("evaluateGate", () => {
     expect(verdictOf({ mergeable: false })).toBe("needs_human");
   });
 
+  test("marks the stop of a pull request that is not mergeable", () => {
+    const result = evaluateGate(validInput({ mergeable: false }));
+
+    expect(
+      !result.ok && result.kind === "needs_human" && result.notMergeable,
+    ).toBe(true);
+  });
+
+  test("does not mark a stop for another reason as not mergeable", () => {
+    const result = evaluateGate(validInput({ update: "major" }));
+
+    expect(
+      !result.ok && result.kind === "needs_human" && result.notMergeable,
+    ).toBe(false);
+  });
+
   test("waits while mergeability is not computed", () => {
     expect(verdictOf({ mergeable: null })).toBe("wait");
   });

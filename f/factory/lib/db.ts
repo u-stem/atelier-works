@@ -667,6 +667,44 @@ export async function hasDependabotItemForHead(
   return rows.length > 0;
 }
 
+/** dependabotのフローがゲートの待ちで取り消すときの注記。`DEPENDABOT_REPROCESSABLE_CANCEL_NOTES`の1つ。 */
+const DEPENDABOT_GATE_WAITING_NOTE = "gate_waiting";
+
+/**
+ * 同じPRの同じheadのdependabotの作業項目が、フローの待ちで取り消された回数と、最後に取り消された時刻を返す。
+ * 取得がフローを起動した後に、フローの側の収集かゲートが待ちを返した回数である。
+ * 取得は、最後の取り消しから間を置いて起動し、回数が上限に達したら人に回す。
+ * 一時的な失敗(GitHubのレート制限など)の間に、周回ごとにフローを起動し続けないためである。
+ * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないとき、
+ * `head_sha`が完全なコミットshaでないときは、DBに触れる前に例外を投げる。
+ */
+export async function dependabotGateWaitingCancels(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ readonly count: number; readonly lastAt: Date | null }> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  assertPrNumber(prNumber);
+  assertCommitSha(headSha);
+  const rows = await sql`
+    SELECT COUNT(*) AS count, MAX(e.occurred_at) AS last_at
+    FROM factory.work_item_events e
+    JOIN factory.work_items wi ON wi.id = e.work_item_id
+    WHERE wi.kind = 'dependabot' AND wi.owner = ${owner} AND wi.repo = ${repo}
+      AND wi.pr_number = ${prNumber}::integer AND wi.head_sha = ${headSha}
+      AND e.to_status = 'cancelled' AND e.note = ${DEPENDABOT_GATE_WAITING_NOTE}
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return { count: 0, lastAt: null };
+  return {
+    count: parseNumericLike(row.count, "count"),
+    lastAt: parseNullableDate(row.last_at, "last_at"),
+  };
+}
+
 /**
  * 同じIssueで、`cycle`より大きい`issue`の作業項目のうち、サイクルが最大のものを返す。無ければ`null`。
  * あれば、`cycle`の作業項目は新しいサイクルに置き換えられている。

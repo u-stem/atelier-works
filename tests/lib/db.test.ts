@@ -18,6 +18,7 @@ import {
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
   deleteWorkerSamplesBefore,
+  dependabotGateWaitingCancels,
   expireApprovalRequestIfPending,
   fetchDeploymentRows,
   findApprovalRequestBySubject,
@@ -534,6 +535,89 @@ describe("hasDependabotItemForHead", () => {
     await expect(
       hasDependabotItemForHead("octo-owner", "atelier-works", 77, "abc", sql),
     ).rejects.toThrow("invalid commit sha");
+  });
+});
+
+describe("dependabotGateWaitingCancels", () => {
+  test("returns the count and the time of the latest cancellation", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ count: "2", last_at: "2026-10-12T00:00:00.000Z" }],
+    ]);
+
+    const result = await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(result).toEqual({
+      count: 2,
+      lastAt: new Date("2026-10-12T00:00:00.000Z"),
+    });
+  });
+
+  test("returns zero and no time when the head was never cancelled to wait", async () => {
+    const { sql } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    const result = await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(result).toEqual({ count: 0, lastAt: null });
+  });
+
+  test("looks only at dependabot work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(calls[0]?.text).toContain("wi.kind = 'dependabot'");
+  });
+
+  test("binds the target and the gate waiting cancel note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(calls[0]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      DEPENDABOT_CANCEL_NOTE.gateWaiting,
+    ]);
+  });
+
+  test("rejects a head sha that is not a full commit sha before touching the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      "abc",
+      sql,
+    ).catch(() => undefined);
+
+    expect(calls).toHaveLength(0);
   });
 });
 

@@ -1,0 +1,9 @@
+summary: '[SF-1-3] dependabotのPRを巡回して自動マージを起動'
+description: 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめ、満たしたPRだけ依存の更新PRの検査と自動マージのフローを起動します。待ちが長引いたPRと条件を満たさないPRは、人の対応待ちにして1回だけ通知します。
+lock: '!inline f/factory/poll_dependabot.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

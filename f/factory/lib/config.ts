@@ -87,6 +87,7 @@ type DefaultableField =
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
   | "dependabot_enabled"
+  | "dependabot_merge_enabled"
   | "dependabot_min_published_days"
   | "pr_ci_watch_enabled"
   | "check_commands_by_repo";
@@ -143,6 +144,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_max_diff_lines: 3000,
   // dependabotの自動処理は既定で無効にし、リモートのリソースで有効にする。
   dependabot_enabled: false,
+  // マージは、結果を人が確かめてから別に有効にする。無効の間は、マージ可の判定も人に回す。
+  dependabot_merge_enabled: false,
   dependabot_min_published_days: 7,
   // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
   pr_ci_watch_enabled: true,
@@ -613,6 +616,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "dependabot_enabled",
       DEFAULTS.dependabot_enabled,
+    ),
+    dependabot_merge_enabled: booleanField(
+      raw,
+      "dependabot_merge_enabled",
+      DEFAULTS.dependabot_merge_enabled,
     ),
     dependabot_min_published_days: positiveIntegerField(
       raw,

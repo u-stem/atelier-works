@@ -90,7 +90,7 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 
 | status | 意味 | 種別 | 終端 |
 | --- | --- | --- | --- |
-| `picked` | claimした直後。監査では作業項目を作った直後 | issue、audit | |
+| `picked` | claimした直後。監査とdependabotでは作業項目を作った直後 | issue、audit、dependabot | |
 | `requirements_generating` | 要件定義ドラフトを生成している | issue | |
 | `awaiting_approval` | 人の承認を待っている | issue、audit | |
 | `approved` | 要件定義が承認された | issue | 終端 |
@@ -98,14 +98,14 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
 | `pr_open` | 実装を終えてPRを作成か更新した。PRのCIとマージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
 | `reviewing` | PRをレビューしている | pr_review | |
-| `reviewed` | レビューをCOMMENTとして投稿した | pr_review、pr_fix | 終端 |
+| `reviewed` | レビューをCOMMENTとして投稿した。dependabotでは、マージしたか、影響の所見を投稿した | pr_review、pr_fix、dependabot | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
 | `rereview_requested` | 修正をpushし、再レビューを依頼した | pr_fix | 終端 |
 | `blocked` | 準備の確認でレビューか修正の前に止めた(headがforkのPRなど)、修正の実行中にPRのheadが動いた、要件の不足で親のIssueへ差し戻した | pr_review、pr_fix | 終端 |
 | `needs_human` | 自動処理を打ち切り、人の対応を待つ | すべて | 終端 |
 | `failed` | 実行時エラーで失敗した | すべて | 終端 |
 | `expired` | 承認依頼が7日の期限を過ぎた | issue | 終端 |
-| `cancelled` | IssueかPRが閉じられた。または、承認済みの要件定義が、同じIssueの新しいサイクルに置き換えられた | すべて | 終端 |
+| `cancelled` | IssueかPRが閉じられた。または、承認済みの要件定義が、同じIssueの新しいサイクルに置き換えられた。dependabotでは、フローがheadを判断せずに止めた | すべて | 終端 |
 | `auditing` | 監査している | audit | |
 | `audited` | 監査を終えた | audit | 終端 |
 
@@ -170,6 +170,20 @@ stateDiagram-v2
     awaiting_approval --> audited: すべての提案を決定
 ```
 
+### dependabotの作業項目
+
+```mermaid
+stateDiagram-v2
+    [*] --> picked: poll_dependabotが登録
+    picked --> reviewed: マージした、所見を投稿した、または照合がマージを見つけた
+    picked --> needs_human: 自動でマージできない、または試運転でマージ可と判定した
+    picked --> cancelled: 無効になった、PRが閉じた、headが動いた、待ちを返した
+    needs_human --> cancelled: PRがclosedかmerged
+```
+
+人に回すと決めたPRは、`poll_dependabot`が作業項目を作った直後に人の対応待ちにする。
+注記と分岐は[dependabotの更新の内部仕様](internals/dependabot.md)に書く。
+
 図に描いていない遷移が3つある。
 終端でない作業項目は、フローが例外で失敗するか孤児と判定されると失敗(`failed`)になる。
 Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取り消し(`cancelled`)になる。
@@ -179,7 +193,7 @@ Issueの作業項目とPRの作業項目は、IssueかPRが閉じられると取
 許されるのは、PRがマージされたとき、作者以外の人が閉じたとき、作者が閉じて作者の関係が許可する関係(`allowed_labeler_associations`)に当たるときである。
 Botが閉じたときは取り消さない。
 
-終端の作業項目は、Consoleからの再実行で再び動き出す。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
+終端の作業項目は、Consoleからの再実行で再び動き出す。監査とdependabotの作業項目は再実行できない。遷移の条件、リース、孤児の判定は[作業項目の状態とリース](internals/work-items.md)に書く。
 
 ## データモデル
 
@@ -300,6 +314,7 @@ Consoleの一覧と集計は次のviewを読む。
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。 |
+| poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
 | sample_worker_load | `30 */2 * * * *` | `f/factory/sample_worker_load` | 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。workerの並列数やポーリングの間隔を見直す根拠にします。 |
@@ -426,6 +441,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/notice_resolve` | script | [OP-2-3] 通知を解決 |
 | `f/factory/poll_issues` | script | [SF-1-1] Issueを巡回して担当を確定 |
 | `f/factory/poll_prs` | script | [SF-1-2] PRを巡回してレビュー / 修正を起動 |
+| `f/factory/poll_dependabot` | script | [SF-1-3] dependabotのPRを巡回して自動マージを起動 |
 | `f/factory/pipeline` | flow | [SF-2-1] 要件定義の生成と承認 |
 | `f/factory/steps/pipeline_prepare` | script | [SF-2-1/1] 作業領域の準備 |
 | `f/factory/steps/pipeline_generate` | script | [SF-2-1/2] 要件定義の生成(Claude) |
@@ -622,6 +638,16 @@ Discordへの通知の2回は、ホスト側の作業の通知と、最後の確
 仕組みは[Consoleの仕様](internals/console.md)に書く。
 
 Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself cloneから読む。そのためpullの直後の実行から反映される。初回の反映(スケジュールの登録と最初のpush)は、ホストから`scripts/bootstrap.sh`が行う。
+
+## dependabotの更新の自動マージ
+
+`poll_dependabot`が10分ごとに、dependabotが開いた依存の更新PRを探し、自動でマージできるかを評価する。
+通ったPRだけ作業項目を作り、`dependabot`フローを起動する。
+フローは、依存を隔離してインストールし、Claudeに影響を調べさせてから、マージするか人に回す。
+既定では無効で、`dependabot_enabled`を真にしたときだけ動く。
+マージは`dependabot_merge_enabled`も真にしたときだけ行い、偽の間は試運転としてマージ可のPRを人に回す。
+対象は`factory_repo`と、`repo_allowlist`に明示したリポジトリだけである。
+マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)に書く。
 
 ## 工程4のmainのCI監視
 

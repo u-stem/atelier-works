@@ -18,6 +18,7 @@ import {
   deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
   deleteWorkerSamplesBefore,
+  dependabotGateWaitingCancels,
   getLatestPrCiCheck,
   getNoticeById,
   getPreviousMainCiRun,
@@ -3134,6 +3135,7 @@ for (const [pr, status, note, counts] of [
   [9113, "cancelled", null, true],
   [9107, "failed", "boom", true],
   [9108, "reviewed", "merged", true],
+  [9115, "reviewed", "reconcile: merged", true],
 ] as const) {
   const id = await insertDependabotWorkItemUnlessActive(
     dependabotCandidate(pr, DEPENDABOT_SHA_A),
@@ -3176,6 +3178,43 @@ check(
   "dependabot head: the latest cancel note decides",
   (await hasDependabotItemForHead(OWNER, "r", 9114, DEPENDABOT_SHA_A, sql)) ===
     true,
+);
+// フローの待ちによる取り消しだけを数え、最後の時刻を返す。ほかの注記の取り消しは数えない。
+const waitedOnce = await dependabotGateWaitingCancels(
+  OWNER,
+  "r",
+  9106,
+  DEPENDABOT_SHA_A,
+  sql,
+);
+check(
+  "dependabot waits: a gate waiting cancellation is counted with its time",
+  waitedOnce.count === 1 && waitedOnce.lastAt instanceof Date,
+  waitedOnce,
+);
+const waitedThenClosed = await dependabotGateWaitingCancels(
+  OWNER,
+  "r",
+  9114,
+  DEPENDABOT_SHA_A,
+  sql,
+);
+check(
+  "dependabot waits: another cancel note is not counted",
+  waitedThenClosed.count === 1,
+  waitedThenClosed,
+);
+const neverWaited = await dependabotGateWaitingCancels(
+  OWNER,
+  "r",
+  9107,
+  DEPENDABOT_SHA_A,
+  sql,
+);
+check(
+  "dependabot waits: a head without a waiting cancellation has none",
+  neverWaited.count === 0 && neverWaited.lastAt === null,
+  neverWaited,
 );
 
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。

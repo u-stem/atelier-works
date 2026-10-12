@@ -850,6 +850,8 @@ type SearchIssueItemPayload = {
   readonly html_url: string;
   readonly repository_url: string;
   readonly user: { readonly login: string } | null;
+  /** 作成の時刻。読む関数(`searchDependabotPrs`)だけが形を確かめる。 */
+  readonly created_at?: unknown;
 };
 
 function isSearchIssueItemPayload(
@@ -2157,6 +2159,50 @@ export async function searchPrs(
     }
   }
   return items;
+}
+
+/**
+ * dependabotのPRを探す範囲。1つのリポジトリに限る。
+ * オーナーの全リポジトリは探さない。自動でマージする対象を、明示したリポジトリに限るためである。
+ */
+export type DependabotPrSearchScope = {
+  readonly kind: "repo";
+  readonly owner: string;
+  readonly repo: string;
+};
+
+export type DependabotPrSearchItem = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+  /** PRを作った時刻(epochミリ秒)。待ちの上限を数える起点にする。 */
+  readonly createdAtMs: number;
+};
+
+/**
+ * `GET /search/issues`で、dependabotのアプリが開いた、`main`をbaseにする、draftでない、開いたPRを返す。
+ * 検索は候補を絞るだけで、作者とbaseとdraftは呼び出し側がPRを読み直して確かめる。
+ * 作成の時刻を読めない項目があれば`GitHubResponseError`を投げる。
+ */
+export async function searchDependabotPrs(
+  client: GhClient,
+  scope: DependabotPrSearchScope,
+): Promise<DependabotPrSearchItem[]> {
+  validateOwnerRepo(scope.owner, scope.repo);
+  const query = `is:pr state:open draft:false base:main author:app/dependabot repo:${scope.owner}/${scope.repo}`;
+  const items = await callGhApiAllSearchItems(
+    client,
+    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
+  );
+  return items.map((item) => {
+    const createdAtMs =
+      typeof item.created_at === "string" ? Date.parse(item.created_at) : NaN;
+    if (!Number.isFinite(createdAtMs)) {
+      throw unexpectedShape("search dependabot prs");
+    }
+    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
+    return { owner, repo, number: item.number, createdAtMs };
+  });
 }
 
 export type PullRequest = {

@@ -47,6 +47,7 @@ schema:
     - implement_max_changed_files
     - implement_max_diff_lines
     - dependabot_enabled
+    - dependabot_merge_enabled
     - dependabot_min_published_days
     - pr_ci_watch_enabled
     - check_commands_by_repo
@@ -108,6 +109,11 @@ schema:
       type: boolean
       description: >-
         dependabotのセキュリティ更新PRを自動で処理するかどうかです。falseの間は、dependabotのPRに何もしません。
+      default: false
+    dependabot_merge_enabled:
+      type: boolean
+      description: >-
+        dependabotの更新PRを、条件を満たしたときに自動でマージするかどうかです。falseの間は、マージできると判断したPRもマージせず、人の対応待ちにします。dependabot_enabledを有効にして試運転の結果を確かめてから、有効にします。
       default: false
     dependabot_min_published_days:
       type: integer

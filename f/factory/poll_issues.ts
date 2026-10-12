@@ -38,7 +38,7 @@ import {
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
-import { notifyBestEffort } from "./lib/discord.ts";
+import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
 import { openFactoryClone } from "./lib/factory_clone.ts";
 import {
   ClaimOwnershipUnknownError,
@@ -76,8 +76,11 @@ import {
   labelerDeniedMessage,
   labelerPolicyFor,
   parseActionableCursor,
+  type ReconcileDecision,
   type ReconcileGithubState,
   readJobState,
+  reconcileNotifies,
+  reconcileTransition,
   recordLabelerCheckLimit,
   rotateTargets,
   runDeployedShaCheck,
@@ -309,6 +312,29 @@ async function removePrWorktrees(
 // reconcile(全種別)
 // ---------------------------------------------------------------------------
 
+/**
+ * 照合が作業項目を取り消すか失敗にしたときの通知を返す。知らせないときは`null`。
+ * 知らせるかは`reconcileNotifies`が決める。dependabotの作業項目を、PRが閉じたことで終えたときは知らせない。
+ */
+export function reconcileEvent(
+  item: Pick<WorkItem, "kind" | "flow_job_id">,
+  decision: Exclude<ReconcileDecision, { readonly action: "none" }>,
+  text: {
+    readonly label: string;
+    readonly note: string;
+    readonly instanceName: string;
+  },
+): NotifyEvent | null {
+  if (!reconcileNotifies(item.kind, decision)) return null;
+  return {
+    kind: "job_failed",
+    instance_name: text.instanceName,
+    flow_path: "f/factory/poll_issues",
+    job_id: item.flow_job_id ?? "unknown",
+    error: `${text.label}: ${text.note}`,
+  };
+}
+
 async function reconcileActiveItems(
   client: GhClient,
   active: readonly WorkItem[],
@@ -360,7 +386,11 @@ async function reconcileActiveItems(
           item.repo,
           item.pr_number,
         );
-        github = { kind: "pr", open: asIssue.state === "open" };
+        github = {
+          kind: "pr",
+          open: asIssue.state === "open",
+          merged: asIssue.mergedAt !== null,
+        };
       }
 
       const decision = isWaitingForHuman(item.status)
@@ -382,9 +412,11 @@ async function reconcileActiveItems(
         }
       }
 
-      const targetStatus =
-        decision.action === "cancel" ? "cancelled" : "failed";
-      const note = `reconcile: ${decision.reason}`;
+      const { to: targetStatus, note } = reconcileTransition(
+        item.kind,
+        decision,
+        github,
+      );
       // 読み取った後にflow_job_idが変わっていれば(実装フローがリースを取った、新しいフローが
       // 起動されたなど)その実行を止めないよう、観測した値のままのときだけ状態を変える。
       // 更新できなかったときは、並行する処理が先に状態を進めている。
@@ -411,17 +443,14 @@ async function reconcileActiveItems(
         await removePrWorktrees(item.owner, item.repo, item.pr_number, log);
       }
 
-      await notifyBestEffort(
-        discordWebhookUrl,
-        {
-          kind: "job_failed",
-          instance_name: config.instance_name,
-          flow_path: "f/factory/poll_issues",
-          job_id: item.flow_job_id ?? "unknown",
-          error: `${label}: ${note}`,
-        },
-        log,
-      );
+      const event = reconcileEvent(item, decision, {
+        label,
+        note,
+        instanceName: config.instance_name,
+      });
+      if (event !== null) {
+        await notifyBestEffort(discordWebhookUrl, event, log);
+      }
 
       count += 1;
     } catch (err) {
@@ -577,7 +606,7 @@ export async function reconcileClosedActionableItems(
         const decision = decideClosureOnly(
           item.kind === "issue"
             ? { kind: "issue", open: false }
-            : { kind: "pr", open: false },
+            : { kind: "pr", open: false, merged: false },
         );
         if (decision.action !== "cancel") continue;
         const note = actionableCancelNote(decision.reason);
