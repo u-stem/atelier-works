@@ -1959,6 +1959,37 @@ execPsql(
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
 );
 
+// dependabotの作業項目は、kindのCHECK制約を通り、アプリの挿入の関数で入る。
+// 戻せることは、後で適用するdown migrationが確かめる。
+const dependabotItem = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "dependabot",
+    owner: OWNER,
+    repo: "r",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 9001,
+    title: "qdb dependabot item",
+    body: null,
+    status: "picked",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+check(
+  "kind: a dependabot work item can be inserted",
+  dependabotItem > 0,
+  dependabotItem,
+);
+
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
 const fullWorkerSample = {
   sampled_at: new Date("2026-10-12T03:09:00.000Z"),

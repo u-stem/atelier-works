@@ -31,6 +31,7 @@ locks:
   f/factory/lib/console_support: fab111d55d69a9e120b5f00cbadca32b5ac07bd1fcd2df0d968c970a9493a286
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
   f/factory/lib/db: e90e31aaf3c6f5c235a5542da12411e367f6f245f0d97f22b58428ec99195d13
+  f/factory/lib/dependabot_support: 4488ceef93330493dc8bd62b99912ce8f68db0182ff65c4f7371214aedc77da9
   f/factory/lib/discord: 56c67d091d4f1da1e40c6e912bae4a2e6355e11230b79dc81f80dd2cb96a5802
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
@@ -61,7 +62,7 @@ locks:
   f/factory/lib/self_update_support: f43a91237cc6c5418dc253162af8e5b18dfe3cd7681541fc1e501d6552f46fcf
   f/factory/lib/summary_support: f4b2a2f9134a7f037e8a19915f2411c29e096d8f5bfdb437d96aa85f45604ba1
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: 894a1b62a2a164816133293b21b9e6331370c0b481c0a9bba0986706c6f62e32
+  f/factory/lib/types: 0b000a627bfe3efee104d7ca4d6a4c0c0189b8aae46a7f14bbfd762f06aa2bf8
   f/factory/lib/worker_load_support: 9d8978e4d8d85b9578b66952d3bc27fd29f5f9ff731402fe8ee0965cd8494896
   f/factory/lib/workspace: 3c0049eb7cf80e055a1205bc898a1277b37ca0debc5c5faaec558c1703dfd42f
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -74,7 +75,7 @@ locks:
   f/factory/poll_prs: 238385c532cb22b010c2381c9c50515863466d97753eb750e422091593534edb
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/retry_work_item: a0447d41cd130badc451ccb28574a947426c62d18a60e2f09ddfa82208fbbc4a
+  f/factory/retry_work_item: 9ddc065fc12d6cb2852c0f98f805962e4689e6ea59d198b24172c624ccebcb87
   f/factory/sample_worker_load: accfb18cd3625e2fa65418e76ff0413108b5bc8f9b4be7389dc1464f7a031a6c
   f/factory/self_update: 82d3a96748df633ca02c056fee3db0d1c69216994719680b6dac19fc47c7dee5
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
