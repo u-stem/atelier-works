@@ -71,12 +71,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * sandboxは、HTTPのCSP(`infra/Caddyfile`)も後ろ盾になる。
  * dependabotのセキュリティ更新PRを自動でマージするフローも守る。マージの判定(`lib/dependabot_support.ts`)、
  * 影響調査のプロンプト(`lib/dependabot_prompt.ts`)、npm registryの取得(`lib/dependabot_registry.ts`)、
- * ゲート入力の組み立て(`lib/dependabot_collect.ts`)、取得(`poll_dependabot.ts`)とそのスケジュール、
+ * ゲート入力の組み立て(`lib/dependabot_collect.ts`)、フローの支援関数(`lib/dependabot_flow_support.ts`)、
+ * 取得(`poll_dependabot.ts`)とそのスケジュール、
  * 3つのステップ(`steps/dependabot_prepare.ts`、`dependabot_assess.ts`、`dependabot_finish.ts`)と、
  * それぞれのscript定義(`*.script.yaml`)である。フロー(`dependabot__flow/`)は、前方一致で守る。
  * 書き換えられると、人の確認なしに、許可していない更新をマージできる。
  * まだ存在しないファイルも先に守る。名前を先に押さえ、後から置かれたファイルが保護の外に出ないようにするためである。
- * 依存の無い`lib/`の4つのlock(`lib/dependabot_*.script.lock`)も守る。中身は`"dependencies": {}`で、
+ * 依存の無い`lib/`の5つのlock(`lib/dependabot_*.script.lock`)も守る。中身は`"dependencies": {}`で、
  * `windmill-client`の版を上げる変更で書き換わらないので、正当な変更を止めない。
  * 一方、窓口の`poll_dependabot.script.lock`と`steps/dependabot_*.script.lock`は守らない。
  * `windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
@@ -118,6 +119,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/dependabot_collect.ts",
   "f/factory/lib/dependabot_collect.script.yaml",
   "f/factory/lib/dependabot_collect.script.lock",
+  "f/factory/lib/dependabot_flow_support.ts",
+  "f/factory/lib/dependabot_flow_support.script.yaml",
+  "f/factory/lib/dependabot_flow_support.script.lock",
   "f/factory/poll_dependabot.ts",
   "f/factory/poll_dependabot.script.yaml",
   "f/factory/poll_dependabot.schedule.yaml",
