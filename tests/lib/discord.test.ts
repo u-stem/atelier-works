@@ -141,6 +141,21 @@ describe("buildEmbed host_action_required", () => {
   });
 });
 
+describe("buildEmbed job_failed", () => {
+  test("shows the next action as a field when the event has one", () => {
+    expect(
+      buildEmbed({ ...JOB_FAILED_EVENT, next_action: "PRを確認してください" })
+        .fields,
+    ).toContainEqual({ name: "次の操作", value: "PRを確認してください" });
+  });
+
+  test("shows no next action field when the event has none", () => {
+    expect(
+      buildEmbed(JOB_FAILED_EVENT).fields.map((field) => field.name),
+    ).not.toContain("次の操作");
+  });
+});
+
 describe("buildEmbed main_ci_failed", () => {
   const event: Extract<NotifyEvent, { kind: "main_ci_failed" }> = {
     kind: "main_ci_failed",

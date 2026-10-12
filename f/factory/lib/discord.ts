@@ -144,6 +144,11 @@ export type NotifyEvent =
       flow_path: string;
       job_id: string;
       error: string;
+      /**
+       * 運用者がまず行う操作の1文。再実行の案内が当たらないフロー(dependabot)だけが載せる。
+       * 無ければ欄を出さない。
+       */
+      next_action?: string;
     }
   | {
       kind: "console_fetch_problem";
@@ -406,6 +411,9 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         description: event.error,
         url: null,
         fields: [
+          ...(event.next_action === undefined
+            ? []
+            : [{ name: "次の操作", value: event.next_action }]),
           instanceField(event.instance_name),
           { name: "ジョブ", value: event.job_id },
         ],

@@ -743,6 +743,9 @@ export function buildChangelogExcerpt(
   return takeBytes(section.join("\n"), maxBytes);
 }
 
+/** dependabotのフローのパス。起動側と、フローの失敗の扱い(`on_error_flow`)が使う。 */
+export const DEPENDABOT_FLOW_PATH = "f/factory/dependabot";
+
 // ---- 時間設定 ----
 
 /** flow.yamlのdependabot_prepareのtimeout(秒)。変えるときはflow.yamlと同じ変更で変える。 */
