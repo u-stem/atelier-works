@@ -36,6 +36,7 @@ import {
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
@@ -51,6 +52,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  setWorkItemPrUrl,
   touchPrCiCheck,
   transitionMainCiRun,
   transitionPrCiCheck,
@@ -3261,6 +3263,35 @@ check(
   stopAtStartSummary?.gap_longest_to?.toISOString() ===
     "2026-10-22T23:00:30.000Z",
   stopAtStartSummary,
+);
+
+// PRのCI監視は、PRを作って`pr_open`のままの`issue`の作業項目だけを巡回する。
+const prOpenWithUrl = await issueWorkItem(951, 1, "pr_open", "qdb-pr-open-url");
+await setWorkItemPrUrl(prOpenWithUrl, "https://github.com/qdb/r/pull/951", sql);
+await issueWorkItem(952, 1, "pr_open", "qdb-pr-open-no-url");
+const cancelledWithUrl = await issueWorkItem(
+  953,
+  1,
+  "cancelled",
+  "qdb-cancelled",
+);
+await setWorkItemPrUrl(
+  cancelledWithUrl,
+  "https://github.com/qdb/r/pull/953",
+  sql,
+);
+check(
+  "pr_open work items: only the issue item that is pr_open and has a pull request url is listed",
+  (await listPrOpenIssueWorkItems(new Date(Date.now() - 60_000), 100, sql))
+    .filter((item) => item.owner === OWNER)
+    .map((item) => item.id)
+    .join(",") === String(prOpenWithUrl),
+);
+check(
+  "pr_open work items: an item not updated since the cutoff is not listed",
+  (
+    await listPrOpenIssueWorkItems(new Date(Date.now() + 60_000), 100, sql)
+  ).every((item) => item.owner !== OWNER),
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

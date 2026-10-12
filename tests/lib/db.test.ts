@@ -67,6 +67,7 @@ import {
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
@@ -3969,6 +3970,40 @@ describe("listActiveIssueWorkItems", () => {
   test("returns the mapped rows", async () => {
     const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
     const items = await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(items.map((item) => item.id)).toEqual([9]);
+  });
+});
+
+describe("listPrOpenIssueWorkItems", () => {
+  const SINCE = new Date("2026-10-01T00:00:00Z");
+
+  test("selects issue-kind work items in the pr_open status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.text).toContain("kind = 'issue' AND status = 'pr_open'");
+  });
+
+  test("selects only work items that have a pull request url", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.text).toContain("pr_url IS NOT NULL");
+  });
+
+  test("filters by the update time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.values).toContain(SINCE.toISOString());
+  });
+
+  test("limits the number of rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.values).toContain(10);
+  });
+
+  test("returns the mapped rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
+    const items = await listPrOpenIssueWorkItems(SINCE, 10, sql);
     expect(items.map((item) => item.id)).toEqual([9]);
   });
 });

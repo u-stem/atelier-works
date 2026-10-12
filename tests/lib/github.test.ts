@@ -2939,7 +2939,7 @@ describe("getPr", () => {
           ref: "feature-x",
           repo: { full_name: "acme/widgets-fork" },
         },
-        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets", id: 99 } },
         mergeable: true,
         mergeable_state: "clean",
         user: { login: "alice", type: "User" },
@@ -2963,6 +2963,7 @@ describe("getPr", () => {
       headRef: "feature-x",
       headRepoFullName: "acme/widgets-fork",
       baseRepoFullName: "acme/widgets",
+      baseRepoId: 99,
       baseRef: "main",
       mergeable: true,
       mergeableState: "clean",
@@ -2970,6 +2971,47 @@ describe("getPr", () => {
       authorType: "User",
       autoMergeEnabled: false,
     });
+  });
+
+  // 実行のheadのリポジトリとIDで比べるために使うので、安全な正の整数でなければnullにする。
+  async function baseRepoIdFor(repo: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 18,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        auto_merge: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      18,
+    );
+    return pr.baseRepoId;
+  }
+
+  test("reads the base repository id", async () => {
+    expect(await baseRepoIdFor({ full_name: "acme/widgets", id: 7 })).toBe(7);
+  });
+
+  test("returns null when the base repository has no id", async () => {
+    expect(await baseRepoIdFor({ full_name: "acme/widgets" })).toBeNull();
+  });
+
+  test("returns null when the base repository id is not a positive integer", async () => {
+    expect(
+      await baseRepoIdFor({ full_name: "acme/widgets", id: -1 }),
+    ).toBeNull();
   });
 
   test("reports auto-merge as enabled when auto_merge is an object", async () => {

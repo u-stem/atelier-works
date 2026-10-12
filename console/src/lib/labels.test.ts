@@ -107,6 +107,16 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("names the failed pull request CI", () => {
+    expect(noticeKindLabel("pr_ci_failed")).toBe("PRのCIの失敗");
+  });
+
+  test("names the denied pull request CI check", () => {
+    expect(noticeKindLabel("pr_ci_check_denied")).toBe(
+      "PRのCIを読む権限の不足",
+    );
+  });
+
   test("translates a known notice kind", () => {
     expect(noticeKindLabel("console_fetch_failed")).toBe(
       "Consoleの取り込みの失敗",

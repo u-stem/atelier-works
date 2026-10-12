@@ -707,6 +707,26 @@ export async function listActiveIssueWorkItems(
 }
 
 /**
+ * PRを作った(`pr_open`)`issue`の作業項目のうち、PRのURLを持ち、`updatedAfter`より後に更新されたものを、
+ * IDの新しい順に最大`limit`件返す。PRのCI監視が、Factoryが作ったPRを見つけるのに使う。
+ * `pr_open`は終端で、PRが閉じても作業項目は変わらない。期間で絞らないと、閉じたPRを毎回読み続ける。
+ */
+export async function listPrOpenIssueWorkItems(
+  updatedAfter: Date,
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'issue' AND status = 'pr_open' AND pr_url IS NOT NULL
+      AND updated_at > ${updatedAfter.toISOString()}::timestamptz
+    ORDER BY id DESC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toWorkItem);
+}
+
+/**
  * 作業項目の状態を移し、`factory.work_item_events`に監査用の行を追加する。
  * 該当する作業項目が無ければ例外を投げる。
  *
