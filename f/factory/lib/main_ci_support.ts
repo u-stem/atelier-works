@@ -51,6 +51,17 @@ export type MainCiState = (typeof MAIN_CI_STATES)[number];
 /** 判定が確定した後の状態。`pending`から遷移できる行き先で、`baseline`は含まない。 */
 export type MainCiSettledState = "passed" | "failed" | "expired" | "no_ci";
 
+export function isMainCiSettledState(
+  value: unknown,
+): value is MainCiSettledState {
+  return (
+    value === "passed" ||
+    value === "failed" ||
+    value === "expired" ||
+    value === "no_ci"
+  );
+}
+
 export function isMainCiState(value: unknown): value is MainCiState {
   return MAIN_CI_STATES.some((state) => state === value);
 }
@@ -312,8 +323,9 @@ export function isPrevFailed(prevState: string | null): boolean {
 // ---------------------------------------------------------------------------
 
 /**
- * 実行のURLが`https://github.com/<owner>/<repo>/`の下にあれば、正規化したURLを返す。
- * そうでなければnull。大文字小文字は区別しない。GitHubが返す名前の綴りと設定が違うことがあるため。
+ * 実行のURLが`https://github.com/<owner>/<repo>/actions/runs/<番号>`
+ * (再実行は末尾に`/attempts/<番号>`)の形なら、正規化したURLを返す。
+ * そうでなければnull。ownerとrepoの大文字小文字は区別しない。GitHubが返す名前の綴りと設定が違うことがあるため。
  * 空白や制御文字を含む値、ユーザー情報、クエリ、フラグメントは受け付けない。
  * 通知の本文に載せるリンクなので、別のリポジトリや別のホストへ誘導されないようにする。
  */
@@ -338,8 +350,25 @@ export function parseRunUrl(
   if (url.protocol !== "https:" || url.host !== "github.com") return null;
   if (url.username !== "" || url.password !== "") return null;
   if (url.search !== "" || url.hash !== "") return null;
-  const prefix = `/${owner}/${repo}/`.toLowerCase();
-  if (!url.pathname.toLowerCase().startsWith(prefix)) return null;
+  // /<owner>/<repo>/actions/runs/<id>、または再実行の/attempts/<n>付きの形だけを許す。
+  const segments = url.pathname.split("/");
+  const head = segments.slice(0, 6);
+  const [empty, urlOwner, urlRepo, actions, runs, runId] = head;
+  if (
+    empty !== "" ||
+    urlOwner?.toLowerCase() !== owner.toLowerCase() ||
+    urlRepo?.toLowerCase() !== repo.toLowerCase() ||
+    actions !== "actions" ||
+    runs !== "runs" ||
+    runId === undefined ||
+    !/^\d+$/.test(runId)
+  ) {
+    return null;
+  }
+  const rest = segments.slice(6);
+  const hasAttempt =
+    rest.length === 2 && rest[0] === "attempts" && /^\d+$/.test(rest[1] ?? "");
+  if (rest.length !== 0 && !hasAttempt) return null;
   return url.href;
 }
 
@@ -358,7 +387,8 @@ export function sanitizeRunName(raw: string): string {
   return cut === "" ? UNNAMED_RUN : cut;
 }
 
-const SUMMARY_MAX_LENGTH = 400;
+/** `buildFailureSummary`が返す文字列の長さの上限。記録のときにも、この長さを超えれば拒む。 */
+export const MAIN_CI_SUMMARY_MAX_LENGTH = 400;
 const SUMMARY_PREFIX = "失敗したworkflow: ";
 const SUMMARY_CONTINUING = "。前のコミットから失敗が続いています";
 /** 省略した件数の注記(` ほか99件`)のために空けておく文字数。 */
@@ -385,7 +415,7 @@ export function buildFailureSummary(
     .map((run) => `${sanitizeRunName(run.name)} (${displayConclusion(run)})`);
   const note = prevFailed ? SUMMARY_CONTINUING : "";
   const budget =
-    SUMMARY_MAX_LENGTH -
+    MAIN_CI_SUMMARY_MAX_LENGTH -
     SUMMARY_PREFIX.length -
     note.length -
     SUMMARY_OMITTED_RESERVE;

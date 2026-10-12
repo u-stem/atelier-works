@@ -4312,6 +4312,8 @@ describe("listWorkflowRuns", () => {
     id: 101,
     name: "CI",
     head_sha: SHA,
+    head_branch: "main",
+    event: "push",
     status: "completed",
     conclusion: "success",
     created_at: "2026-10-12T03:00:00Z",
@@ -4506,6 +4508,51 @@ describe("listWorkflowRuns", () => {
         listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
       ).rejects.not.toBeInstanceOf(WorkflowRunsIncompleteError);
     });
+  });
+
+  test("throws a WorkflowRunsIncompleteError for a run of another branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_branch: "feature" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+  });
+
+  test("throws a WorkflowRunsIncompleteError for a run without a branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_branch: null })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+  });
+
+  test("throws a WorkflowRunsIncompleteError for a run that a pull request started", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ event: "pull_request" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+  });
+
+  test("checks the branch and the event when reading by head sha", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ head_branch: "v1" })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+    ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+  });
+
+  test("throws an unexpected-shape error when head_branch or event is missing", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ event: undefined })] }),
+    ]);
+    await expect(
+      listWorkflowRuns(client(fake), "acme", "widgets", "main"),
+    ).rejects.toThrow("unexpected response shape");
   });
 
   test("rejects an invalid owner before calling the API", async () => {

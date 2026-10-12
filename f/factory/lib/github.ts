@@ -3200,6 +3200,8 @@ type WorkflowRunPayload = {
   id: number;
   name: string | null;
   head_sha: string;
+  head_branch: string | null;
+  event: string;
   status: string;
   conclusion: string | null;
   created_at: string;
@@ -3211,6 +3213,10 @@ function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
   if (typeof value.id !== "number") return false;
   if (value.name !== null && typeof value.name !== "string") return false;
   if (typeof value.head_sha !== "string") return false;
+  if (value.head_branch !== null && typeof value.head_branch !== "string") {
+    return false;
+  }
+  if (typeof value.event !== "string") return false;
   if (typeof value.status !== "string") return false;
   if (value.conclusion !== null && typeof value.conclusion !== "string") {
     return false;
@@ -3235,6 +3241,7 @@ export class WorkflowRunsIncompleteError extends Error {
 function toWorkflowRuns(
   parsed: unknown,
   context: string,
+  branch: string,
   expectedSha: string | undefined,
 ): WorkflowRun[] {
   if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
@@ -3245,6 +3252,11 @@ function toWorkflowRuns(
       throw new Error(`${context}: unexpected response shape`);
     }
     assertCommitSha(raw.head_sha);
+    if (raw.head_branch !== branch || raw.event !== "push") {
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another branch or event`,
+      );
+    }
     if (expectedSha !== undefined && raw.head_sha !== expectedSha) {
       throw new WorkflowRunsIncompleteError(
         `${context}: the response holds a run of another commit`,
@@ -3270,6 +3282,8 @@ function toWorkflowRuns(
  *   `WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読む。判定に使うのはこちらである。
  *   上限のページまで埋まったら、実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。
  *   応答に別のコミットの実行が混ざったときも同じ例外を投げる。
+ *   ブランチと同じ名前のタグのpushで動いた実行は、ブランチ名がそのブランチで返りうる。
+ *   各実行の`head_branch`が`branch`と、`event`が`push`と合わなければ、同じ例外を投げる。
  *   ブランチも条件に付けるのは、同じコミットを別のブランチにpushした実行を混ぜないため。
  * `headSha`と、応答の各実行の`head_sha`は、完全なコミットshaでなければ例外を投げる。
  * 応答の形が違えば例外を投げる。
@@ -3290,7 +3304,12 @@ export async function listWorkflowRuns(
     const endpoint = `${base}&event=push&per_page=${String(WORKFLOW_RUNS_PER_PAGE)}`;
     const response = await callGhApi(client, endpoint);
     ensureSuccess(response, context);
-    return toWorkflowRuns(parseJsonBody(response, context), context, undefined);
+    return toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      branch,
+      undefined,
+    );
   }
   assertCommitSha(headSha);
   const context = `GET workflow runs ${owner}/${repo}@${headSha}`;
@@ -3302,6 +3321,7 @@ export async function listWorkflowRuns(
     const items = toWorkflowRuns(
       parseJsonBody(response, context),
       context,
+      branch,
       headSha,
     );
     runs.push(...items);

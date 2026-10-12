@@ -4579,6 +4579,42 @@ describe("transitionMainCiRun", () => {
     expect(calls[0]?.text).toContain("updated_at = now()");
   });
 
+  test("rejects a summary longer than 400 characters before the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(
+      5,
+      { ...settled, summary: "x".repeat(401) },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("accepts a summary of exactly 400 characters", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(
+      await transitionMainCiRun(
+        5,
+        { ...settled, summary: "x".repeat(400) },
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects a summary that is too long with an error", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    await expect(
+      transitionMainCiRun(5, { ...settled, summary: "x".repeat(401) }, sql),
+    ).rejects.toThrow("summary is too long");
+  });
+
+  test("rejects a state a pending row cannot move to", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    // 型を通らない値を、外から来た値として渡す。
+    const to = JSON.parse(JSON.stringify({ ...settled, state: "baseline" }));
+    await transitionMainCiRun(5, to, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
   test("casts the boolean", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
     await transitionMainCiRun(5, settled, sql);

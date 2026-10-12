@@ -7,8 +7,10 @@ import {
   decideState,
   groupRunsBySha,
   isCommitSha,
+  isMainCiSettledState,
   isMainCiState,
   isPrevFailed,
+  MAIN_CI_SUMMARY_MAX_LENGTH,
   NO_CI_AFTER_MS,
   PENDING_EXPIRES_AFTER_MS,
   parseRunUrl,
@@ -93,6 +95,20 @@ describe("isMainCiState", () => {
 
   test("rejects an unknown state", () => {
     expect(isMainCiState("done")).toBe(false);
+  });
+});
+
+describe("isMainCiSettledState", () => {
+  test("accepts the four states a pending row can move to", () => {
+    expect(
+      ["passed", "failed", "expired", "no_ci"].every(isMainCiSettledState),
+    ).toBe(true);
+  });
+
+  test("rejects pending, baseline and unknown values", () => {
+    expect(
+      ["pending", "baseline", "done", null].map(isMainCiSettledState),
+    ).toEqual([false, false, false, false]);
   });
 });
 
@@ -413,6 +429,35 @@ describe("parseRunUrl", () => {
     expect(parseRunUrl(url, "acme", "widgets")).toBe(url);
   });
 
+  test("accepts a run url of a re-run attempt", () => {
+    const attempt = `${url}/attempts/2`;
+    expect(parseRunUrl(attempt, "acme", "widgets")).toBe(attempt);
+  });
+
+  test("rejects an issue or pull request url of the repository", () => {
+    expect(
+      [
+        "https://github.com/acme/widgets/issues/1",
+        "https://github.com/acme/widgets/pull/1",
+        "https://github.com/acme/widgets",
+        "https://github.com/acme/widgets/",
+      ].map((u) => parseRunUrl(u, "acme", "widgets")),
+    ).toEqual([null, null, null, null]);
+  });
+
+  test("rejects a path that is not exactly a run", () => {
+    expect(
+      [
+        "https://github.com/acme/widgets/actions/runs/",
+        "https://github.com/acme/widgets/actions/runs/abc",
+        `${url}/`,
+        `${url}/jobs/1`,
+        `${url}/attempts/x`,
+        "https://github.com/acme/widgets/actions/workflows/ci.yml",
+      ].map((u) => parseRunUrl(u, "acme", "widgets")),
+    ).toEqual([null, null, null, null, null, null]);
+  });
+
   test("accepts a different letter case of the owner and repo", () => {
     expect(parseRunUrl(url, "Acme", "Widgets")).toBe(url);
   });
@@ -557,7 +602,9 @@ describe("buildFailureSummary", () => {
         conclusion: "failure",
       }),
     );
-    expect(buildFailureSummary(many, true).length).toBeLessThanOrEqual(400);
+    expect(buildFailureSummary(many, true).length).toBeLessThanOrEqual(
+      MAIN_CI_SUMMARY_MAX_LENGTH,
+    );
   });
 });
 

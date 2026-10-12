@@ -20,7 +20,9 @@ import { type JobIds, jobIdsFromEnv } from "./job_ids.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import {
   assertCommitSha,
+  isMainCiSettledState,
   MAIN_CI_STATES,
+  MAIN_CI_SUMMARY_MAX_LENGTH,
   type MainCiSettledState,
   type MainCiState,
 } from "./main_ci_support.ts";
@@ -3230,6 +3232,7 @@ export type MainCiTransition = {
 /**
  * 判定を待っている行を、確定した状態に移す。この呼び出しで移したら`true`を返す。
  * 条件は`state = 'pending'`なので、別の実行が先に移した行は書き換えず、`false`を返す。
+ * `state`が移れる状態でないか、`summary`が`MAIN_CI_SUMMARY_MAX_LENGTH`を超えるときは、DBに触れずに例外を投げる。
  * 呼び出し側は、通知の登録を先にし、この更新を後にする。
  * 更新が先に成功して通知が失敗すると、通知が永久に出ないため。
  * 通知の重複は、通知側の部分一意索引が防ぐ。
@@ -3239,6 +3242,14 @@ export async function transitionMainCiRun(
   to: MainCiTransition,
   sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
+  if (!isMainCiSettledState(to.state)) {
+    throw new Error("transitionMainCiRun: state is not a settled state");
+  }
+  if (to.summary.length > MAIN_CI_SUMMARY_MAX_LENGTH) {
+    throw new Error(
+      `transitionMainCiRun: summary is too long (max ${String(MAIN_CI_SUMMARY_MAX_LENGTH)} characters)`,
+    );
+  }
   const rows = await sql`
     UPDATE factory.main_ci_runs
     SET state = ${to.state}, summary = ${to.summary}, prev_failed = ${to.prevFailed}::boolean,

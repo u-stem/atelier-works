@@ -1674,6 +1674,19 @@ try {
   ciCheckRejected = true;
 }
 check("main_ci_runs: the table rejects a malformed sha", ciCheckRejected);
+let ciLongSummaryRejected = false;
+try {
+  execPsql(
+    target,
+    `UPDATE factory.main_ci_runs SET summary = repeat('x', 401) WHERE owner = 'qdb' AND head_sha = '${CI_SHA_B}'`,
+  );
+} catch {
+  ciLongSummaryRejected = true;
+}
+check(
+  "main_ci_runs: the table rejects a summary over 400 characters",
+  ciLongSummaryRejected,
+);
 const ciPendingOther = "c".repeat(40);
 await recordMainCiRun(
   {
