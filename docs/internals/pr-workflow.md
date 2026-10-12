@@ -26,6 +26,8 @@ PR修正は5つのステップでできている。
 
 PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信だけである。失敗、人の対応待ち、ブロック、要件の不足といった運用上の知らせは、PRに書かずDiscordで知らせる。Issue化の提案の承認と却下の結果は、PRのスレッドに返信する。
 
+実装フローが作ったPRのCIの失敗も、PRには書かずDiscordとnoticeで知らせる。この監視はレビューと修正のフローとは独立していて、修正を起動しない。内容は[PRのCI監視の仕様](pr-ci.md)に書く。
+
 ## 起動条件
 
 `poll_prs`がPRを見つけて作業項目を作り、フローを起動する。
@@ -74,6 +76,12 @@ PRのheadが対象のリポジトリにないとき(forkのPRと、headのリポ
 通らなければ、作業項目を終端の`blocked`にして理由を残し、Discordで人に知らせてから、処理を飛ばす。
 同じ判定は、PR修正の準備のステップの「forkからでない」確認と共有する。
 
+`pr_review_prepare`は、forkの確認より先に、リポジトリのオーナーを`owners`と照合する。
+通らなければ、PRを読む前に、処理を飛ばす。
+そのとき、作業項目を終端の`blocked`にして理由を残し、Discordで人に知らせる。
+forkのPRを見送るときと同じ終わり方である。
+照合は[運用](../operations.md)の「オーナーの数値IDを固定する」に書く。
+
 ### 対象のリポジトリ
 
 対象は、`factory_config`の`repo_allowlist`に含まれるリポジトリだけである。`repo_allowlist`が空なら、`owners`に含まれるリポジトリのすべてが対象になる。`factory_repo`は`repo_allowlist`に関わらず常に対象である。
@@ -90,7 +98,7 @@ Factoryが扱ったPRには、トリガーのラベルのほかにラベルを�
 - 状態が取り消し(`cancelled`)でない。
 - `tracked_pr_days`以内に更新された。
 
-`poll_prs`は、そのPRがまだopenであることを`getPr`で確かめてから候補にする。人が新しいcommitをpushすると、この経路でPRレビューが自動で起動する。1回のpushにつき、Claudeの実行は1回である。
+`poll_prs`は、そのPRが`owners`(`id`の照合を通ったオーナー)と`repo_allowlist`に合い、まだopenであることを`getPr`で確かめてから候補にする。人が新しいcommitをpushすると、この経路でPRレビューが自動で起動する。1回のpushにつき、Claudeの実行は1回である。
 
 `review_post_mode`が`gated`のときは、レビューを投稿しない。`gated`は検証用に予約した値で、承認を経て投稿する画面はまだ無い。このモードでは、PRはレビューの依頼かassigneeの経路でだけ見つけ直す。
 
@@ -764,6 +772,7 @@ PR修正の準備のステップは、worktreeを作る前に次を確かめる(
 | 確かめること | 通らないとき |
 | --- | --- |
 | リポジトリが許可リストに含まれる | ブロック |
+| リポジトリのオーナーが`owners`にある(`factory_repo`を除く)。`id`があれば、現在のIDと一致する | ブロック |
 | `fix_round`が`max_fix_rounds`以下である | 人の対応待ち |
 | 時間設定がステップのtimeoutに収まる | ブロック |
 | 親のIssueの作業項目が実装中でない | ブロック |
@@ -771,7 +780,25 @@ PR修正の準備のステップは、worktreeを作る前に次を確かめる(
 | PRがopenである | ブロック |
 | `head.repo`が`base.repo`と同じである(forkのPRにはpushしない) | ブロック |
 | PRがdraftでない | ブロック |
-| baseのブランチが保護ブランチでない | ブロック |
+| PRのauto-mergeが有効でない | ブロック |
+| headのブランチの状態を読める | 失敗(`failed`)。`job_failed`で通知する |
+| headのブランチがデフォルトブランチでない | ブロック |
+| headのブランチが保護ブランチでない | ブロック |
+| headのブランチにrulesetのruleが適用されていない | ブロック |
+
+PR修正がpushするのはheadのブランチなので、headの保護を確かめる。
+baseが保護されていても、headが普通のブランチなら止めない。
+保護の有無は、branches APIの`protected`で読む。
+`main`を保護するruleset(対象は既定のブランチ)は、`protected: true`として返ることを確かめた。
+globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていない。
+そのため、headのブランチに効くrulesetの規則も、`GET repos/{owner}/{repo}/rules/branches/{branch}`で読む。
+1件でもあれば、理由`head branch has rules`でブロックにする。
+ruleの種類は問わずに止める。
+止めすぎは安全側で、`protected`に反映されないrulesetを見落とさないためである。
+auto-mergeが有効なPRを止めるのは、Factoryの修正pushがレビューを経ずにマージされうるからである。
+headの状態は、GitHubのAPIで読む。
+読めなかったときは例外になり、flowの失敗ハンドラが作業項目を失敗(`failed`)にして、`job_failed`で通知する。ブロックにはならない。
+デフォルトブランチは保護されていることが多いので、デフォルトブランチを先に判定し、理由を区別する。
 
 親のIssueの作業項目と実装の作業項目を確かめるのは、実装フローとPR修正がPRのブランチのworktreeを共有するからである。ブランチ名から引くのは、ブランチ名が`factory/issue-<N>-wi-<id>`の形のときで、親の行が無いPRでも止まる。理由を分けているので、どちらで止まったかを見分けられる。
 

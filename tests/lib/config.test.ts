@@ -207,6 +207,81 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("keeps the numeric id of an owner", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: 4242 }],
+    };
+    expect(parseFactoryConfig(raw).owners[0]?.id).toBe(4242);
+  });
+
+  test("leaves the id of an owner undefined when omitted", () => {
+    expect(parseFactoryConfig(LEGACY_RAW_CONFIG).owners[0]?.id).toBeUndefined();
+  });
+
+  test("treats a null owner id as no id", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: null }],
+    };
+    expect(parseFactoryConfig(raw).owners).toEqual([
+      { name: "octo-owner", kind: "user" },
+    ]);
+  });
+
+  test("throws when two owners share a name that differs only in case", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [
+        { name: "octo-owner", kind: "user", id: 4242 },
+        { name: "Octo-Owner", kind: "user" },
+      ],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("treats an undefined owner id as no id", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: undefined }],
+    };
+    expect(parseFactoryConfig(raw).owners).toEqual([
+      { name: "octo-owner", kind: "user" },
+    ]);
+  });
+
+  test.each([0, -1, 1.5, "42"])("throws when an owner id is %p", (id) => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id }],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("keeps the numeric id of the factory repository", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, factory_repo_id: 777 };
+    expect(parseFactoryConfig(raw).factory_repo_id).toBe(777);
+  });
+
+  test("leaves the factory repository id undefined when omitted", () => {
+    expect(
+      parseFactoryConfig(LEGACY_RAW_CONFIG).factory_repo_id,
+    ).toBeUndefined();
+  });
+
+  test("treats a null factory repository id as no id", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, factory_repo_id: null };
+    expect("factory_repo_id" in parseFactoryConfig(raw)).toBe(false);
+  });
+
+  test.each([0, -1, 1.5, "42"])(
+    "throws when the factory repository id is %p",
+    (id) => {
+      const raw = { ...LEGACY_RAW_CONFIG, factory_repo_id: id };
+      expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+    },
+  );
+
   test("throws when max_turns is present but not a number", () => {
     const raw = { ...LEGACY_RAW_CONFIG, max_turns: "forty" };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
@@ -454,6 +529,26 @@ describe("max_lookback_days", () => {
   });
 });
 
+describe("pr_ci_watch_enabled", () => {
+  test("defaults pr_ci_watch_enabled to true when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_ci_watch_enabled).toBe(true);
+  });
+
+  test("passes through an explicit pr_ci_watch_enabled false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_watch_enabled: false,
+    });
+    expect(config.pr_ci_watch_enabled).toBe(false);
+  });
+
+  test("throws when pr_ci_watch_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_watch_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("implement settings (工程3)", () => {
   test("defaults the seven scalar implement settings when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
@@ -569,6 +664,54 @@ describe("implement settings (工程3)", () => {
     expect(config.check_commands_by_repo).toEqual({
       "octo-owner/atelier-works.git": ["bun test"],
     });
+  });
+});
+
+describe("dependabot settings", () => {
+  test("defaults dependabot_enabled to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_enabled).toBe(false);
+  });
+
+  test("defaults dependabot_min_published_days to 7 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.dependabot_min_published_days).toBe(7);
+  });
+
+  test("passes through an explicit dependabot_enabled true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_enabled: true,
+    });
+    expect(config.dependabot_enabled).toBe(true);
+  });
+
+  test("throws when dependabot_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("passes through an explicit dependabot_min_published_days", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      dependabot_min_published_days: 14,
+    });
+    expect(config.dependabot_min_published_days).toBe(14);
+  });
+
+  test("throws when dependabot_min_published_days is zero", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: 0 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when dependabot_min_published_days is negative", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: -1 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when dependabot_min_published_days is not an integer", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, dependabot_min_published_days: 1.5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 });
 

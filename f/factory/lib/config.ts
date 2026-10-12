@@ -7,6 +7,7 @@ import { JOB_TMP_MAX_AGE_SEC } from "./job_tmp.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
+  type FactoryOwnerKind,
   isBoolean,
   isNumber,
   isOneOf,
@@ -85,6 +86,9 @@ type DefaultableField =
   | "implement_flow_timeout_sec"
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
+  | "dependabot_enabled"
+  | "dependabot_min_published_days"
+  | "pr_ci_watch_enabled"
   | "check_commands_by_repo";
 
 /**
@@ -137,22 +141,66 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_flow_timeout_sec: 14400,
   implement_max_changed_files: 60,
   implement_max_diff_lines: 3000,
+  // dependabotの自動処理は既定で無効にし、リモートのリソースで有効にする。
+  dependabot_enabled: false,
+  dependabot_min_published_days: 7,
+  // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
+  pr_ci_watch_enabled: true,
   check_commands_by_repo: {},
 };
 
-function isFactoryOwner(value: unknown): value is FactoryOwner {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    isString(value.name) &&
-    isString(value.kind) &&
-    OWNER_KINDS.includes(value.kind)
-  );
+/** `owners`の1要素の`kind`に使える値か。 */
+function isOwnerKind(value: unknown): value is FactoryOwnerKind {
+  return isString(value) && OWNER_KINDS.includes(value);
 }
 
-function isFactoryOwnerArray(value: unknown): value is FactoryOwner[] {
-  return Array.isArray(value) && value.every(isFactoryOwner);
+/**
+ * `owners`の1要素をパースする。形が違えば`null`を返す。
+ * `id`は、`null`、`undefined`、省略をどれも「id無し」として扱い、
+ * 結果には`id`のキーを持たせない。値があるときは、正の整数だけを許す。
+ */
+function parseFactoryOwner(value: unknown): FactoryOwner | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const { name, kind, id } = value;
+  if (!isString(name) || !isOwnerKind(kind)) {
+    return null;
+  }
+  if (id === undefined || id === null) {
+    return { name, kind };
+  }
+  if (!isNumber(id) || !Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+  return { name, kind, id };
+}
+
+/**
+ * `owners`をパースする。
+ * 要素に1つでも形の違うものがあるか、名前が重複していれば`null`を返す。
+ * 名前の比較は大文字と小文字を区別しない(GitHubのログイン名と同じ)。
+ * `id`付きと`id`無しの同名が並ぶと、`id`の照合をすり抜けるため、重複を許さない。
+ */
+function parseFactoryOwners(value: unknown): FactoryOwner[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const owners: FactoryOwner[] = [];
+  const names = new Set<string>();
+  for (const item of value) {
+    const owner = parseFactoryOwner(item);
+    if (owner === null) {
+      return null;
+    }
+    const key = owner.name.toLowerCase();
+    if (names.has(key)) {
+      return null;
+    }
+    names.add(key);
+    owners.push(owner);
+  }
+  return owners;
 }
 
 function isLabelerAssociationArray(
@@ -229,6 +277,24 @@ function withinJobTmpAge(field: string, value: number): number {
     throw new ConfigValidationError(
       `"${field}" must not exceed ${String(JOB_TMP_MAX_AGE_SEC)} seconds`,
     );
+  }
+  return value;
+}
+
+/**
+ * 任意の正の整数の項目を読む。`null`、`undefined`、省略は「値無し」として`undefined`を返す。
+ * 値があるときは正の整数だけを許す。
+ */
+function optionalPositiveIntegerField(
+  raw: Record<string, unknown>,
+  field: string,
+): number | undefined {
+  const value = raw[field];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isNumber(value) || !Number.isInteger(value) || value <= 0) {
+    throw new ConfigValidationError(`"${field}" must be a positive integer`);
   }
   return value;
 }
@@ -375,12 +441,14 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     throw new ConfigValidationError("resource value must be an object");
   }
 
-  const owners = raw.owners;
-  if (!isFactoryOwnerArray(owners)) {
+  const owners = parseFactoryOwners(raw.owners);
+  if (owners === null) {
     throw new ConfigValidationError(
-      '"owners" is required and must be an array of { name: string, kind: "user" | "org" }',
+      '"owners" is required and must be an array of { name: string, kind: "user" | "org", id?: positive integer } with unique names (case-insensitive)',
     );
   }
+
+  const factoryRepoId = optionalPositiveIntegerField(raw, "factory_repo_id");
 
   const allowedLabelerAssociations = raw.allowed_labeler_associations;
   const resolvedAllowedLabelerAssociations =
@@ -445,6 +513,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       DEFAULTS.retention_logs_days,
     ),
     factory_repo: requiredStringField(raw, "factory_repo"),
+    ...(factoryRepoId === undefined ? {} : { factory_repo_id: factoryRepoId }),
     factory_branch: stringField(raw, "factory_branch", DEFAULTS.factory_branch),
     instance_name: requiredStringField(raw, "instance_name"),
     windmill_public_url: stringField(
@@ -539,6 +608,21 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
+    ),
+    dependabot_enabled: booleanField(
+      raw,
+      "dependabot_enabled",
+      DEFAULTS.dependabot_enabled,
+    ),
+    dependabot_min_published_days: positiveIntegerField(
+      raw,
+      "dependabot_min_published_days",
+      DEFAULTS.dependabot_min_published_days,
+    ),
+    pr_ci_watch_enabled: booleanField(
+      raw,
+      "pr_ci_watch_enabled",
+      DEFAULTS.pr_ci_watch_enabled,
     ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,

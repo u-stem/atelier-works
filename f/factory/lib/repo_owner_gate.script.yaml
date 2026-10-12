@@ -1,0 +1,9 @@
+summary: '[LIB] 対象リポジトリのオーナーIDの照合'
+description: 内部ライブラリです。直接実行するものではありません。保存済みのowner/repoの現在のオーナーIDを設定のownersのidと照合し、食い違うときは準備のステップを止めます。
+lock: '!inline f/factory/lib/repo_owner_gate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

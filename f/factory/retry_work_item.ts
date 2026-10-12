@@ -309,6 +309,7 @@ export async function closedTargetRefusal(
  * - issueの要件が承認済みだが、`implement_enabled`が無効(状態を問わない)。
  * - `approved`のissueの最新の要件承認が`attempt`と合わない。
  * - auditである(監査は再開しない)。
+ * - dependabotである(dependabotの作業項目は再開しない)。
  */
 export function computeRestartPlan(
   workItem: Pick<WorkItem, "id" | "status" | "kind" | "attempt">,
@@ -362,6 +363,10 @@ export function computeRestartPlan(
     case "audit":
       throw new Error(
         `retry_work_item: work item ${workItem.id} is an audit; audits are not restartable (the next weekly audit covers the failed period, or use 今すぐ監査 in the Console)`,
+      );
+    case "dependabot":
+      throw new Error(
+        `retry_work_item: work item ${workItem.id} is a dependabot work item; dependabot work items are not restartable`,
       );
   }
 }

@@ -1,0 +1,10 @@
+summary: '[LIB] mainのCIの判定の純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。mainのGitHub
+  Actionsの実行をコミット単位で判定する、分類、期限、検証、整形のロジックです。
+lock: '!inline f/factory/lib/main_ci_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

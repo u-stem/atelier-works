@@ -20,7 +20,7 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
-import { loadConfig } from "./lib/config.ts";
+import { isRepoAllowed, loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   bumpWatermarks,
@@ -40,6 +40,7 @@ import {
   addLabels,
   type GhClient,
   GitHubRateLimitError,
+  getAccountId,
   getIssue,
   getLabelerLogin,
   getPr,
@@ -61,6 +62,7 @@ import {
   decidePrActions,
   FORK_HEAD_DENIED_KIND,
   filterByRepoAllowlist,
+  filterVerifiedOwners,
   forkHeadDeniedMessage,
   LABELER_DENIED_KIND,
   labelerDeniedMessage,
@@ -1072,7 +1074,15 @@ export async function main(): Promise<{
   const byPr = activeItemsByPr(active);
 
   const rawCandidates: PrSearchItem[] = [];
-  for (const owner of config.owners) {
+  const verified = await filterVerifiedOwners(config.owners, {
+    getAccountId: (name) => getAccountId(client, name),
+    recordFailure: (step, err) => recordFailureSafe(step, err, log),
+    addNotice: (record) => addNoticeUnlessUnresolved(record),
+  });
+  failed += verified.failed;
+  // 照合を通ったオーナーだけを対象にする。
+  const scope = { ...config, owners: verified.owners };
+  for (const owner of verified.owners) {
     try {
       const found = await searchPrs(client, {
         owner: owner.name,
@@ -1103,6 +1113,9 @@ export async function main(): Promise<{
     for (const trackedPr of tracked) {
       const key = prKey(trackedPr.owner, trackedPr.repo, trackedPr.pr_number);
       if (seenKeys.has(key)) continue;
+      // 照合で飛ばしたオーナーや`owners`に無いオーナーの追跡中のPRは、
+      // 取り直さずに候補から外す。
+      if (!isRepoAllowed(scope, trackedPr.owner, trackedPr.repo)) continue;
       try {
         const pr = await getPr(
           client,
@@ -1133,7 +1146,7 @@ export async function main(): Promise<{
     await recordFailureSafe("list_tracked_prs", err, log);
   }
 
-  const allowed = filterByRepoAllowlist(rawCandidates, config);
+  const allowed = filterByRepoAllowlist(rawCandidates, scope);
 
   const contexts: PrCandidateContext[] = [];
   for (const found of allowed) {

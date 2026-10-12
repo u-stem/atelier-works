@@ -247,6 +247,14 @@ describe("resolverLabel", () => {
     expect(resolverLabel("poll_prs")).toBe("PRの取得(自動)");
   });
 
+  test("labels the main CI watcher as automatic", () => {
+    expect(resolverLabel("watch_main_ci")).toBe("mainのCIの監視(自動)");
+  });
+
+  test("labels the pull request CI watcher as automatic", () => {
+    expect(resolverLabel("watch_pr_ci")).toBe("PRのCIの監視(自動)");
+  });
+
   test("shows a person's name as plain text", () => {
     expect(resolverLabel("operator")).toBe("operator");
   });

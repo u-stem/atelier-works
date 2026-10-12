@@ -1,0 +1,9 @@
+summary: '[LIB] dependabot更新の影響調査のプロンプト'
+description: 内部ライブラリです。dependabotのセキュリティ更新が影響するかを調べるプロンプトと、出力のJSON schemaを提供します。
+lock: '!inline f/factory/lib/dependabot_prompt.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

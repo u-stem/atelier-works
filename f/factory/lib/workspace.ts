@@ -1418,6 +1418,12 @@ export type EnsureFactoryCloneOptions = {
    * 既定値のブランチに固定してしまう。
    */
   readonly branch: string;
+  /**
+   * cloneのロックを取った直後、cloneにもoriginにも触れる前に呼ぶ。
+   * 投げると、何も変えずに失敗する。
+   * `factory_repo_id`の照合に使う。照合から取得までの間を、ロックの待ちで延ばさないため。
+   */
+  readonly beforeUpdate?: () => Promise<void>;
   readonly home?: string;
   readonly path?: string;
   readonly exists?: PathExists;
@@ -1433,11 +1439,11 @@ export type EnsureFactoryCloneResult = {
 
 /**
  * 既存のcloneを更新するとき、`ensureFactoryClone`が走らせるgitの回数。
- * fetch、reset、追跡refの確認(show-ref)、checkoutの4回。
+ * originのURLの付け替え(remote set-url)、fetch、reset、追跡refの確認(show-ref)、checkoutの5回。
  * `self_update`のジョブの上限の見積もりが使う。gitの呼び出しを増減したら、この値も直す
  * (`tests/lib/workspace.test.ts`が、更新での呼び出しの回数と一致することを確かめる)。
  */
-export const FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT = 4;
+export const FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT = 5;
 
 /**
  * `dir`にあるFactory自身のcloneを守るロックのパス(隣の`<dir>.lock`)を返す。
@@ -1465,6 +1471,7 @@ export function factoryCloneLockPath(dir: string): string {
  * `git pull --ff-only`は今checkoutしているブランチを進めるだけで、ブランチを切り替えず、
  * 設定したブランチと食い違っていても気づかないので使わない。
  * このcloneはfetchして読むだけで、その場で編集しないので、強制的に合わせても失うものは無い。
+ * 既存のcloneは、fetchの前にoriginのURLを`opts.repoUrl`に付け替える。照合したURLと取得するURLを、cloneした時点のURLに左右させず1つにするため。
  *
  * `factoryCloneLockPath(dir)`のロックの下で直列に実行する。
  * `NUM_WORKERS`が2以上だと、各フローの最初のステップと`poll_issues`が同じ`dir`に対して
@@ -1486,7 +1493,23 @@ export async function ensureFactoryClone(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
+      await opts.beforeUpdate?.();
       if (await exists(dir)) {
+        // cloneのoriginは、cloneした時点のURLのままである。fetchの前に毎回、
+        // 呼び出し側が渡したURLに合わせ、照合したURLと取得するURLを1つにする。
+        const setUrlResult = await opts.run(
+          buildGitArgv(["remote", "set-url", "origin", "--", opts.repoUrl]),
+          {
+            cwd: dir,
+            env: localGitEnv(opts.home, opts.path),
+          },
+        );
+        if (setUrlResult.exitCode !== 0) {
+          throw gitError(
+            "git remote set-url origin failed for factory clone",
+            setUrlResult,
+          );
+        }
         const fetchResult = await opts.run(
           buildGitArgv(["fetch", "origin", "--", branch], { network: true }),
           {
