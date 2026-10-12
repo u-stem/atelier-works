@@ -23,6 +23,7 @@ import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
   assertCommitSha,
+  isCommitSha,
   WORKFLOW_RUNS_BY_SHA_MAX_PAGES,
   WORKFLOW_RUNS_BY_SHA_PER_PAGE,
   WORKFLOW_RUNS_PER_PAGE,
@@ -446,6 +447,17 @@ export class GitHubHttpError extends Error {
   }
 }
 
+/**
+ * 応答を読めない(形が違う、JSONでない、内容が返らない)か、応答が欠けている(件数の上限で切り詰められた)ときの例外。
+ * 待っても直らないので、呼び出し側は再試行ではなく人の確認に回せる。
+ */
+export class GitHubResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitHubResponseError";
+  }
+}
+
 export function ensureSuccess(response: GhApiResponse, context: string): void {
   if (response.status >= 200 && response.status < 300) return;
   throw new GitHubHttpError(
@@ -464,7 +476,7 @@ export function parseJsonBody(
     return JSON.parse(response.bodyText);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(
+    throw new GitHubResponseError(
       maskSecrets(`${context}: response body is not valid JSON (${reason})`),
     );
   }
@@ -2183,9 +2195,7 @@ export async function getPr(
   ensureSuccess(response, `GET pr ${owner}/${repo}#${number}`);
   const parsed = parseJsonBody(response, `GET pr ${owner}/${repo}#${number}`);
   if (!isPrPayload(parsed)) {
-    throw new Error(
-      `GET pr ${owner}/${repo}#${number}: unexpected response shape`,
-    );
+    throw unexpectedShape(`GET pr ${owner}/${repo}#${number}`);
   }
   const headRepoFullName =
     parsed.head.repo !== null && typeof parsed.head.repo.full_name === "string"
@@ -2331,8 +2341,8 @@ export async function getPrFiles(
 // マージとPRの事実の取得(dependabotのゲート判定の入力)
 // ---------------------------------------------------------------------------
 
-function unexpectedShape(context: string): Error {
-  return new Error(`${context}: unexpected response shape`);
+function unexpectedShape(context: string): GitHubResponseError {
+  return new GitHubResponseError(`${context}: unexpected response shape`);
 }
 
 export type MergePullRequestResult =
@@ -2562,7 +2572,7 @@ export async function listPrFiles(
     },
   );
   if (paths.length >= PR_FILES_API_CAP) {
-    throw new Error(
+    throw new GitHubResponseError(
       `GET pr files ${owner}/${repo}#${number}: the file list may be truncated at ${String(PR_FILES_API_CAP)} files`,
     );
   }
@@ -2600,10 +2610,38 @@ function parseCommitAccount(
 }
 
 /**
- * `GET .../pulls/{number}/commits`を最後のページまで読む。
- * `authorLogin`と`committerLogin`はGitHubのアカウントで、紐づくアカウントが無いcommitでは`null`にする。
+ * コミットの1件分の応答を読む。
  * `verified`は`commit.verification.verified`、`parentCount`は`parents`の長さで、
  * どちらも応答に無いか形が違うときは例外にする。判定に使う値を推測で補わないため。
+ */
+function parsePrCommit(entry: unknown, context: string): PrCommit {
+  if (!isRecord(entry) || typeof entry.sha !== "string") {
+    throw unexpectedShape(context);
+  }
+  const author = parseCommitAccount(entry.author, context);
+  const committer = parseCommitAccount(entry.committer, context);
+  const { commit, parents } = entry;
+  if (
+    !isRecord(commit) ||
+    !isRecord(commit.verification) ||
+    typeof commit.verification.verified !== "boolean" ||
+    !Array.isArray(parents)
+  ) {
+    throw unexpectedShape(context);
+  }
+  return {
+    sha: entry.sha,
+    authorLogin: author?.login ?? null,
+    authorType: author?.type ?? null,
+    committerLogin: committer?.login ?? null,
+    verified: commit.verification.verified,
+    parentCount: parents.length,
+  };
+}
+
+/**
+ * `GET .../pulls/{number}/commits`を最後のページまで読む。
+ * `authorLogin`と`committerLogin`はGitHubのアカウントで、紐づくアカウントが無いcommitでは`null`にする。
  * APIの上限に達して切り詰められた可能性があるときは例外にする。
  * PR番号で引くので、headのshaに固定されない。ゲートに渡す入力は、headのshaを固定した比較から作る。
  */
@@ -2619,39 +2657,168 @@ export async function listPrCommits(
     `repos/${owner}/${repo}/pulls/${number}/commits?per_page=100`,
     (parsed, context) => {
       if (!Array.isArray(parsed)) throw unexpectedShape(context);
-      return parsed.map((entry: unknown): PrCommit => {
-        if (!isRecord(entry) || typeof entry.sha !== "string") {
-          throw unexpectedShape(context);
-        }
-        const author = parseCommitAccount(entry.author, context);
-        const committer = parseCommitAccount(entry.committer, context);
-        const { commit, parents } = entry;
-        if (
-          !isRecord(commit) ||
-          !isRecord(commit.verification) ||
-          typeof commit.verification.verified !== "boolean" ||
-          !Array.isArray(parents)
-        ) {
-          throw unexpectedShape(context);
-        }
-        return {
-          sha: entry.sha,
-          authorLogin: author?.login ?? null,
-          authorType: author?.type ?? null,
-          committerLogin: committer?.login ?? null,
-          verified: commit.verification.verified,
-          parentCount: parents.length,
-        };
-      });
+      return parsed.map((entry: unknown) => parsePrCommit(entry, context));
     },
     PR_COMMITS_MAX_PAGES,
   );
   if (commits.length >= PR_COMMITS_API_CAP) {
-    throw new Error(
+    throw new GitHubResponseError(
       `GET pr commits ${owner}/${repo}#${number}: the commit list may be truncated at ${String(PR_COMMITS_API_CAP)} commits`,
     );
   }
   return commits;
+}
+
+/**
+ * `compare`が変更ファイルとして返せる件数の上限。
+ * 変更ファイルは最初のページにだけ載り、300件で打ち切られる(2ページ目以降に`files`は無い)。
+ * 300件に達したときは、切り詰められた可能性があるものとして扱う。
+ */
+const COMPARE_FILES_API_CAP = 300;
+
+/**
+ * `GET repos/{owner}/{repo}/git/ref/heads/{branch}`で、ブランチの先頭のshaを返す。
+ * `heads/`で名前空間を固定するので、同名のタグがあっても取り違えない。
+ * ブランチ名の`/`は残し、区切りごとにエンコードする。
+ * ブランチでないref、commitでないオブジェクト、小文字40桁でないshaは`GitHubResponseError`にする。
+ */
+export async function getBranchSha(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<string> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const context = `GET branch ref ${owner}/${repo}@${branch}`;
+  const encoded = branch.split("/").map(encodeURIComponent).join("/");
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/git/ref/heads/${encoded}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (
+    !isRecord(parsed) ||
+    parsed.ref !== `refs/heads/${branch}` ||
+    !isRecord(parsed.object) ||
+    parsed.object.type !== "commit" ||
+    !isCommitSha(parsed.object.sha)
+  ) {
+    throw unexpectedShape(context);
+  }
+  return parsed.object.sha;
+}
+
+export type CompareFile = {
+  readonly filename: string;
+  /** 名前の変更の移動元。名前の変更でなければ`null`。 */
+  readonly previousFilename: string | null;
+  readonly status: string;
+};
+
+export type CommitComparison = {
+  /** baseとheadの共通の祖先。 */
+  readonly mergeBaseSha: string;
+  readonly files: CompareFile[];
+  readonly commits: PrCommit[];
+};
+
+function parseCompareFile(entry: unknown, context: string): CompareFile {
+  if (
+    !isRecord(entry) ||
+    typeof entry.filename !== "string" ||
+    typeof entry.status !== "string"
+  ) {
+    throw unexpectedShape(context);
+  }
+  const previous = entry.previous_filename;
+  if (
+    previous !== undefined &&
+    previous !== null &&
+    typeof previous !== "string"
+  ) {
+    throw unexpectedShape(context);
+  }
+  return {
+    filename: entry.filename,
+    previousFilename: previous ?? null,
+    status: entry.status,
+  };
+}
+
+/**
+ * `GET .../compare/{baseSha}...{headSha}`(三点: merge-baseからheadまで)を最後のページまで読む。
+ * baseとheadはどちらも小文字40桁のshaに限る。短いブランチ名は同名のタグと曖昧になり、
+ * merge-baseを偽られうるので受け付けない。ブランチのshaは`getBranchSha`で読む。
+ * shaに固定するので、PR番号で引く`listPrFiles`と`listPrCommits`と違い、
+ * 比較の途中でheadが動いても結果は変わらない。
+ * ファイルは最初のページにだけ載る。ファイルが`COMPARE_FILES_API_CAP`件、commitが250件に達したときは、
+ * 切り詰められた可能性があるので`GitHubResponseError`にする。
+ * 応答の形が違うとき(merge baseのshaが40桁でない、`verified`が無い、`parents`が配列でないなど)も例外にする。
+ */
+export async function compareCommits(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  headSha: string,
+): Promise<CommitComparison> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(baseSha);
+  assertCommitSha(headSha);
+  const found: { mergeBaseSha: string | null; pages: number } = {
+    mergeBaseSha: null,
+    pages: 0,
+  };
+  const files: CompareFile[] = [];
+  const commits = await paginateGhApi<PrCommit>(
+    client,
+    `repos/${owner}/${repo}/compare/${baseSha}...${headSha}?per_page=100`,
+    (parsed, context) => {
+      if (!isRecord(parsed) || !Array.isArray(parsed.commits)) {
+        throw unexpectedShape(context);
+      }
+      const mergeBase = parsed.merge_base_commit;
+      if (!isRecord(mergeBase) || !isCommitSha(mergeBase.sha)) {
+        throw unexpectedShape(context);
+      }
+      if (found.mergeBaseSha !== null && found.mergeBaseSha !== mergeBase.sha) {
+        throw unexpectedShape(context);
+      }
+      found.mergeBaseSha = mergeBase.sha;
+      const pageFiles = parsed.files;
+      if (pageFiles === undefined) {
+        if (found.pages === 0) throw unexpectedShape(context);
+      } else if (!Array.isArray(pageFiles)) {
+        throw unexpectedShape(context);
+      } else {
+        files.push(
+          ...pageFiles.map((entry: unknown) =>
+            parseCompareFile(entry, context),
+          ),
+        );
+      }
+      found.pages += 1;
+      return parsed.commits.map((entry: unknown) =>
+        parsePrCommit(entry, context),
+      );
+    },
+    PR_COMMITS_MAX_PAGES,
+  );
+  const context = `GET compare ${owner}/${repo}`;
+  if (found.mergeBaseSha === null) throw unexpectedShape(context);
+  if (files.length >= COMPARE_FILES_API_CAP) {
+    throw new GitHubResponseError(
+      `${context}: the file list may be truncated at ${String(COMPARE_FILES_API_CAP)} files`,
+    );
+  }
+  if (commits.length >= PR_COMMITS_API_CAP) {
+    throw new GitHubResponseError(
+      `${context}: the commit list may be truncated at ${String(PR_COMMITS_API_CAP)} commits`,
+    );
+  }
+  return { mergeBaseSha: found.mergeBaseSha, files, commits };
 }
 
 const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -2696,7 +2863,9 @@ export async function getFileAtRef(
     throw unexpectedShape(context);
   }
   if (parsed.encoding === "none") {
-    throw new Error(`${context}: content is not returned (file is too large)`);
+    throw new GitHubResponseError(
+      `${context}: content is not returned (file is too large)`,
+    );
   }
   if (parsed.encoding !== "base64" || typeof parsed.content !== "string") {
     throw unexpectedShape(context);
@@ -2708,7 +2877,7 @@ export async function getFileAtRef(
       Buffer.from(base64, "base64"),
     );
   } catch {
-    throw new Error(`${context}: content is not valid UTF-8`);
+    throw new GitHubResponseError(`${context}: content is not valid UTF-8`);
   }
 }
 

@@ -12,6 +12,7 @@ import {
   evaluateGate,
   GITHUB_ACTIONS_APP_ID,
   isPublishedLongEnough,
+  lockfileIntegrity,
   parseImpactAssessment,
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
@@ -140,10 +141,9 @@ type LockEntry = {
   integrity?: string;
 };
 
-const INTEGRITY_A =
-  "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
-const INTEGRITY_B =
-  "sha512-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB==";
+// sha512のbase64は、86文字に`==`が付く88文字になる。
+const INTEGRITY_A = `sha512-${"A".repeat(86)}==`;
+const INTEGRITY_B = `sha512-${"B".repeat(86)}==`;
 
 // bun.lockのテキスト形式(末尾にカンマを許すJSON)の最小例を作る。
 function lockText(
@@ -406,6 +406,66 @@ function manifest(extra: Record<string, unknown> = {}): string {
 
 const MANIFEST_BEFORE = manifest();
 
+describe("lockfileIntegrity", () => {
+  test("returns the integrity of the target entry", () => {
+    expect(lockfileIntegrity(AFTER_OK, TARGET)).toEqual([INTEGRITY_B]);
+  });
+
+  test("returns the integrity of every copy of the target version", () => {
+    const text = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_A },
+    ]);
+
+    expect(lockfileIntegrity(text, TARGET)).toEqual([INTEGRITY_B, INTEGRITY_A]);
+  });
+
+  test("ignores a copy of the target at another version", () => {
+    const text = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@0.9.0", integrity: INTEGRITY_A },
+    ]);
+
+    expect(lockfileIntegrity(text, TARGET)).toEqual([INTEGRITY_B]);
+  });
+
+  test("ignores other packages", () => {
+    expect(lockfileIntegrity(AFTER_OK, { name: "other", to: "2.0.0" })).toEqual(
+      [INTEGRITY_B],
+    );
+  });
+
+  test("returns an empty list when the target is absent", () => {
+    expect(lockfileIntegrity(BEFORE, TARGET)).toEqual([]);
+  });
+
+  test("returns null for a lockfile that cannot be parsed", () => {
+    expect(lockfileIntegrity("{ nope", TARGET)).toBeNull();
+  });
+
+  test("returns null for a lockfile with a duplicate key", () => {
+    const duplicated = AFTER_OK.replace(
+      '    "left-pad": [',
+      `    "left-pad": ["left-pad@1.3.1", "", {}, "${INTEGRITY_A}"],\n    "left-pad": [`,
+    );
+
+    expect(lockfileIntegrity(duplicated, TARGET)).toBeNull();
+  });
+
+  test("returns null for a lockfile without a packages table", () => {
+    expect(lockfileIntegrity('{ "workspaces": {} }', TARGET)).toBeNull();
+  });
+
+  test("returns an unusable value for an entry without an integrity string", () => {
+    const text = AFTER_OK.replace(
+      `"${INTEGRITY_B}"],\n\n    "other"`,
+      `null],\n\n    "other"`,
+    );
+
+    expect(lockfileIntegrity(text, TARGET)).toEqual([""]);
+  });
+});
+
 describe("checkPackageJsonDiff", () => {
   test("accepts a version bump of the target dependency", () => {
     const after = manifest({
@@ -438,6 +498,96 @@ describe("checkPackageJsonDiff", () => {
     });
 
     expect(checkPackageJsonDiff(before, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("accepts a bump of the target in optionalDependencies", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.1" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("accepts a bump of the target in peerDependencies", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.1" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("rejects a changed version of another optional dependency", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.0", fsevents: "2.0.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      optionalDependencies: { "left-pad": "1.3.1", fsevents: "2.0.1" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a changed version of another peer dependency", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.0", react: "18.0.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      peerDependencies: { "left-pad": "1.3.1", react: "19.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a manifest whose top-level keys were only reordered", () => {
+    const after = JSON.stringify(
+      {
+        dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+        devDependencies: { tool: "3.0.0" },
+        scripts: { test: "bun test" },
+        version: "1.0.0",
+        name: "fixture",
+      },
+      null,
+      2,
+    );
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a manifest whose other dependencies were only reordered", () => {
+    const before = manifest({
+      devDependencies: { extra: "1.0.0", tool: "3.0.0" },
+    });
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      devDependencies: { tool: "3.0.0", extra: "1.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a changed workspaces section", () => {
+    const before = manifest({ workspaces: ["packages/a"] });
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      workspaces: ["packages/a", "packages/b"],
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET).ok).toBe(false);
   });
 
   test("rejects a changed scripts section", () => {
@@ -600,6 +750,11 @@ function passingChecks(): GateInput["checks"] {
   }));
 }
 
+// レジストリの事実として、対象の名前と更新先の版に、指定の整合性を付けたもの。
+function registryOf(integrity: string): NonNullable<GateInput["registry"]> {
+  return { name: TARGET.name, version: TARGET.to, integrity };
+}
+
 function validInput(overrides: Partial<GateInput> = {}): GateInput {
   const changedPaths = overrides.changedPaths ?? ["package.json", "bun.lock"];
   return {
@@ -623,6 +778,7 @@ function validInput(overrides: Partial<GateInput> = {}): GateInput {
     minPublishedDays: 7,
     commits: [DEPENDABOT_COMMIT],
     installScripts: { before: {}, after: {} },
+    registry: registryOf(INTEGRITY_B),
     ...overrides,
   };
 }
@@ -1297,6 +1453,180 @@ describe("evaluateGate", () => {
       verdictOf({
         publishedAtIso: "2026-10-18T00:00:00.000Z",
         update: "major",
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("passes when the registry integrity matches the lockfile", () => {
+    expect(verdictOf({ registry: registryOf(INTEGRITY_B) })).toBe("ok");
+  });
+
+  test("needs a human when the registry integrity differs from the lockfile", () => {
+    expect(verdictOf({ registry: registryOf(INTEGRITY_A) })).toBe(
+      "needs_human",
+    );
+  });
+
+  test("needs a human when the registry integrity is unknown", () => {
+    expect(verdictOf({ registry: null })).toBe("needs_human");
+  });
+
+  test("needs a human when the registry fact is for another package", () => {
+    expect(
+      verdictOf({
+        registry: { ...registryOf(INTEGRITY_B), name: "other" },
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the registry fact is for another version", () => {
+    expect(
+      verdictOf({
+        registry: { ...registryOf(INTEGRITY_B), version: "1.3.0" },
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("explains a registry fact for another package", () => {
+    const result = evaluateGate(
+      validInput({ registry: { ...registryOf(INTEGRITY_B), name: "other" } }),
+    );
+
+    expect(result.ok ? "" : result.reason).toContain("registry");
+  });
+
+  test("needs a human when the registry integrity is empty", () => {
+    const result = evaluateGate(validInput({ registry: registryOf("") }));
+
+    expect(result.ok ? "" : result.reason).toContain("malformed");
+  });
+
+  test("needs a human when the registry integrity is not sha512", () => {
+    expect(verdictOf({ registry: registryOf("sha1-AAAA") })).toBe(
+      "needs_human",
+    );
+  });
+
+  test("needs a human when a copy of the target has no integrity", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: "" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: "" },
+    ]);
+
+    const result = evaluateGate(
+      validInput({
+        changedPaths: ["bun.lock"],
+        files: [{ path: "bun.lock", before, after }],
+      }),
+    );
+
+    expect(result.ok ? "" : result.reason).toContain("no valid integrity");
+  });
+
+  test("explains an integrity mismatch", () => {
+    const result = evaluateGate(
+      validInput({ registry: registryOf(INTEGRITY_A) }),
+    );
+
+    expect(result.ok ? "" : result.reason).toContain("integrity");
+  });
+
+  test("shortens the integrity values in the reason", () => {
+    const result = evaluateGate(
+      validInput({ registry: registryOf(`sha512-${"x".repeat(500)}`) }),
+    );
+
+    expect(result.ok ? "" : result.reason.length).toBeLessThan(300);
+  });
+
+  test("keeps a registry integrity from breaking the reason into items", () => {
+    const result = evaluateGate(
+      validInput({ registry: registryOf("sha512-a; injected") }),
+    );
+
+    expect(result.ok ? "" : result.reason).not.toContain("; injected");
+  });
+
+  test("needs a human, not a wait, when the integrity differs and checks are pending", () => {
+    expect(
+      verdictOf({
+        registry: registryOf(INTEGRITY_A),
+        checks: passingChecks().map((check) => ({
+          ...check,
+          conclusion: null,
+        })),
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human, not a wait, when the integrity differs and the version is recent", () => {
+    expect(
+      verdictOf({
+        registry: registryOf(INTEGRITY_A),
+        publishedAtIso: "2026-10-18T00:00:00.000Z",
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human, not a wait, when the integrity is unknown and mergeable is null", () => {
+    expect(verdictOf({ registry: null, mergeable: null })).toBe("needs_human");
+  });
+
+  test("passes when both lockfiles hold the registry integrity", () => {
+    expect(
+      verdictOf({
+        changedPaths: [
+          "package.json",
+          "bun.lock",
+          "console/package.json",
+          "console/bun.lock",
+        ],
+      }),
+    ).toBe("ok");
+  });
+
+  test("needs a human when one of two lockfiles holds another integrity", () => {
+    const divergent = lockText({ "left-pad": "1.3.1", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_A },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+    ]);
+    const changedPaths = [
+      "package.json",
+      "bun.lock",
+      "console/package.json",
+      "console/bun.lock",
+    ];
+
+    expect(
+      verdictOf({
+        changedPaths,
+        files: filesFor(changedPaths).map((file) =>
+          file.path === "console/bun.lock"
+            ? { ...file, after: divergent }
+            : file,
+        ),
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when one copy of the target holds another integrity", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@1.3.0" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_A },
+    ]);
+
+    expect(
+      verdictOf({
+        changedPaths: ["bun.lock"],
+        files: [{ path: "bun.lock", before, after }],
       }),
     ).toBe("needs_human");
   });
