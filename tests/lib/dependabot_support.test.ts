@@ -735,20 +735,28 @@ describe("evaluateGate", () => {
 
   test("needs a human when a protected path changed", () => {
     expect(
-      verdictOf({ changedPaths: ["package.json", ".github/workflows/ci.yml"] }),
+      verdictOf({
+        changedPaths: ["package.json", "bun.lock", ".github/workflows/ci.yml"],
+      }),
     ).toBe("needs_human");
   });
 
   test("needs a human when a path outside the allowed set changed", () => {
     expect(
-      verdictOf({ changedPaths: ["package.json", "f/factory/lib/db.ts"] }),
+      verdictOf({
+        changedPaths: ["package.json", "bun.lock", "f/factory/lib/db.ts"],
+      }),
     ).toBe("needs_human");
   });
 
   test("needs a human when a nested manifest changed", () => {
-    expect(verdictOf({ changedPaths: ["packages/x/package.json"] })).toBe(
-      "needs_human",
+    const result = evaluateGate(
+      validInput({
+        changedPaths: ["package.json", "bun.lock", "packages/x/package.json"],
+      }),
     );
+
+    expect(result.ok ? "" : result.reason).toContain("allowed set");
   });
 
   test("needs a human when no path changed", () => {
