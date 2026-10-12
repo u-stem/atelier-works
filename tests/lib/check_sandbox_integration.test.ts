@@ -14,6 +14,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAllowedCheckCommands } from "../../f/factory/lib/check_runner.ts";
 import {
@@ -31,6 +32,7 @@ import {
   resolveCheckPool,
   restoreCheckOwnership,
   type SlotHandle,
+  symlinksArgv,
   WINDMILL_TMP_DIR,
 } from "../../f/factory/lib/check_sandbox.ts";
 import {
@@ -2064,7 +2066,60 @@ suite("a symlink scan that cannot read a symlink", () => {
   });
 });
 
-suite("a symlink list larger than 8 MiB", () => {
+suite("the file size limit of the symlink listing", () => {
+  const LINKS = 300;
+  const LIMIT = 1024;
+  let base = "";
+  let limited = { exitCode: 0, size: 0 };
+  let unlimited = { exitCode: -1, marks: "" };
+
+  const list = (file: string, limit?: number) => {
+    const dir = join(base, "tree");
+    const result = Bun.spawnSync(symlinksArgv(dir, file, limit));
+    return { exitCode: result.exitCode, marks: result.stdout.toString() };
+  };
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), "link-fsize-"));
+    mkdirSync(join(base, "tree"));
+    for (let i = 0; i < LINKS; i += 1) {
+      symlinkSync(
+        "/etc/passwd",
+        join(base, "tree", `${String(i).padStart(4, "0")}${"x".repeat(60)}`),
+      );
+    }
+    // 一覧は1件が70バイト近くになり、300件で`LIMIT`を大きく超える。
+    const small = list(join(base, "small.list"), LIMIT);
+    limited = {
+      exitCode: small.exitCode,
+      size: statSync(join(base, "small.list")).size,
+    };
+    const roomy = list(join(base, "roomy.list"));
+    unlimited = { exitCode: roomy.exitCode, marks: roomy.marks };
+  });
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  test("find fails when it would write past the limit", () => {
+    expect(limited.exitCode).not.toBe(0);
+  });
+
+  test("the file does not grow past the limit", () => {
+    expect(limited.size).toBeLessThanOrEqual(LIMIT);
+  });
+
+  test("find succeeds within the default limit", () => {
+    expect(unlimited.exitCode).toBe(0);
+  });
+
+  test("find prints one mark per symlink", () => {
+    expect(unlimited.marks).toBe(".".repeat(LINKS));
+  });
+});
+
+suite("a symlink list of about 10 MiB", () => {
   const fx = makeRepo();
   const lockDir = join(fx.base, "slots");
   let worktree = "";

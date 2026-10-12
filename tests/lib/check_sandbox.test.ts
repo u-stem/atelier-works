@@ -94,9 +94,10 @@ import {
   worldWritablePathsArgv,
 } from "../../f/factory/lib/check_sandbox.ts";
 import { logger } from "../../f/factory/lib/log.ts";
-import type {
-  CommandResult,
-  CommandRunOptions,
+import {
+  type CommandResult,
+  type CommandRunOptions,
+  omittedMarker,
 } from "../../f/factory/lib/workspace.ts";
 import { createFakeCommandRunner, fail, ok, timeout } from "./testSupport.ts";
 
@@ -529,11 +530,17 @@ describe("sweepLinksArgv", () => {
 });
 
 describe("symlinksArgv", () => {
-  test("writes the symlinks to a file without following them", () => {
+  test("writes the symlinks to a file without following them and marks each on stdout", () => {
     expect(
       symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(3).join(" "),
     ).toBe(
-      `/usr/bin/find -P ${DIRS.worktreeDir} -type l -fprint0 /scratch/out`,
+      `/usr/bin/find -P ${DIRS.worktreeDir} -type l -fprint0 /scratch/out -printf .`,
+    );
+  });
+
+  test("takes the file size limit as an argument", () => {
+    expect(symlinksArgv(DIRS.worktreeDir, "/scratch/out", 1024)[1]).toBe(
+      "--fsize=1024:1024",
     );
   });
 
@@ -1767,6 +1774,8 @@ function fakeSandboxDeps(opts?: {
   readonly listingTail?: string;
   /** 一覧が上限を超えたか、読めなかったものとして、一覧を返さない。 */
   readonly listingUnavailable?: boolean;
+  /** 一覧を書く`find`の標準出力。既定は、名前1件につき`.`を1つ。 */
+  readonly listingMarks?: string;
 }) {
   const removedLinks: string[] = [];
   // パスと中身は、1バイトを1文字に写した文字列で持つ。UTF-8でない名前も区別できる。
@@ -1798,6 +1807,7 @@ function fakeSandboxDeps(opts?: {
   let reapClock = 0;
   let listing = "";
   const listingLimits: number[] = [];
+  const listingNames: string[] = [];
   const deps: CheckSandboxDeps = {
     run: async (argv, options) => {
       calls.push({ argv, options });
@@ -1816,7 +1826,7 @@ function fakeSandboxDeps(opts?: {
         listing =
           [...symlinks.keys()].map((path) => `${path}\0`).join("") +
           (opts?.listingTail ?? "");
-        return ok();
+        return ok(opts?.listingMarks ?? ".".repeat(symlinks.size));
       }
       if (argv.includes("-links") && argv.includes("+1"))
         return ok(opts?.hardLinked ?? "");
@@ -1893,9 +1903,10 @@ function fakeSandboxDeps(opts?: {
     },
     pathKind: async (path) => opts?.pathKinds?.[path] ?? "directory",
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
-    readPrivateOutput: async (fill, maxBytes) => {
+    readPrivateOutput: async (fill, maxBytes, name) => {
       listing = "";
       listingLimits.push(maxBytes);
+      listingNames.push(name);
       await fill(LIST_FILE);
       if (opts?.listingUnavailable === true) return null;
       const bytes = Buffer.from(listing, "latin1");
@@ -1964,6 +1975,7 @@ function fakeSandboxDeps(opts?: {
     symlinks,
     removedLinks,
     listingLimits,
+    listingNames,
     imageChecks: () => imageChecks,
   };
 }
@@ -2057,96 +2069,222 @@ describe("privateOutputReader", () => {
     }
   });
   const ROOMY = 1024;
+  const NAME = "slot-0.links";
+  const quiet = logger("check_sandbox", { sink: () => {} });
 
   test("returns the bytes the writer wrote, including non-UTF-8 ones", async () => {
     const bytes = Buffer.from([0x61, 0xff, 0x00, 0xef, 0xbf, 0xbd, 0x00]);
-    const read = await privateOutputReader(baseDir())(async (file) => {
-      writeFileSync(file, bytes);
-    }, ROOMY);
+    const read = await privateOutputReader(baseDir())(
+      async (file) => {
+        writeFileSync(file, bytes);
+      },
+      ROOMY,
+      NAME,
+    );
     expect(read?.equals(bytes)).toBe(true);
   });
 
   test("gives the writer a directory only its owner can enter", async () => {
     let mode = 0;
-    await privateOutputReader(baseDir())(async (file) => {
-      mode = statSync(dirname(file)).mode & 0o777;
-      writeFileSync(file, "x");
-    }, ROOMY);
+    await privateOutputReader(baseDir())(
+      async (file) => {
+        mode = statSync(dirname(file)).mode & 0o777;
+        writeFileSync(file, "x");
+      },
+      ROOMY,
+      NAME,
+    );
     expect(mode).toBe(0o700);
   });
 
-  test("creates the directory under the base directory", async () => {
+  test("names the directory as asked under the base directory", async () => {
     const base = baseDir();
-    let parent = "";
-    await privateOutputReader(base)(async (file) => {
-      parent = dirname(dirname(file));
-      writeFileSync(file, "x");
-    }, ROOMY);
-    expect(parent).toBe(base);
+    let directory = "";
+    await privateOutputReader(base)(
+      async (file) => {
+        directory = dirname(file);
+        writeFileSync(file, "x");
+      },
+      ROOMY,
+      NAME,
+    );
+    expect(directory).toBe(join(base, NAME));
   });
 
   test("creates a missing base directory that only its owner can enter", async () => {
     const base = join(baseDir(), "slots");
-    await privateOutputReader(base)(async (file) => {
-      writeFileSync(file, "x");
-    }, ROOMY);
+    await privateOutputReader(base)(
+      async (file) => {
+        writeFileSync(file, "x");
+      },
+      ROOMY,
+      NAME,
+    );
     expect(statSync(base).mode & 0o777).toBe(0o700);
   });
 
   test("removes the directory after reading", async () => {
-    let directory = "";
-    await privateOutputReader(baseDir())(async (file) => {
-      directory = dirname(file);
-      writeFileSync(file, "x");
-    }, ROOMY);
-    expect(existsSync(directory)).toBe(false);
+    const base = baseDir();
+    await privateOutputReader(base)(
+      async (file) => {
+        writeFileSync(file, "x");
+      },
+      ROOMY,
+      NAME,
+    );
+    expect(existsSync(join(base, NAME))).toBe(false);
+  });
+
+  test("starts from an empty directory even if a run left files under the same name", async () => {
+    const base = baseDir();
+    mkdirSync(join(base, NAME));
+    writeFileSync(join(base, NAME, "leftover"), "x");
+    let leftover = true;
+    await privateOutputReader(base)(
+      async (file) => {
+        leftover = existsSync(join(dirname(file), "leftover"));
+        writeFileSync(file, "x");
+      },
+      ROOMY,
+      NAME,
+    );
+    expect(leftover).toBe(false);
+  });
+
+  test("does not write through a symlink left under the same name", async () => {
+    const base = baseDir();
+    const elsewhere = baseDir();
+    symlinkSync(elsewhere, join(base, NAME));
+    await privateOutputReader(base)(
+      async (file) => {
+        writeFileSync(file, "x");
+      },
+      ROOMY,
+      NAME,
+    );
+    expect(existsSync(join(elsewhere, "output"))).toBe(false);
   });
 
   test("removes the directory when the writer throws", async () => {
-    let directory = "";
-    await privateOutputReader(baseDir())(async (file) => {
-      directory = dirname(file);
-      throw new Error("find failed");
-    }, ROOMY).catch(() => {});
-    expect(existsSync(directory)).toBe(false);
+    const base = baseDir();
+    await privateOutputReader(base)(
+      async () => {
+        throw new Error("find failed");
+      },
+      ROOMY,
+      NAME,
+    ).catch(() => {});
+    expect(existsSync(join(base, NAME))).toBe(false);
   });
 
-  test("rethrows what the writer threw", async () => {
+  test("rethrows what the writer threw when the file is within the limit", async () => {
     await expect(
-      privateOutputReader(baseDir())(async () => {
-        throw new Error("find failed");
-      }, ROOMY),
+      privateOutputReader(baseDir())(
+        async (file) => {
+          writeFileSync(file, "ab");
+          throw new Error("find failed");
+        },
+        ROOMY,
+        NAME,
+      ),
     ).rejects.toThrow("find failed");
   });
 
+  test("rethrows what the writer threw when it wrote no file", async () => {
+    await expect(
+      privateOutputReader(baseDir())(
+        async () => {
+          throw new Error("find failed");
+        },
+        ROOMY,
+        NAME,
+      ),
+    ).rejects.toThrow("find failed");
+  });
+
+  test("returns null when the writer threw after the file passed the limit", async () => {
+    const read = await privateOutputReader(baseDir())(
+      async (file) => {
+        writeFileSync(file, "abcde");
+        throw new Error("find was stopped by the size limit");
+      },
+      4,
+      NAME,
+    );
+    expect(read).toBeNull();
+  });
+
+  test("removes the directory when the writer threw after the file passed the limit", async () => {
+    const base = baseDir();
+    await privateOutputReader(base)(
+      async (file) => {
+        writeFileSync(file, "abcde");
+        throw new Error("find was stopped by the size limit");
+      },
+      4,
+      NAME,
+    );
+    expect(existsSync(join(base, NAME))).toBe(false);
+  });
+
   test("reads a file whose size equals the limit", async () => {
-    const read = await privateOutputReader(baseDir())(async (file) => {
-      writeFileSync(file, "abcd");
-    }, 4);
+    const read = await privateOutputReader(baseDir())(
+      async (file) => {
+        writeFileSync(file, "abcd");
+      },
+      4,
+      NAME,
+    );
     expect(read?.length).toBe(4);
   });
 
   test("does not read a file one byte over the limit", async () => {
-    const read = await privateOutputReader(baseDir())(async (file) => {
-      writeFileSync(file, "abcde");
-    }, 4);
+    const read = await privateOutputReader(baseDir())(
+      async (file) => {
+        writeFileSync(file, "abcde");
+      },
+      4,
+      NAME,
+    );
     expect(read).toBeNull();
   });
 
   test("returns null when the file cannot be read", async () => {
-    const read = await privateOutputReader(baseDir())(async (file) => {
-      mkdirSync(file);
-    }, ROOMY);
+    const read = await privateOutputReader(baseDir(), quiet)(
+      async (file) => {
+        mkdirSync(file);
+      },
+      ROOMY,
+      NAME,
+    );
     expect(read).toBeNull();
   });
 
+  test("logs the code of the failure when the file cannot be read", async () => {
+    const lines: string[] = [];
+    await privateOutputReader(
+      baseDir(),
+      logger("check_sandbox", { sink: (line) => lines.push(line) }),
+    )(
+      async (file) => {
+        mkdirSync(file);
+      },
+      ROOMY,
+      NAME,
+    );
+    expect(lines.join("\n")).toContain("EISDIR");
+  });
+
   test("removes the directory when the file cannot be read", async () => {
-    let directory = "";
-    await privateOutputReader(baseDir())(async (file) => {
-      directory = dirname(file);
-      mkdirSync(file);
-    }, ROOMY);
-    expect(existsSync(directory)).toBe(false);
+    const base = baseDir();
+    await privateOutputReader(base, quiet)(
+      async (file) => {
+        mkdirSync(file);
+      },
+      ROOMY,
+      NAME,
+    );
+    expect(existsSync(join(base, NAME))).toBe(false);
   });
 });
 
@@ -2600,6 +2738,62 @@ describe("escapingSymlinks", () => {
     fake.symlinks.set(`${WT}/[... 5 bytes omitted ...]`, OUT);
     await sandbox.escapingSymlinks(DIRS);
     expect(fake.removedLinks).toEqual([`${WT}/[... 5 bytes omitted ...]`]);
+  });
+
+  test("asks for the directory of the slot while the slot is held", async () => {
+    const { fake, sandbox } = await preparedWith();
+    await sandbox.release(DIRS);
+    expect(fake.listingNames.at(-1)).toBe("slot-0.links");
+  });
+
+  test("uses a name of its own when no slot is held", async () => {
+    const fake = fakeSandboxDeps();
+    const sandbox = sandboxOf(fake.deps);
+    await sandbox.escapingSymlinks(DIRS).catch(() => {});
+    expect(fake.listingNames.at(-1)).toMatch(/^scan-[0-9a-f-]+\.links$/);
+  });
+
+  test("limits the marks find prints to one byte per name that fits in the list", async () => {
+    const { fake, sandbox } = await preparedWith();
+    await sandbox.escapingSymlinks(DIRS);
+    const listing = fake.calls.findLast((call) =>
+      call.argv.includes("-fprint0"),
+    );
+    expect(listing?.options?.maxOutputBytes).toBe(
+      Math.floor(LINK_LIST_MAX_BYTES / 2),
+    );
+  });
+
+  test("sweeps when find found more symlinks than the list holds", async () => {
+    const { fake, sandbox } = await preparedWith({ listingMarks: ".." });
+    fake.symlinks.set(`${WT}/a`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("sweeps when find found fewer symlinks than the list holds", async () => {
+    const { fake, sandbox } = await preparedWith({ listingMarks: "" });
+    fake.symlinks.set(`${WT}/a`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("sweeps when the marks were cut by the output limit", async () => {
+    const { fake, sandbox } = await preparedWith({
+      listingMarks: `.${omittedMarker(5)}.`,
+    });
+    fake.symlinks.set(`${WT}/a`, OUT);
+    fake.symlinks.set(`${WT}/b`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("does not sweep when the marks match the list", async () => {
+    const { fake, sandbox } = await preparedWith();
+    fake.symlinks.set(`${WT}/a`, OUT);
+    fake.symlinks.set(`${WT}/b`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).not.toContainEqual(SWEEP);
   });
 
   test("passes the list size limit to the reader", async () => {

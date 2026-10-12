@@ -13,7 +13,6 @@ import {
   chmod,
   lstat,
   mkdir,
-  mkdtemp,
   readdir,
   readFile,
   readlink,
@@ -33,7 +32,7 @@ import {
   maskSecrets,
 } from "./log.ts";
 import { isRecord, isString } from "./types.ts";
-import { type CommandRunner, runCommand } from "./workspace.ts";
+import { type CommandRunner, isCappedOutput, runCommand } from "./workspace.ts";
 
 /** 枠の先頭のuid。`FACTORY_CHECK_UID`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。 */
 export const DEFAULT_CHECK_UID = 10001;
@@ -229,13 +228,18 @@ const SLOT_RELEASE_WAIT_MS = 5_000;
 const CHOWN_TIMEOUT_MS = 300_000;
 const CHOWN_MAX_OUTPUT_BYTES = 16 * 1024;
 /** 読み込むsymlinkの一覧の大きさの上限(バイト)。超えたら読まずに、検出が不完全だったものとして扱う。メモリを抑えるためである。 */
-export const LINK_LIST_MAX_BYTES = 256 * 1024 * 1024;
+export const LINK_LIST_MAX_BYTES = 64 * 1024 * 1024;
 /**
  * `find`が書けるファイルの大きさの上限(バイト)。一覧の上限の2倍にする。
- * 上限を超えた一覧は読まずに不完全として扱い、それを超えて書こうとする`find`はカーネルが止める。
+ * 上限を超えた一覧は読まずに不完全として扱い、それを超えて書こうとする`find`は失敗する。
  * 書き込みの失敗を、終了コードだけに頼らずに見つけ、ディスクを埋めさせないためである。
  */
 export const LINK_LIST_FSIZE_BYTES = 2 * LINK_LIST_MAX_BYTES;
+/**
+ * 一覧を書く間に`find`が標準出力へ出す、1件1バイトの目印の出力の上限(バイト)。
+ * 1件のパスは区切りを含めて2バイト以上なので、上限の大きさの一覧でも収まる。
+ */
+const LINK_LIST_MAX_MARKS = Math.floor(LINK_LIST_MAX_BYTES / 2);
 /** 1つのsymlinkの中身をたどる要素数の上限。超えたら、たどれないものとして外とみなす。 */
 const LINK_MAX_SEGMENTS = 1000;
 /** symlinkの走査にかける時間の上限(ミリ秒)。超えたら、検出が不完全だったものとして扱う。 */
@@ -543,11 +547,16 @@ export function sweepLinksArgv(dir: string): string[] {
 /**
  * `dir`の下のsymlinkのパスを、NUL区切りのバイト列として`file`に書き出すargv。一括の受け渡しが入りうる範囲を見るため、`-xdev`は付けない。
  * 標準出力に出さずにファイルへ書くのは、出力の上限で一覧を省かないためである。
- * `prlimit`で書けるファイルの大きさを`LINK_LIST_FSIZE_BYTES`に抑える。超えて書こうとした`find`は、シグナルで止まり、0以外で終わる。
+ * `prlimit`で書けるファイルの大きさを`fileSizeLimit`(既定は`LINK_LIST_FSIZE_BYTES`)に抑える。超えて書こうとした`find`は失敗する。
+ * `-printf .`は、見つけたsymlinkごとに標準出力へ1バイトを出す。書き出した件数との突き合わせで、一覧の黙った欠けを見つけるためである。
  */
-export function symlinksArgv(dir: string, file: string): string[] {
+export function symlinksArgv(
+  dir: string,
+  file: string,
+  fileSizeLimit: number = LINK_LIST_FSIZE_BYTES,
+): string[] {
   assertChownableDir(dir);
-  const limit = String(LINK_LIST_FSIZE_BYTES);
+  const limit = String(fileSizeLimit);
   return [
     PRLIMIT_PATH,
     `--fsize=${limit}:${limit}`,
@@ -559,6 +568,8 @@ export function symlinksArgv(dir: string, file: string): string[] {
     "l",
     "-fprint0",
     file,
+    "-printf",
+    ".",
   ];
 }
 
@@ -1403,14 +1414,17 @@ export type CheckSandboxDeps = ImageDeps & {
   readonly readSysctl: (name: string) => string | null;
   /**
    * rootだけが入れる一時のディレクトリにファイルを1つ用意し、`fill`にそのパスを渡して書かせ、書かれたバイト列を返す。
-   * `fill`が投げたら、そのまま投げる。
+   * ディレクトリの名前は`name`で決まる。使う前に、同じ名前の残りを消す。
    * `maxBytes`を超える大きさのときと、読めなかったときは、読まずに(または読めずに)nullを返す。
-   * どちらも、呼び出し側は一覧が不完全だったものとして扱う。
+   * `fill`が投げても、ファイルが`maxBytes`を超えていれば、書き込み量の制限で止まったものとしてnullを返す。
+   * それ以外の`fill`の失敗は、そのまま投げる。
+   * 呼び出し側は、nullを一覧が不完全だったものとして扱う。読めなかった原因は捨てる(ログには`code`を残す)。
    * 返す前にディレクトリごと消す。他のユーザーが書き込み先を差し替えられないようにするためである。
    */
   readonly readPrivateOutput: (
     fill: (file: string) => Promise<void>,
     maxBytes: number,
+    name: string,
   ) => Promise<Buffer | null>;
   /** symlinkの中身(読んだままのバイト列)。 */
   readonly readLink: (path: Buffer) => Promise<Buffer>;
@@ -1684,6 +1698,7 @@ async function collectEscapingLinks(
   deps: CheckSandboxDeps,
   dir: string,
   warn: Logger,
+  slot: number | null,
 ): Promise<LinkScan> {
   const resolvedRoot = await deps.realPath(Buffer.from(dir));
   if (resolvedRoot === null) {
@@ -1691,9 +1706,23 @@ async function collectEscapingLinks(
   }
   const root = toBytePath(resolvedRoot);
   // 標準出力ではなくファイルに書かせ、名前のバイトをそのまま、省かずに受け取る。
-  const listed = await deps.readPrivateOutput(async (file) => {
-    await runTool(deps, symlinksArgv(dir, file), `listing symlinks in ${dir}`);
-  }, LINK_LIST_MAX_BYTES);
+  // 枠のロックを持つ間は、枠ごとに決まった名前にして、前の実行の残りを使う前に消す。
+  // 枠を持たないときは、ほかの実行と重ならない名前にする。
+  const name =
+    slot === null ? `scan-${randomUUID()}.links` : `slot-${String(slot)}.links`;
+  let marks = "";
+  const listed = await deps.readPrivateOutput(
+    async (file) => {
+      marks = await runToolOutput(
+        deps,
+        symlinksArgv(dir, file),
+        `listing symlinks in ${dir}`,
+        { maxOutputBytes: LINK_LIST_MAX_MARKS },
+      );
+    },
+    LINK_LIST_MAX_BYTES,
+    name,
+  );
   const links = new Map<BytePath, BytePath>();
   const unreadable: BytePath[] = [];
   // 大きすぎるか読めなかった一覧は、何も調べられないので、不完全として全消しの後始末に任せる。
@@ -1702,6 +1731,10 @@ async function collectEscapingLinks(
   const entries = toBytePath(listed).split("\0");
   // 各名前は`\0`で終わる。末尾が`\0`でなければ一覧が途中で切れているので、最後の断片は捨てて不完全とする。
   let incomplete = (entries.pop() ?? "") !== "";
+  // 書き出した名前の数が、`find`が見つけた数(目印の数)と違えば、一覧が黙って欠けている。
+  if (isCappedOutput(marks) || marks.length !== entries.length) {
+    incomplete = true;
+  }
   for (const path of entries) {
     if (path === "") continue;
     if (deps.reap.now() - startedAt > LINK_SCAN_MAX_MS) {
@@ -2016,8 +2049,9 @@ export function createCheckSandbox(opts: {
    */
   const runSymlinkScan = async (
     dirs: CheckDirs,
+    slot: number | null,
   ): Promise<EscapingSymlinksReport> => {
-    const scan = await collectEscapingLinks(deps, dirs.worktreeDir, log);
+    const scan = await collectEscapingLinks(deps, dirs.worktreeDir, log, slot);
     const removed: string[] = [];
     const problems: string[] = [];
     let removeFailed = false;
@@ -2100,8 +2134,9 @@ export function createCheckSandbox(opts: {
       // 渡す前に記録する。後始末が走らなくても、次にこの枠を取る実行が戻せるようにするためである。
       await deps.slotRecords.write(handle.index, record);
       // 渡す前の、rootの所有の木で控える。投げても枠は`active`にあるので、`release`が手放して取り戻す。
-      baseline = (await collectEscapingLinks(deps, dirs.worktreeDir, log))
-        .links;
+      baseline = (
+        await collectEscapingLinks(deps, dirs.worktreeDir, log, handle.index)
+      ).links;
       scanArmed = true;
       await handOver(
         deps,
@@ -2148,7 +2183,7 @@ export function createCheckSandbox(opts: {
           // 走査と後始末は、枠のロックを持つ間に済ませる。
           // 投げたときは記録を残し、次の回復に掃かせる。例外は`escapingSymlinks`が投げ直す。
           try {
-            const report = await runSymlinkScan(dirs);
+            const report = await runSymlinkScan(dirs, handle.index);
             await deps.slotRecords.clear(handle.index);
             heldScan = { ok: true, report };
           } catch (error) {
@@ -2166,7 +2201,7 @@ export function createCheckSandbox(opts: {
     escapingSymlinks: async (dirs) => {
       const held = heldScan;
       heldScan = null;
-      if (held === null) return await runSymlinkScan(dirs);
+      if (held === null) return await runSymlinkScan(dirs, null);
       if (!held.ok) throw held.error;
       return held.report;
     },
@@ -2407,33 +2442,58 @@ async function listSysvIpc(): Promise<IpcEntry[]> {
 }
 
 /**
- * `baseDir`の下に、rootだけが入れるディレクトリを新しく作り、ファイルを1つ用意して`fill`に書かせ、中身を返す。
+ * `baseDir`の下の`name`のディレクトリを、rootだけが入れる空のものとして新しく作り、ファイルを1つ用意して`fill`に書かせ、中身を返す。
  * `baseDir`は、rootだけが書ける場所(枠の記録のディレクトリ)にする。
  * 親が共有の場所だと、ほかのユーザーが親ごと差し替えられるためである。
- * ディレクトリは`mkdtemp`が新しく作って所有者だけに開くので、名前を先取りしたり、書き込み先を差し替えたりできない。
- * 大きさが`maxBytes`を超えるか、読めなかったときは、nullを返す。`fill`が投げたときは、そのまま投げる。
+ * 前の実行が取り残した同じ名前のものは、使う前に消す。`mkdir`は既にあれば失敗するので、先取りされたものは使わない。
+ * 大きさが`maxBytes`を超えるか、読めなかったときは、nullを返す。読めなかった原因は、ログに`code`だけを残して捨てる。
+ * `fill`が投げたときは、ファイルが`maxBytes`を超えていれば、書き込み量の制限で止まったものとしてnullを返す。そうでなければ、そのまま投げる。
  * どの場合も、返す前にディレクトリごと消す。
  */
 export function privateOutputReader(
   baseDir: string,
+  log: Logger = logger("check_sandbox"),
 ): CheckSandboxDeps["readPrivateOutput"] {
-  return async (fill, maxBytes) => {
+  return async (fill, maxBytes, name) => {
     await mkdir(baseDir, { recursive: true, mode: 0o700 });
-    const dir = await mkdtemp(join(baseDir, "link-list-"));
+    const dir = join(baseDir, name);
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { mode: 0o700 });
     try {
       await chmod(dir, 0o700);
       const file = join(dir, "output");
-      await fill(file);
+      try {
+        await fill(file);
+      } catch (error) {
+        // 書き込み量の制限で止まった`find`は失敗する。大きすぎる一覧として、不完全に倒す。
+        if (!(await exceeds(file, maxBytes))) throw error;
+        return null;
+      }
       try {
         if ((await stat(file)).size > maxBytes) return null;
         return await readFile(file);
-      } catch {
+      } catch (error) {
+        log.warn(
+          "the symlink list could not be read, so it counts as incomplete",
+          {
+            code: errorCode(error) || "unknown",
+          },
+        );
         return null;
       }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
   };
+}
+
+/** `file`の大きさが`maxBytes`を超えているか。調べられなければfalse。 */
+async function exceeds(file: string, maxBytes: number): Promise<boolean> {
+  try {
+    return (await stat(file)).size > maxBytes;
+  } catch {
+    return false;
+  }
 }
 
 export function defaultSandboxDeps(
