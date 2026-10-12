@@ -78,6 +78,12 @@ describe("20261013100500_active_pr_fix_key.up.sql", () => {
 });
 
 describe("20261013100500_active_pr_fix_key.down.sql", () => {
+  test("bounds the wait for the table lock", async () => {
+    expect(await Bun.file(DOWN).text()).toContain(
+      "SET LOCAL lock_timeout = '30s'",
+    );
+  });
+
   test("drops the index", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
       "DROP INDEX factory.work_items_active_pr_fix_key",

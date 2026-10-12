@@ -707,6 +707,8 @@ export type PrCandidate = {
    * DBの部分一意インデックスでも1件に制限され、2件目の挿入は失敗するためである。
    */
   readonly hasActiveFixItem: boolean;
+  /** `hasActiveFixItem`が`true`のとき、その`pr_fix`の作業項目のid。保留の理由としてログに残す。無ければ`null`。 */
+  readonly activeFixItemId: number | null;
   /**
    * このPRの最新の`work_items`の行(種類と状態は問わない)の`head_sha`。
    * 作業項目が一度も無ければ`null`。

@@ -30,6 +30,7 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
     hasActiveFixItem: false,
+    activeFixItemId: null,
     lastKnownHeadSha: null,
     previousFixRound: 0,
     maxReviewId: 0,
@@ -170,6 +171,7 @@ describe("decidePrActions — fix", () => {
       [
         candidate({
           hasActiveFixItem: true,
+          activeFixItemId: 60,
           labels: [FIX_LABEL],
           fixLabelerLogin: "octo-owner",
         }),
@@ -186,6 +188,7 @@ describe("decidePrActions — fix", () => {
       [
         candidate({
           hasActiveFixItem: true,
+          activeFixItemId: 60,
           labels: [REVIEW_LABEL],
           reviewLabelerLogin: "octo-owner",
         }),
@@ -202,6 +205,7 @@ describe("decidePrActions — fix", () => {
       [
         candidate({
           hasActiveFixItem: true,
+          activeFixItemId: 60,
           labels: [FIX_LABEL],
           fixLabelerLogin: "mallory",
         }),

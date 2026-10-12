@@ -26,6 +26,7 @@ import {
   recordPrForkHeadDenied,
   recordPrLabelerDenied,
   resolveClaimNotices,
+  restoreTriggerLabelAfterStartRace,
 } from "../../f/factory/poll_prs.ts";
 import { describeReason } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
@@ -980,6 +981,73 @@ describe("collectLabelLeftRemoved", () => {
   });
 });
 
+describe("restoreTriggerLabelAfterStartRace", () => {
+  const target = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    number: 7,
+    triggerLabel: "factory:fix",
+  };
+  const cause = new Error("duplicate key value");
+
+  test("posts the trigger label back", async () => {
+    const { run, calls } = createFakeCommandRunner([ghApiOk([])]);
+    const { client } = recordingClient(run);
+    await restoreTriggerLabelAfterStartRace(client, target, cause);
+    expect(labelPost(calls)?.options?.stdin).toBe(
+      JSON.stringify({ labels: ["factory:fix"] }),
+    );
+  });
+
+  test("resends the label POST once after a 500", async () => {
+    const { run, calls } = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      ghApiOk([]),
+    ]);
+    const { client } = recordingClient(run);
+    await restoreTriggerLabelAfterStartRace(client, target, cause);
+    expect(calls.filter((call) => call.argv.includes("POST"))).toHaveLength(2);
+  });
+
+  test("logs a warning that the label was restored", async () => {
+    const { run } = createFakeCommandRunner([ghApiOk([])]);
+    const { client } = recordingClient(run);
+    const { log, warns } = recordingLog();
+    await restoreTriggerLabelAfterStartRace(client, target, cause, log);
+    expect(warns).toEqual([
+      "work item could not be started; restored the trigger label",
+    ]);
+  });
+
+  test("throws a left-removed error naming both failures when restoring fails", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(ghApiStdout(500, { message: "boom" })),
+      ok(ghApiStdout(500, { message: "boom" })),
+    ]);
+    const { client } = recordingClient(run);
+    await expect(
+      restoreTriggerLabelAfterStartRace(client, target, cause),
+    ).rejects.toThrow(
+      /starting the work item failed \(duplicate key value\).*restoring trigger label factory:fix failed.*HTTP 500.*a person must add it back/s,
+    );
+  });
+
+  test("carries the trigger label in the left-removed error", async () => {
+    const { run } = createFakeCommandRunner([
+      ok(ghApiStdout(422, { message: "nope" })),
+    ]);
+    const { client } = recordingClient(run);
+    const caught = await restoreTriggerLabelAfterStartRace(
+      client,
+      target,
+      cause,
+    ).catch((err: unknown) => err);
+    expect(
+      caught instanceof PrClaimLabelLeftRemovedError ? caught.label : null,
+    ).toBe("factory:fix");
+  });
+});
+
 describe("processPrDecisions", () => {
   const LABELS = { reviewLabel: "factory:review", fixLabel: "factory:fix" };
   const CANDIDATE = {
@@ -996,6 +1064,7 @@ describe("processPrDecisions", () => {
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
     hasActiveFixItem: false,
+    activeFixItemId: null,
     lastKnownHeadSha: null,
     previousFixRound: 0,
     maxReviewId: 0,
@@ -1040,6 +1109,9 @@ describe("processPrDecisions", () => {
       },
       resolveNotices: async (_candidate, label) => {
         calls.push(`resolveNotices:${label}`);
+      },
+      restoreLabel: async (_candidate, label) => {
+        calls.push(`restoreLabel:${label}`);
       },
       collectLeftRemoved: async () => {},
       recordFailure: async () => {},
@@ -1563,6 +1635,159 @@ describe("processPrDecisions", () => {
       const result = await run([REVIEW_BY_LABEL], handlers);
 
       expect(result.failed).toBe(1);
+    });
+  });
+
+  describe("when starting the fix hits the active pr_fix index", () => {
+    const conflict = new Error(
+      'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+    );
+    const conflicting = {
+      startFix: async () => {
+        throw conflict;
+      },
+    };
+
+    test("puts the fix label back", async () => {
+      const { handlers, calls } = handlersWith(conflicting);
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(calls).toEqual(["restoreLabel:factory:fix"]);
+    });
+
+    test("counts the PR as skipped", async () => {
+      const { handlers } = handlersWith(conflicting);
+
+      const result = await run([FIX_BY_LABEL], handlers);
+
+      expect(result).toEqual({
+        reviewsStarted: 0,
+        fixesStarted: 0,
+        skipped: 1,
+        failed: 0,
+      });
+    });
+
+    test("does not record a failure", async () => {
+      const steps: string[] = [];
+      const { handlers } = handlersWith({
+        ...conflicting,
+        recordFailure: async (step) => {
+          steps.push(step);
+        },
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(steps).toEqual([]);
+    });
+
+    test("passes the error to restoreLabel as the cause", async () => {
+      const causes: unknown[] = [];
+      const { handlers } = handlersWith({
+        ...conflicting,
+        restoreLabel: async (_candidate, _label, cause) => {
+          causes.push(cause);
+        },
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(causes).toEqual([conflict]);
+    });
+
+    test("counts a failure and collects the PR when putting the label back fails", async () => {
+      const collected: unknown[] = [];
+      const { handlers } = handlersWith({
+        ...conflicting,
+        restoreLabel: async () => {
+          throw LEFT_REMOVED;
+        },
+        collectLeftRemoved: async (_items, _candidate, err) => {
+          collected.push(err);
+        },
+      });
+
+      const result = await run([FIX_BY_LABEL], handlers);
+
+      expect({ failed: result.failed, collected }).toEqual({
+        failed: 1,
+        collected: [LEFT_REMOVED],
+      });
+    });
+
+    test("does not put the label back for another error", async () => {
+      const { handlers, calls } = handlersWith({
+        startFix: async () => {
+          throw new Error("start failed");
+        },
+      });
+
+      await run([FIX_BY_LABEL], handlers);
+
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("when a fix label is held back by an active pr_fix", () => {
+    const HELD: PrDecision = {
+      candidate: {
+        ...CANDIDATE,
+        labels: ["factory:fix"],
+        hasActiveFixItem: true,
+        activeFixItemId: 60,
+      },
+      review: { kind: "none" },
+      fix: { kind: "none" },
+    };
+
+    function infoLog() {
+      const infos: { message: string; fields: unknown }[] = [];
+      const log: Logger = {
+        info(message, fields) {
+          infos.push({ message, fields });
+        },
+        warn() {},
+        error() {},
+      };
+      return { log, infos };
+    }
+
+    test("logs the PR and the work item that holds it back", async () => {
+      const { handlers } = handlersWith();
+      const { log, infos } = infoLog();
+
+      await processPrDecisions([HELD], CONTEXTS, LABELS, handlers, log);
+
+      expect(infos).toEqual([
+        {
+          message:
+            "fix label kept: a pr_fix is in progress for the pull request",
+          fields: { target: "octo-owner/atelier-works#7", work_item_id: 60 },
+        },
+      ]);
+    });
+
+    test("starts nothing", async () => {
+      const { handlers, calls } = handlersWith();
+
+      await run([HELD], handlers);
+
+      expect(calls).toEqual([]);
+    });
+
+    test("does not log for a PR without the fix label", async () => {
+      const { handlers } = handlersWith();
+      const { log, infos } = infoLog();
+      const unlabeled: PrDecision = {
+        ...HELD,
+        candidate: { ...HELD.candidate, labels: [] },
+      };
+
+      await processPrDecisions([unlabeled], CONTEXTS, LABELS, handlers, log);
+
+      expect(infos).toEqual([]);
     });
   });
 

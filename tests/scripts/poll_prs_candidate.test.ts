@@ -379,6 +379,14 @@ describe("buildPrCandidate with active pr_fix work items", () => {
     expect((await buildWith([ROW])).hasActiveFixItem).toBe(true);
   });
 
+  test("carries the id of the active pr_fix", async () => {
+    expect((await buildWith([ROW])).activeFixItemId).toBe(60);
+  });
+
+  test("has no active pr_fix id without active rows", async () => {
+    expect((await buildWith([])).activeFixItemId).toBeNull();
+  });
+
   test("does not mark a pull request without active rows", async () => {
     expect((await buildWith([])).hasActiveFixItem).toBe(false);
   });
