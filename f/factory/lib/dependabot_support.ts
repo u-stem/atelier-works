@@ -782,9 +782,10 @@ export type ImpactAssessment = {
   unverified: string[];
 };
 
-const MAX_EVIDENCE_CHARS = 4000;
-const MAX_LIST_ITEMS = 20;
-const MAX_ITEM_CHARS = 500;
+// 構造化出力のJSON schemaも、同じ値を上限に使う。
+export const MAX_EVIDENCE_CHARS = 4000;
+export const MAX_LIST_ITEMS = 20;
+export const MAX_ITEM_CHARS = 500;
 
 function isBoundedStringArray(value: unknown): value is string[] {
   return (

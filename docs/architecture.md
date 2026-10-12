@@ -342,6 +342,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/db` | script | [LIB] Data Tableアクセス |
 | `f/factory/lib/cleanup_db_support` | script | [LIB] DB掃除の純粋ロジック |
 | `f/factory/lib/dependabot_support` | script | [LIB] dependabot更新のゲート判定 |
+| `f/factory/lib/dependabot_prompt` | script | [LIB] dependabot更新の影響調査のプロンプト |
 | `f/factory/lib/discord` | script | [LIB] Discord通知 |
 | `f/factory/lib/drawio_viewer_bump` | script | [LIB] draw.ioのビューアの固定の更新 |
 | `f/factory/lib/drawio_viewer_bump_github` | script | [LIB] draw.ioのビューアの更新のGitHub操作 |
