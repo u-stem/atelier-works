@@ -3755,6 +3755,166 @@ export async function listWorkflowRuns(
   );
 }
 
+/** PRのheadの実行として扱うevent。それ以外のevent(手動、定期など)の実行は、PRの判定に使わない。 */
+const PR_HEAD_RUN_EVENTS: readonly string[] = ["pull_request", "push"];
+
+type PrHeadRunExtras = {
+  readonly headRepository: {
+    readonly id: number | null;
+    readonly fullName: string;
+  } | null;
+  readonly pullRequestNumbers: number[];
+  readonly runAttempt: number;
+};
+
+function parsePrHeadRunExtras(
+  raw: Record<string, unknown>,
+  context: string,
+): PrHeadRunExtras {
+  const shapeError = () => new Error(`${context}: unexpected response shape`);
+  let headRepository: PrHeadRunExtras["headRepository"] = null;
+  const repository = raw.head_repository;
+  if (repository !== null && repository !== undefined) {
+    if (!isRecord(repository) || typeof repository.full_name !== "string") {
+      throw shapeError();
+    }
+    headRepository = {
+      id: typeof repository.id === "number" ? repository.id : null,
+      fullName: repository.full_name,
+    };
+  }
+  const pullRequests = raw.pull_requests ?? [];
+  if (!Array.isArray(pullRequests)) throw shapeError();
+  const pullRequestNumbers: number[] = [];
+  for (const item of pullRequests) {
+    if (!isRecord(item) || !Number.isSafeInteger(item.number)) {
+      throw shapeError();
+    }
+    if (typeof item.number === "number") pullRequestNumbers.push(item.number);
+  }
+  const runAttempt = raw.run_attempt ?? 1;
+  if (typeof runAttempt !== "number" || !Number.isSafeInteger(runAttempt)) {
+    throw shapeError();
+  }
+  return { headRepository, pullRequestNumbers, runAttempt };
+}
+
+function toPrHeadWorkflowRuns(
+  parsed: unknown,
+  context: string,
+  expected: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly headSha: string;
+    readonly headRef: string;
+    readonly baseRepoId: number | undefined;
+    readonly prNumber: number | undefined;
+  },
+): { runs: WorkflowRun[]; rawCount: number } {
+  if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  const incomplete = (what: string) =>
+    new WorkflowRunsIncompleteError(`${context}: the response holds ${what}`);
+  const runs: WorkflowRun[] = [];
+  for (const raw of parsed.workflow_runs) {
+    if (!isWorkflowRunPayload(raw)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    if (!Number.isSafeInteger(raw.id) || raw.id <= 0) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    if (raw.head_sha !== expected.headSha) {
+      throw incomplete("a run of another commit");
+    }
+    if (raw.head_branch !== expected.headRef) {
+      throw incomplete("a run of another branch");
+    }
+    if (!PR_HEAD_RUN_EVENTS.includes(raw.event)) continue;
+    const extras = parsePrHeadRunExtras(raw, context);
+    const repository = extras.headRepository;
+    const sameRepository =
+      repository !== null &&
+      (expected.baseRepoId !== undefined
+        ? repository.id === expected.baseRepoId
+        : repository.fullName.toLowerCase() ===
+          `${expected.owner}/${expected.repo}`.toLowerCase());
+    if (!sameRepository) {
+      throw incomplete("a run whose head is in another repository");
+    }
+    // pull_requests[]はGitHubが結び付けた時だけ入るので、空でも採用する。入っていれば、このPRを含むことを確かめる。
+    if (
+      expected.prNumber !== undefined &&
+      extras.pullRequestNumbers.length > 0 &&
+      !extras.pullRequestNumbers.includes(expected.prNumber)
+    ) {
+      throw incomplete("a run of another pull request");
+    }
+    runs.push({
+      id: raw.id,
+      name: raw.name ?? "",
+      headSha: raw.head_sha,
+      status: raw.status,
+      conclusion: raw.conclusion,
+      createdAt: new Date(raw.created_at),
+      htmlUrl: raw.html_url,
+      event: raw.event,
+      headRepositoryFullName: repository.fullName,
+      pullRequestNumbers: extras.pullRequestNumbers,
+      runAttempt: extras.runAttempt,
+    });
+  }
+  return { runs, rawCount: parsed.workflow_runs.length };
+}
+
+/**
+ * PRのheadのコミット(`headSha`)について、workflowの実行を読む。
+ * 対象は、head側のブランチ(`headRef`)で、eventが`pull_request`か`push`の実行である。
+ * 1ページ100件で最大`WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読み、上限まで埋まったら
+ * 実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。埋まったかは、
+ * eventで捨てる前の件数で決める。
+ * 次の実行が返ったときも同じ例外を投げ、そのコミットを今回は判定させない。
+ * - 別のコミット、別のブランチの実行
+ * - headのあるリポジトリが、ベースのリポジトリと違う実行(forkや削除されたfork)。
+ *   `baseRepoId`があればリポジトリのIDで、なければ`owner/repo`の名前で比べる。
+ * - `prNumber`を渡したときは、`pull_requests`が空でなく、そのPRを含まない実行。
+ *   `pull_requests`が空の実行は、GitHubがPRを結び付けていないだけなので採用する。
+ * 手動や定期など、ほかのeventの実行は捨てる。
+ * `headSha`と応答の各実行の`head_sha`は完全なコミットshaで、実行のIDは正の安全な整数でなければ例外を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listPrHeadWorkflowRuns(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  headSha: string,
+  headRef: string,
+  baseRepoId?: number,
+  prNumber?: number,
+): Promise<WorkflowRun[]> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(headSha);
+  assertBranchName(headRef);
+  const context = `GET pr workflow runs ${owner}/${repo}@${headSha}`;
+  const runs: WorkflowRun[] = [];
+  for (let page = 1; page <= WORKFLOW_RUNS_BY_SHA_MAX_PAGES; page += 1) {
+    const endpoint = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(headRef)}&head_sha=${headSha}&per_page=${String(WORKFLOW_RUNS_BY_SHA_PER_PAGE)}&page=${String(page)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    const items = toPrHeadWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      { owner, repo, headSha, headRef, baseRepoId, prNumber },
+    );
+    runs.push(...items.runs);
+    if (items.rawCount < WORKFLOW_RUNS_BY_SHA_PER_PAGE) return runs;
+  }
+  throw new WorkflowRunsIncompleteError(
+    `${context}: the runs may be incomplete (too many runs)`,
+  );
+}
+
 export type PullRequestUpdate = {
   readonly title?: string;
   readonly body?: string;
