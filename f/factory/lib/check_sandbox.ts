@@ -13,6 +13,7 @@ import {
   chmod,
   lstat,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   readlink,
@@ -23,6 +24,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   escapeReasonSeparator,
@@ -31,7 +33,7 @@ import {
   maskSecrets,
 } from "./log.ts";
 import { isRecord, isString } from "./types.ts";
-import { type CommandRunner, isCappedOutput, runCommand } from "./workspace.ts";
+import { type CommandRunner, runCommand } from "./workspace.ts";
 
 /** 枠の先頭のuid。`FACTORY_CHECK_UID`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。 */
 export const DEFAULT_CHECK_UID = 10001;
@@ -226,8 +228,6 @@ const SLOT_RELEASE_WAIT_MS = 5_000;
 /** 所有権の受け渡しにかける時間の上限(ミリ秒)。`node_modules`が大きいworktreeでも収まる値にする。 */
 const CHOWN_TIMEOUT_MS = 300_000;
 const CHOWN_MAX_OUTPUT_BYTES = 16 * 1024;
-/** symlinkの一覧の出力の上限(バイト)。`node_modules/.bin`のように多いものがあっても切れない大きさにする。 */
-const LINK_LIST_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 /** 1つのsymlinkの中身をたどる要素数の上限。超えたら、たどれないものとして外とみなす。 */
 const LINK_MAX_SEGMENTS = 1000;
 /** symlinkの走査にかける時間の上限(ミリ秒)。超えたら、検出が不完全だったものとして扱う。 */
@@ -532,10 +532,13 @@ export function sweepLinksArgv(dir: string): string[] {
   ];
 }
 
-/** `dir`の下のsymlinkをNUL区切りで列挙するargv。一括の受け渡しが入りうる範囲を見るため、`-xdev`は付けない。 */
-export function symlinksArgv(dir: string): string[] {
+/**
+ * `dir`の下のsymlinkのパスを、NUL区切りのバイト列として`file`に書き出すargv。一括の受け渡しが入りうる範囲を見るため、`-xdev`は付けない。
+ * 標準出力に出さずにファイルへ書くのは、出力の上限で一覧を省かないためである。
+ */
+export function symlinksArgv(dir: string, file: string): string[] {
   assertChownableDir(dir);
-  return [FIND_PATH, "-P", dir, "-type", "l", "-print0"];
+  return [FIND_PATH, "-P", dir, "-type", "l", "-fprint0", file];
 }
 
 /**
@@ -1377,14 +1380,21 @@ export type CheckSandboxDeps = ImageDeps & {
   ) => Promise<"missing" | "directory" | "other">;
   /** カーネルの設定`/proc/sys/...`の値。読めなければnull。 */
   readonly readSysctl: (name: string) => string | null;
-  /** symlinkの中身(読んだままの文字列)。 */
-  readonly readLink: (path: string) => Promise<string>;
+  /**
+   * rootだけが入れる一時のディレクトリにファイルを1つ用意し、`fill`にそのパスを渡して書かせ、書かれたバイト列を返す。
+   * 返す前にディレクトリごと消す。他のユーザーが書き込み先を差し替えられないようにするためである。
+   */
+  readonly readPrivateOutput: (
+    fill: (file: string) => Promise<void>,
+  ) => Promise<Buffer>;
+  /** symlinkの中身(読んだままのバイト列)。 */
+  readonly readLink: (path: Buffer) => Promise<Buffer>;
   /** `path`をたどった先の正規のパス。先が無ければ(存在しないか、ディレクトリでないものを通る)null。それ以外の失敗は例外を投げる。 */
-  readonly realPath: (path: string) => Promise<string | null>;
+  readonly realPath: (path: Buffer) => Promise<Buffer | null>;
   /** symlink自身を消す。たどらない。 */
-  readonly removeLink: (path: string) => Promise<void>;
+  readonly removeLink: (path: Buffer) => Promise<void>;
   /** symlinkを消して、`content`を指すものに張り直す。 */
-  readonly replaceLink: (path: string, content: string) => Promise<void>;
+  readonly replaceLink: (path: Buffer, content: Buffer) => Promise<void>;
 };
 
 /** `escapingSymlinks`の結果。 */
@@ -1420,7 +1430,8 @@ export type CheckSandbox = {
    * 検査が置いたsymlinkは取り戻しの後も残り、次のラウンドでrootのClaudeがたどると外に書きうるためである。
    * `python3 -m venv`のような正当な道具も外を指すsymlinkを置くので、消しただけでは失敗にしない。
    * `prepare`の時点にあった組の中身が変わっていたら、消さずに元の中身へ張り直し、`problems`に書く。
-   * 一覧が上限で切れた、中身を読めない、消せない、のときも`problems`に書く。検出が不完全だからである。
+   * 中身を読めない、消せない、のときも`problems`に書く。検出が不完全だからである。
+   * 名前は、UTF-8でないバイトや長い名前でもバイトのまま扱うので、それだけでは不完全にならない。
    * 消すのは、木がrootの所有になり、枠のuidが書けなくなった後なので、差し替えられない。消すのはsymlink自身だけで、たどらない。
    * `release`の中では呼ばない。片付けを止めないためである。
    */
@@ -1530,8 +1541,21 @@ async function handOver(
   await runTool(deps, argv, what);
 }
 
-/** symlinkの名前と、その中身(読んだままの文字列)。 */
-type LinkMap = ReadonlyMap<string, string>;
+/**
+ * symlinkのパスと中身は、1バイトを1文字に写した文字列(バイト文字列)で持つ。
+ * UTF-8でないバイトも、別々の名前が同じ文字列になることなく保てる。
+ * `/`と`.`は1バイトの文字のままなので、`path`モジュールの区切りの扱いがバイト列の上でも成り立つ。
+ * ファイルシステムに渡すときは`toBytes`でバイト列に戻す。
+ */
+type BytePath = string;
+
+const toBytePath = (bytes: Buffer): BytePath => bytes.toString("latin1");
+const toBytes = (path: BytePath): Buffer => Buffer.from(path, "latin1");
+/** ログと報告に載せる表記。UTF-8でないバイトは置換文字になる。 */
+const displayPath = (path: BytePath): string => toBytes(path).toString("utf8");
+
+/** symlinkの名前と、その中身(読んだままのバイト文字列)。 */
+type LinkMap = ReadonlyMap<BytePath, BytePath>;
 
 /** `error`の`code`。無ければ空の文字列。 */
 function errorCode(error: unknown): string {
@@ -1549,10 +1573,10 @@ function errorCode(error: unknown): string {
  */
 async function isSymlink(
   deps: CheckSandboxDeps,
-  path: string,
+  path: BytePath,
 ): Promise<boolean> {
   try {
-    await deps.readLink(path);
+    await deps.readLink(toBytes(path));
     return true;
   } catch (error) {
     return !["EINVAL", "ENOENT", "ENOTDIR"].includes(errorCode(error));
@@ -1578,11 +1602,15 @@ function inAllowedRegion(current: string, root: string): boolean {
  */
 async function resolveLinkTarget(
   deps: CheckSandboxDeps,
-  path: string,
-  content: string,
-  root: string,
-): Promise<string | null> {
-  const start = isAbsolute(content) ? "/" : await deps.realPath(dirname(path));
+  path: BytePath,
+  content: BytePath,
+  root: BytePath,
+): Promise<BytePath | null> {
+  const realPath = async (target: BytePath): Promise<BytePath | null> => {
+    const resolved = await deps.realPath(toBytes(target));
+    return resolved === null ? null : toBytePath(resolved);
+  };
+  const start = isAbsolute(content) ? "/" : await realPath(dirname(path));
   if (start === null) return null;
   let current = start;
   const segments = content.split("/").filter((part) => part !== "");
@@ -1595,7 +1623,7 @@ async function resolveLinkTarget(
       continue;
     }
     const next = join(current, segment);
-    const resolved = await deps.realPath(next);
+    const resolved = await realPath(next);
     if (resolved !== null) {
       if (!inAllowedRegion(resolved, root)) return null;
       current = resolved;
@@ -1615,11 +1643,9 @@ async function resolveLinkTarget(
 type LinkScan = {
   /** 外を指すsymlinkの名前と中身。 */
   readonly links: LinkMap;
-  /** 中身を読めなかったパス。壊れた名前や長すぎる名前で、消せない。 */
-  readonly unreadable: readonly string[];
-  /** 一覧が出力の上限で途中を省かれたか。 */
-  readonly truncated: boolean;
-  /** 省いた印を含む名前があった、または時間の上限を超えて、全部は調べられなかったか。 */
+  /** 中身を読めなかったパス。パスの長さの上限(`PATH_MAX`)を超えるものなどで、パスでは消せない。 */
+  readonly unreadable: readonly BytePath[];
+  /** 時間の上限を超えて、全部は調べられなかったか。 */
   readonly incomplete: boolean;
 };
 
@@ -1634,56 +1660,45 @@ async function collectEscapingLinks(
   dir: string,
   warn: Logger,
 ): Promise<LinkScan> {
-  const root = await deps.realPath(dir);
-  if (root === null) throw new Error(`check sandbox: cannot resolve ${dir}`);
-  const listed = await runToolOutput(
-    deps,
-    symlinksArgv(dir),
-    `listing symlinks in ${dir}`,
-    { maxOutputBytes: LINK_LIST_MAX_OUTPUT_BYTES },
-  );
-  const links = new Map<string, string>();
-  const unreadable: string[] = [];
+  const resolvedRoot = await deps.realPath(Buffer.from(dir));
+  if (resolvedRoot === null) {
+    throw new Error(`check sandbox: cannot resolve ${dir}`);
+  }
+  const root = toBytePath(resolvedRoot);
+  // 標準出力ではなくファイルに書かせ、名前のバイトをそのまま、省かずに受け取る。
+  const listed = await deps.readPrivateOutput(async (file) => {
+    await runTool(deps, symlinksArgv(dir, file), `listing symlinks in ${dir}`);
+  });
+  const links = new Map<BytePath, BytePath>();
+  const unreadable: BytePath[] = [];
   const startedAt = deps.reap.now();
   let incomplete = false;
-  for (const path of listed.split("\0")) {
+  for (const path of toBytePath(listed).split("\0")) {
     if (path === "") continue;
-    // 省いた印を含む名前は、前後が欠けた壊れたパスか、印そのものを名前にしたものである。
-    // U+FFFDを含む名前は、UTF-8でないバイトが置き換わっている。別々の名前が同じ文字列になり、控えとの照合を取り違えうる。
-    // どちらも読めないものとして、不完全に倒す。
-    if (isCappedOutput(path) || path.includes("\uFFFD")) {
-      incomplete = true;
-      continue;
-    }
     if (deps.reap.now() - startedAt > LINK_SCAN_MAX_MS) {
       incomplete = true;
       break;
     }
-    let content: string;
+    let content: BytePath;
     try {
-      content = await deps.readLink(path);
+      content = toBytePath(await deps.readLink(toBytes(path)));
     } catch {
       unreadable.push(path);
       continue;
     }
-    let target: string | null;
+    let target: BytePath | null;
     try {
       target = await resolveLinkTarget(deps, path, content, root);
     } catch (error) {
       warn.warn("a symlink could not be resolved, so it counts as outside", {
-        path,
+        path: displayPath(path),
         code: errorCode(error) || "unknown",
       });
       target = null;
     }
     if (target === null) links.set(path, content);
   }
-  return {
-    links,
-    unreadable,
-    truncated: isCappedOutput(listed),
-    incomplete,
-  };
+  return { links, unreadable, incomplete };
 }
 
 /**
@@ -1977,41 +1992,32 @@ export function createCheckSandbox(opts: {
     const removed: string[] = [];
     const problems: string[] = [];
     let removeFailed = false;
+    const homePrefix = `${toBytePath(Buffer.from(dirs.homeDir))}/`;
     for (const [path, content] of scan.links) {
       const before = baseline.get(path);
       try {
         if (before === undefined) {
-          await deps.removeLink(path);
+          await deps.removeLink(toBytes(path));
           removed.push(path);
         } else if (before !== content) {
-          await deps.replaceLink(path, before);
+          await deps.replaceLink(toBytes(path), toBytes(before));
           problems.push(
-            `a symlink that existed before the check was changed, so it was restored: ${JSON.stringify(path)}`,
+            `a symlink that existed before the check was changed, so it was restored: ${JSON.stringify(displayPath(path))}`,
           );
         }
       } catch (error) {
         removeFailed = true;
         problems.push(
-          `could not remove or restore ${JSON.stringify(path)}: ${errorCode(error) || "unknown"}`,
+          `could not remove or restore ${JSON.stringify(displayPath(path))}: ${errorCode(error) || "unknown"}`,
         );
       }
     }
     for (const path of scan.unreadable) {
       problems.push(
-        `could not inspect a symlink, so it was left: ${JSON.stringify(path)}`,
+        `could not inspect a symlink, so it was left: ${JSON.stringify(displayPath(path))}`,
       );
     }
-    if (scan.truncated) {
-      problems.push(
-        "the list of symlinks was cut short, so some symlinks were not checked",
-      );
-    }
-    if (
-      scan.truncated ||
-      scan.incomplete ||
-      scan.unreadable.length > 0 ||
-      removeFailed
-    ) {
+    if (scan.incomplete || scan.unreadable.length > 0 || removeFailed) {
       // 全部を調べ切れていないので、外を指すかもしれないものを、名前の文字コードや長さによらずに消す。
       // 失敗したら投げて、rootのClaudeのラウンドに進ませない。
       await runTool(
@@ -2026,14 +2032,14 @@ export function createCheckSandbox(opts: {
     const suspicious = removed.filter((path) => {
       const content = scan.links.get(path) ?? "";
       return (
-        !content.startsWith(`${dirs.homeDir}/`) &&
+        !content.startsWith(homePrefix) &&
         !SYSTEM_BIN_PREFIXES.some((prefix) => content.startsWith(prefix))
       );
     });
     if (suspicious.length > 0) {
       log.warn("removed suspicious outward symlinks", {
         count: suspicious.length,
-        paths: suspicious.slice(0, 20),
+        paths: suspicious.slice(0, 20).map(displayPath),
       });
     }
     if (removed.length > 0) {
@@ -2041,11 +2047,11 @@ export function createCheckSandbox(opts: {
         "removed symlinks the check left pointing outside the worktree",
         {
           count: removed.length,
-          paths: removed.slice(0, 20),
+          paths: removed.slice(0, 20).map(displayPath),
         },
       );
     }
-    return { removed, problems };
+    return { removed: removed.map(displayPath), problems };
   };
   return {
     wrap: (argv) => checkCommandArgv(current(), argv),
@@ -2371,6 +2377,24 @@ async function listSysvIpc(): Promise<IpcEntry[]> {
   return entries;
 }
 
+/**
+ * rootだけが入れるディレクトリにファイルを1つ用意し、`fill`に書かせて、中身を返す。
+ * ディレクトリは`mkdtemp`が新しく作って所有者だけに開くので、ほかのユーザーが名前を先取りしたり、書き込み先を差し替えたりできない。
+ */
+export async function readPrivateOutput(
+  fill: (file: string) => Promise<void>,
+): Promise<Buffer> {
+  const dir = await mkdtemp(join(tmpdir(), "factory-link-list-"));
+  try {
+    await chmod(dir, 0o700);
+    const file = join(dir, "output");
+    await fill(file);
+    return await readFile(file);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 export function defaultSandboxDeps(
   lockDir: string = SLOT_LOCK_DIR,
 ): CheckSandboxDeps {
@@ -2425,10 +2449,11 @@ export function defaultSandboxDeps(
         throw error;
       }
     },
-    readLink: (path) => readlink(path),
+    readPrivateOutput,
+    readLink: (path) => readlink(path, "buffer"),
     realPath: async (path) => {
       try {
-        return await realpath(path);
+        return await realpath(path, "buffer");
       } catch (error) {
         // 先が無い、ディレクトリでないものを通る、輪になっているものは解決できない。権限などの失敗は呼び出し側へ投げる。
         if (isUnresolvable(error)) return null;
