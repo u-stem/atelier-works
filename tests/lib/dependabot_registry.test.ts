@@ -812,6 +812,24 @@ describe("parsePackument registryMetadata", () => {
     );
   });
 
+  test("removes invisible formatting and filler characters", () => {
+    const hidden =
+      "\u206A\u206F\u{E0100}\u{E01EF}\u034F\u180E\u115F\u1160\u3164";
+    const to = version({ _npmUser: { name: `a${hidden}b` } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
+  test("keeps the emoji variation selector", () => {
+    const to = version({ _npmUser: { name: "a\u2764\uFE0Fb" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: a\u2764\uFE0Fb\n",
+    );
+  });
+
   test("keeps every item on one line", () => {
     const to = version({ _npmUser: { name: "a\r\nb c" } });
 

@@ -6,6 +6,7 @@
 import {
   INSTALL_SCRIPT_NAMES,
   parsePublishedAt,
+  SHA512_INTEGRITY,
 } from "./dependabot_support.ts";
 import { isRecord } from "./types.ts";
 
@@ -192,9 +193,6 @@ export type RegistryFacts = {
   registryMetadata: string;
 };
 
-// sha512は64バイトで、base64では86文字と`==`になる。
-const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
-
 // gypfileを持つ版は、installが無ければnpmが`node-gyp rebuild`を実行する。
 const IMPLICIT_GYP_INSTALL = "node-gyp rebuild";
 
@@ -250,14 +248,19 @@ function isHiddenCodePoint(code: number): boolean {
     code < 0x20 ||
     (code >= 0x7f && code <= 0x9f) ||
     code === 0xad ||
+    code === 0x34f ||
+    code === 0x115f ||
+    code === 0x1160 ||
+    code === 0x180e ||
+    code === 0x3164 ||
     (code >= 0x200b && code <= 0x200f) ||
     code === 0x2028 ||
     code === 0x2029 ||
     (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2060 && code <= 0x2064) ||
-    (code >= 0x2066 && code <= 0x2069) ||
+    (code >= 0x2060 && code <= 0x206f) ||
     code === 0xfeff ||
-    (code >= 0xe0000 && code <= 0xe007f)
+    (code >= 0xe0000 && code <= 0xe007f) ||
+    (code >= 0xe0100 && code <= 0xe01ef)
   );
 }
 

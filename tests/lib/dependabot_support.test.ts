@@ -141,10 +141,9 @@ type LockEntry = {
   integrity?: string;
 };
 
-const INTEGRITY_A =
-  "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
-const INTEGRITY_B =
-  "sha512-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB==";
+// sha512のbase64は、86文字に`==`が付く88文字になる。
+const INTEGRITY_A = `sha512-${"A".repeat(86)}==`;
+const INTEGRITY_B = `sha512-${"B".repeat(86)}==`;
 
 // bun.lockのテキスト形式(末尾にカンマを許すJSON)の最小例を作る。
 function lockText(
@@ -1404,6 +1403,38 @@ describe("evaluateGate", () => {
     );
 
     expect(result.ok ? "" : result.reason).toContain("registry");
+  });
+
+  test("needs a human when the registry integrity is empty", () => {
+    const result = evaluateGate(validInput({ registry: registryOf("") }));
+
+    expect(result.ok ? "" : result.reason).toContain("malformed");
+  });
+
+  test("needs a human when the registry integrity is not sha512", () => {
+    expect(verdictOf({ registry: registryOf("sha1-AAAA") })).toBe(
+      "needs_human",
+    );
+  });
+
+  test("needs a human when a copy of the target has no integrity", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: "" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: "" },
+    ]);
+
+    const result = evaluateGate(
+      validInput({
+        changedPaths: ["bun.lock"],
+        files: [{ path: "bun.lock", before, after }],
+      }),
+    );
+
+    expect(result.ok ? "" : result.reason).toContain("no valid integrity");
   });
 
   test("explains an integrity mismatch", () => {

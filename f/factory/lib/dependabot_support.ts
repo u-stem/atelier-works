@@ -232,7 +232,11 @@ function entryIdentity(
   return typeof id === "string" ? splitPackageId(id) : null;
 }
 
-const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/;
+/**
+ * sha512の整合性の形。sha512は64バイトで、base64では86文字と`==`になる。
+ * ロックファイルの値とレジストリの値のどちらも、この形でなければ使わない。
+ */
+export const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
 const DEPENDENCY_FIELDS: readonly string[] = [
   "dependencies",
@@ -672,6 +676,9 @@ function fileProblem(input: GateInput): string | null {
 function integrityProblem(input: GateInput): string | null {
   const { registry, files, changedPaths, target } = input;
   if (registry === null) return "registry integrity is not available";
+  if (!SHA512_INTEGRITY.test(registry.integrity)) {
+    return "registry integrity is malformed";
+  }
   if (registry.name !== target.name || registry.version !== target.to) {
     return `registry fact is for ${detail(registry.name)}@${detail(registry.version)}, expected ${detail(target.name)}@${detail(target.to)}`;
   }
@@ -684,6 +691,9 @@ function integrityProblem(input: GateInput): string | null {
     const found = lockfileIntegrity(after, target);
     if (found === null || found.length === 0) {
       return `target entry was not found in ${detail(lockfile)}`;
+    }
+    if (found.some((value) => !SHA512_INTEGRITY.test(value))) {
+      return `a target entry in ${detail(lockfile)} has no valid integrity`;
     }
     const mismatch = found.find((value) => value !== registry.integrity);
     if (mismatch !== undefined) {
