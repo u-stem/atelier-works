@@ -941,6 +941,22 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポ
 
 監査の内部の挙動は[監査の仕様](internals/audit.md)にある。
 
+## dependabotの更新を設定する
+
+dependabotのセキュリティ更新PRを自動で処理するかどうかは、`f/factory/factory_config`の2つの項目で決める。
+
+| 項目 | 既定値 | 意味 |
+| --- | --- | --- |
+| `dependabot_enabled` | `false` | dependabotのセキュリティ更新PRを自動で処理するか |
+| `dependabot_min_published_days` | `7` | 更新先の版が公開されてから、マージしてよくなるまでの日数 |
+
+`dependabot_min_published_days`は、公開から日が浅い版を自動でマージしないための下限である。
+1以上の整数にする。0、負の値、小数は設定の読み込みで拒否する。
+
+既存のリソースにこれらの項目が無くても、既定値で動く。
+有効にするには、Windmillの画面で`f/factory/factory_config`を開き、`dependabot_enabled`を`true`にする。
+リソースはgitで同期しないので、リポジトリの変更だけでは反映されない。
+
 ## モデルを使い分ける
 
 Factoryは、工程によってClaudeのモデルを使い分ける。
