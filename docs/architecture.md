@@ -40,7 +40,7 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 | 2. 要件定義 | headless Claudeが要件定義ドラフトを生成し、人が承認か却下をする | 実装済み |
 | 3. 実装 | 承認済みの要件定義からworktree上で実装し、PRを作る | 実装済み。既定では無効 |
 | 3. PRレビュー・修正 | 既存のPRをレビューし、指摘を修正する | 実装済み |
-| 4. CI監視 | マージ後のCIを監視する | 未実装 |
+| 4. CI監視 | 対象リポジトリのmainのCIをコミット単位で監視し、失敗を通知する | 実装済み |
 | 5. 自己改善 | 運用記録を週次で監査し、レポートと改善提案を作る | 実装済み |
 
 工程3の実装フロー(`implement`)は、`factory_config`の`implement_enabled`を`true`にしたときだけ動く。既定値は`false`で、その間は要件定義を承認した作業項目が承認済み(`approved`)のまま残る。
@@ -83,7 +83,7 @@ flowchart TD
 | `approved` | 要件定義が承認された | issue | 終端 |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
-| `pr_open` | 実装を終えてPRを作成か更新した。マージ後の追跡は工程4の範囲である | issue | 終端 |
+| `pr_open` | 実装を終えてPRを作成か更新した。マージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
 | `reviewing` | PRをレビューしている | pr_review | |
 | `reviewed` | レビューをCOMMENTとして投稿した | pr_review、pr_fix | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
@@ -564,6 +564,14 @@ Discordへの通知の2回は、ホスト側の作業の通知と、最後の確
 
 Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself cloneから読む。そのためpullの直後の実行から反映される。初回の反映(スケジュールの登録と最初のpush)は、ホストから`scripts/bootstrap.sh`が行う。
 
+## 工程4のmainのCI監視
+
+`watch_main_ci`が5分ごとに、対象リポジトリの既定のブランチへのpushで動いたGitHub Actionsの実行を、コミット単位で判定する。
+作業項目とは独立した読み取りだけの監視で、記録は`main_ci_runs`に残す。
+失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら自動で解決する。
+GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
+判定の条件、通知、権限エラーの扱いは[mainのCI監視の仕様](internals/main-ci.md)に書く。
+
 ## 工程5の監査
 
 `audit_kickoff`が毎週月曜09:30に、前回の監査以降の運用記録を確かめる。行動につながる記録があれば、監査の作業項目を作って`audit`フローを起動する。Consoleの**レポート**の**今すぐ監査**からも起動できる。
@@ -572,7 +580,6 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 
 ## 未実装の機能
 
-- 工程4のマージ後のCIの監視
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

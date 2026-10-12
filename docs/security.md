@@ -225,6 +225,7 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 | Repository access | Only select repositoriesを選び、拾わせるリポジトリ(sandboxのリポジトリを含む)を選ぶ |
 | Repository permissions: Issues | Read and write |
 | Repository permissions: Contents | Read and write |
+| Repository permissions: Actions | Read-only |
 | Repository permissions: Metadata | Read-only(IssuesかContentsを選ぶと自動で付く) |
 | Repository permissions: Pull requests | Read and write |
 | Repository permissions: Workflows | No access |
@@ -233,7 +234,12 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 ContentsをRead and writeにするのは、PR修正と実装のフローがブランチにpushするためである。WorkflowsはNo accessのままにする。`.github/workflows/`を含むpushをGitHubに拒否させるためである。実装フローは`.github/`の変更を止めずに記録するので、この拒否が実質のガードになる。
 ただし、この拒否が及ぶのは`.github/workflows/`の下だけである。`.github/actions/`のcomposite actionには及ばないので、PR修正はパスで止め、実装フローは記録する。組み立てなど配布物に関わる手順は、composite actionに分けない。
 
+ActionsをRead-onlyにするのは、`watch_main_ci`が対象リポジトリの既定のブランチのActionsの実行を読むためである。
+書き込みの権限は付けない。実行の再実行や取り消しをさせないためである。
+権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのmainのCIの失敗に気づけない。
+
 fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
+orgのリポジトリでは、権限を足すと、org側で再び承認を求められることもある。承認するまで、同じ通知は残る。
 
 Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も、同じ`f/factory/github_token`を使う。別の資格情報は用意しない。
 
