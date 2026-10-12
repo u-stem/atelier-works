@@ -605,12 +605,12 @@ markdown-itはargparse@3を、rc-config-loaderのjs-yaml@4はargparse@2を使い
 ## 依存の変更のレビュー
 
 PRレビュー(`pr_review`)は、依存の宣言か取得を変えるPRに、サプライチェーン攻撃の観点で指摘する。
-対象は、マニフェストとロックファイル、GitHub Actionsの`uses:`、イメージの指定、ツールの版の指定である。
-観点と指摘の目安は、[factory-reviewスキル](../.claude/skills/factory-review/SKILL.md)の「依存関係の判定基準」にある。
+対象と観点、指摘の目安は、[factory-reviewスキル](../.claude/skills/factory-review/SKILL.md)の「依存関係の判定基準」にある。
 
 指摘は人のレビューを補うもので、マージを決めない。
-レビューのClaudeはレジストリを読めないので、版の公開日、メンテナの交代、リポジトリの移管は人が確かめる。
-dependabotの更新を自動でマージする前の確認は、別の関門と影響調査が行う([dependabotの更新の自動マージ](#dependabotの更新の自動マージ))。
+レビューのClaudeはレジストリを読めず、依存もインストールしない。
+そのため、dependabotの自動マージの対象でないPRでは、版の公開日、メンテナの交代、リポジトリの移管、依存の中身のinstall時のスクリプトを人が確かめる。
+dependabotの更新を自動でマージする前は、関門と影響調査がこれらを見る([dependabotの更新の自動マージ](#dependabotの更新の自動マージ))。
 
 ## 自己更新の打ち切り
 
