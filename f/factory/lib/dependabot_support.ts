@@ -3,6 +3,7 @@
 // ここは受け取った事実から結論と理由を返す。
 // 判定は安全側に倒す。解釈できない入力は、通すのではなく止める。
 
+import { escapeReasonSeparator } from "./log.ts";
 import { matchesForbiddenPath } from "./protected_paths.ts";
 
 // 値の出典は、.github/workflows/ci.ymlのジョブIDと、docs/security.mdの必須チェックの節である。
@@ -32,6 +33,20 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const DEPENDABOT_LOGIN = "dependabot[bot]";
 const DEPENDABOT_TYPE = "Bot";
+
+const MAX_DETAIL_CHARS = 80;
+
+/**
+ * 理由の文字列に埋め込む、ファイルやGitHubが書ける文字列を整える。
+ * 長い値で理由が膨らまないよう切り詰め、`"; "`で理由が別の項目に割れないようにする。
+ */
+function detail(text: string): string {
+  const shortened =
+    text.length > MAX_DETAIL_CHARS
+      ? `${text.slice(0, MAX_DETAIL_CHARS)}...`
+      : text;
+  return escapeReasonSeparator(shortened);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -190,7 +205,10 @@ function parseJsonObject(
   if (!isRecord(parsed)) return { ok: false, reason: "file is not an object" };
   const duplicate = findDuplicateKey(source);
   if (duplicate !== null) {
-    return { ok: false, reason: `file has a duplicate key: ${duplicate}` };
+    return {
+      ok: false,
+      reason: `file has a duplicate key: ${detail(duplicate)}`,
+    };
   }
   return { ok: true, value: parsed };
 }
@@ -238,16 +256,86 @@ function withoutTarget(
   return copy;
 }
 
-/** workspacesから対象の依存の指定を除き、残りが変わっていないかを比べられる形にする。 */
-function workspacesWithoutTarget(workspaces: unknown, name: string): unknown {
-  if (!isRecord(workspaces)) return workspaces;
-  const result: Record<string, unknown> = {};
-  for (const [key, workspace] of Object.entries(workspaces)) {
-    result[key] = isRecord(workspace)
-      ? withoutTarget(workspace, name)
-      : workspace;
+/**
+ * 依存の指定が、版そのもの、または先頭に^か~が付いた版かを返す。
+ * URLやタグなど、別の取得元を指せる指定を通さないため。
+ */
+function specifierPointsAt(specifier: unknown, version: string): boolean {
+  return (
+    typeof specifier === "string" && specifier.replace(/^[\^~]/, "") === version
+  );
+}
+
+function dependencyFieldProblem(
+  before: unknown,
+  after: unknown,
+  target: { name: string; to: string },
+): string | null {
+  if (!isRecord(before) || !isRecord(after)) {
+    return JSON.stringify(before) === JSON.stringify(after)
+      ? null
+      : "dependency list changed";
   }
-  return result;
+  const hadTarget = Object.hasOwn(before, target.name);
+  if (hadTarget !== Object.hasOwn(after, target.name)) {
+    return "target was added or removed";
+  }
+  const rest = (deps: Record<string, unknown>) =>
+    JSON.stringify(
+      Object.entries(deps).filter(([name]) => name !== target.name),
+    );
+  if (rest(before) !== rest(after)) return "dependencies changed";
+  if (hadTarget) {
+    const beforeSpec = before[target.name];
+    const afterSpec = after[target.name];
+    if (beforeSpec !== afterSpec && !specifierPointsAt(afterSpec, target.to)) {
+      return `target specifier does not point at ${detail(target.to)}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * ロックファイルのworkspacesを比べ、対象の依存の指定以外が変わっていれば理由を返す。
+ * 対象の指定は、前と同じ欄にあり、変えるなら新しい版を指していることを要る。
+ * 作業場所のキーは`Object.keys`で比べる。`__proto__`は`JSON.parse`が持ち主のキーとして作るので、
+ * 値を組み立て直さずに比べて、足された作業場所を見逃さない。
+ */
+function workspacesProblem(
+  before: unknown,
+  after: unknown,
+  target: { name: string; to: string },
+): string | null {
+  if (!isRecord(before) || !isRecord(after)) {
+    return JSON.stringify(before) === JSON.stringify(after)
+      ? null
+      : "workspaces changed";
+  }
+  if (
+    JSON.stringify(Object.keys(before)) !== JSON.stringify(Object.keys(after))
+  ) {
+    return "workspaces were added or removed";
+  }
+  for (const key of Object.keys(before)) {
+    const b = before[key];
+    const a = after[key];
+    if (!isRecord(b) || !isRecord(a)) {
+      if (JSON.stringify(b) !== JSON.stringify(a)) return "workspaces changed";
+      continue;
+    }
+    const others = (workspace: Record<string, unknown>) =>
+      JSON.stringify(
+        Object.entries(workspace).filter(
+          ([field]) => !DEPENDENCY_FIELDS.includes(field),
+        ),
+      );
+    if (others(b) !== others(a)) return "workspace settings changed";
+    for (const field of DEPENDENCY_FIELDS) {
+      const problem = dependencyFieldProblem(b[field], a[field], target);
+      if (problem !== null) return `${field}: ${problem}`;
+    }
+  }
+  return null;
 }
 
 function checkTargetEntry(
@@ -262,7 +350,7 @@ function checkTargetEntry(
     return "a package other than the target changed";
   }
   if (a.version !== target.to) {
-    return `target resolved to ${a.version}, expected ${target.to}`;
+    return `target resolved to ${detail(a.version)}, expected ${detail(target.to)}`;
   }
   if (b.version === a.version) {
     return "target changed without a version change";
@@ -270,7 +358,7 @@ function checkTargetEntry(
   // 入れ子のコピーなど、対象が複数の版で入っていても、各コピーの更新幅を確かめる。
   const kind = classifyUpdate(b.version, a.version);
   if (kind !== "patch" && kind !== "minor") {
-    return `target jumped from ${b.version} to ${a.version} (${kind})`;
+    return `target jumped from ${detail(b.version)} to ${detail(a.version)} (${kind})`;
   }
   if (!Array.isArray(after) || after[1] !== "") {
     return "target is resolved from a non-default registry";
@@ -313,27 +401,29 @@ export function checkLockfileDiff(
   if (otherKeys(a.value) !== otherKeys(b.value)) {
     return { ok: false, reason: "lockfile settings changed" };
   }
-  if (
-    JSON.stringify(workspacesWithoutTarget(a.value.workspaces, target.name)) !==
-    JSON.stringify(workspacesWithoutTarget(b.value.workspaces, target.name))
-  ) {
-    return { ok: false, reason: "workspace dependencies changed" };
-  }
+  const workspaces = workspacesProblem(
+    a.value.workspaces,
+    b.value.workspaces,
+    target,
+  );
+  if (workspaces !== null) return { ok: false, reason: workspaces };
 
   const keys = new Set([...Object.keys(aPackages), ...Object.keys(bPackages)]);
   let targetUpdated = false;
   for (const key of keys) {
     if (!Object.hasOwn(aPackages, key)) {
-      return { ok: false, reason: `package added: ${key}` };
+      return { ok: false, reason: `package added: ${detail(key)}` };
     }
     if (!Object.hasOwn(bPackages, key)) {
-      return { ok: false, reason: `package removed: ${key}` };
+      return { ok: false, reason: `package removed: ${detail(key)}` };
     }
     const beforeEntry = aPackages[key];
     const afterEntry = bPackages[key];
     if (JSON.stringify(beforeEntry) === JSON.stringify(afterEntry)) continue;
     const problem = checkTargetEntry(beforeEntry, afterEntry, target);
-    if (problem !== null) return { ok: false, reason: `${key}: ${problem}` };
+    if (problem !== null) {
+      return { ok: false, reason: `${detail(key)}: ${problem}` };
+    }
     targetUpdated = true;
   }
   if (!targetUpdated) {
@@ -345,14 +435,6 @@ export function checkLockfileDiff(
 // ---- package.jsonの差分 ----
 
 export type PackageJsonVerdict = { ok: true } | { ok: false; reason: string };
-
-// 新しい版の指定は、版そのものか、先頭に^か~が付いた形だけを受け付ける。
-// URLやタグなど、別の取得元を指せる指定を通さないため。
-function specifierPointsAt(specifier: unknown, version: string): boolean {
-  return (
-    typeof specifier === "string" && specifier.replace(/^[\^~]/, "") === version
-  );
-}
 
 /**
  * dependabotがpackage.jsonに加えた変更が、対象パッケージの版の指定だけかを調べる。
@@ -401,7 +483,7 @@ export function checkPackageJsonDiff(
     if (!specifierPointsAt(afterSpec, target.to)) {
       return {
         ok: false,
-        reason: `target specifier in ${field} does not point at ${target.to}`,
+        reason: `target specifier in ${field} does not point at ${detail(target.to)}`,
       };
     }
     targetUpdated = true;
@@ -419,25 +501,43 @@ export type GateInput = {
   authorType: string;
   headRepoFullName: string;
   baseRepoFullName: string;
-  /** PRのすべてのcommitの作者がdependabotであるか。 */
-  allCommitsByDependabot: boolean;
+  /**
+   * PRのすべてのcommit。
+   * 作者とコミッターの両方が`dependabot[bot]`で、署名が検証済みであることを要る。
+   * 作者を取得できなかったものは`null`にする。
+   */
+  commits: {
+    authorLogin: string | null;
+    committerLogin: string | null;
+    verified: boolean;
+  }[];
   checks: { name: string; conclusion: string | null }[];
   requiredChecks: readonly string[];
   update: UpdateKind;
+  /** PRで変更されたすべてのパス。`files`に現れないパスがあれば止める。 */
   changedPaths: readonly string[];
+  /**
+   * 変更されたファイルの更新前と更新後の内容。
+   * 無いファイル(追加と削除)は`null`にする。
+   */
+  files: { path: string; before: string | null; after: string | null }[];
+  /** 更新の対象のパッケージと、更新後の版。 */
+  target: { name: string; to: string };
   mergeable: boolean;
   publishedAtIso: string;
   nowMs: number;
   minPublishedDays: number;
-  lockfile: LockfileVerdict;
-  /** `checkPackageJsonDiff`の結果。 */
-  packageJson: PackageJsonVerdict;
   /**
-   * 更新先のパッケージ自身が、新しくライフサイクルスクリプトを持つようになったか。
-   * 呼び出し側が算出する。ルートのpackage.jsonのscriptsは`checkPackageJsonDiff`が止めるので、
-   * ここは更新先パッケージ自身のライフサイクルスクリプトを指す。
+   * 更新先パッケージのscriptsのうち、preinstall、install、postinstall、prepareだけを抜き出したもの。
+   * 取得に失敗したときは`null`にする。
+   * binding.gypによる暗黙のinstallは、呼び出し側(後続のタスク)が扱う。
+   * ルートのpackage.jsonのscriptsは`checkPackageJsonDiff`が止めるので、
+   * ここは更新先パッケージ自身のスクリプトを指す。
    */
-  hasNewLifecycleScript: boolean;
+  installScripts: {
+    before: Record<string, string> | null;
+    after: Record<string, string> | null;
+  };
 };
 
 export type GateResult =
@@ -459,10 +559,95 @@ function wait(reason: string): GateResult {
 function pathProblem(paths: readonly string[]): string | null {
   if (paths.length === 0) return "no changed paths";
   for (const path of paths) {
-    if (matchesForbiddenPath(path)) return `protected path changed: ${path}`;
-    if (!ALLOWED_PATHS.includes(path)) {
-      return `path outside the allowed set changed: ${path}`;
+    if (matchesForbiddenPath(path)) {
+      return `protected path changed: ${detail(path)}`;
     }
+    if (!ALLOWED_PATHS.includes(path)) {
+      return `path outside the allowed set changed: ${detail(path)}`;
+    }
+  }
+  return null;
+}
+
+// マニフェストと、同じディレクトリのロックファイルの対応。
+const MANIFEST_LOCKFILES: readonly { manifest: string; lockfile: string }[] = [
+  { manifest: "package.json", lockfile: "bun.lock" },
+  { manifest: "console/package.json", lockfile: "console/bun.lock" },
+];
+
+/**
+ * 変更されたファイルの中身を検査し、止める理由を返す。無ければ`null`。
+ * 変更されたパスのすべてが`files`に現れ、追加と削除でなく、検査を通ることを要る。
+ * マニフェストが変わったときは、同じディレクトリのロックファイルも変わっていることを要る。
+ * ロックファイルだけが変わるとき(推移的な依存だけの更新)は、ロックファイルの検査だけで通す。
+ */
+function fileProblem(input: GateInput): string | null {
+  const { changedPaths, files, target } = input;
+  for (const path of changedPaths) {
+    const matches = files.filter((file) => file.path === path);
+    if (matches.length === 0) {
+      return `changed path was not inspected: ${detail(path)}`;
+    }
+    if (matches.length > 1) {
+      return `changed path appears more than once: ${detail(path)}`;
+    }
+  }
+  for (const { manifest, lockfile } of MANIFEST_LOCKFILES) {
+    if (changedPaths.includes(manifest) && !changedPaths.includes(lockfile)) {
+      return `${manifest} changed without ${lockfile}`;
+    }
+  }
+  for (const path of changedPaths) {
+    const file = files.find((candidate) => candidate.path === path);
+    if (file === undefined) continue;
+    if (file.before === null || file.after === null) {
+      return `file was added or deleted: ${detail(path)}`;
+    }
+    const isManifest = MANIFEST_LOCKFILES.some(
+      (pair) => pair.manifest === path,
+    );
+    const verdict = isManifest
+      ? checkPackageJsonDiff(file.before, file.after, target)
+      : checkLockfileDiff(file.before, file.after, target);
+    if (!verdict.ok) {
+      return `${detail(path)} diff rejected: ${escapeReasonSeparator(verdict.reason)}`;
+    }
+  }
+  return null;
+}
+
+const INSTALL_SCRIPT_NAMES: readonly string[] = [
+  "preinstall",
+  "install",
+  "postinstall",
+  "prepare",
+];
+
+/** 更新先パッケージが、新しくinstall時のスクリプトを持つようになったときの理由を返す。無ければ`null`。 */
+function installScriptProblem(input: GateInput): string | null {
+  const { before, after } = input.installScripts;
+  if (before === null || after === null) {
+    return "install scripts of the target could not be fetched";
+  }
+  for (const name of INSTALL_SCRIPT_NAMES) {
+    if (!Object.hasOwn(after, name)) continue;
+    if (!Object.hasOwn(before, name) || before[name] !== after[name]) {
+      return `the target adds or changes the ${name} script`;
+    }
+  }
+  return null;
+}
+
+function commitProblem(input: GateInput): string | null {
+  if (input.commits.length === 0) return "pull request has no commits";
+  for (const commit of input.commits) {
+    if (
+      commit.authorLogin !== DEPENDABOT_LOGIN ||
+      commit.committerLogin !== DEPENDABOT_LOGIN
+    ) {
+      return `a commit was not made by ${DEPENDABOT_LOGIN}: ${detail(String(commit.authorLogin))} / ${detail(String(commit.committerLogin))}`;
+    }
+    if (!commit.verified) return "a commit is not verified";
   }
   return null;
 }
@@ -478,14 +663,16 @@ function checkProblem(input: GateInput): GateResult | null {
   for (const name of input.requiredChecks) {
     const runs = input.checks.filter((check) => check.name === name);
     if (runs.length === 0) {
-      pending ??= `required check has not appeared: ${name}`;
+      pending ??= `required check has not appeared: ${detail(name)}`;
       continue;
     }
     for (const run of runs) {
       if (run.conclusion === null) {
-        pending ??= `required check is not completed: ${name}`;
+        pending ??= `required check is not completed: ${detail(name)}`;
       } else if (!PASSING_CONCLUSIONS.includes(run.conclusion)) {
-        return stop(`required check ${name} ended with ${run.conclusion}`);
+        return stop(
+          `required check ${detail(name)} ended with ${detail(run.conclusion)}`,
+        );
       }
     }
   }
@@ -496,6 +683,7 @@ function checkProblem(input: GateInput): GateResult | null {
  * 自動でmergeしてよいかを判定する。
  * fork、作者、種別、パスなどの止める条件を先に見て、待つ条件(チェックの未完了、公開日数の不足)を後に見る。
  * 止める条件が1つでもあれば、待つ条件より優先して`needs_human`を返す。
+ * 理由に埋め込むファイルやGitHub由来の文字列は、切り詰めて区切りを除いてある。
  */
 export function evaluateGate(input: GateInput): GateResult {
   if (input.headRepoFullName !== input.baseRepoFullName) {
@@ -506,27 +694,21 @@ export function evaluateGate(input: GateInput): GateResult {
     input.authorType !== DEPENDABOT_TYPE
   ) {
     return stop(
-      `author is not ${DEPENDABOT_LOGIN}: ${input.authorLogin} (${input.authorType})`,
+      `author is not ${DEPENDABOT_LOGIN}: ${detail(input.authorLogin)} (${detail(input.authorType)})`,
     );
   }
-  if (!input.allCommitsByDependabot) {
-    return stop("a commit was not made by dependabot");
-  }
+  const commits = commitProblem(input);
+  if (commits !== null) return stop(commits);
   if (input.update !== "patch" && input.update !== "minor") {
     return stop(`update kind is ${input.update}`);
   }
   const pathReason = pathProblem(input.changedPaths);
   if (pathReason !== null) return stop(pathReason);
   if (!input.mergeable) return stop("pull request is not mergeable");
-  if (!input.lockfile.ok) {
-    return stop(`lockfile diff rejected: ${input.lockfile.reason}`);
-  }
-  if (!input.packageJson.ok) {
-    return stop(`package.json diff rejected: ${input.packageJson.reason}`);
-  }
-  if (input.hasNewLifecycleScript) {
-    return stop("a new lifecycle script was added");
-  }
+  const files = fileProblem(input);
+  if (files !== null) return stop(files);
+  const scripts = installScriptProblem(input);
+  if (scripts !== null) return stop(scripts);
   if (parsePublishedAt(input.publishedAtIso) === null) {
     return stop("publish date is invalid");
   }
@@ -564,15 +746,24 @@ export type ImpactAssessment = {
   unverified: string[];
 };
 
-function isStringArray(value: unknown): value is string[] {
+const MAX_EVIDENCE_CHARS = 4000;
+const MAX_LIST_ITEMS = 20;
+const MAX_ITEM_CHARS = 500;
+
+function isBoundedStringArray(value: unknown): value is string[] {
   return (
-    Array.isArray(value) && value.every((item) => typeof item === "string")
+    Array.isArray(value) &&
+    value.length <= MAX_LIST_ITEMS &&
+    value.every(
+      (item) => typeof item === "string" && item.length <= MAX_ITEM_CHARS,
+    )
   );
 }
 
 /**
  * Claudeの構造化出力を影響の評価として検証する。
- * 形が違うときは例外にして、未検証の値を後続の判断に渡さない。
+ * 形が違うとき、根拠が空のとき、長さと件数の上限を超えるときは例外にして、
+ * 未検証の値や際限なく長い値を後続の判断とコメントに渡さない。
  * 未知のキーは捨てる。
  */
 export function parseImpactAssessment(raw: unknown): ImpactAssessment {
@@ -581,14 +772,46 @@ export function parseImpactAssessment(raw: unknown): ImpactAssessment {
   if (impact !== "none" && impact !== "impact") {
     throw new Error("impact assessment has an invalid impact");
   }
-  if (typeof evidence !== "string") {
+  if (
+    typeof evidence !== "string" ||
+    evidence.trim().length === 0 ||
+    evidence.length > MAX_EVIDENCE_CHARS
+  ) {
     throw new Error("impact assessment has an invalid evidence");
   }
-  if (!isStringArray(supplyChainConcerns)) {
+  if (!isBoundedStringArray(supplyChainConcerns)) {
     throw new Error("impact assessment has an invalid supplyChainConcerns");
   }
-  if (!isStringArray(unverified)) {
+  if (!isBoundedStringArray(unverified)) {
     throw new Error("impact assessment has an invalid unverified");
   }
   return { impact, evidence, supplyChainConcerns, unverified };
+}
+
+export type ImpactOutcome = {
+  outcome: "merge" | "fix" | "needs_human";
+  reason: string;
+};
+
+/**
+ * 影響の評価から次の動作を決める。
+ * サプライチェーンの懸念か未検証の項目が1つでもあれば、人に渡す。
+ * 懸念も未検証も無いときは、影響が無ければmerge、あれば修正に進む。
+ */
+export function decideImpactOutcome(a: ImpactAssessment): ImpactOutcome {
+  if (a.supplyChainConcerns.length > 0) {
+    return {
+      outcome: "needs_human",
+      reason: `${a.supplyChainConcerns.length} supply chain concern(s) were reported`,
+    };
+  }
+  if (a.unverified.length > 0) {
+    return {
+      outcome: "needs_human",
+      reason: `${a.unverified.length} unverified item(s) remain`,
+    };
+  }
+  return a.impact === "none"
+    ? { outcome: "merge", reason: "no impact and nothing is left unverified" }
+    : { outcome: "fix", reason: "the update affects this repository" };
 }

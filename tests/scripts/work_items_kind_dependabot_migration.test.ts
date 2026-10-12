@@ -1,4 +1,4 @@
-// `20261012014318_work_items_kind_dependabot`のmigrationが、kindのCHECK制約を静的に確かめる。
+// このテストは、`20261012014318_work_items_kind_dependabot`のmigrationが定めるkindのCHECK制約を静的に確かめる。
 // 制約が実際にdependabotを受け付けることと、downで戻せることは`mise run test:db`が確かめる。
 
 import { describe, expect, test } from "bun:test";
