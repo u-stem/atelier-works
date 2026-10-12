@@ -62,6 +62,7 @@ shopt -u nullglob
 ACTIVE_ISSUE_MIGRATION="20261009120000_active_issue_key.up.sql"
 NOTICES_DEDUP_MIGRATION="20261011170000_notices_unresolved_dedup.up.sql"
 DISK_USAGE_NOTICE_MIGRATION="20261013100300_disk_usage_notice_single.up.sql"
+PR_CI_FIX_SCHEMA_MIGRATION="20261013100400_pr_ci_fix_schema.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -326,10 +327,12 @@ SQL
 }
 
 # CIの失敗を直す仕組みの土台のmigrationが、状態`fixing`を受け入れ、不正な状態、負の回数、長すぎる保留の理由を拒み、
-# 戻したときに`fixing`の行を`failed`へ移して列を落とし、もう一度適用できることを確かめる。
+# 同じPRで終端でないpr_fixを1件までにし、終端のpr_fixとは共存できることと、
+# 戻したときに`fixing`の行だけを`failed`へ移して列と索引を落とし、もう一度適用できることを確かめる。
+# このmigrationの適用直後に呼ぶ。もう一度適用し直すので、最新のmigrationでなくなったときは呼ぶ位置を見直すこと。
 verify_pr_ci_fix_schema() {
-  local up_file="${MIGRATIONS_DIR}/20261013100400_pr_ci_fix_schema.up.sql"
-  local down_file="${MIGRATIONS_DIR}/20261013100400_pr_ci_fix_schema.down.sql"
+  local up_file="${MIGRATIONS_DIR}/${PR_CI_FIX_SCHEMA_MIGRATION}"
+  local down_file="${MIGRATIONS_DIR}/${PR_CI_FIX_SCHEMA_MIGRATION%.up.sql}.down.sql"
   [ -f "${up_file}" ] || die "missing migration: ${up_file}"
   [ -f "${down_file}" ] || die "missing migration: ${down_file}"
   local sha
@@ -362,11 +365,12 @@ verify_pr_ci_fix_schema() {
   expect_rejected "${insert_prefix}) VALUES ('fixprobe', 'r', 3, '${sha}', 'bogus')" pr_ci_checks_state_check
   expect_rejected "${insert_prefix}, fix_attempts) VALUES ('fixprobe', 'r', 3, '${sha}', 'failed', -1)" pr_ci_checks_fix_attempts_check
   expect_rejected "${insert_prefix}, fix_hold_reason) VALUES ('fixprobe', 'r', 3, '${sha}', 'failed', repeat('x', 65))" pr_ci_checks_fix_hold_reason_length_check
+  expect_rejected "${insert_prefix}, fix_hold_reason) VALUES ('fixprobe', 'r', 3, '${sha}', 'failed', '')" pr_ci_checks_fix_hold_reason_check
   printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status, ci_check_id) VALUES (1, 'issue', 'issue', 'fixprobe', 'r', 1, 'https://github.com/fixprobe/r/issues/1', 't', 'failed', 5);\n" \
     | psql_exec "${SCRATCH_DB}" >/dev/null || die "a work item with ci_check_id was rejected"
-  local work_item_columns
-  work_item_columns="$(scalar "SELECT ci_check_id FROM factory.work_items WHERE owner = 'fixprobe'")"
-  [ "${work_item_columns}" = "5" ] || die "expected ci_check_id to be stored, got '${work_item_columns}'"
+  local stored_ci_check_id
+  stored_ci_check_id="$(scalar "SELECT ci_check_id FROM factory.work_items WHERE owner = 'fixprobe'")"
+  [ "${stored_ci_check_id}" = "5" ] || die "expected ci_check_id to be stored, got '${stored_ci_check_id}'"
   local index_def
   index_def="$(scalar "SELECT indexdef FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_ci_check_id_idx'")"
   case "${index_def}" in
@@ -375,15 +379,34 @@ verify_pr_ci_fix_schema() {
   esac
   printf "DELETE FROM factory.work_items WHERE owner = 'fixprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
 
-  # 戻すと、fixingの行はfailedになり、足した列と索引が消える。
+  # 同じPRで終端でないpr_fixは1件までで、終端のpr_fixや別の種別、別のPRとは共存できる。
+  local pr_fix_insert="INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES (1, 'issue', 'pr_fix', 'fixprobe', 'r'"
+  printf "%s, 1, 't', 'implementing');\n" "${pr_fix_insert}" | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "the first active pr_fix was rejected"
+  expect_rejected "${pr_fix_insert}, 1, 't', 'reviewing')" work_items_active_pr_fix_key
+  printf "%s, 1, 't', 'rereview_requested'), (1, 'issue', 'pr_fix', 'fixprobe', 'r', 1, 't', 'cancelled'), (1, 'issue', 'pr_review', 'fixprobe', 'r', 1, 't', 'reviewing'), (1, 'issue', 'pr_fix', 'fixprobe', 'r', 2, 't', 'implementing');\n" "${pr_fix_insert}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "terminal pr_fix rows, a pr_review row, or a pr_fix of another PR was rejected"
+  printf "%s, NULL, 't', 'implementing'), (1, 'issue', 'pr_fix', 'fixprobe', 'r', NULL, 't', 'implementing');\n" "${pr_fix_insert}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "pr_fix rows without pr_number were rejected"
+  printf "DELETE FROM factory.work_items WHERE owner = 'fixprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+
+  # 戻すと、fixingの行だけがfailedになり、足した列と索引が消える。
+  printf "%s) VALUES ('fixprobe', 'r', 5, '%s', 'passed');\n" "${insert_prefix}" "${sha}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a passed row was rejected"
   log "rolling back pr_ci_fix_schema"
   psql_exec "${SCRATCH_DB}" -q <"${down_file}" >/dev/null || die "could not roll back pr_ci_fix_schema"
   local moved
   moved="$(scalar "SELECT state FROM factory.pr_ci_checks WHERE owner = 'fixprobe' AND pr_number = 1")"
   [ "${moved}" = "failed" ] || die "expected the fixing row to become failed after the rollback, got '${moved}'"
+  local kept
+  kept="$(scalar "SELECT state FROM factory.pr_ci_checks WHERE owner = 'fixprobe' AND pr_number = 5")"
+  [ "${kept}" = "passed" ] || die "expected the passed row to stay passed after the rollback, got '${kept}'"
   local remaining
   remaining="$(scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND ((table_name = 'pr_ci_checks' AND column_name IN ('fix_work_item_id', 'fix_attempts', 'fix_hold_reason')) OR (table_name = 'work_items' AND column_name = 'ci_check_id'))")"
   [ "${remaining}" = "0" ] || die "expected the four columns to be dropped by the rollback, ${remaining} remain"
+  local indexes
+  indexes="$(scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname IN ('work_items_ci_check_id_idx', 'work_items_active_pr_fix_key')")"
+  [ "${indexes}" = "0" ] || die "expected the two indexes to be dropped by the rollback, ${indexes} remain"
   expect_rejected "${insert_prefix}) VALUES ('fixprobe', 'r', 4, '${sha}', 'fixing')" pr_ci_checks_state_check
 
   # もう一度適用すると、足した列が戻り、fixingを再び受け入れる。
@@ -391,6 +414,8 @@ verify_pr_ci_fix_schema() {
   psql_exec "${SCRATCH_DB}" -q <"${up_file}" >/dev/null || die "could not re-apply pr_ci_fix_schema"
   remaining="$(scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND ((table_name = 'pr_ci_checks' AND column_name IN ('fix_work_item_id', 'fix_attempts', 'fix_hold_reason')) OR (table_name = 'work_items' AND column_name = 'ci_check_id'))")"
   [ "${remaining}" = "4" ] || die "expected the four columns after re-applying, found ${remaining}"
+  indexes="$(scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname IN ('work_items_ci_check_id_idx', 'work_items_active_pr_fix_key')")"
+  [ "${indexes}" = "2" ] || die "expected the two indexes after re-applying, found ${indexes}"
   printf "%s) VALUES ('fixprobe', 'r', 4, '%s', 'fixing');\n" "${insert_prefix}" "${sha}" \
     | psql_exec "${SCRATCH_DB}" >/dev/null || die "a fixing row was rejected after re-applying"
   printf "DELETE FROM factory.pr_ci_checks WHERE owner = 'fixprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
@@ -418,6 +443,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${DISK_USAGE_NOTICE_MIGRATION}" ]; then
     verify_disk_usage_notice_index
+  fi
+  if [ "${up_name}" = "${PR_CI_FIX_SCHEMA_MIGRATION}" ]; then
+    verify_pr_ci_fix_schema
   fi
 done
 
@@ -460,8 +488,6 @@ log "running the application queries against '${SCRATCH_DB}'"
 COMPOSE_FILE="${COMPOSE_FILE}" SCRATCH_DB="${SCRATCH_DB}" \
   bun run "${REPO_ROOT}/scripts/test-db-queries.ts" \
   || die "the application queries failed against the real PostgreSQL"
-
-verify_pr_ci_fix_schema
 
 shopt -s nullglob
 down_files=("${MIGRATIONS_DIR}"/*.down.sql)

@@ -3,10 +3,33 @@
 // 実際に適用して戻せること、制約が効くことは`mise run test:db`が確かめる。
 
 import { describe, expect, test } from "bun:test";
+import { PR_CI_STATES } from "../../f/factory/lib/pr_ci_support.ts";
+import {
+  TERMINAL_WORK_ITEM_STATUSES,
+  WORK_ITEM_STATUSES,
+} from "../../f/factory/lib/types.ts";
 
 const DIR = "migrations/datatable/main";
 const UP = `${DIR}/20261013100400_pr_ci_fix_schema.up.sql`;
 const DOWN = `${DIR}/20261013100400_pr_ci_fix_schema.down.sql`;
+
+function quotedValues(list: string): string[] {
+  return [...list.matchAll(/'([a-z_]+)'/g)].map((m) => m[1] ?? "");
+}
+
+function stateCheckStates(sql: string): string[] {
+  const match = sql.match(
+    /ADD CONSTRAINT pr_ci_checks_state_check\s+CHECK \(state IN \(([^)]*)\)\)/,
+  );
+  return quotedValues(match?.[1] ?? "");
+}
+
+function activePrFixStatuses(sql: string): string[] {
+  const match = sql.match(
+    /CREATE UNIQUE INDEX work_items_active_pr_fix_key[\s\S]*?status IN \(([^)]*)\)/,
+  );
+  return quotedValues(match?.[1] ?? "");
+}
 
 describe("20261013100400_pr_ci_fix_schema.up.sql", () => {
   test("starts a transaction", async () => {
@@ -27,6 +50,16 @@ describe("20261013100400_pr_ci_fix_schema.up.sql", () => {
     expect(await Bun.file(UP).text()).toContain(
       "ADD CONSTRAINT pr_ci_checks_state_check\n    CHECK (state IN ('pending', 'passed', 'failed', 'superseded', 'expired', 'no_ci', 'observed', 'fixing'));",
     );
+  });
+
+  test("accepts every state the application knows", async () => {
+    const states = stateCheckStates(await Bun.file(UP).text());
+    expect(PR_CI_STATES.filter((state) => !states.includes(state))).toEqual([]);
+  });
+
+  test("accepts only the known states and fixing", async () => {
+    const states = stateCheckStates(await Bun.file(UP).text());
+    expect([...states].sort()).toEqual([...PR_CI_STATES, "fixing"].sort());
   });
 
   test("drops the old state check before adding the new one", async () => {
@@ -65,6 +98,12 @@ describe("20261013100400_pr_ci_fix_schema.up.sql", () => {
     );
   });
 
+  test("rejects an empty fix_hold_reason", async () => {
+    expect(await Bun.file(UP).text()).toContain(
+      "ADD CONSTRAINT pr_ci_checks_fix_hold_reason_check CHECK (fix_hold_reason <> '')",
+    );
+  });
+
   test("adds ci_check_id to work_items as a nullable bigint", async () => {
     expect(await Bun.file(UP).text()).toContain(
       "ALTER TABLE factory.work_items\n    ADD COLUMN ci_check_id bigint;",
@@ -74,6 +113,21 @@ describe("20261013100400_pr_ci_fix_schema.up.sql", () => {
   test("indexes only the work items that belong to a CI round", async () => {
     expect(await Bun.file(UP).text()).toContain(
       "CREATE INDEX work_items_ci_check_id_idx ON factory.work_items (ci_check_id) WHERE ci_check_id IS NOT NULL;",
+    );
+  });
+
+  test("creates the unique index over owner, repo and pr_number for pr_fix", async () => {
+    expect(await Bun.file(UP).text()).toContain(
+      "CREATE UNIQUE INDEX work_items_active_pr_fix_key\n    ON factory.work_items (owner, repo, pr_number)\n    WHERE kind = 'pr_fix' AND status IN (",
+    );
+  });
+
+  test("lists exactly the statuses that are not terminal in the pr_fix index", async () => {
+    const nonTerminal = WORK_ITEM_STATUSES.filter(
+      (status) => !TERMINAL_WORK_ITEM_STATUSES.includes(status),
+    );
+    expect(activePrFixStatuses(await Bun.file(UP).text()).sort()).toEqual(
+      [...nonTerminal].sort(),
     );
   });
 
@@ -95,6 +149,10 @@ describe("20261013100400_pr_ci_fix_schema.down.sql", () => {
     expect((await Bun.file(DOWN).text()).trimEnd().endsWith("END;")).toBe(true);
   });
 
+  test("moves only fixing rows to failed", async () => {
+    expect(await Bun.file(DOWN).text()).toContain("WHERE state = 'fixing'");
+  });
+
   test("moves fixing rows to failed before narrowing the state check", async () => {
     const text = await Bun.file(DOWN).text();
     const update = text.indexOf("SET state = 'failed'");
@@ -108,9 +166,15 @@ describe("20261013100400_pr_ci_fix_schema.down.sql", () => {
     );
   });
 
-  test("drops the index", async () => {
+  test("drops the ci_check_id index", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
       "DROP INDEX factory.work_items_ci_check_id_idx;",
+    );
+  });
+
+  test("drops the pr_fix index", async () => {
+    expect(await Bun.file(DOWN).text()).toContain(
+      "DROP INDEX factory.work_items_active_pr_fix_key;",
     );
   });
 
