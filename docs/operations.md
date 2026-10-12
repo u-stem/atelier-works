@@ -2342,6 +2342,7 @@ DBの掃除のスケジュール(`cleanup_db`、毎日03:30)が、保持期間�
 | 監査の作業項目とレポート・提案 | 監査完了(`audited`)から90日 | `retention_work_items_days` |
 | 失敗の記録、デプロイの記録、解決済みの通知(解決の時刻から数える) | 30日 | `retention_logs_days` |
 | 判定済みのmainのCIの記録(最後の更新から数える。判定を待つ記録と、各リポジトリの最新の記録は消さない) | 30日 | `retention_logs_days` |
+| 判定済みのPRのCIの記録(最後の更新から数える。判定を待つ記録は消さない。各PRの最新の記録は、保持期間の4倍まで残す) | 30日(各PRの最新の記録は120日) | `retention_logs_days` |
 | workerの負荷の記録(測った時刻から数える) | 30日 | `retention_logs_days` |
 
 workerの負荷の記録(`worker_samples`)は、測った時刻(`sampled_at`)から30日を過ぎた行をすべて消す。

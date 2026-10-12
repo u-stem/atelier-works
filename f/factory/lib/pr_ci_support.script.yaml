@@ -1,0 +1,10 @@
+summary: '[LIB] PRのCIの判定の純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。FactoryのPRのGitHub
+  Actionsの実行をheadのコミット単位で判定する、状態の遷移、新しいheadの発見、通知の固定文、ブランチの照合のロジックです。
+lock: '!inline f/factory/lib/pr_ci_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

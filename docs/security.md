@@ -1682,15 +1682,35 @@ gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し
 
 ### PRの状態とheadの確認
 
-準備のステップで、PRについて次の4点を確かめる。
+準備のステップで、PRについて次の8点を確かめる。
 
 - openである。
 - forkからでない。
 - draftでない。
-- baseが保護ブランチでない。
+- auto-mergeが有効でない。
+- headのブランチの状態を読める。
+- headのブランチがリポジトリのデフォルトブランチでない。
+- headのブランチが保護ブランチでない。
+- headのブランチにrulesetのruleが適用されていない。
 
-通らなければ、worktreeを作らずにブロック(`blocked`)で止める。
-forkのブランチと保護されたbaseにはFactoryがpushしてはならず、draftのPRは作者がまだ作業しているためである。
+状態を読めない場合を除き、通らなければ、worktreeを作らずにブロック(`blocked`)で止める。
+forkのブランチ、保護ブランチ、デフォルトブランチにはFactoryがpushしてはならず、draftのPRは作者がまだ作業しているためである。
+auto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマージされうるので、有効なPRは止める。
+修正でpushするのはheadのブランチで、baseではない。
+そのため、baseが保護されていても、headが普通のブランチなら通る。
+保護の有無は、GitHubのbranches APIの`protected`で読む。
+`main`を保護するruleset(対象は既定のブランチ)は、`protected: true`として返ることを確かめた。
+globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていない。
+そのため、`GET repos/{owner}/{repo}/rules/branches/{branch}`でheadのブランチに効くrulesetの規則も読み、1件でもあれば止める。
+ruleの種類は問わずに止める。
+止めすぎは安全側で、`protected`に反映されないrulesetを見落とさないためである。
+headのブランチの状態を読めなかったときは、例外になって作業項目が失敗(`failed`)になり、`job_failed`で通知する。
+どの場合も、worktreeを作る前に止まる。
+
+残るリスクとして、準備からpushまでの間に、PRのauto-mergeを有効にされたり、headのブランチを保護されたりする窓が残る。
+pushの直前に確かめ直すのはheadのshaだけで、auto-mergeと保護は読み直さないためである。
+窓は修正の実行時間ほどの長さになる。
+auto-mergeの有効化にもGitHubの書き込み権限が要るので、受け入れる。
 
 pushの直前には、PRのheadが準備のときから変わっていないことだけを確かめ直す。
 変わっていれば、pushせずにブロックで止める。
@@ -1763,7 +1783,7 @@ symlinkの作成・変更・削除があれば、人の対応待ちにする。�
 
 ### 保護ブランチのガードは使わない
 
-baseが保護ブランチなら止めるガードは、実装フローには適用しない。実装フローは保護されたbaseに直接pushせず、PRを作るだけのためである。
+headが保護ブランチなら止めるガードは、実装フローには適用しない。実装フローはPRごとに新しいブランチを作ってpushし、保護されたbaseやデフォルトブランチには直接pushしないためである。
 
 ### gitleaksで毎ラウンド検査する
 

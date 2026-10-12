@@ -978,3 +978,10 @@ export type FactoryConfig = {
    */
   check_commands_by_repo: Record<string, string[]>;
 };
+
+/** 実装ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを返す。形が違えばnull。pr_fixが、親の行が無くても同じブランチの実装フローを見つけるのに使う。PRのCIの判定も、Factoryのブランチかの照合に使う。 */
+export function parseImplementBranchWorkItemId(branch: string): number | null {
+  const match = /^factory\/issue-[1-9]\d*-wi-([1-9]\d*)$/.exec(branch);
+  const id = match?.[1] === undefined ? Number.NaN : Number(match[1]);
+  return Number.isSafeInteger(id) ? id : null;
+}

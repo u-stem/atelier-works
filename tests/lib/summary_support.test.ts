@@ -146,6 +146,7 @@ describe("getCleanupSummary", () => {
           info_notices_resolved: 0,
           main_ci_runs_deleted: 0,
           worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -167,6 +168,7 @@ describe("getCleanupSummary", () => {
           info_notices_resolved: "0",
           main_ci_runs_deleted: "0",
           worker_samples_deleted: "0",
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: "0",
         },
       ],
@@ -181,6 +183,7 @@ describe("getCleanupSummary", () => {
       info_notices_resolved: 0,
       main_ci_runs_deleted: 0,
       worker_samples_deleted: 0,
+      pr_ci_checks_deleted: 0,
       doc_dirs_deleted: 0,
     });
   });
@@ -198,6 +201,7 @@ describe("getCleanupSummary", () => {
           info_notices_resolved: "4",
           main_ci_runs_deleted: 0,
           worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -219,6 +223,7 @@ describe("getCleanupSummary", () => {
           info_notices_resolved: 0,
           main_ci_runs_deleted: "9",
           worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -240,6 +245,7 @@ describe("getCleanupSummary", () => {
           info_notices_resolved: 0,
           main_ci_runs_deleted: 0,
           worker_samples_deleted: "1440",
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -258,6 +264,34 @@ describe("getCleanupSummary", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await getCleanupSummary(RANGE, sql);
     expect(calls[0]?.text).toContain("sum(main_ci_runs_deleted)");
+  });
+
+  test("sums the deleted pr ci checks", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
+          pr_ci_checks_deleted: "7",
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary?.pr_ci_checks_deleted).toBe(7);
+  });
+
+  test("selects the pr_ci_checks_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("sum(pr_ci_checks_deleted)");
   });
 
   test("selects the info_notices_resolved column", async () => {
@@ -279,6 +313,7 @@ describe("getCleanupSummary", () => {
           info_notices_resolved: 0,
           main_ci_runs_deleted: 0,
           worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],

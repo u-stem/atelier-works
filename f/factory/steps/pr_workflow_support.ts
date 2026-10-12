@@ -12,7 +12,11 @@ import {
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
+import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import {
+  type GhClient,
+  getBranchProtected,
+  getBranchRuleCount,
   isOwnPost,
   type PrReview,
   type ReviewThread,
@@ -883,13 +887,71 @@ export type PrFixSafetyGuardInput = {
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
   readonly draft: boolean;
-  readonly baseProtected: boolean;
+  readonly autoMergeEnabled: boolean;
+  /** 読まなかったときは`null`。openで同一リポジトリのdraftでないPRに`null`が来たら止める。 */
+  readonly headBranch: PrFixHeadBranchState | null;
+};
+
+export type PrFixHeadBranchState = {
+  /** branches APIの`protected`。 */
+  readonly headProtected: boolean;
+  /** headブランチに効くrulesetの規則が1件以上ある。globで対象を指定したrulesetも含む。 */
+  readonly headHasRules: boolean;
+  readonly headIsDefaultBranch: boolean;
 };
 
 /**
- * 修正を試みる前の4つの安全のための関門を判定する。
+ * headブランチの状態を読む対象のPRかを判定する。
+ * forkや閉じたPRのheadはこのリポジトリに無いことがあり、読むと失敗する。
+ * draftは次の関門が先に止めるので、読まずに理由をそのまま残す。
+ */
+export function shouldReadPrFixHeadState(
+  open: boolean,
+  draft: boolean,
+  headRepoFullName: string | null,
+  baseRepoFullName: string,
+): boolean {
+  return (
+    open &&
+    !draft &&
+    evaluateSameRepoHeadGuard(headRepoFullName, baseRepoFullName).ok
+  );
+}
+
+/**
+ * PRのheadブランチが保護ブランチか、リポジトリのデフォルトブランチかを読む。
+ * pr_fixがpushするのはheadブランチなので、baseの保護は見ない。
+ * mainを保護するruleset(対象は既定のブランチ)は`protected: true`として返ることを確かめた。
+ * globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていないので、
+ * ブランチに効くrulesetの規則も別に読み、1件でもあれば止める。
+ * 呼び出し側は、`shouldReadPrFixHeadState`が真のPRにだけ使う。
+ * 読めなければ例外を投げる。
+ */
+export async function fetchPrFixHeadBranchState(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  headRef: string,
+): Promise<PrFixHeadBranchState> {
+  const headProtected = await getBranchProtected(client, owner, repo, headRef);
+  const ruleCount = await getBranchRuleCount(client, owner, repo, headRef);
+  const defaultBranch = await getDefaultBranch(client, owner, repo);
+  return {
+    headProtected,
+    headHasRules: ruleCount > 0,
+    headIsDefaultBranch: headRef === defaultBranch,
+  };
+}
+
+/**
+ * 修正を試みる前の安全のための関門を、open、fork、draft、auto-merge、
+ * headの状態、デフォルトブランチ、保護ブランチの順に判定する。
  * PRがopenであること、head.repoとbase.repoが同じであること(forkへpushしない)、
- * draftでないこと、baseブランチが保護されていないこと。
+ * draftでないこと、auto-mergeが有効でないこと、
+ * headブランチがデフォルトブランチでも保護ブランチでもなく、rulesetのruleも効いていないこと。
+ * auto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマージされうる。
+ * 読めなければ`fetchPrFixHeadBranchState`が例外を投げるので、`null`は通常は届かない。
+ * `null`の分岐は、呼び出し側が読み忘れたときに備える多層防御である。
  * worktreeを作る前、Claudeを実行する前に確かめる。
  * 実際にpushする直前には、`workspace.ts`の`commitAndPush`が
  * headのshaが動いていないことを別に確かめ直す。
@@ -910,8 +972,23 @@ export function evaluatePrFixSafetyGuards(
   if (input.draft) {
     return { ok: false, reason: "pull request is a draft" };
   }
-  if (input.baseProtected) {
-    return { ok: false, reason: "base branch is protected" };
+  if (input.autoMergeEnabled) {
+    return { ok: false, reason: "pull request has auto-merge enabled" };
+  }
+  // 読み忘れても通さない多層防御。通常は`fetchPrFixHeadBranchState`の例外が先に出る。
+  if (input.headBranch === null) {
+    return { ok: false, reason: "head branch state is unavailable" };
+  }
+  // デフォルトブランチは保護されていることが多いので、区別できるように先に判定する。
+  if (input.headBranch.headIsDefaultBranch) {
+    return { ok: false, reason: "head branch is the default branch" };
+  }
+  if (input.headBranch.headProtected) {
+    return { ok: false, reason: "head branch is protected" };
+  }
+  // ruleの種類は問わずに止める。止めすぎは安全側で、`protected`に反映されないrulesetを見落とさないため。
+  if (input.headBranch.headHasRules) {
+    return { ok: false, reason: "head branch has rules" };
   }
   return { ok: true };
 }
@@ -2616,7 +2693,7 @@ export type PrFixFinalAction =
  * `pr_fix_finish.ts`が取るべき終端の動作に振り分ける。
  *
  * `guard_blocked`(prepareの、PRがopen・forkでない・draftでない・
- * 保護ブランチでないという関門と、prepareかverifyがworkerのイメージが古く検査を実行できないと分かったとき)は、
+ * headブランチが保護ブランチでもデフォルトブランチでもないという関門と、prepareかverifyがworkerのイメージが古く検査を実行できないと分かったとき)は、
  * `docs/internals/pr-workflow.md`の「準備での確認」のとおり`work_items`の`"blocked"`にする。修正のラウンドは記録しない。
  * `blocked`(Claude自身の判断か、`pr_fix_verify`が検出した禁止ファイルや
  * 検査コマンドの失敗)は`"needs_human"`にする。
@@ -3551,9 +3628,39 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => `ドラフトを解除してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
+    pattern: /^head branch is the default branch$/,
+    describe: () => "headブランチがデフォルトブランチです",
+    nextAction: () =>
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+  },
+  {
+    pattern: /^head branch is protected$/,
+    describe: () => "headブランチが保護されています",
+    nextAction: () =>
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+  },
+  {
+    pattern: /^head branch has rules$/,
+    describe: () => "headブランチに適用されるrulesetのruleがあります",
+    nextAction: () =>
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+  },
+  {
+    pattern: /^pull request has auto-merge enabled$/,
+    describe: () => "PRのauto-mergeが有効です",
+    nextAction: () =>
+      "PRのauto-mergeを無効にしてから、あらためて`factory:fix`ラベルを付けてください",
+  },
+  {
+    pattern: /^head branch state is unavailable$/,
+    describe: () => "headブランチの状態を読めませんでした",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
+  },
+  // 現在の関門は返さないが、DBに残る過去の理由を表示するために残す。
+  {
     pattern: /^base branch is protected$/,
     describe: () => "baseブランチが保護されています",
-    nextAction: () => "baseブランチの保護設定を確認してください",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
   },
   {
     pattern:
