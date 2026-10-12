@@ -341,6 +341,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/drawio_viewer_bump_github` | script | [LIB] draw.ioのビューアの更新のGitHub操作 |
 | `f/factory/lib/drawio_viewer_observations` | script | [LIB] draw.ioのリリースの観測の記録 |
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
+| `f/factory/lib/factory_clone` | script | [LIB] Factory自身のcloneの用意 |
+| `f/factory/lib/factory_repo_gate` | script | [LIB] Factory自身のリポジトリの照合 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
