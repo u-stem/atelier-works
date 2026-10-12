@@ -25,6 +25,7 @@ import {
   prCiNextAction,
   prCiNoticePrefix,
   prCiSummary,
+  pullRequestPageUrl,
 } from "../../f/factory/lib/pr_ci_support.ts";
 
 const SHA_A = "a".repeat(40);
@@ -1005,5 +1006,21 @@ describe("prCiSummary", () => {
     expect(prCiSummary([run({ conclusion: "failure" })])).not.toContain(
       "前のコミット",
     );
+  });
+});
+
+describe("pullRequestPageUrl", () => {
+  test("builds the pull request page url", () => {
+    expect(pullRequestPageUrl("acme", "widgets", 12)).toBe(
+      "https://github.com/acme/widgets/pull/12",
+    );
+  });
+
+  test("rejects an owner that is not a GitHub name", () => {
+    expect(() => pullRequestPageUrl("ac me", "widgets", 12)).toThrow();
+  });
+
+  test("rejects a pull request number that is not positive", () => {
+    expect(() => pullRequestPageUrl("acme", "widgets", 0)).toThrow();
   });
 });

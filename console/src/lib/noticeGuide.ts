@@ -334,6 +334,26 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
       },
     ),
   ],
+  [
+    "pr_ci_failed",
+    guide(
+      "Factoryが作ったPRのheadのコミットで、CI(GitHub Actionsのpull_requestかpushの実行)が失敗しました。本文に、PR、コミットの先頭7文字、理由、失敗した実行のリンクが載ります。",
+      "リンク先の実行のログで原因を確かめ、PRに修正を入れてください。取り消しやフレークなら、実行をやり直します。",
+      {
+        note: "同じheadの実行をやり直して通ると、自動で解決されます。PRにpushして新しいheadが通ったときと、PRを閉じたときも自動で解決されます。",
+      },
+    ),
+  ],
+  [
+    "pr_ci_check_denied",
+    guide(
+      "対象リポジトリのPRとCIの実行を、GitHubから読めませんでした(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできません。読めない間は、そのリポジトリのPRのCIの失敗に気づけません。",
+      "GitHubのfine-grained PATの設定で、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめてください。権限を足してもPATの値は変わらないので、Windmillの変数を更新する必要はありません。組織のリポジトリでは、組織の承認が再び要ることがあります。",
+      {
+        note: "権限を足して読めるようになると、次の回に自動で解決されます。",
+      },
+    ),
+  ],
 ]);
 
 /** `kind`の説明。表に無い種類は`GENERIC_NOTICE_GUIDE`を返す。 */

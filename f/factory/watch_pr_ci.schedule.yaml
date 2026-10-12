@@ -1,0 +1,13 @@
+summary: '[SF-4-2] PRのCIを監視して失敗を通知'
+description: >-
+  5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。観測と通知だけで、PRには書き込みません。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 0 */5 * * * *
+script_path: f/factory/watch_pr_ci
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

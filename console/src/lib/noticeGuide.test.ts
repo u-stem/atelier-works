@@ -24,6 +24,14 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells how to read the failed run of the pull request CI", () => {
+    expect(noticeGuide("pr_ci_failed").action).toContain("実行のログ");
+  });
+
+  test("tells which permission the denied pull request CI check needs", () => {
+    expect(noticeGuide("pr_ci_check_denied").action).toContain("Actions: Read");
+  });
+
   test("says a busy worktree keeps one notice open, not a new one each day", () => {
     expect(noticeGuide("cleanup_worktree_busy").action).toContain(
       "同じ通知が1件残り続けます",

@@ -2120,6 +2120,11 @@ export type PullRequest = {
   readonly headRef: string;
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
+  /**
+   * ベースのリポジトリのID。実行のheadのリポジトリとIDで比べるために使う。
+   * 無いか、正の安全な整数でなければ`null`。
+   */
+  readonly baseRepoId: number | null;
   readonly baseRef: string;
   /** GitHubがまだ計算していないときは`null`。真偽に丸めない。 */
   readonly mergeable: boolean | null;
@@ -2145,7 +2150,10 @@ type PrPayload = {
   };
   readonly base: {
     readonly ref: string;
-    readonly repo: { readonly full_name: unknown } | null;
+    readonly repo: {
+      readonly full_name: unknown;
+      readonly id?: unknown;
+    } | null;
   };
   readonly mergeable: unknown;
   readonly mergeable_state: unknown;
@@ -2205,6 +2213,13 @@ export async function getPr(
     parsed.base.repo !== null && typeof parsed.base.repo.full_name === "string"
       ? parsed.base.repo.full_name
       : "";
+  const baseRepoIdRaw = parsed.base.repo?.id;
+  const baseRepoId =
+    typeof baseRepoIdRaw === "number" &&
+    Number.isSafeInteger(baseRepoIdRaw) &&
+    baseRepoIdRaw > 0
+      ? baseRepoIdRaw
+      : null;
   return {
     number: parsed.number,
     title: parsed.title,
@@ -2216,6 +2231,7 @@ export async function getPr(
     headRef: parsed.head.ref,
     headRepoFullName,
     baseRepoFullName,
+    baseRepoId,
     baseRef: parsed.base.ref,
     mergeable: typeof parsed.mergeable === "boolean" ? parsed.mergeable : null,
     mergeableState:

@@ -354,11 +354,15 @@ function assertPullRequestNumber(prNumber: number): void {
   }
 }
 
-function pullRequestPageUrl(
+/** PRのページのURL。`owner`と`repo`はGitHubの名前の形で、`prNumber`は正の整数でなければ例外を投げる。 */
+export function pullRequestPageUrl(
   owner: string,
   repo: string,
   prNumber: number,
 ): string {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  assertPullRequestNumber(prNumber);
   return `https://github.com/${owner}/${repo}/pull/${String(prNumber)}`;
 }
 

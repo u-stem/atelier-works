@@ -38,6 +38,7 @@ import {
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
@@ -53,6 +54,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  setWorkItemPrUrl,
   touchPrCiCheck,
   transitionMainCiRun,
   transitionPrCiCheck,
@@ -3364,6 +3366,60 @@ check(
   stopAtStartSummary?.gap_longest_to?.toISOString() ===
     "2026-10-22T23:00:30.000Z",
   stopAtStartSummary,
+);
+
+// PRのCI監視は、PRを作って`pr_open`のままの`issue`の作業項目だけを巡回する。
+const prOpenWithUrl = await issueWorkItem(951, 1, "pr_open", "qdb-pr-open-url");
+await setWorkItemPrUrl(prOpenWithUrl, "https://github.com/qdb/r/pull/951", sql);
+await issueWorkItem(952, 1, "pr_open", "qdb-pr-open-no-url");
+const cancelledWithUrl = await issueWorkItem(
+  953,
+  1,
+  "cancelled",
+  "qdb-cancelled",
+);
+await setWorkItemPrUrl(
+  cancelledWithUrl,
+  "https://github.com/qdb/r/pull/953",
+  sql,
+);
+check(
+  "pr_open work items: only the issue item that is pr_open and has a pull request url is listed",
+  (await listPrOpenIssueWorkItems(new Date(Date.now() - 60_000), 100, sql))
+    .filter((item) => item.owner === OWNER)
+    .map((item) => item.id)
+    .join(",") === String(prOpenWithUrl),
+);
+check(
+  "pr_open work items: an item not updated since the cutoff is not listed",
+  (
+    await listPrOpenIssueWorkItems(new Date(Date.now() + 60_000), 100, sql)
+  ).every((item) => item.owner !== OWNER),
+);
+
+// 権限の不足のnoticeは、リポジトリごとに同じ本文なので、未解決のものがあれば新しく挿入しない。
+const prCiDeniedNotice = {
+  kind: "pr_ci_check_denied",
+  message: "qdb/prci: PRのCIの実行をGitHubから読めません",
+};
+const prCiDeniedFirst = await addNoticeUnlessUnresolved(prCiDeniedNotice, sql);
+check(
+  "pr_ci_check_denied: a second notice of the same repository is not inserted while one is unresolved",
+  prCiDeniedFirst !== null &&
+    (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) === null,
+);
+check(
+  "pr_ci_check_denied: the notice is resolved by the kind and the repository prefix",
+  (await resolveUnresolvedNoticesByPrefix(
+    "pr_ci_check_denied",
+    "qdb/prci: ",
+    "watch_pr_ci",
+    sql,
+  )) === 1 && (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) !== null,
+);
+execPsql(
+  target,
+  "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

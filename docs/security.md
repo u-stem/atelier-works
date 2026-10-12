@@ -234,9 +234,16 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 ContentsをRead and writeにするのは、PR修正と実装のフローがブランチにpushするためである。WorkflowsはNo accessのままにする。`.github/workflows/`を含むpushをGitHubに拒否させるためである。実装フローは`.github/`の変更を止めずに記録するので、この拒否が実質のガードになる。
 ただし、この拒否が及ぶのは`.github/workflows/`の下だけである。`.github/actions/`のcomposite actionには及ばないので、PR修正はパスで止め、実装フローは記録する。組み立てなど配布物に関わる手順は、composite actionに分けない。
 
-ActionsをRead-onlyにするのは、`watch_main_ci`が対象リポジトリの既定のブランチのActionsの実行を読むためである。
+ActionsをRead-onlyにするのは、次の2つの実行を読むためである。
+
+- `watch_main_ci`が読む、対象リポジトリの既定のブランチのActionsの実行
+- `watch_pr_ci`が読む、FactoryのPRのheadのActionsの実行
+
 書き込みの権限は付けない。実行の再実行や取り消しをさせないためである。
-権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのmainのCIの失敗に気づけない。
+権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で、`watch_pr_ci`が要対応の通知`pr_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのCIの失敗に気づけない。
+`watch_pr_ci`は、実行の一覧とPRの状態だけを読み、ワークフローのログは取得しない。Claudeにもログを渡さない。
+通知とDiscordの文は固定文で、workflowの名前、実行の結論、ログといった外部の文字列を入れない。リポジトリへ書ける人が決める文字列なので、通知を介して人やClaudeへ指示を渡させないためである。
+forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。headのリポジトリのIDがベースと違う実行と、結び付いたPRの番号が違う実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱ってしまうためである。
 Actions: Read-onlyでは、実行の一覧だけでなく、選んだ全リポジトリの実行のログとartifactも読める。
 `github_token`は、Console用workerの`approval_decide`と`retry_work_item`も読む。
 そのため、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。

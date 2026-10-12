@@ -975,6 +975,11 @@ export type FactoryConfig = {
   /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
   dependabot_min_published_days: number;
   /**
+   * `watch_pr_ci`がFactoryのPRのCIを観測して通知するか。
+   * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。
+   */
+  pr_ci_watch_enabled: boolean;
+  /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
    * `implementCheckCommandsFor`)。エントリの無いリポジトリでは
