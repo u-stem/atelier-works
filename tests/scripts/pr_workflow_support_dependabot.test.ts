@@ -91,6 +91,13 @@ const CASES: {
     nextAction: MANUAL_ACTION,
   },
   {
+    label: "finish",
+    reason: dependabotReason("finish", "the pull request could not be re-read"),
+    described:
+      "dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(the pull request could not be re-read)",
+    nextAction: MANUAL_ACTION,
+  },
+  {
     label: "merge forbidden",
     reason: DEPENDABOT_MERGE_FORBIDDEN_REASON,
     described: "dependabotの更新をマージする権限がありませんでした(403)",

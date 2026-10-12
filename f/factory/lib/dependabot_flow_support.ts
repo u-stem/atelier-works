@@ -804,6 +804,7 @@ export const DEPENDABOT_REASON_PREFIX = {
   unverifiedInputs: "dependabot unverified inputs: ",
   impact: "dependabot impact: ",
   assess: "dependabot assess: ",
+  finish: "dependabot finish: ",
 } as const;
 
 export type DependabotReasonKind = keyof typeof DEPENDABOT_REASON_PREFIX;
