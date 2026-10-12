@@ -1,0 +1,10 @@
+summary: '[LIB] CI回のプロンプト'
+description: 内部ライブラリです。直接実行するものではありません。CIの失敗ログの抜粋をnonce付きの囲みに入れた、CI回のpr_fixのプロンプトと出力のJSON
+  schemaを作ります。
+lock: '!inline f/factory/lib/ci_fix_prompt.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

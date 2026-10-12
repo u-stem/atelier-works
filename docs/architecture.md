@@ -370,6 +370,10 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 <!-- generated:assets -->
 | path | 種別 | summary |
 | --- | --- | --- |
+| `f/factory/lib/ci_log_support` | script | [LIB] CIのログの整形と秘密値の検査 |
+| `f/factory/lib/ci_fix_classify` | script | [LIB] CIの失敗の分類 |
+| `f/factory/lib/ci_fix_prompt` | script | [LIB] CI回のプロンプト |
+| `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
 | `f/factory/lib/console_support` | script | [LIB] Consoleの通知の重要度 |
 | `f/factory/lib/console_worker` | script | [LIB] Console用workerの停止の検知 |

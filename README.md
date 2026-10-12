@@ -130,4 +130,5 @@ atelier-works/
 | [監査の仕様](docs/internals/audit.md) | 監査と改善提案の仕組み |
 | [dependabotの更新の仕様](docs/internals/dependabot.md) | dependabotのPRの選び方、自動マージの流れ、作業項目の状態 |
 | [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
+| [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査と、変更するファイルの検査 |
 | [通知の仕様](docs/internals/notifications.md) | Discordへの通知の仕組み |

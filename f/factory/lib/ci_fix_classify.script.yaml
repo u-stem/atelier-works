@@ -1,0 +1,9 @@
+summary: '[LIB] CIの失敗の分類'
+description: 内部ライブラリです。直接実行するものではありません。失敗したジョブの名前と結論から、CI回のClaudeがソースの編集で直せる種類かを決めます。
+lock: '!inline f/factory/lib/ci_fix_classify.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

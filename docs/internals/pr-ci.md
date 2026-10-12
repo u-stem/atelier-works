@@ -1,6 +1,6 @@
 # PRのCI監視の内部仕様
 
-`watch_pr_ci`が、Factoryが作ったPRのCIを何で読み、どう判定し、何を通知するかを定める仕様である。`watch_pr_ci`、`lib/pr_ci_watch.ts`、`lib/pr_ci_support.ts`を変更する人が読む。必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用](../operations.md)に書く。mainのCIは[mainのCI監視の仕様](main-ci.md)に分けて書く。
+`watch_pr_ci`が、Factoryが作ったPRのCIを何で読み、どう判定し、何を通知するかを定める仕様である。`watch_pr_ci`、`lib/pr_ci_watch.ts`、`lib/pr_ci_support.ts`を変更する人が読む。必要な権限は[セキュリティ](../security.md)に、通知を受けた人がすることは[運用](../operations.md)に書く。mainのCIは[mainのCI監視の仕様](main-ci.md)に分けて書く。失敗のログを整形してClaudeに渡す部品は、[CIの失敗を直す部品の仕様](ci-fix.md)に分けて書く。
 
 ## 方針
 
