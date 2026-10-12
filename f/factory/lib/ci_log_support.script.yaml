@@ -1,0 +1,9 @@
+summary: '[LIB] CIのログの整形と秘密値の検査'
+description: 内部ライブラリです。直接実行するものではありません。CIの失敗ログから制御文字と不可視文字を除いて量を絞り、gitleaksとmaskSecretsで検査して、揮発する抜粋にします。
+lock: '!inline f/factory/lib/ci_log_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

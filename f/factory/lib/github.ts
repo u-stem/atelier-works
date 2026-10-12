@@ -43,6 +43,7 @@ import {
 import {
   type CommandResult,
   type CommandRunner,
+  isCappedOutput,
   SpawnError,
 } from "./workspace.ts";
 
@@ -266,6 +267,13 @@ export type GhApiCallOptions = {
    * GraphQLの読み取りのqueryはPOSTで送るので、呼び出し側が`true`を明示する。
    */
   readonly idempotent?: boolean;
+  /**
+   * `gh`の出力(ヘッダーと本文)で保持するバイト数の上限。
+   * 大きく信頼できない本文(Actionsのログ)を受け取るときに指定する。
+   * 超えたときは先頭と末尾を残し、間を`omittedMarker`でつなぐ。
+   * ヘッダーは先頭にあるので、先頭の半分が上限より小さい限り読める。
+   */
+  readonly maxOutputBytes?: number;
 };
 
 /**
@@ -330,6 +338,9 @@ async function attemptGhApi(
     commandResult = await client.run(argv, {
       env: buildGhEnv(client),
       ...(stdin !== undefined ? { stdin } : {}),
+      ...(options.maxOutputBytes !== undefined
+        ? { maxOutputBytes: options.maxOutputBytes }
+        : {}),
     });
   } catch (error) {
     if (isTransientSpawnError(error)) return { kind: "spawn_failed", error };
@@ -4283,6 +4294,213 @@ export async function listPrHeadWorkflowRuns(
   throw new WorkflowRunsIncompleteError(
     `${context}: the runs may be incomplete (too many runs)`,
   );
+}
+
+/** 正の安全な整数か。endpointに入れるIDは、この条件を満たすものだけにする。 */
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/** workflowの実行のIDが正の安全な整数でなければ例外を投げる。 */
+function assertRunId(runId: number): void {
+  if (!isPositiveSafeInteger(runId)) {
+    throw new Error(`invalid run id: ${String(runId)}`);
+  }
+}
+
+/** ジョブのIDが正の安全な整数でなければ例外を投げる。 */
+function assertJobId(jobId: number): void {
+  if (!isPositiveSafeInteger(jobId)) {
+    throw new Error(`invalid job id: ${String(jobId)}`);
+  }
+}
+
+/** workflowのジョブの1つのstep。 */
+export type WorkflowJobStep = {
+  readonly name: string;
+  readonly conclusion: string | null;
+  readonly number: number;
+};
+
+/**
+ * workflowの実行のジョブ1件。`listWorkflowRunJobs`が形を検証してから返す。
+ * `name`とstepの`name`はリポジトリへ書ける人が決める文字列なので、表示や
+ * プロンプトに使う前に無害化する。
+ */
+export type WorkflowRunJob = {
+  readonly id: number;
+  readonly runId: number;
+  readonly headSha: string;
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly steps: readonly WorkflowJobStep[];
+};
+
+/** ジョブの一覧を読むページ数の上限。超えたら全体を読めていないので`GitHubPaginationLimitError`にする。 */
+export const WORKFLOW_RUN_JOBS_MAX_PAGES = 3;
+
+function toWorkflowJobStep(raw: unknown, context: string): WorkflowJobStep {
+  if (
+    !isRecord(raw) ||
+    typeof raw.name !== "string" ||
+    !Number.isSafeInteger(raw.number) ||
+    typeof raw.number !== "number" ||
+    (raw.conclusion !== null &&
+      raw.conclusion !== undefined &&
+      typeof raw.conclusion !== "string")
+  ) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return {
+    name: raw.name,
+    conclusion: raw.conclusion ?? null,
+    number: raw.number,
+  };
+}
+
+function toWorkflowRunJobs(
+  parsed: unknown,
+  context: string,
+  expected: { readonly runId: number; readonly headSha: string },
+): WorkflowRunJob[] {
+  if (!isRecord(parsed) || !Array.isArray(parsed.jobs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.jobs.map((raw: unknown): WorkflowRunJob => {
+    if (
+      !isRecord(raw) ||
+      !isPositiveSafeInteger(raw.id) ||
+      !isPositiveSafeInteger(raw.run_id) ||
+      typeof raw.head_sha !== "string" ||
+      typeof raw.name !== "string" ||
+      typeof raw.status !== "string" ||
+      (raw.conclusion !== null && typeof raw.conclusion !== "string") ||
+      (raw.steps !== undefined && !Array.isArray(raw.steps))
+    ) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    if (raw.run_id !== expected.runId) {
+      throw new GitHubResponseError(
+        `${context}: the response holds a job of another run`,
+      );
+    }
+    if (raw.head_sha !== expected.headSha) {
+      throw new GitHubResponseError(
+        `${context}: the response holds a job of another commit`,
+      );
+    }
+    const rawSteps: unknown[] = raw.steps ?? [];
+    return {
+      id: raw.id,
+      runId: raw.run_id,
+      headSha: raw.head_sha,
+      name: raw.name,
+      status: raw.status,
+      conclusion: raw.conclusion,
+      steps: rawSteps.map((step) => toWorkflowJobStep(step, context)),
+    };
+  });
+}
+
+/**
+ * workflowの実行(`runId`)の最新の試行のジョブを、stepつきですべて読む。
+ * `runId`は正の安全な整数、`headSha`は完全なコミットshaでなければ、API呼び出しの前に例外を投げる。
+ * 応答のジョブの`run_id`が`runId`と、`head_sha`が`headSha`と違えば、
+ * 別の実行のログを取り違えないよう`GitHubResponseError`を投げる。
+ * 応答の形が違えば例外を投げる。ページ数が`WORKFLOW_RUN_JOBS_MAX_PAGES`を超えたら
+ * `GitHubPaginationLimitError`を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRunJobs(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  runId: number,
+  headSha: string,
+): Promise<WorkflowRunJob[]> {
+  validateOwnerRepo(owner, repo);
+  assertRunId(runId);
+  assertCommitSha(headSha);
+  const endpoint = `repos/${owner}/${repo}/actions/runs/${String(runId)}/jobs?filter=latest&per_page=100`;
+  return paginateGhApi(
+    client,
+    endpoint,
+    (parsed, context) => toWorkflowRunJobs(parsed, context, { runId, headSha }),
+    WORKFLOW_RUN_JOBS_MAX_PAGES,
+  );
+}
+
+/**
+ * ジョブのログを読むときに保持するバイト数の上限(8MB)。
+ * 超えたログは先頭と末尾だけを残す。失敗の原因は末尾に出るのが普通なので、末尾を使う。
+ */
+export const CI_JOB_LOG_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * `getWorkflowJobLog`の結果。例外にしない結果は、呼び出し側が扱いを分けるもの。
+ * - `forbidden`: 403。トークンの権限が足りない。
+ * - `log_unavailable`: 404か410。ログが無い、または保存期間が過ぎた。
+ */
+export type WorkflowJobLogResult =
+  | {
+      readonly kind: "ok";
+      readonly log: string;
+      /** 上限を超えて間を捨てたか。 */
+      readonly truncated: boolean;
+    }
+  | { readonly kind: "forbidden" }
+  | { readonly kind: "log_unavailable" };
+
+/**
+ * ログの取得に失敗したときの例外。
+ * ログの本文、応答のヘッダー、リダイレクト先の署名付きURLを載せない。載せるのはHTTPのステータスだけである。
+ * `status`が0のときは応答が返らなかった(通信断やtimeout)。
+ */
+export class GitHubCiLogError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`GET workflow job log failed with HTTP ${String(status)}`);
+    this.name = "GitHubCiLogError";
+    this.status = status;
+  }
+}
+
+/**
+ * ジョブ(`jobId`)のログを読む。ログはJSONではないので、本文をそのまま文字列で返す。
+ * 取得先は署名付きURLへの302で、`gh`が内部でたどる。URLは受け取らず、エラーにも戻り値にも出さない。
+ * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
+ * 本文は`CI_JOB_LOG_MAX_BYTES`で切る。
+ * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
+ * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
+ * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function getWorkflowJobLog(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  jobId: number,
+): Promise<WorkflowJobLogResult> {
+  validateOwnerRepo(owner, repo);
+  assertJobId(jobId);
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs`,
+    { maxOutputBytes: CI_JOB_LOG_MAX_BYTES },
+  );
+  if (response.status >= 200 && response.status < 300) {
+    return {
+      kind: "ok",
+      log: response.bodyText,
+      truncated: isCappedOutput(response.bodyText),
+    };
+  }
+  if (response.status === 403) return { kind: "forbidden" };
+  if (response.status === 404 || response.status === 410) {
+    return { kind: "log_unavailable" };
+  }
+  throw new GitHubCiLogError(response.status);
 }
 
 export type PullRequestUpdate = {

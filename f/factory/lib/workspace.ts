@@ -3694,6 +3694,34 @@ export async function runGitleaksOnWorktree(
   if (isCappedOutput(diff.stdout))
     throw new Error("the staged diff exceeded the scan cap");
   const scanned = dropRemovedDiffLines(diff.stdout);
+  const result = await runGitleaksStdin(opts, scanned, (stdout) =>
+    formatGitleaksReport(stdout, scanned),
+  );
+  return { ...result, treeSha };
+}
+
+/** `runGitleaksStdin`が必要とする依存と設定。 */
+type GitleaksStdinOptions = {
+  readonly run: CommandRunner;
+  readonly home?: string;
+  readonly path?: string;
+  readonly timeoutMs: number;
+  readonly createConfigDir?: () => Promise<GitleaksConfigDir>;
+};
+
+/**
+ * `input`を、専用の一時ディレクトリで動く`gitleaks stdin`に渡す。
+ * 終了コード0なら`ok: true`、終了コード1で`formatReport`がレポートを読めれば、
+ * その整形結果(伏せ字済み)を持つ`ok: false`を返す。
+ * 出力の読み取りの打ち切り、上限で切れたレポート、読めないレポート、
+ * それ以外の終了コード、タイムアウトは例外を投げ、「漏洩なし」とはみなさない。
+ * 検査をリポジトリの設定から独立させるため、設定と無視ファイルは専用のディレクトリのものだけを読ませる。
+ */
+async function runGitleaksStdin(
+  opts: GitleaksStdinOptions,
+  input: string,
+  formatReport: (stdout: string) => string | null,
+): Promise<GitleaksResult> {
   const configDir = await (
     opts.createConfigDir ?? defaultCreateGitleaksConfigDir
   )();
@@ -3722,7 +3750,7 @@ export async function runGitleaksOnWorktree(
       {
         cwd: configDir.path,
         env: localGitEnv(opts.home, opts.path),
-        stdin: scanned,
+        stdin: input,
         timeoutMs: opts.timeoutMs,
         maxOutputBytes: GITLEAKS_MAX_OUTPUT_BYTES,
       },
@@ -3730,18 +3758,17 @@ export async function runGitleaksOnWorktree(
     if (result.timedOut)
       throw new Error(`gitleaks timed out after ${String(opts.timeoutMs)}ms`);
     assertOutputComplete("gitleaks", result);
-    if (result.exitCode === 0) return { ok: true, output: "", treeSha };
+    if (result.exitCode === 0) return { ok: true, output: "" };
     if (result.exitCode === GITLEAKS_LEAKS_EXIT_CODE) {
       if (isCappedOutput(result.stdout))
         throw new Error("gitleaks report exceeded the output cap");
-      const report = formatGitleaksReport(result.stdout, scanned);
+      const report = formatReport(result.stdout);
       if (report !== null) {
         return {
           ok: false,
           output: maskSecrets(
             report.length === 0 ? "gitleaks reported a leak" : report,
           ),
-          treeSha,
         };
       }
     }
@@ -3753,4 +3780,41 @@ export async function runGitleaksOnWorktree(
   } finally {
     await configDir.cleanup();
   }
+}
+
+/**
+ * 文字列`text`を、`runGitleaksOnWorktree`と同じ固定の設定の`gitleaks stdin`で検査する。
+ * 信頼できない入力(Actionsのログ、Claudeが書いた文)をプロンプトや投稿に使う前の検査に使う。
+ * 終了コード0なら`ok: true`を返す。終了コード1でJSONのレポートがあれば、
+ * 検出1件につき`- <rule>`の1行(一致した文字列は含まない)の`ok: false`を返す。
+ * 検査できなかったとき(タイムアウト、読み取りの打ち切り、上限で切れたレポート、
+ * 想定外の終了コード)は例外を投げる。呼び出し側は、例外を「検出あり」として扱う(fail-closed)。
+ */
+export async function runGitleaksOnText(
+  opts: GitleaksStdinOptions,
+  text: string,
+): Promise<GitleaksResult> {
+  return runGitleaksStdin(opts, text, formatGitleaksTextReport);
+}
+
+/**
+ * gitleaksの`stdin`のJSONのレポートを、検出1件につき`- <rule>`の1行にして返す。
+ * 文字列の検査にはファイルが無いので、規則の名前だけを出す。一致した文字列は出さない。
+ * `stdout`がJSONの配列でなければ`null`を返す。
+ */
+function formatGitleaksTextReport(stdout: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const lines = parsed.filter(isGitleaksFinding).map((f) => `- ${f.RuleID}`);
+  const unexpected = parsed.length - lines.length;
+  if (unexpected > 0)
+    lines.push(
+      `- (${String(unexpected)} more finding(s) in an unexpected shape)`,
+    );
+  return lines.join("\n");
 }

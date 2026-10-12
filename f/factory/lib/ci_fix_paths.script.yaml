@@ -1,0 +1,9 @@
+summary: '[LIB] CI回の変更ファイルの検査'
+description: 内部ライブラリです。直接実行するものではありません。CI回のClaudeが加えた変更が、PRが変更したファイルと新規のテストだけに収まるかを許可リスト方式で検査します。
+lock: '!inline f/factory/lib/ci_fix_paths.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
