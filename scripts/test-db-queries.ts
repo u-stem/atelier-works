@@ -2911,6 +2911,26 @@ check(
   (await hasDependabotItemForHead(OWNER, "r", 9105, DEPENDABOT_SHA_A, sql)) ===
     false,
 );
+// 取り消した行は数えず、同じheadを処理し直せる。ほかの終端(人に回した、終えた、失敗した)は処理済みとして数える。
+for (const [pr, status, counts] of [
+  [9106, "cancelled", false],
+  [9107, "failed", true],
+  [9108, "reviewed", true],
+] as const) {
+  const id = await insertDependabotWorkItemUnlessActive(
+    dependabotCandidate(pr, DEPENDABOT_SHA_A),
+    sql,
+  );
+  execPsql(
+    target,
+    `UPDATE factory.work_items SET status = '${status}' WHERE id = ${String(id)}`,
+  );
+  check(
+    `dependabot head: a ${status} row for the head ${counts ? "counts" : "does not count"}`,
+    (await hasDependabotItemForHead(OWNER, "r", pr, DEPENDABOT_SHA_A, sql)) ===
+      counts,
+  );
+}
 
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
 const fullWorkerSample = {

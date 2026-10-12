@@ -470,7 +470,7 @@ describe("hasDependabotItemForHead", () => {
     expect(calls[0]?.text).toContain("kind = 'dependabot'");
   });
 
-  test("does not filter by status so that terminal rows count", async () => {
+  test("leaves out cancelled rows so that the same head can be processed again", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasDependabotItemForHead(
       "octo-owner",
@@ -479,7 +479,19 @@ describe("hasDependabotItemForHead", () => {
       DEPENDABOT_SHA,
       sql,
     );
-    expect(calls[0]?.text).not.toContain("status");
+    expect(calls[0]?.text).toContain("status <> 'cancelled'");
+  });
+
+  test("filters by no status other than cancelled so that other terminal rows count", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.text.match(/status/g)).toHaveLength(1);
   });
 
   test("binds the owner, repo, pull request number and head sha", async () => {

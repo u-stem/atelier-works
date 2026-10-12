@@ -613,8 +613,12 @@ export async function insertDependabotWorkItemUnlessActive(
 }
 
 /**
- * 同じPRの同じheadのdependabotの作業項目が、終端でも終端でなくても1件でもあるか。
+ * 同じPRの同じheadのdependabotの作業項目が、取り消した行(`cancelled`)を除いて1件でもあるか。
  * マージの後や人に回した後に、同じheadを処理し直さないために使う。
+ * 取り消した行は数えない。公開日数の待ち、headの移動、無効化、PRが閉じたことで止めた行で、
+ * そのheadはまだ判断していないため、同じheadを処理し直せるようにする。
+ * 失敗した行(`failed`)は処理済みとして数える。`retry_work_item`はdependabotの作業項目を再開しないので、
+ * マージや投稿の後に失敗した可能性のあるheadを、自動で二度処理しないためである。
  * 終端の行は、`cleanup_db`が保持期間(`retention_work_items_days`)を過ぎると削除する。
  * 行が消えると、同じheadを再び処理する。保持期間より長く、処理済みであることを保証するものではない。
  * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないとき、
@@ -635,6 +639,7 @@ export async function hasDependabotItemForHead(
     SELECT id FROM factory.work_items
     WHERE kind = 'dependabot' AND owner = ${owner} AND repo = ${repo}
       AND pr_number = ${prNumber}::integer AND head_sha = ${headSha}
+      AND status <> 'cancelled'
     LIMIT 1
   `.fetch();
   return rows.length > 0;
