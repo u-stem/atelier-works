@@ -47,7 +47,7 @@ locks:
   f/factory/lib/job_tmp: 3112b06a002b5bf20d13f340bd40254dbaca735ec7d4b8c6762ab1c5768b5b9c
   f/factory/lib/log: 31e814d5fdbc939e2f3ccfb5754691c50a5f05d8d255e4fed07a9eb9f5794b2a
   f/factory/lib/main_ci_support: a2fa081e0ad1434a69a21da8375a8cbc8582e5dea5bac3c968ccac05e0731cb1
-  f/factory/lib/main_ci_watch: c344ad71f141828ccf93035466c2dd834b7b3900787f2e006d1963fbc4745a52
+  f/factory/lib/main_ci_watch: 68f03b89fd5b3fe9c3bed99409c0c6d942c22f641e2c08f4de2eb38ce886d2cd
   f/factory/lib/model_policy: 507baa197fd5ebf1c36cafa901b5290523365b5733725fbe79e4f9824e288221
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: c15f941990109bf7567cfd4cea72446471ce414c486eb3c54b6798466d83f3b4

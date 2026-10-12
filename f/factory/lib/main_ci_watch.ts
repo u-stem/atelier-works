@@ -6,7 +6,7 @@
 
 import { isRepoAllowed } from "./config.ts";
 import type { MainCiRun, MainCiTransition, NewMainCiRun } from "./db.ts";
-import type { NotifyEvent } from "./discord.ts";
+import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
   GitHubHttpError,
   GitHubRateLimitError,
@@ -47,7 +47,8 @@ export const PENDING_BATCH_LIMIT = 200;
  * 実行を読めないという永続的な条件のまま、最初に見てからこの時間がたったコミットは`expired`にする。
  * 永続的な条件は、次の2つである。
  * - `head_sha`を指定した読み取りが、実行の多さ(`WorkflowRunsIncompleteError`)か403・404で、読み切れない。
- * - リポジトリが対象から外れた。
+ * - リポジトリが対象から外れた。`repo_allowlist`のオーナーの照合が一時的に失敗している間も、
+ *   そのオーナーのリポジトリは対象に入らないので、この条件に当たる。
  * 発見の403・404、rate limit、サーバーの一時的な失敗は、一時的な条件なので数えない。
  * 読めないまま判定を待ち続けても、人に知らせる手段が無いので、行を終わらせる。
  */
@@ -219,7 +220,7 @@ export type MainCiWatchDeps = {
     resolvedBy: string,
   ) => Promise<number>;
   /** 失敗しても例外を投げない送信(`notifyBestEffort`)を渡す。 */
-  readonly notify: (event: NotifyEvent) => Promise<unknown>;
+  readonly notify: (event: NotifyEvent) => Promise<NotifyBestEffortResult>;
   /** ジョブの失敗として記録する。記録に失敗しても例外を投げない。 */
   readonly recordFailure: (step: string, err: unknown) => Promise<void>;
 };
@@ -480,8 +481,13 @@ async function judgePending(
     return;
   }
   const judgements: Judgement[] = [];
-  for (const row of rows) {
-    if (overBudget(context)) break;
+  for (const [index, row] of rows.entries()) {
+    if (overBudget(context)) {
+      deps.log.warn("main ci judging stopped by the time budget", {
+        left: rows.length - index,
+      });
+      break;
+    }
     try {
       const judgement = decideRow(
         context,
@@ -668,7 +674,7 @@ async function settleFailed(
       ),
     });
     if (noticeId !== null) {
-      await deps.notify({
+      const sent = await deps.notify({
         kind: "main_ci_failed",
         instance_name: deps.instanceName,
         owner: row.owner,
@@ -677,6 +683,15 @@ async function settleFailed(
         url: runUrl,
         next_action: FAILED_NEXT_ACTION,
       });
+      // 通知(notice)は残るので、行は`failed`に移す。Discordに届かなかったことだけを記録する。
+      if (sent.status === "not_sent") {
+        deps.log.warn("main ci failure notice was not delivered", {
+          repo: `${row.owner}/${row.repo}`,
+          sha: row.head_sha,
+          notice_id: noticeId,
+          reason: sent.reason,
+        });
+      }
     }
   }
   const moved = await deps.transition(row.id, {

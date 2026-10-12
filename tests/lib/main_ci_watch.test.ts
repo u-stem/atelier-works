@@ -4,7 +4,10 @@ import type {
   MainCiTransition,
   NewMainCiRun,
 } from "../../f/factory/lib/db.ts";
-import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
+import type {
+  NotifyBestEffortResult,
+  NotifyEvent,
+} from "../../f/factory/lib/discord.ts";
 import {
   GitHubHttpError,
   GitHubRateLimitError,
@@ -99,6 +102,8 @@ type Setup = {
   hasNewer?: boolean;
   /** このコミットより新しい行を、状態を問わず記録済みか。 */
   hasNewerAny?: boolean;
+  /** Discordへの送信の結果。省略すると送れたことにする。 */
+  notifyResult?: NotifyBestEffortResult;
   /** `now`の呼び出しごとに進める時間(ミリ秒)。経過時間の予算を試すのに使う。 */
   clockStepMs?: number;
 };
@@ -219,6 +224,7 @@ function harness(setup: Setup = {}): Harness {
     notify: async (event) => {
       events.push("notify");
       discord.push(event);
+      return setup.notifyResult ?? { status: "sent" };
     },
     recordFailure: async (step) => {
       failures.push(step);
@@ -842,6 +848,28 @@ describe("failed commits", () => {
     });
   });
 
+  test("logs a warning when Discord could not be reached", async () => {
+    const h = failedHarness({
+      notifyResult: { status: "not_sent", reason: "HTTP 500" },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(
+      h.logs.find(
+        (line) => line.message === "main ci failure notice was not delivered",
+      )?.fields,
+    ).toMatchObject({ notice_id: 1, reason: "HTTP 500" });
+  });
+
+  test("does not log a warning when Discord has no webhook", async () => {
+    const h = failedHarness({ notifyResult: { status: "no_webhook" } });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(
+      h.logs.some(
+        (line) => line.message === "main ci failure notice was not delivered",
+      ),
+    ).toBe(false);
+  });
+
   test("a continuing failure adds the notice and sends Discord", async () => {
     const h = failedHarness({ previous: row({ id: 0, state: "failed" }) });
     await runMainCiWatch([TARGET], h.deps);
@@ -1140,6 +1168,20 @@ describe("time budget", () => {
     });
     await runMainCiWatch([TARGET], h.deps);
     expect(h.transitions).toEqual([]);
+  });
+
+  test("logs how many pending commits the budget left unread", async () => {
+    const h = harness({
+      clockStepMs: RUN_BUDGET_MS / 2 + 1,
+      pending: [row({ id: 1 }), row({ id: 2, head_sha: SHA_B })],
+      bySha: { [SHA_A]: [run()], [SHA_B]: [run({ headSha: SHA_B })] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(
+      h.logs.find(
+        (line) => line.message === "main ci judging stopped by the time budget",
+      )?.fields,
+    ).toEqual({ left: 2 });
   });
 
   test("does not expire a commit it left for the next run", async () => {

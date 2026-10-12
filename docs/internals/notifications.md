@@ -234,7 +234,12 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 検査の枠のnoticeを記録できなかったときは、検査を止めずに`check slot notice could not be recorded`をログに出す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。同じ本文の未解決のnoticeがあるあいだは、[重複の抑止](#重複の抑止)のとおり新しく作らない。Discordには通知しない。
 
-`main_ci_failed`は、失敗を確定したコミットごとに1件残す。Discordには、noticeを新しく残したときに通知する。より新しいコミットが既に通っているときは、どちらも出さない。同じコミットの本文は同じなので、通常は重複しない。
+`main_ci_failed`は、失敗を確定したコミットごとに1件残す。Discordには、noticeを新しく残したときに通知する。同じコミットの本文は同じなので、通常は重複しない。
+次のどちらかのときは、noticeとDiscordのどちらも出さない。詳細は[mainのCI監視の仕様](main-ci.md)にある。
+
+- より新しいコミットが既に通っている。
+- 最初に見てから24時間以上たち、より新しい行が記録済みである。
+
 本文は固定文で、workflowの名前や結論は載せない。外部の文字列は、`main_ci_runs`の`summary`列にだけ残す。
 同じリポジトリのより新しいコミットが通ると、`watch_main_ci`が種類と接頭辞で選んで解決する。
 `main_ci_check_denied`は、実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
