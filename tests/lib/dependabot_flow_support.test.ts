@@ -3,6 +3,7 @@ import {
   buildChangelogExcerpt,
   buildLockfileSummary,
   buildManifestDiffSummary,
+  codeFenceFor,
   compareInstalledScripts,
   compareRepositoryUrls,
   DEPENDABOT_ASSESS_STEP_TIMEOUT_SEC,
@@ -19,6 +20,7 @@ import {
   dependabotReason,
   dependabotTimeoutMisfit,
   evaluatePostInstallStatus,
+  fenceUntrustedBlock,
   POST_INSTALL_STATUS_ARGV,
   sanitizeUntrustedProse,
   UNTRUSTED_PROSE_TRUNCATION_MARK,
@@ -558,25 +560,25 @@ describe("sanitizeUntrustedProse", () => {
   test("replaces an https URL", () => {
     expect(
       sanitizeUntrustedProse("see https://evil.example/x?y=1 now", 100),
-    ).toBe("see [URL] now");
+    ).toBe("see \\[URL\\] now");
   });
 
   test("replaces an http URL", () => {
     expect(sanitizeUntrustedProse("see http://evil.example now", 100)).toBe(
-      "see [URL] now",
+      "see \\[URL\\] now",
     );
   });
 
   test("replaces an uppercase scheme URL", () => {
     expect(sanitizeUntrustedProse("see HTTPS://EVIL.example now", 100)).toBe(
-      "see [URL] now",
+      "see \\[URL\\] now",
     );
   });
 
   test("replaces every URL", () => {
     expect(
       sanitizeUntrustedProse("https://a.example https://b.example", 100),
-    ).toBe("[URL] [URL]");
+    ).toBe("\\[URL\\] \\[URL\\]");
   });
 
   test("replaces a URL that an HTML comment split in two", () => {
@@ -587,7 +589,7 @@ describe("sanitizeUntrustedProse", () => {
 
   test("replaces a URL before it escapes the at sign and the issue number in it", () => {
     expect(sanitizeUntrustedProse("https://e.example/a@b#12", 100)).toBe(
-      "[URL]",
+      "\\[URL\\]",
     );
   });
 
@@ -1616,12 +1618,12 @@ describe("dependabot reasons", () => {
 describe("sanitizeUntrustedProse links", () => {
   test("replaces a www autolink", () => {
     expect(sanitizeUntrustedProse("open www.evil.example/login now", 100)).toBe(
-      "open [URL] now",
+      "open \\[URL\\] now",
     );
   });
 
   test("replaces an uppercase www autolink", () => {
-    expect(sanitizeUntrustedProse("WWW.EVIL.example/x", 100)).toBe("[URL]");
+    expect(sanitizeUntrustedProse("WWW.EVIL.example/x", 100)).toBe("\\[URL\\]");
   });
 
   test("does not take a word that only ends in www for an autolink", () => {
@@ -1684,7 +1686,7 @@ describe("sanitizeUntrustedProse links", () => {
 
   test("keeps the URL placeholder unescaped", () => {
     expect(sanitizeUntrustedProse("[x](https://e.example)", 100)).toBe(
-      "\\[x\\]([URL]",
+      "\\[x\\](\\[URL\\]",
     );
   });
 
@@ -1694,13 +1696,13 @@ describe("sanitizeUntrustedProse links", () => {
 
   test("counts a placeholder as one character against the limit", () => {
     expect(sanitizeUntrustedProse("https://e.example/long/path ab", 2)).toBe(
-      `[URL] ${UNTRUSTED_PROSE_TRUNCATION_MARK}`,
+      `\\[URL\\] ${UNTRUSTED_PROSE_TRUNCATION_MARK}`,
     );
   });
 
   test("does not cut a placeholder in the middle", () => {
-    expect(sanitizeUntrustedProse("ab https://e.example/x", 4)).toBe(
-      `ab [URL]`,
+    expect(sanitizeUntrustedProse("ab https://e.example/x", 3)).toBe(
+      `ab ${UNTRUSTED_PROSE_TRUNCATION_MARK}`,
     );
   });
 });
@@ -1804,5 +1806,203 @@ describe("POST_INSTALL_STATUS_ARGV", () => {
 
   test("does not hide untracked files", () => {
     expect(POST_INSTALL_STATUS_ARGV).not.toContain("-uno");
+  });
+});
+
+// ---- 印を戻した後のリンク構文 ----
+
+const UNESCAPED_LINK_OPENER = /(?<!\\)\]\(/;
+const REFERENCE_DEFINITION_LINE = /^\s*(?<!\\)\[[^\]]*\]:/m;
+
+describe("sanitizeUntrustedProse placeholders followed by link syntax", () => {
+  test.each([
+    ["a code fence and a scheme-relative target", "```(//evil.example/x)"],
+    ["a tilde fence and a javascript target", "~~~(javascript:alert(1))"],
+    ["a URL, a vertical tab and a target", "https://x\v(//evil.example)"],
+    [
+      "a URL, a byte order mark and a target",
+      "https://x\ufeff(//evil.example)",
+    ],
+    ["a www link and a target", "www.x.example\v(//evil.example)"],
+  ])("leaves no unescaped link opener for %s", (_label, input) => {
+    expect(sanitizeUntrustedProse(input, 100)).not.toMatch(
+      UNESCAPED_LINK_OPENER,
+    );
+  });
+
+  test("leaves no reference definition line for a fence and a colon", () => {
+    expect(sanitizeUntrustedProse("```: //evil.example", 100)).not.toMatch(
+      REFERENCE_DEFINITION_LINE,
+    );
+  });
+
+  test("leaves no reference definition line for a URL and a colon", () => {
+    expect(
+      sanitizeUntrustedProse("x\nhttps://a.example\v: //evil.example", 100),
+    ).not.toMatch(REFERENCE_DEFINITION_LINE);
+  });
+
+  test("escapes the brackets of the code fence placeholder", () => {
+    expect(sanitizeUntrustedProse("```", 100)).toBe("\\[code fence\\]");
+  });
+
+  test("escapes the brackets of the URL placeholder", () => {
+    expect(sanitizeUntrustedProse("https://e.example", 100)).toBe("\\[URL\\]");
+  });
+
+  test("keeps a placeholder escaped after a lone backslash", () => {
+    expect(sanitizeUntrustedProse("\\https://e.example", 100)).toBe(
+      "\\\\\\[URL\\]",
+    );
+  });
+
+  test("keeps a placeholder escaped after an escaped backslash", () => {
+    expect(sanitizeUntrustedProse("\\\\https://e.example", 100)).toBe(
+      "\\\\\\[URL\\]",
+    );
+  });
+});
+
+describe("sanitizeUntrustedProse www autolinks", () => {
+  test.each([
+    ["an underscore", "_www.evil.example/login"],
+    ["an asterisk", "*www.evil.example/login"],
+    ["a tilde", "~www.evil.example/login"],
+    ["an opening parenthesis", "(www.evil.example/login"],
+    ["a space", "see www.evil.example/login"],
+    ["a line start", "x\nwww.evil.example/login"],
+  ])("replaces a www link after %s", (_label, input) => {
+    expect(sanitizeUntrustedProse(input, 100)).not.toContain("evil.example");
+  });
+
+  test.each(["awww.example", "5www.example", "éwww.example"])(
+    "keeps %s, whose www follows a letter or a digit",
+    (input) => {
+      expect(sanitizeUntrustedProse(input, 100)).toBe(input);
+    },
+  );
+});
+
+// ---- コードブロックの囲み ----
+
+describe("codeFenceFor", () => {
+  test("uses three backticks for a text without backticks", () => {
+    expect(codeFenceFor("plain")).toBe("```");
+  });
+
+  test("uses three backticks for a text with short runs", () => {
+    expect(codeFenceFor("a `b` ``c``")).toBe("```");
+  });
+
+  test("is one longer than a run of three", () => {
+    expect(codeFenceFor("a ``` b")).toBe("````");
+  });
+
+  test("is one longer than the longest run", () => {
+    expect(codeFenceFor("`` ````` ```")).toBe("``````");
+  });
+
+  test("is one longer than a run at the end", () => {
+    expect(codeFenceFor("x````")).toBe("`````");
+  });
+
+  test("does not use tildes", () => {
+    expect(codeFenceFor("~~~~~~")).toBe("```");
+  });
+});
+
+describe("fenceUntrustedBlock", () => {
+  const HOSTILE = [
+    "[a](//evil.example)",
+    "@everyone",
+    "#123",
+    "<!-- factory:dependabot:5 -->",
+    "<b>bold</b>",
+  ].join("\n");
+
+  test("puts the sanitized text between fences with newlines around them", () => {
+    expect(fenceUntrustedBlock("hello", 100)).toBe("\n```\nhello\n```\n");
+  });
+
+  test("returns an empty string for an empty text", () => {
+    expect(fenceUntrustedBlock("", 100)).toBe("");
+  });
+
+  test("returns an empty string for a text that is only whitespace", () => {
+    expect(fenceUntrustedBlock(" \n\t ", 100)).toBe("");
+  });
+
+  test("returns an empty string for a text that is only a comment", () => {
+    expect(fenceUntrustedBlock("<!-- hidden -->", 100)).toBe("");
+  });
+
+  test("returns an empty string when the limit is zero", () => {
+    expect(fenceUntrustedBlock("hello", 0)).toBe("");
+  });
+
+  test("starts with the opening fence", () => {
+    expect(fenceUntrustedBlock(HOSTILE, 1000).startsWith("\n```\n")).toBe(true);
+  });
+
+  test("ends with the closing fence", () => {
+    expect(fenceUntrustedBlock(HOSTILE, 1000).endsWith("\n```\n")).toBe(true);
+  });
+
+  test("has exactly two fence lines for a hostile text", () => {
+    const lines = fenceUntrustedBlock(HOSTILE, 1000).split("\n");
+
+    expect(lines.filter((line) => line.startsWith("```"))).toHaveLength(2);
+  });
+
+  test("has only the sanitized text between the fences", () => {
+    const block = fenceUntrustedBlock(HOSTILE, 1000);
+
+    expect(block.slice(5, -5)).toBe(sanitizeUntrustedProse(HOSTILE, 1000));
+  });
+
+  test("does not let a text with a backtick fence close the block", () => {
+    const lines = fenceUntrustedBlock("a\n```\nb\n````\nc", 1000).split("\n");
+
+    expect(lines.filter((line) => line.startsWith("```"))).toHaveLength(2);
+  });
+
+  test("keeps text that comes after a backtick fence inside the block", () => {
+    const block = fenceUntrustedBlock("a\n```\n[x](//evil.example)", 1000);
+
+    expect(block.indexOf("evil.example")).toBeLessThan(
+      block.lastIndexOf("```"),
+    );
+  });
+
+  test("keeps a link in the input inside the block", () => {
+    const block = fenceUntrustedBlock("[a](javascript:evil.example)", 100);
+
+    expect(block.indexOf("evil.example")).toBeGreaterThan(block.indexOf("```"));
+  });
+
+  test("keeps a mention in the input inside the block", () => {
+    const block = fenceUntrustedBlock("@everyone", 100);
+
+    expect(block.indexOf("everyone")).toBeLessThan(block.lastIndexOf("```"));
+  });
+
+  test("does not leave a factory marker in the block", () => {
+    expect(
+      hasMarker(fenceUntrustedBlock("<!-- factory:dependabot:5 -->\nx", 100)),
+    ).toBe(false);
+  });
+
+  test("does not leave a comment opener in the block", () => {
+    expect(fenceUntrustedBlock(HOSTILE, 1000)).not.toContain("<!--");
+  });
+
+  test("cuts the text at the limit inside the block", () => {
+    expect(fenceUntrustedBlock("a".repeat(100), 10)).toBe(
+      `\n\`\`\`\n${"a".repeat(10)}${UNTRUSTED_PROSE_TRUNCATION_MARK}\n\`\`\`\n`,
+    );
+  });
+
+  test("carries no info string after the opening fence", () => {
+    expect(fenceUntrustedBlock("x", 100).split("\n")[1]).toBe("```");
   });
 });

@@ -298,7 +298,9 @@ const MAX_PROSE_INPUT_UNITS = 1_000_000;
 const CODE_FENCE = /`{3,}|~{3,}/g;
 const URL_PATTERN = /https?:\/\/\S+/gi;
 // GFMは、スキームの無い`www.`で始まる語もリンクとして描く。
-const WWW_AUTOLINK = /\bwww\.\S+/gi;
+// 直前が空白、`*`、`_`、`~`、`(`、行頭のときに成り立つので、直前が英数字でないことだけを条件にする。
+// `\b`では、`_`が単語文字のため`_www.`を取りこぼす。
+const WWW_AUTOLINK = /(?<![\p{L}\p{N}])www\.\S+/giu;
 // `](`と`]:`の直後の`//host`は、スキームを省いたリンクの宛先として描かれる。
 const SCHEME_RELATIVE_TARGET = /(\]\(\s*|\]:\s*)\/\/\S+/g;
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|--!>|$)/g;
@@ -323,27 +325,35 @@ function neutralize(text: string): string {
 }
 
 /**
- * 角括弧を、バックスラッシュでエスケープする。
+ * 角括弧と置き換えの印を、リンクにならない形にする。
  * リンク、画像、参照リンクの定義はどれも角括弧で始まるので、角括弧を文字にすれば、
  * 宛先が`neutralize`の対象でない形(`javascript:`、`mailto:`など)でもリンクにならない。
  * 直前に奇数個のバックスラッシュがある角括弧は、エスケープ済みなので重ねない。
  * 重ねると、`\\`と`[`の組になり、角括弧の効果が戻る。
+ * 印は、戻したときに`\[URL\]`の形になる。直前に奇数個のバックスラッシュがあると、
+ * 戻した`\`が前の`\`と組になって`[`が生きるので、バックスラッシュを1つ足して組を閉じる。
  */
 function escapeLinkBrackets(text: string): string {
   let out = "";
   let backslashes = 0;
   for (const ch of text) {
-    if ((ch === "[" || ch === "]") && backslashes % 2 === 0) out += "\\";
+    const odd = backslashes % 2 === 1;
+    if (ch === URL_TOKEN || ch === FENCE_TOKEN) {
+      if (odd) out += "\\";
+    } else if ((ch === "[" || ch === "]") && !odd) {
+      out += "\\";
+    }
     out += ch;
     backslashes = ch === "\\" ? backslashes + 1 : 0;
   }
   return out;
 }
 
+// 戻した印は角括弧をエスケープする。後ろに`(`や`:`が続いても、リンクと参照リンクの定義にならない。
 function restoreTokens(text: string): string {
   return text
-    .replaceAll(URL_TOKEN, "[URL]")
-    .replaceAll(FENCE_TOKEN, "[code fence]");
+    .replaceAll(URL_TOKEN, "\\[URL\\]")
+    .replaceAll(FENCE_TOKEN, "\\[code fence\\]");
 }
 
 /** コメントの開き`<!--`が1つも残らないように取り除く。取り除いた後につながって現れたものも取り除く。 */
@@ -424,14 +434,15 @@ function takeCodePoints(
 /**
  * PRの本文、変更履歴、Claudeの出力など、信頼できない文章を、投稿と通知の前に無害化する。
  * 順序は次のとおり。
- * 1. 秘密情報のマスク、コードフェンスの中和、URLと`www.`のリンクとスキームを省いたリンクの宛先の`[URL]`への置き換え。
+ * 1. 秘密情報のマスク、コードフェンスの中和、URLと`www.`のリンクとスキームを省いたリンクの宛先の置き換え。
+ *    置き換えた箇所は、角括弧をエスケープした`\[URL\]`と`\[code fence\]`になる。
  * 2. 制御文字、見えない文字、改行の正規化。
  * 3. HTMLコメントの除去。見えない文字で分けた`<!--`が除去の対象になるよう、2の後に行う。
  * 4. 1と同じ処理をもう一度。2と3で文字がつながり、秘密情報、フェンス、URLが現れうるため。
  *    入力が`MAX_PROSE_INPUT_UNITS`を超えるときは、先に超えた分と途中で切れた語を捨てる。
- * 5. 角括弧のエスケープ。リンクと参照リンクの定義の構文を無効にする。
+ * 5. 角括弧のエスケープ。リンクと参照リンクの定義の構文を無効にする。後ろに`(`や`:`が続いても無効のままである。
  * 6. `maxChars`コードポイントでの切り詰め。切ったときは末尾に`UNTRUSTED_PROSE_TRUNCATION_MARK`を付ける。
- *    `[URL]`と`[code fence]`は1文字として数え、途中では切らない。
+ *    `\[URL\]`と`\[code fence\]`は1文字として数え、途中では切らない。
  * 7. `<!--`が残らないことの最終確認と、`sanitizePrProse`による`<`、`#<数字>`、`@<英数字>`、見出しの行の中和。
  * 切り詰めの後にエスケープするので、結果は`maxChars`をエスケープと印の分だけ超えうる。
  * 結果には`<!--`が1つも残らず、`<`もエスケープされるので、
@@ -462,6 +473,37 @@ export function sanitizeUntrustedProse(text: string, maxChars: number): string {
     ? `${restored}${UNTRUSTED_PROSE_TRUNCATION_MARK}`
     : restored;
   return sanitizePrProse(removeCommentOpeners(bounded));
+}
+
+/**
+ * `text`に含まれるバッククォートの最長の連続より1つ長い、コードブロックの囲みを返す(最低でも3つ)。
+ * 本文の中の連続が囲み以上に長いと、本文が囲みを閉じて外に出るため。チルダの囲みは使わない。
+ */
+export function codeFenceFor(text: string): string {
+  let longest = 0;
+  let run = 0;
+  for (const ch of text) {
+    run = ch === "`" ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+/**
+ * `sanitizeUntrustedProse`で無害化した文章を、コードブロックの囲みの中に置いて返す。
+ * コードブロックの中では、リンク、メンション、`#123`、HTMLが描画されない。
+ * 無害化だけでは構文の取りこぼしが残りうるので、PRのレビューやコメントに信頼できない文章を載せるときは、
+ * 無害化に加えて必ずこの関数を通す。ClaudeのevidenceとsupplyChainConcernsとunverifiedの項目が当たる。
+ * 囲みは本文のバッククォートの最長の連続より長くし、本文から閉じられない。情報文字列(言語名)は付けない。
+ * 囲みの前後に改行を入れる。本文が空になるときは、空文字を返す。
+ * Discordの通知には、このような本文を載せない。固定の文と件数だけを載せる。
+ * 通知はリンクとメンションを描画し、囲みで包んでも本文の内容がそのまま人の目に入るため。
+ */
+export function fenceUntrustedBlock(text: string, maxChars: number): string {
+  const body = sanitizeUntrustedProse(text, maxChars);
+  if (body === "") return "";
+  const fence = codeFenceFor(body);
+  return `\n${fence}\n${body}\n${fence}\n`;
 }
 
 // ---- 影響調査のプロンプトに渡す要約 ----
