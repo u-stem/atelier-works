@@ -12,6 +12,7 @@ import {
   evaluateGate,
   GITHUB_ACTIONS_APP_ID,
   isPublishedLongEnough,
+  lockfileIntegrity,
   parseImpactAssessment,
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
@@ -406,6 +407,66 @@ function manifest(extra: Record<string, unknown> = {}): string {
 
 const MANIFEST_BEFORE = manifest();
 
+describe("lockfileIntegrity", () => {
+  test("returns the integrity of the target entry", () => {
+    expect(lockfileIntegrity(AFTER_OK, TARGET)).toEqual([INTEGRITY_B]);
+  });
+
+  test("returns the integrity of every copy of the target version", () => {
+    const text = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_A },
+    ]);
+
+    expect(lockfileIntegrity(text, TARGET)).toEqual([INTEGRITY_B, INTEGRITY_A]);
+  });
+
+  test("ignores a copy of the target at another version", () => {
+    const text = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@0.9.0", integrity: INTEGRITY_A },
+    ]);
+
+    expect(lockfileIntegrity(text, TARGET)).toEqual([INTEGRITY_B]);
+  });
+
+  test("ignores other packages", () => {
+    expect(lockfileIntegrity(AFTER_OK, { name: "other", to: "2.0.0" })).toEqual(
+      [INTEGRITY_B],
+    );
+  });
+
+  test("returns an empty list when the target is absent", () => {
+    expect(lockfileIntegrity(BEFORE, TARGET)).toEqual([]);
+  });
+
+  test("returns null for a lockfile that cannot be parsed", () => {
+    expect(lockfileIntegrity("{ nope", TARGET)).toBeNull();
+  });
+
+  test("returns null for a lockfile with a duplicate key", () => {
+    const duplicated = AFTER_OK.replace(
+      '    "left-pad": [',
+      `    "left-pad": ["left-pad@1.3.1", "", {}, "${INTEGRITY_A}"],\n    "left-pad": [`,
+    );
+
+    expect(lockfileIntegrity(duplicated, TARGET)).toBeNull();
+  });
+
+  test("returns null for a lockfile without a packages table", () => {
+    expect(lockfileIntegrity('{ "workspaces": {} }', TARGET)).toBeNull();
+  });
+
+  test("returns an unusable value for an entry without an integrity string", () => {
+    const text = AFTER_OK.replace(
+      `"${INTEGRITY_B}"],\n\n    "other"`,
+      `null],\n\n    "other"`,
+    );
+
+    expect(lockfileIntegrity(text, TARGET)).toEqual([""]);
+  });
+});
+
 describe("checkPackageJsonDiff", () => {
   test("accepts a version bump of the target dependency", () => {
     const after = manifest({
@@ -623,6 +684,7 @@ function validInput(overrides: Partial<GateInput> = {}): GateInput {
     minPublishedDays: 7,
     commits: [DEPENDABOT_COMMIT],
     installScripts: { before: {}, after: {} },
+    registryIntegrity: INTEGRITY_B,
     ...overrides,
   };
 }
@@ -1297,6 +1359,122 @@ describe("evaluateGate", () => {
       verdictOf({
         publishedAtIso: "2026-10-18T00:00:00.000Z",
         update: "major",
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("passes when the registry integrity matches the lockfile", () => {
+    expect(verdictOf({ registryIntegrity: INTEGRITY_B })).toBe("ok");
+  });
+
+  test("needs a human when the registry integrity differs from the lockfile", () => {
+    expect(verdictOf({ registryIntegrity: INTEGRITY_A })).toBe("needs_human");
+  });
+
+  test("needs a human when the registry integrity is unknown", () => {
+    expect(verdictOf({ registryIntegrity: null })).toBe("needs_human");
+  });
+
+  test("explains an integrity mismatch", () => {
+    const result = evaluateGate(validInput({ registryIntegrity: INTEGRITY_A }));
+
+    expect(result.ok ? "" : result.reason).toContain("integrity");
+  });
+
+  test("shortens the integrity values in the reason", () => {
+    const result = evaluateGate(
+      validInput({ registryIntegrity: `sha512-${"x".repeat(500)}` }),
+    );
+
+    expect(result.ok ? "" : result.reason.length).toBeLessThan(300);
+  });
+
+  test("keeps a registry integrity from breaking the reason into items", () => {
+    const result = evaluateGate(
+      validInput({ registryIntegrity: "sha512-a; injected" }),
+    );
+
+    expect(result.ok ? "" : result.reason).not.toContain("; injected");
+  });
+
+  test("needs a human, not a wait, when the integrity differs and checks are pending", () => {
+    expect(
+      verdictOf({
+        registryIntegrity: INTEGRITY_A,
+        checks: passingChecks().map((check) => ({
+          ...check,
+          conclusion: null,
+        })),
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human, not a wait, when the integrity differs and the version is recent", () => {
+    expect(
+      verdictOf({
+        registryIntegrity: INTEGRITY_A,
+        publishedAtIso: "2026-10-18T00:00:00.000Z",
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human, not a wait, when the integrity is unknown and mergeable is null", () => {
+    expect(verdictOf({ registryIntegrity: null, mergeable: null })).toBe(
+      "needs_human",
+    );
+  });
+
+  test("passes when both lockfiles hold the registry integrity", () => {
+    expect(
+      verdictOf({
+        changedPaths: [
+          "package.json",
+          "bun.lock",
+          "console/package.json",
+          "console/bun.lock",
+        ],
+      }),
+    ).toBe("ok");
+  });
+
+  test("needs a human when one of two lockfiles holds another integrity", () => {
+    const divergent = lockText({ "left-pad": "1.3.1", other: "2.0.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_A },
+      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+    ]);
+    const changedPaths = [
+      "package.json",
+      "bun.lock",
+      "console/package.json",
+      "console/bun.lock",
+    ];
+
+    expect(
+      verdictOf({
+        changedPaths,
+        files: filesFor(changedPaths).map((file) =>
+          file.path === "console/bun.lock"
+            ? { ...file, after: divergent }
+            : file,
+        ),
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when one copy of the target holds another integrity", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@1.3.0" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_A },
+    ]);
+
+    expect(
+      verdictOf({
+        changedPaths: ["bun.lock"],
+        files: [{ path: "bun.lock", before, after }],
       }),
     ).toBe("needs_human");
   });

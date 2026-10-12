@@ -99,7 +99,8 @@ export function classifyUpdate(from: string, to: string): UpdateKind {
 const ISO_WITH_ZONE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-function parsePublishedAt(publishedAtIso: string): number | null {
+/** 時差つきのISO 8601の日時をミリ秒にする。形が違うか、日時として読めないときは`null`にする。 */
+export function parsePublishedAt(publishedAtIso: string): number | null {
   if (!ISO_WITH_ZONE.test(publishedAtIso)) return null;
   const ms = Date.parse(publishedAtIso);
   return Number.isNaN(ms) ? null : ms;
@@ -432,6 +433,36 @@ export function checkLockfileDiff(
   return { ok: true };
 }
 
+/**
+ * ロックファイルに入っている、対象の更新後の版のすべてのエントリの整合性を返す。
+ * 入れ子のコピーも含める。整合性が文字列でないエントリは、どの値とも一致しない`""`にする。
+ * 解釈できないとき、重複したキーがあるとき、packagesの表が無いときは`null`にする。
+ * `text`はbun.lockのテキストである。
+ */
+export function lockfileIntegrity(
+  text: string,
+  target: { name: string; to: string },
+): string[] | null {
+  const parsed = parseJsonObject(text, true);
+  if (!parsed.ok) return null;
+  const packages = parsed.value.packages;
+  if (!isRecord(packages)) return null;
+  const found: string[] = [];
+  for (const entry of Object.values(packages)) {
+    const identity = entryIdentity(entry);
+    if (
+      identity === null ||
+      identity.name !== target.name ||
+      identity.version !== target.to
+    ) {
+      continue;
+    }
+    const integrity: unknown = Array.isArray(entry) ? entry[3] : undefined;
+    found.push(typeof integrity === "string" ? integrity : "");
+  }
+  return found;
+}
+
 // ---- package.jsonの差分 ----
 
 export type PackageJsonVerdict = { ok: true } | { ok: false; reason: string };
@@ -547,6 +578,12 @@ export type GateInput = {
     before: Record<string, string> | null;
     after: Record<string, string> | null;
   };
+  /**
+   * レジストリが報告する、更新先の版の`dist.integrity`。
+   * 取得できなかったときと形が不正なときは`null`にする。
+   * 更新後のロックファイルの対象のエントリが、これと一致することを要る。
+   */
+  registryIntegrity: string | null;
 };
 
 export type GateResult =
@@ -620,6 +657,32 @@ function fileProblem(input: GateInput): string | null {
       : checkLockfileDiff(file.before, file.after, target);
     if (!verdict.ok) {
       return `${detail(path)} diff rejected: ${escapeReasonSeparator(verdict.reason)}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * 更新後のロックファイルの対象のエントリが、レジストリの整合性と一致しないときの理由を返す。無ければ`null`。
+ * ロックファイルが差し替えた取得物ではなく、レジストリが公開したものを入れていることを確かめる。
+ * 変更されたロックファイルのすべてで、対象のエントリが1件以上あり、すべてが一致することを要る。
+ */
+function integrityProblem(input: GateInput): string | null {
+  const { registryIntegrity, files, changedPaths, target } = input;
+  if (registryIntegrity === null) return "registry integrity is not available";
+  for (const { lockfile } of MANIFEST_LOCKFILES) {
+    if (!changedPaths.includes(lockfile)) continue;
+    const after = files.find((file) => file.path === lockfile)?.after;
+    if (after === null || after === undefined) {
+      return `lockfile has no content to check: ${detail(lockfile)}`;
+    }
+    const found = lockfileIntegrity(after, target);
+    if (found === null || found.length === 0) {
+      return `target entry was not found in ${detail(lockfile)}`;
+    }
+    const mismatch = found.find((value) => value !== registryIntegrity);
+    if (mismatch !== undefined) {
+      return `integrity in ${detail(lockfile)} differs from the registry: ${detail(mismatch)} / ${detail(registryIntegrity)}`;
     }
   }
   return null;
@@ -749,6 +812,8 @@ export function evaluateGate(input: GateInput): GateResult {
   if (input.mergeable === false) return stop("pull request is not mergeable");
   const files = fileProblem(input);
   if (files !== null) return stop(files);
+  const integrity = integrityProblem(input);
+  if (integrity !== null) return stop(integrity);
   const scripts = installScriptProblem(input);
   if (scripts !== null) return stop(scripts);
   if (parsePublishedAt(input.publishedAtIso) === null) {
