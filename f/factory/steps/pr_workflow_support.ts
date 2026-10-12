@@ -919,6 +919,7 @@ export function shouldReadPrFixHeadState(
  * mainを保護するruleset(対象は既定のブランチ)は`protected: true`として返ることを確かめた。
  * globで対象を指定するrulesetなどは確かめていない。
  * 呼び出し側は、`shouldReadPrFixHeadState`が真のPRにだけ使う。
+ * 読めなければ例外を投げる。
  */
 export async function fetchPrFixHeadBranchState(
   client: GhClient,
@@ -932,10 +933,12 @@ export async function fetchPrFixHeadBranchState(
 }
 
 /**
- * 修正を試みる前の4つの安全のための関門を判定する。
+ * 修正を試みる前の安全のための関門を、open、fork、draft、headの状態、
+ * デフォルトブランチ、保護ブランチの順に判定する。
  * PRがopenであること、head.repoとbase.repoが同じであること(forkへpushしない)、
  * draftでないこと、headブランチが保護ブランチでもデフォルトブランチでもないこと。
- * headブランチの状態を読めていなければ、どの条件でも通さず止める。
+ * 読めなければ`fetchPrFixHeadBranchState`が例外を投げるので、`null`は通常は届かない。
+ * `null`の分岐は、呼び出し側が読み忘れたときに備える多層防御である。
  * worktreeを作る前、Claudeを実行する前に確かめる。
  * 実際にpushする直前には、`workspace.ts`の`commitAndPush`が
  * headのshaが動いていないことを別に確かめ直す。
@@ -956,6 +959,7 @@ export function evaluatePrFixSafetyGuards(
   if (input.draft) {
     return { ok: false, reason: "pull request is a draft" };
   }
+  // 読み忘れても通さない多層防御。通常は`fetchPrFixHeadBranchState`の例外が先に出る。
   if (input.headBranch === null) {
     return { ok: false, reason: "head branch state is unavailable" };
   }
@@ -2669,7 +2673,7 @@ export type PrFixFinalAction =
  * `pr_fix_finish.ts`が取るべき終端の動作に振り分ける。
  *
  * `guard_blocked`(prepareの、PRがopen・forkでない・draftでない・
- * 保護ブランチでないという関門と、prepareかverifyがworkerのイメージが古く検査を実行できないと分かったとき)は、
+ * headブランチが保護ブランチでもデフォルトブランチでもないという関門と、prepareかverifyがworkerのイメージが古く検査を実行できないと分かったとき)は、
  * `docs/internals/pr-workflow.md`の「準備での確認」のとおり`work_items`の`"blocked"`にする。修正のラウンドは記録しない。
  * `blocked`(Claude自身の判断か、`pr_fix_verify`が検出した禁止ファイルや
  * 検査コマンドの失敗)は`"needs_human"`にする。

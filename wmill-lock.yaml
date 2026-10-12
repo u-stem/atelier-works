@@ -101,6 +101,6 @@ locks:
   f/factory/steps/pr_review_generate: 6473d4f400325943043b2404ab4296a913f60db9f4d24b25605abb0adf4df5e3
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 4f258ff787df1ea0659550eec7e3923bc8db578698beb2b72781bc2f7050001b
-  f/factory/steps/pr_workflow_support: c092e49293bc73a38d6ef7e3cfee389f0a6554c42f07d9e0924a18ef31f00448
+  f/factory/steps/pr_workflow_support: 8e8b67aba1365e47d2fd8b2b9d9d01e7abaeb8c0dc1f2dfc9fbaafda95d469c8
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: 6b197f8bf7a2689c8f1906fcae64b328c9815890b6344796ab0e6cff6585e958

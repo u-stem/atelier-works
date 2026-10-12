@@ -564,6 +564,24 @@ describe("nextActionFor", () => {
     );
   });
 
+  test("asks a person to fix the PR when the head branch is protected", () => {
+    expect(nextActionFor("head branch is protected")).toBe(
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+    );
+  });
+
+  test("asks a person to fix the PR when the head branch is the default branch", () => {
+    expect(nextActionFor("head branch is the default branch")).toBe(
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+    );
+  });
+
+  test("asks to rerun the same work item when the head branch state is unavailable", () => {
+    expect(nextActionFor("head branch state is unavailable")).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
   test("tells the operator to reopen or withdraw when the PR is not open", () => {
     expect(nextActionFor("pull request is not open")).toBe(
       "PRを再オープンするか、この作業を取り下げてください",
