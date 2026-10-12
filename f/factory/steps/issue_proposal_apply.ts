@@ -182,6 +182,30 @@ export async function rejectionReplyStop(
 }
 
 /**
+ * 却下の返信を止めたことを、理由の種類に合わせたログに残す。
+ * 意図した停止(`stopped`)は警告、照合そのものの失敗(`check_failed`)はエラーである。
+ * 失敗は、マスク済みの文とエラーの名前を載せる。
+ */
+export function logRejectionReplyStop(
+  stop: RejectionReplyStop,
+  proposalId: number,
+  log: Logger,
+): void {
+  if (stop.kind === "stopped") {
+    log.warn("rejected reply not posted: repository owner check stopped", {
+      proposal_id: proposalId,
+      reason: stop.reason,
+    });
+    return;
+  }
+  log.error("rejected reply not posted: repository owner check failed", {
+    proposal_id: proposalId,
+    error: stop.error,
+    error_name: stop.errorName,
+  });
+}
+
+/**
  * `workItem.pr_number`を`number`に絞って返し、nullなら例外を投げる。
  * `audit`の提案の作業項目には正当に`pr_number`が無いため、
  * `pr_fix`の提案の分岐からだけ呼ぶ。
@@ -539,17 +563,8 @@ async function run(
           renderIssueProposalRejectedReply(reason),
         );
         await postDecisionReply(proposal, prNumber, replyBody);
-      } else if (stop.kind === "stopped") {
-        log.warn("rejected reply not posted: repository owner check stopped", {
-          proposal_id,
-          reason: stop.reason,
-        });
       } else {
-        log.error("rejected reply not posted: repository owner check failed", {
-          proposal_id,
-          error: stop.error,
-          error_name: stop.errorName,
-        });
+        logRejectionReplyStop(stop, proposal_id, log);
       }
     }
   }

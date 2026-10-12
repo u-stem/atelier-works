@@ -8,7 +8,9 @@ import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts
 import { factoryRepoIdCheckReason } from "../../f/factory/lib/repo_owner_gate.ts";
 import {
   ensureProposalRepoOwner,
+  logRejectionReplyStop,
   proposalRepoOwnerStop,
+  type RejectionReplyStop,
   readWithFactoryLabel,
   rejectionReplyStop,
   resolveFactoryLabel,
@@ -349,6 +351,68 @@ describe("the owner check of an issue proposal", () => {
         Promise.reject(new Error(`failed with ${token}`)),
       );
       expect(JSON.stringify(stop)).not.toContain(token);
+    });
+  });
+
+  describe("logRejectionReplyStop", () => {
+    type LogCall = { level: string; message: string; fields?: unknown };
+
+    function recordingLogger() {
+      const calls: LogCall[] = [];
+      const record = (level: string) => (message: string, fields?: unknown) => {
+        calls.push({ level, message, fields });
+      };
+      const log = {
+        info: record("info"),
+        warn: record("warn"),
+        error: record("error"),
+      };
+      return { log, calls };
+    }
+
+    const CHECK_FAILED: RejectionReplyStop = {
+      kind: "check_failed",
+      error: "HTTP 502",
+      errorName: "GitHubHttpError",
+    };
+
+    test("logs an intended stop as a warning", () => {
+      const { log, calls } = recordingLogger();
+      logRejectionReplyStop(
+        { kind: "stopped", reason: STOPPED_REASON },
+        7,
+        log,
+      );
+      expect(calls.map((call) => call.level)).toEqual(["warn"]);
+    });
+
+    test("carries the proposal id and the reason of an intended stop", () => {
+      const { log, calls } = recordingLogger();
+      logRejectionReplyStop(
+        { kind: "stopped", reason: STOPPED_REASON },
+        7,
+        log,
+      );
+      expect(calls[0]?.fields).toEqual({
+        proposal_id: 7,
+        reason: STOPPED_REASON,
+      });
+    });
+
+    test("logs a failure of the check as an error", () => {
+      const { log, calls } = recordingLogger();
+      logRejectionReplyStop(CHECK_FAILED, 7, log);
+      expect(calls.map((call) => call.level)).toEqual(["error"]);
+    });
+
+    test("carries the message and the error name of a failure of the check", () => {
+      const { log, calls } = recordingLogger();
+      logRejectionReplyStop(CHECK_FAILED, 7, log);
+      expect(calls[0]?.fields).toEqual({
+        proposal_id: 7,
+        error: "HTTP 502",
+        error_name: "GitHubHttpError",
+      });
     });
   });
 });
