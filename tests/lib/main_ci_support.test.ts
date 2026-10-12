@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertCommitSha,
-  backoffMs,
   buildFailureSummary,
   classifyRuns,
   decideState,
+  failingRuns,
   groupRunsBySha,
   isCommitSha,
   isMainCiSettledState,
@@ -608,24 +608,19 @@ describe("buildFailureSummary", () => {
   });
 });
 
-describe("backoffMs", () => {
-  test("starts at 10 minutes", () => {
-    expect(backoffMs(1)).toBe(10 * 60_000);
+describe("failingRuns", () => {
+  test("returns the completed runs that did not pass, oldest first", () => {
+    const runs = [
+      run({ id: 3, conclusion: "failure", createdAt: minutesBefore(2) }),
+      run({ id: 2, conclusion: "success" }),
+      run({ id: 1, conclusion: "timed_out", createdAt: minutesBefore(8) }),
+    ];
+    expect(failingRuns(runs).map((item) => item.id)).toEqual([1, 3]);
   });
 
-  test("doubles for each consecutive failure", () => {
-    expect(backoffMs(3)).toBe(40 * 60_000);
-  });
-
-  test("stops growing at 6 hours", () => {
-    expect(backoffMs(50)).toBe(6 * 60 * 60_000);
-  });
-
-  test("treats a count below 1 as the first failure", () => {
-    expect(backoffMs(0)).toBe(10 * 60_000);
-  });
-
-  test("treats a count that is not a number as the first failure", () => {
-    expect(backoffMs(Number.NaN)).toBe(10 * 60_000);
+  test("leaves out a run that is not completed", () => {
+    expect(
+      failingRuns([run({ status: "in_progress", conclusion: null })]),
+    ).toEqual([]);
   });
 });
