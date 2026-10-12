@@ -144,8 +144,11 @@ function isFactoryOwner(value: unknown): value is FactoryOwner {
   if (!isRecord(value)) {
     return false;
   }
+  // Windmillの画面は、未入力の任意項目を`null`で保存することがある。
+  // `null`は`id`が無いものとして通し、`normalizeOwner`で取り除く。
   if (
     "id" in value &&
+    value.id !== null &&
     (!isNumber(value.id) || !Number.isInteger(value.id) || value.id <= 0)
   ) {
     return false;
@@ -155,6 +158,12 @@ function isFactoryOwner(value: unknown): value is FactoryOwner {
     isString(value.kind) &&
     OWNER_KINDS.includes(value.kind)
   );
+}
+
+/** `id`が`null`のオーナーから`id`を取り除き、「id無し」を`undefined`に統一する。 */
+function normalizeOwner(owner: FactoryOwner): FactoryOwner {
+  const { id, ...rest } = owner;
+  return id === undefined || id === null ? rest : { ...rest, id };
 }
 
 function isFactoryOwnerArray(value: unknown): value is FactoryOwner[] {
@@ -413,7 +422,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
           })();
 
   return {
-    owners,
+    owners: owners.map(normalizeOwner),
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
     allowed_labeler_logins: labelerLoginsField(raw),

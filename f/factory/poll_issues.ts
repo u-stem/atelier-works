@@ -64,6 +64,7 @@ import {
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
+  excludeSkippedOwners,
   filterByRepoAllowlist,
   filterVerifiedOwners,
   groupActionableTargets,
@@ -1387,7 +1388,10 @@ export async function main(): Promise<{
     }
   }
 
-  const allowed = filterByRepoAllowlist(rawCandidates, config);
+  const allowed = filterByRepoAllowlist(
+    excludeSkippedOwners(rawCandidates, verified.skipped, config.factory_repo),
+    config,
+  );
   const candidates = await buildIssueCandidates(
     client,
     allowed,

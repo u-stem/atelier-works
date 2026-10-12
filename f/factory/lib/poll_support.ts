@@ -152,17 +152,50 @@ async function recordOwnerNotice(
 export async function filterVerifiedOwners(
   owners: readonly FactoryOwner[],
   deps: OwnerIdGateDeps,
-): Promise<{ readonly owners: FactoryOwner[]; readonly failed: number }> {
+): Promise<{
+  readonly owners: FactoryOwner[];
+  readonly skipped: FactoryOwner[];
+  readonly failed: number;
+}> {
   const verified: FactoryOwner[] = [];
-  let failed = 0;
+  const skipped: FactoryOwner[] = [];
   for (const owner of owners) {
     if (await gateOwnerId(owner, deps)) {
       verified.push(owner);
     } else {
-      failed += 1;
+      skipped.push(owner);
     }
   }
-  return { owners: verified, failed };
+  return { owners: verified, skipped, failed: skipped.length };
+}
+
+/**
+ * 照合で飛ばしたオーナーの候補を落とす。
+ * 検索を飛ばしても、DBから見つけ直す追跡中のPRは、候補に残ってしまうため。
+ * `factory_repo`は、オーナーによらず常に通す(`filterByRepoAllowlist`と同じ)。
+ * 飛ばしていないオーナーと、`owners`に無いオーナーの候補は、そのまま残す。
+ */
+export function excludeSkippedOwners<
+  T extends { readonly owner: string; readonly repo: string },
+>(
+  items: readonly T[],
+  skipped: readonly FactoryOwner[],
+  factoryRepo: string,
+): T[] {
+  if (skipped.length === 0) {
+    return [...items];
+  }
+  const skippedNames = new Set(skipped.map((o) => o.name.toLowerCase()));
+  const factory = normalizeRepoUrl(factoryRepo);
+  return items.filter((item) => {
+    if (!skippedNames.has(item.owner.toLowerCase())) {
+      return true;
+    }
+    return (
+      normalizeRepoUrl(`https://github.com/${item.owner}/${item.repo}`) ===
+      factory
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------

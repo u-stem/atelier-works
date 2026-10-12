@@ -60,6 +60,7 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   confirmLabeler,
   decidePrActions,
+  excludeSkippedOwners,
   FORK_HEAD_DENIED_KIND,
   filterByRepoAllowlist,
   filterVerifiedOwners,
@@ -1141,7 +1142,10 @@ export async function main(): Promise<{
     await recordFailureSafe("list_tracked_prs", err, log);
   }
 
-  const allowed = filterByRepoAllowlist(rawCandidates, config);
+  const allowed = filterByRepoAllowlist(
+    excludeSkippedOwners(rawCandidates, verified.skipped, config.factory_repo),
+    config,
+  );
 
   const contexts: PrCandidateContext[] = [];
   for (const found of allowed) {
