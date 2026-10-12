@@ -970,6 +970,11 @@ export type FactoryConfig = {
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
   /**
+   * `watch_pr_ci`がFactoryのPRのCIを観測して通知するか。
+   * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。
+   */
+  pr_ci_watch_enabled: boolean;
+  /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
    * `implementCheckCommandsFor`)。エントリの無いリポジトリでは

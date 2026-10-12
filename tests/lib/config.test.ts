@@ -505,6 +505,26 @@ describe("max_lookback_days", () => {
   });
 });
 
+describe("pr_ci_watch_enabled", () => {
+  test("defaults pr_ci_watch_enabled to true when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_ci_watch_enabled).toBe(true);
+  });
+
+  test("passes through an explicit pr_ci_watch_enabled false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_watch_enabled: false,
+    });
+    expect(config.pr_ci_watch_enabled).toBe(false);
+  });
+
+  test("throws when pr_ci_watch_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_watch_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("implement settings (工程3)", () => {
   test("defaults the seven scalar implement settings when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

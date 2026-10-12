@@ -86,6 +86,7 @@ type DefaultableField =
   | "implement_flow_timeout_sec"
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
+  | "pr_ci_watch_enabled"
   | "check_commands_by_repo";
 
 /**
@@ -138,6 +139,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_flow_timeout_sec: 14400,
   implement_max_changed_files: 60,
   implement_max_diff_lines: 3000,
+  // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
+  pr_ci_watch_enabled: true,
   check_commands_by_repo: {},
 };
 
@@ -579,6 +582,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
+    ),
+    pr_ci_watch_enabled: booleanField(
+      raw,
+      "pr_ci_watch_enabled",
+      DEFAULTS.pr_ci_watch_enabled,
     ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,

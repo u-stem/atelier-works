@@ -45,6 +45,7 @@ schema:
     - implement_flow_timeout_sec
     - implement_max_changed_files
     - implement_max_diff_lines
+    - pr_ci_watch_enabled
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -236,6 +237,11 @@ schema:
         required:
           - name
           - kind
+    pr_ci_watch_enabled:
+      type: boolean
+      description: >-
+        FactoryのPRのCIを観測して、失敗を通知するかどうかです。観測と通知だけで、PRにもリポジトリにも書き込みません。falseにすると、`watch_pr_ci`は何も読まずに終わります。
+      default: true
     repo_allowlist:
       type: array
       description: >-

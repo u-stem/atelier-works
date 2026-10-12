@@ -46,6 +46,7 @@ value:
   default_reviewers: []
   repo_allowlist: []
   diff_max_lines: 3000
+  pr_ci_watch_enabled: true
 resource_type: c_factory_config
 description: >-
   個人アカウント単体インスタンス向けの初期設定です。ownersとinstance_nameは、この画面から入力してください。
