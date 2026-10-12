@@ -13,6 +13,7 @@ const ALLOWED = new Set([
 const OPEN_CLONE_CALLERS = [
   "f/factory/poll_issues.ts",
   "f/factory/steps/audit_prepare.ts",
+  "f/factory/steps/dependabot_assess.ts",
   "f/factory/steps/implement_prepare.ts",
   "f/factory/steps/pipeline_generate.ts",
   "f/factory/steps/pipeline_prepare.ts",

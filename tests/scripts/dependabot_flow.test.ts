@@ -535,6 +535,7 @@ function prepareDeps(collected: CollectResult): DependabotPrepareDeps {
         headRef: "dependabot/npm_and_yarn/left-pad-1.3.1",
         headRepoFullName: "acme/widgets",
         baseRepoFullName: "acme/widgets",
+        baseRepoId: 1,
         baseRef: "main",
         mergeable: true,
         mergeableState: "clean",

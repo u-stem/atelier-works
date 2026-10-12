@@ -37,6 +37,7 @@ import {
   type ImpactOutcome,
   parseImpactAssessment,
 } from "../lib/dependabot_support.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { isCommitSha } from "../lib/main_ci_support.ts";
 import { modelFor } from "../lib/model_policy.ts";
@@ -51,7 +52,6 @@ import {
   buildGitArgv,
   type CommandResult,
   type CommandRunner,
-  ensureFactoryClone,
   localGitEnv,
   readAndVerifyWorktreeGitPointer,
   runCommand,
@@ -721,11 +721,9 @@ export async function main(
       run: runCommand,
       budget: () => dailyBudgetStatus(config),
       buildSystemPrompt: async (skillNames) => {
-        const clone = await ensureFactoryClone({
+        const clone = await openFactoryClone(config, {
           run: runCommand,
-          repoUrl: config.factory_repo,
           ghToken,
-          branch: config.factory_branch,
         });
         return buildSystemPrompt({ skillNames, factoryCloneDir: clone.dir });
       },
