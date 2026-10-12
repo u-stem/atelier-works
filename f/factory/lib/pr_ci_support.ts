@@ -198,10 +198,10 @@ export type PrCiPlanRow = {
 export type PrHeadPlan = {
   /** PRの今のheadの行が無いので、新しく記録する。 */
   readonly record: boolean;
-  /** 古いheadの未確定の行(`pending`と`failed`)と、その今の状態。`superseded`にする。 */
+  /** 古いheadの未確定の行(`pending`、`failed`、`no_ci`)と、その今の状態。`superseded`にする。 */
   readonly supersede: readonly {
     readonly id: number;
-    readonly from: "pending" | "failed";
+    readonly from: "pending" | "failed" | "no_ci";
   }[];
   /** headが以前の値に戻り、今のheadの行が`superseded`のままなら、その行。`pending`に戻す。 */
   readonly reopenId: number | null;
@@ -220,7 +220,9 @@ export function planPrHead(
     record: current === undefined,
     supersede: rows.flatMap((row) =>
       row.headSha !== headSha &&
-      (row.state === "pending" || row.state === "failed")
+      (row.state === "pending" ||
+        row.state === "failed" ||
+        row.state === "no_ci")
         ? [{ id: row.id, from: row.state }]
         : [],
     ),

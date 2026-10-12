@@ -551,6 +551,23 @@ describe("planPrHead", () => {
     ).toEqual([{ id: 1, from: "failed" }]);
   });
 
+  test("supersedes the no_ci row of an old head", () => {
+    expect(
+      planPrHead(SHA_B, [{ id: 1, headSha: SHA_A, state: "no_ci" }]).supersede,
+    ).toEqual([{ id: 1, from: "no_ci" }]);
+  });
+
+  test("reopens the superseded no_ci row when the head comes back", () => {
+    const afterSupersede = planPrHead(SHA_B, [
+      { id: 1, headSha: SHA_A, state: "no_ci" },
+    ]);
+    const backToA = planPrHead(SHA_A, [
+      { id: 1, headSha: SHA_A, state: "superseded" },
+      { id: 2, headSha: SHA_B, state: "pending" },
+    ]);
+    expect([afterSupersede.supersede[0]?.id, backToA.reopenId]).toEqual([1, 1]);
+  });
+
   test("leaves the passed row of an old head alone", () => {
     expect(
       planPrHead(SHA_B, [{ id: 1, headSha: SHA_A, state: "passed" }]).supersede,

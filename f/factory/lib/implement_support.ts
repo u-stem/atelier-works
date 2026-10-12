@@ -29,7 +29,6 @@ import {
   isString,
   isStringArray,
 } from "./types.ts";
-
 import { withCommitTrailers } from "./workspace.ts";
 
 export { parseImplementBranchWorkItemId } from "./types.ts";
