@@ -3413,6 +3413,9 @@ export type PrCiCheck = {
   readonly notified_reason: string | null;
   /** PRを作ったFactoryの作業項目のID。外部キーは持たない。 */
   readonly work_item_id: number | null;
+  /** 最後に実行を読み直した時刻。巡回の順に使う。 */
+  readonly checked_at: Date;
+  /** そのheadを最初に見た時刻。headが以前の値に戻ったときは、戻った時刻。 */
   readonly first_seen_at: Date;
   readonly created_at: Date;
   readonly updated_at: Date;
@@ -3443,6 +3446,7 @@ function toPrCiCheck(row: SqlRow): PrCiCheck {
       "notified_reason",
     ),
     work_item_id: parseNullableId(row.work_item_id, "work_item_id"),
+    checked_at: parseDate(row.checked_at, "checked_at"),
     first_seen_at: parseDate(row.first_seen_at, "first_seen_at"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
@@ -3464,6 +3468,7 @@ function assertPrCiTarget(owner: string, repo: string, prNumber: number): void {
 /**
  * PRのheadを`factory.pr_ci_checks`に`pending`で記録する。新しく入れたら`true`、記録済みなら`false`を返す。
  * 記録済みの行は書き換えない。同じheadを何度見ても、状態を巻き戻さないため。
+ * `owner`と`repo`は小文字にして記録する。GitHubが返す綴りと設定の綴りが違っても、同じ行に当たるため。
  * `owner`と`repo`がGitHubの名前の形でないとき、`head_sha`が完全なコミットshaでないとき、
  * PR番号と作業項目のIDが正の整数でないときは、DBに触れる前に例外を投げる。
  */
@@ -3482,7 +3487,7 @@ export async function recordPrCiCheck(
   const rows = await sql`
     INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha, work_item_id, run_created_at)
     VALUES (
-      ${record.owner}, ${record.repo}, ${record.pr_number}::integer, ${record.head_sha},
+      ${record.owner.toLowerCase()}, ${record.repo.toLowerCase()}, ${record.pr_number}::integer, ${record.head_sha},
       ${record.work_item_id}::bigint,
       ${record.run_created_at === null ? null : record.run_created_at.toISOString()}::timestamptz
     )
@@ -3492,7 +3497,7 @@ export async function recordPrCiCheck(
   return rows.length > 0;
 }
 
-/** そのPRの記録済みの行を、新しいheadから順に返す。 */
+/** そのPRの記録済みの行を、新しいheadから順に返す。`owner`と`repo`は小文字にして照会する。 */
 export async function listPrCiChecksForPr(
   owner: string,
   repo: string,
@@ -3502,9 +3507,10 @@ export async function listPrCiChecksForPr(
   assertPrCiTarget(owner, repo, prNumber);
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
+           updated_at
     FROM factory.pr_ci_checks
-    WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}::integer
+    WHERE owner = ${owner.toLowerCase()} AND repo = ${repo.toLowerCase()} AND pr_number = ${prNumber}::integer
     ORDER BY first_seen_at DESC, id DESC
   `.fetch();
   return rows.map(toPrCiCheck);
@@ -3523,9 +3529,10 @@ export async function getLatestPrCiCheck(
   assertPrCiTarget(owner, repo, prNumber);
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
+           updated_at
     FROM factory.pr_ci_checks
-    WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}::integer
+    WHERE owner = ${owner.toLowerCase()} AND repo = ${repo.toLowerCase()} AND pr_number = ${prNumber}::integer
     ORDER BY first_seen_at DESC, id DESC
     LIMIT 1
   `.fetch();
@@ -3533,25 +3540,30 @@ export async function getLatestPrCiCheck(
   return row === undefined ? null : toPrCiCheck(row);
 }
 
-/** 判定を待っている行を、最初に見た順に最大`limit`件返す。 */
+/**
+ * 判定を待っている行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
+ * 読み直すたびに`touchPrCiCheck`で時刻を進めるので、上限を超える行があっても、後ろの行が飢えない。
+ */
 export async function listPendingPrCiChecks(
   limit: number,
   sql: SqlClient = defaultSqlClient,
 ): Promise<PrCiCheck[]> {
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
+           updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'pending'
-    ORDER BY first_seen_at ASC
+    ORDER BY checked_at ASC
     LIMIT ${limit}::bigint
   `.fetch();
   return rows.map(toPrCiCheck);
 }
 
 /**
- * 失敗の行を、最後に更新した古い順に最大`limit`件返す。
+ * 失敗の行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
  * 同じheadの再実行が通ったかを、巡回のたびに読み直すために使う。
+ * 読み直すたびに`touchPrCiCheck`で時刻を進めるので、上限を超える行があっても、後ろの行が飢えない。
  */
 export async function listFailedPrCiChecks(
   limit: number,
@@ -3559,10 +3571,11 @@ export async function listFailedPrCiChecks(
 ): Promise<PrCiCheck[]> {
   const rows = await sql`
     SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
-           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+           notified_reason, work_item_id, checked_at, first_seen_at, created_at,
+           updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'failed'
-    ORDER BY updated_at ASC
+    ORDER BY checked_at ASC
     LIMIT ${limit}::bigint
   `.fetch();
   return rows.map(toPrCiCheck);
@@ -3574,12 +3587,20 @@ export type PrCiTransition = {
   readonly summary?: string;
   /** 渡せば置き換える。渡さなければ今の値を残す。そのheadの最古の実行の作成時刻。 */
   readonly runCreatedAt?: Date;
+  /**
+   * `superseded`から`pending`に戻すときに、必ず`true`にする。それ以外の移行では`true`にできない。
+   * 戻した行は、新しく見つけたheadと同じに扱う。`first_seen_at`を今にしてPRの最新の行にし、
+   * 通知した理由(`notified_reason`)と要約を空にして、前の失敗の通知済みの記録を引き継がない。
+   */
+  readonly reopen?: boolean;
 };
 
 /**
  * 行を`from`の状態から`to.state`に移す。この呼び出しで移したら`true`を返す。
  * 条件は`state = from`なので、別の実行が先に移した行は書き換えず、`false`を返す。
- * 許されない移行(`canTransitionPrCi`)か、`summary`が長すぎるときは、DBに触れずに例外を投げる。
+ * 許されない移行(`canTransitionPrCi`)、`superseded`から`pending`への移行で`reopen`が無いとき、
+ * それ以外の移行に`reopen`があるとき、`summary`が長すぎるときは、DBに触れずに例外を投げる。
+ * 移すたびに`checked_at`も今にする。
  * 呼び出し側は、通知の登録を先にし、この更新を後にする。
  * 更新が先に成功して通知が失敗すると、通知が永久に出ないため。
  * 通知の重複は、通知側の部分一意索引が防ぐ。
@@ -3598,6 +3619,12 @@ export async function transitionPrCiCheck(
       `transitionPrCiCheck: transition is not allowed (${from} -> ${to.state})`,
     );
   }
+  const reopen = to.reopen === true;
+  if (reopen !== (from === "superseded" && to.state === "pending")) {
+    throw new Error(
+      "transitionPrCiCheck: reopen is required for, and only for, superseded -> pending",
+    );
+  }
   if (
     to.summary !== undefined &&
     to.summary.length > PR_CI_SUMMARY_MAX_LENGTH
@@ -3609,10 +3636,31 @@ export async function transitionPrCiCheck(
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET state = ${to.state},
-        summary = COALESCE(${to.summary ?? null}::text, summary),
+        summary = CASE WHEN ${reopen}::boolean THEN '' ELSE COALESCE(${to.summary ?? null}::text, summary) END,
         run_created_at = COALESCE(${to.runCreatedAt === undefined ? null : to.runCreatedAt.toISOString()}::timestamptz, run_created_at),
+        first_seen_at = CASE WHEN ${reopen}::boolean THEN now() ELSE first_seen_at END,
+        notified_reason = CASE WHEN ${reopen}::boolean THEN NULL ELSE notified_reason END,
+        checked_at = now(),
         updated_at = now()
     WHERE id = ${id}::bigint AND state = ${from}
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 実行を読み直した時刻(`checked_at`)を今にする。判定待ちか失敗の行だけを更新し、更新したら`true`を返す。
+ * 状態を変えずに読み直したときに呼ぶ。次の巡回で、ほかの行が先に読み直される。
+ * `updated_at`は変えない。保持期間を延ばさないため。
+ */
+export async function touchPrCiCheck(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const rows = await sql`
+    UPDATE factory.pr_ci_checks
+    SET checked_at = now()
+    WHERE id = ${id}::bigint AND state IN ('pending', 'failed')
     RETURNING id
   `.fetch();
   return rows.length > 0;
@@ -3642,9 +3690,10 @@ export async function markPrCiNotified(
 /**
  * 判定が済んだ(`pending`以外の)行のうち、`updated_at`が`olderThan`以前のものを削除し、行数を返す。
  * 判定を待っている行は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
- * 各PRで、最初に見た時刻が最も新しい1行は、判定済みでも削除しない。
- * 鍵は`(first_seen_at, id)`の最大で、`getLatestPrCiCheck`が返す行と必ず同じになる。
- * PRの最新の行を残すのは、PRに今のheadの判定の記録が残り、同じheadを新しいものとして記録し直さないため。
+ * 失敗(`failed`)のままの行も、各PRで最新の1行は削除しない。再実行が通ったかを読み直し続けるため。
+ * 最新かどうかは`(first_seen_at, id)`の大きさで決め、`getLatestPrCiCheck`が返す行と同じになる。
+ * 通った行などの終わった行は、最新でも保持期間を過ぎたら削除する。
+ * 消した行のheadがまだPRの今のheadなら、次の巡回で新しい行として記録し、判定し直す。
  */
 export async function deletePrCiChecksBefore(
   olderThan: Date,
@@ -3654,11 +3703,14 @@ export async function deletePrCiChecksBefore(
     DELETE FROM factory.pr_ci_checks AS r
     WHERE r.state <> 'pending'
       AND r.updated_at <= ${olderThan.toISOString()}::timestamptz
-      AND EXISTS (
-        SELECT 1 FROM factory.pr_ci_checks AS newer
-        WHERE newer.owner = r.owner AND newer.repo = r.repo
-          AND newer.pr_number = r.pr_number
-          AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
+      AND (
+        r.state <> 'failed'
+        OR EXISTS (
+          SELECT 1 FROM factory.pr_ci_checks AS newer
+          WHERE newer.owner = r.owner AND newer.repo = r.repo
+            AND newer.pr_number = r.pr_number
+            AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
+        )
       )
     RETURNING r.id
   `.fetch();

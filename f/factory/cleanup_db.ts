@@ -4,7 +4,7 @@
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
 // 解決済みのnotice・判定済みの`main_ci_runs`・`pr_ci_checks`・`worker_samples`で、作業項目とは別々に掃除する。
 // 判定を待つ`main_ci_runs`と`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行、
-// 各PRの最新の`pr_ci_checks`の行は、古くても削除しない。
+// 失敗のままの各PRの最新の`pr_ci_checks`の行は、古くても削除しない。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
@@ -158,7 +158,7 @@ async function cleanupMainCiRuns(cutoff: Date, log: Logger): Promise<number> {
   }
 }
 
-/** 判定済みのPRのCIの記録を、最後の更新から保持期間を過ぎたものだけ削除する。判定を待つ行と、各PRの最新の行は消さない。 */
+/** 判定済みのPRのCIの記録を、最後の更新から保持期間を過ぎたものだけ削除する。判定を待つ行と、失敗のままの各PRの最新の行は消さない。 */
 async function cleanupPrCiChecks(cutoff: Date, log: Logger): Promise<number> {
   try {
     return await deletePrCiChecksBefore(cutoff);

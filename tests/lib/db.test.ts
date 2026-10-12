@@ -106,6 +106,7 @@ import {
   toIssueProposal,
   toRequirementDraft,
   toReviewRecord,
+  touchPrCiCheck,
   transitionMainCiRun,
   transitionPrCiCheck,
   updateIntakeIfRegenerating,
@@ -5116,6 +5117,7 @@ const PR_CI_ROW: SqlRow = {
   summary: "",
   notified_reason: null,
   work_item_id: null,
+  checked_at: "2026-10-13T03:00:00.000Z",
   first_seen_at: "2026-10-13T03:00:00.000Z",
   created_at: "2026-10-13T03:00:00.000Z",
   updated_at: "2026-10-13T03:00:00.000Z",
@@ -5244,6 +5246,12 @@ describe("listPrCiChecksForPr", () => {
     ).rejects.toThrow('row field "state"');
   });
 
+  test("reads the last check time", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.checked_at).toEqual(new Date("2026-10-13T03:00:00.000Z"));
+  });
+
   test("reads the work item id of a row that has one", async () => {
     const { sql } = createFakeSqlClient([
       [{ ...PR_CI_ROW, work_item_id: "7" }],
@@ -5285,10 +5293,10 @@ describe("listPendingPrCiChecks", () => {
     expect(calls[0]?.text).toContain("WHERE state = 'pending'");
   });
 
-  test("orders by the first seen time", async () => {
+  test("orders by the last check, so that no row is starved", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listPendingPrCiChecks(50, sql);
-    expect(calls[0]?.text).toContain("ORDER BY first_seen_at ASC");
+    expect(calls[0]?.text).toContain("ORDER BY checked_at ASC");
   });
 
   test("passes the limit as a bigint", async () => {
@@ -5305,10 +5313,10 @@ describe("listFailedPrCiChecks", () => {
     expect(calls[0]?.text).toContain("WHERE state = 'failed'");
   });
 
-  test("orders by the last update, oldest first", async () => {
+  test("orders by the last check, so that no row is starved", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listFailedPrCiChecks(50, sql);
-    expect(calls[0]?.text).toContain("ORDER BY updated_at ASC");
+    expect(calls[0]?.text).toContain("ORDER BY checked_at ASC");
   });
 });
 
@@ -5400,6 +5408,120 @@ describe("transitionPrCiCheck", () => {
   });
 });
 
+describe("transitionPrCiCheck reopen", () => {
+  const reopen = { state: "pending" as const, reopen: true };
+
+  test("restarts the first seen time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain(
+      "first_seen_at = CASE WHEN  ? ::boolean THEN now() ELSE first_seen_at END",
+    );
+  });
+
+  test("clears the notified reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain(
+      "notified_reason = CASE WHEN  ? ::boolean THEN NULL ELSE notified_reason END",
+    );
+  });
+
+  test("clears the summary", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain(
+      "summary = CASE WHEN  ? ::boolean THEN ''",
+    );
+  });
+
+  test("binds the reopen flag as true", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("binds the reopen flag as false for an ordinary transition", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.values).toContain(false);
+  });
+
+  test("refuses to leave superseded without the reopen flag, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", { state: "pending" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses the reopen flag on a transition that is not a reopen", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    await expect(
+      transitionPrCiCheck(9, "pending", { state: "passed", reopen: true }, sql),
+    ).rejects.toThrow("reopen");
+  });
+
+  test("restarts the last check time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain("checked_at = now()");
+  });
+});
+
+describe("touchPrCiCheck", () => {
+  test("records the check time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await touchPrCiCheck(9, sql);
+    expect(calls[0]?.text).toContain("SET checked_at = now()");
+  });
+
+  test("touches only a row that is still waiting or failed", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await touchPrCiCheck(9, sql);
+    expect(calls[0]?.text).toContain("state IN ('pending', 'failed')");
+  });
+
+  test("does not extend the retention of the row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await touchPrCiCheck(9, sql);
+    expect(calls[0]?.text).not.toContain("updated_at");
+  });
+
+  test("returns true when the row was touched", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await touchPrCiCheck(9, sql)).toBe(true);
+  });
+
+  test("returns false when the row had already left", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await touchPrCiCheck(9, sql)).toBe(false);
+  });
+});
+
+describe("pr_ci_checks owner and repo", () => {
+  test("lowercases the owner and repo when recording", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(
+      { ...NEW_PR_CI, owner: "Acme", repo: "Widgets" },
+      sql,
+    );
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+
+  test("lowercases the owner and repo when listing a pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrCiChecksForPr("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+
+  test("lowercases the owner and repo when reading the latest row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestPrCiCheck("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+});
+
 describe("markPrCiNotified", () => {
   test("writes the reason only when it differs from the recorded one", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
@@ -5433,11 +5555,11 @@ describe("deletePrCiChecksBefore", () => {
     expect(calls[0]?.text).toContain("state <> 'pending'");
   });
 
-  test("keeps the newest row of each pull request", async () => {
+  test("keeps the newest row of a pull request only when it is failed", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await deletePrCiChecksBefore(cutoff, sql);
     expect(calls[0]?.text).toMatch(
-      /newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)/,
+      /r\.state <> 'failed'\s+OR EXISTS[\s\S]*newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)/,
     );
   });
 

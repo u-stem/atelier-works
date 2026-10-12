@@ -55,9 +55,15 @@ describe("20261013100000_pr_ci_checks.up.sql", () => {
     expect(await Bun.file(TABLE_UP).text()).toContain("notified_reason text,");
   });
 
-  test("indexes the rows that are still pending", async () => {
+  test("indexes the rows that are still pending by their last check", async () => {
     expect(await Bun.file(TABLE_UP).text()).toContain(
-      "CREATE INDEX pr_ci_checks_pending_idx ON factory.pr_ci_checks (first_seen_at) WHERE state = 'pending'",
+      "CREATE INDEX pr_ci_checks_pending_idx ON factory.pr_ci_checks (checked_at) WHERE state = 'pending'",
+    );
+  });
+
+  test("records the last check time", async () => {
+    expect(await Bun.file(TABLE_UP).text()).toContain(
+      "checked_at timestamptz NOT NULL DEFAULT now(),",
     );
   });
 

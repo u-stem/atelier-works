@@ -57,7 +57,7 @@ export type CleanupCounts = {
   readonly main_ci_runs_deleted: number;
   /** 保持期間を過ぎた、workerの負荷の記録(`worker_samples`)の削除件数。期限を過ぎた行はすべて消す。 */
   readonly worker_samples_deleted: number;
-  /** 保持期間を過ぎた、PRのCIの判定済みの記録(`pr_ci_checks`)の削除件数。判定を待つ行と、各PRの最新の行は消さない。 */
+  /** 保持期間を過ぎた、PRのCIの判定済みの記録(`pr_ci_checks`)の削除件数。判定を待つ行と、失敗のままの各PRの最新の行は消さない。 */
   readonly pr_ci_checks_deleted: number;
   /** 作業項目の削除に合わせて消した要件定義書のディレクトリ(`docDirsFor`)。 */
   readonly doc_dirs_deleted: number;
