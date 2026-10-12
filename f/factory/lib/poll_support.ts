@@ -702,6 +702,13 @@ export type PrCandidate = {
   /** このPRに、終了していない`pr_review`の作業項目がすでにあるか。 */
   readonly hasActiveReviewingItem: boolean;
   /**
+   * このPRの、終端でない`pr_fix`の作業項目のid。無ければ`null`。
+   * 値があるとき、`fix_label`では修正を始めず、このidを保留の理由としてログに残す。
+   * 同じPRの終端でない`pr_fix`は、DBの部分一意インデックスでも1件に制限され、
+   * 2件目の挿入は失敗するためである。
+   */
+  readonly activeFixItemId: number | null;
+  /**
    * このPRの最新の`work_items`の行(種類と状態は問わない)の`head_sha`。
    * 作業項目が一度も無ければ`null`。
    * アサインやレビュー依頼から自動で検出する経路で、
@@ -757,6 +764,8 @@ export type PrDecision = {
  * ラベルの経路も検出の経路も、PRのheadがbaseと同じリポジトリにないとき
  * (forkのPRと、headのリポジトリを取得できないPR)は始めず、`deny_fork_head`を返す。
  * `pr_fix`に自動検出の経路は無く、`fix_label`からだけ始め、コメントからは始めない。
+ * このPRに終端でない`pr_fix`があるときは、`fix_label`が許可された人のものでも始めず、ラベルを残す。
+ * 今の`pr_fix`が終わった後のポーリングが、残ったラベルから始める。
  * draw.ioのビューアの固定を上げるPRのブランチ(`isViewerBumpBranch`)には、`fix_label`が付いていても始めない。
  */
 export function decidePrActions(
@@ -796,9 +805,12 @@ export function decidePrActions(
     // 人だけが直すブランチのPRでは、修正を始めない。ラベルは消費せずに残す。
     // 判定はブランチ名だけで行うので、`factory_repo`に限らず、担当するすべてのリポジトリのPRに効く。
     // `pr_fix_prepare`の`evaluateHumanOnlyBranchGuard`も同じ述語を使う。
+    // 終端でない`pr_fix`があるPRでも、ラベルは消費せずに残す。消費してから挿入が
+    // 一意インデックスに阻まれると、人の依頼が黙って失われるためである。
     const fix: PrFixAction = hasFixLabel
       ? fixLabelAllowed
-        ? isViewerBumpBranch(candidate.headRef)
+        ? isViewerBumpBranch(candidate.headRef) ||
+          candidate.activeFixItemId !== null
           ? { kind: "none" }
           : { kind: "trigger_fix", removeLabel: true }
         : { kind: "deny_labeler" }

@@ -325,3 +325,82 @@ describe("buildPrCandidate with dependabot work items", () => {
     expect((await buildWithDependabot()).lastKnownHeadSha).toBe("b".repeat(40));
   });
 });
+
+// 動いているpr_fixの有無は、同じPRの稼働中の行のうち、pr_fixの行だけから決まる。
+describe("buildPrCandidate with active pr_fix work items", () => {
+  const ROW: WorkItem = {
+    id: 60,
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 7,
+    title: null,
+    body: null,
+    status: "fixing",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: "b".repeat(40),
+    last_review_id: null,
+    last_comment_id: null,
+    last_review_comment_id: null,
+    observed_review_id: null,
+    observed_comment_id: null,
+    observed_review_comment_id: null,
+    fix_round: 1,
+    parent_work_item_id: null,
+    branch: null,
+    pr_url: null,
+    created_at: new Date("2026-10-12T00:00:00Z"),
+    updated_at: new Date("2026-10-12T00:00:00Z"),
+  };
+
+  async function buildWith(active: readonly WorkItem[]) {
+    const fake = world({ labels: [], events: labelEventsOk([]) });
+    return (
+      await buildPrCandidate(
+        { run: fake.run, ghToken: "tok" },
+        FOUND,
+        "octo-owner",
+        active,
+        LABELS,
+        DEPS,
+      )
+    ).candidate;
+  }
+
+  test("marks a pull request that has an active pr_fix", async () => {
+    expect((await buildWith([ROW])).activeFixItemId).toBe(60);
+  });
+
+  test("does not mark a pull request without active rows", async () => {
+    expect((await buildWith([])).activeFixItemId).toBeNull();
+  });
+
+  test("does not count an active pr_review as an active fix", async () => {
+    expect(
+      (await buildWith([{ ...ROW, kind: "pr_review", status: "reviewing" }]))
+        .activeFixItemId,
+    ).toBeNull();
+  });
+
+  test("does not count an active dependabot row as an active fix", async () => {
+    expect(
+      (await buildWith([{ ...ROW, kind: "dependabot", status: "picked" }]))
+        .activeFixItemId,
+    ).toBeNull();
+  });
+
+  test("does not count a terminal pr_fix as an active fix", async () => {
+    expect(
+      (await buildWith([{ ...ROW, status: "rereview_requested" }]))
+        .activeFixItemId,
+    ).toBeNull();
+  });
+});

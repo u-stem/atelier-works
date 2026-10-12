@@ -9,6 +9,8 @@
 // 再開を拒否する。実装フローとpipelineへの再開は比較交換でflow_job_id(リース)を空にし、
 // 起動したジョブIDは空のときだけ記録する。起動の戻り値がジョブIDでなければ、
 // 状態をneeds_humanに戻して例外を投げる(`launchFailureError`)。
+// 同じPRに終端でない別のpr_fixがあるpr_fixは再開できず、その作業項目に従うよう説明する
+// (`activePrFixConflictError`)。
 //
 // どの種別もラベルを付け直さない。トリガーラベル(Issueは`factory`、
 // PRは`factory:review`・`factory:fix`)は取得時に一度だけ消費し、
@@ -22,9 +24,11 @@ import {
   addNoticeUnlessUnresolved,
   getWorkItem,
   isActiveIssueUniqueViolation,
+  isActivePrFixUniqueViolation,
   latestRequirementsApproval,
   latestStatusEvent,
   listActiveIssueWorkItems,
+  listActivePrFixWorkItems,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   type StatusEventSummary,
@@ -236,6 +240,56 @@ export async function activeIssueConflictErrorFrom(
     return activeIssueConflictError(workItem, await lookup());
   } catch {
     return activeIssueConflictError(workItem, []);
+  }
+}
+
+/**
+ * 終端の`pr_fix`を稼働中の状態へ戻す更新が、同じPRの別の稼働中の`pr_fix`に阻まれたときの
+ * 例外を作る。その稼働中の`pr_fix`が同じPRの修正を進めているので、
+ * この作業項目は再開できず、稼働中のものに従う。稼働中の作業項目が見つかれば、そのIDを文に含める。
+ * 同じPRに稼働中の`pr_fix`は1件までなので、ここで再開を断ってもPRの修正は止まらない。
+ */
+export function activePrFixConflictError(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
+  active: readonly Pick<
+    WorkItem,
+    "id" | "owner" | "repo" | "pr_number" | "kind"
+  >[],
+): Error {
+  const other = active.find(
+    (item) =>
+      item.kind === "pr_fix" &&
+      item.id !== workItem.id &&
+      item.owner === workItem.owner &&
+      item.repo === workItem.repo &&
+      item.pr_number === workItem.pr_number,
+  );
+  const id = String(workItem.id);
+  if (other === undefined) {
+    return new Error(
+      `retry_work_item: another work item is already fixing the same pull request, work item ${id} will not be resumed`,
+    );
+  }
+  const otherId = String(other.id);
+  return new Error(
+    `retry_work_item: work item ${otherId} (active) is already fixing the same pull request, work item ${id} will not be resumed, follow work item ${otherId}`,
+  );
+}
+
+/**
+ * `activePrFixConflictError`を、稼働中の作業項目の検索(`lookup`)の結果から作る。
+ * 検索が失敗しても、再実行の失敗の理由を隠さないよう、IDなしの文にして返す。
+ */
+export async function activePrFixConflictErrorFrom(
+  workItem: Pick<WorkItem, "id" | "owner" | "repo" | "pr_number">,
+  lookup: () => Promise<
+    readonly Pick<WorkItem, "id" | "owner" | "repo" | "pr_number" | "kind">[]
+  >,
+): Promise<Error> {
+  try {
+    return activePrFixConflictError(workItem, await lookup());
+  } catch {
+    return activePrFixConflictError(workItem, []);
   }
 }
 
@@ -585,6 +639,14 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
           note,
         );
   } catch (err) {
+    if (isActivePrFixUniqueViolation(err)) {
+      const prNumber = workItem.pr_number;
+      throw await activePrFixConflictErrorFrom(workItem, async () =>
+        prNumber === null
+          ? []
+          : listActivePrFixWorkItems(workItem.owner, workItem.repo, prNumber),
+      );
+    }
     if (!isActiveIssueUniqueViolation(err)) throw err;
     const issueNumber = workItem.issue_number;
     throw await activeIssueConflictErrorFrom(workItem, async () =>

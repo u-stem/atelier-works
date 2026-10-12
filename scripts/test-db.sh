@@ -63,6 +63,7 @@ ACTIVE_ISSUE_MIGRATION="20261009120000_active_issue_key.up.sql"
 NOTICES_DEDUP_MIGRATION="20261011170000_notices_unresolved_dedup.up.sql"
 DISK_USAGE_NOTICE_MIGRATION="20261013100300_disk_usage_notice_single.up.sql"
 PR_CI_FIX_SCHEMA_MIGRATION="20261013100400_pr_ci_fix_schema.up.sql"
+ACTIVE_PR_FIX_MIGRATION="20261013100500_active_pr_fix_key.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -412,6 +413,48 @@ verify_pr_ci_fix_schema() {
   log "pr_ci_fix_schema accepts fixing, rejects invalid values, and round-trips"
 }
 
+# 同じPRの終端でない2件目のpr_fixを拒み、終端の行、pr_review、別のPR、別のリポジトリ、
+# pr_numberがNULLの行とは共存できることを確かめる。拒否の文に制約名が含まれること
+# (`isActivePrFixUniqueViolation`が頼る形)と、終端の行を稼働中へ戻す更新も拒まれることも確かめる。
+# このmigrationの適用直後に呼ぶ。
+verify_active_pr_fix_index() {
+  local insert_prefix="INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES (1, 'issue',"
+  # 文を実行して成功を確かめる。
+  expect_accepted() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" >/dev/null || die "the statement was rejected: $1"
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  expect_rejected() {
+    local statement="$1" constraint="work_items_active_pr_fix_key" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'fixing')"
+  expect_rejected "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'fixing')"
+  expect_rejected "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'picked')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'rereview_requested')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'blocked')"
+  expect_accepted "${insert_prefix} 'pr_review', 'fixprobe', 'r', 1, 't', 'reviewing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 2, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'other', 1, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', NULL, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', NULL, 't', 'fixing')"
+
+  # 終端の行を稼働中へ戻す更新(retry_work_itemの再開)も、同じPRの稼働中の行に拒まれる。
+  expect_rejected "UPDATE factory.work_items SET status = 'fixing' WHERE owner = 'fixprobe' AND repo = 'r' AND pr_number = 1 AND kind = 'pr_fix' AND status = 'blocked'"
+  # 稼働中の行が終端になれば、同じPRに新しい稼働中の行を入れられる。
+  expect_accepted "UPDATE factory.work_items SET status = 'failed' WHERE owner = 'fixprobe' AND repo = 'r' AND pr_number = 1 AND kind = 'pr_fix' AND status = 'fixing'"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'fixing')"
+  printf "DELETE FROM factory.work_items WHERE owner = 'fixprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "pr_fix work items are limited to one active row per pull request"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -436,6 +479,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${PR_CI_FIX_SCHEMA_MIGRATION}" ]; then
     verify_pr_ci_fix_schema
+  fi
+  if [ "${up_name}" = "${ACTIVE_PR_FIX_MIGRATION}" ]; then
+    verify_active_pr_fix_index
   fi
 done
 

@@ -26,6 +26,7 @@ import {
   bumpWatermarks,
   findApprovedWorkItemForIssue,
   insertWorkItem,
+  isActivePrFixUniqueViolation,
   latestPrWorkItem,
   listActive,
   listTrackedPrs,
@@ -71,7 +72,11 @@ import {
   type PrDecision,
   recordLabelerCheckLimit,
 } from "./lib/poll_support.ts";
-import { hasLabel, type WorkItem } from "./lib/types.ts";
+import {
+  hasLabel,
+  TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
+} from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import {
   describeReason,
@@ -185,6 +190,8 @@ const defaultBuildPrCandidateDeps: BuildPrCandidateDeps = {
  * 作成者はPRの`user`から取り、取得できなければ`null`にする。
  * イベントを取得できないときは例外を投げ、そのPRは候補にならない
  * (付与者を確かめられないまま始めない)。
+ * `activeForPr`は、同じPRの終端でない作業項目(`listActive`の結果)である。
+ * 終端の行が混ざっていても稼働中とみなさないよう、`pr_fix`の状態をここでも確かめる(二重の確認)。
  */
 export async function buildPrCandidate(
   client: GhClient,
@@ -250,6 +257,14 @@ export async function buildPrCandidate(
           firstLinkedIssue,
         );
 
+  // `activeForPr`は`listActive`の結果なので終端の行を含まないが、終端の行が混ざっても
+  // 稼働中とみなさないよう、`TERMINAL_WORK_ITEM_STATUSES`でも確かめる(二重の確認)。
+  const activeFix = activeForPr.find(
+    (item) =>
+      item.kind === "pr_fix" &&
+      !TERMINAL_WORK_ITEM_STATUSES.includes(item.status),
+  );
+
   const candidate: PrCandidate = {
     owner: found.owner,
     repo: found.repo,
@@ -268,6 +283,7 @@ export async function buildPrCandidate(
     hasActiveReviewingItem: activeForPr.some(
       (item) => item.kind === "pr_review",
     ),
+    activeFixItemId: activeFix?.id ?? null,
     lastKnownHeadSha: latestAny?.head_sha ?? null,
     previousFixRound: latestFix?.fix_round ?? 0,
     maxReviewId: reviews.maxId,
@@ -310,9 +326,11 @@ export type ClaimPrResult =
  * それでも読めなければ、取得できたか分からない。ラベルを消費したまま
  * 作業項目を作らないと、以後ラベル検索でもDBでもそのPRを見つけられない。
  * 一方、読めないまま作業を始めると、別のアクターがラベルを付け直していた場合に、
- * 次のポーリングで同じPRのサイクルが二重に始まる(ラベルの経路は、稼働中の作業項目があっても
- * `decidePrActions`が止めない)。そのため、トリガーラベルを付け直して
- * `claimed: false`と`restored: true`を返し、次のポーリングが拾い直す。
+ * 次のポーリングで同じPRのサイクルが二重に始まる。レビューのラベルの経路は、稼働中の作業項目が
+ * あっても`decidePrActions`が止めない。修正のラベルの経路は、終端でない`pr_fix`がある間だけ止まり、
+ * その修正が次のポーリングまでに終わると、付け直されたラベルで次のサイクルが始まる。
+ * そのため、トリガーラベルを付け直して`claimed: false`と`restored: true`を返し、
+ * 次のポーリングが拾い直す。
  * 付け直しは5xxと通信断を1回再送する(ラベルの追加は何度送っても状態が同じ)。
  * ラベルが外れたままになるのは、読み取りの失敗がレート制限のとき(同じ制限に当たり、
  * さらに最大120秒待つので付け直さない)と、付け直しも失敗したときである。
@@ -608,6 +626,43 @@ async function restoreTriggerLabel(
   };
 }
 
+/**
+ * 取得の後に作業項目の挿入が、同じPRの終端でない`pr_fix`に阻まれたとき、消費したトリガーラベルを付け直す。
+ * 一覧を読んだ後に別の`pr_fix`が始まった競合で、人の依頼を失わないためである。
+ * ラベルの付与は、既に付いていても成功するので、5xxと通信断を1回再送する。
+ * 付け直しも失敗したら、両方の失敗の文を含む`PrClaimLabelLeftRemovedError`を投げる。
+ * `processPrDecisions`が、失敗に記録し、人へ知らせる(`claimPr`の付け直しと同じ扱い)。
+ */
+export async function restoreTriggerLabelAfterStartRace(
+  client: GhClient,
+  target: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+    readonly triggerLabel: string;
+  },
+  startErr: unknown,
+  log?: Logger,
+): Promise<void> {
+  const { owner, repo, number, triggerLabel } = target;
+  try {
+    await addLabels(client, owner, repo, number, [triggerLabel], {
+      idempotent: true,
+    });
+  } catch (restoreErr) {
+    throw new PrClaimLabelLeftRemovedError(
+      triggerLabel,
+      `starting the work item failed (${errorMessage(startErr)}) and restoring trigger label ${triggerLabel} failed (${errorMessage(restoreErr)}); the label stays removed, so a person must add it back`,
+      restoreErr,
+    );
+  }
+  log?.warn("work item could not be started; restored the trigger label", {
+    target: `${owner}/${repo}#${String(number)}`,
+    label: triggerLabel,
+    error: errorMessage(startErr),
+  });
+}
+
 export type ClaimNotClaimedDeps = {
   readonly addNoticeUnlessUnresolved: typeof addNoticeUnlessUnresolved;
 };
@@ -830,6 +885,15 @@ export type PrDecisionHandlers = {
     candidate: PrCandidate,
     context: PrCandidateContext,
   ) => Promise<void>;
+  /**
+   * 消費したトリガーラベルを付け直す。作業項目の挿入が一意インデックスに阻まれたときに呼ぶ。
+   * 付け直せなければ`PrClaimLabelLeftRemovedError`を投げる。
+   */
+  readonly restoreLabel: (
+    candidate: PrCandidate,
+    label: string,
+    cause: unknown,
+  ) => Promise<void>;
   readonly resolveNotices: (
     candidate: PrCandidate,
     label: string,
@@ -928,6 +992,20 @@ export async function processPrDecisions(
   try {
     for (const decision of decisions) {
       const { candidate, review, fix } = decision;
+      // 終端でない`pr_fix`があるPRの修正ラベルは、消費せずに残している。noticeは出さず、理由をログに残す。
+      if (
+        fix.kind === "none" &&
+        candidate.activeFixItemId !== null &&
+        hasLabel(candidate.labels, labels.fixLabel)
+      ) {
+        log.info(
+          "fix label kept: a pr_fix is in progress for the pull request",
+          {
+            target: prKey(candidate.owner, candidate.repo, candidate.number),
+            work_item_id: candidate.activeFixItemId,
+          },
+        );
+      }
       if (review.kind === "none" && fix.kind === "none") continue;
 
       const context = contexts.get(
@@ -1001,7 +1079,20 @@ export async function processPrDecisions(
               skipped += 1;
               await handlers.recordNotClaimed(candidate, claimResult);
             } else {
-              await handlers.startFix(candidate, context);
+              try {
+                await handlers.startFix(candidate, context);
+              } catch (startErr) {
+                if (!isActivePrFixUniqueViolation(startErr)) throw startErr;
+                // 一覧を読んだ後に別の`pr_fix`が始まった。消費したラベルを付け直し、
+                // その`pr_fix`が終わった後のポーリングに任せる。失敗とは数えない。
+                await handlers.restoreLabel(
+                  candidate,
+                  labels.fixLabel,
+                  startErr,
+                );
+                skipped += 1;
+                continue;
+              }
               fixesStarted += 1;
               await handlers.resolveNotices(candidate, labels.fixLabel);
             }
@@ -1230,6 +1321,18 @@ export async function main(): Promise<{
           context.prevFixSeed,
           context.observed,
           context.linkedParentWorkItemId,
+        ),
+      restoreLabel: (candidate, label, cause) =>
+        restoreTriggerLabelAfterStartRace(
+          client,
+          {
+            owner: candidate.owner,
+            repo: candidate.repo,
+            number: candidate.number,
+            triggerLabel: label,
+          },
+          cause,
+          log,
         ),
       resolveNotices: (candidate, label) =>
         resolveClaimNotices(
