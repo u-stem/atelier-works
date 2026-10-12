@@ -150,6 +150,14 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
+  test("gives the reason for the clean checkout", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "This keeps every out-of-scope file identical to the base branch.",
+    );
+  });
+
   test("keeps files outside the working directory in scope", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
