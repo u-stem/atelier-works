@@ -211,12 +211,16 @@ export type FailureGroup = {
   /** 稼働版を導けなかった失敗の件数。 */
   unknown_version_count: number;
 };
-/** デプロイ1回の記録。`sha_from`は記録に無ければ`null`。 */
+/**
+ * デプロイ1回の記録。`sha_from`は記録に無ければ`null`。
+ * `error`は失敗の理由で、記録に無ければ(成功の行と、理由を記録する前の失敗の行)`null`。
+ */
 export type DeploymentEntry = {
   occurred_at: string;
   sha_from: string | null;
   sha_to: string;
   result: string;
+  error: string | null;
 };
 export type RejectionRecord = {
   kind: string;
@@ -337,10 +341,33 @@ const DEPLOYMENT_RESULT_LABELS: Readonly<Record<string, string>> = {
   failed: "失敗(記録上の稼働版は変わらない。途中まで反映した可能性がある)",
 };
 
+/** デプロイの節の一覧に載せる、失敗の理由の先頭部分の文字数。 */
+export const DEPLOYMENT_ERROR_HEAD_MAX = 120;
+
+const NO_DEPLOYMENT_ERROR_LABEL = "記録なし";
+
+/**
+ * 失敗の行に添える理由の先頭部分。理由はセルとして無害化済みで、ここでは先頭を切るだけである。
+ * 理由を記録する前の失敗の行は、理由の記録が無いと示す。
+ * 版や日時より後に置き、1行の上限で切られるのを理由の側に寄せる。
+ */
+function formatDeploymentError(entry: DeploymentEntry): string {
+  if (entry.result !== "failed") return "";
+  if (entry.error === null || entry.error.length === 0) {
+    return ` / 理由: ${NO_DEPLOYMENT_ERROR_LABEL}`;
+  }
+  const chars = Array.from(entry.error);
+  const head =
+    chars.length <= DEPLOYMENT_ERROR_HEAD_MAX
+      ? entry.error
+      : `${chars.slice(0, DEPLOYMENT_ERROR_HEAD_MAX).join("")}…`;
+  return ` / 理由: ${head}`;
+}
+
 function formatDeploymentLine(entry: DeploymentEntry): string {
   const label = DEPLOYMENT_RESULT_LABELS[entry.result] ?? entry.result;
   return sanitizeCell(
-    `${entry.occurred_at} ${label} ${shortSha(entry.sha_from)} → ${shortSha(entry.sha_to)}`,
+    `${entry.occurred_at} ${label} ${shortSha(entry.sha_from)} → ${shortSha(entry.sha_to)}${formatDeploymentError(entry)}`,
     SANITIZE_CELL_MAX,
   );
 }
@@ -610,6 +637,7 @@ function toDeploymentEntry(row: SqlRow): DeploymentEntry {
     sha_from: parseSha(row.sha_from),
     sha_to: parseCellString(row.sha_to),
     result: parseCellString(row.result),
+    error: parseNullableCellString(row.error),
   };
 }
 
@@ -958,7 +986,7 @@ export async function collectAuditEvidence(
   `.fetch();
 
   const deploymentHistoryRows = await sql`
-    SELECT occurred_at, sha_from, sha_to, result
+    SELECT occurred_at, sha_from, sha_to, result, error
     FROM factory.deployments
     WHERE occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
     ORDER BY occurred_at DESC, id DESC

@@ -800,6 +800,11 @@ export type DeploymentRecord = {
   result: string;
   needs_host_action: boolean;
   pull_requests: DeploymentPullRequest[];
+  /**
+   * 失敗の理由。伏せ字処理と切り詰めを済ませた文(`recordFailedDeployment`を参照)。
+   * 成功の記録では`null`にする。省くと`null`と同じ扱いになる。
+   */
+  error?: string | null;
 };
 
 /** `factory.deployments`の最新の1行のうち、反映の成否と対象の版を表す列。 */

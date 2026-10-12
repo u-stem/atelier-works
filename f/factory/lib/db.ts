@@ -1305,16 +1305,40 @@ export async function recordFailure(
 // deployments
 // ---------------------------------------------------------------------------
 
+const DEPLOYMENT_ERROR_COLUMN_PATTERN =
+  /column "error" of relation "deployments" does not exist/;
+
+/**
+ * 例外が、`deployments.error`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 失敗の理由を書く文が指名する列のうち、新しい列は`error`だけなので、
+ * エラーコード42703か、列と表の名前を含む文のどちらかで判定する(`isMissingJobLinkColumnError`と同じ)。
+ */
+export function isMissingDeploymentErrorColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (Reflect.get(err, "code") === "42703") return true;
+  if (DEPLOYMENT_ERROR_COLUMN_PATTERN.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return (
+    typeof body === "string" && DEPLOYMENT_ERROR_COLUMN_PATTERN.test(body)
+  );
+}
+
 /**
  * `factory.deployments`に行を挿入し、そのIDを返す。
  * `pull_requests`が空のときは、その列を指名しない文で挿入し、列の既定値(空の配列)を使う。
  * migrationが当たる前に新しいコードが動いても、PRを持たない記録(失敗の記録を含む)は
  * 書けるようにするためである。
+ * `error`(失敗の理由)があるときは、`recordFailedDeploymentRow`で書く。
  */
 export async function recordDeployment(
   record: DeploymentRecord,
   sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<number> {
+  const error = record.error ?? null;
+  if (error !== null) {
+    return recordFailedDeploymentRow(record, error, sql, log);
+  }
   const statement =
     record.pull_requests.length === 0
       ? sql`
@@ -1336,6 +1360,41 @@ export async function recordDeployment(
   `;
   const row = await fetchOneRow(statement, "recordDeployment");
   return parseId(row.id, "id");
+}
+
+/**
+ * 失敗の理由を持つ`factory.deployments`の行を、理由と同じ1つの文で挿入する。
+ * `error`の列は`pull_requests`の列より後のmigrationで足すので、ここでは両方を指名する。
+ * 列を足すmigrationより先にこのコードが動いたとき(migrationの段階で失敗した回を含む)だけ、
+ * 理由を持たない文で記録し直す。失敗の記録そのものが消えると、失敗に気づけないためである。
+ * ほかのエラーは投げる。
+ */
+async function recordFailedDeploymentRow(
+  record: DeploymentRecord,
+  error: string,
+  sql: SqlClient,
+  log: Logger,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, pull_requests, error)
+    VALUES (
+      ${record.sha_from}, ${record.sha_to}, ${JSON.stringify(record.changed_paths)}::jsonb,
+      ${record.result}, ${record.needs_host_action}::boolean,
+      ${JSON.stringify(record.pull_requests)}::jsonb, ${error}::text
+    )
+    RETURNING id
+  `;
+  try {
+    const row = await fetchOneRow(statement, "recordDeployment");
+    return parseId(row.id, "id");
+  } catch (err) {
+    if (!isMissingDeploymentErrorColumnError(err)) throw err;
+    log.warn(
+      "deployments.error is missing; recorded the deployment without the reason (the datatable migration has not run yet)",
+      { sha_to: record.sha_to },
+    );
+    return recordDeployment({ ...record, error: null }, sql, log);
+  }
 }
 
 /** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */

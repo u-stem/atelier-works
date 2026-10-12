@@ -183,7 +183,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
-| `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)も持つ |
+| `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
@@ -235,7 +235,7 @@ Consoleの一覧と集計は次のviewを読む。
 
 要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
 
-更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPRで、変更したパスの一覧は選ばない。
+更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPR、失敗の理由で、変更したパスの一覧は選ばない。
 
 `console_query`は、行の配列を返すviewのほかに、1つのオブジェクトを返す3つのviewを持つ。
 
@@ -486,6 +486,8 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)と送信2回に余裕を足した120秒で区切る。
 最後のConsole用のworkerの確認では、例外を投げずに警告だけを残す。
 更新のうち、`wmill_token`の取得を含め、それ以降の失敗と時間切れは、更新の失敗として`deployments`に記録する。
+失敗の行には、ログに出す失敗の文と同じ伏せ字処理を通した理由を、2000字までに切り詰めて`deployments.error`に入れる。
+`error`の列を足すmigrationがまだ当たっていないときは、理由を持たない行として記録し直す。
 ただし、成功の記録そのものが時間切れになったときは、反映が済んでいるので失敗にしない。
 区切りは記録を中断しないので、後から成功の行が入りうる。
 失敗の行を足すと、同じコミットに成功と失敗が並ぶためである。

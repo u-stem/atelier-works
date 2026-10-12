@@ -10,6 +10,7 @@ import {
   UNKNOWN_STATUS_LABEL,
 } from "../../console/src/lib/labels.ts";
 import {
+  failureReasonText,
   PULL_REQUEST_RECORD_LIMIT,
   pullRequestHref,
 } from "../../console/src/lib/updateHistory.ts";
@@ -76,6 +77,30 @@ describe("deployments contract between console_query and the console guard", () 
   test("accepts a first deployment without a previous version", async () => {
     const delivered = await historyAsDelivered([
       { ...DEPLOYMENT_ROW, sha_from: null },
+    ]);
+    expect(isDeploymentHistory(delivered)).toBe(true);
+  });
+
+  test("accepts a failed deployment with a reason", async () => {
+    const delivered = await historyAsDelivered([
+      { ...DEPLOYMENT_ROW, result: "failed", error: "wmill sync push failed" },
+    ]);
+    expect(isDeploymentHistory(delivered)).toBe(true);
+  });
+
+  test("delivers the reason that the console shows", async () => {
+    const delivered = await historyAsDelivered([
+      { ...DEPLOYMENT_ROW, result: "failed", error: "wmill sync push failed" },
+    ]);
+    const first = isDeploymentHistory(delivered) ? delivered[0] : undefined;
+    expect(first === undefined ? null : failureReasonText(first)).toBe(
+      "wmill sync push failed",
+    );
+  });
+
+  test("accepts a failed deployment recorded without a reason", async () => {
+    const delivered = await historyAsDelivered([
+      { ...DEPLOYMENT_ROW, result: "failed", error: null },
     ]);
     expect(isDeploymentHistory(delivered)).toBe(true);
   });

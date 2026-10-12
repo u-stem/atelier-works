@@ -79,7 +79,47 @@ describe("runConsoleQuery deployments", () => {
       needs_host_action: false,
       occurred_at: T0,
       pull_requests: [PULL],
+      error: null,
     });
+  });
+
+  test("selects the reason of the failure", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await runConsoleQuery("deployments", 50, 30, sql);
+    expect(calls[0]?.text).toContain("pull_requests, error");
+  });
+
+  test("reads the reason of a failed deployment", async () => {
+    const row = await firstRow(
+      deploymentRow({ result: "failed", error: "wmill sync push failed" }),
+    );
+    expect(row).toMatchObject({ error: "wmill sync push failed" });
+  });
+
+  test("reads a null reason as null", async () => {
+    expect(await firstRow(deploymentRow({ error: null }))).toMatchObject({
+      error: null,
+    });
+  });
+
+  test("reads an empty reason as null", async () => {
+    expect(await firstRow(deploymentRow({ error: "" }))).toMatchObject({
+      error: null,
+    });
+  });
+
+  test("reads a reason that is not a string as null", async () => {
+    expect(await firstRow(deploymentRow({ error: 42 }))).toMatchObject({
+      error: null,
+    });
+  });
+
+  test("masks a token left in the reason", async () => {
+    const token = `ghp_${"x".repeat(36)}`;
+    const row = await firstRow(
+      deploymentRow({ result: "failed", error: `clone failed: ${token}` }),
+    );
+    expect(row).toMatchObject({ error: "clone failed: ***" });
   });
 
   test("accepts a null sha_from", async () => {
