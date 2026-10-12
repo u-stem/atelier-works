@@ -564,10 +564,20 @@ const MANIFEST_AFTER_OK = manifest({
   dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
 });
 
+// dependabot自身のcommitの実際の形。GitHubが署名するので、コミッターはweb-flowになる。
 const DEPENDABOT_COMMIT = {
   authorLogin: "dependabot[bot]",
-  committerLogin: "dependabot[bot]",
+  committerLogin: "web-flow",
   verified: true,
+  parentCount: 1,
+};
+
+// 人が「ブランチを更新」したときのmerge commit。
+const MERGE_COMMIT = {
+  authorLogin: "someone",
+  committerLogin: "web-flow",
+  verified: true,
+  parentCount: 2,
 };
 
 // package.jsonとロックファイルの、正しい更新の前後の内容を、パスごとに作る。
@@ -971,6 +981,83 @@ describe("evaluateGate", () => {
   test("needs a human when a commit author is unknown", () => {
     expect(
       verdictOf({ commits: [{ ...DEPENDABOT_COMMIT, authorLogin: null }] }),
+    ).toBe("needs_human");
+  });
+
+  test("accepts a commit whose committer is dependabot", () => {
+    expect(
+      verdictOf({
+        commits: [{ ...DEPENDABOT_COMMIT, committerLogin: "dependabot[bot]" }],
+      }),
+    ).toBe("ok");
+  });
+
+  test("needs a human when the committer is github-actions", () => {
+    expect(
+      verdictOf({
+        commits: [
+          { ...DEPENDABOT_COMMIT, committerLogin: "github-actions[bot]" },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("accepts a merge commit made by someone through web-flow", () => {
+    expect(verdictOf({ commits: [DEPENDABOT_COMMIT, MERGE_COMMIT] })).toBe(
+      "ok",
+    );
+  });
+
+  test("needs a human when a merge commit is not committed by web-flow", () => {
+    expect(
+      verdictOf({
+        commits: [
+          DEPENDABOT_COMMIT,
+          { ...MERGE_COMMIT, committerLogin: "dependabot[bot]" },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a merge commit is not verified", () => {
+    expect(
+      verdictOf({
+        commits: [DEPENDABOT_COMMIT, { ...MERGE_COMMIT, verified: false }],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the commits are only merge commits", () => {
+    expect(verdictOf({ commits: [MERGE_COMMIT] })).toBe("needs_human");
+  });
+
+  test("accepts a merge commit with more than two parents", () => {
+    expect(
+      verdictOf({
+        commits: [DEPENDABOT_COMMIT, { ...MERGE_COMMIT, parentCount: 3 }],
+      }),
+    ).toBe("ok");
+  });
+
+  test("needs a human when a commit has no parent", () => {
+    expect(
+      verdictOf({ commits: [{ ...DEPENDABOT_COMMIT, parentCount: 0 }] }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the parent count is negative", () => {
+    expect(
+      verdictOf({
+        commits: [DEPENDABOT_COMMIT, { ...MERGE_COMMIT, parentCount: -1 }],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the parent count is not an integer", () => {
+    expect(
+      verdictOf({
+        commits: [DEPENDABOT_COMMIT, { ...MERGE_COMMIT, parentCount: 1.5 }],
+      }),
     ).toBe("needs_human");
   });
 

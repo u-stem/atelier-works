@@ -502,14 +502,15 @@ export type GateInput = {
   headRepoFullName: string;
   baseRepoFullName: string;
   /**
-   * PRのすべてのcommit。
-   * 作者とコミッターの両方が`dependabot[bot]`で、署名が検証済みであることを要る。
-   * 作者を取得できなかったものは`null`にする。
+   * PRのすべてのcommit。判定の規則は`commitProblem`に書いた。
+   * 作者かコミッターを取得できなかったものは`null`にする。
+   * `parentCount`は親の数で、2以上ならmergeのcommit。
    */
   commits: {
     authorLogin: string | null;
     committerLogin: string | null;
     verified: boolean;
+    parentCount: number;
   }[];
   checks: { name: string; conclusion: string | null }[];
   requiredChecks: readonly string[];
@@ -638,18 +639,44 @@ function installScriptProblem(input: GateInput): string | null {
   return null;
 }
 
+// GitHubが署名するcommitのコミッター。dependabotのcommitと、ブランチの更新のmerge commitに付く。
+const WEB_FLOW_LOGIN = "web-flow";
+
+/**
+ * PRのcommitを調べ、止める理由を返す。無ければ`null`。
+ * 全commitが次のどちらかを満たし、通常のcommitが1件以上あることを要る。
+ * - 通常のcommit(親が1つ): 作者が`dependabot[bot]`、コミッターが`dependabot[bot]`か`web-flow`、署名が検証済み。
+ * - mergeのcommit(親が2つ以上): コミッターが`web-flow`で、署名が検証済み。ブランチの更新は人やFactoryも行うので、作者は問わない。
+ * 親の数が1以上の整数でないcommitは止める。
+ * mergeのcommitが持ち込む差分は、ファイル単位の検査(`files`)がPR全体の差分として見る。
+ */
 function commitProblem(input: GateInput): string | null {
   if (input.commits.length === 0) return "pull request has no commits";
+  let ordinary = 0;
   for (const commit of input.commits) {
+    const { parentCount } = commit;
+    if (!Number.isInteger(parentCount) || parentCount < 1) {
+      return `a commit has an invalid parent count: ${parentCount}`;
+    }
+    if (!commit.verified) return "a commit is not verified";
+    if (parentCount >= 2) {
+      if (commit.committerLogin !== WEB_FLOW_LOGIN) {
+        return `a merge commit was not committed by ${WEB_FLOW_LOGIN}: ${detail(String(commit.committerLogin))}`;
+      }
+      continue;
+    }
     if (
       commit.authorLogin !== DEPENDABOT_LOGIN ||
-      commit.committerLogin !== DEPENDABOT_LOGIN
+      (commit.committerLogin !== DEPENDABOT_LOGIN &&
+        commit.committerLogin !== WEB_FLOW_LOGIN)
     ) {
       return `a commit was not made by ${DEPENDABOT_LOGIN}: ${detail(String(commit.authorLogin))} / ${detail(String(commit.committerLogin))}`;
     }
-    if (!commit.verified) return "a commit is not verified";
+    ordinary += 1;
   }
-  return null;
+  return ordinary === 0
+    ? "pull request has no commit made by dependabot"
+    : null;
 }
 
 const PASSING_CONCLUSIONS: readonly string[] = ["success", "skipped"];
