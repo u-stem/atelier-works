@@ -194,7 +194,6 @@ describe("ownerNotFoundMessage", () => {
 
 describe("filterVerifiedOwners", () => {
   const OTHER: FactoryOwner = { name: "octo-org", kind: "org" };
-  const IDS: Record<string, number> = { "octo-owner": 9999 };
 
   test("returns only the owners that passed the gate", async () => {
     const { deps } = setup(() => Promise.resolve(9999));
@@ -215,9 +214,7 @@ describe("filterVerifiedOwners", () => {
   });
 
   test("looks up only the owners that have an id", async () => {
-    const { deps, recorded } = setup(() =>
-      Promise.resolve(IDS["octo-owner"] ?? 0),
-    );
+    const { deps, recorded } = setup(() => Promise.resolve(9999));
     await filterVerifiedOwners([WITH_ID, OTHER], deps);
     expect(recorded.lookups).toEqual(["octo-owner"]);
   });

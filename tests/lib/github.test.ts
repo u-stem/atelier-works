@@ -230,13 +230,13 @@ describe("getAccountId", () => {
     expect(fake.calls[0]?.argv).toContain("users/octo-org");
   });
 
-  test("throws on a 404 response", async () => {
+  test("rejects with an HTTP error carrying status 404", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(404, { message: "Not Found" })),
     ]);
     await expect(
       getAccountId({ run: fake.run, ghToken: "tok" }, "gone"),
-    ).rejects.toThrow(/HTTP 404/);
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
   });
 
   test("rejects a response whose id is not a number", async () => {
