@@ -768,6 +768,10 @@ describe("reason codes", () => {
     ).toBe("ci_other_conclusion");
   });
 
+  test("points a failed metadata job to the metadata task", () => {
+    expect(prCiNextAction("ci_failure")).toContain("mise run metadata");
+  });
+
   test("gives every reason a next action", () => {
     expect(
       PR_CI_REASONS.map((reason) => prCiNextAction(reason) !== ""),

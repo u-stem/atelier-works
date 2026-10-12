@@ -28,6 +28,10 @@ describe("noticeGuide", () => {
     expect(noticeGuide("pr_ci_failed").action).toContain("実行のログ");
   });
 
+  test("tells how to fix a failed metadata job of the pull request CI", () => {
+    expect(noticeGuide("pr_ci_failed").action).toContain("mise run metadata");
+  });
+
   test("tells which permission the denied pull request CI check needs", () => {
     expect(noticeGuide("pr_ci_check_denied").action).toContain("Actions: Read");
   });
