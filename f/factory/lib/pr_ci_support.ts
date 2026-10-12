@@ -5,7 +5,6 @@
 // 通知の固定文、Factoryのブランチの照合)だけを置く。
 // 外部から来た文字列(workflow名、実行のURL、結論)は、検証・整形してから記録と表示に使う。
 
-import { parseImplementBranchWorkItemId } from "./implement_support.ts";
 import {
   buildFailureSummary,
   decideState,
@@ -16,7 +15,7 @@ import {
   shortSha,
   type WorkflowRun,
 } from "./main_ci_support.ts";
-import { assertGitHubName } from "./types.ts";
+import { assertGitHubName, parseImplementBranchWorkItemId } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // 状態
@@ -66,6 +65,50 @@ export function canTransitionPrCi(from: PrCiState, to: PrCiState): boolean {
 // 判定
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 実行のまとめ
+// ---------------------------------------------------------------------------
+
+function workflowKey(run: WorkflowRun): string {
+  const workflow =
+    run.workflowId !== undefined
+      ? `id:${String(run.workflowId)}`
+      : `name:${run.name}`;
+  return `${workflow}\u0000${run.event ?? ""}`;
+}
+
+/**
+ * 実行を、workflowごとに最新の1件へ絞る。判定は、この関数を通した実行で行う。
+ * 同じheadでも、同じworkflowの実行は何度も作られる。新しいpushで取り消された実行、
+ * 取り消してやり直した実行、手で再実行した実行である。古い実行の失敗や取り消しを数えると、
+ * 後の実行が通っても失敗と判定してしまう。
+ * 組は`(workflowId, event)`で、`workflowId`が無い実行は`name`で代わりにする。
+ * 作成時刻が新しい実行を残し、同時刻なら`id`が大きい実行を残す。
+ * 返す並びは`id`の昇順にして、入力の並びに依らないようにする。
+ */
+export function latestRunPerWorkflow(
+  runs: readonly WorkflowRun[],
+): WorkflowRun[] {
+  const latest = new Map<string, WorkflowRun>();
+  for (const run of runs) {
+    const key = workflowKey(run);
+    const current = latest.get(key);
+    if (
+      current === undefined ||
+      run.createdAt.getTime() > current.createdAt.getTime() ||
+      (run.createdAt.getTime() === current.createdAt.getTime() &&
+        run.id > current.id)
+    ) {
+      latest.set(key, run);
+    }
+  }
+  return [...latest.values()].sort((a, b) => a.id - b.id);
+}
+
+// ---------------------------------------------------------------------------
+// 判定
+// ---------------------------------------------------------------------------
+
 /** `pending`の行の判定の結果。 */
 export type PrCiPendingOutcome =
   | "pending"
@@ -81,7 +124,11 @@ export type DecidePrCiPendingInput = {
   /** そのheadを最初に見た時刻(`first_seen_at`)。 */
   readonly firstSeenAt: Date;
   readonly now: Date;
-  /** 行のheadが、PRの今のheadと同じか。 */
+  /**
+   * 行のheadが、PRの今のheadと同じか。
+   * 実行を読んだ後に取る。実行を読む、PRのheadを読む、判定する、の順にする。
+   * 先にPRのheadを読むと、読んでいる間に進んだheadの実行を、今のheadの失敗として扱ってしまうため。
+   */
   readonly headIsCurrent: boolean;
 };
 
@@ -90,23 +137,22 @@ export type DecidePrCiPendingInput = {
  * 先に、行のheadがPRの今のheadかを見る。古いheadなら、実行の中身にかかわらず`superseded`にする。
  * PRのCIは新しいpushで古い実行を取り消すので、古いheadの`cancelled`を失敗とすると、
  * 直したのに失敗を通知してしまうため。
- * 今のheadなら、`cancelled`も含め`main_ci_support.ts`の`decideState`に従う。
+ * 今のheadなら、実行をworkflowごとの最新に絞り(`latestRunPerWorkflow`)、
+ * `cancelled`も含め`main_ci_support.ts`の`decideState`に従う。
  * 期限(`expired`)が来ても、完了した失敗の実行があれば`failed`にする。
+ * `headIsCurrent`は、実行を読んだ後に取った値を渡すこと(`DecidePrCiPendingInput`)。
  */
 export function decidePrCiPending(
   input: DecidePrCiPendingInput,
 ): PrCiPendingOutcome {
   if (!input.headIsCurrent) return "superseded";
+  const runs = input.runs === null ? null : latestRunPerWorkflow(input.runs);
   const state = decideState({
-    runs: input.runs,
+    runs,
     firstSeenAt: input.firstSeenAt,
     now: input.now,
   });
-  if (
-    state === "expired" &&
-    input.runs !== null &&
-    failingRuns(input.runs).length > 0
-  ) {
+  if (state === "expired" && runs !== null && failingRuns(runs).length > 0) {
     return "failed";
   }
   return state;
@@ -115,20 +161,25 @@ export function decidePrCiPending(
 export type DecidePrCiFailedInput = {
   readonly runs: readonly WorkflowRun[] | null;
   readonly now: Date;
+  /** `DecidePrCiPendingInput.headIsCurrent`と同じく、実行を読んだ後に取る。 */
   readonly headIsCurrent: boolean;
 };
 
 /**
  * 失敗の行を、巡回のたびに読み直した実行で見直す。
+ * 実行はworkflowごとの最新に絞る(`latestRunPerWorkflow`)。
  * 同じheadの再実行が通れば`passed`に戻す。再実行が終わっていなくても、失敗のままにする。
  * 読めなかったときは変えない。headが進んでいれば`superseded`にする。
+ * `headIsCurrent`は、実行を読んだ後に取った値を渡すこと。
  */
 export function decidePrCiFailed(
   input: DecidePrCiFailedInput,
 ): "failed" | "passed" | "superseded" {
   if (!input.headIsCurrent) return "superseded";
   if (input.runs === null) return "failed";
-  return settle(input.runs, input.now) === "passed" ? "passed" : "failed";
+  return settle(latestRunPerWorkflow(input.runs), input.now) === "passed"
+    ? "passed"
+    : "failed";
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +239,7 @@ export type PullRequestRef = {
   readonly number: number;
 };
 
-/** `https://github.com/<owner>/<repo>/pull/<n>`の形なら、その3つを返す。形が違えばnull。 */
+/** `https://github.com/<owner>/<repo>/pull/<n>`の形なら、その3つを返す。形が違えばnull。ownerとrepoは小文字にして返す。 */
 export function parsePullRequestUrl(url: string): PullRequestRef | null {
   const match = PULL_REQUEST_URL_PATTERN.exec(url);
   const [, owner, repo, rawNumber] = match ?? [];
@@ -196,7 +247,9 @@ export function parsePullRequestUrl(url: string): PullRequestRef | null {
     return null;
   }
   const number = Number(rawNumber);
-  return Number.isSafeInteger(number) ? { owner, repo, number } : null;
+  return Number.isSafeInteger(number)
+    ? { owner: owner.toLowerCase(), repo: repo.toLowerCase(), number }
+    : null;
 }
 
 /** ブランチ名から引いた作業項目のうち、照合に使う列。 */
@@ -271,16 +324,24 @@ export function prCiNextAction(reason: PrCiReason): string {
   return PR_CI_NEXT_ACTIONS[reason];
 }
 
-/** 失敗の理由を決める。結論が`failure`の実行があれば`ci_failure`。 */
+/**
+ * 失敗の理由を決める。workflowごとの最新の実行(`latestRunPerWorkflow`)のうち、
+ * 結論が`failure`の実行があれば`ci_failure`。
+ */
 export function classifyPrCiReason(runs: readonly WorkflowRun[]): PrCiReason {
-  return failingRuns(runs).some((run) => run.conclusion === "failure")
+  return failingRuns(latestRunPerWorkflow(runs)).some(
+    (run) => run.conclusion === "failure",
+  )
     ? "ci_failure"
     : "ci_other_conclusion";
 }
 
-/** PRの失敗の要約(`summary`列)。前のコミットから続いているかは、PRでは言わない。 */
+/**
+ * PRの失敗の要約(`summary`列)。前のコミットから続いているかは、PRでは言わない。
+ * workflowごとの最新の実行(`latestRunPerWorkflow`)だけを数える。
+ */
 export function prCiSummary(runs: readonly WorkflowRun[]): string {
-  return buildFailureSummary(runs, false);
+  return buildFailureSummary(latestRunPerWorkflow(runs), false);
 }
 
 function assertPullRequestNumber(prNumber: number): void {
@@ -298,7 +359,7 @@ function pullRequestPageUrl(
 }
 
 /**
- * 通知に載せるリンクを選ぶ。失敗した実行のうち最も古いもので、
+ * 通知に載せるリンクを選ぶ。workflowごとの最新の実行(`latestRunPerWorkflow`)のうち、失敗した最も古いもので、
  * `parseRunUrl`を通ったURLを使う。通るものが無ければ、PRのページにする。
  * 実行のURLは外から来た値なので、検証を通ったものだけを載せる。
  */
@@ -311,7 +372,7 @@ export function prCiFailureLink(input: {
   assertGitHubName(input.owner);
   assertGitHubName(input.repo);
   assertPullRequestNumber(input.prNumber);
-  for (const run of failingRuns(input.runs)) {
+  for (const run of failingRuns(latestRunPerWorkflow(input.runs))) {
     const url = parseRunUrl(run.htmlUrl, input.owner, input.repo);
     if (url !== null) return url;
   }

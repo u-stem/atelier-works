@@ -82,6 +82,8 @@ export type WorkflowRun = {
   readonly conclusion: string | null;
   readonly createdAt: Date;
   readonly htmlUrl: string;
+  /** 実行が属するworkflowのID。同じworkflowの実行をまとめるのに使う。`listPrHeadWorkflowRuns`だけが入れる。 */
+  readonly workflowId?: number;
   /** 実行を始めたevent(`push`、`pull_request`など)。`listPrHeadWorkflowRuns`だけが入れる。 */
   readonly event?: string;
   /** 実行のheadがあるリポジトリの`owner/repo`。削除されたforkならnull。`listPrHeadWorkflowRuns`だけが入れる。 */

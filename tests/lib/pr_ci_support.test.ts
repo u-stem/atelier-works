@@ -13,6 +13,7 @@ import {
   isFactoryPrBranch,
   isPrCiReason,
   isPrCiState,
+  latestRunPerWorkflow,
   PR_CI_FAILED_KIND,
   PR_CI_REASONS,
   PR_CI_STATES,
@@ -119,6 +120,102 @@ describe("canTransitionPrCi", () => {
   });
 });
 
+describe("latestRunPerWorkflow", () => {
+  const ids = (runs: readonly WorkflowRun[]) => runs.map((item) => item.id);
+
+  test("keeps the newer run of a workflow", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 1, workflowId: 7, createdAt: minutesBefore(10) }),
+          run({ id: 2, workflowId: 7, createdAt: minutesBefore(5) }),
+        ]),
+      ),
+    ).toEqual([2]);
+  });
+
+  test("keeps the newer run whatever the order of the input", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 2, workflowId: 7, createdAt: minutesBefore(5) }),
+          run({ id: 1, workflowId: 7, createdAt: minutesBefore(10) }),
+        ]),
+      ),
+    ).toEqual([2]);
+  });
+
+  test("keeps the run with the larger id when the times are equal", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 9, workflowId: 7 }),
+          run({ id: 3, workflowId: 7 }),
+        ]),
+      ),
+    ).toEqual([9]);
+  });
+
+  test("keeps the runs of different workflows", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 1, workflowId: 7 }),
+          run({ id: 2, workflowId: 8 }),
+        ]),
+      ),
+    ).toEqual([1, 2]);
+  });
+
+  test("keeps the runs of one workflow started by different events", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 1, workflowId: 7, event: "push" }),
+          run({ id: 2, workflowId: 7, event: "pull_request" }),
+        ]),
+      ),
+    ).toEqual([1, 2]);
+  });
+
+  test("falls back to the workflow name when there is no workflow id", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 1, name: "CI", createdAt: minutesBefore(10) }),
+          run({ id: 2, name: "CI", createdAt: minutesBefore(5) }),
+        ]),
+      ),
+    ).toEqual([2]);
+  });
+
+  test("does not merge workflows of different names without a workflow id", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 1, name: "CI" }),
+          run({ id: 2, name: "Lint" }),
+        ]),
+      ),
+    ).toEqual([1, 2]);
+  });
+
+  test("returns the runs in the order of their ids", () => {
+    expect(
+      ids(
+        latestRunPerWorkflow([
+          run({ id: 5, workflowId: 8 }),
+          run({ id: 2, workflowId: 7 }),
+        ]),
+      ),
+    ).toEqual([2, 5]);
+  });
+
+  test("returns an empty list for no run", () => {
+    expect(latestRunPerWorkflow([])).toEqual([]);
+  });
+});
+
 describe("decidePrCiPending", () => {
   const base = { firstSeenAt: minutesBefore(5), now: NOW };
 
@@ -158,11 +255,84 @@ describe("decidePrCiPending", () => {
     ).toBe("failed");
   });
 
+  test("passes when a cancelled run was followed by a newer success of the same workflow", () => {
+    expect(
+      decidePrCiPending({
+        ...base,
+        runs: [
+          run({
+            id: 1,
+            workflowId: 7,
+            conclusion: "cancelled",
+            createdAt: minutesBefore(10),
+          }),
+          run({ id: 2, workflowId: 7, createdAt: minutesBefore(5) }),
+        ],
+        headIsCurrent: true,
+      }),
+    ).toBe("passed");
+  });
+
+  test("passes when a failure was followed by a newer success of the same workflow", () => {
+    expect(
+      decidePrCiPending({
+        ...base,
+        runs: [
+          run({
+            id: 1,
+            workflowId: 7,
+            conclusion: "failure",
+            createdAt: minutesBefore(10),
+          }),
+          run({ id: 2, workflowId: 7, createdAt: minutesBefore(5) }),
+        ],
+        headIsCurrent: true,
+      }),
+    ).toBe("passed");
+  });
+
+  test("fails when a success was followed by a newer failure of the same workflow", () => {
+    expect(
+      decidePrCiPending({
+        ...base,
+        runs: [
+          run({ id: 1, workflowId: 7, createdAt: minutesBefore(10) }),
+          run({
+            id: 2,
+            workflowId: 7,
+            conclusion: "failure",
+            createdAt: minutesBefore(5),
+          }),
+        ],
+        headIsCurrent: true,
+      }),
+    ).toBe("failed");
+  });
+
+  test("keeps the failure of another workflow", () => {
+    expect(
+      decidePrCiPending({
+        ...base,
+        runs: [
+          run({
+            id: 1,
+            workflowId: 7,
+            conclusion: "failure",
+            createdAt: minutesBefore(10),
+          }),
+          run({ id: 2, workflowId: 7, createdAt: minutesBefore(5) }),
+          run({ id: 3, workflowId: 8, conclusion: "failure" }),
+        ],
+        headIsCurrent: true,
+      }),
+    ).toBe("failed");
+  });
+
   test("passes when every run succeeded", () => {
     expect(
       decidePrCiPending({
         ...base,
-        runs: [run(), run({ id: 2, conclusion: "skipped" })],
+        runs: [run(), run({ id: 2, name: "Lint", conclusion: "skipped" })],
         headIsCurrent: true,
       }),
     ).toBe("passed");
@@ -247,6 +417,7 @@ describe("decidePrCiPending", () => {
           }),
           run({
             id: 2,
+            name: "Lint",
             conclusion: "failure",
             createdAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
           }),
@@ -266,6 +437,37 @@ describe("decidePrCiFailed", () => {
         now: NOW,
       }),
     ).toBe("passed");
+  });
+
+  test("goes back to passed when a newer run of the same workflow succeeded", () => {
+    expect(
+      decidePrCiFailed({
+        runs: [
+          run({
+            id: 1,
+            workflowId: 7,
+            conclusion: "failure",
+            createdAt: minutesBefore(10),
+          }),
+          run({ id: 2, workflowId: 7, createdAt: minutesBefore(5) }),
+        ],
+        headIsCurrent: true,
+        now: NOW,
+      }),
+    ).toBe("passed");
+  });
+
+  test("stays failed when only another workflow succeeded", () => {
+    expect(
+      decidePrCiFailed({
+        runs: [
+          run({ id: 1, workflowId: 7, conclusion: "failure" }),
+          run({ id: 2, workflowId: 8 }),
+        ],
+        headIsCurrent: true,
+        now: NOW,
+      }),
+    ).toBe("failed");
   });
 
   test("stays failed while the rerun is in progress", () => {
@@ -359,6 +561,12 @@ describe("parsePullRequestUrl", () => {
   test("reads owner, repo and number", () => {
     expect(
       parsePullRequestUrl("https://github.com/acme/widgets/pull/12"),
+    ).toEqual({ owner: "acme", repo: "widgets", number: 12 });
+  });
+
+  test("lowercases owner and repo", () => {
+    expect(
+      parsePullRequestUrl("https://github.com/Acme/Widgets/pull/12"),
     ).toEqual({ owner: "acme", repo: "widgets", number: 12 });
   });
 
@@ -492,7 +700,7 @@ describe("reason codes", () => {
     expect(
       classifyPrCiReason([
         run({ conclusion: "cancelled" }),
-        run({ id: 2, conclusion: "failure" }),
+        run({ id: 2, name: "Lint", conclusion: "failure" }),
       ]),
     ).toBe("ci_failure");
   });
@@ -501,6 +709,25 @@ describe("reason codes", () => {
     expect(classifyPrCiReason([run({ conclusion: "cancelled" })])).toBe(
       "ci_other_conclusion",
     );
+  });
+
+  test("does not blame a failure that a newer run of the same workflow replaced", () => {
+    expect(
+      classifyPrCiReason([
+        run({
+          id: 1,
+          workflowId: 7,
+          conclusion: "failure",
+          createdAt: minutesBefore(10),
+        }),
+        run({
+          id: 2,
+          workflowId: 7,
+          conclusion: "cancelled",
+          createdAt: minutesBefore(5),
+        }),
+      ]),
+    ).toBe("ci_other_conclusion");
   });
 
   test("gives every reason a next action", () => {
@@ -526,6 +753,7 @@ describe("prCiFailureLink", () => {
           }),
           run({
             id: 3,
+            name: "Lint",
             conclusion: "failure",
             createdAt: minutesBefore(8),
             htmlUrl: "https://github.com/acme/widgets/actions/runs/3",
@@ -544,6 +772,23 @@ describe("prCiFailureLink", () => {
             conclusion: "failure",
             htmlUrl: "https://evil.example/acme/widgets/actions/runs/1",
           }),
+        ],
+      }),
+    ).toBe("https://github.com/acme/widgets/pull/12");
+  });
+
+  test("ignores a failing run that a newer run of the same workflow replaced", () => {
+    expect(
+      prCiFailureLink({
+        ...target,
+        runs: [
+          run({
+            id: 2,
+            workflowId: 7,
+            conclusion: "failure",
+            createdAt: minutesBefore(10),
+          }),
+          run({ id: 3, workflowId: 7, createdAt: minutesBefore(5) }),
         ],
       }),
     ).toBe("https://github.com/acme/widgets/pull/12");
@@ -688,6 +933,26 @@ describe("prCiSummary", () => {
         run({ id: 2, name: "Build" }),
       ]),
     ).not.toContain("Build");
+  });
+
+  test("does not mention a workflow whose newer run passed", () => {
+    expect(
+      prCiSummary([
+        run({
+          id: 1,
+          workflowId: 7,
+          name: "Lint",
+          conclusion: "failure",
+          createdAt: minutesBefore(10),
+        }),
+        run({
+          id: 2,
+          workflowId: 7,
+          name: "Lint",
+          createdAt: minutesBefore(5),
+        }),
+      ]),
+    ).not.toContain("Lint");
   });
 
   test("never exceeds the column limit", () => {
