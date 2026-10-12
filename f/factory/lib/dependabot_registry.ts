@@ -311,16 +311,23 @@ function cleanItem(value: unknown): string {
   return cleanText(value) ?? UNKNOWN;
 }
 
-/** 読めたメンテナの名前。読めなければ空の配列。 */
-function maintainerNames(entry: Record<string, unknown> | null): string[] {
+/**
+ * メンテナの名前を読む。`names`は読めた名前で、`unreadable`は読めなかった要素の数である。
+ * 要素がオブジェクトでない、名前が文字列でない、名前が空か長すぎるものを読めなかったとする。
+ * 一覧そのものが配列でないときは、要素が無いものとして扱う。
+ */
+function maintainerNames(entry: Record<string, unknown> | null): {
+  names: string[];
+  unreadable: number;
+} {
   const maintainers = entry?.maintainers;
-  if (!Array.isArray(maintainers)) return [];
   const names: string[] = [];
+  if (!Array.isArray(maintainers)) return { names, unreadable: 0 };
   for (const maintainer of maintainers) {
     const name = isRecord(maintainer) ? cleanText(maintainer.name) : null;
     if (name !== null) names.push(name);
   }
-  return names;
+  return { names, unreadable: maintainers.length - names.length };
 }
 
 function repositoryUrl(entry: Record<string, unknown> | null): string | null {
@@ -395,12 +402,18 @@ function buildMetadata(
     side: "before" | "after",
     entry: Record<string, unknown> | null,
   ): string[] => {
-    const names = maintainerNames(entry);
-    if (names.length === 0) {
-      missing.push(`${side} maintainers`);
-      return [`${side} maintainer: ${UNKNOWN}`];
-    }
-    return names.map((maintainer) => `${side} maintainer: ${maintainer}`);
+    const { names, unreadable } = maintainerNames(entry);
+    // 一覧が無いか空のときも、読めなかったものとして1行を載せる。
+    const unknownCount =
+      names.length === 0 ? Math.max(unreadable, 1) : unreadable;
+    if (unknownCount > 0) missing.push(`${side} maintainers`);
+    return [
+      ...names.map((maintainer) => `${side} maintainer: ${maintainer}`),
+      ...Array.from(
+        { length: unknownCount },
+        () => `${side} maintainer: ${UNKNOWN}`,
+      ),
+    ];
   };
 
   const packageText = orUnknown("package", cleanText(name));

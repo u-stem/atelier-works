@@ -1141,6 +1141,66 @@ describe("parsePackument missing", () => {
     ]);
   });
 
+  test("names maintainers when one of them has a name over 200 characters", () => {
+    const to = version({
+      maintainers: [{ name: "x".repeat(201) }, { name: "ok" }],
+    });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([
+      "after maintainers",
+    ]);
+  });
+
+  test("names maintainers when one of them has only invisible characters", () => {
+    const to = version({
+      maintainers: [{ name: "\u200B\u200B" }, { name: "ok" }],
+    });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([
+      "after maintainers",
+    ]);
+  });
+
+  test("names maintainers when one of them has a name that is not a string", () => {
+    const from = version({ maintainers: [{ name: 5 }, { name: "ok" }] });
+
+    expect(facts(versionsWith(from, version())).missing).toEqual([
+      "before maintainers",
+    ]);
+  });
+
+  test("names maintainers when one of them is not an object", () => {
+    const to = version({ maintainers: ["ok", { name: "ok" }] });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([
+      "after maintainers",
+    ]);
+  });
+
+  test("writes an unknown line for a maintainer that could not be read", () => {
+    const to = version({
+      maintainers: [{ name: "x".repeat(201) }, { name: "ok" }],
+    });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after maintainer: ok\nafter maintainer: unknown",
+    );
+  });
+
+  test("writes an unknown line for each maintainer that could not be read", () => {
+    const to = version({
+      maintainers: [{ name: 5 }, { name: 6 }, { name: "ok" }],
+    });
+
+    const lines = facts(versionsWith(version(), to)).registryMetadata.split(
+      "\n",
+    );
+
+    expect(
+      lines.filter((line) => line === "after maintainer: unknown"),
+    ).toHaveLength(2);
+  });
+
   test("names every item of a missing version", () => {
     expect(facts({ versions: { "1.3.1": version() } }).missing).toEqual([
       "before publisher",
