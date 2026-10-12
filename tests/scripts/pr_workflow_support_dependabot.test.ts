@@ -88,7 +88,7 @@ const CASES: {
     reason: DEPENDABOT_MERGE_FORBIDDEN_REASON,
     described: "dependabotの更新をマージする権限がありませんでした(403)",
     nextAction:
-      "PATにマージ権限があるかと、rulesetのbypassを確認し、手でマージしてください",
+      "PATのマージ権限とrulesetのbypassを確認し、手でマージしてください",
   },
   {
     label: "merge refused",
@@ -181,5 +181,56 @@ describe("nextActionFor for dependabot", () => {
     const reason = dependabotReason("collect", "x".repeat(5000));
 
     expect(nextActionFor(reason)).not.toContain("retry_work_item");
+  });
+});
+
+describe("nextActionFor with the dependabot flow", () => {
+  test.each(CASES)(
+    "keeps the specific next action for the $label reason",
+    ({ reason, nextAction }) => {
+      expect(nextActionFor(reason, "dependabot")).toBe(nextAction);
+    },
+  );
+
+  test.each([
+    "Claude failed",
+    "pull request is a draft",
+    "pull request is not open",
+    "head branch state is unavailable",
+    "GitHub rate limit on /repos/a/b: wait 60s",
+    "some reason this table does not know",
+  ])("gives the manual action to the reason without a prefix: %s", (reason) => {
+    expect(nextActionFor(reason, "dependabot")).toBe(MANUAL_ACTION);
+  });
+
+  test.each([
+    "Claude failed",
+    "pull request is a draft",
+    "head branch state is unavailable",
+    "GitHub rate limit on /repos/a/b: wait 60s",
+    "some reason this table does not know",
+  ])("never points to retry_work_item for: %s", (reason) => {
+    expect(nextActionFor(reason, "dependabot")).not.toContain(
+      "retry_work_item",
+    );
+  });
+
+  test("gives the manual action when a reason list has no dependabot item", () => {
+    expect(
+      nextActionFor("Claude failed; pull request is a draft", "dependabot"),
+    ).toBe(MANUAL_ACTION);
+  });
+
+  test("uses the dependabot item of a reason list", () => {
+    expect(
+      nextActionFor(
+        `Claude failed; ${DEPENDABOT_MERGE_REFUSED_REASON}`,
+        "dependabot",
+      ),
+    ).toBe("マージできない理由(競合や保護)を確認してください");
+  });
+
+  test("leaves the next action for the other flows unchanged", () => {
+    expect(nextActionFor("Claude failed")).toContain("retry_work_item");
   });
 });

@@ -37,21 +37,32 @@ function visible(text: string, replacement = "?"): string {
   return out;
 }
 
+// 制御文字(Cc)、書式文字(Cf。幅ゼロ、向きの制御、ソフトハイフン、タグ文字、アラビア文字のマークを含む)、
+// 行と段落の区切り(Zl、Zp)。
+const HIDDEN_CATEGORIES = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
 /**
- * 制御文字(C0、DEL、C1)、行と段落の区切り、向きを変える文字、幅の無い文字かを返す。
- * これらは画面で見えないまま文章の意味や並びを変えられる。
+ * 画面で見えないか、空白に見えるのに文字として残る文字かを返す。
+ * 基本は`HIDDEN_CATEGORIES`の4つの分類で、次を加える。
+ * - ハングルの詰め物(U+115F、U+1160、U+3164、U+FFA0): 文字だが幅が無いか空白に見える。
+ * - タグ文字の範囲(U+E0000からU+E007F): 未割り当ての点も含め、ASCIIを見えない形で運べる。
+ * - 異体字選択子(U+FE00からU+FE0F、U+E0100からU+E01EF): 前の文字の字形を選ぶだけで、見えない。
+ *   絵文字の表示を選ぶU+FE0Fも取り除く。この関数の用途は1行の理由とPRのコメントで、
+ *   絵文字の字形が変わっても意味は変わらず、見えない文字を通す穴の方が重いため。
+ * これらは画面で見えないまま、文章の意味や並び、目印の検出を変えられる。
  */
 function isHiddenOrControl(code: number): boolean {
+  // 印字できるASCIIは、分類を調べずに通す。
+  if (code >= 0x20 && code < 0x7f) return false;
   return (
-    code < 0x20 ||
-    (code >= 0x7f && code <= 0x9f) ||
-    code === 0x2028 ||
-    code === 0x2029 ||
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2060 && code <= 0x2064) ||
-    (code >= 0x2066 && code <= 0x2069) ||
-    code === 0xfeff
+    code === 0x115f ||
+    code === 0x1160 ||
+    code === 0x3164 ||
+    code === 0xffa0 ||
+    (code >= 0xfe00 && code <= 0xfe0f) ||
+    (code >= 0xe0000 && code <= 0xe007f) ||
+    (code >= 0xe0100 && code <= 0xe01ef) ||
+    HIDDEN_CATEGORIES.test(String.fromCodePoint(code))
   );
 }
 
@@ -59,7 +70,7 @@ function isHiddenOrControl(code: number): boolean {
 
 /**
  * インストールが残してよい、gitに無視されたディレクトリ。
- * `git status --porcelain=v1 -z --ignored`は、ディレクトリを末尾の`/`付きで出す。
+ * `POST_INSTALL_STATUS_ARGV`のgitは、ディレクトリを末尾の`/`付きで出す。
  */
 const ALLOWED_IGNORED_PATHS: readonly string[] = [
   "node_modules/",
@@ -69,8 +80,26 @@ const ALLOWED_IGNORED_PATHS: readonly string[] = [
 ];
 
 /**
+ * インストールの後の作業ツリーの状態を取る、gitの引数(`git`の後ろ)。
+ * 呼び出し側は`buildGitArgv`などで`git`の設定を固定してこの引数を渡し、出力を`evaluatePostInstallStatus`に渡す。
+ * - `--ignored=traditional`: 無視されたディレクトリを、ディレクトリ単位で出す。
+ * - `--untracked-files=normal`: 未追跡のファイルを必ず出す。`-uno`だと未追跡が出力から消え、検査をすり抜ける。
+ * - `-z`: パスをNULで区切り、改行や引用符を含むパスを誤読しない。
+ */
+export const POST_INSTALL_STATUS_ARGV: readonly string[] = Object.freeze([
+  "status",
+  "--porcelain=v1",
+  "-z",
+  "--ignored=traditional",
+  "--untracked-files=normal",
+]);
+
+/**
  * インストールの後の作業ツリーが、きれいなままかを調べる。
- * `porcelainZ`は`git status --porcelain=v1 -z --ignored`の出力で、各項目は`XY パス`をNULで区切る。
+ * `porcelainZ`は`git`に`POST_INSTALL_STATUS_ARGV`を渡した出力で、各項目は`XY パス`をNULで区切る。
+ * 呼び出し側は、グローバルの設定を読まない環境(`localGitEnv`)でgitを実行し、
+ * 終了コードが0であることを確かめてから渡す。gitが失敗して出力が空のときに、この関数に渡してはならない。
+ * 空の出力は「変更が無い」と読んで許可するので、失敗した実行の空の出力を渡すと、検査をすり抜ける。
  * 許すのは、`ALLOWED_IGNORED_PATHS`のちょうどそのパスの、無視された(`!!`)項目だけである。
  * 未追跡、変更、追加、削除、リネーム、ほかの無視されたパス、読めない項目は止める。
  * 影響調査のClaudeは、追跡されていない生成物や、インストールのスクリプトが残した物を見ないことを前提にしているため。
@@ -214,12 +243,9 @@ function normalizeRepositoryUrl(raw: string): string | null {
   return `${scheme}://${url.hostname.toLowerCase()}${path}`;
 }
 
-function isMissingRepository(value: string | null): value is null | "" {
-  return (
-    value === null ||
-    value.trim() === "" ||
-    value.trim().toLowerCase() === "unknown"
-  );
+function isMissingRepository(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed === "" || trimmed.toLowerCase() === "unknown";
 }
 
 /**
@@ -232,10 +258,10 @@ export function compareRepositoryUrls(
   before: string | null,
   after: string | null,
 ): CheckResult {
-  if (isMissingRepository(before)) {
+  if (before === null || isMissingRepository(before)) {
     return stop("repository before the update is not available");
   }
-  if (isMissingRepository(after)) {
+  if (after === null || isMissingRepository(after)) {
     return stop("repository after the update is not available");
   }
   const normalizedBefore = normalizeRepositoryUrl(before);
@@ -271,17 +297,53 @@ const MAX_PROSE_INPUT_UNITS = 1_000_000;
 
 const CODE_FENCE = /`{3,}|~{3,}/g;
 const URL_PATTERN = /https?:\/\/\S+/gi;
+// GFMは、スキームの無い`www.`で始まる語もリンクとして描く。
+const WWW_AUTOLINK = /\bwww\.\S+/gi;
+// `](`と`]:`の直後の`//host`は、スキームを省いたリンクの宛先として描かれる。
+const SCHEME_RELATIVE_TARGET = /(\]\(\s*|\]:\s*)\/\/\S+/g;
 const HTML_COMMENT = /<!--[\s\S]*?(?:-->|--!>|$)/g;
 const COMMENT_REMOVAL_PASSES = 3;
 
+// 置き換えの途中で、本文に現れた文字列と区別するための印。私用領域の文字なので、入力からは先に取り除く。
+// 角括弧のエスケープを終えた後に、`[URL]`と`[code fence]`へ戻す。
+const URL_TOKEN = "\ue000";
+const FENCE_TOKEN = "\ue001";
+
 /**
- * 秘密情報のマスク、コードフェンスの中和、URLの置き換えを順に行う。
+ * 秘密情報のマスク、コードフェンスとリンクの置き換えを順に行う。
+ * URL、`www.`のリンク、スキームを省いたリンクの宛先は、`URL_TOKEN`に置き換える。
  * 後の段階がテキストをつなぎ直すと、前の段階で見えなかった形が現れるので、全体を2回通す。
  */
 function neutralize(text: string): string {
   return maskSecrets(text)
-    .replace(CODE_FENCE, "[code fence]")
-    .replace(URL_PATTERN, "[URL]");
+    .replace(CODE_FENCE, FENCE_TOKEN)
+    .replace(URL_PATTERN, URL_TOKEN)
+    .replace(WWW_AUTOLINK, URL_TOKEN)
+    .replace(SCHEME_RELATIVE_TARGET, `$1${URL_TOKEN}`);
+}
+
+/**
+ * 角括弧を、バックスラッシュでエスケープする。
+ * リンク、画像、参照リンクの定義はどれも角括弧で始まるので、角括弧を文字にすれば、
+ * 宛先が`neutralize`の対象でない形(`javascript:`、`mailto:`など)でもリンクにならない。
+ * 直前に奇数個のバックスラッシュがある角括弧は、エスケープ済みなので重ねない。
+ * 重ねると、`\\`と`[`の組になり、角括弧の効果が戻る。
+ */
+function escapeLinkBrackets(text: string): string {
+  let out = "";
+  let backslashes = 0;
+  for (const ch of text) {
+    if ((ch === "[" || ch === "]") && backslashes % 2 === 0) out += "\\";
+    out += ch;
+    backslashes = ch === "\\" ? backslashes + 1 : 0;
+  }
+  return out;
+}
+
+function restoreTokens(text: string): string {
+  return text
+    .replaceAll(URL_TOKEN, "[URL]")
+    .replaceAll(FENCE_TOKEN, "[code fence]");
 }
 
 /** コメントの開き`<!--`が1つも残らないように取り除く。取り除いた後につながって現れたものも取り除く。 */
@@ -314,13 +376,13 @@ function removeHtmlComments(text: string): string {
 }
 
 /**
- * 制御文字と見えない文字を取り除き、改行をLFにそろえ、タブを空白にし、
- * 3行以上続く空行を1行にして、前後の空白を除く。
+ * 制御文字と見えない文字を取り除き、改行をLFにそろえ、タブを空白にする。
+ * HTMLコメントの除去の前に行う。見えない文字で分けた`<!--`を、除去の対象にするため。
  */
-function normalizeText(text: string): string {
+function stripHiddenCharacters(text: string): string {
   let out = "";
   for (const ch of text.replaceAll("\r\n", "\n").replaceAll("\r", "\n")) {
-    if (ch === "\n" || ch === " " || ch === " ") {
+    if (ch === "\n" || ch === "\u2028" || ch === "\u2029") {
       out += "\n";
     } else if (ch === "\t") {
       out += " ";
@@ -328,7 +390,12 @@ function normalizeText(text: string): string {
       out += ch;
     }
   }
-  return out.replace(/\n{3,}/g, "\n\n").trim();
+  return out;
+}
+
+/** 2行以上続く空行を1行にまとめ、前後の空白を除く。 */
+function tidyWhitespace(text: string): string {
+  return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** 末尾の、空白で区切られていない部分(途中で切れた語)を取り除く。 */
@@ -357,15 +424,18 @@ function takeCodePoints(
 /**
  * PRの本文、変更履歴、Claudeの出力など、信頼できない文章を、投稿と通知の前に無害化する。
  * 順序は次のとおり。
- * 1. 秘密情報のマスク、コードフェンスの中和、URLの`[URL]`への置き換え。
- * 2. HTMLコメントの除去。
- * 3. 制御文字、見えない文字、改行の正規化。
+ * 1. 秘密情報のマスク、コードフェンスの中和、URLと`www.`のリンクとスキームを省いたリンクの宛先の`[URL]`への置き換え。
+ * 2. 制御文字、見えない文字、改行の正規化。
+ * 3. HTMLコメントの除去。見えない文字で分けた`<!--`が除去の対象になるよう、2の後に行う。
  * 4. 1と同じ処理をもう一度。2と3で文字がつながり、秘密情報、フェンス、URLが現れうるため。
  *    入力が`MAX_PROSE_INPUT_UNITS`を超えるときは、先に超えた分と途中で切れた語を捨てる。
- * 5. `maxChars`コードポイントでの切り詰め。切ったときは末尾に`UNTRUSTED_PROSE_TRUNCATION_MARK`を付ける。
- * 6. `sanitizePrProse`で`<`、`#<数字>`、`@<英数字>`、見出しの行を中和する。
+ * 5. 角括弧のエスケープ。リンクと参照リンクの定義の構文を無効にする。
+ * 6. `maxChars`コードポイントでの切り詰め。切ったときは末尾に`UNTRUSTED_PROSE_TRUNCATION_MARK`を付ける。
+ *    `[URL]`と`[code fence]`は1文字として数え、途中では切らない。
+ * 7. `<!--`が残らないことの最終確認と、`sanitizePrProse`による`<`、`#<数字>`、`@<英数字>`、見出しの行の中和。
  * 切り詰めの後にエスケープするので、結果は`maxChars`をエスケープと印の分だけ超えうる。
- * 本文の最後の行がFactoryの目印として読まれることはない。コメントを除き、`<`をエスケープするため。
+ * 結果には`<!--`が1つも残らず、`<`もエスケープされるので、
+ * 本文の最後の行がFactoryの目印として読まれることはない。
  * `maxChars`が1未満か有限でないときは、空文字を返す。
  */
 export function sanitizeUntrustedProse(text: string, maxChars: number): string {
@@ -375,12 +445,23 @@ export function sanitizeUntrustedProse(text: string, maxChars: number): string {
     // 切れ目で途中まで読んだ語を残さない。秘密情報の途中の断片が、マスクの対象にならず残るため。
     input = dropTrailingWord(input.slice(0, MAX_PROSE_INPUT_UNITS));
   }
-  const normalized = neutralize(
-    normalizeText(removeHtmlComments(neutralize(input))),
+  const withoutTokens = input
+    .replaceAll(URL_TOKEN, "")
+    .replaceAll(FENCE_TOKEN, "");
+  const cleaned = neutralize(
+    tidyWhitespace(
+      removeHtmlComments(stripHiddenCharacters(neutralize(withoutTokens))),
+    ),
   );
-  const { text: kept, cut } = takeCodePoints(normalized, Math.floor(maxChars));
-  const bounded = cut ? `${kept}${UNTRUSTED_PROSE_TRUNCATION_MARK}` : kept;
-  return sanitizePrProse(bounded);
+  const { text: kept, cut } = takeCodePoints(
+    escapeLinkBrackets(cleaned),
+    Math.floor(maxChars),
+  );
+  const restored = restoreTokens(kept);
+  const bounded = cut
+    ? `${restored}${UNTRUSTED_PROSE_TRUNCATION_MARK}`
+    : restored;
+  return sanitizePrProse(removeCommentOpeners(bounded));
 }
 
 // ---- 影響調査のプロンプトに渡す要約 ----

@@ -19,6 +19,7 @@ import {
   dependabotReason,
   dependabotTimeoutMisfit,
   evaluatePostInstallStatus,
+  POST_INSTALL_STATUS_ARGV,
   sanitizeUntrustedProse,
   UNTRUSTED_PROSE_TRUNCATION_MARK,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
@@ -1607,5 +1608,201 @@ describe("dependabot reasons", () => {
 
   test("fills in a placeholder for a detail of only whitespace", () => {
     expect(dependabotReason("gate", " \n ")).toBe("dependabot gate: no detail");
+  });
+});
+
+// ---- リンク構文の無効化 ----
+
+describe("sanitizeUntrustedProse links", () => {
+  test("replaces a www autolink", () => {
+    expect(sanitizeUntrustedProse("open www.evil.example/login now", 100)).toBe(
+      "open [URL] now",
+    );
+  });
+
+  test("replaces an uppercase www autolink", () => {
+    expect(sanitizeUntrustedProse("WWW.EVIL.example/x", 100)).toBe("[URL]");
+  });
+
+  test("does not take a word that only ends in www for an autolink", () => {
+    expect(sanitizeUntrustedProse("awww.example", 100)).toBe("awww.example");
+  });
+
+  test("leaves no host from a scheme-relative inline link", () => {
+    expect(
+      sanitizeUntrustedProse("[詳細](//evil.example/x)", 100),
+    ).not.toContain("evil.example");
+  });
+
+  test("leaves no link opener in a scheme-relative inline link", () => {
+    expect(sanitizeUntrustedProse("[詳細](//evil.example/x)", 100)).not.toMatch(
+      /(?<!\\)\]\(/,
+    );
+  });
+
+  test("leaves no host from a scheme-relative reference definition", () => {
+    expect(sanitizeUntrustedProse("[a]: //evil.example", 100)).not.toContain(
+      "evil.example",
+    );
+  });
+
+  test("leaves no line that starts a reference definition", () => {
+    expect(sanitizeUntrustedProse("x\n[a]: //evil.example", 100)).not.toMatch(
+      /^\[/m,
+    );
+  });
+
+  test("leaves no link opener in an inline link with another scheme", () => {
+    expect(sanitizeUntrustedProse("[x](javascript:alert(1))", 100)).not.toMatch(
+      /(?<!\\)\]\(/,
+    );
+  });
+
+  test("leaves no link opener in an inline link with a mailto target", () => {
+    expect(
+      sanitizeUntrustedProse("[URL](mailto:a@b.example)", 100),
+    ).not.toMatch(/(?<!\\)\]\(/);
+  });
+
+  test("leaves no link opener in an image", () => {
+    expect(
+      sanitizeUntrustedProse("![x](//evil.example/a.png)", 100),
+    ).not.toMatch(/(?<!\\)\]\(/);
+  });
+
+  test("escapes square brackets", () => {
+    expect(sanitizeUntrustedProse("[x]", 100)).toBe("\\[x\\]");
+  });
+
+  test("keeps a bracket that is already escaped", () => {
+    expect(sanitizeUntrustedProse("\\[x\\]", 100)).toBe("\\[x\\]");
+  });
+
+  test("escapes a bracket after an escaped backslash", () => {
+    expect(sanitizeUntrustedProse("\\\\[x]", 100)).toBe("\\\\\\[x\\]");
+  });
+
+  test("keeps the URL placeholder unescaped", () => {
+    expect(sanitizeUntrustedProse("[x](https://e.example)", 100)).toBe(
+      "\\[x\\]([URL]",
+    );
+  });
+
+  test("does not let the input forge the placeholder with private-use characters", () => {
+    expect(sanitizeUntrustedProse("a\ue000b\ue001c", 100)).toBe("abc");
+  });
+
+  test("counts a placeholder as one character against the limit", () => {
+    expect(sanitizeUntrustedProse("https://e.example/long/path ab", 2)).toBe(
+      `[URL] ${UNTRUSTED_PROSE_TRUNCATION_MARK}`,
+    );
+  });
+
+  test("does not cut a placeholder in the middle", () => {
+    expect(sanitizeUntrustedProse("ab https://e.example/x", 4)).toBe(
+      `ab [URL]`,
+    );
+  });
+});
+
+// ---- 見えない文字による分割 ----
+
+describe("sanitizeUntrustedProse invisible characters", () => {
+  test.each([
+    ["a zero-width space", "\u200b"],
+    ["a bell", "\u0007"],
+    ["a right-to-left override", "\u202e"],
+    ["a soft hyphen", "\u00ad"],
+    ["an Arabic letter mark", "\u061c"],
+    ["a Hangul filler", "\u3164"],
+    ["a variation selector", "\ufe0f"],
+    ["a tag character", "\u{e0041}"],
+  ])("removes a comment opener split by %s", (_label, hidden) => {
+    expect(
+      sanitizeUntrustedProse(`x <!${hidden}-- factory:dependabot:5 -->`, 100),
+    ).toBe("x");
+  });
+
+  test.each([
+    ["a zero-width space", "\u200b"],
+    ["an Arabic letter mark", "\u061c"],
+    ["a tag character", "\u{e0041}"],
+  ])("leaves no comment opener when %s splits one", (_label, hidden) => {
+    expect(sanitizeUntrustedProse(`<!${hidden}-- y`, 100)).not.toContain(
+      "<!--",
+    );
+  });
+
+  test("does not let a marker split by an invisible character act as a marker", () => {
+    expect(
+      hasMarker(
+        sanitizeUntrustedProse("ok\n<!\u200b-- factory:dependabot:5 -->", 100),
+      ),
+    ).toBe(false);
+  });
+
+  test("leaves no comment opener after a nested split with an invisible character", () => {
+    expect(
+      sanitizeUntrustedProse("<!-<!\u200b-- x -->- y -->", 100),
+    ).not.toContain("<!--");
+  });
+
+  test.each([
+    ["U+061C", "\u061c"],
+    ["U+00AD", "\u00ad"],
+    ["U+180E", "\u180e"],
+    ["U+FE00", "\ufe00"],
+    ["U+FE0F", "\ufe0f"],
+    ["U+E0100", "\u{e0100}"],
+    ["U+3164", "\u3164"],
+    ["U+FFA0", "\uffa0"],
+    ["U+115F", "\u115f"],
+    ["U+1160", "\u1160"],
+    ["U+E0000", "\u{e0000}"],
+    ["U+E0041", "\u{e0041}"],
+    ["U+E007F", "\u{e007f}"],
+  ])("removes %s", (_label, hidden) => {
+    expect(sanitizeUntrustedProse(`a${hidden}b`, 100)).toBe("ab");
+  });
+
+  test("keeps ordinary Japanese text", () => {
+    expect(sanitizeUntrustedProse("更新の内容です。", 100)).toBe(
+      "更新の内容です。",
+    );
+  });
+
+  test("masks a token split by an Arabic letter mark", () => {
+    expect(
+      sanitizeUntrustedProse(
+        `ghp_${"A".repeat(10)}\u061c${"A".repeat(26)}`,
+        100,
+      ),
+    ).not.toContain("ghp_A");
+  });
+
+  test("replaces an invisible character in a reason with a space", () => {
+    expect(dependabotReason("gate", "a\u061cb")).toBe("dependabot gate: a b");
+  });
+});
+
+// ---- インストール後の状態の取得 ----
+
+describe("POST_INSTALL_STATUS_ARGV", () => {
+  test("fixes the arguments the caller must pass to git", () => {
+    expect(POST_INSTALL_STATUS_ARGV).toEqual([
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--ignored=traditional",
+      "--untracked-files=normal",
+    ]);
+  });
+
+  test("is frozen, so that a caller cannot weaken it", () => {
+    expect(Object.isFrozen(POST_INSTALL_STATUS_ARGV)).toBe(true);
+  });
+
+  test("does not hide untracked files", () => {
+    expect(POST_INSTALL_STATUS_ARGV).not.toContain("-uno");
   });
 });

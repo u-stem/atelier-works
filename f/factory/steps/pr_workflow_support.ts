@@ -3504,7 +3504,7 @@ type ReasonRule = {
 };
 
 /** 次の操作がフローによって違う理由のための、理由を出したフローの種類。 */
-export type NextActionFlow = LockOwner["kind"];
+export type NextActionFlow = LockOwner["kind"] | "dependabot";
 
 /**
  * 作業項目を同じ作業項目のまま再実行する操作。どの種別の作業項目にも使える。
@@ -3621,10 +3621,12 @@ const DEPENDABOT_MANUAL_NEXT_ACTION =
 const DEPENDABOT_IMPACT_NEXT_ACTION =
   "PRのコメントの所見を確認し、問題なければ手でマージするか閉じてください。この作業項目は再実行できません。新しいコミットが積まれると、自動で再び対象になります";
 
-const REASON_RULES: readonly ReasonRule[] = [
-  // dependabotの理由(`lib/dependabot_flow_support.ts`の`dependabotReason`と固定の理由)。
-  // 詳細にほかの規則の文字列が入りうるので、ほかの規則より先に当てる。
-  // dependabotの作業項目は`retry_work_item`が拒否するので、どの規則も再実行を案内しない。
+/**
+ * dependabotの理由の規則(`lib/dependabot_flow_support.ts`の`dependabotReason`と固定の理由)。
+ * 詳細にほかの規則の文字列が入りうるので、`REASON_RULES`の先頭に置き、ほかの規則より先に当てる。
+ * どの規則も再実行を案内しない。dependabotの作業項目は`retry_work_item`が拒否するため。
+ */
+const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.gate, "([\\s\\S]+)$"),
     describe: (m) =>
@@ -3690,7 +3692,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: reasonPattern(DEPENDABOT_MERGE_FORBIDDEN_REASON, ""),
     describe: () => "dependabotの更新をマージする権限がありませんでした(403)",
     nextAction: () =>
-      "PATにマージ権限があるかと、rulesetのbypassを確認し、手でマージしてください",
+      "PATのマージ権限とrulesetのbypassを確認し、手でマージしてください",
   },
   {
     pattern: reasonPattern(DEPENDABOT_MERGE_REFUSED_REASON, ""),
@@ -3713,6 +3715,10 @@ const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       "claude_timeout_secを減らしてください。この作業項目は再実行できないので、PRは人が確認して手でマージするか閉じてください",
   },
+];
+
+const REASON_RULES: readonly ReasonRule[] = [
+  ...DEPENDABOT_REASON_RULES,
   // 稼働中のIssueの部分一意インデックス(`work_items_active_issue_key`)への違反。
   // `approved`から`implementing`への移行が阻まれたときに、`cas_failed`の理由として現れる。
   // 同じIssueの別の作業項目が現在のサイクルなので、この作業項目は再開できない。
@@ -4411,18 +4417,25 @@ export function describeReason(reason: string): string {
  * `flow`には理由を出したフローを渡す。worktreeのプロセスの排他の理由のように、
  * フローによって取れる操作が違う理由では、そのフローの操作だけを返す。
  * 省略すると、それらの理由では両方のフローの操作を並べた文を返す。
+ * `flow`が`dependabot`のときは、dependabotの規則だけを調べ、どれにも一致しなければ
+ * `DEPENDABOT_MANUAL_NEXT_ACTION`を返す。dependabotの作業項目は`retry_work_item`が拒否するので、
+ * 接頭辞の無い理由(検査環境、Claudeの失敗、例外の文)に、既存の規則や`GENERIC_NEXT_ACTION`が
+ * 再実行を案内しないようにするため。
  */
 export function nextActionFor(reason: string, flow?: NextActionFlow): string {
   const segments = reason.includes("; ") ? reason.split("; ") : [reason];
+  const rules = flow === "dependabot" ? DEPENDABOT_REASON_RULES : REASON_RULES;
   for (const segment of segments) {
-    for (const rule of REASON_RULES) {
+    for (const rule of rules) {
       const match = segment.match(rule.pattern);
       if (match !== null) {
         return rule.nextAction(match, flow);
       }
     }
   }
-  return GENERIC_NEXT_ACTION;
+  return flow === "dependabot"
+    ? DEPENDABOT_MANUAL_NEXT_ACTION
+    : GENERIC_NEXT_ACTION;
 }
 
 // ---------------------------------------------------------------------------
