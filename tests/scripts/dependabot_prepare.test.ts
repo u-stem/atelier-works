@@ -1001,6 +1001,20 @@ describe("runDependabotPrepare: assess input", () => {
     expect(result.assess?.promptInput.unverifiedInputs).toContain("changelog");
   });
 
+  test("marks the changelog unverified when it has no heading for the target version", async () => {
+    const { result } = await prepare({ changelog: "See GitHub Releases" });
+    expect(result.assess?.promptInput.unverifiedInputs).toContain("changelog");
+  });
+
+  test("does not mark the changelog unverified when it has a heading for the target version", async () => {
+    const { result } = await prepare({
+      changelog: "## v1.3.1\n- fix padding",
+    });
+    expect(result.assess?.promptInput.unverifiedInputs).not.toContain(
+      "changelog",
+    );
+  });
+
   test("leaves the changelog empty when the package ships none", async () => {
     const { result } = await prepare({ changelog: null });
     expect(result.assess?.promptInput.changelog).toBe("");

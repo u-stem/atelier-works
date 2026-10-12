@@ -743,6 +743,14 @@ export function buildChangelogExcerpt(
   return takeBytes(section.join("\n"), maxBytes);
 }
 
+/**
+ * 変更履歴が`version`の見出しを持つかを返す。見出しの判定は`buildChangelogExcerpt`と同じ。
+ * 「See GitHub Releases」だけのように更新先の版の記述が無い変更履歴は、確かめた入力にしない。
+ */
+export function changelogCoversVersion(text: string, version: string): boolean {
+  return findHeading(text.split("\n"), version, 0) !== -1;
+}
+
 /** dependabotのフローのパス。起動側と、フローの失敗の扱い(`on_error_flow`)が使う。 */
 export const DEPENDABOT_FLOW_PATH = "f/factory/dependabot";
 

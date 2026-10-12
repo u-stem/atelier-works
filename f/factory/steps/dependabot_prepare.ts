@@ -34,6 +34,7 @@ import {
   buildChangelogExcerpt,
   buildLockfileSummary,
   buildManifestDiffSummary,
+  changelogCoversVersion,
   compareInstalledScripts,
   compareRepositoryUrls,
   DEPENDABOT_INSTALL_TIMEOUT_MS,
@@ -813,7 +814,14 @@ export async function runDependabotPrepare(
           buildChangelogExcerpt(rawChangelog, from, to),
           CHANGELOG_MAX_CHARS,
         );
-  if (changelog === "") unverified.push("changelog");
+  // 更新先の版の見出しが無い変更履歴は、その版の変更を確かめられないので未確認にする(本文はClaudeに渡す)。
+  if (
+    changelog === "" ||
+    rawChangelog === null ||
+    !changelogCoversVersion(rawChangelog, to)
+  ) {
+    unverified.push("changelog");
+  }
 
   const manifest = manifestDiffFor(result.input.files);
   const manifestDiff = manifest.verified

@@ -3,6 +3,7 @@ import {
   buildChangelogExcerpt,
   buildLockfileSummary,
   buildManifestDiffSummary,
+  changelogCoversVersion,
   codeFenceFor,
   compareInstalledScripts,
   compareRepositoryUrls,
@@ -1228,6 +1229,30 @@ describe("buildLockfileSummary", () => {
     ]);
 
     expect(summary.length).toBeLessThan(600);
+  });
+});
+
+// ---- changelogCoversVersion ----
+
+describe("changelogCoversVersion", () => {
+  test("finds a heading for the version", () => {
+    expect(
+      changelogCoversVersion("# Changelog\n## [1.2.4]\n- fix", "1.2.4"),
+    ).toBe(true);
+  });
+
+  test("does not count a pointer to the release notes", () => {
+    expect(changelogCoversVersion("See GitHub Releases", "1.2.4")).toBe(false);
+  });
+
+  test("does not count the version outside a heading", () => {
+    expect(changelogCoversVersion("# Changelog\n- 1.2.4 fixed", "1.2.4")).toBe(
+      false,
+    );
+  });
+
+  test("does not count a heading of a longer version", () => {
+    expect(changelogCoversVersion("## 1.2.40\n- fix", "1.2.4")).toBe(false);
   });
 });
 
