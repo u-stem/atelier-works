@@ -2075,7 +2075,8 @@ describe("privateOutputReader", () => {
       rmSync(base, { recursive: true, force: true });
     }
   });
-  const ROOMY = 1024;
+  // Linuxではディレクトリの大きさが4096バイトになるので、それより十分大きくする。
+  const ROOMY = 64 * 1024;
   const NAME = "slot-0.links";
   const quiet = logger("check_sandbox", { sink: () => {} });
 
