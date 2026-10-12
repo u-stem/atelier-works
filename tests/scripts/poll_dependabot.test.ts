@@ -573,6 +573,23 @@ describe("processDependabotPr wait throttle", () => {
     );
   });
 
+  test("caps the publish wait at the wait limit when the publish time is in the future", async () => {
+    const { outcome } = await run({
+      collect: ready({ publishedAtIso: "2027-01-01T00:00:00.000Z" }),
+    });
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS + LIMIT_MS);
+  });
+
+  test("caps the publish wait from the first wait of the head", async () => {
+    const { outcome } = await run(
+      { collect: ready({ publishedAtIso: "2027-01-01T00:00:00.000Z" }) },
+      { waits: waited({ firstWaitAtMs: NOW_MS - DAY_MS }) },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS - DAY_MS + LIMIT_MS);
+  });
+
   test("checks another wait in the next round after the first wait", async () => {
     const { outcome } = await run({ collect: ready({ mergeable: null }) });
 
@@ -1059,6 +1076,7 @@ describe("poll state", () => {
       previous: new Map(),
       fresh: new Map([["acme/widgets#12@x", WAIT]]),
       unprocessedPrKeys: new Set(),
+      unsearchedRepoKeys: new Set(),
       resumeAtMs: null,
     });
 
@@ -1070,6 +1088,7 @@ describe("poll state", () => {
       previous: new Map([["acme/widgets#12@x", WAIT]]),
       fresh: new Map(),
       unprocessedPrKeys: new Set(),
+      unsearchedRepoKeys: new Set(),
       resumeAtMs: null,
     });
 
@@ -1081,10 +1100,35 @@ describe("poll state", () => {
       previous: new Map([["acme/widgets#12@x", WAIT]]),
       fresh: new Map(),
       unprocessedPrKeys: new Set(["acme/widgets#12"]),
+      unsearchedRepoKeys: new Set(),
       resumeAtMs: null,
     });
 
     expect(next.heads).toEqual({ "acme/widgets#12@x": WAIT });
+  });
+
+  test("carries the records of a repository it did not search", () => {
+    const next = nextPollState({
+      previous: new Map([["acme/widgets#12@x", WAIT]]),
+      fresh: new Map(),
+      unprocessedPrKeys: new Set(),
+      unsearchedRepoKeys: new Set(["acme/widgets"]),
+      resumeAtMs: null,
+    });
+
+    expect(next.heads).toEqual({ "acme/widgets#12@x": WAIT });
+  });
+
+  test("does not carry the records of another repository by a shared prefix", () => {
+    const next = nextPollState({
+      previous: new Map([["acme/widgets-extra#12@x", WAIT]]),
+      fresh: new Map(),
+      unprocessedPrKeys: new Set(),
+      unsearchedRepoKeys: new Set(["acme/widgets"]),
+      resumeAtMs: null,
+    });
+
+    expect(next.heads).toEqual({});
   });
 
   test("saves the resume time", () => {
@@ -1092,6 +1136,7 @@ describe("poll state", () => {
       previous: new Map(),
       fresh: new Map(),
       unprocessedPrKeys: new Set(),
+      unsearchedRepoKeys: new Set(),
       resumeAtMs: 9,
     });
 
@@ -1452,6 +1497,57 @@ describe("pollDependabot", () => {
         nextCheckAtMs: Date.parse("2026-10-25T00:00:00.000Z"),
       },
     });
+  });
+
+  test("drops the wait record of a pull request that is no longer found", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        found: [],
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({});
+  });
+
+  test("keeps the wait records of a repository whose search failed", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({ [KEY]: wait });
+  });
+
+  test("keeps the wait records of a repository it did not search after the rate limit", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+    const gadgets = headWaitKey("acme", "gadgets", 3, HEAD);
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...CONFIG,
+          repo_allowlist: ["https://github.com/acme/gadgets"],
+        },
+        state: { resumeAtMs: null, heads: { [gadgets]: wait } },
+        search: async () => {
+          throw new GitHubRateLimitError("search", 60_000, true);
+        },
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({ [gadgets]: wait });
   });
 
   test("keeps the wait record of a pull request that failed", async () => {

@@ -1191,22 +1191,25 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 
 ### 有効にする
 
-有効にする順は、試運転、マージの順である。
+有効にする順は、単独の実験、試運転、マージの順である。
 1つずつ確かめてから進める。
 設定を一度に変えると、問題が起きたときに原因を切り分けられないためである。
 
 1. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、WindmillのRunsで確かめる。
-2. `dependabot_merge_enabled`が`false`であることを確かめてから、`dependabot_enabled`を`true`にする。
+2. [有効化の前の確認](security.md#有効化の前の確認)の、試運転の前に単独の実験で確かめる項目を確かめる。
+   フローは使わない。
+   満たさなければ、試運転を始めない。
+3. `dependabot_merge_enabled`が`false`であることを確かめてから、`dependabot_enabled`を`true`にする。
    これで試運転が始まる。
-3. 次の`poll_dependabot`の実行の結果を確かめる。
+4. 次の`poll_dependabot`の実行の結果を確かめる。
    フローを起動していれば、`dependabot`フローの3つのステップの結果と、作業項目の終わり方を確かめる。
-4. [有効化の前の確認](security.md#有効化の前の確認)の、試運転で確かめる項目をすべて確かめる。
-5. 同じ表の、マージの前に確かめる項目をすべて確かめる。
+5. 同じ節の、試運転で確かめる項目をすべて確かめる。
+6. 同じ節の、マージの前に確かめる項目をすべて確かめる。
    マージにはPATのContentsの書き込みが要る。
    実際にマージできるかは、この確認で確かめる。
    classicのPATはリポジトリ単位で権限を絞れないので、fine-grainedのPATを使う。
-6. `dependabot_merge_enabled`を`true`にする。
-7. 最初のマージの結果を確かめる。
+7. `dependabot_merge_enabled`を`true`にする。
+8. 最初のマージの結果を確かめる。
    問題があれば、すぐに`dependabot_merge_enabled`を`false`に戻す。
 
 ### 初回の実機で確かめること
@@ -1237,7 +1240,10 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 dependabotの作業項目は再実行できない。
 通知のリンクからPRを開き、理由とPRのコメントの所見を確かめて、手でマージするか閉じる。
 理由が「dry run」なら、マージしてよいと判断したPRである。
-確かめて手でマージするか、試運転を終えるなら`dependabot_merge_enabled`を有効にする。
+このPRは、確かめて手でマージする。
+`dependabot_merge_enabled`を有効にしても、このPRは再評価されない。
+試運転を終えるなら、`dependabot_merge_enabled`を有効にする。
+有効にした後の新しいPRとheadから、マージが始まる。
 影響の所見が出たPRを修正に回すときは、所見を確かめてから`factory:fix`ラベルを付ける。
 修正をpushしたPRは、自動ではマージされないので、レビューを確かめて人がマージする。
 新しいcommitが積まれると、Factoryは新しいheadを改めて評価する。

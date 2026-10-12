@@ -104,7 +104,7 @@ const CASES: {
     described:
       "dry run: dependabotの更新をマージ可と判定しました。試運転のため、マージしていません",
     nextAction:
-      "PRを確認して手でマージするか、factory_configのdependabot_merge_enabledを有効にしてください。この作業項目は再実行できません",
+      "このPRは、確認して手でマージしてください。dependabot_merge_enabledを有効にしても、このPRは再評価されません。この作業項目は再実行できません",
   },
   {
     label: "merge forbidden",

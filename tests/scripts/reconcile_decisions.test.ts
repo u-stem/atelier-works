@@ -2,14 +2,21 @@
 // (`f/factory/lib/poll_support.ts`)のテスト。
 
 import { describe, expect, test } from "bun:test";
+import { ACTIONABLE_WORK_ITEM_STATUSES } from "../../f/factory/lib/console_support.ts";
+import { DEPENDABOT_REPROCESSABLE_CANCEL_NOTES } from "../../f/factory/lib/db.ts";
 import {
   decideClosureOnly,
   decideReconcileAction,
   isWaitingForHuman,
+  RECONCILE_MERGED_NOTE,
   reconcileNotifies,
   reconcileTransition,
 } from "../../f/factory/lib/poll_support.ts";
 import { DEPENDABOT_DONE_NOTE } from "../../f/factory/steps/dependabot_finish.ts";
+import {
+  describeReason,
+  nextActionFor,
+} from "../../f/factory/steps/pr_workflow_support.ts";
 
 const NOW = new Date("2026-09-26T12:00:00.000Z");
 const RECENT = new Date("2026-09-26T11:59:00.000Z"); // 1分前
@@ -253,7 +260,7 @@ describe("reconcileTransition", () => {
         open: false,
         merged: true,
       }),
-    ).toEqual({ to: "reviewed", note: DEPENDABOT_DONE_NOTE.merged });
+    ).toEqual({ to: "reviewed", note: RECONCILE_MERGED_NOTE });
   });
 
   test("cancels a dependabot work item of a pull request closed without a merge", () => {
@@ -284,5 +291,35 @@ describe("reconcileTransition", () => {
         { kind: "pr", open: true, merged: false },
       ),
     ).toEqual({ to: "failed", note: "reconcile: flow job failed" });
+  });
+});
+
+describe("the note of a merge found by the reconcile", () => {
+  test("is reconcile: merged", () => {
+    expect(RECONCILE_MERGED_NOTE).toBe("reconcile: merged");
+  });
+
+  test("differs from the note of a merge by the dependabot flow", () => {
+    expect(RECONCILE_MERGED_NOTE).not.toBe(DEPENDABOT_DONE_NOTE.merged);
+  });
+
+  test("is not described as a reason of the dependabot flow", () => {
+    expect(describeReason(RECONCILE_MERGED_NOTE)).toBe(RECONCILE_MERGED_NOTE);
+  });
+
+  test("never points to retry_work_item", () => {
+    expect(nextActionFor(RECONCILE_MERGED_NOTE, "dependabot")).not.toContain(
+      "retry_work_item",
+    );
+  });
+
+  test("is not a note that lets the same head be processed again", () => {
+    expect(DEPENDABOT_REPROCESSABLE_CANCEL_NOTES).not.toContain(
+      RECONCILE_MERGED_NOTE,
+    );
+  });
+
+  test("ends in a state the Console does not list as actionable", () => {
+    expect(ACTIONABLE_WORK_ITEM_STATUSES).not.toContain("reviewed");
   });
 });

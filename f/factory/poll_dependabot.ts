@@ -150,6 +150,12 @@ export function headWaitKey(
   return `${prKey(owner, repo, number)}@${headSha}`;
 }
 
+/** PRのキー(`owner/repo#番号`)から、リポジトリの部分を取り出す。 */
+function repoPartOf(prPart: string): string {
+  const hash = prPart.lastIndexOf("#");
+  return hash < 0 ? prPart : prPart.slice(0, hash);
+}
+
 /** 待ちの記録のキーから、PRの部分を取り出す。 */
 function prPartOf(key: string): string {
   const at = key.lastIndexOf("@");
@@ -413,15 +419,17 @@ export async function processDependabotPr(
       );
     }
     const waitCount = (previousWait?.waitCount ?? 0) + 1;
+    // 公開の時刻が未来に偽られても、待ちの上限の時刻より後には延ばさない。
+    // 間引きは上限の判定より前にあるので、延ばすと上限を超えても黙って待ち続けるためである。
+    const nextCheckAtMs = Math.min(
+      publishCheckAtMs ?? ctx.nowMs + backoffFor(waitCount),
+      startMs + limitDays * DAY_MS,
+    );
     return {
       kind: "waiting",
       reason,
       key,
-      wait: {
-        firstWaitAtMs,
-        waitCount,
-        nextCheckAtMs: publishCheckAtMs ?? ctx.nowMs + backoffFor(waitCount),
-      },
+      wait: { firstWaitAtMs, waitCount, nextCheckAtMs },
     };
   };
 
@@ -567,7 +575,8 @@ export function parsePollState(raw: unknown): ParsedPollState {
 
 /**
  * 次の周回に渡すstateを作る。
- * 今回待ちになったheadの記録と、今回調べ終えなかったPR(失敗したPRと、レート制限で打ち切った後のPR)の前の記録だけを残す。
+ * 今回待ちになったheadの記録と、今回調べ終えなかったPR(失敗したPRと、レート制限で打ち切った後のPR)の前の記録を残す。
+ * 検索が失敗したか、検索しなかったリポジトリのPRの前の記録も残す。待ちの起点を失わないためである。
  * 処理を終えたPRと、候補から外れたPR(閉じたPR)の記録は捨てるので、stateは開いたPRの数を超えて増えない。
  */
 export function nextPollState(input: {
@@ -575,11 +584,19 @@ export function nextPollState(input: {
   readonly fresh: ReadonlyMap<string, HeadWaitState>;
   /** 今回調べ終えなかった候補のPRのキー(`headWaitKey`の`@`より前)。 */
   readonly unprocessedPrKeys: ReadonlySet<string>;
+  /** 検索が失敗したか、レート制限で検索しなかったリポジトリのキー(`owner/repo`の小文字)。 */
+  readonly unsearchedRepoKeys: ReadonlySet<string>;
   readonly resumeAtMs: number | null;
 }): PollState {
   const heads: Record<string, HeadWaitState> = {};
   for (const [key, wait] of input.previous) {
-    if (input.unprocessedPrKeys.has(prPartOf(key))) heads[key] = wait;
+    const prPart = prPartOf(key);
+    if (
+      input.unprocessedPrKeys.has(prPart) ||
+      input.unsearchedRepoKeys.has(repoPartOf(prPart))
+    ) {
+      heads[key] = wait;
+    }
   }
   for (const [key, wait] of input.fresh) heads[key] = wait;
   return { resumeAtMs: input.resumeAtMs, heads };
@@ -682,6 +699,10 @@ export async function pollDependabot(
 
   let resumeAtMs: number | null = null;
   const found: DependabotPrSearchItem[] = [];
+  // 検索できなかったリポジトリ。失敗したものと、レート制限で検索しなかったものを入れる。
+  const unsearched = new Set(
+    targets.map((target) => `${target.owner}/${target.repo}`.toLowerCase()),
+  );
   for (const target of targets) {
     try {
       found.push(
@@ -691,6 +712,7 @@ export async function pollDependabot(
           repo: target.repo,
         })),
       );
+      unsearched.delete(`${target.owner}/${target.repo}`.toLowerCase());
     } catch (err) {
       counts.failed += 1;
       await deps.recordFailure(
@@ -770,6 +792,7 @@ export async function pollDependabot(
       previous: previous.heads,
       fresh,
       unprocessedPrKeys: unprocessed,
+      unsearchedRepoKeys: unsearched,
       resumeAtMs,
     }),
   );

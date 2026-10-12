@@ -983,14 +983,14 @@ export type ReconcileTransition = {
 };
 
 /**
- * dependabotのフローがマージを記録するときの注記(`steps/dependabot_finish.ts`の`DEPENDABOT_DONE_NOTE.merged`)。
- * libはstepsを読み込まないので、値を写している(テストが一致を確かめる)。
+ * 照合がマージ済みのdependabotのPRを見つけたときの注記。
+ * フロー自身のマージの注記(`merged`)と分け、Factoryがマージしたのか、ほかがマージしたのかを記録から見分けられるようにする。
  */
-const DEPENDABOT_MERGED_NOTE = "merged";
+export const RECONCILE_MERGED_NOTE = "reconcile: merged";
 
 /**
  * 照合の判定から、作業項目を移す先の状態と注記を決める。
- * dependabotの作業項目のPRがマージされていたときは、取り消しでなく、マージ済み(`reviewed`、注記`merged`)として記録する。
+ * dependabotの作業項目のPRがマージされていたときは、取り消しでなく、マージ済み(`reviewed`、注記`reconcile: merged`)として記録する。
  * フローの記録が間に合わなかったマージや、人が手でマージしたPRを、取り消しとして残さないためである。
  * ほかの種別と、マージされずに閉じたPRは、取り消し(`cancelled`)にする。孤立は失敗(`failed`)にする。
  */
@@ -1006,7 +1006,7 @@ export function reconcileTransition(
     github.kind === "pr" &&
     github.merged
   ) {
-    return { to: "reviewed", note: DEPENDABOT_MERGED_NOTE };
+    return { to: "reviewed", note: RECONCILE_MERGED_NOTE };
   }
   return {
     to: decision.action === "cancel" ? "cancelled" : "failed",

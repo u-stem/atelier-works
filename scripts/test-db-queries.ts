@@ -3040,6 +3040,7 @@ for (const [pr, status, note, counts] of [
   [9113, "cancelled", null, true],
   [9107, "failed", "boom", true],
   [9108, "reviewed", "merged", true],
+  [9115, "reviewed", "reconcile: merged", true],
 ] as const) {
   const id = await insertDependabotWorkItemUnlessActive(
     dependabotCandidate(pr, DEPENDABOT_SHA_A),

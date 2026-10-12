@@ -134,7 +134,8 @@ dependabotの作業項目は、`picked`で始まり、次の終端のどれか�
 
 | 状態 | 注記(`status_reason`) | 意味 |
 | --- | --- | --- |
-| `reviewed` | `merged` | マージした。照合がマージ済みのPRを見つけたときも、この注記で記録する |
+| `reviewed` | `merged` | フローがマージした |
+| `reviewed` | `reconcile: merged` | 照合が、マージ済みのPRを見つけた。Factory以外がマージしたか、フローの記録が間に合わなかった |
 | `reviewed` | `impact_found` | 影響の所見を投稿した。修正のラベルは人が付ける |
 | `cancelled` | `dependabot_disabled` | 処理の途中で無効になった |
 | `cancelled` | `pr_closed` | 処理の途中でPRが閉じた |
@@ -165,7 +166,8 @@ dependabotの作業項目は、`picked`で始まり、次の終端のどれか�
 ## 照合と再実行
 
 `poll_issues`の照合は、ほかの種別と同じく、dependabotの作業項目も扱う。
-PRがマージされていれば、取り消しでなくマージ済み(`reviewed`、注記`merged`)として記録する(`reconcileTransition`)。
+PRがマージされていれば、取り消しでなくマージ済み(`reviewed`、注記`reconcile: merged`)として記録する(`reconcileTransition`)。
+フロー自身のマージ(注記`merged`)とは、注記で見分けられる。
 マージされずに閉じていれば、取り消す。
 どちらも、Discordに知らせない(`reconcileNotifies`)。
 マージされずに閉じるのは、dependabotが置き換えたPRを自分で閉じたときである。
