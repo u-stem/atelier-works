@@ -149,7 +149,6 @@ describe("buildEmbed main_ci_failed", () => {
     repo: "widgets",
     sha7: "abc1234",
     url: "https://github.com/acme/widgets/actions/runs/9",
-    prev_failed: false,
     next_action: "実行のログを確かめて、原因を直す",
   };
 
@@ -179,13 +178,9 @@ describe("buildEmbed main_ci_failed", () => {
     });
   });
 
-  test("does not mention a continuing failure for a first failure", () => {
-    expect(buildEmbed(event).description).not.toContain("続いて");
-  });
-
-  test("says the failure continues from the previous commit", () => {
-    expect(buildEmbed({ ...event, prev_failed: true }).description).toContain(
-      "前のコミットから失敗が続いています",
+  test("names the commit in the description", () => {
+    expect(buildEmbed(event).description).toBe(
+      "mainのコミットabc1234でCIが失敗しました。",
     );
   });
 });

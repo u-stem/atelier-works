@@ -53,7 +53,7 @@ const FAILED_NEXT_ACTION =
   "実行のログを確かめ、直す修正を入れるか、原因のコミットを取り消す";
 
 const DENIED_NEXT_ACTION =
-  "GITHUB_TOKENのfine-grained PATで、このリポジトリにRepository permissionsのActions: Read-onlyを付ける";
+  "PATのRepository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる";
 
 /** 監視するリポジトリ。 */
 export type WatchTarget = {
@@ -64,8 +64,9 @@ export type WatchTarget = {
 /**
  * 監視するリポジトリを決める。`factory_repo`と`repo_allowlist`のうち、
  * `isRepoAllowed`が許すものを、重複なく返す。
+ * `factory_repo`は、`owners`の照合や`repo_allowlist`によらず、常に対象になる。
+ * `repo_allowlist`の項目は、`owners`(照合を通ったオーナーだけを渡すこと)に含まれるオーナーのものだけを通す。
  * `repo_allowlist`が空なら`factory_repo`だけになる。`owners`の全リポジトリを列挙するAPIは使わない。
- * `owners`には、照合を通ったオーナーだけを渡すこと。
  * GitHubのリポジトリのURLとして読めない項目は`invalid`に返す。
  */
 export function listMainCiTargets(
@@ -118,7 +119,7 @@ export function failedNoticeMessage(
 
 /** mainのCIの実行を読めないnoticeの本文。リポジトリごとに同じ文になる。 */
 export function deniedNoticeMessage(owner: string, repo: string): string {
-  return `${noticePrefix(owner, repo)}mainのCIの実行をGitHubから読めません(403か404)。次の操作: ${DENIED_NEXT_ACTION}`;
+  return `${noticePrefix(owner, repo)}mainのCIの実行をGitHubから読めません(403か404)。PATの権限が足りないか、リポジトリにアクセスできません。次の操作: ${DENIED_NEXT_ACTION}`;
 }
 
 export type MainCiWatchDeps = {
@@ -149,6 +150,12 @@ export type MainCiWatchDeps = {
     repo: string,
     runCreatedAt: Date,
   ) => Promise<MainCiRun | null>;
+  /** `runCreatedAt`より新しいコミットで、既に`passed`になったものがあるか。 */
+  readonly hasNewerPassed: (
+    owner: string,
+    repo: string,
+    runCreatedAt: Date,
+  ) => Promise<boolean>;
   readonly transition: (id: number, to: MainCiTransition) => Promise<boolean>;
   /** 新しく挿入したら通知のID、同じ未解決の通知があれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
@@ -456,6 +463,11 @@ async function judgeRow(
     await settleFailed(context, row, runs);
     return;
   }
+  // 期限が来ても、完了した失敗が1件でもあれば、捨てずに失敗として確定する。
+  if (verdict === "expired" && runs !== null && failingRuns(runs).length > 0) {
+    await settleFailed(context, row, runs);
+    return;
+  }
   if (verdict === "passed") {
     await settlePassed(context, row);
     return;
@@ -492,36 +504,37 @@ async function settleFailed(
   runs: readonly WorkflowRun[],
 ): Promise<void> {
   const { deps, counters } = context;
-  const previous = await deps.getPrevious(
-    row.owner,
-    row.repo,
-    row.run_created_at ?? row.first_seen_at,
-  );
+  const own = row.run_created_at ?? row.first_seen_at;
+  const previous = await deps.getPrevious(row.owner, row.repo, own);
   const prevFailed = isPrevFailed(previous === null ? null : previous.state);
   const summary = buildFailureSummary(runs, prevFailed);
   const runUrl = pickRunUrl(row, runs);
-  // 通知を先に登録する。状態の更新が先に成功して通知が失敗すると、通知が永久に出ないため。
-  const noticeId = await deps.addNotice({
-    kind: MAIN_CI_FAILED_KIND,
-    message: failedNoticeMessage(
-      row.owner,
-      row.repo,
-      row.head_sha,
-      runUrl,
-      prevFailed,
-    ),
-  });
-  if (noticeId !== null) {
-    await deps.notify({
-      kind: "main_ci_failed",
-      instance_name: deps.instanceName,
-      owner: row.owner,
-      repo: row.repo,
-      sha7: shortSha(row.head_sha),
-      url: runUrl,
-      prev_failed: prevFailed,
-      next_action: FAILED_NEXT_ACTION,
+  // より新しいコミットが既に通っているなら、この失敗は直った後に分かったことなので知らせない。
+  const superseded = await deps.hasNewerPassed(row.owner, row.repo, own);
+  if (!superseded) {
+    // 通知を先に登録する。状態の更新が先に成功して通知が失敗すると、通知が永久に出ないため。
+    const noticeId = await deps.addNotice({
+      kind: MAIN_CI_FAILED_KIND,
+      message: failedNoticeMessage(
+        row.owner,
+        row.repo,
+        row.head_sha,
+        runUrl,
+        prevFailed,
+      ),
     });
+    // 失敗が続いているときは、コミットごとに鳴らさないよう、Discordには送らない。
+    if (noticeId !== null && !prevFailed) {
+      await deps.notify({
+        kind: "main_ci_failed",
+        instance_name: deps.instanceName,
+        owner: row.owner,
+        repo: row.repo,
+        sha7: shortSha(row.head_sha),
+        url: runUrl,
+        next_action: FAILED_NEXT_ACTION,
+      });
+    }
   }
   const moved = await deps.transition(row.id, {
     state: "failed",
@@ -534,20 +547,15 @@ async function settleFailed(
       repo: `${row.owner}/${row.repo}`,
       sha: row.head_sha,
       prev_failed: prevFailed,
+      superseded,
     });
   }
 }
 
 async function settlePassed(context: Context, row: MainCiRun): Promise<void> {
   const { deps, counters } = context;
-  const moved = await deps.transition(row.id, {
-    state: "passed",
-    summary: "",
-    prevFailed: false,
-  });
-  if (!moved) return;
-  counters.passed += 1;
   // より新しいコミットを記録済みなら、その結果を待つ。古いコミットが遅れて通っても、新しい失敗は解決しない。
+  // 解決は冪等なので、状態の更新より先に行う。更新に失敗した回は、次の回に解決をやり直せる。
   const latest = await deps.latestRunCreatedAt(row.owner, row.repo);
   const own = row.run_created_at ?? row.first_seen_at;
   if (latest === null || latest.getTime() <= own.getTime()) {
@@ -557,4 +565,10 @@ async function settlePassed(context: Context, row: MainCiRun): Promise<void> {
       MAIN_CI_RESOLVED_BY,
     );
   }
+  const moved = await deps.transition(row.id, {
+    state: "passed",
+    summary: "",
+    prevFailed: false,
+  });
+  if (moved) counters.passed += 1;
 }

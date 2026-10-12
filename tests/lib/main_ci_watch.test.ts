@@ -93,6 +93,8 @@ type Setup = {
   recordFails?: (record: NewMainCiRun) => boolean;
   noticeFails?: boolean;
   transitionFails?: boolean;
+  /** このコミットより新しいコミットが、既に通っているか。 */
+  newerPassed?: boolean;
 };
 
 type Harness = {
@@ -153,6 +155,7 @@ function harness(setup: Setup = {}): Harness {
     },
     listPending: async () => setup.pending ?? [],
     getPrevious: async () => setup.previous ?? null,
+    hasNewerPassed: async () => setup.newerPassed ?? false,
     transition: async (id, to) => {
       events.push("transition");
       transitions.push({ id, to });
@@ -220,6 +223,12 @@ describe("listMainCiTargets", () => {
     ]);
   });
 
+  test("lists the factory repository even when its owner is not verified", () => {
+    expect(
+      listMainCiTargets({ ...config, owners: [], repo_allowlist: [] }).targets,
+    ).toEqual([{ owner: "acme", repo: "factory" }]);
+  });
+
   test("lists only the factory repository when the allowlist is empty", () => {
     expect(
       listMainCiTargets({ ...config, repo_allowlist: [] }).targets,
@@ -284,6 +293,18 @@ describe("notice messages", () => {
     expect(
       failedNoticeMessage("acme", "widgets", SHA_A, "https://x.test/", false),
     ).not.toContain("続いています");
+  });
+
+  test("a denied notice names both causes of a 404", () => {
+    expect(deniedNoticeMessage("acme", "widgets")).toContain(
+      "リポジトリにアクセスできません",
+    );
+  });
+
+  test("a denied notice tells to check the repository access of the PAT", () => {
+    expect(deniedNoticeMessage("acme", "widgets")).toContain(
+      "Repository accessに対象リポジトリが入っているか",
+    );
   });
 
   test("a denied notice starts with the repository prefix", () => {
@@ -568,6 +589,52 @@ describe("judging pending commits", () => {
     ]);
   });
 
+  test("settles an expired commit as failed when a completed run failed", async () => {
+    const h = harness({
+      pending: [row()],
+      bySha: {
+        [SHA_A]: [
+          {
+            ...FAILING_RUN,
+            createdAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
+          },
+          run({
+            id: 2,
+            status: "waiting",
+            conclusion: null,
+            createdAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
+          }),
+        ],
+      },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to.state).toBe("failed");
+  });
+
+  test("notifies a commit that expired with a failed run", async () => {
+    const h = harness({
+      pending: [row()],
+      bySha: {
+        [SHA_A]: [
+          {
+            ...FAILING_RUN,
+            createdAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
+          },
+          run({
+            id: 2,
+            status: "queued",
+            conclusion: null,
+            createdAt: new Date(NOW.getTime() - PENDING_EXPIRES_AFTER_MS),
+          }),
+        ],
+      },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.notices.map((notice) => notice.kind)).toEqual([
+      MAIN_CI_FAILED_KIND,
+    ]);
+  });
+
   test("expires a commit that could not be read for a day", async () => {
     const h = harness({
       pending: [
@@ -701,7 +768,6 @@ describe("failed commits", () => {
         repo: "widgets",
         sha7: "aaaaaaa",
         url: "https://github.com/acme/widgets/actions/runs/7",
-        prev_failed: false,
         next_action: expect.any(String),
       },
     ]);
@@ -717,6 +783,27 @@ describe("failed commits", () => {
     const h = failedHarness({ duplicateKinds: [MAIN_CI_FAILED_KIND] });
     await runMainCiWatch([TARGET], h.deps);
     expect(h.transitions[0]?.to.state).toBe("failed");
+  });
+
+  test("a failure after a newer commit passed sends no notice", async () => {
+    const h = failedHarness({ newerPassed: true });
+    await runMainCiWatch([TARGET], h.deps);
+    expect([h.notices, h.discord]).toEqual([[], []]);
+  });
+
+  test("a failure after a newer commit passed is still settled as failed", async () => {
+    const h = failedHarness({ newerPassed: true });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to).toMatchObject({
+      state: "failed",
+      summary: expect.stringContaining("evil"),
+    });
+  });
+
+  test("a continuing failure adds the notice but sends no Discord", async () => {
+    const h = failedHarness({ previous: row({ id: 0, state: "failed" }) });
+    await runMainCiWatch([TARGET], h.deps);
+    expect([h.notices.length, h.discord]).toEqual([1, []]);
   });
 
   test("does not move the commit when the notice cannot be added", async () => {
@@ -785,16 +872,22 @@ describe("passed commits", () => {
     ).toEqual([]);
   });
 
-  test("resolves the failures after the transition", async () => {
+  test("resolves the failures before the transition", async () => {
     const h = harness({
       pending: [row()],
       bySha: { [SHA_A]: [run()] },
       latest: minutesBefore(10),
     });
     await runMainCiWatch([TARGET], h.deps);
-    expect(h.events.indexOf("transition")).toBeLessThan(
-      h.events.lastIndexOf("resolve"),
+    expect(h.events.lastIndexOf("resolve")).toBeLessThan(
+      h.events.indexOf("transition"),
     );
+  });
+
+  test("still moves the commit on after the resolution", async () => {
+    const h = harness({ pending: [row()], bySha: { [SHA_A]: [run()] } });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to.state).toBe("passed");
   });
 
   test("a passed commit sends no notice", async () => {

@@ -101,8 +101,6 @@ export type NotifyEvent =
       sha7: string;
       /** 失敗した実行へのリンク。検証済みのGitHubのURLだけを入れる(`parseRunUrl`)。 */
       url: string;
-      /** 1つ前のコミットも失敗していたか。原因のPRは断定せず、失敗が続いていることだけを示す。 */
-      prev_failed: boolean;
       /** 運用者がまず行う操作の1文。固定文を入れる。 */
       next_action: string;
     }
@@ -355,9 +353,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "main_ci_failed":
       return {
         title: `mainのCIが失敗しました: ${event.owner}/${event.repo}@${event.sha7}`,
-        description: event.prev_failed
-          ? `mainのコミット${event.sha7}でCIが失敗しました。前のコミットから失敗が続いています。`
-          : `mainのコミット${event.sha7}でCIが失敗しました。`,
+        description: `mainのコミット${event.sha7}でCIが失敗しました。`,
         url: event.url,
         fields: [
           { name: "次の操作", value: event.next_action },

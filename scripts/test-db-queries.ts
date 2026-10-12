@@ -14,7 +14,6 @@ import {
   claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
-  deferMainCiRun,
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   getNoticeById,
@@ -1614,17 +1613,6 @@ check(
 );
 const ciPending = ciRows.find((row) => row.head_sha === CI_SHA_A);
 if (ciPending === undefined) throw new Error("main_ci_runs row is missing");
-check(
-  "main_ci_runs: a deferred row is not due",
-  (await deferMainCiRun(
-    ciPending.id,
-    { nextCheckAt: new Date(Date.now() + 60 * 60 * 1000) },
-    sql,
-  )) === true &&
-    (await listPendingMainCiRuns(100, sql)).filter(
-      (row) => row.owner === CI_REPO.owner,
-    ).length === 0,
-);
 const ciSettled = {
   state: "failed" as const,
   summary: "失敗したworkflow: CI (failure)",

@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertCommitSha,
-  backoffMs,
   buildFailureSummary,
   classifyRuns,
   decideState,
@@ -606,28 +605,6 @@ describe("buildFailureSummary", () => {
     expect(buildFailureSummary(many, true).length).toBeLessThanOrEqual(
       MAIN_CI_SUMMARY_MAX_LENGTH,
     );
-  });
-});
-
-describe("backoffMs", () => {
-  test("starts at 10 minutes", () => {
-    expect(backoffMs(1)).toBe(10 * 60_000);
-  });
-
-  test("doubles for each consecutive failure", () => {
-    expect(backoffMs(3)).toBe(40 * 60_000);
-  });
-
-  test("stops growing at 6 hours", () => {
-    expect(backoffMs(50)).toBe(6 * 60 * 60_000);
-  });
-
-  test("treats a count below 1 as the first failure", () => {
-    expect(backoffMs(0)).toBe(10 * 60_000);
-  });
-
-  test("treats a count that is not a number as the first failure", () => {
-    expect(backoffMs(Number.NaN)).toBe(10 * 60_000);
   });
 });
 

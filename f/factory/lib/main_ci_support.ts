@@ -441,25 +441,3 @@ export function buildFailureSummary(
   const omittedNote = omitted > 0 ? ` ほか${String(omitted)}件` : "";
   return `${SUMMARY_PREFIX}${body}${omittedNote}${note}`;
 }
-
-// ---------------------------------------------------------------------------
-// 権限エラーの後の待ち
-// ---------------------------------------------------------------------------
-
-const BACKOFF_BASE_MS = 10 * 60_000;
-const BACKOFF_MAX_MS = 6 * 60 * 60_000;
-
-/**
- * 照会が続けて拒まれたときの、次の照会までの待ち(ミリ秒)。
- * 10分から始めて失敗のたびに2倍にし、6時間で止める。
- * 1未満や数でない回数は、1回目として扱う。権限を足せば、次の照会で自動に戻る。
- */
-export function backoffMs(consecutiveFailures: number): number {
-  const count = Number.isFinite(consecutiveFailures)
-    ? Math.max(1, Math.floor(consecutiveFailures))
-    : 1;
-  return Math.min(
-    BACKOFF_BASE_MS * 2 ** Math.min(count - 1, 30),
-    BACKOFF_MAX_MS,
-  );
-}

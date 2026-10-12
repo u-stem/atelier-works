@@ -4,7 +4,8 @@
 // 作業項目には触れない、読み取りだけの監視である。
 //
 // 流れと判断は`./lib/main_ci_watch.ts`にあり、このファイルは入出力をつなぐだけ。
-// 対象は`factory_repo`と`repo_allowlist`で、照合を通ったオーナーのものだけにする。
+// 対象は`factory_repo`と`repo_allowlist`である。`repo_allowlist`は照合を通ったオーナーのものだけを通し、
+// `factory_repo`は照合の対象外で常に対象にする。`repo_allowlist`が空なら`factory_repo`だけを見る。
 // GITHUB_TOKENにActionsの読み取り権限が無いリポジトリは、`main_ci_check_denied`のnoticeで知らせる。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
@@ -14,6 +15,7 @@ import {
   addNoticeUnlessUnresolved,
   getPreviousMainCiRun,
   hasMainCiRuns,
+  hasPassedMainCiRunAfter,
   latestMainCiRunCreatedAt,
   listMainCiRunsBySha,
   listPendingMainCiRuns,
@@ -67,7 +69,7 @@ export async function main(): Promise<MainCiWatchResult> {
   );
   const client: GhClient = { run: runCommand, ghToken };
 
-  // 名前の付け替えで別のアカウントを読まないよう、照合を通ったオーナーのリポジトリだけを対象にする。
+  // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
   const verified = await filterVerifiedOwners(config.owners, {
     getAccountId: (name) => getAccountId(client, name),
     recordFailure: (step, err) => recordFailureSafe(step, err, log),
@@ -100,6 +102,8 @@ export async function main(): Promise<MainCiWatchResult> {
     listPending: (limit) => listPendingMainCiRuns(limit),
     getPrevious: (owner, repo, runCreatedAt) =>
       getPreviousMainCiRun(owner, repo, runCreatedAt),
+    hasNewerPassed: (owner, repo, runCreatedAt) =>
+      hasPassedMainCiRunAfter(owner, repo, runCreatedAt),
     transition: (id, to) => transitionMainCiRun(id, to),
     addNotice: (record) => addNoticeUnlessUnresolved(record),
     resolveNotices: (kind, messagePrefix, resolvedBy) =>

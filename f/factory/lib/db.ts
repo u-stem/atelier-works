@@ -3205,8 +3205,7 @@ export async function listMainCiRunsBySha(
 }
 
 /**
- * 判定を待っていて、次の照会の時刻が来ている行を、最初に見た順に最大`limit`件返す。
- * `next_check_at`が未来の行(`deferMainCiRun`で先送りした行)は返さない。
+ * 判定を待っている行を、最初に見た順に最大`limit`件返す。
  */
 export async function listPendingMainCiRuns(
   limit: number,
@@ -3216,7 +3215,7 @@ export async function listPendingMainCiRuns(
     SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
            run_created_at, next_check_at, created_at, updated_at
     FROM factory.main_ci_runs
-    WHERE state = 'pending' AND next_check_at <= now()
+    WHERE state = 'pending'
     ORDER BY first_seen_at ASC
     LIMIT ${limit}::bigint
   `.fetch();
@@ -3253,30 +3252,6 @@ export async function transitionMainCiRun(
   const rows = await sql`
     UPDATE factory.main_ci_runs
     SET state = ${to.state}, summary = ${to.summary}, prev_failed = ${to.prevFailed}::boolean,
-        updated_at = now()
-    WHERE id = ${id}::bigint AND state = 'pending'
-    RETURNING id
-  `.fetch();
-  return rows.length > 0;
-}
-
-export type MainCiDeferral = {
-  readonly nextCheckAt: Date;
-};
-
-/**
- * 判定を待っている行の、次の照会の時刻を先に延ばす。延ばしたら`true`を返す。
- * 行は`pending`のままで、延ばした時刻までは`listPendingMainCiRuns`が返さない。
- * 条件は`state = 'pending'`なので、判定が済んだ行は書き換えない。
- */
-export async function deferMainCiRun(
-  id: number,
-  deferral: MainCiDeferral,
-  sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
-  const rows = await sql`
-    UPDATE factory.main_ci_runs
-    SET next_check_at = ${deferral.nextCheckAt.toISOString()}::timestamptz,
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'pending'
     RETURNING id
@@ -3338,6 +3313,28 @@ export async function getPreviousMainCiRun(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : toMainCiRun(row);
+}
+
+/**
+ * `runCreatedAt`より後の実行の作成時刻を持つ`passed`の行が、そのリポジトリにあるか。
+ * 並びの鍵は`latestMainCiRunCreatedAt`と同じである。
+ * 古いコミットの失敗を確定するときに、より新しいコミットが既に通っていて、通知が要らないかを判断するのに使う。
+ */
+export async function hasPassedMainCiRunAfter(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo} AND state = 'passed'
+      AND COALESCE(run_created_at, first_seen_at) > ${runCreatedAt.toISOString()}::timestamptz
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------
