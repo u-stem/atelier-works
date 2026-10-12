@@ -622,7 +622,7 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 
 #### 前の版へ戻したときに記録が残っていたら
 
-検査を枠のユーザーで動かす前の版へ`f/`を戻すrevertは、マージすると自己更新が10分以内に反映する。
+検査を枠のユーザーで動かす前の版へ`f/`を戻すrevertは、マージすると自己更新が2分以内に反映する。
 マージの前に手順1で記録が無いことを確かめても、反映までの間に取り消された検査が記録を残すことがある。
 そのため、反映の後にも手順1で記録の一覧を見る。
 
@@ -1128,15 +1128,15 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `claim_assignee_missing` | Issueを取得したが、FactoryのGitHubユーザーをassigneeにできなかった。作業は続く | そのユーザーがリポジトリのpush権限を持つcollaboratorか確かめる |
 | `supersede_failed` | 新しいサイクルを始めたが、古い承認済みの作業項目を取り消せなかった | なし。古い承認は再開できず、次の新しいサイクルで取り消される |
 | `deployed_sha_mismatch` | 自己更新が反映した版(`f/factory/deployed_sha`)が、self cloneのHEADに30分を超えて追いついていない。mergeの直後に反映を待つ間は通知しない。本文に、直近の反映の記録から読んだ原因の候補が付く。Windmillのdefaultのworkerが埋まって自己更新が待たされたときや、自己更新の実行が長引いて次の回が飛ばされたときは、反映が遅れただけでも通知されうる | 自己更新のジョブのログを確かめる。自己更新が反映に成功すると、その記録より前に作られたnoticeを、`poll_issues`が自動で解決する。人が解決しても、反映が止まっている限り、次の`poll_issues`で再び残る。本文が名指しする版が今の`f/factory/deployed_sha`と違い、自己更新が成功しているときは、反映と判定が重なって残ったnoticeなので、人が解決してよい。人が`f/factory/deployed_sha`を今のHEADへ手で書き換えて版を一致させたときや、自己更新が変数を更新した後に失敗して成功の行が作られなかったときも、止まっていた版を名指しするnoticeは自動では解決されないので、人が解決してよい([通知](internals/notifications.md)) |
-| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。実装、PR修正、作業領域の掃除が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも残す。そのときは本文に、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。検査コマンドのある作業項目は、その間進まない([f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡す。自己更新(10分ごと)が、通知の版がそのHEADと同じか祖先なら、または`infra/`と`mise.toml`の内容がそのHEADと同じなら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの))。イメージが古くて止まった作業項目は、通知が自動で解決されると自動で再開する。本文に反映した版が載らない通知は自動では解決されず再開もしないので、人が解決し、止まった作業項目を`retry_work_item`で再実行する |
+| `host_action_required` | 自己更新が反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)が含まれる。本文に、反映した版と変わったパスが載る。ホストで作業するまで、新しい構成は動かない。実装、PR修正、作業領域の掃除が、workerのイメージが古くて検査コマンドを実行できないと分かったときにも残す。そのときは本文に、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのパス)が載る。検査コマンドのある作業項目は、その間進まない([f/とworkerのイメージを両方変えたとき](#fとworkerのイメージを両方変えたとき)) | ホスト側のcheckoutで`git pull`し、`mise install`と`mise run up`を実行する。`mise run up`は、Caddyを再起動したうえで、終わりにそのcheckoutのHEADをworkerへ渡す。自己更新(2分ごと)が、通知の版がそのHEADと同じか祖先なら、または`infra/`と`mise.toml`の内容がそのHEADと同じなら、通知を自動で解決する。HEADを書けなかったとき(警告が出る)と、このスクリプトを持たない版から`mise run deploy`で取り込む最初の1回(`mise run deploy`はpullの前のタスク定義で動く)は、自動では解決されない。`mise run up`が済んでいれば人が解決してよい([ホスト側で反映するもの](#ホスト側で反映するもの))。イメージが古くて止まった作業項目は、通知が自動で解決されると自動で再開する。本文に反映した版が載らない通知は自動では解決されず再開もしないので、人が解決し、止まった作業項目を`retry_work_item`で再実行する |
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
 | `cleanup_worktree_busy` | 終端の作業項目のworktreeを、使用中として消さなかった。原因は、残ったプロセスが使っていることか、検査用のユーザーからrootに戻せないことである。作業項目のID、worktreeのパス、理由が載る | 理由がプロセスなら、載ったプロセスを止める。rootに戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で片付ける。対処しない限り毎日の掃除で記録しようとするが、同じ本文の未解決のnoticeがあるあいだは新しく作らない。同じ通知が1件残り続ける |
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
-| `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
+| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
+| `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(30回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
 | `drawio_viewer_bump_held` | draw.ioのビューアの固定を、自動では上げなかった。原因は3つある。ビューアの大きさが2割を超えて変わった。取得したファイルがGitHubの記録と一致しない。PRの無い既存のブランチの中身が作るはずの内容と違う。本文に版と理由が載る。上げる版に選んだ最新の版を保留している間は、古い版も上げない。メジャー版の更新は、このお知らせではなく、題名が[major]で始まるPRになる | 本文の「次の操作」に従う。大きさの変化が正当なら、Windmillで`f/factory/drawio_viewer_bump`を`approved_version`にその版を指定して実行する。既存のブランチが原因なら、ブランチを確かめ、不要なら削除する。原因が続けば、解決しても次の週に出直す([draw.ioのビューアの更新](internals/console.md#ビューアの更新)) |
@@ -1159,8 +1159,10 @@ workerの一覧を読むAPIは、ジョブのトークンでは読めない(Forb
 失敗した実行は、workerがジョブを受けて動いた証拠として数える。
 
 `console_fetch_watch`が10分ごとにtag `console`のジョブを作る。
-workerがジョブを受けなければそのジョブが待ち続けるので、止まってから最大で約30分かけて検知する。
-内訳は、ジョブの作成の間隔10分、待ちの5分、自己更新の間隔10分に、自己更新の実行時間を足した値である。
+workerがジョブを受けなければそのジョブが待ち続けるので、止まってから約20分かけて検知する。
+内訳は、ジョブの作成の間隔10分、待ちの5分、自己更新の間隔2分に、自己更新の実行時間を足した値である。
+この確認は自己更新の最後に走るので、同じ回で反映が走ると、その分だけ検知が遅れうる。
+反映の`wmill`は2回で最大10分かかり、約20分の余裕の3分を超えうる。
 
 通知`console_worker_missing`が立つのは、workerが居ないときだけではない。
 workerが居ても、2枠とも塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
@@ -1183,7 +1185,7 @@ workerが居ても、2枠とも塞がっているときや、tagの設定がず�
 
 確認できない回数は自己更新のstateに数える。
 stateを読めなかった回は、数えず、stateも書かない。
-6回(1時間)続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
+30回(1時間)続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
 確認できれば回数は0に戻る。
 
 マージの後は、次の手順で検知が動いていることを確かめる。
@@ -1196,7 +1198,8 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 
 1. 正常な状態で1時間以上、自己更新のジョブログに上の警告が出ず、通知`console_worker_check_failed`も出ないことを見る。
 2. `stop`でConsole用のworkerを止める。
-3. 約30分以内に、通知`console_worker_missing`ができ、Discordにも届くことを見る。
+3. 約20分以内に、通知`console_worker_missing`ができ、Discordにも届くことを見る。
+   反映と重なった回では、最大10分遅れうる。
 4. `start`で戻し、通知を解決する。
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
@@ -1229,7 +1232,7 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 全体の上限は、それでも止まったときの最後の砦である。
 
 上限で打ち切られた回は、最後に行うConsole用のworkerの確認が走らない。
-打ち切られるまでの最大約47分は、10分ごとの次の4回が飛ばされる。
+打ち切られるまでの最大約47分は、2分ごとの次の約23回が飛ばされる。
 この間は、自己更新の反映とConsole用のworkerの停止の検知が止まる。
 
 気づく経路は2つある。
@@ -1473,7 +1476,7 @@ Consoleの**要対応**の失敗から再実行する。この再実行では却
 
 ### 自動で反映されるもの
 
-`f/`、`migrations/`、`.claude/skills/`の変更は、自己更新のスケジュール(`self_update`、10分ごと)が自動で反映する。ホスト側の操作は要らない。
+`f/`、`migrations/`、`.claude/skills/`の変更は、自己更新のスケジュール(`self_update`、2分ごと)が自動で反映する。ホスト側の操作は要らない。
 
 自己更新は、`infra/`か`mise.toml`の`[tools]`・`[env]`の変更を検知すると、デプロイの記録(`deployments.needs_host_action`)に残す。
 続けて、要対応の通知`host_action_required`とDiscordで知らせる。
@@ -1515,7 +1518,7 @@ workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更
 このスクリプトは、ホストのcheckoutのHEADを、workerの共有ボリュームの`/var/lib/factory/host_applied_sha`に書く。
 書くのは作業ツリーではなくHEADなので、`infra/`か`mise.toml`に未コミットの変更を残したまま`mise run up`しても、HEADの版を反映済みとして書く。
 そのときは、ホストの構成とHEADの食い違いを残したまま通知が解決されうるので、変更をコミットするか戻してから`mise run up`を実行する。
-自己更新は10分ごとにこの値を読む。
+自己更新は2分ごとにこの値を読む。
 通知`host_action_required`の版が、この値と同じか祖先であれば、通知を自動で解決する。
 ホストのcheckoutがその版を含んで起動し直されたことを、確かめられるためである。
 祖先でなくても、`infra/`と`mise.toml`の内容がこの値の版と同じなら、同じく解決する。
@@ -1559,7 +1562,7 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 `f/`の変更が、新しいworkerのイメージを前提にすることがある。
 例えば、検査コマンドを枠のユーザー(`factory-check-N`)で動かす`f/`は、イメージの`acl`、`procps`、`prlimit`と枠のユーザーを前提にする。
 ベースのイメージが誰でも書き込めるようにしている`/usr/src/app`と`/tmp/.cache`を、イメージが閉じていることも前提にする。
-マージすると、自己更新が10分以内に`f/`を反映するが、イメージは人が`mise run up`するまで古いままである。
+マージすると、自己更新が2分以内に`f/`を反映するが、イメージは人が`mise run up`するまで古いままである。
 
 この種の変更は、イメージを先に作り直す。
 

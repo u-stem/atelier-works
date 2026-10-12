@@ -1,4 +1,4 @@
-// 10分ごとに、Factory自身のself clone(`/workspaces/factory/atelier-works`)を
+// 2分ごとに、Factory自身のself clone(`/workspaces/factory/atelier-works`)を
 // pullする。前回記録したデプロイからHEADが進んでいれば、worker自身の中から
 // Windmillの定義をpushし、未適用のData Tableのmigrationを適用する。
 //
