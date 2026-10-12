@@ -258,6 +258,30 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("keeps the numeric id of the factory repository", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, factory_repo_id: 777 };
+    expect(parseFactoryConfig(raw).factory_repo_id).toBe(777);
+  });
+
+  test("leaves the factory repository id undefined when omitted", () => {
+    expect(
+      parseFactoryConfig(LEGACY_RAW_CONFIG).factory_repo_id,
+    ).toBeUndefined();
+  });
+
+  test("treats a null factory repository id as no id", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, factory_repo_id: null };
+    expect("factory_repo_id" in parseFactoryConfig(raw)).toBe(false);
+  });
+
+  test.each([0, -1, 1.5, "42"])(
+    "throws when the factory repository id is %p",
+    (id) => {
+      const raw = { ...LEGACY_RAW_CONFIG, factory_repo_id: id };
+      expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+    },
+  );
+
   test("throws when max_turns is present but not a number", () => {
     const raw = { ...LEGACY_RAW_CONFIG, max_turns: "forty" };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);

@@ -36,6 +36,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   pr_trigger_label_left_removed: "action",
   deployed_sha_mismatch: "action",
   owner_id_mismatch: "action",
+  factory_repo_id_mismatch: "action",
   host_action_required: "action",
   cleanup_db_failed: "action",
   cleanup_worktree_busy: "action",

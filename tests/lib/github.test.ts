@@ -32,6 +32,7 @@ import {
   getPr,
   getPrDiff,
   getPrFiles,
+  getRepositoryId,
   getViewer,
   gitIdentityForViewer,
   hasMarker,
@@ -258,6 +259,50 @@ describe("getAccountId", () => {
     ]);
     await expect(
       getAccountId({ run: fake.run, ghToken: "tok" }, "octo-owner"),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("getRepositoryId", () => {
+  test("returns the numeric id of the repository", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ name: "factory", id: 777 }),
+    ]);
+    const id = await getRepositoryId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(id).toBe(777);
+  });
+
+  test("requests the repository endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 777 })]);
+    await getRepositoryId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(fake.calls[0]?.argv).toContain("repos/octo-owner/factory");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getRepositoryId({ run: fake.run, ghToken: "tok" }, "octo-owner", "gone"),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response whose id is not a number", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: "777" })]);
+    await expect(
+      getRepositoryId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
     ).rejects.toThrow(/unexpected response shape/);
   });
 });

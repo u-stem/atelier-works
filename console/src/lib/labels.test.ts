@@ -133,6 +133,12 @@ describe("noticeKindLabel", () => {
     );
   });
 
+  test("translates the factory repo id mismatch notice kind", () => {
+    expect(noticeKindLabel("factory_repo_id_mismatch")).toBe(
+      "Factory自身のリポジトリの照合の失敗",
+    );
+  });
+
   test("translates the labeler check limit notice kind", () => {
     expect(noticeKindLabel("labeler_check_limit")).toBe(
       "ラベル付与者の判定不能",

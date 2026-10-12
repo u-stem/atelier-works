@@ -16,6 +16,7 @@ import {
   setAttemptIfLeaseHolder,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger } from "../lib/log.ts";
@@ -29,7 +30,6 @@ import type { WorkItemStatus } from "../lib/types.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../lib/types.ts";
 import {
   addDetachedWorktree,
-  ensureFactoryClone,
   ensureRepo,
   listWorktrees,
   removeWorktree,
@@ -199,11 +199,9 @@ export async function main(
   if (!(await setAttemptIfLeaseHolder(work_item_id, attempt, leaseJobId)))
     return movedOn(work_item_id, leaseJobId);
 
-  await ensureFactoryClone({
+  await openFactoryClone(config, {
     run: runCommand,
-    repoUrl: config.factory_repo,
     ghToken,
-    branch: config.factory_branch,
   });
 
   const repo = await ensureRepo({

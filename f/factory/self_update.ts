@@ -31,6 +31,7 @@ import {
   addNoticeUnlessUnresolved,
   listUnresolvedNoticesByKind,
   recordDeployment,
+  recordFailure,
   resolveNoticeIfUnresolved,
 } from "./lib/db.ts";
 import {
@@ -38,6 +39,11 @@ import {
   type FetchLike,
   notifyBestEffort,
 } from "./lib/discord.ts";
+import {
+  ensureVerifiedFactoryClone,
+  FactoryRepoIdMismatchError,
+} from "./lib/factory_repo_gate.ts";
+import { getRepositoryId } from "./lib/github.ts";
 import {
   HOST_ACTION_NOTICE_KIND,
   HOST_ACTION_RECONCILE_LIMIT,
@@ -76,7 +82,6 @@ import {
   type CommandResult,
   type CommandRunner,
   DEFAULT_TIMEOUT_MS,
-  ensureFactoryClone,
   FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT,
   omittedMarkerIndex,
   pathExists,
@@ -528,9 +533,11 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
  *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
  * - 止まった作業項目の再開の起動: 1
+ * - `factory_repo_id`の照合: リポジトリIDの取得、失敗の記録、noticeの挿入: 3
+ *   (`gh api`の子プロセスは`DEFAULT_TIMEOUT_MS`が上限だが、ここで先に区切る)
  */
 export const SELF_UPDATE_BOUNDED_CALL_COUNT =
-  13 + 4 + HOST_ACTION_RECONCILE_LIMIT + 1;
+  13 + 4 + HOST_ACTION_RECONCILE_LIMIT + 1 + 3;
 
 /**
  * finallyの通知1回の上限(ミリ秒)。
@@ -578,6 +585,7 @@ export const SELF_UPDATE_WORST_CASE_MS =
 
 export type SelfUpdateResult =
   | { readonly outcome: "unchanged" }
+  | { readonly outcome: "skipped"; readonly reason: "factory_repo_id" }
   | {
       readonly outcome: "updated";
       readonly sha_from: string | null;
@@ -654,6 +662,36 @@ async function startStaleImageRetry(log: Logger): Promise<void> {
   }
 }
 
+/**
+ * 照合の失敗を`job_failures`に残す。例外は投げない。
+ * 記録に失敗しても、照合に落ちた回の扱い(反映しない)は変わらないため、ログだけ残す。
+ */
+async function recordGateFailure(
+  step: string,
+  err: unknown,
+  log: Logger,
+): Promise<void> {
+  const message = maskSecrets(err instanceof Error ? err.message : String(err));
+  log.error(step, { error: message });
+  try {
+    await withCallTimeout("recordFailure factory_repo_id", () =>
+      recordFailure({
+        work_item_id: null,
+        flow_path: "f/factory/self_update",
+        job_id: process.env.WM_JOB_ID ?? "unknown",
+        step,
+        error: message,
+      }),
+    );
+  } catch (recordErr) {
+    log.error("failed to record failure", {
+      error: maskSecrets(
+        recordErr instanceof Error ? recordErr.message : String(recordErr),
+      ),
+    });
+  }
+}
+
 async function updateSelf(
   log: Logger,
   config: FactoryConfig,
@@ -662,12 +700,34 @@ async function updateSelf(
     wmill.getVariable("f/factory/github_token"),
   );
 
-  const factoryClone = await ensureFactoryClone({
-    run: runCommand,
-    repoUrl: config.factory_repo,
-    ghToken,
-    branch: config.factory_branch,
-  });
+  // 取得の前に、`factory_repo`が指すリポジトリのIDを照合する。
+  // 食い違うリポジトリの内容を、秘密値を持つworkspaceへ反映しないためである。
+  // 食い違い、404、URLの誤りの回は、self cloneも更新せず、次の回に照合し直す。
+  // それ以外の照合の失敗(認証、5xx、レート制限、通信断)は、ジョブの失敗にする。
+  let factoryClone: Awaited<ReturnType<typeof ensureVerifiedFactoryClone>>;
+  try {
+    factoryClone = await ensureVerifiedFactoryClone(
+      config,
+      { run: runCommand, ghToken },
+      {
+        getRepositoryId: (owner, repo) =>
+          withCallTimeout("getRepositoryId factory_repo", () =>
+            getRepositoryId({ ghToken, run: runCommand }, owner, repo),
+          ),
+        addNotice: (record) =>
+          withCallTimeout("addNotice factory_repo_id", () =>
+            addNoticeUnlessUnresolved(record),
+          ),
+      },
+    );
+  } catch (err) {
+    if (!(err instanceof FactoryRepoIdMismatchError)) {
+      throw err;
+    }
+    await recordGateFailure("verify_factory_repo_id", err, log);
+    log.warn("factory_repo id check did not pass, skipping the update");
+    return { outcome: "skipped", reason: "factory_repo_id" };
+  }
 
   // `ensureFactoryClone`の事後条件を鵜呑みにせず、ブランチを重ねて確かめる
   // (理由は`readSelfCloneBranch`のコメントを参照)。

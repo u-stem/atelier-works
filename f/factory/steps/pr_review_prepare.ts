@@ -9,12 +9,12 @@ import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { getWorkItem, setHeadSha, updateStatusIfCurrent } from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import { assertGitHubName, assertSha } from "../lib/types.ts";
 import {
   addDetachedWorktree,
-  ensureFactoryClone,
   ensureRepo,
   fetchPrHeadRef,
   runCommand,
@@ -117,12 +117,7 @@ export async function main(
     {
       getPr: (owner, repo, number) => getPr(client, owner, repo, number),
       ensureFactoryClone: () =>
-        ensureFactoryClone({
-          run: runCommand,
-          repoUrl: config.factory_repo,
-          ghToken,
-          branch: config.factory_branch,
-        }),
+        openFactoryClone(config, { run: runCommand, ghToken }),
       ensureRepo: (owner, repo) =>
         ensureRepo({ run: runCommand, owner, repo, ghToken }),
       fetchPrHeadRef: (repoDir, number) =>

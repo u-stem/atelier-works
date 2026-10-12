@@ -354,6 +354,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/drawio_viewer_bump_github` | script | [LIB] draw.ioのビューアの更新のGitHub操作 |
 | `f/factory/lib/drawio_viewer_observations` | script | [LIB] draw.ioのリリースの観測の記録 |
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
+| `f/factory/lib/factory_clone` | script | [LIB] Factory自身のcloneの用意 |
+| `f/factory/lib/factory_repo_gate` | script | [LIB] Factory自身のリポジトリの照合 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
@@ -474,6 +476,21 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 
 `self_update`はFactory自身のリポジトリを2分ごとに取り込み、Windmillに反映する。
 
+pullの前に、`factory_repo_id`があれば、`factory_repo`が指すリポジトリのGitHubの現在のIDと照合する。
+オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを反映しないためである。
+照合は、Factory自身のcloneを使うすべての処理が行う。
+対象は、`self_update`、`poll_issues`のデプロイ版の確認、各フローのprepareと`pipeline_generate`である。
+この対象のどの処理も、`ensureVerifiedFactoryClone`を通して取得する。
+照合は、cloneのロックを取った直後に行い、ロックの待ちを照合から取得までの間に入れない。
+cloneのoriginは、取得の前に毎回`factory_repo`のURLへ付け替える。
+IDの食い違い、リポジトリが無い(404)、URLを読めない場合は、要対応のnotice`factory_repo_id_mismatch`を残す。
+そのとき`self_update`は、self cloneの更新と反映をせず、`job_failures`に記録して成功で終わる。
+ほかの処理は、取得の前にエラーで止まり、既存のエラー処理(フローの失敗など)に乗る。
+認証の失敗、5xx、レート制限、通信断の場合は、noticeを残さず、元の例外を投げてジョブの失敗にする。
+次の回に照合が通れば、取得が再開する。
+`factory_repo_id`が無ければ照合せず、名前だけで取得する。
+設定と限界は[運用](operations.md)の「Factory自身のリポジトリの数値IDを固定する」に書く。
+
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
 2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
 3. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
@@ -500,7 +517,7 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 このscriptが、イメージが古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
 反映した時点でそうなっていれば、通知を出さない。
 
-ジョブ全体には上限(`timeout`)を2800秒で置く。
+ジョブ全体には上限(`timeout`)を3000秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
 子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
@@ -516,30 +533,31 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
-`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、2800秒は切り詰められない。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3000秒は切り詰められない。
 
-2800秒は、全部が最悪のときの長さ2743.2秒に余裕を足した値である。
+3000秒は、全部が最悪のときの長さ2906.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
 | 段 | 回数 | 1回の上限 | 停止の上乗せ | 合計 |
 | --- | --- | --- | --- | --- |
 | self cloneのロック待ち | 1 | 300秒 | 確かめる間隔0.2秒 | 300.2秒 |
-| git | 10 | 60秒 | 13秒 | 730秒 |
+| git | 11 | 60秒 | 13秒 | 803秒 |
 | ホストの印を確かめるローカルのgit | 9 | 10秒 | 13秒 | 207秒 |
 | `wmill sync push`、`wmill datatable migrate up` | 2 | 300秒 | 13秒 | 626秒 |
-| 区切った呼び出し | 21 | 30秒 | なし | 630秒 |
+| 区切った呼び出し | 24 | 30秒 | なし | 720秒 |
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 
-gitの10回は、cloneの更新で4回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
+gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
 ローカルのgitの9回は、ホストの印の確認である。
 コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
 どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
 ローカルのgitは、オブジェクトを参照するだけで、ネットワークとワークツリーに触れないので、上限を10秒にする。
 `mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
-区切った呼び出しの21回は、設定の取得が1回、更新が8回、最後の確認が4回、ホスト側の作業の通知が8回に分かれる。
+区切った呼び出しの24回は、設定の取得が1回、リポジトリIDの照合が3回、更新が8回、最後の確認が4回、ホスト側の作業の通知が8回に分かれる。
+リポジトリIDの照合の3回は、IDの取得、失敗の記録、noticeの挿入である。
 更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
 残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
 成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので、両方を数える。

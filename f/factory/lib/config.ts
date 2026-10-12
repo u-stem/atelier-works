@@ -282,6 +282,24 @@ function withinJobTmpAge(field: string, value: number): number {
 }
 
 /**
+ * 任意の正の整数の項目を読む。`null`、`undefined`、省略は「値無し」として`undefined`を返す。
+ * 値があるときは正の整数だけを許す。
+ */
+function optionalPositiveIntegerField(
+  raw: Record<string, unknown>,
+  field: string,
+): number | undefined {
+  const value = raw[field];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isNumber(value) || !Number.isInteger(value) || value <= 0) {
+    throw new ConfigValidationError(`"${field}" must be a positive integer`);
+  }
+  return value;
+}
+
+/**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、正の整数でなければ例外を投げる。
  */
 function positiveIntegerField(
@@ -430,6 +448,8 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     );
   }
 
+  const factoryRepoId = optionalPositiveIntegerField(raw, "factory_repo_id");
+
   const allowedLabelerAssociations = raw.allowed_labeler_associations;
   const resolvedAllowedLabelerAssociations =
     allowedLabelerAssociations === undefined
@@ -493,6 +513,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       DEFAULTS.retention_logs_days,
     ),
     factory_repo: requiredStringField(raw, "factory_repo"),
+    ...(factoryRepoId === undefined ? {} : { factory_repo_id: factoryRepoId }),
     factory_branch: stringField(raw, "factory_branch", DEFAULTS.factory_branch),
     instance_name: requiredStringField(raw, "instance_name"),
     windmill_public_url: stringField(

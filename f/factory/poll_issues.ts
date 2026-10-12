@@ -39,6 +39,7 @@ import {
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import { openFactoryClone } from "./lib/factory_clone.ts";
 import {
   ClaimOwnershipUnknownError,
   claimIssue,
@@ -89,7 +90,6 @@ import type {
 } from "./lib/types.ts";
 import {
   type CommandRunner,
-  ensureFactoryClone,
   isReviewWorktreeOf,
   listWorktrees,
   pathExists,
@@ -191,11 +191,9 @@ async function checkDeployedSha(
   log: Logger,
 ): Promise<void> {
   try {
-    const factoryClone = await ensureFactoryClone({
+    const factoryClone = await openFactoryClone(config, {
       run: runCommand,
-      repoUrl: config.factory_repo,
       ghToken,
-      branch: config.factory_branch,
     });
     const selfSha = await readRepoHeadSha(runCommand, factoryClone.dir);
 

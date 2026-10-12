@@ -9,6 +9,7 @@ import {
 } from "../lib/check_sandbox.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
@@ -22,7 +23,6 @@ import {
 import { assertGitHubName } from "../lib/types.ts";
 import {
   createGtrWorktree,
-  ensureFactoryClone,
   ensureRepo,
   type GtrWorktree,
   readAndVerifyWorktreeGitPointer,
@@ -253,11 +253,9 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     };
   }
 
-  const factoryClone = await ensureFactoryClone({
+  const factoryClone = await openFactoryClone(config, {
     run: runCommand,
-    repoUrl: config.factory_repo,
     ghToken,
-    branch: config.factory_branch,
   });
   const { dir: repoDir } = await ensureRepo({
     run: runCommand,
