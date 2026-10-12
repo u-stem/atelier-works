@@ -532,15 +532,94 @@ describe("buildCiExcerpt", () => {
     ).toBeLessThanOrEqual(CI_LOG_JOB_MAX_CHARS);
   });
 
-  test("scans the text that goes to the prompt once", async () => {
-    const seen: string[] = [];
+  test("scans the full text of each job and then the excerpt", async () => {
+    let calls = 0;
     await buildCiExcerpt([job(), job({ name: "second" })], {
+      scan: async () => {
+        calls += 1;
+        return { ok: true, output: "" };
+      },
+    });
+    expect(calls).toBe(3);
+  });
+
+  test("scans at most the number of jobs plus one", async () => {
+    let calls = 0;
+    const jobs = Array.from({ length: CI_LOG_MAX_JOBS + 2 }, () => job());
+    await buildCiExcerpt(jobs, {
+      scan: async () => {
+        calls += 1;
+        return { ok: true, output: "" };
+      },
+    });
+    expect(calls).toBe(CI_LOG_MAX_JOBS + 1);
+  });
+
+  // 省略される中間の行に置いた目印。抜粋には入らず、全文のスキャンだけが見る。
+  const longLogWith = (middle: string) => {
+    const lines = Array.from({ length: 5000 }, (_, i) => `line ${String(i)}`);
+    lines[2500] = middle;
+    return lines.join("\n");
+  };
+
+  test("returns secret_detected when a token is only in the omitted middle", async () => {
+    const token = `ghp_${"A".repeat(36)}`;
+    const outcome = await buildCiExcerpt(
+      [job({ log: longLogWith(`leaked ${token}`) })],
+      { scan: async (text) => ({ ok: !/ghp_/.test(text), output: "" }) },
+    );
+    expect(outcome).toEqual({ kind: "secret_detected", reason: "gitleaks" });
+  });
+
+  test("scans the full text before the token-shaped strings are masked", async () => {
+    const token = `ghp_${"A".repeat(36)}`;
+    const seen: string[] = [];
+    await buildCiExcerpt([job({ log: `use ${token}` })], {
       scan: async (text) => {
         seen.push(text);
         return { ok: true, output: "" };
       },
     });
-    expect(seen.length).toBe(1);
+    expect(seen[0]).toContain(token);
+  });
+
+  test("stops at the first detection without scanning the other jobs", async () => {
+    let calls = 0;
+    await buildCiExcerpt([job(), job({ name: "second" })], {
+      scan: async () => {
+        calls += 1;
+        return { ok: false, output: "- generic-api-key" };
+      },
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("fails closed when the scan of the full text throws", async () => {
+    const outcome = await buildCiExcerpt(
+      [job({ log: longLogWith("OMITTED-MARKER") })],
+      {
+        scan: async (text) => {
+          if (text.includes("OMITTED-MARKER")) throw new Error("timed out");
+          return { ok: true, output: "" };
+        },
+      },
+    );
+    expect(outcome).toEqual({ kind: "secret_detected", reason: "scan_failed" });
+  });
+
+  test("continues with the masked excerpt when only a prefix fragment is cut", async () => {
+    const log = `${"x".repeat(285)} ghp_${"A".repeat(5)} tail`;
+    const outcome = await buildCiExcerpt([job({ log })], {
+      scan: cleanScanner,
+    });
+    expect(outcome.kind).toBe("clean");
+  });
+
+  test("scans the excerpt again after the full text was clean", async () => {
+    const outcome = await buildCiExcerpt([job()], {
+      scan: async (text) => ({ ok: !text.startsWith("job:"), output: "" }),
+    });
+    expect(outcome).toEqual({ kind: "secret_detected", reason: "gitleaks" });
   });
 
   test("scans the job name, the step names, and the log", async () => {

@@ -432,10 +432,15 @@ export type CiExcerptOutcome =
  * 先頭の`CI_LOG_MAX_JOBS`件だけを使い、1ジョブ`CI_LOG_JOB_MAX_CHARS`字、全体で
  * `CI_LOG_TOTAL_MAX_CHARS`字に絞る(`cleanLogText`と`condenseJobLog`)。
  * 名前は`sanitizeRunName`の長さに切る。
- * 絞った後の文字列全体(ジョブ名、step名、ログ)を、1回のgitleaksの検査にかける。
+ * 検査は二段にする。
+ * まず、ジョブごとに、絞る前の整形済みの全文(最大で約1.1MB)をgitleaksにかける。
+ * 抜粋から落ちる部分の秘密値でも止めるため。
+ * 次に、トークンの形の文字列を伏せて絞った、ジョブ名、step名、ログの全体を、もう1回かける。
+ * 呼び出しは最大で`CI_LOG_MAX_JOBS`+1回である。
  * 検出があったとき、検査できなかったときは、行を消して続けず`secret_detected`を返す。
  * 呼び出し側はClaudeを起動せず、人に渡す。
  * 検査を通った後も、`maskSecrets`で既知の形式の秘密値を伏せる(二重の防御)。
+ * トークンの形の文字列は、切り口に断片が残らないよう、絞る前に伏せる。
  * 使えるログ本文が無ければ`empty`を返す。
  */
 export async function buildCiExcerpt(
@@ -445,8 +450,15 @@ export async function buildCiExcerpt(
   const excerpts: CiFailureExcerpt[] = [];
   let remaining = CI_LOG_TOTAL_MAX_CHARS;
   for (const job of jobs.slice(0, CI_LOG_MAX_JOBS)) {
+    const cleaned = cleanLogText(job.log);
+    if (cleaned.trim() === "") continue;
+    // 省略される部分に秘密値があっても止めるため、絞る前の全文を検査する。
+    const fullReason = await findSecret(cleaned, deps);
+    if (fullReason !== null) {
+      return { kind: "secret_detected", reason: fullReason };
+    }
     const text = condenseJobLog(
-      maskTokenFragments(cleanLogText(job.log)),
+      maskTokenFragments(cleaned),
       Math.min(CI_LOG_JOB_MAX_CHARS, remaining),
     );
     if (text === "") continue;
