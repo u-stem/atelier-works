@@ -29,14 +29,41 @@ export const WORKER_SAMPLE_FAILURE_LIMIT = 5;
 /** 記録の間隔(分)。noticeの本文に入れる経過時間の計算に使う。 */
 const SAMPLE_INTERVAL_MINUTES = 2;
 
-/** Console用workerが受けるtag。defaultのworkerの枠を使わない。 */
-const CONSOLE_TAG = "console";
-
-/** nativeのworkerが受けるtagの先頭。defaultのworkerの枠を使わない。 */
-const NATIVE_TAG_PREFIX = "native";
+/**
+ * defaultのworkerグループが受けるtag。Windmillの既定の割り当てで、
+ * `infra/docker-compose.yml`の`windmill_worker`は`WORKER_TAGS`を設定しないので、これが使われる。
+ * 実機では、tag `bun`のジョブがdefaultのworkerで動き、tag `postgresql`のプレビュー
+ * (`wmill.datatable()`のクエリ)がnativeのworkerで動くことを確かめている。
+ * tag `console`はConsole用のworker、`nativets`、`bunnative`、`postgresql`、`mysql`、`mssql`、
+ * `graphql`、`snowflake`、`bigquery`、`oracledb`はnativeのworkerが受けるので、このリストに入れない。
+ * 誰も受けないtagのジョブは動かないので、実行中にも待ちにも数えない。
+ */
+const DEFAULT_WORKER_TAGS: ReadonlySet<string> = new Set([
+  "deno",
+  "python3",
+  "go",
+  "bash",
+  "powershell",
+  "dependency",
+  "flow",
+  "hub",
+  "bun",
+  "php",
+  "rust",
+  "ansible",
+  "csharp",
+  "java",
+  "nu",
+  "ruby",
+  "duckdb",
+  "dbt",
+  "other",
+]);
 
 /**
- * フローの親ジョブのjob_kind。親ジョブはworkerの枠を使い続けず、実際の処理は子のscriptが枠を使うので数えない。
+ * フローの親ジョブのjob_kind。親ジョブは動き出した後はworkerの枠を使い続けず、実際の処理は子のscriptが
+ * 枠を使うので、実行中には数えない。まだ始まっていない親は、枠が空くのを待つので待ちに数える。
+ * 単一ステップのフロー(`singlestepflow`)の親は、枠を使うかどうかを確かめていないので、除かない。
  */
 const FLOW_PARENT_KINDS: readonly string[] = [
   "flow",
@@ -176,26 +203,46 @@ export function parseCgroupMemory(texts: CgroupTexts): MemorySample {
 // ---------------------------------------------------------------------------
 
 /**
- * defaultのworkerの枠を使うジョブか。
- * tag `console`はConsole用のworker、`native`で始まるtagはnativeのworkerが受けるので、数えない。
- * フローの親ジョブも数えない。tagが読めないものは、どこで動くか分からないので数えない。
+ * 呼び出し1回に許す時間(ミリ秒)。1回の上限と、全体の締め切りまでの残りの短い方を返す。
+ * 0以下なら締め切りを過ぎているので、呼び出しを飛ばす。
  */
-function usesDefaultSlot(job: Record<string, unknown>): boolean {
-  const tag = job.tag;
-  if (typeof tag !== "string") {
-    return false;
-  }
-  if (tag === CONSOLE_TAG || tag.startsWith(NATIVE_TAG_PREFIX)) {
-    return false;
-  }
-  const kind = job.job_kind;
-  return !(typeof kind === "string" && FLOW_PARENT_KINDS.includes(kind));
+export function remainingCallMs(
+  deadlineMs: number,
+  nowMs: number,
+  perCallMs: number,
+): number {
+  return Math.max(0, Math.min(perCallMs, deadlineMs - nowMs));
+}
+
+/** tagとjob_kindが文字列で読めるジョブ。読めなければ`null`。 */
+type KindedJob = {
+  readonly tag: string;
+  readonly kind: string;
+};
+
+function kindedJob(job: Record<string, unknown>): KindedJob | null {
+  return typeof job.tag === "string" && typeof job.job_kind === "string"
+    ? { tag: job.tag, kind: job.job_kind }
+    : null;
+}
+
+/** defaultのworkerが受けるtagのジョブか。 */
+function onDefaultWorker(job: KindedJob): boolean {
+  return DEFAULT_WORKER_TAGS.has(job.tag);
 }
 
 /** 実行中のジョブの集計。 */
 export type RunningSummary = {
   readonly count: number;
   readonly byScript: Record<string, number>;
+  /** 形が読めず、数えなかった要素の数。 */
+  readonly malformed: number;
+  /**
+   * 記録するジョブ自身を、一覧から正しく読めたか。
+   * 100件未満の一覧には、実行中の自分が必ずある。無い、またはtagとjob_kindが読めないときは、
+   * 応答の形が変わったと見なして`false`にする。100件の一覧は打ち切られているので、無くてもよい。
+   */
+  readonly selfReadable: boolean;
 };
 
 function scriptKey(job: Record<string, unknown>): string {
@@ -226,45 +273,83 @@ function foldScripts(counts: Map<string, number>): Record<string, number> {
   return result;
 }
 
+function selfIsReadable(
+  response: readonly unknown[],
+  selfJobId: string | null,
+  pageSize: number,
+): boolean {
+  if (selfJobId === null) {
+    return true;
+  }
+  const self = findJobById(response, selfJobId);
+  if (self === null) {
+    return response.length >= pageSize;
+  }
+  return kindedJob(self) !== null;
+}
+
 /**
  * 実行中のジョブの応答から、defaultのworkerの枠を使うジョブの数とscriptごとの内訳を集計する。
- * `selfJobId`のジョブ(記録するジョブ自身)は数えない。応答が配列でなければ`null`を返す。
+ * `selfJobId`のジョブ(記録するジョブ自身)は数えない。
+ * 数えるのは、defaultのworkerが受けるtagで、フローの親ジョブでないものである。
+ * 応答が配列でないとき、空でないのにすべての要素の形が読めないときは`null`を返す。
  */
 export function summarizeRunning(
   response: unknown,
   selfJobId: string | null,
+  pageSize: number = WORKER_SAMPLE_QUEUE_PER_PAGE,
 ): RunningSummary | null {
   if (!Array.isArray(response)) {
     return null;
   }
   const counts = new Map<string, number>();
   let count = 0;
+  let malformed = 0;
   for (const job of response) {
-    if (
-      !isRecord(job) ||
-      job.running !== true ||
-      (selfJobId !== null && job.id === selfJobId) ||
-      !usesDefaultSlot(job)
-    ) {
+    if (!isRecord(job) || typeof job.running !== "boolean") {
+      malformed += 1;
+      continue;
+    }
+    if (!job.running || (selfJobId !== null && job.id === selfJobId)) {
+      continue;
+    }
+    const kinded = kindedJob(job);
+    if (kinded === null) {
+      malformed += 1;
+      continue;
+    }
+    if (!onDefaultWorker(kinded) || FLOW_PARENT_KINDS.includes(kinded.kind)) {
       continue;
     }
     count += 1;
     const key = scriptKey(job);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return { count, byScript: foldScripts(counts) };
+  if (response.length > 0 && malformed === response.length) {
+    return null;
+  }
+  return {
+    count,
+    byScript: foldScripts(counts),
+    malformed,
+    selfReadable: selfIsReadable(response, selfJobId, pageSize),
+  };
 }
 
 /** 待っているジョブの集計。`maxWaitSeconds`は、待つジョブが無ければ0。 */
 export type WaitingSummary = {
   readonly count: number;
   readonly maxWaitSeconds: number;
+  /** 形が読めず、数えなかった要素の数。 */
+  readonly malformed: number;
 };
 
 /**
  * 予定時刻を過ぎても開始していないジョブの応答から、待っているジョブの数と最長の待ち時間(秒)を集計する。
- * 数えるのは、実行中でなく、中断されておらず、予定時刻が`nowMs`以前で日時として読めるものだけにする。
- * 予定時刻が未来のジョブは、待たされていないので数えない。応答が配列でなければ`null`を返す。
+ * 数えるのは、実行中でなく、中断されておらず、defaultのworkerが受けるtagで、
+ * 予定時刻が`nowMs`以前のジョブである。まだ始まっていないフローの親も、枠が空くのを待つので数える。
+ * 予定時刻が未来のジョブは、待たされていないので数えない。
+ * 応答が配列でないとき、空でないのにすべての要素の形が読めないときは`null`を返す。
  */
 export function summarizeWaiting(
   response: unknown,
@@ -274,24 +359,32 @@ export function summarizeWaiting(
     return null;
   }
   let count = 0;
+  let malformed = 0;
   let maxWaitMs = 0;
   for (const job of response) {
-    if (
-      !isRecord(job) ||
-      job.running === true ||
-      (typeof job.suspend === "number" && job.suspend > 0) ||
-      !usesDefaultSlot(job)
-    ) {
+    if (!isRecord(job) || typeof job.running !== "boolean") {
+      malformed += 1;
       continue;
     }
+    if (job.running || (typeof job.suspend === "number" && job.suspend > 0)) {
+      continue;
+    }
+    const kinded = kindedJob(job);
     const scheduledMs = parseTimeMs(job.scheduled_for);
-    if (scheduledMs === null || scheduledMs > nowMs) {
+    if (kinded === null || scheduledMs === null) {
+      malformed += 1;
+      continue;
+    }
+    if (!onDefaultWorker(kinded) || scheduledMs > nowMs) {
       continue;
     }
     count += 1;
     maxWaitMs = Math.max(maxWaitMs, nowMs - scheduledMs);
   }
-  return { count, maxWaitSeconds: Math.floor(maxWaitMs / 1000) };
+  if (response.length > 0 && malformed === response.length) {
+    return null;
+  }
+  return { count, maxWaitSeconds: Math.floor(maxWaitMs / 1000), malformed };
 }
 
 function parseTimeMs(value: unknown): number | null {

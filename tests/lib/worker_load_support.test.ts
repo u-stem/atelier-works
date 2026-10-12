@@ -2,22 +2,36 @@ import { describe, expect, test } from "bun:test";
 import { noticeSeverity } from "../../f/factory/lib/console_support.ts";
 import {
   type CgroupTexts,
-  DEFAULT_WORKER_SLOTS,
   findJobById,
   nextFailureCount,
   parseCgroupMemory,
   parseFailureCount,
   RUNNING_BY_SCRIPT_LIMIT,
+  remainingCallMs,
   runningQueueQuery,
   summarizeRunning,
   summarizeWaiting,
   timingOf,
   WORKER_SAMPLE_FAILED_NOTICE,
   WORKER_SAMPLE_FAILURE_LIMIT,
+  WORKER_SAMPLE_QUEUE_PER_PAGE,
   waitingQueueQuery,
 } from "../../f/factory/lib/worker_load_support.ts";
 
 const NOW = Date.parse("2026-10-12T03:10:30.000Z");
+
+/** nativeのworkerが受けるtag。defaultのworkerの枠を使わない。 */
+const NATIVE_WORKER_TAGS = [
+  "nativets",
+  "bunnative",
+  "postgresql",
+  "mysql",
+  "mssql",
+  "graphql",
+  "snowflake",
+  "bigquery",
+  "oracledb",
+];
 
 /** 実機のdefaultのworkerで読んだ形のcgroupの内容。 */
 const MEMORY_STAT = [
@@ -217,10 +231,26 @@ describe("summarizeRunning", () => {
     );
   });
 
-  test("does not count a job with a native tag", () => {
-    expect(summarizeRunning([running({ tag: "nativets" })], null)?.count).toBe(
-      0,
+  for (const tag of NATIVE_WORKER_TAGS) {
+    test(`does not count a job with the native tag ${tag}`, () => {
+      expect(summarizeRunning([running({ tag })], null)?.count).toBe(0);
+    });
+  }
+
+  test("does not count a job with a tag no default worker listens to", () => {
+    expect(summarizeRunning([running({ tag: "custom" })], null)?.count).toBe(0);
+  });
+
+  test("counts a job with another tag the default worker listens to", () => {
+    expect(summarizeRunning([running({ tag: "python3" })], null)?.count).toBe(
+      1,
     );
+  });
+
+  test("counts a preview job with the bun tag", () => {
+    expect(
+      summarizeRunning([running({ job_kind: "preview" })], null)?.count,
+    ).toBe(1);
   });
 
   test("counts a dependency job because it uses a slot", () => {
@@ -236,7 +266,9 @@ describe("summarizeRunning", () => {
   });
 
   test("does not count a job whose tag is unreadable", () => {
-    expect(summarizeRunning([running({ tag: 7 })], null)?.count).toBe(0);
+    expect(
+      summarizeRunning([running(), running({ tag: 7 })], null)?.count,
+    ).toBe(1);
   });
 
   test("skips an element that is not an object", () => {
@@ -245,6 +277,73 @@ describe("summarizeRunning", () => {
 
   test("returns null when the response is not an array", () => {
     expect(summarizeRunning({ error: "x" }, null)).toBeNull();
+  });
+
+  test("counts an element that is not an object as malformed", () => {
+    expect(summarizeRunning(["x", null, running()], null)?.malformed).toBe(2);
+  });
+
+  test("counts an element without a readable tag as malformed", () => {
+    expect(
+      summarizeRunning([running(), running({ tag: 7 })], null)?.malformed,
+    ).toBe(1);
+  });
+
+  test("counts an element without a readable job kind as malformed", () => {
+    expect(
+      summarizeRunning([running(), running({ job_kind: undefined })], null)
+        ?.malformed,
+    ).toBe(1);
+  });
+
+  test("does not count an element without a job kind as running", () => {
+    expect(
+      summarizeRunning([running(), running({ job_kind: undefined })], null)
+        ?.count,
+    ).toBe(1);
+  });
+
+  test("returns null when every element is malformed", () => {
+    expect(summarizeRunning([{ unexpected: true }, "x"], null)).toBeNull();
+  });
+
+  test("reports no malformed element for a well-formed list", () => {
+    expect(summarizeRunning([running()], null)?.malformed).toBe(0);
+  });
+
+  test("reads the sampling job from a short list", () => {
+    expect(
+      summarizeRunning([running({ id: "me" }), running()], "me")?.selfReadable,
+    ).toBe(true);
+  });
+
+  test("cannot read the sampling job that a short list lacks", () => {
+    expect(summarizeRunning([running()], "me")?.selfReadable).toBe(false);
+  });
+
+  test("does not expect the sampling job in a full page", () => {
+    const page = Array.from({ length: WORKER_SAMPLE_QUEUE_PER_PAGE }, () =>
+      running(),
+    );
+    expect(summarizeRunning(page, "me")?.selfReadable).toBe(true);
+  });
+
+  test("cannot read the sampling job whose tag is unreadable", () => {
+    expect(
+      summarizeRunning([running({ id: "me", tag: undefined })], "me")
+        ?.selfReadable,
+    ).toBe(false);
+  });
+
+  test("cannot read the sampling job whose job kind is unreadable", () => {
+    expect(
+      summarizeRunning([running({ id: "me", job_kind: 3 })], "me")
+        ?.selfReadable,
+    ).toBe(false);
+  });
+
+  test("expects no sampling job outside a job", () => {
+    expect(summarizeRunning([], null)?.selfReadable).toBe(true);
   });
 
   test("counts the jobs per script path", () => {
@@ -328,16 +427,47 @@ describe("summarizeWaiting", () => {
     ).toBe(0);
   });
 
-  test("does not count a job with a native tag", () => {
+  for (const tag of NATIVE_WORKER_TAGS) {
+    test(`does not count a job with the native tag ${tag}`, () => {
+      expect(summarizeWaiting([waiting(900, { tag })], NOW)?.count).toBe(0);
+    });
+  }
+
+  test("counts the parent job of a flow that has not started", () => {
     expect(
-      summarizeWaiting([waiting(900, { tag: "nativets" })], NOW)?.count,
-    ).toBe(0);
+      summarizeWaiting([waiting(900, { job_kind: "flow", tag: "flow" })], NOW)
+        ?.count,
+    ).toBe(1);
   });
 
-  test("does not count the parent job of a flow", () => {
+  test("counts a job scheduled exactly now", () => {
+    expect(summarizeWaiting([waiting(0)], NOW)?.count).toBe(1);
+  });
+
+  test("reports zero wait for a job scheduled exactly now", () => {
+    expect(summarizeWaiting([waiting(0)], NOW)?.maxWaitSeconds).toBe(0);
+  });
+
+  test("counts a job whose suspend count is zero", () => {
+    expect(summarizeWaiting([waiting(60, { suspend: 0 })], NOW)?.count).toBe(1);
+  });
+
+  test("counts an element without a readable tag as malformed", () => {
     expect(
-      summarizeWaiting([waiting(900, { job_kind: "flow" })], NOW)?.count,
-    ).toBe(0);
+      summarizeWaiting([waiting(60), waiting(60, { tag: null })], NOW)
+        ?.malformed,
+    ).toBe(1);
+  });
+
+  test("counts an element with an unreadable scheduled time as malformed", () => {
+    expect(
+      summarizeWaiting([waiting(60), waiting(60, { scheduled_for: "x" })], NOW)
+        ?.malformed,
+    ).toBe(1);
+  });
+
+  test("returns null when every element is malformed", () => {
+    expect(summarizeWaiting([{ unexpected: true }, "x"], NOW)).toBeNull();
   });
 
   test("does not count a job that is already running", () => {
@@ -352,8 +482,11 @@ describe("summarizeWaiting", () => {
 
   test("does not count a job whose scheduled time is unreadable", () => {
     expect(
-      summarizeWaiting([waiting(60, { scheduled_for: "soon" })], NOW)?.count,
-    ).toBe(0);
+      summarizeWaiting(
+        [waiting(60), waiting(60, { scheduled_for: "soon" })],
+        NOW,
+      )?.count,
+    ).toBe(1);
   });
 
   test("returns null when the response is not an array", () => {
@@ -469,17 +602,33 @@ describe("failure count", () => {
   });
 });
 
-describe("constants", () => {
-  test("sets the slots to the default worker's NUM_WORKERS", () => {
-    expect(DEFAULT_WORKER_SLOTS).toBe(3);
+describe("call budget", () => {
+  test("allows the per-call limit while the deadline is far", () => {
+    expect(remainingCallMs(20_000, 0, 5_000)).toBe(5_000);
   });
 
+  test("shortens the call to the time left before the deadline", () => {
+    expect(remainingCallMs(20_000, 17_000, 5_000)).toBe(3_000);
+  });
+
+  test("allows nothing at the deadline", () => {
+    expect(remainingCallMs(20_000, 20_000, 5_000)).toBe(0);
+  });
+
+  test("allows nothing after the deadline", () => {
+    expect(remainingCallMs(20_000, 25_000, 5_000)).toBe(0);
+  });
+});
+
+describe("constants", () => {
   test("raises a notice kind that is an action notice", () => {
     expect(noticeSeverity(WORKER_SAMPLE_FAILED_NOTICE.kind)).toBe("action");
   });
 
-  test("keeps the notice message fixed", () => {
-    expect(WORKER_SAMPLE_FAILED_NOTICE.message).toContain("次の操作");
+  test("tells where to look in the notice message", () => {
+    expect(WORKER_SAMPLE_FAILED_NOTICE.message).toMatch(
+      /次の操作: f\/factory\/sample_worker_loadの直近のジョブログ/,
+    );
   });
 
   test("waits for more than one failure before the notice", () => {

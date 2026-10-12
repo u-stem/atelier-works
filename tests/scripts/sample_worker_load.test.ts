@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import type { NewWorkerSample } from "../../f/factory/lib/db.ts";
 import { type Logger, logger } from "../../f/factory/lib/log.ts";
+import { CallTimeoutError } from "../../f/factory/lib/self_update_support.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 import {
   DEFAULT_WORKER_SLOTS,
   WORKER_SAMPLE_FAILED_NOTICE,
   WORKER_SAMPLE_FAILURE_LIMIT,
+  WORKER_SAMPLE_QUEUE_PER_PAGE,
 } from "../../f/factory/lib/worker_load_support.ts";
 import {
+  deadlineCaller,
   runSample,
+  SAMPLE_DEADLINE_MS,
   type SampleDeps,
 } from "../../f/factory/sample_worker_load.ts";
 
@@ -51,6 +55,8 @@ type Harness = {
   deps: SampleDeps;
   samples: NewWorkerSample[];
   notices: NoticeRecord[];
+  resolved: NoticeRecord[];
+  selfReads: { count: number };
   states: Record<string, unknown>[];
   warnings: string[];
 };
@@ -58,6 +64,8 @@ type Harness = {
 function harness(overrides: Partial<SampleDeps> = {}): Harness {
   const samples: NewWorkerSample[] = [];
   const notices: NoticeRecord[] = [];
+  const resolved: NoticeRecord[] = [];
+  const selfReads = { count: 0 };
   const states: Record<string, unknown>[] = [];
   const warnings: string[] = [];
   const log: Logger = logger("test", {
@@ -75,8 +83,13 @@ function harness(overrides: Partial<SampleDeps> = {}): Harness {
     listRunning: () =>
       Promise.resolve([selfJob(), other("f/factory/poll_prs")]),
     listWaiting: () => Promise.resolve([]),
-    getSelfJob: () => Promise.resolve(selfJob()),
-    selfJobId: SELF,
+    self: {
+      id: SELF,
+      getJob: () => {
+        selfReads.count += 1;
+        return Promise.resolve(selfJob());
+      },
+    },
     insertSample: (sample) => {
       samples.push(sample);
       return Promise.resolve(7);
@@ -90,12 +103,16 @@ function harness(overrides: Partial<SampleDeps> = {}): Harness {
       notices.push(record);
       return Promise.resolve(1);
     },
+    resolveNotice: (record) => {
+      resolved.push(record);
+      return Promise.resolve(1);
+    },
     now: () => NOW,
     slots: DEFAULT_WORKER_SLOTS,
     log,
     ...overrides,
   };
-  return { deps, samples, notices, states, warnings };
+  return { deps, samples, notices, resolved, selfReads, states, warnings };
 }
 
 describe("runSample record", () => {
@@ -216,26 +233,28 @@ describe("runSample own row", () => {
   test("leaves the delay null when neither source has it", async () => {
     const h = harness({
       listRunning: () => Promise.resolve([]),
-      getSelfJob: () => Promise.reject(new Error("not found")),
+      self: { id: SELF, getJob: () => Promise.reject(new Error("not found")) },
     });
     await runSample(h.deps);
     expect(h.samples[0]?.lag_seconds).toBeNull();
   });
 
   test("does not read the job itself when the running list has it", async () => {
-    let reads = 0;
+    const h = harness();
+    await runSample(h.deps);
+    expect(h.selfReads.count).toBe(0);
+  });
+
+  test("does not read the job itself when the running list failed", async () => {
     const h = harness({
-      getSelfJob: () => {
-        reads += 1;
-        return Promise.resolve(selfJob());
-      },
+      listRunning: () => Promise.reject(new Error("queue down")),
     });
     await runSample(h.deps);
-    expect(reads).toBe(0);
+    expect(h.selfReads.count).toBe(0);
   });
 
   test("leaves the delay null outside a job", async () => {
-    const h = harness({ selfJobId: null });
+    const h = harness({ self: null });
     await runSample(h.deps);
     expect(h.samples[0]?.lag_seconds).toBeNull();
   });
@@ -314,6 +333,92 @@ describe("runSample partial reads", () => {
   });
 });
 
+describe("runSample response shape", () => {
+  test("leaves the running jobs null when a short list lacks the sampling job", async () => {
+    const h = harness({
+      listRunning: () => Promise.resolve([other("f/factory/poll_prs")]),
+    });
+    await runSample(h.deps);
+    expect(h.samples[0]?.running_jobs).toBeNull();
+  });
+
+  test("leaves the per-script counts null when a short list lacks the sampling job", async () => {
+    const h = harness({
+      listRunning: () => Promise.resolve([other("f/factory/poll_prs")]),
+    });
+    await runSample(h.deps);
+    expect(h.samples[0]?.running_by_script).toBeNull();
+  });
+
+  test("keeps the running jobs when a full page lacks the sampling job", async () => {
+    const page = Array.from({ length: WORKER_SAMPLE_QUEUE_PER_PAGE }, (_, i) =>
+      other(`f/factory/s${String(i)}`, { id: `job-${String(i)}` }),
+    );
+    const h = harness({ listRunning: () => Promise.resolve(page) });
+    await runSample(h.deps);
+    expect(h.samples[0]?.running_jobs).toBe(WORKER_SAMPLE_QUEUE_PER_PAGE);
+  });
+
+  test("leaves the running jobs null when the sampling job has no readable tag", async () => {
+    const h = harness({
+      listRunning: () =>
+        Promise.resolve([selfJob({ tag: undefined }), other("f/factory/a")]),
+    });
+    await runSample(h.deps);
+    expect(h.samples[0]?.running_jobs).toBeNull();
+  });
+
+  test("warns when the sampling job is not readable in the running list", async () => {
+    const h = harness({
+      listRunning: () => Promise.resolve([other("f/factory/poll_prs")]),
+    });
+    await runSample(h.deps);
+    expect(
+      h.warnings.some((line) => line.includes("sampling job is not readable")),
+    ).toBe(true);
+  });
+
+  test("warns about a running element of an unexpected shape", async () => {
+    const h = harness({
+      listRunning: () =>
+        Promise.resolve([selfJob(), other("f/factory/a", { tag: 3 })]),
+    });
+    await runSample(h.deps);
+    expect(h.warnings.some((line) => line.includes("unexpected shape"))).toBe(
+      true,
+    );
+  });
+
+  test("warns about a waiting element of an unexpected shape", async () => {
+    const h = harness({
+      listWaiting: () =>
+        Promise.resolve([
+          { id: "w", running: false, job_kind: "script", tag: "bun" },
+        ]),
+    });
+    await runSample(h.deps);
+    expect(h.warnings.some((line) => line.includes("unexpected shape"))).toBe(
+      true,
+    );
+  });
+
+  test("does not warn when every element has the expected shape", async () => {
+    const h = harness();
+    await runSample(h.deps);
+    expect(h.warnings.some((line) => line.includes("unexpected shape"))).toBe(
+      false,
+    );
+  });
+
+  test("leaves the waiting jobs null when no element has the expected shape", async () => {
+    const h = harness({
+      listWaiting: () => Promise.resolve([{ unexpected: true }]),
+    });
+    await runSample(h.deps);
+    expect(h.samples[0]?.waiting_jobs).toBeNull();
+  });
+});
+
 describe("runSample outcome", () => {
   test("is complete when everything was read, even without memory.pressure", async () => {
     const h = harness();
@@ -329,6 +434,43 @@ describe("runSample outcome", () => {
 
   test("is partial when memory.current could not be read", async () => {
     const h = harness({ readCgroupFile: () => Promise.resolve("") });
+    expect((await runSample(h.deps)).outcome).toBe("partial");
+  });
+
+  test("is partial when the sampling job is missing from a short running list", async () => {
+    const h = harness({
+      listRunning: () => Promise.resolve([other("f/factory/poll_prs")]),
+    });
+    expect((await runSample(h.deps)).outcome).toBe("partial");
+  });
+
+  test("is partial when anon could not be read", async () => {
+    const h = harness({
+      readCgroupFile: (name) =>
+        name === "memory.stat"
+          ? Promise.resolve("inactive_file 1\n")
+          : Promise.resolve(CGROUP_FILES[name] ?? ""),
+    });
+    expect((await runSample(h.deps)).outcome).toBe("partial");
+  });
+
+  test("is partial when the delay could not be read", async () => {
+    const h = harness({
+      listRunning: () => Promise.resolve([selfJob({ started_at: undefined })]),
+      self: { id: SELF, getJob: () => Promise.reject(new Error("not found")) },
+    });
+    expect((await runSample(h.deps)).outcome).toBe("partial");
+  });
+
+  test("is partial when the scheduled time could not be read", async () => {
+    const h = harness({
+      listRunning: () =>
+        Promise.resolve([selfJob({ scheduled_for: undefined })]),
+      self: {
+        id: SELF,
+        getJob: () => Promise.resolve(selfJob({ scheduled_for: undefined })),
+      },
+    });
     expect((await runSample(h.deps)).outcome).toBe("partial");
   });
 
@@ -452,5 +594,111 @@ describe("runSample failure count", () => {
       listWaiting: () => Promise.reject(new Error("queue down")),
     });
     await expect(runSample(h.deps)).resolves.toBeDefined();
+  });
+});
+
+describe("runSample recovery", () => {
+  const limitReached = () =>
+    Promise.resolve({
+      worker_sample_failure_count: WORKER_SAMPLE_FAILURE_LIMIT,
+    });
+
+  test("resolves the notice when a complete run follows enough failures", async () => {
+    const h = harness({ getState: limitReached });
+    await runSample(h.deps);
+    expect(h.resolved).toEqual([WORKER_SAMPLE_FAILED_NOTICE]);
+  });
+
+  test("resets the count after resolving the notice", async () => {
+    const h = harness({ getState: limitReached });
+    await runSample(h.deps);
+    expect(h.states[0]?.worker_sample_failure_count).toBe(0);
+  });
+
+  test("does not resolve the notice below the limit", async () => {
+    const h = harness({
+      getState: () =>
+        Promise.resolve({
+          worker_sample_failure_count: WORKER_SAMPLE_FAILURE_LIMIT - 1,
+        }),
+    });
+    await runSample(h.deps);
+    expect(h.resolved).toEqual([]);
+  });
+
+  test("does not resolve the notice after an incomplete run", async () => {
+    const h = harness({
+      getState: limitReached,
+      listWaiting: () => Promise.reject(new Error("queue down")),
+    });
+    await runSample(h.deps);
+    expect(h.resolved).toEqual([]);
+  });
+
+  test("does not resolve the notice when the state could not be read", async () => {
+    const h = harness({
+      getState: () => Promise.reject(new Error("state down")),
+    });
+    await runSample(h.deps);
+    expect(h.resolved).toEqual([]);
+  });
+
+  test("keeps the count when the notice could not be resolved", async () => {
+    const h = harness({
+      getState: limitReached,
+      resolveNotice: () => Promise.reject(new Error("db down")),
+    });
+    await runSample(h.deps);
+    expect(h.states).toEqual([]);
+  });
+
+  test("does not throw when the notice could not be resolved", async () => {
+    const h = harness({
+      getState: limitReached,
+      resolveNotice: () => Promise.reject(new Error("db down")),
+    });
+    await expect(runSample(h.deps)).resolves.toBeDefined();
+  });
+});
+
+describe("deadlineCaller", () => {
+  test("runs the work while the deadline is far", async () => {
+    const call = deadlineCaller(20_000, () => 0, 5_000);
+    expect(await call("work", () => Promise.resolve("done"))).toBe("done");
+  });
+
+  test("skips the work once the deadline has passed", async () => {
+    let started = false;
+    const call = deadlineCaller(20_000, () => 20_000, 5_000);
+    await call("work", () => {
+      started = true;
+      return Promise.resolve(1);
+    }).catch(() => undefined);
+    expect(started).toBe(false);
+  });
+
+  test("rejects a call made after the deadline", async () => {
+    const call = deadlineCaller(20_000, () => 21_000, 5_000);
+    await expect(call("work", () => Promise.resolve(1))).rejects.toThrow(
+      "deadline",
+    );
+  });
+
+  test("cuts a call short at the time left before the deadline", async () => {
+    const call = deadlineCaller(20_000, () => 19_990, 5_000);
+    await expect(
+      call("work", () => new Promise<never>(() => undefined)),
+    ).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("keeps the deadline below the job timeout", async () => {
+    const yaml = await Bun.file(
+      new URL(
+        "../../f/factory/sample_worker_load.script.yaml",
+        import.meta.url,
+      ),
+    ).text();
+    const seconds = Number(/^timeout: (\d+)$/m.exec(yaml)?.[1]);
+    expect(SAMPLE_DEADLINE_MS).toBeLessThan(seconds * 1000);
   });
 });

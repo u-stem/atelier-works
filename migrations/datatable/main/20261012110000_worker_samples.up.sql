@@ -50,15 +50,15 @@ COMMENT ON TABLE factory.worker_samples IS
 COMMENT ON COLUMN factory.worker_samples.scheduled_for IS
     '記録したジョブの予定時刻。行の間隔が予定より開いていれば、その間の予定が実行されなかったことを示す。ジョブの情報を読めなければNULL。';
 COMMENT ON COLUMN factory.worker_samples.slots IS
-    '枠の数(NUM_WORKERS)。記録時点の設定値で、workerから読んだ値ではない。';
+    '枠の数。記録するscriptのコードの定数(DEFAULT_WORKER_SLOTS)で、workerから読んだ値ではない。NUM_WORKERSを変えた直後は、mise run upでworkerを作り直すまで、実際の枠の数と食い違う。';
 COMMENT ON COLUMN factory.worker_samples.running_jobs IS
-    '実行中のジョブの数。記録するジョブ自身、フローの親ジョブ、tag consoleとnativeのジョブは数えない。';
+    '実行中のジョブの数。記録するジョブ自身、フローの親ジョブ、defaultのworkerが受けないtag(console、nativeのworkerのtag)のジョブは数えない。自分を除くので、最大はslotsより1小さい。占有率は(running_jobs + 1) / slotsである。';
 COMMENT ON COLUMN factory.worker_samples.running_by_script IS
     '実行中のジョブのscriptごとの件数。上限の件数を超えた分は、キー(other)にまとめる。';
 COMMENT ON COLUMN factory.worker_samples.waiting_jobs IS
     '予定時刻を過ぎても開始していないジョブの数。1回の取得は100件までなので、100で頭打ちになる。';
 COMMENT ON COLUMN factory.worker_samples.max_wait_seconds IS
-    '待っているジョブのうち、予定時刻から最も長く待っているものの待ち時間。待つジョブが無ければ0。';
+    '待っているジョブのうち、予定時刻から最も長く待っているものの待ち時間。待つジョブが無ければ0。記録するジョブは自分の遅れの分だけ待った後に始まるので、待ちの深さの下限である。';
 COMMENT ON COLUMN factory.worker_samples.lag_seconds IS
     '記録したジョブの予定時刻から開始までの遅れ。';
 COMMENT ON COLUMN factory.worker_samples.mem_current_bytes IS
@@ -70,7 +70,7 @@ COMMENT ON COLUMN factory.worker_samples.mem_working_set_bytes IS
 COMMENT ON COLUMN factory.worker_samples.mem_peak_bytes IS
     'memory.peak。コンテナの起動からの累積で、キャッシュを含む。前の行から増えたかどうかを見る印にだけ使う。';
 COMMENT ON COLUMN factory.worker_samples.mem_limit_bytes IS
-    'memory.max。上限が無ければNULL。';
+    'memory.max。上限が無ければNULL。読めなかった場合もNULLで、上限なしと区別できない。';
 COMMENT ON COLUMN factory.worker_samples.mem_events_max IS
     'memory.eventsのmax。上限に達した回数の、コンテナの起動からの累積。';
 COMMENT ON COLUMN factory.worker_samples.mem_oom IS
