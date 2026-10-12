@@ -11,8 +11,8 @@ const CLEANUP_UP = `${DIR}/20261012100100_cleanup_main_ci_runs.up.sql`;
 const CLEANUP_DOWN = `${DIR}/20261012100100_cleanup_main_ci_runs.down.sql`;
 const SUMMARY_UP = `${DIR}/20261012100200_main_ci_runs_summary_check.up.sql`;
 const SUMMARY_DOWN = `${DIR}/20261012100200_main_ci_runs_summary_check.down.sql`;
-const DROP_UP = `${DIR}/20261012110000_main_ci_runs_drop_next_check.up.sql`;
-const DROP_DOWN = `${DIR}/20261012110000_main_ci_runs_drop_next_check.down.sql`;
+const DROP_UP = `${DIR}/20261012120000_main_ci_runs_drop_next_check.up.sql`;
+const DROP_DOWN = `${DIR}/20261012120000_main_ci_runs_drop_next_check.down.sql`;
 
 describe("20261012100000_main_ci_runs.up.sql", () => {
   test("creates factory.main_ci_runs", async () => {
@@ -106,7 +106,7 @@ describe("20261012100200_main_ci_runs_summary_check.down.sql", () => {
   });
 });
 
-describe("20261012110000_main_ci_runs_drop_next_check.up.sql", () => {
+describe("20261012120000_main_ci_runs_drop_next_check.up.sql", () => {
   test("drops the next_check_at column", async () => {
     expect(await Bun.file(DROP_UP).text()).toContain(
       "DROP COLUMN next_check_at",
@@ -120,7 +120,7 @@ describe("20261012110000_main_ci_runs_drop_next_check.up.sql", () => {
   });
 });
 
-describe("20261012110000_main_ci_runs_drop_next_check.down.sql", () => {
+describe("20261012120000_main_ci_runs_drop_next_check.down.sql", () => {
   test("adds the next_check_at column back with its default", async () => {
     expect(await Bun.file(DROP_DOWN).text()).toContain(
       "ADD COLUMN next_check_at timestamptz NOT NULL DEFAULT now()",
