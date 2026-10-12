@@ -1,13 +1,13 @@
-// `20261012120000_cleanup_worker_samples`のmigrationが、掃除の件数の列を足すことを静的に確かめる。
+// `20261012140000_cleanup_worker_samples`のmigrationが、掃除の件数の列を足すことを静的に確かめる。
 // 実際に適用して戻せることは`mise run test:db`が確かめる。
 
 import { describe, expect, test } from "bun:test";
 
 const DIR = "migrations/datatable/main";
-const UP = `${DIR}/20261012120000_cleanup_worker_samples.up.sql`;
-const DOWN = `${DIR}/20261012120000_cleanup_worker_samples.down.sql`;
+const UP = `${DIR}/20261012140000_cleanup_worker_samples.up.sql`;
+const DOWN = `${DIR}/20261012140000_cleanup_worker_samples.down.sql`;
 
-describe("20261012120000_cleanup_worker_samples.up.sql", () => {
+describe("20261012140000_cleanup_worker_samples.up.sql", () => {
   test("adds the worker_samples_deleted integer column", async () => {
     expect(await Bun.file(UP).text()).toContain(
       "ADD COLUMN worker_samples_deleted integer NOT NULL DEFAULT 0;",
@@ -39,7 +39,7 @@ describe("20261012120000_cleanup_worker_samples.up.sql", () => {
   });
 });
 
-describe("20261012120000_cleanup_worker_samples.down.sql", () => {
+describe("20261012140000_cleanup_worker_samples.down.sql", () => {
   test("drops the column", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
       "DROP COLUMN worker_samples_deleted",
