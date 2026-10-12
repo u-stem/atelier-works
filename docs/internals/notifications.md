@@ -34,7 +34,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(10分ごと) | Console用のworkerがジョブを受けているかを、1時間(6回)続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(10分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(10分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
-| `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した。1つ前のコミットも失敗していたときは送らない |
+| `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 前日の集計 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
 | `pr_opened` | PR作成 / PR更新 | `implement_finish` | 実装フローがPRを作成か更新した |
@@ -234,7 +234,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 検査の枠のnoticeを記録できなかったときは、検査を止めずに`check slot notice could not be recorded`をログに出す。
 `cleanup_worktree_busy`は、1回の掃除でworktreeのパスごとに1件残す。同じ本文の未解決のnoticeがあるあいだは、[重複の抑止](#重複の抑止)のとおり新しく作らない。Discordには通知しない。
 
-`main_ci_failed`は、失敗を確定したコミットごとに1件残す。Discordには、1つ前のコミットが失敗でないときだけ通知する。より新しいコミットが既に通っているときは、どちらも出さない。同じコミットの本文は同じなので、重複して残らない。
+`main_ci_failed`は、失敗を確定したコミットごとに1件残す。Discordには、noticeを新しく残したときに通知する。より新しいコミットが既に通っているときは、どちらも出さない。同じコミットの本文は同じなので、通常は重複しない。
 本文は固定文で、workflowの名前や結論は載せない。外部の文字列は、`main_ci_runs`の`summary`列にだけ残す。
 同じリポジトリのより新しいコミットが通ると、`watch_main_ci`が種類と接頭辞で選んで解決する。
 `main_ci_check_denied`は、実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。

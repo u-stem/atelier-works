@@ -3079,7 +3079,6 @@ export type MainCiRun = {
   readonly first_seen_at: Date;
   /** そのコミットの最も古い実行の作成時刻。実行をまだ見ていなければnull。 */
   readonly run_created_at: Date | null;
-  readonly next_check_at: Date;
   readonly created_at: Date;
   readonly updated_at: Date;
 };
@@ -3108,7 +3107,6 @@ function toMainCiRun(row: SqlRow): MainCiRun {
       row.run_created_at === null || row.run_created_at === undefined
         ? null
         : parseDate(row.run_created_at, "run_created_at"),
-    next_check_at: parseDate(row.next_check_at, "next_check_at"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -3196,7 +3194,7 @@ export async function listMainCiRunsBySha(
   if (shas.length === 0) return [];
   const rows = await sql`
     SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
-           run_created_at, next_check_at, created_at, updated_at
+           run_created_at, created_at, updated_at
     FROM factory.main_ci_runs
     WHERE owner = ${owner} AND repo = ${repo}
       AND head_sha = ANY(${[...shas]}::text[])
@@ -3213,7 +3211,7 @@ export async function listPendingMainCiRuns(
 ): Promise<MainCiRun[]> {
   const rows = await sql`
     SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
-           run_created_at, next_check_at, created_at, updated_at
+           run_created_at, created_at, updated_at
     FROM factory.main_ci_runs
     WHERE state = 'pending'
     ORDER BY first_seen_at ASC
@@ -3304,7 +3302,7 @@ export async function getPreviousMainCiRun(
   assertGitHubName(repo);
   const rows = await sql`
     SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
-           run_created_at, next_check_at, created_at, updated_at
+           run_created_at, created_at, updated_at
     FROM factory.main_ci_runs
     WHERE owner = ${owner} AND repo = ${repo}
       AND COALESCE(run_created_at, first_seen_at) < ${runCreatedAt.toISOString()}::timestamptz
@@ -3316,14 +3314,15 @@ export async function getPreviousMainCiRun(
 }
 
 /**
- * `runCreatedAt`より後の実行の作成時刻を持つ`passed`の行が、そのリポジトリにあるか。
- * 並びの鍵は`latestMainCiRunCreatedAt`と同じである。
+ * 並びの鍵`(COALESCE(run_created_at, first_seen_at), id)`が、`(runCreatedAt, id)`より後の`passed`の行が、
+ * そのリポジトリにあるか。鍵は`latestMainCiRunCreatedAt`と同じで、時刻が同じ行は`id`の大きい方を後とする。
  * 古いコミットの失敗を確定するときに、より新しいコミットが既に通っていて、通知が要らないかを判断するのに使う。
  */
 export async function hasPassedMainCiRunAfter(
   owner: string,
   repo: string,
   runCreatedAt: Date,
+  id: number,
   sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
   assertGitHubName(owner);
@@ -3331,7 +3330,31 @@ export async function hasPassedMainCiRunAfter(
   const rows = await sql`
     SELECT id FROM factory.main_ci_runs
     WHERE owner = ${owner} AND repo = ${repo} AND state = 'passed'
-      AND COALESCE(run_created_at, first_seen_at) > ${runCreatedAt.toISOString()}::timestamptz
+      AND (COALESCE(run_created_at, first_seen_at), id) >
+        (${runCreatedAt.toISOString()}::timestamptz, ${id}::bigint)
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 並びの鍵が`(runCreatedAt, id)`より後の行が、そのリポジトリにあるか。状態は問わない。
+ * 通ったコミットが、失敗の通知を解決してよいか(より新しいコミットを記録していないか)の判断に使う。
+ */
+export async function hasNewerMainCiRun(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND (COALESCE(run_created_at, first_seen_at), id) >
+        (${runCreatedAt.toISOString()}::timestamptz, ${id}::bigint)
     LIMIT 1
   `.fetch();
   return rows.length > 0;

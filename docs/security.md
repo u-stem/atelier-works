@@ -269,7 +269,7 @@ GitHubの認証は、環境変数`GH_TOKEN`と、gitのcredential helperとし�
 
 `CONSOLE_GITHUB_TOKEN`は、Consoleの成果物を取り込む`console_fetcher`だけが使うfine-grained PATである。
 Factoryの`GITHUB_TOKEN`は流用しない。
-Actionsの読み取り権限が無いので403になり、ほかの権限も広すぎるためである。
+Issues、Contents、Pull requestsの書き込み権限が広すぎるためである。
 
 1. GitHub右上のアイコンから、**Settings**、**Developer settings**、**Personal access tokens**、**Fine-grained tokens**の順に開く。
 2. **Generate new token**を押す。

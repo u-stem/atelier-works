@@ -24,6 +24,7 @@ import {
   MAIN_CI_FAILED_KIND,
   MAIN_CI_RESOLVED_BY,
   type MainCiWatchDeps,
+  RUN_BUDGET_MS,
   runMainCiWatch,
   UNREADABLE_EXPIRES_AFTER_MS,
   type WatchTarget,
@@ -65,7 +66,6 @@ function row(overrides: Partial<MainCiRun> = {}): MainCiRun {
     prev_failed: false,
     first_seen_at: minutesBefore(10),
     run_created_at: minutesBefore(10),
-    next_check_at: minutesBefore(10),
     created_at: minutesBefore(10),
     updated_at: minutesBefore(10),
     ...overrides,
@@ -93,8 +93,12 @@ type Setup = {
   recordFails?: (record: NewMainCiRun) => boolean;
   noticeFails?: boolean;
   transitionFails?: boolean;
-  /** このコミットより新しいコミットが、既に通っているか。 */
+  /** このコミットより新しいコミットが、既に通っているか。同じ回で通した行とは別に与える。 */
   newerPassed?: boolean;
+  /** このコミットより新しい行を、記録済みか。 */
+  hasNewer?: boolean;
+  /** `now`の呼び出しごとに進める時間(ミリ秒)。経過時間の予算を試すのに使う。 */
+  clockStepMs?: number;
 };
 
 type Harness = {
@@ -109,6 +113,7 @@ type Harness = {
   readonly logs: LogLine[];
   readonly listCalls: { repo: string; sha: string | undefined }[];
   readonly branchCalls: string[];
+  readonly newerQueries: { kind: "any" | "passed"; id: number; at: Date }[];
 };
 
 function harness(setup: Setup = {}): Harness {
@@ -122,13 +127,21 @@ function harness(setup: Setup = {}): Harness {
   const logs: LogLine[] = [];
   const listCalls: { repo: string; sha: string | undefined }[] = [];
   const branchCalls: string[] = [];
+  const newerQueries: { kind: "any" | "passed"; id: number; at: Date }[] = [];
+  const passedRows: { at: Date; id: number }[] = [];
+  let clockCalls = 0;
   const log: Logger = {
     info: (message, fields) => logs.push({ level: "info", message, fields }),
     warn: (message, fields) => logs.push({ level: "warn", message, fields }),
     error: (message, fields) => logs.push({ level: "error", message, fields }),
   };
   const deps: MainCiWatchDeps = {
-    now: () => NOW,
+    now: () => {
+      const step = setup.clockStepMs ?? 0;
+      const at = new Date(NOW.getTime() + clockCalls * step);
+      clockCalls += 1;
+      return at;
+    },
     log,
     instanceName: "local",
     getDefaultBranch: async (owner, repo) => {
@@ -137,6 +150,7 @@ function harness(setup: Setup = {}): Harness {
     },
     listRuns: async (_owner, repo, _branch, headSha) => {
       listCalls.push({ repo, sha: headSha });
+      if (headSha !== undefined) events.push("read");
       const table = headSha === undefined ? setup.discovery : setup.bySha;
       const found = table?.[headSha ?? repo] ?? [];
       if (found instanceof Error) throw found;
@@ -155,10 +169,31 @@ function harness(setup: Setup = {}): Harness {
     },
     listPending: async () => setup.pending ?? [],
     getPrevious: async () => setup.previous ?? null,
-    hasNewerPassed: async () => setup.newerPassed ?? false,
+    hasNewerPassed: async (_owner, _repo, at, id) => {
+      newerQueries.push({ kind: "passed", id, at });
+      return (
+        setup.newerPassed === true ||
+        passedRows.some(
+          (passed) =>
+            passed.at.getTime() > at.getTime() ||
+            (passed.at.getTime() === at.getTime() && passed.id > id),
+        )
+      );
+    },
+    hasNewerRow: async (_owner, _repo, at, id) => {
+      newerQueries.push({ kind: "any", id, at });
+      return setup.hasNewer ?? false;
+    },
     transition: async (id, to) => {
       events.push("transition");
       transitions.push({ id, to });
+      const moved = setup.pending?.find((pending) => pending.id === id);
+      if (to.state === "passed" && moved !== undefined) {
+        passedRows.push({
+          at: moved.run_created_at ?? moved.first_seen_at,
+          id,
+        });
+      }
       if (setup.transitionFails === true) throw new Error("transition failed");
       return true;
     },
@@ -195,6 +230,7 @@ function harness(setup: Setup = {}): Harness {
     logs,
     listCalls,
     branchCalls,
+    newerQueries,
   };
 }
 
@@ -800,10 +836,10 @@ describe("failed commits", () => {
     });
   });
 
-  test("a continuing failure adds the notice but sends no Discord", async () => {
+  test("a continuing failure adds the notice and sends Discord", async () => {
     const h = failedHarness({ previous: row({ id: 0, state: "failed" }) });
     await runMainCiWatch([TARGET], h.deps);
-    expect([h.notices.length, h.discord]).toEqual([1, []]);
+    expect([h.notices.length, h.discord.length]).toEqual([1, 1]);
   });
 
   test("does not move the commit when the notice cannot be added", async () => {
@@ -864,7 +900,7 @@ describe("passed commits", () => {
     const h = harness({
       pending: [row({ run_created_at: minutesBefore(20) })],
       bySha: { [SHA_A]: [run()] },
-      latest: minutesBefore(5),
+      hasNewer: true,
     });
     await runMainCiWatch([TARGET], h.deps);
     expect(
@@ -872,11 +908,21 @@ describe("passed commits", () => {
     ).toEqual([]);
   });
 
+  test("asks about newer rows with the run time and id of the commit", async () => {
+    const h = harness({
+      pending: [row({ id: 4 })],
+      bySha: { [SHA_A]: [run()] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.newerQueries).toEqual([
+      { kind: "any", id: 4, at: minutesBefore(10) },
+    ]);
+  });
+
   test("resolves the failures before the transition", async () => {
     const h = harness({
       pending: [row()],
       bySha: { [SHA_A]: [run()] },
-      latest: minutesBefore(10),
     });
     await runMainCiWatch([TARGET], h.deps);
     expect(h.events.lastIndexOf("resolve")).toBeLessThan(
@@ -928,5 +974,188 @@ describe("result", () => {
     const h = harness({ discovery: { widgets: deniedError(403) } });
     const result = await runMainCiWatch([TARGET], h.deps);
     expect(result.denied).toBe(1);
+  });
+});
+
+describe("expiring rows that cannot be read", () => {
+  const OLD = new Date(NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS - 60_000);
+  const oldRow = (overrides: Partial<MainCiRun> = {}) =>
+    row({ first_seen_at: OLD, ...overrides });
+
+  test("does not expire a row of a repository whose discovery failed", async () => {
+    const h = harness({
+      discovery: { widgets: new Error("boom") },
+      pending: [oldRow()],
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("does not expire a row of a repository whose discovery was denied", async () => {
+    const h = harness({
+      discovery: { widgets: deniedError(403) },
+      pending: [oldRow()],
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("does not expire a row while the rate limit holds", async () => {
+    const h = harness({
+      pending: [oldRow()],
+      bySha: {
+        [SHA_A]: new GitHubRateLimitError("endpoint", 300_000, true),
+      },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("does not expire a row whose read failed with a server error", async () => {
+    const h = harness({
+      pending: [oldRow()],
+      bySha: { [SHA_A]: deniedError(500) },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("expires a row whose runs are too many to read", async () => {
+    const h = harness({
+      pending: [oldRow()],
+      bySha: { [SHA_A]: new WorkflowRunsIncompleteError("too many") },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to.state).toBe("expired");
+  });
+
+  test("expires a row whose read was denied after a successful discovery", async () => {
+    const h = harness({
+      pending: [oldRow()],
+      bySha: { [SHA_A]: deniedError(404) },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to.state).toBe("expired");
+  });
+
+  test("expires a row of a repository that is no longer a target", async () => {
+    const h = harness({ pending: [oldRow({ owner: "gone", repo: "app" })] });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to.state).toBe("expired");
+  });
+
+  test("keeps a row of a repository that is no longer a target for less than a day", async () => {
+    const h = harness({ pending: [row({ owner: "gone", repo: "app" })] });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+});
+
+describe("judging in two stages", () => {
+  const stageSetup = (): Setup => ({
+    pending: [
+      row({ id: 1, head_sha: SHA_A, run_created_at: minutesBefore(20) }),
+      row({ id: 2, head_sha: SHA_B, run_created_at: minutesBefore(10) }),
+    ],
+    bySha: {
+      [SHA_A]: [{ ...FAILING_RUN, headSha: SHA_A }],
+      [SHA_B]: [run({ headSha: SHA_B })],
+    },
+  });
+
+  test("reads every pending commit before applying any result", async () => {
+    const h = harness(stageSetup());
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.events.lastIndexOf("read")).toBeLessThan(
+      h.events.indexOf("transition"),
+    );
+  });
+
+  test("applies passed commits before failed ones", async () => {
+    const h = harness(stageSetup());
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions.map((transition) => transition.id)).toEqual([2, 1]);
+  });
+
+  test("an older failure in the same run as a newer pass sends no notice", async () => {
+    const h = harness(stageSetup());
+    await runMainCiWatch([TARGET], h.deps);
+    expect([h.notices, h.discord]).toEqual([[], []]);
+  });
+
+  test("an older failure in the same run as a newer pass is still recorded as failed", async () => {
+    const h = harness(stageSetup());
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[1]?.to.state).toBe("failed");
+  });
+
+  test("at the same time, a smaller id does not supersede a larger id", async () => {
+    const h = harness({
+      pending: [
+        row({ id: 5, head_sha: SHA_A, run_created_at: minutesBefore(10) }),
+        row({ id: 4, head_sha: SHA_B, run_created_at: minutesBefore(10) }),
+      ],
+      bySha: {
+        [SHA_A]: [{ ...FAILING_RUN, headSha: SHA_A }],
+        [SHA_B]: [run({ headSha: SHA_B })],
+      },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.notices).toHaveLength(1);
+  });
+
+  test("asks whether a newer commit passed with the run time and id", async () => {
+    const h = harness({
+      pending: [row({ id: 6 })],
+      bySha: { [SHA_A]: [FAILING_RUN] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.newerQueries).toEqual([
+      { kind: "passed", id: 6, at: minutesBefore(10) },
+    ]);
+  });
+});
+
+describe("time budget", () => {
+  test("does not start a repository after the budget", async () => {
+    const h = harness({
+      clockStepMs: RUN_BUDGET_MS / 2 + 1,
+      discovery: { widgets: [run()], gadgets: [run()] },
+    });
+    await runMainCiWatch([TARGET, { owner: "acme", repo: "gadgets" }], h.deps);
+    expect(h.recorded.map((record) => record.repo)).toEqual(["widgets"]);
+  });
+
+  test("leaves pending commits to the next run after the budget", async () => {
+    const h = harness({
+      clockStepMs: RUN_BUDGET_MS / 2 + 1,
+      pending: [row({ id: 1 }), row({ id: 2, head_sha: SHA_B })],
+      bySha: { [SHA_A]: [run()], [SHA_B]: [run({ headSha: SHA_B })] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("does not expire a commit it left for the next run", async () => {
+    const h = harness({
+      clockStepMs: RUN_BUDGET_MS / 2 + 1,
+      pending: [
+        row({
+          first_seen_at: new Date(NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS),
+        }),
+      ],
+      bySha: { [SHA_A]: new WorkflowRunsIncompleteError("too many") },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("judges everything when the clock does not move", async () => {
+    const h = harness({
+      pending: [row({ id: 1 }), row({ id: 2, head_sha: SHA_B })],
+      bySha: { [SHA_A]: [run()], [SHA_B]: [run({ headSha: SHA_B })] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toHaveLength(2);
   });
 });

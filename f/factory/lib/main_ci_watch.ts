@@ -44,10 +44,20 @@ export const MAIN_CI_RESOLVED_BY = "watch_main_ci";
 export const PENDING_BATCH_LIMIT = 200;
 
 /**
- * 実行を読めない(`runs`が`null`)まま、最初に見てからこの時間がたったコミットは`expired`にする。
- * 読めないまま判定を待ち続けても、人に知らせる手段が無いため、行を終わらせる。
+ * 実行を読めないという永続的な条件のまま、最初に見てからこの時間がたったコミットは`expired`にする。
+ * 永続的な条件は、`head_sha`を指定した読み取りだけが読み切れない(実行が多すぎる、権限が無い)場合と、
+ * リポジトリが対象から外れた場合である。rate limit、サーバーの一時的な失敗、発見の失敗は数えない。
+ * 読めないまま判定を待ち続けても、人に知らせる手段が無いので、行を終わらせる。
  */
 export const UNREADABLE_EXPIRES_AFTER_MS = 24 * 60 * 60_000;
+
+/**
+ * 1回の実行で、新しい読み取りを始めてよい経過時間。超えたら、残りは次の回に回す。
+ * scriptのtimeout(600秒)の前に、確実に終わらせるための余裕である。
+ * 最後に始めた読み取りが、3ページそれぞれでrate limitを最大120秒待っても(360秒)、
+ * 後続のDiscordの待ち(最大30秒)を足して、timeoutに収まる。
+ */
+export const RUN_BUDGET_MS = 180_000;
 
 const FAILED_NEXT_ACTION =
   "実行のログを確かめ、直す修正を入れるか、原因のコミットを取り消す";
@@ -150,11 +160,22 @@ export type MainCiWatchDeps = {
     repo: string,
     runCreatedAt: Date,
   ) => Promise<MainCiRun | null>;
-  /** `runCreatedAt`より新しいコミットで、既に`passed`になったものがあるか。 */
+  /**
+   * 並びの鍵が`(runCreatedAt, id)`より後のコミットで、`passed`のものがあるか。
+   * 時刻が同じコミットは、`id`の大きい方を後とする。
+   */
   readonly hasNewerPassed: (
     owner: string,
     repo: string,
     runCreatedAt: Date,
+    id: number,
+  ) => Promise<boolean>;
+  /** 並びの鍵が`(runCreatedAt, id)`より後のコミットを、状態を問わず記録済みか。 */
+  readonly hasNewerRow: (
+    owner: string,
+    repo: string,
+    runCreatedAt: Date,
+    id: number,
   ) => Promise<boolean>;
   readonly transition: (id: number, to: MainCiTransition) => Promise<boolean>;
   /** 新しく挿入したら通知のID、同じ未解決の通知があれば`null`を返す。 */
@@ -240,7 +261,7 @@ export async function runMainCiWatch(
     targets.map((target) => repoKey(target.owner, target.repo)),
   );
   for (const target of targets) {
-    if (state.rateLimited) break;
+    if (state.rateLimited || overBudget(context)) break;
     await discover(context, target);
   }
   await judgePending(context, targetKeys);
@@ -253,6 +274,11 @@ type Context = {
   readonly counters: Counters;
   readonly state: WatchState;
 };
+
+/** 実行の開始から`RUN_BUDGET_MS`以上たったか。たったら、新しい読み取りは始めない。 */
+function overBudget(context: Context): boolean {
+  return context.deps.now().getTime() - context.now.getTime() >= RUN_BUDGET_MS;
+}
 
 async function defaultBranchOf(
   context: Context,
@@ -378,7 +404,33 @@ async function recordNewCommits(
   }
 }
 
-/** 判定待ちのコミットを、取り直した実行で確定する。 */
+/** 判定待ちの行の実行を取り直した結果。 */
+type ReadOutcome =
+  | { readonly kind: "runs"; readonly runs: WorkflowRun[] }
+  /** 永続的な条件で読めない。一定の時間が続けば、期限切れにしてよい。 */
+  | { readonly kind: "unreadable" }
+  /** 今回は読めなかった(rate limit、一時的な失敗、発見の失敗、時間切れ)。何も決めず、次の回に回す。 */
+  | { readonly kind: "skip" };
+
+/** 読み取りの後に決めた、行の行き先。適用は`passed`、`failed`、`settle`の順に行う。 */
+type Judgement =
+  | { readonly kind: "passed"; readonly row: MainCiRun }
+  | {
+      readonly kind: "failed";
+      readonly row: MainCiRun;
+      readonly runs: readonly WorkflowRun[];
+    }
+  | {
+      readonly kind: "settle";
+      readonly row: MainCiRun;
+      readonly state: "expired" | "no_ci";
+    };
+
+/**
+ * 判定待ちのコミットを、取り直した実行で確定する。2段で行う。
+ * 先に全行の結果を決め、次に`passed`、`failed`、その他の順に適用する。
+ * 同じ回で古いコミットが失敗し、新しいコミットが通ったときに、古い失敗を通知しないためである。
+ */
 async function judgePending(
   context: Context,
   targetKeys: ReadonlySet<string>,
@@ -391,9 +443,16 @@ async function judgePending(
     await recordFailureOf(context, "list_pending", err);
     return;
   }
+  const judgements: Judgement[] = [];
   for (const row of rows) {
+    if (overBudget(context)) break;
     try {
-      await judgeRow(context, row, targetKeys);
+      const judgement = decideRow(
+        context,
+        row,
+        await readRuns(context, row, targetKeys),
+      );
+      if (judgement !== null) judgements.push(judgement);
     } catch (err) {
       await recordFailureOf(
         context,
@@ -402,25 +461,41 @@ async function judgePending(
       );
     }
   }
+  for (const kind of ["passed", "failed", "settle"] as const) {
+    for (const judgement of judgements) {
+      if (judgement.kind !== kind) continue;
+      try {
+        await applyJudgement(context, judgement);
+      } catch (err) {
+        await recordFailureOf(
+          context,
+          `judge_commit:${judgement.row.owner}/${judgement.row.repo}`,
+          err,
+        );
+      }
+    }
+  }
 }
 
 /**
- * コミットの実行を取り直す。読めなかったら`null`を返す。
- * 発見で読めなかったリポジトリと、対象から外れたリポジトリは、読まずに`null`を返す。
+ * コミットの実行を取り直す。
+ * 発見で読めなかったリポジトリ、rate limit、一時的な失敗、時間切れは、何も決めずに`skip`にする。
+ * `head_sha`を指定した読み取りが、実行の多すぎる(`WorkflowRunsIncompleteError`)か403・404で読めないときと、
+ * 対象から外れたリポジトリは、永続的な条件なので`unreadable`にする。
  */
 async function readRuns(
   context: Context,
   row: MainCiRun,
   targetKeys: ReadonlySet<string>,
-): Promise<WorkflowRun[] | null> {
+): Promise<ReadOutcome> {
   const { deps, state } = context;
   const key = repoKey(row.owner, row.repo);
-  if (!targetKeys.has(key) || !state.readable.has(key) || state.rateLimited) {
-    return null;
-  }
+  if (!targetKeys.has(key)) return { kind: "unreadable" };
+  if (!state.readable.has(key) || state.rateLimited) return { kind: "skip" };
   try {
     const branch = await defaultBranchOf(context, row.owner, row.repo);
-    return await deps.listRuns(row.owner, row.repo, branch, row.head_sha);
+    const runs = await deps.listRuns(row.owner, row.repo, branch, row.head_sha);
+    return { kind: "runs", runs };
   } catch (err) {
     if (err instanceof GitHubRateLimitError) {
       state.rateLimited = true;
@@ -428,64 +503,78 @@ async function readRuns(
         repo: `${row.owner}/${row.repo}`,
         error: errorMessage(err),
       });
-    } else if (err instanceof WorkflowRunsIncompleteError || isDenied(err)) {
+      return { kind: "skip" };
+    }
+    if (err instanceof WorkflowRunsIncompleteError || isDenied(err)) {
       deps.log.warn("main ci runs of a commit are not usable", {
         repo: `${row.owner}/${row.repo}`,
         error: errorMessage(err),
       });
-    } else {
-      await recordFailureOf(
-        context,
-        `judge_commit:${row.owner}/${row.repo}`,
-        err,
-      );
+      return { kind: "unreadable" };
     }
-    return null;
+    await recordFailureOf(
+      context,
+      `judge_commit:${row.owner}/${row.repo}`,
+      err,
+    );
+    return { kind: "skip" };
   }
 }
 
-async function judgeRow(
+/** 読み取りの結果から、行の行き先を決める。決めないとき(次の回に回すとき)は`null`を返す。 */
+function decideRow(
   context: Context,
   row: MainCiRun,
-  targetKeys: ReadonlySet<string>,
-): Promise<void> {
-  const { deps, now, counters } = context;
-  const runs = await readRuns(context, row, targetKeys);
-  let verdict = decideState({ runs, firstSeenAt: row.first_seen_at, now });
-  if (
-    runs === null &&
-    now.getTime() - row.first_seen_at.getTime() >= UNREADABLE_EXPIRES_AFTER_MS
-  ) {
-    verdict = "expired";
+  outcome: ReadOutcome,
+): Judgement | null {
+  const { now } = context;
+  if (outcome.kind === "skip") return null;
+  if (outcome.kind === "unreadable") {
+    return now.getTime() - row.first_seen_at.getTime() >=
+      UNREADABLE_EXPIRES_AFTER_MS
+      ? { kind: "settle", row, state: "expired" }
+      : null;
   }
-  if (verdict === "pending") return;
-  if (verdict === "failed" && runs !== null) {
-    await settleFailed(context, row, runs);
-    return;
-  }
+  const { runs } = outcome;
+  const verdict = decideState({ runs, firstSeenAt: row.first_seen_at, now });
+  if (verdict === "passed") return { kind: "passed", row };
+  if (verdict === "failed") return { kind: "failed", row, runs };
   // 期限が来ても、完了した失敗が1件でもあれば、捨てずに失敗として確定する。
-  if (verdict === "expired" && runs !== null && failingRuns(runs).length > 0) {
-    await settleFailed(context, row, runs);
-    return;
-  }
-  if (verdict === "passed") {
-    await settlePassed(context, row);
-    return;
+  if (verdict === "expired" && failingRuns(runs).length > 0) {
+    return { kind: "failed", row, runs };
   }
   if (verdict === "expired" || verdict === "no_ci") {
-    const moved = await deps.transition(row.id, {
-      state: verdict,
-      summary: "",
-      prevFailed: false,
+    return { kind: "settle", row, state: verdict };
+  }
+  return null;
+}
+
+async function applyJudgement(
+  context: Context,
+  judgement: Judgement,
+): Promise<void> {
+  const { deps, counters } = context;
+  if (judgement.kind === "passed") {
+    await settlePassed(context, judgement.row);
+    return;
+  }
+  if (judgement.kind === "failed") {
+    await settleFailed(context, judgement.row, judgement.runs);
+    return;
+  }
+  const { row, state } = judgement;
+  const moved = await deps.transition(row.id, {
+    state,
+    summary: "",
+    prevFailed: false,
+  });
+  if (moved) {
+    counters[state] += 1;
+    deps.log.info("main ci commit settled without a verdict", {
+      repo: `${row.owner}/${row.repo}`,
+      sha: row.head_sha,
+      state,
     });
-    if (moved) {
-      counters[verdict] += 1;
-      deps.log.info("main ci commit settled without a verdict", {
-        repo: `${row.owner}/${row.repo}`,
-        sha: row.head_sha,
-        state: verdict,
-      });
-    }
   }
 }
 
@@ -510,7 +599,12 @@ async function settleFailed(
   const summary = buildFailureSummary(runs, prevFailed);
   const runUrl = pickRunUrl(row, runs);
   // より新しいコミットが既に通っているなら、この失敗は直った後に分かったことなので知らせない。
-  const superseded = await deps.hasNewerPassed(row.owner, row.repo, own);
+  const superseded = await deps.hasNewerPassed(
+    row.owner,
+    row.repo,
+    own,
+    row.id,
+  );
   if (!superseded) {
     // 通知を先に登録する。状態の更新が先に成功して通知が失敗すると、通知が永久に出ないため。
     const noticeId = await deps.addNotice({
@@ -523,8 +617,7 @@ async function settleFailed(
         prevFailed,
       ),
     });
-    // 失敗が続いているときは、コミットごとに鳴らさないよう、Discordには送らない。
-    if (noticeId !== null && !prevFailed) {
+    if (noticeId !== null) {
       await deps.notify({
         kind: "main_ci_failed",
         instance_name: deps.instanceName,
@@ -556,9 +649,8 @@ async function settlePassed(context: Context, row: MainCiRun): Promise<void> {
   const { deps, counters } = context;
   // より新しいコミットを記録済みなら、その結果を待つ。古いコミットが遅れて通っても、新しい失敗は解決しない。
   // 解決は冪等なので、状態の更新より先に行う。更新に失敗した回は、次の回に解決をやり直せる。
-  const latest = await deps.latestRunCreatedAt(row.owner, row.repo);
   const own = row.run_created_at ?? row.first_seen_at;
-  if (latest === null || latest.getTime() <= own.getTime()) {
+  if (!(await deps.hasNewerRow(row.owner, row.repo, own, row.id))) {
     await deps.resolveNotices(
       MAIN_CI_FAILED_KIND,
       noticePrefix(row.owner, row.repo),
