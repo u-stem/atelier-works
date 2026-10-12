@@ -243,7 +243,8 @@ export function entryIdentity(
  */
 export const SHA512_INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
 
-const DEPENDENCY_FIELDS: readonly string[] = [
+/** 依存を宣言するpackage.jsonのキー。 */
+export const DEPENDENCY_FIELDS: readonly string[] = [
   "dependencies",
   "devDependencies",
   "optionalDependencies",
@@ -726,6 +727,9 @@ export const INSTALL_SCRIPT_NAMES: readonly string[] = [
   "postinstall",
   "prepare",
 ];
+
+/** gypfileを持つ版は、installが無ければnpmが実行する暗黙のinstall。 */
+export const IMPLICIT_GYP_INSTALL = "node-gyp rebuild";
 
 /** 更新先パッケージが、新しくinstall時のスクリプトを持つようになったときの理由を返す。無ければ`null`。 */
 function installScriptProblem(input: GateInput): string | null {

@@ -4,6 +4,7 @@
 // 応答の値は外部由来なので、型ガードで読み、欠けた必須の項目は推測で補わず例外にする。
 
 import {
+  IMPLICIT_GYP_INSTALL,
   INSTALL_SCRIPT_NAMES,
   parsePublishedAt,
   SHA512_INTEGRITY,
@@ -209,9 +210,6 @@ export type RegistryFacts = {
    */
   missing: string[];
 };
-
-// gypfileを持つ版は、installが無ければnpmが`node-gyp rebuild`を実行する。
-const IMPLICIT_GYP_INSTALL = "node-gyp rebuild";
 
 function versionEntry(
   versions: Record<string, unknown>,
