@@ -205,6 +205,13 @@ export type RegistryFacts = {
   integrity: string | null;
   registryMetadata: string;
   /**
+   * 更新前の版と更新後の版の`repository`(文字列、または`{ url }`のurl)から、制御文字を除いた値。
+   * 正規化も解析もしない。無い、文字列でない、空、上限を超えて切り詰めが要るときは`null`にし、
+   * 同じ項目の名前(例: "after repository")を`missing`に入れる。
+   */
+  repositoryBefore: string | null;
+  repositoryAfter: string | null;
+  /**
    * `registryMetadata`で"unknown"と書いた項目の名前(例: "after publisher")。
    * 取れた項目は含めない。空でなければ、要約は一部が欠けている。
    */
@@ -505,6 +512,8 @@ export function parsePackument(
     },
     integrity: integrityOf(toEntry),
     registryMetadata: metadata.text,
+    repositoryBefore: repositoryUrl(fromEntry),
+    repositoryAfter: repositoryUrl(toEntry),
     missing: metadata.missing,
   };
 }
