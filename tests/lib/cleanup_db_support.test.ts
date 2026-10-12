@@ -37,6 +37,7 @@ describe("summarizeCleanup", () => {
       notices_deleted: 2,
       info_notices_resolved: 0,
       main_ci_runs_deleted: 0,
+      worker_samples_deleted: 0,
       doc_dirs_deleted: 0,
     });
     expect(summary).toBe(
@@ -53,6 +54,7 @@ describe("summarizeCleanup with resolved info notices", () => {
     deployments_deleted: 5,
     notices_deleted: 2,
     main_ci_runs_deleted: 0,
+    worker_samples_deleted: 0,
     doc_dirs_deleted: 0,
   };
 
@@ -64,6 +66,26 @@ describe("summarizeCleanup with resolved info notices", () => {
 
   test("leaves the sentence as is when there are none", () => {
     expect(summarizeCleanup({ ...base, info_notices_resolved: 0 })).toBe(
+      "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
+    );
+  });
+});
+
+describe("summarizeCleanup with deleted worker samples", () => {
+  test("leaves the sentence as is because the sweep is internal", () => {
+    expect(
+      summarizeCleanup({
+        work_items_deleted: 3,
+        approval_requests_deleted: 5,
+        job_failures_deleted: 12,
+        deployments_deleted: 5,
+        notices_deleted: 2,
+        info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
+        worker_samples_deleted: 1440,
+        doc_dirs_deleted: 0,
+      }),
+    ).toBe(
       "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
     );
   });

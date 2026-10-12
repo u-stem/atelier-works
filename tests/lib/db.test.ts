@@ -10,12 +10,12 @@ import {
   countPrFixFailures,
   decideApprovalRequestIfPending,
   decideIssueProposal,
-  deferMainCiRun,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
+  deleteWorkerSamplesBefore,
   expireApprovalRequestIfPending,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
@@ -28,7 +28,10 @@ import {
   getWorkItem,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
+  hasNewerMainCiRun,
+  hasNewerUnsettledOrFailedMainCiRun,
   hasNonTerminalPrWorkItem,
+  hasPassedMainCiRunAfter,
   hasPriorReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
@@ -3555,6 +3558,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 2,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3574,6 +3578,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 0,
         info_notices_resolved: 4,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3592,6 +3597,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 0,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3610,6 +3616,7 @@ describe("insertCleanupRun", () => {
         notices_deleted: 2,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -4311,6 +4318,32 @@ describe("restartStoppedWorkItem", () => {
   });
 });
 
+describe("insertCleanupRun worker_samples_deleted", () => {
+  const counts = {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 0,
+    info_notices_resolved: 0,
+    main_ci_runs_deleted: 0,
+    worker_samples_deleted: 8,
+    doc_dirs_deleted: 0,
+  };
+
+  test("inserts into the worker_samples_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.text).toContain("worker_samples_deleted");
+  });
+
+  test("records the deleted count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.values).toContain(8);
+  });
+});
+
 describe("insertCleanupRun main_ci_runs_deleted", () => {
   const counts = {
     work_items_deleted: 0,
@@ -4320,6 +4353,7 @@ describe("insertCleanupRun main_ci_runs_deleted", () => {
     notices_deleted: 0,
     info_notices_resolved: 0,
     main_ci_runs_deleted: 6,
+    worker_samples_deleted: 0,
     doc_dirs_deleted: 0,
   };
 
@@ -4352,7 +4386,6 @@ const MAIN_CI_ROW: SqlRow = {
   prev_failed: false,
   first_seen_at: "2026-10-12T03:00:00.000Z",
   run_created_at: null,
-  next_check_at: "2026-10-12T03:00:00.000Z",
   created_at: "2026-10-12T03:00:00.000Z",
   updated_at: "2026-10-12T03:00:00.000Z",
 };
@@ -4524,12 +4557,10 @@ describe("listMainCiRunsBySha", () => {
 });
 
 describe("listPendingMainCiRuns", () => {
-  test("selects only pending rows whose next check time has come", async () => {
+  test("selects only pending rows", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listPendingMainCiRuns(50, sql);
-    expect(calls[0]?.text).toContain(
-      "WHERE state = 'pending' AND next_check_at <= now()",
-    );
+    expect(calls[0]?.text).toContain("WHERE state = 'pending'");
   });
 
   test("orders by the first seen time", async () => {
@@ -4630,33 +4661,6 @@ describe("transitionMainCiRun", () => {
   });
 });
 
-describe("deferMainCiRun", () => {
-  const later = new Date("2026-10-12T04:00:00.000Z");
-
-  test("only updates a pending row", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await deferMainCiRun(5, { nextCheckAt: later }, sql);
-    expect(calls[0]?.text).toContain("AND state = 'pending'");
-  });
-
-  test("moves the next check time", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await deferMainCiRun(5, { nextCheckAt: later }, sql);
-    expect(calls[0]?.values).toContain(later.toISOString());
-  });
-
-  test("does not touch run_created_at", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await deferMainCiRun(5, { nextCheckAt: later }, sql);
-    expect(calls[0]?.text).not.toContain("run_created_at");
-  });
-
-  test("returns false when the row had already left pending", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    expect(await deferMainCiRun(5, { nextCheckAt: later }, sql)).toBe(false);
-  });
-});
-
 describe("getPreviousMainCiRun", () => {
   const at = new Date("2026-10-12T03:00:00.000Z");
 
@@ -4696,6 +4700,126 @@ describe("getPreviousMainCiRun", () => {
   });
 });
 
+describe("hasPassedMainCiRunAfter", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns true when a newer passed row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql)).toBe(
+      true,
+    );
+  });
+
+  test("returns false when no newer passed row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql)).toBe(
+      false,
+    );
+  });
+
+  test("looks only at passed rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain("state = 'passed'");
+  });
+
+  test("compares the (time, id) pair strictly", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain(
+      "(COALESCE(run_created_at, first_seen_at), id) >",
+    );
+  });
+
+  test("passes the id as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain("::bigint");
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "..", at, 5, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("hasNewerMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns true when a newer row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await hasNewerMainCiRun("acme", "widgets", at, 5, sql)).toBe(true);
+  });
+
+  test("returns false when no newer row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasNewerMainCiRun("acme", "widgets", at, 5, sql)).toBe(false);
+  });
+
+  test("does not filter by state", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).not.toContain("state");
+  });
+
+  test("compares the (time, id) pair strictly", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain(
+      "(COALESCE(run_created_at, first_seen_at), id) >",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "..", at, 5, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("hasNewerUnsettledOrFailedMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns true when a newer pending or failed row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when no newer pending or failed row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql),
+    ).toBe(false);
+  });
+
+  test("looks only at pending and failed rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain("state IN ('pending', 'failed')");
+  });
+
+  test("compares the (time, id) pair strictly", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain(
+      "(COALESCE(run_created_at, first_seen_at), id) >",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerUnsettledOrFailedMainCiRun("acme", "..", at, 5, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("deleteMainCiRunsBefore", () => {
   const cutoff = new Date("2026-09-12T00:00:00.000Z");
 
@@ -4722,6 +4846,33 @@ describe("deleteMainCiRunsBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
     expect(await deleteMainCiRunsBefore(cutoff, sql)).toBe(2);
+  });
+});
+
+describe("deleteWorkerSamplesBefore", () => {
+  const cutoff = new Date("2026-09-12T00:00:00.000Z");
+
+  test("deletes from factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.worker_samples");
+  });
+
+  test("ages a row by its sampled_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("sampled_at <=");
+  });
+
+  test("binds the cutoff as a timestamp", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.values).toEqual([cutoff.toISOString()]);
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }, { id: 3 }]]);
+    expect(await deleteWorkerSamplesBefore(cutoff, sql)).toBe(3);
   });
 });
 

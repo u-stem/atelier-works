@@ -3644,8 +3644,9 @@ function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
 
 /**
  * `listWorkflowRuns`が、そのコミットの実行を判定に使えないときに投げる例外。
- * 上限のページまで埋まって実行を読み切れないときと、照会したコミットと違う`head_sha`の実行が
- * 返ったときがある。呼び出し側は、コミットごとに`instanceof`で見分けて、そのコミットを今回は判定しない。
+ * コミットを指定した読み取りで、上限のページまで埋まって実行を読み切れないとき、
+ * 照会したコミットと違う`head_sha`の実行が返ったとき、ブランチやeventの合わない実行が返ったときがある。
+ * 呼び出し側は、コミットごとに`instanceof`で見分けて、そのコミットを今回は判定しない。
  */
 export class WorkflowRunsIncompleteError extends Error {
   constructor(message: string) {
@@ -3663,12 +3664,15 @@ function toWorkflowRuns(
   if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
     throw new Error(`${context}: unexpected response shape`);
   }
-  return parsed.workflow_runs.map((raw: unknown): WorkflowRun => {
+  return parsed.workflow_runs.flatMap((raw: unknown): WorkflowRun[] => {
     if (!isWorkflowRunPayload(raw)) {
       throw new Error(`${context}: unexpected response shape`);
     }
     assertCommitSha(raw.head_sha);
     if (raw.head_branch !== branch || raw.event !== "push") {
+      // ブランチの一覧では、ブランチと同じ名前のタグのpushの実行が混ざりうる。判定の対象ではないので捨てる。
+      // コミットを指定した読み取りでは、一部を捨てた実行で判定しないよう、例外にする。
+      if (expectedSha === undefined) return [];
       throw new WorkflowRunsIncompleteError(
         `${context}: the response holds a run of another branch or event`,
       );
@@ -3678,15 +3682,17 @@ function toWorkflowRuns(
         `${context}: the response holds a run of another commit`,
       );
     }
-    return {
-      id: raw.id,
-      name: raw.name ?? "",
-      headSha: raw.head_sha,
-      status: raw.status,
-      conclusion: raw.conclusion,
-      createdAt: new Date(raw.created_at),
-      htmlUrl: raw.html_url,
-    };
+    return [
+      {
+        id: raw.id,
+        name: raw.name ?? "",
+        headSha: raw.head_sha,
+        status: raw.status,
+        conclusion: raw.conclusion,
+        createdAt: new Date(raw.created_at),
+        htmlUrl: raw.html_url,
+      },
+    ];
   });
 }
 
@@ -3701,6 +3707,7 @@ function toWorkflowRuns(
  *   ブランチと同じ名前のタグのpushで動いた実行は、ブランチ名がそのブランチで返りうる。
  *   各実行の`head_branch`が`branch`と、`event`が`push`と合わなければ、同じ例外を投げる。
  *   ブランチも条件に付けるのは、同じコミットを別のブランチにpushした実行を混ぜないため。
+ *   `headSha`なしの一覧では、これらに合わない実行は捨てて、残りを返す。
  * `headSha`と、応答の各実行の`head_sha`は、完全なコミットshaでなければ例外を投げる。
  * 応答の形が違えば例外を投げる。
  * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。

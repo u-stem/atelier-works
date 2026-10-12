@@ -14,13 +14,16 @@ import {
   claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
-  deferMainCiRun,
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
+  deleteWorkerSamplesBefore,
   getNoticeById,
   getPreviousMainCiRun,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
+  hasNewerMainCiRun,
+  hasNewerUnsettledOrFailedMainCiRun,
+  hasPassedMainCiRunAfter,
   insertCleanupRun,
   insertWorkerSample,
   insertWorkItem,
@@ -29,6 +32,7 @@ import {
   listPendingMainCiRuns,
   listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
+  type NewWorkerSample,
   recordDeployment,
   recordFailure,
   recordMainCiRun,
@@ -43,7 +47,10 @@ import {
   updateIntakeIfRegenerating,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
-import { getCleanupSummary } from "../f/factory/lib/summary_support.ts";
+import {
+  getCleanupSummary,
+  getWorkerLoadSummary,
+} from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
 import {
   runConsoleQuery,
@@ -1092,6 +1099,7 @@ await insertCleanupRun(
     notices_deleted: 2,
     info_notices_resolved: 3,
     main_ci_runs_deleted: 4,
+    worker_samples_deleted: 5,
     doc_dirs_deleted: 0,
   },
   sql,
@@ -1108,6 +1116,7 @@ check(
   "cleanup_runs: the resolved info notices count is recorded and summed",
   cleanupSummary?.info_notices_resolved === 3 &&
     cleanupSummary.main_ci_runs_deleted === 4 &&
+    cleanupSummary.worker_samples_deleted === 5 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
 );
@@ -1616,17 +1625,6 @@ check(
 );
 const ciPending = ciRows.find((row) => row.head_sha === CI_SHA_A);
 if (ciPending === undefined) throw new Error("main_ci_runs row is missing");
-check(
-  "main_ci_runs: a deferred row is not due",
-  (await deferMainCiRun(
-    ciPending.id,
-    { nextCheckAt: new Date(Date.now() + 60 * 60 * 1000) },
-    sql,
-  )) === true &&
-    (await listPendingMainCiRuns(100, sql)).filter(
-      (row) => row.owner === CI_REPO.owner,
-    ).length === 0,
-);
 const ciSettled = {
   state: "failed" as const,
   summary: "失敗したworkflow: CI (failure)",
@@ -1857,6 +1855,320 @@ check(
   )?.toISOString() === "2026-10-12T00:00:00.000Z" &&
     (await hasMainCiRuns(LATE_REPO.owner, LATE_REPO.repo, sql)) === true,
 );
+
+// より新しいコミットの判定。並びの鍵は(実行の時刻、id)で、時刻が同じなら大きいidが後になる。
+const NEWER_REPO = { owner: "qdb", repo: "newer" };
+const newerShas = ["1", "2", "3", "4"].map((c) => c.repeat(40));
+const newerTimes = [
+  "2026-10-10T00:00:00Z",
+  "2026-10-11T00:00:00Z",
+  "2026-10-12T00:00:00Z",
+  "2026-10-12T00:00:00Z",
+];
+for (const [index, sha] of newerShas.entries()) {
+  await recordMainCiRun(
+    {
+      ...NEWER_REPO,
+      head_sha: sha,
+      state: "pending",
+      run_created_at: new Date(newerTimes[index] ?? ""),
+    },
+    sql,
+  );
+}
+const newerRows = await listMainCiRunsBySha(
+  NEWER_REPO.owner,
+  NEWER_REPO.repo,
+  newerShas,
+  sql,
+);
+const newerRow = (sha: string) => {
+  const found = newerRows.find((row) => row.head_sha === sha);
+  if (found === undefined) throw new Error("newer row is missing");
+  return found;
+};
+const [newerP, newerF, newerT1, newerT2] = newerShas.map(newerRow);
+if (
+  newerP === undefined ||
+  newerF === undefined ||
+  newerT1 === undefined ||
+  newerT2 === undefined
+) {
+  throw new Error("newer rows are missing");
+}
+const passedTransition = {
+  state: "passed" as const,
+  summary: "",
+  prevFailed: false,
+};
+await transitionMainCiRun(newerP.id, passedTransition, sql);
+await transitionMainCiRun(
+  newerF.id,
+  { state: "failed", summary: "x", prevFailed: false },
+  sql,
+);
+await transitionMainCiRun(newerT1.id, passedTransition, sql);
+await transitionMainCiRun(newerT2.id, passedTransition, sql);
+const at = (iso: string) => new Date(iso);
+check(
+  "main_ci_runs: a newer passed row is found",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-09T00:00:00Z"),
+    0,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: no newer passed row is found after the newest one",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-13T00:00:00Z"),
+    0,
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    owner: "qdb",
+    repo: "onlyfail",
+    head_sha: newerShas[0] ?? "",
+    state: "pending",
+    run_created_at: at("2026-10-10T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET state = 'failed' WHERE repo = 'onlyfail'",
+);
+check(
+  "main_ci_runs: a newer row of any state is found",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-11T00:00:00Z"),
+    newerF.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: the newest row has no newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT2.id,
+    sql,
+  )) === false,
+);
+check(
+  "main_ci_runs: at the same time, a larger id is a newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT1.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: a failed row is not a newer passed row",
+  (await hasPassedMainCiRunAfter(
+    "qdb",
+    "onlyfail",
+    at("2026-10-09T00:00:00Z"),
+    0,
+    sql,
+  )) === false &&
+    (await hasNewerUnsettledOrFailedMainCiRun(
+      "qdb",
+      "onlyfail",
+      at("2026-10-09T00:00:00Z"),
+      0,
+      sql,
+    )) === true,
+);
+check(
+  "main_ci_runs: at the same time, the larger id is the newer passed row",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT1.id,
+    sql,
+  )) === true &&
+    (await hasPassedMainCiRunAfter(
+      NEWER_REPO.owner,
+      NEWER_REPO.repo,
+      at("2026-10-12T00:00:00Z"),
+      newerT2.id,
+      sql,
+    )) === false,
+);
+
+// 通ったコミットが失敗の通知を解決してよいかの判断。新しい行が判定待ちか失敗なら、解決を待つ。
+const SAME_REPO = { owner: "qdb", repo: "sametime" };
+const sameShas = ["5", "6"].map((c) => c.repeat(40));
+for (const sha of sameShas) {
+  await recordMainCiRun(
+    {
+      ...SAME_REPO,
+      head_sha: sha,
+      state: "pending",
+      run_created_at: at("2026-10-12T00:00:00Z"),
+    },
+    sql,
+  );
+}
+const sameRows = await listMainCiRunsBySha(
+  SAME_REPO.owner,
+  SAME_REPO.repo,
+  sameShas,
+  sql,
+);
+const sameB = sameRows.find((row) => row.head_sha === sameShas[0]);
+const sameC = sameRows.find((row) => row.head_sha === sameShas[1]);
+if (sameB === undefined || sameC === undefined) {
+  throw new Error("sametime rows are missing");
+}
+await transitionMainCiRun(sameB.id, passedTransition, sql);
+await transitionMainCiRun(
+  sameC.id,
+  { state: "failed", summary: "x", prevFailed: false },
+  sql,
+);
+check(
+  "main_ci_runs: at the same time, a smaller id does not resolve the failure of a larger id",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    SAME_REPO.owner,
+    SAME_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    sameB.id,
+    sql,
+  )) === true &&
+    (await hasNewerUnsettledOrFailedMainCiRun(
+      SAME_REPO.owner,
+      SAME_REPO.repo,
+      at("2026-10-12T00:00:00Z"),
+      sameC.id,
+      sql,
+    )) === false,
+);
+const OTHERS_REPO = { owner: "qdb", repo: "settledothers" };
+const otherShas = ["7", "8", "9", "a", "b"].map((c) => c.repeat(40));
+const otherStates = ["passed", "expired", "no_ci", "baseline", "passed"];
+for (const [index, sha] of otherShas.entries()) {
+  await recordMainCiRun(
+    {
+      ...OTHERS_REPO,
+      head_sha: sha,
+      state: "baseline",
+      run_created_at: new Date(Date.UTC(2026, 9, 10 + index)),
+    },
+    sql,
+  );
+  execPsql(
+    target,
+    `UPDATE factory.main_ci_runs SET state = '${otherStates[index] ?? "baseline"}' WHERE repo = 'settledothers' AND head_sha = '${sha}'`,
+  );
+}
+const othersBase = (
+  await listMainCiRunsBySha(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    [otherShas[0] ?? ""],
+    sql,
+  )
+)[0];
+if (othersBase === undefined) throw new Error("settledothers row is missing");
+check(
+  "main_ci_runs: newer passed, expired, no_ci and baseline rows do not block the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    othersBase.id,
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    ...OTHERS_REPO,
+    head_sha: "c".repeat(40),
+    state: "pending",
+    run_created_at: at("2026-10-20T00:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main_ci_runs: a newer pending row blocks the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    othersBase.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: a newer failed row blocks the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    newerP.id,
+    sql,
+  )) === true,
+);
+await recordMainCiRun(
+  {
+    owner: "qdb",
+    repo: "othernewer",
+    head_sha: newerShas[0] ?? "",
+    state: "pending",
+    run_created_at: at("2026-10-20T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET state = 'passed' WHERE repo = 'othernewer'",
+);
+check(
+  "main_ci_runs: a passed row of another repository does not count",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-13T00:00:00Z"),
+    0,
+    sql,
+  )) === false,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.main_ci_runs (owner, repo, head_sha, state, first_seen_at, run_created_at)
+   VALUES ('qdb', 'nullrun', '${newerShas[1] ?? ""}', 'passed', '2026-10-13T00:00:00Z', NULL)`,
+);
+check(
+  "main_ci_runs: a row without a run time is ordered by its first seen time",
+  (await hasPassedMainCiRunAfter(
+    "qdb",
+    "nullrun",
+    at("2026-10-12T00:00:00Z"),
+    0,
+    sql,
+  )) === true &&
+    (await hasPassedMainCiRunAfter(
+      "qdb",
+      "nullrun",
+      at("2026-10-14T00:00:00Z"),
+      0,
+      sql,
+    )) === false,
+);
 execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
 
 // ---------------------------------------------------------------------------
@@ -2082,6 +2394,367 @@ for (const [name, statement] of [
   }
   check(`worker_samples: the table rejects ${name}`, rejected);
 }
+
+// worker_samples: 掃除は期限ちょうどの行も含めて削除し、期限より新しい行を残す。
+const workerCutoff = new Date("2026-10-12T03:10:00.000Z");
+const boundaryWorkerSampleId = await insertWorkerSample(
+  { ...nullWorkerSample, sampled_at: workerCutoff },
+  sql,
+);
+const deletedWorkerSamples = await deleteWorkerSamplesBefore(workerCutoff, sql);
+const keptWorkerSampleIds = (await listRecentWorkerSamples(10, sql)).map(
+  (row) => row.id,
+);
+check(
+  "worker_samples: cleanup deletes the rows at or before the cutoff",
+  deletedWorkerSamples === 2 &&
+    !keptWorkerSampleIds.includes(fullWorkerSampleId) &&
+    !keptWorkerSampleIds.includes(boundaryWorkerSampleId),
+  { deletedWorkerSamples, keptWorkerSampleIds },
+);
+check(
+  "worker_samples: cleanup keeps the row newer than the cutoff",
+  keptWorkerSampleIds.length === 1 &&
+    keptWorkerSampleIds[0] === nullWorkerSampleId,
+  keptWorkerSampleIds,
+);
+
+// この日次集計のブロックは掃除テストの後に置く。掃除テストが`factory.worker_samples`の残り行数を数えるため。
+// worker_samples: 日次のまとめの集計は、範囲の行だけを数え、値の読めた行の間の差でOOMの増分を求める。
+// 範囲は2026-10-10(JST)。範囲の外の行(10分前の行と終端ちょうどの行)は数えず、前の行は差と空白の起点にだけ使う。
+// 空白は、隣り合う行の間隔に加えて、日の両端(始端から最初の行、最後の行から終端)も数える。
+const MIB = 1024 * 1024;
+const loadRange = {
+  start: new Date("2026-10-09T15:00:00.000Z"),
+  end: new Date("2026-10-10T15:00:00.000Z"),
+  label: "2026-10-10",
+};
+function loadSample(
+  sampledAt: string,
+  overrides: Partial<NewWorkerSample> = {},
+): NewWorkerSample {
+  return {
+    ...nullWorkerSample,
+    sampled_at: new Date(sampledAt),
+    ...overrides,
+  };
+}
+for (const sample of [
+  loadSample("2026-10-09T14:55:00.000Z", { mem_oom: 1, mem_oom_kill: 0 }),
+  loadSample("2026-10-09T15:00:00.000Z", {
+    running_jobs: 3,
+    lag_seconds: 45,
+    max_wait_seconds: 100,
+    mem_anon_bytes: 100 * MIB,
+    mem_working_set_bytes: 200 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+    mem_oom: 3,
+    mem_oom_kill: 1,
+  }),
+  // 累積が戻った行。OOMは1(現在値を数える)、killは0。
+  loadSample("2026-10-09T15:02:00.000Z", {
+    running_jobs: 0,
+    lag_seconds: 2,
+    max_wait_seconds: 0,
+    mem_anon_bytes: 200 * MIB,
+    mem_working_set_bytes: 300 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+    mem_oom: 1,
+    mem_oom_kill: 0,
+  }),
+  // 値が全部NULLの行。次の行の差は、この行ではなくその前の非NULLの行から取る。
+  loadSample("2026-10-09T15:04:00.000Z"),
+  loadSample("2026-10-09T15:06:00.000Z", {
+    running_jobs: 1,
+    lag_seconds: 30,
+    max_wait_seconds: 5,
+    mem_anon_bytes: 50 * MIB,
+    mem_oom: 10,
+    mem_oom_kill: 9,
+  }),
+  loadSample("2026-10-10T15:00:00.000Z", {
+    running_jobs: 3,
+    lag_seconds: 999,
+    max_wait_seconds: 999,
+    mem_oom: 99,
+    mem_oom_kill: 99,
+  }),
+]) {
+  await insertWorkerSample(sample, sql);
+}
+const loadSummary = await getWorkerLoadSummary(loadRange, sql);
+check(
+  "worker_samples: the daily summary counts only the rows inside the range",
+  loadSummary?.sample_count === 4,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the largest lag",
+  loadSummary?.lag_max_seconds === 45,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary counts the laggy rows",
+  loadSummary?.lag_over_count === 2,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary totals the lag of the laggy rows",
+  loadSummary?.lag_over_total_seconds === 75,
+  loadSummary,
+);
+// 空白は、始端の前の行から最初の行まで(300秒)と、最後の行(15:06)から終端まで(86040秒)の2回である。
+check(
+  "worker_samples: the daily summary counts the gap that ends at the first row and the gap to the end",
+  loadSummary?.gap_count === 2,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the longest gap in seconds",
+  loadSummary?.gap_longest_seconds === 86040,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the start of the longest gap",
+  loadSummary?.gap_longest_from?.toISOString() === "2026-10-09T15:06:00.000Z",
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the end of the longest gap",
+  loadSummary?.gap_longest_to?.toISOString() === "2026-10-10T15:00:00.000Z",
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the most running jobs",
+  loadSummary?.running_jobs_max === 3,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the slots",
+  loadSummary?.slots_max === 3,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the anon peak",
+  loadSummary?.mem_anon_max_bytes === 200 * MIB,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the working set peak",
+  loadSummary?.mem_working_set_max_bytes === 300 * MIB,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the largest share of the limit",
+  Math.abs((loadSummary?.mem_anon_max_ratio ?? 0) - 0.2) < 1e-9,
+  loadSummary,
+);
+// OOMは、2(1から3)、1(3から戻って1)、9(1から10。全NULLの行をまたぐ)の合計で12である。
+check(
+  "worker_samples: the daily summary sums the OOM increases across a reset and a NULL row",
+  loadSummary?.mem_oom_increase === 12,
+  loadSummary,
+);
+// killは、1(0から1)、0(1から戻って0)、9(0から9)の合計で10である。
+check(
+  "worker_samples: the daily summary sums the OOM kill increases across a reset and a NULL row",
+  loadSummary?.mem_oom_kill_increase === 10,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the longest wait",
+  loadSummary?.max_wait_max_seconds === 100,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary is null for a day without rows",
+  (await getWorkerLoadSummary(
+    {
+      start: new Date("2026-10-07T15:00:00.000Z"),
+      end: new Date("2026-10-08T15:00:00.000Z"),
+      label: "2026-10-08",
+    },
+    sql,
+  )) === null,
+);
+
+// 全部の値がNULLの日と、行が1行だけで10分前にも行が無い日は、OOMの増分が求められないのでNULLで返る。
+// 「OOMなし」(0)と区別するため。2026-10-05(JST)が全NULL、2026-10-04(JST)が1行だけである。
+for (const sample of [
+  loadSample("2026-10-04T15:00:00.000Z"),
+  loadSample("2026-10-04T15:02:00.000Z"),
+  loadSample("2026-10-03T15:00:00.000Z", { mem_oom: 5, mem_oom_kill: 5 }),
+]) {
+  await insertWorkerSample(sample, sql);
+}
+const allNullSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-04T15:00:00.000Z"),
+    end: new Date("2026-10-05T15:00:00.000Z"),
+    label: "2026-10-05",
+  },
+  sql,
+);
+const singleRowSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-03T15:00:00.000Z"),
+    end: new Date("2026-10-04T15:00:00.000Z"),
+    label: "2026-10-04",
+  },
+  sql,
+);
+check(
+  "worker_samples: the OOM increase is null for a day whose rows are all NULL",
+  allNullSummary?.mem_oom_increase === null,
+  allNullSummary,
+);
+check(
+  "worker_samples: the OOM kill increase is null for a day whose rows are all NULL",
+  allNullSummary?.mem_oom_kill_increase === null,
+  allNullSummary,
+);
+check(
+  "worker_samples: the OOM increase is null for a day with one row and no row before it",
+  singleRowSummary?.mem_oom_increase === null,
+  singleRowSummary,
+);
+check(
+  "worker_samples: the OOM kill increase is null for a day with one row and no row before it",
+  singleRowSummary?.mem_oom_kill_increase === null,
+  singleRowSummary,
+);
+// 行が始端ちょうどの1行だけの日は、始端側の空白は0秒で、最後の行から終端までの1日分だけを数える。
+check(
+  "worker_samples: a day with one row at the start counts the gap to the end",
+  singleRowSummary?.gap_count === 1,
+  singleRowSummary,
+);
+check(
+  "worker_samples: a day with one row at the start takes the gap to the end as the longest",
+  singleRowSummary?.gap_longest_seconds === 86400,
+  singleRowSummary,
+);
+
+// 通常の2分おきの日は、両端の空白(30秒と90秒)を数えない。
+// 始端の11分前にも行を置き、範囲の10分前までの行だけを前の行に使うことを確かめる。
+// 11分前の行を前の行に使うと、最初の行との間の11分30秒が空白に数えられ、最初の行のOOMの増分も求まってしまう。
+// 2026-10-21(JST)が通常の日である。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at, mem_oom)
+   VALUES (3, '2026-10-20T14:49:00Z', 50);
+   INSERT INTO factory.worker_samples (slots, sampled_at, mem_oom)
+   SELECT 3, timestamptz '2026-10-20T15:00:30Z' + n * interval '2 minutes',
+     CASE WHEN n = 0 THEN 2 END
+   FROM generate_series(0, 719) AS n`,
+);
+const normalDaySummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-20T15:00:00.000Z"),
+    end: new Date("2026-10-21T15:00:00.000Z"),
+    label: "2026-10-21",
+  },
+  sql,
+);
+check(
+  "worker_samples: a normal day counts no gap at either end",
+  normalDaySummary?.gap_count === 0,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a normal day has no longest gap",
+  normalDaySummary?.gap_longest_seconds === null,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a normal day has no time of the longest gap",
+  normalDaySummary?.gap_longest_from === null &&
+    normalDaySummary?.gap_longest_to === null,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a row 11 minutes before the start is not the previous value of the first row",
+  normalDaySummary?.mem_oom_increase === null,
+  normalDaySummary,
+);
+
+// 夜間の停止の前半。2026-10-22(JST)は、0:00:30から2分おきに記録され、22:58:30の行を最後に止まる。
+// 最後の行から終端までの空白(1時間1分30秒)が、日の終わり側の空白として1回数えられる。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at)
+   SELECT 3, timestamptz '2026-10-21T15:00:30Z' + n * interval '2 minutes'
+   FROM generate_series(0, 689) AS n`,
+);
+const stopAtEndSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-21T15:00:00.000Z"),
+    end: new Date("2026-10-22T15:00:00.000Z"),
+    label: "2026-10-22",
+  },
+  sql,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day counts one gap",
+  stopAtEndSummary?.gap_count === 1,
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day takes its length",
+  stopAtEndSummary?.gap_longest_seconds === 3690,
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day starts at the last row",
+  stopAtEndSummary?.gap_longest_from?.toISOString() ===
+    "2026-10-22T13:58:30.000Z",
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day ends at the end of the range",
+  stopAtEndSummary?.gap_longest_to?.toISOString() ===
+    "2026-10-22T15:00:00.000Z",
+  stopAtEndSummary,
+);
+
+// 夜間の停止の後半。2026-10-23(JST)は、前日の最後の行が1時間以上前なので、始端からの空白になる。
+// 8:00:30の行から2分おきに記録され、始端から最初の行までの空白(8時間30秒)が、日の始まり側の空白として1回数えられる。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at)
+   SELECT 3, timestamptz '2026-10-22T23:00:30Z' + n * interval '2 minutes'
+   FROM generate_series(0, 479) AS n`,
+);
+const stopAtStartSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-22T15:00:00.000Z"),
+    end: new Date("2026-10-23T15:00:00.000Z"),
+    label: "2026-10-23",
+  },
+  sql,
+);
+check(
+  "worker_samples: a stop from the start of the day counts one gap",
+  stopAtStartSummary?.gap_count === 1,
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day takes its length",
+  stopAtStartSummary?.gap_longest_seconds === 28830,
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day starts at the start of the range",
+  stopAtStartSummary?.gap_longest_from?.toISOString() ===
+    "2026-10-22T15:00:00.000Z",
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day ends at the first row",
+  stopAtStartSummary?.gap_longest_to?.toISOString() ===
+    "2026-10-22T23:00:30.000Z",
+  stopAtStartSummary,
+);
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
