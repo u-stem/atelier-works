@@ -1342,6 +1342,72 @@ describe("parsePackument repository", () => {
   });
 });
 
+describe("parsePackument repository under the metadata limit", () => {
+  // 全項目を200文字ちょうどにし、メンテナを大量に並べて、4000文字の上限に当てる。
+  const NAME = "n".repeat(200);
+  const FROM = `1.${"0".repeat(198)}`;
+  const TO = `2.${"0".repeat(198)}`;
+  const REPOSITORY_BEFORE = `github:${"b".repeat(193)}`;
+  const REPOSITORY_AFTER = `github:${"a".repeat(193)}`;
+
+  function crowded() {
+    const maintainers = Array.from({ length: 500 }, (_, i) => ({
+      name: `maintainer-${String(i).padStart(4, "0")}`,
+    }));
+    const entry = (repository: string) =>
+      version({
+        repository,
+        _npmUser: { name: "p".repeat(200) },
+        maintainers,
+      });
+    return parsePackument(
+      {
+        name: NAME,
+        time: { [TO]: "2018-05-01T12:00:00.000Z" },
+        versions: {
+          [FROM]: entry(REPOSITORY_BEFORE),
+          [TO]: entry(REPOSITORY_AFTER),
+        },
+      },
+      NAME,
+      FROM,
+      TO,
+    );
+  }
+
+  test("keeps the before repository line when every item has 200 characters", () => {
+    expect(crowded().registryMetadata).toContain(
+      `before repository: ${REPOSITORY_BEFORE}`,
+    );
+  });
+
+  test("keeps the after repository line when every item has 200 characters", () => {
+    expect(crowded().registryMetadata).toContain(
+      `after repository: ${REPOSITORY_AFTER}`,
+    );
+  });
+
+  test("returns both repositories when every item has 200 characters", () => {
+    const { repositoryBefore, repositoryAfter } = crowded();
+
+    expect([repositoryBefore, repositoryAfter]).toEqual([
+      REPOSITORY_BEFORE,
+      REPOSITORY_AFTER,
+    ]);
+  });
+
+  test("names only the maintainers as missing when the limit is hit", () => {
+    expect(crowded().missing).toEqual([
+      "after maintainers",
+      "before maintainers",
+    ]);
+  });
+
+  test("stays within 4000 characters", () => {
+    expect(crowded().registryMetadata.length).toBeLessThanOrEqual(4000);
+  });
+});
+
 // ---- getRegistryFacts ----
 
 describe("getRegistryFacts", () => {

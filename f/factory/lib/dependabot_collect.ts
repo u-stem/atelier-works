@@ -267,7 +267,7 @@ export type CollectResult =
       /** registryから読んだ、更新の前後の公開者などの要約。影響調査に渡す。 */
       registryMetadata: string;
       /**
-       * 更新前の版と更新後の版のリポジトリのURL。registryの値を整えずに渡す。
+       * 更新前の版と更新後の版のリポジトリのURL。制御文字を除いた値を、正規化せずに渡す。
        * 読めなかったときは`null`で、`unverifiedInputs`が"registry metadata"を含む。
        */
       repositoryBefore: string | null;
