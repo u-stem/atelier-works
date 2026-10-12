@@ -83,25 +83,6 @@ describe("filterByRepoAllowlist", () => {
     ).toEqual([]);
   });
 
-  test("drops an item of an owner removed from owners by the id check", () => {
-    const owners = [
-      { name: "octo-owner", kind: "user" as const, id: 4242 },
-      { name: "octo-org", kind: "org" as const },
-    ];
-    const verifiedOwners = owners.filter((o) => o.name !== "octo-owner");
-    const items = [
-      { owner: "octo-owner", repo: "app" },
-      { owner: "octo-org", repo: "app" },
-    ];
-    expect(
-      filterByRepoAllowlist(items, {
-        owners: verifiedOwners,
-        repo_allowlist: [],
-        factory_repo: FACTORY_REPO,
-      }),
-    ).toEqual([{ owner: "octo-org", repo: "app" }]);
-  });
-
   test("keeps the factory_repo item when its owner has no verified entry", () => {
     const items = [{ owner: "octo-owner", repo: "factory" }];
     expect(

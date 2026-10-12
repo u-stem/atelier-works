@@ -168,17 +168,28 @@ function parseFactoryOwner(value: unknown): FactoryOwner | null {
   return { name, kind, id };
 }
 
-/** `owners`をパースする。要素に1つでも形の違うものがあれば`null`を返す。 */
+/**
+ * `owners`をパースする。
+ * 要素に1つでも形の違うものがあるか、名前が重複していれば`null`を返す。
+ * 名前の比較は大文字と小文字を区別しない(GitHubのログイン名と同じ)。
+ * `id`付きと`id`無しの同名が並ぶと、`id`の照合をすり抜けるため、重複を許さない。
+ */
 function parseFactoryOwners(value: unknown): FactoryOwner[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
   const owners: FactoryOwner[] = [];
+  const names = new Set<string>();
   for (const item of value) {
     const owner = parseFactoryOwner(item);
     if (owner === null) {
       return null;
     }
+    const key = owner.name.toLowerCase();
+    if (names.has(key)) {
+      return null;
+    }
+    names.add(key);
     owners.push(owner);
   }
   return owners;
@@ -407,7 +418,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
   const owners = parseFactoryOwners(raw.owners);
   if (owners === null) {
     throw new ConfigValidationError(
-      '"owners" is required and must be an array of { name: string, kind: "user" | "org", id?: positive integer }',
+      '"owners" is required and must be an array of { name: string, kind: "user" | "org", id?: positive integer } with unique names (case-insensitive)',
     );
   }
 

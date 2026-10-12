@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import {
+  filterByRepoAllowlist,
   filterVerifiedOwners,
   gateOwnerId,
   OWNER_ID_MISMATCH_KIND,
@@ -229,5 +230,26 @@ describe("filterVerifiedOwners", () => {
     const { deps, recorded } = setup(() => Promise.resolve(9999));
     await filterVerifiedOwners([WITH_ID, OTHER], deps);
     expect(recorded.lookups).toEqual(["octo-owner"]);
+  });
+});
+
+describe("filterVerifiedOwners followed by filterByRepoAllowlist", () => {
+  const OTHER: FactoryOwner = { name: "octo-org", kind: "org" };
+  const FACTORY_REPO = "https://github.com/factory-owner/factory";
+
+  test("drops the candidates of an owner whose id check failed", async () => {
+    const { deps } = setup(() => Promise.resolve(9999));
+    const verified = await filterVerifiedOwners([WITH_ID, OTHER], deps);
+    const items = [
+      { owner: "octo-owner", repo: "app" },
+      { owner: "octo-org", repo: "app" },
+    ];
+    expect(
+      filterByRepoAllowlist(items, {
+        owners: verified.owners,
+        repo_allowlist: [],
+        factory_repo: FACTORY_REPO,
+      }),
+    ).toEqual([{ owner: "octo-org", repo: "app" }]);
   });
 });

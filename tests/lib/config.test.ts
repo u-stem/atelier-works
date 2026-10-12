@@ -229,6 +229,17 @@ describe("parseFactoryConfig", () => {
     ]);
   });
 
+  test("throws when two owners share a name that differs only in case", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [
+        { name: "octo-owner", kind: "user", id: 4242 },
+        { name: "Octo-Owner", kind: "user" },
+      ],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("treats an undefined owner id as no id", () => {
     const raw = {
       ...LEGACY_RAW_CONFIG,
