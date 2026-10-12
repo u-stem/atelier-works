@@ -17,7 +17,12 @@ import {
   type AuditPeriod,
   formatAuditPeriodLabel,
 } from "./audit_support.ts";
-import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
+import {
+  defaultSqlClient,
+  fetchDeploymentRows,
+  type SqlClient,
+  type SqlRow,
+} from "./db.ts";
 import { maskSecrets } from "./log.ts";
 import { isNumber, isString } from "./types.ts";
 
@@ -985,13 +990,23 @@ export async function collectAuditEvidence(
       AND (wi.kind IS NULL OR wi.kind <> 'audit')
   `.fetch();
 
-  const deploymentHistoryRows = await sql`
-    SELECT occurred_at, sha_from, sha_to, result, error
-    FROM factory.deployments
-    WHERE occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
-    ORDER BY occurred_at DESC, id DESC
-    LIMIT 30
-  `.fetch();
+  // `error`列を足すmigrationが当たる前は、その列を選ばない問い合わせで読み直す。
+  const deploymentHistoryRows = await fetchDeploymentRows(
+    sql`
+      SELECT occurred_at, sha_from, sha_to, result, error
+      FROM factory.deployments
+      WHERE occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
+      ORDER BY occurred_at DESC, id DESC
+      LIMIT 30
+    `,
+    () => sql`
+      SELECT occurred_at, sha_from, sha_to, result
+      FROM factory.deployments
+      WHERE occurred_at >= ${start}::timestamptz AND occurred_at < ${end}::timestamptz
+      ORDER BY occurred_at DESC, id DESC
+      LIMIT 30
+    `,
+  );
 
   // 時刻Tの直前の稼働版は、Tより前で最後の成功の`sha_to`。
   // 無ければ(古い記録が掃除された場合など)、T以後で最初の成功の`sha_from`を使う。

@@ -1433,12 +1433,13 @@ export async function recordFailure(
 // ---------------------------------------------------------------------------
 
 const DEPLOYMENT_ERROR_COLUMN_PATTERN =
-  /column "error" of relation "deployments" does not exist/;
+  /column "error"(?: of relation "deployments")? does not exist/;
 
 /**
  * 例外が、`deployments.error`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
- * 失敗の理由を書く文が指名する列のうち、新しい列は`error`だけなので、
- * エラーコード42703か、列と表の名前を含む文のどちらかで判定する(`isMissingJobLinkColumnError`と同じ)。
+ * `deployments`を読み書きする文が指名する列のうち、新しい列は`error`だけなので、
+ * エラーコード42703か、列の名前を含む文のどちらかで判定する(`isMissingJobLinkColumnError`と同じ)。
+ * 書く文は`of relation "deployments"`を伴い、読む文は伴わない。
  */
 export function isMissingDeploymentErrorColumnError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -1446,6 +1447,30 @@ export function isMissingDeploymentErrorColumnError(err: unknown): boolean {
   if (DEPLOYMENT_ERROR_COLUMN_PATTERN.test(err.message)) return true;
   const body: unknown = Reflect.get(err, "body");
   return typeof body === "string" && DEPLOYMENT_ERROR_COLUMN_PATTERN.test(body);
+}
+
+/**
+ * 失敗の理由の列(`error`)を選ぶ問い合わせを実行し、行を返す。
+ * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
+ * 列を足すmigrationが当たるまでは、列が無いエラーになる。
+ * そのときだけ`withoutError`の問い合わせで読み直し、`error`は`null`にする。
+ * 反映の履歴の全体が読めなくなるのを防ぐためで、ほかのエラーは投げる。
+ */
+export async function fetchDeploymentRows(
+  withError: SqlStatementHandle,
+  withoutError: () => SqlStatementHandle,
+  log: Logger = logger("db"),
+): Promise<SqlRow[]> {
+  try {
+    return await withError.fetch();
+  } catch (err) {
+    if (!isMissingDeploymentErrorColumnError(err)) throw err;
+    log.warn(
+      "deployments.error is missing; read the deployments without the reason (the datatable migration has not run yet)",
+    );
+    const rows = await withoutError().fetch();
+    return rows.map((row) => ({ ...row, error: null }));
+  }
 }
 
 /**

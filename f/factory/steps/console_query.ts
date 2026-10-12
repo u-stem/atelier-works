@@ -27,6 +27,7 @@ import {
 import {
   CLEANUP_RESOLVER,
   defaultSqlClient,
+  fetchDeploymentRows,
   type SqlClient,
   type SqlRow,
 } from "../lib/db.ts";
@@ -2262,15 +2263,27 @@ export async function runConsoleQuery(
     }
     case "deployments": {
       // 変更したパスの一覧は大きくなりうるので選ばない。画面が使うのは版とPRと失敗の理由だけである。
-      const rows = await sql`
-        SELECT
-          id AS deployment_id, sha_from, sha_to, result, needs_host_action,
-          occurred_at, pull_requests, error
-        FROM factory.deployments
-        WHERE occurred_at >= ${since}::timestamptz
-        ORDER BY occurred_at DESC, id DESC
-        LIMIT ${limit}::integer
-      `.fetch();
+      // `error`列を足すmigrationが当たる前は、その列を選ばない問い合わせで読み直す。
+      const rows = await fetchDeploymentRows(
+        sql`
+          SELECT
+            id AS deployment_id, sha_from, sha_to, result, needs_host_action,
+            occurred_at, pull_requests, error
+          FROM factory.deployments
+          WHERE occurred_at >= ${since}::timestamptz
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT ${limit}::integer
+        `,
+        () => sql`
+          SELECT
+            id AS deployment_id, sha_from, sha_to, result, needs_host_action,
+            occurred_at, pull_requests
+          FROM factory.deployments
+          WHERE occurred_at >= ${since}::timestamptz
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT ${limit}::integer
+        `,
+      );
       return rows.map(toDeploymentHistoryRow);
     }
   }

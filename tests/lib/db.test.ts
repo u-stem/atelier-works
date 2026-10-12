@@ -18,6 +18,7 @@ import {
   deleteTerminalWorkItemsBefore,
   deleteWorkerSamplesBefore,
   expireApprovalRequestIfPending,
+  fetchDeploymentRows,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
   getApprovalRequest,
@@ -1715,6 +1716,64 @@ describe("isMissingDeploymentErrorColumnError", () => {
     expect(isMissingDeploymentErrorColumnError(new Error("db down"))).toBe(
       false,
     );
+  });
+});
+
+describe("isMissingDeploymentErrorColumnError for a read", () => {
+  test("recognizes the message of a select that names the missing column", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        new Error('column "error" does not exist'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("fetchDeploymentRows", () => {
+  const missingColumn = Object.assign(new Error("undefined column"), {
+    code: "42703",
+  });
+
+  function handle(result: () => Promise<SqlRow[]>) {
+    return { fetch: result, execute: () => Promise.resolve() };
+  }
+
+  test("returns the rows of the query that names the error column", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.resolve([{ id: 1, error: "boom" }])),
+      () => handle(() => Promise.reject(new Error("must not run"))),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 1, error: "boom" }]);
+  });
+
+  test("reads again without the error column when it is missing", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.reject(missingColumn)),
+      () => handle(() => Promise.resolve([{ id: 2 }])),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 2, error: null }]);
+  });
+
+  test("rethrows a failure other than a missing error column", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(new Error("db down"))),
+        () => handle(() => Promise.resolve([])),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
+  });
+
+  test("rethrows a failure of the second read", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(missingColumn)),
+        () => handle(() => Promise.reject(new Error("db down"))),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
   });
 });
 

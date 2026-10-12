@@ -121,6 +121,56 @@ describe("deployments contract between console_query and the console guard", () 
   });
 });
 
+/** `error`列を足すmigrationが当たる前のDB。列を選ぶ問い合わせは、列が無いエラーで落ちる。 */
+function sqlBeforeErrorColumn(rows: SqlRow[]): SqlClient {
+  return (strings) => {
+    const text = strings.join(" ? ");
+    return {
+      fetch: () =>
+        text.includes("error")
+          ? Promise.reject(
+              Object.assign(new Error('column "error" does not exist'), {
+                code: "42703",
+              }),
+            )
+          : Promise.resolve(rows),
+      execute: () => Promise.resolve(),
+    };
+  };
+}
+
+describe("deployments before the error column exists", () => {
+  test("reads the history without the reason", async () => {
+    const result = await runConsoleQuery(
+      "deployments",
+      100,
+      90,
+      sqlBeforeErrorColumn([{ ...DEPLOYMENT_ROW, result: "failed" }]),
+    );
+    expect(isDeploymentHistory(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("treats the reason as missing", async () => {
+    const result = await runConsoleQuery(
+      "deployments",
+      100,
+      90,
+      sqlBeforeErrorColumn([{ ...DEPLOYMENT_ROW, result: "failed" }]),
+    );
+    expect(JSON.stringify(result)).toContain('"error":null');
+  });
+
+  test("does not hide another failure", async () => {
+    const failing: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(
+      runConsoleQuery("deployments", 100, 90, failing),
+    ).rejects.toThrow("db down");
+  });
+});
+
 describe("label tables cover the backend values", () => {
   test.each(PULL_REQUEST_ORIGINS.filter((origin) => origin !== "unknown"))(
     "labels pull request origin %s",

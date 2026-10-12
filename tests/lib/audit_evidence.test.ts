@@ -1072,6 +1072,47 @@ describe("deployment history and running versions", () => {
     );
   });
 
+  test("collects the history without the reason when the error column is missing", async () => {
+    const { sql } = createRoutedSqlClient({ deploymentHistory: historyRows });
+    const beforeMigration: SqlClient = (strings, ...values) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      if (!text.includes("result, error")) return sql(strings, ...values);
+      return {
+        fetch: () =>
+          Promise.reject(
+            Object.assign(new Error("undefined column"), { code: "42703" }),
+          ),
+        execute: () => Promise.resolve(),
+      };
+    };
+    const evidence = await collectAuditEvidence(
+      { period: PERIOD, instanceName: "atelier-works" },
+      beforeMigration,
+    );
+    expect(evidence.deployment_history.map((entry) => entry.result)).toEqual([
+      "failed",
+      "success",
+    ]);
+  });
+
+  test("does not hide another failure of the history query", async () => {
+    const { sql } = createRoutedSqlClient();
+    const failing: SqlClient = (strings, ...values) => {
+      const text = strings.join(" ? ").replace(/\s+/g, " ");
+      if (!text.includes("result, error")) return sql(strings, ...values);
+      return {
+        fetch: () => Promise.reject(new Error("db down")),
+        execute: () => Promise.resolve(),
+      };
+    };
+    await expect(
+      collectAuditEvidence(
+        { period: PERIOD, instanceName: "atelier-works" },
+        failing,
+      ),
+    ).rejects.toThrow("db down");
+  });
+
   test("renders the head of the reason after the date, the result and the versions", async () => {
     const { evidence } = await evidenceWithDeployments([
       { ...historyRows[0], error: "wmill sync push failed: boom" },
