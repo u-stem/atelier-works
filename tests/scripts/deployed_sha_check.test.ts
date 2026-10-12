@@ -37,7 +37,7 @@ function decide(
 }
 
 describe("DEPLOYED_SHA_GRACE_MS", () => {
-  test("is 30 minutes: two self_update runs plus one poll_issues run and the deploy time", () => {
+  test("is 30 minutes: the usual 17 minute deploy estimate plus a margin", () => {
     expect(DEPLOYED_SHA_GRACE_MS).toBe(30 * MIN);
   });
 });
