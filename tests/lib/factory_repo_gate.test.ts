@@ -280,6 +280,52 @@ describe("ensureVerifiedFactoryClone", () => {
     ).rejects.toBeInstanceOf(FactoryRepoIdMismatchError);
   });
 
+  test("throws when ensureClone returns without running the check", async () => {
+    const { deps } = setup(() => Promise.resolve(777));
+    const skipping = {
+      ...deps,
+      ensureClone: async () => ({
+        dir: "/workspaces/factory/atelier-works",
+        action: "pulled" as const,
+      }),
+    };
+    await expect(
+      ensureVerifiedFactoryClone(
+        WITH_ID,
+        { run: fakeRun, ghToken: "tok" },
+        skipping,
+      ),
+    ).rejects.toThrow(/without running the factory_repo_id check/);
+  });
+
+  test("does not report a mismatch when ensureClone skips the check", async () => {
+    const { deps } = setup(() => Promise.resolve(777));
+    const skipping = {
+      ...deps,
+      ensureClone: async () => ({
+        dir: "/workspaces/factory/atelier-works",
+        action: "pulled" as const,
+      }),
+    };
+    const failure = await ensureVerifiedFactoryClone(
+      WITH_ID,
+      { run: fakeRun, ghToken: "tok" },
+      skipping,
+    ).catch((err: unknown) => err);
+    expect(failure instanceof FactoryRepoIdMismatchError).toBe(false);
+  });
+
+  test("does not require the check when factory_repo_id is not set", async () => {
+    const { deps, cloneResult } = setup(() => Promise.resolve(1));
+    const skipping = { ...deps, ensureClone: async () => cloneResult };
+    const result = await ensureVerifiedFactoryClone(
+      WITHOUT_ID,
+      { run: fakeRun, ghToken: "tok" },
+      skipping,
+    );
+    expect(result).toBe(cloneResult);
+  });
+
   test("does not touch the clone when the lookup fails", async () => {
     const { deps, recorded } = setup(() =>
       Promise.reject(new Error("HTTP 502")),

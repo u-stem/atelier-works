@@ -170,6 +170,10 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
   照合はcloneのロックの中で行うので、この間にロックの待ちは入らない。
 - `factory_repo_id`が未設定の間は、名前の再取得から守られない。
   未設定のときは、照合せず、通知も出さない。
+- `isRepoAllowed`は`factory_repo`を名前で許すので、自己改善の起票と候補への採用は名前のままである。
+- prepareの各ステップは、`owners`の`id`を照合しない。
+- Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。
+- 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。
 
 ## シークレットの扱い
 

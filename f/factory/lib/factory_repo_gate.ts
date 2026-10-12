@@ -133,6 +133,7 @@ export type EnsureVerifiedFactoryCloneDeps = FactoryRepoVerifyDeps & {
 /**
  * `factory_repo_id`を照合してから、`config.factory_repo`のcloneを用意する。
  * 照合に落ちたら、cloneにもoriginにも触れずにエラーを投げる(`verifyFactoryRepoId`を参照)。
+ * `factory_repo_id`があるのに、`ensureClone`が照合を実行せずに返したときは、`FactoryRepoIdMismatchError`とは別のエラーを投げる。
  * 設定は`FactoryConfig`全体で受け取る。`factory_repo_id`を渡し忘れても、型で見つかるため。
  * URLとブランチは`config`から取るので、照合したURLと取得するURLが一致する。
  *
@@ -147,10 +148,21 @@ export async function ensureVerifiedFactoryClone(
   deps: EnsureVerifiedFactoryCloneDeps,
 ): Promise<EnsureFactoryCloneResult> {
   const ensureClone = deps.ensureClone ?? ensureFactoryClone;
-  return ensureClone({
+  let verified = false;
+  const result = await ensureClone({
     ...options,
     repoUrl: config.factory_repo,
     branch: config.factory_branch,
-    beforeUpdate: () => verifyFactoryRepoId(config, deps),
+    beforeUpdate: async () => {
+      await verifyFactoryRepoId(config, deps);
+      verified = true;
+    },
   });
+  // 差し替えた`ensureClone`が`beforeUpdate`を呼ばずに返すと、照合せずに取得したことになる。
+  if (config.factory_repo_id !== undefined && !verified) {
+    throw new Error(
+      "ensureVerifiedFactoryClone: the clone was prepared without running the factory_repo_id check",
+    );
+  }
+  return result;
 }

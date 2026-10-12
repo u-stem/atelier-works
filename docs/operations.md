@@ -209,6 +209,7 @@ originは取得の前にそのURLへ付け替わるので、古い名前のclone
 - `isRepoAllowed`は`factory_repo`を名前で常に許す。
   自己改善の起票と、`factory_repo`のPRの候補への採用は、名前のままである。
 - prepareの各ステップは、`owners`の`id`を照合しない。
+- 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。
 - Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。
 
 前回反映したshaが新しいHEADの祖先であることは、force pushで巻き戻す正規の運用が止まるので、反映の条件にしない。

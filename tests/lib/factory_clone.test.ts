@@ -3,6 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import { openFactoryClone } from "../../f/factory/lib/factory_clone.ts";
+import { FactoryRepoIdMismatchError } from "../../f/factory/lib/factory_repo_gate.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 import type {
   EnsureFactoryCloneOptions,
@@ -51,10 +52,21 @@ describe("openFactoryClone", () => {
     expect(result).toBe(CLONE);
   });
 
+  test("rejects with a mismatch error when the id differs", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 999 })]);
+    await expect(
+      openFactoryClone(
+        CONFIG,
+        { run: fake.run, ghToken: "tok" },
+        { ensureClone, addNotice: async () => undefined },
+      ),
+    ).rejects.toBeInstanceOf(FactoryRepoIdMismatchError);
+  });
+
   test("records the notice through the injected addNotice when the id differs", async () => {
     const fake = createFakeCommandRunner([ghApiOk({ id: 999 })]);
     const notices: NoticeRecord[] = [];
-    await openFactoryClone(
+    const attempt = openFactoryClone(
       CONFIG,
       { run: fake.run, ghToken: "tok" },
       {
@@ -63,7 +75,8 @@ describe("openFactoryClone", () => {
           notices.push(record);
         },
       },
-    ).catch(() => undefined);
+    );
+    await attempt.catch(() => undefined); // 拒否は上のテストが確かめる
     expect(notices.map((n) => n.kind)).toEqual(["factory_repo_id_mismatch"]);
   });
 });
