@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CHECK_NPROC_LIMIT } from "../../f/factory/lib/check_sandbox.ts";
+import { DEFAULT_WORKER_SLOTS } from "../../f/factory/lib/worker_load_support.ts";
 
 // Console用workerの構成を静的に確かめる。
 // 書き込めるマウントをworker_logsと専用の依存キャッシュに限ること、
@@ -577,5 +578,13 @@ describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
     expect(Number(miseEnv().FACTORY_CHECK_POOL_SIZE)).toBeGreaterThanOrEqual(
       Number(workers?.slice("NUM_WORKERS=".length)),
     );
+  });
+});
+
+describe("infra/docker-compose.yml windmill_worker slots recorded by sample_worker_load", () => {
+  test("DEFAULT_WORKER_SLOTS equals the NUM_WORKERS of the default worker", () => {
+    expect(envEntries(service("windmill_worker"), "NUM_WORKERS=")).toEqual([
+      `NUM_WORKERS=${String(DEFAULT_WORKER_SLOTS)}`,
+    ]);
   });
 });

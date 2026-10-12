@@ -57,7 +57,7 @@ const READ_APPLIED_BYTES = 64;
 const MAX_LISTED_PATHS = 10;
 
 const NEXT_ACTION =
-  "ホストのcheckoutでgit pullし、mise installとmise run upを実行する。実行が済むと、自己更新(10分ごと)がこの通知を自動で解決する";
+  "ホストのcheckoutでgit pullし、mise installとmise run upを実行する。実行が済むと、自己更新(2分ごと)がこの通知を自動で解決する";
 
 const SHA_IN_MESSAGE = /反映した版: ([0-9a-f]{40})/;
 const FULL_SHA = /^[0-9a-f]{40}$/;

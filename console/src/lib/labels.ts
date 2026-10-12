@@ -31,6 +31,7 @@ const WORK_ITEM_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["pr_review", "PRレビュー"],
   ["pr_fix", "PRの修正"],
   ["audit", "監査"],
+  ["dependabot", "dependabotの更新"],
 ]);
 
 const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
@@ -68,9 +69,12 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["console_fetch_stale", "Consoleの取り込みの停止"],
   ["console_worker_missing", "Console専用workerの不在"],
   ["console_worker_check_failed", "Console専用workerの確認の失敗"],
+  ["worker_sample_failed", "workerの負荷の記録の失敗"],
   ["schedule_failing", "定期実行の失敗"],
   ["schedule_failing_check_failed", "定期実行の確認の失敗"],
   ["drawio_viewer_bump_held", "draw.ioのビューアの更新の保留"],
+  ["main_ci_failed", "mainのCIの失敗"],
+  ["main_ci_check_denied", "mainのCIを読む権限の不足"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */

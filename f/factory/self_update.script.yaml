@@ -1,5 +1,5 @@
 summary: '[SYS-1] Software Factory自身を最新化'
-description: 10分ごとに実行し、Software
+description: 2分ごとに実行し、Software
   Factory自身の最新のコミットを取り込みます。前回反映済みのコミットから変更があれば、Windmillへの反映(script・flow・スケジュールなど)とデータベースの更新を自動的に行います。ホスト側の変更(worker
   イメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。
 lock: '!inline f/factory/self_update.script.lock'

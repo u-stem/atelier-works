@@ -21,6 +21,13 @@
 
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
+import {
+  assertCommitSha,
+  WORKFLOW_RUNS_BY_SHA_MAX_PAGES,
+  WORKFLOW_RUNS_BY_SHA_PER_PAGE,
+  WORKFLOW_RUNS_PER_PAGE,
+  type WorkflowRun,
+} from "./main_ci_support.ts";
 import type {
   FactoryOwnerKind,
   GitIdentity,
@@ -2125,8 +2132,12 @@ export type PullRequest = {
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
   readonly baseRef: string;
+  /** GitHubがまだ計算していないときは`null`。真偽に丸めない。 */
+  readonly mergeable: boolean | null;
   readonly mergeableState: string | null;
   readonly authorLogin: string;
+  /** 作者のアカウント種別(`User` / `Bot`など)。作者が無いか不明なら`null`。 */
+  readonly authorType: string | null;
 };
 
 type PrPayload = {
@@ -2145,8 +2156,9 @@ type PrPayload = {
     readonly ref: string;
     readonly repo: { readonly full_name: unknown } | null;
   };
+  readonly mergeable: unknown;
   readonly mergeable_state: unknown;
-  readonly user: { readonly login: string } | null;
+  readonly user: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -2215,11 +2227,19 @@ export async function getPr(
     headRepoFullName,
     baseRepoFullName,
     baseRef: parsed.base.ref,
+    mergeable: typeof parsed.mergeable === "boolean" ? parsed.mergeable : null,
     mergeableState:
       typeof parsed.mergeable_state === "string"
         ? parsed.mergeable_state
         : null,
-    authorLogin: parsed.user?.login ?? "",
+    authorLogin:
+      isRecord(parsed.user) && typeof parsed.user.login === "string"
+        ? parsed.user.login
+        : "",
+    authorType:
+      isRecord(parsed.user) && typeof parsed.user.type === "string"
+        ? parsed.user.type
+        : null,
   };
 }
 
@@ -2322,6 +2342,391 @@ export async function getPrFiles(
     });
   }
   return items;
+}
+
+// ---------------------------------------------------------------------------
+// マージとPRの事実の取得(dependabotのゲート判定の入力)
+// ---------------------------------------------------------------------------
+
+function unexpectedShape(context: string): Error {
+  return new Error(`${context}: unexpected response shape`);
+}
+
+export type MergePullRequestResult =
+  | { readonly merged: true; readonly sha: string }
+  | {
+      readonly merged: false;
+      readonly status: 405 | 409;
+      readonly message: string;
+    };
+
+/** 応答の本文から`message`を読む。JSONでないか文字列でなければ空文字にする。 */
+function readErrorMessage(bodyText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    if (isRecord(parsed) && typeof parsed.message === "string") {
+      return maskSecrets(parsed.message.slice(0, 500));
+    }
+  } catch {
+    // 本文がJSONでなければ、読める理由が無いものとして扱う。
+  }
+  return "";
+}
+
+/**
+ * `PUT .../pulls/{number}/merge`でsquashマージする。
+ * `sha`にレビューした時点のheadを渡し、その後にheadが動いたときはGitHubに拒ませる。
+ * shaは小文字の40桁だけを受け付ける。URLのパスと要求の本文に入る値を、短い形で曖昧にしないため。
+ * squashのコミットの題名は固定で、本文は空にする。PRのタイトルや本文を使わないため。
+ * 405(マージできない状態)と409(headの不一致)は、マージしなかった結果として
+ * `status`と応答の`message`つきで返す。理由は呼び出し側が見分ける。
+ * 403(権限不足)や404などは`GitHubHttpError`を投げる。呼び出し側が権限不足を見分けて先送りできるようにするため。
+ * マージ要求の送信後に投げられる例外はすべて(`GitHubHttpError`、200で形が不正な場合や
+ * 200で`merged: false`の場合の通常の`Error`)、要求がGitHubに届いてマージされた可能性が残る。
+ * `merged: false`を返す場合も同じである。呼び出し側は`getPr`で`merged`を読み直してから判断する。
+ */
+export async function mergePullRequest(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  expectedHeadSha: string,
+): Promise<MergePullRequestResult> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(expectedHeadSha);
+  const context = `PUT pr merge ${owner}/${repo}#${number}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/merge`,
+    {
+      method: "PUT",
+      body: {
+        merge_method: "squash",
+        sha: expectedHeadSha,
+        commit_title: `chore: dependabotの依存更新をマージ(#${number})`,
+        commit_message: "",
+      },
+    },
+  );
+  if (response.status === 405 || response.status === 409) {
+    return {
+      merged: false,
+      status: response.status,
+      message: readErrorMessage(response.bodyText),
+    };
+  }
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.sha !== "string" ||
+    typeof parsed.merged !== "boolean"
+  ) {
+    throw unexpectedShape(context);
+  }
+  if (!parsed.merged) throw new Error(`${context}: GitHub did not merge`);
+  return { merged: true, sha: parsed.sha };
+}
+
+type CheckRunRow = {
+  /** 削除されたAppが作ったチェックでは`null`。 */
+  readonly appId: number | null;
+  readonly name: string;
+  readonly conclusion: string | null;
+  readonly unfinished: boolean;
+  readonly startedMs: number;
+  readonly completedMs: number;
+};
+
+function parseTimestampMs(value: unknown): number | null {
+  if (value === null) return 0;
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function parseCheckRun(value: unknown, context: string): CheckRunRow {
+  if (!isRecord(value)) throw unexpectedShape(context);
+  const { name, status, conclusion, app } = value;
+  if (typeof name !== "string" || typeof status !== "string") {
+    throw unexpectedShape(context);
+  }
+  let appId: number | null = null;
+  if (app !== null) {
+    if (!isRecord(app) || typeof app.id !== "number") {
+      throw unexpectedShape(context);
+    }
+    appId = app.id;
+  }
+  if (conclusion !== null && typeof conclusion !== "string") {
+    throw unexpectedShape(context);
+  }
+  const unfinished = status !== "completed";
+  if (!unfinished && conclusion === null) throw unexpectedShape(context);
+  const startedMs = parseTimestampMs(value.started_at);
+  const completedMs = parseTimestampMs(value.completed_at);
+  if (startedMs === null || completedMs === null) {
+    throw unexpectedShape(context);
+  }
+  return {
+    appId,
+    name,
+    conclusion: unfinished ? null : conclusion,
+    unfinished,
+    startedMs,
+    completedMs,
+  };
+}
+
+/**
+ * 同じ名前のチェックのうち、`candidate`が`current`より新しいか。
+ * 未完了は最新として扱う。開始と完了の時刻が同じで決められないときは、
+ * successでない方を選ぶ(取りこぼしで通さないため)。
+ */
+function isNewerCheckRun(
+  candidate: CheckRunRow,
+  current: CheckRunRow,
+): boolean {
+  if (candidate.unfinished !== current.unfinished) return candidate.unfinished;
+  if (candidate.startedMs !== current.startedMs) {
+    return candidate.startedMs > current.startedMs;
+  }
+  if (candidate.completedMs !== current.completedMs) {
+    return candidate.completedMs > current.completedMs;
+  }
+  return current.conclusion === "success" && candidate.conclusion !== "success";
+}
+
+/**
+ * `GET .../commits/{sha}/check-runs`を最後のページまで読み、
+ * チェックを作ったApp(`app.id`)と名前の組ごとに、最新の1件の結論を返す。
+ * 再実行された古い結果で判定しないためである。
+ * 別のAppが同じ名前で作ったチェックは畳まず、すべて返す。一方の成功で他方の失敗を隠さないため。
+ * 削除されたAppが作ったチェックは`app`が`null`になる。`app`が無い応答は不正として例外にする。
+ * 戻り値の`appId`は`app.id`で、削除されたAppでは`null`にする。呼び出し側がチェックの主体を絞るために使う。
+ * `headSha`は小文字の40桁だけを受け付ける。
+ * 未完了のチェックの`conclusion`は`null`にする。
+ */
+export async function listPrChecks(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  headSha: string,
+): Promise<
+  { name: string; appId: number | null; conclusion: string | null }[]
+> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(headSha);
+  const rows = await paginateGhApi<CheckRunRow>(
+    client,
+    `repos/${owner}/${repo}/commits/${headSha}/check-runs?per_page=100`,
+    (parsed, context) => {
+      if (!isRecord(parsed) || !Array.isArray(parsed.check_runs)) {
+        throw unexpectedShape(context);
+      }
+      return parsed.check_runs.map((run: unknown) =>
+        parseCheckRun(run, context),
+      );
+    },
+  );
+  const latest = new Map<string, CheckRunRow>();
+  for (const row of rows) {
+    const key = `${String(row.appId)}\u0000${row.name}`;
+    const current = latest.get(key);
+    if (current === undefined || isNewerCheckRun(row, current)) {
+      latest.set(key, row);
+    }
+  }
+  return [...latest.values()].map((row) => ({
+    name: row.name,
+    appId: row.appId,
+    conclusion: row.conclusion,
+  }));
+}
+
+/** `pulls/{number}/files`が返せる件数の上限。 */
+const PR_FILES_API_CAP = 3000;
+
+/**
+ * `GET .../pulls/{number}/files`を最後のページまで読み、変更されたファイルのパスを返す。
+ * 名前の変更では、移動元のパスも含める。保護すべきパスからの移動を見逃さないため。
+ * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ * PR番号で引くので、headのshaに固定されない。ゲートに渡す入力は、headのshaを固定した比較から作る。
+ */
+export async function listPrFiles(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string[]> {
+  validateOwnerRepo(owner, repo);
+  const paths = await paginateGhApi<string[]>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/files?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown) => {
+        if (!isRecord(entry) || typeof entry.filename !== "string") {
+          throw unexpectedShape(context);
+        }
+        const previous = entry.previous_filename;
+        if (previous === undefined || previous === null) {
+          return [entry.filename];
+        }
+        if (typeof previous !== "string") throw unexpectedShape(context);
+        return [entry.filename, previous];
+      });
+    },
+  );
+  if (paths.length >= PR_FILES_API_CAP) {
+    throw new Error(
+      `GET pr files ${owner}/${repo}#${number}: the file list may be truncated at ${String(PR_FILES_API_CAP)} files`,
+    );
+  }
+  return [...new Set(paths.flat())];
+}
+
+/** `pulls/{number}/commits`が返せる件数の上限。 */
+const PR_COMMITS_API_CAP = 250;
+/** 件数の上限を1ページ100件で読み切るページ数に、終端の確認の1ページを足した値。 */
+const PR_COMMITS_MAX_PAGES = Math.ceil(PR_COMMITS_API_CAP / 100) + 1;
+
+export type PrCommit = {
+  readonly sha: string;
+  readonly authorLogin: string | null;
+  readonly authorType: string | null;
+  readonly committerLogin: string | null;
+  /** GitHubが署名を検証できたか。 */
+  readonly verified: boolean;
+  /** 親の数。2以上ならmergeのcommit。 */
+  readonly parentCount: number;
+};
+
+function parseCommitAccount(
+  value: unknown,
+  context: string,
+): { login: string; type: string | null } | null {
+  if (value === null || value === undefined) return null;
+  if (!isRecord(value) || typeof value.login !== "string") {
+    throw unexpectedShape(context);
+  }
+  return {
+    login: value.login,
+    type: typeof value.type === "string" ? value.type : null,
+  };
+}
+
+/**
+ * `GET .../pulls/{number}/commits`を最後のページまで読む。
+ * `authorLogin`と`committerLogin`はGitHubのアカウントで、紐づくアカウントが無いcommitでは`null`にする。
+ * `verified`は`commit.verification.verified`、`parentCount`は`parents`の長さで、
+ * どちらも応答に無いか形が違うときは例外にする。判定に使う値を推測で補わないため。
+ * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ * PR番号で引くので、headのshaに固定されない。ゲートに渡す入力は、headのshaを固定した比較から作る。
+ */
+export async function listPrCommits(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrCommit[]> {
+  validateOwnerRepo(owner, repo);
+  const commits = await paginateGhApi<PrCommit>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/commits?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown): PrCommit => {
+        if (!isRecord(entry) || typeof entry.sha !== "string") {
+          throw unexpectedShape(context);
+        }
+        const author = parseCommitAccount(entry.author, context);
+        const committer = parseCommitAccount(entry.committer, context);
+        const { commit, parents } = entry;
+        if (
+          !isRecord(commit) ||
+          !isRecord(commit.verification) ||
+          typeof commit.verification.verified !== "boolean" ||
+          !Array.isArray(parents)
+        ) {
+          throw unexpectedShape(context);
+        }
+        return {
+          sha: entry.sha,
+          authorLogin: author?.login ?? null,
+          authorType: author?.type ?? null,
+          committerLogin: committer?.login ?? null,
+          verified: commit.verification.verified,
+          parentCount: parents.length,
+        };
+      });
+    },
+    PR_COMMITS_MAX_PAGES,
+  );
+  if (commits.length >= PR_COMMITS_API_CAP) {
+    throw new Error(
+      `GET pr commits ${owner}/${repo}#${number}: the commit list may be truncated at ${String(PR_COMMITS_API_CAP)} commits`,
+    );
+  }
+  return commits;
+}
+
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function assertRepoFilePath(path: string): void {
+  const segments = path.split("/");
+  const valid =
+    path !== "" &&
+    !path.includes("\\") &&
+    segments.every(
+      (segment) => segment !== "" && segment !== "." && segment !== "..",
+    );
+  if (!valid) throw new Error("github: file path is not a repository path");
+}
+
+/**
+ * `GET .../contents/{path}?ref={ref}`で、その版のファイルの内容をUTF-8の文字列で返す。
+ * ファイルが無いときは`null`を返す。refが存在しないときも404になるので、
+ * 呼び出し側はrefが存在することを別に確かめる。
+ * 内容が返らない(1MBを超える)ときと、ファイルでないときは例外にする。
+ */
+export async function getFileAtRef(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): Promise<string | null> {
+  validateOwnerRepo(owner, repo);
+  assertRepoFilePath(path);
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const context = `GET file ${owner}/${repo}:${path}@${ref}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+  );
+  if (response.status === 404) return null;
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  // symlinkをたどって別のファイルの内容が返ることを防ぐため、要求したパスと一致するものだけを受け付ける。
+  if (!isRecord(parsed) || parsed.type !== "file" || parsed.path !== path) {
+    throw unexpectedShape(context);
+  }
+  if (parsed.encoding === "none") {
+    throw new Error(`${context}: content is not returned (file is too large)`);
+  }
+  if (parsed.encoding !== "base64" || typeof parsed.content !== "string") {
+    throw unexpectedShape(context);
+  }
+  const base64 = parsed.content.replace(/\r?\n/g, "");
+  if (!BASE64_PATTERN.test(base64)) throw unexpectedShape(context);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.from(base64, "base64"),
+    );
+  } catch {
+    throw new Error(`${context}: content is not valid UTF-8`);
+  }
 }
 
 export type PrReview = {
@@ -3228,6 +3633,149 @@ export async function listPullRequestNumbersByHead(
     }
     return item.number;
   });
+}
+
+type WorkflowRunPayload = {
+  id: number;
+  name: string | null;
+  head_sha: string;
+  head_branch: string | null;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  created_at: string;
+  html_url: string;
+};
+
+function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "number") return false;
+  if (value.name !== null && typeof value.name !== "string") return false;
+  if (typeof value.head_sha !== "string") return false;
+  if (value.head_branch !== null && typeof value.head_branch !== "string") {
+    return false;
+  }
+  if (typeof value.event !== "string") return false;
+  if (typeof value.status !== "string") return false;
+  if (value.conclusion !== null && typeof value.conclusion !== "string") {
+    return false;
+  }
+  if (typeof value.created_at !== "string") return false;
+  if (Number.isNaN(new Date(value.created_at).getTime())) return false;
+  return typeof value.html_url === "string";
+}
+
+/**
+ * `listWorkflowRuns`が、そのコミットの実行を判定に使えないときに投げる例外。
+ * コミットを指定した読み取りで、上限のページまで埋まって実行を読み切れないとき、
+ * 照会したコミットと違う`head_sha`の実行が返ったとき、ブランチやeventの合わない実行が返ったときがある。
+ * 呼び出し側は、コミットごとに`instanceof`で見分けて、そのコミットを今回は判定しない。
+ */
+export class WorkflowRunsIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkflowRunsIncompleteError";
+  }
+}
+
+function toWorkflowRuns(
+  parsed: unknown,
+  context: string,
+  branch: string,
+  expectedSha: string | undefined,
+): WorkflowRun[] {
+  if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.workflow_runs.flatMap((raw: unknown): WorkflowRun[] => {
+    if (!isWorkflowRunPayload(raw)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    if (raw.head_branch !== branch || raw.event !== "push") {
+      // ブランチの一覧では、ブランチと同じ名前のタグのpushの実行が混ざりうる。判定の対象ではないので捨てる。
+      // コミットを指定した読み取りでは、一部を捨てた実行で判定しないよう、例外にする。
+      if (expectedSha === undefined) return [];
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another branch or event`,
+      );
+    }
+    if (expectedSha !== undefined && raw.head_sha !== expectedSha) {
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another commit`,
+      );
+    }
+    return [
+      {
+        id: raw.id,
+        name: raw.name ?? "",
+        headSha: raw.head_sha,
+        status: raw.status,
+        conclusion: raw.conclusion,
+        createdAt: new Date(raw.created_at),
+        htmlUrl: raw.html_url,
+      },
+    ];
+  });
+}
+
+/**
+ * `branch`へのpushで始まったworkflowの実行を読む。使い方は2つある。
+ * - `headSha`なし: ブランチの最新の実行を、新しい順に1ページ(`WORKFLOW_RUNS_PER_PAGE`件)だけ読む。
+ *   新しいコミットを見つけるための一覧で、1つのコミットの実行が全部そろっているとは限らない。
+ * - `headSha`あり: そのコミットの実行を、1ページ`WORKFLOW_RUNS_BY_SHA_PER_PAGE`件で最大
+ *   `WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読む。判定に使うのはこちらである。
+ *   上限のページまで埋まったら、実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。
+ *   応答に別のコミットの実行が混ざったときも同じ例外を投げる。
+ *   ブランチと同じ名前のタグのpushで動いた実行は、ブランチ名がそのブランチで返りうる。
+ *   各実行の`head_branch`が`branch`と、`event`が`push`と合わなければ、同じ例外を投げる。
+ *   ブランチも条件に付けるのは、同じコミットを別のブランチにpushした実行を混ぜないため。
+ *   `headSha`なしの一覧では、これらに合わない実行は捨てて、残りを返す。
+ * `headSha`と、応答の各実行の`head_sha`は、完全なコミットshaでなければ例外を投げる。
+ * 応答の形が違えば例外を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRuns(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+  headSha?: string,
+): Promise<WorkflowRun[]> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const base = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}`;
+  if (headSha === undefined) {
+    const context = `GET workflow runs ${owner}/${repo}@${branch}`;
+    const endpoint = `${base}&event=push&per_page=${String(WORKFLOW_RUNS_PER_PAGE)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    return toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      branch,
+      undefined,
+    );
+  }
+  assertCommitSha(headSha);
+  const context = `GET workflow runs ${owner}/${repo}@${headSha}`;
+  const runs: WorkflowRun[] = [];
+  for (let page = 1; page <= WORKFLOW_RUNS_BY_SHA_MAX_PAGES; page += 1) {
+    const endpoint = `${base}&head_sha=${headSha}&event=push&per_page=${String(WORKFLOW_RUNS_BY_SHA_PER_PAGE)}&page=${String(page)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    const items = toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      branch,
+      headSha,
+    );
+    runs.push(...items);
+    if (items.length < WORKFLOW_RUNS_BY_SHA_PER_PAGE) return runs;
+  }
+  throw new WorkflowRunsIncompleteError(
+    `${context}: the runs may be incomplete (too many runs)`,
+  );
 }
 
 export type PullRequestUpdate = {
