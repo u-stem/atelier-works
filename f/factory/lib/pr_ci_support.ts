@@ -318,7 +318,8 @@ export function isPrCiReason(value: unknown): value is PrCiReason {
 }
 
 const PR_CI_NEXT_ACTIONS: Readonly<Record<PrCiReason, string>> = {
-  ci_failure: "実行のログを確かめ、PRに修正を入れる",
+  ci_failure:
+    "実行のログを確かめ、PRに修正を入れる。metadataジョブの失敗なら、「mise run metadata」を実行して差分をコミットする",
   ci_other_conclusion:
     "実行を確かめ、取り消しやフレークなら再実行し、そうでなければ直す",
 };
