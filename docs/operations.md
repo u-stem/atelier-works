@@ -1088,7 +1088,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(6回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
-| `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、`memory.current`の読み取り、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
+| `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
 | `drawio_viewer_bump_held` | draw.ioのビューアの固定を、自動では上げなかった。原因は3つある。ビューアの大きさが2割を超えて変わった。取得したファイルがGitHubの記録と一致しない。PRの無い既存のブランチの中身が作るはずの内容と違う。本文に版と理由が載る。上げる版に選んだ最新の版を保留している間は、古い版も上げない。メジャー版の更新は、このお知らせではなく、題名が[major]で始まるPRになる | 本文の「次の操作」に従う。大きさの変化が正当なら、Windmillで`f/factory/drawio_viewer_bump`を`approved_version`にその版を指定して実行する。既存のブランチが原因なら、ブランチを確かめ、不要なら削除する。原因が続けば、解決しても次の週に出直す([draw.ioのビューアの更新](internals/console.md#ビューアの更新)) |
@@ -1164,32 +1164,53 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 反映の後は、次の順で動いていることを確かめる。
 
 1. 反映の数分後に、行が2分おきに増えていることを見る。
-2. 最新の行で、`mem_pressure_total_us`以外の列が空でないことを見る。この環境のworkerには`memory.pressure`が無いので、`mem_pressure_total_us`は空になる。
+2. 最新の行で、`mem_pressure_total_us`以外の列が空でないことを見る。
+   確かめた環境のworkerには`memory.pressure`が無かった。
+   `memory.pressure`が無ければ`mem_pressure_total_us`は空になり、これは異常ではない。
+   あれば値が入る。
 3. `wmill job list --script-path f/factory/sample_worker_load`で直近のジョブを選ぶ。
    `wmill job result <id>`の`outcome`が`complete`であることを見る。
    `partial`や`failed`なら、`wmill job logs <id>`の警告から原因を探す。
 4. Claudeのジョブが走っているときの行で、`running_jobs`が増え、`running_by_script`にそのscriptが載ることを見る。
-5. 同じ時刻に、管理者の`wmill job list`で実行中のジョブを数え、`running_jobs`と合うことを見る。記録するジョブ自身と、数えない対象(tag `console`、nativeのworkerのtag、フローの親ジョブ)は、実行中の件数から除いて比べる。
+5. 同じ時刻に、管理者の`wmill job list`で実行中のジョブを数え、`running_jobs`と合うことを見る。
+   記録するジョブ自身と、数えない対象は、実行中の件数から除いて比べる。
+   数えない対象は、tag `console`、nativeのworkerのtag、フローの親ジョブである。
 
 #### 枠の占有
 
-- `running_jobs`は、実行中のジョブのうち、defaultのworkerが受けるtagのものの数である。記録するジョブ自身は数えない。
-- 記録のジョブは、枠が1つ空いたときにしか動かない。そのため、`slots`の枠がすべて埋まった状態は、行として残らない。
-- 占有は、`running_jobs`÷`slots`で読む。この値は、記録のジョブが動けるだけ枠が空いていた瞬間の標本である。
-- 枠が塞がったかどうかは、`lag_seconds`の大きさと、`scheduled_for`の欠けだけで判定する。`running_jobs`の大きさでは判定しない。
+- `running_jobs`は、実行中のジョブのうち、defaultのworkerが受けるtagのものの数である。
+  記録するジョブ自身は数えない。
+- 記録のジョブは、枠が1つ空いたときにしか動かない。
+  そのため、`slots`の枠がすべて埋まった状態は、行として残らない。
+- 占有は、`running_jobs`÷`slots`で読む。
+  この値は、記録のジョブが動けるだけ枠が空いていた瞬間の標本である。
+- 枠が塞がったかどうかは、`lag_seconds`の大きさと、`scheduled_for`の欠けだけで判定する。
+  `running_jobs`の大きさでは判定しない。
 - 内訳は`running_by_script`に、件数の多い10件のscriptのパスと、残りをまとめた`other`で載る。
-- 数えるtagは、Windmillの既定でdefaultのworkerグループが受けるものである。`infra/docker-compose.yml`の`windmill_worker`は`WORKER_TAGS`を設定しないので、既定が使われる。
-- tag `console`のジョブはConsole用のworkerが動かす。tag `postgresql`などnativeのworkerが受けるtagのジョブは、nativeのworkerが動かす。どちらも数えない。
-- `wmill.datatable()`のクエリは、tag `postgresql`のプレビューとして投げられ、nativeのworkerが動かす。tag `bun`のジョブは、defaultのworkerが動かす。どちらも実機で確かめている。
-- 動き出したフローの親ジョブは、枠を使い続けず、実際の処理は子のscriptが枠を使うので、実行中には数えない。まだ始まっていない親は、枠が空くのを待つので、待ちには数える。
-- どのworkerが受けるかを知らないtagのジョブは、数えない。ジョブログに、件数とtag名の先頭5件が警告として1回残る。
+- 数えるtagは、Windmillの既定でdefaultのworkerグループが受けるものである。
+  `infra/docker-compose.yml`の`windmill_worker`は`WORKER_TAGS`を設定しないので、既定が使われる。
+- tag `console`のジョブはConsole用のworkerが動かす。
+  tag `postgresql`などnativeのworkerが受けるtagのジョブは、nativeのworkerが動かす。
+  どちらも数えない。
+- `wmill.datatable()`のクエリは、tag `postgresql`のプレビューとして投げられ、nativeのworkerが動かす。
+  tag `bun`のジョブは、defaultのworkerが動かす。
+  どちらも実機で確かめている。
+- 動き出したフローの親ジョブは、枠を使い続けない。
+  実際の処理は子のscriptが枠を使うので、実行中には数えない。
+  まだ始まっていない親は、枠が空くのを待つので、待ちには数える。
+- どのworkerが受けるかを知らないtagのジョブは、数えない。
+  ジョブログに、件数とtag名の先頭5件が、記録のたびに1回、警告として残る。
 
 #### queueの待ち
 
-- `waiting_jobs`と`max_wait_seconds`は、予定時刻を過ぎても開始していないジョブを、古いものから100件まで読んで数える。予定時刻が未来のジョブは数えない。待つジョブが無ければ`max_wait_seconds`は0になる。
-- 記録するジョブ自身が始まった後の様子なので、`max_wait_seconds`は自分の遅れ(`lag_seconds`)で打ち切られる。待ちの深さの下限として読む。
+- `waiting_jobs`と`max_wait_seconds`は、予定時刻を過ぎても開始していないジョブを、古いものから100件まで読んで数える。
+  予定時刻が未来のジョブは数えない。
+  待つジョブが無ければ`max_wait_seconds`は0になる。
+- 記録するジョブ自身が始まった後の様子なので、`max_wait_seconds`は自分の遅れ(`lag_seconds`)で打ち切られる。
+  待ちの深さの下限として読む。
 - `lag_seconds`は、記録するジョブ自身の予定時刻(`scheduled_for`)から開始までの秒数である。
-- `sampled_at`は、値を読み始めた時刻である。挿入のジョブが遅れても、測った時刻が残る。
+- `sampled_at`は、値を読み始めた時刻である。
+  挿入のジョブが遅れても、測った時刻が残る。
 
 #### 枠の数
 
@@ -1200,11 +1221,17 @@ workerから読んだ値ではない。
 
 #### メモリ
 
-- `mem_current_bytes`は、ページキャッシュを含む。上限に近くても、回収できるキャッシュなら逼迫ではない。
-- 逼迫の判断には、プロセスが確保した`mem_anon_bytes`と、非アクティブなファイルキャッシュを除いた`mem_working_set_bytes`を使う。主に`mem_anon_bytes`を読む。
-- `mem_peak_bytes`は、コンテナの起動からの累積の最大値で、キャッシュも含む。判断には使わず、前の行より増えたかどうかを見る印にだけ使う。
-- 上限への到達は、`mem_events_max`、`mem_oom`、`mem_oom_kill`で見る。どれもコンテナの起動からの累積の回数なので、前の行との差を取る。
-- 読めなかった値は空のまま残る。0は、読めて0だったことを表す。
+- `mem_current_bytes`は、ページキャッシュを含む。
+  上限に近くても、回収できるキャッシュなら逼迫ではない。
+- 逼迫の判断には、プロセスが確保した`mem_anon_bytes`と、非アクティブなファイルキャッシュを除いた`mem_working_set_bytes`を使う。
+  主に`mem_anon_bytes`を読む。
+- `mem_peak_bytes`は、コンテナの起動からの累積の最大値で、キャッシュも含む。
+  判断には使わない。
+  前の行より増えたかどうかを見る印にだけ使う。
+- 上限への到達は、`mem_events_max`、`mem_oom`、`mem_oom_kill`で見る。
+  どれもコンテナの起動からの累積の回数なので、前の行との差を取る。
+- 読めなかった値は空のまま残る。
+  0は、読めて0だったことを表す。
 - `mem_limit_bytes`の空は、上限が無いことと、読めなかったことの両方を表し、区別できない。
 
 #### 予定の欠け
@@ -1216,19 +1243,34 @@ workerから読んだ値ではない。
 
 #### 限界
 
-- 2分より短い塞がりは見えない。値は、記録した瞬間の様子である。
-- 5分ごとの`poll_*`が作る山は、2分ごとの記録の位相に入らないことがある。記録は30秒に始まり、`poll_*`は0秒に始まる。山に当たる回の割合は偏るので、行の平均を占有率として使わない。
-- `waiting_jobs`は100件で頭打ちになる。`max_wait_seconds`は古い順に読むので、頭打ちでも正しい。
-- 実行中のジョブの一覧が100件を超えると、全件を読めない。100件に達した一覧は打ち切られているので、そこに自分のジョブが無くても、読めた回として扱う。
-- 実行中と待ちの一覧は、スケジュールの実行ユーザーの権限で見える範囲に絞られる可能性がある。絞られると、`running_jobs`と`waiting_jobs`は実際より少なくなる。この前提は確かめていない。反映の後の手順5で、管理者の件数と合うかを見る。
-- メモリはコンテナ全体の値で、ジョブごとの内訳は取れない。内訳は`running_by_script`の件数から推す。
-- `memory.pressure`が無いカーネルでは、`mem_pressure_total_us`は空になる。
-- tagの割り当てを変えたときは、数えるtagの一覧(`DEFAULT_WORKER_TAGS`)を直す。変えるのは、defaultのworkerに`WORKER_TAGS`を設定したときと、nativeのworkerのtagを変えたときである。
-- 単一ステップのフロー(`singlestepflow`)の親ジョブは、枠を使うかを確かめていないので、除かずに数える。`running_jobs`が多めに出うる。
-- 2分ごとの実行は、1回ごとに、記録のジョブ(tag `bun`)と、挿入のジョブ(tag `postgresql`のプレビュー)ができる。Windmillのジョブ履歴とログに、1日に1440件以上を足す。
+- 2分より短い塞がりは見えない。
+  値は、記録した瞬間の様子である。
+- 5分ごとの`poll_*`が作る山は、2分ごとの記録の位相に入らないことがある。
+  記録は30秒に始まり、`poll_*`は0秒に始まる。
+  山に当たる回の割合は偏るので、行の平均を占有率として使わない。
+- `waiting_jobs`は100件で頭打ちになる。
+  `max_wait_seconds`は古い順に読むので、頭打ちでも正しい。
+- 実行中のジョブの一覧が100件を超えると、全件を読めない。
+  100件に達した一覧は打ち切られているので、そこに自分のジョブが無くても、読めた回として扱う。
+- 実行中と待ちの一覧は、スケジュールの実行ユーザーの権限で見える範囲に絞られる可能性がある。
+  絞られると、`running_jobs`と`waiting_jobs`は実際より少なくなる。
+  この前提は確かめていない。
+  反映の後の手順5で、管理者の件数と合うかを見る。
+- メモリはコンテナ全体の値で、ジョブごとの内訳は取れない。
+  内訳は`running_by_script`の件数から推す。
+- `memory.pressure`が無い環境では、`mem_pressure_total_us`は空になる。
+- tagの割り当てを変えたときは、数えるtagの一覧(`DEFAULT_WORKER_TAGS`)を直す。
+  変えるのは、defaultのworkerに`WORKER_TAGS`を設定したときと、nativeのworkerのtagを変えたときである。
+- 単一ステップのフロー(`singlestepflow`)の親ジョブは、枠を使うかを確かめていないので、除かずに数える。
+  `running_jobs`が多めに出うる。
+- 2分ごとの実行は、1回ごとに、記録のジョブ(tag `bun`)と、挿入のジョブ(tag `postgresql`のプレビュー)ができる。
+  Windmillのジョブ履歴とログに、1日に1440件以上を足す。
 - 失敗が続く間は、noticeを扱うクエリのジョブも加わる。
-- ジョブ履歴の保持期間は、公式文書では自前運用の無償版で最大30日である。1日1440件の増加と合わせると、記録だけで約4.3万件が履歴に残りうる。実機のインスタンス設定に保持期間の行は無い。
-- 記録の表は、DBの掃除の対象に含まれないので、溜まり続ける。掃除は別の変更で対象に加える予定である。
+- ジョブ履歴の保持期間は、公式文書では自前運用の無償版で最大30日である。
+  1日1440件の増加と合わせると、記録だけで約4.3万件が履歴に残りうる。
+  実機のインスタンス設定に保持期間の行は無い。
+- 記録の表は、DBの掃除の対象に含まれないので、溜まり続ける。
+  詳しくは[保持期間](#保持期間)の節に書く。
 
 #### 記録できない状態
 
@@ -1237,14 +1279,18 @@ workerから読んだ値ではない。
 代わりに、完全には記録できない回を数え、5回(10分)続くと通知`worker_sample_failed`を残す。
 完全に記録できた回は、次をすべて満たす回である。
 
-- queueの2つの応答が一覧で、空でなければ、形を読める要素が1つ以上ある。空の一覧も、完全な回になる。
-- 実行中の一覧から、記録するジョブ自身を読めた。100件未満の一覧に自分が居ない、またはその`tag`と`job_kind`が読めないときは、応答の形が変わったと見なす。`running_jobs`と`running_by_script`を空にして、完全な回に数えない。
+- queueの2つの応答が一覧で、空でなければ、形を読める要素が1つ以上ある。
+  空の一覧も、完全な回になる。
+- 実行中の一覧から、記録するジョブ自身を読めた。
+  100件未満の一覧に自分が居ない、またはその`tag`と`job_kind`が読めないときは、応答の形が変わったと見なす。
+  この場合は`running_jobs`と`running_by_script`を空にして、完全な回に数えない。
 - `memory.current`と`memory.stat`の`anon`が読めた。
 - 記録するジョブ自身の予定時刻と開始の遅れが取れた。
 - 行の挿入が成功した。
 
 `memory.peak`と`memory.pressure`が読めなくても、完全な回として数える。
-回数はWindmillのstateに持つ。stateを読めなかった回は、数えず、stateも書かない。
+回数はWindmillのstateに持つ。
+stateを読めなかった回は、数えず、stateも書かない。
 stateを読めない状態が続くと、失敗が数えられず、通知も出ない。
 ジョブログの`could not read the sampling state`が続いていないかを、反映の後に見る。
 
@@ -1264,19 +1310,32 @@ stateはscriptのパスごとに持つ。
 
 警告は、ジョブログに次の文で残る。
 
-- `could not read the running jobs`、`could not read the waiting jobs`: queueを読むAPIが失敗した。`could not read the sampling job`は、自分のジョブの情報を直接読むAPIが失敗したことを表し、`lag_seconds`だけが空になる。
-- `the running jobs response has elements of an unexpected shape`: 形を読めず、数えなかった要素がある。`malformed`に件数が載る。
+- `could not read the running jobs`、`could not read the waiting jobs`: queueを読むAPIが失敗した。
+- `could not read the sampling job`: 自分のジョブの情報を直接読むAPIが失敗した。
+  `lag_seconds`だけが空になる。
+- `the running jobs response has elements of an unexpected shape`: 形を読めず、数えなかった要素がある。
+  `malformed`に件数が載る。
 - `the waiting jobs response has elements of an unexpected shape`: 待ちの一覧で、同じ状態になった。
 - `the running jobs response has an unexpected shape`: 応答が一覧でないか、すべての要素の形を読めない。
 - `the waiting jobs response has an unexpected shape`: 待ちの一覧で、同じ状態になった。
 - `the sampling job is not readable in the running jobs`: 実行中の一覧から、記録するジョブ自身を読めなかった。
-- `jobs with a tag no worker is known to listen to are not counted`: どのworkerが受けるかを知らないtagのジョブがある。`jobs`に件数、`tags`にtag名の先頭5件が載る。そのジョブは数えないので、`running_jobs`と`waiting_jobs`が少なく出うる。defaultのworkerが受けるtagなら、`DEFAULT_WORKER_TAGS`に足す。
-- `could not read memory.current`: cgroupのファイルを読めなかった。`memory.max`、`memory.stat`、`memory.events`も同じ形の文になる。
-- `could not record the worker sample`: DBへの挿入が失敗した。この回は行が残らない。
-- `could not read the sampling state`: stateを読めなかった。この回は失敗を数えず、stateも書かない。
-- `could not resolve the sampling failure notice`: noticeの解決に失敗した。noticeが残り、回数は戻さず、次の回で解決をやり直す。
-- `could not write the sampling state`: stateへの書き込みが失敗した。この回の回数が残らず、次の回は前の値から数え直す。
-- `could not update the sampling failure count`: 回数の更新の途中で例外が出た。主な原因はnoticeの記録の失敗で、この回は通知が残らない。回数が上限以上の間は、次の回で記録をやり直す。
+- `jobs with a tag no worker is known to listen to are not counted`: どのworkerが受けるかを知らないtagのジョブがある。
+  `jobs`に件数、`tags`にtag名の先頭5件が載る。
+  そのジョブは数えないので、`running_jobs`と`waiting_jobs`が少なく出うる。
+  defaultのworkerが受けるtagなら、`DEFAULT_WORKER_TAGS`に足す。
+- `could not read memory.current`: cgroupのファイルを読めなかった。
+  `memory.max`、`memory.stat`、`memory.events`も同じ形の文になる。
+- `could not record the worker sample`: DBへの挿入が失敗した。
+  この回は行が残らない。
+- `could not read the sampling state`: stateを読めなかった。
+  この回は失敗を数えず、stateも書かない。
+- `could not resolve the sampling failure notice`: noticeの解決に失敗した。
+  noticeが残り、回数は戻さず、次の回で解決をやり直す。
+- `could not write the sampling state`: stateへの書き込みが失敗した。
+  この回の回数が残らず、次の回は前の値から数え直す。
+- `could not update the sampling failure count`: 回数の更新の途中で例外が出た。
+  主な原因はnoticeの記録の失敗で、この回は通知が残らない。
+  回数が上限以上の間は、次の回で記録をやり直す。
 
 ### 続けて失敗するスケジュールの検知を確かめる
 

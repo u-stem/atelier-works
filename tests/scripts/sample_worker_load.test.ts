@@ -58,7 +58,7 @@ type Harness = {
   resolved: NoticeRecord[];
   selfReads: { count: number };
   states: Record<string, unknown>[];
-  warnings: string[];
+  lines: string[];
 };
 
 function harness(overrides: Partial<SampleDeps> = {}): Harness {
@@ -67,10 +67,10 @@ function harness(overrides: Partial<SampleDeps> = {}): Harness {
   const resolved: NoticeRecord[] = [];
   const selfReads = { count: 0 };
   const states: Record<string, unknown>[] = [];
-  const warnings: string[] = [];
+  const lines: string[] = [];
   const log: Logger = logger("test", {
     sink: (line) => {
-      warnings.push(line);
+      lines.push(line);
     },
   });
   const deps: SampleDeps = {
@@ -112,7 +112,7 @@ function harness(overrides: Partial<SampleDeps> = {}): Harness {
     log,
     ...overrides,
   };
-  return { deps, samples, notices, resolved, selfReads, states, warnings };
+  return { deps, samples, notices, resolved, selfReads, states, lines };
 }
 
 describe("runSample record", () => {
@@ -208,9 +208,7 @@ describe("runSample record", () => {
       insertSample: () => Promise.reject(new Error("db down")),
     });
     await runSample(h.deps);
-    expect(h.warnings.some((line) => line.includes('"worker sample"'))).toBe(
-      true,
-    );
+    expect(h.lines.some((line) => line.includes('"worker sample"'))).toBe(true);
   });
 
   test("returns the id of the recorded row", async () => {
@@ -325,15 +323,13 @@ describe("runSample partial reads", () => {
       readCgroupFile: () => Promise.reject(new Error("EACCES")),
     });
     await runSample(h.deps);
-    expect(h.warnings.some((line) => line.includes("memory.current"))).toBe(
-      true,
-    );
+    expect(h.lines.some((line) => line.includes("memory.current"))).toBe(true);
   });
 
   test("does not warn about a missing memory.pressure", async () => {
     const h = harness();
     await runSample(h.deps);
-    expect(h.warnings.some((line) => line.includes("memory.pressure"))).toBe(
+    expect(h.lines.some((line) => line.includes("memory.pressure"))).toBe(
       false,
     );
   });
@@ -380,7 +376,7 @@ describe("runSample response shape", () => {
     });
     await runSample(h.deps);
     expect(
-      h.warnings.some((line) => line.includes("sampling job is not readable")),
+      h.lines.some((line) => line.includes("sampling job is not readable")),
     ).toBe(true);
   });
 
@@ -390,7 +386,7 @@ describe("runSample response shape", () => {
         Promise.resolve([selfJob(), other("f/factory/a", { tag: 3 })]),
     });
     await runSample(h.deps);
-    expect(h.warnings.some((line) => line.includes("unexpected shape"))).toBe(
+    expect(h.lines.some((line) => line.includes("unexpected shape"))).toBe(
       true,
     );
   });
@@ -403,7 +399,7 @@ describe("runSample response shape", () => {
         ]),
     });
     await runSample(h.deps);
-    expect(h.warnings.some((line) => line.includes("unexpected shape"))).toBe(
+    expect(h.lines.some((line) => line.includes("unexpected shape"))).toBe(
       true,
     );
   });
@@ -429,7 +425,7 @@ describe("runSample response shape", () => {
     });
     await runSample(h.deps);
     expect(
-      h.warnings.filter((line) => line.includes("no worker is known")),
+      h.lines.filter((line) => line.includes("no worker is known")),
     ).toHaveLength(1);
   });
 
@@ -440,7 +436,7 @@ describe("runSample response shape", () => {
     });
     await runSample(h.deps);
     expect(
-      h.warnings.some(
+      h.lines.some(
         (line) =>
           line.includes("no worker is known") && line.includes("custom"),
       ),
@@ -459,9 +455,7 @@ describe("runSample response shape", () => {
     });
     await runSample(h.deps);
     expect(
-      h.warnings.some(
-        (line) => line.includes("tag-f") || line.includes("tag-g"),
-      ),
+      h.lines.some((line) => line.includes("tag-f") || line.includes("tag-g")),
     ).toBe(false);
   });
 
@@ -477,7 +471,7 @@ describe("runSample response shape", () => {
   test("does not warn about an unknown tag when every tag is known", async () => {
     const h = harness();
     await runSample(h.deps);
-    expect(h.warnings.some((line) => line.includes("no worker is known"))).toBe(
+    expect(h.lines.some((line) => line.includes("no worker is known"))).toBe(
       false,
     );
   });
@@ -485,7 +479,7 @@ describe("runSample response shape", () => {
   test("does not warn when every element has the expected shape", async () => {
     const h = harness();
     await runSample(h.deps);
-    expect(h.warnings.some((line) => line.includes("unexpected shape"))).toBe(
+    expect(h.lines.some((line) => line.includes("unexpected shape"))).toBe(
       false,
     );
   });
