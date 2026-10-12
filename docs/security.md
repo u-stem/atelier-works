@@ -1682,7 +1682,7 @@ gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し
 
 ### PRの状態とheadの確認
 
-準備のステップで、PRについて次の4点を確かめる。
+準備のステップで、PRについて次の5点を確かめる。
 
 - openである。
 - forkからでない。
@@ -1695,7 +1695,12 @@ forkのブランチ、保護ブランチ、デフォルトブランチにはFact
 修正でpushするのはheadのブランチで、baseではない。
 そのため、baseが保護されていても、headが普通のブランチなら通る。
 保護の有無は、GitHubのbranches APIの`protected`で読む。
-この値は、classicのブランチ保護のないブランチでも、rulesetsで保護されていれば`true`になる。
+`main`を保護するruleset(対象は既定のブランチ)は、`protected: true`として返ることを確かめた。
+globで対象を指定するrulesetなどは確かめていないので、`protected`に反映されるかは分からない。
+headのブランチの状態を読めなかったときは、通さずに止める。
+
+残るリスクとして、PRのauto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマージされうる。
+このリポジトリは`allow_auto_merge`が`false`なので、起こらない。
 
 pushの直前には、PRのheadが準備のときから変わっていないことだけを確かめ直す。
 変わっていれば、pushせずにブロックで止める。

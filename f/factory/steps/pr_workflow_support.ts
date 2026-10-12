@@ -886,21 +886,39 @@ export type PrFixSafetyGuardInput = {
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
   readonly draft: boolean;
+  /** 読まなかったときは`null`。openで同一リポジトリのdraftでないPRに`null`が来たら止める。 */
+  readonly headBranch: PrFixHeadBranchState | null;
+};
+
+export type PrFixHeadBranchState = {
   readonly headProtected: boolean;
   readonly headIsDefaultBranch: boolean;
 };
 
-export type PrFixHeadBranchState = Pick<
-  PrFixSafetyGuardInput,
-  "headProtected" | "headIsDefaultBranch"
->;
+/**
+ * headブランチの状態を読む対象のPRかを判定する。
+ * forkや閉じたPRのheadはこのリポジトリに無いことがあり、読むと失敗する。
+ * draftは次の関門が先に止めるので、読まずに理由をそのまま残す。
+ */
+export function shouldReadPrFixHeadState(
+  open: boolean,
+  draft: boolean,
+  headRepoFullName: string | null,
+  baseRepoFullName: string,
+): boolean {
+  return (
+    open &&
+    !draft &&
+    evaluateSameRepoHeadGuard(headRepoFullName, baseRepoFullName).ok
+  );
+}
 
 /**
  * PRのheadブランチが保護ブランチか、リポジトリのデフォルトブランチかを読む。
  * pr_fixがpushするのはheadブランチなので、baseの保護は見ない。
- * `protected`はrulesetsによる保護も含む。
- * forkのPRやクローズ済みのPRのheadは、このリポジトリに無いことがあるので、
- * 呼び出し側は、同一リポジトリのopenなPRにだけ使う。
+ * mainを保護するruleset(対象は既定のブランチ)は`protected: true`として返ることを確かめた。
+ * globで対象を指定するrulesetなどは確かめていない。
+ * 呼び出し側は、`shouldReadPrFixHeadState`が真のPRにだけ使う。
  */
 export async function fetchPrFixHeadBranchState(
   client: GhClient,
@@ -917,6 +935,7 @@ export async function fetchPrFixHeadBranchState(
  * 修正を試みる前の4つの安全のための関門を判定する。
  * PRがopenであること、head.repoとbase.repoが同じであること(forkへpushしない)、
  * draftでないこと、headブランチが保護ブランチでもデフォルトブランチでもないこと。
+ * headブランチの状態を読めていなければ、どの条件でも通さず止める。
  * worktreeを作る前、Claudeを実行する前に確かめる。
  * 実際にpushする直前には、`workspace.ts`の`commitAndPush`が
  * headのshaが動いていないことを別に確かめ直す。
@@ -937,11 +956,14 @@ export function evaluatePrFixSafetyGuards(
   if (input.draft) {
     return { ok: false, reason: "pull request is a draft" };
   }
+  if (input.headBranch === null) {
+    return { ok: false, reason: "head branch state is unavailable" };
+  }
   // デフォルトブランチは保護されていることが多いので、区別できるように先に判定する。
-  if (input.headIsDefaultBranch) {
+  if (input.headBranch.headIsDefaultBranch) {
     return { ok: false, reason: "head branch is the default branch" };
   }
-  if (input.headProtected) {
+  if (input.headBranch.headProtected) {
     return { ok: false, reason: "head branch is protected" };
   }
   return { ok: true };
@@ -3585,13 +3607,18 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^head branch is the default branch$/,
     describe: () => "headブランチがデフォルトブランチです",
     nextAction: () =>
-      "デフォルトブランチにはFactoryがpushしません。作業用のブランチからPRを作り直してください",
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
   },
   {
     pattern: /^head branch is protected$/,
     describe: () => "headブランチが保護されています",
     nextAction: () =>
-      "保護ブランチにはFactoryがpushしません。作業用のブランチからPRを作り直してください",
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+  },
+  {
+    pattern: /^head branch state is unavailable$/,
+    describe: () => "headブランチの状態を読めませんでした",
+    nextAction: () => RETRY_WORK_ITEM_ACTION,
   },
   // 現在の関門は返さないが、DBに残る過去の理由を表示するために残す。
   {

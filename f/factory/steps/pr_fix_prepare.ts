@@ -36,11 +36,11 @@ import {
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
-  evaluateSameRepoHeadGuard,
   fetchPrFixHeadBranchState,
   type PrFixGateOutcome,
   type PrFixHeadBranchState,
   prFixTimeoutMisfit,
+  shouldReadPrFixHeadState,
 } from "./pr_workflow_support.ts";
 
 export type PrFixPrepareResult = {
@@ -222,26 +222,27 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
       ...earlyExitBase(workItem),
     };
   }
-  // forkやクローズ済みのPRのheadはこのリポジトリに無いことがある。その場合は
-  // 先に判定する関門(open、同一リポジトリ)が止めるので、headの状態は読まない。
-  const headReadable =
-    pr.state === "open" &&
-    evaluateSameRepoHeadGuard(pr.headRepoFullName, pr.baseRepoFullName).ok;
-  const headState: PrFixHeadBranchState = headReadable
+  // 読まないPRは、先に判定する関門(open、同一リポジトリ、draft)が理由を残して止める。
+  const headBranch: PrFixHeadBranchState | null = shouldReadPrFixHeadState(
+    pr.state === "open",
+    pr.draft,
+    pr.headRepoFullName,
+    pr.baseRepoFullName,
+  )
     ? await fetchPrFixHeadBranchState(
         client,
         workItem.owner,
         workItem.repo,
         pr.headRef,
       )
-    : { headProtected: false, headIsDefaultBranch: false };
+    : null;
 
   const safety = evaluatePrFixSafetyGuards({
     open: pr.state === "open",
     headRepoFullName: pr.headRepoFullName,
     baseRepoFullName: pr.baseRepoFullName,
     draft: pr.draft,
-    ...headState,
+    headBranch,
   });
   if (!safety.ok) {
     return {

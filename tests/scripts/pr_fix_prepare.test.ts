@@ -24,6 +24,7 @@ import {
   nextActionFor,
   PR_COMMAND_STOP_OVERHEAD_SEC,
   prFixTimeoutMisfit,
+  shouldReadPrFixHeadState,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 import { ghApiOk } from "../lib/testSupport.ts";
 
@@ -32,8 +33,7 @@ const SAFE_INPUT = {
   headRepoFullName: "octo-owner/atelier-works",
   baseRepoFullName: "octo-owner/atelier-works",
   draft: false,
-  headProtected: false,
-  headIsDefaultBranch: false,
+  headBranch: { headProtected: false, headIsDefaultBranch: false },
 };
 
 describe("evaluatePrFixSafetyGuards", () => {
@@ -70,7 +70,7 @@ describe("evaluatePrFixSafetyGuards", () => {
   test("fails when the head branch is protected", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      headProtected: true,
+      headBranch: { headProtected: true, headIsDefaultBranch: false },
     });
     expect(!result.ok && result.reason).toBe("head branch is protected");
   });
@@ -78,18 +78,45 @@ describe("evaluatePrFixSafetyGuards", () => {
   test("fails when the head branch is the default branch", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      headIsDefaultBranch: true,
+      headBranch: { headProtected: false, headIsDefaultBranch: true },
     });
     expect(!result.ok && result.reason).toBe(
       "head branch is the default branch",
     );
   });
 
+  test("fails when the head branch state is unavailable for an open, same-repo, non-draft PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "head branch state is unavailable",
+    );
+  });
+
+  test("reports the draft reason, not the unavailable state, for a draft PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      draft: true,
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toBe("pull request is a draft");
+  });
+
+  test("reports the fork reason, not the unavailable state, for a fork PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headRepoFullName: "someone-else/atelier-works",
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toContain("fork PR");
+  });
+
   test("reports the default-branch reason when the default branch is also protected", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      headProtected: true,
-      headIsDefaultBranch: true,
+      headBranch: { headProtected: true, headIsDefaultBranch: true },
     });
     expect(!result.ok && result.reason).toBe(
       "head branch is the default branch",
@@ -188,9 +215,37 @@ describe("fetchPrFixHeadBranchState", () => {
       "widgets",
       "feature/x",
     );
-    expect(evaluatePrFixSafetyGuards({ ...SAFE_INPUT, ...state })).toEqual({
+    expect(
+      evaluatePrFixSafetyGuards({ ...SAFE_INPUT, headBranch: state }),
+    ).toEqual({
       ok: true,
     });
+  });
+});
+
+describe("shouldReadPrFixHeadState", () => {
+  const SAME = "octo-owner/atelier-works";
+
+  test("is true for an open, non-draft PR from the same repository", () => {
+    expect(shouldReadPrFixHeadState(true, false, SAME, SAME)).toBe(true);
+  });
+
+  test("is false when the PR is not open", () => {
+    expect(shouldReadPrFixHeadState(false, false, SAME, SAME)).toBe(false);
+  });
+
+  test("is false when the PR is a draft", () => {
+    expect(shouldReadPrFixHeadState(true, true, SAME, SAME)).toBe(false);
+  });
+
+  test("is false when the head repository is a fork", () => {
+    expect(
+      shouldReadPrFixHeadState(true, false, "someone-else/atelier-works", SAME),
+    ).toBe(false);
+  });
+
+  test("is false when the head repository is unavailable", () => {
+    expect(shouldReadPrFixHeadState(true, false, null, SAME)).toBe(false);
   });
 });
 
@@ -416,6 +471,12 @@ describe("describeReason", () => {
   test("still translates the base branch reason kept in earlier records", () => {
     expect(describeReason("base branch is protected")).toBe(
       "baseブランチが保護されています",
+    );
+  });
+
+  test("translates the unavailable head branch state reason", () => {
+    expect(describeReason("head branch state is unavailable")).toBe(
+      "headブランチの状態を読めませんでした",
     );
   });
 
