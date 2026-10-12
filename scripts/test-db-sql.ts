@@ -100,7 +100,11 @@ function runPsql(
       `psql failed (exit ${String(result.exitCode)}): ${result.stderr.toString().trim()}`,
     );
   }
-  return result.stdout.toString().trim();
+  const output = result.stdout.toString();
+  // CSVでは、値がNULLの1列だけの行が空行になる。全体をtrimすると、その行が消えて0行と区別できなくなるので、
+  // 末尾の改行を1つだけ取り除く。値は文字列で返る。
+  if (format === "csv") return output.replace(/\n$/, "");
+  return output.trim();
 }
 
 /** PostgreSQLが、更新を含む`WITH`を最上位以外に置けないときのエラーの文。 */

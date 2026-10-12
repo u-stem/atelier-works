@@ -215,7 +215,7 @@ export type PrHeadPlan = {
 /**
  * PRの今のheadを見つけたときに、記録と旧行の整理を決める。
  * 通った旧行(`passed`)などの終わった行は、記録として残すので触らない。
- * headが進んだ`fixing`の行は`superseded`にする。直す作業項目が新しいheadをpushした結果だからである。
+ * headが進んだ`fixing`の行は`superseded`にする。headが進んだなら、その行のheadのCIを直す意味が無くなるためである。
  * headが同じ`fixing`の行は触らない。
  */
 export function planPrHead(

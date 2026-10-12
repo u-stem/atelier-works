@@ -4178,7 +4178,7 @@ function assertFixHoldReason(reason: string): void {
 export type ClaimPrCiCheckInput = {
   /** 直す行(`pr_ci_checks`)のID。 */
   readonly id: number;
-  /** PRのowner。作業項目に書く綴りで、行の照合には小文字にして使う。 */
+  /** PRのowner。作業項目にそのまま書くGitHubの正規の綴りで、行の照合には小文字にして使う。 */
   readonly owner: string;
   readonly repo: string;
   /** 呼び出し側がいま読んだPRのhead。行の`head_sha`と同じでなければ起動しない。 */
@@ -4201,6 +4201,10 @@ export type ClaimPrCiCheckInput = {
  * - 同じPRに、終端でない`pr_fix`の作業項目がある。同じブランチへ別々にpushして競合するのを防ぐ。
  * 上の確認をすり抜けた並行する起動は、一意索引`work_items_active_pr_fix_key`が拒む。
  * その違反は、文全体が取り消されるので、行も変わらず`null`を返す。
+ *
+ * 作業項目の`owner`と`repo`は、GitHubの正規の綴り(PRのAPIが返す`base.repo.owner.login`と`name`)で、
+ * `poll_prs`の`startFix`と同じ綴りを渡す。一意索引と既存の照合は大文字小文字を区別するためである。
+ * 行との照合には小文字を使うので、`pr_ci_checks`の小文字の綴りをそのまま渡さない。
  *
  * 作業項目は、`startFix`と同じく状態`fixing`、サイクルと試行は1で挿入する。
  * `fix_round`と、処理済みの位置(`last_review_id`、`last_comment_id`、`last_review_comment_id`)は、

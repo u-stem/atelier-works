@@ -367,15 +367,15 @@ function isIsoDateTime(value: string): boolean {
 }
 
 /**
- * `raw[field]`を返す。値が無ければ`fallback`を返す。
- * `null`は値無しとして`null`を返す。文字列は、タイムゾーン付きのISO 8601の日時だけを通し、
- * 書かれた文字列のまま返す。それ以外は例外を投げる。
+ * `raw[field]`を`Date`にして返す。値が無ければ`fallback`を返す。
+ * `null`は値無しとして`null`を返す。文字列は、秒まで書いたタイムゾーン付きの
+ * RFC 3339の日時だけを通す。それ以外は例外を投げる。
  */
 function isoDateTimeOrNullField(
   raw: Record<string, unknown>,
   field: string,
-  fallback: string | null,
-): string | null {
+  fallback: Date | null,
+): Date | null {
   const value = raw[field];
   if (value === undefined) {
     return fallback;
@@ -385,7 +385,23 @@ function isoDateTimeOrNullField(
   }
   if (!isString(value) || !isIsoDateTime(value)) {
     throw new ConfigValidationError(
-      `"${field}" must be an ISO 8601 date-time with a time zone, or null`,
+      `"${field}" must be an RFC 3339 date-time with seconds and a time zone, or null`,
+    );
+  }
+  return new Date(value);
+}
+
+/**
+ * `pr_ci_fix_max_rounds`の上限。直す作業項目はPRにpushするので、設定の書き損じで
+ * 回数が際限なく増えないようにする。
+ */
+const PR_CI_FIX_MAX_ROUNDS_LIMIT = 10;
+
+/** `value`が`limit`を超えるときは例外を投げる。 */
+function atMost(field: string, value: number, limit: number): number {
+  if (value > limit) {
+    throw new ConfigValidationError(
+      `"${field}" must not exceed ${String(limit)}`,
     );
   }
   return value;
@@ -708,10 +724,14 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "pr_ci_fix_enabled",
       DEFAULTS.pr_ci_fix_enabled,
     ),
-    pr_ci_fix_max_rounds: positiveIntegerField(
-      raw,
+    pr_ci_fix_max_rounds: atMost(
       "pr_ci_fix_max_rounds",
-      DEFAULTS.pr_ci_fix_max_rounds,
+      positiveIntegerField(
+        raw,
+        "pr_ci_fix_max_rounds",
+        DEFAULTS.pr_ci_fix_max_rounds,
+      ),
+      PR_CI_FIX_MAX_ROUNDS_LIMIT,
     ),
     pr_ci_fix_enabled_since: isoDateTimeOrNullField(
       raw,

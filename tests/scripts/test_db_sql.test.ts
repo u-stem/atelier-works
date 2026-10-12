@@ -87,6 +87,10 @@ describe("parseCsvRows", () => {
     expect(parseCsvRows("id\n1\n2")).toEqual([{ id: "1" }, { id: "2" }]);
   });
 
+  test("reads a header followed by an empty line as one row of null", () => {
+    expect(parseCsvRows("id\n")).toEqual([{ id: null }]);
+  });
+
   test("returns no row for a header only", () => {
     expect(parseCsvRows("id")).toEqual([]);
   });

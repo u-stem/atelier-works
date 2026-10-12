@@ -1007,15 +1007,17 @@ export type FactoryConfig = {
    */
   pr_ci_fix_enabled: boolean;
   /**
-   * 1つのPRで、CIの失敗を直すラウンドを起動できる回数の上限。1以上の整数。既定は2。
-   * 直近に通ったheadより後のラウンドを数える。
+   * 1つのPRで、CIの失敗を直すラウンドを起動できる回数の上限。1以上10以下の整数。既定は2。
+   * 直近に通ったheadより後のラウンドを数え、通ると数え直す。
    */
   pr_ci_fix_max_rounds: number;
   /**
-   * この時刻より前に見つけた失敗は、直す対象にしない。タイムゾーン付きのISO 8601の日時。
+   * この時刻より前に見つけた失敗は、直す対象にしない。「見つけた時刻」は`pr_ci_checks.first_seen_at`で、
+   * 比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
+   * 設定には秒まで書いたRFC 3339の日時(タイムゾーン付き)を書き、読み込み後は`Date`になる。
    * `null`は、時刻で絞らないことを表す。既定は`null`。
    */
-  pr_ci_fix_enabled_since: string | null;
+  pr_ci_fix_enabled_since: Date | null;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の

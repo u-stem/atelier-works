@@ -583,6 +583,19 @@ describe("pr_ci_fix_max_rounds", () => {
     expect(config.pr_ci_fix_max_rounds).toBe(1);
   });
 
+  test("accepts 10 as pr_ci_fix_max_rounds", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_max_rounds: 10,
+    });
+    expect(config.pr_ci_fix_max_rounds).toBe(10);
+  });
+
+  test("throws when pr_ci_fix_max_rounds is 11", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_max_rounds: 11 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("throws when pr_ci_fix_max_rounds is zero", () => {
     const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_max_rounds: 0 };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
@@ -618,21 +631,23 @@ describe("pr_ci_fix_enabled_since", () => {
     expect(config.pr_ci_fix_enabled_since).toBeNull();
   });
 
-  test("passes through a UTC time", () => {
+  test("returns a UTC time as a Date", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,
       pr_ci_fix_enabled_since: "2026-10-13T03:00:00Z",
     });
-    expect(config.pr_ci_fix_enabled_since).toBe("2026-10-13T03:00:00Z");
+    expect(config.pr_ci_fix_enabled_since).toEqual(
+      new Date("2026-10-13T03:00:00Z"),
+    );
   });
 
-  test("passes through a time with an offset and fractional seconds", () => {
+  test("returns a time with an offset and fractional seconds as the same instant", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,
       pr_ci_fix_enabled_since: "2026-10-13T12:00:00.250+09:00",
     });
-    expect(config.pr_ci_fix_enabled_since).toBe(
-      "2026-10-13T12:00:00.250+09:00",
+    expect(config.pr_ci_fix_enabled_since?.toISOString()).toBe(
+      "2026-10-13T03:00:00.250Z",
     );
   });
 
@@ -640,6 +655,7 @@ describe("pr_ci_fix_enabled_since", () => {
     ["an empty string", ""],
     ["a date without a time", "2026-10-13"],
     ["a time without an offset", "2026-10-13T03:00:00"],
+    ["a time without seconds", "2026-10-13T03:00Z"],
     ["text", "yesterday"],
     ["a month that does not exist", "2026-13-01T00:00:00Z"],
     ["a day that does not exist", "2026-02-30T00:00:00Z"],

@@ -38,7 +38,7 @@
 | `fixing` | 失敗を直す作業項目の結果待ち。`claimPrCiCheckForFix`だけが`failed`から移す。この監視は判定で読まない | しない |
 
 遷移は`canTransitionPrCi`が定める。更新は`WHERE state = <移る前の状態>`の条件付きで、別の実行が先に移した行は書き換えない。
-`fixing`への移行は`failed`からだけで、`transitionPrCiCheck`は拒否する。作業項目の挿入と同じ文で行う必要があるためである。
+`transitionPrCiCheck`は`fixing`への移行を拒否し、`claimPrCiCheckForFix`だけが行う。作業項目の挿入と同じ1つのSQL文で行う必要があるためである。
 `fixing`からは、`failed`、`superseded`、`passed`へ移れる。`fixing`から出る移行は、`fix_work_item_id`を空にする。
 
 ## 失敗を直すための状態と関数
@@ -79,8 +79,8 @@
 作業項目は、種別`pr_fix`、状態`fixing`、サイクルと試行は1で挿入する。
 ラウンドの番号(`fix_round`)と処理済みの位置は、同じPRの直近の`pr_fix`から写す。
 処理済みの位置は、`last_review_id`、`last_comment_id`、`last_review_comment_id`の3列である。
-直近の`pr_fix`が無ければ、すべて0にする。直す作業項目は、どれも進めない。
-ownerとrepoは、行との照合では小文字で比べる。作業項目には、呼び出し側が渡した綴りで書く。
+直近の`pr_fix`が無ければ、すべて0にする。直す作業項目は、ラウンドの番号も処理済みの位置も進めない。
+ownerとrepoは、行との照合では小文字で比べる。作業項目には、GitHubの正規の綴り(PRのAPIが返す`base.repo.owner.login`と`name`)を、`poll_prs`と同じ綴りで渡す。一意索引と既存の照合が大文字小文字を区別するためである。
 
 `countPrFixFailures`は、`ci_check_id`を持つ作業項目を数えない。
 指摘への対応の失敗から、モデルを`heavy_model`に上げるかを決める。この判定に、CIの失敗を直す作業項目の失敗を混ぜないためである。
@@ -93,18 +93,22 @@ ownerとrepoは、行との照合では小文字で比べる。作業項目に�
 
 | 項目 | 既定値 | 意味 |
 | --- | --- | --- |
-| `pr_ci_fix_enabled` | `false` | 直す作業項目を起動してよいか。`false`の間は何も起動しない |
-| `pr_ci_fix_max_rounds` | `2` | 1つのPRで起動できる、直す作業項目の数の上限。1以上の整数。数えるのは`countPrCiFixRounds` |
-| `pr_ci_fix_enabled_since` | 無し | この時刻より前に見つけた失敗を、直す対象にしない。タイムゾーン付きのISO 8601の日時。無ければ時刻では絞らない |
+| `pr_ci_fix_enabled` | `false` | 直す作業項目を起動してよいか。`false`の間は起動しない |
+| `pr_ci_fix_max_rounds` | `2` | 1つのPRで起動できる、直す作業項目の数の上限。1以上10以下の整数。直近の`passed`の行より後を数え、通ると数え直す。数えるのは`countPrCiFixRounds` |
+| `pr_ci_fix_enabled_since` | 無し | 最初に見た時刻(`first_seen_at`)がこの時刻より前の失敗を、直す対象にしない。無ければ時刻では絞らない |
 
-不正な値は、既定値に倒さず設定の読み込みで拒否する。
+`pr_ci_fix_enabled_since`は、秒まで書いたタイムゾーン付きのRFC 3339の日時にする(例: `2026-10-13T03:00:00Z`)。
+読み込みの後は`Date`になる。比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
+有効にした時点で判定待ちだった失敗も、最初に見た時刻が前なら対象外になる。直す対象を絞る側に倒すためである。
+日時の形が違う値や、`pr_ci_fix_max_rounds`が範囲を外れた値は、既定値に倒さず設定の読み込みで拒否する。
+設定を書き損じると、設定の読み込み全体が設定エラーで止まり、Factoryのほかの処理も動かなくなる。
 
 ## 発見
 
 対象のPRごとに、PRを読み、今のheadの行を整える(`planPrHead`)。
 
 - 今のheadの行が無ければ、`pending`で記録する。
-- 古いheadの`pending`、`failed`、`no_ci`、`fixing`の行は、`superseded`にする。通知しない。今のheadの`fixing`の行は触らない。
+- 古いheadの`pending`、`failed`、`no_ci`、`fixing`の行は、`superseded`にする。通知しない。今のheadの`fixing`の行は触らない。headが進んだなら、その行のheadのCIを直す意味が無くなるためである。
 - 今のheadの行が`superseded`なら、`pending`に戻す。headが以前の値に戻ったときである。
 - `passed`などの終わった行は、記録として残す。
 
