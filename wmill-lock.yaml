@@ -32,7 +32,7 @@ locks:
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
   f/factory/lib/db: 211b54c11a7bf2524abb6268af8edd1ddf5190e72b3a2319fb29d1cd7397a7e0
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
-  f/factory/lib/dependabot_flow_support: ad5587d39aab48151c49698e6028a328215cfaaa33addae5de2b07a46a5d4306
+  f/factory/lib/dependabot_flow_support: d5abc007472d2a0c1baaf3965d91f23ed320dc1a0ed791f4921e89130ac40dd0
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
   f/factory/lib/dependabot_support: c778f65309eda258518db01372a7d341e7c41871982dfe3e557a5f780663289a
@@ -87,6 +87,7 @@ locks:
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
   f/factory/steps/console_query: 138970a4c7a416e1fb534a16538ed14d6ac30349930287d2d02d6de65959c9f8
+  f/factory/steps/dependabot_assess: 278ed28b312069be89335959e02cbe22f4e0dbc6c3a9d5d491356ad6937b5d2d
   f/factory/steps/dependabot_prepare: 7ed77957b166ce944ef010d8cbbbd1af02d9f0124b47a947ffd6f6ab4e51d5cf
   f/factory/steps/implement_finish: 7ac8214e2b9d2bef27798763fe609e1c416a90971c6810fb89a5a30e89ea1683
   f/factory/steps/implement_generate: 0671a360eef104568c2efaf753c42348a779005d3185c64e26fea5aeb15a36c1
@@ -106,6 +107,6 @@ locks:
   f/factory/steps/pr_review_generate: 6473d4f400325943043b2404ab4296a913f60db9f4d24b25605abb0adf4df5e3
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 4f258ff787df1ea0659550eec7e3923bc8db578698beb2b72781bc2f7050001b
-  f/factory/steps/pr_workflow_support: 11edfb7fdc988585cb5d220766e2d19f3424c397cc0fa15e4f31986139826268
+  f/factory/steps/pr_workflow_support: 8ab0deab33cd794d05c93baabf620857be47bfe1634f09410b08133cb5a2213a
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: 6b197f8bf7a2689c8f1906fcae64b328c9815890b6344796ab0e6cff6585e958

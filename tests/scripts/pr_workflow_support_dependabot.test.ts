@@ -84,6 +84,13 @@ const CASES: {
     nextAction: COMMENT_ACTION,
   },
   {
+    label: "assess",
+    reason: dependabotReason("assess", "claude run failed (timeout)"),
+    described:
+      "dependabotの更新の影響調査を、最後まで行えませんでした(claude run failed (timeout))",
+    nextAction: MANUAL_ACTION,
+  },
+  {
     label: "merge forbidden",
     reason: DEPENDABOT_MERGE_FORBIDDEN_REASON,
     described: "dependabotの更新をマージする権限がありませんでした(403)",

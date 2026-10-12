@@ -803,6 +803,7 @@ export const DEPENDABOT_REASON_PREFIX = {
   localCheck: "dependabot local check: ",
   unverifiedInputs: "dependabot unverified inputs: ",
   impact: "dependabot impact: ",
+  assess: "dependabot assess: ",
 } as const;
 
 export type DependabotReasonKind = keyof typeof DEPENDABOT_REASON_PREFIX;

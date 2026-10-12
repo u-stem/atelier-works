@@ -1,0 +1,20 @@
+summary: '[SF-3-5/2] 依存の更新の影響調査(Claude)'
+description: 準備ステップが作った作業ディレクトリで、Claudeに依存の更新の影響を調べさせるステップです。Claudeにはファイルの読み取りだけを許可します。このステップは結論を出さず、Claudeの評価か、人に回す理由を終了のステップに渡します。
+lock: '!inline f/factory/steps/dependabot_assess.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    prepare:
+      type: object
+      description: 準備ステップの結果(影響調査に渡す入力を含む)。
+      default: null
+      properties: {}
+    work_item_id:
+      type: number
+      description: 対象の作業項目のID。
+      default: null
+  required:
+    - work_item_id
+    - prepare

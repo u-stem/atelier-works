@@ -3689,6 +3689,12 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => DEPENDABOT_IMPACT_NEXT_ACTION,
   },
   {
+    pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.assess, "([\\s\\S]+)$"),
+    describe: (m) =>
+      `dependabotの更新の影響調査を、最後まで行えませんでした(${m[1]})`,
+    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+  },
+  {
     pattern: reasonPattern(DEPENDABOT_MERGE_FORBIDDEN_REASON, ""),
     describe: () => "dependabotの更新をマージする権限がありませんでした(403)",
     nextAction: () =>

@@ -427,6 +427,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/implement_verify` | script | [SF-3-4/3] 検証と修正のループ |
 | `f/factory/steps/implement_finish` | script | [SF-3-4/4] コミット・push・PR作成 |
 | `f/factory/steps/dependabot_prepare` | script | [SF-3-5/1] 依存の更新の検査とインストール |
+| `f/factory/steps/dependabot_assess` | script | [SF-3-5/2] 依存の更新の影響調査(Claude) |
 | `f/factory/watch_main_ci` | script | [SF-4-1] mainのCIを監視して失敗を通知 |
 | `f/factory/audit_kickoff` | script | [SF-5-1] 週次監査の起動 |
 | `f/factory/audit` | flow | [SF-5-2] 運用記録の監査と改善提案 |
