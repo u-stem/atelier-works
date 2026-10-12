@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { GateInput } from "../../f/factory/lib/dependabot_support.ts";
 import {
   addLabels,
   type ClaimIssueResult,
@@ -5458,9 +5459,28 @@ function commitEntry(
   sha: string,
   author: { login: string; type: string } | null,
   committer: { login: string; type: string } | null,
+  options: { verified?: boolean; parentCount?: number } = {},
 ) {
-  return { sha, author, committer, commit: { message: "m" } };
+  const parentCount = options.parentCount ?? 1;
+  return {
+    sha,
+    author,
+    committer,
+    commit: {
+      message: "m",
+      verification: {
+        verified: options.verified ?? true,
+        reason: "valid",
+      },
+    },
+    parents: Array.from({ length: parentCount }, (_, index) => ({
+      sha: index.toString(16).padStart(40, "1"),
+    })),
+  };
 }
+
+const DEPENDABOT_ACCOUNT = { login: "dependabot[bot]", type: "Bot" };
+const WEB_FLOW_ACCOUNT = { login: "web-flow", type: "User" };
 
 describe("listPrCommits", () => {
   test("returns the sha and the GitHub accounts of each commit", async () => {
@@ -5485,8 +5505,154 @@ describe("listPrCommits", () => {
         authorLogin: "dependabot[bot]",
         authorType: "Bot",
         committerLogin: "web-flow",
+        verified: true,
+        parentCount: 1,
       },
     ]);
+  });
+
+  test("reads a Dependabot commit as signed with one parent", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT, {
+          verified: true,
+          parentCount: 1,
+        }),
+      ]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits[0]).toMatchObject({
+      authorLogin: "dependabot[bot]",
+      committerLogin: "web-flow",
+      verified: true,
+      parentCount: 1,
+    });
+  });
+
+  test("reads a branch update merge commit as having two parents", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        commitEntry(SHA_A, WEB_FLOW_ACCOUNT, WEB_FLOW_ACCOUNT, {
+          verified: true,
+          parentCount: 2,
+        }),
+      ]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits[0]?.parentCount).toBe(2);
+  });
+
+  test("reports an unverified commit as not verified", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        commitEntry(SHA_A, DEPENDABOT_ACCOUNT, DEPENDABOT_ACCOUNT, {
+          verified: false,
+        }),
+      ]),
+    ]);
+    const commits = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(commits[0]?.verified).toBe(false);
+  });
+
+  test("returns commits in the shape the gate takes", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([commitEntry(SHA_A, DEPENDABOT_ACCOUNT, WEB_FLOW_ACCOUNT)]),
+    ]);
+    const gateCommits: GateInput["commits"] = await listPrCommits(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(
+      gateCommits.map((commit) => [
+        commit.authorLogin,
+        commit.committerLogin,
+        commit.verified,
+        commit.parentCount,
+      ]),
+    ).toEqual([["dependabot[bot]", "web-flow", true, 1]]);
+  });
+
+  test("throws when a commit has no verification", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          sha: SHA_A,
+          author: null,
+          committer: null,
+          commit: { message: "m" },
+          parents: [],
+        },
+      ]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when verified is not a boolean", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          sha: SHA_A,
+          author: null,
+          committer: null,
+          commit: { verification: { verified: "true" } },
+          parents: [],
+        },
+      ]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when parents is not an array", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([
+        {
+          sha: SHA_A,
+          author: null,
+          committer: null,
+          commit: { verification: { verified: true } },
+          parents: 1,
+        },
+      ]),
+    ]);
+    await expect(
+      listPrCommits(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
   });
 
   test("returns nulls for a commit without a GitHub account", async () => {
@@ -5500,7 +5666,14 @@ describe("listPrCommits", () => {
       12,
     );
     expect(commits).toEqual([
-      { sha: SHA_A, authorLogin: null, authorType: null, committerLogin: null },
+      {
+        sha: SHA_A,
+        authorLogin: null,
+        authorType: null,
+        committerLogin: null,
+        verified: true,
+        parentCount: 1,
+      },
     ]);
   });
 

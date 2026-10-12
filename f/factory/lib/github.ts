@@ -2575,6 +2575,10 @@ export type PrCommit = {
   readonly authorLogin: string | null;
   readonly authorType: string | null;
   readonly committerLogin: string | null;
+  /** GitHubが署名を検証できたか。 */
+  readonly verified: boolean;
+  /** 親の数。2以上ならmergeのcommit。 */
+  readonly parentCount: number;
 };
 
 function parseCommitAccount(
@@ -2594,6 +2598,8 @@ function parseCommitAccount(
 /**
  * `GET .../pulls/{number}/commits`を最後のページまで読む。
  * `authorLogin`と`committerLogin`はGitHubのアカウントで、紐づくアカウントが無いcommitでは`null`にする。
+ * `verified`は`commit.verification.verified`、`parentCount`は`parents`の長さで、
+ * どちらも応答に無いか形が違うときは例外にする。判定に使う値を推測で補わないため。
  * APIの上限に達して切り詰められた可能性があるときは例外にする。
  */
 export async function listPrCommits(
@@ -2614,11 +2620,22 @@ export async function listPrCommits(
         }
         const author = parseCommitAccount(entry.author, context);
         const committer = parseCommitAccount(entry.committer, context);
+        const { commit, parents } = entry;
+        if (
+          !isRecord(commit) ||
+          !isRecord(commit.verification) ||
+          typeof commit.verification.verified !== "boolean" ||
+          !Array.isArray(parents)
+        ) {
+          throw unexpectedShape(context);
+        }
         return {
           sha: entry.sha,
           authorLogin: author?.login ?? null,
           authorType: author?.type ?? null,
           committerLogin: committer?.login ?? null,
+          verified: commit.verification.verified,
+          parentCount: parents.length,
         };
       });
     },
