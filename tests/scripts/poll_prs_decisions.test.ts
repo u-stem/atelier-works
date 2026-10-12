@@ -29,7 +29,6 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
-    hasActiveFixItem: false,
     activeFixItemId: null,
     lastKnownHeadSha: null,
     previousFixRound: 0,
@@ -170,7 +169,6 @@ describe("decidePrActions — fix", () => {
     const [decision] = decidePrActions(
       [
         candidate({
-          hasActiveFixItem: true,
           activeFixItemId: 60,
           labels: [FIX_LABEL],
           fixLabelerLogin: "octo-owner",
@@ -187,7 +185,6 @@ describe("decidePrActions — fix", () => {
     const [decision] = decidePrActions(
       [
         candidate({
-          hasActiveFixItem: true,
           activeFixItemId: 60,
           labels: [REVIEW_LABEL],
           reviewLabelerLogin: "octo-owner",
@@ -204,7 +201,6 @@ describe("decidePrActions — fix", () => {
     const [decision] = decidePrActions(
       [
         candidate({
-          hasActiveFixItem: true,
           activeFixItemId: 60,
           labels: [FIX_LABEL],
           fixLabelerLogin: "mallory",

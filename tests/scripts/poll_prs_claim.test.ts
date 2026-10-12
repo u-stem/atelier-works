@@ -1063,7 +1063,6 @@ describe("processPrDecisions", () => {
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
-    hasActiveFixItem: false,
     activeFixItemId: null,
     lastKnownHeadSha: null,
     previousFixRound: 0,
@@ -1697,23 +1696,34 @@ describe("processPrDecisions", () => {
       expect(causes).toEqual([conflict]);
     });
 
-    test("counts a failure and collects the PR when putting the label back fails", async () => {
-      const collected: unknown[] = [];
-      const { handlers } = handlersWith({
+    describe("when putting the label back fails", () => {
+      const restoreFails = {
         ...conflicting,
         restoreLabel: async () => {
           throw LEFT_REMOVED;
         },
-        collectLeftRemoved: async (_items, _candidate, err) => {
-          collected.push(err);
-        },
+      };
+
+      test("counts a failure", async () => {
+        const { handlers } = handlersWith(restoreFails);
+
+        const result = await run([FIX_BY_LABEL], handlers);
+
+        expect(result.failed).toBe(1);
       });
 
-      const result = await run([FIX_BY_LABEL], handlers);
+      test("collects the PR whose label stays removed", async () => {
+        const collected: unknown[] = [];
+        const { handlers } = handlersWith({
+          ...restoreFails,
+          collectLeftRemoved: async (_items, _candidate, err) => {
+            collected.push(err);
+          },
+        });
 
-      expect({ failed: result.failed, collected }).toEqual({
-        failed: 1,
-        collected: [LEFT_REMOVED],
+        await run([FIX_BY_LABEL], handlers);
+
+        expect(collected).toEqual([LEFT_REMOVED]);
       });
     });
 
@@ -1735,7 +1745,6 @@ describe("processPrDecisions", () => {
       candidate: {
         ...CANDIDATE,
         labels: ["factory:fix"],
-        hasActiveFixItem: true,
         activeFixItemId: 60,
       },
       review: { kind: "none" },

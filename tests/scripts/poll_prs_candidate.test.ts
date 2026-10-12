@@ -376,39 +376,31 @@ describe("buildPrCandidate with active pr_fix work items", () => {
   }
 
   test("marks a pull request that has an active pr_fix", async () => {
-    expect((await buildWith([ROW])).hasActiveFixItem).toBe(true);
-  });
-
-  test("carries the id of the active pr_fix", async () => {
     expect((await buildWith([ROW])).activeFixItemId).toBe(60);
   });
 
-  test("has no active pr_fix id without active rows", async () => {
-    expect((await buildWith([])).activeFixItemId).toBeNull();
-  });
-
   test("does not mark a pull request without active rows", async () => {
-    expect((await buildWith([])).hasActiveFixItem).toBe(false);
+    expect((await buildWith([])).activeFixItemId).toBeNull();
   });
 
   test("does not count an active pr_review as an active fix", async () => {
     expect(
       (await buildWith([{ ...ROW, kind: "pr_review", status: "reviewing" }]))
-        .hasActiveFixItem,
-    ).toBe(false);
+        .activeFixItemId,
+    ).toBeNull();
   });
 
   test("does not count an active dependabot row as an active fix", async () => {
     expect(
       (await buildWith([{ ...ROW, kind: "dependabot", status: "picked" }]))
-        .hasActiveFixItem,
-    ).toBe(false);
+        .activeFixItemId,
+    ).toBeNull();
   });
 
   test("does not count a terminal pr_fix as an active fix", async () => {
     expect(
       (await buildWith([{ ...ROW, status: "rereview_requested" }]))
-        .hasActiveFixItem,
-    ).toBe(false);
+        .activeFixItemId,
+    ).toBeNull();
   });
 });

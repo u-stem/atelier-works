@@ -283,7 +283,6 @@ export async function buildPrCandidate(
     hasActiveReviewingItem: activeForPr.some(
       (item) => item.kind === "pr_review",
     ),
-    hasActiveFixItem: activeFix !== undefined,
     activeFixItemId: activeFix?.id ?? null,
     lastKnownHeadSha: latestAny?.head_sha ?? null,
     previousFixRound: latestFix?.fix_round ?? 0,

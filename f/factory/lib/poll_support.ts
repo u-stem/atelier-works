@@ -702,12 +702,11 @@ export type PrCandidate = {
   /** このPRに、終了していない`pr_review`の作業項目がすでにあるか。 */
   readonly hasActiveReviewingItem: boolean;
   /**
-   * このPRに、終端でない`pr_fix`の作業項目がすでにあるか。
-   * あるとき、`fix_label`では修正を始めない。同じPRの終端でない`pr_fix`は、
-   * DBの部分一意インデックスでも1件に制限され、2件目の挿入は失敗するためである。
+   * このPRの、終端でない`pr_fix`の作業項目のid。無ければ`null`。
+   * 値があるとき、`fix_label`では修正を始めず、このidを保留の理由としてログに残す。
+   * 同じPRの終端でない`pr_fix`は、DBの部分一意インデックスでも1件に制限され、
+   * 2件目の挿入は失敗するためである。
    */
-  readonly hasActiveFixItem: boolean;
-  /** `hasActiveFixItem`が`true`のとき、その`pr_fix`の作業項目のid。保留の理由としてログに残す。無ければ`null`。 */
   readonly activeFixItemId: number | null;
   /**
    * このPRの最新の`work_items`の行(種類と状態は問わない)の`head_sha`。
@@ -810,7 +809,8 @@ export function decidePrActions(
     // 一意インデックスに阻まれると、人の依頼が黙って失われるためである。
     const fix: PrFixAction = hasFixLabel
       ? fixLabelAllowed
-        ? isViewerBumpBranch(candidate.headRef) || candidate.hasActiveFixItem
+        ? isViewerBumpBranch(candidate.headRef) ||
+          candidate.activeFixItemId !== null
           ? { kind: "none" }
           : { kind: "trigger_fix", removeLabel: true }
         : { kind: "deny_labeler" }
