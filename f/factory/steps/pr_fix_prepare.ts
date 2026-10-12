@@ -10,7 +10,7 @@ import {
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
-import { type GhClient, getPr, getRepositoryOwnerId } from "../lib/github.ts";
+import { type GhClient, getPr } from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
@@ -20,7 +20,10 @@ import {
   WorktreeBusyError,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
-import { verifyRepoOwnerId } from "../lib/repo_owner_gate.ts";
+import {
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import {
   createGtrWorktree,
@@ -135,11 +138,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     config,
     workItem.owner,
     workItem.repo,
-    {
-      getRepositoryOwnerId: (owner, repo) =>
-        getRepositoryOwnerId(client, owner, repo),
-      addNotice: addNoticeUnlessUnresolved,
-    },
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
   );
   if (!ownerGuard.ok) {
     return {

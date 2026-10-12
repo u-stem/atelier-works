@@ -6,7 +6,16 @@
 // そのリポジトリのcloneやcheckout、検査コマンドの実行、Issueへの書き込みの前に、各ステップが呼ぶ。
 // I/Oは依存として受け取り、テストでは差し替える。
 
-import { GitHubHttpError } from "./github.ts";
+import {
+  FactoryRepoIdMismatchError,
+  verifyFactoryRepoId,
+} from "./factory_repo_gate.ts";
+import {
+  type GhClient,
+  GitHubHttpError,
+  getRepositoryId,
+  getRepositoryOwnerId,
+} from "./github.ts";
 import { isFactoryRepo } from "./implement_finish_support.ts";
 import { OWNER_ID_MISMATCH_KIND } from "./poll_support.ts";
 import type { FactoryConfig, NoticeRecord } from "./types.ts";
@@ -70,6 +79,11 @@ export function repoOwnerNotConfiguredReason(repository: string): string {
   return `repository owner is not in factory_config owners: ${repository}`;
 }
 
+/** 作業項目の状態の注記に残す、`factory_repo_id`の照合に落ちた理由。 */
+export function factoryRepoIdCheckReason(repository: string): string {
+  return `factory repository id check failed: ${repository}`;
+}
+
 export type RepoOwnerGateResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };
@@ -79,36 +93,62 @@ export type RepoOwnerGateDeps = {
     owner: string,
     repo: string,
   ) => Promise<number>;
+  /** `factory_repo_id`の照合(`verifyFactoryRepoId`)が使う。`GET repos/{owner}/{repo}`のリポジトリのID。 */
+  readonly getRepositoryId: (owner: string, repo: string) => Promise<number>;
   readonly addNotice: (record: NoticeRecord) => Promise<unknown>;
 };
+
+/**
+ * `client`のGitHub呼び出しと、`addNotice`のnotice記録から、関門の依存を組み立てる。
+ * 呼び出し側のステップが同じ配線を重ねて書かないためのものである。
+ */
+export function repoOwnerGateDeps(
+  client: GhClient,
+  addNotice: (record: NoticeRecord) => Promise<unknown>,
+): RepoOwnerGateDeps {
+  return {
+    getRepositoryOwnerId: (owner, repo) =>
+      getRepositoryOwnerId(client, owner, repo),
+    getRepositoryId: (owner, repo) => getRepositoryId(client, owner, repo),
+    addNotice,
+  };
+}
 
 /**
  * 作業項目のリポジトリのオーナーを、設定の`owners`と照合し、先へ進めてよいかを返す。
  * 呼び出しの順に頼らず、この関門自身が閉じる。`isRepoAllowed`を呼ばないステップにも使うため。
  *
+ * - リポジトリが`factory_repo`と一致し、`factory_repo_id`があるときは、先にそのIDを照合する(`verifyFactoryRepoId`)。
+ *   食い違い、リポジトリが無い(404)ときは、`factory_repo_id_mismatch`のnoticeを残して理由つきで止める。
+ *   cloneを開かないステップ(Issueの作成、Issue化の提案)は、`openFactoryClone`の照合を通らないので、ここで行う。
+ *   cloneを開くステップでは、同じ照合が重なる。取得が1回増えるだけなので許容する。
  * - `owner`と同じ名前(大文字と小文字を区別しない)の`owners`の要素が無いときは、
- *   リポジトリが`factory_repo`と一致する場合だけ、取得せずに通す。`factory_repo`は`factory_repo_id`が別に照合する。
+ *   リポジトリが`factory_repo`と一致する場合だけ通す。
  *   それ以外は、noticeを残して理由つきで止める。`owners`に無いオーナーは対象外のためである。
  * - 要素が`id`を持たないときは、名前だけで動くので、取得せずに通す。
  * - 要素が`id`を持つときは、`GET repos/{owner}/{repo}`のオーナーのIDと照合する。
  *   食い違いと、リポジトリが無い(404)ときは、noticeを残して理由つきで止める。
  *   どちらも改名か削除でほぼ恒久で、人が`owners`を見直す操作がある。
- *   404以外の取得の失敗(401、5xx、レート制限、通信断)は、noticeを残さず元の例外を投げる。
- *   一時的な障害でありうるので、呼び出し側のジョブの失敗にして、検知を弱めない。
+ * 404以外の取得の失敗(401、5xx、レート制限、通信断)は、noticeを残さず元の例外を投げる。
+ * 一時的な障害でありうるので、呼び出し側のジョブの失敗にして、検知を弱めない。
  * noticeの記録が失敗しても、止める結果を隠さない。
- * 取得は1回だけである。
  */
 export async function verifyRepoOwnerId(
-  config: Pick<FactoryConfig, "owners" | "factory_repo">,
+  config: Pick<FactoryConfig, "owners" | "factory_repo" | "factory_repo_id">,
   owner: string,
   repo: string,
   deps: RepoOwnerGateDeps,
 ): Promise<RepoOwnerGateResult> {
+  const factoryRepo = isFactoryRepo(config.factory_repo, owner, repo);
+  if (factoryRepo) {
+    const factoryGate = await verifyFactoryRepo(config, owner, repo, deps);
+    if (!factoryGate.ok) return factoryGate;
+  }
   const configured = config.owners.find(
     (candidate) => candidate.name.toLowerCase() === owner.toLowerCase(),
   );
   if (configured === undefined) {
-    if (isFactoryRepo(config.factory_repo, owner, repo)) {
+    if (factoryRepo) {
       return { ok: true };
     }
     await recordNotice(repoOwnerNotConfiguredMessage(`${owner}/${repo}`), deps);
@@ -165,4 +205,32 @@ async function recordNotice(
   } catch {
     // noticeを残せなくても、止めたことは呼び出し側の終端と作業項目の注記で伝わる。
   }
+}
+
+/**
+ * `factory_repo_id`があるときだけ、`factory_repo`のリポジトリIDを照合する。
+ * `verifyFactoryRepoId`が残すnoticeを使い、その例外だけを止める結果に変える。
+ * それ以外の例外(取得の失敗)は、そのまま投げる。
+ */
+async function verifyFactoryRepo(
+  config: Pick<FactoryConfig, "factory_repo" | "factory_repo_id">,
+  owner: string,
+  repo: string,
+  deps: RepoOwnerGateDeps,
+): Promise<RepoOwnerGateResult> {
+  try {
+    await verifyFactoryRepoId(config, {
+      getRepositoryId: deps.getRepositoryId,
+      addNotice: deps.addNotice,
+    });
+  } catch (err) {
+    if (err instanceof FactoryRepoIdMismatchError) {
+      return {
+        ok: false,
+        reason: factoryRepoIdCheckReason(`${owner}/${repo}`),
+      };
+    }
+    throw err;
+  }
+  return { ok: true };
 }

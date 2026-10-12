@@ -19,11 +19,7 @@ import {
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
-import {
-  type GhClient,
-  getIssue,
-  getRepositoryOwnerId,
-} from "../lib/github.ts";
+import { type GhClient, getIssue } from "../lib/github.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger } from "../lib/log.ts";
 import {
@@ -32,7 +28,10 @@ import {
   PIPELINE_LEASE_POLL_MS,
   PIPELINE_LEASE_WAIT_MS,
 } from "../lib/pipeline_lease.ts";
-import { verifyRepoOwnerId } from "../lib/repo_owner_gate.ts";
+import {
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import type { WorkItemStatus } from "../lib/types.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../lib/types.ts";
 import {
@@ -241,11 +240,7 @@ export async function main(
     config,
     workItem.owner,
     workItem.repo,
-    {
-      getRepositoryOwnerId: (owner, repo) =>
-        getRepositoryOwnerId(client, owner, repo),
-      addNotice: addNoticeUnlessUnresolved,
-    },
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
   );
   if (!ownerGuard.ok) {
     return stopForRepoOwner(ownerGuard.reason, {

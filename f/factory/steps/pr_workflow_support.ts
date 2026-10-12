@@ -3687,6 +3687,13 @@ const REASON_RULES: readonly ReasonRule[] = [
       `factory_configのownersを見直してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
+    pattern: /^factory repository id check failed: (\S+)$/,
+    describe: (m) =>
+      `Factory自身のリポジトリ${m[1]}のIDを、factory_configのfactory_repo_idと照合できません`,
+    nextAction: () =>
+      `factory_configのfactory_repoとfactory_repo_idを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  {
     pattern:
       /^repository not found while checking the owner id in factory_config owners: (\S+) \(expected (\d+)\)$/,
     describe: (m) =>

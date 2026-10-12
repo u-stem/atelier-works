@@ -187,7 +187,8 @@ Claudeや検査コマンドが書ける詳細と、pr_fixのClaudeが理由と�
 
 関門は、呼び出しの順に頼らず、それ自身が閉じる。
 `owners`に名前が無いオーナーのリポジトリは、`factory_repo`と一致するときだけ通し、それ以外は止める。
-`factory_repo`は`factory_repo_id`が別に照合する。
+リポジトリが`factory_repo`と一致し、`factory_repo_id`があるときは、関門が先にそのIDも照合する。
+cloneを開かない処理は、`openFactoryClone`の照合を通らないためである。
 `id`を持つ要素は、現在のIDと合うときだけ通す。
 `id`を持たない要素は、名前だけで動く。
 照合は、1ステップにつき1回の取得で行う。

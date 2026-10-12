@@ -154,16 +154,18 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 
 - 要件定義(`pipeline_prepare`)、実装(`implement_prepare`)、PR修正(`pr_fix_prepare`)、PRレビュー(`pr_review_prepare`)の準備。
 - フォームで投入する`manual_intake_create_issue`。Issueを作る前に照合する。
-- Issue化の提案を処理する`issue_proposal_apply`。判断の記録とGitHubへの書き込みの前に、1回だけ照合する。
+- Issue化の提案を処理する`issue_proposal_apply`。承認は判断の記録の前に、却下は返信の前に、1回だけ照合する。
 
 照合は、リポジトリのオーナーの名前で`owners`を引いて行う。
 大文字と小文字は区別しない。
 
-- 要素が`id`を持つときは、`GET repos/<owner>/<repo>`が返すオーナーのIDと比べる。取得は、1ステップにつき1回である。
+- 要素が`id`を持つときは、`GET repos/<owner>/<repo>`が返すオーナーのIDと比べる。
 - 要素が`id`を持たないときは、照合せず、名前だけで動く。
 - 要素が無いときは、リポジトリが`factory_repo`と一致する場合だけ通す。それ以外は対象外として止める。
 
-`factory_repo`は、`factory_repo_id`が別に照合する([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
+リポジトリが`factory_repo`と一致し、`factory_repo_id`があるときは、これらより先に、リポジトリ自体のIDも比べる([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
+cloneを開かない処理にも、この照合を効かせるためである。
+cloneを開く準備のステップでは、`openFactoryClone`も同じ照合をするので、取得が1回増える。
 通ったときだけ、cloneとcheckoutに進む。
 `check_commands_by_repo`のキーは名前だが、`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか検査コマンドが走らない。
 
@@ -174,6 +176,7 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 - リポジトリが見つからない(404)。
 - オーナーが`owners`に無い。
 
+`factory_repo`のIDが食い違うか、見つからないときは、`factory_repo_id_mismatch`が残る。
 本文にリポジトリ名が載る。
 `owners`に無いときは、オーナーを改名したなら名前を直し、対象にするなら足す操作が載る。
 それ以外は、設定のIDが載り、食い違いのときはGitHubの現在のIDも載る。
@@ -190,7 +193,12 @@ GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_co
 | `implement_prepare` | 作業項目を人の対応待ちにして、Discordに知らせる |
 | `pr_fix_prepare` | 作業項目をブロック(`blocked`)にして、Discordに知らせる |
 | `pr_review_prepare` | PRを読む前に、作業項目をブロックにして、Discordに知らせる。forkのPRを見送るときと同じ終わり方である |
-| `issue_proposal_apply` | GitHubへ何も書かずに、例外で失敗する。提案は`pending`のままか、`pending`に戻る。`owners`を見直した後に、Consoleの要対応から再度承認する |
+| `issue_proposal_apply`の承認 | 判断を記録せず、GitHubへ何も書かずに、例外で失敗する。承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。`owners`を見直した後に同じ承認をやり直すと、続きから処理する。記録済みの承認は、却下に変えられない |
+| `issue_proposal_apply`の却下 | 判断を記録した後、返信だけを止める。警告のログを残し、作業項目は先へ進める |
+
+照合に落ちたIssue化の提案の承認は、`owners`を見直して同じ承認をやり直す。
+`approval_decide`は、記録済みの承認を却下に変える操作を断る。
+名前が乗っ取られたままのときは、承認依頼が要対応に残り続ける。
 
 404以外のすべて(認証の失敗、5xx、レート制限、通信断を含む)でIDを取得できなかったときは、noticeを残さず、ステップが失敗する。
 持続する障害を見逃さないためである。
@@ -256,6 +264,7 @@ privateリポジトリでは、PATがアクセスを失うと、401でなく404�
 | `poll_issues`のデプロイ版の確認 | その回の確認を飛ばし、警告のログを残す。ポーリングは続く |
 | 要件定義(`pipeline_prepare`、`pipeline_generate`)、実装、PR修正、PRレビューの準備 | 取得の前にステップが失敗し、フローが失敗する。作業項目は失敗になり、Discordに`job_failed`が届く。原因を直した後に、`retry_work_item`で再実行する |
 | 監査の準備 | 取得の前にステップが失敗し、フローが失敗する。作業項目は失敗になり、Discordに`job_failed`が届く。監査の作業項目は再実行できない。失敗した期間は、次の週次の監査か、**レポート**の**今すぐ監査**で取り込む |
+| フォームからのIssueの作成、Issue化の提案の処理 | cloneを開かないが、オーナーの照合の関門が`factory_repo_id`を照合する。食い違いと404では、書き込まずに止める([作業項目を進める前の照合](#作業項目を進める前の照合)) |
 
 404以外のすべて(認証の失敗、5xx、レート制限、通信断を含む)でIDを取得できなかったときは、noticeを残さず、例外としてそのまま失敗にする。
 `self_update`のジョブは失敗し、`job_failed`が届く。

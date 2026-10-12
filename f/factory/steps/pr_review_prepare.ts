@@ -15,15 +15,11 @@ import {
 } from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
-import {
-  type GhClient,
-  getPr,
-  getRepositoryOwnerId,
-  type PullRequest,
-} from "../lib/github.ts";
+import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
 import {
   type RepoOwnerGateResult,
+  repoOwnerGateDeps,
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
 import { assertGitHubName, assertSha } from "../lib/types.ts";
@@ -130,11 +126,12 @@ export async function main(
     },
     {
       checkRepoOwner: () =>
-        verifyRepoOwnerId(config, workItem.owner, workItem.repo, {
-          getRepositoryOwnerId: (owner, repo) =>
-            getRepositoryOwnerId(client, owner, repo),
-          addNotice: addNoticeUnlessUnresolved,
-        }),
+        verifyRepoOwnerId(
+          config,
+          workItem.owner,
+          workItem.repo,
+          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
       getPr: (owner, repo, number) => getPr(client, owner, repo, number),
       ensureFactoryClone: () =>
         openFactoryClone(config, { run: runCommand, ghToken }),

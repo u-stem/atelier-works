@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
 import {
   ensureProposalRepoOwner,
+  proposalRepoOwnerStop,
   readWithFactoryLabel,
   resolveFactoryLabel,
 } from "../../f/factory/steps/issue_proposal_apply.ts";
@@ -212,78 +213,60 @@ describe("chooseIssueProposalReplyTarget", () => {
   });
 });
 
-describe("ensureProposalRepoOwner", () => {
+describe("the owner check of an issue proposal", () => {
   const STOPPED_REASON =
     "repository owner id differs from factory_config owners: acme/widgets (expected 1, actual 2)";
   const STOPPED: RepoOwnerGateResult = { ok: false, reason: STOPPED_REASON };
 
-  function setup(gate: RepoOwnerGateResult) {
+  function verifyReturning(gate: RepoOwnerGateResult) {
     const calls: string[] = [];
-    const deps = {
-      verify: async () => {
-        calls.push("verify");
-        return gate;
-      },
-      revertToPending: async () => {
-        calls.push("revertToPending");
-      },
+    const verify = async () => {
+      calls.push("verify");
+      return gate;
     };
-    return { deps, calls };
+    return { verify, calls };
   }
 
-  test("returns without touching the proposal when the owner id matches", async () => {
-    const { deps, calls } = setup({ ok: true });
-    await ensureProposalRepoOwner(
-      { status: "pending", created_issue_number: null },
-      deps,
-    );
-    expect(calls).toEqual(["verify"]);
+  describe("proposalRepoOwnerStop", () => {
+    test("returns null when the owner check passes", async () => {
+      const { verify } = verifyReturning({ ok: true });
+      expect(await proposalRepoOwnerStop(verify)).toBeNull();
+    });
+
+    test("returns the reason when the owner check stops the proposal", async () => {
+      const { verify } = verifyReturning(STOPPED);
+      expect(await proposalRepoOwnerStop(verify)).toBe(STOPPED_REASON);
+    });
+
+    test("checks once", async () => {
+      const { verify, calls } = verifyReturning(STOPPED);
+      await proposalRepoOwnerStop(verify);
+      expect(calls).toEqual(["verify"]);
+    });
   });
 
-  test("rejects with the reason when the check stops the proposal", async () => {
-    const { deps } = setup(STOPPED);
-    await expect(
-      ensureProposalRepoOwner(
-        { status: "pending", created_issue_number: null },
-        deps,
-      ),
-    ).rejects.toThrow(STOPPED_REASON);
-  });
+  describe("ensureProposalRepoOwner", () => {
+    test("returns when the owner check passes", async () => {
+      const { verify } = verifyReturning({ ok: true });
+      await expect(ensureProposalRepoOwner(verify)).resolves.toBeUndefined();
+    });
 
-  test("leaves a pending proposal as it is when the check stops it", async () => {
-    const { deps, calls } = setup(STOPPED);
-    await ensureProposalRepoOwner(
-      { status: "pending", created_issue_number: null },
-      deps,
-    ).catch(() => undefined);
-    expect(calls).toEqual(["verify"]);
-  });
+    test("rejects with the reason when the owner check stops the approval", async () => {
+      const { verify } = verifyReturning(STOPPED);
+      await expect(ensureProposalRepoOwner(verify)).rejects.toThrow(
+        STOPPED_REASON,
+      );
+    });
 
-  test("returns an approved proposal without an issue to pending when the check stops it", async () => {
-    const { deps, calls } = setup(STOPPED);
-    await ensureProposalRepoOwner(
-      { status: "approved", created_issue_number: null },
-      deps,
-    ).catch(() => undefined);
-    expect(calls).toEqual(["verify", "revertToPending"]);
-  });
+    test("tells the next action in the error", async () => {
+      const { verify } = verifyReturning(STOPPED);
+      await expect(ensureProposalRepoOwner(verify)).rejects.toThrow("再度承認");
+    });
 
-  test("keeps an approved proposal whose issue exists when the check stops it", async () => {
-    const { deps, calls } = setup(STOPPED);
-    await ensureProposalRepoOwner(
-      { status: "approved", created_issue_number: 12 },
-      deps,
-    ).catch(() => undefined);
-    expect(calls).toEqual(["verify"]);
-  });
-
-  test("tells the next action in the error", async () => {
-    const { deps } = setup(STOPPED);
-    await expect(
-      ensureProposalRepoOwner(
-        { status: "pending", created_issue_number: null },
-        deps,
-      ),
-    ).rejects.toThrow("再度承認");
+    test("checks once", async () => {
+      const { verify, calls } = verifyReturning(STOPPED);
+      await ensureProposalRepoOwner(verify).catch(() => undefined);
+      expect(calls).toEqual(["verify"]);
+    });
   });
 });

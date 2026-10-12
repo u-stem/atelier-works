@@ -1,9 +1,15 @@
 // 対象リポジトリのオーナーの数値IDを、取得の前にGitHubの現在のIDと照合する判定のテスト。
 
 import { describe, expect, test } from "bun:test";
+import {
+  FACTORY_REPO_ID_MISMATCH_KIND,
+  factoryRepoIdMismatchMessage,
+  factoryRepoNotFoundMessage,
+} from "../../f/factory/lib/factory_repo_gate.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import { OWNER_ID_MISMATCH_KIND } from "../../f/factory/lib/poll_support.ts";
 import {
+  factoryRepoIdCheckReason,
   repoOwnerIdMismatchMessage,
   repoOwnerIdMismatchReason,
   repoOwnerNotConfiguredMessage,
@@ -24,18 +30,34 @@ const WITHOUT_ID: FactoryOwner = { name: "octo-owner", kind: "user" };
 const FACTORY_REPO = "https://github.com/octo-owner/factory.git";
 
 /** `factory_repo`はオーナーの`octo-owner`のリポジトリにする。 */
-function configWith(owners: FactoryOwner[], factoryRepo = FACTORY_REPO) {
-  return { owners, factory_repo: factoryRepo };
+function configWith(
+  owners: FactoryOwner[],
+  factoryRepo = FACTORY_REPO,
+  factoryRepoId?: number,
+) {
+  return {
+    owners,
+    factory_repo: factoryRepo,
+    ...(factoryRepoId === undefined ? {} : { factory_repo_id: factoryRepoId }),
+  };
 }
 
 type Recorded = {
   readonly notices: NoticeRecord[];
   readonly lookups: { owner: string; repo: string }[];
+  readonly repoLookups: { owner: string; repo: string }[];
 };
 
-function setup(lookup: () => Promise<number>) {
-  const recorded: Recorded = { notices: [], lookups: [] };
+function setup(
+  lookup: () => Promise<number>,
+  repoLookup: () => Promise<number> = () => Promise.resolve(777),
+) {
+  const recorded: Recorded = { notices: [], lookups: [], repoLookups: [] };
   const deps = {
+    getRepositoryId: (owner: string, repo: string) => {
+      recorded.repoLookups.push({ owner, repo });
+      return repoLookup();
+    },
     getRepositoryOwnerId: (owner: string, repo: string) => {
       recorded.lookups.push({ owner, repo });
       return lookup();
@@ -112,15 +134,26 @@ describe("verifyRepoOwnerId", () => {
     expect(result.ok).toBe(false);
   });
 
-  test("proceeds without a lookup for the factory repository that owners does not list", async () => {
-    const { deps, recorded } = setup(() => Promise.resolve(1));
+  test("proceeds for the factory repository that owners does not list", async () => {
+    const { deps } = setup(() => Promise.resolve(1));
     const result = await verifyRepoOwnerId(
       configWith([], "https://github.com/stranger/factory.git"),
       "stranger",
       "factory",
       deps,
     );
-    expect([result, recorded.lookups]).toEqual([{ ok: true }, []]);
+    expect(result).toEqual({ ok: true });
+  });
+
+  test("makes no lookup for the factory repository when factory_repo_id is not set", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(1));
+    await verifyRepoOwnerId(
+      configWith([], "https://github.com/stranger/factory.git"),
+      "stranger",
+      "factory",
+      deps,
+    );
+    expect(recorded.repoLookups).toEqual([]);
   });
 
   test("matches the factory repository without regard to case", async () => {
@@ -374,6 +407,18 @@ describe("the reason shown to people", () => {
     ).toContain("factory_configのowners");
   });
 
+  test("translates the factory repository id reason, keeping the repository", () => {
+    expect(
+      describeReason(factoryRepoIdCheckReason("octo-owner/factory")),
+    ).toContain("octo-owner/factory");
+  });
+
+  test("tells the factory repository id next action to review factory_repo_id", () => {
+    expect(
+      nextActionFor(factoryRepoIdCheckReason("octo-owner/factory")),
+    ).toContain("factory_repo_id");
+  });
+
   test("tells the not-found next action to check the token permission", () => {
     expect(nextActionFor(notFound)).toContain("PAT");
   });
@@ -392,5 +437,182 @@ describe("repoOwnerNotConfiguredMessage", () => {
 
   test("names the next action", () => {
     expect(message).toContain("見直して");
+  });
+});
+
+describe("verifyRepoOwnerId for the factory repository with factory_repo_id", () => {
+  const STRANGER = "https://github.com/stranger/factory.git";
+  const STRANGER_REPO = "stranger/factory";
+
+  test("proceeds when the current repository id matches", async () => {
+    const { deps } = setup(
+      () => Promise.resolve(1),
+      () => Promise.resolve(777),
+    );
+    const result = await verifyRepoOwnerId(
+      configWith([], STRANGER, 777),
+      "stranger",
+      "factory",
+      deps,
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  test("looks up the repository named by factory_repo", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(1));
+    await verifyRepoOwnerId(
+      configWith([], STRANGER, 777),
+      "stranger",
+      "factory",
+      deps,
+    );
+    expect(recorded.repoLookups).toEqual([
+      { owner: "stranger", repo: "factory" },
+    ]);
+  });
+
+  test("stops when the current repository id differs", async () => {
+    const { deps } = setup(
+      () => Promise.resolve(1),
+      () => Promise.resolve(999),
+    );
+    const result = await verifyRepoOwnerId(
+      configWith([], STRANGER, 777),
+      "stranger",
+      "factory",
+      deps,
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: factoryRepoIdCheckReason(STRANGER_REPO),
+    });
+  });
+
+  test("records the factory_repo_id_mismatch notice when the repository id differs", async () => {
+    const { deps, recorded } = setup(
+      () => Promise.resolve(1),
+      () => Promise.resolve(999),
+    );
+    await verifyRepoOwnerId(
+      configWith([], STRANGER, 777),
+      "stranger",
+      "factory",
+      deps,
+    );
+    expect(recorded.notices).toEqual([
+      {
+        kind: FACTORY_REPO_ID_MISMATCH_KIND,
+        message: factoryRepoIdMismatchMessage(STRANGER_REPO, 777, 999),
+      },
+    ]);
+  });
+
+  test("stops when the factory repository is not found", async () => {
+    const { deps } = setup(
+      () => Promise.resolve(1),
+      () => Promise.reject(new GitHubHttpError("not found", 404)),
+    );
+    const result = await verifyRepoOwnerId(
+      configWith([], STRANGER, 777),
+      "stranger",
+      "factory",
+      deps,
+    );
+    expect(result).toEqual({
+      ok: false,
+      reason: factoryRepoIdCheckReason(STRANGER_REPO),
+    });
+  });
+
+  test("records the not-found notice when the factory repository is not found", async () => {
+    const { deps, recorded } = setup(
+      () => Promise.resolve(1),
+      () => Promise.reject(new GitHubHttpError("not found", 404)),
+    );
+    await verifyRepoOwnerId(
+      configWith([], STRANGER, 777),
+      "stranger",
+      "factory",
+      deps,
+    );
+    expect(recorded.notices).toEqual([
+      {
+        kind: FACTORY_REPO_ID_MISMATCH_KIND,
+        message: factoryRepoNotFoundMessage(STRANGER_REPO, 777),
+      },
+    ]);
+  });
+
+  test("rejects with the original error for a server error", async () => {
+    const failure = new GitHubHttpError("boom", 502);
+    const { deps } = setup(
+      () => Promise.resolve(1),
+      () => Promise.reject(failure),
+    );
+    await expect(
+      verifyRepoOwnerId(
+        configWith([], STRANGER, 777),
+        "stranger",
+        "factory",
+        deps,
+      ),
+    ).rejects.toBe(failure);
+  });
+
+  test("checks the owner id as well when the owner is listed with an id", async () => {
+    const { deps, recorded } = setup(
+      () => Promise.resolve(4242),
+      () => Promise.resolve(777),
+    );
+    await verifyRepoOwnerId(
+      configWith([WITH_ID], FACTORY_REPO, 777),
+      "octo-owner",
+      "factory",
+      deps,
+    );
+    expect(recorded.lookups).toEqual([
+      { owner: "octo-owner", repo: "factory" },
+    ]);
+  });
+
+  test("checks the repository id as well when the owner is listed with an id", async () => {
+    const { deps, recorded } = setup(
+      () => Promise.resolve(4242),
+      () => Promise.resolve(777),
+    );
+    await verifyRepoOwnerId(
+      configWith([WITH_ID], FACTORY_REPO, 777),
+      "octo-owner",
+      "factory",
+      deps,
+    );
+    expect(recorded.repoLookups).toEqual([
+      { owner: "octo-owner", repo: "factory" },
+    ]);
+  });
+
+  test("stops on a repository id mismatch even when the owner id matches", async () => {
+    const { deps } = setup(
+      () => Promise.resolve(4242),
+      () => Promise.resolve(999),
+    );
+    const result = await verifyRepoOwnerId(
+      configWith([WITH_ID], FACTORY_REPO, 777),
+      "octo-owner",
+      "factory",
+      deps,
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("makes no repository id lookup for another repository of the same owner", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(4242));
+    await verifyRepoOwnerId(
+      configWith([WITH_ID], FACTORY_REPO, 777),
+      "octo-owner",
+      "app",
+      deps,
+    );
+    expect(recorded.repoLookups).toEqual([]);
   });
 });

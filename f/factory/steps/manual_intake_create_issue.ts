@@ -4,12 +4,11 @@
 import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import { addNoticeUnlessUnresolved } from "../lib/db.ts";
+import { createIssue, type GhClient } from "../lib/github.ts";
 import {
-  createIssue,
-  type GhClient,
-  getRepositoryOwnerId,
-} from "../lib/github.ts";
-import { verifyRepoOwnerId } from "../lib/repo_owner_gate.ts";
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 
@@ -83,11 +82,12 @@ export async function main(
   const client: GhClient = { run: runCommand, ghToken };
 
   // 入力した依頼文を、名前が別の人に渡ったリポジトリのIssueに書き込まないよう、投稿の前に照合する。
-  const ownerGuard = await verifyRepoOwnerId(config, owner, repo, {
-    getRepositoryOwnerId: (ownerName, repoName) =>
-      getRepositoryOwnerId(client, ownerName, repoName),
-    addNotice: addNoticeUnlessUnresolved,
-  });
+  const ownerGuard = await verifyRepoOwnerId(
+    config,
+    owner,
+    repo,
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+  );
   if (!ownerGuard.ok) {
     throw new Error(`manual_intake: ${ownerGuard.reason}`);
   }

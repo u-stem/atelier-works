@@ -26,7 +26,6 @@ import {
   createIssue,
   findIssueByMarker,
   type GhClient,
-  getRepositoryOwnerId,
   postIssueComment,
   replyReviewComment,
   resolveReviewThread,
@@ -35,13 +34,10 @@ import {
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import {
   type RepoOwnerGateResult,
+  repoOwnerGateDeps,
   verifyRepoOwnerId,
 } from "../lib/repo_owner_gate.ts";
-import {
-  type IssueProposalOrigin,
-  type IssueProposalStatus,
-  isBoolean,
-} from "../lib/types.ts";
+import { type IssueProposalOrigin, isBoolean } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 import {
   appendIssueProposalMarker,
@@ -93,8 +89,10 @@ export function readWithFactoryLabel(
  * パイプラインに戻してよいのは、そのリポジトリが`factory_config`
  * (owners / repo_allowlist)で許可されているときだけ。
  * 許可されていなければラベルを付けず、黙って落とさずに、ログに残す`reason`を返す。
- * `isRepoAllowed`は`factory_repo`を常に許すため、`repoAllowed`は通常は真になる。
- * 偽になるのは、`factory_repo`と作業項目の`owner`/`repo`が食い違ったときだけ。
+ * `isRepoAllowed`は`factory_repo`を常に許すため、`audit`の提案の`repoAllowed`は通常は真になる。
+ * 偽になるのは、作業項目の`owner`/`repo`が`factory_repo`と食い違い、
+ * かつ`owners`と`repo_allowlist`にも許されないときだけである。
+ * `owners`に無いオーナーのリポジトリは、この判定の前に、承認の経路が止める(`ensureProposalRepoOwner`)。
  */
 export function resolveFactoryLabel(input: {
   readonly requested: boolean;
@@ -112,42 +110,34 @@ export function resolveFactoryLabel(input: {
   return { apply: true, reason: null };
 }
 
-export type ProposalRepoOwnerDeps = {
-  /** 保存済みのリポジトリのオーナーの数値IDを、`owners`と照合する(`verifyRepoOwnerId`)。 */
-  readonly verify: () => Promise<RepoOwnerGateResult>;
-  /** 提案の行を"pending"に戻す(`revertIssueProposalToPending`)。 */
-  readonly revertToPending: () => Promise<void>;
-};
+/**
+ * 提案が指す保存済みのリポジトリのオーナーを照合し(`verify`)、止めるなら理由を返す。通れば`null`を返す。
+ * 名前が別の人に渡っていると、Issueの起票も返信も、その人のリポジトリに書き込んでしまうためである。
+ * noticeは`verify`が残す。
+ */
+export async function proposalRepoOwnerStop(
+  verify: () => Promise<RepoOwnerGateResult>,
+): Promise<string | null> {
+  const gate = await verify();
+  return gate.ok ? null : gate.reason;
+}
 
 /**
- * GitHubへ書き込む前に、提案が指す保存済みのリポジトリのオーナーを照合する。
- * 名前が別の人に渡っていると、Issueの起票も返信も、その人のリポジトリに書き込んでしまうためである。
- * 通れば何もしない。通らなければ、GitHubへは何も書かずに例外を投げる。
- * 照合は1回で、Issueの作成と返信の前に重ねて呼ばない。
- * 行が"approved"でIssueの番号が無いときは、"pending"に戻す。
- * 戻さないと、Consoleの要対応から外れたまま、処理中に見えるためである。
- * 行が"pending"のときは判断を記録する前なので、触れない。
- * Issueの番号があるときは、Issueが既にGitHubにあるので触れない(戻すと作り直して重複しうる)。
- * 例外の文に次の操作を載せる。noticeは`verify`が残す。
+ * 承認の前に、`proposalRepoOwnerStop`で照合し、止めるなら例外を投げる。
+ * 判断の記録もGitHubへの書き込みもしないので、行の状態は変わらない。
+ * 承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。
+ * `owners`を見直した後に同じ承認をやり直すと、`approval_decide`が起動し直し、続きから処理する。
+ * 記録済みの承認は、却下に変えられない。
  */
 export async function ensureProposalRepoOwner(
-  proposal: {
-    readonly status: IssueProposalStatus;
-    readonly created_issue_number: number | null;
-  },
-  deps: ProposalRepoOwnerDeps,
+  verify: () => Promise<RepoOwnerGateResult>,
 ): Promise<void> {
-  const gate = await deps.verify();
-  if (gate.ok) return;
-  if (
-    proposal.status === "approved" &&
-    proposal.created_issue_number === null
-  ) {
-    await deps.revertToPending();
+  const stop = await proposalRepoOwnerStop(verify);
+  if (stop !== null) {
+    throw new Error(
+      `issue_proposal_apply: ${stop}。factory_configのownersを見直してから、Consoleの要対応から再度承認してください`,
+    );
   }
-  throw new Error(
-    `issue_proposal_apply: ${gate.reason}。factory_configのownersを見直してから、Consoleの要対応から再度承認してください`,
-  );
 }
 
 /**
@@ -218,8 +208,12 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * この場合は意図して"pending"に戻さない。
  * Issueは既にあり、戻して作り直すと重複するおそれがあるため。
  *
- * 判断を記録する前に、保存済みのリポジトリのオーナーの数値IDを`owners`と照合する(`ensureProposalRepoOwner`)。
- * 通らなければ、GitHubへ書き込まずに例外を投げる。
+ * GitHubへ書き込む前に、保存済みのリポジトリのオーナーを`owners`と照合する。
+ * 承認は、判断を記録する前に照合する(`ensureProposalRepoOwner`)。
+ * 通らなければ、何も記録も書き込みもせずに例外を投げる。
+ * 承認依頼は`approved`のまま、Consoleの要対応に残る(`console_query.ts`の要約と同じ条件)。
+ * 却下は、判断を記録した後、返信の前に照合する(`proposalRepoOwnerStop`)。
+ * 通らなければ返信だけを止め、警告のログを残して作業項目は先へ進める。
  *
  * 承認依頼・Issue提案・作業項目・判断者・auditのレポートが無いとき、
  * 依頼のkindが違うとき、判定で拒否されたときは例外を投げる。
@@ -298,18 +292,15 @@ async function run(
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
 
-  // 判断を記録する前、GitHubへ書き込む前に、保存済みのリポジトリのオーナーを1回だけ照合する。
-  await ensureProposalRepoOwner(proposal, {
-    verify: () =>
-      verifyRepoOwnerId(config, owner, repo, {
-        getRepositoryOwnerId: (ownerName, repoName) =>
-          getRepositoryOwnerId(client, ownerName, repoName),
-        addNotice: addNoticeUnlessUnresolved,
-      }),
-    revertToPending: async () => {
-      await revertIssueProposalToPending(proposal_id);
-    },
-  });
+  // 承認の経路は判断の記録の前に、却下の経路は返信の前に、保存済みのリポジトリのオーナーを照合する。
+  // どちらの経路も、照合は1回である。
+  const verifyOwner = () =>
+    verifyRepoOwnerId(
+      config,
+      owner,
+      repo,
+      repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+    );
 
   // `pr_fix`の提案は、Issue本文に元のPRのURLと番号を入れる。
   // `audit`の提案にはリンクするPRが無いので、提案元の監査レポートの期間を入れる。
@@ -362,6 +353,7 @@ async function run(
   let labelApplied = false;
 
   if (decision === "approve") {
+    await ensureProposalRepoOwner(verifyOwner);
     // 楽観ロック: 行がまだ"pending"のときだけ遷移させる。
     // この呼び出しが誤りになる場合(本当の食い違いや、完了済みの承認)は
     // `classification`で除いてあるので、falseが返るのは、並行するか先行する
@@ -491,16 +483,26 @@ async function run(
       created_issue_url: null,
     });
     if (proposal.origin === "pr_fix") {
-      const prNumber = requirePrNumber(
-        workItem.pr_number,
-        proposal.work_item_id,
-      );
-      const replyBody = withMarker(
-        "pr_fix",
-        workItemId,
-        renderIssueProposalRejectedReply(reason),
-      );
-      await postDecisionReply(proposal, prNumber, replyBody);
+      // 却下は判断を記録済みなので、照合に落ちたときは返信だけを止め、作業項目は先へ進める。
+      // 止めて例外にすると、提案が残らないのに作業項目が人の対応待ちのまま動かなくなる。
+      const stop = await proposalRepoOwnerStop(verifyOwner);
+      if (stop === null) {
+        const prNumber = requirePrNumber(
+          workItem.pr_number,
+          proposal.work_item_id,
+        );
+        const replyBody = withMarker(
+          "pr_fix",
+          workItemId,
+          renderIssueProposalRejectedReply(reason),
+        );
+        await postDecisionReply(proposal, prNumber, replyBody);
+      } else {
+        log.warn("rejected reply not posted: repository owner check failed", {
+          proposal_id,
+          reason: stop,
+        });
+      }
     }
   }
 

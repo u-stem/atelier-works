@@ -10,6 +10,25 @@ async function source(name: string): Promise<string> {
   return Bun.file(new URL(name, STEPS_DIR)).text();
 }
 
+/**
+ * `marker`を含む行の次の行から、コメント行と空行を除いた文の行を順に返す。
+ * 呼び出しが「その行の直後の文」であることを、行の位置でなく並びで確かめるために使う。
+ */
+function statementsAfter(
+  text: string,
+  marker: string,
+  count: number,
+): string[] {
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line.includes(marker));
+  if (start === -1) throw new Error(`not found in the source: ${marker}`);
+  return lines
+    .slice(start + 1)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("//"))
+    .slice(0, count);
+}
+
 /** `needle`が最初に現れる位置。無ければ例外にして、テストの前提が崩れたことを知らせる。 */
 function positionOf(text: string, needle: string): number {
   const position = text.indexOf(needle);
@@ -97,30 +116,51 @@ describe("the owner id check in manual_intake_create_issue", () => {
   });
 });
 
-describe("the owner id check in issue_proposal_apply", () => {
-  test("runs before the decision is recorded", async () => {
+describe("the owner check in issue_proposal_apply", () => {
+  test("is the first statement of the approval path, before any record or write", async () => {
     const text = await source("issue_proposal_apply.ts");
-    expect(positionOf(text, "await ensureProposalRepoOwner(")).toBeLessThan(
-      positionOf(text, "await decideIssueProposal("),
+    expect(statementsAfter(text, 'if (decision === "approve") {', 2)).toEqual([
+      "await ensureProposalRepoOwner(verifyOwner);",
+      "await decideIssueProposal(proposal_id, {",
+    ]);
+  });
+
+  test("follows the recording of a rejection and guards the reply on the rejection path", async () => {
+    const text = await source("issue_proposal_apply.ts");
+    expect(statementsAfter(text, 'status: "rejected",', 9)).toEqual([
+      "decided_by: decidedBy,",
+      "decision_reason: reason,",
+      "with_factory_label: null,",
+      "created_issue_number: null,",
+      "created_issue_url: null,",
+      "});",
+      'if (proposal.origin === "pr_fix") {',
+      "const stop = await proposalRepoOwnerStop(verifyOwner);",
+      "if (stop === null) {",
+    ]);
+  });
+
+  test("posts the rejection reply only inside the passing branch", async () => {
+    const text = await source("issue_proposal_apply.ts");
+    expect(statementsAfter(text, "if (stop === null) {", 12)).toContain(
+      "await postDecisionReply(proposal, prNumber, replyBody);",
     );
   });
 
-  test("runs before the issue is created", async () => {
+  test("builds the check from one call to the gate", async () => {
     const text = await source("issue_proposal_apply.ts");
-    expect(positionOf(text, "await ensureProposalRepoOwner(")).toBeLessThan(
-      positionOf(text, "await createIssue("),
-    );
+    expect(text.split("verifyRepoOwnerId(").length - 1).toBe(1);
   });
 
-  test("runs before the reply is posted", async () => {
-    const text = await source("issue_proposal_apply.ts");
-    expect(positionOf(text, "await ensureProposalRepoOwner(")).toBeLessThan(
-      positionOf(text, "await postDecisionReply("),
-    );
-  });
-
-  test("runs only once", async () => {
+  test("calls the approval check once", async () => {
     const text = await source("issue_proposal_apply.ts");
     expect(text.split("await ensureProposalRepoOwner(").length - 1).toBe(1);
+  });
+
+  test("calls the rejection check once", async () => {
+    const text = await source("issue_proposal_apply.ts");
+    expect(
+      text.split("await proposalRepoOwnerStop(verifyOwner)").length - 1,
+    ).toBe(1);
   });
 });

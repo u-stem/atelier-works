@@ -75,6 +75,7 @@ flowchart TD
 ほかに、フォームからのIssueの作成(`manual_intake_create_issue`)と、Issue化の提案の処理(`issue_proposal_apply`)がある。
 どれも、cloneやGitHubへの書き込みの前に、リポジトリのオーナーを`owners`と照合する。
 `owners`に無いオーナーのリポジトリは、`factory_repo`でなければ止める。
+`factory_repo`と一致するリポジトリは、`factory_repo_id`があれば、同じ関門がそのIDも照合する。
 オーナーが改名して別の人がその名前を取得した場合に、その人のリポジトリを取得したり、実行したりしないためである。
 設定と限界は[運用](operations.md)の「オーナーの数値IDを固定する」に書く。
 

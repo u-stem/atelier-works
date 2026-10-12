@@ -32,7 +32,6 @@ import {
   findOpenPullRequestByHead,
   type GhClient,
   getIssue,
-  getRepositoryOwnerId,
   type Issue,
   listPullRequestNumbersByHead,
   type PullRequestRef,
@@ -68,7 +67,10 @@ import {
   WorktreeBusyError,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
-import { verifyRepoOwnerId } from "../lib/repo_owner_gate.ts";
+import {
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import {
   assertGitHubName,
   type FactoryConfig,
@@ -283,11 +285,7 @@ export async function main(
     config,
     workItem.owner,
     workItem.repo,
-    {
-      getRepositoryOwnerId: (owner, repo) =>
-        getRepositoryOwnerId(client, owner, repo),
-      addNotice: addNoticeUnlessUnresolved,
-    },
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
   );
   if (!ownerGuard.ok) return stop("needs_human", ownerGuard.reason);
   // 時間設定がflow.yamlのstep timeoutに収まらなければ、Windmillがアプリ側の期限より先にステップを打ち切りうるので始めない。
