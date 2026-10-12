@@ -3080,7 +3080,6 @@ export type MainCiRun = {
   readonly first_seen_at: Date;
   /** そのコミットの最も古い実行の作成時刻。実行をまだ見ていなければnull。 */
   readonly run_created_at: Date | null;
-  readonly next_check_at: Date;
   readonly created_at: Date;
   readonly updated_at: Date;
 };
@@ -3109,7 +3108,6 @@ function toMainCiRun(row: SqlRow): MainCiRun {
       row.run_created_at === null || row.run_created_at === undefined
         ? null
         : parseDate(row.run_created_at, "run_created_at"),
-    next_check_at: parseDate(row.next_check_at, "next_check_at"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -3197,7 +3195,7 @@ export async function listMainCiRunsBySha(
   if (shas.length === 0) return [];
   const rows = await sql`
     SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
-           run_created_at, next_check_at, created_at, updated_at
+           run_created_at, created_at, updated_at
     FROM factory.main_ci_runs
     WHERE owner = ${owner} AND repo = ${repo}
       AND head_sha = ANY(${[...shas]}::text[])
@@ -3206,8 +3204,7 @@ export async function listMainCiRunsBySha(
 }
 
 /**
- * 判定を待っていて、次の照会の時刻が来ている行を、最初に見た順に最大`limit`件返す。
- * `next_check_at`が未来の行(`deferMainCiRun`で先送りした行)は返さない。
+ * 判定を待っている行を、最初に見た順に最大`limit`件返す。
  */
 export async function listPendingMainCiRuns(
   limit: number,
@@ -3215,9 +3212,9 @@ export async function listPendingMainCiRuns(
 ): Promise<MainCiRun[]> {
   const rows = await sql`
     SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
-           run_created_at, next_check_at, created_at, updated_at
+           run_created_at, created_at, updated_at
     FROM factory.main_ci_runs
-    WHERE state = 'pending' AND next_check_at <= now()
+    WHERE state = 'pending'
     ORDER BY first_seen_at ASC
     LIMIT ${limit}::bigint
   `.fetch();
@@ -3254,30 +3251,6 @@ export async function transitionMainCiRun(
   const rows = await sql`
     UPDATE factory.main_ci_runs
     SET state = ${to.state}, summary = ${to.summary}, prev_failed = ${to.prevFailed}::boolean,
-        updated_at = now()
-    WHERE id = ${id}::bigint AND state = 'pending'
-    RETURNING id
-  `.fetch();
-  return rows.length > 0;
-}
-
-export type MainCiDeferral = {
-  readonly nextCheckAt: Date;
-};
-
-/**
- * 判定を待っている行の、次の照会の時刻を先に延ばす。延ばしたら`true`を返す。
- * 行は`pending`のままで、延ばした時刻までは`listPendingMainCiRuns`が返さない。
- * 条件は`state = 'pending'`なので、判定が済んだ行は書き換えない。
- */
-export async function deferMainCiRun(
-  id: number,
-  deferral: MainCiDeferral,
-  sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
-  const rows = await sql`
-    UPDATE factory.main_ci_runs
-    SET next_check_at = ${deferral.nextCheckAt.toISOString()}::timestamptz,
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'pending'
     RETURNING id
@@ -3330,7 +3303,7 @@ export async function getPreviousMainCiRun(
   assertGitHubName(repo);
   const rows = await sql`
     SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
-           run_created_at, next_check_at, created_at, updated_at
+           run_created_at, created_at, updated_at
     FROM factory.main_ci_runs
     WHERE owner = ${owner} AND repo = ${repo}
       AND COALESCE(run_created_at, first_seen_at) < ${runCreatedAt.toISOString()}::timestamptz
@@ -3339,6 +3312,78 @@ export async function getPreviousMainCiRun(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : toMainCiRun(row);
+}
+
+/**
+ * 並びの鍵`(COALESCE(run_created_at, first_seen_at), id)`が、`(runCreatedAt, id)`より後の`passed`の行が、
+ * そのリポジトリにあるか。鍵は`latestMainCiRunCreatedAt`と同じで、時刻が同じ行は`id`の大きい方を後とする。
+ * 古いコミットの失敗を確定するときに、より新しいコミットが既に通っていて、通知が要らないかを判断するのに使う。
+ */
+export async function hasPassedMainCiRunAfter(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo} AND state = 'passed'
+      AND (COALESCE(run_created_at, first_seen_at), id) >
+        (${runCreatedAt.toISOString()}::timestamptz, ${id}::bigint)
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 並びの鍵が`(runCreatedAt, id)`より後の行が、そのリポジトリにあるか。状態は問わない。
+ * 古い失敗を通知するかの判断に使う。そのリポジトリで最新の行は、後の行が無いので`false`になる。
+ */
+export async function hasNewerMainCiRun(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND (COALESCE(run_created_at, first_seen_at), id) >
+        (${runCreatedAt.toISOString()}::timestamptz, ${id}::bigint)
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 並びの鍵が`(runCreatedAt, id)`より後で、判定待ち(`pending`)か失敗(`failed`)の行が、そのリポジトリにあるか。
+ * `passed`、`expired`、`no_ci`、`baseline`の新しい行は数えない。
+ * 通ったコミットが、失敗の通知を解決してよいかの判断に使う。
+ * 新しい行が判定待ちか失敗なら、その結果が出るまで、古い失敗は解決しない。
+ */
+export async function hasNewerUnsettledOrFailedMainCiRun(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo} AND state IN ('pending', 'failed')
+      AND (COALESCE(run_created_at, first_seen_at), id) >
+        (${runCreatedAt.toISOString()}::timestamptz, ${id}::bigint)
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------

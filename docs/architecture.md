@@ -40,7 +40,7 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 | 2. 要件定義 | headless Claudeが要件定義ドラフトを生成し、人が承認か却下をする | 実装済み |
 | 3. 実装 | 承認済みの要件定義からworktree上で実装し、PRを作る | 実装済み。既定では無効 |
 | 3. PRレビュー・修正 | 既存のPRをレビューし、指摘を修正する | 実装済み |
-| 4. CI監視 | マージ後のCIを監視する | 未実装 |
+| 4. CI監視 | 対象リポジトリのmainのCIをコミット単位で監視し、失敗を通知する | 実装済み |
 | 5. 自己改善 | 運用記録を週次で監査し、レポートと改善提案を作る | 実装済み |
 
 工程3の実装フロー(`implement`)は、`factory_config`の`implement_enabled`を`true`にしたときだけ動く。既定値は`false`で、その間は要件定義を承認した作業項目が承認済み(`approved`)のまま残る。
@@ -84,7 +84,7 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `approved` | 要件定義が承認された | issue | 終端 |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
-| `pr_open` | 実装を終えてPRを作成か更新した。マージ後の追跡は工程4の範囲である | issue | 終端 |
+| `pr_open` | 実装を終えてPRを作成か更新した。マージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
 | `reviewing` | PRをレビューしている | pr_review | |
 | `reviewed` | レビューをCOMMENTとして投稿した | pr_review、pr_fix | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
@@ -291,6 +291,7 @@ Consoleの一覧と集計は次のviewを読む。
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
 | sample_worker_load | `30 */2 * * * *` | `f/factory/sample_worker_load` | 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。workerの並列数やポーリングの間隔を見直す根拠にします。 |
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
+| watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -352,6 +353,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
+| `f/factory/lib/main_ci_watch` | script | [LIB] mainのCI監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
@@ -418,6 +420,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/implement_generate` | script | [SF-3-4/2] 実装(Claude) |
 | `f/factory/steps/implement_verify` | script | [SF-3-4/3] 検証と修正のループ |
 | `f/factory/steps/implement_finish` | script | [SF-3-4/4] コミット・push・PR作成 |
+| `f/factory/watch_main_ci` | script | [SF-4-1] mainのCIを監視して失敗を通知 |
 | `f/factory/audit_kickoff` | script | [SF-5-1] 週次監査の起動 |
 | `f/factory/audit` | flow | [SF-5-2] 運用記録の監査と改善提案 |
 | `f/factory/steps/audit_prepare` | script | [SF-5-2/1] 証跡の収集と作業領域の準備 |
@@ -568,6 +571,14 @@ Discordへの通知の2回は、ホスト側の作業の通知と、最後の確
 
 Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself cloneから読む。そのためpullの直後の実行から反映される。初回の反映(スケジュールの登録と最初のpush)は、ホストから`scripts/bootstrap.sh`が行う。
 
+## 工程4のmainのCI監視
+
+`watch_main_ci`が5分ごとに、対象リポジトリの既定のブランチへのpushで動いたGitHub Actionsの実行を、コミット単位で判定する。
+作業項目とは独立した読み取りだけの監視で、記録は`main_ci_runs`に残す。
+失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら自動で解決する。
+GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
+判定の条件、通知、権限エラーの扱いは[mainのCI監視の仕様](internals/main-ci.md)に書く。
+
 ## 工程5の監査
 
 `audit_kickoff`が毎週月曜09:30に、前回の監査以降の運用記録を確かめる。行動につながる記録があれば、監査の作業項目を作って`audit`フローを起動する。Consoleの**レポート**の**今すぐ監査**からも起動できる。
@@ -576,7 +587,6 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 
 ## 未実装の機能
 
-- 工程4のマージ後のCIの監視
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

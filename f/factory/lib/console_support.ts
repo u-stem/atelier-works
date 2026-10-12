@@ -50,6 +50,8 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   schedule_failing: "action",
   schedule_failing_check_failed: "action",
   drawio_viewer_bump_held: "action",
+  main_ci_failed: "action",
+  main_ci_check_denied: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */
