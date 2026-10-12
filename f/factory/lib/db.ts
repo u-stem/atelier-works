@@ -3753,3 +3753,158 @@ export async function listImplementRounds(
   `.fetch();
   return rows.map(toImplementRound);
 }
+
+// ---------------------------------------------------------------------------
+// worker_samples
+// ---------------------------------------------------------------------------
+
+/**
+ * `factory.worker_samples`に記録する1回分の値。`null`は読めなかったことを表す。
+ * `slots`は設定値で、必ず入る。
+ * `sampled_at`は値を測った時刻で、呼び出し側が渡す。挿入のジョブが遅れても、測った時刻が残るためである。
+ */
+export type NewWorkerSample = {
+  readonly sampled_at: Date;
+  readonly scheduled_for: Date | null;
+  readonly slots: number;
+  readonly running_jobs: number | null;
+  readonly running_by_script: Record<string, number> | null;
+  readonly waiting_jobs: number | null;
+  readonly max_wait_seconds: number | null;
+  readonly lag_seconds: number | null;
+  readonly mem_current_bytes: number | null;
+  readonly mem_anon_bytes: number | null;
+  readonly mem_working_set_bytes: number | null;
+  readonly mem_peak_bytes: number | null;
+  readonly mem_limit_bytes: number | null;
+  readonly mem_events_max: number | null;
+  readonly mem_oom: number | null;
+  readonly mem_oom_kill: number | null;
+  readonly mem_pressure_total_us: number | null;
+};
+
+/** `factory.worker_samples`の1行。 */
+export type WorkerSample = NewWorkerSample & {
+  readonly id: number;
+};
+
+function parseNullableNumber(value: unknown, field: string): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return parseNumericLike(value, field);
+}
+
+function parseNullableDate(value: unknown, field: string): Date | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return parseDate(value, field);
+}
+
+function parseNullableCountMap(
+  value: unknown,
+  field: string,
+): Record<string, number> | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const object = parseJsonObject(value, field);
+  const counts: Record<string, number> = {};
+  for (const [key, count] of Object.entries(object)) {
+    counts[key] = parseRequiredNumber(count, `${field}.${key}`);
+  }
+  return counts;
+}
+
+function toWorkerSample(row: SqlRow): WorkerSample {
+  return {
+    id: parseId(row.id, "id"),
+    sampled_at: parseDate(row.sampled_at, "sampled_at"),
+    scheduled_for: parseNullableDate(row.scheduled_for, "scheduled_for"),
+    slots: parseNumericLike(row.slots, "slots"),
+    running_jobs: parseNullableNumber(row.running_jobs, "running_jobs"),
+    running_by_script: parseNullableCountMap(
+      row.running_by_script,
+      "running_by_script",
+    ),
+    waiting_jobs: parseNullableNumber(row.waiting_jobs, "waiting_jobs"),
+    max_wait_seconds: parseNullableNumber(
+      row.max_wait_seconds,
+      "max_wait_seconds",
+    ),
+    lag_seconds: parseNullableNumber(row.lag_seconds, "lag_seconds"),
+    mem_current_bytes: parseNullableNumber(
+      row.mem_current_bytes,
+      "mem_current_bytes",
+    ),
+    mem_anon_bytes: parseNullableNumber(row.mem_anon_bytes, "mem_anon_bytes"),
+    mem_working_set_bytes: parseNullableNumber(
+      row.mem_working_set_bytes,
+      "mem_working_set_bytes",
+    ),
+    mem_peak_bytes: parseNullableNumber(row.mem_peak_bytes, "mem_peak_bytes"),
+    mem_limit_bytes: parseNullableNumber(
+      row.mem_limit_bytes,
+      "mem_limit_bytes",
+    ),
+    mem_events_max: parseNullableNumber(row.mem_events_max, "mem_events_max"),
+    mem_oom: parseNullableNumber(row.mem_oom, "mem_oom"),
+    mem_oom_kill: parseNullableNumber(row.mem_oom_kill, "mem_oom_kill"),
+    mem_pressure_total_us: parseNullableNumber(
+      row.mem_pressure_total_us,
+      "mem_pressure_total_us",
+    ),
+  };
+}
+
+/**
+ * workerの負荷の1回分を`factory.worker_samples`に記録し、そのIDを返す。
+ * 読めなかった値の`null`は、型のキャストを付けて渡す。
+ * キャストが無いと、パラメータがtext型で束縛されて、数値とjsonbの列への挿入が失敗する。
+ */
+export async function insertWorkerSample(
+  sample: NewWorkerSample,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.worker_samples (
+      sampled_at, scheduled_for, slots, running_jobs, running_by_script, waiting_jobs,
+      max_wait_seconds, lag_seconds, mem_current_bytes, mem_anon_bytes,
+      mem_working_set_bytes, mem_peak_bytes, mem_limit_bytes, mem_events_max,
+      mem_oom, mem_oom_kill, mem_pressure_total_us
+    ) VALUES (
+      ${sample.sampled_at.toISOString()}::timestamptz,
+      ${sample.scheduled_for?.toISOString() ?? null}::timestamptz,
+      ${sample.slots}::smallint, ${sample.running_jobs}::smallint,
+      ${sample.running_by_script === null ? null : JSON.stringify(sample.running_by_script)}::jsonb,
+      ${sample.waiting_jobs}::integer, ${sample.max_wait_seconds}::integer,
+      ${sample.lag_seconds}::integer,
+      ${sample.mem_current_bytes}::bigint, ${sample.mem_anon_bytes}::bigint,
+      ${sample.mem_working_set_bytes}::bigint, ${sample.mem_peak_bytes}::bigint,
+      ${sample.mem_limit_bytes}::bigint, ${sample.mem_events_max}::bigint,
+      ${sample.mem_oom}::bigint, ${sample.mem_oom_kill}::bigint,
+      ${sample.mem_pressure_total_us}::bigint
+    )
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "insertWorkerSample");
+  return parseId(row.id, "id");
+}
+
+/** 新しい順に`limit`件の`factory.worker_samples`の行を返す。 */
+export async function listRecentWorkerSamples(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkerSample[]> {
+  const rows = await sql`
+    SELECT id, sampled_at, scheduled_for, slots, running_jobs, running_by_script,
+           waiting_jobs, max_wait_seconds, lag_seconds, mem_current_bytes,
+           mem_anon_bytes, mem_working_set_bytes, mem_peak_bytes, mem_limit_bytes,
+           mem_events_max, mem_oom, mem_oom_kill, mem_pressure_total_us
+    FROM factory.worker_samples
+    ORDER BY sampled_at DESC, id DESC
+    LIMIT ${limit}::integer
+  `.fetch();
+  return rows.map(toWorkerSample);
+}
