@@ -27,6 +27,7 @@ import {
 import {
   CLEANUP_RESOLVER,
   defaultSqlClient,
+  fetchDeploymentRows,
   type SqlClient,
   type SqlRow,
 } from "../lib/db.ts";
@@ -35,7 +36,7 @@ import {
   validateDrawioXml,
 } from "../lib/drawio.ts";
 import { parseJobId } from "../lib/job_ids.ts";
-import { logger } from "../lib/log.ts";
+import { logger, maskSecrets } from "../lib/log.ts";
 import {
   DIAGRAM_NAME_PATTERN,
   REQUIREMENTS_BASE_DIR,
@@ -1746,7 +1747,21 @@ export type DeploymentHistoryRow = {
   readonly needs_host_action: boolean;
   readonly occurred_at: string;
   readonly pull_requests: DeploymentPullRequest[];
+  /**
+   * 失敗の理由。記録に無ければ(成功の行と、理由を記録する前の失敗の行)`null`。
+   * 外部のコマンドの出力を含みうる、信頼できない文字列で、画面には文字としてだけ出す。
+   */
+  readonly error: string | null;
 };
+
+/**
+ * `deployments.error`を読む。記録の時点で伏せ字にしてあるが、読むときにも`maskSecrets`を通す。
+ * 文字列でない値と空文字は、理由が無いものとして`null`にする。
+ */
+function parseDeploymentError(value: unknown): string | null {
+  if (!isString(value) || value.length === 0) return null;
+  return maskSecrets(value);
+}
 
 /**
  * `deployments.pull_requests`の1要素を解析する。形が違えば`null`を返す。
@@ -1802,6 +1817,7 @@ function toDeploymentHistoryRow(row: SqlRow): DeploymentHistoryRow {
     needs_host_action: asBool(row.needs_host_action, "needs_host_action"),
     occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
     pull_requests: parseDeploymentPullRequests(row.pull_requests),
+    error: parseDeploymentError(row.error),
   };
 }
 
@@ -2246,16 +2262,28 @@ export async function runConsoleQuery(
       return rows.map(toAuditDocRow);
     }
     case "deployments": {
-      // 変更したパスの一覧は大きくなりうるので選ばない。画面が使うのは版とPRだけである。
-      const rows = await sql`
-        SELECT
-          id AS deployment_id, sha_from, sha_to, result, needs_host_action,
-          occurred_at, pull_requests
-        FROM factory.deployments
-        WHERE occurred_at >= ${since}::timestamptz
-        ORDER BY occurred_at DESC, id DESC
-        LIMIT ${limit}::integer
-      `.fetch();
+      // 変更したパスの一覧は大きくなりうるので選ばない。画面が使うのは版とPRと失敗の理由だけである。
+      // `error`列を足すmigrationが当たる前は、その列を選ばない問い合わせで読み直す。
+      const rows = await fetchDeploymentRows(
+        sql`
+          SELECT
+            id AS deployment_id, sha_from, sha_to, result, needs_host_action,
+            occurred_at, pull_requests, error
+          FROM factory.deployments
+          WHERE occurred_at >= ${since}::timestamptz
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT ${limit}::integer
+        `,
+        () => sql`
+          SELECT
+            id AS deployment_id, sha_from, sha_to, result, needs_host_action,
+            occurred_at, pull_requests
+          FROM factory.deployments
+          WHERE occurred_at >= ${since}::timestamptz
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT ${limit}::integer
+        `,
+      );
       return rows.map(toDeploymentHistoryRow);
     }
   }

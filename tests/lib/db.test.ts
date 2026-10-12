@@ -18,6 +18,7 @@ import {
   deleteTerminalWorkItemsBefore,
   deleteWorkerSamplesBefore,
   expireApprovalRequestIfPending,
+  fetchDeploymentRows,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
   getApprovalRequest,
@@ -50,6 +51,7 @@ import {
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
+  isMissingDeploymentErrorColumnError,
   latestDraft,
   latestFixRound,
   latestMainCiRunCreatedAt,
@@ -151,6 +153,9 @@ const NOW = new Date("2026-09-26T00:00:00.000Z");
 
 /** ジョブの外で動いたときの記録。環境変数に頼らず、値の並びを固定するために明示して渡す。 */
 const NO_JOBS = { job_id: null, root_job_id: null };
+
+/** 何も出さないログ。警告の有無を確かめないテストに渡す。 */
+const SILENT_LOG: Logger = { info() {}, warn() {}, error() {} };
 
 const WORK_ITEM_ROW: SqlRow = {
   id: 1,
@@ -1610,6 +1615,165 @@ describe("recordDeployment", () => {
       sql,
     );
     expect(calls[0]?.text).toContain("::boolean");
+  });
+
+  const FAILED_RECORD = {
+    sha_from: "aaa",
+    sha_to: "bbb",
+    changed_paths: [],
+    result: "failed",
+    needs_host_action: false,
+    pull_requests: [],
+    error: "wmill sync push failed: boom",
+  };
+
+  test("writes the reason of a failure in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls[0]?.values).toContain("wmill sync push failed: boom");
+  });
+
+  test("names the error column for a failure with a reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls[0]?.text).toContain("error)");
+  });
+
+  test("records a failure with a reason in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("does not name the error column for a success", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "success",
+        needs_host_action: false,
+        pull_requests: [],
+        error: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).not.toContain("error");
+  });
+
+  test("records the failure without the reason when the error column is missing", async () => {
+    const calls: FakeCall[] = [];
+    const sql: SqlClient = (strings, ...values) => {
+      calls.push({ text: strings.join(" ? "), values });
+      const failing = calls.length === 1;
+      return {
+        fetch: () =>
+          failing
+            ? Promise.reject(
+                new Error(
+                  'column "error" of relation "deployments" does not exist',
+                ),
+              )
+            : Promise.resolve([{ id: 14 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    expect(await recordDeployment(FAILED_RECORD, sql, SILENT_LOG)).toBe(14);
+  });
+
+  test("rethrows a failure other than a missing error column", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(
+      recordDeployment(FAILED_RECORD, sql, SILENT_LOG),
+    ).rejects.toThrow("db down");
+  });
+});
+
+describe("isMissingDeploymentErrorColumnError", () => {
+  test("recognizes the undefined_column code", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        Object.assign(new Error("x"), { code: "42703" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("recognizes the message in the body of an API error", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        Object.assign(new Error("Bad Request"), {
+          body: 'column "error" of relation "deployments" does not exist',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match another failure", () => {
+    expect(isMissingDeploymentErrorColumnError(new Error("db down"))).toBe(
+      false,
+    );
+  });
+});
+
+describe("isMissingDeploymentErrorColumnError for a read", () => {
+  test("recognizes the message of a select that names the missing column", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        new Error('column "error" does not exist'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("fetchDeploymentRows", () => {
+  const missingColumn = Object.assign(new Error("undefined column"), {
+    code: "42703",
+  });
+
+  function handle(result: () => Promise<SqlRow[]>) {
+    return { fetch: result, execute: () => Promise.resolve() };
+  }
+
+  test("returns the rows of the query that names the error column", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.resolve([{ id: 1, error: "boom" }])),
+      () => handle(() => Promise.reject(new Error("must not run"))),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 1, error: "boom" }]);
+  });
+
+  test("reads again without the error column when it is missing", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.reject(missingColumn)),
+      () => handle(() => Promise.resolve([{ id: 2 }])),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 2, error: null }]);
+  });
+
+  test("rethrows a failure other than a missing error column", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(new Error("db down"))),
+        () => handle(() => Promise.resolve([])),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
+  });
+
+  test("rethrows a failure of the second read", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(missingColumn)),
+        () => handle(() => Promise.reject(new Error("db down"))),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
   });
 });
 

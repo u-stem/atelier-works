@@ -6,10 +6,13 @@ import {
   CallTimeoutError,
   classifyChangedPaths,
   decideUpdate,
+  deploymentFailureMessage,
   extractMiseHostSections,
+  MAX_DEPLOYMENT_ERROR_LENGTH,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
   readDeployedSha,
+  recordFailedDeployment,
   recordSuccessDeployment,
   resolveWmillCliContext,
   SELF_UPDATE_CALL_TIMEOUT_MS,
@@ -17,6 +20,7 @@ import {
   truncateOutput,
   withCallTimeout,
 } from "../../f/factory/lib/self_update_support.ts";
+import type { DeploymentRecord } from "../../f/factory/lib/types.ts";
 
 describe("decideUpdate", () => {
   test("returns unchanged when the shas are equal", () => {
@@ -645,5 +649,184 @@ describe("recordSuccessDeployment", () => {
     ).catch(() => {});
 
     expect(timeouts).toEqual([]);
+  });
+});
+
+describe("recordFailedDeployment", () => {
+  const SHA_FROM = "a".repeat(40);
+  const SHA_TO = "b".repeat(40);
+  const WMILL_TOKEN = "wmill-token-value-0123456789";
+
+  /** 記録された行を集め、`recordFailedDeployment`を1回呼ぶ。 */
+  async function recordOnce(
+    error: unknown,
+    secrets: readonly string[] = [WMILL_TOKEN],
+  ): Promise<{ records: DeploymentRecord[]; message: string }> {
+    const records: DeploymentRecord[] = [];
+    const message = await recordFailedDeployment(
+      {
+        record: async (record) => {
+          records.push(record);
+        },
+        onRecordError: () => {},
+      },
+      { shaFrom: SHA_FROM, shaTo: SHA_TO, error, secrets },
+      50,
+    );
+    return { records, message };
+  }
+
+  test("records a failed result when the sync push fails", async () => {
+    const { records } = await recordOnce(
+      new Error("wmill sync push failed (exit 1, timed_out=false): boom"),
+    );
+    expect(records[0]?.result).toBe("failed");
+  });
+
+  test("records the error of the sync push as the reason", async () => {
+    const { records } = await recordOnce(
+      new Error("wmill sync push failed (exit 1, timed_out=false): boom"),
+    );
+    expect(records[0]?.error).toBe(
+      "wmill sync push failed (exit 1, timed_out=false): boom",
+    );
+  });
+
+  test("records the error of the datatable migration as the reason", async () => {
+    const { records } = await recordOnce(
+      new Error(
+        "wmill datatable migrate up failed (exit 1, timed_out=false): relation exists",
+      ),
+    );
+    expect(records[0]?.error).toBe(
+      "wmill datatable migrate up failed (exit 1, timed_out=false): relation exists",
+    );
+  });
+
+  test("records a thrown value that is not an Error as text", async () => {
+    const { records } = await recordOnce("plain failure");
+    expect(records[0]?.error).toBe("plain failure");
+  });
+
+  test("keeps the versions of the deployment", async () => {
+    const { records } = await recordOnce(new Error("boom"));
+    expect([records[0]?.sha_from, records[0]?.sha_to]).toEqual([
+      SHA_FROM,
+      SHA_TO,
+    ]);
+  });
+
+  test("masks the token of the wmill CLI in the reason", async () => {
+    const { records } = await recordOnce(
+      new Error(`wmill sync push failed: --token ${WMILL_TOKEN}`),
+    );
+    expect(records[0]?.error).not.toContain(WMILL_TOKEN);
+  });
+
+  test("replaces the token of the wmill CLI with the mask", async () => {
+    const { records } = await recordOnce(
+      new Error(`wmill sync push failed: --token ${WMILL_TOKEN}`),
+    );
+    expect(records[0]?.error).toBe("wmill sync push failed: --token ***");
+  });
+
+  test("masks a GitHub token in the reason", async () => {
+    const token = `ghp_${"x".repeat(36)}`;
+    const { records } = await recordOnce(new Error(`clone failed: ${token}`));
+    expect(records[0]?.error).toBe("clone failed: ***");
+  });
+
+  test("returns the same masked text that it records", async () => {
+    const { records, message } = await recordOnce(
+      new Error(`failed: ${WMILL_TOKEN}`),
+    );
+    expect(records[0]?.error).toBe(message);
+  });
+
+  test("cuts a long reason to the limit", async () => {
+    const { records } = await recordOnce(
+      new Error("x".repeat(MAX_DEPLOYMENT_ERROR_LENGTH + 500)),
+    );
+    expect(records[0]?.error?.length).toBe(MAX_DEPLOYMENT_ERROR_LENGTH);
+  });
+
+  test("keeps the head of a long reason", async () => {
+    const head = "wmill sync push failed: ";
+    const { records } = await recordOnce(
+      new Error(`${head}${"y".repeat(MAX_DEPLOYMENT_ERROR_LENGTH)}`),
+    );
+    expect(records[0]?.error).toBe(
+      `${head}${"y".repeat(MAX_DEPLOYMENT_ERROR_LENGTH - head.length)}`,
+    );
+  });
+
+  test("counts a character outside the BMP as one when cutting", async () => {
+    const { records } = await recordOnce(
+      new Error("🙂".repeat(MAX_DEPLOYMENT_ERROR_LENGTH + 1)),
+    );
+    expect(Array.from(records[0]?.error ?? "").length).toBe(
+      MAX_DEPLOYMENT_ERROR_LENGTH,
+    );
+  });
+
+  test("masks the token before cutting so that no part of it remains", async () => {
+    const prefix = "z".repeat(MAX_DEPLOYMENT_ERROR_LENGTH - 5);
+    const { records } = await recordOnce(new Error(`${prefix}${WMILL_TOKEN}`));
+    expect(records[0]?.error).toBe(`${prefix}***`);
+  });
+
+  test("reports a failure of the record instead of throwing", async () => {
+    const reported: string[] = [];
+    await recordFailedDeployment(
+      {
+        record: async () => {
+          throw new Error(`db down ${WMILL_TOKEN}`);
+        },
+        onRecordError: (message) => reported.push(message),
+      },
+      {
+        shaFrom: null,
+        shaTo: SHA_TO,
+        error: new Error("boom"),
+        secrets: [WMILL_TOKEN],
+      },
+      50,
+    );
+    expect(reported).toEqual(["db down ***"]);
+  });
+
+  test("reports a timeout of the record instead of throwing", async () => {
+    const reported: string[] = [];
+    await recordFailedDeployment(
+      {
+        record: NEVER,
+        onRecordError: (message) => reported.push(message),
+      },
+      { shaFrom: null, shaTo: SHA_TO, error: new Error("boom"), secrets: [] },
+      10,
+    );
+    expect(reported).toEqual(["recordDeployment failed timed out after 10ms"]);
+  });
+
+  test("still returns the reason when the record fails", async () => {
+    const message = await recordFailedDeployment(
+      {
+        record: async () => {
+          throw new Error("db down");
+        },
+        onRecordError: () => {},
+      },
+      { shaFrom: null, shaTo: SHA_TO, error: new Error("boom"), secrets: [] },
+      50,
+    );
+    expect(message).toBe("boom");
+  });
+});
+
+describe("deploymentFailureMessage", () => {
+  test("masks the given secrets", () => {
+    expect(deploymentFailureMessage(new Error("a s3cr3t b"), ["s3cr3t"])).toBe(
+      "a *** b",
+    );
   });
 });

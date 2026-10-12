@@ -1451,6 +1451,37 @@ check(
     historyEmpty.pull_requests.length === 0,
   historyEmpty,
 );
+check(
+  "deployments: a failure recorded without a reason reads as null",
+  historyEmpty !== undefined &&
+    "error" in historyEmpty &&
+    historyEmpty.error === null,
+  historyEmpty,
+);
+// 失敗の理由は、行と同じ1つの文で書かれ、そのまま読み戻せる。
+await recordDeployment(
+  {
+    sha_from: null,
+    sha_to: "qdb-hist-error",
+    changed_paths: [],
+    result: "failed",
+    needs_host_action: false,
+    pull_requests: [],
+    error: "wmill sync push failed: qdb",
+  },
+  sql,
+);
+const historyErrorRows = await runConsoleQuery("deployments", 200, 30, sql);
+const historyError = historyErrorRows.find(
+  (row) => "sha_to" in row && row.sha_to === "qdb-hist-error",
+);
+check(
+  "deployments: the reason of a failure is read back",
+  historyError !== undefined &&
+    "error" in historyError &&
+    historyError.error === "wmill sync push failed: qdb",
+  historyError,
+);
 const historyUnrecorded = historyRows.find(
   (row) => "sha_to" in row && row.sha_to === "qdb-sha-boundary",
 );

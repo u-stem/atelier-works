@@ -2,6 +2,9 @@
 // I/Oは持たない。git・wmill CLIのサブプロセス、Data Tableへの記録、
 // Discordへの通知は`self_update.ts`が行う。
 
+import { maskSecrets } from "./log.ts";
+import type { DeploymentRecord } from "./types.ts";
+
 // ---------------------------------------------------------------------------
 // decideUpdate: 再デプロイが必要かの判定
 // ---------------------------------------------------------------------------
@@ -402,6 +405,79 @@ export async function recordSuccessDeployment(
     if (!(err instanceof CallTimeoutError)) throw err;
     onTimeout(err);
   }
+}
+
+// ---------------------------------------------------------------------------
+// recordFailedDeployment: 失敗した反映を、理由と一緒に記録する
+// ---------------------------------------------------------------------------
+
+/**
+ * `deployments.error`に保存する失敗の理由の上限(文字数。サロゲートペアは1字と数える)。
+ * 原因の手掛かりを残しつつ、記録と画面の応答を重くしないための値である。
+ */
+export const MAX_DEPLOYMENT_ERROR_LENGTH = 2000;
+
+/**
+ * 失敗の例外から、ログに出す文を作る。既知の形式の秘密情報と`secrets`の値を伏せ字にする。
+ * ログと`deployments.error`の両方にこの文を使い、同じ伏せ字処理を通す。
+ */
+export function deploymentFailureMessage(
+  err: unknown,
+  secrets: readonly string[],
+): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err), secrets);
+}
+
+/**
+ * 伏せ字処理済みの`message`を、`MAX_DEPLOYMENT_ERROR_LENGTH`字までの先頭に切り詰める。
+ * 伏せ字にした後で切るので、秘密情報の一部だけが残ることはない。
+ */
+export function truncateDeploymentError(message: string): string {
+  const chars = Array.from(message);
+  return chars.length <= MAX_DEPLOYMENT_ERROR_LENGTH
+    ? message
+    : chars.slice(0, MAX_DEPLOYMENT_ERROR_LENGTH).join("");
+}
+
+/**
+ * 失敗した反映を、伏せ字処理と切り詰めを済ませた理由と一緒に1つの記録として書き、ログに出した文を返す。
+ * 理由はログに出す文と同じもので、反映、migration、版の記録のどの段階の失敗でも同じ道を通る。
+ * 記録に失敗しても例外は投げず、`onRecordError`に伏せ字処理済みの文を渡す。
+ * 呼び出し側が元の例外を投げ直せるようにするためである。
+ */
+export async function recordFailedDeployment(
+  deps: {
+    readonly record: (record: DeploymentRecord) => Promise<unknown>;
+    readonly onRecordError: (message: string) => void;
+  },
+  input: {
+    readonly shaFrom: string | null;
+    readonly shaTo: string;
+    readonly error: unknown;
+    readonly secrets: readonly string[];
+  },
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<string> {
+  const message = deploymentFailureMessage(input.error, input.secrets);
+  try {
+    await withCallTimeout(
+      "recordDeployment failed",
+      () =>
+        deps.record({
+          sha_from: input.shaFrom,
+          sha_to: input.shaTo,
+          changed_paths: [],
+          result: "failed",
+          needs_host_action: false,
+          pull_requests: [],
+          error: truncateDeploymentError(message),
+        }),
+      timeoutMs,
+    );
+  } catch (recordErr) {
+    deps.onRecordError(deploymentFailureMessage(recordErr, input.secrets));
+  }
+  return message;
 }
 
 /**

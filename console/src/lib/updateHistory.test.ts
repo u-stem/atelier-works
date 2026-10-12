@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  FAILURE_REASON_HEAD_LENGTH,
+  failureReasonText,
   isPullRequestListTruncated,
   PULL_REQUEST_RECORD_LIMIT,
   pullRequestHref,
@@ -11,6 +13,52 @@ import {
 
 const SHA_A = "0123456789abcdef0123456789abcdef01234567";
 const SHA_B = "fedcba9876543210fedcba9876543210fedcba98";
+
+describe("failureReasonText", () => {
+  test("shows the reason of a failure", () => {
+    expect(failureReasonText({ result: "failed", error: "boom" })).toBe("boom");
+  });
+
+  test("shows nothing for a success", () => {
+    expect(failureReasonText({ result: "success", error: null })).toBeNull();
+  });
+
+  test(`cuts the reason to its first ${String(FAILURE_REASON_HEAD_LENGTH)} characters`, () => {
+    const head = "h".repeat(FAILURE_REASON_HEAD_LENGTH);
+    expect(failureReasonText({ result: "failed", error: `${head}TAIL` })).toBe(
+      `${head}…`,
+    );
+  });
+
+  test("keeps a reason of exactly the head length", () => {
+    const head = "h".repeat(FAILURE_REASON_HEAD_LENGTH);
+    expect(failureReasonText({ result: "failed", error: head })).toBe(head);
+  });
+
+  test("puts a reason with line breaks on one line", () => {
+    expect(failureReasonText({ result: "failed", error: "a\n\nb  c" })).toBe(
+      "a b c",
+    );
+  });
+
+  test("states that a failure with a null reason has no reason", () => {
+    expect(failureReasonText({ result: "failed", error: null })).toBe(
+      "理由の記録はありません",
+    );
+  });
+
+  test("states that a failure without the reason field has no reason", () => {
+    expect(failureReasonText({ result: "failed" })).toBe(
+      "理由の記録はありません",
+    );
+  });
+
+  test("states that a failure with a blank reason has no reason", () => {
+    expect(failureReasonText({ result: "failed", error: " \n " })).toBe(
+      "理由の記録はありません",
+    );
+  });
+});
 
 describe("shortSha", () => {
   test("keeps the first seven characters of a full sha", () => {
