@@ -140,6 +140,16 @@ function isPassing(run: WorkflowRun): boolean {
 }
 
 /**
+ * 完了していて、成功とみなさない実行を、作成の古い順に返す。
+ * 失敗の通知に載せるリンクと、要約の元になる実行を選ぶのに使う。
+ */
+export function failingRuns(runs: readonly WorkflowRun[]): WorkflowRun[] {
+  return runs
+    .filter((run) => run.status === "completed" && !isPassing(run))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
+/**
  * 1つのコミットの実行をまとめて判定する。
  * 実行が無いか、1件でも`completed`でなければ`pending`。
  * すべて完了していて、結論がsuccess、skipped、neutralだけなら`passed`、それ以外は`failed`。

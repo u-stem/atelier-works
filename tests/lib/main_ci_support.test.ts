@@ -5,6 +5,7 @@ import {
   buildFailureSummary,
   classifyRuns,
   decideState,
+  failingRuns,
   groupRunsBySha,
   isCommitSha,
   isMainCiSettledState,
@@ -627,5 +628,22 @@ describe("backoffMs", () => {
 
   test("treats a count that is not a number as the first failure", () => {
     expect(backoffMs(Number.NaN)).toBe(10 * 60_000);
+  });
+});
+
+describe("failingRuns", () => {
+  test("returns the completed runs that did not pass, oldest first", () => {
+    const runs = [
+      run({ id: 3, conclusion: "failure", createdAt: minutesBefore(2) }),
+      run({ id: 2, conclusion: "success" }),
+      run({ id: 1, conclusion: "timed_out", createdAt: minutesBefore(8) }),
+    ];
+    expect(failingRuns(runs).map((item) => item.id)).toEqual([1, 3]);
+  });
+
+  test("leaves out a run that is not completed", () => {
+    expect(
+      failingRuns([run({ status: "in_progress", conclusion: null })]),
+    ).toEqual([]);
   });
 });

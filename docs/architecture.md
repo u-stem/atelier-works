@@ -288,6 +288,7 @@ Consoleの一覧と集計は次のviewを読む。
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
 | self_update | `0 */10 * * * *` | `f/factory/self_update` | 10分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
+| watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -347,6 +348,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
+| `f/factory/lib/main_ci_watch` | script | [LIB] mainのCI監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
@@ -412,6 +414,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/implement_generate` | script | [SF-3-4/2] 実装(Claude) |
 | `f/factory/steps/implement_verify` | script | [SF-3-4/3] 検証と修正のループ |
 | `f/factory/steps/implement_finish` | script | [SF-3-4/4] コミット・push・PR作成 |
+| `f/factory/watch_main_ci` | script | [SF-4-1] mainのCIを監視して失敗を通知 |
 | `f/factory/audit_kickoff` | script | [SF-5-1] 週次監査の起動 |
 | `f/factory/audit` | flow | [SF-5-2] 運用記録の監査と改善提案 |
 | `f/factory/steps/audit_prepare` | script | [SF-5-2/1] 証跡の収集と作業領域の準備 |

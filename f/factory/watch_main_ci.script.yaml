@@ -1,0 +1,10 @@
+summary: '[SF-4-1] mainのCIを監視して失敗を通知'
+description: 5分ごとに実行し、対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub
+  Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。
+lock: '!inline f/factory/watch_main_ci.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
