@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { noticeSeverity } from "../../f/factory/lib/console_support.ts";
 import {
   CONSOLE_JOB_WAIT_SECONDS,
@@ -432,8 +433,19 @@ describe("nextUnknownCount", () => {
     expect(nextUnknownCount(5, "stalled")).toBe(0);
   });
 
-  test("raises after six in a row", () => {
-    expect(CONSOLE_WORKER_UNKNOWN_LIMIT).toBe(6);
+  test("raises after thirty in a row", () => {
+    expect(CONSOLE_WORKER_UNKNOWN_LIMIT).toBe(30);
+  });
+
+  test("covers one hour at the self_update interval", () => {
+    const schedule = readFileSync(
+      new URL("../../f/factory/self_update.schedule.yaml", import.meta.url),
+      "utf8",
+    );
+    const cron = /^schedule: 0 \*\/(\d+) \* \* \* \*$/m.exec(schedule);
+    const minutes = Number(cron?.[1]);
+
+    expect(CONSOLE_WORKER_UNKNOWN_LIMIT * minutes).toBe(60);
   });
 });
 
@@ -669,21 +681,27 @@ describe("watchConsoleWorker", () => {
   });
 
   test("does not raise before the limit", async () => {
-    const h = harness({ response: FAILS, storedCount: 4 });
+    const h = harness({
+      response: FAILS,
+      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 2,
+    });
     await watchConsoleWorker(h.deps);
     expect(h.notices).toEqual([]);
   });
 
-  test("raises the check failed notice on the sixth unknown in a row", async () => {
-    const h = harness({ response: FAILS, storedCount: 5 });
+  test("raises the check failed notice on the thirtieth unknown in a row", async () => {
+    const h = harness({
+      response: FAILS,
+      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
+    });
     await watchConsoleWorker(h.deps);
     expect(h.notices).toEqual([CONSOLE_WORKER_CHECK_FAILED_NOTICE]);
   });
 
-  test("raises the check failed notice on the sixth unknown even when the state cannot be written", async () => {
+  test("raises the check failed notice on the thirtieth unknown even when the state cannot be written", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: 5,
+      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
       setStateThrows: true,
     });
     await watchConsoleWorker(h.deps);
@@ -693,7 +711,7 @@ describe("watchConsoleWorker", () => {
   test("warns when the state cannot be written", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: 5,
+      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
       setStateThrows: true,
     });
     await watchConsoleWorker(h.deps);
@@ -705,7 +723,10 @@ describe("watchConsoleWorker", () => {
   });
 
   test("sends Discord when the check failed notice is newly inserted", async () => {
-    const h = harness({ response: FAILS, storedCount: 5 });
+    const h = harness({
+      response: FAILS,
+      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
+    });
     await watchConsoleWorker(h.deps);
     expect(h.events[0]).toMatchObject({
       kind: "console_worker_check_failed",
@@ -716,7 +737,7 @@ describe("watchConsoleWorker", () => {
   test("does not send Discord while the check failed notice is unresolved", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: 7,
+      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT + 1,
       noticeInserted: false,
     });
     await watchConsoleWorker(h.deps);
@@ -813,7 +834,7 @@ describe("watchConsoleWorker", () => {
   test("does not throw when the notice cannot be recorded", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: 5,
+      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
       addNoticeThrows: true,
     });
     expect(await watchConsoleWorker(h.deps)).toBe("unknown");

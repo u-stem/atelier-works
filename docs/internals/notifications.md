@@ -31,9 +31,9 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
 | `job_failed` | ジョブ失敗 | 下の表を参照 | フローやスケジュールが失敗した |
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
-| `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(10分ごと) | Console用のworkerがジョブを受けているかを、1時間(6回)続けて確かめられなかった |
-| `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(10分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
-| `host_action_required` | ホスト側の作業が必要です | `self_update`(10分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
+| `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、1時間(30回)続けて確かめられなかった |
+| `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
+| `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 前日の集計 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
 | `pr_opened` | PR作成 / PR更新 | `implement_finish` | 実装フローがPRを作成か更新した |
@@ -264,7 +264,7 @@ DBには、未解決のnoticeの種類と本文のmd5に対する部分一意索
 
 `self_update`は、`wmill sync push`を先に、`wmill datatable migrate up`を後に実行する。
 両者の間は通常数秒で、新しいコードの`ON CONFLICT`が索引なしのまま失敗しうる。
-migrationが失敗したときは、次の自己更新(10分後)まで、noticeを作れない。migrationの失敗は、自己更新の失敗として知らされる。
+migrationが失敗したときは、次の自己更新(2分後)まで、noticeを作れない。migrationの失敗は、自己更新の失敗として知らされる。
 どちらも受け入れる。
 
 ### 種類ごとの記録の条件
@@ -273,11 +273,11 @@ migrationが失敗したときは、次の自己更新(10分後)まで、notice�
 `deployed_sha_mismatch`は、反映が止まったときだけ残す。
 mergeの直後から自己更新が反映するまでの間は、版が必ず食い違うためである。
 `poll_issues`は、食い違いを最初に見た時刻を、このスケジュールのWindmillのstateのキー`deployed_sha_check`の下に保存する。
-自己更新の2周期(20分)に、`poll_issues`の1周期(5分)と反映にかかる時間の見込み(5分)を足した30分を超えて続いたときに、1件残す。
+自己更新の周期(2分)と`poll_issues`の周期(5分)と反映にかかる時間の見込み(5分)の合計12分に余裕を持たせた30分を超えて続いたときに、1件残す。
 反映にかかる時間は見込みで、実測の上限ではない。
 自己更新は反映のために外部コマンドを最大3回呼び、1回の上限は5分である。正常な反映も、見込みを超えうる。
 超えたときは通知が出るが、反映が成功すると自動で解決される。
-2つのスケジュールは毎時0分で位置が重なるので、20分ちょうどでは判定が反映より先に動いて誤って知らせうる。
+2つのスケジュールは毎時0分で位置が重なるので、合計ちょうどでは判定が反映より先に動いて誤って知らせうる。
 数え直すのは、反映済みの版(`f/factory/deployed_sha`)が変わったとき、つまり反映が進んだときだけである。
 止まったままmergeが続き、self cloneのHEADだけが変わっても、数え直さない。
 `f/factory/deployed_sha`が空のときは、変数が無いときと同じく、何もしない。stateとnoticeは変えない。
