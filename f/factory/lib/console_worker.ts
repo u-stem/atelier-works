@@ -34,8 +34,8 @@ export const CONSOLE_FETCH_WATCH_PATH = "f/factory/console_fetch_watch";
 /** 確認が終わるまで待つ上限。確認が止まっても自己更新の反映を遅らせないための値。 */
 export const CONSOLE_WORKER_CHECK_TIMEOUT_MS = 10_000;
 
-/** 確認できない状態がこの回数(自己更新は10分ごとなので1時間)続いたら、noticeにする。 */
-export const CONSOLE_WORKER_UNKNOWN_LIMIT = 6;
+/** 確認できない状態がこの回数(自己更新は2分ごとなので1時間)続いたら、noticeにする。 */
+export const CONSOLE_WORKER_UNKNOWN_LIMIT = 30;
 
 const MISSING_CAUSE = `Consoleのジョブが${CONSOLE_JOB_WAIT_SECONDS / 60}分以上待たされています。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、ジョブを受けていません。Consoleのジョブがqueueに溜まり、Consoleが止まります`;
 const MISSING_ACTION =
