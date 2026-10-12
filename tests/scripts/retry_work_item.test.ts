@@ -6,6 +6,8 @@ import type { WorkItem, WorkItemStatus } from "../../f/factory/lib/types.ts";
 import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
+  activePrFixConflictError,
+  activePrFixConflictErrorFrom,
   asBeforeActionableCancel,
   cancelledRestartRefusal,
   closedTargetRefusal,
@@ -397,6 +399,80 @@ describe("activeIssueConflictErrorFrom", () => {
     });
     expect(error.message).toBe(
       "retry_work_item: another work item is the current cycle for this Issue, work item 3 will not be resumed",
+    );
+  });
+});
+
+describe("activePrFixConflictError", () => {
+  const base = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+    kind: "pr_fix" as const,
+  };
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+  };
+
+  test("names the active pr_fix of the same pull request", () => {
+    const error = activePrFixConflictError(target, [
+      { ...base, id: 9 },
+      { ...base, id: 3 },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: work item 9 (active) is already fixing the same pull request, work item 3 will not be resumed, follow work item 9",
+    );
+  });
+
+  test("ignores active work items of other pull requests", () => {
+    const error = activePrFixConflictError(target, [
+      { ...base, id: 9, pr_number: 99 },
+      { ...base, id: 4 },
+    ]);
+    expect(error.message).toContain("work item 4 (active)");
+  });
+
+  test("ignores active work items that are not pr_fix", () => {
+    const error = activePrFixConflictError(target, [
+      { ...base, id: 9, kind: "pr_review" as const },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
+    );
+  });
+
+  test("omits the id when the active work item is not found", () => {
+    const error = activePrFixConflictError(target, [{ ...base, id: 3 }]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
+    );
+  });
+});
+
+describe("activePrFixConflictErrorFrom", () => {
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+  };
+
+  test("names the active work item returned by the lookup", async () => {
+    const error = await activePrFixConflictErrorFrom(target, async () => [
+      { ...target, id: 9, kind: "pr_fix" as const },
+    ]);
+    expect(error.message).toContain("work item 9 (active)");
+  });
+
+  test("falls back to the message without an id when the lookup fails", async () => {
+    const error = await activePrFixConflictErrorFrom(target, async () => {
+      throw new Error("db down");
+    });
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
     );
   });
 });

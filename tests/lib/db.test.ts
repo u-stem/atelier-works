@@ -52,6 +52,7 @@ import {
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
+  isActivePrFixUniqueViolation,
   isMissingDeploymentErrorColumnError,
   latestDraft,
   latestFixRound,
@@ -62,6 +63,7 @@ import {
   listActionableWorkItems,
   listActive,
   listActiveIssueWorkItems,
+  listActivePrFixWorkItems,
   listAutoRetryCandidates,
   listExpiredPendingApprovalRequests,
   listFailedPrCiChecks,
@@ -4413,6 +4415,67 @@ describe("isActiveIssueUniqueViolation with a server body", () => {
   });
 });
 
+describe("isActivePrFixUniqueViolation", () => {
+  const KEY_BODY =
+    'ERROR: duplicate key value violates unique constraint "work_items_active_pr_fix_key"';
+
+  test("recognises a violation of the active pr_fix index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+    );
+    expect(isActivePrFixUniqueViolation(err)).toBe(true);
+  });
+
+  test("does not match a violation of the active issue index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_issue_key"',
+    );
+    expect(isActivePrFixUniqueViolation(err)).toBe(false);
+  });
+
+  test("does not match an unrelated error", () => {
+    expect(isActivePrFixUniqueViolation(new Error("db down"))).toBe(false);
+  });
+
+  test("does not match a value that is not an error", () => {
+    expect(isActivePrFixUniqueViolation("work_items_active_pr_fix_key")).toBe(
+      false,
+    );
+  });
+
+  test("recognises the constraint name in a string body", () => {
+    const err = Object.assign(new Error("Conflict"), { body: KEY_BODY });
+    expect(isActivePrFixUniqueViolation(err)).toBe(true);
+  });
+
+  test("ignores a body that is not a string", () => {
+    const err = Object.assign(new Error("Conflict"), {
+      body: { message: KEY_BODY },
+    });
+    expect(isActivePrFixUniqueViolation(err)).toBe(false);
+  });
+});
+
+describe("listActivePrFixWorkItems", () => {
+  test("filters by owner, repo and pull request number", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("o", "r", 7, sql);
+    expect(calls[0]?.values).toContain(7);
+  });
+
+  test("selects pr_fix work items that are not terminal", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("o", "r", 7, sql);
+    expect(calls[0]?.text).toContain("kind = 'pr_fix'");
+  });
+
+  test("passes the terminal statuses as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("o", "r", 7, sql);
+    expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
+  });
+});
+
 describe("listActiveIssueWorkItems", () => {
   test("filters by owner, repo and issue number", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
@@ -4733,6 +4796,12 @@ describe("listAutoRetryCandidates", () => {
     expect(calls[0]?.text).toContain("newer_fix.id");
   });
 
+  test("excludes a pr_fix item whose pull request has another active pr_fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("active_fix.id <> w.id");
+  });
+
   test("excludes an item that used up its restarts", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listAutoRetryCandidates(params, sql);
@@ -4811,6 +4880,35 @@ describe("restartStoppedWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
     expect(calls[0]?.text).toContain("newer_fix.id");
+  });
+
+  test("guards the update against another active pr_fix of the same pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("active_fix.id <> factory.work_items.id");
+  });
+
+  test("returns false when another active pr_fix appears before the update", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () =>
+        Promise.reject(
+          new Error(
+            'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+          ),
+        ),
+      execute: () => Promise.resolve(),
+    });
+    expect(await restartStoppedWorkItem(params, sql, NO_JOBS)).toBe(false);
+  });
+
+  test("rethrows an error that is not the active pr_fix violation", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(restartStoppedWorkItem(params, sql, NO_JOBS)).rejects.toThrow(
+      "db down",
+    );
   });
 
   test("records the event in the same statement", async () => {

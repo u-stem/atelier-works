@@ -29,6 +29,7 @@ function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
+    hasActiveFixItem: false,
     lastKnownHeadSha: null,
     previousFixRound: 0,
     maxReviewId: 0,
@@ -164,6 +165,54 @@ describe("decidePrActions — review", () => {
 });
 
 describe("decidePrActions — fix", () => {
+  test("does not trigger a fix while a pr_fix is in progress for the pull request", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          hasActiveFixItem: true,
+          labels: [FIX_LABEL],
+          fixLabelerLogin: "octo-owner",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.fix).toEqual({ kind: "none" });
+  });
+
+  test("still starts a review while a pr_fix is in progress", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          hasActiveFixItem: true,
+          labels: [REVIEW_LABEL],
+          reviewLabelerLogin: "octo-owner",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.review.kind).toBe("trigger_review");
+  });
+
+  test("denies a fix label from a person who is not allowed even while a pr_fix is in progress", () => {
+    const [decision] = decidePrActions(
+      [
+        candidate({
+          hasActiveFixItem: true,
+          labels: [FIX_LABEL],
+          fixLabelerLogin: "mallory",
+        }),
+      ],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.fix).toEqual({ kind: "deny_labeler" });
+  });
+
   test("triggers a label-based fix and asks to remove the label", () => {
     const [decision] = decidePrActions(
       [candidate({ labels: [FIX_LABEL], fixLabelerLogin: "octo-owner" })],

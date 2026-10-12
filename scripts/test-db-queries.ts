@@ -31,7 +31,10 @@ import {
   insertDependabotWorkItemUnlessActive,
   insertWorkerSample,
   insertWorkItem,
+  isActivePrFixUniqueViolation,
   latestMainCiRunCreatedAt,
+  listActivePrFixWorkItems,
+  listAutoRetryCandidates,
   listFailedPrCiChecks,
   listMainCiRunsBySha,
   listNoCiPrCiChecksToRecheck,
@@ -53,6 +56,7 @@ import {
   resolveStaleInfoNoticesBefore,
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
+  restartStoppedWorkItem,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
   setWorkItemPrUrl,
@@ -3027,6 +3031,97 @@ check(
   "dependabot head: a row of another kind does not count",
   (await hasDependabotItemForHead(OWNER, "r", 9105, DEPENDABOT_SHA_A, sql)) ===
     false,
+);
+
+// 同じPRの終端でないpr_fixは1件までである(`work_items_active_pr_fix_key`)。
+// 一意インデックスへの違反を`isActivePrFixUniqueViolation`が見分けられること、稼働中のpr_fixの一覧、
+// 自動の再開の候補の一覧と比較交換が、同じPRの別の稼働中のpr_fixを避けることを確かめる。
+const NO_JOB_IDS = { job_id: null, root_job_id: null };
+const activeFix = await prWorkItem("pr_fix", 9201, "fixing", "qdb active fix");
+let activeFixInsertError: unknown = null;
+try {
+  await prWorkItem("pr_fix", 9201, "fixing", "qdb second active fix");
+} catch (err) {
+  activeFixInsertError = err;
+}
+check(
+  "active pr_fix: a second active row for the same pull request is rejected by the index",
+  isActivePrFixUniqueViolation(activeFixInsertError),
+  activeFixInsertError,
+);
+check(
+  "active pr_fix: the list returns the active row of the pull request",
+  (await listActivePrFixWorkItems(OWNER, "r", 9201, sql))
+    .map((item) => item.id)
+    .join(",") === String(activeFix),
+);
+const stoppedFix = await prWorkItem(
+  "pr_fix",
+  9201,
+  "blocked",
+  "qdb stopped fix",
+);
+event(stoppedFix, "blocked", "worker image is stale: probe");
+execPsql(
+  target,
+  "INSERT INTO factory.notices (kind, message, resolved, resolved_by, resolved_at) VALUES ('qdb_stale_image', 'qdb stale image probe', true, 'qdb', now() + interval '1 minute')",
+);
+const autoRetryParams = {
+  reasonPrefixes: ["worker image is stale: "],
+  noticeKind: "qdb_stale_image",
+  noticeMarker: "qdb stale image probe",
+  resolvedBy: "qdb",
+  notePrefix: "auto_retry: ",
+  maxRestarts: 3,
+};
+const restartParams = {
+  ...autoRetryParams,
+  id: stoppedFix,
+  expectedFrom: "blocked",
+  to: "fixing",
+  clearFlowJobId: false,
+  note: "auto_retry: restarted from blocked",
+} as const;
+check(
+  "active pr_fix: a stopped pr_fix is not an auto retry candidate while the pull request has an active one",
+  !(await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(stoppedFix),
+);
+check(
+  "active pr_fix: a stopped pr_fix is not restarted while the pull request has an active one",
+  (await restartStoppedWorkItem(restartParams, sql, NO_JOB_IDS)) === false,
+);
+let activeFixUpdateError: unknown = null;
+try {
+  await updateStatusIfCurrent(
+    stoppedFix,
+    "blocked",
+    "fixing",
+    "qdb retry",
+    sql,
+  );
+} catch (err) {
+  activeFixUpdateError = err;
+}
+check(
+  "active pr_fix: moving a terminal pr_fix to an active status is rejected by the index",
+  isActivePrFixUniqueViolation(activeFixUpdateError),
+  activeFixUpdateError,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'failed' WHERE id = ${String(activeFix)}`,
+);
+check(
+  "active pr_fix: a stopped pr_fix is an auto retry candidate once the active one ends",
+  (await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(stoppedFix),
+);
+check(
+  "active pr_fix: a stopped pr_fix is restarted once the active one ends",
+  (await restartStoppedWorkItem(restartParams, sql, NO_JOB_IDS)) === true,
 );
 // フロー自身が取り消した行(4つの注記)は数えず、同じheadを処理し直せる。
 // ほかの処理が取り消した行と、ほかの終端(終えた、失敗した)は処理済みとして数える。

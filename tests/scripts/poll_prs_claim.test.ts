@@ -995,6 +995,7 @@ describe("processPrDecisions", () => {
     reviewLabelerLogin: null,
     fixLabelerLogin: null,
     hasActiveReviewingItem: false,
+    hasActiveFixItem: false,
     lastKnownHeadSha: null,
     previousFixRound: 0,
     maxReviewId: 0,

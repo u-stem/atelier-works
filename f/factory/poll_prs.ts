@@ -71,7 +71,11 @@ import {
   type PrDecision,
   recordLabelerCheckLimit,
 } from "./lib/poll_support.ts";
-import { hasLabel, type WorkItem } from "./lib/types.ts";
+import {
+  hasLabel,
+  TERMINAL_WORK_ITEM_STATUSES,
+  type WorkItem,
+} from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import {
   describeReason,
@@ -268,6 +272,11 @@ export async function buildPrCandidate(
     hasActiveReviewingItem: activeForPr.some(
       (item) => item.kind === "pr_review",
     ),
+    hasActiveFixItem: activeForPr.some(
+      (item) =>
+        item.kind === "pr_fix" &&
+        !TERMINAL_WORK_ITEM_STATUSES.includes(item.status),
+    ),
     lastKnownHeadSha: latestAny?.head_sha ?? null,
     previousFixRound: latestFix?.fix_round ?? 0,
     maxReviewId: reviews.maxId,
@@ -310,9 +319,11 @@ export type ClaimPrResult =
  * それでも読めなければ、取得できたか分からない。ラベルを消費したまま
  * 作業項目を作らないと、以後ラベル検索でもDBでもそのPRを見つけられない。
  * 一方、読めないまま作業を始めると、別のアクターがラベルを付け直していた場合に、
- * 次のポーリングで同じPRのサイクルが二重に始まる(ラベルの経路は、稼働中の作業項目があっても
- * `decidePrActions`が止めない)。そのため、トリガーラベルを付け直して
- * `claimed: false`と`restored: true`を返し、次のポーリングが拾い直す。
+ * 次のポーリングで同じPRのサイクルが二重に始まる。レビューのラベルの経路は、稼働中の作業項目が
+ * あっても`decidePrActions`が止めない。修正のラベルの経路は、終端でない`pr_fix`がある間だけ止まり、
+ * その修正が次のポーリングまでに終わると、付け直されたラベルで次のサイクルが始まる。
+ * そのため、トリガーラベルを付け直して`claimed: false`と`restored: true`を返し、
+ * 次のポーリングが拾い直す。
  * 付け直しは5xxと通信断を1回再送する(ラベルの追加は何度送っても状態が同じ)。
  * ラベルが外れたままになるのは、読み取りの失敗がレート制限のとき(同じ制限に当たり、
  * さらに最大120秒待つので付け直さない)と、付け直しも失敗したときである。
