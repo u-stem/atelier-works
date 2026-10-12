@@ -1,6 +1,7 @@
 // `factory_repo_id`を、取得の前にGitHubの現在のリポジトリIDと照合する判定のテスト。
 
 import { describe, expect, test } from "bun:test";
+import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import {
   ensureVerifiedFactoryClone,
   FACTORY_REPO_ID_MISMATCH_KIND,
@@ -18,15 +19,20 @@ import type {
   EnsureFactoryCloneResult,
 } from "../../f/factory/lib/workspace.ts";
 
-const WITH_ID = {
+const RAW_CONFIG = {
+  owners: [{ name: "octo-owner", kind: "user" }],
+  instance_name: "local",
+  factory_branch: "main",
+};
+const WITH_ID = parseFactoryConfig({
+  ...RAW_CONFIG,
   factory_repo: "https://github.com/octo-owner/factory.git",
   factory_repo_id: 777,
-  factory_branch: "main",
-};
-const WITHOUT_ID = {
+});
+const WITHOUT_ID = parseFactoryConfig({
+  ...RAW_CONFIG,
   factory_repo: "https://github.com/octo-owner/factory",
-  factory_branch: "main",
-};
+});
 
 type Recorded = {
   readonly notices: NoticeRecord[];
@@ -48,7 +54,9 @@ function setup(lookup: () => Promise<number>) {
     addNotice: async (record: NoticeRecord) => {
       recorded.notices.push(record);
     },
+    // 本物の`ensureFactoryClone`と同じく、ロックの中で`beforeUpdate`を呼んでから更新する。
     ensureClone: async (opts: EnsureFactoryCloneOptions) => {
+      await opts.beforeUpdate?.();
       recorded.clones.push(opts);
       return cloneResult;
     },

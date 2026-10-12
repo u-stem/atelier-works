@@ -5,6 +5,7 @@
 import { addNoticeUnlessUnresolved } from "./db.ts";
 import { ensureVerifiedFactoryClone } from "./factory_repo_gate.ts";
 import { getRepositoryId } from "./github.ts";
+import { withCallTimeout } from "./self_update_support.ts";
 import type { FactoryConfig } from "./types.ts";
 import type { CommandRunner, EnsureFactoryCloneResult } from "./workspace.ts";
 
@@ -19,19 +20,22 @@ export type OpenFactoryCloneOptions = {
  * 呼び出し側の既存のエラー処理(フローの失敗など)に乗せる。
  */
 export function openFactoryClone(
-  config: Pick<
-    FactoryConfig,
-    "factory_repo" | "factory_repo_id" | "factory_branch"
-  >,
+  config: FactoryConfig,
   options: OpenFactoryCloneOptions,
 ): Promise<EnsureFactoryCloneResult> {
   return ensureVerifiedFactoryClone(config, options, {
     getRepositoryId: (owner, repo) =>
-      getRepositoryId(
-        { run: options.run, ghToken: options.ghToken },
-        owner,
-        repo,
+      // cloneのロックを持ったまま呼ぶので、他の処理を長く塞がないよう、上限で区切る。
+      withCallTimeout("getRepositoryId factory_repo", () =>
+        getRepositoryId(
+          { run: options.run, ghToken: options.ghToken },
+          owner,
+          repo,
+        ),
       ),
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
+    addNotice: (record) =>
+      withCallTimeout("addNotice factory_repo_id", () =>
+        addNoticeUnlessUnresolved(record),
+      ),
   });
 }

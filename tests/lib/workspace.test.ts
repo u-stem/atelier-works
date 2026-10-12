@@ -980,6 +980,56 @@ describe("ensureFactoryClone", () => {
     );
   });
 
+  test("runs beforeUpdate while holding the lock", async () => {
+    const lockFs = createInMemoryLockFs();
+    let lockHeld = false;
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => false,
+      lockFs,
+      beforeUpdate: async () => {
+        lockHeld =
+          (await lockFs.read("/workspaces/factory/atelier-works.lock")) !==
+          null;
+      },
+    });
+    expect(lockHeld).toBe(true);
+  });
+
+  test("runs no git command when beforeUpdate throws", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+      beforeUpdate: () => Promise.reject(new Error("not verified")),
+    }).catch(() => undefined);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("releases the lock when beforeUpdate throws", async () => {
+    const lockFs = createInMemoryLockFs();
+    await ensureFactoryClone({
+      run: createFakeCommandRunner([]).run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs,
+      beforeUpdate: () => Promise.reject(new Error("not verified")),
+    }).catch(() => undefined);
+    expect(await lockFs.read("/workspaces/factory/atelier-works.lock")).toBe(
+      null,
+    );
+  });
+
   test("throws when the fetch fails", async () => {
     const fake = createFakeCommandRunner([ok(), fail("could not fetch")]);
     await expect(
@@ -6790,5 +6840,30 @@ describe("isReviewWorktreeOf", () => {
     expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
       false,
     );
+  });
+});
+
+describe("git remote set-url as used by ensureFactoryClone", () => {
+  test("replaces the origin URL of a real repository", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-clone-origin-"));
+    try {
+      const git = (...args: string[]) =>
+        Bun.spawnSync(["git", "-C", dir, ...args]);
+      git("init", "-q");
+      git("remote", "add", "origin", "https://example.com/old/repo.git");
+      const result = git(
+        "remote",
+        "set-url",
+        "origin",
+        "--",
+        "https://example.com/new/repo.git",
+      );
+      expect([
+        result.exitCode,
+        git("config", "--get", "remote.origin.url").stdout.toString().trim(),
+      ]).toEqual([0, "https://example.com/new/repo.git"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

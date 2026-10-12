@@ -456,7 +456,8 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 pullの前に、`factory_repo_id`があれば、`factory_repo`が指すリポジトリのGitHubの現在のIDと照合する。
 オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを反映しないためである。
 照合は、Factory自身のcloneを使うすべての処理が行う。
-対象は、`self_update`、`poll_issues`のデプロイ版の確認、各フローのprepareである。
+対象は、`self_update`、`poll_issues`のデプロイ版の確認、各フローのprepareと`pipeline_generate`である。
+照合は、cloneのロックを取った直後に行い、ロックの待ちを照合から取得までの間に入れない。
 どれも`ensureVerifiedFactoryClone`を通して取得する。
 cloneのoriginは、取得の前に毎回`factory_repo`のURLへ付け替える。
 IDの食い違い、リポジトリが無い(404)、URLを読めない場合は、要対応のnotice`factory_repo_id_mismatch`を残す。

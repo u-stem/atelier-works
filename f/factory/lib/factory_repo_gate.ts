@@ -36,7 +36,7 @@ export function factoryRepoNotFoundMessage(
   repository: string,
   expectedId: number,
 ): string {
-  return `${repository}: GitHubにこのリポジトリが見つかりません(設定のfactory_repo_idは${String(expectedId)})。リポジトリが削除されたか、オーナーが改名した可能性があるため、factory_repoを取得せずに止めました。factory_configのfactory_repoとfactory_repo_idを見直してください`;
+  return `${repository}: GitHubにこのリポジトリが見つかりません(設定のfactory_repo_idは${String(expectedId)})。リポジトリが削除されたか、オーナーが改名したか、PATがこのリポジトリを読めなくなった可能性があるため、factory_repoを取得せずに止めました。privateリポジトリでは、PATがアクセスを失うと401でなく404が返ることがあります。factory_configのfactory_repoとfactory_repo_idを見直してください`;
 }
 
 /**
@@ -131,24 +131,25 @@ export type EnsureVerifiedFactoryCloneDeps = FactoryRepoVerifyDeps & {
 
 /**
  * `factory_repo_id`を照合してから、`config.factory_repo`のcloneを用意する。
- * 照合に落ちたら、cloneに触れずにエラーを投げる(`verifyFactoryRepoId`を参照)。
+ * 照合に落ちたら、cloneにもoriginにも触れずにエラーを投げる(`verifyFactoryRepoId`を参照)。
+ * 設定は`FactoryConfig`全体で受け取る。`factory_repo_id`を渡し忘れても、型で見つかるため。
  * URLとブランチは`config`から取るので、照合したURLと取得するURLが一致する。
- * `ensureFactoryClone`はfetchの前にoriginをそのURLへ付け替える。
- * 照合とfetchの間の短い時間に、リポジトリが入れ替わる余地は残る。
+ *
+ * 照合は、`ensureFactoryClone`がcloneのロックを取った直後(`beforeUpdate`)に行う。
+ * ロックの待ちが、照合から取得までの間に入らない。
+ * 照合の応答を読んでからfetchするまでには、originの付け替えとfetchの接続の分だけ、リポジトリが入れ替わる余地が残る。
+ * ロックを持つ時間は、照合の1往復の分だけ延びる。
  */
 export async function ensureVerifiedFactoryClone(
-  config: Pick<
-    FactoryConfig,
-    "factory_repo" | "factory_repo_id" | "factory_branch"
-  >,
+  config: FactoryConfig,
   options: Omit<EnsureFactoryCloneOptions, "repoUrl" | "branch">,
   deps: EnsureVerifiedFactoryCloneDeps,
 ): Promise<EnsureFactoryCloneResult> {
-  await verifyFactoryRepoId(config, deps);
   const ensureClone = deps.ensureClone ?? ensureFactoryClone;
   return ensureClone({
     ...options,
     repoUrl: config.factory_repo,
     branch: config.factory_branch,
+    beforeUpdate: () => verifyFactoryRepoId(config, deps),
   });
 }

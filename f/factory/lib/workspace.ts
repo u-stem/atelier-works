@@ -1418,6 +1418,12 @@ export type EnsureFactoryCloneOptions = {
    * 既定値のブランチに固定してしまう。
    */
   readonly branch: string;
+  /**
+   * cloneのロックを取った直後、cloneにもoriginにも触れる前に呼ぶ。
+   * 投げると、何も変えずに失敗する。
+   * `factory_repo_id`の照合に使う。照合から取得までの間を、ロックの待ちで延ばさないため。
+   */
+  readonly beforeUpdate?: () => Promise<void>;
   readonly home?: string;
   readonly path?: string;
   readonly exists?: PathExists;
@@ -1487,6 +1493,7 @@ export async function ensureFactoryClone(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
+      await opts.beforeUpdate?.();
       if (await exists(dir)) {
         // cloneのoriginは、cloneした時点のURLのままである。fetchの前に毎回、
         // 呼び出し側が渡したURLに合わせ、照合したURLと取得するURLを1つにする。

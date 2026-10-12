@@ -189,8 +189,8 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "factory_repo_id_mismatch",
     guide(
-      "設定したfactory_repo_idが、factory_repoのGitHubの現在のIDと食い違うか、そのリポジトリが見つかりません。リポジトリが削除されたか、オーナーが改名して別の人がその名前を取得した可能性があります。自己更新は取得も反映もせず、Factory自身のリポジトリを使うほかの処理は、取得の前に失敗します。",
-      "GitHubで、そのリポジトリが意図した持ち主のものか確かめ、factory_configのfactory_repoとfactory_repo_idを見直してください。",
+      "設定したfactory_repo_idが、factory_repoのGitHubの現在のIDと食い違うか、そのリポジトリが見つかりません。リポジトリが削除されたか、オーナーが改名して別の人がその名前を取得したか、PATがそのリポジトリを読めなくなった可能性があります。privateリポジトリでは、PATがアクセスを失うと404になることがあります。自己更新は取得も反映もせず、Factory自身のリポジトリを使うほかの処理は、取得の前に失敗します。",
+      "GitHubで、そのリポジトリが意図した持ち主のものか、PATがそのリポジトリを読めるかを確かめ、factory_configのfactory_repoとfactory_repo_idを見直してください。",
       {
         note: "名前とIDが合うと、次の回から自己更新が再開し、ほかの処理も取得できます。見直した後に、この通知を解決してください。",
       },
