@@ -2161,14 +2161,15 @@ export async function searchPrs(
   return items;
 }
 
-/** dependabotのPRを探す範囲。オーナーのすべてのリポジトリか、1つのリポジトリ。 */
-export type DependabotPrSearchScope =
-  | {
-      readonly kind: "owner";
-      readonly owner: string;
-      readonly ownerKind: FactoryOwnerKind;
-    }
-  | { readonly kind: "repo"; readonly owner: string; readonly repo: string };
+/**
+ * dependabotのPRを探す範囲。1つのリポジトリに限る。
+ * オーナーの全リポジトリは探さない。自動でマージする対象を、明示したリポジトリに限るためである。
+ */
+export type DependabotPrSearchScope = {
+  readonly kind: "repo";
+  readonly owner: string;
+  readonly repo: string;
+};
 
 export type DependabotPrSearchItem = {
   readonly owner: string;
@@ -2187,15 +2188,8 @@ export async function searchDependabotPrs(
   client: GhClient,
   scope: DependabotPrSearchScope,
 ): Promise<DependabotPrSearchItem[]> {
-  let qualifier: string;
-  if (scope.kind === "owner") {
-    assertGitHubName(scope.owner);
-    qualifier = ownerQualifier(scope.owner, scope.ownerKind);
-  } else {
-    validateOwnerRepo(scope.owner, scope.repo);
-    qualifier = `repo:${scope.owner}/${scope.repo}`;
-  }
-  const query = `is:pr state:open draft:false base:main author:app/dependabot ${qualifier}`;
+  validateOwnerRepo(scope.owner, scope.repo);
+  const query = `is:pr state:open draft:false base:main author:app/dependabot repo:${scope.owner}/${scope.repo}`;
   const items = await callGhApiAllSearchItems(
     client,
     `search/issues?q=${encodeURIComponent(query)}&per_page=100`,

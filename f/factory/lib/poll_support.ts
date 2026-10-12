@@ -818,7 +818,12 @@ export type ReconcileGithubState =
       readonly kind: "issue";
       readonly open: boolean;
     }
-  | { readonly kind: "pr"; readonly open: boolean }
+  | {
+      readonly kind: "pr";
+      readonly open: boolean;
+      /** PRがマージされたか。閉じたdependabotの作業項目を、マージ済みとして記録するかに使う。 */
+      readonly merged: boolean;
+    }
   /**
    * 監査の作業項目にはGitHubのオブジェクトが無く、ジョブの状態と孤立の検査だけを行う。
    */
@@ -971,10 +976,49 @@ export function decideReconcileAction(
   };
 }
 
+/** 照合が作業項目を移す先の状態と、注記。 */
+export type ReconcileTransition = {
+  readonly to: "cancelled" | "failed" | "reviewed";
+  readonly note: string;
+};
+
+/**
+ * dependabotのフローがマージを記録するときの注記(`steps/dependabot_finish.ts`の`DEPENDABOT_DONE_NOTE.merged`)。
+ * libはstepsを読み込まないので、値を写している(テストが一致を確かめる)。
+ */
+const DEPENDABOT_MERGED_NOTE = "merged";
+
+/**
+ * 照合の判定から、作業項目を移す先の状態と注記を決める。
+ * dependabotの作業項目のPRがマージされていたときは、取り消しでなく、マージ済み(`reviewed`、注記`merged`)として記録する。
+ * フローの記録が間に合わなかったマージや、人が手でマージしたPRを、取り消しとして残さないためである。
+ * ほかの種別と、マージされずに閉じたPRは、取り消し(`cancelled`)にする。孤立は失敗(`failed`)にする。
+ */
+export function reconcileTransition(
+  kind: WorkItemKind,
+  decision: Exclude<ReconcileDecision, { readonly action: "none" }>,
+  github: ReconcileGithubState,
+): ReconcileTransition {
+  if (
+    kind === "dependabot" &&
+    decision.action === "cancel" &&
+    decision.reason === "pr_closed" &&
+    github.kind === "pr" &&
+    github.merged
+  ) {
+    return { to: "reviewed", note: DEPENDABOT_MERGED_NOTE };
+  }
+  return {
+    to: decision.action === "cancel" ? "cancelled" : "failed",
+    note: `reconcile: ${decision.reason}`,
+  };
+}
+
 /**
  * 照合が作業項目を取り消すか失敗にしたときに、Discordへ知らせるか。
- * dependabotの作業項目を、PRが閉じたことで取り消したときは知らせない。
- * dependabotは置き換えたPRを自分で閉じるので、閉じたことは人の行動を求めないためである。
+ * dependabotの作業項目を、PRが閉じたことで終えたときは知らせない。
+ * マージされずに閉じたのは、dependabotが置き換えたPRを自分で閉じた場合で、人の行動を求めないためである。
+ * マージされたときはマージ済みとして記録する(`reconcileTransition`)ので、これも人の行動を求めない。
  * ほかの種別と、dependabotの孤立による失敗は知らせる。
  */
 export function reconcileNotifies(

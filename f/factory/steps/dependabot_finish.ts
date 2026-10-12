@@ -8,6 +8,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import { getWorkItem, updateStatusIfCurrent } from "../lib/db.ts";
 import {
+  DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_RESULT_UNKNOWN_REASON,
@@ -311,6 +312,8 @@ export type DependabotFinishRunInput = {
   readonly fixLabel: string;
   /** `factory_config`の`dependabot_enabled`。偽なら、GitHubに書かずに取り消す。 */
   readonly enabled: boolean;
+  /** `factory_config`の`dependabot_merge_enabled`。偽なら、マージの結論でもマージせずに人に回す(試運転)。 */
+  readonly mergeEnabled: boolean;
 };
 
 /** このステップの戻り値。 */
@@ -347,6 +350,7 @@ function errorText(error: unknown): string {
  * 7. `decideAssessedOutcome`で結論を出す。GitHubに書く前に、PRを読み直す。
  *    閉じたかマージ済みなら取り消し(`pr_closed`)、headが動いていれば取り消し(`head_moved`)、
  *    baseがこのリポジトリの`main`でない、headが別のリポジトリにあるときは人に回す。
+ *    `dependabot_merge_enabled`が偽(試運転)なら、マージの直前の確認を終えた後、マージせずに人に回す。
  * 8. マージ: headのshaを固定して1回だけマージを要求し、成功したら`reviewed`(`merged`)を1回だけ記録する。
  *    記録がfalse(ほかの処理が先に動かした)か例外のときは、警告だけ残してステップは成功で返す。
  *    マージの成功は通知しない(人の操作が要らないため)。
@@ -591,6 +595,9 @@ export async function runDependabotFinish(
       return cancel(DEPENDABOT_CANCEL_NOTE.gateWaiting);
     }
 
+    // 試運転では、マージの直前の確認までを通し、マージだけを人に任せる。
+    if (!run.mergeEnabled) return toHuman(DEPENDABOT_DRY_RUN_REASON);
+
     let merged: MergePullRequestResult;
     try {
       merged = await deps.mergePullRequest(
@@ -789,6 +796,7 @@ export async function main(
       instanceName: config.instance_name,
       fixLabel: config.fix_label,
       enabled: config.dependabot_enabled,
+      mergeEnabled: config.dependabot_merge_enabled,
     },
   );
 }

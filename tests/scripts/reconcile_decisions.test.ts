@@ -7,7 +7,9 @@ import {
   decideReconcileAction,
   isWaitingForHuman,
   reconcileNotifies,
+  reconcileTransition,
 } from "../../f/factory/lib/poll_support.ts";
+import { DEPENDABOT_DONE_NOTE } from "../../f/factory/steps/dependabot_finish.ts";
 
 const NOW = new Date("2026-09-26T12:00:00.000Z");
 const RECENT = new Date("2026-09-26T11:59:00.000Z"); // 1分前
@@ -125,7 +127,7 @@ describe("decideReconcileAction — pr kind", () => {
   test("cancels when the PR is closed or merged", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
-      { kind: "pr", open: false },
+      { kind: "pr", open: false, merged: false },
       { state: "running" },
       NOW,
     );
@@ -135,7 +137,7 @@ describe("decideReconcileAction — pr kind", () => {
   test("does nothing for an open PR with a running job", () => {
     const decision = decideReconcileAction(
       { updated_at: RECENT },
-      { kind: "pr", open: true },
+      { kind: "pr", open: true, merged: false },
       { state: "running" },
       NOW,
     );
@@ -162,7 +164,9 @@ describe("decideClosureOnly", () => {
   });
 
   test("cancels a closed PR", () => {
-    expect(decideClosureOnly({ kind: "pr", open: false })).toEqual({
+    expect(
+      decideClosureOnly({ kind: "pr", open: false, merged: false }),
+    ).toEqual({
       action: "cancel",
       reason: "pr_closed",
     });
@@ -236,5 +240,49 @@ describe("reconcileNotifies", () => {
     expect(
       reconcileNotifies("issue", { action: "cancel", reason: "closed" }),
     ).toBe(true);
+  });
+});
+
+describe("reconcileTransition", () => {
+  const CLOSED = { action: "cancel", reason: "pr_closed" } as const;
+
+  test("records a dependabot work item of a merged pull request as merged", () => {
+    expect(
+      reconcileTransition("dependabot", CLOSED, {
+        kind: "pr",
+        open: false,
+        merged: true,
+      }),
+    ).toEqual({ to: "reviewed", note: DEPENDABOT_DONE_NOTE.merged });
+  });
+
+  test("cancels a dependabot work item of a pull request closed without a merge", () => {
+    expect(
+      reconcileTransition("dependabot", CLOSED, {
+        kind: "pr",
+        open: false,
+        merged: false,
+      }),
+    ).toEqual({ to: "cancelled", note: "reconcile: pr_closed" });
+  });
+
+  test("keeps cancelling a review of a merged pull request", () => {
+    expect(
+      reconcileTransition("pr_review", CLOSED, {
+        kind: "pr",
+        open: false,
+        merged: true,
+      }),
+    ).toEqual({ to: "cancelled", note: "reconcile: pr_closed" });
+  });
+
+  test("fails an orphaned dependabot work item", () => {
+    expect(
+      reconcileTransition(
+        "dependabot",
+        { action: "fail_orphan", reason: "flow job failed" },
+        { kind: "pr", open: true, merged: false },
+      ),
+    ).toEqual({ to: "failed", note: "reconcile: flow job failed" });
   });
 });

@@ -827,6 +827,11 @@ export const DEPENDABOT_MERGE_REFUSED_REASON = "dependabot merge refused (405)";
 export const DEPENDABOT_MERGE_FORBIDDEN_REASON =
   "dependabot merge forbidden (403)";
 
+/**
+ * マージしてよいと判断したが、`dependabot_merge_enabled`が偽なのでマージせずに人に回すときの理由(試運転)。
+ */
+export const DEPENDABOT_DRY_RUN_REASON = "dependabot dry run: merge allowed";
+
 /** マージの結果をPRの状態からも確かめられなかったときの理由。 */
 export const DEPENDABOT_RESULT_UNKNOWN_REASON = "dependabot result unknown";
 

@@ -3038,10 +3038,10 @@ describe("searchPrs", () => {
 });
 
 describe("searchDependabotPrs", () => {
-  const OWNER_SCOPE = {
-    kind: "owner" as const,
+  const SCOPE = {
+    kind: "repo" as const,
     owner: "acme",
-    ownerKind: "user" as const,
+    repo: "widgets",
   };
 
   function dependabotItem(number: number, createdAt: unknown): unknown {
@@ -3066,23 +3066,19 @@ describe("searchDependabotPrs", () => {
   }
 
   test("asks only for pull requests opened by the dependabot app", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("author:app/dependabot");
+    expect(await queryOf(SCOPE)).toContain("author:app/dependabot");
   });
 
   test("asks only for pull requests based on main", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("base:main");
+    expect(await queryOf(SCOPE)).toContain("base:main");
   });
 
   test("asks only for open pull requests", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("is:pr state:open");
+    expect(await queryOf(SCOPE)).toContain("is:pr state:open");
   });
 
   test("leaves out draft pull requests", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("draft:false");
-  });
-
-  test("narrows an owner scope by the owner qualifier", async () => {
-    expect(await queryOf(OWNER_SCOPE)).toContain("user:acme");
+    expect(await queryOf(SCOPE)).toContain("draft:false");
   });
 
   test("narrows a repository scope to the repository", async () => {
@@ -3098,7 +3094,7 @@ describe("searchDependabotPrs", () => {
 
     const items = await searchDependabotPrs(
       { run: fake.run, ghToken: "tok" },
-      OWNER_SCOPE,
+      SCOPE,
     );
 
     expect(items).toEqual([
@@ -3117,7 +3113,7 @@ describe("searchDependabotPrs", () => {
     ]);
 
     await expect(
-      searchDependabotPrs({ run: fake.run, ghToken: "tok" }, OWNER_SCOPE),
+      searchDependabotPrs({ run: fake.run, ghToken: "tok" }, SCOPE),
     ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 });

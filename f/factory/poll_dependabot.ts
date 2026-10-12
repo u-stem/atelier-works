@@ -2,10 +2,11 @@
 // 通ったPRだけ作業項目を`picked`で作り、フロー`f/factory/dependabot`を起動する。
 // 待つ間は作業項目を作らない。人に回すと決めたPRは、作業項目を作ってすぐ`needs_human`で終え、1回だけ通知する。
 // `dependabot_enabled`が偽なら、GitHubにもDBにも触れずに終える。
+// 対象のリポジトリは`factory_repo`と`repo_allowlist`に明示したものだけで、オーナーの全リポジトリは見ない。
 //
 // 判断は`processDependabotPr`と`pollDependabot`にあり、`main`は入出力をつなぐだけである。
 // 1件のPRの失敗では例外を投げず、失敗を記録して次のPRへ進む。
-// GitHubのレート制限に当たったら、その周回の残りのPRは調べない。
+// GitHubのレート制限に当たったら、その周回の残りを調べず、解除の時刻まで周回を飛ばす。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
@@ -49,15 +50,22 @@ import {
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
 import { isCommitSha } from "./lib/main_ci_support.ts";
+import { listMainCiTargets } from "./lib/main_ci_watch.ts";
 import {
   filterByRepoAllowlist,
   filterVerifiedOwners,
 } from "./lib/poll_support.ts";
+import {
+  type RepoOwnerGateResult,
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "./lib/repo_owner_gate.ts";
 import type { FactoryConfig, FactoryOwner, WorkItem } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
 const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
 
 /** 対象にするPRの作者。ゲートも同じ作者を求める。 */
 const DEPENDABOT_AUTHOR_LOGIN = "dependabot[bot]";
@@ -67,17 +75,31 @@ const DEPENDABOT_BASE_REF = "main";
 
 /**
  * 待ちの上限を、公開の日数(`dependabot_min_published_days`)に足す日数。
- * PRを作ってから、公開の日数にこの日数を足した時間を超えて待ちが続けば、人に回す。
+ * 待ちの起点から、公開の日数にこの日数を足した時間を超えて待ちが続けば、人に回す。
  * 必須のチェックの失敗の放置やレート制限の連続で、いつまでも黙って待たないためである。
  */
 export const WAIT_LIMIT_EXTRA_DAYS = 7;
+
+/**
+ * 公開の日数のほかの待ち(チェックの未完了、マージできるかの計算中など)で、次に確かめるまでの間(ミリ秒)。
+ * 同じheadで続けて待った回数で選び、最後の値を上限にする。目安は次の周回、30分後、60分後である。
+ * 周期10分の実行時刻のずれで1周多く飛ばさないよう、それぞれ1分短くする。
+ */
+export const WAIT_BACKOFF_MS: readonly number[] = Object.freeze([
+  9 * MINUTE_MS,
+  29 * MINUTE_MS,
+  59 * MINUTE_MS,
+]);
+
+/** レート制限が解除の時刻を示さなかったときに、周回を飛ばす時間(ミリ秒)。 */
+export const RATE_LIMIT_DEFAULT_PAUSE_MS = 15 * MINUTE_MS;
 
 /**
  * フローが待ちで止まった後に、同じheadのフローを起動し直すまでの間(ミリ秒)。
  * 取得の評価が通っても、フローの側の収集が待ちを返すことがある(レート制限、チェックの再実行など)。
  * そのたびに周回ごとにフローを起動しないよう、間を置く。
  */
-export const FLOW_WAIT_COOLDOWN_MS = 60 * 60_000;
+export const FLOW_WAIT_COOLDOWN_MS = 60 * MINUTE_MS;
 
 /** 同じheadで、フローが待ちで止まった回数がこれに達したら、人に回す。 */
 export const MAX_FLOW_GATE_WAITS = 3;
@@ -108,23 +130,43 @@ export const DEPENDABOT_SKIP_REASON = {
   headHandled: "the head was already handled",
   /** フローが待ちで止まった直後。 */
   flowWaitCooldown: "the flow stopped to wait for this head recently",
-  /** 公開の日数を待っている。 */
-  publishWait: "the update is waiting for the publish days",
+  /** 待っているheadの、次に確かめる時刻の前。 */
+  throttled: "the head is waiting until its next check",
   /** ほかの取得が先に作業項目を作った。 */
   insertLost: "another poll created the work item first",
 } as const;
 
-/** 公開の日数の待ちを間引くキー。headごとに分け、新しいheadは間引かない。 */
-export function publishWaitKey(
+function prKey(owner: string, repo: string, number: number): string {
+  return `${owner}/${repo}#${String(number)}`.toLowerCase();
+}
+
+/** 待ちの記録のキー。headごとに分け、新しいheadは前のheadの待ちを引き継がない。 */
+export function headWaitKey(
   owner: string,
   repo: string,
   number: number,
   headSha: string,
 ): string {
-  return `${owner}/${repo}#${String(number)}@${headSha}`;
+  return `${prKey(owner, repo, number)}@${headSha}`;
+}
+
+/** 待ちの記録のキーから、PRの部分を取り出す。 */
+function prPartOf(key: string): string {
+  const at = key.lastIndexOf("@");
+  return at < 0 ? key : key.slice(0, at);
 }
 
 // ---- 1件のPR ----
+
+/** 同じheadの待ちの記録。 */
+export type HeadWaitState = {
+  /** このheadで初めて待ちを見た時刻。待ちの上限の起点の1つ。 */
+  readonly firstWaitAtMs: number;
+  /** このheadで続けて待った回数。 */
+  readonly waitCount: number;
+  /** 次に評価する時刻。これより前の周回では評価しない。 */
+  readonly nextCheckAtMs: number;
+};
 
 /** `processDependabotPr`が使うI/O。テストでは偽物に差し替える。 */
 export type PollDependabotDeps = {
@@ -151,6 +193,14 @@ export type PollDependabotDeps = {
     repo: string,
     number: number,
   ) => Promise<CollectResult>;
+  /**
+   * リポジトリのオーナーと`factory_repo_id`の照合(`verifyRepoOwnerId`)。
+   * 作業項目を作る前に呼ぶ。落ちたときは関門がnoticeを残し、理由を返す。
+   */
+  readonly checkRepoOwner: (
+    owner: string,
+    repo: string,
+  ) => Promise<RepoOwnerGateResult>;
   readonly insertItem: (item: NewDependabotWorkItem) => Promise<number | null>;
   readonly updateStatus: (
     id: number,
@@ -177,8 +227,8 @@ export type PollDependabotContext = {
   readonly retentionDays: number;
   /** このPRの終端でない作業項目。 */
   readonly activeForPr: readonly Pick<WorkItem, "kind">[];
-  /** 公開の日数を待つheadの、次に確かめる時刻(`publishWaitKey`がキー)。 */
-  readonly nextCheckAt: ReadonlyMap<string, number>;
+  /** 前の周回までの待ちの記録(`headWaitKey`がキー)。 */
+  readonly waits: ReadonlyMap<string, HeadWaitState>;
 };
 
 export type DependabotPollOutcome =
@@ -196,23 +246,12 @@ export type DependabotPollOutcome =
   | {
       readonly kind: "waiting";
       readonly reason: string;
-      /** 待っているhead。 */
-      readonly headSha: string;
-      /** 公開の日数の待ちで、次に確かめる時刻。ほかの待ちは`null`。 */
-      readonly nextCheckAtMs: number | null;
+      /** 待っているheadの記録のキー(`headWaitKey`)。 */
+      readonly key: string;
+      /** 次の周回へ引き継ぐ待ちの記録。 */
+      readonly wait: HeadWaitState;
     }
   | { readonly kind: "skipped"; readonly reason: string };
-
-/** PRを作ってから、待ちの上限を超えたか。上限ちょうどは超えていない。 */
-function waitLimitExceeded(
-  createdAtMs: number,
-  nowMs: number,
-  minPublishedDays: number,
-): boolean {
-  return (
-    nowMs - createdAtMs > (minPublishedDays + WAIT_LIMIT_EXTRA_DAYS) * DAY_MS
-  );
-}
 
 /** 処理済みの記録が保持期間で消えたかもしれないほど、PRが古いか。 */
 function olderThanRetention(
@@ -222,6 +261,12 @@ function olderThanRetention(
 ): boolean {
   const days = Math.max(0, retentionDays - RETENTION_MARGIN_DAYS);
   return nowMs - createdAtMs >= days * DAY_MS;
+}
+
+/** 続けて待った回数から、次に確かめるまでの間を選ぶ。 */
+function backoffFor(waitCount: number): number {
+  const index = Math.min(Math.max(waitCount, 1), WAIT_BACKOFF_MS.length) - 1;
+  return WAIT_BACKOFF_MS[index] ?? RATE_LIMIT_DEFAULT_PAUSE_MS;
 }
 
 function prUrl(owner: string, repo: string, number: number): string {
@@ -239,16 +284,18 @@ function errorMessage(err: unknown): string {
  *    終端でないdependabotの作業項目があれば、フローが動いているので何もしない。
  * 2. PRを読み、開いた、draftでない、baseが`main`、作者が`dependabot[bot]`、headが完全なshaのものだけを続ける。
  * 3. そのheadを処理済み(`hasDependabotItemForHead`)なら、何もしない。
- * 4. 公開の日数を待っているheadは、次に確かめる時刻まで収集しない。
+ * 4. 待っているheadは、次に確かめる時刻まで評価しない。
  * 5. PRを作ってから保持期間に近いほど時間がたっていれば、処理済みの記録が消えたかもしれないので、人に回す。
  * 6. 同じheadでフローが待ちで止まった回数が上限に達していれば人に回し、直後なら起動を見送る。
  * 7. フローの準備と同じ収集(`collectGateInput`)とゲート(`evaluateGate`)で評価する。
  *    通ればフローを起動し、止まれば人に回し、待ちなら作業項目を作らない。
- *    待ちが上限を超えて続いていれば、人に回す。
+ *    マージできない(競合)は、dependabotがrebaseで直しうるので待ちとして扱う。
+ *    待ちの起点(PRを作った時刻と、そのheadで初めて待ちを見た時刻の遅い方)から上限を超えたら、人に回す。
+ * 作業項目を作る前に、リポジトリのオーナーと`factory_repo_id`を照合する。落ちたら、その理由で人に回す。
  * 人に回すときと起動するときは、作業項目を`picked`で作る。部分一意インデックスが同じPRの2件目を拒むので、
  * 作れなかったときは、ほかの取得が先に始めたものとして何もしない。
  * 人に回すときは、すぐに`needs_human`へ移し、移せたときだけ通知する。
- * 起動に失敗したときは、行を`failed`にし、失敗を記録して通知する。
+ * 起動に失敗したときは、行を`failed`にし、失敗を記録して、移せたときだけ通知する。
  * PRの読み取りなど、ここで分類しない失敗は例外のまま投げる。
  */
 export async function processDependabotPr(
@@ -292,15 +339,14 @@ export async function processDependabotPr(
     return skipped(DEPENDABOT_SKIP_REASON.headHandled);
   }
 
-  const throttledUntil = ctx.nextCheckAt.get(
-    publishWaitKey(owner, repo, number, headSha),
-  );
-  if (throttledUntil !== undefined && throttledUntil > ctx.nowMs) {
+  const key = headWaitKey(owner, repo, number, headSha);
+  const previousWait = ctx.waits.get(key);
+  if (previousWait !== undefined && previousWait.nextCheckAtMs > ctx.nowMs) {
     return {
       kind: "waiting",
-      reason: DEPENDABOT_SKIP_REASON.publishWait,
-      headSha,
-      nextCheckAtMs: throttledUntil,
+      reason: DEPENDABOT_SKIP_REASON.throttled,
+      key,
+      wait: previousWait,
     };
   }
 
@@ -330,7 +376,16 @@ export async function processDependabotPr(
     });
   };
 
-  const escalate = async (note: string): Promise<DependabotPollOutcome> => {
+  /** オーナーの照合に落ちたときの理由を返す。通れば`null`。 */
+  const ownerStop = async (): Promise<string | null> => {
+    const gate = await deps.checkRepoOwner(owner, repo);
+    return gate.ok ? null : dependabotReason("poll", gate.reason);
+  };
+
+  /** 照合を済ませた後に、作業項目を作ってすぐ人の対応待ちにする。 */
+  const escalateChecked = async (
+    note: string,
+  ): Promise<DependabotPollOutcome> => {
     const id = await deps.insertItem(newItem);
     if (id === null) return skipped(DEPENDABOT_SKIP_REASON.insertLost);
     if (await deps.updateStatus(id, "picked", "needs_human", note)) {
@@ -339,19 +394,35 @@ export async function processDependabotPr(
     return { kind: "escalated", workItemId: id, note };
   };
 
+  const escalate = async (note: string): Promise<DependabotPollOutcome> =>
+    escalateChecked((await ownerStop()) ?? note);
+
   const waitOrEscalate = (
     reason: string,
-    nextCheckAtMs: number | null,
+    publishCheckAtMs: number | null,
   ): Promise<DependabotPollOutcome> | DependabotPollOutcome => {
-    if (waitLimitExceeded(found.createdAtMs, ctx.nowMs, ctx.minPublishedDays)) {
+    const firstWaitAtMs = previousWait?.firstWaitAtMs ?? ctx.nowMs;
+    const startMs = Math.max(found.createdAtMs, firstWaitAtMs);
+    const limitDays = ctx.minPublishedDays + WAIT_LIMIT_EXTRA_DAYS;
+    if (ctx.nowMs - startMs > limitDays * DAY_MS) {
       return escalate(
         dependabotReason(
           "poll",
-          `still waiting more than ${String(ctx.minPublishedDays + WAIT_LIMIT_EXTRA_DAYS)} days after the pull request was opened (${reason})`,
+          `still waiting more than ${String(limitDays)} days (${reason})`,
         ),
       );
     }
-    return { kind: "waiting", reason, headSha, nextCheckAtMs };
+    const waitCount = (previousWait?.waitCount ?? 0) + 1;
+    return {
+      kind: "waiting",
+      reason,
+      key,
+      wait: {
+        firstWaitAtMs,
+        waitCount,
+        nextCheckAtMs: publishCheckAtMs ?? ctx.nowMs + backoffFor(waitCount),
+      },
+    };
   };
 
   if (olderThanRetention(found.createdAtMs, ctx.nowMs, ctx.retentionDays)) {
@@ -363,18 +434,18 @@ export async function processDependabotPr(
     );
   }
 
-  const waits = await deps.gateWaitingCancels(owner, repo, number, headSha);
-  if (waits.count >= MAX_FLOW_GATE_WAITS) {
+  const flowWaits = await deps.gateWaitingCancels(owner, repo, number, headSha);
+  if (flowWaits.count >= MAX_FLOW_GATE_WAITS) {
     return escalate(
       dependabotReason(
         "poll",
-        `the flow stopped to wait ${String(waits.count)} times for this head`,
+        `the flow stopped to wait ${String(flowWaits.count)} times for this head`,
       ),
     );
   }
   if (
-    waits.lastAt !== null &&
-    ctx.nowMs - waits.lastAt.getTime() < FLOW_WAIT_COOLDOWN_MS
+    flowWaits.lastAt !== null &&
+    ctx.nowMs - flowWaits.lastAt.getTime() < FLOW_WAIT_COOLDOWN_MS
   ) {
     return skipped(DEPENDABOT_SKIP_REASON.flowWaitCooldown);
   }
@@ -399,18 +470,22 @@ export async function processDependabotPr(
   const gate = evaluateGate(result.input);
   if (!gate.ok) {
     if (gate.kind === "needs_human") {
-      return escalate(dependabotReason("gate", gate.reason));
+      return gate.notMergeable
+        ? waitOrEscalate(gate.reason, null)
+        : escalate(dependabotReason("gate", gate.reason));
     }
     const { publishedAtIso, nowMs, minPublishedDays } = result.input;
     const publishedMs = Date.parse(publishedAtIso);
-    const nextCheckAtMs =
+    const publishCheckAtMs =
       !isPublishedLongEnough(publishedAtIso, nowMs, minPublishedDays) &&
       Number.isFinite(publishedMs)
         ? publishedMs + minPublishedDays * DAY_MS
         : null;
-    return waitOrEscalate(gate.reason, nextCheckAtMs);
+    return waitOrEscalate(gate.reason, publishCheckAtMs);
   }
 
+  const stop = await ownerStop();
+  if (stop !== null) return escalateChecked(stop);
   const id = await deps.insertItem(newItem);
   if (id === null) return skipped(DEPENDABOT_SKIP_REASON.insertLost);
   let jobId: string;
@@ -435,42 +510,79 @@ export async function processDependabotPr(
   return { kind: "started", workItemId: id };
 }
 
-// ---- 間引きの状態 ----
+// ---- 周回の状態 ----
 
 /** Windmillのstateに保存する形。 */
-export type PollState = { readonly nextCheckAt: Record<string, number> };
+export type PollState = {
+  /** レート制限の解除まで、周回を飛ばす時刻。無ければ`null`。 */
+  readonly resumeAtMs: number | null;
+  /** 待っているheadの記録(`headWaitKey`がキー)。 */
+  readonly heads: Record<string, HeadWaitState>;
+};
 
-/** 保存したstateを読む。形が違えば、間引きの無い状態として扱う。 */
-export function parsePollState(raw: unknown): Map<string, number> {
-  const result = new Map<string, number>();
-  if (typeof raw !== "object" || raw === null) return result;
-  const times: unknown = Reflect.get(raw, "nextCheckAt");
-  if (typeof times !== "object" || times === null || Array.isArray(times)) {
-    return result;
+export type ParsedPollState = {
+  readonly resumeAtMs: number | null;
+  readonly heads: Map<string, HeadWaitState>;
+};
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function parseHeadWait(value: unknown): HeadWaitState | null {
+  if (typeof value !== "object" || value === null) return null;
+  const firstWaitAtMs: unknown = Reflect.get(value, "firstWaitAtMs");
+  const waitCount: unknown = Reflect.get(value, "waitCount");
+  const nextCheckAtMs: unknown = Reflect.get(value, "nextCheckAtMs");
+  if (
+    !isFiniteNumber(firstWaitAtMs) ||
+    !isFiniteNumber(waitCount) ||
+    !isFiniteNumber(nextCheckAtMs)
+  ) {
+    return null;
   }
-  for (const [key, value] of Object.entries(times)) {
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      return new Map();
-    }
-    result.set(key, value);
+  return { firstWaitAtMs, waitCount, nextCheckAtMs };
+}
+
+/** 保存したstateを読む。形が違えば、記録の無い状態として扱う。 */
+export function parsePollState(raw: unknown): ParsedPollState {
+  const empty: ParsedPollState = { resumeAtMs: null, heads: new Map() };
+  if (typeof raw !== "object" || raw === null) return empty;
+  const resume: unknown = Reflect.get(raw, "resumeAtMs");
+  const heads: unknown = Reflect.get(raw, "heads");
+  if (resume !== null && resume !== undefined && !isFiniteNumber(resume)) {
+    return empty;
   }
-  return result;
+  if (typeof heads !== "object" || heads === null || Array.isArray(heads)) {
+    return empty;
+  }
+  const parsed = new Map<string, HeadWaitState>();
+  for (const [key, value] of Object.entries(heads)) {
+    const wait = parseHeadWait(value);
+    if (wait === null) return empty;
+    parsed.set(key, wait);
+  }
+  return { resumeAtMs: isFiniteNumber(resume) ? resume : null, heads: parsed };
 }
 
 /**
- * 次の周回に渡すstateを作る。前の時刻に今回の時刻を重ね、時刻が来たものを捨てる。
- * 閉じたPRの時刻も、時刻が来れば捨てるので、stateは公開の日数を超えて残らない。
+ * 次の周回に渡すstateを作る。
+ * 今回待ちになったheadの記録と、今回調べ終えなかったPR(失敗したPRと、レート制限で打ち切った後のPR)の前の記録だけを残す。
+ * 処理を終えたPRと、候補から外れたPR(閉じたPR)の記録は捨てるので、stateは開いたPRの数を超えて増えない。
  */
-export function nextPollState(
-  previous: ReadonlyMap<string, number>,
-  fresh: ReadonlyMap<string, number>,
-  nowMs: number,
-): PollState {
-  const nextCheckAt: Record<string, number> = {};
-  for (const [key, value] of [...previous, ...fresh]) {
-    if (value > nowMs) nextCheckAt[key] = value;
+export function nextPollState(input: {
+  readonly previous: ReadonlyMap<string, HeadWaitState>;
+  readonly fresh: ReadonlyMap<string, HeadWaitState>;
+  /** 今回調べ終えなかった候補のPRのキー(`headWaitKey`の`@`より前)。 */
+  readonly unprocessedPrKeys: ReadonlySet<string>;
+  readonly resumeAtMs: number | null;
+}): PollState {
+  const heads: Record<string, HeadWaitState> = {};
+  for (const [key, wait] of input.previous) {
+    if (input.unprocessedPrKeys.has(prPartOf(key))) heads[key] = wait;
   }
-  return { nextCheckAt };
+  for (const [key, wait] of input.fresh) heads[key] = wait;
+  return { resumeAtMs: input.resumeAtMs, heads };
 }
 
 // ---- 周回 ----
@@ -488,20 +600,23 @@ export type PollSession = {
   readonly listActive: () => Promise<
     readonly Pick<WorkItem, "kind" | "owner" | "repo" | "pr_number">[]
   >;
-  readonly getState: () => Promise<unknown>;
-  readonly setState: (state: PollState) => Promise<void>;
-  readonly now: () => number;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
   readonly deps: PollDependabotDeps;
 };
 
 export type PollDependabotIo = {
   readonly loadConfig: () => Promise<FactoryConfig>;
-  /** GitHubとDBに触れる準備をする。`dependabot_enabled`が偽なら呼ばない。 */
+  readonly getState: () => Promise<unknown>;
+  readonly setState: (state: PollState) => Promise<void>;
+  readonly now: () => number;
+  /** GitHubとDBに触れる準備をする。`dependabot_enabled`が偽のときと、周回を飛ばすときは呼ばない。 */
   readonly open: (config: FactoryConfig) => Promise<PollSession>;
 };
 
 export type PollDependabotResult = {
   readonly enabled: boolean;
+  /** レート制限の解除を待つため、周回を飛ばしたか。 */
+  readonly paused: boolean;
   readonly started: number;
   readonly escalated: number;
   readonly waiting: number;
@@ -509,17 +624,21 @@ export type PollDependabotResult = {
   readonly failed: number;
 };
 
-function prKey(owner: string, repo: string, number: number): string {
-  return `${owner}/${repo}#${String(number)}`.toLowerCase();
+/** レート制限の例外から、周回を再開してよい時刻を求める。 */
+function resumeAfter(err: GitHubRateLimitError, nowMs: number): number {
+  return nowMs + (err.requiredWaitMs ?? RATE_LIMIT_DEFAULT_PAUSE_MS);
 }
 
 /**
  * dependabotのPRを1周する。
  * `dependabot_enabled`が偽なら、GitHubにもDBにも触れずに終える。
- * 照合を通ったオーナーごとにPRを探し、`poll_prs`と同じ許可リスト(`filterByRepoAllowlist`)で絞る。
- * 1つのオーナーの検索の失敗と、1件のPRの失敗は記録して続ける。
- * GitHubのレート制限に当たったら、残りのPRは次の周回に回す。
- * 最後に、公開の日数を待つheadの次に確かめる時刻を保存する。
+ * レート制限の解除の時刻の前なら、GitHubに触れずに周回を飛ばす。
+ * 対象のリポジトリは`watch_main_ci`と同じ規則で決める(`listMainCiTargets`)。
+ * `factory_repo`と、`repo_allowlist`のうち照合を通ったオーナーのリポジトリだけを、リポジトリごとに探す。
+ * `repo_allowlist`が空なら`factory_repo`だけを見る。オーナーの全リポジトリは見ない。
+ * 1つのリポジトリの検索の失敗と、1件のPRの失敗は記録して続ける。
+ * GitHubのレート制限に当たったら、残りを次の周回に回し、解除の時刻をstateに残す。
+ * 最後に、待っているheadの記録を保存する。
  */
 export async function pollDependabot(
   io: PollDependabotIo,
@@ -532,29 +651,57 @@ export async function pollDependabot(
     skipped: 0,
     failed: 0,
   };
-  if (!config.dependabot_enabled) return { enabled: false, ...counts };
+  if (!config.dependabot_enabled) {
+    return { enabled: false, paused: false, ...counts };
+  }
+
+  const nowMs = io.now();
+  const previous = parsePollState(await io.getState());
+  if (previous.resumeAtMs !== null && previous.resumeAtMs > nowMs) {
+    return { enabled: true, paused: true, ...counts };
+  }
 
   const session = await io.open(config);
   const { deps } = session;
   counts.failed += session.ownersFailed;
 
+  const { targets, invalid } = listMainCiTargets({
+    owners: [...session.verifiedOwners],
+    repo_allowlist: config.repo_allowlist,
+    factory_repo: config.factory_repo,
+  });
+  if (invalid.length > 0) {
+    // URLに認証情報が埋め込まれていることがあるので、値は載せない。
+    session.warn(
+      "repo_allowlist has entries that are not GitHub repository URLs",
+      {
+        count: invalid.length,
+      },
+    );
+  }
+
+  let resumeAtMs: number | null = null;
   const found: DependabotPrSearchItem[] = [];
-  for (const owner of session.verifiedOwners) {
+  for (const target of targets) {
     try {
       found.push(
         ...(await session.search({
-          kind: "owner",
-          owner: owner.name,
-          ownerKind: owner.kind,
+          kind: "repo",
+          owner: target.owner,
+          repo: target.repo,
         })),
       );
     } catch (err) {
       counts.failed += 1;
       await deps.recordFailure(
-        `search_dependabot_prs:${owner.name}`,
+        `search_dependabot_prs:${target.owner}/${target.repo}`,
         err,
         null,
       );
+      if (err instanceof GitHubRateLimitError) {
+        resumeAtMs = resumeAfter(err, nowMs);
+        break;
+      }
     }
   }
   const scope = { ...config, owners: [...session.verifiedOwners] };
@@ -569,17 +716,20 @@ export async function pollDependabot(
     .sort((a, b) => a.createdAtMs - b.createdAtMs || a.number - b.number);
 
   const activeByPr = new Map<string, Pick<WorkItem, "kind">[]>();
-  for (const item of await session.listActive()) {
-    if (item.pr_number === null) continue;
-    const key = prKey(item.owner, item.repo, item.pr_number);
-    activeByPr.set(key, [...(activeByPr.get(key) ?? []), item]);
+  if (resumeAtMs === null && candidates.length > 0) {
+    for (const item of await session.listActive()) {
+      if (item.pr_number === null) continue;
+      const key = prKey(item.owner, item.repo, item.pr_number);
+      activeByPr.set(key, [...(activeByPr.get(key) ?? []), item]);
+    }
   }
 
-  const previous = parsePollState(await session.getState());
-  const fresh = new Map<string, number>();
-  const nowMs = session.now();
-
+  const fresh = new Map<string, HeadWaitState>();
+  const unprocessed = new Set(
+    candidates.map((item) => prKey(item.owner, item.repo, item.number)),
+  );
   for (const candidate of candidates) {
+    if (resumeAtMs !== null) break;
     const key = prKey(candidate.owner, candidate.repo, candidate.number);
     let outcome: DependabotPollOutcome;
     try {
@@ -592,7 +742,7 @@ export async function pollDependabot(
           minPublishedDays: config.dependabot_min_published_days,
           retentionDays: config.retention_work_items_days,
           activeForPr: activeByPr.get(key) ?? [],
-          nextCheckAt: previous,
+          waits: previous.heads,
         },
         candidate,
       );
@@ -603,25 +753,27 @@ export async function pollDependabot(
         err,
         null,
       );
-      if (err instanceof GitHubRateLimitError) break;
+      // 失敗したPRの待ちの記録は消さずに残し、次の周回で続ける。
+      if (err instanceof GitHubRateLimitError) {
+        resumeAtMs = resumeAfter(err, nowMs);
+        break;
+      }
       continue;
     }
+    unprocessed.delete(key);
     counts[outcome.kind] += 1;
-    if (outcome.kind === "waiting" && outcome.nextCheckAtMs !== null) {
-      fresh.set(
-        publishWaitKey(
-          candidate.owner,
-          candidate.repo,
-          candidate.number,
-          outcome.headSha,
-        ),
-        outcome.nextCheckAtMs,
-      );
-    }
+    if (outcome.kind === "waiting") fresh.set(outcome.key, outcome.wait);
   }
 
-  await session.setState(nextPollState(previous, fresh, nowMs));
-  return { enabled: true, ...counts };
+  await io.setState(
+    nextPollState({
+      previous: previous.heads,
+      fresh,
+      unprocessedPrKeys: unprocessed,
+      resumeAtMs,
+    }),
+  );
+  return { enabled: true, paused: false, ...counts };
 }
 
 export async function main(): Promise<PollDependabotResult> {
@@ -629,6 +781,9 @@ export async function main(): Promise<PollDependabotResult> {
   return pollDependabot({
     loadConfig: () =>
       loadConfig(() => wmill.getResource("f/factory/factory_config")),
+    getState: () => wmill.getState(),
+    setState: (state) => wmill.setState(state),
+    now: () => Date.now(),
     open: async (config) => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
       const discordWebhookUrl = await wmill.getVariable(
@@ -657,6 +812,7 @@ export async function main(): Promise<PollDependabotResult> {
           });
         }
       };
+      // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
       const verified = await filterVerifiedOwners(config.owners, {
         getAccountId: (name) => getAccountId(client, name),
         recordFailure: (step, err) => record(step, err, null),
@@ -675,9 +831,7 @@ export async function main(): Promise<PollDependabotResult> {
         ownersFailed: verified.failed,
         search: (scope) => searchDependabotPrs(client, scope),
         listActive: () => listActive(),
-        getState: () => wmill.getState(),
-        setState: (state) => wmill.setState(state),
-        now: () => Date.now(),
+        warn: (message, fields) => log.warn(message, fields),
         deps: {
           getPr: (owner, repo, number) => getPr(client, owner, repo, number),
           hasItemForHead: (owner, repo, prNumber, headSha) =>
@@ -686,6 +840,13 @@ export async function main(): Promise<PollDependabotResult> {
             dependabotGateWaitingCancels(owner, repo, prNumber, headSha),
           collect: (owner, repo, number) =>
             collectGateInput(collectDeps, { owner, repo, number }),
+          checkRepoOwner: (owner, repo) =>
+            verifyRepoOwnerId(
+              config,
+              owner,
+              repo,
+              repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+            ),
           insertItem: (item) => insertDependabotWorkItemUnlessActive(item),
           updateStatus: (id, from, to, note) =>
             updateStatusIfCurrent(id, from, to, note),

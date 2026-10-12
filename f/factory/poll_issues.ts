@@ -80,6 +80,7 @@ import {
   type ReconcileGithubState,
   readJobState,
   reconcileNotifies,
+  reconcileTransition,
   recordLabelerCheckLimit,
   rotateTargets,
   runDeployedShaCheck,
@@ -313,7 +314,7 @@ async function removePrWorktrees(
 
 /**
  * 照合が作業項目を取り消すか失敗にしたときの通知を返す。知らせないときは`null`。
- * 知らせるかは`reconcileNotifies`が決める。dependabotの作業項目を、PRが閉じたことで取り消したときは知らせない。
+ * 知らせるかは`reconcileNotifies`が決める。dependabotの作業項目を、PRが閉じたことで終えたときは知らせない。
  */
 export function reconcileEvent(
   item: Pick<WorkItem, "kind" | "flow_job_id">,
@@ -385,7 +386,11 @@ async function reconcileActiveItems(
           item.repo,
           item.pr_number,
         );
-        github = { kind: "pr", open: asIssue.state === "open" };
+        github = {
+          kind: "pr",
+          open: asIssue.state === "open",
+          merged: asIssue.mergedAt !== null,
+        };
       }
 
       const decision = isWaitingForHuman(item.status)
@@ -407,9 +412,11 @@ async function reconcileActiveItems(
         }
       }
 
-      const targetStatus =
-        decision.action === "cancel" ? "cancelled" : "failed";
-      const note = `reconcile: ${decision.reason}`;
+      const { to: targetStatus, note } = reconcileTransition(
+        item.kind,
+        decision,
+        github,
+      );
       // 読み取った後にflow_job_idが変わっていれば(実装フローがリースを取った、新しいフローが
       // 起動されたなど)その実行を止めないよう、観測した値のままのときだけ状態を変える。
       // 更新できなかったときは、並行する処理が先に状態を進めている。
@@ -599,7 +606,7 @@ export async function reconcileClosedActionableItems(
         const decision = decideClosureOnly(
           item.kind === "issue"
             ? { kind: "issue", open: false }
-            : { kind: "pr", open: false },
+            : { kind: "pr", open: false, merged: false },
         );
         if (decision.action !== "cancel") continue;
         const note = actionableCancelNote(decision.reason);

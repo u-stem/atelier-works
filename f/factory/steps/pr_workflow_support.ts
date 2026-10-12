@@ -12,6 +12,7 @@ import {
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
 import {
+  DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
   DEPENDABOT_REASON_PREFIX,
@@ -3696,6 +3697,13 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `dependabotの更新を、PRを取得する処理で人に回しました(${m[1]})`,
     nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_DRY_RUN_REASON, ""),
+    describe: () =>
+      "dry run: dependabotの更新をマージ可と判定しました。試運転のため、マージしていません",
+    nextAction: () =>
+      "PRを確認して手でマージするか、factory_configのdependabot_merge_enabledを有効にしてください。この作業項目は再実行できません",
   },
   {
     pattern: reasonPattern(DEPENDABOT_MERGE_FORBIDDEN_REASON, ""),

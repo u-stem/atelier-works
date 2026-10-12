@@ -51,8 +51,8 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `pr_review_generate` | レビューの生成を止めた |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
 | `watch_pr_ci` | Factoryが作ったPRのCIが失敗し、通知を新しく残した(理由は`ci_failure`か`ci_other_conclusion`) |
-| `poll_dependabot` | dependabotのPRを人に回すと決めた。待ちが上限を超えた、収集かゲートが止めた、フローの起動に失敗した、などである。作業項目を作った直後に人の対応待ちにして、1回だけ送る |
-| `dependabot_prepare`、`dependabot_finish` | dependabotのフローが、自動でマージできないと判断して人に回した。影響の所見を投稿し、修正のラベルを人に付けてもらうときも送る |
+| `poll_dependabot` | dependabotのPRを人に回すと決めた。待ちが上限を超えた、収集かゲートが止めた、リポジトリの照合に落ちた、フローの起動に失敗した、などである。作業項目を作った直後に人の対応待ちにして、1回だけ送る |
+| `dependabot_prepare`、`dependabot_finish` | dependabotのフローが、自動でマージできないと判断して人に回した。影響の所見を投稿し、修正のラベルを人に付けてもらうときと、試運転でマージ可と判定したときも送る |
 
 `poll_issues`が、1回のポーリングで複数のIssueについてラベルを外した結果を判断できなかったときは、Issueごとに送らず、リンクを並べた1件の通知にまとめる。
 各行は`owner/repo#番号`とリンクで、タイトルとリンクの先は先頭のIssueである。
@@ -67,7 +67,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | --- | --- |
 | `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る |
 | `on_error_schedule` | スケジュールのジョブが失敗した。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
-| `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで取り消したときは送らない。dependabotは置き換えたPRを自分で閉じ、人の行動が要らないためである |
+| `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで終えたときは送らない。マージされていればマージ済みとして記録し、マージされずに閉じたのはdependabotが置き換えたPRを自分で閉じた場合で、どちらも人の行動が要らないためである |
 | `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
 | `issue_proposal_apply` | Issue化の提案の反映が失敗した |
 

@@ -22,19 +22,26 @@ import {
   GitHubRateLimitError,
   type PullRequest,
 } from "../../f/factory/lib/github.ts";
+import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
+import type { FactoryConfig } from "../../f/factory/lib/types.ts";
 import {
   DEPENDABOT_SKIP_REASON,
   type DependabotPollOutcome,
   FLOW_WAIT_COOLDOWN_MS,
+  type HeadWaitState,
+  headWaitKey,
   MAX_FLOW_GATE_WAITS,
   nextPollState,
   type PollDependabotContext,
   type PollDependabotDeps,
+  type PollDependabotIo,
   type PollSession,
+  type PollState,
   parsePollState,
   pollDependabot,
   processDependabotPr,
-  publishWaitKey,
+  RATE_LIMIT_DEFAULT_PAUSE_MS,
+  WAIT_BACKOFF_MS,
 } from "../../f/factory/poll_dependabot.ts";
 import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -48,6 +55,8 @@ const DAY_MS = 86_400_000;
 const NOW_MS = Date.parse("2026-10-20T00:00:00.000Z");
 const PUBLISHED_AT = "2026-10-01T00:00:00.000Z";
 const TARGET = { name: "left-pad", to: "1.3.1" };
+/** 待ちの上限(公開の日数7日+7日)。 */
+const LIMIT_MS = (7 + 7) * DAY_MS;
 
 function lockText(version: string, integrity: string): string {
   return `{
@@ -171,9 +180,13 @@ const FOUND: DependabotPrSearchItem = {
   owner: "acme",
   repo: "widgets",
   number: 12,
-  // 待ちの上限(7日+7日)の内側。
   createdAtMs: NOW_MS - 3 * DAY_MS,
 };
+
+const KEY = headWaitKey("acme", "widgets", 12, HEAD);
+const FIRST_BACKOFF_MS = WAIT_BACKOFF_MS[0] ?? Number.NaN;
+const SECOND_BACKOFF_MS = WAIT_BACKOFF_MS[1] ?? Number.NaN;
+const LAST_BACKOFF_MS = WAIT_BACKOFF_MS[2] ?? Number.NaN;
 
 // ---- 偽の依存 ----
 
@@ -185,7 +198,7 @@ type Harness = {
   readonly started: number[];
   readonly flowJobIds: { id: number; jobId: string }[];
   readonly failures: { step: string; workItemId: number | null }[];
-  readonly calls: { getPr: number; collect: number };
+  readonly calls: { getPr: number; collect: number; ownerChecks: number };
 };
 
 type HarnessOptions = {
@@ -193,6 +206,7 @@ type HarnessOptions = {
   readonly handled?: boolean;
   readonly waits?: { count: number; lastAt: Date | null };
   readonly collect?: CollectResult;
+  readonly ownerGate?: RepoOwnerGateResult;
   readonly insertId?: number | null;
   readonly updated?: boolean;
   readonly startFlow?: () => Promise<string>;
@@ -205,7 +219,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const started: number[] = [];
   const flowJobIds: Harness["flowJobIds"] = [];
   const failures: Harness["failures"] = [];
-  const calls = { getPr: 0, collect: 0 };
+  const calls = { getPr: 0, collect: 0, ownerChecks: 0 };
   const deps: PollDependabotDeps = {
     getPr: async () => {
       calls.getPr += 1;
@@ -216,6 +230,10 @@ function harness(options: HarnessOptions = {}): Harness {
     collect: async () => {
       calls.collect += 1;
       return options.collect ?? ready();
+    },
+    checkRepoOwner: async () => {
+      calls.ownerChecks += 1;
+      return options.ownerGate ?? { ok: true };
     },
     insertItem: async (item) => {
       inserted.push(item);
@@ -263,7 +281,7 @@ function context(
     minPublishedDays: 7,
     retentionDays: 90,
     activeForPr: [],
-    nextCheckAt: new Map(),
+    waits: new Map(),
     ...overrides,
   };
 }
@@ -282,6 +300,27 @@ function noteOf(outcome: DependabotPollOutcome): string {
   return outcome.kind === "escalated" || outcome.kind === "failed"
     ? outcome.note
     : "";
+}
+
+function waitOf(outcome: DependabotPollOutcome): HeadWaitState | null {
+  return outcome.kind === "waiting" ? outcome.wait : null;
+}
+
+/** 前の周回までに、このheadで待っていた記録。 */
+function waited(
+  wait: Partial<HeadWaitState> = {},
+): ReadonlyMap<string, HeadWaitState> {
+  return new Map([
+    [
+      KEY,
+      {
+        firstWaitAtMs: NOW_MS - DAY_MS,
+        waitCount: 1,
+        nextCheckAtMs: NOW_MS,
+        ...wait,
+      },
+    ],
+  ]);
 }
 
 // ---- 選ぶ条件 ----
@@ -414,14 +453,14 @@ describe("processDependabotPr after the retention", () => {
     expect(h.calls.collect).toBe(0);
   });
 
-  test("still processes a pull request a day younger than the threshold", async () => {
+  test("still processes a pull request just younger than the threshold", async () => {
     const { outcome } = await run(
       {},
       {},
-      { ...FOUND, createdAtMs: NOW_MS - 88 * DAY_MS + 1 },
+      { ...OLD, createdAtMs: OLD.createdAtMs + 1 },
     );
 
-    expect(outcome.kind).not.toBe("escalated");
+    expect(outcome.kind).toBe("started");
   });
 
   test("lets a handled head of an old pull request stay handled", async () => {
@@ -478,33 +517,32 @@ describe("processDependabotPr after the flow stopped to wait", () => {
   });
 });
 
-// ---- 公開の日数の待ちの間引き ----
+// ---- 待ちの間引き ----
 
-describe("processDependabotPr publish wait throttle", () => {
-  const key = publishWaitKey("acme", "widgets", 12, HEAD);
-
+describe("processDependabotPr wait throttle", () => {
   test("does not collect before the time to check again", async () => {
-    const { h } = await run({}, { nextCheckAt: new Map([[key, NOW_MS + 1]]) });
+    const { h } = await run(
+      {},
+      { waits: waited({ nextCheckAtMs: NOW_MS + 1 }) },
+    );
 
     expect(h.calls.collect).toBe(0);
   });
 
-  test("keeps the time to check again while throttled", async () => {
-    const { outcome } = await run(
-      {},
-      { nextCheckAt: new Map([[key, NOW_MS + 1]]) },
-    );
+  test("keeps the wait record while throttled", async () => {
+    const wait = { firstWaitAtMs: 1, waitCount: 2, nextCheckAtMs: NOW_MS + 1 };
+    const { outcome } = await run({}, { waits: new Map([[KEY, wait]]) });
 
     expect(outcome).toEqual({
       kind: "waiting",
-      reason: DEPENDABOT_SKIP_REASON.publishWait,
-      headSha: HEAD,
-      nextCheckAtMs: NOW_MS + 1,
+      reason: DEPENDABOT_SKIP_REASON.throttled,
+      key: KEY,
+      wait,
     });
   });
 
   test("collects again once the time has come", async () => {
-    const { h } = await run({}, { nextCheckAt: new Map([[key, NOW_MS]]) });
+    const { h } = await run({}, { waits: waited({ nextCheckAtMs: NOW_MS }) });
 
     expect(h.calls.collect).toBe(1);
   });
@@ -513,13 +551,59 @@ describe("processDependabotPr publish wait throttle", () => {
     const { h } = await run(
       {},
       {
-        nextCheckAt: new Map([
-          [publishWaitKey("acme", "widgets", 12, OTHER_HEAD), NOW_MS + 1],
+        waits: new Map([
+          [
+            headWaitKey("acme", "widgets", 12, OTHER_HEAD),
+            { firstWaitAtMs: 0, waitCount: 1, nextCheckAtMs: NOW_MS + 1 },
+          ],
         ]),
       },
     );
 
     expect(h.calls.collect).toBe(1);
+  });
+
+  test("checks the publish wait again when the publish days have passed", async () => {
+    const { outcome } = await run({
+      collect: ready({ publishedAtIso: "2026-10-18T00:00:00.000Z" }),
+    });
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(
+      Date.parse("2026-10-25T00:00:00.000Z"),
+    );
+  });
+
+  test("checks another wait in the next round after the first wait", async () => {
+    const { outcome } = await run({ collect: ready({ mergeable: null }) });
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS + FIRST_BACKOFF_MS);
+  });
+
+  test("checks less often after the second wait", async () => {
+    const { outcome } = await run(
+      { collect: ready({ mergeable: null }) },
+      { waits: waited({ waitCount: 1 }) },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS + SECOND_BACKOFF_MS);
+  });
+
+  test("stops lengthening the interval at the last step", async () => {
+    const { outcome } = await run(
+      { collect: ready({ mergeable: null }) },
+      { waits: waited({ waitCount: 9 }) },
+    );
+
+    expect(waitOf(outcome)?.nextCheckAtMs).toBe(NOW_MS + LAST_BACKOFF_MS);
+  });
+
+  test("counts the consecutive waits", async () => {
+    const { outcome } = await run(
+      { collect: ready({ mergeable: null }) },
+      { waits: waited({ waitCount: 2 }) },
+    );
+
+    expect(waitOf(outcome)?.waitCount).toBe(3);
   });
 });
 
@@ -560,7 +644,7 @@ describe("processDependabotPr collect results", () => {
     expect(h.inserted).toHaveLength(0);
   });
 
-  test("reports the wait of the collection", async () => {
+  test("starts the wait record at the first wait", async () => {
     const { outcome } = await run({
       collect: { kind: "wait", reason: "GitHub is temporarily unavailable" },
     });
@@ -568,8 +652,12 @@ describe("processDependabotPr collect results", () => {
     expect(outcome).toEqual({
       kind: "waiting",
       reason: "GitHub is temporarily unavailable",
-      headSha: HEAD,
-      nextCheckAtMs: null,
+      key: KEY,
+      wait: {
+        firstWaitAtMs: NOW_MS,
+        waitCount: 1,
+        nextCheckAtMs: NOW_MS + FIRST_BACKOFF_MS,
+      },
     });
   });
 
@@ -583,13 +671,19 @@ describe("processDependabotPr collect results", () => {
 // ---- 待ちの上限 ----
 
 describe("processDependabotPr wait limit", () => {
-  const capMs = (7 + 7) * DAY_MS;
+  const OLD_PR: DependabotPrSearchItem = {
+    ...FOUND,
+    createdAtMs: NOW_MS - 30 * DAY_MS,
+  };
+  const WAITING = {
+    collect: { kind: "wait", reason: "GitHub rate limit was hit" },
+  } as const;
 
   test("hands a long wait to a person", async () => {
     const { outcome } = await run(
-      { collect: { kind: "wait", reason: "GitHub rate limit was hit" } },
-      {},
-      { ...FOUND, createdAtMs: NOW_MS - capMs - 1 },
+      WAITING,
+      { waits: waited({ firstWaitAtMs: NOW_MS - LIMIT_MS - 1 }) },
+      OLD_PR,
     );
 
     expect(outcome.kind).toBe("escalated");
@@ -597,9 +691,25 @@ describe("processDependabotPr wait limit", () => {
 
   test("still waits exactly at the limit", async () => {
     const { outcome } = await run(
-      { collect: { kind: "wait", reason: "GitHub rate limit was hit" } },
-      {},
-      { ...FOUND, createdAtMs: NOW_MS - capMs },
+      WAITING,
+      { waits: waited({ firstWaitAtMs: NOW_MS - LIMIT_MS }) },
+      OLD_PR,
+    );
+
+    expect(outcome.kind).toBe("waiting");
+  });
+
+  test("starts counting at the first wait of a new head of an old pull request", async () => {
+    const { outcome } = await run(WAITING, {}, OLD_PR);
+
+    expect(outcome.kind).toBe("waiting");
+  });
+
+  test("counts from the creation of a pull request opened after the first wait", async () => {
+    const { outcome } = await run(
+      WAITING,
+      { waits: waited({ firstWaitAtMs: NOW_MS - 30 * DAY_MS }) },
+      FOUND,
     );
 
     expect(outcome.kind).toBe("waiting");
@@ -608,8 +718,8 @@ describe("processDependabotPr wait limit", () => {
   test("hands a long wait of the gate to a person", async () => {
     const { outcome } = await run(
       { collect: ready({ mergeable: null }) },
-      {},
-      { ...FOUND, createdAtMs: NOW_MS - capMs - 1 },
+      { waits: waited({ firstWaitAtMs: NOW_MS - LIMIT_MS - 1 }) },
+      OLD_PR,
     );
 
     expect(noteOf(outcome).startsWith(DEPENDABOT_REASON_PREFIX.poll)).toBe(
@@ -619,9 +729,12 @@ describe("processDependabotPr wait limit", () => {
 
   test("counts the limit from the configured publish days", async () => {
     const { outcome } = await run(
-      { collect: { kind: "wait", reason: "GitHub rate limit was hit" } },
-      { minPublishedDays: 30 },
-      { ...FOUND, createdAtMs: NOW_MS - capMs - 1 },
+      WAITING,
+      {
+        minPublishedDays: 30,
+        waits: waited({ firstWaitAtMs: NOW_MS - LIMIT_MS - 1 }),
+      },
+      OLD_PR,
     );
 
     expect(outcome.kind).toBe("waiting");
@@ -681,22 +794,6 @@ describe("processDependabotPr gate", () => {
     expect(h.inserted).toHaveLength(0);
   });
 
-  test("checks again when the publish days have passed", async () => {
-    const { outcome } = await run({
-      collect: ready({ publishedAtIso: "2026-10-18T00:00:00.000Z" }),
-    });
-
-    expect(outcome.kind === "waiting" ? outcome.nextCheckAtMs : null).toBe(
-      Date.parse("2026-10-25T00:00:00.000Z"),
-    );
-  });
-
-  test("does not throttle a wait that is not about the publish days", async () => {
-    const { outcome } = await run({ collect: ready({ mergeable: null }) });
-
-    expect(outcome.kind === "waiting" ? outcome.nextCheckAtMs : 0).toBeNull();
-  });
-
   test("hands a gate stop to a person with the gate reason", async () => {
     const { outcome } = await run({
       collect: ready({ headRepoFullName: "mallory/widgets" }),
@@ -713,6 +810,74 @@ describe("processDependabotPr gate", () => {
     });
 
     expect(h.started).toHaveLength(0);
+  });
+
+  test("waits on a conflict that dependabot can rebase", async () => {
+    const { outcome } = await run({ collect: ready({ mergeable: false }) });
+
+    expect(outcome.kind).toBe("waiting");
+  });
+
+  test("creates no work item for a conflict", async () => {
+    const { h } = await run({ collect: ready({ mergeable: false }) });
+
+    expect(h.inserted).toHaveLength(0);
+  });
+
+  test("hands a long conflict to a person", async () => {
+    const { outcome } = await run(
+      { collect: ready({ mergeable: false }) },
+      { waits: waited({ firstWaitAtMs: NOW_MS - LIMIT_MS - 1 }) },
+      { ...FOUND, createdAtMs: NOW_MS - 30 * DAY_MS },
+    );
+
+    expect(outcome.kind).toBe("escalated");
+  });
+});
+
+// ---- オーナーの照合 ----
+
+describe("processDependabotPr repository owner check", () => {
+  const STOPPED: RepoOwnerGateResult = {
+    ok: false,
+    reason: "factory repository id check failed: acme/widgets",
+  };
+
+  test("checks the owner before starting the flow", async () => {
+    const { h } = await run();
+
+    expect(h.calls.ownerChecks).toBe(1);
+  });
+
+  test("does not start the flow when the owner check fails", async () => {
+    const { h } = await run({ ownerGate: STOPPED });
+
+    expect(h.started).toHaveLength(0);
+  });
+
+  test("hands the pull request to a person with the owner check reason", async () => {
+    const { outcome } = await run({ ownerGate: STOPPED });
+
+    expect(noteOf(outcome)).toBe(
+      dependabotReason("poll", STOPPED.ok ? "" : STOPPED.reason),
+    );
+  });
+
+  test("checks the owner before handing a gate stop to a person", async () => {
+    const { outcome } = await run({
+      ownerGate: STOPPED,
+      collect: ready({ headRepoFullName: "mallory/widgets" }),
+    });
+
+    expect(noteOf(outcome)).toBe(
+      dependabotReason("poll", STOPPED.ok ? "" : STOPPED.reason),
+    );
+  });
+
+  test("does not check the owner while only waiting", async () => {
+    const { h } = await run({ collect: ready({ mergeable: null }) });
+
+    expect(h.calls.ownerChecks).toBe(0);
   });
 });
 
@@ -843,6 +1008,12 @@ describe("processDependabotPr flow start failure", () => {
     expect(h.notified).toHaveLength(1);
   });
 
+  test("does not notify when another process ended the work item first", async () => {
+    const { h } = await run({ ...FAILING, updated: false });
+
+    expect(h.notified).toHaveLength(0);
+  });
+
   test("records the failure against the work item", async () => {
     const { h } = await run(FAILING);
 
@@ -858,39 +1029,73 @@ describe("processDependabotPr flow start failure", () => {
   });
 });
 
-// ---- 間引きの状態 ----
+// ---- 周回の状態 ----
 
 describe("poll state", () => {
-  test("reads the times to check again", () => {
-    const state = parsePollState({ nextCheckAt: { k: 5 } });
+  const WAIT: HeadWaitState = {
+    firstWaitAtMs: 1,
+    waitCount: 2,
+    nextCheckAtMs: 3,
+  };
 
-    expect([...state]).toEqual([["k", 5]]);
+  test("reads the wait records and the resume time", () => {
+    const state = parsePollState({ resumeAtMs: 5, heads: { k: WAIT } });
+
+    expect([state.resumeAtMs, [...state.heads]]).toEqual([5, [["k", WAIT]]]);
   });
 
   test("ignores a state of another shape", () => {
-    const state = parsePollState({ nextCheckAt: { k: "soon" } });
+    const state = parsePollState({ heads: { k: { waitCount: "two" } } });
 
-    expect(state.size).toBe(0);
+    expect(state.heads.size).toBe(0);
   });
 
   test("ignores a missing state", () => {
-    expect(parsePollState(null).size).toBe(0);
+    expect(parsePollState(null).heads.size).toBe(0);
   });
 
-  test("drops the times that have come", () => {
-    const next = nextPollState(new Map([["k", NOW_MS]]), new Map(), NOW_MS);
+  test("keeps the new wait records", () => {
+    const next = nextPollState({
+      previous: new Map(),
+      fresh: new Map([["acme/widgets#12@x", WAIT]]),
+      unprocessedPrKeys: new Set(),
+      resumeAtMs: null,
+    });
 
-    expect(next).toEqual({ nextCheckAt: {} });
+    expect(next.heads).toEqual({ "acme/widgets#12@x": WAIT });
   });
 
-  test("keeps a future time and adds the new ones", () => {
-    const next = nextPollState(
-      new Map([["k", NOW_MS + 1]]),
-      new Map([["j", NOW_MS + 2]]),
-      NOW_MS,
-    );
+  test("drops the record of a pull request it processed", () => {
+    const next = nextPollState({
+      previous: new Map([["acme/widgets#12@x", WAIT]]),
+      fresh: new Map(),
+      unprocessedPrKeys: new Set(),
+      resumeAtMs: null,
+    });
 
-    expect(next).toEqual({ nextCheckAt: { k: NOW_MS + 1, j: NOW_MS + 2 } });
+    expect(next.heads).toEqual({});
+  });
+
+  test("carries the record of a pull request it did not reach", () => {
+    const next = nextPollState({
+      previous: new Map([["acme/widgets#12@x", WAIT]]),
+      fresh: new Map(),
+      unprocessedPrKeys: new Set(["acme/widgets#12"]),
+      resumeAtMs: null,
+    });
+
+    expect(next.heads).toEqual({ "acme/widgets#12@x": WAIT });
+  });
+
+  test("saves the resume time", () => {
+    const next = nextPollState({
+      previous: new Map(),
+      fresh: new Map(),
+      unprocessedPrKeys: new Set(),
+      resumeAtMs: 9,
+    });
+
+    expect(next.resumeAtMs).toBe(9);
   });
 });
 
@@ -899,147 +1104,242 @@ describe("poll state", () => {
 const CONFIG = parseFactoryConfig({
   owners: [{ name: "acme", kind: "user" }],
   instance_name: "test",
-  factory_repo: "https://github.com/acme/factory.git",
+  factory_repo: "https://github.com/acme/widgets.git",
   dependabot_enabled: true,
 });
 
-type SessionLog = {
+type RoundLog = {
   opened: number;
   searched: DependabotPrSearchScope[];
   processed: number[];
+  collected: number;
   failures: string[];
-  state: unknown;
+  state: PollState | null;
 };
 
-function session(
-  log: SessionLog,
-  options: {
-    readonly found?: DependabotPrSearchItem[];
-    readonly getPr?: (number: number) => Promise<PullRequest>;
-    readonly search?: () => Promise<DependabotPrSearchItem[]>;
-  } = {},
-): PollSession {
-  const h = harness();
+type RoundOptions = {
+  readonly config?: FactoryConfig;
+  readonly state?: unknown;
+  readonly found?: DependabotPrSearchItem[];
+  readonly getPr?: (number: number) => Promise<PullRequest>;
+  readonly search?: () => Promise<DependabotPrSearchItem[]>;
+  readonly active?: Awaited<ReturnType<PollSession["listActive"]>>;
+  readonly collect?: () => Promise<CollectResult>;
+};
+
+function emptyLog(): RoundLog {
   return {
-    viewerLogin: "factory-bot",
-    verifiedOwners: CONFIG.owners,
-    ownersFailed: 0,
-    search: async (scope) => {
-      log.searched.push(scope);
-      return options.search === undefined
-        ? (options.found ?? [FOUND])
-        : options.search();
-    },
-    listActive: async () => [],
-    getState: async () => null,
+    opened: 0,
+    searched: [],
+    processed: [],
+    collected: 0,
+    failures: [],
+    state: null,
+  };
+}
+
+function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
+  const config = options.config ?? CONFIG;
+  return {
+    loadConfig: async () => config,
+    getState: async () => options.state ?? null,
     setState: async (state) => {
       log.state = state;
     },
     now: () => NOW_MS,
-    deps: {
-      ...h.deps,
-      getPr: async (_owner, _repo, number) => {
-        log.processed.push(number);
-        return options.getPr === undefined
-          ? pullRequest({ number })
-          : options.getPr(number);
-      },
-      recordFailure: async (step) => {
-        log.failures.push(step);
-      },
+    open: async () => {
+      log.opened += 1;
+      const h = harness();
+      return {
+        viewerLogin: "factory-bot",
+        verifiedOwners: config.owners,
+        ownersFailed: 0,
+        search: async (scope) => {
+          log.searched.push(scope);
+          return options.search === undefined
+            ? (options.found ?? [FOUND])
+            : options.search();
+        },
+        listActive: async () => options.active ?? [],
+        warn: () => {},
+        deps: {
+          ...h.deps,
+          getPr: async (_owner, _repo, number) => {
+            log.processed.push(number);
+            return options.getPr === undefined
+              ? pullRequest({ number })
+              : options.getPr(number);
+          },
+          collect: async () => {
+            log.collected += 1;
+            return options.collect === undefined ? ready() : options.collect();
+          },
+          recordFailure: async (step) => {
+            log.failures.push(step);
+          },
+        },
+      };
     },
   };
-}
-
-function emptyLog(): SessionLog {
-  return { opened: 0, searched: [], processed: [], failures: [], state: null };
 }
 
 describe("pollDependabot", () => {
   test("does not open GitHub when dependabot is disabled", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => ({ ...CONFIG, dependabot_enabled: false }),
-      open: async () => {
-        log.opened += 1;
-        return session(log);
-      },
-    });
+    await pollDependabot(
+      round(log, { config: { ...CONFIG, dependabot_enabled: false } }),
+    );
 
     expect(log.opened).toBe(0);
   });
 
   test("reports that it was disabled", async () => {
-    const result = await pollDependabot({
-      loadConfig: async () => ({ ...CONFIG, dependabot_enabled: false }),
-      open: async () => session(emptyLog()),
-    });
+    const result = await pollDependabot(
+      round(emptyLog(), { config: { ...CONFIG, dependabot_enabled: false } }),
+    );
 
     expect(result.enabled).toBe(false);
   });
 
-  test("searches every verified owner", async () => {
+  test("searches only the factory repository when the allowlist is empty", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () => session(log),
-    });
+    await pollDependabot(round(log));
 
     expect(log.searched).toEqual([
-      { kind: "owner", owner: "acme", ownerKind: "user" },
+      { kind: "repo", owner: "acme", repo: "widgets" },
     ]);
   });
 
-  test("leaves out a repository outside the allowlist", async () => {
+  test("adds a repository named in the allowlist", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => ({
-        ...CONFIG,
-        repo_allowlist: ["https://github.com/acme/other"],
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...CONFIG,
+          repo_allowlist: ["https://github.com/acme/gadgets"],
+        },
       }),
-      open: async () => session(log),
-    });
+    );
 
-    expect(log.processed).toHaveLength(0);
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "widgets" },
+      { kind: "repo", owner: "acme", repo: "gadgets" },
+    ]);
+  });
+
+  test("does not search an allowlisted repository of an owner that is not verified", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...CONFIG,
+          repo_allowlist: ["https://github.com/mallory/gadgets"],
+        },
+      }),
+    );
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "widgets" },
+    ]);
   });
 
   test("processes the same pull request once", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () => session(log, { found: [FOUND, FOUND] }),
-    });
+    await pollDependabot(round(log, { found: [FOUND, FOUND] }));
 
     expect(log.processed).toEqual([12]);
   });
 
   test("counts a started flow", async () => {
-    const result = await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () => session(emptyLog()),
-    });
+    const result = await pollDependabot(round(emptyLog()));
 
     expect(result.started).toBe(1);
+  });
+
+  test("does not read a pull request with an active review even when the names differ in case", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        active: [
+          { kind: "pr_review", owner: "Acme", repo: "Widgets", pr_number: 12 },
+        ],
+      }),
+    );
+
+    expect(log.processed).toHaveLength(0);
+  });
+
+  test("does not collect a head whose saved time to check has not come", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        state: {
+          resumeAtMs: null,
+          heads: {
+            [KEY]: {
+              firstWaitAtMs: NOW_MS,
+              waitCount: 1,
+              nextCheckAtMs: NOW_MS + 1,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(log.collected).toBe(0);
+  });
+
+  test("passes the configured publish days", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: { ...CONFIG, dependabot_min_published_days: 30 },
+        found: [{ ...FOUND, createdAtMs: NOW_MS - 40 * DAY_MS }],
+        state: {
+          resumeAtMs: null,
+          heads: {
+            [KEY]: {
+              firstWaitAtMs: NOW_MS - 20 * DAY_MS,
+              waitCount: 1,
+              nextCheckAtMs: NOW_MS,
+            },
+          },
+        },
+        collect: async () => ({ kind: "wait", reason: "checks are pending" }),
+      }),
+    );
+
+    expect(result.waiting).toBe(1);
+  });
+
+  test("passes the configured retention", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: { ...CONFIG, retention_work_items_days: 2 },
+      }),
+    );
+
+    expect(result.escalated).toBe(1);
   });
 
   test("records a failure of one pull request and goes on", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () =>
-        session(log, {
-          found: [FOUND, { ...FOUND, number: 13 }],
-          getPr: async (number) => {
-            if (number === 12) throw new Error("boom");
-            return pullRequest({ number });
-          },
-        }),
-    });
+    await pollDependabot(
+      round(log, {
+        found: [FOUND, { ...FOUND, number: 13 }],
+        getPr: async (number) => {
+          if (number === 12) throw new Error("boom");
+          return pullRequest({ number });
+        },
+      }),
+    );
 
     expect(log.processed).toEqual([12, 13]);
   });
@@ -1047,15 +1347,13 @@ describe("pollDependabot", () => {
   test("records the failure of the pull request", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () =>
-        session(log, {
-          getPr: async () => {
-            throw new Error("boom");
-          },
-        }),
-    });
+    await pollDependabot(
+      round(log, {
+        getPr: async () => {
+          throw new Error("boom");
+        },
+      }),
+    );
 
     expect(log.failures).toEqual(["dependabot_pr:acme/widgets#12"]);
   });
@@ -1063,60 +1361,112 @@ describe("pollDependabot", () => {
   test("stops the round at the GitHub rate limit", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () =>
-        session(log, {
-          found: [FOUND, { ...FOUND, number: 13 }],
-          getPr: async () => {
-            throw new GitHubRateLimitError("pulls", 60_000, true);
-          },
-        }),
-    });
+    await pollDependabot(
+      round(log, {
+        found: [FOUND, { ...FOUND, number: 13 }],
+        getPr: async () => {
+          throw new GitHubRateLimitError("pulls", 60_000, true);
+        },
+      }),
+    );
 
     expect(log.processed).toEqual([12]);
+  });
+
+  test("saves the time the rate limit resets", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        getPr: async () => {
+          throw new GitHubRateLimitError("pulls", 60_000, true);
+        },
+      }),
+    );
+
+    expect(log.state?.resumeAtMs).toBe(NOW_MS + 60_000);
+  });
+
+  test("pauses for a default time when the rate limit gives no reset", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        search: async () => {
+          throw new GitHubRateLimitError("search", null, true);
+        },
+      }),
+    );
+
+    expect(log.state?.resumeAtMs).toBe(NOW_MS + RATE_LIMIT_DEFAULT_PAUSE_MS);
+  });
+
+  test("skips the round before the saved resume time", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { state: { resumeAtMs: NOW_MS + 1, heads: {} } }),
+    );
+
+    expect(log.opened).toBe(0);
+  });
+
+  test("runs the round once the resume time has come", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { state: { resumeAtMs: NOW_MS, heads: {} } }),
+    );
+
+    expect(log.opened).toBe(1);
   });
 
   test("records a failed search and goes on", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () =>
-        session(log, {
-          search: async () => {
-            throw new Error("search failed");
-          },
-        }),
-    });
+    await pollDependabot(
+      round(log, {
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
 
-    expect(log.failures).toEqual(["search_dependabot_prs:acme"]);
+    expect(log.failures).toEqual(["search_dependabot_prs:acme/widgets"]);
   });
 
-  test("saves the time to check again of a publish wait", async () => {
+  test("saves the wait record of a publish wait", async () => {
     const log = emptyLog();
 
-    await pollDependabot({
-      loadConfig: async () => CONFIG,
-      open: async () => {
-        const base = session(log);
-        return {
-          ...base,
-          deps: {
-            ...base.deps,
-            collect: async () =>
-              ready({ publishedAtIso: "2026-10-18T00:00:00.000Z" }),
-          },
-        };
-      },
-    });
+    await pollDependabot(
+      round(log, {
+        collect: async () =>
+          ready({ publishedAtIso: "2026-10-18T00:00:00.000Z" }),
+      }),
+    );
 
-    expect(log.state).toEqual({
-      nextCheckAt: {
-        [publishWaitKey("acme", "widgets", 12, HEAD)]: Date.parse(
-          "2026-10-25T00:00:00.000Z",
-        ),
+    expect(log.state?.heads).toEqual({
+      [KEY]: {
+        firstWaitAtMs: NOW_MS,
+        waitCount: 1,
+        nextCheckAtMs: Date.parse("2026-10-25T00:00:00.000Z"),
       },
     });
+  });
+
+  test("keeps the wait record of a pull request that failed", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        getPr: async () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({ [KEY]: wait });
   });
 });

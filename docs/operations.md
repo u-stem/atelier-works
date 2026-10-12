@@ -153,6 +153,7 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 対象は次のとおりである。
 
 - 要件定義(`pipeline_prepare`)、実装(`implement_prepare`)、PR修正(`pr_fix_prepare`)、PRレビュー(`pr_review_prepare`)の準備。
+- dependabotのPRの取得(`poll_dependabot`)。作業項目を作る前に照合する。
 - フォームで投入する`manual_intake_create_issue`。Issueを作る前に照合する。
 - Issue化の提案を処理する`issue_proposal_apply`。承認は判断の記録の前に、却下は返信の前に、1回だけ照合する。
 
@@ -199,6 +200,7 @@ GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_co
 | `implement_prepare` | 作業項目を人の対応待ちにして、Discordに知らせる |
 | `pr_fix_prepare` | 作業項目をブロック(`blocked`)にして、Discordに知らせる |
 | `pr_review_prepare` | PRを読む前に、作業項目をブロックにして、Discordに知らせる。forkのPRを見送るときと同じ終わり方である |
+| `poll_dependabot` | 作業項目を作る前に照合する。落ちたら、作業項目を作ってすぐ人の対応待ちにして、Discordに知らせる。フローは起動しない。作業項目は再実行できないので、設定を見直した後は、PRを人が確かめる |
 | `issue_proposal_apply`の承認 | 判断を記録せず、GitHubへ何も書かずに、例外で失敗する。承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。例外の文は、`factory_repo_id`の食い違いか見つからないとき(404やURLを読めないとき)なら`factory_repo`と`factory_repo_id`、それ以外なら`owners`を見直すよう案内する |
 | `issue_proposal_apply`の却下 | 判断を記録した後、返信だけを止め、作業項目は先へ進める。止めた理由はログに残る。照合そのものが失敗したとき(404以外の取得の失敗を含む)も、例外にしない |
 
@@ -1167,62 +1169,75 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポ
 ## dependabotの更新を設定する
 
 dependabotが開いた依存の更新PRを、Factoryが評価して自動でマージできる。
-`f/factory/factory_config`の次の2つの項目で設定する。
+`f/factory/factory_config`の次の3つの項目で設定する。
 `factory_config`は同期の対象外なので、WindmillのResourcesの編集画面で直す。
 
 | 項目 | 既定値 | 意味 |
 | --- | --- | --- |
 | `dependabot_enabled` | `false` | dependabotのPRを自動で処理するか |
+| `dependabot_merge_enabled` | `false` | マージしてよいと判断したPRを、実際にマージするか。偽の間は試運転で、そのPRを人に回す |
 | `dependabot_min_published_days` | `7` | 更新先の版が公開されてから、マージしてよくなるまでの日数 |
 
 `dependabot_min_published_days`は、公開から日が浅い版を自動でマージしないための下限である。
 1以上の整数にする。0、負の値、小数は設定の読み込みで拒否する。
 既存のリソースにこれらの項目が無くても、既定値で動く。
 
+対象は、`factory_repo`と`repo_allowlist`のリポジトリである。
+`repo_allowlist`の項目は、`owners`の照合を通ったオーナーのものだけが対象になる。
+`repo_allowlist`が空のときは`factory_repo`だけを見る。`poll_prs`のように、オーナーの全リポジトリは見ない。
+対象のリポジトリを足すときは、そのリポジトリの`main`のrulesetと必須チェックの名前が、[マージする条件](security.md#マージする条件)の7件と同じかを確かめる。
+
 マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)にある。
 
 ### 有効にする
 
-有効にすると、FactoryがPATで`main`へマージする。
-次の順に、1つずつ確かめてから進める。
+有効にする順は、試運転、マージの順である。
+1つずつ確かめてから進める。
 設定を一度に変えると、問題が起きたときに原因を切り分けられないためである。
 
-1. [有効化の前の確認](security.md#有効化の前の確認)の表の項目を、上から順にすべて確かめる。
-2. PATの権限を確かめる。
-   Pull requestsとContentsがRead and writeであれば、マージに足りる。
-3. `main`のruleset(`protect-main`)の必須チェックが、[マージする条件](security.md#マージする条件)の7件と同じであることを確かめる。
-   食い違うと、関門が見ていないチェックでマージが拒まれるか、rulesetが求めないチェックを関門だけが待つ。
-4. PATの持ち主がrulesetを迂回できるかを確かめる。
-   迂回できると、マージのAPIが必須チェックを強制しないことがある。
-5. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、WindmillのRunsで確かめる。
-6. dependabotのPRが1件だけ開いているときに、`dependabot_enabled`を`true`にする。
-7. 次の`poll_dependabot`の実行の結果を確かめる。
+1. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、WindmillのRunsで確かめる。
+2. `dependabot_merge_enabled`が`false`であることを確かめてから、`dependabot_enabled`を`true`にする。
+   これで試運転が始まる。
+3. 次の`poll_dependabot`の実行の結果を確かめる。
    フローを起動していれば、`dependabot`フローの3つのステップの結果と、作業項目の終わり方を確かめる。
-8. 問題があれば、すぐに無効にする。
+4. [有効化の前の確認](security.md#有効化の前の確認)の、試運転で確かめる項目をすべて確かめる。
+5. 同じ表の、マージの前に確かめる項目をすべて確かめる。
+   マージにはPATのContentsの書き込みが要る。
+   実際にマージできるかは、この確認で確かめる。
+   classicのPATはリポジトリ単位で権限を絞れないので、fine-grainedのPATを使う。
+6. `dependabot_merge_enabled`を`true`にする。
+7. 最初のマージの結果を確かめる。
+   問題があれば、すぐに`dependabot_merge_enabled`を`false`に戻す。
 
 ### 初回の実機で確かめること
 
-最初の数件は、次の点を作業項目の結果とWindmillのRunsで確かめる。
+試運転とマージの最初の数件は、次の点を作業項目の結果とWindmillのRunsで確かめる。
 
 - 隔離したインストールが、npm registryに届き、`--frozen-lockfile`で成功する。
 - インストールが、準備のステップのtimeout(3600秒)の中で終わる。
 - 影響調査のClaudeの出力が、構造化出力の形で受け付けられる。
+- 試運転でマージ可と判定したPRが、理由「dry run」で人に回る。
 - マージしたPRのsquashのcommitの題名が固定の文で、本文が空である。
 - 人に回したPRの通知に、PRのリンクと次の操作が載る。
 
 ### 無効にする
 
-`dependabot_enabled`を`false`にする。
+マージだけを止めるときは、`dependabot_merge_enabled`を`false`にする。
+処理は続き、マージしてよいと判断したPRは人に回る。
+
+すべてを止めるときは、`dependabot_enabled`を`false`にする。
 次の実行から、`poll_dependabot`はGitHubとDBのどちらにも触れずに終わる。
 動いているフローは、準備と終了のステップで作業項目を取り消し(`dependabot_disabled`)、GitHubに書かない。
 影響調査のステップも、無効ならClaudeを起動しない。
-スケジュールを止めるのにWindmillの画面で無効にしない。
+スケジュールは、Windmillの画面で無効にして止めない。
 `mise run push`がリポジトリの定義で有効に戻すためである。
 
 ### 人に回ったとき
 
 dependabotの作業項目は再実行できない。
 通知のリンクからPRを開き、理由とPRのコメントの所見を確かめて、手でマージするか閉じる。
+理由が「dry run」なら、マージしてよいと判断したPRである。
+確かめて手でマージするか、試運転を終えるなら`dependabot_merge_enabled`を有効にする。
 影響の所見が出たPRを修正に回すときは、所見を確かめてから`factory:fix`ラベルを付ける。
 修正をpushしたPRは、自動ではマージされないので、レビューを確かめて人がマージする。
 新しいcommitが積まれると、Factoryは新しいheadを改めて評価する。

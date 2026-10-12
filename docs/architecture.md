@@ -175,8 +175,8 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> picked: poll_dependabotが登録
-    picked --> reviewed: マージした、または所見を投稿した
-    picked --> needs_human: 自動でマージできない
+    picked --> reviewed: マージした、所見を投稿した、または照合がマージを見つけた
+    picked --> needs_human: 自動でマージできない、または試運転でマージ可と判定した
     picked --> cancelled: 無効になった、PRが閉じた、headが動いた、待ちを返した
     needs_human --> cancelled: PRがclosedかmerged
 ```
@@ -641,6 +641,8 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 通ったPRだけ作業項目を作り、`dependabot`フローを起動する。
 フローは、依存を隔離してインストールし、Claudeに影響を調べさせてから、マージするか人に回す。
 既定では無効で、`dependabot_enabled`を真にしたときだけ動く。
+マージは`dependabot_merge_enabled`も真にしたときだけ行い、偽の間は試運転としてマージ可のPRを人に回す。
+対象は`factory_repo`と、`repo_allowlist`に明示したリポジトリだけである。
 マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)に書く。
 
 ## 工程4のmainのCI監視
