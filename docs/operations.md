@@ -149,20 +149,34 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 
 作業項目は、検索の時点の`owner`と`repo`の名前を保存する。
 承認を待つ間などに名前が別の人に渡ると、保存した名前のURLは別のリポジトリを指す。
-そこで、作業項目を進める準備のステップが、リポジトリを取得する前に照合する。
-対象は、要件定義(`pipeline_prepare`)、実装(`implement_prepare`)、PR修正(`pr_fix_prepare`)、PRレビュー(`pr_review_prepare`)である。
-フォームで投入する`manual_intake_create_issue`も、Issueを作る前に同じ照合をする。
+そこで、作業項目を進めるステップが、リポジトリを取得する前か、GitHubへ書き込む前に照合する。
+対象は次のとおりである。
 
-照合では、`GET repos/<owner>/<repo>`が返すオーナーのIDを、`owners`で名前が合う要素の`id`と比べる。
-取得は、1ステップにつき1回である。
-IDが一致したときだけ、cloneとcheckoutに進む。
-`check_commands_by_repo`のキーは名前だが、`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか検査コマンドが走らない。
-`id`の無いオーナーと、`owners`に名前が無いリポジトリ(`factory_repo`だけで許されるもの)は、照合しない。
+- 要件定義(`pipeline_prepare`)、実装(`implement_prepare`)、PR修正(`pr_fix_prepare`)、PRレビュー(`pr_review_prepare`)の準備。
+- フォームで投入する`manual_intake_create_issue`。Issueを作る前に照合する。
+- Issue化の提案を処理する`issue_proposal_apply`。判断の記録とGitHubへの書き込みの前に、1回だけ照合する。
+
+照合は、リポジトリのオーナーの名前で`owners`を引いて行う。
+大文字と小文字は区別しない。
+
+- 要素が`id`を持つときは、`GET repos/<owner>/<repo>`が返すオーナーのIDと比べる。取得は、1ステップにつき1回である。
+- 要素が`id`を持たないときは、照合せず、名前だけで動く。
+- 要素が無いときは、リポジトリが`factory_repo`と一致する場合だけ通す。それ以外は対象外として止める。
+
 `factory_repo`は、`factory_repo_id`が別に照合する([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
+通ったときだけ、cloneとcheckoutに進む。
+`check_commands_by_repo`のキーは名前だが、`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか検査コマンドが走らない。
 
-食い違うか、リポジトリが見つからない(404)ときは、Consoleの**要対応**に`owner_id_mismatch`が残る。
-本文にリポジトリ名と、設定のIDが載る。
-食い違いのときは、GitHubの現在のIDも載る。
+止めたときは、Consoleの**要対応**に`owner_id_mismatch`が残る。
+止めるのは、次のいずれかのときである。
+
+- IDが食い違う。
+- リポジトリが見つからない(404)。
+- オーナーが`owners`に無い。
+
+本文にリポジトリ名が載る。
+`owners`に無いときは、オーナーを改名したなら名前を直し、対象にするなら足す操作が載る。
+それ以外は、設定のIDが載り、食い違いのときはGitHubの現在のIDも載る。
 404は、リポジトリの削除や改名のほかに、PATがそのリポジトリを読めなくなったときにも返る。
 privateリポジトリでは、PATがアクセスを失うと、401でなく404になりうる。
 GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_config`の`owners`の名前か`id`を見直す。
@@ -175,15 +189,20 @@ GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_co
 | `pipeline_prepare` | 作業項目を人の対応待ち(`needs_human`)にして、Discordに知らせる。後続のステップは飛ばす |
 | `implement_prepare` | 作業項目を人の対応待ちにして、Discordに知らせる |
 | `pr_fix_prepare` | 作業項目をブロック(`blocked`)にして、Discordに知らせる |
-| `pr_review_prepare` | 処理を飛ばす。許可リストから外れたリポジトリと同じ終わり方で、作業項目は`reviewing`のまま残る。猶予の後に整理が失敗にして、Discordに`job_failed`を送る |
+| `pr_review_prepare` | PRを読む前に、作業項目をブロックにして、Discordに知らせる。forkのPRを見送るときと同じ終わり方である |
+| `issue_proposal_apply` | GitHubへ何も書かずに、例外で失敗する。提案は`pending`のままか、`pending`に戻る。`owners`を見直した後に、Consoleの要対応から再度承認する |
 
 404以外のすべて(認証の失敗、5xx、レート制限、通信断を含む)でIDを取得できなかったときは、noticeを残さず、ステップが失敗する。
 持続する障害を見逃さないためである。
 原因を直した後に、`retry_work_item`で再実行する。
 `manual_intake_create_issue`は、食い違いと404でも、Issueを作らずにフローが失敗する。
 
-照合は、準備のステップで1回だけ行う。
+照合は、ステップごとに1回だけ行う。
 照合の後に、実行中に名前が入れ替わっても、その実行は検知しない。
+照合しない処理も残る。
+取り消された作業項目の再開の前に行うIssueの状態の確認と、要件定義を作り直す再実行の前に行うIssueの題名と本文の取り込みである。
+どちらも、Console用のworkerに`gh`が無いので、名前のまま読む。
+取り込んだ内容は、続く`pipeline_prepare`の照合が止めるので、Claudeには渡らない。
 
 #### ラベルの付与者の判定
 
@@ -1290,7 +1309,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
 | `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す |
 | `fork_head_denied` | PRのheadのリポジトリが、このリポジトリと同一でない(fork、または取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。止めるなら、`factory:review`ラベルとassignee、レビュー依頼を外すか、PRを閉じる。外すまでは、解決しても出直す |
-| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できない。そのオーナーの検索を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
+| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できないか、作業項目のオーナーが`owners`に無い。そのオーナーの検索を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
 | `factory_repo_id_mismatch` | `factory_repo`の`factory_repo_id`をGitHubの現在のIDと照合できず、自己更新が取得も反映もしていない。Factory自身のリポジトリを使うほかの処理は、取得の前に失敗する | [Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する)の手順で`factory_repo`と`factory_repo_id`を見直す |
 | `labeler_check_limit` | 付与者を判定できない。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っている | ラベルを外し、許可された人が付け直す。対応した後に、Consoleでnoticeを解決する |
 | `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |

@@ -4,7 +4,9 @@
 // 二重に作らないための印の生成と判定、`is_inline`による返信先の決定を確かめる。
 
 import { describe, expect, test } from "bun:test";
+import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
 import {
+  ensureProposalRepoOwner,
   readWithFactoryLabel,
   resolveFactoryLabel,
 } from "../../f/factory/steps/issue_proposal_apply.ts";
@@ -207,5 +209,81 @@ describe("chooseIssueProposalReplyTarget", () => {
 
   test("chooses issue_comment for a plain issue comment", () => {
     expect(chooseIssueProposalReplyTarget(false)).toBe("issue_comment");
+  });
+});
+
+describe("ensureProposalRepoOwner", () => {
+  const STOPPED_REASON =
+    "repository owner id differs from factory_config owners: acme/widgets (expected 1, actual 2)";
+  const STOPPED: RepoOwnerGateResult = { ok: false, reason: STOPPED_REASON };
+
+  function setup(gate: RepoOwnerGateResult) {
+    const calls: string[] = [];
+    const deps = {
+      verify: async () => {
+        calls.push("verify");
+        return gate;
+      },
+      revertToPending: async () => {
+        calls.push("revertToPending");
+      },
+    };
+    return { deps, calls };
+  }
+
+  test("returns without touching the proposal when the owner id matches", async () => {
+    const { deps, calls } = setup({ ok: true });
+    await ensureProposalRepoOwner(
+      { status: "pending", created_issue_number: null },
+      deps,
+    );
+    expect(calls).toEqual(["verify"]);
+  });
+
+  test("rejects with the reason when the check stops the proposal", async () => {
+    const { deps } = setup(STOPPED);
+    await expect(
+      ensureProposalRepoOwner(
+        { status: "pending", created_issue_number: null },
+        deps,
+      ),
+    ).rejects.toThrow(STOPPED_REASON);
+  });
+
+  test("leaves a pending proposal as it is when the check stops it", async () => {
+    const { deps, calls } = setup(STOPPED);
+    await ensureProposalRepoOwner(
+      { status: "pending", created_issue_number: null },
+      deps,
+    ).catch(() => undefined);
+    expect(calls).toEqual(["verify"]);
+  });
+
+  test("returns an approved proposal without an issue to pending when the check stops it", async () => {
+    const { deps, calls } = setup(STOPPED);
+    await ensureProposalRepoOwner(
+      { status: "approved", created_issue_number: null },
+      deps,
+    ).catch(() => undefined);
+    expect(calls).toEqual(["verify", "revertToPending"]);
+  });
+
+  test("keeps an approved proposal whose issue exists when the check stops it", async () => {
+    const { deps, calls } = setup(STOPPED);
+    await ensureProposalRepoOwner(
+      { status: "approved", created_issue_number: 12 },
+      deps,
+    ).catch(() => undefined);
+    expect(calls).toEqual(["verify"]);
+  });
+
+  test("tells the next action in the error", async () => {
+    const { deps } = setup(STOPPED);
+    await expect(
+      ensureProposalRepoOwner(
+        { status: "pending", created_issue_number: null },
+        deps,
+      ),
+    ).rejects.toThrow("再度承認");
   });
 });

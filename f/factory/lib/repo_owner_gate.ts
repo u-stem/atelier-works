@@ -3,10 +3,11 @@
 // オーナーが改名して別の人がその名前を取得すると、名前のURLは別のリポジトリを指す。
 // 検索の入口の照合(`poll_support.ts`の`gateOwnerId`)を通った後でも、作業項目は
 // 名前を保存したまま残るので、承認待ちの間などに入れ替わりうる。
-// そのリポジトリのcloneやcheckout、検査コマンドの実行の前に、各準備のステップが呼ぶ。
+// そのリポジトリのcloneやcheckout、検査コマンドの実行、Issueへの書き込みの前に、各ステップが呼ぶ。
 // I/Oは依存として受け取り、テストでは差し替える。
 
 import { GitHubHttpError } from "./github.ts";
+import { isFactoryRepo } from "./implement_finish_support.ts";
 import { OWNER_ID_MISMATCH_KIND } from "./poll_support.ts";
 import type { FactoryConfig, NoticeRecord } from "./types.ts";
 
@@ -37,6 +38,14 @@ export function repoOwnerNotFoundMessage(
 }
 
 /**
+ * `owners`に無いオーナーのリポジトリのnoticeの本文。
+ * リポジトリだけで決まるので、同じ状況が続くあいだは同じ本文の未解決のnoticeが重ならない。
+ */
+export function repoOwnerNotConfiguredMessage(repository: string): string {
+  return `${repository}: このオーナーがfactory_configのownersに無く、対象外のため、リポジトリを取得せずに作業を止めました。オーナーを改名した場合は、ownersの名前を新しい名前に直してください。対象にするなら、ownersにオーナーを足してください。ownersを見直して、止めた作業項目を再実行してください`;
+}
+
+/**
  * 作業項目の状態の注記に残す、IDの食い違いの理由。
  * 記録する理由は英語のまま保ち、表示するときだけ訳す(`describeReason`)。
  */
@@ -56,6 +65,11 @@ export function repoOwnerNotFoundReason(
   return `repository not found while checking the owner id in factory_config owners: ${repository} (expected ${String(expectedId)})`;
 }
 
+/** 作業項目の状態の注記に残す、`owners`に無いオーナーの理由。 */
+export function repoOwnerNotConfiguredReason(repository: string): string {
+  return `repository owner is not in factory_config owners: ${repository}`;
+}
+
 export type RepoOwnerGateResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };
@@ -69,19 +83,23 @@ export type RepoOwnerGateDeps = {
 };
 
 /**
- * `owner`と同じ名前(大文字と小文字を区別しない)の`owners`の要素が`id`を持つときだけ、
- * `GET repos/{owner}/{repo}`のオーナーのIDと照合する。
- * `id`が無いときと、`owners`に同じ名前が無いとき(`factory_repo`だけで許されるリポジトリ)は、
- * 名前だけで動くので、取得せずに通す。`factory_repo`は`factory_repo_id`が別に照合する。
- * 食い違いと、リポジトリが無い(404)ときは、noticeを残して理由つきで止める。
- * どちらも改名か削除でほぼ恒久で、人が`owners`を見直す操作がある。
- * 404以外の取得の失敗(401、5xx、レート制限、通信断)は、noticeを残さず元の例外を投げる。
- * 一時的な障害でありうるので、呼び出し側のジョブの失敗にして、検知を弱めない。
+ * 作業項目のリポジトリのオーナーを、設定の`owners`と照合し、先へ進めてよいかを返す。
+ * 呼び出しの順に頼らず、この関門自身が閉じる。`isRepoAllowed`を呼ばないステップにも使うため。
+ *
+ * - `owner`と同じ名前(大文字と小文字を区別しない)の`owners`の要素が無いときは、
+ *   リポジトリが`factory_repo`と一致する場合だけ、取得せずに通す。`factory_repo`は`factory_repo_id`が別に照合する。
+ *   それ以外は、noticeを残して理由つきで止める。`owners`に無いオーナーは対象外のためである。
+ * - 要素が`id`を持たないときは、名前だけで動くので、取得せずに通す。
+ * - 要素が`id`を持つときは、`GET repos/{owner}/{repo}`のオーナーのIDと照合する。
+ *   食い違いと、リポジトリが無い(404)ときは、noticeを残して理由つきで止める。
+ *   どちらも改名か削除でほぼ恒久で、人が`owners`を見直す操作がある。
+ *   404以外の取得の失敗(401、5xx、レート制限、通信断)は、noticeを残さず元の例外を投げる。
+ *   一時的な障害でありうるので、呼び出し側のジョブの失敗にして、検知を弱めない。
  * noticeの記録が失敗しても、止める結果を隠さない。
  * 取得は1回だけである。
  */
 export async function verifyRepoOwnerId(
-  config: Pick<FactoryConfig, "owners">,
+  config: Pick<FactoryConfig, "owners" | "factory_repo">,
   owner: string,
   repo: string,
   deps: RepoOwnerGateDeps,
@@ -89,8 +107,18 @@ export async function verifyRepoOwnerId(
   const configured = config.owners.find(
     (candidate) => candidate.name.toLowerCase() === owner.toLowerCase(),
   );
-  const expectedId = configured?.id;
-  if (configured === undefined || expectedId === undefined) {
+  if (configured === undefined) {
+    if (isFactoryRepo(config.factory_repo, owner, repo)) {
+      return { ok: true };
+    }
+    await recordNotice(repoOwnerNotConfiguredMessage(`${owner}/${repo}`), deps);
+    return {
+      ok: false,
+      reason: repoOwnerNotConfiguredReason(`${owner}/${repo}`),
+    };
+  }
+  const expectedId = configured.id;
+  if (expectedId === undefined) {
     return { ok: true };
   }
   const repository = `${owner}/${repo}`;

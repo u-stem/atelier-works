@@ -7,6 +7,7 @@ import * as wmill from "windmill-client@1.817.0";
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
+  addNoticeUnlessUnresolved,
   claimIssueCreation,
   countPendingIssueProposals,
   decideIssueProposal,
@@ -25,13 +26,22 @@ import {
   createIssue,
   findIssueByMarker,
   type GhClient,
+  getRepositoryOwnerId,
   postIssueComment,
   replyReviewComment,
   resolveReviewThread,
   withMarker,
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
-import { type IssueProposalOrigin, isBoolean } from "../lib/types.ts";
+import {
+  type RepoOwnerGateResult,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
+import {
+  type IssueProposalOrigin,
+  type IssueProposalStatus,
+  isBoolean,
+} from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 import {
   appendIssueProposalMarker,
@@ -102,6 +112,44 @@ export function resolveFactoryLabel(input: {
   return { apply: true, reason: null };
 }
 
+export type ProposalRepoOwnerDeps = {
+  /** 保存済みのリポジトリのオーナーの数値IDを、`owners`と照合する(`verifyRepoOwnerId`)。 */
+  readonly verify: () => Promise<RepoOwnerGateResult>;
+  /** 提案の行を"pending"に戻す(`revertIssueProposalToPending`)。 */
+  readonly revertToPending: () => Promise<void>;
+};
+
+/**
+ * GitHubへ書き込む前に、提案が指す保存済みのリポジトリのオーナーを照合する。
+ * 名前が別の人に渡っていると、Issueの起票も返信も、その人のリポジトリに書き込んでしまうためである。
+ * 通れば何もしない。通らなければ、GitHubへは何も書かずに例外を投げる。
+ * 照合は1回で、Issueの作成と返信の前に重ねて呼ばない。
+ * 行が"approved"でIssueの番号が無いときは、"pending"に戻す。
+ * 戻さないと、Consoleの要対応から外れたまま、処理中に見えるためである。
+ * 行が"pending"のときは判断を記録する前なので、触れない。
+ * Issueの番号があるときは、Issueが既にGitHubにあるので触れない(戻すと作り直して重複しうる)。
+ * 例外の文に次の操作を載せる。noticeは`verify`が残す。
+ */
+export async function ensureProposalRepoOwner(
+  proposal: {
+    readonly status: IssueProposalStatus;
+    readonly created_issue_number: number | null;
+  },
+  deps: ProposalRepoOwnerDeps,
+): Promise<void> {
+  const gate = await deps.verify();
+  if (gate.ok) return;
+  if (
+    proposal.status === "approved" &&
+    proposal.created_issue_number === null
+  ) {
+    await deps.revertToPending();
+  }
+  throw new Error(
+    `issue_proposal_apply: ${gate.reason}。factory_configのownersを見直してから、Consoleの要対応から再度承認してください`,
+  );
+}
+
 /**
  * `workItem.pr_number`を`number`に絞って返し、nullなら例外を投げる。
  * `audit`の提案の作業項目には正当に`pr_number`が無いため、
@@ -169,6 +217,9 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * 返信、スレッドの解決、状態の切り替え)が失敗しても、提案は人が再試行できるよう見えている。
  * この場合は意図して"pending"に戻さない。
  * Issueは既にあり、戻して作り直すと重複するおそれがあるため。
+ *
+ * 判断を記録する前に、保存済みのリポジトリのオーナーの数値IDを`owners`と照合する(`ensureProposalRepoOwner`)。
+ * 通らなければ、GitHubへ書き込まずに例外を投げる。
  *
  * 承認依頼・Issue提案・作業項目・判断者・auditのレポートが無いとき、
  * 依頼のkindが違うとき、判定で拒否されたときは例外を投げる。
@@ -246,6 +297,19 @@ async function run(
   );
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
+
+  // 判断を記録する前、GitHubへ書き込む前に、保存済みのリポジトリのオーナーを1回だけ照合する。
+  await ensureProposalRepoOwner(proposal, {
+    verify: () =>
+      verifyRepoOwnerId(config, owner, repo, {
+        getRepositoryOwnerId: (ownerName, repoName) =>
+          getRepositoryOwnerId(client, ownerName, repoName),
+        addNotice: addNoticeUnlessUnresolved,
+      }),
+    revertToPending: async () => {
+      await revertIssueProposalToPending(proposal_id);
+    },
+  });
 
   // `pr_fix`の提案は、Issue本文に元のPRのURLと番号を入れる。
   // `audit`の提案にはリンクするPRが無いので、提案元の監査レポートの期間を入れる。

@@ -50,6 +50,10 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells the owner id mismatch also covers an owner missing from owners", () => {
+    expect(noticeGuide("owner_id_mismatch").meaning).toContain("ownersに無く");
+  });
+
   test("falls back to the generic guide for an unknown kind", () => {
     expect(noticeGuide("future_kind")).toBe(GENERIC_NOTICE_GUIDE);
   });

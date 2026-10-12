@@ -9,7 +9,7 @@ import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts
 import {
   type BlockReviewDeps,
   type BlockReviewInput,
-  blockReviewForForkHead,
+  blockReview,
   buildReviewWorktreeDir,
   prepareReviewWorktree,
   type ReviewPrepareDeps,
@@ -128,14 +128,14 @@ function recordingDeps(
     setHeadSha: async () => {
       calls.push("setHeadSha");
     },
-    blockForkHead: async (reason) => {
+    blockReview: async (reason) => {
       blocked.push(reason);
     },
   };
   return { deps, calls, blocked };
 }
 
-describe("blockReviewForForkHead", () => {
+describe("blockReview", () => {
   const INPUT: BlockReviewInput = {
     work_item_id: 11,
     owner: "octo-owner",
@@ -162,13 +162,13 @@ describe("blockReviewForForkHead", () => {
 
   test("moves the work item from reviewing to blocked with the reason", async () => {
     const { deps, transitions } = blockDeps(true);
-    await blockReviewForForkHead(INPUT, deps);
+    await blockReview(INPUT, deps);
     expect(transitions).toEqual([[11, "reviewing", "blocked", FORK_REASON]]);
   });
 
   test("notifies a person that the PR needs a human", async () => {
     const { deps, events } = blockDeps(true);
-    await blockReviewForForkHead(INPUT, deps);
+    await blockReview(INPUT, deps);
     expect(events[0]).toMatchObject({
       kind: "needs_human",
       url: "https://github.com/octo-owner/atelier-works/pull/7",
@@ -178,7 +178,7 @@ describe("blockReviewForForkHead", () => {
 
   test("does not notify when another process already moved the work item", async () => {
     const { deps, events } = blockDeps(false);
-    await blockReviewForForkHead(INPUT, deps);
+    await blockReview(INPUT, deps);
     expect(events).toEqual([]);
   });
 });
@@ -242,13 +242,13 @@ describe("prepareReviewWorktree", () => {
     expect(calls).toEqual(["checkRepoOwner"]);
   });
 
-  test("does not block the work item when the owner id check stops it", async () => {
+  test("blocks the work item with the reason when the owner id check stops it", async () => {
     const { deps, blocked } = recordingDeps("octo-owner/atelier-works", {
       ok: false,
       reason: OWNER_REASON,
     });
     await prepareReviewWorktree(TARGET, deps);
-    expect(blocked).toEqual([]);
+    expect(blocked).toEqual([OWNER_REASON]);
   });
 
   test("checks the owner id before reading the pull request", async () => {

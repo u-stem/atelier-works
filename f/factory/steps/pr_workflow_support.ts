@@ -3680,6 +3680,13 @@ const REASON_RULES: readonly ReasonRule[] = [
       `GitHubでそのオーナーが意図した持ち主か確かめ、factory_configのownersの名前かidを見直してから、${RETRY_WORK_ITEM_ACTION}`,
   },
   {
+    pattern: /^repository owner is not in factory_config owners: (\S+)$/,
+    describe: (m) =>
+      `リポジトリ${m[1]}のオーナーが、factory_configのownersにありません`,
+    nextAction: () =>
+      `factory_configのownersを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+  },
+  {
     pattern:
       /^repository not found while checking the owner id in factory_config owners: (\S+) \(expected (\d+)\)$/,
     describe: (m) =>

@@ -35,7 +35,7 @@ describe("the owner id check in implement_prepare", () => {
   test("runs before the check commands of the repository are read", async () => {
     const text = await source("implement_prepare.ts");
     expect(positionOf(text, "await verifyRepoOwnerId(")).toBeLessThan(
-      positionOf(text, "implementCheckCommandsFor(\n"),
+      positionOf(text, "= implementCheckCommandsFor("),
     );
   });
 });
@@ -82,7 +82,9 @@ describe("the owner id check in pipeline_prepare", () => {
 describe("the owner id check in pr_review_prepare", () => {
   test("is handed to the worktree preparation, which runs it first", async () => {
     const text = await source("pr_review_prepare.ts");
-    expect(text).toContain("checkRepoOwner: () =>\n        verifyRepoOwnerId(");
+    expect(positionOf(text, "checkRepoOwner:")).toBeLessThan(
+      positionOf(text, "verifyRepoOwnerId("),
+    );
   });
 });
 
@@ -92,5 +94,33 @@ describe("the owner id check in manual_intake_create_issue", () => {
     expect(positionOf(text, "await verifyRepoOwnerId(")).toBeLessThan(
       positionOf(text, "await createIssue("),
     );
+  });
+});
+
+describe("the owner id check in issue_proposal_apply", () => {
+  test("runs before the decision is recorded", async () => {
+    const text = await source("issue_proposal_apply.ts");
+    expect(positionOf(text, "await ensureProposalRepoOwner(")).toBeLessThan(
+      positionOf(text, "await decideIssueProposal("),
+    );
+  });
+
+  test("runs before the issue is created", async () => {
+    const text = await source("issue_proposal_apply.ts");
+    expect(positionOf(text, "await ensureProposalRepoOwner(")).toBeLessThan(
+      positionOf(text, "await createIssue("),
+    );
+  });
+
+  test("runs before the reply is posted", async () => {
+    const text = await source("issue_proposal_apply.ts");
+    expect(positionOf(text, "await ensureProposalRepoOwner(")).toBeLessThan(
+      positionOf(text, "await postDecisionReply("),
+    );
+  });
+
+  test("runs only once", async () => {
+    const text = await source("issue_proposal_apply.ts");
+    expect(text.split("await ensureProposalRepoOwner(").length - 1).toBe(1);
   });
 });
