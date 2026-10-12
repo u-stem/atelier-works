@@ -20,16 +20,19 @@ import { withCallTimeout } from "./lib/self_update_support.ts";
 import { isRecord, type NoticeRecord } from "./lib/types.ts";
 import {
   type CgroupTexts,
+  combineUnknownTags,
   DEFAULT_WORKER_SLOTS,
   findJobById,
   nextFailureCount,
   parseCgroupMemory,
   parseFailureCount,
+  type RunningSummary,
   remainingCallMs,
   runningQueueQuery,
   summarizeRunning,
   summarizeWaiting,
   timingOf,
+  type WaitingSummary,
   WORKER_SAMPLE_FAILED_NOTICE,
   WORKER_SAMPLE_FAILURE_LIMIT,
   waitingQueueQuery,
@@ -104,6 +107,33 @@ export type SampleDeps = {
   readonly slots: number;
   readonly log: Logger;
 };
+
+/** 警告に名前を出す未知のtagの数の上限。 */
+const UNKNOWN_TAGS_SHOWN = 5;
+
+/**
+ * 受けるworkerが分からないtagのジョブがあれば、件数とtag名の先頭数件を1回だけ警告に残す。
+ * defaultのworkerの枠を使うかどうかが分からないので、実行中にも待ちにも数えない。
+ * 警告で気づけるよう、数えない理由をログに残す。
+ */
+function warnAboutUnknownTags(
+  log: Logger,
+  running: RunningSummary | null,
+  waiting: WaitingSummary | null,
+): void {
+  const none = { jobs: 0, tags: [] };
+  const unknown = combineUnknownTags(
+    running?.unknownTags ?? none,
+    waiting?.unknownTags ?? none,
+  );
+  if (unknown.jobs === 0) {
+    return;
+  }
+  log.warn("jobs with a tag no worker is known to listen to are not counted", {
+    jobs: unknown.jobs,
+    tags: unknown.tags.slice(0, UNKNOWN_TAGS_SHOWN),
+  });
+}
 
 /** 失敗を警告のログに残して`null`を返す。1つの値の失敗で、ほかの値の記録を止めないため。 */
 async function attempt<T>(
@@ -249,6 +279,7 @@ export async function runSample(deps: SampleDeps): Promise<SampleResult> {
   const waiting = summarizeWaiting(waitingResponse, nowMs);
   warnAboutShape(deps.log, "running jobs", runningResponse, runningSummary);
   warnAboutShape(deps.log, "waiting jobs", waitingResponse, waiting);
+  warnAboutUnknownTags(deps.log, runningSummary, waiting);
   // 100件未満の一覧に自分が居ないのは、応答の形が変わったしるしである。0を完全な値として
   // 記録しないよう、実行中の数は読めなかったものとして扱う。
   const running =
@@ -278,7 +309,9 @@ export async function runSample(deps: SampleDeps): Promise<SampleResult> {
 
   let sampleId: number | null = null;
   try {
+    // 測った時刻を明示して渡す。挿入のジョブが遅れても、測った時刻が残る。
     const sample: NewWorkerSample = {
+      sampled_at: new Date(nowMs),
       scheduled_for: timing.scheduledFor,
       slots: deps.slots,
       running_jobs: running?.count ?? null,

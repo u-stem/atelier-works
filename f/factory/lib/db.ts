@@ -3761,8 +3761,10 @@ export async function listImplementRounds(
 /**
  * `factory.worker_samples`に記録する1回分の値。`null`は読めなかったことを表す。
  * `slots`は設定値で、必ず入る。
+ * `sampled_at`は値を測った時刻で、呼び出し側が渡す。挿入のジョブが遅れても、測った時刻が残るためである。
  */
 export type NewWorkerSample = {
+  readonly sampled_at: Date;
   readonly scheduled_for: Date | null;
   readonly slots: number;
   readonly running_jobs: number | null;
@@ -3784,7 +3786,6 @@ export type NewWorkerSample = {
 /** `factory.worker_samples`の1行。 */
 export type WorkerSample = NewWorkerSample & {
   readonly id: number;
-  readonly sampled_at: Date;
 };
 
 function parseNullableNumber(value: unknown, field: string): number | null {
@@ -3868,11 +3869,12 @@ export async function insertWorkerSample(
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.worker_samples (
-      scheduled_for, slots, running_jobs, running_by_script, waiting_jobs,
+      sampled_at, scheduled_for, slots, running_jobs, running_by_script, waiting_jobs,
       max_wait_seconds, lag_seconds, mem_current_bytes, mem_anon_bytes,
       mem_working_set_bytes, mem_peak_bytes, mem_limit_bytes, mem_events_max,
       mem_oom, mem_oom_kill, mem_pressure_total_us
     ) VALUES (
+      ${sample.sampled_at.toISOString()}::timestamptz,
       ${sample.scheduled_for?.toISOString() ?? null}::timestamptz,
       ${sample.slots}::smallint, ${sample.running_jobs}::smallint,
       ${sample.running_by_script === null ? null : JSON.stringify(sample.running_by_script)}::jsonb,

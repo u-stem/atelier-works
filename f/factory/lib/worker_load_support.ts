@@ -37,6 +37,7 @@ const SAMPLE_INTERVAL_MINUTES = 2;
  * tag `console`はConsole用のworker、`nativets`、`bunnative`、`postgresql`、`mysql`、`mssql`、
  * `graphql`、`snowflake`、`bigquery`、`oracledb`はnativeのworkerが受けるので、このリストに入れない。
  * 誰も受けないtagのジョブは動かないので、実行中にも待ちにも数えない。
+ * 次の`OTHER_WORKER_TAGS`にも無いtagは、警告に出す。
  */
 const DEFAULT_WORKER_TAGS: ReadonlySet<string> = new Set([
   "deno",
@@ -59,6 +60,26 @@ const DEFAULT_WORKER_TAGS: ReadonlySet<string> = new Set([
   "dbt",
   "other",
 ]);
+
+/**
+ * defaultのworkerの枠を使わないと分かっているtag。Console用のworkerとnativeのworkerが受ける。
+ * これらは数えない。ここにも`DEFAULT_WORKER_TAGS`にも無いtagは、受けるworkerが分からないので警告に出す。
+ */
+const OTHER_WORKER_TAGS: ReadonlySet<string> = new Set([
+  "console",
+  "nativets",
+  "bunnative",
+  "postgresql",
+  "mysql",
+  "mssql",
+  "graphql",
+  "snowflake",
+  "bigquery",
+  "oracledb",
+]);
+
+/** 警告に出す未知のtagの名前の長さの上限。 */
+const UNKNOWN_TAG_MAX_LENGTH = 60;
 
 /**
  * フローの親ジョブのjob_kind。親ジョブは動き出した後はworkerの枠を使い続けず、実際の処理は子のscriptが
@@ -231,9 +252,47 @@ function onDefaultWorker(job: KindedJob): boolean {
   return DEFAULT_WORKER_TAGS.has(job.tag);
 }
 
+/** 受けるworkerが分からないtagのジョブ。数えずに警告に出す。 */
+export type UnknownTags = {
+  /** そのtagのジョブの件数。 */
+  readonly jobs: number;
+  /** 重複を除いたtag名を、辞書順に並べたもの。長いものは切り詰める。 */
+  readonly tags: readonly string[];
+};
+
+function isUnknownTag(tag: string): boolean {
+  return !DEFAULT_WORKER_TAGS.has(tag) && !OTHER_WORKER_TAGS.has(tag);
+}
+
+function unknownTagsOf(counts: ReadonlyMap<string, number>): UnknownTags {
+  let jobs = 0;
+  for (const count of counts.values()) {
+    jobs += count;
+  }
+  return { jobs, tags: [...counts.keys()].sort() };
+}
+
+function noteUnknownTag(counts: Map<string, number>, tag: string): void {
+  const name = tag.slice(0, UNKNOWN_TAG_MAX_LENGTH);
+  counts.set(name, (counts.get(name) ?? 0) + 1);
+}
+
+/** 実行中と待ちの未知のtagをまとめる。 */
+export function combineUnknownTags(
+  first: UnknownTags,
+  second: UnknownTags,
+): UnknownTags {
+  return {
+    jobs: first.jobs + second.jobs,
+    tags: [...new Set([...first.tags, ...second.tags])].sort(),
+  };
+}
+
 /** 実行中のジョブの集計。 */
 export type RunningSummary = {
   readonly count: number;
+  /** 受けるworkerが分からないtagのジョブ。`count`には入らない。 */
+  readonly unknownTags: UnknownTags;
   readonly byScript: Record<string, number>;
   /** 形が読めず、数えなかった要素の数。 */
   readonly malformed: number;
@@ -303,6 +362,7 @@ export function summarizeRunning(
     return null;
   }
   const counts = new Map<string, number>();
+  const unknown = new Map<string, number>();
   let count = 0;
   let malformed = 0;
   for (const job of response) {
@@ -318,6 +378,9 @@ export function summarizeRunning(
       malformed += 1;
       continue;
     }
+    if (isUnknownTag(kinded.tag)) {
+      noteUnknownTag(unknown, kinded.tag);
+    }
     if (!onDefaultWorker(kinded) || FLOW_PARENT_KINDS.includes(kinded.kind)) {
       continue;
     }
@@ -330,6 +393,7 @@ export function summarizeRunning(
   }
   return {
     count,
+    unknownTags: unknownTagsOf(unknown),
     byScript: foldScripts(counts),
     malformed,
     selfReadable: selfIsReadable(response, selfJobId, pageSize),
@@ -339,6 +403,8 @@ export function summarizeRunning(
 /** 待っているジョブの集計。`maxWaitSeconds`は、待つジョブが無ければ0。 */
 export type WaitingSummary = {
   readonly count: number;
+  /** 受けるworkerが分からないtagのジョブ。`count`には入らない。 */
+  readonly unknownTags: UnknownTags;
   readonly maxWaitSeconds: number;
   /** 形が読めず、数えなかった要素の数。 */
   readonly malformed: number;
@@ -358,6 +424,7 @@ export function summarizeWaiting(
   if (!Array.isArray(response)) {
     return null;
   }
+  const unknown = new Map<string, number>();
   let count = 0;
   let malformed = 0;
   let maxWaitMs = 0;
@@ -375,6 +442,9 @@ export function summarizeWaiting(
       malformed += 1;
       continue;
     }
+    if (isUnknownTag(kinded.tag)) {
+      noteUnknownTag(unknown, kinded.tag);
+    }
     if (!onDefaultWorker(kinded) || scheduledMs > nowMs) {
       continue;
     }
@@ -384,7 +454,12 @@ export function summarizeWaiting(
   if (response.length > 0 && malformed === response.length) {
     return null;
   }
-  return { count, maxWaitSeconds: Math.floor(maxWaitMs / 1000), malformed };
+  return {
+    count,
+    unknownTags: unknownTagsOf(unknown),
+    maxWaitSeconds: Math.floor(maxWaitMs / 1000),
+    malformed,
+  };
 }
 
 function parseTimeMs(value: unknown): number | null {

@@ -4727,6 +4727,7 @@ describe("deleteMainCiRunsBefore", () => {
 
 describe("insertWorkerSample", () => {
   const sample = {
+    sampled_at: new Date("2026-10-12T03:10:30.000Z"),
     scheduled_for: new Date("2026-10-12T03:08:30.000Z"),
     slots: 3,
     running_jobs: 2,
@@ -4768,16 +4769,28 @@ describe("insertWorkerSample", () => {
     expect(calls[0]?.values).toContain('{"f/factory/poll_prs":2}');
   });
 
-  test("casts the scheduled_for value to timestamptz", async () => {
+  test("casts the scheduled_for and sampled_at values to timestamptz", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     await insertWorkerSample(sample, sql);
-    expect(calls[0]?.text).toContain("::timestamptz");
+    expect(calls[0]?.text.match(/::timestamptz/g)).toHaveLength(2);
   });
 
   test("passes scheduled_for as an ISO string", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     await insertWorkerSample(sample, sql);
     expect(calls[0]?.values).toContain("2026-10-12T03:08:30.000Z");
+  });
+
+  test("inserts into the sampled_at column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text).toContain("sampled_at");
+  });
+
+  test("passes sampled_at as an ISO string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain("2026-10-12T03:10:30.000Z");
   });
 
   test("casts the byte counts to bigint", async () => {

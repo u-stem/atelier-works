@@ -47,12 +47,14 @@ CREATE TABLE factory.worker_samples (
 
 COMMENT ON TABLE factory.worker_samples IS
     'defaultのworkerの負荷の2分ごとの記録。枠の占有、queueの待ち、コンテナのcgroupのメモリを並べる。読み取り専用の記録で、作業項目には影響しない。';
+COMMENT ON COLUMN factory.worker_samples.sampled_at IS
+    '値を読み始めた時刻。記録するscriptが明示して渡すので、挿入のジョブが遅れても、測った時刻が残る。';
 COMMENT ON COLUMN factory.worker_samples.scheduled_for IS
     '記録したジョブの予定時刻。行の間隔が予定より開いていれば、その間の予定が実行されなかったことを示す。ジョブの情報を読めなければNULL。';
 COMMENT ON COLUMN factory.worker_samples.slots IS
     '枠の数。記録するscriptのコードの定数(DEFAULT_WORKER_SLOTS)で、workerから読んだ値ではない。NUM_WORKERSを変えた直後は、mise run upでworkerを作り直すまで、実際の枠の数と食い違う。';
 COMMENT ON COLUMN factory.worker_samples.running_jobs IS
-    '実行中のジョブの数。記録するジョブ自身、フローの親ジョブ、defaultのworkerが受けないtag(console、nativeのworkerのtag)のジョブは数えない。自分を除くので、最大はslotsより1小さい。占有率は(running_jobs + 1) / slotsである。';
+    '実行中のジョブの数。記録するジョブ自身、フローの親ジョブ、defaultのworkerが受けないtag(console、nativeのworkerのtag)のジョブは数えない。記録のジョブは枠が空いたときにしか動かないので、枠がすべて埋まった状態は行に残らない。占有はrunning_jobs / slotsで読み、枠が空いていた瞬間の標本である。塞がりはlag_secondsとscheduled_forの欠けで判定する。';
 COMMENT ON COLUMN factory.worker_samples.running_by_script IS
     '実行中のジョブのscriptごとの件数。上限の件数を超えた分は、キー(other)にまとめる。';
 COMMENT ON COLUMN factory.worker_samples.waiting_jobs IS

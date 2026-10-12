@@ -1961,6 +1961,7 @@ execPsql(
 
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
 const fullWorkerSample = {
+  sampled_at: new Date("2026-10-12T03:09:00.000Z"),
   scheduled_for: new Date("2026-10-12T03:08:30.000Z"),
   slots: 3,
   running_jobs: 2,
@@ -1979,6 +1980,7 @@ const fullWorkerSample = {
   mem_pressure_total_us: null,
 };
 const nullWorkerSample = {
+  sampled_at: new Date("2026-10-12T03:11:00.000Z"),
   scheduled_for: null,
   slots: 3,
   running_jobs: null,
@@ -2021,7 +2023,8 @@ check(
     fullWorkerRow.mem_current_bytes === 4_000_000_000 &&
     fullWorkerRow.mem_limit_bytes === 4_294_967_296 &&
     fullWorkerRow.running_by_script?.["f/factory/poll_prs"] === 1 &&
-    fullWorkerRow.scheduled_for?.toISOString() === "2026-10-12T03:08:30.000Z",
+    fullWorkerRow.scheduled_for?.toISOString() === "2026-10-12T03:08:30.000Z" &&
+    fullWorkerRow.sampled_at.toISOString() === "2026-10-12T03:09:00.000Z",
   fullWorkerRow,
 );
 check(

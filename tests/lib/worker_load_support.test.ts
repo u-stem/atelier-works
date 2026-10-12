@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { noticeSeverity } from "../../f/factory/lib/console_support.ts";
 import {
   type CgroupTexts,
+  combineUnknownTags,
   findJobById,
   nextFailureCount,
   parseCgroupMemory,
@@ -247,6 +248,57 @@ describe("summarizeRunning", () => {
     );
   });
 
+  test("reports the tag of a job no worker is known to listen to", () => {
+    expect(
+      summarizeRunning([running({ tag: "custom" })], null)?.unknownTags,
+    ).toEqual({ jobs: 1, tags: ["custom"] });
+  });
+
+  test("reports each unknown tag once, in order", () => {
+    expect(
+      summarizeRunning(
+        [
+          running({ tag: "zeta" }),
+          running({ tag: "alpha" }),
+          running({ tag: "zeta" }),
+        ],
+        null,
+      )?.unknownTags,
+    ).toEqual({ jobs: 3, tags: ["alpha", "zeta"] });
+  });
+
+  test("does not report the console tag as unknown", () => {
+    expect(
+      summarizeRunning([running({ tag: "console" })], null)?.unknownTags.jobs,
+    ).toBe(0);
+  });
+
+  for (const tag of NATIVE_WORKER_TAGS) {
+    test(`does not report the native tag ${tag} as unknown`, () => {
+      expect(summarizeRunning([running({ tag })], null)?.unknownTags.jobs).toBe(
+        0,
+      );
+    });
+  }
+
+  test("does not report a tag the default worker listens to as unknown", () => {
+    expect(summarizeRunning([running()], null)?.unknownTags.jobs).toBe(0);
+  });
+
+  test("does not report the sampling job itself as unknown", () => {
+    expect(
+      summarizeRunning([running({ id: "me", tag: "custom" })], "me")
+        ?.unknownTags.jobs,
+    ).toBe(0);
+  });
+
+  test("shortens a very long unknown tag", () => {
+    expect(
+      summarizeRunning([running({ tag: "x".repeat(500) })], null)?.unknownTags
+        .tags[0],
+    ).toHaveLength(60);
+  });
+
   test("counts a preview job with the bun tag", () => {
     expect(
       summarizeRunning([running({ job_kind: "preview" })], null)?.count,
@@ -401,6 +453,24 @@ describe("summarizeRunning", () => {
   });
 });
 
+describe("combineUnknownTags", () => {
+  test("adds the job counts", () => {
+    expect(
+      combineUnknownTags({ jobs: 2, tags: ["a"] }, { jobs: 1, tags: ["b"] })
+        .jobs,
+    ).toBe(3);
+  });
+
+  test("merges the tags without duplicates, in order", () => {
+    expect(
+      combineUnknownTags(
+        { jobs: 2, tags: ["b", "c"] },
+        { jobs: 1, tags: ["a", "b"] },
+      ).tags,
+    ).toEqual(["a", "b", "c"]);
+  });
+});
+
 describe("summarizeWaiting", () => {
   test("counts a job that has waited past its scheduled time", () => {
     expect(summarizeWaiting([waiting(60)], NOW)?.count).toBe(1);
@@ -432,6 +502,25 @@ describe("summarizeWaiting", () => {
       expect(summarizeWaiting([waiting(900, { tag })], NOW)?.count).toBe(0);
     });
   }
+
+  test("does not count a job with a tag no worker is known to listen to", () => {
+    expect(
+      summarizeWaiting([waiting(900, { tag: "custom" })], NOW)?.count,
+    ).toBe(0);
+  });
+
+  test("reports the tag of a waiting job no worker is known to listen to", () => {
+    expect(
+      summarizeWaiting([waiting(900, { tag: "custom" })], NOW)?.unknownTags,
+    ).toEqual({ jobs: 1, tags: ["custom"] });
+  });
+
+  test("does not report the console tag of a waiting job as unknown", () => {
+    expect(
+      summarizeWaiting([waiting(900, { tag: "console" })], NOW)?.unknownTags
+        .jobs,
+    ).toBe(0);
+  });
 
   test("counts the parent job of a flow that has not started", () => {
     expect(

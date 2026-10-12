@@ -178,6 +178,12 @@ describe("runSample record", () => {
     );
   });
 
+  test("records the time the values were measured, not the time of the insert", async () => {
+    const h = harness();
+    await runSample(h.deps);
+    expect(h.samples[0]?.sampled_at).toEqual(new Date(NOW));
+  });
+
   test("records the configured slots", async () => {
     const h = harness();
     await runSample(h.deps);
@@ -399,6 +405,80 @@ describe("runSample response shape", () => {
     await runSample(h.deps);
     expect(h.warnings.some((line) => line.includes("unexpected shape"))).toBe(
       true,
+    );
+  });
+
+  test("warns once about jobs with a tag no worker is known to listen to", async () => {
+    const h = harness({
+      listRunning: () =>
+        Promise.resolve([
+          selfJob(),
+          other("f/factory/a", { tag: "custom" }),
+          other("f/factory/b", { tag: "custom" }),
+        ]),
+      listWaiting: () =>
+        Promise.resolve([
+          {
+            id: "w",
+            running: false,
+            job_kind: "script",
+            tag: "mystery",
+            scheduled_for: "2026-10-12T03:00:00.000Z",
+          },
+        ]),
+    });
+    await runSample(h.deps);
+    expect(
+      h.warnings.filter((line) => line.includes("no worker is known")),
+    ).toHaveLength(1);
+  });
+
+  test("names the unknown tags in the warning", async () => {
+    const h = harness({
+      listRunning: () =>
+        Promise.resolve([selfJob(), other("f/factory/a", { tag: "custom" })]),
+    });
+    await runSample(h.deps);
+    expect(
+      h.warnings.some(
+        (line) =>
+          line.includes("no worker is known") && line.includes("custom"),
+      ),
+    ).toBe(true);
+  });
+
+  test("names at most five unknown tags in the warning", async () => {
+    const h = harness({
+      listRunning: () =>
+        Promise.resolve([
+          selfJob(),
+          ...["a", "b", "c", "d", "e", "f", "g"].map((tag) =>
+            other(`f/factory/${tag}`, { tag: `tag-${tag}` }),
+          ),
+        ]),
+    });
+    await runSample(h.deps);
+    expect(
+      h.warnings.some(
+        (line) => line.includes("tag-f") || line.includes("tag-g"),
+      ),
+    ).toBe(false);
+  });
+
+  test("does not count the jobs with an unknown tag as running", async () => {
+    const h = harness({
+      listRunning: () =>
+        Promise.resolve([selfJob(), other("f/factory/a", { tag: "custom" })]),
+    });
+    await runSample(h.deps);
+    expect(h.samples[0]?.running_jobs).toBe(0);
+  });
+
+  test("does not warn about an unknown tag when every tag is known", async () => {
+    const h = harness();
+    await runSample(h.deps);
+    expect(h.warnings.some((line) => line.includes("no worker is known"))).toBe(
+      false,
     );
   });
 
