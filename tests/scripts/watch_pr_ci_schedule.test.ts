@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
 // watch_pr_ciは5分ごとに動く。timeoutは、GitHubのrate limitの待ち(最大120秒)とDiscordの待ち(最大30秒)を
-// 含めて、経過時間の予算(180秒)の後に始めた読み取りが収まる長さにする。
+// 含めて、経過時間の予算(120秒)の後に始めた読み取りが収まる長さにする。
 // 長引いた回は、no_flow_overlapで次の回が飛ばされる。
 
 const ROOT = join(import.meta.dir, "..", "..");

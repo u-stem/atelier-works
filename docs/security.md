@@ -243,7 +243,7 @@ ActionsをRead-onlyにするのは、次の2つの実行を読むためである
 権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で、`watch_pr_ci`が要対応の通知`pr_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのCIの失敗に気づけない。
 `watch_pr_ci`は、実行の一覧とPRの状態だけを読み、ワークフローのログは取得しない。Claudeにもログを渡さない。
 通知とDiscordの文は固定文で、workflowの名前、実行の結論、ログといった外部の文字列を入れない。リポジトリへ書ける人が決める文字列なので、通知を介して人やClaudeへ指示を渡させないためである。
-forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。headのリポジトリのIDがベースと違う実行や、結び付いたPRが別の実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱うためである。
+forkのPRの実行と、別のPRの実行は、判定に使わず捨てる。headのリポジトリのIDがベースと違う実行と、結び付いたPRの番号が違う実行を使うと、forkや別のPRの結果を、FactoryのPRの結果として扱ってしまうためである。
 Actions: Read-onlyでは、実行の一覧だけでなく、選んだ全リポジトリの実行のログとartifactも読める。
 `github_token`は、Console用workerの`approval_decide`と`retry_work_item`も読む。
 そのため、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。

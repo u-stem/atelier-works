@@ -3294,6 +3294,31 @@ check(
   ).every((item) => item.owner !== OWNER),
 );
 
+// 権限の不足のnoticeは、リポジトリごとに同じ本文なので、未解決のものがあれば新しく挿入しない。
+const prCiDeniedNotice = {
+  kind: "pr_ci_check_denied",
+  message: "qdb/prci: PRのCIの実行をGitHubから読めません",
+};
+const prCiDeniedFirst = await addNoticeUnlessUnresolved(prCiDeniedNotice, sql);
+check(
+  "pr_ci_check_denied: a second notice of the same repository is not inserted while one is unresolved",
+  prCiDeniedFirst !== null &&
+    (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) === null,
+);
+check(
+  "pr_ci_check_denied: the notice is resolved by the kind and the repository prefix",
+  (await resolveUnresolvedNoticesByPrefix(
+    "pr_ci_check_denied",
+    "qdb/prci: ",
+    "watch_pr_ci",
+    sql,
+  )) === 1 && (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) !== null,
+);
+execPsql(
+  target,
+  "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);

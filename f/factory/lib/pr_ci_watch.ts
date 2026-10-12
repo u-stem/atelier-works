@@ -39,7 +39,7 @@ import {
   prCiSummary,
   pullRequestPageUrl,
 } from "./pr_ci_support.ts";
-import type { NoticeRecord } from "./types.ts";
+import { assertGitHubName, type NoticeRecord } from "./types.ts";
 
 /** PRのCIの実行をGitHubから読めないことを知らせるnoticeの種類。 */
 export const PR_CI_CHECK_DENIED_KIND = "pr_ci_check_denied";
@@ -82,6 +82,9 @@ export const UNREADABLE_EXPIRES_AFTER_MS = 24 * 60 * 60_000;
 
 /**
  * 1回の実行で、新しい読み取りを始めてよい経過時間。超えたら、残りは次の回に回す。
+ * 予算を見るのは、PRの発見、行の判定の開始、失敗の確定の前である。
+ * 実行の読み取りのページごとには見ない。`watch_main_ci`と同じく、1つの要求の列は途中で止めず、
+ * 読み始めた行は読み切る。
  * ただし、失敗の確定(通知の登録とDiscord)は、1回の実行で最初の1件を予算を見ずに進める。
  * 予算切れが続いても、失敗の通知が飢えないためである。
  *
@@ -91,10 +94,11 @@ export const UNREADABLE_EXPIRES_AFTER_MS = 24 * 60 * 60_000;
  * - 1行の判定は、PRの読み取り、実行の読み取り(最大3ページ)、PRの読み取りの順である。
  *   通常は数秒で終わり、予算の直前に始めた行でも、待ちが重ならなければ収まる。
  * - 失敗の確定には、Discordの待ち(最大30秒)がかかる。
+ * - 予算は、この最悪の見積もりを足してもtimeoutに収まる長さにする。
  * rate limitの待ちが重なると、timeoutを超えうる。
  * そのときはjobが打ち切られるが、行ごとの更新は冪等なので、確定しなかった行は次の回に残る。
  */
-export const RUN_BUDGET_MS = 180_000;
+export const RUN_BUDGET_MS = 120_000;
 
 const DENIED_NEXT_ACTION =
   "PATのRepository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる";
@@ -444,6 +448,18 @@ async function discoverPr(
   ref: PullRequestRef,
 ): Promise<void> {
   const { deps, counters } = context;
+  // `parsePullRequestUrl`は先頭が`.`のリポジトリ名も通すが、DBへの記録は通さない。
+  // 例外にすると毎回失敗として記録されるので、読まずに飛ばす。
+  try {
+    assertGitHubName(ref.owner);
+    assertGitHubName(ref.repo);
+  } catch {
+    deps.log.warn("pr ci skipped a repository whose name is not supported", {
+      repo: repoKey(ref),
+      pr: ref.number,
+    });
+    return;
+  }
   const pr = await readPr(context, ref);
   if (pr.state === "closed") {
     await closePr(context, ref);
@@ -561,7 +577,18 @@ async function judgeRowSafely(context: Context, row: PrCiCheck): Promise<void> {
     await judgeRow(context, row);
   } catch (err) {
     await recordFailureOf(context, `judge_pr:${prKey(rowRef(row))}`, err);
-    await touchSafely(context, row);
+    // 分類できない例外が続いても、判定待ちの行が残り続けないよう、読めない行と同じ期限で終わらせる。
+    let expired = false;
+    try {
+      expired = await expireStalePending(context, row);
+    } catch (expireErr) {
+      await recordFailureOf(
+        context,
+        `expire_pr:${prKey(rowRef(row))}`,
+        expireErr,
+      );
+    }
+    if (!expired) await touchSafely(context, row);
   }
 }
 
@@ -733,6 +760,15 @@ async function moveWithoutVerdict(
     await touchSafely(context, row);
     return;
   }
+  // 今のheadに失敗が無いまま終わるので、旧headの失敗のnoticeは古くなっている。
+  // 解決は冪等なので、行の更新より先に行う。
+  if (target === "expired" || target === "no_ci") {
+    await deps.resolveNotices(
+      PR_CI_FAILED_KIND,
+      prCiNoticePrefix(row.owner, row.repo, row.pr_number),
+      PR_CI_RESOLVED_BY,
+    );
+  }
   const moved = await deps.transition(row.id, row.state, {
     state: target,
     ...extra,
@@ -757,29 +793,61 @@ async function supersede(context: Context, row: PrCiCheck): Promise<void> {
 }
 
 /**
- * 永続的な条件で読めない行を扱う。判定待ちの行は、最初に見てから`UNREADABLE_EXPIRES_AFTER_MS`たてば
- * 通知せずに`expired`にし、ログに残す。それ以外は、読み直した時刻だけを進める。
+ * 最初に見てから`UNREADABLE_EXPIRES_AFTER_MS`たった判定待ちの行を、通知せずに`expired`にしてログに残す。
+ * 移したら`true`を返す。判定待ちでない行と、期限前の行は何もせず`false`を返す。
+ */
+async function expireStalePending(
+  context: Context,
+  row: PrCiCheck,
+): Promise<boolean> {
+  const { deps, counters, now } = context;
+  if (
+    row.state !== "pending" ||
+    now.getTime() - row.first_seen_at.getTime() < UNREADABLE_EXPIRES_AFTER_MS
+  ) {
+    return false;
+  }
+  const moved = await deps.transition(row.id, "pending", { state: "expired" });
+  if (moved) {
+    counters.expired += 1;
+    deps.log.warn("pr ci row expired because its runs were unreadable", {
+      repo: repoKey(row),
+      pr: row.pr_number,
+      sha: row.head_sha,
+    });
+  }
+  return true;
+}
+
+/**
+ * 永続的な条件で読めない行を扱う。最初に見てから`UNREADABLE_EXPIRES_AFTER_MS`たつと、
+ * 判定待ちの行は通知せずに`expired`にする。
+ * 失敗と実行なしの行は`superseded`にし、そのPRの失敗のnoticeを解決する。
+ * 読めないまま失敗の通知だけを残し続けても、人が確かめられないためである。
+ * 解決は冪等なので、行の更新より先に行う。
+ * 期限の前は、読み直した時刻だけを進める。
  */
 async function settleUnreadable(
   context: Context,
   row: PrCiCheck,
 ): Promise<void> {
-  const { deps, counters, now } = context;
+  const { deps, now } = context;
+  if (await expireStalePending(context, row)) return;
   if (
-    row.state === "pending" &&
+    row.state !== "pending" &&
     now.getTime() - row.first_seen_at.getTime() >= UNREADABLE_EXPIRES_AFTER_MS
   ) {
-    const moved = await deps.transition(row.id, "pending", {
-      state: "expired",
+    await deps.resolveNotices(
+      PR_CI_FAILED_KIND,
+      prCiNoticePrefix(row.owner, row.repo, row.pr_number),
+      PR_CI_RESOLVED_BY,
+    );
+    await supersede(context, row);
+    deps.log.warn("pr ci row superseded because its runs were unreadable", {
+      repo: repoKey(row),
+      pr: row.pr_number,
+      sha: row.head_sha,
     });
-    if (moved) {
-      counters.expired += 1;
-      deps.log.warn("pr ci row expired because its runs were unreadable", {
-        repo: repoKey(row),
-        pr: row.pr_number,
-        sha: row.head_sha,
-      });
-    }
     return;
   }
   await touchSafely(context, row);
