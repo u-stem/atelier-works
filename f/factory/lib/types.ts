@@ -193,12 +193,18 @@ export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
 ];
 
 /** 作業項目のサイクルが扱うGitHubの対象の種類。 */
-export type WorkItemKind = "issue" | "pr_review" | "pr_fix" | "audit";
+export type WorkItemKind =
+  | "issue"
+  | "pr_review"
+  | "pr_fix"
+  | "audit"
+  | "dependabot";
 export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "issue",
   "pr_review",
   "pr_fix",
   "audit",
+  "dependabot",
 ];
 
 /**

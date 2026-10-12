@@ -60,7 +60,7 @@ locks:
   f/factory/lib/self_update_support: f43a91237cc6c5418dc253162af8e5b18dfe3cd7681541fc1e501d6552f46fcf
   f/factory/lib/summary_support: 0baf32a9659017e51af7cbe3171a357f6960f1609ec27ff204eb30c1b852368b
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: 84311e6ae60e70060d92e5a3816b0d4e663612a9b7fc105dcf6b96c37ee3b8b9
+  f/factory/lib/types: 0d040a9ca152cc7b2d7f848bb155db8a1b4b7c44b7a6676ebea7ef732513a381
   f/factory/lib/workspace: 3c0049eb7cf80e055a1205bc898a1277b37ca0debc5c5faaec558c1703dfd42f
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/notice_resolve: 3794cae7243a5e3efa50091313272a61aae6d8c6930e3a2060d4e8b8c48067ac
@@ -72,7 +72,7 @@ locks:
   f/factory/poll_prs: a690d824b72ca37701b203b16b590e4d79bcd75f83c9f48e1bbc37db27272d5e
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/retry_work_item: a0447d41cd130badc451ccb28574a947426c62d18a60e2f09ddfa82208fbbc4a
+  f/factory/retry_work_item: 9ddc065fc12d6cb2852c0f98f805962e4689e6ea59d198b24172c624ccebcb87
   f/factory/self_update: 4a3445bccde238070aba7f84ea71e67e5d8fdd878878e81e37f6aa864fbd5453
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81

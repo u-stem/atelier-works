@@ -31,6 +31,7 @@ const WORK_ITEM_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["pr_review", "PRレビュー"],
   ["pr_fix", "PRの修正"],
   ["audit", "監査"],
+  ["dependabot", "dependabotの更新"],
 ]);
 
 const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([

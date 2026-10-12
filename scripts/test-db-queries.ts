@@ -1639,6 +1639,37 @@ execPsql(
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
 );
 
+// dependabotの作業項目は、kindのCHECK制約を通り、アプリの挿入の関数で入る。
+// 戻せることは、後で適用するdown migrationが確かめる。
+const dependabotItem = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "dependabot",
+    owner: OWNER,
+    repo: "r",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 9001,
+    title: "qdb dependabot item",
+    body: null,
+    status: "picked",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+check(
+  "kind: a dependabot work item can be inserted",
+  dependabotItem > 0,
+  dependabotItem,
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);

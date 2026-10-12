@@ -73,7 +73,8 @@ flowchart TD
 
 ### 状態の一覧
 
-作業項目の種別(`kind`)は、Issueの`issue`、PRレビューの`pr_review`、PR修正の`pr_fix`、監査の`audit`の4つである。
+作業項目の種別(`kind`)は5つある。
+Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は`audit`、dependabotのセキュリティ更新PRは`dependabot`である。
 
 | status | 意味 | 種別 | 終端 |
 | --- | --- | --- | --- |

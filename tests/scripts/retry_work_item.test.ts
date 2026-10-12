@@ -412,6 +412,17 @@ describe("computeRestartPlan for a cancelled work item", () => {
   });
 });
 
+describe("computeRestartPlan for a dependabot work item", () => {
+  test("refuses to restart a dependabot work item", () => {
+    expect(() =>
+      computeRestartPlan(
+        { id: 1, status: "failed", kind: "dependabot", attempt: 1 },
+        { implementReady: false, implementEnabled: false },
+      ),
+    ).toThrow(/dependabot/);
+  });
+});
+
 describe("asBeforeActionableCancel", () => {
   const cancelled: Pick<WorkItem, "id" | "status" | "kind" | "attempt"> = {
     id: 1,
