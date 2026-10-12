@@ -764,6 +764,29 @@ describe("evaluateGate", () => {
     ).toBe("ok");
   });
 
+  test("waits when actions passed a check that another app left unfinished", () => {
+    expect(
+      verdictOf({
+        checks: [
+          ...passingChecks(),
+          { name: "check", appId: OTHER_APP_ID, conclusion: null },
+        ],
+      }),
+    ).toBe("wait");
+  });
+
+  test("needs a human for a failed check while another required check has not appeared from actions", () => {
+    expect(
+      verdictOf({
+        checks: REQUIRED_CHECKS.map((name) => ({
+          name,
+          appId: name === "scope" ? OTHER_APP_ID : GITHUB_ACTIONS_APP_ID,
+          conclusion: name === "check" ? "failure" : "success",
+        })),
+      }),
+    ).toBe("needs_human");
+  });
+
   test("needs a human when a required check failed", () => {
     expect(
       verdictOf({

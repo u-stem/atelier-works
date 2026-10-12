@@ -134,6 +134,14 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
+  test("keeps a file with an unconfirmed condition in scope", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "A file for which you cannot confirm any one of these conditions is in scope.",
+    );
+  });
+
   test("keeps untracked files in scope", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
@@ -492,6 +500,12 @@ describe("factory-dependabot skill", () => {
     );
 
     expect(listed).toEqual([...ALLOWED_PATHS]);
+  });
+
+  test("keeps a file with an unconfirmed condition in scope", () => {
+    expect(skill).toContain(
+      "対象外にする条件のどれかを確かめられないファイルは、対象になる。",
+    );
   });
 
   test("keeps untracked files in scope", () => {
