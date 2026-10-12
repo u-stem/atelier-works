@@ -1,7 +1,7 @@
 // `poll_issues.ts`と`poll_prs.ts`の判定ロジックを、I/Oを持たない純粋関数としてまとめる。
 // 各`main()`はこれらを呼び、その結果に従ってI/Oだけを行う。
 
-import { normalizeRepoUrl } from "./config.ts";
+import { isRepoAllowed } from "./config.ts";
 import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
 import { isViewerBumpBranch } from "./drawio_viewer_bump.ts";
 import { type GhClient, GitHubHttpError, getLabelerLogin } from "./github.ts";
@@ -27,31 +27,23 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * `items`のうち、`factory_config.repo_allowlist`に含まれるリポジトリのものを返す。
- * `repo_allowlist`はHTTPSのclone URL(`https://github.com/<owner>/<repo>`)のリストで、
- * 空なら絞り込まない。ownerとrepoの組を、大文字と小文字を区別せずに比べる。
- * `isRepoAllowed`(`lib/config.ts`)と同じく、
- * `config.factory_repo`は`repo_allowlist`によらず常に通す。
- * 監査から起票したIssueなどFactory自身のリポジトリの候補を、`repo_allowlist`に
+ * `items`のうち、`isRepoAllowed`(`lib/config.ts`)が許すリポジトリのものを返す。
+ * `owner`が`config.owners`に無い候補は落とす。大文字と小文字は区別しない。
+ * `config.repo_allowlist`が空でなければ、HTTPSのclone URL
+ * (`https://github.com/<owner>/<repo>`)がそこに含まれる候補だけを残す。
+ * `config.factory_repo`は、`owners`と`repo_allowlist`によらず常に通す。
+ * 監査から起票したIssueなどFactory自身のリポジトリの候補を、`owners`や`repo_allowlist`に
  * 載っていなくても`poll_issues`と`poll_prs`の候補に残すため。
+ * 呼び出し側は、照合を通ったオーナーだけを`config.owners`に渡す。
+ * 検索を飛ばしたオーナーや、`owners`から消えた旧名の追跡中のPRを、候補から外すため。
  */
 export function filterByRepoAllowlist<
   T extends { readonly owner: string; readonly repo: string },
 >(
   items: readonly T[],
-  config: Pick<FactoryConfig, "repo_allowlist" | "factory_repo">,
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
 ): T[] {
-  if (config.repo_allowlist.length === 0) {
-    return [...items];
-  }
-  const allowed = new Set(config.repo_allowlist.map(normalizeRepoUrl));
-  const factoryRepo = normalizeRepoUrl(config.factory_repo);
-  return items.filter((item) => {
-    const target = normalizeRepoUrl(
-      `https://github.com/${item.owner}/${item.repo}`,
-    );
-    return target === factoryRepo || allowed.has(target);
-  });
+  return items.filter((item) => isRepoAllowed(config, item.owner, item.repo));
 }
 
 // ---------------------------------------------------------------------------
@@ -154,48 +146,18 @@ export async function filterVerifiedOwners(
   deps: OwnerIdGateDeps,
 ): Promise<{
   readonly owners: FactoryOwner[];
-  readonly skipped: FactoryOwner[];
   readonly failed: number;
 }> {
   const verified: FactoryOwner[] = [];
-  const skipped: FactoryOwner[] = [];
+  let failed = 0;
   for (const owner of owners) {
     if (await gateOwnerId(owner, deps)) {
       verified.push(owner);
     } else {
-      skipped.push(owner);
+      failed += 1;
     }
   }
-  return { owners: verified, skipped, failed: skipped.length };
-}
-
-/**
- * 照合で飛ばしたオーナーの候補を落とす。
- * 検索を飛ばしても、DBから見つけ直す追跡中のPRは、候補に残ってしまうため。
- * `factory_repo`は、オーナーによらず常に通す(`filterByRepoAllowlist`と同じ)。
- * 飛ばしていないオーナーと、`owners`に無いオーナーの候補は、そのまま残す。
- */
-export function excludeSkippedOwners<
-  T extends { readonly owner: string; readonly repo: string },
->(
-  items: readonly T[],
-  skipped: readonly FactoryOwner[],
-  factoryRepo: string,
-): T[] {
-  if (skipped.length === 0) {
-    return [...items];
-  }
-  const skippedNames = new Set(skipped.map((o) => o.name.toLowerCase()));
-  const factory = normalizeRepoUrl(factoryRepo);
-  return items.filter((item) => {
-    if (!skippedNames.has(item.owner.toLowerCase())) {
-      return true;
-    }
-    return (
-      normalizeRepoUrl(`https://github.com/${item.owner}/${item.repo}`) ===
-      factory
-    );
-  });
+  return { owners: verified, failed };
 }
 
 // ---------------------------------------------------------------------------

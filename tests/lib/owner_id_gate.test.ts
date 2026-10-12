@@ -3,7 +3,6 @@
 import { describe, expect, test } from "bun:test";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import {
-  excludeSkippedOwners,
   filterVerifiedOwners,
   gateOwnerId,
   OWNER_ID_MISMATCH_KIND,
@@ -214,12 +213,6 @@ describe("filterVerifiedOwners", () => {
     expect(result.owners).toEqual([OTHER]);
   });
 
-  test("returns the owners that were skipped", async () => {
-    const { deps } = setup(() => Promise.resolve(9999));
-    const result = await filterVerifiedOwners([WITH_ID, OTHER], deps);
-    expect(result.skipped).toEqual([WITH_ID]);
-  });
-
   test("counts the owners that were skipped", async () => {
     const { deps } = setup(() => Promise.resolve(9999));
     const result = await filterVerifiedOwners([WITH_ID, OTHER], deps);
@@ -236,35 +229,5 @@ describe("filterVerifiedOwners", () => {
     const { deps, recorded } = setup(() => Promise.resolve(9999));
     await filterVerifiedOwners([WITH_ID, OTHER], deps);
     expect(recorded.lookups).toEqual(["octo-owner"]);
-  });
-});
-
-describe("excludeSkippedOwners", () => {
-  const FACTORY_REPO = "https://github.com/octo-owner/factory";
-  const SKIPPED = [WITH_ID];
-
-  test("drops the items of a skipped owner, including tracked ones", () => {
-    const items = [
-      { owner: "octo-owner", repo: "app" },
-      { owner: "octo-org", repo: "app" },
-    ];
-    expect(excludeSkippedOwners(items, SKIPPED, FACTORY_REPO)).toEqual([
-      { owner: "octo-org", repo: "app" },
-    ]);
-  });
-
-  test("matches the owner name case-insensitively", () => {
-    const items = [{ owner: "Octo-Owner", repo: "app" }];
-    expect(excludeSkippedOwners(items, SKIPPED, FACTORY_REPO)).toEqual([]);
-  });
-
-  test("keeps the factory repo even when its owner was skipped", () => {
-    const items = [{ owner: "octo-owner", repo: "factory" }];
-    expect(excludeSkippedOwners(items, SKIPPED, FACTORY_REPO)).toEqual(items);
-  });
-
-  test("keeps every item when no owner was skipped", () => {
-    const items = [{ owner: "octo-owner", repo: "app" }];
-    expect(excludeSkippedOwners(items, [], FACTORY_REPO)).toEqual(items);
   });
 });

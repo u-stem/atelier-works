@@ -64,7 +64,6 @@ import {
   decideClosureOnly,
   decideIssueActions,
   decideReconcileAction,
-  excludeSkippedOwners,
   filterByRepoAllowlist,
   filterVerifiedOwners,
   groupActionableTargets,
@@ -1374,6 +1373,8 @@ export async function main(): Promise<{
     addNotice: (record) => addNoticeUnlessUnresolved(record),
   });
   failed += verified.failed;
+  // 照合を通ったオーナーだけを対象にする。
+  const scope = { ...config, owners: verified.owners };
   for (const owner of verified.owners) {
     try {
       const found = await searchIssues(client, {
@@ -1388,10 +1389,7 @@ export async function main(): Promise<{
     }
   }
 
-  const allowed = filterByRepoAllowlist(
-    excludeSkippedOwners(rawCandidates, verified.skipped, config.factory_repo),
-    config,
-  );
+  const allowed = filterByRepoAllowlist(rawCandidates, scope);
   const candidates = await buildIssueCandidates(
     client,
     allowed,

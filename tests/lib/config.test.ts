@@ -229,6 +229,16 @@ describe("parseFactoryConfig", () => {
     ]);
   });
 
+  test("treats an undefined owner id as no id", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: undefined }],
+    };
+    expect(parseFactoryConfig(raw).owners).toEqual([
+      { name: "octo-owner", kind: "user" },
+    ]);
+  });
+
   test.each([0, -1, 1.5, "42"])("throws when an owner id is %p", (id) => {
     const raw = {
       ...LEGACY_RAW_CONFIG,
