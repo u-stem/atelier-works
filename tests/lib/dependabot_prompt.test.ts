@@ -126,11 +126,11 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
-  test("limits the out-of-scope files by four conditions", () => {
+  test("limits the out-of-scope files by three conditions", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      `Only a file that meets all of these conditions is out of scope: it is inside the working directory, it is tracked by git, it is outside any node_modules or vendor directory at any depth (for example console/node_modules), and it is not one of the files this pull request changes (${ALLOWED_PATHS.join(", ")}).`,
+      `Only a file that meets all of these conditions is out of scope: it is inside the working directory, it is outside any node_modules or vendor directory at any depth (for example console/node_modules), and it is not one of the files this pull request changes (${ALLOWED_PATHS.join(", ")}).`,
     );
   });
 
@@ -142,11 +142,11 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
-  test("keeps untracked files in scope", () => {
+  test("states the clean checkout the caller provides", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "A file that git does not track, such as a build output or a generated file, is in scope.",
+      "The caller starts you in a clean checkout of the commit that passed the gate: the only untracked directories are node_modules and vendor, and caches and other generated files are kept outside the working directory.",
     );
   });
 
@@ -508,9 +508,9 @@ describe("factory-dependabot skill", () => {
     );
   });
 
-  test("keeps untracked files in scope", () => {
+  test("states the clean checkout the caller provides", () => {
     expect(skill).toContain(
-      "gitが追跡していないファイル(ビルド成果物や生成物)は対象になる。",
+      "- 呼び出し側は、機械の関門を通したshaのクリーンなcheckoutでClaudeを起動する。\n  追跡されていないのは`node_modules`と`vendor`(依存のインストール先)だけで、キャッシュなどの生成物は作業ディレクトリの外に置く。",
     );
   });
 

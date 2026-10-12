@@ -31,7 +31,7 @@ locks:
   f/factory/lib/console_support: fab111d55d69a9e120b5f00cbadca32b5ac07bd1fcd2df0d968c970a9493a286
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
   f/factory/lib/db: e90e31aaf3c6f5c235a5542da12411e367f6f245f0d97f22b58428ec99195d13
-  f/factory/lib/dependabot_prompt: 6fd81c92e9df71121eec3876deadbc74a07fc649fd42399c52a3c2e8fc5f648c
+  f/factory/lib/dependabot_prompt: 810f6436338accdb23a550c2fd697ed7d70a69765561fb6980dd68f93fd3fa04
   f/factory/lib/dependabot_support: 1635065acfd99ef90dfa967e9f354f267a509e823d7c32fc8897092c28ca84e3
   f/factory/lib/discord: 56c67d091d4f1da1e40c6e912bae4a2e6355e11230b79dc81f80dd2cb96a5802
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
