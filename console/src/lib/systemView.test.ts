@@ -235,6 +235,10 @@ describe("resolverLabel", () => {
     expect(resolverLabel("cleanup_db")).toBe("DBの掃除(自動)");
   });
 
+  test("labels the workspace cleanup as automatic", () => {
+    expect(resolverLabel("cleanup_workspaces")).toBe("作業領域の掃除(自動)");
+  });
+
   test("labels the self update as automatic", () => {
     expect(resolverLabel("self_update")).toBe("自己更新(自動)");
   });

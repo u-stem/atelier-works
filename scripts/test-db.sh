@@ -61,6 +61,40 @@ shopt -u nullglob
 
 ACTIVE_ISSUE_MIGRATION="20261009120000_active_issue_key.up.sql"
 NOTICES_DEDUP_MIGRATION="20261011170000_notices_unresolved_dedup.up.sql"
+DISK_USAGE_NOTICE_MIGRATION="20261013100300_disk_usage_notice_single.up.sql"
+
+# ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
+# migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
+seed_disk_usage_notices() {
+  psql_exec "${SCRATCH_DB}" <<'SQL' >/dev/null
+INSERT INTO factory.notices (kind, message, resolved, created_at) VALUES
+  ('workspace_disk_usage', 'oldest', false, '2026-10-01 00:00:00+00'),
+  ('workspace_disk_usage', 'newest', false, '2026-10-03 00:00:00+00'),
+  ('workspace_disk_usage', 'middle', false, '2026-10-02 00:00:00+00'),
+  ('workspace_disk_usage', 'history', true, '2026-09-30 00:00:00+00');
+SQL
+}
+
+# migrationが最も新しい1件だけを残し、残りを解決者migrationで解決済みにし、
+# 解決済みの履歴には触れず、索引が本文の異なる2件目の未解決を拒むことを確かめる。
+verify_disk_usage_notice_index() {
+  local kept
+  kept="$(printf "SELECT string_agg(message || ':' || resolved || ':' || COALESCE(resolved_by, '-'), ',' ORDER BY message) FROM factory.notices WHERE kind = 'workspace_disk_usage';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the disk usage notices"
+  [ "${kept}" = "history:true:-,middle:true:migration,newest:false:-,oldest:true:migration" ] \
+    || die "unexpected disk usage notices after the migration: ${kept}"
+  local rejected
+  if rejected="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('workspace_disk_usage', 'another');\n" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+    die "a second unresolved disk usage notice was accepted"
+  fi
+  case "${rejected}" in
+    *notices_unresolved_disk_usage_key*) ;;
+    *) die "the second disk usage notice was rejected, but not by notices_unresolved_disk_usage_key: ${rejected}" ;;
+  esac
+  printf "DELETE FROM factory.notices WHERE kind = 'workspace_disk_usage';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "unresolved disk usage notices are unique per kind"
+}
 
 # 未解決の通知の部分一意索引を足す前に、重複した未解決の通知を入れておく。
 # migrationが最古の1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -299,6 +333,9 @@ for up_file in "${up_files[@]}"; do
   if [ "${up_name}" = "${NOTICES_DEDUP_MIGRATION}" ]; then
     seed_notice_duplicates
   fi
+  if [ "${up_name}" = "${DISK_USAGE_NOTICE_MIGRATION}" ]; then
+    seed_disk_usage_notices
+  fi
   log "applying ${up_name}"
   psql_exec "${SCRATCH_DB}" <"${up_file}"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -306,6 +343,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${NOTICES_DEDUP_MIGRATION}" ]; then
     verify_notice_dedup_index
+  fi
+  if [ "${up_name}" = "${DISK_USAGE_NOTICE_MIGRATION}" ]; then
+    verify_disk_usage_notice_index
   fi
 done
 
