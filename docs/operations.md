@@ -1108,8 +1108,10 @@ workerの一覧を読むAPIは、ジョブのトークンでは読めない(Forb
 失敗した実行は、workerがジョブを受けて動いた証拠として数える。
 
 `console_fetch_watch`が10分ごとにtag `console`のジョブを作る。
-workerがジョブを受けなければそのジョブが待ち続けるので、止まってから最大で約20分かけて検知する。
+workerがジョブを受けなければそのジョブが待ち続けるので、止まってから約20分かけて検知する。
 内訳は、ジョブの作成の間隔10分、待ちの5分、自己更新の間隔2分に、自己更新の実行時間を足した値である。
+この確認は自己更新の最後に走るので、同じ回で反映が走ると、その分だけ検知が遅れうる。
+反映の`wmill`は2回で最大10分かかり、約20分の余裕の3分を超えうる。
 
 通知`console_worker_missing`が立つのは、workerが居ないときだけではない。
 workerが居ても、2枠とも塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
@@ -1146,6 +1148,7 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 1. 正常な状態で1時間以上、自己更新のジョブログに上の警告が出ず、通知`console_worker_check_failed`も出ないことを見る。
 2. `stop`でConsole用のworkerを止める。
 3. 約20分以内に、通知`console_worker_missing`ができ、Discordにも届くことを見る。
+   反映と重なった回では、最大10分遅れうる。
 4. `start`で戻し、通知を解決する。
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
