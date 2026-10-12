@@ -21,6 +21,13 @@
 
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
+import {
+  assertCommitSha,
+  WORKFLOW_RUNS_BY_SHA_MAX_PAGES,
+  WORKFLOW_RUNS_BY_SHA_PER_PAGE,
+  WORKFLOW_RUNS_PER_PAGE,
+  type WorkflowRun,
+} from "./main_ci_support.ts";
 import type {
   FactoryOwnerKind,
   GitIdentity,
@@ -3205,6 +3212,142 @@ export async function listPullRequestNumbersByHead(
     }
     return item.number;
   });
+}
+
+type WorkflowRunPayload = {
+  id: number;
+  name: string | null;
+  head_sha: string;
+  head_branch: string | null;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  created_at: string;
+  html_url: string;
+};
+
+function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "number") return false;
+  if (value.name !== null && typeof value.name !== "string") return false;
+  if (typeof value.head_sha !== "string") return false;
+  if (value.head_branch !== null && typeof value.head_branch !== "string") {
+    return false;
+  }
+  if (typeof value.event !== "string") return false;
+  if (typeof value.status !== "string") return false;
+  if (value.conclusion !== null && typeof value.conclusion !== "string") {
+    return false;
+  }
+  if (typeof value.created_at !== "string") return false;
+  if (Number.isNaN(new Date(value.created_at).getTime())) return false;
+  return typeof value.html_url === "string";
+}
+
+/**
+ * `listWorkflowRuns`が、そのコミットの実行を判定に使えないときに投げる例外。
+ * 上限のページまで埋まって実行を読み切れないときと、照会したコミットと違う`head_sha`の実行が
+ * 返ったときがある。呼び出し側は、コミットごとに`instanceof`で見分けて、そのコミットを今回は判定しない。
+ */
+export class WorkflowRunsIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkflowRunsIncompleteError";
+  }
+}
+
+function toWorkflowRuns(
+  parsed: unknown,
+  context: string,
+  branch: string,
+  expectedSha: string | undefined,
+): WorkflowRun[] {
+  if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.workflow_runs.map((raw: unknown): WorkflowRun => {
+    if (!isWorkflowRunPayload(raw)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    if (raw.head_branch !== branch || raw.event !== "push") {
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another branch or event`,
+      );
+    }
+    if (expectedSha !== undefined && raw.head_sha !== expectedSha) {
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another commit`,
+      );
+    }
+    return {
+      id: raw.id,
+      name: raw.name ?? "",
+      headSha: raw.head_sha,
+      status: raw.status,
+      conclusion: raw.conclusion,
+      createdAt: new Date(raw.created_at),
+      htmlUrl: raw.html_url,
+    };
+  });
+}
+
+/**
+ * `branch`へのpushで始まったworkflowの実行を読む。使い方は2つある。
+ * - `headSha`なし: ブランチの最新の実行を、新しい順に1ページ(`WORKFLOW_RUNS_PER_PAGE`件)だけ読む。
+ *   新しいコミットを見つけるための一覧で、1つのコミットの実行が全部そろっているとは限らない。
+ * - `headSha`あり: そのコミットの実行を、1ページ`WORKFLOW_RUNS_BY_SHA_PER_PAGE`件で最大
+ *   `WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読む。判定に使うのはこちらである。
+ *   上限のページまで埋まったら、実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。
+ *   応答に別のコミットの実行が混ざったときも同じ例外を投げる。
+ *   ブランチと同じ名前のタグのpushで動いた実行は、ブランチ名がそのブランチで返りうる。
+ *   各実行の`head_branch`が`branch`と、`event`が`push`と合わなければ、同じ例外を投げる。
+ *   ブランチも条件に付けるのは、同じコミットを別のブランチにpushした実行を混ぜないため。
+ * `headSha`と、応答の各実行の`head_sha`は、完全なコミットshaでなければ例外を投げる。
+ * 応答の形が違えば例外を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRuns(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+  headSha?: string,
+): Promise<WorkflowRun[]> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const base = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}`;
+  if (headSha === undefined) {
+    const context = `GET workflow runs ${owner}/${repo}@${branch}`;
+    const endpoint = `${base}&event=push&per_page=${String(WORKFLOW_RUNS_PER_PAGE)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    return toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      branch,
+      undefined,
+    );
+  }
+  assertCommitSha(headSha);
+  const context = `GET workflow runs ${owner}/${repo}@${headSha}`;
+  const runs: WorkflowRun[] = [];
+  for (let page = 1; page <= WORKFLOW_RUNS_BY_SHA_MAX_PAGES; page += 1) {
+    const endpoint = `${base}&head_sha=${headSha}&event=push&per_page=${String(WORKFLOW_RUNS_BY_SHA_PER_PAGE)}&page=${String(page)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    const items = toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      branch,
+      headSha,
+    );
+    runs.push(...items);
+    if (items.length < WORKFLOW_RUNS_BY_SHA_PER_PAGE) return runs;
+  }
+  throw new WorkflowRunsIncompleteError(
+    `${context}: the runs may be incomplete (too many runs)`,
+  );
 }
 
 export type PullRequestUpdate = {

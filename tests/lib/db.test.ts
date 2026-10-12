@@ -10,8 +10,10 @@ import {
   countPrFixFailures,
   decideApprovalRequestIfPending,
   decideIssueProposal,
+  deferMainCiRun,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
+  deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
   expireApprovalRequestIfPending,
@@ -21,9 +23,11 @@ import {
   getIssueProposal,
   getLatestDeployment,
   getNoticeById,
+  getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
   hasIntakeRefreshEvent,
+  hasMainCiRuns,
   hasNonTerminalPrWorkItem,
   hasPriorReview,
   hasUnfinishedPrRun,
@@ -40,6 +44,7 @@ import {
   isActiveIssueUniqueViolation,
   latestDraft,
   latestFixRound,
+  latestMainCiRunCreatedAt,
   latestPrWorkItem,
   latestRequirementsApproval,
   latestStatusEvent,
@@ -49,7 +54,9 @@ import {
   listAutoRetryCandidates,
   listExpiredPendingApprovalRequests,
   listImplementRounds,
+  listMainCiRunsBySha,
   listPendingIssueProposals,
+  listPendingMainCiRuns,
   listStaleTerminalWorkItems,
   listTrackedPrs,
   listUnresolvedNoticesByKind,
@@ -59,6 +66,7 @@ import {
   recordAgentRun,
   recordDeployment,
   recordFailure,
+  recordMainCiRun,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -86,6 +94,7 @@ import {
   toIssueProposal,
   toRequirementDraft,
   toReviewRecord,
+  transitionMainCiRun,
   updateIntakeIfRegenerating,
   updateStatus,
   updateStatusIfCurrent,
@@ -3543,6 +3552,7 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 5,
         notices_deleted: 2,
         info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3561,6 +3571,7 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 0,
         notices_deleted: 0,
         info_notices_resolved: 4,
+        main_ci_runs_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3578,6 +3589,7 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 0,
         notices_deleted: 0,
         info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3595,6 +3607,7 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 5,
         notices_deleted: 2,
         info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -4293,5 +4306,419 @@ describe("restartStoppedWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe("insertCleanupRun main_ci_runs_deleted", () => {
+  const counts = {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 0,
+    info_notices_resolved: 0,
+    main_ci_runs_deleted: 6,
+    doc_dirs_deleted: 0,
+  };
+
+  test("inserts into the main_ci_runs_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.text).toContain("main_ci_runs_deleted");
+  });
+
+  test("records the deleted count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.values).toContain(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// main_ci_runs
+// ---------------------------------------------------------------------------
+
+const CI_SHA = "a".repeat(40);
+
+const MAIN_CI_ROW: SqlRow = {
+  id: "5",
+  owner: "acme",
+  repo: "widgets",
+  head_sha: CI_SHA,
+  state: "pending",
+  summary: "",
+  prev_failed: false,
+  first_seen_at: "2026-10-12T03:00:00.000Z",
+  run_created_at: null,
+  next_check_at: "2026-10-12T03:00:00.000Z",
+  created_at: "2026-10-12T03:00:00.000Z",
+  updated_at: "2026-10-12T03:00:00.000Z",
+};
+
+const NEW_CI_RUN = {
+  owner: "acme",
+  repo: "widgets",
+  head_sha: CI_SHA,
+  state: "pending" as const,
+  run_created_at: new Date("2026-10-12T03:00:00.000Z"),
+};
+
+describe("recordMainCiRun", () => {
+  test("rejects non 40-hex sha", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordMainCiRun({ ...NEW_CI_RUN, head_sha: "abc1234" }, sql),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("does not touch the database for a rejected sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun({ ...NEW_CI_RUN, head_sha: "abc1234" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid owner", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordMainCiRun({ ...NEW_CI_RUN, owner: "a b" }, sql),
+    ).rejects.toThrow("invalid GitHub name");
+  });
+
+  test("inserts into factory.main_ci_runs", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun(NEW_CI_RUN, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.main_ci_runs");
+  });
+
+  test("leaves an existing row alone on conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun(NEW_CI_RUN, sql);
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (owner, repo, head_sha) DO NOTHING",
+    );
+  });
+
+  test("casts run_created_at to timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun(NEW_CI_RUN, sql);
+    expect(calls[0]?.text).toContain("::timestamptz");
+  });
+
+  test("returns true when the row was inserted", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await recordMainCiRun(NEW_CI_RUN, sql)).toBe(true);
+  });
+
+  test("returns false when the sha was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await recordMainCiRun(NEW_CI_RUN, sql)).toBe(false);
+  });
+
+  test("records a baseline row with its state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun({ ...NEW_CI_RUN, state: "baseline" }, sql);
+    expect(calls[0]?.values).toContain("baseline");
+  });
+});
+
+describe("hasMainCiRuns", () => {
+  test("returns true when the repository has a row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await hasMainCiRuns("acme", "widgets", sql)).toBe(true);
+  });
+
+  test("returns false when the repository has no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasMainCiRuns("acme", "widgets", sql)).toBe(false);
+  });
+
+  test("limits the lookup to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasMainCiRuns("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain("LIMIT 1");
+  });
+
+  test("rejects an invalid owner or repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasMainCiRuns("a b", "widgets", sql).catch(() => undefined);
+    await hasMainCiRuns("acme", "..", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("latestMainCiRunCreatedAt", () => {
+  test("returns the newest recorded run time", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ latest: "2026-10-12T03:00:00.000Z" }],
+    ]);
+    expect(await latestMainCiRunCreatedAt("acme", "widgets", sql)).toEqual(
+      new Date("2026-10-12T03:00:00.000Z"),
+    );
+  });
+
+  test("returns null when the repository has no row", async () => {
+    const { sql } = createFakeSqlClient([[{ latest: null }]]);
+    expect(await latestMainCiRunCreatedAt("acme", "widgets", sql)).toBeNull();
+  });
+
+  test("takes the maximum over every state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ latest: null }]]);
+    await latestMainCiRunCreatedAt("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain(
+      "max(COALESCE(run_created_at, first_seen_at))",
+    );
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestMainCiRunCreatedAt("a b", "widgets", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("listMainCiRunsBySha", () => {
+  test("rejects a sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      listMainCiRunsBySha("acme", "widgets", ["abc"], sql),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listMainCiRunsBySha("a b", "widgets", [CI_SHA], sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("returns nothing without querying when no sha is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listMainCiRunsBySha("acme", "widgets", [], sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[MAIN_CI_ROW]]);
+    const rows = await listMainCiRunsBySha("acme", "widgets", [CI_SHA], sql);
+    expect(rows[0]).toMatchObject({
+      id: 5,
+      head_sha: CI_SHA,
+      state: "pending",
+      prev_failed: false,
+      run_created_at: null,
+    });
+  });
+
+  test("matches the shas with an array cast", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listMainCiRunsBySha("acme", "widgets", [CI_SHA], sql);
+    expect(calls[0]?.text).toContain("ANY( ? ::text[])");
+  });
+});
+
+describe("listPendingMainCiRuns", () => {
+  test("selects only pending rows whose next check time has come", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingMainCiRuns(50, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE state = 'pending' AND next_check_at <= now()",
+    );
+  });
+
+  test("orders by the first seen time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingMainCiRuns(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY first_seen_at ASC");
+  });
+
+  test("passes the limit as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingMainCiRuns(50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+
+  test("rejects an unexpected state in a row", async () => {
+    const { sql } = createFakeSqlClient([[{ ...MAIN_CI_ROW, state: "done" }]]);
+    await expect(listPendingMainCiRuns(50, sql)).rejects.toThrow(
+      'row field "state"',
+    );
+  });
+});
+
+describe("transitionMainCiRun", () => {
+  const settled = {
+    state: "failed" as const,
+    summary: "失敗したworkflow: CI (failure)",
+    prevFailed: true,
+  };
+
+  test("transition is idempotent: it only updates a pending row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).toContain("AND state = 'pending'");
+  });
+
+  test("returns true when this call changed the row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(await transitionMainCiRun(5, settled, sql)).toBe(true);
+  });
+
+  test("returns false when the row had already left pending", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await transitionMainCiRun(5, settled, sql)).toBe(false);
+  });
+
+  test("refreshes updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).toContain("updated_at = now()");
+  });
+
+  test("rejects a summary longer than 400 characters before the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(
+      5,
+      { ...settled, summary: "x".repeat(401) },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("accepts a summary of exactly 400 characters", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(
+      await transitionMainCiRun(
+        5,
+        { ...settled, summary: "x".repeat(400) },
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects a summary that is too long with an error", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    await expect(
+      transitionMainCiRun(5, { ...settled, summary: "x".repeat(401) }, sql),
+    ).rejects.toThrow("summary is too long");
+  });
+
+  test("rejects a state a pending row cannot move to", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    // 型を通らない値を、外から来た値として渡す。
+    const to = JSON.parse(JSON.stringify({ ...settled, state: "baseline" }));
+    await transitionMainCiRun(5, to, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("casts the boolean", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).toContain("? ::boolean");
+  });
+
+  test("does not touch run_created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).not.toContain("run_created_at");
+  });
+});
+
+describe("deferMainCiRun", () => {
+  const later = new Date("2026-10-12T04:00:00.000Z");
+
+  test("only updates a pending row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await deferMainCiRun(5, { nextCheckAt: later }, sql);
+    expect(calls[0]?.text).toContain("AND state = 'pending'");
+  });
+
+  test("moves the next check time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await deferMainCiRun(5, { nextCheckAt: later }, sql);
+    expect(calls[0]?.values).toContain(later.toISOString());
+  });
+
+  test("does not touch run_created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await deferMainCiRun(5, { nextCheckAt: later }, sql);
+    expect(calls[0]?.text).not.toContain("run_created_at");
+  });
+
+  test("returns false when the row had already left pending", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await deferMainCiRun(5, { nextCheckAt: later }, sql)).toBe(false);
+  });
+});
+
+describe("getPreviousMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns the newest row older than the given run time", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...MAIN_CI_ROW, state: "failed" }],
+    ]);
+    const row = await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(row?.state).toBe("failed");
+  });
+
+  test("returns null when no older row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getPreviousMainCiRun("acme", "widgets", at, sql)).toBeNull();
+  });
+
+  test("orders by the same key as the cleanup and the watermark", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(calls[0]?.text).toContain(
+      "ORDER BY COALESCE(run_created_at, first_seen_at) DESC, id DESC",
+    );
+  });
+
+  test("compares strictly before the given run time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE(run_created_at, first_seen_at) < ",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "..", at, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("deleteMainCiRunsBefore", () => {
+  const cutoff = new Date("2026-09-12T00:00:00.000Z");
+
+  test("cleanup keeps pending rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteMainCiRunsBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("state <> 'pending'");
+  });
+
+  test("keeps the newest row of each repository", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteMainCiRunsBefore(cutoff, sql);
+    expect(calls[0]?.text).toMatch(
+      /COALESCE\(newer\.run_created_at, newer\.first_seen_at\)[\s\S]*COALESCE\(r\.run_created_at, r\.first_seen_at\)/,
+    );
+  });
+
+  test("ages a row by its updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteMainCiRunsBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("updated_at <=");
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await deleteMainCiRunsBefore(cutoff, sql)).toBe(2);
   });
 });
