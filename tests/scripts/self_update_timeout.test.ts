@@ -40,6 +40,7 @@ const WRAPPERS = [
   "readDeployedSha(",
   "setDeployedSha(",
   "recordSuccessDeployment(",
+  "recordFailedDeployment(",
 ];
 // `wmill.`のSDK呼び出しはすべて対象にする(`wmill.foo(`と`wmill.XxxService.foo(`)。
 // 例外は`wmill.JobService.`で、Console用workerの確認(`watchConsoleWorker`)が
@@ -100,7 +101,8 @@ describe("self_update timeout", () => {
       (HOST_ACTION_RECONCILE_LIMIT - 1) * resolveSites +
       2 * count(source, /readDeployedSha\(/g) +
       2 * count(source, /setDeployedSha\(/g) +
-      count(source, /recordSuccessDeployment\(/g);
+      count(source, /recordSuccessDeployment\(/g) +
+      count(source, /recordFailedDeployment\(/g);
 
     expect(sites).toBe(SELF_UPDATE_BOUNDED_CALL_COUNT);
   });

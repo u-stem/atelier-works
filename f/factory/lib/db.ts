@@ -1445,9 +1445,7 @@ export function isMissingDeploymentErrorColumnError(err: unknown): boolean {
   if (Reflect.get(err, "code") === "42703") return true;
   if (DEPLOYMENT_ERROR_COLUMN_PATTERN.test(err.message)) return true;
   const body: unknown = Reflect.get(err, "body");
-  return (
-    typeof body === "string" && DEPLOYMENT_ERROR_COLUMN_PATTERN.test(body)
-  );
+  return typeof body === "string" && DEPLOYMENT_ERROR_COLUMN_PATTERN.test(body);
 }
 
 /**
