@@ -95,7 +95,7 @@ type Setup = {
   transitionFails?: boolean;
   /** このコミットより新しいコミットが、既に通っているか。同じ回で通した行とは別に与える。 */
   newerPassed?: boolean;
-  /** このコミットより新しい行を、記録済みか。 */
+  /** このコミットより新しい行で、判定待ちか失敗のものを、記録済みか。 */
   hasNewer?: boolean;
   /** `now`の呼び出しごとに進める時間(ミリ秒)。経過時間の予算を試すのに使う。 */
   clockStepMs?: number;
@@ -180,7 +180,7 @@ function harness(setup: Setup = {}): Harness {
         )
       );
     },
-    hasNewerRow: async (_owner, _repo, at, id) => {
+    hasNewerUnsettledOrFailedRow: async (_owner, _repo, at, id) => {
       newerQueries.push({ kind: "any", id, at });
       return setup.hasNewer ?? false;
     },
@@ -896,7 +896,7 @@ describe("passed commits", () => {
     });
   });
 
-  test("does not resolve the failures when a newer commit exists", async () => {
+  test("does not resolve the failures while a newer commit is pending or failed", async () => {
     const h = harness({
       pending: [row({ run_created_at: minutesBefore(20) })],
       bySha: { [SHA_A]: [run()] },
@@ -1157,5 +1157,70 @@ describe("time budget", () => {
     });
     await runMainCiWatch([TARGET], h.deps);
     expect(h.transitions).toHaveLength(2);
+  });
+});
+
+describe("budget while applying", () => {
+  // 開始(0)、発見の確認(70秒)、読み取りの確認(140秒)の後、適用の確認(210秒)で予算を超える。
+  const STEP_MS = 70_000;
+
+  test("leaves a failed commit to the next run without a notice", async () => {
+    const h = harness({
+      clockStepMs: STEP_MS,
+      pending: [row()],
+      bySha: { [SHA_A]: [FAILING_RUN] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect([h.notices, h.discord]).toEqual([[], []]);
+  });
+
+  test("leaves a failed commit pending when the budget is over", async () => {
+    const h = harness({
+      clockStepMs: STEP_MS,
+      pending: [row()],
+      bySha: { [SHA_A]: [FAILING_RUN] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("still applies a passed commit when the budget is over", async () => {
+    const h = harness({
+      clockStepMs: STEP_MS,
+      pending: [row()],
+      bySha: { [SHA_A]: [run()] },
+    });
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to.state).toBe("passed");
+  });
+});
+
+describe("old failures", () => {
+  const STALE_MS = 24 * 60 * 60_000;
+  const failedRow = (ageMs: number) =>
+    harness({
+      pending: [row({ first_seen_at: new Date(NOW.getTime() - ageMs) })],
+      bySha: { [SHA_A]: [FAILING_RUN] },
+    });
+
+  test("a failure of a row first seen 25 hours ago sends no notice", async () => {
+    const h = failedRow(STALE_MS + 60 * 60_000);
+    await runMainCiWatch([TARGET], h.deps);
+    expect([h.notices, h.discord]).toEqual([[], []]);
+  });
+
+  test("a failure of a row first seen 25 hours ago is still recorded as failed", async () => {
+    const h = failedRow(STALE_MS + 60 * 60_000);
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.transitions[0]?.to).toMatchObject({
+      state: "failed",
+      summary: expect.stringContaining("evil"),
+    });
+  });
+
+  test("a failure of a row first seen 23 hours ago is notified", async () => {
+    const h = failedRow(STALE_MS - 60 * 60_000);
+    await runMainCiWatch([TARGET], h.deps);
+    expect(h.notices).toHaveLength(1);
   });
 });

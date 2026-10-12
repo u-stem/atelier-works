@@ -45,17 +45,33 @@ export const PENDING_BATCH_LIMIT = 200;
 
 /**
  * 実行を読めないという永続的な条件のまま、最初に見てからこの時間がたったコミットは`expired`にする。
- * 永続的な条件は、`head_sha`を指定した読み取りだけが読み切れない(実行が多すぎる、権限が無い)場合と、
- * リポジトリが対象から外れた場合である。rate limit、サーバーの一時的な失敗、発見の失敗は数えない。
+ * 永続的な条件は、次の2つである。
+ * - `head_sha`を指定した読み取りが、実行の多さ(`WorkflowRunsIncompleteError`)か403・404で、読み切れない。
+ * - リポジトリが対象から外れた。
+ * 発見の403・404、rate limit、サーバーの一時的な失敗は、一時的な条件なので数えない。
  * 読めないまま判定を待ち続けても、人に知らせる手段が無いので、行を終わらせる。
  */
 export const UNREADABLE_EXPIRES_AFTER_MS = 24 * 60 * 60_000;
 
 /**
- * 1回の実行で、新しい読み取りを始めてよい経過時間。超えたら、残りは次の回に回す。
- * scriptのtimeout(600秒)の前に、確実に終わらせるための余裕である。
- * 最後に始めた読み取りが、3ページそれぞれでrate limitを最大120秒待っても(360秒)、
- * 後続のDiscordの待ち(最大30秒)を足して、timeoutに収まる。
+ * 最初に見てからこの時間がたった行の失敗は、通知しない。
+ * 権限が長く戻らなかった後に判定が再開したときに、止まっていた間の古い失敗を一度に通知しないためである。
+ * 失敗は`failed`として記録し、要約も残す。
+ */
+export const STALE_FAILURE_AFTER_MS = 24 * 60 * 60_000;
+
+/**
+ * 1回の実行で、新しい読み取りと、失敗の確定(通知の登録とDiscord)を始めてよい経過時間。
+ * 超えたら、残りは次の回に回す。通ったコミットの確定など、軽い適用は予算の対象にしない。
+ * scriptのtimeout(600秒)に収める見積もりは次のとおりである。
+ * - 1回の要求の上限は、ghの実行60秒、5xxの再送(待ち2秒と実行60秒)、rate limitの待ち120秒を足したもの。
+ *   rate limitの待ちの後の再試行が再び拒まれたら、読み取りをやめる。
+ * - 予算の直前に始めた読み取りは、1ページなら終わりまで約240秒かかりうる。
+ *   実行が100件を超えるコミットは最大3ページで、その3倍になる。
+ * - 適用の段では、予算を超えると失敗の確定を始めない。予算の直前に始めたDiscordは、待ちが最大30秒である。
+ * 実行が100件以下のコミットだけなら、180秒に240秒を足した約420秒でtimeoutに収まる。
+ * 3ページ読むコミットが続けてrate limitを待つ場合は、timeoutを超えうる。
+ * そのときはjobが打ち切られるが、行ごとの更新は冪等なので、確定しなかった行は次の回に残る。
  */
 export const RUN_BUDGET_MS = 180_000;
 
@@ -170,8 +186,11 @@ export type MainCiWatchDeps = {
     runCreatedAt: Date,
     id: number,
   ) => Promise<boolean>;
-  /** 並びの鍵が`(runCreatedAt, id)`より後のコミットを、状態を問わず記録済みか。 */
-  readonly hasNewerRow: (
+  /**
+   * 並びの鍵が`(runCreatedAt, id)`より後のコミットで、判定待ちか失敗のものを記録済みか。
+   * 通ったコミットが失敗の通知を解決してよいかの判断に使う。
+   */
+  readonly hasNewerUnsettledOrFailedRow: (
     owner: string,
     repo: string,
     runCreatedAt: Date,
@@ -559,6 +578,14 @@ async function applyJudgement(
     return;
   }
   if (judgement.kind === "failed") {
+    // 通知の登録とDiscordは、予算の後に始めない。状態を変えずに、次の回に回す。
+    if (overBudget(context)) {
+      deps.log.warn("main ci failure left to the next run by the time budget", {
+        repo: `${judgement.row.owner}/${judgement.row.repo}`,
+        sha: judgement.row.head_sha,
+      });
+      return;
+    }
     await settleFailed(context, judgement.row, judgement.runs);
     return;
   }
@@ -598,14 +625,15 @@ async function settleFailed(
   const prevFailed = isPrevFailed(previous === null ? null : previous.state);
   const summary = buildFailureSummary(runs, prevFailed);
   const runUrl = pickRunUrl(row, runs);
-  // より新しいコミットが既に通っているなら、この失敗は直った後に分かったことなので知らせない。
-  const superseded = await deps.hasNewerPassed(
-    row.owner,
-    row.repo,
-    own,
-    row.id,
-  );
-  if (!superseded) {
+  // 次の2つの失敗は、知らせても人の行動につながらないので、通知を出さずに確定する。
+  // - 最初に見てから長くたった失敗。権限が戻らなかった間に溜まった古い失敗である。
+  // - より新しいコミットが既に通っている失敗。直った後に分かったことである。
+  const stale =
+    context.now.getTime() - row.first_seen_at.getTime() >=
+    STALE_FAILURE_AFTER_MS;
+  const silent =
+    stale || (await deps.hasNewerPassed(row.owner, row.repo, own, row.id));
+  if (!silent) {
     // 通知を先に登録する。状態の更新が先に成功して通知が失敗すると、通知が永久に出ないため。
     const noticeId = await deps.addNotice({
       kind: MAIN_CI_FAILED_KIND,
@@ -640,17 +668,20 @@ async function settleFailed(
       repo: `${row.owner}/${row.repo}`,
       sha: row.head_sha,
       prev_failed: prevFailed,
-      superseded,
+      silent,
     });
   }
 }
 
 async function settlePassed(context: Context, row: MainCiRun): Promise<void> {
   const { deps, counters } = context;
-  // より新しいコミットを記録済みなら、その結果を待つ。古いコミットが遅れて通っても、新しい失敗は解決しない。
+  // より新しいコミットが判定待ちか失敗なら、その結果を待つ。古いコミットが遅れて通っても、新しい失敗は解決しない。
+  // 新しいコミットが期限切れ、実行なし、基準の記録のどれかなら、解決を妨げない。
   // 解決は冪等なので、状態の更新より先に行う。更新に失敗した回は、次の回に解決をやり直せる。
   const own = row.run_created_at ?? row.first_seen_at;
-  if (!(await deps.hasNewerRow(row.owner, row.repo, own, row.id))) {
+  if (
+    !(await deps.hasNewerUnsettledOrFailedRow(row.owner, row.repo, own, row.id))
+  ) {
     await deps.resolveNotices(
       MAIN_CI_FAILED_KIND,
       noticePrefix(row.owner, row.repo),

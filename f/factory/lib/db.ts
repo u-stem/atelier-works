@@ -3338,10 +3338,12 @@ export async function hasPassedMainCiRunAfter(
 }
 
 /**
- * 並びの鍵が`(runCreatedAt, id)`より後の行が、そのリポジトリにあるか。状態は問わない。
- * 通ったコミットが、失敗の通知を解決してよいか(より新しいコミットを記録していないか)の判断に使う。
+ * 並びの鍵が`(runCreatedAt, id)`より後で、判定待ち(`pending`)か失敗(`failed`)の行が、そのリポジトリにあるか。
+ * `passed`、`expired`、`no_ci`、`baseline`の新しい行は数えない。
+ * 通ったコミットが、失敗の通知を解決してよいかの判断に使う。
+ * 新しい行が判定待ちか失敗なら、その結果が出るまで、古い失敗は解決しない。
  */
-export async function hasNewerMainCiRun(
+export async function hasNewerUnsettledOrFailedMainCiRun(
   owner: string,
   repo: string,
   runCreatedAt: Date,
@@ -3352,7 +3354,7 @@ export async function hasNewerMainCiRun(
   assertGitHubName(repo);
   const rows = await sql`
     SELECT id FROM factory.main_ci_runs
-    WHERE owner = ${owner} AND repo = ${repo}
+    WHERE owner = ${owner} AND repo = ${repo} AND state IN ('pending', 'failed')
       AND (COALESCE(run_created_at, first_seen_at), id) >
         (${runCreatedAt.toISOString()}::timestamptz, ${id}::bigint)
     LIMIT 1
