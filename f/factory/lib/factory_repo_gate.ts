@@ -1,5 +1,6 @@
 // `factory_repo_id`を、`factory_repo`の取得の前にGitHubの現在のリポジトリIDと照合する。
-// Factory自身のcloneを使うすべてのフローが、`ensureVerifiedFactoryClone`を通して取得する。
+// Factory自身のcloneの取得と更新は、すべて`ensureVerifiedFactoryClone`を通して行う。
+// 監査のスナップショットのworktreeが、self cloneに既にあるHEADのshaを取るfetchは、対象に含めない。
 // オーナーが改名して別の人がその名前を取得すると、名前のURLは別のリポジトリを指す。
 // その内容を、秘密値を持つworkspaceへ反映したり、Claudeに読ませたりしないための照合である。
 // I/Oは依存として受け取り、テストでは差し替える。

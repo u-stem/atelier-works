@@ -115,7 +115,7 @@ describe("noticeKindLabel", () => {
 
   test("translates the factory repo id mismatch notice kind", () => {
     expect(noticeKindLabel("factory_repo_id_mismatch")).toBe(
-      "自己更新の照合の失敗",
+      "Factory自身のリポジトリの照合の失敗",
     );
   });
 

@@ -1014,6 +1014,20 @@ describe("ensureFactoryClone", () => {
     expect(fake.calls).toEqual([]);
   });
 
+  test("runs no git command on a first clone when beforeUpdate throws", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => false,
+      lockFs: createInMemoryLockFs(),
+      beforeUpdate: () => Promise.reject(new Error("not verified")),
+    }).catch(() => undefined);
+    expect(fake.calls).toEqual([]);
+  });
+
   test("releases the lock when beforeUpdate throws", async () => {
     const lockFs = createInMemoryLockFs();
     await ensureFactoryClone({
@@ -6844,24 +6858,49 @@ describe("isReviewWorktreeOf", () => {
 });
 
 describe("git remote set-url as used by ensureFactoryClone", () => {
-  test("replaces the origin URL of a real repository", async () => {
+  // フックの中で動くとGIT_DIRなどが入るので、テスト用のリポジトリに漏らさない。
+  // グローバルとシステムのgit設定も読ませない。
+  function cleanGitEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined && !key.startsWith("GIT_")) {
+        env[key] = value;
+      }
+    }
+    env.GIT_CONFIG_GLOBAL = "/dev/null";
+    env.GIT_CONFIG_NOSYSTEM = "1";
+    return env;
+  }
+
+  /** gitを実行して標準出力を返す。終了コードが0でなければ投げる。 */
+  function git(cwd: string, args: string[]): string {
+    const result = Bun.spawnSync(["git", ...args], {
+      cwd,
+      env: cleanGitEnv(),
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `git ${args.join(" ")} failed: ${result.stderr.toString()}`,
+      );
+    }
+    return result.stdout.toString().trim();
+  }
+
+  test("replaces the origin URL of a real repository", () => {
     const dir = mkdtempSync(join(tmpdir(), "factory-clone-origin-"));
     try {
-      const git = (...args: string[]) =>
-        Bun.spawnSync(["git", "-C", dir, ...args]);
-      git("init", "-q");
-      git("remote", "add", "origin", "https://example.com/old/repo.git");
-      const result = git(
+      git(dir, ["init", "-q"]);
+      git(dir, ["remote", "add", "origin", "https://example.com/old/repo.git"]);
+      git(dir, [
         "remote",
         "set-url",
         "origin",
         "--",
         "https://example.com/new/repo.git",
+      ]);
+      expect(git(dir, ["config", "--get", "remote.origin.url"])).toBe(
+        "https://example.com/new/repo.git",
       );
-      expect([
-        result.exitCode,
-        git("config", "--get", "remote.origin.url").stdout.toString().trim(),
-      ]).toEqual([0, "https://example.com/new/repo.git"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
