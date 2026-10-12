@@ -76,8 +76,10 @@ const RAW_LOG_OMITTED_MARKER = "\n[... log middle omitted ...]\n";
  * 生のログが大きいとき、先頭と末尾だけを残し、間を省略の注記でつなぐ。
  * 行に分ける前に絞るのは、改行だけの巨大な入力で、行の配列のメモリを有界にするため。
  * 間にある`##[error]`の行は落ちる。
+ * 切り口がサロゲートペアの途中なら、片割れを捨てる。
+ * 後段の除去が対のないサロゲートを消すが、この関数の出力も整った文字列にする。
  */
-function capRawLog(raw: string): string {
+export function capRawLog(raw: string): string {
   if (raw.length <= RAW_LOG_HEAD_CHARS + RAW_LOG_TAIL_CHARS) return raw;
   const head = cutChars(raw, RAW_LOG_HEAD_CHARS);
   const tail = raw.slice(raw.length - RAW_LOG_TAIL_CHARS);
@@ -114,10 +116,13 @@ export function cleanLogText(raw: string): string {
 
 /**
  * 外部由来の名前(ジョブ名、step名)を、プロンプトに載せてよい1行にする。
- * 不可視文字を除き、空白を1つにまとめ、`sanitizeRunName`で60文字に切る。空なら`(unnamed)`。
+ * 不可視文字を除き、トークンの形の文字列を伏せ、空白を1つにまとめ、`sanitizeRunName`で60文字に切る。空なら`(unnamed)`。
+ * 伏せるのは切る前である。切り口にかかった秘密値の断片を残さないため。
  */
 export function sanitizeExternalName(raw: string): string {
-  return sanitizeRunName(cleanLogText(raw).replace(/\s+/g, " "));
+  return sanitizeRunName(
+    maskTokenFragments(cleanLogText(raw)).replace(/\s+/g, " "),
+  );
 }
 
 /**

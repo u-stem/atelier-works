@@ -6,9 +6,11 @@ import {
   CI_LOG_MAX_JOBS,
   CI_LOG_TOTAL_MAX_CHARS,
   type CiTextScanner,
+  capRawLog,
   cleanLogText,
   condenseJobLog,
   guardCiRoundText,
+  sanitizeExternalName,
   VolatileCiExcerpt,
   VolatileCiLog,
   VolatileCiPrompt,
@@ -252,11 +254,58 @@ describe("cleanLogText on a huge log", () => {
     expect(cleanLogText("a\nb")).toBe("a\nb");
   });
 
-  test("does not leave half of a surrogate pair where the middle was dropped", () => {
-    const out = cleanLogText("😀".repeat(1_000_000));
+  test("keeps the tail well-formed when it would start inside a surrogate pair", () => {
+    // 全体の長さが奇数なので、末尾の切り出しは絵文字の下位サロゲートから始まる。
+    const out = capRawLog(`${"😀".repeat(1_000_000)}x`);
+    expect(out.isWellFormed()).toBe(true);
+  });
+
+  test("keeps the head well-formed when it would end inside a surrogate pair", () => {
+    // 先頭の1文字の後に絵文字が続くので、先頭の切り出しは上位サロゲートの直後で終わる。
+    const out = capRawLog(`x${"😀".repeat(1_000_000)}`);
+    expect(out.isWellFormed()).toBe(true);
+  });
+
+  test("returns a well-formed result from cleanLogText for the same inputs", () => {
+    const out = cleanLogText(`x${"😀".repeat(1_000_000)}y`);
+    expect(out.isWellFormed()).toBe(true);
+  });
+});
+
+describe("sanitizeExternalName", () => {
+  test("masks a token-shaped string before the name is cut", () => {
+    const name = `Run curl -H "Authorization: token ghp_${"A".repeat(36)}"`;
+    expect(sanitizeExternalName(name)).not.toContain("ghp_");
+  });
+
+  test("leaves no fragment of the token in the cut name", () => {
+    const name = `Run curl -H "Authorization: token ghp_${"A".repeat(36)}"`;
+    expect(sanitizeExternalName(name)).not.toContain("AAAA");
+  });
+
+  test("keeps the rest of the name around the masked token", () => {
+    const name = `deploy with ghp_${"A".repeat(36)} now`;
+    expect(sanitizeExternalName(name)).toBe("deploy with *** now");
+  });
+
+  test("masks a token in a step name of an excerpt", async () => {
+    // 切り口の後ろに`ghp_AAAA`だけが残る長さ。`maskSecrets`は20字未満の断片を伏せない。
+    const step = `${"y".repeat(45)} token ghp_${"A".repeat(36)}`;
+    const outcome = await buildCiExcerpt(
+      [
+        {
+          name: "check",
+          failedSteps: [step],
+          log: "##[error]failed",
+        },
+      ],
+      { scan: cleanScanner },
+    );
     expect(
-      /\ud83d\ude00\n\[\.\.\. log middle omitted \.\.\.\]\n\ude00/.test(out),
-    ).toBe(false);
+      outcome.kind === "clean"
+        ? outcome.excerpt.read()[0]?.failedSteps[0]
+        : "ghp_",
+    ).not.toContain("ghp_");
   });
 });
 
@@ -608,11 +657,14 @@ describe("buildCiExcerpt", () => {
   });
 
   test("continues with the masked excerpt when only a prefix fragment is cut", async () => {
-    const log = `${"x".repeat(285)} ghp_${"A".repeat(5)} tail`;
+    // 306字の行は300字の切り口にかかり、伏せ字が無ければ`ghp_AAAAAAAA`が残る。
+    const log = `${"x".repeat(290)} ghp_${"A".repeat(10)}`;
     const outcome = await buildCiExcerpt([job({ log })], {
       scan: cleanScanner,
     });
-    expect(outcome.kind).toBe("clean");
+    expect(
+      outcome.kind === "clean" ? outcome.excerpt.read()[0]?.text : "ghp_",
+    ).not.toContain("ghp_");
   });
 
   test("scans the excerpt again after the full text was clean", async () => {

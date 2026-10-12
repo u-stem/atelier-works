@@ -300,7 +300,8 @@ ActionsをRead-onlyにするのは、次の3つを読むためである。
 
 - `watch_main_ci`が読む、対象リポジトリの既定のブランチのActionsの実行
 - `watch_pr_ci`が読む、FactoryのPRのheadのActionsの実行
-- CI回の部品が読む、失敗したジョブのログ本文(`getWorkflowJobLog`)。詳細は[CIの失敗を直す部品の仕様](internals/ci-fix.md)にある
+- CI回の部品(`getWorkflowJobLog`)が読む、失敗したジョブのログ本文。
+  詳細は[CIの失敗を直す部品の仕様](internals/ci-fix.md)にある。
 
 書き込みの権限は付けない。実行の再実行や取り消しをさせないためである。
 権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で、`watch_pr_ci`が要対応の通知`pr_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのCIの失敗に気づけない。
@@ -1888,6 +1889,8 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
 - 切り口にかかった秘密値の一部は、トークンの形の文字列を切る前に伏せることで緩和している。
   この緩和が効くのは、接頭辞が分かる形の秘密値に限る。
   全文のgitleaksの検査は、伏せる前に行うので、本物の秘密値はここで止まる。
+- 生のログの先頭と末尾を残す境目では、秘密値が分断される。
+  分断された後半は接頭辞を持たないので、伏せられず、gitleaksにも検出されない可能性がある。
 - base64などで符号化された秘密値と、複数の行に分割された秘密値は、gitleaksと`maskSecrets`で検出できない可能性がある。
   Actionsが自動で伏せる範囲に頼る部分が残る。
 - 抑制の記述の検出は文字列の照合なので、別の書き方で検査を無効にする変更は検出できない。
@@ -1898,6 +1901,9 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
 - 拒否した安全装置が直接importするモジュールのうち、`db`、`discord`、`poll_support`、`implement_*`などの共有モジュールは、拒否せずに受け入れている。
   CI回のClaudeが、PRがすでに変更していればこれらを書き換えられる。
   受け入れた一覧と理由は、テストが固定する。
+- ルートの`AGENTS.md`、`CLAUDE.md`、`AGENTS.wmill.md`、`.gitignore`と、安全装置以外の`*.script.yaml`は、拒否の一覧に無い。
+  PRがすでに変更していれば、CI回のClaudeが書き換えられる。
+  影響は、マージの後か、人の対話セッションで読まれたときに現れる。
 - `github.ts`は、CI回のClaudeが変更できない。
   Factory自身の修正PRのCIが`github.ts`の不具合で落ちても、CI回は直せずに人へ渡す。
 
