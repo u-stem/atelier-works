@@ -54,13 +54,6 @@ const CASES: {
     nextAction: MANUAL_ACTION,
   },
   {
-    label: "unverified inputs",
-    reason: dependabotReason("unverifiedInputs", "changelog"),
-    described:
-      "dependabotの更新の影響調査に必要な入力が、一部確認できませんでした(changelog)",
-    nextAction: MANUAL_ACTION,
-  },
-  {
     label: "impact with supply chain concerns",
     reason: dependabotReason(
       "impact",

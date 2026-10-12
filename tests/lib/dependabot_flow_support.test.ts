@@ -1577,7 +1577,6 @@ describe("dependabot reasons", () => {
     ["collect", "dependabot collect: "],
     ["installFailed", "dependabot install failed: "],
     ["localCheck", "dependabot local check: "],
-    ["unverifiedInputs", "dependabot unverified inputs: "],
     ["impact", "dependabot impact: "],
     ["assess", "dependabot assess: "],
     ["finish", "dependabot finish: "],

@@ -12,6 +12,7 @@ import type {
 import {
   DEPENDABOT_REASON_PREFIX,
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
+  dependabotReason,
   POST_INSTALL_STATUS_ARGV,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
 import {
@@ -212,6 +213,7 @@ const CONFIG: DependabotAssessConfig = {
   claude_timeout_sec: 1800,
   max_turns: 40,
   max_budget_usd_per_run: 5,
+  dependabot_enabled: true,
 };
 
 const CLEAN_STATUS = "!! node_modules/\0!! console/node_modules/\0";
@@ -537,6 +539,25 @@ describe("runDependabotAssess before claude", () => {
 
   test("throws on a malformed prepare result", async () => {
     await expect(runWith(harness(), { proceed: true })).rejects.toThrow();
+  });
+
+  test("hands the update to a human when dependabot is disabled", async () => {
+    const result = await runWith(harness(), proceeding(), {
+      ...CONFIG,
+      dependabot_enabled: false,
+    });
+
+    expect(reasonOf(result)).toBe(
+      dependabotReason("assess", "dependabot processing is disabled"),
+    );
+  });
+
+  test("does not start claude when dependabot is disabled", async () => {
+    const h = harness();
+
+    await runWith(h, proceeding(), { ...CONFIG, dependabot_enabled: false });
+
+    expect(h.claudeCalls).toHaveLength(0);
   });
 
   test("hands a time settings misfit to a human", async () => {

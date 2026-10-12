@@ -441,6 +441,7 @@ export type DependabotAssessConfig = Pick<
   | "claude_timeout_sec"
   | "max_turns"
   | "max_budget_usd_per_run"
+  | "dependabot_enabled"
 >;
 
 /** `runDependabotAssess`が使うI/O。テストでは偽物に差し替える。 */
@@ -560,6 +561,13 @@ export async function runDependabotAssess(
     input,
     reason,
   });
+
+  // 準備の後に無効にされたら、Claudeを起動しない。終了のステップが無効を見て、通知せずに取り消す。
+  if (!config.dependabot_enabled) {
+    return needsHuman(
+      dependabotReason("assess", "dependabot processing is disabled"),
+    );
+  }
 
   // 最悪の所要時間がflow.yamlのtimeoutに収まらない設定では、Windmillが先にステップを打ち切るため、起動しない。
   const misfit = dependabotTimeoutMisfit(config);

@@ -3654,15 +3654,6 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
       `dependabotの更新を、インストールした後の確認で止めました(${m[1]})`,
     nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
   },
-  {
-    pattern: reasonPattern(
-      DEPENDABOT_REASON_PREFIX.unverifiedInputs,
-      "([\\s\\S]+)$",
-    ),
-    describe: (m) =>
-      `dependabotの更新の影響調査に必要な入力が、一部確認できませんでした(${m[1]})`,
-    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
-  },
   // `decideImpactOutcome`が返す2つの理由は、件数を訳に含める。
   {
     pattern: reasonPattern(

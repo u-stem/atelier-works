@@ -1062,11 +1062,20 @@ export async function main(
       updateStatus: (id, from, to, note) =>
         updateStatusIfCurrent(id, from, to, note),
       notify: async (event) => {
-        await notifyBestEffort(
-          await wmill.getVariable("f/factory/discord_webhook_url"),
-          event,
-          log,
-        );
+        // 通知は状態を記録した後に送るので、webhookを読めなくてもステップを失敗させない。
+        try {
+          await notifyBestEffort(
+            await wmill.getVariable("f/factory/discord_webhook_url"),
+            event,
+            log,
+          );
+        } catch (error) {
+          log.warn("failed to read the discord webhook url", {
+            error: maskSecrets(
+              error instanceof Error ? error.message : String(error),
+            ),
+          });
+        }
       },
       warn: (message, fields) => log.warn(message, fields),
     },
