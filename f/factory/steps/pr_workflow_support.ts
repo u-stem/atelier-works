@@ -16,6 +16,7 @@ import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import {
   type GhClient,
   getBranchProtected,
+  getBranchRuleCount,
   isOwnPost,
   type PrReview,
   type ReviewThread,
@@ -886,12 +887,16 @@ export type PrFixSafetyGuardInput = {
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
   readonly draft: boolean;
+  readonly autoMergeEnabled: boolean;
   /** 読まなかったときは`null`。openで同一リポジトリのdraftでないPRに`null`が来たら止める。 */
   readonly headBranch: PrFixHeadBranchState | null;
 };
 
 export type PrFixHeadBranchState = {
+  /** branches APIの`protected`。 */
   readonly headProtected: boolean;
+  /** headブランチに効くrulesetの規則が1件以上ある。globで対象を指定したrulesetも含む。 */
+  readonly headHasRules: boolean;
   readonly headIsDefaultBranch: boolean;
 };
 
@@ -917,7 +922,8 @@ export function shouldReadPrFixHeadState(
  * PRのheadブランチが保護ブランチか、リポジトリのデフォルトブランチかを読む。
  * pr_fixがpushするのはheadブランチなので、baseの保護は見ない。
  * mainを保護するruleset(対象は既定のブランチ)は`protected: true`として返ることを確かめた。
- * globで対象を指定するrulesetなどは確かめていない。
+ * globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていないので、
+ * ブランチに効くrulesetの規則も別に読み、1件でもあれば保護として扱う。
  * 呼び出し側は、`shouldReadPrFixHeadState`が真のPRにだけ使う。
  * 読めなければ例外を投げる。
  */
@@ -928,15 +934,22 @@ export async function fetchPrFixHeadBranchState(
   headRef: string,
 ): Promise<PrFixHeadBranchState> {
   const headProtected = await getBranchProtected(client, owner, repo, headRef);
+  const ruleCount = await getBranchRuleCount(client, owner, repo, headRef);
   const defaultBranch = await getDefaultBranch(client, owner, repo);
-  return { headProtected, headIsDefaultBranch: headRef === defaultBranch };
+  return {
+    headProtected,
+    headHasRules: ruleCount > 0,
+    headIsDefaultBranch: headRef === defaultBranch,
+  };
 }
 
 /**
- * 修正を試みる前の安全のための関門を、open、fork、draft、headの状態、
- * デフォルトブランチ、保護ブランチの順に判定する。
+ * 修正を試みる前の安全のための関門を、open、fork、draft、auto-merge、
+ * headの状態、デフォルトブランチ、保護ブランチの順に判定する。
  * PRがopenであること、head.repoとbase.repoが同じであること(forkへpushしない)、
- * draftでないこと、headブランチが保護ブランチでもデフォルトブランチでもないこと。
+ * draftでないこと、auto-mergeが有効でないこと、
+ * headブランチが保護ブランチ(rulesetが効くブランチを含む)でもデフォルトブランチでもないこと。
+ * auto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマージされうる。
  * 読めなければ`fetchPrFixHeadBranchState`が例外を投げるので、`null`は通常は届かない。
  * `null`の分岐は、呼び出し側が読み忘れたときに備える多層防御である。
  * worktreeを作る前、Claudeを実行する前に確かめる。
@@ -959,6 +972,9 @@ export function evaluatePrFixSafetyGuards(
   if (input.draft) {
     return { ok: false, reason: "pull request is a draft" };
   }
+  if (input.autoMergeEnabled) {
+    return { ok: false, reason: "pull request has auto-merge enabled" };
+  }
   // 読み忘れても通さない多層防御。通常は`fetchPrFixHeadBranchState`の例外が先に出る。
   if (input.headBranch === null) {
     return { ok: false, reason: "head branch state is unavailable" };
@@ -967,7 +983,7 @@ export function evaluatePrFixSafetyGuards(
   if (input.headBranch.headIsDefaultBranch) {
     return { ok: false, reason: "head branch is the default branch" };
   }
-  if (input.headBranch.headProtected) {
+  if (input.headBranch.headProtected || input.headBranch.headHasRules) {
     return { ok: false, reason: "head branch is protected" };
   }
   return { ok: true };
@@ -3618,6 +3634,12 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () => "headブランチが保護されています",
     nextAction: () =>
       "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+  },
+  {
+    pattern: /^pull request has auto-merge enabled$/,
+    describe: () => "PRのauto-mergeが有効です",
+    nextAction: () =>
+      "PRのauto-mergeを無効にしてから、あらためて`factory:fix`ラベルを付けてください",
   },
   {
     pattern: /^head branch state is unavailable$/,

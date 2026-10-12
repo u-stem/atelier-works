@@ -1682,28 +1682,32 @@ gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し
 
 ### PRの状態とheadの確認
 
-準備のステップで、PRについて次の6点を確かめる。
+準備のステップで、PRについて次の7点を確かめる。
 
 - openである。
 - forkからでない。
 - draftでない。
+- auto-mergeが有効でない。
 - headのブランチの状態を読める。
 - headのブランチがリポジトリのデフォルトブランチでない。
 - headのブランチが保護ブランチでない。
 
 状態を読めない場合を除き、通らなければ、worktreeを作らずにブロック(`blocked`)で止める。
 forkのブランチ、保護ブランチ、デフォルトブランチにはFactoryがpushしてはならず、draftのPRは作者がまだ作業しているためである。
+auto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマージされうるので、有効なPRは止める。
 修正でpushするのはheadのブランチで、baseではない。
 そのため、baseが保護されていても、headが普通のブランチなら通る。
 保護の有無は、GitHubのbranches APIの`protected`で読む。
 `main`を保護するruleset(対象は既定のブランチ)は、`protected: true`として返ることを確かめた。
-globで対象を指定するrulesetなどは確かめていないので、`protected`に反映されるかは分からない。
+globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていない。
+そのため、`GET repos/{owner}/{repo}/rules/branches/{branch}`でheadのブランチに効くrulesetの規則も読み、1件でもあれば保護ブランチとして扱う。
 headのブランチの状態を読めなかったときは、例外になって作業項目が失敗(`failed`)になり、`job_failed`で通知する。
 どの場合も、worktreeを作る前に止まる。
 
-残るリスクとして、PRのauto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマージされうる。
-確認した時点では`allow_auto_merge`が`false`なので、起こらない。
-この設定が変わると、このリスクは現実になる。
+残るリスクとして、準備からpushまでの間に、PRのauto-mergeを有効にされたり、headのブランチを保護されたりする窓が残る。
+pushの直前に確かめ直すのはheadのshaだけで、auto-mergeと保護は読み直さないためである。
+窓は修正の実行時間ほどの長さになる。
+auto-mergeの有効化にもGitHubの書き込み権限が要るので、受け入れる。
 
 pushの直前には、PRのheadが準備のときから変わっていないことだけを確かめ直す。
 変わっていれば、pushせずにブロックで止める。

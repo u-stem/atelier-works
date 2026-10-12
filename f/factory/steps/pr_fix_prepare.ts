@@ -242,6 +242,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     headRepoFullName: pr.headRepoFullName,
     baseRepoFullName: pr.baseRepoFullName,
     draft: pr.draft,
+    autoMergeEnabled: pr.autoMergeEnabled,
     headBranch,
   });
   if (!safety.ok) {

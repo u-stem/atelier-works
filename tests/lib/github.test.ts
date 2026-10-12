@@ -22,6 +22,7 @@ import {
   GitHubRateLimitError,
   getAccountId,
   getBranchProtected,
+  getBranchRuleCount,
   getFileAtRef,
   getIssue,
   getLabelerLogin,
@@ -2965,7 +2966,60 @@ describe("getPr", () => {
       mergeableState: "clean",
       authorLogin: "alice",
       authorType: "User",
+      autoMergeEnabled: false,
     });
+  });
+
+  test("reports auto-merge as enabled when auto_merge is an object", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 15,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        auto_merge: { merge_method: "squash" },
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      15,
+    );
+    expect(pr.autoMergeEnabled).toBe(true);
+  });
+
+  test("reports auto-merge as disabled when auto_merge is null", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 16,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        auto_merge: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      16,
+    );
+    expect(pr.autoMergeEnabled).toBe(false);
   });
 
   test("keeps mergeable null while GitHub has not computed it", async () => {
@@ -3548,6 +3602,57 @@ describe("getBranchProtected", () => {
       "main",
     );
     expect(protectedFlag).toBe(false);
+  });
+});
+
+describe("getBranchRuleCount", () => {
+  test("returns the number of rules that apply to the branch", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ type: "deletion" }, { type: "pull_request" }]),
+    ]);
+    const count = await getBranchRuleCount(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(count).toBe(2);
+  });
+
+  test("returns 0 when no rule applies", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    const count = await getBranchRuleCount(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(count).toBe(0);
+  });
+
+  test("encodes the branch name in the endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await getBranchRuleCount(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(fake.calls[0]?.argv[2]).toBe(
+      "repos/acme/widgets/rules/branches/feature%2Fx",
+    );
+  });
+
+  test("throws when the response is not an array", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ message: "x" })]);
+    await expect(
+      getBranchRuleCount(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "main",
+      ),
+    ).rejects.toThrow("unexpected response shape");
   });
 });
 

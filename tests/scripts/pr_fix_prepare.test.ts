@@ -33,7 +33,12 @@ const SAFE_INPUT = {
   headRepoFullName: "octo-owner/atelier-works",
   baseRepoFullName: "octo-owner/atelier-works",
   draft: false,
-  headBranch: { headProtected: false, headIsDefaultBranch: false },
+  autoMergeEnabled: false,
+  headBranch: {
+    headProtected: false,
+    headHasRules: false,
+    headIsDefaultBranch: false,
+  },
 };
 
 describe("evaluatePrFixSafetyGuards", () => {
@@ -70,7 +75,11 @@ describe("evaluatePrFixSafetyGuards", () => {
   test("fails when the head branch is protected", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      headBranch: { headProtected: true, headIsDefaultBranch: false },
+      headBranch: {
+        headProtected: true,
+        headHasRules: false,
+        headIsDefaultBranch: false,
+      },
     });
     expect(!result.ok && result.reason).toBe("head branch is protected");
   });
@@ -78,10 +87,56 @@ describe("evaluatePrFixSafetyGuards", () => {
   test("fails when the head branch is the default branch", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      headBranch: { headProtected: false, headIsDefaultBranch: true },
+      headBranch: {
+        headProtected: false,
+        headHasRules: false,
+        headIsDefaultBranch: true,
+      },
     });
     expect(!result.ok && result.reason).toBe(
       "head branch is the default branch",
+    );
+  });
+
+  test("fails when a ruleset applies to the head branch", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: {
+        headProtected: false,
+        headHasRules: true,
+        headIsDefaultBranch: false,
+      },
+    });
+    expect(!result.ok && result.reason).toBe("head branch is protected");
+  });
+
+  test("fails when auto-merge is enabled on the PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      autoMergeEnabled: true,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "pull request has auto-merge enabled",
+    );
+  });
+
+  test("reports the draft reason before the auto-merge reason", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      draft: true,
+      autoMergeEnabled: true,
+    });
+    expect(!result.ok && result.reason).toBe("pull request is a draft");
+  });
+
+  test("reports the auto-merge reason before the unavailable state", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      autoMergeEnabled: true,
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "pull request has auto-merge enabled",
     );
   });
 
@@ -116,7 +171,11 @@ describe("evaluatePrFixSafetyGuards", () => {
   test("reports the default-branch reason when the default branch is also protected", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      headBranch: { headProtected: true, headIsDefaultBranch: true },
+      headBranch: {
+        headProtected: true,
+        headHasRules: false,
+        headIsDefaultBranch: true,
+      },
     });
     expect(!result.ok && result.reason).toBe(
       "head branch is the default branch",
@@ -135,13 +194,16 @@ describe("evaluatePrFixSafetyGuards", () => {
 
 // リポジトリのAPIの応答を、問い合わせ先のendpointごとに返す偽のコマンド実行。
 // 保護されたbase(`main`)向けのPRのheadが、保護されていない普通のブランチである状況を作る。
-function createBranchApiRunner(headProtected: boolean) {
+function createBranchApiRunner(headProtected: boolean, headRules = 0) {
   const endpoints: string[] = [];
   const run: CommandRunner = async (argv) => {
     const endpoint = argv[2] ?? "";
     endpoints.push(endpoint);
     if (endpoint === "repos/acme/widgets") {
       return ghApiOk({ default_branch: "main" });
+    }
+    if (endpoint.startsWith("repos/acme/widgets/rules/branches/")) {
+      return ghApiOk(Array.from({ length: headRules }, () => ({ type: "x" })));
     }
     if (endpoint === "repos/acme/widgets/branches/main") {
       return ghApiOk({ protected: true });
@@ -183,6 +245,41 @@ describe("fetchPrFixHeadBranchState", () => {
       "feature/x",
     );
     expect(state.headProtected).toBe(true);
+  });
+
+  test("reads the rules that apply to the head branch", async () => {
+    const api = createBranchApiRunner(false);
+    await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(api.endpoints).toContain(
+      "repos/acme/widgets/rules/branches/feature%2Fx",
+    );
+  });
+
+  test("reports a head branch that a ruleset applies to", async () => {
+    const api = createBranchApiRunner(false, 1);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "release/*",
+    );
+    expect(state.headHasRules).toBe(true);
+  });
+
+  test("reports a head branch that no ruleset applies to", async () => {
+    const api = createBranchApiRunner(false, 0);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(state.headHasRules).toBe(false);
   });
 
   test("reports a head branch that is the default branch", async () => {
@@ -480,6 +577,12 @@ describe("describeReason", () => {
     );
   });
 
+  test("translates the auto-merge reason", () => {
+    expect(describeReason("pull request has auto-merge enabled")).toBe(
+      "PRのauto-mergeが有効です",
+    );
+  });
+
   test("translates a dynamic fix-round-exhausted reason, keeping the numbers", () => {
     expect(describeReason("fix_round 4 exceeds max_fix_rounds 3")).toBe(
       "fix_round 4がmax_fix_rounds 3を超えました",
@@ -573,6 +676,12 @@ describe("nextActionFor", () => {
   test("asks a person to fix the PR when the head branch is the default branch", () => {
     expect(nextActionFor("head branch is the default branch")).toBe(
       "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+    );
+  });
+
+  test("asks to disable auto-merge and relabel when auto-merge is enabled", () => {
+    expect(nextActionFor("pull request has auto-merge enabled")).toBe(
+      "PRのauto-mergeを無効にしてから、あらためて`factory:fix`ラベルを付けてください",
     );
   });
 
