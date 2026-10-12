@@ -230,16 +230,6 @@ export function groupRunsBySha(runs: readonly WorkflowRun[]): ShaGroup[] {
   );
 }
 
-/** 新しい順の`groups`で、`headSha`の1つ前(次に古い)コミットのshaを返す。無ければnull。 */
-export function previousShaOf(
-  groups: readonly ShaGroup[],
-  headSha: string,
-): string | null {
-  const index = groups.findIndex((group) => group.headSha === headSha);
-  if (index < 0) return null;
-  return groups[index + 1]?.headSha ?? null;
-}
-
 /** 一覧で見つけたコミットと、その最古の実行の作成時刻。 */
 export type CandidateSha = {
   readonly headSha: string;
@@ -260,9 +250,13 @@ export type PlannedSha = {
  *   一覧に残っていて、古い失敗を新しく通知するのを防ぐため。
  * それ以外の新しいコミットは`pending`で記録する。
  *
- * 返り値は、実行の作成時刻が古い順(同時刻は`headSha`順)に並べる。
- * 呼び出し側は、この順に記録する。途中で記録に失敗しても、記録済みの最新の実行より
- * 古い未記録のコミットが、次回に黙って`baseline`になることを避けるため。
+ * 返り値は、`baseline`を先に、`pending`を後に並べる。呼び出し側は、この順に記録する。
+ * - `baseline`は実行の作成時刻が新しい順に並べる。初回の観測の途中で記録に失敗しても、
+ *   最新のコミットが先に記録されて高水位線が上がるので、次の回は残りがすべて`baseline`になる。
+ *   古い側から記録すると、残りの既存コミットが`pending`になり、古い失敗を新しく通知してしまう。
+ * - `pending`は古い順に並べる。途中で記録に失敗しても、記録済みより古い未記録のコミットが
+ *   次の回に黙って`baseline`になることはない。
+ * 同時刻のコミットは`headSha`順にして、並びを決める。
  */
 export function planNewShas(
   candidates: readonly CandidateSha[],
@@ -270,22 +264,34 @@ export function planNewShas(
   repoHasRows: boolean,
   latestRunCreatedAt: Date | null,
 ): PlannedSha[] {
-  return candidates
+  const planned = candidates
     .filter((candidate) => !known.has(candidate.headSha))
+    .map(
+      (candidate): PlannedSha => ({
+        ...candidate,
+        state:
+          !repoHasRows ||
+          (latestRunCreatedAt !== null &&
+            candidate.runCreatedAt.getTime() < latestRunCreatedAt.getTime())
+            ? "baseline"
+            : "pending",
+      }),
+    );
+  const bySha = (a: PlannedSha, b: PlannedSha): number =>
+    a.headSha < b.headSha ? -1 : a.headSha > b.headSha ? 1 : 0;
+  const baselines = planned
+    .filter((item) => item.state === "baseline")
     .sort(
       (a, b) =>
-        a.runCreatedAt.getTime() - b.runCreatedAt.getTime() ||
-        (a.headSha < b.headSha ? -1 : a.headSha > b.headSha ? 1 : 0),
-    )
-    .map((candidate) => ({
-      ...candidate,
-      state:
-        !repoHasRows ||
-        (latestRunCreatedAt !== null &&
-          candidate.runCreatedAt.getTime() < latestRunCreatedAt.getTime())
-          ? "baseline"
-          : "pending",
-    }));
+        b.runCreatedAt.getTime() - a.runCreatedAt.getTime() || bySha(a, b),
+    );
+  const pendings = planned
+    .filter((item) => item.state === "pending")
+    .sort(
+      (a, b) =>
+        a.runCreatedAt.getTime() - b.runCreatedAt.getTime() || bySha(a, b),
+    );
+  return [...baselines, ...pendings];
 }
 
 /**

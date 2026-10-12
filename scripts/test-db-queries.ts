@@ -1637,6 +1637,43 @@ check(
     ciAfter.run_created_at?.toISOString() === "2026-10-12T00:00:00.000Z",
   ciAfter,
 );
+// 記録済みの run_created_at は、遷移と延期で書き換えない。
+const CI_SHA_H = "2".repeat(40);
+await recordMainCiRun(
+  {
+    ...CI_REPO,
+    head_sha: CI_SHA_H,
+    state: "pending",
+    run_created_at: new Date("2026-10-10T00:00:00Z"),
+  },
+  sql,
+);
+const ciHeld = (
+  await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_H], sql)
+)[0];
+if (ciHeld === undefined) throw new Error("main_ci_runs row is missing");
+await deferMainCiRun(
+  ciHeld.id,
+  {
+    nextCheckAt: new Date(Date.now() - 1000),
+    runCreatedAt: new Date("2026-10-11T00:00:00Z"),
+  },
+  sql,
+);
+await transitionMainCiRun(
+  ciHeld.id,
+  { ...ciSettled, runCreatedAt: new Date("2026-10-12T00:00:00Z") },
+  sql,
+);
+const ciHeldAfter = (
+  await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_H], sql)
+)[0];
+check(
+  "main_ci_runs: a recorded run time is not overwritten by a defer or a transition",
+  ciHeldAfter?.state === "failed" &&
+    ciHeldAfter.run_created_at?.toISOString() === "2026-10-10T00:00:00.000Z",
+  ciHeldAfter,
+);
 let ciRejectedSha = false;
 try {
   await recordMainCiRun(
@@ -1691,6 +1728,24 @@ check(
     ).length === 1,
   ciDeleted,
 );
+// 初回の観測の記録が最新のコミットだけで止まっても、高水位線はその最新の時刻まで上がる。
+const FIRST_REPO = { owner: "qdb", repo: "first" };
+await recordMainCiRun(
+  {
+    ...FIRST_REPO,
+    head_sha: CI_SHA_A,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main_ci_runs: recording only the newest baseline raises the watermark to it",
+  (
+    await latestMainCiRunCreatedAt(FIRST_REPO.owner, FIRST_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z",
+);
+
 // 掃除は、リポジトリごとの最新の行を残す。保持期間の後も、初回の観測に戻らない。
 const KEEP_REPO = { owner: "qdb", repo: "keep" };
 const CI_SHA_D = "d".repeat(40);

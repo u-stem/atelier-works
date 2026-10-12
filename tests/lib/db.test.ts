@@ -4586,10 +4586,12 @@ describe("transitionMainCiRun", () => {
     expect(calls[0]?.text).toMatch(/\? ::boolean[\s\S]*\? ::timestamptz/);
   });
 
-  test("keeps the recorded run time when none is given", async () => {
+  test("never overwrites a recorded run time", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
     await transitionMainCiRun(5, settled, sql);
-    expect(calls[0]?.text).toContain("COALESCE(");
+    expect(calls[0]?.text).toContain(
+      "run_created_at = COALESCE(run_created_at,",
+    );
   });
 });
 
@@ -4606,6 +4608,14 @@ describe("deferMainCiRun", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
     await deferMainCiRun(5, { nextCheckAt: later, runCreatedAt: null }, sql);
     expect(calls[0]?.values).toContain(later.toISOString());
+  });
+
+  test("never overwrites a recorded run time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await deferMainCiRun(5, { nextCheckAt: later, runCreatedAt: later }, sql);
+    expect(calls[0]?.text).toContain(
+      "run_created_at = COALESCE(run_created_at,",
+    );
   });
 
   test("returns false when the row had already left pending", async () => {

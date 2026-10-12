@@ -3224,7 +3224,7 @@ export type MainCiTransition = {
   readonly state: MainCiSettledState;
   readonly summary: string;
   readonly prevFailed: boolean;
-  /** 最も古い実行の作成時刻。nullなら記録済みの値を残す。 */
+  /** 最も古い実行の作成時刻。記録済みの値は書き換えず、未記録(null)の行にだけ入れる。 */
   readonly runCreatedAt: Date | null;
 };
 
@@ -3243,7 +3243,7 @@ export async function transitionMainCiRun(
   const rows = await sql`
     UPDATE factory.main_ci_runs
     SET state = ${to.state}, summary = ${to.summary}, prev_failed = ${to.prevFailed}::boolean,
-        run_created_at = COALESCE(${to.runCreatedAt?.toISOString() ?? null}::timestamptz, run_created_at),
+        run_created_at = COALESCE(run_created_at, ${to.runCreatedAt?.toISOString() ?? null}::timestamptz),
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'pending'
     RETURNING id
@@ -3253,7 +3253,7 @@ export async function transitionMainCiRun(
 
 export type MainCiDeferral = {
   readonly nextCheckAt: Date;
-  /** 最も古い実行の作成時刻。nullなら記録済みの値を残す。 */
+  /** 最も古い実行の作成時刻。記録済みの値は書き換えず、未記録(null)の行にだけ入れる。 */
   readonly runCreatedAt: Date | null;
 };
 
@@ -3270,7 +3270,7 @@ export async function deferMainCiRun(
   const rows = await sql`
     UPDATE factory.main_ci_runs
     SET next_check_at = ${deferral.nextCheckAt.toISOString()}::timestamptz,
-        run_created_at = COALESCE(${deferral.runCreatedAt?.toISOString() ?? null}::timestamptz, run_created_at),
+        run_created_at = COALESCE(run_created_at, ${deferral.runCreatedAt?.toISOString() ?? null}::timestamptz),
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'pending'
     RETURNING id

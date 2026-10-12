@@ -13,7 +13,6 @@ import {
   PENDING_EXPIRES_AFTER_MS,
   parseRunUrl,
   planNewShas,
-  previousShaOf,
   SETTLE_MIN_AGE_MS,
   sanitizeRunName,
   settle,
@@ -273,26 +272,6 @@ describe("groupRunsBySha", () => {
   });
 });
 
-describe("previousShaOf", () => {
-  const groups = groupRunsBySha([
-    run({ headSha: SHA_A, createdAt: minutesBefore(5) }),
-    run({ id: 2, headSha: SHA_B, createdAt: minutesBefore(20) }),
-    run({ id: 3, headSha: SHA_C, createdAt: minutesBefore(40) }),
-  ]);
-
-  test("returns the next older sha", () => {
-    expect(previousShaOf(groups, SHA_A)).toBe(SHA_B);
-  });
-
-  test("returns null for the oldest sha", () => {
-    expect(previousShaOf(groups, SHA_C)).toBeNull();
-  });
-
-  test("returns null for a sha that is not listed", () => {
-    expect(previousShaOf(groups, "d".repeat(40))).toBeNull();
-  });
-});
-
 describe("planNewShas", () => {
   const candidate = (headSha: string, minutes: number) => ({
     headSha,
@@ -307,8 +286,8 @@ describe("planNewShas", () => {
       null,
     );
     expect(plan.map((p) => [p.headSha, p.state])).toEqual([
-      [SHA_B, "baseline"],
       [SHA_A, "baseline"],
+      [SHA_B, "baseline"],
     ]);
   });
 
@@ -347,14 +326,38 @@ describe("planNewShas", () => {
     expect(plan[0]?.state).toBe("pending");
   });
 
-  test("orders the plan by run time, oldest first", () => {
+  test("orders baselines newest first", () => {
     const plan = planNewShas(
-      [candidate(SHA_A, 5), candidate(SHA_C, 40), candidate(SHA_B, 20)],
+      [candidate(SHA_A, 40), candidate(SHA_C, 5), candidate(SHA_B, 20)],
       new Set(),
       false,
       null,
     );
     expect(plan.map((p) => p.headSha)).toEqual([SHA_C, SHA_B, SHA_A]);
+  });
+
+  test("orders pending oldest first", () => {
+    const plan = planNewShas(
+      [candidate(SHA_A, 5), candidate(SHA_C, 40), candidate(SHA_B, 20)],
+      new Set(),
+      true,
+      minutesBefore(60),
+    );
+    expect(plan.map((p) => p.headSha)).toEqual([SHA_C, SHA_B, SHA_A]);
+  });
+
+  test("puts every baseline before the pending shas", () => {
+    const plan = planNewShas(
+      [candidate(SHA_A, 5), candidate(SHA_B, 90), candidate(SHA_C, 10)],
+      new Set(),
+      true,
+      minutesBefore(60),
+    );
+    expect(plan.map((p) => [p.headSha, p.state])).toEqual([
+      [SHA_B, "baseline"],
+      [SHA_C, "pending"],
+      [SHA_A, "pending"],
+    ]);
   });
 
   test("breaks a tie of run times by sha", () => {
@@ -365,6 +368,22 @@ describe("planNewShas", () => {
       null,
     );
     expect(plan.map((p) => p.headSha)).toEqual([SHA_A, SHA_B]);
+  });
+
+  test("after a first record that stopped midway, the rest are all baseline", () => {
+    const candidates = [
+      candidate(SHA_A, 40),
+      candidate(SHA_B, 5),
+      candidate(SHA_C, 20),
+    ];
+    const first = planNewShas(candidates, new Set(), false, null)[0];
+    const next = planNewShas(
+      candidates,
+      new Set(first === undefined ? [] : [first.headSha]),
+      true,
+      first?.runCreatedAt ?? null,
+    );
+    expect(next.map((p) => p.state)).toEqual(["baseline", "baseline"]);
   });
 
   test("carries the run time of each planned sha", () => {
