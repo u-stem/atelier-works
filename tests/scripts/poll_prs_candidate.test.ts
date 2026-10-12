@@ -8,6 +8,7 @@ import {
   LabelerCheckLimitError,
   type PrSearchItem,
 } from "../../f/factory/lib/github.ts";
+import type { WorkItem } from "../../f/factory/lib/types.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   type BuildPrCandidateDeps,
@@ -248,5 +249,79 @@ describe("buildPrCandidate head repository", () => {
       events: labelEventsOk([]),
     });
     expect(candidate.headInBaseRepo).toBe(false);
+  });
+});
+
+// dependabotの作業項目は、同じPRのpr_reviewとpr_fixの判断に混ぜない。
+// 実行中のレビューの有無と修正のラウンドは、それぞれの種別の行だけから決まることを確かめる。
+describe("buildPrCandidate with dependabot work items", () => {
+  const DEPENDABOT_ROW: WorkItem = {
+    id: 50,
+    cycle: 1,
+    source: "issue",
+    kind: "dependabot",
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 7,
+    title: null,
+    body: null,
+    status: "picked",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: "b".repeat(40),
+    last_review_id: null,
+    last_comment_id: null,
+    last_review_comment_id: null,
+    observed_review_id: null,
+    observed_comment_id: null,
+    observed_review_comment_id: null,
+    fix_round: 3,
+    parent_work_item_id: null,
+    branch: null,
+    pr_url: null,
+    created_at: new Date("2026-10-12T00:00:00Z"),
+    updated_at: new Date("2026-10-12T00:00:00Z"),
+  };
+
+  /** 種類を問わない最新の行はdependabotの行で、pr_fixの行は無いDB。 */
+  const DEPENDABOT_ONLY: BuildPrCandidateDeps = {
+    latestPrWorkItem: async (_owner, _repo, _number, opts) =>
+      opts?.kind === undefined || opts.kind === "dependabot"
+        ? DEPENDABOT_ROW
+        : null,
+    findApprovedWorkItemForIssue: async () => null,
+  };
+
+  async function buildWithDependabot() {
+    const fake = world({ labels: [], events: labelEventsOk([]) });
+    return (
+      await buildPrCandidate(
+        { run: fake.run, ghToken: "tok" },
+        FOUND,
+        "octo-owner",
+        [DEPENDABOT_ROW],
+        LABELS,
+        DEPENDABOT_ONLY,
+      )
+    ).candidate;
+  }
+
+  test("does not count a running dependabot item as a running review", async () => {
+    expect((await buildWithDependabot()).hasActiveReviewingItem).toBe(false);
+  });
+
+  test("takes the fix round only from pr_fix rows", async () => {
+    expect((await buildWithDependabot()).previousFixRound).toBe(0);
+  });
+
+  // 種類を問わない最新の行のheadを見る。自動検出のレビューは作成者が許可されたアカウントのPRに限るので、
+  // dependabotが作ったPRでは、この値がレビューを起こさない(poll_prs_decisions.test.tsで確かめる)。
+  test("reads the head of the latest row even when it is a dependabot row", async () => {
+    expect((await buildWithDependabot()).lastKnownHeadSha).toBe("b".repeat(40));
   });
 });

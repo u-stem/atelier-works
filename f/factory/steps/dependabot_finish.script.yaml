@@ -1,0 +1,26 @@
+summary: '[SF-3-5/3] 依存の更新のマージと終了'
+description: 準備と影響調査の結果から結論を出し、作業項目を終えるステップです。懸念か未確認の項目が残れば、人に回します。どちらも無く影響も無ければ、PRを読み直してheadが変わっていないことを確かめてからマージします。影響があれば、所見をPRに投稿して修正のラベルを付けます。
+lock: '!inline f/factory/steps/dependabot_finish.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    assess:
+      type: object
+      description: 影響調査ステップの結果。
+      default: null
+      properties: {}
+    prepare:
+      type: object
+      description: 準備ステップの結果。
+      default: null
+      properties: {}
+    work_item_id:
+      type: number
+      description: 対象の作業項目のID。
+      default: null
+  required:
+    - work_item_id
+    - prepare
+    - assess

@@ -315,7 +315,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | スケジュール | 処理の対象 |
 | --- | --- |
 | `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける。閉じたIssueやPRの失敗、人の対応待ち、期限切れの作業項目は、閉じた人を確かめて取り消し、要対応の一覧から外す |
-| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
+| `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は期限を待たず、終端でないdependabotの作業項目が使っていなければ消す。信頼していない依存を入れた作業ツリーで、処理し直すときは準備のステップが作り直すためである。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `sample_worker_load` | defaultのworkerの枠の占有、queueの待ち、コンテナのcgroupのメモリ。読めない値は空のまま記録し、例外は投げない。完全には記録できない回をWindmillのstateに数え、続いたときだけnoticeにする |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数、defaultのworkerの負荷の集計。負荷は`worker_samples`を1回のクエリで集計し、読めなくても他の項目は通知する |
@@ -359,6 +359,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/dependabot_registry` | script | [LIB] dependabot更新のnpm registry取得 |
 | `f/factory/lib/dependabot_collect` | script | [LIB] dependabot更新のゲート入力の収集 |
 | `f/factory/lib/dependabot_support` | script | [LIB] dependabot更新のゲート判定 |
+| `f/factory/lib/dependabot_flow_support` | script | [LIB] dependabot更新のフローの支援関数 |
 | `f/factory/lib/dependabot_prompt` | script | [LIB] dependabot更新の影響調査のプロンプト |
 | `f/factory/lib/discord` | script | [LIB] Discord通知 |
 | `f/factory/lib/drawio_viewer_bump` | script | [LIB] draw.ioのビューアの固定の更新 |
@@ -442,6 +443,10 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/implement_generate` | script | [SF-3-4/2] 実装(Claude) |
 | `f/factory/steps/implement_verify` | script | [SF-3-4/3] 検証と修正のループ |
 | `f/factory/steps/implement_finish` | script | [SF-3-4/4] コミット・push・PR作成 |
+| `f/factory/dependabot` | flow | [SF-3-5] 依存の更新PRの検査と自動マージ |
+| `f/factory/steps/dependabot_prepare` | script | [SF-3-5/1] 依存の更新の検査とインストール |
+| `f/factory/steps/dependabot_assess` | script | [SF-3-5/2] 依存の更新の影響調査(Claude) |
+| `f/factory/steps/dependabot_finish` | script | [SF-3-5/3] 依存の更新のマージと終了 |
 | `f/factory/watch_main_ci` | script | [SF-4-1] mainのCIを監視して失敗を通知 |
 | `f/factory/watch_pr_ci` | script | [SF-4-2] PRのCIを監視して失敗を通知 |
 | `f/factory/audit_kickoff` | script | [SF-5-1] 週次監査の起動 |

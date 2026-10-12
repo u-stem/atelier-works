@@ -1216,6 +1216,198 @@ describe("parsePackument missing", () => {
   });
 });
 
+describe("parsePackument repository", () => {
+  test("reads the url of an object repository for the to version", () => {
+    expect(facts().repositoryAfter).toBe(
+      "git+ssh://git@github.com/maintainer-b/left-pad.git",
+    );
+  });
+
+  test("reads the url of an object repository for the from version", () => {
+    expect(facts().repositoryBefore).toBe(
+      "git+ssh://git@github.com/maintainer-b/left-pad.git",
+    );
+  });
+
+  test("reads a repository written as a string", () => {
+    const to = version({ repository: "github:maintainer-b/left-pad" });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBe(
+      "github:maintainer-b/left-pad",
+    );
+  });
+
+  test("takes the from value from the from version, not the to version", () => {
+    const from = version({ repository: "github:old-owner/left-pad" });
+    const to = version({ repository: "github:new-owner/left-pad" });
+
+    expect(facts(versionsWith(from, to)).repositoryBefore).toBe(
+      "github:old-owner/left-pad",
+    );
+  });
+
+  test("takes the to value from the to version, not the from version", () => {
+    const from = version({ repository: "github:old-owner/left-pad" });
+    const to = version({ repository: "github:new-owner/left-pad" });
+
+    expect(facts(versionsWith(from, to)).repositoryAfter).toBe(
+      "github:new-owner/left-pad",
+    );
+  });
+
+  test("returns null for a missing repository", () => {
+    const to = version({ repository: undefined });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBeNull();
+  });
+
+  test("returns null for a repository that is neither a string nor an object", () => {
+    const from = version({ repository: 5 });
+
+    expect(facts(versionsWith(from, version())).repositoryBefore).toBeNull();
+  });
+
+  test("returns null for an object repository whose url is not a string", () => {
+    const to = version({ repository: { type: "git", url: { href: "x" } } });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBeNull();
+  });
+
+  test("returns null for an object repository without a url", () => {
+    const to = version({ repository: { type: "git" } });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBeNull();
+  });
+
+  test("returns null when the from version is not in the packument", () => {
+    expect(
+      facts({ versions: { "1.3.1": version() } }).repositoryBefore,
+    ).toBeNull();
+  });
+
+  test("returns null for a value over 200 characters instead of cutting it", () => {
+    const to = version({ repository: `github:${"x".repeat(200)}` });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBeNull();
+  });
+
+  test("keeps a value of exactly 200 characters whole", () => {
+    const url = `github:${"x".repeat(193)}`;
+    const to = version({ repository: url });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBe(url);
+  });
+
+  test("returns null for a value cut at the scan limit", () => {
+    const url = `https://github.com/lodash/lodash${"\u200B".repeat(800)}.evil.example`;
+    const to = version({ repository: { url } });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBeNull();
+  });
+
+  test("removes invisible characters from the value", () => {
+    const to = version({
+      repository: "https://github.com/\u202Elodash/lod\u200Bash",
+    });
+
+    expect(facts(versionsWith(version(), to)).repositoryAfter).toBe(
+      "https://github.com/lodash/lodash",
+    );
+  });
+
+  test("lists a null after value once in missing", () => {
+    const to = version({ repository: "x".repeat(201) });
+
+    expect(
+      facts(versionsWith(version(), to)).missing.filter(
+        (label) => label === "after repository",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("lists a null before value once in missing", () => {
+    const from = version({ repository: undefined });
+
+    expect(
+      facts(versionsWith(from, version())).missing.filter(
+        (label) => label === "before repository",
+      ),
+    ).toHaveLength(1);
+  });
+
+  test("lists neither repository in missing when both are read", () => {
+    expect(
+      facts().missing.filter((label) => label.endsWith("repository")),
+    ).toEqual([]);
+  });
+});
+
+describe("parsePackument repository under the metadata limit", () => {
+  // 全項目を200文字ちょうどにし、メンテナを大量に並べて、4000文字の上限に当てる。
+  const NAME = "n".repeat(200);
+  const FROM = `1.${"0".repeat(198)}`;
+  const TO = `2.${"0".repeat(198)}`;
+  const REPOSITORY_BEFORE = `github:${"b".repeat(193)}`;
+  const REPOSITORY_AFTER = `github:${"a".repeat(193)}`;
+
+  function crowded() {
+    const maintainers = Array.from({ length: 500 }, (_, i) => ({
+      name: `maintainer-${String(i).padStart(4, "0")}`,
+    }));
+    const entry = (repository: string) =>
+      version({
+        repository,
+        _npmUser: { name: "p".repeat(200) },
+        maintainers,
+      });
+    return parsePackument(
+      {
+        name: NAME,
+        time: { [TO]: "2018-05-01T12:00:00.000Z" },
+        versions: {
+          [FROM]: entry(REPOSITORY_BEFORE),
+          [TO]: entry(REPOSITORY_AFTER),
+        },
+      },
+      NAME,
+      FROM,
+      TO,
+    );
+  }
+
+  test("keeps the before repository line when every item has 200 characters", () => {
+    expect(crowded().registryMetadata).toContain(
+      `before repository: ${REPOSITORY_BEFORE}`,
+    );
+  });
+
+  test("keeps the after repository line when every item has 200 characters", () => {
+    expect(crowded().registryMetadata).toContain(
+      `after repository: ${REPOSITORY_AFTER}`,
+    );
+  });
+
+  test("returns both repositories when every item has 200 characters", () => {
+    const { repositoryBefore, repositoryAfter } = crowded();
+
+    expect([repositoryBefore, repositoryAfter]).toEqual([
+      REPOSITORY_BEFORE,
+      REPOSITORY_AFTER,
+    ]);
+  });
+
+  test("names only the maintainers as missing when the limit is hit", () => {
+    expect(crowded().missing).toEqual([
+      "after maintainers",
+      "before maintainers",
+    ]);
+  });
+
+  test("stays within 4000 characters", () => {
+    expect(crowded().registryMetadata.length).toBeLessThanOrEqual(4000);
+  });
+});
+
 // ---- getRegistryFacts ----
 
 describe("getRegistryFacts", () => {

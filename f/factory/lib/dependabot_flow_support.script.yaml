@@ -1,0 +1,9 @@
+summary: '[LIB] dependabot更新のフローの支援関数'
+description: 内部ライブラリです。dependabotのセキュリティ更新PRのフローが使う、インストール後の検査、信頼できない文章の無害化、要約の組み立て、時間設定、通知の理由の語彙を提供します。
+lock: '!inline f/factory/lib/dependabot_flow_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

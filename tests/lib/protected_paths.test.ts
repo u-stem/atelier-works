@@ -552,6 +552,7 @@ describe("dependabot flow files", () => {
     "f/factory/lib/dependabot_prompt",
     "f/factory/lib/dependabot_registry",
     "f/factory/lib/dependabot_collect",
+    "f/factory/lib/dependabot_flow_support",
     "f/factory/poll_dependabot",
     "f/factory/steps/dependabot_prepare",
     "f/factory/steps/dependabot_assess",

@@ -212,6 +212,37 @@ describe("decidePrActions — fix", () => {
   });
 });
 
+// dependabotのフローは、影響があると判断したPRに、Factoryのアカウント(viewer)で`fix_label`を付けて修正に回す。
+// その経路が`pr_fix`の起動の判定を通ること、dependabotの作業項目がレビューの自動検出を起こさないことを確かめる。
+describe("decidePrActions — dependabot pull requests", () => {
+  const dependabotPr = (overrides: Partial<PrCandidate> = {}) =>
+    candidate({
+      authorLogin: "dependabot[bot]",
+      headRef: "dependabot/npm_and_yarn/left-pad-1.3.1",
+      ...overrides,
+    });
+
+  test("starts a fix when the dependabot flow added the fix label with the viewer's account", () => {
+    const [decision] = decidePrActions(
+      [dependabotPr({ labels: [FIX_LABEL], fixLabelerLogin: "octo-owner" })],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.fix).toEqual({ kind: "trigger_fix", removeLabel: true });
+  });
+
+  test("does not start a review by detection when the latest row is a dependabot row of an older head", () => {
+    const [decision] = decidePrActions(
+      [dependabotPr({ lastKnownHeadSha: "b".repeat(40) })],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.review).toEqual({ kind: "none" });
+  });
+});
+
 describe("decidePrActions — labeler check", () => {
   function reviewOf(overrides: Partial<PrCandidate>, policy = POLICY) {
     const [decision] = decidePrActions(

@@ -60,6 +60,7 @@ import {
   transitionMainCiRun,
   transitionPrCiCheck,
   updateIntakeIfRegenerating,
+  updateStatusIfCurrent,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
 import {
@@ -3026,6 +3027,60 @@ check(
   "dependabot head: a row of another kind does not count",
   (await hasDependabotItemForHead(OWNER, "r", 9105, DEPENDABOT_SHA_A, sql)) ===
     false,
+);
+// フロー自身が取り消した行(4つの注記)は数えず、同じheadを処理し直せる。
+// ほかの処理が取り消した行と、ほかの終端(終えた、失敗した)は処理済みとして数える。
+for (const [pr, status, note, counts] of [
+  [9106, "cancelled", "gate_waiting", false],
+  [9109, "cancelled", "head_moved", false],
+  [9110, "cancelled", "pr_closed", false],
+  [9111, "cancelled", "dependabot_disabled", false],
+  [9112, "cancelled", "reconcile: pull request closed", true],
+  [9113, "cancelled", null, true],
+  [9107, "failed", "boom", true],
+  [9108, "reviewed", "merged", true],
+] as const) {
+  const id = await insertDependabotWorkItemUnlessActive(
+    dependabotCandidate(pr, DEPENDABOT_SHA_A),
+    sql,
+  );
+  if (id === null) throw new Error(`dependabot head: insert for ${pr} failed`);
+  await updateStatusIfCurrent(id, "picked", status, note, sql);
+  check(
+    `dependabot head: a ${status} row noted ${String(note)} ${counts ? "counts" : "does not count"}`,
+    (await hasDependabotItemForHead(OWNER, "r", pr, DEPENDABOT_SHA_A, sql)) ===
+      counts,
+  );
+}
+// 取り消しの後に別の取り消しで注記が変わった行は、最新の注記で判断する。
+const recancelled = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9114, DEPENDABOT_SHA_A),
+  sql,
+);
+if (recancelled === null)
+  throw new Error("dependabot head: insert for 9114 failed");
+await updateStatusIfCurrent(
+  recancelled,
+  "picked",
+  "cancelled",
+  "gate_waiting",
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'picked' WHERE id = ${String(recancelled)}`,
+);
+await updateStatusIfCurrent(
+  recancelled,
+  "picked",
+  "cancelled",
+  "reconcile: closed",
+  sql,
+);
+check(
+  "dependabot head: the latest cancel note decides",
+  (await hasDependabotItemForHead(OWNER, "r", 9114, DEPENDABOT_SHA_A, sql)) ===
+    true,
 );
 
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。

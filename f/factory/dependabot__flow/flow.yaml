@@ -1,0 +1,79 @@
+summary: '[SF-3-5] 依存の更新PRの検査と自動マージ'
+description: dependabotのセキュリティ更新PRを検査し、自動でマージするかを決めます。更新の情報を集め直して自動でマージできる条件を確かめ、隔離した環境で依存をインストールしてから、Claudeに影響を調べさせます。懸念や確認できなかった項目があれば人に回し、影響があれば所見を投稿して修正に回します。懸念も確認できなかった項目も無く、影響も無ければ、調べたheadのままマージします。
+value:
+  modules:
+    - id: dependabot_prepare
+      summary: '[SF-3-5/1] 依存の更新の検査とインストール'
+      value:
+        type: script
+        input_transforms:
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/dependabot_prepare
+      timeout:
+        type: static
+        value: 3600
+    - id: dependabot_assess
+      summary: '[SF-3-5/2] 依存の更新の影響調査(Claude)'
+      value:
+        type: script
+        input_transforms:
+          prepare:
+            type: javascript
+            expr: results.dependabot_prepare
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/dependabot_assess
+      skip_if:
+        expr: results.dependabot_prepare.proceed !== true
+      timeout:
+        type: static
+        value: 7200
+    - id: dependabot_finish
+      summary: '[SF-3-5/3] 依存の更新のマージと終了'
+      value:
+        type: script
+        input_transforms:
+          assess:
+            type: javascript
+            expr: 'results.dependabot_prepare.proceed === true ? results.dependabot_assess :
+              { kind: "skipped", workItemId: flow_input.work_item_id, reason:
+              results.dependabot_prepare.reason }'
+          prepare:
+            type: javascript
+            expr: results.dependabot_prepare
+          work_item_id:
+            type: javascript
+            expr: flow_input.work_item_id
+        path: f/factory/steps/dependabot_finish
+      timeout:
+        type: static
+        value: 1800
+  failure_module:
+    id: failure
+    value:
+      type: script
+      input_transforms:
+        error:
+          type: javascript
+          expr: error
+        path:
+          type: static
+          value: f/factory/dependabot
+        work_item_id:
+          type: javascript
+          expr: flow_input.work_item_id
+      path: f/factory/on_error_flow
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  order:
+    - work_item_id
+  properties:
+    work_item_id:
+      type: integer
+      description: 処理する作業項目のID。dependabotのPRを取得する処理が作業項目を作り、このフローを起動します。
+  required:
+    - work_item_id

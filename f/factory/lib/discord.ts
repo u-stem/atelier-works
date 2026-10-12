@@ -144,6 +144,16 @@ export type NotifyEvent =
       flow_path: string;
       job_id: string;
       error: string;
+      /**
+       * 運用者がまず行う操作の1文。再実行の案内が当たらないフロー(dependabot)だけが載せる。
+       * 無ければ欄を出さない。
+       */
+      next_action?: string;
+      /**
+       * 失敗した作業項目のPR。人が対応するPRを示すフロー(dependabot)だけが載せる。
+       * あればPRへのリンクと「対象」の欄を出す。
+       */
+      pr?: { owner: string; repo: string; number: number };
     }
   | {
       kind: "console_fetch_problem";
@@ -404,8 +414,22 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       return {
         title: `ジョブ失敗: ${event.flow_path}`,
         description: event.error,
-        url: null,
+        url:
+          event.pr === undefined
+            ? null
+            : `https://github.com/${event.pr.owner}/${event.pr.repo}/pull/${String(event.pr.number)}`,
         fields: [
+          ...(event.next_action === undefined
+            ? []
+            : [{ name: "次の操作", value: event.next_action }]),
+          ...(event.pr === undefined
+            ? []
+            : [
+                {
+                  name: "対象",
+                  value: `${event.pr.owner}/${event.pr.repo}#${String(event.pr.number)}`,
+                },
+              ]),
           instanceField(event.instance_name),
           { name: "ジョブ", value: event.job_id },
         ],
