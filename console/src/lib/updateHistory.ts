@@ -43,6 +43,34 @@ export function pullRequestTitleText(pull: {
   return pull.title ?? `題名なし(#${String(pull.number)})`;
 }
 
+/** 反映の履歴に出す、失敗の理由の先頭部分の文字数。 */
+export const FAILURE_REASON_HEAD_LENGTH = 120;
+
+const NO_FAILURE_REASON_TEXT = "理由の記録はありません";
+
+/**
+ * 失敗した反映に添える理由の文。失敗でなければ`null`を返し、何も出さない。
+ * 理由は外部のコマンドの出力を含みうる信頼できない文字列なので、マークアップとして解釈せず、
+ * 改行と連続する空白を1つの空白にまとめ、先頭の`FAILURE_REASON_HEAD_LENGTH`字だけを返す。
+ * 理由が記録されていない失敗(理由を記録する前の行)は、記録が無いことを示す文を返す。
+ */
+export function failureReasonText(entry: {
+  readonly result: string;
+  readonly error?: string | null;
+}): string | null {
+  if (entry.result !== "failed") {
+    return null;
+  }
+  const reason = (entry.error ?? "").replace(/\s+/g, " ").trim();
+  if (reason.length === 0) {
+    return NO_FAILURE_REASON_TEXT;
+  }
+  const chars = Array.from(reason);
+  return chars.length <= FAILURE_REASON_HEAD_LENGTH
+    ? reason
+    : `${chars.slice(0, FAILURE_REASON_HEAD_LENGTH).join("")}…`;
+}
+
 /** backendが1回の反映に記録するPRの上限。`MAX_PULL_REQUESTS_PER_DEPLOYMENT`と同じ値に保つ。 */
 export const PULL_REQUEST_RECORD_LIMIT = 100;
 

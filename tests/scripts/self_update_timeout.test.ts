@@ -35,11 +35,13 @@ function count(source: string, pattern: RegExp): number {
   return source.match(pattern)?.length ?? 0;
 }
 
+// `recordFailedDeployment(`の区切りが効くのは`record`だけで`onRecordError`には届かないので、`onRecordError`には外部呼び出しを足さない。
 const WRAPPERS = [
   "withCallTimeout(",
   "readDeployedSha(",
   "setDeployedSha(",
   "recordSuccessDeployment(",
+  "recordFailedDeployment(",
 ];
 // `wmill.`のSDK呼び出しはすべて対象にする(`wmill.foo(`と`wmill.XxxService.foo(`)。
 // 例外は`wmill.JobService.`で、Console用workerの確認(`watchConsoleWorker`)が
@@ -100,7 +102,8 @@ describe("self_update timeout", () => {
       (HOST_ACTION_RECONCILE_LIMIT - 1) * resolveSites +
       2 * count(source, /readDeployedSha\(/g) +
       2 * count(source, /setDeployedSha\(/g) +
-      count(source, /recordSuccessDeployment\(/g);
+      count(source, /recordSuccessDeployment\(/g) +
+      count(source, /recordFailedDeployment\(/g);
 
     expect(sites).toBe(SELF_UPDATE_BOUNDED_CALL_COUNT);
   });

@@ -53,6 +53,24 @@ describe("isDeploymentHistory", () => {
     ).toBe(true);
   });
 
+  test("accepts an entry with the reason of a failure", () => {
+    expect(
+      isDeploymentHistory([{ ...ENTRY, result: "failed", error: "boom" }]),
+    ).toBe(true);
+  });
+
+  test("accepts an entry with a null reason", () => {
+    expect(isDeploymentHistory([{ ...ENTRY, error: null }])).toBe(true);
+  });
+
+  test("accepts an entry from a backend that does not send the reason yet", () => {
+    expect(isDeploymentHistory([ENTRY])).toBe(true);
+  });
+
+  test("rejects a reason that is not a string", () => {
+    expect(isDeploymentHistory([{ ...ENTRY, error: 42 }])).toBe(false);
+  });
+
   test("rejects a value that is not a list", () => {
     expect(isDeploymentHistory({ rows: [] })).toBe(false);
   });

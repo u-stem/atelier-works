@@ -65,10 +65,12 @@ import {
   buildWmillEnv,
   classifyChangedPaths,
   decideUpdate,
+  deploymentFailureMessage,
   MISE_TOML_PATH,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
   readDeployedSha,
+  recordFailedDeployment,
   recordSuccessDeployment,
   resolveWmillCliContext,
   SELF_UPDATE_CALL_TIMEOUT_MS,
@@ -899,6 +901,7 @@ async function updateSelf(
           result: "success",
           needs_host_action: classification.needs_host_action,
           pull_requests: pullRequests,
+          error: null,
         }),
       (timeout) => {
         log.warn("recording the successful deployment timed out", {
@@ -953,29 +956,24 @@ async function updateSelf(
       needs_host_action: classification.needs_host_action,
     };
   } catch (err) {
-    const message = maskSecrets(
-      err instanceof Error ? err.message : String(err),
-      secrets,
+    log.error("self_update failed", {
+      error: deploymentFailureMessage(err, secrets),
+    });
+    // 理由はログと同じ伏せ字処理を通して記録する。記録に失敗しても元の例外を投げる。
+    await recordFailedDeployment(
+      {
+        record: (record) => recordDeployment(record),
+        onRecordError: (message) => {
+          log.error("failed to record deployment", { error: message });
+        },
+      },
+      {
+        shaFrom: deployedSha.length > 0 ? deployedSha : null,
+        shaTo: currentSha,
+        error: err,
+        secrets,
+      },
     );
-    log.error("self_update failed", { error: message });
-    try {
-      await withCallTimeout("recordDeployment failed", () =>
-        recordDeployment({
-          sha_from: deployedSha.length > 0 ? deployedSha : null,
-          sha_to: currentSha,
-          changed_paths: [],
-          result: "failed",
-          needs_host_action: false,
-          pull_requests: [],
-        }),
-      );
-    } catch (recordErr) {
-      log.error("failed to record deployment", {
-        error: maskSecrets(
-          recordErr instanceof Error ? recordErr.message : String(recordErr),
-        ),
-      });
-    }
     throw err;
   }
 }

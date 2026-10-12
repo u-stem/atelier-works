@@ -10,6 +10,7 @@ import {
   UNKNOWN_STATUS_LABEL,
 } from "../../console/src/lib/labels.ts";
 import {
+  failureReasonText,
   PULL_REQUEST_RECORD_LIMIT,
   pullRequestHref,
 } from "../../console/src/lib/updateHistory.ts";
@@ -80,6 +81,30 @@ describe("deployments contract between console_query and the console guard", () 
     expect(isDeploymentHistory(delivered)).toBe(true);
   });
 
+  test("accepts a failed deployment with a reason", async () => {
+    const delivered = await historyAsDelivered([
+      { ...DEPLOYMENT_ROW, result: "failed", error: "wmill sync push failed" },
+    ]);
+    expect(isDeploymentHistory(delivered)).toBe(true);
+  });
+
+  test("delivers the reason that the console shows", async () => {
+    const delivered = await historyAsDelivered([
+      { ...DEPLOYMENT_ROW, result: "failed", error: "wmill sync push failed" },
+    ]);
+    const first = isDeploymentHistory(delivered) ? delivered[0] : undefined;
+    expect(first === undefined ? null : failureReasonText(first)).toBe(
+      "wmill sync push failed",
+    );
+  });
+
+  test("accepts a failed deployment recorded without a reason", async () => {
+    const delivered = await historyAsDelivered([
+      { ...DEPLOYMENT_ROW, result: "failed", error: null },
+    ]);
+    expect(isDeploymentHistory(delivered)).toBe(true);
+  });
+
   test("carries a UTC offset on the timestamp", async () => {
     const delivered = await historyAsDelivered([DEPLOYMENT_ROW]);
     expect(JSON.stringify(delivered)).toContain(`"occurred_at":"${T0}"`);
@@ -93,6 +118,56 @@ describe("deployments contract between console_query and the console guard", () 
     expect(first === undefined ? null : pullRequestHref(first)).toBe(
       "https://github.com/o/r/pull/7",
     );
+  });
+});
+
+/** `error`列を足すmigrationが当たる前のDB。列を選ぶ問い合わせは、列が無いエラーで落ちる。 */
+function sqlBeforeErrorColumn(rows: SqlRow[]): SqlClient {
+  return (strings) => {
+    const text = strings.join(" ? ");
+    return {
+      fetch: () =>
+        text.includes("error")
+          ? Promise.reject(
+              Object.assign(new Error('column "error" does not exist'), {
+                code: "42703",
+              }),
+            )
+          : Promise.resolve(rows),
+      execute: () => Promise.resolve(),
+    };
+  };
+}
+
+describe("deployments before the error column exists", () => {
+  test("reads the history without the reason", async () => {
+    const result = await runConsoleQuery(
+      "deployments",
+      100,
+      90,
+      sqlBeforeErrorColumn([{ ...DEPLOYMENT_ROW, result: "failed" }]),
+    );
+    expect(isDeploymentHistory(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("treats the reason as missing", async () => {
+    const result = await runConsoleQuery(
+      "deployments",
+      100,
+      90,
+      sqlBeforeErrorColumn([{ ...DEPLOYMENT_ROW, result: "failed" }]),
+    );
+    expect(JSON.stringify(result)).toContain('"error":null');
+  });
+
+  test("does not hide another failure", async () => {
+    const failing: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(
+      runConsoleQuery("deployments", 100, 90, failing),
+    ).rejects.toThrow("db down");
   });
 });
 

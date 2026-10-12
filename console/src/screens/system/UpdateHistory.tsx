@@ -10,6 +10,7 @@ import {
   pullRequestOriginLabel,
 } from "../../lib/labels.ts";
 import {
+  failureReasonText,
   isPullRequestListTruncated,
   pullRequestHref,
   pullRequestTitleText,
@@ -79,6 +80,7 @@ function DeploymentItem({
   entry: DeploymentEntry;
   now: number;
 }) {
+  const reason = failureReasonText(entry);
   return (
     <li className="rounded-xl border border-border bg-card p-5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -95,6 +97,12 @@ function DeploymentItem({
           {hostActionLabel(entry.needs_host_action)}
         </Badge>
       </div>
+      {reason === null ? null : (
+        <p className="mt-3 break-words text-small">
+          <span className="text-muted-foreground">理由: </span>
+          {reason}
+        </p>
+      )}
       {entry.pull_requests.length === 0 ? (
         <p className="mt-3 text-small text-muted-foreground">
           含まれるPRの記録はありません
@@ -117,6 +125,7 @@ function DeploymentItem({
 
 /**
  * 反映の履歴。新しい順に並べ、反映ごとに日時、版、結果、ホストの作業の要否、含まれるPRを出す。
+ * 失敗した反映には、理由の先頭部分を文字としてだけ出す。
  * PRごとに、Software Factoryが作ったか、人が作ったか、不明かを示す。
  */
 export function UpdateHistory({
