@@ -32,6 +32,8 @@ import {
   getPr,
   getPrDiff,
   getPrFiles,
+  getRepositoryId,
+  getRepositoryOwnerId,
   getViewer,
   gitIdentityForViewer,
   hasMarker,
@@ -258,6 +260,113 @@ describe("getAccountId", () => {
     ]);
     await expect(
       getAccountId({ run: fake.run, ghToken: "tok" }, "octo-owner"),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("getRepositoryId", () => {
+  test("returns the numeric id of the repository", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ name: "factory", id: 777 }),
+    ]);
+    const id = await getRepositoryId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(id).toBe(777);
+  });
+
+  test("requests the repository endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 777 })]);
+    await getRepositoryId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(fake.calls[0]?.argv).toContain("repos/octo-owner/factory");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getRepositoryId({ run: fake.run, ghToken: "tok" }, "octo-owner", "gone"),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response whose id is not a number", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: "777" })]);
+    await expect(
+      getRepositoryId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("getRepositoryOwnerId", () => {
+  test("returns the numeric id of the owner of the repository", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { login: "octo-owner", id: 4242 } }),
+    ]);
+    const id = await getRepositoryOwnerId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(id).toBe(4242);
+  });
+
+  test("requests the repository endpoint", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { id: 4242 } }),
+    ]);
+    await getRepositoryOwnerId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(fake.calls[0]?.argv).toContain("repos/octo-owner/factory");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "gone",
+      ),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response without the owner", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 777 })]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a response whose owner id is not a number", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { id: "4242" } }),
+    ]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
     ).rejects.toThrow(/unexpected response shape/);
   });
 });
@@ -2949,7 +3058,7 @@ describe("getPr", () => {
           ref: "feature-x",
           repo: { full_name: "acme/widgets-fork" },
         },
-        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets", id: 99 } },
         mergeable: true,
         mergeable_state: "clean",
         user: { login: "alice", type: "User" },
@@ -2973,6 +3082,7 @@ describe("getPr", () => {
       headRef: "feature-x",
       headRepoFullName: "acme/widgets-fork",
       baseRepoFullName: "acme/widgets",
+      baseRepoId: 99,
       baseRef: "main",
       mergeable: true,
       mergeableState: "clean",
@@ -2980,6 +3090,47 @@ describe("getPr", () => {
       authorType: "User",
       autoMergeEnabled: false,
     });
+  });
+
+  // 実行のheadのリポジトリとIDで比べるために使うので、安全な正の整数でなければnullにする。
+  async function baseRepoIdFor(repo: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 18,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        auto_merge: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      18,
+    );
+    return pr.baseRepoId;
+  }
+
+  test("reads the base repository id", async () => {
+    expect(await baseRepoIdFor({ full_name: "acme/widgets", id: 7 })).toBe(7);
+  });
+
+  test("returns null when the base repository has no id", async () => {
+    expect(await baseRepoIdFor({ full_name: "acme/widgets" })).toBeNull();
+  });
+
+  test("returns null when the base repository id is not a positive integer", async () => {
+    expect(
+      await baseRepoIdFor({ full_name: "acme/widgets", id: -1 }),
+    ).toBeNull();
   });
 
   test("reports auto-merge as enabled when auto_merge is an object", async () => {

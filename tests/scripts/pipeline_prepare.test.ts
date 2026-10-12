@@ -4,8 +4,10 @@ import {
   buildRequirementsWorktreeDir,
   findWorktreeEntry,
   isAlreadyTerminal,
+  PIPELINE_PREPARE_MOVED_ON_REASON,
   shouldCancelForClosedIssue,
   shouldReuseWorktree,
+  stopForRepoOwner,
 } from "../../f/factory/steps/pipeline_prepare.ts";
 
 function fakeEntry(overrides: Partial<WorktreeEntry> = {}): WorktreeEntry {
@@ -98,5 +100,59 @@ describe("shouldCancelForClosedIssue", () => {
 
   test("cancels once the issue is closed", () => {
     expect(shouldCancelForClosedIssue("closed")).toBe(true);
+  });
+});
+
+describe("stopForRepoOwner", () => {
+  const REASON =
+    "repository owner id differs from factory_config owners: acme/widgets (expected 1, actual 2)";
+
+  function recordingDeps(moved: boolean) {
+    const transitions: string[] = [];
+    const notified: string[] = [];
+    const deps = {
+      moveToNeedsHuman: async (reason: string) => {
+        transitions.push(reason);
+        return moved;
+      },
+      notify: async (reason: string) => {
+        notified.push(reason);
+      },
+    };
+    return { deps, transitions, notified };
+  }
+
+  test("skips with the reason", async () => {
+    const { deps } = recordingDeps(true);
+    expect(await stopForRepoOwner(REASON, deps)).toEqual({
+      skip: true,
+      reason: REASON,
+    });
+  });
+
+  test("moves the work item to needs_human with the reason", async () => {
+    const { deps, transitions } = recordingDeps(true);
+    await stopForRepoOwner(REASON, deps);
+    expect(transitions).toEqual([REASON]);
+  });
+
+  test("notifies a person with the reason", async () => {
+    const { deps, notified } = recordingDeps(true);
+    await stopForRepoOwner(REASON, deps);
+    expect(notified).toEqual([REASON]);
+  });
+
+  test("skips as moved on when the lease or status changed", async () => {
+    const { deps } = recordingDeps(false);
+    expect(await stopForRepoOwner(REASON, deps)).toEqual({
+      skip: true,
+      reason: PIPELINE_PREPARE_MOVED_ON_REASON,
+    });
+  });
+
+  test("does not notify when the lease or status changed", async () => {
+    const { deps, notified } = recordingDeps(false);
+    await stopForRepoOwner(REASON, deps);
+    expect(notified).toEqual([]);
   });
 });

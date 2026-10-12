@@ -824,6 +824,26 @@ export async function listActiveIssueWorkItems(
 }
 
 /**
+ * PRを作った(`pr_open`)`issue`の作業項目のうち、PRのURLを持ち、`updatedAfter`より後に更新されたものを、
+ * IDの新しい順に最大`limit`件返す。PRのCI監視が、Factoryが作ったPRを見つけるのに使う。
+ * `pr_open`は終端で、PRが閉じても作業項目は変わらない。期間で絞らないと、閉じたPRを毎回読み続ける。
+ */
+export async function listPrOpenIssueWorkItems(
+  updatedAfter: Date,
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<WorkItem[]> {
+  const rows = await sql`
+    SELECT * FROM factory.work_items
+    WHERE kind = 'issue' AND status = 'pr_open' AND pr_url IS NOT NULL
+      AND updated_at > ${updatedAfter.toISOString()}::timestamptz
+    ORDER BY id DESC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toWorkItem);
+}
+
+/**
  * 作業項目の状態を移し、`factory.work_item_events`に監査用の行を追加する。
  * 該当する作業項目が無ければ例外を投げる。
  *
@@ -1439,16 +1459,63 @@ export async function recordFailure(
 // deployments
 // ---------------------------------------------------------------------------
 
+const DEPLOYMENT_ERROR_COLUMN_PATTERN =
+  /column "error"(?: of relation "deployments")? does not exist/;
+
+/**
+ * 例外が、`deployments.error`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * `deployments`を読み書きする文が指名する列のうち、新しい列は`error`だけなので、
+ * エラーコード42703か、列の名前を含む文のどちらかで判定する(`isMissingJobLinkColumnError`と同じ)。
+ * 書く文は`of relation "deployments"`を伴い、読む文は伴わない。
+ */
+export function isMissingDeploymentErrorColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (Reflect.get(err, "code") === "42703") return true;
+  if (DEPLOYMENT_ERROR_COLUMN_PATTERN.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && DEPLOYMENT_ERROR_COLUMN_PATTERN.test(body);
+}
+
+/**
+ * 失敗の理由の列(`error`)を選ぶ問い合わせを実行し、行を返す。
+ * 反映(`wmill sync push`)はmigration(`wmill datatable migrate up`)より先に走るので、
+ * 列を足すmigrationが当たるまでは、列が無いエラーになる。
+ * そのときだけ`withoutError`の問い合わせで読み直し、`error`は`null`にする。
+ * 反映の履歴の全体が読めなくなるのを防ぐためで、ほかのエラーは投げる。
+ */
+export async function fetchDeploymentRows(
+  withError: SqlStatementHandle,
+  withoutError: () => SqlStatementHandle,
+  log: Logger = logger("db"),
+): Promise<SqlRow[]> {
+  try {
+    return await withError.fetch();
+  } catch (err) {
+    if (!isMissingDeploymentErrorColumnError(err)) throw err;
+    log.warn(
+      "deployments.error is missing; read the deployments without the reason (the datatable migration has not run yet)",
+    );
+    const rows = await withoutError().fetch();
+    return rows.map((row) => ({ ...row, error: null }));
+  }
+}
+
 /**
  * `factory.deployments`に行を挿入し、そのIDを返す。
  * `pull_requests`が空のときは、その列を指名しない文で挿入し、列の既定値(空の配列)を使う。
  * migrationが当たる前に新しいコードが動いても、PRを持たない記録(失敗の記録を含む)は
  * 書けるようにするためである。
+ * `error`(失敗の理由)があるときは、`recordFailedDeploymentRow`で書く。
  */
 export async function recordDeployment(
   record: DeploymentRecord,
   sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<number> {
+  const error = record.error ?? null;
+  if (error !== null) {
+    return recordFailedDeploymentRow(record, error, sql, log);
+  }
   const statement =
     record.pull_requests.length === 0
       ? sql`
@@ -1470,6 +1537,41 @@ export async function recordDeployment(
   `;
   const row = await fetchOneRow(statement, "recordDeployment");
   return parseId(row.id, "id");
+}
+
+/**
+ * 失敗の理由を持つ`factory.deployments`の行を、理由と同じ1つの文で挿入する。
+ * `error`の列は`pull_requests`の列より後のmigrationで足すので、ここでは両方を指名する。
+ * 列を足すmigrationより先にこのコードが動いたとき(migrationの段階で失敗した回を含む)だけ、
+ * 理由を持たない文で記録し直す。失敗の記録そのものが消えると、失敗に気づけないためである。
+ * ほかのエラーは投げる。
+ */
+async function recordFailedDeploymentRow(
+  record: DeploymentRecord,
+  error: string,
+  sql: SqlClient,
+  log: Logger,
+): Promise<number> {
+  const statement = sql`
+    INSERT INTO factory.deployments (sha_from, sha_to, changed_paths, result, needs_host_action, pull_requests, error)
+    VALUES (
+      ${record.sha_from}, ${record.sha_to}, ${JSON.stringify(record.changed_paths)}::jsonb,
+      ${record.result}, ${record.needs_host_action}::boolean,
+      ${JSON.stringify(record.pull_requests)}::jsonb, ${error}::text
+    )
+    RETURNING id
+  `;
+  try {
+    const row = await fetchOneRow(statement, "recordDeployment");
+    return parseId(row.id, "id");
+  } catch (err) {
+    if (!isMissingDeploymentErrorColumnError(err)) throw err;
+    log.warn(
+      "deployments.error is missing; recorded the deployment without the reason (the datatable migration has not run yet)",
+      { sha_to: record.sha_to },
+    );
+    return recordDeployment({ ...record, error: null }, sql, log);
+  }
 }
 
 /** `factory.deployments`の最新の1行を返す。1行も無ければ`null`を返す。 */
@@ -1503,6 +1605,7 @@ export async function getLatestDeployment(
  * 解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば再び挿入する。
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
  * 通知を作る経路は、この関数だけを使う。
+ * 例外は作業領域のディスク使用量の通知で、`recordWorkspaceDiskUsageNotice`を使う。
  *
  * 既存の未解決のnoticeは、「情報」の種類(`INFO_NOTICE_KINDS`)で`created_at`が1日より前なら、
  * 現在時刻に更新する。
@@ -1534,6 +1637,50 @@ export async function addNoticeUnlessUnresolved(
   if (row === undefined || !parseBoolean(row.inserted, "inserted")) {
     return null;
   }
+  return parseId(row.id, "id");
+}
+
+/** ディスク使用量の通知を記録した作業領域の掃除が、余分な未解決の通知を解決したときの解決者。 */
+export const WORKSPACE_CLEANUP_RESOLVER = "cleanup_workspaces";
+
+/**
+ * 作業領域のディスク使用量の通知を記録し、未解決の通知のIDを返す。
+ * 本文は測った使用量を含むので、`addNoticeUnlessUnresolved`では値が変わるたびに新しい通知になる。
+ * この関数は、未解決の通知を本文に関わらず1件に保つ。
+ *
+ * 先に、未解決の通知のうち最も新しい1件(作成時刻が同じならIDが大きい方)を残し、
+ * 残りを解決済みにする(解決者は`WORKSPACE_CLEANUP_RESOLVER`)。
+ * 次に、未解決の通知が無ければ挿入し、あれば本文と作成時刻を更新する。
+ * 作成時刻は、記録のたびに現在時刻にする。掃除は1日1回なので、行の書き換えも1日1回になる。
+ *
+ * 並行した記録との競合は、ディスク使用量の未解決の通知の部分一意索引
+ * (`notices_unresolved_disk_usage_key`)で受け、`ON CONFLICT`の更新に回る。
+ * 索引の述語と照合するため、種類は値で渡さずSQLに直接書く。
+ */
+export async function recordWorkspaceDiskUsageNotice(
+  message: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${WORKSPACE_CLEANUP_RESOLVER}, resolved_at = now()
+    WHERE kind = 'workspace_disk_usage'
+      AND resolved = false
+      AND id <> (
+        SELECT id FROM factory.notices
+        WHERE kind = 'workspace_disk_usage' AND resolved = false
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      )
+  `.execute();
+  const statement = sql`
+    INSERT INTO factory.notices (kind, message)
+    VALUES ('workspace_disk_usage', ${message})
+    ON CONFLICT (kind) WHERE resolved = false AND kind = 'workspace_disk_usage'
+    DO UPDATE SET message = EXCLUDED.message, created_at = now()
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "recordWorkspaceDiskUsageNotice");
   return parseId(row.id, "id");
 }
 

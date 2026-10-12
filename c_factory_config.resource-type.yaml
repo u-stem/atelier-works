@@ -21,6 +21,7 @@ schema:
     - retention_work_items_days
     - retention_logs_days
     - factory_repo
+    - factory_repo_id
     - factory_branch
     - instance_name
     - windmill_public_url
@@ -47,6 +48,7 @@ schema:
     - implement_max_diff_lines
     - dependabot_enabled
     - dependabot_min_published_days
+    - pr_ci_watch_enabled
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -127,6 +129,11 @@ schema:
       description: >-
         このSoftware Factory自身のリポジトリのURLです。自分自身を最新化する処理の対象になります。
       format: uri
+    factory_repo_id:
+      type: integer
+      minimum: 1
+      description: >-
+        `factory_repo`のGitHubリポジトリの数値IDです。指定すると、Factory自身のリポジトリを使う処理が取得の前にGitHubの現在のIDと照合し、食い違うときは取得しません。オーナーが改名して別の人がその名前を取得した場合に、その人のリポジトリを使わないためです。省略すると名前だけで取得します。
     fix_label:
       type: string
       description: このラベルが付いたPRは修正処理の対象になります。
@@ -238,7 +245,7 @@ schema:
             type: integer
             minimum: 1
             description: >-
-              GitHubのアカウントの数値IDです。指定すると、検索の前にGitHubの現在のIDと照合し、食い違うオーナーは検索を飛ばします。オーナーが改名して別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れないためです。省略すると名前だけで照合します。
+              GitHubのアカウントの数値IDです。指定すると、検索の前にGitHubの現在のIDと照合し、食い違うオーナーは検索を飛ばします。作業項目を進める準備のステップも、リポジトリを取得する前に、リポジトリのオーナーのIDを照合します。オーナーが改名して別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れず、保存済みの作業項目も進めないためです。省略すると名前だけで照合します。
           kind:
             type: string
             description: userなら個人アカウント、orgなら組織を指定します。
@@ -248,6 +255,11 @@ schema:
         required:
           - name
           - kind
+    pr_ci_watch_enabled:
+      type: boolean
+      description: >-
+        FactoryのPRのCIを観測して、失敗を通知するかどうかです。観測と通知だけで、PRにもリポジトリにも書き込みません。falseにすると、`watch_pr_ci`は何も読まずに終わります。
+      default: true
     repo_allowlist:
       type: array
       description: >-

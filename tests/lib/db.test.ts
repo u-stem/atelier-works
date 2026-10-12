@@ -19,6 +19,7 @@ import {
   deleteTerminalWorkItemsBefore,
   deleteWorkerSamplesBefore,
   expireApprovalRequestIfPending,
+  fetchDeploymentRows,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
   getApprovalRequest,
@@ -51,6 +52,7 @@ import {
   insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
+  isMissingDeploymentErrorColumnError,
   latestDraft,
   latestFixRound,
   latestMainCiRunCreatedAt,
@@ -70,6 +72,7 @@ import {
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
@@ -83,6 +86,7 @@ import {
   recordFailure,
   recordMainCiRun,
   recordPrCiCheck,
+  recordWorkspaceDiskUsageNotice,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -152,6 +156,9 @@ const NOW = new Date("2026-09-26T00:00:00.000Z");
 
 /** ジョブの外で動いたときの記録。環境変数に頼らず、値の並びを固定するために明示して渡す。 */
 const NO_JOBS = { job_id: null, root_job_id: null };
+
+/** 何も出さないログ。警告の有無を確かめないテストに渡す。 */
+const SILENT_LOG: Logger = { info() {}, warn() {}, error() {} };
 
 const WORK_ITEM_ROW: SqlRow = {
   id: 1,
@@ -1607,6 +1614,165 @@ describe("recordDeployment", () => {
     );
     expect(calls[0]?.text).toContain("::boolean");
   });
+
+  const FAILED_RECORD = {
+    sha_from: "aaa",
+    sha_to: "bbb",
+    changed_paths: [],
+    result: "failed",
+    needs_host_action: false,
+    pull_requests: [],
+    error: "wmill sync push failed: boom",
+  };
+
+  test("writes the reason of a failure in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls[0]?.values).toContain("wmill sync push failed: boom");
+  });
+
+  test("names the error column for a failure with a reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls[0]?.text).toContain("error)");
+  });
+
+  test("records a failure with a reason in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("does not name the error column for a success", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "success",
+        needs_host_action: false,
+        pull_requests: [],
+        error: null,
+      },
+      sql,
+    );
+    expect(calls[0]?.text).not.toContain("error");
+  });
+
+  test("records the failure without the reason when the error column is missing", async () => {
+    const calls: FakeCall[] = [];
+    const sql: SqlClient = (strings, ...values) => {
+      calls.push({ text: strings.join(" ? "), values });
+      const failing = calls.length === 1;
+      return {
+        fetch: () =>
+          failing
+            ? Promise.reject(
+                new Error(
+                  'column "error" of relation "deployments" does not exist',
+                ),
+              )
+            : Promise.resolve([{ id: 14 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    expect(await recordDeployment(FAILED_RECORD, sql, SILENT_LOG)).toBe(14);
+  });
+
+  test("rethrows a failure other than a missing error column", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(
+      recordDeployment(FAILED_RECORD, sql, SILENT_LOG),
+    ).rejects.toThrow("db down");
+  });
+});
+
+describe("isMissingDeploymentErrorColumnError", () => {
+  test("recognizes the undefined_column code", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        Object.assign(new Error("x"), { code: "42703" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("recognizes the message in the body of an API error", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        Object.assign(new Error("Bad Request"), {
+          body: 'column "error" of relation "deployments" does not exist',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match another failure", () => {
+    expect(isMissingDeploymentErrorColumnError(new Error("db down"))).toBe(
+      false,
+    );
+  });
+});
+
+describe("isMissingDeploymentErrorColumnError for a read", () => {
+  test("recognizes the message of a select that names the missing column", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        new Error('column "error" does not exist'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("fetchDeploymentRows", () => {
+  const missingColumn = Object.assign(new Error("undefined column"), {
+    code: "42703",
+  });
+
+  function handle(result: () => Promise<SqlRow[]>) {
+    return { fetch: result, execute: () => Promise.resolve() };
+  }
+
+  test("returns the rows of the query that names the error column", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.resolve([{ id: 1, error: "boom" }])),
+      () => handle(() => Promise.reject(new Error("must not run"))),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 1, error: "boom" }]);
+  });
+
+  test("reads again without the error column when it is missing", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.reject(missingColumn)),
+      () => handle(() => Promise.resolve([{ id: 2 }])),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 2, error: null }]);
+  });
+
+  test("rethrows a failure other than a missing error column", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(new Error("db down"))),
+        () => handle(() => Promise.resolve([])),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
+  });
+
+  test("rethrows a failure of the second read", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(missingColumn)),
+        () => handle(() => Promise.reject(new Error("db down"))),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
+  });
 });
 
 describe("addNoticeUnlessUnresolved", () => {
@@ -1666,6 +1832,88 @@ describe("addNoticeUnlessUnresolved", () => {
   test("returns null when an open notice was left as it is", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await addNoticeUnlessUnresolved(record, sql)).toBeNull();
+  });
+});
+
+describe("recordWorkspaceDiskUsageNotice", () => {
+  const message = "/workspacesのディスク使用量は約2.0 MiBです。";
+
+  test("resolves the open disk usage notices first", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE kind = 'workspace_disk_usage'\n      AND resolved = false",
+    );
+  });
+
+  test("keeps the newest open notice unresolved", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain(
+      "AND id <> (\n        SELECT id FROM factory.notices\n        WHERE kind = 'workspace_disk_usage' AND resolved = false\n        ORDER BY created_at DESC, id DESC\n        LIMIT 1",
+    );
+  });
+
+  test("records the cleanup as the resolver of the extra notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.values).toEqual(["cleanup_workspaces"]);
+  });
+
+  test("records when the extra notices were resolved", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain("SET resolved = true");
+  });
+
+  test("inserts a notice of the disk usage kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "INSERT INTO factory.notices (kind, message)\n    VALUES ('workspace_disk_usage', ",
+    );
+  });
+
+  test("passes only the message to the insert", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.values).toEqual([message]);
+  });
+
+  test("targets the partial unique index over the open disk usage notice", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "ON CONFLICT (kind) WHERE resolved = false AND kind = 'workspace_disk_usage'",
+    );
+  });
+
+  test("updates the message of the open notice on a conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "DO UPDATE SET message = EXCLUDED.message",
+    );
+  });
+
+  test("refreshes created_at of the open notice on every conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "DO UPDATE SET message = EXCLUDED.message, created_at = now()\n    RETURNING id",
+    );
+  });
+
+  test("returns the id of the open notice", async () => {
+    const { sql } = createFakeSqlClient([[], [{ id: 21 }]]);
+    expect(await recordWorkspaceDiskUsageNotice(message, sql)).toBe(21);
+  });
+
+  test("throws when the upsert returns no row", async () => {
+    const { sql } = createFakeSqlClient([[], []]);
+    await expect(recordWorkspaceDiskUsageNotice(message, sql)).rejects.toThrow(
+      "recordWorkspaceDiskUsageNotice",
+    );
   });
 });
 
@@ -4181,6 +4429,40 @@ describe("listActiveIssueWorkItems", () => {
   test("returns the mapped rows", async () => {
     const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
     const items = await listActiveIssueWorkItems("o", "r", 12, sql);
+    expect(items.map((item) => item.id)).toEqual([9]);
+  });
+});
+
+describe("listPrOpenIssueWorkItems", () => {
+  const SINCE = new Date("2026-10-01T00:00:00Z");
+
+  test("selects issue-kind work items in the pr_open status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.text).toContain("kind = 'issue' AND status = 'pr_open'");
+  });
+
+  test("selects only work items that have a pull request url", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.text).toContain("pr_url IS NOT NULL");
+  });
+
+  test("filters by the update time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.values).toContain(SINCE.toISOString());
+  });
+
+  test("limits the number of rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.values).toContain(10);
+  });
+
+  test("returns the mapped rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
+    const items = await listPrOpenIssueWorkItems(SINCE, 10, sql);
     expect(items.map((item) => item.id)).toEqual([9]);
   });
 });

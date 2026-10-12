@@ -36,6 +36,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   pr_trigger_label_left_removed: "action",
   deployed_sha_mismatch: "action",
   owner_id_mismatch: "action",
+  factory_repo_id_mismatch: "action",
   host_action_required: "action",
   cleanup_db_failed: "action",
   cleanup_worktree_busy: "action",
@@ -52,6 +53,8 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   drawio_viewer_bump_held: "action",
   main_ci_failed: "action",
   main_ci_check_denied: "action",
+  pr_ci_failed: "action",
+  pr_ci_check_denied: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */

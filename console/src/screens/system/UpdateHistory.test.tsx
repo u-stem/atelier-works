@@ -1,0 +1,85 @@
+import { describe, expect, test } from "bun:test";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { DeploymentEntry } from "../../api/guards/deployments.ts";
+import { TooltipProvider } from "../../components/ui/tooltip.tsx";
+import { UpdateHistory } from "./UpdateHistory.tsx";
+
+const T0 = "2026-10-11T03:20:00.000Z";
+const NOW = Date.parse("2026-10-11T04:00:00.000Z");
+const REASON = "wmill sync push failed (exit 1, timed_out=false): boom";
+const MARKUP_REASON = '<a href="https://evil.example">x</a><img src=x>';
+const URL_REASON = "see https://evil.example/path for details";
+const NO_REASON = "理由の記録はありません";
+
+const FAILED: DeploymentEntry = {
+  deployment_id: 1,
+  sha_from: "a".repeat(40),
+  sha_to: "b".repeat(40),
+  result: "failed",
+  needs_host_action: false,
+  occurred_at: T0,
+  pull_requests: [],
+  error: REASON,
+};
+
+function render(entries: readonly DeploymentEntry[]): string {
+  return renderToStaticMarkup(
+    <TooltipProvider>
+      <UpdateHistory entries={entries} now={NOW} />
+    </TooltipProvider>,
+  );
+}
+
+function renderReason(error: string | null): string {
+  return render([{ ...FAILED, error }]);
+}
+
+describe("UpdateHistory", () => {
+  test("shows the reason of a failed deployment", () => {
+    expect(render([FAILED])).toContain(REASON);
+  });
+
+  test("labels the reason", () => {
+    expect(render([FAILED])).toContain("理由: ");
+  });
+
+  test("shows only the head of a long reason", () => {
+    expect(renderReason(`${"h".repeat(120)}TAIL`)).not.toContain("TAIL");
+  });
+
+  test("escapes markup in the reason", () => {
+    expect(renderReason(MARKUP_REASON)).toContain(
+      "&lt;a href=&quot;https://evil.example&quot;&gt;x&lt;/a&gt;&lt;img src=x&gt;",
+    );
+  });
+
+  test("does not turn markup in the reason into a link", () => {
+    expect(renderReason(MARKUP_REASON)).not.toContain("<a ");
+  });
+
+  test("does not turn markup in the reason into an image", () => {
+    expect(renderReason(MARKUP_REASON)).not.toContain("<img");
+  });
+
+  test("does not turn a URL in the reason into a link", () => {
+    expect(renderReason(URL_REASON)).not.toContain("<a ");
+  });
+
+  test("shows a URL in the reason as text", () => {
+    expect(renderReason(URL_REASON)).toContain(URL_REASON);
+  });
+
+  test("states that a failure recorded without a reason has no reason", () => {
+    expect(renderReason(null)).toContain(NO_REASON);
+  });
+
+  test("states that a failure from an older backend has no reason", () => {
+    const { error: _omitted, ...older } = FAILED;
+    expect(render([older])).toContain(NO_REASON);
+  });
+
+  test("shows no reason for a successful deployment", () => {
+    const success = { ...FAILED, result: "success", error: null };
+    expect(render([success])).not.toContain("理由");
+  });
+});

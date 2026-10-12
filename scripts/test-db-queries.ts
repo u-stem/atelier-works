@@ -38,6 +38,7 @@ import {
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
@@ -46,6 +47,7 @@ import {
   recordFailure,
   recordMainCiRun,
   recordPrCiCheck,
+  recordWorkspaceDiskUsageNotice,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -53,6 +55,7 @@ import {
   resolveUnresolvedNoticesByPrefix,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
+  setWorkItemPrUrl,
   touchPrCiCheck,
   transitionMainCiRun,
   transitionPrCiCheck,
@@ -1450,6 +1453,37 @@ check(
     historyEmpty.pull_requests.length === 0,
   historyEmpty,
 );
+check(
+  "deployments: a failure recorded without a reason reads as null",
+  historyEmpty !== undefined &&
+    "error" in historyEmpty &&
+    historyEmpty.error === null,
+  historyEmpty,
+);
+// 失敗の理由は、行と同じ1つの文で書かれ、そのまま読み戻せる。
+await recordDeployment(
+  {
+    sha_from: null,
+    sha_to: "qdb-hist-error",
+    changed_paths: [],
+    result: "failed",
+    needs_host_action: false,
+    pull_requests: [],
+    error: "wmill sync push failed: qdb",
+  },
+  sql,
+);
+const historyErrorRows = await runConsoleQuery("deployments", 200, 30, sql);
+const historyError = historyErrorRows.find(
+  (row) => "sha_to" in row && row.sha_to === "qdb-hist-error",
+);
+check(
+  "deployments: the reason of a failure is read back",
+  historyError !== undefined &&
+    "error" in historyError &&
+    historyError.error === "wmill sync push failed: qdb",
+  historyError,
+);
 const historyUnrecorded = historyRows.find(
   (row) => "sha_to" in row && row.sha_to === "qdb-sha-boundary",
 );
@@ -2781,6 +2815,88 @@ execPsql(
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
 );
 
+// ---------------------------------------------------------------------------
+// ディスク使用量の通知は、本文に関わらず未解決を1件に保つ
+// ---------------------------------------------------------------------------
+
+const DISK_USAGE_KIND = "workspace_disk_usage";
+const diskFirst = await recordWorkspaceDiskUsageNotice("qdb disk A", sql);
+const diskSecond = await recordWorkspaceDiskUsageNotice("qdb disk B", sql);
+const diskAfterB = await listUnresolvedNoticesByKind(DISK_USAGE_KIND, sql);
+check(
+  "disk usage notice: a new usage updates the open notice",
+  diskSecond === diskFirst && diskAfterB.length === 1,
+  diskAfterB,
+);
+check(
+  "disk usage notice: the open notice shows the new usage",
+  diskAfterB[0]?.message === "qdb disk B",
+  diskAfterB,
+);
+for (const usage of ["qdb disk C", "qdb disk D", "qdb disk E"]) {
+  await recordWorkspaceDiskUsageNotice(usage, sql);
+}
+const diskAfterE = await listUnresolvedNoticesByKind(DISK_USAGE_KIND, sql);
+check(
+  "disk usage notice: three more usages keep one open notice with the last usage",
+  diskAfterE.length === 1 && diskAfterE[0]?.message === "qdb disk E",
+  diskAfterE,
+);
+execPsql(
+  target,
+  `UPDATE factory.notices SET created_at = now() - interval '12 hours' WHERE id = ${String(diskFirst)}`,
+);
+await recordWorkspaceDiskUsageNotice("qdb disk F", sql);
+const diskRefreshed = await getNoticeById(diskFirst, sql);
+check(
+  "disk usage notice: a notice younger than a day gets a new created_at",
+  diskRefreshed !== null &&
+    Date.now() - diskRefreshed.created_at.getTime() < 60 * 60 * 1000,
+  diskRefreshed,
+);
+let diskDuplicateRejected = false;
+try {
+  execPsql(
+    target,
+    `INSERT INTO factory.notices (kind, message) VALUES ('${DISK_USAGE_KIND}', 'qdb disk other')`,
+  );
+} catch (err) {
+  diskDuplicateRejected =
+    err instanceof Error &&
+    err.message.includes("notices_unresolved_disk_usage_key");
+}
+check(
+  "disk usage notice: the index rejects a second open notice",
+  diskDuplicateRejected,
+);
+await resolveNoticeIfUnresolved(diskFirst, DISK_USAGE_KIND, "op", [], sql);
+const diskResolvedBefore = await getNoticeById(diskFirst, sql);
+const diskNew = await recordWorkspaceDiskUsageNotice("qdb disk G", sql);
+const diskAfterG = await listUnresolvedNoticesByKind(DISK_USAGE_KIND, sql);
+check(
+  "disk usage notice: after the notice is resolved a new notice is inserted",
+  diskNew !== diskFirst &&
+    diskAfterG.length === 1 &&
+    diskAfterG[0]?.id === diskNew &&
+    diskAfterG[0]?.message === "qdb disk G",
+  diskAfterG,
+);
+const diskResolvedAfter = await getNoticeById(diskFirst, sql);
+check(
+  "disk usage notice: the resolved notice stays as it was",
+  diskResolvedBefore !== null &&
+    diskResolvedAfter !== null &&
+    diskResolvedAfter.resolved &&
+    diskResolvedAfter.message === diskResolvedBefore.message &&
+    diskResolvedAfter.created_at.getTime() ===
+      diskResolvedBefore.created_at.getTime(),
+  diskResolvedAfter,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.notices WHERE kind = '${DISK_USAGE_KIND}'`,
+);
+
 // dependabotの作業項目は、kindのCHECK制約を通り、アプリの挿入の関数で入る。
 // 戻せることは、後で適用するdown migrationが確かめる。
 const dependabotItem = await insertWorkItem(
@@ -3419,6 +3535,60 @@ check(
   stopAtStartSummary?.gap_longest_to?.toISOString() ===
     "2026-10-22T23:00:30.000Z",
   stopAtStartSummary,
+);
+
+// PRのCI監視は、PRを作って`pr_open`のままの`issue`の作業項目だけを巡回する。
+const prOpenWithUrl = await issueWorkItem(951, 1, "pr_open", "qdb-pr-open-url");
+await setWorkItemPrUrl(prOpenWithUrl, "https://github.com/qdb/r/pull/951", sql);
+await issueWorkItem(952, 1, "pr_open", "qdb-pr-open-no-url");
+const cancelledWithUrl = await issueWorkItem(
+  953,
+  1,
+  "cancelled",
+  "qdb-cancelled",
+);
+await setWorkItemPrUrl(
+  cancelledWithUrl,
+  "https://github.com/qdb/r/pull/953",
+  sql,
+);
+check(
+  "pr_open work items: only the issue item that is pr_open and has a pull request url is listed",
+  (await listPrOpenIssueWorkItems(new Date(Date.now() - 60_000), 100, sql))
+    .filter((item) => item.owner === OWNER)
+    .map((item) => item.id)
+    .join(",") === String(prOpenWithUrl),
+);
+check(
+  "pr_open work items: an item not updated since the cutoff is not listed",
+  (
+    await listPrOpenIssueWorkItems(new Date(Date.now() + 60_000), 100, sql)
+  ).every((item) => item.owner !== OWNER),
+);
+
+// 権限の不足のnoticeは、リポジトリごとに同じ本文なので、未解決のものがあれば新しく挿入しない。
+const prCiDeniedNotice = {
+  kind: "pr_ci_check_denied",
+  message: "qdb/prci: PRのCIの実行をGitHubから読めません",
+};
+const prCiDeniedFirst = await addNoticeUnlessUnresolved(prCiDeniedNotice, sql);
+check(
+  "pr_ci_check_denied: a second notice of the same repository is not inserted while one is unresolved",
+  prCiDeniedFirst !== null &&
+    (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) === null,
+);
+check(
+  "pr_ci_check_denied: the notice is resolved by the kind and the repository prefix",
+  (await resolveUnresolvedNoticesByPrefix(
+    "pr_ci_check_denied",
+    "qdb/prci: ",
+    "watch_pr_ci",
+    sql,
+  )) === 1 && (await addNoticeUnlessUnresolved(prCiDeniedNotice, sql)) !== null,
+);
+execPsql(
+  target,
+  "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

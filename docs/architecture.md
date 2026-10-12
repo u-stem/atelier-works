@@ -40,7 +40,8 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 | 2. 要件定義 | headless Claudeが要件定義ドラフトを生成し、人が承認か却下をする | 実装済み |
 | 3. 実装 | 承認済みの要件定義からworktree上で実装し、PRを作る | 実装済み。既定では無効 |
 | 3. PRレビュー・修正 | 既存のPRをレビューし、指摘を修正する | 実装済み |
-| 4. CI監視 | 対象リポジトリのmainのCIをコミット単位で監視し、失敗を通知する | 実装済み |
+| 4. mainのCI監視 | 対象リポジトリのmainのCIをコミット単位で監視し、失敗を通知する | 実装済み |
+| 4. PRのCI監視 | Factoryが作ったPRのCIをheadのコミット単位で監視し、失敗を通知する | 実装済み |
 | 5. 自己改善 | 運用記録を週次で監査し、レポートと改善提案を作る | 実装済み |
 
 工程3の実装フロー(`implement`)は、`factory_config`の`implement_enabled`を`true`にしたときだけ動く。既定値は`false`で、その間は要件定義を承認した作業項目が承認済み(`approved`)のまま残る。
@@ -67,6 +68,17 @@ flowchart TD
 
 承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
 
+`owners`に`id`があるオーナーは、GitHubの現在のIDと2か所で照合する。
+1つは、検索の入口である`poll_issues`と`poll_prs`である。
+もう1つは、作業項目を進める処理である。
+準備のステップは、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`である。
+ほかに、フォームからのIssueの作成(`manual_intake_create_issue`)と、Issue化の提案の処理(`issue_proposal_apply`)がある。
+どれも、cloneやGitHubへの書き込みの前に、リポジトリのオーナーを`owners`と照合する。
+`owners`に無いオーナーのリポジトリは、`factory_repo`でなければ止める。
+`factory_repo`と一致するリポジトリは、`factory_repo_id`があれば、同じ関門がそのIDも照合する。
+オーナーが改名して別の人がその名前を取得した場合に、その人のリポジトリを取得したり、実行したりしないためである。
+設定と限界は[運用](operations.md)の「オーナーの数値IDを固定する」に書く。
+
 ## 状態遷移
 
 作業項目(`work_items`)の状態は`status`列だけが持つ。GitHubのラベルは人からFactoryへのトリガーに限り、状態を表さない。
@@ -84,7 +96,7 @@ Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は
 | `approved` | 要件定義が承認された | issue | 終端 |
 | `rejected` | 値は定義されているが、今のコードは作業項目に書き込まない。却下は承認依頼の状態として記録する | issue | 終端 |
 | `implementing` | 実装している。worktree上の実装、検証と修正のループ、PRの作成までを含む | issue | |
-| `pr_open` | 実装を終えてPRを作成か更新した。マージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
+| `pr_open` | 実装を終えてPRを作成か更新した。PRのCIとマージ後のCIは、作業項目とは別に工程4が監視する | issue | 終端 |
 | `reviewing` | PRをレビューしている | pr_review | |
 | `reviewed` | レビューをCOMMENTとして投稿した | pr_review、pr_fix | 終端 |
 | `fixing` | レビューの指摘やコメントを修正している | pr_fix | |
@@ -184,7 +196,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `approvals` | 承認と却下の古い履歴。今は書き込まない |
 | `agent_runs` | Claudeの実行1回ごとのモデル、トークン数、費用、所要時間、終了コード |
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
-| `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)も持つ |
+| `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
 | `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
@@ -239,7 +251,7 @@ Consoleの一覧と集計は次のviewを読む。
 
 要件定義書と監査レポートの詳細表示では、Consoleのbackend(`f/factory/steps/console_query.ts`)がテーブルを直接読む。読むのは`requirement_drafts`、`audit_reports`、`approval_requests`、`issue_proposals`、`work_items`である。
 
-更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPRで、変更したパスの一覧は選ばない。
+更新履歴の表示では、`console_query`の`deployments`viewが`deployments`テーブルを新しい順に読む。選ぶのは、版、結果、ホストの作業の要否、時刻、含まれるPR、失敗の理由で、変更したパスの一覧は選ばない。
 
 `console_query`は、行の配列を返すviewのほかに、1つのオブジェクトを返す3つのviewを持つ。
 
@@ -293,6 +305,7 @@ Consoleの一覧と集計は次のviewを読む。
 | sample_worker_load | `30 */2 * * * *` | `f/factory/sample_worker_load` | 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。workerの並列数やポーリングの間隔を見直す根拠にします。 |
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 | watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
+| watch_pr_ci | `0 */5 * * * *` | `f/factory/watch_pr_ci` | 5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。観測と通知だけで、PRには書き込みません。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -353,6 +366,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/drawio_viewer_bump_github` | script | [LIB] draw.ioのビューアの更新のGitHub操作 |
 | `f/factory/lib/drawio_viewer_observations` | script | [LIB] draw.ioのリリースの観測の記録 |
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
+| `f/factory/lib/factory_clone` | script | [LIB] Factory自身のcloneの用意 |
+| `f/factory/lib/factory_repo_gate` | script | [LIB] Factory自身のリポジトリの照合 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
@@ -360,6 +375,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
 | `f/factory/lib/main_ci_watch` | script | [LIB] mainのCI監視の流れ |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
+| `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
@@ -378,6 +394,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
+| `f/factory/lib/repo_owner_gate` | script | [LIB] 対象リポジトリのオーナーIDの照合 |
 | `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
@@ -431,6 +448,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/dependabot_assess` | script | [SF-3-5/2] 依存の更新の影響調査(Claude) |
 | `f/factory/steps/dependabot_finish` | script | [SF-3-5/3] 依存の更新のマージと終了 |
 | `f/factory/watch_main_ci` | script | [SF-4-1] mainのCIを監視して失敗を通知 |
+| `f/factory/watch_pr_ci` | script | [SF-4-2] PRのCIを監視して失敗を通知 |
 | `f/factory/audit_kickoff` | script | [SF-5-1] 週次監査の起動 |
 | `f/factory/audit` | flow | [SF-5-2] 運用記録の監査と改善提案 |
 | `f/factory/steps/audit_prepare` | script | [SF-5-2/1] 証跡の収集と作業領域の準備 |
@@ -475,6 +493,21 @@ Factoryの投稿の見分け方、総評の組み立て、スレッドの解決�
 
 `self_update`はFactory自身のリポジトリを2分ごとに取り込み、Windmillに反映する。
 
+pullの前に、`factory_repo_id`があれば、`factory_repo`が指すリポジトリのGitHubの現在のIDと照合する。
+オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを反映しないためである。
+照合は、Factory自身のcloneを使うすべての処理が行う。
+対象は、`self_update`、`poll_issues`のデプロイ版の確認、各フローのprepareと`pipeline_generate`である。
+この対象のどの処理も、`ensureVerifiedFactoryClone`を通して取得する。
+照合は、cloneのロックを取った直後に行い、ロックの待ちを照合から取得までの間に入れない。
+cloneのoriginは、取得の前に毎回`factory_repo`のURLへ付け替える。
+IDの食い違い、リポジトリが無い(404)、URLを読めない場合は、要対応のnotice`factory_repo_id_mismatch`を残す。
+そのとき`self_update`は、self cloneの更新と反映をせず、`job_failures`に記録して成功で終わる。
+ほかの処理は、取得の前にエラーで止まり、既存のエラー処理(フローの失敗など)に乗る。
+認証の失敗、5xx、レート制限、通信断の場合は、noticeを残さず、元の例外を投げてジョブの失敗にする。
+次の回に照合が通れば、取得が再開する。
+`factory_repo_id`が無ければ照合せず、名前だけで取得する。
+設定と限界は[運用](operations.md)の「Factory自身のリポジトリの数値IDを固定する」に書く。
+
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
 2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
 3. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
@@ -501,13 +534,17 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 このscriptが、イメージが古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
 反映した時点でそうなっていれば、通知を出さない。
 
-ジョブ全体には上限(`timeout`)を2800秒で置く。
+ジョブ全体には上限(`timeout`)を3000秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
 子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
 Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)と送信2回に余裕を足した120秒で区切る。
 最後のConsole用のworkerの確認では、例外を投げずに警告だけを残す。
 更新のうち、`wmill_token`の取得を含め、それ以降の失敗と時間切れは、更新の失敗として`deployments`に記録する。
+失敗の行には、ログに出す失敗の文と同じ伏せ字処理を通した理由を、2000字までに切り詰めて`deployments.error`に入れる。
+`error`の列を足すmigrationがまだ当たっていないときは、理由を持たない行として記録し直す。
+読む側(`console_query`の`deployments`viewと証跡パックのデプロイの一覧)も、列が無いエラーのときだけ`error`を選ばない問い合わせで読み直し、理由は無いものとして扱う。
+反映の履歴の全体が読めなくなるのを防ぐためで、ほかのエラーは握らない。
 ただし、成功の記録そのものが時間切れになったときは、反映が済んでいるので失敗にしない。
 区切りは記録を中断しないので、後から成功の行が入りうる。
 失敗の行を足すと、同じコミットに成功と失敗が並ぶためである。
@@ -517,30 +554,31 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
-`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、2800秒は切り詰められない。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3000秒は切り詰められない。
 
-2800秒は、全部が最悪のときの長さ2743.2秒に余裕を足した値である。
+3000秒は、全部が最悪のときの長さ2906.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
 | 段 | 回数 | 1回の上限 | 停止の上乗せ | 合計 |
 | --- | --- | --- | --- | --- |
 | self cloneのロック待ち | 1 | 300秒 | 確かめる間隔0.2秒 | 300.2秒 |
-| git | 10 | 60秒 | 13秒 | 730秒 |
+| git | 11 | 60秒 | 13秒 | 803秒 |
 | ホストの印を確かめるローカルのgit | 9 | 10秒 | 13秒 | 207秒 |
 | `wmill sync push`、`wmill datatable migrate up` | 2 | 300秒 | 13秒 | 626秒 |
-| 区切った呼び出し | 21 | 30秒 | なし | 630秒 |
+| 区切った呼び出し | 24 | 30秒 | なし | 720秒 |
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 
-gitの10回は、cloneの更新で4回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
+gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
 ローカルのgitの9回は、ホストの印の確認である。
 コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
 どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
 ローカルのgitは、オブジェクトを参照するだけで、ネットワークとワークツリーに触れないので、上限を10秒にする。
 `mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
-区切った呼び出しの21回は、設定の取得が1回、更新が8回、最後の確認が4回、ホスト側の作業の通知が8回に分かれる。
+区切った呼び出しの24回は、設定の取得が1回、リポジトリIDの照合が3回、更新が8回、最後の確認が4回、ホスト側の作業の通知が8回に分かれる。
+リポジトリIDの照合の3回は、IDの取得、失敗の記録、noticeの挿入である。
 更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
 残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
 成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので、両方を数える。
@@ -588,6 +626,15 @@ Claudeに渡すスキル(`.claude/skills/**`)は、実行のたびにself clone�
 失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら自動で解決する。
 GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
 判定の条件、通知、権限エラーの扱いは[mainのCI監視の仕様](internals/main-ci.md)に書く。
+
+## 工程4のPRのCI監視
+
+`watch_pr_ci`が5分ごとに、Factoryが作ったPRのGitHub Actionsの実行を、headのコミット単位で判定する。
+対象は、状態が`pr_open`の作業項目が指すPRのうち、開いていて下書きでなく、forkでないものである。人が作ったPRは見ない。
+作業項目の状態は変えず、記録は`pr_ci_checks`に残す。観測と通知だけを行い、PRとリポジトリへの書き込みと、ログの読み取りはしない。
+失敗したheadは要対応の通知とDiscordで知らせ、同じheadの再実行か新しいheadが通ったときと、PRが閉じたときに、通知を自動で解決する。
+GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
+判定の順序、通知、自動解決、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md)に書く。
 
 ## 工程5の監査
 

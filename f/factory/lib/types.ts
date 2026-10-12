@@ -806,6 +806,11 @@ export type DeploymentRecord = {
   result: string;
   needs_host_action: boolean;
   pull_requests: DeploymentPullRequest[];
+  /**
+   * 失敗の理由。伏せ字処理と切り詰めを済ませた文(`recordFailedDeployment`を参照)。
+   * 成功の記録では`null`にする。省くと`null`と同じ扱いになる。
+   */
+  error?: string | null;
 };
 
 /** `factory.deployments`の最新の1行のうち、反映の成否と対象の版を表す列。 */
@@ -847,7 +852,8 @@ export type FactoryOwner = {
   /**
    * GitHubのアカウントの数値ID(正の整数)。
    * 指定すると、`poll_issues`と`poll_prs`が検索の前に現在のIDと照合する。
-   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れないため。
+   * 作業項目を進める準備のステップも、リポジトリを取得する前に、リポジトリのオーナーのIDを照合する。
+   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れず、保存済みの作業項目も進めないため。
    * 省略すると、名前だけで照合する。
    */
   id?: number;
@@ -902,6 +908,13 @@ export type FactoryConfig = {
    */
   retention_logs_days: number;
   factory_repo: string;
+  /**
+   * `factory_repo`のGitHubリポジトリの数値ID(正の整数)。
+   * 指定すると、Factory自身のcloneを使う処理が取得の前に現在のIDと照合し、食い違うときは取得しない。
+   * オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを使わないため。
+   * 省略すると、名前だけで取得する。
+   */
+  factory_repo_id?: number;
   /**
    * `self_update.ts`がこのSoftware Factory自身のリポジトリから更新するときに
    * 追う`factory_repo`のブランチ。`ensureFactoryClone`が毎回fetchし、
@@ -974,6 +987,11 @@ export type FactoryConfig = {
   dependabot_enabled: boolean;
   /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
   dependabot_min_published_days: number;
+  /**
+   * `watch_pr_ci`がFactoryのPRのCIを観測して通知するか。
+   * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。
+   */
+  pr_ci_watch_enabled: boolean;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の

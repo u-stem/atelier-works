@@ -1,0 +1,9 @@
+summary: '[LIB] Factory自身のリポジトリの照合'
+description: 内部ライブラリです。直接実行するものではありません。factory_repo_idと現在のリポジトリIDを照合し、食い違うときはcloneの取得を止めます。
+lock: '!inline f/factory/lib/factory_repo_gate.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

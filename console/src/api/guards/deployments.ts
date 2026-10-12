@@ -34,6 +34,11 @@ export type DeploymentEntry = {
   readonly needs_host_action: boolean;
   readonly occurred_at: string;
   readonly pull_requests: DeploymentPullRequest[];
+  /**
+   * 失敗の理由。信頼できない文字列で、画面には文字としてだけ出す。
+   * 理由が無ければ`null`で、理由を返す前のbackendの応答では欠ける。
+   */
+  readonly error?: string | null;
 };
 
 function isDeploymentPullRequest(
@@ -61,7 +66,8 @@ function isDeploymentEntry(value: unknown): value is DeploymentEntry {
     isString(value.result) &&
     isBoolean(value.needs_host_action) &&
     isIsoTimestamp(value.occurred_at) &&
-    isPullRequestList(value.pull_requests)
+    isPullRequestList(value.pull_requests) &&
+    (value.error === undefined || isNullableString(value.error))
   );
 }
 

@@ -28,14 +28,13 @@ import {
   busyWorktreeNoticeMessage,
   dirsNotYetVisited,
   excludeActiveWorktrees,
-  formatDiskUsageMessage,
   groupByRepo,
   issueWorktreePaths,
   lockFileDirs,
   mainRepoDir,
   orphanClaudeThresholdSec,
-  parseDiskUsageKb,
   partitionRepoGroups,
+  recordDiskUsage,
   selectOrphanClaudePids,
   terminateOrphans,
   unresolvedHoldersNoticeMessage,
@@ -46,6 +45,7 @@ import {
   addNoticeUnlessUnresolved,
   listActive,
   listStaleTerminalWorkItems,
+  recordWorkspaceDiskUsageNotice,
 } from "./lib/db.ts";
 import { type GhClient, getPr } from "./lib/github.ts";
 import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
@@ -662,20 +662,14 @@ function removeStaleJobTmpDirs(log: Logger): number {
 // ディスク使用量
 // ---------------------------------------------------------------------------
 
-async function recordDiskUsage(log: Logger): Promise<number> {
-  const duResult = await runCommand(["du", "-sk", WORKSPACES_ROOT]);
-  if (duResult.exitCode !== 0) {
-    log.warn("cleanup: du failed, skipping disk usage notice", {
-      error: maskSecrets(duResult.stderr.trim()),
-    });
-    return 0;
-  }
-  const usageKb = parseDiskUsageKb(duResult.stdout);
-  await addNoticeUnlessUnresolved({
-    kind: "workspace_disk_usage",
-    message: formatDiskUsageMessage(usageKb, WORKSPACES_ROOT),
+function recordWorkspacesDiskUsage(log: Logger): Promise<number> {
+  return recordDiskUsage(WORKSPACES_ROOT, {
+    measure: () => runCommand(["du", "-sk", WORKSPACES_ROOT]),
+    record: (message) => recordWorkspaceDiskUsageNotice(message),
+    warn: (message, error) => {
+      log.warn(message, { error: maskSecrets(error) });
+    },
   });
-  return usageKb;
 }
 
 // ---------------------------------------------------------------------------
@@ -712,7 +706,7 @@ export async function main(): Promise<CleanupWorkspacesResult> {
 
   const removedJobTmpDirs = removeStaleJobTmpDirs(log);
 
-  const diskUsageKb = await recordDiskUsage(log);
+  const diskUsageKb = await recordWorkspacesDiskUsage(log);
 
   const result: CleanupWorkspacesResult = {
     removed_worktrees: removed.worktrees + removedDependabot,

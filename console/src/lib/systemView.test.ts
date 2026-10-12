@@ -235,6 +235,10 @@ describe("resolverLabel", () => {
     expect(resolverLabel("cleanup_db")).toBe("DBの掃除(自動)");
   });
 
+  test("labels the workspace cleanup as automatic", () => {
+    expect(resolverLabel("cleanup_workspaces")).toBe("作業領域の掃除(自動)");
+  });
+
   test("labels the self update as automatic", () => {
     expect(resolverLabel("self_update")).toBe("自己更新(自動)");
   });
@@ -249,6 +253,10 @@ describe("resolverLabel", () => {
 
   test("labels the main CI watcher as automatic", () => {
     expect(resolverLabel("watch_main_ci")).toBe("mainのCIの監視(自動)");
+  });
+
+  test("labels the pull request CI watcher as automatic", () => {
+    expect(resolverLabel("watch_pr_ci")).toBe("PRのCIの監視(自動)");
   });
 
   test("shows a person's name as plain text", () => {

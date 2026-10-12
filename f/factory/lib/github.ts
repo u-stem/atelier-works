@@ -744,6 +744,56 @@ export async function getAccountId(
 }
 
 /**
+ * `GET repos/{owner}/{repo}`で、リポジトリの現在の数値IDを取得する。
+ * 名前を別の人が取得していれば、その人のリポジトリのIDが返る。
+ * 改名や移管の後の旧名で、GitHubの転送が効くかは確かめていない。
+ */
+export async function getRepositoryId(
+  client: GhClient,
+  owner: string,
+  repo: string,
+): Promise<number> {
+  const context = "GET /repos/{owner}/{repo}";
+  const response = await callGhApi(
+    client,
+    `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isIdPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.id;
+}
+
+/**
+ * `GET repos/{owner}/{repo}`で、リポジトリを持つオーナー(ユーザーか組織)の現在の数値IDを取得する。
+ * 名前を別の人が取得していれば、その人のIDが返る。
+ * リポジトリの存在の確認と同じ1回の呼び出しで取れるので、オーナーのIDだけを別に引かない。
+ */
+export async function getRepositoryOwnerId(
+  client: GhClient,
+  owner: string,
+  repo: string,
+): Promise<number> {
+  const context = "GET /repos/{owner}/{repo}";
+  const response = await callGhApi(
+    client,
+    `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  const ownerPayload: unknown =
+    typeof parsed === "object" && parsed !== null
+      ? Reflect.get(parsed, "owner")
+      : undefined;
+  if (!isIdPayload(ownerPayload)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return ownerPayload.id;
+}
+
+/**
  * Factoryが作るコミットのauthorとcommitterの名義を、viewer
  * (PATが指すGitHubアカウント)から作る。
  * 個人のメールアドレスをコミットに書かないよう、GitHubのnoreplyの形
@@ -2120,6 +2170,11 @@ export type PullRequest = {
   readonly headRef: string;
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
+  /**
+   * ベースのリポジトリのID。実行のheadのリポジトリとIDで比べるために使う。
+   * 無いか、正の安全な整数でなければ`null`。
+   */
+  readonly baseRepoId: number | null;
   readonly baseRef: string;
   /** GitHubがまだ計算していないときは`null`。真偽に丸めない。 */
   readonly mergeable: boolean | null;
@@ -2145,7 +2200,10 @@ type PrPayload = {
   };
   readonly base: {
     readonly ref: string;
-    readonly repo: { readonly full_name: unknown } | null;
+    readonly repo: {
+      readonly full_name: unknown;
+      readonly id?: unknown;
+    } | null;
   };
   readonly mergeable: unknown;
   readonly mergeable_state: unknown;
@@ -2205,6 +2263,13 @@ export async function getPr(
     parsed.base.repo !== null && typeof parsed.base.repo.full_name === "string"
       ? parsed.base.repo.full_name
       : "";
+  const baseRepoIdRaw = parsed.base.repo?.id;
+  const baseRepoId =
+    typeof baseRepoIdRaw === "number" &&
+    Number.isSafeInteger(baseRepoIdRaw) &&
+    baseRepoIdRaw > 0
+      ? baseRepoIdRaw
+      : null;
   return {
     number: parsed.number,
     title: parsed.title,
@@ -2216,6 +2281,7 @@ export async function getPr(
     headRef: parsed.head.ref,
     headRepoFullName,
     baseRepoFullName,
+    baseRepoId,
     baseRef: parsed.base.ref,
     mergeable: typeof parsed.mergeable === "boolean" ? parsed.mergeable : null,
     mergeableState:

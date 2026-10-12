@@ -179,10 +179,20 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "owner_id_mismatch",
     guide(
-      "設定したオーナーの数値IDが、GitHubの現在のIDと食い違うか、その名前のアカウントが見つかりません。オーナーが改名または削除された可能性があります。このオーナーの検索は飛ばしています。",
-      "GitHubで、そのアカウントが意図した持ち主か確かめ、factory_configのownersの名前とIDを見直してください。",
+      "設定したオーナーの数値IDが、GitHubの現在のIDと食い違うか、その名前のアカウントやリポジトリが見つかりません。オーナーが改名または削除された可能性があります。保存済みの作業項目のオーナーが、ownersに無くなっていることもあります。このオーナーの検索は飛ばし、そのオーナーのリポジトリの作業項目は、リポジトリを取得せずに止めています。",
+      "GitHubで、そのアカウントが意図した持ち主か確かめ、factory_configのownersの名前とIDを見直してください。止めた作業項目は、見直した後に再実行します。",
       {
         note: "名前とIDが合うと、次の回から検索が再開します。見直した後に、この通知を解決してください。",
+      },
+    ),
+  ],
+  [
+    "factory_repo_id_mismatch",
+    guide(
+      "設定したfactory_repo_idが、factory_repoのGitHubの現在のIDと食い違うか、そのリポジトリが見つかりません。リポジトリが削除されたか、オーナーが改名して別の人がその名前を取得したか、PATがそのリポジトリを読めなくなった可能性があります。privateリポジトリでは、PATがアクセスを失うと404になることがあります。自己更新は取得も反映もせず、Factory自身のリポジトリを使うほかの処理は、取得の前に失敗します。",
+      "GitHubで、そのリポジトリが意図した持ち主のものか、PATがそのリポジトリを読めるかを確かめ、factory_configのfactory_repoとfactory_repo_idを見直してください。",
+      {
+        note: "名前とIDが合うと、次の回から自己更新が再開し、ほかの処理も取得できます。見直した後に、この通知を解決してください。",
       },
     ),
   ],
@@ -328,6 +338,26 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     "main_ci_check_denied",
     guide(
       "対象リポジトリの既定のブランチのCIの実行を、GitHubから読めませんでした(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできません。読めない間は、そのリポジトリのmainのCIの失敗に気づけません。",
+      "GitHubのfine-grained PATの設定で、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめてください。権限を足してもPATの値は変わらないので、Windmillの変数を更新する必要はありません。組織のリポジトリでは、組織の承認が再び要ることがあります。",
+      {
+        note: "権限を足して読めるようになると、次の回に自動で解決されます。",
+      },
+    ),
+  ],
+  [
+    "pr_ci_failed",
+    guide(
+      "Factoryが作ったPRのheadのコミットで、CI(GitHub Actionsのpull_requestかpushの実行)が失敗しました。本文に、PR、コミットの先頭7文字、理由、失敗した実行のリンクが載ります。",
+      "リンク先の実行のログで原因を確かめ、PRに修正を入れてください。metadataジョブの失敗なら、「mise run metadata」を実行して差分をコミットします。取り消しやフレークなら、実行をやり直します。",
+      {
+        note: "同じheadの実行をやり直して通ると、自動で解決されます。PRにpushして新しいheadが通ったときと、PRを閉じたときも自動で解決されます。",
+      },
+    ),
+  ],
+  [
+    "pr_ci_check_denied",
+    guide(
+      "対象リポジトリのPRとCIの実行を、GitHubから読めませんでした(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできません。読めない間は、そのリポジトリのPRのCIの失敗に気づけません。",
       "GitHubのfine-grained PATの設定で、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめてください。権限を足してもPATの値は変わらないので、Windmillの変数を更新する必要はありません。組織のリポジトリでは、組織の承認が再び要ることがあります。",
       {
         note: "権限を足して読めるようになると、次の回に自動で解決されます。",

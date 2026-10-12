@@ -26,7 +26,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `approval_requested` | 承認待ち | `pipeline_request_approval` | 要件定義の承認依頼を記録した |
 | `requirements_approved` | 要件定義承認 | `requirements_apply` | 要件定義が承認された |
 | `intake_refreshed` | 取り込み内容を更新 | `requirements_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した |
-| `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった |
+| `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった。または、Factoryが作ったPRのCIが失敗した |
 | `pr_reviewed` | PRレビュー完了 | `pr_review_post` | レビューを投稿した |
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
 | `job_failed` | ジョブ失敗 | 下の表を参照 | フローやスケジュールが失敗した |
@@ -50,6 +50,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
+| `watch_pr_ci` | Factoryが作ったPRのCIが失敗し、通知を新しく残した(理由は`ci_failure`か`ci_other_conclusion`) |
 
 `poll_issues`が、1回のポーリングで複数のIssueについてラベルを外した結果を判断できなかったときは、Issueごとに送らず、リンクを並べた1件の通知にまとめる。
 各行は`owner/repo#番号`とリンクで、タイトルとリンクの先は先頭のIssueである。
@@ -215,7 +216,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `labeler_denied` | `poll_issues`、`poll_prs` | 対象、許可されていないトリガーラベル |
 | `fork_head_denied` | `poll_prs` | 対象のPR |
 | `labeler_check_limit` | `poll_issues`、`poll_prs` | 対象、付与者を判定できないトリガーラベル、付け直す操作 |
-| `owner_id_mismatch` | `poll_issues`、`poll_prs` | オーナー名、設定のID、食い違いのときはGitHubの現在のID、`owners`を見直す操作 |
+| `owner_id_mismatch` | `poll_issues`、`poll_prs`、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`、`manual_intake_create_issue`、`issue_proposal_apply` | オーナー名かリポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`owners`を見直す操作 |
+| `factory_repo_id_mismatch` | `self_update`、`poll_issues`、各フローのprepare、`pipeline_generate`、`manual_intake_create_issue`、`issue_proposal_apply` | リポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`factory_repo`と`factory_repo_id`を見直す操作 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
@@ -228,6 +230,8 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 | `main_ci_failed` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、コミットの先頭7文字、失敗した実行のリンク、次の操作 |
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
+| `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、失敗した実行のリンク、次の操作 |
+| `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
 `check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。
@@ -246,9 +250,15 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `main_ci_check_denied`は、実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
 詳細は[mainのCI監視の仕様](main-ci.md)にある。
 
+`pr_ci_failed`は、失敗を確定したPRのheadごとに1件残す。Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。リンクはPRのページで、説明に理由コード、「次の操作」を載せる。
+本文は固定文で、workflowの名前、結論、ログは載せない。外部の文字列は、`pr_ci_checks`の`summary`列にだけ残す。
+同じheadの再実行が通ったとき、新しいheadが通ったとき、PRが閉じたときに、`watch_pr_ci`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
+`pr_ci_check_denied`は、PRか実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
+詳細は[PRのCI監視の仕様](pr-ci.md)にある。
+
 ### 重複の抑止
 
-noticeは、すべて`addNoticeUnlessUnresolved`で作る。
+noticeは、作業領域のディスク使用量(`workspace_disk_usage`)を除き、すべて`addNoticeUnlessUnresolved`で作る。
 同じ種類と本文の未解決のnoticeがあるあいだは、新しく追加しない。
 同じ状況が続く間、スケジュールや実行のたびに、見分けの付かないnoticeが積み上がるのを防ぐためである。
 本文が対象(作業項目、PR、版など)で決まるので、対象が違えば別のnoticeになる。
@@ -256,6 +266,20 @@ noticeは、すべて`addNoticeUnlessUnresolved`で作る。
 
 DBには、未解決のnoticeの種類と本文のmd5に対する部分一意索引があり、並行した追加の重複も拒む。
 `resolved_by`が`migration`の解決済みnoticeは、索引を作るmigrationが、同じ種類と本文の未解決のうち作成が最古の1件を残して解決したものである。
+
+### ディスク使用量のnotice
+
+ディスク使用量のnoticeは、本文に測った使用量が入るので、本文での判定では値が変わるたびに別のnoticeになる。
+そのため、作業領域の掃除は`recordWorkspaceDiskUsageNotice`で記録し、本文が違っても未解決のnoticeを1件に保つ。
+
+- 未解決のnoticeがあれば、新しく作らず、本文を新しい使用量に、作成時刻を現在に更新する。時刻の更新は1日の間隔を空けず、記録のたびに行う。掃除は1日1回なので、実質1日1回である。
+- 未解決のnoticeが無ければ、1件作る。解決済みのnoticeは変えず、履歴として残る。
+- 未解決のnoticeが2件以上あれば、作成が最も新しい1件を更新し、残りを解決済みにする(`resolved_by`は`cleanup_workspaces`)。
+- 使用量を測れなかったときは、noticeを作成せず、更新しない。記録に失敗しても、掃除の他の処理の結果は変わらず、警告のログだけを残す。
+
+DBには、この種類の未解決のnoticeを1件までにする部分一意索引(`notices_unresolved_disk_usage_key`)があり、掃除が同時に2つ動いても2件目を拒む。
+記録はこの索引を`ON CONFLICT`の衝突先にして、既存の1件の更新に回る。
+索引を作るmigrationは、未解決のうち作成が最も新しい1件を残し、残りを解決済みにする(`resolved_by`は`migration`)。
 
 ### 作成時刻の更新
 

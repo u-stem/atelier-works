@@ -24,10 +24,38 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells how to read the failed run of the pull request CI", () => {
+    expect(noticeGuide("pr_ci_failed").action).toContain("実行のログ");
+  });
+
+  test("tells how to fix a failed metadata job of the pull request CI", () => {
+    expect(noticeGuide("pr_ci_failed").action).toContain("mise run metadata");
+  });
+
+  test("tells which permission the denied pull request CI check needs", () => {
+    expect(noticeGuide("pr_ci_check_denied").action).toContain("Actions: Read");
+  });
+
   test("says a busy worktree keeps one notice open, not a new one each day", () => {
     expect(noticeGuide("cleanup_worktree_busy").action).toContain(
       "同じ通知が1件残り続けます",
     );
+  });
+
+  test("tells the factory repo id mismatch is fixed in factory_repo and factory_repo_id", () => {
+    expect(noticeGuide("factory_repo_id_mismatch").action).toContain(
+      "factory_repo_id",
+    );
+  });
+
+  test("tells the owner id mismatch also stops the work on the repositories of the owner", () => {
+    expect(noticeGuide("owner_id_mismatch").meaning).toContain(
+      "リポジトリを取得せずに止めて",
+    );
+  });
+
+  test("tells the owner id mismatch also covers an owner missing from owners", () => {
+    expect(noticeGuide("owner_id_mismatch").meaning).toContain("ownersに無く");
   });
 
   test("falls back to the generic guide for an unknown kind", () => {

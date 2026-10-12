@@ -445,3 +445,54 @@ export function formatDiskUsageMessage(usageKb: number, path: string): string {
   const usageMib = (usageKb / 1024).toFixed(1);
   return `${path}のディスク使用量は約${usageMib} MiBです。`;
 }
+
+export type RecordDiskUsageDeps = {
+  /** `du -sk <path>`を実行し、終了コードと出力を返す。 */
+  readonly measure: () => Promise<{
+    readonly exitCode: number;
+    readonly stdout: string;
+    readonly stderr: string;
+  }>;
+  /** 本文を、ディスク使用量の未解決の通知として記録する。 */
+  readonly record: (message: string) => Promise<unknown>;
+  /** 測定や記録の失敗を残す。 */
+  readonly warn: (message: string, error: string) => void;
+};
+
+/**
+ * `path`のディスク使用量を測り、通知として記録して、使用量(KiB)を返す。
+ * 測定に失敗したら記録せず0を返し、既存の通知には触れない。
+ * 記録に失敗しても例外を投げず、測った使用量を返す。掃除の他の処理の結果を変えないため。
+ */
+export async function recordDiskUsage(
+  path: string,
+  deps: RecordDiskUsageDeps,
+): Promise<number> {
+  const duResult = await deps.measure();
+  if (duResult.exitCode !== 0) {
+    deps.warn(
+      "cleanup: du failed, skipping disk usage notice",
+      duResult.stderr.trim(),
+    );
+    return 0;
+  }
+  let usageKb: number;
+  try {
+    usageKb = parseDiskUsageKb(duResult.stdout);
+  } catch (err) {
+    deps.warn(
+      "cleanup: unexpected du output, skipping disk usage notice",
+      err instanceof Error ? err.message : String(err),
+    );
+    return 0;
+  }
+  try {
+    await deps.record(formatDiskUsageMessage(usageKb, path));
+  } catch (err) {
+    deps.warn(
+      "cleanup: failed to record disk usage notice",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  return usageKb;
+}

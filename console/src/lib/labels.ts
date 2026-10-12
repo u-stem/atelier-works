@@ -58,6 +58,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["pr_trigger_label_left_removed", "PRのトリガーラベルの外れ"],
   ["deployed_sha_mismatch", "反映された版の不一致"],
   ["owner_id_mismatch", "オーナーの照合の失敗"],
+  ["factory_repo_id_mismatch", "Factory自身のリポジトリの照合の失敗"],
   ["host_action_required", "ホスト側の作業"],
   ["cleanup_db_failed", "データベースの掃除の失敗"],
   ["cleanup_worktree_busy", "作業ディレクトリの使用中"],
@@ -74,6 +75,8 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["drawio_viewer_bump_held", "draw.ioのビューアの更新の保留"],
   ["main_ci_failed", "mainのCIの失敗"],
   ["main_ci_check_denied", "mainのCIを読む権限の不足"],
+  ["pr_ci_failed", "PRのCIの失敗"],
+  ["pr_ci_check_denied", "PRのCIを読む権限の不足"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */

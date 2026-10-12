@@ -318,7 +318,8 @@ export function isPrCiReason(value: unknown): value is PrCiReason {
 }
 
 const PR_CI_NEXT_ACTIONS: Readonly<Record<PrCiReason, string>> = {
-  ci_failure: "実行のログを確かめ、PRに修正を入れる",
+  ci_failure:
+    "実行のログを確かめ、PRに修正を入れる。metadataジョブの失敗なら、「mise run metadata」を実行して差分をコミットする",
   ci_other_conclusion:
     "実行を確かめ、取り消しやフレークなら再実行し、そうでなければ直す",
 };
@@ -354,11 +355,15 @@ function assertPullRequestNumber(prNumber: number): void {
   }
 }
 
-function pullRequestPageUrl(
+/** PRのページのURL。`owner`と`repo`はGitHubの名前の形で、`prNumber`は正の整数でなければ例外を投げる。 */
+export function pullRequestPageUrl(
   owner: string,
   repo: string,
   prNumber: number,
 ): string {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  assertPullRequestNumber(prNumber);
   return `https://github.com/${owner}/${repo}/pull/${String(prNumber)}`;
 }
 
