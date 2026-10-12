@@ -10,6 +10,7 @@ import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import { OWNER_ID_MISMATCH_KIND } from "../../f/factory/lib/poll_support.ts";
 import {
   factoryRepoIdCheckReason,
+  isFactoryRepoIdCheckReason,
   repoOwnerIdMismatchMessage,
   repoOwnerIdMismatchReason,
   repoOwnerNotConfiguredMessage,
@@ -602,7 +603,24 @@ describe("verifyRepoOwnerId for the factory repository with factory_repo_id", ()
       "factory",
       deps,
     );
-    expect(result.ok).toBe(false);
+    expect(result).toEqual({
+      ok: false,
+      reason: factoryRepoIdCheckReason("octo-owner/factory"),
+    });
+  });
+
+  test("makes no owner id lookup after a repository id mismatch", async () => {
+    const { deps, recorded } = setup(
+      () => Promise.resolve(4242),
+      () => Promise.resolve(999),
+    );
+    await verifyRepoOwnerId(
+      configWith([WITH_ID], FACTORY_REPO, 777),
+      "octo-owner",
+      "factory",
+      deps,
+    );
+    expect(recorded.lookups).toEqual([]);
   });
 
   test("makes no repository id lookup for another repository of the same owner", async () => {
@@ -614,5 +632,31 @@ describe("verifyRepoOwnerId for the factory repository with factory_repo_id", ()
       deps,
     );
     expect(recorded.repoLookups).toEqual([]);
+  });
+});
+
+describe("isFactoryRepoIdCheckReason", () => {
+  test("accepts the factory repository id reason", () => {
+    expect(
+      isFactoryRepoIdCheckReason(
+        factoryRepoIdCheckReason("octo-owner/factory"),
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects the owner id reason", () => {
+    expect(
+      isFactoryRepoIdCheckReason(
+        repoOwnerIdMismatchReason("octo-owner/app", 1, 2),
+      ),
+    ).toBe(false);
+  });
+
+  test("rejects the not-configured reason", () => {
+    expect(
+      isFactoryRepoIdCheckReason(
+        repoOwnerNotConfiguredReason("octo-owner/app"),
+      ),
+    ).toBe(false);
   });
 });

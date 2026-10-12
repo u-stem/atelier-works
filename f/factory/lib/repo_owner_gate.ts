@@ -84,6 +84,11 @@ export function factoryRepoIdCheckReason(repository: string): string {
   return `factory repository id check failed: ${repository}`;
 }
 
+/** `reason`が、`factory_repo_id`の照合に落ちた理由(`factoryRepoIdCheckReason`)かを返す。 */
+export function isFactoryRepoIdCheckReason(reason: string): boolean {
+  return reason.startsWith("factory repository id check failed: ");
+}
+
 export type RepoOwnerGateResult =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };

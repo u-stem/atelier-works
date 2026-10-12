@@ -135,7 +135,7 @@ describe("the owner check in issue_proposal_apply", () => {
       "created_issue_url: null,",
       "});",
       'if (proposal.origin === "pr_fix") {',
-      "const stop = await proposalRepoOwnerStop(verifyOwner);",
+      "const stop = await rejectionReplyStop(verifyOwner);",
       "if (stop === null) {",
     ]);
   });
@@ -159,8 +159,8 @@ describe("the owner check in issue_proposal_apply", () => {
 
   test("calls the rejection check once", async () => {
     const text = await source("issue_proposal_apply.ts");
-    expect(
-      text.split("await proposalRepoOwnerStop(verifyOwner)").length - 1,
-    ).toBe(1);
+    expect(text.split("await rejectionReplyStop(verifyOwner)").length - 1).toBe(
+      1,
+    );
   });
 });

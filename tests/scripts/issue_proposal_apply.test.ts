@@ -5,10 +5,12 @@
 
 import { describe, expect, test } from "bun:test";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
+import { factoryRepoIdCheckReason } from "../../f/factory/lib/repo_owner_gate.ts";
 import {
   ensureProposalRepoOwner,
   proposalRepoOwnerStop,
   readWithFactoryLabel,
+  rejectionReplyStop,
   resolveFactoryLabel,
 } from "../../f/factory/steps/issue_proposal_apply.ts";
 import {
@@ -263,10 +265,68 @@ describe("the owner check of an issue proposal", () => {
       await expect(ensureProposalRepoOwner(verify)).rejects.toThrow("再度承認");
     });
 
+    test("points an owner mismatch at owners", async () => {
+      const { verify } = verifyReturning(STOPPED);
+      await expect(ensureProposalRepoOwner(verify)).rejects.toThrow(
+        "factory_configのownersを見直して",
+      );
+    });
+
+    test("points a factory repository id mismatch at factory_repo and factory_repo_id", async () => {
+      const { verify } = verifyReturning({
+        ok: false,
+        reason: factoryRepoIdCheckReason("acme/factory"),
+      });
+      await expect(ensureProposalRepoOwner(verify)).rejects.toThrow(
+        "factory_configのfactory_repoとfactory_repo_idを見直して",
+      );
+    });
+
+    test("propagates a failure of the check as it is", async () => {
+      const failure = new Error("HTTP 502");
+      await expect(
+        ensureProposalRepoOwner(() => Promise.reject(failure)),
+      ).rejects.toBe(failure);
+    });
+
     test("checks once", async () => {
       const { verify, calls } = verifyReturning(STOPPED);
       await ensureProposalRepoOwner(verify).catch(() => undefined);
       expect(calls).toEqual(["verify"]);
+    });
+  });
+
+  describe("rejectionReplyStop", () => {
+    test("returns null when the owner check passes", async () => {
+      const { verify } = verifyReturning({ ok: true });
+      expect(await rejectionReplyStop(verify)).toBeNull();
+    });
+
+    test("returns the reason when the owner check stops the reply", async () => {
+      const { verify } = verifyReturning(STOPPED);
+      expect(await rejectionReplyStop(verify)).toBe(STOPPED_REASON);
+    });
+
+    test("stops the reply instead of throwing when the check fails", async () => {
+      const stop = await rejectionReplyStop(() =>
+        Promise.reject(new Error("HTTP 502")),
+      );
+      expect(stop).not.toBeNull();
+    });
+
+    test("names the failure of the check in the stop", async () => {
+      const stop = await rejectionReplyStop(() =>
+        Promise.reject(new Error("HTTP 502")),
+      );
+      expect(stop).toContain("HTTP 502");
+    });
+
+    test("masks secrets in the failure of the check", async () => {
+      const token = `ghp_${"a".repeat(36)}`;
+      const stop = await rejectionReplyStop(() =>
+        Promise.reject(new Error(`failed with ${token}`)),
+      );
+      expect(stop).not.toContain(token);
     });
   });
 });

@@ -169,14 +169,15 @@ cloneを開く準備のステップでは、`openFactoryClone`も同じ照合を
 通ったときだけ、cloneとcheckoutに進む。
 `check_commands_by_repo`のキーは名前だが、`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか検査コマンドが走らない。
 
-止めたときは、Consoleの**要対応**に`owner_id_mismatch`が残る。
+止めたときは、Consoleの**要対応**にnoticeが残る。
 止めるのは、次のいずれかのときである。
 
-- IDが食い違う。
+- オーナーのIDが食い違う。
 - リポジトリが見つからない(404)。
 - オーナーが`owners`に無い。
+- `factory_repo`のリポジトリIDが食い違うか、見つからない。
 
-`factory_repo`のIDが食い違うか、見つからないときは、`factory_repo_id_mismatch`が残る。
+オーナーの照合で止めたときの種類は、`owner_id_mismatch`である。
 本文にリポジトリ名が載る。
 `owners`に無いときは、オーナーを改名したなら名前を直し、対象にするなら足す操作が載る。
 それ以外は、設定のIDが載り、食い違いのときはGitHubの現在のIDも載る。
@@ -184,6 +185,11 @@ cloneを開く準備のステップでは、`openFactoryClone`も同じ照合を
 privateリポジトリでは、PATがアクセスを失うと、401でなく404になりうる。
 GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_config`の`owners`の名前か`id`を見直す。
 見直した後に、`retry_work_item`で再実行し、noticeを解決する。
+
+`factory_repo`のリポジトリIDで止めたときの種類は、`factory_repo_id_mismatch`である。
+本文にリポジトリ名と、設定の`factory_repo_id`が載る。
+食い違いのときは、GitHubの現在のIDも載る。
+`factory_config`の`factory_repo`と`factory_repo_id`を見直し、見直した後に、noticeを解決する。
 
 照合に落ちたときの終わり方は、処理ごとに次のとおりである。
 
@@ -193,10 +199,16 @@ GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_co
 | `implement_prepare` | 作業項目を人の対応待ちにして、Discordに知らせる |
 | `pr_fix_prepare` | 作業項目をブロック(`blocked`)にして、Discordに知らせる |
 | `pr_review_prepare` | PRを読む前に、作業項目をブロックにして、Discordに知らせる。forkのPRを見送るときと同じ終わり方である |
-| `issue_proposal_apply`の承認 | 判断を記録せず、GitHubへ何も書かずに、例外で失敗する。承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。`owners`を見直した後に同じ承認をやり直すと、続きから処理する。記録済みの承認は、却下に変えられない |
-| `issue_proposal_apply`の却下 | 判断を記録した後、返信だけを止める。警告のログを残し、作業項目は先へ進める |
+| `issue_proposal_apply`の承認 | 判断を記録せず、GitHubへ何も書かずに、例外で失敗する。承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。例外の文は、`factory_repo_id`の食い違いなら`factory_repo`と`factory_repo_id`、それ以外なら`owners`を見直すよう案内する |
+| `issue_proposal_apply`の却下 | 判断を記録した後、返信だけを止める。警告のログを残し、作業項目は先へ進める。照合そのものが失敗したとき(404以外の取得の失敗を含む)も、例外にせず、同じく返信だけを止める |
 
-照合に落ちたIssue化の提案の承認は、`owners`を見直して同じ承認をやり直す。
+`factory_repo_id`の食い違いで止まるときの終わり方は、作業項目のリポジトリで2通りに分かれる。
+作業項目が`factory_repo`自身のリポジトリのときは、関門が止めるので、上の表のとおりに終わる。
+それ以外のリポジトリのときは、関門を通り、cloneを開く`openFactoryClone`の照合が例外を投げる。
+そのときは、ステップが失敗し、フローが失敗する([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
+
+照合に落ちたIssue化の提案の承認は、原因を見直して同じ承認をやり直す。
+やり直すと、`approval_decide`が起動し直し、続きから処理する。
 `approval_decide`は、記録済みの承認を却下に変える操作を断る。
 名前が乗っ取られたままのときは、承認依頼が要対応に残り続ける。
 
@@ -205,12 +217,20 @@ GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_co
 原因を直した後に、`retry_work_item`で再実行する。
 `manual_intake_create_issue`は、食い違いと404でも、Issueを作らずにフローが失敗する。
 
-照合は、ステップごとに1回だけ行う。
+照合は、ステップの始めに行う。
 照合の後に、実行中に名前が入れ替わっても、その実行は検知しない。
+
 照合しない処理も残る。
-取り消された作業項目の再開の前に行うIssueの状態の確認と、要件定義を作り直す再実行の前に行うIssueの題名と本文の取り込みである。
-どちらも、Console用のworkerに`gh`が無いので、名前のまま読む。
-取り込んだ内容は、続く`pipeline_prepare`の照合が止めるので、Claudeには渡らない。
+
+- 取り消された作業項目の再開の前に行うIssueの状態の確認と、要件定義を作り直す再実行の前に行うIssueの題名と本文の取り込み。
+  どちらも、Console用のworkerに`gh`が無いので、名前のまま読む。
+  取り込んだ内容は、続く`pipeline_prepare`の照合が止めるので、Claudeには渡らない。
+- 実装(`implement_finish`)とPR修正(`pr_fix_finish`)のpush。
+  準備のステップの照合から、長い実行を挟んで、名前のoriginへ行く。
+  実行中に名前が乗っ取られると、ローカルにしか無いオブジェクトが相手に送られうる。
+  privateリポジトリでは、履歴が渡りうる。
+  pushの直前には照合しない。
+- `drawio_viewer_bump`。`factory_repo`の名前だけで、ブランチとPRとラベルを作る。送る内容は公開物である。
 
 #### ラベルの付与者の判定
 
@@ -262,7 +282,7 @@ privateリポジトリでは、PATがアクセスを失うと、401でなく404�
 | --- | --- |
 | `self_update` | 取得も反映もせず、成功で終わる。`job_failures`に失敗を記録する。食い違いが続く間は、実行ごとに失敗の行が1行ずつ増える |
 | `poll_issues`のデプロイ版の確認 | その回の確認を飛ばし、警告のログを残す。ポーリングは続く |
-| 要件定義(`pipeline_prepare`、`pipeline_generate`)、実装、PR修正、PRレビューの準備 | 取得の前にステップが失敗し、フローが失敗する。作業項目は失敗になり、Discordに`job_failed`が届く。原因を直した後に、`retry_work_item`で再実行する |
+| 要件定義(`pipeline_prepare`、`pipeline_generate`)、実装、PR修正、PRレビューの準備 | 取得の前にステップが失敗し、フローが失敗する。作業項目は失敗になり、Discordに`job_failed`が届く。原因を直した後に、`retry_work_item`で再実行する。作業項目が`factory_repo`自身のリポジトリのときは、オーナーの照合の関門が先に止める。終わり方は[作業項目を進める前の照合](#作業項目を進める前の照合)の表のとおりである |
 | 監査の準備 | 取得の前にステップが失敗し、フローが失敗する。作業項目は失敗になり、Discordに`job_failed`が届く。監査の作業項目は再実行できない。失敗した期間は、次の週次の監査か、**レポート**の**今すぐ監査**で取り込む |
 | フォームからのIssueの作成、Issue化の提案の処理 | cloneを開かないが、オーナーの照合の関門が`factory_repo_id`を照合する。食い違いと404では、書き込まずに止める([作業項目を進める前の照合](#作業項目を進める前の照合)) |
 

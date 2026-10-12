@@ -33,6 +33,7 @@ import {
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import {
+  isFactoryRepoIdCheckReason,
   type RepoOwnerGateResult,
   repoOwnerGateDeps,
   verifyRepoOwnerId,
@@ -126,17 +127,40 @@ export async function proposalRepoOwnerStop(
  * 承認の前に、`proposalRepoOwnerStop`で照合し、止めるなら例外を投げる。
  * 判断の記録もGitHubへの書き込みもしないので、行の状態は変わらない。
  * 承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。
- * `owners`を見直した後に同じ承認をやり直すと、`approval_decide`が起動し直し、続きから処理する。
+ * 例外の文の次の操作は、理由に応じて分ける。
+ * `factory_repo_id`の食い違いなら`factory_repo`と`factory_repo_id`、それ以外なら`owners`を見直す。
+ * 見直した後に同じ承認をやり直すと、`approval_decide`が起動し直し、続きから処理する。
  * 記録済みの承認は、却下に変えられない。
+ * 照合そのものが失敗したとき(404以外の取得の失敗)は、その例外をそのまま投げる。
  */
 export async function ensureProposalRepoOwner(
   verify: () => Promise<RepoOwnerGateResult>,
 ): Promise<void> {
   const stop = await proposalRepoOwnerStop(verify);
   if (stop !== null) {
+    const review = isFactoryRepoIdCheckReason(stop)
+      ? "factory_configのfactory_repoとfactory_repo_id"
+      : "factory_configのowners";
     throw new Error(
-      `issue_proposal_apply: ${stop}。factory_configのownersを見直してから、Consoleの要対応から再度承認してください`,
+      `issue_proposal_apply: ${stop}。${review}を見直してから、Consoleの要対応から再度承認してください`,
     );
+  }
+}
+
+/**
+ * 却下の返信の前に照合し、返信を止める理由を返す。通れば`null`を返す。
+ * `ensureProposalRepoOwner`と違い、照合そのものの失敗(404以外の取得の失敗を含む)も例外にせず、
+ * 失敗を理由にして返信を止める側へ倒す。
+ * 判断は記録済みで、例外にすると、承認依頼が`rejected`のままConsoleが操作を出さず、
+ * 作業項目が人の対応待ちのまま止まるためである。
+ */
+export async function rejectionReplyStop(
+  verify: () => Promise<RepoOwnerGateResult>,
+): Promise<string | null> {
+  try {
+    return await proposalRepoOwnerStop(verify);
+  } catch (err) {
+    return `repository owner check failed: ${maskSecrets(err instanceof Error ? err.message : String(err))}`;
   }
 }
 
@@ -212,8 +236,8 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * 承認は、判断を記録する前に照合する(`ensureProposalRepoOwner`)。
  * 通らなければ、何も記録も書き込みもせずに例外を投げる。
  * 承認依頼は`approved`のまま、Consoleの要対応に残る(`console_query.ts`の要約と同じ条件)。
- * 却下は、判断を記録した後、返信の前に照合する(`proposalRepoOwnerStop`)。
- * 通らなければ返信だけを止め、警告のログを残して作業項目は先へ進める。
+ * 却下は、判断を記録した後、返信の前に照合する(`rejectionReplyStop`)。
+ * 通らないとき、照合が失敗したときは、返信だけを止め、警告のログを残して作業項目は先へ進める。
  *
  * 承認依頼・Issue提案・作業項目・判断者・auditのレポートが無いとき、
  * 依頼のkindが違うとき、判定で拒否されたときは例外を投げる。
@@ -485,7 +509,7 @@ async function run(
     if (proposal.origin === "pr_fix") {
       // 却下は判断を記録済みなので、照合に落ちたときは返信だけを止め、作業項目は先へ進める。
       // 止めて例外にすると、提案が残らないのに作業項目が人の対応待ちのまま動かなくなる。
-      const stop = await proposalRepoOwnerStop(verifyOwner);
+      const stop = await rejectionReplyStop(verifyOwner);
       if (stop === null) {
         const prNumber = requirePrNumber(
           workItem.pr_number,
