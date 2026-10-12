@@ -519,6 +519,9 @@ export type GateInput = {
   changedPaths: readonly string[];
   /**
    * 変更されたファイルの更新前と更新後の内容。
+   * `before`はPRのbase(merge-base)の内容、`after`はPRのheadの内容にする。
+   * `changedPaths`と`files`は、同じbaseとheadの比較から作る。
+   * mergeのcommit単位で差分を取ると、持ち込まれた変更を見落とすので、取ってはならない。
    * 無いファイル(追加と削除)は`null`にする。
    */
   files: { path: string; before: string | null; after: string | null }[];
@@ -648,7 +651,9 @@ const WEB_FLOW_LOGIN = "web-flow";
  * - 通常のcommit(親が1つ): 作者が`dependabot[bot]`、コミッターが`dependabot[bot]`か`web-flow`、署名が検証済み。
  * - mergeのcommit(親が2つ以上): コミッターが`web-flow`で、署名が検証済み。ブランチの更新は人やFactoryも行うので、作者は問わない。
  * 親の数が1以上の整数でないcommitは止める。
- * mergeのcommitが持ち込む差分は、ファイル単位の検査(`files`)がPR全体の差分として見る。
+ * 作者はgitのメタデータで、本人確認にはならない。本体の防御はファイル単位の検査(`files`)で、
+ * commitの検査は補助の層である。
+ * mergeのcommitが持ち込む差分は、`files`がbaseからheadまでの全体の差分として見る。
  */
 function commitProblem(input: GateInput): string | null {
   if (input.commits.length === 0) return "pull request has no commits";

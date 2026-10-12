@@ -1047,16 +1047,50 @@ describe("evaluateGate", () => {
 
   test("needs a human when the parent count is negative", () => {
     expect(
-      verdictOf({
-        commits: [DEPENDABOT_COMMIT, { ...MERGE_COMMIT, parentCount: -1 }],
-      }),
+      verdictOf({ commits: [{ ...DEPENDABOT_COMMIT, parentCount: -1 }] }),
     ).toBe("needs_human");
   });
 
   test("needs a human when the parent count is not an integer", () => {
     expect(
+      verdictOf({ commits: [{ ...DEPENDABOT_COMMIT, parentCount: 1.5 }] }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the parent count is NaN", () => {
+    expect(
       verdictOf({
-        commits: [DEPENDABOT_COMMIT, { ...MERGE_COMMIT, parentCount: 1.5 }],
+        commits: [{ ...DEPENDABOT_COMMIT, parentCount: Number.NaN }],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the parent count is infinite", () => {
+    expect(
+      verdictOf({
+        commits: [
+          DEPENDABOT_COMMIT,
+          { ...DEPENDABOT_COMMIT, parentCount: Number.POSITIVE_INFINITY },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when a merge commit is committed by github-actions", () => {
+    expect(
+      verdictOf({
+        commits: [
+          DEPENDABOT_COMMIT,
+          { ...MERGE_COMMIT, committerLogin: "github-actions[bot]" },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when the committer of a merge commit is unknown", () => {
+    expect(
+      verdictOf({
+        commits: [DEPENDABOT_COMMIT, { ...MERGE_COMMIT, committerLogin: null }],
       }),
     ).toBe("needs_human");
   });
