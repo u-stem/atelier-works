@@ -194,6 +194,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `cleanup_runs` | DBの掃除1回ごとの削除件数 |
 | `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
+| `worker_samples` | defaultのworkerの負荷の2分ごとの記録。枠を使うジョブの数とscriptごとの内訳、待つジョブの数と最長の待ち、予定時刻と開始の遅れ、コンテナのメモリを1行に並べる。読めなかった値は空のまま残す。作業項目とは独立した読み取り専用の記録である |
 
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
 
@@ -288,6 +289,7 @@ Consoleの一覧と集計は次のviewを読む。
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数を集計し、Discordへ日次サマリを投稿します。 |
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
+| sample_worker_load | `30 */2 * * * *` | `f/factory/sample_worker_load` | 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。workerの並列数やポーリングの間隔を見直す根拠にします。 |
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 <!-- /generated:schedules -->
 
@@ -300,6 +302,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | `poll_issues` | Issueの検知とclaim、作業項目の照合(reconcile)、再投入の検出、承認依頼の期限切れ。照合ではIssueとPRのclose、孤児になったジョブを見つける。閉じたIssueやPRの失敗、人の対応待ち、期限切れの作業項目は、閉じた人を確かめて取り消し、要対応の一覧から外す |
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
+| `sample_worker_load` | defaultのworkerの枠の占有、queueの待ち、コンテナのcgroupのメモリ。読めない値は空のまま記録し、例外は投げない。完全には記録できない回をWindmillのstateに数え、続いたときだけnoticeにする |
 | `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数 |
 
 複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。
@@ -351,6 +354,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
+| `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
 | `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
@@ -419,6 +423,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/audit_prepare` | script | [SF-5-2/1] 証跡の収集と作業領域の準備 |
 | `f/factory/steps/audit_generate` | script | [SF-5-2/2] 監査レポートと提案の生成(Claude) |
 | `f/factory/self_update` | script | [SYS-1] Software Factory自身を最新化 |
+| `f/factory/sample_worker_load` | script | [SYS-10] workerの負荷を記録 |
 | `f/factory/cleanup_workspaces` | script | [SYS-2] 作業領域を掃除 |
 | `f/factory/notify_daily_summary` | script | [SYS-3] 日次サマリ通知 |
 | `f/factory/on_error_flow` | script | [SYS-4] フロー失敗ハンドラ |

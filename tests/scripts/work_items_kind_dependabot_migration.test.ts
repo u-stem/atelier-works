@@ -1,13 +1,13 @@
-// このテストは、`20261012014318_work_items_kind_dependabot`のmigrationが定めるkindのCHECK制約を静的に確かめる。
+// このテストは、`20261012120000_work_items_kind_dependabot`のmigrationが定めるkindのCHECK制約を静的に確かめる。
 // 制約が実際にdependabotを受け付けることと、downで戻せることは`mise run test:db`が確かめる。
 
 import { describe, expect, test } from "bun:test";
 import { WORK_ITEM_KINDS } from "../../f/factory/lib/types.ts";
 
 const UP =
-  "migrations/datatable/main/20261012014318_work_items_kind_dependabot.up.sql";
+  "migrations/datatable/main/20261012120000_work_items_kind_dependabot.up.sql";
 const DOWN =
-  "migrations/datatable/main/20261012014318_work_items_kind_dependabot.down.sql";
+  "migrations/datatable/main/20261012120000_work_items_kind_dependabot.down.sql";
 
 function kindsInCheck(sql: string, constraint: string): string[] {
   const match = sql.match(
@@ -19,7 +19,7 @@ function kindsInCheck(sql: string, constraint: string): string[] {
   return [...list.matchAll(/'([a-z_]+)'/g)].map((m) => m[1] ?? "");
 }
 
-describe("20261012014318_work_items_kind_dependabot.up.sql", () => {
+describe("20261012120000_work_items_kind_dependabot.up.sql", () => {
   test("lists exactly the work item kinds of the application", async () => {
     const kinds = kindsInCheck(
       await Bun.file(UP).text(),
@@ -47,7 +47,7 @@ describe("20261012014318_work_items_kind_dependabot.up.sql", () => {
   });
 });
 
-describe("20261012014318_work_items_kind_dependabot.down.sql", () => {
+describe("20261012120000_work_items_kind_dependabot.down.sql", () => {
   test("restores the check without dependabot", async () => {
     const kinds = kindsInCheck(
       await Bun.file(DOWN).text(),
