@@ -44,6 +44,12 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells the owner id mismatch also stops the work on the repositories of the owner", () => {
+    expect(noticeGuide("owner_id_mismatch").meaning).toContain(
+      "リポジトリを取得せずに止めて",
+    );
+  });
+
   test("falls back to the generic guide for an unknown kind", () => {
     expect(noticeGuide("future_kind")).toBe(GENERIC_NOTICE_GUIDE);
   });

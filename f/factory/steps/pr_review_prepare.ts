@@ -7,11 +7,25 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
-import { getWorkItem, setHeadSha, updateStatusIfCurrent } from "../lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  getWorkItem,
+  setHeadSha,
+  updateStatusIfCurrent,
+} from "../lib/db.ts";
 import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
-import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
+import {
+  type GhClient,
+  getPr,
+  getRepositoryOwnerId,
+  type PullRequest,
+} from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import {
+  type RepoOwnerGateResult,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import { assertGitHubName, assertSha } from "../lib/types.ts";
 import {
   addDetachedWorktree,
@@ -115,6 +129,12 @@ export async function main(
       attempt: workItem.attempt,
     },
     {
+      checkRepoOwner: () =>
+        verifyRepoOwnerId(config, workItem.owner, workItem.repo, {
+          getRepositoryOwnerId: (owner, repo) =>
+            getRepositoryOwnerId(client, owner, repo),
+          addNotice: addNoticeUnlessUnresolved,
+        }),
       getPr: (owner, repo, number) => getPr(client, owner, repo, number),
       ensureFactoryClone: () =>
         openFactoryClone(config, { run: runCommand, ghToken }),
@@ -206,6 +226,11 @@ export type ReviewPrepareTarget = {
 
 /** `prepareReviewWorktree`が使う入出力。テストで差し替える。 */
 export type ReviewPrepareDeps = {
+  /**
+   * リポジトリのオーナーの数値IDを、設定の`owners`と照合する(`verifyRepoOwnerId`)。
+   * 通らなければ、PRの読み取りより前に止める。
+   */
+  readonly checkRepoOwner: () => Promise<RepoOwnerGateResult>;
   readonly getPr: (
     owner: string,
     repo: string,
@@ -228,7 +253,10 @@ export type ReviewPrepareDeps = {
 };
 
 /**
- * 多層防御のため、PRのheadがbaseと同じリポジトリにあるかを最初に確かめる。
+ * 多層防御のため、まずリポジトリのオーナーの数値IDを設定の`owners`と照合する。
+ * 通らないときは、PRの読み取りもcloneもfetchもworktreeの作成もせずに、理由つきで`skip`を返す。
+ * 許可リストの再確認で外れたリポジトリと同じ終端である。
+ * 次に、PRのheadがbaseと同じリポジトリにあるかを確かめる。
  * `poll_prs.ts`は、headがbaseと同じリポジトリにないPRのレビューを始めないが、
  * 作業項目を手で追加するなどの経路は止められない。
  * 通らないときは、forkの内容をcloneにもfetchにも入れず、worktreeも作らずに、
@@ -239,6 +267,11 @@ export async function prepareReviewWorktree(
   deps: ReviewPrepareDeps,
 ): Promise<PrReviewPrepareResult> {
   const { owner, repo, pr_number } = target;
+
+  const ownerGate = await deps.checkRepoOwner();
+  if (!ownerGate.ok) {
+    return { skip: true, reason: ownerGate.reason, ...SKIPPED_BASE };
+  }
 
   const prForRepoCheck = await deps.getPr(owner, repo, pr_number);
   const sameRepoHead = evaluateSameRepoHeadGuard(

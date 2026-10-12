@@ -33,6 +33,7 @@ import {
   getPrDiff,
   getPrFiles,
   getRepositoryId,
+  getRepositoryOwnerId,
   getViewer,
   gitIdentityForViewer,
   hasMarker,
@@ -299,6 +300,69 @@ describe("getRepositoryId", () => {
     const fake = createFakeCommandRunner([ghApiOk({ id: "777" })]);
     await expect(
       getRepositoryId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+});
+
+describe("getRepositoryOwnerId", () => {
+  test("returns the numeric id of the owner of the repository", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { login: "octo-owner", id: 4242 } }),
+    ]);
+    const id = await getRepositoryOwnerId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(id).toBe(4242);
+  });
+
+  test("requests the repository endpoint", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { id: 4242 } }),
+    ]);
+    await getRepositoryOwnerId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+      "factory",
+    );
+    expect(fake.calls[0]?.argv).toContain("repos/octo-owner/factory");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "gone",
+      ),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response without the owner", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ id: 777 })]);
+    await expect(
+      getRepositoryOwnerId(
+        { run: fake.run, ghToken: "tok" },
+        "octo-owner",
+        "factory",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a response whose owner id is not a number", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ id: 777, owner: { id: "4242" } }),
+    ]);
+    await expect(
+      getRepositoryOwnerId(
         { run: fake.run, ghToken: "tok" },
         "octo-owner",
         "factory",

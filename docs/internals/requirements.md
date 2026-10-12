@@ -8,13 +8,17 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 
 | ステップ | 処理 |
 | --- | --- |
-| `pipeline_prepare` | attemptを保存し、対象リポジトリの既定ブランチの先頭に要件定義用のworktreeを用意する。Issueが閉じていれば取り消す |
+| `pipeline_prepare` | attemptを保存し、リポジトリのオーナーの数値IDを照合してから、対象リポジトリの既定ブランチの先頭に要件定義用のworktreeを用意する。Issueが閉じていれば取り消す |
 | `pipeline_generate` | 日次予算を確かめ、headless Claudeに要件定義書と図を書かせ、検査してドラフトとして保存する |
 | `pipeline_request_approval` | 承認依頼を記録して通知し、人の判断を待たずにフローを終える |
 
 要件定義用のworktreeは`/workspaces/<owner>/<repo>/req-<N>`に置く。既存のworktreeが既定ブランチの今の先頭と違えば、消して作り直す。
 
 日次予算を超えていれば、`pipeline_generate`はClaudeを起動しない。作業項目を人の対応待ち(`needs_human`)にし、Discordに通知する。
+
+リポジトリのオーナーの数値IDが`owners`の`id`と食い違うときは、`pipeline_prepare`が、対象リポジトリをcloneせずに、作業項目を人の対応待ちにしてDiscordに通知する。
+後続のステップは飛ばす。
+照合は[運用](../operations.md)の「オーナーの数値IDを固定する」に書く。
 
 ## 要件定義ファイルの置き場所
 

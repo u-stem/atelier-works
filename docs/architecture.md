@@ -68,6 +68,15 @@ flowchart TD
 
 承認はWindmillのsuspendではなく、承認依頼のテーブルの行で待つ。pipelineフローは承認依頼を記録した時点で終わり、人の決定は別のscriptが反映する。仕組みは[要件定義の生成と承認](internals/requirements.md)に書く。
 
+`owners`に`id`があるオーナーは、GitHubの現在のIDと2か所で照合する。
+1つは、検索の入口である`poll_issues`と`poll_prs`である。
+もう1つは、作業項目を進める準備のステップと、フォームからのIssueの作成である。
+準備のステップは、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`である。
+フォームからの作成は、`manual_intake_create_issue`である。
+どちらも、cloneやIssueの作成の前に、リポジトリのオーナーのIDを取得して照合する。
+オーナーが改名して別の人がその名前を取得した場合に、その人のリポジトリを取得したり、実行したりしないためである。
+設定と限界は[運用](operations.md)の「オーナーの数値IDを固定する」に書く。
+
 ## 状態遷移
 
 作業項目(`work_items`)の状態は`status`列だけが持つ。GitHubのラベルは人からFactoryへのトリガーに限り、状態を表さない。

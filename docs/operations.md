@@ -112,8 +112,9 @@ gh api users/<名前> --jq .id
 ```
 
 オーナーが改名して別の人がその名前を取得すると、名前だけの照合では同じオーナーに見える。
-`id`を入れると、名前を取得した第三者のIssueとPRが、検索の候補に入らない。
-`allowed_labeler_logins`に古い名前が残っていても、その人のラベルはラベルの確認まで進まない。
+`id`を入れると、名前を取得した第三者のリポジトリのIssueとPRが、検索の候補に入らない。
+承認を待つ間に名前が入れ替わっても、保存済みの作業項目は、リポジトリを取得する前に止まる。
+`allowed_labeler_logins`に古い名前が残っていても、その名前がオーナーの名前なら、そのオーナーのリポジトリのラベルはラベルの確認まで進まない。
 候補に入らないので、拒否のnotice(`labeler_denied`)も積もらない。
 
 `allowed_labeler_logins`に古い名前が残っていなければ、`id`が無くても、名前を取得した人はラベルの確認で拒否される。
@@ -144,9 +145,58 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 404以外のすべて(5xx、レート制限、認証の失敗、通信断を含む)でIDを取得できなかったときは、失敗の記録だけが残る。
 一時的な障害でありうるので、次の回に再試行する。
 
-照合の対象は、検索の入口と、候補の絞り込みである。
-prepareの各ステップ(`implement_prepare`、`pr_review_prepare`、`pr_fix_prepare`)、ラベルの確認そのものは照合しない。
-`factory_repo`の取得は、`owners`の`id`とは別に、`factory_repo_id`で照合する([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
+#### 作業項目を進める前の照合
+
+作業項目は、検索の時点の`owner`と`repo`の名前を保存する。
+承認を待つ間などに名前が別の人に渡ると、保存した名前のURLは別のリポジトリを指す。
+そこで、作業項目を進める準備のステップが、リポジトリを取得する前に照合する。
+対象は、要件定義(`pipeline_prepare`)、実装(`implement_prepare`)、PR修正(`pr_fix_prepare`)、PRレビュー(`pr_review_prepare`)である。
+フォームで投入する`manual_intake_create_issue`も、Issueを作る前に同じ照合をする。
+
+照合では、`GET repos/<owner>/<repo>`が返すオーナーのIDを、`owners`で名前が合う要素の`id`と比べる。
+取得は、1ステップにつき1回である。
+IDが一致したときだけ、cloneとcheckoutに進む。
+`check_commands_by_repo`のキーは名前だが、`id`を入れたオーナーのリポジトリでは、照合を通ったものにしか検査コマンドが走らない。
+`id`の無いオーナーと、`owners`に名前が無いリポジトリ(`factory_repo`だけで許されるもの)は、照合しない。
+`factory_repo`は、`factory_repo_id`が別に照合する([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
+
+食い違うか、リポジトリが見つからない(404)ときは、Consoleの**要対応**に`owner_id_mismatch`が残る。
+本文にリポジトリ名と、設定のIDが載る。
+食い違いのときは、GitHubの現在のIDも載る。
+404は、リポジトリの削除や改名のほかに、PATがそのリポジトリを読めなくなったときにも返る。
+privateリポジトリでは、PATがアクセスを失うと、401でなく404になりうる。
+GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_config`の`owners`の名前か`id`を見直す。
+見直した後に、`retry_work_item`で再実行し、noticeを解決する。
+
+照合に落ちたときの終わり方は、処理ごとに次のとおりである。
+
+| 処理 | 終わり方 |
+| --- | --- |
+| `pipeline_prepare` | 作業項目を人の対応待ち(`needs_human`)にして、Discordに知らせる。後続のステップは飛ばす |
+| `implement_prepare` | 作業項目を人の対応待ちにして、Discordに知らせる |
+| `pr_fix_prepare` | 作業項目をブロック(`blocked`)にして、Discordに知らせる |
+| `pr_review_prepare` | 処理を飛ばす。許可リストから外れたリポジトリと同じ終わり方で、作業項目は`reviewing`のまま残る。猶予の後に整理が失敗にして、Discordに`job_failed`を送る |
+
+404以外のすべて(認証の失敗、5xx、レート制限、通信断を含む)でIDを取得できなかったときは、noticeを残さず、ステップが失敗する。
+持続する障害を見逃さないためである。
+原因を直した後に、`retry_work_item`で再実行する。
+`manual_intake_create_issue`は、食い違いと404でも、Issueを作らずにフローが失敗する。
+
+照合は、準備のステップで1回だけ行う。
+照合の後に、実行中に名前が入れ替わっても、その実行は検知しない。
+
+#### ラベルの付与者の判定
+
+ラベルの付与者は、名前で判定する。
+タイムラインのラベルのイベントは、GraphQLでユーザーの数値IDを返せる。
+しかし、`allowed_labeler_logins`は名前だけを持つ。
+名前から数値IDを引くと、今その名前を持つ人のIDが返るので、IDで比べても名前を取得した人は通る。
+IDで判定するには、許可するアカウントのIDを設定に持たせる必要があり、今はその設定を持たない。
+
+古い名前が`allowed_labeler_logins`に残ると、その名前を取得した人が、許可されたラベル付与者になりうる。
+名前を変えたアカウントは、`allowed_labeler_logins`から外す。
+ラベルを付けられる人は、書き込み権限を持つ人に限られない。
+公開リポジトリでは、起票者が自分のIssueにラベルを付けられることもある。
 
 ### Factory自身のリポジトリの数値IDを固定する
 
@@ -208,7 +258,6 @@ originは取得の前にそのURLへ付け替わるので、古い名前のclone
 - ロックを持つ時間は、照合の1往復の分だけ延びる。
 - `isRepoAllowed`は`factory_repo`を名前で常に許す。
   自己改善の起票と、`factory_repo`のPRの候補への採用は、名前のままである。
-- prepareの各ステップは、`owners`の`id`を照合しない。
 - 監査のスナップショットのworktreeが、self cloneに既にあるshaを取るfetchは、照合しない。
 - Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。
 
@@ -1241,7 +1290,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
 | `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す |
 | `fork_head_denied` | PRのheadのリポジトリが、このリポジトリと同一でない(fork、または取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。止めるなら、`factory:review`ラベルとassignee、レビュー依頼を外すか、PRを閉じる。外すまでは、解決しても出直す |
-| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できない | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直す |
+| `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できない。そのオーナーの検索を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
 | `factory_repo_id_mismatch` | `factory_repo`の`factory_repo_id`をGitHubの現在のIDと照合できず、自己更新が取得も反映もしていない。Factory自身のリポジトリを使うほかの処理は、取得の前に失敗する | [Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する)の手順で`factory_repo`と`factory_repo_id`を見直す |
 | `labeler_check_limit` | 付与者を判定できない。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っている | ラベルを外し、許可された人が付け直す。対応した後に、Consoleでnoticeを解決する |
 | `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
