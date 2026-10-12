@@ -27,6 +27,7 @@ import {
   latestRequirementsApproval,
   setWorkItemBranch,
 } from "../lib/db.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import {
   findOpenPullRequestByHead,
   type GhClient,
@@ -75,7 +76,6 @@ import {
 import {
   createGtrWorktree,
   currentRemoteHeadSha,
-  ensureFactoryClone,
   ensureRepo,
   listWorktrees,
   mergeBaseSha,
@@ -342,11 +342,9 @@ export async function main(
   if (await hasPrRunOnBranch())
     return stop("needs_human", ACTIVE_PR_RUN_REASON);
 
-  const factoryClone = await ensureFactoryClone({
+  const factoryClone = await openFactoryClone(config, {
     run: runCommand,
-    repoUrl: config.factory_repo,
     ghToken,
-    branch: config.factory_branch,
   });
   const { dir: repoDir } = await ensureRepo({
     run: runCommand,

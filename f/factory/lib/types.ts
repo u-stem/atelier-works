@@ -898,8 +898,8 @@ export type FactoryConfig = {
   factory_repo: string;
   /**
    * `factory_repo`のGitHubリポジトリの数値ID(正の整数)。
-   * 指定すると、`self_update.ts`が取得の前に現在のIDと照合し、食い違うときは反映しない。
-   * オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを反映しないため。
+   * 指定すると、Factory自身のcloneを使う処理が取得の前に現在のIDと照合し、食い違うときは取得しない。
+   * オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを使わないため。
    * 省略すると、名前だけで取得する。
    */
   factory_repo_id?: number;

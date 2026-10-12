@@ -2,94 +2,110 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  ensureVerifiedFactoryClone,
   FACTORY_REPO_ID_MISMATCH_KIND,
+  FactoryRepoIdMismatchError,
   factoryRepoIdMismatchMessage,
   factoryRepoNotFoundMessage,
   factoryRepoUnreadableMessage,
-  gateFactoryRepoId,
+  verifyFactoryRepoId,
 } from "../../f/factory/lib/factory_repo_gate.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
+import type {
+  CommandRunner,
+  EnsureFactoryCloneOptions,
+  EnsureFactoryCloneResult,
+} from "../../f/factory/lib/workspace.ts";
 
 const WITH_ID = {
   factory_repo: "https://github.com/octo-owner/factory.git",
   factory_repo_id: 777,
+  factory_branch: "main",
 };
-const WITHOUT_ID = { factory_repo: "https://github.com/octo-owner/factory" };
+const WITHOUT_ID = {
+  factory_repo: "https://github.com/octo-owner/factory",
+  factory_branch: "main",
+};
 
 type Recorded = {
-  readonly failures: { step: string; message: string }[];
   readonly notices: NoticeRecord[];
   readonly lookups: { owner: string; repo: string }[];
+  readonly clones: EnsureFactoryCloneOptions[];
 };
 
 function setup(lookup: () => Promise<number>) {
-  const recorded: Recorded = { failures: [], notices: [], lookups: [] };
+  const recorded: Recorded = { notices: [], lookups: [], clones: [] };
+  const cloneResult: EnsureFactoryCloneResult = {
+    dir: "/workspaces/factory/atelier-works",
+    action: "pulled",
+  };
   const deps = {
     getRepositoryId: (owner: string, repo: string) => {
       recorded.lookups.push({ owner, repo });
       return lookup();
     },
-    recordFailure: async (step: string, err: unknown) => {
-      recorded.failures.push({
-        step,
-        message: err instanceof Error ? err.message : String(err),
-      });
-    },
     addNotice: async (record: NoticeRecord) => {
       recorded.notices.push(record);
     },
+    ensureClone: async (opts: EnsureFactoryCloneOptions) => {
+      recorded.clones.push(opts);
+      return cloneResult;
+    },
   };
-  return { deps, recorded };
+  return { deps, recorded, cloneResult };
 }
 
-describe("gateFactoryRepoId", () => {
-  test("proceeds when factory_repo_id is not set", async () => {
-    const { deps } = setup(() => Promise.resolve(1));
-    expect(await gateFactoryRepoId(WITHOUT_ID, deps)).toBe(true);
-  });
+const fakeRun: CommandRunner = async () => ({
+  exitCode: 0,
+  stdout: "",
+  stderr: "",
+  timedOut: false,
+});
 
-  test("makes no lookup when factory_repo_id is not set", async () => {
+describe("verifyFactoryRepoId", () => {
+  test("resolves without a lookup when factory_repo_id is not set", async () => {
     const { deps, recorded } = setup(() => Promise.resolve(1));
-    await gateFactoryRepoId(WITHOUT_ID, deps);
+    await verifyFactoryRepoId(WITHOUT_ID, deps);
     expect(recorded.lookups).toEqual([]);
   });
 
-  test("proceeds when the current id matches", async () => {
+  test("resolves when the current id matches", async () => {
     const { deps } = setup(() => Promise.resolve(777));
-    expect(await gateFactoryRepoId(WITH_ID, deps)).toBe(true);
+    await expect(verifyFactoryRepoId(WITH_ID, deps)).resolves.toBeUndefined();
   });
 
   test("looks up the owner and repo named by the URL without the .git suffix", async () => {
     const { deps, recorded } = setup(() => Promise.resolve(777));
-    await gateFactoryRepoId(WITH_ID, deps);
+    await verifyFactoryRepoId(WITH_ID, deps);
     expect(recorded.lookups).toEqual([
       { owner: "octo-owner", repo: "factory" },
     ]);
   });
 
-  test("records nothing when the current id matches", async () => {
+  test("records no notice when the current id matches", async () => {
     const { deps, recorded } = setup(() => Promise.resolve(777));
-    await gateFactoryRepoId(WITH_ID, deps);
-    expect(recorded.failures).toEqual([]);
+    await verifyFactoryRepoId(WITH_ID, deps);
+    expect(recorded.notices).toEqual([]);
   });
 
-  test("blocks the update when the current id differs", async () => {
+  test("rejects with a mismatch error when the current id differs", async () => {
     const { deps } = setup(() => Promise.resolve(999));
-    expect(await gateFactoryRepoId(WITH_ID, deps)).toBe(false);
+    await expect(verifyFactoryRepoId(WITH_ID, deps)).rejects.toBeInstanceOf(
+      FactoryRepoIdMismatchError,
+    );
   });
 
-  test("records a failure when the current id differs", async () => {
-    const { deps, recorded } = setup(() => Promise.resolve(999));
-    await gateFactoryRepoId(WITH_ID, deps);
-    expect(recorded.failures.map((f) => f.step)).toEqual([
-      "verify_factory_repo_id",
-    ]);
+  test("carries the notice text in the mismatch error", async () => {
+    const { deps } = setup(() => Promise.resolve(999));
+    await expect(verifyFactoryRepoId(WITH_ID, deps)).rejects.toThrow(
+      factoryRepoIdMismatchMessage("octo-owner/factory", 777, 999),
+    );
   });
 
   test("records an actionable notice with both ids when the current id differs", async () => {
     const { deps, recorded } = setup(() => Promise.resolve(999));
-    await gateFactoryRepoId(WITH_ID, deps);
+    await verifyFactoryRepoId(WITH_ID, deps).catch(() => undefined);
     expect(recorded.notices).toEqual([
       {
         kind: FACTORY_REPO_ID_MISMATCH_KIND,
@@ -98,18 +114,20 @@ describe("gateFactoryRepoId", () => {
     ]);
   });
 
-  test("blocks the update when the repository is not found", async () => {
+  test("rejects with a mismatch error when the repository is not found", async () => {
     const { deps } = setup(() =>
       Promise.reject(new GitHubHttpError("not found", 404)),
     );
-    expect(await gateFactoryRepoId(WITH_ID, deps)).toBe(false);
+    await expect(verifyFactoryRepoId(WITH_ID, deps)).rejects.toBeInstanceOf(
+      FactoryRepoIdMismatchError,
+    );
   });
 
   test("records an actionable notice when the repository is not found", async () => {
     const { deps, recorded } = setup(() =>
       Promise.reject(new GitHubHttpError("not found", 404)),
     );
-    await gateFactoryRepoId(WITH_ID, deps);
+    await verifyFactoryRepoId(WITH_ID, deps).catch(() => undefined);
     expect(recorded.notices).toEqual([
       {
         kind: FACTORY_REPO_ID_MISMATCH_KIND,
@@ -118,60 +136,58 @@ describe("gateFactoryRepoId", () => {
     ]);
   });
 
-  test("blocks the update when the lookup fails", async () => {
-    const { deps } = setup(() => Promise.reject(new Error("HTTP 502")));
-    expect(await gateFactoryRepoId(WITH_ID, deps)).toBe(false);
+  test("rethrows the original error when the lookup fails", async () => {
+    const failure = new Error("HTTP 502");
+    const { deps } = setup(() => Promise.reject(failure));
+    await expect(verifyFactoryRepoId(WITH_ID, deps)).rejects.toBe(failure);
   });
 
-  test("records the lookup error when the lookup fails", async () => {
+  test.each([
+    ["a server error", 500],
+    ["an authentication failure", 401],
+    ["a rate limit", 403],
+  ])("records no notice for %s", async (_name, status) => {
     const { deps, recorded } = setup(() =>
-      Promise.reject(new Error("HTTP 502")),
+      Promise.reject(new GitHubHttpError("failed", status)),
     );
-    await gateFactoryRepoId(WITH_ID, deps);
-    expect(recorded.failures[0]?.message).toBe("HTTP 502");
+    await verifyFactoryRepoId(WITH_ID, deps).catch(() => undefined);
+    expect(recorded.notices).toEqual([]);
   });
 
-  test("records no notice for a server error", async () => {
-    const { deps, recorded } = setup(() =>
+  test("keeps the original error class for a server error", async () => {
+    const { deps } = setup(() =>
       Promise.reject(new GitHubHttpError("boom", 500)),
     );
-    await gateFactoryRepoId(WITH_ID, deps);
-    expect(recorded.notices).toEqual([]);
-  });
-
-  test("records no notice for a rate limit", async () => {
-    const { deps, recorded } = setup(() =>
-      Promise.reject(new GitHubHttpError("limited", 403)),
+    await expect(verifyFactoryRepoId(WITH_ID, deps)).rejects.toBeInstanceOf(
+      GitHubHttpError,
     );
-    await gateFactoryRepoId(WITH_ID, deps);
-    expect(recorded.notices).toEqual([]);
   });
 
-  test("blocks the update when the URL names no repository", async () => {
+  test("rejects with a mismatch error when the URL names no repository", async () => {
     const { deps } = setup(() => Promise.resolve(777));
-    expect(
-      await gateFactoryRepoId(
+    await expect(
+      verifyFactoryRepoId(
         { factory_repo: "git@example.com:octo/factory", factory_repo_id: 777 },
         deps,
       ),
-    ).toBe(false);
+    ).rejects.toBeInstanceOf(FactoryRepoIdMismatchError);
   });
 
   test("makes no lookup when the URL names no repository", async () => {
     const { deps, recorded } = setup(() => Promise.resolve(777));
-    await gateFactoryRepoId(
+    await verifyFactoryRepoId(
       { factory_repo: "git@example.com:octo/factory", factory_repo_id: 777 },
       deps,
-    );
+    ).catch(() => undefined);
     expect(recorded.lookups).toEqual([]);
   });
 
   test("records an actionable notice when the URL names no repository", async () => {
     const { deps, recorded } = setup(() => Promise.resolve(777));
-    await gateFactoryRepoId(
+    await verifyFactoryRepoId(
       { factory_repo: "git@example.com:octo/factory", factory_repo_id: 777 },
       deps,
-    );
+    ).catch(() => undefined);
     expect(recorded.notices).toEqual([
       {
         kind: FACTORY_REPO_ID_MISMATCH_KIND,
@@ -180,25 +196,92 @@ describe("gateFactoryRepoId", () => {
     ]);
   });
 
-  test("still blocks the update when recording the notice fails", async () => {
+  test("still rejects with the mismatch error when recording the notice fails", async () => {
     const { deps } = setup(() => Promise.resolve(999));
     const failing = {
       ...deps,
       addNotice: () => Promise.reject(new Error("db down")),
     };
-    expect(await gateFactoryRepoId(WITH_ID, failing)).toBe(false);
+    await expect(verifyFactoryRepoId(WITH_ID, failing)).rejects.toBeInstanceOf(
+      FactoryRepoIdMismatchError,
+    );
+  });
+});
+
+describe("ensureVerifiedFactoryClone", () => {
+  test("returns the clone when the current id matches", async () => {
+    const { deps, cloneResult } = setup(() => Promise.resolve(777));
+    const result = await ensureVerifiedFactoryClone(
+      WITH_ID,
+      { run: fakeRun, ghToken: "tok" },
+      deps,
+    );
+    expect(result).toBe(cloneResult);
   });
 
-  test("records a failure for the notice when recording the notice fails", async () => {
-    const { deps, recorded } = setup(() => Promise.resolve(999));
-    const failing = {
-      ...deps,
-      addNotice: () => Promise.reject(new Error("db down")),
-    };
-    await gateFactoryRepoId(WITH_ID, failing);
-    expect(recorded.failures.map((f) => f.step)).toContain(
-      "verify_factory_repo_id:notice",
+  test("clones the configured URL and branch", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(777));
+    await ensureVerifiedFactoryClone(
+      WITH_ID,
+      { run: fakeRun, ghToken: "tok" },
+      deps,
     );
+    expect(recorded.clones.map((c) => [c.repoUrl, c.branch])).toEqual([
+      ["https://github.com/octo-owner/factory.git", "main"],
+    ]);
+  });
+
+  test("passes the other options through", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(777));
+    await ensureVerifiedFactoryClone(
+      WITH_ID,
+      { run: fakeRun, ghToken: "tok", dir: "/tmp/clone" },
+      deps,
+    );
+    expect(recorded.clones[0]?.dir).toBe("/tmp/clone");
+  });
+
+  test("clones without a lookup when factory_repo_id is not set", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(1));
+    await ensureVerifiedFactoryClone(
+      WITHOUT_ID,
+      { run: fakeRun, ghToken: "tok" },
+      deps,
+    );
+    expect(recorded.lookups).toEqual([]);
+  });
+
+  test("does not touch the clone when the current id differs", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(999));
+    await ensureVerifiedFactoryClone(
+      WITH_ID,
+      { run: fakeRun, ghToken: "tok" },
+      deps,
+    ).catch(() => undefined);
+    expect(recorded.clones).toEqual([]);
+  });
+
+  test("rejects with a mismatch error when the current id differs", async () => {
+    const { deps } = setup(() => Promise.resolve(999));
+    await expect(
+      ensureVerifiedFactoryClone(
+        WITH_ID,
+        { run: fakeRun, ghToken: "tok" },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(FactoryRepoIdMismatchError);
+  });
+
+  test("does not touch the clone when the lookup fails", async () => {
+    const { deps, recorded } = setup(() =>
+      Promise.reject(new Error("HTTP 502")),
+    );
+    await ensureVerifiedFactoryClone(
+      WITH_ID,
+      { run: fakeRun, ghToken: "tok" },
+      deps,
+    ).catch(() => undefined);
+    expect(recorded.clones).toEqual([]);
   });
 });
 

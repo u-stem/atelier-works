@@ -39,7 +39,10 @@ import {
   type FetchLike,
   notifyBestEffort,
 } from "./lib/discord.ts";
-import { gateFactoryRepoId } from "./lib/factory_repo_gate.ts";
+import {
+  ensureVerifiedFactoryClone,
+  FactoryRepoIdMismatchError,
+} from "./lib/factory_repo_gate.ts";
 import { getRepositoryId } from "./lib/github.ts";
 import {
   HOST_ACTION_NOTICE_KIND,
@@ -79,7 +82,6 @@ import {
   type CommandResult,
   type CommandRunner,
   DEFAULT_TIMEOUT_MS,
-  ensureFactoryClone,
   FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT,
   omittedMarkerIndex,
   pathExists,
@@ -700,29 +702,32 @@ async function updateSelf(
 
   // 取得の前に、`factory_repo`が指すリポジトリのIDを照合する。
   // 食い違うリポジトリの内容を、秘密値を持つworkspaceへ反映しないためである。
-  // 照合に落ちた回は、self cloneも更新せず、次の回に照合し直す。
-  const factoryRepoVerified = await gateFactoryRepoId(config, {
-    getRepositoryId: (owner, repo) =>
-      withCallTimeout("getRepositoryId factory_repo", () =>
-        getRepositoryId({ ghToken, run: runCommand }, owner, repo),
-      ),
-    recordFailure: (step, err) => recordGateFailure(step, err, log),
-    addNotice: (record) =>
-      withCallTimeout("addNotice factory_repo_id", () =>
-        addNoticeUnlessUnresolved(record),
-      ),
-  });
-  if (!factoryRepoVerified) {
+  // 食い違い、404、URLの誤りの回は、self cloneも更新せず、次の回に照合し直す。
+  // それ以外の照合の失敗(認証、5xx、レート制限、通信断)は、ジョブの失敗にする。
+  let factoryClone: Awaited<ReturnType<typeof ensureVerifiedFactoryClone>>;
+  try {
+    factoryClone = await ensureVerifiedFactoryClone(
+      config,
+      { run: runCommand, ghToken },
+      {
+        getRepositoryId: (owner, repo) =>
+          withCallTimeout("getRepositoryId factory_repo", () =>
+            getRepositoryId({ ghToken, run: runCommand }, owner, repo),
+          ),
+        addNotice: (record) =>
+          withCallTimeout("addNotice factory_repo_id", () =>
+            addNoticeUnlessUnresolved(record),
+          ),
+      },
+    );
+  } catch (err) {
+    if (!(err instanceof FactoryRepoIdMismatchError)) {
+      throw err;
+    }
+    await recordGateFailure("verify_factory_repo_id", err, log);
     log.warn("factory_repo id check did not pass, skipping the update");
     return { outcome: "skipped", reason: "factory_repo_id" };
   }
-
-  const factoryClone = await ensureFactoryClone({
-    run: runCommand,
-    repoUrl: config.factory_repo,
-    ghToken,
-    branch: config.factory_branch,
-  });
 
   // `ensureFactoryClone`の事後条件を鵜呑みにせず、ブランチを重ねて確かめる
   // (理由は`readSelfCloneBranch`のコメントを参照)。

@@ -146,12 +146,12 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 
 照合の対象は、検索の入口と、候補の絞り込みである。
 prepareの各ステップ(`implement_prepare`、`pr_review_prepare`、`pr_fix_prepare`)、ラベルの確認そのものは照合しない。
-`factory_repo`の取得は、`owners`の`id`ではなく、`factory_repo_id`で照合する([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
+`factory_repo`の取得は、`owners`の`id`とは別に、`factory_repo_id`で照合する([Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する))。
 
 ### Factory自身のリポジトリの数値IDを固定する
 
 `factory_config`の`factory_repo_id`に、`factory_repo`のGitHubリポジトリの数値IDを入れられる。
-`factory_repo_id`を省略するか`null`にすると、`factory_repo_id`が無いものとして扱う。
+省略すると、IDを照合せず、名前だけで取得する。
 次のコマンドで調べる。
 
 ```bash
@@ -159,33 +159,48 @@ gh api repos/<owner>/<repo> --jq .id
 ```
 
 `self_update`は`factory_repo`のURL(名前)から取得し、リモートの内容を`wmill sync push`で反映する。
+ほかの処理も、`factory_repo`のcloneからスキルとテンプレートを読んで、Claudeに渡す。
 オーナーが改名して別の人がその名前を取得し、同じ名前のリポジトリを作ると、名前のURLはその人のリポジトリを指す。
-その内容は、秘密値を持つworkspaceに反映されうる。
-`factory_repo_id`を入れると、`self_update`は取得の前に、GitHubの現在のIDと照合する。
-IDが一致したときだけ、取得と反映に進む。
+その内容は、秘密値を持つworkspaceに反映されたり、Claudeに読まれたりしうる。
 
-食い違うか、リポジトリが見つからない(404)ときは、self cloneの更新と反映をしない。
+`factory_repo_id`を入れると、Factory自身のcloneを用意するすべての処理が、取得の前に、GitHubの現在のIDと照合する。
+IDが一致したときだけ、取得に進む。
+cloneのoriginは、取得の前に毎回`factory_repo`のURLへ付け替える。
+照合したURLと取得するURLは、同じである。
+
+食い違うか、リポジトリが見つからない(404)か、`factory_repo`のURLが`https://github.com/<owner>/<repo>`の形でないときは、取得しない。
 Consoleの**要対応**に`factory_repo_id_mismatch`が残る。
 本文にリポジトリ名と、設定のIDが載る。
 食い違いのときは、GitHubの現在のIDも載る。
 GitHubでそのリポジトリが意図した持ち主のものかを確かめ、`factory_config`の`factory_repo`か`factory_repo_id`を見直す。
-名前とIDが合うと、次の回から反映が再開する。
+名前とIDが合うと、次の回から取得が再開する。
 見直した後に、noticeを解決する。
 
-`factory_repo`のURLが`https://github.com/<owner>/<repo>`の形でないときも、照合できないので反映せず、同じnoticeが残る。
+照合に落ちたときの振る舞いは、処理ごとに次のとおりである。
 
-404以外のすべて(5xx、レート制限、認証の失敗、通信断を含む)でIDを取得できなかったときは、反映せず、失敗の記録だけが残る。
-一時的な障害でありうるので、次の回に再試行する。
+| 処理 | 振る舞い |
+| --- | --- |
+| `self_update` | 取得も反映もせず、成功で終わる。`job_failures`に失敗を記録する |
+| `poll_issues`のデプロイ版の確認 | その回の確認を飛ばし、警告のログを残す。ポーリングは続く |
+| 要件定義、実装、PR修正、PRレビュー、監査の準備 | 取得の前にステップが失敗し、フローが失敗する。作業項目は失敗になり、Discordに`job_failed`が届く。原因を直した後に、`retry_work_item`で再実行する |
+
+404以外のすべて(認証の失敗、5xx、レート制限、通信断を含む)でIDを取得できなかったときは、noticeを残さず、例外としてそのまま失敗にする。
+`self_update`のジョブは失敗し、`job_failed`が届く。
+持続する障害を見逃さないためである。
+`poll_issues`のデプロイ版の確認は、警告のログだけを残す。
+次の回に照合が通れば、取得が再開する。
 
 リポジトリ自体の改名や移管では、IDが変わらない。
 正規の改名のときは、`factory_repo`のURLを新しい名前に直す。
 `factory_repo_id`はそのまま使える。
+originは取得の前にそのURLへ付け替わるので、古い名前のcloneが残らない。
 
-照合の対象は、`self_update`の取得と反映だけである。
-次のものは照合しない。
+照合の限界は次のとおりである。
 
+- 照合から取得までの短い間に、リポジトリが入れ替わる余地は残る。
 - `isRepoAllowed`は`factory_repo`を名前で常に許す。自己改善の起票と、`factory_repo`のPRの候補への採用は、名前のままである。
-- prepareの各ステップ(`implement_prepare`、`pr_review_prepare`、`pr_fix_prepare`)は、IDを照合しない。
+- prepareの各ステップは、`owners`の`id`を照合しない。
+- Consoleの配信物を取り込む処理と、ホストの`git pull`は、`factory_repo_id`を照合しない。
 
 前回反映したshaが新しいHEADの祖先であることは、force pushで巻き戻す正規の運用が止まるので、反映の条件にしない。
 
@@ -1114,7 +1129,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す |
 | `fork_head_denied` | PRのheadのリポジトリが、このリポジトリと同一でない(fork、または取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。止めるなら、`factory:review`ラベルとassignee、レビュー依頼を外すか、PRを閉じる。外すまでは、解決しても出直す |
 | `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できない | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直す |
-| `factory_repo_id_mismatch` | `factory_repo`の`factory_repo_id`をGitHubの現在のIDと照合できず、自己更新が反映していない | [Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する)の手順で`factory_repo`と`factory_repo_id`を見直す |
+| `factory_repo_id_mismatch` | `factory_repo`の`factory_repo_id`をGitHubの現在のIDと照合できず、自己更新が取得も反映もしていない。Factory自身のリポジトリを使うほかの処理は、取得の前に失敗する | [Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する)の手順で`factory_repo`と`factory_repo_id`を見直す |
 | `labeler_check_limit` | 付与者を判定できない。直近100件のラベルのイベントにトリガーラベルのイベントが無く、古いイベントが残っている | ラベルを外し、許可された人が付け直す。対応した後に、Consoleでnoticeを解決する |
 | `claim_race_lost` | ほかのインスタンスか人が先にIssue・PRのトリガーラベルを外した。または、別の取得が同じIssueを先に取得した。同じ本文の未解決のnoticeがあるあいだは追加しない | 理由がラベルを先に外されたことなら、人が意図して外したのか確かめる。意図していなければ、何もしない |
 | `pr_trigger_label_left_removed` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままで作業項目も無い。本文は`<owner>/<repo>#<PR番号>: <ラベル>`で、PRごとに残る | [PRのトリガーラベルが外れたままになったとき](#prのトリガーラベルが外れたままになったとき)の手順で、ラベルが付いていないか、サイクルが始まっていないかを確かめてから付け直す |
@@ -1214,7 +1229,7 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 ### 自己更新の打ち切りを確かめる
 
-`self_update`のジョブには、全体の上限(2900秒)がある。
+`self_update`のジョブには、全体の上限(3000秒)がある。
 値の内訳は[アーキテクチャ](architecture.md)の「自己更新」に書く。
 通常は、各コマンドの上限と、区切った呼び出し(1回30秒)の上限で先に終わる。
 全体の上限は、それでも止まったときの最後の砦である。
@@ -1260,9 +1275,9 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 手順は次のとおりである。
 
 1. `self_update`の上限が反映されていることを確かめる。
-   `wmill script get f/factory/self_update`の出力で、`timeout`が2900であることを見る。
-   2900秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
-   `job_default_timeout`は21600秒以上にする決まりなので、2900秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
+   `wmill script get f/factory/self_update`の出力で、`timeout`が3000であることを見る。
+   3000秒がインスタンスの上限で切り詰められないのは、セルフホストの上限が環境変数`TIMEOUT`で、未設定なら7日だからである。
+   `job_default_timeout`は21600秒以上にする決まりなので、3000秒はその範囲に収まる([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)。
 2. `u/<user>/timeout_probe`というscriptを作る。
    子プロセスを起動せず、60秒待つだけにする。
    設定の`timeout`は10秒にする。

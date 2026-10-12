@@ -15,26 +15,31 @@ async function selfUpdateSource(): Promise<string> {
 }
 
 describe("self_update factory repo id wiring", () => {
-  test("checks the repository id before fetching the self clone", async () => {
+  test("prepares the self clone through the verified path with the configuration", async () => {
     const source = await selfUpdateSource();
 
-    expect(
-      source.indexOf("await gateFactoryRepoId(") <
-        source.indexOf("await ensureFactoryClone("),
-    ).toBe(true);
+    expect(source).toMatch(/await ensureVerifiedFactoryClone\(\s*config,/);
   });
 
-  test("returns before fetching the self clone when the check fails", async () => {
+  test("does not call the unverified clone function", async () => {
+    const source = await selfUpdateSource();
+
+    expect(source).not.toMatch(/\bensureFactoryClone\(/);
+  });
+
+  test("rethrows every error that is not a repository id mismatch", async () => {
     const source = await selfUpdateSource();
 
     expect(source).toMatch(
-      /await gateFactoryRepoId\([\s\S]*?\);\s*if \(!factoryRepoVerified\) \{[\s\S]*?return \{ outcome: "skipped"[^}]*\};\s*\}\s*const factoryClone = await ensureFactoryClone\(/,
+      /catch \(err\) \{\s*if \(!\(err instanceof FactoryRepoIdMismatchError\)\) \{\s*throw err;\s*\}/,
     );
   });
 
-  test("passes the configuration to the check", async () => {
+  test("records the failure and skips the update on a mismatch", async () => {
     const source = await selfUpdateSource();
 
-    expect(source).toMatch(/await gateFactoryRepoId\(\s*config,/);
+    expect(source).toMatch(
+      /throw err;\s*\}\s*await recordGateFailure\([\s\S]*?return \{ outcome: "skipped"[^}]*\};\s*\}\s*\/?[\s\S]*?readSelfCloneBranch\(/,
+    );
   });
 });

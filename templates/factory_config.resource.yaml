@@ -14,8 +14,8 @@
 #       id: <GitHubの数値ID>   # 任意。`gh api users/<名前> --jq .id`で調べる
 #
 # factory_repo_id: 任意。`factory_repo`のGitHubリポジトリの数値IDで、
-# `gh api repos/<owner>/<repo> --jq .id`で調べる。入れると、自己更新が取得の前に
-# 現在のIDと照合し、食い違うときは反映しない。
+# `gh api repos/<owner>/<repo> --jq .id`で調べる。入れると、Factory自身のcloneを使う処理が
+# 取得の前に現在のIDと照合し、食い違うときは取得しない。
 value:
   owners: []
   trigger_label: factory

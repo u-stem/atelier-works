@@ -725,9 +725,9 @@ export async function getAccountId(
 }
 
 /**
- * リポジトリの現在の数値IDを取得する。
- * 改名したリポジトリの旧名は、GitHubが新しい名前へ転送するので同じIDが返る。
- * 名前を別の人が取得したときは、その人のリポジトリのIDが返る。
+ * `GET repos/{owner}/{repo}`で、リポジトリの現在の数値IDを取得する。
+ * 名前を別の人が取得していれば、その人のリポジトリのIDが返る。
+ * 改名や移管の後の旧名で、GitHubの転送が効くかは確かめていない。
  */
 export async function getRepositoryId(
   client: GhClient,

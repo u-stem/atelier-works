@@ -824,6 +824,7 @@ describe("ensureFactoryClone", () => {
     const fake = createFakeCommandRunner([
       ok(),
       ok(),
+      ok(),
       ok(`${TRACKING_SHA}\n`),
       ok(),
     ]);
@@ -839,10 +840,10 @@ describe("ensureFactoryClone", () => {
       dir: "/workspaces/factory/atelier-works",
       action: "pulled",
     });
-    expect(fake.calls[0]?.argv).toEqual(
+    expect(fake.calls[1]?.argv).toEqual(
       expect.arrayContaining(["fetch", "origin", "--", "main"]),
     );
-    expect(fake.calls[3]?.argv).toEqual(
+    expect(fake.calls[4]?.argv).toEqual(
       expect.arrayContaining([
         "checkout",
         "-B",
@@ -854,6 +855,7 @@ describe("ensureFactoryClone", () => {
 
   test("runs FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT git commands when the clone dir already exists", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),
@@ -874,6 +876,7 @@ describe("ensureFactoryClone", () => {
     const fake = createFakeCommandRunner([
       ok(),
       ok(),
+      ok(),
       ok(`${TRACKING_SHA}\n`),
       ok(),
     ]);
@@ -885,13 +888,14 @@ describe("ensureFactoryClone", () => {
       exists: async () => true,
       lockFs: createInMemoryLockFs(),
     });
-    expect(fake.calls[1]?.argv).toEqual(
+    expect(fake.calls[2]?.argv).toEqual(
       expect.arrayContaining(["reset", "--hard"]),
     );
   });
 
   test("checks out -B the *configured* branch even when the existing clone was left on a different one (a prior caller defaulting to main must not stick)", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),
@@ -905,7 +909,7 @@ describe("ensureFactoryClone", () => {
       exists: async () => true,
       lockFs: createInMemoryLockFs(),
     });
-    expect(fake.calls[0]?.argv).toEqual(
+    expect(fake.calls[1]?.argv).toEqual(
       expect.arrayContaining([
         "fetch",
         "origin",
@@ -913,7 +917,7 @@ describe("ensureFactoryClone", () => {
         "feat/factory-foundation",
       ]),
     );
-    expect(fake.calls[3]?.argv).toEqual(
+    expect(fake.calls[4]?.argv).toEqual(
       expect.arrayContaining([
         "checkout",
         "-B",
@@ -923,8 +927,61 @@ describe("ensureFactoryClone", () => {
     );
   });
 
+  test("points origin at the configured repo URL before fetching, so a stale origin is never fetched", async () => {
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv.slice(-5)).toEqual([
+      "remote",
+      "set-url",
+      "origin",
+      "--",
+      "https://github.com/acme/atelier-works.git",
+    ]);
+  });
+
+  test("does not fetch when pointing origin at the configured URL fails", async () => {
+    const fake = createFakeCommandRunner([fail("No such remote")]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    }).catch(() => undefined);
+    expect(fake.calls.some((call) => call.argv.includes("fetch"))).toBe(false);
+  });
+
+  test("does not touch origin when it clones", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => false,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls.some((call) => call.argv.includes("set-url"))).toBe(
+      false,
+    );
+  });
+
   test("throws when the fetch fails", async () => {
-    const fake = createFakeCommandRunner([fail("could not fetch")]);
+    const fake = createFakeCommandRunner([ok(), fail("could not fetch")]);
     await expect(
       ensureFactoryClone({
         run: fake.run,
@@ -938,7 +995,12 @@ describe("ensureFactoryClone", () => {
   });
 
   test("throws without checking out when the tracking ref does not exist", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(), fail("not a valid ref")]);
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(),
+      fail("not a valid ref"),
+    ]);
     await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -954,6 +1016,7 @@ describe("ensureFactoryClone", () => {
 
   test("throws when the checkout fails", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),
@@ -975,6 +1038,7 @@ describe("ensureFactoryClone", () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),

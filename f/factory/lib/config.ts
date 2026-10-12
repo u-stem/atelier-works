@@ -274,9 +274,6 @@ function withinJobTmpAge(field: string, value: number): number {
 }
 
 /**
- * `raw[field]`を返す。値が無ければ`fallback`を返し、正の整数でなければ例外を投げる。
- */
-/**
  * 任意の正の整数の項目を読む。`null`、`undefined`、省略は「値無し」として`undefined`を返す。
  * 値があるときは正の整数だけを許す。
  */
@@ -294,6 +291,9 @@ function optionalPositiveIntegerField(
   return value;
 }
 
+/**
+ * `raw[field]`を返す。値が無ければ`fallback`を返し、正の整数でなければ例外を投げる。
+ */
 function positiveIntegerField(
   raw: Record<string, unknown>,
   field: string,
