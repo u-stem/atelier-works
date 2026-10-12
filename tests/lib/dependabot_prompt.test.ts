@@ -5,6 +5,7 @@ import {
   IMPACT_SCHEMA,
 } from "../../f/factory/lib/dependabot_prompt.ts";
 import {
+  ALLOWED_PATHS,
   type ImpactAssessment,
   MAX_EVIDENCE_CHARS,
   MAX_ITEM_CHARS,
@@ -127,7 +128,7 @@ describe("buildDependabotPrompt", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "Only a file that meets all of these conditions is out of scope: it is inside the working directory, it is outside node_modules and vendor, and it is not one of the four files this pull request changes (package.json, bun.lock, console/package.json, console/bun.lock).",
+      `Only a file that meets all of these conditions is out of scope: it is inside the working directory, it is outside node_modules and vendor, and it is not one of the files this pull request changes (${ALLOWED_PATHS.join(", ")}).`,
     );
   });
 
@@ -143,7 +144,7 @@ describe("buildDependabotPrompt", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "The content of the four changed files, opened directly, is in scope.",
+      "The content of the changed files, opened directly, is in scope.",
     );
   });
 
@@ -167,7 +168,7 @@ describe("buildDependabotPrompt", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      "A file that is out of scope matches the base branch, because the mechanical gate stops every changed path other than those four files.",
+      "A file that is out of scope matches the base branch, because the mechanical gate stops every changed path other than those files.",
     );
   });
 

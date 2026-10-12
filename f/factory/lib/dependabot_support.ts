@@ -22,7 +22,7 @@ export const REQUIRED_CHECKS: readonly string[] = [
  * 更新を許すファイル。依存の版を変えるのは、マニフェストとロックファイルだけである。
  * リポジトリ直下とconsole/配下の2か所に限り、それ以外の階層は許さない。
  */
-const ALLOWED_PATHS: readonly string[] = [
+export const ALLOWED_PATHS: readonly string[] = [
   "package.json",
   "bun.lock",
   "console/package.json",
