@@ -393,6 +393,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
 | `f/factory/lib/implement_launch_support` | script | [LIB] 実装フローの起動判定 |
+| `f/factory/lib/repo_owner_gate` | script | [LIB] 対象リポジトリのオーナーIDの照合 |
 | `f/factory/lib/model_policy` | script | [LIB] 工程ごとのモデルの選択 |
 | `f/factory/lib/supersede_support` | script | [LIB] 承認の取り消しのコメント |
 | `f/factory/lib/approval_support` | script | [LIB] 承認依頼の純粋ロジック |
