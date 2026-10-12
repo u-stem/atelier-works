@@ -14,13 +14,16 @@ import {
   claimIssueCreation,
   countImplementFailedRounds,
   countPrFixFailures,
-  deferMainCiRun,
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
+  deleteWorkerSamplesBefore,
   getNoticeById,
   getPreviousMainCiRun,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
+  hasNewerMainCiRun,
+  hasNewerUnsettledOrFailedMainCiRun,
+  hasPassedMainCiRunAfter,
   insertCleanupRun,
   insertWorkerSample,
   insertWorkItem,
@@ -1096,6 +1099,7 @@ await insertCleanupRun(
     notices_deleted: 2,
     info_notices_resolved: 3,
     main_ci_runs_deleted: 4,
+    worker_samples_deleted: 5,
     doc_dirs_deleted: 0,
   },
   sql,
@@ -1112,6 +1116,7 @@ check(
   "cleanup_runs: the resolved info notices count is recorded and summed",
   cleanupSummary?.info_notices_resolved === 3 &&
     cleanupSummary.main_ci_runs_deleted === 4 &&
+    cleanupSummary.worker_samples_deleted === 5 &&
     cleanupSummary.notices_deleted === 2,
   cleanupSummary,
 );
@@ -1620,17 +1625,6 @@ check(
 );
 const ciPending = ciRows.find((row) => row.head_sha === CI_SHA_A);
 if (ciPending === undefined) throw new Error("main_ci_runs row is missing");
-check(
-  "main_ci_runs: a deferred row is not due",
-  (await deferMainCiRun(
-    ciPending.id,
-    { nextCheckAt: new Date(Date.now() + 60 * 60 * 1000) },
-    sql,
-  )) === true &&
-    (await listPendingMainCiRuns(100, sql)).filter(
-      (row) => row.owner === CI_REPO.owner,
-    ).length === 0,
-);
 const ciSettled = {
   state: "failed" as const,
   summary: "失敗したworkflow: CI (failure)",
@@ -1861,6 +1855,320 @@ check(
   )?.toISOString() === "2026-10-12T00:00:00.000Z" &&
     (await hasMainCiRuns(LATE_REPO.owner, LATE_REPO.repo, sql)) === true,
 );
+
+// より新しいコミットの判定。並びの鍵は(実行の時刻、id)で、時刻が同じなら大きいidが後になる。
+const NEWER_REPO = { owner: "qdb", repo: "newer" };
+const newerShas = ["1", "2", "3", "4"].map((c) => c.repeat(40));
+const newerTimes = [
+  "2026-10-10T00:00:00Z",
+  "2026-10-11T00:00:00Z",
+  "2026-10-12T00:00:00Z",
+  "2026-10-12T00:00:00Z",
+];
+for (const [index, sha] of newerShas.entries()) {
+  await recordMainCiRun(
+    {
+      ...NEWER_REPO,
+      head_sha: sha,
+      state: "pending",
+      run_created_at: new Date(newerTimes[index] ?? ""),
+    },
+    sql,
+  );
+}
+const newerRows = await listMainCiRunsBySha(
+  NEWER_REPO.owner,
+  NEWER_REPO.repo,
+  newerShas,
+  sql,
+);
+const newerRow = (sha: string) => {
+  const found = newerRows.find((row) => row.head_sha === sha);
+  if (found === undefined) throw new Error("newer row is missing");
+  return found;
+};
+const [newerP, newerF, newerT1, newerT2] = newerShas.map(newerRow);
+if (
+  newerP === undefined ||
+  newerF === undefined ||
+  newerT1 === undefined ||
+  newerT2 === undefined
+) {
+  throw new Error("newer rows are missing");
+}
+const passedTransition = {
+  state: "passed" as const,
+  summary: "",
+  prevFailed: false,
+};
+await transitionMainCiRun(newerP.id, passedTransition, sql);
+await transitionMainCiRun(
+  newerF.id,
+  { state: "failed", summary: "x", prevFailed: false },
+  sql,
+);
+await transitionMainCiRun(newerT1.id, passedTransition, sql);
+await transitionMainCiRun(newerT2.id, passedTransition, sql);
+const at = (iso: string) => new Date(iso);
+check(
+  "main_ci_runs: a newer passed row is found",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-09T00:00:00Z"),
+    0,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: no newer passed row is found after the newest one",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-13T00:00:00Z"),
+    0,
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    owner: "qdb",
+    repo: "onlyfail",
+    head_sha: newerShas[0] ?? "",
+    state: "pending",
+    run_created_at: at("2026-10-10T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET state = 'failed' WHERE repo = 'onlyfail'",
+);
+check(
+  "main_ci_runs: a newer row of any state is found",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-11T00:00:00Z"),
+    newerF.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: the newest row has no newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT2.id,
+    sql,
+  )) === false,
+);
+check(
+  "main_ci_runs: at the same time, a larger id is a newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT1.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: a failed row is not a newer passed row",
+  (await hasPassedMainCiRunAfter(
+    "qdb",
+    "onlyfail",
+    at("2026-10-09T00:00:00Z"),
+    0,
+    sql,
+  )) === false &&
+    (await hasNewerUnsettledOrFailedMainCiRun(
+      "qdb",
+      "onlyfail",
+      at("2026-10-09T00:00:00Z"),
+      0,
+      sql,
+    )) === true,
+);
+check(
+  "main_ci_runs: at the same time, the larger id is the newer passed row",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT1.id,
+    sql,
+  )) === true &&
+    (await hasPassedMainCiRunAfter(
+      NEWER_REPO.owner,
+      NEWER_REPO.repo,
+      at("2026-10-12T00:00:00Z"),
+      newerT2.id,
+      sql,
+    )) === false,
+);
+
+// 通ったコミットが失敗の通知を解決してよいかの判断。新しい行が判定待ちか失敗なら、解決を待つ。
+const SAME_REPO = { owner: "qdb", repo: "sametime" };
+const sameShas = ["5", "6"].map((c) => c.repeat(40));
+for (const sha of sameShas) {
+  await recordMainCiRun(
+    {
+      ...SAME_REPO,
+      head_sha: sha,
+      state: "pending",
+      run_created_at: at("2026-10-12T00:00:00Z"),
+    },
+    sql,
+  );
+}
+const sameRows = await listMainCiRunsBySha(
+  SAME_REPO.owner,
+  SAME_REPO.repo,
+  sameShas,
+  sql,
+);
+const sameB = sameRows.find((row) => row.head_sha === sameShas[0]);
+const sameC = sameRows.find((row) => row.head_sha === sameShas[1]);
+if (sameB === undefined || sameC === undefined) {
+  throw new Error("sametime rows are missing");
+}
+await transitionMainCiRun(sameB.id, passedTransition, sql);
+await transitionMainCiRun(
+  sameC.id,
+  { state: "failed", summary: "x", prevFailed: false },
+  sql,
+);
+check(
+  "main_ci_runs: at the same time, a smaller id does not resolve the failure of a larger id",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    SAME_REPO.owner,
+    SAME_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    sameB.id,
+    sql,
+  )) === true &&
+    (await hasNewerUnsettledOrFailedMainCiRun(
+      SAME_REPO.owner,
+      SAME_REPO.repo,
+      at("2026-10-12T00:00:00Z"),
+      sameC.id,
+      sql,
+    )) === false,
+);
+const OTHERS_REPO = { owner: "qdb", repo: "settledothers" };
+const otherShas = ["7", "8", "9", "a", "b"].map((c) => c.repeat(40));
+const otherStates = ["passed", "expired", "no_ci", "baseline", "passed"];
+for (const [index, sha] of otherShas.entries()) {
+  await recordMainCiRun(
+    {
+      ...OTHERS_REPO,
+      head_sha: sha,
+      state: "baseline",
+      run_created_at: new Date(Date.UTC(2026, 9, 10 + index)),
+    },
+    sql,
+  );
+  execPsql(
+    target,
+    `UPDATE factory.main_ci_runs SET state = '${otherStates[index] ?? "baseline"}' WHERE repo = 'settledothers' AND head_sha = '${sha}'`,
+  );
+}
+const othersBase = (
+  await listMainCiRunsBySha(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    [otherShas[0] ?? ""],
+    sql,
+  )
+)[0];
+if (othersBase === undefined) throw new Error("settledothers row is missing");
+check(
+  "main_ci_runs: newer passed, expired, no_ci and baseline rows do not block the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    othersBase.id,
+    sql,
+  )) === false,
+);
+await recordMainCiRun(
+  {
+    ...OTHERS_REPO,
+    head_sha: "c".repeat(40),
+    state: "pending",
+    run_created_at: at("2026-10-20T00:00:00Z"),
+  },
+  sql,
+);
+check(
+  "main_ci_runs: a newer pending row blocks the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    OTHERS_REPO.owner,
+    OTHERS_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    othersBase.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: a newer failed row blocks the resolution",
+  (await hasNewerUnsettledOrFailedMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-10T00:00:00Z"),
+    newerP.id,
+    sql,
+  )) === true,
+);
+await recordMainCiRun(
+  {
+    owner: "qdb",
+    repo: "othernewer",
+    head_sha: newerShas[0] ?? "",
+    state: "pending",
+    run_created_at: at("2026-10-20T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET state = 'passed' WHERE repo = 'othernewer'",
+);
+check(
+  "main_ci_runs: a passed row of another repository does not count",
+  (await hasPassedMainCiRunAfter(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-13T00:00:00Z"),
+    0,
+    sql,
+  )) === false,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.main_ci_runs (owner, repo, head_sha, state, first_seen_at, run_created_at)
+   VALUES ('qdb', 'nullrun', '${newerShas[1] ?? ""}', 'passed', '2026-10-13T00:00:00Z', NULL)`,
+);
+check(
+  "main_ci_runs: a row without a run time is ordered by its first seen time",
+  (await hasPassedMainCiRunAfter(
+    "qdb",
+    "nullrun",
+    at("2026-10-12T00:00:00Z"),
+    0,
+    sql,
+  )) === true &&
+    (await hasPassedMainCiRunAfter(
+      "qdb",
+      "nullrun",
+      at("2026-10-14T00:00:00Z"),
+      0,
+      sql,
+    )) === false,
+);
 execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
 
 // ---------------------------------------------------------------------------
@@ -1963,6 +2271,37 @@ execPsql(
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
 );
 
+// dependabotの作業項目は、kindのCHECK制約を通り、アプリの挿入の関数で入る。
+// 戻せることは、後で適用するdown migrationが確かめる。
+const dependabotItem = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "dependabot",
+    owner: OWNER,
+    repo: "r",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 9001,
+    title: "qdb dependabot item",
+    body: null,
+    status: "picked",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+check(
+  "kind: a dependabot work item can be inserted",
+  dependabotItem > 0,
+  dependabotItem,
+);
+
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
 const fullWorkerSample = {
   sampled_at: new Date("2026-10-12T03:09:00.000Z"),
@@ -2055,6 +2394,30 @@ for (const [name, statement] of [
   }
   check(`worker_samples: the table rejects ${name}`, rejected);
 }
+
+// worker_samples: 掃除は期限ちょうどの行も含めて削除し、期限より新しい行を残す。
+const workerCutoff = new Date("2026-10-12T03:10:00.000Z");
+const boundaryWorkerSampleId = await insertWorkerSample(
+  { ...nullWorkerSample, sampled_at: workerCutoff },
+  sql,
+);
+const deletedWorkerSamples = await deleteWorkerSamplesBefore(workerCutoff, sql);
+const keptWorkerSampleIds = (await listRecentWorkerSamples(10, sql)).map(
+  (row) => row.id,
+);
+check(
+  "worker_samples: cleanup deletes the rows at or before the cutoff",
+  deletedWorkerSamples === 2 &&
+    !keptWorkerSampleIds.includes(fullWorkerSampleId) &&
+    !keptWorkerSampleIds.includes(boundaryWorkerSampleId),
+  { deletedWorkerSamples, keptWorkerSampleIds },
+);
+check(
+  "worker_samples: cleanup keeps the row newer than the cutoff",
+  keptWorkerSampleIds.length === 1 &&
+    keptWorkerSampleIds[0] === nullWorkerSampleId,
+  keptWorkerSampleIds,
+);
 
 // worker_samples: 日次のまとめの集計は、範囲の行だけを数え、値の読めた行の間の差でOOMの増分を求める。
 // 範囲は2026-10-10(JST)。範囲の外の行(10分前の行と終端ちょうどの行)は数えず、前の行は差と空白の起点にだけ使う。

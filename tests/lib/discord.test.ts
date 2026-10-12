@@ -141,6 +141,50 @@ describe("buildEmbed host_action_required", () => {
   });
 });
 
+describe("buildEmbed main_ci_failed", () => {
+  const event: Extract<NotifyEvent, { kind: "main_ci_failed" }> = {
+    kind: "main_ci_failed",
+    instance_name: "local",
+    owner: "acme",
+    repo: "widgets",
+    sha7: "abc1234",
+    url: "https://github.com/acme/widgets/actions/runs/9",
+    next_action: "実行のログを確かめて、原因を直す",
+  };
+
+  test("names the repository and the commit in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "mainのCIが失敗しました: acme/widgets@abc1234",
+    );
+  });
+
+  test("links to the run", () => {
+    expect(buildEmbed(event).url).toBe(
+      "https://github.com/acme/widgets/actions/runs/9",
+    );
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "実行のログを確かめて、原因を直す",
+    });
+  });
+
+  test("includes the repository field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "リポジトリ",
+      value: "acme/widgets",
+    });
+  });
+
+  test("names the commit in the description", () => {
+    expect(buildEmbed(event).description).toBe(
+      "mainのコミットabc1234でCIが失敗しました。",
+    );
+  });
+});
+
 describe("buildEmbed console_worker_missing", () => {
   const event: NotifyEvent = {
     kind: "console_worker_missing",
@@ -325,6 +369,7 @@ describe("buildEmbed", () => {
         notices_deleted: 2,
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
         doc_dirs_deleted: 0,
       },
       worker_load: { kind: "no_record" },

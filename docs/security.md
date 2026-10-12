@@ -225,6 +225,7 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 | Repository access | Only select repositoriesを選び、拾わせるリポジトリ(sandboxのリポジトリを含む)を選ぶ |
 | Repository permissions: Issues | Read and write |
 | Repository permissions: Contents | Read and write |
+| Repository permissions: Actions | Read-only |
 | Repository permissions: Metadata | Read-only(IssuesかContentsを選ぶと自動で付く) |
 | Repository permissions: Pull requests | Read and write |
 | Repository permissions: Workflows | No access |
@@ -233,7 +234,16 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 ContentsをRead and writeにするのは、PR修正と実装のフローがブランチにpushするためである。WorkflowsはNo accessのままにする。`.github/workflows/`を含むpushをGitHubに拒否させるためである。実装フローは`.github/`の変更を止めずに記録するので、この拒否が実質のガードになる。
 ただし、この拒否が及ぶのは`.github/workflows/`の下だけである。`.github/actions/`のcomposite actionには及ばないので、PR修正はパスで止め、実装フローは記録する。組み立てなど配布物に関わる手順は、composite actionに分けない。
 
+ActionsをRead-onlyにするのは、`watch_main_ci`が対象リポジトリの既定のブランチのActionsの実行を読むためである。
+書き込みの権限は付けない。実行の再実行や取り消しをさせないためである。
+権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのmainのCIの失敗に気づけない。
+Actions: Read-onlyでは、実行の一覧だけでなく、選んだ全リポジトリの実行のログとartifactも読める。
+`github_token`は、Console用workerの`approval_decide`と`retry_work_item`も読む。
+そのため、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。
+ログとartifactには秘密値を入れない。漏れたときの影響が広がる分は、残るリスクとして受け入れる。
+
 fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
+orgのリポジトリでは、権限を足すと、org側で再び承認を求められることもある。承認するまで、同じ通知は残る。
 
 Issue化の提案を承認してIssueを作るとき(`issue_proposal_apply`)も、同じ`f/factory/github_token`を使う。別の資格情報は用意しない。
 
@@ -263,7 +273,7 @@ GitHubの認証は、環境変数`GH_TOKEN`と、gitのcredential helperとし�
 
 `CONSOLE_GITHUB_TOKEN`は、Consoleの成果物を取り込む`console_fetcher`だけが使うfine-grained PATである。
 Factoryの`GITHUB_TOKEN`は流用しない。
-Actionsの読み取り権限が無いので403になり、ほかの権限も広すぎるためである。
+Issues、Contents、Pull requestsの書き込み権限が広すぎるためである。
 
 1. GitHub右上のアイコンから、**Settings**、**Developer settings**、**Personal access tokens**、**Fine-grained tokens**の順に開く。
 2. **Generate new token**を押す。

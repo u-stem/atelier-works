@@ -97,6 +97,18 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "main_ci_failed";
+      instance_name: string;
+      owner: string;
+      repo: string;
+      /** 失敗したコミットのsha先頭7文字。 */
+      sha7: string;
+      /** 失敗した実行へのリンク。検証済みのGitHubのURLだけを入れる(`parseRunUrl`)。 */
+      url: string;
+      /** 運用者がまず行う操作の1文。固定文を入れる。 */
+      next_action: string;
+    }
+  | {
       kind: "pr_reviewed";
       instance_name: string;
       owner: string;
@@ -347,6 +359,17 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         ],
       };
     }
+    case "main_ci_failed":
+      return {
+        title: `mainのCIが失敗しました: ${event.owner}/${event.repo}@${event.sha7}`,
+        description: `mainのコミット${event.sha7}でCIが失敗しました。`,
+        url: event.url,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+          repoField(event.owner, event.repo),
+        ],
+      };
     case "pr_reviewed": {
       const stateText =
         event.result === "changes_requested"
