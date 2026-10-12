@@ -5,7 +5,6 @@ BEGIN;
 
 SET LOCAL lock_timeout = '30s';
 
-DROP INDEX factory.work_items_active_pr_fix_key;
 DROP INDEX factory.work_items_ci_check_id_idx;
 
 ALTER TABLE factory.work_items

@@ -11,17 +11,8 @@
 -- work_items:
 --   ci_check_id       この作業項目が直しているpr_ci_checksの行のID。CIの失敗を直す作業項目だけが持つ。
 --
--- あわせて、同じPRで終端でないpr_fixの作業項目を同時に1件までにする部分一意索引を足す。
--- CIの失敗を直す作業項目と、レビュー指摘を直す作業項目が、同じPRを同時に書き換えないようにするためである。
--- 状態の一覧は、f/factory/lib/types.ts の TERMINAL_WORK_ITEM_STATUSES に入らない状態のすべてで、
--- work_items_active_dependabot_key の一覧と同じである。
--- tests/scripts/pr_ci_fix_schema_migration.test.ts が、両者が食い違っていないことを確かめる。
--- 終端の状態を変えるときは、この索引も作り直す新しいmigrationが要る。
--- pr_numberがNULLの行は、ユニーク索引では互いに別の値として扱われるので、衝突しない。
--- 終端でないpr_fixの行が同じPRに重なっていれば、CREATE UNIQUE INDEXが失敗し、migrationはエラーで止まる。
---
 -- 外部キーは持たない。pr_ci_checksは作業項目の削除に連なって消えず、作業項目も行の掃除に連なって消えない。
--- 参照先が消えても、値が空になって回復の条件が崩れることはない。
+-- 値は参照先の行が無くても残り、参照先の削除で書き換わらない。
 --
 -- 列の追加はACCESS EXCLUSIVEのロックを取る。ロックの待ちは最大30秒で、
 -- 止まった書き込みがあればmigrationは失敗する(self_updateが再試行する)。
@@ -56,12 +47,5 @@ COMMENT ON COLUMN factory.work_items.ci_check_id IS
 
 -- ci_check_id = <pr_ci_checksの行のID> で作業項目を引く照合に使う。値のある作業項目だけを索引に入れる。
 CREATE INDEX work_items_ci_check_id_idx ON factory.work_items (ci_check_id) WHERE ci_check_id IS NOT NULL;
-
-CREATE UNIQUE INDEX work_items_active_pr_fix_key
-    ON factory.work_items (owner, repo, pr_number)
-    WHERE kind = 'pr_fix' AND status IN (
-        'picked', 'requirements_generating', 'awaiting_approval',
-        'implementing', 'reviewing', 'fixing', 'auditing'
-    );
 
 END;
