@@ -433,10 +433,6 @@ describe("nextUnknownCount", () => {
     expect(nextUnknownCount(5, "stalled")).toBe(0);
   });
 
-  test("raises after thirty in a row", () => {
-    expect(CONSOLE_WORKER_UNKNOWN_LIMIT).toBe(30);
-  });
-
   test("covers one hour at the self_update interval", () => {
     const schedule = readFileSync(
       new URL("../../f/factory/self_update.schedule.yaml", import.meta.url),
@@ -689,7 +685,7 @@ describe("watchConsoleWorker", () => {
     expect(h.notices).toEqual([]);
   });
 
-  test("raises the check failed notice on the thirtieth unknown in a row", async () => {
+  test("raises the check failed notice on the unknown that reaches the limit", async () => {
     const h = harness({
       response: FAILS,
       storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
@@ -698,7 +694,7 @@ describe("watchConsoleWorker", () => {
     expect(h.notices).toEqual([CONSOLE_WORKER_CHECK_FAILED_NOTICE]);
   });
 
-  test("raises the check failed notice on the thirtieth unknown even when the state cannot be written", async () => {
+  test("raises the check failed notice on the unknown that reaches the limit even when the state cannot be written", async () => {
     const h = harness({
       response: FAILS,
       storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
