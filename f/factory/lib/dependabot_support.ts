@@ -512,7 +512,11 @@ export type GateInput = {
     verified: boolean;
     parentCount: number;
   }[];
-  checks: { name: string; conclusion: string | null }[];
+  /**
+   * `appId`はチェックを作ったAppのid。削除されたAppのチェックでは`null`にする。
+   * 必須のチェックは、GitHub Actions(`GITHUB_ACTIONS_APP_ID`)から来たものだけを出揃ったと見なす。
+   */
+  checks: { name: string; appId: number | null; conclusion: string | null }[];
   requiredChecks: readonly string[];
   update: UpdateKind;
   /** PRで変更されたすべてのパス。`files`に現れないパスがあれば止める。 */
@@ -687,18 +691,20 @@ function commitProblem(input: GateInput): string | null {
 
 const PASSING_CONCLUSIONS: readonly string[] = ["success", "skipped"];
 
+/** GitHub Actionsが作るチェックの`app.id`。必須チェックの主体を、このAppに限る。 */
+export const GITHUB_ACTIONS_APP_ID = 15368;
+
 /**
  * 必須チェックの状態を見る。失敗は止め、未完了と未出現は待つ。
  * 同じ名前のチェックが複数あるときは、すべてが合格するまで通さない。
+ * 出揃ったと見なすには、GitHub Actionsから来たチェックが1件以上要る。
+ * ほかのAppが同じ名前で成功を報告しても、出揃った証拠にしない。
+ * ほかのAppの同名の失敗は止める。成功で失敗を隠さないため。
  */
 function checkProblem(input: GateInput): GateResult | null {
   let pending: string | null = null;
   for (const name of input.requiredChecks) {
     const runs = input.checks.filter((check) => check.name === name);
-    if (runs.length === 0) {
-      pending ??= `required check has not appeared: ${detail(name)}`;
-      continue;
-    }
     for (const run of runs) {
       if (run.conclusion === null) {
         pending ??= `required check is not completed: ${detail(name)}`;
@@ -707,6 +713,9 @@ function checkProblem(input: GateInput): GateResult | null {
           `required check ${detail(name)} ended with ${detail(run.conclusion)}`,
         );
       }
+    }
+    if (!runs.some((run) => run.appId === GITHUB_ACTIONS_APP_ID)) {
+      pending ??= `required check has not appeared from GitHub Actions: ${detail(name)}`;
     }
   }
   return pending === null ? null : wait(pending);

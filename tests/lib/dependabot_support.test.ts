@@ -10,6 +10,7 @@ import {
   classifyUpdate,
   decideImpactOutcome,
   evaluateGate,
+  GITHUB_ACTIONS_APP_ID,
   isPublishedLongEnough,
   parseImpactAssessment,
   REQUIRED_CHECKS,
@@ -589,6 +590,16 @@ function filesFor(paths: readonly string[]): GateInput["files"] {
   );
 }
 
+const OTHER_APP_ID = 12345;
+
+function passingChecks(): GateInput["checks"] {
+  return REQUIRED_CHECKS.map((name) => ({
+    name,
+    appId: GITHUB_ACTIONS_APP_ID,
+    conclusion: "success",
+  }));
+}
+
 function validInput(overrides: Partial<GateInput> = {}): GateInput {
   const changedPaths = overrides.changedPaths ?? ["package.json", "bun.lock"];
   return {
@@ -596,7 +607,11 @@ function validInput(overrides: Partial<GateInput> = {}): GateInput {
     authorType: "Bot",
     headRepoFullName: "owner/repo",
     baseRepoFullName: "owner/repo",
-    checks: REQUIRED_CHECKS.map((name) => ({ name, conclusion: "success" })),
+    checks: REQUIRED_CHECKS.map((name) => ({
+      name,
+      appId: GITHUB_ACTIONS_APP_ID,
+      conclusion: "success",
+    })),
     requiredChecks: REQUIRED_CHECKS,
     update: "patch",
     changedPaths,
@@ -651,6 +666,7 @@ describe("evaluateGate", () => {
       verdictOf({
         checks: REQUIRED_CHECKS.map((name) => ({
           name,
+          appId: GITHUB_ACTIONS_APP_ID,
           conclusion: name === "console" ? "skipped" : "success",
         })),
       }),
@@ -662,6 +678,7 @@ describe("evaluateGate", () => {
       verdictOf({
         checks: REQUIRED_CHECKS.map((name) => ({
           name,
+          appId: GITHUB_ACTIONS_APP_ID,
           conclusion: name === "check" ? null : "success",
         })),
       }),
@@ -672,7 +689,11 @@ describe("evaluateGate", () => {
     expect(
       verdictOf({
         checks: REQUIRED_CHECKS.filter((name) => name !== "metadata").map(
-          (name) => ({ name, conclusion: "success" }),
+          (name) => ({
+            name,
+            appId: GITHUB_ACTIONS_APP_ID,
+            conclusion: "success",
+          }),
         ),
       }),
     ).toBe("wait");
@@ -682,8 +703,62 @@ describe("evaluateGate", () => {
     expect(
       verdictOf({
         checks: [
-          ...REQUIRED_CHECKS.map((name) => ({ name, conclusion: "success" })),
-          { name: "optional", conclusion: "failure" },
+          ...REQUIRED_CHECKS.map((name) => ({
+            name,
+            appId: GITHUB_ACTIONS_APP_ID,
+            conclusion: "success",
+          })),
+          {
+            name: "optional",
+            appId: GITHUB_ACTIONS_APP_ID,
+            conclusion: "failure",
+          },
+        ],
+      }),
+    ).toBe("ok");
+  });
+
+  test("waits when a required check came only from another app", () => {
+    expect(
+      verdictOf({
+        checks: REQUIRED_CHECKS.map((name) => ({
+          name,
+          appId: name === "check" ? OTHER_APP_ID : GITHUB_ACTIONS_APP_ID,
+          conclusion: "success",
+        })),
+      }),
+    ).toBe("wait");
+  });
+
+  test("waits when a required check came only from a deleted app", () => {
+    expect(
+      verdictOf({
+        checks: REQUIRED_CHECKS.map((name) => ({
+          name,
+          appId: name === "check" ? null : GITHUB_ACTIONS_APP_ID,
+          conclusion: "success",
+        })),
+      }),
+    ).toBe("wait");
+  });
+
+  test("needs a human when another app failed a check that actions passed", () => {
+    expect(
+      verdictOf({
+        checks: [
+          ...passingChecks(),
+          { name: "check", appId: OTHER_APP_ID, conclusion: "failure" },
+        ],
+      }),
+    ).toBe("needs_human");
+  });
+
+  test("accepts a check that actions passed alongside another app's success", () => {
+    expect(
+      verdictOf({
+        checks: [
+          ...passingChecks(),
+          { name: "check", appId: OTHER_APP_ID, conclusion: "success" },
         ],
       }),
     ).toBe("ok");
@@ -694,6 +769,7 @@ describe("evaluateGate", () => {
       verdictOf({
         checks: REQUIRED_CHECKS.map((name) => ({
           name,
+          appId: GITHUB_ACTIONS_APP_ID,
           conclusion: name === "test-db" ? "failure" : "success",
         })),
       }),
@@ -705,6 +781,7 @@ describe("evaluateGate", () => {
       verdictOf({
         checks: REQUIRED_CHECKS.map((name) => ({
           name,
+          appId: GITHUB_ACTIONS_APP_ID,
           conclusion: name === "scope" ? "cancelled" : "success",
         })),
       }),
@@ -716,6 +793,7 @@ describe("evaluateGate", () => {
       verdictOf({
         checks: REQUIRED_CHECKS.map((name) => ({
           name,
+          appId: GITHUB_ACTIONS_APP_ID,
           conclusion:
             name === "scope" ? "failure" : name === "check" ? null : "success",
         })),
@@ -793,6 +871,7 @@ describe("evaluateGate", () => {
         mergeable: null,
         checks: REQUIRED_CHECKS.map((name) => ({
           name,
+          appId: GITHUB_ACTIONS_APP_ID,
           conclusion: name === "check" ? "failure" : "success",
         })),
       }),

@@ -4735,7 +4735,7 @@ describe("mergePullRequest", () => {
       JSON.stringify({
         merge_method: "squash",
         sha: SHA_A,
-        commit_title: "chore: dependabotのセキュリティ更新をマージ(#12)",
+        commit_title: "chore: dependabotの依存更新をマージ(#12)",
         commit_message: "",
       }),
     );
@@ -4890,6 +4890,19 @@ describe("mergePullRequest", () => {
     ).rejects.toThrow(/did not merge/);
   });
 
+  test("rejects an abbreviated expected sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      mergePullRequest(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+        "abc1234",
+      ),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+
   test("rejects an expected sha that is not hexadecimal", async () => {
     const fake = createFakeCommandRunner([]);
     await expect(
@@ -4967,8 +4980,8 @@ describe("listPrChecks", () => {
       SHA_A,
     );
     expect(checks).toEqual([
-      { name: "lint", conclusion: "success" },
-      { name: "test", conclusion: "failure" },
+      { name: "lint", appId: 1, conclusion: "success" },
+      { name: "test", appId: 1, conclusion: "failure" },
     ]);
   });
 
@@ -4998,7 +5011,7 @@ describe("listPrChecks", () => {
       "widgets",
       SHA_A,
     );
-    expect(checks).toEqual([{ name: "test", conclusion: "success" }]);
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: "success" }]);
   });
 
   test("keeps the latest run when the newer one is listed first", async () => {
@@ -5027,7 +5040,7 @@ describe("listPrChecks", () => {
       "widgets",
       SHA_A,
     );
-    expect(checks).toEqual([{ name: "test", conclusion: "success" }]);
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: "success" }]);
   });
 
   test("prefers the non-success run when two runs have identical times", async () => {
@@ -5056,7 +5069,7 @@ describe("listPrChecks", () => {
       "widgets",
       SHA_A,
     );
-    expect(checks).toEqual([{ name: "test", conclusion: "failure" }]);
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: "failure" }]);
   });
 
   test("treats an unfinished rerun as the latest with a null conclusion", async () => {
@@ -5080,7 +5093,7 @@ describe("listPrChecks", () => {
       "widgets",
       SHA_A,
     );
-    expect(checks).toEqual([{ name: "test", conclusion: null }]);
+    expect(checks).toEqual([{ name: "test", appId: 1, conclusion: null }]);
   });
 
   test("does not hide a failure of another app's check with the same name", async () => {
@@ -5114,8 +5127,8 @@ describe("listPrChecks", () => {
       SHA_A,
     );
     expect(checks).toEqual([
-      { name: "test", conclusion: "failure" },
-      { name: "test", conclusion: "success" },
+      { name: "test", appId: 1, conclusion: "failure" },
+      { name: "test", appId: 2, conclusion: "success" },
     ]);
   });
 
@@ -5160,8 +5173,8 @@ describe("listPrChecks", () => {
       SHA_A,
     );
     expect(checks).toEqual([
-      { name: "old", conclusion: "success" },
-      { name: "old", conclusion: "failure" },
+      { name: "old", appId: null, conclusion: "success" },
+      { name: "old", appId: 2, conclusion: "failure" },
     ]);
   });
 
@@ -5222,7 +5235,7 @@ describe("listPrChecks", () => {
       "widgets",
       SHA_A,
     );
-    expect(checks).toEqual([{ name: "build", conclusion: null }]);
+    expect(checks).toEqual([{ name: "build", appId: 1, conclusion: null }]);
   });
 
   test("reads every page of check runs", async () => {
@@ -5265,6 +5278,30 @@ describe("listPrChecks", () => {
       SHA_A,
     );
     expect(checks.map((check) => check.name)).toEqual(["a", "b"]);
+  });
+
+  test("rejects an abbreviated head sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "abc1234",
+      ),
+    ).rejects.toThrow(/invalid commit sha/);
+  });
+
+  test("rejects an uppercase head sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      listPrChecks(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        "A".repeat(40),
+      ),
+    ).rejects.toThrow(/invalid commit sha/);
   });
 
   test("throws when check_runs is not an array", async () => {

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   buildDependabotPrompt,
   type DependabotPromptInput,
+  effectiveUnverifiedInputs,
   IMPACT_SCHEMA,
 } from "../../f/factory/lib/dependabot_prompt.ts";
 import {
@@ -124,11 +126,19 @@ describe("buildDependabotPrompt", () => {
     );
   });
 
-  test("limits the out-of-scope files by three conditions", () => {
+  test("limits the out-of-scope files by four conditions", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
     expect(prompt).toContain(
-      `Only a file that meets all of these conditions is out of scope: it is inside the working directory, it is outside node_modules and vendor, and it is not one of the files this pull request changes (${ALLOWED_PATHS.join(", ")}).`,
+      `Only a file that meets all of these conditions is out of scope: it is inside the working directory, it is tracked by git, it is outside any node_modules or vendor directory at any depth (for example console/node_modules), and it is not one of the files this pull request changes (${ALLOWED_PATHS.join(", ")}).`,
+    );
+  });
+
+  test("keeps untracked files in scope", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "A file that git does not track, such as a build output or a generated file, is in scope.",
     );
   });
 
@@ -309,6 +319,14 @@ describe("buildDependabotPrompt", () => {
     expect(prompt).not.toContain("could not be retrieved");
   });
 
+  test("never sets impact to none while a concern or an unverified item remains", () => {
+    const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
+
+    expect(prompt).toContain(
+      "If any concern or unverified item remains, never set `impact` to `none`.",
+    );
+  });
+
   test("leaves the merge decision to the caller", () => {
     const prompt = buildDependabotPrompt(INPUT, FIXED_UUID);
 
@@ -320,6 +338,74 @@ describe("buildDependabotPrompt", () => {
 
     expect(prompt).toContain(
       "Respond with structured output matching the provided JSON schema only.",
+    );
+  });
+});
+
+describe("effectiveUnverifiedInputs", () => {
+  test("returns the inputs the caller named", () => {
+    const names = effectiveUnverifiedInputs({
+      ...INPUT,
+      unverifiedInputs: ["changelog"],
+    });
+
+    expect(names).toEqual(["changelog"]);
+  });
+
+  test("adds registry metadata when it is whitespace only", () => {
+    const names = effectiveUnverifiedInputs({
+      ...INPUT,
+      registryMetadata: " \n\t ",
+    });
+
+    expect(names).toContain("registry metadata");
+  });
+
+  test("adds registry metadata when it is empty", () => {
+    const names = effectiveUnverifiedInputs({ ...INPUT, registryMetadata: "" });
+
+    expect(names).toEqual(["registry metadata"]);
+  });
+
+  test("does not repeat registry metadata the caller already named", () => {
+    const names = effectiveUnverifiedInputs({
+      ...INPUT,
+      registryMetadata: "",
+      unverifiedInputs: ["registry metadata"],
+    });
+
+    expect(names).toEqual(["registry metadata"]);
+  });
+
+  test("returns an empty list when every input was retrieved", () => {
+    expect(effectiveUnverifiedInputs(INPUT)).toEqual([]);
+  });
+
+  test("does not change the list the caller passed", () => {
+    const unverifiedInputs: DependabotPromptInput["unverifiedInputs"] = [];
+
+    effectiveUnverifiedInputs({
+      ...INPUT,
+      registryMetadata: "",
+      unverifiedInputs,
+    });
+
+    expect(unverifiedInputs).toEqual([]);
+  });
+
+  test("matches the inputs the prompt lists as unverified", () => {
+    const input: DependabotPromptInput = {
+      ...INPUT,
+      registryMetadata: "",
+      unverifiedInputs: ["changelog"],
+    };
+
+    const prompt = buildDependabotPrompt(input, FIXED_UUID);
+
+    expect(prompt).toContain(
+      effectiveUnverifiedInputs(input)
+        .map((name) => `- ${name}`)
+        .join("\n"),
     );
   });
 });
@@ -383,5 +469,40 @@ describe("IMPACT_SCHEMA", () => {
     };
 
     expect(parseImpactAssessment(minimal)).toEqual(minimal);
+  });
+});
+
+describe("factory-dependabot skill", () => {
+  const skill = readFileSync(
+    new URL(
+      "../../.claude/skills/factory-dependabot/SKILL.md",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  test("lists the files the pull request changes exactly as ALLOWED_PATHS", () => {
+    const line = skill
+      .split("\n")
+      .find((candidate) =>
+        candidate.startsWith(`- PRが変える${ALLOWED_PATHS.length}ファイルは`),
+      );
+    const listed = [...(line ?? "").matchAll(/`([^`]+)`/g)].map(
+      (match) => match[1],
+    );
+
+    expect(listed).toEqual([...ALLOWED_PATHS]);
+  });
+
+  test("keeps untracked files in scope", () => {
+    expect(skill).toContain(
+      "gitが追跡していないファイル(ビルド成果物や生成物)は対象になる。",
+    );
+  });
+
+  test("keeps node_modules and vendor in scope at any depth", () => {
+    expect(skill).toContain(
+      "`node_modules`と`vendor`は、任意の深さのどのディレクトリでも対象になる(例: `console/node_modules`)。",
+    );
   });
 });

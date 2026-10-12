@@ -2325,15 +2325,6 @@ export async function getPrFiles(
 // マージとPRの事実の取得(dependabotのゲート判定の入力)
 // ---------------------------------------------------------------------------
 
-const COMMIT_SHA_PATTERN = /^[0-9a-f]{7,64}$/i;
-
-/** shaはURLのパスと要求の本文に入るので、16進の文字列だけを受け付ける。 */
-function assertLabeledCommitSha(sha: string, label: string): void {
-  if (!COMMIT_SHA_PATTERN.test(sha)) {
-    throw new Error(`github: ${label} is not a commit sha`);
-  }
-}
-
 function unexpectedShape(context: string): Error {
   return new Error(`${context}: unexpected response shape`);
 }
@@ -2362,6 +2353,7 @@ function readErrorMessage(bodyText: string): string {
 /**
  * `PUT .../pulls/{number}/merge`でsquashマージする。
  * `sha`にレビューした時点のheadを渡し、その後にheadが動いたときはGitHubに拒ませる。
+ * shaは小文字の40桁だけを受け付ける。URLのパスと要求の本文に入る値を、短い形で曖昧にしないため。
  * squashのコミットの題名は固定で、本文は空にする。PRのタイトルや本文を使わないため。
  * 405(マージできない状態)と409(headの不一致)は、マージしなかった結果として
  * `status`と応答の`message`つきで返す。理由は呼び出し側が見分ける。
@@ -2378,7 +2370,7 @@ export async function mergePullRequest(
   expectedHeadSha: string,
 ): Promise<MergePullRequestResult> {
   validateOwnerRepo(owner, repo);
-  assertLabeledCommitSha(expectedHeadSha, "expected head sha");
+  assertCommitSha(expectedHeadSha);
   const context = `PUT pr merge ${owner}/${repo}#${number}`;
   const response = await callGhApi(
     client,
@@ -2388,7 +2380,7 @@ export async function mergePullRequest(
       body: {
         merge_method: "squash",
         sha: expectedHeadSha,
-        commit_title: `chore: dependabotのセキュリティ更新をマージ(#${number})`,
+        commit_title: `chore: dependabotの依存更新をマージ(#${number})`,
         commit_message: "",
       },
     },
@@ -2488,6 +2480,8 @@ function isNewerCheckRun(
  * 再実行された古い結果で判定しないためである。
  * 別のAppが同じ名前で作ったチェックは畳まず、すべて返す。一方の成功で他方の失敗を隠さないため。
  * 削除されたAppが作ったチェックは`app`が`null`になる。`app`が無い応答は不正として例外にする。
+ * 戻り値の`appId`は`app.id`で、削除されたAppでは`null`にする。呼び出し側がチェックの主体を絞るために使う。
+ * `headSha`は小文字の40桁だけを受け付ける。
  * 未完了のチェックの`conclusion`は`null`にする。
  */
 export async function listPrChecks(
@@ -2495,9 +2489,11 @@ export async function listPrChecks(
   owner: string,
   repo: string,
   headSha: string,
-): Promise<{ name: string; conclusion: string | null }[]> {
+): Promise<
+  { name: string; appId: number | null; conclusion: string | null }[]
+> {
   validateOwnerRepo(owner, repo);
-  assertLabeledCommitSha(headSha, "head sha");
+  assertCommitSha(headSha);
   const rows = await paginateGhApi<CheckRunRow>(
     client,
     `repos/${owner}/${repo}/commits/${headSha}/check-runs?per_page=100`,
@@ -2520,6 +2516,7 @@ export async function listPrChecks(
   }
   return [...latest.values()].map((row) => ({
     name: row.name,
+    appId: row.appId,
     conclusion: row.conclusion,
   }));
 }
@@ -2531,6 +2528,7 @@ const PR_FILES_API_CAP = 3000;
  * `GET .../pulls/{number}/files`を最後のページまで読み、変更されたファイルのパスを返す。
  * 名前の変更では、移動元のパスも含める。保護すべきパスからの移動を見逃さないため。
  * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ * PR番号で引くので、headのshaに固定されない。ゲートに渡す入力は、headのshaを固定した比較から作る。
  */
 export async function listPrFiles(
   client: GhClient,
@@ -2601,6 +2599,7 @@ function parseCommitAccount(
  * `verified`は`commit.verification.verified`、`parentCount`は`parents`の長さで、
  * どちらも応答に無いか形が違うときは例外にする。判定に使う値を推測で補わないため。
  * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ * PR番号で引くので、headのshaに固定されない。ゲートに渡す入力は、headのshaを固定した比較から作る。
  */
 export async function listPrCommits(
   client: GhClient,
