@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -532,7 +533,7 @@ describe("sweepLinksArgv", () => {
 describe("symlinksArgv", () => {
   test("writes the symlinks to a file without following them and marks each on stdout", () => {
     expect(
-      symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(3).join(" "),
+      symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(4).join(" "),
     ).toBe(
       `/usr/bin/find -P ${DIRS.worktreeDir} -type l -fprint0 /scratch/out -printf .`,
     );
@@ -545,9 +546,15 @@ describe("symlinksArgv", () => {
   });
 
   test("caps the size of the file find can write", () => {
-    expect(symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(0, 3)).toEqual([
+    expect(symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(0, 2)).toEqual([
       "/usr/bin/prlimit",
       `--fsize=${String(LINK_LIST_FSIZE_BYTES)}:${String(LINK_LIST_FSIZE_BYTES)}`,
+    ]);
+  });
+
+  test("keeps a find stopped by the size limit from writing a core dump", () => {
+    expect(symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(2, 4)).toEqual([
+      "--core=0:0",
       "--",
     ]);
   });
@@ -2273,6 +2280,51 @@ describe("privateOutputReader", () => {
       NAME,
     );
     expect(lines.join("\n")).toContain("EISDIR");
+  });
+
+  test("makes an existing base directory private", async () => {
+    const base = baseDir();
+    chmodSync(base, 0o755);
+    await privateOutputReader(base)(
+      async (file) => {
+        writeFileSync(file, "x");
+      },
+      ROOMY,
+      NAME,
+    );
+    expect(statSync(base).mode & 0o777).toBe(0o700);
+  });
+
+  test("logs a summary of the failure when it counts the list as incomplete because of the size", async () => {
+    const lines: string[] = [];
+    await privateOutputReader(
+      baseDir(),
+      logger("check_sandbox", { sink: (line) => lines.push(line) }),
+    )(
+      async (file) => {
+        writeFileSync(file, "abcde");
+        throw new Error("listing symlinks failed (exit 153)");
+      },
+      4,
+      NAME,
+    );
+    expect(lines.join("\n")).toContain("exit 153");
+  });
+
+  test("masks secrets in the summary of the failure", async () => {
+    const lines: string[] = [];
+    await privateOutputReader(
+      baseDir(),
+      logger("check_sandbox", { sink: (line) => lines.push(line) }),
+    )(
+      async (file) => {
+        writeFileSync(file, "abcde");
+        throw new Error("failed: ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+      },
+      4,
+      NAME,
+    );
+    expect(lines.join("\n")).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz");
   });
 
   test("removes the directory when the file cannot be read", async () => {

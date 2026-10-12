@@ -547,6 +547,7 @@ export function sweepLinksArgv(dir: string): string[] {
 /**
  * `dir`の下のsymlinkのパスを、NUL区切りのバイト列として`file`に書き出すargv。一括の受け渡しが入りうる範囲を見るため、`-xdev`は付けない。
  * 標準出力に出さずにファイルへ書くのは、出力の上限で一覧を省かないためである。
+ * `--core=0:0`は、制限で止められた`find`がコアダンプを書かないようにする。
  * `prlimit`で書けるファイルの大きさを`fileSizeLimit`(既定は`LINK_LIST_FSIZE_BYTES`)に抑える。超えて書こうとした`find`は失敗する。
  * `-printf .`は、見つけたsymlinkごとに標準出力へ1バイトを出す。書き出した件数との突き合わせで、一覧の黙った欠けを見つけるためである。
  */
@@ -560,6 +561,7 @@ export function symlinksArgv(
   return [
     PRLIMIT_PATH,
     `--fsize=${limit}:${limit}`,
+    "--core=0:0",
     "--",
     FIND_PATH,
     "-P",
@@ -2456,6 +2458,7 @@ export function privateOutputReader(
 ): CheckSandboxDeps["readPrivateOutput"] {
   return async (fill, maxBytes, name) => {
     await mkdir(baseDir, { recursive: true, mode: 0o700 });
+    await chmod(baseDir, 0o700);
     const dir = join(baseDir, name);
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { mode: 0o700 });
@@ -2467,6 +2470,12 @@ export function privateOutputReader(
       } catch (error) {
         // 書き込み量の制限で止まった`find`は失敗する。大きすぎる一覧として、不完全に倒す。
         if (!(await exceeds(file, maxBytes))) throw error;
+        log.warn(
+          "find failed after the symlink list passed the size limit, so it counts as incomplete",
+          {
+            error: failureSummary(error),
+          },
+        );
         return null;
       }
       try {
@@ -2485,6 +2494,11 @@ export function privateOutputReader(
       await rm(dir, { recursive: true, force: true });
     }
   };
+}
+
+/** 失敗の要旨。メッセージは秘密値を含みうるので、マスクして先頭の1行だけを返す。 */
+function failureSummary(error: unknown): string {
+  return firstLine(errorMessage(error));
 }
 
 /** `file`の大きさが`maxBytes`を超えているか。調べられなければfalse。 */
