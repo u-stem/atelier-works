@@ -2109,8 +2109,12 @@ export type PullRequest = {
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
   readonly baseRef: string;
+  /** GitHubがまだ計算していないときは`null`。真偽に丸めない。 */
+  readonly mergeable: boolean | null;
   readonly mergeableState: string | null;
   readonly authorLogin: string;
+  /** 作者のアカウント種別(`User` / `Bot`など)。作者が無いか不明なら`null`。 */
+  readonly authorType: string | null;
 };
 
 type PrPayload = {
@@ -2129,8 +2133,9 @@ type PrPayload = {
     readonly ref: string;
     readonly repo: { readonly full_name: unknown } | null;
   };
+  readonly mergeable: unknown;
   readonly mergeable_state: unknown;
-  readonly user: { readonly login: string } | null;
+  readonly user: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -2199,11 +2204,19 @@ export async function getPr(
     headRepoFullName,
     baseRepoFullName,
     baseRef: parsed.base.ref,
+    mergeable: typeof parsed.mergeable === "boolean" ? parsed.mergeable : null,
     mergeableState:
       typeof parsed.mergeable_state === "string"
         ? parsed.mergeable_state
         : null,
-    authorLogin: parsed.user?.login ?? "",
+    authorLogin:
+      isRecord(parsed.user) && typeof parsed.user.login === "string"
+        ? parsed.user.login
+        : "",
+    authorType:
+      isRecord(parsed.user) && typeof parsed.user.type === "string"
+        ? parsed.user.type
+        : null,
   };
 }
 
@@ -2306,6 +2319,375 @@ export async function getPrFiles(
     });
   }
   return items;
+}
+
+// ---------------------------------------------------------------------------
+// マージとPRの事実の取得(dependabotのゲート判定の入力)
+// ---------------------------------------------------------------------------
+
+const COMMIT_SHA_PATTERN = /^[0-9a-f]{7,64}$/i;
+
+/** shaはURLのパスと要求の本文に入るので、16進の文字列だけを受け付ける。 */
+function assertLabeledCommitSha(sha: string, label: string): void {
+  if (!COMMIT_SHA_PATTERN.test(sha)) {
+    throw new Error(`github: ${label} is not a commit sha`);
+  }
+}
+
+function unexpectedShape(context: string): Error {
+  return new Error(`${context}: unexpected response shape`);
+}
+
+export type MergePullRequestResult =
+  | { readonly merged: true; readonly sha: string }
+  | {
+      readonly merged: false;
+      readonly status: 405 | 409;
+      readonly message: string;
+    };
+
+/** 応答の本文から`message`を読む。JSONでないか文字列でなければ空文字にする。 */
+function readErrorMessage(bodyText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    if (isRecord(parsed) && typeof parsed.message === "string") {
+      return maskSecrets(parsed.message.slice(0, 500));
+    }
+  } catch {
+    // 本文がJSONでなければ、読める理由が無いものとして扱う。
+  }
+  return "";
+}
+
+/**
+ * `PUT .../pulls/{number}/merge`でsquashマージする。
+ * `sha`にレビューした時点のheadを渡し、その後にheadが動いたときはGitHubに拒ませる。
+ * squashのコミットの題名は固定で、本文は空にする。PRのタイトルや本文を使わないため。
+ * 405(マージできない状態)と409(headの不一致)は、マージしなかった結果として
+ * `status`と応答の`message`つきで返す。理由は呼び出し側が見分ける。
+ * 403(権限不足)や404などは`GitHubHttpError`を投げる。呼び出し側が権限不足を見分けて先送りできるようにするため。
+ * マージ要求の送信後に投げられる例外はすべて(`GitHubHttpError`、200で形が不正な場合や
+ * 200で`merged: false`の場合の通常の`Error`)、要求がGitHubに届いてマージされた可能性が残る。
+ * `merged: false`を返す場合も同じである。呼び出し側は`getPr`で`merged`を読み直してから判断する。
+ */
+export async function mergePullRequest(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  expectedHeadSha: string,
+): Promise<MergePullRequestResult> {
+  validateOwnerRepo(owner, repo);
+  assertLabeledCommitSha(expectedHeadSha, "expected head sha");
+  const context = `PUT pr merge ${owner}/${repo}#${number}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/merge`,
+    {
+      method: "PUT",
+      body: {
+        merge_method: "squash",
+        sha: expectedHeadSha,
+        commit_title: `chore: dependabotのセキュリティ更新をマージ(#${number})`,
+        commit_message: "",
+      },
+    },
+  );
+  if (response.status === 405 || response.status === 409) {
+    return {
+      merged: false,
+      status: response.status,
+      message: readErrorMessage(response.bodyText),
+    };
+  }
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.sha !== "string" ||
+    typeof parsed.merged !== "boolean"
+  ) {
+    throw unexpectedShape(context);
+  }
+  if (!parsed.merged) throw new Error(`${context}: GitHub did not merge`);
+  return { merged: true, sha: parsed.sha };
+}
+
+type CheckRunRow = {
+  /** 削除されたAppが作ったチェックでは`null`。 */
+  readonly appId: number | null;
+  readonly name: string;
+  readonly conclusion: string | null;
+  readonly unfinished: boolean;
+  readonly startedMs: number;
+  readonly completedMs: number;
+};
+
+function parseTimestampMs(value: unknown): number | null {
+  if (value === null) return 0;
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function parseCheckRun(value: unknown, context: string): CheckRunRow {
+  if (!isRecord(value)) throw unexpectedShape(context);
+  const { name, status, conclusion, app } = value;
+  if (typeof name !== "string" || typeof status !== "string") {
+    throw unexpectedShape(context);
+  }
+  let appId: number | null = null;
+  if (app !== null) {
+    if (!isRecord(app) || typeof app.id !== "number") {
+      throw unexpectedShape(context);
+    }
+    appId = app.id;
+  }
+  if (conclusion !== null && typeof conclusion !== "string") {
+    throw unexpectedShape(context);
+  }
+  const unfinished = status !== "completed";
+  if (!unfinished && conclusion === null) throw unexpectedShape(context);
+  const startedMs = parseTimestampMs(value.started_at);
+  const completedMs = parseTimestampMs(value.completed_at);
+  if (startedMs === null || completedMs === null) {
+    throw unexpectedShape(context);
+  }
+  return {
+    appId,
+    name,
+    conclusion: unfinished ? null : conclusion,
+    unfinished,
+    startedMs,
+    completedMs,
+  };
+}
+
+/**
+ * 同じ名前のチェックのうち、`candidate`が`current`より新しいか。
+ * 未完了は最新として扱う。開始と完了の時刻が同じで決められないときは、
+ * successでない方を選ぶ(取りこぼしで通さないため)。
+ */
+function isNewerCheckRun(
+  candidate: CheckRunRow,
+  current: CheckRunRow,
+): boolean {
+  if (candidate.unfinished !== current.unfinished) return candidate.unfinished;
+  if (candidate.startedMs !== current.startedMs) {
+    return candidate.startedMs > current.startedMs;
+  }
+  if (candidate.completedMs !== current.completedMs) {
+    return candidate.completedMs > current.completedMs;
+  }
+  return current.conclusion === "success" && candidate.conclusion !== "success";
+}
+
+/**
+ * `GET .../commits/{sha}/check-runs`を最後のページまで読み、
+ * チェックを作ったApp(`app.id`)と名前の組ごとに、最新の1件の結論を返す。
+ * 再実行された古い結果で判定しないためである。
+ * 別のAppが同じ名前で作ったチェックは畳まず、すべて返す。一方の成功で他方の失敗を隠さないため。
+ * 削除されたAppが作ったチェックは`app`が`null`になる。`app`が無い応答は不正として例外にする。
+ * 未完了のチェックの`conclusion`は`null`にする。
+ */
+export async function listPrChecks(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  headSha: string,
+): Promise<{ name: string; conclusion: string | null }[]> {
+  validateOwnerRepo(owner, repo);
+  assertLabeledCommitSha(headSha, "head sha");
+  const rows = await paginateGhApi<CheckRunRow>(
+    client,
+    `repos/${owner}/${repo}/commits/${headSha}/check-runs?per_page=100`,
+    (parsed, context) => {
+      if (!isRecord(parsed) || !Array.isArray(parsed.check_runs)) {
+        throw unexpectedShape(context);
+      }
+      return parsed.check_runs.map((run: unknown) =>
+        parseCheckRun(run, context),
+      );
+    },
+  );
+  const latest = new Map<string, CheckRunRow>();
+  for (const row of rows) {
+    const key = `${String(row.appId)}\u0000${row.name}`;
+    const current = latest.get(key);
+    if (current === undefined || isNewerCheckRun(row, current)) {
+      latest.set(key, row);
+    }
+  }
+  return [...latest.values()].map((row) => ({
+    name: row.name,
+    conclusion: row.conclusion,
+  }));
+}
+
+/** `pulls/{number}/files`が返せる件数の上限。 */
+const PR_FILES_API_CAP = 3000;
+
+/**
+ * `GET .../pulls/{number}/files`を最後のページまで読み、変更されたファイルのパスを返す。
+ * 名前の変更では、移動元のパスも含める。保護すべきパスからの移動を見逃さないため。
+ * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ */
+export async function listPrFiles(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string[]> {
+  validateOwnerRepo(owner, repo);
+  const paths = await paginateGhApi<string[]>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/files?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown) => {
+        if (!isRecord(entry) || typeof entry.filename !== "string") {
+          throw unexpectedShape(context);
+        }
+        const previous = entry.previous_filename;
+        if (previous === undefined || previous === null) {
+          return [entry.filename];
+        }
+        if (typeof previous !== "string") throw unexpectedShape(context);
+        return [entry.filename, previous];
+      });
+    },
+  );
+  if (paths.length >= PR_FILES_API_CAP) {
+    throw new Error(
+      `GET pr files ${owner}/${repo}#${number}: the file list may be truncated at ${String(PR_FILES_API_CAP)} files`,
+    );
+  }
+  return [...new Set(paths.flat())];
+}
+
+/** `pulls/{number}/commits`が返せる件数の上限。 */
+const PR_COMMITS_API_CAP = 250;
+/** 件数の上限を1ページ100件で読み切るページ数に、終端の確認の1ページを足した値。 */
+const PR_COMMITS_MAX_PAGES = Math.ceil(PR_COMMITS_API_CAP / 100) + 1;
+
+export type PrCommit = {
+  readonly sha: string;
+  readonly authorLogin: string | null;
+  readonly authorType: string | null;
+  readonly committerLogin: string | null;
+};
+
+function parseCommitAccount(
+  value: unknown,
+  context: string,
+): { login: string; type: string | null } | null {
+  if (value === null || value === undefined) return null;
+  if (!isRecord(value) || typeof value.login !== "string") {
+    throw unexpectedShape(context);
+  }
+  return {
+    login: value.login,
+    type: typeof value.type === "string" ? value.type : null,
+  };
+}
+
+/**
+ * `GET .../pulls/{number}/commits`を最後のページまで読む。
+ * `authorLogin`と`committerLogin`はGitHubのアカウントで、紐づくアカウントが無いcommitでは`null`にする。
+ * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ */
+export async function listPrCommits(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrCommit[]> {
+  validateOwnerRepo(owner, repo);
+  const commits = await paginateGhApi<PrCommit>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/commits?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown): PrCommit => {
+        if (!isRecord(entry) || typeof entry.sha !== "string") {
+          throw unexpectedShape(context);
+        }
+        const author = parseCommitAccount(entry.author, context);
+        const committer = parseCommitAccount(entry.committer, context);
+        return {
+          sha: entry.sha,
+          authorLogin: author?.login ?? null,
+          authorType: author?.type ?? null,
+          committerLogin: committer?.login ?? null,
+        };
+      });
+    },
+    PR_COMMITS_MAX_PAGES,
+  );
+  if (commits.length >= PR_COMMITS_API_CAP) {
+    throw new Error(
+      `GET pr commits ${owner}/${repo}#${number}: the commit list may be truncated at ${String(PR_COMMITS_API_CAP)} commits`,
+    );
+  }
+  return commits;
+}
+
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function assertRepoFilePath(path: string): void {
+  const segments = path.split("/");
+  const valid =
+    path !== "" &&
+    !path.includes("\\") &&
+    segments.every(
+      (segment) => segment !== "" && segment !== "." && segment !== "..",
+    );
+  if (!valid) throw new Error("github: file path is not a repository path");
+}
+
+/**
+ * `GET .../contents/{path}?ref={ref}`で、その版のファイルの内容をUTF-8の文字列で返す。
+ * ファイルが無いときは`null`を返す。refが存在しないときも404になるので、
+ * 呼び出し側はrefが存在することを別に確かめる。
+ * 内容が返らない(1MBを超える)ときと、ファイルでないときは例外にする。
+ */
+export async function getFileAtRef(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): Promise<string | null> {
+  validateOwnerRepo(owner, repo);
+  assertRepoFilePath(path);
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const context = `GET file ${owner}/${repo}:${path}@${ref}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+  );
+  if (response.status === 404) return null;
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  // symlinkをたどって別のファイルの内容が返ることを防ぐため、要求したパスと一致するものだけを受け付ける。
+  if (!isRecord(parsed) || parsed.type !== "file" || parsed.path !== path) {
+    throw unexpectedShape(context);
+  }
+  if (parsed.encoding === "none") {
+    throw new Error(`${context}: content is not returned (file is too large)`);
+  }
+  if (parsed.encoding !== "base64" || typeof parsed.content !== "string") {
+    throw unexpectedShape(context);
+  }
+  const base64 = parsed.content.replace(/\r?\n/g, "");
+  if (!BASE64_PATTERN.test(base64)) throw unexpectedShape(context);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.from(base64, "base64"),
+    );
+  } catch {
+    throw new Error(`${context}: content is not valid UTF-8`);
+  }
 }
 
 export type PrReview = {

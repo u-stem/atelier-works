@@ -527,7 +527,8 @@ export type GateInput = {
   files: { path: string; before: string | null; after: string | null }[];
   /** 更新の対象のパッケージと、更新後の版。 */
   target: { name: string; to: string };
-  mergeable: boolean;
+  /** GitHubがまだ計算していないときは`null`。 */
+  mergeable: boolean | null;
   publishedAtIso: string;
   nowMs: number;
   minPublishedDays: number;
@@ -713,7 +714,7 @@ function checkProblem(input: GateInput): GateResult | null {
 
 /**
  * 自動でmergeしてよいかを判定する。
- * fork、作者、種別、パスなどの止める条件を先に見て、待つ条件(チェックの未完了、公開日数の不足)を後に見る。
+ * fork、作者、種別、パスなどの止める条件を先に見て、待つ条件(mergeableの未計算、チェックの未完了、公開日数の不足)を後に見る。
  * 止める条件が1つでもあれば、待つ条件より優先して`needs_human`を返す。
  * 理由に埋め込むファイルやGitHub由来の文字列は、切り詰めて区切りを除いてある。
  */
@@ -736,7 +737,7 @@ export function evaluateGate(input: GateInput): GateResult {
   }
   const pathReason = pathProblem(input.changedPaths);
   if (pathReason !== null) return stop(pathReason);
-  if (!input.mergeable) return stop("pull request is not mergeable");
+  if (input.mergeable === false) return stop("pull request is not mergeable");
   const files = fileProblem(input);
   if (files !== null) return stop(files);
   const scripts = installScriptProblem(input);
@@ -754,6 +755,9 @@ export function evaluateGate(input: GateInput): GateResult {
   const checks = checkProblem(input);
   if (checks !== null && !checks.ok && checks.kind === "needs_human") {
     return checks;
+  }
+  if (input.mergeable === null) {
+    return wait("mergeability has not been computed yet");
   }
   if (
     !isPublishedLongEnough(
