@@ -281,25 +281,30 @@ function isHiddenChar(char: string): boolean {
   return (
     HIDDEN_CATEGORIES.test(char) ||
     HIDDEN_FILLERS.has(code) ||
-    (code >= 0x180b && code <= 0x180d) ||
+    (code >= 0x180b && code <= 0x180f) ||
     (code >= 0xfe00 && code <= 0xfe0f) ||
     (code >= 0xe0100 && code <= 0xe01ef)
   );
 }
 
-// 1文字がUTF-16で最大2単位なので、見る範囲は上限の文字数の4倍までにする。
-// 隠れた文字が多く続く文字列は、後ろを読まずに切る。
+// 見る長さの上限。1文字はUTF-16で最大2単位なので、上限の文字数の4倍までを許す。
+// これを超える値は、後ろを読み捨てると見える文字を失うので、読めない値として扱う。
 const MAX_SCANNED_UNITS = MAX_ITEM_CHARS * 4;
 
-/** 外部由来の文字列から制御文字を除き、1項目の上限に切る。文字列でないか、空になれば`null`にする。 */
+/**
+ * 外部由来の文字列から制御文字を除いて返す。
+ * 文字列でない、空になる、見る長さ(`MAX_SCANNED_UNITS`)を超える、
+ * 除いた後の文字数が1項目の上限(`MAX_ITEM_CHARS`)を超えるときは`null`にする。
+ * 切り詰めた値は、後ろの文字が見えないまま残るので使わない。
+ */
 function cleanText(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const kept = Array.from(value.slice(0, MAX_SCANNED_UNITS))
-    .filter((char) => !isHiddenChar(char))
-    .slice(0, MAX_ITEM_CHARS)
-    .join("")
-    .trim();
-  return kept.length === 0 ? null : kept;
+  if (typeof value !== "string" || value.length > MAX_SCANNED_UNITS) {
+    return null;
+  }
+  const kept = Array.from(value).filter((char) => !isHiddenChar(char));
+  if (kept.length > MAX_ITEM_CHARS) return null;
+  const text = kept.join("").trim();
+  return text.length === 0 ? null : text;
 }
 
 function cleanItem(value: unknown): string {
@@ -329,23 +334,49 @@ function publisherName(entry: Record<string, unknown> | null): string | null {
   return isRecord(user) ? cleanText(user.name) : null;
 }
 
-/** 行を先頭から、全体が`limit`文字に収まるところまで積む。行や文字の途中では切らない。 */
-function fitLines(lines: readonly string[], limit: number): string {
-  const kept: string[] = [];
+/** 要約の1項目。`label`は取れなかった項目の名前と同じ形で、`lines`は表示する行である。 */
+type MetadataGroup = { label: string; lines: string[] };
+
+/**
+ * 項目を`priority`の順に、全体が`limit`文字に収まるところまで積む。
+ * 項目の中では先頭から積み、入らない行から後ろを捨てる。行や文字の途中では切らない。
+ * 戻り値の`text`は、積めた行を`groups`の並びのまま改行でつないだもの。
+ * `dropped`は、行を1つでも捨てた項目の`label`である。
+ */
+function fitGroups(
+  groups: readonly MetadataGroup[],
+  priority: readonly number[],
+  limit: number,
+): { text: string; dropped: string[] } {
+  const keptCounts = groups.map(() => 0);
+  const dropped: string[] = [];
   let length = 0;
-  for (const line of lines) {
-    const next = length + line.length + (kept.length === 0 ? 0 : 1);
-    if (next > limit) break;
-    kept.push(line);
-    length = next;
+  let count = 0;
+  for (const index of priority) {
+    const group = groups[index];
+    if (group === undefined) continue;
+    for (const line of group.lines) {
+      const next = length + line.length + (count === 0 ? 0 : 1);
+      if (next > limit) break;
+      length = next;
+      count += 1;
+      keptCounts[index] = (keptCounts[index] ?? 0) + 1;
+    }
+    if ((keptCounts[index] ?? 0) < group.lines.length) {
+      dropped.push(group.label);
+    }
   }
-  return kept.join("\n");
+  const text = groups
+    .flatMap((group, index) => group.lines.slice(0, keptCounts[index] ?? 0))
+    .join("\n");
+  return { text, dropped };
 }
 
 /**
  * 更新の前後の公開者、リポジトリ、メンテナを、1行1項目の文字列にする。
  * メンテナはメールを含めず名前だけを載せる。取れない項目は"unknown"と書き、その名前を`missing`に入れる。
- * 公開者とリポジトリを先に並べ、全体を上限で切るときに先に失われるのをメンテナにする。
+ * 全体が上限を超えるときは、更新後の項目、更新前の項目の順に、公開者とリポジトリを先に、
+ * メンテナを後に積む。積めなかった行がある項目は、その名前を`missing`に入れる。
  */
 function buildMetadata(
   name: string,
@@ -376,17 +407,49 @@ function buildMetadata(
   const fromText = cleanText(from);
   const toText = cleanText(to);
   if (fromText === null || toText === null) missing.push("update");
-  const lines = [
-    `package: ${packageText}`,
-    `update: ${fromText ?? UNKNOWN} -> ${toText ?? UNKNOWN}`,
-    `before publisher: ${orUnknown("before publisher", publisherName(fromEntry))}`,
-    `after publisher: ${orUnknown("after publisher", publisherName(toEntry))}`,
-    `before repository: ${orUnknown("before repository", repositoryUrl(fromEntry))}`,
-    `after repository: ${orUnknown("after repository", repositoryUrl(toEntry))}`,
-    ...maintainerLines("before", fromEntry),
-    ...maintainerLines("after", toEntry),
+  const groups: MetadataGroup[] = [
+    { label: "package", lines: [`package: ${packageText}`] },
+    {
+      label: "update",
+      lines: [`update: ${fromText ?? UNKNOWN} -> ${toText ?? UNKNOWN}`],
+    },
+    {
+      label: "before publisher",
+      lines: [
+        `before publisher: ${orUnknown("before publisher", publisherName(fromEntry))}`,
+      ],
+    },
+    {
+      label: "after publisher",
+      lines: [
+        `after publisher: ${orUnknown("after publisher", publisherName(toEntry))}`,
+      ],
+    },
+    {
+      label: "before repository",
+      lines: [
+        `before repository: ${orUnknown("before repository", repositoryUrl(fromEntry))}`,
+      ],
+    },
+    {
+      label: "after repository",
+      lines: [
+        `after repository: ${orUnknown("after repository", repositoryUrl(toEntry))}`,
+      ],
+    },
+    {
+      label: "before maintainers",
+      lines: maintainerLines("before", fromEntry),
+    },
+    { label: "after maintainers", lines: maintainerLines("after", toEntry) },
   ];
-  return { text: fitLines(lines, MAX_METADATA_CHARS), missing };
+  // 並びは表示の順で、積む順は更新後を先にし、メンテナを最後にする。
+  const priority = [0, 1, 3, 5, 2, 4, 7, 6];
+  const fitted = fitGroups(groups, priority, MAX_METADATA_CHARS);
+  for (const label of fitted.dropped) {
+    if (!missing.includes(label)) missing.push(label);
+  }
+  return { text: fitted.text, missing };
 }
 
 /**

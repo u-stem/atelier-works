@@ -895,6 +895,14 @@ describe("parsePackument registryMetadata", () => {
     );
   });
 
+  test("removes the Mongolian free variation selector four", () => {
+    const to = version({ _npmUser: { name: "a\u180Fb" } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: ab\n",
+    );
+  });
+
   test("removes the variation selectors other than the emoji one", () => {
     const to = version({ _npmUser: { name: "a\uFE00\uFE0Eb\u{E0100}c" } });
 
@@ -973,12 +981,46 @@ describe("parsePackument registryMetadata", () => {
     );
   });
 
-  test("cuts an item to 200 characters", () => {
-    const to = version({ _npmUser: { name: "x".repeat(500) } });
+  test("keeps an item of exactly 200 characters", () => {
+    const to = version({ _npmUser: { name: "x".repeat(200) } });
 
     expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
       `after publisher: ${"x".repeat(200)}\n`,
     );
+  });
+
+  test("writes unknown for an item over 200 characters", () => {
+    const to = version({ _npmUser: { name: "x".repeat(201) } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after publisher: unknown\n",
+    );
+  });
+
+  test("names an item over 200 characters as missing", () => {
+    const to = version({ _npmUser: { name: "x".repeat(201) } });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([
+      "after publisher",
+    ]);
+  });
+
+  test("writes unknown for a value whose tail hides behind invisible characters", () => {
+    const url = `https://github.com/lodash/lodash${"\u200B".repeat(800)}.evil.example`;
+    const to = version({ repository: { url } });
+
+    expect(facts(versionsWith(version(), to)).registryMetadata).toContain(
+      "after repository: unknown\n",
+    );
+  });
+
+  test("names a value cut at the scan limit as missing", () => {
+    const url = `https://github.com/lodash/lodash${"\u200B".repeat(800)}.evil.example`;
+    const to = version({ repository: { url } });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([
+      "after repository",
+    ]);
   });
 
   test("cuts the whole text to 4000 characters", () => {
@@ -1002,6 +1044,48 @@ describe("parsePackument registryMetadata", () => {
     );
 
     expect(lines.at(-1)).toBe(`after maintainer: ${name}`);
+  });
+
+  test("keeps the updated version's maintainers when the old ones fill the text", () => {
+    const many = Array.from({ length: 300 }, (_, i) => ({
+      name: `old-maintainer-${String(i).padStart(4, "0")}`,
+    }));
+    const from = version({ maintainers: many });
+
+    expect(facts(versionsWith(from, version())).registryMetadata).toContain(
+      "after maintainer: maintainer-b",
+    );
+  });
+
+  test("names the old maintainers that were cut off as missing", () => {
+    const many = Array.from({ length: 300 }, (_, i) => ({
+      name: `old-maintainer-${String(i).padStart(4, "0")}`,
+    }));
+    const from = version({ maintainers: many });
+
+    expect(facts(versionsWith(from, version())).missing).toEqual([
+      "before maintainers",
+    ]);
+  });
+
+  test("names the maintainers that were cut off at the end as missing", () => {
+    const many = Array.from({ length: 500 }, (_, i) => ({
+      name: `maintainer-${String(i).padStart(4, "0")}`,
+    }));
+    const to = version({ maintainers: many });
+
+    expect(facts(versionsWith(version(), to)).missing).toContain(
+      "after maintainers",
+    );
+  });
+
+  test("does not name the maintainers when every line fits", () => {
+    const many = Array.from({ length: 50 }, (_, i) => ({
+      name: `maintainer-${String(i).padStart(4, "0")}`,
+    }));
+    const to = version({ maintainers: many });
+
+    expect(facts(versionsWith(version(), to)).missing).toEqual([]);
   });
 
   test("does not leave half of a surrogate pair after the cut", () => {
