@@ -1,5 +1,5 @@
 summary: '[SF-3-5/1] 依存の更新の検査とインストール'
-description: dependabotのPRの事実を集め直してゲートを評価し、通ればheadに固定した作業ディレクトリに依存を隔離してインストールし、インストール後の状態とスクリプトを確かめて、影響調査に渡す入力を組み立てるステップです。
+description: dependabotのPRについて事実を集め直し、ゲートを評価するステップです。ゲートを通れば、headに固定した作業ディレクトリへ依存を隔離してインストールし、インストール後の状態とスクリプトを確かめてから影響調査に渡す入力を組み立てます。
 lock: '!inline f/factory/steps/dependabot_prepare.script.lock'
 kind: script
 schema:

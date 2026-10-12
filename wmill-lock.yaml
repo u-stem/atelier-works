@@ -32,7 +32,7 @@ locks:
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
   f/factory/lib/db: 211b54c11a7bf2524abb6268af8edd1ddf5190e72b3a2319fb29d1cd7397a7e0
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
-  f/factory/lib/dependabot_flow_support: db3a8b4062a3d73be9eaf736566e0ef3cf80ff9741b1dbca447c4b478c7cd115
+  f/factory/lib/dependabot_flow_support: ad5587d39aab48151c49698e6028a328215cfaaa33addae5de2b07a46a5d4306
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
   f/factory/lib/dependabot_support: c778f65309eda258518db01372a7d341e7c41871982dfe3e557a5f780663289a
@@ -87,7 +87,7 @@ locks:
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 3bc36e6c5c703430960a777ad34ca2380d8574db93a5c930486d42cf07a05c81
   f/factory/steps/console_query: 138970a4c7a416e1fb534a16538ed14d6ac30349930287d2d02d6de65959c9f8
-  f/factory/steps/dependabot_prepare: 2764200a89544a596f47450fb2fc5b7c0c1e7139c8cadac73fc617ca14820758
+  f/factory/steps/dependabot_prepare: 7ed77957b166ce944ef010d8cbbbd1af02d9f0124b47a947ffd6f6ab4e51d5cf
   f/factory/steps/implement_finish: 7ac8214e2b9d2bef27798763fe609e1c416a90971c6810fb89a5a30e89ea1683
   f/factory/steps/implement_generate: 0671a360eef104568c2efaf753c42348a779005d3185c64e26fea5aeb15a36c1
   f/factory/steps/implement_prepare: b100c794c26c2c9d1fde4e6342dcfab9ec37ab47c4442d6b7b4a52a8fa5f9d84

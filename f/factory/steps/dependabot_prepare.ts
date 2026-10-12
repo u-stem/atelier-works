@@ -7,7 +7,7 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import {
   type CheckCommandResult,
   runAllowedCheckCommands,
@@ -28,6 +28,7 @@ import {
   type CollectDeps,
   type CollectResult,
   collectGateInput,
+  LOCKFILE_PATHS,
 } from "../lib/dependabot_collect.ts";
 import {
   buildChangelogExcerpt,
@@ -38,6 +39,7 @@ import {
   DEPENDABOT_INSTALL_TIMEOUT_MS,
   dependabotReason,
   evaluatePostInstallStatus,
+  MAX_SUMMARY_CHARS,
   POST_INSTALL_STATUS_ARGV,
   sanitizeUntrustedProse,
 } from "../lib/dependabot_flow_support.ts";
@@ -111,7 +113,7 @@ export type DependabotAssessInput = {
   readonly baseSha: string;
   readonly mergeBaseSha: string;
   readonly repoDir: string;
-  /** headのshaのdetachedの作業ツリー。インストール済みで、無視された`node_modules`のほかに追跡外のファイルが無い。 */
+  /** headのshaのdetachedの作業ツリー。インストール済みで、インストール先(`node_modules`と`vendor`、console/の下も含む)のほかに追跡外のファイルが無い。 */
   readonly worktreeDir: string;
   /** 更新の対象。名前は`registry`の名前と一致し、版は`x.y.z`の形である(ゲートが確かめている)。 */
   readonly target: {
@@ -125,26 +127,51 @@ export type DependabotAssessInput = {
    * `unverifiedInputs`は`effectiveUnverifiedInputs`を適用した後の一覧で、空でなければ人に回す。
    */
   readonly promptInput: DependabotPromptInput;
-  /** 更新の前後でrepositoryのURLが同じ場所を指すと確かめられなかったか。読めない、解釈できないときも真にする。 */
-  readonly repositoryChanged: boolean;
   /**
    * 機械の検査が見つけたサプライチェーンの懸念。無害化した英語の文である。
+   * repositoryのURLが同じ場所を指すと確かめられないとき(読めない、解釈できないときも含む)に1件入る。
    * 結論を出すときは、Claudeの`supplyChainConcerns`に足してから`decideImpactOutcome`に渡す。1件でもあれば人に回る。
    */
   readonly machineConcerns: string[];
 };
 
-export type DependabotPrepareResult = {
-  /** 影響調査に進むか。 */
-  readonly proceed: boolean;
-  /** このステップが作業項目を終端にしたときの状態。進むとき、状態を変えずに終えたときは`null`。 */
-  readonly terminalStatus: "cancelled" | "needs_human" | null;
-  /** 進まないときの理由。状態を変えたときは状態の注記と同じ文字列。 */
-  readonly reason: string | null;
+/**
+ * 影響調査の結果に関わらず、人に回す根拠の一覧を返す。空なら根拠は無い。
+ * 未確認の入力(`promptInput.unverifiedInputs`)と機械の懸念(`machineConcerns`)を1つにまとめる。
+ * 2つは別々の用途(プロンプトと`decideImpactOutcome`)にも使うので、成果物には分けて持ち、まとめるのはこの関数に限る。
+ */
+export function escalationsOf(assess: DependabotAssessInput): string[] {
+  return [
+    ...assess.promptInput.unverifiedInputs.map(
+      (name) => `unverified input: ${name}`,
+    ),
+    ...assess.machineConcerns,
+  ];
+}
+
+/** 影響調査に進むときの結果。 */
+export type DependabotPrepareProceed = {
+  readonly proceed: true;
+  readonly terminalStatus: null;
+  readonly reason: null;
   readonly workItemId: number;
-  /** 進むときだけ入る。 */
-  readonly assess: DependabotAssessInput | null;
+  readonly assess: DependabotAssessInput;
 };
+
+/** 影響調査に進まないときの結果。 */
+export type DependabotPrepareStopped = {
+  readonly proceed: false;
+  /** このステップが作業項目を終端にしたときの状態。状態を変えずに終えたとき(ほかの処理が先に動かしたときも)は`null`。 */
+  readonly terminalStatus: "cancelled" | "needs_human" | null;
+  /** 進まない理由。状態を変えたときは状態の注記と同じ文字列。 */
+  readonly reason: string;
+  readonly workItemId: number;
+  readonly assess: null;
+};
+
+export type DependabotPrepareResult =
+  | DependabotPrepareProceed
+  | DependabotPrepareStopped;
 
 // ---- 依存 ----
 
@@ -225,8 +252,6 @@ const PR_TITLE_MAX_CHARS = 300;
 const PR_BODY_MAX_CHARS = 16_000;
 /** 変更履歴の抜粋の上限(`buildChangelogExcerpt`の既定のバイト数と同じ)。 */
 const CHANGELOG_MAX_CHARS = 32_768;
-/** `buildManifestDiffSummary`と`buildLockfileSummary`の上限と同じ。 */
-const SUMMARY_MAX_CHARS = 8_000;
 const CONCERN_MAX_CHARS = 500;
 const NOTIFY_REASON_MAX_CHARS = 1_000;
 /** 読む変更履歴のファイルの上限。超えるものは読まずに未確認にする。 */
@@ -237,14 +262,18 @@ const PACKAGE_JSON_MAX_BYTES = 1024 * 1024;
 
 /**
  * dependabotの作業項目の作業ツリーのパスを返す。`sha7`は固定したheadのshaの先頭7文字。
- * メインのcloneの隣に置く。片付け(`cleanup_workspaces`)も、この関数でパスを求める。
+ * メインのclone(`ensureRepo`の`<owner>/<repo>/main`)の隣に置く。片付け(`cleanup_workspaces`)も、この関数でパスを求める。
+ * `repoDir`が`/main`で終わらないときは例外を投げる。メインのcloneの外に作業ツリーを作らないため。
  */
 export function buildDependabotWorktreeDir(
   repoDir: string,
   prNumber: number,
   sha7: string,
 ): string {
-  return `${repoDir.replace(/\/main$/, "")}/dependabot-${String(prNumber)}-${sha7}`;
+  if (!repoDir.endsWith("/main")) {
+    throw new Error(`not a main clone directory: ${repoDir}`);
+  }
+  return `${dirname(repoDir)}/dependabot-${String(prNumber)}-${sha7}`;
 }
 
 export type RecreateWorktreeOps = {
@@ -371,7 +400,9 @@ async function packageRoot(
 
 /**
  * インストールしたパッケージの`package.json`を読み、`binding.gyp`の有無を調べる。
- * 実体が作業ツリーの外にあるとき、読めないとき、JSONでないとき、大きすぎるときは`null`を返す。
+ * パッケージの実体が作業ツリーの外にあるとき、`package.json`の実体がパッケージの外にあるとき、
+ * 読めないとき、通常のファイルでないとき、JSONでないとき、大きすぎるときは`null`を返す。
+ * `binding.gyp`はシンボリックリンクを辿らずに見るので、リンク切れでも「ある」とする。
  * 呼び出し側は`null`を人に回す理由にする。
  */
 export async function readInstalledPackageFrom(
@@ -383,10 +414,10 @@ export async function readInstalledPackageFrom(
   if (located === null) return null;
   let text: string | null;
   try {
-    text = await fs.readTextLimited(
-      join(located.dir, "package.json"),
-      PACKAGE_JSON_MAX_BYTES,
-    );
+    // package.json自体もシンボリックリンクでありうるので、実体がパッケージの中にあるときだけ読む。
+    const path = await fs.realpath(join(located.dir, "package.json"));
+    if (!isInside(located.dir, path)) return null;
+    text = await fs.readTextLimited(path, PACKAGE_JSON_MAX_BYTES);
   } catch {
     return null;
   }
@@ -471,17 +502,30 @@ export function manifestDiffFor(files: GateInput["files"]): {
   return { text, verified: text !== "" };
 }
 
-/** ロックファイルのパスから、インストールしたパッケージのディレクトリ(作業ツリーからの相対パス)を返す。 */
-function installedPackageDirs(
+const LOCKFILE_NAME = "bun.lock";
+
+/**
+ * 変わったロックファイルから、インストールした対象のディレクトリ(作業ツリーからの相対パス)を求める。
+ * ロックファイルは`LOCKFILE_PATHS`のどれかで、同じディレクトリの`node_modules/<name>`に写す。
+ * ロックファイルが1つも変わっていないとき、写せないロックファイルが変わっているときは`problem`に理由を入れる。
+ * 呼び出し側は`problem`を人に回す理由にする。突き合わせを黙って飛ばさないため。
+ */
+export function installedPackageDirsFor(
   changedPaths: readonly string[],
   name: string,
-): string[] {
+): { dirs: string[]; problem: string | null } {
   const dirs: string[] = [];
-  if (changedPaths.includes("bun.lock")) dirs.push(`node_modules/${name}`);
-  if (changedPaths.includes("console/bun.lock")) {
-    dirs.push(`console/node_modules/${name}`);
+  for (const path of changedPaths) {
+    if (path !== LOCKFILE_NAME && !path.endsWith(`/${LOCKFILE_NAME}`)) continue;
+    if (!LOCKFILE_PATHS.includes(path)) {
+      return { dirs: [], problem: `changed lockfile is not mapped: ${path}` };
+    }
+    const prefix = path.slice(0, path.length - LOCKFILE_NAME.length);
+    dirs.push(`${prefix}node_modules/${name}`);
   }
-  return dirs;
+  return dirs.length === 0
+    ? { dirs, problem: "no changed lockfile to inspect the install" }
+    : { dirs, problem: null };
 }
 
 const PLAIN_VERSION = /^\d+\.\d+\.\d+$/;
@@ -522,7 +566,7 @@ export async function runDependabotPrepare(
   input: DependabotPrepareInput,
 ): Promise<DependabotPrepareResult> {
   const { workItem } = input;
-  const notReady = (reason: string): DependabotPrepareResult => ({
+  const notReady = (reason: string): DependabotPrepareStopped => ({
     proceed: false,
     terminalStatus: null,
     reason,
@@ -551,7 +595,7 @@ export async function runDependabotPrepare(
   const finish = async (
     to: "cancelled" | "needs_human",
     note: string,
-  ): Promise<DependabotPrepareResult> => {
+  ): Promise<DependabotPrepareStopped> => {
     if (worktree !== null) {
       try {
         await deps.removeWorktree(worktree);
@@ -699,7 +743,14 @@ export async function runDependabotPrepare(
     return finish("needs_human", dependabotReason("localCheck", clean.reason));
   }
 
-  const packageDirs = installedPackageDirs(result.input.changedPaths, name);
+  const mapped = installedPackageDirsFor(result.input.changedPaths, name);
+  if (mapped.problem !== null) {
+    return finish(
+      "needs_human",
+      dependabotReason("localCheck", mapped.problem),
+    );
+  }
+  const packageDirs = mapped.dirs;
   for (const packageDir of packageDirs) {
     const pkg = await deps.readInstalledPackage(worktreeDir, packageDir);
     if (pkg === null) {
@@ -766,12 +817,12 @@ export async function runDependabotPrepare(
 
   const manifest = manifestDiffFor(result.input.files);
   const manifestDiff = manifest.verified
-    ? sanitizeUntrustedProse(manifest.text, SUMMARY_MAX_CHARS)
+    ? sanitizeUntrustedProse(manifest.text, MAX_SUMMARY_CHARS)
     : "";
   if (manifestDiff === "") unverified.push("manifest diff");
   const lockfileSummary = sanitizeUntrustedProse(
     buildLockfileSummary(result.input.files),
-    SUMMARY_MAX_CHARS,
+    MAX_SUMMARY_CHARS,
   );
   if (lockfileSummary === "") unverified.push("lockfile summary");
 
@@ -819,7 +870,6 @@ export async function runDependabotPrepare(
       worktreeDir,
       target: { name, from, to },
       promptInput,
-      repositoryChanged: !repository.ok,
       machineConcerns,
     },
   };

@@ -554,7 +554,8 @@ export function fenceUntrustedBlock(text: string, maxChars: number): string {
 
 // ---- 影響調査のプロンプトに渡す要約 ----
 
-const MAX_SUMMARY_CHARS = 8000;
+/** `buildManifestDiffSummary`と`buildLockfileSummary`が返す要約の長さの上限。 */
+export const MAX_SUMMARY_CHARS = 8000;
 const MAX_SUMMARY_LINE_CHARS = 400;
 const SUMMARY_TRUNCATION_MARK = "\n... (truncated)";
 

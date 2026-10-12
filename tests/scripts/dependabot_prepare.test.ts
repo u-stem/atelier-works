@@ -3,7 +3,10 @@
 // インストールしたスクリプトとリポジトリのURLの突き合わせ、影響調査に渡す成果物の組み立てを、
 // 注入した偽の依存で確かめる。
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CheckCommandResult } from "../../f/factory/lib/check_runner.ts";
 import {
   CHECK_IMAGE_STALE_REASON,
@@ -36,16 +39,21 @@ import {
   type CommandRunner,
   localGitEnv,
   type WorktreeEntry,
+  WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
 import {
   buildDependabotWorktreeDir,
   collectDepsFor,
   DEPENDABOT_CANCEL_NOTE,
   DEPENDABOT_INSTALL_COMMANDS,
+  type DependabotAssessInput,
   type DependabotPrepareDeps,
   type DependabotPrepareInput,
   type DependabotPrepareResult,
+  defaultInstalledFs,
+  escalationsOf,
   type InstalledFs,
+  installedPackageDirsFor,
   manifestDiffFor,
   type PreparedWorktree,
   readChangelogFrom,
@@ -72,7 +80,11 @@ const REPO_DIR = "/workspaces/acme/widgets/main";
 const POINTER = "gitdir: /workspaces/acme/widgets/main/.git/worktrees/x\n";
 const REPOSITORY = "git+https://github.com/stevemao/left-pad.git";
 
-function lockText(version: string, integrity: string): string {
+function lockText(
+  version: string,
+  integrity: string,
+  name = "left-pad",
+): string {
   return `{
   "lockfileVersion": 2,
   "configVersion": 1,
@@ -80,39 +92,55 @@ function lockText(version: string, integrity: string): string {
     "": {
       "name": "fixture",
       "dependencies": {
-        "left-pad": "${version}",
+        "${name}": "${version}",
       },
     },
   },
   "packages": {
-    "left-pad": ["left-pad@${version}", "", {}, "${integrity}"],
+    "${name}": ["${name}@${version}", "", {}, "${integrity}"],
   },
 }
 `;
 }
 
-function manifest(version: string): string {
+function manifest(version: string, name = "left-pad"): string {
   return JSON.stringify(
     {
       name: "fixture",
       version: "1.0.0",
-      dependencies: { "left-pad": version },
+      dependencies: { [name]: version },
     },
     null,
     2,
   );
 }
 
-function filesFor(paths: readonly string[]): GateInput["files"] {
+function filesFor(
+  paths: readonly string[],
+  name = "left-pad",
+): GateInput["files"] {
   return paths.map((path) =>
     path.endsWith("package.json")
-      ? { path, before: manifest("1.3.0"), after: manifest("1.3.1") }
+      ? {
+          path,
+          before: manifest("1.3.0", name),
+          after: manifest("1.3.1", name),
+        }
       : {
           path,
-          before: lockText("1.3.0", INTEGRITY_A),
-          after: lockText("1.3.1", INTEGRITY_B),
+          before: lockText("1.3.0", INTEGRITY_A, name),
+          after: lockText("1.3.1", INTEGRITY_B, name),
         },
   );
+}
+
+/** 対象の名前だけを変えた、ゲートを通る入力。 */
+function gateInputFor(name: string): GateInput {
+  return gateInput({
+    files: filesFor(["package.json", "bun.lock"], name),
+    target: { name, to: "1.3.1" },
+    registry: { name, version: "1.3.1", integrity: INTEGRITY_B },
+  });
 }
 
 function gateInput(overrides: Partial<GateInput> = {}): GateInput {
@@ -257,6 +285,10 @@ type HarnessOptions = {
   readonly unreadablePackage?: boolean;
   readonly changelog?: string | null;
   readonly statusMoved?: boolean;
+  /** `assertGitPointer`が投げる例外。 */
+  readonly pointerError?: Error;
+  /** `removeWorktree`を失敗させる。 */
+  readonly removeFails?: boolean;
 };
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -297,6 +329,7 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     removeWorktree: async () => {
       calls.push("removeWorktree");
+      if (options.removeFails === true) throw new Error("rm failed");
     },
     runInstall: async () => {
       calls.push("install");
@@ -307,6 +340,7 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     assertGitPointer: async () => {
       calls.push("assertGitPointer");
+      if (options.pointerError !== undefined) throw options.pointerError;
     },
     run,
     readInstalledPackage: async (_dir, packageDir) => {
@@ -541,6 +575,38 @@ describe("runDependabotPrepare: collect", () => {
 // ---- ゲート ----
 
 describe("runDependabotPrepare: gate", () => {
+  test("moves to needs_human when the from version is not x.y.z", async () => {
+    const { h } = await prepare({
+      collect: async () => ready({ from: "v1.3.0" }),
+    });
+    expect(
+      onlyUpdate(h)?.note.startsWith(DEPENDABOT_REASON_PREFIX.localCheck),
+    ).toBe(true);
+  });
+
+  test("moves to needs_human when the target name contains ..", async () => {
+    const { h } = await prepare({
+      collect: async () => ready({ input: gateInputFor("left..pad") }),
+    });
+    expect(
+      onlyUpdate(h)?.note.startsWith(DEPENDABOT_REASON_PREFIX.localCheck),
+    ).toBe(true);
+  });
+
+  test("does not create a worktree for a target name that contains ..", async () => {
+    const { h } = await prepare({
+      collect: async () => ready({ input: gateInputFor("left..pad") }),
+    });
+    expect(h.calls).not.toContain("createWorktree");
+  });
+
+  test("does not create a worktree for a target of an unexpected form", async () => {
+    const { h } = await prepare({
+      collect: async () => ready({ from: "v1.3.0" }),
+    });
+    expect(h.calls).not.toContain("createWorktree");
+  });
+
   test("moves to needs_human with a gate reason when the gate stops", async () => {
     const { h } = await prepare({
       collect: async () =>
@@ -602,6 +668,38 @@ describe("runDependabotPrepare: gate", () => {
 // ---- インストール ----
 
 describe("runDependabotPrepare: install", () => {
+  test("rethrows an install error that is not about the worker environment", async () => {
+    const h = harness({
+      install: async () => {
+        throw new Error("spawn failed");
+      },
+    });
+    await expect(runDependabotPrepare(h.deps, INPUT)).rejects.toThrow(
+      "spawn failed",
+    );
+  });
+
+  test("still records the status when the worktree cannot be removed", async () => {
+    const { h } = await prepare({
+      removeFails: true,
+      install: async () => installFailed(),
+    });
+    expect(onlyUpdate(h)?.to).toBe("needs_human");
+  });
+
+  test("reports no terminal status when another process already moved the work item", async () => {
+    const { result } = await prepare({
+      statusMoved: false,
+      install: async () => installFailed(),
+    });
+    expect(result.terminalStatus).toBeNull();
+  });
+
+  test("reports the terminal status it recorded", async () => {
+    const { result } = await prepare({ install: async () => installFailed() });
+    expect(result.terminalStatus).toBe("needs_human");
+  });
+
   test("moves to needs_human with an install reason when an install fails", async () => {
     const { h } = await prepare({
       install: async () => installFailed(),
@@ -654,6 +752,29 @@ describe("runDependabotPrepare: install", () => {
 // ---- インストール後の作業ツリー ----
 
 describe("runDependabotPrepare: post-install status", () => {
+  test("moves to needs_human with a local check reason when the install changed .git", async () => {
+    const { h } = await prepare({
+      pointerError: new WorktreeGitPointerModifiedError(),
+    });
+    expect(
+      onlyUpdate(h)?.note.startsWith(DEPENDABOT_REASON_PREFIX.localCheck),
+    ).toBe(true);
+  });
+
+  test("does not run git when the install changed .git", async () => {
+    const { h } = await prepare({
+      pointerError: new WorktreeGitPointerModifiedError(),
+    });
+    expect(h.calls).not.toContain("git");
+  });
+
+  test("rethrows an unexpected error from the .git check", async () => {
+    const h = harness({ pointerError: new Error("disk gone") });
+    await expect(runDependabotPrepare(h.deps, INPUT)).rejects.toThrow(
+      "disk gone",
+    );
+  });
+
   test("runs git status with the fixed argv", async () => {
     const { h } = await prepare();
     expect(h.gitCalls[0]?.argv).toEqual(
@@ -782,7 +903,10 @@ async function repositoryChanged(
     collect: async () =>
       ready({ repositoryBefore: before, repositoryAfter: after }),
   });
-  return result.assess?.repositoryChanged;
+  // repositoryの変化は、機械の懸念が1件あることで表す。
+  return result.assess === null
+    ? undefined
+    : result.assess.machineConcerns.length > 0;
 }
 
 describe("runDependabotPrepare: repository", () => {
@@ -956,6 +1080,74 @@ describe("runDependabotPrepare: assess input", () => {
   });
 });
 
+describe("installedPackageDirsFor", () => {
+  test("maps the root and console lockfiles to their node_modules", () => {
+    expect(
+      installedPackageDirsFor(["bun.lock", "console/bun.lock"], "left-pad"),
+    ).toEqual({
+      dirs: ["node_modules/left-pad", "console/node_modules/left-pad"],
+      problem: null,
+    });
+  });
+
+  test("reports a problem when no lockfile changed", () => {
+    expect(
+      installedPackageDirsFor(["package.json"], "left-pad").problem,
+    ).not.toBeNull();
+  });
+
+  test("reports a problem for a changed lockfile it cannot map", () => {
+    expect(
+      installedPackageDirsFor(["bun.lock", "tools/bun.lock"], "left-pad")
+        .problem,
+    ).not.toBeNull();
+  });
+});
+
+function assessWith(
+  unverifiedInputs: DependabotAssessInput["promptInput"]["unverifiedInputs"],
+  machineConcerns: string[],
+): DependabotAssessInput {
+  return {
+    workItemId: 7,
+    owner: "acme",
+    repo: "widgets",
+    prNumber: 12,
+    headSha: HEAD,
+    baseRef: "main",
+    baseSha: BASE_SHA,
+    mergeBaseSha: MERGE_BASE,
+    repoDir: REPO_DIR,
+    worktreeDir: WORKTREE_DIR,
+    target: { name: "left-pad", from: "1.3.0", to: "1.3.1" },
+    promptInput: {
+      packageName: "left-pad",
+      fromVersion: "1.3.0",
+      toVersion: "1.3.1",
+      prTitle: "",
+      prBody: "",
+      changelog: "",
+      manifestDiff: "",
+      lockfileSummary: "",
+      registryMetadata: "",
+      unverifiedInputs,
+    },
+    machineConcerns,
+  };
+}
+
+describe("escalationsOf", () => {
+  test("lists the unverified inputs and the machine concerns together", () => {
+    expect(
+      escalationsOf(assessWith(["changelog"], ["repository changed"])),
+    ).toEqual(["unverified input: changelog", "repository changed"]);
+  });
+
+  test("is empty when nothing is unverified and no concern was found", () => {
+    expect(escalationsOf(assessWith([], []))).toEqual([]);
+  });
+});
+
 describe("manifestDiffFor", () => {
   test("is unverified when a changed manifest cannot be summarized", () => {
     const files = filesFor(["package.json", "bun.lock"]).map((file) =>
@@ -978,6 +1170,12 @@ describe("manifestDiffFor", () => {
 // ---- 作業ツリー ----
 
 describe("buildDependabotWorktreeDir", () => {
+  test("rejects a repository directory that is not a main clone", () => {
+    expect(() =>
+      buildDependabotWorktreeDir("/workspaces/acme/widgets", 12, "abc1234"),
+    ).toThrow();
+  });
+
   test("builds the dependabot-<pr>-<sha7> path beside the main clone", () => {
     expect(
       buildDependabotWorktreeDir(
@@ -1296,6 +1494,93 @@ describe("readChangelogFrom", () => {
     );
     expect(
       await readChangelogFrom(fs, WORKTREE_DIR, "node_modules/left-pad"),
+    ).toBeNull();
+  });
+});
+
+// ---- 本物のファイル操作 ----
+
+const TMP_DIRS: string[] = [];
+
+afterAll(async () => {
+  for (const dir of TMP_DIRS) await rm(dir, { recursive: true, force: true });
+});
+
+/** 一時ディレクトリに作業ツリーと`node_modules/left-pad`を作り、そのパスを返す。 */
+async function realWorktree(): Promise<{ worktree: string; pkg: string }> {
+  const base = await mkdtemp(join(tmpdir(), "dependabot-prepare-test-"));
+  TMP_DIRS.push(base);
+  const worktree = join(base, "worktree");
+  const pkg = join(worktree, "node_modules", "left-pad");
+  await mkdir(pkg, { recursive: true });
+  return { worktree, pkg };
+}
+
+describe("readInstalledPackageFrom with the real file system", () => {
+  test("counts a dangling binding.gyp link as present", async () => {
+    const { worktree, pkg } = await realWorktree();
+    await writeFile(join(pkg, "package.json"), "{}");
+    await symlink(join(pkg, "missing.gyp"), join(pkg, "binding.gyp"));
+    const read = await readInstalledPackageFrom(
+      defaultInstalledFs,
+      worktree,
+      "node_modules/left-pad",
+    );
+    expect(read?.hasBindingGyp).toBe(true);
+  });
+
+  test("returns null for a package.json over the size limit", async () => {
+    const { worktree, pkg } = await realWorktree();
+    await writeFile(
+      join(pkg, "package.json"),
+      `{"pad":"${"x".repeat(1024 * 1024)}"}`,
+    );
+    expect(
+      await readInstalledPackageFrom(
+        defaultInstalledFs,
+        worktree,
+        "node_modules/left-pad",
+      ),
+    ).toBeNull();
+  });
+
+  test("returns null when package.json is a directory", async () => {
+    const { worktree, pkg } = await realWorktree();
+    await mkdir(join(pkg, "package.json"));
+    expect(
+      await readInstalledPackageFrom(
+        defaultInstalledFs,
+        worktree,
+        "node_modules/left-pad",
+      ),
+    ).toBeNull();
+  });
+
+  test("returns null when the package directory links outside the worktree", async () => {
+    const { worktree } = await realWorktree();
+    const outside = await mkdtemp(join(tmpdir(), "dependabot-prepare-out-"));
+    TMP_DIRS.push(outside);
+    await writeFile(join(outside, "package.json"), "{}");
+    await symlink(outside, join(worktree, "node_modules", "right-pad"));
+    expect(
+      await readInstalledPackageFrom(
+        defaultInstalledFs,
+        worktree,
+        "node_modules/right-pad",
+      ),
+    ).toBeNull();
+  });
+
+  test("returns null when package.json links outside the package", async () => {
+    const { worktree, pkg } = await realWorktree();
+    await writeFile(join(worktree, "secret.json"), "{}");
+    await symlink(join(worktree, "secret.json"), join(pkg, "package.json"));
+    expect(
+      await readInstalledPackageFrom(
+        defaultInstalledFs,
+        worktree,
+        "node_modules/left-pad",
+      ),
     ).toBeNull();
   });
 });
