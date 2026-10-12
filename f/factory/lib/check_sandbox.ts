@@ -20,11 +20,11 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
   escapeReasonSeparator,
@@ -228,6 +228,14 @@ const SLOT_RELEASE_WAIT_MS = 5_000;
 /** 所有権の受け渡しにかける時間の上限(ミリ秒)。`node_modules`が大きいworktreeでも収まる値にする。 */
 const CHOWN_TIMEOUT_MS = 300_000;
 const CHOWN_MAX_OUTPUT_BYTES = 16 * 1024;
+/** 読み込むsymlinkの一覧の大きさの上限(バイト)。超えたら読まずに、検出が不完全だったものとして扱う。メモリを抑えるためである。 */
+export const LINK_LIST_MAX_BYTES = 256 * 1024 * 1024;
+/**
+ * `find`が書けるファイルの大きさの上限(バイト)。一覧の上限の2倍にする。
+ * 上限を超えた一覧は読まずに不完全として扱い、それを超えて書こうとする`find`はカーネルが止める。
+ * 書き込みの失敗を、終了コードだけに頼らずに見つけ、ディスクを埋めさせないためである。
+ */
+export const LINK_LIST_FSIZE_BYTES = 2 * LINK_LIST_MAX_BYTES;
 /** 1つのsymlinkの中身をたどる要素数の上限。超えたら、たどれないものとして外とみなす。 */
 const LINK_MAX_SEGMENTS = 1000;
 /** symlinkの走査にかける時間の上限(ミリ秒)。超えたら、検出が不完全だったものとして扱う。 */
@@ -535,10 +543,23 @@ export function sweepLinksArgv(dir: string): string[] {
 /**
  * `dir`の下のsymlinkのパスを、NUL区切りのバイト列として`file`に書き出すargv。一括の受け渡しが入りうる範囲を見るため、`-xdev`は付けない。
  * 標準出力に出さずにファイルへ書くのは、出力の上限で一覧を省かないためである。
+ * `prlimit`で書けるファイルの大きさを`LINK_LIST_FSIZE_BYTES`に抑える。超えて書こうとした`find`は、シグナルで止まり、0以外で終わる。
  */
 export function symlinksArgv(dir: string, file: string): string[] {
   assertChownableDir(dir);
-  return [FIND_PATH, "-P", dir, "-type", "l", "-fprint0", file];
+  const limit = String(LINK_LIST_FSIZE_BYTES);
+  return [
+    PRLIMIT_PATH,
+    `--fsize=${limit}:${limit}`,
+    "--",
+    FIND_PATH,
+    "-P",
+    dir,
+    "-type",
+    "l",
+    "-fprint0",
+    file,
+  ];
 }
 
 /**
@@ -1382,11 +1403,15 @@ export type CheckSandboxDeps = ImageDeps & {
   readonly readSysctl: (name: string) => string | null;
   /**
    * rootだけが入れる一時のディレクトリにファイルを1つ用意し、`fill`にそのパスを渡して書かせ、書かれたバイト列を返す。
+   * `fill`が投げたら、そのまま投げる。
+   * `maxBytes`を超える大きさのときと、読めなかったときは、読まずに(または読めずに)nullを返す。
+   * どちらも、呼び出し側は一覧が不完全だったものとして扱う。
    * 返す前にディレクトリごと消す。他のユーザーが書き込み先を差し替えられないようにするためである。
    */
   readonly readPrivateOutput: (
     fill: (file: string) => Promise<void>,
-  ) => Promise<Buffer>;
+    maxBytes: number,
+  ) => Promise<Buffer | null>;
   /** symlinkの中身(読んだままのバイト列)。 */
   readonly readLink: (path: Buffer) => Promise<Buffer>;
   /** `path`をたどった先の正規のパス。先が無ければ(存在しないか、ディレクトリでないものを通る)null。それ以外の失敗は例外を投げる。 */
@@ -1668,12 +1693,16 @@ async function collectEscapingLinks(
   // 標準出力ではなくファイルに書かせ、名前のバイトをそのまま、省かずに受け取る。
   const listed = await deps.readPrivateOutput(async (file) => {
     await runTool(deps, symlinksArgv(dir, file), `listing symlinks in ${dir}`);
-  });
+  }, LINK_LIST_MAX_BYTES);
   const links = new Map<BytePath, BytePath>();
   const unreadable: BytePath[] = [];
+  // 大きすぎるか読めなかった一覧は、何も調べられないので、不完全として全消しの後始末に任せる。
+  if (listed === null) return { links, unreadable, incomplete: true };
   const startedAt = deps.reap.now();
-  let incomplete = false;
-  for (const path of toBytePath(listed).split("\0")) {
+  const entries = toBytePath(listed).split("\0");
+  // 各名前は`\0`で終わる。末尾が`\0`でなければ一覧が途中で切れているので、最後の断片は捨てて不完全とする。
+  let incomplete = (entries.pop() ?? "") !== "";
+  for (const path of entries) {
     if (path === "") continue;
     if (deps.reap.now() - startedAt > LINK_SCAN_MAX_MS) {
       incomplete = true;
@@ -2378,21 +2407,33 @@ async function listSysvIpc(): Promise<IpcEntry[]> {
 }
 
 /**
- * rootだけが入れるディレクトリにファイルを1つ用意し、`fill`に書かせて、中身を返す。
- * ディレクトリは`mkdtemp`が新しく作って所有者だけに開くので、ほかのユーザーが名前を先取りしたり、書き込み先を差し替えたりできない。
+ * `baseDir`の下に、rootだけが入れるディレクトリを新しく作り、ファイルを1つ用意して`fill`に書かせ、中身を返す。
+ * `baseDir`は、rootだけが書ける場所(枠の記録のディレクトリ)にする。
+ * 親が共有の場所だと、ほかのユーザーが親ごと差し替えられるためである。
+ * ディレクトリは`mkdtemp`が新しく作って所有者だけに開くので、名前を先取りしたり、書き込み先を差し替えたりできない。
+ * 大きさが`maxBytes`を超えるか、読めなかったときは、nullを返す。`fill`が投げたときは、そのまま投げる。
+ * どの場合も、返す前にディレクトリごと消す。
  */
-export async function readPrivateOutput(
-  fill: (file: string) => Promise<void>,
-): Promise<Buffer> {
-  const dir = await mkdtemp(join(tmpdir(), "factory-link-list-"));
-  try {
-    await chmod(dir, 0o700);
-    const file = join(dir, "output");
-    await fill(file);
-    return await readFile(file);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+export function privateOutputReader(
+  baseDir: string,
+): CheckSandboxDeps["readPrivateOutput"] {
+  return async (fill, maxBytes) => {
+    await mkdir(baseDir, { recursive: true, mode: 0o700 });
+    const dir = await mkdtemp(join(baseDir, "link-list-"));
+    try {
+      await chmod(dir, 0o700);
+      const file = join(dir, "output");
+      await fill(file);
+      try {
+        if ((await stat(file)).size > maxBytes) return null;
+        return await readFile(file);
+      } catch {
+        return null;
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  };
 }
 
 export function defaultSandboxDeps(
@@ -2449,7 +2490,7 @@ export function defaultSandboxDeps(
         throw error;
       }
     },
-    readPrivateOutput,
+    readPrivateOutput: privateOutputReader(lockDir),
     readLink: (path) => readlink(path, "buffer"),
     realPath: async (path) => {
       try {

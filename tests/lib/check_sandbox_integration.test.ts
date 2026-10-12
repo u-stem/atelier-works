@@ -1914,6 +1914,8 @@ suite("symlinks with names that are not plain text", () => {
   let worktree = "";
   let detected = "";
   let names: string[] = [];
+  let nameBytes: string[] = [];
+  let underOddDir: string[] = [];
 
   beforeAll(async () => {
     mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
@@ -1935,6 +1937,11 @@ suite("symlinks with names that are not plain text", () => {
         'ln -s /etc/passwd "$(printf "a\\377")"',
         // 名前の上限(255)に近い長い名前。
         'ln -s /etc/passwd "$(printf "n%.0s" $(seq 1 250))"',
+        // UTF-8でない名前のディレクトリの下の外向きのsymlinkと、それを経由して外を指すsymlink。
+        'odd="$(printf "d\\377")"',
+        'mkdir "$odd"',
+        'ln -s /etc "$odd/x"',
+        'ln -s "$odd/x/passwd" y',
         "",
       ].join("\n"),
     );
@@ -1945,6 +1952,12 @@ suite("symlinks with names that are not plain text", () => {
     );
     detected = results.at(-1)?.output ?? "";
     names = readdirSync(worktree);
+    nameBytes = readdirSync(worktree, { encoding: "buffer" }).map((name) =>
+      name.toString("hex"),
+    );
+    underOddDir = readdirSync(
+      Buffer.concat([Buffer.from(`${worktree}/`), Buffer.from([0x64, 0xff])]),
+    );
   }, 60_000);
 
   afterAll(() => {
@@ -1976,8 +1989,20 @@ suite("symlinks with names that are not plain text", () => {
     expect(names.filter((name) => name.startsWith("nnnn"))).toEqual([]);
   });
 
-  test("of a pair that looks the same, the non-UTF-8 outward one is removed and the tracked inward one is kept", () => {
-    expect(names.filter((name) => name.startsWith("a"))).toEqual(["a\uFFFD"]);
+  test("of a pair that looks the same, the tracked inward one is kept", () => {
+    expect(nameBytes).toContain("61efbfbd");
+  });
+
+  test("of a pair that looks the same, the non-UTF-8 outward one is removed", () => {
+    expect(nameBytes).not.toContain("61ff");
+  });
+
+  test("an outward symlink under a directory whose name is not UTF-8 is removed", () => {
+    expect(underOddDir).toEqual([]);
+  });
+
+  test("a symlink that reaches outside through it is removed", () => {
+    expect(names).not.toContain("y");
   });
 });
 

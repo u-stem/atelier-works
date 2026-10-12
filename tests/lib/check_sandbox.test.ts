@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,6 +50,8 @@ import {
   isCheckEnvironmentReason,
   kernelWarningText,
   killAllArgv,
+  LINK_LIST_FSIZE_BYTES,
+  LINK_LIST_MAX_BYTES,
   leftoverArgv,
   listWorldWritablePaths,
   newCheckIdentity,
@@ -58,12 +64,12 @@ import {
   parseProcStatus,
   parseSlotRecord,
   parseSysvIpc,
+  privateOutputReader,
   purgeDirsArgv,
   purgeFilesArgv,
   REAP_MAX_WAIT_MS,
   REQUIRED_TOOL_PATHS,
   type ReapDeps,
-  readPrivateOutput,
   reapUidProcesses,
   reclaimArgv,
   reclaimBulkArgv,
@@ -524,9 +530,23 @@ describe("sweepLinksArgv", () => {
 
 describe("symlinksArgv", () => {
   test("writes the symlinks to a file without following them", () => {
-    expect(symlinksArgv(DIRS.worktreeDir, "/scratch/out").join(" ")).toBe(
+    expect(
+      symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(3).join(" "),
+    ).toBe(
       `/usr/bin/find -P ${DIRS.worktreeDir} -type l -fprint0 /scratch/out`,
     );
+  });
+
+  test("caps the size of the file find can write", () => {
+    expect(symlinksArgv(DIRS.worktreeDir, "/scratch/out").slice(0, 3)).toEqual([
+      "/usr/bin/prlimit",
+      `--fsize=${String(LINK_LIST_FSIZE_BYTES)}:${String(LINK_LIST_FSIZE_BYTES)}`,
+      "--",
+    ]);
+  });
+
+  test("lets find write more than the list size the scan reads", () => {
+    expect(LINK_LIST_FSIZE_BYTES).toBeGreaterThan(LINK_LIST_MAX_BYTES);
   });
 
   test("refuses a top-level directory", () => {
@@ -1743,6 +1763,10 @@ function fakeSandboxDeps(opts?: {
   readonly unreadablePaths?: readonly string[];
   /** `removeLink`が失敗するパス。 */
   readonly removeFails?: string;
+  /** symlinkの一覧の末尾に足す、`\0`で終わらない断片。 */
+  readonly listingTail?: string;
+  /** 一覧が上限を超えたか、読めなかったものとして、一覧を返さない。 */
+  readonly listingUnavailable?: boolean;
 }) {
   const removedLinks: string[] = [];
   // パスと中身は、1バイトを1文字に写した文字列で持つ。UTF-8でない名前も区別できる。
@@ -1773,6 +1797,7 @@ function fakeSandboxDeps(opts?: {
   const notices: CheckSlotNotice[] = [];
   let reapClock = 0;
   let listing = "";
+  const listingLimits: number[] = [];
   const deps: CheckSandboxDeps = {
     run: async (argv, options) => {
       calls.push({ argv, options });
@@ -1788,7 +1813,9 @@ function fakeSandboxDeps(opts?: {
       if (argv.includes("-fprint0") && opts?.failSymlinkListing === true)
         return fail("listing failed", 1);
       if (argv.includes("-fprint0")) {
-        listing = [...symlinks.keys()].map((path) => `${path}\0`).join("");
+        listing =
+          [...symlinks.keys()].map((path) => `${path}\0`).join("") +
+          (opts?.listingTail ?? "");
         return ok();
       }
       if (argv.includes("-links") && argv.includes("+1"))
@@ -1866,10 +1893,13 @@ function fakeSandboxDeps(opts?: {
     },
     pathKind: async (path) => opts?.pathKinds?.[path] ?? "directory",
     readSysctl: (name) => opts?.sysctl?.[name] ?? null,
-    readPrivateOutput: async (fill) => {
+    readPrivateOutput: async (fill, maxBytes) => {
       listing = "";
+      listingLimits.push(maxBytes);
       await fill(LIST_FILE);
-      return Buffer.from(listing, "latin1");
+      if (opts?.listingUnavailable === true) return null;
+      const bytes = Buffer.from(listing, "latin1");
+      return bytes.length > maxBytes ? null : bytes;
     },
     readLink: async (bytes) => {
       const path = binary(bytes);
@@ -1933,6 +1963,7 @@ function fakeSandboxDeps(opts?: {
     onNotice,
     symlinks,
     removedLinks,
+    listingLimits,
     imageChecks: () => imageChecks,
   };
 }
@@ -2013,40 +2044,175 @@ async function prepared(fake: ReturnType<typeof fakeSandboxDeps>) {
   return { sandbox, before: fake.calls.length };
 }
 
-describe("readPrivateOutput", () => {
+describe("privateOutputReader", () => {
+  const bases: string[] = [];
+  const baseDir = (): string => {
+    const base = mkdtempSync(join(tmpdir(), "private-output-test-"));
+    bases.push(base);
+    return base;
+  };
+  afterEach(() => {
+    for (const base of bases.splice(0)) {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+  const ROOMY = 1024;
+
   test("returns the bytes the writer wrote, including non-UTF-8 ones", async () => {
     const bytes = Buffer.from([0x61, 0xff, 0x00, 0xef, 0xbf, 0xbd, 0x00]);
-    const read = await readPrivateOutput(async (file) => {
+    const read = await privateOutputReader(baseDir())(async (file) => {
       writeFileSync(file, bytes);
-    });
-    expect(read.equals(bytes)).toBe(true);
+    }, ROOMY);
+    expect(read?.equals(bytes)).toBe(true);
   });
 
   test("gives the writer a directory only its owner can enter", async () => {
     let mode = 0;
-    await readPrivateOutput(async (file) => {
+    await privateOutputReader(baseDir())(async (file) => {
       mode = statSync(dirname(file)).mode & 0o777;
       writeFileSync(file, "x");
-    });
+    }, ROOMY);
     expect(mode).toBe(0o700);
+  });
+
+  test("creates the directory under the base directory", async () => {
+    const base = baseDir();
+    let parent = "";
+    await privateOutputReader(base)(async (file) => {
+      parent = dirname(dirname(file));
+      writeFileSync(file, "x");
+    }, ROOMY);
+    expect(parent).toBe(base);
+  });
+
+  test("creates a missing base directory that only its owner can enter", async () => {
+    const base = join(baseDir(), "slots");
+    await privateOutputReader(base)(async (file) => {
+      writeFileSync(file, "x");
+    }, ROOMY);
+    expect(statSync(base).mode & 0o777).toBe(0o700);
   });
 
   test("removes the directory after reading", async () => {
     let directory = "";
-    await readPrivateOutput(async (file) => {
+    await privateOutputReader(baseDir())(async (file) => {
       directory = dirname(file);
       writeFileSync(file, "x");
-    });
+    }, ROOMY);
     expect(existsSync(directory)).toBe(false);
   });
 
   test("removes the directory when the writer throws", async () => {
     let directory = "";
-    await readPrivateOutput(async (file) => {
+    await privateOutputReader(baseDir())(async (file) => {
       directory = dirname(file);
       throw new Error("find failed");
-    }).catch(() => {});
+    }, ROOMY).catch(() => {});
     expect(existsSync(directory)).toBe(false);
+  });
+
+  test("rethrows what the writer threw", async () => {
+    await expect(
+      privateOutputReader(baseDir())(async () => {
+        throw new Error("find failed");
+      }, ROOMY),
+    ).rejects.toThrow("find failed");
+  });
+
+  test("reads a file whose size equals the limit", async () => {
+    const read = await privateOutputReader(baseDir())(async (file) => {
+      writeFileSync(file, "abcd");
+    }, 4);
+    expect(read?.length).toBe(4);
+  });
+
+  test("does not read a file one byte over the limit", async () => {
+    const read = await privateOutputReader(baseDir())(async (file) => {
+      writeFileSync(file, "abcde");
+    }, 4);
+    expect(read).toBeNull();
+  });
+
+  test("returns null when the file cannot be read", async () => {
+    const read = await privateOutputReader(baseDir())(async (file) => {
+      mkdirSync(file);
+    }, ROOMY);
+    expect(read).toBeNull();
+  });
+
+  test("removes the directory when the file cannot be read", async () => {
+    let directory = "";
+    await privateOutputReader(baseDir())(async (file) => {
+      directory = dirname(file);
+      mkdirSync(file);
+    }, ROOMY);
+    expect(existsSync(directory)).toBe(false);
+  });
+});
+
+describe("the default filesystem dependencies for symlinks", () => {
+  const base = mkdtempSync(join(tmpdir(), "link-deps-test-"));
+  const deps = defaultSandboxDeps(join(base, "slots"));
+  const NON_UTF8_NAME = Buffer.from([0x61, 0xff]);
+  const linkPath = (dir: string): Buffer =>
+    Buffer.concat([Buffer.from(`${base}/${dir}/`), NON_UTF8_NAME]);
+  // 非UTF-8の名前を作れないファイルシステム(macOSのAPFSなど)では、その名前を使う試験を飛ばす。
+  let supported = true;
+  try {
+    symlinkSync(
+      "probe",
+      Buffer.concat([Buffer.from(`${base}/`), NON_UTF8_NAME]),
+    );
+  } catch {
+    supported = false;
+  }
+  const linkTest = supported ? test : test.skip;
+  const CONTENT = Buffer.from([0x2f, 0x65, 0xff]);
+
+  afterAll(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+  afterEach(() => {
+    for (const dir of ["a", "b", "c", "d"]) {
+      rmSync(join(base, dir), { recursive: true, force: true });
+    }
+  });
+
+  linkTest("readLink returns a Buffer", async () => {
+    mkdirSync(join(base, "a"));
+    symlinkSync(CONTENT, linkPath("a"));
+    expect(Buffer.isBuffer(await deps.readLink(linkPath("a")))).toBe(true);
+  });
+
+  linkTest("readLink keeps bytes that are not UTF-8", async () => {
+    mkdirSync(join(base, "b"));
+    symlinkSync(CONTENT, linkPath("b"));
+    expect((await deps.readLink(linkPath("b"))).equals(CONTENT)).toBe(true);
+  });
+
+  linkTest("removeLink removes a symlink whose name is not UTF-8", async () => {
+    mkdirSync(join(base, "c"));
+    symlinkSync("target", linkPath("c"));
+    await deps.removeLink(linkPath("c"));
+    expect(() => lstatSync(linkPath("c"))).toThrow();
+  });
+
+  linkTest(
+    "replaceLink points a non-UTF-8 name at the given bytes",
+    async () => {
+      mkdirSync(join(base, "d"));
+      symlinkSync("old", linkPath("d"));
+      await deps.replaceLink(linkPath("d"), CONTENT);
+      expect(readlinkSync(linkPath("d"), "buffer").equals(CONTENT)).toBe(true);
+    },
+  );
+
+  test("realPath returns a Buffer", async () => {
+    expect(Buffer.isBuffer(await deps.realPath(Buffer.from(base)))).toBe(true);
+  });
+
+  test("realPath returns null for a path that does not exist", async () => {
+    expect(await deps.realPath(Buffer.from(`${base}/missing/x`))).toBeNull();
   });
 });
 
@@ -2403,7 +2569,7 @@ describe("escapingSymlinks", () => {
     expect(fake.removedLinks).toEqual([longName]);
   });
 
-  test("removes a symlink whose path is longer than 4000 bytes without sweeping", async () => {
+  test("does not sweep when a symlink path is longer than 4000 bytes", async () => {
     const { fake, sandbox } = await preparedWith();
     const deep = `${WT}/${Array.from({ length: 20 }, () => "d".repeat(200)).join("/")}/evil`;
     fake.symlinks.set(deep, OUT);
@@ -2434,6 +2600,45 @@ describe("escapingSymlinks", () => {
     fake.symlinks.set(`${WT}/[... 5 bytes omitted ...]`, OUT);
     await sandbox.escapingSymlinks(DIRS);
     expect(fake.removedLinks).toEqual([`${WT}/[... 5 bytes omitted ...]`]);
+  });
+
+  test("passes the list size limit to the reader", async () => {
+    const { fake, sandbox } = await preparedWith();
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.listingLimits.at(-1)).toBe(LINK_LIST_MAX_BYTES);
+  });
+
+  test("sweeps when the list is too large or cannot be read", async () => {
+    const { fake, sandbox } = await preparedWith({ listingUnavailable: true });
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("says the sweep happened when the list is unavailable", async () => {
+    const { sandbox } = await preparedWith({ listingUnavailable: true });
+    expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
+      INCOMPLETE,
+    );
+  });
+
+  test("sweeps when the list does not end with a NUL", async () => {
+    const { fake, sandbox } = await preparedWith({ listingTail: `${WT}/ev` });
+    await sandbox.escapingSymlinks(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(SWEEP);
+  });
+
+  test("does not inspect the cut fragment at the end of the list", async () => {
+    const { sandbox } = await preparedWith({ listingTail: `${WT}/ev` });
+    expect(
+      (await sandbox.escapingSymlinks(DIRS)).problems.join("\n"),
+    ).not.toContain("could not inspect");
+  });
+
+  test("still removes the complete names before the cut fragment", async () => {
+    const { fake, sandbox } = await preparedWith({ listingTail: `${WT}/ev` });
+    fake.symlinks.set(`${WT}/evil`, OUT);
+    await sandbox.escapingSymlinks(DIRS);
+    expect(fake.removedLinks).toEqual([`${WT}/evil`]);
   });
 
   test("sweeps when a symlink cannot be removed", async () => {
