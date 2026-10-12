@@ -1381,42 +1381,73 @@ describe("unreadable runs", () => {
     expect(failureNoticeResolutions(h)).toEqual([]);
   });
 
-  test("supersedes a failed row that stayed unreadable for a day", async () => {
+  test("keeps a day-old failed row when the runs are incomplete", async () => {
     const h = harness({
       prs: { [PR_KEY]: pr() },
       failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
       runs: { [SHA_A]: new WorkflowRunsIncompleteError("too many runs") },
     });
     await runPrCiWatch(h.deps);
-    expect(h.transitions.map((t) => [t.from, t.to.state])).toEqual([
-      ["failed", "superseded"],
-    ]);
+    expect(h.transitions).toEqual([]);
   });
 
-  test("resolves the failure notices of a failed row that stayed unreadable for a day", async () => {
+  test("keeps a day-old failed row when the runs return 403", async () => {
     const h = harness({
       prs: { [PR_KEY]: pr() },
       failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
-      runs: { [SHA_A]: new WorkflowRunsIncompleteError("too many runs") },
+      runs: { [SHA_A]: deniedError(403) },
     });
     await runPrCiWatch(h.deps);
-    expect(failureNoticeResolutions(h)).toEqual([
-      { kind: PR_CI_FAILED_KIND, prefix: PR_PREFIX, by: PR_CI_RESOLVED_BY },
-    ]);
+    expect(h.transitions).toEqual([]);
   });
 
-  test("resolves the notices before it supersedes an unreadable failed row", async () => {
+  test("keeps a day-old failed row when the pull request returns 404", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: deniedError(404) },
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("does not resolve the failure notices of a day-old failed row that returns 403", async () => {
     const h = harness({
       prs: { [PR_KEY]: pr() },
       failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
-      runs: { [SHA_A]: new WorkflowRunsIncompleteError("too many runs") },
+      runs: { [SHA_A]: deniedError(403) },
     });
     await runPrCiWatch(h.deps);
-    expect(
-      h.events.filter(
-        (event) => event === "resolve_failure" || event === "transition",
-      ),
-    ).toEqual(["resolve_failure", "transition"]);
+    expect(failureNoticeResolutions(h)).toEqual([]);
+  });
+
+  test("touches a day-old failed row that returns 403", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+      runs: { [SHA_A]: deniedError(403) },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toEqual([1]);
+  });
+
+  test("does not notify a day-old failed row again when it is readable after a 403", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+      runs: { [SHA_A]: [failingRun()] },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("keeps a day-old failed row that is readable and still failing", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+      runs: { [SHA_A]: [failingRun()] },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
   });
 
   test("supersedes a failed row of a repository that is no longer allowed after a day", async () => {
@@ -1428,16 +1459,58 @@ describe("unreadable runs", () => {
     expect(h.transitions.map((t) => t.to.state)).toEqual(["superseded"]);
   });
 
-  test("supersedes a no_ci row that stayed unreadable for a day", async () => {
+  test("resolves the failure notices of a failed row of a repository that is no longer allowed", async () => {
+    const h = harness({
+      allowed: () => false,
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(failureNoticeResolutions(h)).toEqual([
+      { kind: PR_CI_FAILED_KIND, prefix: PR_PREFIX, by: PR_CI_RESOLVED_BY },
+    ]);
+  });
+
+  test("resolves the notices before it supersedes a failed row of a repository that is no longer allowed", async () => {
+    const h = harness({
+      allowed: () => false,
+      failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(
+      h.events.filter(
+        (event) => event === "resolve_failure" || event === "transition",
+      ),
+    ).toEqual(["resolve_failure", "transition"]);
+  });
+
+  test("keeps a failed row of a repository that is no longer allowed within a day", async () => {
+    const h = harness({
+      allowed: () => false,
+      failed: [row({ state: "failed" })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("supersedes a no_ci row of a repository that is no longer allowed after a day", async () => {
+    const h = harness({
+      allowed: () => false,
+      noCi: [row({ state: "no_ci", first_seen_at: DAY_OLD })],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((t) => [t.from, t.to.state])).toEqual([
+      ["no_ci", "superseded"],
+    ]);
+  });
+
+  test("keeps a day-old no_ci row that returns 403", async () => {
     const h = harness({
       prs: { [PR_KEY]: pr() },
       noCi: [row({ state: "no_ci", first_seen_at: DAY_OLD })],
       runs: { [SHA_A]: deniedError(403) },
     });
     await runPrCiWatch(h.deps);
-    expect(h.transitions.map((t) => [t.from, t.to.state])).toEqual([
-      ["no_ci", "superseded"],
-    ]);
+    expect(h.transitions).toEqual([]);
   });
 
   test("keeps a no_ci row that is unreadable within a day", async () => {
@@ -1738,6 +1811,50 @@ describe("exceptions", () => {
     });
     await runPrCiWatch(h.deps);
     expect(h.transitions).toEqual([]);
+  });
+
+  test("does not expire a pending row whose failure could not be settled", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      pending: [
+        row({
+          first_seen_at: new Date(NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS),
+        }),
+      ],
+      runs: { [SHA_A]: [failingRun()] },
+      noticeFails: true,
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([]);
+  });
+
+  test("does not expire a pending row whose move to failed raised an exception", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      pending: [
+        row({
+          first_seen_at: new Date(NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS),
+        }),
+      ],
+      runs: { [SHA_A]: [failingRun()] },
+      transitionFailsFor: [1],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((t) => t.to.state)).toEqual(["failed"]);
+  });
+
+  test("expires a day-old pending row when the server fails while reading", async () => {
+    const h = harness({
+      prs: { [PR_KEY]: pr() },
+      pending: [
+        row({
+          first_seen_at: new Date(NOW.getTime() - UNREADABLE_EXPIRES_AFTER_MS),
+        }),
+      ],
+      runs: { [SHA_A]: deniedError(502) },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((t) => t.to.state)).toEqual(["expired"]);
   });
 
   test("touches a row whose expiry failed", async () => {

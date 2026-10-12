@@ -70,13 +70,15 @@ export const NO_CI_RECHECK_INTERVAL_MS = 60 * 60_000;
 
 /**
  * 実行を読めないという永続的な条件のまま、最初に見てからこの時間がたった判定待ちの行は`expired`にする。
- * 永続的な条件は、次の3つである。
+ * 読めない条件は、次の4つである。
  * - 実行の多さ(`WorkflowRunsIncompleteError`)で、実行を読み切れない。
  * - 実行かPRを読む権限が無い(403、404)。
  * - リポジトリが対象から外れた。
- * rate limitとサーバーの一時的な失敗は、一時的な条件なので数えない。
+ * - 読み取りの段階で、分類できない例外(サーバーの5xxを含む)が出た。
+ * rate limitは、以降の読み取りを止めるだけで数えない。
  * 読めないまま判定を待ち続けても、人に知らせる手段が無いので、行を終わらせる。
  * 失敗の行と実行なしの行は、期限切れにしない。失敗の通知は、読めなくなっても残す。
+ * 対象から外れたリポジトリの失敗と実行なしの行だけは、`superseded`にする。
  */
 export const UNREADABLE_EXPIRES_AFTER_MS = 24 * 60 * 60_000;
 
@@ -577,19 +579,33 @@ async function judgeRowSafely(context: Context, row: PrCiCheck): Promise<void> {
     await judgeRow(context, row);
   } catch (err) {
     await recordFailureOf(context, `judge_pr:${prKey(rowRef(row))}`, err);
-    // 分類できない例外が続いても、判定待ちの行が残り続けないよう、読めない行と同じ期限で終わらせる。
-    let expired = false;
-    try {
-      expired = await expireStalePending(context, row);
-    } catch (expireErr) {
-      await recordFailureOf(
-        context,
-        `expire_pr:${prKey(rowRef(row))}`,
-        expireErr,
-      );
-    }
-    if (!expired) await touchSafely(context, row);
+    await touchSafely(context, row);
   }
+}
+
+/**
+ * 読み取りの段階で分類できない例外が出た行を扱う。
+ * 例外が続いても判定待ちの行が残り続けないよう、読めない行と同じ期限で終わらせる。
+ * 終わらせない行は、読み直した時刻だけを進める。
+ * 通知の登録など、読んだ後の段階の例外には使わない。実行を読めた行を、読めない行として終わらせないためである。
+ */
+async function settleReadException(
+  context: Context,
+  row: PrCiCheck,
+  err: unknown,
+): Promise<void> {
+  await recordFailureOf(context, `judge_pr:${prKey(rowRef(row))}`, err);
+  let expired = false;
+  try {
+    expired = await expireStalePending(context, row);
+  } catch (expireErr) {
+    await recordFailureOf(
+      context,
+      `expire_pr:${prKey(rowRef(row))}`,
+      expireErr,
+    );
+  }
+  if (!expired) await touchSafely(context, row);
 }
 
 /** 実行を読んだ結果。 */
@@ -613,11 +629,17 @@ async function judgeRow(context: Context, row: PrCiCheck): Promise<void> {
   const ref = rowRef(row);
   if (state.closedPrs.has(prKey(ref))) return;
   if (!deps.isRepoAllowed(ref.owner, ref.repo)) {
-    await settleUnreadable(context, row);
+    await settleUnreadable(context, row, true);
     return;
   }
   if (state.rateLimited) return;
-  const read = await readRow(context, row, ref);
+  let read: RowRead;
+  try {
+    read = await readRow(context, row, ref);
+  } catch (err) {
+    await settleReadException(context, row, err);
+    return;
+  }
   switch (read.kind) {
     case "skip":
       return;
@@ -628,7 +650,7 @@ async function judgeRow(context: Context, row: PrCiCheck): Promise<void> {
       await supersede(context, row);
       return;
     case "unreadable":
-      await settleUnreadable(context, row);
+      await settleUnreadable(context, row, false);
       return;
     case "runs":
       await applyRuns(context, row, ref, read.runs, read.headIsCurrent);
@@ -820,20 +842,24 @@ async function expireStalePending(
 }
 
 /**
- * 永続的な条件で読めない行を扱う。最初に見てから`UNREADABLE_EXPIRES_AFTER_MS`たつと、
- * 判定待ちの行は通知せずに`expired`にする。
- * 失敗と実行なしの行は`superseded`にし、そのPRの失敗のnoticeを解決する。
- * 読めないまま失敗の通知だけを残し続けても、人が確かめられないためである。
+ * 読めない行を扱う。`removed`は、リポジトリが対象から外れた(許可リストや、オーナーの照合から外れた)ことを表す。
+ * 最初に見てから`UNREADABLE_EXPIRES_AFTER_MS`たつと、判定待ちの行は、どちらの条件でも通知せずに`expired`にする。
+ * 失敗と実行なしの行は、`removed`のときだけ`superseded`にし、そのPRの失敗のnoticeを解決する。
+ * 対象から外れたリポジトリの失敗は、人が確かめる手段が無いためである。
+ * 権限の不足(403、404)や実行の多さで読めない回は、失敗の行を`superseded`にせず、noticeも解決しない。
+ * 一時的な不通で、今も続く失敗の通知を消さないためである。
  * 解決は冪等なので、行の更新より先に行う。
- * 期限の前は、読み直した時刻だけを進める。
+ * 期限の前と、`superseded`にしない行は、読み直した時刻だけを進める。
  */
 async function settleUnreadable(
   context: Context,
   row: PrCiCheck,
+  removed: boolean,
 ): Promise<void> {
   const { deps, now } = context;
   if (await expireStalePending(context, row)) return;
   if (
+    removed &&
     row.state !== "pending" &&
     now.getTime() - row.first_seen_at.getTime() >= UNREADABLE_EXPIRES_AFTER_MS
   ) {
@@ -843,7 +869,7 @@ async function settleUnreadable(
       PR_CI_RESOLVED_BY,
     );
     await supersede(context, row);
-    deps.log.warn("pr ci row superseded because its runs were unreadable", {
+    deps.log.warn("pr ci row superseded because its repository was removed", {
       repo: repoKey(row),
       pr: row.pr_number,
       sha: row.head_sha,
