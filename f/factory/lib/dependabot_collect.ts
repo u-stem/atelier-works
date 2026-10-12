@@ -8,6 +8,8 @@
 
 import type { UnverifiedInputName } from "./dependabot_prompt.ts";
 import {
+  type FetchLike,
+  getRegistryFacts,
   type RegistryFacts,
   RegistryHttpError,
   RegistryResponseError,
@@ -25,13 +27,20 @@ import {
 } from "./dependabot_support.ts";
 import {
   type CommitComparison,
+  compareCommits,
+  type GhClient,
   GitHubHttpError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
   GitHubResponseError,
+  getBranchSha,
+  getFileAtRef,
+  getPr,
+  listPrChecks,
   type PullRequest,
 } from "./github.ts";
 import { isCommitSha } from "./main_ci_support.ts";
+import type { FactoryConfig } from "./types.ts";
 
 // ---- 更新の対象の導出 ----
 
@@ -257,6 +266,12 @@ export type CollectResult =
       from: string;
       /** registryから読んだ、更新の前後の公開者などの要約。影響調査に渡す。 */
       registryMetadata: string;
+      /**
+       * 更新前の版と更新後の版のリポジトリのURL。registryの値を整えずに渡す。
+       * 読めなかったときは`null`で、`unverifiedInputs`が"registry metadata"を含む。
+       */
+      repositoryBefore: string | null;
+      repositoryAfter: string | null;
       /** 取得できなかった入力。registryの要約に欠けた項目があれば"registry metadata"を含む。 */
       unverifiedInputs: UnverifiedInputName[];
     }
@@ -264,6 +279,38 @@ export type CollectResult =
   | { kind: "needs_human"; reason: string }
   /** PRが閉じたかmergeされた。人に通知する対象ではない。 */
   | { kind: "closed"; reason: string };
+
+/**
+ * GitHubの関数を`client`に、registryの読み取りを`fetchImpl`に束ねて`CollectDeps`を作る。
+ * `fetchImpl`は渡された関数をそのまま`getRegistryFacts`に渡す。
+ * 取得の側が`redirect: "manual"`と締め切りの`signal`を付けるので、包んで変えてはならない。
+ * 呼び出し側は、素のグローバル`fetch`を渡す。
+ * 期待するbaseのブランチは`main`に固定する。
+ */
+export function buildCollectDeps(args: {
+  client: GhClient;
+  config: Pick<FactoryConfig, "dependabot_min_published_days">;
+  fetchImpl: FetchLike;
+  now: () => number;
+}): CollectDeps {
+  const { client, config, fetchImpl, now } = args;
+  return {
+    getPr: (owner, repo, number) => getPr(client, owner, repo, number),
+    getBranchSha: (owner, repo, branch) =>
+      getBranchSha(client, owner, repo, branch),
+    compareCommits: (owner, repo, baseSha, headSha) =>
+      compareCommits(client, owner, repo, baseSha, headSha),
+    getFileAtRef: (owner, repo, path, ref) =>
+      getFileAtRef(client, owner, repo, path, ref),
+    listPrChecks: (owner, repo, headSha) =>
+      listPrChecks(client, owner, repo, headSha),
+    getRegistryFacts: (name, from, to) =>
+      getRegistryFacts(name, from, to, fetchImpl),
+    now,
+    minPublishedDays: config.dependabot_min_published_days,
+    expectedBaseRef: "main",
+  };
+}
 
 /** PRがopenでないときの`closed`の理由。 */
 export const NOT_OPEN = "pull request is not open";
@@ -364,6 +411,8 @@ type Gathered = {
   mergeBaseSha: string;
   from: string;
   registryMetadata: string;
+  repositoryBefore: string | null;
+  repositoryAfter: string | null;
   unverifiedInputs: UnverifiedInputName[];
 };
 
@@ -422,6 +471,8 @@ async function gather(
       mergeBaseSha,
       from,
       registryMetadata: facts.registryMetadata,
+      repositoryBefore: facts.repositoryBefore,
+      repositoryAfter: facts.repositoryAfter,
       unverifiedInputs: facts.missing.length === 0 ? [] : ["registry metadata"],
       input: {
         authorLogin: first.authorLogin,
@@ -515,6 +566,8 @@ async function collect(
     mergeBaseSha: gathered.mergeBaseSha,
     from: gathered.from,
     registryMetadata: gathered.registryMetadata,
+    repositoryBefore: gathered.repositoryBefore,
+    repositoryAfter: gathered.repositoryAfter,
     unverifiedInputs: gathered.unverifiedInputs,
   };
 }

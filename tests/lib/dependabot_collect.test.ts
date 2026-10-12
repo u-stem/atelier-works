@@ -1,12 +1,15 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import {
+  buildCollectDeps,
   type CollectDeps,
   collectGateInput,
   deriveTarget,
   LOCKFILE_PATHS,
   NOT_OPEN,
 } from "../../f/factory/lib/dependabot_collect.ts";
+import * as registry from "../../f/factory/lib/dependabot_registry.ts";
 import {
+  type FetchLike,
   type RegistryFacts,
   RegistryHttpError,
   RegistryResponseError,
@@ -18,6 +21,7 @@ import {
   REQUIRED_CHECKS,
 } from "../../f/factory/lib/dependabot_support.ts";
 import {
+  type GhClient,
   GitHubHttpError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
@@ -25,6 +29,7 @@ import {
   type PrCommit,
   type PullRequest,
 } from "../../f/factory/lib/github.ts";
+import { createFakeCommandRunner, ghApiOk } from "./testSupport.ts";
 
 // ---- ロックファイルの fixture ----
 
@@ -402,6 +407,8 @@ function facts(overrides: Partial<RegistryFacts> = {}): RegistryFacts {
     installScripts: { before: {}, after: {} },
     integrity: INTEGRITY_B,
     registryMetadata: "",
+    repositoryBefore: "git+https://github.com/acme/left-pad.git",
+    repositoryAfter: "git+https://github.com/acme/left-pad.git",
     missing: [],
     ...overrides,
   };
@@ -539,6 +546,54 @@ describe("collectGateInput", () => {
       headSha: HEAD,
       mergeBaseSha: MERGE_BASE,
     });
+  });
+
+  test("returns the repository of the from version as repositoryBefore", async () => {
+    const result = await collectGateInput(
+      setup({
+        registry: async () =>
+          facts({
+            repositoryBefore: "github:old-owner/left-pad",
+            repositoryAfter: "github:new-owner/left-pad",
+          }),
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind === "ready" ? result.repositoryBefore : undefined).toBe(
+      "github:old-owner/left-pad",
+    );
+  });
+
+  test("returns the repository of the to version as repositoryAfter", async () => {
+    const result = await collectGateInput(
+      setup({
+        registry: async () =>
+          facts({
+            repositoryBefore: "github:old-owner/left-pad",
+            repositoryAfter: "github:new-owner/left-pad",
+          }),
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind === "ready" ? result.repositoryAfter : undefined).toBe(
+      "github:new-owner/left-pad",
+    );
+  });
+
+  test("returns null for a repository the registry could not give", async () => {
+    const result = await collectGateInput(
+      setup({
+        registry: async () =>
+          facts({ repositoryAfter: null, missing: ["after repository"] }),
+      }).deps,
+      PR_REF,
+    );
+
+    expect(result.kind === "ready" ? result.repositoryAfter : undefined).toBe(
+      null,
+    );
   });
 
   test("derives the target and the update kind from the lockfile", async () => {
@@ -1317,5 +1372,173 @@ describe("LOCKFILE_PATHS", () => {
 
   test("an element cannot be appended", () => {
     expect(Reflect.set(LOCKFILE_PATHS, LOCKFILE_PATHS.length, "x")).toBe(false);
+  });
+});
+
+// ---- buildCollectDeps ----
+
+const GH_TOKEN = "tok";
+const FAKE_PACKUMENT = {
+  name: "left-pad",
+  time: { "1.3.1": "2026-10-01T00:00:00.000Z" },
+  versions: { "1.3.0": {}, "1.3.1": {} },
+};
+
+function neverFetch(): FetchLike {
+  return () => Promise.reject(new Error("fetch must not be called"));
+}
+
+function depsWith(
+  overrides: {
+    run?: GhClient["run"];
+    days?: number;
+    fetchImpl?: FetchLike;
+    now?: () => number;
+  } = {},
+): CollectDeps {
+  const client: GhClient = {
+    run: overrides.run ?? createFakeCommandRunner([]).run,
+    ghToken: GH_TOKEN,
+    sleep: async () => {},
+    transientRetryDelayMs: 0,
+  };
+  return buildCollectDeps({
+    client,
+    config: { dependabot_min_published_days: overrides.days ?? 7 },
+    fetchImpl: overrides.fetchImpl ?? neverFetch(),
+    now: overrides.now ?? (() => NOW),
+  });
+}
+
+/** 束ねた関数を呼び、ghに渡った最初の呼び出しのargvを返す。応答の解析の失敗は無視する。 */
+async function firstGhArgv(
+  call: (deps: CollectDeps) => Promise<unknown>,
+): Promise<readonly string[]> {
+  const fake = createFakeCommandRunner([ghApiOk({}), ghApiOk({}), ghApiOk({})]);
+  await call(depsWith({ run: fake.run })).catch(() => undefined);
+  return fake.calls[0]?.argv ?? [];
+}
+
+describe("buildCollectDeps", () => {
+  afterEach(() => {
+    mock.restore();
+  });
+
+  test("binds getPr to the client and puts the client first", async () => {
+    const argv = await firstGhArgv((deps) => deps.getPr("acme", "widgets", 12));
+
+    expect(argv).toContain("repos/acme/widgets/pulls/12");
+  });
+
+  test("passes the token of the client to gh", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+
+    await depsWith({ run: fake.run })
+      .getPr("acme", "widgets", 12)
+      .catch(() => undefined);
+
+    expect(fake.calls[0]?.options?.env?.GH_TOKEN).toBe(GH_TOKEN);
+  });
+
+  test("binds getBranchSha to the client", async () => {
+    const argv = await firstGhArgv((deps) =>
+      deps.getBranchSha("acme", "widgets", "main"),
+    );
+
+    expect(argv).toContain("repos/acme/widgets/git/ref/heads/main");
+  });
+
+  test("binds compareCommits to the client", async () => {
+    const argv = await firstGhArgv((deps) =>
+      deps.compareCommits("acme", "widgets", BASE_SHA, HEAD),
+    );
+
+    expect(argv).toContain(
+      `repos/acme/widgets/compare/${BASE_SHA}...${HEAD}?per_page=100`,
+    );
+  });
+
+  test("binds getFileAtRef to the client", async () => {
+    const argv = await firstGhArgv((deps) =>
+      deps.getFileAtRef("acme", "widgets", "bun.lock", HEAD),
+    );
+
+    expect(argv).toContain(`repos/acme/widgets/contents/bun.lock?ref=${HEAD}`);
+  });
+
+  test("binds listPrChecks to the client", async () => {
+    const argv = await firstGhArgv((deps) =>
+      deps.listPrChecks("acme", "widgets", HEAD),
+    );
+
+    expect(argv).toContain(
+      `repos/acme/widgets/commits/${HEAD}/check-runs?per_page=100`,
+    );
+  });
+
+  test("passes minPublishedDays from the config", () => {
+    expect(depsWith({ days: 11 }).minPublishedDays).toBe(11);
+  });
+
+  test("expects main as the base branch", () => {
+    expect(depsWith().expectedBaseRef).toBe("main");
+  });
+
+  test("passes the clock through", () => {
+    expect(depsWith({ now: () => 12345 }).now()).toBe(12345);
+  });
+
+  test("reads the registry through the given fetch with the request options of the registry reader", async () => {
+    const seen: { url: string; init: RequestInit }[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      seen.push({ url, init });
+      return new Response(JSON.stringify(FAKE_PACKUMENT), { status: 200 });
+    };
+
+    await depsWith({ fetchImpl }).getRegistryFacts(
+      "left-pad",
+      "1.3.0",
+      "1.3.1",
+    );
+
+    expect(seen).toEqual([
+      {
+        url: "https://registry.npmjs.org/left-pad",
+        init: {
+          redirect: "manual",
+          signal: expect.any(AbortSignal),
+          headers: { accept: "application/json" },
+        },
+      },
+    ]);
+  });
+
+  test("hands the given fetch itself to the registry reader, not a wrapper", async () => {
+    const reader = spyOn(registry, "getRegistryFacts").mockResolvedValue(
+      facts(),
+    );
+    const fetchImpl = neverFetch();
+
+    await depsWith({ fetchImpl }).getRegistryFacts(
+      "left-pad",
+      "1.3.0",
+      "1.3.1",
+    );
+
+    expect(reader.mock.calls[0]?.[3]).toBe(fetchImpl);
+  });
+
+  test("hands the name and the versions to the registry reader", async () => {
+    const reader = spyOn(registry, "getRegistryFacts").mockResolvedValue(
+      facts(),
+    );
+
+    await depsWith().getRegistryFacts("left-pad", "1.3.0", "1.3.1");
+
+    expect(reader.mock.calls[0]?.slice(0, 3)).toEqual([
+      "left-pad",
+      "1.3.0",
+      "1.3.1",
+    ]);
   });
 });
