@@ -3542,7 +3542,9 @@ export async function getLatestPrCiCheck(
 
 /**
  * 判定を待っている行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
- * 読み直すたびに`touchPrCiCheck`で時刻を進めるので、上限を超える行があっても、後ろの行が飢えない。
+ * 後ろの行が飢えないためには、呼び出し側が、読み直すたびに`checked_at`を進める必要がある。
+ * 例外で読み直しが途中で終わる経路でも、`touchPrCiCheck`か状態の移行(`transitionPrCiCheck`)で進める前提である。
+ * 進めないと、同じ行が先頭に残り続け、上限を超える分の行が読み直されない。
  */
 export async function listPendingPrCiChecks(
   limit: number,
@@ -3563,7 +3565,8 @@ export async function listPendingPrCiChecks(
 /**
  * 失敗の行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
  * 同じheadの再実行が通ったかを、巡回のたびに読み直すために使う。
- * 読み直すたびに`touchPrCiCheck`で時刻を進めるので、上限を超える行があっても、後ろの行が飢えない。
+ * 後ろの行が飢えないためには、呼び出し側が、読み直すたびに`checked_at`を進める必要がある。
+ * 例外で読み直しが途中で終わる経路でも、`touchPrCiCheck`か状態の移行(`transitionPrCiCheck`)で進める前提である。
  */
 export async function listFailedPrCiChecks(
   limit: number,
@@ -3591,6 +3594,7 @@ export type PrCiTransition = {
    * `superseded`から`pending`に戻すときに、必ず`true`にする。それ以外の移行では`true`にできない。
    * 戻した行は、新しく見つけたheadと同じに扱う。`first_seen_at`を今にしてPRの最新の行にし、
    * 通知した理由(`notified_reason`)と要約を空にして、前の失敗の通知済みの記録を引き継がない。
+   * `run_created_at`は残る。判定は読み直した実行から求めるので、影響しない。
    */
   readonly reopen?: boolean;
 };
@@ -3649,7 +3653,37 @@ export async function transitionPrCiCheck(
 }
 
 /**
- * 実行を読み直した時刻(`checked_at`)を今にする。判定待ちか失敗の行だけを更新し、更新したら`true`を返す。
+ * `checked_at`が`checkedBefore`以前の`no_ci`の行のうち、そのPRで最新の行を、読み直していない順に最大`limit`件返す。
+ * 実行が遅れて作られた場合に、判定し直すために使う。PRで最新の行だけを返すのは、古いheadの`no_ci`は読み直す意味がないため。
+ * 間隔は呼び出し側が`checkedBefore`で決める。判定待ちより遅い間隔で読み直せる。
+ * 後ろの行が飢えないためには、`listPendingPrCiChecks`と同じく、読み直すたびに`checked_at`を進める必要がある。
+ */
+export async function listNoCiPrCiChecksToRecheck(
+  checkedBefore: Date,
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  const rows = await sql`
+    SELECT r.id, r.owner, r.repo, r.pr_number, r.head_sha, r.state, r.run_created_at, r.summary,
+           r.notified_reason, r.work_item_id, r.checked_at, r.first_seen_at, r.created_at,
+           r.updated_at
+    FROM factory.pr_ci_checks AS r
+    WHERE r.state = 'no_ci'
+      AND r.checked_at <= ${checkedBefore.toISOString()}::timestamptz
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.pr_ci_checks AS newer
+        WHERE newer.owner = r.owner AND newer.repo = r.repo
+          AND newer.pr_number = r.pr_number
+          AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
+      )
+    ORDER BY r.checked_at ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
+/**
+ * 実行を読み直した時刻(`checked_at`)を今にする。判定待ち、失敗、実行なし(`no_ci`)の行だけを更新し、更新したら`true`を返す。
  * 状態を変えずに読み直したときに呼ぶ。次の巡回で、ほかの行が先に読み直される。
  * `updated_at`は変えない。保持期間を延ばさないため。
  */
@@ -3660,7 +3694,7 @@ export async function touchPrCiCheck(
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET checked_at = now()
-    WHERE id = ${id}::bigint AND state IN ('pending', 'failed')
+    WHERE id = ${id}::bigint AND state IN ('pending', 'failed', 'no_ci')
     RETURNING id
   `.fetch();
   return rows.length > 0;
@@ -3688,29 +3722,37 @@ export async function markPrCiNotified(
 }
 
 /**
- * 判定が済んだ(`pending`以外の)行のうち、`updated_at`が`olderThan`以前のものを削除し、行数を返す。
- * 判定を待っている行は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
- * 失敗(`failed`)のままの行も、各PRで最新の1行は削除しない。再実行が通ったかを読み直し続けるため。
- * 最新かどうかは`(first_seen_at, id)`の大きさで決め、`getLatestPrCiCheck`が返す行と同じになる。
- * 通った行などの終わった行は、最新でも保持期間を過ぎたら削除する。
+ * `pending`以外の行のうち、`updated_at`が基準以前のものを削除し、行数を返す。
+ * - 判定を待っている行(`pending`)は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
+ * - 各PRで最新の行は、`latestOlderThan`以前になるまで削除する。状態は問わない。
+ *   最新かどうかは`(first_seen_at, id)`の大きさで決め、`getLatestPrCiCheck`が返す行と同じになる。
+ *   最新の行を長く残すのは、失敗の行を読み直し続け、PRの今のheadの記録を保つため。
+ * - 最新でない行は、`olderThan`以前になったら削除する。
+ * `latestOlderThan`は`olderThan`と同じか、それより前の時刻にする。そうでなければ、DBに触れずに例外を投げる。
  * 消した行のheadがまだPRの今のheadなら、次の巡回で新しい行として記録し、判定し直す。
  */
 export async function deletePrCiChecksBefore(
   olderThan: Date,
+  latestOlderThan: Date,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
+  if (latestOlderThan.getTime() > olderThan.getTime()) {
+    throw new Error(
+      "deletePrCiChecksBefore: latestOlderThan must not be later than olderThan",
+    );
+  }
   const rows = await sql`
     DELETE FROM factory.pr_ci_checks AS r
     WHERE r.state <> 'pending'
       AND r.updated_at <= ${olderThan.toISOString()}::timestamptz
       AND (
-        r.state <> 'failed'
-        OR EXISTS (
+        EXISTS (
           SELECT 1 FROM factory.pr_ci_checks AS newer
           WHERE newer.owner = r.owner AND newer.repo = r.repo
             AND newer.pr_number = r.pr_number
             AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
         )
+        OR r.updated_at <= ${latestOlderThan.toISOString()}::timestamptz
       )
     RETURNING r.id
   `.fetch();

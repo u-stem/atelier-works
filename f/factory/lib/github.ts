@@ -3811,8 +3811,8 @@ function parsePrHeadRunExtras(
 
 /** `listPrHeadWorkflowRuns`の読み方の指定。 */
 export type PrHeadWorkflowRunsOptions = {
-  /** ベースのリポジトリのID。あれば、headのリポジトリをIDで比べる。なければ`owner/repo`の名前で比べる。 */
-  readonly baseRepoId?: number;
+  /** ベースのリポジトリのID。headのリポジトリをIDで比べる。名前は付け替えられるので比べない。 */
+  readonly baseRepoId: number;
   /** PRの番号。あれば、`pull_requests`が空でなくこのPRを含まない実行を捨てる。 */
   readonly prNumber?: number;
 };
@@ -3864,13 +3864,7 @@ function toPrHeadWorkflowRuns(
     const extras = parsePrHeadRunExtras(raw, context);
     const repository = extras.headRepository;
     // forkの実行は、同じブランチ名とshaでも別のリポジトリの実行なので、捨てて続ける。
-    if (
-      repository === null ||
-      (baseRepoId !== undefined
-        ? repository.id !== baseRepoId
-        : repository.fullName.toLowerCase() !==
-          `${expected.owner}/${expected.repo}`.toLowerCase())
-    ) {
+    if (repository === null || repository.id !== baseRepoId) {
       droppedOtherRepository += 1;
       continue;
     }
@@ -3908,6 +3902,18 @@ function toPrHeadWorkflowRuns(
   };
 }
 
+function finishPrHeadWorkflowRuns(
+  context: string,
+  result: PrHeadWorkflowRuns,
+): PrHeadWorkflowRuns {
+  if (result.runs.length === 0 && result.droppedOtherRepository > 0) {
+    throw new WorkflowRunsIncompleteError(
+      `${context}: every run was dropped as one of another repository`,
+    );
+  }
+  return result;
+}
+
 /**
  * PRのheadのコミット(`headSha`)について、workflowの実行を読む。
  * 対象は、head側のブランチ(`headRef`)で、eventが`pull_request`か`push`の実行である。
@@ -3915,9 +3921,12 @@ function toPrHeadWorkflowRuns(
  * 実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。埋まったかは、
  * 捨てる前の件数で決める。
  * 別のコミットや別のブランチの実行が返ったときも同じ例外を投げ、そのコミットを今回は判定させない。
- * 次の実行は捨てて続け、捨てた件数を結果に持たせる。呼び出し側はログに残せる。
+ * 次の実行は通常は捨てて続け、捨てた件数を結果に持たせる。呼び出し側はログに残せる。
  * - headのあるリポジトリが、ベースのリポジトリと違う実行(forkや削除されたfork)。
- *   `options.baseRepoId`があればリポジトリのIDで、なければ`owner/repo`の名前で比べる。
+ *   `options.baseRepoId`とリポジトリのIDで比べる。
+ *   読んだ実行がすべてこれで捨てられ、判定に使える実行が1件も残らないときだけは、
+ *   捨てて続けずに`WorkflowRunsIncompleteError`を投げる。
+ *   本物の実行を取り違えて全部捨てると、実行が無いのと見分けがつかず、判定が黙って`no_ci`に倒れるため。
  * - `options.prNumber`を渡したときは、`pull_requests`が空でなく、そのPRを含まない実行。
  *   `pull_requests`が空の実行は、GitHubがPRを結び付けていないだけなので採用する。
  * 手動や定期など、ほかのeventの実行も捨てる(件数には数えない)。
@@ -3931,7 +3940,7 @@ export async function listPrHeadWorkflowRuns(
   repo: string,
   headSha: string,
   headRef: string,
-  options: PrHeadWorkflowRunsOptions = {},
+  options: PrHeadWorkflowRunsOptions,
 ): Promise<PrHeadWorkflowRuns> {
   validateOwnerRepo(owner, repo);
   assertCommitSha(headSha);
@@ -3953,7 +3962,11 @@ export async function listPrHeadWorkflowRuns(
     droppedOtherRepository += items.droppedOtherRepository;
     droppedOtherPullRequest += items.droppedOtherPullRequest;
     if (items.rawCount < WORKFLOW_RUNS_BY_SHA_PER_PAGE) {
-      return { runs, droppedOtherRepository, droppedOtherPullRequest };
+      return finishPrHeadWorkflowRuns(context, {
+        runs,
+        droppedOtherRepository,
+        droppedOtherPullRequest,
+      });
     }
   }
   throw new WorkflowRunsIncompleteError(

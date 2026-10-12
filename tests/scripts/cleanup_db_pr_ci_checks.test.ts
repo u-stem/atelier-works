@@ -7,8 +7,8 @@ const SOURCE = Bun.file("f/factory/cleanup_db.ts").text();
 
 describe("cleanup_db.ts", () => {
   test("deletes pr ci records with the logs cutoff", async () => {
-    expect(await SOURCE).toContain(
-      "cleanupPrCiChecks(cutoffs.logsBefore, log)",
+    expect(await SOURCE).toMatch(
+      /cleanupPrCiChecks\(\s*cutoffs\.logsBefore,\s*cutoffs\.latestLogsBefore,\s*log,?\s*\)/,
     );
   });
 

@@ -4,6 +4,7 @@
 -- 判定の単位は(owner, repo, pr_number, head_sha)である。
 -- 作業項目(work_items)とは独立した記録で、作業項目の状態、終端、リードタイムには影響しない。
 -- 外部キーは持たない。作業項目の削除に連なって消えず、掃除は自身のupdated_atで行う。
+-- 掃除は、pending以外のうち、最新でない行を保持期間で、各PRの最新の行を保持期間の4倍で削除する。
 --
 -- state:
 --   pending    実行の完了と確定を待っている。掃除の対象にしない。
@@ -11,7 +12,7 @@
 --   failed     すべての実行が完了し、それ以外の結論があった。同じheadの再実行で通れば、passedに戻る。
 --   superseded PRのheadが進み、このheadの判定は不要になった。headが以前の値に戻ったら、pendingに戻して判定し直す。
 --   expired    期限までに完了しなかった。
---   no_ci      実行が1件も現れなかった。
+--   no_ci      実行が1件も現れなかった。実行が遅れて作られた場合に、読み直して判定し直せる。
 --   observed   判定を記録しただけで、通知も修正の起動もしない。
 BEGIN;
 
@@ -55,7 +56,7 @@ COMMENT ON COLUMN factory.pr_ci_checks.first_seen_at IS
 
 -- 照会の対象(pendingのもの)を、読み直していない順に引く。
 CREATE INDEX pr_ci_checks_pending_idx ON factory.pr_ci_checks (checked_at) WHERE state = 'pending';
--- 掃除の対象(pending以外で、更新から保持期間を過ぎたもの)を引く。
+-- 掃除の対象(pending以外で、更新から保持期間を過ぎたもの。各PRの最新の行は4倍)を引く。
 CREATE INDEX pr_ci_checks_settled_idx ON factory.pr_ci_checks (updated_at) WHERE state <> 'pending';
 
 END;

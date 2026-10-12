@@ -30,9 +30,9 @@ import {
   isStringArray,
 } from "./types.ts";
 
-export { parseImplementBranchWorkItemId } from "./types.ts";
-
 import { withCommitTrailers } from "./workspace.ts";
+
+export { parseImplementBranchWorkItemId } from "./types.ts";
 
 /**
  * Claude自身が返す2つの結果(`IMPLEMENT_SCHEMA`)。

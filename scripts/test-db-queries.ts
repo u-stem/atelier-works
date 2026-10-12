@@ -32,6 +32,7 @@ import {
   latestMainCiRunCreatedAt,
   listFailedPrCiChecks,
   listMainCiRunsBySha,
+  listNoCiPrCiChecksToRecheck,
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
@@ -2486,6 +2487,7 @@ execPsql(
 );
 await deletePrCiChecksBefore(
   new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  new Date(Date.now() - 120 * 24 * 60 * 60 * 1000),
   sql,
 );
 check(
@@ -2496,7 +2498,7 @@ check(
 );
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
 
-// 掃除は、判定待ちの行と、失敗のままの各PRの最新の行を残す。終わった行は、最新でも保持期間を過ぎたら消す。
+// 掃除は、判定待ちの行を残す。各PRの最新の行は保持期間の4倍まで残し、最新でない行は保持期間で消す。
 const PR_SHA_3 = "3".repeat(40);
 await recordPrCiCheck(prCiNew(21, PR_SHA_1), sql);
 await recordPrCiCheck(prCiNew(21, PR_SHA_2), sql);
@@ -2521,12 +2523,15 @@ execPsql(
   target,
   "UPDATE factory.pr_ci_checks SET state = 'failed' WHERE pr_number = 24",
 );
+const prCiCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+const prCiLatestCutoff = new Date(Date.now() - 120 * 24 * 60 * 60 * 1000);
 execPsql(
   target,
   "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '90 days' WHERE owner = 'qdb'",
 );
 const prCiDeleted = await deletePrCiChecksBefore(
-  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  prCiCutoff,
+  prCiLatestCutoff,
   sql,
 );
 const prCiLeft = async (prNumber: number) =>
@@ -2534,13 +2539,13 @@ const prCiLeft = async (prNumber: number) =>
     .map((row) => `${row.head_sha.slice(0, 1)}:${row.state}`)
     .join(",");
 check(
-  "pr_ci_checks: cleanup deletes the old superseded row and the newest passed row",
-  (await prCiLeft(21)) === "",
+  "pr_ci_checks: cleanup deletes the old superseded row and keeps the newest passed row for now",
+  (await prCiLeft(21)) === "2:passed",
   await prCiLeft(21),
 );
 check(
-  "pr_ci_checks: cleanup deletes the only row of a pull request when it has passed",
-  (await prCiLeft(22)) === "",
+  "pr_ci_checks: cleanup keeps the only row of a pull request for now",
+  (await prCiLeft(22)) === "1:passed",
   await prCiLeft(22),
 );
 check(
@@ -2554,9 +2559,110 @@ check(
   await prCiLeft(24),
 );
 check(
-  "pr_ci_checks: cleanup counted the four deleted rows",
-  prCiDeleted === 4,
+  "pr_ci_checks: cleanup counted the two rows that were not the newest",
+  prCiDeleted === 2,
   prCiDeleted,
+);
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET updated_at = now() - interval '150 days' WHERE owner = 'qdb'",
+);
+const prCiDeletedLatest = await deletePrCiChecksBefore(
+  prCiCutoff,
+  prCiLatestCutoff,
+  sql,
+);
+check(
+  "pr_ci_checks: after four times the retention, the newest rows are deleted whatever their state",
+  (await prCiLeft(21)) === "" &&
+    (await prCiLeft(22)) === "" &&
+    (await prCiLeft(24)) === "",
+  [await prCiLeft(21), await prCiLeft(22), await prCiLeft(24)],
+);
+check(
+  "pr_ci_checks: the pending rows survive however old they are",
+  (await prCiLeft(23)) === "3:pending,1:pending",
+  await prCiLeft(23),
+);
+check(
+  "pr_ci_checks: the second sweep counted the three newest rows",
+  prCiDeletedLatest === 3,
+  prCiDeletedLatest,
+);
+check(
+  "pr_ci_checks: a latest cutoff later than the cutoff is refused",
+  await deletePrCiChecksBefore(prCiLatestCutoff, prCiCutoff, sql)
+    .then(() => false)
+    .catch(() => true),
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
+
+// no_ci の行は、実行が遅れて作られた場合のために、今のheadの行だけを遅い間隔で読み直す。
+const PR_NO_CI = [81, 82, 83];
+for (const prNumber of PR_NO_CI) {
+  await recordPrCiCheck(prCiNew(prNumber, PR_SHA_1), sql);
+}
+await recordPrCiCheck(prCiNew(82, PR_SHA_2), sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '3 hours' WHERE pr_number = 82 AND head_sha = '${PR_SHA_1}'`,
+);
+for (const prNumber of PR_NO_CI) {
+  const row = (
+    await listPrCiChecksForPr(PR_CI.owner, PR_CI.repo, prNumber, sql)
+  ).find((item) => item.head_sha === PR_SHA_1);
+  if (row === undefined) throw new Error("pr_ci_checks row is missing");
+  await transitionPrCiCheck(row.id, "pending", { state: "no_ci" }, sql);
+}
+execPsql(
+  target,
+  "UPDATE factory.pr_ci_checks SET checked_at = now() - interval '3 hours' WHERE pr_number IN (81, 82)",
+);
+const prCiNoCi = await listNoCiPrCiChecksToRecheck(
+  new Date(Date.now() - 60 * 60 * 1000),
+  100,
+  sql,
+);
+check(
+  "pr_ci_checks: only the newest no_ci row of a pull request that was not checked lately is rechecked",
+  prCiNoCi
+    .filter((row) => row.owner === PR_CI.owner)
+    .map((row) => row.pr_number)
+    .join(",") === "81",
+  prCiNoCi.map((row) => `${row.pr_number}:${row.head_sha.slice(0, 1)}`),
+);
+const prCiNoCiRow = prCiNoCi.find((row) => row.pr_number === 81);
+if (prCiNoCiRow === undefined) throw new Error("no_ci row is missing");
+check(
+  "pr_ci_checks: touching a no_ci row takes it out of the recheck list",
+  (await touchPrCiCheck(prCiNoCiRow.id, sql)) === true &&
+    (
+      await listNoCiPrCiChecksToRecheck(
+        new Date(Date.now() - 60 * 60 * 1000),
+        100,
+        sql,
+      )
+    ).every((row) => row.pr_number !== 81),
+);
+check(
+  "pr_ci_checks: a no_ci row can be judged again once its runs appear",
+  (await transitionPrCiCheck(
+    prCiNoCiRow.id,
+    "no_ci",
+    { state: "passed", runCreatedAt: new Date("2026-10-13T05:00:00Z") },
+    sql,
+  )) === true,
+);
+check(
+  "pr_ci_checks: a no_ci row cannot expire",
+  await transitionPrCiCheck(
+    (await getLatestPrCiCheck(PR_CI.owner, PR_CI.repo, 83, sql))?.id ?? 0,
+    "no_ci",
+    { state: "expired" },
+    sql,
+  )
+    .then(() => false)
+    .catch(() => true),
 );
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qdb'");
 

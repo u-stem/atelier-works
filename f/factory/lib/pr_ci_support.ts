@@ -45,6 +45,8 @@ export const PR_CI_SUMMARY_MAX_LENGTH = MAIN_CI_SUMMARY_MAX_LENGTH;
  * 行が移れる状態。条件付きの更新(`WHERE state = <移る前の状態>`)が冪等になるよう、
  * 同じ状態への移行は認めない。
  * - `failed`は終端にしない。同じheadの再実行が通れば`passed`に戻る。
+ * - `no_ci`も終端にしない。実行が遅れて作られた場合に、読み直して判定し直せるようにする。
+ *   実行が現れれば`pending`、判定が確定していれば`passed`か`failed`に移る。
  * - `superseded`から`pending`へは、headが以前の値に戻ったときに限る。
  */
 const PR_CI_TRANSITIONS: Readonly<Record<PrCiState, readonly PrCiState[]>> = {
@@ -53,7 +55,7 @@ const PR_CI_TRANSITIONS: Readonly<Record<PrCiState, readonly PrCiState[]>> = {
   superseded: ["pending"],
   passed: [],
   expired: [],
-  no_ci: [],
+  no_ci: ["pending", "failed", "passed", "superseded"],
   observed: [],
 };
 

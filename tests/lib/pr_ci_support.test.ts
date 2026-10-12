@@ -111,6 +111,26 @@ describe("canTransitionPrCi", () => {
     expect(canTransitionPrCi("passed", "failed")).toBe(false);
   });
 
+  test("lets a no_ci row be judged once its runs appear", () => {
+    expect(canTransitionPrCi("no_ci", "pending")).toBe(true);
+  });
+
+  test("lets a no_ci row settle as passed", () => {
+    expect(canTransitionPrCi("no_ci", "passed")).toBe(true);
+  });
+
+  test("lets a no_ci row settle as failed", () => {
+    expect(canTransitionPrCi("no_ci", "failed")).toBe(true);
+  });
+
+  test("lets a no_ci row be superseded", () => {
+    expect(canTransitionPrCi("no_ci", "superseded")).toBe(true);
+  });
+
+  test("does not let a no_ci row expire", () => {
+    expect(canTransitionPrCi("no_ci", "expired")).toBe(false);
+  });
+
   test("does not let an expired row move", () => {
     expect(canTransitionPrCi("expired", "passed")).toBe(false);
   });

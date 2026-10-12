@@ -4765,7 +4765,10 @@ describe("listPrHeadWorkflowRuns", () => {
     fake: ReturnType<typeof createFakeCommandRunner>,
     options: { baseRepoId?: number; prNumber?: number } = {},
   ) =>
-    listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, REF, options);
+    listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, REF, {
+      baseRepoId: 55,
+      ...options,
+    });
   const list = async (
     fake: ReturnType<typeof createFakeCommandRunner>,
     options: { baseRepoId?: number; prNumber?: number } = {},
@@ -4855,13 +4858,13 @@ describe("listPrHeadWorkflowRuns", () => {
     );
   });
 
-  test("drops a run whose head repository differs by name", async () => {
+  test("drops a run whose head repository has another id", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({
         workflow_runs: [
           rawRun({
             id: 1,
-            head_repository: { id: 99, full_name: "evil/widgets" },
+            head_repository: { id: 99, full_name: "acme/widgets" },
           }),
           rawRun({ id: 2 }),
         ],
@@ -4870,16 +4873,39 @@ describe("listPrHeadWorkflowRuns", () => {
     expect((await list(fake)).map((item) => item.id)).toEqual([2]);
   });
 
-  test("drops a run whose head repository id differs", async () => {
-    const fake = createFakeCommandRunner([page(1)]);
-    expect(await list(fake, { baseRepoId: 56 })).toEqual([]);
+  test("does not trust the repository name when the id matches", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ head_repository: { id: 55, full_name: "renamed/widgets" } }),
+        ],
+      }),
+    ]);
+    expect(await list(fake)).toHaveLength(1);
   });
 
   test("drops a run whose head repository is gone", async () => {
     const fake = createFakeCommandRunner([
-      ghApiOk({ workflow_runs: [rawRun({ head_repository: null })] }),
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_repository: null }),
+          rawRun({ id: 2 }),
+        ],
+      }),
     ]);
-    expect(await list(fake)).toEqual([]);
+    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
+  });
+
+  test("drops a run whose head repository has no id", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_repository: { full_name: "acme/widgets" } }),
+          rawRun({ id: 2 }),
+        ],
+      }),
+    ]);
+    expect((await list(fake)).map((item) => item.id)).toEqual([2]);
   });
 
   test("reports how many runs of another repository were dropped", async () => {
@@ -4906,28 +4932,55 @@ describe("listPrHeadWorkflowRuns", () => {
     });
   });
 
-  test("counts a dropped run when it decides the page is full of another repository", async () => {
+  test("throws a WorkflowRunsIncompleteError when every run was another repository's", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        workflow_runs: [
+          rawRun({ id: 1, head_repository: null }),
+          rawRun({
+            id: 2,
+            head_repository: { id: 99, full_name: "evil/widgets" },
+          }),
+        ],
+      }),
+    ]);
+    await expect(list(fake)).rejects.toBeInstanceOf(
+      WorkflowRunsIncompleteError,
+    );
+  });
+
+  test("throws a WorkflowRunsIncompleteError when the base repository id is wrong for every run", async () => {
+    const fake = createFakeCommandRunner([page(1)]);
+    await expect(list(fake, { baseRepoId: 56 })).rejects.toBeInstanceOf(
+      WorkflowRunsIncompleteError,
+    );
+  });
+
+  test("does not throw when the only runs dropped were of another pull request", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ pull_requests: [{ number: 13 }] })] }),
+    ]);
+    expect(await list(fake, { prNumber: 12 })).toEqual([]);
+  });
+
+  test("does not throw when the only runs dropped were of another event", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ workflow_runs: [rawRun({ event: "schedule" })] }),
+    ]);
+    expect(await list(fake)).toEqual([]);
+  });
+
+  test("counts a dropped run when it decides the page is full", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk({
         workflow_runs: Array.from({ length: 100 }, (_, i) =>
-          rawRun({ id: i + 1, head_repository: null }),
+          rawRun(i === 0 ? { id: 1 } : { id: i + 1, head_repository: null }),
         ),
       }),
       page(0),
     ]);
     await list(fake);
     expect(fake.calls).toHaveLength(2);
-  });
-
-  test("compares the repository name without regard to case", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({
-        workflow_runs: [
-          rawRun({ head_repository: { id: 55, full_name: "Acme/Widgets" } }),
-        ],
-      }),
-    ]);
-    expect(await list(fake)).toHaveLength(1);
   });
 
   test("adopts a run whose pull_requests is empty", async () => {
@@ -5019,14 +5072,18 @@ describe("listPrHeadWorkflowRuns", () => {
   test("rejects a short sha before calling the API", async () => {
     const fake = createFakeCommandRunner([]);
     await expect(
-      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", "abc1234", REF),
+      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", "abc1234", REF, {
+        baseRepoId: 55,
+      }),
     ).rejects.toThrow("invalid commit sha");
   });
 
   test("rejects a branch name that git would take as an option", async () => {
     const fake = createFakeCommandRunner([]);
     await expect(
-      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, "-x"),
+      listPrHeadWorkflowRuns(client(fake), "acme", "widgets", SHA, "-x", {
+        baseRepoId: 55,
+      }),
     ).rejects.toThrow("invalid branch name");
   });
 

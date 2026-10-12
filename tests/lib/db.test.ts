@@ -62,6 +62,7 @@ import {
   listFailedPrCiChecks,
   listImplementRounds,
   listMainCiRunsBySha,
+  listNoCiPrCiChecksToRecheck,
   listPendingIssueProposals,
   listPendingMainCiRuns,
   listPendingPrCiChecks,
@@ -5320,6 +5321,48 @@ describe("listFailedPrCiChecks", () => {
   });
 });
 
+describe("listNoCiPrCiChecksToRecheck", () => {
+  const before = new Date("2026-10-13T00:00:00.000Z");
+
+  test("selects only no_ci rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("WHERE r.state = 'no_ci'");
+  });
+
+  test("selects only rows last checked at or before the given time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("r.checked_at <=");
+  });
+
+  test("selects only the newest row of a pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toMatch(
+      /NOT EXISTS \([\s\S]*newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)/,
+    );
+  });
+
+  test("orders by the last check, so that no row is starved", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY r.checked_at ASC");
+  });
+
+  test("passes the limit as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...PR_CI_ROW, state: "no_ci" }]]);
+    const rows = await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(rows[0]?.state).toBe("no_ci");
+  });
+});
+
 describe("transitionPrCiCheck", () => {
   test("only updates a row that is still in the expected state", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
@@ -5476,10 +5519,10 @@ describe("touchPrCiCheck", () => {
     expect(calls[0]?.text).toContain("SET checked_at = now()");
   });
 
-  test("touches only a row that is still waiting or failed", async () => {
+  test("touches only a row that is still waiting, failed or without ci", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
     await touchPrCiCheck(9, sql);
-    expect(calls[0]?.text).toContain("state IN ('pending', 'failed')");
+    expect(calls[0]?.text).toContain("state IN ('pending', 'failed', 'no_ci')");
   });
 
   test("does not extend the retention of the row", async () => {
@@ -5548,29 +5591,53 @@ describe("markPrCiNotified", () => {
 
 describe("deletePrCiChecksBefore", () => {
   const cutoff = new Date("2026-09-12T00:00:00.000Z");
+  const latestCutoff = new Date("2026-05-15T00:00:00.000Z");
 
   test("keeps pending rows", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await deletePrCiChecksBefore(cutoff, sql);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
     expect(calls[0]?.text).toContain("state <> 'pending'");
   });
 
-  test("keeps the newest row of a pull request only when it is failed", async () => {
+  test("deletes the newest row of a pull request only after the longer retention", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await deletePrCiChecksBefore(cutoff, sql);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
     expect(calls[0]?.text).toMatch(
-      /r\.state <> 'failed'\s+OR EXISTS[\s\S]*newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)/,
+      /EXISTS \([\s\S]*newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)\s*\)\s*OR r\.updated_at <=/,
     );
+  });
+
+  test("does not keep the newest row by its state", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
+    expect(calls[0]?.text).not.toContain("'failed'");
   });
 
   test("ages a row by its updated_at", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await deletePrCiChecksBefore(cutoff, sql);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
     expect(calls[0]?.text).toContain("updated_at <=");
+  });
+
+  test("binds both cutoffs as timestamps", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
+    expect(calls[0]?.values).toEqual([
+      cutoff.toISOString(),
+      latestCutoff.toISOString(),
+    ]);
+  });
+
+  test("refuses a latest cutoff that is later than the cutoff, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(latestCutoff, cutoff, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
   });
 
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
-    expect(await deletePrCiChecksBefore(cutoff, sql)).toBe(2);
+    expect(await deletePrCiChecksBefore(cutoff, latestCutoff, sql)).toBe(2);
   });
 });

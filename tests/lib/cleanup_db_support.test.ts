@@ -25,6 +25,16 @@ describe("computeRetentionCutoffs", () => {
     });
     expect(cutoffs.logsBefore).toEqual(new Date("2026-08-28T00:00:00.000Z"));
   });
+
+  test("subtracts four times retention_logs_days from now for latestLogsBefore", () => {
+    const cutoffs = computeRetentionCutoffs(NOW, {
+      retention_work_items_days: 90,
+      retention_logs_days: 30,
+    });
+    expect(cutoffs.latestLogsBefore).toEqual(
+      new Date("2026-05-30T00:00:00.000Z"),
+    );
+  });
 });
 
 describe("summarizeCleanup", () => {
