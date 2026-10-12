@@ -237,6 +237,10 @@ ContentsをRead and writeにするのは、PR修正と実装のフローがブ�
 ActionsをRead-onlyにするのは、`watch_main_ci`が対象リポジトリの既定のブランチのActionsの実行を読むためである。
 書き込みの権限は付けない。実行の再実行や取り消しをさせないためである。
 権限が足りないリポジトリは、`watch_main_ci`が要対応の通知`main_ci_check_denied`で知らせる。権限が足りない間は、そのリポジトリのmainのCIの失敗に気づけない。
+Actions: Read-onlyでは、実行の一覧だけでなく、選んだ全リポジトリの実行のログとartifactも読める。
+`github_token`は、Console用workerの`approval_decide`と`retry_work_item`も読む。
+そのため、漏れたときの影響は、Contentsの読み書きに加えて、ログとartifactを読まれる分だけ広がる。
+ログとartifactには秘密値を入れない。漏れたときの影響が広がる分は、残るリスクとして受け入れる。
 
 fine-grained PATは、トークンの値を変えずに権限の設定だけを変えられる。権限を変えるときは既存のトークンを更新すればよく、再発行は要らない。
 orgのリポジトリでは、権限を足すと、org側で再び承認を求められることもある。承認するまで、同じ通知は残る。
