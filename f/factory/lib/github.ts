@@ -3220,6 +3220,18 @@ function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
   return typeof value.html_url === "string";
 }
 
+/**
+ * `listWorkflowRuns`が、そのコミットの実行を判定に使えないときに投げる例外。
+ * 上限のページまで埋まって実行を読み切れないときと、照会したコミットと違う`head_sha`の実行が
+ * 返ったときがある。呼び出し側は、コミットごとに`instanceof`で見分けて、そのコミットを今回は判定しない。
+ */
+export class WorkflowRunsIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkflowRunsIncompleteError";
+  }
+}
+
 function toWorkflowRuns(
   parsed: unknown,
   context: string,
@@ -3234,7 +3246,9 @@ function toWorkflowRuns(
     }
     assertCommitSha(raw.head_sha);
     if (expectedSha !== undefined && raw.head_sha !== expectedSha) {
-      throw new Error(`${context}: unexpected response shape`);
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another commit`,
+      );
     }
     return {
       id: raw.id,
@@ -3254,7 +3268,8 @@ function toWorkflowRuns(
  *   新しいコミットを見つけるための一覧で、1つのコミットの実行が全部そろっているとは限らない。
  * - `headSha`あり: そのコミットの実行を、1ページ`WORKFLOW_RUNS_BY_SHA_PER_PAGE`件で最大
  *   `WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読む。判定に使うのはこちらである。
- *   上限のページまで埋まったら、実行の一部を読めていないので例外を投げる。
+ *   上限のページまで埋まったら、実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。
+ *   応答に別のコミットの実行が混ざったときも同じ例外を投げる。
  *   ブランチも条件に付けるのは、同じコミットを別のブランチにpushした実行を混ぜないため。
  * `headSha`と、応答の各実行の`head_sha`は、完全なコミットshaでなければ例外を投げる。
  * 応答の形が違えば例外を投げる。
@@ -3292,7 +3307,9 @@ export async function listWorkflowRuns(
     runs.push(...items);
     if (items.length < WORKFLOW_RUNS_BY_SHA_PER_PAGE) return runs;
   }
-  throw new Error(`${context}: the runs may be incomplete (too many runs)`);
+  throw new WorkflowRunsIncompleteError(
+    `${context}: the runs may be incomplete (too many runs)`,
+  );
 }
 
 export type PullRequestUpdate = {

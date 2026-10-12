@@ -3,8 +3,8 @@
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
 // 解決済みのnotice・判定済みの`main_ci_runs`で、作業項目とは別々に掃除する。
-// 判定を待つ`main_ci_runs`の行と、各リポジトリの最新の行は、古くても削除しない。同じ期間を過ぎた未解決の`info`のnoticeは、
-// 削除せず解決済みにする。
+// 判定を待つ`main_ci_runs`の行と、各リポジトリの最新の行は、古くても削除しない。
+// 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、

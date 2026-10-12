@@ -18,6 +18,7 @@ import {
   deleteMainCiRunsBefore,
   deleteResolvedNoticesBefore,
   getNoticeById,
+  getPreviousMainCiRun,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
   insertCleanupRun,
@@ -1712,6 +1713,26 @@ await recordMainCiRun(
   },
   sql,
 );
+const keepPrevious = await getPreviousMainCiRun(
+  KEEP_REPO.owner,
+  KEEP_REPO.repo,
+  new Date("2026-10-12T00:00:00Z"),
+  sql,
+);
+check(
+  "main_ci_runs: the previous row is the newest one older than the run time",
+  keepPrevious?.head_sha === CI_SHA_D && keepPrevious.state === "baseline",
+  keepPrevious,
+);
+check(
+  "main_ci_runs: no row is older than the oldest run time",
+  (await getPreviousMainCiRun(
+    KEEP_REPO.owner,
+    KEEP_REPO.repo,
+    new Date("2026-10-11T00:00:00Z"),
+    sql,
+  )) === null,
+);
 execPsql(
   target,
   "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'keep'",
@@ -1740,6 +1761,54 @@ check(
   (
     await latestMainCiRunCreatedAt(KEEP_REPO.owner, KEEP_REPO.repo, sql)
   )?.toISOString() === "2026-10-12T00:00:00.000Z",
+);
+// 新しいコミットを先に記録しても(小さいid)、実行の時刻が最新の行を残す。
+const LATE_REPO = { owner: "qdb", repo: "late" };
+const CI_SHA_F = "f".repeat(40);
+const CI_SHA_G = "1".repeat(40);
+await recordMainCiRun(
+  {
+    ...LATE_REPO,
+    head_sha: CI_SHA_F,
+    state: "baseline",
+    run_created_at: new Date("2026-10-12T00:00:00Z"),
+  },
+  sql,
+);
+await recordMainCiRun(
+  {
+    ...LATE_REPO,
+    head_sha: CI_SHA_G,
+    state: "baseline",
+    run_created_at: new Date("2026-10-11T00:00:00Z"),
+  },
+  sql,
+);
+execPsql(
+  target,
+  "UPDATE factory.main_ci_runs SET updated_at = now() - interval '90 days' WHERE repo = 'late'",
+);
+await deleteMainCiRunsBefore(
+  new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+  sql,
+);
+const lateRows = await listMainCiRunsBySha(
+  LATE_REPO.owner,
+  LATE_REPO.repo,
+  [CI_SHA_F, CI_SHA_G],
+  sql,
+);
+check(
+  "main_ci_runs: cleanup keeps the row with the newest run time, not the newest id",
+  lateRows.map((row) => row.head_sha).join(",") === CI_SHA_F,
+  lateRows,
+);
+check(
+  "main_ci_runs: the watermark is unchanged after the cleanup",
+  (
+    await latestMainCiRunCreatedAt(LATE_REPO.owner, LATE_REPO.repo, sql)
+  )?.toISOString() === "2026-10-12T00:00:00.000Z" &&
+    (await hasMainCiRuns(LATE_REPO.owner, LATE_REPO.repo, sql)) === true,
 );
 execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qdb'");
 

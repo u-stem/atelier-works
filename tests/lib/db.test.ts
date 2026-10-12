@@ -23,6 +23,7 @@ import {
   getIssueProposal,
   getLatestDeployment,
   getNoticeById,
+  getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
   hasIntakeRefreshEvent,
@@ -4457,7 +4458,7 @@ describe("latestMainCiRunCreatedAt", () => {
     );
   });
 
-  test("returns null when no row has a run time", async () => {
+  test("returns null when the repository has no row", async () => {
     const { sql } = createFakeSqlClient([[{ latest: null }]]);
     expect(await latestMainCiRunCreatedAt("acme", "widgets", sql)).toBeNull();
   });
@@ -4465,7 +4466,9 @@ describe("latestMainCiRunCreatedAt", () => {
   test("takes the maximum over every state", async () => {
     const { sql, calls } = createFakeSqlClient([[{ latest: null }]]);
     await latestMainCiRunCreatedAt("acme", "widgets", sql);
-    expect(calls[0]?.text).toContain("max(run_created_at)");
+    expect(calls[0]?.text).toContain(
+      "max(COALESCE(run_created_at, first_seen_at))",
+    );
   });
 
   test("rejects an invalid owner without querying", async () => {
@@ -4613,6 +4616,45 @@ describe("deferMainCiRun", () => {
   });
 });
 
+describe("getPreviousMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns the newest row older than the given run time", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...MAIN_CI_ROW, state: "failed" }],
+    ]);
+    const row = await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(row?.state).toBe("failed");
+  });
+
+  test("returns null when no older row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getPreviousMainCiRun("acme", "widgets", at, sql)).toBeNull();
+  });
+
+  test("orders by the same key as the cleanup and the watermark", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(calls[0]?.text).toContain(
+      "ORDER BY COALESCE(run_created_at, first_seen_at) DESC, id DESC",
+    );
+  });
+
+  test("compares strictly before the given run time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE(run_created_at, first_seen_at) < ",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "..", at, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("deleteMainCiRunsBefore", () => {
   const cutoff = new Date("2026-09-12T00:00:00.000Z");
 
@@ -4626,7 +4668,7 @@ describe("deleteMainCiRunsBefore", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await deleteMainCiRunsBefore(cutoff, sql);
     expect(calls[0]?.text).toMatch(
-      /EXISTS[\s\S]*newer\.first_seen_at[\s\S]*r\.first_seen_at/,
+      /COALESCE\(newer\.run_created_at, newer\.first_seen_at\)[\s\S]*COALESCE\(r\.run_created_at, r\.first_seen_at\)/,
     );
   });
 

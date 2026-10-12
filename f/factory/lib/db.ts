@@ -3157,8 +3157,10 @@ export async function hasMainCiRuns(
 }
 
 /**
- * そのリポジトリの記録済みの行のうち、最も新しい`run_created_at`を返す。
- * どの状態の行も数える。実行の時刻を持つ行が無ければnull。
+ * そのリポジトリの記録済みの行のうち、最も新しい実行の作成時刻を返す。行が無ければnull。
+ * どの状態の行も数える。実行の時刻(`run_created_at`)が無い行は、最初に見た時刻で数える。
+ * この並びの鍵は、掃除が残す最新の行(`deleteMainCiRunsBefore`)と
+ * 1つ前の行(`getPreviousMainCiRun`)の鍵と同じで、掃除の後も値が変わらない。
  * これより古いコミットは、新しく見つけても通知の対象にしない(`planNewShas`)。
  */
 export async function latestMainCiRunCreatedAt(
@@ -3169,7 +3171,7 @@ export async function latestMainCiRunCreatedAt(
   assertGitHubName(owner);
   assertGitHubName(repo);
   const rows = await sql`
-    SELECT max(run_created_at) AS latest FROM factory.main_ci_runs
+    SELECT max(COALESCE(run_created_at, first_seen_at)) AS latest FROM factory.main_ci_runs
     WHERE owner = ${owner} AND repo = ${repo}
   `.fetch();
   const latest = rows[0]?.latest;
@@ -3279,7 +3281,10 @@ export async function deferMainCiRun(
 /**
  * 判定が済んだ(`pending`以外の)行のうち、`updated_at`が`olderThan`以前のものを削除し、行数を返す。
  * 判定を待っている行は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
- * 各リポジトリで`first_seen_at`が最も新しい1行(同時刻なら`id`が大きい行)は、判定済みでも削除しない。
+ * 各リポジトリで、実行の作成時刻が最も新しい1行は、判定済みでも削除しない。
+ * 鍵は`(COALESCE(run_created_at, first_seen_at), id)`の最大で、`latestMainCiRunCreatedAt`が
+ * 返す値の行と必ず同じになる。見つけた順ではなく実行の時刻で選ぶのは、新しいコミットを先に記録しても
+ * 高水位線が変わらないようにするため。
  * リポジトリの記録を空に戻すと、初回の観測と見なして既存のコミットを`baseline`で記録し直すため、
  * `hasMainCiRuns`と`latestMainCiRunCreatedAt`が保持期間の後も値を保てるようにする。
  */
@@ -3294,11 +3299,39 @@ export async function deleteMainCiRunsBefore(
       AND EXISTS (
         SELECT 1 FROM factory.main_ci_runs AS newer
         WHERE newer.owner = r.owner AND newer.repo = r.repo
-          AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
+          AND (COALESCE(newer.run_created_at, newer.first_seen_at), newer.id)
+            > (COALESCE(r.run_created_at, r.first_seen_at), r.id)
       )
     RETURNING r.id
   `.fetch();
   return rows.length;
+}
+
+/**
+ * `runCreatedAt`より前の実行の作成時刻を持つ行のうち、最も新しい1行を返す。無ければnull。
+ * 「1つ前のコミット」の状態を引くのに使う(`isPrevFailed`)。
+ * 並びの鍵は`latestMainCiRunCreatedAt`と同じで、時刻が同じ行は`id`の大きい方を返す。
+ * 判定を待っている行や`baseline`の行も返すので、呼び出し側が`state`を見て扱う。
+ */
+export async function getPreviousMainCiRun(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<MainCiRun | null> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id, owner, repo, head_sha, state, summary, prev_failed, first_seen_at,
+           run_created_at, next_check_at, created_at, updated_at
+    FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND COALESCE(run_created_at, first_seen_at) < ${runCreatedAt.toISOString()}::timestamptz
+    ORDER BY COALESCE(run_created_at, first_seen_at) DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toMainCiRun(row);
 }
 
 // ---------------------------------------------------------------------------

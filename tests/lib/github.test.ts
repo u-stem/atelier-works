@@ -48,6 +48,7 @@ import {
   setLabels,
   updatePullRequest,
   updatePullRequestBody,
+  WorkflowRunsIncompleteError,
   withMarker,
 } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
@@ -4463,6 +4464,17 @@ describe("listWorkflowRuns", () => {
       ).rejects.toThrow("may be incomplete");
     });
 
+    test("throws a WorkflowRunsIncompleteError when three pages are all full", async () => {
+      const fake = createFakeCommandRunner([
+        page(100),
+        page(100, 1000),
+        page(100, 2000),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+    });
+
     test("returns an empty list when the sha has no run", async () => {
       const fake = createFakeCommandRunner([page(0)]);
       expect(
@@ -4477,13 +4489,22 @@ describe("listWorkflowRuns", () => {
       ).rejects.toThrow("invalid commit sha");
     });
 
-    test("throws when a run belongs to another sha", async () => {
+    test("throws a WorkflowRunsIncompleteError when a run belongs to another sha", async () => {
       const fake = createFakeCommandRunner([
         ghApiOk({ workflow_runs: [rawRun({ head_sha: "b".repeat(40) })] }),
       ]);
       await expect(
         listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
-      ).rejects.toThrow("unexpected response shape");
+      ).rejects.toBeInstanceOf(WorkflowRunsIncompleteError);
+    });
+
+    test("does not treat a malformed run as a WorkflowRunsIncompleteError", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk({ workflow_runs: [rawRun({ status: 7 })] }),
+      ]);
+      await expect(
+        listWorkflowRuns(client(fake), "acme", "widgets", "main", SHA),
+      ).rejects.not.toBeInstanceOf(WorkflowRunsIncompleteError);
     });
   });
 

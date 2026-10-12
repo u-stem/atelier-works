@@ -156,11 +156,9 @@ export type DecideStateInput = {
   /**
    * そのコミットについて取り直した実行。
    * 空の配列は「照会して0件だった」ことを表す。`null`は「照会できなかった」ことを表し、
-   * 実行が無いとは判断しない(`no_ci`にしない)。
+   * 実行が無いとも、期限が来たとも判断しない。
    */
   readonly runs: readonly WorkflowRun[] | null;
-  /** 行に記録している最古の実行の作成時刻。`runs`を読めなかったときの期限の起点に使う。 */
-  readonly runCreatedAt: Date | null;
   /** そのコミットを最初に見た時刻(`first_seen_at`)。 */
   readonly firstSeenAt: Date;
   readonly now: Date;
@@ -168,12 +166,12 @@ export type DecideStateInput = {
 
 /**
  * 保留中のコミットの、今の状態を決める。
- * 実行から確定できるなら、期限より先にその結果を返す。期限で落とす前に、
- * 取り直した最新の実行で最後の判定をするため。
- * 確定できないとき:
- * - 照会して実行が0件のまま、最初に見てから`NO_CI_AFTER_MS`がたてば`no_ci`。
- * - 最古の実行の作成時刻から`PENDING_EXPIRES_AFTER_MS`がたてば`expired`。
- *   実行を読めていなければ、記録した最古の実行の作成時刻、それも無ければ最初に見た時刻から数える。
+ * `runs`が`null`(照会できなかった)なら、常に`pending`を返す。
+ * 照会できなかったときに`expired`や`no_ci`で落とすと、読めていない実行の結果を捨てるため。
+ * 照会できたときは、確定できるなら期限より先にその結果を返す。
+ * 期限で落とす前に、取り直した最新の実行で最後の判定をするため。確定できないとき:
+ * - 実行が0件のまま、最初に見てから`NO_CI_AFTER_MS`がたてば`no_ci`。
+ * - 未完了のまま、最古の実行の作成時刻から`PENDING_EXPIRES_AFTER_MS`がたてば`expired`。
  *   実行がpushの直後に作られるので、見つけるのが遅れたコミットも、実行の開始から数えて期限を決められる。
  * - それ以外は`pending`。
  */
@@ -181,19 +179,16 @@ export function decideState(
   input: DecideStateInput,
 ): "pending" | MainCiSettledState {
   const { runs, now } = input;
-  if (runs !== null) {
-    const verdict = settle(runs, now);
-    if (verdict !== "pending") return verdict;
+  if (runs === null) return "pending";
+  const verdict = settle(runs, now);
+  if (verdict !== "pending") return verdict;
+  if (runs.length === 0) {
+    return now.getTime() - input.firstSeenAt.getTime() >= NO_CI_AFTER_MS
+      ? "no_ci"
+      : "pending";
   }
-  const seenMs = now.getTime() - input.firstSeenAt.getTime();
-  if (runs !== null && runs.length === 0 && seenMs >= NO_CI_AFTER_MS) {
-    return "no_ci";
-  }
-  const startedAt =
-    runs !== null && runs.length > 0
-      ? new Date(Math.min(...runs.map((run) => run.createdAt.getTime())))
-      : (input.runCreatedAt ?? input.firstSeenAt);
-  return now.getTime() - startedAt.getTime() >= PENDING_EXPIRES_AFTER_MS
+  const oldest = Math.min(...runs.map((run) => run.createdAt.getTime()));
+  return now.getTime() - oldest >= PENDING_EXPIRES_AFTER_MS
     ? "expired"
     : "pending";
 }
@@ -264,6 +259,10 @@ export type PlannedSha = {
  * - 記録済みの最新の実行(`latestRunCreatedAt`)より古い。掃除で消えた行のコミットが
  *   一覧に残っていて、古い失敗を新しく通知するのを防ぐため。
  * それ以外の新しいコミットは`pending`で記録する。
+ *
+ * 返り値は、実行の作成時刻が古い順(同時刻は`headSha`順)に並べる。
+ * 呼び出し側は、この順に記録する。途中で記録に失敗しても、記録済みの最新の実行より
+ * 古い未記録のコミットが、次回に黙って`baseline`になることを避けるため。
  */
 export function planNewShas(
   candidates: readonly CandidateSha[],
@@ -273,6 +272,11 @@ export function planNewShas(
 ): PlannedSha[] {
   return candidates
     .filter((candidate) => !known.has(candidate.headSha))
+    .sort(
+      (a, b) =>
+        a.runCreatedAt.getTime() - b.runCreatedAt.getTime() ||
+        (a.headSha < b.headSha ? -1 : a.headSha > b.headSha ? 1 : 0),
+    )
     .map((candidate) => ({
       ...candidate,
       state:
