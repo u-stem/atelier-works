@@ -20,6 +20,7 @@ import {
   getPreviousMainCiRun,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
+  hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
   insertCleanupRun,
@@ -1933,6 +1934,36 @@ await recordMainCiRun(
 execPsql(
   target,
   "UPDATE factory.main_ci_runs SET state = 'failed' WHERE repo = 'onlyfail'",
+);
+check(
+  "main_ci_runs: a newer row of any state is found",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-11T00:00:00Z"),
+    newerF.id,
+    sql,
+  )) === true,
+);
+check(
+  "main_ci_runs: the newest row has no newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT2.id,
+    sql,
+  )) === false,
+);
+check(
+  "main_ci_runs: at the same time, a larger id is a newer row",
+  (await hasNewerMainCiRun(
+    NEWER_REPO.owner,
+    NEWER_REPO.repo,
+    at("2026-10-12T00:00:00Z"),
+    newerT1.id,
+    sql,
+  )) === true,
 );
 check(
   "main_ci_runs: a failed row is not a newer passed row",

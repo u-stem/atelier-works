@@ -27,6 +27,7 @@ import {
   getWorkItem,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
+  hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
   hasNonTerminalPrWorkItem,
   hasPassedMainCiRunAfter,
@@ -4707,6 +4708,40 @@ describe("hasPassedMainCiRunAfter", () => {
     await hasPassedMainCiRunAfter("acme", "..", at, 5, sql).catch(
       () => undefined,
     );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("hasNewerMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns true when a newer row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await hasNewerMainCiRun("acme", "widgets", at, 5, sql)).toBe(true);
+  });
+
+  test("returns false when no newer row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasNewerMainCiRun("acme", "widgets", at, 5, sql)).toBe(false);
+  });
+
+  test("does not filter by state", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).not.toContain("state");
+  });
+
+  test("compares the (time, id) pair strictly", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain(
+      "(COALESCE(run_created_at, first_seen_at), id) >",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "..", at, 5, sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 });

@@ -15,6 +15,7 @@ import {
   addNoticeUnlessUnresolved,
   getPreviousMainCiRun,
   hasMainCiRuns,
+  hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
   latestMainCiRunCreatedAt,
@@ -105,6 +106,8 @@ export async function main(): Promise<MainCiWatchResult> {
       getPreviousMainCiRun(owner, repo, runCreatedAt),
     hasNewerPassed: (owner, repo, runCreatedAt, id) =>
       hasPassedMainCiRunAfter(owner, repo, runCreatedAt, id),
+    hasNewerRow: (owner, repo, runCreatedAt, id) =>
+      hasNewerMainCiRun(owner, repo, runCreatedAt, id),
     hasNewerUnsettledOrFailedRow: (owner, repo, runCreatedAt, id) =>
       hasNewerUnsettledOrFailedMainCiRun(owner, repo, runCreatedAt, id),
     transition: (id, to) => transitionMainCiRun(id, to),

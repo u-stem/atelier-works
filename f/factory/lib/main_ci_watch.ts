@@ -54,8 +54,9 @@ export const PENDING_BATCH_LIMIT = 200;
 export const UNREADABLE_EXPIRES_AFTER_MS = 24 * 60 * 60_000;
 
 /**
- * 最初に見てからこの時間がたった行の失敗は、通知しない。
+ * 最初に見てからこの時間がたち、かつより新しい行がある行の失敗は、通知しない。
  * 権限が長く戻らなかった後に判定が再開したときに、止まっていた間の古い失敗を一度に通知しないためである。
+ * そのリポジトリで最新の行の失敗は、この時間がたっていても通知する。
  * 失敗は`failed`として記録し、要約も残す。
  */
 export const STALE_FAILURE_AFTER_MS = 24 * 60 * 60_000;
@@ -63,14 +64,17 @@ export const STALE_FAILURE_AFTER_MS = 24 * 60 * 60_000;
 /**
  * 1回の実行で、新しい読み取りと、失敗の確定(通知の登録とDiscord)を始めてよい経過時間。
  * 超えたら、残りは次の回に回す。通ったコミットの確定など、軽い適用は予算の対象にしない。
- * scriptのtimeout(600秒)に収める見積もりは次のとおりである。
- * - 1回の要求の上限は、ghの実行60秒、5xxの再送(待ち2秒と実行60秒)、rate limitの待ち120秒を足したもの。
+ * ただし、失敗の確定は、1回の実行で最初の1件を予算を見ずに進める。
+ * 予算切れが続いても、失敗の通知が飢えないためである。
+ *
+ * scriptのtimeout(600秒)との関係は次のとおりである。
+ * - 1回の要求の上限は、ghの実行60秒、5xxの再送(待ち2秒と実行60秒)、rate limitの待ち120秒を足した約240秒。
  *   rate limitの待ちの後の再試行が再び拒まれたら、読み取りをやめる。
- * - 予算の直前に始めた読み取りは、1ページなら終わりまで約240秒かかりうる。
- *   実行が100件を超えるコミットは最大3ページで、その3倍になる。
- * - 適用の段では、予算を超えると失敗の確定を始めない。予算の直前に始めたDiscordは、待ちが最大30秒である。
- * 実行が100件以下のコミットだけなら、180秒に240秒を足した約420秒でtimeoutに収まる。
- * 3ページ読むコミットが続けてrate limitを待つ場合は、timeoutを超えうる。
+ * - 予算の直前に始めた発見は、既定ブランチの取得と実行一覧の2要求なので、最悪で約480秒かかる。
+ * - 予算の直前に始めた判定の読み取りは、1ページなら約240秒、最大3ページで3倍になる。
+ * - 適用の段で予算を見ない最初の失敗には、Discordの待ち(最大30秒)がかかる。
+ * 通常はrate limitの待ちも再送も起きず、数秒から数十秒で終わるので、timeoutに収まる。
+ * rate limitの待ちが重なると、timeoutを超えうる。
  * そのときはjobが打ち切られるが、行ごとの更新は冪等なので、確定しなかった行は次の回に残る。
  */
 export const RUN_BUDGET_MS = 180_000;
@@ -187,6 +191,16 @@ export type MainCiWatchDeps = {
     id: number,
   ) => Promise<boolean>;
   /**
+   * 並びの鍵が`(runCreatedAt, id)`より後のコミットを、状態を問わず記録済みか。
+   * 古い失敗を通知するかの判断に使う。
+   */
+  readonly hasNewerRow: (
+    owner: string,
+    repo: string,
+    runCreatedAt: Date,
+    id: number,
+  ) => Promise<boolean>;
+  /**
    * 並びの鍵が`(runCreatedAt, id)`より後のコミットで、判定待ちか失敗のものを記録済みか。
    * 通ったコミットが失敗の通知を解決してよいかの判断に使う。
    */
@@ -233,6 +247,8 @@ type WatchState = {
   readonly branches: Map<string, string>;
   /** rate limitに当たったら、今回はそれ以上GitHubを読まない。 */
   rateLimited: boolean;
+  /** この回で、失敗の確定を始めた数。最初の1件は、予算を見ずに確定する。 */
+  failedStarted: number;
 };
 
 function repoKey(owner: string, repo: string): string {
@@ -274,6 +290,7 @@ export async function runMainCiWatch(
     readable: new Set(),
     branches: new Map(),
     rateLimited: false,
+    failedStarted: 0,
   };
   const context: Context = { deps, now, counters, state };
   const targetKeys = new Set(
@@ -579,7 +596,10 @@ async function applyJudgement(
   }
   if (judgement.kind === "failed") {
     // 通知の登録とDiscordは、予算の後に始めない。状態を変えずに、次の回に回す。
-    if (overBudget(context)) {
+    // ただし、1回の実行で最初の1件は予算を見ずに確定する。予算切れが続いても、失敗の通知が飢えないためである。
+    const first = context.state.failedStarted === 0;
+    context.state.failedStarted += 1;
+    if (!first && overBudget(context)) {
       deps.log.warn("main ci failure left to the next run by the time budget", {
         repo: `${judgement.row.owner}/${judgement.row.repo}`,
         sha: judgement.row.head_sha,
@@ -626,11 +646,13 @@ async function settleFailed(
   const summary = buildFailureSummary(runs, prevFailed);
   const runUrl = pickRunUrl(row, runs);
   // 次の2つの失敗は、知らせても人の行動につながらないので、通知を出さずに確定する。
-  // - 最初に見てから長くたった失敗。権限が戻らなかった間に溜まった古い失敗である。
+  // - 最初に見てから長くたち、より新しい行がある失敗。権限が戻らなかった間に溜まった古い失敗である。
+  //   そのリポジトリで最新の行は、長くたっていても通知する。今も壊れているmainの先頭の失敗を捨てないためである。
   // - より新しいコミットが既に通っている失敗。直った後に分かったことである。
   const stale =
     context.now.getTime() - row.first_seen_at.getTime() >=
-    STALE_FAILURE_AFTER_MS;
+      STALE_FAILURE_AFTER_MS &&
+    (await deps.hasNewerRow(row.owner, row.repo, own, row.id));
   const silent =
     stale || (await deps.hasNewerPassed(row.owner, row.repo, own, row.id));
   if (!silent) {

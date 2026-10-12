@@ -3338,6 +3338,29 @@ export async function hasPassedMainCiRunAfter(
 }
 
 /**
+ * 並びの鍵が`(runCreatedAt, id)`より後の行が、そのリポジトリにあるか。状態は問わない。
+ * 古い失敗を通知するかの判断に使う。そのリポジトリで最新の行は、後の行が無いので`false`になる。
+ */
+export async function hasNewerMainCiRun(
+  owner: string,
+  repo: string,
+  runCreatedAt: Date,
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  const rows = await sql`
+    SELECT id FROM factory.main_ci_runs
+    WHERE owner = ${owner} AND repo = ${repo}
+      AND (COALESCE(run_created_at, first_seen_at), id) >
+        (${runCreatedAt.toISOString()}::timestamptz, ${id}::bigint)
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * 並びの鍵が`(runCreatedAt, id)`より後で、判定待ち(`pending`)か失敗(`failed`)の行が、そのリポジトリにあるか。
  * `passed`、`expired`、`no_ci`、`baseline`の新しい行は数えない。
  * 通ったコミットが、失敗の通知を解決してよいかの判断に使う。
