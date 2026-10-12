@@ -207,6 +207,57 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("keeps the numeric id of an owner", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: 4242 }],
+    };
+    expect(parseFactoryConfig(raw).owners[0]?.id).toBe(4242);
+  });
+
+  test("leaves the id of an owner undefined when omitted", () => {
+    expect(parseFactoryConfig(LEGACY_RAW_CONFIG).owners[0]?.id).toBeUndefined();
+  });
+
+  test("treats a null owner id as no id", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: null }],
+    };
+    expect(parseFactoryConfig(raw).owners).toEqual([
+      { name: "octo-owner", kind: "user" },
+    ]);
+  });
+
+  test("throws when two owners share a name that differs only in case", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [
+        { name: "octo-owner", kind: "user", id: 4242 },
+        { name: "Octo-Owner", kind: "user" },
+      ],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("treats an undefined owner id as no id", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id: undefined }],
+    };
+    expect(parseFactoryConfig(raw).owners).toEqual([
+      { name: "octo-owner", kind: "user" },
+    ]);
+  });
+
+  test.each([0, -1, 1.5, "42"])("throws when an owner id is %p", (id) => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      owners: [{ name: "octo-owner", kind: "user", id }],
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("throws when max_turns is present but not a number", () => {
     const raw = { ...LEGACY_RAW_CONFIG, max_turns: "forty" };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);

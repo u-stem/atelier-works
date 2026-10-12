@@ -11,6 +11,7 @@
 #   owners:
 #     - name: <GitHubのユーザー名か組織名>
 #       kind: user   # または"org"
+#       id: <GitHubの数値ID>   # 任意。`gh api users/<名前> --jq .id`で調べる
 value:
   owners: []
   trigger_label: factory

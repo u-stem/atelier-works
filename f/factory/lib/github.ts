@@ -707,6 +707,24 @@ export async function getViewer(client: GhClient): Promise<Viewer> {
 }
 
 /**
+ * アカウント(ユーザーか組織)の現在の数値IDを取得する。
+ * 組織でも`GET /users/{name}`で数値のIDが取れるので、`kind`によらず同じ経路を使う。
+ */
+export async function getAccountId(
+  client: GhClient,
+  name: string,
+): Promise<number> {
+  const context = "GET /users/{name}";
+  const response = await callGhApi(client, `users/${encodeURIComponent(name)}`);
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isViewerPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.id;
+}
+
+/**
  * Factoryが作るコミットのauthorとcommitterの名義を、viewer
  * (PATが指すGitHubアカウント)から作る。
  * 個人のメールアドレスをコミットに書かないよう、GitHubのnoreplyの形
