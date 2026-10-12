@@ -69,6 +69,27 @@ function parseNumericLike(value: unknown, field: string): number {
   throw new Error(`summary_support: row field "${field}" is not numeric`);
 }
 
+/** 日時を`Date`にして返す。`Date`でも日時の文字列でもなければ例外を投げる。 */
+function parseDate(value: unknown, field: string): Date {
+  if (value instanceof Date) {
+    return value;
+  }
+  if (isString(value)) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  throw new Error(
+    `summary_support: row field "${field}" is not a valid timestamp`,
+  );
+}
+
+/** `parseDate`と同じだが、NULLは`null`で返す。 */
+function parseNullableDate(value: unknown, field: string): Date | null {
+  return value === null || value === undefined ? null : parseDate(value, field);
+}
+
 /** `parseNumericLike`と同じだが、NULL(集計に使える値が無かったこと)は`null`で返す。 */
 function parseNullableNumeric(value: unknown, field: string): number | null {
   return value === null || value === undefined
@@ -126,8 +147,12 @@ export async function getAgentRunSummary(
  *   差が負なら累積が戻った(コンテナの再起動)ので、現在値を増分とする。
  *   範囲の最初の行の差は、範囲の始端の10分前まで読んだ直近の行との差で求める。
  *   差を1つも求められないときの合計はNULLで、「OOMなし」とは区別される。
- * - 空白は、隣り合う行の`sampled_at`の間隔が`DAILY_GAP_THRESHOLD_SECONDS`を超えた回数である。
- *   停止(ホストのスリープ、worker作り直し、Windmillの再起動)は長い1回の空白になる。
+ * - 空白は、`sampled_at`の間隔が`DAILY_GAP_THRESHOLD_SECONDS`を超えた回数である。
+ *   隣り合う行の間隔に加えて、日の両端も数える。
+ *   範囲の最初の行は、始端の10分前までの直近の行との間隔で、その行が無ければ始端との間隔で数える。
+ *   最後の行は、終端との間隔で数える。夜間にまたぐ停止は、両端の空白として前日と当日に分かれて出る。
+ *   長い1回の空白は、停止でも長いジョブによる枠の塞がりでも出るので、ここでは区別しない。
+ *   最長の空白は、開始と終了の時刻も返す。
  * - 割合は行ごとに求めてから最大を取る。上限が読めない行は、メモリの割合に使わない。
  * - 集計は`(sampled_at)`の索引で範囲を絞る。
  */
@@ -157,8 +182,24 @@ export async function getWorkerLoadSummary(
     timed AS (
       SELECT
         *,
-        extract(epoch FROM sampled_at - lag(sampled_at) OVER (ORDER BY sampled_at, id)) AS gap_seconds
+        coalesce(
+          lag(sampled_at) OVER (ORDER BY sampled_at, id),
+          ${range.start.toISOString()}::timestamptz
+        ) AS gap_from
       FROM base
+    ),
+    gaps AS (
+      SELECT gap_from, sampled_at AS gap_to FROM timed WHERE in_range
+      UNION ALL
+      SELECT max(sampled_at), ${range.end.toISOString()}::timestamptz
+      FROM base
+      WHERE in_range
+      HAVING count(*) > 0
+    ),
+    long_gaps AS (
+      SELECT gap_from, gap_to, extract(epoch FROM gap_to - gap_from) AS gap_seconds
+      FROM gaps
+      WHERE extract(epoch FROM gap_to - gap_from) > ${DAILY_GAP_THRESHOLD_SECONDS}
     ),
     oom AS (
       SELECT sampled_at, in_range, mem_oom AS current_value,
@@ -177,8 +218,10 @@ export async function getWorkerLoadSummary(
       max(lag_seconds) AS lag_max_seconds,
       count(*) FILTER (WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}) AS lag_over_count,
       coalesce(sum(lag_seconds) FILTER (WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}), 0) AS lag_over_total_seconds,
-      count(*) FILTER (WHERE gap_seconds > ${DAILY_GAP_THRESHOLD_SECONDS}) AS gap_count,
-      max(gap_seconds) FILTER (WHERE gap_seconds > ${DAILY_GAP_THRESHOLD_SECONDS}) AS gap_longest_seconds,
+      (SELECT count(*) FROM long_gaps) AS gap_count,
+      (SELECT max(gap_seconds) FROM long_gaps) AS gap_longest_seconds,
+      (SELECT gap_from FROM long_gaps ORDER BY gap_seconds DESC, gap_from LIMIT 1) AS gap_longest_from,
+      (SELECT gap_to FROM long_gaps ORDER BY gap_seconds DESC, gap_from LIMIT 1) AS gap_longest_to,
       max(running_jobs) AS running_jobs_max,
       max(slots) AS slots_max,
       max(mem_anon_bytes) AS mem_anon_max_bytes,
@@ -218,6 +261,11 @@ export async function getWorkerLoadSummary(
       row.gap_longest_seconds,
       "gap_longest_seconds",
     ),
+    gap_longest_from: parseNullableDate(
+      row.gap_longest_from,
+      "gap_longest_from",
+    ),
+    gap_longest_to: parseNullableDate(row.gap_longest_to, "gap_longest_to"),
     running_jobs_max: parseNullableNumeric(
       row.running_jobs_max,
       "running_jobs_max",

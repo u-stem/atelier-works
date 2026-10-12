@@ -743,6 +743,8 @@ function loadSummary(
     lag_over_total_seconds: 0,
     gap_count: 0,
     gap_longest_seconds: null,
+    gap_longest_from: null,
+    gap_longest_to: null,
     running_jobs_max: 2,
     slots_max: 3,
     mem_anon_max_bytes: 80 * MIB,
@@ -765,6 +767,12 @@ describe("summarizeWorkerLoad", () => {
   test("shows the share of missing samples", () => {
     expect(summarizeWorkerLoad(loadSummary({ sample_count: 540 }))).toContain(
       "記録540/720件(欠け25%)",
+    );
+  });
+
+  test("shows the share of missing samples with one decimal when whole percent would round to zero", () => {
+    expect(summarizeWorkerLoad(loadSummary({ sample_count: 717 }))).toContain(
+      "記録717/720件(欠け0.4%)",
     );
   });
 
@@ -796,40 +804,68 @@ describe("summarizeWorkerLoad", () => {
     expect(summarizeWorkerLoad(loadSummary())).toContain("空白: 4分超なし");
   });
 
-  test("shows the number of long gaps and the longest one in minutes", () => {
+  test("shows the number of long gaps, the longest one in minutes and when it was", () => {
     expect(
       summarizeWorkerLoad(
-        loadSummary({ gap_count: 2, gap_longest_seconds: 5400 }),
+        loadSummary({
+          gap_count: 2,
+          gap_longest_seconds: 5400,
+          gap_longest_from: new Date("2026-10-09T17:10:00.000Z"),
+          gap_longest_to: new Date("2026-10-09T18:40:00.000Z"),
+        }),
       ),
-    ).toContain("空白: 4分超2回、最長90分");
+    ).toContain("空白: 4分超2回、最長90分(02:10〜03:40)");
   });
 
-  test("rounds the longest gap to whole minutes", () => {
+  test("shows the end of the day as 00:00 when the longest gap runs to the end", () => {
     expect(
       summarizeWorkerLoad(
-        loadSummary({ gap_count: 1, gap_longest_seconds: 301 }),
+        loadSummary({
+          gap_count: 1,
+          gap_longest_seconds: 3600,
+          gap_longest_from: new Date("2026-10-10T14:00:00.000Z"),
+          gap_longest_to: new Date("2026-10-10T15:00:00.000Z"),
+        }),
       ),
-    ).toContain("最長5分");
+    ).toContain("最長60分(23:00〜00:00)");
   });
 
-  test("tells a stop from a blocked slot when there is a gap", () => {
+  test("omits the time of the longest gap when it is unknown", () => {
     expect(
       summarizeWorkerLoad(
         loadSummary({ gap_count: 1, gap_longest_seconds: 300 }),
       ),
-    ).toContain("長い1回の空白は停止、短い空白と遅れが多ければ枠の塞がり");
+    ).toContain("空白: 4分超1回、最長5分\n");
   });
 
-  test("tells a stop from a blocked slot when there are laggy samples", () => {
+  test("rounds the longest gap up to whole minutes", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ gap_count: 1, gap_longest_seconds: 241 }),
+      ),
+    ).toContain("最長5分");
+  });
+
+  test("does not assert a stop when there is a gap", () => {
+    expect(
+      summarizeWorkerLoad(
+        loadSummary({ gap_count: 1, gap_longest_seconds: 300 }),
+      ),
+    ).toContain(
+      "読み方: 長い空白は、停止か、長いジョブによる枠の塞がり。その時刻にジョブが動いていたかで見分ける",
+    );
+  });
+
+  test("omits the reading hint when there are laggy samples but no gap", () => {
     expect(
       summarizeWorkerLoad(
         loadSummary({ lag_over_count: 1, lag_over_total_seconds: 40 }),
       ),
-    ).toContain("長い1回の空白は停止、短い空白と遅れが多ければ枠の塞がり");
+    ).not.toContain("読み方");
   });
 
-  test("omits the reading hint when there is neither a gap nor a lag", () => {
-    expect(summarizeWorkerLoad(loadSummary())).not.toContain("枠の塞がり");
+  test("omits the reading hint when there is no gap", () => {
+    expect(summarizeWorkerLoad(loadSummary())).not.toContain("読み方");
   });
 
   test("shows the most other jobs seen against the slots left for them", () => {
@@ -948,7 +984,7 @@ describe("describeWorkerLoad", () => {
 
   test("points to the job log when the summary could not be read", () => {
     expect(describeWorkerLoad({ kind: "read_failed" })).toBe(
-      "集計を読めませんでした(notify_daily_summaryのジョブログを確認)",
+      "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)",
     );
   });
 });

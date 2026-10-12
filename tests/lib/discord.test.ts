@@ -415,7 +415,8 @@ describe("buildEmbed", () => {
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
-      value: "集計を読めませんでした(notify_daily_summaryのジョブログを確認)",
+      value:
+        "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)",
     });
   });
 
@@ -440,6 +441,8 @@ describe("buildEmbed", () => {
           lag_over_total_seconds: 0,
           gap_count: 0,
           gap_longest_seconds: null,
+          gap_longest_from: null,
+          gap_longest_to: null,
           running_jobs_max: 1,
           slots_max: 3,
           mem_anon_max_bytes: 100 * 1024 * 1024,

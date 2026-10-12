@@ -14,6 +14,8 @@ const SUMMARY: WorkerLoadSummary = {
   lag_over_total_seconds: 0,
   gap_count: 0,
   gap_longest_seconds: null,
+  gap_longest_from: null,
+  gap_longest_to: null,
   running_jobs_max: 1,
   slots_max: 3,
   mem_anon_max_bytes: 80_000_000,

@@ -2421,6 +2421,7 @@ check(
 
 // worker_samples: 日次のまとめの集計は、範囲の行だけを数え、値の読めた行の間の差でOOMの増分を求める。
 // 範囲は2026-10-10(JST)。範囲の外の行(10分前の行と終端ちょうどの行)は数えず、前の行は差と空白の起点にだけ使う。
+// 空白は、隣り合う行の間隔に加えて、日の両端(始端から最初の行、最後の行から終端)も数える。
 const MIB = 1024 * 1024;
 const loadRange = {
   start: new Date("2026-10-09T15:00:00.000Z"),
@@ -2501,14 +2502,25 @@ check(
   loadSummary?.lag_over_total_seconds === 75,
   loadSummary,
 );
+// 空白は、始端の前の行から最初の行まで(300秒)と、最後の行(15:06)から終端まで(86040秒)の2回である。
 check(
-  "worker_samples: the daily summary counts the gap that ends at the first row of the range",
-  loadSummary?.gap_count === 1,
+  "worker_samples: the daily summary counts the gap that ends at the first row and the gap to the end",
+  loadSummary?.gap_count === 2,
   loadSummary,
 );
 check(
   "worker_samples: the daily summary takes the longest gap in seconds",
-  loadSummary?.gap_longest_seconds === 300,
+  loadSummary?.gap_longest_seconds === 86040,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the start of the longest gap",
+  loadSummary?.gap_longest_from?.toISOString() === "2026-10-09T15:06:00.000Z",
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the end of the longest gap",
+  loadSummary?.gap_longest_to?.toISOString() === "2026-10-10T15:00:00.000Z",
   loadSummary,
 );
 check(
@@ -2610,15 +2622,137 @@ check(
   singleRowSummary?.mem_oom_kill_increase === null,
   singleRowSummary,
 );
+// 行が始端ちょうどの1行だけの日は、始端側の空白は0秒で、最後の行から終端までの1日分だけを数える。
 check(
-  "worker_samples: a day with one row and no row before it has no gap",
-  singleRowSummary?.gap_count === 0,
+  "worker_samples: a day with one row at the start counts the gap to the end",
+  singleRowSummary?.gap_count === 1,
   singleRowSummary,
 );
 check(
-  "worker_samples: a day with one row and no row before it has no longest gap",
-  singleRowSummary?.gap_longest_seconds === null,
+  "worker_samples: a day with one row at the start takes the gap to the end as the longest",
+  singleRowSummary?.gap_longest_seconds === 86400,
   singleRowSummary,
+);
+
+// 通常の2分おきの日は、両端の空白(30秒と90秒)を数えない。
+// 始端の11分前にも行を置き、範囲の10分前までの行だけを前の行に使うことを確かめる。
+// 11分前の行を前の行に使うと、最初の行との間の11分30秒が空白に数えられ、最初の行のOOMの増分も求まってしまう。
+// 2026-10-21(JST)が通常の日である。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at, mem_oom)
+   VALUES (3, '2026-10-20T14:49:00Z', 50);
+   INSERT INTO factory.worker_samples (slots, sampled_at, mem_oom)
+   SELECT 3, timestamptz '2026-10-20T15:00:30Z' + n * interval '2 minutes',
+     CASE WHEN n = 0 THEN 2 END
+   FROM generate_series(0, 719) AS n`,
+);
+const normalDaySummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-20T15:00:00.000Z"),
+    end: new Date("2026-10-21T15:00:00.000Z"),
+    label: "2026-10-21",
+  },
+  sql,
+);
+check(
+  "worker_samples: a normal day counts no gap at either end",
+  normalDaySummary?.gap_count === 0,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a normal day has no longest gap",
+  normalDaySummary?.gap_longest_seconds === null,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a normal day has no time of the longest gap",
+  normalDaySummary?.gap_longest_from === null &&
+    normalDaySummary?.gap_longest_to === null,
+  normalDaySummary,
+);
+check(
+  "worker_samples: a row 11 minutes before the start is not the previous value of the first row",
+  normalDaySummary?.mem_oom_increase === null,
+  normalDaySummary,
+);
+
+// 夜間の停止の前半。2026-10-22(JST)は、0:00:30から2分おきに記録され、22:58:30の行を最後に止まる。
+// 最後の行から終端までの空白(1時間1分30秒)が、日の終わり側の空白として1回数えられる。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at)
+   SELECT 3, timestamptz '2026-10-21T15:00:30Z' + n * interval '2 minutes'
+   FROM generate_series(0, 689) AS n`,
+);
+const stopAtEndSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-21T15:00:00.000Z"),
+    end: new Date("2026-10-22T15:00:00.000Z"),
+    label: "2026-10-22",
+  },
+  sql,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day counts one gap",
+  stopAtEndSummary?.gap_count === 1,
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day takes its length",
+  stopAtEndSummary?.gap_longest_seconds === 3690,
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day starts at the last row",
+  stopAtEndSummary?.gap_longest_from?.toISOString() ===
+    "2026-10-22T13:58:30.000Z",
+  stopAtEndSummary,
+);
+check(
+  "worker_samples: a stop that runs to the end of the day ends at the end of the range",
+  stopAtEndSummary?.gap_longest_to?.toISOString() ===
+    "2026-10-22T15:00:00.000Z",
+  stopAtEndSummary,
+);
+
+// 夜間の停止の後半。2026-10-23(JST)は、前日の最後の行が1時間以上前なので、始端からの空白になる。
+// 8:00:30の行から2分おきに記録され、始端から最初の行までの空白(8時間30秒)が、日の始まり側の空白として1回数えられる。
+execPsql(
+  target,
+  `INSERT INTO factory.worker_samples (slots, sampled_at)
+   SELECT 3, timestamptz '2026-10-22T23:00:30Z' + n * interval '2 minutes'
+   FROM generate_series(0, 479) AS n`,
+);
+const stopAtStartSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-22T15:00:00.000Z"),
+    end: new Date("2026-10-23T15:00:00.000Z"),
+    label: "2026-10-23",
+  },
+  sql,
+);
+check(
+  "worker_samples: a stop from the start of the day counts one gap",
+  stopAtStartSummary?.gap_count === 1,
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day takes its length",
+  stopAtStartSummary?.gap_longest_seconds === 28830,
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day starts at the start of the range",
+  stopAtStartSummary?.gap_longest_from?.toISOString() ===
+    "2026-10-22T15:00:00.000Z",
+  stopAtStartSummary,
+);
+check(
+  "worker_samples: a stop from the start of the day ends at the first row",
+  stopAtStartSummary?.gap_longest_to?.toISOString() ===
+    "2026-10-22T23:00:30.000Z",
+  stopAtStartSummary,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

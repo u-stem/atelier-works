@@ -539,8 +539,9 @@ export const WORKER_SAMPLES_PER_DAY = (24 * 60) / SAMPLE_INTERVAL_MINUTES;
 export const DAILY_LAG_THRESHOLD_SECONDS = 30;
 
 /**
- * 日次のまとめで「空白」に数える、隣り合う行の間隔の下限(秒)。
- * 期待する間隔(2分)の2倍を超えたとき、その間の予定が少なくとも1回は実行されていない。
+ * 日次のまとめで「空白」に数える、行の間隔の下限(秒)。
+ * 期待する間隔(2分)の2倍を超えたとき、その間の記録が少なくとも1回は取れていない。
+ * 正常な日の両端の間隔(始端から最初の行、最後の行から終端)は、これを超えない。
  */
 export const DAILY_GAP_THRESHOLD_SECONDS = SAMPLE_INTERVAL_MINUTES * 2 * 60;
 
@@ -560,12 +561,18 @@ export type WorkerLoadSummary = {
   /** `lag_seconds`が`DAILY_LAG_THRESHOLD_SECONDS`以上の行の`lag_seconds`の合計(秒)。 */
   readonly lag_over_total_seconds: number;
   /**
-   * 隣り合う行の間隔が`DAILY_GAP_THRESHOLD_SECONDS`を超えた回数。
-   * 範囲の最初の行は、始端の10分前までの直近の行との間隔で数える。
+   * `sampled_at`の間隔が`DAILY_GAP_THRESHOLD_SECONDS`を超えた回数。
+   * 隣り合う行の間隔に加えて、日の両端も数える。
+   * 範囲の最初の行は、始端の10分前までの直近の行との間隔で、そこに行が無ければ始端との間隔で数える。
+   * 最後の行は、終端との間隔で数える。
    */
   readonly gap_count: number;
   /** 数えた空白のうち最長の間隔(秒)。空白が無ければ`null`。 */
   readonly gap_longest_seconds: number | null;
+  /** 最長の空白の開始の時刻。空白が無ければ`null`。 */
+  readonly gap_longest_from: Date | null;
+  /** 最長の空白の終了の時刻。空白が無ければ`null`。 */
+  readonly gap_longest_to: Date | null;
   /** `running_jobs`の最大。記録のジョブ自身は含まない。 */
   readonly running_jobs_max: number | null;
   /** `slots`の最大。記録のジョブ自身が1つ使うので、他のジョブが使える上限は`slots - 1`である。 */
@@ -603,6 +610,23 @@ function percent(ratio: number): string {
   return `${String(Math.round(ratio * 100))}%`;
 }
 
+/** 欠けた記録があるのに、整数のパーセントでは0%に丸まるときだけ、小数1桁で出す。 */
+function missingPercent(ratio: number): string {
+  return ratio > 0 && Math.round(ratio * 100) === 0
+    ? `${(ratio * 100).toFixed(1)}%`
+    : percent(ratio);
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** `date`のJSTの時刻を`HH:MM`で返す。 */
+function jstClock(date: Date): string {
+  const shifted = new Date(date.getTime() + JST_OFFSET_MS);
+  const hours = String(shifted.getUTCHours()).padStart(2, "0");
+  const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
 function mib(bytes: number): string {
   return `${String(Math.round(bytes / BYTES_PER_MIB))}MiB`;
 }
@@ -612,7 +636,7 @@ function missingLine(summary: WorkerLoadSummary): string {
     0,
     1 - summary.sample_count / summary.expected_count,
   );
-  return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${percent(missing)})`;
+  return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${missingPercent(missing)})`;
 }
 
 function lagLine(summary: WorkerLoadSummary): string {
@@ -623,15 +647,26 @@ function lagLine(summary: WorkerLoadSummary): string {
 
 function gapLine(summary: WorkerLoadSummary): string {
   const threshold = String(DAILY_GAP_THRESHOLD_SECONDS / 60);
-  return summary.gap_count === 0 || summary.gap_longest_seconds === null
-    ? `空白: ${threshold}分超なし`
-    : `空白: ${threshold}分超${String(summary.gap_count)}回、最長${String(Math.round(summary.gap_longest_seconds / 60))}分`;
+  if (summary.gap_count === 0 || summary.gap_longest_seconds === null) {
+    return `空白: ${threshold}分超なし`;
+  }
+  const minutes = String(Math.ceil(summary.gap_longest_seconds / 60));
+  const when =
+    summary.gap_longest_from === null || summary.gap_longest_to === null
+      ? ""
+      : `(${jstClock(summary.gap_longest_from)}〜${jstClock(summary.gap_longest_to)})`;
+  return `空白: ${threshold}分超${String(summary.gap_count)}回、最長${minutes}分${when}`;
 }
 
-/** 空白か遅れがある日だけ、停止と枠の塞がりの見分け方を添える。 */
+/**
+ * 空白がある日だけ、読み方を添える。
+ * 長い空白は、停止でも、長いジョブが枠を塞いだ場合でも出るので、
+ * 形からは断定せず、その時刻のジョブの有無で見分けるよう促す。
+ * 遅れだけの日は、ポーリングの山で毎日出るので添えない。
+ */
 function readingHint(summary: WorkerLoadSummary): string | null {
-  return summary.gap_count > 0 || summary.lag_over_count > 0
-    ? "読み方: 長い1回の空白は停止、短い空白と遅れが多ければ枠の塞がり"
+  return summary.gap_count > 0
+    ? "読み方: 長い空白は、停止か、長いジョブによる枠の塞がり。その時刻にジョブが動いていたかで見分ける"
     : null;
 }
 
@@ -707,6 +742,6 @@ export function describeWorkerLoad(report: WorkerLoadReport): string {
     case "no_record":
       return "前日の記録なし(sample_worker_loadのスケジュールを確かめる)";
     case "read_failed":
-      return "集計を読めませんでした(notify_daily_summaryのジョブログを確認)";
+      return "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)";
   }
 }

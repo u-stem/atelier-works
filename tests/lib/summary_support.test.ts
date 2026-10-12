@@ -302,6 +302,8 @@ describe("getWorkerLoadSummary", () => {
     lag_over_total_seconds: "120",
     gap_count: "2",
     gap_longest_seconds: "5400.000",
+    gap_longest_from: "2026-10-09T17:10:00.000Z",
+    gap_longest_to: new Date("2026-10-09T18:40:00.000Z"),
     running_jobs_max: 2,
     slots_max: "3",
     mem_anon_max_bytes: "83886080",
@@ -319,6 +321,8 @@ describe("getWorkerLoadSummary", () => {
     lag_over_total_seconds: 0,
     gap_count: 0,
     gap_longest_seconds: null,
+    gap_longest_from: null,
+    gap_longest_to: null,
     running_jobs_max: null,
     slots_max: 3,
     mem_anon_max_bytes: null,
@@ -349,10 +353,11 @@ describe("getWorkerLoadSummary", () => {
       RANGE.start.toISOString(),
       RANGE.start.toISOString(),
       RANGE.end.toISOString(),
+      RANGE.start.toISOString(),
+      RANGE.end.toISOString(),
+      DAILY_GAP_THRESHOLD_SECONDS,
       DAILY_LAG_THRESHOLD_SECONDS,
       DAILY_LAG_THRESHOLD_SECONDS,
-      DAILY_GAP_THRESHOLD_SECONDS,
-      DAILY_GAP_THRESHOLD_SECONDS,
     ]);
   });
 
@@ -367,6 +372,8 @@ describe("getWorkerLoadSummary", () => {
       lag_over_total_seconds: 120,
       gap_count: 2,
       gap_longest_seconds: 5400,
+      gap_longest_from: new Date("2026-10-09T17:10:00.000Z"),
+      gap_longest_to: new Date("2026-10-09T18:40:00.000Z"),
       running_jobs_max: 2,
       slots_max: 3,
       mem_anon_max_bytes: 83886080,
@@ -389,6 +396,8 @@ describe("getWorkerLoadSummary", () => {
       lag_over_total_seconds: 0,
       gap_count: 0,
       gap_longest_seconds: null,
+      gap_longest_from: null,
+      gap_longest_to: null,
       running_jobs_max: null,
       slots_max: 3,
       mem_anon_max_bytes: null,
@@ -410,6 +419,15 @@ describe("getWorkerLoadSummary", () => {
     const { sql } = createFakeSqlClient([[]]);
     const summary = await getWorkerLoadSummary(RANGE, sql);
     expect(summary).toBeNull();
+  });
+
+  test("throws when the start of the longest gap is not a timestamp", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...FULL_ROW, gap_longest_from: "yesterday" }],
+    ]);
+    await expect(getWorkerLoadSummary(RANGE, sql)).rejects.toThrow(
+      'row field "gap_longest_from" is not a valid timestamp',
+    );
   });
 
   test("throws when an aggregate is not numeric", async () => {
