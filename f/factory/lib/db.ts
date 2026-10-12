@@ -3088,7 +3088,8 @@ export type NewMainCiRun = {
   readonly head_sha: string;
   /** 初回の観測で既存のコミットを記録するときは`baseline`、新しいコミットは`pending`。 */
   readonly state: "pending" | "baseline";
-  readonly run_created_at: Date | null;
+  /** そのコミットの最古の実行の作成時刻。判定の期限と高水位線の基準になるので、記録時に必ず入れる。 */
+  readonly run_created_at: Date;
 };
 
 function toMainCiRun(row: SqlRow): MainCiRun {
@@ -3128,7 +3129,7 @@ export async function recordMainCiRun(
     INSERT INTO factory.main_ci_runs (owner, repo, head_sha, state, run_created_at)
     VALUES (
       ${record.owner}, ${record.repo}, ${record.head_sha}, ${record.state},
-      ${record.run_created_at?.toISOString() ?? null}::timestamptz
+      ${record.run_created_at.toISOString()}::timestamptz
     )
     ON CONFLICT (owner, repo, head_sha) DO NOTHING
     RETURNING id
@@ -3224,8 +3225,6 @@ export type MainCiTransition = {
   readonly state: MainCiSettledState;
   readonly summary: string;
   readonly prevFailed: boolean;
-  /** 最も古い実行の作成時刻。記録済みの値は書き換えず、未記録(null)の行にだけ入れる。 */
-  readonly runCreatedAt: Date | null;
 };
 
 /**
@@ -3243,7 +3242,6 @@ export async function transitionMainCiRun(
   const rows = await sql`
     UPDATE factory.main_ci_runs
     SET state = ${to.state}, summary = ${to.summary}, prev_failed = ${to.prevFailed}::boolean,
-        run_created_at = COALESCE(run_created_at, ${to.runCreatedAt?.toISOString() ?? null}::timestamptz),
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'pending'
     RETURNING id
@@ -3253,8 +3251,6 @@ export async function transitionMainCiRun(
 
 export type MainCiDeferral = {
   readonly nextCheckAt: Date;
-  /** 最も古い実行の作成時刻。記録済みの値は書き換えず、未記録(null)の行にだけ入れる。 */
-  readonly runCreatedAt: Date | null;
 };
 
 /**
@@ -3270,7 +3266,6 @@ export async function deferMainCiRun(
   const rows = await sql`
     UPDATE factory.main_ci_runs
     SET next_check_at = ${deferral.nextCheckAt.toISOString()}::timestamptz,
-        run_created_at = COALESCE(run_created_at, ${deferral.runCreatedAt?.toISOString() ?? null}::timestamptz),
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'pending'
     RETURNING id

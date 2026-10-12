@@ -1561,14 +1561,24 @@ check(
 check(
   "main_ci_runs: the first record is inserted",
   (await recordMainCiRun(
-    { ...CI_REPO, head_sha: CI_SHA_A, state: "pending", run_created_at: null },
+    {
+      ...CI_REPO,
+      head_sha: CI_SHA_A,
+      state: "pending",
+      run_created_at: new Date("2026-10-09T00:00:00Z"),
+    },
     sql,
   )) === true,
 );
 check(
   "main_ci_runs: the same sha is not recorded twice",
   (await recordMainCiRun(
-    { ...CI_REPO, head_sha: CI_SHA_A, state: "baseline", run_created_at: null },
+    {
+      ...CI_REPO,
+      head_sha: CI_SHA_A,
+      state: "baseline",
+      run_created_at: new Date("2026-10-09T00:00:00Z"),
+    },
     sql,
   )) === false,
 );
@@ -1608,7 +1618,7 @@ check(
   "main_ci_runs: a deferred row is not due",
   (await deferMainCiRun(
     ciPending.id,
-    { nextCheckAt: new Date(Date.now() + 60 * 60 * 1000), runCreatedAt: null },
+    { nextCheckAt: new Date(Date.now() + 60 * 60 * 1000) },
     sql,
   )) === true &&
     (await listPendingMainCiRuns(100, sql)).filter(
@@ -1619,7 +1629,6 @@ const ciSettled = {
   state: "failed" as const,
   summary: "失敗したworkflow: CI (failure)",
   prevFailed: true,
-  runCreatedAt: new Date("2026-10-12T00:00:00Z"),
 };
 check(
   "main_ci_runs: transition moves a pending row once",
@@ -1630,54 +1639,22 @@ const ciAfter = (
   await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_A], sql)
 )[0];
 check(
-  "main_ci_runs: the transition stored the summary, prev_failed and run time",
+  "main_ci_runs: the transition stored the summary and prev_failed, and kept the run time",
   ciAfter?.state === "failed" &&
     ciAfter.prev_failed === true &&
     ciAfter.summary === ciSettled.summary &&
-    ciAfter.run_created_at?.toISOString() === "2026-10-12T00:00:00.000Z",
+    ciAfter.run_created_at?.toISOString() === "2026-10-09T00:00:00.000Z",
   ciAfter,
-);
-// 記録済みの run_created_at は、遷移と延期で書き換えない。
-const CI_SHA_H = "2".repeat(40);
-await recordMainCiRun(
-  {
-    ...CI_REPO,
-    head_sha: CI_SHA_H,
-    state: "pending",
-    run_created_at: new Date("2026-10-10T00:00:00Z"),
-  },
-  sql,
-);
-const ciHeld = (
-  await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_H], sql)
-)[0];
-if (ciHeld === undefined) throw new Error("main_ci_runs row is missing");
-await deferMainCiRun(
-  ciHeld.id,
-  {
-    nextCheckAt: new Date(Date.now() - 1000),
-    runCreatedAt: new Date("2026-10-11T00:00:00Z"),
-  },
-  sql,
-);
-await transitionMainCiRun(
-  ciHeld.id,
-  { ...ciSettled, runCreatedAt: new Date("2026-10-12T00:00:00Z") },
-  sql,
-);
-const ciHeldAfter = (
-  await listMainCiRunsBySha(CI_REPO.owner, CI_REPO.repo, [CI_SHA_H], sql)
-)[0];
-check(
-  "main_ci_runs: a recorded run time is not overwritten by a defer or a transition",
-  ciHeldAfter?.state === "failed" &&
-    ciHeldAfter.run_created_at?.toISOString() === "2026-10-10T00:00:00.000Z",
-  ciHeldAfter,
 );
 let ciRejectedSha = false;
 try {
   await recordMainCiRun(
-    { ...CI_REPO, head_sha: "abc1234", state: "pending", run_created_at: null },
+    {
+      ...CI_REPO,
+      head_sha: "abc1234",
+      state: "pending",
+      run_created_at: new Date("2026-10-12T00:00:00Z"),
+    },
     sql,
   );
 } catch {
@@ -1703,7 +1680,7 @@ await recordMainCiRun(
     ...CI_REPO,
     head_sha: ciPendingOther,
     state: "pending",
-    run_created_at: null,
+    run_created_at: new Date("2026-10-12T01:00:00Z"),
   },
   sql,
 );

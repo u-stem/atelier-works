@@ -4360,7 +4360,7 @@ const NEW_CI_RUN = {
   repo: "widgets",
   head_sha: CI_SHA,
   state: "pending" as const,
-  run_created_at: null,
+  run_created_at: new Date("2026-10-12T03:00:00.000Z"),
 };
 
 describe("recordMainCiRun", () => {
@@ -4400,7 +4400,7 @@ describe("recordMainCiRun", () => {
     );
   });
 
-  test("casts the nullable run_created_at to timestamptz", async () => {
+  test("casts run_created_at to timestamptz", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     await recordMainCiRun(NEW_CI_RUN, sql);
     expect(calls[0]?.text).toContain("::timestamptz");
@@ -4555,7 +4555,6 @@ describe("transitionMainCiRun", () => {
     state: "failed" as const,
     summary: "失敗したworkflow: CI (failure)",
     prevFailed: true,
-    runCreatedAt: new Date("2026-10-12T03:00:00.000Z"),
   };
 
   test("transition is idempotent: it only updates a pending row", async () => {
@@ -4580,18 +4579,16 @@ describe("transitionMainCiRun", () => {
     expect(calls[0]?.text).toContain("updated_at = now()");
   });
 
-  test("casts the boolean and the nullable timestamp", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await transitionMainCiRun(5, { ...settled, runCreatedAt: null }, sql);
-    expect(calls[0]?.text).toMatch(/\? ::boolean[\s\S]*\? ::timestamptz/);
-  });
-
-  test("never overwrites a recorded run time", async () => {
+  test("casts the boolean", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
     await transitionMainCiRun(5, settled, sql);
-    expect(calls[0]?.text).toContain(
-      "run_created_at = COALESCE(run_created_at,",
-    );
+    expect(calls[0]?.text).toContain("? ::boolean");
+  });
+
+  test("does not touch run_created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).not.toContain("run_created_at");
   });
 });
 
@@ -4600,29 +4597,25 @@ describe("deferMainCiRun", () => {
 
   test("only updates a pending row", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await deferMainCiRun(5, { nextCheckAt: later, runCreatedAt: null }, sql);
+    await deferMainCiRun(5, { nextCheckAt: later }, sql);
     expect(calls[0]?.text).toContain("AND state = 'pending'");
   });
 
   test("moves the next check time", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await deferMainCiRun(5, { nextCheckAt: later, runCreatedAt: null }, sql);
+    await deferMainCiRun(5, { nextCheckAt: later }, sql);
     expect(calls[0]?.values).toContain(later.toISOString());
   });
 
-  test("never overwrites a recorded run time", async () => {
+  test("does not touch run_created_at", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
-    await deferMainCiRun(5, { nextCheckAt: later, runCreatedAt: later }, sql);
-    expect(calls[0]?.text).toContain(
-      "run_created_at = COALESCE(run_created_at,",
-    );
+    await deferMainCiRun(5, { nextCheckAt: later }, sql);
+    expect(calls[0]?.text).not.toContain("run_created_at");
   });
 
   test("returns false when the row had already left pending", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(
-      await deferMainCiRun(5, { nextCheckAt: later, runCreatedAt: null }, sql),
-    ).toBe(false);
+    expect(await deferMainCiRun(5, { nextCheckAt: later }, sql)).toBe(false);
   });
 });
 

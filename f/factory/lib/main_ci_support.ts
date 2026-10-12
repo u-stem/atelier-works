@@ -86,7 +86,7 @@ export const SETTLE_MIN_AGE_MS = 2 * 60_000;
 /** 実行が1件も現れないまま、この時間がたったら`no_ci`にする。 */
 export const NO_CI_AFTER_MS = 15 * 60_000;
 
-/** 未完了のまま、最初に見てからこの時間がたったら`expired`にする。 */
+/** 未完了のまま、最古の実行が作られてからこの時間がたったら`expired`にする。 */
 export const PENDING_EXPIRES_AFTER_MS = 2 * 60 * 60_000;
 
 /** 新しいコミットを見つけるために、ブランチの実行を読む件数(1ページだけ)。 */
@@ -257,6 +257,10 @@ export type PlannedSha = {
  * - `pending`は古い順に並べる。途中で記録に失敗しても、記録済みより古い未記録のコミットが
  *   次の回に黙って`baseline`になることはない。
  * 同時刻のコミットは`headSha`順にして、並びを決める。
+ *
+ * 呼び出し側は、1件でも記録に失敗したら、そのリポジトリの残りは記録せず、次の回に回す。
+ * 失敗しても続けると、最新の`baseline`が抜けて既存の失敗が`pending`になる、または
+ * 古い`pending`が黙って`baseline`になるため。
  */
 export function planNewShas(
   candidates: readonly CandidateSha[],
