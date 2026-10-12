@@ -246,6 +246,34 @@ describe("handleFlowFailure for the dependabot flow", () => {
     );
   });
 
+  test("names the pull request of the work item in the notification", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toEqual({
+      owner: "acme",
+      repo: "widgets",
+      number: 12,
+    });
+  });
+
+  test("names no pull request when the work item cannot be found", async () => {
+    const fake = fakeFailureDeps({ item: null });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
+  test("names no pull request when the work item has none", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ pr_number: null }) });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
+  test("names no pull request when the owner is not a GitHub name", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ owner: "../x" }) });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
   test("still marks the work item failed when the config cannot be read", async () => {
     const fake = fakeFailureDeps({
       instanceName: async () => {
@@ -291,6 +319,15 @@ describe("handleFlowFailure for other flows", () => {
       failureInput({ path: "f/factory/pr_fix" }),
     );
     expect(jobFailed(fake.events)?.next_action).toBeUndefined();
+  });
+
+  test("names no pull request for a flow without its own rule", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ kind: "pr_fix" }) });
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({ path: "f/factory/pr_fix" }),
+    );
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
   });
 
   test("does not mark a pipeline failed while no flow_job_id is recorded", async () => {

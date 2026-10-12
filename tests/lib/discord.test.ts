@@ -149,6 +149,34 @@ describe("buildEmbed job_failed", () => {
     ).toContainEqual({ name: "次の操作", value: "PRを確認してください" });
   });
 
+  test("links the pull request when the event names one", () => {
+    expect(
+      buildEmbed({
+        ...JOB_FAILED_EVENT,
+        pr: { owner: "acme", repo: "widgets", number: 12 },
+      }).url,
+    ).toBe("https://github.com/acme/widgets/pull/12");
+  });
+
+  test("shows the pull request as the target when the event names one", () => {
+    expect(
+      buildEmbed({
+        ...JOB_FAILED_EVENT,
+        pr: { owner: "acme", repo: "widgets", number: 12 },
+      }).fields,
+    ).toContainEqual({ name: "対象", value: "acme/widgets#12" });
+  });
+
+  test("has no link when the event names no pull request", () => {
+    expect(buildEmbed(JOB_FAILED_EVENT).url).toBeNull();
+  });
+
+  test("shows no target field when the event names no pull request", () => {
+    expect(
+      buildEmbed(JOB_FAILED_EVENT).fields.map((field) => field.name),
+    ).not.toContain("対象");
+  });
+
   test("shows no next action field when the event has none", () => {
     expect(
       buildEmbed(JOB_FAILED_EVENT).fields.map((field) => field.name),

@@ -537,13 +537,14 @@ export async function removeDependabotWorktrees(
     if (targets.length === 0) continue;
     for (const dir of targets) {
       try {
+        // ロックの確認は時間がかかりうるので先に済ませ、作業項目の読み直しと削除の間を最短にする。
+        await deps.ensureLockFree(dir);
         const stillFree = selectDependabotWorktreesToRemove(
           repoDir,
           [{ path: dir, detached: true }],
           await deps.listActive(),
         );
         if (stillFree === null || !stillFree.includes(dir)) continue;
-        await deps.ensureLockFree(dir);
         await deps.removeWorktree(repoDir, dir);
         removed += 1;
       } catch (err) {

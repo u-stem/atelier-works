@@ -304,12 +304,14 @@ describe("removeDependabotWorktrees", () => {
     expect(fake.removed).toEqual([]);
   });
 
-  test("checks the process lock before removing", async () => {
+  test("checks the process lock, then re-reads the work items right before removing", async () => {
     const fake = sweep();
     await removeDependabotWorktrees(fake.deps);
-    expect(
-      fake.calls.filter((call) => call.endsWith(WORKTREE)).slice(0, 2),
-    ).toEqual([`lock ${WORKTREE}`, `remove ${WORKTREE}`]);
+    expect(fake.calls.slice(2, 5)).toEqual([
+      `lock ${WORKTREE}`,
+      "active",
+      `remove ${WORKTREE}`,
+    ]);
   });
 
   test("does not remove a worktree that processes still use", async () => {

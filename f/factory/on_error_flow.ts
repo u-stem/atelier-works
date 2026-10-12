@@ -19,7 +19,7 @@
 // 取得時に消費済みで、外すものも付けるものも無いため。
 // 運用者に届くのは、DBの`failed`への遷移と、`main()`が必ず送る
 // Discordの`job_failed`通知である。設定を読めないときも、インスタンス名を伏せて通知する。
-// dependabotのフローの通知には、再実行を案内しない次の操作を載せる。
+// dependabotのフローの通知には、対象のPRと、再実行を案内しない次の操作を載せる。
 // dependabotの作業項目は`retry_work_item`が再開しないためである。
 
 import * as wmill from "windmill-client@1.817.0";
@@ -34,6 +34,7 @@ import { type NotifyEvent, notify } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
 import {
+  assertGitHubName,
   type FailureRecord,
   isRecord,
   isString,
@@ -117,6 +118,26 @@ export function failureNextAction(
   return path === DEPENDABOT_FLOW_PATH
     ? nextActionFor(message, "dependabot")
     : undefined;
+}
+
+/**
+ * 失敗したフローの通知に載せるPRを返す。dependabotのフローで、作業項目にPR番号があるときだけ返す。
+ * dependabotの失敗は再実行できず、人がPRを見て対応するので、どのPRかを通知に載せる。
+ * ownerとrepoがGitHubの名前の形でなければ返さない。通知のリンクに使うためである。
+ */
+export function failureTargetPr(
+  path: string | null,
+  item: Pick<WorkItem, "owner" | "repo" | "pr_number"> | null,
+): { owner: string; repo: string; number: number } | undefined {
+  if (path !== DEPENDABOT_FLOW_PATH || item === null) return undefined;
+  if (item.pr_number === null) return undefined;
+  try {
+    assertGitHubName(item.owner);
+    assertGitHubName(item.repo);
+  } catch {
+    return undefined;
+  }
+  return { owner: item.owner, repo: item.repo, number: item.pr_number };
 }
 
 /** `handleFlowFailure`が使う外部の操作。テストで差し替える。 */
@@ -260,6 +281,7 @@ export async function handleFlowFailure(
     const webhookUrl = await deps.readWebhookUrl();
     if (webhookUrl.length > 0) {
       const nextAction = failureNextAction(path ?? null, message);
+      const pr = failureTargetPr(path ?? null, item);
       await deps.notify(webhookUrl, {
         kind: "job_failed",
         instance_name: instanceName,
@@ -267,6 +289,7 @@ export async function handleFlowFailure(
         job_id: resolvedJobId,
         error: message,
         ...(nextAction === undefined ? {} : { next_action: nextAction }),
+        ...(pr === undefined ? {} : { pr }),
       });
     }
   } catch (notifyErr) {

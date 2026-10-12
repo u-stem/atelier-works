@@ -62,7 +62,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 
 | 処理 | 送るとき |
 | --- | --- |
-| `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intakeなど)が失敗した |
+| `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る |
 | `on_error_schedule` | スケジュールのジョブが失敗した。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした |
 | `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |
@@ -81,7 +81,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `needs_human` | 対象のIssueかPR | 説明に理由、「次の操作」、リポジトリ |
 | `pr_reviewed` | PR | 説明に指摘の件数と状態 |
 | `pr_fixed` | PR | 再レビュー依頼のAPIが失敗したときだけ「補足」 |
-| `job_failed` | なし | 説明にエラー、ジョブのID |
+| `job_failed` | なし。dependabotのフローではPR | 説明にエラー、ジョブのID。dependabotのフローでは「次の操作」と「対象」 |
 | `console_fetch_problem` | なし | 説明に原因、「次の操作」 |
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
@@ -97,6 +97,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 
 - 同じ理由でも、実装フローとPRの修正で次の操作が変わるものは、フロー(`NextActionFlow`)を渡して選ぶ。
 - 再実行を案内するときは、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行するよう書く(`RETRY_WORK_ITEM_ACTION`)。どの種別と状態の作業項目にも使えるためである。
+- dependabotの作業項目の理由では、フロー`dependabot`を渡して、再実行を案内しない文を選ぶ。`retry_work_item`はdependabotの作業項目を再開しないためである。フローの失敗の通知(`job_failed`)も、この規則で次の操作を選ぶ。
 - どの規則にも当たらない理由では、`GENERIC_NEXT_ACTION`の文になる。通知の理由とConsoleの**システム**で原因を確かめて取り除き、`retry_work_item`を実行するよう求める文である。
 
 ### 理由の区切りを無効にする
