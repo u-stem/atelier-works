@@ -687,6 +687,16 @@ describe("evaluateGate", () => {
     expect(verdictOf({ mergeable: false })).toBe("needs_human");
   });
 
+  test("waits while mergeability is not computed", () => {
+    expect(verdictOf({ mergeable: null })).toBe("wait");
+  });
+
+  test("needs a human for a bad author even when mergeability is not computed", () => {
+    expect(verdictOf({ mergeable: null, authorLogin: "someone" })).toBe(
+      "needs_human",
+    );
+  });
+
   test("needs a human when the lockfile diff is rejected", () => {
     expect(
       verdictOf({ lockfile: { ok: false, reason: "extra package" } }),

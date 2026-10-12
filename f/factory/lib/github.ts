@@ -2313,12 +2313,36 @@ function unexpectedShape(context: string): Error {
   return new Error(`${context}: unexpected response shape`);
 }
 
+export type MergePullRequestResult =
+  | { readonly merged: true; readonly sha: string }
+  | {
+      readonly merged: false;
+      readonly status: 405 | 409;
+      readonly message: string;
+    };
+
+/** 応答の本文から`message`を読む。JSONでないか文字列でなければ空文字にする。 */
+function readErrorMessage(bodyText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    if (isRecord(parsed) && typeof parsed.message === "string") {
+      return maskSecrets(parsed.message.slice(0, 500));
+    }
+  } catch {
+    // 本文がJSONでなければ、読める理由が無いものとして扱う。
+  }
+  return "";
+}
+
 /**
  * `PUT .../pulls/{number}/merge`でsquashマージする。
  * `sha`にレビューした時点のheadを渡し、その後にheadが動いたときはGitHubに拒ませる。
+ * squashのコミットの題名は固定で、本文は空にする。PRのタイトルや本文を使わないため。
  * 405(マージできない状態)と409(headの不一致)は、マージしなかった結果として
- * `{ merged: false, sha: expectedHeadSha }`で返す。
+ * `status`と応答の`message`つきで返す。理由は呼び出し側が見分ける。
  * 403(権限不足)や404などは`GitHubHttpError`を投げる。呼び出し側が権限不足を見分けて先送りできるようにするため。
+ * `merged: false`の場合と、通信断や5xxの`GitHubHttpError`の場合は、
+ * 要求がGitHubに届いてマージされた可能性が残る。呼び出し側は`getPr`で`merged`を読み直してから判断する。
  */
 export async function mergePullRequest(
   client: GhClient,
@@ -2326,7 +2350,7 @@ export async function mergePullRequest(
   repo: string,
   number: number,
   expectedHeadSha: string,
-): Promise<{ merged: boolean; sha: string }> {
+): Promise<MergePullRequestResult> {
   validateOwnerRepo(owner, repo);
   assertCommitSha(expectedHeadSha, "expected head sha");
   const context = `PUT pr merge ${owner}/${repo}#${number}`;
@@ -2335,11 +2359,20 @@ export async function mergePullRequest(
     `repos/${owner}/${repo}/pulls/${number}/merge`,
     {
       method: "PUT",
-      body: { merge_method: "squash", sha: expectedHeadSha },
+      body: {
+        merge_method: "squash",
+        sha: expectedHeadSha,
+        commit_title: `chore: dependabotのセキュリティ更新をマージ(#${number})`,
+        commit_message: "",
+      },
     },
   );
   if (response.status === 405 || response.status === 409) {
-    return { merged: false, sha: expectedHeadSha };
+    return {
+      merged: false,
+      status: response.status,
+      message: readErrorMessage(response.bodyText),
+    };
   }
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
@@ -2350,12 +2383,12 @@ export async function mergePullRequest(
   ) {
     throw unexpectedShape(context);
   }
-  return parsed.merged
-    ? { merged: true, sha: parsed.sha }
-    : { merged: false, sha: expectedHeadSha };
+  if (!parsed.merged) throw new Error(`${context}: GitHub did not merge`);
+  return { merged: true, sha: parsed.sha };
 }
 
 type CheckRunRow = {
+  readonly appId: number;
   readonly name: string;
   readonly conclusion: string | null;
   readonly unfinished: boolean;
@@ -2372,8 +2405,11 @@ function parseTimestampMs(value: unknown): number | null {
 
 function parseCheckRun(value: unknown, context: string): CheckRunRow {
   if (!isRecord(value)) throw unexpectedShape(context);
-  const { name, status, conclusion } = value;
+  const { name, status, conclusion, app } = value;
   if (typeof name !== "string" || typeof status !== "string") {
+    throw unexpectedShape(context);
+  }
+  if (!isRecord(app) || typeof app.id !== "number") {
     throw unexpectedShape(context);
   }
   if (conclusion !== null && typeof conclusion !== "string") {
@@ -2387,6 +2423,7 @@ function parseCheckRun(value: unknown, context: string): CheckRunRow {
     throw unexpectedShape(context);
   }
   return {
+    appId: app.id,
     name,
     conclusion: unfinished ? null : conclusion,
     unfinished,
@@ -2416,7 +2453,9 @@ function isNewerCheckRun(
 
 /**
  * `GET .../commits/{sha}/check-runs`を最後のページまで読み、
- * 名前ごとに最新の1件の結論を返す。再実行された古い結果で判定しないため。
+ * チェックを作ったApp(`app.id`)と名前の組ごとに、最新の1件の結論を返す。
+ * 再実行された古い結果で判定しないためである。
+ * 別のAppが同じ名前で作ったチェックは畳まず、すべて返す。一方の成功で他方の失敗を隠さないため。
  * 未完了のチェックの`conclusion`は`null`にする。
  */
 export async function listPrChecks(
@@ -2441,9 +2480,10 @@ export async function listPrChecks(
   );
   const latest = new Map<string, CheckRunRow>();
   for (const row of rows) {
-    const current = latest.get(row.name);
+    const key = `${String(row.appId)}\u0000${row.name}`;
+    const current = latest.get(key);
     if (current === undefined || isNewerCheckRun(row, current)) {
-      latest.set(row.name, row);
+      latest.set(key, row);
     }
   }
   return [...latest.values()].map((row) => ({
@@ -2495,6 +2535,8 @@ export async function listPrFiles(
 
 /** `pulls/{number}/commits`が返せる件数の上限。 */
 const PR_COMMITS_API_CAP = 250;
+/** 件数の上限を1ページ100件で読み切るページ数に、終端の確認の1ページを足した値。 */
+const PR_COMMITS_MAX_PAGES = Math.ceil(PR_COMMITS_API_CAP / 100) + 1;
 
 export type PrCommit = {
   readonly sha: string;
@@ -2548,7 +2590,7 @@ export async function listPrCommits(
         };
       });
     },
-    PR_COMMITS_API_CAP,
+    PR_COMMITS_MAX_PAGES,
   );
   if (commits.length >= PR_COMMITS_API_CAP) {
     throw new Error(
@@ -2595,7 +2637,8 @@ export async function getFileAtRef(
   if (response.status === 404) return null;
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);
-  if (!isRecord(parsed) || parsed.type !== "file") {
+  // symlinkをたどって別のファイルの内容が返ることを防ぐため、要求したパスと一致するものだけを受け付ける。
+  if (!isRecord(parsed) || parsed.type !== "file" || parsed.path !== path) {
     throw unexpectedShape(context);
   }
   if (parsed.encoding === "none") {
