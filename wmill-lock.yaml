@@ -12,6 +12,7 @@ locks:
   f/factory/cleanup_db: db65b8aaf566594a6f94a9ebdfa8e052789138be9ea811a459c31a9b2b364c38
   f/factory/cleanup_workspaces: 2dd1eaa2a3b20e6d2663d5cb589ca66b6485941ad6a4365a00362912aa7f0b02
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
+  f/factory/dependabot__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/drawio_viewer_bump: 22e941c5ef86b4a57e78f1a30fd76f2dad6a7892effeb04c929f3db8d0fbdc1a
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/lib/approval_support: 1e8919953d84c24fde78fa25660750f82812f660de31b1b0560c1b7ba1a9d3a0

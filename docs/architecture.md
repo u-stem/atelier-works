@@ -426,6 +426,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/implement_generate` | script | [SF-3-4/2] 実装(Claude) |
 | `f/factory/steps/implement_verify` | script | [SF-3-4/3] 検証と修正のループ |
 | `f/factory/steps/implement_finish` | script | [SF-3-4/4] コミット・push・PR作成 |
+| `f/factory/dependabot` | flow | [SF-3-5] 依存の更新PRの検査と自動マージ |
 | `f/factory/steps/dependabot_prepare` | script | [SF-3-5/1] 依存の更新の検査とインストール |
 | `f/factory/steps/dependabot_assess` | script | [SF-3-5/2] 依存の更新の影響調査(Claude) |
 | `f/factory/steps/dependabot_finish` | script | [SF-3-5/3] 依存の更新のマージと終了 |
