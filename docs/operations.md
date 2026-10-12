@@ -1035,7 +1035,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `cleanup_db_failed` | 保持期間を過ぎたレコードの削除に失敗した | 内容を確かめる。次の日の掃除でやり直す |
 | `cleanup_worktrees_skipped` | 動いているPRの修正のブランチを確かめられず、そのリポジトリの作業領域の掃除を見送った | 次の日の掃除を待つ |
 | `cleanup_worktree_busy` | 終端の作業項目のworktreeを、使用中として消さなかった。原因は、残ったプロセスが使っていることか、検査用のユーザーからrootに戻せないことである。作業項目のID、worktreeのパス、理由が載る | 理由がプロセスなら、載ったプロセスを止める。rootに戻せないなら、[検査の枠の記録を片付ける](#検査の枠の記録を片付ける)の手順で片付ける。対処しない限り毎日の掃除で記録しようとするが、同じ本文の未解決のnoticeがあるあいだは新しく作らない。同じ通知が1件残り続ける |
-| `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量 | 増え続けていないか見る |
+| `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量。未解決は1件だけで、掃除のたびに本文と作成時刻が最新の測定に更新される。解決した後の掃除で、新しく1件作られる | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(10分ごと)が検知し、Discordにも届く |

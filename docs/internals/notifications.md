@@ -231,7 +231,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 
 ### 重複の抑止
 
-noticeは、すべて`addNoticeUnlessUnresolved`で作る。
+noticeは、作業領域のディスク使用量(`workspace_disk_usage`)を除き、すべて`addNoticeUnlessUnresolved`で作る。
 同じ種類と本文の未解決のnoticeがあるあいだは、新しく追加しない。
 同じ状況が続く間、スケジュールや実行のたびに、見分けの付かないnoticeが積み上がるのを防ぐためである。
 本文が対象(作業項目、PR、版など)で決まるので、対象が違えば別のnoticeになる。
@@ -239,6 +239,20 @@ noticeは、すべて`addNoticeUnlessUnresolved`で作る。
 
 DBには、未解決のnoticeの種類と本文のmd5に対する部分一意索引があり、並行した追加の重複も拒む。
 `resolved_by`が`migration`の解決済みnoticeは、索引を作るmigrationが、同じ種類と本文の未解決のうち作成が最古の1件を残して解決したものである。
+
+### ディスク使用量のnotice
+
+ディスク使用量のnoticeは、本文に測った使用量が入るので、本文での判定では値が変わるたびに別のnoticeになる。
+そのため、作業領域の掃除は`recordWorkspaceDiskUsageNotice`で記録し、未解決のnoticeを本文に関わらず1件に保つ。
+
+- 未解決のnoticeがあれば、新しく作らず、本文を新しい使用量に、作成時刻を現在に更新する。時刻の更新は1日の間隔を空けず、記録のたびに行う。掃除は1日1回なので、実質1日1回である。
+- 未解決のnoticeが無ければ、1件作る。解決済みのnoticeは変えず、履歴として残る。
+- 未解決のnoticeが2件以上あれば、作成が最も新しい1件を更新し、残りを解決済みにする(`resolved_by`は`cleanup_workspaces`)。
+- 使用量を測れなかったときは、noticeを作りも変えもしない。記録に失敗しても、掃除の他の処理の結果は変わらず、警告のログだけを残す。
+
+DBには、この種類の未解決のnoticeを1件までにする部分一意索引(`notices_unresolved_disk_usage_key`)があり、掃除が同時に2つ動いても2件目を拒む。
+記録はこの索引を`ON CONFLICT`の衝突先にして、既存の1件の更新に回る。
+索引を作るmigrationは、未解決のうち作成が最も新しい1件を残し、残りを解決済みにする(`resolved_by`は`migration`)。
 
 ### 作成時刻の更新
 

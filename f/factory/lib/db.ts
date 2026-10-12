@@ -1369,6 +1369,7 @@ export async function getLatestDeployment(
  * 解決済みのnoticeは数えないので、解決した後に同じ状況が起きれば再び挿入する。
  * `message`が状態の値(版の組など)を含めば、値が変わったときは新しいnoticeになる。
  * 通知を作る経路は、この関数だけを使う。
+ * 例外は作業領域のディスク使用量の通知で、`recordWorkspaceDiskUsageNotice`を使う。
  *
  * 既存の未解決のnoticeは、「情報」の種類(`INFO_NOTICE_KINDS`)で`created_at`が1日より前なら、
  * 現在時刻に更新する。
@@ -1400,6 +1401,50 @@ export async function addNoticeUnlessUnresolved(
   if (row === undefined || !parseBoolean(row.inserted, "inserted")) {
     return null;
   }
+  return parseId(row.id, "id");
+}
+
+/** ディスク使用量の通知を記録した作業領域の掃除が、余分な未解決の通知を解決したときの解決者。 */
+export const WORKSPACE_CLEANUP_RESOLVER = "cleanup_workspaces";
+
+/**
+ * 作業領域のディスク使用量の通知を記録し、未解決の通知のIDを返す。
+ * 本文は測った使用量を含むので、`addNoticeUnlessUnresolved`では値が変わるたびに新しい通知になる。
+ * この関数は、未解決の通知を本文に関わらず1件に保つ。
+ *
+ * 先に、未解決の通知のうち最も新しい1件(作成時刻が同じならIDが大きい方)を残し、
+ * 残りを解決済みにする(解決者は`WORKSPACE_CLEANUP_RESOLVER`)。
+ * 次に、未解決の通知が無ければ挿入し、あれば本文と作成時刻を更新する。
+ * 作成時刻は、記録のたびに現在時刻にする。掃除は1日1回なので、行の書き換えも1日1回になる。
+ *
+ * 並行した記録との競合は、ディスク使用量の未解決の通知の部分一意索引
+ * (`notices_unresolved_disk_usage_key`)で受け、`ON CONFLICT`の更新に回る。
+ * 索引の述語と照合するため、種類は値で渡さずSQLに直接書く。
+ */
+export async function recordWorkspaceDiskUsageNotice(
+  message: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  await sql`
+    UPDATE factory.notices
+    SET resolved = true, resolved_by = ${WORKSPACE_CLEANUP_RESOLVER}, resolved_at = now()
+    WHERE kind = 'workspace_disk_usage'
+      AND resolved = false
+      AND id <> (
+        SELECT id FROM factory.notices
+        WHERE kind = 'workspace_disk_usage' AND resolved = false
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      )
+  `.execute();
+  const statement = sql`
+    INSERT INTO factory.notices (kind, message)
+    VALUES ('workspace_disk_usage', ${message})
+    ON CONFLICT (kind) WHERE resolved = false AND kind = 'workspace_disk_usage'
+    DO UPDATE SET message = EXCLUDED.message, created_at = now()
+    RETURNING id
+  `;
+  const row = await fetchOneRow(statement, "recordWorkspaceDiskUsageNotice");
   return parseId(row.id, "id");
 }
 

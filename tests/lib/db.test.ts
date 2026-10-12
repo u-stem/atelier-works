@@ -59,6 +59,7 @@ import {
   recordAgentRun,
   recordDeployment,
   recordFailure,
+  recordWorkspaceDiskUsageNotice,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -1430,6 +1431,88 @@ describe("addNoticeUnlessUnresolved", () => {
   test("returns null when an open notice was left as it is", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await addNoticeUnlessUnresolved(record, sql)).toBeNull();
+  });
+});
+
+describe("recordWorkspaceDiskUsageNotice", () => {
+  const message = "/workspacesのディスク使用量は約2.0 MiBです。";
+
+  test("resolves the open disk usage notices first", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE kind = 'workspace_disk_usage'\n      AND resolved = false",
+    );
+  });
+
+  test("keeps the newest open notice unresolved", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain(
+      "AND id <> (\n        SELECT id FROM factory.notices\n        WHERE kind = 'workspace_disk_usage' AND resolved = false\n        ORDER BY created_at DESC, id DESC\n        LIMIT 1",
+    );
+  });
+
+  test("records the cleanup as the resolver of the extra notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.values).toEqual(["cleanup_workspaces"]);
+  });
+
+  test("records when the extra notices were resolved", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain("SET resolved = true");
+  });
+
+  test("inserts a notice of the disk usage kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "INSERT INTO factory.notices (kind, message)\n    VALUES ('workspace_disk_usage', ",
+    );
+  });
+
+  test("passes only the message to the insert", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.values).toEqual([message]);
+  });
+
+  test("targets the partial unique index over the open disk usage notice", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "ON CONFLICT (kind) WHERE resolved = false AND kind = 'workspace_disk_usage'",
+    );
+  });
+
+  test("updates the message of the open notice on a conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "DO UPDATE SET message = EXCLUDED.message",
+    );
+  });
+
+  test("refreshes created_at of the open notice on every conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "DO UPDATE SET message = EXCLUDED.message, created_at = now()\n    RETURNING id",
+    );
+  });
+
+  test("returns the id of the open notice", async () => {
+    const { sql } = createFakeSqlClient([[], [{ id: 21 }]]);
+    expect(await recordWorkspaceDiskUsageNotice(message, sql)).toBe(21);
+  });
+
+  test("throws when the upsert returns no row", async () => {
+    const { sql } = createFakeSqlClient([[], []]);
+    await expect(recordWorkspaceDiskUsageNotice(message, sql)).rejects.toThrow(
+      "recordWorkspaceDiskUsageNotice",
+    );
   });
 });
 

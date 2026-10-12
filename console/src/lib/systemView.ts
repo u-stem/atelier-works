@@ -199,6 +199,7 @@ export function describeInfoNotice(
 
 const RESOLVER_LABELS: ReadonlyMap<string, string> = new Map([
   ["cleanup_db", "DBの掃除(自動)"],
+  ["cleanup_workspaces", "作業領域の掃除(自動)"],
   ["self_update", "自己更新(自動)"],
   ["poll_issues", "Issueの取得(自動)"],
   ["poll_prs", "PRの取得(自動)"],

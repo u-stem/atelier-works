@@ -22,6 +22,7 @@ import {
   listUnresolvedNoticesByKind,
   recordDeployment,
   recordFailure,
+  recordWorkspaceDiskUsageNotice,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -1637,6 +1638,88 @@ check(
 execPsql(
   target,
   `DELETE FROM factory.notices WHERE kind = '${actionRecord.kind}'`,
+);
+
+// ---------------------------------------------------------------------------
+// ディスク使用量の通知は、本文に関わらず未解決を1件に保つ
+// ---------------------------------------------------------------------------
+
+const DISK_USAGE_KIND = "workspace_disk_usage";
+const diskFirst = await recordWorkspaceDiskUsageNotice("qdb disk A", sql);
+const diskSecond = await recordWorkspaceDiskUsageNotice("qdb disk B", sql);
+const diskAfterB = await listUnresolvedNoticesByKind(DISK_USAGE_KIND, sql);
+check(
+  "disk usage notice: a new usage updates the open notice",
+  diskSecond === diskFirst && diskAfterB.length === 1,
+  diskAfterB,
+);
+check(
+  "disk usage notice: the open notice shows the new usage",
+  diskAfterB[0]?.message === "qdb disk B",
+  diskAfterB,
+);
+for (const usage of ["qdb disk C", "qdb disk D", "qdb disk E"]) {
+  await recordWorkspaceDiskUsageNotice(usage, sql);
+}
+const diskAfterE = await listUnresolvedNoticesByKind(DISK_USAGE_KIND, sql);
+check(
+  "disk usage notice: three more usages keep one open notice with the last usage",
+  diskAfterE.length === 1 && diskAfterE[0]?.message === "qdb disk E",
+  diskAfterE,
+);
+execPsql(
+  target,
+  `UPDATE factory.notices SET created_at = now() - interval '12 hours' WHERE id = ${String(diskFirst)}`,
+);
+await recordWorkspaceDiskUsageNotice("qdb disk F", sql);
+const diskRefreshed = await getNoticeById(diskFirst, sql);
+check(
+  "disk usage notice: a notice younger than a day gets a new created_at",
+  diskRefreshed !== null &&
+    Date.now() - diskRefreshed.created_at.getTime() < 60 * 60 * 1000,
+  diskRefreshed,
+);
+let diskDuplicateRejected = false;
+try {
+  execPsql(
+    target,
+    `INSERT INTO factory.notices (kind, message) VALUES ('${DISK_USAGE_KIND}', 'qdb disk other')`,
+  );
+} catch (err) {
+  diskDuplicateRejected =
+    err instanceof Error &&
+    err.message.includes("notices_unresolved_disk_usage_key");
+}
+check(
+  "disk usage notice: the index rejects a second open notice",
+  diskDuplicateRejected,
+);
+await resolveNoticeIfUnresolved(diskFirst, DISK_USAGE_KIND, "op", [], sql);
+const diskResolvedBefore = await getNoticeById(diskFirst, sql);
+const diskNew = await recordWorkspaceDiskUsageNotice("qdb disk G", sql);
+const diskAfterG = await listUnresolvedNoticesByKind(DISK_USAGE_KIND, sql);
+check(
+  "disk usage notice: after the notice is resolved a new notice is inserted",
+  diskNew !== diskFirst &&
+    diskAfterG.length === 1 &&
+    diskAfterG[0]?.id === diskNew &&
+    diskAfterG[0]?.message === "qdb disk G",
+  diskAfterG,
+);
+const diskResolvedAfter = await getNoticeById(diskFirst, sql);
+check(
+  "disk usage notice: the resolved notice stays as it was",
+  diskResolvedBefore !== null &&
+    diskResolvedAfter !== null &&
+    diskResolvedAfter.resolved &&
+    diskResolvedAfter.message === diskResolvedBefore.message &&
+    diskResolvedAfter.created_at.getTime() ===
+      diskResolvedBefore.created_at.getTime(),
+  diskResolvedAfter,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.notices WHERE kind = '${DISK_USAGE_KIND}'`,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
