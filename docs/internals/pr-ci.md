@@ -35,8 +35,16 @@
 | `expired` | 未完了のまま最古の実行から2時間たったか、読めないまま24時間たった。終端 | しない |
 | `no_ci` | 実行が現れないまま15分たった。実行が現れれば読み直す | しない |
 | `observed` | 遷移表にはあるが、この監視は使わない | しない |
+| `fixing` | 失敗を直す作業項目の結果待ち。DBの制約が受け入れる値。この監視は書かず、読みもしない | しない |
 
 遷移は`canTransitionPrCi`が定める。更新は`WHERE state = <移る前の状態>`の条件付きで、別の実行が先に移した行は書き換えない。
+
+## 修正のための列と索引
+
+`pr_ci_checks`は、列`fix_work_item_id`(bigint、NULL可)を持つ。
+同じく`fix_attempts`(integer、既定0、0以上)と、`fix_hold_reason`(text、NULL可、空でなく64字まで)を持つ。
+`work_items`は、列`ci_check_id`(bigint、NULL可)と、値のある行だけの部分索引を持つ。
+いずれも外部キーは無い。
 
 ## 発見
 
