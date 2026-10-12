@@ -147,20 +147,37 @@ export async function ensureProposalRepoOwner(
   }
 }
 
+/** 却下の返信を止める理由。 */
+export type RejectionReplyStop =
+  /** 照合が`ok: false`を返した。意図した停止である。 */
+  | { readonly kind: "stopped"; readonly reason: string }
+  /** 照合そのものが失敗した(404以外の取得の失敗、想定外の例外)。`error`は秘密をマスクした文。 */
+  | {
+      readonly kind: "check_failed";
+      readonly error: string;
+      readonly errorName: string;
+    };
+
 /**
  * 却下の返信の前に照合し、返信を止める理由を返す。通れば`null`を返す。
  * `ensureProposalRepoOwner`と違い、照合そのものの失敗(404以外の取得の失敗を含む)も例外にせず、
- * 失敗を理由にして返信を止める側へ倒す。
+ * `check_failed`にして返信を止める側へ倒す。
  * 判断は記録済みで、例外にすると、承認依頼が`rejected`のままConsoleが操作を出さず、
  * 作業項目が人の対応待ちのまま止まるためである。
+ * 意図した停止(`stopped`)と照合の失敗(`check_failed`)は、呼び出し側が別のログに残せるよう区別する。
  */
 export async function rejectionReplyStop(
   verify: () => Promise<RepoOwnerGateResult>,
-): Promise<string | null> {
+): Promise<RejectionReplyStop | null> {
   try {
-    return await proposalRepoOwnerStop(verify);
+    const reason = await proposalRepoOwnerStop(verify);
+    return reason === null ? null : { kind: "stopped", reason };
   } catch (err) {
-    return `repository owner check failed: ${maskSecrets(err instanceof Error ? err.message : String(err))}`;
+    return {
+      kind: "check_failed",
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      errorName: err instanceof Error ? err.name : "UnknownError",
+    };
   }
 }
 
@@ -237,7 +254,8 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * 通らなければ、何も記録も書き込みもせずに例外を投げる。
  * 承認依頼は`approved`のまま、Consoleの要対応に残る(`console_query.ts`の要約と同じ条件)。
  * 却下は、判断を記録した後、返信の前に照合する(`rejectionReplyStop`)。
- * 通らないとき、照合が失敗したときは、返信だけを止め、警告のログを残して作業項目は先へ進める。
+ * 通らないときは、返信だけを止め、警告のログを残して作業項目は先へ進める。
+ * 照合そのものが失敗したときも、返信を止めて先へ進むが、エラーのログに残す。
  *
  * 承認依頼・Issue提案・作業項目・判断者・auditのレポートが無いとき、
  * 依頼のkindが違うとき、判定で拒否されたときは例外を投げる。
@@ -521,10 +539,16 @@ async function run(
           renderIssueProposalRejectedReply(reason),
         );
         await postDecisionReply(proposal, prNumber, replyBody);
-      } else {
-        log.warn("rejected reply not posted: repository owner check failed", {
+      } else if (stop.kind === "stopped") {
+        log.warn("rejected reply not posted: repository owner check stopped", {
           proposal_id,
-          reason: stop,
+          reason: stop.reason,
+        });
+      } else {
+        log.error("rejected reply not posted: repository owner check failed", {
+          proposal_id,
+          error: stop.error,
+          error_name: stop.errorName,
         });
       }
     }

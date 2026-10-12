@@ -302,23 +302,45 @@ describe("the owner check of an issue proposal", () => {
       expect(await rejectionReplyStop(verify)).toBeNull();
     });
 
-    test("returns the reason when the owner check stops the reply", async () => {
+    test("returns the reason as an intended stop when the owner check stops the reply", async () => {
       const { verify } = verifyReturning(STOPPED);
-      expect(await rejectionReplyStop(verify)).toBe(STOPPED_REASON);
+      expect(await rejectionReplyStop(verify)).toEqual({
+        kind: "stopped",
+        reason: STOPPED_REASON,
+      });
     });
 
-    test("stops the reply instead of throwing when the check fails", async () => {
+    test("tells a failure of the check apart from an intended stop", async () => {
       const stop = await rejectionReplyStop(() =>
         Promise.reject(new Error("HTTP 502")),
       );
-      expect(stop).not.toBeNull();
+      expect(stop?.kind).toBe("check_failed");
     });
 
-    test("names the failure of the check in the stop", async () => {
+    test("carries the failure message of the check", async () => {
       const stop = await rejectionReplyStop(() =>
         Promise.reject(new Error("HTTP 502")),
       );
-      expect(stop).toContain("HTTP 502");
+      expect(stop).toMatchObject({ error: "HTTP 502" });
+    });
+
+    test("carries the error name of the check", async () => {
+      class UpstreamError extends Error {
+        override name = "UpstreamError";
+      }
+      const stop = await rejectionReplyStop(() =>
+        Promise.reject(new UpstreamError("boom")),
+      );
+      expect(stop).toMatchObject({ errorName: "UpstreamError" });
+    });
+
+    test("names a thrown non-error value as a plain error", async () => {
+      const stop = await rejectionReplyStop(() => Promise.reject("boom"));
+      expect(stop).toEqual({
+        kind: "check_failed",
+        error: "boom",
+        errorName: "UnknownError",
+      });
     });
 
     test("masks secrets in the failure of the check", async () => {
@@ -326,7 +348,7 @@ describe("the owner check of an issue proposal", () => {
       const stop = await rejectionReplyStop(() =>
         Promise.reject(new Error(`failed with ${token}`)),
       );
-      expect(stop).not.toContain(token);
+      expect(JSON.stringify(stop)).not.toContain(token);
     });
   });
 });
