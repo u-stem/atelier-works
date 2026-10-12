@@ -403,6 +403,14 @@ describe("describeRetryPlan", () => {
     );
   });
 
+  test("refuses a retry of a dependabot work item", () => {
+    expect(
+      describeRetryPlan(failure({ kind: "dependabot" })).blockedReason,
+    ).toBe(
+      "dependabotの作業項目は再実行できません。PRを確認して手でマージするか閉じてください。",
+    );
+  });
+
   test("leaves the destination of an unknown kind to the run", () => {
     expect(describeRetryPlan(failure({ kind: "future_kind" })).toLabel).toBe(
       "作業項目の種類に応じた状態",

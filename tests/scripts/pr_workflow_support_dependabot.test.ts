@@ -91,6 +91,13 @@ const CASES: {
     nextAction: MANUAL_ACTION,
   },
   {
+    label: "poll",
+    reason: dependabotReason("poll", "the flow could not be started"),
+    described:
+      "dependabotの更新を、PRを取得する処理で人に回しました(the flow could not be started)",
+    nextAction: MANUAL_ACTION,
+  },
+  {
     label: "merge forbidden",
     reason: DEPENDABOT_MERGE_FORBIDDEN_REASON,
     described: "dependabotの更新をマージする権限がありませんでした(403)",

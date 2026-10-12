@@ -57,6 +57,7 @@ import {
   replyReviewComment,
   requestReviewers,
   resolveReviewThread,
+  searchDependabotPrs,
   searchIssues,
   searchPrs,
   setLabels,
@@ -3033,6 +3034,91 @@ describe("searchPrs", () => {
     );
     expect(fake.calls).toHaveLength(QUERY_COUNT + 1); // 1本目のクエリの2ページ分と残りのクエリ
     expect(items.map((item) => item.number)).toEqual([10, 11]);
+  });
+});
+
+describe("searchDependabotPrs", () => {
+  const OWNER_SCOPE = {
+    kind: "owner" as const,
+    owner: "acme",
+    ownerKind: "user" as const,
+  };
+
+  function dependabotItem(number: number, createdAt: unknown): unknown {
+    return {
+      id: number,
+      number,
+      title: `bump ${String(number)}`,
+      body: null,
+      html_url: `https://github.com/acme/widgets/pull/${String(number)}`,
+      repository_url: "https://api.github.com/repos/acme/widgets",
+      user: { login: "dependabot[bot]" },
+      created_at: createdAt,
+    };
+  }
+
+  async function queryOf(
+    scope: Parameters<typeof searchDependabotPrs>[1],
+  ): Promise<string> {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await searchDependabotPrs({ run: fake.run, ghToken: "tok" }, scope);
+    return decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
+  }
+
+  test("asks only for pull requests opened by the dependabot app", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("author:app/dependabot");
+  });
+
+  test("asks only for pull requests based on main", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("base:main");
+  });
+
+  test("asks only for open pull requests", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("is:pr state:open");
+  });
+
+  test("leaves out draft pull requests", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("draft:false");
+  });
+
+  test("narrows an owner scope by the owner qualifier", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("user:acme");
+  });
+
+  test("narrows a repository scope to the repository", async () => {
+    expect(
+      await queryOf({ kind: "repo", owner: "acme", repo: "widgets" }),
+    ).toContain("repo:acme/widgets");
+  });
+
+  test("returns the repository, number and creation time of each pull request", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [dependabotItem(7, "2026-10-01T00:00:00Z")] }),
+    ]);
+
+    const items = await searchDependabotPrs(
+      { run: fake.run, ghToken: "tok" },
+      OWNER_SCOPE,
+    );
+
+    expect(items).toEqual([
+      {
+        owner: "acme",
+        repo: "widgets",
+        number: 7,
+        createdAtMs: Date.parse("2026-10-01T00:00:00Z"),
+      },
+    ]);
+  });
+
+  test("rejects an item without a readable creation time", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [dependabotItem(7, "not a date")] }),
+    ]);
+
+    await expect(
+      searchDependabotPrs({ run: fake.run, ghToken: "tok" }, OWNER_SCOPE),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 });
 

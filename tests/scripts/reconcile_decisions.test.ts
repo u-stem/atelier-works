@@ -6,6 +6,7 @@ import {
   decideClosureOnly,
   decideReconcileAction,
   isWaitingForHuman,
+  reconcileNotifies,
 } from "../../f/factory/lib/poll_support.ts";
 
 const NOW = new Date("2026-09-26T12:00:00.000Z");
@@ -197,5 +198,43 @@ describe("decideReconcileAction — audit kind", () => {
       NOW,
     );
     expect(decision.action).toBe("none");
+  });
+});
+
+describe("reconcileNotifies", () => {
+  test("does not notify a dependabot work item cancelled because its pull request closed", () => {
+    expect(
+      reconcileNotifies("dependabot", {
+        action: "cancel",
+        reason: "pr_closed",
+      }),
+    ).toBe(false);
+  });
+
+  test("notifies a dependabot work item failed as orphaned", () => {
+    expect(
+      reconcileNotifies("dependabot", {
+        action: "fail_orphan",
+        reason: "flow job failed without a terminal status update",
+      }),
+    ).toBe(true);
+  });
+
+  test("keeps notifying a review cancelled because its pull request closed", () => {
+    expect(
+      reconcileNotifies("pr_review", { action: "cancel", reason: "pr_closed" }),
+    ).toBe(true);
+  });
+
+  test("keeps notifying a fix cancelled because its pull request closed", () => {
+    expect(
+      reconcileNotifies("pr_fix", { action: "cancel", reason: "pr_closed" }),
+    ).toBe(true);
+  });
+
+  test("keeps notifying an issue cancelled because it closed", () => {
+    expect(
+      reconcileNotifies("issue", { action: "cancel", reason: "closed" }),
+    ).toBe(true);
   });
 });

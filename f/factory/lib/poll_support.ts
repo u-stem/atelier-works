@@ -19,6 +19,7 @@ import {
   type LatestDeployment,
   type NoticeRecord,
   type WorkItem,
+  type WorkItemKind,
   type WorkItemStatus,
 } from "./types.ts";
 
@@ -968,6 +969,23 @@ export function decideReconcileAction(
     action: "fail_orphan",
     reason: "flow job finished or absent without a terminal status update",
   };
+}
+
+/**
+ * 照合が作業項目を取り消すか失敗にしたときに、Discordへ知らせるか。
+ * dependabotの作業項目を、PRが閉じたことで取り消したときは知らせない。
+ * dependabotは置き換えたPRを自分で閉じるので、閉じたことは人の行動を求めないためである。
+ * ほかの種別と、dependabotの孤立による失敗は知らせる。
+ */
+export function reconcileNotifies(
+  kind: WorkItemKind,
+  decision: Exclude<ReconcileDecision, { readonly action: "none" }>,
+): boolean {
+  return !(
+    kind === "dependabot" &&
+    decision.action === "cancel" &&
+    decision.reason === "pr_closed"
+  );
 }
 
 /**

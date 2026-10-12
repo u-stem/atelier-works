@@ -128,5 +128,6 @@ atelier-works/
 | [実装フローの仕様](docs/internals/implement.md) | 実装フローの仕組みと安全策の詳細 |
 | [PRワークフローの仕様](docs/internals/pr-workflow.md) | PRのレビューと修正の仕組みと安全策の詳細 |
 | [監査の仕様](docs/internals/audit.md) | 監査と改善提案の仕組み |
+| [dependabotの更新の仕様](docs/internals/dependabot.md) | dependabotのPRの選び方、自動マージの流れ、作業項目の状態 |
 | [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
 | [通知の仕様](docs/internals/notifications.md) | Discordへの通知の仕組み |

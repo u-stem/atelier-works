@@ -1166,17 +1166,66 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポ
 
 ## dependabotの更新を設定する
 
-dependabotのセキュリティ更新PRの自動処理は、`f/factory/factory_config`の次の2つの項目で設定する。
+dependabotが開いた依存の更新PRを、Factoryが評価して自動でマージできる。
+`f/factory/factory_config`の次の2つの項目で設定する。
+`factory_config`は同期の対象外なので、WindmillのResourcesの編集画面で直す。
 
 | 項目 | 既定値 | 意味 |
 | --- | --- | --- |
-| `dependabot_enabled` | `false` | dependabotのセキュリティ更新PRを自動で処理するか |
+| `dependabot_enabled` | `false` | dependabotのPRを自動で処理するか |
 | `dependabot_min_published_days` | `7` | 更新先の版が公開されてから、マージしてよくなるまでの日数 |
 
 `dependabot_min_published_days`は、公開から日が浅い版を自動でマージしないための下限である。
 1以上の整数にする。0、負の値、小数は設定の読み込みで拒否する。
-
 既存のリソースにこれらの項目が無くても、既定値で動く。
+
+マージする条件と残るリスクは[セキュリティ](security.md#dependabotの更新の自動マージ)に、選び方と状態は[dependabotの更新の内部仕様](internals/dependabot.md)にある。
+
+### 有効にする
+
+有効にすると、FactoryがPATで`main`へマージする。
+次の順に、1つずつ確かめてから進める。
+設定を一度に変えると、問題が起きたときに原因を切り分けられないためである。
+
+1. [有効化の前の確認](security.md#有効化の前の確認)の表の項目を、上から順にすべて確かめる。
+2. PATの権限を確かめる。
+   Pull requestsとContentsがRead and writeであれば、マージに足りる。
+3. `main`のruleset(`protect-main`)の必須チェックが、[マージする条件](security.md#マージする条件)の7件と同じであることを確かめる。
+   食い違うと、関門が見ていないチェックでマージが拒まれるか、rulesetが求めないチェックを関門だけが待つ。
+4. PATの持ち主がrulesetを迂回できるかを確かめる。
+   迂回できると、マージのAPIが必須チェックを強制しないことがある。
+5. `dependabot_enabled`を`false`のまま、`poll_dependabot`の実行の結果が`enabled: false`で終わることを、WindmillのRunsで確かめる。
+6. dependabotのPRが1件だけ開いているときに、`dependabot_enabled`を`true`にする。
+7. 次の`poll_dependabot`の実行の結果を確かめる。
+   フローを起動していれば、`dependabot`フローの3つのステップの結果と、作業項目の終わり方を確かめる。
+8. 問題があれば、すぐに無効にする。
+
+### 初回の実機で確かめること
+
+最初の数件は、次の点を作業項目の結果とWindmillのRunsで確かめる。
+
+- 隔離したインストールが、npm registryに届き、`--frozen-lockfile`で成功する。
+- インストールが、準備のステップのtimeout(3600秒)の中で終わる。
+- 影響調査のClaudeの出力が、構造化出力の形で受け付けられる。
+- マージしたPRのsquashのcommitの題名が固定の文で、本文が空である。
+- 人に回したPRの通知に、PRのリンクと次の操作が載る。
+
+### 無効にする
+
+`dependabot_enabled`を`false`にする。
+次の実行から、`poll_dependabot`はGitHubとDBのどちらにも触れずに終わる。
+動いているフローは、準備と終了のステップで作業項目を取り消し(`dependabot_disabled`)、GitHubに書かない。
+影響調査のステップも、無効ならClaudeを起動しない。
+スケジュールを止めるのにWindmillの画面で無効にしない。
+`mise run push`がリポジトリの定義で有効に戻すためである。
+
+### 人に回ったとき
+
+dependabotの作業項目は再実行できない。
+通知のリンクからPRを開き、理由とPRのコメントの所見を確かめて、手でマージするか閉じる。
+影響の所見が出たPRを修正に回すときは、所見を確かめてから`factory:fix`ラベルを付ける。
+修正をpushしたPRは、自動ではマージされないので、レビューを確かめて人がマージする。
+新しいcommitが積まれると、Factoryは新しいheadを改めて評価する。
 
 ## モデルを使い分ける
 

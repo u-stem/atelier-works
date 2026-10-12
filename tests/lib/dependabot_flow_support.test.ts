@@ -1580,6 +1580,7 @@ describe("dependabot reasons", () => {
     ["impact", "dependabot impact: "],
     ["assess", "dependabot assess: "],
     ["finish", "dependabot finish: "],
+    ["poll", "dependabot poll: "],
   ] as const)("fixes the %s prefix", (kind, prefix) => {
     expect(DEPENDABOT_REASON_PREFIX[kind]).toBe(prefix);
   });

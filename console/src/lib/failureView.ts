@@ -228,6 +228,15 @@ export function describeRetryPlan(failure: SummaryFailure): RetryPlan {
         blockedReason:
           "監査は再実行できません。次の定期の監査が、失敗した期間を扱います。",
       };
+    // scriptが断るので、再実行のボタンを出さない。新しいheadは取得が別の作業項目で拾う。
+    case "dependabot":
+      return {
+        fromLabel,
+        toLabel: "",
+        note: null,
+        blockedReason:
+          "dependabotの作業項目は再実行できません。PRを確認して手でマージするか閉じてください。",
+      };
     default:
       return {
         fromLabel,
