@@ -838,6 +838,13 @@ export type FactoryOwnerKind = "user" | "org";
 export type FactoryOwner = {
   name: string;
   kind: FactoryOwnerKind;
+  /**
+   * GitHubのアカウントの数値ID(正の整数)。
+   * 指定すると、`poll_issues`と`poll_prs`が検索の前に現在のIDと照合する。
+   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れないため。
+   * 省略すると、名前だけで照合する。
+   */
+  id?: number;
 };
 
 export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
