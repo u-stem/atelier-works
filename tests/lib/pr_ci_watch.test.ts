@@ -30,6 +30,7 @@ import {
   prCiNextAction,
 } from "../../f/factory/lib/pr_ci_support.ts";
 import {
+  buildRepoGates,
   deniedNoticeMessage,
   NO_CI_RECHECK_INTERVAL_MS,
   PR_CI_CHECK_DENIED_KIND,
@@ -39,7 +40,7 @@ import {
   runPrCiWatch,
   UNREADABLE_EXPIRES_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_watch.ts";
-import type { NoticeRecord } from "../../f/factory/lib/types.ts";
+import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
 const SHA_B = "b".repeat(40);
@@ -1583,11 +1584,16 @@ describe("unreadable runs", () => {
   });
 
   test("does not notify a failed row that is readable after the verification recovered", async () => {
+    let verified = false;
     const h = harness({
+      allowed: () => verified,
+      configured: () => true,
       prs: { [PR_KEY]: pr() },
       failed: [row({ state: "failed", first_seen_at: DAY_OLD })],
       runs: { [SHA_A]: [failingRun()] },
     });
+    await runPrCiWatch(h.deps);
+    verified = true;
     await runPrCiWatch(h.deps);
     expect(h.notices).toEqual([]);
   });
@@ -2066,5 +2072,99 @@ describe("dropped runs", () => {
       other_repository: 2,
       other_pull_request: 1,
     });
+  });
+});
+
+describe("buildRepoGates", () => {
+  const acme: FactoryOwner = { name: "acme", kind: "org" };
+  const other: FactoryOwner = { name: "other", kind: "user" };
+  const config = {
+    owners: [acme, other],
+    repo_allowlist: [],
+    factory_repo: "https://github.com/acme/factory",
+  };
+
+  test("allows a repository of a verified owner", () => {
+    expect(
+      buildRepoGates(config, [acme]).isRepoAllowed("acme", "widgets"),
+    ).toBe(true);
+  });
+
+  test("ignores the case of the owner name", () => {
+    expect(
+      buildRepoGates(config, [acme]).isRepoAllowed("ACME", "widgets"),
+    ).toBe(true);
+  });
+
+  test("does not allow a repository of an owner that failed the verification", () => {
+    expect(buildRepoGates(config, [acme]).isRepoAllowed("other", "app")).toBe(
+      false,
+    );
+  });
+
+  test("keeps a repository of an owner that failed the verification as configured", () => {
+    expect(
+      buildRepoGates(config, [acme]).isRepoConfigured("other", "app"),
+    ).toBe(true);
+  });
+
+  test("ignores the case of the owner name when checking the configuration", () => {
+    expect(buildRepoGates(config, []).isRepoConfigured("OTHER", "app")).toBe(
+      true,
+    );
+  });
+
+  test("allows nothing of an owner that is not in the configuration", () => {
+    expect(
+      buildRepoGates(config, [acme]).isRepoAllowed("stranger", "app"),
+    ).toBe(false);
+  });
+
+  test("does not count an owner that is not in the configuration as configured", () => {
+    expect(
+      buildRepoGates(config, [acme]).isRepoConfigured("stranger", "app"),
+    ).toBe(false);
+  });
+
+  test("always allows the factory repository", () => {
+    expect(buildRepoGates(config, []).isRepoAllowed("acme", "factory")).toBe(
+      true,
+    );
+  });
+
+  test("always counts the factory repository as configured", () => {
+    expect(
+      buildRepoGates({ ...config, owners: [] }, []).isRepoConfigured(
+        "acme",
+        "factory",
+      ),
+    ).toBe(true);
+  });
+
+  test("does not count a repository outside a non-empty allowlist as configured", () => {
+    expect(
+      buildRepoGates(
+        { ...config, repo_allowlist: ["https://github.com/acme/widgets"] },
+        [acme],
+      ).isRepoConfigured("acme", "other-app"),
+    ).toBe(false);
+  });
+
+  test("counts a repository in a non-empty allowlist as configured even if the owner failed the verification", () => {
+    expect(
+      buildRepoGates(
+        { ...config, repo_allowlist: ["https://github.com/other/app"] },
+        [acme],
+      ).isRepoConfigured("other", "app"),
+    ).toBe(true);
+  });
+
+  test("does not allow a repository in the allowlist when the owner failed the verification", () => {
+    expect(
+      buildRepoGates(
+        { ...config, repo_allowlist: ["https://github.com/other/app"] },
+        [acme],
+      ).isRepoAllowed("other", "app"),
+    ).toBe(false);
   });
 });

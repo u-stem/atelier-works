@@ -11,7 +11,7 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
-import { isRepoAllowed, loadConfig } from "./lib/config.ts";
+import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   listFailedPrCiChecks,
@@ -36,6 +36,7 @@ import {
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import {
+  buildRepoGates,
   PR_CI_WATCH_IDLE_RESULT,
   type PrCiWatchResult,
   runPrCiWatch,
@@ -88,27 +89,11 @@ export async function main(): Promise<PrCiWatchResult> {
     recordFailure: (step, err) => recordFailureSafe(step, err, log),
     addNotice: (record) => addNoticeUnlessUnresolved(record),
   });
-  const allowConfig = {
-    owners: verified.owners,
-    repo_allowlist: config.repo_allowlist,
-    factory_repo: config.factory_repo,
-  };
-
   const result = await runPrCiWatch({
     now: () => new Date(),
     log,
     instanceName: config.instance_name,
-    isRepoAllowed: (owner, repo) => isRepoAllowed(allowConfig, owner, repo),
-    isRepoConfigured: (owner, repo) =>
-      isRepoAllowed(
-        {
-          owners: config.owners,
-          repo_allowlist: config.repo_allowlist,
-          factory_repo: config.factory_repo,
-        },
-        owner,
-        repo,
-      ),
+    ...buildRepoGates(config, verified.owners),
     listTrackedItems: async () => {
       const items = await listPrOpenIssueWorkItems(
         new Date(Date.now() - config.tracked_pr_days * DAY_MS),

@@ -9,6 +9,7 @@
 // 1つの行の判定は、実行を読む、PRのheadを読む、判定する、の順に行う。
 // 先にPRのheadを読むと、読んでいる間に進んだheadの実行を、今のheadの失敗として扱ってしまう。
 
+import { isRepoAllowed } from "./config.ts";
 import type { NewPrCiCheck, PrCiCheck, PrCiTransition } from "./db.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
@@ -39,7 +40,12 @@ import {
   prCiSummary,
   pullRequestPageUrl,
 } from "./pr_ci_support.ts";
-import { assertGitHubName, type NoticeRecord } from "./types.ts";
+import {
+  assertGitHubName,
+  type FactoryConfig,
+  type FactoryOwner,
+  type NoticeRecord,
+} from "./types.ts";
 
 /** PRのCIの実行をGitHubから読めないことを知らせるnoticeの種類。 */
 export const PR_CI_CHECK_DENIED_KIND = "pr_ci_check_denied";
@@ -119,16 +125,41 @@ export function deniedNoticeMessage(owner: string, repo: string): string {
   return `${repoNoticePrefix(owner, repo)}PRのCIの実行をGitHubから読めません(403か404)。PATの権限が足りないか、リポジトリにアクセスできません。次の操作: ${DENIED_NEXT_ACTION}`;
 }
 
+/**
+ * 巡回の対象にするかの判定を作る。
+ * `isRepoAllowed`は、照合を通ったオーナー(`verifiedOwners`)に合うリポジトリを許す。
+ * `isRepoConfigured`は、同じ規則を設定の`owners`の全体に当てる。
+ * `factory_repo`は、どちらも常に許す。
+ */
+export function buildRepoGates(
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
+  verifiedOwners: readonly FactoryOwner[],
+): {
+  readonly isRepoAllowed: (owner: string, repo: string) => boolean;
+  readonly isRepoConfigured: (owner: string, repo: string) => boolean;
+} {
+  const verified = {
+    owners: [...verifiedOwners],
+    repo_allowlist: config.repo_allowlist,
+    factory_repo: config.factory_repo,
+  };
+  return {
+    isRepoAllowed: (owner, repo) => isRepoAllowed(verified, owner, repo),
+    isRepoConfigured: (owner, repo) => isRepoAllowed(config, owner, repo),
+  };
+}
+
 export type PrCiWatchDeps = {
   readonly now: () => Date;
   readonly log: Logger;
   readonly instanceName: string;
-  /** 許可リストと、照合済みのオーナーに合うリポジトリか。 */
+  /** 許可リストと、照合を通ったオーナーに合うリポジトリか(`buildRepoGates`)。 */
   readonly isRepoAllowed: (owner: string, repo: string) => boolean;
   /**
-   * 照合前の設定に合うリポジトリか。`factory_repo`、`repo_allowlist`の項目、
-   * `owners`のオーナーのいずれかに合えば`true`で、照合に失敗したオーナーも含める。
-   * `isRepoAllowed`が`false`でも、こちらが`true`なら、照合が一時的に失敗しているだけかもしれない。
+   * `isRepoAllowed`と同じ規則を、照合前の`owners`に当てた結果(`buildRepoGates`)。
+   * 照合に失敗したオーナーの、許可リストに合うリポジトリは`true`になる。
+   * `repo_allowlist`が空でないときは、許可リストの項目まで外れて初めて`false`になる。
+   * `isRepoAllowed`が`false`でもこちらが`true`なら、照合が一時的に失敗しているだけかもしれない。
    */
   readonly isRepoConfigured: (owner: string, repo: string) => boolean;
   /** PRを作ったまま`pr_open`の作業項目。新しい順に、最大`TRACKED_PR_LIMIT`件。 */
@@ -854,7 +885,8 @@ async function expireStalePending(
 }
 
 /**
- * 読めない行を扱う。`removed`は、リポジトリが設定から外れた(`factory_repo`にも`repo_allowlist`にも`owners`にも合わない)ことを表す。
+ * 読めない行を扱う。`removed`は、リポジトリが設定から外れた(`isRepoConfigured`が`false`)ことを表す。
+ * `repo_allowlist`が空でないときは、許可リストの項目まで外れて初めて外れたと数える。
  * オーナーの照合に失敗しているだけの回は含まない。
  * 最初に見てから`UNREADABLE_EXPIRES_AFTER_MS`たつと、判定待ちの行は、どちらの条件でも通知せずに`expired`にする。
  * 失敗と実行なしの行は、`removed`のときだけ`superseded`にし、そのPRの失敗のnoticeを解決する。
