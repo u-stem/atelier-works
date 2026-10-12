@@ -613,11 +613,24 @@ export async function insertDependabotWorkItemUnlessActive(
 }
 
 /**
- * 同じPRの同じheadのdependabotの作業項目が、取り消した行(`cancelled`)を除いて1件でもあるか。
+ * dependabotのフロー自身が作業項目を取り消すときの注記(`steps/dependabot_prepare.ts`の`DEPENDABOT_CANCEL_NOTE`)。
+ * 無効化、PRが閉じた、headの移動、公開日数の待ちで、どれもそのheadをまだ判断していない。
+ * libはstepsを読み込まないので、値を写している(テストが一致を確かめる)。
+ */
+export const DEPENDABOT_REPROCESSABLE_CANCEL_NOTES: readonly string[] = [
+  "dependabot_disabled",
+  "pr_closed",
+  "head_moved",
+  "gate_waiting",
+];
+
+/**
+ * 同じPRの同じheadのdependabotの作業項目が、処理し直してよい取り消しの行を除いて1件でもあるか。
  * マージの後や人に回した後に、同じheadを処理し直さないために使う。
- * 取り消した行は数えない。公開日数の待ち、headの移動、無効化、PRが閉じたことで止めた行で、
- * そのheadはまだ判断していないため、同じheadを処理し直せるようにする。
- * 失敗した行(`failed`)は処理済みとして数える。`retry_work_item`はdependabotの作業項目を再開しないので、
+ * 処理し直してよい取り消しは、最新の取り消しの注記が`DEPENDABOT_REPROCESSABLE_CANCEL_NOTES`のどれかである行に限る。
+ * フロー自身がそのheadを判断せずに止めた行なので、同じheadを処理し直せるようにする。
+ * 照合などほかの処理が取り消した行は、処理済みとして数える。取り消した理由が分からないheadを、自動で処理し直さないためである。
+ * 失敗した行(`failed`)も処理済みとして数える。`retry_work_item`はdependabotの作業項目を再開しないので、
  * マージや投稿の後に失敗した可能性のあるheadを、自動で二度処理しないためである。
  * 終端の行は、`cleanup_db`が保持期間(`retention_work_items_days`)を過ぎると削除する。
  * 行が消えると、同じheadを再び処理する。保持期間より長く、処理済みであることを保証するものではない。
@@ -635,11 +648,20 @@ export async function hasDependabotItemForHead(
   assertGitHubName(repo);
   assertPrNumber(prNumber);
   assertCommitSha(headSha);
+  const reprocessable: string[] = [...DEPENDABOT_REPROCESSABLE_CANCEL_NOTES];
   const rows = await sql`
-    SELECT id FROM factory.work_items
-    WHERE kind = 'dependabot' AND owner = ${owner} AND repo = ${repo}
-      AND pr_number = ${prNumber}::integer AND head_sha = ${headSha}
-      AND status <> 'cancelled'
+    SELECT wi.id FROM factory.work_items wi
+    WHERE wi.kind = 'dependabot' AND wi.owner = ${owner} AND wi.repo = ${repo}
+      AND wi.pr_number = ${prNumber}::integer AND wi.head_sha = ${headSha}
+      AND NOT (
+        wi.status = 'cancelled'
+        AND COALESCE((
+          SELECT e.note FROM factory.work_item_events e
+          WHERE e.work_item_id = wi.id AND e.to_status = 'cancelled'
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ) = ANY(${reprocessable}), false)
+      )
     LIMIT 1
   `.fetch();
   return rows.length > 0;

@@ -8,6 +8,7 @@ import {
   countImplementFailedRounds,
   countPendingIssueProposals,
   countPrFixFailures,
+  DEPENDABOT_REPROCESSABLE_CANCEL_NOTES,
   decideApprovalRequestIfPending,
   decideIssueProposal,
   deleteDeploymentsBefore,
@@ -121,6 +122,7 @@ import {
 } from "../../f/factory/lib/db.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
+import { DEPENDABOT_CANCEL_NOTE } from "../../f/factory/steps/dependabot_prepare.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -470,31 +472,7 @@ describe("hasDependabotItemForHead", () => {
     expect(calls[0]?.text).toContain("kind = 'dependabot'");
   });
 
-  test("leaves out cancelled rows so that the same head can be processed again", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await hasDependabotItemForHead(
-      "octo-owner",
-      "atelier-works",
-      77,
-      DEPENDABOT_SHA,
-      sql,
-    );
-    expect(calls[0]?.text).toContain("status <> 'cancelled'");
-  });
-
-  test("filters by no status other than cancelled so that other terminal rows count", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await hasDependabotItemForHead(
-      "octo-owner",
-      "atelier-works",
-      77,
-      DEPENDABOT_SHA,
-      sql,
-    );
-    expect(calls[0]?.text.match(/status/g)).toHaveLength(1);
-  });
-
-  test("binds the owner, repo, pull request number and head sha", async () => {
+  test("binds the owner, repo, pull request number, head sha and the reprocessable cancel notes", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasDependabotItemForHead(
       "octo-owner",
@@ -508,7 +486,14 @@ describe("hasDependabotItemForHead", () => {
       "atelier-works",
       77,
       DEPENDABOT_SHA,
+      [...DEPENDABOT_REPROCESSABLE_CANCEL_NOTES],
     ]);
+  });
+
+  test("treats exactly the cancel notes of the dependabot flow as reprocessable", () => {
+    expect([...DEPENDABOT_REPROCESSABLE_CANCEL_NOTES].sort()).toEqual(
+      Object.values(DEPENDABOT_CANCEL_NOTE).sort(),
+    );
   });
 
   test("limits the lookup to one row", async () => {
