@@ -1009,6 +1009,8 @@ workerの時計とGitHubの時計が数分ずれても、確定を待つ時間�
 CIが失敗したheadを見つけると、通知`pr_ci_failed`を残し、Discordにも`needs_human`として届ける。
 リンク先の実行のログで原因を確かめ、PRに修正を入れる。
 metadataジョブの失敗なら、`mise run metadata`を実行して差分をコミットする。
+`mise run metadata`はローカルのWindmillに接続するため、先に`mise run up`でスタックを起動しておく([セットアップ](setup.md#gitのフック))。
+metadataジョブはWindmillの起動やログインでも落ちるので、`mise run metadata`で差分が出ないときは、実行をやり直す。
 取り消しやフレークなら、実行をやり直す。
 通知は、次のときに自動で解決される。
 
