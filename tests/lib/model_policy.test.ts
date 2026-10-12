@@ -8,7 +8,7 @@ import {
 const CONFIG = { model: "light-model", heavy_model: "heavy-model" };
 
 describe("modelFor", () => {
-  test.each(["requirements", "pr_review", "audit"] as const)(
+  test.each(["requirements", "pr_review", "audit", "dependabot"] as const)(
     "uses heavy_model for %s with no failures",
     (stage) => {
       expect(modelFor(CONFIG, stage, 0)).toBe("heavy-model");
@@ -41,6 +41,12 @@ describe("modelFor", () => {
 
   test("uses heavy_model for pr_fix after two failures", () => {
     expect(modelFor(CONFIG, "pr_fix", 2)).toBe("heavy-model");
+  });
+});
+
+describe("modelFor for dependabot", () => {
+  test("keeps heavy_model after many failures", () => {
+    expect(modelFor(CONFIG, "dependabot", 5)).toBe("heavy-model");
   });
 });
 
@@ -77,6 +83,10 @@ describe("modelChangesAfterFailure", () => {
 
   test("is false for a stage that always uses heavy_model", () => {
     expect(modelChangesAfterFailure(CONFIG, "pr_review", 1)).toBe(false);
+  });
+
+  test("is false for dependabot, which always uses heavy_model", () => {
+    expect(modelChangesAfterFailure(CONFIG, "dependabot", 1)).toBe(false);
   });
 
   test("is false when model and heavy_model are the same", () => {

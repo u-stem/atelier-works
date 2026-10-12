@@ -11,6 +11,13 @@ import {
   CheckEnvironmentError,
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
+import {
+  DEPENDABOT_MERGE_FORBIDDEN_REASON,
+  DEPENDABOT_MERGE_REFUSED_REASON,
+  DEPENDABOT_REASON_PREFIX,
+  DEPENDABOT_RESULT_UNKNOWN_REASON,
+  DEPENDABOT_TIMEOUT_MISFIT_REASON,
+} from "../lib/dependabot_flow_support.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
 import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import {
@@ -3599,7 +3606,113 @@ function worktreeLockHeldInRunNextAction(
   return `検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}(実装なら残ったプロセスは再実行の準備ステップが止めます)`;
 }
 
+/** 理由の接頭辞(正規表現の特殊文字を含みうる)で始まる理由に一致する正規表現を返す。末尾に`tail`を続ける。 */
+function reasonPattern(prefix: string, tail: string): RegExp {
+  return new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}${tail}`);
+}
+
+/**
+ * dependabotの作業項目を、自動で処理できず人に回すときの次の操作。
+ * dependabotの作業項目は`retry_work_item`が拒否するので、再実行は案内しない。
+ * 新しいコミットが積まれると、取得が新しいheadの別の作業項目として拾う。
+ */
+const DEPENDABOT_MANUAL_NEXT_ACTION =
+  "PRの内容を人が確認し、問題なければ手でマージするか閉じてください。この作業項目は再実行できません。新しいコミットが積まれると、自動で再び対象になります";
+const DEPENDABOT_IMPACT_NEXT_ACTION =
+  "PRのコメントの所見を確認し、問題なければ手でマージするか閉じてください。この作業項目は再実行できません。新しいコミットが積まれると、自動で再び対象になります";
+
 const REASON_RULES: readonly ReasonRule[] = [
+  // dependabotの理由(`lib/dependabot_flow_support.ts`の`dependabotReason`と固定の理由)。
+  // 詳細にほかの規則の文字列が入りうるので、ほかの規則より先に当てる。
+  // dependabotの作業項目は`retry_work_item`が拒否するので、どの規則も再実行を案内しない。
+  {
+    pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.gate, "([\\s\\S]+)$"),
+    describe: (m) =>
+      `dependabotの更新が、自動でマージする条件を満たしていません(${m[1]})`,
+    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.collect, "([\\s\\S]+)$"),
+    describe: (m) =>
+      `dependabotの更新の検査に必要な情報を集められませんでした(${m[1]})`,
+    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(
+      DEPENDABOT_REASON_PREFIX.installFailed,
+      "([\\s\\S]+)$",
+    ),
+    describe: (m) =>
+      `dependabotの更新の依存を、隔離した環境でインストールできませんでした(${m[1]})`,
+    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.localCheck, "([\\s\\S]+)$"),
+    describe: (m) =>
+      `dependabotの更新を、インストールした後の確認で止めました(${m[1]})`,
+    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(
+      DEPENDABOT_REASON_PREFIX.unverifiedInputs,
+      "([\\s\\S]+)$",
+    ),
+    describe: (m) =>
+      `dependabotの更新の影響調査に必要な入力が、一部確認できませんでした(${m[1]})`,
+    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+  },
+  // `decideImpactOutcome`が返す2つの理由は、件数を訳に含める。
+  {
+    pattern: reasonPattern(
+      DEPENDABOT_REASON_PREFIX.impact,
+      "(\\d+) supply chain concern",
+    ),
+    describe: (m) =>
+      `dependabotの更新の影響調査で、サプライチェーンの懸念が${m[1]}件報告されました`,
+    nextAction: () => DEPENDABOT_IMPACT_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(
+      DEPENDABOT_REASON_PREFIX.impact,
+      "(\\d+) unverified item",
+    ),
+    describe: (m) =>
+      `dependabotの更新の影響調査で、未確認の項目が${m[1]}件残っています`,
+    nextAction: () => DEPENDABOT_IMPACT_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.impact, "([\\s\\S]+)$"),
+    describe: (m) =>
+      `dependabotの更新の影響調査で、人の確認が必要と判断しました(${m[1]})`,
+    nextAction: () => DEPENDABOT_IMPACT_NEXT_ACTION,
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_MERGE_FORBIDDEN_REASON, ""),
+    describe: () => "dependabotの更新をマージする権限がありませんでした(403)",
+    nextAction: () =>
+      "PATにマージ権限があるかと、rulesetのbypassを確認し、手でマージしてください",
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_MERGE_REFUSED_REASON, ""),
+    describe: () => "GitHubがdependabotの更新のマージを拒否しました(405)",
+    nextAction: () => "マージできない理由(競合や保護)を確認してください",
+  },
+  {
+    pattern: reasonPattern(DEPENDABOT_RESULT_UNKNOWN_REASON, ""),
+    describe: () => "dependabotの更新のマージ結果を確認できませんでした",
+    nextAction: () =>
+      "PRがマージ済みかを確認してください。未マージなら内容を確認し、手でマージするか閉じてください。この作業項目は再実行できません",
+  },
+  {
+    pattern: reasonPattern(
+      `${DEPENDABOT_TIMEOUT_MISFIT_REASON}: `,
+      "([\\s\\S]+)$",
+    ),
+    describe: (m) =>
+      `dependabotの時間設定が、flow.yamlの影響調査ステップのtimeoutに収まりません(${m[1]})`,
+    nextAction: () =>
+      "claude_timeout_secを減らしてください。この作業項目は再実行できないので、PRは人が確認して手でマージするか閉じてください",
+  },
   // 稼働中のIssueの部分一意インデックス(`work_items_active_issue_key`)への違反。
   // `approved`から`implementing`への移行が阻まれたときに、`cas_failed`の理由として現れる。
   // 同じIssueの別の作業項目が現在のサイクルなので、この作業項目は再開できない。
