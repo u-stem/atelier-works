@@ -73,7 +73,8 @@ flowchart TD
 
 ### 状態の一覧
 
-作業項目の種別(`kind`)は、Issueの`issue`、PRレビューの`pr_review`、PR修正の`pr_fix`、監査の`audit`の4つである。
+作業項目の種別(`kind`)は5つある。
+Issueは`issue`、PRレビューは`pr_review`、PR修正は`pr_fix`、監査は`audit`、dependabotのセキュリティ更新PRは`dependabot`である。
 
 | status | 意味 | 種別 | 終端 |
 | --- | --- | --- | --- |
@@ -340,6 +341,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/console_worker` | script | [LIB] Console用workerの停止の検知 |
 | `f/factory/lib/db` | script | [LIB] Data Tableアクセス |
 | `f/factory/lib/cleanup_db_support` | script | [LIB] DB掃除の純粋ロジック |
+| `f/factory/lib/dependabot_support` | script | [LIB] dependabot更新のゲート判定 |
 | `f/factory/lib/discord` | script | [LIB] Discord通知 |
 | `f/factory/lib/drawio_viewer_bump` | script | [LIB] draw.ioのビューアの固定の更新 |
 | `f/factory/lib/drawio_viewer_bump_github` | script | [LIB] draw.ioのビューアの更新のGitHub操作 |
