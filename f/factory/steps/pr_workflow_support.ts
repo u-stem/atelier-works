@@ -923,7 +923,7 @@ export function shouldReadPrFixHeadState(
  * pr_fixがpushするのはheadブランチなので、baseの保護は見ない。
  * mainを保護するruleset(対象は既定のブランチ)は`protected: true`として返ることを確かめた。
  * globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていないので、
- * ブランチに効くrulesetの規則も別に読み、1件でもあれば保護として扱う。
+ * ブランチに効くrulesetの規則も別に読み、1件でもあれば止める。
  * 呼び出し側は、`shouldReadPrFixHeadState`が真のPRにだけ使う。
  * 読めなければ例外を投げる。
  */
@@ -948,7 +948,7 @@ export async function fetchPrFixHeadBranchState(
  * headの状態、デフォルトブランチ、保護ブランチの順に判定する。
  * PRがopenであること、head.repoとbase.repoが同じであること(forkへpushしない)、
  * draftでないこと、auto-mergeが有効でないこと、
- * headブランチが保護ブランチ(rulesetが効くブランチを含む)でもデフォルトブランチでもないこと。
+ * headブランチがデフォルトブランチでも保護ブランチでもなく、rulesetのruleも効いていないこと。
  * auto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマージされうる。
  * 読めなければ`fetchPrFixHeadBranchState`が例外を投げるので、`null`は通常は届かない。
  * `null`の分岐は、呼び出し側が読み忘れたときに備える多層防御である。
@@ -983,8 +983,12 @@ export function evaluatePrFixSafetyGuards(
   if (input.headBranch.headIsDefaultBranch) {
     return { ok: false, reason: "head branch is the default branch" };
   }
-  if (input.headBranch.headProtected || input.headBranch.headHasRules) {
+  if (input.headBranch.headProtected) {
     return { ok: false, reason: "head branch is protected" };
+  }
+  // ruleの種類は問わずに止める。止めすぎは安全側で、`protected`に反映されないrulesetを見落とさないため。
+  if (input.headBranch.headHasRules) {
+    return { ok: false, reason: "head branch has rules" };
   }
   return { ok: true };
 }
@@ -3632,6 +3636,12 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^head branch is protected$/,
     describe: () => "headブランチが保護されています",
+    nextAction: () =>
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+  },
+  {
+    pattern: /^head branch has rules$/,
+    describe: () => "headブランチに適用されるrulesetのruleがあります",
     nextAction: () =>
       "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
   },

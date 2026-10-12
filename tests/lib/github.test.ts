@@ -2942,6 +2942,7 @@ describe("getPr", () => {
         mergeable: true,
         mergeable_state: "clean",
         user: { login: "alice", type: "User" },
+        auto_merge: null,
       }),
     ]);
     const pr = await getPr(
@@ -2994,6 +2995,49 @@ describe("getPr", () => {
       15,
     );
     expect(pr.autoMergeEnabled).toBe(true);
+  });
+
+  // `auto_merge`が読めない形のときは、無効と決めつけず有効として扱い、修正を止める。
+  async function autoMergeFor(extra: Record<string, unknown>) {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 17,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: true,
+        mergeable_state: "clean",
+        user: { login: "alice", type: "User" },
+        ...extra,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      17,
+    );
+    return pr.autoMergeEnabled;
+  }
+
+  test("treats a missing auto_merge key as enabled", async () => {
+    expect(await autoMergeFor({})).toBe(true);
+  });
+
+  test("treats a boolean auto_merge as enabled", async () => {
+    expect(await autoMergeFor({ auto_merge: true })).toBe(true);
+  });
+
+  test("treats a string auto_merge as enabled", async () => {
+    expect(await autoMergeFor({ auto_merge: "squash" })).toBe(true);
+  });
+
+  test("treats an array auto_merge as enabled", async () => {
+    expect(await autoMergeFor({ auto_merge: [] })).toBe(true);
   });
 
   test("reports auto-merge as disabled when auto_merge is null", async () => {
@@ -3641,6 +3685,20 @@ describe("getBranchRuleCount", () => {
     expect(fake.calls[0]?.argv[2]).toBe(
       "repos/acme/widgets/rules/branches/feature%2Fx",
     );
+  });
+
+  test("throws GitHubHttpError when the API answers 403", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "Resource not accessible" })),
+    ]);
+    await expect(
+      getBranchRuleCount(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "main",
+      ),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
   });
 
   test("throws when the response is not an array", async () => {

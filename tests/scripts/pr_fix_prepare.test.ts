@@ -26,7 +26,7 @@ import {
   prFixTimeoutMisfit,
   shouldReadPrFixHeadState,
 } from "../../f/factory/steps/pr_workflow_support.ts";
-import { ghApiOk } from "../lib/testSupport.ts";
+import { ghApiOk, ghApiStdout, ok } from "../lib/testSupport.ts";
 
 const SAFE_INPUT = {
   open: true,
@@ -98,11 +98,23 @@ describe("evaluatePrFixSafetyGuards", () => {
     );
   });
 
-  test("fails when a ruleset applies to the head branch", () => {
+  test("fails when only rules apply to the head branch", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
       headBranch: {
         headProtected: false,
+        headHasRules: true,
+        headIsDefaultBranch: false,
+      },
+    });
+    expect(!result.ok && result.reason).toBe("head branch has rules");
+  });
+
+  test("reports the protected reason when the branch is protected and has rules", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: {
+        headProtected: true,
         headHasRules: true,
         headIsDefaultBranch: false,
       },
@@ -269,6 +281,27 @@ describe("fetchPrFixHeadBranchState", () => {
       "release/*",
     );
     expect(state.headHasRules).toBe(true);
+  });
+
+  test("propagates the error when the rules cannot be read", async () => {
+    const run: CommandRunner = async (argv) => {
+      const endpoint = argv[2] ?? "";
+      if (endpoint.startsWith("repos/acme/widgets/rules/branches/")) {
+        return ok(ghApiStdout(403, { message: "Resource not accessible" }));
+      }
+      if (endpoint === "repos/acme/widgets") {
+        return ghApiOk({ default_branch: "main" });
+      }
+      return ghApiOk({ protected: false });
+    };
+    await expect(
+      fetchPrFixHeadBranchState(
+        { run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "feature/x",
+      ),
+    ).rejects.toBeInstanceOf(Error);
   });
 
   test("reports a head branch that no ruleset applies to", async () => {
@@ -577,6 +610,12 @@ describe("describeReason", () => {
     );
   });
 
+  test("translates the head branch rules reason", () => {
+    expect(describeReason("head branch has rules")).toBe(
+      "headブランチに適用されるrulesetのruleがあります",
+    );
+  });
+
   test("translates the auto-merge reason", () => {
     expect(describeReason("pull request has auto-merge enabled")).toBe(
       "PRのauto-mergeが有効です",
@@ -675,6 +714,12 @@ describe("nextActionFor", () => {
 
   test("asks a person to fix the PR when the head branch is the default branch", () => {
     expect(nextActionFor("head branch is the default branch")).toBe(
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+    );
+  });
+
+  test("asks a person to fix the PR when rules apply to the head branch", () => {
+    expect(nextActionFor("head branch has rules")).toBe(
       "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
     );
   });

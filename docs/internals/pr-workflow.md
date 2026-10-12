@@ -775,6 +775,7 @@ PR修正の準備のステップは、worktreeを作る前に次を確かめる(
 | headのブランチの状態を読める | 失敗(`failed`)。`job_failed`で通知する |
 | headのブランチがデフォルトブランチでない | ブロック |
 | headのブランチが保護ブランチでない | ブロック |
+| headのブランチにrulesetのruleが適用されていない | ブロック |
 
 PR修正がpushするのはheadのブランチなので、headの保護を確かめる。
 baseが保護されていても、headが普通のブランチなら止めない。
@@ -782,7 +783,9 @@ baseが保護されていても、headが普通のブランチなら止めない
 `main`を保護するruleset(対象は既定のブランチ)は、`protected: true`として返ることを確かめた。
 globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていない。
 そのため、headのブランチに効くrulesetの規則も、`GET repos/{owner}/{repo}/rules/branches/{branch}`で読む。
-1件でもあれば、保護ブランチとして扱う。
+1件でもあれば、理由`head branch has rules`でブロックにする。
+ruleの種類は問わずに止める。
+止めすぎは安全側で、`protected`に反映されないrulesetを見落とさないためである。
 auto-mergeが有効なPRを止めるのは、Factoryの修正pushがレビューを経ずにマージされうるからである。
 headの状態は、GitHubのAPIで読む。
 読めなかったときは例外になり、flowの失敗ハンドラが作業項目を失敗(`failed`)にして、`job_failed`で通知する。ブロックにはならない。

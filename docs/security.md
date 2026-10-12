@@ -1682,7 +1682,7 @@ gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し
 
 ### PRの状態とheadの確認
 
-準備のステップで、PRについて次の7点を確かめる。
+準備のステップで、PRについて次の8点を確かめる。
 
 - openである。
 - forkからでない。
@@ -1691,6 +1691,7 @@ gitの実行には`GIT_NO_REPLACE_OBJECTS=1`を付け、`refs/replace/`で差し
 - headのブランチの状態を読める。
 - headのブランチがリポジトリのデフォルトブランチでない。
 - headのブランチが保護ブランチでない。
+- headのブランチにrulesetのruleが適用されていない。
 
 状態を読めない場合を除き、通らなければ、worktreeを作らずにブロック(`blocked`)で止める。
 forkのブランチ、保護ブランチ、デフォルトブランチにはFactoryがpushしてはならず、draftのPRは作者がまだ作業しているためである。
@@ -1700,7 +1701,9 @@ auto-mergeが有効だと、Factoryの修正pushがレビューを経ずにマ�
 保護の有無は、GitHubのbranches APIの`protected`で読む。
 `main`を保護するruleset(対象は既定のブランチ)は、`protected: true`として返ることを確かめた。
 globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていない。
-そのため、`GET repos/{owner}/{repo}/rules/branches/{branch}`でheadのブランチに効くrulesetの規則も読み、1件でもあれば保護ブランチとして扱う。
+そのため、`GET repos/{owner}/{repo}/rules/branches/{branch}`でheadのブランチに効くrulesetの規則も読み、1件でもあれば止める。
+ruleの種類は問わずに止める。
+止めすぎは安全側で、`protected`に反映されないrulesetを見落とさないためである。
 headのブランチの状態を読めなかったときは、例外になって作業項目が失敗(`failed`)になり、`job_failed`で通知する。
 どの場合も、worktreeを作る前に止まる。
 

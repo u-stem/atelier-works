@@ -2220,9 +2220,9 @@ export async function getPr(
       isRecord(parsed.user) && typeof parsed.user.type === "string"
         ? parsed.user.type
         : null,
-    // 無効なら`null`。`null`でも未指定でもない値は、読み違えても通さないよう有効として扱う。
-    autoMergeEnabled:
-      parsed.auto_merge !== null && parsed.auto_merge !== undefined,
+    // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
+    // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
+    autoMergeEnabled: parsed.auto_merge !== null,
   };
 }
 
