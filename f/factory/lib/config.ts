@@ -86,6 +86,8 @@ type DefaultableField =
   | "implement_flow_timeout_sec"
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
+  | "dependabot_enabled"
+  | "dependabot_min_published_days"
   | "check_commands_by_repo";
 
 /**
@@ -138,6 +140,9 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_flow_timeout_sec: 14400,
   implement_max_changed_files: 60,
   implement_max_diff_lines: 3000,
+  // dependabotの自動処理は既定で無効にし、リモートのリソースで有効にする。
+  dependabot_enabled: false,
+  dependabot_min_published_days: 7,
   check_commands_by_repo: {},
 };
 
@@ -579,6 +584,16 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
+    ),
+    dependabot_enabled: booleanField(
+      raw,
+      "dependabot_enabled",
+      DEFAULTS.dependabot_enabled,
+    ),
+    dependabot_min_published_days: positiveIntegerField(
+      raw,
+      "dependabot_min_published_days",
+      DEFAULTS.dependabot_min_published_days,
     ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,

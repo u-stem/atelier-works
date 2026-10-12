@@ -21,12 +21,14 @@ import {
   getLatestPrCiCheck,
   getNoticeById,
   getPreviousMainCiRun,
+  hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
   hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
   insertCleanupRun,
+  insertDependabotWorkItemUnlessActive,
   insertWorkerSample,
   insertWorkItem,
   latestMainCiRunCreatedAt,
@@ -2807,6 +2809,107 @@ check(
   "kind: a dependabot work item can be inserted",
   dependabotItem > 0,
   dependabotItem,
+);
+
+// dependabotの作業項目の部分一意インデックス(`work_items_active_dependabot_key`)は、
+// 同じPRの終端でない2件目を拒み、終端になれば同じPRに入れ、ほかの種類の行には影響しない。
+const DEPENDABOT_SHA_A = "a".repeat(40);
+const DEPENDABOT_SHA_B = "b".repeat(40);
+function dependabotCandidate(pr: number, headSha: string) {
+  return {
+    owner: OWNER,
+    repo: "r",
+    pr_number: pr,
+    title: "qdb dependabot candidate",
+    status: "picked" as const,
+    claimed_by: null,
+    head_sha: headSha,
+  };
+}
+const dependabotFirst = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: the first insert for a pull request returns the id",
+  dependabotFirst !== null && dependabotFirst > 0,
+  dependabotFirst,
+);
+const dependabotSecond = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_B),
+  sql,
+);
+check(
+  "dependabot intake: a second active work item for the same pull request returns null",
+  dependabotSecond === null,
+  dependabotSecond,
+);
+const dependabotOtherPr = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9102, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: another pull request is not blocked",
+  dependabotOtherPr !== null && dependabotOtherPr > 0,
+  dependabotOtherPr,
+);
+await prWorkItem("pr_review", 9103, "reviewing", "qdb-dependabot-other-kind");
+const dependabotNextToReview = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9103, DEPENDABOT_SHA_A),
+  sql,
+);
+check(
+  "dependabot intake: an active review of the same pull request does not block",
+  dependabotNextToReview !== null && dependabotNextToReview > 0,
+  dependabotNextToReview,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'needs_human' WHERE id = ${String(dependabotFirst)}`,
+);
+const dependabotAfterTerminal = await insertDependabotWorkItemUnlessActive(
+  dependabotCandidate(9101, DEPENDABOT_SHA_B),
+  sql,
+);
+check(
+  "dependabot intake: a pull request whose work item is terminal can start again",
+  dependabotAfterTerminal !== null && dependabotAfterTerminal > 0,
+  dependabotAfterTerminal,
+);
+check(
+  "dependabot head: a terminal row for the head counts",
+  (await hasDependabotItemForHead(OWNER, "r", 9101, DEPENDABOT_SHA_A, sql)) ===
+    true,
+);
+check(
+  "dependabot head: an active row for the head counts",
+  (await hasDependabotItemForHead(OWNER, "r", 9101, DEPENDABOT_SHA_B, sql)) ===
+    true,
+);
+check(
+  "dependabot head: a head without a row does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9102, DEPENDABOT_SHA_B, sql)) ===
+    false,
+);
+check(
+  "dependabot head: a row of another pull request does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9104, DEPENDABOT_SHA_A, sql)) ===
+    false,
+);
+const reviewWithHead = await prWorkItem(
+  "pr_review",
+  9105,
+  "reviewing",
+  "qdb-dependabot-review-head",
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET head_sha = '${DEPENDABOT_SHA_A}' WHERE id = ${String(reviewWithHead)}`,
+);
+check(
+  "dependabot head: a row of another kind does not count",
+  (await hasDependabotItemForHead(OWNER, "r", 9105, DEPENDABOT_SHA_A, sql)) ===
+    false,
 );
 
 // worker_samples: 読めない値はNULLで入り、bigintとjsonbの列が往復し、表のCHECKが不正な値を拒む。
