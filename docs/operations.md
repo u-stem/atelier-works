@@ -943,7 +943,7 @@ Discordの監査完了の通知(`audit_completed`)のリンクは、監査レポ
 
 ## dependabotの更新を設定する
 
-dependabotのセキュリティ更新PRを自動で処理するかどうかは、`f/factory/factory_config`の2つの項目で決める。
+dependabotのセキュリティ更新PRの自動処理は、`f/factory/factory_config`の次の2つの項目で設定する。
 
 | 項目 | 既定値 | 意味 |
 | --- | --- | --- |
@@ -954,8 +954,6 @@ dependabotのセキュリティ更新PRを自動で処理するかどうかは�
 1以上の整数にする。0、負の値、小数は設定の読み込みで拒否する。
 
 既存のリソースにこれらの項目が無くても、既定値で動く。
-有効にするには、Windmillの画面で`f/factory/factory_config`を開き、`dependabot_enabled`を`true`にする。
-リソースはgitで同期しないので、リポジトリの変更だけでは反映されない。
 
 ## モデルを使い分ける
 

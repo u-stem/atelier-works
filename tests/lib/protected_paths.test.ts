@@ -25,6 +25,7 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       ".lefthook/",
       "console/public/",
       "infra/console_fetcher/",
+      "f/factory/dependabot__flow/",
       "infra/",
       ".husky/",
       ".githooks/",
@@ -542,9 +543,9 @@ describe("drawio isolation test", () => {
 });
 
 // dependabotの自動マージの判定とフローは、書き換えられると、人の確認なしに
-// 任意の更新をマージできる。そのため、まだ存在しないファイルも含めて、完全一致で守る。
-// 「理由」は、保護が完全一致の一覧から来ていることである。ディレクトリや
-// ファイル名の規則に当たって守られているのでは、同名の別のファイルまで巻き込む。
+// 任意の更新をマージできる。そのため、まだ存在しないファイルも含めて守る。
+// 「理由」は、保護が完全一致の一覧とフローのディレクトリから来ていることである。
+// ほかのディレクトリやファイル名の規則に当たって守られているのでは、同名の別のファイルまで巻き込む。
 describe("dependabot flow files", () => {
   const SCRIPTS = [
     "f/factory/lib/dependabot_support",
@@ -556,18 +557,31 @@ describe("dependabot flow files", () => {
     "f/factory/steps/dependabot_assess",
     "f/factory/steps/dependabot_finish",
   ];
-  const PROTECTED = [
+  // 依存の無いlib。lockは`"dependencies": {}`で、`windmill-client`の版更新で書き換わらない。
+  const LIB_LOCKS = SCRIPTS.filter((base) =>
+    base.startsWith("f/factory/lib/"),
+  ).map((base) => `${base}.script.lock`);
+  // 窓口のscriptとステップのlockは`windmill-client`を含み、その版更新で書き換わる。
+  const CLIENT_LOCKS = SCRIPTS.filter(
+    (base) => !base.startsWith("f/factory/lib/"),
+  ).map((base) => `${base}.script.lock`);
+  const EXACT = [
     ...SCRIPTS.flatMap((base) => [`${base}.ts`, `${base}.script.yaml`]),
+    ...LIB_LOCKS,
     "f/factory/poll_dependabot.schedule.yaml",
-    "f/factory/dependabot__flow/flow.yaml",
   ];
-  const LOCKS = SCRIPTS.map((base) => `${base}.script.lock`);
+  const FLOW_FILES = [
+    "f/factory/dependabot__flow/flow.yaml",
+    "f/factory/dependabot__flow/inline_step.ts",
+    "f/factory/dependabot__flow/modules/step.script.yaml",
+  ];
+  const PROTECTED = [...EXACT, ...FLOW_FILES];
   const NEAR_MISSES = [
     "f/factory/steps/dependabot_support.ts",
     "f/factory/lib/dependabot_support.test.ts",
     "f/factory/lib/dependabot_support.ts.orig",
     "f/factory/lib/dependabot_other.ts",
-    "f/factory/dependabot__flow/other.yaml",
+    "f/factory/dependabot_flow/flow.yaml",
     "f/factory/poll_dependabot.ts.bak",
     "f/factory/steps/dependabot_prepare.test.ts",
   ];
@@ -580,11 +594,11 @@ describe("dependabot flow files", () => {
     expect(matchesImplementProtectedPath(path)).toBe(true);
   });
 
-  test.each(PROTECTED)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+  test.each(EXACT)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
     expect(FORBIDDEN_EXACT_PATHS).toContain(path);
   });
 
-  test.each(PROTECTED)("IMPLEMENT_PROTECTED_EXACT_PATHS lists %s", (path) => {
+  test.each(EXACT)("IMPLEMENT_PROTECTED_EXACT_PATHS lists %s", (path) => {
     expect(IMPLEMENT_PROTECTED_EXACT_PATHS).toContain(path);
   });
 
@@ -595,29 +609,44 @@ describe("dependabot flow files", () => {
     },
   );
 
-  test.each(LOCKS)(
-    "matchesForbiddenPath does not match %s, which changes with every windmill-client bump",
+  test("protects the flow directory by prefix so that inline modules are covered", () => {
+    expect(FORBIDDEN_PATH_PREFIXES).toContain("f/factory/dependabot__flow/");
+  });
+
+  test.each(CLIENT_LOCKS)(
+    "matchesForbiddenPath does not match %s, which pins windmill-client and changes with every bump",
     (path) => {
       expect(matchesForbiddenPath(path)).toBe(false);
     },
   );
 
-  test.each(LOCKS)(
-    "matchesImplementProtectedPath does not match %s, which changes with every windmill-client bump",
+  test.each(CLIENT_LOCKS)(
+    "matchesImplementProtectedPath does not match %s, which pins windmill-client and changes with every bump",
     (path) => {
       expect(matchesImplementProtectedPath(path)).toBe(false);
     },
   );
 
+  test.each(CLIENT_LOCKS)("FORBIDDEN_EXACT_PATHS does not list %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
+  });
+
+  test.each(LIB_LOCKS)(
+    "the lock %s does not pin windmill-client, so it does not change with a bump",
+    async (path) => {
+      expect(await Bun.file(path).text()).not.toContain("windmill-client");
+    },
+  );
+
   test.each(NEAR_MISSES)(
-    "matchesForbiddenPath does not match the near miss %s, so the protection is an exact match",
+    "matchesForbiddenPath does not match the near miss %s, so the protection is not a loose match",
     (path) => {
       expect(matchesForbiddenPath(path)).toBe(false);
     },
   );
 
   test.each(NEAR_MISSES)(
-    "matchesImplementProtectedPath does not match the near miss %s, so the protection is an exact match",
+    "matchesImplementProtectedPath does not match the near miss %s, so the protection is not a loose match",
     (path) => {
       expect(matchesImplementProtectedPath(path)).toBe(false);
     },
@@ -626,12 +655,43 @@ describe("dependabot flow files", () => {
   test("does not protect the shared GitHub module", () => {
     expect(matchesForbiddenPath("f/factory/lib/github.ts")).toBe(false);
   });
+});
 
-  test("lists no lock of the dependabot flow among the exact paths", () => {
-    expect(
-      FORBIDDEN_EXACT_PATHS.filter(
-        (path) => path.includes("dependabot") && path.endsWith(".script.lock"),
-      ),
-    ).toEqual([]);
+// `f/factory/`に置かれたdependabotのファイルが保護から漏れないよう、実際のファイルを調べる。
+// 後から足すファイルも、この検査に自動で入る。
+// 窓口のscriptとステップのlockは`windmill-client`を含み、その版更新で書き換わるので除く。
+describe("dependabot files on disk", () => {
+  const CLIENT_LOCK =
+    /^f\/factory\/(poll_dependabot|steps\/dependabot_[a-z_]+)\.script\.lock$/;
+
+  async function dependabotPaths(): Promise<string[]> {
+    const paths: string[] = [];
+    for await (const path of new Bun.Glob("f/factory/**/*").scan({
+      cwd: ".",
+      onlyFiles: true,
+    })) {
+      if (path.includes("dependabot")) paths.push(path);
+    }
+    return paths;
+  }
+
+  test("finds the dependabot files, so that the checks below are not empty", async () => {
+    expect(await dependabotPaths()).toContain(
+      "f/factory/lib/dependabot_support.ts",
+    );
+  });
+
+  test("matchesForbiddenPath matches every one except the locks that pin windmill-client", async () => {
+    const unprotected = (await dependabotPaths()).filter(
+      (path) => !CLIENT_LOCK.test(path) && !matchesForbiddenPath(path),
+    );
+    expect(unprotected).toEqual([]);
+  });
+
+  test("matchesImplementProtectedPath matches every one except the locks that pin windmill-client", async () => {
+    const unprotected = (await dependabotPaths()).filter(
+      (path) => !CLIENT_LOCK.test(path) && !matchesImplementProtectedPath(path),
+    );
+    expect(unprotected).toEqual([]);
   });
 });

@@ -396,6 +396,30 @@ describe("insertDependabotWorkItemUnlessActive", () => {
     ).rejects.toThrow("invalid pull request number");
   });
 
+  test("rejects a terminal status without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    // 型は開始の状態だけを受け付けるので、型を通らない値はJSONから作る。
+    const terminal = {
+      ...NEW_DEPENDABOT_ITEM,
+      ...JSON.parse('{"status":"needs_human"}'),
+    };
+    await insertDependabotWorkItemUnlessActive(terminal, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("names the status in the error for a status that cannot start", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const terminal = {
+      ...NEW_DEPENDABOT_ITEM,
+      ...JSON.parse('{"status":"needs_human"}'),
+    };
+    await expect(
+      insertDependabotWorkItemUnlessActive(terminal, sql),
+    ).rejects.toThrow("invalid dependabot start status: needs_human");
+  });
+
   test("rejects a head sha that is not a full commit sha", async () => {
     const { sql } = createFakeSqlClient([[]]);
     await expect(

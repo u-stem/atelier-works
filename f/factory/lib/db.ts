@@ -551,6 +551,13 @@ export async function insertIssueWorkItemUnlessActive(
 }
 
 /**
+ * dependabotの作業項目を始める状態。
+ * 終端の状態で挿入すると、部分一意インデックスの対象外になり、同じPRの重複を防げない。
+ * そのため、型で終端の状態を受け付けない。
+ */
+export type DependabotStartStatus = "picked";
+
+/**
  * dependabotのセキュリティ更新PRの作業項目の入力。
  * 残りの列は固定する。サイクルは1、取得元は`issue`(PRの作業項目と同じ)、
  * Issueと本文は無し、試行は1である。
@@ -560,7 +567,7 @@ export type NewDependabotWorkItem = {
   readonly repo: string;
   readonly pr_number: number;
   readonly title: string | null;
-  readonly status: WorkItemStatus;
+  readonly status: DependabotStartStatus;
   readonly claimed_by: string | null;
   /** 処理を始めたheadの完全なコミットsha。 */
   readonly head_sha: string;
@@ -573,7 +580,8 @@ export type NewDependabotWorkItem = {
  * `ON CONFLICT DO NOTHING`は対象を指定しない。
  * 同じPRの別の取得が先に作業項目を作った場合に、DBを共有するインスタンスの間でも二重に始めないための、最後の防御である。
  * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないとき、
- * `head_sha`が完全なコミットshaでないときは、DBに触れる前に例外を投げる。
+ * `head_sha`が完全なコミットshaでないとき、`status`が開始の状態でないときは、
+ * DBに触れる前に例外を投げる。
  */
 export async function insertDependabotWorkItemUnlessActive(
   item: NewDependabotWorkItem,
@@ -583,6 +591,9 @@ export async function insertDependabotWorkItemUnlessActive(
   assertGitHubName(item.repo);
   assertPrNumber(item.pr_number);
   assertCommitSha(item.head_sha);
+  if (item.status !== "picked") {
+    throw new Error(`invalid dependabot start status: ${String(item.status)}`);
+  }
   const rows = await sql`
     INSERT INTO factory.work_items (
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
@@ -604,6 +615,8 @@ export async function insertDependabotWorkItemUnlessActive(
 /**
  * 同じPRの同じheadのdependabotの作業項目が、終端でも終端でなくても1件でもあるか。
  * マージの後や人に回した後に、同じheadを処理し直さないために使う。
+ * 終端の行は、`cleanup_db`が保持期間(`retention_work_items_days`)を過ぎると削除する。
+ * 行が消えると、同じheadを再び処理する。保持期間より長く、処理済みであることを保証するものではない。
  * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないとき、
  * `head_sha`が完全なコミットshaでないときは、DBに触れる前に例外を投げる。
  */
