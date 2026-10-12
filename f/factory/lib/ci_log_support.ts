@@ -3,7 +3,7 @@
 // 最大の危険になる。そのため、制御文字と不可視文字を除き、量を絞り、
 // 秘密値の検査(gitleaksとmaskSecrets)を通ったものだけを「揮発する値」として返す。
 // gitleaksの実行は`CiTextScanner`として注入する。検査できなかったときは「検出あり」と同じに扱う(fail-closed)。
-// ここに呼び出し元のflowは無い。抜粋はstepの結果やDBに載せない。
+// 抜粋はstepの結果やDBに載せない。
 
 import { maskSecrets } from "./log.ts";
 import { sanitizeRunName } from "./main_ci_support.ts";
@@ -66,9 +66,29 @@ const REMOVED_CHARS =
 /** Actionsのログの行頭にあるタイムスタンプ。 */
 const TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/gm;
 
+/** 生のログで残す先頭の字数。 */
+const RAW_LOG_HEAD_CHARS = 128 * 1024;
+/** 生のログで残す末尾の字数。失敗の原因は末尾に出るので、先頭より多く残す。 */
+const RAW_LOG_TAIL_CHARS = 1024 * 1024;
+const RAW_LOG_OMITTED_MARKER = "\n[... log middle omitted ...]\n";
+
+/**
+ * 生のログが大きいとき、先頭と末尾だけを残し、間を省略の注記でつなぐ。
+ * 行に分ける前に絞るのは、改行だけの巨大な入力で、行の配列のメモリを有界にするため。
+ * 間にある`##[error]`の行は落ちる。
+ */
+function capRawLog(raw: string): string {
+  if (raw.length <= RAW_LOG_HEAD_CHARS + RAW_LOG_TAIL_CHARS) return raw;
+  const head = cutChars(raw, RAW_LOG_HEAD_CHARS);
+  const tail = raw.slice(raw.length - RAW_LOG_TAIL_CHARS);
+  const safeTail = /^[\udc00-\udfff]/.test(tail) ? tail.slice(1) : tail;
+  return `${head}${RAW_LOG_OMITTED_MARKER}${safeTail}`;
+}
+
 /**
  * 正規表現にかける前に1行を切る長さ。
  * 改行の無い巨大な入力で、どの正規表現の最悪の計算量も有界にするため。
+ * 改行の種類をそろえた後に切るので、進捗表示の`\r`で区切られた行を1行にまとめて切ることはない。
  */
 const RAW_LINE_MAX_CHARS = 2000;
 
@@ -79,13 +99,13 @@ const RAW_LINE_MAX_CHARS = 2000;
  * 検査の前に除くのは、不可視文字で分割された秘密値を検査に見せるためである。
  */
 export function cleanLogText(raw: string): string {
-  return raw
+  return capRawLog(raw)
+    .replace(/\r\n?/g, "\n")
+    .replace(LINE_BREAK_LIKE, "\n")
     .split("\n")
     .map((line) => cutChars(line, RAW_LINE_MAX_CHARS))
     .join("\n")
     .replace(TERMINAL_SEQUENCE, "")
-    .replace(/\r\n?/g, "\n")
-    .replace(LINE_BREAK_LIKE, "\n")
     .replace(/\t/g, " ")
     .replace(SPACE_LIKE, " ")
     .replace(REMOVED_CHARS, "")
@@ -98,6 +118,26 @@ export function cleanLogText(raw: string): string {
  */
 export function sanitizeExternalName(raw: string): string {
   return sanitizeRunName(cleanLogText(raw).replace(/\s+/g, " "));
+}
+
+/**
+ * 切り口にかかるとgitleaksも`maskSecrets`も見逃す、秘密値の接頭辞の形。
+ * 接頭辞の後ろをすべて伏せる。`maskSecrets`の長さの条件を付けないのは、
+ * 切る前の全文を伏せれば、切り口に断片が残らないため。
+ */
+const TOKEN_FRAGMENT_PATTERNS: readonly RegExp[] = [
+  /github_pat_\w+/g,
+  /gh[oprsu]_[A-Za-z0-9]+/g,
+  /sk-ant-[\w-]+/g,
+  /https:\/\/(?:ptb\.|canary\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+/g,
+];
+
+/** 切る前の全文で、トークンの形の文字列を`***`にする。各パターンは線形に照合する。 */
+function maskTokenFragments(text: string): string {
+  return TOKEN_FRAGMENT_PATTERNS.reduce(
+    (masked, pattern) => masked.replace(pattern, "***"),
+    text,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +446,7 @@ export async function buildCiExcerpt(
   let remaining = CI_LOG_TOTAL_MAX_CHARS;
   for (const job of jobs.slice(0, CI_LOG_MAX_JOBS)) {
     const text = condenseJobLog(
-      cleanLogText(job.log),
+      maskTokenFragments(cleanLogText(job.log)),
       Math.min(CI_LOG_JOB_MAX_CHARS, remaining),
     );
     if (text === "") continue;

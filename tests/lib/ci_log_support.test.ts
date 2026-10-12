@@ -161,6 +161,41 @@ describe("cleanLogText worst-case input", () => {
     expect(elapsedMs(`${ESC}P abc\n`.repeat(300_000))).toBeLessThan(LIMIT_MS);
   });
 
+  test("finishes quickly for many lines just under the line limit", () => {
+    expect(elapsedMs(`${"x".repeat(1999)}\n`.repeat(2000))).toBeLessThan(
+      LIMIT_MS,
+    );
+  });
+
+  test("keeps the text of an OSC sequence that ends with BEL out of the result", () => {
+    expect(cleanLogText(`${ESC}]0;window title${BEL}after`)).toBe("after");
+  });
+
+  test("keeps the text of an OSC hyperlink that ends with ST", () => {
+    const text = `${ESC}]8;;http://evil.example${ESC}\\click${ESC}]8;;${ESC}\\ end`;
+    expect(cleanLogText(text)).toBe("click end");
+  });
+
+  test("an unterminated OSC stops at the end of its line", () => {
+    expect(cleanLogText(`${ESC}]0;title without end\nnext line`)).toBe(
+      "\nnext line",
+    );
+  });
+
+  test("a CSI sequence with parameters leaves the text after the final byte", () => {
+    expect(cleanLogText(`${ESC}[1;31mred${ESC}[0m`)).toBe("red");
+  });
+
+  test("keeps a message after many carriage-return progress updates", () => {
+    const text = `${"progress 0%\r".repeat(5000)}\rERROR: build failed`;
+    expect(cleanLogText(text)).toEndWith("ERROR: build failed");
+  });
+
+  test("keeps a message after many Unicode line separators", () => {
+    const text = `${"progress 0%\u2028".repeat(5000)}ERROR: build failed`;
+    expect(cleanLogText(text)).toEndWith("ERROR: build failed");
+  });
+
   test("a DCS sequence does not swallow text after the next ESC", () => {
     expect(cleanLogText(`${ESC}Pabc${ESC}[31mred${ESC}[0m tail`)).toBe(
       "red tail",
@@ -173,6 +208,55 @@ describe("cleanLogText worst-case input", () => {
 
   test("keeps the lines after a very long line", () => {
     expect(cleanLogText(`${"x".repeat(100_000)}\nnext`)).toEndWith("\nnext");
+  });
+});
+
+describe("cleanLogText on a huge log", () => {
+  const HEAD = 128 * 1024;
+  const TAIL = 1024 * 1024;
+  const MARKER_ROOM = 200;
+
+  test("bounds the result of eight million newlines", () => {
+    expect(cleanLogText("\n".repeat(8_000_000)).length).toBeLessThanOrEqual(
+      HEAD + TAIL + MARKER_ROOM,
+    );
+  });
+
+  test("bounds the number of lines of eight million newlines", () => {
+    expect(
+      cleanLogText("\n".repeat(8_000_000)).split("\n").length,
+    ).toBeLessThanOrEqual(HEAD + TAIL + MARKER_ROOM);
+  });
+
+  test("keeps the start of a huge log", () => {
+    const raw = `START\n${"x\n".repeat(4_000_000)}END`;
+    expect(cleanLogText(raw)).toStartWith("START\n");
+  });
+
+  test("keeps the end of a huge log", () => {
+    const raw = `START\n${"x\n".repeat(4_000_000)}END`;
+    expect(cleanLogText(raw)).toEndWith("\nEND");
+  });
+
+  test("marks the dropped middle of a huge log", () => {
+    const raw = `START\n${"x\n".repeat(4_000_000)}END`;
+    expect(cleanLogText(raw)).toContain("[... log middle omitted ...]");
+  });
+
+  test("drops an error line in the middle of a huge log", () => {
+    const raw = `${"x\n".repeat(2_000_000)}##[error]middle\n${"y\n".repeat(2_000_000)}`;
+    expect(cleanLogText(raw)).not.toContain("##[error]middle");
+  });
+
+  test("leaves a log within the limits untouched", () => {
+    expect(cleanLogText("a\nb")).toBe("a\nb");
+  });
+
+  test("does not leave half of a surrogate pair where the middle was dropped", () => {
+    const out = cleanLogText("😀".repeat(1_000_000));
+    expect(
+      /\ud83d\ude00\n\[\.\.\. log middle omitted \.\.\.\]\n\ude00/.test(out),
+    ).toBe(false);
   });
 });
 
@@ -505,6 +589,57 @@ describe("buildCiExcerpt", () => {
     ).toBe("token is ***");
   });
 
+  test("masks a token cut in half at the line limit", async () => {
+    const token = `ghp_${"A".repeat(36)}`;
+    const log = `${"x".repeat(285)} ${token} tail`;
+    const outcome = await buildCiExcerpt([job({ log })], {
+      scan: cleanScanner,
+    });
+    expect(
+      outcome.kind === "clean" ? outcome.excerpt.read()[0]?.text : "",
+    ).not.toContain("ghp_");
+  });
+
+  test("leaves no fragment of a token cut at the line limit", async () => {
+    const token = `ghp_${"A".repeat(36)}`;
+    const log = `${"x".repeat(290)} ${token} tail`;
+    const outcome = await buildCiExcerpt([job({ log })], {
+      scan: cleanScanner,
+    });
+    expect(
+      outcome.kind === "clean" ? outcome.excerpt.read()[0]?.text : "",
+    ).not.toContain("AAAA");
+  });
+
+  test.each([
+    ["a fine-grained token", `github_pat_${"B".repeat(40)}`],
+    ["an Anthropic key", `sk-ant-api03-${"C".repeat(40)}`],
+    ["an OAuth token", `gho_${"D".repeat(36)}`],
+    ["a server token", `ghs_${"E".repeat(36)}`],
+  ])("masks %s before the line is cut", async (_label, token) => {
+    const log = `${"x".repeat(285)} ${token} tail`;
+    const outcome = await buildCiExcerpt([job({ log })], {
+      scan: cleanScanner,
+    });
+    const text =
+      outcome.kind === "clean" ? (outcome.excerpt.read()[0]?.text ?? "") : "";
+    expect(/github_pat_|sk-ant-|gh[os]_|BBBB|CCCC|DDDD|EEEE/.test(text)).toBe(
+      false,
+    );
+  });
+
+  test("scans the text after the token was masked", async () => {
+    let seen = "";
+    const token = `ghp_${"A".repeat(36)}`;
+    await buildCiExcerpt([job({ log: `use ${token}` })], {
+      scan: async (text) => {
+        seen = text;
+        return { ok: true, output: "" };
+      },
+    });
+    expect(seen).not.toContain(token);
+  });
+
   test("returns empty when no job has any log text", async () => {
     const outcome = await buildCiExcerpt([job({ log: "\n\n" })], {
       scan: cleanScanner,
@@ -530,13 +665,13 @@ describe("buildCiExcerpt", () => {
 
   test("scans the text after invisible characters are removed", async () => {
     let seen = "";
-    await buildCiExcerpt([job({ log: "gh\u200Bp_split" })], {
+    await buildCiExcerpt([job({ log: "ab\u200Bcd_split" })], {
       scan: async (text) => {
         seen = text;
         return { ok: true, output: "" };
       },
     });
-    expect(seen).toContain("ghp_split");
+    expect(seen).toContain("abcd_split");
   });
 });
 

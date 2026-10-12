@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { dirname, join, normalize } from "node:path";
 import {
   type CiFixChange,
   type CiFixViolationCode,
   checkCiFixChanges,
+  isDeniedPath,
 } from "../../f/factory/lib/ci_fix_paths.ts";
 
 const change = (
@@ -269,6 +271,15 @@ describe("protected paths", () => {
     ".mcp.json",
     "sub/.mcp.json",
     "f/factory/foo.resource-type.yaml",
+    "f/factory/lib/types.ts",
+    "f/factory/lib/types.script.yaml",
+    "f/factory/lib/job_tmp.ts",
+    "f/factory/lib/repo_owner_gate.ts",
+    "f/factory/lib/model_policy.ts",
+    "f/factory/lib/config.ts",
+    "f/factory/lib/host_action.ts",
+    "f/factory/lib/process_lock.ts",
+    "f/factory/lib/factory_repo_gate.ts",
   ])("rejects %s even when the pull request changed it", (path) => {
     expect(codeOf([change(path)], [path])).toBe("protected_path");
   });
@@ -393,6 +404,18 @@ describe("weakening checks", () => {
     "// nolint",
     "const k = 'abc'; // gitleaks:allow",
     "// BIOME-IGNORE lint: x",
+    "<!-- markdownlint-disable MD013 -->",
+    "<!-- markdownlint-capture -->",
+    '<!-- markdownlint-configure-file { "default": false } -->',
+    "<!-- textlint-disable -->",
+    "spyOn(client, 'run')",
+    "jest.spyOn(client, 'run')",
+    "vi.mock('./x.ts')",
+    "jest . mock ('./x.ts')",
+    "fn.mockImplementation(() => 1)",
+    "fn.mockReturnValue(1)",
+    "fn.mockReturnValueOnce(1)",
+    "fn.mockResolvedValue(1)",
   ])("rejects an added line: %s", (line) => {
     const path = "f/factory/lib/feature.ts";
     expect(codeOf([change(path, { addedLines: [line] })], [path])).toBe(
@@ -471,5 +494,92 @@ describe("reporting", () => {
       prChangedPaths: [],
     });
     expect(verdict.ok ? 0 : verdict.violations.length).toBe(1);
+  });
+});
+
+/**
+ * 拒否した安全装置が直接importするのに、拒否しないモジュールと、受け入れる理由。
+ * 安全装置の挙動を変えうる依存は、拒否の一覧に入れる。
+ * ここに書くのは、ほかのフローが日常的に直す共有モジュールで、拒否すると正当な修正を止めるものに限る。
+ * 一覧に無い依存が増えたとき、または一覧の項目が使われなくなったときは、このテストが赤くなる。
+ */
+const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
+  "f/factory/lib/db.ts":
+    "DBの読み書きの共有モジュール。多くのフローが日常的に直す",
+  "f/factory/lib/discord.ts":
+    "Discord通知の共有モジュール。通知の文面を直す変更が多い",
+  "f/factory/lib/poll_support.ts":
+    "PRのポーリングの判定の共有モジュール。フローの挙動を直す変更が多い",
+  "f/factory/lib/implement_support.ts":
+    "実装フローの共有モジュール。実装フローの修正が日常的に触れる",
+  "f/factory/lib/implement_launch_support.ts":
+    "実装フローの起動の共有モジュール。実装フローの修正が日常的に触れる",
+  "f/factory/lib/implement_loop.ts":
+    "実装フローの検証ループ。実装フローの修正が日常的に触れる",
+  "f/factory/lib/implement_finish_support.ts":
+    "実装フローの終了処理の共有モジュール。実装フローの修正が日常的に触れる",
+  "f/factory/lib/factory_clone.ts":
+    "Factory自身のcloneを用意する共有モジュール。ほかのフローが日常的に使う",
+  "f/factory/lib/self_update_support.ts":
+    "自己更新の判定と整形の純粋関数。self_updateの修正が日常的に触れる",
+  "f/factory/lib/job_ids.ts": "WindmillのジョブIDの形の検査。依存が無く小さい",
+  "f/factory/lib/prose_check.ts":
+    "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
+};
+
+const REPO_ROOT = join(import.meta.dir, "..", "..");
+
+/** 静的なimportとexport fromが指す、リポジトリのルートからの相対パス。 */
+function importedPaths(path: string, source: string): string[] {
+  const found: string[] = [];
+  for (const match of source.matchAll(
+    /(?:import|export)\s[^;]*?from\s+"(\.[^"]+)"/g,
+  )) {
+    found.push(normalize(join(dirname(path), match[1] ?? "")));
+  }
+  return found;
+}
+
+describe("dependencies of the denied safety files", () => {
+  /** 拒否したファイルごとの、拒否していない依存。 */
+  async function undeniedDependencies(): Promise<Map<string, string[]>> {
+    const result = new Map<string, string[]>();
+    const glob = new Bun.Glob("f/factory/**/*.ts");
+    for await (const path of glob.scan({ cwd: REPO_ROOT })) {
+      if (!isDeniedPath(path)) continue;
+      const source = await Bun.file(join(REPO_ROOT, path)).text();
+      for (const target of importedPaths(path, source)) {
+        if (isDeniedPath(target)) continue;
+        result.set(target, [...(result.get(target) ?? []), path]);
+      }
+    }
+    return result;
+  }
+
+  test("every dependency is denied or accepted with a reason", async () => {
+    const unexplained = [...(await undeniedDependencies()).keys()].filter(
+      (target) => !(target in ACCEPTED_DEPENDENCIES),
+    );
+    expect(unexplained).toEqual([]);
+  });
+
+  test("every accepted dependency is still imported by a denied file", async () => {
+    const used = await undeniedDependencies();
+    const stale = Object.keys(ACCEPTED_DEPENDENCIES).filter(
+      (target) => !used.has(target),
+    );
+    expect(stale).toEqual([]);
+  });
+
+  test("no accepted dependency is denied", () => {
+    const denied = Object.keys(ACCEPTED_DEPENDENCIES).filter(isDeniedPath);
+    expect(denied).toEqual([]);
+  });
+
+  test("the scan finds the denied files", async () => {
+    const glob = new Bun.Glob("f/factory/lib/claude.ts");
+    const found: string[] = [];
+    for await (const path of glob.scan({ cwd: REPO_ROOT })) found.push(path);
+    expect(found.filter(isDeniedPath)).toEqual(["f/factory/lib/claude.ts"]);
   });
 });

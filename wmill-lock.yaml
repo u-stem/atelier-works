@@ -24,9 +24,9 @@ locks:
   f/factory/lib/check_runner: ce61aec711844891f2b087988b9087696c2b73e366f173f64ac7689bb436135b
   f/factory/lib/check_sandbox: cda5c9e171572ef81113d3748eb988f968e103fc0aab0feebe5d142bd1f9bf57
   f/factory/lib/ci_fix_classify: 3c7afb89715cb5a2ede49d499c473aef0facb8503b5c495d4b94b3714d2845a7
-  f/factory/lib/ci_fix_paths: 7f97d83af0ed92b1a58881b5d751c4e734168dd2a2723530ef81dcd8bd24bb80
+  f/factory/lib/ci_fix_paths: d5b9f024ed7497f3f70ba822b1d54a1f0c325e459633560675af76bd60ef1d07
   f/factory/lib/ci_fix_prompt: cc1dd1b059b33173764b76cee0a0bea1127ee88e642e93ef4f23b928af25609c
-  f/factory/lib/ci_log_support: 3d00985a83492e36073ec4ae5270eb4ed5570e365f42e46330437b02c4614159
+  f/factory/lib/ci_log_support: 417a047662354c7f99809047dc82d422b3af43b3e3caec7985de57707ee74655
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 0da701e30c732878371ee7b96d96d343173e230deef982fad82300a201c9fa0c
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea

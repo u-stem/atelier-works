@@ -15,7 +15,11 @@ import {
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
 } from "./protected_paths.ts";
 
-/** Claudeが加えた変更1件。 */
+/**
+ * Claudeが加えた変更1件。
+ * gitのrename検出は切り、移動は削除と追加の2件で渡す。
+ * rename検出を使うと、移動元の削除が見えなくなるため。
+ */
 export type CiFixChange = {
   /** リポジトリのルートからの相対パス。 */
   readonly path: string;
@@ -145,6 +149,14 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/check_runner.",
   "f/factory/lib/prompts.",
   "f/factory/lib/github.",
+  "f/factory/lib/types.",
+  "f/factory/lib/job_tmp.",
+  "f/factory/lib/repo_owner_gate.",
+  "f/factory/lib/model_policy.",
+  "f/factory/lib/config.",
+  "f/factory/lib/host_action.",
+  "f/factory/lib/process_lock.",
+  "f/factory/lib/factory_repo_gate.",
   "f/factory/lib/ci_",
   "f/factory/lib/pr_ci_",
   "f/factory/lib/main_ci_",
@@ -195,7 +207,7 @@ function inDirectory(lowerPath: string, directory: string): boolean {
  * 実装フローの保護パス(`IMPLEMENT_PROTECTED_*`)に、CI回だけの拒否を足したもの。
  * 大文字小文字を畳むのは、大文字小文字を区別しないファイルシステムで同じファイルを指す綴りを拒否するため。
  */
-function isDeniedPath(path: string): boolean {
+export function isDeniedPath(path: string): boolean {
   const lower = path.toLowerCase();
   if (PROTECTED_EXACT_LOWERCASE.has(lower)) return true;
   const directories = [
@@ -271,6 +283,13 @@ const WEAKENING_PATTERNS: readonly RegExp[] = [
   /\bnolint\b/i,
   /\bnosonar\b/i,
   /gitleaks:allow/i,
+  // 文書の検査の抑制。markdownlintとtextlintのコメント。
+  /markdownlint-(?:disable|capture|configure-file)/i,
+  /textlint-disable/i,
+  // テストの振る舞いの差し替え。既存のテストの意味を変えずに足せる書き方は少ない。
+  /\bspyOn\s*\(/i,
+  /\b(?:vi|jest)\s*\.\s*mock\s*\(/i,
+  /\.\s*mock(?:Implementation|ReturnValue|ResolvedValue|RejectedValue)/i,
 ];
 
 function weakensChecks(lines: readonly string[]): boolean {

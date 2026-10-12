@@ -37,6 +37,8 @@ CIのログはリポジトリへ書ける人が決める外部入力である。
   ただし、`VolatileCiExcerpt.read()`が返す配列は普通のオブジェクトなので、型では守れない。
   取り出した配列も、stepの戻り値に載せない。
 - `CiFixChange`の入力は、Claudeの変更後の作業ツリーと、実行前のheadの差分から、flowが作る。
+  gitのrename検出は切り、移動は削除と追加の2件で渡す。
+  rename検出を使うと、移動元の削除が見えなくなるためである。
 
 ## ログの取得
 
@@ -63,7 +65,8 @@ CIのログはリポジトリへ書ける人が決める外部入力である。
 - 失敗の原因は末尾に出るのが普通なので、切れても使える。
 - 切れたかは`truncated`で返す。
   出力全体のバイト数が上限を超えたかで決める。
-  本文に書かれた注記の文字列は見ないので、ログの書き手は偽装できない。
+  本文に書かれた注記の文字列は見ないので、切れたのに切れていないと判定させることはできない。
+  不正なUTF-8を含むログでは、切れていないのに切れたと判定することがある。
 - `ensureSuccess`は使わない。
   本文をエラーの文に写してしまうためである。
 
@@ -98,13 +101,23 @@ URLは受け取らない。
 - 書式文字(書字方向の制御、ゼロ幅、タグ文字、BOM、ソフトハイフン)、私用領域、対のないサロゲート
 - 異体字選択子、ハングルの詰め文字、クメール文字の固有母音、モンゴル文字の異体字選択子、点字の空白などの、見えない文字
 
-改行コードはLFにそろえる。
+改行コードと行区切りの文字は、LFにそろえる。
 タブと幅の違う空白は、普通の空白にする。
 検査の前に不可視文字を除くのは、不可視文字で分割された秘密値を、検査に見せるためである。
 
-1行は2000字で切ってから、正規表現にかける。
+生のログが大きいときは、先頭の128K字と末尾の1M字だけを残してから、行に分ける。
+間は省略の注記でつなぐ。
+改行だけの巨大な入力でも、行の配列のメモリを有界にするためである。
+間にある`##[error]`の行は落ちる。
+
+改行の種類をそろえた後に、1行を2000字で切ってから、正規表現にかける。
+進捗表示の復帰文字で区切られた行を、1行にまとめて切ってしまわないためである。
 改行の無い巨大な入力でも、どの正規表現も入力の長さに比例した時間で終わらせるためである。
 終端の無い制御列は、本文の文字クラスから改行、ESC、BELを除いて、ESCをまたいで照合し直さない。
+
+整形の後、切る前の全文で、トークンの形の文字列を伏せる。
+対象は`github_pat_`、`gh[oprsu]_`、`sk-ant-`で始まる文字列とDiscordのwebhookのURLで、接頭辞の後ろをすべて`***`にする。
+切り口にかかった秘密値の一部が、gitleaksと`maskSecrets`の長さの条件をすり抜けて残ることを防ぐためである。
 
 `condenseJobLog`は、整形したログを字数の上限に収める。
 
@@ -243,12 +256,19 @@ gitは呼ばない。
 - Windmillのflowの定義: `*__flow/`の配下
 - Factoryの安全装置は、次の名前で始まるファイルである。
   - `f/factory/lib/`の`claude`、`protected_paths`、`log`、`workspace`、`check_sandbox`、`check_runner`、`prompts`、`github`
+  - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
+  - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`
   - `f/factory/lib/`の`ci_`、`pr_ci_`、`main_ci_`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
   - `f/factory/`の`watch_pr_ci`と`watch_main_ci`
 
 CI回のClaudeがこれらを書き換えると、自分を止める検査を弱められるためである。
 `github`を拒否するので、Factory自身のリポジトリで`github.ts`の不具合がCIを落としても、CI回は直せずに人へ渡す。
+
+拒否した安全装置が直接importするモジュールは、拒否するか、受け入れる理由を書いた表に載せる。
+表は`tests/lib/ci_fix_paths.test.ts`の`ACCEPTED_DEPENDENCIES`にあり、静的なimportを数えるテストが、一覧に無い依存や使われなくなった項目で失敗する。
+受け入れたのは、ほかのフローが日常的に直す共有モジュールで、拒否すると正当な修正を止めるものである。
+`db`、`discord`、`poll_support`、`implement_*`、`factory_clone`、`self_update_support`、`job_ids`、`prose_check`がこれにあたる。
 
 テストのパスは、`tests`などのディレクトリの配下か、`*.test.ts`と`*.spec.ts`の形のものである。
 テストは追加だけを許す。
@@ -262,8 +282,10 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 - 警告と型検査の抑制: `biome-ignore`、`@ts-ignore`、`@ts-expect-error`、`@ts-nocheck`、`eslint-disable`
 - テストの除外と保留: `.skip`、`.only`、`.todo`、`.failing`、`.if(`、`.skipIf(`、`["skip"]`、`skip: true`、`xit(`、`fit(`
 - テスト実行の中断とモジュールの差し替え: `process.exit(`、`mock.module(`
+- テストの振る舞いの差し替え: `spyOn(`、`vi.mock(`、`jest.mock(`、`.mockImplementation`、`.mockReturnValue`、`.mockResolvedValue`
 - カバレッジの除外: `istanbul ignore`、`c8 ignore`、`v8 ignore`
 - 秘密値の検査の許可: `gitleaks:allow`
+- 文書の検査の抑制: `markdownlint-disable`、`markdownlint-capture`、`markdownlint-configure-file`、`textlint-disable`
 - ほかの言語の抑制: `# noqa`、`# type: ignore`、`nolint`
 
 違反の報告に載せるパスは、不可視文字を除き、120字に切る。
@@ -278,5 +300,9 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 - テストの期待値の書き換えは、機械では判定できない。
   再レビューに頼る。
 - 非テストのファイルで、行を削って検査を無効にする変更も、機械では判定できない。
+- 追加行で既存のテストの振る舞いを変えられる書き方が、ほかにもありうる。
+  差し替えの関数を呼ばずに、グローバルの値を直接書き換える、といった書き方である。
+- 拒否した安全装置の依存のうち、受け入れた共有モジュールは、CI回のClaudeが書き換えられる。
 - base64に包まれた秘密値や、複数の行に分割された秘密値は、gitleaksと`maskSecrets`で検出できない可能性がある。
+- 生のログが大きいときは、先頭と末尾以外を読まない。間にある`##[error]`の行は落ちる。
 - 認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。
