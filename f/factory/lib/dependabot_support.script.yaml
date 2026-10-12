@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] dependabot更新のゲート判定'
+description: 内部ライブラリです。dependabotのセキュリティ更新PRを自動でmergeしてよいかを、チェック、差分、公開日数から決める純粋関数を提供します。
 lock: '!inline f/factory/lib/dependabot_support.script.lock'
 kind: script
 schema:

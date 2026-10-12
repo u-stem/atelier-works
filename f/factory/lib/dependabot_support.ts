@@ -5,10 +5,8 @@
 
 import { matchesForbiddenPath } from "./protected_paths.ts";
 
-/**
- * mainのrulesetが必須にするチェック名。
- * `.github/workflows/ci.yml`のジョブ名と、docs/security.mdの一覧に合わせる。
- */
+// 値の出典は、.github/workflows/ci.ymlのジョブIDと、docs/security.mdの必須チェックの節である。
+/** mainのrulesetが必須にするチェック名。 */
 export const REQUIRED_CHECKS: readonly string[] = [
   "scope",
   "check",
@@ -66,7 +64,8 @@ function isGreater(to: Version, from: Version): boolean {
 /**
  * 版の上がり方を分類する。
  * プレリリース、dist-tag、版が上がらない変更は、判断できないので`unknown`にする。
- * 0.xのminorの変更は、semverの慣習で破壊的変更を含みうるので`major`として扱う。
+ * 0.xは最初の0でない桁が互換性の境界になるので、0.xのminorの変更と、0.0.xのpatchの変更は
+ * 破壊的変更を含みうるものとして`major`にする。
  */
 export function classifyUpdate(from: string, to: string): UpdateKind {
   const a = parseVersion(from);
@@ -74,28 +73,39 @@ export function classifyUpdate(from: string, to: string): UpdateKind {
   if (a === null || b === null || !isGreater(b, a)) return "unknown";
   if (a.major !== b.major) return "major";
   if (a.minor !== b.minor) return a.major === 0 ? "major" : "minor";
+  if (a.major === 0 && a.minor === 0) return "major";
   return "patch";
 }
 
 // ---- 公開からの日数 ----
 
+// 日付と時刻に、末尾のZか±hh:mmの時差が付いた形だけを受け付ける。
+// 時差の無い日時は実行環境のタイムゾーンで解釈され、日数の判定がずれるため。
+const ISO_WITH_ZONE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function parsePublishedAt(publishedAtIso: string): number | null {
+  if (!ISO_WITH_ZONE.test(publishedAtIso)) return null;
+  const ms = Date.parse(publishedAtIso);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 /**
  * 公開から`minDays`日以上たっているかを返す。ちょうど`minDays`日たった時点で真になる。
- * 日時を解釈できないときと、公開が未来のときは偽にする。
+ * 時差つきのISO 8601でない日時、公開が未来のとき、`minDays`が有限でないか負のときは偽にする。
  */
 export function isPublishedLongEnough(
   publishedAtIso: string,
   nowMs: number,
   minDays: number,
 ): boolean {
-  const publishedMs = Date.parse(publishedAtIso);
-  if (Number.isNaN(publishedMs)) return false;
+  if (!Number.isFinite(minDays) || minDays < 0) return false;
+  const publishedMs = parsePublishedAt(publishedAtIso);
+  if (publishedMs === null) return false;
   return nowMs - publishedMs >= minDays * DAY_MS;
 }
 
-// ---- ロックファイルの差分 ----
-
-export type LockfileVerdict = { ok: true } | { ok: false; reason: string };
+// ---- JSONの解析 ----
 
 /**
  * bun.lockの末尾のカンマを取り除く。
@@ -131,14 +141,63 @@ function stripTrailingCommas(text: string): string {
   return out;
 }
 
-function parseLockfile(text: string): Record<string, unknown> | null {
-  try {
-    const parsed: unknown = JSON.parse(stripTrailingCommas(text));
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
+/**
+ * 構文として正しいJSONの中で、同じオブジェクトに重複したキーがあれば、そのキーを返す。
+ * `JSON.parse`は重複を黙って後ろの値にするので、見えない上書きを検出するために使う。
+ */
+function findDuplicateKey(text: string): string | null {
+  const stack: (Set<string> | null)[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") stack.push(new Set());
+    else if (ch === "[") stack.push(null);
+    else if (ch === "}" || ch === "]") stack.pop();
+    else if (ch === '"') {
+      let j = i + 1;
+      while (text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      const keys = stack[stack.length - 1];
+      let next = j + 1;
+      while (next < text.length && /\s/.test(text[next] ?? "")) next++;
+      if (keys instanceof Set && text[next] === ":") {
+        const key: unknown = JSON.parse(text.slice(i, j + 1));
+        if (typeof key === "string") {
+          if (keys.has(key)) return key;
+          keys.add(key);
+        }
+      }
+      i = j;
+    }
   }
+  return null;
 }
+
+type JsonObjectResult =
+  | { ok: true; value: Record<string, unknown> }
+  | { ok: false; reason: string };
+
+/** JSONのオブジェクトを解析する。構文の誤りと重複したキーは`ok: false`にする。 */
+function parseJsonObject(
+  text: string,
+  allowTrailingCommas: boolean,
+): JsonObjectResult {
+  const source = allowTrailingCommas ? stripTrailingCommas(text) : text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return { ok: false, reason: "file could not be parsed" };
+  }
+  if (!isRecord(parsed)) return { ok: false, reason: "file is not an object" };
+  const duplicate = findDuplicateKey(source);
+  if (duplicate !== null) {
+    return { ok: false, reason: `file has a duplicate key: ${duplicate}` };
+  }
+  return { ok: true, value: parsed };
+}
+
+// ---- ロックファイルの差分 ----
+
+export type LockfileVerdict = { ok: true } | { ok: false; reason: string };
 
 function splitPackageId(id: string): { name: string; version: string } | null {
   const at = id.indexOf("@", id.startsWith("@") ? 1 : 0);
@@ -163,24 +222,30 @@ const DEPENDENCY_FIELDS: readonly string[] = [
   "peerDependencies",
 ];
 
+/** 依存の表から対象の指定を除き、残りが変わっていないかを比べられる形にする。 */
+function withoutTarget(
+  container: Record<string, unknown>,
+  name: string,
+): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...container };
+  for (const field of DEPENDENCY_FIELDS) {
+    const deps = copy[field];
+    if (isRecord(deps)) {
+      const { [name]: _removed, ...rest } = deps;
+      copy[field] = rest;
+    }
+  }
+  return copy;
+}
+
 /** workspacesから対象の依存の指定を除き、残りが変わっていないかを比べられる形にする。 */
 function workspacesWithoutTarget(workspaces: unknown, name: string): unknown {
   if (!isRecord(workspaces)) return workspaces;
   const result: Record<string, unknown> = {};
   for (const [key, workspace] of Object.entries(workspaces)) {
-    if (!isRecord(workspace)) {
-      result[key] = workspace;
-      continue;
-    }
-    const copy: Record<string, unknown> = { ...workspace };
-    for (const field of DEPENDENCY_FIELDS) {
-      const deps = copy[field];
-      if (isRecord(deps)) {
-        const { [name]: _removed, ...rest } = deps;
-        copy[field] = rest;
-      }
-    }
-    result[key] = copy;
+    result[key] = isRecord(workspace)
+      ? withoutTarget(workspace, name)
+      : workspace;
   }
   return result;
 }
@@ -192,15 +257,20 @@ function checkTargetEntry(
 ): string | null {
   const b = entryIdentity(before);
   const a = entryIdentity(after);
-  if (b === null || a === null || a.name !== target.name) {
+  if (b === null || a === null) return "a package entry is malformed";
+  if (a.name !== target.name || b.name !== target.name) {
     return "a package other than the target changed";
   }
-  if (b.name !== target.name) return "a package other than the target changed";
   if (a.version !== target.to) {
     return `target resolved to ${a.version}, expected ${target.to}`;
   }
   if (b.version === a.version) {
     return "target changed without a version change";
+  }
+  // 入れ子のコピーなど、対象が複数の版で入っていても、各コピーの更新幅を確かめる。
+  const kind = classifyUpdate(b.version, a.version);
+  if (kind !== "patch" && kind !== "minor") {
+    return `target jumped from ${b.version} to ${a.version} (${kind})`;
   }
   if (!Array.isArray(after) || after[1] !== "") {
     return "target is resolved from a non-default registry";
@@ -214,22 +284,22 @@ function checkTargetEntry(
 
 /**
  * dependabotがロックファイルに加えた変更が、対象の版の更新だけかを調べる。
- * 対象以外のパッケージの増減と変更、レジストリの変更、版が変わらない整合性の変更は、
- * 依存の差し替えに使えるので`ok: false`にする。
- * `before`と`after`は、bun.lockのテキストである。解釈できなければ`ok: false`にする。
+ * 対象以外のパッケージの増減と変更、レジストリの変更、版が変わらない整合性の変更、
+ * 対象のpatchとminor以外の更新は、依存の差し替えに使えるので`ok: false`にする。
+ * `before`と`after`は、bun.lockのテキストである。解釈できないとき、
+ * 重複したキーがあるときは`ok: false`にする。
  */
 export function checkLockfileDiff(
   before: string,
   after: string,
   target: { name: string; to: string },
 ): LockfileVerdict {
-  const a = parseLockfile(before);
-  const b = parseLockfile(after);
-  if (a === null || b === null) {
-    return { ok: false, reason: "lockfile could not be parsed" };
-  }
-  const aPackages = a.packages;
-  const bPackages = b.packages;
+  const a = parseJsonObject(before, true);
+  const b = parseJsonObject(after, true);
+  if (!a.ok) return { ok: false, reason: `before: ${a.reason}` };
+  if (!b.ok) return { ok: false, reason: `after: ${b.reason}` };
+  const aPackages = a.value.packages;
+  const bPackages = b.value.packages;
   if (!isRecord(aPackages) || !isRecord(bPackages)) {
     return { ok: false, reason: "lockfile has no packages table" };
   }
@@ -240,12 +310,12 @@ export function checkLockfileDiff(
         ([key]) => key !== "packages" && key !== "workspaces",
       ),
     );
-  if (otherKeys(a) !== otherKeys(b)) {
+  if (otherKeys(a.value) !== otherKeys(b.value)) {
     return { ok: false, reason: "lockfile settings changed" };
   }
   if (
-    JSON.stringify(workspacesWithoutTarget(a.workspaces, target.name)) !==
-    JSON.stringify(workspacesWithoutTarget(b.workspaces, target.name))
+    JSON.stringify(workspacesWithoutTarget(a.value.workspaces, target.name)) !==
+    JSON.stringify(workspacesWithoutTarget(b.value.workspaces, target.name))
   ) {
     return { ok: false, reason: "workspace dependencies changed" };
   }
@@ -253,10 +323,10 @@ export function checkLockfileDiff(
   const keys = new Set([...Object.keys(aPackages), ...Object.keys(bPackages)]);
   let targetUpdated = false;
   for (const key of keys) {
-    if (!(key in aPackages)) {
+    if (!Object.hasOwn(aPackages, key)) {
       return { ok: false, reason: `package added: ${key}` };
     }
-    if (!(key in bPackages)) {
+    if (!Object.hasOwn(bPackages, key)) {
       return { ok: false, reason: `package removed: ${key}` };
     }
     const beforeEntry = aPackages[key];
@@ -272,6 +342,76 @@ export function checkLockfileDiff(
   return { ok: true };
 }
 
+// ---- package.jsonの差分 ----
+
+export type PackageJsonVerdict = { ok: true } | { ok: false; reason: string };
+
+// 新しい版の指定は、版そのものか、先頭に^か~が付いた形だけを受け付ける。
+// URLやタグなど、別の取得元を指せる指定を通さないため。
+function specifierPointsAt(specifier: unknown, version: string): boolean {
+  return (
+    typeof specifier === "string" && specifier.replace(/^[\^~]/, "") === version
+  );
+}
+
+/**
+ * dependabotがpackage.jsonに加えた変更が、対象パッケージの版の指定だけかを調べる。
+ * dependencies、devDependencies、optionalDependencies、peerDependenciesのうち、
+ * 対象の指定の変更だけを許す。scripts、trustedDependencies、overrides、resolutions、
+ * patchedDependencies、binを含む、ほかのキーと依存の増減と変更は`ok: false`にする。
+ * 解釈できないとき、重複したキーがあるときも`ok: false`にする。
+ */
+export function checkPackageJsonDiff(
+  before: string,
+  after: string,
+  target: { name: string; to: string },
+): PackageJsonVerdict {
+  const a = parseJsonObject(before, false);
+  const b = parseJsonObject(after, false);
+  if (!a.ok) return { ok: false, reason: `before: ${a.reason}` };
+  if (!b.ok) return { ok: false, reason: `after: ${b.reason}` };
+
+  if (
+    JSON.stringify(withoutTarget(a.value, target.name)) !==
+    JSON.stringify(withoutTarget(b.value, target.name))
+  ) {
+    return {
+      ok: false,
+      reason: "package.json changed outside the target dependency",
+    };
+  }
+
+  let targetUpdated = false;
+  for (const field of DEPENDENCY_FIELDS) {
+    const beforeDeps = a.value[field];
+    const afterDeps = b.value[field];
+    if (!isRecord(beforeDeps) || !isRecord(afterDeps)) continue;
+    const hadBefore = Object.hasOwn(beforeDeps, target.name);
+    const hasAfter = Object.hasOwn(afterDeps, target.name);
+    if (hadBefore !== hasAfter) {
+      return {
+        ok: false,
+        reason: `target was added or removed in ${field}`,
+      };
+    }
+    if (!hadBefore) continue;
+    const beforeSpec = beforeDeps[target.name];
+    const afterSpec = afterDeps[target.name];
+    if (beforeSpec === afterSpec) continue;
+    if (!specifierPointsAt(afterSpec, target.to)) {
+      return {
+        ok: false,
+        reason: `target specifier in ${field} does not point at ${target.to}`,
+      };
+    }
+    targetUpdated = true;
+  }
+  if (!targetUpdated) {
+    return { ok: false, reason: "target was not updated in package.json" };
+  }
+  return { ok: true };
+}
+
 // ---- ゲート ----
 
 export type GateInput = {
@@ -279,6 +419,8 @@ export type GateInput = {
   authorType: string;
   headRepoFullName: string;
   baseRepoFullName: string;
+  /** PRのすべてのcommitの作者がdependabotであるか。 */
+  allCommitsByDependabot: boolean;
   checks: { name: string; conclusion: string | null }[];
   requiredChecks: readonly string[];
   update: UpdateKind;
@@ -288,6 +430,13 @@ export type GateInput = {
   nowMs: number;
   minPublishedDays: number;
   lockfile: LockfileVerdict;
+  /** `checkPackageJsonDiff`の結果。 */
+  packageJson: PackageJsonVerdict;
+  /**
+   * 更新先のパッケージ自身が、新しくライフサイクルスクリプトを持つようになったか。
+   * 呼び出し側が算出する。ルートのpackage.jsonのscriptsは`checkPackageJsonDiff`が止めるので、
+   * ここは更新先パッケージ自身のライフサイクルスクリプトを指す。
+   */
   hasNewLifecycleScript: boolean;
 };
 
@@ -303,7 +452,10 @@ function wait(reason: string): GateResult {
   return { ok: false, kind: "wait", reason };
 }
 
-/** 変更されたパスのうち、保護パスか許可外のものの理由を返す。無ければ`null`。 */
+/**
+ * 変更されたパスのうち、保護パスか許可外のものの理由を返す。無ければ`null`。
+ * 許可リストだけで足りるが、保護パスは理由の文言を分けるために先に判定する。
+ */
 function pathProblem(paths: readonly string[]): string | null {
   if (paths.length === 0) return "no changed paths";
   for (const path of paths) {
@@ -357,6 +509,9 @@ export function evaluateGate(input: GateInput): GateResult {
       `author is not ${DEPENDABOT_LOGIN}: ${input.authorLogin} (${input.authorType})`,
     );
   }
+  if (!input.allCommitsByDependabot) {
+    return stop("a commit was not made by dependabot");
+  }
   if (input.update !== "patch" && input.update !== "minor") {
     return stop(`update kind is ${input.update}`);
   }
@@ -366,11 +521,20 @@ export function evaluateGate(input: GateInput): GateResult {
   if (!input.lockfile.ok) {
     return stop(`lockfile diff rejected: ${input.lockfile.reason}`);
   }
+  if (!input.packageJson.ok) {
+    return stop(`package.json diff rejected: ${input.packageJson.reason}`);
+  }
   if (input.hasNewLifecycleScript) {
     return stop("a new lifecycle script was added");
   }
-  if (Number.isNaN(Date.parse(input.publishedAtIso))) {
+  if (parsePublishedAt(input.publishedAtIso) === null) {
     return stop("publish date is invalid");
+  }
+  if (!Number.isFinite(input.minPublishedDays) || input.minPublishedDays < 0) {
+    return stop("minimum published days is invalid");
+  }
+  if (input.requiredChecks.length === 0) {
+    return stop("no required check is configured");
   }
 
   const checks = checkProblem(input);

