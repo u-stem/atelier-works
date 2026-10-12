@@ -16,7 +16,10 @@ import {
   getCleanupSummary,
   getWorkerLoadSummary,
 } from "./lib/summary_support.ts";
-import type { WorkerLoadSummary } from "./lib/worker_load_support.ts";
+import type {
+  WorkerLoadReport,
+  WorkerLoadSummary,
+} from "./lib/worker_load_support.ts";
 
 export type DailySummaryResult = {
   readonly day: string;
@@ -26,11 +29,12 @@ export type DailySummaryResult = {
   readonly approved_count: number;
   readonly rejected_count: number;
   readonly cleanup: CleanupCounts | null;
-  readonly worker_load: WorkerLoadSummary | null;
+  readonly worker_load: WorkerLoadReport;
 };
 
 /**
- * 前日のworkerの負荷の集計を読む。読めなかったときは、警告を残して`null`を返す。
+ * 前日のworkerの負荷の集計を読み、記録が無いことと読めなかったことを分けて返す。
+ * 読めなかったときは、警告を残して`read_failed`を返す。
  * 負荷の記録は日次のまとめの補足なので、表が無いなどで読めなくても、
  * ほかの項目の通知を止めない。
  */
@@ -38,15 +42,18 @@ export async function readWorkerLoad(
   range: DayRange,
   fetchSummary: (range: DayRange) => Promise<WorkerLoadSummary | null>,
   log: Logger,
-): Promise<WorkerLoadSummary | null> {
+): Promise<WorkerLoadReport> {
   try {
-    return await fetchSummary(range);
+    const summary = await fetchSummary(range);
+    return summary === null
+      ? { kind: "no_record" }
+      : { kind: "summary", summary };
   } catch (error) {
     log.warn("worker load summary could not be read", {
       day: range.label,
       error: error instanceof Error ? error.message : String(error),
     });
-    return null;
+    return { kind: "read_failed" };
   }
 }
 

@@ -11,8 +11,11 @@ const SUMMARY: WorkerLoadSummary = {
   expected_count: 720,
   lag_max_seconds: 4,
   lag_over_count: 0,
-  running_ratio_max: 1 / 3,
-  running_ratio_avg: 0.1,
+  lag_over_total_seconds: 0,
+  gap_count: 0,
+  gap_longest_seconds: null,
+  running_jobs_max: 1,
+  slots_max: 3,
   mem_anon_max_bytes: 80_000_000,
   mem_anon_max_ratio: 0.02,
   mem_working_set_max_bytes: 270_000_000,
@@ -39,27 +42,27 @@ describe("readWorkerLoad", () => {
       () => Promise.resolve(SUMMARY),
       log,
     );
-    expect(result).toEqual(SUMMARY);
+    expect(result).toEqual({ kind: "summary", summary: SUMMARY });
   });
 
-  test("returns null when the query has no sample", async () => {
+  test("returns no_record when the query has no sample", async () => {
     const { log } = captureLog();
     const result = await readWorkerLoad(
       RANGE,
       () => Promise.resolve(null),
       log,
     );
-    expect(result).toBeNull();
+    expect(result).toEqual({ kind: "no_record" });
   });
 
-  test("returns null instead of throwing when the query fails", async () => {
+  test("returns read_failed instead of throwing when the query fails", async () => {
     const { log } = captureLog();
     const result = await readWorkerLoad(
       RANGE,
       () => Promise.reject(new Error("relation does not exist")),
       log,
     );
-    expect(result).toBeNull();
+    expect(result).toEqual({ kind: "read_failed" });
   });
 
   test("warns with the cause when the query fails", async () => {
@@ -70,5 +73,11 @@ describe("readWorkerLoad", () => {
       log,
     );
     expect(lines.join("\n")).toContain("connection refused");
+  });
+
+  test("does not warn when there is simply no record", async () => {
+    const { log, lines } = captureLog();
+    await readWorkerLoad(RANGE, () => Promise.resolve(null), log);
+    expect(lines).toHaveLength(0);
   });
 });

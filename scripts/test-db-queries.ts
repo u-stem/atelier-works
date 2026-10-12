@@ -2056,8 +2056,8 @@ for (const [name, statement] of [
   check(`worker_samples: the table rejects ${name}`, rejected);
 }
 
-// worker_samples: 日次のまとめの集計は、範囲の行だけを数え、前の行との差でOOMの増分を求める。
-// 範囲は2026-10-10(JST)。範囲の外の行(10分前の行と終端ちょうどの行)は数えず、前の行は差の起点にだけ使う。
+// worker_samples: 日次のまとめの集計は、範囲の行だけを数え、値の読めた行の間の差でOOMの増分を求める。
+// 範囲は2026-10-10(JST)。範囲の外の行(10分前の行と終端ちょうどの行)は数えず、前の行は差と空白の起点にだけ使う。
 const MIB = 1024 * 1024;
 const loadRange = {
   start: new Date("2026-10-09T15:00:00.000Z"),
@@ -2086,6 +2086,7 @@ for (const sample of [
     mem_oom: 3,
     mem_oom_kill: 1,
   }),
+  // 累積が戻った行。OOMは1(現在値を数える)、killは0。
   loadSample("2026-10-09T15:02:00.000Z", {
     running_jobs: 0,
     lag_seconds: 2,
@@ -2093,16 +2094,17 @@ for (const sample of [
     mem_anon_bytes: 200 * MIB,
     mem_working_set_bytes: 300 * MIB,
     mem_limit_bytes: 1000 * MIB,
-    mem_oom: 0,
+    mem_oom: 1,
     mem_oom_kill: 0,
   }),
+  // 値が全部NULLの行。次の行の差は、この行ではなくその前の非NULLの行から取る。
   loadSample("2026-10-09T15:04:00.000Z"),
   loadSample("2026-10-09T15:06:00.000Z", {
     running_jobs: 1,
     lag_seconds: 30,
     max_wait_seconds: 5,
     mem_anon_bytes: 50 * MIB,
-    mem_oom: 9,
+    mem_oom: 10,
     mem_oom_kill: 9,
   }),
   loadSample("2026-10-10T15:00:00.000Z", {
@@ -2122,27 +2124,65 @@ check(
   loadSummary,
 );
 check(
-  "worker_samples: the daily summary takes the largest lag and counts the laggy rows",
-  loadSummary?.lag_max_seconds === 45 && loadSummary.lag_over_count === 2,
+  "worker_samples: the daily summary takes the largest lag",
+  loadSummary?.lag_max_seconds === 45,
   loadSummary,
 );
 check(
-  "worker_samples: the daily summary averages the running share over the rows that have it",
-  loadSummary?.running_ratio_max === 1 &&
-    Math.abs((loadSummary.running_ratio_avg ?? 0) - 4 / 9) < 1e-9,
+  "worker_samples: the daily summary counts the laggy rows",
+  loadSummary?.lag_over_count === 2,
   loadSummary,
 );
 check(
-  "worker_samples: the daily summary takes the memory peaks and the share of the limit",
-  loadSummary?.mem_anon_max_bytes === 200 * MIB &&
-    loadSummary.mem_working_set_max_bytes === 300 * MIB &&
-    Math.abs((loadSummary.mem_anon_max_ratio ?? 0) - 0.2) < 1e-9,
+  "worker_samples: the daily summary totals the lag of the laggy rows",
+  loadSummary?.lag_over_total_seconds === 75,
   loadSummary,
 );
 check(
-  "worker_samples: the daily summary sums the counter increases and ignores a reset",
-  loadSummary?.mem_oom_increase === 2 &&
-    loadSummary.mem_oom_kill_increase === 1,
+  "worker_samples: the daily summary counts the gap that ends at the first row of the range",
+  loadSummary?.gap_count === 1,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the longest gap in seconds",
+  loadSummary?.gap_longest_seconds === 300,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the most running jobs",
+  loadSummary?.running_jobs_max === 3,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the slots",
+  loadSummary?.slots_max === 3,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the anon peak",
+  loadSummary?.mem_anon_max_bytes === 200 * MIB,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the working set peak",
+  loadSummary?.mem_working_set_max_bytes === 300 * MIB,
+  loadSummary,
+);
+check(
+  "worker_samples: the daily summary takes the largest share of the limit",
+  Math.abs((loadSummary?.mem_anon_max_ratio ?? 0) - 0.2) < 1e-9,
+  loadSummary,
+);
+// OOMは、2(1から3)、1(3から戻って1)、9(1から10。全NULLの行をまたぐ)の合計で12である。
+check(
+  "worker_samples: the daily summary sums the OOM increases across a reset and a NULL row",
+  loadSummary?.mem_oom_increase === 12,
+  loadSummary,
+);
+// killは、1(0から1)、0(1から戻って0)、9(0から9)の合計で10である。
+check(
+  "worker_samples: the daily summary sums the OOM kill increases across a reset and a NULL row",
+  loadSummary?.mem_oom_kill_increase === 10,
   loadSummary,
 );
 check(
@@ -2160,6 +2200,62 @@ check(
     },
     sql,
   )) === null,
+);
+
+// 全部の値がNULLの日と、行が1行だけで10分前にも行が無い日は、OOMの増分が求められないのでNULLで返る。
+// 「OOMなし」(0)と区別するため。2026-10-05(JST)が全NULL、2026-10-04(JST)が1行だけである。
+for (const sample of [
+  loadSample("2026-10-04T15:00:00.000Z"),
+  loadSample("2026-10-04T15:02:00.000Z"),
+  loadSample("2026-10-03T15:00:00.000Z", { mem_oom: 5, mem_oom_kill: 5 }),
+]) {
+  await insertWorkerSample(sample, sql);
+}
+const allNullSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-04T15:00:00.000Z"),
+    end: new Date("2026-10-05T15:00:00.000Z"),
+    label: "2026-10-05",
+  },
+  sql,
+);
+const singleRowSummary = await getWorkerLoadSummary(
+  {
+    start: new Date("2026-10-03T15:00:00.000Z"),
+    end: new Date("2026-10-04T15:00:00.000Z"),
+    label: "2026-10-04",
+  },
+  sql,
+);
+check(
+  "worker_samples: the OOM increase is null for a day whose rows are all NULL",
+  allNullSummary?.mem_oom_increase === null,
+  allNullSummary,
+);
+check(
+  "worker_samples: the OOM kill increase is null for a day whose rows are all NULL",
+  allNullSummary?.mem_oom_kill_increase === null,
+  allNullSummary,
+);
+check(
+  "worker_samples: the OOM increase is null for a day with one row and no row before it",
+  singleRowSummary?.mem_oom_increase === null,
+  singleRowSummary,
+);
+check(
+  "worker_samples: the OOM kill increase is null for a day with one row and no row before it",
+  singleRowSummary?.mem_oom_kill_increase === null,
+  singleRowSummary,
+);
+check(
+  "worker_samples: a day with one row and no row before it has no gap",
+  singleRowSummary?.gap_count === 0,
+  singleRowSummary,
+);
+check(
+  "worker_samples: a day with one row and no row before it has no longest gap",
+  singleRowSummary?.gap_longest_seconds === null,
+  singleRowSummary,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

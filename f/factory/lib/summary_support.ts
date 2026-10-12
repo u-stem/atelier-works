@@ -9,6 +9,7 @@ import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
 import { isNumber, isString } from "./types.ts";
 import {
+  DAILY_GAP_THRESHOLD_SECONDS,
   DAILY_LAG_THRESHOLD_SECONDS,
   WORKER_SAMPLES_PER_DAY,
   type WorkerLoadSummary,
@@ -119,10 +120,15 @@ export async function getAgentRunSummary(
  * すべて0の集計ではなく`null`を返す。
  * 日次サマリーのDiscord埋め込みで、「負荷が0だった」と「記録が無い」を区別するため。
  *
- * - `mem_oom`と`mem_oom_kill`は起動からの累積なので、行の間の差を足す。
- *   コンテナが再起動して累積が戻った分は負の差になり、0として扱う。
+ * - `mem_oom`と`mem_oom_kill`は起動からの累積なので、値の読めた行だけを並べ、
+ *   その隣り合う行の差を足す。列ごとに別の窓で並べるのは、
+ *   片方がNULLの行をまたいでも、その間の増分を取りこぼさないためである。
+ *   差が負なら累積が戻った(コンテナの再起動)ので、現在値を増分とする。
  *   範囲の最初の行の差は、範囲の始端の10分前まで読んだ直近の行との差で求める。
- * - 割合は行ごとに求めてから最大と平均を取る。上限が読めない行は、メモリの割合に使わない。
+ *   差を1つも求められないときの合計はNULLで、「OOMなし」とは区別される。
+ * - 空白は、隣り合う行の`sampled_at`の間隔が`DAILY_GAP_THRESHOLD_SECONDS`を超えた回数である。
+ *   停止(ホストのスリープ、worker作り直し、Windmillの再起動)は長い1回の空白になる。
+ * - 割合は行ごとに求めてから最大を取る。上限が読めない行は、メモリの割合に使わない。
  * - 集計は`(sampled_at)`の索引で範囲を絞る。
  */
 export async function getWorkerLoadSummary(
@@ -130,9 +136,11 @@ export async function getWorkerLoadSummary(
   sql: SqlClient = defaultSqlClient,
 ): Promise<WorkerLoadSummary | null> {
   const rows = await sql`
-    WITH samples AS (
+    WITH base AS (
       SELECT
+        id,
         sampled_at,
+        sampled_at >= ${range.start.toISOString()}::timestamptz AS in_range,
         slots,
         running_jobs,
         lag_seconds,
@@ -140,28 +148,50 @@ export async function getWorkerLoadSummary(
         mem_anon_bytes,
         mem_working_set_bytes,
         mem_limit_bytes,
-        mem_oom - lag(mem_oom) OVER w AS oom_delta,
-        mem_oom_kill - lag(mem_oom_kill) OVER w AS oom_kill_delta
+        mem_oom,
+        mem_oom_kill
       FROM factory.worker_samples
       WHERE sampled_at >= ${range.start.toISOString()}::timestamptz - interval '10 minutes'
         AND sampled_at < ${range.end.toISOString()}
-      WINDOW w AS (ORDER BY sampled_at, id)
+    ),
+    timed AS (
+      SELECT
+        *,
+        extract(epoch FROM sampled_at - lag(sampled_at) OVER (ORDER BY sampled_at, id)) AS gap_seconds
+      FROM base
+    ),
+    oom AS (
+      SELECT sampled_at, in_range, mem_oom AS current_value,
+        lag(mem_oom) OVER (ORDER BY sampled_at, id) AS previous_value
+      FROM base
+      WHERE mem_oom IS NOT NULL
+    ),
+    oom_kill AS (
+      SELECT sampled_at, in_range, mem_oom_kill AS current_value,
+        lag(mem_oom_kill) OVER (ORDER BY sampled_at, id) AS previous_value
+      FROM base
+      WHERE mem_oom_kill IS NOT NULL
     )
     SELECT
       count(*) AS sample_count,
       max(lag_seconds) AS lag_max_seconds,
       count(*) FILTER (WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}) AS lag_over_count,
-      max(running_jobs::float8 / slots) AS running_ratio_max,
-      avg(running_jobs::float8 / slots) AS running_ratio_avg,
+      coalesce(sum(lag_seconds) FILTER (WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}), 0) AS lag_over_total_seconds,
+      count(*) FILTER (WHERE gap_seconds > ${DAILY_GAP_THRESHOLD_SECONDS}) AS gap_count,
+      max(gap_seconds) FILTER (WHERE gap_seconds > ${DAILY_GAP_THRESHOLD_SECONDS}) AS gap_longest_seconds,
+      max(running_jobs) AS running_jobs_max,
+      max(slots) AS slots_max,
       max(mem_anon_bytes) AS mem_anon_max_bytes,
       max(mem_anon_bytes::float8 / mem_limit_bytes)
         FILTER (WHERE mem_limit_bytes > 0) AS mem_anon_max_ratio,
       max(mem_working_set_bytes) AS mem_working_set_max_bytes,
-      sum(greatest(oom_delta, 0)) AS mem_oom_increase,
-      sum(greatest(oom_kill_delta, 0)) AS mem_oom_kill_increase,
+      (SELECT sum(CASE WHEN current_value < previous_value THEN current_value ELSE current_value - previous_value END)
+        FROM oom WHERE in_range) AS mem_oom_increase,
+      (SELECT sum(CASE WHEN current_value < previous_value THEN current_value ELSE current_value - previous_value END)
+        FROM oom_kill WHERE in_range) AS mem_oom_kill_increase,
       max(max_wait_seconds) AS max_wait_max_seconds
-    FROM samples
-    WHERE sampled_at >= ${range.start.toISOString()}
+    FROM timed
+    WHERE in_range
   `.fetch();
   const row = rows[0];
   if (row === undefined) {
@@ -179,14 +209,20 @@ export async function getWorkerLoadSummary(
       "lag_max_seconds",
     ),
     lag_over_count: parseNumericLike(row.lag_over_count, "lag_over_count"),
-    running_ratio_max: parseNullableNumeric(
-      row.running_ratio_max,
-      "running_ratio_max",
+    lag_over_total_seconds: parseNumericLike(
+      row.lag_over_total_seconds,
+      "lag_over_total_seconds",
     ),
-    running_ratio_avg: parseNullableNumeric(
-      row.running_ratio_avg,
-      "running_ratio_avg",
+    gap_count: parseNumericLike(row.gap_count, "gap_count"),
+    gap_longest_seconds: parseNullableNumeric(
+      row.gap_longest_seconds,
+      "gap_longest_seconds",
     ),
+    running_jobs_max: parseNullableNumeric(
+      row.running_jobs_max,
+      "running_jobs_max",
+    ),
+    slots_max: parseNullableNumeric(row.slots_max, "slots_max"),
     mem_anon_max_bytes: parseNullableNumeric(
       row.mem_anon_max_bytes,
       "mem_anon_max_bytes",

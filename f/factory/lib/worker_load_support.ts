@@ -539,6 +539,12 @@ export const WORKER_SAMPLES_PER_DAY = (24 * 60) / SAMPLE_INTERVAL_MINUTES;
 export const DAILY_LAG_THRESHOLD_SECONDS = 30;
 
 /**
+ * 日次のまとめで「空白」に数える、隣り合う行の間隔の下限(秒)。
+ * 期待する間隔(2分)の2倍を超えたとき、その間の予定が少なくとも1回は実行されていない。
+ */
+export const DAILY_GAP_THRESHOLD_SECONDS = SAMPLE_INTERVAL_MINUTES * 2 * 60;
+
+/**
  * 1日分の`factory.worker_samples`の集計。`null`は、その日のどの行にも値が無かったことを表す。
  * 0は、読めて0だったことを表す。
  */
@@ -551,23 +557,45 @@ export type WorkerLoadSummary = {
   readonly lag_max_seconds: number | null;
   /** `lag_seconds`が`DAILY_LAG_THRESHOLD_SECONDS`以上の行の数。 */
   readonly lag_over_count: number;
-  /** 行ごとの`running_jobs / slots`の最大。記録のジョブ自身は含まない。 */
-  readonly running_ratio_max: number | null;
-  /** 行ごとの`running_jobs / slots`の平均。 */
-  readonly running_ratio_avg: number | null;
+  /** `lag_seconds`が`DAILY_LAG_THRESHOLD_SECONDS`以上の行の`lag_seconds`の合計(秒)。 */
+  readonly lag_over_total_seconds: number;
+  /**
+   * 隣り合う行の間隔が`DAILY_GAP_THRESHOLD_SECONDS`を超えた回数。
+   * 範囲の最初の行は、始端の10分前までの直近の行との間隔で数える。
+   */
+  readonly gap_count: number;
+  /** 数えた空白のうち最長の間隔(秒)。空白が無ければ`null`。 */
+  readonly gap_longest_seconds: number | null;
+  /** `running_jobs`の最大。記録のジョブ自身は含まない。 */
+  readonly running_jobs_max: number | null;
+  /** `slots`の最大。記録のジョブ自身が1つ使うので、他のジョブが使える上限は`slots - 1`である。 */
+  readonly slots_max: number | null;
   /** `mem_anon_bytes`の最大(バイト)。 */
   readonly mem_anon_max_bytes: number | null;
   /** 行ごとの`mem_anon_bytes / mem_limit_bytes`の最大。上限が読めた行だけで求める。 */
   readonly mem_anon_max_ratio: number | null;
   /** `mem_working_set_bytes`の最大(バイト)。 */
   readonly mem_working_set_max_bytes: number | null;
-  /** `mem_oom`が行の間で増えた回数の合計。コンテナの再起動で戻った分は数えない。 */
+  /**
+   * `mem_oom`が値の読めた行の間で増えた回数の合計。
+   * 累積が戻った(コンテナの再起動)ときは、現在値を増分として数える。
+   * 増分を1つも求められないとき(値の読めた行が1行だけなど)は`null`。
+   */
   readonly mem_oom_increase: number | null;
-  /** `mem_oom_kill`が行の間で増えた回数の合計。 */
+  /** `mem_oom_kill`の増分の合計。数え方と`null`の意味は`mem_oom_increase`と同じ。 */
   readonly mem_oom_kill_increase: number | null;
   /** `max_wait_seconds`の最大。記録のジョブ自身の遅れで打ち切られるので、下限である。 */
   readonly max_wait_max_seconds: number | null;
 };
+
+/**
+ * 日次のまとめに載せる前日の負荷の読み取り結果。
+ * 記録が無かったことと、集計を読めなかったことは、次の操作が違うので分ける。
+ */
+export type WorkerLoadReport =
+  | { readonly kind: "summary"; readonly summary: WorkerLoadSummary }
+  | { readonly kind: "no_record" }
+  | { readonly kind: "read_failed" };
 
 const BYTES_PER_MIB = 1024 * 1024;
 
@@ -580,37 +608,49 @@ function mib(bytes: number): string {
 }
 
 function missingLine(summary: WorkerLoadSummary): string {
-  const missing =
-    summary.expected_count > 0
-      ? Math.min(
-          1,
-          Math.max(0, 1 - summary.sample_count / summary.expected_count),
-        )
-      : 0;
+  const missing = Math.max(
+    0,
+    1 - summary.sample_count / summary.expected_count,
+  );
   return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${percent(missing)})`;
 }
 
 function lagLine(summary: WorkerLoadSummary): string {
   return summary.lag_max_seconds === null
     ? "遅れ: 不明"
-    : `遅れ: 最大${String(summary.lag_max_seconds)}秒、${String(DAILY_LAG_THRESHOLD_SECONDS)}秒以上${String(summary.lag_over_count)}件`;
+    : `遅れ: 最大${String(summary.lag_max_seconds)}秒、${String(DAILY_LAG_THRESHOLD_SECONDS)}秒以上${String(summary.lag_over_count)}件(計${String(summary.lag_over_total_seconds)}秒)`;
+}
+
+function gapLine(summary: WorkerLoadSummary): string {
+  const threshold = String(DAILY_GAP_THRESHOLD_SECONDS / 60);
+  return summary.gap_count === 0 || summary.gap_longest_seconds === null
+    ? `空白: ${threshold}分超なし`
+    : `空白: ${threshold}分超${String(summary.gap_count)}回、最長${String(Math.round(summary.gap_longest_seconds / 60))}分`;
+}
+
+/** 空白か遅れがある日だけ、停止と枠の塞がりの見分け方を添える。 */
+function readingHint(summary: WorkerLoadSummary): string | null {
+  return summary.gap_count > 0 || summary.lag_over_count > 0
+    ? "読み方: 長い1回の空白は停止、短い空白と遅れが多ければ枠の塞がり"
+    : null;
 }
 
 function runningLine(summary: WorkerLoadSummary): string {
-  return summary.running_ratio_max === null ||
-    summary.running_ratio_avg === null
+  return summary.running_jobs_max === null || summary.slots_max === null
     ? "他のジョブの枠の使用: 不明"
-    : `他のジョブの枠の使用: 最大${percent(summary.running_ratio_max)}、平均${percent(summary.running_ratio_avg)}`;
+    : `他のジョブの枠の使用: 最大${String(summary.running_jobs_max)}件(記録の枠を除く、上限${String(summary.slots_max - 1)})`;
+}
+
+function countText(count: number | null): string {
+  return count === null ? "不明" : `${String(count)}回`;
 }
 
 function oomText(summary: WorkerLoadSummary): string {
   const { mem_oom_increase: oom, mem_oom_kill_increase: kill } = summary;
-  if (oom === null || kill === null) {
-    return "OOMの増分は不明";
+  if ((oom ?? 0) > 0 || (kill ?? 0) > 0) {
+    return `OOMあり(OOM ${countText(oom)}、kill ${countText(kill)})`;
   }
-  return oom === 0 && kill === 0
-    ? "OOMなし"
-    : `OOMあり(OOM ${String(oom)}回、kill ${String(kill)}回)`;
+  return oom === null || kill === null ? "OOMの増分は不明" : "OOMなし";
 }
 
 function memoryLine(summary: WorkerLoadSummary): string {
@@ -643,14 +683,30 @@ function waitLine(summary: WorkerLoadSummary): string {
 
 /**
  * 1日分の集計を、日次のまとめのDiscordの欄に載せる複数行の文にする。
- * 見方は`docs/operations.md`の「workerの負荷の記録を確かめる」にある。
+ * 見方は`docs/operations.md`の「日次のまとめでの見方」にある。
  */
 export function summarizeWorkerLoad(summary: WorkerLoadSummary): string {
   return [
     missingLine(summary),
     lagLine(summary),
+    gapLine(summary),
+    readingHint(summary),
     runningLine(summary),
     memoryLine(summary),
     waitLine(summary),
-  ].join("\n");
+  ]
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+/** 前日の負荷の読み取り結果を、Discordの欄の文にする。記録が無い場合と読めない場合は、次の操作を添える。 */
+export function describeWorkerLoad(report: WorkerLoadReport): string {
+  switch (report.kind) {
+    case "summary":
+      return summarizeWorkerLoad(report.summary);
+    case "no_record":
+      return "前日の記録なし(sample_worker_loadのスケジュールを確かめる)";
+    case "read_failed":
+      return "集計を読めませんでした(notify_daily_summaryのジョブログを確認)";
+  }
 }

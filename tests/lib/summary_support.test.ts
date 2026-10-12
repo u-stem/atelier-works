@@ -8,6 +8,7 @@ import {
   getWorkerLoadSummary,
 } from "../../f/factory/lib/summary_support.ts";
 import {
+  DAILY_GAP_THRESHOLD_SECONDS,
   DAILY_LAG_THRESHOLD_SECONDS,
   WORKER_SAMPLES_PER_DAY,
 } from "../../f/factory/lib/worker_load_support.ts";
@@ -265,8 +266,11 @@ describe("getWorkerLoadSummary", () => {
     sample_count: "718",
     lag_max_seconds: 45,
     lag_over_count: "3",
-    running_ratio_max: 0.6666666666666666,
-    running_ratio_avg: "0.27",
+    lag_over_total_seconds: "120",
+    gap_count: "2",
+    gap_longest_seconds: "5400.000",
+    running_jobs_max: 2,
+    slots_max: "3",
     mem_anon_max_bytes: "83886080",
     mem_anon_max_ratio: 0.0195,
     mem_working_set_max_bytes: "272629760",
@@ -279,8 +283,11 @@ describe("getWorkerLoadSummary", () => {
     sample_count: 2,
     lag_max_seconds: null,
     lag_over_count: 0,
-    running_ratio_max: null,
-    running_ratio_avg: null,
+    lag_over_total_seconds: 0,
+    gap_count: 0,
+    gap_longest_seconds: null,
+    running_jobs_max: null,
+    slots_max: 3,
     mem_anon_max_bytes: null,
     mem_anon_max_ratio: null,
     mem_working_set_max_bytes: null,
@@ -289,7 +296,8 @@ describe("getWorkerLoadSummary", () => {
     max_wait_max_seconds: null,
   };
 
-  test("queries factory.worker_samples", async () => {
+  // SQLの文面の回帰検知。集計の中身は、scripts/test-db-queries.tsが本物のPostgreSQLで確かめる。
+  test("regression: queries factory.worker_samples", async () => {
     const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
     await getWorkerLoadSummary(RANGE, sql);
     expect(calls[0]?.text).toContain("FROM factory.worker_samples");
@@ -301,26 +309,17 @@ describe("getWorkerLoadSummary", () => {
     expect(calls).toHaveLength(1);
   });
 
-  test("takes the increase of the oom counters between consecutive samples", async () => {
-    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
-    await getWorkerLoadSummary(RANGE, sql);
-    expect(calls[0]?.text).toContain("lag(mem_oom_kill)");
-  });
-
-  test("ignores a counter that dropped after a restart", async () => {
-    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
-    await getWorkerLoadSummary(RANGE, sql);
-    expect(calls[0]?.text).toContain("greatest(oom_kill_delta, 0)");
-  });
-
-  test("passes the range start, the range end and the lag threshold", async () => {
+  test("passes the range, the lag threshold and the gap threshold", async () => {
     const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
     await getWorkerLoadSummary(RANGE, sql);
     expect(calls[0]?.values).toEqual([
       RANGE.start.toISOString(),
+      RANGE.start.toISOString(),
       RANGE.end.toISOString(),
       DAILY_LAG_THRESHOLD_SECONDS,
-      RANGE.start.toISOString(),
+      DAILY_LAG_THRESHOLD_SECONDS,
+      DAILY_GAP_THRESHOLD_SECONDS,
+      DAILY_GAP_THRESHOLD_SECONDS,
     ]);
   });
 
@@ -332,8 +331,11 @@ describe("getWorkerLoadSummary", () => {
       expected_count: WORKER_SAMPLES_PER_DAY,
       lag_max_seconds: 45,
       lag_over_count: 3,
-      running_ratio_max: 0.6666666666666666,
-      running_ratio_avg: 0.27,
+      lag_over_total_seconds: 120,
+      gap_count: 2,
+      gap_longest_seconds: 5400,
+      running_jobs_max: 2,
+      slots_max: 3,
       mem_anon_max_bytes: 83886080,
       mem_anon_max_ratio: 0.0195,
       mem_working_set_max_bytes: 272629760,
@@ -351,8 +353,11 @@ describe("getWorkerLoadSummary", () => {
       expected_count: WORKER_SAMPLES_PER_DAY,
       lag_max_seconds: null,
       lag_over_count: 0,
-      running_ratio_max: null,
-      running_ratio_avg: null,
+      lag_over_total_seconds: 0,
+      gap_count: 0,
+      gap_longest_seconds: null,
+      running_jobs_max: null,
+      slots_max: 3,
       mem_anon_max_bytes: null,
       mem_anon_max_ratio: null,
       mem_working_set_max_bytes: null,

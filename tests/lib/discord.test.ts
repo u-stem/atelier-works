@@ -283,7 +283,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
-      worker_load: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.description).toBe("エージェント実行3件、$1.50消費。");
   });
@@ -299,7 +299,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
-      worker_load: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
@@ -327,7 +327,7 @@ describe("buildEmbed", () => {
         main_ci_runs_deleted: 0,
         doc_dirs_deleted: 0,
       },
-      worker_load: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
@@ -336,7 +336,7 @@ describe("buildEmbed", () => {
     });
   });
 
-  test("shows a 'no record' worker load field when worker_load is null", () => {
+  test("shows a 'no record' worker load field when there is no record", () => {
     const embed = buildEmbed({
       kind: "daily_summary",
       instance_name: "local",
@@ -347,11 +347,30 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
-      worker_load: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
-      value: "前日の記録なし",
+      value: "前日の記録なし(sample_worker_loadのスケジュールを確かめる)",
+    });
+  });
+
+  test("shows a 'read failed' worker load field when the summary could not be read", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "read_failed" },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value: "集計を読めませんでした(notify_daily_summaryのジョブログを確認)",
     });
   });
 
@@ -367,26 +386,33 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: {
-        sample_count: 700,
-        expected_count: 720,
-        lag_max_seconds: 5,
-        lag_over_count: 0,
-        running_ratio_max: 1 / 3,
-        running_ratio_avg: 0.1,
-        mem_anon_max_bytes: 100 * 1024 * 1024,
-        mem_anon_max_ratio: 0.025,
-        mem_working_set_max_bytes: 200 * 1024 * 1024,
-        mem_oom_increase: 0,
-        mem_oom_kill_increase: 0,
-        max_wait_max_seconds: 0,
+        kind: "summary",
+        summary: {
+          sample_count: 700,
+          expected_count: 720,
+          lag_max_seconds: 5,
+          lag_over_count: 0,
+          lag_over_total_seconds: 0,
+          gap_count: 0,
+          gap_longest_seconds: null,
+          running_jobs_max: 1,
+          slots_max: 3,
+          mem_anon_max_bytes: 100 * 1024 * 1024,
+          mem_anon_max_ratio: 0.025,
+          mem_working_set_max_bytes: 200 * 1024 * 1024,
+          mem_oom_increase: 0,
+          mem_oom_kill_increase: 0,
+          max_wait_max_seconds: 0,
+        },
       },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
       value: [
         "記録700/720件(欠け3%)",
-        "遅れ: 最大5秒、30秒以上0件",
-        "他のジョブの枠の使用: 最大33%、平均10%",
+        "遅れ: 最大5秒、30秒以上0件(計0秒)",
+        "空白: 4分超なし",
+        "他のジョブの枠の使用: 最大1件(記録の枠を除く、上限2)",
         "メモリ: anon最大100MiB(上限の3%)、working set最大200MiB、OOMなし",
         "待ちの最長: 0秒以上",
       ].join("\n"),
