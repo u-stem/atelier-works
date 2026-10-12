@@ -19,6 +19,7 @@ import {
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
   GitHubRateLimitError,
+  getAccountId,
   getBranchProtected,
   getIssue,
   getLabelerLogin,
@@ -208,6 +209,45 @@ describe("getViewer", () => {
     await expect(getViewer({ run: fake.run, ghToken: "tok" })).rejects.toThrow(
       /unexpected response shape/,
     );
+  });
+});
+
+describe("getAccountId", () => {
+  test("returns the numeric id of the account", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "octo-owner", id: 4242 }),
+    ]);
+    const id = await getAccountId(
+      { run: fake.run, ghToken: "tok" },
+      "octo-owner",
+    );
+    expect(id).toBe(4242);
+  });
+
+  test("requests the users endpoint, which also serves organizations", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "octo-org", id: 7 }),
+    ]);
+    await getAccountId({ run: fake.run, ghToken: "tok" }, "octo-org");
+    expect(fake.calls[0]?.argv).toContain("users/octo-org");
+  });
+
+  test("rejects with an HTTP error carrying status 404", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    await expect(
+      getAccountId({ run: fake.run, ghToken: "tok" }, "gone"),
+    ).rejects.toMatchObject({ name: "GitHubHttpError", status: 404 });
+  });
+
+  test("rejects a response whose id is not a number", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ login: "octo-owner", id: "4242" }),
+    ]);
+    await expect(
+      getAccountId({ run: fake.run, ghToken: "tok" }, "octo-owner"),
+    ).rejects.toThrow(/unexpected response shape/);
   });
 });
 

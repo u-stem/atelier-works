@@ -217,10 +217,16 @@ schema:
         order:
           - name
           - kind
+          - id
         properties:
           name:
             type: string
             description: GitHubのユーザーまたは組織のログイン名。
+          id:
+            type: integer
+            minimum: 1
+            description: >-
+              GitHubのアカウントの数値IDです。指定すると、検索の前にGitHubの現在のIDと照合し、食い違うオーナーは検索を飛ばします。オーナーが改名して別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れないためです。省略すると名前だけで照合します。
           kind:
             type: string
             description: userなら個人アカウント、orgなら組織を指定します。

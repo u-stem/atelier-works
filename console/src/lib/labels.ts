@@ -56,6 +56,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["claim_assignee_missing", "担当者の未設定"],
   ["pr_trigger_label_left_removed", "PRのトリガーラベルの外れ"],
   ["deployed_sha_mismatch", "反映された版の不一致"],
+  ["owner_id_mismatch", "オーナーの照合の失敗"],
   ["host_action_required", "ホスト側の作業"],
   ["cleanup_db_failed", "データベースの掃除の失敗"],
   ["cleanup_worktree_busy", "作業ディレクトリの使用中"],

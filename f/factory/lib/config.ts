@@ -7,6 +7,7 @@ import { JOB_TMP_MAX_AGE_SEC } from "./job_tmp.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
+  type FactoryOwnerKind,
   isBoolean,
   isNumber,
   isOneOf,
@@ -140,19 +141,58 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   check_commands_by_repo: {},
 };
 
-function isFactoryOwner(value: unknown): value is FactoryOwner {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    isString(value.name) &&
-    isString(value.kind) &&
-    OWNER_KINDS.includes(value.kind)
-  );
+/** `owners`の1要素の`kind`に使える値か。 */
+function isOwnerKind(value: unknown): value is FactoryOwnerKind {
+  return isString(value) && OWNER_KINDS.includes(value);
 }
 
-function isFactoryOwnerArray(value: unknown): value is FactoryOwner[] {
-  return Array.isArray(value) && value.every(isFactoryOwner);
+/**
+ * `owners`の1要素をパースする。形が違えば`null`を返す。
+ * `id`は、`null`、`undefined`、省略をどれも「id無し」として扱い、
+ * 結果には`id`のキーを持たせない。値があるときは、正の整数だけを許す。
+ */
+function parseFactoryOwner(value: unknown): FactoryOwner | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const { name, kind, id } = value;
+  if (!isString(name) || !isOwnerKind(kind)) {
+    return null;
+  }
+  if (id === undefined || id === null) {
+    return { name, kind };
+  }
+  if (!isNumber(id) || !Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+  return { name, kind, id };
+}
+
+/**
+ * `owners`をパースする。
+ * 要素に1つでも形の違うものがあるか、名前が重複していれば`null`を返す。
+ * 名前の比較は大文字と小文字を区別しない(GitHubのログイン名と同じ)。
+ * `id`付きと`id`無しの同名が並ぶと、`id`の照合をすり抜けるため、重複を許さない。
+ */
+function parseFactoryOwners(value: unknown): FactoryOwner[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const owners: FactoryOwner[] = [];
+  const names = new Set<string>();
+  for (const item of value) {
+    const owner = parseFactoryOwner(item);
+    if (owner === null) {
+      return null;
+    }
+    const key = owner.name.toLowerCase();
+    if (names.has(key)) {
+      return null;
+    }
+    names.add(key);
+    owners.push(owner);
+  }
+  return owners;
 }
 
 function isLabelerAssociationArray(
@@ -375,10 +415,10 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     throw new ConfigValidationError("resource value must be an object");
   }
 
-  const owners = raw.owners;
-  if (!isFactoryOwnerArray(owners)) {
+  const owners = parseFactoryOwners(raw.owners);
+  if (owners === null) {
     throw new ConfigValidationError(
-      '"owners" is required and must be an array of { name: string, kind: "user" | "org" }',
+      '"owners" is required and must be an array of { name: string, kind: "user" | "org", id?: positive integer } with unique names (case-insensitive)',
     );
   }
 
