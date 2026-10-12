@@ -248,6 +248,13 @@ type FakeOptions = {
   readonly createReviewError?: Error;
   readonly addLabelsError?: Error;
   readonly updateResult?: boolean;
+  readonly updateError?: Error;
+  /** 2回目の`getPr`(マージの要求が例外で終わった後の読み直し)が返すPR。省略時は1回目と同じ。 */
+  readonly prAfterMerge?: PullRequest;
+  /** 2回目の`getPr`が投げる例外。 */
+  readonly getPrAfterMergeError?: Error;
+  /** `dependabot_enabled`。省略時は真。 */
+  readonly enabled?: boolean;
 };
 
 function fake(options: FakeOptions = {}): {
@@ -258,6 +265,7 @@ function fake(options: FakeOptions = {}): {
   const record = (name: string, ...args: unknown[]) => {
     calls.push({ name, args });
   };
+  let prReads = 0;
   const deps: DependabotFinishDeps = {
     getWorkItem: async (id) => {
       record("getWorkItem", id);
@@ -269,6 +277,13 @@ function fake(options: FakeOptions = {}): {
     },
     getPr: async (owner, repo, number) => {
       record("getPr", owner, repo, number);
+      prReads += 1;
+      if (prReads > 1) {
+        if (options.getPrAfterMergeError !== undefined) {
+          throw options.getPrAfterMergeError;
+        }
+        if (options.prAfterMerge !== undefined) return options.prAfterMerge;
+      }
       if (options.getPrError !== undefined) throw options.getPrError;
       return options.pr ?? openPr();
     },
@@ -301,6 +316,7 @@ function fake(options: FakeOptions = {}): {
     },
     updateStatus: async (id, from, to, note) => {
       record("updateStatus", id, from, to, note);
+      if (options.updateError !== undefined) throw options.updateError;
       return options.updateResult ?? true;
     },
     notify: async (event) => {
@@ -326,6 +342,7 @@ function run(
     input,
     instanceName: INSTANCE,
     fixLabel: FIX_LABEL,
+    enabled: options.enabled ?? true,
   }).then((result) => ({ result, calls }));
 }
 
@@ -341,6 +358,7 @@ async function callsOfFailingRun(
       input,
       instanceName: INSTANCE,
       fixLabel: FIX_LABEL,
+      enabled: options.enabled ?? true,
     });
   } catch {
     // 例外で終わることは別のテストが確かめる。
@@ -943,14 +961,6 @@ describe("runDependabotFinish when the merge fails", () => {
       DEPENDABOT_MERGE_REFUSED_REASON,
     ],
     [
-      "409",
-      { merge: { merged: false, status: 409, message: "head changed" } },
-      dependabotReason(
-        "finish",
-        "GitHub refused the merge because the head changed (409)",
-      ),
-    ],
-    [
       "403",
       { mergeError: new GitHubHttpError("PUT pr merge failed with 403", 403) },
       DEPENDABOT_MERGE_FORBIDDEN_REASON,
@@ -988,7 +998,7 @@ describe("runDependabotFinish when the merge fails", () => {
 
   test("does not put the GitHub message into the notification", async () => {
     const { calls } = await run(mergeInput(), {
-      merge: { merged: false, status: 409, message: "@admin see evil.example" },
+      merge: { merged: false, status: 405, message: "@admin see evil.example" },
     });
 
     expect(JSON.stringify(findEvent(calls))).not.toContain("@admin");
@@ -1000,6 +1010,207 @@ describe("runDependabotFinish when the merge fails", () => {
     });
 
     expect(result.action).toBe("needs_human");
+  });
+
+  test("cancels a merge refused because the head changed (409)", async () => {
+    const { calls } = await run(mergeInput(), {
+      merge: { merged: false, status: 409, message: "head changed" },
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "cancelled", "head_moved"],
+    ]);
+  });
+
+  test("does not notify a merge refused because the head changed (409)", async () => {
+    const { calls } = await run(mergeInput(), {
+      merge: { merged: false, status: 409, message: "head changed" },
+    });
+
+    expect(named(calls, "notify")).toHaveLength(0);
+  });
+});
+
+describe("runDependabotFinish when the merge request threw", () => {
+  const thrown = { mergeError: new Error("connection reset") };
+
+  test("re-reads the pull request once after the merge request", async () => {
+    const { calls } = await run(mergeInput(), thrown);
+
+    expect(effectOrder(calls).slice(1, 4)).toEqual([
+      "getPr",
+      "mergePullRequest",
+      "getPr",
+    ]);
+  });
+
+  test("records the merge when the pull request merged at the assessed head", async () => {
+    const { calls } = await run(mergeInput(), {
+      ...thrown,
+      prAfterMerge: openPr({ state: "closed", merged: true }),
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "reviewed", "merged"],
+    ]);
+  });
+
+  test("does not notify a merge confirmed by the re-read", async () => {
+    const { calls } = await run(mergeInput(), {
+      ...thrown,
+      prAfterMerge: openPr({ state: "closed", merged: true }),
+    });
+
+    expect(named(calls, "notify")).toHaveLength(0);
+  });
+
+  test("records a forbidden merge as merged when the re-read shows it merged", async () => {
+    const { result } = await run(mergeInput(), {
+      mergeError: new GitHubHttpError("PUT pr merge failed with 403", 403),
+      prAfterMerge: openPr({ state: "closed", merged: true }),
+    });
+
+    expect(result.action).toBe("merged");
+  });
+
+  test("hands a merge at another head to a human as an unknown result", async () => {
+    const { calls } = await run(mergeInput(), {
+      ...thrown,
+      prAfterMerge: openPr({
+        state: "closed",
+        merged: true,
+        headSha: OTHER_HEAD,
+      }),
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "needs_human", DEPENDABOT_RESULT_UNKNOWN_REASON],
+    ]);
+  });
+
+  test("hands an unreadable pull request to a human as an unknown result", async () => {
+    const { calls } = await run(mergeInput(), {
+      ...thrown,
+      getPrAfterMergeError: new Error("HTTP 502"),
+    });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "needs_human", DEPENDABOT_RESULT_UNKNOWN_REASON],
+    ]);
+  });
+
+  test.each([
+    ["the pull request merged", openPr({ state: "closed", merged: true })],
+    ["the pull request is still open", openPr()],
+  ])("never sends the merge again when %s", async (_label, prAfterMerge) => {
+    const { calls } = await run(mergeInput(), { ...thrown, prAfterMerge });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(1);
+  });
+
+  test("never sends the merge again when the pull request could not be read", async () => {
+    const { calls } = await run(mergeInput(), {
+      ...thrown,
+      getPrAfterMergeError: new Error("HTTP 502"),
+    });
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(1);
+  });
+});
+
+describe("runDependabotFinish when the merge could not be recorded", () => {
+  const failing = { updateError: new Error("database is unavailable") };
+
+  test("returns the merge without a recorded status", async () => {
+    const { result } = await run(mergeInput(), failing);
+
+    expect(result).toEqual({
+      workItemId: WORK_ITEM_ID,
+      action: "merged",
+      status: null,
+      reason: "merged",
+    });
+  });
+
+  test("warns with the merge and head shas", async () => {
+    const { calls } = await run(mergeInput(), failing);
+
+    expect(
+      named(calls, "warn").map((call) => [call.args[0], call.args[1]]),
+    ).toEqual([
+      [
+        "failed to record the merge",
+        {
+          work_item_id: WORK_ITEM_ID,
+          head_sha: HEAD,
+          merge_sha: MERGE_SHA,
+          error: "database is unavailable",
+        },
+      ],
+    ]);
+  });
+
+  test("does not notify", async () => {
+    const { calls } = await run(mergeInput(), failing);
+
+    expect(named(calls, "notify")).toHaveLength(0);
+  });
+});
+
+describe("runDependabotFinish when dependabot is disabled", () => {
+  const disabled = { enabled: false };
+
+  test("does not merge", async () => {
+    const { calls } = await run(mergeInput(), disabled);
+
+    expect(named(calls, "mergePullRequest")).toHaveLength(0);
+  });
+
+  test("does not post the fix review", async () => {
+    const { calls } = await run(fixInput(), disabled);
+
+    expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+
+  test("does not add the fix label", async () => {
+    const { calls } = await run(fixInput(), disabled);
+
+    expect(named(calls, "addLabels")).toHaveLength(0);
+  });
+
+  test("does not post the findings of a concern", async () => {
+    const { calls } = await run(humanInput(), disabled);
+
+    expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+
+  test("does not read the pull request", async () => {
+    const { calls } = await run(mergeInput(), disabled);
+
+    expect(named(calls, "getPr")).toHaveLength(0);
+  });
+
+  test("cancels the item without notifying", async () => {
+    const { calls } = await run(fixInput(), disabled);
+
+    expect([...statusUpdates(calls), named(calls, "notify").length]).toEqual([
+      [WORK_ITEM_ID, "picked", "cancelled", "dependabot_disabled"],
+      0,
+    ]);
+  });
+
+  test("cancels an item whose assessment could not finish", async () => {
+    const { calls } = await run(assessFailedInput(), disabled);
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "cancelled", "dependabot_disabled"],
+    ]);
+  });
+
+  test("still removes the worktree", async () => {
+    const { calls } = await run(mergeInput(), disabled);
+
+    expect(named(calls, "removeWorktree")).toHaveLength(1);
   });
 });
 

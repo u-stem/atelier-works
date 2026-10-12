@@ -287,6 +287,8 @@ export type DependabotFinishRunInput = {
   readonly instanceName: string;
   /** 修正に回すときに付けるラベル(`factory_config`の`fix_label`)。 */
   readonly fixLabel: string;
+  /** `factory_config`の`dependabot_enabled`。偽なら、GitHubに書かずに取り消す。 */
+  readonly enabled: boolean;
 };
 
 /** このステップの戻り値。 */
@@ -318,17 +320,21 @@ function errorText(error: unknown): string {
  *    状態が`picked`のまま残っているときだけ、人に回す。
  * 3. 作業ツリーを消す。消せなくても続け、片付け(`cleanup_workspaces`)に任せる。
  * 4. 状態がすでに`picked`でなければ(ほかの処理が終端にした、前の実行が終えた)、何もしない。
- * 5. 影響調査を終えられなかったときは、その理由で人に回す。
- * 6. `decideAssessedOutcome`で結論を出す。GitHubに書く前に、PRを読み直す。
+ * 5. `dependabot_enabled`が偽なら、取り消す(`dependabot_disabled`)。GitHubには書かず、通知もしない。
+ * 6. 影響調査を終えられなかったときは、その理由で人に回す。
+ * 7. `decideAssessedOutcome`で結論を出す。GitHubに書く前に、PRを読み直す。
  *    閉じたかマージ済みなら取り消し(`pr_closed`)、headが動いていれば取り消し(`head_moved`)、
  *    baseがこのリポジトリの`main`でない、headが別のリポジトリにあるときは人に回す。
- * 7. マージ: headのshaを固定してマージし、成功したら`reviewed`(`merged`)を1回だけ記録する。
- *    記録できなかったとき(ほかの処理が先に動かした)は警告だけ残す。マージの成功は通知しない(人の操作が要らないため)。
- *    マージできなかったときは、マージできた扱いにせず人に回す。
- * 8. 修正: 所見をPRのレビューに投稿し(この作業項目の目印があれば投稿しない)、修正のラベルを付け、
+ * 8. マージ: headのshaを固定して1回だけマージを要求し、成功したら`reviewed`(`merged`)を1回だけ記録する。
+ *    記録がfalse(ほかの処理が先に動かした)か例外のときは、警告だけ残してステップは成功で返す。
+ *    マージの成功は通知しない(人の操作が要らないため)。
+ *    409(headが固定したshaと違う)は、通知せずに取り消す(`head_moved`)。405は人に回す。
+ *    要求が例外で終わったときは、PRを1回だけ読み直す。調べたheadのままマージ済みならマージとして記録し、
+ *    読めないか未マージなら、マージできた扱いにせず人に回す。どの場合もマージを再送しない。
+ * 9. 修正: 所見をPRのレビューに投稿し(この作業項目の目印があれば投稿しない)、修正のラベルを付け、
  *    `reviewed`(`impact_found`)を記録して、修正の後に人がマージするよう通知する。マージはしない。
  *    投稿かラベルに失敗したら人に回す。
- * 9. 人に回す: 所見を投稿してから人に回す。投稿に失敗したときは、その旨の理由で人に回す。
+ * 10. 人に回す: 所見を投稿してから人に回す。投稿に失敗したときは、その旨の理由で人に回す。
  * 人に回すときの通知には、理由の訳と件数だけを載せ、Claudeが書いた文は載せない。次の操作に再実行を案内しない。
  */
 export async function runDependabotFinish(
@@ -430,6 +436,9 @@ export async function runDependabotFinish(
     return result("none", null, null);
   }
 
+  // 無効にした後は、GitHubに書かず、人にも回さない(修正のラベルはpr_fixを起動するので付けない)。
+  if (!run.enabled) return cancel(DEPENDABOT_CANCEL_NOTE.disabled);
+
   if (input.kind === "needs_human") return toHuman(input.reason);
 
   /** GitHubに書く前にPRを読み直す。書いてよければ`null`、止めるときはその結果を返す。 */
@@ -453,8 +462,8 @@ export async function runDependabotFinish(
       return cancel(DEPENDABOT_CANCEL_NOTE.headMoved);
     }
     const fullName = `${owner}/${repo}`.toLowerCase();
+    // `target.baseRef`は、影響調査の入力の読み直しで`main`だと確かめてある。
     if (
-      pr.baseRef !== "main" ||
       pr.baseRef !== target.baseRef ||
       pr.baseRepoFullName.toLowerCase() !== fullName ||
       (pr.headRepoFullName ?? "").toLowerCase() !== fullName
@@ -498,6 +507,47 @@ export async function runDependabotFinish(
   if (stop !== null) return stop;
 
   if (outcome.outcome === "merge") {
+    /**
+     * マージされたことを1回だけ記録する。マージは済んでいるので、記録できなくてもステップを失敗させない。
+     * 失敗させると、フローの失敗の扱いが`picked`の行を`failed`にし、マージ済みのPRを人に回してしまう。
+     */
+    const recordMerged = async (
+      mergeSha: string | null,
+    ): Promise<DependabotFinishResult> => {
+      deps.info("merged the dependabot pull request", {
+        work_item_id: workItemId,
+        head_sha: target.headSha,
+        merge_sha: mergeSha,
+      });
+      let moved: boolean;
+      try {
+        moved = await deps.updateStatus(
+          workItemId,
+          "picked",
+          "reviewed",
+          DEPENDABOT_DONE_NOTE.merged,
+        );
+      } catch (error) {
+        deps.warn("failed to record the merge", {
+          work_item_id: workItemId,
+          head_sha: target.headSha,
+          merge_sha: mergeSha,
+          error: errorText(error),
+        });
+        return result("merged", null, DEPENDABOT_DONE_NOTE.merged);
+      }
+      if (!moved) {
+        deps.warn("work item left picked before the merge was recorded", {
+          work_item_id: workItemId,
+        });
+      }
+      return result(
+        "merged",
+        moved ? "reviewed" : null,
+        DEPENDABOT_DONE_NOTE.merged,
+      );
+    };
+
     let merged: MergePullRequestResult;
     try {
       merged = await deps.mergePullRequest(
@@ -507,11 +557,24 @@ export async function runDependabotFinish(
         target.headSha,
       );
     } catch (error) {
-      // 要求の後の例外では、マージされた可能性が残る。マージできた扱いにせず、人に確かめてもらう。
+      // 要求の後の例外では、マージされた可能性が残る。PRを1回だけ読み直し、
+      // 調べたheadのままマージ済みと読めたときだけマージとして記録する。マージは再送しない。
       deps.warn("merge request failed", {
         work_item_id: workItemId,
         error: errorText(error),
       });
+      let after: PullRequest | null = null;
+      try {
+        after = await deps.getPr(owner, repo, prNumber);
+      } catch (readError) {
+        deps.warn("failed to re-read the pull request after the merge", {
+          work_item_id: workItemId,
+          error: errorText(readError),
+        });
+      }
+      if (after?.merged === true && after.headSha === target.headSha) {
+        return recordMerged(null);
+      }
       return toHuman(
         error instanceof GitHubHttpError && error.status === 403
           ? DEPENDABOT_MERGE_FORBIDDEN_REASON
@@ -525,36 +588,13 @@ export async function runDependabotFinish(
         status: merged.status,
         message: maskSecrets(merged.message),
       });
-      return toHuman(
-        merged.status === 405
-          ? DEPENDABOT_MERGE_REFUSED_REASON
-          : dependabotReason(
-              "finish",
-              "GitHub refused the merge because the head changed (409)",
-            ),
-      );
+      // 409はheadが固定したshaと違い、確かにマージされていない。新しいheadは取得が別の作業項目で拾うので、
+      // 読み直しでheadの移動を見つけたときと同じく、通知せずに取り消す。
+      return merged.status === 409
+        ? cancel(DEPENDABOT_CANCEL_NOTE.headMoved)
+        : toHuman(DEPENDABOT_MERGE_REFUSED_REASON);
     }
-    deps.info("merged the dependabot pull request", {
-      work_item_id: workItemId,
-      head_sha: target.headSha,
-      merge_sha: merged.sha,
-    });
-    const moved = await deps.updateStatus(
-      workItemId,
-      "picked",
-      "reviewed",
-      DEPENDABOT_DONE_NOTE.merged,
-    );
-    if (!moved) {
-      deps.warn("work item left picked before the merge was recorded", {
-        work_item_id: workItemId,
-      });
-    }
-    return result(
-      "merged",
-      moved ? "reviewed" : null,
-      DEPENDABOT_DONE_NOTE.merged,
-    );
+    return recordMerged(merged.sha);
   }
 
   if (outcome.outcome === "fix") {
@@ -697,6 +737,7 @@ export async function main(
       input,
       instanceName: config.instance_name,
       fixLabel: config.fix_label,
+      enabled: config.dependabot_enabled,
     },
   );
 }
