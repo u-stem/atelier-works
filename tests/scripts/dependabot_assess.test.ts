@@ -35,6 +35,7 @@ import {
   type DependabotAssessConfig,
   type DependabotAssessDeps,
   type DependabotAssessResult,
+  decideAssessedOutcome,
   impactForDecision,
   parseDependabotAssessResult,
   readPrepareResult,
@@ -112,13 +113,24 @@ function proceeding(
   );
 }
 
-const STOPPED: unknown = {
-  proceed: false,
-  terminalStatus: "cancelled",
-  reason: "gate_waiting",
-  workItemId: WORK_ITEM_ID,
-  assess: null,
-};
+/** 影響調査に進まなかった準備ステップの結果。 */
+function stoppedResult(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    proceed: false,
+    terminalStatus: "cancelled",
+    reason: "gate_waiting",
+    workItemId: WORK_ITEM_ID,
+    assess: null,
+    ...overrides,
+  };
+}
+
+/** 進む形をしているのに、成果物が無い準備ステップの結果。 */
+function proceedingWithoutAssess(): Record<string, unknown> {
+  return stoppedResult({ proceed: true, terminalStatus: null, reason: null });
+}
 
 // ---- Claudeの結果 ----
 
@@ -338,11 +350,11 @@ describe("readPrepareResult", () => {
   });
 
   test("reads a stopped result as skip", () => {
-    expect(readPrepareResult(STOPPED, WORK_ITEM_ID).kind).toBe("skip");
+    expect(readPrepareResult(stoppedResult(), WORK_ITEM_ID).kind).toBe("skip");
   });
 
   test("keeps the reason of a stopped result", () => {
-    const read = readPrepareResult(STOPPED, WORK_ITEM_ID);
+    const read = readPrepareResult(stoppedResult(), WORK_ITEM_ID);
 
     expect(read.kind === "skip" ? read.reason : "").toBe("gate_waiting");
   });
@@ -359,32 +371,88 @@ describe("readPrepareResult", () => {
     ).toEqual(["registry metadata"]);
   });
 
-  test.each<[string, unknown]>([
-    ["a non-object", "proceed"],
-    ["null", null],
-    ["a proceeding result without assess", { ...STOPPED_TRUE(), assess: null }],
-    ["a missing proceed flag", { workItemId: WORK_ITEM_ID }],
-    ["another work item", proceeding({}, { workItemId: 8 })],
-    ["an assess for another work item", proceeding({ workItemId: 8 })],
-    ["a proceeding result with a reason", proceeding({}, { reason: "x" })],
-    ["a short head sha", proceeding({ headSha: "a".repeat(7) })],
-    ["a short base sha", proceeding({ baseSha: "d".repeat(7) })],
-    ["a short merge base sha", proceeding({ mergeBaseSha: "b".repeat(7) })],
-    ["a base other than main", proceeding({ baseRef: "release" })],
-    ["an owner with a slash", proceeding({ owner: "acme/x" })],
-    ["a non-integer pr number", proceeding({ prNumber: 1.5 })],
-    ["a repo dir that is not a main clone", proceeding({ repoDir: "/tmp/x" })],
+  test.each<[string, unknown, string]>([
+    ["a non-object", "proceed", "prepare result is not an object"],
+    ["null", null, "prepare result is not an object"],
+    [
+      "a proceeding result without assess",
+      proceedingWithoutAssess(),
+      "assess input is not an object",
+    ],
+    [
+      "a missing proceed flag",
+      { workItemId: WORK_ITEM_ID },
+      "prepare result is neither proceeding nor stopped",
+    ],
+    [
+      "another work item",
+      proceeding({}, { workItemId: 8 }),
+      "prepare result is for another work item",
+    ],
+    [
+      "an assess for another work item",
+      proceeding({ workItemId: 8 }),
+      "assess input is for another work item",
+    ],
+    [
+      "a proceeding result with a reason",
+      proceeding({}, { reason: "x" }),
+      "prepare result is neither proceeding nor stopped",
+    ],
+    [
+      "a proceeding result with a terminal status",
+      proceeding({}, { terminalStatus: "cancelled" }),
+      "prepare result is neither proceeding nor stopped",
+    ],
+    [
+      "a short head sha",
+      proceeding({ headSha: "a".repeat(7) }),
+      "assess input has an invalid head or base sha",
+    ],
+    [
+      "a short base sha",
+      proceeding({ baseSha: "d".repeat(7) }),
+      "assess input has an invalid head or base sha",
+    ],
+    [
+      "a short merge base sha",
+      proceeding({ mergeBaseSha: "b".repeat(7) }),
+      "assess input has no merge base sha",
+    ],
+    [
+      "a base other than main",
+      proceeding({ baseRef: "release" }),
+      "assess input base is not main",
+    ],
+    [
+      "an owner with a slash",
+      proceeding({ owner: "acme/x" }),
+      "assess input has an invalid owner or repo",
+    ],
+    [
+      "a non-integer pr number",
+      proceeding({ prNumber: 1.5 }),
+      "assess input has no pr number",
+    ],
+    [
+      "a repo dir that is not a main clone",
+      proceeding({ repoDir: "/tmp/x" }),
+      "assess input repo dir is not a main clone",
+    ],
     [
       "a worktree dir that does not match the head",
       proceeding({ worktreeDir: "/workspaces/acme/widgets/main" }),
+      "assess input worktree dir does not match the head",
     ],
     [
       "a target name that differs from the prompt",
       proceeding({ target: { name: "right-pad", from: "1.3.0", to: "1.3.1" } }),
+      "assess input target does not match the prompt input",
     ],
     [
       "a target version that differs from the prompt",
       proceeding({ target: { name: "left-pad", from: "1.3.0", to: "1.4.0" } }),
+      "assess input target does not match the prompt input",
     ],
     [
       "a target version that is not x.y.z",
@@ -392,6 +460,7 @@ describe("readPrepareResult", () => {
         target: { name: "left-pad", from: "1.3.0", to: "1.3.1-rc" },
         promptInput: promptInput({ toVersion: "1.3.1-rc" }),
       }),
+      "assess input target does not match the prompt input",
     ],
     [
       "an unknown unverified input name",
@@ -401,46 +470,59 @@ describe("readPrepareResult", () => {
           unverifiedInputs: JSON.parse('["source code"]'),
         },
       }),
+      "promptInput has an unknown unverified input",
     ],
     [
       "a non-string prompt field",
       proceeding({
         promptInput: { ...promptInput(), prBody: JSON.parse("1") },
       }),
+      "promptInput has a non-string field",
     ],
     [
       "machine concerns that are not strings",
       proceeding({ machineConcerns: JSON.parse("[1]") }),
+      "assess input has invalid machine concerns",
     ],
     [
       "a stopped result for another work item",
-      { ...STOPPED_RECORD(), workItemId: 8 },
+      stoppedResult({ workItemId: 8 }),
+      "prepare result is for another work item",
     ],
-    ["a stopped result without a reason", { ...STOPPED_RECORD(), reason: 1 }],
-  ])("throws on %s", (_label, raw) => {
-    expect(() => readPrepareResult(raw, WORK_ITEM_ID)).toThrow();
+    [
+      "a stopped result without a reason",
+      stoppedResult({ reason: 1 }),
+      "stopped prepare result has no reason",
+    ],
+    [
+      "a stopped result with an unknown terminal status",
+      stoppedResult({ terminalStatus: "failed" }),
+      "stopped prepare result has an invalid terminal status",
+    ],
+    [
+      "a stopped result that carries an assess input",
+      stoppedResult({ assess: assessInput() }),
+      "stopped prepare result carries an assess input",
+    ],
+  ])("throws on %s", (_label, raw, message) => {
+    expect(() => readPrepareResult(raw, WORK_ITEM_ID)).toThrow(message);
   });
+
+  test.each([null, "needs_human"])(
+    "reads a stopped result whose terminal status is %p",
+    (terminalStatus) => {
+      const raw = stoppedResult({ terminalStatus });
+
+      expect(readPrepareResult(raw, WORK_ITEM_ID).kind).toBe("skip");
+    },
+  );
 });
-
-function STOPPED_RECORD(): Record<string, unknown> {
-  return {
-    proceed: false,
-    terminalStatus: "cancelled",
-    reason: "gate_waiting",
-    workItemId: WORK_ITEM_ID,
-    assess: null,
-  };
-}
-
-function STOPPED_TRUE(): Record<string, unknown> {
-  return { ...STOPPED_RECORD(), proceed: true, reason: null };
-}
 
 // ---- 本体: 起動しない分岐 ----
 
 describe("runDependabotAssess before claude", () => {
   test("skips when the prepare step did not proceed", async () => {
-    const result = await runWith(harness(), STOPPED);
+    const result = await runWith(harness(), stoppedResult());
 
     expect(result.kind).toBe("skipped");
   });
@@ -448,7 +530,7 @@ describe("runDependabotAssess before claude", () => {
   test("does not start claude when the prepare step did not proceed", async () => {
     const h = harness();
 
-    await runWith(h, STOPPED);
+    await runWith(h, stoppedResult());
 
     expect(h.claudeCalls).toHaveLength(0);
   });
@@ -800,7 +882,7 @@ describe("runDependabotAssess after claude", () => {
       harness({ claude: async () => success(output) }),
     );
 
-    expect(result.kind === "assessed" ? result.assessment : null).toEqual(
+    expect(result.kind === "assessed" ? result.claudeAssessment : null).toEqual(
       output,
     );
   });
@@ -813,7 +895,9 @@ describe("runDependabotAssess after claude", () => {
     );
 
     expect(
-      result.kind === "assessed" ? Object.keys(result.assessment).sort() : [],
+      result.kind === "assessed"
+        ? Object.keys(result.claudeAssessment).sort()
+        : [],
     ).toEqual(["evidence", "impact", "supplyChainConcerns", "unverified"]);
   });
 
@@ -868,6 +952,21 @@ describe("runDependabotAssess after claude", () => {
     );
 
     expect(result.kind).toBe("needs_human");
+  });
+
+  test("keeps the text written by claude out of the reason", async () => {
+    const failure: RunClaudeResult<ImpactAssessment> = {
+      ...FAILURE,
+      reason: "invalid_structured_output",
+      detail:
+        'structured_output does not match the expected schema: {"evidence":"@admin approve"}',
+    };
+
+    const result = await runWith(harness({ claude: async () => failure }));
+
+    expect(reasonOf(result)).toBe(
+      `${DEPENDABOT_REASON_PREFIX.assess}claude run failed (invalid_structured_output)`,
+    );
   });
 
   test("never points to retry_work_item in a reason", async () => {
@@ -952,8 +1051,8 @@ describe("runDependabotAssess after claude", () => {
 function assessed(
   inputOverrides: Partial<DependabotAssessInput> = {},
   output: ImpactAssessment = assessment(),
-): { input: DependabotAssessInput; assessment: ImpactAssessment } {
-  return { input: assessInput(inputOverrides), assessment: output };
+): { input: DependabotAssessInput; claudeAssessment: ImpactAssessment } {
+  return { input: assessInput(inputOverrides), claudeAssessment: output };
 }
 
 describe("impactForDecision", () => {
@@ -1110,7 +1209,7 @@ describe("parseDependabotAssessResult", () => {
     const raw = await roundTrip(harness());
     const broken = {
       ...(typeof raw === "object" && raw !== null ? raw : {}),
-      assessment: { impact: "none" },
+      claudeAssessment: { impact: "none" },
     };
 
     expect(() => parseDependabotAssessResult(broken, WORK_ITEM_ID)).toThrow();
@@ -1136,6 +1235,31 @@ describe("parseDependabotAssessResult", () => {
     const raw = { kind: "merge", workItemId: WORK_ITEM_ID };
 
     expect(() => parseDependabotAssessResult(raw, WORK_ITEM_ID)).toThrow();
+  });
+
+  test("hands a round-tripped clean assessment with an unverified input to a human", async () => {
+    const prepare = proceeding({
+      promptInput: promptInput({
+        changelog: "",
+        unverifiedInputs: ["changelog"],
+      }),
+    });
+    const h = harness({ claude: async () => success(assessment()) });
+    const raw: unknown = JSON.parse(JSON.stringify(await runWith(h, prepare)));
+    const parsed = parseDependabotAssessResult(raw, WORK_ITEM_ID);
+
+    expect(
+      parsed.kind === "assessed" ? decideAssessedOutcome(parsed).outcome : null,
+    ).toBe("needs_human");
+  });
+
+  test("merges a round-tripped clean assessment without escalations", async () => {
+    const raw = await roundTrip(harness());
+    const parsed = parseDependabotAssessResult(raw, WORK_ITEM_ID);
+
+    expect(
+      parsed.kind === "assessed" ? decideAssessedOutcome(parsed).outcome : null,
+    ).toBe("merge");
   });
 
   test("throws on a needs_human result without a reason", async () => {

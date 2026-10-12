@@ -2,7 +2,7 @@
 // 準備ステップが作った作業ツリーで、factory-dependabotスキルと読み取り専用のツールでClaude Codeをヘッドレスで実行し、
 // 更新がこのリポジトリに影響するかと、サプライチェーンの懸念があるかを評価させる。
 // このステップは結論(マージ、修正、人に回す)を出さず、状態も変えない。
-// 結論は終了のステップが、マージの直前に`decideImpactOutcome`(`impactForDecision`で組み立てた評価)から出す。
+// 結論は終了のステップが、マージの直前に`decideAssessedOutcome`で出す。
 // 人に回すべき失敗は`needs_human`の結果として返し、終端にするのと通知は終了のステップが行う。
 
 import * as wmill from "windmill-client@1.817.0";
@@ -32,7 +32,9 @@ import {
   type UnverifiedInputName,
 } from "../lib/dependabot_prompt.ts";
 import {
+  decideImpactOutcome,
   type ImpactAssessment,
+  type ImpactOutcome,
   parseImpactAssessment,
 } from "../lib/dependabot_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
@@ -98,13 +100,16 @@ export type DependabotAssessNeedsHuman = {
   readonly reason: string;
 };
 
-/** Claudeの評価を得たとき。結論は、終了のステップが`impactForDecision`と`decideImpactOutcome`で出す。 */
+/** Claudeの評価を得たとき。結論は、終了のステップが`decideAssessedOutcome`で出す。 */
 export type DependabotAssessed = {
   readonly kind: "assessed";
   readonly workItemId: number;
   readonly input: DependabotAssessInput;
-  /** Claudeの評価(`parseImpactAssessment`を通したもの)。未確認の入力と機械の懸念は、まだ足していない。 */
-  readonly assessment: ImpactAssessment;
+  /**
+   * Claudeの評価(`parseImpactAssessment`を通したもの)。未確認の入力と機械の懸念は、まだ足していない。
+   * これだけで結論を出すと、人に回す根拠を落とす。結論は`decideAssessedOutcome`で出す。
+   */
+  readonly claudeAssessment: ImpactAssessment;
   /** 最後の試行の`agent_runs`の行のID。 */
   readonly agentRunId: number;
 };
@@ -117,7 +122,7 @@ export type DependabotAssessResult =
 // ---- 判定に渡す評価 ----
 
 /**
- * 結論を出すために`decideImpactOutcome`へ渡す評価を返す。
+ * 結論を出すために`decideImpactOutcome`へ渡す評価を返す。後段は直接使わず、`decideAssessedOutcome`を使う。
  * Claudeの評価に、人に回す根拠(`escalationsOf`)を足す。
  * 機械の懸念は`supplyChainConcerns`に、それ以外の根拠(未確認の入力)は`unverified`に入れる。
  * 根拠が1件でもあれば、Claudeが懸念も未確認も無いと答えていても、結論は人に回る。
@@ -125,22 +130,35 @@ export type DependabotAssessResult =
  */
 export function impactForDecision(result: {
   readonly input: DependabotAssessInput;
-  readonly assessment: ImpactAssessment;
+  readonly claudeAssessment: ImpactAssessment;
 }): ImpactAssessment {
+  const claude = result.claudeAssessment;
   const machine = new Set(result.input.machineConcerns);
   const escalations = escalationsOf(result.input);
   return {
-    impact: result.assessment.impact,
-    evidence: result.assessment.evidence,
+    impact: claude.impact,
+    evidence: claude.evidence,
     supplyChainConcerns: [
-      ...result.assessment.supplyChainConcerns,
+      ...claude.supplyChainConcerns,
       ...escalations.filter((item) => machine.has(item)),
     ],
     unverified: [
-      ...result.assessment.unverified,
+      ...claude.unverified,
       ...escalations.filter((item) => !machine.has(item)),
     ],
   };
+}
+
+/**
+ * 影響調査の結果から、マージ、修正、人に回すのどれに進むかを決める。終了のステップは、結論をこの関数だけで出す。
+ * `claudeAssessment`を`decideImpactOutcome`へ直接渡すと、人に回す根拠を落として緩む側に倒れるため、
+ * 根拠を足した評価(`impactForDecision`)をこの中で渡す。
+ * 足した評価の配列は`parseImpactAssessment`の件数の上限を超えうるので、読み直しに通さない。
+ */
+export function decideAssessedOutcome(
+  result: DependabotAssessed,
+): ImpactOutcome {
+  return decideImpactOutcome(impactForDecision(result));
 }
 
 // ---- ステップ間の入力の読み直し ----
@@ -256,7 +274,8 @@ export function readAssessInput(
     target,
     machineConcerns,
   } = raw;
-  if (raw.workItemId !== workItemId) fail("assess input is for another item");
+  if (raw.workItemId !== workItemId)
+    fail("assess input is for another work item");
   if (!isGitHubName(owner) || !isGitHubName(repo)) {
     fail("assess input has an invalid owner or repo");
   }
@@ -310,6 +329,13 @@ export function readAssessInput(
   };
 }
 
+/** 準備ステップが止まったときに取りうる`terminalStatus`(`DependabotPrepareStopped`と同じ)。 */
+const STOPPED_TERMINAL_STATUSES: readonly (string | null)[] = [
+  "cancelled",
+  "needs_human",
+  null,
+];
+
 export type PrepareStepOutcome =
   | { readonly kind: "proceed"; readonly input: DependabotAssessInput }
   | { readonly kind: "skip"; readonly reason: string };
@@ -328,7 +354,17 @@ export function readPrepareResult(
     fail("prepare result is for another work item");
   }
   if (raw.proceed === false) {
-    if (typeof raw.reason !== "string") fail("prepare result has no reason");
+    if (typeof raw.reason !== "string") {
+      fail("stopped prepare result has no reason");
+    }
+    if (
+      !STOPPED_TERMINAL_STATUSES.some((status) => status === raw.terminalStatus)
+    ) {
+      fail("stopped prepare result has an invalid terminal status");
+    }
+    if (raw.assess !== null) {
+      fail("stopped prepare result carries an assess input");
+    }
     return { kind: "skip", reason: raw.reason };
   }
   if (
@@ -375,7 +411,7 @@ export function parseDependabotAssessResult(
       kind,
       workItemId,
       input: readAssessInput(raw.input, workItemId),
-      assessment: parseImpactAssessment(raw.assessment),
+      claudeAssessment: parseImpactAssessment(raw.claudeAssessment),
       agentRunId: raw.agentRunId,
     };
   }
@@ -627,11 +663,15 @@ export async function runDependabotAssess(
     );
   }
   if (result.outcome !== "success") {
+    // 詳細にはClaudeが書いた文(構造化出力や結果の文)が入りうるので、注記と通知には載せない。
+    // 詳細は`agent_runs.error`に記録済みで、ログにも残す。
+    deps.warn("claude run failed", {
+      work_item_id: workItemId,
+      reason: result.reason,
+      detail: result.detail,
+    });
     return needsHuman(
-      dependabotReason(
-        "assess",
-        `claude run failed (${result.reason}): ${result.detail}`,
-      ),
+      dependabotReason("assess", `claude run failed (${result.reason})`),
     );
   }
   return {
@@ -639,7 +679,7 @@ export async function runDependabotAssess(
     workItemId,
     input,
     // 型ガードは通っているが、未知のキーを捨てた値にするため、もう一度読む。
-    assessment: parseImpactAssessment(result.structuredOutput),
+    claudeAssessment: parseImpactAssessment(result.structuredOutput),
     agentRunId,
   };
 }
