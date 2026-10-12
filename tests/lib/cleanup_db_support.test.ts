@@ -38,6 +38,7 @@ describe("summarizeCleanup", () => {
       info_notices_resolved: 0,
       main_ci_runs_deleted: 0,
       worker_samples_deleted: 0,
+      pr_ci_checks_deleted: 0,
       doc_dirs_deleted: 0,
     });
     expect(summary).toBe(
@@ -55,6 +56,7 @@ describe("summarizeCleanup with resolved info notices", () => {
     notices_deleted: 2,
     main_ci_runs_deleted: 0,
     worker_samples_deleted: 0,
+    pr_ci_checks_deleted: 0,
     doc_dirs_deleted: 0,
   };
 
@@ -83,6 +85,7 @@ describe("summarizeCleanup with deleted worker samples", () => {
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
         worker_samples_deleted: 1440,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       }),
     ).toBe(

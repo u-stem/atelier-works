@@ -13,6 +13,7 @@ import {
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
   deleteMainCiRunsBefore,
+  deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
   deleteWorkerSamplesBefore,
@@ -22,6 +23,7 @@ import {
   getApprovalRequest,
   getIssueProposal,
   getLatestDeployment,
+  getLatestPrCiCheck,
   getNoticeById,
   getPreviousMainCiRun,
   getRequirementDraft,
@@ -57,14 +59,18 @@ import {
   listActiveIssueWorkItems,
   listAutoRetryCandidates,
   listExpiredPendingApprovalRequests,
+  listFailedPrCiChecks,
   listImplementRounds,
   listMainCiRunsBySha,
   listPendingIssueProposals,
   listPendingMainCiRuns,
+  listPendingPrCiChecks,
+  listPrCiChecksForPr,
   listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
   listUnresolvedNoticesByKind,
+  markPrCiNotified,
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   nextCycleForIssue,
@@ -72,6 +78,7 @@ import {
   recordDeployment,
   recordFailure,
   recordMainCiRun,
+  recordPrCiCheck,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -100,6 +107,7 @@ import {
   toRequirementDraft,
   toReviewRecord,
   transitionMainCiRun,
+  transitionPrCiCheck,
   updateIntakeIfRegenerating,
   updateStatus,
   updateStatusIfCurrent,
@@ -3559,6 +3567,7 @@ describe("insertCleanupRun", () => {
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
         worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3579,6 +3588,7 @@ describe("insertCleanupRun", () => {
         info_notices_resolved: 4,
         main_ci_runs_deleted: 0,
         worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3598,6 +3608,7 @@ describe("insertCleanupRun", () => {
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
         worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3617,6 +3628,7 @@ describe("insertCleanupRun", () => {
         info_notices_resolved: 0,
         main_ci_runs_deleted: 0,
         worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -4328,6 +4340,7 @@ describe("insertCleanupRun worker_samples_deleted", () => {
     info_notices_resolved: 0,
     main_ci_runs_deleted: 0,
     worker_samples_deleted: 8,
+    pr_ci_checks_deleted: 0,
     doc_dirs_deleted: 0,
   };
 
@@ -4354,6 +4367,7 @@ describe("insertCleanupRun main_ci_runs_deleted", () => {
     info_notices_resolved: 0,
     main_ci_runs_deleted: 6,
     worker_samples_deleted: 0,
+    pr_ci_checks_deleted: 0,
     doc_dirs_deleted: 0,
   };
 
@@ -5057,5 +5071,384 @@ describe("listRecentWorkerSamples", () => {
     await expect(listRecentWorkerSamples(1, sql)).rejects.toThrow(
       "waiting_jobs",
     );
+  });
+});
+
+describe("insertCleanupRun pr_ci_checks_deleted", () => {
+  const counts = {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 0,
+    info_notices_resolved: 0,
+    main_ci_runs_deleted: 0,
+    worker_samples_deleted: 0,
+    pr_ci_checks_deleted: 13,
+    doc_dirs_deleted: 0,
+  };
+
+  test("inserts into the pr_ci_checks_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.text).toContain("pr_ci_checks_deleted");
+  });
+
+  test("records the deleted count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.values).toContain(13);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pr_ci_checks
+// ---------------------------------------------------------------------------
+
+const PR_CI_ROW: SqlRow = {
+  id: "9",
+  owner: "acme",
+  repo: "widgets",
+  pr_number: 12,
+  head_sha: CI_SHA,
+  state: "pending",
+  run_created_at: null,
+  summary: "",
+  notified_reason: null,
+  work_item_id: null,
+  first_seen_at: "2026-10-13T03:00:00.000Z",
+  created_at: "2026-10-13T03:00:00.000Z",
+  updated_at: "2026-10-13T03:00:00.000Z",
+};
+
+const NEW_PR_CI = {
+  owner: "acme",
+  repo: "widgets",
+  pr_number: 12,
+  head_sha: CI_SHA,
+  work_item_id: 7,
+  run_created_at: null,
+};
+
+describe("recordPrCiCheck", () => {
+  test("rejects non 40-hex sha", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, head_sha: "abc1234" }, sql),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("does not touch the database for a rejected sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck({ ...NEW_PR_CI, head_sha: "abc1234" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid owner", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, owner: "a b" }, sql),
+    ).rejects.toThrow("invalid GitHub name");
+  });
+
+  test("rejects a pull request number that is not positive", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, pr_number: 0 }, sql),
+    ).rejects.toThrow("invalid pull request number");
+  });
+
+  test("rejects a work item id that is not positive", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, work_item_id: -1 }, sql),
+    ).rejects.toThrow("invalid work item id");
+  });
+
+  test("inserts into factory.pr_ci_checks", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(NEW_PR_CI, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.pr_ci_checks");
+  });
+
+  test("leaves an existing row alone on conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(NEW_PR_CI, sql);
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (owner, repo, pr_number, head_sha) DO NOTHING",
+    );
+  });
+
+  test("casts the nullable columns explicitly", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(NEW_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /\? ::bigint[\s\S]*\? ::timestamptz|\? ::timestamptz[\s\S]*\? ::bigint/,
+    );
+  });
+
+  test("binds a missing work item id as null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck({ ...NEW_PR_CI, work_item_id: null }, sql);
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("returns true when the row was inserted", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await recordPrCiCheck(NEW_PR_CI, sql)).toBe(true);
+  });
+
+  test("returns false when the head was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await recordPrCiCheck(NEW_PR_CI, sql)).toBe(false);
+  });
+});
+
+describe("listPrCiChecksForPr", () => {
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]).toMatchObject({
+      id: 9,
+      pr_number: 12,
+      head_sha: CI_SHA,
+      state: "pending",
+      run_created_at: null,
+      notified_reason: null,
+      work_item_id: null,
+    });
+  });
+
+  test("filters by owner, repo and pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE owner =  ?  AND repo =  ?  AND pr_number =  ? ::integer",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrCiChecksForPr("acme", "..", 12, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an unexpected state in a row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, state: "baseline" }],
+    ]);
+    await expect(
+      listPrCiChecksForPr("acme", "widgets", 12, sql),
+    ).rejects.toThrow('row field "state"');
+  });
+
+  test("reads the work item id of a row that has one", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, work_item_id: "7" }],
+    ]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.work_item_id).toBe(7);
+  });
+});
+
+describe("getLatestPrCiCheck", () => {
+  test("returns the row", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const row = await getLatestPrCiCheck("acme", "widgets", 12, sql);
+    expect(row?.id).toBe(9);
+  });
+
+  test("returns null when the pull request has no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestPrCiCheck("acme", "widgets", 12, sql)).toBeNull();
+  });
+
+  test("orders by the first seen time, then the id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestPrCiCheck("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("ORDER BY first_seen_at DESC, id DESC");
+  });
+
+  test("limits the lookup to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestPrCiCheck("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("LIMIT 1");
+  });
+});
+
+describe("listPendingPrCiChecks", () => {
+  test("selects only pending rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("WHERE state = 'pending'");
+  });
+
+  test("orders by the first seen time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY first_seen_at ASC");
+  });
+
+  test("passes the limit as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+});
+
+describe("listFailedPrCiChecks", () => {
+  test("selects only failed rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("WHERE state = 'failed'");
+  });
+
+  test("orders by the last update, oldest first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY updated_at ASC");
+  });
+});
+
+describe("transitionPrCiCheck", () => {
+  test("only updates a row that is still in the expected state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain("AND state =  ? ");
+  });
+
+  test("returns true when this call changed the row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await transitionPrCiCheck(9, "pending", { state: "passed" }, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when the row had already moved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await transitionPrCiCheck(9, "pending", { state: "passed" }, sql),
+    ).toBe(false);
+  });
+
+  test("refreshes updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain("updated_at = now()");
+  });
+
+  test("keeps the summary when none is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain("COALESCE( ? ::text, summary)");
+  });
+
+  test("keeps the run time when none is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE( ? ::timestamptz, run_created_at)",
+    );
+  });
+
+  test("rejects a transition that is not allowed, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "passed", { state: "failed" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("names the refused transition in the error", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    await expect(
+      transitionPrCiCheck(9, "passed", { state: "failed" }, sql),
+    ).rejects.toThrow("passed -> failed");
+  });
+
+  test("rejects a summary longer than 400 characters before the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(
+      9,
+      "pending",
+      { state: "failed", summary: "x".repeat(401) },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("accepts a summary of exactly 400 characters", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await transitionPrCiCheck(
+        9,
+        "pending",
+        { state: "failed", summary: "x".repeat(400) },
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects a state that is not a known state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    // 型を通らない値を、外から来た値として渡す。
+    const to = JSON.parse(JSON.stringify({ state: "baseline" }));
+    await transitionPrCiCheck(9, "pending", to, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("markPrCiNotified", () => {
+  test("writes the reason only when it differs from the recorded one", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await markPrCiNotified(9, "ci_failure", sql);
+    expect(calls[0]?.text).toContain("notified_reason IS DISTINCT FROM");
+  });
+
+  test("returns true when the reason was newly written", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await markPrCiNotified(9, "ci_failure", sql)).toBe(true);
+  });
+
+  test("returns false when the reason was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await markPrCiNotified(9, "ci_failure", sql)).toBe(false);
+  });
+
+  test("rejects a reason that is not a reason code, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await markPrCiNotified(9, "because", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("deletePrCiChecksBefore", () => {
+  const cutoff = new Date("2026-09-12T00:00:00.000Z");
+
+  test("keeps pending rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("state <> 'pending'");
+  });
+
+  test("keeps the newest row of each pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, sql);
+    expect(calls[0]?.text).toMatch(
+      /newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)/,
+    );
+  });
+
+  test("ages a row by its updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("updated_at <=");
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await deletePrCiChecksBefore(cutoff, sql)).toBe(2);
   });
 });

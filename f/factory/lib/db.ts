@@ -27,6 +27,14 @@ import {
   type MainCiState,
 } from "./main_ci_support.ts";
 import {
+  canTransitionPrCi,
+  isPrCiReason,
+  isPrCiState,
+  PR_CI_STATES,
+  PR_CI_SUMMARY_MAX_LENGTH,
+  type PrCiState,
+} from "./pr_ci_support.ts";
+import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
   APPROVAL_REQUEST_STATUSES,
@@ -3050,13 +3058,13 @@ export async function insertCleanupRun(
     INSERT INTO factory.cleanup_runs (
       work_items_deleted, approval_requests_deleted, job_failures_deleted,
       deployments_deleted, notices_deleted, info_notices_resolved,
-      main_ci_runs_deleted, worker_samples_deleted, doc_dirs_deleted
+      main_ci_runs_deleted, worker_samples_deleted, pr_ci_checks_deleted, doc_dirs_deleted
     ) VALUES (
       ${counts.work_items_deleted}::integer, ${counts.approval_requests_deleted}::integer,
       ${counts.job_failures_deleted}::integer, ${counts.deployments_deleted}::integer,
       ${counts.notices_deleted}::integer, ${counts.info_notices_resolved}::integer,
       ${counts.main_ci_runs_deleted}::integer, ${counts.worker_samples_deleted}::integer,
-      ${counts.doc_dirs_deleted}::integer
+      ${counts.pr_ci_checks_deleted}::integer, ${counts.doc_dirs_deleted}::integer
     )
     RETURNING id
   `;
@@ -3384,6 +3392,277 @@ export async function hasNewerUnsettledOrFailedMainCiRun(
     LIMIT 1
   `.fetch();
   return rows.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// pr_ci_checks
+// ---------------------------------------------------------------------------
+
+/** `factory.pr_ci_checks`の1行。 */
+export type PrCiCheck = {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly head_sha: string;
+  readonly state: PrCiState;
+  /** そのheadの最も古い実行の作成時刻。実行をまだ見ていなければnull。 */
+  readonly run_created_at: Date | null;
+  readonly summary: string;
+  /** 通知した理由コード。通知していなければnull。 */
+  readonly notified_reason: string | null;
+  /** PRを作ったFactoryの作業項目のID。外部キーは持たない。 */
+  readonly work_item_id: number | null;
+  readonly first_seen_at: Date;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+};
+
+export type NewPrCiCheck = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly head_sha: string;
+  readonly work_item_id: number | null;
+  /** そのheadの最古の実行の作成時刻。まだ実行を見ていなければnull。 */
+  readonly run_created_at: Date | null;
+};
+
+function toPrCiCheck(row: SqlRow): PrCiCheck {
+  return {
+    id: parseId(row.id, "id"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    pr_number: parseNumericLike(row.pr_number, "pr_number"),
+    head_sha: parseRequiredString(row.head_sha, "head_sha"),
+    state: parseEnum(row.state, PR_CI_STATES, "state"),
+    run_created_at: parseNullableDate(row.run_created_at, "run_created_at"),
+    summary: parseRequiredString(row.summary, "summary"),
+    notified_reason: parseNullableString(
+      row.notified_reason,
+      "notified_reason",
+    ),
+    work_item_id: parseNullableId(row.work_item_id, "work_item_id"),
+    first_seen_at: parseDate(row.first_seen_at, "first_seen_at"),
+    created_at: parseDate(row.created_at, "created_at"),
+    updated_at: parseDate(row.updated_at, "updated_at"),
+  };
+}
+
+function assertPrNumber(prNumber: number): void {
+  if (!Number.isSafeInteger(prNumber) || prNumber <= 0) {
+    throw new Error(`invalid pull request number: ${String(prNumber)}`);
+  }
+}
+
+function assertPrCiTarget(owner: string, repo: string, prNumber: number): void {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  assertPrNumber(prNumber);
+}
+
+/**
+ * PRのheadを`factory.pr_ci_checks`に`pending`で記録する。新しく入れたら`true`、記録済みなら`false`を返す。
+ * 記録済みの行は書き換えない。同じheadを何度見ても、状態を巻き戻さないため。
+ * `owner`と`repo`がGitHubの名前の形でないとき、`head_sha`が完全なコミットshaでないとき、
+ * PR番号と作業項目のIDが正の整数でないときは、DBに触れる前に例外を投げる。
+ */
+export async function recordPrCiCheck(
+  record: NewPrCiCheck,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPrCiTarget(record.owner, record.repo, record.pr_number);
+  assertCommitSha(record.head_sha);
+  if (
+    record.work_item_id !== null &&
+    (!Number.isSafeInteger(record.work_item_id) || record.work_item_id <= 0)
+  ) {
+    throw new Error(`invalid work item id: ${String(record.work_item_id)}`);
+  }
+  const rows = await sql`
+    INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha, work_item_id, run_created_at)
+    VALUES (
+      ${record.owner}, ${record.repo}, ${record.pr_number}::integer, ${record.head_sha},
+      ${record.work_item_id}::bigint,
+      ${record.run_created_at === null ? null : record.run_created_at.toISOString()}::timestamptz
+    )
+    ON CONFLICT (owner, repo, pr_number, head_sha) DO NOTHING
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/** そのPRの記録済みの行を、新しいheadから順に返す。 */
+export async function listPrCiChecksForPr(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  assertPrCiTarget(owner, repo, prNumber);
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}::integer
+    ORDER BY first_seen_at DESC, id DESC
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
+/**
+ * そのPRの最新の行を返す。無ければnull。
+ * 新しさは`(first_seen_at, id)`で決める。headは見つけた順に進むためで、掃除が残す行(`deletePrCiChecksBefore`)と同じ鍵である。
+ */
+export async function getLatestPrCiCheck(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck | null> {
+  assertPrCiTarget(owner, repo, prNumber);
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE owner = ${owner} AND repo = ${repo} AND pr_number = ${prNumber}::integer
+    ORDER BY first_seen_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toPrCiCheck(row);
+}
+
+/** 判定を待っている行を、最初に見た順に最大`limit`件返す。 */
+export async function listPendingPrCiChecks(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE state = 'pending'
+    ORDER BY first_seen_at ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
+/**
+ * 失敗の行を、最後に更新した古い順に最大`limit`件返す。
+ * 同じheadの再実行が通ったかを、巡回のたびに読み直すために使う。
+ */
+export async function listFailedPrCiChecks(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE state = 'failed'
+    ORDER BY updated_at ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
+export type PrCiTransition = {
+  readonly state: PrCiState;
+  /** 渡せば置き換える。渡さなければ今の値を残す。長さは`PR_CI_SUMMARY_MAX_LENGTH`まで。 */
+  readonly summary?: string;
+  /** 渡せば置き換える。渡さなければ今の値を残す。そのheadの最古の実行の作成時刻。 */
+  readonly runCreatedAt?: Date;
+};
+
+/**
+ * 行を`from`の状態から`to.state`に移す。この呼び出しで移したら`true`を返す。
+ * 条件は`state = from`なので、別の実行が先に移した行は書き換えず、`false`を返す。
+ * 許されない移行(`canTransitionPrCi`)か、`summary`が長すぎるときは、DBに触れずに例外を投げる。
+ * 呼び出し側は、通知の登録を先にし、この更新を後にする。
+ * 更新が先に成功して通知が失敗すると、通知が永久に出ないため。
+ * 通知の重複は、通知側の部分一意索引が防ぐ。
+ */
+export async function transitionPrCiCheck(
+  id: number,
+  from: PrCiState,
+  to: PrCiTransition,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  if (!isPrCiState(from) || !isPrCiState(to.state)) {
+    throw new Error("transitionPrCiCheck: state is not a known state");
+  }
+  if (!canTransitionPrCi(from, to.state)) {
+    throw new Error(
+      `transitionPrCiCheck: transition is not allowed (${from} -> ${to.state})`,
+    );
+  }
+  if (
+    to.summary !== undefined &&
+    to.summary.length > PR_CI_SUMMARY_MAX_LENGTH
+  ) {
+    throw new Error(
+      `transitionPrCiCheck: summary is too long (max ${String(PR_CI_SUMMARY_MAX_LENGTH)} characters)`,
+    );
+  }
+  const rows = await sql`
+    UPDATE factory.pr_ci_checks
+    SET state = ${to.state},
+        summary = COALESCE(${to.summary ?? null}::text, summary),
+        run_created_at = COALESCE(${to.runCreatedAt === undefined ? null : to.runCreatedAt.toISOString()}::timestamptz, run_created_at),
+        updated_at = now()
+    WHERE id = ${id}::bigint AND state = ${from}
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 通知した理由コードを記録する。今の値と違うときに書き、書いたら`true`を返す。
+ * 同じ理由を重ねて通知しないために使う。`reason`が理由コードでなければ、DBに触れずに例外を投げる。
+ */
+export async function markPrCiNotified(
+  id: number,
+  reason: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  if (!isPrCiReason(reason)) {
+    throw new Error("markPrCiNotified: reason is not a reason code");
+  }
+  const rows = await sql`
+    UPDATE factory.pr_ci_checks
+    SET notified_reason = ${reason}, updated_at = now()
+    WHERE id = ${id}::bigint AND notified_reason IS DISTINCT FROM ${reason}
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 判定が済んだ(`pending`以外の)行のうち、`updated_at`が`olderThan`以前のものを削除し、行数を返す。
+ * 判定を待っている行は、古さにかかわらず削除しない。照会を続けて、`expired`などに移すため。
+ * 各PRで、最初に見た時刻が最も新しい1行は、判定済みでも削除しない。
+ * 鍵は`(first_seen_at, id)`の最大で、`getLatestPrCiCheck`が返す行と必ず同じになる。
+ * PRの最新の行を残すのは、PRに今のheadの判定の記録が残り、同じheadを新しいものとして記録し直さないため。
+ */
+export async function deletePrCiChecksBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    DELETE FROM factory.pr_ci_checks AS r
+    WHERE r.state <> 'pending'
+      AND r.updated_at <= ${olderThan.toISOString()}::timestamptz
+      AND EXISTS (
+        SELECT 1 FROM factory.pr_ci_checks AS newer
+        WHERE newer.owner = r.owner AND newer.repo = r.repo
+          AND newer.pr_number = r.pr_number
+          AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
+      )
+    RETURNING r.id
+  `.fetch();
+  return rows.length;
 }
 
 // ---------------------------------------------------------------------------
