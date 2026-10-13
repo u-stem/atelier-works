@@ -11,7 +11,6 @@ import {
   buildCiExcerpt,
   CI_LOG_MAX_JOBS,
   type CiLogJobInput,
-  type CiSecretReason,
   type CiTextScanner,
   guardCiRoundText,
   type VolatileCiExcerpt,
@@ -103,6 +102,28 @@ export function isCiRound(item: {
   readonly ci_check_id: number | null;
 }): boolean {
   return item.ci_check_id !== null;
+}
+
+/**
+ * CI回で、作業項目が直す失敗のheadを返す。無ければ例外を投げる。
+ * 無いまま通常の回の再実行に進むと、指摘を直す回として動いてしまうため。
+ */
+export function requireCiRoundHeadSha(headSha: string | null): string {
+  if (headSha === null || headSha.length === 0) {
+    throw new Error("pr_fix_verify: a CI round has no head_sha");
+  }
+  return headSha;
+}
+
+/**
+ * commitする変更が無かったときの理由。
+ * 通常の回は、溜めた返信も投稿するので、そのことも理由に載せる。
+ * CI回は返信を投稿しない。
+ */
+export function nothingToCommitReason(ciRound: boolean): string {
+  return ciRound
+    ? "no changes to commit"
+    : "no changes to commit; replies posted";
 }
 
 /** factory-fixスキルの本文に、CI回の節のマーカーがあるか。 */
@@ -413,7 +434,7 @@ export async function gatherCiFailureInput(
   if (excerpt.kind === "empty") return blocked("the CI job log is empty");
   if (excerpt.kind === "secret_detected") {
     return blocked(
-      `the CI job log matched the secret scan (${secretReasonText(excerpt.reason)})`,
+      `the CI job log matched the secret scan (${excerpt.reason})`,
     );
   }
   const first = runs[0];
@@ -464,10 +485,6 @@ export function buildCiGatherDeps(
       ),
     scan: ciTextScanner(run),
   };
-}
-
-function secretReasonText(reason: CiSecretReason): string {
-  return reason;
 }
 
 /** ローカルの検査1件の失敗。`pr_fix_verify`の`CheckFailure`と同じ形である。 */

@@ -8,6 +8,7 @@ import {
 import {
   describeReason,
   nextActionFor,
+  nextActionForPrFix,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const NEXT_ACTION =
@@ -73,6 +74,28 @@ describe("nextActionFor a CI round", () => {
   test("does not point to retry_work_item", () => {
     expect(nextActionFor("ci round: x", "pr_fix")).not.toContain(
       "retry_work_item",
+    );
+  });
+});
+
+describe("nextActionForPrFix", () => {
+  test("keeps the generic action of a review round", () => {
+    expect(nextActionForPrFix("unknown failure", false)).toBe(
+      nextActionFor("unknown failure", "pr_fix"),
+    );
+  });
+
+  test("waits for the re-evaluation when a CI round ends with an unknown reason", () => {
+    expect(nextActionForPrFix("unknown failure", true)).toBe(NEXT_ACTION);
+  });
+
+  test("waits for the re-evaluation when a CI round has nothing to commit", () => {
+    expect(nextActionForPrFix("no changes to commit", true)).toBe(NEXT_ACTION);
+  });
+
+  test("keeps a specific action of a CI round", () => {
+    expect(nextActionForPrFix("pull request is a draft", true)).toBe(
+      nextActionFor("pull request is a draft", "pr_fix"),
     );
   });
 });

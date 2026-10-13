@@ -4416,6 +4416,20 @@ const REASON_RULES: readonly ReasonRule[] = [
 ];
 
 /**
+ * PR修正の理由に対する次の操作を選ぶ。
+ * CI回は再実行も付け直しも案内しない。汎用の案内(`retry_work_item`)と、返信を前提にした案内(`factory:fix`の付け直し)は、
+ * CIの再評価を待つ案内に置き換える。個別の規則がある理由は、そのままにする。
+ */
+export function nextActionForPrFix(reason: string, ciRound: boolean): string {
+  const action = nextActionFor(reason, "pr_fix");
+  if (!ciRound) return action;
+  return action === GENERIC_NEXT_ACTION ||
+    action === NOTHING_TO_COMMIT_NEXT_ACTION
+    ? CI_ROUND_NEXT_ACTION
+    : action;
+}
+
+/**
  * 早期終了(skip、guard_blocked、round_exhausted)のときの結果のフィールドを返す。
  * PRの位置(owner、repo、pr_number)は常に作業項目から取る。
  * `pr_fix_finish.ts`は、worktreeを用意しなかったときでも、Discordの通知の宛先に

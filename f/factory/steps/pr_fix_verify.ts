@@ -27,6 +27,7 @@ import {
   inspectCiFixChanges,
   localCheckJobs,
   removeIgnoredFilesIfPointerIntact,
+  requireCiRoundHeadSha,
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
 import {
@@ -522,13 +523,12 @@ export async function main(
         // CI回は、通常の回の検査に加えて、許可リスト方式で変更を検査する。
         // 無視されたファイルも対象にする。検査コマンドの動き方を変えうるためである。
         // 理由に入るパスは秘密値の検査を通っていないので、外へ出す前に検査する。
-        if (head_sha === null) throw new Error("pr_fix_verify: no head_sha");
         const reasons = inspected.blocked
           ? inspected.reasons
           : await inspectCiFixChanges(
               runCommand,
               worktree_dir,
-              head_sha,
+              requireCiRoundHeadSha(head_sha),
               await loadPrChangedPaths(),
               { source: "worktree" },
             );
@@ -571,7 +571,7 @@ export async function main(
           "f/factory/claude_oauth_token",
         );
         const client: GhClient = { run: runCommand, ghToken };
-        if (head_sha !== null && ci_check_id !== null) {
+        if (ciRound) {
           return ciRetryResult(
             await runCiRetry({
               client,
@@ -582,7 +582,7 @@ export async function main(
               owner,
               repo,
               prNumber: pr_number,
-              headSha: head_sha,
+              headSha: requireCiRoundHeadSha(head_sha),
               worktreeDir: worktree_dir,
               factoryCloneDir: factory_clone_dir,
               attempt,

@@ -17,7 +17,9 @@ import {
   isCiFixOutputAllowed,
   isCiRound,
   localCheckJobs,
+  nothingToCommitReason,
   removeIgnoredFilesIfPointerIntact,
+  requireCiRoundHeadSha,
   runCiFixApply,
   runPostPushBookkeeping,
 } from "../../f/factory/lib/ci_fix_round.ts";
@@ -915,5 +917,31 @@ describe("removeIgnoredFilesIfPointerIntact", () => {
         },
       }),
     ).rejects.toThrow("git clean failed");
+  });
+});
+
+describe("requireCiRoundHeadSha", () => {
+  test("returns the head", () => {
+    expect(requireCiRoundHeadSha(SHA)).toBe(SHA);
+  });
+
+  test("throws when the head is null", () => {
+    expect(() => requireCiRoundHeadSha(null)).toThrow("no head_sha");
+  });
+
+  test("throws when the head is empty", () => {
+    expect(() => requireCiRoundHeadSha("")).toThrow("no head_sha");
+  });
+});
+
+describe("nothingToCommitReason", () => {
+  test("mentions the posted replies in a review round", () => {
+    expect(nothingToCommitReason(false)).toBe(
+      "no changes to commit; replies posted",
+    );
+  });
+
+  test("does not mention replies in a CI round", () => {
+    expect(nothingToCommitReason(true)).toBe("no changes to commit");
   });
 });

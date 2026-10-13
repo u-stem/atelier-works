@@ -10,6 +10,7 @@ import {
   guardCiRoundReasons,
   inspectCiFixChanges,
   isCiRound,
+  nothingToCommitReason,
   runPostPushBookkeeping,
 } from "../lib/ci_fix_round.ts";
 import { loadConfig } from "../lib/config.ts";
@@ -73,6 +74,7 @@ import {
   listReviewThreadsBestEffort,
   matchReviewThreadForComment,
   nextActionFor,
+  nextActionForPrFix,
   PR_HEAD_NOT_RECORDED_REASON,
   type PrFixFinishOutcome,
   prFixPushGateReason,
@@ -302,7 +304,7 @@ export async function main(
       // 日本語への変換は表示用。記録する`status_reason`は変換前の英語のまま保つ。
       reason: describeReason(discordReason),
       target: { kind: "pr", number: pr_number },
-      next_action: nextActionFor(discordReason, "pr_fix"),
+      next_action: nextActionForPrFix(discordReason, ciRound),
     };
     await notifyBestEffort(webhookUrl, event, log);
   }
@@ -825,7 +827,7 @@ export async function main(
       "needs_human",
       nothingToCommitProposals.length > 0
         ? buildIssueProposalReason(nothingToCommitProposals.length)
-        : "no changes to commit; replies posted",
+        : nothingToCommitReason(ciRound),
     );
     return {
       ok: true,
