@@ -41,6 +41,7 @@ import {
   assertOutputComplete,
   buildGitArgv,
   type CommandRunner,
+  DEFAULT_TIMEOUT_MS,
   isCappedOutput,
   localGitEnv,
   runGitleaksOnText,
@@ -207,6 +208,42 @@ export function ciRoundApplyTimeoutMisfit(
     overhead.baseSec;
   if (total <= stepTimeoutSec) return null;
   return `${REASON_PREFIX}: time settings do not fit the flow step timeout: 2 claude runs and 5 secret scans need ${String(total)}s but the step allows ${String(stepTimeoutSec)}s`;
+}
+
+/**
+ * 検証ステップの時間設定が、CI回の追加の作業を含めてstep timeoutに収まらなければ理由を返す。収まれば`null`を返す。
+ * 検査コマンドが無ければ、検証ステップは検査も再実行も行わないので`null`を返す。
+ * 通常の回の見積もり(Claude 2回と、全件の検査2回)に、CI回だけの次の作業を足す。
+ * - 再実行のgitleaks最大5回(抜粋の4回と、出力の1回)と、止める理由の検査1回。
+ * - 検査コマンドの後の`git clean`2回。gitの1回は`DEFAULT_TIMEOUT_MS`で打ち切る。
+ * - 変更を読む4回(Claudeの実行の後、検査コマンドの後、再実行の後、2回目の検査コマンドの後)。
+ *   1回の読み取りは、時間の上限(`CI_ROUND_COLLECT_BUDGET_MS`)に、上限を超えた時点で実行中のgit数回を足した時間で収まる。
+ * 再実行のログ取得のAPI呼び出しは、通常の回と同じく、`baseSec`の余裕に含める。
+ * `overhead`は、通常の回の見積もりと同じ値を渡す。
+ */
+export function ciRoundVerifyTimeoutMisfit(
+  claudeTimeoutSec: number,
+  checkCount: number,
+  stepTimeoutSec: number,
+  overhead: { readonly commandStopSec: number; readonly baseSec: number } = {
+    commandStopSec: 15,
+    baseSec: 600,
+  },
+): string | null {
+  if (checkCount === 0) return null;
+  const { commandStopSec } = overhead;
+  const claudeSec = claudeTimeoutSec + commandStopSec;
+  const scanSec = CI_FIX_GITLEAKS_TIMEOUT_MS / 1000 + commandStopSec;
+  const gitSec = DEFAULT_TIMEOUT_MS / 1000 + commandStopSec;
+  const collectSec = CI_ROUND_COLLECT_BUDGET_MS / 1000 + 3 * gitSec;
+  const total =
+    (2 + 2 * checkCount) * claudeSec +
+    6 * scanSec +
+    2 * gitSec +
+    4 * collectSec +
+    overhead.baseSec;
+  if (total <= stepTimeoutSec) return null;
+  return `${REASON_PREFIX}: time settings do not fit the flow step timeout: the verify step needs ${String(total)}s for ${String(checkCount)} check commands but the step allows ${String(stepTimeoutSec)}s`;
 }
 
 // ---------------------------------------------------------------------------
@@ -648,6 +685,13 @@ const defaultChangeFs: CiChangeFs = {
 /** 読んで検査する変更の数の上限。超えたら、1件ずつ読まずに止める。 */
 export const CI_ROUND_MAX_CHANGES = 200;
 
+/**
+ * 変更を読む時間の上限(ミリ秒)。超えたら、残りを読まずに止める。
+ * ファイルごとにgitを実行するので、gitの1回のタイムアウトを件数分だけ足すと、1回の検査でステップのtimeoutを超えうる。
+ * 上限があるので、時間の見積もり(`ciRoundVerifyTimeoutMisfit`)は、この値と、上限を超えた時点で実行中のgit数回で数えられる。
+ */
+export const CI_ROUND_COLLECT_BUDGET_MS = 2 * 60_000;
+
 /** 未追跡のファイルの内容を読む大きさの上限(バイト)。超えたら読まずに対応外にする。 */
 const UNTRACKED_MAX_BYTES = 1024 * 1024;
 
@@ -775,6 +819,8 @@ export type CiChangeOptions = {
   /** 読む変更の数の上限。省略時は`CI_ROUND_MAX_CHANGES`。 */
   readonly maxChanges?: number;
   readonly fs?: CiChangeFs;
+  /** 現在時刻(ミリ秒)。省略時は`Date.now`。時間の上限(`CI_ROUND_COLLECT_BUDGET_MS`)の測定に使う。 */
+  readonly now?: () => number;
 };
 
 function splitLines(text: string): string[] {
@@ -833,10 +879,16 @@ export async function collectCiFixChanges(
 ): Promise<{
   readonly changes: CiFixChange[];
   readonly overflow: boolean;
+  /** 読む時間の上限(`CI_ROUND_COLLECT_BUDGET_MS`)を超えて、残りを読まなかった。 */
+  readonly timedOut: boolean;
 }> {
   assertSha(baseSha);
   const fs = options.fs ?? defaultChangeFs;
   const max = options.maxChanges ?? CI_ROUND_MAX_CHANGES;
+  const now = options.now ?? Date.now;
+  const startedAt = now();
+  const outOfTime = (): boolean =>
+    now() - startedAt > CI_ROUND_COLLECT_BUDGET_MS;
   const cached = options.source === "staged" ? ["--cached"] : [];
 
   const tracked = parseRawDiffZ(
@@ -865,11 +917,12 @@ export async function collectCiFixChanges(
           .filter((path) => path !== "")
       : [];
   if (tracked.length + untracked.length > max) {
-    return { changes: [], overflow: true };
+    return { changes: [], overflow: true, timedOut: false };
   }
 
   const changes: CiFixChange[] = [];
   for (const entry of tracked) {
+    if (outOfTime()) return { changes: [], overflow: true, timedOut: true };
     const readable =
       REGULAR_MODES.includes(entry.mode) &&
       entry.status !== "typechange" &&
@@ -921,9 +974,10 @@ export async function collectCiFixChanges(
     );
   }
   for (const path of untracked) {
+    if (outOfTime()) return { changes: [], overflow: true, timedOut: true };
     changes.push(await untrackedChange(fs, worktreeDir, path));
   }
-  return { changes, overflow: false };
+  return { changes, overflow: false, timedOut: false };
 }
 
 /**
@@ -964,12 +1018,13 @@ export async function inspectCiFixChanges(
   options: CiChangeOptions,
 ): Promise<string[]> {
   const max = options.maxChanges ?? CI_ROUND_MAX_CHANGES;
-  const { changes, overflow } = await collectCiFixChanges(
+  const { changes, overflow, timedOut } = await collectCiFixChanges(
     run,
     worktreeDir,
     baseSha,
     options,
   );
+  if (timedOut) return [`${REASON_PREFIX} took too long to read the changes`];
   if (overflow)
     return [`${REASON_PREFIX} changed more than ${String(max)} files`];
   const verdict = checkCiFixChanges({ changes, prChangedPaths });

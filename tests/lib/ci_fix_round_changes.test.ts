@@ -421,6 +421,55 @@ describe("collectCiFixChanges", () => {
     ]).toEqual([true, 0]);
   });
 
+  test("stops reading patches after the time budget", async () => {
+    const tracked = raw(
+      ...Array.from({ length: 5 }, (_, n): [string, string, string, string] => [
+        "100644",
+        "100644",
+        "M",
+        `f${String(n)}.ts`,
+      ]),
+    );
+    const { run, argvs } = fakeGit({ tracked });
+    let clock = 0;
+    await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+      now: () => {
+        clock += 100_000;
+        return clock;
+      },
+    });
+    expect(argvs.filter((argv) => argv.includes("-U0")).length).toBe(1);
+  });
+
+  test("reports that the time budget ran out", async () => {
+    const tracked = raw(["100644", "100644", "M", "a.ts"]);
+    const { run } = fakeGit({ tracked });
+    let clock = 0;
+    const outcome = await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+      now: () => {
+        clock += 200_000;
+        return clock;
+      },
+    });
+    expect(outcome.timedOut).toBe(true);
+  });
+
+  test("does not report a timeout within the budget", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", "a.ts"]),
+    });
+    const outcome = await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+      now: () => 0,
+    });
+    expect(outcome.timedOut).toBe(false);
+  });
+
   test("throws when git fails, so that a failed listing is not read as no changes", async () => {
     const { run } = fakeGit({ fail: "--raw" });
     await expect(
@@ -492,6 +541,23 @@ describe("inspectCiFixChanges", () => {
     ).toEqual([
       "ci round change not allowed (weakens_checks): tests/new.test.ts",
     ]);
+  });
+
+  test("reports a timeout as one reason", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", "a.ts"]),
+    });
+    let clock = 0;
+    expect(
+      await inspectCiFixChanges(run, DIR, SHA, [], {
+        ...WORKTREE,
+        fs: fakeFs({}).fs,
+        now: () => {
+          clock += 200_000;
+          return clock;
+        },
+      }),
+    ).toEqual(["ci round took too long to read the changes"]);
   });
 
   test("reports an overflow as one reason", async () => {

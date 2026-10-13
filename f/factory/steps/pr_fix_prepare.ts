@@ -9,6 +9,7 @@ import {
 } from "../lib/check_sandbox.ts";
 import {
   ciRoundApplyTimeoutMisfit,
+  ciRoundVerifyTimeoutMisfit,
   evaluateCiRoundPrepareGuard,
 } from "../lib/ci_fix_round.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
@@ -52,12 +53,19 @@ import {
   fetchPrFixHeadBranchState,
   PR_COMMAND_STOP_OVERHEAD_SEC,
   PR_FIX_APPLY_STEP_TIMEOUT_SEC,
+  PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
   PR_STEP_OVERRUN_BASE_SEC,
   type PrFixGateOutcome,
   type PrFixHeadBranchState,
   prFixTimeoutMisfit,
   shouldReadPrFixHeadState,
 } from "./pr_workflow_support.ts";
+
+/** CI回の時間の見積もりに使う、通常の回と同じ余裕。 */
+const CI_ROUND_OVERHEAD = {
+  commandStopSec: PR_COMMAND_STOP_OVERHEAD_SEC,
+  baseSec: PR_STEP_OVERRUN_BASE_SEC,
+} as const;
 
 export type PrFixPrepareResult = {
   readonly outcome: PrFixGateOutcome;
@@ -187,14 +195,17 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   const timeoutMisfit =
     prFixTimeoutMisfit(config) ??
     (ciRound
-      ? ciRoundApplyTimeoutMisfit(
+      ? (ciRoundApplyTimeoutMisfit(
           config.claude_timeout_sec,
           PR_FIX_APPLY_STEP_TIMEOUT_SEC,
-          {
-            commandStopSec: PR_COMMAND_STOP_OVERHEAD_SEC,
-            baseSec: PR_STEP_OVERRUN_BASE_SEC,
-          },
-        )
+          CI_ROUND_OVERHEAD,
+        ) ??
+        ciRoundVerifyTimeoutMisfit(
+          config.claude_timeout_sec,
+          config.allowed_check_commands.length,
+          PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
+          CI_ROUND_OVERHEAD,
+        ))
       : null);
   if (timeoutMisfit !== null) {
     return {

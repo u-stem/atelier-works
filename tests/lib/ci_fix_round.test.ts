@@ -9,6 +9,7 @@ import {
   ciRoundApplyTimeoutMisfit,
   ciRoundPushGuardReason,
   ciRoundRetryRefusal,
+  ciRoundVerifyTimeoutMisfit,
   evaluateCiRoundPrepareGuard,
   finalizeCiFixOutput,
   gatherCiFailureInput,
@@ -174,6 +175,31 @@ describe("ciRoundApplyTimeoutMisfit", () => {
 
   test("reports a Claude timeout that leaves no room for the scans", () => {
     expect(ciRoundApplyTimeoutMisfit(3000, 7200)).toContain("ci round");
+  });
+});
+
+describe("ciRoundVerifyTimeoutMisfit", () => {
+  test("accepts the default time settings with four check commands", () => {
+    expect(ciRoundVerifyTimeoutMisfit(1800, 4, 21_600)).toBeNull();
+  });
+
+  test("reports a fifth check command that no longer fits", () => {
+    expect(ciRoundVerifyTimeoutMisfit(1800, 5, 21_600)).toContain("ci round");
+  });
+
+  test("counts the extra work of a CI round on top of the claude runs and the checks", () => {
+    // 通常の回の見積もり: (2 + 2 x 4) x (1800 + 15) + 600 = 18750
+    expect(ciRoundVerifyTimeoutMisfit(1800, 4, 18_750)).not.toBeNull();
+  });
+
+  test("accepts any time settings when there are no check commands", () => {
+    expect(ciRoundVerifyTimeoutMisfit(3000, 0, 1)).toBeNull();
+  });
+
+  test("states the required time and the allowed time", () => {
+    expect(ciRoundVerifyTimeoutMisfit(1800, 5, 21_600)).toContain(
+      "but the step allows 21600s",
+    );
   });
 });
 
