@@ -177,6 +177,17 @@ const CI_DENIED_BASENAME_PATTERNS: readonly RegExp[] = [
   /\.script\.lock$/,
   /\.(?:schedule|variable|resource|resource-type|trigger)\.yaml$/,
   /^\.mcp\.json$/,
+  // 無視ファイル。入れ子の`.gitignore`などは、biomeやprettierの対象から
+  // 既存のファイルを外せる。`tests/`の配下の新規ファイルとして許可リストを通さないため、
+  // テストの判定より前に拒否する。
+  /^\.[\w.-]*ignore$/,
+  /^\.editorconfig$/,
+  // テストの収集と実行を変えるファイル。`tests/`の配下に置いても効くので、同じ理由で先に拒否する。
+  // `*.config.*`や`pyproject.toml`などは、実装フローの保護ファイル名がすでに拒否する。
+  /^conftest\.py$/,
+  /^(?:pytest|tox)\.ini$/,
+  /^\.(?:mocharc|nycrc|c8rc|coveragerc)(?:\..*)?$/,
+  /^(?:vitest|jest)\.setup\.[\w.-]+$/,
 ];
 
 /** 実装フローの保護ファイル名を、大文字小文字を問わない形にしたもの。 */
