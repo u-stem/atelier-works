@@ -64,6 +64,12 @@ export const CI_ROUND_REPLIES_REASON = `${REASON_PREFIX}: the output of Claude c
 /** 止める理由が秘密値の検査に当たったときに、理由の代わりに返す固定の文。 */
 export const CI_ROUND_REASONS_WITHHELD = `${REASON_PREFIX}: the reasons for stopping matched the secret scan`;
 
+/** commitに加わる新規ファイルのパスが、秘密値の検査に当たったときの固定の文。 */
+export const CI_ROUND_STAGED_PATH_MATCHED = `${REASON_PREFIX}: a staged path matched the secret scan`;
+
+/** commitに加わる新規ファイルのパスを、秘密値の検査にかけられなかったときの固定の文。 */
+export const CI_ROUND_STAGED_PATHS_UNSCANNED = `${REASON_PREFIX}: the staged paths could not be scanned for secrets`;
+
 /**
  * CI回のClaudeが使えるツール。ファイルの読み取り、検索、編集に限り、`Bash`は含めない。
  * ログに書かれた指示で、コマンドを実行させないためである。検査コマンドはflowが実行する。
@@ -82,7 +88,10 @@ export const CI_FIX_TOOLS: readonly string[] = [
  */
 export const CI_FIX_ALLOWED_TOOLS: readonly string[] = ["Edit", "Write"];
 
-/** CI回のgitleaksの1回あたりのタイムアウト(ミリ秒)。1回のCI回で最大5回走る。 */
+/**
+ * CI回のgitleaksの1回あたりのタイムアウト(ミリ秒)。
+ * 修正のステップで最大5回、検証のステップで最大6回、完了のステップで最大2回走る。
+ */
 export const CI_FIX_GITLEAKS_TIMEOUT_MS = 2 * 60_000;
 
 /** 失敗した実行のうち、ジョブを読む実行の数の上限。 */
@@ -1008,57 +1017,80 @@ export async function ciRoundDiffOrFalse(
  * 理由に入るパスは、Claudeが選べる名前やリポジトリのファイル名で、秘密値の検査を通っていない。
  * 理由をまとめて1回検査し、検出と検査の失敗のときは、固定の文1件に置き換える。
  * 通ったものには`maskSecrets`をかける。件数は変えない。
- * `alsoScan`は、返さずに同じ1回の検査にだけ加える文字列である。
- * 違反が無くても外へ出るパス(commitされるファイル名など)を検査するために使う。
- * 検出と検査の失敗のときは、理由が空でも固定の文1件を返す。
  */
 export async function guardCiRoundReasons(
   reasons: readonly string[],
   scan: CiTextScanner,
-  alsoScan: readonly string[] = [],
 ): Promise<string[]> {
-  if (reasons.length === 0 && alsoScan.length === 0) return [];
+  if (reasons.length === 0) return [];
   const flatten = (text: string): string => text.replace(/\s+/g, " ");
   const guarded = await guardCiRoundText(
     {
       commit_subject: reasons.map(flatten).join("\n"),
-      commit_body:
-        alsoScan.length === 0 ? null : alsoScan.map(flatten).join("\n"),
+      commit_body: null,
       summary: "",
       blocked_reason: null,
     },
     { scan },
   );
   if (guarded.kind === "secret_detected") return [CI_ROUND_REASONS_WITHHELD];
-  if (reasons.length === 0) return [];
   return guarded.fields.commit_subject.split("\n");
 }
 
 /**
- * 索引(commitする内容)にある、`baseSha`からの変更のパスを返す。
- * 違反の無い変更のパスも含む。リネーム検出は切り、外部のdiffのプログラムは使わない。
- * gitの失敗は例外にする。空の一覧として扱うと、パスを検査せずに通すためである。
+ * commitするツリー`treeSha`が`baseSha`に対して新しく加えるファイルのパスを返す。
+ * 既存のファイルの名前はすでに公開されているので、状態が追加のものだけを返す。
+ * 索引ではなくツリーで比べるので、リポジトリのロックの外で呼べる。
+ * 内容がそのツリーのままであることは、`commitAndPush`の`expectedTreeSha`が保証する。
+ * リネーム検出は切る。gitの失敗は例外にする。空の一覧として扱うと、パスを検査せずに通すためである。
  */
-export async function listCiStagedPaths(
+export async function listCiAddedPathsInTree(
   run: CommandRunner,
   worktreeDir: string,
   baseSha: string,
+  treeSha: string,
 ): Promise<string[]> {
   assertSha(baseSha);
+  assertSha(treeSha);
   const entries = parseRawDiffZ(
-    await runGit(run, worktreeDir, "git diff --raw", [
-      "diff",
-      "--cached",
-      "--raw",
+    await runGit(run, worktreeDir, "git diff-tree", [
+      "diff-tree",
+      "-r",
       "-z",
       "--no-renames",
-      "--no-ext-diff",
-      "--ignore-submodules=none",
+      "--raw",
       baseSha,
+      treeSha,
       "--",
     ]),
   );
-  return entries.map((entry) => entry.path);
+  return entries
+    .filter((entry) => entry.status === "added")
+    .map((entry) => entry.path);
+}
+
+/**
+ * commitに加わる新規ファイルのパスを、1回のgitleaksの検査にかける。
+ * パスはClaudeが選べる名前なので、許可された新規テストのファイル名に秘密値を載せて、
+ * commitを通して流出させる経路を塞ぐために使う。
+ * 当たったときと、検査できなかったときは、パスを含まない固定の文を返す。問題が無ければ`null`を返す。
+ * 当たったルールの一覧(一致した文字列は含まない)は`onMatch`に渡す。
+ */
+export async function ciAddedPathsStopReason(
+  paths: readonly string[],
+  scan: CiTextScanner,
+  onMatch: (rules: string) => void,
+): Promise<string | null> {
+  if (paths.length === 0) return null;
+  const text = paths.map((path) => path.replace(/\s+/g, " ")).join("\n");
+  try {
+    const result = await scan(text);
+    if (result.ok) return null;
+    onMatch(result.output);
+    return CI_ROUND_STAGED_PATH_MATCHED;
+  } catch {
+    return CI_ROUND_STAGED_PATHS_UNSCANNED;
+  }
 }
 
 /**

@@ -5,12 +5,13 @@
 import * as wmill from "windmill-client@1.817.0";
 import {
   CI_ROUND_REPLIES_REASON,
+  ciAddedPathsStopReason,
   ciRoundPushGuardReason,
   ciTextScanner,
   guardCiRoundReasons,
   inspectCiFixChanges,
   isCiRound,
-  listCiStagedPaths,
+  listCiAddedPathsInTree,
   nothingToCommitReason,
   runPostPushBookkeeping,
 } from "../lib/ci_fix_round.ts";
@@ -729,8 +730,6 @@ export async function main(
         await getPrFiles(client, owner, repo, pr_number)
       ).map((file) => file.filename);
       // 理由に入るパスは秘密値の検査を通っていないので、外へ出す前に検査する。
-      // 違反が無くても、commitされるファイル名は外へ出る。許可された新規ファイルの名前に
-      // 秘密値を載せて流出させないよう、ステージしたパスの一覧を常に同じ1回の検査に加える。
       return await guardCiRoundReasons(
         [
           ...staged,
@@ -743,7 +742,6 @@ export async function main(
           )),
         ],
         ciTextScanner(runCommand),
-        await listCiStagedPaths(runCommand, worktree_dir, head_sha),
       );
     },
     inspectTree: (scannedTreeSha) =>
@@ -754,6 +752,28 @@ export async function main(
       }),
   });
   if (scanned.kind === "stop") return stopBeforeCommit(scanned.reason);
+
+  if (ciRound) {
+    // commitに加わる新規ファイルの名前は外へ出る。許可された新規ファイルの名前に秘密値を
+    // 載せて流出させないよう、検査したツリーの新規パスを秘密値の検査にかける。
+    // 時間のかかる検査なので、リポジトリのロックの外で先に行う。
+    // 内容が検査したツリーのままであることは、`commitAndPush`の`expectedTreeSha`が保証する。
+    const pathStop = await ciAddedPathsStopReason(
+      await listCiAddedPathsInTree(
+        runCommand,
+        worktree_dir,
+        head_sha,
+        scanned.treeSha,
+      ),
+      ciTextScanner(runCommand),
+      (rules) =>
+        log.warn("a staged path matched the secret scan", {
+          work_item_id,
+          rules,
+        }),
+    );
+    if (pathStop !== null) return stopBeforeCommit(pathStop);
+  }
 
   /** pushの前後に、PRのheadが動いていたと分かったときの終わり方。ラウンドを記録して`blocked`にする。 */
   async function finishHeadChanged(

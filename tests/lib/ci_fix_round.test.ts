@@ -2,9 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   CI_FIX_SKILL_MARKER,
   CI_ROUND_REASONS_WITHHELD,
+  CI_ROUND_STAGED_PATH_MATCHED,
+  CI_ROUND_STAGED_PATHS_UNSCANNED,
   type CiFixApplyDeps,
   type CiGatherDeps,
   type CiGatherOutcome,
+  ciAddedPathsStopReason,
   ciClaudeFailureText,
   ciRoundApplyTimeoutMisfit,
   ciRoundDiffOrFalse,
@@ -939,46 +942,98 @@ describe("guardCiRoundReasons", () => {
   });
 });
 
-describe("guardCiRoundReasons with extra text to scan", () => {
+describe("ciAddedPathsStopReason", () => {
   const clean = async () => ({ ok: true, output: "" });
 
-  test("runs the scan for the extra text when there is no reason", async () => {
+  test("returns null when there is no path", async () => {
+    expect(await ciAddedPathsStopReason([], clean, () => {})).toBeNull();
+  });
+
+  test("does not run the scan when there is no path", async () => {
     let scanned = false;
-    await guardCiRoundReasons([], async () => {
-      scanned = true;
-      return { ok: true, output: "" };
-    }, ["tests/new.test.ts"]);
-    expect(scanned).toBe(true);
-  });
-
-  test("returns no reason when the extra text is clean", async () => {
-    expect(await guardCiRoundReasons([], clean, ["tests/new.test.ts"])).toEqual(
+    await ciAddedPathsStopReason(
       [],
+      async () => {
+        scanned = true;
+        return { ok: true, output: "" };
+      },
+      () => {},
     );
+    expect(scanned).toBe(false);
   });
 
-  test("replaces the reasons with a fixed sentence when only the extra text is found", async () => {
+  test("returns null when the paths are clean", async () => {
     expect(
-      await guardCiRoundReasons(
-        [],
-        async () => ({ ok: false, output: "finding" }),
+      await ciAddedPathsStopReason(["tests/new.test.ts"], clean, () => {}),
+    ).toBeNull();
+  });
+
+  test("returns a fixed sentence when a path matched", async () => {
+    expect(
+      await ciAddedPathsStopReason(
         ["tests/new.test.ts"],
+        async () => ({ ok: false, output: "- generic-api-key" }),
+        () => {},
       ),
-    ).toEqual([CI_ROUND_REASONS_WITHHELD]);
+    ).toBe(CI_ROUND_STAGED_PATH_MATCHED);
   });
 
-  test("does not put the extra text in the returned reasons", async () => {
-    expect(
-      await guardCiRoundReasons(["not a regular file: a"], clean, ["b.ts"]),
-    ).toEqual(["not a regular file: a"]);
+  test("reports the rules that matched without the paths", async () => {
+    const reported: string[] = [];
+    await ciAddedPathsStopReason(
+      ["tests/new.test.ts"],
+      async () => ({ ok: false, output: "- generic-api-key" }),
+      (rules) => reported.push(rules),
+    );
+    expect(reported).toEqual(["- generic-api-key"]);
   });
 
-  test("replaces the reasons when the scan of the extra text fails", async () => {
+  test("does not put a path in the fixed sentence", async () => {
     expect(
-      await guardCiRoundReasons([], async () => {
-        throw new Error("gitleaks crashed");
-      }, ["tests/new.test.ts"]),
-    ).toEqual([CI_ROUND_REASONS_WITHHELD]);
+      await ciAddedPathsStopReason(
+        ["secret-path.ts"],
+        async () => ({ ok: false, output: "- r" }),
+        () => {},
+      ),
+    ).not.toContain("secret-path");
+  });
+
+  test("returns another fixed sentence when the scan itself fails", async () => {
+    expect(
+      await ciAddedPathsStopReason(
+        ["tests/new.test.ts"],
+        async () => {
+          throw new Error("gitleaks crashed");
+        },
+        () => {},
+      ),
+    ).toBe(CI_ROUND_STAGED_PATHS_UNSCANNED);
+  });
+
+  test("scans every path in one call", async () => {
+    const texts: string[] = [];
+    await ciAddedPathsStopReason(
+      ["a.ts", "b.ts"],
+      async (text) => {
+        texts.push(text);
+        return { ok: true, output: "" };
+      },
+      () => {},
+    );
+    expect(texts).toEqual(["a.ts\nb.ts"]);
+  });
+
+  test("keeps a line break in a path from splitting it into two lines", async () => {
+    const texts: string[] = [];
+    await ciAddedPathsStopReason(
+      ["a\nb.ts"],
+      async (text) => {
+        texts.push(text);
+        return { ok: true, output: "" };
+      },
+      () => {},
+    );
+    expect(texts).toEqual(["a b.ts"]);
   });
 });
 

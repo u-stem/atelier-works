@@ -71,13 +71,22 @@ describe("the finish step of a CI round", () => {
     expect(count(text, "if (!ciRound) await postFixReplies(null);")).toBe(1);
   });
 
-  test("scans the staged paths together with the reasons in one call", async () => {
+  test("scans the added paths of the scanned tree before the repository lock is taken", async () => {
     const text = await source("pr_fix_finish.ts");
     expect(
-      text.includes(
-        "        ciTextScanner(runCommand),\n        await listCiStagedPaths(runCommand, worktree_dir, head_sha),",
-      ),
+      text.indexOf("ciAddedPathsStopReason(\n") <
+        text.indexOf("commitAndPush({"),
     ).toBe(true);
+  });
+
+  test("lists the added paths from the scanned tree", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      count(
+        text,
+        "listCiAddedPathsInTree(\n        runCommand,\n        worktree_dir,\n        head_sha,\n        scanned.treeSha,",
+      ),
+    ).toBe(1);
   });
 });
 

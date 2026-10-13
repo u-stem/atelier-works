@@ -3,7 +3,7 @@ import {
   type CiChangeFs,
   collectCiFixChanges,
   inspectCiFixChanges,
-  listCiStagedPaths,
+  listCiAddedPathsInTree,
   parseRawDiffZ,
   parseZeroContextPatch,
 } from "../../f/factory/lib/ci_fix_round.ts";
@@ -606,32 +606,47 @@ describe("inspectCiFixChanges", () => {
   });
 });
 
-describe("listCiStagedPaths", () => {
-  test("lists the paths of the staged files", async () => {
+describe("listCiAddedPathsInTree", () => {
+  const TREE = "b".repeat(40);
+
+  test("lists only the added paths", async () => {
     const { run } = fakeGit({
       tracked: raw(
         ["100644", "100644", "M", "a.ts"],
         ["000000", "100644", "A", "tests/new.test.ts"],
+        ["100644", "000000", "D", "old.ts"],
       ),
     });
-    expect(await listCiStagedPaths(run, DIR, SHA)).toEqual([
-      "a.ts",
+    expect(await listCiAddedPathsInTree(run, DIR, SHA, TREE)).toEqual([
       "tests/new.test.ts",
     ]);
   });
 
-  test("asks git for the index with the rename detection off", async () => {
+  test("compares the base commit with the scanned tree", async () => {
     const { run, argvs } = fakeGit({ tracked: "" });
-    await listCiStagedPaths(run, DIR, SHA);
+    await listCiAddedPathsInTree(run, DIR, SHA, TREE);
+    expect(argvs[0]?.slice(-4)).toEqual(["--raw", SHA, TREE, "--"]);
+  });
+
+  test("turns the rename detection off", async () => {
+    const { run, argvs } = fakeGit({ tracked: "" });
+    await listCiAddedPathsInTree(run, DIR, SHA, TREE);
     expect(argvs[0]).toEqual(
-      expect.arrayContaining(["--cached", "--raw", "--no-renames"]),
+      expect.arrayContaining(["diff-tree", "-r", "-z", "--no-renames"]),
     );
+  });
+
+  test("rejects a tree that is not a full sha", async () => {
+    const { run } = fakeGit({ tracked: "" });
+    await expect(
+      listCiAddedPathsInTree(run, DIR, SHA, "HEAD"),
+    ).rejects.toThrow();
   });
 
   test("throws when git fails", async () => {
     const { run } = fakeGit({ fail: "--raw" });
-    await expect(listCiStagedPaths(run, DIR, SHA)).rejects.toThrow(
-      "git diff --raw failed",
+    await expect(listCiAddedPathsInTree(run, DIR, SHA, TREE)).rejects.toThrow(
+      "git diff-tree failed",
     );
   });
 });
