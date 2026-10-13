@@ -93,9 +93,9 @@ describe("nextActionForPrFix", () => {
     expect(nextActionForPrFix("no changes to commit", true)).toBe(NEXT_ACTION);
   });
 
-  test("waits for the re-evaluation when the pull request is a draft", () => {
+  test("keeps the procedure of a draft pull request and waits for the re-evaluation", () => {
     expect(nextActionForPrFix("pull request is a draft", true)).toBe(
-      NEXT_ACTION,
+      "ドラフトを解除してから、CIの再評価を待ってください",
     );
   });
 
@@ -136,5 +136,86 @@ describe("nextActionForPrFix", () => {
     expect(nextActionForPrFix("pull request is not open", true)).toBe(
       nextActionFor("pull request is not open", "pr_fix"),
     );
+  });
+});
+
+describe("nextActionForPrFix keeps the procedure of an infrastructure reason in a CI round", () => {
+  const BUSY = "worktree is still used by processes from an earlier run: 123";
+  const OWNERSHIP =
+    "worktree is still used by processes from an earlier run: check sandbox: acl left";
+  const STALE_IMAGE = "worker image is stale: run mise run up: version 1";
+  const LOCK_HELD = "worktree lock is held by a process this run left behind";
+
+  test("keeps the procedure of a busy worktree", () => {
+    expect(nextActionForPrFix(BUSY, true)).toBe(
+      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、CIの再評価を待ってください",
+    );
+  });
+
+  test("keeps the review-round action of a busy worktree", () => {
+    expect(nextActionForPrFix(BUSY, false)).toBe(nextActionFor(BUSY, "pr_fix"));
+  });
+
+  test("keeps the procedure of a failed ownership restore", () => {
+    expect(nextActionForPrFix(OWNERSHIP, true)).toBe(
+      "運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、CIの再評価を待ってください",
+    );
+  });
+
+  test("keeps the review-round action of a failed ownership restore", () => {
+    expect(nextActionForPrFix(OWNERSHIP, false)).toBe(
+      nextActionFor(OWNERSHIP, "pr_fix"),
+    );
+  });
+
+  test("keeps the procedure of a stale worker image", () => {
+    expect(nextActionForPrFix(STALE_IMAGE, true)).toBe(
+      "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、CIの再評価を待ってください",
+    );
+  });
+
+  test("does not say that a stalled item resumes by itself for a stale worker image", () => {
+    expect(nextActionForPrFix(STALE_IMAGE, true)).not.toContain("自動で再開");
+  });
+
+  test("keeps the review-round action of a stale worker image", () => {
+    expect(nextActionForPrFix(STALE_IMAGE, false)).toBe(
+      nextActionFor(STALE_IMAGE, "pr_fix"),
+    );
+  });
+
+  test("keeps the procedure of a lock held by a process of the run", () => {
+    expect(nextActionForPrFix(LOCK_HELD, true)).toBe(
+      "検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、CIの再評価を待ってください",
+    );
+  });
+
+  test("keeps the review-round action of a lock held by a process of the run", () => {
+    expect(nextActionForPrFix(LOCK_HELD, false)).toBe(
+      nextActionFor(LOCK_HELD, "pr_fix"),
+    );
+  });
+
+  test("keeps the procedure of a moved local HEAD", () => {
+    expect(nextActionForPrFix("local HEAD a is not the PR head b", true)).toBe(
+      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、CIの再評価を待ってください",
+    );
+  });
+
+  test("keeps the procedure of a changed worktree after the secret scan", () => {
+    expect(
+      nextActionForPrFix("worktree changed after the secret scan", true),
+    ).toBe(
+      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、CIの再評価を待ってください",
+    );
+  });
+
+  test("keeps the procedure of an unsafe worker runtime without a retry", () => {
+    expect(
+      nextActionForPrFix(
+        "worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: /x",
+        true,
+      ),
+    ).not.toContain("retry_work_item");
   });
 });
