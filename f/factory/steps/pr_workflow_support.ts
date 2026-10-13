@@ -3505,7 +3505,7 @@ export function decidePostProposalTransition(
 // 黙って捨てたり崩したりせず、そのまま返す。
 // ---------------------------------------------------------------------------
 
-type ReasonRule = {
+export type ReasonRule = {
   readonly pattern: RegExp;
   readonly describe: (match: RegExpMatchArray) => string;
   /**
@@ -3812,7 +3812,7 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
  */
 const CI_ROUND_NEXT_ACTION = `${CI_WAIT_ACTION}。直らなければ、人が修正してください`;
 
-const REASON_RULES: readonly ReasonRule[] = [
+export const REASON_RULES: readonly ReasonRule[] = [
   // CI回の理由は`ci round`で始まる(`lib/ci_fix_round.ts`)。接頭辞の後ろに、`: 固定の文`か
   // ` change not allowed (種類): パス`が続く。ほかの規則に先に当たらないよう、先頭に置く。
   {
@@ -4513,7 +4513,17 @@ export function nextActionForPrFix(reason: string, ciRound: boolean): string {
   if (!ciRound) return nextActionFor(reason, "pr_fix");
   const found = findNextActionRule(reason, REASON_RULES);
   if (found === null) return CI_ROUND_NEXT_ACTION;
-  const { rule, match } = found;
+  return ciRoundActionOfRule(found.rule, found.match);
+}
+
+/**
+ * 規則がCI回で案内する次の操作。`nextActionForPrFix`が使い、規則の表の検査も使う。
+ * `ciNextAction`を持てばそれを使い、持たなければ`nextAction`が再実行か付け直しを含むときだけ置き換える。
+ */
+export function ciRoundActionOfRule(
+  rule: ReasonRule,
+  match: RegExpMatchArray,
+): string {
   if (rule.ciNextAction !== undefined) {
     return rule.ciNextAction(match, "pr_fix");
   }
