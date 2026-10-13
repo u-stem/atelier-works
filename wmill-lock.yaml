@@ -65,8 +65,8 @@ locks:
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: 64a0543f1d628ee92270a939a06f0eab81d7eed0b133f363b9f35692cd7f5004
-  f/factory/lib/pr_ci_fix_recovery: c72d8440a5e241bdc7c168b62807203a8464bfd6b5f919f2548d438d62d54475
-  f/factory/lib/pr_ci_support: c6bb216140f3e1e6089bc2c46ec783237d7a98b69b8e03d2150fb82ac6e6316e
+  f/factory/lib/pr_ci_fix_recovery: 0efbdfe837c32add26d3d0af3d761dab2deb3fd61240e677430783f71dcaeec2
+  f/factory/lib/pr_ci_support: 9a046af3c71c061247114b99eb1c118ba607b80fc5a09c857dadb5b10c8c2d43
   f/factory/lib/pr_ci_watch: fbd87fc721f327fbf1d1dd13f748ed7b740fce4c071751ef1e1eb2dd6098db14
   f/factory/lib/pr_fix_launch: 3a779ba932ebcdf2fddbbe15717e12a1c4eb49ca8a36755ecbf8adf9b5a41cc0
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa

@@ -116,7 +116,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
 | `budget_exceeded` | 一時的 | 日次の予算を使い切った |
 | `not_reviewed` | 一時的 | 今のheadの自動レビューがまだ無い |
-| `last_fix_unsettled` | 一時的 | 直近の直す作業項目が、成功で終わっていない |
+| `last_fix_unsettled` | 一時的 | 直近の直す作業項目が、まだ終わっていない(動いている) |
 | `pr_draft_or_auto_merge` | 一時的 | PRがドラフトか、auto-mergeが有効である |
 
 noticeを出す時機は、決定的な理由なら保留した時点、一時的な理由なら保留が続いたときである。
@@ -145,14 +145,21 @@ Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr
 | --- | --- |
 | 動いている(終端でない) | そのままにする。読み直した時刻だけを進める |
 | pushした(`rereview_requested`か、直す回がpushしたcommitを記録している) | `superseded`にする。PRのheadは読まない。headの読み遅れで、古いheadの行を起動し直さないためである |
-| `blocked` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ、保留なしで`failed`に戻す。起動し直す回数は、直す回数の上限が止める |
 | イメージが古い理由(自動の再開の対象の理由)で`blocked`になった | 止まってから24時間は戻さない。24時間後に保留なしで戻す。保留の理由ではなく、人がイメージを作り直す猶予である |
+| それ以外の`blocked` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ、保留なしで`failed`に戻す。起動し直す回数は、直す回数の上限が止める |
 | `needs_human` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ`fix_stopped`にする |
 | 存在しない、または上の行に当たらない終端の状態(`failed`、`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
 
 24時間待つのは、待たずに戻すと、同じ理由で止まる回を重ねて、直す回数の上限を使い切るためである。
 CIの回は自動の再開の対象外なので、この間に作業項目が再開されることはない。
-`pr_fix`が`cancelled`になるのはPRが閉じたときだけで、閉じたPRは、戻す前のheadの読み取りが拾う。そのため`cancelled`は保留しない。
+`pr_fix`が`cancelled`になるのはPRが閉じたときだけである。
+設定から外れたリポジトリを除き、閉じたPRは、戻す前のheadの読み取りが拾う。
+そのため`cancelled`は保留しない。
+
+既知の競合がある。
+`poll_issues`は、PRが閉じた`pr_fix`を`cancelled`にする。
+この後、回復が走る前にPRを開き直すと、`needs_human`から取り消された回の`fix_stopped`は消えて、保留なしで`failed`に戻る。
+確率は低い。CIの回は`retry_work_item`が再開を断るので、作業項目が二重に起動することはない。
 
 `failed`などに戻す前に、PRのheadを読む。
 headが行のheadと違えば、戻さず`superseded`にする。PRが閉じていれば、閉じたPRの整理に任せる。

@@ -2702,4 +2702,38 @@ describe("recovery without the watch", () => {
     const result = await runPrCiRecovery(h.deps);
     expect(result.released).toBe(1);
   });
+
+  test("does not return the row when the pull request is denied with a 403", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), { prs: { [PR_KEY]: deniedError(403) } }),
+    );
+    await runPrCiRecovery(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("advances the read time when the pull request is denied with a 403", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), { prs: { [PR_KEY]: deniedError(403) } }),
+    );
+    await runPrCiRecovery(h.deps);
+    expect(h.touched).toEqual([FIXING_ID]);
+  });
+
+  test("adds a denied notice when the pull request is denied with a 403", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), { prs: { [PR_KEY]: deniedError(403) } }),
+    );
+    await runPrCiRecovery(h.deps);
+    expect(h.notices.map((notice) => notice.kind)).toEqual([
+      PR_CI_CHECK_DENIED_KIND,
+    ]);
+  });
+
+  test("does not return the row when the pull request is not found", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), { prs: { [PR_KEY]: deniedError(404) } }),
+    );
+    await runPrCiRecovery(h.deps);
+    expect(h.released).toEqual([]);
+  });
 });

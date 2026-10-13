@@ -464,7 +464,7 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `main_ci_failed`: mainのCIが赤い。
  * - `budget_exceeded`: 日次の予算を使い切った。
  * - `not_reviewed`: 今のheadの自動レビューがまだ無い。
- * - `last_fix_unsettled`: 直近の直す作業が、成功で終わっていない。
+ * - `last_fix_unsettled`: 直近の直す作業が、まだ終わっていない(動いている)。
  * - `pr_draft_or_auto_merge`: PRがドラフトか、auto-mergeが有効である。
  */
 export const PR_CI_FIX_HOLD_REASONS = [
@@ -579,7 +579,7 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: true,
     notice: "prolonged",
     discord: true,
-    nextAction: "直近の直す作業が、まだ成功で終わっていません。終わるまで待つ",
+    nextAction: "直近の直す作業が、まだ終わっていません。終わるまで待つ",
   },
   pr_draft_or_auto_merge: {
     temporary: true,

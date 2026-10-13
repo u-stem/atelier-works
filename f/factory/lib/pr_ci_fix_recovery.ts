@@ -86,7 +86,7 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - pushした作業項目(`rereview_requested`か、pushしたcommitの記録がある)は、`pushed`にする。
  *   行のheadの読み遅れで、古いheadの行を`failed`に戻して直し直すことを防ぐためである。
  * - 存在しない作業項目と、`failed`や`cancelled`などの終わり方をした作業項目は、保留なしで戻す。
- *   `pr_fix`が`cancelled`になるのはPRが閉じたときだけで、閉じたPRは戻す前のheadの読み取りが拾うためである。
+ *   `pr_fix`が`cancelled`になるのはPRが閉じたときだけで、設定から外れたリポジトリを除き、閉じたPRは戻す前のheadの読み取りが拾うためである。
  * - `blocked`は、理由を保留の理由に写せればその理由で保留する。写せなければ、保留なしで戻す。
  *   起動し直す回数は、回数の上限(`pr_ci_fix_max_rounds`)が止める。
  *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった作業項目は、
