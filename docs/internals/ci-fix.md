@@ -387,6 +387,10 @@ gitは呼ばない。
 - `wmill.yaml`、`wmill-lock.yaml`、`tsconfig*.json`、`biome.json`、`.mcp.json`、`*.script.lock`
 - Windmillの定義: `*.schedule.yaml`、`*.variable.yaml`、`*.resource.yaml`、`*.resource-type.yaml`、`*.trigger.yaml`
 - Windmillのflowの定義: `*__flow/`の配下
+- 無視ファイル: `.gitignore`、`.ignore`、`.prettierignore`、`.eslintignore`、`.dockerignore`など、名前が`ignore`で終わる隠しファイル
+- エディタの設定: `.editorconfig`
+- テストの収集と実行を変えるファイル: `conftest.py`、`pytest.ini`、`tox.ini`、`.mocharc*`
+- カバレッジとテストの準備: `.nycrc*`、`.c8rc*`、`.coveragerc`、`vitest.setup.*`、`jest.setup.*`
 - Factoryの安全装置は、次の名前で始まるファイルである。
   - `f/factory/lib/`の`claude`、`protected_paths`、`log`、`workspace`、`check_sandbox`、`check_runner`、`prompts`、`github`
   - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
@@ -396,6 +400,10 @@ gitは呼ばない。
   - `f/factory/`の`watch_pr_ci`と`watch_main_ci`
 
 CI回のClaudeがこれらを書き換えると、自分を止める検査を弱められるためである。
+無視ファイルとテストの実行を変えるファイルは、`tests/`の配下の新規ファイルでも拒否する。
+入れ子の`.gitignore`は、biomeの対象から既存のファイルを外せる。
+`conftest.py`は、pytestの収集を変えられる。
+この拒否は、テストのパスの判定より前に行う。
 `github`を拒否するので、Factory自身のリポジトリで`github.ts`の不具合がCIを落としても、CI回は直せずに人へ渡す。
 
 拒否した安全装置が直接importするモジュールは、拒否するか、受け入れる理由を書いた表に載せる。
@@ -441,6 +449,9 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
   間にある`##[error]`の行は落ちる。
 - 新規ファイルのパスの秘密値の検査は、秘密値と似た文字列を含む正当なファイル名を、誤検知として止める。
   止まった修正は、CIの再評価で別の回として評価し直される。
+- 再レビューでCI回の差分を重点的に見る固定文は、CI回のpushの後、レビューの前に人がpushすると外れる。
+  レビューするshaが変わり、CI回のpushしたcommitを含まなくなるためである。
+  この抜けは受け入れる。通常のレビューは変わらず行われるためである。
 - 再レビューでCI回の差分を重点的に見る固定文は、DBの問い合わせが失敗すると外れる。
   列が無い、行の形が合わないといった続く失敗でも同じである。
   失敗すると、重点確認は黙って外れる。残るのは`log.warn`だけで、noticeと通知は出さない。
