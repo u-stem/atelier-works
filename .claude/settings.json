@@ -22,22 +22,7 @@
       "Bash(wmill lint:*)",
       "Bash(wmill sync push --dry-run:*)",
       "Bash(git push:*)",
-      "Bash(git -C * status *)",
-      "Bash(git -C * log *)",
-      "Bash(git -C * diff *)",
-      "Bash(git -C * show *)",
-      "Bash(git -C * grep *)",
-      "Bash(git -C * rev-parse *)",
-      "Bash(git -C * rev-list *)",
-      "Bash(git -C * merge-base *)",
-      "Bash(git -C * worktree list*)",
-      "Bash(git -C * branch -r*)",
-      "Bash(git -C * branch --show-current)",
-      "Bash(mise --cd * run check*)",
-      "Bash(mise --cd * run lint:docs*)",
-      "Bash(mise --cd * run test:db*)",
-      "Bash(wmill job list *)",
-      "Bash(wmill job result *)"
+      "Bash(wmill job list *)"
     ],
     "deny": [
       "Read(./infra/.env)",
