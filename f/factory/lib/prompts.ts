@@ -261,6 +261,8 @@ export function reviewPrompt(
       "- Check that no suppression comment (biome-ignore, @ts-ignore,",
       "  @ts-expect-error, eslint-disable) was added.",
       "- Check that the edit fixes the cause of the failure instead of hiding it.",
+      "- Check that the edit adds no behavior unrelated to the cause of the failure",
+      "  (for example, network access or reading environment variables).",
     );
   }
 

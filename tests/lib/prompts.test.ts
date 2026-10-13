@@ -446,6 +446,18 @@ describe("reviewPrompt", () => {
       );
     });
 
+    test("asks to check for behavior unrelated to the failure", () => {
+      expect(withCiRound(true)).toContain(
+        "Check that the edit adds no behavior unrelated to the cause of the failure",
+      );
+    });
+
+    test("names outside communication and environment variable reads as examples", () => {
+      expect(withCiRound(true)).toContain(
+        "(for example, network access or reading environment variables)",
+      );
+    });
+
     test("omits the CI round section when ciRoundDiff is false", () => {
       expect(withCiRound(false)).not.toContain("CI-fix round");
     });
