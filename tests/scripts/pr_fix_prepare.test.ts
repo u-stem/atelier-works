@@ -443,6 +443,11 @@ describe("evaluateFixRoundGuard", () => {
     const result = evaluateFixRoundGuard(4, 3);
     expect(result.ok).toBe(false);
   });
+
+  test("passes a CI round whose fix_round exceeds the max", () => {
+    // CIの回はfix_roundを前の値のまま写すので、指摘修正が上限のPRでも止めない。
+    expect(evaluateFixRoundGuard(4, 3, true)).toEqual({ ok: true });
+  });
 });
 
 describe("evaluateRepoAllowedGuard", () => {
@@ -796,7 +801,12 @@ describe("earlyExitBase", () => {
     parent_work_item_id: null,
     attempt: 1,
     fix_round: 4,
+    ci_check_id: 9,
   };
+
+  test("keeps the CI check id so that pr_fix_finish knows it is a CI round", () => {
+    expect(earlyExitBase(workItem).ci_check_id).toBe(9);
+  });
 
   test("keeps the PR coordinates so pr_fix_finish can relabel the PR", () => {
     expect(earlyExitBase(workItem).pr_number).toBe(3);

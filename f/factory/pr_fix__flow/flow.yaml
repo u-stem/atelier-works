@@ -46,6 +46,9 @@ value:
           attempt:
             type: javascript
             expr: results.pr_fix_prepare.attempt
+          ci_check_id:
+            type: javascript
+            expr: results.pr_fix_prepare.ci_check_id ?? null
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []
@@ -119,6 +122,9 @@ value:
           branch:
             type: javascript
             expr: results.pr_fix_prepare.branch ?? null
+          ci_check_id:
+            type: javascript
+            expr: results.pr_fix_prepare.ci_check_id ?? null
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []
@@ -170,6 +176,9 @@ value:
           branch:
             type: javascript
             expr: results.pr_fix_prepare.branch ?? null
+          ci_check_id:
+            type: javascript
+            expr: results.pr_fix_prepare.ci_check_id ?? null
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []

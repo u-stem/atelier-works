@@ -3,6 +3,13 @@
 // 作業項目の状態遷移、GitHubへの副作用、Discordへの通知を行う。
 
 import * as wmill from "windmill-client@1.817.0";
+import {
+  CI_ROUND_REPLIES_REASON,
+  ciRoundPushGuardReason,
+  inspectCiFixChanges,
+  isCiRound,
+  runPostPushBookkeeping,
+} from "../lib/ci_fix_round.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -21,6 +28,7 @@ import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   type GhClient,
   getPr,
+  getPrFiles,
   getViewer,
   gitIdentityForViewer,
   listReviewThreads,
@@ -193,6 +201,15 @@ export async function requestRereview(
  * トリガーの`fix_label`は着手時に消費済みなので、終端の遷移で外すラベルは無い。
  * gtrのworktreeは消さずに残し、後で`cleanup_workspaces`が片付ける。
  *
+ * CIの失敗を直す回(`ci_check_id`が非NULL)は、通常の回と次の点が違う。
+ * - 返信を投稿せず、作業項目のheadも処理済みの位置も更新しない。
+ *   作業項目のheadを進めないのは、その差(作業項目のheadとPRのhead)が`poll_prs`の自動のレビューを起動するためで、
+ *   通常の回と逆である。
+ * - ステージした内容を、保護パスの検査に加えて、許可リスト方式でも検査する(`inspectCiFixChanges`)。
+ * - pushの直前に、PRが開いていて、draftでなく、auto-mergeが無効で、headが修正の前提のままであることを確かめる。
+ * - 返信を持つ結果は受け付けない。
+ * 失敗の行(`pr_ci_checks`)には触れない。行の整理は`watch_pr_ci`の役目である。
+ *
  * `fix_round`はここでは増やさない。
  * `poll_prs.ts`が作業項目を作る時点で、その行が表すラウンド番号を
  * `fix_round`に入れている(`setFixRound(workItemId, previousFixRound + 1)`)。
@@ -224,11 +241,13 @@ export async function main(
   max_review_comment_id: number,
   worktree_git_pointer: string | null = null,
   branch: string | null = null,
+  ci_check_id: number | null = null,
 ): Promise<PrFixFinishResult> {
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
   }
   const action = decideFixFinishAction(outcome, parent_work_item_id !== null);
+  const ciRound = isCiRound({ ci_check_id });
 
   if (action.kind === "noop") {
     return {
@@ -452,6 +471,9 @@ export async function main(
       final_status: "needs_human",
       notice: "missing commit_message",
     };
+  }
+  if (ciRound && replies.length > 0) {
+    return stopBeforeCommit(CI_ROUND_REPLIES_REASON);
   }
   // Claudeが提案した件名と本文は、`pr_fix_apply.ts`から`pr_fix_verify.ts`まで別々に運ばれ、
   // コミットメッセージの文字列につなぐのはここだけ。
@@ -691,8 +713,27 @@ export async function main(
       }
       return scan;
     },
-    inspectChanges: () =>
-      inspectStagedChanges(runCommand, worktree_dir, head_sha),
+    inspectChanges: async () => {
+      const staged = await inspectStagedChanges(
+        runCommand,
+        worktree_dir,
+        head_sha,
+      );
+      if (!ciRound) return staged;
+      const prChangedPaths = (
+        await getPrFiles(client, owner, repo, pr_number)
+      ).map((file) => file.filename);
+      return [
+        ...staged,
+        ...(await inspectCiFixChanges(
+          runCommand,
+          worktree_dir,
+          head_sha,
+          prChangedPaths,
+          { source: "staged" },
+        )),
+      ];
+    },
     inspectTree: (scannedTreeSha) =>
       scannedTreeStopReasons({
         run: runCommand,
@@ -701,6 +742,34 @@ export async function main(
       }),
   });
   if (scanned.kind === "stop") return stopBeforeCommit(scanned.reason);
+
+  /** pushの前後に、PRのheadが動いていたと分かったときの終わり方。ラウンドを記録して`blocked`にする。 */
+  async function finishHeadChanged(
+    currentSha: string,
+  ): Promise<PrFixFinishResult> {
+    await insertFixRound({
+      work_item_id,
+      round: fix_round,
+      trigger_review_ids,
+      outcome: "blocked",
+      replies,
+      commit_shas: [],
+    });
+    await finalizeTerminal(
+      "blocked",
+      `PR head moved to ${currentSha} while the fix was in progress`,
+    );
+    return { ok: true, final_status: "blocked", notice: "head_changed" };
+  }
+
+  if (ciRound) {
+    // CI回は人の指摘に答える回ではなく、レビューを経ずにマージされうる状態では押せない。
+    // commitAndPushが確かめるheadに加えて、PRの状態もpushの直前に読み直す。
+    const latest = await getPr(client, owner, repo, pr_number);
+    if (latest.headSha !== head_sha) return finishHeadChanged(latest.headSha);
+    const pushStop = ciRoundPushGuardReason(latest, head_sha);
+    if (pushStop !== null) return stopBeforeCommit(pushStop);
+  }
 
   let pushResult: CommitAndPushResult;
   try {
@@ -724,19 +793,7 @@ export async function main(
   }
 
   if (pushResult.outcome === "head_changed") {
-    await insertFixRound({
-      work_item_id,
-      round: fix_round,
-      trigger_review_ids,
-      outcome: "blocked",
-      replies,
-      commit_shas: [],
-    });
-    await finalizeTerminal(
-      "blocked",
-      `PR head moved to ${pushResult.currentSha} while the fix was in progress`,
-    );
-    return { ok: true, final_status: "blocked", notice: "head_changed" };
+    return finishHeadChanged(pushResult.currentSha);
   }
 
   if (pushResult.outcome === "nothing_to_commit") {
@@ -751,7 +808,7 @@ export async function main(
     // pushするcommitが無くても溜めた返信は投稿する。
     // Claudeがすべてを"skipped"(または差分の無い"fixed")にしたこともあり、
     // その返信も黙って捨てずにGitHubへ届ける。
-    await postFixReplies(null);
+    if (!ciRound) await postFixReplies(null);
     // commitするものが無いラウンドでも、Claudeが指摘を対象外と判断することがあるため、
     // push成功の経路だけでなくここでも`propose_issue`の返信を記録する。
     // `factory.issue_proposals`の行は、上の`postFixReplies`が返信の投稿前に登録済み。
@@ -782,19 +839,22 @@ export async function main(
     commit_shas: [newSha],
   });
 
-  await postFixReplies(newSha);
-
-  await setHeadSha(work_item_id, newSha);
   // 修正をcommitしてpushし、きっかけのコメントに返信したので、
   // 今回のフィードバックは消費済みになる。
   // push経路でwatermarkを進めるのはここだけ(`shouldAdvanceWatermarks`の説明を参照)。
-  if (shouldAdvanceWatermarks("push_success")) {
-    await bumpWatermarks(work_item_id, {
-      last_review_id: max_review_id,
-      last_comment_id: max_comment_id,
-      last_review_comment_id: max_review_comment_id,
-    });
-  }
+  // CI回は、返信も、作業項目のheadと処理済みの位置の更新もしない(`runPostPushBookkeeping`)。
+  await runPostPushBookkeeping(ciRound, {
+    postReplies: () => postFixReplies(newSha),
+    setHeadSha: () => setHeadSha(work_item_id, newSha),
+    bumpWatermarks: async () => {
+      if (!shouldAdvanceWatermarks("push_success")) return;
+      await bumpWatermarks(work_item_id, {
+        last_review_id: max_review_id,
+        last_comment_id: max_comment_id,
+        last_review_comment_id: max_review_comment_id,
+      });
+    },
+  });
 
   // このラウンドで`propose_issue`の返信を1件以上記録したら、PRはまだ再レビューに進めない。
   // 人が先にConsoleの要対応で提案したIssueを承認か却下する必要がある

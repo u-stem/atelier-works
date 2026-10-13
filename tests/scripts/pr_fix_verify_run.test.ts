@@ -9,8 +9,10 @@ import {
   CheckRuntimeUnsafeError,
 } from "../../f/factory/lib/check_sandbox.ts";
 import type { CheckFailure } from "../../f/factory/lib/prompts.ts";
+import type { FixReply } from "../../f/factory/lib/types.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
+  ciRetryResult,
   type PrFixRetryResult,
   type PrFixVerifyDeps,
   type PrFixVerifyInput,
@@ -626,5 +628,140 @@ describe("runPrFixVerify: a worker that cannot run the checks", () => {
       checksError: { at: 0, error: new Error("disk full") },
     });
     await expect(runPrFixVerify(h.deps, INPUT)).rejects.toThrow("disk full");
+  });
+});
+
+describe("runPrFixVerify: CI round", () => {
+  const CI_INPUT: PrFixVerifyInput = { ...INPUT, ciRound: true };
+  const REPLY: FixReply = {
+    review_comment_id: 1,
+    body: "done",
+    decision: "fixed",
+  };
+
+  test("blocks an apply result that carries a reply", async () => {
+    const h = harness();
+    const result = await runPrFixVerify(h.deps, {
+      ...CI_INPUT,
+      apply: { ...CI_INPUT.apply, replies: [REPLY] },
+    });
+    expect(result.reason).toBe(
+      "ci round: the output of Claude carries replies",
+    );
+  });
+
+  test("returns no reply in the blocked result", async () => {
+    const h = harness();
+    const result = await runPrFixVerify(h.deps, {
+      ...CI_INPUT,
+      apply: { ...CI_INPUT.apply, replies: [REPLY] },
+    });
+    expect(result.replies).toEqual([]);
+  });
+
+  test("does not inspect the worktree when the apply result carries a reply", async () => {
+    const h = harness();
+    await runPrFixVerify(h.deps, {
+      ...CI_INPUT,
+      apply: { ...CI_INPUT.apply, replies: [REPLY] },
+    });
+    expect(h.calls).not.toContain("inspectChanges");
+  });
+
+  test("blocks a retry result that carries a reply", async () => {
+    const h = harness({
+      checks: [false],
+      retry: {
+        outcome: "success",
+        output: { ...RETRY_OUTPUT, replies: [REPLY] },
+      },
+    });
+    const result = await runPrFixVerify(h.deps, CI_INPUT);
+    expect(result.reason).toBe(
+      "ci round: the output of Claude carries replies",
+    );
+  });
+
+  test("passes a clean apply result without replies", async () => {
+    const h = harness();
+    const result = await runPrFixVerify(h.deps, CI_INPUT);
+    expect(result.outcome).toBe("done");
+  });
+
+  test("keeps the replies of a review round untouched", async () => {
+    const h = harness();
+    const result = await runPrFixVerify(h.deps, {
+      ...INPUT,
+      apply: { ...INPUT.apply, replies: [REPLY] },
+    });
+    expect(result.replies).toEqual([REPLY]);
+  });
+});
+
+describe("ciRetryResult", () => {
+  test("turns a finished done result into a successful retry", () => {
+    expect(
+      ciRetryResult({
+        kind: "finished",
+        outcome: "done",
+        reason: null,
+        summary: "直しました。",
+        commit_subject: "fix: 直す",
+        commit_body: null,
+      }),
+    ).toEqual({
+      outcome: "success",
+      output: {
+        outcome: "done",
+        summary: "直しました。",
+        replies: [],
+        blocked_reason: null,
+        commit_subject: "fix: 直す",
+        commit_body: null,
+      },
+    });
+  });
+
+  test("turns a finished blocked result into a blocked retry output", () => {
+    expect(
+      ciRetryResult({
+        kind: "finished",
+        outcome: "blocked",
+        reason: "原因が分かりません。",
+        summary: "",
+        commit_subject: null,
+        commit_body: null,
+      }),
+    ).toEqual({
+      outcome: "success",
+      output: {
+        outcome: "blocked",
+        summary: "",
+        replies: [],
+        blocked_reason: "原因が分かりません。",
+        commit_subject: "",
+        commit_body: null,
+      },
+    });
+  });
+
+  test("turns a stop before or after Claude into a blocked retry output", () => {
+    expect(ciRetryResult({ kind: "blocked", reason: "ci round: x" })).toEqual({
+      outcome: "success",
+      output: {
+        outcome: "blocked",
+        summary: "",
+        replies: [],
+        blocked_reason: "ci round: x",
+        commit_subject: "",
+        commit_body: null,
+      },
+    });
+  });
+
+  test("keeps a failed Claude run as a failure", () => {
+    expect(
+      ciRetryResult({ kind: "claude_failure", reason: "timeout", detail: "d" }),
+    ).toEqual({ outcome: "failure", reason: "timeout", detail: "d" });
   });
 });

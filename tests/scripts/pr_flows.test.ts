@@ -125,6 +125,14 @@ describe("pr_fix flow.yaml", () => {
     );
   });
 
+  for (const step of ["pr_fix_apply", "pr_fix_verify", "pr_fix_finish"]) {
+    test(`passes the CI check id of the work item to ${step}`, () => {
+      expect(moduleBlock(PR_FIX_FLOW, step)).toContain(
+        "          ci_check_id:\n            type: javascript\n            expr: results.pr_fix_prepare.ci_check_id ?? null\n",
+      );
+    });
+  }
+
   test("passes the .git pointer recorded by prepare to the finish step", () => {
     expect(moduleBlock(PR_FIX_FLOW, "pr_fix_finish")).toContain(
       "          worktree_git_pointer:\n            type: javascript\n            expr: results.pr_fix_prepare.worktree_git_pointer ?? null\n",

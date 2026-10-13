@@ -153,6 +153,23 @@ describe("decidePrActions — review", () => {
     expect(decision?.review).toEqual({ kind: "none" });
   });
 
+  // CIの失敗を直す回は、作業項目のhead_shaを更新しない。pushした新しいheadが
+  // 「最新の作業項目のhead_sha」と食い違うことが、自動のレビューを起動する唯一の信号になる。
+  test("triggers a review of the head a CI round pushed, because the work item head stays the old one", () => {
+    const oldHead = "bbbbbbb2222222222222222222222222222222";
+    const [decision] = decidePrActions(
+      [candidate({ lastKnownHeadSha: oldHead })],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      POLICY,
+    );
+    expect(decision?.review).toEqual({
+      kind: "trigger_review",
+      reason: "assignment",
+      removeLabel: false,
+    });
+  });
+
   test("does not trigger review when the head_sha was already processed", () => {
     const [decision] = decidePrActions(
       [candidate({ lastKnownHeadSha: candidate().headSha })],

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
@@ -858,5 +860,21 @@ describe("shouldRefreshIntakeOnRestart", () => {
         { toStatus: "requirements_generating" },
       ),
     ).toBe(false);
+  });
+});
+
+describe("main: CI round refusal", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/retry_work_item.ts"),
+    "utf8",
+  );
+
+  test("refuses a CI round right after reading the work item", () => {
+    const afterRead = source.slice(
+      source.indexOf("await getWorkItem(work_item_id)"),
+    );
+    expect(afterRead.indexOf("ciRoundRetryRefusal(workItem)")).toBeLessThan(
+      afterRead.indexOf("computeRestartPlan(restartItem"),
+    );
   });
 });

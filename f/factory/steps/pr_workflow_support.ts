@@ -11,6 +11,7 @@ import {
   CheckEnvironmentError,
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
+import { isCiFixOutputAllowed } from "../lib/ci_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
@@ -1001,11 +1002,17 @@ export function evaluatePrFixSafetyGuards(
   return { ok: true };
 }
 
+/**
+ * 修正ラウンドの上限(`max_fix_rounds`)を確かめる。
+ * CIの失敗を直す回(`ciRound`)は確かめない。その回は`fix_round`を前の値のまま写すので、
+ * 指摘修正が上限に達したPRでも、CIの回が止まってしまうため。CIの回の上限は`pr_ci_fix_max_rounds`が決める。
+ */
 export function evaluateFixRoundGuard(
   fixRound: number,
   maxFixRounds: number,
+  ciRound = false,
 ): PrFixGuardResult {
-  if (fixRound > maxFixRounds) {
+  if (!ciRound && fixRound > maxFixRounds) {
     return {
       ok: false,
       reason: `fix_round ${String(fixRound)} exceeds max_fix_rounds ${String(maxFixRounds)}`,
@@ -1449,6 +1456,15 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
     return false;
   }
   return true;
+}
+
+/**
+ * CIの失敗を直す回のClaudeの出力として受け付けるか。
+ * 通常の回の形(`isFixClaudeOutput`)に加えて、結果が`done`か`blocked`で、`replies`が空であること。
+ * 返信は指摘に答えるもので、CI回には答える指摘が無い。ログに仕込まれた指示で返信が投稿されるのを防ぐ。
+ */
+export function isCiFixClaudeOutput(value: unknown): value is FixClaudeOutput {
+  return isFixClaudeOutput(value) && isCiFixOutputAllowed(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -4399,6 +4415,7 @@ export function earlyExitBase(
     | "parent_work_item_id"
     | "attempt"
     | "fix_round"
+    | "ci_check_id"
   >,
 ): {
   readonly owner: string;
@@ -4413,6 +4430,7 @@ export function earlyExitBase(
   readonly parent_work_item_id: number | null;
   readonly attempt: number;
   readonly fix_round: number;
+  readonly ci_check_id: number | null;
 } {
   return {
     owner: workItem.owner,
@@ -4427,6 +4445,7 @@ export function earlyExitBase(
     parent_work_item_id: workItem.parent_work_item_id,
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,
+    ci_check_id: workItem.ci_check_id,
   };
 }
 

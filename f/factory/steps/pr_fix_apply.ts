@@ -3,6 +3,14 @@
 // `pr_fix_collect.ts`が集めたレビューとコメントに対応させる。
 
 import * as wmill from "windmill-client@1.817.0";
+import { readFile } from "node:fs/promises";
+import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
+import {
+  buildCiGatherDeps,
+  ciTextScanner,
+  gatherCiFailureInput,
+  runCiFixApply,
+} from "../lib/ci_fix_round.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -30,6 +38,7 @@ import {
   type CollectedComment,
   type CollectedReview,
   claudeBlockedReason,
+  isCiFixClaudeOutput,
   isFixClaudeOutput,
   recordedGitPointerStopReason,
   WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
@@ -54,6 +63,7 @@ export type PrFixApplyResult = {
  * 準備ステップの結果に`worktree_git_pointer`が無いときも、Claudeを起動せず"blocked"を返す。
  * 不正な出力への再試行の前にも`.git`を確かめ、一致しなければ再試行しない。
  * Claudeの実行が失敗したときは例外を投げる。
+ * CIの失敗を直す回(`ci_check_id`が非NULL)は、指摘ではなく失敗したジョブのログから直す(`applyCiRound`)。
  */
 export async function main(
   work_item_id: number,
@@ -68,6 +78,7 @@ export async function main(
   reviews: CollectedReview[],
   comments: CollectedComment[],
   worktree_git_pointer: string | null = null,
+  ci_check_id: number | null = null,
 ): Promise<PrFixApplyResult> {
   const log = logger("pr_fix_apply");
 
@@ -118,6 +129,23 @@ export async function main(
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
   const client: GhClient = { run: runCommand, ghToken };
+
+  if (ci_check_id !== null) {
+    return await applyCiRound({
+      workItemId: work_item_id,
+      owner,
+      repo,
+      prNumber: pr_number,
+      headSha: head_sha,
+      worktreeDir: worktree_dir,
+      factoryCloneDir: factory_clone_dir,
+      attempt,
+      recordedPointer,
+      client,
+      oauthToken,
+      config,
+    });
+  }
 
   const pr = await getPr(client, owner, repo, pr_number);
   const requirements =
@@ -222,4 +250,144 @@ export async function main(
   } finally {
     await systemPrompt.cleanup();
   }
+}
+
+function blockedResult(reason: string): PrFixApplyResult {
+  return {
+    outcome: "blocked",
+    reason,
+    summary: "",
+    replies: [],
+    commit_subject: null,
+    commit_body: null,
+  };
+}
+
+type CiRoundApplyInput = {
+  readonly workItemId: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly worktreeDir: string;
+  readonly factoryCloneDir: string;
+  readonly attempt: number;
+  readonly recordedPointer: string;
+  readonly client: GhClient;
+  readonly oauthToken: string;
+  readonly config: Awaited<ReturnType<typeof loadConfig>>;
+};
+
+/**
+ * CIの失敗を直す回の修正。失敗した実行のログを読み、秘密値の検査を通した抜粋だけをClaudeに渡す。
+ * Claudeには`Bash`を渡さず、読み取りと編集のツールだけを渡す。ログに書かれた指示でコマンドを実行させないためである。
+ * 抜粋とそれを含むプロンプトは、この関数の中だけで持ち、戻り値、DB、ログに載せない。
+ * ログを読めない、秘密値の検査に通らない、直せない種類の失敗、スキルにCI回の節が無いときは、
+ * Claudeを起動せずに`blocked`を返す。
+ * 出力の返信が空でないときは、不正な出力として扱う(再試行の後も満たさなければ失敗する)。
+ */
+async function applyCiRound(
+  input: CiRoundApplyInput,
+): Promise<PrFixApplyResult> {
+  const { client, owner, repo, headSha, config } = input;
+  const target = {
+    owner,
+    repo,
+    prNumber: input.prNumber,
+    headSha,
+  };
+  const gatherDeps = buildCiGatherDeps(client, target, runCommand);
+
+  const result = await runCiFixApply({
+    readSkillText: () =>
+      readFile(
+        `${input.factoryCloneDir}/.claude/skills/factory-fix/SKILL.md`,
+        "utf8",
+      ),
+    gather: () => gatherCiFailureInput(gatherDeps, target),
+    buildPrompt: (ready) =>
+      buildCiFixPrompt({
+        pr: {
+          owner,
+          repo,
+          number: input.prNumber,
+          headSha,
+          runUrl: ready.runUrl,
+        },
+        excerpt: ready.excerpt,
+        prChangedPaths: ready.prChangedPaths,
+      }),
+    startClaude: async (prompt) => {
+      const systemPrompt = await buildSystemPrompt({
+        skillNames: ["factory-fix"],
+        factoryCloneDir: input.factoryCloneDir,
+      });
+      try {
+        const sonnetFailures = await countPrFixFailures(input.workItemId);
+        const run = await runClaude({
+          run: withWorktreeProcessLock(
+            runCommand,
+            worktreeLockFor(input.worktreeDir),
+            {
+              kind: "pr_fix",
+              workItemId: input.workItemId,
+              jobId: lockJobIdFromEnv(process.env),
+            },
+          ),
+          workItemId: input.workItemId,
+          stage: "pr_fix",
+          attempt: input.attempt,
+          model: modelFor(config, "pr_fix", sonnetFailures),
+          prompt: prompt.reveal(),
+          appendSystemPromptFile: systemPrompt.path,
+          jsonSchema: CI_FIX_SCHEMA,
+          isStructuredOutput: isCiFixClaudeOutput,
+          tools: ["Read", "Glob", "Grep", "Edit", "Write"],
+          // 通常の回と同じ許可の組み合わせ。Bashは渡さない。
+          permissionMode: "dontAsk",
+          allowedTools: ["Edit", "Write"],
+          settingSources: ["user"],
+          maxTurns: config.max_turns,
+          maxBudgetUsd: config.max_budget_usd_per_run,
+          cwd: input.worktreeDir,
+          oauthToken: input.oauthToken,
+          timeoutMs: config.claude_timeout_sec * 1000,
+          beforeRetry: () =>
+            worktreeGitPointerMatches(input.worktreeDir, input.recordedPointer),
+        });
+        await recordClaudeRuns(run, recordAgentRun);
+        return run.outcome === "success"
+          ? { kind: "success", output: run.structuredOutput }
+          : { kind: "failure", reason: run.reason, detail: run.detail };
+      } finally {
+        await systemPrompt.cleanup();
+      }
+    },
+    scan: ciTextScanner(runCommand),
+  });
+
+  if (result.kind === "blocked") {
+    return blockedResult(result.reason);
+  }
+  if (result.kind === "claude_failure") {
+    // 失敗した実行が`.git`を書き換えていれば、例外にせずポインタの書き換えを理由に"blocked"を返す。
+    const afterFailureReason = await recordedGitPointerStopReason(
+      input.recordedPointer,
+      (expected) => assertWorktreeGitPointer(input.worktreeDir, expected),
+    );
+    if (afterFailureReason !== null) {
+      return blockedResult(afterFailureReason);
+    }
+    throw new Error(
+      `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
+    );
+  }
+  return {
+    outcome: result.outcome,
+    reason: result.reason,
+    summary: result.summary,
+    replies: [],
+    commit_subject: result.commit_subject,
+    commit_body: result.commit_body,
+  };
 }
