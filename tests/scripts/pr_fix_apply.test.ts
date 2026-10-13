@@ -9,6 +9,7 @@ import { fixPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import {
   composeCommitMessage,
+  isCiFixClaudeOutput,
   isFixClaudeOutput,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
@@ -323,5 +324,41 @@ describe("fixPrompt requirements wiring", () => {
       checkFailures: [],
     });
     expect(prompt).not.toContain("Approved requirements");
+  });
+});
+
+describe("isCiFixClaudeOutput", () => {
+  const CI_OUTPUT = { ...VALID_OUTPUT, replies: [] };
+
+  test("accepts a done output without replies", () => {
+    expect(isCiFixClaudeOutput(CI_OUTPUT)).toBe(true);
+  });
+
+  test("accepts a blocked output without replies", () => {
+    expect(
+      isCiFixClaudeOutput({
+        ...CI_OUTPUT,
+        outcome: "blocked",
+        blocked_reason: "unsafe",
+      }),
+    ).toBe(true);
+  });
+
+  test("rejects an output that carries a reply", () => {
+    expect(isCiFixClaudeOutput(VALID_OUTPUT)).toBe(false);
+  });
+
+  test("rejects a requirements gap", () => {
+    expect(
+      isCiFixClaudeOutput({
+        ...CI_OUTPUT,
+        outcome: "requirements_gap",
+        blocked_reason: "gap",
+      }),
+    ).toBe(false);
+  });
+
+  test("rejects an output that is not a fix output", () => {
+    expect(isCiFixClaudeOutput({ outcome: "done", replies: [] })).toBe(false);
   });
 });

@@ -10,6 +10,10 @@ schema:
       type: number
       description: この処理の実行回数。
       default: null
+    ci_check_id:
+      type: number
+      description: ''
+      default: null
     comments:
       type: array
       description: 収集したPRコメントの一覧。

@@ -1053,6 +1053,8 @@ export type AutoRetryCandidate = {
  * 一意インデックス`work_items_active_pr_fix_key`に阻まれるためである。
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回に達したものも除く。
  * 再開できない項目が`limit`件を占めて、後ろの項目を締め出さないためである。
+ * CIの失敗を直す回(`ci_check_id`が非NULL)は除く。失敗の行は`fixing`のまま食い違うので、
+ * 作業項目だけを再開しても直らない。`watch_pr_ci`が失敗の行を見て評価し直す。
  * 要件が未承認の項目のように、DBの条件だけでは除けないものは、呼び出し側が飛ばす。
  * noticeの解決の時刻が止まった時刻より後であることが、止まった後に原因が直ったことの印になる。
  * 止まった後の解決に限るので、再開後に同じ理由で止まった作業項目は、次の解決まで対象にならない。
@@ -1081,6 +1083,7 @@ export async function listAutoRetryCandidates(
     ) last ON true
     WHERE ((w.kind = 'issue' AND w.status = 'needs_human')
         OR (w.kind = 'pr_fix' AND w.status = 'blocked'))
+      AND w.ci_check_id IS NULL
       AND EXISTS (
         SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
         WHERE starts_with(last.note, p.prefix)
@@ -1130,7 +1133,8 @@ export async function listAutoRetryCandidates(
 
 /**
  * 止まった作業項目を、理由を条件にした比較と交換で再開の状態へ移す。
- * 状態が`expectedFrom`で、その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
+ * 状態が`expectedFrom`で、CIの失敗を直す回(`ci_check_id`が非NULL)でなく、
+ * その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満で、
  * 同じIssueに新しいサイクルの`issue`が無く、同じPRに`id`の大きい`pr_fix`も、終端でない別の`pr_fix`も無く、
  * 止まった後に、本文に`noticeMarker`を含む`noticeKind`のnoticeが`resolvedBy`に解決されているときだけ更新し、
@@ -1166,6 +1170,7 @@ export async function restartStoppedWorkItem(
           flow_job_id = CASE WHEN ${params.clearFlowJobId}::boolean THEN NULL ELSE flow_job_id END,
           updated_at = now()
       WHERE id = ${params.id}::bigint AND status = ${params.expectedFrom}
+        AND ci_check_id IS NULL
         AND EXISTS (
           SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
           WHERE starts_with((
@@ -3923,6 +3928,58 @@ export async function getLatestPrCiCheck(
   `.fetch();
   const row = rows[0];
   return row === undefined ? null : toPrCiCheck(row);
+}
+
+/** IDで`factory.pr_ci_checks`の行を読む。無ければnull。 */
+export async function getPrCiCheckById(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck | null> {
+  assertPositiveId(id, "pr ci check id");
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE id = ${id}::bigint
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toPrCiCheck(row);
+}
+
+/**
+ * `reviewSha`のレビューが、CIの失敗を直したラウンドの差分を含むかを返す。
+ * そのPRの`pr_fix`のうち、CIの回(`ci_check_id`を持つ)のどれかが、pushしたcommit(`fix_rounds.commit_shas`)に
+ * `reviewSha`を含むときに真になる。最新かどうかと状態は問わない。
+ * 再レビューの依頼の前に別のレビューが走っても、依頼の後に作業項目が終端へ進んでも、pushしたcommitは変わらないためである。
+ * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないので偽になる。
+ * ownerとrepoは小文字で照合する。
+ */
+export async function hasCiRoundDiffToReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  reviewSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPrCiTarget(owner, repo, prNumber);
+  assertCommitSha(reviewSha);
+  const rows = await sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM factory.work_items w
+      JOIN factory.fix_rounds r ON r.work_item_id = w.id,
+        jsonb_array_elements_text(r.commit_shas) AS pushed(sha)
+      WHERE w.kind = 'pr_fix'
+        AND w.ci_check_id IS NOT NULL
+        AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
+        AND w.pr_number = ${prNumber}::integer
+        AND pushed.sha = ${reviewSha}
+    ) AS pushed_by_ci_round
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return false;
+  return parseBoolean(row.pushed_by_ci_round, "pushed_by_ci_round");
 }
 
 /**

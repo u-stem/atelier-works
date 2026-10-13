@@ -372,6 +372,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | --- | --- | --- |
 | `f/factory/lib/ci_log_support` | script | [LIB] CIのログの整形と秘密値の検査 |
 | `f/factory/lib/ci_fix_classify` | script | [LIB] CIの失敗の分類 |
+| `f/factory/lib/ci_fix_round` | script | [LIB] CI回のpr_fixの共通部品 |
 | `f/factory/lib/ci_fix_prompt` | script | [LIB] CI回のプロンプト |
 | `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
@@ -556,6 +557,7 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 `self_update`はこのHEADを毎回読み、通知の版を含むか、ホスト側の作業が要るパスの内容が通知の版と同じなら、通知を解決する。
 通知の解決の後に、毎回`auto_retry_stale_image`を別のジョブで起動する。
 このscriptが、イメージが古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
+CIの失敗を直す回は再開しない。
 反映した時点でそうなっていれば、通知を出さない。
 
 ジョブ全体には上限(`timeout`)を3000秒で置く。

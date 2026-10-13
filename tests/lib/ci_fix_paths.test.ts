@@ -315,6 +315,55 @@ describe("protected paths", () => {
     ).toBe("protected_path");
   });
 
+  test.each([
+    ".gitignore",
+    "tests/.gitignore",
+    "tests/lib/deep/.gitignore",
+    "f/factory/.ignore",
+    "tests/.prettierignore",
+    "tests/.eslintignore",
+    "tests/.dockerignore",
+    "tests/.npmignore",
+    "tests/.markdownlintignore",
+    "tests/.editorconfig",
+    "tests/.GitIgnore",
+  ])("rejects a new ignore or editor file %s under tests", (path) => {
+    expect(
+      codeOf([change(path, { status: "added", removedLineCount: 0 })]),
+    ).toBe("protected_path");
+  });
+
+  test.each([
+    "conftest.py",
+    "tests/conftest.py",
+    "tests/lib/deep/conftest.py",
+    "tests/pytest.ini",
+    "tests/tox.ini",
+    "tests/.mocharc.json",
+    "tests/.mocharc.cjs",
+    "tests/.coveragerc",
+    "tests/.nycrc.json",
+    "tests/.c8rc.json",
+    "tests/vitest.setup.ts",
+    "tests/jest.setup.js",
+    "tests/Conftest.py",
+  ])("rejects a new test runner setting %s under tests", (path) => {
+    expect(
+      codeOf([change(path, { status: "added", removedLineCount: 0 })]),
+    ).toBe("protected_path");
+  });
+
+  test("rejects deleting an ignore file under tests", () => {
+    expect(
+      codeOf([
+        change("tests/.gitignore", {
+          status: "deleted",
+          addedLines: [],
+        }),
+      ]),
+    ).toBe("protected_path");
+  });
+
   test("does not treat a similarly named source file as a safety device", () => {
     expect(allowed("f/factory/lib/logger_helper.ts")).toBe(true);
   });

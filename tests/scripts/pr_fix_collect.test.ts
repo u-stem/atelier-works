@@ -2,6 +2,7 @@
 // `selectNewReviewComments`、`selectNewIssueComments`、`decideCollectOutcome`のテスト。
 
 import { describe, expect, test } from "bun:test";
+import { ciRoundCollectResult } from "../../f/factory/steps/pr_fix_collect.ts";
 import {
   decideCollectOutcome,
   selectNewIssueComments,
@@ -276,5 +277,32 @@ describe("decideCollectOutcome", () => {
   test("reports no_feedback when there is nothing new", () => {
     const outcome = decideCollectOutcome([], []);
     expect(outcome).toBe("no_feedback");
+  });
+});
+
+describe("ciRoundCollectResult", () => {
+  test("lets the CI round go on to the fix step", () => {
+    expect(ciRoundCollectResult().outcome).toBe("proceed");
+  });
+
+  test("collects no review", () => {
+    expect(ciRoundCollectResult().reviews).toEqual([]);
+  });
+
+  test("collects no comment", () => {
+    expect(ciRoundCollectResult().comments).toEqual([]);
+  });
+
+  test("triggers on no review", () => {
+    expect(ciRoundCollectResult().trigger_review_ids).toEqual([]);
+  });
+
+  test("moves no watermark", () => {
+    const result = ciRoundCollectResult();
+    expect([
+      result.max_review_id,
+      result.max_comment_id,
+      result.max_review_comment_id,
+    ]).toEqual([0, 0, 0]);
   });
 });

@@ -233,6 +233,7 @@ describe("reviewPrompt", () => {
         changedFiles: ["a.ts"],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -248,6 +249,7 @@ describe("reviewPrompt", () => {
         changedFiles: ["a.ts", "b.ts"],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -262,6 +264,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -276,6 +279,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -290,6 +294,7 @@ describe("reviewPrompt", () => {
         changedFiles: ["UNIQUE_PATH_MARKER.ts"],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -306,6 +311,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -324,6 +330,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -340,6 +347,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -354,6 +362,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -369,6 +378,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -385,6 +395,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [{ path: "a.ts", line: 10, body: "null check missing" }],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
@@ -402,10 +413,68 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
+        ciRoundDiff: false,
       },
       FIXED_UUID,
     );
     expect(prompt).not.toContain("open findings from a prior review");
+  });
+
+  describe("ciRoundDiff", () => {
+    const withCiRound = (ciRoundDiff: boolean) =>
+      reviewPrompt(
+        {
+          pr: PR,
+          diff: "+const x = 1;",
+          changedFiles: ["a.ts"],
+          requirements: null,
+          openFindings: [],
+          ciRoundDiff,
+        },
+        FIXED_UUID,
+      );
+
+    test("asks the reviewer to check the CI round edit when ciRoundDiff is true", () => {
+      expect(withCiRound(true)).toContain(
+        "The latest commit was written by the factory's CI-fix round",
+      );
+    });
+
+    test("asks to check that no test was weakened", () => {
+      expect(withCiRound(true)).toContain(
+        "weakened, skipped, deleted, or loosened",
+      );
+    });
+
+    test("asks to check for behavior unrelated to the failure", () => {
+      expect(withCiRound(true)).toContain(
+        "Check that the edit adds no behavior unrelated to the cause of the failure",
+      );
+    });
+
+    test("names outside communication and environment variable reads as examples", () => {
+      expect(withCiRound(true)).toContain(
+        "(for example, network access or reading environment variables)",
+      );
+    });
+
+    test("asks to check for ignore file and tool setting changes", () => {
+      expect(withCiRound(true)).toContain(
+        "Check that no ignore file or tool setting was added or changed",
+      );
+    });
+
+    test("omits the CI round section when ciRoundDiff is false", () => {
+      expect(withCiRound(false)).not.toContain("CI-fix round");
+    });
+
+    test("puts the CI round section outside every data fence", () => {
+      const prompt = withCiRound(true);
+      const index = prompt.indexOf("CI-fix round");
+      const lastOpen = prompt.lastIndexOf("<<<DATA-test-nonce", index);
+      const lastClose = prompt.lastIndexOf(">>>DATA-test-nonce", index);
+      expect(lastClose).toBeGreaterThan(lastOpen);
+    });
   });
 });
 

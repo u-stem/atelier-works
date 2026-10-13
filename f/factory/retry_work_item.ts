@@ -9,6 +9,7 @@
 // 再開を拒否する。実装フローとpipelineへの再開は比較交換でflow_job_id(リース)を空にし、
 // 起動したジョブIDは空のときだけ記録する。起動の戻り値がジョブIDでなければ、
 // 状態をneeds_humanに戻して例外を投げる(`launchFailureError`)。
+// CIの失敗を直す回のpr_fixは再開できず、CIの監視が自動で評価し直すことを説明する(`ciRoundRetryRefusal`)。
 // 同じPRに終端でない別のpr_fixがあるpr_fixは再開できず、その作業項目に従うよう説明する
 // (`activePrFixConflictError`)。
 //
@@ -19,6 +20,7 @@
 // 見つけ直す。したがって再開はフローを直接起動するだけで、GitHubには
 // 何の副作用も無い。新しいサイクルを始めるのは、人がラベルを付け直したときだけ。
 import * as wmill from "windmill-client@1.817.0";
+import { ciRoundRetryRefusal } from "./lib/ci_fix_round.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -542,6 +544,9 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   if (workItem === null) {
     throw new Error(`retry_work_item: no work item with id ${work_item_id}`);
   }
+  // CIの失敗を直す回は、`watch_pr_ci`が失敗の行を見て自動で評価し直す。作業項目だけを再開すると、行と食い違う。
+  const ciRoundRefusal = ciRoundRetryRefusal(workItem);
+  if (ciRoundRefusal !== null) throw new Error(ciRoundRefusal);
 
   const newest =
     workItem.kind === "issue" && workItem.issue_number !== null

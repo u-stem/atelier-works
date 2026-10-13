@@ -7,8 +7,17 @@ import {
   checkImageGate,
   checkImageProblemsFromEnv,
 } from "../lib/check_sandbox.ts";
+import {
+  ciRoundApplyTimeoutMisfit,
+  ciRoundVerifyTimeoutMisfit,
+  evaluateCiRoundPrepareGuard,
+} from "../lib/ci_fix_round.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
-import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  getPrCiCheckById,
+  getWorkItem,
+} from "../lib/db.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
@@ -30,6 +39,7 @@ import {
   ensureRepo,
   type GtrWorktree,
   readAndVerifyWorktreeGitPointer,
+  removeIgnoredFiles,
   runCommand,
 } from "../lib/workspace.ts";
 import {
@@ -41,11 +51,21 @@ import {
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   fetchPrFixHeadBranchState,
+  PR_COMMAND_STOP_OVERHEAD_SEC,
+  PR_FIX_APPLY_STEP_TIMEOUT_SEC,
+  PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
+  PR_STEP_OVERRUN_BASE_SEC,
   type PrFixGateOutcome,
   type PrFixHeadBranchState,
   prFixTimeoutMisfit,
   shouldReadPrFixHeadState,
 } from "./pr_workflow_support.ts";
+
+/** CI回の時間の見積もりに使う、通常の回と同じ余裕。 */
+const CI_ROUND_OVERHEAD = {
+  commandStopSec: PR_COMMAND_STOP_OVERHEAD_SEC,
+  baseSec: PR_STEP_OVERRUN_BASE_SEC,
+} as const;
 
 export type PrFixPrepareResult = {
   readonly outcome: PrFixGateOutcome;
@@ -68,6 +88,8 @@ export type PrFixPrepareResult = {
   readonly parent_work_item_id: number | null;
   readonly attempt: number;
   readonly fix_round: number;
+  /** CIの失敗を直す回なら、直す`pr_ci_checks`の行のID。指摘を直す回はnull。 */
+  readonly ci_check_id: number | null;
 };
 
 /**
@@ -89,6 +111,12 @@ export type PrFixPrepareResult = {
  * `allowed_check_commands`があり、workerが検査を実行できないときと、枠の記録が指すworktreeを同じ理由で取り戻せないときは、
  * 要対応の通知を残して`guard_blocked`を返す。通知は、イメージが古ければ`host_action_required`、稼働中のworkerの問題なら`check_runtime_unsafe`である。
  * 作業項目が無い、またはPR番号が無いときは例外を投げる。
+ * CIの失敗を直す回(`ci_check_id`が非NULL)は、次を変える。
+ * - 修正ラウンドの上限(`max_fix_rounds`)を確かめない。その回は`fix_round`を前の値のまま写すためである。
+ * - 失敗の行が、いまのPRのheadについて、この作業項目で`fixing`であることを確かめる。違えば`guard_blocked`を返す。
+ *   `skip`にすると、完了ステップが何もせず、作業項目が`fixing`のまま残るためである。
+ * - 修正ステップの時間が、gitleaksの追加の実行を含めて収まることを確かめる。
+ * - worktreeを用意した後、無視されたファイルを消す。Claudeが書いた無視されたファイルを、後の検査で見分けるためである。
  */
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   const workItem = await getWorkItem(work_item_id);
@@ -148,9 +176,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     };
   }
 
+  const ciRound = workItem.ci_check_id !== null;
   const roundGuard = evaluateFixRoundGuard(
     workItem.fix_round,
     config.max_fix_rounds,
+    ciRound,
   );
   if (!roundGuard.ok) {
     return {
@@ -162,7 +192,21 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
 
   // 修正・検証ステップの最悪の所要時間がflow.yamlのtimeoutに収まらない設定では、
   // Windmillがアプリ側のtimeoutより先にステップを打ち切るため、worktreeに触れる前に止める。
-  const timeoutMisfit = prFixTimeoutMisfit(config);
+  const timeoutMisfit =
+    prFixTimeoutMisfit(config) ??
+    (ciRound
+      ? (ciRoundApplyTimeoutMisfit(
+          config.claude_timeout_sec,
+          PR_FIX_APPLY_STEP_TIMEOUT_SEC,
+          CI_ROUND_OVERHEAD,
+        ) ??
+        ciRoundVerifyTimeoutMisfit(
+          config.claude_timeout_sec,
+          config.allowed_check_commands.length,
+          PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
+          CI_ROUND_OVERHEAD,
+        ))
+      : null);
   if (timeoutMisfit !== null) {
     return {
       outcome: "guard_blocked",
@@ -215,6 +259,20 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     workItem.repo,
     workItem.pr_number,
   );
+  if (workItem.ci_check_id !== null) {
+    const ciGuard = evaluateCiRoundPrepareGuard({
+      workItemId: work_item_id,
+      prHeadSha: pr.headSha,
+      row: await getPrCiCheckById(workItem.ci_check_id),
+    });
+    if (!ciGuard.ok) {
+      return {
+        outcome: "guard_blocked",
+        reason: ciGuard.reason,
+        ...earlyExitBase(workItem),
+      };
+    }
+  }
   // 親の行が無くても(parent_work_item_idがnull)、ブランチ名から実装の作業項目を引き、実装フローの実行中ならworktreeに触れない。
   const branchItemId = parseImplementBranchWorkItemId(pr.headRef);
   const branchItem =
@@ -330,6 +388,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     repoDir,
     dir: worktree.path,
   });
+  if (ciRound) {
+    // 再利用したworktreeには、前の実行の生成物が無視されたまま残る。消さないと、
+    // 修正の後の検査で、Claudeが書いた無視されたファイルと見分けられない。
+    await removeIgnoredFiles({ run: runCommand, worktreeDir: worktree.path });
+  }
 
   return {
     outcome: "proceed",
@@ -346,5 +409,6 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     parent_work_item_id: workItem.parent_work_item_id,
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,
+    ci_check_id: workItem.ci_check_id,
   };
 }

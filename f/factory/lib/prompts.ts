@@ -199,6 +199,12 @@ export type ReviewPromptInput = {
    * PRの初回のレビューでは空。
    */
   openFindings: PromptOpenFinding[];
+  /**
+   * 直近のコミットが、CIの失敗を直す回(CI回)の修正かどうか。DBから決めた値だけを渡す。
+   * 真のときは、テストの弱体化と抑制の追加を重点的に見るよう、固定の文で頼む。
+   * CI回のClaudeは、通るように直す立場なので、検査を弱めて通す誘惑があるため。
+   */
+  ciRoundDiff: boolean;
 };
 
 export function reviewPrompt(
@@ -242,6 +248,23 @@ export function reviewPrompt(
       "This PR was opened by the factory itself to satisfy the following",
       "approved requirements. Check the diff against them.",
       dataFence(nonce, "approved requirements", input.requirements.markdown),
+    );
+  }
+
+  if (input.ciRoundDiff) {
+    sections.push(
+      "",
+      "The latest commit was written by the factory's CI-fix round, which edited",
+      "the source to make a failing CI check pass. Review that edit with extra care:",
+      "- Check that no test was weakened, skipped, deleted, or loosened, and that",
+      "  no expected value was rewritten only to make a check pass.",
+      "- Check that no suppression comment (biome-ignore, @ts-ignore,",
+      "  @ts-expect-error, eslint-disable) was added.",
+      "- Check that the edit fixes the cause of the failure instead of hiding it.",
+      "- Check that the edit adds no behavior unrelated to the cause of the failure",
+      "  (for example, network access or reading environment variables).",
+      "- Check that no ignore file or tool setting was added or changed",
+      "  (for example, .gitignore, conftest.py, or a test runner setting).",
     );
   }
 

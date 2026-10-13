@@ -12,6 +12,10 @@ import {
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
 import {
+  CI_ROUND_REASON_PREFIX,
+  isCiFixOutputAllowed,
+} from "../lib/ci_fix_round.ts";
+import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
   DEPENDABOT_MERGE_REFUSED_REASON,
@@ -1001,11 +1005,17 @@ export function evaluatePrFixSafetyGuards(
   return { ok: true };
 }
 
+/**
+ * 修正ラウンドの上限(`max_fix_rounds`)を確かめる。
+ * CIの失敗を直す回(`ciRound`)は確かめない。その回は`fix_round`を前の値のまま写すので、
+ * 指摘修正が上限に達したPRでも、CIの回が止まってしまうため。CIの回の上限は`pr_ci_fix_max_rounds`が決める。
+ */
 export function evaluateFixRoundGuard(
   fixRound: number,
   maxFixRounds: number,
+  ciRound = false,
 ): PrFixGuardResult {
-  if (fixRound > maxFixRounds) {
+  if (!ciRound && fixRound > maxFixRounds) {
     return {
       ok: false,
       reason: `fix_round ${String(fixRound)} exceeds max_fix_rounds ${String(maxFixRounds)}`,
@@ -1449,6 +1459,15 @@ export function isFixClaudeOutput(value: unknown): value is FixClaudeOutput {
     return false;
   }
   return true;
+}
+
+/**
+ * CIの失敗を直す回のClaudeの出力として受け付けるか。
+ * 通常の回の形(`isFixClaudeOutput`)に加えて、結果が`done`か`blocked`で、`replies`が空であること。
+ * 返信は指摘に答えるもので、CI回には答える指摘が無い。ログに仕込まれた指示で返信が投稿されるのを防ぐ。
+ */
+export function isCiFixClaudeOutput(value: unknown): value is FixClaudeOutput {
+  return isFixClaudeOutput(value) && isCiFixOutputAllowed(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -3486,7 +3505,7 @@ export function decidePostProposalTransition(
 // 黙って捨てたり崩したりせず、そのまま返す。
 // ---------------------------------------------------------------------------
 
-type ReasonRule = {
+export type ReasonRule = {
   readonly pattern: RegExp;
   readonly describe: (match: RegExpMatchArray) => string;
   /**
@@ -3499,6 +3518,16 @@ type ReasonRule = {
    * `flow`は理由を出したフロー(`nextActionFor`の引数)。フローによって取れる操作が違う理由だけが使う。
    */
   readonly nextAction: (
+    match: RegExpMatchArray,
+    flow: NextActionFlow | undefined,
+  ) => string;
+  /**
+   * CI回(`pr_fix`のうち、CIの失敗を直す回)での次の操作。
+   * 人が取る手順と、その後の再実行が組みになった理由で、手順を残して再実行だけをCIの再評価の待ちに差し替える。
+   * CI回は再実行も`factory:fix`の付け直しも効かないので、`nextAction`をそのまま使えないためである。
+   * 無い規則は、`nextActionForPrFix`が`nextAction`から決める。
+   */
+  readonly ciNextAction?: (
     match: RegExpMatchArray,
     flow: NextActionFlow | undefined,
   ) => string;
@@ -3516,11 +3545,34 @@ const RETRY_WORK_ITEM_ACTION =
   "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 
 /**
+ * CI回の再実行の代わりに案内する操作。
+ * `watch_pr_ci`が失敗の行を評価し直すので、人は再実行も付け直しもしない。
+ */
+const CI_WAIT_ACTION = "CIの再評価を待ってください";
+
+/**
+ * 人が取る手順`procedure`の後に、通常回は再実行を、CI回はCIの再評価の待ちを続ける規則の次の操作。
+ * `procedure`は「…てから、」のように、続きを受ける形で終える。
+ * `suffix`は、再実行か待ちの後ろに添える補足である。
+ */
+function procedureThenRerun(
+  procedure: string,
+  suffix = "",
+): Pick<ReasonRule, "nextAction" | "ciNextAction"> {
+  return {
+    nextAction: () => `${procedure}${RETRY_WORK_ITEM_ACTION}${suffix}`,
+    ciNextAction: () => `${procedure}${CI_WAIT_ACTION}${suffix}`,
+  };
+}
+
+/**
  * 汎用の次の対応。より具体的な対応が無いときの既定にする。
  * 原因は通知の理由と、Consoleのシステム画面のnoticeに残る。
  * 取り除いた後の再実行は、どの種別の作業項目にも使える`retry_work_item`を案内する。
  */
-const GENERIC_NEXT_ACTION = `通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、${RETRY_WORK_ITEM_ACTION}`;
+const GENERIC_PROCEDURE =
+  "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、";
+const GENERIC_NEXT_ACTION = `${GENERIC_PROCEDURE}${RETRY_WORK_ITEM_ACTION}`;
 
 const FACTORY_FIX_RELABEL_ACTION =
   "対応してほしい指摘をコメントしてから`factory:fix`を付け直してください";
@@ -3528,9 +3580,12 @@ const CHECK_COMMAND_NEXT_ACTION =
   "失敗しているチェックを確認し、人が修正してください";
 const FORBIDDEN_CHANGE_NEXT_ACTION =
   "差分を確認し、問題なければ人が直接修正してください";
-const DIFF_SIZE_NEXT_ACTION =
-  "変更を分割するか、上限を見直してから`factory:fix`を付け直してください";
-const GITHUB_RATE_LIMIT_NEXT_ACTION = `GitHubのrate limitの解除を待ってから、${RETRY_WORK_ITEM_ACTION}`;
+const DIFF_SIZE_PROCEDURE = "変更を分割するか、上限を見直してから";
+const DIFF_SIZE_NEXT_ACTION = `${DIFF_SIZE_PROCEDURE}\`factory:fix\`を付け直してください`;
+const DIFF_SIZE_CI_NEXT_ACTION = `${DIFF_SIZE_PROCEDURE}、${CI_WAIT_ACTION}`;
+const AUTO_MERGE_PROCEDURE = "PRのauto-mergeを無効にしてから、";
+const GITHUB_RATE_LIMIT_PROCEDURE = "GitHubのrate limitの解除を待ってから、";
+const GITHUB_RATE_LIMIT_NEXT_ACTION = `${GITHUB_RATE_LIMIT_PROCEDURE}${RETRY_WORK_ITEM_ACTION}`;
 /** `lib/github.ts`の`GitHubRateLimitError`のメッセージ。1はエンドポイント、2は待ちの説明。 */
 const GITHUB_RATE_LIMIT_REASON_PATTERN = /^GitHub rate limit on (\S+): (.+)$/;
 const DAILY_BUDGET_NEXT_ACTION =
@@ -3556,20 +3611,28 @@ function afterFixWorkRerun(
   return `${check}、PRの修正なら\`factory:fix\`を付け直し、実装なら${RETRY_WORK_ITEM_ACTION}`;
 }
 
+const LOCAL_HEAD_CHECK =
+  "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから";
+
 /** ローカルのHEADが動いたとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
 function localHeadNextAction(flow: NextActionFlow | undefined): string {
-  return afterFixWorkRerun(
-    "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから",
-    flow,
-  );
+  return afterFixWorkRerun(LOCAL_HEAD_CHECK, flow);
 }
+
+const LEFTOVER_PROCESS_CHECK =
+  "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ";
 
 /** 検査やcommitの後にworktreeが変わったとき(実装フローとpr_fixの両方で起きる)の次の操作。 */
 function leftoverProcessNextAction(flow: NextActionFlow | undefined): string {
-  return afterFixWorkRerun(
-    "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ",
-    flow,
-  );
+  return afterFixWorkRerun(LEFTOVER_PROCESS_CHECK, flow);
+}
+
+/**
+ * `afterFixWorkRerun`のCI回版。確かめる内容の後に、`factory:fix`の付け直しの代わりにCIの再評価の待ちを続ける。
+ * `check`は「…てから」「…確かめ」のどちらの形でも、読点を挟んで続けられる。
+ */
+function ciAfterFixWorkRerun(check: string): string {
+  return `${check}、${CI_WAIT_ACTION}`;
 }
 
 /**
@@ -3581,14 +3644,23 @@ function leftoverProcessNextAction(flow: NextActionFlow | undefined): string {
  * 再実行はどちらのフローも`retry_work_item`にする。pr_fixで`factory:fix`を付け直すと、
  * 何も修正していないのに新しい作業項目で修正のラウンドを1つ使ってしまうため。
  */
-const WORKTREE_BUSY_NEXT_ACTION = `理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、${RETRY_WORK_ITEM_ACTION}`;
+const WORKTREE_BUSY_PROCEDURE =
+  "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、";
+
+const STALE_IMAGE_PROCEDURE =
+  "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください";
 
 /**
  * 検査用のユーザーからworktreeを取り戻せなかったときの次の操作。
  * 止まらないプロセス、残ったACL、読めない枠の記録のように、再実行しても同じ理由で止まる原因なので、
  * 人が枠の記録を確かめて所有権を戻してから再実行する。フローによらず同じ手順である。
  */
-const OWNERSHIP_RESTORE_FAILED_NEXT_ACTION = `運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、${RETRY_WORK_ITEM_ACTION}`;
+const OWNERSHIP_RESTORE_FAILED_PROCEDURE =
+  "運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、";
+
+/** pr_fixで、この実行が残したプロセスがworktreeのロックを持ち続けていたときに、人が取る手順。 */
+const LOCK_HELD_PR_FIX_PROCEDURE =
+  "検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、";
 
 /**
  * 実行中に、この実行の検査コマンドなどが残したプロセスがworktreeのロックを持ち続けていたときの次の操作。
@@ -3603,7 +3675,7 @@ function worktreeLockHeldInRunNextAction(
   if (flow === "implement")
     return `検査コマンドが常駐プロセスを残していないか確かめてから、${RETRY_WORK_ITEM_ACTION}(残ったプロセスは再実行の準備ステップが止めます)`;
   if (flow === "pr_fix")
-    return `検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}`;
+    return `${LOCK_HELD_PR_FIX_PROCEDURE}${RETRY_WORK_ITEM_ACTION}`;
   return `検査コマンドが常駐プロセスを残していないか確かめ、PRの修正なら残ったプロセスをworkerのコンテナで止めてから、${RETRY_WORK_ITEM_ACTION}(実装なら残ったプロセスは再実行の準備ステップが止めます)`;
 }
 
@@ -3734,7 +3806,20 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
   },
 ];
 
-const REASON_RULES: readonly ReasonRule[] = [
+/**
+ * CIの失敗を直す回(CI回)を止めた理由の次の操作。
+ * CI回は手動でも自動でも再開しない。`watch_pr_ci`が失敗の行を見て評価し直す。
+ */
+const CI_ROUND_NEXT_ACTION = `${CI_WAIT_ACTION}。直らなければ、人が修正してください`;
+
+export const REASON_RULES: readonly ReasonRule[] = [
+  // CI回の理由は`ci round`で始まる(`lib/ci_fix_round.ts`)。接頭辞の後ろに、`: 固定の文`か
+  // ` change not allowed (種類): パス`が続く。ほかの規則に先に当たらないよう、先頭に置く。
+  {
+    pattern: reasonPattern(CI_ROUND_REASON_PREFIX, "(?:: | )([\\s\\S]+)$"),
+    describe: (m) => `CIの失敗を直す回を止めました(${m[1]})`,
+    nextAction: () => CI_ROUND_NEXT_ACTION,
+  },
   ...DEPENDABOT_REASON_RULES,
   // 稼働中のIssueの部分一意インデックス(`work_items_active_issue_key`)への違反。
   // `approved`から`implementing`への移行が阻まれたときに、`cas_failed`の理由として現れる。
@@ -3761,7 +3846,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^pull request is a draft$/,
     describe: () => "PRがドラフトです",
-    nextAction: () => `ドラフトを解除してから、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun("ドラフトを解除してから、"),
   },
   {
     pattern: /^head branch is the default branch$/,
@@ -3785,7 +3870,8 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^pull request has auto-merge enabled$/,
     describe: () => "PRのauto-mergeが有効です",
     nextAction: () =>
-      "PRのauto-mergeを無効にしてから、あらためて`factory:fix`ラベルを付けてください",
+      `${AUTO_MERGE_PROCEDURE}あらためて\`factory:fix\`ラベルを付けてください`,
+    ciNextAction: () => `${AUTO_MERGE_PROCEDURE}${CI_WAIT_ACTION}`,
   },
   {
     pattern: /^head branch state is unavailable$/,
@@ -3812,30 +3898,32 @@ const REASON_RULES: readonly ReasonRule[] = [
       /^repository owner id differs from factory_config owners: (\S+) \(expected (\d+), actual (\d+)\)$/,
     describe: (m) =>
       `リポジトリ${m[1]}のオーナーのIDが、factory_configのownersのID ${m[2]}と食い違います(現在のID ${m[3]})`,
-    nextAction: () =>
-      `GitHubでそのオーナーが意図した持ち主か確かめ、factory_configのownersの名前かidを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun(
+      "GitHubでそのオーナーが意図した持ち主か確かめ、factory_configのownersの名前かidを見直してから、",
+    ),
   },
   {
     pattern: /^repository owner is not in factory_config owners: (\S+)$/,
     describe: (m) =>
       `リポジトリ${m[1]}のオーナーが、factory_configのownersにありません`,
-    nextAction: () =>
-      `factory_configのownersを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun("factory_configのownersを見直してから、"),
   },
   {
     pattern: /^factory repository id check failed: (\S+)$/,
     describe: (m) =>
       `Factory自身のリポジトリ${m[1]}のIDを、factory_configのfactory_repo_idと照合できません`,
-    nextAction: () =>
-      `factory_configのfactory_repoとfactory_repo_idを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun(
+      "factory_configのfactory_repoとfactory_repo_idを見直してから、",
+    ),
   },
   {
     pattern:
       /^repository not found while checking the owner id in factory_config owners: (\S+) \(expected (\d+)\)$/,
     describe: (m) =>
       `リポジトリ${m[1]}がGitHubで見つかりません(factory_configのownersのID ${m[2]})`,
-    nextAction: () =>
-      `リポジトリの削除、オーナーの改名、PATの権限を確かめ、factory_configのownersの名前とidを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun(
+      "リポジトリの削除、オーナーの改名、PATの権限を確かめ、factory_configのownersの名前とidを見直してから、",
+    ),
   },
   // pr_fix_prepare.tsの`evaluateFixRoundGuard`(round_exhausted)
   {
@@ -3892,11 +3980,13 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^changed file count (\d+) exceeds (\S+) (\d+)$/,
     describe: (m) => `変更ファイル数${m[1]}が${m[2]} ${m[3]}を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
+    ciNextAction: () => DIFF_SIZE_CI_NEXT_ACTION,
   },
   {
     pattern: /^diff line total (\d+) exceeds (\S+) (\d+)$/,
     describe: (m) => `diffの総行数${m[1]}が${m[2]} ${m[3]}を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
+    ciNextAction: () => DIFF_SIZE_CI_NEXT_ACTION,
   },
   // pr_fix_apply.ts、pr_fix_verify.ts、pipeline_generate.ts、
   // pr_review_generate.tsの日次予算の検査(予算超過)
@@ -3973,12 +4063,12 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^needs human attention$/,
     describe: () => "人による対応が必要です",
-    nextAction: () => GENERIC_NEXT_ACTION,
+    ...procedureThenRerun(GENERIC_PROCEDURE),
   },
   {
     pattern: /^safety guard failed$/,
     describe: () => "安全性ガードに失敗しました",
-    nextAction: () => GENERIC_NEXT_ACTION,
+    ...procedureThenRerun(GENERIC_PROCEDURE),
   },
   // pr_fix_finish.tsの`evaluateRerouteGuard`(親に`issue_number`が無い)
   {
@@ -4140,7 +4230,7 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: GITHUB_RATE_LIMIT_REASON_PATTERN,
     describe: (m) => `GitHub APIのrate limitに当たりました(${m[1]}): ${m[2]}`,
-    nextAction: () => GITHUB_RATE_LIMIT_NEXT_ACTION,
+    ...procedureThenRerun(GITHUB_RATE_LIMIT_PROCEDURE),
   },
   // 中身がrate limitのときだけ、その規則に訳と次の操作を任せる。
   // それ以外の中身(HTTPのエラーやgitの失敗など)は、これまでどおり汎用の案内にする。
@@ -4157,6 +4247,10 @@ const REASON_RULES: readonly ReasonRule[] = [
       GITHUB_RATE_LIMIT_REASON_PATTERN.test(m[1] ?? "")
         ? GITHUB_RATE_LIMIT_NEXT_ACTION
         : GENERIC_NEXT_ACTION,
+    ciNextAction: (m) =>
+      GITHUB_RATE_LIMIT_REASON_PATTERN.test(m[1] ?? "")
+        ? `${GITHUB_RATE_LIMIT_PROCEDURE}${CI_WAIT_ACTION}`
+        : `${GENERIC_PROCEDURE}${CI_WAIT_ACTION}`,
   },
   {
     pattern: /^implement finished without a final output$/,
@@ -4211,14 +4305,16 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^worktree changed after verification$/,
     describe: () => "検証の後にworktreeが変更されました",
-    nextAction: () =>
-      `検査コマンドが追跡対象のファイルを書き換えていないか確認し、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun(
+      "検査コマンドが追跡対象のファイルを書き換えていないか確認し、",
+    ),
   },
   // `lib/workspace.ts`の`commitAndPush`の`expectedTreeSha`(実装フローとpr_fixのpush)
   {
     pattern: /^committed tree differs from the inspected tree$/,
     describe: () => "commitしたツリーが、検査したツリーと異なります",
     nextAction: (_m, flow) => leftoverProcessNextAction(flow),
+    ciNextAction: () => ciAfterFixWorkRerun(LEFTOVER_PROCESS_CHECK),
   },
   // `lib/implement_loop.ts`の`scannedTreeChangedReason`(実装フローの検証ループ)
   {
@@ -4232,6 +4328,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^worktree changed after the secret scan$/,
     describe: () => "秘密情報の検査の後にworktreeが変更されました",
     nextAction: (_m, flow) => leftoverProcessNextAction(flow),
+    ciNextAction: () => ciAfterFixWorkRerun(LEFTOVER_PROCESS_CHECK),
   },
   {
     pattern: /^requirements regeneration could not be started$/,
@@ -4277,11 +4374,13 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `worktreeのHEAD(${m[1]})が記録したブランチの先頭(${m[2]})と異なります`,
     nextAction: (_m, flow) => localHeadNextAction(flow),
+    ciNextAction: () => ciAfterFixWorkRerun(LOCAL_HEAD_CHECK),
   },
   {
     pattern: /^local HEAD is not on branch (.+)$/,
     describe: (m) => `worktreeのHEADがブランチ${m[1]}にありません`,
     nextAction: (_m, flow) => localHeadNextAction(flow),
+    ciNextAction: () => ciAfterFixWorkRerun(LOCAL_HEAD_CHECK),
   },
   // pr_fix_verify.tsの`inspectUncommittedChanges`と、pr_fix_finish.tsの`inspectStagedChanges`
   {
@@ -4301,7 +4400,7 @@ const REASON_RULES: readonly ReasonRule[] = [
       /^worktree is still used by processes from an earlier run: check sandbox: ([\s\S]+)$/,
     describe: (m) =>
       `検査用のユーザーに渡したworktreeを、rootに戻せませんでした(${m[1]})`,
-    nextAction: () => OWNERSHIP_RESTORE_FAILED_NEXT_ACTION,
+    ...procedureThenRerun(OWNERSHIP_RESTORE_FAILED_PROCEDURE),
   },
   {
     pattern:
@@ -4310,7 +4409,7 @@ const REASON_RULES: readonly ReasonRule[] = [
       m[1] === undefined
         ? "前の実行のプロセスがまだworktreeを使っています"
         : `前の実行のプロセスがまだworktreeを使っています(${m[1]})`,
-    nextAction: () => WORKTREE_BUSY_NEXT_ACTION,
+    ...procedureThenRerun(WORKTREE_BUSY_PROCEDURE),
   },
   // `lib/check_sandbox.ts`の`CheckImageStaleError`(実装フローとpr_fixの準備・検証・完了のステップ)
   {
@@ -4318,7 +4417,10 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: (m) =>
       `workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(${m[1]})`,
     nextAction: () =>
-      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、止まった作業項目が自動で再開します。自動の再開が3回の上限に達したときと、通知に版が載らないときだけ、${RETRY_WORK_ITEM_ACTION}`,
+      `${STALE_IMAGE_PROCEDURE}。作り直した後は、止まった作業項目が自動で再開します。自動の再開が3回の上限に達したときと、通知に版が載らないときだけ、${RETRY_WORK_ITEM_ACTION}`,
+    // CI回は止まった作業項目を自動では再開しないので、再開の文は出さない。
+    ciNextAction: () =>
+      `${STALE_IMAGE_PROCEDURE}。作り直した後は、${CI_WAIT_ACTION}`,
   },
   // `lib/check_sandbox.ts`の`CheckRuntimeUnsafeError`(同じステップ)。イメージは作り直さず、パスを閉じるかworkerを作り直す。
   // ボリュームのマウントポイントの権限はボリュームにあり、workerを作り直しても変わらない。
@@ -4327,8 +4429,10 @@ const REASON_RULES: readonly ReasonRule[] = [
       /^worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: ([\s\S]+)$/,
     describe: (m) =>
       `workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(${m[1]})`,
-    nextAction: () =>
-      `理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、${RETRY_WORK_ITEM_ACTION}(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)`,
+    ...procedureThenRerun(
+      "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、",
+      "(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
+    ),
   },
   {
     pattern: /^implementation of the branch's work item is running$/,
@@ -4341,6 +4445,7 @@ const REASON_RULES: readonly ReasonRule[] = [
     describe: () =>
       "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
     nextAction: (_m, flow) => worktreeLockHeldInRunNextAction(flow),
+    ciNextAction: () => `${LOCK_HELD_PR_FIX_PROCEDURE}${CI_WAIT_ACTION}`,
   },
   {
     pattern: /^implement flow deadline reached after round (\d+)$/,
@@ -4369,8 +4474,9 @@ const REASON_RULES: readonly ReasonRule[] = [
       /^pr_fix time settings do not fit the flow step timeout: ([\s\S]+)$/,
     describe: (m) =>
       `PR修正の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まりません(${m[1]})`,
-    nextAction: () =>
-      `claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、${RETRY_WORK_ITEM_ACTION}`,
+    ...procedureThenRerun(
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、",
+    ),
   },
   {
     pattern:
@@ -4381,6 +4487,49 @@ const REASON_RULES: readonly ReasonRule[] = [
       "claude_timeout_secを減らしてから、`factory:review`を付け直してください",
   },
 ];
+
+/**
+ * 再実行か`factory:fix`の付け直しを案内する次の操作か。
+ * CI回では、どちらも案内してはならない。
+ * `ciNextAction`を持たない規則の案内にだけ使う。
+ */
+function pointsToRetryOrRelabel(action: string): boolean {
+  return (
+    action.includes(RETRY_WORK_ITEM_ACTION) ||
+    action.includes("factory:fix") ||
+    action.includes("付け直")
+  );
+}
+
+/**
+ * PR修正の理由に対する次の操作を選ぶ。
+ * CI回は再実行も付け直しも案内しない。
+ * CI回は`watch_pr_ci`が失敗の行を評価し直し、手動でも自動でも再開しないためである。
+ * 規則が`ciNextAction`を持てば、人が取る手順を残し、再実行の部分だけをCIの再評価の待ちに差し替えたその文を使う。
+ * 持たない規則は、通常回の案内が再実行か付け直しを含むときだけ、CIの再評価を待つ案内に置き換える。
+ * 再実行も付け直しも含まない案内(PRを開き直す、人が直すなど)は、そのままにする。
+ */
+export function nextActionForPrFix(reason: string, ciRound: boolean): string {
+  if (!ciRound) return nextActionFor(reason, "pr_fix");
+  const found = findNextActionRule(reason, REASON_RULES);
+  if (found === null) return CI_ROUND_NEXT_ACTION;
+  return ciRoundActionOfRule(found.rule, found.match);
+}
+
+/**
+ * 規則がCI回で案内する次の操作。`nextActionForPrFix`が使い、規則の表の検査も使う。
+ * `ciNextAction`を持てばそれを使い、持たなければ`nextAction`が再実行か付け直しを含むときだけ置き換える。
+ */
+export function ciRoundActionOfRule(
+  rule: ReasonRule,
+  match: RegExpMatchArray,
+): string {
+  if (rule.ciNextAction !== undefined) {
+    return rule.ciNextAction(match, "pr_fix");
+  }
+  const action = rule.nextAction(match, "pr_fix");
+  return pointsToRetryOrRelabel(action) ? CI_ROUND_NEXT_ACTION : action;
+}
 
 /**
  * 早期終了(skip、guard_blocked、round_exhausted)のときの結果のフィールドを返す。
@@ -4399,6 +4548,7 @@ export function earlyExitBase(
     | "parent_work_item_id"
     | "attempt"
     | "fix_round"
+    | "ci_check_id"
   >,
 ): {
   readonly owner: string;
@@ -4413,6 +4563,7 @@ export function earlyExitBase(
   readonly parent_work_item_id: number | null;
   readonly attempt: number;
   readonly fix_round: number;
+  readonly ci_check_id: number | null;
 } {
   return {
     owner: workItem.owner,
@@ -4427,6 +4578,7 @@ export function earlyExitBase(
     parent_work_item_id: workItem.parent_work_item_id,
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,
+    ci_check_id: workItem.ci_check_id,
   };
 }
 
@@ -4453,6 +4605,24 @@ export function describeReason(reason: string): string {
 }
 
 /**
+ * `"; "`でつないだ各項目を前から順に`rules`に当て、最初に一致した規則と一致の結果を返す。
+ * どれにも一致しなければ`null`を返す。
+ */
+function findNextActionRule(
+  reason: string,
+  rules: readonly ReasonRule[],
+): { readonly rule: ReasonRule; readonly match: RegExpMatchArray } | null {
+  const segments = reason.includes("; ") ? reason.split("; ") : [reason];
+  for (const segment of segments) {
+    for (const rule of rules) {
+      const match = segment.match(rule.pattern);
+      if (match !== null) return { rule, match };
+    }
+  }
+  return null;
+}
+
+/**
  * `reason` / `status_reason`の文字列に対する、具体的な「次の操作」の指示を選ぶ。
  * `needs_human`の`NotifyEvent`を出すすべての箇所(`pr_fix_finish.ts`、
  * `pr_review_generate.ts`、`requirements_apply.ts`、`pipeline_generate.ts`、
@@ -4471,16 +4641,9 @@ export function describeReason(reason: string): string {
  * 再実行を案内しないようにするため。
  */
 export function nextActionFor(reason: string, flow?: NextActionFlow): string {
-  const segments = reason.includes("; ") ? reason.split("; ") : [reason];
   const rules = flow === "dependabot" ? DEPENDABOT_REASON_RULES : REASON_RULES;
-  for (const segment of segments) {
-    for (const rule of rules) {
-      const match = segment.match(rule.pattern);
-      if (match !== null) {
-        return rule.nextAction(match, flow);
-      }
-    }
-  }
+  const found = findNextActionRule(reason, rules);
+  if (found !== null) return found.rule.nextAction(found.match, flow);
   return flow === "dependabot"
     ? DEPENDABOT_MANUAL_NEXT_ACTION
     : GENERIC_NEXT_ACTION;
