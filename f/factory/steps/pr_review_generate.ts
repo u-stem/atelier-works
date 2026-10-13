@@ -13,6 +13,7 @@ import {
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
+  hasCiRoundDiffToReview,
   latestDraft,
   recordAgentRun,
   updateStatusIfCurrent,
@@ -164,6 +165,15 @@ export async function main(
   // 最初のレビューではスレッドがまだ無いので空になる。
   const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
 
+  // 直近のpr_fixがCIの失敗を直した回なら、その差分を重点的に見るようプロンプトに加える。
+  // 値はDBから決めた真偽値だけで、PRの内容からは決めない。
+  const ciRoundDiff = await hasCiRoundDiffToReview(
+    owner,
+    repo,
+    pr_number,
+    review_sha,
+  );
+
   const promptText = reviewPrompt({
     pr: {
       owner,
@@ -179,6 +189,7 @@ export async function main(
     changedFiles: prFiles,
     requirements,
     openFindings,
+    ciRoundDiff,
   });
 
   const systemPrompt = await buildSystemPrompt({
