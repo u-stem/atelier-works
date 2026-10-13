@@ -17,6 +17,7 @@ import {
   type VolatileCiExcerpt,
   type VolatileCiPrompt,
 } from "./ci_log_support.ts";
+import type { RunClaudeFailureReason } from "./claude.ts";
 import type { PrCiCheck } from "./db.ts";
 import {
   type GhClient,
@@ -54,6 +55,9 @@ export const CI_FIX_SKILL_MARKER = "ci-fix-skill:v1";
 
 /** CI回のClaudeの出力が返信を持つときの理由。返信を持つ出力は受け付けない。 */
 export const CI_ROUND_REPLIES_REASON = `${REASON_PREFIX}: the output of Claude carries replies`;
+
+/** 止める理由が秘密値の検査に当たったときに、理由の代わりに返す固定の文。 */
+export const CI_ROUND_REASONS_WITHHELD = `${REASON_PREFIX}: the reasons for stopping matched the secret scan`;
 
 /** CI回のgitleaksの1回あたりのタイムアウト(ミリ秒)。1回のCI回で最大5回走る。 */
 export const CI_FIX_GITLEAKS_TIMEOUT_MS = 2 * 60_000;
@@ -470,14 +474,21 @@ export function localCheckJobs(
 // 修正ステップの流れ
 // ---------------------------------------------------------------------------
 
-/** Claudeの1回の実行の結果。 */
+/**
+ * Claudeの1回の実行の結果。
+ * 失敗には詳細を持たせない。詳細は、不正な出力の先頭の抜粋などで、秘密値の検査を通っていないためである。
+ */
 export type CiClaudeOutcome =
   | { readonly kind: "success"; readonly output: CiFixOutput }
-  | {
-      readonly kind: "failure";
-      readonly reason: string;
-      readonly detail: string;
-    };
+  | { readonly kind: "failure"; readonly reason: RunClaudeFailureReason };
+
+/**
+ * Claudeの実行が失敗したときの、例外と止める理由に使う固定の文。
+ * 実行の詳細(不正な出力の抜粋やstderr)は、秘密値の検査を通っていないので入れない。
+ */
+export function ciClaudeFailureText(reason: RunClaudeFailureReason): string {
+  return `${REASON_PREFIX}: claude run failed (${reason})`;
+}
 
 export type CiFixApplyDeps = {
   /** Factoryのcloneにある、factory-fixスキルの本文。 */
@@ -496,8 +507,7 @@ export type CiFixApplyResult =
   /** Claudeの実行が失敗した。呼び出し側が、`.git`の確認の後に例外にする。 */
   | {
       readonly kind: "claude_failure";
-      readonly reason: string;
-      readonly detail: string;
+      readonly reason: RunClaudeFailureReason;
     };
 
 /**
@@ -519,11 +529,7 @@ export async function runCiFixApply(
   if (gathered.kind === "blocked") return gathered;
   const claude = await deps.startClaude(deps.buildPrompt(gathered));
   if (claude.kind === "failure") {
-    return {
-      kind: "claude_failure",
-      reason: claude.reason,
-      detail: claude.detail,
-    };
+    return { kind: "claude_failure", reason: claude.reason };
   }
   return finalizeCiFixOutput(claude.output, deps.scan);
 }
@@ -878,6 +884,31 @@ export async function collectCiFixChanges(
     changes.push(await untrackedChange(fs, worktreeDir, path));
   }
   return { changes, overflow: false };
+}
+
+/**
+ * 変更を止める理由を、外へ出してよい形にする。
+ * 理由に入るパスは、Claudeが選べる名前やリポジトリのファイル名で、秘密値の検査を通っていない。
+ * 理由をまとめて1回検査し、検出と検査の失敗のときは、固定の文1件に置き換える。
+ * 通ったものには`maskSecrets`をかける。件数は変えない。
+ */
+export async function guardCiRoundReasons(
+  reasons: readonly string[],
+  scan: CiTextScanner,
+): Promise<string[]> {
+  if (reasons.length === 0) return [];
+  const flat = reasons.map((reason) => reason.replace(/\s+/g, " "));
+  const guarded = await guardCiRoundText(
+    {
+      commit_subject: flat.join("\n"),
+      commit_body: null,
+      summary: "",
+      blocked_reason: null,
+    },
+    { scan },
+  );
+  if (guarded.kind === "secret_detected") return [CI_ROUND_REASONS_WITHHELD];
+  return guarded.fields.commit_subject.split("\n");
 }
 
 /**

@@ -6,6 +6,8 @@ import * as wmill from "windmill-client@1.817.0";
 import {
   CI_ROUND_REPLIES_REASON,
   ciRoundPushGuardReason,
+  ciTextScanner,
+  guardCiRoundReasons,
   inspectCiFixChanges,
   isCiRound,
   runPostPushBookkeeping,
@@ -723,16 +725,20 @@ export async function main(
       const prChangedPaths = (
         await getPrFiles(client, owner, repo, pr_number)
       ).map((file) => file.filename);
-      return [
-        ...staged,
-        ...(await inspectCiFixChanges(
-          runCommand,
-          worktree_dir,
-          head_sha,
-          prChangedPaths,
-          { source: "staged" },
-        )),
-      ];
+      // 理由に入るパスは秘密値の検査を通っていないので、外へ出す前に検査する。
+      return await guardCiRoundReasons(
+        [
+          ...staged,
+          ...(await inspectCiFixChanges(
+            runCommand,
+            worktree_dir,
+            head_sha,
+            prChangedPaths,
+            { source: "staged" },
+          )),
+        ],
+        ciTextScanner(runCommand),
+      );
     },
     inspectTree: (scannedTreeSha) =>
       scannedTreeStopReasons({

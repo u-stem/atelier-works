@@ -1,15 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
   CI_FIX_SKILL_MARKER,
+  CI_ROUND_REASONS_WITHHELD,
   type CiFixApplyDeps,
   type CiGatherDeps,
   type CiGatherOutcome,
+  ciClaudeFailureText,
   ciRoundApplyTimeoutMisfit,
   ciRoundPushGuardReason,
   ciRoundRetryRefusal,
   evaluateCiRoundPrepareGuard,
   finalizeCiFixOutput,
   gatherCiFailureInput,
+  guardCiRoundReasons,
   hasCiFixSkillMarker,
   isCiFixOutputAllowed,
   isCiRound,
@@ -767,16 +770,11 @@ describe("runCiFixApply", () => {
 
   test("reports a failed run of Claude", async () => {
     const { deps } = applyDeps({
-      startClaude: async () => ({
-        kind: "failure",
-        reason: "timeout",
-        detail: "timed out",
-      }),
+      startClaude: async () => ({ kind: "failure", reason: "timeout" }),
     });
     expect(await runCiFixApply(deps)).toEqual({
       kind: "claude_failure",
       reason: "timeout",
-      detail: "timed out",
     });
   });
 
@@ -785,5 +783,74 @@ describe("runCiFixApply", () => {
       scan: async () => ({ ok: false, output: "- x" }),
     });
     expect((await runCiFixApply(deps)).kind).toBe("blocked");
+  });
+});
+
+describe("ciClaudeFailureText", () => {
+  test("states the failure reason in a fixed sentence", () => {
+    expect(ciClaudeFailureText("invalid_structured_output")).toBe(
+      "ci round: claude run failed (invalid_structured_output)",
+    );
+  });
+});
+
+describe("guardCiRoundReasons", () => {
+  const clean = async () => ({ ok: true, output: "" });
+
+  test("returns the reasons when the scan passes", async () => {
+    expect(
+      await guardCiRoundReasons(
+        ["ci round change not allowed (x): a.ts"],
+        clean,
+      ),
+    ).toEqual(["ci round change not allowed (x): a.ts"]);
+  });
+
+  test("does not run the scan when there is no reason", async () => {
+    let scanned = false;
+    await guardCiRoundReasons([], async () => {
+      scanned = true;
+      return { ok: true, output: "" };
+    });
+    expect(scanned).toBe(false);
+  });
+
+  test("replaces the reasons when the scan finds a secret", async () => {
+    expect(
+      await guardCiRoundReasons(["not a regular file: key.txt"], async () => ({
+        ok: false,
+        output: "finding",
+      })),
+    ).toEqual([CI_ROUND_REASONS_WITHHELD]);
+  });
+
+  test("replaces the reasons when the scan itself fails", async () => {
+    expect(
+      await guardCiRoundReasons(["not a regular file: key.txt"], async () => {
+        throw new Error("gitleaks crashed");
+      }),
+    ).toEqual([CI_ROUND_REASONS_WITHHELD]);
+  });
+
+  test("keeps the number of reasons when a path contains a line break", async () => {
+    expect(
+      (
+        await guardCiRoundReasons(
+          ["not a regular file: a\nb.txt", "symlink changed: c"],
+          clean,
+        )
+      ).length,
+    ).toBe(2);
+  });
+
+  test("masks the shape of a token in a reason", async () => {
+    expect(
+      (
+        await guardCiRoundReasons(
+          [`not a regular file: ghp_${"a".repeat(36)}`],
+          clean,
+        )
+      ).join(""),
+    ).not.toContain("ghp_");
   });
 });

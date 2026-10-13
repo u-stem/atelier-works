@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
 import {
   buildCiGatherDeps,
+  ciClaudeFailureText,
   ciTextScanner,
   gatherCiFailureInput,
   runCiFixApply,
@@ -358,7 +359,7 @@ async function applyCiRound(
         await recordClaudeRuns(run, recordAgentRun);
         return run.outcome === "success"
           ? { kind: "success", output: run.structuredOutput }
-          : { kind: "failure", reason: run.reason, detail: run.detail };
+          : { kind: "failure", reason: run.reason };
       } finally {
         await systemPrompt.cleanup();
       }
@@ -378,9 +379,8 @@ async function applyCiRound(
     if (afterFailureReason !== null) {
       return blockedResult(afterFailureReason);
     }
-    throw new Error(
-      `pr_fix_apply: claude run failed (${result.reason}): ${result.detail}`,
-    );
+    // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
+    throw new Error(`pr_fix_apply: ${ciClaudeFailureText(result.reason)}`);
   }
   return {
     outcome: result.outcome,

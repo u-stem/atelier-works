@@ -682,6 +682,21 @@ describe("runPrFixVerify: CI round", () => {
     );
   });
 
+  test("states a failed retry in a fixed sentence without the detail", async () => {
+    const h = harness({
+      checks: [false],
+      retry: {
+        outcome: "failure",
+        reason: "invalid_structured_output",
+        detail: "ghp_secret-from-the-output",
+      },
+    });
+    const result = await runPrFixVerify(h.deps, CI_INPUT);
+    expect(result.reason).toBe(
+      "ci round: claude run failed (invalid_structured_output)",
+    );
+  });
+
   test("passes a clean apply result without replies", async () => {
     const h = harness();
     const result = await runPrFixVerify(h.deps, CI_INPUT);
@@ -761,7 +776,7 @@ describe("ciRetryResult", () => {
 
   test("keeps a failed Claude run as a failure", () => {
     expect(
-      ciRetryResult({ kind: "claude_failure", reason: "timeout", detail: "d" }),
-    ).toEqual({ outcome: "failure", reason: "timeout", detail: "d" });
+      ciRetryResult({ kind: "claude_failure", reason: "timeout" }),
+    ).toEqual({ outcome: "failure", reason: "timeout", detail: "" });
   });
 });

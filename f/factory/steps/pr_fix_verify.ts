@@ -18,9 +18,11 @@ import {
   buildCiGatherDeps,
   CI_ROUND_REPLIES_REASON,
   type CiFixApplyResult,
+  ciClaudeFailureText,
   ciTextScanner,
   discardIgnoredFiles,
   gatherCiFailureInput,
+  guardCiRoundReasons,
   inspectCiFixChanges,
   localCheckJobs,
   runCiFixApply,
@@ -29,6 +31,7 @@ import {
   buildSystemPrompt,
   type DailyBudgetStatus,
   dailyBudgetStatus,
+  type RunClaudeFailureReason,
   recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
@@ -88,7 +91,7 @@ export type PrFixVerifyResult = {
 export type PrFixRetryResult =
   | {
       readonly outcome: "failure";
-      readonly reason: string;
+      readonly reason: RunClaudeFailureReason;
       readonly detail: string;
     }
   | { readonly outcome: "success"; readonly output: FixClaudeOutput };
@@ -100,11 +103,8 @@ export type PrFixRetryResult =
  */
 export function ciRetryResult(result: CiFixApplyResult): PrFixRetryResult {
   if (result.kind === "claude_failure") {
-    return {
-      outcome: "failure",
-      reason: result.reason,
-      detail: result.detail,
-    };
+    // 実行の詳細は、秘密値の検査を通っていないので持たせない。
+    return { outcome: "failure", reason: result.reason, detail: "" };
   }
   if (result.kind === "blocked") {
     return {
@@ -355,7 +355,9 @@ export async function runPrFixVerify(
       );
     }
     return blocked(
-      `check-fix retry pass failed (${retry.reason}): ${retry.detail}`,
+      ciRound
+        ? ciClaudeFailureText(retry.reason)
+        : `check-fix retry pass failed (${retry.reason}): ${retry.detail}`,
       input.apply.summary,
       input.apply.replies,
     );
@@ -513,18 +515,25 @@ export async function main(
             maxDiffLines: config.max_fix_diff_lines,
           },
         );
-        if (!ciRound || inspected.blocked) return inspected;
+        if (!ciRound) return inspected;
         // CI回は、通常の回の検査に加えて、許可リスト方式で変更を検査する。
         // 無視されたファイルも対象にする。検査コマンドの動き方を変えうるためである。
+        // 理由に入るパスは秘密値の検査を通っていないので、外へ出す前に検査する。
         if (head_sha === null) throw new Error("pr_fix_verify: no head_sha");
-        const reasons = await inspectCiFixChanges(
-          runCommand,
-          worktree_dir,
-          head_sha,
-          await loadPrChangedPaths(),
-          { source: "worktree" },
+        const reasons = inspected.blocked
+          ? inspected.reasons
+          : await inspectCiFixChanges(
+              runCommand,
+              worktree_dir,
+              head_sha,
+              await loadPrChangedPaths(),
+              { source: "worktree" },
+            );
+        const safeReasons = await guardCiRoundReasons(
+          reasons,
+          ciTextScanner(runCommand),
         );
-        return { blocked: reasons.length > 0, reasons };
+        return { blocked: safeReasons.length > 0, reasons: safeReasons };
       },
       runChecks: async () => {
         const results = await runAllowedCheckCommands(
@@ -752,7 +761,7 @@ async function runCiRetry(input: CiRetryInput): Promise<CiFixApplyResult> {
         await recordClaudeRuns(run, recordAgentRun);
         return run.outcome === "success"
           ? { kind: "success", output: run.structuredOutput }
-          : { kind: "failure", reason: run.reason, detail: run.detail };
+          : { kind: "failure", reason: run.reason };
       } finally {
         await systemPrompt.cleanup();
       }
