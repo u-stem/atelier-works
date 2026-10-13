@@ -47,8 +47,12 @@ import {
   runGitleaksOnText,
 } from "./workspace.ts";
 
-/** 理由の接頭辞。`describeReason`などが、CI回の理由だと見分けるために使う。 */
-const REASON_PREFIX = "ci round";
+/**
+ * CI回の理由の接頭辞。CI回が作る理由はすべてこの文字列で始まる。
+ * 理由を人が読む文と次の操作にする規則(`pr_workflow_support.ts`)が、CI回の理由を見分けるために使う。
+ */
+export const CI_ROUND_REASON_PREFIX = "ci round";
+const REASON_PREFIX = CI_ROUND_REASON_PREFIX;
 
 /** factory-fixスキルが、CI回の節を持つことを示す固定のマーカー。 */
 export const CI_FIX_SKILL_MARKER = "ci-fix-skill:v1";

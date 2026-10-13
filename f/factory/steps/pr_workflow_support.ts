@@ -11,7 +11,10 @@ import {
   CheckEnvironmentError,
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
-import { isCiFixOutputAllowed } from "../lib/ci_fix_round.ts";
+import {
+  CI_ROUND_REASON_PREFIX,
+  isCiFixOutputAllowed,
+} from "../lib/ci_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
@@ -3750,7 +3753,21 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
   },
 ];
 
+/**
+ * CIの失敗を直す回(CI回)を止めた理由の次の操作。
+ * CI回は手動でも自動でも再開しない。`watch_pr_ci`が失敗の行を見て評価し直す。
+ */
+const CI_ROUND_NEXT_ACTION =
+  "CIの再評価を待ってください。直らなければ、人が修正してください";
+
 const REASON_RULES: readonly ReasonRule[] = [
+  // CI回の理由は`ci round`で始まる(`lib/ci_fix_round.ts`)。接頭辞の後ろに、`: 固定の文`か
+  // ` change not allowed (種類): パス`が続く。ほかの規則に先に当たらないよう、先頭に置く。
+  {
+    pattern: reasonPattern(CI_ROUND_REASON_PREFIX, "(?:: | )([\\s\\S]+)$"),
+    describe: (m) => `CIの失敗を直す回を止めました(${m[1]})`,
+    nextAction: () => CI_ROUND_NEXT_ACTION,
+  },
   ...DEPENDABOT_REASON_RULES,
   // 稼働中のIssueの部分一意インデックス(`work_items_active_issue_key`)への違反。
   // `approved`から`implementing`への移行が阻まれたときに、`cas_failed`の理由として現れる。
