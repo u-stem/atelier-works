@@ -219,3 +219,43 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
     ).not.toContain("retry_work_item");
   });
 });
+
+describe("nextActionForPrFix keeps the procedure of a gate reason in a CI round", () => {
+  test("keeps the procedure of auto-merge and waits for the re-evaluation", () => {
+    expect(
+      nextActionForPrFix("pull request has auto-merge enabled", true),
+    ).toBe("PRのauto-mergeを無効にしてから、CIの再評価を待ってください");
+  });
+
+  test("keeps the review-round action of auto-merge", () => {
+    expect(
+      nextActionForPrFix("pull request has auto-merge enabled", false),
+    ).toBe(
+      "PRのauto-mergeを無効にしてから、あらためて`factory:fix`ラベルを付けてください",
+    );
+  });
+
+  test("keeps the procedure of a diff that has too many files", () => {
+    expect(
+      nextActionForPrFix("changed file count 31 exceeds max_files 30", true),
+    ).toBe("変更を分割するか、上限を見直してから、CIの再評価を待ってください");
+  });
+
+  test("keeps the procedure of a diff that has too many lines", () => {
+    expect(
+      nextActionForPrFix("diff line total 900 exceeds max_lines 800", true),
+    ).toBe("変更を分割するか、上限を見直してから、CIの再評価を待ってください");
+  });
+
+  test("keeps the procedure of the generic safety guard reason", () => {
+    expect(nextActionForPrFix("safety guard failed", true)).toBe(
+      "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、CIの再評価を待ってください",
+    );
+  });
+
+  test("keeps the procedure of the generic human attention reason", () => {
+    expect(nextActionForPrFix("needs human attention", true)).toBe(
+      "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、CIの再評価を待ってください",
+    );
+  });
+});

@@ -3580,8 +3580,10 @@ const CHECK_COMMAND_NEXT_ACTION =
   "失敗しているチェックを確認し、人が修正してください";
 const FORBIDDEN_CHANGE_NEXT_ACTION =
   "差分を確認し、問題なければ人が直接修正してください";
-const DIFF_SIZE_NEXT_ACTION =
-  "変更を分割するか、上限を見直してから`factory:fix`を付け直してください";
+const DIFF_SIZE_PROCEDURE = "変更を分割するか、上限を見直してから";
+const DIFF_SIZE_NEXT_ACTION = `${DIFF_SIZE_PROCEDURE}\`factory:fix\`を付け直してください`;
+const DIFF_SIZE_CI_NEXT_ACTION = `${DIFF_SIZE_PROCEDURE}、${CI_WAIT_ACTION}`;
+const AUTO_MERGE_PROCEDURE = "PRのauto-mergeを無効にしてから、";
 const GITHUB_RATE_LIMIT_PROCEDURE = "GitHubのrate limitの解除を待ってから、";
 const GITHUB_RATE_LIMIT_NEXT_ACTION = `${GITHUB_RATE_LIMIT_PROCEDURE}${RETRY_WORK_ITEM_ACTION}`;
 /** `lib/github.ts`の`GitHubRateLimitError`のメッセージ。1はエンドポイント、2は待ちの説明。 */
@@ -3868,7 +3870,8 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^pull request has auto-merge enabled$/,
     describe: () => "PRのauto-mergeが有効です",
     nextAction: () =>
-      "PRのauto-mergeを無効にしてから、あらためて`factory:fix`ラベルを付けてください",
+      `${AUTO_MERGE_PROCEDURE}あらためて\`factory:fix\`ラベルを付けてください`,
+    ciNextAction: () => `${AUTO_MERGE_PROCEDURE}${CI_WAIT_ACTION}`,
   },
   {
     pattern: /^head branch state is unavailable$/,
@@ -3977,11 +3980,13 @@ const REASON_RULES: readonly ReasonRule[] = [
     pattern: /^changed file count (\d+) exceeds (\S+) (\d+)$/,
     describe: (m) => `変更ファイル数${m[1]}が${m[2]} ${m[3]}を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
+    ciNextAction: () => DIFF_SIZE_CI_NEXT_ACTION,
   },
   {
     pattern: /^diff line total (\d+) exceeds (\S+) (\d+)$/,
     describe: (m) => `diffの総行数${m[1]}が${m[2]} ${m[3]}を超えました`,
     nextAction: () => DIFF_SIZE_NEXT_ACTION,
+    ciNextAction: () => DIFF_SIZE_CI_NEXT_ACTION,
   },
   // pr_fix_apply.ts、pr_fix_verify.ts、pipeline_generate.ts、
   // pr_review_generate.tsの日次予算の検査(予算超過)
@@ -4058,12 +4063,12 @@ const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^needs human attention$/,
     describe: () => "人による対応が必要です",
-    nextAction: () => GENERIC_NEXT_ACTION,
+    ...procedureThenRerun(GENERIC_PROCEDURE),
   },
   {
     pattern: /^safety guard failed$/,
     describe: () => "安全性ガードに失敗しました",
-    nextAction: () => GENERIC_NEXT_ACTION,
+    ...procedureThenRerun(GENERIC_PROCEDURE),
   },
   // pr_fix_finish.tsの`evaluateRerouteGuard`(親に`issue_number`が無い)
   {
