@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry.ts";
+import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
 import {
   CI_ROUND_DETAILS,
   ciRoundReason,

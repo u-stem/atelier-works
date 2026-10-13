@@ -2,7 +2,7 @@
 // 作業項目の状態と、止めた理由の注記から、行を`failed`に戻すか、`superseded`にするか、そのままにするかを決める。
 // I/Oは持たない。読み取りと更新は`pr_ci_watch.ts`が行う。
 
-import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry.ts";
+import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
 import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";

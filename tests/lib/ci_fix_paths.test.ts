@@ -571,8 +571,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "Factory自身のcloneを用意する共有モジュール。ほかのフローが日常的に使う",
   "f/factory/lib/self_update_support.ts":
     "自己更新の判定と整形の純粋関数。self_updateの修正が日常的に触れる",
-  "f/factory/lib/auto_retry.ts":
-    "自動の再開の対象の理由の一覧。回復が待ち時間の判定に参照する。自動の再開の修正が日常的に触れる",
+  "f/factory/lib/auto_retry_reasons.ts":
+    "自動の再開の対象の理由の一覧。回復が待ち時間の判定に参照する。依存が小さい",
   "f/factory/lib/job_ids.ts": "WindmillのジョブIDの形の検査。依存が無く小さい",
   "f/factory/lib/prose_check.ts":
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",

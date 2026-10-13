@@ -8,10 +8,10 @@ import {
   AUTO_RETRY_LIST_LIMIT,
   AUTO_RETRY_MAX_RESTARTS,
   AUTO_RETRY_NOTE_PREFIX,
-  AUTO_RETRY_REASON_PREFIXES,
   type AutoRetryResult,
   retryStaleImageItems,
 } from "./lib/auto_retry.ts";
+import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   latestRequirementsApproval,

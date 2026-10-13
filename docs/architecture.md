@@ -433,6 +433,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/audit_evidence` | script | [LIB] 監査の証跡収集 |
 | `f/factory/lib/audit_doc` | script | [LIB] 監査レポートの検査 |
 | `f/factory/lib/schedule_failing` | script | [LIB] 続けて失敗するスケジュールの検知 |
+| `f/factory/lib/auto_retry_reasons` | script | [LIB] 自動で再開してよい止まった理由 |
 | `f/factory/lib/self_update_support` | script | [LIB] 自己更新の純粋ロジック |
 | `f/factory/lib/requirements_template` | script | [LIB] 要件定義テンプレートの定義 |
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
