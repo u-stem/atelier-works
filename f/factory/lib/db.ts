@@ -3950,8 +3950,8 @@ export async function getPrCiCheckById(
 /**
  * `reviewSha`のレビューが、CIの失敗を直したラウンドの差分を含むかを返す。
  * そのPRの最新の`pr_fix`が、CIの回(`ci_check_id`を持つ)で、再レビューの依頼まで終え(`rereview_requested`)、
- * 着手したheadが`reviewSha`と違うときに限って真になる。
- * CIの回は`head_sha`を更新しないので、着手したheadと違えば、その回がpushした新しいheadをレビューすることになる。
+ * その回がpushしたcommit(`fix_rounds.commit_shas`)に`reviewSha`が入っているときに限って真になる。
+ * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないので偽になる。
  * ownerとrepoは小文字で照合する。
  */
 export async function hasCiRoundDiffToReview(
@@ -3964,22 +3964,25 @@ export async function hasCiRoundDiffToReview(
   assertPrCiTarget(owner, repo, prNumber);
   assertCommitSha(reviewSha);
   const rows = await sql`
-    SELECT ci_check_id, status, head_sha
-    FROM factory.work_items
-    WHERE kind = 'pr_fix'
-      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
-      AND pr_number = ${prNumber}::integer
-    ORDER BY created_at DESC, id DESC
+    SELECT w.ci_check_id, w.status,
+      EXISTS (
+        SELECT 1 FROM factory.fix_rounds r,
+          jsonb_array_elements_text(r.commit_shas) AS pushed(sha)
+        WHERE r.work_item_id = w.id AND pushed.sha = ${reviewSha}
+      ) AS pushed_review_sha
+    FROM factory.work_items w
+    WHERE w.kind = 'pr_fix'
+      AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
+      AND w.pr_number = ${prNumber}::integer
+    ORDER BY w.created_at DESC, w.id DESC
     LIMIT 1
   `.fetch();
   const row = rows[0];
   if (row === undefined) return false;
-  const headSha = parseNullableString(row.head_sha, "head_sha");
   return (
     parseNullableId(row.ci_check_id, "ci_check_id") !== null &&
     row.status === "rereview_requested" &&
-    headSha !== null &&
-    headSha !== reviewSha
+    parseBoolean(row.pushed_review_sha, "pushed_review_sha")
   );
 }
 

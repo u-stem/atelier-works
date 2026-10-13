@@ -6118,14 +6118,23 @@ describe("hasCiRoundDiffToReview", () => {
   const FIX_ROW: SqlRow = {
     ci_check_id: "9",
     status: "rereview_requested",
-    head_sha: "b".repeat(40),
+    pushed_review_sha: true,
   };
 
-  test("is true when the latest pr_fix is a finished CI round of an older head", async () => {
+  test("is true when the latest pr_fix is a finished CI round that pushed the reviewed commit", async () => {
     const { sql } = createFakeSqlClient([[FIX_ROW]]);
     expect(
       await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
     ).toBe(true);
+  });
+
+  test("is false when the reviewed commit was not pushed by the CI round", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...FIX_ROW, pushed_review_sha: false }],
+    ]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
   });
 
   test("is false when the pull request has no pr_fix", async () => {
@@ -6149,32 +6158,26 @@ describe("hasCiRoundDiffToReview", () => {
     ).toBe(false);
   });
 
-  test("is false when the review is of the head the CI round started from", async () => {
-    const { sql } = createFakeSqlClient([[{ ...FIX_ROW, head_sha: CI_SHA }]]);
-    expect(
-      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
-    ).toBe(false);
-  });
-
-  test("is false when the CI round recorded no head", async () => {
-    const { sql } = createFakeSqlClient([[{ ...FIX_ROW, head_sha: null }]]);
-    expect(
-      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
-    ).toBe(false);
+  test("looks for the reviewed commit among the commits that the round pushed", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).toContain(
+      "jsonb_array_elements_text(r.commit_shas)",
+    );
   });
 
   test("reads only the latest pr_fix of the pull request", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
     expect(calls[0]?.text).toMatch(
-      /kind = 'pr_fix'[\s\S]*ORDER BY created_at DESC, id DESC\s+LIMIT 1/,
+      /w\.kind = 'pr_fix'[\s\S]*ORDER BY w\.created_at DESC, w\.id DESC\s+LIMIT 1/,
     );
   });
 
   test("matches the owner and the repository without regard to case", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasCiRoundDiffToReview("Acme", "Widgets", 12, CI_SHA, sql);
-    expect(calls[0]?.values).toEqual(["acme", "widgets", 12]);
+    expect(calls[0]?.values).toEqual([CI_SHA, "acme", "widgets", 12]);
   });
 
   test("rejects a review sha that is not a full commit sha", async () => {
