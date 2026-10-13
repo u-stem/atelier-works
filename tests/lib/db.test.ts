@@ -4928,6 +4928,12 @@ describe("listAutoRetryCandidates", () => {
     expect(calls[0]?.text).toContain("active_fix.id <> w.id");
   });
 
+  test("excludes a CI round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("w.ci_check_id IS NULL");
+  });
+
   test("excludes an item that used up its restarts", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listAutoRetryCandidates(params, sql);
@@ -4982,6 +4988,12 @@ describe("restartStoppedWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
     expect(calls[0]?.values).toContain(3);
+  });
+
+  test("guards the update against a CI round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("AND ci_check_id IS NULL");
   });
 
   test("guards the update against a newer cycle of the same Issue", async () => {
