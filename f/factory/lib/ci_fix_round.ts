@@ -850,7 +850,13 @@ async function untrackedChange(
   }
   if (info.isSymbolicLink()) return { ...unsupported, mode: SYMLINK_MODE };
   if (!info.isFile() || info.size > UNTRACKED_MAX_BYTES) return unsupported;
-  const text = await fs.readFile(`${worktreeDir}/${path}`);
+  let text: string;
+  try {
+    text = await fs.readFile(`${worktreeDir}/${path}`);
+  } catch {
+    // 読めないファイルは、中身を検査できないので対応外として拒否する。
+    return unsupported;
+  }
   return {
     path,
     status: "added",

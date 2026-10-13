@@ -306,6 +306,21 @@ describe("collectCiFixChanges", () => {
     expect([changes[0]?.mode, reads]).toEqual(["000000", []]);
   });
 
+  test("marks an untracked file that cannot be read as unsupported", async () => {
+    const { run } = fakeGit({ untracked: ["locked.ts"] });
+    const { fs } = fakeFs({ "locked.ts": { kind: "file", text: "x" } });
+    const { changes } = await collectCiFixChanges(run, DIR, SHA, {
+      ...WORKTREE,
+      fs: {
+        ...fs,
+        readFile: async () => {
+          throw new Error("EACCES");
+        },
+      },
+    });
+    expect(changes[0]?.mode).toBe("000000");
+  });
+
   test("lists the ignored files too, by not applying the ignore rules", async () => {
     const { run, argvs } = fakeGit({ untracked: [] });
     await collectCiFixChanges(run, DIR, SHA, {
