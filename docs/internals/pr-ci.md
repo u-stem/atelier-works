@@ -83,7 +83,7 @@
 作業項目は、種別`pr_fix`、状態`fixing`、サイクルと試行は1で挿入する。
 ラウンドの番号(`fix_round`)と処理済みの位置は、同じPRの直近の`pr_fix`から写す。
 処理済みの位置は、`last_review_id`、`last_comment_id`、`last_review_comment_id`の3列である。
-直近の`pr_fix`が無ければ、すべて0にする。直す作業項目は、ラウンドの番号も処理済みの位置も進めない。
+直近の`pr_fix`が無ければ、すべて0にする。直す作業項目は、ラウンドの番号も処理済みの位置も進めず、完了のステップで作業項目の`head_sha`も更新しない([PRワークフロー](pr-workflow.md)の「CIの失敗を直す回」)。
 ownerとrepoは、行との照合では小文字で比べる。
 作業項目には、`poll_prs`が`startFix`に渡すownerとrepo(検索結果の`repository_url`由来)と同じ綴りを渡す。
 一意索引と既存の照合が大文字小文字を区別するためである。
