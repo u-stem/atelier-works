@@ -159,7 +159,8 @@ CIの回は自動の再開の対象外なので、この間に作業項目が再
 既知の競合がある。
 `poll_issues`は、PRが閉じた`pr_fix`を`cancelled`にする。
 この後、回復が走る前にPRを開き直すと、`needs_human`から取り消された回の`fix_stopped`は消えて、保留なしで`failed`に戻る。
-確率は低い。CIの回は`retry_work_item`が再開を断るので、作業項目が二重に起動することはない。
+同じheadでCIの直しが再び起動しうる。起動し直す回数は、直す回数の上限が止める。
+CIの回は`retry_work_item`が再開を断るので、作業項目が二重に起動することはない。
 
 `failed`などに戻す前に、PRのheadを読む。
 headが行のheadと違えば、戻さず`superseded`にする。PRが閉じていれば、閉じたPRの整理に任せる。
