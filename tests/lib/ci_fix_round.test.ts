@@ -17,6 +17,7 @@ import {
   isCiFixOutputAllowed,
   isCiRound,
   localCheckJobs,
+  removeIgnoredFilesIfPointerIntact,
   runCiFixApply,
   runPostPushBookkeeping,
 } from "../../f/factory/lib/ci_fix_round.ts";
@@ -30,6 +31,7 @@ import type {
   WorkflowRunJob,
 } from "../../f/factory/lib/github.ts";
 import type { WorkflowRun } from "../../f/factory/lib/main_ci_support.ts";
+import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -852,5 +854,66 @@ describe("guardCiRoundReasons", () => {
         )
       ).join(""),
     ).not.toContain("ghp_");
+  });
+});
+
+describe("removeIgnoredFilesIfPointerIntact", () => {
+  test("removes the ignored files when the pointer is intact", async () => {
+    const calls: string[] = [];
+    await removeIgnoredFilesIfPointerIntact({
+      assertPointer: async () => {
+        calls.push("assert");
+      },
+      remove: async () => {
+        calls.push("remove");
+      },
+    });
+    expect(calls).toEqual(["assert", "remove"]);
+  });
+
+  test("does not remove when the pointer was modified", async () => {
+    const calls: string[] = [];
+    await removeIgnoredFilesIfPointerIntact({
+      assertPointer: async () => {
+        throw new WorktreeGitPointerModifiedError();
+      },
+      remove: async () => {
+        calls.push("remove");
+      },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("reports that it did not remove when the pointer was modified", async () => {
+    expect(
+      await removeIgnoredFilesIfPointerIntact({
+        assertPointer: async () => {
+          throw new WorktreeGitPointerModifiedError();
+        },
+        remove: async () => {},
+      }),
+    ).toBe(false);
+  });
+
+  test("rethrows an unrelated failure of the check", async () => {
+    await expect(
+      removeIgnoredFilesIfPointerIntact({
+        assertPointer: async () => {
+          throw new Error("disk full");
+        },
+        remove: async () => {},
+      }),
+    ).rejects.toThrow("disk full");
+  });
+
+  test("lets a failure of the removal through", async () => {
+    await expect(
+      removeIgnoredFilesIfPointerIntact({
+        assertPointer: async () => {},
+        remove: async () => {
+          throw new Error("git clean failed");
+        },
+      }),
+    ).rejects.toThrow("git clean failed");
   });
 });

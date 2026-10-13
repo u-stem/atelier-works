@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   type CiChangeFs,
   collectCiFixChanges,
-  discardIgnoredFiles,
   inspectCiFixChanges,
   parseRawDiffZ,
   parseZeroContextPatch,
@@ -522,18 +521,5 @@ describe("inspectCiFixChanges", () => {
       fs,
     });
     expect(reasons.every((reason) => !reason.includes("; "))).toBe(true);
-  });
-});
-
-describe("discardIgnoredFiles", () => {
-  test("removes only the ignored files and directories", async () => {
-    const { run, argvs } = fakeGit({});
-    await discardIgnoredFiles(run, DIR);
-    expect(argvs[0]?.slice(-2)).toEqual(["clean", "-fdX"]);
-  });
-
-  test("throws when git fails", async () => {
-    const run: CommandRunner = async () => result("", 1);
-    await expect(discardIgnoredFiles(run, DIR)).rejects.toThrow("git clean");
   });
 });

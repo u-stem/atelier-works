@@ -45,6 +45,7 @@ import {
   isCappedOutput,
   localGitEnv,
   runGitleaksOnText,
+  WorktreeGitPointerModifiedError,
 } from "./workspace.ts";
 
 /**
@@ -946,14 +947,23 @@ export async function inspectCiFixChanges(
 }
 
 /**
- * worktreeの、`.gitignore`で無視されたファイルとディレクトリを消す(`git clean -fdX`)。
- * 検査コマンドの生成物(依存の取得先など)を捨てて、無視されたファイルが無い状態から変更を見るために使う。
- * 無視されたファイルは、変更の一覧(`git status`)に現れないので、残したままだと、
- * Claudeが書いた無視されたファイルと、検査コマンドが作った生成物を見分けられない。
+ * `.git`が準備ステップの記録のままのときだけ、無視されたファイルを消す(`remove`)。
+ * 無視されたファイルは、検査コマンドの生成物と、Claudeが書いたファイルを見分けられなくするので、
+ * 検査コマンドの実行のたびに、その後で消す。
+ * `git clean`もworktreeでgitを実行するので、準備のステップと同じく、`.git`を確かめてから呼ぶ。
+ * 書き換えられていれば消さずに`false`を返す。呼び出し側の次の検査が、同じ確認で止める。
+ * `.git`の確認が、書き換え以外の理由で失敗したときは、そのまま投げる。
  */
-export async function discardIgnoredFiles(
-  run: CommandRunner,
-  worktreeDir: string,
-): Promise<void> {
-  await runGit(run, worktreeDir, "git clean -fdX", ["clean", "-fdX"]);
+export async function removeIgnoredFilesIfPointerIntact(deps: {
+  readonly assertPointer: () => Promise<void>;
+  readonly remove: () => Promise<void>;
+}): Promise<boolean> {
+  try {
+    await deps.assertPointer();
+  } catch (err) {
+    if (err instanceof WorktreeGitPointerModifiedError) return false;
+    throw err;
+  }
+  await deps.remove();
+  return true;
 }

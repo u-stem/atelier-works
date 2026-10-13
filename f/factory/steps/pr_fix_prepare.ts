@@ -9,7 +9,6 @@ import {
 } from "../lib/check_sandbox.ts";
 import {
   ciRoundApplyTimeoutMisfit,
-  discardIgnoredFiles,
   evaluateCiRoundPrepareGuard,
 } from "../lib/ci_fix_round.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
@@ -39,6 +38,7 @@ import {
   ensureRepo,
   type GtrWorktree,
   readAndVerifyWorktreeGitPointer,
+  removeIgnoredFiles,
   runCommand,
 } from "../lib/workspace.ts";
 import {
@@ -380,7 +380,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   if (ciRound) {
     // 再利用したworktreeには、前の実行の生成物が無視されたまま残る。消さないと、
     // 修正の後の検査で、Claudeが書いた無視されたファイルと見分けられない。
-    await discardIgnoredFiles(runCommand, worktree.path);
+    await removeIgnoredFiles({ run: runCommand, worktreeDir: worktree.path });
   }
 
   return {

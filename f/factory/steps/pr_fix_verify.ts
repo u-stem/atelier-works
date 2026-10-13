@@ -20,11 +20,11 @@ import {
   type CiFixApplyResult,
   ciClaudeFailureText,
   ciTextScanner,
-  discardIgnoredFiles,
   gatherCiFailureInput,
   guardCiRoundReasons,
   inspectCiFixChanges,
   localCheckJobs,
+  removeIgnoredFilesIfPointerIntact,
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
 import {
@@ -56,6 +56,7 @@ import type { FixOutcome, FixReply } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
   type CommandRunner,
+  removeIgnoredFiles,
   runCommand,
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
@@ -547,7 +548,18 @@ export async function main(
         );
         // 検査コマンドの生成物(無視されたファイル)を捨てる。残すと、次の検査で、
         // Claudeが書いた無視されたファイルと見分けられない。
-        if (ciRound) await discardIgnoredFiles(runCommand, worktree_dir);
+        if (ciRound && worktree_git_pointer !== null) {
+          const pointer = worktree_git_pointer;
+          await removeIgnoredFilesIfPointerIntact({
+            assertPointer: () =>
+              assertWorktreeGitPointer(worktree_dir, pointer),
+            remove: () =>
+              removeIgnoredFiles({
+                run: runCommand,
+                worktreeDir: worktree_dir,
+              }),
+          });
+        }
         return results;
       },
       budgetStatus: () => dailyBudgetStatus(config),
