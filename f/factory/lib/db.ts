@@ -3925,6 +3925,59 @@ export async function getLatestPrCiCheck(
   return row === undefined ? null : toPrCiCheck(row);
 }
 
+/** IDで`factory.pr_ci_checks`の行を読む。無ければnull。 */
+export async function getPrCiCheckById(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck | null> {
+  assertPositiveId(id, "pr ci check id");
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE id = ${id}::bigint
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toPrCiCheck(row);
+}
+
+/**
+ * `reviewSha`のレビューが、CIの失敗を直したラウンドの差分を含むかを返す。
+ * そのPRの最新の`pr_fix`が、CIの回(`ci_check_id`を持つ)で、再レビューの依頼まで終え(`rereview_requested`)、
+ * 着手したheadが`reviewSha`と違うときに限って真になる。
+ * CIの回は`head_sha`を更新しないので、着手したheadと違えば、その回がpushした新しいheadをレビューすることになる。
+ * ownerとrepoは小文字で照合する。
+ */
+export async function hasCiRoundDiffToReview(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  reviewSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPrCiTarget(owner, repo, prNumber);
+  assertCommitSha(reviewSha);
+  const rows = await sql`
+    SELECT ci_check_id, status, head_sha
+    FROM factory.work_items
+    WHERE kind = 'pr_fix'
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND pr_number = ${prNumber}::integer
+    ORDER BY created_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) return false;
+  const headSha = parseNullableString(row.head_sha, "head_sha");
+  return (
+    parseNullableId(row.ci_check_id, "ci_check_id") !== null &&
+    row.status === "rereview_requested" &&
+    headSha !== null &&
+    headSha !== reviewSha
+  );
+}
+
 /**
  * 判定を待っている行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
  * 後ろの行が飢えないためには、呼び出し側が、読み直すたびに`checked_at`を進める必要がある。

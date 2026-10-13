@@ -31,9 +31,11 @@ import {
   getLatestDeployment,
   getLatestPrCiCheck,
   getNoticeById,
+  getPrCiCheckById,
   getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
+  hasCiRoundDiffToReview,
   hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
@@ -6065,6 +6067,109 @@ describe("getLatestPrCiCheck", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await getLatestPrCiCheck("acme", "widgets", 12, sql);
     expect(calls[0]?.text).toContain("LIMIT 1");
+  });
+});
+
+describe("getPrCiCheckById", () => {
+  test("returns the row", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const row = await getPrCiCheckById(9, sql);
+    expect(row?.head_sha).toBe(CI_SHA);
+  });
+
+  test("returns null when the row does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getPrCiCheckById(9, sql)).toBeNull();
+  });
+
+  test("looks the row up by its id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPrCiCheckById(9, sql);
+    expect(calls[0]?.text).toContain("WHERE id = ");
+  });
+
+  test("selects the columns that track the fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPrCiCheckById(9, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_work_item_id, fix_attempts, fix_hold_reason",
+    );
+  });
+
+  test("rejects an id that is not a positive integer", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(getPrCiCheckById(0, sql)).rejects.toThrow("pr ci check id");
+  });
+});
+
+describe("hasCiRoundDiffToReview", () => {
+  const FIX_ROW: SqlRow = {
+    ci_check_id: "9",
+    status: "rereview_requested",
+    head_sha: "b".repeat(40),
+  };
+
+  test("is true when the latest pr_fix is a finished CI round of an older head", async () => {
+    const { sql } = createFakeSqlClient([[FIX_ROW]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(true);
+  });
+
+  test("is false when the pull request has no pr_fix", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
+  });
+
+  test("is false when the latest pr_fix is not a CI round", async () => {
+    const { sql } = createFakeSqlClient([[{ ...FIX_ROW, ci_check_id: null }]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
+  });
+
+  test("is false when the CI round did not finish with a re-review request", async () => {
+    const { sql } = createFakeSqlClient([[{ ...FIX_ROW, status: "blocked" }]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
+  });
+
+  test("is false when the review is of the head the CI round started from", async () => {
+    const { sql } = createFakeSqlClient([[{ ...FIX_ROW, head_sha: CI_SHA }]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
+  });
+
+  test("is false when the CI round recorded no head", async () => {
+    const { sql } = createFakeSqlClient([[{ ...FIX_ROW, head_sha: null }]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
+  });
+
+  test("reads only the latest pr_fix of the pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).toMatch(
+      /kind = 'pr_fix'[\s\S]*ORDER BY created_at DESC, id DESC\s+LIMIT 1/,
+    );
+  });
+
+  test("matches the owner and the repository without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("Acme", "Widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.values).toEqual(["acme", "widgets", 12]);
+  });
+
+  test("rejects a review sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      hasCiRoundDiffToReview("acme", "widgets", 12, "abc", sql),
+    ).rejects.toThrow();
   });
 });
 
