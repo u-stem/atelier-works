@@ -93,9 +93,48 @@ describe("nextActionForPrFix", () => {
     expect(nextActionForPrFix("no changes to commit", true)).toBe(NEXT_ACTION);
   });
 
-  test("keeps a specific action of a CI round", () => {
+  test("waits for the re-evaluation when the pull request is a draft", () => {
     expect(nextActionForPrFix("pull request is a draft", true)).toBe(
+      NEXT_ACTION,
+    );
+  });
+
+  test("waits for the re-evaluation when the PR head moved during the fix", () => {
+    expect(
+      nextActionForPrFix(
+        "PR head moved to abc123 while the fix was in progress",
+        true,
+      ),
+    ).toBe(NEXT_ACTION);
+  });
+
+  test("waits for the re-evaluation when the worktree git pointer was not recorded", () => {
+    expect(
+      nextActionForPrFix("worktree git pointer was not recorded", true),
+    ).toBe(NEXT_ACTION);
+  });
+
+  test("waits for the re-evaluation when the PR head was not recorded", () => {
+    expect(nextActionForPrFix("PR head was not recorded", true)).toBe(
+      NEXT_ACTION,
+    );
+  });
+
+  test("waits for the re-evaluation when Claude blocked with a reason that points to a retry", () => {
+    expect(nextActionForPrFix("head branch state is unavailable", true)).toBe(
+      NEXT_ACTION,
+    );
+  });
+
+  test("keeps the draft action of a review round", () => {
+    expect(nextActionForPrFix("pull request is a draft", false)).toBe(
       nextActionFor("pull request is a draft", "pr_fix"),
+    );
+  });
+
+  test("keeps a specific action that points to neither a retry nor a relabel", () => {
+    expect(nextActionForPrFix("pull request is not open", true)).toBe(
+      nextActionFor("pull request is not open", "pr_fix"),
     );
   });
 });

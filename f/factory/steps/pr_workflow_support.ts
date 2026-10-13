@@ -4416,17 +4416,28 @@ const REASON_RULES: readonly ReasonRule[] = [
 ];
 
 /**
+ * 再実行か`factory:fix`の付け直しを案内する次の操作か。
+ * CI回では、どちらも案内してはならない。
+ */
+function pointsToRetryOrRelabel(action: string): boolean {
+  return (
+    action.includes(RETRY_WORK_ITEM_ACTION) ||
+    action.includes("factory:fix") ||
+    action.includes("付け直")
+  );
+}
+
+/**
  * PR修正の理由に対する次の操作を選ぶ。
- * CI回は再実行も付け直しも案内しない。汎用の案内(`retry_work_item`)と、返信を前提にした案内(`factory:fix`の付け直し)は、
- * CIの再評価を待つ案内に置き換える。個別の規則がある理由は、そのままにする。
+ * CI回は再実行も付け直しも案内しない。個別の規則の案内が再実行(`retry_work_item`)か、
+ * `factory:fix`の付け直しを含むときは、CIの再評価を待つ案内に置き換える。
+ * CI回は`watch_pr_ci`が失敗の行を評価し直し、手動でも自動でも再開しないためである。
+ * 再実行も付け直しも含まない案内(PRを開き直す、人が直すなど)は、そのままにする。
  */
 export function nextActionForPrFix(reason: string, ciRound: boolean): string {
   const action = nextActionFor(reason, "pr_fix");
   if (!ciRound) return action;
-  return action === GENERIC_NEXT_ACTION ||
-    action === NOTHING_TO_COMMIT_NEXT_ACTION
-    ? CI_ROUND_NEXT_ACTION
-    : action;
+  return pointsToRetryOrRelabel(action) ? CI_ROUND_NEXT_ACTION : action;
 }
 
 /**
