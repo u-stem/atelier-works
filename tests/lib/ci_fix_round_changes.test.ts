@@ -3,6 +3,7 @@ import {
   type CiChangeFs,
   collectCiFixChanges,
   inspectCiFixChanges,
+  listCiStagedPaths,
   parseRawDiffZ,
   parseZeroContextPatch,
 } from "../../f/factory/lib/ci_fix_round.ts";
@@ -587,5 +588,35 @@ describe("inspectCiFixChanges", () => {
       fs,
     });
     expect(reasons.every((reason) => !reason.includes("; "))).toBe(true);
+  });
+});
+
+describe("listCiStagedPaths", () => {
+  test("lists the paths of the staged files", async () => {
+    const { run } = fakeGit({
+      tracked: raw(
+        ["100644", "100644", "M", "a.ts"],
+        ["000000", "100644", "A", "tests/new.test.ts"],
+      ),
+    });
+    expect(await listCiStagedPaths(run, DIR, SHA)).toEqual([
+      "a.ts",
+      "tests/new.test.ts",
+    ]);
+  });
+
+  test("asks git for the index with the rename detection off", async () => {
+    const { run, argvs } = fakeGit({ tracked: "" });
+    await listCiStagedPaths(run, DIR, SHA);
+    expect(argvs[0]).toEqual(
+      expect.arrayContaining(["--cached", "--raw", "--no-renames"]),
+    );
+  });
+
+  test("throws when git fails", async () => {
+    const { run } = fakeGit({ fail: "--raw" });
+    await expect(listCiStagedPaths(run, DIR, SHA)).rejects.toThrow(
+      "git diff --raw failed",
+    );
   });
 });

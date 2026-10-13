@@ -10,6 +10,7 @@ import {
   guardCiRoundReasons,
   inspectCiFixChanges,
   isCiRound,
+  listCiStagedPaths,
   nothingToCommitReason,
   runPostPushBookkeeping,
 } from "../lib/ci_fix_round.ts";
@@ -728,6 +729,8 @@ export async function main(
         await getPrFiles(client, owner, repo, pr_number)
       ).map((file) => file.filename);
       // 理由に入るパスは秘密値の検査を通っていないので、外へ出す前に検査する。
+      // 違反が無くても、commitされるファイル名は外へ出る。許可された新規ファイルの名前に
+      // 秘密値を載せて流出させないよう、ステージしたパスの一覧を常に同じ1回の検査に加える。
       return await guardCiRoundReasons(
         [
           ...staged,
@@ -740,6 +743,7 @@ export async function main(
           )),
         ],
         ciTextScanner(runCommand),
+        await listCiStagedPaths(runCommand, worktree_dir, head_sha),
       );
     },
     inspectTree: (scannedTreeSha) =>

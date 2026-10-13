@@ -70,4 +70,13 @@ describe("the finish step of a CI round", () => {
     const text = await source("pr_fix_finish.ts");
     expect(count(text, "if (!ciRound) await postFixReplies(null);")).toBe(1);
   });
+
+  test("scans the staged paths together with the reasons in one call", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      text.includes(
+        "        ciTextScanner(runCommand),\n        await listCiStagedPaths(runCommand, worktree_dir, head_sha),",
+      ),
+    ).toBe(true);
+  });
 });

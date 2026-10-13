@@ -985,24 +985,57 @@ export async function collectCiFixChanges(
  * 理由に入るパスは、Claudeが選べる名前やリポジトリのファイル名で、秘密値の検査を通っていない。
  * 理由をまとめて1回検査し、検出と検査の失敗のときは、固定の文1件に置き換える。
  * 通ったものには`maskSecrets`をかける。件数は変えない。
+ * `alsoScan`は、返さずに同じ1回の検査にだけ加える文字列である。
+ * 違反が無くても外へ出るパス(commitされるファイル名など)を検査するために使う。
+ * 検出と検査の失敗のときは、理由が空でも固定の文1件を返す。
  */
 export async function guardCiRoundReasons(
   reasons: readonly string[],
   scan: CiTextScanner,
+  alsoScan: readonly string[] = [],
 ): Promise<string[]> {
-  if (reasons.length === 0) return [];
-  const flat = reasons.map((reason) => reason.replace(/\s+/g, " "));
+  if (reasons.length === 0 && alsoScan.length === 0) return [];
+  const flatten = (text: string): string => text.replace(/\s+/g, " ");
   const guarded = await guardCiRoundText(
     {
-      commit_subject: flat.join("\n"),
-      commit_body: null,
+      commit_subject: reasons.map(flatten).join("\n"),
+      commit_body:
+        alsoScan.length === 0 ? null : alsoScan.map(flatten).join("\n"),
       summary: "",
       blocked_reason: null,
     },
     { scan },
   );
   if (guarded.kind === "secret_detected") return [CI_ROUND_REASONS_WITHHELD];
+  if (reasons.length === 0) return [];
   return guarded.fields.commit_subject.split("\n");
+}
+
+/**
+ * 索引(commitする内容)にある、`baseSha`からの変更のパスを返す。
+ * 違反の無い変更のパスも含む。リネーム検出は切り、外部のdiffのプログラムは使わない。
+ * gitの失敗は例外にする。空の一覧として扱うと、パスを検査せずに通すためである。
+ */
+export async function listCiStagedPaths(
+  run: CommandRunner,
+  worktreeDir: string,
+  baseSha: string,
+): Promise<string[]> {
+  assertSha(baseSha);
+  const entries = parseRawDiffZ(
+    await runGit(run, worktreeDir, "git diff --raw", [
+      "diff",
+      "--cached",
+      "--raw",
+      "-z",
+      "--no-renames",
+      "--no-ext-diff",
+      "--ignore-submodules=none",
+      baseSha,
+      "--",
+    ]),
+  );
+  return entries.map((entry) => entry.path);
 }
 
 /**

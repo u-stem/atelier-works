@@ -885,6 +885,49 @@ describe("guardCiRoundReasons", () => {
   });
 });
 
+describe("guardCiRoundReasons with extra text to scan", () => {
+  const clean = async () => ({ ok: true, output: "" });
+
+  test("runs the scan for the extra text when there is no reason", async () => {
+    let scanned = false;
+    await guardCiRoundReasons([], async () => {
+      scanned = true;
+      return { ok: true, output: "" };
+    }, ["tests/new.test.ts"]);
+    expect(scanned).toBe(true);
+  });
+
+  test("returns no reason when the extra text is clean", async () => {
+    expect(await guardCiRoundReasons([], clean, ["tests/new.test.ts"])).toEqual(
+      [],
+    );
+  });
+
+  test("replaces the reasons with a fixed sentence when only the extra text is found", async () => {
+    expect(
+      await guardCiRoundReasons(
+        [],
+        async () => ({ ok: false, output: "finding" }),
+        ["tests/new.test.ts"],
+      ),
+    ).toEqual([CI_ROUND_REASONS_WITHHELD]);
+  });
+
+  test("does not put the extra text in the returned reasons", async () => {
+    expect(
+      await guardCiRoundReasons(["not a regular file: a"], clean, ["b.ts"]),
+    ).toEqual(["not a regular file: a"]);
+  });
+
+  test("replaces the reasons when the scan of the extra text fails", async () => {
+    expect(
+      await guardCiRoundReasons([], async () => {
+        throw new Error("gitleaks crashed");
+      }, ["tests/new.test.ts"]),
+    ).toEqual([CI_ROUND_REASONS_WITHHELD]);
+  });
+});
+
 describe("removeIgnoredFilesIfPointerIntact", () => {
   test("removes the ignored files when the pointer is intact", async () => {
     const calls: string[] = [];
