@@ -26,7 +26,7 @@ locks:
   f/factory/lib/ci_fix_classify: 3c7afb89715cb5a2ede49d499c473aef0facb8503b5c495d4b94b3714d2845a7
   f/factory/lib/ci_fix_paths: d5b9f024ed7497f3f70ba822b1d54a1f0c325e459633560675af76bd60ef1d07
   f/factory/lib/ci_fix_prompt: cc1dd1b059b33173764b76cee0a0bea1127ee88e642e93ef4f23b928af25609c
-  f/factory/lib/ci_fix_round: 1d5ea428b4ec9580cef1d50a13a98a5fb3d163f32c2ed281d09a874e1341ff6b
+  f/factory/lib/ci_fix_round: 9846bb1e890740a4742ca643e00b3afdd864ba620e73b0981a8ee16e73a20935
   f/factory/lib/ci_log_support: 0c079813679b394691042182d5adfa552dcc12cd38836f04c74930af40b7dc69
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 0da701e30c732878371ee7b96d96d343173e230deef982fad82300a201c9fa0c
@@ -111,11 +111,11 @@ locks:
   f/factory/steps/pipeline_generate: 32db3d8e2ded0b0731c98fba812e66f35cf681681663626b8fb9ab0060e6a8a6
   f/factory/steps/pipeline_prepare: 2fce173e13f4f049ae07595e86307c8bb178afb9399ff4acbdb6b9bae8e48f5b
   f/factory/steps/pipeline_request_approval: 88bd1e6f549cc625287c0dfbb26d0c09d47c13634b5f266e292794babff9c19c
-  f/factory/steps/pr_fix_apply: 683d59e94b89225f2dcc74e952e6cdab17dcea7963014f1321655888ceb815b8
+  f/factory/steps/pr_fix_apply: bb0530fa9d9405a1509d7c1ff448d372a11b00532dbf4b7eb388f6b30e39a200
   f/factory/steps/pr_fix_collect: b5c3ca56575599535cd9e07dfa1287884a62572b26059b7556603d6953511c74
   f/factory/steps/pr_fix_finish: 87b2373fa84f8367a3905d73f19f948f44ac69b93b3898d181018d7638ef642e
   f/factory/steps/pr_fix_prepare: 97c904f02cdaa6acddbc87256537967741a0510b74cbbee0bceee7d36274d187
-  f/factory/steps/pr_fix_verify: 7b2fc7177e0adfd4d544ec3f0a33e7ba7ea059a506e92246101bd0347ca9167d
+  f/factory/steps/pr_fix_verify: 7bbf8e73adb41e8158d987c76a83a15287c01e70ce554432da6d4dd643e79885
   f/factory/steps/pr_review_generate: 5eb09c684bec123f215242166762ef6b2946726bc72929a82f7d3b884a189a1b
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 7a0b3a341ca4c56ebc34aceb8411a3aaaa23367f408fd17091b6d8886a8656d1

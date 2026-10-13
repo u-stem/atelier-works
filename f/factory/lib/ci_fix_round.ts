@@ -64,6 +64,24 @@ export const CI_ROUND_REPLIES_REASON = `${REASON_PREFIX}: the output of Claude c
 /** 止める理由が秘密値の検査に当たったときに、理由の代わりに返す固定の文。 */
 export const CI_ROUND_REASONS_WITHHELD = `${REASON_PREFIX}: the reasons for stopping matched the secret scan`;
 
+/**
+ * CI回のClaudeが使えるツール。ファイルの読み取り、検索、編集に限り、`Bash`は含めない。
+ * ログに書かれた指示で、コマンドを実行させないためである。検査コマンドはflowが実行する。
+ */
+export const CI_FIX_TOOLS: readonly string[] = [
+  "Read",
+  "Glob",
+  "Grep",
+  "Edit",
+  "Write",
+];
+
+/**
+ * CI回のClaudeに、確認なしで許すツール。`CI_FIX_TOOLS`の部分集合である。
+ * 実測では、`dontAsk`だけだと編集と書き込みが拒否され、この2つを許したときだけ通った。
+ */
+export const CI_FIX_ALLOWED_TOOLS: readonly string[] = ["Edit", "Write"];
+
 /** CI回のgitleaksの1回あたりのタイムアウト(ミリ秒)。1回のCI回で最大5回走る。 */
 export const CI_FIX_GITLEAKS_TIMEOUT_MS = 2 * 60_000;
 

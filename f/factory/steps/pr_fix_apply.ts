@@ -7,6 +7,8 @@ import { readFile } from "node:fs/promises";
 import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
 import {
   buildCiGatherDeps,
+  CI_FIX_ALLOWED_TOOLS,
+  CI_FIX_TOOLS,
   ciClaudeFailureText,
   ciTextScanner,
   gatherCiFailureInput,
@@ -343,10 +345,10 @@ async function applyCiRound(
           appendSystemPromptFile: systemPrompt.path,
           jsonSchema: CI_FIX_SCHEMA,
           isStructuredOutput: isCiFixClaudeOutput,
-          tools: ["Read", "Glob", "Grep", "Edit", "Write"],
+          tools: CI_FIX_TOOLS,
           // 通常の回と同じ許可の組み合わせ。Bashは渡さない。
           permissionMode: "dontAsk",
-          allowedTools: ["Edit", "Write"],
+          allowedTools: CI_FIX_ALLOWED_TOOLS,
           settingSources: ["user"],
           maxTurns: config.max_turns,
           maxBudgetUsd: config.max_budget_usd_per_run,
