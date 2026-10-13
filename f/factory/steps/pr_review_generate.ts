@@ -166,7 +166,7 @@ export async function main(
   // 最初のレビューではスレッドがまだ無いので空になる。
   const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
 
-  // 直近のpr_fixがCIの失敗を直した回なら、その差分を重点的に見るようプロンプトに加える。
+  // レビューするcommitが、CI回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
   // 値はDBから決めた真偽値だけで、PRの内容からは決めない。
   // 問い合わせに失敗しても通常のレビューは止めない。偽に倒して警告を残す。
   const ciRoundDiff = await ciRoundDiffOrFalse(
