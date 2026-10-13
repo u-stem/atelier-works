@@ -6,6 +6,7 @@
 
 観測と通知だけを行う。PRとリポジトリへは書き込まず、ワークフローのログも読まない。
 作業項目の状態、終端、リードタイムには触れない。記録は`factory.pr_ci_checks`だけに残す。
+失敗を直す作業項目が終わった行を戻す回復も、`pr_ci_checks`の行だけを書き換える。
 監視の単位は、PRの今のheadのコミットである。行は`(owner, repo, pr_number, head_sha)`で一意になる。
 通知には、PR、コミットの先頭7文字、理由コード、次の操作、実行のURLだけを載せる。
 
@@ -35,7 +36,7 @@
 | `expired` | 未完了のまま最古の実行から2時間たったか、読めないまま24時間たった。終端 | しない |
 | `no_ci` | 実行が現れないまま15分たった。実行が現れれば読み直す | しない |
 | `observed` | 遷移表にはあるが、この監視は使わない | しない |
-| `fixing` | 失敗を直す作業項目の結果待ち。`claimPrCiCheckForFix`だけが`failed`から移す。この監視は判定で読まない | しない |
+| `fixing` | 失敗を直す作業項目の結果待ち。`claimPrCiCheckForFix`だけが`failed`から移す。判定で実行を読み直さず、回復が行き先を決める | しない |
 
 遷移は`canTransitionPrCi`が定める。更新は`WHERE state = <移る前の状態>`の条件付きで、別の実行が先に移した行は書き換えない。
 `transitionPrCiCheck`は`fixing`への移行を拒否し、`claimPrCiCheckForFix`だけが行う。
@@ -94,6 +95,77 @@ ownerとrepoは、行との照合では小文字で比べる。
 
 `fixing`の行は、掃除(`deletePrCiChecksBefore`)が削除しない。
 `touchPrCiCheck`は`fixing`の行も読み直した時刻を進める。
+
+## 保留の理由の語彙
+
+`fix_hold_reason`に書く値は、`lib/pr_ci_support.ts`の`PR_CI_FIX_HOLD_REASONS`の12個に限る。
+DBの検査は長さだけなので、書く側をこの型で縛る。
+値ごとの性質と、人が次にすることの固定文は`prCiFixHoldInfo`が返す。
+決定的な理由は、同じheadでは起動し直さない。headが進んで新しい行になるまで残る。
+一時的な理由は、解けたら自動で外す。
+
+| 理由 | 種類 | 意味 |
+| --- | --- | --- |
+| `unfixable_job` | 決定的 | 失敗したジョブが、ソースの編集では直せない種類(metadataなど) |
+| `other_conclusion` | 決定的 | 失敗ではなく、取り消しや期限切れなどで終わった |
+| `log_unavailable` | 決定的 | 失敗のログを読めない |
+| `marker_missing` | 決定的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない |
+| `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま止まった |
+| `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
+| `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
+| `main_ci_failed` | 一時的 | mainのCIが赤い |
+| `budget_exceeded` | 一時的 | 日次の予算を使い切った |
+| `not_reviewed` | 一時的 | 今のheadの自動レビューがまだ無い |
+| `last_fix_unsettled` | 一時的 | 直近の直す作業項目が、成功で終わっていない |
+| `pr_draft_or_auto_merge` | 一時的 | PRがドラフトか、auto-mergeが有効である |
+
+noticeを出す時機は、決定的な理由なら保留した時点、一時的な理由なら保留が続いたときである。
+一時的な保留は、解ければ何も知らせずに済むためである。
+Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr_fix_finish`がすでに送っているので、noticeだけにする。
+
+## 回復
+
+回復は、直す作業項目が終わったのに`fixing`のまま残る行を、`failed`か`superseded`に戻す。
+作業項目は行を戻さないので、監視が戻す。戻さないと、同じPRへの`factory:fix`が、終わった作業項目の行に止められ続ける。
+回復は発見の後、判定の前に行い、設定`pr_ci_watch_enabled`が`false`でも動く。
+作業項目の起動はしない。
+対象は、`listFixingPrCiChecks`が返す行と、`findOrphanFixingPrCiChecks`が返す行を合わせたものである。
+前者は最大100件、後者は最大50件を、読み直していない順に取る。
+作業項目に結ばれていない行(`fix_work_item_id`が空)は、`updated_at`から10分以上たったものだけを扱う。起動の直後の行を戻さないためである。
+
+行ごとに、作業項目の状態を先に読み、PRのheadを後で読む(`decideFixingRecovery`)。
+先にPRのheadを読むと、読んでいる間に作業項目がpushした場合に、古いheadの行を`failed`に戻してしまうためである。
+
+| 作業項目 | 行の行き先 |
+| --- | --- |
+| 動いている(終端でない) | そのままにする。読み直した時刻だけを進める |
+| pushした(`rereview_requested`か、直す回がpushしたcommitを記録している) | `superseded`にする。PRのheadは読まない。headの読み遅れで、古いheadの行を起動し直さないためである |
+| 存在しない、`failed`、`cancelled`、`expired` | 保留なしで`failed`に戻す |
+| `blocked`か`needs_human` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ`fix_stopped`にする |
+| イメージが古くて`blocked`になった | 止まってから24時間は戻さない。24時間後に保留なしで戻す。イメージを作り直す人に、その間の猶予を与える |
+
+`failed`などに戻す前に、PRのheadを読む。
+headが行のheadと違えば、戻さず`superseded`にする。PRが閉じていれば、閉じたPRの整理に任せる。
+rate limitと権限の不足で読めない回は、行を動かさず、読み直した時刻だけを進める。
+許可リストから外れたリポジトリは読まない。headが動いていても、戻した`failed`の行を、続く判定が`superseded`にする。
+
+止めた理由を保留の理由に写すのは、固定文への先頭一致か完全一致だけである(`holdReasonForStoppedItem`)。
+部分一致は使わない。Claudeの出力は、止めた理由の中で`ci round: claude blocked:`の接頭辞の後ろに置かれ、固定文と一致しない。
+固定文の前後に別の文字列が付いた理由も、一致しない。
+そのため、Claudeやログに由来する文字列では、保留の理由を選べない。
+写す固定文は、`lib/ci_fix_round.ts`の`CI_ROUND_DETAILS`が止める側と共有する。
+
+| 止めた理由 | 保留の理由 |
+| --- | --- |
+| スキルにCI回のマーカーが無い | `marker_missing` |
+| ジョブがソースの編集では直せない種類 | `unfixable_job` |
+| ジョブが失敗でなく、ほかの結論で終わった | `other_conclusion` |
+| トークンがログを読めない、ログが取得できない | `log_unavailable` |
+| 日次予算の超過 | `budget_exceeded` |
+| PRがドラフトか、auto-mergeが有効 | `pr_draft_or_auto_merge` |
+
+`cancelled`と`expired`の作業項目の行は、保留なしで戻すので、直す作業を起動し直せる。
+直す回数の上限(`pr_ci_fix_max_rounds`)が、起動し直しの歯止めになる。
 
 ## 失敗を直す設定
 

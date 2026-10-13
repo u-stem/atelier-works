@@ -284,7 +284,7 @@ schema:
     pr_ci_watch_enabled:
       type: boolean
       description: >-
-        FactoryのPRのCIを観測して、失敗を通知するかどうかです。観測と通知だけで、PRにもリポジトリにも書き込みません。falseにすると、`watch_pr_ci`は何も読まずに終わります。
+        FactoryのPRのCIを観測して、失敗を通知するかどうかです。観測と通知だけで、PRにもリポジトリにも書き込みません。falseにすると、`watch_pr_ci`は発見と判定と通知をしません。失敗を直す作業項目が終わった行を戻す回復だけは、行があれば動きます。
       default: true
     repo_allowlist:
       type: array

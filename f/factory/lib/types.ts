@@ -1000,6 +1000,7 @@ export type FactoryConfig = {
   /**
    * `watch_pr_ci`がFactoryのPRのCIを観測して通知するか。
    * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。
+   * `false`でも、直す作業項目が終わった行を戻す回復は動く。
    */
   pr_ci_watch_enabled: boolean;
   /**

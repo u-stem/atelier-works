@@ -58,6 +58,25 @@ const REASON_PREFIX = CI_ROUND_REASON_PREFIX;
 /** factory-fixスキルが、CI回の節を持つことを示す固定のマーカー。 */
 export const CI_FIX_SKILL_MARKER = "ci-fix-skill:v1";
 
+/**
+ * 修正の前に止める理由のうち、`watch_pr_ci`が保留の理由(`fix_hold_reason`)に写すものの固定文。
+ * 接頭辞の`ci round: `は含まない。止める側(`ciRoundReason`)と写す側が同じ文を使うので、
+ * 片方だけを変えて写せなくなることがない。
+ * `unfixableJob`と`otherConclusion`は、後ろに分類の詳細が続くので、固定の前半だけを持つ。
+ */
+export const CI_ROUND_DETAILS = {
+  markerMissing: `the factory-fix skill lacks the ${CI_FIX_SKILL_MARKER} marker`,
+  unfixableJob: "the failed CI job cannot be fixed by editing the source (",
+  otherConclusion: "the CI job did not fail but ended with ",
+  tokenCannotReadLog: "the token cannot read the CI job log",
+  logUnavailable: "the CI job log is unavailable",
+} as const;
+
+/** 固定文`detail`に接頭辞を付けた、CI回の止める理由。 */
+export function ciRoundReason(detail: string): string {
+  return `${REASON_PREFIX}: ${detail}`;
+}
+
 /** CI回のClaudeの出力が返信を持つときの理由。返信を持つ出力は受け付けない。 */
 export const CI_ROUND_REPLIES_REASON = `${REASON_PREFIX}: the output of Claude carries replies`;
 
@@ -261,8 +280,9 @@ export function ciRoundVerifyTimeoutMisfit(
 
 /**
  * `retry_work_item`が、CI回の`pr_fix`を再開しない理由を返す。再開してよければnull。
- * CI回は、`watch_pr_ci`が失敗の行を見て自動で評価し直す。
- * 人が作業項目だけを再開しても、行は`fixing`のまま食い違うため。
+ * 人が作業項目だけを再開しても、失敗の行は`fixing`のまま食い違うため。
+ * 回が終わると、`watch_pr_ci`が行を`failed`に戻す。戻した後は、保留の理由が一時的なら自動で起動し直し、
+ * そうでなければ、PRにpushしてheadが変わるまで同じ失敗を起動し直さない。
  */
 export function ciRoundRetryRefusal(item: {
   readonly id: number;
@@ -270,7 +290,7 @@ export function ciRoundRetryRefusal(item: {
   readonly ci_check_id: number | null;
 }): string | null {
   if (item.kind !== "pr_fix" || item.ci_check_id === null) return null;
-  return `retry_work_item: work item ${String(item.id)} is a CI round; CI rounds are re-evaluated automatically when the CI failure is still there, so it was not restarted`;
+  return `retry_work_item: work item ${String(item.id)} is a CI round; it was not restarted because the CI check row would stay fixing. watch_pr_ci returns the row to failed when the round ends, and a push to the PR makes the failure new`;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,14 +469,10 @@ export async function gatherCiFailureInput(
   }
   const verdict = classifyCiFailure(jobs);
   if (verdict.kind === "unfixable_job") {
-    return blocked(
-      `the failed CI job cannot be fixed by editing the source (${verdict.reason})`,
-    );
+    return blocked(`${CI_ROUND_DETAILS.unfixableJob}${verdict.reason})`);
   }
   if (verdict.kind === "other_conclusion") {
-    return blocked(
-      `the CI job did not fail but ended with ${verdict.conclusion}`,
-    );
+    return blocked(`${CI_ROUND_DETAILS.otherConclusion}${verdict.conclusion}`);
   }
   if (verdict.kind === "no_failure") {
     return blocked("no failed job in the failed runs");
@@ -467,10 +483,10 @@ export async function gatherCiFailureInput(
   for (const failed of verdict.jobs.slice(0, logSlots)) {
     const log = await deps.getLog(failed.id);
     if (log.kind === "forbidden") {
-      return blocked("the token cannot read the CI job log");
+      return blocked(CI_ROUND_DETAILS.tokenCannotReadLog);
     }
     if (log.kind === "log_unavailable") {
-      return blocked("the CI job log is unavailable");
+      return blocked(CI_ROUND_DETAILS.logUnavailable);
     }
     ciJobs.push({
       name: failed.name,
@@ -615,7 +631,7 @@ export async function runCiFixApply(
   if (!hasCiFixSkillMarker(await deps.readSkillText())) {
     return {
       kind: "blocked",
-      reason: `${REASON_PREFIX}: the factory-fix skill lacks the ${CI_FIX_SKILL_MARKER} marker`,
+      reason: ciRoundReason(CI_ROUND_DETAILS.markerMissing),
     };
   }
   const gathered = await deps.gather();

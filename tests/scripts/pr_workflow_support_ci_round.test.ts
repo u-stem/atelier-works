@@ -5,6 +5,7 @@ import {
   CI_ROUND_REPLIES_REASON,
   ciClaudeFailureText,
 } from "../../f/factory/lib/ci_fix_round.ts";
+import { prCiFixHoldInfo } from "../../f/factory/lib/pr_ci_support.ts";
 import {
   describeReason,
   nextActionFor,
@@ -12,7 +13,10 @@ import {
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const NEXT_ACTION =
-  "CIの再評価を待ってください。直らなければ、人が修正してください";
+  "原因を確かめて人が直してから、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
+const PUSH =
+  "PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
+const WAIT = "Factoryが自動で評価し直すのを待ってください";
 
 describe("describeReason for a CI round", () => {
   test("describes a fixed reason of the gather step", () => {
@@ -59,10 +63,55 @@ describe("describeReason for a CI round", () => {
 });
 
 describe("nextActionFor a CI round", () => {
-  test("waits for the re-evaluation instead of a retry", () => {
+  test("gives the action of the hold reason for a fixed reason of the gather step", () => {
     expect(nextActionFor("ci round: the CI job log is unavailable")).toBe(
-      NEXT_ACTION,
+      prCiFixHoldInfo("log_unavailable").nextAction,
     );
+  });
+
+  test("gives the action of the hold reason for a missing skill marker", () => {
+    expect(
+      nextActionFor(
+        "ci round: the factory-fix skill lacks the ci-fix-skill:v1 marker",
+      ),
+    ).toBe(prCiFixHoldInfo("marker_missing").nextAction);
+  });
+
+  test("gives the action of the hold reason for a job that cannot be fixed", () => {
+    expect(
+      nextActionFor(
+        "ci round: the failed CI job cannot be fixed by editing the source (metadata job)",
+      ),
+    ).toBe(prCiFixHoldInfo("unfixable_job").nextAction);
+  });
+
+  test("gives the action of the hold reason for another conclusion", () => {
+    expect(
+      nextActionFor(
+        "ci round: the CI job did not fail but ended with cancelled",
+      ),
+    ).toBe(prCiFixHoldInfo("other_conclusion").nextAction);
+  });
+
+  test("gives the action of the hold reason for a log the token cannot read", () => {
+    expect(
+      nextActionFor("ci round: the token cannot read the CI job log"),
+    ).toBe(prCiFixHoldInfo("log_unavailable").nextAction);
+  });
+
+  test("gives the action of the hold reason in a CI round of the pr_fix flow", () => {
+    expect(
+      nextActionForPrFix("ci round: the CI job log is unavailable", true),
+    ).toBe(prCiFixHoldInfo("log_unavailable").nextAction);
+  });
+
+  test("does not give the action of a hold reason that Claude repeats", () => {
+    expect(
+      nextActionFor(
+        "ci round: claude blocked: the CI job log is unavailable",
+        "pr_fix",
+      ),
+    ).toBe(NEXT_ACTION);
   });
 
   test("uses the same action for a change that is not allowed", () => {
@@ -85,21 +134,21 @@ describe("nextActionForPrFix", () => {
     );
   });
 
-  test("waits for the re-evaluation when a CI round ends with an unknown reason", () => {
+  test("asks for a push when a CI round ends with an unknown reason", () => {
     expect(nextActionForPrFix("unknown failure", true)).toBe(NEXT_ACTION);
   });
 
-  test("waits for the re-evaluation when a CI round has nothing to commit", () => {
+  test("asks for a push when a CI round has nothing to commit", () => {
     expect(nextActionForPrFix("no changes to commit", true)).toBe(NEXT_ACTION);
   });
 
-  test("keeps the procedure of a draft pull request and waits for the re-evaluation", () => {
+  test("keeps the procedure of a draft pull request and waits for the automatic re-evaluation", () => {
     expect(nextActionForPrFix("pull request is a draft", true)).toBe(
-      "ドラフトを解除してから、CIの再評価を待ってください",
+      `ドラフトを解除してから、${WAIT}`,
     );
   });
 
-  test("waits for the re-evaluation when the PR head moved during the fix", () => {
+  test("asks for a push when the PR head moved during the fix", () => {
     expect(
       nextActionForPrFix(
         "PR head moved to abc123 while the fix was in progress",
@@ -108,19 +157,19 @@ describe("nextActionForPrFix", () => {
     ).toBe(NEXT_ACTION);
   });
 
-  test("waits for the re-evaluation when the worktree git pointer was not recorded", () => {
+  test("asks for a push when the worktree git pointer was not recorded", () => {
     expect(
       nextActionForPrFix("worktree git pointer was not recorded", true),
     ).toBe(NEXT_ACTION);
   });
 
-  test("waits for the re-evaluation when the PR head was not recorded", () => {
+  test("asks for a push when the PR head was not recorded", () => {
     expect(nextActionForPrFix("PR head was not recorded", true)).toBe(
       NEXT_ACTION,
     );
   });
 
-  test("waits for the re-evaluation when Claude blocked with a reason that points to a retry", () => {
+  test("asks for a push when Claude blocked with a reason that points to a retry", () => {
     expect(nextActionForPrFix("head branch state is unavailable", true)).toBe(
       NEXT_ACTION,
     );
@@ -148,7 +197,7 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
 
   test("keeps the procedure of a busy worktree", () => {
     expect(nextActionForPrFix(BUSY, true)).toBe(
-      "理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、CIの再評価を待ってください",
+      `理由に載ったプロセスが終わるのを待つか、workerのコンテナでそのプロセスを止めてから、${PUSH}`,
     );
   });
 
@@ -158,7 +207,7 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
 
   test("keeps the procedure of a failed ownership restore", () => {
     expect(nextActionForPrFix(OWNERSHIP, true)).toBe(
-      "運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、CIの再評価を待ってください",
+      `運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、${PUSH}`,
     );
   });
 
@@ -170,7 +219,7 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
 
   test("keeps the procedure of a stale worker image", () => {
     expect(nextActionForPrFix(STALE_IMAGE, true)).toBe(
-      "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、CIの再評価を待ってください",
+      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、${WAIT}(止まってから24時間後に評価し直します)`,
     );
   });
 
@@ -186,7 +235,7 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
 
   test("keeps the procedure of a lock held by a process of the run", () => {
     expect(nextActionForPrFix(LOCK_HELD, true)).toBe(
-      "検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、CIの再評価を待ってください",
+      `検査コマンドが常駐プロセスを残していないか確かめ、残っていればworkerのコンテナで止めてから、${PUSH}`,
     );
   });
 
@@ -198,7 +247,7 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
 
   test("keeps the procedure of a moved local HEAD", () => {
     expect(nextActionForPrFix("local HEAD a is not the PR head b", true)).toBe(
-      "検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、CIの再評価を待ってください",
+      `検査コマンドがコミットやブランチの切り替えをしていないか確かめて人が直してから、${PUSH}`,
     );
   });
 
@@ -206,7 +255,7 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
     expect(
       nextActionForPrFix("worktree changed after the secret scan", true),
     ).toBe(
-      "検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、CIの再評価を待ってください",
+      `検査コマンドなどが残したプロセスがworktreeを書き換えていないか確かめ、${PUSH}`,
     );
   });
 
@@ -224,7 +273,7 @@ describe("nextActionForPrFix keeps the procedure of a gate reason in a CI round"
   test("keeps the procedure of auto-merge and waits for the re-evaluation", () => {
     expect(
       nextActionForPrFix("pull request has auto-merge enabled", true),
-    ).toBe("PRのauto-mergeを無効にしてから、CIの再評価を待ってください");
+    ).toBe(`PRのauto-mergeを無効にしてから、${WAIT}`);
   });
 
   test("keeps the review-round action of auto-merge", () => {
@@ -238,24 +287,24 @@ describe("nextActionForPrFix keeps the procedure of a gate reason in a CI round"
   test("keeps the procedure of a diff that has too many files", () => {
     expect(
       nextActionForPrFix("changed file count 31 exceeds max_files 30", true),
-    ).toBe("変更を分割するか、上限を見直してから、CIの再評価を待ってください");
+    ).toBe(`変更を分割するか、上限を見直してから、${PUSH}`);
   });
 
   test("keeps the procedure of a diff that has too many lines", () => {
     expect(
       nextActionForPrFix("diff line total 900 exceeds max_lines 800", true),
-    ).toBe("変更を分割するか、上限を見直してから、CIの再評価を待ってください");
+    ).toBe(`変更を分割するか、上限を見直してから、${PUSH}`);
   });
 
   test("keeps the procedure of the generic safety guard reason", () => {
     expect(nextActionForPrFix("safety guard failed", true)).toBe(
-      "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、CIの再評価を待ってください",
+      `通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、${PUSH}`,
     );
   });
 
   test("keeps the procedure of the generic human attention reason", () => {
     expect(nextActionForPrFix("needs human attention", true)).toBe(
-      "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、CIの再評価を待ってください",
+      `通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、${PUSH}`,
     );
   });
 });

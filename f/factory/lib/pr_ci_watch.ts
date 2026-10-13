@@ -2,6 +2,8 @@
 // 発見(Factoryが作ったPRの今のheadを記録し、古いheadの行を整理する)の後に、
 // 判定(判定待ち、失敗、実行なしの行を読み直して確定する)を行う。
 // 失敗は通知し、通ったheadはそのPRの失敗の通知を解決し、閉じたPRの行は整理する。
+// 発見と判定の間に、回復(失敗を直す作業項目が終わった`fixing`の行を戻す)を行う。回復は監視の設定に依らず動き、
+// 作業項目の起動はしない(`runPrCiRecovery`)。
 // GitHub、DB、Discordの呼び出しは`PrCiWatchDeps`で渡し、テストで差し替える。
 // 外部の文字列(workflow名、実行の結論、ログ)は、通知の本文にもDiscordにも載せない。
 // 要約(`summary`列)にだけ、検証・整形した名前を残す。
@@ -23,12 +25,17 @@ import {
 import type { Logger } from "./log.ts";
 import type { WorkflowRun } from "./main_ci_support.ts";
 import {
+  decideFixingRecovery,
+  type FixItemState,
+} from "./pr_ci_fix_recovery.ts";
+import {
   classifyPrCiReason,
   decidePrCiFailed,
   decidePrCiPending,
   type FactoryWorkItemRef,
   isFactoryPrBranch,
   PR_CI_FAILED_KIND,
+  type PrCiFixHoldReason,
   type PrCiState,
   type PullRequestRef,
   parsePullRequestUrl,
@@ -67,6 +74,12 @@ export const FAILED_BATCH_LIMIT = 100;
 
 /** 1回の実行で読み直す、実行なし(`no_ci`)の行の最大の数。 */
 export const NO_CI_BATCH_LIMIT = 50;
+
+/** 1回の実行で回復の対象にする、修正中(`fixing`)の行の最大の数。 */
+export const FIXING_BATCH_LIMIT = 100;
+
+/** 1回の実行で回復の対象にする、直す作業項目に結ばれていない修正中の行の最大の数。 */
+export const ORPHAN_FIXING_BATCH_LIMIT = 50;
 
 /**
  * 実行なし(`no_ci`)の行を読み直す間隔。
@@ -189,6 +202,23 @@ export type PrCiWatchDeps = {
     checkedBefore: Date,
     limit: number,
   ) => Promise<PrCiCheck[]>;
+  /** 修正中(`fixing`)の行を、読み直していない順に返す。 */
+  readonly listFixing: (limit: number) => Promise<PrCiCheck[]>;
+  /** 直す作業項目に結ばれていない修正中の行を返す(`findOrphanFixingPrCiChecks`)。 */
+  readonly listOrphanFixing: (limit: number) => Promise<PrCiCheck[]>;
+  /** 直す作業項目の状態を返す。作業項目が無ければ`null`。 */
+  readonly readFixItem: (workItemId: number) => Promise<FixItemState | null>;
+  /**
+   * 修正中の行を`failed`に戻す。この呼び出しで戻したら`true`。
+   * `fixWorkItemId`を渡せば、その作業項目に結ばれた行だけを戻す。
+   */
+  readonly release: (
+    id: number,
+    options: {
+      readonly holdReason?: PrCiFixHoldReason;
+      readonly fixWorkItemId?: number;
+    },
+  ) => Promise<boolean>;
   /** 条件付きの更新。この呼び出しで移したら`true`。 */
   readonly transition: (
     id: number,
@@ -220,6 +250,8 @@ export type PrCiWatchResult = {
   readonly superseded: number;
   readonly expired: number;
   readonly no_ci: number;
+  /** 回復で`fixing`から`failed`に戻した行の数。 */
+  readonly released: number;
   /** 実行かPRを読む権限が無かったリポジトリの数。 */
   readonly denied: number;
   /** 例外で処理できなかった数。 */
@@ -235,6 +267,7 @@ export const PR_CI_WATCH_IDLE_RESULT: PrCiWatchResult = {
   superseded: 0,
   expired: 0,
   no_ci: 0,
+  released: 0,
   denied: 0,
   errors: 0,
 };
@@ -331,7 +364,27 @@ function oldestRunTime(runs: readonly WorkflowRun[]): Date | null {
 export async function runPrCiWatch(
   deps: PrCiWatchDeps,
 ): Promise<PrCiWatchResult> {
-  const context: Context = {
+  const context = newContext(deps);
+  await discover(context);
+  await recoverFixing(context);
+  await recheck(context);
+  return context.counters;
+}
+
+/**
+ * 回復だけを行う。監視を無効にしている間も、修正中の行を放置しないために使う。
+ * 発見も判定も通知もしない。作業項目の起動もしない。
+ */
+export async function runPrCiRecovery(
+  deps: PrCiWatchDeps,
+): Promise<PrCiWatchResult> {
+  const context = newContext(deps);
+  await recoverFixing(context);
+  return context.counters;
+}
+
+function newContext(deps: PrCiWatchDeps): Context {
+  return {
     deps,
     now: deps.now(),
     counters: { ...PR_CI_WATCH_IDLE_RESULT },
@@ -344,9 +397,6 @@ export async function runPrCiWatch(
       closedPrs: new Set(),
     },
   };
-  await discover(context);
-  await recheck(context);
-  return context.counters;
 }
 
 // ---------------------------------------------------------------------------
@@ -575,6 +625,144 @@ async function closePr(context: Context, ref: PullRequestRef): Promise<void> {
     }
   }
   state.closedPrs.add(key);
+}
+
+// ---------------------------------------------------------------------------
+// 回復
+// ---------------------------------------------------------------------------
+
+/**
+ * 回復の対象の行。修正中の行に、直す作業項目に結ばれていない行を足して、重複を除く。
+ * 作業項目に結ばれていない行は、`updated_at`から10分以上たったもの(`listOrphanFixing`)に限る。
+ * 起動の直後の行を、起動の途中として戻さないためである。
+ */
+function mergeFixingRows(
+  fixing: readonly PrCiCheck[],
+  orphans: readonly PrCiCheck[],
+): PrCiCheck[] {
+  const orphanIds = new Set(orphans.map((row) => row.id));
+  const seen = new Set<number>();
+  const rows: PrCiCheck[] = [];
+  for (const row of [...fixing, ...orphans]) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    if (row.fix_work_item_id === null && !orphanIds.has(row.id)) continue;
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
+ * 直す作業項目が終わった修正中の行を、`failed`か`superseded`に戻す。
+ * 監視の設定に依らず、起動もしない。行き先は`decideFixingRecovery`が決める。
+ * 作業項目の状態を先に読み、その後でPRのheadを読む。
+ * 先にPRのheadを読むと、読んでいる間に作業項目がpushした場合に、古いheadの行を`failed`に戻してしまうためである。
+ * 例外は行ごとに捕まえ、読み直した時刻を進めて、後ろの行が飢えないようにする。
+ */
+async function recoverFixing(context: Context): Promise<void> {
+  const { deps } = context;
+  let rows: PrCiCheck[];
+  try {
+    const fixing = await deps.listFixing(FIXING_BATCH_LIMIT);
+    const orphans = await deps.listOrphanFixing(ORPHAN_FIXING_BATCH_LIMIT);
+    rows = mergeFixingRows(fixing, orphans);
+  } catch (err) {
+    await recordFailureOf(context, "list_fixing", err);
+    return;
+  }
+  for (const [index, row] of rows.entries()) {
+    if (overBudget(context)) {
+      deps.log.warn("pr ci recovery stopped by the time budget", {
+        left: rows.length - index,
+      });
+      break;
+    }
+    try {
+      await recoverRow(context, row);
+    } catch (err) {
+      await recordFailureOf(
+        context,
+        `recover_fixing:${prKey(rowRef(row))}`,
+        err,
+      );
+      await touchSafely(context, row);
+    }
+  }
+}
+
+async function recoverRow(context: Context, row: PrCiCheck): Promise<void> {
+  const { deps, counters } = context;
+  const ref = rowRef(row);
+  const item =
+    row.fix_work_item_id === null
+      ? null
+      : await deps.readFixItem(row.fix_work_item_id);
+  const decision = decideFixingRecovery(item, context.now);
+  if (decision.kind === "keep") {
+    await touchSafely(context, row);
+    return;
+  }
+  if (decision.kind === "pushed") {
+    await supersede(context, row);
+    return;
+  }
+  const head = await readFixingHead(context, row, ref);
+  if (head === "unread") {
+    await touchSafely(context, row);
+    return;
+  }
+  if (head === "closed") {
+    await closePr(context, ref);
+    return;
+  }
+  if (head === "moved") {
+    await supersede(context, row);
+    return;
+  }
+  const released = await deps.release(row.id, {
+    ...(decision.hold === null ? {} : { holdReason: decision.hold }),
+    ...(row.fix_work_item_id === null
+      ? {}
+      : { fixWorkItemId: row.fix_work_item_id }),
+  });
+  if (!released) return;
+  counters.released += 1;
+  deps.log.info("pr ci fixing row returned to failed", {
+    repo: repoKey(row),
+    pr: row.pr_number,
+    sha: row.head_sha,
+    hold: decision.hold,
+  });
+}
+
+/** 修正中の行のheadが、PRの今のheadかを、PRを読み直して調べる。 */
+type FixingHead =
+  | "same"
+  | "moved"
+  | "closed"
+  /** 今回は読めなかった(rate limitか権限の不足)。次の回に回す。 */
+  | "unread";
+
+/**
+ * 許可リストから外れたリポジトリは読まない。headが動いていても、戻した`failed`の行を
+ * 判定が`superseded`にするので、`same`として戻す。
+ */
+async function readFixingHead(
+  context: Context,
+  row: PrCiCheck,
+  ref: PullRequestRef,
+): Promise<FixingHead> {
+  const { deps, state } = context;
+  if (!deps.isRepoAllowed(ref.owner, ref.repo)) return "same";
+  if (state.rateLimited) return "unread";
+  try {
+    const pr = await readPr(context, ref);
+    if (pr.state === "closed") return "closed";
+    return pr.headSha === row.head_sha ? "same" : "moved";
+  } catch (err) {
+    if ((await absorbReadError(context, ref, err)) === null) throw err;
+    return "unread";
+  }
 }
 
 // ---------------------------------------------------------------------------

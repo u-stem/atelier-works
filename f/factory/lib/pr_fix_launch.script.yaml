@@ -1,0 +1,9 @@
+summary: '[LIB] pr_fixフローの起動'
+description: 内部ライブラリです。直接実行するものではありません。作業項目のpr_fixフローを起動し、ジョブIDを作業項目に記録します。
+lock: '!inline f/factory/lib/pr_fix_launch.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -22,6 +22,7 @@ import {
   PENDING_EXPIRES_AFTER_MS,
   type WorkflowRun,
 } from "../../f/factory/lib/main_ci_support.ts";
+import type { FixItemState } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import {
   type FactoryWorkItemRef,
   PR_CI_FAILED_KIND,
@@ -37,6 +38,7 @@ import {
   PR_CI_RESOLVED_BY,
   type PrCiWatchDeps,
   RUN_BUDGET_MS,
+  runPrCiRecovery,
   runPrCiWatch,
   UNREADABLE_EXPIRES_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_watch.ts";
@@ -161,6 +163,14 @@ type Setup = {
   pending?: PrCiCheck[];
   failed?: PrCiCheck[];
   noCi?: PrCiCheck[];
+  /** 修正中(`fixing`)の行。 */
+  fixing?: PrCiCheck[];
+  /** 直す作業項目に結ばれていない修正中の行。 */
+  orphans?: PrCiCheck[];
+  /** 作業項目のIDごとの状態。無い項目は存在しない作業項目として返す。 */
+  fixItems?: Record<number, FixItemState | Error>;
+  /** `release`が失敗する行のID。 */
+  releaseFailsFor?: number[];
   allowed?: (owner: string, repo: string) => boolean;
   /** 照合前の設定に合うか。省略すると、`allowed`と同じ結果にする。 */
   configured?: (owner: string, repo: string) => boolean;
@@ -206,6 +216,14 @@ type Harness = {
     options: PrHeadWorkflowRunsOptions;
   }[];
   readonly noCiQueries: { checkedBefore: Date; limit: number }[];
+  readonly released: {
+    readonly id: number;
+    readonly options: {
+      readonly holdReason?: string | undefined;
+      readonly fixWorkItemId?: number | undefined;
+    };
+  }[];
+  readonly fixItemReads: number[];
 };
 
 function asRuns(value: PrHeadWorkflowRuns | WorkflowRun[]): PrHeadWorkflowRuns {
@@ -228,6 +246,8 @@ function harness(setup: Setup = {}): Harness {
   const prCalls: string[] = [];
   const runCalls: Harness["runCalls"] = [];
   const noCiQueries: { checkedBefore: Date; limit: number }[] = [];
+  const released: Harness["released"] = [];
+  const fixItemReads: number[] = [];
   const prCursor = new Map<string, number>();
   let elapsedMs = 0;
   const log: Logger = {
@@ -289,6 +309,23 @@ function harness(setup: Setup = {}): Harness {
       noCiQueries.push({ checkedBefore, limit });
       return setup.noCi ?? [];
     },
+    listFixing: async () => setup.fixing ?? [],
+    listOrphanFixing: async () => setup.orphans ?? [],
+    readFixItem: async (workItemId) => {
+      events.push("read_fix_item");
+      fixItemReads.push(workItemId);
+      const found = setup.fixItems?.[workItemId];
+      if (found instanceof Error) throw found;
+      return found ?? null;
+    },
+    release: async (id, options) => {
+      events.push("release");
+      if (setup.releaseFailsFor?.includes(id) === true) {
+        throw new Error("release failed");
+      }
+      released.push({ id, options });
+      return true;
+    },
     transition: async (id, from, to) => {
       events.push("transition");
       transitions.push({ id, from, to });
@@ -349,6 +386,8 @@ function harness(setup: Setup = {}): Harness {
     prCalls,
     runCalls,
     noCiQueries,
+    released,
+    fixItemReads,
   };
 }
 
@@ -2206,5 +2245,362 @@ describe("buildRepoGates", () => {
         [acme],
       ).isRepoAllowed("other", "app"),
     ).toBe(false);
+  });
+});
+
+const FIXING_ID = 9;
+const FIX_ITEM_ID = 77;
+
+function fixingRow(overrides: Partial<PrCiCheck> = {}): PrCiCheck {
+  return row({
+    id: FIXING_ID,
+    state: "fixing",
+    fix_work_item_id: FIX_ITEM_ID,
+    fix_attempts: 1,
+    ...overrides,
+  });
+}
+
+function fixItem(
+  status: FixItemState["status"],
+  overrides: Partial<FixItemState> = {},
+): FixItemState {
+  return {
+    status,
+    updatedAt: minutesBefore(5),
+    note: null,
+    pushed: false,
+    ...overrides,
+  };
+}
+
+/** 修正中の行が1件あり、PRのheadが行のheadのままの設定。 */
+function fixingSetup(
+  item: FixItemState | Error | undefined,
+  overrides: Setup = {},
+): Setup {
+  return {
+    fixing: [fixingRow()],
+    prs: { [PR_KEY]: pr() },
+    ...(item === undefined ? {} : { fixItems: { [FIX_ITEM_ID]: item } }),
+    ...overrides,
+  };
+}
+
+describe("recovery of a fixing row", () => {
+  test("returns the row to failed when the work item failed", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([
+      { id: FIXING_ID, options: { fixWorkItemId: FIX_ITEM_ID } },
+    ]);
+  });
+
+  test("returns the row to failed when the work item does not exist", async () => {
+    const h = harness(fixingSetup(undefined));
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([
+      { id: FIXING_ID, options: { fixWorkItemId: FIX_ITEM_ID } },
+    ]);
+  });
+
+  test("holds the row as stopped when the work item is blocked", async () => {
+    const h = harness(
+      fixingSetup(fixItem("blocked", { note: "head branch is protected" })),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
+      "fix_stopped",
+    ]);
+  });
+
+  test("holds the row as stopped when the work item needs a human", async () => {
+    const h = harness(fixingSetup(fixItem("needs_human")));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
+      "fix_stopped",
+    ]);
+  });
+
+  test("holds the row by the known reason the work item stopped on", async () => {
+    const h = harness(
+      fixingSetup(
+        fixItem("needs_human", {
+          note: "ci round: the CI job log is unavailable",
+        }),
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
+      "log_unavailable",
+    ]);
+  });
+
+  test("does not hold the row when the work item failed", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => "holdReason" in entry.options)).toEqual([
+      false,
+    ]);
+  });
+
+  test("supersedes the row when the pull request head moved", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        prs: { [PR_KEY]: pr({ headSha: SHA_B }) },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([
+      { id: FIXING_ID, from: "fixing", to: { state: "superseded" } },
+    ]);
+  });
+
+  test("does not release a row whose pull request head moved", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        prs: { [PR_KEY]: pr({ headSha: SHA_B }) },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("supersedes the row when the work item pushed", async () => {
+    const h = harness(fixingSetup(fixItem("rereview_requested")));
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([
+      { id: FIXING_ID, from: "fixing", to: { state: "superseded" } },
+    ]);
+  });
+
+  test("supersedes the row when a stopped work item had pushed commits", async () => {
+    const h = harness(fixingSetup(fixItem("needs_human", { pushed: true })));
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((entry) => entry.to.state)).toEqual([
+      "superseded",
+    ]);
+  });
+
+  test("does not read the pull request of a pushed work item", async () => {
+    const h = harness(fixingSetup(fixItem("rereview_requested")));
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([]);
+  });
+
+  test("reads the work item before the pull request head", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    await runPrCiWatch(h.deps);
+    expect(h.events.slice(h.events.indexOf("read_fix_item"))[1]).toBe("get_pr");
+  });
+
+  test("reads the pull request head after discovery read it", async () => {
+    const h = harness(fixingSetup(fixItem("failed"), { items: [item()] }));
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([PR_KEY, PR_KEY]);
+  });
+
+  test("leaves a row whose work item is running", async () => {
+    const h = harness(fixingSetup(fixItem("fixing")));
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("advances the read time of a row whose work item is running", async () => {
+    const h = harness(fixingSetup(fixItem("fixing")));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toEqual([FIXING_ID]);
+  });
+
+  test("waits for a stale image before returning the row", async () => {
+    const h = harness(
+      fixingSetup(
+        fixItem("blocked", {
+          note: "worker image is stale: run mise run up: x",
+          updatedAt: minutesBefore(60),
+        }),
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("returns the row without a hold after the stale image wait", async () => {
+    const h = harness(
+      fixingSetup(
+        fixItem("blocked", {
+          note: "worker image is stale: run mise run up: x",
+          updatedAt: minutesBefore(25 * 60),
+        }),
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => "holdReason" in entry.options)).toEqual([
+      false,
+    ]);
+  });
+
+  test("closes the pull request when it is closed", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        prs: { [PR_KEY]: pr({ state: "closed" }) },
+        rowsForPr: { 12: [fixingRow()] },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([
+      { id: FIXING_ID, from: "fixing", to: { state: "superseded" } },
+    ]);
+  });
+
+  test("returns a row of a repository that is not allowed without reading the pull request", async () => {
+    const h = harness(fixingSetup(fixItem("failed"), { allowed: () => false }));
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([]);
+  });
+
+  test("still returns a row of a repository that is not allowed", async () => {
+    const h = harness(fixingSetup(fixItem("failed"), { allowed: () => false }));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.id)).toEqual([FIXING_ID]);
+  });
+
+  test("stops reading after the rate limit and leaves the row", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        prs: { [PR_KEY]: new GitHubRateLimitError("endpoint", 300_000, true) },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("leaves the row and records the failure when the pull request cannot be read", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        prs: { [PR_KEY]: new Error("boom") },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual([`recover_fixing:${PR_KEY}`]);
+  });
+
+  test("records the failure when the work item cannot be read", async () => {
+    const h = harness(fixingSetup(new Error("db down")));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual([`recover_fixing:${PR_KEY}`]);
+  });
+
+  test("advances the read time of a row it could not recover", async () => {
+    const h = harness(fixingSetup(new Error("db down")));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toEqual([FIXING_ID]);
+  });
+
+  test("goes on to the next row after a failure", async () => {
+    const h = harness({
+      fixing: [
+        fixingRow({ id: 10, fix_work_item_id: 78 }),
+        fixingRow({ id: 11, fix_work_item_id: 79 }),
+      ],
+      fixItems: { 78: new Error("db down"), 79: fixItem("failed") },
+      prs: { [PR_KEY]: pr() },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.id)).toEqual([11]);
+  });
+
+  test("counts a returned row", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.released).toBe(1);
+  });
+
+  test("returns an orphan row that is not bound to a work item", async () => {
+    const orphan = fixingRow({ fix_work_item_id: null });
+    const h = harness({ orphans: [orphan], prs: { [PR_KEY]: pr() } });
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([{ id: FIXING_ID, options: {} }]);
+  });
+
+  test("does not read a work item for an orphan row that is not bound to one", async () => {
+    const orphan = fixingRow({ fix_work_item_id: null });
+    const h = harness({ orphans: [orphan], prs: { [PR_KEY]: pr() } });
+    await runPrCiWatch(h.deps);
+    expect(h.fixItemReads).toEqual([]);
+  });
+
+  test("leaves a young row that is not bound to a work item yet", async () => {
+    const h = harness({
+      fixing: [fixingRow({ fix_work_item_id: null })],
+      prs: { [PR_KEY]: pr() },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("handles a row listed both as fixing and as an orphan once", async () => {
+    const orphan = fixingRow({ fix_work_item_id: null });
+    const h = harness({
+      fixing: [orphan],
+      orphans: [orphan],
+      prs: { [PR_KEY]: pr() },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.released.length).toBe(1);
+  });
+
+  test("stops recovering when the time budget is used up", async () => {
+    const h = harness({
+      fixing: [
+        fixingRow({ id: 10, fix_work_item_id: 78 }),
+        fixingRow({ id: 11, fix_work_item_id: 79 }),
+      ],
+      fixItems: { 78: fixItem("failed"), 79: fixItem("failed") },
+      prs: { [PR_KEY]: pr() },
+      budgetUsedAfterFirstPr: true,
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.id)).toEqual([10]);
+  });
+
+  test("recovers before it rechecks failed rows", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), { failed: [row({ state: "failed" })] }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.events.indexOf("release")).toBeLessThan(
+      h.events.indexOf("list_runs"),
+    );
+  });
+});
+
+describe("recovery without the watch", () => {
+  test("returns the row to failed", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    await runPrCiRecovery(h.deps);
+    expect(h.released.map((entry) => entry.id)).toEqual([FIXING_ID]);
+  });
+
+  test("does not discover pull requests", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), { items: [item()], rowsForPr: {} }),
+    );
+    await runPrCiRecovery(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not read runs", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), { pending: [row()], failed: [row()] }),
+    );
+    await runPrCiRecovery(h.deps);
+    expect(h.runCalls).toEqual([]);
+  });
+
+  test("reports the recovered row", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    const result = await runPrCiRecovery(h.deps);
+    expect(result.released).toBe(1);
   });
 });

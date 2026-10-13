@@ -1,0 +1,9 @@
+summary: '[LIB] 失敗を直した行の回復'
+description: 内部ライブラリです。直接実行するものではありません。失敗を直す作業項目が終わった修正中の行を、failedに戻すか、supersededにするかを決めます。
+lock: '!inline f/factory/lib/pr_ci_fix_recovery.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

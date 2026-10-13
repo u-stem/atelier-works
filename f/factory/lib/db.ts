@@ -30,6 +30,7 @@ import {
   canTransitionPrCi,
   isPrCiReason,
   isPrCiState,
+  PR_CI_FIX_HOLD_REASON_MAX_LENGTH,
   PR_CI_STATES,
   PR_CI_SUMMARY_MAX_LENGTH,
   type PrCiState,
@@ -1054,7 +1055,7 @@ export type AutoRetryCandidate = {
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回に達したものも除く。
  * 再開できない項目が`limit`件を占めて、後ろの項目を締め出さないためである。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は除く。失敗の行は`fixing`のまま食い違うので、
- * 作業項目だけを再開しても直らない。`watch_pr_ci`が失敗の行を見て評価し直す。
+ * 作業項目だけを再開しても直らない。回が終わると`watch_pr_ci`が行を戻す。
  * 要件が未承認の項目のように、DBの条件だけでは除けないものは、呼び出し側が飛ばす。
  * noticeの解決の時刻が止まった時刻より後であることが、止まった後に原因が直ったことの印になる。
  * 止まった後の解決に限るので、再開後に同じ理由で止まった作業項目は、次の解決まで対象にならない。
@@ -4214,9 +4215,6 @@ export async function deletePrCiChecksBefore(
 // ---------------------------------------------------------------------------
 // pr_ci_checks: 失敗を直す作業項目
 // ---------------------------------------------------------------------------
-
-/** `fix_hold_reason`列の長さの上限。DBのCHECK制約と同じ値にする。 */
-const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
 
 function assertPositiveId(id: number, what: string): void {
   if (!Number.isSafeInteger(id) || id <= 0) {

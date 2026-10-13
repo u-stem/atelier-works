@@ -11,10 +11,13 @@ import {
   decidePrCiFailed,
   decidePrCiPending,
   isFactoryPrBranch,
+  isPrCiFixHoldReason,
   isPrCiReason,
   isPrCiState,
   latestRunPerWorkflow,
   PR_CI_FAILED_KIND,
+  PR_CI_FIX_HOLD_REASON_MAX_LENGTH,
+  PR_CI_FIX_HOLD_REASONS,
   PR_CI_REASONS,
   PR_CI_STATES,
   PR_CI_SUMMARY_MAX_LENGTH,
@@ -22,6 +25,7 @@ import {
   planPrHead,
   prCiFailedNoticeMessage,
   prCiFailureLink,
+  prCiFixHoldInfo,
   prCiNextAction,
   prCiNoticePrefix,
   prCiSummary,
@@ -1085,5 +1089,104 @@ describe("pullRequestPageUrl", () => {
 
   test("rejects a pull request number that is not positive", () => {
     expect(() => pullRequestPageUrl("acme", "widgets", 0)).toThrow();
+  });
+});
+
+const DETERMINISTIC_HOLDS = [
+  "unfixable_job",
+  "other_conclusion",
+  "log_unavailable",
+  "marker_missing",
+  "fix_stopped",
+  "rounds_exhausted",
+  "not_factory_head",
+] as const;
+
+const TEMPORARY_HOLDS = [
+  "main_ci_failed",
+  "budget_exceeded",
+  "not_reviewed",
+  "last_fix_unsettled",
+  "pr_draft_or_auto_merge",
+] as const;
+
+describe("PR_CI_FIX_HOLD_REASONS", () => {
+  test("lists the deterministic and the temporary reasons", () => {
+    expect([...PR_CI_FIX_HOLD_REASONS].sort()).toEqual(
+      [...DETERMINISTIC_HOLDS, ...TEMPORARY_HOLDS].sort(),
+    );
+  });
+
+  test("keeps every reason within the column limit", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.every(
+        (reason) =>
+          reason.length > 0 &&
+          reason.length <= PR_CI_FIX_HOLD_REASON_MAX_LENGTH,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("isPrCiFixHoldReason", () => {
+  test("accepts a listed reason", () => {
+    expect(isPrCiFixHoldReason("fix_stopped")).toBe(true);
+  });
+
+  test("rejects an unlisted string", () => {
+    expect(isPrCiFixHoldReason("whatever")).toBe(false);
+  });
+
+  test("rejects null", () => {
+    expect(isPrCiFixHoldReason(null)).toBe(false);
+  });
+});
+
+describe("prCiFixHoldInfo", () => {
+  test("marks every deterministic reason as not temporary", () => {
+    expect(
+      DETERMINISTIC_HOLDS.map((reason) => prCiFixHoldInfo(reason).temporary),
+    ).toEqual(DETERMINISTIC_HOLDS.map(() => false));
+  });
+
+  test("marks every temporary reason as temporary", () => {
+    expect(
+      TEMPORARY_HOLDS.map((reason) => prCiFixHoldInfo(reason).temporary),
+    ).toEqual(TEMPORARY_HOLDS.map(() => true));
+  });
+
+  test("announces a deterministic reason as soon as it is held", () => {
+    expect(
+      DETERMINISTIC_HOLDS.map((reason) => prCiFixHoldInfo(reason).notice),
+    ).toEqual(DETERMINISTIC_HOLDS.map(() => "immediate"));
+  });
+
+  test("announces a temporary reason only after it lasts", () => {
+    expect(
+      TEMPORARY_HOLDS.map((reason) => prCiFixHoldInfo(reason).notice),
+    ).toEqual(TEMPORARY_HOLDS.map(() => "prolonged"));
+  });
+
+  test("gives every reason a next action", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.every(
+        (reason) => prCiFixHoldInfo(reason).nextAction.length > 0,
+      ),
+    ).toBe(true);
+  });
+
+  test("gives every reason a different next action", () => {
+    expect(
+      new Set(PR_CI_FIX_HOLD_REASONS.map((r) => prCiFixHoldInfo(r).nextAction))
+        .size,
+    ).toBe(PR_CI_FIX_HOLD_REASONS.length);
+  });
+
+  test("leaves the discord message of a stopped fix to the fix flow", () => {
+    expect(prCiFixHoldInfo("fix_stopped").discord).toBe(false);
+  });
+
+  test("sends the discord message when the rounds are exhausted", () => {
+    expect(prCiFixHoldInfo("rounds_exhausted").discord).toBe(true);
   });
 });
