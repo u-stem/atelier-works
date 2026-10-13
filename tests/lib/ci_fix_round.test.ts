@@ -677,7 +677,24 @@ describe("finalizeCiFixOutput", () => {
       { ...OUTPUT, outcome: "blocked", blocked_reason: "a; b" },
       scanOk,
     );
-    expect(result.kind === "finished" ? result.reason : null).toBe("a, b");
+    expect(result.kind === "finished" ? result.reason : null).toBe(
+      "ci round: claude blocked: a, b",
+    );
+  });
+
+  test("marks the blocked reason of Claude with the prefix of a CI round", async () => {
+    const result = await finalizeCiFixOutput(
+      { ...OUTPUT, outcome: "blocked", blocked_reason: "原因が分かりません。" },
+      scanOk,
+    );
+    expect(result.kind === "finished" ? result.reason : "unset").toBe(
+      "ci round: claude blocked: 原因が分かりません。",
+    );
+  });
+
+  test("keeps the reason null when Claude gave no blocked reason", async () => {
+    const result = await finalizeCiFixOutput(OUTPUT, scanOk);
+    expect(result.kind === "finished" ? result.reason : "unset").toBeNull();
   });
 
   test("stops an output that matches the secret scan", async () => {

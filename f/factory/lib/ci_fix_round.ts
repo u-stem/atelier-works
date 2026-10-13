@@ -314,6 +314,13 @@ export type CiFixFinalized =
   | { readonly kind: "blocked"; readonly reason: string };
 
 /**
+ * Claudeの`blocked_reason`の先頭に付ける接頭辞。
+ * 理由の文は、ログの内容を写せる。接頭辞があれば、次の操作の選択は先頭のCI回の規則だけに当たり、
+ * ログに仕込んだ文で、基盤を直す手順を案内させられない。
+ */
+const CLAUDE_BLOCKED_PREFIX = `${REASON_PREFIX}: claude blocked: `;
+
+/**
  * Claudeの出力の文字列(コミットの件名と本文、要約、停止の理由)をgitleaksで検査し、
  * 通ったものを`finished`で返す。
  * 検出があったときと、検査できなかったときは、`blocked`を返す。
@@ -350,7 +357,7 @@ export async function finalizeCiFixOutput(
     reason:
       fields.blocked_reason === null
         ? null
-        : escapeReasonSeparator(fields.blocked_reason),
+        : `${CLAUDE_BLOCKED_PREFIX}${escapeReasonSeparator(fields.blocked_reason)}`,
     summary: fields.summary,
     commit_subject: done ? fields.commit_subject : null,
     commit_body: done ? fields.commit_body : null,

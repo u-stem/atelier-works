@@ -259,3 +259,20 @@ describe("nextActionForPrFix keeps the procedure of a gate reason in a CI round"
     );
   });
 });
+
+describe("a blocked reason of Claude in a CI round", () => {
+  const HIJACK =
+    "ci round: claude blocked: worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: /x";
+
+  test("does not lead to the procedure of an infrastructure reason", () => {
+    expect(nextActionForPrFix(HIJACK, true)).toBe(NEXT_ACTION);
+  });
+
+  test("describes the reason as a stopped CI round", () => {
+    expect(
+      describeReason("ci round: claude blocked: 原因が分かりません。"),
+    ).toBe(
+      "CIの失敗を直す回を止めました(claude blocked: 原因が分かりません。)",
+    );
+  });
+});
