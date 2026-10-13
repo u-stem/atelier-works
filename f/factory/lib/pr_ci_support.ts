@@ -501,8 +501,16 @@ export type PrCiFixHoldInfo = {
   readonly notice: "immediate" | "prolonged";
   /** noticeと一緒にDiscordにも送るか。直す作業の流れがすでに送った理由は送らない。 */
   readonly discord: boolean;
-  /** 人が次にすることの固定文。 */
+  /**
+   * 人が次にすることの固定文。
+   * 理由コードごとの案内(`prCiNextAction`)と同じ常体で書き、通知の文脈に依らない案内として使う。
+   */
   readonly nextAction: string;
+  /**
+   * 直す作業が止まった通知の、人が次にすることの固定文。
+   * 他のCI回の案内と同じ敬体で書く。1つの文字列の中で文体を混ぜない。
+   */
+  readonly stopAction: string;
 };
 
 const PR_CI_FIX_HOLD_INFO: Readonly<
@@ -513,84 +521,107 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     notice: "immediate",
     discord: true,
     nextAction:
-      "失敗したジョブはソースの編集では直せません。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットする",
+      "失敗したジョブはソースの編集では直せない。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットする",
+    stopAction:
+      "失敗したジョブはソースの編集では直せません。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットしてください",
   },
   other_conclusion: {
     temporary: false,
     notice: "immediate",
     discord: true,
     nextAction:
-      "失敗ではなく、取り消しや期限切れなどで終わっています。実行を確かめ、取り消しやフレークなら再実行する",
+      "失敗ではなく、取り消しや期限切れなどで終わっている。実行を確かめ、取り消しやフレークなら再実行する",
+    stopAction:
+      "失敗ではなく、取り消しや期限切れなどで終わっています。実行を確かめ、取り消しやフレークなら再実行してください",
   },
   log_unavailable: {
     temporary: false,
     notice: "immediate",
     discord: true,
     nextAction:
-      "失敗のログをFactoryが読めません。PATのActions権限とログの保持期限を確かめ、人が直す",
+      "失敗のログをFactoryが読めない。PATのActions権限とログの保持期限を確かめ、人が直す",
+    stopAction:
+      "失敗のログをFactoryが読めません。PATのActions権限とログの保持期限を確かめ、人が直してください",
   },
   marker_missing: {
     temporary: false,
     notice: "immediate",
     discord: true,
     nextAction:
-      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節がありません。クローンを更新するまで、人が直す",
+      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節が無い。クローンを更新するまで、人が直す",
+    stopAction:
+      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節がありません。クローンを更新するまで、人が直してください",
   },
   fix_stopped: {
     temporary: false,
     notice: "immediate",
     discord: false,
     nextAction:
-      "直す作業が人の判断待ちで止まりました。作業項目の理由を確かめ、人が直してPRにpushする",
+      "直す作業が人の判断待ちで止まった。作業項目の理由を確かめ、人が直してPRにpushする",
+    stopAction:
+      "直す作業が人の判断待ちで止まりました。作業項目の理由を確かめ、人が直してPRにpushしてください",
   },
   rounds_exhausted: {
     temporary: false,
     notice: "immediate",
     discord: true,
-    nextAction: "自動で直す回数の上限に達しました。人が直してPRにpushする",
+    nextAction: "自動で直す回数の上限に達した。人が直してPRにpushする",
+    stopAction:
+      "自動で直す回数の上限に達しました。人が直してPRにpushしてください",
   },
   not_factory_head: {
     temporary: false,
     notice: "immediate",
     discord: true,
     nextAction:
-      "最後のpushがFactoryのものでないので、自動では直しません。人が直してPRにpushする",
+      "最後のpushがFactoryのものでないので、自動では直さない。人が直してPRにpushする",
+    stopAction:
+      "最後のpushがFactoryのものでないので、自動では直しません。人が直してPRにpushしてください",
   },
   main_ci_failed: {
     temporary: true,
     notice: "prolonged",
     discord: true,
-    nextAction: "mainのCIが失敗しています。mainが直るまで待つ",
+    nextAction: "mainのCIが失敗している。mainが直るまで待つ",
+    stopAction: "mainのCIが失敗しています。mainが直るまで待ってください",
   },
   budget_exceeded: {
     temporary: true,
     notice: "prolonged",
     discord: true,
     nextAction:
-      "1日あたりのClaude利用予算に達しています。翌日まで待つか、daily_budget_usdを引き上げる",
+      "1日あたりのClaude利用予算に達している。翌日まで待つか、daily_budget_usdを引き上げる",
+    stopAction:
+      "1日あたりのClaude利用予算に達しています。翌日まで待つか、daily_budget_usdを引き上げてください",
   },
   not_reviewed: {
     temporary: true,
     notice: "prolonged",
     discord: true,
-    nextAction: "今のheadの自動レビューがありません。レビューが付くまで待つ",
+    nextAction: "今のheadの自動レビューが無い。レビューが付くまで待つ",
+    stopAction:
+      "今のheadの自動レビューがありません。レビューが付くまで待ってください",
   },
   last_fix_unsettled: {
     temporary: true,
     notice: "prolonged",
     discord: true,
-    nextAction: "直近の直す作業が、まだ終わっていません。終わるまで待つ",
+    nextAction: "直近の直す作業が、まだ終わっていない。終わるまで待つ",
+    stopAction:
+      "直近の直す作業が、まだ終わっていません。終わるまで待ってください",
   },
   pr_draft_or_auto_merge: {
     temporary: true,
     notice: "prolonged",
     discord: true,
     nextAction:
-      "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にする",
+      "PRがドラフトか、auto-mergeが有効である。ドラフトを解除し、auto-mergeを無効にする",
+    stopAction:
+      "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にしてください",
   },
 };
 
-/** 保留の理由の性質と、人が次にすることの固定文。 */
+/** 保留の理由の性質と、人が次にすることの固定文(常体の`nextAction`と敬体の`stopAction`)。 */
 export function prCiFixHoldInfo(reason: PrCiFixHoldReason): PrCiFixHoldInfo {
   return PR_CI_FIX_HOLD_INFO[reason];
 }

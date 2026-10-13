@@ -1142,6 +1142,12 @@ describe("isPrCiFixHoldReason", () => {
   });
 });
 
+const POLITE_ENDING = /(です|ます|ません|ました|でした|ください)$/;
+
+function sentencesOf(action: string): string[] {
+  return action.split("。").filter((sentence) => sentence !== "");
+}
+
 describe("prCiFixHoldInfo", () => {
   test("marks every deterministic reason as not temporary", () => {
     expect(
@@ -1181,6 +1187,63 @@ describe("prCiFixHoldInfo", () => {
         /(始める|評価し直す|また自動で直す)/.test(
           prCiFixHoldInfo(reason).nextAction,
         ),
+      ),
+    ).toEqual([]);
+  });
+
+  test("gives every reason a stop action", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.every(
+        (reason) => prCiFixHoldInfo(reason).stopAction.length > 0,
+      ),
+    ).toBe(true);
+  });
+
+  test("promises no automatic start or re-evaluation in any stop action", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.filter((reason) =>
+        /(始める|評価し直す|また自動で直す)/.test(
+          prCiFixHoldInfo(reason).stopAction,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  test("gives every reason a different stop action", () => {
+    expect(
+      new Set(PR_CI_FIX_HOLD_REASONS.map((r) => prCiFixHoldInfo(r).stopAction))
+        .size,
+    ).toBe(PR_CI_FIX_HOLD_REASONS.length);
+  });
+
+  test("ends every sentence of every stop action in the polite form", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.flatMap((reason) =>
+        sentencesOf(prCiFixHoldInfo(reason).stopAction),
+      ).filter((sentence) => !POLITE_ENDING.test(sentence)),
+    ).toEqual([]);
+  });
+
+  test("ends no sentence of any next action in the polite form", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.flatMap((reason) =>
+        sentencesOf(prCiFixHoldInfo(reason).nextAction),
+      ).filter((sentence) => POLITE_ENDING.test(sentence)),
+    ).toEqual([]);
+  });
+
+  test("leaves no trailing full stop in any stop action", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.filter((reason) =>
+        prCiFixHoldInfo(reason).stopAction.endsWith("。"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("leaves no trailing full stop in any next action", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.filter((reason) =>
+        prCiFixHoldInfo(reason).nextAction.endsWith("。"),
       ),
     ).toEqual([]);
   });

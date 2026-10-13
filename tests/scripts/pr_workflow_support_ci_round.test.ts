@@ -66,7 +66,7 @@ describe("describeReason for a CI round", () => {
 describe("nextActionFor a CI round", () => {
   test("gives the action of the hold reason for a fixed reason of the gather step", () => {
     expect(nextActionFor("ci round: the CI job log is unavailable")).toBe(
-      prCiFixHoldInfo("log_unavailable").nextAction,
+      prCiFixHoldInfo("log_unavailable").stopAction,
     );
   });
 
@@ -75,7 +75,7 @@ describe("nextActionFor a CI round", () => {
       nextActionFor(
         "ci round: the factory-fix skill lacks the ci-fix-skill:v1 marker",
       ),
-    ).toBe(prCiFixHoldInfo("marker_missing").nextAction);
+    ).toBe(prCiFixHoldInfo("marker_missing").stopAction);
   });
 
   test("gives the action of the hold reason for a job that cannot be fixed", () => {
@@ -83,7 +83,7 @@ describe("nextActionFor a CI round", () => {
       nextActionFor(
         "ci round: the failed CI job cannot be fixed by editing the source (metadata job)",
       ),
-    ).toBe(prCiFixHoldInfo("unfixable_job").nextAction);
+    ).toBe(prCiFixHoldInfo("unfixable_job").stopAction);
   });
 
   test("gives the action of the hold reason for another conclusion", () => {
@@ -91,19 +91,19 @@ describe("nextActionFor a CI round", () => {
       nextActionFor(
         "ci round: the CI job did not fail but ended with cancelled",
       ),
-    ).toBe(prCiFixHoldInfo("other_conclusion").nextAction);
+    ).toBe(prCiFixHoldInfo("other_conclusion").stopAction);
   });
 
   test("gives the action of the hold reason for a log the token cannot read", () => {
     expect(
       nextActionFor("ci round: the token cannot read the CI job log"),
-    ).toBe(prCiFixHoldInfo("log_unavailable").nextAction);
+    ).toBe(prCiFixHoldInfo("log_unavailable").stopAction);
   });
 
   test("gives the action of the hold reason in a CI round of the pr_fix flow", () => {
     expect(
       nextActionForPrFix("ci round: the CI job log is unavailable", true),
-    ).toBe(prCiFixHoldInfo("log_unavailable").nextAction);
+    ).toBe(prCiFixHoldInfo("log_unavailable").stopAction);
   });
 
   test("does not give the action of a hold reason that Claude repeats", () => {

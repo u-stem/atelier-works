@@ -3826,7 +3826,7 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
 const CI_ROUND_NEXT_ACTION = `原因を確かめて人が直してから、${CI_PUSH_ACTION}`;
 
 /**
- * 修正の前に止めた理由の次の操作。保留の理由(`fix_hold_reason`)に写せる理由は、その理由の固定文を使う。
+ * 修正の前に止めた理由の次の操作。保留の理由(`fix_hold_reason`)に写せる理由は、その理由の敬体の固定文(`stopAction`)を使う。
  * 写せない理由は、`CI_ROUND_NEXT_ACTION`にする。
  * `match.input`は、規則が一致した理由の1項目である。
  */
@@ -3834,7 +3834,7 @@ function ciRoundStopAction(match: RegExpMatchArray): string {
   const hold = holdReasonForStoppedItem(match.input ?? null);
   return hold === null
     ? CI_ROUND_NEXT_ACTION
-    : prCiFixHoldInfo(hold).nextAction;
+    : prCiFixHoldInfo(hold).stopAction;
 }
 
 export const REASON_RULES: readonly ReasonRule[] = [
