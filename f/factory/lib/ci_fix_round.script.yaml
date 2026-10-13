@@ -1,0 +1,9 @@
+summary: '[LIB] CI回のpr_fixの共通部品'
+description: 内部ライブラリです。直接実行するものではありません。CI回のpr_fixの各ステップが使う、ログから抜粋までの流れ、変更の検査の入力、通常の回との違いの判断を置きます。
+lock: '!inline f/factory/lib/ci_fix_round.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

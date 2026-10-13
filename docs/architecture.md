@@ -372,6 +372,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | --- | --- | --- |
 | `f/factory/lib/ci_log_support` | script | [LIB] CIのログの整形と秘密値の検査 |
 | `f/factory/lib/ci_fix_classify` | script | [LIB] CIの失敗の分類 |
+| `f/factory/lib/ci_fix_round` | script | [LIB] CI回のpr_fixの共通部品 |
 | `f/factory/lib/ci_fix_prompt` | script | [LIB] CI回のプロンプト |
 | `f/factory/lib/ci_fix_paths` | script | [LIB] CI回の変更ファイルの検査 |
 | `f/factory/lib/console_status` | script | [LIB] Consoleの取り込みの状態 |
