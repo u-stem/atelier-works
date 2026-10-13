@@ -458,6 +458,12 @@ describe("reviewPrompt", () => {
       );
     });
 
+    test("asks to check for ignore file and tool setting changes", () => {
+      expect(withCiRound(true)).toContain(
+        "Check that no ignore file or tool setting was added or changed",
+      );
+    });
+
     test("omits the CI round section when ciRoundDiff is false", () => {
       expect(withCiRound(false)).not.toContain("CI-fix round");
     });

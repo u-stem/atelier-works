@@ -263,6 +263,8 @@ export function reviewPrompt(
       "- Check that the edit fixes the cause of the failure instead of hiding it.",
       "- Check that the edit adds no behavior unrelated to the cause of the failure",
       "  (for example, network access or reading environment variables).",
+      "- Check that no ignore file or tool setting was added or changed",
+      "  (for example, .gitignore, conftest.py, or a test runner setting).",
     );
   }
 
