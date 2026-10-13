@@ -21,7 +21,8 @@
       "Bash(gh pr view:*)",
       "Bash(wmill lint:*)",
       "Bash(wmill sync push --dry-run:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(wmill job list *)"
     ],
     "deny": [
       "Read(./infra/.env)",
