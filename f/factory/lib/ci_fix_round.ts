@@ -281,8 +281,7 @@ export function ciRoundVerifyTimeoutMisfit(
 /**
  * `retry_work_item`が、CI回の`pr_fix`を再開しない理由を返す。再開してよければnull。
  * 人が作業項目だけを再開しても、失敗の行は`fixing`のまま食い違うため。
- * 回が終わると、`watch_pr_ci`が行を`failed`に戻す。戻した後は、保留の理由が一時的なら自動で起動し直し、
- * そうでなければ、PRにpushしてheadが変わるまで同じ失敗を起動し直さない。
+ * 回が終わると、`watch_pr_ci`が行を`failed`に戻す。PRにpushしてheadが変われば、新しい失敗として判定される。
  */
 export function ciRoundRetryRefusal(item: {
   readonly id: number;

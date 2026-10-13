@@ -4427,6 +4427,11 @@ export type ReleaseFixingPrCiCheckOptions = {
   readonly holdReason?: string;
   /** 渡せば、`fix_work_item_id`がこの作業項目の行だけを戻す。別の作業項目に起動し直された行を戻さないため。 */
   readonly fixWorkItemId?: number;
+  /**
+   * `true`なら、`fix_work_item_id`が空の行だけを戻す。直す作業項目に結ばれていない行を戻す間に、
+   * 起動が作業項目を結んだ行を戻さないため。`fixWorkItemId`とは同時に渡せない。
+   */
+  readonly withoutFixWorkItem?: boolean;
 };
 
 /**
@@ -4434,7 +4439,8 @@ export type ReleaseFixingPrCiCheckOptions = {
  * この呼び出しで戻したら`true`を返す。条件は`state = 'fixing'`なので、別の実行が先に移した行は
  * 書き換えず、`false`を返す。同じ呼び出しを繰り返しても結果は変わらない。
  * `fix_attempts`は減らさない。
- * `holdReason`が空か64字を超えるときは、DBに触れずに例外を投げる。
+ * `holdReason`が空か64字を超えるときと、`fixWorkItemId`と`withoutFixWorkItem`を同時に渡したときは、
+ * DBに触れずに例外を投げる。
  */
 export async function releaseFixingPrCiCheck(
   id: number,
@@ -4446,8 +4452,14 @@ export async function releaseFixingPrCiCheck(
   if (options.fixWorkItemId !== undefined) {
     assertPositiveId(options.fixWorkItemId, "work item id");
   }
+  if (options.fixWorkItemId !== undefined && options.withoutFixWorkItem) {
+    throw new Error(
+      "releaseFixingPrCiCheck: fixWorkItemId and withoutFixWorkItem are exclusive",
+    );
+  }
   const holdReason = options.holdReason ?? null;
   const fixWorkItemId = options.fixWorkItemId ?? null;
+  const withoutFixWorkItem = options.withoutFixWorkItem === true;
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET state = 'failed',
@@ -4456,6 +4468,7 @@ export async function releaseFixingPrCiCheck(
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'fixing'
       AND (${fixWorkItemId}::bigint IS NULL OR fix_work_item_id = ${fixWorkItemId}::bigint)
+      AND (NOT ${withoutFixWorkItem}::boolean OR fix_work_item_id IS NULL)
     RETURNING id
   `.fetch();
   return rows.length > 0;

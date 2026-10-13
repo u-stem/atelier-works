@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry.ts";
 import {
   CI_ROUND_DETAILS,
   ciRoundReason,
@@ -150,10 +151,10 @@ describe("decideFixingRecovery", () => {
     });
   });
 
-  test("releases the row without a hold when the work item was cancelled", () => {
+  test("holds the row as stopped when the work item was cancelled", () => {
     expect(decideFixingRecovery(item("cancelled"), NOW)).toEqual({
       kind: "release",
-      hold: null,
+      hold: "fix_stopped",
     });
   });
 
@@ -164,10 +165,35 @@ describe("decideFixingRecovery", () => {
     });
   });
 
-  test("holds a blocked work item with an unknown reason as stopped", () => {
+  test("releases a blocked work item with an unknown reason without a hold", () => {
     expect(
       decideFixingRecovery(
         item("blocked", { note: "head branch is protected" }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("releases a blocked work item with no note without a hold", () => {
+    expect(decideFixingRecovery(item("blocked"), NOW)).toEqual({
+      kind: "release",
+      hold: null,
+    });
+  });
+
+  test("holds a blocked work item with a known reason by that reason", () => {
+    expect(
+      decideFixingRecovery(
+        item("blocked", { note: "ci round: the CI job log is unavailable" }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "log_unavailable" });
+  });
+
+  test("holds a needs_human work item with an unknown reason as stopped", () => {
+    expect(
+      decideFixingRecovery(
+        item("needs_human", { note: "head branch is protected" }),
         NOW,
       ),
     ).toEqual({ kind: "release", hold: "fix_stopped" });
@@ -240,6 +266,20 @@ describe("decideFixingRecovery", () => {
         NOW,
       ),
     ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test("keeps a blocked row within the wait for every auto retry prefix", () => {
+    const kinds = AUTO_RETRY_REASON_PREFIXES.map(
+      (prefix) =>
+        decideFixingRecovery(
+          item("blocked", {
+            note: `${prefix}detail`,
+            updatedAt: new Date(NOW.getTime() - 60_000),
+          }),
+          NOW,
+        ).kind,
+    );
+    expect(kinds).toEqual(AUTO_RETRY_REASON_PREFIXES.map(() => "keep"));
   });
 
   test("waits for 24 hours on a stale image", () => {

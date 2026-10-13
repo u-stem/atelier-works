@@ -3547,11 +3547,12 @@ const RETRY_WORK_ITEM_ACTION =
   "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 
 /**
- * CI回で止めた理由のうち、解ければ`watch_pr_ci`が自動で評価し直す理由の案内。
- * 人は再実行も付け直しもしない。この案内を使うのは、`fix_hold_reason`が一時的な理由(`pr_draft_or_auto_merge`)の
- * 場合と、戻した行を一定時間後に評価し直す場合(イメージが古い)に限る。
+ * CI回で止めた理由のうち、一時的な理由(ドラフト、auto-merge)の案内。
+ * 人は再実行も付け直しもしない。保留が解けるのを待つか、PRにpushする。
+ * 待った後にFactoryが何かを始めるとは約束しない。pushして新しいheadになれば、新しい失敗として判定される。
  */
-const CI_WAIT_ACTION = "Factoryが自動で評価し直すのを待ってください";
+const CI_WAIT_ACTION =
+  "保留が解けるまで待つか、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
 
 /**
  * CI回で止めた理由のうち、同じheadでは評価し直さない理由の案内。
@@ -4443,9 +4444,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       `${STALE_IMAGE_PROCEDURE}。作り直した後は、止まった作業項目が自動で再開します。自動の再開が3回の上限に達したときと、通知に版が載らないときだけ、${RETRY_WORK_ITEM_ACTION}`,
     // CI回は止まった作業項目を自動では再開しないので、再開の文は出さない。
-    // 行は止まってから`STALE_IMAGE_WAIT_MS`の後に戻し、その後で評価し直す。
+    // 失敗の行は、止まってから`STALE_IMAGE_WAIT_MS`の後に保留なしで戻る。その後の扱いは約束しない。
     ciNextAction: () =>
-      `${STALE_IMAGE_PROCEDURE}。作り直した後は、${CI_WAIT_ACTION}(止まってから24時間後に評価し直します)`,
+      `${STALE_IMAGE_PROCEDURE}。作り直した後、失敗の行は止まってから24時間後に保留なしで戻ります。待てないときは、${CI_PUSH_ACTION}`,
   },
   // `lib/check_sandbox.ts`の`CheckRuntimeUnsafeError`(同じステップ)。イメージは作り直さず、パスを閉じるかworkerを作り直す。
   // ボリュームのマウントポイントの権限はボリュームにあり、workerを作り直しても変わらない。
@@ -4529,8 +4530,8 @@ function pointsToRetryOrRelabel(action: string): boolean {
 /**
  * PR修正の理由に対する次の操作を選ぶ。
  * CI回は再実行も付け直しも案内しない。
- * CI回は手動でも自動でも再開しない。回が終わると`watch_pr_ci`が失敗の行を戻し、保留の理由が一時的なときだけ起動し直すためである。
- * 規則が`ciNextAction`を持てば、人が取る手順を残し、再実行の部分だけを、待つ案内かPRへのpushの案内に差し替えたその文を使う。
+ * CI回は手動でも自動でも再開しない。回が終わると`watch_pr_ci`が失敗の行を戻すためである。
+ * 規則が`ciNextAction`を持てば、人が取る手順を残し、再実行の部分だけを、待つかpushする案内か、PRへのpushの案内に差し替えたその文を使う。
  * 持たない規則は、通常回の案内が再実行か付け直しを含むときだけ、PRへのpushの案内(`CI_ROUND_NEXT_ACTION`)に置き換える。
  * 再実行も付け直しも含まない案内(PRを開き直す、人が直すなど)は、そのままにする。
  */

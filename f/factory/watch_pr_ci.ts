@@ -10,6 +10,7 @@
 // 常に対象の`factory_repo`)に合うリポジトリのものである。
 // GITHUB_TOKENにActionsの読み取り権限が無いリポジトリは、`pr_ci_check_denied`のnoticeで知らせる。
 // 設定`pr_ci_watch_enabled`が`false`のときは、回復だけを行い、発見と判定と通知はしない。
+// このときはオーナーの照合も行わず、設定に合うリポジトリのPRだけを読む(`buildRecoveryRepoGates`)。
 // 回復の対象の行が無ければ、何も読まずに終わる。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
@@ -46,6 +47,7 @@ import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import { readFixItemState } from "./lib/pr_ci_fix_recovery.ts";
 import {
+  buildRecoveryRepoGates,
   buildRepoGates,
   PR_CI_WATCH_IDLE_RESULT,
   type PrCiWatchDeps,
@@ -100,16 +102,24 @@ export async function main(): Promise<PrCiWatchResult> {
   const client: GhClient = { run: runCommand, ghToken };
 
   // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
-  const verified = await filterVerifiedOwners(config.owners, {
-    getAccountId: (name) => getAccountId(client, name),
-    recordFailure: (step, err) => recordFailureSafe(step, err, log),
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
-  });
+  // 無効のときは、照合のGitHubの呼び出しとnoticeの追加を避けるため、照合せずに設定だけで決める。
+  const gates = config.pr_ci_watch_enabled
+    ? buildRepoGates(
+        config,
+        (
+          await filterVerifiedOwners(config.owners, {
+            getAccountId: (name) => getAccountId(client, name),
+            recordFailure: (step, err) => recordFailureSafe(step, err, log),
+            addNotice: (record) => addNoticeUnlessUnresolved(record),
+          })
+        ).owners,
+      )
+    : buildRecoveryRepoGates(config);
   const deps: PrCiWatchDeps = {
     now: () => new Date(),
     log,
     instanceName: config.instance_name,
-    ...buildRepoGates(config, verified.owners),
+    ...gates,
     listTrackedItems: async () => {
       const items = await listPrOpenIssueWorkItems(
         new Date(Date.now() - config.tracked_pr_days * DAY_MS),

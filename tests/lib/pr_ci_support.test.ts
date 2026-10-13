@@ -1175,6 +1175,16 @@ describe("prCiFixHoldInfo", () => {
     ).toBe(true);
   });
 
+  test("promises no automatic start or re-evaluation in any next action", () => {
+    expect(
+      PR_CI_FIX_HOLD_REASONS.filter((reason) =>
+        /(始める|評価し直す|また自動で直す)/.test(
+          prCiFixHoldInfo(reason).nextAction,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
   test("gives every reason a different next action", () => {
     expect(
       new Set(PR_CI_FIX_HOLD_REASONS.map((r) => prCiFixHoldInfo(r).nextAction))

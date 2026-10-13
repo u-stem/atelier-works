@@ -31,6 +31,7 @@ import {
   prCiNextAction,
 } from "../../f/factory/lib/pr_ci_support.ts";
 import {
+  buildRecoveryRepoGates,
   buildRepoGates,
   deniedNoticeMessage,
   NO_CI_RECHECK_INTERVAL_MS,
@@ -221,6 +222,7 @@ type Harness = {
     readonly options: {
       readonly holdReason?: string | undefined;
       readonly fixWorkItemId?: number | undefined;
+      readonly withoutFixWorkItem?: boolean | undefined;
     };
   }[];
   readonly fixItemReads: number[];
@@ -2154,6 +2156,43 @@ describe("dropped runs", () => {
   });
 });
 
+describe("buildRecoveryRepoGates", () => {
+  const acme: FactoryOwner = { name: "acme", kind: "org" };
+  const config = {
+    owners: [acme],
+    repo_allowlist: [],
+    factory_repo: "https://github.com/acme/factory",
+  };
+
+  test("allows a repository of a configured owner without a verification", () => {
+    expect(
+      buildRecoveryRepoGates(config).isRepoAllowed("acme", "widgets"),
+    ).toBe(true);
+  });
+
+  test("does not allow a repository of an owner that is not configured", () => {
+    expect(
+      buildRecoveryRepoGates(config).isRepoAllowed("stranger", "app"),
+    ).toBe(false);
+  });
+
+  test("does not allow a repository outside a non-empty allowlist", () => {
+    expect(
+      buildRecoveryRepoGates({
+        ...config,
+        repo_allowlist: ["https://github.com/acme/widgets"],
+      }).isRepoAllowed("acme", "other-app"),
+    ).toBe(false);
+  });
+
+  test("agrees with the configuration check", () => {
+    const gates = buildRecoveryRepoGates(config);
+    expect(gates.isRepoAllowed("acme", "widgets")).toBe(
+      gates.isRepoConfigured("acme", "widgets"),
+    );
+  });
+});
+
 describe("buildRepoGates", () => {
   const acme: FactoryOwner = { name: "acme", kind: "org" };
   const other: FactoryOwner = { name: "other", kind: "user" };
@@ -2304,10 +2343,18 @@ describe("recovery of a fixing row", () => {
     ]);
   });
 
-  test("holds the row as stopped when the work item is blocked", async () => {
+  test("returns the row without a hold when the work item is blocked for an unknown reason", async () => {
     const h = harness(
       fixingSetup(fixItem("blocked", { note: "head branch is protected" })),
     );
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => "holdReason" in entry.options)).toEqual([
+      false,
+    ]);
+  });
+
+  test("holds the row as stopped when the work item was cancelled", async () => {
+    const h = harness(fixingSetup(fixItem("cancelled")));
     await runPrCiWatch(h.deps);
     expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
       "fix_stopped",
@@ -2465,6 +2512,39 @@ describe("recovery of a fixing row", () => {
     expect(h.released.map((entry) => entry.id)).toEqual([FIXING_ID]);
   });
 
+  test("leaves a row of a repository that is configured but not verified", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        allowed: () => false,
+        configured: () => true,
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("advances the read time of a row of a repository that is configured but not verified", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        allowed: () => false,
+        configured: () => true,
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toEqual([FIXING_ID]);
+  });
+
+  test("does not read the pull request of a repository that is configured but not verified", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        allowed: () => false,
+        configured: () => true,
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([]);
+  });
+
   test("stops reading after the rate limit and leaves the row", async () => {
     const h = harness(
       fixingSetup(fixItem("failed"), {
@@ -2520,7 +2600,9 @@ describe("recovery of a fixing row", () => {
     const orphan = fixingRow({ fix_work_item_id: null });
     const h = harness({ orphans: [orphan], prs: { [PR_KEY]: pr() } });
     await runPrCiWatch(h.deps);
-    expect(h.released).toEqual([{ id: FIXING_ID, options: {} }]);
+    expect(h.released).toEqual([
+      { id: FIXING_ID, options: { withoutFixWorkItem: true } },
+    ]);
   });
 
   test("does not read a work item for an orphan row that is not bound to one", async () => {
@@ -2596,6 +2678,23 @@ describe("recovery without the watch", () => {
     );
     await runPrCiRecovery(h.deps);
     expect(h.runCalls).toEqual([]);
+  });
+
+  test("does not add a notice", async () => {
+    const h = harness(
+      fixingSetup(fixItem("failed"), {
+        prs: { [PR_KEY]: pr({ state: "closed" }) },
+        rowsForPr: { 12: [fixingRow()] },
+      }),
+    );
+    await runPrCiRecovery(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("does not send a discord message", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    await runPrCiRecovery(h.deps);
+    expect(h.discord).toEqual([]);
   });
 
   test("reports the recovered row", async () => {

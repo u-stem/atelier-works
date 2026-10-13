@@ -455,11 +455,12 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `other_conclusion`: 失敗ではなく、取り消しや期限切れなどで終わった。
  * - `log_unavailable`: 失敗のログを読めない。
  * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
- * - `fix_stopped`: 直す作業が、pushしないまま止まった。
+ * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まったか、取り消された。
+ *   止めた理由が語彙に写せない`blocked`は含めない。起動し直す回数は、回数の上限が止める。
  * - `rounds_exhausted`: 直す回数の上限に達した。
  * - `not_factory_head`: 最後のpushがFactoryのものでない。
  *
- * 一時的な理由は、解けたら自動で外す。
+ * 一時的な理由は、解ければ外してよい理由である。
  * - `main_ci_failed`: mainのCIが赤い。
  * - `budget_exceeded`: 日次の予算を使い切った。
  * - `not_reviewed`: 今のheadの自動レビューがまだ無い。
@@ -490,7 +491,7 @@ export function isPrCiFixHoldReason(
 }
 
 export type PrCiFixHoldInfo = {
-  /** 解けたら自動で外す理由か。そうでなければ、同じheadでは起動し直さない。 */
+  /** 解ければ外してよい理由か。そうでなければ、同じheadでは起動し直さない。 */
   readonly temporary: boolean;
   /**
    * 保留を知らせる`pr_ci_failed`のnoticeを出す時機。
@@ -540,14 +541,13 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     notice: "immediate",
     discord: false,
     nextAction:
-      "直す作業が止まりました。作業項目の理由を確かめ、人が直してPRにpushする",
+      "直す作業が止まったか、取り消されました。作業項目の理由を確かめ、人が直してPRにpushする",
   },
   rounds_exhausted: {
     temporary: false,
     notice: "immediate",
     discord: true,
-    nextAction:
-      "自動で直す回数の上限に達しました。人が直してPRにpushする。pushして新しいheadになれば、また自動で直す",
+    nextAction: "自動で直す回数の上限に達しました。人が直してPRにpushする",
   },
   not_factory_head: {
     temporary: false,
@@ -560,36 +560,33 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: true,
     notice: "prolonged",
     discord: true,
-    nextAction:
-      "mainのCIが失敗しています。mainが直るのを待つ。直ると自動で直す作業を始める",
+    nextAction: "mainのCIが失敗しています。mainが直るまで待つ",
   },
   budget_exceeded: {
     temporary: true,
     notice: "prolonged",
     discord: true,
     nextAction:
-      "1日あたりのClaude利用予算に達しています。翌日まで待つか、daily_budget_usdを引き上げる。解けると自動で直す作業を始める",
+      "1日あたりのClaude利用予算に達しています。翌日まで待つか、daily_budget_usdを引き上げる",
   },
   not_reviewed: {
     temporary: true,
     notice: "prolonged",
     discord: true,
-    nextAction:
-      "今のheadの自動レビューがありません。レビューが付くのを待つ。付くと自動で直す作業を始める",
+    nextAction: "今のheadの自動レビューがありません。レビューが付くまで待つ",
   },
   last_fix_unsettled: {
     temporary: true,
     notice: "prolonged",
     discord: true,
-    nextAction:
-      "直近の直す作業が、まだ成功で終わっていません。終わるのを待つ。終わると自動で評価し直す",
+    nextAction: "直近の直す作業が、まだ成功で終わっていません。終わるまで待つ",
   },
   pr_draft_or_auto_merge: {
     temporary: true,
     notice: "prolonged",
     discord: true,
     nextAction:
-      "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にする。解けると自動で直す作業を始める",
+      "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にする",
   },
 };
 

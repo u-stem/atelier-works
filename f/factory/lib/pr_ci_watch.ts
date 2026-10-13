@@ -162,6 +162,17 @@ export function buildRepoGates(
   };
 }
 
+/**
+ * 回復だけを行うときの判定を作る。オーナーの照合をしないので、設定に合うリポジトリを許す。
+ * 回復は、PRの状態とheadを読んで行を戻すだけで、通知もClaudeへの入力もしない。
+ * 照合はGitHubの呼び出しと通知の追加を伴うため、監視を無効にしている間は行わない。
+ */
+export function buildRecoveryRepoGates(
+  config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
+): ReturnType<typeof buildRepoGates> {
+  return buildRepoGates(config, config.owners);
+}
+
 export type PrCiWatchDeps = {
   readonly now: () => Date;
   readonly log: Logger;
@@ -211,12 +222,14 @@ export type PrCiWatchDeps = {
   /**
    * 修正中の行を`failed`に戻す。この呼び出しで戻したら`true`。
    * `fixWorkItemId`を渡せば、その作業項目に結ばれた行だけを戻す。
+   * `withoutFixWorkItem`を渡せば、作業項目に結ばれていない行だけを戻す。
    */
   readonly release: (
     id: number,
     options: {
       readonly holdReason?: PrCiFixHoldReason;
       readonly fixWorkItemId?: number;
+      readonly withoutFixWorkItem?: boolean;
     },
   ) => Promise<boolean>;
   /** 条件付きの更新。この呼び出しで移したら`true`。 */
@@ -374,6 +387,8 @@ export async function runPrCiWatch(
 /**
  * 回復だけを行う。監視を無効にしている間も、修正中の行を放置しないために使う。
  * 発見も判定も通知もしない。作業項目の起動もしない。
+ * 戻す行のPRが閉じていたときだけ、閉じたPRの整理(`closePr`)を行う。失敗のnoticeの解決と、
+ * そのPRの未完了の行を`superseded`にすることを含む。
  */
 export async function runPrCiRecovery(
   deps: PrCiWatchDeps,
@@ -722,7 +737,7 @@ async function recoverRow(context: Context, row: PrCiCheck): Promise<void> {
   const released = await deps.release(row.id, {
     ...(decision.hold === null ? {} : { holdReason: decision.hold }),
     ...(row.fix_work_item_id === null
-      ? {}
+      ? { withoutFixWorkItem: true }
       : { fixWorkItemId: row.fix_work_item_id }),
   });
   if (!released) return;
@@ -744,8 +759,11 @@ type FixingHead =
   | "unread";
 
 /**
- * 許可リストから外れたリポジトリは読まない。headが動いていても、戻した`failed`の行を
- * 判定が`superseded`にするので、`same`として戻す。
+ * 許可リストに合わないリポジトリは読まない。
+ * - 設定から外れたリポジトリ(`isRepoConfigured`が`false`)は、headが動いていても、戻した`failed`の行を
+ *   判定が`superseded`にするので、`same`として戻す。
+ * - 設定には合うが照合を通っていないリポジトリは、照合が一時的に失敗しているだけかもしれない。
+ *   headが動いたか分からないまま戻すと、古いheadの行を直し直しうるので、`unread`にして次の回に回す。
  */
 async function readFixingHead(
   context: Context,
@@ -753,7 +771,9 @@ async function readFixingHead(
   ref: PullRequestRef,
 ): Promise<FixingHead> {
   const { deps, state } = context;
-  if (!deps.isRepoAllowed(ref.owner, ref.repo)) return "same";
+  if (!deps.isRepoAllowed(ref.owner, ref.repo)) {
+    return deps.isRepoConfigured(ref.owner, ref.repo) ? "unread" : "same";
+  }
   if (state.rateLimited) return "unread";
   try {
     const pr = await readPr(context, ref);

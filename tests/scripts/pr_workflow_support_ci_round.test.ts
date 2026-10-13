@@ -16,7 +16,8 @@ const NEXT_ACTION =
   "原因を確かめて人が直してから、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
 const PUSH =
   "PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
-const WAIT = "Factoryが自動で評価し直すのを待ってください";
+const WAIT =
+  "保留が解けるまで待つか、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
 
 describe("describeReason for a CI round", () => {
   test("describes a fixed reason of the gather step", () => {
@@ -142,7 +143,7 @@ describe("nextActionForPrFix", () => {
     expect(nextActionForPrFix("no changes to commit", true)).toBe(NEXT_ACTION);
   });
 
-  test("keeps the procedure of a draft pull request and waits for the automatic re-evaluation", () => {
+  test("keeps the procedure of a draft pull request and waits for the hold to clear", () => {
     expect(nextActionForPrFix("pull request is a draft", true)).toBe(
       `ドラフトを解除してから、${WAIT}`,
     );
@@ -219,7 +220,13 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
 
   test("keeps the procedure of a stale worker image", () => {
     expect(nextActionForPrFix(STALE_IMAGE, true)).toBe(
-      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、${WAIT}(止まってから24時間後に評価し直します)`,
+      `ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後、失敗の行は止まってから24時間後に保留なしで戻ります。待てないときは、${PUSH}`,
+    );
+  });
+
+  test("does not promise an automatic re-evaluation for a stale worker image", () => {
+    expect(nextActionForPrFix(STALE_IMAGE, true)).not.toContain(
+      "自動で評価し直",
     );
   });
 
@@ -270,7 +277,13 @@ describe("nextActionForPrFix keeps the procedure of an infrastructure reason in 
 });
 
 describe("nextActionForPrFix keeps the procedure of a gate reason in a CI round", () => {
-  test("keeps the procedure of auto-merge and waits for the re-evaluation", () => {
+  test("does not promise an automatic re-evaluation for a draft pull request", () => {
+    expect(nextActionForPrFix("pull request is a draft", true)).not.toContain(
+      "自動で評価し直",
+    );
+  });
+
+  test("keeps the procedure of auto-merge and waits for the hold to clear", () => {
     expect(
       nextActionForPrFix("pull request has auto-merge enabled", true),
     ).toBe(`PRのauto-mergeを無効にしてから、${WAIT}`);

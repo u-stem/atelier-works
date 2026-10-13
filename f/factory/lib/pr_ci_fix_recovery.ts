@@ -2,14 +2,14 @@
 // 作業項目の状態と、止めた理由の注記から、行を`failed`に戻すか、`superseded`にするか、そのままにするかを決める。
 // I/Oは持たない。読み取りと更新は`pr_ci_watch.ts`が行う。
 
-import { CHECK_IMAGE_STALE_REASON } from "./check_sandbox.ts";
+import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry.ts";
 import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
 
 /**
- * イメージが古くて止まった作業項目の行を戻すまで待つ時間。
- * イメージを作り直す人に、その間の猶予を与える。待たずに戻すと、同じ理由で止まる回を重ねて、
+ * 自動の再開の対象の理由(イメージが古い)で止まった作業項目の行を戻すまで待つ時間。
+ * イメージを作り直す人と自動の再開に、その間の猶予を与える。待たずに戻すと、同じ理由で止まる回を重ねて、
  * 回数の上限を使い切るためである。
  */
 export const STALE_IMAGE_WAIT_MS = 24 * 60 * 60_000;
@@ -86,8 +86,12 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - pushした作業項目(`rereview_requested`か、pushしたcommitの記録がある)は、`pushed`にする。
  *   行のheadの読み遅れで、古いheadの行を`failed`に戻して直し直すことを防ぐためである。
  * - 存在しない作業項目と、`failed`などの失敗で終わった作業項目は、保留なしで戻す。起動し直してよい。
- * - `blocked`と`needs_human`は、理由を保留の理由に写す。写せなければ`fix_stopped`にする。
- *   ただし、イメージが古くて`blocked`になった作業項目は、`STALE_IMAGE_WAIT_MS`の間は戻さず、過ぎたら保留なしで戻す。
+ * - `blocked`は、理由を保留の理由に写せればその理由で保留する。写せなければ、保留なしで戻す。
+ *   起動し直す回数は、回数の上限(`pr_ci_fix_max_rounds`)が止める。
+ *   ただし、自動の再開の対象の理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった作業項目は、
+ *   自動の再開に譲るため`STALE_IMAGE_WAIT_MS`の間は戻さず、過ぎたら保留なしで戻す。
+ * - `needs_human`は、理由を保留の理由に写す。写せなければ`fix_stopped`にする。
+ * - `cancelled`は、人が止めたので`fix_stopped`にする。
  */
 export function decideFixingRecovery(
   item: FixItemState | null,
@@ -98,19 +102,26 @@ export function decideFixingRecovery(
   if (item.status === "rereview_requested" || item.pushed) {
     return { kind: "pushed" };
   }
-  if (item.status === "blocked" || item.status === "needs_human") {
+  if (item.status === "cancelled") {
+    return { kind: "release", hold: "fix_stopped" };
+  }
+  if (item.status === "needs_human") {
+    return {
+      kind: "release",
+      hold: holdReasonForStoppedItem(item.note) ?? "fix_stopped",
+    };
+  }
+  if (item.status === "blocked") {
+    const note = item.note;
     if (
-      item.status === "blocked" &&
-      item.note?.startsWith(`${CHECK_IMAGE_STALE_REASON}: `) === true
+      note !== null &&
+      AUTO_RETRY_REASON_PREFIXES.some((prefix) => note.startsWith(prefix))
     ) {
       return now.getTime() - item.updatedAt.getTime() < STALE_IMAGE_WAIT_MS
         ? { kind: "keep" }
         : { kind: "release", hold: null };
     }
-    return {
-      kind: "release",
-      hold: holdReasonForStoppedItem(item.note) ?? "fix_stopped",
-    };
+    return { kind: "release", hold: holdReasonForStoppedItem(item.note) };
   }
   return { kind: "release", hold: null };
 }
