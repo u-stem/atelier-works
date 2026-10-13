@@ -981,6 +981,23 @@ export async function collectCiFixChanges(
 }
 
 /**
+ * レビューの入力にする「CI回の差分か」の問い合わせを、失敗しても通常のレビューを止めない形にする。
+ * 問い合わせが例外を投げたときは偽を返し、`onError`に例外のメッセージを渡す。
+ * この値は重点的に見る固定文を足すかどうかだけを決めるので、偽に倒しても通常のレビューは変わらない。
+ */
+export async function ciRoundDiffOrFalse(
+  lookup: () => Promise<boolean>,
+  onError: (message: string) => void,
+): Promise<boolean> {
+  try {
+    return await lookup();
+  } catch (err) {
+    onError(err instanceof Error ? err.message : String(err));
+    return false;
+  }
+}
+
+/**
  * 変更を止める理由を、外へ出してよい形にする。
  * 理由に入るパスは、Claudeが選べる名前やリポジトリのファイル名で、秘密値の検査を通っていない。
  * 理由をまとめて1回検査し、検出と検査の失敗のときは、固定の文1件に置き換える。

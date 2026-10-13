@@ -80,3 +80,15 @@ describe("the finish step of a CI round", () => {
     ).toBe(true);
   });
 });
+
+describe("the review generate step", () => {
+  test("looks up the CI round diff through the helper that falls back to false", async () => {
+    const text = await source("pr_review_generate.ts");
+    expect(
+      count(
+        text,
+        "ciRoundDiffOrFalse(\n    () => hasCiRoundDiffToReview(owner, repo, pr_number, review_sha),",
+      ),
+    ).toBe(1);
+  });
+});

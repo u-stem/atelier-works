@@ -7,6 +7,7 @@ import {
   type CiGatherOutcome,
   ciClaudeFailureText,
   ciRoundApplyTimeoutMisfit,
+  ciRoundDiffOrFalse,
   ciRoundPushGuardReason,
   ciRoundRetryRefusal,
   ciRoundVerifyTimeoutMisfit,
@@ -821,6 +822,59 @@ describe("ciClaudeFailureText", () => {
     expect(ciClaudeFailureText("invalid_structured_output")).toBe(
       "ci round: claude run failed (invalid_structured_output)",
     );
+  });
+});
+
+describe("ciRoundDiffOrFalse", () => {
+  test("returns the answer of the lookup", async () => {
+    expect(
+      await ciRoundDiffOrFalse(
+        async () => true,
+        () => {},
+      ),
+    ).toBe(true);
+  });
+
+  test("returns false when the lookup throws", async () => {
+    expect(
+      await ciRoundDiffOrFalse(
+        async () => {
+          throw new Error("db down");
+        },
+        () => {},
+      ),
+    ).toBe(false);
+  });
+
+  test("reports the message of the error when the lookup throws", async () => {
+    const reported: string[] = [];
+    await ciRoundDiffOrFalse(
+      async () => {
+        throw new Error("db down");
+      },
+      (message) => reported.push(message),
+    );
+    expect(reported).toEqual(["db down"]);
+  });
+
+  test("reports a thrown value that is not an Error", async () => {
+    const reported: string[] = [];
+    await ciRoundDiffOrFalse(
+      async () => {
+        throw "plain";
+      },
+      (message) => reported.push(message),
+    );
+    expect(reported).toEqual(["plain"]);
+  });
+
+  test("does not report when the lookup succeeds", async () => {
+    const reported: string[] = [];
+    await ciRoundDiffOrFalse(
+      async () => false,
+      (message) => reported.push(message),
+    );
+    expect(reported).toEqual([]);
   });
 });
 

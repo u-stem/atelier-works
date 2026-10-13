@@ -5,6 +5,7 @@
 // detachedのworktreeである。
 
 import * as wmill from "windmill-client@1.817.0";
+import { ciRoundDiffOrFalse } from "../lib/ci_fix_round.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -167,11 +168,14 @@ export async function main(
 
   // 直近のpr_fixがCIの失敗を直した回なら、その差分を重点的に見るようプロンプトに加える。
   // 値はDBから決めた真偽値だけで、PRの内容からは決めない。
-  const ciRoundDiff = await hasCiRoundDiffToReview(
-    owner,
-    repo,
-    pr_number,
-    review_sha,
+  // 問い合わせに失敗しても通常のレビューは止めない。偽に倒して警告を残す。
+  const ciRoundDiff = await ciRoundDiffOrFalse(
+    () => hasCiRoundDiffToReview(owner, repo, pr_number, review_sha),
+    (message) =>
+      log.warn("could not look up the CI round diff, reviewing without it", {
+        work_item_id,
+        error: message,
+      }),
   );
 
   const promptText = reviewPrompt({

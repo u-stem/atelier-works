@@ -3949,8 +3949,9 @@ export async function getPrCiCheckById(
 
 /**
  * `reviewSha`のレビューが、CIの失敗を直したラウンドの差分を含むかを返す。
- * そのPRの最新の`pr_fix`が、CIの回(`ci_check_id`を持つ)で、再レビューの依頼まで終え(`rereview_requested`)、
- * その回がpushしたcommit(`fix_rounds.commit_shas`)に`reviewSha`が入っているときに限って真になる。
+ * そのPRの`pr_fix`のうち、CIの回(`ci_check_id`を持つ)のどれかが、pushしたcommit(`fix_rounds.commit_shas`)に
+ * `reviewSha`を含むときに真になる。最新かどうかと状態は問わない。
+ * 再レビューの依頼の前に別のレビューが走っても、依頼の後に作業項目が終端へ進んでも、pushしたcommitは変わらないためである。
  * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないので偽になる。
  * ownerとrepoは小文字で照合する。
  */
@@ -3964,26 +3965,21 @@ export async function hasCiRoundDiffToReview(
   assertPrCiTarget(owner, repo, prNumber);
   assertCommitSha(reviewSha);
   const rows = await sql`
-    SELECT w.ci_check_id, w.status,
-      EXISTS (
-        SELECT 1 FROM factory.fix_rounds r,
-          jsonb_array_elements_text(r.commit_shas) AS pushed(sha)
-        WHERE r.work_item_id = w.id AND pushed.sha = ${reviewSha}
-      ) AS pushed_review_sha
-    FROM factory.work_items w
-    WHERE w.kind = 'pr_fix'
-      AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
-      AND w.pr_number = ${prNumber}::integer
-    ORDER BY w.created_at DESC, w.id DESC
-    LIMIT 1
+    SELECT EXISTS (
+      SELECT 1
+      FROM factory.work_items w
+      JOIN factory.fix_rounds r ON r.work_item_id = w.id,
+        jsonb_array_elements_text(r.commit_shas) AS pushed(sha)
+      WHERE w.kind = 'pr_fix'
+        AND w.ci_check_id IS NOT NULL
+        AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
+        AND w.pr_number = ${prNumber}::integer
+        AND pushed.sha = ${reviewSha}
+    ) AS pushed_by_ci_round
   `.fetch();
   const row = rows[0];
   if (row === undefined) return false;
-  return (
-    parseNullableId(row.ci_check_id, "ci_check_id") !== null &&
-    row.status === "rereview_requested" &&
-    parseBoolean(row.pushed_review_sha, "pushed_review_sha")
-  );
+  return parseBoolean(row.pushed_by_ci_round, "pushed_by_ci_round");
 }
 
 /**

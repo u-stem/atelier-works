@@ -26,7 +26,7 @@ locks:
   f/factory/lib/ci_fix_classify: 3c7afb89715cb5a2ede49d499c473aef0facb8503b5c495d4b94b3714d2845a7
   f/factory/lib/ci_fix_paths: d5b9f024ed7497f3f70ba822b1d54a1f0c325e459633560675af76bd60ef1d07
   f/factory/lib/ci_fix_prompt: cc1dd1b059b33173764b76cee0a0bea1127ee88e642e93ef4f23b928af25609c
-  f/factory/lib/ci_fix_round: 9d9ba154adf205f7c89b5087d5e052f309d983ed0a3eaca6a0c2945f4cc49aac
+  f/factory/lib/ci_fix_round: 46d739291f83caa0d0e14ead9dc8e7cc3b71cfea3731974e30ef04115ae04c56
   f/factory/lib/ci_log_support: 0c079813679b394691042182d5adfa552dcc12cd38836f04c74930af40b7dc69
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 0da701e30c732878371ee7b96d96d343173e230deef982fad82300a201c9fa0c
@@ -36,7 +36,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d1a31969da1507c7e0d959f55897dec7360835451e901fdc84bd984c6b195e53
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
-  f/factory/lib/db: c3beddb75f501076d1908be4d2d70976666a79969ee4fc25e5b5b1b621da859e
+  f/factory/lib/db: 1e4536d7d7d9759a42fef8fc27a73e6a3c28712ec7a4c02a8d9d162951271c35
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -116,7 +116,7 @@ locks:
   f/factory/steps/pr_fix_finish: 48ffc097d13a67d5f580071039aad1d1521a71beaf8623a0d890e02405e945c6
   f/factory/steps/pr_fix_prepare: bdbb269174fd008d414afbf5b2f1507f601f4e930bd419574de2b856d29a2e3d
   f/factory/steps/pr_fix_verify: e2c8c658a0995da2279555f3dc3dcf35543d0a5543f06da2c8773a5089e1d000
-  f/factory/steps/pr_review_generate: 5eb09c684bec123f215242166762ef6b2946726bc72929a82f7d3b884a189a1b
+  f/factory/steps/pr_review_generate: 97b839baae79a93ff3ebf1d99994e7959f19b05e8cef5593ec398aac0756e3f0
   f/factory/steps/pr_review_post: eed26e78c65d0f339b99530491dffb0b3044bd16324f07ff97c5ef9035c2b314
   f/factory/steps/pr_review_prepare: 7a0b3a341ca4c56ebc34aceb8411a3aaaa23367f408fd17091b6d8886a8656d1
   f/factory/steps/pr_workflow_support: c6ab8b7039125110106bc196fe4b3eb389be0f02f3bef8901013473bdf10b337
