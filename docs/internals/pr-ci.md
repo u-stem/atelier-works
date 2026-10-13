@@ -110,7 +110,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `other_conclusion` | 決定的 | 失敗ではなく、取り消しや期限切れなどで終わった |
 | `log_unavailable` | 決定的 | 失敗のログを読めない |
 | `marker_missing` | 決定的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない |
-| `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まったか、取り消された |
+| `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まった |
 | `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
 | `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
@@ -129,8 +129,10 @@ Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr
 作業項目は行を戻さないので、監視が戻す。戻さないと、行が`fixing`のまま残る。残った行は、判定されず、通知されない。`claimPrCiCheckForFix`の対象にもならない。
 回復は発見の後、判定の前に行い、設定`pr_ci_watch_enabled`が`false`でも動く。
 作業項目の起動はしない。
-`false`のときは、発見と判定と通知をしない。オーナーの照合はせず、設定の`owners`と`repo_allowlist`に合うリポジトリのPRを読む(`buildRecoveryRepoGates`)。
+`false`のときは、発見と判定と失敗の通知をしない。オーナーの照合はせず、設定の`owners`と`repo_allowlist`に合うリポジトリのPRを読む(`buildRecoveryRepoGates`)。
 照合はGitHubの呼び出しとnoticeの追加を伴うためである。
+照合に伴うnoticeは足さないが、回復がPRを読めず403か404になると、権限の不足のnotice(`pr_ci_check_denied`)は足しうる。
+このnoticeを解決するのは判定なので、`false`の間は解決されない。
 行を戻すPRが閉じていたら、`false`のときでも閉じたPRを整理する。失敗のnoticeを解決し、そのPRの未完了の行を`superseded`にする。
 対象は、`listFixingPrCiChecks`が返す行と、`findOrphanFixingPrCiChecks`が返す行を合わせたものである。
 前者は最大100件、後者は最大50件を、読み直していない順に取る。
@@ -143,11 +145,14 @@ Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr
 | --- | --- |
 | 動いている(終端でない) | そのままにする。読み直した時刻だけを進める |
 | pushした(`rereview_requested`か、直す回がpushしたcommitを記録している) | `superseded`にする。PRのheadは読まない。headの読み遅れで、古いheadの行を起動し直さないためである |
-| 存在しない、`failed`、`expired` | 保留なしで`failed`に戻す |
 | `blocked` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ、保留なしで`failed`に戻す。起動し直す回数は、直す回数の上限が止める |
+| イメージが古い理由(自動の再開の対象の理由)で`blocked`になった | 止まってから24時間は戻さない。24時間後に保留なしで戻す。保留の理由ではなく、人がイメージを作り直す猶予である |
 | `needs_human` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ`fix_stopped`にする |
-| `cancelled` | `fix_stopped`にして`failed`に戻す |
-| 自動の再開の対象の理由で`blocked`になった(イメージが古い) | 止まってから24時間は戻さない。24時間後に保留なしで戻す。保留の理由ではなく、再開に譲る猶予である |
+| 存在しない、または上の行に当たらない終端の状態(`failed`、`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
+
+24時間待つのは、待たずに戻すと、同じ理由で止まる回を重ねて、直す回数の上限を使い切るためである。
+CIの回は自動の再開の対象外なので、この間に作業項目が再開されることはない。
+`pr_fix`が`cancelled`になるのはPRが閉じたときだけで、閉じたPRは、戻す前のheadの読み取りが拾う。そのため`cancelled`は保留しない。
 
 `failed`などに戻す前に、PRのheadを読む。
 headが行のheadと違えば、戻さず`superseded`にする。PRが閉じていれば、閉じたPRの整理に任せる。

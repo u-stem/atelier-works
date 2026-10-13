@@ -65,9 +65,9 @@ locks:
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: 64a0543f1d628ee92270a939a06f0eab81d7eed0b133f363b9f35692cd7f5004
-  f/factory/lib/pr_ci_fix_recovery: a90f9d59122db02c9c65947b9c3d8ed573aee781e2da631f7680ca0bb4b90d96
-  f/factory/lib/pr_ci_support: 63ebca31627d791175fc484b9ee2cc1b5f4cc393a45dfd664ced522d0cb81dc3
-  f/factory/lib/pr_ci_watch: b53434ec70bd512df16ca82b0eb20129913b40f0bc4ddc8665b8e5ae3ef00637
+  f/factory/lib/pr_ci_fix_recovery: c72d8440a5e241bdc7c168b62807203a8464bfd6b5f919f2548d438d62d54475
+  f/factory/lib/pr_ci_support: c6bb216140f3e1e6089bc2c46ec783237d7a98b69b8e03d2150fb82ac6e6316e
+  f/factory/lib/pr_ci_watch: fbd87fc721f327fbf1d1dd13f748ed7b740fce4c071751ef1e1eb2dd6098db14
   f/factory/lib/pr_fix_launch: 3a779ba932ebcdf2fddbbe15717e12a1c4eb49ca8a36755ecbf8adf9b5a41cc0
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: 84e0cc498ef2a01e60f9cf869b762c031731f0ea9dd5ad7f5b51a78b81de4bea
@@ -81,7 +81,7 @@ locks:
   f/factory/lib/self_update_support: 67c7b658a660af759976cf14ba5f2cf41921074e4f71916760a97bfd0475159c
   f/factory/lib/summary_support: 032b4c68ad4412f890724532423d8c81d8a6da7f2186e3cfe4d84999c56484a9
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: 21111f238240bd0e83d88633ca8fbaf3ccef6b3c160be246f4179fe1df7cd4da
+  f/factory/lib/types: fea6f2788a3516a48ac1c9ddb41ca2233a2bc7105cad8c5a3fca89905a539ce8
   f/factory/lib/worker_load_support: b6ae51b478860e07a4da1c130a793c619e524f9f400301bc881451810dbc6153
   f/factory/lib/workspace: 4100b0da9bdde7c48425630f7167012c70696ee338ce0d4302231adc34ffd92c
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -125,4 +125,4 @@ locks:
   f/factory/steps/pr_workflow_support: e9a0705cb7dd20ed1b6f17e49c5437b4ab78ba433d3b338a9d41a6dccd5f3a7c
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: 6b197f8bf7a2689c8f1906fcae64b328c9815890b6344796ab0e6cff6585e958
-  f/factory/watch_pr_ci: ccb6418b38b5ccc1e3d41f73d6064f345d0018778ac78b209aaa88a4614294a9
+  f/factory/watch_pr_ci: 1e067281837ba9aee542b4363a69782b3f17b1b4d7a81c045925f8bef26ff7db

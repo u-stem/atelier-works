@@ -2353,11 +2353,11 @@ describe("recovery of a fixing row", () => {
     ]);
   });
 
-  test("holds the row as stopped when the work item was cancelled", async () => {
+  test("returns the row without a hold when the work item was cancelled", async () => {
     const h = harness(fixingSetup(fixItem("cancelled")));
     await runPrCiWatch(h.deps);
-    expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
-      "fix_stopped",
+    expect(h.released.map((entry) => "holdReason" in entry.options)).toEqual([
+      false,
     ]);
   });
 

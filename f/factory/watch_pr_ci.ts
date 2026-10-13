@@ -9,8 +9,10 @@
 // 対象は、作業項目の`pr_url`から引いたPRのうち、許可リスト(`repo_allowlist`と照合済みの`owners`、
 // 常に対象の`factory_repo`)に合うリポジトリのものである。
 // GITHUB_TOKENにActionsの読み取り権限が無いリポジトリは、`pr_ci_check_denied`のnoticeで知らせる。
-// 設定`pr_ci_watch_enabled`が`false`のときは、回復だけを行い、発見と判定と通知はしない。
+// 設定`pr_ci_watch_enabled`が`false`のときは、回復だけを行い、発見と判定と失敗の通知はしない。
 // このときはオーナーの照合も行わず、設定に合うリポジトリのPRだけを読む(`buildRecoveryRepoGates`)。
+// 照合に伴う通知は足さない。ただし、回復がPRを読めず403か404になると、`pr_ci_check_denied`は足しうる。
+// 判定が動かない間は、この通知は解決されない。
 // 回復の対象の行が無ければ、何も読まずに終わる。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。

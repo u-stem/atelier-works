@@ -151,10 +151,10 @@ describe("decideFixingRecovery", () => {
     });
   });
 
-  test("holds the row as stopped when the work item was cancelled", () => {
+  test("releases the row without a hold when the work item was cancelled", () => {
     expect(decideFixingRecovery(item("cancelled"), NOW)).toEqual({
       kind: "release",
-      hold: "fix_stopped",
+      hold: null,
     });
   });
 

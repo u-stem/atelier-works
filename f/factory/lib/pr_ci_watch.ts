@@ -164,8 +164,10 @@ export function buildRepoGates(
 
 /**
  * 回復だけを行うときの判定を作る。オーナーの照合をしないので、設定に合うリポジトリを許す。
- * 回復は、PRの状態とheadを読んで行を戻すだけで、通知もClaudeへの入力もしない。
+ * 回復は、PRの状態とheadを読んで行を戻すだけで、失敗の通知もClaudeへの入力もしない。
  * 照合はGitHubの呼び出しと通知の追加を伴うため、監視を無効にしている間は行わない。
+ * ただし、回復がPRを読めず403か404になると、権限の不足の通知(`pr_ci_check_denied`)は足しうる。
+ * 判定が動かない間は、この通知は解決されない。
  */
 export function buildRecoveryRepoGates(
   config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
@@ -386,7 +388,8 @@ export async function runPrCiWatch(
 
 /**
  * 回復だけを行う。監視を無効にしている間も、修正中の行を放置しないために使う。
- * 発見も判定も通知もしない。作業項目の起動もしない。
+ * 発見も判定も失敗の通知もしない。作業項目の起動もしない。
+ * 権限の不足(403、404)で読めないときだけ、`pr_ci_check_denied`の通知を足しうる。解決は判定が行う。
  * 戻す行のPRが閉じていたときだけ、閉じたPRの整理(`closePr`)を行う。失敗のnoticeの解決と、
  * そのPRの未完了の行を`superseded`にすることを含む。
  */
@@ -760,8 +763,9 @@ type FixingHead =
 
 /**
  * 許可リストに合わないリポジトリは読まない。
- * - 設定から外れたリポジトリ(`isRepoConfigured`が`false`)は、headが動いていても、戻した`failed`の行を
- *   判定が`superseded`にするので、`same`として戻す。
+ * - 設定から外れたリポジトリ(`isRepoConfigured`が`false`)は、headが動いていても`same`として戻す。
+ *   戻した`failed`の行を判定が`superseded`にするのは、最初に見てから24時間たった行だけで、
+ *   それより新しい行は読み直した時刻を進めるだけである。
  * - 設定には合うが照合を通っていないリポジトリは、照合が一時的に失敗しているだけかもしれない。
  *   headが動いたか分からないまま戻すと、古いheadの行を直し直しうるので、`unread`にして次の回に回す。
  */

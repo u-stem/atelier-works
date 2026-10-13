@@ -455,7 +455,7 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `other_conclusion`: 失敗ではなく、取り消しや期限切れなどで終わった。
  * - `log_unavailable`: 失敗のログを読めない。
  * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
- * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まったか、取り消された。
+ * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まった。
  *   止めた理由が語彙に写せない`blocked`は含めない。起動し直す回数は、回数の上限が止める。
  * - `rounds_exhausted`: 直す回数の上限に達した。
  * - `not_factory_head`: 最後のpushがFactoryのものでない。
@@ -541,7 +541,7 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     notice: "immediate",
     discord: false,
     nextAction:
-      "直す作業が止まったか、取り消されました。作業項目の理由を確かめ、人が直してPRにpushする",
+      "直す作業が人の判断待ちで止まりました。作業項目の理由を確かめ、人が直してPRにpushする",
   },
   rounds_exhausted: {
     temporary: false,
