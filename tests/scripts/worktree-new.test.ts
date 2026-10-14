@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -55,6 +56,9 @@ type RunOptions = {
 
 const BASH = Bun.which("bash") ?? "bash";
 
+// テストごとに作る空のHOME。
+let fakeHome = "";
+
 function runScript(
   cwd: string,
   args: string[],
@@ -67,7 +71,14 @@ function runScript(
   const result = Bun.spawnSync(command, {
     cwd,
     stdin: Buffer.from(options.input ?? ""),
-    env: { ...cleanEnv(), WORKTREE_NEW_BUN: bun, ...options.env },
+    env: {
+      ...cleanEnv(),
+      // 利用者のClaude設定(`~/.claude/settings.json`)を読ませない。
+      HOME: fakeHome,
+      WORKTREE_NEW_EXTRA_PATH: "",
+      WORKTREE_NEW_BUN: bun,
+      ...options.env,
+    },
   });
   return {
     exitCode: result.exitCode,
@@ -105,6 +116,8 @@ describe("worktree-new.sh", () => {
 
   beforeEach(() => {
     root = makeTempRoot("worktree-new-");
+    fakeHome = join(root, "home");
+    mkdirSync(fakeHome);
     originDir = join(root, "origin.git");
     mainDir = join(root, "main");
     fakeBun = join(root, "fake-bun");
@@ -637,9 +650,10 @@ describe("worktree-new.sh", () => {
       name: unknown,
       options: RunOptions = {},
       cwd: string = mainDir,
+      jsonCwd: string = mainDir,
     ): Run {
       return runScript(cwd, ["--hook"], fakeBun, {
-        input: JSON.stringify({ name, cwd: mainDir }),
+        input: JSON.stringify({ name, cwd: jsonCwd }),
         ...options,
       });
     }
@@ -828,6 +842,342 @@ describe("worktree-new.sh", () => {
       const result = runHook("feat-foo");
 
       expect(result.stdout).toBe("");
+    });
+
+    function writeSettings(dir: string, file: string, content: string): void {
+      mkdirSync(join(dir, ".claude"), { recursive: true });
+      writeFileSync(join(dir, ".claude", file), content);
+    }
+
+    const baseRef = (value: unknown) =>
+      JSON.stringify({ worktree: { baseRef: value } });
+
+    // メインのcheckoutだけに、originにpushしていないcommitを足してshaを返す。
+    function localCommit(): string {
+      git(mainDir, [
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "--no-gpg-sign",
+        "-m",
+        "local",
+      ]);
+      return git(mainDir, ["rev-parse", "HEAD"]);
+    }
+
+    describe("worktree.baseRef", () => {
+      let local: string;
+      let originHead: string;
+
+      beforeEach(() => {
+        originHead = git(mainDir, ["rev-parse", "HEAD"]);
+        local = localCommit();
+      });
+
+      const headOf = (result: Run) =>
+        git(result.stdout.trim(), ["rev-parse", "HEAD"]);
+
+      test("branches from HEAD when the project settings say head", () => {
+        writeSettings(mainDir, "settings.json", baseRef("head"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(local);
+      });
+
+      test("does not fetch when it branches from HEAD", () => {
+        writeSettings(mainDir, "settings.json", baseRef("head"));
+
+        const result = runHook("feat-foo");
+
+        expect(result.stderr).not.toContain("fetching origin/main");
+      });
+
+      test("branches from origin/main when the setting is fresh", () => {
+        writeSettings(mainDir, "settings.json", baseRef("fresh"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(originHead);
+      });
+
+      test("branches from origin/main when the setting is absent", () => {
+        expect(headOf(runHook("feat-foo"))).toBe(originHead);
+      });
+
+      test("branches from origin/main when the setting is an unknown string", () => {
+        writeSettings(mainDir, "settings.json", baseRef("branch"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(originHead);
+      });
+
+      test("branches from origin/main when the setting is a number", () => {
+        writeSettings(mainDir, "settings.json", baseRef(5));
+
+        expect(headOf(runHook("feat-foo"))).toBe(originHead);
+      });
+
+      test("branches from origin/main when the settings file is broken", () => {
+        writeSettings(mainDir, "settings.json", "{ not json");
+
+        expect(headOf(runHook("feat-foo"))).toBe(originHead);
+      });
+
+      test("still succeeds when the settings file is broken", () => {
+        writeSettings(mainDir, "settings.json", "{ not json");
+
+        expect(runHook("feat-foo").exitCode).toBe(0);
+      });
+
+      test("skips a broken local settings file and reads the next one", () => {
+        writeSettings(mainDir, "settings.local.json", "{ not json");
+        writeSettings(mainDir, "settings.json", baseRef("head"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(local);
+      });
+
+      test("prefers settings.local.json over settings.json", () => {
+        writeSettings(mainDir, "settings.local.json", baseRef("fresh"));
+        writeSettings(mainDir, "settings.json", baseRef("head"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(originHead);
+      });
+
+      test("prefers a local head over a project fresh", () => {
+        writeSettings(mainDir, "settings.local.json", baseRef("head"));
+        writeSettings(mainDir, "settings.json", baseRef("fresh"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(local);
+      });
+
+      test("reads the user settings when the project has none", () => {
+        writeSettings(fakeHome, "settings.json", baseRef("head"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(local);
+      });
+
+      test("prefers the project settings over the user settings", () => {
+        writeSettings(fakeHome, "settings.json", baseRef("head"));
+        writeSettings(mainDir, "settings.json", baseRef("fresh"));
+
+        expect(headOf(runHook("feat-foo"))).toBe(originHead);
+      });
+
+      test("prefers the settings of the hook cwd over those of the main checkout", () => {
+        runScript(mainDir, ["fix/first"], fakeBun);
+        const first = join(worktrees(), "fix-first");
+        const firstHead = git(first, ["rev-parse", "HEAD"]);
+        writeSettings(first, "settings.json", baseRef("head"));
+        writeSettings(mainDir, "settings.json", baseRef("fresh"));
+
+        const result = runHook("feat-foo", {}, mainDir, first);
+
+        expect(headOf(result)).toBe(firstHead);
+      });
+    });
+
+    describe("reusing an existing worktree", () => {
+      test("succeeds on the second call with the same name", () => {
+        runHook("feat-foo");
+
+        expect(runHook("feat-foo").exitCode).toBe(0);
+      });
+
+      test("prints the same path on the second call", () => {
+        runHook("feat-foo");
+
+        expect(runHook("feat-foo").stdout).toBe(
+          `${join(worktrees(), "feat-foo")}\n`,
+        );
+      });
+
+      test("does not install again on the second call", () => {
+        runHook("feat-foo");
+
+        runHook("feat-foo");
+
+        expect(readFileSync(bunLog, "utf8").trim().split("\n")).toHaveLength(2);
+      });
+
+      test("fails when the worktree at the path has another branch", () => {
+        git(mainDir, [
+          "worktree",
+          "add",
+          "--quiet",
+          "-b",
+          "other",
+          join(worktrees(), "feat-foo"),
+        ]);
+
+        expect(runHook("feat-foo").exitCode).toBe(1);
+      });
+
+      test("fails when the directory is not a registered worktree", () => {
+        mkdirSync(join(worktrees(), "feat-foo"), { recursive: true });
+
+        expect(runHook("feat-foo").exitCode).toBe(1);
+      });
+
+      test("fails when only the branch exists", () => {
+        git(mainDir, ["branch", "feat/foo"]);
+
+        expect(runHook("feat-foo").exitCode).toBe(1);
+      });
+
+      test("fails in the argument mode on the second call", () => {
+        runScript(mainDir, ["feat/foo"], fakeBun);
+
+        expect(runScript(mainDir, ["feat/foo"], fakeBun).exitCode).toBe(1);
+      });
+    });
+
+    describe("PATH and bun", () => {
+      // 偽のbunかmiseを、`name`の名前で`dir`に置く。
+      function fakeTool(dir: string, name: string): void {
+        mkdirSync(dir, { recursive: true });
+        writeFakeBun(join(dir, name), bunLog, 0);
+      }
+
+      test("runs the install through mise when it is found", () => {
+        const extra = join(root, "extra");
+        fakeTool(extra, "mise");
+
+        runHook("feat-foo", {
+          env: { WORKTREE_NEW_BUN: "", WORKTREE_NEW_EXTRA_PATH: extra },
+        });
+
+        expect(readFileSync(bunLog, "utf8").trim().split("\n")).toEqual([
+          `${join(worktrees(), "feat-foo")} exec -- bun install --frozen-lockfile --ignore-scripts`,
+          `${join(worktrees(), "feat-foo")} exec -- bun install --cwd console --frozen-lockfile --ignore-scripts`,
+        ]);
+      });
+
+      test("lets WORKTREE_NEW_BUN win over mise", () => {
+        const extra = join(root, "extra");
+        fakeTool(extra, "mise");
+
+        runHook("feat-foo", { env: { WORKTREE_NEW_EXTRA_PATH: extra } });
+
+        expect(readFileSync(bunLog, "utf8").trim().split("\n")[0]).toBe(
+          `${join(worktrees(), "feat-foo")} install --frozen-lockfile --ignore-scripts`,
+        );
+      });
+
+      // miseを含まないPATHを、必要な道具のリンクだけで作る。
+      function toolOnlyPath(withBun: boolean): string {
+        const bin = join(root, "toolbin");
+        mkdirSync(bin);
+        const tools = [
+          "bash",
+          "git",
+          "jq",
+          "tr",
+          "sed",
+          "cat",
+          "dirname",
+          "basename",
+          "env",
+          "mkdir",
+          "touch",
+        ];
+        for (const tool of tools) {
+          symlinkSync(Bun.which(tool) ?? "/nonexistent", join(bin, tool));
+        }
+        if (withBun) {
+          fakeTool(bin, "bun");
+        }
+        return bin;
+      }
+
+      test("runs bun directly when mise is absent", () => {
+        const bin = toolOnlyPath(true);
+
+        runHook("feat-foo", { env: { PATH: bin, WORKTREE_NEW_BUN: "" } });
+
+        expect(readFileSync(bunLog, "utf8").trim().split("\n")[0]).toBe(
+          `${join(worktrees(), "feat-foo")} install --frozen-lockfile --ignore-scripts`,
+        );
+      });
+
+      test("fails with a reason when neither mise nor bun is found", () => {
+        const bin = toolOnlyPath(false);
+
+        const result = runHook("feat-foo", {
+          env: { PATH: bin, WORKTREE_NEW_BUN: "" },
+        });
+
+        expect(result.stderr).toContain("bun is required");
+      });
+
+      test("creates nothing when bun is not found", () => {
+        const bin = toolOnlyPath(false);
+
+        runHook("feat-foo", { env: { PATH: bin, WORKTREE_NEW_BUN: "" } });
+
+        expect(existsSync(join(mainDir, ".claude"))).toBe(false);
+      });
+    });
+
+    describe("network limits", () => {
+      let gitLog: string;
+      let fakeBin: string;
+
+      beforeEach(() => {
+        gitLog = join(root, "git.log");
+        fakeBin = join(root, "fakebin");
+        mkdirSync(fakeBin);
+        const realGit = Bun.which("git") ?? "git";
+        writeFileSync(
+          join(fakeBin, "git"),
+          `#!/usr/bin/env bash\necho "args=$* ssh=\${GIT_SSH_COMMAND:-}" >> "${gitLog}"\nexec "${realGit}" "$@"\n`,
+        );
+        chmodSync(join(fakeBin, "git"), 0o755);
+      });
+
+      const withFakeGit = (extra: Record<string, string> = {}) => ({
+        env: { PATH: `${fakeBin}:${process.env.PATH ?? ""}`, ...extra },
+      });
+
+      test("sets a low speed limit for fetch in the hook mode", () => {
+        runHook("feat-foo", withFakeGit());
+
+        expect(readFileSync(gitLog, "utf8")).toContain(
+          "-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 fetch",
+        );
+      });
+
+      test("sets a low speed limit for ls-remote in the hook mode", () => {
+        runHook("feat-foo", withFakeGit());
+
+        expect(readFileSync(gitLog, "utf8")).toContain(
+          "-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 ls-remote",
+        );
+      });
+
+      test("sets a connect timeout for ssh when none is configured", () => {
+        runHook("feat-foo", withFakeGit());
+
+        expect(readFileSync(gitLog, "utf8")).toContain(
+          "ssh=ssh -o ConnectTimeout=15 -o BatchMode=yes",
+        );
+      });
+
+      test("keeps a GIT_SSH_COMMAND that is already set", () => {
+        runHook("feat-foo", withFakeGit({ GIT_SSH_COMMAND: "myssh" }));
+
+        expect(readFileSync(gitLog, "utf8")).toContain("ssh=myssh");
+      });
+
+      test("does not add the limits in the argument mode", () => {
+        runScript(mainDir, ["feat/foo"], fakeBun, withFakeGit());
+
+        expect(readFileSync(gitLog, "utf8")).not.toContain("lowSpeed");
+      });
+    });
+
+    test("prints the real path when the cwd is a symbolic link to the main checkout", () => {
+      const link = join(root, "link-to-main");
+      symlinkSync(mainDir, link);
+
+      const result = runHook("feat-foo", {}, link, link);
+
+      expect(result.stdout).toBe(`${join(worktrees(), "feat-foo")}\n`);
     });
   });
 

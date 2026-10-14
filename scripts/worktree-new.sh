@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# `origin/main`からgit worktreeを作り、依存を入れて、作業ディレクトリの絶対パスを
-# 標準出力の最後の行に出す。進捗は標準エラーへ出す。
+# git worktreeを作り、依存を入れて、作業ディレクトリの絶対パスを標準出力の最後の行に出す。
+# 進捗は標準エラーへ出す。起点は`origin/main`(フックでは設定により`HEAD`)である。
 #
 # 使い方:
 #   scripts/worktree-new.sh <type>/<name>   (例: feat/foo)
@@ -8,6 +8,7 @@
 #   scripts/worktree-new.sh --hook
 #     ClaudeのWorktreeCreateフック。標準入力のJSONの`name`と`cwd`を読み、標準出力にはパスだけを出す。
 # 既にブランチ(ローカルとorigin)かディレクトリがあれば、何も変えずに非ゼロで終わる。
+# ただしフックは、登録済みで期待するブランチのworktreeが既にあれば、それを再利用して成功にする。
 set -euo pipefail
 
 usage() {
@@ -19,13 +20,29 @@ usage() {
 
 types='feat|fix|docs|refactor|test|chore'
 hook=0
+hook_cwd=""
+# 追加のgitの引数。フックのときだけ、通信の待ちを制限する。
+net_opts=()
 
 if [ "$#" -eq 1 ] && [ "$1" = "--hook" ]; then
   hook=1
+  # Claudeがmiseを有効にしていないシェルから呼ぶので、jqとmiseがある場所を足す。
+  # `WORKTREE_NEW_EXTRA_PATH`は足す場所を差し替える(テスト用)。空なら足さない。
+  extra_path="${WORKTREE_NEW_EXTRA_PATH-/opt/homebrew/bin:/usr/local/bin}"
+  if [ -n "$extra_path" ]; then
+    PATH="$extra_path:$PATH"
+    export PATH
+  fi
   if ! command -v jq >/dev/null 2>&1; then
     echo "worktree-new: jq is required for --hook but was not found in PATH" >&2
     exit 1
   fi
+  # オフラインや遅い回線でも、subagentの起動を長く止めないよう、待ちを制限する。
+  # sshはつながらなければ15秒で諦め、パスワードを聞かない。HTTPSは20秒間1KB/s未満なら諦める。
+  if [ -z "${GIT_SSH_COMMAND:-}" ]; then
+    export GIT_SSH_COMMAND="ssh -o ConnectTimeout=15 -o BatchMode=yes"
+  fi
+  net_opts=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20)
   input="$(cat)"
   if ! name="$(printf '%s' "$input" | jq -er '.name | select(type == "string")')"; then
     echo "worktree-new: the hook input is not JSON with a string \"name\"" >&2
@@ -34,6 +51,8 @@ if [ "$#" -eq 1 ] && [ "$1" = "--hook" ]; then
   hook_cwd="$(printf '%s' "$input" | jq -r '.cwd | select(type == "string")')"
   if [ -n "$hook_cwd" ] && [ -d "$hook_cwd" ]; then
     cd "$hook_cwd"
+  else
+    hook_cwd=""
   fi
   # 名前を、ブランチ名とディレクトリ名に使える形にそろえる。
   # `/`、`.`、`..`は`-`になり、パスの区切りを含められない。
@@ -64,6 +83,21 @@ else
   dir_name="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
 fi
 
+# 依存を入れるコマンド。`WORKTREE_NEW_BUN`は実行ファイルを差し替える(テスト用)。
+# フックはmiseを有効にしていないシェルから呼ばれるので、miseがあれば`mise exec -- bun`で動かす。
+# 引数は`mise run setup`と同じ。
+if [ -n "${WORKTREE_NEW_BUN:-}" ]; then
+  bun_cmd=("$WORKTREE_NEW_BUN")
+elif [ "$hook" -eq 1 ] && command -v mise >/dev/null 2>&1; then
+  bun_cmd=(mise exec -- bun)
+else
+  bun_cmd=(bun)
+fi
+if ! command -v "${bun_cmd[0]}" >/dev/null 2>&1; then
+  echo "worktree-new: ${bun_cmd[0]} is required to install the dependencies but was not found in PATH" >&2
+  exit 1
+fi
+
 # 置き場所は、相対パスではなくメインのcheckoutの絶対パスから決める。
 # 別のworktreeの中から実行しても、その中に入れ子にならないようにするため。
 common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
@@ -80,7 +114,32 @@ main_root="$(cd "$(dirname "$common_dir")" && pwd -P)"
 # worktree側の`mise.toml`のほうが近いので、worktreeには引き継がれない。
 worktree_path="$main_root/.claude/worktrees/$dir_name"
 
+# フックが作ったworktreeを、`claude --worktree foo`の2回目などで再び求められたときに、
+# 起動を止めないよう再利用する。パスが登録済みで、期待するブランチのときだけ成功にする。
+# ブランチだけがある、別のブランチ、登録の無いディレクトリは、混ざるおそれがあるので失敗にする。
+is_registered_with_branch() {
+  local list line in_target=0
+  list="$(git worktree list --porcelain)"
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree $worktree_path") in_target=1 ;;
+      "worktree "*) in_target=0 ;;
+      "branch refs/heads/$branch")
+        if [ "$in_target" -eq 1 ]; then
+          return 0
+        fi
+        ;;
+    esac
+  done <<<"$list"
+  return 1
+}
+
 if [ -e "$worktree_path" ]; then
+  if [ "$hook" -eq 1 ] && is_registered_with_branch; then
+    echo "worktree-new: reusing the existing worktree: $worktree_path" >&2
+    echo "$worktree_path"
+    exit 0
+  fi
   echo "worktree-new: directory already exists: $worktree_path" >&2
   exit 1
 fi
@@ -89,28 +148,66 @@ if git show-ref --verify --quiet "refs/heads/$branch"; then
   exit 1
 fi
 
-# フックはsubagentの起動に使われる。オフラインでもsubagentを止めないよう、
-# フックのときだけ、fetchとoriginの検査の失敗を警告にして続ける。
-# 取り込み済みの`refs/remotes/origin/main`が無ければ、起点が決められないので失敗する。
-echo "worktree-new: fetching origin/main" >&2
-if ! git fetch origin main >&2; then
-  if [ "$hook" -ne 1 ]; then
-    exit 1
-  fi
-  echo "worktree-new: warning: fetch failed, using the existing refs/remotes/origin/main" >&2
+# Claude Codeの設定`worktree.baseRef`を読む。`head`ならフックのcwdの`HEAD`から作り、
+# それ以外(未設定、`fresh`、不正な値)は`origin/main`から作る。
+# 読む順は、`settings.local.json`、`settings.json`(フックのcwdのものが先、メインのcheckoutが次)、
+# ユーザーの`settings.json`で、値が見つかった最初のファイルに従う。
+# 壊れて読めないファイルは、作成を止めずに飛ばす。
+resolve_base_ref() {
+  local file value cwd_dir="${hook_cwd:-$main_root}"
+  for file in \
+    "$cwd_dir/.claude/settings.local.json" \
+    "$main_root/.claude/settings.local.json" \
+    "$cwd_dir/.claude/settings.json" \
+    "$main_root/.claude/settings.json" \
+    "${HOME:-/nonexistent}/.claude/settings.json"; do
+    if [ ! -f "$file" ]; then
+      continue
+    fi
+    if value="$(jq -r '.worktree.baseRef // empty' "$file" 2>/dev/null)" && [ -n "$value" ]; then
+      echo "$value"
+      return
+    fi
+  done
+  echo "fresh"
+}
+
+base_ref="fresh"
+if [ "$hook" -eq 1 ]; then
+  base_ref="$(resolve_base_ref)"
 fi
 
-# 短い`origin/main`は同名のブランチやタグに解決されうるので、完全な名前で指す。
-if ! base_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
-  echo "worktree-new: refs/remotes/origin/main does not exist" >&2
-  exit 1
+if [ "$base_ref" = "head" ]; then
+  # 現在の作業を起点にするので、fetchはしない。
+  echo "worktree-new: worktree.baseRef is head; branching from HEAD" >&2
+  if ! base_sha="$(git rev-parse --verify HEAD)"; then
+    echo "worktree-new: HEAD does not resolve to a commit" >&2
+    exit 1
+  fi
+else
+  # フックはsubagentの起動に使われる。オフラインでもsubagentを止めないよう、
+  # フックのときだけ、fetchとoriginの検査の失敗を警告にして続ける。
+  # 取り込み済みの`refs/remotes/origin/main`が無ければ、起点が決められないので失敗する。
+  echo "worktree-new: fetching origin/main" >&2
+  if ! git ${net_opts[@]+"${net_opts[@]}"} fetch origin main >&2; then
+    if [ "$hook" -ne 1 ]; then
+      exit 1
+    fi
+    echo "worktree-new: warning: fetch failed, using the existing refs/remotes/origin/main" >&2
+  fi
+
+  # 短い`origin/main`は同名のブランチやタグに解決されうるので、完全な名前で指す。
+  if ! base_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
+    echo "worktree-new: refs/remotes/origin/main does not exist" >&2
+    exit 1
+  fi
 fi
 
 # originに同名のブランチがあると、最初のpushが拒否されるか、他の作業に混ざる。
 # `ls-remote --exit-code`は、一致が無いと2、通信などの失敗はそれ以外で終わる。
 # この検査から最初のpushまでの間に、他の人が同名のブランチをpushするレースは受け入れる。
 remote_status=0
-git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null || remote_status=$?
+git ${net_opts[@]+"${net_opts[@]}"} ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null || remote_status=$?
 if [ "$remote_status" -eq 0 ]; then
   echo "worktree-new: branch already exists on origin: $branch" >&2
   exit 1
@@ -126,10 +223,14 @@ fi
 # 後始末の対象は、`git worktree add`の成功から依存の導入の完了までに限る。
 # ここまでの検査で止まったときは、既存のブランチやディレクトリを消さない。
 # 完成したあとの失敗や中断では、できあがったworktreeを消さない。
-# worktreeは強制せずに消す。依存の導入が作るのはgitignore済みの`node_modules`だけなので、
-# 通常のremoveが通る。未追跡のファイルや変更があれば、gitが拒む。
+# worktreeは強制せずに消す。`git worktree remove`は、gitに無視されたファイル
+# (node_modules、`*.local.*`、`.wmill`など)を黙って消す。ここで消してよいのは、
+# 作ったばかりのworktreeに依存の導入が残したものだけ、という前提による。
+# 未追跡のファイルや変更があれば、gitが拒む。
 # ブランチは、作った時点の`base_sha`を指すままのときだけ消す。コミットが増えていれば、gitが拒む。
 # 片付けの最中の中断で、worktreeだけが消えてブランチが残らないよう、INTとTERMは無視する。
+# TERMは、前景で動くbunが終わるまでtrapが遅れる。KILLでは後始末が走らない。
+# そうして残った作りかけは、`mise run worktree:prune`が放置されたものとして片付ける。
 created=0
 cleanup() {
   local rc=$?
@@ -180,12 +281,10 @@ created=1
 # (`scripts/link-worktree-wmill.sh`)が張る。
 # `lefthook install`は実行しない。フックは共通の`.git/hooks`に入り、すべてのworktreeで
 # 共有されるので、メインのcheckoutの`mise run setup`で入っていれば足りるためである。
-# `WORKTREE_NEW_BUN`は、bunの実行ファイルを差し替える(テスト用)。引数は`mise run setup`と同じ。
-bun="${WORKTREE_NEW_BUN:-bun}"
 cd "$worktree_path"
 echo "worktree-new: installing dependencies" >&2
-"$bun" install --frozen-lockfile --ignore-scripts >&2
-"$bun" install --cwd console --frozen-lockfile --ignore-scripts >&2
+"${bun_cmd[@]}" install --frozen-lockfile --ignore-scripts >&2
+"${bun_cmd[@]}" install --cwd console --frozen-lockfile --ignore-scripts >&2
 created=0
 
 echo "worktree-new: first push: git push -u origin HEAD" >&2
