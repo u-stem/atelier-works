@@ -97,6 +97,8 @@ PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走�
 `main`へのpushで、直近で成功した実行のcommitを調べ、差分の基点にするためである。
 どちらも読み取りだけで、書き込みの権限は付けない。
 トークンを`gh`に渡すのは`main`へのpushの実行だけで、PRの実行には渡さない。
+`metadata`ジョブも権限を足さない。
+失敗したときに限り、PRの実行でartifactを上げる([CIのメタデータの再生成](#ciのメタデータの再生成))。
 
 `console-dist.yml`の既定の権限も、`contents: read`だけである。
 ジョブは権限を足さない。
@@ -108,6 +110,77 @@ PRを作ればCIが走査し、Factoryは実装ブランチのpushの前に走�
 残るリスクとして、PRの実行の判定は、PRの版の`scripts/ci-scope.ts`で行う。
 判定を書き換える変更は、保護パスとして`pr_fix`と`implement`が止める。
 人が書いたPRは`ci.yml`も書き換えられるので、レビューで確かめる。
+
+### CIのメタデータの再生成
+
+`metadata`ジョブは、検査が失敗したときに、使い捨てのWindmillでメタデータを作り直し、結果をartifact(`metadata-patch`)に出す。
+動かす条件、手順、artifactの形は[セットアップ](setup.md#ciのメタデータの検査)にある。
+ここでは、権限と前提を書く。
+
+#### 権限と条件
+
+ジョブの権限は`contents: read`のままで、書き込みの権限を足さない。
+artifactの書き込みは、ランナーの実行用の資格情報で行うため、`GITHUB_TOKEN`の権限は要らない。
+ジョブにsecretsを渡さず、作り直しの結果をPRやブランチに書き込まない。
+
+作り直しは、同じリポジトリのPRで、ブランチ名が`factory/`で始まるときだけ動かす。
+PRのコードが動く作り直しを、forkと人のブランチに広げないためである。
+条件の式は、ジョブの環境変数で1度だけ評価する。
+各ステップの`if`はその環境変数を読み、`run`のシェルには式を展開しない。
+ブランチ名がシェルに渡らないので、ブランチ名による注入は起こらない。
+
+残るリスクとして、`startsWith`は大文字小文字を区別しないので、`Factory/`で始まるブランチも対象になる。
+同じリポジトリのブランチを作れる人が、このジョブで得る権限は変わらないので、受け入れる。
+
+#### 使い捨ての環境
+
+Windmillのサーバーとworkerは、ジョブの中のコンテナだけで動く。
+サーバーは`127.0.0.1`にだけ公開し、workerはポートを公開しない。
+資格情報は、公開されている既定の管理者とダミーのデータベースのパスワードだけで、本番の秘密は届かない。
+そのため、PRの依存の解決が悪用されても、被害は使い捨ての環境と、読み取りだけのトークンに限られる。
+
+作り直しは、PRのブランチのscriptが指定する依存を、レジストリから取得する。
+ネットワークは分離しない。
+`mise run metadata`はPRの`mise.toml`のタスクを動かす。`check`ジョブもPRの`mise.toml`を使うので、動かすコードの範囲は広がらない。
+
+#### install script
+
+bunは、依存のinstall scriptを、既定で信頼する一覧(trustedDependencies)にあるパッケージについて実行する。
+bunは`NPM_CONFIG_IGNORE_SCRIPTS`を読まない。
+そのため、`windmill_worker_ci`は次の2つで止める。
+
+- bunfigの`ignoreScripts = true`を、workerの`/root/.bunfig.toml`に読み取り専用でマウントする(`infra/ci-worker-bunfig.toml`)。
+- `NPM_CONFIG_IGNORE_SCRIPTS=true`を渡す。npmを使う経路があっても、install scriptを動かさないための備えである。
+
+workerは、依存の解決のプロセスの環境を絞る。
+`NPM_CONFIG_IGNORE_SCRIPTS`を`WHITELIST_ENVS`にも挙げて、`bun install`まで届かせる。
+
+確かめた版はWindmill 1.817.0(`mise.toml`の`WM_VERSION`)で、ローカルのdocker composeで次を確かめた。
+
+| 確かめたこと | 結果 |
+| --- | --- |
+| `WHITELIST_ENVS`に挙げたとき、`bun install`の環境に変数があるか | ある |
+| `WHITELIST_ENVS`に挙げないとき | ない |
+| 環境変数だけで、ルートと信頼した依存のinstall scriptが止まるか(workerのbunとホストのbun) | 止まらない |
+| bunfigを置くと、同じ試験のscriptが止まるか(workerのコンテナ) | 止まる |
+| bunfigを置いたworkerで、`wmill generate-metadata --yes`が依存を解決できるか | できる |
+
+次は確かめていない。
+
+- GitHub Actionsのランナーでの動作。
+- レジストリのパッケージでのinstall scriptの停止。試験に使ったのは、ローカルの`file:`の依存である。
+- Windmillがnpmを呼ぶ経路が実在するか。
+- Windmillの版を上げたときの、環境の絞り方とbunfigの読み方の変化。版を上げるときは、上の確認を繰り返す。
+
+#### artifactの扱い
+
+artifactの内容は、PRのブランチにある`scripts/metadata-patch.ts`が書く。
+PRの作者が書き換えられるので、受け取る側は内容を信用しない。
+受け取る側は、`main`の版の`isAllowedMetadataPath`と`parseManifest`で再検査する。
+そのうえで、`headSha`がブランチの先頭と一致すること、`sha256`が内容と一致することを確かめる。
+
+artifactに秘密は入らない。入るのは、リポジトリにあるファイルの再生成結果だけである。
+保持は7日に絞り、古いパッチが長く残らないようにする。
 
 ### 開発セッションのsubagent
 

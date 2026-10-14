@@ -254,6 +254,14 @@ describe("scopeOfPaths", () => {
     expect(scopeOfPaths(["infra/docker-compose.ci.yml"])).toEqual(allScope());
   });
 
+  test("runs everything for the CI worker bunfig", () => {
+    expect(scopeOfPaths(["infra/ci-worker-bunfig.toml"])).toEqual(allScope());
+  });
+
+  test("runs nothing for the metadata patch script, which the unit tests cover", () => {
+    expect(scopeOfPaths(["scripts/metadata-patch.ts"])).toEqual(noneScope({}));
+  });
+
   test("runs everything for another file under infra/", () => {
     expect(scopeOfPaths(["infra/other/x.conf"])).toEqual(allScope());
   });

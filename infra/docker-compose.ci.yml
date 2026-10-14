@@ -1,5 +1,5 @@
 # CIの`metadata`ジョブだけが、`docker-compose.yml`に重ねて使う。
-# `wmill generate-metadata --dry-run`がホストから届くよう、サーバーの8000番を
+# `wmill generate-metadata`がホストから届くよう、サーバーの8000番を
 # `127.0.0.1:8080`に公開する。普段はcaddyが8080番を受けるが、CIはcaddyを起動しない。
 # `127.0.0.1:8080`は、`wmill.yaml`の`baseUrl`と`mise.toml`の`WM_BASE_URL`に合わせる。
 # wmillは`wmill.yaml`の`baseUrl`でワークスペースを引くため、ずれると接続できない。
@@ -8,3 +8,27 @@ services:
   windmill_server:
     ports:
       - "127.0.0.1:8080:8000"
+
+  # メタデータを作り直す(`wmill generate-metadata --yes`)ときだけ起動するworker。
+  # 作り直しは、依存の解決のジョブをworkerに投げて結果を待つので、workerが要る。
+  # 本番の独自イメージ(claude・gh・gtrなどを足したもの)は要らないので、上流のイメージを使う。
+  # `windmill_worker`と違い、`restart`・資源の制限・永続のボリュームは付けない。
+  # ジョブの終了とともに捨てる使い捨てのコンテナで、本番の秘密は届かないため。
+  # 依存のinstall scriptは、次の2つで動かさない。
+  # - bunは`NPM_CONFIG_IGNORE_SCRIPTS`を読まないので、bunfigの`ignoreScripts`で止める。
+  # - npmを使う経路のために`NPM_CONFIG_IGNORE_SCRIPTS`を渡す。
+  #   workerは子プロセスの環境を絞るので、`WHITELIST_ENVS`に挙げた名前だけが届く。
+  windmill_worker_ci:
+    image: ghcr.io/windmill-labs/windmill:${WM_VERSION:?run via mise}
+    environment:
+      - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
+      - MODE=worker
+      - WORKER_GROUP=default
+      - NUM_WORKERS=1
+      - NPM_CONFIG_IGNORE_SCRIPTS=true
+      - WHITELIST_ENVS=NPM_CONFIG_IGNORE_SCRIPTS
+    volumes:
+      - ./ci-worker-bunfig.toml:/root/.bunfig.toml:ro
+    depends_on:
+      db:
+        condition: service_healthy

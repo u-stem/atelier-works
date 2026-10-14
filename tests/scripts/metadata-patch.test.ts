@@ -456,7 +456,7 @@ describe("collectPatch", () => {
 
     const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
 
-    expect(result.ok && result.manifest).toEqual(readManifest(out));
+    expect(result.ok ? result.manifest : null).toEqual(readManifest(out));
   });
 
   test("fails when a source file also changed", () => {

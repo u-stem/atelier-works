@@ -148,11 +148,67 @@ LEFTHOOK_EXCLUDE=wmill-metadata-check git push
 
 フックを飛ばしたときは、次のpushの前に`mise run metadata`を実行する。
 
-CIの`metadata`ジョブも、メタデータが最新かを検査する。
+フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、CIの`metadata`ジョブで失敗する。
+
+### CIのメタデータの検査
+
+CIの`metadata`ジョブは、メタデータが最新かを検査する。
 使い捨てのWindmillをdbとサーバーだけで起動し、空のワークスペースを作って`mise run metadata:check`を実行する。
 このジョブを動かす条件は、「CIの実行の範囲」にある。
 
-フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
+検査が通れば、ジョブは成功する。作り直しは動かさず、所要時間も増えない。
+
+検査が失敗したときは、ジョブを失敗のまま終える。
+PRのチェックは赤のままで、パッチを出しても緑にはならない。
+そのうえで、次の2つを満たすPRに限り、メタデータを作り直した結果をartifact(`metadata-patch`)に出す。
+
+- PRのブランチが、同じリポジトリにある(forkのPRではない)。
+- ブランチ名が`factory/`で始まる(Factoryが作るPR)。
+
+人のブランチとforkでは作り直さない。
+PRのコードが動く作り直しを、Factoryが作るPRに限るためである。
+
+#### パッチを出す手順
+
+1. workerのサービス`windmill_worker_ci`を起動し、健全になるまで待つ。
+   依存の解決のジョブは、workerが動かす。
+   イメージは、サーバーと同じ上流のイメージ(版は`mise.toml`の`WM_VERSION`)で、独自のworkerのイメージは使わない。
+2. `mise run metadata`で`wmill generate-metadata --yes`を実行する。
+   失敗したときは、パッチを作らない。
+3. `scripts/metadata-patch.ts`が、作業ツリーの変更を検査し、パッチを書く。
+   許可リストの外の変更が1つでもあるときは、何も書かずに失敗する。
+4. `actions/upload-artifact`で、`metadata-patch`という名前で上げる。
+   保持は7日で、秘密は入れない。
+
+#### 許可するパスとパッチの形
+
+パッチに載せるのは、次のパスの変更だけである。
+再生成が書き換えるのはメタデータのファイルだけなので、ほかのパスの変更が混ざったときは異常として扱う。
+
+| パス | 内容 |
+| --- | --- |
+| `wmill-lock.yaml` | ロックのハッシュ |
+| `f/**/*.script.lock` | scriptの依存のロック |
+| `f/**/*.script.yaml` | scriptの入力のスキーマ |
+
+パスの区間は、英数字と`_`で始まり、英数字と`_`、`.`、`-`だけを含む。
+`..`、絶対パス、改行、隠しファイル、symlinkは載せない。
+ファイルは1つ1MiBまで、変更は1000件までとする。
+判定は`scripts/metadata-patch.ts`の`isAllowedMetadataPath`にある。
+
+artifactの中身は次のとおりである。
+
+| パス | 内容 |
+| --- | --- |
+| `manifest.json` | 版(`version`)、PRのheadのsha(`headSha`)、変更の一覧(`entries`) |
+| `files/<リポジトリ相対のパス>` | 追加と変更のファイルの内容そのもの |
+
+`entries`の各項目は、`path`、`status`(`added`、`modified`、`deleted`)、`sha256`、`size`を持つ。
+削除は`path`と`status`だけを記録し、`files/`にはファイルを置かない。
+`headSha`は、適用する側が、ブランチの先頭が変わっていないことを確かめるために使う。
+manifestを読む判定は`parseManifest`にある。
+
+仕組みの権限と前提は、[セキュリティ](security.md#ciのメタデータの再生成)に書く。
 
 ### CIの実行の範囲
 
@@ -197,7 +253,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 
 - `.github/workflows/`
 - `.github/`のうち、IssueとPRのテンプレート以外
-- `infra/`のうち、`Caddyfile`、`console_fetcher/`、`worker/`以外(`docker-compose*.yml`を含む)
+- `infra/`のうち、`Caddyfile`、`console_fetcher/`、`worker/`以外(`docker-compose*.yml`と`ci-worker-bunfig.toml`を含む)
 - `mise.toml`、`package.json`、`bun.lock`、`wmill.yaml`
 - ルートの`tsconfig*.json`
 - `scripts/`の下の`.sh`ファイル(次の表に挙げたものを除く)

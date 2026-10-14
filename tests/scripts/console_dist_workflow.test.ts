@@ -58,6 +58,14 @@ function stepNamed(
 const consoleDist = readYaml(join(WORKFLOWS_DIR, WORKFLOW_FILE));
 const ci = readYaml(join(WORKFLOWS_DIR, CI_WORKFLOW_FILE));
 
+function stepsOfAllJobs(
+  document: Record<string, unknown>,
+): Record<string, unknown>[] {
+  return Object.values(recordAt(document, "jobs")).flatMap((container) =>
+    stepsOf(container),
+  );
+}
+
 function allUses(...documents: readonly Record<string, unknown>[]): string[] {
   const uses: string[] = [];
   for (const document of documents) {
@@ -181,12 +189,15 @@ describe("ci.yml", () => {
     });
   });
 
-  test("uploads no artifact from any job", () => {
-    const uploads = allUses(ci).filter((uses) =>
-      uses.startsWith("actions/upload-artifact@"),
+  test("uploads no artifact with the console build's name", () => {
+    const consoleUploads = stepsOfAllJobs(ci).filter(
+      (step) =>
+        typeof step.uses === "string" &&
+        step.uses.startsWith("actions/upload-artifact@") &&
+        recordAt(step, "with").name === ARTIFACT_NAME,
     );
 
-    expect(uploads).toEqual([]);
+    expect(consoleUploads).toEqual([]);
   });
 
   test("builds the console with the same steps as console-dist.yml", () => {
