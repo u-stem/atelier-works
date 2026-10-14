@@ -390,7 +390,7 @@ describe("buildEmbed", () => {
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
-      value: "前日の掃除記録なし",
+      value: "その日の掃除記録なし",
     });
   });
 
@@ -440,7 +440,7 @@ describe("buildEmbed", () => {
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
-      value: "前日の記録なし(sample_worker_loadのスケジュールを確かめる)",
+      value: "その日の記録なし(sample_worker_loadのスケジュールを確かめる)",
     });
   });
 

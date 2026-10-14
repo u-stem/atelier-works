@@ -40,7 +40,7 @@ export type DailySummaryResult = {
 };
 
 /**
- * 前日のworkerの負荷の集計を読み、記録が無いことと読めなかったことを分けて返す。
+ * その日のworkerの負荷の集計を読み、記録が無いことと読めなかったことを分けて返す。
  * 読めなかったときは、警告を残して`read_failed`を返す。
  * 負荷の記録は日次のまとめの補足なので、表が無いなどで読めなくても、
  * ほかの項目の通知を止めない。
@@ -77,6 +77,8 @@ export type CatchupResult = {
   readonly skipped_count: number;
   /** 通知が届かず、次の実行にやり直しを持ち越した日。無ければ`null`。 */
   readonly undelivered_day: string | null;
+  /** `undelivered_day`の通知が届かなかった理由(秘密情報はマスク済み)。無ければ`null`。 */
+  readonly undelivered_reason: string | null;
 };
 
 /** `summarizePendingDays`が使う外部の操作。テストでは差し替える。 */
@@ -92,8 +94,7 @@ export type CatchupDeps = {
  * - 集計が例外になったら、その日で止まり、保存を進めない。次の実行が同じ日から再開する。
  * - 通知が届かなかった(`not_sent`)ら、その日で止まり、保存を進めない。
  *   進めると、届かなかった日の要約が二度と出ないため。
- *   例外にはしない。通知の失敗は`notifyBestEffort`が警告に残しており、
- *   失敗の通知もDiscordに出るので、例外にしても人に届く情報が増えないため。
+ *   ここでは例外にせず、`undelivered_day`に残して返す。例外にするのは`assertAllDelivered`である。
  * - webhookが未設定(`no_webhook`)なら、送る先が無いので保存を進める。
  */
 export async function summarizePendingDays(
@@ -106,6 +107,11 @@ export async function summarizePendingDays(
       first_day: plan.days[0]?.label ?? null,
     });
   }
+  if (plan.future_last_day !== null) {
+    deps.log.warn("last summary day is later than yesterday", {
+      last_day: plan.future_last_day,
+    });
+  }
   const days: DailySummaryResult[] = [];
   for (const range of plan.days) {
     const { result, delivery } = await deps.summarizeDay(range);
@@ -114,12 +120,33 @@ export async function summarizePendingDays(
         days,
         skipped_count: plan.skipped_count,
         undelivered_day: range.label,
+        undelivered_reason: delivery.reason,
       };
     }
     await deps.saveLastDay(range.label);
     days.push(result);
   }
-  return { days, skipped_count: plan.skipped_count, undelivered_day: null };
+  return {
+    days,
+    skipped_count: plan.skipped_count,
+    undelivered_day: null,
+    undelivered_reason: null,
+  };
+}
+
+/**
+ * 通知が届かなかった日があれば、例外を投げる。
+ * 成功で終えると、Discordに届かない状態が続いても、ジョブのログの警告しか残らない。
+ * 例外にすると、`on_error_schedule`が失敗を`job_failures`に記録するので、Consoleに残る。
+ * 届いた日の保存は`summarizePendingDays`が済ませているので、次の実行は届かなかった日から再開する。
+ */
+export function assertAllDelivered(result: CatchupResult): CatchupResult {
+  if (result.undelivered_day !== null) {
+    throw new Error(
+      `daily summary for ${result.undelivered_day} was not delivered: ${result.undelivered_reason ?? "unknown"}`,
+    );
+  }
+  return result;
 }
 
 export async function main(): Promise<CatchupResult> {
@@ -130,45 +157,49 @@ export async function main(): Promise<CatchupResult> {
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
   const lastDay = parseSummaryState(await wmill.getState());
 
-  return await summarizePendingDays(planSummaryDays(lastDay, new Date()), {
-    summarizeDay: async (range) => {
-      const [agentRuns, approvals, cleanup, workerLoad] = await Promise.all([
-        getAgentRunSummary(range),
-        getApprovalSummary(range),
-        getCleanupSummary(range),
-        readWorkerLoad(range, (r) => getWorkerLoadSummary(r), log),
-      ]);
-      const delivery = await notifyBestEffort(
-        webhookUrl,
-        {
-          kind: "daily_summary",
-          instance_name: config.instance_name,
-          day: range.label,
-          run_count: agentRuns.run_count,
-          total_cost_usd: agentRuns.total_cost_usd,
-          failure_count: agentRuns.failure_count,
-          approved_count: approvals.approved_count,
-          rejected_count: approvals.rejected_count,
-          cleanup,
-          worker_load: workerLoad,
-        },
-        log,
-      );
-      return {
-        result: {
-          day: range.label,
-          run_count: agentRuns.run_count,
-          total_cost_usd: agentRuns.total_cost_usd,
-          failure_count: agentRuns.failure_count,
-          approved_count: approvals.approved_count,
-          rejected_count: approvals.rejected_count,
-          cleanup,
-          worker_load: workerLoad,
-        },
-        delivery,
-      };
+  const result = await summarizePendingDays(
+    planSummaryDays(lastDay, new Date()),
+    {
+      summarizeDay: async (range) => {
+        const [agentRuns, approvals, cleanup, workerLoad] = await Promise.all([
+          getAgentRunSummary(range),
+          getApprovalSummary(range),
+          getCleanupSummary(range),
+          readWorkerLoad(range, (r) => getWorkerLoadSummary(r), log),
+        ]);
+        const delivery = await notifyBestEffort(
+          webhookUrl,
+          {
+            kind: "daily_summary",
+            instance_name: config.instance_name,
+            day: range.label,
+            run_count: agentRuns.run_count,
+            total_cost_usd: agentRuns.total_cost_usd,
+            failure_count: agentRuns.failure_count,
+            approved_count: approvals.approved_count,
+            rejected_count: approvals.rejected_count,
+            cleanup,
+            worker_load: workerLoad,
+          },
+          log,
+        );
+        return {
+          result: {
+            day: range.label,
+            run_count: agentRuns.run_count,
+            total_cost_usd: agentRuns.total_cost_usd,
+            failure_count: agentRuns.failure_count,
+            approved_count: approvals.approved_count,
+            rejected_count: approvals.rejected_count,
+            cleanup,
+            worker_load: workerLoad,
+          },
+          delivery,
+        };
+      },
+      saveLastDay: (label) => wmill.setState({ last_day: label }),
+      log,
     },
-    saveLastDay: (label) => wmill.setState({ last_day: label }),
-    log,
-  });
+  );
+  return assertAllDelivered(result);
 }

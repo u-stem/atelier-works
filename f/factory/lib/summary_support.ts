@@ -97,12 +97,19 @@ export type SummaryPlan = {
   readonly days: readonly DayRange[];
   /** 上限を超えたために出さずに飛ばす日数。 */
   readonly skipped_count: number;
+  /**
+   * 最後に出した日が前日より後(時計のずれなど)のとき、その日。
+   * 出す日が無いまま、実際の日付が追い付くまで要約が止まるので、呼び出し側が警告に残す。
+   */
+  readonly future_last_day: string | null;
 };
 
 /**
  * 最後に要約を出した日`lastDay`の翌日から`now`の前日までを、古い順に並べる。
  * - `lastDay`が`null`(初回、または読めない値)のときは、前日だけを出し、過去を遡らない。
- * - `lastDay`が前日以降(同じ日や時計のずれによる未来)のときは、出す日が無い。
+ * - `lastDay`が前日のときは、出す日が無い。
+ * - `lastDay`が前日より後(時計のずれによる未来)のときも、出す日が無く、
+ *   `future_last_day`にその日を返す。
  * - 対象が`maxDays`を超えるときは、新しい方の`maxDays`日だけを出し、
  *   古い日は飛ばして`skipped_count`に数える。
  *   日次の要約は古い日ほど読まれにくく、長い停止の後に何通も続けて出さないため。
@@ -116,7 +123,14 @@ export function planSummaryDays(
   const lastMs = lastDay === null ? null : parseDayLabel(lastDay);
   const firstMs = lastMs === null ? yesterdayMs : lastMs + DAY_MS;
   if (firstMs > yesterdayMs) {
-    return { days: [], skipped_count: 0 };
+    return {
+      days: [],
+      skipped_count: 0,
+      future_last_day:
+        lastDay !== null && lastMs !== null && lastMs > yesterdayMs
+          ? lastDay
+          : null,
+    };
   }
   const total = Math.round((yesterdayMs - firstMs) / DAY_MS) + 1;
   const skipped = Math.max(0, total - maxDays);
@@ -124,7 +138,7 @@ export function planSummaryDays(
   for (let ms = firstMs + skipped * DAY_MS; ms <= yesterdayMs; ms += DAY_MS) {
     days.push(dayRangeFromShiftedMidnight(ms));
   }
-  return { days, skipped_count: skipped };
+  return { days, skipped_count: skipped, future_last_day: null };
 }
 
 /**

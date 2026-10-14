@@ -8,6 +8,7 @@ import {
 } from "../../f/factory/lib/summary_support.ts";
 import type { WorkerLoadSummary } from "../../f/factory/lib/worker_load_support.ts";
 import {
+  assertAllDelivered,
   type DailySummaryResult,
   readWorkerLoad,
   type SummarizedDay,
@@ -227,6 +228,51 @@ describe("summarizePendingDays", () => {
     expect(result.undelivered_day).toBe("2026-10-12");
   });
 
+  test("reports no undelivered day when every notification was sent", async () => {
+    const { run } = setup({ lastDay: "2026-10-10" });
+    const result = await run();
+    expect(result.undelivered_day).toBeNull();
+  });
+
+  test("rejects after the loop when a notification was not sent", async () => {
+    const { run } = setup({
+      lastDay: "2026-10-10",
+      delivery: (range) =>
+        range.label === "2026-10-12"
+          ? { status: "not_sent", reason: "http 500" }
+          : SENT,
+    });
+    await expect(run().then(assertAllDelivered)).rejects.toThrow("2026-10-12");
+  });
+
+  test("keeps the state of the days delivered before the failure", async () => {
+    const { run, saved } = setup({
+      lastDay: "2026-10-10",
+      delivery: (range) =>
+        range.label === "2026-10-12"
+          ? { status: "not_sent", reason: "http 500" }
+          : SENT,
+    });
+    await run()
+      .then(assertAllDelivered)
+      .catch(() => undefined);
+    expect(saved).toEqual(["2026-10-11"]);
+  });
+
+  test("includes the reason in the rejection", async () => {
+    const { run } = setup({
+      lastDay: "2026-10-12",
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    await expect(run().then(assertAllDelivered)).rejects.toThrow("http 500");
+  });
+
+  test("returns the result when every notification was sent", async () => {
+    const { run } = setup({ lastDay: "2026-10-12" });
+    const result = await run().then(assertAllDelivered);
+    expect(result.days.map((day) => day.day)).toEqual(["2026-10-13"]);
+  });
+
   test("saves the day when no webhook is configured", async () => {
     const { run, saved } = setup({
       lastDay: "2026-10-12",
@@ -234,6 +280,30 @@ describe("summarizePendingDays", () => {
     });
     await run();
     expect(saved).toEqual(["2026-10-13"]);
+  });
+
+  test("goes through every day when no webhook is configured", async () => {
+    const { run, summarized } = setup({
+      lastDay: "2026-10-10",
+      delivery: () => ({ status: "no_webhook" }),
+    });
+    await run();
+    expect(summarized).toEqual(["2026-10-11", "2026-10-12", "2026-10-13"]);
+  });
+
+  test("advances the state for every day when no webhook is configured", async () => {
+    const { run, saved } = setup({
+      lastDay: "2026-10-10",
+      delivery: () => ({ status: "no_webhook" }),
+    });
+    await run();
+    expect(saved).toEqual(["2026-10-11", "2026-10-12", "2026-10-13"]);
+  });
+
+  test("warns when the saved day is later than yesterday", async () => {
+    const { run, lines } = setup({ lastDay: "2026-10-20" });
+    await run();
+    expect(lines.join("\n")).toContain("later than yesterday");
   });
 
   test("warns about the days skipped beyond the limit", async () => {

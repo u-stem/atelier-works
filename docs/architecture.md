@@ -333,7 +333,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は期限を待たず、終端でないdependabotの作業項目が使っていなければ消す。信頼していない依存を入れた作業ツリーで、処理し直すときは準備のステップが作り直すためである。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `sample_worker_load` | defaultのworkerの枠の占有、queueの待ち、コンテナのcgroupのメモリ。読めない値は空のまま記録し、例外は投げない。完全には記録できない回をWindmillのstateに数え、続いたときだけnoticeにする |
-| `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数、defaultのworkerの負荷の集計。負荷は`worker_samples`を1回のクエリで集計し、読めなくても他の項目は通知する。最後に出した日をWindmillのstateに残し、飛んだ日は古い順に追い付いて出す |
+| `notify_daily_summary` | 集計の対象の日のコスト、件数、失敗、DBの掃除の件数、defaultのworkerの負荷の集計。負荷は`worker_samples`を1回のクエリで集計し、読めなくても他の項目は通知する。最後に出した日をWindmillのstateに残し、飛んだ日は古い順に追い付いて出す |
 
 複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。
 Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。

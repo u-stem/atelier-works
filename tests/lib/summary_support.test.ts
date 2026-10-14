@@ -144,6 +144,26 @@ describe("planSummaryDays", () => {
     expect(labels("2026-10-20")).toEqual([]);
   });
 
+  test("reports no future day when the saved day is yesterday", () => {
+    expect(planSummaryDays("2026-10-13", NOW).future_last_day).toBeNull();
+  });
+
+  test("reports the saved day when it is later than yesterday", () => {
+    expect(planSummaryDays("2026-10-20", NOW).future_last_day).toBe(
+      "2026-10-20",
+    );
+  });
+
+  test("reports the saved day when it is today", () => {
+    expect(planSummaryDays("2026-10-14", NOW).future_last_day).toBe(
+      "2026-10-14",
+    );
+  });
+
+  test("reports no future day when there is no saved state", () => {
+    expect(planSummaryDays(null, NOW).future_last_day).toBeNull();
+  });
+
   test("crosses a month boundary", () => {
     // 2026-11-02T00:05:00ZはJSTで2026-11-02 09:05。昨日は2026-11-01。
     expect(labels("2026-10-30", new Date("2026-11-02T00:05:00Z"))).toEqual([
