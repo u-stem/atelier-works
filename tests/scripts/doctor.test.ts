@@ -348,6 +348,17 @@ describe("doctor.sh custom tag check", () => {
     expect(line).not.toContain(ADMIN_PASSWORD);
   });
 
+  test("masks the admin password that straddles the 200th character", async () => {
+    const padding = "x".repeat(190);
+    installFakeMise(`echo "${padding}${ADMIN_PASSWORD}" >&2; exit 1`);
+    const windmill = startWindmill(["chromium"]);
+
+    const line = await tagLine({ WM_HTTP_PORT: String(windmill.server.port) });
+
+    windmill.server.stop(true);
+    expect(line).not.toContain(ADMIN_PASSWORD.slice(0, 8));
+  });
+
   test("explains a refused login in the WARN", async () => {
     installFakeMise();
     const windmill = startWindmill(["console"]);

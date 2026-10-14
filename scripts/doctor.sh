@@ -275,10 +275,12 @@ if [[ "${windmill_is_up}" -eq 1 ]]; then
       10) report "カスタムtag" ng "consoleが許可されていません('mise run instance:tags' を実行してください)" ;;
       *)
         # 理由として標準エラーの先頭行だけを添える。万一パスワードが含まれても伏せる。
-        tag_reason="$(printf '%s\n' "${tag_stderr}" | head -n1 | cut -c1-200)"
+        # 切り詰めの後に伏せると、200文字目をまたぐパスワードの前半が残るので、伏せるのを先にする。
+        tag_reason="$(printf '%s\n' "${tag_stderr}" | head -n1)"
         if [[ -n "${WM_ADMIN_PASSWORD:-}" ]]; then
           tag_reason="${tag_reason//"${WM_ADMIN_PASSWORD}"/***}"
         fi
+        tag_reason="$(printf '%s' "${tag_reason}" | cut -c1-200)"
         warn "カスタムtag" "確認できませんでした(終了コード: ${tag_status}${tag_reason:+、${tag_reason}})"
         ;;
     esac
