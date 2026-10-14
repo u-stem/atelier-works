@@ -2228,6 +2228,40 @@ export async function searchPrs(
   return items;
 }
 
+/**
+ * rate limitの解除を待たないクライアントを返す。
+ * 解除まで待つ代わりに、待ちが要るとすぐ`GitHubRateLimitError`を投げる。
+ * ghの起動失敗と5xxの再試行は、待たずにすぐ行う。補助の読み取りが、最大120秒眠って全体の時間を使わないためである。
+ */
+function noWaitClient(client: GhClient, endpoint: string): GhClient {
+  return {
+    ...client,
+    transientRetryDelayMs: 0,
+    sleep: async (ms) => {
+      if (ms === 0) return;
+      throw new GitHubRateLimitError(endpoint, ms, false);
+    },
+  };
+}
+
+/**
+ * `getPr`と同じだが、rate limitの解除を待たずに`GitHubRateLimitError`を投げる。
+ * 人のPRの発見が、PATのcoreの枠を使い切った回に、全体の時間を使わないために使う。
+ */
+export async function getPrWithoutWait(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PullRequest> {
+  return getPr(
+    noWaitClient(client, `repos/${owner}/${repo}/pulls/${String(number)}`),
+    owner,
+    repo,
+    number,
+  );
+}
+
 /** 人のPRを探す範囲。オーナーの全体か、1つのリポジトリ。 */
 export type OpenAuthoredPrsScope =
   | {
@@ -2275,15 +2309,7 @@ export async function searchOpenAuthoredPrs(
   }
   const query = `is:pr is:open draft:false author:${opts.author} ${qualifier} sort:updated-desc`;
   const endpoint = `search/issues?q=${encodeURIComponent(query)}&per_page=100`;
-  const noWait: GhClient = {
-    ...client,
-    transientRetryDelayMs: 0,
-    sleep: async (ms) => {
-      if (ms === 0) return;
-      throw new GitHubRateLimitError(endpoint, ms, false);
-    },
-  };
-  const response = await callGhApi(noWait, endpoint);
+  const response = await callGhApi(noWaitClient(client, endpoint), endpoint);
   const context = `GET ${endpoint}`;
   ensureSuccess(response, context);
   const parsed = parseJsonBody(response, context);

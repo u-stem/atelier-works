@@ -69,6 +69,7 @@ import {
   getAccountId,
   getFileAtRef,
   getPr,
+  getPrWithoutWait,
   getViewer,
   listPrCommitMessages,
   listPrHeadWorkflowRuns,
@@ -229,6 +230,8 @@ export async function main(): Promise<PrCiWatchResult> {
           config,
           verifiedOwners,
           getViewer: () => getViewer(client),
+          getPr: (owner, repo, number) =>
+            getPrWithoutWait(client, owner, repo, number),
           search: (scope, author) =>
             searchOpenAuthoredPrs(client, { scope, author }),
           recordFailure: (step, err) => recordFailureSafe(step, err, log),

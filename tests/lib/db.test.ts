@@ -6214,10 +6214,12 @@ describe("listPendingPrCiChecks", () => {
     expect(calls[0]?.text).toContain("WHERE state = 'pending'");
   });
 
-  test("orders by the last check, so that no row is starved", async () => {
+  test("orders the rows of factory pull requests first and then by the last check", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listPendingPrCiChecks(50, sql);
-    expect(calls[0]?.text).toContain("ORDER BY checked_at ASC");
+    expect(calls[0]?.text).toContain(
+      "ORDER BY (work_item_id IS NULL) ASC, checked_at ASC",
+    );
   });
 
   test("passes the limit as a bigint", async () => {
@@ -6234,10 +6236,12 @@ describe("listFailedPrCiChecks", () => {
     expect(calls[0]?.text).toContain("WHERE state = 'failed'");
   });
 
-  test("orders by the last check, so that no row is starved", async () => {
+  test("orders the rows of factory pull requests first and then by the last check", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listFailedPrCiChecks(50, sql);
-    expect(calls[0]?.text).toContain("ORDER BY checked_at ASC");
+    expect(calls[0]?.text).toContain(
+      "ORDER BY (work_item_id IS NULL) ASC, checked_at ASC",
+    );
   });
 });
 
@@ -6286,10 +6290,12 @@ describe("listNoCiPrCiChecksToRecheck", () => {
     );
   });
 
-  test("orders by the last check, so that no row is starved", async () => {
+  test("orders the rows of factory pull requests first and then by the last check", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listNoCiPrCiChecksToRecheck(before, 50, sql);
-    expect(calls[0]?.text).toContain("ORDER BY r.checked_at ASC");
+    expect(calls[0]?.text).toContain(
+      "ORDER BY (r.work_item_id IS NULL) ASC, r.checked_at ASC",
+    );
   });
 
   test("passes the limit as a bigint", async () => {
@@ -6833,7 +6839,7 @@ describe("releaseFixingPrCiCheck", () => {
       sql,
     );
     expect(calls[0]?.text).toMatch(
-      /notified_reason = CASE WHEN  \? ::boolean THEN NULL ELSE notified_reason END/,
+      /notified_reason = CASE WHEN {2}\? ::boolean THEN NULL ELSE notified_reason END/,
     );
   });
 
@@ -6959,7 +6965,7 @@ describe("setPrCiFixHold", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
     await setPrCiFixHold(9, "rounds_exhausted", { resetNotified: true }, sql);
     expect(calls[0]?.text).toMatch(
-      /notified_reason = CASE WHEN  \? ::boolean THEN NULL ELSE notified_reason END/,
+      /notified_reason = CASE WHEN {2}\? ::boolean THEN NULL ELSE notified_reason END/,
     );
   });
 

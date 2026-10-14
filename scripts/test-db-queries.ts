@@ -3416,6 +3416,68 @@ check(
   !(await claimCandidates()).split(",").includes("605"),
 );
 
+// 判定の対象の並び: FactoryのPRの行(作業項目に結ぶ)を先、人のPRの行(作業項目なし)を後にする。
+// 人の行のほうが読み直していなくても、Factoryの行の判定を後ろに回さない。
+const ORDER = { owner: "qord", repo: "order" };
+const orderRowNew = (prNumber: number, workItemId: number | null) => ({
+  ...ORDER,
+  pr_number: prNumber,
+  head_sha: PR_SHA_1,
+  work_item_id: workItemId,
+  run_created_at: null,
+});
+/** 行を記録して、状態を移し、読み直した時刻を設定する。 */
+async function orderRow(
+  prNumber: number,
+  workItemId: number | null,
+  state: "pending" | "failed" | "no_ci",
+  checkedAgo: string,
+) {
+  await recordPrCiCheck(orderRowNew(prNumber, workItemId), sql);
+  const row = (
+    await listPrCiChecksForPr(ORDER.owner, ORDER.repo, prNumber, sql)
+  )[0];
+  if (row === undefined) throw new Error("pr_ci_checks row is missing");
+  if (state !== "pending") {
+    await transitionPrCiCheck(row.id, "pending", { state }, sql);
+  }
+  execPsql(
+    target,
+    `UPDATE factory.pr_ci_checks SET checked_at = now() - interval '${checkedAgo}' WHERE id = ${String(row.id)}`,
+  );
+}
+await orderRow(901, null, "pending", "3 hours");
+await orderRow(902, 7001, "pending", "1 hour");
+await orderRow(903, null, "failed", "3 hours");
+await orderRow(904, 7002, "failed", "1 hour");
+await orderRow(905, null, "no_ci", "3 hours");
+await orderRow(906, 7003, "no_ci", "2 hours");
+const orderNumbers = (rows: { owner: string; pr_number: number }[]) =>
+  rows
+    .filter((row) => row.owner === ORDER.owner)
+    .map((row) => row.pr_number)
+    .join(",");
+check(
+  "recheck order: a pending row of a factory pull request comes before an older human row",
+  orderNumbers(await listPendingPrCiChecks(100, sql)) === "902,901",
+  orderNumbers(await listPendingPrCiChecks(100, sql)),
+);
+check(
+  "recheck order: a failed row of a factory pull request comes before an older human row",
+  orderNumbers(await listFailedPrCiChecks(100, sql)) === "904,903",
+  orderNumbers(await listFailedPrCiChecks(100, sql)),
+);
+check(
+  "recheck order: a no_ci row of a factory pull request comes before an older human row",
+  orderNumbers(
+    await listNoCiPrCiChecksToRecheck(new Date(Date.now() + 60_000), 100, sql),
+  ) === "906,905",
+  orderNumbers(
+    await listNoCiPrCiChecksToRecheck(new Date(Date.now() + 60_000), 100, sql),
+  ),
+);
+execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qord'");
+
 // 保留を外すときは、読んだ理由のままの行だけを外す。
 check(
   "hold: a hold that is not the reason that was read is not cleared",

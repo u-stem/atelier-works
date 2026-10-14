@@ -54,6 +54,7 @@ import {
   HUMAN_DISCOVERY_BUDGET_MS,
   HUMAN_PR_LIMIT,
   HUMAN_PR_READ_LIMIT,
+  HUMAN_RECHECK_LIMIT,
   NO_CI_RECHECK_INTERVAL_MS,
   PR_CI_CHECK_DENIED_KIND,
   PR_CI_RESOLVED_BY,
@@ -320,6 +321,26 @@ function harness(setup: Setup = {}): Harness {
     warn: (message, fields) => logs.push({ level: "warn", message, fields }),
     error: (message, fields) => logs.push({ level: "error", message, fields }),
   };
+  const readPrReply = async (
+    owner: string,
+    repo: string,
+    number: number,
+  ): Promise<PullRequest> => {
+    const key = `${owner}/${repo}#${String(number)}`;
+    events.push("get_pr");
+    prCalls.push(key);
+    const reply = setup.prs?.[key];
+    if (reply === undefined) throw new Error(`no pull request set up: ${key}`);
+    const index = prCursor.get(key) ?? 0;
+    prCursor.set(key, index + 1);
+    const value =
+      reply instanceof PrReplies
+        ? reply.values[Math.min(index, reply.values.length - 1)]
+        : reply;
+    if (value === undefined) throw new Error(`empty replies: ${key}`);
+    if (value instanceof Error) throw value;
+    return value;
+  };
   const deps: PrCiWatchDeps = {
     now: () =>
       new Date(
@@ -335,23 +356,7 @@ function harness(setup: Setup = {}): Harness {
     isRepoConfigured: (owner, repo) =>
       setup.configured?.(owner, repo) ?? setup.allowed?.(owner, repo) ?? true,
     listTrackedItems: async () => setup.items ?? [],
-    getPr: async (owner, repo, number) => {
-      const key = `${owner}/${repo}#${String(number)}`;
-      events.push("get_pr");
-      prCalls.push(key);
-      const reply = setup.prs?.[key];
-      if (reply === undefined)
-        throw new Error(`no pull request set up: ${key}`);
-      const index = prCursor.get(key) ?? 0;
-      prCursor.set(key, index + 1);
-      const value =
-        reply instanceof PrReplies
-          ? reply.values[Math.min(index, reply.values.length - 1)]
-          : reply;
-      if (value === undefined) throw new Error(`empty replies: ${key}`);
-      if (value instanceof Error) throw value;
-      return value;
-    },
+    getPr: readPrReply,
     listRuns: async (_owner, _repo, headSha, headRef, options) => {
       events.push("list_runs");
       runCalls.push({ sha: headSha, headRef, options });
@@ -452,6 +457,7 @@ function harness(setup: Setup = {}): Harness {
             scopes: setup.human.scopes ?? [
               { kind: "owner", owner: "acme", ownerKind: "user" },
             ],
+            getPr: readPrReply,
             search: async (scope, author) => {
               events.push("search");
               searches.push({ scope, author });
@@ -4787,6 +4793,9 @@ describe("buildHumanDiscovery", () => {
         viewerCalls.push(1);
         return { login: "factory-bot", id: 1 };
       },
+      getPr: async () => {
+        throw new Error("unused");
+      },
       search: async (scope, author) => {
         searched.push(`${scope.owner}:${author}`);
         return [];
@@ -5089,6 +5098,9 @@ describe("the limits of the human discovery", () => {
               allowed_labeler_ids: {},
             }),
             scopes: [{ kind: "owner", owner: "acme", ownerKind: "user" }],
+            getPr: async () => {
+              throw new Error("unused");
+            },
             search: async () => {
               trail.push("search");
               return [];
@@ -5130,7 +5142,7 @@ describe("the limits of the human discovery", () => {
     );
     await runPrCiWatch(h.deps);
     expect(h.logs.map((line) => line.message)).toContain(
-      "pr ci human search skipped an author that GitHub rejected",
+      "pr ci human search skipped authors that GitHub rejected",
     );
   });
 
@@ -5229,5 +5241,260 @@ describe("the notices of the older heads of a human pull request", () => {
     expect(failureNoticeResolutions(h).map((entry) => entry.prefix)).toEqual([
       OLD_PREFIX,
     ]);
+  });
+});
+
+describe("the recheck of the rows of human pull requests", () => {
+  /** 今のheadが進んでいて、読み直すと`superseded`になる人の行を`count`件作る。古い順に番号を振る。 */
+  function staleHumanSetup(
+    count: number,
+    state: "pending" | "failed" = "pending",
+    firstNumber = 100,
+  ) {
+    const rows: PrCiCheck[] = [];
+    const prs: Record<string, PullRequest> = {};
+    for (let index = 0; index < count; index += 1) {
+      const number = firstNumber + index;
+      rows.push(
+        humanRow({
+          id: number,
+          pr_number: number,
+          state,
+          checked_at: minutesBefore(1000 - number),
+        }),
+      );
+      prs[`acme/widgets#${String(number)}`] = humanPr({
+        number,
+        headSha: SHA_B,
+      });
+    }
+    return { rows, prs };
+  }
+
+  test("rechecks at most the limit of human rows", async () => {
+    const { rows, prs } = staleHumanSetup(HUMAN_RECHECK_LIMIT + 5);
+    const h = harness({ prs, pending: rows });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toHaveLength(HUMAN_RECHECK_LIMIT);
+  });
+
+  test("rechecks the human rows that were read least recently", async () => {
+    const { rows, prs } = staleHumanSetup(HUMAN_RECHECK_LIMIT + 5);
+    const h = harness({ prs, pending: [...rows].reverse() });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((entry) => entry.id)).toEqual(
+      rows.slice(0, HUMAN_RECHECK_LIMIT).map((entry) => entry.id),
+    );
+  });
+
+  test("counts the human rows of every list together", async () => {
+    const pending = staleHumanSetup(30, "pending", 100);
+    const failed = staleHumanSetup(30, "failed", 200);
+    const h = harness({
+      prs: { ...pending.prs, ...failed.prs },
+      pending: pending.rows,
+      failed: failed.rows,
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toHaveLength(HUMAN_RECHECK_LIMIT);
+  });
+
+  test("rechecks the rows of a factory pull request before the human ones", async () => {
+    const h = harness({
+      prs: {
+        [PR_KEY]: pr({ headSha: SHA_B }),
+        [HUMAN_KEY]: humanPr({ headSha: SHA_B }),
+      },
+      pending: [humanRow(), row()],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((entry) => entry.id)).toEqual([1, 9]);
+  });
+
+  test("does not limit the rows of factory pull requests", async () => {
+    const count = HUMAN_RECHECK_LIMIT + 5;
+    const rows: PrCiCheck[] = [];
+    const prs: Record<string, PullRequest> = {};
+    for (let index = 0; index < count; index += 1) {
+      const number = 300 + index;
+      rows.push(row({ id: number, pr_number: number }));
+      prs[`acme/widgets#${String(number)}`] = pr({ number, headSha: SHA_B });
+    }
+    const h = harness({ prs, pending: rows });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toHaveLength(count);
+  });
+
+  test("still rechecks the recorded human rows when the discovery is off", async () => {
+    const { rows, prs } = staleHumanSetup(3);
+    const h = harness({ prs, pending: rows });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toHaveLength(3);
+  });
+});
+
+describe("the read of the pull requests by the human discovery", () => {
+  test("does not use the read of the factory pull requests", async () => {
+    const h = harness(
+      humanSetup({
+        override: {
+          getPr: async () => {
+            throw new Error("the shared read must not be used");
+          },
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toHaveLength(1);
+  });
+
+  test("leaves the notice of a factory row alone after the rate limit of a read", async () => {
+    const h = harness({
+      human: { found: { alice: [hit(40)] } },
+      prs: { [HUMAN_KEY]: rateLimitError() },
+      unnotified: [
+        row({
+          id: 2,
+          state: "failed",
+          updated_at: minutesBefore(1),
+          first_seen_at: minutesBefore(10),
+        }),
+      ],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toHaveLength(1);
+  });
+
+  test("passes the read of a pull request to the injected function", async () => {
+    const reads: number[] = [];
+    const discovery = await buildHumanDiscovery({
+      config: {
+        pr_ci_watch_human_prs: true,
+        allowed_labeler_logins: [],
+        allowed_labeler_ids: {},
+        factory_repo: "https://github.com/acme/factory.git",
+      },
+      verifiedOwners: [],
+      getViewer: async () => ({ login: "factory-bot", id: 1 }),
+      getPr: async (_owner, _repo, number) => {
+        reads.push(number);
+        return humanPr({ number });
+      },
+      search: async () => [],
+      recordFailure: async () => {},
+    });
+    await discovery?.getPr("acme", "widgets", 7);
+    expect(reads).toEqual([7]);
+  });
+});
+
+describe("the authors that GitHub rejects", () => {
+  const REJECTED = () => new GitHubHttpError("Validation Failed", 422);
+
+  test("records the failure of a repository scope", async () => {
+    const h = harness({
+      human: {
+        scopes: [{ kind: "repo", owner: "other", repo: "tools" }],
+        found: { "other/tools:alice": REJECTED() },
+      },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["search_human_prs:other/tools:alice"]);
+  });
+
+  test("records one failure when every author of a scope is rejected", async () => {
+    const h = harness({
+      human: { found: { "factory-bot": REJECTED(), alice: REJECTED() } },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["search_human_prs:acme"]);
+  });
+
+  test("logs the authors that were skipped with the scope", async () => {
+    const h = harness({
+      human: { found: { "factory-bot": REJECTED(), alice: [] } },
+    });
+    await runPrCiWatch(h.deps);
+    expect(
+      h.logs.find(
+        (line) =>
+          line.message ===
+          "pr ci human search skipped authors that GitHub rejected",
+      )?.fields,
+    ).toEqual({ scope: "acme", authors: ["factory-bot"] });
+  });
+
+  test("records nothing when only some authors of a scope are rejected", async () => {
+    const h = harness({
+      human: { found: { "factory-bot": REJECTED(), alice: [] } },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual([]);
+  });
+});
+
+describe("the resolution of the older notices when it fails", () => {
+  const FAILING_PR = "acme/widgets#40";
+
+  function failingHumanSetup(): Setup {
+    return {
+      prs: { [HUMAN_KEY]: humanPr() },
+      pending: [humanRow()],
+      runs: { [SHA_A]: [failingRun()] },
+      rowsForPr: {
+        40: [humanRow({ id: 3, head_sha: SHA_B, state: "superseded" })],
+      },
+      resolveFailsFor: [PR_CI_FAILED_KIND],
+    };
+  }
+
+  test("adds the notice of the new failure", async () => {
+    const h = harness(failingHumanSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.notices.map((notice) => notice.kind)).toEqual([PR_CI_FAILED_KIND]);
+  });
+
+  test("sends the new failure to Discord", async () => {
+    const h = harness(failingHumanSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toHaveLength(1);
+  });
+
+  test("records the failure of the resolution", async () => {
+    const h = harness(failingHumanSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual([`resolve_older_notices:${FAILING_PR}`]);
+  });
+
+  test("adds the deferred notice too", async () => {
+    const h = harness({
+      unnotified: [
+        humanRow({
+          state: "failed",
+          updated_at: minutesBefore(1),
+          first_seen_at: minutesBefore(10),
+        }),
+      ],
+      rowsForPr: {
+        40: [humanRow({ id: 3, head_sha: SHA_B, state: "superseded" })],
+      },
+      resolveFailsFor: [PR_CI_FAILED_KIND],
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toHaveLength(1);
+  });
+
+  test("does not resolve the notice of a head that shares the short sha", async () => {
+    const sameShort = `${SHA_A.slice(0, 7)}${"b".repeat(33)}`;
+    const h = harness({
+      prs: { [HUMAN_KEY]: humanPr() },
+      pending: [humanRow()],
+      runs: { [SHA_A]: [failingRun()] },
+      rowsForPr: {
+        40: [humanRow({ id: 3, head_sha: sameShort, state: "superseded" })],
+      },
+    });
+    await runPrCiWatch(h.deps);
+    expect(failureNoticeResolutions(h)).toEqual([]);
   });
 });

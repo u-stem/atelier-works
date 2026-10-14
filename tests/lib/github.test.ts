@@ -33,6 +33,7 @@ import {
   getPr,
   getPrDiff,
   getPrFiles,
+  getPrWithoutWait,
   getRepositoryId,
   getRepositoryOwnerId,
   getViewer,
@@ -3419,6 +3420,46 @@ describe("searchDependabotPrs", () => {
 
     await expect(
       searchDependabotPrs({ run: fake.run, ghToken: "tok" }, SCOPE),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+});
+
+describe("getPrWithoutWait", () => {
+  const RATE_LIMITED = () =>
+    ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" }));
+
+  test("throws the rate limit error without waiting for the limit to reset", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await expect(
+      getPrWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("does not send a second request after the rate limit", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await getPrWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("reports an unexpected response shape as a response error", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: "12" })]);
+    await expect(
+      getPrWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
     ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 });

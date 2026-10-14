@@ -45,7 +45,7 @@ import {
   WorkflowRunsIncompleteError,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
-import type { WorkflowRun } from "./main_ci_support.ts";
+import { shortSha, type WorkflowRun } from "./main_ci_support.ts";
 import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
   classifyHeadFailure,
@@ -139,6 +139,13 @@ export const HUMAN_PR_LIMIT = 20;
  * 記録済みでheadが動いていないPRは記録の枠を使わないので、読み取りの数にも上限を置く。
  */
 export const HUMAN_PR_READ_LIMIT = 60;
+
+/**
+ * 1回の実行で判定する、記録済みの人の行の最大の数。判定待ち、失敗、実行なしの合計である。
+ * 人の行は、FactoryのPRの行と同じ時間と、PATのcoreの枠を使う。上限を置かないと、記録した人のPRが増えるほど、
+ * FactoryのPRの判定を圧迫する。超えた分は、読み直していない順に次の回へ回す。
+ */
+export const HUMAN_RECHECK_LIMIT = 40;
 
 /**
  * 人のPRの発見(検索とPRの読み取り)に使える時間。
@@ -266,6 +273,7 @@ export async function buildHumanDiscovery(input: {
   >;
   readonly verifiedOwners: readonly FactoryOwner[];
   readonly getViewer: () => Promise<Viewer>;
+  readonly getPr: PrCiHumanDiscoveryDeps["getPr"];
   readonly search: PrCiHumanDiscoveryDeps["search"];
   readonly recordFailure: (step: string, err: unknown) => Promise<void>;
 }): Promise<PrCiHumanDiscoveryDeps | undefined> {
@@ -295,6 +303,7 @@ export async function buildHumanDiscovery(input: {
   return {
     policy: labelerPolicyFor(viewer.login, config),
     scopes,
+    getPr: input.getPr,
     search: input.search,
   };
 }
@@ -372,6 +381,15 @@ export type PrCiHumanDiscoveryDeps = {
   /** 検索する範囲。オーナーごと、または`factory_repo`のリポジトリ。 */
   readonly scopes: readonly OpenAuthoredPrsScope[];
   /**
+   * 見つかったPRを読む。rate limitのときは、待たずに`GitHubRateLimitError`を投げる(`getPrWithoutWait`)。
+   * FactoryのPRの読み取り(`PrCiWatchDeps.getPr`)とは分ける。人のPRの発見が、解除を待って全体の時間を使わないためである。
+   */
+  readonly getPr: (
+    owner: string,
+    repo: string,
+    number: number,
+  ) => Promise<PullRequest>;
+  /**
    * 範囲と作者で、開いていて下書きでないPRを検索する(`searchOpenAuthoredPrs`)。
    * rate limitのときは、待たずに`GitHubRateLimitError`を投げる。
    */
@@ -384,7 +402,7 @@ export type PrCiHumanDiscoveryDeps = {
 export type PrCiWatchDeps = {
   /** 渡したときだけ、判定の後に失敗した行の起動を行う。 */
   readonly claim?: PrCiClaimDeps;
-  /** 渡したときだけ、発見の最後に許可された人のPRを記録する。 */
+  /** 渡したときだけ、判定と起動の後に許可された人のPRを記録する。 */
   readonly humanDiscovery?: PrCiHumanDiscoveryDeps;
   /**
    * 失敗の通知を保留するかと、保留した通知を出す時機を決める設定。
@@ -918,12 +936,14 @@ function humanScopeLabel(scope: OpenAuthoredPrsScope): string {
  * 検索は範囲(`scopes`)と作者ごとに1回で、1ページだけ読む。
  * 検索結果は、範囲と作者をまたいで更新の新しい順に並べ直してから読む。
  * 検索がrate limitで拒まれても、全体のrate limitにはせず、残りの検索を止める。
- * 作者が改名や削除で検索を拒まれた(422)ときは、その作者の検索を飛ばし、失敗は記録しない。
+ * 範囲がオーナーで、一部の作者だけが検索を拒まれた(422)ときは、改名や削除とみなして、その作者の検索を飛ばし、
+ * 警告のログに残す。範囲がリポジトリのときと、範囲の全員が拒まれたときは、失敗として記録する。
  * FactoryのPRの判定と起動を人のPRの発見が遅らせないよう、起動の後に置き、全体の経過時間と
  * `HUMAN_DISCOVERY_BUDGET_MS`の両方を見る。ここで記録した行の判定は、次の回に行う。
  * 新しく記録した行と、`reopen`した行の数が`HUMAN_PR_LIMIT`に達したら、残りは読まない。
  * 記録済みでheadが動いていないPRは数えない。読む数は`HUMAN_PR_READ_LIMIT`までである。
  * 読んでrate limitに拒まれたら、全体のrate limitにはせず、残りのPRだけを止める。
+ * PRは、待たない読み取り(`PrCiHumanDiscoveryDeps.getPr`)で読み、同じ回の判定には再利用しない。
  */
 async function discoverHuman(context: Context): Promise<void> {
   const { deps, state } = context;
@@ -937,9 +957,11 @@ async function discoverHuman(context: Context): Promise<void> {
     deps.now().getTime() - startedAt >= HUMAN_DISCOVERY_BUDGET_MS;
 
   const found: OpenAuthoredPrSearchItem[] = [];
+  const authors = humanPrAuthors(human.policy);
   let searching = true;
   for (const scope of human.scopes) {
-    for (const author of humanPrAuthors(human.policy)) {
+    const rejected: { author: string; error: GitHubHttpError }[] = [];
+    for (const author of authors) {
       if (!searching) break;
       if (outOfTime()) {
         deps.log.warn("pr ci human search stopped by the time budget");
@@ -956,11 +978,12 @@ async function discoverHuman(context: Context): Promise<void> {
           searching = false;
           break;
         }
-        if (err instanceof GitHubHttpError && err.status === 422) {
-          deps.log.warn(
-            "pr ci human search skipped an author that GitHub rejected",
-            { scope: humanScopeLabel(scope), author },
-          );
+        if (
+          scope.kind === "owner" &&
+          err instanceof GitHubHttpError &&
+          err.status === 422
+        ) {
+          rejected.push({ author, error: err });
           continue;
         }
         await recordFailureOf(
@@ -969,6 +992,21 @@ async function discoverHuman(context: Context): Promise<void> {
           err,
         );
       }
+    }
+    const firstRejected = rejected[0];
+    if (firstRejected === undefined) continue;
+    if (rejected.length === authors.length) {
+      // 範囲の全員が拒まれたのは、作者の改名や削除ではなく、範囲の側の問題かもしれない。
+      await recordFailureOf(
+        context,
+        `search_human_prs:${humanScopeLabel(scope)}`,
+        firstRejected.error,
+      );
+    } else {
+      deps.log.warn("pr ci human search skipped authors that GitHub rejected", {
+        scope: humanScopeLabel(scope),
+        authors: rejected.map((entry) => entry.author),
+      });
     }
   }
   found.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
@@ -1003,7 +1041,7 @@ async function discoverHuman(context: Context): Promise<void> {
     }
     reads += 1;
     try {
-      const pr = await readPr(context, ref);
+      const pr = await human.getPr(ref.owner, ref.repo, ref.number);
       const author = {
         login: pr.authorLogin,
         id: pr.authorId,
@@ -1230,6 +1268,30 @@ async function readFixingHead(
 // 判定
 // ---------------------------------------------------------------------------
 
+/**
+ * 読み直す行の並びを決める。FactoryのPRの行は、順序を変えずに先に置く。
+ * 人の行(`work_item_id`が空)は後ろに置き、読み直していない順に`HUMAN_RECHECK_LIMIT`件までにする。
+ * 超えた分は何も書き換えないので、次の回の先頭に残る。読んだ行は`checked_at`が進むため、全員が順に回る。
+ * 人の行がFactoryのPRの行の判定の時間と、PATのcoreの枠を食わないための上限である。
+ */
+function orderRowsForRecheck(
+  rows: readonly PrCiCheck[],
+  log: Logger,
+): PrCiCheck[] {
+  const factoryRows = rows.filter((row) => row.work_item_id !== null);
+  const humanRows = rows
+    .filter((row) => row.work_item_id === null)
+    .sort(
+      (a, b) => a.checked_at.getTime() - b.checked_at.getTime() || a.id - b.id,
+    );
+  if (humanRows.length > HUMAN_RECHECK_LIMIT) {
+    log.warn("pr ci human rows are left to the next run", {
+      left: humanRows.length - HUMAN_RECHECK_LIMIT,
+    });
+  }
+  return [...factoryRows, ...humanRows.slice(0, HUMAN_RECHECK_LIMIT)];
+}
+
 /** 判定待ち、失敗、実行なしの行を読み直して確定する。 */
 async function recheck(context: Context): Promise<void> {
   const { deps } = context;
@@ -1241,7 +1303,7 @@ async function recheck(context: Context): Promise<void> {
       new Date(context.now.getTime() - NO_CI_RECHECK_INTERVAL_MS),
       NO_CI_BATCH_LIMIT,
     );
-    rows = [...pending, ...failed, ...noCi];
+    rows = orderRowsForRecheck([...pending, ...failed, ...noCi], deps.log);
   } catch (err) {
     await recordFailureOf(context, "list_rows", err);
     return;
@@ -1600,6 +1662,7 @@ async function settlePassed(
  * 1つのPRに未解決のnoticeが重なる。FactoryのPRの行は変えない。
  * 今のheadのnoticeは解決しない。通知をやり直した回に、同じ本文が重複と見なされ、Discordが重ならないためである。
  * 古いheadは、そのPRの記録済みの行から求める。解決は冪等なので、通知の登録より先に行う。
+ * 解決に失敗しても、失敗を記録して通知へ進む。
  */
 async function resolveOlderHeadNotices(
   context: Context,
@@ -1607,15 +1670,28 @@ async function resolveOlderHeadNotices(
 ): Promise<void> {
   if (row.work_item_id !== null) return;
   const { deps } = context;
-  const rows = await deps.listRowsForPr(row.owner, row.repo, row.pr_number);
-  const olderHeads = new Set(
-    rows.map((other) => other.head_sha).filter((sha) => sha !== row.head_sha),
-  );
-  for (const sha of olderHeads) {
-    await deps.resolveNotices(
-      PR_CI_FAILED_KIND,
-      prCiHeadNoticePrefix(row.owner, row.repo, row.pr_number, sha),
-      PR_CI_RESOLVED_BY,
+  try {
+    const rows = await deps.listRowsForPr(row.owner, row.repo, row.pr_number);
+    // 先頭7文字が今のheadと同じheadは除く。本文は先頭7文字で表すので、今のheadのnoticeに当たるためである。
+    const currentShort = shortSha(row.head_sha);
+    const olderHeads = new Set(
+      rows
+        .map((other) => other.head_sha)
+        .filter((sha) => shortSha(sha) !== currentShort),
+    );
+    for (const sha of olderHeads) {
+      await deps.resolveNotices(
+        PR_CI_FAILED_KIND,
+        prCiHeadNoticePrefix(row.owner, row.repo, row.pr_number, sha),
+        PR_CI_RESOLVED_BY,
+      );
+    }
+  } catch (err) {
+    // 古いnoticeが残るだけなので、新しい失敗の通知は止めない。
+    await recordFailureOf(
+      context,
+      `resolve_older_notices:${prKey(rowRef(row))}`,
+      err,
     );
   }
 }
