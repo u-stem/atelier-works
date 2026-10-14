@@ -81,6 +81,7 @@ function pullRequest(headRepoFullName: string | null): PullRequest {
     mergeable: null,
     mergeableState: null,
     authorLogin: "octo-owner",
+    authorId: null,
     authorType: null,
     autoMergeEnabled: false,
   };
