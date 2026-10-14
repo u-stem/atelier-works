@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const ROOT = join(import.meta.dir, "../../..");
@@ -216,4 +224,99 @@ describe("docs/security.md", () => {
   test("explains what happens when the hook times out", () => {
     expect(security).toContain("タイムアウト");
   });
+});
+
+function allowRules(): string[] {
+  const permissions = readSettings().permissions;
+  if (!isRecord(permissions) || !Array.isArray(permissions.allow)) return [];
+  return permissions.allow.filter(
+    (rule): rule is string => typeof rule === "string",
+  );
+}
+
+/** `.claude/settings.json`のWorktreeCreateに登録したフックのコマンドを返す。 */
+function worktreeCreateCommands(): string[] {
+  const hooks = readSettings().hooks;
+  if (!isRecord(hooks) || !Array.isArray(hooks.WorktreeCreate)) return [];
+  const commands: string[] = [];
+  for (const entry of hooks.WorktreeCreate) {
+    if (!isRecord(entry) || !Array.isArray(entry.hooks)) continue;
+    for (const hook of entry.hooks) {
+      if (isRecord(hook) && typeof hook.command === "string")
+        commands.push(hook.command);
+    }
+  }
+  return commands;
+}
+
+function runWorktreeCreate(projectDir: string, stdin: string) {
+  return Bun.spawnSync(
+    ["/bin/sh", "-c", worktreeCreateCommands()[0] ?? "exit 99"],
+    {
+      stdin: Buffer.from(stdin),
+      env: { PATH: "/usr/bin:/bin", CLAUDE_PROJECT_DIR: projectDir },
+    },
+  );
+}
+
+describe("the WorktreeCreate hook", () => {
+  test("registers exactly one command", () => {
+    expect(worktreeCreateCommands()).toHaveLength(1);
+  });
+
+  test("runs worktree-new.sh in the hook mode", () => {
+    expect(worktreeCreateCommands()[0]).toEndWith(
+      ` "\${CLAUDE_PROJECT_DIR}/scripts/worktree-new.sh" --hook`,
+    );
+  });
+
+  test("points at an existing script", () => {
+    expect(existsSync(join(ROOT, "scripts/worktree-new.sh"))).toBe(true);
+  });
+
+  test("fails when the script is missing instead of succeeding silently", () => {
+    const dir = mkdtempSync(join(tmpdir(), "worktree-hook-"));
+    try {
+      const result = runWorktreeCreate(dir, "{}");
+
+      expect(result.exitCode).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("says why it failed when the script is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "worktree-hook-"));
+    try {
+      const result = runWorktreeCreate(dir, "{}");
+
+      expect(result.stderr.toString()).toContain("worktree script not found");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("passes --hook and the standard input to the script", () => {
+    const dir = mkdtempSync(join(tmpdir(), "worktree-hook-"));
+    try {
+      mkdirSync(join(dir, "scripts"));
+      writeFileSync(
+        join(dir, "scripts/worktree-new.sh"),
+        '#!/usr/bin/env bash\necho "args=$* stdin=$(cat)"\n',
+      );
+
+      const result = runWorktreeCreate(dir, '{"name":"x"}');
+
+      expect(result.stdout.toString()).toBe('args=--hook stdin={"name":"x"}\n');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(["Bash(mise run worktree:new:*)", "Bash(mise run worktree:prune)"])(
+    "allows %s",
+    (rule) => {
+      expect(allowRules()).toContain(rule);
+    },
+  );
 });

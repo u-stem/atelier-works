@@ -4,30 +4,65 @@
 #
 # 使い方:
 #   scripts/worktree-new.sh <type>/<name>   (例: feat/foo)
-# ブランチ名は`<type>/<name>`、ディレクトリ名は`<type>-<name>`になる。
+#     ブランチ名は`<type>/<name>`、ディレクトリ名は`<type>-<name>`になる。
+#   scripts/worktree-new.sh --hook
+#     ClaudeのWorktreeCreateフック。標準入力のJSONの`name`と`cwd`を読み、標準出力にはパスだけを出す。
 # 既にブランチ(ローカルとorigin)かディレクトリがあれば、何も変えずに非ゼロで終わる。
 set -euo pipefail
 
 usage() {
   echo "usage: scripts/worktree-new.sh <type>/<name>" >&2
+  echo "       scripts/worktree-new.sh --hook   (reads the WorktreeCreate JSON on stdin)" >&2
   echo "  type: feat | fix | docs | refactor | test | chore" >&2
   echo "  name: lowercase letters, digits and hyphens" >&2
 }
 
 types='feat|fix|docs|refactor|test|chore'
+hook=0
 
-if [ "$#" -ne 1 ]; then
-  usage
-  exit 2
+if [ "$#" -eq 1 ] && [ "$1" = "--hook" ]; then
+  hook=1
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "worktree-new: jq is required for --hook but was not found in PATH" >&2
+    exit 1
+  fi
+  input="$(cat)"
+  if ! name="$(printf '%s' "$input" | jq -er '.name | select(type == "string")')"; then
+    echo "worktree-new: the hook input is not JSON with a string \"name\"" >&2
+    exit 2
+  fi
+  hook_cwd="$(printf '%s' "$input" | jq -r '.cwd | select(type == "string")')"
+  if [ -n "$hook_cwd" ] && [ -d "$hook_cwd" ]; then
+    cd "$hook_cwd"
+  fi
+  # 名前を、ブランチ名とディレクトリ名に使える形にそろえる。
+  # `/`、`.`、`..`は`-`になり、パスの区切りを含められない。
+  slug="$(printf '%s' "$name" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C sed -e 's/[^a-z0-9-]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//')"
+  if [ -z "$slug" ]; then
+    echo "worktree-new: the name has no usable characters: $name" >&2
+    exit 2
+  fi
+  hook_pattern="^($types)-(.+)$"
+  if [[ "$slug" =~ $hook_pattern ]]; then
+    branch="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+  else
+    branch="worktree-$slug"
+  fi
+  dir_name="$slug"
+else
+  if [ "$#" -ne 1 ]; then
+    usage
+    exit 2
+  fi
+  pattern="^($types)/([a-z0-9-]+)\$"
+  if [[ ! "$1" =~ $pattern ]]; then
+    echo "worktree-new: invalid argument: $1" >&2
+    usage
+    exit 2
+  fi
+  branch="$1"
+  dir_name="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
 fi
-pattern="^($types)/([a-z0-9-]+)\$"
-if [[ ! "$1" =~ $pattern ]]; then
-  echo "worktree-new: invalid argument: $1" >&2
-  usage
-  exit 2
-fi
-branch="$1"
-dir_name="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}"
 
 # 置き場所は、相対パスではなくメインのcheckoutの絶対パスから決める。
 # 別のworktreeの中から実行しても、その中に入れ子にならないようにするため。
@@ -37,7 +72,8 @@ if [ "$(basename "$common_dir")" != ".git" ]; then
   echo "worktree-new: cannot locate the main checkout from $common_dir" >&2
   exit 1
 fi
-main_root="$(dirname "$common_dir")"
+# フックに返すパスはシンボリックリンクを通ってはならないので、実パスにそろえる。
+main_root="$(cd "$(dirname "$common_dir")" && pwd -P)"
 # メインのcheckout直下の`mise.local.toml`(秘密値)は、miseの親ディレクトリ探索で
 # `.claude/worktrees/`の下にも引き継がれるので、秘密値を複製しない。
 # ただし`mise.toml`にもあるキー(例: `WM_HTTP_PORT`)を`mise.local.toml`で上書きしても、
@@ -53,8 +89,16 @@ if git show-ref --verify --quiet "refs/heads/$branch"; then
   exit 1
 fi
 
+# フックはsubagentの起動に使われる。オフラインでもsubagentを止めないよう、
+# フックのときだけ、fetchとoriginの検査の失敗を警告にして続ける。
+# 取り込み済みの`refs/remotes/origin/main`が無ければ、起点が決められないので失敗する。
 echo "worktree-new: fetching origin/main" >&2
-git fetch origin main >&2
+if ! git fetch origin main >&2; then
+  if [ "$hook" -ne 1 ]; then
+    exit 1
+  fi
+  echo "worktree-new: warning: fetch failed, using the existing refs/remotes/origin/main" >&2
+fi
 
 # 短い`origin/main`は同名のブランチやタグに解決されうるので、完全な名前で指す。
 if ! base_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
@@ -72,8 +116,11 @@ if [ "$remote_status" -eq 0 ]; then
   exit 1
 fi
 if [ "$remote_status" -ne 2 ]; then
-  echo "worktree-new: cannot check the branch on origin (exit $remote_status)" >&2
-  exit 1
+  if [ "$hook" -ne 1 ]; then
+    echo "worktree-new: cannot check the branch on origin (exit $remote_status)" >&2
+    exit 1
+  fi
+  echo "worktree-new: warning: cannot check the branch on origin (exit $remote_status), continuing" >&2
 fi
 
 # 後始末の対象は、`git worktree add`の成功から依存の導入の完了までに限る。
