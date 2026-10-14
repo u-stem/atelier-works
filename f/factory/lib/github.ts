@@ -280,6 +280,13 @@ export type GhApiCallOptions = {
    * ヘッダーは先頭にあるので、先頭の半分が上限より小さい限り読める。
    */
   readonly maxOutputBytes?: number;
+  /**
+   * `gh`に`--allow-escape-sequences`を渡す。
+   * ghは、応答に端末の制御列を含むと、本文を出さずに拒否の文だけを出す。
+   * 制御列を含みうる本文(Actionsのログ)を受け取るときに指定する。
+   * 制御列の除去は呼び出し側の整形が行う。
+   */
+  readonly allowEscapeSequences?: boolean;
 };
 
 /**
@@ -336,6 +343,9 @@ async function attemptGhApi(
   if (options.acceptHeader !== undefined)
     argv.push("-H", `Accept: ${options.acceptHeader}`);
   if (options.body !== undefined) argv.push("--input", "-");
+  if (options.allowEscapeSequences === true) {
+    argv.push("--allow-escape-sequences");
+  }
 
   const stdin =
     options.body !== undefined ? JSON.stringify(options.body) : undefined;
@@ -4519,12 +4529,45 @@ export class GitHubCiLogError extends Error {
   }
 }
 
+/** ghの拒否の文として扱う本文の最大の長さ。拒否の文は約100字である。 */
+const CI_LOG_REFUSAL_MAX_LENGTH = 300;
+
+/**
+ * ghが、制御列を含む応答の本文を出さずに、代わりに出す拒否の文か。
+ * ログの本文と取り違えて空の抜粋にしないために見分ける。
+ * 本物のログと取り違えないよう、短い本文に限る。
+ */
+function isEscapeSequenceRefusal(bodyText: string): boolean {
+  const text = bodyText.trim();
+  return (
+    text.length <= CI_LOG_REFUSAL_MAX_LENGTH &&
+    text.includes("terminal escape sequences") &&
+    text.includes("--allow-escape-sequences")
+  );
+}
+
+/**
+ * ghがログの本文を出さずに、制御列を理由とする拒否の文を出したときの例外。
+ * `--allow-escape-sequences`を解さないghで起きる。HTTPの失敗ではないので、ステータスを持たない。
+ * 本文は載せない。
+ */
+export class GitHubCiLogRefusedError extends Error {
+  constructor() {
+    super(
+      "GET workflow job log was refused by gh because the response contains terminal escape sequences",
+    );
+    this.name = "GitHubCiLogRefusedError";
+  }
+}
+
 /**
  * ジョブ(`jobId`)のログを読む。ログはJSONではないので、本文をそのまま文字列で返す。
  * 取得先は署名付きURLへの302で、`gh`が内部でたどる。URLは受け取らず、エラーにも戻り値にも出さない。
  * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
  * 本文は`CI_JOB_LOG_MAX_BYTES`で切り、切ったかは`truncated`で返す。
  * 本文は`VolatileCiLog`で包んで返す。
+ * ログは端末の制御列を含むので、`gh`に`--allow-escape-sequences`を渡す。
+ * 2xxの本文がghの拒否の文だったときは、`GitHubCiLogRefusedError`を投げる。
  * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
  * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
  * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
@@ -4540,9 +4583,12 @@ export async function getWorkflowJobLog(
   const response = await callGhApi(
     client,
     `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs`,
-    { maxOutputBytes: CI_JOB_LOG_MAX_BYTES },
+    { maxOutputBytes: CI_JOB_LOG_MAX_BYTES, allowEscapeSequences: true },
   );
   if (response.status >= 200 && response.status < 300) {
+    if (isEscapeSequenceRefusal(response.bodyText)) {
+      throw new GitHubCiLogRefusedError();
+    }
     return {
       kind: "ok",
       log: VolatileCiLog.of(response.bodyText),

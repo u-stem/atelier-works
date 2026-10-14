@@ -4,6 +4,7 @@ import {
   addLabels,
   type ClaimIssueResult,
   ClaimOwnershipUnknownError,
+  callGhApi,
   claimIssue,
   commentIssue,
   compareCommits,
@@ -158,6 +159,31 @@ describe("isFactoryPost", () => {
     expect(
       isFactoryPost(undefined, "factory-bot", "READMEも直してください"),
     ).toBe(false);
+  });
+});
+
+describe("allowEscapeSequences", () => {
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  test("adds --allow-escape-sequences when the option is true", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await callGhApi(client(fake), "user", { allowEscapeSequences: true });
+    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
+  });
+
+  test("omits --allow-escape-sequences by default", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await callGhApi(client(fake), "user");
+    expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
+  });
+
+  test("omits --allow-escape-sequences from the other API calls", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
+    await getViewer(client(fake));
+    expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
   });
 });
 

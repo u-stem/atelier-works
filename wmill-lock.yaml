@@ -50,7 +50,7 @@ locks:
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 12498f9f5d129dcec0cbd1a27a2d1a72328a2bfc890fe54330a1d6bd003ea5dd
-  f/factory/lib/github: df008caa3b87c4866cf79da7ae17fc48154e2d8b859f414987dab84dea910bc3
+  f/factory/lib/github: 820d59b7b177258774ce2c92c85e2a040a512a625b526ea6de778396388d4424
   f/factory/lib/host_action: dc0d09838934a55630d453e9c3af9aaaaaaef637325f1133eab9a809327e7123
   f/factory/lib/implement_finish_support: 650e75bc3c8f4568472a5d94a06d86aac9ec5ec2151a1b4b8679956ab544d4c5
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77

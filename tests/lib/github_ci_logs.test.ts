@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CI_JOB_LOG_MAX_BYTES,
   GitHubCiLogError,
+  GitHubCiLogRefusedError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
   getWorkflowJobLog,
@@ -204,6 +205,12 @@ describe("getWorkflowJobLog", () => {
     );
   });
 
+  test("asks gh to output a log that has terminal escape sequences", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    await get(fake);
+    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
+  });
+
   test("passes the byte cap to the runner", async () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
     await get(fake);
@@ -244,6 +251,32 @@ describe("getWorkflowJobLog", () => {
     );
     const fake = createFakeCommandRunner([ok(stdout)]);
     expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
+  });
+
+  const REFUSAL =
+    "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway";
+
+  test("throws a GitHubCiLogRefusedError when gh outputs its refusal instead of the log", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, REFUSAL))]);
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogRefusedError);
+  });
+
+  test("recognizes the refusal with a trailing newline", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, `${REFUSAL}\n`)),
+    ]);
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogRefusedError);
+  });
+
+  test("names the cause in the message of the refusal error", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, REFUSAL))]);
+    expect(await messageOf(fake)).toContain("terminal escape sequences");
+  });
+
+  test("keeps a long log that mentions the flag as a log", async () => {
+    const long = `${"line\n".repeat(500)}${REFUSAL}\n`;
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, long))]);
+    expect(await get(fake)).toMatchObject({ kind: "ok" });
   });
 
   test("returns forbidden for 403", async () => {
