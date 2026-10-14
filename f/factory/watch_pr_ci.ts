@@ -1,9 +1,11 @@
 // 5分ごとに、Factoryが作ったPRのCI(GitHub Actionsのpull_requestとpushの実行)を、
 // headのコミット単位で判定する。失敗したheadは要対応のnoticeとDiscordで知らせ、
 // 同じPRのheadが通ったら、失敗のnoticeを自動で解決する。閉じたPRの行は整理する。
-// 観測と通知だけで、PRにもリポジトリにも書き込まない。Claudeにログは渡さない。
+// PRにもリポジトリにも書き込まず、ログも読まない。
+// 設定`pr_ci_fix_enabled`が真のときは、失敗した行を直す作業項目(pr_fixのCI回)を起動する。
+// ログを読んでClaudeに渡すのは、起動した作業項目である。
 // 失敗を直す作業項目が終わった`fixing`の行は、回復で`failed`か`superseded`に戻す。
-// 回復は設定`pr_ci_watch_enabled`に依らず動く。作業項目の起動はしない。
+// 回復は設定`pr_ci_watch_enabled`に依らず動く。作業項目の起動は、監視が有効なときだけ行う。
 //
 // 流れと判断は`./lib/pr_ci_watch.ts`にあり、このファイルは入出力をつなぐだけ。
 // 対象は、作業項目の`pr_url`から引いたPRのうち、許可リスト(`repo_allowlist`と照合済みの`owners`、
@@ -17,13 +19,21 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
+import { hasCiFixSkillMarker } from "./lib/ci_fix_round.ts";
+import { dailyBudgetStatus } from "./lib/claude.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  claimPrCiCheckForFix,
+  countPrCiFixRounds,
   findOrphanFixingPrCiChecks,
   getWorkItem,
+  hasPrReviewForHead,
+  isLatestMainCiRunFailed,
   latestFixRound,
   latestStatusEvent,
+  listActivePrFixWorkItems,
+  listClaimablePrCiChecks,
   listFailedPrCiChecks,
   listFixingPrCiChecks,
   listNoCiPrCiChecksToRecheck,
@@ -35,32 +45,103 @@ import {
   recordPrCiCheck,
   releaseFixingPrCiCheck,
   resolveUnresolvedNoticesByPrefix,
+  setFlowJobId,
+  setPrCiFixHold,
   touchPrCiCheck,
   transitionPrCiCheck,
+  updateStatusIfCurrent,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
 import {
   type GhClient,
   getAccountId,
+  getFileAtRef,
   getPr,
+  listPrCommitMessages,
   listPrHeadWorkflowRuns,
+  listWorkflowRunJobs,
+  parseGitHubRepoUrl,
 } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import { readFixItemState } from "./lib/pr_ci_fix_recovery.ts";
+import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "./lib/pr_ci_support.ts";
 import {
   buildRecoveryRepoGates,
   buildRepoGates,
   PR_CI_WATCH_IDLE_RESULT,
+  type PrCiClaimDeps,
   type PrCiWatchDeps,
   type PrCiWatchResult,
   runPrCiRecovery,
   runPrCiWatch,
   TRACKED_PR_LIMIT,
 } from "./lib/pr_ci_watch.ts";
+import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
+import type { FactoryConfig } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 
 const DAY_MS = 24 * 60 * 60_000;
+
+/** factory-fixスキルの、Factoryのcloneの中での位置。`pr_fix_apply`が読むファイルと同じである。 */
+const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
+
+/**
+ * 失敗した行から直す作業項目を起動する依存を組む。
+ * 設定で起動が有効で、有効にした時刻があるときだけ組み、そうでなければ`undefined`を返す。
+ * スキルのマーカーは、`pr_fix`が読むcloneと同じブランチ(`factory_branch`)のファイルで確かめる。
+ */
+function buildClaimDeps(
+  config: FactoryConfig,
+  client: GhClient,
+): PrCiClaimDeps | undefined {
+  const since = config.pr_ci_fix_enabled_since;
+  if (!config.pr_ci_fix_enabled || since === null) return undefined;
+  return {
+    maxRounds: config.pr_ci_fix_max_rounds,
+    enabledSince: since,
+    listCandidates: (from, limit) =>
+      listClaimablePrCiChecks(from, PR_CI_FIX_TEMPORARY_HOLD_REASONS, limit),
+    hasActiveFix: async (owner, repo, prNumber) =>
+      (await listActivePrFixWorkItems(owner, repo, prNumber)).length > 0,
+    hasReview: (owner, repo, prNumber, headSha) =>
+      hasPrReviewForHead(owner, repo, prNumber, headSha),
+    listCommits: (owner, repo, prNumber) =>
+      listPrCommitMessages(client, owner, repo, prNumber),
+    // `factory_repo`の解釈もここで行う。解釈に失敗しても、ほかの処理を止めず、行単位の失敗として記録される。
+    hasSkillMarker: async () => {
+      const factoryRepo = parseGitHubRepoUrl(config.factory_repo);
+      const text = await getFileAtRef(
+        client,
+        factoryRepo.owner,
+        factoryRepo.repo,
+        FACTORY_FIX_SKILL_PATH,
+        config.factory_branch,
+      );
+      return text !== null && hasCiFixSkillMarker(text);
+    },
+    listJobs: (owner, repo, runId, headSha) =>
+      listWorkflowRunJobs(client, owner, repo, runId, headSha),
+    budgetExceeded: async () => (await dailyBudgetStatus(config)).exceeded,
+    mainCiFailed: (owner, repo) => isLatestMainCiRunFailed(owner, repo),
+    countRounds: (owner, repo, prNumber) =>
+      countPrCiFixRounds(owner, repo, prNumber),
+    setHold: (id, reason, expected) => setPrCiFixHold(id, reason, { expected }),
+    claim: (input) => claimPrCiCheckForFix(input),
+    launch: async (workItemId) => {
+      await launchPrFixFlow(workItemId, {
+        runFlowAsync: (flowPath, args) => wmill.runFlowAsync(flowPath, args),
+        setFlowJobId,
+      });
+    },
+    failFixItem: async (workItemId, note) => {
+      await updateStatusIfCurrent(workItemId, "fixing", "failed", note);
+    },
+    cancelFlow: async (jobId, reason) => {
+      await wmill.cancelJob(jobId, reason);
+    },
+  };
+}
 
 async function recordFailureSafe(
   step: string,
@@ -117,7 +198,11 @@ export async function main(): Promise<PrCiWatchResult> {
         ).owners,
       )
     : buildRecoveryRepoGates(config);
+  const claim = config.pr_ci_watch_enabled
+    ? buildClaimDeps(config, client)
+    : undefined;
   const deps: PrCiWatchDeps = {
+    ...(claim === undefined ? {} : { claim }),
     now: () => new Date(),
     log,
     instanceName: config.instance_name,

@@ -938,7 +938,7 @@ PRを閉じるかマージすると、新しい通知は出ない。
 
 Factoryは、ほかの人のコメントと同じく、ラベルの前に書かれた指示を修正の材料として集める。Factoryのレビュー済みのPRにも使える。
 
-修正は`factory:fix`ラベルでしか起動しない。コメントやcommitのpushだけでは起動しない。次の修正を始めたいときは、`factory:fix`を付け直す。
+修正は`factory:fix`ラベルでしか起動しない。コメントやcommitのpushだけでは起動しない。ただしCIの失敗を直す回は、`watch_pr_ci`が起動する([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。次の修正を始めたいときは、`factory:fix`を付け直す。
 同じPRの修正が動いている間は、`factory:fix`を付けても始まらず、ラベルは保留される。
 保留中のラベルは消えずに残る。
 その修正が終わった後に、1回だけ新しいラウンドが始まる。
@@ -1121,8 +1121,9 @@ workerの時計とGitHubの時計が数分ずれても、確定を待つ時間�
 ## PRのCIを監視する
 
 `watch_pr_ci`が5分ごとに、Factoryが作ったPRのGitHub Actionsの結果を、headのコミット単位で確かめる。
-観測と通知だけを行い、PRとリポジトリへは書き込まない。ログも読まない。
-設定`pr_ci_watch_enabled`を`false`にすると、発見と判定と失敗の通知をしない。失敗を直す作業項目が終わった行を戻す回復だけは、行があれば動く。行が無ければ、何も読まずに終わる。
+失敗を通知する。設定で有効にしたときは、失敗を直す作業項目も起動する([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。
+`watch_pr_ci`自身は、PRとリポジトリへは書き込まず、ログも読まない。
+設定`pr_ci_watch_enabled`を`false`にすると、発見、判定、失敗の通知、作業項目の起動をしない。失敗を直す作業項目が終わった行を戻す回復だけは、行があれば動く。行が無ければ、何も読まずに終わる。
 回復はオーナーの照合をせず、設定に合うリポジトリのPRを読む。行を戻すPRが閉じていたときは、そのPRの失敗の通知を解決し、未完了の行を`superseded`にする。
 照合に伴う通知は足さない。ただし、回復がPRを読めず403か404になると、通知`pr_ci_check_denied`は足しうる。判定が動かない間は、この通知は解決されないので、権限を直した後に人が解決する。
 既定は`true`である。
@@ -1164,6 +1165,86 @@ PRのCIが新しいpushで古い実行を取り消す設定のリポジトリを
 監視を有効にした直後の最初の巡回では、そのとき赤い開いたFactoryのPRが、すべて通知される。
 
 見落としうる限界と内部の挙動は[PRのCI監視の仕様](internals/pr-ci.md)にある。
+
+### 失敗の自動修正を有効にする
+
+設定`pr_ci_fix_enabled`を`true`にすると、`watch_pr_ci`が失敗したheadを直す作業項目を起動する。
+既定は`false`で、偽の間は何も起動しない。
+起動した作業項目は、失敗した実行のログの抜粋をClaudeに渡して直し、PRのブランチにpushする([PRワークフロー](internals/pr-workflow.md#CIの失敗を直す回))。
+通知`pr_ci_failed`は、起動の結果を待たず、これまでどおり失敗を見つけたときに届く。直した結果のheadのCIが通ると、通知は自動で解決される。
+
+次の条件をすべて満たす失敗だけを直す。満たさない失敗は、人が直す。
+
+- 失敗を見つけた時刻が、`pr_ci_fix_enabled_since`以後である。
+- PRのすべてのcommitが、Factoryのトレーラーを持つ。トレーラーの無いcommitを含むPRは、自動で直さない。
+- 今のheadのFactoryのレビューがある。ドラフトでなく、auto-mergeが有効でもない。
+- 失敗が`failure`で、ソースの編集で直せる種類である。metadataジョブの失敗や、取り消しなどで終わった実行は、直さない。
+- 同じPRで動いている直す作業項目が無い。
+- 日次の予算が残っていて、mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
+- Factoryのリポジトリの`factory_branch`にあるfactory-fixスキルが、CI回の節(マーカー`ci-fix-skill:v1`)を持つ。ファイルはGitHubのAPIで読む。
+  `pr_fix`の準備は毎回`factory_branch`をfetchしてhard resetする。
+  起動した後にスキルが変わって作業項目が準備で失敗すると、保留`marker_missing`になり、次の巡回で外れて起動し直す。
+  仕組みと損失は[PRのCI監視の仕様](internals/pr-ci.md#判断)にある。
+
+条件を満たさない行は、理由が`pr_ci_checks.fix_hold_reason`に残る。理由と意味は[PRのCI監視の仕様](internals/pr-ci.md#保留の理由の語彙)にある。
+一時的な理由は、条件が解ければ自動で外れて起動する。決定的な理由は、そのheadでは外れない。
+
+設定は、WindmillのResourcesの`factory_config`で直す。
+
+| 項目 | 既定値 | 内容 |
+| --- | --- | --- |
+| `pr_ci_fix_enabled` | `false` | 直す作業項目を起動するか |
+| `pr_ci_fix_max_rounds` | `2` | 1つのPRで起動できる数。直近に通ったheadより後を数える |
+| `pr_ci_fix_enabled_since` | 無し | この時刻より前に見つけた失敗は直さない。`pr_ci_fix_enabled`が`true`なら必須 |
+
+`pr_ci_fix_enabled`が`true`で`pr_ci_fix_enabled_since`が無い設定は、設定の読み込みが拒否する。Factoryのほかの処理も止まるので、2項目は同じ編集で書く。
+
+有効にする手順は次のとおりである。
+有効にした最初の1件を、実際の失敗で確かめるためである。検証用のPRを1件だけ選ぶ設定は無いので、次の順に範囲を絞る。
+
+1. Factoryのリポジトリの`factory_branch`のfactory-fixスキルが、マーカー`ci-fix-skill:v1`を持つことを確かめる。
+   ファイルをAPIで読み、マーカーを探す。出力に行が出れば持っている。
+   `<owner>/<repo>`は、`factory_config`の`factory_repo`である。
+
+   ```bash
+   gh api -H "Accept: application/vnd.github.raw" "repos/<owner>/<repo>/contents/.claude/skills/factory-fix/SKILL.md?ref=<factory_branch>" | grep ci-fix-skill:v1
+   ```
+
+   何も出ないときは、`grep`を外した`gh api`単体が成功するかを先に確かめる。ファイルを読めていないだけのことがある。
+
+   マーカーは、保護パスのスキルへの人のPRで入れる。PRがマージされるまで、有効にしない。
+   持たないと、すべての失敗が保留`marker_missing`になる。スキルが入れば、次の巡回で外れる。
+2. 有効にする前から残る失敗(`failed`の行)を片付ける。PRを直すか閉じる。さらに、赤いFactoryのPRが残っていないかを確かめる。
+3. `pr_ci_fix_max_rounds`を`1`にし、`daily_budget_usd`を「当日の使用額に1ラウンド分を足した値」にする。
+   当日の使用額は、Factoryが予算の判定に使う集計と同じ式で読む。日の区切りはJSTの0時である。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT COALESCE(SUM(cost_usd), 0) AS spent_usd FROM factory.agent_runs WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tokyo') AT TIME ZONE 'Asia/Tokyo'"
+   ```
+
+   1ラウンド分は、`max_budget_usd_per_run`(Claude 1回の実行の費用の上限)を単位に見積もる。1ラウンドは複数回の実行を含みうるので、その数を見込んで足す。
+   決めきれなければ、小さい値から始め、巡回ごとに様子を見て増やす。
+   `daily_budget_usd`はFactory全体で共有するので、使い切ると`pr_review`など、ほかのフローも止まる。
+   走行中の分は数えないので、予算を使い切るまで、巡回ごとに最大2件を起動しうる。
+4. `pr_ci_fix_enabled_since`へ有効にする時刻を書く。同じ編集で`pr_ci_fix_enabled`を`true`にする。
+5. 有効にした後の最初の失敗で、起動した作業項目の結果をConsoleで確かめる。
+   失敗したのに起動しなかったときは、保留の理由を読む。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, owner, repo, pr_number, head_sha, state, fix_hold_reason, fix_attempts, fix_work_item_id FROM factory.pr_ci_checks WHERE state IN ('failed','fixing') ORDER BY updated_at DESC LIMIT 20"
+   ```
+
+   理由ごとの意味は[保留の理由の語彙](internals/pr-ci.md#保留の理由の語彙)の表にある。
+   一時的な理由は条件が解ければ自動で外れる。決定的な理由は人が対処する。
+   ジョブIDの未記録でフローを取り消した回が起きたときは、Discordの通知(`job_failed`)が増えるかを見る。取り消したフローで失敗時の通知が動くかは、確かめていない。
+6. 結果に問題が無ければ、`pr_ci_fix_max_rounds`と`daily_budget_usd`を戻す。
+
+止め方は次のとおりである。
+
+- すべてを止めるには、`pr_ci_fix_enabled`を`false`に戻す。動いている作業項目は止まらず、終わると回復が行を戻す。有効に戻すときも、`pr_ci_fix_enabled_since`を戻す時刻に書き直す。書き直さないと、止めている間に見つけた失敗まで直しにいく。
+- 1つのPRだけを止めるには、PRをドラフトにする。ドラフトのPRは起動せず、動いている作業項目も、準備かpushの直前でドラフトを見て止まる。
+
+直す作業項目が`cancelled`になるのは、PRが閉じたときだけである。閉じたPRの行は、`superseded`になる。
 
 ## 監査を使う
 

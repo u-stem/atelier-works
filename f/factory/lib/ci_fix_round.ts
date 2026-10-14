@@ -5,7 +5,7 @@
 // `steps/`は読み込まない。lib同士の依存を一方向に保つため、`steps/`の型は構造的な型で受ける。
 
 import { lstat, readFile } from "node:fs/promises";
-import { classifyCiFailure } from "./ci_fix_classify.ts";
+import { type CiFailureClass, classifyCiFailure } from "./ci_fix_classify.ts";
 import { type CiFixChange, checkCiFixChanges } from "./ci_fix_paths.ts";
 import {
   buildCiExcerpt,
@@ -113,8 +113,42 @@ export const CI_FIX_ALLOWED_TOOLS: readonly string[] = ["Edit", "Write"];
  */
 export const CI_FIX_GITLEAKS_TIMEOUT_MS = 2 * 60_000;
 
-/** 失敗した実行のうち、ジョブを読む実行の数の上限。 */
-const CI_ROUND_MAX_RUNS = 5;
+/**
+ * 失敗した実行のうち、ジョブを読む実行の数の上限。
+ * 起動の前の分類(`classifyHeadFailure`)も、同じ数で読む。
+ */
+export const CI_ROUND_MAX_RUNS = 5;
+
+/** `classifyFailedRuns`の結果。 */
+export type FailedRunsClassification = {
+  /** ジョブを読んだ失敗の実行。古い順に最大`CI_ROUND_MAX_RUNS`件。 */
+  readonly runs: readonly WorkflowRun[];
+  /** 失敗した実行が無ければ`null`。 */
+  readonly verdict: CiFailureClass<WorkflowRunJob> | null;
+};
+
+/**
+ * そのheadの実行から、失敗の分類を求める。
+ * workflowごとの最新の実行のうち失敗したものを、最大`CI_ROUND_MAX_RUNS`件まで選び、
+ * そのジョブをまとめて分類する(`classifyCiFailure`)。
+ * 起動の前の分類(`classifyHeadFailure`)とCI回の収集(`gatherCiFailureInput`)が同じ選び方を使うので、
+ * 起動の前に直せると分かった失敗を、CI回が別の失敗として読むことはない。
+ */
+export async function classifyFailedRuns(
+  allRuns: readonly WorkflowRun[],
+  listJobs: (runId: number) => Promise<readonly WorkflowRunJob[]>,
+): Promise<FailedRunsClassification> {
+  const runs = failingRuns(latestRunPerWorkflow(allRuns)).slice(
+    0,
+    CI_ROUND_MAX_RUNS,
+  );
+  if (runs.length === 0) return { runs, verdict: null };
+  const jobs: WorkflowRunJob[] = [];
+  for (const failedRun of runs) {
+    jobs.push(...(await listJobs(failedRun.id)));
+  }
+  return { runs, verdict: classifyCiFailure(jobs) };
+}
 
 /**
  * CI回が使う、文字列のgitleaksの検査(`gitleaks stdin`)。
@@ -455,18 +489,13 @@ export async function gatherCiFailureInput(
   }
   if (pr.baseRepoId === null) return blocked("base repository id is missing");
 
-  const runs = failingRuns(
-    latestRunPerWorkflow(await deps.listRuns(pr.headRef, pr.baseRepoId)),
-  ).slice(0, CI_ROUND_MAX_RUNS);
-  if (runs.length === 0) {
+  const { runs, verdict } = await classifyFailedRuns(
+    await deps.listRuns(pr.headRef, pr.baseRepoId),
+    deps.listJobs,
+  );
+  if (verdict === null) {
     return blocked("no failed workflow run for the head");
   }
-
-  const jobs: WorkflowRunJob[] = [];
-  for (const failedRun of runs) {
-    jobs.push(...(await deps.listJobs(failedRun.id)));
-  }
-  const verdict = classifyCiFailure(jobs);
   if (verdict.kind === "unfixable_job") {
     return blocked(`${CI_ROUND_DETAILS.unfixableJob}${verdict.reason})`);
   }

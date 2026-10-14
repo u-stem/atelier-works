@@ -137,7 +137,7 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * 拡張子の違うファイル(`.ts`、`.script.yaml`、`.script.lock`)をまとめて拒否するため、
  * ステムで終わらせる。
  * Claudeの実行、保護パスの判定、ログの機密保持、作業ディレクトリ、検査の隔離、pr_fixのstep、
- * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、
+ * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、pr_fixフローの起動(`pr_fix_launch`)、
  * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)である。
  */
 const CI_DENIED_NAME_PREFIXES: readonly string[] = [
@@ -159,6 +159,7 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/factory_repo_gate.",
   "f/factory/lib/ci_",
   "f/factory/lib/pr_ci_",
+  "f/factory/lib/pr_fix_launch.",
   "f/factory/lib/main_ci_",
   "f/factory/watch_pr_ci.",
   "f/factory/watch_main_ci.",

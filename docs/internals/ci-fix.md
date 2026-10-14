@@ -400,7 +400,7 @@ gitは呼ばない。
   - `f/factory/lib/`の`claude`、`protected_paths`、`log`、`workspace`、`check_sandbox`、`check_runner`、`prompts`、`github`
   - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
   - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`
-  - `f/factory/lib/`の`ci_`、`pr_ci_`、`main_ci_`
+  - `f/factory/lib/`の`ci_`、`pr_ci_`、`main_ci_`、`pr_fix_launch`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
   - `f/factory/`の`watch_pr_ci`と`watch_main_ci`
 

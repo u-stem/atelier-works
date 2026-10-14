@@ -2561,7 +2561,8 @@ function isNonFastForwardRejection(stderr: string): boolean {
 const CLAUDE_COAUTHOR_TRAILER =
   "Co-Authored-By: Claude <noreply@anthropic.com>";
 
-function generatedByTrailer(instanceName: string): string {
+/** Factoryが作るコミットの末尾に付ける、生成元を示すトレーラーの行。 */
+export function generatedByTrailer(instanceName: string): string {
   return `Generated-By: Software Factory (${instanceName})`;
 }
 

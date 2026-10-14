@@ -1,0 +1,9 @@
+summary: '[LIB] 失敗した行を直してよいかの判断'
+description: 内部ライブラリです。直接実行するものではありません。失敗した行について、直す作業項目を起動するか、保留するか、何もしないかを決めます。
+lock: '!inline f/factory/lib/pr_ci_fix_claim.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

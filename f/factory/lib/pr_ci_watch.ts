@@ -4,6 +4,9 @@
 // 失敗は通知し、通ったheadはそのPRの失敗の通知を解決し、閉じたPRの行は整理する。
 // 発見と判定の間に、回復(失敗を直す作業項目が終わった`fixing`の行を戻す)を行う。回復は監視の設定に依らず動き、
 // 作業項目の起動はしない(`runPrCiRecovery`)。
+// 判定の後に、起動(失敗した行を直す作業項目を起動する)を行う。起動は`deps.claim`を渡したときだけ動く。
+// 起動してよいかの判断は`pr_ci_fix_claim.ts`にあり、ここは読み取りと書き込みの順序を受け持つ。
+// 失敗の通知は起動と独立に、従来どおりすぐ出す。
 // GitHub、DB、Discordの呼び出しは`PrCiWatchDeps`で渡し、テストで差し替える。
 // 外部の文字列(workflow名、実行の結論、ログ)は、通知の本文にもDiscordにも載せない。
 // 要約(`summary`列)にだけ、検証・整形した名前を残す。
@@ -12,18 +15,30 @@
 // 先にPRのheadを読むと、読んでいる間に進んだheadの実行を、今のheadの失敗として扱ってしまう。
 
 import { isRepoAllowed } from "./config.ts";
-import type { NewPrCiCheck, PrCiCheck, PrCiTransition } from "./db.ts";
+import type {
+  ClaimPrCiCheckInput,
+  NewPrCiCheck,
+  PrCiCheck,
+  PrCiTransition,
+} from "./db.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
   GitHubHttpError,
   GitHubRateLimitError,
+  type PrCommitMessages,
   type PrHeadWorkflowRuns,
   type PrHeadWorkflowRunsOptions,
   type PullRequest,
+  type WorkflowRunJob,
   WorkflowRunsIncompleteError,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
 import type { WorkflowRun } from "./main_ci_support.ts";
+import {
+  classifyHeadFailure,
+  decideFixClaim,
+  type FixClaimReaders,
+} from "./pr_ci_fix_claim.ts";
 import {
   decideFixingRecovery,
   type FixItemState,
@@ -47,6 +62,7 @@ import {
   prCiSummary,
   pullRequestPageUrl,
 } from "./pr_ci_support.ts";
+import { PrFixFlowJobIdRecordError } from "./pr_fix_launch.ts";
 import {
   assertGitHubName,
   type FactoryConfig,
@@ -80,6 +96,15 @@ export const FIXING_BATCH_LIMIT = 100;
 
 /** 1回の実行で回復の対象にする、直す作業項目に結ばれていない修正中の行の最大の数。 */
 export const ORPHAN_FIXING_BATCH_LIMIT = 50;
+
+/** 1回の実行で起動の候補にする、失敗の行の最大の数。 */
+export const CLAIM_BATCH_LIMIT = 50;
+
+/**
+ * 1回の実行で起動する行の最大の数。
+ * 直す作業項目はClaudeを走らせてPRにpushするので、一度に起動する数を絞り、予算と競合を抑える。
+ */
+export const CLAIMS_PER_RUN_LIMIT = 2;
 
 /**
  * 実行なし(`no_ci`)の行を読み直す間隔。
@@ -175,7 +200,71 @@ export function buildRecoveryRepoGates(
   return buildRepoGates(config, config.owners);
 }
 
+/**
+ * 失敗した行から、直す作業項目を起動する依存。渡さなければ起動しない。
+ * リポジトリ名の綴りは、引く先で違う。作業項目を引く`hasActiveFix`と、起動の`claim`には、
+ * PRが示すGitHubの正規の綴りを渡す。ほかの関数には、行と同じ小文字を渡す。
+ */
+export type PrCiClaimDeps = {
+  /** 1つのPRで起動できるラウンドの上限。 */
+  readonly maxRounds: number;
+  /** この時刻より前に見つけた失敗は、起動の対象にしない。 */
+  readonly enabledSince: Date;
+  /** 起動の候補の行(`listClaimablePrCiChecks`)。 */
+  readonly listCandidates: (since: Date, limit: number) => Promise<PrCiCheck[]>;
+  readonly hasActiveFix: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<boolean>;
+  readonly hasReview: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+    headSha: string,
+  ) => Promise<boolean>;
+  readonly listCommits: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<PrCommitMessages>;
+  /** factory-fixスキルがCI回の節のマーカーを持つか。 */
+  readonly hasSkillMarker: () => Promise<boolean>;
+  readonly listJobs: (
+    owner: string,
+    repo: string,
+    runId: number,
+    headSha: string,
+  ) => Promise<readonly WorkflowRunJob[]>;
+  readonly budgetExceeded: () => Promise<boolean>;
+  readonly mainCiFailed: (owner: string, repo: string) => Promise<boolean>;
+  readonly countRounds: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<number>;
+  /**
+   * 保留の理由を書く。`null`で外す。書いたら`true`。
+   * `expected`は、書く前の理由(`null`は保留なし)。いまの理由がこれと違う行は書き換えない。
+   */
+  readonly setHold: (
+    id: number,
+    reason: PrCiFixHoldReason | null,
+    expected: string | null,
+  ) => Promise<boolean>;
+  /** 行を`fixing`に移して作業項目を挿入する(`claimPrCiCheckForFix`)。起動できなければ`null`。 */
+  readonly claim: (input: ClaimPrCiCheckInput) => Promise<number | null>;
+  /** 作業項目のpr_fixフローを起動する。 */
+  readonly launch: (workItemId: number) => Promise<void>;
+  /** 起動に失敗した作業項目を`failed`にする。 */
+  readonly failFixItem: (workItemId: number, note: string) => Promise<void>;
+  /** 起動したが記録できなかったフローのジョブを取り消す(`wmill.cancelJob`)。 */
+  readonly cancelFlow: (jobId: string, reason: string) => Promise<void>;
+};
+
 export type PrCiWatchDeps = {
+  /** 渡したときだけ、判定の後に失敗した行の起動を行う。 */
+  readonly claim?: PrCiClaimDeps;
   readonly now: () => Date;
   readonly log: Logger;
   readonly instanceName: string;
@@ -267,6 +356,10 @@ export type PrCiWatchResult = {
   readonly no_ci: number;
   /** 回復で`fixing`から`failed`に戻した行の数。 */
   readonly released: number;
+  /** 直す作業項目を起動した行の数。 */
+  readonly claimed: number;
+  /** 起動せず、保留の理由を書いた(変えた)行の数。 */
+  readonly held: number;
   /** 実行かPRを読む権限が無かったリポジトリの数。 */
   readonly denied: number;
   /** 例外で処理できなかった数。 */
@@ -283,6 +376,8 @@ export const PR_CI_WATCH_IDLE_RESULT: PrCiWatchResult = {
   expired: 0,
   no_ci: 0,
   released: 0,
+  claimed: 0,
+  held: 0,
   denied: 0,
   errors: 0,
 };
@@ -296,6 +391,8 @@ type WatchState = {
   rateLimited: boolean;
   /** この回で、失敗の確定を始めた数。最初の1件は、予算を見ずに確定する。 */
   failedStarted: number;
+  /** この回で、行を`fixing`に移して作業項目を作った数。フローの起動に失敗した分も数える。 */
+  claimsStarted: number;
   /** この回に読んだPR。判定の最初に使う。判定の最後のheadの確認には使わず、必ず読み直す。 */
   readonly snapshots: Map<string, PullRequest>;
   /** 権限の不足を、この回に知らせたリポジトリ。 */
@@ -304,7 +401,28 @@ type WatchState = {
   readonly readableRepos: Set<string>;
   /** 閉じたPRとして整理を終えたPR。 */
   readonly closedPrs: Set<string>;
+  /**
+   * この回の発見で、Factoryのブランチと確かめたPR。起動はこのPRの行に限る。
+   * 発見は、同じリポジトリのheadで、ブランチが作業項目のものであることを確かめる。
+   */
+  readonly discoveredPrs: Set<string>;
+  /** この回の回復で`failed`に戻した行のID。同じ回では起動しない。 */
+  readonly releasedIds: Set<number>;
+  /** 起動の判断で読んだ、回の中で変わらない事実。予算、スキルのマーカー、リポジトリごとのmainのCI。 */
+  readonly claimFacts: Map<string, boolean>;
+  /** この回にスキルを読めなかった失敗。以後の行は読み直さず、同じ失敗として扱う。 */
+  skillMarkerFailure: SkillMarkerReadError | null;
+  /** `skillMarkerFailure`を記録した後か。1回の実行で1回だけ記録する。 */
+  skillMarkerFailureRecorded: boolean;
 };
+
+/** factory-fixスキルを読めなかった。対象のPRではなく、Factoryのリポジトリの読み取りの失敗である。 */
+class SkillMarkerReadError extends Error {
+  constructor(cause: unknown) {
+    super(`skill marker could not be read: ${errorMessage(cause)}`, { cause });
+    this.name = "SkillMarkerReadError";
+  }
+}
 
 type Context = {
   readonly deps: PrCiWatchDeps;
@@ -383,6 +501,7 @@ export async function runPrCiWatch(
   await discover(context);
   await recoverFixing(context);
   await recheck(context);
+  await claimFixes(context);
   return context.counters;
 }
 
@@ -409,10 +528,16 @@ function newContext(deps: PrCiWatchDeps): Context {
     state: {
       rateLimited: false,
       failedStarted: 0,
+      claimsStarted: 0,
       snapshots: new Map(),
       deniedRepos: new Set(),
       readableRepos: new Set(),
       closedPrs: new Set(),
+      discoveredPrs: new Set(),
+      releasedIds: new Set(),
+      claimFacts: new Map(),
+      skillMarkerFailure: null,
+      skillMarkerFailureRecorded: false,
     },
   };
 }
@@ -573,8 +698,10 @@ async function discoverPr(
     return;
   }
   // 下書きと、forkのPRと、Factoryのものでないブランチには、行を作らない。
-  if (pr.draft || !isSameRepoHead(pr)) return;
-  if (!isFactoryPrBranch(pr.headRef, ref, item)) return;
+  // 下書きでも、Factoryのブランチなら起動の判断の対象にする(保留の理由を書くため)。
+  if (!isSameRepoHead(pr) || !isFactoryPrBranch(pr.headRef, ref, item)) return;
+  context.state.discoveredPrs.add(prKey(ref));
+  if (pr.draft) return;
   const rows = await deps.listRowsForPr(ref.owner, ref.repo, ref.number);
   const plan = planPrHead(
     pr.headSha,
@@ -745,6 +872,7 @@ async function recoverRow(context: Context, row: PrCiCheck): Promise<void> {
   });
   if (!released) return;
   counters.released += 1;
+  context.state.releasedIds.add(row.id);
   deps.log.info("pr ci fixing row returned to failed", {
     repo: repoKey(row),
     pr: row.pr_number,
@@ -1229,5 +1357,307 @@ async function settleFailed(
     pr: ref.number,
     sha: row.head_sha,
     reason,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 起動
+// ---------------------------------------------------------------------------
+
+/** 起動の判断で、回の中で変わらない事実を、1回だけ読んで覚える。読めなければ覚えずに例外を伝える。 */
+async function readFactOnce(
+  context: Context,
+  key: string,
+  read: () => Promise<boolean>,
+): Promise<boolean> {
+  const known = context.state.claimFacts.get(key);
+  if (known !== undefined) return known;
+  const value = await read();
+  context.state.claimFacts.set(key, value);
+  return value;
+}
+
+/** PRが示す`owner/repo`を、GitHubの正規の綴りの2つに分ける。形が違えば`null`。 */
+function canonicalRepoNames(
+  pr: PullRequest,
+): { owner: string; repo: string } | null {
+  const parts = pr.baseRepoFullName.split("/");
+  const [owner, repo] = parts;
+  if (parts.length !== 2 || !owner || !repo) return null;
+  return { owner, repo };
+}
+
+/**
+ * 失敗した行のうち、直す作業項目を起動してよいものを起動する。
+ * 候補は、失敗の行で、保留がないか一時的な保留で、`enabledSince`以後に見つけたものである。
+ * 次の行は起動しない。
+ * - この回の発見で読んでいないPRの行。発見はFactoryのブランチと確かめる。
+ * - この回の回復で戻した行。戻した直後の状態で、すぐ起動し直さないためである。
+ * 1回の実行で作業項目を作るのは`CLAIMS_PER_RUN_LIMIT`件までで、予算を過ぎたら新しい行を始めない。
+ * フローの起動に失敗した分も数える。起動の失敗が続いても、1回の実行で作業項目を作り続けないためである。
+ * 保留の理由は、判断のたびに見直す。一時的な保留が解けた行は、保留を外してその回のうちに判断を続ける。
+ */
+async function claimFixes(context: Context): Promise<void> {
+  const { deps, state } = context;
+  const claim = deps.claim;
+  if (claim === undefined) return;
+  let rows: PrCiCheck[];
+  try {
+    rows = await claim.listCandidates(claim.enabledSince, CLAIM_BATCH_LIMIT);
+  } catch (err) {
+    await recordFailureOf(context, "list_claimable", err);
+    return;
+  }
+  for (const [index, row] of rows.entries()) {
+    if (state.rateLimited) break;
+    if (state.claimsStarted >= CLAIMS_PER_RUN_LIMIT) break;
+    if (overBudget(context)) {
+      deps.log.warn("pr ci claim stopped by the time budget", {
+        left: rows.length - index,
+      });
+      break;
+    }
+    const ref = rowRef(row);
+    if (
+      state.releasedIds.has(row.id) ||
+      !state.discoveredPrs.has(prKey(ref)) ||
+      !deps.isRepoAllowed(ref.owner, ref.repo)
+    ) {
+      // 候補の一覧の先頭に居座って、後ろの行を飢えさせないために、読み直した時刻を進める。
+      await touchSafely(context, row);
+      continue;
+    }
+    try {
+      await claimRow(context, claim, row, ref);
+    } catch (err) {
+      await absorbClaimError(context, ref, err);
+      await touchSafely(context, row);
+    }
+  }
+}
+
+/**
+ * 起動の判断の読み取りの失敗を扱う。
+ * スキルの読み取りの失敗は、対象のPRの権限の不足ではないので、PRのリポジトリのnoticeにせず、
+ * 手順名`skill_marker`で1回だけ記録する。rate limitだけは、以後の読み取りを止める。
+ */
+async function absorbClaimError(
+  context: Context,
+  ref: PullRequestRef,
+  err: unknown,
+): Promise<void> {
+  const { state } = context;
+  if (err instanceof SkillMarkerReadError) {
+    if (err.cause instanceof GitHubRateLimitError) {
+      await absorbReadError(context, ref, err.cause);
+      return;
+    }
+    if (!state.skillMarkerFailureRecorded) {
+      state.skillMarkerFailureRecorded = true;
+      await recordFailureOf(context, "skill_marker", err);
+    }
+    return;
+  }
+  if ((await absorbReadError(context, ref, err)) === null) {
+    await recordFailureOf(context, `claim_fix:${prKey(ref)}`, err);
+  }
+}
+
+/** スキルのマーカーを、この回で1回だけ読む。読めなければ、以後の行も同じ失敗にする。 */
+async function readSkillMarker(
+  context: Context,
+  claim: PrCiClaimDeps,
+): Promise<boolean> {
+  const { state } = context;
+  if (state.skillMarkerFailure !== null) throw state.skillMarkerFailure;
+  try {
+    return await readFactOnce(context, "skill_marker", claim.hasSkillMarker);
+  } catch (err) {
+    state.skillMarkerFailure = new SkillMarkerReadError(err);
+    throw state.skillMarkerFailure;
+  }
+}
+
+/** 起動の判断が読む事実を、この行について組む。回の中で変わらない事実は、回の間で共有する。 */
+function claimReaders(
+  context: Context,
+  claim: PrCiClaimDeps,
+  row: PrCiCheck,
+  ref: PullRequestRef,
+  names: { owner: string; repo: string },
+): FixClaimReaders {
+  const { deps } = context;
+  const repo = repoKey(ref);
+  return {
+    hasActiveFix: () =>
+      claim.hasActiveFix(names.owner, names.repo, row.pr_number),
+    hasReview: () =>
+      claim.hasReview(row.owner, row.repo, row.pr_number, row.head_sha),
+    readPr: () => readPr(context, ref),
+    readCommits: () => claim.listCommits(row.owner, row.repo, row.pr_number),
+    hasSkillMarker: () => readSkillMarker(context, claim),
+    classify: async (pr) => {
+      if (pr.baseRepoId === null) return "unreadable";
+      const found = await deps.listRuns(
+        row.owner,
+        row.repo,
+        row.head_sha,
+        pr.headRef,
+        { baseRepoId: pr.baseRepoId, prNumber: row.pr_number },
+      );
+      return classifyHeadFailure(found.runs, (runId) =>
+        claim.listJobs(row.owner, row.repo, runId, row.head_sha),
+      );
+    },
+    budgetExceeded: () => readFactOnce(context, "budget", claim.budgetExceeded),
+    mainCiFailed: () =>
+      readFactOnce(context, `main_ci:${repo}`, () =>
+        claim.mainCiFailed(row.owner, row.repo),
+      ),
+    countRounds: () => claim.countRounds(row.owner, row.repo, row.pr_number),
+  };
+}
+
+/**
+ * 起動したがジョブIDを記録できなかったフローを取り消す。取り消せたら`true`。
+ * 取り消せなかったときは、人が気づけるように失敗を記録して`false`を返す。
+ */
+async function cancelStartedFlow(
+  context: Context,
+  claim: PrCiClaimDeps,
+  row: PrCiCheck,
+  workItemId: number,
+  err: PrFixFlowJobIdRecordError,
+): Promise<boolean> {
+  const { deps } = context;
+  try {
+    await claim.cancelFlow(
+      err.flowJobId,
+      "pr ci fix: the job id of the flow was not recorded",
+    );
+    return true;
+  } catch (cancelErr) {
+    deps.log.warn("pr ci fix flow started without a recorded job id", {
+      repo: repoKey(row),
+      pr: row.pr_number,
+      work_item_id: workItemId,
+      flow_job_id: err.flowJobId,
+      error: errorMessage(err.cause),
+      cancel_error: errorMessage(cancelErr),
+    });
+    await recordFailureOf(context, "record_fix_job_id", err);
+    return false;
+  }
+}
+
+async function claimRow(
+  context: Context,
+  claim: PrCiClaimDeps,
+  row: PrCiCheck,
+  ref: PullRequestRef,
+): Promise<void> {
+  const { deps, counters, state } = context;
+  const snapshot = state.snapshots.get(prKey(ref));
+  const names = snapshot === undefined ? null : canonicalRepoNames(snapshot);
+  if (names === null) {
+    deps.log.warn(
+      "pr ci claim skipped a pull request without a repository name",
+      {
+        repo: repoKey(ref),
+        pr: ref.number,
+      },
+    );
+    await touchSafely(context, row);
+    return;
+  }
+  const decision = await decideFixClaim({
+    row,
+    instanceName: deps.instanceName,
+    maxRounds: claim.maxRounds,
+    readers: claimReaders(context, claim, row, ref, names),
+  });
+  if (decision.kind === "skip") {
+    await touchSafely(context, row);
+    return;
+  }
+  if (decision.kind === "hold") {
+    if (row.fix_hold_reason !== decision.reason) {
+      if (await claim.setHold(row.id, decision.reason, row.fix_hold_reason)) {
+        counters.held += 1;
+      }
+    }
+    await touchSafely(context, row);
+    return;
+  }
+  // 一時的な保留が解けた行は、保留を外してから起動する。
+  // 読んだ後に別の実行が理由を書き換えていたら外せないので、その行は起動せず、次の回に判断し直す。
+  if (
+    row.fix_hold_reason !== null &&
+    !(await claim.setHold(row.id, null, row.fix_hold_reason))
+  ) {
+    await touchSafely(context, row);
+    return;
+  }
+  const workItemId = await claim.claim({
+    id: row.id,
+    owner: names.owner,
+    repo: names.repo,
+    headSha: decision.pr.headSha,
+    title: decision.pr.title,
+    claimedBy: null,
+  });
+  if (workItemId === null) {
+    await touchSafely(context, row);
+    return;
+  }
+  state.claimsStarted += 1;
+  await launchClaimed(context, claim, row, ref, workItemId);
+}
+
+/**
+ * 起動した作業項目のフローを起動する。起動に失敗したら、作業項目を`failed`にして、行を`failed`に戻す。
+ * 作業項目を失敗にできなくても、行は戻す。作業項目が動いている間は、次の判断が
+ * `last_fix_unsettled`で保留し、作業項目が終わった後に再び起動の候補になる。
+ * 戻した行は`fix_attempts`を減らさないので、起動し直すたびに回数の上限へ近づく。
+ * フローが起動した後にジョブIDの記録だけが失敗したときは、動いているフローが次の起動と
+ * 二重になるのを防ぐために、起動したジョブを取り消す。取り消せたら起動の失敗と同じに片付ける。
+ * 取り消せなかったときは、動いているフローを残すために、作業項目を失敗にも行を戻しもせず、
+ * 警告と失敗の記録を残す。
+ */
+async function launchClaimed(
+  context: Context,
+  claim: PrCiClaimDeps,
+  row: PrCiCheck,
+  ref: PullRequestRef,
+  workItemId: number,
+): Promise<void> {
+  const { deps, counters } = context;
+  try {
+    await claim.launch(workItemId);
+  } catch (err) {
+    let note = "pr ci fix: the flow could not start";
+    if (err instanceof PrFixFlowJobIdRecordError) {
+      if (!(await cancelStartedFlow(context, claim, row, workItemId, err))) {
+        counters.claimed += 1;
+        return;
+      }
+      note =
+        "pr ci fix: the flow was cancelled because its job id was not recorded";
+    }
+    await recordFailureOf(context, `launch_fix:${prKey(ref)}`, err);
+    try {
+      await claim.failFixItem(workItemId, note);
+    } catch (failErr) {
+      await recordFailureOf(context, `fail_fix_item:${prKey(ref)}`, failErr);
+    }
+    await deps.release(row.id, { fixWorkItemId: workItemId });
+    return;
+  }
+  counters.claimed += 1;
+  deps.log.info("pr ci fix launched", {
+    repo: repoKey(row),
+    pr: row.pr_number,
+    sha: row.head_sha,
+    work_item_id: workItemId,
   });
 }
