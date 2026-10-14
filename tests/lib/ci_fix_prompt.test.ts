@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildCiFixPrompt,
+  CI_FENCE_LABEL_CHANGED_FILES,
+  CI_FENCE_LABEL_FAILURE_PREFIX,
   CI_FIX_PROMPT_MAX_CHANGED_PATHS,
   CI_FIX_SCHEMA,
+  CI_ROUND_PROMPT_CUE,
   type CiFixPromptInput,
 } from "../../f/factory/lib/ci_fix_prompt.ts";
 import { VolatileCiExcerpt } from "../../f/factory/lib/ci_log_support.ts";
@@ -68,6 +71,10 @@ describe("buildCiFixPrompt", () => {
     expect(outsideFences(text)).not.toContain("LOG-LINE-UNIQUE");
   });
 
+  test("states the CI round cue outside the fences", () => {
+    expect(outsideFences(prompt())).toContain(CI_ROUND_PROMPT_CUE);
+  });
+
   test("contains the log excerpt", () => {
     expect(prompt({ excerpt: excerptOf("LOG-LINE-UNIQUE") })).toContain(
       "LOG-LINE-UNIQUE",
@@ -91,7 +98,9 @@ describe("buildCiFixPrompt", () => {
       { jobName: "a", failedSteps: [], text: "one" },
       { jobName: "b", failedSteps: [], text: "two" },
     ]);
-    const fences = prompt({ excerpt }).split(`<<<DATA-${NONCE} (ci failure`);
+    const fences = prompt({ excerpt }).split(
+      `<<<DATA-${NONCE} (${CI_FENCE_LABEL_FAILURE_PREFIX}`,
+    );
     expect(fences.length - 1).toBe(2);
   });
 
@@ -225,7 +234,11 @@ describe("buildCiFixPrompt changed files", () => {
   });
 
   test("labels the list as pull request changed files", () => {
-    expect(prompt()).toContain("(pull request changed files)");
+    expect(prompt()).toContain(`(${CI_FENCE_LABEL_CHANGED_FILES})`);
+  });
+
+  test("labels each log excerpt with the failure label prefix and its number", () => {
+    expect(prompt()).toContain(`(${CI_FENCE_LABEL_FAILURE_PREFIX} 1)`);
   });
 
   test("leaves out an unsafe path", () => {
