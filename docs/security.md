@@ -204,7 +204,7 @@ artifactの中身は、攻撃者が完全に決められるものとして扱う
 publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名のartifactを上げることもできる。
 そのため、受け取る側はartifactを信用しない前提で扱い、次のすべてを守る。
 確かめるコードは`f/factory/lib/`の`metadata_patch_*.ts`にまとめ、判定を1か所に置く。
-各部品の責務は[内部仕様](internals/ci-fix.md#メタデータのパッチの受け取り)にある。
+各部品の責務は[メタデータのパッチの受け取り](internals/ci-fix.md#メタデータのパッチの受け取り)にある。
 
 | 取り決め | 実装 |
 | --- | --- |
@@ -246,8 +246,8 @@ artifactを取る実行は、次をすべて満たすものに限る。
 artifactは、その実行のIDに紐づくものだけを取る。
 ブランチ名やartifact名だけで実行を探さない。
 
-取ったartifactのIDとdigestは、`metadata`ジョブのログに残った値と照合する。
-値は、`Upload the metadata patch`ステップが出す`artifact-id`と`artifact-digest`である。
+適用する側は、取ったartifactのIDとdigestを、`metadata`ジョブが出した値と照合する。
+照合できないときは、パッチを適用しない。
 別のジョブが上げ直したartifactは、IDとdigestが違うため、見分けられる。
 
 ##### 適用先と方式
@@ -292,7 +292,7 @@ zipは、展開の前に宣言された大きさとパスを検査し、展開�
 - stored、deflate以外の圧縮方式、暗号化、zip64
 - manifestの`size`と実際の長さが違うもの、`files/`にあってmanifestに無いファイル、削除の項目に対応する`files/`のファイル
 
-取得の制限(トークンの渡し先、取得先、受け取るバイト数の上限)は、[内部仕様](internals/ci-fix.md#パッチの取得)にある。
+取得の制限(トークンの渡し先、取得先、受け取るバイト数の上限)は、[パッチの取得](internals/ci-fix.md#パッチの取得)にある。
 
 ##### パスと削除の制限
 
@@ -325,7 +325,8 @@ lockの意味(版の範囲、パッケージの入れ子、取得元、integrity
   1つでも違えば、manifestの内容と無関係に、パッチ全体を拒否する。
   依存の変更は、パッチの`.script.lock`を見なくても、コードのimportに現れるためである。
 - 局所importは、Windmillの解決に合わせて読む。
-  追えないimportは拒否する。一覧は[内部仕様](internals/ci-fix.md#importの読み取り)にある。
+  追えないimportは拒否する。
+  一覧は[importの読み取り](internals/ci-fix.md#importの読み取り)にある。
   閉包を求める解決と、依存の集合をたどる解決は、同じ関数を使う。食い違うと、閉包の外のscriptに、依存を隠せるためである。
 - 既存のscript(headの木にlockがある)のlockは、headの木のlockとバイト列まで同一であること。適用しても変わらない。
   加えて、閉包の既存のscriptのlockは、baseの先端の木のlockとも同一であること。
