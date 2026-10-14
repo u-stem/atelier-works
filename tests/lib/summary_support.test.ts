@@ -38,6 +38,29 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
   return { sql, calls };
 }
 
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/**
+ * 時刻の文字列をパラメータに渡しているのに、直後に`::timestamptz`が無い位置を返す。
+ * 型の無い文字列のパラメータはtextで束縛され、timestamptz列との比較が
+ * `operator does not exist: timestamp with time zone >= text`で失敗する。
+ */
+function untypedTimeParameters(call: FakeCall | undefined): number[] {
+  if (call === undefined) {
+    return [-1];
+  }
+  const segments = call.text.split(" ? ");
+  const untyped: number[] = [];
+  call.values.forEach((value, index) => {
+    const isTime = typeof value === "string" && ISO_TIMESTAMP.test(value);
+    const next = segments[index + 1] ?? "";
+    if (isTime && !next.startsWith("::timestamptz")) {
+      untyped.push(index);
+    }
+  });
+  return untyped;
+}
+
 describe("computeYesterdayRangeJst", () => {
   test("labels the JST calendar day before `now`'s JST calendar day", () => {
     // 2026-09-26T00:05:00ZはJSTで2026-09-26 09:05。
@@ -71,6 +94,12 @@ describe("getAgentRunSummary", () => {
     ]);
     await getAgentRunSummary(RANGE, sql);
     expect(calls[0]?.text).toContain("FROM factory.agent_runs");
+  });
+
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getAgentRunSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
   });
 
   test("parses a numeric-string total_cost_usd (Postgres numeric column)", async () => {
@@ -107,6 +136,12 @@ describe("getApprovalSummary", () => {
     ]);
     await getApprovalSummary(RANGE, sql);
     expect(calls[0]?.text).toContain("FROM factory.approval_requests");
+  });
+
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getApprovalSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
   });
 
   test("counts only requirement-draft decisions (kind = requirements)", async () => {
@@ -254,6 +289,12 @@ describe("getCleanupSummary", () => {
     expect(summary?.worker_samples_deleted).toBe(1440);
   });
 
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
+  });
+
   test("selects the worker_samples_deleted column", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await getCleanupSummary(RANGE, sql);
@@ -373,6 +414,12 @@ describe("getWorkerLoadSummary", () => {
     const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
     await getWorkerLoadSummary(RANGE, sql);
     expect(calls[0]?.text).toContain("FROM factory.worker_samples");
+  });
+
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
   });
 
   test("aggregates in a single query", async () => {

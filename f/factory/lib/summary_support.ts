@@ -129,8 +129,8 @@ export async function getAgentRunSummary(
       coalesce(sum(cost_usd), 0) AS total_cost_usd,
       count(*) FILTER (WHERE exit_code IS DISTINCT FROM 0) AS failure_count
     FROM factory.agent_runs
-    WHERE created_at >= ${range.start.toISOString()}
-      AND created_at < ${range.end.toISOString()}
+    WHERE created_at >= ${range.start.toISOString()}::timestamptz
+      AND created_at < ${range.end.toISOString()}::timestamptz
   `.fetch();
   return toAgentRunSummary(rows[0]);
 }
@@ -177,7 +177,7 @@ export async function getWorkerLoadSummary(
         mem_oom_kill
       FROM factory.worker_samples
       WHERE sampled_at >= ${range.start.toISOString()}::timestamptz - interval '10 minutes'
-        AND sampled_at < ${range.end.toISOString()}
+        AND sampled_at < ${range.end.toISOString()}::timestamptz
     ),
     timed AS (
       SELECT
@@ -328,8 +328,8 @@ export async function getApprovalSummary(
       count(*) FILTER (WHERE status = 'rejected') AS rejected_count
     FROM factory.approval_requests
     WHERE kind = 'requirements'
-      AND decided_at >= ${range.start.toISOString()}
-      AND decided_at < ${range.end.toISOString()}
+      AND decided_at >= ${range.start.toISOString()}::timestamptz
+      AND decided_at < ${range.end.toISOString()}::timestamptz
   `.fetch();
   return toApprovalSummary(rows[0]);
 }
@@ -361,8 +361,8 @@ export async function getCleanupSummary(
       coalesce(sum(pr_ci_checks_deleted), 0) AS pr_ci_checks_deleted,
       coalesce(sum(doc_dirs_deleted), 0) AS doc_dirs_deleted
     FROM factory.cleanup_runs
-    WHERE ran_at >= ${range.start.toISOString()}
-      AND ran_at < ${range.end.toISOString()}
+    WHERE ran_at >= ${range.start.toISOString()}::timestamptz
+      AND ran_at < ${range.end.toISOString()}::timestamptz
   `.fetch();
   const row = rows[0];
   if (row === undefined || parseNumericLike(row.run_count, "run_count") === 0) {

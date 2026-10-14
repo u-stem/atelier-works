@@ -80,7 +80,7 @@ locks:
   f/factory/lib/schedule_failing: 59730fe317dcc36bfa832053ced4f7273d4af8fa0644940df1db9b08c869b29f
   f/factory/lib/self_update_pull_requests: b21a5d10d4d5900d7bebaad33b711e71d50461ff3747fd59c54dca63426674d0
   f/factory/lib/self_update_support: 67c7b658a660af759976cf14ba5f2cf41921074e4f71916760a97bfd0475159c
-  f/factory/lib/summary_support: 032b4c68ad4412f890724532423d8c81d8a6da7f2186e3cfe4d84999c56484a9
+  f/factory/lib/summary_support: 45ffceaab1e33b43ba3354415fbb163941187c67d0cdee65ddfa69f8dd286798
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
   f/factory/lib/types: f47bffb5910db836de3823ab01eb1cfb4185f6465c02ecda597cfc32da14c412
   f/factory/lib/worker_load_support: b6ae51b478860e07a4da1c130a793c619e524f9f400301bc881451810dbc6153
