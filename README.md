@@ -6,14 +6,14 @@ GitHubのIssueを起点に、要件定義、実装、PR、マージ後の監視�
 
 Factoryは次の5つの工程で動く。
 
-| 工程 | 内容 | 状態 |
-| --- | --- | --- |
-| 1. 拾う | `factory`ラベルの付いたIssueと、`factory:review`・`factory:fix`ラベルの付いたPRを定期的に探し、取り込む | 実装済み |
-| 2. 要件定義 | headless Claudeが要件定義のドラフトを書き、人が承認するか差し戻す | 実装済み |
-| 3. 実装とPR | 承認された要件定義からworktreeで実装してPRを作り、PRのレビューと修正を回す | 実装済み。Issueからの実装は`implement_enabled`で有効にする |
-| 4. mainのCI監視 | 対象リポジトリのmainのCIをコミット単位で監視し、失敗を通知する | 実装済み |
-| 4. PRのCI監視 | Factoryが作ったPRのCIをheadのコミット単位で監視し、失敗を通知する。設定で有効にしたときは、失敗を直す作業項目も起動する | 実装済み |
-| 5. 自己改善 | 運用の記録を監査し、改善の提案をIssueにする | 実装済み |
+| 工程 | 内容 |
+| --- | --- |
+| 1. 拾う | `factory`ラベルの付いたIssueと、`factory:review`・`factory:fix`ラベルの付いたPRを定期的に探し、取り込む |
+| 2. 要件定義 | headless Claudeが要件定義のドラフトを書き、人が承認するか差し戻す |
+| 3. 実装とPR | 承認された要件定義からworktreeで実装してPRを作り、PRのレビューと修正を回す。Issueからの実装は`implement_enabled`を有効にしたときだけ動く |
+| 4. mainのCI監視 | 対象リポジトリのmainのCIをコミット単位で監視し、失敗を通知する |
+| 4. PRのCI監視 | Factoryが作ったPRのCIをheadのコミット単位で監視し、失敗を通知する。設定で有効にしたときは、失敗を直す作業項目も起動する |
+| 5. 自己改善 | 運用の記録を監査し、改善の提案をIssueにする |
 
 工程のほかに、次のものが動く。
 
@@ -22,7 +22,7 @@ Factoryは次の5つの工程で動く。
 - ダッシュボード(Factory Console。`/console/`で開く)
 - 自己更新と、失敗したジョブの通知
 
-Discordからの双方向の操作は未実装である。Discordには通知だけを送る。
+Discordには通知だけを送る。Discordからの操作は受け付けない。
 
 ## 10分で動かす
 
@@ -95,6 +95,7 @@ Discordからの双方向の操作は未実装である。Discordには通知だ
 atelier-works/
   README.md                        # この文書
   AGENTS.md / CLAUDE.md            # エージェント向けの指示(本体はAGENTS.md)
+  SECURITY.md                      # 脆弱性の報告窓口
   mise.toml                        # ツールの管理とタスクの定義
   mise.local.toml.example          # 秘密値のテンプレート(値は人が入れる)
   wmill.yaml                       # wmill syncの設定
@@ -132,4 +133,6 @@ atelier-works/
 | [dependabotの更新の仕様](docs/internals/dependabot.md) | dependabotのPRの選び方、自動マージの流れ、作業項目の状態 |
 | [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ |
+| [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |
+| [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成と、成果物を配信する仕組み |
 | [通知の仕様](docs/internals/notifications.md) | Discordへの通知の仕組み |
