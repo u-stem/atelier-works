@@ -134,6 +134,30 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells that an account with a configured id is denied when the id differs", () => {
+    expect(noticeGuide("labeler_denied").meaning).toContain(
+      "IDを入れたアカウントは、名前が同じでもIDが違う人",
+    );
+  });
+
+  test("tells that an account without a configured id is matched by name only", () => {
+    expect(noticeGuide("labeler_denied").meaning).toContain(
+      "IDを入れていないアカウントは、名前だけで照合します",
+    );
+  });
+
+  test("tells to check the configured id when the allowed person is denied", () => {
+    expect(noticeGuide("labeler_denied").action).toContain(
+      "allowed_labeler_idsのIDが合っているか",
+    );
+  });
+
+  test("gives the command that looks up an account id", () => {
+    expect(noticeGuide("labeler_denied").commands).toEqual([
+      "gh api users/<ログイン名> --jq .id",
+    ]);
+  });
+
   test("tells when a lost claim needs no action", () => {
     expect(noticeGuide("claim_race_lost").note).toContain(
       "同じ本文の未解決の通知がある",

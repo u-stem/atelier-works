@@ -94,13 +94,21 @@ export function labelEventNode(
   label: string,
   createdAt = "2026-09-28T03:13:41Z",
   actorType = "User",
+  databaseId?: unknown,
 ) {
   const prefix = kind === "labeled" ? "LE" : "UNLE";
   return {
     __typename: kind === "labeled" ? "LabeledEvent" : "UnlabeledEvent",
     id: `${prefix}_${createdAt}_${label}`,
     createdAt,
-    actor: login === null ? null : { login, __typename: actorType },
+    actor:
+      login === null
+        ? null
+        : {
+            login,
+            __typename: actorType,
+            ...(databaseId === undefined ? {} : { databaseId }),
+          },
     label: { name: label },
   };
 }

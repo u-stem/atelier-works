@@ -335,6 +335,121 @@ describe("parseFactoryConfig", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
+  test("defaults allowed_labeler_ids to an empty record when absent", () => {
+    expect(parseFactoryConfig(LEGACY_RAW_CONFIG).allowed_labeler_ids).toEqual(
+      {},
+    );
+  });
+
+  test("passes through an explicit allowed_labeler_ids record", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice", "bob"],
+      allowed_labeler_ids: { alice: 1001 },
+    });
+    expect(config.allowed_labeler_ids).toEqual({ alice: 1001 });
+  });
+
+  test("matches an allowed_labeler_ids key to a login case-insensitively", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["Alice"],
+      allowed_labeler_ids: { aLICE: 1001 },
+    });
+    expect(config.allowed_labeler_ids).toEqual({ aLICE: 1001 });
+  });
+
+  test("keeps a __proto__ key of allowed_labeler_ids as an own entry", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["__proto__"],
+      allowed_labeler_ids: JSON.parse('{"__proto__": 1001}'),
+    });
+    expect(Object.hasOwn(config.allowed_labeler_ids, "__proto__")).toBe(true);
+  });
+
+  test("throws when allowed_labeler_ids is not an object", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, allowed_labeler_ids: [1001] };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when an allowed_labeler_ids value is a string", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { alice: "1001" },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when an allowed_labeler_ids value is zero", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { alice: 0 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when an allowed_labeler_ids value is negative", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { alice: -5 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when an allowed_labeler_ids value is not an integer", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { alice: 1.5 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when an allowed_labeler_ids value is not a safe integer", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { alice: Number.MAX_SAFE_INTEGER + 1 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when an allowed_labeler_ids key is not in allowed_labeler_logins", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { alic: 1001 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when allowed_labeler_ids is set but allowed_labeler_logins is absent", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, allowed_labeler_ids: { alice: 1001 } };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when an allowed_labeler_ids key ends with [bot]", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { "some-app[bot]": 1001 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when allowed_labeler_ids keys differ only in case", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: { alice: 1001, Alice: 1001 },
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
   test("throws when factory_repo is missing (no schema default)", () => {
     const { factory_repo: _factoryRepo, ...withoutFactoryRepo } =
       LEGACY_RAW_CONFIG;

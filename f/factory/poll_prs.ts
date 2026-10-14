@@ -43,10 +43,11 @@ import {
   GitHubRateLimitError,
   getAccountId,
   getIssue,
-  getLabelerLogin,
+  getLabelerActor,
   getPr,
   getViewer,
   type Issue,
+  type LabelerActor,
   LabelerCheckLimitError,
   listPrReviewComments,
   listPrReviews,
@@ -224,9 +225,9 @@ export async function buildPrCandidate(
     ),
   ]);
 
-  const labelerOf = async (label: string): Promise<string | null> => {
+  const labelerOf = async (label: string): Promise<LabelerActor | null> => {
     if (!hasLabel(asIssue.labels, label)) return null;
-    return getLabelerLogin(
+    return getLabelerActor(
       client,
       found.owner,
       found.repo,
@@ -234,7 +235,7 @@ export async function buildPrCandidate(
       label,
     );
   };
-  const [reviewLabelerLogin, fixLabelerLogin] = await Promise.all([
+  const [reviewLabeler, fixLabeler] = await Promise.all([
     labelerOf(triggerLabels.reviewLabel),
     labelerOf(triggerLabels.fixLabel),
   ]);
@@ -279,8 +280,11 @@ export async function buildPrCandidate(
       pr.headRepoFullName,
       pr.baseRepoFullName,
     ).ok,
-    reviewLabelerLogin,
-    fixLabelerLogin,
+    authorId: pr.authorId,
+    reviewLabelerLogin: reviewLabeler === null ? null : reviewLabeler.login,
+    reviewLabelerId: reviewLabeler === null ? null : reviewLabeler.databaseId,
+    fixLabelerLogin: fixLabeler === null ? null : fixLabeler.login,
+    fixLabelerId: fixLabeler === null ? null : fixLabeler.databaseId,
     hasActiveReviewingItem: activeForPr.some(
       (item) => item.kind === "pr_review",
     ),

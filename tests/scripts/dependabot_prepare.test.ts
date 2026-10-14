@@ -215,6 +215,7 @@ function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
     mergeable: true,
     mergeableState: "clean",
     authorLogin: "dependabot[bot]",
+    authorId: null,
     authorType: "Bot",
     ...overrides,
   };

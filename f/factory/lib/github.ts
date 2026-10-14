@@ -1233,8 +1233,8 @@ const LABEL_EVENTS_QUERY = `
             pageInfo { hasPreviousPage }
             nodes {
               __typename
-              ... on LabeledEvent { createdAt actor { __typename login } label { name } }
-              ... on UnlabeledEvent { createdAt actor { __typename login } label { name } }
+              ... on LabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
             }
           }
         }
@@ -1243,8 +1243,8 @@ const LABEL_EVENTS_QUERY = `
             pageInfo { hasPreviousPage }
             nodes {
               __typename
-              ... on LabeledEvent { createdAt actor { __typename login } label { name } }
-              ... on UnlabeledEvent { createdAt actor { __typename login } label { name } }
+              ... on LabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
             }
           }
         }
@@ -1258,6 +1258,11 @@ type LabelEvent = {
   readonly createdAt: number;
   /** 種類が`User`のactorのログイン名。actorが無いときと、`User`でないときは`null`。 */
   readonly actorLogin: string | null;
+  /**
+   * actorの数値ID(`databaseId`)。`actorLogin`が`null`のときと、応答に無いとき、
+   * 正の安全な整数でないときは`null`。
+   */
+  readonly actorId: number | null;
   readonly label: string;
 };
 
@@ -1308,10 +1313,17 @@ function parseLabelEvent(raw: unknown, context: string): LabelEvent | null {
     typeof actor.login === "string"
       ? actor.login
       : null;
+  const actorId =
+    actorLogin !== null &&
+    isRecord(actor) &&
+    isPositiveSafeInteger(actor.databaseId)
+      ? actor.databaseId
+      : null;
   return {
     kind: typename === "LabeledEvent" ? "labeled" : "unlabeled",
     createdAt,
     actorLogin,
+    actorId,
     label,
   };
 }
@@ -1367,11 +1379,19 @@ async function lastLabelEvent(
   return tied ? null : last;
 }
 
+/** トリガーラベルを付けた人。 */
+export type LabelerActor = {
+  readonly login: string;
+  /** GitHubの数値ID。応答に無いとき、正の安全な整数でないときは`null`。 */
+  readonly databaseId: number | null;
+};
+
 /**
- * `label`を最後に付けた人のログイン名を返す。IssueとPRのどちらにも使える。
+ * `label`を最後に付けた人を、ログイン名と数値IDで返す。IssueとPRのどちらにも使える。
  * ラベルは外されて別の人に付け直されていることがある。そのため
  * 見るべきなのは、いずれかのラベル付与ではなく、そのラベルの最新のイベントである。
  * 他のラベルのイベントは見ない。
+ * 数値IDは、ラベルのイベントと同じ応答で取れる。追加のAPI呼び出しは要らない。
  * 次のときは`null`を返す。呼び出し側は、判定できないものとして拒否する。
  * - そのラベルのイベントが無い。
  * - 最後のイベントが`unlabeled`である(今付いているラベルの付与者を特定できない)。
@@ -1382,15 +1402,18 @@ async function lastLabelEvent(
  * 取得に失敗したときは例外を投げる。
  * 直近のラベルのイベントの中にそのラベルのイベントが無いときは`LabelerCheckLimitError`を投げる。
  */
-export async function getLabelerLogin(
+export async function getLabelerActor(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
   label: string,
-): Promise<string | null> {
+): Promise<LabelerActor | null> {
   const last = await lastLabelEvent(client, owner, repo, number, label);
-  return last !== null && last.kind === "labeled" ? last.actorLogin : null;
+  if (last === null || last.kind !== "labeled" || last.actorLogin === null) {
+    return null;
+  }
+  return { login: last.actorLogin, databaseId: last.actorId };
 }
 
 export type ClaimIssueOptions = {
@@ -2247,6 +2270,11 @@ export type PullRequest = {
   readonly mergeable: boolean | null;
   readonly mergeableState: string | null;
   readonly authorLogin: string;
+  /**
+   * 作者の数値ID(RESTの`user.id`)。作者が無いとき、応答に無いとき、
+   * 正の安全な整数でないときは`null`。
+   */
+  readonly authorId: number | null;
   /** 作者のアカウント種別(`User` / `Bot`など)。作者が無いか不明なら`null`。 */
   readonly authorType: string | null;
   /** PRにauto-mergeが設定されているか。有効なら、条件が揃った時点でGitHubがマージする。 */
@@ -2359,6 +2387,10 @@ export async function getPr(
       isRecord(parsed.user) && typeof parsed.user.login === "string"
         ? parsed.user.login
         : "",
+    authorId:
+      isRecord(parsed.user) && isPositiveSafeInteger(parsed.user.id)
+        ? parsed.user.id
+        : null,
     authorType:
       isRecord(parsed.user) && typeof parsed.user.type === "string"
         ? parsed.user.type

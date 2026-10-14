@@ -540,6 +540,7 @@ function prepareDeps(collected: CollectResult): DependabotPrepareDeps {
         mergeable: true,
         mergeableState: "clean",
         authorLogin: "dependabot[bot]",
+        authorId: null,
         authorType: "Bot",
       },
     }),
