@@ -18,11 +18,34 @@ const NEW_SCRIPT_KEYS: ReadonlySet<string> = new Set([
 function hasForbiddenCharacter(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
     const code = text.charCodeAt(index);
-    if ((code < 0x20 && code !== 0x0a && code !== 0x09) || code === 0x7f) {
+    if (
+      (code < 0x20 && code !== 0x0a && code !== 0x09) ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      code === 0xfeff
+    ) {
       return true;
     }
   }
   return false;
+}
+
+// 実行者の権限で変数やリソースの値に解決される、`$var:`や`$res:`の形の値の先頭。
+// キーの先頭の`$schema`は、検査の前に取り除く。
+const SCHEMA_MARKER_LINE =
+  /^ *\$schema: https:\/\/json-schema\.org\/draft\/2020-12\/schema *$/gm;
+const DOLLAR_VALUE = /(?:^ *|[:,[{] *|- +)["']?\$/m;
+const WINDMILL_EXTENSION = /x-windmill-/i;
+
+/**
+ * `schema`の塊が、値の解決も拡張も含まないか。
+ * `schema`はコードを動かさないが、`$`で始まる文字列の値は実行者の権限で解決され、
+ * `x-windmill-`のキーはフォームの挙動を変える。
+ */
+function isInertSchema(block: string): boolean {
+  const text = block.replace(SCHEMA_MARKER_LINE, "");
+  return !(DOLLAR_VALUE.test(text) || WINDMILL_EXTENSION.test(text));
 }
 
 export type BlocksResult =
@@ -70,6 +93,7 @@ export function splitTopLevelBlocks(text: string): BlocksResult {
 export type ScriptYamlFailure =
   | "malformed"
   | "no_schema"
+  | "unsafe_schema"
   | "bad_lock"
   | "disallowed_key"
   | "bad_kind"
@@ -86,7 +110,8 @@ function reject(reason: ScriptYamlFailure): ScriptYamlResult {
 
 /**
  * 再生成した`.script.yaml`(`patch`)を検査する。`scriptPath`は拡張子のないscriptのパス。
- * 共通して、`schema`があり、`lock`が`'!inline <scriptPath>.script.lock'`であることを求める。
+ * 共通して、`schema`があり、その中に`$`で始まる値と`x-windmill-`のキーが無く、
+ * `lock`が`'!inline <scriptPath>.script.lock'`であることを求める。
  * - 新しいscript(`isNewScript`): キーが許可リストの中にあり、`kind`があるなら`script`であること。
  * - 既存のscript: 現在の版(`head`)と比べて、`schema`以外のキーの塊が同じであること。
  *   summaryなどを正当に変えたPRを拒まず、`tag`や`timeout`の追加と削除を拒むため。
@@ -101,8 +126,12 @@ export function checkScriptYaml(input: {
   if (!patch.ok) {
     return reject("malformed");
   }
-  if (!patch.blocks.has("schema")) {
+  const schema = patch.blocks.get("schema");
+  if (schema === undefined) {
     return reject("no_schema");
+  }
+  if (!isInertSchema(schema)) {
+    return reject("unsafe_schema");
   }
   const expectedLock = `lock: '!inline ${input.scriptPath}.script.lock'`;
   if (patch.blocks.get("lock") !== expectedLock) {

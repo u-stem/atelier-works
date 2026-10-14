@@ -737,7 +737,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
-- CIが出すメタデータのパッチを検査する側: `f/factory/lib/metadata_patch_*.ts`の5つと、それぞれの`.script.yaml`、`.script.lock`
+- CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の7つと、それぞれの`.script.yaml`、`.script.lock`
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。

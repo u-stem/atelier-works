@@ -5,15 +5,22 @@
 // 安全は、書き込む内容を許可リストで絞ることで成り立たせる。
 
 import { createHash } from "node:crypto";
-import { posix } from "node:path";
+import {
+  type FileRead,
+  relativeCandidates,
+  scanImports,
+  traceBareImports,
+} from "./metadata_patch_imports.ts";
 import {
   compareLocks,
+  compareVersions,
   type DependencyChange,
   type ParsedLock,
   parseLock,
 } from "./metadata_patch_lock.ts";
 import {
   isAllowedMetadataPath,
+  MAX_FILE_BYTES,
   type Manifest,
   parseManifest,
 } from "./metadata_patch_manifest.ts";
@@ -73,9 +80,19 @@ export type PrFacts = {
   readonly baseSha: string;
   /** `base...head`の差分。 */
   readonly diff: readonly PrDiffEntry[];
+  /**
+   * `diff`が全件でないとき(APIの件数の上限で切れたときなど)は真。
+   * 差分の一部しか見ずに許可リストの検査を通さないよう、真ならパッチを断る。
+   */
+  readonly diffTruncated: boolean;
 };
 
-/** 読み取りの手段。I/Oは呼び出し側が実装し、テストでは差し替える。 */
+/**
+ * 読み取りの手段。I/Oは呼び出し側が実装し、テストでは差し替える。
+ * `isAncestor`と`publishedAgeDays`は、判定できないことをnullで伝える。
+ * それ以外のポートは、失敗を例外で伝える。例外は握りつぶさず、そのまま投げて呼び出し側に返す。
+ * ただし`readBaseFile`は、無いことと読めないことを`FileRead`で分ける。
+ */
 export type VerifyPorts = {
   /** `ancestor`が`descendant`の祖先(同じcommitを含む)か。判定できなければnull。 */
   readonly isAncestor: (
@@ -90,8 +107,8 @@ export type VerifyPorts = {
   readonly listHeadSources: () => Promise<readonly string[]>;
   /** PRのheadの木のファイルを読む。無ければnull。 */
   readonly readHeadFile: (path: string) => Promise<Uint8Array | null>;
-  /** baseブランチの先端の木のファイルを読む。無ければnull。 */
-  readonly readBaseFile: (path: string) => Promise<Uint8Array | null>;
+  /** baseブランチの先端の木のファイルを読む。無いことと読めないことを分ける。 */
+  readonly readBaseFile: (path: string) => Promise<FileRead>;
   /** パッケージの版が公開されてからの日数。レジストリから取得できなければnull。 */
   readonly publishedAgeDays: (
     name: string,
@@ -116,6 +133,8 @@ export type VerifyFailureCode =
   | "run_not_failed"
   | "metadata_job_not_failed"
   | "pr_diff_not_allowed"
+  | "pr_diff_incomplete"
+  | "invalid_config"
   | "manifest_missing"
   | "manifest_invalid"
   | "manifest_head_sha_mismatch"
@@ -139,7 +158,11 @@ export type VerifyFailureCode =
   | "new_script_without_source"
   | "lock_invalid"
   | "base_lock_invalid"
+  | "base_unreadable"
+  | "untraceable_import"
+  | "lock_changed_without_import_change"
   | "lock_integrity_changed"
+  | "version_downgrade"
   | "registry_unavailable"
   | "version_too_new"
   | "script_yaml_invalid"
@@ -178,10 +201,19 @@ function fail(code: VerifyFailureCode, detail?: string): Failure {
     : { ok: false, code, detail: sanitize(detail) };
 }
 
-/** 入力に由来する文字列を、制御文字を含まない短いJSON文字列にする。 */
+// 制御文字、書式文字(双方向制御、ゼロ幅、BOM)、私用領域、行と段落の区切り、普通の空白以外の空白。
+const UNSAFE_DETAIL_CHARS =
+  /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu;
+
+/** 入力に由来する文字列から、表示を乱す文字を除き、短いJSON文字列にする。 */
 function sanitize(value: string): string {
-  const shown = JSON.stringify(value.slice(0, DETAIL_MAX));
-  return value.length > DETAIL_MAX ? `${shown}...` : shown;
+  const cleaned = value
+    .slice(0, DETAIL_MAX * 4)
+    .replace(UNSAFE_DETAIL_CHARS, "");
+  const shown = JSON.stringify(cleaned.slice(0, DETAIL_MAX));
+  return cleaned.length > DETAIL_MAX || value.length > DETAIL_MAX * 4
+    ? `${shown}...`
+    : shown;
 }
 
 function decodeUtf8(bytes: Uint8Array): string | null {
@@ -239,6 +271,9 @@ function checkProvenance(input: VerifyInput): Failure | null {
   }
   if (run.metadataJobConclusion !== "failure") {
     return fail("metadata_job_not_failed");
+  }
+  if (pr.diffTruncated) {
+    return fail("pr_diff_incomplete");
   }
   for (const entry of pr.diff) {
     for (const path of [entry.path, entry.previousPath]) {
@@ -345,45 +380,6 @@ async function checkHistory(
   return null;
 }
 
-const IMPORT_PATTERNS: readonly RegExp[] = [
-  /\b(?:import|export)\b[^'"`;]*?\bfrom\s*["']([^"']+)["']/g,
-  /\bimport\s*["']([^"']+)["']/g,
-  /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-  /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
-];
-
-/** `from`のファイルが相対importで読むファイルのうち、`sources`にあるものを返す。 */
-function relativeImports(
-  from: string,
-  code: string,
-  sources: ReadonlySet<string>,
-): string[] {
-  const found: string[] = [];
-  for (const pattern of IMPORT_PATTERNS) {
-    for (const match of code.matchAll(pattern)) {
-      const specifier = match[1];
-      if (
-        specifier === undefined ||
-        !(specifier.startsWith("./") || specifier.startsWith("../"))
-      ) {
-        continue;
-      }
-      const base = posix.normalize(posix.join(posix.dirname(from), specifier));
-      const candidates = [
-        base,
-        `${base}.ts`,
-        base.replace(/\.js$/, ".ts"),
-        `${base}/index.ts`,
-      ];
-      const target = candidates.find((candidate) => sources.has(candidate));
-      if (target !== undefined) {
-        found.push(target);
-      }
-    }
-  }
-  return found;
-}
-
 /**
  * `.ts`が変わったscriptと、それを相対importの推移閉包で読むscriptの、`.ts`のパスを返す。
  * importの関係は、PRのheadの木のコードから、このコードの規則で求める。
@@ -396,11 +392,21 @@ async function affectedSources(
   const importers = new Map<string, string[]>();
   for (const path of sources) {
     const bytes = await ports.readHeadFile(path);
-    const code = bytes === null ? null : decodeUtf8(bytes);
+    // 読めないファイルは辺を持たない。そのscriptは閉包に入らず、パッチは断られる。
+    const code =
+      bytes === null || bytes.byteLength > MAX_FILE_BYTES
+        ? null
+        : decodeUtf8(bytes);
     if (code === null) {
       continue;
     }
-    for (const target of relativeImports(path, code, sources)) {
+    for (const specifier of scanImports(code).relative) {
+      const target = relativeCandidates(path, specifier).find((candidate) =>
+        sources.has(candidate),
+      );
+      if (target === undefined) {
+        continue;
+      }
       const list = importers.get(target) ?? [];
       list.push(path);
       importers.set(target, list);
@@ -435,7 +441,10 @@ type Context = {
   readonly input: VerifyInput;
   readonly ports: VerifyPorts;
   readonly headSources: ReadonlySet<string>;
+  /** PRの差分で`.ts`が追加された、または変更されたscript。 */
+  readonly changedSources: ReadonlySet<string>;
   readonly addedSources: ReadonlySet<string>;
+  /** 変更されたscriptと、それを相対importの推移閉包で読むscript。 */
   readonly affected: ReadonlySet<string>;
   readonly ageCache: Map<string, number | null>;
   readonly dependencyChanges: ScriptDependencyChange[];
@@ -455,7 +464,43 @@ async function ageOf(
   return age;
 }
 
-/** lockの構造を検査し、mainの版からの変化を、公開からの日数で確かめる。 */
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  return a.size === b.size && [...a].every((item) => b.has(item));
+}
+
+/** 前半の依存と`packages`が、すべて同じか。mainの版が無いときは、依存が空であることを求める。 */
+function isSameLock(base: ParsedLock | null, next: ParsedLock): boolean {
+  const nextDeps = Object.entries(next.dependencies);
+  if (base === null) {
+    return nextDeps.length === 0 && next.packages.size === 0;
+  }
+  const baseDeps = base.dependencies;
+  return (
+    nextDeps.length === Object.keys(baseDeps).length &&
+    nextDeps.every(([name, range]) => baseDeps[name] === range) &&
+    next.packages.size === base.packages.size &&
+    [...next.packages].every(([key, pkg]) => {
+      const before = base.packages.get(key);
+      return (
+        before !== undefined &&
+        before.version === pkg.version &&
+        before.integrity === pkg.integrity
+      );
+    })
+  );
+}
+
+/** 公開からの日数として使える値か。有限の、負でない数に限る。 */
+function isUsableAge(age: unknown): age is number {
+  return typeof age === "number" && Number.isFinite(age) && age >= 0;
+}
+
+/**
+ * lockの構造を検査し、mainの版からの変化を確かめる。
+ * - scriptが読む裸のimport指定子の集合が、mainの版と同じなら、lockはmainの版と同一であること。
+ *   依存を変える根拠が、コードのimportにあるときだけ、`packages`の差分を認める。
+ * - 差分は、integrityの差し替えと版を下げることを拒み、新しい版と上がる版は公開からの日数を確かめる。
+ */
 async function checkLock(
   context: Context,
   path: string,
@@ -470,27 +515,66 @@ async function checkLock(
   if (!parsed.ok) {
     return fail("lock_invalid", `${path}: ${parsed.reason}`);
   }
-  const baseBytes = await context.ports.readBaseFile(path);
+  const baseRead = await context.ports.readBaseFile(path);
+  if (baseRead.kind === "failed") {
+    return fail("base_unreadable", path);
+  }
   let base: ParsedLock | null = null;
-  if (baseBytes !== null) {
-    const baseText = decodeUtf8(baseBytes);
+  if (baseRead.kind === "found") {
+    const baseText = decodeUtf8(baseRead.content);
     const baseParsed = baseText === null ? null : parseLock(baseText);
     if (baseParsed === null || !baseParsed.ok) {
       return fail("base_lock_invalid", path);
     }
     base = baseParsed.lock;
   }
+
+  const source = `${script}.ts`;
+  const headImports = await traceBareImports(
+    source,
+    async (file): Promise<FileRead> => {
+      const bytes = await context.ports.readHeadFile(file);
+      return bytes === null
+        ? { kind: "missing" }
+        : { kind: "found", content: bytes };
+    },
+  );
+  if (!headImports.ok) {
+    return fail("untraceable_import", path);
+  }
+  const baseImports = await traceBareImports(
+    source,
+    context.ports.readBaseFile,
+  );
+  if (!baseImports.ok) {
+    return fail(
+      baseImports.reason === "unreadable"
+        ? "base_unreadable"
+        : "untraceable_import",
+      path,
+    );
+  }
+  if (sameSet(headImports.bare, baseImports.bare)) {
+    return isSameLock(base, parsed.lock)
+      ? null
+      : fail("lock_changed_without_import_change", path);
+  }
+
   const compared = compareLocks(base, parsed.lock);
   if (!compared.ok) {
     return fail("lock_integrity_changed", path);
   }
   for (const change of compared.changes) {
+    const label = `${change.name}@${change.to}`;
+    if (change.from !== null && compareVersions(change.to, change.from) < 0) {
+      return fail("version_downgrade", label);
+    }
     const age = await ageOf(context, change.name, change.to);
-    if (age === null) {
-      return fail("registry_unavailable", `${change.name}@${change.to}`);
+    if (!isUsableAge(age)) {
+      return fail("registry_unavailable", label);
     }
     if (age < context.input.config.minPublishedDays) {
-      return fail("version_too_new", `${change.name}@${change.to}`);
+      return fail("version_too_new", label);
     }
     context.dependencyChanges.push({ script, ...change });
   }
@@ -543,6 +627,9 @@ async function checkScriptEntry(
   if (!context.affected.has(source)) {
     return fail("script_not_affected", path);
   }
+  if (kind.kind === "yaml" && !isNew && !context.changedSources.has(source)) {
+    return fail("script_not_affected", path);
+  }
   return kind.kind === "lock"
     ? checkLock(context, path, kind.script, content)
     : checkYaml(context, path, kind.script, source, content, isNew);
@@ -570,7 +657,9 @@ async function checkWmillLock(
     }
   }
   const allowed = new Set(
-    [...context.affected].map((source) => source.slice(0, -".ts".length)),
+    [...context.affected]
+      .filter((source) => !matchesForbiddenPath(source))
+      .map((source) => source.slice(0, -".ts".length)),
   );
   for (const [key, hash] of patch.locks) {
     if (head.locks.get(key) !== hash && !allowed.has(key)) {
@@ -599,14 +688,20 @@ async function checkStatus(
  * - manifestが今の許可リストを通り、`headSha`がPRの今のheadと一致し、
  *   実体の大きさとsha256が合い、manifestに無いファイルが無く、削除と保護パスが無い。
  * - `baseSha`がbaseの履歴にあり、headがそれを含み、`mergeSha`の親が`baseSha`、`headSha`の順である。
- * - `*.script.lock`と`*.script.yaml`が、`.ts`が変わったscriptとそれをimportするscriptのものに限られ、
- *   lockの構造、依存の取得元とintegrity、公開からの日数、`.script.yaml`のキー、`wmill-lock.yaml`のキーを満たす。
+ * - `*.script.lock`が、`.ts`が変わったscriptとそれをimportするscriptのものに限られる。
+ *   `*.script.yaml`は、`.ts`が変わったscript自身のものに限られる。
+ * - lockの構造、依存の取得元とintegrity、importの指定子との結び付き、版を下げないこと、
+ *   公開からの日数、`.script.yaml`のキーと`schema`、`wmill-lock.yaml`のキーを満たす。
  * 失敗の`code`は固定の種別で、`detail`は表示用に無害化している。
  */
 export async function verifyMetadataPatch(
   input: VerifyInput,
   ports: VerifyPorts,
 ): Promise<VerifyResult> {
+  const days = input.config.minPublishedDays;
+  if (!Number.isInteger(days) || days <= 0) {
+    return fail("invalid_config");
+  }
   const provenance = checkProvenance(input);
   if (provenance !== null) {
     return provenance;
@@ -639,6 +734,7 @@ export async function verifyMetadataPatch(
     input,
     ports,
     headSources,
+    changedSources: changed,
     addedSources: added,
     affected: await affectedSources(changed, headSources, ports),
     ageCache: new Map(),

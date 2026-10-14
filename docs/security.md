@@ -208,11 +208,13 @@ publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名
 
 | 取り決め | 実装 |
 | --- | --- |
-| artifactの取得 | `github.ts`の`listWorkflowRunArtifacts`、`downloadArtifactZip` |
+| artifactの一覧 | `github.ts`の`listWorkflowRunArtifacts` |
+| artifactの取得 | `metadata_patch_download.ts`の`downloadArtifactZip` |
 | zipの内容の制限 | `metadata_patch_zip.ts`の`readMetadataPatchZip` |
 | 出どころ、再検証、適用先、新規script | `metadata_patch_verify.ts`の`verifyMetadataPatch` |
 | パスの許可リスト、manifest | `metadata_patch_manifest.ts`の`isAllowedMetadataPath`、`parseManifest` |
 | lockの制限 | `metadata_patch_lock.ts`の`parseLock`、`compareLocks` |
+| lockとimportの結び付き | `metadata_patch_imports.ts`の`traceBareImports` |
 | `.script.yaml`と`wmill-lock.yaml`の制限 | `metadata_patch_yaml.ts`の`checkScriptYaml`、`parseWmillLock` |
 
 ##### 出どころ
@@ -226,8 +228,9 @@ artifactを取る実行は、次をすべて満たすものに限る。
 - 実行の`head_sha`が、PRの今のheadと一致する。
 - 実行の結論が`failure`で、原因が`metadata`ジョブの失敗である。
 - PRの差分(`base...head`)が、`f/**`、`migrations/**`、`docs/**`、`tests/**`のパスだけである。
+- PRの差分を、全件読めている。APIの件数の上限で切れた差分は、許可リストの外を隠しうるので断る。
 
-最後の条件は、これら以外に触れていれば、パッチを適用しない。
+差分の条件は、これら以外に触れていれば、パッチを適用しない。
 該当するのは、次のようなパスである。
 
 - 設定: `bunfig.toml`、`mise*.toml`、`.mise*`、`.config/mise*`、`.tool-versions`、`wmill.yaml`、`package.json`、`tsconfig.json`
@@ -286,8 +289,9 @@ zipは、展開の前に宣言された大きさとパスを検査し、展開�
 - 宣言された大きさと、展開した実際の長さが違うもの
 - symlinkと特殊ファイル
 - `..`、絶対パス、バックスラッシュ、制御文字を含むパス(zip slip)
-- 同じ名前と、大文字小文字だけが違う名前
+- 同じ名前と、大文字小文字だけが違う名前(区間は小文字にそろえて照合する)
 - stored、deflate以外の圧縮方式、暗号化、zip64
+- manifestの`size`と実際の長さが違うもの、`files/`にあってmanifestに無いファイル、削除の項目に対応する`files/`のファイル
 
 ダウンロードは、申告された大きさと、実際に受け取ったバイト数の両方で上限を守る。
 トークンはAPIへの最初の要求にだけ載せ、取得先はAzureのblob storageの`https`に限る。
@@ -297,29 +301,42 @@ zipは、展開の前に宣言された大きさとパスを検査し、展開�
 - 保護パス(`f/factory/lib/protected_paths.ts`の`matchesForbiddenPath`)に当たるパスを拒否する。
 - 削除を拒否する。
 - `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)が、headの今の版と違えば拒否する。summaryなどを正当に変えたPRを、拒否しないためである。
+- `schema`の中に、`$`で始まる値(`$var:`、`$res:`など)と、`x-windmill-`のキーがあれば拒否する。コードは動かさないが、値が実行者の権限で解決されるためである。
 
 ##### lockの制限
 
-`*.script.lock`と`*.script.yaml`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
+`*.script.lock`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
+`*.script.yaml`を変えてよいのは、`.ts`自身が変わったscriptに限る。入力のスキーマは、そのscript自身の`main`の引数からしか決まらないためである。
 importするscriptの範囲は、`main`の版のコードで、headの木の相対importの推移閉包を計算して決める。
 対応する`.ts`が保護パスに当たるscriptのlockは、lock自身が保護パスでなくても拒否する(例: `steps/dependabot_*.ts`)。
 
 lockは、構造として解析する。
 前半はJSONで、`package.json`の形をしている。後半は、`//bun.lock`の行から始まる。
 
-- 前半のキーは`dependencies`だけにする。値は、semverの版か範囲に限る。URL、`file:`、`git`、`github:`、`link:`、`npm:`の別名を拒否する。
+- 前半のキーは`dependencies`だけにする。値は、`^`、`~`、完全一致の版に限る。URL、`file:`、`git`、`github:`、`link:`、`npm:`の別名、タグを拒否する。
+- 前半の各依存は、後半のトップレベルの`packages`に同名で存在し、解決された版が前半の範囲を満たすこと。
 - 後半のキーは、`lockfileVersion`、`configVersion`、`workspaces`、`packages`だけにする。
 - 各パッケージの取得元が既定のレジストリ(空文字)で、integrityが`sha512-`で始まることを確かめる。
-- `main`の版に無い版や、版が上がるものは、レジストリの公開から`dependabot_min_published_days`日(既定7日)以上たったものに限る。
+- 各パッケージの`meta`は、キーを`dependencies`、`optionalDependencies`、`peerDependencies`、`optionalPeers`、`bin`、`os`、`cpu`、`libc`に絞る。依存の範囲にURLやパスを含めず、依存の名前が`packages`のキーに解決できること。
+- パッケージ名は、npmの命名規則に合わせる。`.`、`..`、先頭が`.`か`_`の名前を拒否する。
+- 新しく入る版と、版が変わるものは、レジストリの公開から`dependabot_min_published_days`日(既定7日)以上たったものに限る。
   日数はdependabotの更新とそろえる。公開から日が浅い版を取り込まないためである。
-- 版が同じでも、取得元かintegrityが`main`の版と違うものは拒否する。安全のため、比べる相手はheadではなく`main`の版にする。可能なら、レジストリの公開値と照合する。
+  公開からの日数を取得できないときは拒否する。
+- `main`の版より低い版への変更を拒否する。
+- 版が同じでも、取得元かintegrityが`main`の版と違うものは拒否する。安全のため、比べる相手はheadではなく`main`の版にする。
 - `postinstall`などのscripts、`trustedDependencies`、`overrides`を拒否する。
+
+lockの`packages`は、コードのimportと結び付ける。
+閉包の中のscriptについて、headの木で相対importをたどって集めた裸のimport指定子(版つき)の集合が、`main`の版と同じなら、lockは`main`の版と完全に同一でなければならない。
+集合が違うscript、つまり依存が実際に変わったscriptだけが、`packages`の差分を持てる。
+指定子が文字列リテラルでないimportや、1ファイルの上限を超えるファイルは追えないので、拒否する。
+`main`の版のソースかlockを読めないときも拒否する。
 
 依存の無いlockは、後半が`<empty>`の1語になる。これは受け付ける。
 後半のbun.lockは、末尾のカンマを許すJSONCである。`JSON.parse`では読めないので、JSONCを読めるパーサーを使う。
 
 依存の差分は、コミットメッセージかPR本文に列挙する。
-列挙には、版に加えて、取得元とintegrityの変化も含める。
+列挙には、版に加えて、integrityの変化も含める。
 
 ##### ロックのハッシュの制限
 
@@ -336,13 +353,6 @@ lockは、構造として解析する。
 - `lock`は、フルパスの`'!inline f/<dir>/<name>.script.lock'`に固定する。
 - `tag`、`timeout`、`concurrency`などのキーは拒否する。
 - 対応する`.ts`が無い`.script.lock`と`.script.yaml`の追加を拒否する。
-
-##### zipの制限
-
-- 展開の前に、全体の大きさで打ち切る。
-- zip内のsymlink(外部属性)、同名の重複、大文字小文字だけが違うパスを拒否する。区間は小文字にそろえて照合する。
-- manifestの`size`と、実際の長さが違うものを拒否する。
-- `files/`にあってmanifestに無いファイル、削除の項目に対応する`files/`のファイル、zip slipを拒否する。
 
 ##### 層の関係
 
@@ -2052,7 +2062,9 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
-CIが出すメタデータのパッチを検査する`f/factory/lib/metadata_patch_*.ts`の5つと、それぞれの`.script.yaml`、`.script.lock`も止める。
+CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の7つも止める。
+7つは、manifest、zip、lock、yaml、verify、imports、downloadである。
+それぞれの`.script.yaml`と`.script.lock`も止める。
 書き換えられると、パッチの受け取り側の検査が緩むためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。

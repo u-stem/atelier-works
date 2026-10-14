@@ -201,7 +201,12 @@ describe("parseLock", () => {
     ["a tilde range", "~1.3.0"],
     ["a prerelease", "1.3.0-beta.1"],
   ])("accepts %s as a dependency value", (_label, spec) => {
-    expect(parseLock(buildLock({ deps: { "left-pad": spec } })).ok).toBe(true);
+    const version = spec.replace(/^[\^~]/, "");
+    const text = buildLock({
+      deps: { "left-pad": spec },
+      packages: { "left-pad": { ident: `left-pad@${version}` } },
+    });
+    expect(parseLock(text).ok).toBe(true);
   });
 
   test("rejects a replaced source of a package", () => {

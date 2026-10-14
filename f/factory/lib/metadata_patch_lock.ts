@@ -186,17 +186,137 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// npmのパッケージ名。スコープは任意で、大文字は古いパッケージのために許す。
-const PACKAGE_NAME = /^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+$/;
+// npmのパッケージ名の1区間。英数字で始め、`.`、`..`、先頭が`.`か`_`のものを拒む。
+const SEGMENT = "[A-Za-z0-9][A-Za-z0-9._-]*";
+const NAME = `(?:@${SEGMENT}/)?${SEGMENT}`;
+const PACKAGE_NAME = new RegExp(`^${NAME}$`);
 // bun.lockのパッケージのキー。入れ子の依存は`親/子`で表す。
-const PACKAGE_KEY =
-  /^(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+(?:\/(?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+)*$/;
+const PACKAGE_KEY = new RegExp(`^${NAME}(?:/${NAME})*$`);
 const EXACT_VERSION =
   /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const DEPENDENCY_SPEC =
   /^[\^~]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 // sha512の64バイトをbase64にした長さ(86文字と`==`)。
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
+
+const VERSION =
+  /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+const RANGE =
+  /^([\^~]?)(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+
+type Version = {
+  readonly core: readonly [number, number, number];
+  readonly pre: string | null;
+};
+
+function parseVersion(text: string): Version | null {
+  const match = VERSION.exec(text);
+  if (match === null) {
+    return null;
+  }
+  return {
+    core: [Number(match[1]), Number(match[2]), Number(match[3])],
+    pre: match[4] ?? null,
+  };
+}
+
+function comparePrerelease(a: string, b: string): number {
+  const left = a.split(".");
+  const right = b.split(".");
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const x = left[index];
+    const y = right[index];
+    if (x === undefined) {
+      return -1;
+    }
+    if (y === undefined) {
+      return 1;
+    }
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric && yNumeric) {
+      const diff = Number(x) - Number(y);
+      if (diff !== 0) {
+        return diff < 0 ? -1 : 1;
+      }
+    } else if (xNumeric !== yNumeric) {
+      return xNumeric ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function compareParsed(a: Version, b: Version): number {
+  for (let index = 0; index < 3; index += 1) {
+    const x = a.core[index] ?? 0;
+    const y = b.core[index] ?? 0;
+    if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  if (a.pre === null && b.pre === null) {
+    return 0;
+  }
+  if (a.pre === null) {
+    return 1;
+  }
+  if (b.pre === null) {
+    return -1;
+  }
+  return comparePrerelease(a.pre, b.pre);
+}
+
+/**
+ * 2つの版を、semverの優先順位で比べる(ビルドメタデータは無視する)。
+ * 版の形でないものは、比べられないので例外を投げる。
+ */
+export function compareVersions(a: string, b: string): number {
+  const left = parseVersion(a);
+  const right = parseVersion(b);
+  if (left === null || right === null) {
+    throw new Error("compareVersions: not a version");
+  }
+  return compareParsed(left, right);
+}
+
+/**
+ * `version`が`range`を満たすか。範囲は完全一致、`^`、`~`だけを読み、ほかの形は満たさないものとする。
+ * プレリリースの版は、範囲が同じ`major.minor.patch`のプレリリースを指すときだけ満たす。
+ */
+export function satisfiesRange(version: string, range: string): boolean {
+  const target = parseVersion(version);
+  const match = RANGE.exec(range);
+  if (target === null || match === null) {
+    return false;
+  }
+  const base: Version = {
+    core: [Number(match[2]), Number(match[3]), Number(match[4])],
+    pre: match[5] ?? null,
+  };
+  if (match[1] === "") {
+    return compareParsed(target, base) === 0;
+  }
+  if (target.pre !== null) {
+    const sameTuple = target.core.every((part, i) => part === base.core[i]);
+    if (base.pre === null || !sameTuple) {
+      return false;
+    }
+  }
+  const [major, minor, patch] = base.core;
+  let upper: Version;
+  if (match[1] === "~") {
+    upper = { core: [major, minor + 1, 0], pre: null };
+  } else if (major > 0) {
+    upper = { core: [major + 1, 0, 0], pre: null };
+  } else if (minor > 0) {
+    upper = { core: [0, minor + 1, 0], pre: null };
+  } else {
+    upper = { core: [0, 0, patch + 1], pre: null };
+  }
+  return compareParsed(target, base) >= 0 && compareParsed(target, upper) < 0;
+}
 
 export type LockFailure =
   | "no_marker"
@@ -205,6 +325,7 @@ export type LockFailure =
   | "bad_dependency"
   | "bad_workspace"
   | "bad_package"
+  | "unresolved_dependency"
   | "bad_source"
   | "bad_integrity";
 
@@ -270,7 +391,103 @@ function lastPackageName(key: string): string {
   return scope?.startsWith("@") ? `${scope}/${last}` : last;
 }
 
-function readPackage(key: string, value: unknown): LockPackage | LockFailure {
+const META_KEYS: ReadonlySet<string> = new Set([
+  "dependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "optionalPeers",
+  "bin",
+  "os",
+  "cpu",
+  "libc",
+]);
+
+// パッケージが宣言する依存の範囲。URL、パス、別名、タグを含まない形に限る。
+const SAFE_RANGE = /^(?:\*|[xX]|[\^~<>=0-9 ][0-9A-Za-z.*^~<>=|+\- ]*)?$/;
+
+function isStringList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === "string")
+  );
+}
+
+/** 依存を宣言する`meta`の項目から、依存の名前を読む。形が違えばnull。 */
+function readMetaDependencies(value: unknown): string[] | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const names: string[] = [];
+  for (const [name, spec] of Object.entries(value)) {
+    if (
+      !PACKAGE_NAME.test(name) ||
+      typeof spec !== "string" ||
+      !SAFE_RANGE.test(spec)
+    ) {
+      return null;
+    }
+    names.push(name);
+  }
+  return names;
+}
+
+type MetaResult =
+  | { readonly ok: true; readonly installed: readonly string[] }
+  | { readonly ok: false; readonly reason: LockFailure };
+
+/**
+ * パッケージの`meta`(3番目の要素)を許可リストで検査する。
+ * 解決先を確かめるべき依存(`dependencies`と`optionalDependencies`)の名前を返す。
+ */
+function readMeta(meta: Record<string, unknown>): MetaResult {
+  if (!hasOnlyKeys(meta, META_KEYS)) {
+    return { ok: false, reason: "disallowed_key" };
+  }
+  const installed: string[] = [];
+  for (const key of [
+    "dependencies",
+    "optionalDependencies",
+    "peerDependencies",
+  ]) {
+    if (meta[key] === undefined) {
+      continue;
+    }
+    const names = readMetaDependencies(meta[key]);
+    if (names === null) {
+      return { ok: false, reason: "bad_package" };
+    }
+    if (key !== "peerDependencies") {
+      installed.push(...names);
+    }
+  }
+  const peers = meta.optionalPeers;
+  if (
+    peers !== undefined &&
+    !(isStringList(peers) && peers.every((name) => PACKAGE_NAME.test(name)))
+  ) {
+    return { ok: false, reason: "bad_package" };
+  }
+  const bin = meta.bin;
+  const binOk =
+    bin === undefined ||
+    typeof bin === "string" ||
+    (isRecord(bin) && Object.values(bin).every((v) => typeof v === "string"));
+  const platformOk = ["os", "cpu", "libc"].every((key) => {
+    const value = meta[key];
+    return (
+      value === undefined || typeof value === "string" || isStringList(value)
+    );
+  });
+  return binOk && platformOk
+    ? { ok: true, installed }
+    : { ok: false, reason: "bad_package" };
+}
+
+type ReadPackage = {
+  readonly pkg: LockPackage;
+  readonly installed: readonly string[];
+};
+
+function readPackage(key: string, value: unknown): ReadPackage | LockFailure {
   if (!PACKAGE_KEY.test(key)) {
     return "bad_package";
   }
@@ -293,7 +510,36 @@ function readPackage(key: string, value: unknown): LockPackage | LockFailure {
   if (typeof integrity !== "string" || !INTEGRITY.test(integrity)) {
     return "bad_integrity";
   }
-  return { name, version, integrity };
+  const parsedMeta = readMeta(meta);
+  if (!parsedMeta.ok) {
+    return parsedMeta.reason;
+  }
+  return { pkg: { name, version, integrity }, installed: parsedMeta.installed };
+}
+
+/** 入れ子の依存のキーから、1段上のキーを返す(トップレベルの依存は空文字)。 */
+function parentKey(key: string): string {
+  const parts = key.split("/");
+  const drop = parts[parts.length - 2]?.startsWith("@") ? 2 : 1;
+  return parts.slice(0, -drop).join("/");
+}
+
+/** `key`のパッケージが宣言する依存`name`が、入れ子かトップレベルのパッケージに解決できるか。 */
+function resolves(
+  packages: ReadonlyMap<string, LockPackage>,
+  key: string,
+  name: string,
+): boolean {
+  let scope = key;
+  for (;;) {
+    if (packages.has(scope === "" ? name : `${scope}/${name}`)) {
+      return true;
+    }
+    if (scope === "") {
+      return false;
+    }
+    scope = parentKey(scope);
+  }
 }
 
 function readPackages(
@@ -303,14 +549,32 @@ function readPackages(
     return "malformed";
   }
   const packages = new Map<string, LockPackage>();
+  const installed = new Map<string, readonly string[]>();
   for (const [key, entry] of Object.entries(value)) {
     const parsed = readPackage(key, entry);
     if (typeof parsed === "string") {
       return parsed;
     }
-    packages.set(key, parsed);
+    packages.set(key, parsed.pkg);
+    installed.set(key, parsed.installed);
+  }
+  for (const [key, names] of installed) {
+    if (!names.every((name) => resolves(packages, key, name))) {
+      return "bad_package";
+    }
   }
   return packages;
+}
+
+/** 前半の各依存が、トップレベルの同名のパッケージに、範囲を満たす版で解決されているか。 */
+function isResolved(
+  dependencies: Readonly<Record<string, string>>,
+  packages: ReadonlyMap<string, LockPackage>,
+): boolean {
+  return Object.entries(dependencies).every(([name, range]) => {
+    const pkg = packages.get(name);
+    return pkg !== undefined && satisfiesRange(pkg.version, range);
+  });
 }
 
 const FRONT_KEYS: ReadonlySet<string> = new Set(["dependencies"]);
@@ -362,6 +626,8 @@ function readWorkspaces(
  *   URL、`file:`、`git`、`github:`、`link:`、`npm:`の別名、タグは版として読まない。
  * - 後半: `<empty>`の1語か、キーが`lockfileVersion`、`configVersion`、`workspaces`、`packages`だけのJSONC。
  *   各パッケージは取得元が空文字(既定のレジストリ)で、integrityが`sha512-`の形のものに限る。
+ *   各パッケージの`meta`は、キーを許可リストに絞り、依存の範囲にURLやパスを含めない。
+ *   前半の各依存は、`packages`のトップレベルに同名で、範囲を満たす版として解決されていること。
  * `scripts`、`trustedDependencies`、`overrides`などのキーは、どちらの半分でも拒む。
  */
 export function parseLock(text: string): LockParseResult {
@@ -387,7 +653,7 @@ export function parseLock(text: string): LockParseResult {
           ok: true,
           lock: { dependencies: deps.dependencies, packages: new Map() },
         }
-      : bad("bad_workspace");
+      : bad("unresolved_dependency");
   }
   const backParsed = parseJsonc(backText);
   if (!backParsed.ok || !isRecord(backParsed.value)) {
@@ -410,6 +676,9 @@ export function parseLock(text: string): LockParseResult {
   const packages = readPackages(back.packages ?? {});
   if (typeof packages === "string") {
     return bad(packages);
+  }
+  if (!isResolved(deps.dependencies, packages)) {
+    return bad("unresolved_dependency");
   }
   return { ok: true, lock: { dependencies: deps.dependencies, packages } };
 }

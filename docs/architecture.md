@@ -409,9 +409,11 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
+| `f/factory/lib/metadata_patch_imports` | script | [LIB] メタデータのパッチのimportの読み取り |
 | `f/factory/lib/metadata_patch_lock` | script | [LIB] メタデータのパッチのlockの検査 |
 | `f/factory/lib/metadata_patch_yaml` | script | [LIB] メタデータのパッチのyamlの検査 |
 | `f/factory/lib/metadata_patch_zip` | script | [LIB] メタデータのパッチのzipの読み取り |
+| `f/factory/lib/metadata_patch_download` | script | [LIB] メタデータのパッチの取得 |
 | `f/factory/lib/metadata_patch_manifest` | script | [LIB] メタデータのパッチの検査 |
 | `f/factory/lib/metadata_patch_verify` | script | [LIB] メタデータのパッチの適用条件の検査 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |

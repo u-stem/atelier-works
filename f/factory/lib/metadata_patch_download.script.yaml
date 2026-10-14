@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのパッチの取得'
+description: 内部ライブラリです。直接実行するものではありません。CIが出したメタデータのパッチ(artifactのzip)を、トークンの渡し先と取得先を絞って、バイト列で取得します。
+lock: '!inline f/factory/lib/metadata_patch_download.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

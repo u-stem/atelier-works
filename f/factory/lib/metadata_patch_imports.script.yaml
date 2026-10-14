@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのパッチのimportの読み取り'
+description: 内部ライブラリです。直接実行するものではありません。scriptのソースのimportの指定子を読み、変えてよいscriptの範囲とlockを変えてよいかの判断に使います。
+lock: '!inline f/factory/lib/metadata_patch_imports.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

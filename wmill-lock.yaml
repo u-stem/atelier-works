@@ -50,7 +50,7 @@ locks:
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
-  f/factory/lib/github: b3ad50f18fb64fc45232c5d8bab9d02a94eb47df6059cd93286289fbe57a95b2
+  f/factory/lib/github: d97a0c2009de07b4fa3022a544a512c3041aad873f47785191bce13f556517b0
   f/factory/lib/host_action: dc0d09838934a55630d453e9c3af9aaaaaaef637325f1133eab9a809327e7123
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77
@@ -62,10 +62,12 @@ locks:
   f/factory/lib/log: 31e814d5fdbc939e2f3ccfb5754691c50a5f05d8d255e4fed07a9eb9f5794b2a
   f/factory/lib/main_ci_support: 940c2ac05fb0df4f52899703c910d5a0dd42390a131802ea0e087964812e2b1c
   f/factory/lib/main_ci_watch: 68f03b89fd5b3fe9c3bed99409c0c6d942c22f641e2c08f4de2eb38ce886d2cd
-  f/factory/lib/metadata_patch_lock: 9c33eb0f646ae830f42af57b6acc93f9c0b088d2a0bb39ec531118e2bcfa7d69
+  f/factory/lib/metadata_patch_download: 078d936ec5e0c61f52c4d0627076c637f2243d230d6a30ffe913e9e7c97b28f5
+  f/factory/lib/metadata_patch_imports: e68a914ac2c05a90dea4c2702332331812b1e7164e0552b3680ad14188b8ca04
+  f/factory/lib/metadata_patch_lock: e3f0b21e84c14cb11a92214bf65c2cec81a6c2928f67d8732426f257a1fb8a86
   f/factory/lib/metadata_patch_manifest: 19c0f6c7028f57690b430db933768f8eed4e96350f5f98bfab326ec61f887532
-  f/factory/lib/metadata_patch_verify: 057d8af912fd60a5e84ef0a96e264a0c1d48adc99b9f81bc6521127ac633f417
-  f/factory/lib/metadata_patch_yaml: ad2cae3bc4832a6a15ee00e942a5b91c05a2eff2555b4308cd713abe4b3c610c
+  f/factory/lib/metadata_patch_verify: 72ccfa8baa528cc3ed70138daaec1363ceb041da52056d32e794f0d3d571e664
+  f/factory/lib/metadata_patch_yaml: 3614c07fe5cafb0f78c77289f2da4f01b9c85d6fae173a925c45e8eaf7847f19
   f/factory/lib/metadata_patch_zip: a56d306dc136e35d46ed4fa436562cc2a61b15b31e8754bf0003716322ea9503
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
@@ -80,7 +82,7 @@ locks:
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: e134fde89f4c21a7320d24434379313258a14a08d76d3e5323c60fb65457edc1
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
-  f/factory/lib/protected_paths: 452ddf2789984b9ac64d2e9d8795c258c9b33c2e1be627611c35a817a7a124a6
+  f/factory/lib/protected_paths: ef64a84fd39d644daa5c6e6980b27dc21995bb17799fbfc37298286a0a3e42a8
   f/factory/lib/repo_owner_gate: b0323a09556bf59c5cd7459bb8898dfe176381207f7a866e274c88ac9cd652ee
   f/factory/lib/requirements_doc: 6ae93ca66b45fdffcd1f2722bdaf51ebbda80452631d219d69ddfe58ac68e4d2
   f/factory/lib/requirements_template: a5db62e34792d5d9aaa6190010c79ebf0d2a403e2d1c49fabe491365f4dbe955

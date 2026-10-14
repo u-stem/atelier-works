@@ -1,180 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import {
-  type PrDiffEntry,
-  type PrFacts,
-  type RunFacts,
-  type VerifyConfig,
-  type VerifyPorts,
-  verifyMetadataPatch,
-} from "../../f/factory/lib/metadata_patch_verify.ts";
+import type { PrDiffEntry } from "../../f/factory/lib/metadata_patch_verify.ts";
 import {
   buildLock,
   INTEGRITY,
   OTHER_INTEGRITY,
 } from "./metadata_patch_fixtures.ts";
-
-const HEAD = "a".repeat(40);
-const BASE = "b".repeat(40);
-const MERGE = "c".repeat(40);
-const BASE_TIP = "d".repeat(40);
-const HASH_OLD = "1".repeat(64);
-const HASH_NEW = "2".repeat(64);
-
-const encoder = new TextEncoder();
-const sha256 = (bytes: Uint8Array) =>
-  createHash("sha256").update(bytes).digest("hex");
-
-const scriptYaml = (name: string, schemaType = "object") =>
-  [
-    `summary: ${name}`,
-    "description: a script",
-    `lock: '!inline f/factory/${name}.script.lock'`,
-    "kind: script",
-    "schema:",
-    `  type: ${schemaType}`,
-    "",
-  ].join("\n");
-
-const wmillLock = (hashes: Record<string, string>) =>
-  `version: v2\nlocks:\n${Object.entries(hashes)
-    .map(([key, hash]) => `  ${key}: ${hash}`)
-    .join("\n")}\n`;
-
-const OLD_LOCK = buildLock({ deps: { "left-pad": "1.3.0" } });
-const NEW_LOCK = buildLock({
-  deps: { "left-pad": "1.4.0" },
-  packages: { "left-pad": { ident: "left-pad@1.4.0" } },
-});
-
-type World = {
-  config: VerifyConfig;
-  run: RunFacts;
-  pr: PrFacts;
-  head: Map<string, string | Uint8Array>;
-  base: Map<string, string | Uint8Array>;
-  /** パッチに載せるファイル。キーはリポジトリ相対のパス。 */
-  patch: Map<string, string | Uint8Array>;
-  statuses: Map<string, "added" | "modified">;
-  /** 作ったmanifestを書き換える。 */
-  tamperManifest: (manifest: Record<string, unknown>) => void;
-  /** 作ったarchiveを書き換える。 */
-  tamperArchive: (archive: Map<string, Uint8Array>) => void;
-  isAncestor: (ancestor: string, descendant: string) => boolean | null;
-  parents: readonly string[] | null;
-  age: (name: string, version: string) => number | null;
-};
-
-/** headはfoo.tsがlib/bar.tsをimportし、PRはbar.tsだけを変えた状態。パッチはfooのlock、yaml、ハッシュを直す。 */
-function world(): World {
-  return {
-    config: {
-      repository: "acme/widgets",
-      workflowPath: ".github/workflows/ci.yml",
-      minPublishedDays: 7,
-    },
-    run: {
-      workflowPath: ".github/workflows/ci.yml",
-      event: "pull_request",
-      headRepositoryFullName: "acme/widgets",
-      pullRequestNumbers: [42],
-      headSha: HEAD,
-      conclusion: "failure",
-      metadataJobConclusion: "failure",
-    },
-    pr: {
-      number: 42,
-      headSha: HEAD,
-      baseSha: BASE_TIP,
-      diff: [{ path: "f/factory/lib/bar.ts", status: "modified" }],
-    },
-    head: new Map<string, string | Uint8Array>([
-      ["f/factory/foo.ts", 'import { x } from "./lib/bar.ts";\n'],
-      ["f/factory/lib/bar.ts", "export const x = 2;\n"],
-      ["f/factory/other.ts", "export const y = 1;\n"],
-      ["f/factory/foo.script.lock", OLD_LOCK],
-      ["f/factory/foo.script.yaml", scriptYaml("foo")],
-      [
-        "wmill-lock.yaml",
-        wmillLock({ "f/factory/foo": HASH_OLD, "f/factory/other": HASH_OLD }),
-      ],
-    ]),
-    base: new Map<string, string | Uint8Array>([
-      ["f/factory/foo.script.lock", OLD_LOCK],
-    ]),
-    patch: new Map<string, string | Uint8Array>([
-      ["f/factory/foo.script.lock", NEW_LOCK],
-      ["f/factory/foo.script.yaml", scriptYaml("foo", "string")],
-      [
-        "wmill-lock.yaml",
-        wmillLock({ "f/factory/foo": HASH_NEW, "f/factory/other": HASH_OLD }),
-      ],
-    ]),
-    statuses: new Map(),
-    tamperManifest: () => {},
-    tamperArchive: () => {},
-    isAncestor: () => true,
-    parents: [BASE, HEAD],
-    age: () => 30,
-  };
-}
-
-const bytes = (value: string | Uint8Array): Uint8Array =>
-  typeof value === "string" ? encoder.encode(value) : value;
-
-function build(w: World) {
-  const archive = new Map<string, Uint8Array>();
-  const entries: Record<string, unknown>[] = [];
-  for (const [path, value] of [...w.patch].sort(([a], [b]) =>
-    a < b ? -1 : 1,
-  )) {
-    const content = bytes(value);
-    archive.set(`files/${path}`, content);
-    entries.push({
-      path,
-      status: w.statuses.get(path) ?? "modified",
-      sha256: sha256(content),
-      size: content.byteLength,
-    });
-  }
-  const manifest: Record<string, unknown> = {
-    version: 1,
-    headSha: HEAD,
-    baseSha: BASE,
-    mergeSha: MERGE,
-    entries,
-  };
-  w.tamperManifest(manifest);
-  archive.set("manifest.json", encoder.encode(JSON.stringify(manifest)));
-  w.tamperArchive(archive);
-  const ports: VerifyPorts = {
-    isAncestor: async (a, d) => w.isAncestor(a, d),
-    readCommitParents: async () => w.parents,
-    listHeadSources: async () =>
-      [...w.head.keys()].filter((path) => path.endsWith(".ts")),
-    readHeadFile: async (path) => {
-      const value = w.head.get(path);
-      return value === undefined ? null : bytes(value);
-    },
-    readBaseFile: async (path) => {
-      const value = w.base.get(path);
-      return value === undefined ? null : bytes(value);
-    },
-    publishedAgeDays: async (name, version) => w.age(name, version),
-  };
-  return { input: { config: w.config, run: w.run, pr: w.pr, archive }, ports };
-}
-
-async function verify(w: World) {
-  const { input, ports } = build(w);
-  return verifyMetadataPatch(input, ports);
-}
-
-async function codeOf(w: World): Promise<string> {
-  const result = await verify(w);
-  return result.ok ? "ok" : result.code;
-}
+import {
+  BASE,
+  BASE_TIP,
+  codeOf,
+  encoder,
+  HASH_NEW,
+  HASH_OLD,
+  HEAD,
+  NEW_LOCK,
+  OLD_LOCK,
+  scriptYaml,
+  verify,
+  wmillLock,
+  world,
+} from "./metadata_patch_verify_world.ts";
 
 describe("verifyMetadataPatch accepts a correct patch", () => {
   test("accepts a patch for an importer of a changed file", async () => {
@@ -231,14 +77,14 @@ describe("verifyMetadataPatch accepts a correct patch", () => {
       "f/factory/baz.ts",
       'import {\n  a,\n  b,\n} from "./lib/bar.ts";\n',
     );
-    w.patch.set("f/factory/baz.script.lock", OLD_LOCK);
+    w.patch.set("f/factory/baz.script.lock", EMPTY_LOCK);
     w.statuses.set("f/factory/baz.script.lock", "added");
     expect(await codeOf(w)).toBe("ok");
   });
 
   test("accepts a new script whose source the PR added", async () => {
     const w = world();
-    w.head.set("f/factory/newone.ts", "export function main() {}\n");
+    w.head.set("f/factory/newone.ts", 'import pad from "left-pad@1.3.0";\n');
     w.pr = {
       ...w.pr,
       diff: [{ path: "f/factory/newone.ts", status: "added" }],
@@ -263,6 +109,9 @@ describe("verifyMetadataPatch accepts a correct patch", () => {
   });
 });
 
+const WMILL_IMPORT = 'import * as wmill from "windmill-client@1.817.0";\n';
+const EMPTY_LOCK = '{\n  "dependencies": {}\n}\n//bun.lock\n<empty>';
+
 describe("verifyMetadataPatch with the committed files", () => {
   test("accepts a patch made of the committed lock, schema and hashes", async () => {
     const lock = readFileSync("f/factory/approval_decide.script.lock", "utf8");
@@ -270,7 +119,7 @@ describe("verifyMetadataPatch with the committed files", () => {
     const hashes = readFileSync("wmill-lock.yaml", "utf8");
     const w = world();
     w.head = new Map<string, string | Uint8Array>([
-      ["f/factory/approval_decide.ts", "export function main() {}\n"],
+      ["f/factory/approval_decide.ts", WMILL_IMPORT],
       ["f/factory/approval_decide.script.lock", lock],
       [
         "f/factory/approval_decide.script.yaml",
@@ -282,6 +131,7 @@ describe("verifyMetadataPatch with the committed files", () => {
       ],
     ]);
     w.base = new Map<string, string | Uint8Array>([
+      ["f/factory/approval_decide.ts", WMILL_IMPORT],
       ["f/factory/approval_decide.script.lock", lock],
     ]);
     w.pr = {
