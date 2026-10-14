@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CI_JOB_LOG_MAX_BYTES,
+  GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubCiLogError,
   GitHubCiLogIncompleteError,
   GitHubPaginationLimitError,
@@ -325,6 +326,67 @@ describe("getWorkflowJobLog", () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
     await get(fake);
     expect(fake.calls).toHaveLength(1);
+  });
+
+  /** 実行とsleepの呼び出しを順に記録し、待ちの位置と長さを確かめられるようにする。 */
+  const recordingClient = (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    transientRetryDelayMs?: number,
+  ) => {
+    const events: string[] = [];
+    const sleeps: number[] = [];
+    return {
+      events,
+      sleeps,
+      client: {
+        run: async (...args: Parameters<typeof fake.run>) => {
+          events.push("run");
+          return fake.run(...args);
+        },
+        ghToken: "tok",
+        sleep: async (ms: number) => {
+          events.push("sleep");
+          sleeps.push(ms);
+        },
+        ...(transientRetryDelayMs === undefined
+          ? {}
+          : { transientRetryDelayMs }),
+      },
+    };
+  };
+
+  const incompleteThenOk = () =>
+    createFakeCommandRunner([
+      exited(1, ghApiStdout(200, "line 1")),
+      ok(ghApiStdout(200, "line 1\nline 2")),
+    ]);
+
+  test("waits once between an incomplete first fetch and the second fetch", async () => {
+    const { client: recording, events } = recordingClient(incompleteThenOk());
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(events).toEqual(["run", "sleep", "run"]);
+  });
+
+  test("waits for the transientRetryDelayMs of the client before the second fetch", async () => {
+    const { client: recording, sleeps } = recordingClient(
+      incompleteThenOk(),
+      1234,
+    );
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(sleeps).toEqual([1234]);
+  });
+
+  test("waits for the default delay before the second fetch when the client has no transientRetryDelayMs", async () => {
+    const { client: recording, sleeps } = recordingClient(incompleteThenOk());
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
+  });
+
+  test("does not wait when the first fetch succeeds", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    const { client: recording, sleeps } = recordingClient(fake);
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(sleeps).toEqual([]);
   });
 
   test("states a fixed message for the incomplete log error", async () => {
