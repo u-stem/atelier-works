@@ -398,11 +398,14 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
 | `f/factory/lib/main_ci_watch` | script | [LIB] mainのCI監視の流れ |
+| `f/factory/lib/metadata_signature` | script | [LIB] mainの引数と型宣言の比較 |
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
+| `f/factory/lib/metadata_hash` | script | [LIB] wmill-lock.yamlのhashの再計算 |
+| `f/factory/lib/metadata_precheck` | script | [LIB] wmill-lock.yamlの再計算の事前検査 |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
@@ -700,6 +703,6 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
-- CIが出したメタデータのパッチ(`metadata-patch`)をFactoryが適用して、PRを直すこと。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- CIが出したメタデータのパッチ(`metadata-patch`)の適用か、Factory自身による`wmill-lock.yaml`のhashの再計算で、PRを直すこと。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

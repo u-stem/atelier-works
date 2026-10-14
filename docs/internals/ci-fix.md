@@ -8,6 +8,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/ci_fix_prompt.ts`、`lib/ci_fix_paths.ts`
 - `lib/ci_fix_round.ts`
 - `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
+- `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`
 
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
@@ -434,6 +435,7 @@ gitは呼ばない。
   - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
   - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`
   - `f/factory/lib/`の`ci_`、`pr_ci_`、`main_ci_`、`pr_fix_launch`
+  - `f/factory/lib/`の`metadata_`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
   - `f/factory/`の`watch_pr_ci`と`watch_main_ci`
 
@@ -597,12 +599,128 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - `mergeSha`を本物のPRのmerge commitに結び付けること。適用の前に、GitHub APIのPRの`merge_commit_sha`と照合する。
   lockの比較先はheadの木とbaseの先端の木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
 - `main`の依存更新のたびに、閉包の多くのscriptで、依存の集合かlockが食い違う場合の扱い。検査の前に、`main`を取り込む。
-- Factory自身が`wmill-lock.yaml`のhashと`schema`を計算して書く案。artifactを経由しない。
-  wmillのhashの算法とパーサーの結び付きが前提で、この検査の大半(zip、取得、出どころ、manifest)が要らなくなる。
-  配線の前に、この案を比べるかどうかを決める。
+- artifactを経由しない[hashの再計算](#メタデータのhashの再計算)を、artifactの適用の代わりに使うか、先に試すか。
+  再計算は`schema`を書かないので、`main`の引数が変わるPRは人の手に回る。
 - 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
 - `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
+
+## メタデータのhashの再計算
+
+wmill CLIとバックエンドを使わずに、Factory自身が`wmill-lock.yaml`のhashを計算し直す部品である。
+共有のlibを変えたPRは、CIの`metadata`ジョブが、hashの食い違いで落ちる。
+再計算は、このうち依存が変わらないPRだけを直す。
+artifactを経由しないので、取得、zip、出どころ、manifestの検査は要らない。
+未信頼のPRのheadを読むだけで、scriptの実行も、wmill CLIの起動もしない。
+取り決めは[セキュリティ](../security.md#hashの再計算)にある。
+
+### 再計算の部品
+
+| ファイル | 責務 |
+| --- | --- |
+| `lib/metadata_hash.ts` | ファイルの内容から、`wmill-lock.yaml`の全キーのhashを計算する(`computeLockEntries`)。既存のlockの行ごとの値だけを置き換える(`patchWmillLock`) |
+| `lib/metadata_precheck.ts` | gitの木を読み、依存が変わらない再生成かを確かめる(`planMetadataRehash`)。確かめられたときだけ、新しい本文と、変わったキーを返す |
+| `lib/metadata_signature.ts` | `main`の引数と戻り値の型、トップレベルの型宣言を、字句で読んで比べる |
+
+3つとも、保護パスである。
+
+### hashの算法
+
+算法は、`mise.toml`で固定したwmill CLIの版(`ASSUMED_WMILL_CLI_VERSION`)から写した。
+写し元は、`generateScriptHash`、`generateFlowHash`、`generate-metadata rehash`の分岐である。
+
+- scriptのhashは、ワークスペースの依存のJSON、scriptのソース、`.script.yaml`の全文を、この順につなげたsha256である。
+  `dependencies/`が無いので、依存のJSONは`{}`に固定する。
+- scriptのキーは、拡張子を除いたパスである。
+  wmillは最初の`.`までをキーにするので、拡張子の前に`.`を含む名前は扱わない。
+- flowのフォルダ直下にある、scriptの拡張子のファイルごとに、内容に`{}`をつなげたsha256を作る。
+  キーは`<フォルダ>+<ファイル名>`である。
+- flow全体のhashは、ファイルごとのhashを、キーでソートしたJSONにしたsha256である。
+  キーは`<フォルダ>+__flow_hash`である。
+- `flow.yaml`、`.script.lock`、依存先のscript、`wmill.yaml`、言語は、hashに入らない。
+
+`patchWmillLock`は、既存の行の値だけを置き換える。
+引用符、キーの順、改行は変えない。
+置き換えた結果は`parseWmillLock`で読み直し、形が崩れていないことを確かめる。
+再計算したキーが元のlockに無いときは、置き換えず、失敗として返す。
+元のlockのキーに再計算した値が無いときも、同じく失敗として返す。
+ただし、ファイルが無いまま残っている項目は例外である。
+wmillも消さない項目なので、baseの先端の木で、ファイルから決まらなかったキーは、そのまま残す。
+
+### 事前検査
+
+`planMetadataRehash`は、baseの先端とheadのcommitを受け取る。
+読み取りは、木の一覧(`listTree`)、blobの読み取り(`readBlob`)、祖先の判定(`isAncestor`)の3つのポートで行う。
+ポートは、gitのオブジェクトから実装する。
+作業ツリーのファイルは開かない。
+PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
+名前の変更は、削除と追加の2件に見えるので、scriptの集合が変わったものとして扱う。
+
+次の表の順に確かめ、最初に外れた条件の種別を返す。
+
+| 確かめること | 外れたときの種別 |
+| --- | --- |
+| headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
+| `f/`、`wmill.yaml`、`wmill-lock.yaml`にsymlinkとsubmoduleが無い | `special_file` |
+| `f/`のファイルが1MiB以下で、5000件以下 | `file_too_large`、`too_many_files` |
+| headに`dependencies/`が無い | `workspace_dependencies` |
+| `wmill.yaml`がbaseの先端と同一 | `wmill_yaml_changed` |
+| PRの差分に、scriptとflowのファイルの追加、削除、名前の変更が無い | `script_set_changed` |
+| PRの差分に、`.script.lock`とflowのlockが無い | `lock_file_changed` |
+| PRの差分に、`.script.yaml`が無い | `script_yaml_changed` |
+| 変更されたscriptが、TypeScript(bun)である | `unsupported_script` |
+| すべてのscriptで、裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed` |
+| 変更された`.ts`の`main`の引数、戻り値の型、型宣言が、baseの先端と同じ | `main_changed`、`main_presence_changed`、`declaration_changed`、読めないときは`main_unparsable` |
+| hashを計算できる形である | `unsupported_script`、`missing_metadata`、`not_text`、`duplicate_key` |
+| 再計算したキーの集合が、headのlockのキーの集合と一致する | `lock_key_set_mismatch`、`wmill_lock_invalid` |
+
+ポートが例外を投げたときは、`port_error`を返す。
+種別は固定で、例外の内容は載せない。
+失敗の`path`はPRの作者が決められるので、PR本文やコメントに載せるときは無害化する。
+
+裸のimportの閉包は、[importの読み取り](#importの読み取り)と同じ関数で求める。
+PRが触っていないscriptも、すべて確かめる。
+追えないimportが1つでもあれば、その1つのために全体が人の手に回る。
+局所importの解決は、headの木の`f/`の下の`.ts`の一覧で、両方の木に同じように行う。
+
+### 人の手に回す条件
+
+事前検査が失敗の種別を返したときは、再計算せず、人が手元で`mise run metadata`を実行して直す。
+判断できないとき、読めないとき、字句の切れ目に確信が持てないときは、通さずに人の手に回す。
+通すと依存の変化を見落とし、回すと人の作業が増えるだけで済むためである。
+
+### mainの引数の比べ方
+
+`schema`は、`main`の引数からだけ決まる。
+そこで、`main`の署名と型宣言が同じなら、`schema`も同じとみなす。
+`metadata_signature.ts`は、構文木を作らず、字句で読む。
+workerで動くwasmのパーサーに、依存を増やさないためである。
+
+- コメントを除き、文字列、テンプレート、正規表現を1つの字句にして、括弧の対応を数える。
+- 署名は、`export function main`(`async`つきを含む)から、本体の開き波括弧の前までである。
+  引数の既定値と戻り値の型を含むので、`schema`の`default`が変わるときも署名が変わる。
+- トップレベルの`type`、`interface`、`enum`、`class`の宣言文も、署名とあわせて比べる。
+  引数の型が、同じファイルの宣言を指しうるためである。
+- 空白とコメントの違いは、違いとして扱わない。
+- 字句を読み切れないときは、読めないものとして断る。
+  閉じない文字列とコメント、閉じ波括弧の後の`/`、括弧の不一致がこれにあたる。
+- `main`が`export function main`以外の形で公開されるとき(変数、既定のexport、`export { main }`)と、2つ以上あるときも断る。
+
+### 算法を固定するテスト
+
+`tests/lib/metadata_hash.test.ts`は、リポジトリのcommit済みのファイルから計算したhashを、`wmill-lock.yaml`のすべての項目と比べる。
+ファイルが無いまま残っている項目だけが、一覧で例外になる。
+`mise.toml`のwmill CLIの版が、`ASSUMED_WMILL_CLI_VERSION`と違うときも、このテストが落ちる。
+
+テストが落ちたときは、算法を確かめ直す。
+
+1. 新しい版の`generateScriptHash`、`generateFlowHash`、`generate-metadata rehash`の分岐を読む。
+2. 摂動を加えたコピーで、`wmill generate-metadata rehash`の出力と`patchWmillLock`の結果を、バイトで比べる。
+3. 再計算したlockで、`wmill generate-metadata --dry-run`が、すべて最新だと答えることを確かめる。
+4. `ASSUMED_WMILL_CLI_VERSION`を直す。
+
+`rehash`はバックエンドなしで動き、依存が変わらないPRでは、通常の再生成と同じ`wmill-lock.yaml`を出す。
+確かめ直すときの照合に使い、テストの本体には入れない。
 
 ## 既知の限界
 
@@ -647,3 +765,9 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
   古いlockに新しいhashが残る形は、import集合の比較と、解決の一致で防ぐ。
 - パッチの`.script.yaml`の`schema`のうち、`default`、`enum`、`format`、`resourceType`の中身は読まない。
   コードの既定値と違う`default`を、Factoryのcommitに置ける。
+- `main`の署名の比較は、字句の近似である。
+  正規表現と除算の見分けや、型宣言の範囲を、完全には決められない。
+  決められない形は断るが、字句の読み違いで、署名の違いを見落とす入力がありうる。
+- hashの算法は、`ASSUMED_WMILL_CLI_VERSION`の版だけで確かめた。
+  `dependencies/`、`__mod`のフォルダ、JSONのflowのように、このリポジトリに無い形は、写さずに人の手に回す。
+  算法を固定するテストが見つけられるのは、版の変更と、リポジトリの現物との食い違いだけである。
