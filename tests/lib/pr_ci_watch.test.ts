@@ -27,11 +27,17 @@ import {
 } from "../../f/factory/lib/main_ci_support.ts";
 import type { FixItemState } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import {
+  HOLD_PROLONGED_AFTER_MS,
+  type PrCiNotifyPolicy,
+  UNHELD_FAILURE_NOTICE_AFTER_MS,
+} from "../../f/factory/lib/pr_ci_notify.ts";
+import {
   type FactoryWorkItemRef,
   PR_CI_FAILED_KIND,
   type PrCiFixHoldReason,
   type PrCiState,
   prCiFailedNoticeMessage,
+  prCiFixHoldInfo,
   prCiNextAction,
 } from "../../f/factory/lib/pr_ci_support.ts";
 import {
@@ -176,6 +182,10 @@ type Setup = {
   fixing?: PrCiCheck[];
   /** 直す作業項目に結ばれていない修正中の行。 */
   orphans?: PrCiCheck[];
+  /** 失敗に確定して、まだ通知していない行(`listUnnotifiedFailed`が返す)。 */
+  unnotified?: PrCiCheck[];
+  /** 通知の保留の設定。省略すると、自動修正は無効。 */
+  policy?: Partial<PrCiNotifyPolicy>;
   /** 作業項目のIDごとの状態。無い項目は存在しない作業項目として返す。 */
   fixItems?: Record<number, FixItemState | Error>;
   /** `release`が失敗する行のID。 */
@@ -231,6 +241,7 @@ type Harness = {
       readonly holdReason?: string | undefined;
       readonly fixWorkItemId?: number | undefined;
       readonly withoutFixWorkItem?: boolean | undefined;
+      readonly resetNotified?: boolean | undefined;
     };
   }[];
   readonly fixItemReads: number[];
@@ -321,6 +332,13 @@ function harness(setup: Setup = {}): Harness {
     },
     listFixing: async () => setup.fixing ?? [],
     listOrphanFixing: async () => setup.orphans ?? [],
+    listUnnotifiedFailed: async () => setup.unnotified ?? [],
+    notifyPolicy: {
+      fixEnabled: false,
+      fixEnabledSince: null,
+      claudeTimeoutSec: 1800,
+      ...setup.policy,
+    },
     readFixItem: async (workItemId) => {
       events.push("read_fix_item");
       fixItemReads.push(workItemId);
@@ -2391,6 +2409,22 @@ describe("recovery of a fixing row", () => {
     ]);
   });
 
+  test("asks to clear the notified reason when the hold is deterministic", async () => {
+    const h = harness(fixingSetup(fixItem("needs_human")));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.resetNotified)).toEqual([
+      true,
+    ]);
+  });
+
+  test("does not ask to clear the notified reason when no hold is written", async () => {
+    const h = harness(fixingSetup(fixItem("failed")));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => "resetNotified" in entry.options)).toEqual(
+      [false],
+    );
+  });
+
   test("does not hold the row when the work item failed", async () => {
     const h = harness(fixingSetup(fixItem("failed")));
     await runPrCiWatch(h.deps);
@@ -2812,6 +2846,8 @@ type ClaimHarness = {
   readonly holds: { id: number; reason: PrCiFixHoldReason | null }[];
   /** `setHold`に渡した、書く前の理由の期待。 */
   readonly holdExpectations: (string | null)[];
+  /** `setHold`に渡した、通知した理由を空に戻すかの指示。 */
+  readonly holdResets: boolean[];
   readonly failedItems: { id: number; note: string }[];
   /** 取り消しを求めたジョブ。 */
   readonly cancelled: { jobId: string; reason: string }[];
@@ -2825,6 +2861,7 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
   const launched: number[] = [];
   const holds: ClaimHarness["holds"] = [];
   const holdExpectations: ClaimHarness["holdExpectations"] = [];
+  const holdResets: ClaimHarness["holdResets"] = [];
   const failedItems: ClaimHarness["failedItems"] = [];
   const cancelled: ClaimHarness["cancelled"] = [];
   const listed: ClaimHarness["listed"] = [];
@@ -2878,10 +2915,11 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
       count("rounds");
       return setup.rounds ?? 0;
     },
-    setHold: async (id, reason, expected) => {
+    setHold: async (id, reason, expected, resetNotified) => {
       count("set_hold");
       holds.push({ id, reason });
       holdExpectations.push(expected);
+      holdResets.push(resetNotified);
       return setup.setHoldWritesNothing !== true;
     },
     claim: async (input) => {
@@ -2917,6 +2955,7 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     launched,
     holds,
     holdExpectations,
+    holdResets,
     failedItems,
     cancelled,
     listed,
@@ -3413,6 +3452,38 @@ describe("holding a row", () => {
     expect(c.claims).toEqual([]);
   });
 
+  test("asks to clear the notified reason when the new hold is deterministic", async () => {
+    const c = claimHarness({ rounds: 2 });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holdResets).toEqual([true]);
+  });
+
+  test("keeps the notified reason when the new hold is temporary", async () => {
+    const c = claimHarness({ review: false });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holdResets).toEqual([false]);
+  });
+
+  test("keeps the notified reason of a row already announced as other conclusion", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ notified_reason: "ci_other_conclusion" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holdResets).toEqual([false]);
+  });
+
+  test("keeps the notified reason when a hold is cleared", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holdResets).toEqual([false]);
+  });
+
   test("holds a row at the rounds limit", async () => {
     const c = claimHarness({ rounds: 2 });
     const h = harness(claimSetup(c));
@@ -3594,5 +3665,598 @@ describe("a read that fails while claiming", () => {
     const h = harness(claimSetup(c));
     await runPrCiWatch(h.deps);
     expect(c.reads.review).toBe(1);
+  });
+});
+
+const FIX_POLICY: PrCiNotifyPolicy = {
+  fixEnabled: true,
+  fixEnabledSince: SINCE,
+  claudeTimeoutSec: 1800,
+};
+
+describe("deferring the notice of a failure that the automatic fix takes", () => {
+  const failedSetup = (overrides: Setup = {}): Setup => ({
+    prs: { [PR_KEY]: pr() },
+    pending: [row()],
+    runs: { [SHA_A]: [failingRun()] },
+    policy: FIX_POLICY,
+    ...overrides,
+  });
+
+  test("adds no notice", async () => {
+    const h = harness(failedSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("sends no Discord message", async () => {
+    const h = harness(failedSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toEqual([]);
+  });
+
+  test("does not mark the reason as notified", async () => {
+    const h = harness(failedSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([]);
+  });
+
+  test("still moves the row to failed with the summary", async () => {
+    const h = harness(failedSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((t) => [t.from, t.to.state])).toEqual([
+      ["pending", "failed"],
+    ]);
+  });
+
+  test("still counts the failure", async () => {
+    const h = harness(failedSetup());
+    const result = await runPrCiWatch(h.deps);
+    expect(result.failed).toBe(1);
+  });
+
+  test("notifies at once a row first seen before the start time", async () => {
+    const h = harness(
+      failedSetup({
+        pending: [row({ first_seen_at: new Date(SINCE.getTime() - 1) })],
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: 1, reason: "ci_failure" }]);
+  });
+
+  test("notifies at once a failure that is not a plain failure", async () => {
+    const h = harness(
+      failedSetup({
+        runs: { [SHA_A]: [failingRun({ conclusion: "cancelled" })] },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: 1, reason: "ci_other_conclusion" }]);
+  });
+
+  test("notifies at once when the setting has no start time", async () => {
+    const h = harness(
+      failedSetup({ policy: { ...FIX_POLICY, fixEnabledSince: null } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: 1, reason: "ci_failure" }]);
+  });
+
+  test("notifies at once when the automatic fix is disabled", async () => {
+    const h = harness(
+      failedSetup({ policy: { ...FIX_POLICY, fixEnabled: false } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: 1, reason: "ci_failure" }]);
+  });
+});
+
+describe("notifying a deferred failure", () => {
+  const UNNOTIFIED_ID = 9;
+  const unnotified = (overrides: Partial<PrCiCheck> = {}): PrCiCheck =>
+    row({
+      id: UNNOTIFIED_ID,
+      state: "failed",
+      first_seen_at: minutesBefore(300),
+      updated_at: minutesBefore(1),
+      ...overrides,
+    });
+  const deferredSetup = (
+    rowOverrides: Partial<PrCiCheck> = {},
+    overrides: Setup = {},
+  ): Setup => ({
+    unnotified: [unnotified(rowOverrides)],
+    policy: FIX_POLICY,
+    ...overrides,
+  });
+  const heldMessage = (hold: PrCiFixHoldReason) =>
+    prCiFailedNoticeMessage({
+      owner: "acme",
+      repo: "widgets",
+      prNumber: 12,
+      headSha: SHA_A,
+      link: PR_PAGE,
+      reason: "ci_failure",
+      hold,
+    });
+
+  test("adds a notice with the hold reason for a deterministic hold", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "rounds_exhausted" }));
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      { kind: PR_CI_FAILED_KIND, message: heldMessage("rounds_exhausted") },
+    ]);
+  });
+
+  test("sends one needs_human message with the hold reason and its next action", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "rounds_exhausted" }));
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toEqual([
+      {
+        kind: "needs_human",
+        instance_name: "local",
+        owner: "acme",
+        repo: "widgets",
+        url: PR_PAGE,
+        reason: "ci_failure(自動修正の保留: rounds_exhausted)",
+        target: { kind: "pr", number: 12 },
+        next_action: prCiFixHoldInfo("rounds_exhausted").nextAction,
+      },
+    ]);
+  });
+
+  test("marks the reason as notified", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "rounds_exhausted" }));
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: UNNOTIFIED_ID, reason: "ci_failure" }]);
+  });
+
+  test("adds the notice, then sends to Discord, then marks the reason", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "rounds_exhausted" }));
+    await runPrCiWatch(h.deps);
+    expect(
+      h.events.filter((event) => ["notice", "notify", "mark"].includes(event)),
+    ).toEqual(["notice", "notify", "mark"]);
+  });
+
+  test("adds the notice of a stopped fix", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "fix_stopped" }));
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      { kind: PR_CI_FAILED_KIND, message: heldMessage("fix_stopped") },
+    ]);
+  });
+
+  test("leaves the Discord message of a stopped fix to the fix flow", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "fix_stopped" }));
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toEqual([]);
+  });
+
+  test("marks the reason of a stopped fix as notified", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "fix_stopped" }));
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: UNNOTIFIED_ID, reason: "ci_failure" }]);
+  });
+
+  test("sends to Discord only when the notice was newly inserted", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "rounds_exhausted" },
+        { duplicateKinds: [PR_CI_FAILED_KIND] },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toEqual([]);
+  });
+
+  test("marks the reason even when the notice already exists", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "rounds_exhausted" },
+        { duplicateKinds: [PR_CI_FAILED_KIND] },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: UNNOTIFIED_ID, reason: "ci_failure" }]);
+  });
+
+  test("waits for a row that failed a moment ago without a hold", async () => {
+    const h = harness(deferredSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("waits for a temporary hold that has not lasted long", async () => {
+    const h = harness(
+      deferredSetup({
+        fix_hold_reason: "main_ci_failed",
+        updated_at: new Date(NOW.getTime() - HOLD_PROLONGED_AFTER_MS + 1),
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("notifies a temporary hold that has lasted long", async () => {
+    const h = harness(
+      deferredSetup({
+        fix_hold_reason: "main_ci_failed",
+        updated_at: new Date(NOW.getTime() - HOLD_PROLONGED_AFTER_MS),
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      { kind: PR_CI_FAILED_KIND, message: heldMessage("main_ci_failed") },
+    ]);
+  });
+
+  test("waits for a missing review for twice the claude timeout", async () => {
+    const h = harness(
+      deferredSetup({
+        fix_hold_reason: "not_reviewed",
+        updated_at: new Date(NOW.getTime() - 2 * 1800 * 1000 + 1),
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("notifies a missing review after twice the claude timeout", async () => {
+    const h = harness(
+      deferredSetup({
+        fix_hold_reason: "not_reviewed",
+        updated_at: new Date(NOW.getTime() - 2 * 1800 * 1000),
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      { kind: PR_CI_FAILED_KIND, message: heldMessage("not_reviewed") },
+    ]);
+  });
+
+  test("notifies without a hold a row that neither started nor was held for the insurance time", async () => {
+    const h = harness(
+      deferredSetup({
+        updated_at: new Date(NOW.getTime() - UNHELD_FAILURE_NOTICE_AFTER_MS),
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      {
+        kind: PR_CI_FAILED_KIND,
+        message: prCiFailedNoticeMessage({
+          owner: "acme",
+          repo: "widgets",
+          prNumber: 12,
+          headSha: SHA_A,
+          link: PR_PAGE,
+          reason: "ci_failure",
+        }),
+      },
+    ]);
+  });
+
+  test("sends the failure next action to Discord for a row without a hold", async () => {
+    const h = harness(
+      deferredSetup({
+        updated_at: new Date(NOW.getTime() - UNHELD_FAILURE_NOTICE_AFTER_MS),
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(
+      h.discord.map((event) => event.kind === "needs_human" && event.reason),
+    ).toEqual(["ci_failure"]);
+  });
+
+  test("notifies at once when the automatic fix is disabled", async () => {
+    const h = harness(
+      deferredSetup({}, { policy: { ...FIX_POLICY, fixEnabled: false } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: UNNOTIFIED_ID, reason: "ci_failure" }]);
+  });
+
+  test("notifies a temporary hold without the hold text when the automatic fix is disabled", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "main_ci_failed" },
+        { policy: { ...FIX_POLICY, fixEnabled: false } },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      {
+        kind: PR_CI_FAILED_KIND,
+        message: prCiFailedNoticeMessage({
+          owner: "acme",
+          repo: "widgets",
+          prNumber: 12,
+          headSha: SHA_A,
+          link: PR_PAGE,
+          reason: "ci_failure",
+        }),
+      },
+    ]);
+  });
+
+  test("sends the failure next action to Discord for a temporary hold when the automatic fix is disabled", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "main_ci_failed" },
+        { policy: { ...FIX_POLICY, fixEnabled: false } },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(
+      h.discord.map(
+        (event) => event.kind === "needs_human" && event.next_action,
+      ),
+    ).toEqual([prCiNextAction("ci_failure")]);
+  });
+
+  test("does not notify a row announced as other conclusion", async () => {
+    const h = harness(
+      deferredSetup({
+        fix_hold_reason: "rounds_exhausted",
+        notified_reason: "ci_other_conclusion",
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("notifies at once a row first seen before the start time", async () => {
+    const h = harness(
+      deferredSetup({ first_seen_at: new Date(SINCE.getTime() - 1) }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: UNNOTIFIED_ID, reason: "ci_failure" }]);
+  });
+
+  test("notifies without the watch", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "rounds_exhausted" }));
+    await runPrCiRecovery(h.deps);
+    expect(h.marked).toEqual([{ id: UNNOTIFIED_ID, reason: "ci_failure" }]);
+  });
+
+  test("reads nothing from GitHub", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "rounds_exhausted" }));
+    await runPrCiRecovery(h.deps);
+    expect(h.prCalls).toEqual([]);
+  });
+
+  test("notifies after the time budget is used up", async () => {
+    const h = harness(
+      trackedSetup({
+        ...deferredSetup({ fix_hold_reason: "rounds_exhausted" }),
+        budgetUsedAfterFirstPr: true,
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: UNNOTIFIED_ID, reason: "ci_failure" }]);
+  });
+
+  test("leaves the rows after the first to the next run once the time budget is used up", async () => {
+    const h = harness(
+      trackedSetup({
+        unnotified: [
+          unnotified({ fix_hold_reason: "rounds_exhausted" }),
+          unnotified({
+            id: 10,
+            pr_number: 13,
+            fix_hold_reason: "log_unavailable",
+          }),
+        ],
+        policy: FIX_POLICY,
+        budgetUsedAfterFirstPr: true,
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked.map((entry) => entry.id)).toEqual([UNNOTIFIED_ID]);
+  });
+
+  describe("the order in a run", () => {
+    const orderSetup = (trail: string[]) => {
+      const c = claimHarness({ trail });
+      return harness(
+        claimSetup(c, {
+          ...deferredSetup({ fix_hold_reason: "rounds_exhausted" }),
+          pending: [
+            row({ id: 3, first_seen_at: new Date(SINCE.getTime() - 1) }),
+          ],
+          fixing: [row({ id: 4, state: "fixing", fix_work_item_id: 31 })],
+          fixItems: { 31: fixItem("failed") },
+          override: {
+            markNotified: async (id) => {
+              trail.push(id === UNNOTIFIED_ID ? "deferred" : "judged");
+              return true;
+            },
+            release: async () => {
+              trail.push("recovered");
+              return true;
+            },
+          },
+        }),
+      );
+    };
+
+    test("notifies after the recovery", async () => {
+      const trail: string[] = [];
+      await runPrCiWatch(orderSetup(trail).deps);
+      expect(trail.indexOf("recovered")).toBeLessThan(
+        trail.indexOf("deferred"),
+      );
+    });
+
+    test("notifies after it re-judges the rows", async () => {
+      const trail: string[] = [];
+      await runPrCiWatch(orderSetup(trail).deps);
+      expect(trail.indexOf("judged")).toBeLessThan(trail.indexOf("deferred"));
+    });
+
+    test("notifies after it claims the rows", async () => {
+      const trail: string[] = [];
+      await runPrCiWatch(orderSetup(trail).deps);
+      expect(trail.indexOf("claim")).toBeLessThan(trail.indexOf("deferred"));
+    });
+
+    test("notifies after the recovery without the watch", async () => {
+      const trail: string[] = [];
+      await runPrCiRecovery(orderSetup(trail).deps);
+      expect(trail.indexOf("recovered")).toBeLessThan(
+        trail.indexOf("deferred"),
+      );
+    });
+  });
+
+  test("does not notify a row that was notified already", async () => {
+    const h = harness(
+      deferredSetup({
+        fix_hold_reason: "rounds_exhausted",
+        notified_reason: "ci_failure",
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("does not notify a row of a repository that left the settings", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "rounds_exhausted" },
+        { allowed: () => false },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("does not mark the reason when the notice cannot be added", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "rounds_exhausted" },
+        { noticeFails: true },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([]);
+  });
+
+  test("records the failure when the notice cannot be added", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "rounds_exhausted" },
+        { noticeFails: true },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["notify_deferred:acme/widgets#12"]);
+  });
+
+  test("records the failure when the reason cannot be marked as notified", async () => {
+    const h = harness(
+      deferredSetup(
+        { fix_hold_reason: "rounds_exhausted" },
+        {
+          override: {
+            markNotified: async () => {
+              throw new Error("mark failed");
+            },
+          },
+        },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["notify_deferred:acme/widgets#12"]);
+  });
+
+  describe("a run after the reason could not be marked as notified", () => {
+    const failedMarkRun = () =>
+      harness(
+        deferredSetup(
+          { fix_hold_reason: "rounds_exhausted" },
+          {
+            override: {
+              markNotified: async () => {
+                throw new Error("mark failed");
+              },
+            },
+          },
+        ),
+      );
+    const retryRun = () =>
+      harness(
+        deferredSetup(
+          { fix_hold_reason: "rounds_exhausted" },
+          { duplicateKinds: [PR_CI_FAILED_KIND] },
+        ),
+      );
+
+    test("sends the Discord message only once over both runs", async () => {
+      const first = failedMarkRun();
+      const second = retryRun();
+      await runPrCiWatch(first.deps);
+      await runPrCiWatch(second.deps);
+      expect([...first.discord, ...second.discord]).toHaveLength(1);
+    });
+
+    test("marks the reason in the second run", async () => {
+      await runPrCiWatch(failedMarkRun().deps);
+      const second = retryRun();
+      await runPrCiWatch(second.deps);
+      expect(second.marked).toEqual([
+        { id: UNNOTIFIED_ID, reason: "ci_failure" },
+      ]);
+    });
+  });
+
+  test("goes on to the next row after a row whose notice cannot be added", async () => {
+    let calls = 0;
+    const h = harness({
+      unnotified: [
+        unnotified({ fix_hold_reason: "rounds_exhausted" }),
+        unnotified({
+          id: 10,
+          pr_number: 13,
+          fix_hold_reason: "log_unavailable",
+        }),
+      ],
+      policy: FIX_POLICY,
+      override: {
+        addNotice: async () => {
+          calls += 1;
+          if (calls === 1) throw new Error("notice failed");
+          return calls;
+        },
+      },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.marked.map((entry) => entry.id)).toEqual([10]);
+  });
+
+  test("does not stop when the list of rows cannot be read", async () => {
+    const h = harness({
+      override: {
+        listUnnotifiedFailed: async () => {
+          throw new Error("list failed");
+        },
+      },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["list_unnotified"]);
+  });
+
+  test("counts the notified rows in the result", async () => {
+    const h = harness(deferredSetup({ fix_hold_reason: "rounds_exhausted" }));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.notified).toBe(1);
+  });
+
+  test("does not count a row that waits", async () => {
+    const h = harness(deferredSetup());
+    const result = await runPrCiWatch(h.deps);
+    expect(result.notified).toBe(0);
   });
 });
