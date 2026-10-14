@@ -55,12 +55,14 @@ import {
   resolveTagCommit,
 } from "./lib/drawio_viewer_bump_github.ts";
 import { recordViewerObservation } from "./lib/drawio_viewer_observations.ts";
+import { isFactoryRepoIdVerified } from "./lib/factory_repo_gate.ts";
 import {
   addLabels,
   createPullRequest,
   type GhClient,
   GitHubHttpError,
   getPr,
+  getRepositoryId,
   getViewer,
   gitIdentityForViewer,
   listPullRequestNumbersByHead,
@@ -129,6 +131,12 @@ export type BumpDeps = {
     branch: string,
     files: readonly BranchFile[],
   ) => Promise<BranchCheck>;
+  /**
+   * 書き込みの直前に、`factory_repo`のリポジトリIDを`factory_repo_id`と照合する。
+   * 通れば`true`。食い違うか見つからないときは、noticeを残して`false`を返す。取得の失敗は例外のまま投げる。
+   * `factory_repo_id`が無いときは、名前だけで動くので、取得せずに`true`を返す。
+   */
+  readonly verifyFactoryRepo: () => Promise<boolean>;
   /** ブランチ(無ければ作る)をheadにしたPRを開く。自動レビューのラベルは付けない。 */
   readonly publish: (
     input: BumpPullRequestInput,
@@ -145,6 +153,7 @@ export type BumpResult =
   | { readonly outcome: "pull_request_pending"; readonly branch: string }
   | { readonly outcome: "already_proposed"; readonly branch: string }
   | { readonly outcome: "rejected"; readonly tag: string }
+  | { readonly outcome: "repository_mismatch" }
   | {
       readonly outcome: "opened";
       readonly branch: string;
@@ -175,7 +184,8 @@ function rejectedNotice(
  * - 大きさ: 今の大きさから2割を超えて増減した版は、`approvedTag`の指名が無ければ、PRを作らずnoticeに残す。
  * - 既存のブランチ: PRの無いブランチが既にあるときは、中身を確かめ、合わなければPRを作らずnoticeに残す。
  * - メジャー版: 変わる版も、他の確認を通ればPRにする。題名と本文で人の確認を求める。
- * 失敗はすべて例外にして、ジョブを失敗させる(スケジュールの失敗の通知に流れる)。次の週に再び試す。
+ * - `factory_repo_id`の照合: 設定されていて食い違うときは、何も書かず`repository_mismatch`を返す。例外にしない。
+ * 上の照合以外の失敗は、例外にして、ジョブを失敗させる(スケジュールの失敗の通知に流れる)。次の週に再び試す。
  */
 export async function runBump(
   deps: BumpDeps,
@@ -311,6 +321,14 @@ export async function runBump(
       });
       return { outcome: "rejected", tag: target.tag };
     }
+  }
+  // 最初の書き込み(ブランチの作成、またはPRの作成)の直前に、`factory_repo_id`を照合する。
+  // 取得と照合を重ねる間に、名前が別の人に渡っていても、その人のリポジトリに書かない。
+  if (!(await deps.verifyFactoryRepo())) {
+    deps.log.warn("the factory repository id check failed; not opening", {
+      branch,
+    });
+    return { outcome: "repository_mismatch" };
   }
   const pr = await deps.publish({
     branch,
@@ -509,6 +527,12 @@ export async function main(approved_version = ""): Promise<BumpResult> {
           expectedHeadSha,
         };
       },
+      verifyFactoryRepo: () =>
+        isFactoryRepoIdVerified(config, {
+          getRepositoryId: (owner, repo) =>
+            getRepositoryId(client, owner, repo),
+          addNotice: addNoticeUnlessUnresolved,
+        }),
       requestReview: (pullRequestNumber) =>
         addLabels(client, repoRef.owner, repoRef.repo, pullRequestNumber, [
           config.review_label,

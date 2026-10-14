@@ -11,12 +11,14 @@ import { OWNER_ID_MISMATCH_KIND } from "../../f/factory/lib/poll_support.ts";
 import {
   factoryRepoIdCheckReason,
   isFactoryRepoIdCheckReason,
+  isRepoOwnerStopReason,
   repoOwnerIdMismatchMessage,
   repoOwnerIdMismatchReason,
   repoOwnerNotConfiguredMessage,
   repoOwnerNotConfiguredReason,
   repoOwnerNotFoundMessage,
   repoOwnerNotFoundReason,
+  repoOwnerStopReason,
   verifyRepoOwnerId,
 } from "../../f/factory/lib/repo_owner_gate.ts";
 import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
@@ -658,5 +660,83 @@ describe("isFactoryRepoIdCheckReason", () => {
         repoOwnerNotConfiguredReason("octo-owner/app"),
       ),
     ).toBe(false);
+  });
+});
+
+describe("repoOwnerStopReason", () => {
+  test("returns null when the owner id matches", async () => {
+    const { deps } = setup(() => Promise.resolve(4242));
+    const reason = await repoOwnerStopReason(
+      configWith([WITH_ID]),
+      "octo-owner",
+      "app",
+      deps,
+    );
+    expect(reason).toBeNull();
+  });
+
+  test("returns null without a lookup when the owner has no id", async () => {
+    const { deps, recorded } = setup(() => Promise.resolve(1));
+    await repoOwnerStopReason(
+      configWith([WITHOUT_ID]),
+      "octo-owner",
+      "app",
+      deps,
+    );
+    expect(recorded.lookups).toEqual([]);
+  });
+
+  test("returns the reason when the owner id differs", async () => {
+    const { deps } = setup(() => Promise.resolve(9999));
+    const reason = await repoOwnerStopReason(
+      configWith([WITH_ID]),
+      "octo-owner",
+      "app",
+      deps,
+    );
+    expect(reason).toBe(
+      repoOwnerIdMismatchReason("octo-owner/app", 4242, 9999),
+    );
+  });
+
+  test("rethrows a lookup failure other than 404", async () => {
+    const { deps } = setup(() =>
+      Promise.reject(new GitHubHttpError("server error", 500)),
+    );
+    await expect(
+      repoOwnerStopReason(configWith([WITH_ID]), "octo-owner", "app", deps),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
+  });
+});
+
+describe("isRepoOwnerStopReason", () => {
+  test("accepts the owner id reason", () => {
+    expect(
+      isRepoOwnerStopReason(repoOwnerIdMismatchReason("octo-owner/app", 1, 2)),
+    ).toBe(true);
+  });
+
+  test("accepts the not-found reason", () => {
+    expect(
+      isRepoOwnerStopReason(repoOwnerNotFoundReason("octo-owner/app", 1)),
+    ).toBe(true);
+  });
+
+  test("accepts the not-configured reason", () => {
+    expect(
+      isRepoOwnerStopReason(repoOwnerNotConfiguredReason("octo-owner/app")),
+    ).toBe(true);
+  });
+
+  test("accepts the factory repository id reason", () => {
+    expect(
+      isRepoOwnerStopReason(factoryRepoIdCheckReason("octo-owner/factory")),
+    ).toBe(true);
+  });
+
+  test("rejects an unrelated reason", () => {
+    expect(isRepoOwnerStopReason("worktree changed after verification")).toBe(
+      false,
+    );
   });
 });

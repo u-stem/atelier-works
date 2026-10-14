@@ -57,6 +57,7 @@ import {
   isNewShellScript,
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
+import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
 import {
   assertSha,
   type FactoryConfig,
@@ -2600,7 +2601,8 @@ export async function recordedGitPointerStopReason(
  * pr_fixの完了ステップがcommitの前に止めたとき(`prFixPushGateReason`か`CommitBlockedError`)の遷移を返す。
  * `statusNote`(`work_items.status_reason`に記録する値)にも止めた理由を入れる。
  * このとき直前のステップの`reason`はdoneでnullなので、それを使うと理由が記録に残らないため。
- * 理由が、workerが検査の前提を満たさないこと(`isCheckEnvironmentReason`)なら、準備と検証のステップの関門と同じく、
+ * 理由が、workerが検査の前提を満たさないこと(`isCheckEnvironmentReason`)か、
+ * リポジトリのオーナーの数値IDの照合に落ちたこと(`isRepoOwnerStopReason`)なら、準備と検証のステップの関門と同じく、
  * `blocked`にして修正のラウンドを記録しない(`recordsRound`がfalse)。Claudeの修正の失敗ではないので、モデルの失敗に数えないためである。
  * それ以外は`needs_human`にして、止めたラウンドを記録する。
  */
@@ -2610,7 +2612,8 @@ export function stopBeforeCommitTerminal(stopReason: string): {
   readonly discordReason: string;
   readonly statusNote: string;
 } {
-  const environment = isCheckEnvironmentReason(stopReason);
+  const environment =
+    isCheckEnvironmentReason(stopReason) || isRepoOwnerStopReason(stopReason);
   return {
     toStatus: environment ? "blocked" : "needs_human",
     recordsRound: !environment,

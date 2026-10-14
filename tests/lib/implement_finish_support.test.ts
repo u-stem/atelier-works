@@ -6,6 +6,7 @@ import {
 import {
   buildPrOpenedEvent,
   decideAfterCommit,
+  decideGapBranchCleanup,
   decideGapReroute,
   decideImplementFinishAction,
   decideVerifiedTree,
@@ -264,6 +265,65 @@ describe("shouldDeleteBranchOnGap", () => {
   });
 });
 
+describe("decideGapBranchCleanup", () => {
+  test("deletes when the branch is a candidate and the owner check passes", async () => {
+    const cleanup = await decideGapBranchCleanup({
+      shouldDelete: true,
+      ensureRepoOwner: async () => null,
+      onCheckError: () => {},
+    });
+    expect(cleanup).toEqual({ kind: "delete" });
+  });
+
+  test("stops with the reason when the owner check fails", async () => {
+    const cleanup = await decideGapBranchCleanup({
+      shouldDelete: true,
+      ensureRepoOwner: async () => "repository owner id differs",
+      onCheckError: () => {},
+    });
+    expect(cleanup).toEqual({
+      kind: "stop",
+      reason: "repository owner id differs",
+    });
+  });
+
+  test("keeps the branch when the owner check throws", async () => {
+    const cleanup = await decideGapBranchCleanup({
+      shouldDelete: true,
+      ensureRepoOwner: async () => {
+        throw new Error("GitHub API 503");
+      },
+      onCheckError: () => {},
+    });
+    expect(cleanup).toEqual({ kind: "keep" });
+  });
+
+  test("hands the thrown error to onCheckError", async () => {
+    const seen: unknown[] = [];
+    await decideGapBranchCleanup({
+      shouldDelete: true,
+      ensureRepoOwner: async () => {
+        throw new Error("GitHub API 503");
+      },
+      onCheckError: (err) => seen.push(err),
+    });
+    expect(seen).toHaveLength(1);
+  });
+
+  test("keeps the branch without checking when it is not a candidate", async () => {
+    let checks = 0;
+    const cleanup = await decideGapBranchCleanup({
+      shouldDelete: false,
+      ensureRepoOwner: async () => {
+        checks += 1;
+        return null;
+      },
+      onCheckError: () => {},
+    });
+    expect([cleanup, checks]).toEqual([{ kind: "keep" }, 0]);
+  });
+});
+
 describe("decideGapReroute", () => {
   test("reroutes below max_attempts", () => {
     expect(decideGapReroute(1, 3)).toBe("reroute");
@@ -306,6 +366,7 @@ describe("preserveWork", () => {
       PUSHED,
     assertGitPointer: () => Promise<void> = async () => {},
     ensureLockFree: () => Promise<void> = async () => {},
+    ensureRepoOwner: () => Promise<string | null> = async () => null,
   ): {
     deps: PreserveWorkDeps;
     pushes: { count: number; trees: string[] };
@@ -320,6 +381,7 @@ describe("preserveWork", () => {
       deps: {
         ensureLockFree,
         assertGitPointer,
+        ensureRepoOwner,
         scanForSecrets: async () => {
           scans.count += 1;
           return scan();
@@ -395,6 +457,48 @@ describe("preserveWork", () => {
         )
       )[0],
     ).toMatch(/^implement finish failed: /);
+  });
+
+  const OWNER_STOP = async (): Promise<string | null> =>
+    "repository owner is not in factory_config owners: octo-owner/app";
+
+  test("reports the owner check failure instead of pushing", async () => {
+    expect(
+      await preserveWork(
+        preserveDeps(CLEAN_SCAN, undefined, undefined, undefined, OWNER_STOP)
+          .deps,
+      ),
+    ).toEqual([
+      "repository owner is not in factory_config owners: octo-owner/app",
+    ]);
+  });
+
+  test("does not push when the owner check fails", async () => {
+    const h = preserveDeps(
+      CLEAN_SCAN,
+      undefined,
+      undefined,
+      undefined,
+      OWNER_STOP,
+    );
+    await preserveWork(h.deps);
+    expect(h.pushes.count).toBe(0);
+  });
+
+  test("does not check the owner when secrets were found", async () => {
+    let checks = 0;
+    const h = preserveDeps(
+      LEAK_SCAN,
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        checks += 1;
+        return null;
+      },
+    );
+    await preserveWork(h.deps);
+    expect(checks).toBe(0);
   });
 
   test("reports secrets instead of pushing", async () => {

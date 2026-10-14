@@ -9,6 +9,7 @@ import {
   factoryRepoIdMismatchMessage,
   factoryRepoNotFoundMessage,
   factoryRepoUnreadableMessage,
+  isFactoryRepoIdVerified,
   verifyFactoryRepoId,
 } from "../../f/factory/lib/factory_repo_gate.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
@@ -213,6 +214,36 @@ describe("verifyFactoryRepoId", () => {
     await expect(verifyFactoryRepoId(WITH_ID, failing)).rejects.toBeInstanceOf(
       FactoryRepoIdMismatchError,
     );
+  });
+});
+
+describe("isFactoryRepoIdVerified", () => {
+  test("returns true when the current id matches", async () => {
+    const { deps } = setup(() => Promise.resolve(777));
+    expect(await isFactoryRepoIdVerified(WITH_ID, deps)).toBe(true);
+  });
+
+  test("returns false when the current id differs", async () => {
+    const { deps } = setup(() => Promise.resolve(778));
+    expect(await isFactoryRepoIdVerified(WITH_ID, deps)).toBe(false);
+  });
+
+  test("returns false when the repository is not found", async () => {
+    const { deps } = setup(() =>
+      Promise.reject(new GitHubHttpError("not found", 404)),
+    );
+    expect(await isFactoryRepoIdVerified(WITH_ID, deps)).toBe(false);
+  });
+
+  test("rethrows the original error when the lookup fails with a server error", async () => {
+    const failure = new GitHubHttpError("bad gateway", 502);
+    const { deps } = setup(() => Promise.reject(failure));
+    await expect(isFactoryRepoIdVerified(WITH_ID, deps)).rejects.toBe(failure);
+  });
+
+  test("returns true without a lookup when factory_repo_id is not set", async () => {
+    const { deps } = setup(() => Promise.resolve(1));
+    expect(await isFactoryRepoIdVerified(WITHOUT_ID, deps)).toBe(true);
   });
 });
 
