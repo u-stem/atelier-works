@@ -41,6 +41,7 @@ import {
   DEFAULT_CHECK_UID,
   DEFAULT_POOL_SIZE,
   defaultSandboxDeps,
+  deleteLinksByInodeArgvs,
   dropWriteBitsArgv,
   formatSlotRecord,
   gatherArgv,
@@ -89,6 +90,7 @@ import {
   slotRecordUnreadableNoticeText,
   slotSkipNoticeText,
   sweepLinksArgv,
+  symlinkDetailsArgv,
   symlinksArgv,
   UnreadableSlotRecordError,
   WINDMILL_TMP_DIR,
@@ -568,6 +570,47 @@ describe("symlinksArgv", () => {
   });
 });
 
+describe("symlinkDetailsArgv", () => {
+  test("writes the inode number and content of each symlink to a file without using paths", () => {
+    expect(
+      symlinkDetailsArgv(DIRS.worktreeDir, "/scratch/out").slice(4).join(" "),
+    ).toBe(
+      `/usr/bin/find -P ${DIRS.worktreeDir} -type l -fprintf /scratch/out %i\\0%l\\0`,
+    );
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => symlinkDetailsArgv("/workspaces", "/scratch/out")).toThrow();
+  });
+});
+
+describe("deleteLinksByInodeArgvs", () => {
+  test("selects symlinks by inode number and the same content condition as the sweep", () => {
+    expect(
+      deleteLinksByInodeArgvs(DIRS.worktreeDir, ["12", "34"])[0]?.join(" "),
+    ).toBe(
+      `/usr/bin/find -P ${DIRS.worktreeDir} -type l ( -inum 12 -o -inum 34 ) ( -lname /* -o -lname *..* ) -delete`,
+    );
+  });
+
+  test("splits many inode numbers into several commands", () => {
+    const inodes = Array.from({ length: 450 }, (_, i) => String(i + 1));
+    expect(deleteLinksByInodeArgvs(DIRS.worktreeDir, inodes)).toHaveLength(3);
+  });
+
+  test("builds no command for no inode numbers", () => {
+    expect(deleteLinksByInodeArgvs(DIRS.worktreeDir, [])).toEqual([]);
+  });
+
+  test("refuses an inode number that is not digits", () => {
+    expect(() => deleteLinksByInodeArgvs(DIRS.worktreeDir, ["1 -o"])).toThrow();
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => deleteLinksByInodeArgvs("/workspaces", ["1"])).toThrow();
+  });
+});
+
 describe("gatherArgv", () => {
   const argv = gatherArgv(IDENTITY, DIRS.worktreeDir);
 
@@ -709,15 +752,21 @@ describe("removeTreeArgv", () => {
 });
 
 describe("aclLeftoverArgv", () => {
-  test("lists the entries with extended ACLs without following symlinks", () => {
+  test("lists the entries with extended ACLs from inside each directory without building paths", () => {
     expect(aclLeftoverArgv(DIRS.worktreeDir)).toEqual([
-      "/usr/bin/getfacl",
-      "-R",
+      "/usr/bin/find",
       "-P",
+      DIRS.worktreeDir,
+      "!",
+      "-type",
+      "l",
+      "-execdir",
+      "/usr/bin/getfacl",
       "-s",
       "-p",
       "--",
-      DIRS.worktreeDir,
+      "{}",
+      "+",
     ]);
   });
 
@@ -1775,6 +1824,10 @@ function fakeSandboxDeps(opts?: {
   readonly failSymlinkListing?: boolean;
   /** `readLink`が読めない(ENOENT)パス。 */
   readonly unreadablePaths?: readonly string[];
+  /** パスを使わない書き出し(inode番号と中身)を成功させる。既定は失敗させ、読めないsymlinkを全消しに任せる。 */
+  readonly readableByInode?: boolean;
+  /** inode番号で消すコマンドを失敗させる。 */
+  readonly failInodeDelete?: boolean;
   /** `removeLink`が失敗するパス。 */
   readonly removeFails?: string;
   /** symlinkの一覧の末尾に足す、`\0`で終わらない断片。 */
@@ -1785,6 +1838,8 @@ function fakeSandboxDeps(opts?: {
   readonly listingMarks?: string;
 }) {
   const removedLinks: string[] = [];
+  /** inode番号で消したsymlinkのパス。 */
+  const removedByInode: string[] = [];
   // パスと中身は、1バイトを1文字に写した文字列で持つ。UTF-8でない名前も区別できる。
   const symlinks = new Map(Object.entries(opts?.symlinks ?? {}));
   const binary = (bytes: Buffer): string => bytes.toString("latin1");
@@ -1827,6 +1882,25 @@ function fakeSandboxDeps(opts?: {
       }
       const responded = opts?.respond?.(argv);
       if (responded !== undefined) return responded;
+      if (argv.includes("-fprintf")) {
+        if (opts?.readableByInode !== true) return fail("details failed", 1);
+        listing = [...symlinks.entries()]
+          .map(([, link], index) => `${String(index + 1)}\0${link.content}\0`)
+          .join("");
+        return ok();
+      }
+      if (argv.includes("-inum")) {
+        if (opts?.failInodeDelete === true) return fail("delete failed", 1);
+        const wanted = new Set(
+          argv.flatMap((arg, i) => (argv[i - 1] === "-inum" ? [arg] : [])),
+        );
+        for (const [index, path] of [...symlinks.keys()].entries()) {
+          if (!wanted.has(String(index + 1))) continue;
+          removedByInode.push(path);
+          symlinks.delete(path);
+        }
+        return ok();
+      }
       if (argv.includes("-fprint0") && opts?.failSymlinkListing === true)
         return fail("listing failed", 1);
       if (argv.includes("-fprint0")) {
@@ -1981,6 +2055,7 @@ function fakeSandboxDeps(opts?: {
     onNotice,
     symlinks,
     removedLinks,
+    removedByInode,
     listingLimits,
     listingNames,
     imageChecks: () => imageChecks,
@@ -2631,6 +2706,90 @@ describe("escapingSymlinks", () => {
     expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
       `could not inspect a symlink, so it was left: ${JSON.stringify(`${WT}/bad`)}`,
     );
+  });
+
+  describe("a symlink whose path cannot be read", () => {
+    const LONG = `${WT}/long`;
+    const opts = { unreadablePaths: [LONG], readableByInode: true };
+
+    test("removes it by its inode number", async () => {
+      const { fake, sandbox } = await preparedWith(opts);
+      fake.symlinks.set(LONG, OUT);
+      await sandbox.escapingSymlinks(DIRS);
+      expect(fake.removedByInode).toEqual([LONG]);
+    });
+
+    test("lists it as removed", async () => {
+      const { fake, sandbox } = await preparedWith(opts);
+      fake.symlinks.set(LONG, OUT);
+      expect((await sandbox.escapingSymlinks(DIRS)).removed).toEqual([LONG]);
+    });
+
+    test("does not call it a problem", async () => {
+      const { fake, sandbox } = await preparedWith(opts);
+      fake.symlinks.set(LONG, OUT);
+      expect((await sandbox.escapingSymlinks(DIRS)).problems).toEqual([]);
+    });
+
+    test("does not sweep", async () => {
+      const { fake, sandbox } = await preparedWith(opts);
+      fake.symlinks.set(LONG, OUT);
+      await sandbox.escapingSymlinks(DIRS);
+      expect(argvOf(fake.calls)).not.toContainEqual(sweepLinksArgv(WT));
+    });
+
+    test("leaves one whose content points inside", async () => {
+      const { fake, sandbox } = await preparedWith(opts);
+      fake.symlinks.set(LONG, { content: "sibling", resolved: null });
+      await sandbox.escapingSymlinks(DIRS);
+      expect(fake.removedByInode).toEqual([]);
+    });
+
+    test("keeps one that existed before the check with the same content", async () => {
+      const fake = fakeSandboxDeps({ ...opts, symlinks: { [LONG]: OUT } });
+      const sandbox = sandboxOf(fake.deps);
+      await sandbox.prepare(DIRS);
+      await sandbox.escapingSymlinks(DIRS);
+      expect(fake.removedByInode).toEqual([]);
+    });
+
+    test("removes one that existed before the check when its content changed", async () => {
+      const fake = fakeSandboxDeps({ ...opts, symlinks: { [LONG]: OUT } });
+      const sandbox = sandboxOf(fake.deps);
+      await sandbox.prepare(DIRS);
+      fake.symlinks.set(LONG, { content: "/etc/shadow", resolved: null });
+      await sandbox.escapingSymlinks(DIRS);
+      expect(fake.removedByInode).toEqual([LONG]);
+    });
+
+    test("reports a changed one that existed before the check as a problem", async () => {
+      const fake = fakeSandboxDeps({ ...opts, symlinks: { [LONG]: OUT } });
+      const sandbox = sandboxOf(fake.deps);
+      await sandbox.prepare(DIRS);
+      fake.symlinks.set(LONG, { content: "/etc/shadow", resolved: null });
+      expect((await sandbox.escapingSymlinks(DIRS)).problems).toContain(
+        `a symlink with a path too long to restore existed before the check and was changed, so it was removed: ${JSON.stringify(LONG)}`,
+      );
+    });
+
+    test("falls back to the sweep when the inode delete fails", async () => {
+      const { fake, sandbox } = await preparedWith({
+        ...opts,
+        failInodeDelete: true,
+      });
+      fake.symlinks.set(LONG, OUT);
+      await sandbox.escapingSymlinks(DIRS);
+      expect(argvOf(fake.calls)).toContainEqual(sweepLinksArgv(WT));
+    });
+
+    test("falls back to the sweep when the contents cannot be read", async () => {
+      const { fake, sandbox } = await preparedWith({
+        unreadablePaths: [LONG],
+      });
+      fake.symlinks.set(LONG, OUT);
+      await sandbox.escapingSymlinks(DIRS);
+      expect(argvOf(fake.calls)).toContainEqual(sweepLinksArgv(WT));
+    });
   });
 
   test("reports a symlink that cannot be removed and still removes the others", async () => {
