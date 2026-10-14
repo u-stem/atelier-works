@@ -1,8 +1,18 @@
 import { describe, expect, test } from "bun:test";
+import type { NotifyBestEffortResult } from "../../f/factory/lib/discord.ts";
 import { logger } from "../../f/factory/lib/log.ts";
-import { computeYesterdayRangeJst } from "../../f/factory/lib/summary_support.ts";
+import {
+  computeYesterdayRangeJst,
+  type DayRange,
+  planSummaryDays,
+} from "../../f/factory/lib/summary_support.ts";
 import type { WorkerLoadSummary } from "../../f/factory/lib/worker_load_support.ts";
-import { readWorkerLoad } from "../../f/factory/notify_daily_summary.ts";
+import {
+  type DailySummaryResult,
+  readWorkerLoad,
+  type SummarizedDay,
+  summarizePendingDays,
+} from "../../f/factory/notify_daily_summary.ts";
 
 const RANGE = computeYesterdayRangeJst(new Date("2026-10-13T00:05:00Z"));
 
@@ -80,6 +90,161 @@ describe("readWorkerLoad", () => {
   test("does not warn when there is simply no record", async () => {
     const { log, lines } = captureLog();
     await readWorkerLoad(RANGE, () => Promise.resolve(null), log);
+    expect(lines).toHaveLength(0);
+  });
+});
+
+describe("summarizePendingDays", () => {
+  // 2026-10-14T00:05:00ZはJSTで2026-10-14 09:05。昨日は2026-10-13。
+  const NOW = new Date("2026-10-14T00:05:00Z");
+  const SENT: NotifyBestEffortResult = { status: "sent" };
+
+  function resultFor(range: DayRange): DailySummaryResult {
+    return {
+      day: range.label,
+      run_count: 0,
+      total_cost_usd: 0,
+      failure_count: 0,
+      approved_count: 0,
+      rejected_count: 0,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+    };
+  }
+
+  function setup(options: {
+    lastDay: string | null;
+    delivery?: (range: DayRange) => NotifyBestEffortResult;
+    failOn?: string;
+  }) {
+    const { log, lines } = captureLog();
+    const summarized: string[] = [];
+    const saved: string[] = [];
+    const run = () =>
+      summarizePendingDays(planSummaryDays(options.lastDay, NOW), {
+        summarizeDay: (range): Promise<SummarizedDay> => {
+          summarized.push(range.label);
+          if (range.label === options.failOn) {
+            return Promise.reject(new Error("aggregate failed"));
+          }
+          return Promise.resolve({
+            result: resultFor(range),
+            delivery: options.delivery?.(range) ?? SENT,
+          });
+        },
+        saveLastDay: (label) => {
+          saved.push(label);
+          return Promise.resolve();
+        },
+        log,
+      });
+    return { run, summarized, saved, lines };
+  }
+
+  test("summarizes the missed days from oldest to newest", async () => {
+    const { run, summarized } = setup({ lastDay: "2026-10-10" });
+    await run();
+    expect(summarized).toEqual(["2026-10-11", "2026-10-12", "2026-10-13"]);
+  });
+
+  test("saves the day after each successful summary", async () => {
+    const { run, saved } = setup({ lastDay: "2026-10-10" });
+    await run();
+    expect(saved).toEqual(["2026-10-11", "2026-10-12", "2026-10-13"]);
+  });
+
+  test("returns the summarized days", async () => {
+    const { run } = setup({ lastDay: "2026-10-11" });
+    const result = await run();
+    expect(result.days.map((day) => day.day)).toEqual([
+      "2026-10-12",
+      "2026-10-13",
+    ]);
+  });
+
+  test("does nothing when there is no day to summarize", async () => {
+    const { run, summarized } = setup({ lastDay: "2026-10-13" });
+    await run();
+    expect(summarized).toEqual([]);
+  });
+
+  test("rejects when a day fails to aggregate", async () => {
+    const { run } = setup({ lastDay: "2026-10-10", failOn: "2026-10-12" });
+    await expect(run()).rejects.toThrow("aggregate failed");
+  });
+
+  test("does not save the day that failed to aggregate", async () => {
+    const { run, saved } = setup({
+      lastDay: "2026-10-10",
+      failOn: "2026-10-12",
+    });
+    await run().catch(() => undefined);
+    expect(saved).toEqual(["2026-10-11"]);
+  });
+
+  test("does not summarize later days after a failure", async () => {
+    const { run, summarized } = setup({
+      lastDay: "2026-10-10",
+      failOn: "2026-10-12",
+    });
+    await run().catch(() => undefined);
+    expect(summarized).toEqual(["2026-10-11", "2026-10-12"]);
+  });
+
+  test("does not save a day whose notification was not sent", async () => {
+    const { run, saved } = setup({
+      lastDay: "2026-10-10",
+      delivery: (range) =>
+        range.label === "2026-10-12"
+          ? { status: "not_sent", reason: "http 500" }
+          : SENT,
+    });
+    await run();
+    expect(saved).toEqual(["2026-10-11"]);
+  });
+
+  test("stops at the day whose notification was not sent", async () => {
+    const { run, summarized } = setup({
+      lastDay: "2026-10-10",
+      delivery: (range) =>
+        range.label === "2026-10-12"
+          ? { status: "not_sent", reason: "http 500" }
+          : SENT,
+    });
+    await run();
+    expect(summarized).toEqual(["2026-10-11", "2026-10-12"]);
+  });
+
+  test("reports the day whose notification was not sent", async () => {
+    const { run } = setup({
+      lastDay: "2026-10-10",
+      delivery: (range) =>
+        range.label === "2026-10-12"
+          ? { status: "not_sent", reason: "http 500" }
+          : SENT,
+    });
+    const result = await run();
+    expect(result.undelivered_day).toBe("2026-10-12");
+  });
+
+  test("saves the day when no webhook is configured", async () => {
+    const { run, saved } = setup({
+      lastDay: "2026-10-12",
+      delivery: () => ({ status: "no_webhook" }),
+    });
+    await run();
+    expect(saved).toEqual(["2026-10-13"]);
+  });
+
+  test("warns about the days skipped beyond the limit", async () => {
+    const { run, lines } = setup({ lastDay: "2026-10-01" });
+    await run();
+    expect(lines.join("\n")).toContain("skipped");
+  });
+
+  test("does not warn when no day is skipped", async () => {
+    const { run, lines } = setup({ lastDay: "2026-10-10" });
+    await run();
     expect(lines).toHaveLength(0);
   });
 });

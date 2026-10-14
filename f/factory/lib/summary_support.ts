@@ -7,7 +7,7 @@
 
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
-import { isNumber, isString } from "./types.ts";
+import { isNumber, isRecord, isString } from "./types.ts";
 import {
   DAILY_GAP_THRESHOLD_SECONDS,
   DAILY_LAG_THRESHOLD_SECONDS,
@@ -34,24 +34,97 @@ function formatDateUtc(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** JSTの日付の0時を「UTCの0時」として表した時刻(ミリ秒)から、その日の範囲を作る。 */
+function dayRangeFromShiftedMidnight(shiftedMidnightMs: number): DayRange {
+  return {
+    start: new Date(shiftedMidnightMs - JST_OFFSET_MS),
+    end: new Date(shiftedMidnightMs + DAY_MS - JST_OFFSET_MS),
+    label: formatDateUtc(new Date(shiftedMidnightMs)),
+  };
+}
+
+/** `now`が属するJSTの日の0時を、「UTCの0時」として表した時刻(ミリ秒)で返す。 */
+function todayShiftedMidnightMs(now: Date): number {
+  const jstShifted = new Date(now.getTime() + JST_OFFSET_MS);
+  return Date.UTC(
+    jstShifted.getUTCFullYear(),
+    jstShifted.getUTCMonth(),
+    jstShifted.getUTCDate(),
+  );
+}
+
 /**
  * `now`が属するJSTの日の前日を、UTCの時刻の範囲`[start, end)`と
  * `YYYY-MM-DD`のラベルで返す(JSTはUTC+9固定、夏時間なし)。
  * 毎日09:00(Asia/Tokyo)に動く`notify_daily_summary.ts`の「前日」に当たる。
  */
 export function computeYesterdayRangeJst(now: Date): DayRange {
-  const jstShifted = new Date(now.getTime() + JST_OFFSET_MS);
-  const todayJstMidnightUtcMs = Date.UTC(
-    jstShifted.getUTCFullYear(),
-    jstShifted.getUTCMonth(),
-    jstShifted.getUTCDate(),
-  );
-  const yesterdayJstMidnightUtcMs = todayJstMidnightUtcMs - DAY_MS;
-  return {
-    start: new Date(yesterdayJstMidnightUtcMs - JST_OFFSET_MS),
-    end: new Date(todayJstMidnightUtcMs - JST_OFFSET_MS),
-    label: formatDateUtc(new Date(yesterdayJstMidnightUtcMs)),
-  };
+  return dayRangeFromShiftedMidnight(todayShiftedMidnightMs(now) - DAY_MS);
+}
+
+const DAY_LABEL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * `YYYY-MM-DD`を、その日のJSTの0時を「UTCの0時」として表した時刻(ミリ秒)にする。
+ * 形式が違うときと、存在しない日付(2月30日など)は`null`を返す。
+ */
+function parseDayLabel(label: string): number | null {
+  const match = DAY_LABEL_PATTERN.exec(label);
+  if (match === null) {
+    return null;
+  }
+  const ms = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return formatDateUtc(new Date(ms)) === label ? ms : null;
+}
+
+/** 一度の実行で遡って出す日数の上限。 */
+export const MAX_CATCHUP_DAYS = 7;
+
+/**
+ * Windmillのstateに保存した、最後に要約を出した日(JSTの`YYYY-MM-DD`)を読む。
+ * 形が違うもの(初回の`null`を含む)は、前回の記録が無いものとして`null`を返す。
+ */
+export function parseSummaryState(value: unknown): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const lastDay = value.last_day;
+  return isString(lastDay) && parseDayLabel(lastDay) !== null ? lastDay : null;
+}
+
+export type SummaryPlan = {
+  /** 要約を出す日。古い順。 */
+  readonly days: readonly DayRange[];
+  /** 上限を超えたために出さずに飛ばす日数。 */
+  readonly skipped_count: number;
+};
+
+/**
+ * 最後に要約を出した日`lastDay`の翌日から`now`の前日までを、古い順に並べる。
+ * - `lastDay`が`null`(初回、または読めない値)のときは、前日だけを出し、過去を遡らない。
+ * - `lastDay`が前日以降(同じ日や時計のずれによる未来)のときは、出す日が無い。
+ * - 対象が`maxDays`を超えるときは、新しい方の`maxDays`日だけを出し、
+ *   古い日は飛ばして`skipped_count`に数える。
+ *   日次の要約は古い日ほど読まれにくく、長い停止の後に何通も続けて出さないため。
+ */
+export function planSummaryDays(
+  lastDay: string | null,
+  now: Date,
+  maxDays: number = MAX_CATCHUP_DAYS,
+): SummaryPlan {
+  const yesterdayMs = todayShiftedMidnightMs(now) - DAY_MS;
+  const lastMs = lastDay === null ? null : parseDayLabel(lastDay);
+  const firstMs = lastMs === null ? yesterdayMs : lastMs + DAY_MS;
+  if (firstMs > yesterdayMs) {
+    return { days: [], skipped_count: 0 };
+  }
+  const total = Math.round((yesterdayMs - firstMs) / DAY_MS) + 1;
+  const skipped = Math.max(0, total - maxDays);
+  const days: DayRange[] = [];
+  for (let ms = firstMs + skipped * DAY_MS; ms <= yesterdayMs; ms += DAY_MS) {
+    days.push(dayRangeFromShiftedMidnight(ms));
+  }
+  return { days, skipped_count: skipped };
 }
 
 /**

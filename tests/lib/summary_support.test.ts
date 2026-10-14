@@ -6,6 +6,9 @@ import {
   getApprovalSummary,
   getCleanupSummary,
   getWorkerLoadSummary,
+  MAX_CATCHUP_DAYS,
+  parseSummaryState,
+  planSummaryDays,
 } from "../../f/factory/lib/summary_support.ts";
 import {
   DAILY_GAP_THRESHOLD_SECONDS,
@@ -86,6 +89,122 @@ describe("computeYesterdayRangeJst", () => {
 });
 
 const RANGE = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
+
+describe("parseSummaryState", () => {
+  test("reads the last summarized day", () => {
+    expect(parseSummaryState({ last_day: "2026-10-13" })).toBe("2026-10-13");
+  });
+
+  test("returns null for the initial empty state", () => {
+    expect(parseSummaryState(null)).toBeNull();
+  });
+
+  test("returns null when last_day is not a string", () => {
+    expect(parseSummaryState({ last_day: 20261013 })).toBeNull();
+  });
+
+  test("returns null when last_day is not YYYY-MM-DD", () => {
+    expect(parseSummaryState({ last_day: "2026/10/13" })).toBeNull();
+  });
+
+  test("returns null when last_day is not a real calendar day", () => {
+    expect(parseSummaryState({ last_day: "2026-02-30" })).toBeNull();
+  });
+});
+
+describe("planSummaryDays", () => {
+  // 2026-10-14T00:05:00ZはJSTで2026-10-14 09:05。昨日は2026-10-13。
+  const NOW = new Date("2026-10-14T00:05:00Z");
+
+  function labels(lastDay: string | null, now: Date = NOW): string[] {
+    return planSummaryDays(lastDay, now).days.map((day) => day.label);
+  }
+
+  test("summarizes only yesterday when there is no saved state", () => {
+    expect(labels(null)).toEqual(["2026-10-13"]);
+  });
+
+  test("summarizes only yesterday when the last summary was the day before", () => {
+    expect(labels("2026-10-12")).toEqual(["2026-10-13"]);
+  });
+
+  test("lists every missed day from oldest to newest", () => {
+    expect(labels("2026-10-10")).toEqual([
+      "2026-10-11",
+      "2026-10-12",
+      "2026-10-13",
+    ]);
+  });
+
+  test("summarizes nothing when yesterday was already summarized", () => {
+    expect(labels("2026-10-13")).toEqual([]);
+  });
+
+  test("summarizes nothing when the saved day is in the future (clock skew)", () => {
+    expect(labels("2026-10-20")).toEqual([]);
+  });
+
+  test("crosses a month boundary", () => {
+    // 2026-11-02T00:05:00ZはJSTで2026-11-02 09:05。昨日は2026-11-01。
+    expect(labels("2026-10-30", new Date("2026-11-02T00:05:00Z"))).toEqual([
+      "2026-10-31",
+      "2026-11-01",
+    ]);
+  });
+
+  test("crosses a year boundary", () => {
+    expect(labels("2026-12-30", new Date("2027-01-02T00:05:00Z"))).toEqual([
+      "2026-12-31",
+      "2027-01-01",
+    ]);
+  });
+
+  test("crosses a leap day", () => {
+    expect(labels("2028-02-27", new Date("2028-03-01T00:05:00Z"))).toEqual([
+      "2028-02-28",
+      "2028-02-29",
+    ]);
+  });
+
+  test("keeps all days when the gap is exactly the limit", () => {
+    expect(labels("2026-10-06")).toHaveLength(MAX_CATCHUP_DAYS);
+  });
+
+  test("skips none when the gap is exactly the limit", () => {
+    expect(planSummaryDays("2026-10-06", NOW).skipped_count).toBe(0);
+  });
+
+  test("keeps only the newest days when the gap exceeds the limit", () => {
+    expect(labels("2026-10-01")).toEqual([
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11",
+      "2026-10-12",
+      "2026-10-13",
+    ]);
+  });
+
+  test("counts the days dropped beyond the limit", () => {
+    expect(planSummaryDays("2026-10-01", NOW).skipped_count).toBe(5);
+  });
+
+  test("gives each day the 00:00 JST start expressed in UTC", () => {
+    const [day] = planSummaryDays("2026-10-11", NOW).days;
+    expect(day?.start.toISOString()).toBe("2026-10-11T15:00:00.000Z");
+  });
+
+  test("gives each day a one-day span ending at the next 00:00 JST", () => {
+    const [day] = planSummaryDays("2026-10-11", NOW).days;
+    expect(day?.end.toISOString()).toBe("2026-10-12T15:00:00.000Z");
+  });
+
+  test("matches computeYesterdayRangeJst for yesterday", () => {
+    const [day] = planSummaryDays(null, NOW).days;
+    expect(day).toEqual(computeYesterdayRangeJst(NOW));
+  });
+});
 
 describe("getAgentRunSummary", () => {
   test("queries factory.agent_runs", async () => {
