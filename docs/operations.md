@@ -1195,10 +1195,11 @@ CIが失敗したheadを見つけると、通知`pr_ci_failed`を残し、Discor
 自動で直す対象の失敗だけは、直せるかが決まってから届く([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。
 リンク先の実行のログで原因を確かめ、PRに修正を入れる。
 metadataジョブの失敗なら、`mise run metadata`を実行して差分をコミットする。
-Factoryが作るPR(同じリポジトリの`factory/`ブランチ)では、CIが再生成の結果をartifact(`metadata-patch`)に出す([CIのメタデータの検査](setup.md#ciのメタデータの検査))。
-Factoryがそのパッチを適用してPRを直す処理は未実装なので、artifactが出ていても、人が`mise run metadata`で直す。
-`mise run metadata`はローカルのWindmillに接続するため、先に`mise run up`でスタックを起動しておく([セットアップ](setup.md#gitのフック))。
+`mise run metadata`はローカルのWindmillに接続する。
+先に`mise run up`でスタックを起動しておく([セットアップ](setup.md#gitのフック))。
 metadataジョブはWindmillの起動やログインでも落ちるので、`mise run metadata`で差分が出ないときは、実行をやり直す。
+Factoryが作るPR(同じリポジトリの`factory/`ブランチ)では、CIが再生成の結果をartifact(`metadata-patch`)に出す([CIのメタデータの検査](setup.md#ciのメタデータの検査))。
+artifactが出ていても、PRには適用されない。人が`mise run metadata`を実行して差分をコミットする。
 取り消しやフレークなら、実行をやり直す。
 通知は、次のときに自動で解決される。
 
