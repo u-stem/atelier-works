@@ -126,7 +126,7 @@ describe("ciRoundRetryRefusal", () => {
   test("refuses a pr_fix of a CI round", () => {
     expect(
       ciRoundRetryRefusal({ kind: "pr_fix", ci_check_id: 9, id: 5 }),
-    ).toContain("re-evaluated automatically");
+    ).toContain("returns the row to failed");
   });
 
   test("names the work item in the refusal", () => {

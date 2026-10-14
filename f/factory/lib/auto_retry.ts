@@ -1,7 +1,7 @@
 // イメージが古くて止まった作業項目を、原因が直った後に自動で再開する。
 //
 // 対象は、実装(`issue`)の`needs_human`と、PR修正(`pr_fix`)の`blocked`のうち、
-// 止まった理由が`AUTO_RETRY_REASON_PREFIXES`のどれかで始まるものである。
+// 止まった理由が`AUTO_RETRY_REASON_PREFIXES`(`auto_retry_reasons.ts`)のどれかで始まるものである。
 // 理由は明示した許可リストで扱う。許可リストに無い理由は、人が`retry_work_item`で再開する。
 // 稼働中のworkerの問題(誰でも書けるパス)の理由は載せない。直ったことを示す自動の印が無く、
 // 人が閉じてnoticeを解決するまで続くため、自動で再開すると同じ理由で止まり続ける。
@@ -18,17 +18,11 @@
 // - 同じ作業項目の自動の再開は、`AUTO_RETRY_MAX_RESTARTS`回までである。
 // - 要件が承認済みでないIssueと、`implement_enabled`が無効のIssueは、要件定義を作り直さないよう再開しない。
 
-import { CHECK_IMAGE_STALE_REASON } from "./check_sandbox.ts";
 import type { AutoRetryCandidate } from "./db.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./implement_loop.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type { WorkItemStatus } from "./types.ts";
-
-/** 自動で再開してよい止まった理由の先頭。 */
-export const AUTO_RETRY_REASON_PREFIXES: readonly string[] = [
-  `${CHECK_IMAGE_STALE_REASON}: `,
-];
 
 /** 自動の再開の遷移の注記の先頭。再開の回数をこの注記で数える。 */
 export const AUTO_RETRY_NOTE_PREFIX = "auto_retry: ";

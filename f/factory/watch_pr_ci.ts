@@ -2,19 +2,30 @@
 // headのコミット単位で判定する。失敗したheadは要対応のnoticeとDiscordで知らせ、
 // 同じPRのheadが通ったら、失敗のnoticeを自動で解決する。閉じたPRの行は整理する。
 // 観測と通知だけで、PRにもリポジトリにも書き込まない。Claudeにログは渡さない。
+// 失敗を直す作業項目が終わった`fixing`の行は、回復で`failed`か`superseded`に戻す。
+// 回復は設定`pr_ci_watch_enabled`に依らず動く。作業項目の起動はしない。
 //
 // 流れと判断は`./lib/pr_ci_watch.ts`にあり、このファイルは入出力をつなぐだけ。
 // 対象は、作業項目の`pr_url`から引いたPRのうち、許可リスト(`repo_allowlist`と照合済みの`owners`、
 // 常に対象の`factory_repo`)に合うリポジトリのものである。
 // GITHUB_TOKENにActionsの読み取り権限が無いリポジトリは、`pr_ci_check_denied`のnoticeで知らせる。
-// 設定`pr_ci_watch_enabled`が`false`のときは、何も読まずに終わる。
+// 設定`pr_ci_watch_enabled`が`false`のときは、回復だけを行い、発見と判定と失敗の通知はしない。
+// このときはオーナーの照合も行わず、設定に合うリポジトリのPRだけを読む(`buildRecoveryRepoGates`)。
+// 照合に伴う通知は足さない。ただし、回復がPRを読めず403か404になると、`pr_ci_check_denied`は足しうる。
+// 判定が動かない間は、この通知は解決されない。
+// 回復の対象の行が無ければ、何も読まずに終わる。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  findOrphanFixingPrCiChecks,
+  getWorkItem,
+  latestFixRound,
+  latestStatusEvent,
   listFailedPrCiChecks,
+  listFixingPrCiChecks,
   listNoCiPrCiChecksToRecheck,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
@@ -22,6 +33,7 @@ import {
   markPrCiNotified,
   recordFailure,
   recordPrCiCheck,
+  releaseFixingPrCiCheck,
   resolveUnresolvedNoticesByPrefix,
   touchPrCiCheck,
   transitionPrCiCheck,
@@ -35,10 +47,14 @@ import {
 } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
+import { readFixItemState } from "./lib/pr_ci_fix_recovery.ts";
 import {
+  buildRecoveryRepoGates,
   buildRepoGates,
   PR_CI_WATCH_IDLE_RESULT,
+  type PrCiWatchDeps,
   type PrCiWatchResult,
+  runPrCiRecovery,
   runPrCiWatch,
   TRACKED_PR_LIMIT,
 } from "./lib/pr_ci_watch.ts";
@@ -73,7 +89,11 @@ export async function main(): Promise<PrCiWatchResult> {
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
-  if (!config.pr_ci_watch_enabled) {
+  // 無効のときは、修正中の行が無ければ何も読まずに終わる。回復の対象がある間だけ、GitHubを読む。
+  if (
+    !config.pr_ci_watch_enabled &&
+    (await listFixingPrCiChecks(1)).length === 0
+  ) {
     log.info("pr ci watch is disabled");
     return PR_CI_WATCH_IDLE_RESULT;
   }
@@ -84,16 +104,24 @@ export async function main(): Promise<PrCiWatchResult> {
   const client: GhClient = { run: runCommand, ghToken };
 
   // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
-  const verified = await filterVerifiedOwners(config.owners, {
-    getAccountId: (name) => getAccountId(client, name),
-    recordFailure: (step, err) => recordFailureSafe(step, err, log),
-    addNotice: (record) => addNoticeUnlessUnresolved(record),
-  });
-  const result = await runPrCiWatch({
+  // 無効のときは、照合のGitHubの呼び出しとnoticeの追加を避けるため、照合せずに設定だけで決める。
+  const gates = config.pr_ci_watch_enabled
+    ? buildRepoGates(
+        config,
+        (
+          await filterVerifiedOwners(config.owners, {
+            getAccountId: (name) => getAccountId(client, name),
+            recordFailure: (step, err) => recordFailureSafe(step, err, log),
+            addNotice: (record) => addNoticeUnlessUnresolved(record),
+          })
+        ).owners,
+      )
+    : buildRecoveryRepoGates(config);
+  const deps: PrCiWatchDeps = {
     now: () => new Date(),
     log,
     instanceName: config.instance_name,
-    ...buildRepoGates(config, verified.owners),
+    ...gates,
     listTrackedItems: async () => {
       const items = await listPrOpenIssueWorkItems(
         new Date(Date.now() - config.tracked_pr_days * DAY_MS),
@@ -118,6 +146,17 @@ export async function main(): Promise<PrCiWatchResult> {
     listNoCi: (checkedBefore, limit) =>
       listNoCiPrCiChecksToRecheck(checkedBefore, limit),
     transition: (id, from, to) => transitionPrCiCheck(id, from, to),
+    listFixing: (limit) => listFixingPrCiChecks(limit),
+    listOrphanFixing: (limit) => findOrphanFixingPrCiChecks(limit),
+    readFixItem: (workItemId) =>
+      readFixItemState(workItemId, {
+        getWorkItem: (id) => getWorkItem(id),
+        latestStatusNote: async (id, status) =>
+          (await latestStatusEvent(id, status))?.note ?? null,
+        hasPushedCommits: async (id) =>
+          ((await latestFixRound(id))?.commit_shas.length ?? 0) > 0,
+      }),
+    release: (id, options) => releaseFixingPrCiCheck(id, options),
     touch: (id) => touchPrCiCheck(id),
     markNotified: (id, reason) => markPrCiNotified(id, reason),
     addNotice: (record) => addNoticeUnlessUnresolved(record),
@@ -125,7 +164,14 @@ export async function main(): Promise<PrCiWatchResult> {
       resolveUnresolvedNoticesByPrefix(kind, messagePrefix, resolvedBy),
     notify: (event) => notifyBestEffort(discordWebhookUrl, event, log),
     recordFailure: (step, err) => recordFailureSafe(step, err, log),
-  });
+  };
+  if (!config.pr_ci_watch_enabled) {
+    log.info("pr ci watch is disabled; recovering fixing rows only");
+    const recovered = await runPrCiRecovery(deps);
+    log.info("pr ci recovery finished", { ...recovered });
+    return recovered;
+  }
+  const result = await runPrCiWatch(deps);
   log.info("pr ci watch finished", { ...result });
   return result;
 }

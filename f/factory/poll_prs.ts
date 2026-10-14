@@ -72,6 +72,7 @@ import {
   type PrDecision,
   recordLabelerCheckLimit,
 } from "./lib/poll_support.ts";
+import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import {
   hasLabel,
   TERMINAL_WORK_ITEM_STATUSES,
@@ -843,13 +844,10 @@ async function startFix(
   // `startReview`と同じ)。トリガーラベルを消費した後は、DB
   // (`listTrackedPrs`)から見つけ直す。
   // 応答がジョブIDでなければ例外にする(扱いは`startReview`と同じ)。
-  const flowJobId = parseFlowJobId(
-    await wmill.runFlowAsync("f/factory/pr_fix", {
-      work_item_id: workItemId,
-    }),
-    "runFlowAsync",
-  );
-  await setFlowJobId(workItemId, flowJobId);
+  await launchPrFixFlow(workItemId, {
+    runFlowAsync: (flowPath, args) => wmill.runFlowAsync(flowPath, args),
+    setFlowJobId,
+  });
 }
 
 export type PrDecisionHandlers = {

@@ -4,15 +4,10 @@ import {
   AUTO_RETRY_LIST_LIMIT,
   AUTO_RETRY_MAX_RESTARTS,
   AUTO_RETRY_NOTE_PREFIX,
-  AUTO_RETRY_REASON_PREFIXES,
   type AutoRetryDeps,
   autoRetryPlan,
   retryStaleImageItems,
 } from "../../f/factory/lib/auto_retry.ts";
-import {
-  CHECK_IMAGE_STALE_REASON,
-  CHECK_RUNTIME_UNSAFE_REASON,
-} from "../../f/factory/lib/check_sandbox.ts";
 import type { AutoRetryCandidate } from "../../f/factory/lib/db.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
@@ -83,20 +78,6 @@ function fakeDeps(
   };
   return { deps, rec };
 }
-
-describe("AUTO_RETRY_REASON_PREFIXES", () => {
-  test("contains the stale image reason", () => {
-    expect(AUTO_RETRY_REASON_PREFIXES).toContain(
-      `${CHECK_IMAGE_STALE_REASON}: `,
-    );
-  });
-
-  test("does not contain the runtime unsafe reason", () => {
-    expect(AUTO_RETRY_REASON_PREFIXES).not.toContain(
-      `${CHECK_RUNTIME_UNSAFE_REASON}: `,
-    );
-  });
-});
 
 describe("autoRetryPlan", () => {
   test("restarts an implement item at the implement flow with a lease", () => {

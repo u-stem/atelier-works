@@ -1,0 +1,9 @@
+summary: '[LIB] 自動で再開してよい止まった理由'
+description: 内部ライブラリです。直接実行するものではありません。自動の再開の対象にする、止まった理由の先頭の一覧です。
+lock: '!inline f/factory/lib/auto_retry_reasons.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -438,3 +438,190 @@ export function prCiFailedNoticeMessage(input: PrCiFailedNoticeInput): string {
   const prefix = prCiNoticePrefix(input.owner, input.repo, input.prNumber);
   return `${prefix}PRのコミット${sha}でCIが失敗しました。理由: ${input.reason}。次の操作: ${prCiNextAction(input.reason)}。実行: ${input.link}`;
 }
+
+// ---------------------------------------------------------------------------
+// 失敗を直す作業の保留の理由
+// ---------------------------------------------------------------------------
+
+/** `fix_hold_reason`列の長さの上限。DBのCHECK制約と同じ値にする。 */
+export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
+
+/**
+ * 失敗を直す作業を起動しない理由(`fix_hold_reason`)の語彙。
+ * DBの検査は長さだけなので、書く側をこの型で縛る。
+ *
+ * 決定的な理由は、同じheadでは起動し直さない。headが進んで新しい行になるまで残る。
+ * - `unfixable_job`: 失敗したジョブが、ソースの編集では直せない種類(metadataなど)。
+ * - `other_conclusion`: 失敗ではなく、取り消しや期限切れなどで終わった。
+ * - `log_unavailable`: 失敗のログを読めない。
+ * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
+ * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まった。
+ *   止めた理由が語彙に写せない`blocked`は含めない。起動し直す回数は、回数の上限が止める。
+ * - `rounds_exhausted`: 直す回数の上限に達した。
+ * - `not_factory_head`: 最後のpushがFactoryのものでない。
+ *
+ * 一時的な理由は、解ければ外してよい理由である。
+ * - `main_ci_failed`: mainのCIが赤い。
+ * - `budget_exceeded`: 日次の予算を使い切った。
+ * - `not_reviewed`: 今のheadの自動レビューがまだ無い。
+ * - `last_fix_unsettled`: 直近の直す作業が、まだ終わっていない(動いている)。
+ * - `pr_draft_or_auto_merge`: PRがドラフトか、auto-mergeが有効である。
+ */
+export const PR_CI_FIX_HOLD_REASONS = [
+  "unfixable_job",
+  "other_conclusion",
+  "log_unavailable",
+  "marker_missing",
+  "fix_stopped",
+  "rounds_exhausted",
+  "not_factory_head",
+  "main_ci_failed",
+  "budget_exceeded",
+  "not_reviewed",
+  "last_fix_unsettled",
+  "pr_draft_or_auto_merge",
+] as const;
+
+export type PrCiFixHoldReason = (typeof PR_CI_FIX_HOLD_REASONS)[number];
+
+export function isPrCiFixHoldReason(
+  value: unknown,
+): value is PrCiFixHoldReason {
+  return PR_CI_FIX_HOLD_REASONS.some((reason) => reason === value);
+}
+
+export type PrCiFixHoldInfo = {
+  /** 解ければ外してよい理由か。そうでなければ、同じheadでは起動し直さない。 */
+  readonly temporary: boolean;
+  /**
+   * 保留を知らせる`pr_ci_failed`のnoticeを出す時機。
+   * 決定的な理由は保留した時点(`immediate`)、一時的な理由は保留が続いたとき(`prolonged`)だけ出す。
+   * 一時的な保留は、解ければ何も知らせずに済むためである。
+   */
+  readonly notice: "immediate" | "prolonged";
+  /** noticeと一緒にDiscordにも送るか。直す作業の流れがすでに送った理由は送らない。 */
+  readonly discord: boolean;
+  /**
+   * 人が次にすることの固定文。
+   * 理由コードごとの案内(`prCiNextAction`)と同じ常体で書き、通知の文脈に依らない案内として使う。
+   */
+  readonly nextAction: string;
+  /**
+   * 直す作業が止まった通知の、人が次にすることの固定文。
+   * 他のCI回の案内と同じ敬体で書く。1つの文字列の中で文体を混ぜない。
+   */
+  readonly stopAction: string;
+};
+
+const PR_CI_FIX_HOLD_INFO: Readonly<
+  Record<PrCiFixHoldReason, PrCiFixHoldInfo>
+> = {
+  unfixable_job: {
+    temporary: false,
+    notice: "immediate",
+    discord: true,
+    nextAction:
+      "失敗したジョブはソースの編集では直せない。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットする",
+    stopAction:
+      "失敗したジョブはソースの編集では直せません。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットしてください",
+  },
+  other_conclusion: {
+    temporary: false,
+    notice: "immediate",
+    discord: true,
+    nextAction:
+      "失敗ではなく、取り消しや期限切れなどで終わっている。実行を確かめ、取り消しやフレークなら再実行する",
+    stopAction:
+      "失敗ではなく、取り消しや期限切れなどで終わっています。実行を確かめ、取り消しやフレークなら再実行してください",
+  },
+  log_unavailable: {
+    temporary: false,
+    notice: "immediate",
+    discord: true,
+    nextAction:
+      "失敗のログをFactoryが読めない。PATのActions権限とログの保持期限を確かめ、人が直す",
+    stopAction:
+      "失敗のログをFactoryが読めません。PATのActions権限とログの保持期限を確かめ、人が直してください",
+  },
+  marker_missing: {
+    temporary: false,
+    notice: "immediate",
+    discord: true,
+    nextAction:
+      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節が無い。クローンを更新するまで、人が直す",
+    stopAction:
+      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節がありません。クローンを更新するまで、人が直してください",
+  },
+  fix_stopped: {
+    temporary: false,
+    notice: "immediate",
+    discord: false,
+    nextAction:
+      "直す作業が人の判断待ちで止まった。作業項目の理由を確かめ、人が直してPRにpushする",
+    stopAction:
+      "直す作業が人の判断待ちで止まりました。作業項目の理由を確かめ、人が直してPRにpushしてください",
+  },
+  rounds_exhausted: {
+    temporary: false,
+    notice: "immediate",
+    discord: true,
+    nextAction: "自動で直す回数の上限に達した。人が直してPRにpushする",
+    stopAction:
+      "自動で直す回数の上限に達しました。人が直してPRにpushしてください",
+  },
+  not_factory_head: {
+    temporary: false,
+    notice: "immediate",
+    discord: true,
+    nextAction:
+      "最後のpushがFactoryのものでないので、自動では直さない。人が直してPRにpushする",
+    stopAction:
+      "最後のpushがFactoryのものでないので、自動では直しません。人が直してPRにpushしてください",
+  },
+  main_ci_failed: {
+    temporary: true,
+    notice: "prolonged",
+    discord: true,
+    nextAction: "mainのCIが失敗している。mainが直るまで待つ",
+    stopAction: "mainのCIが失敗しています。mainが直るまで待ってください",
+  },
+  budget_exceeded: {
+    temporary: true,
+    notice: "prolonged",
+    discord: true,
+    nextAction:
+      "1日あたりのClaude利用予算に達している。翌日まで待つか、daily_budget_usdを引き上げる",
+    stopAction:
+      "1日あたりのClaude利用予算に達しています。翌日まで待つか、daily_budget_usdを引き上げてください",
+  },
+  not_reviewed: {
+    temporary: true,
+    notice: "prolonged",
+    discord: true,
+    nextAction: "今のheadの自動レビューが無い。レビューが付くまで待つ",
+    stopAction:
+      "今のheadの自動レビューがありません。レビューが付くまで待ってください",
+  },
+  last_fix_unsettled: {
+    temporary: true,
+    notice: "prolonged",
+    discord: true,
+    nextAction: "直近の直す作業が、まだ終わっていない。終わるまで待つ",
+    stopAction:
+      "直近の直す作業が、まだ終わっていません。終わるまで待ってください",
+  },
+  pr_draft_or_auto_merge: {
+    temporary: true,
+    notice: "prolonged",
+    discord: true,
+    nextAction:
+      "PRがドラフトか、auto-mergeが有効である。ドラフトを解除し、auto-mergeを無効にする",
+    stopAction:
+      "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にしてください",
+  },
+};
+
+/** 保留の理由の性質と、人が次にすることの固定文(常体の`nextAction`と敬体の`stopAction`)。 */
+export function prCiFixHoldInfo(reason: PrCiFixHoldReason): PrCiFixHoldInfo {
+  return PR_CI_FIX_HOLD_INFO[reason];
+}

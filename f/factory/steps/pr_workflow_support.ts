@@ -41,6 +41,8 @@ import {
 import { parseFlowJobId } from "../lib/implement_launch_support.ts";
 import { gitPointerStopReason } from "../lib/implement_loop.ts";
 import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
+import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
+import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
 import {
   ASCII_BOUNDARY_CLASS,
@@ -3523,7 +3525,7 @@ export type ReasonRule = {
   ) => string;
   /**
    * CI回(`pr_fix`のうち、CIの失敗を直す回)での次の操作。
-   * 人が取る手順と、その後の再実行が組みになった理由で、手順を残して再実行だけをCIの再評価の待ちに差し替える。
+   * 人が取る手順と、その後の再実行が組みになった理由で、手順を残して再実行だけを、自動の評価し直しを待つ案内か、PRへのpushの案内に差し替える。
    * CI回は再実行も`factory:fix`の付け直しも効かないので、`nextAction`をそのまま使えないためである。
    * 無い規則は、`nextActionForPrFix`が`nextAction`から決める。
    */
@@ -3545,23 +3547,34 @@ const RETRY_WORK_ITEM_ACTION =
   "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください";
 
 /**
- * CI回の再実行の代わりに案内する操作。
- * `watch_pr_ci`が失敗の行を評価し直すので、人は再実行も付け直しもしない。
+ * CI回で止めた理由のうち、一時的な理由(ドラフト、auto-merge)の案内。
+ * 人は再実行も付け直しもしない。保留が解けるのを待つか、PRにpushする。
+ * 待った後にFactoryが何かを始めるとは約束しない。pushして新しいheadになれば、新しい失敗として判定される。
  */
-const CI_WAIT_ACTION = "CIの再評価を待ってください";
+const CI_WAIT_ACTION =
+  "保留が解けるまで待つか、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
 
 /**
- * 人が取る手順`procedure`の後に、通常回は再実行を、CI回はCIの再評価の待ちを続ける規則の次の操作。
+ * CI回で止めた理由のうち、同じheadでは評価し直さない理由の案内。
+ * 作業項目を再実行しても、`factory:fix`を付け直しても、失敗の行は動かない。
+ * PRにpushしてheadが変わると、`watch_pr_ci`が新しい失敗として判定し直す。
+ */
+const CI_PUSH_ACTION =
+  "PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
+
+/**
+ * 人が取る手順`procedure`の後に、通常回は再実行を、CI回は`ciFollowUp`(既定はPRへのpush)を続ける規則の次の操作。
  * `procedure`は「…てから、」のように、続きを受ける形で終える。
- * `suffix`は、再実行か待ちの後ろに添える補足である。
+ * `suffix`は、再実行かCI回の続きの後ろに添える補足である。
  */
 function procedureThenRerun(
   procedure: string,
   suffix = "",
+  ciFollowUp = CI_PUSH_ACTION,
 ): Pick<ReasonRule, "nextAction" | "ciNextAction"> {
   return {
     nextAction: () => `${procedure}${RETRY_WORK_ITEM_ACTION}${suffix}`,
-    ciNextAction: () => `${procedure}${CI_WAIT_ACTION}${suffix}`,
+    ciNextAction: () => `${procedure}${ciFollowUp}${suffix}`,
   };
 }
 
@@ -3582,7 +3595,7 @@ const FORBIDDEN_CHANGE_NEXT_ACTION =
   "差分を確認し、問題なければ人が直接修正してください";
 const DIFF_SIZE_PROCEDURE = "変更を分割するか、上限を見直してから";
 const DIFF_SIZE_NEXT_ACTION = `${DIFF_SIZE_PROCEDURE}\`factory:fix\`を付け直してください`;
-const DIFF_SIZE_CI_NEXT_ACTION = `${DIFF_SIZE_PROCEDURE}、${CI_WAIT_ACTION}`;
+const DIFF_SIZE_CI_NEXT_ACTION = `${DIFF_SIZE_PROCEDURE}、${CI_PUSH_ACTION}`;
 const AUTO_MERGE_PROCEDURE = "PRのauto-mergeを無効にしてから、";
 const GITHUB_RATE_LIMIT_PROCEDURE = "GitHubのrate limitの解除を待ってから、";
 const GITHUB_RATE_LIMIT_NEXT_ACTION = `${GITHUB_RATE_LIMIT_PROCEDURE}${RETRY_WORK_ITEM_ACTION}`;
@@ -3628,11 +3641,11 @@ function leftoverProcessNextAction(flow: NextActionFlow | undefined): string {
 }
 
 /**
- * `afterFixWorkRerun`のCI回版。確かめる内容の後に、`factory:fix`の付け直しの代わりにCIの再評価の待ちを続ける。
+ * `afterFixWorkRerun`のCI回版。確かめる内容の後に、`factory:fix`の付け直しの代わりにPRへのpushを続ける。
  * `check`は「…てから」「…確かめ」のどちらの形でも、読点を挟んで続けられる。
  */
 function ciAfterFixWorkRerun(check: string): string {
-  return `${check}、${CI_WAIT_ACTION}`;
+  return `${check}、${CI_PUSH_ACTION}`;
 }
 
 /**
@@ -3807,10 +3820,22 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
 ];
 
 /**
- * CIの失敗を直す回(CI回)を止めた理由の次の操作。
- * CI回は手動でも自動でも再開しない。`watch_pr_ci`が失敗の行を見て評価し直す。
+ * CIの失敗を直す回(CI回)を止めた理由の次の操作のうち、保留の理由に写せない理由の既定。
+ * CI回は手動でも自動でも再開しない。`watch_pr_ci`は、止めた作業項目の行を同じheadでは評価し直さない。
  */
-const CI_ROUND_NEXT_ACTION = `${CI_WAIT_ACTION}。直らなければ、人が修正してください`;
+const CI_ROUND_NEXT_ACTION = `原因を確かめて人が直してから、${CI_PUSH_ACTION}`;
+
+/**
+ * 修正の前に止めた理由の次の操作。保留の理由(`fix_hold_reason`)に写せる理由は、その理由の敬体の固定文(`stopAction`)を使う。
+ * 写せない理由は、`CI_ROUND_NEXT_ACTION`にする。
+ * `match.input`は、規則が一致した理由の1項目である。
+ */
+function ciRoundStopAction(match: RegExpMatchArray): string {
+  const hold = holdReasonForStoppedItem(match.input ?? null);
+  return hold === null
+    ? CI_ROUND_NEXT_ACTION
+    : prCiFixHoldInfo(hold).stopAction;
+}
 
 export const REASON_RULES: readonly ReasonRule[] = [
   // CI回の理由は`ci round`で始まる(`lib/ci_fix_round.ts`)。接頭辞の後ろに、`: 固定の文`か
@@ -3818,7 +3843,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: reasonPattern(CI_ROUND_REASON_PREFIX, "(?:: | )([\\s\\S]+)$"),
     describe: (m) => `CIの失敗を直す回を止めました(${m[1]})`,
-    nextAction: () => CI_ROUND_NEXT_ACTION,
+    nextAction: (m) => ciRoundStopAction(m),
   },
   ...DEPENDABOT_REASON_RULES,
   // 稼働中のIssueの部分一意インデックス(`work_items_active_issue_key`)への違反。
@@ -3846,7 +3871,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: /^pull request is a draft$/,
     describe: () => "PRがドラフトです",
-    ...procedureThenRerun("ドラフトを解除してから、"),
+    ...procedureThenRerun("ドラフトを解除してから、", "", CI_WAIT_ACTION),
   },
   {
     pattern: /^head branch is the default branch$/,
@@ -4249,8 +4274,8 @@ export const REASON_RULES: readonly ReasonRule[] = [
         : GENERIC_NEXT_ACTION,
     ciNextAction: (m) =>
       GITHUB_RATE_LIMIT_REASON_PATTERN.test(m[1] ?? "")
-        ? `${GITHUB_RATE_LIMIT_PROCEDURE}${CI_WAIT_ACTION}`
-        : `${GENERIC_PROCEDURE}${CI_WAIT_ACTION}`,
+        ? `${GITHUB_RATE_LIMIT_PROCEDURE}${CI_PUSH_ACTION}`
+        : `${GENERIC_PROCEDURE}${CI_PUSH_ACTION}`,
   },
   {
     pattern: /^implement finished without a final output$/,
@@ -4419,8 +4444,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
     nextAction: () =>
       `${STALE_IMAGE_PROCEDURE}。作り直した後は、止まった作業項目が自動で再開します。自動の再開が3回の上限に達したときと、通知に版が載らないときだけ、${RETRY_WORK_ITEM_ACTION}`,
     // CI回は止まった作業項目を自動では再開しないので、再開の文は出さない。
+    // 失敗の行は、止まってから`STALE_IMAGE_WAIT_MS`の後に保留なしで戻る。その後の扱いは約束しない。
     ciNextAction: () =>
-      `${STALE_IMAGE_PROCEDURE}。作り直した後は、${CI_WAIT_ACTION}`,
+      `${STALE_IMAGE_PROCEDURE}。作り直した後、失敗の行は止まってから24時間後に保留なしで戻ります。待てないときは、${CI_PUSH_ACTION}`,
   },
   // `lib/check_sandbox.ts`の`CheckRuntimeUnsafeError`(同じステップ)。イメージは作り直さず、パスを閉じるかworkerを作り直す。
   // ボリュームのマウントポイントの権限はボリュームにあり、workerを作り直しても変わらない。
@@ -4445,7 +4471,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
     describe: () =>
       "この実行の検査コマンドなどが残したプロセスが、worktreeのロックを持ち続けています",
     nextAction: (_m, flow) => worktreeLockHeldInRunNextAction(flow),
-    ciNextAction: () => `${LOCK_HELD_PR_FIX_PROCEDURE}${CI_WAIT_ACTION}`,
+    ciNextAction: () => `${LOCK_HELD_PR_FIX_PROCEDURE}${CI_PUSH_ACTION}`,
   },
   {
     pattern: /^implement flow deadline reached after round (\d+)$/,
@@ -4504,9 +4530,9 @@ function pointsToRetryOrRelabel(action: string): boolean {
 /**
  * PR修正の理由に対する次の操作を選ぶ。
  * CI回は再実行も付け直しも案内しない。
- * CI回は`watch_pr_ci`が失敗の行を評価し直し、手動でも自動でも再開しないためである。
- * 規則が`ciNextAction`を持てば、人が取る手順を残し、再実行の部分だけをCIの再評価の待ちに差し替えたその文を使う。
- * 持たない規則は、通常回の案内が再実行か付け直しを含むときだけ、CIの再評価を待つ案内に置き換える。
+ * CI回は手動でも自動でも再開しない。回が終わると`watch_pr_ci`が失敗の行を戻すためである。
+ * 規則が`ciNextAction`を持てば、人が取る手順を残し、再実行の部分だけを、待つかpushする案内か、PRへのpushの案内に差し替えたその文を使う。
+ * 持たない規則は、通常回の案内が再実行か付け直しを含むときだけ、PRへのpushの案内(`CI_ROUND_NEXT_ACTION`)に置き換える。
  * 再実行も付け直しも含まない案内(PRを開き直す、人が直すなど)は、そのままにする。
  */
 export function nextActionForPrFix(reason: string, ciRound: boolean): string {

@@ -30,6 +30,7 @@ import {
   canTransitionPrCi,
   isPrCiReason,
   isPrCiState,
+  PR_CI_FIX_HOLD_REASON_MAX_LENGTH,
   PR_CI_STATES,
   PR_CI_SUMMARY_MAX_LENGTH,
   type PrCiState,
@@ -1054,7 +1055,7 @@ export type AutoRetryCandidate = {
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回に達したものも除く。
  * 再開できない項目が`limit`件を占めて、後ろの項目を締め出さないためである。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は除く。失敗の行は`fixing`のまま食い違うので、
- * 作業項目だけを再開しても直らない。`watch_pr_ci`が失敗の行を見て評価し直す。
+ * 作業項目だけを再開しても直らない。回が終わると`watch_pr_ci`が行を戻す。
  * 要件が未承認の項目のように、DBの条件だけでは除けないものは、呼び出し側が飛ばす。
  * noticeの解決の時刻が止まった時刻より後であることが、止まった後に原因が直ったことの印になる。
  * 止まった後の解決に限るので、再開後に同じ理由で止まった作業項目は、次の解決まで対象にならない。
@@ -4215,9 +4216,6 @@ export async function deletePrCiChecksBefore(
 // pr_ci_checks: 失敗を直す作業項目
 // ---------------------------------------------------------------------------
 
-/** `fix_hold_reason`列の長さの上限。DBのCHECK制約と同じ値にする。 */
-const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
-
 function assertPositiveId(id: number, what: string): void {
   if (!Number.isSafeInteger(id) || id <= 0) {
     throw new Error(`invalid ${what}: ${String(id)}`);
@@ -4429,6 +4427,11 @@ export type ReleaseFixingPrCiCheckOptions = {
   readonly holdReason?: string;
   /** 渡せば、`fix_work_item_id`がこの作業項目の行だけを戻す。別の作業項目に起動し直された行を戻さないため。 */
   readonly fixWorkItemId?: number;
+  /**
+   * `true`なら、`fix_work_item_id`が空の行だけを戻す。直す作業項目に結ばれていない行を戻す間に、
+   * 起動が作業項目を結んだ行を戻さないため。`fixWorkItemId`とは同時に渡せない。
+   */
+  readonly withoutFixWorkItem?: boolean;
 };
 
 /**
@@ -4436,7 +4439,8 @@ export type ReleaseFixingPrCiCheckOptions = {
  * この呼び出しで戻したら`true`を返す。条件は`state = 'fixing'`なので、別の実行が先に移した行は
  * 書き換えず、`false`を返す。同じ呼び出しを繰り返しても結果は変わらない。
  * `fix_attempts`は減らさない。
- * `holdReason`が空か64字を超えるときは、DBに触れずに例外を投げる。
+ * `holdReason`が空か64字を超えるときと、`fixWorkItemId`と`withoutFixWorkItem`を同時に渡したときは、
+ * DBに触れずに例外を投げる。
  */
 export async function releaseFixingPrCiCheck(
   id: number,
@@ -4448,8 +4452,14 @@ export async function releaseFixingPrCiCheck(
   if (options.fixWorkItemId !== undefined) {
     assertPositiveId(options.fixWorkItemId, "work item id");
   }
+  if (options.fixWorkItemId !== undefined && options.withoutFixWorkItem) {
+    throw new Error(
+      "releaseFixingPrCiCheck: fixWorkItemId and withoutFixWorkItem are exclusive",
+    );
+  }
   const holdReason = options.holdReason ?? null;
   const fixWorkItemId = options.fixWorkItemId ?? null;
+  const withoutFixWorkItem = options.withoutFixWorkItem === true;
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET state = 'failed',
@@ -4458,6 +4468,7 @@ export async function releaseFixingPrCiCheck(
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'fixing'
       AND (${fixWorkItemId}::bigint IS NULL OR fix_work_item_id = ${fixWorkItemId}::bigint)
+      AND (NOT ${withoutFixWorkItem}::boolean OR fix_work_item_id IS NULL)
     RETURNING id
   `.fetch();
   return rows.length > 0;

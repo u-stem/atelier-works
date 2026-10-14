@@ -6766,6 +6766,36 @@ describe("releaseFixingPrCiCheck", () => {
     );
   });
 
+  test("restricts the row to one without a fix work item when asked", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { withoutFixWorkItem: true }, sql);
+    expect(calls[0]?.text).toContain(
+      "AND (NOT  ? ::boolean OR fix_work_item_id IS NULL)",
+    );
+  });
+
+  test("binds the restriction to a row without a fix work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { withoutFixWorkItem: true }, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("does not restrict to a row without a fix work item by default", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, {}, sql);
+    expect(calls[0]?.values).not.toContain(true);
+  });
+
+  test("rejects a restriction to both a work item and none, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(
+      9,
+      { fixWorkItemId: 31, withoutFixWorkItem: true },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
   test("returns true when this call released the row", async () => {
     const { sql } = createFakeSqlClient([[{ id: 9 }]]);
     expect(await releaseFixingPrCiCheck(9, {}, sql)).toBe(true);
