@@ -34,6 +34,7 @@ declare namespace RT {
     retention_work_items_days: number,
     allowed_labeler_associations: string[],
     allowed_labeler_logins: string[],
+    allowed_labeler_ids: object,
     implement_enabled: boolean,
     implement_max_rounds: number,
     implement_max_turns: number,

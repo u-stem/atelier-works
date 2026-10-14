@@ -235,6 +235,7 @@ function openPr(overrides: Partial<PullRequest> = {}): PullRequest {
     mergeable: true,
     mergeableState: "clean",
     authorLogin: "dependabot[bot]",
+    authorId: null,
     authorType: "Bot",
     autoMergeEnabled: false,
     ...overrides,

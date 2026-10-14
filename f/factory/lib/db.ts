@@ -4114,6 +4114,28 @@ export async function listClaimablePrCiChecks(
   return rows.map(toPrCiCheck);
 }
 
+/**
+ * 失敗に確定して、まだ通知していない行(`notified_reason`がNULL)を、更新の古い順に最大`limit`件返す。
+ * 自動修正の対象の失敗は、確定した時点では通知しない。この一覧が、通知してよいかを状態から判断する対象になる。
+ * 状態を変えずに読み直しても`updated_at`は進まないので、通知の条件を満たさない行が先頭に残り続けても、
+ * 条件を満たした行は、更新の古い行から順に一覧を離れる。
+ */
+export async function listUnnotifiedFailedPrCiChecks(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE state = 'failed' AND notified_reason IS NULL
+    ORDER BY updated_at ASC, id ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
 export type PrCiTransition = {
   readonly state: PrCiState;
   /** 渡せば置き換える。渡さなければ今の値を残す。長さは`PR_CI_SUMMARY_MAX_LENGTH`まで。 */
@@ -4352,6 +4374,9 @@ export type ClaimPrCiCheckInput = {
  * `fix_round`と、処理済みの位置(`last_review_id`、`last_comment_id`、`last_review_comment_id`)は、
  * 同じPRの直近の`pr_fix`から写す。無ければ0にする。CIの回は、ラウンドの番号も位置も進めない。
  * `ci_check_id`には直す行のIDを入れ、CIの回を見分ける印にする。
+ * `notified_reason`はNULLに戻す。起動する行は、保留が続いたことを知らせた後かもしれない。
+ * 直す作業が失敗や停止で終わったときに、その結果を改めて通知するためである。
+ * 起動しない理由で通知した行(失敗でない結論、自動修正の対象外)は、起動しないので影響しない。
  */
 export async function claimPrCiCheckForFix(
   input: ClaimPrCiCheckInput,
@@ -4372,6 +4397,7 @@ export async function claimPrCiCheckForFix(
         SET state = 'fixing',
             fix_work_item_id = (SELECT id FROM nid),
             fix_attempts = r.fix_attempts + 1,
+            notified_reason = NULL,
             updated_at = now()
         WHERE r.id = ${input.id}::bigint AND r.state = 'failed' AND r.head_sha = ${input.headSha}
           AND r.owner = ${input.owner.toLowerCase()} AND r.repo = ${input.repo.toLowerCase()}
@@ -4524,6 +4550,12 @@ export type ReleaseFixingPrCiCheckOptions = {
    * 起動が作業項目を結んだ行を戻さないため。`fixWorkItemId`とは同時に渡せない。
    */
   readonly withoutFixWorkItem?: boolean;
+  /**
+   * `true`なら、通知した理由(`notified_reason`)を空に戻す。
+   * 一時的な保留を知らせた後に、決定的な保留へ変わった行を、改めて通知するためである。
+   * 渡した保留の理由が決定的かは、呼び出し側が判断する。
+   */
+  readonly resetNotified?: boolean;
 };
 
 /**
@@ -4552,11 +4584,13 @@ export async function releaseFixingPrCiCheck(
   const holdReason = options.holdReason ?? null;
   const fixWorkItemId = options.fixWorkItemId ?? null;
   const withoutFixWorkItem = options.withoutFixWorkItem === true;
+  const resetNotified = options.resetNotified === true;
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET state = 'failed',
         fix_work_item_id = NULL,
         fix_hold_reason = COALESCE(${holdReason}::text, fix_hold_reason),
+        notified_reason = CASE WHEN ${resetNotified}::boolean THEN NULL ELSE notified_reason END,
         updated_at = now()
     WHERE id = ${id}::bigint AND state = 'fixing'
       AND (${fixWorkItemId}::bigint IS NULL OR fix_work_item_id = ${fixWorkItemId}::bigint)
@@ -4572,6 +4606,12 @@ export type SetPrCiFixHoldOptions = {
    * 読んでから書くまでの間に、別の実行が書いた理由を上書きしないためである。
    */
   readonly expected?: string | null;
+  /**
+   * `true`なら、通知した理由(`notified_reason`)を、理由を書くのと同時に空に戻す。
+   * 一時的な保留を知らせた後に、決定的な保留へ変わった行を、改めて通知するためである。
+   * 渡した理由が決定的かは、呼び出し側が判断する。
+   */
+  readonly resetNotified?: boolean;
 };
 
 /**
@@ -4591,9 +4631,12 @@ export async function setPrCiFixHold(
   if (reason !== null) assertFixHoldReason(reason);
   const checkExpected = options.expected !== undefined;
   const expected = options.expected ?? null;
+  const resetNotified = options.resetNotified === true;
   const rows = await sql`
     UPDATE factory.pr_ci_checks
-    SET fix_hold_reason = ${reason}::text, updated_at = now()
+    SET fix_hold_reason = ${reason}::text,
+        notified_reason = CASE WHEN ${resetNotified}::boolean THEN NULL ELSE notified_reason END,
+        updated_at = now()
     WHERE id = ${id}::bigint AND state = 'failed'
       AND fix_hold_reason IS DISTINCT FROM ${reason}::text
       AND (NOT ${checkExpected}::boolean OR fix_hold_reason IS NOT DISTINCT FROM ${expected}::text)

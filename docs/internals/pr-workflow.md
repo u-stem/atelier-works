@@ -26,7 +26,7 @@ PR修正は5つのステップでできている。
 
 PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信だけである。失敗、人の対応待ち、ブロック、要件の不足といった運用上の知らせは、PRに書かずDiscordで知らせる。Issue化の提案の承認と却下の結果は、PRのスレッドに返信する。
 
-実装フローが作ったPRのCIの失敗も、PRには書かずDiscordとnoticeで知らせる。この監視はレビューと修正のフローとは独立している。設定`pr_ci_fix_enabled`が`true`のときは、失敗したPRを直す修正(CI回)を起動する。内容は[PRのCI監視の仕様](pr-ci.md)に書く。
+実装フローが作ったPRのCIの失敗も、PRには書かずDiscordとnoticeで知らせる。この監視はレビューと修正のフローとは独立している。設定`pr_ci_fix_enabled`が`true`のときは、失敗したPRを直す修正(CI回)を起動し、自動で直す対象の失敗は、直せるかが決まってから知らせる。内容は[PRのCI監視の仕様](pr-ci.md)に書く。
 
 ## 起動条件
 
@@ -73,6 +73,7 @@ PR修正の通常の回は、ラベルからしか起動しない。コメント
 
 `poll_prs`は、`factory:review`と`factory:fix`のそれぞれについて、そのラベルを最後に付けた人を、ラベルの`labeled`イベントの`actor`で確かめる。
 許可されるのは、FactoryのPATのアカウントと、`allowed_labeler_logins`に挙げたアカウントである。
+`allowed_labeler_ids`にIDを入れたアカウントは、`actor`の数値IDも一致するときだけ許可する。
 許可されない人が付けたラベルと、付与者を特定できないラベルは、外さずに残し、起動しない。
 取得の直前にも、同じ確認をもう一度行う。
 イベントを取得できなかったPRは、そのポーリングでは対象にしない。
@@ -486,6 +487,7 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | `review_label` | `factory:review` | PRレビューを起動するラベル |
 | `fix_label` | `factory:fix` | PR修正を起動するラベル |
 | `allowed_labeler_logins` | `[]` | ラベルを付けてよいアカウント。FactoryのPATのアカウントに加えて許可する |
+| `allowed_labeler_ids` | `{}` | `allowed_labeler_logins`のアカウントの数値ID。名前をキーにする。入れたアカウントは、IDも一致するときだけ許可する |
 | `allowed_labeler_associations` | `["OWNER", "MEMBER", "COLLABORATOR"]` | 修正の材料にする投稿者の関係 |
 | `repo_allowlist` | `[]` | 対象のリポジトリ。空なら`owners`のすべて |
 | `tracked_pr_days` | `30` | ラベルが外れた後もPRを追跡する日数 |

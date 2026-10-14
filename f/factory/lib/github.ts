@@ -128,6 +128,13 @@ export type GhApiResponse = {
    * 上限を超えたかを、本文に書かれた注記の文字列には頼らずに決められる。
    */
   readonly capped?: true;
+  /**
+   * `gh`プロセスの終了コード。`attemptGhApi`が付ける。
+   * ステータスが2xxでも、本文が欠けたまま`gh`が失敗したことを呼び出し側が見分けるために使う。
+   * 省略可能なのは、出力を読んだ直後の応答が終了コードを持たず、後から付けるため。
+   * 省略された応答は、終了コードが0だと確かめられていないので、呼び出し側は失敗として扱う(fail-closed)。
+   */
+  readonly exitCode?: number;
 };
 
 function parseGhApiOutput(stdout: string): GhApiResponse {
@@ -280,6 +287,13 @@ export type GhApiCallOptions = {
    * ヘッダーは先頭にあるので、先頭の半分が上限より小さい限り読める。
    */
   readonly maxOutputBytes?: number;
+  /**
+   * `gh`に`--allow-escape-sequences`を渡す。
+   * ghは、応答に端末の制御列を含むと、本文を出さずに拒否の文だけを出す。
+   * 制御列を含みうる本文(Actionsのログ)を受け取るときに指定する。
+   * 制御列の除去は呼び出し側の整形が行う。
+   */
+  readonly allowEscapeSequences?: boolean;
 };
 
 /**
@@ -336,6 +350,9 @@ async function attemptGhApi(
   if (options.acceptHeader !== undefined)
     argv.push("-H", `Accept: ${options.acceptHeader}`);
   if (options.body !== undefined) argv.push("--input", "-");
+  if (options.allowEscapeSequences === true) {
+    argv.push("--allow-escape-sequences");
+  }
 
   const stdin =
     options.body !== undefined ? JSON.stringify(options.body) : undefined;
@@ -356,7 +373,11 @@ async function attemptGhApi(
   const capped =
     options.maxOutputBytes !== undefined &&
     Buffer.byteLength(commandResult.stdout) > options.maxOutputBytes;
-  const response: GhApiResponse = capped ? { ...parsed, capped: true } : parsed;
+  const response: GhApiResponse = {
+    ...parsed,
+    ...(capped ? { capped: true as const } : {}),
+    exitCode: commandResult.exitCode,
+  };
   return {
     kind: "completed",
     response,
@@ -1233,8 +1254,8 @@ const LABEL_EVENTS_QUERY = `
             pageInfo { hasPreviousPage }
             nodes {
               __typename
-              ... on LabeledEvent { createdAt actor { __typename login } label { name } }
-              ... on UnlabeledEvent { createdAt actor { __typename login } label { name } }
+              ... on LabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
             }
           }
         }
@@ -1243,8 +1264,8 @@ const LABEL_EVENTS_QUERY = `
             pageInfo { hasPreviousPage }
             nodes {
               __typename
-              ... on LabeledEvent { createdAt actor { __typename login } label { name } }
-              ... on UnlabeledEvent { createdAt actor { __typename login } label { name } }
+              ... on LabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
             }
           }
         }
@@ -1258,6 +1279,11 @@ type LabelEvent = {
   readonly createdAt: number;
   /** 種類が`User`のactorのログイン名。actorが無いときと、`User`でないときは`null`。 */
   readonly actorLogin: string | null;
+  /**
+   * actorの数値ID(`databaseId`)。`actorLogin`が`null`のときと、応答に無いとき、
+   * 正の安全な整数でないときは`null`。
+   */
+  readonly actorId: number | null;
   readonly label: string;
 };
 
@@ -1308,10 +1334,17 @@ function parseLabelEvent(raw: unknown, context: string): LabelEvent | null {
     typeof actor.login === "string"
       ? actor.login
       : null;
+  const actorId =
+    actorLogin !== null &&
+    isRecord(actor) &&
+    isPositiveSafeInteger(actor.databaseId)
+      ? actor.databaseId
+      : null;
   return {
     kind: typename === "LabeledEvent" ? "labeled" : "unlabeled",
     createdAt,
     actorLogin,
+    actorId,
     label,
   };
 }
@@ -1367,11 +1400,19 @@ async function lastLabelEvent(
   return tied ? null : last;
 }
 
+/** トリガーラベルを付けた人。 */
+export type LabelerActor = {
+  readonly login: string;
+  /** GitHubの数値ID。応答に無いとき、正の安全な整数でないときは`null`。 */
+  readonly databaseId: number | null;
+};
+
 /**
- * `label`を最後に付けた人のログイン名を返す。IssueとPRのどちらにも使える。
+ * `label`を最後に付けた人を、ログイン名と数値IDで返す。IssueとPRのどちらにも使える。
  * ラベルは外されて別の人に付け直されていることがある。そのため
  * 見るべきなのは、いずれかのラベル付与ではなく、そのラベルの最新のイベントである。
  * 他のラベルのイベントは見ない。
+ * 数値IDは、ラベルのイベントと同じ応答で取れる。追加のAPI呼び出しは要らない。
  * 次のときは`null`を返す。呼び出し側は、判定できないものとして拒否する。
  * - そのラベルのイベントが無い。
  * - 最後のイベントが`unlabeled`である(今付いているラベルの付与者を特定できない)。
@@ -1382,15 +1423,18 @@ async function lastLabelEvent(
  * 取得に失敗したときは例外を投げる。
  * 直近のラベルのイベントの中にそのラベルのイベントが無いときは`LabelerCheckLimitError`を投げる。
  */
-export async function getLabelerLogin(
+export async function getLabelerActor(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
   label: string,
-): Promise<string | null> {
+): Promise<LabelerActor | null> {
   const last = await lastLabelEvent(client, owner, repo, number, label);
-  return last !== null && last.kind === "labeled" ? last.actorLogin : null;
+  if (last === null || last.kind !== "labeled" || last.actorLogin === null) {
+    return null;
+  }
+  return { login: last.actorLogin, databaseId: last.actorId };
 }
 
 export type ClaimIssueOptions = {
@@ -2247,6 +2291,11 @@ export type PullRequest = {
   readonly mergeable: boolean | null;
   readonly mergeableState: string | null;
   readonly authorLogin: string;
+  /**
+   * 作者の数値ID(RESTの`user.id`)。作者が無いとき、応答に無いとき、
+   * 正の安全な整数でないときは`null`。
+   */
+  readonly authorId: number | null;
   /** 作者のアカウント種別(`User` / `Bot`など)。作者が無いか不明なら`null`。 */
   readonly authorType: string | null;
   /** PRにauto-mergeが設定されているか。有効なら、条件が揃った時点でGitHubがマージする。 */
@@ -2359,6 +2408,10 @@ export async function getPr(
       isRecord(parsed.user) && typeof parsed.user.login === "string"
         ? parsed.user.login
         : "",
+    authorId:
+      isRecord(parsed.user) && isPositiveSafeInteger(parsed.user.id)
+        ? parsed.user.id
+        : null,
     authorType:
       isRecord(parsed.user) && typeof parsed.user.type === "string"
         ? parsed.user.type
@@ -4520,11 +4573,34 @@ export class GitHubCiLogError extends Error {
 }
 
 /**
+ * ログの本文が欠けたまま`gh`が終わったときの例外。
+ * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、拒否、
+ * 本文の途中の切断、timeoutで止めた取得で起きる。
+ * 本文の欠けたログを使わないために投げる。本文、stderr、終了コードを載せない。
+ * HTTPの失敗ではないので、ステータスを持たない。
+ */
+export class GitHubCiLogIncompleteError extends Error {
+  constructor() {
+    super(
+      "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
+    );
+    this.name = "GitHubCiLogIncompleteError";
+  }
+}
+
+/**
  * ジョブ(`jobId`)のログを読む。ログはJSONではないので、本文をそのまま文字列で返す。
  * 取得先は署名付きURLへの302で、`gh`が内部でたどる。URLは受け取らず、エラーにも戻り値にも出さない。
  * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
  * 本文は`CI_JOB_LOG_MAX_BYTES`で切り、切ったかは`truncated`で返す。
  * 本文は`VolatileCiLog`で包んで返す。
+ * ログは端末の制御列を含むので、`gh`に`--allow-escape-sequences`を渡す。
+ * 2xxなのに`gh`の終了コードが0以外(終了コードが無い場合を含む)のときは、
+ * 上限に達したかによらず、本文の欠けたログとして扱う。
+ * runnerは上限に達してもプロセスを止めず、先頭と末尾を残して最後まで読むので、
+ * 上限に達した正常なログは終了コード0で`truncated`のログとして返る。
+ * 一時的な切断をCIの回に持ち込まないため、欠けたときは、GETが冪等であることを使って1回だけ取り直す。
+ * 取り直しても欠けたときは、`GitHubCiLogIncompleteError`を投げる。
  * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
  * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
  * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
@@ -4537,12 +4613,30 @@ export async function getWorkflowJobLog(
 ): Promise<WorkflowJobLogResult> {
   validateOwnerRepo(owner, repo);
   assertJobId(jobId);
+  try {
+    return await fetchWorkflowJobLog(client, owner, repo, jobId);
+  } catch (error) {
+    if (!(error instanceof GitHubCiLogIncompleteError)) throw error;
+  }
+  const sleep = client.sleep ?? defaultSleep;
+  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
+  return fetchWorkflowJobLog(client, owner, repo, jobId);
+}
+
+/** `getWorkflowJobLog`の1回分。2xxで終了コードが0でなければ`GitHubCiLogIncompleteError`を投げる。 */
+async function fetchWorkflowJobLog(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  jobId: number,
+): Promise<WorkflowJobLogResult> {
   const response = await callGhApi(
     client,
     `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs`,
-    { maxOutputBytes: CI_JOB_LOG_MAX_BYTES },
+    { maxOutputBytes: CI_JOB_LOG_MAX_BYTES, allowEscapeSequences: true },
   );
   if (response.status >= 200 && response.status < 300) {
+    if (response.exitCode !== 0) throw new GitHubCiLogIncompleteError();
     return {
       kind: "ok",
       log: VolatileCiLog.of(response.bodyText),

@@ -32,6 +32,22 @@ describe("noticeGuide", () => {
     expect(noticeGuide("pr_ci_failed").action).toContain("mise run metadata");
   });
 
+  test("tells that the pull request CI notice carries the reason the automatic fix was held", () => {
+    expect(noticeGuide("pr_ci_failed").meaning).toContain(
+      "自動修正の保留の理由",
+    );
+  });
+
+  test("tells to follow the next action of the hold reason when the notice has one", () => {
+    expect(noticeGuide("pr_ci_failed").action).toContain(
+      "保留の理由が載っていなければ",
+    );
+  });
+
+  test("tells that a failure the automatic fix repaired is not notified", () => {
+    expect(noticeGuide("pr_ci_failed").note).toContain("直せた失敗");
+  });
+
   test("tells which permission the denied pull request CI check needs", () => {
     expect(noticeGuide("pr_ci_check_denied").action).toContain("Actions: Read");
   });
@@ -116,6 +132,30 @@ describe("noticeGuide", () => {
     expect(noticeGuide("implement_needs_human").action).toContain(
       "f/factory/retry_work_item",
     );
+  });
+
+  test("tells that an account with a configured id is denied when the id differs", () => {
+    expect(noticeGuide("labeler_denied").meaning).toContain(
+      "IDを入れたアカウントは、名前が同じでもIDが違う人",
+    );
+  });
+
+  test("tells that an account without a configured id is matched by name only", () => {
+    expect(noticeGuide("labeler_denied").meaning).toContain(
+      "IDを入れていないアカウントは、名前だけで照合します",
+    );
+  });
+
+  test("tells to check the configured id when the allowed person is denied", () => {
+    expect(noticeGuide("labeler_denied").action).toContain(
+      "allowed_labeler_idsのIDが合っているか",
+    );
+  });
+
+  test("gives the command that looks up an account id", () => {
+    expect(noticeGuide("labeler_denied").commands).toEqual([
+      "gh api users/<ログイン名> --jq .id",
+    ]);
   });
 
   test("tells when a lost claim needs no action", () => {

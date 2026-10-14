@@ -10,6 +10,7 @@ schema:
     - trigger_label
     - allowed_labeler_associations
     - allowed_labeler_logins
+    - allowed_labeler_ids
     - model
     - heavy_model
     - max_attempts
@@ -79,10 +80,17 @@ schema:
     allowed_labeler_logins:
       type: array
       description: >-
-        トリガーラベル(`trigger_label`、`review_label`、`fix_label`)を付けてよい、Factoryを動かすアカウント以外のGitHubのログイン名です。空の場合は、Factoryのアカウントが付けたラベルにだけ反応します。大文字小文字は区別しません。他人の入力に応じてラベルを付ける自動化のアカウントや、FactoryのPATを使う自動化は、許可しないでください。`[bot]`で終わるログイン名は設定の検証で拒否します。許可はログイン名で判定するため、アカウント名を変更したアカウントは、古い名前を他人が取れることがあるので外してください。
+        トリガーラベル(`trigger_label`、`review_label`、`fix_label`)を付けてよい、Factoryを動かすアカウント以外のGitHubのログイン名です。空の場合は、Factoryのアカウントが付けたラベルにだけ反応します。大文字小文字は区別しません。他人の入力に応じてラベルを付ける自動化のアカウントや、FactoryのPATを使う自動化は、許可しないでください。`[bot]`で終わるログイン名は設定の検証で拒否します。許可はログイン名で判定します。アカウント名を変更すると、古い名前を他人が取れることがあります。名前を変えたアカウントは外すか、`allowed_labeler_ids`にIDを入れてください。
       default: []
       items:
         type: string
+    allowed_labeler_ids:
+      type: object
+      description: >-
+        `allowed_labeler_logins`のアカウントの、GitHubの数値IDです。キーはログイン名(`allowed_labeler_logins`に含まれる名前。大文字小文字は区別しません)、値は`gh api users/<ログイン名> --jq .id`で調べた数値IDです。IDを入れたアカウントは、同じ名前でもIDが違う人が付けたラベルを許可しません。アカウント名を変更した後に別の人がその名前を取っても、拒否されます。入れないアカウントは名前だけで照合します。`[bot]`で終わるキー、`allowed_labeler_logins`に無いキー、大文字小文字だけが違う重複したキーは、設定の検証で拒否します。
+      default: {}
+      additionalProperties:
+        type: integer
     check_commands_by_repo:
       type: object
       description: >-

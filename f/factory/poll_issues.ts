@@ -48,7 +48,7 @@ import {
   GitHubRateLimitError,
   getAccountId,
   getIssue,
-  getLabelerLogin,
+  getLabelerActor,
   getViewer,
   type IssueSearchItem,
   LabelerCheckLimitError,
@@ -736,7 +736,7 @@ export async function buildIssueCandidates(
   const candidates: IssueCandidate[] = [];
   for (const item of found) {
     try {
-      const labelerLogin = await getLabelerLogin(
+      const labeler = await getLabelerActor(
         client,
         item.owner,
         item.repo,
@@ -750,7 +750,8 @@ export async function buildIssueCandidates(
         title: item.title,
         body: item.body,
         htmlUrl: item.htmlUrl,
-        labelerLogin,
+        labelerLogin: labeler === null ? null : labeler.login,
+        labelerId: labeler === null ? null : labeler.databaseId,
         hasActiveWorkItem: activeIssueKeys.has(
           `${item.owner}/${item.repo}#${item.number}`,
         ),
