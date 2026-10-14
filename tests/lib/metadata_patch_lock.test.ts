@@ -6,53 +6,11 @@ import {
   parseJsonc,
   parseLock,
 } from "../../f/factory/lib/metadata_patch_lock.ts";
-
-const INTEGRITY = `sha512-${"A".repeat(86)}==`;
-const OTHER_INTEGRITY = `sha512-${"B".repeat(86)}==`;
-
-type PackageSpec = {
-  readonly key?: string;
-  readonly ident?: string;
-  readonly registry?: string;
-  readonly meta?: unknown;
-  readonly integrity?: string;
-};
-
-/** bun.lockの形のロックを組み立てる。`front`と`back`で、それぞれの構造を差し替えられる。 */
-function buildLock(
-  options: {
-    readonly front?: unknown;
-    readonly back?: unknown;
-    readonly packages?: Record<string, PackageSpec | unknown[]>;
-    readonly deps?: Record<string, string>;
-  } = {},
-): string {
-  const deps = options.deps ?? { "left-pad": "1.3.0" };
-  const front = options.front ?? { dependencies: deps };
-  const packages = options.packages ?? {
-    "left-pad": { ident: "left-pad@1.3.0" },
-  };
-  const entries: Record<string, unknown> = {};
-  for (const [key, spec] of Object.entries(packages)) {
-    if (Array.isArray(spec)) {
-      entries[key] = spec;
-      continue;
-    }
-    entries[key] = [
-      spec.ident ?? `${key}@1.0.0`,
-      spec.registry ?? "",
-      spec.meta ?? {},
-      spec.integrity ?? INTEGRITY,
-    ];
-  }
-  const back = options.back ?? {
-    lockfileVersion: 2,
-    configVersion: 1,
-    workspaces: { "": { dependencies: deps } },
-    packages: entries,
-  };
-  return `${JSON.stringify(front, null, 2)}\n//bun.lock\n${JSON.stringify(back, null, 2)}`;
-}
+import {
+  buildLock,
+  INTEGRITY,
+  OTHER_INTEGRITY,
+} from "./metadata_patch_fixtures.ts";
 
 function failure(text: string): string {
   const result = parseLock(text);

@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] メタデータのパッチのzipの読み取り'
+description: 内部ライブラリです。直接実行するものではありません。CIが出したメタデータのパッチ(artifactのzip)を、展開の前後で大きさとパスを検査しながら安全に読みます。
 lock: '!inline f/factory/lib/metadata_patch_zip.script.lock'
 kind: script
 schema:

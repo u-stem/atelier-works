@@ -2028,7 +2028,8 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
-CIが出すメタデータのパッチを検査する`f/factory/lib/metadata_patch_manifest.ts`と、その`.script.yaml`、`.script.lock`も止める。書き換えられると、パッチの受け取り側の検査が緩むためである。
+CIが出すメタデータのパッチを検査する`f/factory/lib/metadata_patch_*.ts`の5つと、それぞれの`.script.yaml`、`.script.lock`も止める。
+書き換えられると、パッチの受け取り側の検査が緩むためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 
