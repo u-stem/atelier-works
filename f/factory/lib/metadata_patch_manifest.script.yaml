@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのパッチの検査'
+description: 内部ライブラリです。直接実行するものではありません。CIが出すメタデータのパッチの、パスの許可リストとmanifestの形を検査します。
+lock: '!inline f/factory/lib/metadata_patch_manifest.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

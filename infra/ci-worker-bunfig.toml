@@ -1,0 +1,7 @@
+# CIの`windmill_worker_ci`が、`/root/.bunfig.toml`として読み取り専用でマウントする。
+# bunは依存のinstall scriptを、既定で信頼する一覧(trustedDependencies)にあるパッケージだけ実行する。
+# また、`NPM_CONFIG_IGNORE_SCRIPTS`を読まない。
+# メタデータの作り直しで依存を入れるとき、どのパッケージのinstall scriptも動かさないために、
+# bunfigで無効にする。
+[install]
+ignoreScripts = true

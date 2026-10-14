@@ -211,14 +211,25 @@ jobs:
     # 飛ばしたコミットが古いメタデータのままマージされると、mainの自動反映がそれを配る。
     # `check`ジョブから独立させる。
     # 関係する変更が無いときは、`scope`ジョブの判定でジョブごと飛ばす。
+    #
+    # 検査が失敗したときは、ジョブを失敗のまま終える。
+    # そのうえで、同じリポジトリの`factory/`のブランチのPRに限り、メタデータを作り直した結果を
+    # artifact(`metadata-patch`)に出す。Factoryが取り出して直すためで、ここではPRに書き込まない。
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.metadata != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 起動、検査、作り直し(最大8分)、収集、後片付けに足りる長さ。
+    # 時間切れの結論は`cancelled`か`timed_out`になりうるが、どちらもPRのチェックを緑にしない。
+    timeout-minutes: 25
     env:
       # 使い捨て専用の値。`test-db`ジョブと同じく、このジョブが起動するPostgresだけが使う。
       # 本物の秘密ではないので、CIに存在しない`mise.local.toml`を通さず直書きしてよい。
       DB_PASSWORD: ci-dummy-password
+      # 作り直しの結果を出してよいPRか。同じリポジトリのPRで、ブランチ名が`factory/`で始まるときだけ真。
+      # forkのPRや人のブランチでは、PRのコードが動く作り直しをしない。
+      # 式の入力はこの1か所で評価し、各ステップの`if`は`env`を読む。
+      # `run`のシェルには式を展開しない。
+      METADATA_PATCH_ELIGIBLE: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'factory/') }}
       # GitHubのランナーはジョブごとに別のVMなので、CIの中では衝突しない。
       # 手元でこのジョブの手順を再現するとき、開発者の`infra`プロジェクトと名前が衝突しないようにする。
       COMPOSE_PROJECT_NAME: metadata-ci
@@ -256,14 +267,73 @@ jobs:
         run: mise exec -- scripts/ci-metadata-login.sh
 
       - name: Check that the metadata is up to date
+        # 失敗しても後続のステップを動かすため、ここでは止めない。
+        # 失敗は`outcome`に残り、`Fail because the metadata is stale`が、ジョブを失敗させる。
+        id: check
+        continue-on-error: true
         run: mise run metadata:check
+
+      - name: Start a worker for regeneration
+        # 作り直しは、依存の解決のジョブをworkerに投げて結果を待つ。検査が通ったときは起動しない。
+        # 上流のworkerのイメージにはHEALTHCHECKが無く、`--wait`はコンテナが動き始めるまでしか待たない。
+        if: ${{ steps.check.outcome == 'failure' && env.METADATA_PATCH_ELIGIBLE == 'true' }}
+        run: mise exec -- docker compose up -d --wait windmill_worker_ci
+
+      - name: Wait for the worker to register
+        # workerが依存の解決のジョブ(tag `dependency`)を受けられるようになるまで待つ。
+        if: ${{ steps.check.outcome == 'failure' && env.METADATA_PATCH_ELIGIBLE == 'true' }}
+        timeout-minutes: 3
+        run: mise exec -- scripts/ci-metadata-wait-worker.sh
+
+      - name: Regenerate the metadata
+        # 失敗しても`Show diagnostics`を動かすため止めない。失敗したときは、パッチを作らない。
+        if: ${{ steps.check.outcome == 'failure' && env.METADATA_PATCH_ELIGIBLE == 'true' }}
+        id: regenerate
+        continue-on-error: true
+        timeout-minutes: 8
+        run: mise run metadata
+
+      - name: Collect the metadata patch
+        # `wmill-lock.yaml`、`*.script.lock`、`*.script.yaml`以外の変更があれば失敗し、何も書かない。
+        # 書く前に、チェックアウトしたcommitが`MERGE_SHA`で、第2親が`HEAD_SHA`であることを確かめる。
+        # baseのshaは、merge木の第1親から読んで記録する。
+        # PRのブランチに入っている版のスクリプトで動くので、出力は受け取る側が検査し直す。
+        if: ${{ steps.check.outcome == 'failure' && env.METADATA_PATCH_ELIGIBLE == 'true' && steps.regenerate.outcome == 'success' }}
+        id: collect
+        timeout-minutes: 2
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # 作り直しはPRのheadそのものではなく、baseとのmerge木に対して行う。
+          MERGE_SHA: ${{ github.sha }}
+        run: mise exec -- bun ./scripts/metadata-patch.ts "$RUNNER_TEMP/metadata-patch"
+
+      - name: Upload the metadata patch
+        # 内容は、リポジトリに入っているファイルの再生成結果だけで、秘密は入らない。
+        if: ${{ steps.check.outcome == 'failure' && env.METADATA_PATCH_ELIGIBLE == 'true' && steps.collect.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: metadata-patch
+          path: ${{ runner.temp }}/metadata-patch/
+          retention-days: 7
+          if-no-files-found: error
+          # 同じ実行の「Re-run all jobs」で上げ直しても、名前の衝突で失敗しないようにする。
+          overwrite: true
 
       - name: Show diagnostics
         # ログインやメタデータの検査が失敗したとき、原因を追えるようにサーバーの状態を残す。
-        if: failure()
+        # 検査の失敗は`continue-on-error`で`failure()`に現れないので、`outcome`も見る。
+        if: ${{ failure() || steps.check.outcome == 'failure' }}
         run: |
           mise exec -- docker compose ps
-          mise exec -- docker compose logs --tail 200 windmill_server
+          mise exec -- docker compose logs --tail 200 windmill_server windmill_worker_ci
+
+      - name: Fail because the metadata is stale
+        # PRのチェックを緑にしないため、検査が失敗していたら必ずここで失敗させる。
+        # パッチを出せたかどうかにかかわらない。
+        if: ${{ !cancelled() && steps.check.outcome == 'failure' }}
+        run: |
+          echo "The Windmill metadata is stale. Run 'mise run metadata' locally and push the result." >&2
+          exit 1
 
       - name: Tear down Windmill
         if: always()

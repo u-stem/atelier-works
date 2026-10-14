@@ -542,6 +542,39 @@ describe("drawio isolation test", () => {
   });
 });
 
+// メタデータのパッチを検査する部品は、書き換えられると、受け取り側の検査が緩む。
+// 保護が完全一致の一覧から来ていることを確かめる。
+describe("metadata patch manifest files", () => {
+  const EXACT = [
+    "f/factory/lib/metadata_patch_manifest.ts",
+    "f/factory/lib/metadata_patch_manifest.script.yaml",
+    "f/factory/lib/metadata_patch_manifest.script.lock",
+  ];
+  const NEAR_MISSES = [
+    "f/factory/lib/metadata_patch_manifest.test.ts",
+    "f/factory/lib/metadata_patch_manifest.ts.orig",
+    "f/factory/lib/metadata_patch_manifest_other.ts",
+    "f/factory/steps/metadata_patch_manifest.ts",
+    "tests/lib/metadata_patch_manifest.test.ts",
+  ];
+
+  test.each(EXACT)("matchesForbiddenPath matches %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(true);
+  });
+
+  test.each(EXACT)("matchesImplementProtectedPath matches %s", (path) => {
+    expect(matchesImplementProtectedPath(path)).toBe(true);
+  });
+
+  test.each(EXACT)("FORBIDDEN_EXACT_PATHS lists %s", (path) => {
+    expect(FORBIDDEN_EXACT_PATHS).toContain(path);
+  });
+
+  test.each(NEAR_MISSES)("matchesForbiddenPath does not match %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+});
+
 // dependabotの自動マージの判定とフローは、書き換えられると、人の確認なしに
 // 任意の更新をマージできる。そのため、まだ存在しないファイルも含めて守る。
 // 「理由」は、保護が完全一致の一覧とフローのディレクトリから来ていることである。

@@ -148,11 +148,85 @@ LEFTHOOK_EXCLUDE=wmill-metadata-check git push
 
 フックを飛ばしたときは、次のpushの前に`mise run metadata`を実行する。
 
-CIの`metadata`ジョブも、メタデータが最新かを検査する。
+フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、CIの`metadata`ジョブで失敗する。
+
+### CIのメタデータの検査
+
+CIの`metadata`ジョブは、メタデータが最新かを検査する。
 使い捨てのWindmillをdbとサーバーだけで起動し、空のワークスペースを作って`mise run metadata:check`を実行する。
 このジョブを動かす条件は、「CIの実行の範囲」にある。
 
-フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
+検査が通れば、ジョブは成功する。
+作り直しは動かさず、所要時間も増えない。
+
+検査が失敗したときは、ジョブを失敗のまま終える。
+PRのチェックは赤のままで、パッチを出しても緑にはならない。
+そのうえで、次の2つを満たすPRに限り、メタデータを作り直した結果をartifact(`metadata-patch`)に出す。
+
+- PRのブランチが、同じリポジトリにある(forkのPRではない)。
+- ブランチ名が`factory/`で始まる(Factoryが作るPR)。
+
+人のブランチとforkでは作り直さない。
+PRのコードが動く作り直しを、Factoryが作るPRに限るためである。
+
+#### パッチを出す手順
+
+1. workerのサービス`windmill_worker_ci`を起動する。
+   依存の解決のジョブは、workerが動かす。
+   イメージは、サーバーと同じ上流のイメージ(版は`mise.toml`の`WM_VERSION`)で、独自のworkerのイメージは使わない。
+2. workerが登録されるまで待つ(`scripts/ci-metadata-wait-worker.sh`)。
+   上流のイメージにはHEALTHCHECKが無く、`docker compose up --wait`はコンテナが動き始めるまでしか待たない。
+   そのため、workerの一覧のAPIで、依存の解決のジョブ(tag `dependency`)を受けるworkerが現れるのを確かめる。
+3. `mise run metadata`で`wmill generate-metadata --yes`を実行する。
+   失敗したときは、パッチを作らない。
+4. `scripts/metadata-patch.ts`が、作業ツリーの変更を検査し、パッチを書く。
+   書く前に、チェックアウトしたcommitが`MERGE_SHA`で、第2親が`HEAD_SHA`であることを確かめる。
+   baseのshaは、merge木の第1親から読んで記録する。
+   一致しないときと、許可リストの外の変更が1つでもあるときは、何も書かずに失敗する。
+5. `actions/upload-artifact`で、`metadata-patch`という名前で上げる。
+   保持は7日で、秘密は入れない。
+
+ジョブの制限時間は25分である。
+起動、検査、作り直し(最大8分)、収集、後片付けを収められる長さである。
+時間切れになると、ジョブの結論は`cancelled`か`timed_out`になりうる。
+どちらの結論でも、PRのチェックは緑にならない。
+
+#### 許可するパスとパッチの形
+
+パッチに載せるのは、次のパスの変更だけである。
+再生成が書き換えるのはメタデータのファイルだけなので、ほかのパスの変更が混ざったときは異常として扱う。
+
+| パス | 内容 |
+| --- | --- |
+| `wmill-lock.yaml` | ロックのハッシュ |
+| `f/**/*.script.lock` | scriptの依存のロック |
+| `f/**/*.script.yaml` | scriptの入力のスキーマ |
+
+フロー(`*__flow/flow.yaml`)とそのインラインのlockは、許可するパスの対象外である。
+フローのメタデータが変わると、パッチを出さずに失敗する。
+このときは、人が手元で`mise run metadata`を実行して直す。
+
+パスの区間は、英数字と`_`で始まり、英数字と`_`、`.`、`-`だけを含む。
+`..`、絶対パス、改行、隠しファイル、symlinkは載せない。
+ファイルは1つ1MiBまで、全ファイルの合計は4MiBまで、変更は500件までとする。
+超えたときは、何も書かずに失敗する。
+判定は`f/factory/lib/metadata_patch_manifest.ts`の`isAllowedMetadataPath`にある。
+
+artifactの中身は次のとおりである。
+
+| パス | 内容 |
+| --- | --- |
+| `manifest.json` | 版(`version`)、PRのheadのsha(`headSha`)、merge木の第1親のsha(`baseSha`)、作り直したmerge木のcommit(`mergeSha`)、変更の一覧(`entries`) |
+| `files/<リポジトリ相対のパス>` | 追加と変更のファイルの内容そのもの |
+
+`entries`の各項目は、`path`、`status`(`added`、`modified`、`deleted`)、`sha256`、`size`を持つ。
+削除は`path`と`status`だけを記録し、`files/`にはファイルを置かない。
+作り直しは、PRのheadそのものではなく、baseとのmerge木(`mergeSha`)に対して行う。
+そのため、パッチを適用してよいのは、PRのheadが`baseSha`を含むときだけである。
+含まないときは、merge木とheadの木が違い、パッチはheadに対する結果ではなくなる。
+manifestを読む判定は、同じファイルの`parseManifest`にある。
+
+仕組みの権限と前提は、[セキュリティ](security.md#ciのメタデータの再生成)に書く。
 
 ### CIの実行の範囲
 
@@ -197,7 +271,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 
 - `.github/workflows/`
 - `.github/`のうち、IssueとPRのテンプレート以外
-- `infra/`のうち、`Caddyfile`、`console_fetcher/`、`worker/`以外(`docker-compose*.yml`を含む)
+- `infra/`のうち、`Caddyfile`、`console_fetcher/`、`worker/`以外(`docker-compose*.yml`と`ci-worker-bunfig.toml`を含む)
 - `mise.toml`、`package.json`、`bun.lock`、`wmill.yaml`
 - ルートの`tsconfig*.json`
 - `scripts/`の下の`.sh`ファイル(次の表に挙げたものを除く)
@@ -216,7 +290,7 @@ CI自身と環境の定義が変わると、どのジョブの結果も変わり
 | `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
 | `f/factory/lib/check_sandbox`と`f/factory/lib/check_runner`で始まるファイル、`tests/lib/check_sandbox_integration`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
 | `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
-| `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh` | `metadata` |
+| `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh`、`scripts/ci-metadata-wait-worker.sh` | `metadata` |
 | `console/`、`scripts/check-console-lockfile.ts` | `console` |
 
 許可リストは、次のパスである。

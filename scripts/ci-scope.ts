@@ -159,11 +159,12 @@ const EXCLUSIVE_RULES: readonly Rule[] = [
   { matches: under("infra/"), flags: FLAGS },
   // migrationの適用を確かめるscriptは、test-dbジョブだけが動かす。
   { matches: under("scripts/test-db"), flags: ["db"] },
-  // メタデータの検査とログインのscriptは、metadataジョブだけが動かす。
+  // メタデータの検査、ログイン、workerの待機のscriptは、metadataジョブだけが動かす。
   {
     matches: exact(
       "scripts/check-metadata-fresh.sh",
       "scripts/ci-metadata-login.sh",
+      "scripts/ci-metadata-wait-worker.sh",
     ),
     flags: ["metadata"],
   },

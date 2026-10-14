@@ -254,6 +254,14 @@ describe("scopeOfPaths", () => {
     expect(scopeOfPaths(["infra/docker-compose.ci.yml"])).toEqual(allScope());
   });
 
+  test("runs everything for the CI worker bunfig", () => {
+    expect(scopeOfPaths(["infra/ci-worker-bunfig.toml"])).toEqual(allScope());
+  });
+
+  test("runs nothing for the metadata patch script, which the unit tests cover", () => {
+    expect(scopeOfPaths(["scripts/metadata-patch.ts"])).toEqual(noneScope({}));
+  });
+
   test("runs everything for another file under infra/", () => {
     expect(scopeOfPaths(["infra/other/x.conf"])).toEqual(allScope());
   });
@@ -286,6 +294,12 @@ describe("scopeOfPaths", () => {
 
   test("runs only metadata for the metadata login script", () => {
     expect(scopeOfPaths(["scripts/ci-metadata-login.sh"])).toEqual(
+      noneScope({ metadata: true }),
+    );
+  });
+
+  test("runs only metadata for the metadata worker wait script", () => {
+    expect(scopeOfPaths(["scripts/ci-metadata-wait-worker.sh"])).toEqual(
       noneScope({ metadata: true }),
     );
   });
