@@ -316,7 +316,7 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 | --- | --- |
 | ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定する。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする |
 | `doctor`が「カスタムtag」でNGになる | インスタンスがtag`console`を許可していない。`mise run instance:tags`を実行する |
-| `doctor`が「カスタムtag」でWARNになる | 管理者でログインできず、許可の有無を確かめられていない。`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる |
+| `doctor`が「カスタムtag」でWARNになる | 許可の有無を確かめられていない。行に添えられた理由を見る。ログインが拒まれたなら、`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる。`doctor`は`WM_HTTP_PORT`のポートにだけ資格情報を送り、Windmillの応答でなければ送らない |
 | `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新した後で`mise run up`を実行し直し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`でConsole用workerを作り直す。Dockerの更新で止まったworkerはrestart policyで元のマウントのまま起動し直し、`mise run up`は設定の変わらないworkerを作り直さないためである。その後で`mise run doctor`を実行し、`docker version`と`console worker mount`の行が`OK`になることを確かめる(手順は[運用](operations.md#console用workerを確かめる)) |
 | `doctor`が「初期パスワード」でNGになる | パスワードが`changeme`のままである。`mise run bootstrap`がログインした後にパスワードを変える |
 | `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する。スタックの起動には、版の検査を通る`mise run up`を使う |

@@ -518,6 +518,11 @@ Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bo
 許可しても、このworkerのマウントとDBへの到達は変わらない。
 変わるのは、このworkerでscriptを動かせる主体である。
 
+許可の確認(`doctor`)は、管理者の資格情報を送る宛先を、死活を確かめたポートの`127.0.0.1`に限る。
+`WM_BASE_URL`は使わない。
+ログインの前に`/api/version`がWindmillの応答かを確かめ、違えば資格情報を送らない。
+`WM_HTTP_PORT`だけを変えたときに、別のローカルプロセスへパスワードを平文で渡さないためである。
+
 Consoleから押せる書き込みには、読むsecret変数の上限を決める。
 `github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。
 `audit_kickoff`と`notice_resolve`は、どのsecret変数も読まない。

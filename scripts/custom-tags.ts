@@ -8,7 +8,10 @@
 //   - `plan`: bootstrap.shが使う。保存済みの値と実効の値を環境変数から読み、
 //     何をするかをJSONで標準出力に出す。
 //   - `check <tag>`: doctor.shが使う。管理者でログインし、tagが許可されているかを
-//     終了コードで返す(0=許可済み、1=未許可、2=確認できない)。
+//     終了コードで返す(0=許可済み、10=未許可、2=確認できない)。
+//     未許可に専用の値を使うのは、bunの未捕捉の例外やmiseの失敗が返す1を、
+//     未許可と取り違えないため。宛先は`WM_CHECK_BASE_URL`だけから読む。
+//     呼び出し側が死活を確かめた宛先と同じものを渡させ、資格情報を別の宛先へ送らない。
 
 export type CustomTagPlan =
   | { kind: "present" }
@@ -52,51 +55,77 @@ export function planCustomTag(
 
 export type CustomTagCheck = "present" | "missing" | "unknown";
 
+// `check`が未許可を返す終了コード。
+export const CHECK_EXIT_MISSING = 10;
+const CHECK_EXIT_UNKNOWN = 2;
+
+// Windmillの`/api/version`は`CE v1.817.0`のような文字列を返す。
+const WINDMILL_VERSION_PATTERN = /^(CE|EE) v\d/;
+
 interface AdminCredentials {
   email: string;
   password: string;
 }
 
 // 管理者でログインし、インスタンスが許可するカスタムtagにtagがあるかを確かめる。
+// ログインの前に`/api/version`がWindmillの応答かを確かめ、そうでなければ
+// 資格情報を送らない。別のプロセスが宛先のポートを使っていても漏らさないため。
 // 取得の途中で失敗したときは"unknown"を返し、tagの有無を断定しない。
+// 失敗の理由は`explain`に渡す。応答の本文は渡さない(資格情報を含みうるため)。
 // セッションのトークンはメモリの上だけに置き、確認の後にログアウトする。
 export async function checkInstanceCustomTag(
   baseUrl: string,
   credentials: AdminCredentials,
   tag: string,
+  explain: (message: string) => void = () => undefined,
 ): Promise<CustomTagCheck> {
   const api = `${baseUrl.replace(/\/+$/, "")}/api`;
   let token: string | undefined;
   try {
+    const version = await fetch(`${api}/version`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!version.ok || !WINDMILL_VERSION_PATTERN.test(await version.text())) {
+      explain("the peer did not answer as Windmill");
+      return "unknown";
+    }
     const login = await fetch(`${api}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(credentials),
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
     if (!login.ok) {
+      explain(`login was refused (status ${login.status})`);
       return "unknown";
     }
     token = (await login.text()).trim();
     const response = await fetch(`${api}/workers/custom_tags`, {
       headers: { Authorization: `Bearer ${token}` },
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) {
+      explain(`reading the custom tags failed (status ${response.status})`);
       return "unknown";
     }
     const tags = parseCustomTags(await response.json());
     if (tags === undefined) {
+      explain("the custom tags response has an unexpected shape");
       return "unknown";
     }
     return tags.includes(tag) ? "present" : "missing";
   } catch {
+    explain("the request to the instance failed");
     return "unknown";
   } finally {
     if (token !== undefined && token.length > 0) {
       await fetch(`${api}/auth/logout`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
+        redirect: "manual",
         signal: AbortSignal.timeout(10_000),
       }).catch(() => undefined);
     }
@@ -124,21 +153,23 @@ async function main(args: readonly string[]): Promise<number> {
     return 0;
   }
   if (mode === "check" && tag !== undefined) {
-    const baseUrl = process.env.WM_BASE_URL ?? "";
+    const baseUrl = process.env.WM_CHECK_BASE_URL ?? "";
     const email = process.env.WM_ADMIN_EMAIL ?? "";
     const password = process.env.WM_ADMIN_PASSWORD ?? "";
     if (baseUrl === "" || email === "" || password === "") {
-      return 2;
+      console.error("WM_CHECK_BASE_URL or the admin credentials are not set");
+      return CHECK_EXIT_UNKNOWN;
     }
     const result = await checkInstanceCustomTag(
       baseUrl,
       { email, password },
       tag,
+      (message) => console.error(message),
     );
     if (result === "present") {
       return 0;
     }
-    return result === "missing" ? 1 : 2;
+    return result === "missing" ? CHECK_EXIT_MISSING : CHECK_EXIT_UNKNOWN;
   }
   console.error("usage: custom-tags.ts plan <tag> | check <tag>");
   return 64;
