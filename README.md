@@ -88,31 +88,8 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
-| `mise run worktree:new` | `mise run worktree:new -- feat/foo`で、`origin/main`から`feat/foo`のブランチとworktreeを作り、依存を入れる。詳しくは「worktreeの作成と片付け」に書く |
-| `mise run worktree:prune` | `.claude/worktrees/`の下にある、消してよいworktreeを一覧にする。`mise run worktree:prune -- --apply`で消す。詳しくは「worktreeの作成と片付け」に書く |
-
-### worktreeの作成と片付け
-
-`mise run worktree:new -- feat/foo`は、メインのcheckoutの`.claude/worktrees/`に、`origin/main`から作ったworktreeを置く。
-依存を入れたあと、作業ディレクトリのパスを最後の行に出す。
-依存の導入に失敗すると、作ったブランチとworktreeを消す。
-導入に数十秒以上かかることがあるので、Claudeから呼ぶときは長めのtimeoutか`run_in_background`を使う。
-
-EnterWorktreeや`claude --worktree`、subagentが作るworktreeも、WorktreeCreateフックが同じスクリプトを通す。
-フックは、メインのcheckoutかユーザーのClaude Code設定で`worktree.baseRef`が`head`のときだけ、`HEAD`から作る。
-同じ名前のworktreeが既にあれば、依存を入れ直して再利用する。
-
-`mise run worktree:prune`は、次をすべて満たすworktreeだけを消してよいものとする。
-残したworktreeには、理由を付けて一覧に出す。
-
-- ロックも、detachedも、変更も、未追跡のファイルも無い。
-- node_modulesなど再生成できるもの以外に、無視されたファイルが無い。
-- 直近120分以内に更新したファイルが無い。`--min-idle-minutes`で変えられる。
-- cwdをそのworktreeの中に持つプロセスが無い。見るのはcwdだけなので、エディタで開いているだけのworktreeは検出できず、直近の更新の確認が守る。
-- ブランチが`origin/main`に入っているか、ベースが`main`のマージ済みPRの先頭と一致する。
-- reflogに、到達できないcommitが無い。
-
-作ったまま24時間以上使われていないworktreeは、放置されたものとして消す。
+| `mise run worktree:new` | `mise run worktree:new -- feat/foo`で、`origin/main`から`feat/foo`のブランチとworktreeを作り、依存を入れる。詳しくは[セットアップ](docs/setup.md)の「worktreeの作成と片付け」に書く |
+| `mise run worktree:prune` | `.claude/worktrees/`の下にある、消してよいworktreeを一覧にする。`mise run worktree:prune -- --apply`で消す。詳しくは[セットアップ](docs/setup.md)の「worktreeの作成と片付け」に書く |
 
 ## リポジトリの構成
 

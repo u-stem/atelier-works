@@ -22,4 +22,5 @@
 - Metadata: auto。メタデータの再生成と検査はgitのフックが行うので、確認せずに任せる。依存の変更を隠さないため`rehash`は使わない。
 - メタデータのフックを飛ばすのは、ローカルのWindmillを起動できないときだけにする。commitには`LEFTHOOK_EXCLUDE=wmill-metadata`、pushには`LEFTHOOK_EXCLUDE=wmill-metadata-check`を付ける。次のpushの前に`mise run metadata`で追従させる。追従させないと、CIの`metadata`ジョブが失敗する。
 - gitのフックはlefthookで動く([セットアップ](docs/setup.md)の「gitのフック」)。`--no-verify`は使わない。フックの検査を飛ばすと、壊れた変更や秘密値がpushされるため。
+- worktreeは`mise run worktree:new -- <type>/<name>`で作り、既存のworktreeへは`EnterWorktree`の`path`で入る。片付けは`mise run worktree:prune`で行う。手順は[セットアップ](docs/setup.md)の「worktreeの作成と片付け」にある。
 - `scripts/lint-no-type-assertions.ts`はトークン単位のヒューリスティックで、まれな入力では誤検知や見逃しが起こる。`.tsx`でJSXを読み違えたときの扱いと既知の限界は[コーディング規約](docs/coding-guidelines.md)の「TypeScript」にある。

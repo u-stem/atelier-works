@@ -288,6 +288,84 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 フックを入れる前に作った作業ツリーには、次のcheckoutでリンクが張られる。
 すぐに張るときは、その作業ツリーで`scripts/link-worktree-wmill.sh`を実行する。
 
+## worktreeの作成と片付け
+
+作業用のworktreeは、メインのcheckoutの`.claude/worktrees/`に置く。
+miseは親ディレクトリの`mise.local.toml`(秘密値)を引き継ぐので、メインのcheckout直下のファイルを複製せずに使える。
+`.wmill`のログイン情報は、前の節「git worktreeのログイン情報」のとおり、post-checkoutのフックがリンクする。
+
+### 作成
+
+```bash
+mise run worktree:new -- feat/foo
+```
+
+引数は`<type>/<name>`で、`type`は`feat`、`fix`、`docs`、`refactor`、`test`、`chore`のどれかにする。
+ブランチ名は`feat/foo`、ディレクトリ名は`feat-foo`になる。
+スクリプトは、`origin/main`からブランチとworktreeを作り、ルートと`console/`の依存を入れる。
+標準出力の最後の行に、作業ディレクトリのパスを出す。
+同じ名前のブランチかディレクトリが既にあれば、何も変えずに失敗する。
+依存の導入に失敗したときは、作ったブランチとworktreeだけを消す。
+
+依存の導入に数十秒以上かかることがある。
+Claudeから呼ぶときは、長めのtimeoutか`run_in_background`を使う。
+
+EnterWorktree、`claude --worktree`、subagentの`isolation: "worktree"`が作るworktreeも、同じスクリプトを通す。
+`.claude/settings.json`のWorktreeCreateフックが、`worktree-new.sh --hook`を呼ぶためである。
+どの経路で作っても、置き場所と依存が揃う。
+フックには次の違いがある。
+
+- メインのcheckoutかユーザーのClaude Code設定の`worktree.baseRef`が`head`なら、`HEAD`から作る。それ以外は`origin/main`から作る。
+- 登録済みの同名のworktreeがあれば、依存を入れ直して再利用する。
+- ブランチだけがあってディレクトリが無ければ、そのブランチをチェックアウトして使う。
+
+WorktreeRemoveフックは無く、削除はClaude Codeの既定に任せる。
+既存のworktreeへ入るときは、EnterWorktreeの`path`にそのパスを渡す。
+
+### 片付け
+
+```bash
+mise run worktree:prune
+mise run worktree:prune -- --apply
+```
+
+1つ目は乾燥実行で、消すものと残すものを理由つきで一覧にする。
+2つ目が実際に消す。
+`git worktree remove`を強制せずに使うので、変更やコミットは失われない。
+リモートのブランチには触れない。
+`--min-idle-minutes`で、直近の更新を見る時間(既定は120分)を変えられる。
+
+消してよいのは、`.claude/worktrees/`の下にある次の条件をすべて満たすworktreeである。
+
+- ブランチが`origin/main`の祖先か、ベースが`main`のマージ済みPRの先頭と一致する。後者はsquashマージを扱うために`gh`で調べる。
+- 変更も未追跡のファイルも無い。
+- 再生成できるもの(`node_modules`、`.wmill`のリンク、`console/dist/`など)以外に、無視されたファイルが無い。
+- 直近120分以内に更新したファイルが無い。
+- cwdをその中に持つプロセスが無い。
+
+作ってから24時間以上使われていないworktreeは、放置されたものとして消す。
+subagentが作ったworktreeに、削除のフックが無いためである。
+
+残したものには、次の理由が付く。
+
+| 理由 | 意味 |
+| --- | --- |
+| `outside` | `.claude/worktrees/`の外にある |
+| `locked` | ロックされている |
+| `current directory` | 実行したディレクトリがその中にある |
+| `missing directory` | ディレクトリが無い。記録は`git worktree prune`が消す |
+| `detached` | HEADがブランチを指していない |
+| `dirty` | 変更か未追跡のファイルがある |
+| `ignored files` | 再生成できない無視されたファイルがある。秘密値のローカルファイルを守る |
+| `recent` | 直近に更新されている |
+| `in use` | プロセスがcwdに持っている。エディタで開いているだけのworktreeは検出できず、`recent`が守る |
+| `unused` | 作ったまま使っておらず、24時間経っていない |
+| `gh unavailable` | `gh`が失敗したか認証が切れていて、マージを確かめられない |
+| `unmerged` | マージ済みと確かめられない。pushしていないコミットを含む |
+| `reflog has unreachable commits` | `git reset --hard`などで外したコミットが、削除でreflogごと失われる |
+
+初めて使うときは、乾燥実行の一覧を見て、消してよいかを確かめてから`--apply`を付ける。
+
 ## 自己更新の設定
 
 `factory_config`の`factory_branch`には、`self_update`が追跡するこのリポジトリのブランチの名前を書く。既定値は`main`である。forkやfeatureブランチで運用するときは、Windmillの画面でこの値を変える。

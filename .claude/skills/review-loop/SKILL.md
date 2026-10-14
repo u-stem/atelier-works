@@ -159,17 +159,14 @@ PRを作った後は、Factoryの`pr_review`(`factory:review`ラベル)が別の
 対話セッションのsubagentが作った作業ツリー(`.claude/worktrees/agent-*`)は、PRのマージ後に親が片付ける。
 Factoryが作る作業ツリーは、`cleanup_workspaces`が片付けるので対象にしない。
 
-- 親は、主の作業ツリーから実行する。
-  先に`git fetch origin`を実行し、`origin/main`を最新にする。
-- 対象は、次の3つを満たすものである。
-  - ブランチが`git branch --merged origin/main`の一覧にある。
-  - `git status --short`が空である。
-  - その作業ツリーを使うagentが残っていない。
-- `git worktree remove <パス>`で消し、続けて`git branch -d <ブランチ>`でローカルのブランチを消す。
-  `--force`、`git branch -D`、`rm -rf`は使わない。
+- 親は、主の作業ツリーで先に`git fetch origin`を実行し、`origin/main`を最新にする。
+  続けて`mise run worktree:prune`を実行し、乾燥実行の一覧で消す対象を確かめる。
+  squashマージは、`gh`でマージ済みPRの先頭と照合して扱う。
+- 一覧に問題が無ければ、`mise run worktree:prune -- --apply`で消す。
+  変更、再生成できない無視されたファイル、直近の更新、cwdを持つプロセスがあるworktreeは、スクリプトが残す。
+- `--force`、`git branch -D`、`rm -rf`は使わない。
   未マージのコミットや、コミットしていない変更を失わないためである。
-- 次のものは消さずに残し、片付けを終えたときの親の報告に、消したものと並べて一覧で載せる。
-  - `--merged`の一覧に無いブランチ
-  - 変更が残っているもの
-  - `git worktree remove`か`git branch -d`が拒んだもの(ロックされた作業ツリーを含む)
+- 残ったworktreeは、理由つきで一覧に出る。
+  片付けを終えたときの親の報告に、消したものと並べて載せる。
+  理由の意味は、[セットアップ](../../../docs/setup.md)の「worktreeの作成と片付け」にある。
 - リモートのブランチは、マージ時にGitHubが消す設定なので、手で消さない。
