@@ -156,13 +156,18 @@ PRを作った後は、Factoryの`pr_review`(`factory:review`ラベル)が別の
 
 ## 終わった作業ツリーの片付け
 
-対話セッションのsubagentが作った作業ツリー(`.claude/worktrees/agent-*`)は、PRのマージ後に親が片付ける。
+`.claude/worktrees/`の下にある作業ツリーのうち、スクリプトが消してよいとしたものを、PRのマージ後に親が片付ける。
+subagentが作った`agent-*`に限らず、`worktree:new`で作った`<type>-<name>`も対象になる。
 Factoryが作る作業ツリーは、`cleanup_workspaces`が片付けるので対象にしない。
 
 - 親は、主の作業ツリーで先に`git fetch origin`を実行し、`origin/main`を最新にする。
   続けて`mise run worktree:prune`を実行し、乾燥実行の一覧で消す対象を確かめる。
   squashマージは、`gh`でマージ済みPRの先頭と照合して扱う。
+- 一覧に自分のものでない作業ツリーがあれば、他のセッションが使っていないかを確かめてから`--apply`を付ける。
 - 一覧に問題が無ければ、`mise run worktree:prune -- --apply`で消す。
+  `.claude/settings.json`が許可するのは`mise run worktree:prune`(乾燥実行)だけで、`--apply`は対話セッションでは確認を求められる。
+  クラウドやheadlessのように確認できない実行では、乾燥実行の結果を報告して終える。
+  確認で止まらず次へ進むためである。
   変更、再生成できない無視されたファイル、直近の更新、cwdを持つプロセスがあるworktreeは、スクリプトが残す。
 - `--force`、`git branch -D`、`rm -rf`は使わない。
   未マージのコミットや、コミットしていない変更を失わないためである。

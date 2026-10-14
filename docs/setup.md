@@ -301,10 +301,11 @@ mise run worktree:new -- feat/foo
 ```
 
 引数は`<type>/<name>`で、`type`は`feat`、`fix`、`docs`、`refactor`、`test`、`chore`のどれかにする。
+`name`に使える文字は、小文字、数字、ハイフン(`[a-z0-9-]`)だけである。
 ブランチ名は`feat/foo`、ディレクトリ名は`feat-foo`になる。
 スクリプトは、`origin/main`からブランチとworktreeを作り、ルートと`console/`の依存を入れる。
 標準出力の最後の行に、作業ディレクトリのパスを出す。
-同じ名前のブランチかディレクトリが既にあれば、何も変えずに失敗する。
+同じ名前のブランチ(ローカルとoriginの両方を見る)かディレクトリが既にあれば、何も変えずに失敗する。
 依存の導入に失敗したときは、作ったブランチとworktreeだけを消す。
 
 依存の導入に数十秒以上かかることがある。
@@ -315,12 +316,26 @@ EnterWorktree、`claude --worktree`、subagentの`isolation: "worktree"`が作�
 どの経路で作っても、置き場所と依存が揃う。
 フックには次の違いがある。
 
-- メインのcheckoutかユーザーのClaude Code設定の`worktree.baseRef`が`head`なら、`HEAD`から作る。それ以外は`origin/main`から作る。
-- 登録済みの同名のworktreeがあれば、依存を入れ直して再利用する。
+- フックの`name`からブランチ名を決める。
+  `feat-foo`のように先頭が`type`と`-`の名前は`feat/foo`、それ以外は`worktree-<名前>`になる。
+- `worktree.baseRef`が`head`なら、`HEAD`から作る。それ以外は`origin/main`から作る。
+  読む順は、メインのcheckoutの`.claude/settings.local.json`、`.claude/settings.json`、ユーザーのClaude Code設定である。
+  最初に値があったファイルに従う。
+- 同名のworktreeを再利用するのは、登録済みで期待するブランチのときだけである。
+  別のブランチのworktreeや、登録の無いディレクトリは、混ざるのを避けるために失敗する。
+  再利用するときは、依存を入れ直す。
 - ブランチだけがあってディレクトリが無ければ、そのブランチをチェックアウトして使う。
+- fetchやoriginのブランチの確認に失敗しても、警告を出して続ける。
+  オフラインでsubagentの起動を止めないためである。
 
 WorktreeRemoveフックは無く、削除はClaude Codeの既定に任せる。
 既存のworktreeへ入るときは、EnterWorktreeの`path`にそのパスを渡す。
+
+> [!NOTE]
+> `mise.local.toml`の秘密値は、worktreeに引き継がれる。
+> 一方、`mise.toml`にもあるキー(例: `WM_HTTP_PORT`)を`mise.local.toml`で上書きしても、引き継がれない。
+> worktree側の`mise.toml`のほうが近いためである。
+> 秘密値のキーは`mise.toml`に無いので、引き継がれる。
 
 ### 片付け
 
@@ -331,20 +346,33 @@ mise run worktree:prune -- --apply
 
 1つ目は乾燥実行で、消すものと残すものを理由つきで一覧にする。
 2つ目が実際に消す。
+`.claude/settings.json`が許可するのは乾燥実行だけである。
+`--apply`の扱いは、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「終わった作業ツリーの片付け」にある。
 `git worktree remove`を強制せずに使うので、変更やコミットは失われない。
 リモートのブランチには触れない。
+マージ時にGitHubが消す設定のためである。
 `--min-idle-minutes`で、直近の更新を見る時間(既定は120分)を変えられる。
 
 消してよいのは、`.claude/worktrees/`の下にある次の条件をすべて満たすworktreeである。
 
-- ブランチが`origin/main`の祖先か、ベースが`main`のマージ済みPRの先頭と一致する。後者はsquashマージを扱うために`gh`で調べる。
+- ロックされておらず、HEADがブランチを指している(detachedではない)。
 - 変更も未追跡のファイルも無い。
-- 再生成できるもの(`node_modules`、`.wmill`のリンク、`console/dist/`など)以外に、無視されたファイルが無い。
+- 無視されたファイルが、再生成できる次の6つだけである。
+  `node_modules`、`.wmill`のシンボリックリンク、`console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`。
+  それ以外(`*.local.*`、`.claude/settings.local.json`など)は、削除で黙って消えるので、`ignored files`として残す。
 - 直近120分以内に更新したファイルが無い。
 - cwdをその中に持つプロセスが無い。
-
-作ってから24時間以上使われていないworktreeは、放置されたものとして消す。
-subagentが作ったworktreeに、削除のフックが無いためである。
+- 次のどちらかを満たす。
+  - ブランチが`origin/main`の祖先か、ベースが`main`のマージ済みPRの先頭と一致する。
+    後者はsquashマージを扱うために`gh`で調べる。
+  - 放置されたもの(`abandoned`)である。
+    ブランチのreflogがちょうど1行で、その件名が`branch: Created from`で始まり、先頭がHEADと一致する。
+    消すブランチ以外のref(`refs/remotes/*`やタグを含む)がHEADのコミットを含む。
+    作ってから24時間以上経ち、24時間以内に更新したファイルも無い。
+    つまり、作ったまま独自のコミットが無いブランチに限る。
+    subagentが作ったworktreeに、削除のフックが無いためである。
+- ブランチとworktreeのHEADのreflogにあるすべてのコミットが、消してよい根拠の先から到達できる。
+  `git reset --hard`で外したコミットは、削除でreflogごと失われるためである。
 
 残したものには、次の理由が付く。
 
@@ -359,12 +387,12 @@ subagentが作ったworktreeに、削除のフックが無いためである。
 | `ignored files` | 再生成できない無視されたファイルがある。秘密値のローカルファイルを守る |
 | `recent` | 直近に更新されている |
 | `in use` | プロセスがcwdに持っている。エディタで開いているだけのworktreeは検出できず、`recent`が守る |
-| `unused` | 作ったまま使っておらず、24時間経っていない |
+| `unused` | 作ったまま使っておらず、放置の条件を満たさない |
 | `gh unavailable` | `gh`が失敗したか認証が切れていて、マージを確かめられない |
 | `unmerged` | マージ済みと確かめられない。pushしていないコミットを含む |
 | `reflog has unreachable commits` | `git reset --hard`などで外したコミットが、削除でreflogごと失われる |
 
-初めて使うときは、乾燥実行の一覧を見て、消してよいかを確かめてから`--apply`を付ける。
+毎回、乾燥実行の一覧を見て、消してよいかを確かめてから`--apply`を付ける。
 
 ## 自己更新の設定
 
