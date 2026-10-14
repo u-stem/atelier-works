@@ -293,12 +293,19 @@ custom_tags_set_body() {
   '
 }
 
+# 書き込んだ後に`/workers/custom_tags`を読み戻す回数と間隔(秒)。
+# 実効の値への反映が書き込みより遅れることがあるため、数回読み直す。
+CUSTOM_TAGS_READBACK_ATTEMPTS=5
+CUSTOM_TAGS_READBACK_INTERVAL=1
+
 # インスタンスのカスタムtag(global setting `custom_tags`)に`console`を足す。
 # superadminのセッションのトークンで呼ぶこと。保存済みの値があればそれを保ち、
 # 無いとき(未設定)はインスタンスが実際に許可している値を起点にする。
 # 何を書くかの判定は`scripts/custom-tags.ts`の`plan`が行う。
+# 読み取りと書き込みの間に排他は無い。同じ設定を同時に編集すると、
+# 後の書き込みが先の変更を上書きしうるので、同時に実行しない。
 ensure_instance_custom_tag() {
-  local status stored effective plan kind tags
+  local status stored effective plan kind tags attempt
   status="$(api_get /settings/global/custom_tags)"
   case "${status}" in
     200) stored="$(cat "${RESP_FILE}")" ;;
@@ -306,11 +313,13 @@ ensure_instance_custom_tag() {
     *) die "failed to read the instance custom_tags setting (status ${status})" ;;
   esac
   [ -n "${stored}" ] || stored="null"
-  status="$(api_get /workers/custom_tags)"
-  if [ "${status}" = "200" ]; then
+  effective="null"
+  if [ "${stored}" = "null" ]; then
+    # 保存済みの値が無いときだけ、実効の値が起点になる。読めないまま進めると、
+    # 既定のtagを失う書き込みになりうるので、ここで止める。
+    status="$(api_get /workers/custom_tags)"
+    [ "${status}" = "200" ] || die "failed to read effective custom tags (status ${status})"
     effective="$(cat "${RESP_FILE}")"
-  else
-    effective="null"
   fi
   plan="$(WM_TMP_STORED="${stored}" WM_TMP_EFFECTIVE="${effective}" \
     run_in_repo bun run scripts/custom-tags.ts plan "${CONSOLE_TAG}")"
@@ -324,12 +333,17 @@ ensure_instance_custom_tag() {
       tags="$(printf '%s' "${plan}" | jq -c '.tags')"
       status="$(custom_tags_set_body "${tags}" | api_post /settings/global/custom_tags)"
       [ "${status}" = "200" ] || die "failed to set the instance custom_tags (status ${status})"
-      status="$(api_get /workers/custom_tags)"
-      if [ "${status}" = "200" ] && jq -e --arg tag "${CONSOLE_TAG}" 'index($tag) != null' "${RESP_FILE}" >/dev/null; then
-        log "instance custom tags set to ${tags}"
-      else
-        die "set the instance custom_tags to ${tags}, but '${CONSOLE_TAG}' is not listed when read back (status ${status})"
-      fi
+      for attempt in $(seq 1 "${CUSTOM_TAGS_READBACK_ATTEMPTS}"); do
+        status="$(api_get /workers/custom_tags)"
+        if [ "${status}" = "200" ] && jq -e --arg tag "${CONSOLE_TAG}" 'index($tag) != null' "${RESP_FILE}" >/dev/null; then
+          log "instance custom tags set to ${tags}"
+          return 0
+        fi
+        if [ "${attempt}" -lt "${CUSTOM_TAGS_READBACK_ATTEMPTS}" ]; then
+          sleep "${CUSTOM_TAGS_READBACK_INTERVAL}"
+        fi
+      done
+      die "set the instance custom_tags to ${tags}, but '${CONSOLE_TAG}' is not listed when read back (status ${status})"
       ;;
     *)
       die "the instance custom_tags setting has an unexpected shape; fix it in the Windmill UI (Instance settings > Workers) and run again"
