@@ -263,15 +263,26 @@ describe("getWorkflowJobLog", () => {
     stderr = "",
   ): CommandResult => ({ stdout, stderr, exitCode, timedOut: false });
 
+  /** 取り直しても同じ失敗が続くように、同じ実行を2回分用意する。 */
+  const exitedTwice = (exitCode: number, stdout: string, stderr = "") => [
+    exited(exitCode, stdout, stderr),
+    exited(exitCode, stdout, stderr),
+  ];
+
+  const cappedStdout = ghApiStdout(
+    200,
+    `head${omittedMarker(9_000_000)}${"x".repeat(CI_JOB_LOG_MAX_BYTES)}`,
+  );
+
   test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a 2xx status with an empty body", async () => {
-    const fake = createFakeCommandRunner([exited(1, ghApiStdout(200, ""))]);
+    const fake = createFakeCommandRunner(exitedTwice(1, ghApiStdout(200, "")));
     await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
   });
 
   test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a partial body", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ghApiStdout(200, "line 1\nline 2")),
-    ]);
+    const fake = createFakeCommandRunner(
+      exitedTwice(1, ghApiStdout(200, "line 1\nline 2")),
+    );
     await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
   });
 
@@ -280,17 +291,44 @@ describe("getWorkflowJobLog", () => {
     expect(await get(fake)).toMatchObject({ kind: "ok", truncated: false });
   });
 
-  test("returns a truncated log when the output hit the cap and gh exits non-zero", async () => {
-    const stdout = ghApiStdout(
-      200,
-      `head${omittedMarker(9_000_000)}${"x".repeat(CI_JOB_LOG_MAX_BYTES)}`,
-    );
-    const fake = createFakeCommandRunner([exited(143, stdout)]);
+  test("throws a GitHubCiLogIncompleteError when the output hit the cap and gh exits non-zero", async () => {
+    const fake = createFakeCommandRunner(exitedTwice(143, cappedStdout));
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
+  });
+
+  test("returns a truncated log when the output hit the cap and gh exits zero", async () => {
+    const fake = createFakeCommandRunner([ok(cappedStdout)]);
     expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
   });
 
+  test("returns the log when the second fetch exits zero after a non-zero first fetch", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(200, "line 1")),
+      ok(ghApiStdout(200, "line 1\nline 2")),
+    ]);
+    const result = await get(fake);
+    expect(result.kind === "ok" ? result.log.reveal() : null).toBe(
+      "line 1\nline 2",
+    );
+  });
+
+  test("fetches the log only once more after an incomplete first fetch", async () => {
+    const fake = createFakeCommandRunner([
+      ...exitedTwice(1, ghApiStdout(200, "")),
+      ok(ghApiStdout(200, "line")),
+    ]);
+    await get(fake).catch(() => undefined);
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  test("fetches the log once when gh exits zero", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    await get(fake);
+    expect(fake.calls).toHaveLength(1);
+  });
+
   test("states a fixed message for the incomplete log error", async () => {
-    const fake = createFakeCommandRunner([exited(1, ghApiStdout(200, ""))]);
+    const fake = createFakeCommandRunner(exitedTwice(1, ghApiStdout(200, "")));
     expect(await messageOf(fake)).toBe(
       "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
     );
@@ -299,16 +337,16 @@ describe("getWorkflowJobLog", () => {
   test("keeps the stderr of gh out of the incomplete log error", async () => {
     const stderr =
       "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway";
-    const fake = createFakeCommandRunner([
-      exited(1, ghApiStdout(200, ""), stderr),
-    ]);
+    const fake = createFakeCommandRunner(
+      exitedTwice(1, ghApiStdout(200, ""), stderr),
+    );
     expect(await messageOf(fake)).not.toContain("--allow-escape-sequences");
   });
 
   test("keeps the partial body out of the incomplete log error", async () => {
-    const fake = createFakeCommandRunner([
-      exited(1, ghApiStdout(200, "PARTIAL-BODY-MARKER")),
-    ]);
+    const fake = createFakeCommandRunner(
+      exitedTwice(1, ghApiStdout(200, "PARTIAL-BODY-MARKER")),
+    );
     expect(await messageOf(fake)).not.toContain("PARTIAL-BODY-MARKER");
   });
 

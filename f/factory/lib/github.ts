@@ -131,6 +131,8 @@ export type GhApiResponse = {
   /**
    * `gh`プロセスの終了コード。`attemptGhApi`が付ける。
    * ステータスが2xxでも、本文が欠けたまま`gh`が失敗したことを呼び出し側が見分けるために使う。
+   * 省略可能なのは、出力を読んだ直後の応答が終了コードを持たず、後から付けるため。
+   * 省略された応答は、終了コードが0だと確かめられていないので、呼び出し側は失敗として扱う(fail-closed)。
    */
   readonly exitCode?: number;
 };
@@ -4541,7 +4543,7 @@ export class GitHubCiLogError extends Error {
 /**
  * ログの本文が欠けたまま`gh`が終わったときの例外。
  * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、拒否、
- * 本文の途中の切断、フラグを解さない版の失敗で起きる。
+ * 本文の途中の切断、timeoutで止めた取得で起きる。
  * 本文の欠けたログを使わないために投げる。本文、stderr、終了コードを載せない。
  * HTTPの失敗ではないので、ステータスを持たない。
  */
@@ -4561,9 +4563,12 @@ export class GitHubCiLogIncompleteError extends Error {
  * 本文は`CI_JOB_LOG_MAX_BYTES`で切り、切ったかは`truncated`で返す。
  * 本文は`VolatileCiLog`で包んで返す。
  * ログは端末の制御列を含むので、`gh`に`--allow-escape-sequences`を渡す。
- * 2xxなのに`gh`の終了コードが0以外のときは、`GitHubCiLogIncompleteError`を投げる。
- * 本文の欠けたログを使わないためである。上限で打ち切ったときは、プロセスを止めた結果なので
- * 終了コードを見ず、`truncated`のログとして返す。
+ * 2xxなのに`gh`の終了コードが0以外(終了コードが無い場合を含む)のときは、
+ * 上限に達したかによらず、本文の欠けたログとして扱う。
+ * runnerは上限に達してもプロセスを止めず、先頭と末尾を残して最後まで読むので、
+ * 上限に達した正常なログは終了コード0で`truncated`のログとして返る。
+ * 一時的な切断をCIの回に持ち込まないため、欠けたときは、GETが冪等であることを使って1回だけ取り直す。
+ * 取り直しても欠けたときは、`GitHubCiLogIncompleteError`を投げる。
  * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
  * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
  * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
@@ -4576,15 +4581,30 @@ export async function getWorkflowJobLog(
 ): Promise<WorkflowJobLogResult> {
   validateOwnerRepo(owner, repo);
   assertJobId(jobId);
+  try {
+    return await fetchWorkflowJobLog(client, owner, repo, jobId);
+  } catch (error) {
+    if (!(error instanceof GitHubCiLogIncompleteError)) throw error;
+  }
+  const sleep = client.sleep ?? defaultSleep;
+  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
+  return fetchWorkflowJobLog(client, owner, repo, jobId);
+}
+
+/** `getWorkflowJobLog`の1回分。2xxで終了コードが0でなければ`GitHubCiLogIncompleteError`を投げる。 */
+async function fetchWorkflowJobLog(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  jobId: number,
+): Promise<WorkflowJobLogResult> {
   const response = await callGhApi(
     client,
     `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs`,
     { maxOutputBytes: CI_JOB_LOG_MAX_BYTES, allowEscapeSequences: true },
   );
   if (response.status >= 200 && response.status < 300) {
-    if (response.capped !== true && response.exitCode !== 0) {
-      throw new GitHubCiLogIncompleteError();
-    }
+    if (response.exitCode !== 0) throw new GitHubCiLogIncompleteError();
     return {
       kind: "ok",
       log: VolatileCiLog.of(response.bodyText),
