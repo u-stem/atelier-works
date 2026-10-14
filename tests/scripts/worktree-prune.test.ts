@@ -4,9 +4,12 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,6 +47,17 @@ function git(cwd: string, args: string[]): string {
 }
 
 type Run = { exitCode: number; stdout: string; stderr: string };
+
+// worktreeの中のファイル(`.git`とnode_modulesを除く)の更新時刻を、`minutes`分前にする。
+function ageFiles(dir: string, minutes: number): void {
+  const when = new Date(Date.now() - minutes * 60_000);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) ageFiles(path, minutes);
+    else if (entry.isFile()) utimesSync(path, when, when);
+  }
+}
 
 function makeTempRoot(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
@@ -96,7 +110,35 @@ describe("worktree-prune.sh", () => {
       path,
       "origin/main",
     ]);
+    // 既定のrecentの時間(120分)より古く、放置の時間(24時間)より新しいことにする。
+    ageFiles(path, 180);
     return path;
+  }
+
+  // 偽のlsofが返す出力を差し替える。
+  function writeLsof(output: string): void {
+    writeFileSync(
+      join(fakeBin, "lsof"),
+      `#!/usr/bin/env bash\ncat <<'EOF'\n${output}\nEOF\n`,
+    );
+    chmodSync(join(fakeBin, "lsof"), 0o755);
+  }
+
+  // ブランチのreflogの時刻を、`minutes`分前にそろえる。
+  function ageReflog(branch: string, minutes: number): void {
+    const file = join(
+      mainDir,
+      ".git",
+      "logs",
+      "refs",
+      "heads",
+      ...branch.split("/"),
+    );
+    const epoch = Math.floor(Date.now() / 1000) - minutes * 60;
+    writeFileSync(
+      file,
+      readFileSync(file, "utf8").replace(/> \d+ /g, `> ${epoch} `),
+    );
   }
 
   // worktreeのブランチに、origin/mainに無いcommitを足してshaを返す。
@@ -139,6 +181,7 @@ describe("worktree-prune.sh", () => {
     fakeBin = join(root, "fakebin");
     mkdirSync(fakeBin);
     writeGh("exit 0");
+    writeLsof("");
 
     git(root, [
       "init",
@@ -150,8 +193,13 @@ describe("worktree-prune.sh", () => {
     git(root, ["clone", "--quiet", originDir, mainDir]);
     git(mainDir, ["checkout", "--quiet", "-b", "main"]);
     writeFileSync(join(mainDir, "README.md"), "x\n");
-    writeFileSync(join(mainDir, ".gitignore"), "node_modules/\n.claude/\n");
-    git(mainDir, ["add", "README.md", ".gitignore"]);
+    writeFileSync(
+      join(mainDir, ".gitignore"),
+      "node_modules/\n.claude/\n.wmill\n*.local.*\n",
+    );
+    mkdirSync(join(mainDir, "console"));
+    writeFileSync(join(mainDir, "console", "package.json"), "{}\n");
+    git(mainDir, ["add", "README.md", ".gitignore", "console/package.json"]);
     git(mainDir, ["commit", "--quiet", "--no-gpg-sign", "-m", "init"]);
     git(mainDir, ["push", "--quiet", "origin", "main"]);
   });
@@ -167,8 +215,8 @@ describe("worktree-prune.sh", () => {
       expect(result.exitCode).toBe(2);
     });
 
-    test("rejects two arguments with 2", () => {
-      const result = run(["--apply", "--apply"]);
+    test("rejects an extra argument with 2", () => {
+      const result = run(["--apply", "extra"]);
 
       expect(result.exitCode).toBe(2);
     });
@@ -288,6 +336,190 @@ describe("worktree-prune.sh", () => {
     });
   });
 
+  describe("a branch that was created and left alone", () => {
+    const DAY = 25 * 60;
+
+    function abandoned(): string {
+      const path = addWorktree("docs-aband", "docs/aband");
+      ageFiles(path, DAY);
+      ageReflog("docs/aband", DAY);
+      return path;
+    }
+
+    test("is removed as abandoned after 25 hours", () => {
+      const path = abandoned();
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `would remove: ${path} (docs/aband): abandoned`,
+      );
+    });
+
+    test("loses its worktree with --apply", () => {
+      const path = abandoned();
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("is kept as unused after 1 hour", () => {
+      const path = addWorktree("docs-aband", "docs/aband");
+      ageFiles(path, 60);
+      ageReflog("docs/aband", 60);
+
+      const result = run(["--min-idle-minutes", "0"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/aband): unused`);
+    });
+
+    test("is kept after 25 hours when it holds an untracked file", () => {
+      const path = abandoned();
+      writeFileSync(join(path, "notes.txt"), "n\n");
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("is kept as unused after 25 hours when a file changed 5 hours ago", () => {
+      const path = abandoned();
+      const when = new Date(Date.now() - 5 * 3_600_000);
+      utimesSync(join(path, "README.md"), when, when);
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/aband): unused`);
+    });
+  });
+
+  describe("a merged branch that may be in use", () => {
+    let path: string;
+
+    beforeEach(() => {
+      path = addMergedWorktree("docs-busy", "docs/busy");
+    });
+
+    test("is kept as recent when a file changed within the last 120 minutes", () => {
+      const now = new Date();
+      utimesSync(join(path, "README.md"), now, now);
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/busy): recent`);
+    });
+
+    test("is removed when --min-idle-minutes is 0 despite a fresh file", () => {
+      const now = new Date();
+      utimesSync(join(path, "README.md"), now, now);
+
+      run(["--apply", "--min-idle-minutes", "0"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("is kept as recent with a custom window", () => {
+      const when = new Date(Date.now() - 200 * 60_000);
+      utimesSync(join(path, "README.md"), when, when);
+
+      const result = run(["--min-idle-minutes", "300"]);
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/busy): recent`);
+    });
+
+    test("is kept as in use when a process has its cwd inside", () => {
+      writeLsof(`p1234\nn${path}/console`);
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/busy): in use`);
+    });
+
+    test("is not removed with --apply while a process has its cwd inside", () => {
+      writeLsof(`p1234\nn${path}`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("is removed when the only process cwd is a sibling with the same prefix", () => {
+      writeLsof(`p1234\nn${path}-other`);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("rejects a non-numeric --min-idle-minutes with 2", () => {
+      const result = run(["--min-idle-minutes", "abc"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+
+    test("rejects --min-idle-minutes without a value with 2", () => {
+      const result = run(["--min-idle-minutes"]);
+
+      expect(result.exitCode).toBe(2);
+    });
+  });
+
+  describe("a merged branch with ignored files", () => {
+    let path: string;
+
+    beforeEach(() => {
+      path = addMergedWorktree("docs-ign", "docs/ign");
+    });
+
+    test("is kept as ignored files when it holds a local secrets file", () => {
+      writeFileSync(join(path, "mise.local.toml"), "SECRET=1\n");
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/ign): ignored files`,
+      );
+    });
+
+    test("keeps the ignored file with --apply", () => {
+      writeFileSync(join(path, "mise.local.toml"), "SECRET=1\n");
+
+      run(["--apply"]);
+
+      expect(existsSync(join(path, "mise.local.toml"))).toBe(true);
+    });
+
+    test("does not count node_modules and the .wmill link as ignored files", () => {
+      mkdirSync(join(path, "node_modules"));
+      writeFileSync(join(path, "node_modules", "marker"), "m\n");
+      mkdirSync(join(path, "console", "node_modules"), { recursive: true });
+      writeFileSync(join(path, "console", "node_modules", "marker"), "m\n");
+      symlinkSync(join(mainDir, "README.md"), join(path, ".wmill"));
+      ageFiles(path, 180);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+  });
+
+  describe("removing the branch", () => {
+    test("also removes the upstream settings of the branch", () => {
+      addMergedWorktree("docs-up", "docs/up");
+      git(mainDir, ["config", "branch.docs/up.remote", "origin"]);
+      git(mainDir, ["config", "branch.docs/up.merge", "refs/heads/docs/up"]);
+
+      run(["--apply"]);
+
+      const result = Bun.spawnSync(
+        ["git", "config", "--get", "branch.docs/up.remote"],
+        { cwd: mainDir, env: cleanEnv() },
+      );
+      expect(result.exitCode).not.toBe(0);
+    });
+  });
+
   describe("a squash-merged branch", () => {
     let path: string;
     let tip: string;
@@ -323,6 +555,26 @@ describe("worktree-prune.sh", () => {
 
     test("is kept as unmerged when gh reports no merged pull request", () => {
       writeGh("exit 0");
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (feat/squash): unmerged`);
+    });
+
+    test("asks gh only for pull requests into main", () => {
+      const log = join(root, "gh-args.log");
+      writeGh(`echo "$@" > "${log}"\necho ${tip}`);
+
+      run();
+
+      expect(readFileSync(log, "utf8")).toContain("--base main");
+    });
+
+    test("is kept as unmerged when the pull request was merged into another base", () => {
+      // 積み重ねたPRは、ベースがmainでないので、gh pr listの--base mainに現れない。
+      writeGh(
+        `base=""\nwhile [ "$#" -gt 0 ]; do\n  if [ "$1" = "--base" ]; then base="$2"; fi\n  shift\ndone\nif [ "$base" = "stack" ]; then echo ${tip}; fi\nexit 0`,
+      );
 
       const result = run();
 

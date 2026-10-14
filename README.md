@@ -89,7 +89,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
 | `mise run worktree:new` | `mise run worktree:new -- feat/foo`で、`origin/main`から`feat/foo`のブランチとworktreeを作る。worktreeはメインのcheckoutの下に置き、依存を入れて、作業ディレクトリのパスを最後の行に出す。依存の導入に失敗したら、作ったブランチとworktreeを消す。導入に数十秒以上かかることがあるので、Claudeから呼ぶときは長めのtimeoutか`run_in_background`を使う |
-| `mise run worktree:prune` | `.claude/worktrees/`の下のworktreeのうち、マージ済みで変更の無いものを一覧にする(乾燥実行)。`mise run worktree:prune -- --apply`で、worktreeとローカルのブランチを消す。ロック中、detached、変更あり、未マージ、ghが使えないものは残し、理由を出す |
+| `mise run worktree:prune` | `.claude/worktrees/`の下のworktreeのうち、マージ済みで変更の無いものを一覧にする(乾燥実行)。`mise run worktree:prune -- --apply`で、worktreeとローカルのブランチを消す。ロック中、detached、変更あり、node_modulesと`.wmill`以外の無視されたファイルあり、直近120分以内の更新あり(`--min-idle-minutes`で変更)、プロセスが使用中、未マージ、ghが使えないものは残し、理由を出す。作ったまま24時間以上使われていないworktreeは、放置されたものとして消す |
 
 ## リポジトリの構成
 
