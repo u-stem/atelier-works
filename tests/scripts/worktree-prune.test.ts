@@ -364,6 +364,85 @@ describe("worktree-prune.sh", () => {
       expect(existsSync(path)).toBe(false);
     });
 
+    // reflogを最後の1行だけにして、`git gc`のreflog expireで古い行が消えた状態を作る。
+    // `subject`を渡すと、その1行の件名も差し替える。
+    function keepLastReflogLine(branch: string, subject?: string): void {
+      const file = join(
+        mainDir,
+        ".git",
+        "logs",
+        "refs",
+        "heads",
+        ...branch.split("/"),
+      );
+      const lines = readFileSync(file, "utf8").trim().split("\n");
+      let last = lines[lines.length - 1] ?? "";
+      if (subject !== undefined) {
+        last = `${last.split("\t")[0]}\t${subject}`;
+      }
+      writeFileSync(file, `${last}\n`);
+    }
+
+    test("is kept as unused when only the last commit line survives a reflog expire", () => {
+      const path = addWorktree("docs-exp", "docs/exp");
+      commitIn(path);
+      ageFiles(path, DAY);
+      ageReflog("docs/exp", DAY);
+      keepLastReflogLine("docs/exp");
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/exp): unused`);
+    });
+
+    test("keeps the unpushed commit with --apply after a reflog expire", () => {
+      const path = addWorktree("docs-exp", "docs/exp");
+      commitIn(path);
+      ageFiles(path, DAY);
+      ageReflog("docs/exp", DAY);
+      keepLastReflogLine("docs/exp");
+
+      run(["--apply"]);
+
+      expect(branchExists("docs/exp")).toBe(true);
+    });
+
+    test("is kept as unused when no other ref contains the commit although the subject says created", () => {
+      const path = addWorktree("docs-lone", "docs/lone");
+      commitIn(path);
+      ageFiles(path, DAY);
+      ageReflog("docs/lone", DAY);
+      keepLastReflogLine("docs/lone", "branch: Created from HEAD");
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/lone): unused`);
+    });
+
+    test("is kept as unused when the only line is not a creation record, even if origin/main contains the commit", () => {
+      const path = addWorktree("docs-subj", "docs/subj");
+      ageFiles(path, DAY);
+      ageReflog("docs/subj", DAY);
+      keepLastReflogLine("docs/subj", "commit: work");
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/subj): unused`);
+    });
+
+    test("is removed as abandoned when another ref contains the commit and the line is a creation record", () => {
+      const path = addWorktree("docs-both", "docs/both");
+      ageFiles(path, DAY);
+      ageReflog("docs/both", DAY);
+      keepLastReflogLine("docs/both");
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `would remove: ${path} (docs/both): abandoned`,
+      );
+    });
+
     test("is kept as unused after 1 hour", () => {
       const path = addWorktree("docs-aband", "docs/aband");
       ageFiles(path, 60);

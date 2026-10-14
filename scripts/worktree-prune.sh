@@ -25,7 +25,10 @@
 #   - 祖先の場合は、ブランチのreflogにcommitの記録もあるときに限る。作ったまま使っていない
 #     ブランチ(`unused`)は、origin/mainが進むと祖先に見えるため、残す。ただし、作ってから
 #     24時間以上、ファイルの更新も無いものは、放置されたもの(`abandoned`)として消す。
-#     `abandoned`は起点がorigin/mainの祖先でなくてもよい。独自のcommitが無いので何も失わない。
+#     `abandoned`は起点がorigin/mainの祖先でなくてもよい。ただし、reflogの唯一の行が作成の記録
+#     (件名が`branch: Created from`)で、消すブランチ以外のrefがHEADのcommitを含むときに限る。
+#     `git gc`のreflog expireで古い行が消えると、pushしていない最後のcommitの行だけが残り、
+#     1行のreflogと区別できなくなる。他のrefが辿れるcommitなら、消しても何も失わない。
 #   - ブランチのreflogと、worktreeのHEADのreflogにあるすべてのcommitが、消してよい根拠の先から
 #     到達できる(`reflog has unreachable commits`)。根拠の先は、祖先ならorigin/main、PRの一致と
 #     `abandoned`ならブランチの先頭である。`git reset --hard`で外したcommitは、削除でreflogごと
@@ -128,6 +131,19 @@ has_process_inside() {
   return 1
 }
 
+# 消すブランチ以外のrefが、commit `$1`を含めば0を返す(`refs/remotes/*`やタグを含む)。
+# 失敗したときは含まないものとして扱い、消さない側に倒す。
+has_other_ref_containing() {
+  local refs ref
+  refs="$(git for-each-ref --contains "$1" --format='%(refname)' 2>/dev/null)" || return 1
+  while IFS= read -r ref; do
+    if [ -n "$ref" ] && [ "$ref" != "refs/heads/$wt_branch" ]; then
+      return 0
+    fi
+  done <<<"$refs"
+  return 1
+}
+
 # ブランチのreflogと、worktreeのHEADのreflogにあるすべてのcommitが、`$1`から到達できれば0を返す。
 # `git reset --hard`で外したcommitは、worktreeとブランチの削除でreflogごと失われるため、
 # 到達できないcommitがあれば消さない。reflogが読めないときも同じ。
@@ -205,15 +221,17 @@ consider() {
     return
   fi
 
-  # ブランチのreflogの行数と、先頭の記録のshaと時刻。
+  # ブランチのreflogの行数と、先頭の記録のshaと時刻と件名。
   # reflogが作成の記録だけ(または読めない)なら、commitがあった証拠が無い。
-  local reflog_out="" reflog_lines=0 reflog_line first_sha="" first_time=""
-  reflog_out="$(git reflog show --date=unix --format='%H %gd' "refs/heads/$wt_branch" 2>/dev/null)" || reflog_out=""
+  local reflog_out="" reflog_lines=0 reflog_line first_sha="" first_time="" first_subject="" reflog_head
+  reflog_out="$(git reflog show --date=unix --format='%H %gd%x09%gs' "refs/heads/$wt_branch" 2>/dev/null)" || reflog_out=""
   if [ -n "$reflog_out" ]; then
     while IFS= read -r reflog_line; do
       if [ "$reflog_lines" -eq 0 ]; then
-        first_sha="${reflog_line%% *}"
-        first_time="${reflog_line##*@\{}"
+        reflog_head="${reflog_line%%$'\t'*}"
+        first_subject="${reflog_line#*$'\t'}"
+        first_sha="${reflog_head%% *}"
+        first_time="${reflog_head##*@\{}"
         first_time="${first_time%\}}"
       fi
       reflog_lines=$((reflog_lines + 1))
@@ -227,8 +245,15 @@ consider() {
     && [[ "$first_time" =~ ^[0-9]+$ ]] \
     && [ $((now - first_time)) -ge $((abandoned_minutes * 60)) ] \
     && ! has_recent_file "$wt_path" "$abandoned_minutes"; then
-    # 作ったまま使っていない。ブランチに独自のcommitが無いので、起点が
-    # origin/mainの祖先でなくても(機能ブランチから作った場合など)、何も失わない。
+    # reflogの1行だけでは、作ったまま使っていないとは言い切れない。`git gc`のreflog expireで
+    # 古い行が消えると、pushしていない最後のcommitの行だけが残り、同じ形になる。
+    # そのため、行の件名が作成の記録で、かつ消すブランチ以外のrefがHEADのcommitを
+    # 含むときに限って、独自のcommitが無いとみなす。起点がorigin/mainの祖先でなくても
+    # (機能ブランチから作った場合など)、他のrefが辿れるので何も失わない。
+    if [[ "$first_subject" != "branch: Created from"* ]] || ! has_other_ref_containing "$wt_head"; then
+      keep "unused"
+      return
+    fi
     how="abandoned"
     reach_target="$wt_head"
   elif git merge-base --is-ancestor "$wt_head" refs/remotes/origin/main 2>/dev/null; then
