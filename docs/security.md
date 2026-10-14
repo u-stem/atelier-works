@@ -213,7 +213,7 @@ publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名
 | zipの内容の制限 | `metadata_patch_zip.ts`の`readMetadataPatchZip` |
 | 出どころ、再検証、適用先、新規script | `metadata_patch_verify.ts`の`verifyMetadataPatch` |
 | パスの許可リスト、manifest | `metadata_patch_manifest.ts`の`isAllowedMetadataPath`、`parseManifest` |
-| 新しいscriptの依存の検出 | `metadata_patch_imports.ts`の`traceBareImports` |
+| 依存の変化の検出 | `metadata_patch_imports.ts`の`traceBareImports` |
 | `.script.yaml`と`wmill-lock.yaml`の制限 | `metadata_patch_yaml.ts`の`checkScriptYaml`、`parseWmillLock` |
 
 ##### 出どころ
@@ -305,6 +305,11 @@ zipは、展開の前に宣言された大きさとパスを検査し、展開�
   `$`で始まる値(`$var:`、`$res:`)は実行者の権限で解決され、`x-windmill`のキーはフォームの挙動を変えるためである。
   エスケープやタグで綴りを変えられると、復号しない検査では見分けられないので、それらの文字ごと拒む。
   例外は、wmillが先頭に書く`$schema: https://json-schema.org/draft/2020-12/schema`の1行だけである。
+- `schema`のスキーマの語彙のキーは、許可リスト(`ALLOWED_SCHEMA_KEYWORDS`)に限る。
+  リストは、リポジトリのすべての`.script.yaml`の`schema`で使われているキーの和集合である。
+  `showExpr`や`customErrorMessage`のように、式の評価やUIの挙動に関わるキーは、使われていないので拒否する。
+  `properties`の直下のキー(引数の名前)と、`default`や`enum`などの中身は、語彙として読まない。
+  `properties`と`items`の中身が、同じ行の`{...}`で書かれているものは、キーを隠せるので拒否する。
 
 ##### lockの制限
 
@@ -317,20 +322,22 @@ lockの意味(版の範囲、パッケージの入れ子、取得元、integrity
 - `*.script.lock`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
   importするscriptの範囲は、PRのheadの木のコードで、相対importの推移閉包を計算して決める。
 - 対応する`.ts`が保護パスに当たるscriptのlockは、lock自身が保護パスでなくても拒否する(例: `steps/dependabot_*.ts`)。
-- 既存のscript(`baseSha`の木にlockがある)のlockは、`baseSha`の木のlockとバイト列まで同一であること。
-  差があれば、依存の変更として拒否する。
-  比べる相手は、`baseSha`の木である。再生成がその木に対して行われ、baseブランチの先端は、その後に進みうるためである。
+- 閉包に入るすべてのscriptについて、相対importをたどって集めた裸のimport指定子(版つき)の集合を、baseの先端の木とheadの木で比べる。
+  1つでも違えば、manifestの内容と無関係に、パッチ全体を拒否する。
+  依存の変更は、パッチの`.script.lock`を見なくても、コードのimportに現れるためである。
+  文字列リテラルでないimport、import属性、1ファイルの上限を超えるファイルなど、追えないものも拒否する。
+- 既存のscript(headの木にlockがある)のlockは、headの木のlockとバイト列まで同一であること。適用しても変わらない。
+  比べる相手はheadの木である。manifestの`baseSha`は出どころの照合にだけ使い、内容の比較には使わない。過去のcommitを選ばれて、比較の相手を変えられないためである。
 - 新しいscriptは、同じPRで`.ts`を追加したものに限る。
-  lockは、`baseSha`の木にある依存の無いlib(`f/factory/lib/metadata_patch_manifest.script.lock`)のlockと同一であること。
-  そのscriptが相対importの閉包で読むファイルに、裸のimportがあれば拒否する。
-  文字列リテラルでないimportや、1ファイルの上限を超えるファイルなど、追えないものも拒否する。
+  lockは、baseの先端の木にある依存の無いlib(`f/factory/lib/metadata_patch_manifest.script.lock`)のlockと同一であること。
+  lockと`.script.yaml`の両方が、パッチが運ぶか、headの木にすでにあること。lockの無い新しいscriptは拒否する。
 - `*.script.yaml`を変えてよいのは、`.ts`自身が変わったscriptに限る。入力のスキーマは、そのscript自身の`main`の引数からしか決まらないためである。
 - 空のlockを固定の値として埋め込まない。lockの書式がwmillの版で変わっても、リポジトリの実物と比べるためである。
 - headの木かbaseの木のファイルを読めないときは拒否する。
 
 ##### ロックのハッシュの制限
 
-`wmill-lock.yaml`は、YAMLとして解析する。
+`wmill-lock.yaml`は、完全なYAMLとして解析しない。wmillが書く決まった形に1行ずつ合わせて読み、外れるものは断る。
 
 - 変わったキーが、許可したscriptのものに限られることを確かめる。
 - 値が64桁の小文字の16進数であることを確かめる。
@@ -359,11 +366,8 @@ lockの意味(版の範囲、パッケージの入れ子、取得元、integrity
 
 ##### 受け取る側の実装で決めること
 
-次は、受け取る側を実装するときに決める。ここでは決めない。
-
-- 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
-- `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
-- `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
+受け取る側を呼び出す配線で決める項目は、[内部仕様](internals/ci-fix.md#配線で決めること)にまとめる。
+この文書は、それらを前提にせず、内容の制限を定める。
 
 ### 開発セッションのsubagent
 

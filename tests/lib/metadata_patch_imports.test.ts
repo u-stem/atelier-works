@@ -117,6 +117,84 @@ describe("scanImports", () => {
   });
 });
 
+describe("scanImports with the transpiler", () => {
+  test("detects an import hidden between quotes in comments", () => {
+    const code = "/*'*/import x from \"evil\";/*'*/";
+    expect(scanImports(code).bare).toEqual(["evil"]);
+  });
+
+  test("detects an import after a block comment with a quote", () => {
+    const code = '/* it\'s */ import x from "evil2";';
+    expect(scanImports(code).bare).toEqual(["evil2"]);
+  });
+
+  test("ignores an import in a line comment", () => {
+    expect(scanImports('// import x from "commented";\n').bare).toEqual([]);
+  });
+
+  test("ignores an import in a block comment", () => {
+    expect(scanImports('/* import y from "block"; */').bare).toEqual([]);
+  });
+
+  test("ignores an import in a string", () => {
+    expect(scanImports('const s = "import x from \\"instr\\"";').bare).toEqual(
+      [],
+    );
+  });
+
+  test("ignores an import in a template literal", () => {
+    expect(scanImports('const s = `import x from "intpl"`;').bare).toEqual([]);
+  });
+
+  test("reads an inline type import as an edge", () => {
+    expect(scanImports('import { type T, b } from "./a.ts";').relative).toEqual(
+      ["./a.ts"],
+    );
+  });
+
+  test("reads a type-only export as an edge", () => {
+    expect(scanImports('export type { T } from "./t.ts";').relative).toEqual([
+      "./t.ts",
+    ]);
+  });
+
+  test.each([
+    ["a macro attribute", 'import { m } from "./m.ts" with { type: "macro" };'],
+    ["a json attribute", 'import j from "./a.json" with { type: "json" };'],
+    [
+      "an assert attribute",
+      'import j from "./a.json" assert { type: "json" };',
+    ],
+    [
+      "an attribute split over lines",
+      'import m from "./m.ts" with\n{ type: "macro" };',
+    ],
+  ])("marks %s as untraceable", (_label, code) => {
+    expect(scanImports(code).untraceable).toBe(true);
+  });
+
+  test("does not read the imports of a source with an attribute", () => {
+    const code = 'import { m } from "./m.ts" with { type: "macro" };';
+    expect(scanImports(code).relative).toEqual([]);
+  });
+
+  test("marks a source that does not parse as untraceable", () => {
+    expect(scanImports("import import import").untraceable).toBe(true);
+  });
+
+  test("marks a call inside a comment as untraceable", () => {
+    expect(scanImports("// import(name)\n").untraceable).toBe(true);
+  });
+
+  test("marks a call inside a string as untraceable", () => {
+    expect(scanImports('const s = "require(x)";').untraceable).toBe(true);
+  });
+
+  test("reads a call with a literal inside a comment as traceable", () => {
+    expect(scanImports('// import("./a.ts")\n').untraceable).toBe(false);
+  });
+});
+
 describe("relativeCandidates", () => {
   test("lists the paths that a specifier can mean", () => {
     expect(relativeCandidates("f/factory/a.ts", "./lib/b")).toEqual([

@@ -40,17 +40,126 @@ const RISKY_SCHEMA_CHARS = /[\\!&*%\t$]/;
 const WINDMILL_EXTENSION = /x-windmill/i;
 
 /**
+ * `schema`の中で、スキーマの語彙として書いてよいキー。
+ * リポジトリのすべての`.script.yaml`の`schema`で使われているキーの和集合である。
+ * `showExpr`や`customErrorMessage`のように、Windmillの式やUIの挙動に関わるキーは含めない。
+ */
+export const ALLOWED_SCHEMA_KEYWORDS: ReadonlySet<string> = new Set<string>([
+  "type",
+  "properties",
+  "required",
+  "description",
+  "default",
+  "originalType",
+  "format",
+  "items",
+  "resourceType",
+  "enum",
+]);
+
+// 値を持たない`properties`と`items`の子は、スキーマの語彙を持つ入れ子として読む。
+const NESTED_SCHEMA_KEYS: ReadonlySet<string> = new Set([
+  "properties",
+  "items",
+]);
+const KEY_LINE = /^( *)(.+?):(?: +(.*))?$/;
+
+type SchemaState = "schema" | "names" | "opaque";
+type SchemaFrame = { readonly indent: number; readonly child: SchemaState };
+
+export type SchemaWalk =
+  | { readonly ok: true; readonly keywords: ReadonlySet<string> }
+  | { readonly ok: false };
+
+function unquote(key: string): string {
+  const trimmed = key.trim();
+  const quoted =
+    trimmed.length >= 2 &&
+    (trimmed[0] === '"' || trimmed[0] === "'") &&
+    trimmed.at(-1) === trimmed[0];
+  return quoted ? trimmed.slice(1, -1) : trimmed;
+}
+
+/**
+ * `schema`の塊をインデントで読み、スキーマの語彙として書かれたキーを集める。
+ * `schema`直下、`properties`の各項目の中、`items`の中のキーを語彙として読む。
+ * `properties`の直下のキー(引数の名前)は自由に読み、`default`や`enum`など、ほかのキーの中身は読まない。
+ * 語彙の位置にある行が、キーの行でないとき、リストの項目のとき、
+ * `properties`と`items`の中身が同じ行の`{...}`で書かれているときは、失敗にする。
+ * 流れ形式の入れ子に、語彙のキーを隠させないためである。
+ */
+export function walkSchema(block: string): SchemaWalk {
+  const keywords = new Set<string>();
+  const frames: SchemaFrame[] = [];
+  const lines = block.split("\n").slice(1);
+  for (const line of lines) {
+    if (line.trim() === "" || line.trimStart().startsWith("#")) {
+      continue;
+    }
+    if (line === SCHEMA_MARKER_LINE) {
+      continue;
+    }
+    const indent = line.length - line.trimStart().length;
+    while (frames.length > 0 && (frames.at(-1)?.indent ?? 0) >= indent) {
+      frames.pop();
+    }
+    const container: SchemaState = frames.at(-1)?.child ?? "schema";
+    const content = line.trimStart();
+    if (content === "-" || content.startsWith("- ")) {
+      if (container !== "opaque") {
+        return { ok: false };
+      }
+      continue;
+    }
+    const match = KEY_LINE.exec(line);
+    if (match?.[2] === undefined) {
+      if (container !== "opaque") {
+        return { ok: false };
+      }
+      continue;
+    }
+    const key = unquote(match[2]);
+    const inline = (match[3] ?? "").trim();
+    let child: SchemaState = "opaque";
+    if (container === "schema") {
+      keywords.add(key);
+      if (NESTED_SCHEMA_KEYS.has(key)) {
+        child = key === "properties" ? "names" : "schema";
+        if (inline !== "" && inline !== "{}") {
+          return { ok: false };
+        }
+      }
+    } else if (container === "names") {
+      child = "schema";
+      if (inline !== "" && inline !== "{}") {
+        return { ok: false };
+      }
+    }
+    frames.push({ indent, child });
+  }
+  return { ok: true, keywords };
+}
+
+/**
  * `schema`の塊が、許可リストの範囲に収まるか。
- * 既知の1行を除いて、復号の前に、値の意味を変えうる文字と`x-windmill`を含まないことを求める。
+ * - 既知の1行を除いて、復号の前に、値の意味を変えうる文字と`x-windmill`を含まないこと。
+ * - スキーマの語彙のキーが、`ALLOWED_SCHEMA_KEYWORDS`の中にあること。
  * `schema`はコードを動かさないが、`$`で始まる値は実行者の権限で解決され、
- * `x-windmill`のキーはフォームの挙動を変える。
+ * `x-windmill`や`showExpr`のようなキーはフォームの挙動と式の評価を変える。
  * エスケープやタグで綴りを変えられると正規表現では見分けられないので、それらの文字ごと拒む。
  */
 function isInertSchema(block: string): boolean {
   const lines = block.split("\n");
   const known = lines.indexOf(SCHEMA_MARKER_LINE);
   const text = lines.filter((_line, index) => index !== known).join("\n");
-  return !(RISKY_SCHEMA_CHARS.test(text) || WINDMILL_EXTENSION.test(text));
+  if (RISKY_SCHEMA_CHARS.test(text) || WINDMILL_EXTENSION.test(text)) {
+    return false;
+  }
+  const walked = walkSchema(block);
+  return (
+    walked.ok &&
+    [...walked.keywords].every((key) => ALLOWED_SCHEMA_KEYWORDS.has(key))
+  );
 }
 
 export type BlocksResult =
@@ -115,7 +224,8 @@ function reject(reason: ScriptYamlFailure): ScriptYamlResult {
 
 /**
  * 再生成した`.script.yaml`(`patch`)を検査する。`scriptPath`は拡張子のないscriptのパス。
- * 共通して、`schema`があり、その中に`$`で始まる値と`x-windmill-`のキーが無く、
+ * 共通して、`schema`があり、その中に許可リスト外の文字(`\`、`!`、`&`、`*`、`%`、タブ、`$`)と
+ * `x-windmill`が無く、スキーマの語彙のキーが`ALLOWED_SCHEMA_KEYWORDS`の中にあり、
  * `lock`が`'!inline <scriptPath>.script.lock'`であることを求める。
  * - 新しいscript(`isNewScript`): キーが許可リストの中にあり、`kind`があるなら`script`であること。
  * - 既存のscript: 現在の版(`head`)と比べて、`schema`以外のキーの塊が同じであること。

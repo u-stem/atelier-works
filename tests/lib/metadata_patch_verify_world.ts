@@ -16,16 +16,16 @@ export const BASE_TIP = "d".repeat(40);
 export const HASH_OLD = "1".repeat(64);
 export const HASH_NEW = "2".repeat(64);
 
-/** 依存の無いlibのlockと同じ中身。baseの木にある正規の空lockとして使う。 */
+/** 依存の無いlibのlockと同じ中身。baseの先端の木にある正規の空lockとして使う。 */
 export const EMPTY_LOCK = '{\n  "dependencies": {}\n}\n//bun.lock\n<empty>';
 /** 正規の空lockを置くbaseの木のパス。 */
 export const EMPTY_LOCK_PATH =
   "f/factory/lib/metadata_patch_manifest.script.lock";
-/** baseの木にある、依存を持つscriptのlock。 */
+/** 依存を持つscriptのlock。 */
 export const LOCK =
   '{\n  "dependencies": {\n    "left-pad": "1.3.0"\n  }\n}\n//bun.lock\n{"lockfileVersion": 2}';
-/** headの木にある、古いlock。 */
-export const STALE_LOCK =
+/** 別の版のlock。 */
+export const OTHER_LOCK =
   '{\n  "dependencies": {\n    "left-pad": "1.2.0"\n  }\n}\n//bun.lock\n{"lockfileVersion": 2}';
 
 export const encoder = new TextEncoder();
@@ -53,7 +53,7 @@ export type World = {
   run: RunFacts;
   pr: PrFacts;
   head: Map<string, string | Uint8Array>;
-  /** manifestの`baseSha`の木。 */
+  /** baseブランチの今の先端(`pr.baseSha`)の木。 */
   base: Map<string, string | Uint8Array>;
   /** パッチに載せるファイル。キーはリポジトリ相対のパス。 */
   patch: Map<string, string | Uint8Array>;
@@ -66,7 +66,7 @@ export type World = {
   parents: readonly string[] | null;
   /** 読み取りに失敗するbaseのパス。 */
   baseFailures: Set<string>;
-  /** baseの木の読み取りで渡されたcommit。 */
+  /** baseの木の読み取りで渡されたref。 */
   baseReads: string[];
   /** 読み取りに失敗するheadのパス。 */
   headFailures: Set<string>;
@@ -76,7 +76,7 @@ export type World = {
 
 /**
  * headはfoo.tsがlib/bar.tsをimportし、PRはfoo.tsとbar.tsを変えた状態。
- * fooのlockはbaseの木では`LOCK`で、headでは古い。パッチはfooのlock(baseと同じ)、yaml、ハッシュを直す。
+ * fooのlockはheadの木でもパッチでも`LOCK`で、importはbaseの先端の木と同じ。パッチはfooのlock、yaml、ハッシュを運ぶ。
  */
 export function world(): World {
   return {
@@ -107,7 +107,7 @@ export function world(): World {
       ["f/factory/foo.ts", 'import { x } from "./lib/bar.ts";\n'],
       ["f/factory/lib/bar.ts", "export const x = 2;\n"],
       ["f/factory/other.ts", "export const y = 1;\n"],
-      ["f/factory/foo.script.lock", STALE_LOCK],
+      ["f/factory/foo.script.lock", LOCK],
       ["f/factory/foo.script.yaml", scriptYaml("foo")],
       [
         "wmill-lock.yaml",
@@ -140,7 +140,7 @@ export function world(): World {
   };
 }
 
-/** baseとheadの両方に、lockを持つ既存のscriptを足す。headのlockは古い。 */
+/** baseとheadの両方に、同じlockを持つ既存のscriptを足す。 */
 export function addExistingScript(
   w: World,
   name: string,
@@ -148,7 +148,7 @@ export function addExistingScript(
 ): void {
   w.head.set(`f/factory/${name}.ts`, source);
   w.base.set(`f/factory/${name}.ts`, source);
-  w.head.set(`f/factory/${name}.script.lock`, STALE_LOCK);
+  w.head.set(`f/factory/${name}.script.lock`, LOCK);
   w.base.set(`f/factory/${name}.script.lock`, LOCK);
 }
 
@@ -194,8 +194,8 @@ export function build(w: World) {
         ? { kind: "missing" }
         : { kind: "found", content: bytes(value) };
     },
-    readBaseFile: async (sha, path): Promise<FileRead> => {
-      w.baseReads.push(sha);
+    readBaseFile: async (ref, path): Promise<FileRead> => {
+      w.baseReads.push(ref);
       if (w.baseFailures.has(path)) {
         return { kind: "failed" };
       }

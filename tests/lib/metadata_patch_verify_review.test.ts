@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test";
 import {
   addExistingScript,
   BASE,
+  BASE_TIP,
   codeOf,
   EMPTY_LOCK,
   EMPTY_LOCK_PATH,
   HASH_NEW,
   HASH_OLD,
   LOCK,
+  OTHER_LOCK,
   scriptYaml,
   verify,
   wmillLock,
@@ -54,7 +56,7 @@ describe("verifyMetadataPatch limits the script yaml to changed sources", () => 
 });
 
 describe("verifyMetadataPatch keeps the lock of an existing script", () => {
-  test("rejects a lock that differs from the base tree", async () => {
+  test("rejects a lock that differs from the head tree", async () => {
     const w = world();
     w.patch.set("f/factory/foo.script.lock", LOCK.replace("1.3.0", "1.4.0"));
     expect(await codeOf(w)).toBe("lock_changed");
@@ -75,16 +77,109 @@ describe("verifyMetadataPatch keeps the lock of an existing script", () => {
     expect(await codeOf(w)).toBe("lock_changed");
   });
 
-  test("rejects when the lock in the base tree cannot be read", async () => {
+  test("rejects when the lock in the head tree cannot be read", async () => {
     const w = world();
-    w.baseFailures.add("f/factory/foo.script.lock");
+    w.headFailures.add("f/factory/foo.script.lock");
+    expect(await codeOf(w)).toBe("head_unreadable");
+  });
+
+  test("compares with the head tree, not with an older lock in the base tree", async () => {
+    const w = world();
+    w.base.set("f/factory/foo.script.lock", OTHER_LOCK);
+    expect(await codeOf(w)).toBe("ok");
+  });
+});
+
+describe("verifyMetadataPatch refuses a change of dependencies", () => {
+  test("rejects a bare import added to a changed script", async () => {
+    const w = world();
+    w.head.set(
+      "f/factory/foo.ts",
+      'import { x } from "./lib/bar.ts";\nimport pad from "left-pad@1.4.0";\n',
+    );
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("rejects a bare import removed from a changed script", async () => {
+    const w = world();
+    w.base.set(
+      "f/factory/foo.ts",
+      'import { x } from "./lib/bar.ts";\nimport pad from "left-pad@1.4.0";\n',
+    );
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("rejects another version of the same package", async () => {
+    const w = world();
+    w.base.set("f/factory/foo.ts", 'import pad from "left-pad@1.3.0";\n');
+    w.head.set("f/factory/foo.ts", 'import pad from "left-pad@1.4.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("rejects a bare import that arrives through a changed library", async () => {
+    const w = world();
+    w.head.set("f/factory/lib/bar.ts", 'import pad from "left-pad@1.4.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("rejects a change in an importer that the manifest does not carry", async () => {
+    const w = world();
+    addExistingScript(w, "baz", 'import "./foo.ts";\n');
+    w.head.set(
+      "f/factory/baz.ts",
+      'import "./foo.ts";\nimport "evil@1.0.0";\n',
+    );
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("rejects an import hidden between quotes in comments", async () => {
+    const w = world();
+    w.head.set(
+      "f/factory/foo.ts",
+      '/*\'*/import x from "evil";/*\'*/\nimport { y } from "./lib/bar.ts";\n',
+    );
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("accepts an import that only appears in a comment", async () => {
+    const w = world();
+    w.head.set(
+      "f/factory/foo.ts",
+      '// import x from "evil";\nimport { y } from "./lib/bar.ts";\n',
+    );
+    expect(await codeOf(w)).toBe("ok");
+  });
+
+  test.each([
+    ["a variable", "await import(name);"],
+    ["a concatenation", 'await import("./x" + n);'],
+    ["a macro attribute", 'import { m } from "./m.ts" with { type: "macro" };'],
+  ])(
+    "rejects a changed script with an import made of %s",
+    async (_label, code) => {
+      const w = world();
+      w.head.set("f/factory/foo.ts", `${code}\n`);
+      expect(await codeOf(w)).toBe("dependency_change_requires_human");
+    },
+  );
+
+  test("rejects when the source in the base tree cannot be read", async () => {
+    const w = world();
+    w.baseFailures.add("f/factory/foo.ts");
     expect(await codeOf(w)).toBe("base_unreadable");
   });
 
-  test("accepts a lock that equals the base tree even if head differs", async () => {
+  test("rejects when a library in the base tree cannot be read", async () => {
     const w = world();
-    expect(w.head.get("f/factory/foo.script.lock")).not.toBe(LOCK);
-    expect(await codeOf(w)).toBe("ok");
+    w.baseFailures.add("f/factory/lib/bar.ts");
+    expect(await codeOf(w)).toBe("base_unreadable");
+  });
+
+  test("rejects a script that is not in the base tree and imports a package", async () => {
+    const w = world();
+    w.base.delete("f/factory/foo.ts");
+    w.head.set("f/factory/foo.ts", 'import pad from "left-pad@1.4.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
   });
 });
 
@@ -182,6 +277,42 @@ describe("verifyMetadataPatch accepts only an empty lock for a new script", () =
   });
 });
 
+describe("verifyMetadataPatch requires the metadata of a new script", () => {
+  test("rejects a new script whose yaml is missing", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.patch.delete("f/factory/newone.script.yaml");
+    expect(await codeOf(w)).toBe("new_script_incomplete");
+  });
+
+  test("rejects a new script whose lock is missing", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.patch.delete("f/factory/newone.script.lock");
+    expect(await codeOf(w)).toBe("new_script_incomplete");
+  });
+
+  test("accepts a new script whose metadata is already in the head tree", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.patch.delete("f/factory/newone.script.lock");
+    w.patch.delete("f/factory/newone.script.yaml");
+    w.head.set("f/factory/newone.script.lock", EMPTY_LOCK);
+    w.head.set("f/factory/newone.script.yaml", scriptYaml("newone"));
+    expect(await codeOf(w)).toBe("ok");
+  });
+
+  test("does not ask a flow module for metadata", async () => {
+    const w = world();
+    w.head.set("f/factory/x__flow/step.ts", "export function main() {}\n");
+    w.pr = {
+      ...w.pr,
+      diff: [
+        ...w.pr.diff,
+        { path: "f/factory/x__flow/step.ts", status: "added" },
+      ],
+    };
+    expect(await codeOf(w)).toBe("ok");
+  });
+});
+
 describe("verifyMetadataPatch reads the head tree", () => {
   test("rejects when a file of the head tree cannot be read", async () => {
     const w = world();
@@ -259,10 +390,16 @@ describe("verifyMetadataPatch surfaces port failures", () => {
   });
 });
 
-describe("verifyMetadataPatch reads the tree of the base sha", () => {
-  test("reads the base files at the sha of the manifest", async () => {
+describe("verifyMetadataPatch reads the tree of the base tip", () => {
+  test("reads the base files at the tip of the base branch", async () => {
     const w = world();
     await verify(w);
-    expect([...new Set(w.baseReads)]).toEqual([BASE]);
+    expect([...new Set(w.baseReads)]).toEqual([BASE_TIP]);
+  });
+
+  test("never reads the tree of the sha in the manifest", async () => {
+    const w = world();
+    await verify(w);
+    expect(w.baseReads).not.toContain(BASE);
   });
 });

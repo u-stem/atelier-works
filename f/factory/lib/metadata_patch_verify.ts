@@ -4,7 +4,8 @@
 // artifactはPRの作者が完全に決められるので、出どころの確認は補助にとどめ、
 // 安全は、書き込む内容を許可リストで絞ることで成り立たせる。
 // 自動で適用するのは、依存が変わらない再生成だけである。lockの意味は解釈せず、
-// 既存のscriptのlockはbaseの木と同一のものに限り、新しいscriptのlockは空のlockに限る。
+// 閉包に入るscriptの裸のimportがbaseの先端の木と同じであることを確かめ、
+// 既存のscriptのlockはheadの木と同一のものに限り、新しいscriptのlockは空のlockに限る。
 
 import { createHash } from "node:crypto";
 import {
@@ -32,7 +33,7 @@ export const ALLOWED_DIFF_PREFIXES: readonly string[] = [
 
 /**
  * 新しいscriptのlockが一致すべき、空のlockの置き場所。
- * 依存の無いlibのlockで、baseの木から読む。中身をコードに埋め込まないのは、
+ * 依存の無いlibのlockで、baseの先端の木から読む。中身をコードに埋め込まないのは、
  * lockの書式がwmillの版で変わっても、リポジトリの実物と比べるため。
  */
 export const EMPTY_LOCK_REFERENCE =
@@ -109,10 +110,10 @@ export type VerifyPorts = {
   /** PRのheadの木のファイルを読む。 */
   readonly readHeadFile: (path: string) => Promise<FileRead>;
   /**
-   * `baseSha`のcommitの木のファイルを読む。`baseSha`はmanifestの値で、baseブランチの今の先端とは限らない。
-   * パッチはこの木に対する再生成の結果なので、lockの比較もこの木で行う。
+   * commit(`ref`)の木のファイルを読む。検査は`ref`にbaseブランチの今の先端(`PrFacts.baseSha`)を渡す。
+   * manifestの`baseSha`は渡さない。過去のcommitを選ばれて、比較の相手を変えられないためである。
    */
-  readonly readBaseFile: (baseSha: string, path: string) => Promise<FileRead>;
+  readonly readBaseFile: (ref: string, path: string) => Promise<FileRead>;
 };
 
 export type VerifyInput = {
@@ -154,6 +155,7 @@ export type VerifyFailureCode =
   | "script_not_affected"
   | "protected_source"
   | "new_script_without_source"
+  | "new_script_incomplete"
   | "head_unreadable"
   | "base_unreadable"
   | "lock_changed"
@@ -373,6 +375,22 @@ async function checkHistory(
   return null;
 }
 
+/** 読み取りの結果を、同じ検査の中で使い回す。木のファイルは検査の間に変わらないとして扱う。 */
+function memoizeRead(
+  read: (path: string) => Promise<FileRead>,
+): (path: string) => Promise<FileRead> {
+  const cache = new Map<string, Promise<FileRead>>();
+  return (path) => {
+    const cached = cache.get(path);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const pending = read(path);
+    cache.set(path, pending);
+    return pending;
+  };
+}
+
 /**
  * `.ts`が変わったscriptと、それを相対importの推移閉包で読むscriptの、`.ts`のパスを返す。
  * importの関係は、PRのheadの木のコードから、このコードの規則で求める。
@@ -382,11 +400,11 @@ async function checkHistory(
 async function affectedSources(
   changed: ReadonlySet<string>,
   sources: ReadonlySet<string>,
-  ports: VerifyPorts,
+  readHead: (path: string) => Promise<FileRead>,
 ): Promise<ReadonlySet<string> | Failure> {
   const importers = new Map<string, string[]>();
   for (const path of sources) {
-    const read = await ports.readHeadFile(path);
+    const read = await readHead(path);
     if (read.kind === "failed") {
       return fail("head_unreadable", path);
     }
@@ -435,10 +453,10 @@ function classify(path: string): ScriptFile | null {
 }
 
 type Context = {
-  readonly input: VerifyInput;
-  readonly ports: VerifyPorts;
-  /** manifestの`baseSha`。 */
-  readonly baseSha: string;
+  /** headの木の読み取り。 */
+  readonly readHead: (path: string) => Promise<FileRead>;
+  /** baseブランチの今の先端(`pr.baseSha`)の木の読み取り。 */
+  readonly readBase: (path: string) => Promise<FileRead>;
   readonly headSources: ReadonlySet<string>;
   /** PRの差分で`.ts`が追加された、または変更されたscript。 */
   readonly changedSources: ReadonlySet<string>;
@@ -451,11 +469,81 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
 }
 
+function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  return a.size === b.size && [...a].every((item) => b.has(item));
+}
+
+/**
+ * 依存が変わらないことを、manifestの内容と無関係に確かめる。
+ * 閉包に入るすべてのscriptについて、相対importをたどって集めた裸のimport指定子(版つき)の集合を、
+ * baseの先端の木とheadの木で比べ、1つでも違えば断る。
+ * 追えないimportと、上限を超えるファイルがあるときも断る。lockの内容は解釈しない。
+ */
+async function checkDependencies(context: Context): Promise<Failure | null> {
+  for (const source of [...context.affected].sort()) {
+    const head = await traceBareImports(source, context.readHead);
+    if (!head.ok) {
+      return fail(
+        head.reason === "unreadable"
+          ? "head_unreadable"
+          : "dependency_change_requires_human",
+        source,
+      );
+    }
+    const base = await traceBareImports(source, context.readBase);
+    if (!base.ok) {
+      return fail(
+        base.reason === "unreadable"
+          ? "base_unreadable"
+          : "dependency_change_requires_human",
+        source,
+      );
+    }
+    if (!sameSet(head.bare, base.bare)) {
+      return fail("dependency_change_requires_human", source);
+    }
+  }
+  return null;
+}
+
+/**
+ * 新しいscript(PRの差分で`.ts`が追加されたもの)に、lockと`.script.yaml`がそろうか。
+ * パッチが運ぶか、headの木にすでにあるかのどちらかを求める。
+ * どちらにも無いlockは、後から依存を含んで作られるのを、この検査では見られないためである。
+ * フローのモジュール(`__flow/`の下)はscriptのメタデータを持たないので対象にしない。
+ */
+async function checkNewScripts(
+  context: Context,
+  manifest: Manifest,
+): Promise<Failure | null> {
+  const carried = new Set(manifest.entries.map((entry) => entry.path));
+  for (const source of [...context.addedSources].sort()) {
+    if (source.includes("__flow/")) {
+      continue;
+    }
+    const stem = source.slice(0, -".ts".length);
+    for (const path of [`${stem}.script.lock`, `${stem}.script.yaml`]) {
+      if (carried.has(path)) {
+        continue;
+      }
+      const read = await context.readHead(path);
+      if (read.kind === "failed") {
+        return fail("head_unreadable", path);
+      }
+      if (read.kind === "missing") {
+        return fail("new_script_incomplete", path);
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * lockを検査する。依存が変わる再生成は自動で適用せず、人の手に回す。
- * - 既存のscript(baseの木にlockがある): baseの木のlockとバイト列まで同一であること。
- * - 新しいscript: 同じPRで`.ts`を追加したもので、lockが空のlock(baseの木の参照のlock)と同一であり、
- *   そのscriptが相対importの閉包で読むファイルに、裸のimportも追えないimportも無いこと。
+ * - 既存のscript(headの木にlockがある): headの木のlockとバイト列まで同一であること。適用しても変わらない。
+ * - 新しいscript: 同じPRで`.ts`を追加したもので、lockが空のlock(baseの先端の木の参照のlock)と同一であること。
+ *   裸のimportが無いことは、`checkDependencies`が確かめる。
+ * 比べる相手はheadの木で、manifestの`baseSha`は内容の比較に使わない。過去のcommitを選ばれないためである。
  */
 async function checkLock(
   context: Context,
@@ -463,38 +551,24 @@ async function checkLock(
   script: string,
   content: Uint8Array,
 ): Promise<Failure | null> {
-  const { ports, baseSha } = context;
-  const baseRead = await ports.readBaseFile(baseSha, path);
-  if (baseRead.kind === "failed") {
-    return fail("base_unreadable", path);
+  const headRead = await context.readHead(path);
+  if (headRead.kind === "failed") {
+    return fail("head_unreadable", path);
   }
-  if (baseRead.kind === "found") {
-    return sameBytes(content, baseRead.content)
+  if (headRead.kind === "found") {
+    return sameBytes(content, headRead.content)
       ? null
       : fail("lock_changed", path);
   }
 
-  const source = `${script}.ts`;
-  if (!context.addedSources.has(source)) {
+  if (!context.addedSources.has(`${script}.ts`)) {
     return fail("new_script_without_source", path);
   }
-  const reference = await ports.readBaseFile(baseSha, EMPTY_LOCK_REFERENCE);
+  const reference = await context.readBase(EMPTY_LOCK_REFERENCE);
   if (reference.kind !== "found") {
     return fail("base_unreadable", EMPTY_LOCK_REFERENCE);
   }
-  if (!sameBytes(content, reference.content)) {
-    return fail("dependency_change_requires_human", path);
-  }
-  const imports = await traceBareImports(source, ports.readHeadFile);
-  if (!imports.ok) {
-    return fail(
-      imports.reason === "unreadable"
-        ? "head_unreadable"
-        : "dependency_change_requires_human",
-      path,
-    );
-  }
-  return imports.bare.size === 0
+  return sameBytes(content, reference.content)
     ? null
     : fail("dependency_change_requires_human", path);
 }
@@ -515,7 +589,7 @@ async function checkYaml(
   if (isNew && !context.addedSources.has(source)) {
     return fail("new_script_without_source", path);
   }
-  const headRead = await context.ports.readHeadFile(path);
+  const headRead = await context.readHead(path);
   if (headRead.kind === "failed") {
     return fail("head_unreadable", path);
   }
@@ -562,7 +636,7 @@ async function checkWmillLock(
   content: Uint8Array,
 ): Promise<Failure | null> {
   const patchText = decodeUtf8(content);
-  const headRead = await context.ports.readHeadFile(WMILL_LOCK);
+  const headRead = await context.readHead(WMILL_LOCK);
   if (headRead.kind === "failed") {
     return fail("head_unreadable", WMILL_LOCK);
   }
@@ -596,11 +670,11 @@ async function checkWmillLock(
 
 /** manifestが言う状態と、headの木の実際が合うこと。 */
 async function checkStatus(
-  ports: VerifyPorts,
+  context: Context,
   path: string,
   status: "added" | "modified",
 ): Promise<Failure | null> {
-  const read = await ports.readHeadFile(path);
+  const read = await context.readHead(path);
   if (read.kind === "failed") {
     return fail("head_unreadable", path);
   }
@@ -616,9 +690,12 @@ async function checkStatus(
  * - manifestが今の許可リストを通り、`headSha`がPRの今のheadと一致し、
  *   実体の大きさとsha256が合い、manifestに無いファイルが無く、削除と保護パスが無い。
  * - `baseSha`がbaseの履歴にあり、headがそれを含み、`mergeSha`の親が`baseSha`、`headSha`の順である。
+ *   `baseSha`と`mergeSha`は出どころの照合だけに使い、内容の比較には使わない。
+ * - 閉包に入るscriptの裸のimport指定子の集合が、baseの先端の木とheadの木で同じである。
+ * - 新しいscriptは、lockと`.script.yaml`がそろう。
  * - `*.script.lock`が、`.ts`が変わったscriptとそれをimportするscriptのものに限られる。
  *   `*.script.yaml`は、`.ts`が変わったscript自身のものに限られる。
- * - lockは、既存のscriptならbaseの木と同一、新しいscriptなら空のlockで、依存が変わらないこと。
+ * - lockは、既存のscriptならheadの木と同一、新しいscriptなら空のlockである。
  * - `.script.yaml`のキーと`schema`、`wmill-lock.yaml`のキーを満たす。
  * 失敗の`code`は固定の種別で、`detail`は表示用に無害化している。
  */
@@ -651,22 +728,33 @@ export async function verifyMetadataPatch(
       added.add(entry.path);
     }
   }
+  const readHead = memoizeRead(ports.readHeadFile);
+  const readBase = memoizeRead((path) =>
+    ports.readBaseFile(input.pr.baseSha, path),
+  );
   const headSources = new Set(
     (await ports.listHeadSources()).filter((path) => SOURCE_PATH.test(path)),
   );
-  const affected = await affectedSources(changed, headSources, ports);
+  const affected = await affectedSources(changed, headSources, readHead);
   if ("ok" in affected) {
     return affected;
   }
   const context: Context = {
-    input,
-    ports,
-    baseSha: manifest.baseSha,
+    readHead,
+    readBase,
     headSources,
     changedSources: changed,
     addedSources: added,
     affected,
   };
+  const dependencies = await checkDependencies(context);
+  if (dependencies !== null) {
+    return dependencies;
+  }
+  const complete = await checkNewScripts(context, manifest);
+  if (complete !== null) {
+    return complete;
+  }
 
   const writes: { path: string; content: Uint8Array }[] = [];
   for (const entry of manifest.entries) {
@@ -674,7 +762,7 @@ export async function verifyMetadataPatch(
     if (entry.status === "deleted" || content === undefined) {
       return fail("manifest_invalid", entry.path);
     }
-    const status = await checkStatus(ports, entry.path, entry.status);
+    const status = await checkStatus(context, entry.path, entry.status);
     if (status !== null) {
       return status;
     }

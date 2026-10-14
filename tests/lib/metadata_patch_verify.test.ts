@@ -12,7 +12,6 @@ import {
   HASH_OLD,
   HEAD,
   LOCK,
-  STALE_LOCK,
   scriptYaml,
   verify,
   wmillLock,
@@ -98,7 +97,7 @@ describe("verifyMetadataPatch with the committed files", () => {
     const w = world();
     w.head = new Map<string, string | Uint8Array>([
       ["f/factory/approval_decide.ts", "export function main() {}\n"],
-      ["f/factory/approval_decide.script.lock", STALE_LOCK],
+      ["f/factory/approval_decide.script.lock", lock],
       [
         "f/factory/approval_decide.script.yaml",
         yaml.replace("type: object", "type: string"),
@@ -400,7 +399,7 @@ describe("verifyMetadataPatch limits which scripts may change", () => {
     expect(await codeOf(w)).toBe("status_mismatch");
   });
 
-  test("rejects a lock that is not text", async () => {
+  test("rejects a lock whose bytes differ from the head tree", async () => {
     const w = world();
     w.patch.set(
       "f/factory/foo.script.lock",
@@ -440,11 +439,13 @@ describe("verifyMetadataPatch checks the script yaml", () => {
       diff: [{ path: "f/factory/newone.ts", status: "added" }],
     };
     w.patch = new Map<string, string | Uint8Array>([
+      ["f/factory/newone.script.lock", EMPTY_LOCK],
       [
         "f/factory/newone.script.yaml",
         `${scriptYaml("newone")}timeout: 9999\n`,
       ],
     ]);
+    w.statuses.set("f/factory/newone.script.lock", "added");
     w.statuses.set("f/factory/newone.script.yaml", "added");
     expect(await codeOf(w)).toBe("script_yaml_invalid");
   });

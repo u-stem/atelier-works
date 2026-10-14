@@ -517,20 +517,26 @@ zipの中の文字列は、`reason`に載せない。
 
 ### importの読み取り
 
-`metadata_patch_imports.ts`は、ソースの文字列リテラルのうち、`from`、`import`、`import(`、`require(`の直後にあるものを指定子として読む。
-コメントと文字列の中の同じ形も拾うので、集合は実際より広くなりうる。
-読み取りはファイルの大きさに対して線形で、1MiBのファイルでも終わる。
-次のimportは、指定子を決められないので、追えないものとして扱う。
+`metadata_patch_imports.ts`は、`Bun.Transpiler`の`scanImports`で、import文、`export from`、`import()`、`require()`を読む。
+トランスパイラは構文を解析するので、コメントや文字列の中のimport風の文字列は拾わず、コメントで引用符を挟んだ隠し方も見抜く。
+トランスパイラが返さない型だけのimportは、正規表現で足して、相対importの閉包に含める。
+Windmillのworkerのbunと、`bun test`のbunで、同じ結果を返すことを確かめている。
 
-- 指定子が文字列リテラルでない`import()`と`require()`。
-- リテラルの次が`)`か`,`でないもの。`import("a" + b)`のような連結や、メソッド呼び出しである。
+次のimportは、指定子を決められないので、追えないものとして扱い、トランスパイラに渡さない。
+
+- 引数が、エスケープを含まない単独の文字列リテラルでない`import()`と`require()`。連結やメソッド呼び出しを含む。
+- import属性(`with { ... }`、`assert { ... }`)。`type: "macro"`はビルド時にコードを実行するためである。
+- トランスパイラが読めないソース。
+
+呼び出しの形は、コメントや文字列の中の出現も追えないものに倒す。誤って断る側である。
 
 ### 適用条件の検査
 
 `verifyMetadataPatch`は、実行とPRの事実、zipの展開結果、読み取りのポートを受け取る。
 自分ではI/Oをしない。
 ポートは、履歴の祖先の判定、merge commitの親の取得、headの木とbaseの木のファイルの読み取りである。
-baseの木は、manifestの`baseSha`のcommitの木で、baseブランチの今の先端ではない。
+baseの木は、baseブランチの今の先端(`PrFacts.baseSha`)の木である。
+manifestの`baseSha`と`mergeSha`は出どころの照合にだけ使い、内容の比較には使わない。過去のcommitを選ばれないためである。
 `isAncestor`は、判定できないことをnullで伝える。
 `readHeadFile`と`readBaseFile`は、無いことと読めないことを分けて返し、読めないときは検査が断る。
 ほかのポートは、失敗を例外で伝え、検査は例外をそのまま投げる。
@@ -550,8 +556,9 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
 
 - `.script.lock`は、`.ts`が変わったscriptと、それを相対importの推移閉包で読むscriptに限る。
 - `.script.yaml`は、`.ts`が変わったscript自身に限る。
-- 既存のscriptのlockは、baseの木のlockとバイト列まで同一であること。
-- 新しいscriptのlockは、baseの木にある依存の無いlibのlockと同一であり、そのscriptが閉包で読むファイルに裸のimportが無いこと。
+- 閉包に入るすべてのscriptで、裸のimport指定子の集合が、baseの先端の木とheadの木で同じであること。manifestの内容とは無関係に確かめる。
+- 既存のscriptのlockは、headの木のlockとバイト列まで同一であること。
+- 新しいscriptのlockは、baseの先端の木にある依存の無いlibのlockと同一であること。lockと`.script.yaml`は、パッチが運ぶか、headの木にあること。
 
 自動で適用するのは、依存が変わらない再生成だけである。
 lockの意味を解釈しないので、受け取る側で、版の範囲や取得元の検査を持たない。
@@ -572,6 +579,11 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - フローのキー(`__flow+...`)が変わるパッチの扱い。
 - 検査の後にheadが動く競合の扱い。
 - artifactのIDとdigestを、`metadata`ジョブのログの値と照合する手順。
+- `mergeSha`を本物のPRのmerge commitに結び付けること。適用の前に、GitHub APIのPRの`merge_commit_sha`と照合する。
+  lockの比較先はheadの木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
+- 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
+- `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
+- `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
 
 ## 既知の限界
 
@@ -604,6 +616,7 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - パッチの`.script.yaml`の`schema`は、許可リストにない文字(`\`、`!`、`&`、`*`、`%`、タブ、`$`)と`x-windmill`を含むものを拒む。
   説明文などに、これらの文字を正当に含むscriptは、自動では直らない。
 - `.script.yaml`と`wmill-lock.yaml`は、完全なYAMLとして解析しない。wmillが書く形から外れたものは、正当でも断る。
-- importの読み取りは、字句の近似である。正規表現リテラルや文字列の入れ子で、実際のimportと食い違いうる。
-  食い違いは、新しいscriptの裸のimportの検出と、変えてよいscriptの範囲に効く。
-  新しいscriptのlockが空のlockと同一であることが、最後の防御になる。
+- 型だけのimportの読み取りは、正規表現で、コメントで引用符を挟んだ隠し方を見抜けない。
+  型は実行時の依存ではなく、閉包の範囲にだけ効く。
+- Windmillが依存を決めるimportの読み方と、`Bun.Transpiler`の読み方は、同じとは限らない。
+  食い違いは、依存の変化の検出に効くので、lockをheadの木と同一に限ることが最後の防御になる。
