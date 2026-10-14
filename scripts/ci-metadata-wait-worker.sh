@@ -43,15 +43,21 @@ token="$(curl -fsS --max-time 30 -X POST "${API}/auth/login" \
 [ -n "${token}" ] || die "login returned an empty token"
 echo "::add-mask::${token}"
 
+body="$(mktemp)"
+trap 'rm -f "${body}"' EXIT
+last_status="none"
 for ((i = 1; i <= attempts; i++)); do
   # 一覧が取れない間(起動の途中)は、失敗を無視して次の回に進む。
-  workers="$(curl -fsS --max-time 10 -H "Authorization: Bearer ${token}" "${API}/workers/list" 2>/dev/null || true)"
+  # 診断のため、最後のHTTPステータスを覚えておく。接続できなかったときは000になる。
+  status="$(curl -sS --max-time 10 -o "${body}" -w '%{http_code}' \
+    -H "Authorization: Bearer ${token}" "${API}/workers/list" 2>/dev/null || true)"
+  last_status="${status:-none}"
   # 各workerの`custom_tags`に`dependency`が含まれていれば、依存の解決のジョブを動かせる。
-  if grep -Eq '"custom_tags":\[[^]]*"dependency"' <<<"${workers}"; then
+  if grep -Eq '"custom_tags":\[[^]]*"dependency"' "${body}"; then
     log "a worker for dependency jobs is registered"
     exit 0
   fi
   sleep "${interval}"
 done
 
-die "no worker registered for dependency jobs after ${attempts} attempts"
+die "no worker registered for dependency jobs after ${attempts} attempts (last HTTP status: ${last_status})"

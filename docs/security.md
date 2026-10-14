@@ -198,7 +198,10 @@ manifestは、PRのheadのsha(`headSha`)、baseのsha(`baseSha`)、作り直し�
 #### 受け取る側が必ず確かめること
 
 publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名のartifactを上げられる。
-そのため、artifactを受け取る側は、次の3つの層をすべて守る。
+ワークフローのパスの照合は、中身が`main`の版であることを保証しない。PRが`ci.yml`を書き換えうるためである。
+そのため、受け取る側はartifactを信用しない前提で扱い、次のすべてを守る。
+確かめるコードは、`f/factory/lib/metadata_patch_manifest.ts`の`isAllowedMetadataPath`、`parseManifest`、上限の定数を使う。
+判定を1か所に置くためである。
 
 ##### 出どころ
 
@@ -209,28 +212,82 @@ artifactを取る実行は、次をすべて満たすものに限る。
 - `head_repository.full_name`が、このリポジトリである。
 - 実行の`pull_requests`に、対象のPRの番号がある。
 - 実行の`head_sha`が、PRの今のheadと一致する。
+- 実行の結論が`failure`で、原因が`metadata`ジョブの失敗である。
+
+`metadata`ジョブは、パッチを出した後も失敗で終わる。
+そのため、成功した実行だけを探すと、パッチが見つからない。
+同じPRに複数の実行があるときは、`metadata`ジョブが`failure`の実行のうち、最新のものを選ぶ。
 
 artifactは、その実行のIDに紐づくものだけを取る。
 ブランチ名やartifact名だけで実行を探さない。
+
+##### 適用先と方式
+
+パッチは、merge木に対する再生成の結果である。
+適用してよいのは、PRのheadが`baseSha`を祖先に含むとき(`git merge-base --is-ancestor`)だけである。
+含まないときは、パッチを捨てる。
+Factoryが`main`を取り込み、CIが再実行されるのを待つ。
+
+含むときは、merge木とheadの`f/`と`wmill-lock.yaml`が一致する。
+そのため、パッチはファイル単位で置き換えてよい。
 
 ##### 再検証
 
 PRの版の`scripts/metadata-patch.ts`が出した結果は、信用しない。
 
-- `main`の版の`isAllowedMetadataPath`と`parseManifest`で、manifestと全項目を再検査する。
+- `main`の版の`isAllowedMetadataPath`と`parseManifest`で、manifestの全項目を再検査する。
 - `headSha`、`baseSha`、`sha256`を照合する。`baseSha`は、PRのbaseの今のshaとも照合する。
-- zipを展開する前に、全体の大きさで打ち切る。
-- `files/`にあってmanifestに無いファイル、削除の項目に対応する`files/`のファイル、zip slipを拒否する。
+- `mergeSha`のcommitをAPIで取得し、親が`baseSha`と`headSha`に一致することを確かめる。取得できないときは拒否する。
 
-##### 内容の制限
+##### パスと削除の制限
 
 - 保護パス(`f/factory/lib/protected_paths.ts`の`matchesForbiddenPath`)に当たるパスを拒否する。
 - 削除を拒否する。
 - `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)がbaseと違えば拒否する。
-- `*.script.lock`と`wmill-lock.yaml`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
-- 依存の版の差分は、コミットメッセージかPR本文に列挙する。
 
-出どころと再検証は、偽のartifactや書き換えられたartifactを受け取らないための層である。
+##### lockの制限
+
+`*.script.lock`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
+importするscriptの範囲は、`main`の版のコードで、headの木の相対importの推移閉包を計算して決める。
+対応する`.ts`が保護パスに当たるscriptのlockは、lock自身が保護パスでなくても拒否する(例: `steps/dependabot_*.ts`)。
+
+lockは、構造として解析する。
+前半はJSONで、`package.json`の形をしている。後半は、`//bun.lock`の行から始まる。
+
+- 前半のキーは`dependencies`だけにする。値は、semverの版か範囲に限る。URL、`file:`、`git`、`github:`、`link:`、`npm:`の別名を拒否する。
+- 後半のキーは、`lockfileVersion`、`configVersion`、`workspaces`、`packages`だけにする。
+- 各パッケージの取得元が既定のレジストリ(空文字)で、integrityが`sha512-`で始まることを確かめる。
+- 版が同じでも、取得元かintegrityがbaseと違うものは拒否する。可能なら、レジストリの公開値と照合する。
+- `postinstall`などのscripts、`trustedDependencies`、`overrides`を拒否する。
+
+依存の差分は、コミットメッセージかPR本文に列挙する。
+列挙には、版に加えて、取得元とintegrityの変化も含める。
+
+##### wmill-lock.yamlの制限
+
+`wmill-lock.yaml`は、YAMLとして解析する。
+
+- 変わったキーが、許可したscriptのものに限られることを確かめる。
+- 値が64桁の小文字の16進数であることを確かめる。
+- キーの削除と、未知の`version`を拒否する。
+
+##### 新規scriptの制限
+
+- `.script.yaml`の追加を許すのは、同じPRで`.ts`を追加したscriptだけである。
+- キーは、許可リスト(`summary`、`description`、`lock`、`kind`、`schema`)に限る。`lock`は、`'!inline <同じ名前>.script.lock'`に固定する。
+- `tag`、`timeout`、`concurrency`などのキーは拒否する。
+- 対応する`.ts`が無い`.script.lock`と`.script.yaml`の追加を拒否する。
+
+##### zipの制限
+
+- 展開の前に、全体の大きさで打ち切る。
+- zip内のsymlink(外部属性)、同名の重複、大文字小文字だけが違うパスを拒否する。区間は小文字にそろえて照合する。
+- manifestの`size`と、実際の長さが違うものを拒否する。
+- `files/`にあってmanifestに無いファイル、削除の項目に対応する`files/`のファイル、zip slipを拒否する。
+
+##### 層の関係
+
+出どころの確認と再検証は、偽のartifactや書き換えられたartifactを受け取らないための層である。
 内容の制限は、出どころが破られたときに、被害を限る層である。
 内容の制限だけでは、偽のartifactを受け取り続けるので、どちらも外さない。
 

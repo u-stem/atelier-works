@@ -409,6 +409,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
+| `f/factory/lib/metadata_patch_manifest` | script | [LIB] メタデータのパッチの検査 |
 | `f/factory/lib/log` | script | [LIB] ログとマスク |
 | `f/factory/lib/cleanup_support` | script | [LIB] 作業領域掃除の純粋ロジック |
 | `f/factory/lib/protected_paths` | script | [LIB] 保護パスの判定 |

@@ -124,7 +124,7 @@ describe("the metadata job", () => {
     expect(stepNamed("Regenerate the metadata").run).toBe("mise run metadata");
   });
 
-  test("starts the worker and waits until it is healthy", () => {
+  test("starts the worker with --wait, which returns once the container runs", () => {
     expect(stepNamed("Start a worker for regeneration").run).toBe(
       "mise exec -- docker compose up -d --wait windmill_worker_ci",
     );

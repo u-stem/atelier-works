@@ -180,7 +180,8 @@ PRのコードが動く作り直しを、Factoryが作るPRに限るためであ
 3. `mise run metadata`で`wmill generate-metadata --yes`を実行する。
    失敗したときは、パッチを作らない。
 4. `scripts/metadata-patch.ts`が、作業ツリーの変更を検査し、パッチを書く。
-   許可リストの外の変更が1つでもあるときは、何も書かずに失敗する。
+   書く前に、チェックアウトしたcommitが`MERGE_SHA`で、第1親が`BASE_SHA`、第2親が`HEAD_SHA`であることを確かめる。
+   一致しないときと、許可リストの外の変更が1つでもあるときは、何も書かずに失敗する。
 5. `actions/upload-artifact`で、`metadata-patch`という名前で上げる。
    保持は7日で、秘密は入れない。
 
@@ -208,7 +209,7 @@ PRのコードが動く作り直しを、Factoryが作るPRに限るためであ
 `..`、絶対パス、改行、隠しファイル、symlinkは載せない。
 ファイルは1つ1MiBまで、全ファイルの合計は4MiBまで、変更は500件までとする。
 超えたときは、何も書かずに失敗する。
-判定は`scripts/metadata-patch.ts`の`isAllowedMetadataPath`にある。
+判定は`f/factory/lib/metadata_patch_manifest.ts`の`isAllowedMetadataPath`にある。
 
 artifactの中身は次のとおりである。
 
@@ -222,7 +223,7 @@ artifactの中身は次のとおりである。
 作り直しは、PRのheadそのものではなく、baseとのmerge木(`mergeSha`)に対して行う。
 そのため、パッチを適用してよいのは、`headSha`と`baseSha`が今も変わっていないときだけである。
 どちらかが動いていれば、merge木が変わっていて、パッチは今のmerge木に対する結果ではなくなる。
-manifestを読む判定は`parseManifest`にある。
+manifestを読む判定は、同じファイルの`parseManifest`にある。
 
 仕組みの権限と前提は、[セキュリティ](security.md#ciのメタデータの再生成)に書く。
 

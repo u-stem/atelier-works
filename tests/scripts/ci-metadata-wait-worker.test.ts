@@ -20,18 +20,30 @@ afterEach(() => {
 });
 
 // 本物のcurlではなく、ログインとworkerの一覧に決まった応答を返す偽のcurlをPATHの先頭に置く。
-// `workers`が空文字列のときは、一覧の取得が失敗した(起動の途中)ように振る舞う。
+// 一覧は、`-o`のファイルに本文を書き、標準出力にHTTPステータスを出す。
+// `workers`が空文字列のときは、一覧の取得が503で失敗した(起動の途中)ように振る舞う。
 function installFakeCurl(workers: string): void {
-  const listLine =
+  const listLines =
     workers === ""
-      ? "exit 22"
-      : `printf '%s' '${workers.replaceAll("'", "'\\''")}'`;
+      ? ["printf '%s' '503'"]
+      : [
+          `if [ -n "$out" ]; then printf '%s' '${workers.replaceAll("'", "'\\''")}' > "$out"; fi`,
+          "printf '%s' '200'",
+        ];
   const body = [
     "#!/bin/sh",
+    'out=""',
+    'prev=""',
+    'for arg in "$@"; do',
+    '  if [ "$prev" = "-o" ]; then out="$arg"; fi',
+    '  prev="$arg"',
+    "done",
     'for arg in "$@"; do',
     '  case "$arg" in',
     "    */auth/login) printf '%s' 'fake-token'; exit 0 ;;",
-    `    */workers/list) ${listLine}; exit 0 ;;`,
+    "    */workers/list)",
+    ...listLines.map((line) => `      ${line}`),
+    "      exit 0 ;;",
     "  esac",
     "done",
     "exit 2",
@@ -124,6 +136,24 @@ describe("ci-metadata-wait-worker.sh", () => {
     expect(
       run({ ...CI_ENV, METADATA_WORKER_WAIT_ATTEMPTS: "x" }).exitCode,
     ).toBe(1);
+  });
+
+  test("reports the last HTTP status when the list cannot be fetched", () => {
+    installFakeCurl("");
+
+    expect(run(CI_ENV).stderr).toContain("last HTTP status: 503");
+  });
+
+  test("reports the last HTTP status when the tag is missing", () => {
+    installFakeCurl(WITHOUT_DEPENDENCY);
+
+    expect(run(CI_ENV).stderr).toContain("last HTTP status: 200");
+  });
+
+  test("does not print the token in the failure message", () => {
+    installFakeCurl(WITHOUT_DEPENDENCY);
+
+    expect(run(CI_ENV).stderr).not.toContain("fake-token");
   });
 
   test("names the cause when the worker never registers", () => {

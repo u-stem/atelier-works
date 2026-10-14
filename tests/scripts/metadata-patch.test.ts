@@ -11,12 +11,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
-  collectPatch,
-  isAllowedMetadataPath,
   MAX_FILE_BYTES,
-  MAX_TOTAL_BYTES,
   type Manifest,
   parseManifest,
+} from "../../f/factory/lib/metadata_patch_manifest.ts";
+import {
+  type CollectOptions,
+  checkMergeShape,
+  collectPatch,
   parseStatusOutput,
 } from "../../scripts/metadata-patch.ts";
 
@@ -28,59 +30,6 @@ const BASE = "b".repeat(40);
 const MERGE = "c".repeat(40);
 const SHA256_OF_ABC =
   "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-
-describe("isAllowedMetadataPath", () => {
-  test("accepts the lock hash file", () => {
-    expect(isAllowedMetadataPath("wmill-lock.yaml")).toBe(true);
-  });
-
-  test("accepts a script lock", () => {
-    expect(isAllowedMetadataPath("f/factory/poll_prs.script.lock")).toBe(true);
-  });
-
-  test("accepts a script schema", () => {
-    expect(isAllowedMetadataPath("f/factory/poll_prs.script.yaml")).toBe(true);
-  });
-
-  test("accepts a script lock in a nested folder", () => {
-    expect(isAllowedMetadataPath("f/factory/lib/_probe-1.script.lock")).toBe(
-      true,
-    );
-  });
-
-  test("accepts a script lock directly under f", () => {
-    expect(isAllowedMetadataPath("f/a.script.lock")).toBe(true);
-  });
-
-  test.each([
-    ["a script source", "f/factory/poll_prs.ts"],
-    ["a flow definition", "f/factory/audit__flow/flow.yaml"],
-    ["a schedule", "f/factory/poll_prs.schedule.yaml"],
-    ["a backup of a lock", "f/factory/a.script.lock.bak"],
-    ["a lock outside f", "g/factory/a.script.lock"],
-    ["a lock in a nested lock-hash name", "sub/wmill-lock.yaml"],
-    ["a path below the lock hash file", "wmill-lock.yaml/a"],
-    ["a workflow", ".github/workflows/ci.yml"],
-    ["an absolute path", "/f/a.script.lock"],
-    ["a parent reference", "../f/a.script.lock"],
-    ["a parent reference inside f", "f/../a.script.lock"],
-    ["a current directory segment", "f/./a.script.lock"],
-    ["an empty segment", "f//a.script.lock"],
-    ["a trailing slash", "f/a.script.lock/"],
-    ["a hidden folder", "f/.hidden/a.script.lock"],
-    ["a hidden file", "f/factory/.script.lock"],
-    ["a backslash", "f\\factory\\a.script.lock"],
-    ["a newline", "f/factory/a.script.lock\nx"],
-    ["a trailing newline", "f/factory/a.script.lock\n"],
-    ["a NUL", "f/factory/a\0.script.lock"],
-    ["a space", "f/factory/a b.script.lock"],
-    ["a non-ASCII name", "f/factory/あ.script.lock"],
-    ["an upper-case folder", "F/factory/a.script.lock"],
-    ["an empty string", ""],
-  ])("rejects %s", (_name, path) => {
-    expect(isAllowedMetadataPath(path)).toBe(false);
-  });
-});
 
 describe("parseStatusOutput", () => {
   test("returns no changes for an empty output", () => {
@@ -138,187 +87,6 @@ describe("parseStatusOutput", () => {
       ok: false,
       reason: "unexpected status",
     });
-  });
-});
-
-describe("parseManifest", () => {
-  function manifestJson(overrides: Record<string, unknown> = {}): string {
-    return JSON.stringify({
-      version: 1,
-      headSha: HEAD,
-      baseSha: BASE,
-      mergeSha: MERGE,
-      entries: [
-        {
-          path: "f/a.script.lock",
-          status: "modified",
-          sha256: SHA256_OF_ABC,
-          size: 3,
-        },
-        { path: "f/b.script.yaml", status: "deleted" },
-      ],
-      ...overrides,
-    });
-  }
-
-  test("reads a valid manifest", () => {
-    expect(parseManifest(manifestJson())?.headSha).toBe(HEAD);
-  });
-
-  test("reads every entry of a valid manifest", () => {
-    expect(parseManifest(manifestJson())?.entries).toHaveLength(2);
-  });
-
-  test("reads the base sha", () => {
-    expect(parseManifest(manifestJson())?.baseSha).toBe(BASE);
-  });
-
-  test("reads the merge sha", () => {
-    expect(parseManifest(manifestJson())?.mergeSha).toBe(MERGE);
-  });
-
-  test("rejects a manifest without the base sha", () => {
-    expect(parseManifest(manifestJson({ baseSha: undefined }))).toBeNull();
-  });
-
-  test("rejects a base sha that is not hexadecimal", () => {
-    expect(parseManifest(manifestJson({ baseSha: "main" }))).toBeNull();
-  });
-
-  test("rejects a manifest without the merge sha", () => {
-    expect(parseManifest(manifestJson({ mergeSha: undefined }))).toBeNull();
-  });
-
-  test("rejects a merge sha that is not hexadecimal", () => {
-    expect(parseManifest(manifestJson({ mergeSha: "xyz" }))).toBeNull();
-  });
-
-  test("rejects sizes whose total is above the limit", () => {
-    const entries = ["a", "b", "c", "d", "e"].map((name) => ({
-      path: `f/${name}.script.lock`,
-      status: "added",
-      sha256: SHA256_OF_ABC,
-      size: MAX_FILE_BYTES,
-    }));
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("accepts sizes whose total is at the limit", () => {
-    const entries = ["a", "b", "c", "d"].map((name) => ({
-      path: `f/${name}.script.lock`,
-      status: "added",
-      sha256: SHA256_OF_ABC,
-      size: MAX_TOTAL_BYTES / 4,
-    }));
-    expect(parseManifest(manifestJson({ entries }))).not.toBeNull();
-  });
-
-  test("rejects more entries than the limit", () => {
-    const entries = Array.from({ length: 501 }, (_, index) => ({
-      path: `f/n${index}.script.lock`,
-      status: "deleted",
-    }));
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects text that is not JSON", () => {
-    expect(parseManifest("{")).toBeNull();
-  });
-
-  test("rejects an unknown version", () => {
-    expect(parseManifest(manifestJson({ version: 2 }))).toBeNull();
-  });
-
-  test("rejects a head sha that is not hexadecimal", () => {
-    expect(parseManifest(manifestJson({ headSha: "main" }))).toBeNull();
-  });
-
-  test("rejects an upper-case head sha", () => {
-    expect(parseManifest(manifestJson({ headSha: "A".repeat(40) }))).toBeNull();
-  });
-
-  test("rejects entries that are not an array", () => {
-    expect(parseManifest(manifestJson({ entries: {} }))).toBeNull();
-  });
-
-  test("rejects an empty entry list", () => {
-    expect(parseManifest(manifestJson({ entries: [] }))).toBeNull();
-  });
-
-  test("rejects a path outside the allow-list", () => {
-    const entries = [
-      { path: "f/a.ts", status: "modified", sha256: SHA256_OF_ABC, size: 3 },
-    ];
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects an unknown status", () => {
-    const entries = [
-      { path: "f/a.script.lock", status: "renamed", sha256: "0", size: 3 },
-    ];
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects a malformed digest", () => {
-    const entries = [
-      {
-        path: "f/a.script.lock",
-        status: "modified",
-        sha256: "ABC",
-        size: 3,
-      },
-    ];
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects a negative size", () => {
-    const entries = [
-      {
-        path: "f/a.script.lock",
-        status: "added",
-        sha256: SHA256_OF_ABC,
-        size: -1,
-      },
-    ];
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects a size above the limit", () => {
-    const entries = [
-      {
-        path: "f/a.script.lock",
-        status: "added",
-        sha256: SHA256_OF_ABC,
-        size: MAX_FILE_BYTES + 1,
-      },
-    ];
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects a deleted entry that carries a digest", () => {
-    const entries = [
-      {
-        path: "f/a.script.lock",
-        status: "deleted",
-        sha256: SHA256_OF_ABC,
-        size: 3,
-      },
-    ];
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects a modified entry without a digest", () => {
-    const entries = [{ path: "f/a.script.lock", status: "modified" }];
-    expect(parseManifest(manifestJson({ entries }))).toBeNull();
-  });
-
-  test("rejects the same path twice", () => {
-    const entry = { path: "f/a.script.lock", status: "deleted" };
-    expect(parseManifest(manifestJson({ entries: [entry, entry] }))).toBeNull();
-  });
-
-  test("rejects an entry that is not an object", () => {
-    expect(parseManifest(manifestJson({ entries: ["f/a"] }))).toBeNull();
   });
 });
 
@@ -396,6 +164,14 @@ function readManifest(out: string): Manifest | null {
   return parseManifest(readFileSync(join(out, "manifest.json"), "utf8"));
 }
 
+const MERGE_LINE = `${MERGE} ${BASE} ${HEAD}\n`;
+
+// 親の読み取りを、期待どおりのmerge木を返すものに差し替えて呼ぶ。
+// 実際の履歴のmerge木で確かめるテストは、別に書く。
+function collect(options: CollectOptions): ReturnType<typeof collectPatch> {
+  return collectPatch({ readParents: () => MERGE_LINE, ...options });
+}
+
 describe("collectPatch", () => {
   const baseFiles = {
     "wmill-lock.yaml": "locks: {}\n",
@@ -410,7 +186,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -433,7 +209,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -451,7 +227,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", new Uint8Array([0xff, 0xfe, 0x00]));
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -469,7 +245,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/new.script.yaml", "abc");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -485,7 +261,7 @@ describe("collectPatch", () => {
     const out = outPath();
     rmSync(join(repo, "f/factory/a.script.yaml"));
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -503,7 +279,7 @@ describe("collectPatch", () => {
     const out = outPath();
     rmSync(join(repo, "f/factory/a.script.yaml"));
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -521,7 +297,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "wmill-lock.yaml", "locks: {a: b}\n");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -537,7 +313,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "wmill-lock.yaml", "locks: {a: b}\n");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -553,7 +329,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "wmill-lock.yaml", "locks: {a: b}\n");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -569,7 +345,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "wmill-lock.yaml", "x");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -585,7 +361,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "wmill-lock.yaml", "x");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -607,7 +383,7 @@ describe("collectPatch", () => {
       );
     }
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -629,7 +405,7 @@ describe("collectPatch", () => {
       );
     }
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -651,7 +427,7 @@ describe("collectPatch", () => {
       );
     }
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -669,7 +445,7 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.yaml", "x");
     write(repo, "f/factory/a.script.lock", "x");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -689,7 +465,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -706,7 +482,7 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     write(repo, "f/factory/a.ts", "export const a = 2;\n");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -727,7 +503,7 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     write(repo, "f/factory/a.ts", "export const a = 2;\n");
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -744,7 +520,7 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     write(repo, "notes.txt", "x");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -760,7 +536,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/.hidden/a.script.lock", "abc");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -777,7 +553,7 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     git(repo, "add", "f/factory/a.script.lock");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -793,7 +569,7 @@ describe("collectPatch", () => {
     const out = outPath();
     symlinkSync("../../outside.txt", join(repo, "f/factory/link.script.lock"));
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -814,7 +590,7 @@ describe("collectPatch", () => {
     rmSync(join(repo, "f/factory/a.script.lock"));
     symlinkSync("../../outside.txt", join(repo, "f/factory/a.script.lock"));
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -831,7 +607,7 @@ describe("collectPatch", () => {
     write(repo, "elsewhere/a.script.lock", "abc");
     symlinkSync("../elsewhere", join(repo, "f/link"));
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -853,7 +629,7 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     symlinkSync("../../outside.txt", join(repo, "f/factory/link.script.lock"));
 
-    collectPatch({
+    collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -869,7 +645,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "x".repeat(MAX_FILE_BYTES + 1));
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -889,7 +665,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "x".repeat(MAX_FILE_BYTES));
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -904,7 +680,7 @@ describe("collectPatch", () => {
     const repo = repoWith(baseFiles);
     const out = outPath();
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -920,7 +696,7 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: "main",
@@ -937,7 +713,7 @@ describe("collectPatch", () => {
     mkdirSync(out);
     write(repo, "f/factory/a.script.lock", "abc");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -952,7 +728,7 @@ describe("collectPatch", () => {
     const out = outPath();
     const notARepo = tempDir("metadata-patch-plain-");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: notARepo,
       outDir: out,
       headSha: HEAD,
@@ -967,7 +743,7 @@ describe("collectPatch", () => {
     const repo = repoWith(baseFiles);
     const out = outPath();
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -991,7 +767,7 @@ describe("collectPatch", () => {
       (_, index) => ` M f/factory/n${index}.script.lock\0`,
     ).join("");
 
-    const result = collectPatch({
+    const result = collect({
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
@@ -1004,20 +780,256 @@ describe("collectPatch", () => {
   });
 });
 
+describe("checkMergeShape", () => {
+  const expected = { headSha: HEAD, baseSha: BASE, mergeSha: MERGE };
+
+  test("accepts a merge commit whose parents are the base and the head", () => {
+    expect(checkMergeShape(`${MERGE} ${BASE} ${HEAD}\n`, expected)).toBeNull();
+  });
+
+  test("rejects a first parent that is not the base", () => {
+    expect(
+      checkMergeShape(`${MERGE} ${"d".repeat(40)} ${HEAD}\n`, expected),
+    ).toBe("base sha mismatch");
+  });
+
+  test("rejects a second parent that is not the head", () => {
+    expect(
+      checkMergeShape(`${MERGE} ${BASE} ${"d".repeat(40)}\n`, expected),
+    ).toBe("head sha mismatch");
+  });
+
+  test("rejects a current commit that is not the merge sha", () => {
+    expect(
+      checkMergeShape(`${"d".repeat(40)} ${BASE} ${HEAD}\n`, expected),
+    ).toBe("merge sha mismatch");
+  });
+
+  test("rejects the base and the head in the other order", () => {
+    expect(checkMergeShape(`${MERGE} ${HEAD} ${BASE}\n`, expected)).toBe(
+      "base sha mismatch",
+    );
+  });
+
+  test("rejects a commit with one parent", () => {
+    expect(checkMergeShape(`${MERGE} ${BASE}\n`, expected)).toBe(
+      "not a merge commit",
+    );
+  });
+
+  test("rejects a commit without a parent", () => {
+    expect(checkMergeShape(`${MERGE}\n`, expected)).toBe("not a merge commit");
+  });
+
+  test("rejects a commit with three parents", () => {
+    expect(
+      checkMergeShape(`${MERGE} ${BASE} ${HEAD} ${HEAD}\n`, expected),
+    ).toBe("not a merge commit");
+  });
+
+  test("rejects an output that is not commit ids", () => {
+    expect(checkMergeShape("fatal: bad revision\n", expected)).toBe(
+      "not a merge commit",
+    );
+  });
+
+  test("rejects an empty output", () => {
+    expect(checkMergeShape("", expected)).toBe("not a merge commit");
+  });
+});
+
+function gitOut(repo: string, ...args: string[]): string {
+  const result = Bun.spawnSync(["git", ...args], {
+    cwd: repo,
+    env: gitEnv(repo),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  return result.stdout.toString().trim();
+}
+
+type MergeRepo = {
+  readonly repo: string;
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly mergeSha: string;
+};
+
+// PRのmerge木と同じ形の履歴を作る。第1親がbase、第2親がheadのmerge commitに立つ。
+function mergeRepoWith(files: Record<string, string>): MergeRepo {
+  const repo = repoWith(files);
+  const baseSha = gitOut(repo, "rev-parse", "HEAD");
+  const identity = [
+    "-c",
+    "user.name=t",
+    "-c",
+    "user.email=t@example.com",
+    "-c",
+    "commit.gpgsign=false",
+  ];
+  git(repo, "checkout", "-q", "-b", "topic");
+  git(repo, ...identity, "commit", "-q", "--allow-empty", "-m", "topic");
+  const headSha = gitOut(repo, "rev-parse", "HEAD");
+  git(repo, "checkout", "-q", "main");
+  git(repo, ...identity, "merge", "-q", "--no-ff", "-m", "merge", "topic");
+  const mergeSha = gitOut(repo, "rev-parse", "HEAD");
+  return { repo, baseSha, headSha, mergeSha };
+}
+
+describe("collectPatch against a real merge commit", () => {
+  const files = { "f/factory/a.script.lock": "old\n" };
+
+  test("accepts the shas of the merge commit", () => {
+    const { repo, baseSha, headSha, mergeSha } = mergeRepoWith(files);
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: outPath(),
+      headSha,
+      baseSha,
+      mergeSha,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("accepts the shas of the merge commit in a shallow clone", () => {
+    const { repo, baseSha, headSha, mergeSha } = mergeRepoWith(files);
+    const parent = tempDir("metadata-patch-shallow-");
+    git(parent, "clone", "-q", "--depth", "1", `file://${repo}`, "clone");
+    const clone = join(parent, "clone");
+    write(clone, "f/factory/a.script.lock", "abc");
+
+    const result = collectPatch({
+      repoDir: clone,
+      outDir: outPath(),
+      headSha,
+      baseSha,
+      mergeSha,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects a base sha that is not the first parent", () => {
+    const { repo, headSha, mergeSha } = mergeRepoWith(files);
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: outPath(),
+      headSha,
+      baseSha: "d".repeat(40),
+      mergeSha,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "base sha mismatch" });
+  });
+
+  test("rejects a head sha that is not the second parent", () => {
+    const { repo, baseSha, mergeSha } = mergeRepoWith(files);
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: outPath(),
+      headSha: "d".repeat(40),
+      baseSha,
+      mergeSha,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "head sha mismatch" });
+  });
+
+  test("rejects a merge sha that is not the current commit", () => {
+    const { repo, baseSha, headSha } = mergeRepoWith(files);
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: outPath(),
+      headSha,
+      baseSha,
+      mergeSha: "d".repeat(40),
+    });
+
+    expect(result).toEqual({ ok: false, reason: "merge sha mismatch" });
+  });
+
+  test("rejects a current commit that is not a merge commit", () => {
+    const repo = repoWith(files);
+    const sha = gitOut(repo, "rev-parse", "HEAD");
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: outPath(),
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: sha,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "not a merge commit" });
+  });
+
+  test("writes nothing when the shas do not match", () => {
+    const { repo, headSha, mergeSha } = mergeRepoWith(files);
+    const out = outPath();
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha,
+      baseSha: "d".repeat(40),
+      mergeSha,
+    });
+
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test("fails when the history cannot be read", () => {
+    const result = collectPatch({
+      repoDir: tempDir("metadata-patch-plain-"),
+      outDir: outPath(),
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "git failed" });
+  });
+
+  test("fails when the injected reader fails", () => {
+    const repo = repoWith(files);
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: outPath(),
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+      readParents: () => null,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "git failed" });
+  });
+});
+
 describe("the command line", () => {
   function run(
-    repo: string,
+    merge: MergeRepo,
     out: string,
-    headSha: string,
     extra: Record<string, string> = {},
   ) {
     return Bun.spawnSync(["bun", SCRIPT, out], {
-      cwd: repo,
+      cwd: merge.repo,
       env: {
         ...gitEnv(tempDir("metadata-patch-home-")),
-        HEAD_SHA: headSha,
-        BASE_SHA: BASE,
-        MERGE_SHA: MERGE,
+        HEAD_SHA: merge.headSha,
+        BASE_SHA: merge.baseSha,
+        MERGE_SHA: merge.mergeSha,
         ...extra,
       },
       stdout: "pipe",
@@ -1026,11 +1038,11 @@ describe("the command line", () => {
   }
 
   test("exits with 0 and writes the manifest", () => {
-    const repo = repoWith({ "f/factory/a.script.lock": "old\n" });
+    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
     const out = outPath();
-    write(repo, "f/factory/a.script.lock", "abc");
+    write(merge.repo, "f/factory/a.script.lock", "abc");
 
-    const result = run(repo, out, HEAD);
+    const result = run(merge, out);
 
     expect([result.exitCode, existsSync(join(out, "manifest.json"))]).toEqual([
       0,
@@ -1039,44 +1051,64 @@ describe("the command line", () => {
   });
 
   test("exits with 1 for a path outside the allow-list", () => {
-    const repo = repoWith({ "f/factory/a.ts": "old\n" });
+    const merge = mergeRepoWith({ "f/factory/a.ts": "old\n" });
     const out = outPath();
-    write(repo, "f/factory/a.ts", "new\n");
+    write(merge.repo, "f/factory/a.ts", "new\n");
 
-    expect(run(repo, out, HEAD).exitCode).toBe(1);
+    expect(run(merge, out).exitCode).toBe(1);
   });
 
   test("exits with 1 without the head sha", () => {
-    const repo = repoWith({ "f/factory/a.script.lock": "old\n" });
+    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
     const out = outPath();
-    write(repo, "f/factory/a.script.lock", "abc");
+    write(merge.repo, "f/factory/a.script.lock", "abc");
 
-    expect(run(repo, out, "").exitCode).toBe(1);
+    expect(run(merge, out, { HEAD_SHA: "" }).exitCode).toBe(1);
   });
 
   test("exits with 1 without the base sha", () => {
-    const repo = repoWith({ "f/factory/a.script.lock": "old\n" });
+    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
     const out = outPath();
-    write(repo, "f/factory/a.script.lock", "abc");
+    write(merge.repo, "f/factory/a.script.lock", "abc");
 
-    expect(run(repo, out, HEAD, { BASE_SHA: "" }).exitCode).toBe(1);
+    expect(run(merge, out, { BASE_SHA: "" }).exitCode).toBe(1);
   });
 
   test("exits with 1 without the merge sha", () => {
-    const repo = repoWith({ "f/factory/a.script.lock": "old\n" });
+    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
     const out = outPath();
-    write(repo, "f/factory/a.script.lock", "abc");
+    write(merge.repo, "f/factory/a.script.lock", "abc");
 
-    expect(run(repo, out, HEAD, { MERGE_SHA: "" }).exitCode).toBe(1);
+    expect(run(merge, out, { MERGE_SHA: "" }).exitCode).toBe(1);
+  });
+
+  test("exits with 1 when the base sha is not the first parent", () => {
+    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
+    const out = outPath();
+    write(merge.repo, "f/factory/a.script.lock", "abc");
+
+    expect(run(merge, out, { BASE_SHA: "d".repeat(40) }).exitCode).toBe(1);
+  });
+
+  test("names all three variables in the usage message", () => {
+    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
+    const result = Bun.spawnSync(["bun", SCRIPT], {
+      cwd: merge.repo,
+      env: gitEnv(tempDir("metadata-patch-home-")),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(result.stderr.toString()).toContain(
+      "HEAD_SHA=<sha> BASE_SHA=<sha> MERGE_SHA=<sha>",
+    );
   });
 
   test("does not echo the content of a rejected path on stdout", () => {
-    const repo = repoWith({ "f/factory/a.ts": "old\n" });
+    const merge = mergeRepoWith({ "f/factory/a.ts": "old\n" });
     const out = outPath();
-    write(repo, "f/factory/a.ts", "SECRET-CONTENT\n");
+    write(merge.repo, "f/factory/a.ts", "SECRET-CONTENT\n");
 
-    expect(run(repo, out, HEAD).stdout.toString()).not.toContain(
-      "SECRET-CONTENT",
-    );
+    expect(run(merge, out).stdout.toString()).not.toContain("SECRET-CONTENT");
   });
 });

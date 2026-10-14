@@ -11,6 +11,7 @@
 //
 // 使い方: HEAD_SHA=<sha> BASE_SHA=<sha> MERGE_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>
 // 外部パッケージを使わない。依存を入れる前のジョブで動かすため。
+// パスの許可リストとmanifestの検査は、受け取る側と共有するため`f/factory/lib/metadata_patch_manifest.ts`にある。
 
 import { createHash } from "node:crypto";
 import {
@@ -22,66 +23,21 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-
-/** 1ファイルの上限。ロックとスキーマは数KBで、これを超えるものは異常として扱う。 */
-export const MAX_FILE_BYTES = 1024 * 1024;
-
-/** 1つのパッチに載せる変更の数の上限。 */
-export const MAX_ENTRIES = 500;
-
-/** 1つのパッチに載せるファイルの大きさの合計の上限。 */
-export const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
-
-export type ChangeStatus = "added" | "modified" | "deleted";
+import {
+  type ChangeStatus,
+  isAllowedMetadataPath,
+  isSha,
+  MAX_ENTRIES,
+  MAX_FILE_BYTES,
+  MAX_TOTAL_BYTES,
+  type Manifest,
+  type ManifestEntry,
+} from "../f/factory/lib/metadata_patch_manifest.ts";
 
 export type StatusChange = {
   readonly path: string;
   readonly status: ChangeStatus;
 };
-
-export type ManifestEntry =
-  | {
-      readonly path: string;
-      readonly status: "added" | "modified";
-      readonly sha256: string;
-      readonly size: number;
-    }
-  | { readonly path: string; readonly status: "deleted" };
-
-export type Manifest = {
-  readonly version: 1;
-  /** PRのheadのcommit。 */
-  readonly headSha: string;
-  /** PRのbaseのcommit。 */
-  readonly baseSha: string;
-  /** 再生成を行ったmerge木のcommit。 */
-  readonly mergeSha: string;
-  readonly entries: readonly ManifestEntry[];
-};
-
-// SHA-1(40桁)とSHA-256(64桁)の小文字の16進数。
-const COMMIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-const DIGEST = /^[0-9a-f]{64}$/;
-
-// パスの1区間。英数字か`_`で始め、`.`と`..`と隠しファイルを含めない。
-const SEGMENT = "[A-Za-z0-9_][A-Za-z0-9_.-]*";
-const SCRIPT_METADATA = new RegExp(
-  `^f/(?:${SEGMENT}/)*${SEGMENT}\\.script\\.(?:lock|yaml)$`,
-);
-
-/**
- * パッチに載せてよいパスか。許可するのは次の3種類だけである。
- * - `wmill-lock.yaml`
- * - `f/**` の `*.script.lock`
- * - `f/**` の `*.script.yaml`
- *
- * 適用側が同じ判定で再検査できるよう、判定はこの1か所に置く。
- * 区間の文字を英数字と`_` `.` `-`に限るのは、`..`、絶対パス、改行、制御文字、
- * 隠しディレクトリを、パスの組み立ての前に必ず弾くため。
- */
-export function isAllowedMetadataPath(path: string): boolean {
-  return path === "wmill-lock.yaml" || SCRIPT_METADATA.test(path);
-}
 
 export type StatusParse =
   | { readonly ok: true; readonly changes: readonly StatusChange[] }
@@ -114,93 +70,14 @@ export function parseStatusOutput(output: string): StatusParse {
   return { ok: true, changes };
 }
 
-function isSha(value: unknown): value is string {
-  return typeof value === "string" && COMMIT_SHA.test(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseEntry(value: unknown): ManifestEntry | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const { path, status } = value;
-  if (typeof path !== "string" || !isAllowedMetadataPath(path)) {
-    return null;
-  }
-  if (status === "deleted") {
-    return "sha256" in value || "size" in value ? null : { path, status };
-  }
-  if (status !== "added" && status !== "modified") {
-    return null;
-  }
-  const { sha256, size } = value;
-  if (typeof sha256 !== "string" || !DIGEST.test(sha256)) {
-    return null;
-  }
-  if (
-    typeof size !== "number" ||
-    !Number.isInteger(size) ||
-    size < 0 ||
-    size > MAX_FILE_BYTES
-  ) {
-    return null;
-  }
-  return { path, status, sha256, size };
-}
-
-/**
- * `manifest.json`の文字列を読む。形が合わなければnullを返す。
- * 許可リストにないパス、重複、想定外の状態、桁の合わないsha256を拒む。
- * 外から来た値なので、型があると決め打ちせずに1項目ずつ確かめる。
- */
-export function parseManifest(json: string): Manifest | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(json);
-  } catch {
-    return null;
-  }
-  if (!isRecord(value) || value.version !== 1) {
-    return null;
-  }
-  const { headSha, baseSha, mergeSha, entries } = value;
-  if (!isSha(headSha) || !isSha(baseSha) || !isSha(mergeSha)) {
-    return null;
-  }
-  if (
-    !Array.isArray(entries) ||
-    entries.length === 0 ||
-    entries.length > MAX_ENTRIES
-  ) {
-    return null;
-  }
-  const parsed: ManifestEntry[] = [];
-  const seen = new Set<string>();
-  for (const raw of entries) {
-    const entry = parseEntry(raw);
-    if (entry === null || seen.has(entry.path)) {
-      return null;
-    }
-    seen.add(entry.path);
-    parsed.push(entry);
-  }
-  const total = parsed.reduce(
-    (sum, entry) => sum + ("size" in entry ? entry.size : 0),
-    0,
-  );
-  if (total > MAX_TOTAL_BYTES) {
-    return null;
-  }
-  return { version: 1, headSha, baseSha, mergeSha, entries: parsed };
-}
-
 export type CollectFailure =
   | "invalid sha"
   | "output exists"
   | "git failed"
+  | "not a merge commit"
+  | "merge sha mismatch"
+  | "base sha mismatch"
+  | "head sha mismatch"
   | "unexpected status"
   | "no changes"
   | "too many changes"
@@ -227,6 +104,8 @@ export type CollectOptions = {
   readonly mergeSha: string;
   /** `git status`の出力を返す。gitが失敗したらnull。省略すると実際のgitを呼ぶ。 */
   readonly readStatus?: (repoDir: string) => string | null;
+  /** 現在のcommitと親を空白で区切った1行を返す。gitが失敗したらnull。省略すると実際のgitを呼ぶ。 */
+  readonly readParents?: (repoDir: string) => string | null;
 };
 
 // 親のプロセスのGIT_DIRなどを引き継ぐと、cwdのリポジトリを見ない。
@@ -255,6 +134,66 @@ export function readGitStatus(repoDir: string): string | null {
     { cwd: repoDir, env: cleanEnv(), stdout: "pipe", stderr: "pipe" },
   );
   return result.exitCode === 0 ? result.stdout.toString() : null;
+}
+
+/**
+ * 現在のcommitと、その親を空白で区切った1行を読む。
+ * 親は、commitオブジェクトの`parent`行から読む。
+ * 浅いcloneでは、境界のcommitの親が`rev-list --parents`に現れず、merge木を見分けられないため。
+ */
+export function readGitParents(repoDir: string): string | null {
+  const options = {
+    cwd: repoDir,
+    env: cleanEnv(),
+    stdout: "pipe",
+    stderr: "pipe",
+  } as const;
+  const head = Bun.spawnSync(["git", "rev-parse", "--verify", "HEAD"], options);
+  const object = Bun.spawnSync(["git", "cat-file", "commit", "HEAD"], options);
+  if (head.exitCode !== 0 || object.exitCode !== 0) {
+    return null;
+  }
+  const parents: string[] = [];
+  // ヘッダは最初の空行までで、その後ろはコミットメッセージなので読まない。
+  for (const line of object.stdout.toString().split("\n")) {
+    if (line === "") {
+      break;
+    }
+    if (line.startsWith("parent ")) {
+      parents.push(line.slice("parent ".length));
+    }
+  }
+  return [head.stdout.toString().trim(), ...parents].join(" ");
+}
+
+/**
+ * 作業ツリーのcommitが、PRのmerge木であることを実体と突き合わせる。
+ * 現在のcommitが`mergeSha`、第1親が`baseSha`、第2親が`headSha`に等しいときだけ、nullを返す。
+ * manifestに書くshaが、実際に再生成した木のものであることを、書く前に保証するため。
+ */
+export function checkMergeShape(
+  output: string,
+  expected: {
+    readonly headSha: string;
+    readonly baseSha: string;
+    readonly mergeSha: string;
+  },
+): CollectFailure | null {
+  const parts = output.trim().split(" ");
+  if (parts.length !== 3 || !parts.every((part) => isSha(part))) {
+    return "not a merge commit";
+  }
+  const [merge, firstParent, secondParent] = parts;
+  if (merge !== expected.mergeSha) {
+    return "merge sha mismatch";
+  }
+  if (firstParent !== expected.baseSha) {
+    return "base sha mismatch";
+  }
+  if (secondParent !== expected.headSha) {
+    return "head sha mismatch";
+  }
+  return null;
 }
 
 /**
@@ -340,11 +279,19 @@ function isPlanned(value: Planned | CollectResult): value is Planned {
  */
 export function collectPatch(options: CollectOptions): CollectResult {
   const { repoDir, outDir, headSha, baseSha, mergeSha } = options;
-  if (![headSha, baseSha, mergeSha].every((sha) => COMMIT_SHA.test(sha))) {
+  if (![headSha, baseSha, mergeSha].every((sha) => isSha(sha))) {
     return fail("invalid sha");
   }
   if (existsSync(outDir)) {
     return fail("output exists");
+  }
+  const parents = (options.readParents ?? readGitParents)(repoDir);
+  if (parents === null) {
+    return fail("git failed");
+  }
+  const shape = checkMergeShape(parents, { headSha, baseSha, mergeSha });
+  if (shape !== null) {
+    return fail(shape);
   }
   const output = (options.readStatus ?? readGitStatus)(repoDir);
   if (output === null) {
@@ -419,7 +366,7 @@ function main(): void {
   const outDir = process.argv[2];
   if (outDir === undefined || outDir === "") {
     console.error(
-      "usage: HEAD_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>",
+      "usage: HEAD_SHA=<sha> BASE_SHA=<sha> MERGE_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>",
     );
     process.exitCode = 1;
     return;
