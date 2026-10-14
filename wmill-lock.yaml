@@ -63,6 +63,7 @@ locks:
   f/factory/lib/main_ci_support: 940c2ac05fb0df4f52899703c910d5a0dd42390a131802ea0e087964812e2b1c
   f/factory/lib/main_ci_watch: 68f03b89fd5b3fe9c3bed99409c0c6d942c22f641e2c08f4de2eb38ce886d2cd
   f/factory/lib/metadata_patch_manifest: 19c0f6c7028f57690b430db933768f8eed4e96350f5f98bfab326ec61f887532
+  f/factory/lib/metadata_patch_zip: a77be6a4320908cb93ea5eeee3bc405a1b039560e985d9ca37686960a95a07cf
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: ea5981391d7d989101f28cbbc9b17905691a9b15c398e829997712e56cd85f96
