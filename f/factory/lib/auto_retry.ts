@@ -149,13 +149,21 @@ function messageOf(err: unknown): string {
 
 type Outcome = "restarted" | "skipped" | "failed";
 
+/** 再開先を決める。実装の要件が承認済みかを読んでから、`autoRetryPlan`で判定する。 */
+async function planFor(
+  deps: Pick<AutoRetryDeps, "implementEnabled" | "isImplementReady">,
+  candidate: AutoRetryCandidate,
+): Promise<AutoRetryPlan | null> {
+  const implementReady =
+    candidate.kind === "issue" ? await deps.isImplementReady(candidate) : false;
+  return autoRetryPlan(candidate, implementReady, deps.implementEnabled);
+}
+
 async function retryOne(
   deps: AutoRetryDeps,
   candidate: AutoRetryCandidate,
 ): Promise<Outcome> {
-  const implementReady =
-    candidate.kind === "issue" ? await deps.isImplementReady(candidate) : false;
-  const plan = autoRetryPlan(candidate, implementReady, deps.implementEnabled);
+  const plan = await planFor(deps, candidate);
   if (plan === null) {
     deps.log.info("auto retry skipped: the work item cannot be restarted", {
       work_item_id: candidate.id,
@@ -249,13 +257,7 @@ export async function hasRetryableCandidate(
   >,
 ): Promise<boolean> {
   for (const candidate of await deps.listCandidates()) {
-    const implementReady =
-      candidate.kind === "issue"
-        ? await deps.isImplementReady(candidate)
-        : false;
-    if (
-      autoRetryPlan(candidate, implementReady, deps.implementEnabled) !== null
-    ) {
+    if ((await planFor(deps, candidate)) !== null) {
       return true;
     }
   }

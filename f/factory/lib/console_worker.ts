@@ -42,7 +42,7 @@ export const CONSOLE_WORKER_UNKNOWN_GRACE_MS = 60 * 60 * 1000;
 export const CONSOLE_WORKER_UNKNOWN_SINCE_KEY =
   "console_worker_unknown_since_ms";
 
-/** 移行前のstateに残りうる、回数を数えるキー。読まず、stateを書くときに消す。 */
+/** stateに残る回数のキー。時刻だけを持つ形にそろえるため、読まず、stateを書くときに消す。 */
 const LEGACY_UNKNOWN_COUNT_KEY = "console_worker_unknown_count";
 
 const MISSING_CAUSE = `Consoleのジョブが${CONSOLE_JOB_WAIT_SECONDS / 60}分以上待たされています。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、ジョブを受けていません。Consoleのジョブがqueueに溜まり、Consoleが止まります`;

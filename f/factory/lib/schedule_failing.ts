@@ -18,14 +18,14 @@ export const SCHEDULE_FAILING_RUNS = 3;
  */
 export const SCHEDULE_FAILING_FETCH_COUNT = 10;
 
+/** 失敗したジョブのIDを特定できないときの値。 */
+const UNKNOWN_JOB_ID = "unknown";
+
 /**
  * `canceled_by`がこの値の取り消しを、ジョブの`timeout`による時間切れとみなす。
  * 取り消した人は`canceled_by`に名前が入るので、`canceled_reason`の文面は見ない。
  * 人が書ける文面で、時間切れと取り違えうるため。
  */
-/** 失敗したジョブのIDを特定できないときの値。 */
-const UNKNOWN_JOB_ID = "unknown";
-
 const TIMEOUT_CANCELED_BY = "timeout";
 
 function isCanceledByTimeout(run: Record<string, unknown>): boolean {
