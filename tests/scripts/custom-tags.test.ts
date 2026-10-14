@@ -95,6 +95,8 @@ interface ServeOptions {
   tagsStatus?: number;
   // /api/versionの本文。Windmill以外の応答を模すときに変える。
   version?: string;
+  // 指定すると、ログインをこの宛先への307で答える。
+  loginRedirectTo?: string;
 }
 
 function serve(options: ServeOptions) {
@@ -110,6 +112,12 @@ function serve(options: ServeOptions) {
         return new Response(version);
       }
       if (url.pathname === "/api/auth/login") {
+        if (options.loginRedirectTo !== undefined) {
+          return new Response(null, {
+            status: 307,
+            headers: { Location: options.loginRedirectTo },
+          });
+        }
         return loginStatus === 200
           ? new Response("session-token")
           : new Response("denied", { status: loginStatus });
@@ -241,6 +249,34 @@ describe("checkInstanceCustomTag", () => {
 
     server.stop(true);
     expect(calls).toEqual(["GET /api/version"]);
+  });
+
+  test("does not follow a redirect of the login to another destination", async () => {
+    const other = serve({ tags: ["console"] });
+    const { server, baseUrl } = serve({
+      tags: ["console"],
+      loginRedirectTo: `${other.baseUrl}/api/auth/login`,
+    });
+
+    await checkInstanceCustomTag(baseUrl, credentials, "console");
+
+    server.stop(true);
+    other.server.stop(true);
+    expect(other.calls).toEqual([]);
+  });
+
+  test("stops after the login when the login is redirected", async () => {
+    const other = serve({ tags: ["console"] });
+    const { server, calls, baseUrl } = serve({
+      tags: ["console"],
+      loginRedirectTo: `${other.baseUrl}/api/auth/login`,
+    });
+
+    await checkInstanceCustomTag(baseUrl, credentials, "console");
+
+    server.stop(true);
+    other.server.stop(true);
+    expect(calls).toEqual(["GET /api/version", "POST /api/auth/login"]);
   });
 
   test("probes the version before it logs in", async () => {
