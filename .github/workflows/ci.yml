@@ -218,7 +218,9 @@ jobs:
     needs: scope
     if: ${{ !cancelled() && needs.scope.outputs.metadata != 'false' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 起動、検査、作り直し(最大8分)、収集、後片付けに足りる長さ。
+    # 時間切れの結論は`cancelled`か`timed_out`になりうるが、どちらもPRのチェックを緑にしない。
+    timeout-minutes: 25
     env:
       # 使い捨て専用の値。`test-db`ジョブと同じく、このジョブが起動するPostgresだけが使う。
       # 本物の秘密ではないので、CIに存在しない`mise.local.toml`を通さず直書きしてよい。
@@ -273,8 +275,15 @@ jobs:
 
       - name: Start a worker for regeneration
         # 作り直しは、依存の解決のジョブをworkerに投げて結果を待つ。検査が通ったときは起動しない。
+        # 上流のworkerのイメージにはHEALTHCHECKが無く、`--wait`はコンテナが動き始めるまでしか待たない。
         if: ${{ steps.check.outcome == 'failure' && env.METADATA_PATCH_ELIGIBLE == 'true' }}
         run: mise exec -- docker compose up -d --wait windmill_worker_ci
+
+      - name: Wait for the worker to register
+        # workerが依存の解決のジョブ(tag `dependency`)を受けられるようになるまで待つ。
+        if: ${{ steps.check.outcome == 'failure' && env.METADATA_PATCH_ELIGIBLE == 'true' }}
+        timeout-minutes: 3
+        run: mise exec -- scripts/ci-metadata-wait-worker.sh
 
       - name: Regenerate the metadata
         # 失敗しても`Show diagnostics`を動かすため止めない。失敗したときは、パッチを作らない。
@@ -292,6 +301,9 @@ jobs:
         timeout-minutes: 2
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # 作り直しはPRのheadそのものではなく、baseとのmerge木に対して行う。
+          MERGE_SHA: ${{ github.sha }}
         run: mise exec -- bun ./scripts/metadata-patch.ts "$RUNNER_TEMP/metadata-patch"
 
       - name: Upload the metadata patch

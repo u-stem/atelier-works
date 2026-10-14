@@ -298,6 +298,12 @@ describe("scopeOfPaths", () => {
     );
   });
 
+  test("runs only metadata for the metadata worker wait script", () => {
+    expect(scopeOfPaths(["scripts/ci-metadata-wait-worker.sh"])).toEqual(
+      noneScope({ metadata: true }),
+    );
+  });
+
   test("runs nothing for the Claude hook runner", () => {
     expect(scopeOfPaths(["scripts/claude-hooks/run.sh"])).toEqual(
       noneScope({}),

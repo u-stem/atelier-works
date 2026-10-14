@@ -14,6 +14,7 @@ import {
   collectPatch,
   isAllowedMetadataPath,
   MAX_FILE_BYTES,
+  MAX_TOTAL_BYTES,
   type Manifest,
   parseManifest,
   parseStatusOutput,
@@ -23,6 +24,8 @@ const ROOT = join(import.meta.dir, "..", "..");
 const SCRIPT = join(ROOT, "scripts", "metadata-patch.ts");
 
 const HEAD = "a".repeat(40);
+const BASE = "b".repeat(40);
+const MERGE = "c".repeat(40);
 const SHA256_OF_ABC =
   "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
@@ -143,6 +146,8 @@ describe("parseManifest", () => {
     return JSON.stringify({
       version: 1,
       headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
       entries: [
         {
           path: "f/a.script.lock",
@@ -162,6 +167,58 @@ describe("parseManifest", () => {
 
   test("reads every entry of a valid manifest", () => {
     expect(parseManifest(manifestJson())?.entries).toHaveLength(2);
+  });
+
+  test("reads the base sha", () => {
+    expect(parseManifest(manifestJson())?.baseSha).toBe(BASE);
+  });
+
+  test("reads the merge sha", () => {
+    expect(parseManifest(manifestJson())?.mergeSha).toBe(MERGE);
+  });
+
+  test("rejects a manifest without the base sha", () => {
+    expect(parseManifest(manifestJson({ baseSha: undefined }))).toBeNull();
+  });
+
+  test("rejects a base sha that is not hexadecimal", () => {
+    expect(parseManifest(manifestJson({ baseSha: "main" }))).toBeNull();
+  });
+
+  test("rejects a manifest without the merge sha", () => {
+    expect(parseManifest(manifestJson({ mergeSha: undefined }))).toBeNull();
+  });
+
+  test("rejects a merge sha that is not hexadecimal", () => {
+    expect(parseManifest(manifestJson({ mergeSha: "xyz" }))).toBeNull();
+  });
+
+  test("rejects sizes whose total is above the limit", () => {
+    const entries = ["a", "b", "c", "d", "e"].map((name) => ({
+      path: `f/${name}.script.lock`,
+      status: "added",
+      sha256: SHA256_OF_ABC,
+      size: MAX_FILE_BYTES,
+    }));
+    expect(parseManifest(manifestJson({ entries }))).toBeNull();
+  });
+
+  test("accepts sizes whose total is at the limit", () => {
+    const entries = ["a", "b", "c", "d"].map((name) => ({
+      path: `f/${name}.script.lock`,
+      status: "added",
+      sha256: SHA256_OF_ABC,
+      size: MAX_TOTAL_BYTES / 4,
+    }));
+    expect(parseManifest(manifestJson({ entries }))).not.toBeNull();
+  });
+
+  test("rejects more entries than the limit", () => {
+    const entries = Array.from({ length: 501 }, (_, index) => ({
+      path: `f/n${index}.script.lock`,
+      status: "deleted",
+    }));
+    expect(parseManifest(manifestJson({ entries }))).toBeNull();
   });
 
   test("rejects text that is not JSON", () => {
@@ -353,7 +410,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(readManifest(out)?.entries).toEqual([
       {
@@ -370,7 +433,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(
       readFileSync(join(out, "files", "f/factory/a.script.lock"), "utf8"),
@@ -382,7 +451,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", new Uint8Array([0xff, 0xfe, 0x00]));
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(
       [...readFileSync(join(out, "files", "f/factory/a.script.lock"))].join(),
@@ -394,7 +469,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/new.script.yaml", "abc");
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(readManifest(out)?.entries[0]?.status).toBe("added");
   });
@@ -404,7 +485,13 @@ describe("collectPatch", () => {
     const out = outPath();
     rmSync(join(repo, "f/factory/a.script.yaml"));
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(existsSync(join(out, "files", "f/factory/a.script.yaml"))).toBe(
       false,
@@ -416,7 +503,13 @@ describe("collectPatch", () => {
     const out = outPath();
     rmSync(join(repo, "f/factory/a.script.yaml"));
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(readManifest(out)?.entries).toEqual([
       { path: "f/factory/a.script.yaml", status: "deleted" },
@@ -428,9 +521,145 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "wmill-lock.yaml", "locks: {a: b}\n");
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(readManifest(out)?.headSha).toBe(HEAD);
+  });
+
+  test("records the base sha in the manifest", () => {
+    const repo = repoWith(baseFiles);
+    const out = outPath();
+    write(repo, "wmill-lock.yaml", "locks: {a: b}\n");
+
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
+
+    expect(readManifest(out)?.baseSha).toBe(BASE);
+  });
+
+  test("records the merge sha in the manifest", () => {
+    const repo = repoWith(baseFiles);
+    const out = outPath();
+    write(repo, "wmill-lock.yaml", "locks: {a: b}\n");
+
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
+
+    expect(readManifest(out)?.mergeSha).toBe(MERGE);
+  });
+
+  test("fails for a base sha that is not a commit id", () => {
+    const repo = repoWith(baseFiles);
+    const out = outPath();
+    write(repo, "wmill-lock.yaml", "x");
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: "",
+      mergeSha: MERGE,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "invalid sha" });
+  });
+
+  test("fails for a merge sha that is not a commit id", () => {
+    const repo = repoWith(baseFiles);
+    const out = outPath();
+    write(repo, "wmill-lock.yaml", "x");
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: "HEAD",
+    });
+
+    expect(result).toEqual({ ok: false, reason: "invalid sha" });
+  });
+
+  test("fails when the files together are above the total limit", () => {
+    const repo = repoWith(baseFiles);
+    const out = outPath();
+    for (const name of ["a", "b", "c", "d", "e"]) {
+      write(
+        repo,
+        `f/factory/big_${name}.script.lock`,
+        "x".repeat(MAX_FILE_BYTES),
+      );
+    }
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "patch too large" });
+  });
+
+  test("writes nothing when the files together are above the total limit", () => {
+    const repo = repoWith(baseFiles);
+    const out = outPath();
+    for (const name of ["a", "b", "c", "d", "e"]) {
+      write(
+        repo,
+        `f/factory/big_${name}.script.lock`,
+        "x".repeat(MAX_FILE_BYTES),
+      );
+    }
+
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
+
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test("accepts files whose total is at the limit", () => {
+    const repo = repoWith(baseFiles);
+    const out = outPath();
+    for (const name of ["a", "b", "c", "d"]) {
+      write(
+        repo,
+        `f/factory/big_${name}.script.lock`,
+        "x".repeat(MAX_FILE_BYTES),
+      );
+    }
+
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   test("sorts the entries by path", () => {
@@ -440,7 +669,13 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.yaml", "x");
     write(repo, "f/factory/a.script.lock", "x");
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(readManifest(out)?.entries.map((entry) => entry.path)).toEqual([
       "f/factory/a.script.lock",
@@ -454,7 +689,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result.ok ? result.manifest : null).toEqual(readManifest(out));
   });
@@ -465,7 +706,13 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     write(repo, "f/factory/a.ts", "export const a = 2;\n");
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result).toEqual({
       ok: false,
@@ -480,7 +727,13 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     write(repo, "f/factory/a.ts", "export const a = 2;\n");
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(existsSync(out)).toBe(false);
   });
@@ -491,7 +744,13 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     write(repo, "notes.txt", "x");
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result.ok).toBe(false);
   });
@@ -501,7 +760,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/.hidden/a.script.lock", "abc");
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result.ok).toBe(false);
   });
@@ -512,7 +777,13 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     git(repo, "add", "f/factory/a.script.lock");
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result).toEqual({ ok: false, reason: "unexpected status" });
   });
@@ -522,7 +793,13 @@ describe("collectPatch", () => {
     const out = outPath();
     symlinkSync("../../outside.txt", join(repo, "f/factory/link.script.lock"));
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result).toEqual({
       ok: false,
@@ -537,7 +814,13 @@ describe("collectPatch", () => {
     rmSync(join(repo, "f/factory/a.script.lock"));
     symlinkSync("../../outside.txt", join(repo, "f/factory/a.script.lock"));
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result.ok).toBe(false);
   });
@@ -552,6 +835,8 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
       readStatus: () => "?? f/link/a.script.lock\0",
     });
 
@@ -568,7 +853,13 @@ describe("collectPatch", () => {
     write(repo, "f/factory/a.script.lock", "abc");
     symlinkSync("../../outside.txt", join(repo, "f/factory/link.script.lock"));
 
-    collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(existsSync(out)).toBe(false);
   });
@@ -578,7 +869,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "x".repeat(MAX_FILE_BYTES + 1));
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result).toEqual({
       ok: false,
@@ -592,7 +889,13 @@ describe("collectPatch", () => {
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "x".repeat(MAX_FILE_BYTES));
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result.ok).toBe(true);
   });
@@ -601,7 +904,13 @@ describe("collectPatch", () => {
     const repo = repoWith(baseFiles);
     const out = outPath();
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result).toEqual({ ok: false, reason: "no changes" });
   });
@@ -615,9 +924,11 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: "main",
+      baseSha: BASE,
+      mergeSha: MERGE,
     });
 
-    expect(result).toEqual({ ok: false, reason: "invalid head sha" });
+    expect(result).toEqual({ ok: false, reason: "invalid sha" });
   });
 
   test("fails when the output folder already exists", () => {
@@ -626,7 +937,13 @@ describe("collectPatch", () => {
     mkdirSync(out);
     write(repo, "f/factory/a.script.lock", "abc");
 
-    const result = collectPatch({ repoDir: repo, outDir: out, headSha: HEAD });
+    const result = collectPatch({
+      repoDir: repo,
+      outDir: out,
+      headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
+    });
 
     expect(result).toEqual({ ok: false, reason: "output exists" });
   });
@@ -639,6 +956,8 @@ describe("collectPatch", () => {
       repoDir: notARepo,
       outDir: out,
       headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
     });
 
     expect(result).toEqual({ ok: false, reason: "git failed" });
@@ -652,6 +971,8 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
       readStatus: () => " M f/factory/a.ts\0",
     });
 
@@ -666,7 +987,7 @@ describe("collectPatch", () => {
     const repo = repoWith(baseFiles);
     const out = outPath();
     const lines = Array.from(
-      { length: 1001 },
+      { length: 501 },
       (_, index) => ` M f/factory/n${index}.script.lock\0`,
     ).join("");
 
@@ -674,6 +995,8 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
+      baseSha: BASE,
+      mergeSha: MERGE,
       readStatus: () => lines,
     });
 
@@ -682,10 +1005,21 @@ describe("collectPatch", () => {
 });
 
 describe("the command line", () => {
-  function run(repo: string, out: string, headSha: string) {
+  function run(
+    repo: string,
+    out: string,
+    headSha: string,
+    extra: Record<string, string> = {},
+  ) {
     return Bun.spawnSync(["bun", SCRIPT, out], {
       cwd: repo,
-      env: { ...gitEnv(tempDir("metadata-patch-home-")), HEAD_SHA: headSha },
+      env: {
+        ...gitEnv(tempDir("metadata-patch-home-")),
+        HEAD_SHA: headSha,
+        BASE_SHA: BASE,
+        MERGE_SHA: MERGE,
+        ...extra,
+      },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -718,6 +1052,22 @@ describe("the command line", () => {
     write(repo, "f/factory/a.script.lock", "abc");
 
     expect(run(repo, out, "").exitCode).toBe(1);
+  });
+
+  test("exits with 1 without the base sha", () => {
+    const repo = repoWith({ "f/factory/a.script.lock": "old\n" });
+    const out = outPath();
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    expect(run(repo, out, HEAD, { BASE_SHA: "" }).exitCode).toBe(1);
+  });
+
+  test("exits with 1 without the merge sha", () => {
+    const repo = repoWith({ "f/factory/a.script.lock": "old\n" });
+    const out = outPath();
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    expect(run(repo, out, HEAD, { MERGE_SHA: "" }).exitCode).toBe(1);
   });
 
   test("does not echo the content of a rejected path on stdout", () => {

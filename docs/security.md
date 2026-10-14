@@ -129,8 +129,8 @@ PRのコードが動く作り直しを、forkと人のブランチに広げな�
 各ステップの`if`はその環境変数を読み、`run`のシェルには式を展開しない。
 ブランチ名がシェルに渡らないので、ブランチ名による注入は起こらない。
 
-残るリスクとして、`startsWith`は大文字小文字を区別しないので、`Factory/`で始まるブランチも対象になる。
-同じリポジトリのブランチを作れる人が、このジョブで得る権限は変わらないので、受け入れる。
+`startsWith`は大文字小文字を区別しないので、`Factory/`で始まるブランチも対象になる。
+受け取る側は、PRの番号と`head_repository`で判定するので、この条件は境界ではない。
 
 #### 使い捨ての環境
 
@@ -139,9 +139,11 @@ Windmillのサーバーとworkerは、ジョブの中のコンテナだけで動
 資格情報は、公開されている既定の管理者とダミーのデータベースのパスワードだけで、本番の秘密は届かない。
 そのため、PRの依存の解決が悪用されても、被害は使い捨ての環境と、読み取りだけのトークンに限られる。
 
-作り直しは、PRのブランチのscriptが指定する依存を、レジストリから取得する。
 ネットワークは分離しない。
-`mise run metadata`はPRの`mise.toml`のタスクを動かす。`check`ジョブもPRの`mise.toml`を使うので、動かすコードの範囲は広がらない。
+作り直しで増えるのは、次の2点である。
+
+- レジストリからの依存の取得。取得する依存は、PRのブランチのscriptが決める。
+- PRで書き換えた`mise.toml`の`metadata`タスクの実行。
 
 #### install script
 
@@ -164,6 +166,17 @@ workerは、依存の解決のプロセスの環境を絞る。
 | 環境変数だけで、ルートと信頼した依存のinstall scriptが止まるか(workerのbunとホストのbun) | 止まらない |
 | bunfigを置くと、同じ試験のscriptが止まるか(workerのコンテナ) | 止まる |
 | bunfigを置いたworkerで、`wmill generate-metadata --yes`が依存を解決できるか | できる |
+| 上流のworkerのイメージ(1.817.0)にHEALTHCHECKがあるか | ない(`docker image inspect`で空、コンテナの`State.Health`も無い) |
+| `docker compose up --wait`は、HEALTHCHECKの無いworkerを何で待つか | コンテナが動き始めるまで(登録は待たない) |
+| 認証したAPIの`/api/workers/list`に、workerが現れるか | 現れ、`custom_tags`に`dependency`を含む |
+
+bunfigの`ignoreScripts`が止めるのは、依存のinstall scriptである。
+Bunのmacroと、Pythonのsdistのビルドは、bunfigでは止まらない。
+再生成の中でこれらが動くかは、確かめていない。
+
+残るリスクとして、これらが動いても、被害は限られるので受け入れる。
+ランナーに本番の秘密は無く、ジョブの権限は`contents: read`だけである。
+さらに、受け取る側の内容の制限が、パッチの影響を絞る。
 
 次は確かめていない。
 
@@ -176,11 +189,50 @@ workerは、依存の解決のプロセスの環境を絞る。
 
 artifactの内容は、PRのブランチにある`scripts/metadata-patch.ts`が書く。
 PRの作者が書き換えられるので、受け取る側は内容を信用しない。
-受け取る側は、`main`の版の`isAllowedMetadataPath`と`parseManifest`で再検査する。
-そのうえで、`headSha`がブランチの先頭と一致すること、`sha256`が内容と一致することを確かめる。
-
 artifactに秘密は入らない。入るのは、リポジトリにあるファイルの再生成結果だけである。
 保持は7日に絞り、古いパッチが長く残らないようにする。
+
+manifestは、PRのheadのsha(`headSha`)、baseのsha(`baseSha`)、作り直したmerge木のcommit(`mergeSha`)を持つ。
+再生成はmerge木で行うので、パッチを適用してよいのは、`headSha`と`baseSha`が今も変わっていないときだけである。
+
+#### 受け取る側が必ず確かめること
+
+publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名のartifactを上げられる。
+そのため、artifactを受け取る側は、次の3つの層をすべて守る。
+
+##### 出どころ
+
+artifactを取る実行は、次をすべて満たすものに限る。
+
+- workflowのパスが`.github/workflows/ci.yml`である。
+- イベントが`pull_request`である。
+- `head_repository.full_name`が、このリポジトリである。
+- 実行の`pull_requests`に、対象のPRの番号がある。
+- 実行の`head_sha`が、PRの今のheadと一致する。
+
+artifactは、その実行のIDに紐づくものだけを取る。
+ブランチ名やartifact名だけで実行を探さない。
+
+##### 再検証
+
+PRの版の`scripts/metadata-patch.ts`が出した結果は、信用しない。
+
+- `main`の版の`isAllowedMetadataPath`と`parseManifest`で、manifestと全項目を再検査する。
+- `headSha`、`baseSha`、`sha256`を照合する。`baseSha`は、PRのbaseの今のshaとも照合する。
+- zipを展開する前に、全体の大きさで打ち切る。
+- `files/`にあってmanifestに無いファイル、削除の項目に対応する`files/`のファイル、zip slipを拒否する。
+
+##### 内容の制限
+
+- 保護パス(`f/factory/lib/protected_paths.ts`の`matchesForbiddenPath`)に当たるパスを拒否する。
+- 削除を拒否する。
+- `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)がbaseと違えば拒否する。
+- `*.script.lock`と`wmill-lock.yaml`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
+- 依存の版の差分は、コミットメッセージかPR本文に列挙する。
+
+出どころと再検証は、偽のartifactや書き換えられたartifactを受け取らないための層である。
+内容の制限は、出どころが破られたときに、被害を限る層である。
+内容の制限だけでは、偽のartifactを受け取り続けるので、どちらも外さない。
 
 ### 開発セッションのsubagent
 

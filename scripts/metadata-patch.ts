@@ -5,10 +5,11 @@
 //
 // 出力は、変更したファイルの内容そのままを`<outDir>/files/<リポジトリ相対のパス>`に置き、
 // 変更の一覧とsha256を`<outDir>/manifest.json`に書く。削除はmanifestだけに記録する。
-// manifestに元のPRのheadのshaを入れるのは、適用する側が、ブランチの先頭が
-// 変わっていないことを確かめるため。
+// 再生成はPRのheadそのものではなく、baseとのmerge木に対して行う。
+// manifestにPRのheadのsha(headSha)、baseのsha(baseSha)、merge木のcommit(mergeSha)を入れるのは、
+// 適用する側が、headとbaseが今も変わっていないときだけ適用するため。
 //
-// 使い方: HEAD_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>
+// 使い方: HEAD_SHA=<sha> BASE_SHA=<sha> MERGE_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>
 // 外部パッケージを使わない。依存を入れる前のジョブで動かすため。
 
 import { createHash } from "node:crypto";
@@ -26,7 +27,10 @@ import { dirname, join } from "node:path";
 export const MAX_FILE_BYTES = 1024 * 1024;
 
 /** 1つのパッチに載せる変更の数の上限。 */
-export const MAX_ENTRIES = 1000;
+export const MAX_ENTRIES = 500;
+
+/** 1つのパッチに載せるファイルの大きさの合計の上限。 */
+export const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
 
 export type ChangeStatus = "added" | "modified" | "deleted";
 
@@ -46,7 +50,12 @@ export type ManifestEntry =
 
 export type Manifest = {
   readonly version: 1;
+  /** PRのheadのcommit。 */
   readonly headSha: string;
+  /** PRのbaseのcommit。 */
+  readonly baseSha: string;
+  /** 再生成を行ったmerge木のcommit。 */
+  readonly mergeSha: string;
   readonly entries: readonly ManifestEntry[];
 };
 
@@ -105,6 +114,10 @@ export function parseStatusOutput(output: string): StatusParse {
   return { ok: true, changes };
 }
 
+function isSha(value: unknown): value is string {
+  return typeof value === "string" && COMMIT_SHA.test(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -153,8 +166,8 @@ export function parseManifest(json: string): Manifest | null {
   if (!isRecord(value) || value.version !== 1) {
     return null;
   }
-  const { headSha, entries } = value;
-  if (typeof headSha !== "string" || !COMMIT_SHA.test(headSha)) {
+  const { headSha, baseSha, mergeSha, entries } = value;
+  if (!isSha(headSha) || !isSha(baseSha) || !isSha(mergeSha)) {
     return null;
   }
   if (
@@ -174,16 +187,24 @@ export function parseManifest(json: string): Manifest | null {
     seen.add(entry.path);
     parsed.push(entry);
   }
-  return { version: 1, headSha, entries: parsed };
+  const total = parsed.reduce(
+    (sum, entry) => sum + ("size" in entry ? entry.size : 0),
+    0,
+  );
+  if (total > MAX_TOTAL_BYTES) {
+    return null;
+  }
+  return { version: 1, headSha, baseSha, mergeSha, entries: parsed };
 }
 
 export type CollectFailure =
-  | "invalid head sha"
+  | "invalid sha"
   | "output exists"
   | "git failed"
   | "unexpected status"
   | "no changes"
   | "too many changes"
+  | "patch too large"
   | "disallowed path"
   | "not a regular file"
   | "file too large"
@@ -202,6 +223,8 @@ export type CollectOptions = {
   readonly repoDir: string;
   readonly outDir: string;
   readonly headSha: string;
+  readonly baseSha: string;
+  readonly mergeSha: string;
   /** `git status`の出力を返す。gitが失敗したらnull。省略すると実際のgitを呼ぶ。 */
   readonly readStatus?: (repoDir: string) => string | null;
 };
@@ -316,9 +339,9 @@ function isPlanned(value: Planned | CollectResult): value is Planned {
  * 書き込みの途中で失敗したときは、書きかけの`outDir`を消す。
  */
 export function collectPatch(options: CollectOptions): CollectResult {
-  const { repoDir, outDir, headSha } = options;
-  if (!COMMIT_SHA.test(headSha)) {
-    return fail("invalid head sha");
+  const { repoDir, outDir, headSha, baseSha, mergeSha } = options;
+  if (![headSha, baseSha, mergeSha].every((sha) => COMMIT_SHA.test(sha))) {
+    return fail("invalid sha");
   }
   if (existsSync(outDir)) {
     return fail("output exists");
@@ -350,10 +373,19 @@ export function collectPatch(options: CollectOptions): CollectResult {
     }
     planned.push(result);
   }
+  const total = planned.reduce(
+    (sum, item) => sum + (item.content?.length ?? 0),
+    0,
+  );
+  if (total > MAX_TOTAL_BYTES) {
+    return fail("patch too large");
+  }
   planned.sort((a, b) => (a.entry.path < b.entry.path ? -1 : 1));
   const manifest: Manifest = {
     version: 1,
     headSha,
+    baseSha,
+    mergeSha,
     entries: planned.map((item) => item.entry),
   };
   try {
@@ -396,6 +428,8 @@ function main(): void {
     repoDir: process.cwd(),
     outDir,
     headSha: process.env.HEAD_SHA ?? "",
+    baseSha: process.env.BASE_SHA ?? "",
+    mergeSha: process.env.MERGE_SHA ?? "",
   });
   if (!result.ok) {
     const where =

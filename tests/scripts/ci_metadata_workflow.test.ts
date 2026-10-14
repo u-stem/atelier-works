@@ -64,6 +64,7 @@ const ELIGIBLE = "env.METADATA_PATCH_ELIGIBLE == 'true'";
 
 const GATED_STEPS: string[] = [
   "Start a worker for regeneration",
+  "Wait for the worker to register",
   "Regenerate the metadata",
   "Collect the metadata patch",
   "Upload the metadata patch",
@@ -129,10 +130,32 @@ describe("the metadata job", () => {
     );
   });
 
-  test("passes the head commit to the collection through the environment", () => {
+  test("passes the commits to the collection through the environment", () => {
     expect(recordAt(stepNamed("Collect the metadata patch"), "env")).toEqual({
       HEAD_SHA: `${OPEN} github.event.pull_request.head.sha }}`,
+      BASE_SHA: `${OPEN} github.event.pull_request.base.sha }}`,
+      MERGE_SHA: `${OPEN} github.sha }}`,
     });
+  });
+
+  test("waits for the worker to register after starting it", () => {
+    expect(stepNamed("Wait for the worker to register").run).toBe(
+      "mise exec -- scripts/ci-metadata-wait-worker.sh",
+    );
+  });
+
+  test("waits for the worker after it starts", () => {
+    expect(indexOfStep("Wait for the worker to register")).toBe(
+      indexOfStep("Start a worker for regeneration") + 1,
+    );
+  });
+
+  test("allows twenty-five minutes for the whole job", () => {
+    expect(metadata["timeout-minutes"]).toBe(25);
+  });
+
+  test("limits the regeneration step so the job timeout is not the first to fire", () => {
+    expect(stepNamed("Regenerate the metadata")["timeout-minutes"]).toBe(8);
   });
 
   test("collects into a folder outside the checkout", () => {
