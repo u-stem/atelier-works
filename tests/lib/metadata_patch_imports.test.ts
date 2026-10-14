@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
+  createFileScanner,
   type FileRead,
-  relativeCandidates,
+  resolveLocal,
   scanImports,
   traceBareImports,
 } from "../../f/factory/lib/metadata_patch_imports.ts";
@@ -14,38 +16,44 @@ describe("scanImports", () => {
   });
 
   test("reads a relative import", () => {
-    expect(scanImports('import { a } from "./lib/a.ts";').relative).toEqual([
+    expect(scanImports('import { a } from "./lib/a.ts";').local).toEqual([
       "./lib/a.ts",
     ]);
   });
 
+  test("reads a rooted import of the workspace", () => {
+    expect(
+      scanImports('import { a } from "/f/factory/lib/a.ts";').local,
+    ).toEqual(["/f/factory/lib/a.ts"]);
+  });
+
   test("reads an import split over lines", () => {
     const code = 'import {\n  a,\n  b,\n} from "./lib/a.ts";\n';
-    expect(scanImports(code).relative).toEqual(["./lib/a.ts"]);
+    expect(scanImports(code).local).toEqual(["./lib/a.ts"]);
   });
 
   test("reads an export from", () => {
-    expect(scanImports('export * from "./a.ts";').relative).toEqual(["./a.ts"]);
+    expect(scanImports('export * from "./a.ts";').local).toEqual(["./a.ts"]);
   });
 
   test("reads an import for its side effect", () => {
-    expect(scanImports('import "./a.ts";').relative).toEqual(["./a.ts"]);
+    expect(scanImports('import "./a.ts";').local).toEqual(["./a.ts"]);
   });
 
   test("reads a dynamic import with a literal", () => {
-    expect(scanImports('const m = await import ("./a.ts");').relative).toEqual([
+    expect(scanImports('const m = await import ("./a.ts");').local).toEqual([
       "./a.ts",
     ]);
   });
 
-  test("reads a require with a literal", () => {
+  test("reads a require call with a literal", () => {
     expect(scanImports('const m = require("left-pad@1.3.0");').bare).toEqual([
       "left-pad@1.3.0",
     ]);
   });
 
   test("reads an import type", () => {
-    expect(scanImports('import type { T } from "./t.ts";').relative).toEqual([
+    expect(scanImports('import type { T } from "./t.ts";').local).toEqual([
       "./t.ts",
     ]);
   });
@@ -56,28 +64,36 @@ describe("scanImports", () => {
   });
 
   test("ignores a string that is not an import", () => {
-    expect(scanImports('const a = "./a.ts"; log("x/y");').relative).toEqual([]);
-  });
-
-  test("ignores a property named from", () => {
-    expect(scanImports('const a = obj.from "./a.ts";').relative).toEqual([]);
+    expect(scanImports('const a = "./a.ts"; log("x/y");').local).toEqual([]);
   });
 
   test("keeps an import after a lone quote in a comment", () => {
     const code = '// don\'t do this\nimport "./a.ts";\n';
-    expect(scanImports(code).relative).toEqual(["./a.ts"]);
+    expect(scanImports(code).local).toEqual(["./a.ts"]);
   });
 
   test.each([
-    ["a variable in import()", "const m = await import(name);"],
-    ["a template literal in import()", "await import(`./\x24{x}.ts`);"],
-    ["a variable in require()", "const m = require(name);"],
+    ["a variable", "const m = await import(name);"],
+    ["a template literal", "await import(`./\x24{x}.ts`);"],
+    ["a variable in a require call", "const m = require(name);"],
     ["a call over lines", "await import(\n  name\n);"],
     ["a concatenation after a literal", 'await import("a" + b);'],
     ["a concatenation of a relative path", 'await import("./x" + n);'],
     ["a method call on the literal", 'require("a".concat(b));'],
     ["a conditional after the literal", 'await import("a" ? b : c);'],
+    ["a require call on import.meta", 'const m = import.meta.require("x");'],
+    ["a require method on an object", 'loader.require("x");'],
+    ["a require method after a line break", 'loader\n  .require("x");'],
+    ["an optional call", 'loader?.require("x");'],
   ])("marks %s as untraceable", (_label, code) => {
+    expect(scanImports(code).untraceable).toBe(true);
+  });
+
+  test.each([
+    ["the user scripts", 'import x from "/u/admin/secret";'],
+    ["an absolute path outside the tree", 'import x from "/etc/passwd";'],
+    ["a root path", 'import x from "/x.ts";'],
+  ])("marks an import of %s as untraceable", (_label, code) => {
     expect(scanImports(code).untraceable).toBe(true);
   });
 
@@ -94,10 +110,6 @@ describe("scanImports", () => {
     );
   });
 
-  test("does not mark a method named require as untraceable", () => {
-    expect(scanImports("loader.require(name);").untraceable).toBe(false);
-  });
-
   test("does not mark plain code as untraceable", () => {
     expect(scanImports('import a from "./a.ts";\nlog(a);').untraceable).toBe(
       false,
@@ -110,6 +122,11 @@ describe("scanImports", () => {
     ["unpaired quotes", '"'.repeat(MAX_FILE_BYTES)],
     ["a long line of from keywords", 'from "'.repeat(MAX_FILE_BYTES / 6)],
     ["open parentheses", "import(".repeat(MAX_FILE_BYTES / 7)],
+    ["braces after import", "import {".repeat(MAX_FILE_BYTES / 8)],
+    [
+      "white space before a call",
+      `x${" ".repeat(MAX_FILE_BYTES - 20)}.require(`,
+    ],
   ])("finishes quickly on %s", (_label, code) => {
     const started = performance.now();
     scanImports(code);
@@ -146,16 +163,39 @@ describe("scanImports with the transpiler", () => {
     expect(scanImports('const s = `import x from "intpl"`;').bare).toEqual([]);
   });
 
-  test("reads an inline type import as an edge", () => {
-    expect(scanImports('import { type T, b } from "./a.ts";').relative).toEqual(
-      ["./a.ts"],
-    );
+  test("reads an import whose braces hold only type modifiers", () => {
+    expect(
+      scanImports('import { type X } from "type-modifier-only";').bare,
+    ).toEqual(["type-modifier-only"]);
+  });
+
+  test("reads an import with a type modifier and a value", () => {
+    expect(
+      scanImports('import { type X, y } from "type-and-value";').bare,
+    ).toEqual(["type-and-value"]);
+  });
+
+  test("reads an import that is used only in a type position", () => {
+    const code = 'import { Foo } from "type-position";\nlet a: Foo;';
+    expect(scanImports(code).bare).toEqual(["type-position"]);
+  });
+
+  test("reads an import type of a package", () => {
+    expect(scanImports('import type { T } from "import-type";').bare).toEqual([
+      "import-type",
+    ]);
   });
 
   test("reads a type-only export as an edge", () => {
-    expect(scanImports('export type { T } from "./t.ts";').relative).toEqual([
+    expect(scanImports('export type { T } from "./t.ts";').local).toEqual([
       "./t.ts",
     ]);
+  });
+
+  test("reads an import in a type position", () => {
+    expect(
+      scanImports('type A = typeof import("typeof-import");').bare,
+    ).toEqual(["typeof-import"]);
   });
 
   test.each([
@@ -175,7 +215,7 @@ describe("scanImports with the transpiler", () => {
 
   test("does not read the imports of a source with an attribute", () => {
     const code = 'import { m } from "./m.ts" with { type: "macro" };';
-    expect(scanImports(code).relative).toEqual([]);
+    expect(scanImports(code).local).toEqual([]);
   });
 
   test("marks a source that does not parse as untraceable", () => {
@@ -195,30 +235,86 @@ describe("scanImports with the transpiler", () => {
   });
 });
 
-describe("relativeCandidates", () => {
-  test("lists the paths that a specifier can mean", () => {
-    expect(relativeCandidates("f/factory/a.ts", "./lib/b")).toEqual([
-      "f/factory/lib/b",
-      "f/factory/lib/b.ts",
-      "f/factory/lib/b/index.ts",
-    ]);
-  });
-
-  test("maps a js extension to ts", () => {
-    expect(relativeCandidates("f/factory/a.ts", "./b.js")).toContain(
-      "f/factory/b.ts",
-    );
-  });
-
-  test("drops a path that leaves the tree", () => {
-    expect(relativeCandidates("f/a.ts", "../../x.ts")).toEqual([]);
+describe("scanImports on the repository", () => {
+  test("reads every source under f as traceable", async () => {
+    const untraceable: string[] = [];
+    for await (const path of new Bun.Glob("f/**/*.ts").scan(".")) {
+      if (scanImports(readFileSync(path, "utf8")).untraceable) {
+        untraceable.push(path);
+      }
+    }
+    expect(untraceable).toEqual([]);
   });
 });
 
-function reader(files: Record<string, string | "failed">) {
-  const calls: string[] = [];
+const SOURCES: ReadonlySet<string> = new Set([
+  "f/factory/a.ts",
+  "f/factory/lib/b.ts",
+  "f/factory/lib/c/index.ts",
+  "f/factory/lib/d.ts",
+]);
+
+describe("resolveLocal", () => {
+  test("resolves a relative specifier with its extension", () => {
+    expect(resolveLocal("f/factory/a.ts", "./lib/b.ts", SOURCES)).toBe(
+      "f/factory/lib/b.ts",
+    );
+  });
+
+  test("completes the extension", () => {
+    expect(resolveLocal("f/factory/a.ts", "./lib/b", SOURCES)).toBe(
+      "f/factory/lib/b.ts",
+    );
+  });
+
+  test("maps a js extension to ts", () => {
+    expect(resolveLocal("f/factory/a.ts", "./lib/b.js", SOURCES)).toBe(
+      "f/factory/lib/b.ts",
+    );
+  });
+
+  test("resolves a directory to its index", () => {
+    expect(resolveLocal("f/factory/a.ts", "./lib/c", SOURCES)).toBe(
+      "f/factory/lib/c/index.ts",
+    );
+  });
+
+  test("resolves a rooted specifier to the workspace", () => {
+    expect(resolveLocal("f/factory/a.ts", "/f/factory/lib/d.ts", SOURCES)).toBe(
+      "f/factory/lib/d.ts",
+    );
+  });
+
+  test("resolves the same file from a relative and a rooted specifier", () => {
+    expect(resolveLocal("f/factory/lib/b.ts", "./d.ts", SOURCES)).toBe(
+      resolveLocal("f/factory/a.ts", "/f/factory/lib/d.ts", SOURCES),
+    );
+  });
+
+  test("does not resolve a file that is not in the list", () => {
+    expect(resolveLocal("f/factory/a.ts", "./lib/none.ts", SOURCES)).toBeNull();
+  });
+
+  test("does not resolve a decoy without an extension", () => {
+    expect(resolveLocal("f/factory/a.ts", "./lib/decoy", SOURCES)).toBeNull();
+  });
+
+  test("does not resolve a path that leaves the tree", () => {
+    expect(resolveLocal("f/a.ts", "../../x.ts", SOURCES)).toBeNull();
+  });
+
+  test.each([["/u/admin/x"], ["/etc/passwd"], ["/factory/a.ts"]])(
+    "does not resolve the specifier %s",
+    (specifier) => {
+      expect(resolveLocal("f/factory/a.ts", specifier, SOURCES)).toBeNull();
+    },
+  );
+});
+
+function scannerOf(files: Record<string, string | "failed">) {
+  const reads: string[] = [];
   const read = async (path: string): Promise<FileRead> => {
-    calls.push(path);
+    reads.push(path);
     const value = files[path];
     if (value === undefined) {
       return { kind: "missing" };
@@ -228,17 +324,22 @@ function reader(files: Record<string, string | "failed">) {
     }
     return { kind: "found", content: new TextEncoder().encode(value) };
   };
-  return { read, calls };
+  return { scan: createFileScanner(read), reads };
+}
+
+function sourcesOf(files: Record<string, unknown>): ReadonlySet<string> {
+  return new Set(Object.keys(files));
 }
 
 describe("traceBareImports", () => {
-  test("collects the bare imports through relative imports", async () => {
-    const { read } = reader({
+  test("collects the bare imports through local imports", async () => {
+    const files = {
       "f/a.ts": 'import "./b.ts";\nimport "left-pad@1.3.0";',
       "f/b.ts": 'import "./lib/c";\nimport "is-odd@1.0.0";',
       "f/lib/c.ts": 'import "is-even@2.0.0";',
-    });
-    const result = await traceBareImports("f/a.ts", read);
+    };
+    const { scan } = scannerOf(files);
+    const result = await traceBareImports("f/a.ts", scan, sourcesOf(files));
     expect(result.ok && [...result.bare].sort()).toEqual([
       "is-even@2.0.0",
       "is-odd@1.0.0",
@@ -246,74 +347,146 @@ describe("traceBareImports", () => {
     ]);
   });
 
+  test("follows a rooted import", async () => {
+    const files = {
+      "f/a.ts": 'import "/f/lib/c.ts";',
+      "f/lib/c.ts": 'import "x@1.0.0";',
+    };
+    const { scan } = scannerOf(files);
+    const result = await traceBareImports("f/a.ts", scan, sourcesOf(files));
+    expect(result.ok && [...result.bare]).toEqual(["x@1.0.0"]);
+  });
+
   test("resolves an index file", async () => {
-    const { read } = reader({
+    const files = {
       "f/a.ts": 'import "./lib";',
       "f/lib/index.ts": 'import "x@1.0.0";',
-    });
-    const result = await traceBareImports("f/a.ts", read);
+    };
+    const { scan } = scannerOf(files);
+    const result = await traceBareImports("f/a.ts", scan, sourcesOf(files));
     expect(result.ok && [...result.bare]).toEqual(["x@1.0.0"]);
   });
 
   test("stops at a cycle", async () => {
-    const { read } = reader({
+    const files = {
       "f/a.ts": 'import "./b.ts";',
       "f/b.ts": 'import "./a.ts";\nimport "x@1.0.0";',
-    });
-    const result = await traceBareImports("f/a.ts", read);
+    };
+    const { scan } = scannerOf(files);
+    const result = await traceBareImports("f/a.ts", scan, sourcesOf(files));
     expect(result.ok && [...result.bare]).toEqual(["x@1.0.0"]);
   });
 
   test("returns no imports for a missing entry", async () => {
-    const { read } = reader({});
-    const result = await traceBareImports("f/a.ts", read);
+    const { scan } = scannerOf({});
+    const result = await traceBareImports("f/a.ts", scan, new Set());
     expect(result.ok && result.bare.size).toBe(0);
   });
 
-  test("ignores a relative import that resolves to nothing", async () => {
-    const { read } = reader({ "f/a.ts": 'import "./gone.ts";' });
-    const result = await traceBareImports("f/a.ts", read);
+  test("marks a local import that resolves to nothing as untraceable", async () => {
+    const files = { "f/a.ts": 'import "./gone.ts";' };
+    const { scan } = scannerOf(files);
+    expect(await traceBareImports("f/a.ts", scan, sourcesOf(files))).toEqual({
+      ok: false,
+      reason: "untraceable",
+    });
+  });
+
+  test("does not read a decoy without an extension", async () => {
+    const files = {
+      "f/a.ts": 'import "./decoy";',
+      "f/decoy": 'import "evil@1.0.0";',
+    };
+    const { scan, reads } = scannerOf(files);
+    await traceBareImports("f/a.ts", scan, new Set(["f/a.ts"]));
+    expect(reads).not.toContain("f/decoy");
+  });
+
+  test("marks a user script import as untraceable", async () => {
+    const files = { "f/a.ts": 'import "/u/admin/x";' };
+    const { scan } = scannerOf(files);
+    expect(await traceBareImports("f/a.ts", scan, sourcesOf(files))).toEqual({
+      ok: false,
+      reason: "untraceable",
+    });
+  });
+
+  test("skips a file of the list that this tree does not have", async () => {
+    const files = { "f/a.ts": 'import "./b.ts";' };
+    const { scan } = scannerOf(files);
+    const result = await traceBareImports(
+      "f/a.ts",
+      scan,
+      new Set(["f/a.ts", "f/b.ts"]),
+    );
     expect(result.ok).toBe(true);
   });
 
   test("fails when a file cannot be read", async () => {
-    const { read } = reader({
-      "f/a.ts": 'import "./b.ts";',
-      "f/b.ts": "failed",
-    });
-    expect(await traceBareImports("f/a.ts", read)).toEqual({
+    const files = { "f/a.ts": 'import "./b.ts";', "f/b.ts": "failed" as const };
+    const { scan } = scannerOf(files);
+    expect(await traceBareImports("f/a.ts", scan, sourcesOf(files))).toEqual({
       ok: false,
       reason: "unreadable",
     });
   });
 
   test("fails on an import that cannot be followed", async () => {
-    const { read } = reader({
+    const files = {
       "f/a.ts": 'import "./b.ts";',
       "f/b.ts": "await import(name);",
-    });
-    expect(await traceBareImports("f/a.ts", read)).toEqual({
+    };
+    const { scan } = scannerOf(files);
+    expect(await traceBareImports("f/a.ts", scan, sourcesOf(files))).toEqual({
       ok: false,
       reason: "untraceable",
     });
   });
 
   test("fails on a file over the size limit", async () => {
-    const { read } = reader({ "f/a.ts": " ".repeat(MAX_FILE_BYTES + 1) });
-    expect(await traceBareImports("f/a.ts", read)).toEqual({
+    const files = { "f/a.ts": " ".repeat(MAX_FILE_BYTES + 1) };
+    const { scan } = scannerOf(files);
+    expect(await traceBareImports("f/a.ts", scan, sourcesOf(files))).toEqual({
       ok: false,
       reason: "untraceable",
     });
   });
 
   test("fails on a file that is not text", async () => {
-    const read = async (): Promise<FileRead> => ({
-      kind: "found",
-      content: new Uint8Array([0xff, 0xfe]),
-    });
-    expect(await traceBareImports("f/a.ts", read)).toEqual({
-      ok: false,
-      reason: "untraceable",
-    });
+    const scan = createFileScanner(
+      async (): Promise<FileRead> => ({
+        kind: "found",
+        content: new Uint8Array([0xff, 0xfe]),
+      }),
+    );
+    expect(await traceBareImports("f/a.ts", scan, new Set(["f/a.ts"]))).toEqual(
+      {
+        ok: false,
+        reason: "untraceable",
+      },
+    );
+  });
+});
+
+describe("createFileScanner", () => {
+  test("reads and scans a file once however many times it is asked", async () => {
+    const { scan, reads } = scannerOf({ "f/a.ts": 'import "x@1.0.0";' });
+    await scan("f/a.ts");
+    await scan("f/a.ts");
+    await scan("f/a.ts");
+    expect(reads).toEqual(["f/a.ts"]);
+  });
+
+  test("shares the scan between traces of different entries", async () => {
+    const files = {
+      "f/a.ts": 'import "./lib.ts";',
+      "f/b.ts": 'import "./lib.ts";',
+      "f/lib.ts": 'import "x@1.0.0";',
+    };
+    const { scan, reads } = scannerOf(files);
+    const sources = sourcesOf(files);
+    await traceBareImports("f/a.ts", scan, sources);
+    await traceBareImports("f/b.ts", scan, sources);
+    expect(reads.filter((path) => path === "f/lib.ts")).toHaveLength(1);
   });
 });

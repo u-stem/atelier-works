@@ -142,6 +142,7 @@ export function walkSchema(block: string): SchemaWalk {
 
 /**
  * `schema`の塊が、許可リストの範囲に収まるか。
+ * - 塊の1行目が`schema:`だけで、値が同じ行に書かれていないこと。流れ形式やブロックスカラーで中身を隠せない。
  * - 既知の1行を除いて、復号の前に、値の意味を変えうる文字と`x-windmill`を含まないこと。
  * - スキーマの語彙のキーが、`ALLOWED_SCHEMA_KEYWORDS`の中にあること。
  * `schema`はコードを動かさないが、`$`で始まる値は実行者の権限で解決され、
@@ -150,6 +151,9 @@ export function walkSchema(block: string): SchemaWalk {
  */
 function isInertSchema(block: string): boolean {
   const lines = block.split("\n");
+  if (lines[0] !== "schema:") {
+    return false;
+  }
   const known = lines.indexOf(SCHEMA_MARKER_LINE);
   const text = lines.filter((_line, index) => index !== known).join("\n");
   if (RISKY_SCHEMA_CHARS.test(text) || WINDMILL_EXTENSION.test(text)) {

@@ -9,14 +9,14 @@
 
 import { createHash } from "node:crypto";
 import {
+  createFileScanner,
   type FileRead,
-  relativeCandidates,
-  scanImports,
+  type FileScan,
+  resolveLocal,
   traceBareImports,
 } from "./metadata_patch_imports.ts";
 import {
   isAllowedMetadataPath,
-  MAX_FILE_BYTES,
   type Manifest,
   parseManifest,
 } from "./metadata_patch_manifest.ts";
@@ -30,6 +30,12 @@ export const ALLOWED_DIFF_PREFIXES: readonly string[] = [
   "docs/",
   "tests/",
 ];
+
+/** PRの差分に含めてよい、個別のパス。PR自身が一部を更新していても断らない。 */
+export const ALLOWED_DIFF_PATHS: readonly string[] = ["wmill-lock.yaml"];
+
+/** headの木の`f/`の下の`.ts`の数の上限。超えたら、閉包の計算が有界でなくなるので断る。 */
+export const MAX_SOURCES = 5000;
 
 /**
  * 新しいscriptのlockが一致すべき、空のlockの置き場所。
@@ -156,6 +162,8 @@ export type VerifyFailureCode =
   | "protected_source"
   | "new_script_without_source"
   | "new_script_incomplete"
+  | "empty_lock_invalid"
+  | "too_many_sources"
   | "head_unreadable"
   | "base_unreadable"
   | "lock_changed"
@@ -236,7 +244,8 @@ function isSafeDiffPath(path: string): boolean {
 function isAllowedDiffPath(path: string): boolean {
   return (
     isSafeDiffPath(path) &&
-    ALLOWED_DIFF_PREFIXES.some((prefix) => path.startsWith(prefix))
+    (ALLOWED_DIFF_PATHS.includes(path) ||
+      ALLOWED_DIFF_PREFIXES.some((prefix) => path.startsWith(prefix)))
   );
 }
 
@@ -340,7 +349,13 @@ function checkArchive(input: VerifyInput): Checked | Failure {
   return { manifest, contents };
 }
 
-/** パッチを適用してよい履歴の関係か。baseShaがbaseの履歴にあり、headがそれを含み、merge commitの親が順序どおりか。 */
+/**
+ * パッチを適用してよい履歴の関係か。
+ * - `baseSha`がbaseの今の先端の祖先であること。
+ * - headがbaseの今の先端を含むこと。含まなければ、依存の比較の相手が先に進んでいるので、
+ *   `main`を取り込んだ後の再実行を待つ。`baseSha`がheadの祖先であることは、これと前の条件から従う。
+ * - `mergeSha`のcommitの親が、`baseSha`、`headSha`の順であること。
+ */
 async function checkHistory(
   input: VerifyInput,
   manifest: Manifest,
@@ -353,11 +368,11 @@ async function checkHistory(
   if (!inBase) {
     return fail("base_not_in_base_history");
   }
-  const inHead = await ports.isAncestor(manifest.baseSha, input.pr.headSha);
-  if (inHead === null) {
+  const tipInHead = await ports.isAncestor(input.pr.baseSha, input.pr.headSha);
+  if (tipInHead === null) {
     return fail("ancestry_unknown");
   }
-  if (!inHead) {
+  if (!tipInHead) {
     return fail("head_lacks_base");
   }
   const parents = await ports.readCommitParents(manifest.mergeSha);
@@ -392,34 +407,34 @@ function memoizeRead(
 }
 
 /**
- * `.ts`が変わったscriptと、それを相対importの推移閉包で読むscriptの、`.ts`のパスを返す。
+ * `.ts`が変わったscriptと、それを局所importの推移閉包で読むscriptの、`.ts`のパスを返す。
  * importの関係は、PRのheadの木のコードから、このコードの規則で求める。
- * 1ファイルの上限を超えるものと、文字列でないものは辺を持たない。そのscriptは閉包に入らず、パッチは断られる。
+ * 局所importの解決は、依存の検査のたどり方と同じ関数(`resolveLocal`)を使う。
+ * 追えないimportを含むファイルは辺を持たない。そのscriptは閉包に入らず、パッチは断られる。
  * 読み取りに失敗したときは、閉包を決められないので、失敗を返す。
  */
 async function affectedSources(
   changed: ReadonlySet<string>,
   sources: ReadonlySet<string>,
-  readHead: (path: string) => Promise<FileRead>,
+  scanHead: (path: string) => Promise<FileScan>,
 ): Promise<ReadonlySet<string> | Failure> {
   const importers = new Map<string, string[]>();
   for (const path of sources) {
-    const read = await readHead(path);
-    if (read.kind === "failed") {
+    const result = await scanHead(path);
+    if (result.kind === "failed") {
       return fail("head_unreadable", path);
     }
-    const code =
-      read.kind === "found" && read.content.byteLength <= MAX_FILE_BYTES
-        ? decodeUtf8(read.content)
-        : null;
-    if (code === null) {
+    if (result.kind === "missing" || result.scan.untraceable) {
       continue;
     }
-    for (const specifier of scanImports(code).relative) {
-      const target = relativeCandidates(path, specifier).find((candidate) =>
-        sources.has(candidate),
-      );
-      if (target === undefined) {
+    const targets = result.scan.local.map((specifier) =>
+      resolveLocal(path, specifier, sources),
+    );
+    if (targets.some((target) => target === null)) {
+      continue;
+    }
+    for (const target of targets) {
+      if (target === null) {
         continue;
       }
       const list = importers.get(target) ?? [];
@@ -457,6 +472,10 @@ type Context = {
   readonly readHead: (path: string) => Promise<FileRead>;
   /** baseブランチの今の先端(`pr.baseSha`)の木の読み取り。 */
   readonly readBase: (path: string) => Promise<FileRead>;
+  /** headの木のファイルのimportの読み取り。結果は使い回す。 */
+  readonly scanHead: (path: string) => Promise<FileScan>;
+  /** baseの先端の木のファイルのimportの読み取り。結果は使い回す。 */
+  readonly scanBase: (path: string) => Promise<FileScan>;
   readonly headSources: ReadonlySet<string>;
   /** PRの差分で`.ts`が追加された、または変更されたscript。 */
   readonly changedSources: ReadonlySet<string>;
@@ -469,19 +488,62 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
 }
 
+const LOCK_MARKER = "\n//bun.lock\n";
+
+/** 依存の無いlockか。前半の`dependencies`が空で、後半が`<empty>`の1語であること。 */
+function isEmptyLock(bytes: Uint8Array): boolean {
+  const text = decodeUtf8(bytes);
+  if (text === null) {
+    return false;
+  }
+  const first = text.indexOf(LOCK_MARKER);
+  if (first === -1 || text.indexOf(LOCK_MARKER, first + 1) !== -1) {
+    return false;
+  }
+  if (text.slice(first + LOCK_MARKER.length).trim() !== "<empty>") {
+    return false;
+  }
+  let front: unknown;
+  try {
+    front = JSON.parse(text.slice(0, first));
+  } catch {
+    return false;
+  }
+  if (typeof front !== "object" || front === null || Array.isArray(front)) {
+    return false;
+  }
+  const keys = Object.keys(front);
+  if (keys.length !== 1 || keys[0] !== "dependencies") {
+    return false;
+  }
+  const dependencies = Object.values(front)[0];
+  return (
+    typeof dependencies === "object" &&
+    dependencies !== null &&
+    !Array.isArray(dependencies) &&
+    Object.keys(dependencies).length === 0
+  );
+}
+
 function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   return a.size === b.size && [...a].every((item) => b.has(item));
 }
 
 /**
- * 依存が変わらないことを、manifestの内容と無関係に確かめる。
- * 閉包に入るすべてのscriptについて、相対importをたどって集めた裸のimport指定子(版つき)の集合を、
- * baseの先端の木とheadの木で比べ、1つでも違えば断る。
+ * 依存が変わらないことを、manifestの内容と無関係に確かめる。閉包に入るすべてのscriptについて、次を求める。
+ * - 局所importをたどって集めた裸のimport指定子(版つき)の集合が、baseの先端の木とheadの木で同じであること。
+ * - 新しいscriptは、集合が空であること。baseの先端が同じ内容を持つときも、空であることを求める。
+ * - 既存のscriptのlockが、headの木とbaseの先端の木で、バイト列まで同一であること。
+ *   古いlockに新しいhashが残る形と、lockを手で変えたPRを、ここで断る。
  * 追えないimportと、上限を超えるファイルがあるときも断る。lockの内容は解釈しない。
  */
 async function checkDependencies(context: Context): Promise<Failure | null> {
   for (const source of [...context.affected].sort()) {
-    const head = await traceBareImports(source, context.readHead);
+    const head = await traceBareImports(
+      source,
+      context.scanHead,
+      context.headSources,
+    );
     if (!head.ok) {
       return fail(
         head.reason === "unreadable"
@@ -490,7 +552,15 @@ async function checkDependencies(context: Context): Promise<Failure | null> {
         source,
       );
     }
-    const base = await traceBareImports(source, context.readBase);
+    const isNew = context.addedSources.has(source);
+    if (isNew && head.bare.size > 0) {
+      return fail("dependency_change_requires_human", source);
+    }
+    const base = await traceBareImports(
+      source,
+      context.scanBase,
+      context.headSources,
+    );
     if (!base.ok) {
       return fail(
         base.reason === "unreadable"
@@ -502,8 +572,36 @@ async function checkDependencies(context: Context): Promise<Failure | null> {
     if (!sameSet(head.bare, base.bare)) {
       return fail("dependency_change_requires_human", source);
     }
+    if (!isNew) {
+      const failure = await checkExistingLock(context, source);
+      if (failure !== null) {
+        return failure;
+      }
+    }
   }
   return null;
+}
+
+/** 既存のscriptのlockが、headの木とbaseの先端の木で同一か。headにlockが無いscriptは対象にしない。 */
+async function checkExistingLock(
+  context: Context,
+  source: string,
+): Promise<Failure | null> {
+  const path = `${source.slice(0, -".ts".length)}.script.lock`;
+  const head = await context.readHead(path);
+  if (head.kind === "failed") {
+    return fail("head_unreadable", path);
+  }
+  if (head.kind === "missing") {
+    return null;
+  }
+  const base = await context.readBase(path);
+  if (base.kind === "failed") {
+    return fail("base_unreadable", path);
+  }
+  return base.kind === "found" && sameBytes(head.content, base.content)
+    ? null
+    : fail("lock_changed", path);
 }
 
 /**
@@ -567,6 +665,9 @@ async function checkLock(
   const reference = await context.readBase(EMPTY_LOCK_REFERENCE);
   if (reference.kind !== "found") {
     return fail("base_unreadable", EMPTY_LOCK_REFERENCE);
+  }
+  if (!isEmptyLock(reference.content)) {
+    return fail("empty_lock_invalid", EMPTY_LOCK_REFERENCE);
   }
   return sameBytes(content, reference.content)
     ? null
@@ -689,9 +790,11 @@ async function checkStatus(
  * - 実行とPRの事実が、取ってよい実行の条件に合う。
  * - manifestが今の許可リストを通り、`headSha`がPRの今のheadと一致し、
  *   実体の大きさとsha256が合い、manifestに無いファイルが無く、削除と保護パスが無い。
- * - `baseSha`がbaseの履歴にあり、headがそれを含み、`mergeSha`の親が`baseSha`、`headSha`の順である。
+ * - `baseSha`がbaseの履歴にあり、`mergeSha`の親が`baseSha`、`headSha`の順である。
+ * - headがbaseの今の先端を含む。含まなければ、`main`を取り込んだ後の再実行を待つ。
  *   `baseSha`と`mergeSha`は出どころの照合だけに使い、内容の比較には使わない。
  * - 閉包に入るscriptの裸のimport指定子の集合が、baseの先端の木とheadの木で同じである。
+ *   新しいscriptは集合が空で、既存のscriptのlockはheadの木とbaseの先端の木で同一である。
  * - 新しいscriptは、lockと`.script.yaml`がそろう。
  * - `*.script.lock`が、`.ts`が変わったscriptとそれをimportするscriptのものに限られる。
  *   `*.script.yaml`は、`.ts`が変わったscript自身のものに限られる。
@@ -735,13 +838,20 @@ export async function verifyMetadataPatch(
   const headSources = new Set(
     (await ports.listHeadSources()).filter((path) => SOURCE_PATH.test(path)),
   );
-  const affected = await affectedSources(changed, headSources, readHead);
+  if (headSources.size > MAX_SOURCES) {
+    return fail("too_many_sources");
+  }
+  const scanHead = createFileScanner(readHead);
+  const scanBase = createFileScanner(readBase);
+  const affected = await affectedSources(changed, headSources, scanHead);
   if ("ok" in affected) {
     return affected;
   }
   const context: Context = {
     readHead,
     readBase,
+    scanHead,
+    scanBase,
     headSources,
     changedSources: changed,
     addedSources: added,

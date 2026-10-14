@@ -68,6 +68,10 @@ export type World = {
   baseFailures: Set<string>;
   /** baseの木の読み取りで渡されたref。 */
   baseReads: string[];
+  /** headの木の読み取りで渡されたパス。 */
+  headReads: string[];
+  /** baseの木の読み取りで渡されたパス。 */
+  basePaths: string[];
   /** 読み取りに失敗するheadのパス。 */
   headFailures: Set<string>;
   /** ポートの一部を差し替える。 */
@@ -135,6 +139,8 @@ export function world(): World {
     parents: [BASE, HEAD],
     baseFailures: new Set(),
     baseReads: [],
+    headReads: [],
+    basePaths: [],
     headFailures: new Set(),
     ports: {},
   };
@@ -186,6 +192,7 @@ export function build(w: World) {
     listHeadSources: async () =>
       [...w.head.keys()].filter((path) => path.endsWith(".ts")),
     readHeadFile: async (path): Promise<FileRead> => {
+      w.headReads.push(path);
       if (w.headFailures.has(path)) {
         return { kind: "failed" };
       }
@@ -196,6 +203,7 @@ export function build(w: World) {
     },
     readBaseFile: async (ref, path): Promise<FileRead> => {
       w.baseReads.push(ref);
+      w.basePaths.push(path);
       if (w.baseFailures.has(path)) {
         return { kind: "failed" };
       }

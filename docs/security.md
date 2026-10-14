@@ -226,7 +226,7 @@ artifactを取る実行は、次をすべて満たすものに限る。
 - 実行の`pull_requests`に、対象のPRの番号がある。
 - 実行の`head_sha`が、PRの今のheadと一致する。
 - 実行の結論が`failure`で、原因が`metadata`ジョブの失敗である。
-- PRの差分(`base...head`)が、`f/**`、`migrations/**`、`docs/**`、`tests/**`のパスだけである。
+- PRの差分(`base...head`)が、`f/**`、`migrations/**`、`docs/**`、`tests/**`のパスと、ルートの`wmill-lock.yaml`だけである。
 - PRの差分を、全件読めている。APIの件数の上限で切れた差分は、許可リストの外を隠しうるので断る。
 
 差分の条件は、これら以外に触れていれば、パッチを適用しない。
@@ -255,9 +255,10 @@ PR 2または後続で実装する。それまでは、この取り決めだけ�
 ##### 適用先と方式
 
 パッチは、merge木に対する再生成の結果である。
-適用してよいのは、PRのheadが`baseSha`を祖先に含むとき(`git merge-base --is-ancestor`)だけである。
+適用してよいのは、PRのheadが、baseブランチの今の先端を祖先に含むとき(`git merge-base --is-ancestor`)だけである。
 含まないときは、パッチを捨てる。
 Factoryが`main`を取り込み、CIが再実行されるのを待つ。
+依存の比較の相手が先に進んでいるのに、人の手に回さないためである。
 
 含むときは、merge木とheadの`f/`と`wmill-lock.yaml`が一致する。
 そのため、パッチはファイル単位で置き換えてよい。
@@ -273,11 +274,12 @@ PRの版の`scripts/metadata-patch.ts`が出した結果は、信用しない。
 - `main`の版の`isAllowedMetadataPath`と`parseManifest`で、manifestの全項目を再検査する。
 - `headSha`と`sha256`を照合する。
 - `baseSha`が、PRのbaseの今のshaの祖先であること(`--is-ancestor`)を確かめる。
+- PRのheadが、baseの今の先端を祖先に含むことを確かめる。`baseSha`がheadの祖先であることは、この2つから従う。
 - `mergeSha`のcommitをAPIで取得し、第1親が`baseSha`、第2親が`headSha`に一致することを確かめる。取得できないときは拒否する。
 
 `baseSha`の照合を、一致ではなく祖先にする。
 一致を求めると、`main`が進むたびに適用が先送りされるためである。
-headが`baseSha`を含めば、merge木とheadの木は同じで、パッチはheadに対して正しいままである。
+headがbaseの今の先端を含めば、merge木とheadの木は同じで、パッチはheadに対して正しいままである。
 
 ##### zipの内容の制限
 
@@ -320,26 +322,37 @@ lockの意味(版の範囲、パッケージの入れ子、取得元、integrity
 依存が変わる再生成は、自動化の対象外で、別の仕組みで扱う。
 
 - `*.script.lock`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
-  importするscriptの範囲は、PRのheadの木のコードで、相対importの推移閉包を計算して決める。
+  importするscriptの範囲は、PRのheadの木のコードで、局所importの推移閉包を計算して決める。
 - 対応する`.ts`が保護パスに当たるscriptのlockは、lock自身が保護パスでなくても拒否する(例: `steps/dependabot_*.ts`)。
-- 閉包に入るすべてのscriptについて、相対importをたどって集めた裸のimport指定子(版つき)の集合を、baseの先端の木とheadの木で比べる。
+- 閉包に入るすべてのscriptについて、局所importをたどって集めた裸のimport指定子(版つき)の集合を、baseの先端の木とheadの木で比べる。
   1つでも違えば、manifestの内容と無関係に、パッチ全体を拒否する。
   依存の変更は、パッチの`.script.lock`を見なくても、コードのimportに現れるためである。
-  文字列リテラルでないimport、import属性、1ファイルの上限を超えるファイルなど、追えないものも拒否する。
+- 局所importは、Windmillの解決に合わせて読む。
+  相対の指定子と、`/f/`で始まる指定子(`f/`に写す)を、headの木の`f/`の下の`.ts`の一覧に解決する。
+  拡張子のないファイルは、一覧に無いので読まない。
+  `/u/`とそれ以外の`/`で始まる指定子、一覧に解決できない局所import、文字列リテラルでない動的import、メソッドとして呼ぶrequire、import属性、1ファイルの上限を超えるファイルは、追えないので拒否する。
+  閉包を求める解決と、依存の集合をたどる解決は、同じ関数を使う。食い違うと、閉包の外のscriptに、依存を隠せるためである。
 - 既存のscript(headの木にlockがある)のlockは、headの木のlockとバイト列まで同一であること。適用しても変わらない。
-  比べる相手はheadの木である。manifestの`baseSha`は出どころの照合にだけ使い、内容の比較には使わない。過去のcommitを選ばれて、比較の相手を変えられないためである。
+  加えて、閉包の既存のscriptのlockは、baseの先端の木のlockとも同一であること。
+  PRの作者がlockを手で変えた形と、古いlockに新しいhashが残る形を、断るためである。
+  比べる相手はheadの木とbaseの先端の木で、manifestの`baseSha`は出どころの照合にだけ使い、内容の比較には使わない。過去のcommitを選ばれて、比較の相手を変えられないためである。
 - 新しいscriptは、同じPRで`.ts`を追加したものに限る。
+  裸のimportの集合が空であること。baseの先端が同じ内容を持つときも、空であることを求める。
   lockは、baseの先端の木にある依存の無いlib(`f/factory/lib/metadata_patch_manifest.script.lock`)のlockと同一であること。
+  参照のlockは、前半の`dependencies`が空で、後半が`<empty>`であることを、検査の中で確かめる。
   lockと`.script.yaml`の両方が、パッチが運ぶか、headの木にすでにあること。lockの無い新しいscriptは拒否する。
 - `*.script.yaml`を変えてよいのは、`.ts`自身が変わったscriptに限る。入力のスキーマは、そのscript自身の`main`の引数からしか決まらないためである。
 - 空のlockを固定の値として埋め込まない。lockの書式がwmillの版で変わっても、リポジトリの実物と比べるためである。
 - headの木かbaseの木のファイルを読めないときは拒否する。
+- headの木の`f/`の下の`.ts`が5000件を超えるときは拒否する。閉包の計算を有界にするためである。
 
 ##### ロックのハッシュの制限
 
 `wmill-lock.yaml`は、完全なYAMLとして解析しない。wmillが書く決まった形に1行ずつ合わせて読み、外れるものは断る。
 
 - 変わったキーが、許可したscriptのものに限られることを確かめる。
+  許可するのは、閉包に入るscriptである。hashはimportする先のコードにも依存するためである。
+  この範囲では、hashを任意の値にできる。ただし、lockの内容は変えられないので、依存の解決には影響しない。
 - 値が64桁の小文字の16進数であることを確かめる。
 - キーの削除と、未知の`version`を拒否する。
 

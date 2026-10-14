@@ -237,6 +237,55 @@ describe("checkScriptYaml allows only the keywords in use", () => {
   });
 });
 
+describe("checkScriptYaml requires the schema key to stand alone", () => {
+  const withSchemaLine = (first: string, rest: readonly string[] = []) =>
+    [
+      "summary: foo",
+      "description: 説明です",
+      `lock: '!inline ${SCRIPT}.script.lock'`,
+      "kind: script",
+      first,
+      ...rest,
+      "",
+    ].join("\n");
+
+  function reasonOf(text: string): string {
+    const result = checkScriptYaml({
+      patch: text,
+      head: text,
+      scriptPath: SCRIPT,
+      isNewScript: false,
+    });
+    return result.ok ? "ok" : result.reason;
+  }
+
+  test.each([
+    ["a flow mapping", "schema: {properties: {a: {showExpr: x}}}"],
+    ["a flow list", "schema: [a]"],
+    ["a block scalar", "schema: |"],
+    ["a folded scalar", "schema: >"],
+    ["a plain value", "schema: x"],
+    ["an empty flow mapping", "schema: {}"],
+    ["a trailing space", "schema: "],
+    ["an alias", "schema: *a"],
+  ])("rejects %s", (_label, first) => {
+    expect(reasonOf(withSchemaLine(first, ["  type: object"]))).toBe(
+      "unsafe_schema",
+    );
+  });
+
+  test("accepts the key on a line of its own", () => {
+    expect(
+      reasonOf(
+        withSchemaLine("schema:", [
+          "  $schema: https://json-schema.org/draft/2020-12/schema",
+          "  type: object",
+        ]),
+      ),
+    ).toBe("ok");
+  });
+});
+
 describe("splitTopLevelBlocks rejects line separators and marks", () => {
   test.each([
     ["a next line", String.fromCharCode(0x85)],

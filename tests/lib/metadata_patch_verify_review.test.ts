@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { MAX_FILE_BYTES } from "../../f/factory/lib/metadata_patch_manifest.ts";
+import { MAX_SOURCES } from "../../f/factory/lib/metadata_patch_verify.ts";
 import {
   addExistingScript,
   BASE,
@@ -8,6 +10,7 @@ import {
   EMPTY_LOCK_PATH,
   HASH_NEW,
   HASH_OLD,
+  HEAD,
   LOCK,
   OTHER_LOCK,
   scriptYaml,
@@ -83,9 +86,49 @@ describe("verifyMetadataPatch keeps the lock of an existing script", () => {
     expect(await codeOf(w)).toBe("head_unreadable");
   });
 
-  test("compares with the head tree, not with an older lock in the base tree", async () => {
+  test("rejects a lock that equals the head tree but differs from the base tip", async () => {
     const w = world();
     w.base.set("f/factory/foo.script.lock", OTHER_LOCK);
+    expect(await codeOf(w)).toBe("lock_changed");
+  });
+
+  test("rejects a lock the author edited by hand together with the source", async () => {
+    const w = world();
+    w.head.set("f/factory/foo.script.lock", OTHER_LOCK);
+    w.patch.set("f/factory/foo.script.lock", OTHER_LOCK);
+    expect(await codeOf(w)).toBe("lock_changed");
+  });
+
+  test("rejects when the base tip has no lock for an existing script", async () => {
+    const w = world();
+    w.base.delete("f/factory/foo.script.lock");
+    expect(await codeOf(w)).toBe("lock_changed");
+  });
+
+  test("rejects when the lock in the base tip cannot be read", async () => {
+    const w = world();
+    w.baseFailures.add("f/factory/foo.script.lock");
+    expect(await codeOf(w)).toBe("base_unreadable");
+  });
+
+  test("checks the lock of an importer that the manifest does not carry", async () => {
+    const w = world();
+    addExistingScript(w, "baz", 'import "./foo.ts";\n');
+    w.head.set("f/factory/baz.script.lock", OTHER_LOCK);
+    expect(await codeOf(w)).toBe("lock_changed");
+  });
+
+  test("does not ask a source without a lock for one", async () => {
+    const w = world();
+    w.head.set("f/factory/x__flow/step.ts", "export const a = 1;\n");
+    w.base.set("f/factory/x__flow/step.ts", "export const a = 0;\n");
+    w.pr = {
+      ...w.pr,
+      diff: [
+        ...w.pr.diff,
+        { path: "f/factory/x__flow/step.ts", status: "modified" },
+      ],
+    };
     expect(await codeOf(w)).toBe("ok");
   });
 });
@@ -401,5 +444,245 @@ describe("verifyMetadataPatch reads the tree of the base tip", () => {
     const w = world();
     await verify(w);
     expect(w.baseReads).not.toContain(BASE);
+  });
+});
+
+describe("verifyMetadataPatch resolves imports as Windmill does", () => {
+  const rooted = 'import { x } from "/f/factory/lib/bar.ts";\n';
+
+  test("treats a rooted import as an edge of the closure", async () => {
+    const w = world();
+    w.head.set("f/factory/foo.ts", rooted);
+    w.base.set("f/factory/foo.ts", rooted);
+    w.pr = {
+      ...w.pr,
+      diff: [{ path: "f/factory/lib/bar.ts", status: "modified" }],
+    };
+    w.patch.delete("f/factory/foo.script.yaml");
+    expect(await codeOf(w)).toBe("ok");
+  });
+
+  test("follows a rooted import when it compares the dependencies", async () => {
+    const w = world();
+    w.head.set("f/factory/foo.ts", rooted);
+    w.base.set("f/factory/foo.ts", rooted);
+    w.head.set("f/factory/lib/bar.ts", 'import pad from "left-pad@1.4.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test.each([
+    ["a user script", 'import x from "/u/admin/secret";'],
+    ["a path outside the tree", 'import x from "/etc/passwd";'],
+    ["a file that does not exist", 'import x from "./gone.ts";'],
+    [
+      "a rooted file that does not exist",
+      'import x from "/f/factory/gone.ts";',
+    ],
+  ])("rejects a changed script that imports %s", async (_label, code) => {
+    const w = world();
+    w.head.set("f/factory/foo.ts", `${code}\n`);
+    w.base.set("f/factory/foo.ts", `${code}\n`);
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("does not read a decoy without an extension", async () => {
+    const w = world();
+    w.head.set("f/factory/foo.ts", 'import x from "./decoy";\n');
+    w.head.set("f/factory/decoy", 'import pad from "left-pad@9.9.9";\n');
+    await verify(w);
+    expect(w.headReads).not.toContain("f/factory/decoy");
+  });
+
+  test("rejects an import that only a decoy could satisfy", async () => {
+    const w = world();
+    w.head.set("f/factory/foo.ts", 'import x from "./decoy";\n');
+    w.base.set("f/factory/foo.ts", 'import x from "./decoy";\n');
+    w.head.set("f/factory/decoy", "export const a = 1;\n");
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("resolves the closure and the trace to the same file", async () => {
+    const w = world();
+    addExistingScript(w, "baz", 'import x from "/f/factory/foo.ts";\n');
+    w.patch.set("f/factory/baz.script.lock", LOCK);
+    w.head.set(
+      "f/factory/foo.ts",
+      'import { x } from "../factory/lib/bar.ts";\n',
+    );
+    w.base.set(
+      "f/factory/foo.ts",
+      'import { x } from "../factory/lib/bar.ts";\n',
+    );
+    w.head.set("f/factory/lib/bar.ts", 'import pad from "left-pad@2.0.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+});
+
+describe("verifyMetadataPatch requires no dependency of a new script", () => {
+  test("rejects a new script even when the base tip holds the same content", async () => {
+    const w = withNewScript('import pad from "left-pad@1.3.0";\n');
+    w.base.set("f/factory/newone.ts", 'import pad from "left-pad@1.3.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("accepts a new script without a dependency when the base tip holds the same", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.base.set("f/factory/newone.ts", "export function main() {}\n");
+    expect(await codeOf(w)).toBe("ok");
+  });
+});
+
+describe("verifyMetadataPatch checks the reference empty lock", () => {
+  test.each([
+    ["a lock with a dependency", LOCK],
+    ["a lock without the marker", '{"dependencies": {}}'],
+    [
+      "a lock with another key",
+      '{"dependencies": {}, "scripts": {}}\n//bun.lock\n<empty>',
+    ],
+    ["a lock with a second half", '{"dependencies": {}}\n//bun.lock\n{"a": 1}'],
+    ["a lock with a list", "[]\n//bun.lock\n<empty>"],
+    ["text that is not JSON", "x\n//bun.lock\n<empty>"],
+    [
+      "a lock with two markers",
+      '{"dependencies": {}}\n//bun.lock\n//bun.lock\n<empty>',
+    ],
+  ])("rejects %s as the reference", async (_label, content) => {
+    const w = withNewScript("export function main() {}\n");
+    w.base.set(EMPTY_LOCK_PATH, content);
+    w.patch.set("f/factory/newone.script.lock", content);
+    expect(await codeOf(w)).toBe("empty_lock_invalid");
+  });
+
+  test("accepts a reference with spaces in the first half", async () => {
+    const w = withNewScript("export function main() {}\n");
+    const content = '{ "dependencies" : { } }\n//bun.lock\n<empty>';
+    w.base.set(EMPTY_LOCK_PATH, content);
+    w.patch.set("f/factory/newone.script.lock", content);
+    expect(await codeOf(w)).toBe("ok");
+  });
+});
+
+describe("verifyMetadataPatch accepts the hash file in the diff", () => {
+  test("accepts a PR that already updated the hash file", async () => {
+    const w = world();
+    w.pr = {
+      ...w.pr,
+      diff: [...w.pr.diff, { path: "wmill-lock.yaml", status: "modified" }],
+    };
+    expect(await codeOf(w)).toBe("ok");
+  });
+
+  test("rejects a path below the hash file name", async () => {
+    const w = world();
+    w.pr = {
+      ...w.pr,
+      diff: [...w.pr.diff, { path: "wmill-lock.yaml/x", status: "modified" }],
+    };
+    expect(await codeOf(w)).toBe("pr_diff_not_allowed");
+  });
+
+  test("rejects a hash file in another folder", async () => {
+    const w = world();
+    w.pr = {
+      ...w.pr,
+      diff: [...w.pr.diff, { path: "sub/wmill-lock.yaml", status: "modified" }],
+    };
+    expect(await codeOf(w)).toBe("pr_diff_not_allowed");
+  });
+});
+
+describe("verifyMetadataPatch keeps the work bounded", () => {
+  test("rejects a tree with too many sources", async () => {
+    const w = world();
+    for (let i = 0; i < MAX_SOURCES + 1; i++) {
+      w.head.set(`f/gen/s${String(i)}.ts`, "export const a = 1;\n");
+    }
+    expect(await codeOf(w)).toBe("too_many_sources");
+  });
+
+  test("reads and scans each file once for many scripts", async () => {
+    const w = world();
+    const body = 'import { c } from "./common.ts";\n'.repeat(20);
+    w.head.set("f/gen/common.ts", "export const c = 1;\n");
+    w.base.set("f/gen/common.ts", "export const c = 0;\n");
+    for (let i = 0; i < 300; i++) {
+      const path = `f/gen/s${String(i)}.ts`;
+      w.head.set(path, body);
+      w.base.set(path, body);
+    }
+    w.pr = {
+      ...w.pr,
+      diff: [...w.pr.diff, { path: "f/gen/common.ts", status: "modified" }],
+    };
+    await verify(w);
+    const counts = new Map<string, number>();
+    for (const path of w.headReads) {
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+    }
+    expect(Math.max(...counts.values())).toBe(1);
+  });
+
+  test("reads each file of the base tip once for many scripts", async () => {
+    const w = world();
+    const body = 'import { c } from "./common.ts";\n';
+    w.head.set("f/gen/common.ts", "export const c = 1;\n");
+    w.base.set("f/gen/common.ts", "export const c = 0;\n");
+    for (let i = 0; i < 100; i++) {
+      const path = `f/gen/s${String(i)}.ts`;
+      w.head.set(path, body);
+      w.base.set(path, body);
+    }
+    w.pr = {
+      ...w.pr,
+      diff: [...w.pr.diff, { path: "f/gen/common.ts", status: "modified" }],
+    };
+    await verify(w);
+    const counts = new Map<string, number>();
+    for (const path of w.basePaths) {
+      counts.set(path, (counts.get(path) ?? 0) + 1);
+    }
+    expect(Math.max(...counts.values())).toBe(1);
+  });
+
+  test("finishes on many files that are close to the size limit", async () => {
+    const w = world();
+    const body = 'import { c } from "./common.ts";\n'.repeat(
+      Math.floor((MAX_FILE_BYTES - 1000) / 33),
+    );
+    w.head.set("f/gen/common.ts", "export const c = 1;\n");
+    w.base.set("f/gen/common.ts", "export const c = 0;\n");
+    for (let i = 0; i < 15; i++) {
+      const path = `f/gen/big${String(i)}.ts`;
+      w.head.set(path, body);
+      w.base.set(path, body);
+    }
+    w.pr = {
+      ...w.pr,
+      diff: [...w.pr.diff, { path: "f/gen/common.ts", status: "modified" }],
+    };
+    const started = performance.now();
+    await verify(w);
+    expect(performance.now() - started).toBeLessThan(20000);
+  });
+});
+
+describe("verifyMetadataPatch requires the head to hold the base tip", () => {
+  test("rejects a head that lacks the tip of the base branch", async () => {
+    const w = world();
+    w.isAncestor = (ancestor, descendant) =>
+      !(ancestor === BASE_TIP && descendant === HEAD);
+    expect(await codeOf(w)).toBe("head_lacks_base");
+  });
+
+  test("asks whether the head holds the tip", async () => {
+    const w = world();
+    const asked: string[] = [];
+    w.isAncestor = (ancestor, descendant) => {
+      asked.push(`${ancestor}:${descendant}`);
+      return true;
+    };
+    await verify(w);
+    expect(asked).toEqual([`${BASE}:${BASE_TIP}`, `${BASE_TIP}:${HEAD}`]);
   });
 });
