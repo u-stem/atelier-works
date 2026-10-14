@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createFileScanner,
   type FileRead,
@@ -209,8 +217,85 @@ describe("scanImports with the transpiler", () => {
       "an attribute split over lines",
       'import m from "./m.ts" with\n{ type: "macro" };',
     ],
+    [
+      "a block comment before the attribute",
+      'import m from "./m.ts" /* c */ with { type: "macro" };',
+    ],
+    [
+      "a block comment after the keyword",
+      'import m from "./m.ts" with/* c */{ type: "macro" };',
+    ],
+    [
+      "a line comment before the attribute",
+      'import m from "./m.ts" // c\nwith { type: "macro" };',
+    ],
+    [
+      "a line comment after the keyword",
+      'import m from "./m.ts" with // c\n{ type: "macro" };',
+    ],
+    [
+      "an assert attribute with a comment",
+      'import m from "./m.ts" assert /* c */ { type: "macro" };',
+    ],
+    [
+      "an unterminated comment after the keyword",
+      'import m from "./m.ts" with /* c { type: "macro" };',
+    ],
   ])("marks %s as untraceable", (_label, code) => {
     expect(scanImports(code).untraceable).toBe(true);
+  });
+
+  test.each([
+    ["the word without", "const without = 1;"],
+    ["a name that starts with with", "function withdraw() {}\nwithdraw();"],
+    ["the word in a string", 'const s = "deal with it";'],
+    ["the word in a comment", "// work with care\n"],
+    ["assert used as a function", "assert(value);\nassert.ok(value);"],
+    ["an import of assert", 'import assert from "node:assert";'],
+    ["a word followed by a colon", "const o = { with: 1, assert: 2 };"],
+  ])("does not mark %s as untraceable", (_label, code) => {
+    expect(scanImports(code).untraceable).toBe(false);
+  });
+
+  test("does not run a macro while it scans a source with an attribute", () => {
+    const dir = mkdtempSync(join(tmpdir(), "macro-"));
+    const marker = join(dir, "ran");
+    const macro = join(dir, "m.ts");
+    writeFileSync(
+      macro,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\nexport function m() { return 1; }\n`,
+    );
+    const code = `import { m } from ${JSON.stringify(macro)} with { type: "macro" };\nm();\n`;
+    try {
+      scanImports(code);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("scans a megabyte of keywords in linear time", () => {
+    const code = `${"with ".repeat(200_000)}x`;
+    const started = performance.now();
+    scanImports(code);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("does not run a macro behind a comment", () => {
+    const dir = mkdtempSync(join(tmpdir(), "macro-"));
+    const marker = join(dir, "ran");
+    const macro = join(dir, "m.ts");
+    writeFileSync(
+      macro,
+      `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\nexport function m() { return 1; }\n`,
+    );
+    const code = `import { m } from ${JSON.stringify(macro)} /* c */ with { type: "macro" };\nm();\n`;
+    try {
+      scanImports(code);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("does not read the imports of a source with an attribute", () => {

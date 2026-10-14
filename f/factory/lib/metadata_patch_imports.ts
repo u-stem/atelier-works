@@ -32,8 +32,8 @@ export type ImportScan = {
 const CALL = /(?<![\w$])(?:import|require)\s*\(/g;
 // 呼び出しの引数が、エスケープを含まない文字列リテラル1つだけで始まる形。
 const SOLE_LITERAL = /\s*(["'])([^"'\\\n]*)\1\s*[,)]/y;
-// 文字列の直後のimport属性。
-const ATTRIBUTE = /["']\s*(?:with|assert)\s*\{/;
+// import属性のキーワード。語の境界で区切る。
+const ATTRIBUTE_KEYWORD = /\b(?:with|assert)\b/g;
 // トランスパイラが返さない、型だけのimportとexport。型は実行時の依存ではないが、閉包には含める。
 const TYPE_ONLY =
   /\b(?:import|export)\s+type\b[^;"']{0,300}?\bfrom\s*["']([^"'\n]+)["']/g;
@@ -59,6 +59,32 @@ function previousNonSpace(code: string, index: number): string | undefined {
     cursor -= 1;
   }
   return code[cursor - 1];
+}
+
+/**
+ * import属性になりうる形を含むか。
+ * 語の`with`か`assert`の直後(空白を除く)が開き波括弧か、コメントの開始なら真を返す。
+ * コメントは終端を探さず、開始だけで断る。終端を探すと、入力によっては計算量が2乗になる。
+ * 文字列やコメントの中の出現も断る側に倒す。
+ */
+function hasAttribute(code: string): boolean {
+  for (const match of code.matchAll(ATTRIBUTE_KEYWORD)) {
+    let cursor = match.index + match[0].length;
+    while (isSpace(code[cursor])) {
+      cursor += 1;
+    }
+    const next = code[cursor];
+    if (next === "{") {
+      return true;
+    }
+    if (
+      next === "/" &&
+      (code[cursor + 1] === "*" || code[cursor + 1] === "/")
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -106,7 +132,7 @@ function isLocal(specifier: string): boolean {
 export function scanImports(code: string): ImportScan {
   const none = { local: [], bare: [], untraceable: true } as const;
   const specifiers: string[] = [];
-  if (ATTRIBUTE.test(code) || inspectCalls(code, specifiers).untraceable) {
+  if (hasAttribute(code) || inspectCalls(code, specifiers).untraceable) {
     return none;
   }
   try {

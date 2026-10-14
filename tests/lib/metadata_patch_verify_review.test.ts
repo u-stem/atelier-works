@@ -397,6 +397,18 @@ describe("verifyMetadataPatch cleans the detail", () => {
     },
   );
 
+  test("replaces backticks in the detail so a code span cannot be closed", async () => {
+    const w = world();
+    w.pr = {
+      ...w.pr,
+      diff: [...w.pr.diff, { path: "scripts/a`b``c.ts", status: "modified" }],
+    };
+    const result = await verify(w);
+    expect(result.ok ? "" : (result.detail ?? "")).toBe(
+      "\"scripts/a'b''c.ts\"",
+    );
+  });
+
   test("cuts a long detail", async () => {
     const w = world();
     w.pr = {

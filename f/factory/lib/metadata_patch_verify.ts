@@ -180,6 +180,7 @@ export type VerifyFailureCode =
  * gitのtree APIで書くか、パスの各区間のmodeが`100644`か`040000`であることを確かめる。
  * 失敗の`detail`は、PRの作者が決められる文字列(パスなど)を含む。
  * PR本文やコメントに載せるときは、コードスパンで囲み、メンションとリンクを無効にすること。
+ * `detail`のバッククォートは`'`に置き換え済みで、囲んだコードスパンを内側から閉じられない。
  */
 export type VerifyResult =
   | {
@@ -196,7 +197,10 @@ export type VerifyResult =
       readonly detail?: string;
     };
 
-type Failure = Extract<VerifyResult, { ok: false }>;
+/** 検査が通らなかった結果。 */
+export type VerifyFailure = Extract<VerifyResult, { ok: false }>;
+
+type Failure = VerifyFailure;
 
 function fail(code: VerifyFailureCode, detail?: string): Failure {
   return detail === undefined
@@ -212,7 +216,8 @@ const UNSAFE_DETAIL_CHARS =
 function sanitize(value: string): string {
   const cleaned = value
     .slice(0, DETAIL_MAX * 4)
-    .replace(UNSAFE_DETAIL_CHARS, "");
+    .replace(UNSAFE_DETAIL_CHARS, "")
+    .replaceAll("`", "'");
   const shown = JSON.stringify(cleaned.slice(0, DETAIL_MAX));
   return cleaned.length > DETAIL_MAX || value.length > DETAIL_MAX * 4
     ? `${shown}...`
@@ -249,8 +254,15 @@ function isAllowedDiffPath(path: string): boolean {
   );
 }
 
-/** 実行の事実とPRの差分を、artifactを開く前に検査する。 */
-function checkProvenance(input: VerifyInput): Failure | null {
+/**
+ * 実行の事実とPRの差分だけを検査する。artifactもポートも見ない。
+ * 呼び出し側は、artifactの一覧の取得とダウンロードの前にこれを呼び、
+ * 出どころで断れるものは、取得も展開もせずに断る。
+ * `verifyMetadataPatch`も、先頭で同じ検査をもう一度行う。
+ */
+export function checkProvenance(
+  input: Pick<VerifyInput, "config" | "run" | "pr">,
+): VerifyFailure | null {
   const { config, run, pr } = input;
   if (run.workflowPath !== config.workflowPath) {
     return fail("workflow_path_mismatch");

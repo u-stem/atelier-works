@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import {
   MAX_ZIP_BYTES,
   readMetadataPatchZip,
@@ -69,5 +70,36 @@ describe("readMetadataPatchZip limits", () => {
       }
     }
     expect(reason(zip)).toBe("bad_name");
+  });
+});
+
+describe("inflation stops at the declared size", () => {
+  const zeros = new Uint8Array(100 * 1024 * 1024);
+  const compressed = new Uint8Array(deflateRawSync(zeros));
+
+  test("inflateRawSync throws when the output passes maxOutputLength", () => {
+    expect(() => inflateRawSync(compressed, { maxOutputLength: 10 })).toThrow(
+      "larger than 10 bytes",
+    );
+  });
+
+  test("inflateRawSync stops before it allocates the whole output", () => {
+    const before = process.memoryUsage().rss;
+    try {
+      inflateRawSync(compressed, { maxOutputLength: 10 });
+    } catch {
+      // 上限で打ち切られる。
+    }
+    expect(process.memoryUsage().rss - before).toBeLessThan(30 * 1024 * 1024);
+  });
+
+  test("stops quickly on a small declared size with a huge real size", () => {
+    const zip = buildZip([{ name: "a", data: zeros, declaredSize: 10 }]);
+    const started = performance.now();
+    const result = readMetadataPatchZip(zip);
+    expect([
+      result.ok ? "ok" : result.reason,
+      performance.now() - started < 2000,
+    ]).toEqual(["size_mismatch", true]);
   });
 });
