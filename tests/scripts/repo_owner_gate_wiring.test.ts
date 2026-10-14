@@ -36,6 +36,13 @@ function positionOf(text: string, needle: string): number {
   return position;
 }
 
+/** `marker`が最初に現れる位置から`end`の手前まで。`end`が無ければ最後まで。 */
+function sliceBetween(text: string, marker: string, end: string): string {
+  const start = positionOf(text, marker);
+  const stop = text.indexOf(end, start);
+  return stop === -1 ? text.slice(start) : text.slice(start, stop);
+}
+
 describe("the owner id check in implement_prepare", () => {
   test("runs before the factory clone is opened", async () => {
     const text = await source("implement_prepare.ts");
@@ -168,21 +175,44 @@ describe("the owner check in issue_proposal_apply", () => {
 describe("the owner id check before the writes of the finish steps", () => {
   test("implement_finish checks before the final commit and push", async () => {
     const text = await source("implement_finish.ts");
-    expect(positionOf(text, "await ownerStopReason()")).toBeLessThan(
-      positionOf(text, "const pushed = await commitAndPush("),
+    const openPullRequest = text.slice(
+      positionOf(text, "const openPullRequest = async ("),
+    );
+    expect(positionOf(openPullRequest, "await ownerStopReason()")).toBeLessThan(
+      positionOf(openPullRequest, "const pushed = await commitAndPush("),
     );
   });
 
   test("implement_finish hands the check to the partial work push", async () => {
     const text = await source("implement_finish.ts");
-    expect(text).toContain("ensureRepoOwner: ownerStopReason,");
+    expect(statementsAfter(text, "const preserveWorkDeps = ", 3)).toContain(
+      "ensureRepoOwner: ownerStopReason,",
+    );
   });
 
-  test("implement_finish checks before deleting the remote branch", async () => {
+  test("implement_finish hands the check to the branch cleanup of a requirements gap", async () => {
     const text = await source("implement_finish.ts");
-    expect(positionOf(text, "await ownerStopReason()")).toBeLessThan(
-      positionOf(text, "await deleteRemoteBranch("),
-    );
+    expect(
+      statementsAfter(
+        text,
+        "const cleanup = await decideGapBranchCleanup({",
+        2,
+      ),
+    ).toEqual(["shouldDelete,", "ensureRepoOwner: ownerStopReason,"]);
+  });
+
+  test("implement_finish deletes the remote branch only inside the passing branch", async () => {
+    const text = await source("implement_finish.ts");
+    expect(
+      statementsAfter(text, 'if (cleanup.kind === "delete") {', 2),
+    ).toEqual(["try {", "await deleteRemoteBranch({"]);
+  });
+
+  test("implement_finish keeps the gap report when the cleanup stops", async () => {
+    const text = await source("implement_finish.ts");
+    expect(
+      statementsAfter(text, 'if (cleanup.kind === "stop") {', 5),
+    ).toContain("{ detail: gapReportNoticeDetail(gapReport) },");
   });
 
   test("pr_fix_finish checks before the commit and push", async () => {
@@ -207,6 +237,38 @@ describe("the owner id check before the writes of the finish steps", () => {
   test("pr_review_post hands the check to the review publication", async () => {
     const text = await source("pr_review_post.ts");
     expect(text).toContain("ensureRepoOwner: () =>");
+  });
+
+  test("pr_review_post blocks the work item with the reason of the owner check", async () => {
+    const text = await source("pr_review_post.ts");
+    const branch = sliceBetween(
+      text,
+      "if (published.ownerStopReason !== null) {",
+      "const openMustCount",
+    );
+    expect(branch).toContain("reason: published.ownerStopReason,");
+  });
+
+  test("pr_review_post blocks before it returns a skip when the owner check stops", async () => {
+    const text = await source("pr_review_post.ts");
+    const branch = sliceBetween(
+      text,
+      "if (published.ownerStopReason !== null) {",
+      "const openMustCount",
+    );
+    expect(positionOf(branch, "await blockReview(")).toBeLessThan(
+      positionOf(
+        branch,
+        "return { skip: true, posted: false, posted_review_id: null };",
+      ),
+    );
+  });
+
+  test("pr_review_post records the review only after the owner check branch", async () => {
+    const text = await source("pr_review_post.ts");
+    expect(
+      positionOf(text, "if (published.ownerStopReason !== null) {"),
+    ).toBeLessThan(positionOf(text, "await insertReview({"));
   });
 
   test("drawio_viewer_bump hands the factory_repo_id check to the bump", async () => {

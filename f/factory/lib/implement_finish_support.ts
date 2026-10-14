@@ -110,6 +110,34 @@ export function shouldDeleteBranchOnGap(state: {
   );
 }
 
+/** requirements_gapでのブランチの扱い。`stop`は照合に落ちたことで、理由を伴う。 */
+export type GapBranchCleanup =
+  | { readonly kind: "delete" }
+  | { readonly kind: "keep" }
+  | { readonly kind: "stop"; readonly reason: string };
+
+/**
+ * requirements_gapのとき、リモートブランチの削除に進んでよいかを、削除の直前の照合で決める。
+ * 削除の対象でなければ照合せず、ブランチを残す。
+ * 照合に落ちたら`stop`を返し、削除しない。
+ * 照合の取得に失敗したら、`onCheckError`に例外を渡してブランチを残す。
+ * ブランチが残るだけで差し戻しは続けられるので、一時的な障害で差し戻し全体を止めない。
+ */
+export async function decideGapBranchCleanup(deps: {
+  readonly shouldDelete: boolean;
+  readonly ensureRepoOwner: () => Promise<string | null>;
+  readonly onCheckError: (err: unknown) => void;
+}): Promise<GapBranchCleanup> {
+  if (!deps.shouldDelete) return { kind: "keep" };
+  try {
+    const reason = await deps.ensureRepoOwner();
+    return reason === null ? { kind: "delete" } : { kind: "stop", reason };
+  } catch (err) {
+    deps.onCheckError(err);
+    return { kind: "keep" };
+  }
+}
+
 /**
  * requirements_gapのとき、要件定義へ差し戻すか`needs_human`にするかを決める。
  * `attempt + 1`が`max_attempts`を超えるなら差し戻さない。

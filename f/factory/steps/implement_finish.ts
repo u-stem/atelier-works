@@ -34,6 +34,7 @@ import {
 import {
   buildPrOpenedEvent,
   decideAfterCommit,
+  decideGapBranchCleanup,
   decideGapReroute,
   decideImplementFinishAction,
   decideVerifiedTree,
@@ -574,21 +575,31 @@ async function finishImplement(
         error: errorText(err),
       });
     }
-    if (
-      shouldDeleteBranchOnGap({
-        prUrl: recordedPrUrl,
-        openPrNumber,
-        prLookupFailed,
-      })
-    ) {
-      await confirmLease();
-      const ownerStop = await ownerStopReason();
-      if (ownerStop !== null) {
-        return finalizeNeedsHuman(
-          ownerStop,
-          nextActionFor(ownerStop, "implement"),
-        );
-      }
+    const shouldDelete = shouldDeleteBranchOnGap({
+      prUrl: recordedPrUrl,
+      openPrNumber,
+      prLookupFailed,
+    });
+    if (shouldDelete) await confirmLease();
+    // 削除の直前に照合する。取得に失敗したら、PRの検索に失敗したときと同じく、ブランチを残して差し戻しを続ける。
+    const cleanup = await decideGapBranchCleanup({
+      shouldDelete,
+      ensureRepoOwner: ownerStopReason,
+      onCheckError: (err) => {
+        log.warn("owner id check failed; keeping the branch", {
+          error: errorText(err),
+        });
+      },
+    });
+    if (cleanup.kind === "stop") {
+      // 差し戻し理由をnoticeとDiscordに残す。差し戻しを続けないので、他に伝える経路が無い。
+      return finalizeNeedsHuman(
+        cleanup.reason,
+        nextActionFor(cleanup.reason, "implement"),
+        { detail: gapReportNoticeDetail(gapReport) },
+      );
+    }
+    if (cleanup.kind === "delete") {
       try {
         await deleteRemoteBranch({
           run: runCommand,
