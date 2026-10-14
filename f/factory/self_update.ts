@@ -21,11 +21,11 @@
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import {
-  AUTO_RETRY_MAX_RESTARTS,
-  AUTO_RETRY_NOTE_PREFIX,
+  AUTO_RETRY_LIST_LIMIT,
+  autoRetryCandidateQuery,
+  hasRetryableCandidate,
   shouldStartStaleImageRetry,
 } from "./lib/auto_retry.ts";
-import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   CONSOLE_WORKER_CHECK_TIMEOUT_MS,
@@ -35,6 +35,7 @@ import {
 } from "./lib/console_worker.ts";
 import {
   addNoticeUnlessUnresolved,
+  latestRequirementsApproval,
   listAutoRetryCandidates,
   listUnresolvedNoticesByKind,
   recordDeployment,
@@ -59,8 +60,8 @@ import {
   readHostAppliedSha,
   reconcileHostActionNotices,
   recordHostAction,
-  STALE_IMAGE_NOTICE_MARKER,
 } from "./lib/host_action.ts";
+import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
@@ -542,7 +543,7 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
  * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
  *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
- * - 止まった作業項目の再開の候補の確認と起動: 2
+ * - 止まった作業項目の再開の候補の確認(候補の一覧と要件の承認の読み)と起動: 2
  * - `factory_repo_id`の照合: リポジトリIDの取得、失敗の記録、noticeの挿入: 3
  *   (`gh api`の子プロセスは`DEFAULT_TIMEOUT_MS`が上限だが、ここで先に区切る)
  */
@@ -783,20 +784,21 @@ async function updateSelf(
     if (
       await shouldStartStaleImageRetry({
         resolvedCount: resolved,
-        hasCandidates: async () =>
-          (
-            await withCallTimeout("list auto retry candidates", () =>
-              listAutoRetryCandidates({
-                reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
-                noticeKind: HOST_ACTION_NOTICE_KIND,
-                noticeMarker: STALE_IMAGE_NOTICE_MARKER,
-                resolvedBy: HOST_ACTION_RESOLVER,
-                notePrefix: AUTO_RETRY_NOTE_PREFIX,
-                maxRestarts: AUTO_RETRY_MAX_RESTARTS,
-                limit: 1,
-              }),
-            )
-          ).length > 0,
+        hasCandidates: () =>
+          withCallTimeout("check auto retry candidates", () =>
+            hasRetryableCandidate({
+              implementEnabled: config.implement_enabled,
+              listCandidates: () =>
+                listAutoRetryCandidates(
+                  autoRetryCandidateQuery(AUTO_RETRY_LIST_LIMIT),
+                ),
+              isImplementReady: async (candidate) =>
+                isRequirementsApprovedForAttempt(
+                  await latestRequirementsApproval(candidate.id),
+                  candidate.attempt,
+                ),
+            }),
+          ),
         log,
       })
     ) {

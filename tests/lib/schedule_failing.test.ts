@@ -5,7 +5,7 @@ import {
   allRecentRunsFailed,
   buildScheduleFailingNotice,
   flagFailingSchedule,
-  previousRunFailed,
+  previousFailedRunId,
   SCHEDULE_FAILING_CHECK_FAILED_NOTICE,
   SCHEDULE_FAILING_FETCH_COUNT,
   SCHEDULE_FAILING_RUNS,
@@ -408,71 +408,78 @@ describe("flagFailingSchedule", () => {
 
 const run = (id: string, base: Record<string, unknown>) => ({ id, ...base });
 
-describe("previousRunFailed", () => {
-  test("is false when the previous run succeeded", () => {
+describe("previousFailedRunId", () => {
+  test("is null when the previous run succeeded", () => {
     expect(
-      previousRunFailed([run("b", FAILED), run("a", SUCCEEDED)], "b"),
-    ).toBe(false);
+      previousFailedRunId([run("b", FAILED), run("a", SUCCEEDED)], "b"),
+    ).toBeNull();
   });
 
-  test("is true when the previous run failed", () => {
-    expect(previousRunFailed([run("b", FAILED), run("a", FAILED)], "b")).toBe(
-      true,
+  test("returns the id of the previous run when it failed", () => {
+    expect(previousFailedRunId([run("b", FAILED), run("a", FAILED)], "b")).toBe(
+      "a",
     );
   });
 
-  test("is false when there is no previous run", () => {
-    expect(previousRunFailed([run("b", FAILED)], "b")).toBe(false);
+  test("is null when there is no previous run", () => {
+    expect(previousFailedRunId([run("b", FAILED)], "b")).toBeNull();
   });
 
   test("looks before the failed job when it is not the first entry", () => {
     expect(
-      previousRunFailed(
+      previousFailedRunId(
         [run("c", FAILED), run("b", FAILED), run("a", SUCCEEDED)],
         "b",
       ),
-    ).toBe(false);
+    ).toBeNull();
   });
 
-  test("takes the second entry as the previous run when the job is not listed", () => {
-    expect(previousRunFailed([run("x", FAILED), run("y", FAILED)], "b")).toBe(
-      true,
-    );
+  test("is null when the known job is not listed", () => {
+    expect(
+      previousFailedRunId([run("x", FAILED), run("y", FAILED)], "b"),
+    ).toBeNull();
+  });
+
+  test("takes the entry after the first when the job id is unknown", () => {
+    expect(
+      previousFailedRunId([run("x", FAILED), run("y", FAILED)], "unknown"),
+    ).toBe("y");
   });
 
   test("skips a skipped run", () => {
     expect(
-      previousRunFailed(
+      previousFailedRunId(
         [run("c", FAILED), run("s", SKIPPED), run("a", SUCCEEDED)],
         "c",
       ),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   test("skips a run canceled by a person", () => {
     expect(
-      previousRunFailed(
+      previousFailedRunId(
         [run("c", FAILED), run("p", CANCELED_BY_PERSON), run("a", FAILED)],
         "c",
       ),
-    ).toBe(true);
+    ).toBe("a");
   });
 
-  test("is false when the response is not a list", () => {
-    expect(previousRunFailed(null, "b")).toBe(false);
+  test("is null when the response is not a list", () => {
+    expect(previousFailedRunId(null, "b")).toBeNull();
   });
 });
 
 describe("shouldNotifyJobFailed", () => {
   const afterSuccess = [run("b", FAILED), run("a", SUCCEEDED)];
   const afterFailure = [run("b", FAILED), run("a", FAILED)];
+  const recorded = { job_id: "a", error: "boom" };
 
   test("notifies the first failure of a streak", () => {
     expect(
       shouldNotifyJobFailed({
         runs: afterSuccess,
         jobId: "b",
-        previousError: "boom",
+        previousFailure: recorded,
         currentError: "boom",
       }),
     ).toBe(true);
@@ -483,7 +490,7 @@ describe("shouldNotifyJobFailed", () => {
       shouldNotifyJobFailed({
         runs: afterFailure,
         jobId: "b",
-        previousError: "boom",
+        previousFailure: recorded,
         currentError: "boom",
       }),
     ).toBe(false);
@@ -494,18 +501,29 @@ describe("shouldNotifyJobFailed", () => {
       shouldNotifyJobFailed({
         runs: afterFailure,
         jobId: "b",
-        previousError: "boom",
+        previousFailure: recorded,
         currentError: "bang",
       }),
     ).toBe(true);
   });
 
-  test("notifies a repeated failure when the previous error is unknown", () => {
+  test("notifies when the previous failure is unknown", () => {
     expect(
       shouldNotifyJobFailed({
         runs: afterFailure,
         jobId: "b",
-        previousError: null,
+        previousFailure: null,
+        currentError: "boom",
+      }),
+    ).toBe(true);
+  });
+
+  test("notifies when the recorded failure belongs to another run", () => {
+    expect(
+      shouldNotifyJobFailed({
+        runs: afterFailure,
+        jobId: "b",
+        previousFailure: { job_id: "old", error: "boom" },
         currentError: "boom",
       }),
     ).toBe(true);
@@ -516,8 +534,47 @@ describe("shouldNotifyJobFailed", () => {
       shouldNotifyJobFailed({
         runs: null,
         jobId: "b",
-        previousError: "boom",
+        previousFailure: recorded,
         currentError: "boom",
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("flagFailingSchedule announcement", () => {
+  test("announces a newly inserted failing notice", async () => {
+    const h = harness({ runs: [FAILED, FAILED, FAILED] });
+    let announced = 0;
+    await flagFailingSchedule("f/factory/a", {
+      ...h.deps,
+      onFailingNoticeInserted: async () => {
+        announced += 1;
+      },
+    });
+    expect(announced).toBe(1);
+  });
+
+  test("does not announce when the notice already exists", async () => {
+    const h = harness({ runs: [FAILED, FAILED, FAILED] });
+    let announced = 0;
+    await flagFailingSchedule("f/factory/a", {
+      ...h.deps,
+      addNotice: async () => null,
+      onFailingNoticeInserted: async () => {
+        announced += 1;
+      },
+    });
+    expect(announced).toBe(0);
+  });
+
+  test("still returns true when the announcement throws", async () => {
+    const h = harness({ runs: [FAILED, FAILED, FAILED] });
+    expect(
+      await flagFailingSchedule("f/factory/a", {
+        ...h.deps,
+        onFailingNoticeInserted: async () => {
+          throw new Error("discord down");
+        },
       }),
     ).toBe(true);
   });

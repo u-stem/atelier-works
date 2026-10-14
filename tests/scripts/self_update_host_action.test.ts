@@ -106,10 +106,10 @@ describe("self_update host action wiring", () => {
     expect(source).toContain("resolvedCount: resolved,");
   });
 
-  test("counts only one retry candidate for the start decision", async () => {
+  test("selects the retry candidates with the same query as the retry script", async () => {
     const source = await selfUpdateSource();
 
-    expect(source).toMatch(/limit: 1,\s*\}\),\s*\)\s*\)\.length > 0/);
+    expect(source).toContain("autoRetryCandidateQuery(AUTO_RETRY_LIST_LIMIT)");
   });
 
   test("starts the automatic retry script by its path", async () => {

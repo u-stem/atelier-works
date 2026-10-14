@@ -45,21 +45,15 @@ describe("auto_retry_stale_image wiring", () => {
   test("reads more candidates than it restarts in one run", async () => {
     const source = await scriptSource();
 
-    expect(source).toContain("limit: AUTO_RETRY_LIST_LIMIT,");
-  });
-
-  test("passes the restart cap and note prefix to the candidate query", async () => {
-    const source = await scriptSource();
-
-    expect(source).toMatch(
-      /notePrefix: AUTO_RETRY_NOTE_PREFIX,\s*maxRestarts: AUTO_RETRY_MAX_RESTARTS,\s*limit:/,
+    expect(source).toContain(
+      "listAutoRetryCandidates(autoRetryCandidateQuery(AUTO_RETRY_LIST_LIMIT))",
     );
   });
 
-  test("restricts the candidates and the restart to notices the self update resolved", async () => {
+  test("restricts the restart to notices the self update resolved", async () => {
     const source = await scriptSource();
 
-    expect(source.match(/resolvedBy: HOST_ACTION_RESOLVER,/g)).toHaveLength(2);
+    expect(source.match(/resolvedBy: HOST_ACTION_RESOLVER,/g)).toHaveLength(1);
   });
 
   test("restricts the restart to the stale image notice", async () => {

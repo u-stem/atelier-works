@@ -9,6 +9,7 @@ import {
   AUTO_RETRY_MAX_RESTARTS,
   AUTO_RETRY_NOTE_PREFIX,
   type AutoRetryResult,
+  autoRetryCandidateQuery,
   retryStaleImageItems,
 } from "./lib/auto_retry.ts";
 import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
@@ -38,15 +39,7 @@ export async function main(): Promise<AutoRetryResult> {
   const result = await retryStaleImageItems({
     implementEnabled: config.implement_enabled,
     listCandidates: () =>
-      listAutoRetryCandidates({
-        reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
-        noticeKind: HOST_ACTION_NOTICE_KIND,
-        noticeMarker: STALE_IMAGE_NOTICE_MARKER,
-        resolvedBy: HOST_ACTION_RESOLVER,
-        notePrefix: AUTO_RETRY_NOTE_PREFIX,
-        maxRestarts: AUTO_RETRY_MAX_RESTARTS,
-        limit: AUTO_RETRY_LIST_LIMIT,
-      }),
+      listAutoRetryCandidates(autoRetryCandidateQuery(AUTO_RETRY_LIST_LIMIT)),
     isImplementReady: async (candidate) =>
       isRequirementsApprovedForAttempt(
         await latestRequirementsApproval(candidate.id),

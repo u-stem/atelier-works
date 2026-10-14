@@ -5,11 +5,17 @@ import {
   AUTO_RETRY_MAX_RESTARTS,
   AUTO_RETRY_NOTE_PREFIX,
   type AutoRetryDeps,
+  autoRetryCandidateQuery,
   autoRetryPlan,
+  hasRetryableCandidate,
   retryStaleImageItems,
   shouldStartStaleImageRetry,
 } from "../../f/factory/lib/auto_retry.ts";
 import type { AutoRetryCandidate } from "../../f/factory/lib/db.ts";
+import {
+  HOST_ACTION_RESOLVER,
+  STALE_IMAGE_NOTICE_MARKER,
+} from "../../f/factory/lib/host_action.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 
@@ -373,6 +379,97 @@ describe("shouldStartStaleImageRetry", () => {
         resolvedCount: 0,
         hasCandidates: never,
         log: quietLog,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("autoRetryCandidateQuery", () => {
+  test("passes the given limit", () => {
+    expect(autoRetryCandidateQuery(7).limit).toBe(7);
+  });
+
+  test("passes the restart cap", () => {
+    expect(autoRetryCandidateQuery(1).maxRestarts).toBe(
+      AUTO_RETRY_MAX_RESTARTS,
+    );
+  });
+
+  test("passes the note prefix", () => {
+    expect(autoRetryCandidateQuery(1).notePrefix).toBe(AUTO_RETRY_NOTE_PREFIX);
+  });
+
+  test("restricts the candidates to notices the self update resolved", () => {
+    expect(autoRetryCandidateQuery(1).resolvedBy).toBe(HOST_ACTION_RESOLVER);
+  });
+
+  test("restricts the candidates to the stale image notice", () => {
+    expect(autoRetryCandidateQuery(1).noticeMarker).toBe(
+      STALE_IMAGE_NOTICE_MARKER,
+    );
+  });
+});
+
+describe("hasRetryableCandidate", () => {
+  const ready = async () => true;
+  const notReady = async () => false;
+
+  test("is true when a pr_fix candidate exists", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: false,
+        listCandidates: async () => [PR_FIX],
+        isImplementReady: notReady,
+      }),
+    ).toBe(true);
+  });
+
+  test("is true when an approved issue candidate exists", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: true,
+        listCandidates: async () => [ISSUE],
+        isImplementReady: ready,
+      }),
+    ).toBe(true);
+  });
+
+  test("is false when the only candidate is an issue without an approval", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: true,
+        listCandidates: async () => [ISSUE],
+        isImplementReady: notReady,
+      }),
+    ).toBe(false);
+  });
+
+  test("is false when the only candidate is an issue and implement is disabled", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: false,
+        listCandidates: async () => [ISSUE],
+        isImplementReady: ready,
+      }),
+    ).toBe(false);
+  });
+
+  test("is false when there is no candidate", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: true,
+        listCandidates: async () => [],
+        isImplementReady: ready,
+      }),
+    ).toBe(false);
+  });
+
+  test("finds a retryable candidate behind one that cannot restart", async () => {
+    expect(
+      await hasRetryableCandidate({
+        implementEnabled: true,
+        listCandidates: async () => [ISSUE, PR_FIX],
+        isImplementReady: notReady,
       }),
     ).toBe(true);
   });

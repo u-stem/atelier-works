@@ -18,7 +18,13 @@
 // - 同じ作業項目の自動の再開は、`AUTO_RETRY_MAX_RESTARTS`回までである。
 // - 要件が承認済みでないIssueと、`implement_enabled`が無効のIssueは、要件定義を作り直さないよう再開しない。
 
+import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
 import type { AutoRetryCandidate } from "./db.ts";
+import {
+  HOST_ACTION_NOTICE_KIND,
+  HOST_ACTION_RESOLVER,
+  STALE_IMAGE_NOTICE_MARKER,
+} from "./host_action.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "./implement_loop.ts";
 import { type Logger, maskSecrets } from "./log.ts";
@@ -40,6 +46,22 @@ export const AUTO_RETRY_LIMIT_PER_RUN = 5;
 export const AUTO_RETRY_LIST_LIMIT = 50;
 
 const PR_FIX_FLOW_PATH = "f/factory/pr_fix";
+
+/**
+ * `listAutoRetryCandidates`に渡す、再開の候補を選ぶ条件。
+ * 再開のscriptと、自己更新が起動の要否を決める確認とが、同じ条件で候補を選ぶよう、1か所に置く。
+ */
+export function autoRetryCandidateQuery(limit: number) {
+  return {
+    reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
+    noticeKind: HOST_ACTION_NOTICE_KIND,
+    noticeMarker: STALE_IMAGE_NOTICE_MARKER,
+    resolvedBy: HOST_ACTION_RESOLVER,
+    notePrefix: AUTO_RETRY_NOTE_PREFIX,
+    maxRestarts: AUTO_RETRY_MAX_RESTARTS,
+    limit,
+  };
+}
 
 export type AutoRetryPlan = {
   readonly toStatus: WorkItemStatus;
@@ -216,15 +238,40 @@ export async function retryStaleImageItems(
 }
 
 /**
+ * 候補のうち、再開できるものが1件でもあるか。`autoRetryPlan`で、再開のscriptと同じ判定をする。
+ * 要件が未承認のIssueや、`implement_enabled`が無効のIssueは、DBの候補に残り続けるが再開できない。
+ * それらだけが残る間は、起動しても何もしないので、`false`を返す。
+ */
+export async function hasRetryableCandidate(
+  deps: Pick<
+    AutoRetryDeps,
+    "implementEnabled" | "listCandidates" | "isImplementReady"
+  >,
+): Promise<boolean> {
+  for (const candidate of await deps.listCandidates()) {
+    const implementReady =
+      candidate.kind === "issue"
+        ? await deps.isImplementReady(candidate)
+        : false;
+    if (
+      autoRetryPlan(candidate, implementReady, deps.implementEnabled) !== null
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * 自己更新が、再開のscriptを起動するかを決める。
- * 通知を解決した回は、候補が現れうるので起動する。解決しなかった回は、候補が残っているときだけ起動する。
+ * 通知を解決した回は、候補が現れうるので起動する。解決しなかった回は、再開できる候補が残っているときだけ起動する。
  * 前の回で取り逃した項目を拾うためである。どちらでもない回は、起動しない。
  * 起動したジョブは何もせずに終わるだけで、2分ごとの実行がジョブの履歴とqueueを埋めるため。
  * 候補を数えられなかったときは、取り逃しを避けて起動する。例外は投げない。
  */
 export async function shouldStartStaleImageRetry(deps: {
   readonly resolvedCount: number;
-  /** 再開の候補が1件以上あるか。 */
+  /** 再開できる候補が1件以上あるか。 */
   readonly hasCandidates: () => Promise<boolean>;
   readonly log: Logger;
 }): Promise<boolean> {

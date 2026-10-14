@@ -23,6 +23,9 @@ export const SCHEDULE_FAILING_FETCH_COUNT = 10;
  * 取り消した人は`canceled_by`に名前が入るので、`canceled_reason`の文面は見ない。
  * 人が書ける文面で、時間切れと取り違えうるため。
  */
+/** 失敗したジョブのIDを特定できないときの値。 */
+const UNKNOWN_JOB_ID = "unknown";
+
 const TIMEOUT_CANCELED_BY = "timeout";
 
 function isCanceledByTimeout(run: Record<string, unknown>): boolean {
@@ -42,40 +45,63 @@ function countedRuns(runs: readonly unknown[]): unknown[] {
 }
 
 /**
- * 失敗したジョブ(`jobId`)の直前の実行が、失敗だったか。
+ * 失敗したジョブ(`jobId`)の直前の実行が失敗だったとき、その実行のIDを返す。そうでなければ`null`を返す。
  * 履歴(新しい順)に`jobId`の実行があれば、それより古い実行の先頭を直前とする。
- * 無ければ、先頭が今回の失敗だとみなして、その次を直前とする。
- * 直前の実行が無いとき、履歴が配列でないとき、形の違う要素のときは`false`を返す(初回の失敗として扱う)。
+ * `jobId`が特定できないとき(`unknown`)だけ、先頭を今回の失敗とみなして、その次を直前とする。
+ * `jobId`が分かっているのに履歴に無いときは、直前を決められないので`null`を返す(初回の失敗として扱う)。
+ * 履歴が配列でないとき、形の違う要素のときも`null`を返す。
  * 飛ばされた実行と人が取り消した実行は、`allRecentRunsFailed`と同じく数えない。
  */
-export function previousRunFailed(runs: unknown, jobId: string): boolean {
+export function previousFailedRunId(
+  runs: unknown,
+  jobId: string,
+): string | null {
   if (!Array.isArray(runs)) {
-    return false;
+    return null;
   }
   const counted = countedRuns(runs);
-  const index = counted.findIndex((run) => isRecord(run) && run.id === jobId);
-  const previous = counted[index === -1 ? 1 : index + 1];
-  return isRecord(previous) && previous.success === false;
+  const index =
+    jobId === UNKNOWN_JOB_ID
+      ? 0
+      : counted.findIndex((run) => isRecord(run) && run.id === jobId);
+  if (index === -1) {
+    return null;
+  }
+  const previous = counted[index + 1];
+  return isRecord(previous) &&
+    previous.success === false &&
+    typeof previous.id === "string"
+    ? previous.id
+    : null;
 }
+
+/** 前回の失敗として`job_failures`に記録した行。 */
+export type PreviousScheduleFailure = {
+  readonly job_id: string;
+  readonly error: string;
+};
 
 /**
  * `job_failed`をDiscordへ送るか。
  * 同じスケジュールの連続した失敗の初回と、エラー文が前回の失敗から変わったときだけ送る。
  * 以降の失敗は、続けて失敗していることを知らせる`schedule_failing`に任せる。
- * 直前のエラー文(`previousError`)を読めないときは、変わったかを判定できないので送る。
+ * 前回の失敗の記録が、直前の失敗した実行のものだと確かめられたときだけ、比べる。
+ * 記録が別の実行のものや、読めなかったときは、変わったかを判定できないので送る。
  * 通知が抜けるより、重なるほうがよいため。
  */
 export function shouldNotifyJobFailed(input: {
   readonly runs: unknown;
   readonly jobId: string;
-  readonly previousError: string | null;
+  readonly previousFailure: PreviousScheduleFailure | null;
   readonly currentError: string;
 }): boolean {
-  if (!previousRunFailed(input.runs, input.jobId)) {
+  const previousRunId = previousFailedRunId(input.runs, input.jobId);
+  if (previousRunId === null || input.previousFailure === null) {
     return true;
   }
   return (
-    input.previousError === null || input.previousError !== input.currentError
+    input.previousFailure.job_id !== previousRunId ||
+    input.previousFailure.error !== input.currentError
   );
 }
 
@@ -132,6 +158,11 @@ export type FlagFailingScheduleDeps = {
   ) => Promise<unknown>;
   /** 同じ本文の未解決のnoticeが無ければ挿入してIDを返し、あれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
+  /**
+   * `schedule_failing`のnoticeを新しく挿入したときに呼ぶ。Consoleのnoticeを見ない運用者にも知らせるために使う。
+   * 例外を投げてもよい。`flagFailingSchedule`が受け止める。
+   */
+  readonly onFailingNoticeInserted?: () => Promise<void>;
   readonly log: Logger;
 };
 
@@ -170,7 +201,16 @@ export async function flagFailingSchedule(
     return false;
   }
   try {
-    await deps.addNotice(buildScheduleFailingNotice(flowPath));
+    const inserted = await deps.addNotice(buildScheduleFailingNotice(flowPath));
+    if (inserted !== null && deps.onFailingNoticeInserted !== undefined) {
+      try {
+        await deps.onFailingNoticeInserted();
+      } catch (err) {
+        deps.log.error("failed to announce the schedule failing notice", {
+          error: maskSecrets(String(err)),
+        });
+      }
+    }
     return true;
   } catch (err) {
     deps.log.error("failed to record the schedule failing notice", {
