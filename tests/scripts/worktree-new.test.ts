@@ -959,12 +959,40 @@ describe("worktree-new.sh", () => {
         expect(headOf(runHook("feat-foo"))).toBe(originHead);
       });
 
-      test("prefers the settings of the hook cwd over those of the main checkout", () => {
+      // 最初のworktreeを作った後でoriginを進めて、HEADから作ることとorigin/mainから作ることを区別する。
+      function firstWorktreeThenAdvanceOrigin(): {
+        first: string;
+        firstHead: string;
+        newOrigin: string;
+      } {
         runScript(mainDir, ["fix/first"], fakeBun);
         const first = join(worktrees(), "fix-first");
         const firstHead = git(first, ["rev-parse", "HEAD"]);
+        return { first, firstHead, newOrigin: advanceOrigin() };
+      }
+
+      test("ignores the settings of the hook cwd", () => {
+        const { first, newOrigin } = firstWorktreeThenAdvanceOrigin();
         writeSettings(first, "settings.json", baseRef("head"));
         writeSettings(mainDir, "settings.json", baseRef("fresh"));
+
+        const result = runHook("feat-foo", {}, mainDir, first);
+
+        expect(headOf(result)).toBe(newOrigin);
+      });
+
+      test("ignores the local settings of the hook cwd", () => {
+        const { first, newOrigin } = firstWorktreeThenAdvanceOrigin();
+        writeSettings(first, "settings.local.json", baseRef("head"));
+
+        const result = runHook("feat-foo", {}, mainDir, first);
+
+        expect(headOf(result)).toBe(newOrigin);
+      });
+
+      test("branches from the HEAD of the hook cwd when the main settings say head", () => {
+        const { first, firstHead } = firstWorktreeThenAdvanceOrigin();
+        writeSettings(mainDir, "settings.json", baseRef("head"));
 
         const result = runHook("feat-foo", {}, mainDir, first);
 
@@ -987,12 +1015,46 @@ describe("worktree-new.sh", () => {
         );
       });
 
-      test("does not install again on the second call", () => {
+      test("installs the dependencies again on the second call", () => {
         runHook("feat-foo");
 
         runHook("feat-foo");
 
-        expect(readFileSync(bunLog, "utf8").trim().split("\n")).toHaveLength(2);
+        expect(readFileSync(bunLog, "utf8").trim().split("\n")).toHaveLength(4);
+      });
+
+      test("fails when the install fails on reuse", () => {
+        runHook("feat-foo");
+        writeFakeBun(fakeBun, bunLog, 1);
+
+        expect(runHook("feat-foo").exitCode).toBe(1);
+      });
+
+      test("keeps the reused worktree when the install fails", () => {
+        runHook("feat-foo");
+        writeFakeBun(fakeBun, bunLog, 1);
+
+        runHook("feat-foo");
+
+        expect(existsSync(join(worktrees(), "feat-foo", ".git"))).toBe(true);
+      });
+
+      test("keeps the branch of the reused worktree when the install fails", () => {
+        runHook("feat-foo");
+        writeFakeBun(fakeBun, bunLog, 1);
+
+        runHook("feat-foo");
+
+        expect(git(mainDir, ["branch", "--list", "feat/foo"])).toContain(
+          "feat/foo",
+        );
+      });
+
+      test("prints nothing to stdout when the install fails on reuse", () => {
+        runHook("feat-foo");
+        writeFakeBun(fakeBun, bunLog, 1);
+
+        expect(runHook("feat-foo").stdout).toBe("");
       });
 
       test("fails when the worktree at the path has another branch", () => {
@@ -1014,10 +1076,89 @@ describe("worktree-new.sh", () => {
         expect(runHook("feat-foo").exitCode).toBe(1);
       });
 
-      test("fails when only the branch exists", () => {
+      describe("when only the branch exists", () => {
+        let branchSha: string;
+
+        beforeEach(() => {
+          branchSha = git(mainDir, ["rev-parse", "HEAD"]);
+          git(mainDir, [
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "-m",
+            "branch tip",
+          ]);
+          branchSha = git(mainDir, ["rev-parse", "HEAD"]);
+          git(mainDir, ["branch", "feat/foo", branchSha]);
+        });
+
+        test("checks out the existing branch in the hook mode", () => {
+          const result = runHook("feat-foo");
+
+          expect(
+            git(result.stdout.trim(), ["rev-parse", "--abbrev-ref", "HEAD"]),
+          ).toBe("feat/foo");
+        });
+
+        test("keeps the commit of the existing branch", () => {
+          const result = runHook("feat-foo");
+
+          expect(git(result.stdout.trim(), ["rev-parse", "HEAD"])).toBe(
+            branchSha,
+          );
+        });
+
+        test("installs the dependencies", () => {
+          runHook("feat-foo");
+
+          expect(readFileSync(bunLog, "utf8").trim().split("\n")).toHaveLength(
+            2,
+          );
+        });
+
+        test("removes only the worktree and keeps the branch when the install fails", () => {
+          writeFakeBun(fakeBun, bunLog, 1);
+
+          runHook("feat-foo");
+
+          expect([
+            existsSync(join(worktrees(), "feat-foo")),
+            git(mainDir, ["branch", "--list", "feat/foo"]).includes("feat/foo"),
+          ]).toEqual([false, true]);
+        });
+
+        test("fails when another worktree has the branch checked out", () => {
+          git(mainDir, [
+            "worktree",
+            "add",
+            "--quiet",
+            join(root, "elsewhere"),
+            "feat/foo",
+          ]);
+
+          expect(runHook("feat-foo").exitCode).toBe(1);
+        });
+
+        test("does not create the directory when git refuses the checkout", () => {
+          git(mainDir, [
+            "worktree",
+            "add",
+            "--quiet",
+            join(root, "elsewhere"),
+            "feat/foo",
+          ]);
+
+          runHook("feat-foo");
+
+          expect(existsSync(join(worktrees(), "feat-foo"))).toBe(false);
+        });
+      });
+
+      test("fails in the argument mode when only the branch exists", () => {
         git(mainDir, ["branch", "feat/foo"]);
 
-        expect(runHook("feat-foo").exitCode).toBe(1);
+        expect(runScript(mainDir, ["feat/foo"], fakeBun).exitCode).toBe(1);
       });
 
       test("fails in the argument mode on the second call", () => {
@@ -1134,34 +1275,70 @@ describe("worktree-new.sh", () => {
         env: { PATH: `${fakeBin}:${process.env.PATH ?? ""}`, ...extra },
       });
 
+      const SSH_OPTION = "core.sshCommand=ssh -o ConnectTimeout=15";
+
       test("sets a low speed limit for fetch in the hook mode", () => {
         runHook("feat-foo", withFakeGit());
 
-        expect(readFileSync(gitLog, "utf8")).toContain(
-          "-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 fetch",
+        expect(readFileSync(gitLog, "utf8")).toMatch(
+          /-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 .*fetch/,
         );
       });
 
       test("sets a low speed limit for ls-remote in the hook mode", () => {
         runHook("feat-foo", withFakeGit());
 
-        expect(readFileSync(gitLog, "utf8")).toContain(
-          "-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 ls-remote",
+        expect(readFileSync(gitLog, "utf8")).toMatch(
+          /-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20 .*ls-remote/,
         );
       });
 
-      test("sets a connect timeout for ssh when none is configured", () => {
+      test("passes a connect timeout for ssh to git when none is configured", () => {
         runHook("feat-foo", withFakeGit());
 
         expect(readFileSync(gitLog, "utf8")).toContain(
-          "ssh=ssh -o ConnectTimeout=15 -o BatchMode=yes",
+          `-c ${SSH_OPTION} -o BatchMode=yes`,
         );
+      });
+
+      test("does not export GIT_SSH_COMMAND to git", () => {
+        runHook("feat-foo", withFakeGit());
+
+        expect(readFileSync(gitLog, "utf8")).not.toContain("ssh=ssh");
+      });
+
+      test("does not pass GIT_SSH_COMMAND to the install", () => {
+        const envLog = join(root, "bun-env.log");
+        writeFakeBun(
+          fakeBun,
+          bunLog,
+          0,
+          `echo "ssh=\${GIT_SSH_COMMAND:-}" >> "${envLog}"`,
+        );
+
+        runHook("feat-foo");
+
+        expect(readFileSync(envLog, "utf8")).toBe("ssh=\nssh=\n");
+      });
+
+      test("keeps the core.sshCommand of the user", () => {
+        git(mainDir, ["config", "core.sshCommand", "myssh"]);
+
+        runHook("feat-foo", withFakeGit());
+
+        expect(readFileSync(gitLog, "utf8")).not.toContain(SSH_OPTION);
       });
 
       test("keeps a GIT_SSH_COMMAND that is already set", () => {
         runHook("feat-foo", withFakeGit({ GIT_SSH_COMMAND: "myssh" }));
 
-        expect(readFileSync(gitLog, "utf8")).toContain("ssh=myssh");
+        expect(readFileSync(gitLog, "utf8")).not.toContain(SSH_OPTION);
+      });
+
+      test("keeps a GIT_SSH that is already set", () => {
+        runHook("feat-foo", withFakeGit({ GIT_SSH: "myssh" }));
+
+        expect(readFileSync(gitLog, "utf8")).not.toContain(SSH_OPTION);
       });
 
       test("does not add the limits in the argument mode", () => {

@@ -8,7 +8,8 @@
 #   scripts/worktree-new.sh --hook
 #     ClaudeのWorktreeCreateフック。標準入力のJSONの`name`と`cwd`を読み、標準出力にはパスだけを出す。
 # 既にブランチ(ローカルとorigin)かディレクトリがあれば、何も変えずに非ゼロで終わる。
-# ただしフックは、登録済みで期待するブランチのworktreeが既にあれば、それを再利用して成功にする。
+# ただしフックは、登録済みで期待するブランチのworktreeが既にあれば、依存を入れ直して再利用し、
+# ブランチだけがあってディレクトリが無ければ、そのブランチをチェックアウトして使う。
 set -euo pipefail
 
 usage() {
@@ -37,12 +38,6 @@ if [ "$#" -eq 1 ] && [ "$1" = "--hook" ]; then
     echo "worktree-new: jq is required for --hook but was not found in PATH" >&2
     exit 1
   fi
-  # オフラインや遅い回線でも、subagentの起動を長く止めないよう、待ちを制限する。
-  # sshはつながらなければ15秒で諦め、パスワードを聞かない。HTTPSは20秒間1KB/s未満なら諦める。
-  if [ -z "${GIT_SSH_COMMAND:-}" ]; then
-    export GIT_SSH_COMMAND="ssh -o ConnectTimeout=15 -o BatchMode=yes"
-  fi
-  net_opts=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20)
   input="$(cat)"
   if ! name="$(printf '%s' "$input" | jq -er '.name | select(type == "string")')"; then
     echo "worktree-new: the hook input is not JSON with a string \"name\"" >&2
@@ -51,8 +46,15 @@ if [ "$#" -eq 1 ] && [ "$1" = "--hook" ]; then
   hook_cwd="$(printf '%s' "$input" | jq -r '.cwd | select(type == "string")')"
   if [ -n "$hook_cwd" ] && [ -d "$hook_cwd" ]; then
     cd "$hook_cwd"
-  else
-    hook_cwd=""
+  fi
+  # オフラインや遅い回線でも、subagentの起動を長く止めないよう、fetchとls-remoteの待ちを制限する。
+  # HTTPSは20秒間1KB/s未満なら諦める。sshは、つながらなければ15秒で諦め、パスワードを聞かない。
+  # sshの設定は、利用者の`core.sshCommand`、`GIT_SSH`、`GIT_SSH_COMMAND`を上書きしないよう、
+  # どれも無いときだけ足す。環境変数にはexportしない。子プロセス(bun install)に渡さないため。
+  net_opts=(-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=20)
+  ssh_configured="$(git config --get core.sshCommand || true)"
+  if [ -z "$ssh_configured" ] && [ -z "${GIT_SSH:-}" ] && [ -z "${GIT_SSH_COMMAND:-}" ]; then
+    net_opts+=(-c "core.sshCommand=ssh -o ConnectTimeout=15 -o BatchMode=yes")
   fi
   # 名前を、ブランチ名とディレクトリ名に使える形にそろえる。
   # `/`、`.`、`..`は`-`になり、パスの区切りを含められない。
@@ -116,7 +118,7 @@ worktree_path="$main_root/.claude/worktrees/$dir_name"
 
 # フックが作ったworktreeを、`claude --worktree foo`の2回目などで再び求められたときに、
 # 起動を止めないよう再利用する。パスが登録済みで、期待するブランチのときだけ成功にする。
-# ブランチだけがある、別のブランチ、登録の無いディレクトリは、混ざるおそれがあるので失敗にする。
+# 登録の無いディレクトリや、別のブランチのworktreeは、混ざるおそれがあるので失敗にする。
 is_registered_with_branch() {
   local list line in_target=0
   list="$(git worktree list --porcelain)"
@@ -136,29 +138,43 @@ is_registered_with_branch() {
 
 if [ -e "$worktree_path" ]; then
   if [ "$hook" -eq 1 ] && is_registered_with_branch; then
+    # 依存の導入がKILLなどで途中で止まったworktreeを、依存が欠けたまま成功として返さないよう、
+    # 導入をやり直す(すでに入っていれば速く終わる)。再利用したworktreeは自分が作ったものでは
+    # ないので、失敗しても消さない。
     echo "worktree-new: reusing the existing worktree: $worktree_path" >&2
+    cd "$worktree_path"
+    "${bun_cmd[@]}" install --frozen-lockfile --ignore-scripts >&2
+    "${bun_cmd[@]}" install --cwd console --frozen-lockfile --ignore-scripts >&2
     echo "$worktree_path"
     exit 0
   fi
   echo "worktree-new: directory already exists: $worktree_path" >&2
   exit 1
 fi
+
+# フックだけは、ブランチがあってディレクトリが無いとき(worktreeだけ消えた後など)に、
+# 既存のローカルブランチをそのまま使う。別のworktreeがチェックアウト済みならgitが拒む。
+# このブランチは自分が作ったものではないので、失敗しても消さない。
+existing_branch=0
 if git show-ref --verify --quiet "refs/heads/$branch"; then
-  echo "worktree-new: branch already exists: $branch" >&2
-  exit 1
+  if [ "$hook" -ne 1 ]; then
+    echo "worktree-new: branch already exists: $branch" >&2
+    exit 1
+  fi
+  existing_branch=1
+  echo "worktree-new: using the existing branch: $branch" >&2
 fi
 
 # Claude Codeの設定`worktree.baseRef`を読む。`head`ならフックのcwdの`HEAD`から作り、
 # それ以外(未設定、`fresh`、不正な値)は`origin/main`から作る。
-# 読む順は、`settings.local.json`、`settings.json`(フックのcwdのものが先、メインのcheckoutが次)、
-# ユーザーの`settings.json`で、値が見つかった最初のファイルに従う。
+# 読む先は、メインのcheckoutの`.claude/settings.local.json`、`.claude/settings.json`、
+# ユーザーの`~/.claude/settings.json`で、値が見つかった最初のファイルに従う。
+# フックのcwdの設定は読まない。EnterWorktreeの後はcwdがworktreeになり、古い設定が先に効くため。
 # 壊れて読めないファイルは、作成を止めずに飛ばす。
 resolve_base_ref() {
-  local file value cwd_dir="${hook_cwd:-$main_root}"
+  local file value
   for file in \
-    "$cwd_dir/.claude/settings.local.json" \
     "$main_root/.claude/settings.local.json" \
-    "$cwd_dir/.claude/settings.json" \
     "$main_root/.claude/settings.json" \
     "${HOME:-/nonexistent}/.claude/settings.json"; do
     if [ ! -f "$file" ]; then
@@ -172,52 +188,60 @@ resolve_base_ref() {
   echo "fresh"
 }
 
-base_ref="fresh"
-if [ "$hook" -eq 1 ]; then
-  base_ref="$(resolve_base_ref)"
-fi
-
-if [ "$base_ref" = "head" ]; then
-  # 現在の作業を起点にするので、fetchはしない。
-  echo "worktree-new: worktree.baseRef is head; branching from HEAD" >&2
-  if ! base_sha="$(git rev-parse --verify HEAD)"; then
-    echo "worktree-new: HEAD does not resolve to a commit" >&2
-    exit 1
+# 新しいブランチの起点`base_sha`を決め、originに同名のブランチが無いことを確かめる。
+prepare_new_branch() {
+  local base_ref="fresh"
+  if [ "$hook" -eq 1 ]; then
+    base_ref="$(resolve_base_ref)"
   fi
-else
-  # フックはsubagentの起動に使われる。オフラインでもsubagentを止めないよう、
-  # フックのときだけ、fetchとoriginの検査の失敗を警告にして続ける。
-  # 取り込み済みの`refs/remotes/origin/main`が無ければ、起点が決められないので失敗する。
-  echo "worktree-new: fetching origin/main" >&2
-  if ! git ${net_opts[@]+"${net_opts[@]}"} fetch origin main >&2; then
-    if [ "$hook" -ne 1 ]; then
+
+  if [ "$base_ref" = "head" ]; then
+    # 現在の作業を起点にするので、fetchはしない。
+    echo "worktree-new: worktree.baseRef is head; branching from HEAD" >&2
+    if ! base_sha="$(git rev-parse --verify HEAD)"; then
+      echo "worktree-new: HEAD does not resolve to a commit" >&2
       exit 1
     fi
-    echo "worktree-new: warning: fetch failed, using the existing refs/remotes/origin/main" >&2
+  else
+    # フックはsubagentの起動に使われる。オフラインでもsubagentを止めないよう、
+    # フックのときだけ、fetchとoriginの検査の失敗を警告にして続ける。
+    # 取り込み済みの`refs/remotes/origin/main`が無ければ、起点が決められないので失敗する。
+    echo "worktree-new: fetching origin/main" >&2
+    if ! git ${net_opts[@]+"${net_opts[@]}"} fetch origin main >&2; then
+      if [ "$hook" -ne 1 ]; then
+        exit 1
+      fi
+      echo "worktree-new: warning: fetch failed, using the existing refs/remotes/origin/main" >&2
+    fi
+
+    # 短い`origin/main`は同名のブランチやタグに解決されうるので、完全な名前で指す。
+    if ! base_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
+      echo "worktree-new: refs/remotes/origin/main does not exist" >&2
+      exit 1
+    fi
   fi
 
-  # 短い`origin/main`は同名のブランチやタグに解決されうるので、完全な名前で指す。
-  if ! base_sha="$(git show-ref --verify --hash refs/remotes/origin/main)"; then
-    echo "worktree-new: refs/remotes/origin/main does not exist" >&2
+  # originに同名のブランチがあると、最初のpushが拒否されるか、他の作業に混ざる。
+  # `ls-remote --exit-code`は、一致が無いと2、通信などの失敗はそれ以外で終わる。
+  # この検査から最初のpushまでの間に、他の人が同名のブランチをpushするレースは受け入れる。
+  local remote_status=0
+  git ${net_opts[@]+"${net_opts[@]}"} ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null || remote_status=$?
+  if [ "$remote_status" -eq 0 ]; then
+    echo "worktree-new: branch already exists on origin: $branch" >&2
     exit 1
   fi
-fi
+  if [ "$remote_status" -ne 2 ]; then
+    if [ "$hook" -ne 1 ]; then
+      echo "worktree-new: cannot check the branch on origin (exit $remote_status)" >&2
+      exit 1
+    fi
+    echo "worktree-new: warning: cannot check the branch on origin (exit $remote_status), continuing" >&2
+  fi
+}
 
-# originに同名のブランチがあると、最初のpushが拒否されるか、他の作業に混ざる。
-# `ls-remote --exit-code`は、一致が無いと2、通信などの失敗はそれ以外で終わる。
-# この検査から最初のpushまでの間に、他の人が同名のブランチをpushするレースは受け入れる。
-remote_status=0
-git ${net_opts[@]+"${net_opts[@]}"} ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null || remote_status=$?
-if [ "$remote_status" -eq 0 ]; then
-  echo "worktree-new: branch already exists on origin: $branch" >&2
-  exit 1
-fi
-if [ "$remote_status" -ne 2 ]; then
-  if [ "$hook" -ne 1 ]; then
-    echo "worktree-new: cannot check the branch on origin (exit $remote_status)" >&2
-    exit 1
-  fi
-  echo "worktree-new: warning: cannot check the branch on origin (exit $remote_status), continuing" >&2
+base_sha=""
+if [ "$existing_branch" -eq 0 ]; then
+  prepare_new_branch
 fi
 
 # 後始末の対象は、`git worktree add`の成功から依存の導入の完了までに限る。
@@ -228,6 +252,7 @@ fi
 # 作ったばかりのworktreeに依存の導入が残したものだけ、という前提による。
 # 未追跡のファイルや変更があれば、gitが拒む。
 # ブランチは、作った時点の`base_sha`を指すままのときだけ消す。コミットが増えていれば、gitが拒む。
+# 既存のブランチを使ったとき(`existing_branch`)は、自分が作ったものではないので、ブランチを消さない。
 # 片付けの最中の中断で、worktreeだけが消えてブランチが残らないよう、INTとTERMは無視する。
 # TERMは、前景で動くbunが終わるまでtrapが遅れる。KILLでは後始末が走らない。
 # そうして残った作りかけは、`mise run worktree:prune`が放置されたものとして片付ける。
@@ -237,10 +262,12 @@ cleanup() {
   trap '' INT TERM
   trap - EXIT
   if [ "$created" -eq 1 ] && [ "$rc" -ne 0 ]; then
-    echo "worktree-new: failed (exit $rc), removing $worktree_path and branch $branch" >&2
+    echo "worktree-new: failed (exit $rc), removing $worktree_path" >&2
     cd "$main_root" || true
     if git worktree remove "$worktree_path" >&2; then
-      if git update-ref -d "refs/heads/$branch" "$base_sha" >&2; then
+      if [ "$existing_branch" -eq 1 ]; then
+        echo "worktree-new: removed. The existing branch $branch is kept. Fix the cause and rerun" >&2
+      elif git update-ref -d "refs/heads/$branch" "$base_sha" >&2; then
         echo "worktree-new: removed. Fix the cause and rerun" >&2
       else
         echo "worktree-new: the worktree is removed, but branch $branch remains" >&2
@@ -264,7 +291,14 @@ trap 'exit 143' TERM
 # `git worktree add`自身が失敗しても`created`は立てない。並行して同名を作った別の実行の
 # 成果物かもしれず、自分が作ったと言い切れないためである。残っているものだけを示す。
 echo "worktree-new: creating $worktree_path on $branch" >&2
-if ! git worktree add --no-track -b "$branch" "$worktree_path" "$base_sha" >&2; then
+if [ "$existing_branch" -eq 1 ]; then
+  add_status=0
+  git worktree add "$worktree_path" "$branch" >&2 || add_status=$?
+else
+  add_status=0
+  git worktree add --no-track -b "$branch" "$worktree_path" "$base_sha" >&2 || add_status=$?
+fi
+if [ "$add_status" -ne 0 ]; then
   echo "worktree-new: git worktree add failed; nothing was removed" >&2
   git worktree list >&2 || true
   if git show-ref --verify --quiet "refs/heads/$branch"; then

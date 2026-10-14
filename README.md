@@ -99,7 +99,8 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 導入に数十秒以上かかることがあるので、Claudeから呼ぶときは長めのtimeoutか`run_in_background`を使う。
 
 EnterWorktreeや`claude --worktree`、subagentが作るworktreeも、WorktreeCreateフックが同じスクリプトを通す。
-フックは、Claude Codeの設定で`worktree.baseRef`が`head`のときだけ、`HEAD`から作る。
+フックは、メインのcheckoutかユーザーのClaude Code設定で`worktree.baseRef`が`head`のときだけ、`HEAD`から作る。
+同じ名前のworktreeが既にあれば、依存を入れ直して再利用する。
 
 `mise run worktree:prune`は、次をすべて満たすworktreeだけを消してよいものとする。
 残したworktreeには、理由を付けて一覧に出す。
