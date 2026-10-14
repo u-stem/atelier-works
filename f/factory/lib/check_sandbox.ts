@@ -576,6 +576,81 @@ export function symlinksArgv(
 }
 
 /**
+ * `dir`の下のsymlinkの、パスとinode番号と中身を、`\0`区切りで`file`に書き出すargv。
+ * 1件につき「パス、inode番号、中身」の3つを書く。`find`は出力にパスを書くだけで、パスで開かないので、パスの長さがPATH_MAXを超えるsymlinkも扱える。
+ * 先頭のパスは、`symlinksArgv`の一覧の名前との突き合わせに使う。
+ * 大きさの制限は`symlinksArgv`と同じである。
+ */
+export function symlinkDetailsArgv(
+  dir: string,
+  file: string,
+  fileSizeLimit: number = LINK_LIST_FSIZE_BYTES,
+): string[] {
+  assertChownableDir(dir);
+  const limit = String(fileSizeLimit);
+  return [
+    PRLIMIT_PATH,
+    `--fsize=${limit}:${limit}`,
+    "--core=0:0",
+    "--",
+    FIND_PATH,
+    "-P",
+    dir,
+    "-type",
+    "l",
+    "-fprintf",
+    file,
+    "%p\\0%i\\0%l\\0",
+  ];
+}
+
+/** 1回の`find`に渡すinode番号の数の上限。引数の長さの上限に収めるためである。 */
+const DELETE_BY_INODE_CHUNK = 200;
+
+/**
+ * `dir`の下の、inode番号が`inodes`のどれかで、中身が絶対パスか`..`を含むsymlinkを消すargvの列。rootで実行する。
+ * パスを組み立てずに、`find -delete`が親のfdを起点に消す。パスの長さがPATH_MAXを超えるsymlinkも消せる。
+ * 別のファイルシステムの同じinode番号を巻き込まないよう、中身の条件は`sweepLinksArgv`と同じにする。
+ * 巻き込んでも、消えるのは外を指しうるsymlinkに限られる。
+ */
+export function deleteLinksByInodeArgvs(
+  dir: string,
+  inodes: readonly string[],
+): string[][] {
+  assertChownableDir(dir);
+  const chunks: string[][] = [];
+  for (let at = 0; at < inodes.length; at += DELETE_BY_INODE_CHUNK) {
+    const chunk = inodes.slice(at, at + DELETE_BY_INODE_CHUNK);
+    for (const inode of chunk) {
+      if (!/^[0-9]+$/.test(inode)) {
+        throw new Error(`check sandbox: invalid inode number: ${inode}`);
+      }
+    }
+    chunks.push([
+      FIND_PATH,
+      "-P",
+      dir,
+      "-type",
+      "l",
+      "(",
+      ...chunk.flatMap((inode, index) =>
+        index === 0 ? ["-inum", inode] : ["-o", "-inum", inode],
+      ),
+      ")",
+      "(",
+      "-lname",
+      "/*",
+      "-o",
+      "-lname",
+      "*..*",
+      ")",
+      "-delete",
+    ]);
+  }
+  return chunks;
+}
+
+/**
  * 取り戻しの1段目。rootで、`dir`の下のうち、枠のuidが所有していないディレクトリすべてと、
  * ほかの非rootのユーザー(並行して動く別の枠など)のもの、書き込みかsetidのビットが立ったrootの単独のファイルを、枠のuidに集める。
  * 権限のビットは次の段で枠のuidとして落とす。rootのまま`chmod`すると、差し替えられたsymlinkの先を変えうるためである。
@@ -744,11 +819,27 @@ export function notRootOwnedArgv(dir: string): string[] {
  * 取り戻しの確かめ。`dir`の下に、拡張のACL(名前付きのエントリかデフォルトのACL)を持つものがあれば、その一覧を出す。
  * ACLは`chown`と`chmod`では消えない。枠のuidがディレクトリに付けたデフォルトのACLが残ると、
  * 後でrootが作るファイルに、他の枠が書ける権限が付くためである。
- * `-P`でsymlinkをたどらず、`-s`で基本のエントリだけのものを飛ばす。ACLの無いファイルシステムでは何も出さない。
+ * symlinkは除き、`-s`で基本のエントリだけのものを飛ばす。ACLの無いファイルシステムでは何も出さない。
+ * `getfacl -R`はパスを組み立てるので、パスの長さがPATH_MAXを超えるものがあると失敗する。
+ * そのため`find -execdir`で、各ディレクトリの中から名前だけで呼ぶ。出力のパスは、そのディレクトリからの相対になる。
  */
 export function aclLeftoverArgv(dir: string): string[] {
   assertChownableDir(dir);
-  return [GETFACL_PATH, "-R", "-P", "-s", "-p", "--", dir];
+  return [
+    FIND_PATH,
+    "-P",
+    dir,
+    "!",
+    "-type",
+    "l",
+    "-execdir",
+    GETFACL_PATH,
+    "-s",
+    "-p",
+    "--",
+    "{}",
+    "+",
+  ];
 }
 
 /**
@@ -1680,11 +1771,79 @@ async function resolveLinkTarget(
   return current === root || current.startsWith(`${root}/`) ? current : null;
 }
 
+/** パスを使わずに読んだsymlink。inode番号は10進の文字列で持つ。 */
+type PathlessLink = {
+  readonly inode: string;
+  readonly content: BytePath;
+};
+
+/** 中身が絶対パスか`..`を含むか。`sweepLinksArgv`の条件と同じで、パスを決められないsymlinkの外向きの判定に使う。 */
+function contentEscapes(content: BytePath): boolean {
+  return content.startsWith("/") || content.includes("..");
+}
+
+/**
+ * `entries`(一覧の名前)のうち`indexes`番目のsymlinkの、inode番号と中身を、パスを使わずに読む。
+ * 書き出しの件数が一覧と合わないとき、パスが一覧と食い違うとき、書き出しが途中で切れたとき、`find`が失敗したときは、nullを返す。
+ * 呼び出し側は、読めなかったものとして全消しの後始末に任せる。
+ */
+async function readPathlessLinks(
+  deps: CheckSandboxDeps,
+  dir: string,
+  name: string,
+  entries: readonly BytePath[],
+  indexes: readonly number[],
+  warn: Logger,
+): Promise<Map<BytePath, PathlessLink> | null> {
+  let listed: Buffer | null;
+  try {
+    listed = await deps.readPrivateOutput(
+      async (file) => {
+        await runTool(
+          deps,
+          symlinkDetailsArgv(dir, file),
+          `reading symlink contents in ${dir}`,
+        );
+      },
+      LINK_LIST_MAX_BYTES,
+      `${name}.details`,
+    );
+  } catch (error) {
+    warn.warn("the symlink contents could not be listed", {
+      error: failureSummary(error),
+    });
+    return null;
+  }
+  if (listed === null) return null;
+  const fields = toBytePath(listed).split("\0");
+  if ((fields.pop() ?? "") !== "") return null;
+  if (fields.length !== entries.length * 3) return null;
+  const found = new Map<BytePath, PathlessLink>();
+  for (const index of indexes) {
+    const path = entries[index];
+    const listedPath = fields[index * 3];
+    const inode = fields[index * 3 + 1];
+    const content = fields[index * 3 + 2];
+    if (path === undefined || inode === undefined || content === undefined) {
+      return null;
+    }
+    if (listedPath !== path) return null;
+    if (!/^[0-9]+$/.test(inode)) return null;
+    found.set(path, { inode, content });
+  }
+  return found;
+}
+
 /** 走査の結果。 */
 type LinkScan = {
   /** 外を指すsymlinkの名前と中身。 */
   readonly links: LinkMap;
-  /** 中身を読めなかったパス。パスの長さの上限(`PATH_MAX`)を超えるものなどで、パスでは消せない。 */
+  /**
+   * パスでは中身を読めなかった、外を指すsymlink。パスの長さの上限(`PATH_MAX`)を超えるものなどである。
+   * 中身はinode順の書き出しから得て、消すときもパスでなくinode番号で選ぶ。
+   */
+  readonly pathless: ReadonlyMap<BytePath, PathlessLink>;
+  /** パスでも書き出しでも中身を読めなかったパス。消せないので、全消しの後始末に任せる。 */
   readonly unreadable: readonly BytePath[];
   /** 時間の上限を超えて、全部は調べられなかったか。 */
   readonly incomplete: boolean;
@@ -1726,9 +1885,10 @@ async function collectEscapingLinks(
     name,
   );
   const links = new Map<BytePath, BytePath>();
+  const pathless = new Map<BytePath, PathlessLink>();
   const unreadable: BytePath[] = [];
   // 大きすぎるか読めなかった一覧は、何も調べられないので、不完全として全消しの後始末に任せる。
-  if (listed === null) return { links, unreadable, incomplete: true };
+  if (listed === null) return { links, pathless, unreadable, incomplete: true };
   const startedAt = deps.reap.now();
   const entries = toBytePath(listed).split("\0");
   // 各名前は`\0`で終わる。末尾が`\0`でなければ一覧が途中で切れているので、最後の断片は捨てて不完全とする。
@@ -1737,7 +1897,8 @@ async function collectEscapingLinks(
   if (isCappedOutput(marks) || marks.length !== entries.length) {
     incomplete = true;
   }
-  for (const path of entries) {
+  const unreadableAt: number[] = [];
+  for (const [position, path] of entries.entries()) {
     if (path === "") continue;
     if (deps.reap.now() - startedAt > LINK_SCAN_MAX_MS) {
       incomplete = true;
@@ -1747,7 +1908,7 @@ async function collectEscapingLinks(
     try {
       content = toBytePath(await deps.readLink(toBytes(path)));
     } catch {
-      unreadable.push(path);
+      unreadableAt.push(position);
       continue;
     }
     let target: BytePath | null;
@@ -1762,7 +1923,27 @@ async function collectEscapingLinks(
     }
     if (target === null) links.set(path, content);
   }
-  return { links, unreadable, incomplete };
+  if (unreadableAt.length > 0) {
+    // パスで読めないものは、パスを使わない書き出しで中身を得る。得られなければ、全消しの後始末に任せる。
+    const read = await readPathlessLinks(
+      deps,
+      dir,
+      name,
+      entries,
+      unreadableAt,
+      warn,
+    );
+    for (const position of unreadableAt) {
+      const path = entries[position] ?? "";
+      const found = read?.get(path);
+      if (found === undefined) {
+        unreadable.push(path);
+      } else if (contentEscapes(found.content)) {
+        pathless.set(path, found);
+      }
+    }
+  }
+  return { links, pathless, unreadable, incomplete };
 }
 
 /**
@@ -1969,6 +2150,8 @@ export function createCheckSandbox(opts: {
   const indices = opts.uids.map((_, index) => index);
   let active: { identity: CheckIdentity; handle: SlotHandle } | null = null;
   let baseline: LinkMap = new Map();
+  /** 控えを取った時点の、パスでは読めなかった外向きのsymlinkの名前と中身。 */
+  let baselinePathless: LinkMap = new Map();
   /** 控えを取った後か。`release`が走査をするかを決める。 */
   let scanArmed = false;
   /** `release`の中で済ませた走査の結果。`escapingSymlinks`が返す。 */
@@ -2077,6 +2260,43 @@ export function createCheckSandbox(opts: {
         );
       }
     }
+    // パスでは読めないsymlinkは、inode番号で選んで消す。控えにあって中身が同じものは、そのまま残す。
+    const pathlessRemoved: string[] = [];
+    const pathlessInodes: string[] = [];
+    for (const [path, link] of scan.pathless) {
+      const before = baselinePathless.get(path);
+      if (before === link.content) continue;
+      pathlessInodes.push(link.inode);
+      pathlessRemoved.push(path);
+      if (before !== undefined) {
+        problems.push(
+          `a symlink with a path too long to restore existed before the check and was changed, so it was removed: ${JSON.stringify(displayPath(path))}`,
+        );
+      }
+    }
+    try {
+      for (const argv of deleteLinksByInodeArgvs(
+        dirs.worktreeDir,
+        pathlessInodes,
+      )) {
+        await runTool(
+          deps,
+          argv,
+          `removing symlinks with long paths in ${dirs.worktreeDir}`,
+        );
+      }
+      removed.push(...pathlessRemoved);
+    } catch (error) {
+      removeFailed = true;
+      log.warn("symlinks with long paths could not be removed", {
+        error: errorMessage(error),
+      });
+      for (const path of pathlessRemoved) {
+        problems.push(
+          `could not remove ${JSON.stringify(displayPath(path))}: unknown`,
+        );
+      }
+    }
     for (const path of scan.unreadable) {
       problems.push(
         `could not inspect a symlink, so it was left: ${JSON.stringify(displayPath(path))}`,
@@ -2095,7 +2315,8 @@ export function createCheckSandbox(opts: {
       );
     }
     const suspicious = removed.filter((path) => {
-      const content = scan.links.get(path) ?? "";
+      const content =
+        scan.links.get(path) ?? scan.pathless.get(path)?.content ?? "";
       return (
         !content.startsWith(homePrefix) &&
         !SYSTEM_BIN_PREFIXES.some((prefix) => content.startsWith(prefix))
@@ -2136,9 +2357,16 @@ export function createCheckSandbox(opts: {
       // 渡す前に記録する。後始末が走らなくても、次にこの枠を取る実行が戻せるようにするためである。
       await deps.slotRecords.write(handle.index, record);
       // 渡す前の、rootの所有の木で控える。投げても枠は`active`にあるので、`release`が手放して取り戻す。
-      baseline = (
-        await collectEscapingLinks(deps, dirs.worktreeDir, log, handle.index)
-      ).links;
+      const before = await collectEscapingLinks(
+        deps,
+        dirs.worktreeDir,
+        log,
+        handle.index,
+      );
+      baseline = before.links;
+      baselinePathless = new Map(
+        [...before.pathless].map(([path, link]) => [path, link.content]),
+      );
       scanArmed = true;
       await handOver(
         deps,
