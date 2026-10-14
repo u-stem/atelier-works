@@ -187,3 +187,7 @@ run = "bun run scripts/check-comment-only-diff.ts"
 [tasks."worktree:new"]
 description = "Create a worktree for type/name from origin/main and install its dependencies"
 run = "scripts/worktree-new.sh"
+
+[tasks."worktree:prune"]
+description = "List (dry run) or remove (--apply) merged, clean worktrees under .claude/worktrees"
+run = "scripts/worktree-prune.sh"
