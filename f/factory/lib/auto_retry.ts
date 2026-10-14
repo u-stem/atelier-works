@@ -214,3 +214,29 @@ export async function retryStaleImageItems(
   }
   return counts;
 }
+
+/**
+ * 自己更新が、再開のscriptを起動するかを決める。
+ * 通知を解決した回は、候補が現れうるので起動する。解決しなかった回は、候補が残っているときだけ起動する。
+ * 前の回で取り逃した項目を拾うためである。どちらでもない回は、起動しない。
+ * 起動したジョブは何もせずに終わるだけで、2分ごとの実行がジョブの履歴とqueueを埋めるため。
+ * 候補を数えられなかったときは、取り逃しを避けて起動する。例外は投げない。
+ */
+export async function shouldStartStaleImageRetry(deps: {
+  readonly resolvedCount: number;
+  /** 再開の候補が1件以上あるか。 */
+  readonly hasCandidates: () => Promise<boolean>;
+  readonly log: Logger;
+}): Promise<boolean> {
+  if (deps.resolvedCount > 0) {
+    return true;
+  }
+  try {
+    return await deps.hasCandidates();
+  } catch (err) {
+    deps.log.warn("auto retry candidates could not be counted", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return true;
+  }
+}

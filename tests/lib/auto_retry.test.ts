@@ -7,6 +7,7 @@ import {
   type AutoRetryDeps,
   autoRetryPlan,
   retryStaleImageItems,
+  shouldStartStaleImageRetry,
 } from "../../f/factory/lib/auto_retry.ts";
 import type { AutoRetryCandidate } from "../../f/factory/lib/db.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
@@ -328,5 +329,51 @@ describe("auto retry limits", () => {
 
   test("marks the restart notes with the prefix the cap counts", () => {
     expect(AUTO_RETRY_NOTE_PREFIX).toBe("auto_retry: ");
+  });
+});
+
+describe("shouldStartStaleImageRetry", () => {
+  const never = async (): Promise<boolean> => {
+    throw new Error("candidates must not be read");
+  };
+
+  test("starts when a notice was resolved in this run", async () => {
+    expect(
+      await shouldStartStaleImageRetry({
+        resolvedCount: 1,
+        hasCandidates: never,
+        log: quietLog,
+      }),
+    ).toBe(true);
+  });
+
+  test("starts when no notice was resolved but a candidate remains", async () => {
+    expect(
+      await shouldStartStaleImageRetry({
+        resolvedCount: 0,
+        hasCandidates: async () => true,
+        log: quietLog,
+      }),
+    ).toBe(true);
+  });
+
+  test("does not start when nothing was resolved and no candidate remains", async () => {
+    expect(
+      await shouldStartStaleImageRetry({
+        resolvedCount: 0,
+        hasCandidates: async () => false,
+        log: quietLog,
+      }),
+    ).toBe(false);
+  });
+
+  test("starts when the candidates cannot be read", async () => {
+    expect(
+      await shouldStartStaleImageRetry({
+        resolvedCount: 0,
+        hasCandidates: never,
+        log: quietLog,
+      }),
+    ).toBe(true);
   });
 });

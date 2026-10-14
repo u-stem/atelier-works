@@ -92,12 +92,24 @@ describe("self_update host action wiring", () => {
     ]);
   });
 
-  test("starts the automatic retry outside any branch on the resolved count", async () => {
+  test("starts the automatic retry only through the start decision", async () => {
     const source = await selfUpdateSource();
 
     expect(source).toMatch(
-      /\}\);\s*await startStaleImageRetry\(log\);\s*return resolved;/,
+      /if \(\s*await shouldStartStaleImageRetry\(\{[\s\S]*?\}\)\s*\) \{\s*await startStaleImageRetry\(log\);\s*\}\s*return resolved;/,
     );
+  });
+
+  test("passes the resolved count to the start decision", async () => {
+    const source = await selfUpdateSource();
+
+    expect(source).toContain("resolvedCount: resolved,");
+  });
+
+  test("counts only one retry candidate for the start decision", async () => {
+    const source = await selfUpdateSource();
+
+    expect(source).toMatch(/limit: 1,\s*\}\),\s*\)\s*\)\.length > 0/);
   });
 
   test("starts the automatic retry script by its path", async () => {

@@ -1703,6 +1703,27 @@ export async function getLatestDeployment(
   };
 }
 
+/**
+ * `flowPath`のスケジュールの失敗として最後に記録されたエラー文を返す。無ければ`null`。
+ * スケジュールの失敗ハンドラが記録する行(`step`がNULL)だけを見る。
+ * ステップ付きの行は、成功した実行の中で記録する部分的な失敗なので、連続した失敗の比較に使わない。
+ * 失敗ハンドラが、今回の失敗を記録する前に呼ぶ。
+ */
+export async function getLatestScheduleFailureError(
+  flowPath: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<string | null> {
+  const rows = await sql`
+    SELECT error
+    FROM factory.job_failures
+    WHERE flow_path = ${flowPath} AND step IS NULL
+    ORDER BY occurred_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : parseRequiredString(row.error, "error");
+}
+
 // ---------------------------------------------------------------------------
 // notices
 // ---------------------------------------------------------------------------

@@ -20,6 +20,12 @@
 // `scripts/bootstrap.sh`が空の値で一度だけ作り、以降は下の
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
+import {
+  AUTO_RETRY_MAX_RESTARTS,
+  AUTO_RETRY_NOTE_PREFIX,
+  shouldStartStaleImageRetry,
+} from "./lib/auto_retry.ts";
+import { AUTO_RETRY_REASON_PREFIXES } from "./lib/auto_retry_reasons.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   CONSOLE_WORKER_CHECK_TIMEOUT_MS,
@@ -29,6 +35,7 @@ import {
 } from "./lib/console_worker.ts";
 import {
   addNoticeUnlessUnresolved,
+  listAutoRetryCandidates,
   listUnresolvedNoticesByKind,
   recordDeployment,
   recordFailure,
@@ -52,6 +59,7 @@ import {
   readHostAppliedSha,
   reconcileHostActionNotices,
   recordHostAction,
+  STALE_IMAGE_NOTICE_MARKER,
 } from "./lib/host_action.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
@@ -534,12 +542,12 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
  * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
  *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
- * - 止まった作業項目の再開の起動: 1
+ * - 止まった作業項目の再開の候補の確認と起動: 2
  * - `factory_repo_id`の照合: リポジトリIDの取得、失敗の記録、noticeの挿入: 3
  *   (`gh api`の子プロセスは`DEFAULT_TIMEOUT_MS`が上限だが、ここで先に区切る)
  */
 export const SELF_UPDATE_BOUNDED_CALL_COUNT =
-  13 + 4 + HOST_ACTION_RECONCILE_LIMIT + 1 + 3;
+  13 + 4 + HOST_ACTION_RECONCILE_LIMIT + 2 + 3;
 
 /**
  * finallyの通知1回の上限(ミリ秒)。
@@ -751,8 +759,9 @@ async function updateSelf(
   });
   // ホストで反映が済んだ通知を解決する。反映が不要な回でも、反映の後でも呼ぶ。
   // 反映の判断を遅らせないよう、反映の判断と記録より後に呼ぶ。
-  // イメージが古くて止まった作業項目の再開は、通知を解決した回に限らず毎回始める。
+  // イメージが古くて止まった作業項目の再開は、通知を解決した回と、候補が残っている回だけ始める。
   // 候補の選び方は繰り返しても同じ結果になるので、前の回で取り逃した項目も拾える。
+  // 何もしないジョブを2分ごとに起動しないよう、どちらでもない回は起動しない。
   const resolveHostActionNotices = async () => {
     const resolved = await reconcileHostActionNotices({
       listUnresolved: () =>
@@ -771,7 +780,28 @@ async function updateSelf(
         ),
       log,
     });
-    await startStaleImageRetry(log);
+    if (
+      await shouldStartStaleImageRetry({
+        resolvedCount: resolved,
+        hasCandidates: async () =>
+          (
+            await withCallTimeout("list auto retry candidates", () =>
+              listAutoRetryCandidates({
+                reasonPrefixes: AUTO_RETRY_REASON_PREFIXES,
+                noticeKind: HOST_ACTION_NOTICE_KIND,
+                noticeMarker: STALE_IMAGE_NOTICE_MARKER,
+                resolvedBy: HOST_ACTION_RESOLVER,
+                notePrefix: AUTO_RETRY_NOTE_PREFIX,
+                maxRestarts: AUTO_RETRY_MAX_RESTARTS,
+                limit: 1,
+              }),
+            )
+          ).length > 0,
+        log,
+      })
+    ) {
+      await startStaleImageRetry(log);
+    }
     return resolved;
   };
 

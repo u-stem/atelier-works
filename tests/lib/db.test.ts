@@ -30,6 +30,7 @@ import {
   getIssueProposal,
   getLatestDeployment,
   getLatestPrCiCheck,
+  getLatestScheduleFailureError,
   getNoticeById,
   getPrCiCheckById,
   getPreviousMainCiRun,
@@ -4680,6 +4681,32 @@ describe("getLatestDeployment", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await getLatestDeployment(sql);
     expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC");
+  });
+});
+
+describe("getLatestScheduleFailureError", () => {
+  test("returns null when no failure was recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestScheduleFailureError("f/factory/x", sql)).toBeNull();
+  });
+
+  test("returns the error of the newest row", async () => {
+    const { sql } = createFakeSqlClient([[{ error: "boom" }]]);
+    expect(await getLatestScheduleFailureError("f/factory/x", sql)).toBe(
+      "boom",
+    );
+  });
+
+  test("reads only the rows recorded by the failure handler", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestScheduleFailureError("f/factory/x", sql);
+    expect(calls[0]?.text).toContain("step IS NULL");
+  });
+
+  test("orders by newest first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestScheduleFailureError("f/factory/x", sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
   });
 });
 

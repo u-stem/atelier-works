@@ -5,9 +5,11 @@ import {
   allRecentRunsFailed,
   buildScheduleFailingNotice,
   flagFailingSchedule,
+  previousRunFailed,
   SCHEDULE_FAILING_CHECK_FAILED_NOTICE,
   SCHEDULE_FAILING_FETCH_COUNT,
   SCHEDULE_FAILING_RUNS,
+  shouldNotifyJobFailed,
 } from "../../f/factory/lib/schedule_failing.ts";
 import { isRecord, type NoticeRecord } from "../../f/factory/lib/types.ts";
 
@@ -401,5 +403,122 @@ describe("flagFailingSchedule", () => {
       addNoticeThrows: true,
     });
     expect(await flagFailingSchedule("f/factory/a", h.deps)).toBe(false);
+  });
+});
+
+const run = (id: string, base: Record<string, unknown>) => ({ id, ...base });
+
+describe("previousRunFailed", () => {
+  test("is false when the previous run succeeded", () => {
+    expect(
+      previousRunFailed([run("b", FAILED), run("a", SUCCEEDED)], "b"),
+    ).toBe(false);
+  });
+
+  test("is true when the previous run failed", () => {
+    expect(previousRunFailed([run("b", FAILED), run("a", FAILED)], "b")).toBe(
+      true,
+    );
+  });
+
+  test("is false when there is no previous run", () => {
+    expect(previousRunFailed([run("b", FAILED)], "b")).toBe(false);
+  });
+
+  test("looks before the failed job when it is not the first entry", () => {
+    expect(
+      previousRunFailed(
+        [run("c", FAILED), run("b", FAILED), run("a", SUCCEEDED)],
+        "b",
+      ),
+    ).toBe(false);
+  });
+
+  test("takes the second entry as the previous run when the job is not listed", () => {
+    expect(previousRunFailed([run("x", FAILED), run("y", FAILED)], "b")).toBe(
+      true,
+    );
+  });
+
+  test("skips a skipped run", () => {
+    expect(
+      previousRunFailed(
+        [run("c", FAILED), run("s", SKIPPED), run("a", SUCCEEDED)],
+        "c",
+      ),
+    ).toBe(false);
+  });
+
+  test("skips a run canceled by a person", () => {
+    expect(
+      previousRunFailed(
+        [run("c", FAILED), run("p", CANCELED_BY_PERSON), run("a", FAILED)],
+        "c",
+      ),
+    ).toBe(true);
+  });
+
+  test("is false when the response is not a list", () => {
+    expect(previousRunFailed(null, "b")).toBe(false);
+  });
+});
+
+describe("shouldNotifyJobFailed", () => {
+  const afterSuccess = [run("b", FAILED), run("a", SUCCEEDED)];
+  const afterFailure = [run("b", FAILED), run("a", FAILED)];
+
+  test("notifies the first failure of a streak", () => {
+    expect(
+      shouldNotifyJobFailed({
+        runs: afterSuccess,
+        jobId: "b",
+        previousError: "boom",
+        currentError: "boom",
+      }),
+    ).toBe(true);
+  });
+
+  test("does not notify a repeated failure with the same error", () => {
+    expect(
+      shouldNotifyJobFailed({
+        runs: afterFailure,
+        jobId: "b",
+        previousError: "boom",
+        currentError: "boom",
+      }),
+    ).toBe(false);
+  });
+
+  test("notifies a repeated failure whose error changed", () => {
+    expect(
+      shouldNotifyJobFailed({
+        runs: afterFailure,
+        jobId: "b",
+        previousError: "boom",
+        currentError: "bang",
+      }),
+    ).toBe(true);
+  });
+
+  test("notifies a repeated failure when the previous error is unknown", () => {
+    expect(
+      shouldNotifyJobFailed({
+        runs: afterFailure,
+        jobId: "b",
+        previousError: null,
+        currentError: "boom",
+      }),
+    ).toBe(true);
+  });
+
+  test("notifies when the history could not be read", () => {
+    expect(
+      shouldNotifyJobFailed({
+        runs: null,
+        jobId: "b",
+        previousError: "boom",
+        currentError: "boom",
+      }),
+    ).toBe(true);
   });
 });

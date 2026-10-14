@@ -29,6 +29,56 @@ function isCanceledByTimeout(run: Record<string, unknown>): boolean {
   return run.canceled === true && run.canceled_by === TIMEOUT_CANCELED_BY;
 }
 
+/** 飛ばされた実行(`is_skipped`)と、人が取り消した実行(`canceled`)を除く。時間切れの取り消しは残す。 */
+function countedRuns(runs: readonly unknown[]): unknown[] {
+  return runs.filter(
+    (run) =>
+      !(
+        isRecord(run) &&
+        (run.is_skipped === true ||
+          (run.canceled === true && !isCanceledByTimeout(run)))
+      ),
+  );
+}
+
+/**
+ * 失敗したジョブ(`jobId`)の直前の実行が、失敗だったか。
+ * 履歴(新しい順)に`jobId`の実行があれば、それより古い実行の先頭を直前とする。
+ * 無ければ、先頭が今回の失敗だとみなして、その次を直前とする。
+ * 直前の実行が無いとき、履歴が配列でないとき、形の違う要素のときは`false`を返す(初回の失敗として扱う)。
+ * 飛ばされた実行と人が取り消した実行は、`allRecentRunsFailed`と同じく数えない。
+ */
+export function previousRunFailed(runs: unknown, jobId: string): boolean {
+  if (!Array.isArray(runs)) {
+    return false;
+  }
+  const counted = countedRuns(runs);
+  const index = counted.findIndex((run) => isRecord(run) && run.id === jobId);
+  const previous = counted[index === -1 ? 1 : index + 1];
+  return isRecord(previous) && previous.success === false;
+}
+
+/**
+ * `job_failed`をDiscordへ送るか。
+ * 同じスケジュールの連続した失敗の初回と、エラー文が前回の失敗から変わったときだけ送る。
+ * 以降の失敗は、続けて失敗していることを知らせる`schedule_failing`に任せる。
+ * 直前のエラー文(`previousError`)を読めないときは、変わったかを判定できないので送る。
+ * 通知が抜けるより、重なるほうがよいため。
+ */
+export function shouldNotifyJobFailed(input: {
+  readonly runs: unknown;
+  readonly jobId: string;
+  readonly previousError: string | null;
+  readonly currentError: string;
+}): boolean {
+  if (!previousRunFailed(input.runs, input.jobId)) {
+    return true;
+  }
+  return (
+    input.previousError === null || input.previousError !== input.currentError
+  );
+}
+
 /**
  * ジョブ履歴の応答(新しい順)から、飛ばされた実行(`is_skipped`)と、人が取り消した実行(`canceled`)を除いた
  * 先頭`SCHEDULE_FAILING_RUNS`件が、すべて失敗か。
@@ -42,14 +92,7 @@ export function allRecentRunsFailed(runs: unknown): boolean {
   if (!Array.isArray(runs)) {
     return false;
   }
-  const counted = runs.filter(
-    (run) =>
-      !(
-        isRecord(run) &&
-        (run.is_skipped === true ||
-          (run.canceled === true && !isCanceledByTimeout(run)))
-      ),
-  );
+  const counted = countedRuns(runs);
   if (counted.length < SCHEDULE_FAILING_RUNS) {
     return false;
   }
