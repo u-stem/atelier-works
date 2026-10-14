@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { MAX_FILE_BYTES } from "../../f/factory/lib/metadata_patch_manifest.ts";
-import { buildLock } from "./metadata_patch_fixtures.ts";
 import {
+  addExistingScript,
+  BASE,
   codeOf,
+  EMPTY_LOCK,
+  EMPTY_LOCK_PATH,
   HASH_NEW,
   HASH_OLD,
-  OLD_LOCK,
+  LOCK,
   scriptYaml,
   verify,
   wmillLock,
@@ -51,147 +53,154 @@ describe("verifyMetadataPatch limits the script yaml to changed sources", () => 
   });
 });
 
-describe("verifyMetadataPatch ties the lock to the imports", () => {
-  test("rejects a new package when the imports did not change", async () => {
+describe("verifyMetadataPatch keeps the lock of an existing script", () => {
+  test("rejects a lock that differs from the base tree", async () => {
     const w = world();
-    w.head.set("f/factory/foo.ts", 'import pad from "left-pad@1.3.0";\n');
+    w.patch.set("f/factory/foo.script.lock", LOCK.replace("1.3.0", "1.4.0"));
+    expect(await codeOf(w)).toBe("lock_changed");
+  });
+
+  test("rejects a lock with an added dependency", async () => {
+    const w = world();
     w.patch.set(
       "f/factory/foo.script.lock",
-      buildLock({
-        deps: { "left-pad": "1.3.0", "is-odd": "1.0.0" },
-        packages: {
-          "left-pad": { ident: "left-pad@1.3.0" },
-          "is-odd": { ident: "is-odd@1.0.0" },
-        },
-      }),
+      LOCK.replace('"left-pad"', '"is-odd": "1.0.0",\n    "left-pad"'),
     );
-    expect(await codeOf(w)).toBe("lock_changed_without_import_change");
+    expect(await codeOf(w)).toBe("lock_changed");
   });
 
-  test("rejects a raised version when the imports did not change", async () => {
+  test("rejects a lock that differs by one byte", async () => {
     const w = world();
-    w.head.set("f/factory/foo.ts", 'import pad from "left-pad@1.3.0";\n');
-    expect(await codeOf(w)).toBe("lock_changed_without_import_change");
+    w.patch.set("f/factory/foo.script.lock", `${LOCK}\n`);
+    expect(await codeOf(w)).toBe("lock_changed");
   });
 
-  test("accepts the lock of main when the imports did not change", async () => {
-    const w = world();
-    w.head.set("f/factory/foo.ts", 'import pad from "left-pad@1.3.0";\n');
-    w.patch.set("f/factory/foo.script.lock", OLD_LOCK);
-    expect(await codeOf(w)).toBe("ok");
-  });
-
-  test("follows the imports of the files that the script imports", async () => {
-    const w = world();
-    w.head.set("f/factory/foo.ts", 'import { x } from "./lib/bar.ts";\n');
-    w.base.set("f/factory/foo.ts", 'import { x } from "./lib/bar.ts";\n');
-    w.head.set("f/factory/lib/bar.ts", 'import pad from "left-pad@1.4.0";\n');
-    expect(await codeOf(w)).toBe("ok");
-  });
-
-  test("rejects a lock for a script that has no imports in main", async () => {
-    const w = world();
-    w.head.set("f/factory/foo.ts", "export const a = 1;\n");
-    w.base.set("f/factory/foo.ts", "export const a = 1;\n");
-    expect(await codeOf(w)).toBe("lock_changed_without_import_change");
-  });
-
-  test("rejects an import that is a variable in the script", async () => {
-    const w = world();
-    w.head.set("f/factory/foo.ts", "await import(name);\n");
-    expect(await codeOf(w)).toBe("untraceable_import");
-  });
-
-  test("rejects an import that is a template literal in an imported file", async () => {
-    const w = world();
-    w.head.set("f/factory/lib/bar.ts", "await import(`./\x24{x}.ts`);\n");
-    w.head.set(
-      "f/factory/foo.ts",
-      'import { x } from "./lib/bar.ts";\nimport pad from "left-pad@1.4.0";\n',
-    );
-    expect(await codeOf(w)).toBe("untraceable_import");
-  });
-
-  test("rejects a require with a variable in main", async () => {
-    const w = world();
-    w.base.set("f/factory/foo.ts", "const m = require(name);\n");
-    expect(await codeOf(w)).toBe("untraceable_import");
-  });
-
-  test("rejects a script larger than the file limit", async () => {
-    const w = world();
-    w.head.set("f/factory/foo.ts", " ".repeat(MAX_FILE_BYTES + 1));
-    expect(await codeOf(w)).toBe("untraceable_import");
-  });
-
-  test("finishes on a script made of repeated import keywords", async () => {
-    const w = world();
-    w.head.set("f/factory/foo.ts", "import ".repeat(MAX_FILE_BYTES / 7));
-    const started = performance.now();
-    await verify(w);
-    expect(performance.now() - started).toBeLessThan(5000);
-  });
-
-  test("rejects when the source in main cannot be read", async () => {
-    const w = world();
-    w.baseFailures.add("f/factory/foo.ts");
-    expect(await codeOf(w)).toBe("base_unreadable");
-  });
-
-  test("rejects when the lock in main cannot be read", async () => {
+  test("rejects when the lock in the base tree cannot be read", async () => {
     const w = world();
     w.baseFailures.add("f/factory/foo.script.lock");
     expect(await codeOf(w)).toBe("base_unreadable");
   });
+
+  test("accepts a lock that equals the base tree even if head differs", async () => {
+    const w = world();
+    expect(w.head.get("f/factory/foo.script.lock")).not.toBe(LOCK);
+    expect(await codeOf(w)).toBe("ok");
+  });
 });
 
-describe("verifyMetadataPatch checks the registry answer", () => {
-  test.each([
-    ["not a number", Number.NaN],
-    ["infinite", Number.POSITIVE_INFINITY],
-    ["negative", -1],
-  ])("rejects an age that is %s", async (_label, age) => {
-    const w = world();
-    w.age = () => age;
-    expect(await codeOf(w)).toBe("registry_unavailable");
-  });
-
-  test("rejects an age of zero days against a one day minimum", async () => {
-    const w = world();
-    w.config = { ...w.config, minPublishedDays: 1 };
-    w.age = () => 0;
-    expect(await codeOf(w)).toBe("version_too_new");
-  });
-
-  test.each([[0], [-1], [1.5], [Number.NaN], [Number.POSITIVE_INFINITY]])(
-    "rejects a minimum of %s days",
-    async (days) => {
-      const w = world();
-      w.config = { ...w.config, minPublishedDays: days };
-      expect(await codeOf(w)).toBe("invalid_config");
-    },
-  );
-});
-
-describe("verifyMetadataPatch rejects lowered versions", () => {
-  test("rejects a version lower than the one in main", async () => {
-    const w = world();
-    w.patch.set(
-      "f/factory/foo.script.lock",
-      buildLock({
-        deps: { "left-pad": "1.2.0" },
-        packages: { "left-pad": { ident: "left-pad@1.2.0" } },
+/** PRが新しいscriptを足した状態。lockは空lockで、yamlとハッシュも付ける。 */
+function withNewScript(source: string) {
+  const w = world();
+  w.head.set("f/factory/newone.ts", source);
+  w.pr = {
+    ...w.pr,
+    diff: [{ path: "f/factory/newone.ts", status: "added" }],
+  };
+  w.patch = new Map<string, string | Uint8Array>([
+    ["f/factory/newone.script.lock", EMPTY_LOCK],
+    ["f/factory/newone.script.yaml", scriptYaml("newone")],
+    [
+      "wmill-lock.yaml",
+      wmillLock({
+        "f/factory/foo": HASH_OLD,
+        "f/factory/other": HASH_OLD,
+        "f/factory/newone": HASH_NEW,
       }),
+    ],
+  ]);
+  w.statuses.set("f/factory/newone.script.lock", "added");
+  w.statuses.set("f/factory/newone.script.yaml", "added");
+  return w;
+}
+
+describe("verifyMetadataPatch accepts only an empty lock for a new script", () => {
+  test("accepts the empty lock of a script without imports", async () => {
+    expect(await codeOf(withNewScript("export function main() {}\n"))).toBe(
+      "ok",
     );
-    expect(await codeOf(w)).toBe("version_downgrade");
+  });
+
+  test("accepts the empty lock of a script that imports a local file", async () => {
+    const w = withNewScript('import { x } from "./lib/bar.ts";\n');
+    expect(await codeOf(w)).toBe("ok");
+  });
+
+  test("rejects a lock with a dependency", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.patch.set("f/factory/newone.script.lock", LOCK);
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("rejects a script that imports a package", async () => {
+    const w = withNewScript('import pad from "left-pad@1.3.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test("rejects a script that imports a package through a local file", async () => {
+    const w = withNewScript('import { x } from "./lib/bar.ts";\n');
+    w.head.set("f/factory/lib/bar.ts", 'import pad from "left-pad@1.3.0";\n');
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
+  });
+
+  test.each([
+    ["a variable", "await import(name);"],
+    ["a concatenation", 'await import("./x" + n);'],
+    ["a template literal", "await import(`./x`);"],
+  ])("rejects a script with an import made of %s", async (_label, code) => {
+    expect(await codeOf(withNewScript(`${code}\n`))).toBe(
+      "dependency_change_requires_human",
+    );
+  });
+
+  test("rejects a new lock for a source the PR did not add", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.pr = {
+      ...w.pr,
+      diff: [{ path: "f/factory/foo.ts", status: "modified" }],
+    };
+    w.head.set("f/factory/newone.ts", 'import "./foo.ts";\n');
+    w.head.set("f/factory/foo.ts", 'import "./lib/bar.ts";\n');
+    expect(await codeOf(w)).toBe("new_script_without_source");
+  });
+
+  test("rejects when the reference empty lock cannot be read", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.baseFailures.add(EMPTY_LOCK_PATH);
+    expect(await codeOf(w)).toBe("base_unreadable");
+  });
+
+  test("rejects when the reference empty lock does not exist", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.base.delete(EMPTY_LOCK_PATH);
+    expect(await codeOf(w)).toBe("base_unreadable");
+  });
+
+  test("compares with the bytes of the reference lock, not a fixed value", async () => {
+    const w = withNewScript("export function main() {}\n");
+    w.base.set(EMPTY_LOCK_PATH, `${EMPTY_LOCK}\n`);
+    expect(await codeOf(w)).toBe("dependency_change_requires_human");
   });
 });
 
-describe("verifyMetadataPatch checks that the diff is whole", () => {
-  test("rejects a diff that GitHub cut short", async () => {
+describe("verifyMetadataPatch reads the head tree", () => {
+  test("rejects when a file of the head tree cannot be read", async () => {
     const w = world();
-    w.pr = { ...w.pr, diffTruncated: true };
-    expect(await codeOf(w)).toBe("pr_diff_incomplete");
+    w.headFailures.add("f/factory/foo.script.yaml");
+    expect(await codeOf(w)).toBe("head_unreadable");
+  });
+
+  test("rejects when a source that decides the closure cannot be read", async () => {
+    const w = world();
+    addExistingScript(w, "baz", 'import "./foo.ts";\n');
+    w.patch.set("f/factory/baz.script.lock", LOCK);
+    w.headFailures.add("f/factory/baz.ts");
+    expect(await codeOf(w)).toBe("head_unreadable");
+  });
+
+  test("rejects when the hash file of the head tree cannot be read", async () => {
+    const w = world();
+    w.headFailures.add("wmill-lock.yaml");
+    expect(await codeOf(w)).toBe("head_unreadable");
   });
 });
 
@@ -239,44 +248,21 @@ describe("verifyMetadataPatch surfaces port failures", () => {
     await expect(verify(w)).rejects.toThrow("boom");
   });
 
-  test("does not accept a patch when the registry port throws", async () => {
+  test("does not accept a patch when the base port throws", async () => {
     const w = world();
     w.ports = {
-      publishedAgeDays: async () => {
-        throw new Error("registry down");
+      readBaseFile: async () => {
+        throw new Error("base down");
       },
     };
-    await expect(verify(w)).rejects.toThrow("registry down");
+    await expect(verify(w)).rejects.toThrow("base down");
   });
 });
 
-describe("verifyMetadataPatch limits the lock hashes", () => {
-  test("rejects a hash for a script whose source is protected", async () => {
+describe("verifyMetadataPatch reads the tree of the base sha", () => {
+  test("reads the base files at the sha of the manifest", async () => {
     const w = world();
-    w.head.set("f/factory/steps/dependabot_assess.ts", "export const a = 1;\n");
-    w.pr = {
-      ...w.pr,
-      diff: [
-        ...w.pr.diff,
-        { path: "f/factory/steps/dependabot_assess.ts", status: "modified" },
-      ],
-    };
-    w.head.set(
-      "wmill-lock.yaml",
-      wmillLock({
-        "f/factory/foo": HASH_OLD,
-        "f/factory/other": HASH_OLD,
-        "f/factory/steps/dependabot_assess": HASH_OLD,
-      }),
-    );
-    w.patch.set(
-      "wmill-lock.yaml",
-      wmillLock({
-        "f/factory/foo": HASH_NEW,
-        "f/factory/other": HASH_OLD,
-        "f/factory/steps/dependabot_assess": HASH_NEW,
-      }),
-    );
-    expect(await codeOf(w)).toBe("wmill_lock_key_not_allowed");
+    await verify(w);
+    expect([...new Set(w.baseReads)]).toEqual([BASE]);
   });
 });

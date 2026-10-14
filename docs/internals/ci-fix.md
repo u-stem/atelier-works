@@ -482,8 +482,7 @@ artifactはPRの作者が完全に決められるので、安全は内容の制�
 | `lib/metadata_patch_download.ts` | zipのバイト列の取得(`downloadArtifactZip`)。トークンの渡し先と取得先の制限 |
 | `lib/metadata_patch_zip.ts` | zipの安全な読み取り。結果は、パスから内容への対応 |
 | `lib/metadata_patch_manifest.ts` | パスの許可リストと、manifestの形と上限 |
-| `lib/metadata_patch_lock.ts` | scriptのlockの構造の検査と、mainの版との比較 |
-| `lib/metadata_patch_imports.ts` | scriptのimportの読み取り。相対importの閉包と、裸のimport指定子の集合 |
+| `lib/metadata_patch_imports.ts` | scriptのimportの読み取り。相対importの閉包と、裸のimportの検出 |
 | `lib/metadata_patch_yaml.ts` | `.script.yaml`と`wmill-lock.yaml`の検査 |
 | `lib/metadata_patch_verify.ts` | 適用条件の検査。通れば書き込む内容を、通らなければ失敗の種別を返す |
 
@@ -521,24 +520,27 @@ zipの中の文字列は、`reason`に載せない。
 `metadata_patch_imports.ts`は、ソースの文字列リテラルのうち、`from`、`import`、`import(`、`require(`の直後にあるものを指定子として読む。
 コメントと文字列の中の同じ形も拾うので、集合は実際より広くなりうる。
 読み取りはファイルの大きさに対して線形で、1MiBのファイルでも終わる。
-指定子が文字列リテラルでない`import()`と`require()`は、追えないものとして扱う。
+次のimportは、指定子を決められないので、追えないものとして扱う。
+
+- 指定子が文字列リテラルでない`import()`と`require()`。
+- リテラルの次が`)`か`,`でないもの。`import("a" + b)`のような連結や、メソッド呼び出しである。
 
 ### 適用条件の検査
 
 `verifyMetadataPatch`は、実行とPRの事実、zipの展開結果、読み取りのポートを受け取る。
 自分ではI/Oをしない。
-ポートは、履歴の祖先の判定、merge commitの親の取得、headの木とbaseの先端の木のファイルの読み取り、パッケージの公開からの日数の取得である。
-`isAncestor`と`publishedAgeDays`は、判定できないことをnullで伝える。
-`readBaseFile`は、無いことと読めないことを分けて返す。
+ポートは、履歴の祖先の判定、merge commitの親の取得、headの木とbaseの木のファイルの読み取りである。
+baseの木は、manifestの`baseSha`のcommitの木で、baseブランチの今の先端ではない。
+`isAncestor`は、判定できないことをnullで伝える。
+`readHeadFile`と`readBaseFile`は、無いことと読めないことを分けて返し、読めないときは検査が断る。
 ほかのポートは、失敗を例外で伝え、検査は例外をそのまま投げる。
 
 検査は次の順に行い、最初に当たった失敗を返す。
 
-1. 設定(最小の公開日数は正の整数)
-2. 実行の出どころとPRの差分
-3. manifestと、実体の大きさとsha256、削除、保護パス
-4. 履歴(`baseSha`、`headSha`、`mergeSha`の関係)
-5. ファイルごとの内容
+1. 実行の出どころとPRの差分
+2. manifestと、実体の大きさとsha256、削除、保護パス
+3. 履歴(`baseSha`、`headSha`、`mergeSha`の関係)
+4. ファイルごとの内容
 
 PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならない。
 呼び出し側は、APIの件数の上限で切れたときに`diffTruncated`を真にする。
@@ -548,12 +550,19 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
 
 - `.script.lock`は、`.ts`が変わったscriptと、それを相対importの推移閉包で読むscriptに限る。
 - `.script.yaml`は、`.ts`が変わったscript自身に限る。
-- lockの`packages`は、裸のimport指定子の集合が`main`の版と違うscriptだけが変えられる。
-  集合が同じなら、lockは`main`の版と同一でなければならない。
+- 既存のscriptのlockは、baseの木のlockとバイト列まで同一であること。
+- 新しいscriptのlockは、baseの木にある依存の無いlibのlockと同一であり、そのscriptが閉包で読むファイルに裸のimportが無いこと。
 
-成功の結果は、書き込む内容の一覧(`writes`)と、依存の版の変化(`dependencyChanges`)である。
+自動で適用するのは、依存が変わらない再生成だけである。
+lockの意味を解釈しないので、受け取る側で、版の範囲や取得元の検査を持たない。
+依存が変わる再生成は、自動化の対象外で、別の仕組みで扱う。
+
+成功の結果は、書き込む内容の一覧(`writes`)である。
+書き込む側は、headの木のsymlinkをたどって木の外へ書かないよう、書き込む前に確かめる。
 失敗の結果は、固定の種別(`code`)と、無害化した補足(`detail`)である。
-補足はパスなど入力に由来する値を含みうるので、制御文字、書式文字、行の区切りを除き、JSONの文字列にして長さを切る。
+補足はパスなど入力に由来する値を含み、PRの作者が決められる。
+補足は、制御文字、書式文字、行の区切りを除き、JSONの文字列にして長さを切る。
+PR本文やコメントに載せるときは、コードスパンで囲み、メンションとリンクを無効にする。
 
 ### 配線で決めること
 
@@ -592,8 +601,9 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
   この呼び出しはGitHub APIのページ送りなので、応答が遅いと、ロックを長く持つ。
 - 認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。
 - `agent_runs.error`には、`lib/claude.ts`が実行の詳細を書く。検査を通っていない出力の抜粋がDBに残る。
-- パッチの`.script.yaml`の`schema`は、`$`で始まる値と`x-windmill-`のキーだけを拒む。値の意味は検査しない。
+- パッチの`.script.yaml`の`schema`は、許可リストにない文字(`\`、`!`、`&`、`*`、`%`、タブ、`$`)と`x-windmill`を含むものを拒む。
+  説明文などに、これらの文字を正当に含むscriptは、自動では直らない。
 - `.script.yaml`と`wmill-lock.yaml`は、完全なYAMLとして解析しない。wmillが書く形から外れたものは、正当でも断る。
-- lockのintegrityを、レジストリの公開値と照合することは実装していない。`main`の版との一致だけを確かめる。
 - importの読み取りは、字句の近似である。正規表現リテラルや文字列の入れ子で、実際のimportと食い違いうる。
-  食い違いは、`packages`を変えてよいscriptの判定に効くので、公開からの日数とintegrityの検査が最後の防御になる。
+  食い違いは、新しいscriptの裸のimportの検出と、変えてよいscriptの範囲に効く。
+  新しいscriptのlockが空のlockと同一であることが、最後の防御になる。

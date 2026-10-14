@@ -410,7 +410,6 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/metadata_patch_imports` | script | [LIB] メタデータのパッチのimportの読み取り |
-| `f/factory/lib/metadata_patch_lock` | script | [LIB] メタデータのパッチのlockの検査 |
 | `f/factory/lib/metadata_patch_yaml` | script | [LIB] メタデータのパッチのyamlの検査 |
 | `f/factory/lib/metadata_patch_zip` | script | [LIB] メタデータのパッチのzipの読み取り |
 | `f/factory/lib/metadata_patch_download` | script | [LIB] メタデータのパッチの取得 |

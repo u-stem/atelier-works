@@ -1,9 +1,0 @@
-summary: '[LIB] メタデータのパッチのlockの検査'
-description: 内部ライブラリです。直接実行するものではありません。CIが再生成したscriptのlockを構造として読み、許可したキーと値の形だけを通します。
-lock: '!inline f/factory/lib/metadata_patch_lock.script.lock'
-kind: script
-schema:
-  $schema: https://json-schema.org/draft/2020-12/schema
-  type: object
-  properties: {}
-  required: []

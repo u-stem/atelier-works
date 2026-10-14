@@ -32,7 +32,7 @@ function reason(schemaLines: readonly string[]): string {
   return result.ok ? "ok" : result.reason;
 }
 
-describe("checkScriptYaml rejects a schema that resolves values", () => {
+describe("checkScriptYaml rejects a schema outside the allowed characters", () => {
   test.each([
     [
       "a variable default",
@@ -47,16 +47,39 @@ describe("checkScriptYaml rejects a schema that resolves values", () => {
       ["  properties:", "    a:", '      default: "$res:u/x/y"'],
     ],
     [
+      "a quoted variable default with a path",
+      ["  properties:", "    a:", '      default: "$var:f/x"'],
+    ],
+    [
       "a single quoted variable default",
       ["  properties:", "    a:", "      default: '$var:u/x/y'"],
     ],
+    [
+      "a tagged variable default",
+      ["  properties:", "    a:", "      default: !!str $var:f/x"],
+    ],
+    [
+      "an anchored variable default",
+      ["  properties:", "    a:", "      default: &a $var:f/x"],
+    ],
+    ["an alias", ["  properties:", "    a:", "      default: *a"]],
     ["a list item", ["  enum:", "    - $var:u/x/y"]],
     ["a flow mapping", ["  properties: {a: {default: $var:u/x/y}}"]],
     ["a flow list", ["  enum: [$var:u/x/y]"]],
     ["a continued line", ["  description: >", "    text", "    $var:u/x/y"]],
+    ["a dollar sign inside a description", ["  description: costs 5$ or less"]],
+    [
+      "a tab before the value",
+      ["  properties:", "    a:", "      default:\t$res:x"],
+    ],
+    ["a tab anywhere", ["  description:\tplain"]],
+    ["a directive mark", ["  description: 50% done"]],
     ["an x-windmill key", ["  x-windmill-dyn-select: foo"]],
     ["a quoted x-windmill key", ['  "x-windmill-fileupload": true']],
     ["an upper case x-windmill key", ["  X-Windmill-Foo: 1"]],
+    ["an escaped hyphen in a key", ['  "x\\x2dwindmill-foo": 1']],
+    ["an escaped letter in a key", ['  "x-windmil\\u006c-foo": 1']],
+    ["a folded line break in a key", ['  "x-wind\\', '    mill-foo": 1']],
   ])("rejects %s", (_label, lines) => {
     expect(reason(lines)).toBe("unsafe_schema");
   });
@@ -65,14 +88,20 @@ describe("checkScriptYaml rejects a schema that resolves values", () => {
     expect(reason(["  type: object", "  properties: {}"])).toBe("ok");
   });
 
-  test("accepts a dollar sign inside a description", () => {
-    expect(reason(["  description: costs 5$ or less"])).toBe("ok");
+  test("rejects a second schema marker line with another value", () => {
+    expect(reason(["  $schema: https://example.com/schema"])).toBe(
+      "unsafe_schema",
+    );
   });
 
   test("accepts a default that is a plain string", () => {
     expect(reason(["  properties:", "    a:", "      default: hello"])).toBe(
       "ok",
     );
+  });
+
+  test("accepts Japanese text in a description", () => {
+    expect(reason(["  description: 日本語の説明、です。"])).toBe("ok");
   });
 });
 

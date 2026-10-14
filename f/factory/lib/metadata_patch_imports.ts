@@ -47,34 +47,58 @@ function endsWithWord(code: string, end: number, word: string): boolean {
   );
 }
 
+/** 指定子の書かれ方。`static`はimport文とexport from、`call`はimport()とrequire()。 */
+type SpecifierKind = "static" | "call";
+
 /** 文字列リテラルの直前が、import文かimport()かrequire()の指定子の位置か。 */
-function isSpecifierPosition(code: string, literalStart: number): boolean {
+function specifierKind(
+  code: string,
+  literalStart: number,
+): SpecifierKind | null {
   const end = skipSpaceBefore(code, literalStart);
   if (endsWithWord(code, end, "from") || endsWithWord(code, end, "import")) {
-    return true;
+    return "static";
   }
   if (code[end - 1] !== "(") {
-    return false;
+    return null;
   }
   const callee = skipSpaceBefore(code, end - 1);
-  return (
-    endsWithWord(code, callee, "import") ||
+  return endsWithWord(code, callee, "import") ||
     endsWithWord(code, callee, "require")
-  );
+    ? "call"
+    : null;
+}
+
+/** `start`以降の、空白でない最初の文字。 */
+function nextNonSpace(code: string, start: number): string | undefined {
+  let index = start;
+  while (index < code.length && isSpace(code[index])) {
+    index += 1;
+  }
+  return code[index];
 }
 
 /**
  * ソースのimportの指定子を読む。
  * 文字列リテラルのうち、`from`、`import`、`import(`、`require(`の直後にあるものを指定子とする。
+ * 呼び出しの形では、リテラルの次が`)`か`,`でなければ、文字列の連結などで指定子を作っているので、追えないものとする。
  * コメントと文字列の中の同じ形も拾うので、集合は実際より広くなりうる。
  */
 export function scanImports(code: string): ImportScan {
   const relative: string[] = [];
   const bare: string[] = [];
+  let untraceable = false;
   for (const match of code.matchAll(LITERAL)) {
     const specifier = match[2] ?? "";
-    if (!isSpecifierPosition(code, match.index)) {
+    const kind = specifierKind(code, match.index);
+    if (kind === null) {
       continue;
+    }
+    if (kind === "call") {
+      const next = nextNonSpace(code, match.index + match[0].length);
+      if (next !== ")" && next !== ",") {
+        untraceable = true;
+      }
     }
     if (specifier.startsWith("./") || specifier.startsWith("../")) {
       relative.push(specifier);
@@ -87,12 +111,13 @@ export function scanImports(code: string): ImportScan {
       bare.push(specifier);
     }
   }
-  let untraceable = false;
-  for (const match of code.matchAll(NON_LITERAL_CALL)) {
-    const next = match[1];
-    if (next !== undefined && next !== '"' && next !== "'") {
-      untraceable = true;
-      break;
+  if (!untraceable) {
+    for (const match of code.matchAll(NON_LITERAL_CALL)) {
+      const next = match[1];
+      if (next !== undefined && next !== '"' && next !== "'") {
+        untraceable = true;
+        break;
+      }
     }
   }
   return { relative, bare, untraceable };

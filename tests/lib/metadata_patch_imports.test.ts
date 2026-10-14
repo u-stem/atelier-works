@@ -73,8 +73,25 @@ describe("scanImports", () => {
     ["a template literal in import()", "await import(`./\x24{x}.ts`);"],
     ["a variable in require()", "const m = require(name);"],
     ["a call over lines", "await import(\n  name\n);"],
+    ["a concatenation after a literal", 'await import("a" + b);'],
+    ["a concatenation of a relative path", 'await import("./x" + n);'],
+    ["a method call on the literal", 'require("a".concat(b));'],
+    ["a conditional after the literal", 'await import("a" ? b : c);'],
   ])("marks %s as untraceable", (_label, code) => {
     expect(scanImports(code).untraceable).toBe(true);
+  });
+
+  test("does not mark a literal followed by an options argument", () => {
+    expect(
+      scanImports('await import("./a.ts", { with: { type: "json" } });')
+        .untraceable,
+    ).toBe(false);
+  });
+
+  test("does not mark a literal followed by a closing parenthesis and a call", () => {
+    expect(scanImports('(await import("./a.ts")).main();').untraceable).toBe(
+      false,
+    );
   });
 
   test("does not mark a method named require as untraceable", () => {

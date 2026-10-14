@@ -31,21 +31,26 @@ function hasForbiddenCharacter(text: string): boolean {
   return false;
 }
 
-// 実行者の権限で変数やリソースの値に解決される、`$var:`や`$res:`の形の値の先頭。
-// キーの先頭の`$schema`は、検査の前に取り除く。
+// wmillが`schema`の先頭に書く、JSON Schemaの版の行。`$`を含んでよい唯一の行である。
 const SCHEMA_MARKER_LINE =
-  /^ *\$schema: https:\/\/json-schema\.org\/draft\/2020-12\/schema *$/gm;
-const DOLLAR_VALUE = /(?:^ *|[:,[{] *|- +)["']?\$/m;
-const WINDMILL_EXTENSION = /x-windmill-/i;
+  "  $schema: https://json-schema.org/draft/2020-12/schema";
+// YAMLの復号を実装せずに値の意味を変えうる文字。エスケープ(`\`)、タグ(`!`)、アンカー(`&`)、
+// エイリアス(`*`)、ディレクティブ(`%`)、タブ、`$`(`$var:`や`$res:`は実行者の権限で解決される)。
+const RISKY_SCHEMA_CHARS = /[\\!&*%\t$]/;
+const WINDMILL_EXTENSION = /x-windmill/i;
 
 /**
- * `schema`の塊が、値の解決も拡張も含まないか。
- * `schema`はコードを動かさないが、`$`で始まる文字列の値は実行者の権限で解決され、
- * `x-windmill-`のキーはフォームの挙動を変える。
+ * `schema`の塊が、許可リストの範囲に収まるか。
+ * 既知の1行を除いて、復号の前に、値の意味を変えうる文字と`x-windmill`を含まないことを求める。
+ * `schema`はコードを動かさないが、`$`で始まる値は実行者の権限で解決され、
+ * `x-windmill`のキーはフォームの挙動を変える。
+ * エスケープやタグで綴りを変えられると正規表現では見分けられないので、それらの文字ごと拒む。
  */
 function isInertSchema(block: string): boolean {
-  const text = block.replace(SCHEMA_MARKER_LINE, "");
-  return !(DOLLAR_VALUE.test(text) || WINDMILL_EXTENSION.test(text));
+  const lines = block.split("\n");
+  const known = lines.indexOf(SCHEMA_MARKER_LINE);
+  const text = lines.filter((_line, index) => index !== known).join("\n");
+  return !(RISKY_SCHEMA_CHARS.test(text) || WINDMILL_EXTENSION.test(text));
 }
 
 export type BlocksResult =

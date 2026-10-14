@@ -8,7 +8,6 @@ import {
   type VerifyPorts,
   verifyMetadataPatch,
 } from "../../f/factory/lib/metadata_patch_verify.ts";
-import { buildLock } from "./metadata_patch_fixtures.ts";
 
 export const HEAD = "a".repeat(40);
 export const BASE = "b".repeat(40);
@@ -16,6 +15,18 @@ export const MERGE = "c".repeat(40);
 export const BASE_TIP = "d".repeat(40);
 export const HASH_OLD = "1".repeat(64);
 export const HASH_NEW = "2".repeat(64);
+
+/** 依存の無いlibのlockと同じ中身。baseの木にある正規の空lockとして使う。 */
+export const EMPTY_LOCK = '{\n  "dependencies": {}\n}\n//bun.lock\n<empty>';
+/** 正規の空lockを置くbaseの木のパス。 */
+export const EMPTY_LOCK_PATH =
+  "f/factory/lib/metadata_patch_manifest.script.lock";
+/** baseの木にある、依存を持つscriptのlock。 */
+export const LOCK =
+  '{\n  "dependencies": {\n    "left-pad": "1.3.0"\n  }\n}\n//bun.lock\n{"lockfileVersion": 2}';
+/** headの木にある、古いlock。 */
+export const STALE_LOCK =
+  '{\n  "dependencies": {\n    "left-pad": "1.2.0"\n  }\n}\n//bun.lock\n{"lockfileVersion": 2}';
 
 export const encoder = new TextEncoder();
 export const sha256 = (bytes: Uint8Array) =>
@@ -37,17 +48,12 @@ export const wmillLock = (hashes: Record<string, string>) =>
     .map(([key, hash]) => `  ${key}: ${hash}`)
     .join("\n")}\n`;
 
-export const OLD_LOCK = buildLock({ deps: { "left-pad": "1.3.0" } });
-export const NEW_LOCK = buildLock({
-  deps: { "left-pad": "1.4.0" },
-  packages: { "left-pad": { ident: "left-pad@1.4.0" } },
-});
-
 export type World = {
   config: VerifyConfig;
   run: RunFacts;
   pr: PrFacts;
   head: Map<string, string | Uint8Array>;
+  /** manifestの`baseSha`の木。 */
   base: Map<string, string | Uint8Array>;
   /** パッチに載せるファイル。キーはリポジトリ相対のパス。 */
   patch: Map<string, string | Uint8Array>;
@@ -58,20 +64,25 @@ export type World = {
   tamperArchive: (archive: Map<string, Uint8Array>) => void;
   isAncestor: (ancestor: string, descendant: string) => boolean | null;
   parents: readonly string[] | null;
-  age: (name: string, version: string) => number | null;
   /** 読み取りに失敗するbaseのパス。 */
   baseFailures: Set<string>;
+  /** baseの木の読み取りで渡されたcommit。 */
+  baseReads: string[];
+  /** 読み取りに失敗するheadのパス。 */
+  headFailures: Set<string>;
   /** ポートの一部を差し替える。 */
   ports: Partial<VerifyPorts>;
 };
 
-/** headはfoo.tsがlib/bar.tsをimportし、PRはbar.tsだけを変えた状態。パッチはfooのlock、yaml、ハッシュを直す。 */
+/**
+ * headはfoo.tsがlib/bar.tsをimportし、PRはfoo.tsとbar.tsを変えた状態。
+ * fooのlockはbaseの木では`LOCK`で、headでは古い。パッチはfooのlock(baseと同じ)、yaml、ハッシュを直す。
+ */
 export function world(): World {
   return {
     config: {
       repository: "acme/widgets",
       workflowPath: ".github/workflows/ci.yml",
-      minPublishedDays: 7,
     },
     run: {
       workflowPath: ".github/workflows/ci.yml",
@@ -93,13 +104,10 @@ export function world(): World {
       diffTruncated: false,
     },
     head: new Map<string, string | Uint8Array>([
-      [
-        "f/factory/foo.ts",
-        'import { x } from "./lib/bar.ts";\nimport pad from "left-pad@1.4.0";\n',
-      ],
+      ["f/factory/foo.ts", 'import { x } from "./lib/bar.ts";\n'],
       ["f/factory/lib/bar.ts", "export const x = 2;\n"],
       ["f/factory/other.ts", "export const y = 1;\n"],
-      ["f/factory/foo.script.lock", OLD_LOCK],
+      ["f/factory/foo.script.lock", STALE_LOCK],
       ["f/factory/foo.script.yaml", scriptYaml("foo")],
       [
         "wmill-lock.yaml",
@@ -107,15 +115,13 @@ export function world(): World {
       ],
     ]),
     base: new Map<string, string | Uint8Array>([
-      [
-        "f/factory/foo.ts",
-        'import { x } from "./lib/bar.ts";\nimport pad from "left-pad@1.3.0";\n',
-      ],
+      ["f/factory/foo.ts", 'import { x } from "./lib/bar.ts";\n'],
       ["f/factory/lib/bar.ts", "export const x = 1;\n"],
-      ["f/factory/foo.script.lock", OLD_LOCK],
+      ["f/factory/foo.script.lock", LOCK],
+      [EMPTY_LOCK_PATH, EMPTY_LOCK],
     ]),
     patch: new Map<string, string | Uint8Array>([
-      ["f/factory/foo.script.lock", NEW_LOCK],
+      ["f/factory/foo.script.lock", LOCK],
       ["f/factory/foo.script.yaml", scriptYaml("foo", "string")],
       [
         "wmill-lock.yaml",
@@ -127,10 +133,23 @@ export function world(): World {
     tamperArchive: () => {},
     isAncestor: () => true,
     parents: [BASE, HEAD],
-    age: () => 30,
     baseFailures: new Set(),
+    baseReads: [],
+    headFailures: new Set(),
     ports: {},
   };
+}
+
+/** baseとheadの両方に、lockを持つ既存のscriptを足す。headのlockは古い。 */
+export function addExistingScript(
+  w: World,
+  name: string,
+  source: string,
+): void {
+  w.head.set(`f/factory/${name}.ts`, source);
+  w.base.set(`f/factory/${name}.ts`, source);
+  w.head.set(`f/factory/${name}.script.lock`, STALE_LOCK);
+  w.base.set(`f/factory/${name}.script.lock`, LOCK);
 }
 
 export const bytes = (value: string | Uint8Array): Uint8Array =>
@@ -166,11 +185,17 @@ export function build(w: World) {
     readCommitParents: async () => w.parents,
     listHeadSources: async () =>
       [...w.head.keys()].filter((path) => path.endsWith(".ts")),
-    readHeadFile: async (path) => {
+    readHeadFile: async (path): Promise<FileRead> => {
+      if (w.headFailures.has(path)) {
+        return { kind: "failed" };
+      }
       const value = w.head.get(path);
-      return value === undefined ? null : bytes(value);
+      return value === undefined
+        ? { kind: "missing" }
+        : { kind: "found", content: bytes(value) };
     },
-    readBaseFile: async (path): Promise<FileRead> => {
+    readBaseFile: async (sha, path): Promise<FileRead> => {
+      w.baseReads.push(sha);
       if (w.baseFailures.has(path)) {
         return { kind: "failed" };
       }
@@ -179,7 +204,6 @@ export function build(w: World) {
         ? { kind: "missing" }
         : { kind: "found", content: bytes(value) };
     },
-    publishedAgeDays: async (name, version) => w.age(name, version),
     ...w.ports,
   };
   return { input: { config: w.config, run: w.run, pr: w.pr, archive }, ports };

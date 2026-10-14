@@ -737,14 +737,14 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
-- CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の7つと、それぞれの`.script.yaml`、`.script.lock`
+- CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`、`.script.lock`
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。
 固定を書き換えるPRを作る側は、書き換えられると、人の確認なしに別の版や取得元を固定するPRを作れる。
 固定を強制する側のスクリプトは、書き換えられると、検査をすり抜けた内容が配信物に混ざる。
 `scripts/ci-scope.ts`は、書き換えられると、検査のジョブを黙って飛ばせる。
-`f/factory/lib/metadata_patch_*.ts`は、パッチに載せてよいパス、manifestの形、zipの読み方、lockとyamlの許可するキー、適用の条件を決める。
+`f/factory/lib/metadata_patch_*.ts`は、パッチの取得先とトークンの渡し先、zipの読み方、パッチに載せてよい内容を決める。
 書き換えられると、パッチの受け取り側の検査が緩む。
 `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
 `infra/console_fetcher/`は、配信物を検証して配信する。
