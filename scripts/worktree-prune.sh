@@ -11,18 +11,25 @@
 #   - このスクリプトを実行したディレクトリが、その中ではない。
 #   - HEADがブランチを指している(detachedは残す)。
 #   - 作業ツリーに変更も未追跡のファイルも無い。
-#   - 無視されたファイルが、node_modulesと`.wmill`以外に無い。`git worktree remove`は無視された
+#   - 無視されたファイルが、再生成できるもの(node_modules、`.wmill`のリンク、`console/dist/`、
+#     `console/.cache/`、`__pycache__/`、`.DS_Store`)以外に無い。`git worktree remove`は無視された
 #     ファイルを黙って消すので、秘密値のローカルファイルなどを守るために残す(`ignored files`)。
 #   - 使用中に見えない。使用中のworktreeはロックされるとは限らないため、ロックに頼らず、次の2つで調べる。
 #       `recent`: node_modulesと`.git`を除くファイルが、直近N分(既定120)以内に更新されている。
 #       `in use`: いずれかのプロセスのcwdがその中にある(`lsof`で調べる)。
-#     `lsof`が無い環境では`in use`の判定を飛ばし、`recent`だけで守る。
+#     `lsof`が無い環境や、出力が空の環境では`in use`の判定を飛ばし、`recent`だけで守る。
+#     `in use`はcwdを持つプロセスだけを見るので、エディタで開いているだけのworktreeは検出できない。
 #   - ブランチの先頭が、`origin/main`の祖先か、ベースが`main`のマージ済みPRの先頭のcommitと同じである。
 #     後者はsquashマージに当たる。ローカルにpushしていないcommitがあれば一致しないので残る。
 #     ghの失敗や認証切れは、未マージとして残す。
 #   - 祖先の場合は、ブランチのreflogにcommitの記録もあるときに限る。作ったまま使っていない
 #     ブランチ(`unused`)は、origin/mainが進むと祖先に見えるため、残す。ただし、作ってから
 #     24時間以上、ファイルの更新も無いものは、放置されたもの(`abandoned`)として消す。
+#     `abandoned`は起点がorigin/mainの祖先でなくてもよい。独自のcommitが無いので何も失わない。
+#   - ブランチのreflogと、worktreeのHEADのreflogにあるすべてのcommitが、消してよい根拠の先から
+#     到達できる(`reflog has unreachable commits`)。根拠の先は、祖先ならorigin/main、PRの一致と
+#     `abandoned`ならブランチの先頭である。`git reset --hard`で外したcommitは、削除でreflogごと
+#     失われるので、残す。reflogが読めないときも残す。
 #     WorktreeRemoveフックを持たないので、subagentが作ったworktreeが溜まり続けるのを防ぐ。
 #     この24時間は`--min-idle-minutes`と別に固定する。短くすると、作った直後の
 #     worktreeを使い始める前に消してしまうおそれがあるため。
@@ -85,6 +92,11 @@ have_lsof=0
 if command -v lsof >/dev/null 2>&1; then
   have_lsof=1
   cwd_list="$(lsof -a -d cwd -Fn 2>/dev/null)" || true
+  # 自分自身のcwdが必ず出るので、空なら失敗とみなす。空のまま照合すると、何も使われていないことになる。
+  if [ -z "$cwd_list" ]; then
+    have_lsof=0
+    echo "worktree-prune: warning: lsof returned nothing; skipped the in use check" >&2
+  fi
 fi
 
 removed=0
@@ -116,6 +128,20 @@ has_process_inside() {
   return 1
 }
 
+# ブランチのreflogと、worktreeのHEADのreflogにあるすべてのcommitが、`$1`から到達できれば0を返す。
+# `git reset --hard`で外したcommitは、worktreeとブランチの削除でreflogごと失われるため、
+# 到達できないcommitがあれば消さない。reflogが読めないときも同じ。
+reflogs_reachable() {
+  local target="$1" branch_log head_log sha
+  branch_log="$(git reflog show --format=%H "refs/heads/$wt_branch" 2>/dev/null)" || return 1
+  head_log="$(git -C "$wt_path" reflog show --format=%H HEAD 2>/dev/null)" || return 1
+  [ -n "$branch_log" ] && [ -n "$head_log" ] || return 1
+  while IFS= read -r sha; do
+    git merge-base --is-ancestor "$sha" "$target" 2>/dev/null || return 1
+  done <<<"$branch_log"$'\n'"$head_log"
+  return 0
+}
+
 # `wt_*`の変数に入れた1件のworktreeを判定し、消せるものは消す(または予定を表示する)。
 consider() {
   if [[ "$wt_path/" != "$scope"* ]]; then
@@ -139,17 +165,24 @@ consider() {
     return
   fi
 
-  # 変更と未追跡のファイルは`dirty`、node_modulesと`.wmill`以外の無視されたファイルは
-  # `ignored files`として残す。
+  # 変更と未追跡のファイルは`dirty`、再生成できるもの以外の無視されたファイルは
+  # `ignored files`として残す。再生成できるものは、node_modules、`.wmill`のリンク、
+  # `console/dist/`、`console/.cache/`、`__pycache__/`、`.DS_Store`である。
+  # `.wmill`は実体のディレクトリを許さない。ログインの情報が入りうるため。
+  # 利用者の`status.showUntrackedFiles=no`で未追跡のファイルが隠れないよう、明示する。
   local status_out status_line dirty=0 ignored=0
-  if ! status_out="$(git -C "$wt_path" status --porcelain --ignored)"; then
+  if ! status_out="$(git -C "$wt_path" status --porcelain --ignored --untracked-files=all)"; then
     keep "dirty"
     return
   fi
   while IFS= read -r status_line; do
     case "$status_line" in
       "") ;;
-      "!! node_modules/" | "!! "*"/node_modules/" | "!! .wmill" | "!! .wmill/") ;;
+      "!! node_modules/"* | "!! "*"/node_modules/"*) ;;
+      "!! .wmill") ;;
+      "!! console/dist/"* | "!! console/.cache/"*) ;;
+      "!! __pycache__/"* | "!! "*"/__pycache__/"*) ;;
+      "!! .DS_Store" | "!! "*"/.DS_Store") ;;
       "!! "*) ignored=1 ;;
       *) dirty=1 ;;
     esac
@@ -172,38 +205,39 @@ consider() {
     return
   fi
 
-  local how=""
-  if git merge-base --is-ancestor "$wt_head" refs/remotes/origin/main 2>/dev/null; then
-    # reflogが作成の記録だけ(または読めない)なら、commitがあった証拠が無い。
-    local reflog_out="" reflog_lines=0 reflog_line first_sha="" first_time=""
-    reflog_out="$(git reflog show --date=unix --format='%H %gd' "refs/heads/$wt_branch" 2>/dev/null)" || reflog_out=""
-    if [ -n "$reflog_out" ]; then
-      while IFS= read -r reflog_line; do
-        if [ "$reflog_lines" -eq 0 ]; then
-          first_sha="${reflog_line%% *}"
-          first_time="${reflog_line##*@\{}"
-          first_time="${first_time%\}}"
-        fi
-        reflog_lines=$((reflog_lines + 1))
-      done <<<"$reflog_out"
-    fi
-    if [ "$reflog_lines" -ge 2 ]; then
-      how="ancestor of origin/main"
-    else
-      # 作ったまま使っていない。reflogの時刻が読めて、放置とみなす時間を過ぎ、
-      # ファイルの更新も無いときだけ消す。
-      local now
-      now="$(date +%s)"
-      if [ "$reflog_lines" -eq 1 ] && [ "$first_sha" = "$wt_head" ] \
-        && [[ "$first_time" =~ ^[0-9]+$ ]] \
-        && [ $((now - first_time)) -ge $((abandoned_minutes * 60)) ] \
-        && ! has_recent_file "$wt_path" "$abandoned_minutes"; then
-        how="abandoned"
-      else
-        keep "unused"
-        return
+  # ブランチのreflogの行数と、先頭の記録のshaと時刻。
+  # reflogが作成の記録だけ(または読めない)なら、commitがあった証拠が無い。
+  local reflog_out="" reflog_lines=0 reflog_line first_sha="" first_time=""
+  reflog_out="$(git reflog show --date=unix --format='%H %gd' "refs/heads/$wt_branch" 2>/dev/null)" || reflog_out=""
+  if [ -n "$reflog_out" ]; then
+    while IFS= read -r reflog_line; do
+      if [ "$reflog_lines" -eq 0 ]; then
+        first_sha="${reflog_line%% *}"
+        first_time="${reflog_line##*@\{}"
+        first_time="${first_time%\}}"
       fi
+      reflog_lines=$((reflog_lines + 1))
+    done <<<"$reflog_out"
+  fi
+
+  # 消してよい根拠ごとに、reflogのすべてのcommitが到達できなければならない先(`reach_target`)が違う。
+  local how="" reach_target="" now
+  now="$(date +%s)"
+  if [ "$reflog_lines" -eq 1 ] && [ "$first_sha" = "$wt_head" ] \
+    && [[ "$first_time" =~ ^[0-9]+$ ]] \
+    && [ $((now - first_time)) -ge $((abandoned_minutes * 60)) ] \
+    && ! has_recent_file "$wt_path" "$abandoned_minutes"; then
+    # 作ったまま使っていない。ブランチに独自のcommitが無いので、起点が
+    # origin/mainの祖先でなくても(機能ブランチから作った場合など)、何も失わない。
+    how="abandoned"
+    reach_target="$wt_head"
+  elif git merge-base --is-ancestor "$wt_head" refs/remotes/origin/main 2>/dev/null; then
+    if [ "$reflog_lines" -lt 2 ]; then
+      keep "unused"
+      return
     fi
+    how="ancestor of origin/main"
+    reach_target="refs/remotes/origin/main"
   else
     local gh_status=0 gh_out=""
     gh_out="$(gh pr list --head "$wt_branch" --base main --state merged --json headRefOid --jq '.[].headRefOid' 2>/dev/null)" || gh_status=$?
@@ -221,6 +255,13 @@ consider() {
       keep "unmerged"
       return
     fi
+    # PRの先頭とブランチの先頭が一致済みなので、ローカルの先頭から到達できればよい。
+    reach_target="$wt_head"
+  fi
+
+  if ! reflogs_reachable "$reach_target"; then
+    keep "reflog has unreachable commits"
+    return
   fi
 
   if [ "$apply" -ne 1 ]; then

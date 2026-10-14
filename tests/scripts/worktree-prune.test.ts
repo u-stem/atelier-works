@@ -195,7 +195,7 @@ describe("worktree-prune.sh", () => {
     writeFileSync(join(mainDir, "README.md"), "x\n");
     writeFileSync(
       join(mainDir, ".gitignore"),
-      "node_modules/\n.claude/\n.wmill\n*.local.*\n",
+      "node_modules/\n.claude/\n.wmill\n*.local.*\nconsole/dist/\nconsole/.cache/\n__pycache__/\n.DS_Store\n",
     );
     mkdirSync(join(mainDir, "console"));
     writeFileSync(join(mainDir, "console", "package.json"), "{}\n");
@@ -504,6 +504,171 @@ describe("worktree-prune.sh", () => {
     });
   });
 
+  describe("a worktree whose reflog holds commits that reset dropped", () => {
+    test("is kept even though its tip is an ancestor of origin/main", () => {
+      const path = addWorktree("fix-reset", "fix/reset");
+      commitIn(path);
+      commitIn(path);
+      git(path, ["reset", "--quiet", "--hard", "origin/main"]);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (fix/reset): reflog has unreachable commits`,
+      );
+    });
+
+    test("is not removed with --apply", () => {
+      const path = addWorktree("fix-reset", "fix/reset");
+      commitIn(path);
+      git(path, ["reset", "--quiet", "--hard", "origin/main"]);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("is kept on the squash route when the reset dropped a commit", () => {
+      const path = addWorktree("fix-squash-reset", "fix/squash-reset");
+      const kept = commitIn(path);
+      commitIn(path);
+      git(path, ["reset", "--quiet", "--hard", kept]);
+      writeGh(`echo ${kept}`);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (fix/squash-reset): reflog has unreachable commits`,
+      );
+    });
+
+    test("is removable when the reflog of HEAD is missing, since it records nothing to lose", () => {
+      const path = addMergedWorktree("fix-nolog", "fix/nolog");
+      rmSync(join(mainDir, ".git", "worktrees", "fix-nolog", "logs", "HEAD"));
+
+      const result = run();
+
+      expect(result.stdout).toContain(`would remove: ${path} (fix/nolog)`);
+    });
+  });
+
+  describe("ignored files", () => {
+    test("keeps a real .wmill directory", () => {
+      const path = addMergedWorktree("docs-wmill", "docs/wmill");
+      mkdirSync(join(path, ".wmill"));
+      writeFileSync(join(path, ".wmill", "token"), "t\n");
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/wmill): ignored files`,
+      );
+    });
+
+    test("does not delete the token of a real .wmill directory with --apply", () => {
+      const path = addMergedWorktree("docs-wmill", "docs/wmill");
+      mkdirSync(join(path, ".wmill"));
+      writeFileSync(join(path, ".wmill", "token"), "t\n");
+
+      run(["--apply"]);
+
+      expect(existsSync(join(path, ".wmill", "token"))).toBe(true);
+    });
+
+    test("removes a worktree that holds only regenerable files", () => {
+      const path = addMergedWorktree("docs-regen", "docs/regen");
+      for (const file of [
+        "console/dist/app.js",
+        "console/.cache/c.bin",
+        "__pycache__/m.pyc",
+        "console/__pycache__/n.pyc",
+        ".DS_Store",
+        "console/.DS_Store",
+      ]) {
+        mkdirSync(join(path, file, ".."), { recursive: true });
+        writeFileSync(join(path, file), "g\n");
+      }
+      ageFiles(path, 180);
+
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(false);
+    });
+
+    test("keeps a worktree with a local Claude settings file", () => {
+      const path = addMergedWorktree("docs-claude", "docs/claude");
+      mkdirSync(join(path, ".claude"));
+      writeFileSync(join(path, ".claude", "settings.local.json"), "{}\n");
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `kept: ${path} (docs/claude): ignored files`,
+      );
+    });
+
+    test("sees an untracked file although status.showUntrackedFiles is no", () => {
+      git(mainDir, ["config", "status.showUntrackedFiles", "no"]);
+      const path = addMergedWorktree("docs-untr", "docs/untr");
+      writeFileSync(join(path, "notes.txt"), "n\n");
+
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/untr): dirty`);
+    });
+  });
+
+  describe("an abandoned branch made from a feature branch", () => {
+    test("is removed although its base is not an ancestor of origin/main", () => {
+      const tree = git(mainDir, ["rev-parse", "origin/main^{tree}"]);
+      const featureTip = git(mainDir, [
+        "commit-tree",
+        tree,
+        "-p",
+        "origin/main",
+        "-m",
+        "feature",
+      ]);
+      git(mainDir, ["branch", "base-feature", featureTip]);
+      const path = worktreePath("docs-fb");
+      git(mainDir, [
+        "worktree",
+        "add",
+        "--quiet",
+        "-b",
+        "docs/fb",
+        path,
+        "base-feature",
+      ]);
+      ageFiles(path, 25 * 60);
+      ageReflog("docs/fb", 25 * 60);
+
+      const result = run();
+
+      expect(result.stdout).toContain(
+        `would remove: ${path} (docs/fb): abandoned`,
+      );
+    });
+  });
+
+  describe("when lsof returns nothing", () => {
+    test("warns that the in use check was skipped", () => {
+      writeLsof("");
+
+      const result = run();
+
+      expect(result.stderr).toContain("skipped the in use check");
+    });
+
+    test("does not warn when lsof returns the cwd of processes", () => {
+      writeLsof(`p1\nn${root}`);
+
+      const result = run();
+
+      expect(result.stderr).not.toContain("skipped the in use check");
+    });
+  });
+
   describe("removing the branch", () => {
     test("also removes the upstream settings of the branch", () => {
       addMergedWorktree("docs-up", "docs/up");
@@ -594,7 +759,14 @@ describe("worktree-prune.sh", () => {
     test("is kept as gh unavailable when gh is not installed", () => {
       // ghだけを含まないPATHを作る。
       rmSync(join(fakeBin, "gh"));
-      for (const tool of ["git", "basename", "dirname"]) {
+      for (const tool of [
+        "git",
+        "basename",
+        "dirname",
+        "date",
+        "find",
+        "cat",
+      ]) {
         symlinkSync(requireBin(tool), join(fakeBin, tool));
       }
       const result = Bun.spawnSync([BASH, SCRIPT], {
@@ -613,11 +785,19 @@ describe("worktree-prune.sh", () => {
       expect(existsSync(path)).toBe(true);
     });
 
-    test("keeps its branch when it moves on between the check and the removal", () => {
-      // ghの応答の後、worktreeの掃除の前にブランチが進む。
-      writeGh(
-        `echo ${tip}\ngit -C "${path}" commit --quiet --allow-empty --no-gpg-sign -m race`,
+    // 判定の後、worktreeを消す直前にブランチが進む。偽のgitが`worktree remove`の前にcommitする。
+    function installRacingGit(): void {
+      const realGit = Bun.which("git") ?? "git";
+      writeFileSync(
+        join(fakeBin, "git"),
+        `#!/usr/bin/env bash\nif [ "$1" = worktree ] && [ "$2" = remove ]; then "${realGit}" -C "${path}" commit --quiet --allow-empty --no-gpg-sign -m race; fi\nexec "${realGit}" "$@"\n`,
       );
+      chmodSync(join(fakeBin, "git"), 0o755);
+    }
+
+    test("keeps its branch when it moves on between the check and the removal", () => {
+      writeGh(`echo ${tip}`);
+      installRacingGit();
 
       run(["--apply"]);
 
@@ -625,9 +805,8 @@ describe("worktree-prune.sh", () => {
     });
 
     test("tells that the branch remains when it moves on", () => {
-      writeGh(
-        `echo ${tip}\ngit -C "${path}" commit --quiet --allow-empty --no-gpg-sign -m race`,
-      );
+      writeGh(`echo ${tip}`);
+      installRacingGit();
 
       const result = run(["--apply"]);
 
