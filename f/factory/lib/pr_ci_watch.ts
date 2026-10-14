@@ -2,11 +2,14 @@
 // 発見(Factoryが作ったPRの今のheadを記録し、古いheadの行を整理する)の後に、
 // 判定(判定待ち、失敗、実行なしの行を読み直して確定する)を行う。
 // 失敗は通知し、通ったheadはそのPRの失敗の通知を解決し、閉じたPRの行は整理する。
-// 発見と判定の間に、回復(失敗を直す作業項目が終わった`fixing`の行を戻す)を行う。回復は監視の設定に依らず動き、
-// 作業項目の起動はしない(`runPrCiRecovery`)。
-// 判定の後に、起動(失敗した行を直す作業項目を起動する)を行う。起動は`deps.claim`を渡したときだけ動く。
-// 起動してよいかの判断は`pr_ci_fix_claim.ts`にあり、ここは読み取りと書き込みの順序を受け持つ。
-// 失敗の通知は起動と独立に、従来どおりすぐ出す。
+// 発見と判定の間に、回復(失敗を直す作業項目が終わった`fixing`の行を戻す)を行う。
+// 判定の後に、起動(失敗した行を直す作業項目を起動する)を行い、最後に保留した失敗の通知(`notifyDeferred`)を行う。
+// 起動は`deps.claim`を渡したときだけ動く。起動してよいかの判断は`pr_ci_fix_claim.ts`にあり、
+// ここは読み取りと書き込みの順序を受け持つ。
+// 回復と保留した通知は監視の設定に依らず動き、作業項目の起動はしない(`runPrCiRecovery`)。
+// 保留した通知を最後に置くのは、同じ回の判定と起動が書いた状態を見て、通知するかを決めるためである。
+// 自動で直す対象の失敗は、確定した時点では通知せず、直せるかが決まるたびに`notifyDeferred`が通知する。同じ状態では重ねない。
+// 通知する時機の判断は`pr_ci_notify.ts`にある。それ以外の失敗は、確定した時点ですぐ通知する。
 // GitHub、DB、Discordの呼び出しは`PrCiWatchDeps`で渡し、テストで差し替える。
 // 外部の文字列(workflow名、実行の結論、ログ)は、通知の本文にもDiscordにも載せない。
 // 要約(`summary`列)にだけ、検証・整形した名前を残す。
@@ -44,6 +47,11 @@ import {
   type FixItemState,
 } from "./pr_ci_fix_recovery.ts";
 import {
+  decideDeferredNotice,
+  defersFailureNotice,
+  type PrCiNotifyPolicy,
+} from "./pr_ci_notify.ts";
+import {
   classifyPrCiReason,
   decidePrCiFailed,
   decidePrCiPending,
@@ -57,6 +65,7 @@ import {
   planPrHead,
   prCiFailedNoticeMessage,
   prCiFailureLink,
+  prCiFixHoldInfo,
   prCiNextAction,
   prCiNoticePrefix,
   prCiSummary,
@@ -99,6 +108,9 @@ export const ORPHAN_FIXING_BATCH_LIMIT = 50;
 
 /** 1回の実行で起動の候補にする、失敗の行の最大の数。 */
 export const CLAIM_BATCH_LIMIT = 50;
+
+/** 1回の実行で、保留した失敗の通知を判断する行の最大の数。 */
+export const DEFERRED_NOTICE_BATCH_LIMIT = 200;
 
 /**
  * 1回の実行で起動する行の最大の数。
@@ -246,11 +258,13 @@ export type PrCiClaimDeps = {
   /**
    * 保留の理由を書く。`null`で外す。書いたら`true`。
    * `expected`は、書く前の理由(`null`は保留なし)。いまの理由がこれと違う行は書き換えない。
+   * `resetNotified`が真なら、通知した理由を同時に空に戻す。
    */
   readonly setHold: (
     id: number,
     reason: PrCiFixHoldReason | null,
     expected: string | null,
+    resetNotified: boolean,
   ) => Promise<boolean>;
   /** 行を`fixing`に移して作業項目を挿入する(`claimPrCiCheckForFix`)。起動できなければ`null`。 */
   readonly claim: (input: ClaimPrCiCheckInput) => Promise<number | null>;
@@ -265,6 +279,11 @@ export type PrCiClaimDeps = {
 export type PrCiWatchDeps = {
   /** 渡したときだけ、判定の後に失敗した行の起動を行う。 */
   readonly claim?: PrCiClaimDeps;
+  /**
+   * 失敗の通知を保留するかと、保留した通知を出す時機を決める設定。
+   * 自動修正が無効なら、失敗は確定した時点で通知する。
+   */
+  readonly notifyPolicy: PrCiNotifyPolicy;
   readonly now: () => Date;
   readonly log: Logger;
   readonly instanceName: string;
@@ -308,12 +327,15 @@ export type PrCiWatchDeps = {
   readonly listFixing: (limit: number) => Promise<PrCiCheck[]>;
   /** 直す作業項目に結ばれていない修正中の行を返す(`findOrphanFixingPrCiChecks`)。 */
   readonly listOrphanFixing: (limit: number) => Promise<PrCiCheck[]>;
+  /** 失敗に確定して、まだ通知していない行を返す(`listUnnotifiedFailedPrCiChecks`)。 */
+  readonly listUnnotifiedFailed: (limit: number) => Promise<PrCiCheck[]>;
   /** 直す作業項目の状態を返す。作業項目が無ければ`null`。 */
   readonly readFixItem: (workItemId: number) => Promise<FixItemState | null>;
   /**
    * 修正中の行を`failed`に戻す。この呼び出しで戻したら`true`。
    * `fixWorkItemId`を渡せば、その作業項目に結ばれた行だけを戻す。
    * `withoutFixWorkItem`を渡せば、作業項目に結ばれていない行だけを戻す。
+   * `resetNotified`を渡せば、通知した理由を空に戻す。
    */
   readonly release: (
     id: number,
@@ -321,6 +343,7 @@ export type PrCiWatchDeps = {
       readonly holdReason?: PrCiFixHoldReason;
       readonly fixWorkItemId?: number;
       readonly withoutFixWorkItem?: boolean;
+      readonly resetNotified?: boolean;
     },
   ) => Promise<boolean>;
   /** 条件付きの更新。この呼び出しで移したら`true`。 */
@@ -360,6 +383,8 @@ export type PrCiWatchResult = {
   readonly claimed: number;
   /** 起動せず、保留の理由を書いた(変えた)行の数。 */
   readonly held: number;
+  /** 保留していた失敗を、状態を見て通知した行の数。 */
+  readonly notified: number;
   /** 実行かPRを読む権限が無かったリポジトリの数。 */
   readonly denied: number;
   /** 例外で処理できなかった数。 */
@@ -378,6 +403,7 @@ export const PR_CI_WATCH_IDLE_RESULT: PrCiWatchResult = {
   released: 0,
   claimed: 0,
   held: 0,
+  notified: 0,
   denied: 0,
   errors: 0,
 };
@@ -502,13 +528,15 @@ export async function runPrCiWatch(
   await recoverFixing(context);
   await recheck(context);
   await claimFixes(context);
+  await notifyDeferred(context);
   return context.counters;
 }
 
 /**
- * 回復だけを行う。監視を無効にしている間も、修正中の行を放置しないために使う。
- * 発見も判定も失敗の通知もしない。作業項目の起動もしない。
- * 権限の不足(403、404)で読めないときだけ、`pr_ci_check_denied`の通知を足しうる。解決は判定が行う。
+ * 回復と、保留した失敗の通知だけを行う。監視を無効にしている間も、修正中の行を放置せず、
+ * 保留した通知を取りこぼさないために使う。
+ * 発見も判定もしない。作業項目の起動もしない。保留した通知はDBだけを読み、GitHubを読まない。
+ * 回復がPRを読めず403か404になったときだけ、`pr_ci_check_denied`の通知を足しうる。解決は判定が行う。
  * 戻す行のPRが閉じていたときだけ、閉じたPRの整理(`closePr`)を行う。失敗のnoticeの解決と、
  * そのPRの未完了の行を`superseded`にすることを含む。
  */
@@ -517,6 +545,7 @@ export async function runPrCiRecovery(
 ): Promise<PrCiWatchResult> {
   const context = newContext(deps);
   await recoverFixing(context);
+  await notifyDeferred(context);
   return context.counters;
 }
 
@@ -835,6 +864,14 @@ async function recoverFixing(context: Context): Promise<void> {
   }
 }
 
+/**
+ * 解けるのを待たない保留か。この保留を書く行は、先に出した「待つ」の通知の後でも、
+ * 改めて「人が直す」と通知する必要があるので、通知した理由を空に戻す。
+ */
+function isDeterministicHold(reason: PrCiFixHoldReason): boolean {
+  return !prCiFixHoldInfo(reason).temporary;
+}
+
 async function recoverRow(context: Context, row: PrCiCheck): Promise<void> {
   const { deps, counters } = context;
   const ref = rowRef(row);
@@ -866,6 +903,9 @@ async function recoverRow(context: Context, row: PrCiCheck): Promise<void> {
   }
   const released = await deps.release(row.id, {
     ...(decision.hold === null ? {} : { holdReason: decision.hold }),
+    ...(decision.hold !== null && isDeterministicHold(decision.hold)
+      ? { resetNotified: true }
+      : {}),
     ...(row.fix_work_item_id === null
       ? { withoutFixWorkItem: true }
       : { fixWorkItemId: row.fix_work_item_id }),
@@ -1306,6 +1346,29 @@ async function settleFailed(
     return;
   }
   const reason = classifyPrCiReason(runs);
+  if (
+    defersFailureNotice({
+      reason,
+      firstSeenAt: row.first_seen_at,
+      policy: deps.notifyPolicy,
+    })
+  ) {
+    // 自動で直す対象の失敗は、状態だけを`failed`にする。通知は、直せるかが決まってから`notifyDeferred`が出す。
+    const moved = await deps.transition(row.id, row.state, {
+      state: "failed",
+      summary: prCiSummary(runs),
+      ...extra,
+    });
+    if (!moved) return;
+    counters.failed += 1;
+    deps.log.warn("pr ci failed; the notice is held for the automatic fix", {
+      repo: repoKey(ref),
+      pr: ref.number,
+      sha: row.head_sha,
+      reason,
+    });
+    return;
+  }
   const link = prCiFailureLink({
     owner: ref.owner,
     repo: ref.repo,
@@ -1357,6 +1420,125 @@ async function settleFailed(
     pr: ref.number,
     sha: row.head_sha,
     reason,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 保留した失敗の通知
+// ---------------------------------------------------------------------------
+
+/**
+ * 失敗に確定して、まだ通知していない行のうち、いま通知してよいものを通知する。
+ * 行の今の状態だけで決める(`decideDeferredNotice`)。設定やGitHubの読み取りの結果に頼らないので、
+ * 監視が無効でも、予算が尽きても動く。
+ * 通知の登録、Discord、通知した理由の記録の順に行う。登録が先なのは、記録が先に成功して登録が失敗すると、
+ * 通知が永久に出ないためである。記録に失敗した回は、次の回に同じ手順をやり直し、重複は通知の索引が防ぐ。
+ * 1回の実行で最初の1件は、予算を見ずに通知する。予算切れが続いても、通知が飢えないためである。
+ */
+async function notifyDeferred(context: Context): Promise<void> {
+  const { deps } = context;
+  let rows: PrCiCheck[];
+  try {
+    rows = await deps.listUnnotifiedFailed(DEFERRED_NOTICE_BATCH_LIMIT);
+  } catch (err) {
+    await recordFailureOf(context, "list_unnotified", err);
+    return;
+  }
+  let started = 0;
+  for (const [index, row] of rows.entries()) {
+    // 通知した理由コードが空でない行は、確定した時点で通知した行である。
+    // `ci_other_conclusion`で通知した行を、`ci_failure`として通知し直さないために除く。
+    // 一覧のSQLも同じ条件で絞るので、ここは一覧の契約が崩れたときの二重の防御である。
+    if (
+      row.notified_reason !== null ||
+      !deps.isRepoConfigured(row.owner, row.repo)
+    ) {
+      continue;
+    }
+    const decision = decideDeferredNotice({
+      row: {
+        fixHoldReason: row.fix_hold_reason,
+        firstSeenAt: row.first_seen_at,
+        updatedAt: row.updated_at,
+      },
+      policy: deps.notifyPolicy,
+      now: context.now,
+    });
+    if (decision.kind === "wait") continue;
+    if (started > 0 && overBudget(context)) {
+      deps.log.warn("pr ci deferred notices stopped by the time budget", {
+        left: rows.length - index,
+      });
+      break;
+    }
+    started += 1;
+    try {
+      await sendDeferredNotice(context, row, decision.hold, decision.discord);
+    } catch (err) {
+      await recordFailureOf(
+        context,
+        `notify_deferred:${prKey(rowRef(row))}`,
+        err,
+      );
+    }
+  }
+}
+
+async function sendDeferredNotice(
+  context: Context,
+  row: PrCiCheck,
+  hold: PrCiFixHoldReason | null,
+  discord: boolean,
+): Promise<void> {
+  const { deps, counters } = context;
+  const ref = rowRef(row);
+  const link = pullRequestPageUrl(ref.owner, ref.repo, ref.number);
+  // 通知を遅らせるのは、`ci_failure`の行だけである(`defersFailureNotice`)。
+  // `ci_other_conclusion`の行は確定した時点で通知し、理由コードを記録するので、通常はここに来ない。
+  // 確定時の記録だけが失敗した行は来うる。その限界は`docs/internals/pr-ci.md`に書いてある。
+  // 理由コードを行から読み直さず固定するのは、この前提に立つためである。
+  const reason = "ci_failure";
+  const message = prCiFailedNoticeMessage({
+    owner: ref.owner,
+    repo: ref.repo,
+    prNumber: ref.number,
+    headSha: row.head_sha,
+    link,
+    reason,
+    ...(hold === null ? {} : { hold }),
+  });
+  const noticeId = await deps.addNotice({ kind: PR_CI_FAILED_KIND, message });
+  if (noticeId !== null && discord) {
+    const sent = await deps.notify({
+      kind: "needs_human",
+      instance_name: deps.instanceName,
+      owner: ref.owner,
+      repo: ref.repo,
+      url: link,
+      reason: hold === null ? reason : `${reason}(自動修正の保留: ${hold})`,
+      target: { kind: "pr", number: ref.number },
+      next_action:
+        hold === null
+          ? prCiNextAction(reason)
+          : prCiFixHoldInfo(hold).nextAction,
+    });
+    if (sent.status === "not_sent") {
+      deps.log.warn("pr ci deferred notice was not delivered", {
+        repo: repoKey(ref),
+        pr: ref.number,
+        sha: row.head_sha,
+        notice_id: noticeId,
+        reason: sent.reason,
+      });
+    }
+  }
+  await deps.markNotified(row.id, reason);
+  counters.notified += 1;
+  deps.log.warn("pr ci failure notified after the automatic fix was decided", {
+    repo: repoKey(ref),
+    pr: ref.number,
+    sha: row.head_sha,
+    hold,
   });
 }
 
@@ -1582,7 +1764,16 @@ async function claimRow(
   }
   if (decision.kind === "hold") {
     if (row.fix_hold_reason !== decision.reason) {
-      if (await claim.setHold(row.id, decision.reason, row.fix_hold_reason)) {
+      if (
+        await claim.setHold(
+          row.id,
+          decision.reason,
+          row.fix_hold_reason,
+          // 確定時に「人が直す」と知らせた行は、同じ保留に着くだけなので戻さない。
+          isDeterministicHold(decision.reason) &&
+            row.notified_reason !== "ci_other_conclusion",
+        )
+      ) {
         counters.held += 1;
       }
     }
@@ -1593,7 +1784,7 @@ async function claimRow(
   // 読んだ後に別の実行が理由を書き換えていたら外せないので、その行は起動せず、次の回に判断し直す。
   if (
     row.fix_hold_reason !== null &&
-    !(await claim.setHold(row.id, null, row.fix_hold_reason))
+    !(await claim.setHold(row.id, null, row.fix_hold_reason, false))
   ) {
     await touchSafely(context, row);
     return;

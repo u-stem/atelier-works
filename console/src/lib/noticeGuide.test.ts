@@ -32,6 +32,22 @@ describe("noticeGuide", () => {
     expect(noticeGuide("pr_ci_failed").action).toContain("mise run metadata");
   });
 
+  test("tells that the pull request CI notice carries the reason the automatic fix was held", () => {
+    expect(noticeGuide("pr_ci_failed").meaning).toContain(
+      "自動修正の保留の理由",
+    );
+  });
+
+  test("tells to follow the next action of the hold reason when the notice has one", () => {
+    expect(noticeGuide("pr_ci_failed").action).toContain(
+      "保留の理由が載っていなければ",
+    );
+  });
+
+  test("tells that a failure the automatic fix repaired is not notified", () => {
+    expect(noticeGuide("pr_ci_failed").note).toContain("直せた失敗");
+  });
+
   test("tells which permission the denied pull request CI check needs", () => {
     expect(noticeGuide("pr_ci_check_denied").action).toContain("Actions: Read");
   });

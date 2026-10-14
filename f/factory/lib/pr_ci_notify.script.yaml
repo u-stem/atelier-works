@@ -1,0 +1,9 @@
+summary: '[LIB] 失敗の通知を出す時機の判断'
+description: 内部ライブラリです。直接実行するものではありません。自動で直す対象の失敗の通知を保留するか、保留した通知をいま出すかを決めます。
+lock: '!inline f/factory/lib/pr_ci_notify.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
