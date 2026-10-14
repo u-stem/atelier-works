@@ -9,8 +9,10 @@ import {
 import type { WorkerLoadSummary } from "../../f/factory/lib/worker_load_support.ts";
 import {
   assertAllDelivered,
+  CATCHUP_INTERVAL_MS,
   type DailySummaryResult,
   readWorkerLoad,
+  runDailySummary,
   type SummarizedDay,
   summarizePendingDays,
 } from "../../f/factory/notify_daily_summary.ts";
@@ -121,6 +123,7 @@ describe("summarizePendingDays", () => {
     const { log, lines } = captureLog();
     const summarized: string[] = [];
     const saved: string[] = [];
+    const sleeps: number[] = [];
     const run = () =>
       summarizePendingDays(planSummaryDays(options.lastDay, NOW), {
         summarizeDay: (range): Promise<SummarizedDay> => {
@@ -137,9 +140,13 @@ describe("summarizePendingDays", () => {
           saved.push(label);
           return Promise.resolve();
         },
+        sleep: (ms) => {
+          sleeps.push(ms);
+          return Promise.resolve();
+        },
         log,
       });
-    return { run, summarized, saved, lines };
+    return { run, summarized, saved, sleeps, lines };
   }
 
   test("summarizes the missed days from oldest to newest", async () => {
@@ -306,6 +313,51 @@ describe("summarizePendingDays", () => {
     expect(lines.join("\n")).toContain("later than yesterday");
   });
 
+  test("summarizes yesterday when the saved day is later than yesterday", async () => {
+    const { run, summarized } = setup({ lastDay: "2026-10-20" });
+    await run();
+    expect(summarized).toEqual(["2026-10-13"]);
+  });
+
+  test("overwrites the saved day when it is later than yesterday", async () => {
+    const { run, saved } = setup({ lastDay: "2026-10-20" });
+    await run();
+    expect(saved).toEqual(["2026-10-13"]);
+  });
+
+  test("waits between days of a catch-up", async () => {
+    const { run, sleeps } = setup({ lastDay: "2026-10-10" });
+    await run();
+    expect(sleeps).toEqual([CATCHUP_INTERVAL_MS, CATCHUP_INTERVAL_MS]);
+  });
+
+  test("does not wait when only one day is sent", async () => {
+    const { run, sleeps } = setup({ lastDay: "2026-10-12" });
+    await run();
+    expect(sleeps).toEqual([]);
+  });
+
+  test("does not wait after the day whose notification was not sent", async () => {
+    const { run, sleeps } = setup({
+      lastDay: "2026-10-10",
+      delivery: (range) =>
+        range.label === "2026-10-11"
+          ? { status: "not_sent", reason: "http 500" }
+          : SENT,
+    });
+    await run();
+    expect(sleeps).toEqual([]);
+  });
+
+  test("does not wait when no webhook is configured", async () => {
+    const { run, sleeps } = setup({
+      lastDay: "2026-10-10",
+      delivery: () => ({ status: "no_webhook" }),
+    });
+    await run();
+    expect(sleeps).toEqual([]);
+  });
+
   test("warns about the days skipped beyond the limit", async () => {
     const { run, lines } = setup({ lastDay: "2026-10-01" });
     await run();
@@ -316,5 +368,115 @@ describe("summarizePendingDays", () => {
     const { run, lines } = setup({ lastDay: "2026-10-10" });
     await run();
     expect(lines).toHaveLength(0);
+  });
+});
+
+describe("runDailySummary", () => {
+  const SENT: NotifyBestEffortResult = { status: "sent" };
+
+  function resultFor(range: DayRange): DailySummaryResult {
+    return {
+      day: range.label,
+      run_count: 0,
+      total_cost_usd: 0,
+      failure_count: 0,
+      approved_count: 0,
+      rejected_count: 0,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+    };
+  }
+
+  /** stateを1つの変数に保存する。実行をまたいで同じストアを使える。 */
+  function setup(options: {
+    state: unknown;
+    delivery?: (range: DayRange) => NotifyBestEffortResult;
+  }) {
+    const { log, lines } = captureLog();
+    const store = { value: options.state };
+    const summarized: string[] = [];
+    const run = (now: string) =>
+      runDailySummary({
+        getState: () => Promise.resolve(store.value),
+        setState: (state) => {
+          store.value = state;
+          return Promise.resolve();
+        },
+        summarizeDay: (range) => {
+          summarized.push(range.label);
+          return Promise.resolve({
+            result: resultFor(range),
+            delivery: options.delivery?.(range) ?? SENT,
+          });
+        },
+        sleep: () => Promise.resolve(),
+        now: () => new Date(now),
+        log,
+      });
+    return { run, store, summarized, lines };
+  }
+
+  const NOW = "2026-10-14T00:05:00Z";
+  const NEXT_DAY = "2026-10-15T00:05:00Z";
+
+  test("rejects when a notification was not sent", async () => {
+    const { run } = setup({
+      state: { last_day: "2026-10-12" },
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    await expect(run(NOW)).rejects.toThrow("not delivered");
+  });
+
+  test("keeps the state of the day whose notification was not sent", async () => {
+    const { run, store } = setup({
+      state: { last_day: "2026-10-12" },
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    await run(NOW).catch(() => undefined);
+    expect(store.value).toEqual({ last_day: "2026-10-12" });
+  });
+
+  test("starts the next run from the day after the saved one", async () => {
+    const { run, summarized } = setup({ state: null });
+    await run(NOW);
+    await run(NEXT_DAY);
+    expect(summarized).toEqual(["2026-10-13", "2026-10-14"]);
+  });
+
+  test("does not summarize the same day twice in the same day", async () => {
+    const { run, summarized } = setup({ state: null });
+    await run(NOW);
+    await run(NOW);
+    expect(summarized).toEqual(["2026-10-13"]);
+  });
+
+  test("saves the last summarized day", async () => {
+    const { run, store } = setup({ state: { last_day: "2026-10-10" } });
+    await run(NOW);
+    expect(store.value).toEqual({ last_day: "2026-10-13" });
+  });
+
+  test("warns when the saved state could not be read", async () => {
+    const { run, lines } = setup({ state: { last_day: "2026-02-30" } });
+    await run(NOW);
+    expect(lines.join("\n")).toContain("could not be read");
+  });
+
+  test("summarizes yesterday when the saved state could not be read", async () => {
+    const { run, summarized } = setup({ state: { last_day: "2026-02-30" } });
+    await run(NOW);
+    expect(summarized).toEqual(["2026-10-13"]);
+  });
+
+  test("does not warn about the initial empty state", async () => {
+    const { run, lines } = setup({ state: null });
+    await run(NOW);
+    expect(lines).toHaveLength(0);
+  });
+
+  test("repairs a saved day later than yesterday", async () => {
+    const { run, store } = setup({ state: { last_day: "2026-10-20" } });
+    await run(NOW);
+    expect(store.value).toEqual({ last_day: "2026-10-13" });
   });
 });

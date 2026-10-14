@@ -80,16 +80,33 @@ function parseDayLabel(label: string): number | null {
 /** 一度の実行で遡って出す日数の上限。 */
 export const MAX_CATCHUP_DAYS = 7;
 
+/** stateを読んだ結果。`unreadable`は、値があるのに解釈できなかったことを表す。 */
+export type SummaryStateReading = {
+  /** 最後に要約を出した日。記録が無い、または読めないときは`null`。 */
+  readonly last_day: string | null;
+  /** 初回ではない値が入っていたのに、解釈できなかったとき`true`。呼び出し側が警告に残す。 */
+  readonly unreadable: boolean;
+};
+
 /**
  * Windmillのstateに保存した、最後に要約を出した日(JSTの`YYYY-MM-DD`)を読む。
- * 形が違うもの(初回の`null`を含む)は、前回の記録が無いものとして`null`を返す。
+ * - 初回の空のstate(`null`、`undefined`、`last_day`の無いオブジェクト)は、記録なしとして`unreadable: false`で返す。
+ * - 値があるのに形が違うもの(実在しない日付を含む)は、記録なしと同じに扱いつつ`unreadable: true`で返す。
  */
-export function parseSummaryState(value: unknown): string | null {
+export function parseSummaryState(value: unknown): SummaryStateReading {
+  if (value === null || value === undefined) {
+    return { last_day: null, unreadable: false };
+  }
   if (!isRecord(value)) {
-    return null;
+    return { last_day: null, unreadable: true };
   }
   const lastDay = value.last_day;
-  return isString(lastDay) && parseDayLabel(lastDay) !== null ? lastDay : null;
+  if (lastDay === undefined || lastDay === null) {
+    return { last_day: null, unreadable: false };
+  }
+  return isString(lastDay) && parseDayLabel(lastDay) !== null
+    ? { last_day: lastDay, unreadable: false }
+    : { last_day: null, unreadable: true };
 }
 
 export type SummaryPlan = {
@@ -99,7 +116,7 @@ export type SummaryPlan = {
   readonly skipped_count: number;
   /**
    * 最後に出した日が前日より後(時計のずれなど)のとき、その日。
-   * 出す日が無いまま、実際の日付が追い付くまで要約が止まるので、呼び出し側が警告に残す。
+   * 記録なしと同じに扱って前日を出し、stateを上書きして直す。呼び出し側が警告に残す。
    */
   readonly future_last_day: string | null;
 };
@@ -108,8 +125,8 @@ export type SummaryPlan = {
  * 最後に要約を出した日`lastDay`の翌日から`now`の前日までを、古い順に並べる。
  * - `lastDay`が`null`(初回、または読めない値)のときは、前日だけを出し、過去を遡らない。
  * - `lastDay`が前日のときは、出す日が無い。
- * - `lastDay`が前日より後(時計のずれによる未来)のときも、出す日が無く、
- *   `future_last_day`にその日を返す。
+ * - `lastDay`が前日より後(時計のずれによる未来)のときは、記録なしと同じに前日だけを出し、
+ *   `future_last_day`にその日を返す。放置すると、日付が追い付くまで要約が止まるため。
  * - 対象が`maxDays`を超えるときは、新しい方の`maxDays`日だけを出し、
  *   古い日は飛ばして`skipped_count`に数える。
  *   日次の要約は古い日ほど読まれにくく、長い停止の後に何通も続けて出さないため。
@@ -120,17 +137,12 @@ export function planSummaryDays(
   maxDays: number = MAX_CATCHUP_DAYS,
 ): SummaryPlan {
   const yesterdayMs = todayShiftedMidnightMs(now) - DAY_MS;
-  const lastMs = lastDay === null ? null : parseDayLabel(lastDay);
+  const parsedMs = lastDay === null ? null : parseDayLabel(lastDay);
+  const isFuture = parsedMs !== null && parsedMs > yesterdayMs;
+  const lastMs = isFuture ? null : parsedMs;
   const firstMs = lastMs === null ? yesterdayMs : lastMs + DAY_MS;
   if (firstMs > yesterdayMs) {
-    return {
-      days: [],
-      skipped_count: 0,
-      future_last_day:
-        lastDay !== null && lastMs !== null && lastMs > yesterdayMs
-          ? lastDay
-          : null,
-    };
+    return { days: [], skipped_count: 0, future_last_day: null };
   }
   const total = Math.round((yesterdayMs - firstMs) / DAY_MS) + 1;
   const skipped = Math.max(0, total - maxDays);
@@ -138,7 +150,11 @@ export function planSummaryDays(
   for (let ms = firstMs + skipped * DAY_MS; ms <= yesterdayMs; ms += DAY_MS) {
     days.push(dayRangeFromShiftedMidnight(ms));
   }
-  return { days, skipped_count: skipped, future_last_day: null };
+  return {
+    days,
+    skipped_count: skipped,
+    future_last_day: isFuture ? lastDay : null,
+  };
 }
 
 /**

@@ -81,11 +81,20 @@ export type CatchupResult = {
   readonly undelivered_reason: string | null;
 };
 
+/**
+ * 追い付きで続けて送るときの、日と日の間の待ち(ミリ秒)。
+ * 同じwebhookを使う他の通知を、Discordの送信回数の制限(429)で落とさないために、
+ * 連続して送らず1秒あける。
+ */
+export const CATCHUP_INTERVAL_MS = 1000;
+
 /** `summarizePendingDays`が使う外部の操作。テストでは差し替える。 */
 export type CatchupDeps = {
   readonly summarizeDay: (range: DayRange) => Promise<SummarizedDay>;
   /** 最後に要約を出した日(`YYYY-MM-DD`)を保存する。 */
   readonly saveLastDay: (label: string) => Promise<void>;
+  /** 指定のミリ秒だけ待つ。 */
+  readonly sleep: (ms: number) => Promise<void>;
   readonly log: Logger;
 };
 
@@ -96,6 +105,7 @@ export type CatchupDeps = {
  *   進めると、届かなかった日の要約が二度と出ないため。
  *   ここでは例外にせず、`undelivered_day`に残して返す。例外にするのは`assertAllDelivered`である。
  * - webhookが未設定(`no_webhook`)なら、送る先が無いので保存を進める。
+ * - 2通目以降は、直前の日を送った後に`CATCHUP_INTERVAL_MS`待ってから集計する。
  */
 export async function summarizePendingDays(
   plan: SummaryPlan,
@@ -113,7 +123,11 @@ export async function summarizePendingDays(
     });
   }
   const days: DailySummaryResult[] = [];
+  let sentPrevious = false;
   for (const range of plan.days) {
+    if (sentPrevious) {
+      await deps.sleep(CATCHUP_INTERVAL_MS);
+    }
     const { result, delivery } = await deps.summarizeDay(range);
     if (delivery.status === "not_sent") {
       return {
@@ -125,6 +139,7 @@ export async function summarizePendingDays(
     }
     await deps.saveLastDay(range.label);
     days.push(result);
+    sentPrevious = delivery.status === "sent";
   }
   return {
     days,
@@ -149,57 +164,89 @@ export function assertAllDelivered(result: CatchupResult): CatchupResult {
   return result;
 }
 
+/** `runDailySummary`が使う外部の操作。テストでは差し替える。 */
+export type DailySummaryDeps = {
+  readonly getState: () => Promise<unknown>;
+  readonly setState: (state: { last_day: string }) => Promise<void>;
+  readonly summarizeDay: (range: DayRange) => Promise<SummarizedDay>;
+  readonly sleep: (ms: number) => Promise<void>;
+  readonly now: () => Date;
+  readonly log: Logger;
+};
+
+/**
+ * stateを読み、出す日を決め、1日ずつ集計して通知し、そのたびにstateを保存する。
+ * 通知が届かない日があれば、最後に例外を投げる(`assertAllDelivered`)。
+ * `main`から例外が外れると、Discordに届かない状態が失敗として残らないので、ここにまとめてテストする。
+ */
+export async function runDailySummary(
+  deps: DailySummaryDeps,
+): Promise<CatchupResult> {
+  const reading = parseSummaryState(await deps.getState());
+  if (reading.unreadable) {
+    deps.log.warn("summary state could not be read; treated as no record");
+  }
+  const result = await summarizePendingDays(
+    planSummaryDays(reading.last_day, deps.now()),
+    {
+      summarizeDay: deps.summarizeDay,
+      saveLastDay: (label) => deps.setState({ last_day: label }),
+      sleep: deps.sleep,
+      log: deps.log,
+    },
+  );
+  return assertAllDelivered(result);
+}
+
 export async function main(): Promise<CatchupResult> {
   const log = logger("notify_daily_summary");
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-  const lastDay = parseSummaryState(await wmill.getState());
 
-  const result = await summarizePendingDays(
-    planSummaryDays(lastDay, new Date()),
-    {
-      summarizeDay: async (range) => {
-        const [agentRuns, approvals, cleanup, workerLoad] = await Promise.all([
-          getAgentRunSummary(range),
-          getApprovalSummary(range),
-          getCleanupSummary(range),
-          readWorkerLoad(range, (r) => getWorkerLoadSummary(r), log),
-        ]);
-        const delivery = await notifyBestEffort(
-          webhookUrl,
-          {
-            kind: "daily_summary",
-            instance_name: config.instance_name,
-            day: range.label,
-            run_count: agentRuns.run_count,
-            total_cost_usd: agentRuns.total_cost_usd,
-            failure_count: agentRuns.failure_count,
-            approved_count: approvals.approved_count,
-            rejected_count: approvals.rejected_count,
-            cleanup,
-            worker_load: workerLoad,
-          },
-          log,
-        );
-        return {
-          result: {
-            day: range.label,
-            run_count: agentRuns.run_count,
-            total_cost_usd: agentRuns.total_cost_usd,
-            failure_count: agentRuns.failure_count,
-            approved_count: approvals.approved_count,
-            rejected_count: approvals.rejected_count,
-            cleanup,
-            worker_load: workerLoad,
-          },
-          delivery,
-        };
-      },
-      saveLastDay: (label) => wmill.setState({ last_day: label }),
-      log,
+  return runDailySummary({
+    getState: () => wmill.getState(),
+    setState: (state) => wmill.setState(state),
+    summarizeDay: async (range) => {
+      const [agentRuns, approvals, cleanup, workerLoad] = await Promise.all([
+        getAgentRunSummary(range),
+        getApprovalSummary(range),
+        getCleanupSummary(range),
+        readWorkerLoad(range, (r) => getWorkerLoadSummary(r), log),
+      ]);
+      const delivery = await notifyBestEffort(
+        webhookUrl,
+        {
+          kind: "daily_summary",
+          instance_name: config.instance_name,
+          day: range.label,
+          run_count: agentRuns.run_count,
+          total_cost_usd: agentRuns.total_cost_usd,
+          failure_count: agentRuns.failure_count,
+          approved_count: approvals.approved_count,
+          rejected_count: approvals.rejected_count,
+          cleanup,
+          worker_load: workerLoad,
+        },
+        log,
+      );
+      return {
+        result: {
+          day: range.label,
+          run_count: agentRuns.run_count,
+          total_cost_usd: agentRuns.total_cost_usd,
+          failure_count: agentRuns.failure_count,
+          approved_count: approvals.approved_count,
+          rejected_count: approvals.rejected_count,
+          cleanup,
+          worker_load: workerLoad,
+        },
+        delivery,
+      };
     },
-  );
-  return assertAllDelivered(result);
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => new Date(),
+    log,
+  });
 }

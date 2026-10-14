@@ -92,23 +92,59 @@ const RANGE = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
 
 describe("parseSummaryState", () => {
   test("reads the last summarized day", () => {
-    expect(parseSummaryState({ last_day: "2026-10-13" })).toBe("2026-10-13");
+    expect(parseSummaryState({ last_day: "2026-10-13" }).last_day).toBe(
+      "2026-10-13",
+    );
   });
 
-  test("returns null for the initial empty state", () => {
-    expect(parseSummaryState(null)).toBeNull();
+  test("is readable when the last day is valid", () => {
+    expect(parseSummaryState({ last_day: "2026-10-13" }).unreadable).toBe(
+      false,
+    );
   });
 
-  test("returns null when last_day is not a string", () => {
-    expect(parseSummaryState({ last_day: 20261013 })).toBeNull();
+  test("returns no day for the initial empty state", () => {
+    expect(parseSummaryState(null).last_day).toBeNull();
   });
 
-  test("returns null when last_day is not YYYY-MM-DD", () => {
-    expect(parseSummaryState({ last_day: "2026/10/13" })).toBeNull();
+  test("is not unreadable for the initial empty state", () => {
+    expect(parseSummaryState(null).unreadable).toBe(false);
   });
 
-  test("returns null when last_day is not a real calendar day", () => {
-    expect(parseSummaryState({ last_day: "2026-02-30" })).toBeNull();
+  test("is not unreadable for an undefined state", () => {
+    expect(parseSummaryState(undefined).unreadable).toBe(false);
+  });
+
+  test("is not unreadable when last_day is absent", () => {
+    expect(parseSummaryState({}).unreadable).toBe(false);
+  });
+
+  test("returns no day when last_day is not a string", () => {
+    expect(parseSummaryState({ last_day: 20261013 }).last_day).toBeNull();
+  });
+
+  test("is unreadable when last_day is not a string", () => {
+    expect(parseSummaryState({ last_day: 20261013 }).unreadable).toBe(true);
+  });
+
+  test("returns no day when last_day is not YYYY-MM-DD", () => {
+    expect(parseSummaryState({ last_day: "2026/10/13" }).last_day).toBeNull();
+  });
+
+  test("is unreadable when last_day is not YYYY-MM-DD", () => {
+    expect(parseSummaryState({ last_day: "2026/10/13" }).unreadable).toBe(true);
+  });
+
+  test("returns no day when last_day is not a real calendar day", () => {
+    expect(parseSummaryState({ last_day: "2026-02-30" }).last_day).toBeNull();
+  });
+
+  test("is unreadable when last_day is not a real calendar day", () => {
+    expect(parseSummaryState({ last_day: "2026-02-30" }).unreadable).toBe(true);
+  });
+
+  test("is unreadable when the state is not an object", () => {
+    expect(parseSummaryState("2026-10-13").unreadable).toBe(true);
   });
 });
 
@@ -140,8 +176,16 @@ describe("planSummaryDays", () => {
     expect(labels("2026-10-13")).toEqual([]);
   });
 
-  test("summarizes nothing when the saved day is in the future (clock skew)", () => {
-    expect(labels("2026-10-20")).toEqual([]);
+  test("summarizes only yesterday when the saved day is in the future (clock skew)", () => {
+    expect(labels("2026-10-20")).toEqual(["2026-10-13"]);
+  });
+
+  test("summarizes only yesterday when the saved day is today", () => {
+    expect(labels("2026-10-14")).toEqual(["2026-10-13"]);
+  });
+
+  test("skips none when the saved day is in the future", () => {
+    expect(planSummaryDays("2026-10-20", NOW).skipped_count).toBe(0);
   });
 
   test("reports no future day when the saved day is yesterday", () => {
