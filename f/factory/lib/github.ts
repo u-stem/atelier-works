@@ -128,6 +128,11 @@ export type GhApiResponse = {
    * 上限を超えたかを、本文に書かれた注記の文字列には頼らずに決められる。
    */
   readonly capped?: true;
+  /**
+   * `gh`プロセスの終了コード。`attemptGhApi`が付ける。
+   * ステータスが2xxでも、本文が欠けたまま`gh`が失敗したことを呼び出し側が見分けるために使う。
+   */
+  readonly exitCode?: number;
 };
 
 function parseGhApiOutput(stdout: string): GhApiResponse {
@@ -366,7 +371,11 @@ async function attemptGhApi(
   const capped =
     options.maxOutputBytes !== undefined &&
     Buffer.byteLength(commandResult.stdout) > options.maxOutputBytes;
-  const response: GhApiResponse = capped ? { ...parsed, capped: true } : parsed;
+  const response: GhApiResponse = {
+    ...parsed,
+    ...(capped ? { capped: true as const } : {}),
+    exitCode: commandResult.exitCode,
+  };
   return {
     kind: "completed",
     response,
@@ -4529,34 +4538,19 @@ export class GitHubCiLogError extends Error {
   }
 }
 
-/** ghの拒否の文として扱う本文の最大の長さ。拒否の文は約100字である。 */
-const CI_LOG_REFUSAL_MAX_LENGTH = 300;
-
 /**
- * ghが、制御列を含む応答の本文を出さずに、代わりに出す拒否の文か。
- * ログの本文と取り違えて空の抜粋にしないために見分ける。
- * 本物のログと取り違えないよう、短い本文に限る。
+ * ログの本文が欠けたまま`gh`が終わったときの例外。
+ * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、拒否、
+ * 本文の途中の切断、フラグを解さない版の失敗で起きる。
+ * 本文の欠けたログを使わないために投げる。本文、stderr、終了コードを載せない。
+ * HTTPの失敗ではないので、ステータスを持たない。
  */
-function isEscapeSequenceRefusal(bodyText: string): boolean {
-  const text = bodyText.trim();
-  return (
-    text.length <= CI_LOG_REFUSAL_MAX_LENGTH &&
-    text.includes("terminal escape sequences") &&
-    text.includes("--allow-escape-sequences")
-  );
-}
-
-/**
- * ghがログの本文を出さずに、制御列を理由とする拒否の文を出したときの例外。
- * `--allow-escape-sequences`を解さないghで起きる。HTTPの失敗ではないので、ステータスを持たない。
- * 本文は載せない。
- */
-export class GitHubCiLogRefusedError extends Error {
+export class GitHubCiLogIncompleteError extends Error {
   constructor() {
     super(
-      "GET workflow job log was refused by gh because the response contains terminal escape sequences",
+      "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
     );
-    this.name = "GitHubCiLogRefusedError";
+    this.name = "GitHubCiLogIncompleteError";
   }
 }
 
@@ -4567,7 +4561,9 @@ export class GitHubCiLogRefusedError extends Error {
  * 本文は`CI_JOB_LOG_MAX_BYTES`で切り、切ったかは`truncated`で返す。
  * 本文は`VolatileCiLog`で包んで返す。
  * ログは端末の制御列を含むので、`gh`に`--allow-escape-sequences`を渡す。
- * 2xxの本文がghの拒否の文だったときは、`GitHubCiLogRefusedError`を投げる。
+ * 2xxなのに`gh`の終了コードが0以外のときは、`GitHubCiLogIncompleteError`を投げる。
+ * 本文の欠けたログを使わないためである。上限で打ち切ったときは、プロセスを止めた結果なので
+ * 終了コードを見ず、`truncated`のログとして返す。
  * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
  * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
  * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
@@ -4586,8 +4582,8 @@ export async function getWorkflowJobLog(
     { maxOutputBytes: CI_JOB_LOG_MAX_BYTES, allowEscapeSequences: true },
   );
   if (response.status >= 200 && response.status < 300) {
-    if (isEscapeSequenceRefusal(response.bodyText)) {
-      throw new GitHubCiLogRefusedError();
+    if (response.capped !== true && response.exitCode !== 0) {
+      throw new GitHubCiLogIncompleteError();
     }
     return {
       kind: "ok",

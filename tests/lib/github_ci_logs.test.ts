@@ -2,14 +2,17 @@ import { describe, expect, test } from "bun:test";
 import {
   CI_JOB_LOG_MAX_BYTES,
   GitHubCiLogError,
-  GitHubCiLogRefusedError,
+  GitHubCiLogIncompleteError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
   getWorkflowJobLog,
   listWorkflowRunJobs,
   WORKFLOW_RUN_JOBS_MAX_PAGES,
 } from "../../f/factory/lib/github.ts";
-import { omittedMarker } from "../../f/factory/lib/workspace.ts";
+import {
+  type CommandResult,
+  omittedMarker,
+} from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
   fail,
@@ -253,30 +256,87 @@ describe("getWorkflowJobLog", () => {
     expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
   });
 
-  const REFUSAL =
-    "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway";
+  /** ghが終了コードを非0にして終わった実行。stderrの中身は判定に使わない。 */
+  const exited = (
+    exitCode: number,
+    stdout: string,
+    stderr = "",
+  ): CommandResult => ({ stdout, stderr, exitCode, timedOut: false });
 
-  test("throws a GitHubCiLogRefusedError when gh outputs its refusal instead of the log", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, REFUSAL))]);
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogRefusedError);
+  test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a 2xx status with an empty body", async () => {
+    const fake = createFakeCommandRunner([exited(1, ghApiStdout(200, ""))]);
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
   });
 
-  test("recognizes the refusal with a trailing newline", async () => {
+  test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a partial body", async () => {
     const fake = createFakeCommandRunner([
-      ok(ghApiStdout(200, `${REFUSAL}\n`)),
+      exited(1, ghApiStdout(200, "line 1\nline 2")),
     ]);
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogRefusedError);
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
   });
 
-  test("names the cause in the message of the refusal error", async () => {
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, REFUSAL))]);
-    expect(await messageOf(fake)).toContain("terminal escape sequences");
+  test("returns the log when gh exits zero after a 2xx status", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: false });
   });
 
-  test("keeps a long log that mentions the flag as a log", async () => {
-    const long = `${"line\n".repeat(500)}${REFUSAL}\n`;
-    const fake = createFakeCommandRunner([ok(ghApiStdout(200, long))]);
-    expect(await get(fake)).toMatchObject({ kind: "ok" });
+  test("returns a truncated log when the output hit the cap and gh exits non-zero", async () => {
+    const stdout = ghApiStdout(
+      200,
+      `head${omittedMarker(9_000_000)}${"x".repeat(CI_JOB_LOG_MAX_BYTES)}`,
+    );
+    const fake = createFakeCommandRunner([exited(143, stdout)]);
+    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
+  });
+
+  test("states a fixed message for the incomplete log error", async () => {
+    const fake = createFakeCommandRunner([exited(1, ghApiStdout(200, ""))]);
+    expect(await messageOf(fake)).toBe(
+      "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
+    );
+  });
+
+  test("keeps the stderr of gh out of the incomplete log error", async () => {
+    const stderr =
+      "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway";
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(200, ""), stderr),
+    ]);
+    expect(await messageOf(fake)).not.toContain("--allow-escape-sequences");
+  });
+
+  test("keeps the partial body out of the incomplete log error", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(200, "PARTIAL-BODY-MARKER")),
+    ]);
+    expect(await messageOf(fake)).not.toContain("PARTIAL-BODY-MARKER");
+  });
+
+  test("does not look at the exit code for a 403", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(403, { message: "Resource not accessible" })),
+    ]);
+    expect(await get(fake)).toEqual({ kind: "forbidden" });
+  });
+
+  test("does not look at the exit code for a 404", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
+  });
+
+  test("does not look at the exit code for a 410", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(410, { message: "Gone" })),
+    ]);
+    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
+  });
+
+  test("throws a GitHubCiLogError for an unexpected status with a non-zero exit code", async () => {
+    const body = exited(1, ghApiStdout(422, "unprocessable"));
+    const fake = createFakeCommandRunner([body]);
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogError);
   });
 
   test("returns forbidden for 403", async () => {
