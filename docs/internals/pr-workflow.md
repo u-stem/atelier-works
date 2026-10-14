@@ -26,7 +26,7 @@ PR修正は5つのステップでできている。
 
 PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信だけである。失敗、人の対応待ち、ブロック、要件の不足といった運用上の知らせは、PRに書かずDiscordで知らせる。Issue化の提案の承認と却下の結果は、PRのスレッドに返信する。
 
-実装フローが作ったPRのCIの失敗も、PRには書かずDiscordとnoticeで知らせる。この監視はレビューと修正のフローとは独立していて、修正を起動しない。内容は[PRのCI監視の仕様](pr-ci.md)に書く。
+実装フローが作ったPRのCIの失敗も、PRには書かずDiscordとnoticeで知らせる。この監視はレビューと修正のフローとは独立している。設定`pr_ci_fix_enabled`が`true`のときは、失敗したPRを直す修正(CI回)を起動する。内容は[PRのCI監視の仕様](pr-ci.md)に書く。
 
 ## 起動条件
 
@@ -37,6 +37,7 @@ PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信�
 | PRレビュー | PRに`factory:review`ラベルが付いた |
 | PRレビュー | PRのレビューの依頼先かassigneeがこのインスタンスのGitHubアカウントで、未処理のhead(`head_sha`)がある |
 | PR修正 | PRに`factory:fix`ラベルが付いた |
+| PR修正のCI回 | `watch_pr_ci`が、失敗したheadの行を直すと判断した。条件は[PRのCI監視の仕様](pr-ci.md)の「起動」に書く |
 
 トリガーのラベルは、着手(claim)したときに消費して外す。レビューの依頼とassigneeの経路には、消費するラベルが無い。ラベル名は`factory_config`の`review_label`と`fix_label`で決める。
 
@@ -46,7 +47,7 @@ PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信�
 `pr_fix_prepare`も同じ判定(`evaluateHumanOnlyBranchGuard`)で止め、作業項目をblockedにする。
 修正を許すと、固定のファイル以外も書き換えたcommitを、人が気づかずにマージするおそれがある。このPRは人が直す。レビューは動く。
 
-PR修正はラベルからしか起動しない。コメントやcommitのpushだけでは起動しない。次のラウンドを始めるには、PRに`factory:fix`ラベルを付け直す。PRレビューが終わった(`reviewed`)PRにも付けられる。
+PR修正の通常の回は、ラベルからしか起動しない。コメントやcommitのpushだけでは起動しない。CI回だけは、`watch_pr_ci`が起動する。次のラウンドを始めるには、PRに`factory:fix`ラベルを付け直す。PRレビューが終わった(`reviewed`)PRにも付けられる。
 
 同じPRに終了していないPR修正があるとき、許可された人が付けた`factory:fix`ラベルは、PR修正を始めない。
 `decidePrActions`が、候補の`activeFixItemId`で判定し、ラベルは消費せずに残す。

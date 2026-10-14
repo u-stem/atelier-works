@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type {
+  ClaimPrCiCheckInput,
   NewPrCiCheck,
   PrCiCheck,
   PrCiTransition,
@@ -11,9 +12,11 @@ import type {
 import {
   GitHubHttpError,
   GitHubRateLimitError,
+  type PrCommitMessages,
   type PrHeadWorkflowRuns,
   type PrHeadWorkflowRunsOptions,
   type PullRequest,
+  type WorkflowRunJob,
   WorkflowRunsIncompleteError,
 } from "../../f/factory/lib/github.ts";
 import type { LogFields, Logger } from "../../f/factory/lib/log.ts";
@@ -26,6 +29,7 @@ import type { FixItemState } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import {
   type FactoryWorkItemRef,
   PR_CI_FAILED_KIND,
+  type PrCiFixHoldReason,
   type PrCiState,
   prCiFailedNoticeMessage,
   prCiNextAction,
@@ -33,16 +37,20 @@ import {
 import {
   buildRecoveryRepoGates,
   buildRepoGates,
+  CLAIM_BATCH_LIMIT,
+  CLAIMS_PER_RUN_LIMIT,
   deniedNoticeMessage,
   NO_CI_RECHECK_INTERVAL_MS,
   PR_CI_CHECK_DENIED_KIND,
   PR_CI_RESOLVED_BY,
+  type PrCiClaimDeps,
   type PrCiWatchDeps,
   RUN_BUDGET_MS,
   runPrCiRecovery,
   runPrCiWatch,
   UNREADABLE_EXPIRES_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_watch.ts";
+import { PrFixFlowJobIdRecordError } from "../../f/factory/lib/pr_fix_launch.ts";
 import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
@@ -2735,5 +2743,856 @@ describe("recovery without the watch", () => {
     );
     await runPrCiRecovery(h.deps);
     expect(h.released).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 失敗を直す作業項目の起動
+// ---------------------------------------------------------------------------
+
+const SINCE = new Date("2026-10-12T00:00:00Z");
+const TRAILER = "Generated-By: Software Factory (local)";
+const FACTORY_COMMIT = `fix: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n${TRAILER}`;
+const NEW_ITEM_ID = 501;
+
+type ClaimSetup = {
+  readonly candidates?: PrCiCheck[];
+  readonly activeFix?: boolean;
+  readonly review?: boolean;
+  readonly commits?: PrCommitMessages;
+  readonly marker?: boolean;
+  readonly jobs?: WorkflowRunJob[];
+  readonly budgetExceeded?: boolean;
+  readonly mainCiFailed?: boolean;
+  readonly rounds?: number;
+  readonly claimResults?: (number | null)[];
+  readonly launchFails?: boolean;
+  /** フローは起動したが、ジョブIDを作業項目に記録できなかった。 */
+  readonly launchRecordFails?: boolean;
+  /** 起動したフローの取り消しが失敗した。 */
+  readonly cancelFlowFails?: boolean;
+  readonly failFixItemFails?: boolean;
+  /** 保留を書く更新が、条件に合わず何も書かなかった。 */
+  readonly setHoldWritesNothing?: boolean;
+  readonly markerError?: Error;
+  readonly listCommitsError?: Error;
+  readonly listCandidatesFails?: boolean;
+  /** 呼び出しを、ほかの記録と同じ列に並べるための配列。 */
+  readonly trail?: string[];
+};
+
+function workflowJob(name: string, conclusion: string | null): WorkflowRunJob {
+  return {
+    id: 900,
+    runId: 7,
+    headSha: SHA_A,
+    name,
+    status: "completed",
+    conclusion,
+    steps: [],
+  };
+}
+
+function candidateRow(overrides: Partial<PrCiCheck> = {}): PrCiCheck {
+  return row({
+    id: 5,
+    state: "failed",
+    notified_reason: "ci_failure",
+    first_seen_at: minutesBefore(30),
+    ...overrides,
+  });
+}
+
+const STARTED_FLOW_JOB_ID = "0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f";
+
+type ClaimHarness = {
+  readonly deps: PrCiClaimDeps;
+  readonly claims: ClaimPrCiCheckInput[];
+  readonly launched: number[];
+  readonly holds: { id: number; reason: PrCiFixHoldReason | null }[];
+  /** `setHold`に渡した、書く前の理由の期待。 */
+  readonly holdExpectations: (string | null)[];
+  readonly failedItems: { id: number; note: string }[];
+  /** 取り消しを求めたジョブ。 */
+  readonly cancelled: { jobId: string; reason: string }[];
+  readonly listed: { since: Date; limit: number }[];
+  readonly reads: Record<string, number>;
+  readonly order: string[];
+};
+
+function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
+  const claims: ClaimPrCiCheckInput[] = [];
+  const launched: number[] = [];
+  const holds: ClaimHarness["holds"] = [];
+  const holdExpectations: ClaimHarness["holdExpectations"] = [];
+  const failedItems: ClaimHarness["failedItems"] = [];
+  const cancelled: ClaimHarness["cancelled"] = [];
+  const listed: ClaimHarness["listed"] = [];
+  const reads: Record<string, number> = {};
+  const order: string[] = [];
+  const results = [...(setup.claimResults ?? [])];
+  const count = (name: string) => {
+    reads[name] = (reads[name] ?? 0) + 1;
+    order.push(name);
+    setup.trail?.push(name);
+  };
+  const deps: PrCiClaimDeps = {
+    enabledSince: SINCE,
+    maxRounds: 2,
+    listCandidates: async (since, limit) => {
+      listed.push({ since, limit });
+      if (setup.listCandidatesFails === true) throw new Error("list failed");
+      return setup.candidates ?? [candidateRow()];
+    },
+    hasActiveFix: async () => {
+      count("active_fix");
+      return setup.activeFix ?? false;
+    },
+    hasReview: async () => {
+      count("review");
+      return setup.review ?? true;
+    },
+    listCommits: async () => {
+      count("commits");
+      if (setup.listCommitsError !== undefined) throw setup.listCommitsError;
+      return setup.commits ?? { messages: [FACTORY_COMMIT], truncated: false };
+    },
+    hasSkillMarker: async () => {
+      count("marker");
+      if (setup.markerError !== undefined) throw setup.markerError;
+      return setup.marker ?? true;
+    },
+    listJobs: async () => {
+      count("jobs");
+      return setup.jobs ?? [workflowJob("check", "failure")];
+    },
+    budgetExceeded: async () => {
+      count("budget");
+      return setup.budgetExceeded ?? false;
+    },
+    mainCiFailed: async () => {
+      count("main_ci");
+      return setup.mainCiFailed ?? false;
+    },
+    countRounds: async () => {
+      count("rounds");
+      return setup.rounds ?? 0;
+    },
+    setHold: async (id, reason, expected) => {
+      count("set_hold");
+      holds.push({ id, reason });
+      holdExpectations.push(expected);
+      return setup.setHoldWritesNothing !== true;
+    },
+    claim: async (input) => {
+      count("claim");
+      claims.push(input);
+      return results.length > 0 ? (results.shift() ?? null) : NEW_ITEM_ID;
+    },
+    launch: async (workItemId) => {
+      count("launch");
+      if (setup.launchFails === true) throw new Error("launch failed");
+      if (setup.launchRecordFails === true) {
+        throw new PrFixFlowJobIdRecordError(
+          STARTED_FLOW_JOB_ID,
+          new Error("record failed"),
+        );
+      }
+      launched.push(workItemId);
+    },
+    failFixItem: async (id, note) => {
+      count("fail_item");
+      if (setup.failFixItemFails === true) throw new Error("fail item failed");
+      failedItems.push({ id, note });
+    },
+    cancelFlow: async (jobId, reason) => {
+      count("cancel_flow");
+      cancelled.push({ jobId, reason });
+      if (setup.cancelFlowFails === true) throw new Error("cancel failed");
+    },
+  };
+  return {
+    deps,
+    claims,
+    launched,
+    holds,
+    holdExpectations,
+    failedItems,
+    cancelled,
+    listed,
+    reads,
+    order,
+  };
+}
+
+/** 追跡中のPRが1件あり、その今のheadの実行が失敗している設定。 */
+function claimSetup(c: ClaimHarness | null, overrides: Setup = {}): Setup {
+  return {
+    items: [item()],
+    prs: { [PR_KEY]: pr({ baseRepoFullName: "Acme/Widgets" }) },
+    runs: { [SHA_A]: [failingRun()] },
+    ...overrides,
+    override: {
+      ...(c === null ? {} : { claim: c.deps }),
+      ...overrides.override,
+    },
+  };
+}
+
+describe("claiming a failed row", () => {
+  test("launches the fix flow for a claimable row", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.launched).toEqual([NEW_ITEM_ID]);
+  });
+
+  test("claims the row with the spelling the base repository uses", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims.map((input) => [input.owner, input.repo])).toEqual([
+      ["Acme", "Widgets"],
+    ]);
+  });
+
+  test("claims the row at the head it just read", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims.map((input) => input.headSha)).toEqual([SHA_A]);
+  });
+
+  test("claims the row with the title of the pull request", async () => {
+    const c = claimHarness();
+    const h = harness(
+      claimSetup(c, {
+        prs: {
+          [PR_KEY]: pr({ baseRepoFullName: "Acme/Widgets", title: "T1" }),
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(c.claims.map((input) => input.title)).toEqual(["T1"]);
+  });
+
+  test("claims the row without a human claimer", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims.map((input) => input.claimedBy)).toEqual([null]);
+  });
+
+  test("lists the candidates since the time the setting gives", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.listed).toEqual([{ since: SINCE, limit: CLAIM_BATCH_LIMIT }]);
+  });
+
+  test("counts the claimed row", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.claimed).toBe(1);
+  });
+
+  test("does not claim when the claim dependencies are absent", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(null));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("does not claim in the recovery that runs without the watch", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c));
+    await runPrCiRecovery(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("does not claim a row whose pull request the discovery did not read", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c, { items: [] }));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("does not claim a row of a pull request with a branch that is not the Factory's", async () => {
+    const c = claimHarness();
+    const h = harness(
+      claimSetup(c, {
+        prs: {
+          [PR_KEY]: pr({
+            baseRepoFullName: "Acme/Widgets",
+            headRef: "feature/x",
+          }),
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("does not claim a row of a repository that is not allowed", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c, { allowed: () => false }));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("does not launch when the claim got nothing", async () => {
+    const c = claimHarness({ claimResults: [null] });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.launched).toEqual([]);
+  });
+
+  test("does not count a claim that got nothing", async () => {
+    const c = claimHarness({ claimResults: [null] });
+    const h = harness(claimSetup(c));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.claimed).toBe(0);
+  });
+
+  test("claims after the judging of the rows", async () => {
+    const trail: string[] = [];
+    const c = claimHarness({ trail });
+    const h = harness(
+      claimSetup(c, {
+        pending: [row()],
+        override: {
+          markNotified: async () => {
+            trail.push("mark_notified");
+            return true;
+          },
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(trail.indexOf("mark_notified")).toBeLessThan(trail.indexOf("claim"));
+  });
+
+  test("keeps the immediate failure notice for a row it claims", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c, { pending: [row()] }));
+    await runPrCiWatch(h.deps);
+    expect(h.discord.length).toBe(1);
+  });
+
+  test("touches a row whose pull request the discovery did not read", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c, { items: [] }));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(5);
+  });
+
+  test("touches a row of a repository that is not allowed", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c, { allowed: () => false }));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(5);
+  });
+
+  test("touches a row that the recovery returned in the same run", async () => {
+    const c = claimHarness({ candidates: [candidateRow({ id: FIXING_ID })] });
+    const h = harness(
+      claimSetup(c, {
+        fixing: [fixingRow()],
+        fixItems: { [FIX_ITEM_ID]: fixItem("failed") },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(FIXING_ID);
+  });
+
+  test("touches a row whose pull request has no repository name", async () => {
+    const c = claimHarness();
+    const h = harness(
+      claimSetup(c, {
+        prs: { [PR_KEY]: pr({ baseRepoFullName: "widgets" }) },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(5);
+  });
+
+  test("touches a row it evaluated and did not claim", async () => {
+    const c = claimHarness({ review: false });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(5);
+  });
+});
+
+describe("a launch that fails", () => {
+  test("fails the work item the claim created", async () => {
+    const c = claimHarness({ launchFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.failedItems.map((entry) => entry.id)).toEqual([NEW_ITEM_ID]);
+  });
+
+  test("returns the row to failed for the work item it created", async () => {
+    const c = claimHarness({ launchFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([
+      { id: 5, options: { fixWorkItemId: NEW_ITEM_ID } },
+    ]);
+  });
+
+  test("returns the row even when failing the work item also fails", async () => {
+    const c = claimHarness({ launchFails: true, failFixItemFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.id)).toEqual([5]);
+  });
+
+  test("records the failure of the launch", async () => {
+    const c = claimHarness({ launchFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toContain("launch_fix:acme/widgets#12");
+  });
+
+  test("does not count the launch that failed", async () => {
+    const c = claimHarness({ launchFails: true });
+    const h = harness(claimSetup(c));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.claimed).toBe(0);
+  });
+});
+
+describe("a flow that started but whose job id was not recorded", () => {
+  test("cancels the flow that started", async () => {
+    const c = claimHarness({ launchRecordFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.cancelled.map((entry) => entry.jobId)).toEqual([
+      STARTED_FLOW_JOB_ID,
+    ]);
+  });
+
+  test("fails the work item once the flow is cancelled", async () => {
+    const c = claimHarness({ launchRecordFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.failedItems.map((entry) => entry.id)).toEqual([NEW_ITEM_ID]);
+  });
+
+  test("returns the row once the flow is cancelled", async () => {
+    const c = claimHarness({ launchRecordFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([
+      { id: 5, options: { fixWorkItemId: NEW_ITEM_ID } },
+    ]);
+  });
+
+  test("does not count the flow that was cancelled", async () => {
+    const c = claimHarness({ launchRecordFails: true });
+    const h = harness(claimSetup(c));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.claimed).toBe(0);
+  });
+
+  test("records the failure of the launch once the flow is cancelled", async () => {
+    const c = claimHarness({ launchRecordFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toContain("launch_fix:acme/widgets#12");
+  });
+
+  test("notes on the work item that the flow was cancelled", async () => {
+    const c = claimHarness({ launchRecordFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.failedItems.map((entry) => entry.note)).toEqual([
+      "pr ci fix: the flow was cancelled because its job id was not recorded",
+    ]);
+  });
+
+  test("notes on the work item that the flow could not start when the launch fails", async () => {
+    const c = claimHarness({ launchFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.failedItems.map((entry) => entry.note)).toEqual([
+      "pr ci fix: the flow could not start",
+    ]);
+  });
+
+  test("does not fail the work item of a flow it could not cancel", async () => {
+    const c = claimHarness({ launchRecordFails: true, cancelFlowFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.failedItems).toEqual([]);
+  });
+
+  test("does not return the row of a flow it could not cancel", async () => {
+    const c = claimHarness({ launchRecordFails: true, cancelFlowFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.released).toEqual([]);
+  });
+
+  test("counts the flow it could not cancel", async () => {
+    const c = claimHarness({ launchRecordFails: true, cancelFlowFails: true });
+    const h = harness(claimSetup(c));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.claimed).toBe(1);
+  });
+
+  test("records the missing job id when it could not cancel the flow", async () => {
+    const c = claimHarness({ launchRecordFails: true, cancelFlowFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toContain("record_fix_job_id");
+  });
+
+  test("leaves a warning when it could not cancel the flow", async () => {
+    const c = claimHarness({ launchRecordFails: true, cancelFlowFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(
+      h.logs.filter(
+        (line) =>
+          line.level === "warn" &&
+          line.message === "pr ci fix flow started without a recorded job id",
+      ).length,
+    ).toBe(1);
+  });
+});
+
+describe("the claim limits", () => {
+  function threePrs(): Setup {
+    const items = [33, 34, 35].map((id, index) =>
+      item({
+        id,
+        prUrl: `https://github.com/acme/widgets/pull/${String(12 + index)}`,
+      }),
+    );
+    const prs: Record<string, PullRequest> = {};
+    for (const [index, id] of [33, 34, 35].entries()) {
+      prs[`acme/widgets#${String(12 + index)}`] = pr({
+        number: 12 + index,
+        headRef: `factory/issue-5-wi-${String(id)}`,
+        baseRepoFullName: "acme/widgets",
+      });
+    }
+    return { items, prs, runs: { [SHA_A]: [failingRun()] } };
+  }
+
+  const threeRows = [12, 13, 14].map((number, index) =>
+    candidateRow({ id: 5 + index, pr_number: number }),
+  );
+
+  test("claims at most the limit of rows in one run", async () => {
+    const c = claimHarness({ candidates: threeRows });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.claims.length).toBe(CLAIMS_PER_RUN_LIMIT);
+  });
+
+  test("counts a claim whose launch failed toward the limit", async () => {
+    const c = claimHarness({ candidates: threeRows, launchFails: true });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.claims.length).toBe(CLAIMS_PER_RUN_LIMIT);
+  });
+
+  test("does not claim after the time budget is used", async () => {
+    const c = claimHarness();
+    const h = harness(claimSetup(c, { budgetUsedAfterFirstPr: true }));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("does not claim a row that the recovery returned in the same run", async () => {
+    const c = claimHarness({ candidates: [candidateRow({ id: FIXING_ID })] });
+    const h = harness(
+      claimSetup(c, {
+        fixing: [fixingRow()],
+        fixItems: { [FIX_ITEM_ID]: fixItem("failed") },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("records a failure when the candidates cannot be listed", async () => {
+    const c = claimHarness({ listCandidatesFails: true });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toContain("list_claimable");
+  });
+
+  test("reads the budget once for several rows", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      claimResults: [null, null],
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.budget).toBe(1);
+  });
+
+  test("reads the skill marker once for several rows", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      claimResults: [null, null],
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.marker).toBe(1);
+  });
+
+  test("reads the skill once even when it cannot be read", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      markerError: new Error("boom"),
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.marker).toBe(1);
+  });
+
+  test("records the failure to read the skill once for several rows", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      markerError: new Error("boom"),
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["skill_marker"]);
+  });
+
+  test("touches every row it could not evaluate for a failed skill read", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      markerError: new Error("boom"),
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toEqual([5, 6, 7]);
+  });
+
+  test("stops claiming when reading the skill hits the rate limit", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      markerError: new GitHubRateLimitError("endpoint", 300_000, true),
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.review).toBe(1);
+  });
+
+  test("reads the state of the main branch once for a repository", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      claimResults: [null, null],
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.main_ci).toBe(1);
+  });
+});
+
+describe("holding a row", () => {
+  test("holds a row whose head has no review", async () => {
+    const c = claimHarness({ review: false });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "not_reviewed" }]);
+  });
+
+  test("does not claim a held row", async () => {
+    const c = claimHarness({ review: false });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("holds a row at the rounds limit", async () => {
+    const c = claimHarness({ rounds: 2 });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "rounds_exhausted" }]);
+  });
+
+  test("holds a row when the commits are not all the Factory's", async () => {
+    const c = claimHarness({
+      commits: { messages: [FACTORY_COMMIT, "human"], truncated: false },
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "not_factory_head" }]);
+  });
+
+  test("holds a row of a draft pull request", async () => {
+    const c = claimHarness();
+    const h = harness(
+      claimSetup(c, {
+        prs: {
+          [PR_KEY]: pr({ baseRepoFullName: "Acme/Widgets", draft: true }),
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "pr_draft_or_auto_merge" }]);
+  });
+
+  test("does not rewrite a hold that has not changed", async () => {
+    const c = claimHarness({
+      review: false,
+      candidates: [candidateRow({ fix_hold_reason: "not_reviewed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([]);
+  });
+
+  test("changes a temporary hold to the reason that applies now", async () => {
+    const c = claimHarness({
+      budgetExceeded: true,
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "budget_exceeded" }]);
+  });
+
+  test("clears a temporary hold that no longer applies", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: null }]);
+  });
+
+  test("clears a temporary hold only if it is still the reason that was read", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holdExpectations).toEqual(["main_ci_failed"]);
+  });
+
+  test("does not claim a row whose hold could not be cleared", async () => {
+    const c = claimHarness({
+      setHoldWritesNothing: true,
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("touches a row whose hold could not be cleared", async () => {
+    const c = claimHarness({
+      setHoldWritesNothing: true,
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(5);
+  });
+
+  test("holds a row that was started too many times without a flow", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ fix_attempts: 5 })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "rounds_exhausted" }]);
+  });
+
+  test("claims the row after clearing the hold in the same run", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.order.indexOf("set_hold")).toBeLessThan(c.order.indexOf("claim"));
+  });
+
+  test("leaves the hold of a row whose pull request head moved", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ fix_hold_reason: "main_ci_failed" })],
+    });
+    const h = harness(
+      claimSetup(c, {
+        prs: {
+          [PR_KEY]: pr({ baseRepoFullName: "Acme/Widgets", headSha: SHA_B }),
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([]);
+  });
+
+  test("counts the hold it wrote", async () => {
+    const c = claimHarness({ review: false });
+    const h = harness(claimSetup(c));
+    const result = await runPrCiWatch(h.deps);
+    expect(result.held).toBe(1);
+  });
+});
+
+describe("a read that fails while claiming", () => {
+  test("records an unclassified failure of the read", async () => {
+    const c = claimHarness({ listCommitsError: new Error("boom") });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toContain("claim_fix:acme/widgets#12");
+  });
+
+  test("records a failure of the skill read under its own step", async () => {
+    const c = claimHarness({ markerError: new Error("boom") });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["skill_marker"]);
+  });
+
+  test("does not blame the pull request when the skill read is denied", async () => {
+    const c = claimHarness({ markerError: deniedError(403) });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.notices.map((notice) => notice.kind)).toEqual([]);
+  });
+
+  test("touches a row when the skill cannot be read", async () => {
+    const c = claimHarness({ markerError: new Error("boom") });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.touched).toContain(5);
+  });
+
+  test("does not claim after a failed read", async () => {
+    const c = claimHarness({ listCommitsError: new Error("boom") });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("adds the denied notice when the read is denied", async () => {
+    const c = claimHarness({ listCommitsError: deniedError(403) });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(h.notices.map((notice) => notice.kind)).toContain(
+      PR_CI_CHECK_DENIED_KIND,
+    );
+  });
+
+  test("stops claiming after the rate limit", async () => {
+    const c = claimHarness({
+      listCommitsError: new GitHubRateLimitError("endpoint", 300_000, true),
+      candidates: [candidateRow(), candidateRow({ id: 6, pr_number: 13 })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.reads.review).toBe(1);
   });
 });

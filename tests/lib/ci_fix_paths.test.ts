@@ -254,6 +254,8 @@ describe("protected paths", () => {
     "f/factory/lib/ci_log_support.script.yaml",
     "f/factory/lib/pr_ci_support.ts",
     "f/factory/lib/pr_ci_watch.ts",
+    "f/factory/lib/pr_fix_launch.ts",
+    "f/factory/lib/pr_fix_launch.script.yaml",
     "f/factory/lib/main_ci_support.ts",
     "f/factory/watch_pr_ci.ts",
     "f/factory/dependabot__flow/flow.yaml",
@@ -554,7 +556,7 @@ describe("reporting", () => {
  */
 const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
   "f/factory/lib/db.ts":
-    "DBの読み書きの共有モジュール。多くのフローが日常的に直す",
+    "DBの読み書きの共有モジュール。多くのフローが日常的に直す。起動の歯止めのSQLを含む。CI回がdb.tsを変えても反映はマージ後で、レビューが受け皿になる",
   "f/factory/lib/discord.ts":
     "Discord通知の共有モジュール。通知の文面を直す変更が多い",
   "f/factory/lib/poll_support.ts":

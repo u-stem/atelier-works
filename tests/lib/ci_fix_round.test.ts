@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CI_FIX_SKILL_MARKER,
+  CI_ROUND_MAX_RUNS,
   CI_ROUND_REASONS_WITHHELD,
   CI_ROUND_STAGED_PATH_MATCHED,
   CI_ROUND_STAGED_PATHS_UNSCANNED,
@@ -14,6 +15,7 @@ import {
   ciRoundPushGuardReason,
   ciRoundRetryRefusal,
   ciRoundVerifyTimeoutMisfit,
+  classifyFailedRuns,
   evaluateCiRoundPrepareGuard,
   finalizeCiFixOutput,
   gatherCiFailureInput,
@@ -369,6 +371,48 @@ function gatherDeps(over: Partial<CiGatherDeps> = {}): {
 function blockedReason(outcome: CiGatherOutcome): string | null {
   return outcome.kind === "blocked" ? outcome.reason : null;
 }
+
+describe("classifyFailedRuns", () => {
+  test("returns no verdict when no run failed", async () => {
+    const result = await classifyFailedRuns(
+      [run({ conclusion: "success" })],
+      async () => [],
+    );
+    expect(result.verdict).toBeNull();
+  });
+
+  test("returns the failed runs it read the jobs of", async () => {
+    const result = await classifyFailedRuns(
+      [
+        run({ id: 500 }),
+        run({ id: 501, workflowId: 2, conclusion: "success" }),
+      ],
+      async () => [job()],
+    );
+    expect(result.runs.map((entry) => entry.id)).toEqual([500]);
+  });
+
+  test("classifies the jobs of the failed runs together", async () => {
+    const result = await classifyFailedRuns([run()], async () => [
+      job({ name: "metadata" }),
+    ]);
+    expect(result.verdict?.kind).toBe("unfixable_job");
+  });
+
+  test("reads at most the limit of failed runs", async () => {
+    const asked: number[] = [];
+    await classifyFailedRuns(
+      Array.from({ length: 8 }, (_, index) =>
+        run({ id: index + 1, workflowId: index + 1 }),
+      ),
+      async (runId) => {
+        asked.push(runId);
+        return [job({ runId })];
+      },
+    );
+    expect(asked.length).toBe(CI_ROUND_MAX_RUNS);
+  });
+});
 
 describe("gatherCiFailureInput", () => {
   test("returns the sanitized excerpt of the failed job", async () => {

@@ -267,13 +267,13 @@ schema:
     pr_ci_fix_enabled:
       type: boolean
       description: >-
-        FactoryのPRのCIの失敗を直す作業項目を、起動してよいかを表す値です。この値を読んで起動を決める処理はまだ無く、設定の読み込みと検証だけがあります。
+        FactoryのPRのCIの失敗を直す作業項目を、watch_pr_ciが起動してよいかを表す値です。falseの間は何も起動しません。trueにするには、pr_ci_fix_enabled_sinceも書きます。
       default: false
     pr_ci_fix_enabled_since:
       type: string
       format: date-time
       description: >-
-        秒まで書いたタイムゾーン付きのRFC 3339の日時です(例: 2026-10-13T03:00:00Z)。書き損じると、設定の読み込みが失敗します。指定すると、CIの記録の最初に見た時刻(first_seen_at)がこの時刻より前の失敗は、直す対象にしません。有効にした時点で判定待ちだった失敗も、見つけた時刻が前なら対象外です。省略すると、時刻では絞りません。
+        秒まで書いたタイムゾーン付きのRFC 3339の日時です(例: 2026-10-13T03:00:00Z)。書き損じると、設定の読み込みが失敗します。指定すると、CIの記録の最初に見た時刻(first_seen_at)がこの時刻より前の失敗は、直す対象にしません。有効にした時点で判定待ちだった失敗も、見つけた時刻が前なら対象外です。pr_ci_fix_enabledがtrueのときは省略できません。
     pr_ci_fix_max_rounds:
       type: integer
       minimum: 1

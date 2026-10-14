@@ -1005,7 +1005,8 @@ export type FactoryConfig = {
    */
   pr_ci_watch_enabled: boolean;
   /**
-   * CIの失敗を直す作業項目を起動してよいか。既定は`false`で、偽の間は何も起動しない。
+   * CIの失敗を直す作業項目を、`watch_pr_ci`が起動してよいか。既定は`false`で、偽の間は何も起動しない。
+   * 真にするには`pr_ci_fix_enabled_since`が要る。`pr_ci_watch_enabled`が偽のときも起動しない。
    */
   pr_ci_fix_enabled: boolean;
   /**
@@ -1017,7 +1018,8 @@ export type FactoryConfig = {
    * この時刻より前に見つけた失敗は、直す対象にしない。「見つけた時刻」は`pr_ci_checks.first_seen_at`で、
    * 比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
    * 設定には秒まで書いたRFC 3339の日時(タイムゾーン付き)を書き、読み込み後は`Date`になる。
-   * `null`は、時刻で絞らないことを表す。既定は`null`。
+   * `pr_ci_fix_enabled`が真なら`null`にできない。無いと、有効にする前から残る失敗まで、一度に直しに行くためである。
+   * 既定は`null`。
    */
   pr_ci_fix_enabled_since: Date | null;
   /**

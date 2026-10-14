@@ -2809,6 +2809,47 @@ export async function listPrCommits(
  */
 const COMPARE_FILES_API_CAP = 300;
 
+export type PrCommitMessages = {
+  /** PRのcommitの本文(件名とトレーラーを含む全文)。古いcommitから順に並ぶ。 */
+  readonly messages: readonly string[];
+  /** APIの上限(250件)に達し、切り詰められた可能性がある。 */
+  readonly truncated: boolean;
+};
+
+/**
+ * `GET .../pulls/{number}/commits`を最後のページまで読み、commitの本文を返す。
+ * トレーラーの有無を調べる用途に限り、読み取りだけを行う。
+ * 応答の形が違うときの例外には、本文を載せない。
+ * 上限に達したときは例外にせず`truncated`を立てる。切り詰められた一覧では、全commitの検査ができないためである。
+ */
+export async function listPrCommitMessages(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrCommitMessages> {
+  validateOwnerRepo(owner, repo);
+  const messages = await paginateGhApi<string>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/commits?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown) => {
+        if (
+          !isRecord(entry) ||
+          !isRecord(entry.commit) ||
+          typeof entry.commit.message !== "string"
+        ) {
+          throw unexpectedShape(context);
+        }
+        return entry.commit.message;
+      });
+    },
+    PR_COMMITS_MAX_PAGES,
+  );
+  return { messages, truncated: messages.length >= PR_COMMITS_API_CAP };
+}
+
 /**
  * `GET repos/{owner}/{repo}/git/ref/heads/{branch}`で、ブランチの先頭のshaを返す。
  * `heads/`で名前空間を固定するので、同名のタグがあっても取り違えない。

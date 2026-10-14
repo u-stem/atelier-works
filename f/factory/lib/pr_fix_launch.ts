@@ -21,9 +21,29 @@ export type PrFixLaunchDeps = {
 };
 
 /**
+ * フローは起動したが、ジョブIDを作業項目に記録できなかった。
+ * 動いているフローを二重に起動しないために、呼び出し側は起動の失敗と区別して扱う。
+ */
+export class PrFixFlowJobIdRecordError extends Error {
+  readonly flowJobId: string;
+
+  constructor(flowJobId: string, cause: unknown) {
+    super(
+      `pr_fix flow started as ${flowJobId} but its job id was not recorded: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause },
+    );
+    this.name = "PrFixFlowJobIdRecordError";
+    this.flowJobId = flowJobId;
+  }
+}
+
+/**
  * 作業項目のpr_fixフローを起動し、ジョブIDを記録して返す。
  * `runFlowAsync`はHTTPエラーでも例外を投げずに応答本文を返すので、応答がジョブIDの形でなければ
  * 例外を投げる(`parseFlowJobId`)。そのときジョブIDは記録しない。
+ * フローの起動後に記録だけが失敗したときは、`PrFixFlowJobIdRecordError`を投げる。
  * 作業項目の挿入は呼び出し側が先に済ませる。起動の失敗の扱いも呼び出し側が決める。
  */
 export async function launchPrFixFlow(
@@ -34,6 +54,10 @@ export async function launchPrFixFlow(
     await deps.runFlowAsync(PR_FIX_FLOW_PATH, { work_item_id: workItemId }),
     "runFlowAsync",
   );
-  await deps.setFlowJobId(workItemId, flowJobId);
+  try {
+    await deps.setFlowJobId(workItemId, flowJobId);
+  } catch (err) {
+    throw new PrFixFlowJobIdRecordError(flowJobId, err);
+  }
   return flowJobId;
 }

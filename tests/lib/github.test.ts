@@ -42,6 +42,7 @@ import {
   LabelerCheckLimitError,
   listIssueComments,
   listPrChecks,
+  listPrCommitMessages,
   listPrCommits,
   listPrFiles,
   listPrHeadWorkflowRuns,
@@ -7328,5 +7329,107 @@ describe("getFileAtRef", () => {
         SHA_A,
       ),
     ).rejects.toThrow(/path/);
+  });
+});
+
+describe("listPrCommitMessages", () => {
+  const client = () => ({
+    run: createFakeCommandRunner([]).run,
+    ghToken: CLIENT_TOKEN,
+  });
+
+  function messageEntry(sha: string, message: string) {
+    return { ...commitEntry(sha, null, null), commit: { message } };
+  }
+
+  test("returns the message of each commit in order", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([messageEntry(SHA_A, "first"), messageEntry(SHA_B, "second")]),
+    ]);
+    const result = await listPrCommitMessages(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(result.messages).toEqual(["first", "second"]);
+  });
+
+  test("is not truncated below the 250-commit cap", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([messageEntry(SHA_A, "first")]),
+    ]);
+    const result = await listPrCommitMessages(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(result.truncated).toBe(false);
+  });
+
+  test("reports a list at the 250-commit cap as truncated", async () => {
+    const entries = Array.from({ length: 250 }, (_, index) =>
+      messageEntry(index.toString(16).padStart(40, "0"), "m"),
+    );
+    const fake = createFakeCommandRunner([ghApiOk(entries)]);
+    const result = await listPrCommitMessages(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(result.truncated).toBe(true);
+  });
+
+  test("reads every page", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(200, [messageEntry(SHA_A, "first")], {
+          link: '<https://api.github.com/repos/acme/widgets/pulls/12/commits?per_page=100&page=2>; rel="next"',
+        }),
+      ),
+      ghApiOk([messageEntry(SHA_B, "second")]),
+    ]);
+    const result = await listPrCommitMessages(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(result.messages).toEqual(["first", "second"]);
+  });
+
+  test("throws when a commit has no message", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ sha: SHA_A, commit: {} }]),
+    ]);
+    await expect(
+      listPrCommitMessages(
+        { run: fake.run, ghToken: CLIENT_TOKEN },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("does not put the message in the error", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([{ sha: SHA_A, commit: { message: 42 }, secret: "SECRET-BODY" }]),
+    ]);
+    const failure = await listPrCommitMessages(
+      { run: fake.run, ghToken: CLIENT_TOKEN },
+      "acme",
+      "widgets",
+      12,
+    ).catch((err: unknown) => String(err));
+    expect(failure).not.toContain("SECRET-BODY");
+  });
+
+  test("rejects a repository name that is not a GitHub name", async () => {
+    await expect(
+      listPrCommitMessages(client(), "acme", "../widgets", 12),
+    ).rejects.toThrow();
   });
 });

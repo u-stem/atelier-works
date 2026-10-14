@@ -2091,6 +2091,34 @@ export async function hasPriorReview(
   return rows.length > 0;
 }
 
+/**
+ * このPRのheadについて、Factoryのレビューが記録されているかを返す。
+ * `factory.reviews`の`head_sha`で判定する。種類が`pr_review`の作業項目のレビューに限り、
+ * 投稿したレビューも、投稿を見送って記録だけしたレビューも数える。
+ * ownerとrepoは小文字で照合する。
+ */
+export async function hasPrReviewForHead(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPrCiTarget(owner, repo, prNumber);
+  assertCommitSha(headSha);
+  const rows = await sql`
+    SELECT 1
+    FROM factory.reviews AS r
+    JOIN factory.work_items AS w ON w.id = r.work_item_id
+    WHERE w.kind = 'pr_review'
+      AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
+      AND w.pr_number = ${prNumber}::integer
+      AND r.head_sha = ${headSha}
+    LIMIT 1
+  `.fetch();
+  return rows.length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // fix_rounds
 // ---------------------------------------------------------------------------
@@ -4027,6 +4055,39 @@ export async function listFailedPrCiChecks(
   return rows.map(toPrCiCheck);
 }
 
+/**
+ * 失敗を直す作業項目を起動する候補の行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
+ * 次をすべて満たす行である。
+ * - `failed`である。
+ * - `first_seen_at`が`since`以後である。比較はSQLのtimestamptzで行う。
+ * - 保留がない(`fix_hold_reason`がNULL)か、保留の理由が`temporaryHolds`に含まれる。
+ *   決定的な理由で保留された行は、同じheadでは起動し直さないので返さない。
+ * 後ろの行が飢えないためには、呼び出し側が、見るたびに`checked_at`を進める必要がある(`touchPrCiCheck`)。
+ */
+export async function listClaimablePrCiChecks(
+  since: Date,
+  temporaryHolds: readonly string[],
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrCiCheck[]> {
+  if (Number.isNaN(since.getTime())) {
+    throw new Error("listClaimablePrCiChecks: invalid since");
+  }
+  const holds: string[] = [...temporaryHolds];
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, run_created_at, summary,
+           notified_reason, work_item_id, fix_work_item_id, fix_attempts, fix_hold_reason,
+           checked_at, first_seen_at, created_at, updated_at
+    FROM factory.pr_ci_checks
+    WHERE state = 'failed'
+      AND first_seen_at >= ${since.toISOString()}::timestamptz
+      AND (fix_hold_reason IS NULL OR fix_hold_reason = ANY(${holds}::text[]))
+    ORDER BY checked_at ASC
+    LIMIT ${limit}::bigint
+  `.fetch();
+  return rows.map(toPrCiCheck);
+}
+
 export type PrCiTransition = {
   readonly state: PrCiState;
   /** 渡せば置き換える。渡さなければ今の値を残す。長さは`PR_CI_SUMMARY_MAX_LENGTH`まで。 */
@@ -4340,6 +4401,10 @@ export async function claimPrCiCheckForFix(
  * `ci_check_id`を持つ`pr_fix`の作業項目を、作成時刻で数える。`passed`の行が無ければ、すべてを数える。
  * 上限(`pr_ci_fix_max_rounds`)に達したかを見るのに使う。
  * 通った後は数え直すので、別のheadの新しい失敗には、また上限までの回数が使える。
+ * `failed`で`flow_job_id`が空の作業項目は数えない。
+ * フローの起動に失敗した回のほか、ジョブIDが記録されないまま回復や失敗の処理が`failed`にした回も含む。
+ * Claudeを走らせていない回で、直す機会を使い切らないためである。
+ * 数えない回が続く行は、行の`fix_attempts`の上限(`pr_ci_fix_max_rounds`に3を足した数)が止める。
  * ownerとrepoは小文字で照合する。
  */
 export async function countPrCiFixRounds(
@@ -4357,6 +4422,7 @@ export async function countPrCiFixRounds(
     WHERE wi.kind = 'pr_fix' AND wi.ci_check_id IS NOT NULL
       AND lower(wi.owner) = ${lowerOwner} AND lower(wi.repo) = ${lowerRepo}
       AND wi.pr_number = ${prNumber}::integer
+      AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)
       AND wi.created_at > COALESCE(
         (
           SELECT MAX(p.updated_at) FROM factory.pr_ci_checks AS p
@@ -4474,24 +4540,37 @@ export async function releaseFixingPrCiCheck(
   return rows.length > 0;
 }
 
+export type SetPrCiFixHoldOptions = {
+  /**
+   * 渡せば、いまの理由がこの値(`null`は保留なし)と同じ行だけを書き換える。
+   * 読んでから書くまでの間に、別の実行が書いた理由を上書きしないためである。
+   */
+  readonly expected?: string | null;
+};
+
 /**
  * `failed`の行の、失敗を直す作業項目を起動しない理由(`fix_hold_reason`)を設定する。`null`で解除する。
  * 今の値と違うときだけ書き、書いたら`true`を返す。`failed`でない行は書き換えない。
+ * `options.expected`を渡したときは、いまの理由がそれと違う行も書き換えない。
  * 保留の間は、`claimPrCiCheckForFix`が起動しない。
  * `reason`が空か64字を超えるときは、DBに触れずに例外を投げる。
  */
 export async function setPrCiFixHold(
   id: number,
   reason: string | null,
+  options: SetPrCiFixHoldOptions = {},
   sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
   assertPositiveId(id, "pr ci check id");
   if (reason !== null) assertFixHoldReason(reason);
+  const checkExpected = options.expected !== undefined;
+  const expected = options.expected ?? null;
   const rows = await sql`
     UPDATE factory.pr_ci_checks
     SET fix_hold_reason = ${reason}::text, updated_at = now()
     WHERE id = ${id}::bigint AND state = 'failed'
       AND fix_hold_reason IS DISTINCT FROM ${reason}::text
+      AND (NOT ${checkExpected}::boolean OR fix_hold_reason IS NOT DISTINCT FROM ${expected}::text)
     RETURNING id
   `.fetch();
   return rows.length > 0;
