@@ -56,11 +56,16 @@ import {
 } from "./lib/drawio_viewer_bump_github.ts";
 import { recordViewerObservation } from "./lib/drawio_viewer_observations.ts";
 import {
+  FactoryRepoIdMismatchError,
+  verifyFactoryRepoId,
+} from "./lib/factory_repo_gate.ts";
+import {
   addLabels,
   createPullRequest,
   type GhClient,
   GitHubHttpError,
   getPr,
+  getRepositoryId,
   getViewer,
   gitIdentityForViewer,
   listPullRequestNumbersByHead,
@@ -129,6 +134,12 @@ export type BumpDeps = {
     branch: string,
     files: readonly BranchFile[],
   ) => Promise<BranchCheck>;
+  /**
+   * 書き込みの直前に、`factory_repo`のリポジトリIDを`factory_repo_id`と照合する。
+   * 通れば`true`。食い違うか見つからないときは、noticeを残して`false`を返す。取得の失敗は例外のまま投げる。
+   * `factory_repo_id`が無いときは、名前だけで動くので、取得せずに`true`を返す。
+   */
+  readonly verifyFactoryRepo: () => Promise<boolean>;
   /** ブランチ(無ければ作る)をheadにしたPRを開く。自動レビューのラベルは付けない。 */
   readonly publish: (
     input: BumpPullRequestInput,
@@ -145,6 +156,7 @@ export type BumpResult =
   | { readonly outcome: "pull_request_pending"; readonly branch: string }
   | { readonly outcome: "already_proposed"; readonly branch: string }
   | { readonly outcome: "rejected"; readonly tag: string }
+  | { readonly outcome: "repository_mismatch" }
   | {
       readonly outcome: "opened";
       readonly branch: string;
@@ -311,6 +323,14 @@ export async function runBump(
       });
       return { outcome: "rejected", tag: target.tag };
     }
+  }
+  // 最初の書き込み(ブランチの作成、またはPRの作成)の直前に、`factory_repo_id`を照合する。
+  // 取得と照合を重ねる間に、名前が別の人に渡っていても、その人のリポジトリに書かない。
+  if (!(await deps.verifyFactoryRepo())) {
+    deps.log.warn("the factory repository id check failed; not opening", {
+      branch,
+    });
+    return { outcome: "repository_mismatch" };
   }
   const pr = await deps.publish({
     branch,
@@ -508,6 +528,19 @@ export async function main(approved_version = ""): Promise<BumpResult> {
           headSha: pr.headSha,
           expectedHeadSha,
         };
+      },
+      verifyFactoryRepo: async () => {
+        try {
+          await verifyFactoryRepoId(config, {
+            getRepositoryId: (owner, repo) =>
+              getRepositoryId(client, owner, repo),
+            addNotice: addNoticeUnlessUnresolved,
+          });
+          return true;
+        } catch (error) {
+          if (error instanceof FactoryRepoIdMismatchError) return false;
+          throw error;
+        }
       },
       requestReview: (pullRequestNumber) =>
         addLabels(client, repoRef.owner, repoRef.repo, pullRequestNumber, [

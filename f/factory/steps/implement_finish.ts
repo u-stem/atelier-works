@@ -85,6 +85,10 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import {
+  repoOwnerGateDeps,
+  repoOwnerStopReason,
+} from "../lib/repo_owner_gate.ts";
 import { isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
@@ -227,6 +231,9 @@ type PrAttempt =
  * commitの直前には、`commitAndPush`がステージし直した索引のツリーを、途中経過ではgitleaksが検査したツリーと、
  * 最終commitではループで検証したツリーと比べ、違えばcommitしない。
  *
+ * originへの書き込み(途中経過と最終のpush、リモートブランチの削除)の直前には、リポジトリのオーナーの数値IDを照合する。
+ * 通らなければ書かずに、理由つきでneeds_humanで終える。
+ *
  * 外への副作用(途中経過と最終のcommitとpush、worktreeとリモートブランチの削除、
  * PRの作成と更新、`pr_url`の記録、ラベル)の直前には、作業項目を読み直してリースを確かめる
  * (`assertImplementLease`)。失っていれば、最初の確認と同じく何もせずに終える。
@@ -331,6 +338,17 @@ async function finishImplement(
   const client: GhClient = { run: runCommand, ghToken };
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
+  // origin(push、ブランチの削除)への書き込みの直前に呼ぶ。準備の入口の照合から長い実行を挟むので、
+  // その間に名前が別の人に渡っていても、ローカルにしか無いオブジェクトを相手に渡さない。
+  // 通らなければ止める理由を返す。noticeは照合が残す。
+  const ownerStopReason = (): Promise<string | null> =>
+    repoOwnerStopReason(
+      config,
+      owner,
+      repo,
+      repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+    );
+
   /**
    * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
    * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
@@ -433,6 +451,7 @@ async function finishImplement(
   const preserveWorkDeps = (ctx: ImplementContext): PreserveWorkDeps => ({
     ensureLockFree: ensureLockFree(ctx),
     assertGitPointer: assertGitPointer(ctx),
+    ensureRepoOwner: ownerStopReason,
     scanForSecrets: () =>
       runGitleaksOnWorktree({
         run: runCommand,
@@ -563,6 +582,13 @@ async function finishImplement(
       })
     ) {
       await confirmLease();
+      const ownerStop = await ownerStopReason();
+      if (ownerStop !== null) {
+        return finalizeNeedsHuman(
+          ownerStop,
+          nextActionFor(ownerStop, "implement"),
+        );
+      }
       try {
         await deleteRemoteBranch({
           run: runCommand,
@@ -669,6 +695,10 @@ async function finishImplement(
         },
         config.instance_name,
       );
+      // 最初の書き込み(push)の直前に、オーナーの数値IDを照合する。
+      // 以降のPRの作成と更新、ラベルの付与は、このpushに続けて行う。
+      const ownerStop = await ownerStopReason();
+      if (ownerStop !== null) return { ok: false, reason: ownerStop };
       // `commitAndPush`はステージし直すので、commitする索引そのものが検証したツリーかも確かめる。
       const pushed = await commitAndPush({
         ...(await commitOptions(ctx, message)),

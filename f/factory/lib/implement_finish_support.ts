@@ -237,6 +237,11 @@ export type PreserveWorkDeps = {
   readonly ensureLockFree: () => Promise<void>;
   /** 文脈の`worktree_git_pointer`に対して`assertWorktreeGitPointer`を実行する。 */
   readonly assertGitPointer: () => Promise<void>;
+  /**
+   * pushの直前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
+   * 通らないときは、止める理由を返す。通るときは`null`。
+   */
+  readonly ensureRepoOwner: () => Promise<string | null>;
   /** implementのworktreeに`runGitleaksOnWorktree`を実行する。 */
   readonly scanForSecrets: () => Promise<GitleaksScan>;
   /**
@@ -255,6 +260,7 @@ export type PreserveWorkDeps = {
  * worktreeのロックを持つプロセスが残っていればpushしない。
  * `.git`ポインタが変わったworktreeではgitを実行しない。
  * 秘密の検査で検出された変更や、検査できなかった変更、検査した後に変わった変更もpushしない。
+ * pushの直前に、リポジトリのオーナーの数値IDを照合し、通らなければpushしない。
  * `needs_human`の理由に付け足す注記(英語)の配列を返す。
  * 例外は`ImplementLeaseLostError`(依存がリースを失ったと知らせた)だけを投げ直し、
  * それ以外は注記にする。リースを失った実行は、注記を付けて人に知らせるのではなく、何もせずに終えるため。
@@ -276,6 +282,8 @@ export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
   }
   if (!scan.ok) return [SECRETS_NOT_PUSHED_REASON];
   try {
+    const ownerStop = await deps.ensureRepoOwner();
+    if (ownerStop !== null) return [ownerStop];
     const pushed = await deps.commitAndPush(scan.treeSha);
     return pushed.outcome === "head_changed"
       ? [`branch head moved to ${pushed.currentSha} while implementing`]

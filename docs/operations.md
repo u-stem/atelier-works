@@ -156,6 +156,11 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 - dependabotのPRの取得(`poll_dependabot`)。作業項目を作る前に照合する。
 - フォームで投入する`manual_intake_create_issue`。Issueを作る前に照合する。
 - Issue化の提案を処理する`issue_proposal_apply`。承認は判断の記録の前に、却下は返信の前に、1回だけ照合する。
+- 長い実行を挟んだ後の書き込み。Claudeの実行と検査の間に名前が別の人に渡りうるので、準備の入口に加えて、書き込みの直前にも1回照合する。
+  実装の終了処理(`implement_finish`)は、pushとリモートブランチの削除の前に照合する。
+  PR修正の終了処理(`pr_fix_finish`)は、pushの前に照合する。
+  PRレビューの投稿(`pr_review_post`)は、レビューの投稿の前に照合する。
+  draw.ioのビューアを上げる`drawio_viewer_bump`は、`factory_repo_id`をブランチの作成の前に照合する。
 
 照合は、リポジトリのオーナーの名前で`owners`を引いて行う。
 大文字と小文字は区別しない。
@@ -200,6 +205,10 @@ GitHubでそのオーナーが意図した持ち主かを確かめ、`factory_co
 | `implement_prepare` | 作業項目を人の対応待ちにして、Discordに知らせる |
 | `pr_fix_prepare` | 作業項目をブロック(`blocked`)にして、Discordに知らせる |
 | `pr_review_prepare` | PRを読む前に、作業項目をブロックにして、Discordに知らせる。forkのPRを見送るときと同じ終わり方である |
+| `implement_finish` | pushかリモートブランチの削除の前に止める。何も書かずに、作業項目を人の対応待ちにして、Discordに知らせる。途中までの作業のpushでは、理由を人の対応待ちの理由に足す |
+| `pr_fix_finish` | pushの前に止める。作業項目をブロックにして、修正のラウンドは記録せず、Discordに知らせる。返信も投稿しない |
+| `pr_review_post` | レビューの投稿とスレッドの解決の前に止める。作業項目をブロックにして、Discordに知らせる。投稿済みのレビューを再利用するときは、書き込まないので照合しない |
+| `drawio_viewer_bump` | ブランチもPRも作らずに終わる。`factory_repo_id_mismatch`のnoticeが残る。`factory_repo_id`が無いときは照合しない |
 | `poll_dependabot` | 作業項目を作る前に照合する。落ちたら、作業項目を作ってすぐ人の対応待ちにして、Discordに知らせる。フローは起動しない。作業項目は再実行できないので、設定を見直した後は、PRを人が確かめる |
 | `issue_proposal_apply`の承認 | 判断を記録せず、GitHubへ何も書かずに、例外で失敗する。承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。例外の文は、`factory_repo_id`の食い違いか見つからないとき(404やURLを読めないとき)なら`factory_repo`と`factory_repo_id`、それ以外なら`owners`を見直すよう案内する |
 | `issue_proposal_apply`の却下 | 判断を記録した後、返信だけを止め、作業項目は先へ進める。止めた理由はログに残る。照合そのものが失敗したとき(404以外の取得の失敗を含む)も、例外にしない |

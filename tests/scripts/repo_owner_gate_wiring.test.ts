@@ -164,3 +164,55 @@ describe("the owner check in issue_proposal_apply", () => {
     );
   });
 });
+
+describe("the owner id check before the writes of the finish steps", () => {
+  test("implement_finish checks before the final commit and push", async () => {
+    const text = await source("implement_finish.ts");
+    expect(positionOf(text, "await ownerStopReason()")).toBeLessThan(
+      positionOf(text, "const pushed = await commitAndPush("),
+    );
+  });
+
+  test("implement_finish hands the check to the partial work push", async () => {
+    const text = await source("implement_finish.ts");
+    expect(text).toContain("ensureRepoOwner: ownerStopReason,");
+  });
+
+  test("implement_finish checks before deleting the remote branch", async () => {
+    const text = await source("implement_finish.ts");
+    expect(positionOf(text, "await ownerStopReason()")).toBeLessThan(
+      positionOf(text, "await deleteRemoteBranch("),
+    );
+  });
+
+  test("pr_fix_finish checks before the commit and push", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(positionOf(text, "await repoOwnerStopReason(")).toBeLessThan(
+      positionOf(text, "pushResult = await commitAndPush("),
+    );
+  });
+
+  test("pr_fix_finish checks after the pull request is read for the ci round", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      positionOf(text, "await getPr(client, owner, repo, pr_number)"),
+    ).toBeLessThan(positionOf(text, "await repoOwnerStopReason("));
+  });
+
+  test("pr_fix_finish calls the gate once", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(text.split("await repoOwnerStopReason(").length - 1).toBe(1);
+  });
+
+  test("pr_review_post hands the check to the review publication", async () => {
+    const text = await source("pr_review_post.ts");
+    expect(text).toContain("ensureRepoOwner: () =>");
+  });
+
+  test("drawio_viewer_bump hands the factory_repo_id check to the bump", async () => {
+    const text = await Bun.file(
+      new URL("../../f/factory/drawio_viewer_bump.ts", import.meta.url),
+    ).text();
+    expect(text).toContain("verifyFactoryRepo: async () =>");
+  });
+});

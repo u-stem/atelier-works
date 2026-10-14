@@ -201,6 +201,38 @@ export async function verifyRepoOwnerId(
   };
 }
 
+/**
+ * `verifyRepoOwnerId`の結果を、止める理由か`null`(通る)に読み替える。
+ * GitHubへ書き込む直前に呼ぶ終端のステップが、通らないときに書かず、その理由を終端に載せるためのもの。
+ * noticeは`verifyRepoOwnerId`が残す。取得の失敗(404以外)は、元の例外のまま投げる。
+ */
+export async function repoOwnerStopReason(
+  config: Pick<FactoryConfig, "owners" | "factory_repo" | "factory_repo_id">,
+  owner: string,
+  repo: string,
+  deps: RepoOwnerGateDeps,
+): Promise<string | null> {
+  const result = await verifyRepoOwnerId(config, owner, repo, deps);
+  return result.ok ? null : result.reason;
+}
+
+/**
+ * `reason`が、この関門が返す止める理由のどれかを返す。
+ * 理由の文字列だけを受け取る終端の処理が、Claudeの失敗として数えずに止めるかを決めるために使う。
+ */
+export function isRepoOwnerStopReason(reason: string): boolean {
+  return (
+    reason.startsWith(
+      "repository owner id differs from factory_config owners: ",
+    ) ||
+    reason.startsWith(
+      "repository not found while checking the owner id in factory_config owners: ",
+    ) ||
+    reason.startsWith("repository owner is not in factory_config owners: ") ||
+    isFactoryRepoIdCheckReason(reason)
+  );
+}
+
 async function recordNotice(
   message: string,
   deps: RepoOwnerGateDeps,

@@ -11,6 +11,7 @@ import {
 import type { ReviewThread } from "../../f/factory/lib/github.ts";
 import { SECRETS_NOT_PUSHED_REASON } from "../../f/factory/lib/implement_finish_support.ts";
 import { WorktreeBusyError } from "../../f/factory/lib/process_lock.ts";
+import { repoOwnerIdMismatchReason } from "../../f/factory/lib/repo_owner_gate.ts";
 import type { FixReply } from "../../f/factory/lib/types.ts";
 import {
   type GitleaksScan,
@@ -77,6 +78,16 @@ describe("stopBeforeCommitTerminal", () => {
 
   test("does not record a round when the running worker is unsafe for checks", () => {
     expect(stopBeforeCommitTerminal(RUNTIME).recordsRound).toBe(false);
+  });
+
+  const OWNER = repoOwnerIdMismatchReason("acme/widgets", 1, 2);
+
+  test("blocks the work item when the repository owner check fails", () => {
+    expect(stopBeforeCommitTerminal(OWNER).toStatus).toBe("blocked");
+  });
+
+  test("does not record a round when the repository owner check fails", () => {
+    expect(stopBeforeCommitTerminal(OWNER).recordsRound).toBe(false);
   });
 
   test("keeps the environment problem as status_reason", () => {

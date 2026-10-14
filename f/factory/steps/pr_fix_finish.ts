@@ -50,6 +50,10 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import {
+  repoOwnerGateDeps,
+  repoOwnerStopReason,
+} from "../lib/repo_owner_gate.ts";
 import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
@@ -213,6 +217,7 @@ export async function requestRereview(
  *   通常の回と逆である。
  * - ステージした内容を、保護パスの検査に加えて、許可リスト方式でも検査する(`inspectCiFixChanges`)。
  * - pushの直前に、PRが開いていて、draftでなく、auto-mergeが無効で、headが修正の前提のままであることを確かめる。
+ * - pushの直前に、リポジトリのオーナーの数値IDを照合する。通らなければpushも返信もせず、`blocked`にする。
  * - 返信を持つ結果は受け付けない。
  * 失敗の行(`pr_ci_checks`)には触れない。行の整理は`watch_pr_ci`の役目である。
  *
@@ -802,6 +807,17 @@ export async function main(
     const pushStop = ciRoundPushGuardReason(latest, head_sha);
     if (pushStop !== null) return stopBeforeCommit(pushStop);
   }
+
+  // 最初の書き込み(push)の直前に、オーナーの数値IDを照合する。
+  // 準備の入口の照合から、Claudeの実行と検査を挟むので、その間に名前が別の人に渡っていても、
+  // ローカルにしか無いオブジェクトを相手に渡さない。以降の返信は、このpushに続けて行う。
+  const ownerStop = await repoOwnerStopReason(
+    config,
+    owner,
+    repo,
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+  );
+  if (ownerStop !== null) return stopBeforeCommit(ownerStop);
 
   let pushResult: CommitAndPushResult;
   try {

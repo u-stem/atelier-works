@@ -306,6 +306,7 @@ describe("preserveWork", () => {
       PUSHED,
     assertGitPointer: () => Promise<void> = async () => {},
     ensureLockFree: () => Promise<void> = async () => {},
+    ensureRepoOwner: () => Promise<string | null> = async () => null,
   ): {
     deps: PreserveWorkDeps;
     pushes: { count: number; trees: string[] };
@@ -320,6 +321,7 @@ describe("preserveWork", () => {
       deps: {
         ensureLockFree,
         assertGitPointer,
+        ensureRepoOwner,
         scanForSecrets: async () => {
           scans.count += 1;
           return scan();
@@ -395,6 +397,48 @@ describe("preserveWork", () => {
         )
       )[0],
     ).toMatch(/^implement finish failed: /);
+  });
+
+  const OWNER_STOP = async (): Promise<string | null> =>
+    "repository owner is not in factory_config owners: octo-owner/app";
+
+  test("reports the owner check failure instead of pushing", async () => {
+    expect(
+      await preserveWork(
+        preserveDeps(CLEAN_SCAN, undefined, undefined, undefined, OWNER_STOP)
+          .deps,
+      ),
+    ).toEqual([
+      "repository owner is not in factory_config owners: octo-owner/app",
+    ]);
+  });
+
+  test("does not push when the owner check fails", async () => {
+    const h = preserveDeps(
+      CLEAN_SCAN,
+      undefined,
+      undefined,
+      undefined,
+      OWNER_STOP,
+    );
+    await preserveWork(h.deps);
+    expect(h.pushes.count).toBe(0);
+  });
+
+  test("does not check the owner when secrets were found", async () => {
+    let checks = 0;
+    const h = preserveDeps(
+      LEAK_SCAN,
+      undefined,
+      undefined,
+      undefined,
+      async () => {
+        checks += 1;
+        return null;
+      },
+    );
+    await preserveWork(h.deps);
+    expect(checks).toBe(0);
   });
 
   test("reports secrets instead of pushing", async () => {

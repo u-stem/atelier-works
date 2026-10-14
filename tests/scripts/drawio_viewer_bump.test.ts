@@ -81,6 +81,7 @@ function harness(overrides: Partial<BumpDeps> = {}): Harness {
         expectedHeadSha: sha,
       };
     },
+    verifyFactoryRepo: async () => true,
     requestReview: async (number) => {
       reviewed.push(number);
     },
@@ -114,6 +115,54 @@ describe("runBump nothing to do", () => {
     });
     await runBump(deps, null);
     expect(published).toEqual([]);
+  });
+});
+
+describe("runBump checking the factory repository before writing", () => {
+  test("creates no branch or pull request when the repository check fails", async () => {
+    const { deps, published } = harness({
+      verifyFactoryRepo: async () => false,
+    });
+    await runBump(deps, null);
+    expect(published).toEqual([]);
+  });
+
+  test("reports the repository check failure", async () => {
+    const { deps } = harness({ verifyFactoryRepo: async () => false });
+    expect((await runBump(deps, null)).outcome).toBe("repository_mismatch");
+  });
+
+  test("requests no review when the repository check fails", async () => {
+    const { deps, reviewed } = harness({
+      verifyFactoryRepo: async () => false,
+    });
+    await runBump(deps, null);
+    expect(reviewed).toEqual([]);
+  });
+
+  test("checks the repository once when it opens the pull request", async () => {
+    let checks = 0;
+    const { deps } = harness({
+      verifyFactoryRepo: async () => {
+        checks += 1;
+        return true;
+      },
+    });
+    await runBump(deps, null);
+    expect(checks).toBe(1);
+  });
+
+  test("does not check the repository when there is nothing to open", async () => {
+    let checks = 0;
+    const { deps } = harness({
+      listReleases: async () => [release("v32.4.1", 30)],
+      verifyFactoryRepo: async () => {
+        checks += 1;
+        return true;
+      },
+    });
+    await runBump(deps, null);
+    expect(checks).toBe(0);
   });
 });
 
