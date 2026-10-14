@@ -1,5 +1,7 @@
 // `f/factory/`のすべてのスケジュールの`on_failure`ハンドラ。
 // 失敗を`job_failures`に記録し、Discordに`job_failed`を通知する。
+// 通知は、同じスケジュールの連続した失敗の初回と、エラー文が変わったときだけにする。
+// 失敗が続くと、スケジュールの間隔に比例して通知が増えるため。
 // 同じスケジュールの直近3回の実行が続けて失敗していれば、要対応のnoticeも残す。
 //
 // Windmillは`on_failure`ハンドラを決まった特殊引数で呼ぶ。引数名
@@ -11,10 +13,19 @@
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
-import { addNoticeUnlessUnresolved, recordFailure } from "./lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  getLatestScheduleFailure,
+  recordFailure,
+} from "./lib/db.ts";
 import { notify } from "./lib/discord.ts";
 import { logger, maskSecrets } from "./lib/log.ts";
-import { flagFailingSchedule } from "./lib/schedule_failing.ts";
+import {
+  flagFailingSchedule,
+  type PreviousScheduleFailure,
+  SCHEDULE_FAILING_FETCH_COUNT,
+  shouldNotifyJobFailed,
+} from "./lib/schedule_failing.ts";
 import { isRecord, isString } from "./lib/types.ts";
 
 function errorMessage(error: unknown): string {
@@ -47,6 +58,19 @@ export async function main(
     error: message,
   });
 
+  // 今回の失敗を記録する前に、前回の失敗の記録を読む。
+  // 読めなければ、変わったかを判定できないので、通知を送る側に倒す。
+  let previousFailure: PreviousScheduleFailure | null = null;
+  try {
+    previousFailure = await getLatestScheduleFailure(flowPath);
+  } catch (readErr) {
+    log.error("failed to read the previous failure", {
+      error: maskSecrets(
+        readErr instanceof Error ? readErr.message : String(readErr),
+      ),
+    });
+  }
+
   try {
     await recordFailure({
       work_item_id: null,
@@ -63,7 +87,20 @@ export async function main(
     });
   }
 
-  try {
+  // ジョブ履歴は、通知の判定と、連続した失敗の判定で使い回す。
+  let runsRequest: Promise<unknown> | undefined;
+  const fetchRuns = (): Promise<unknown> => {
+    runsRequest ??= wmill.JobService.listCompletedJobs({
+      workspace: wmillDefault.getWorkspace(),
+      scriptPathExact: flowPath,
+      orderDesc: true,
+      isSkipped: false,
+      perPage: SCHEDULE_FAILING_FETCH_COUNT,
+    });
+    return runsRequest;
+  };
+
+  const sendJobFailed = async (): Promise<void> => {
     const config = await loadConfig(() =>
       wmill.getResource("f/factory/factory_config"),
     );
@@ -77,6 +114,39 @@ export async function main(
         error: message,
       });
     }
+  };
+
+  try {
+    let runs: unknown = null;
+    if (flowPath !== "unknown") {
+      try {
+        runs = await fetchRuns();
+      } catch (historyErr) {
+        // 履歴を読めなければ、初回の失敗として通知する。
+        log.error("failed to read the schedule history for the notification", {
+          error: maskSecrets(
+            historyErr instanceof Error
+              ? historyErr.message
+              : String(historyErr),
+          ),
+        });
+      }
+    }
+    if (
+      shouldNotifyJobFailed({
+        runs,
+        jobId: resolvedJobId,
+        previousFailure,
+        currentError: message,
+      })
+    ) {
+      await sendJobFailed();
+    } else {
+      log.info("job_failed notification skipped for a repeated failure", {
+        flow_path: flowPath,
+        job_id: resolvedJobId,
+      });
+    }
   } catch (notifyErr) {
     log.error("failed to send discord notification", {
       error: maskSecrets(
@@ -87,16 +157,11 @@ export async function main(
 
   // 直近の実行が続けて失敗しているスケジュールは、Discordの通知を見落としても拾えるよう、
   // 要対応のnoticeにも残す。既存の記録とDiscordの通知より後ろに置き、これらを遅らせない。
+  // 初回の通知が届かなかった場合に備え、続けて失敗している通知を新しく残したときは、Discordにも送り直す。
   await flagFailingSchedule(flowPath, {
-    listRecentRuns: (path, count) =>
-      wmill.JobService.listCompletedJobs({
-        workspace: wmillDefault.getWorkspace(),
-        scriptPathExact: path,
-        orderDesc: true,
-        isSkipped: false,
-        perPage: count,
-      }),
+    listRecentRuns: () => fetchRuns(),
     addNotice: (record) => addNoticeUnlessUnresolved(record),
+    onFailingNoticeInserted: sendJobFailed,
     log,
   });
 }

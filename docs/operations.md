@@ -1521,7 +1521,7 @@ Factoryは、人の行動が要るものだけをDiscordに送る。通知の仕
 | 承認待ち(`approval_requested`) | 要件定義が承認待ちになった | [要件定義を承認・却下する](#要件定義を承認却下する) |
 | 要件定義承認(`requirements_approved`) | 要件定義が承認され、Issueにリンクを投稿した | なし。実装が有効なら実装フローが始まる |
 | 人による対応が必要(`needs_human`) | 作業項目が人の対応待ちか期限切れになった。または、Factoryが作ったPRのCIが失敗した。通知を新しく残したときに届く | 通知の「次の操作」に従う。作業項目を再実行するときは、Windmillで`retry_work_item`を実行する。PRのCIの失敗は[PRのCIを監視する](#prのciを監視する)にある |
-| ジョブ失敗(`job_failed`) | フローやスケジュールが失敗した。孤児のジョブや閉じたIssue・PRの片付けも含む | Consoleの**要対応**の失敗か、**システム**の「作業項目に紐づかない失敗」で内容を確かめる。作業項目の失敗は再実行する。dependabotの作業項目は再実行できないので、通知の「次の操作」に従ってPRを人が確かめる |
+| ジョブ失敗(`job_failed`) | フローやスケジュールが失敗した。孤児のジョブや閉じたIssue・PRの片付けも含む。スケジュールは、連続した失敗の初回とエラー文が変わったときだけ届く。同じ失敗が続くときは、3回目に`schedule_failing`が出て、そのときもう一度届く(同じスケジュールの未解決の`schedule_failing`が残っているときは届かない) | Consoleの**要対応**の失敗か、**システム**の「作業項目に紐づかない失敗」で内容を確かめる。作業項目の失敗は再実行する。dependabotの作業項目は再実行できないので、通知の「次の操作」に従ってPRを人が確かめる |
 | PR作成・更新(`pr_opened`) | 実装フローがPRを作成か更新した | [PRができたら](#prができたら) |
 | PRレビュー完了(`pr_reviewed`) | レビューを投稿した | 指摘を確かめる。指摘が無ければApproveを判断する |
 | PR修正適用(`pr_fixed`) | 修正をpushし、再レビューを依頼した | 再レビューを待つ。補足に依頼の失敗が載っていれば、GitHubのPRで人がレビュアーを依頼する |
@@ -1628,7 +1628,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
-| `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が1時間(30回)続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
+| `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
@@ -1678,10 +1678,12 @@ workerが居ても、2枠とも塞がっているときや、tagの設定がず�
 - `could not confirm the console worker from the job lists`: 応答が一覧の形でない。または、待つジョブも30分以内の完了も無い(完了は、Console用のworkerのものだけを数える)。
 - `console worker check timed out`: 10秒以内に終わらなかった。
 
-確認できない回数は自己更新のstateに数える。
-stateを読めなかった回は、数えず、stateも書かない。
-30回(1時間)続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
-確認できれば回数は0に戻る。
+最初に確認できなかった時刻を、自己更新のstateのキー`console_worker_unknown_since_ms`に残す。
+回数ではなく時刻で数えるので、自己更新の間隔を変えても、続いた時間の意味は変わらない。
+stateを読めなかった回は、時刻を書かない。
+その時刻から1時間続くと、通知`console_worker_check_failed`を残し、Discordにも知らせる。
+確認できれば時刻を消す。
+stateに回数のキー`console_worker_unknown_count`があれば、読まず、書くときに消す。
 
 マージの後は、次の手順で検知が動いていることを確かめる。
 Console用のworkerを止めて戻すコマンドは次のとおりである。
@@ -1870,9 +1872,13 @@ OOMの増分は、`mem_oom`と`mem_oom_kill`を別々に、値の読めた行だ
 - 2分ごとの実行は、1回ごとに、記録のジョブ(tag `bun`)と、挿入のジョブ(tag `postgresql`のプレビュー)ができる。
   Windmillのジョブ履歴とログに、1日に1440件以上を足す。
 - 失敗が続く間は、noticeを扱うクエリのジョブも加わる。
-- ジョブ履歴の保持期間は、公式文書では自前運用の無償版で最大30日である。
+- ジョブ履歴の保持期間は、公式文書では自前運用の無償版(Community Edition)で最大30日である。
   1日1440件の増加と合わせると、記録だけで約4.3万件が履歴に残りうる。
-  実機のインスタンス設定に保持期間の行は無い。
+  保持期間を変える設定(`retention_period_secs`)はEnterprise Editionだけで、実機のインスタンス設定にも行が無い。
+  設定が未設定のときの既定値は、Windmillのソース(`backend/src/monitor.rs`の`retention_period_secs`の読み込み)で30日(2592000秒)と確かめた。
+  公式文書には既定値の数値が無い。
+  `self_update`は2分ごとなので1日に720件を足し、30日で約2.2万件になる。
+  `auto_retry_stale_image`は、候補があるときと通知を解決した回だけ起動するので、`self_update`の間隔に比例して増えない。
 - 記録の表は、DBの掃除が、`sampled_at`から30日(`retention_logs_days`)を過ぎた行を消す。
   掃除が毎日動いていれば、行数は約2.2万行で頭打ちになる。
   詳しくは[保持期間](#保持期間)の節に書く。
