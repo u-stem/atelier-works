@@ -33,7 +33,7 @@ locks:
   f/factory/lib/claude: 0da701e30c732878371ee7b96d96d343173e230deef982fad82300a201c9fa0c
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 81d98d59d095338a46ffc844fbb47254e89c113652498cfbe39c38cad3bf37da
-  f/factory/lib/config: b4ca2e1f165a801f52218690da7afa672529cb0657630b288f2aec9bdfc76ed2
+  f/factory/lib/config: 7715da7654ef4f8302998158662acde12efa5dca63ee1f2f73411c59401d51e5
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d1a31969da1507c7e0d959f55897dec7360835451e901fdc84bd984c6b195e53
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
@@ -50,7 +50,7 @@ locks:
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 12498f9f5d129dcec0cbd1a27a2d1a72328a2bfc890fe54330a1d6bd003ea5dd
-  f/factory/lib/github: df008caa3b87c4866cf79da7ae17fc48154e2d8b859f414987dab84dea910bc3
+  f/factory/lib/github: a7e6c6fb965bf49eaffda19172958e3beee56f90d766b62bb819253cbf44d98f
   f/factory/lib/host_action: dc0d09838934a55630d453e9c3af9aaaaaaef637325f1133eab9a809327e7123
   f/factory/lib/implement_finish_support: 650e75bc3c8f4568472a5d94a06d86aac9ec5ec2151a1b4b8679956ab544d4c5
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77
@@ -82,7 +82,7 @@ locks:
   f/factory/lib/self_update_support: 67c7b658a660af759976cf14ba5f2cf41921074e4f71916760a97bfd0475159c
   f/factory/lib/summary_support: 032b4c68ad4412f890724532423d8c81d8a6da7f2186e3cfe4d84999c56484a9
   f/factory/lib/supersede_support: 0bd26793924642319a83c6b2759c8ac26229e889e57ab70a1de8ac0d9c1848db
-  f/factory/lib/types: f47bffb5910db836de3823ab01eb1cfb4185f6465c02ecda597cfc32da14c412
+  f/factory/lib/types: 3931b58c198eb228252ccba11b56e5e41b6ebd2295fff6ee262cbda1dfdb19e3
   f/factory/lib/worker_load_support: b6ae51b478860e07a4da1c130a793c619e524f9f400301bc881451810dbc6153
   f/factory/lib/workspace: b0dde0eb3d74504f9c947ef7568f68f892058ed210712c825fbd01b63be55a7b
   f/factory/manual_intake__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a

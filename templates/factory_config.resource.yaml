@@ -13,6 +13,11 @@
 #       kind: user   # または"org"
 #       id: <GitHubの数値ID>   # 任意。`gh api users/<名前> --jq .id`で調べる
 #
+# allowed_labeler_ids: 任意。`allowed_labeler_logins`のアカウントの数値IDで、
+# `{<ログイン名>: <数値ID>}`の形に書く。`gh api users/<ログイン名> --jq .id`で調べる。
+# 入れたアカウントは、同じ名前でもIDが違う人が付けたラベルを許可しない。
+# 入れないアカウントは名前だけで照合する。
+#
 # factory_repo_id: 任意。`factory_repo`のGitHubリポジトリの数値IDで、
 # `gh api repos/<owner>/<repo> --jq .id`で調べる。入れると、Factory自身のcloneを使う処理が
 # 取得の前に現在のIDと照合し、食い違うときは取得しない。
@@ -24,6 +29,7 @@ value:
     - MEMBER
     - COLLABORATOR
   allowed_labeler_logins: []
+  allowed_labeler_ids: {}
   model: claude-sonnet-5-5
   heavy_model: claude-opus-5-5
   max_attempts: 3
