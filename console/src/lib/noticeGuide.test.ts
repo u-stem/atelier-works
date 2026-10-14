@@ -118,9 +118,15 @@ describe("noticeGuide", () => {
     );
   });
 
-  test("tells that a denied labeler may be another account with the same name", () => {
+  test("tells that an account with a configured id is denied when the id differs", () => {
     expect(noticeGuide("labeler_denied").meaning).toContain(
-      "名前が同じでも別のアカウント",
+      "IDを入れたアカウントは、名前が同じでもIDが違う人",
+    );
+  });
+
+  test("tells that an account without a configured id is matched by name only", () => {
+    expect(noticeGuide("labeler_denied").meaning).toContain(
+      "IDを入れていないアカウントは、名前だけで照合します",
     );
   });
 

@@ -489,7 +489,14 @@ export function labelerPolicyFor(
 ): LabelerPolicy {
   const allowedIds: Record<string, number> = {};
   for (const [login, id] of Object.entries(config.allowed_labeler_ids)) {
-    allowedIds[login.toLowerCase()] = id;
+    // `__proto__`のキーは、代入では自身のプロパティにならず値が黙って落ちる。
+    // 落ちるとIDなしの扱いになるので、定義で自身のプロパティにする。
+    Object.defineProperty(allowedIds, login.toLowerCase(), {
+      value: id,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return {
     viewerLogin,
@@ -524,9 +531,9 @@ export function isAllowedLabeler(
   if (!policy.allowedLogins.some((login) => login.toLowerCase() === actor)) {
     return false;
   }
-  const expectedId = policy.allowedIds[actor];
-  if (expectedId === undefined) return true;
-  return actorId === expectedId;
+  // `constructor`などの継承したプロパティを、載せたIDと取り違えない。
+  if (!Object.hasOwn(policy.allowedIds, actor)) return true;
+  return actorId === policy.allowedIds[actor];
 }
 
 /**

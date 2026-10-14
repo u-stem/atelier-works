@@ -498,7 +498,14 @@ function labelerIdsField(
         `"${field}"[${JSON.stringify(key)}] must be a positive integer`,
       );
     }
-    result[key] = id;
+    // `__proto__`のキーは、代入では自身のプロパティにならず値が黙って落ちる。
+    // 落ちるとIDなしの設定に変わるので、定義で自身のプロパティにする。
+    Object.defineProperty(result, key, {
+      value: id,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return result;
 }

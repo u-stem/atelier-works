@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   decidePrActions,
+  isAllowedLabeler,
   type LabelerPolicy,
   labelerPolicyFor,
   type PrCandidate,
@@ -710,6 +711,29 @@ describe("labelerPolicyFor", () => {
       allowed_labeler_ids: { Alice: 1001 },
     });
     expect(policy.allowedIds).toEqual({ alice: 1001 });
+  });
+});
+
+describe("labelerPolicyFor with a __proto__ key", () => {
+  const ids: Record<string, number> = JSON.parse('{"__proto__": 1001}');
+
+  function policy() {
+    return labelerPolicyFor("octo-owner", {
+      allowed_labeler_logins: ["__proto__"],
+      allowed_labeler_ids: ids,
+    });
+  }
+
+  test("keeps the id as an own property", () => {
+    expect(Object.hasOwn(policy().allowedIds, "__proto__")).toBe(true);
+  });
+
+  test("denies the login when the id differs", () => {
+    expect(isAllowedLabeler("__proto__", policy(), 2002)).toBe(false);
+  });
+
+  test("allows the login when the id matches", () => {
+    expect(isAllowedLabeler("__proto__", policy(), 1001)).toBe(true);
   });
 });
 

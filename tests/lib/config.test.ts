@@ -359,6 +359,15 @@ describe("parseFactoryConfig", () => {
     expect(config.allowed_labeler_ids).toEqual({ aLICE: 1001 });
   });
 
+  test("keeps a __proto__ key of allowed_labeler_ids as an own entry", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      allowed_labeler_logins: ["__proto__"],
+      allowed_labeler_ids: JSON.parse('{"__proto__": 1001}'),
+    });
+    expect(Object.hasOwn(config.allowed_labeler_ids, "__proto__")).toBe(true);
+  });
+
   test("throws when allowed_labeler_ids is not an object", () => {
     const raw = { ...LEGACY_RAW_CONFIG, allowed_labeler_ids: [1001] };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);

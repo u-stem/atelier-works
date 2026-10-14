@@ -217,6 +217,15 @@ describe("isAllowedLabeler with numeric IDs", () => {
     expect(isAllowedLabeler("octo-owner", policy, 1)).toBe(true);
   });
 
+  test("allows a listed login named like an Object.prototype member without an id", () => {
+    const policy: LabelerPolicy = {
+      ...VIEWER_ONLY,
+      allowedLogins: ["constructor"],
+      allowedIds: {},
+    };
+    expect(isAllowedLabeler("constructor", policy, null)).toBe(true);
+  });
+
   test("denies an unlisted login even when an id is configured for another", () => {
     expect(isAllowedLabeler("mallory", WITH_ID, 1001)).toBe(false);
   });

@@ -29,7 +29,6 @@ import {
   getFileAtRef,
   getIssue,
   getLabelerActor,
-  getLabelerLogin,
   getPr,
   getPrDiff,
   getPrFiles,
@@ -1467,7 +1466,7 @@ describe("getIssue closing fields", () => {
   });
 });
 
-describe("getLabelerLogin", () => {
+describe("getLabelerActor labeler selection", () => {
   const at = (n: number) => `2026-10-01T00:00:${String(n).padStart(2, "0")}Z`;
   const labeled = (login: string | null, label: string, n = 1) =>
     labelEventNode("labeled", login, label, at(n));
@@ -1476,16 +1475,14 @@ describe("getLabelerLogin", () => {
 
   async function loginOf(responses: readonly CommandResult[], label: string) {
     const fake = createFakeCommandRunner(responses);
-    return {
-      fake,
-      login: await getLabelerLogin(
-        { run: fake.run, ghToken: "tok" },
-        "acme",
-        "widgets",
-        5,
-        label,
-      ),
-    };
+    const actor = await getLabelerActor(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      label,
+    );
+    return { fake, login: actor === null ? null : actor.login };
   }
 
   test("reads the label events through GraphQL", async () => {
@@ -1786,7 +1783,7 @@ describe("getLabelerLogin", () => {
       ok(ghApiStdout(400, { message: "bad" })),
     ]);
     await expect(
-      getLabelerLogin(
+      getLabelerActor(
         { run: fake.run, ghToken: "tok" },
         "acme",
         "widgets",

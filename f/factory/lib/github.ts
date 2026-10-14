@@ -1416,20 +1416,6 @@ export async function getLabelerActor(
   return { login: last.actorLogin, databaseId: last.actorId };
 }
 
-/**
- * `label`を最後に付けた人のログイン名を返す。`null`にする条件は`getLabelerActor`と同じ。
- */
-export async function getLabelerLogin(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  number: number,
-  label: string,
-): Promise<string | null> {
-  const actor = await getLabelerActor(client, owner, repo, number, label);
-  return actor === null ? null : actor.login;
-}
-
 export type ClaimIssueOptions = {
   readonly triggerLabel: string;
   readonly assignee: string;
