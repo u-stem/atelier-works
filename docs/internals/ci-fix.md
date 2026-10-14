@@ -7,6 +7,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/ci_log_support.ts`、`lib/ci_fix_classify.ts`
 - `lib/ci_fix_prompt.ts`、`lib/ci_fix_paths.ts`
 - `lib/ci_fix_round.ts`
+- `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
 
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
@@ -469,6 +470,70 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 違反の報告に載せるパスは、不可視文字を除き、120字に切る。
 パスは外部由来の文字列だからである。
 
+## メタデータのパッチの受け取り
+
+CIの`metadata`ジョブが出すパッチ(artifact)を、取得し、検査し、書き込む内容の一覧にする部品である。
+artifactはPRの作者が完全に決められるので、安全は内容の制限で成り立たせる。
+取り決めは[セキュリティ](../security.md#受け取る側が必ず確かめること)にある。
+
+| ファイル | 責務 |
+| --- | --- |
+| `lib/github.ts` | 実行のartifactの一覧(`listWorkflowRunArtifacts`)と、zipのバイト列の取得(`downloadArtifactZip`) |
+| `lib/metadata_patch_zip.ts` | zipの安全な読み取り。結果は、パスから内容への対応 |
+| `lib/metadata_patch_manifest.ts` | パスの許可リストと、manifestの形と上限 |
+| `lib/metadata_patch_lock.ts` | scriptのlockの構造の検査と、mainの版との比較 |
+| `lib/metadata_patch_yaml.ts` | `.script.yaml`と`wmill-lock.yaml`の検査 |
+| `lib/metadata_patch_verify.ts` | 適用条件の検査。通れば書き込む内容を、通らなければ失敗の種別を返す |
+
+### パッチの取得
+
+zipは`fetch`で取得する。
+`gh api`の出力は文字列に復号されるので、バイナリのzipが壊れるためである。
+トークンはGitHubのAPIへの最初の要求にだけ載せ、リダイレクトはたどらない。
+返った302の`Location`が、`https`のAzureのblob storageでなければ断る。
+次の要求にはトークンを付けず、リダイレクトをたどらない。
+
+取得の前に、期限切れと、申告された大きさ(`size_in_bytes`)が上限を超えるものを断る。
+取得の間は、実際に受け取ったバイト数が上限を超えた時点で読むのをやめる。
+上限は`metadata_patch_zip.ts`の`MAX_ZIP_BYTES`で、呼び出し側が渡す。
+
+失敗は`GitHubArtifactDownloadError`で、種別とHTTPのステータスだけを持つ。
+署名付きURL、本文、トークンは、例外とログに載せない。
+取得したバイト列は、ログとDBに載せない。
+
+### zipの読み取り
+
+`readMetadataPatchZip`は、中央ディレクトリを自前で読み、`inflateRawSync`で展開する。
+圧縮方式はstoredとdeflateだけで、zip64、複数ディスク、暗号化は断る。
+展開の前に、宣言された大きさの合計、1ファイルの大きさ、エントリ数を上限と比べる。
+展開は宣言された大きさで打ち切り、実際の長さが違えば断る。
+
+symlink、特殊ファイル、`..`や絶対パスを含むパス、バックスラッシュ、制御文字も断る。
+同じ名前と、大文字小文字だけが違う名前も断る。
+結果は`{ ok: true, files }`か`{ ok: false, reason }`で、`reason`は固定の種別である。
+zipの中の文字列は、`reason`に載せない。
+
+### 適用条件の検査
+
+`verifyMetadataPatch`は、実行とPRの事実、zipの展開結果、読み取りのポートを受け取る。
+自分ではI/Oをしない。
+ポートは、履歴の祖先の判定、merge commitの親の取得、headの木とbaseの先端の木のファイルの読み取り、パッケージの公開からの日数の取得である。
+
+検査は次の順に行い、最初に当たった失敗を返す。
+
+1. 実行の出どころとPRの差分
+2. manifestと、実体の大きさとsha256、削除、保護パス
+3. 履歴(`baseSha`、`headSha`、`mergeSha`の関係)
+4. ファイルごとの内容
+
+ファイルごとの検査では、`.ts`が変わったscriptと、それを相対importの推移閉包で読むscriptだけを、変えてよいものとする。
+importの関係は、headの木のコードを正規表現で読んで求める。
+変数やテンプレートリテラルのimportは追えないので、そのscriptは対象にならず、パッチは断られる。
+
+成功の結果は、書き込む内容の一覧(`writes`)と、依存の版の変化(`dependencyChanges`)である。
+失敗の結果は、固定の種別(`code`)と、無害化した補足(`detail`)である。
+補足はパスなど入力に由来する値を含みうるので、JSONの文字列にして長さを切る。
+
 ## 既知の限界
 
 - 抑制の記述の検出は、追加行を1行ずつ見る文字列の照合である。
@@ -497,3 +562,5 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
   この呼び出しはGitHub APIのページ送りなので、応答が遅いと、ロックを長く持つ。
 - 認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。
 - `agent_runs.error`には、`lib/claude.ts`が実行の詳細を書く。検査を通っていない出力の抜粋がDBに残る。
+- パッチの`.script.yaml`は、`schema`の中身を検査しない。入力フォームの定義で、コードを動かさないためである。
+- `.script.yaml`と`wmill-lock.yaml`は、完全なYAMLとして解析しない。wmillが書く形から外れたものは、正当でも断る。

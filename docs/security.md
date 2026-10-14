@@ -203,8 +203,17 @@ artifactの中身は、攻撃者が完全に決められるものとして扱う
 ブランチやworkflowのパスの照合では、これを防げない。
 publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名のartifactを上げることもできる。
 そのため、受け取る側はartifactを信用しない前提で扱い、次のすべてを守る。
-確かめるコードは、`f/factory/lib/metadata_patch_manifest.ts`の`isAllowedMetadataPath`、`parseManifest`、上限の定数を使う。
-判定を1か所に置くためである。
+確かめるコードは`f/factory/lib/`の`metadata_patch_*.ts`にまとめ、判定を1か所に置く。
+各部品の責務は[内部仕様](internals/ci-fix.md#メタデータのパッチの受け取り)にある。
+
+| 取り決め | 実装 |
+| --- | --- |
+| artifactの取得 | `github.ts`の`listWorkflowRunArtifacts`、`downloadArtifactZip` |
+| zipの内容の制限 | `metadata_patch_zip.ts`の`readMetadataPatchZip` |
+| 出どころ、再検証、適用先、新規script | `metadata_patch_verify.ts`の`verifyMetadataPatch` |
+| パスの許可リスト、manifest | `metadata_patch_manifest.ts`の`isAllowedMetadataPath`、`parseManifest` |
+| lockの制限 | `metadata_patch_lock.ts`の`parseLock`、`compareLocks` |
+| `.script.yaml`と`wmill-lock.yaml`の制限 | `metadata_patch_yaml.ts`の`checkScriptYaml`、`parseWmillLock` |
 
 ##### 出どころ
 
@@ -267,6 +276,21 @@ PRの版の`scripts/metadata-patch.ts`が出した結果は、信用しない。
 `baseSha`の照合を、一致ではなく祖先にする。
 一致を求めると、`main`が進むたびに適用が先送りされるためである。
 headが`baseSha`を含めば、merge木とheadの木は同じで、パッチはheadに対して正しいままである。
+
+##### zipの内容の制限
+
+zipは、展開の前に宣言された大きさとパスを検査し、展開の間は宣言された大きさで打ち切る。
+次を拒否する。
+
+- 展開後の合計、1ファイル、エントリ数が上限を超えるもの(zip bomb)
+- 宣言された大きさと、展開した実際の長さが違うもの
+- symlinkと特殊ファイル
+- `..`、絶対パス、バックスラッシュ、制御文字を含むパス(zip slip)
+- 同じ名前と、大文字小文字だけが違う名前
+- stored、deflate以外の圧縮方式、暗号化、zip64
+
+ダウンロードは、申告された大きさと、実際に受け取ったバイト数の両方で上限を守る。
+トークンはAPIへの最初の要求にだけ載せ、取得先はAzureのblob storageの`https`に限る。
 
 ##### パスと削除の制限
 
