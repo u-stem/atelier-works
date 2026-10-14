@@ -26,7 +26,7 @@ locks:
   f/factory/lib/check_sandbox: cda5c9e171572ef81113d3748eb988f968e103fc0aab0feebe5d142bd1f9bf57
   f/factory/lib/ci_fix_classify: 3c7afb89715cb5a2ede49d499c473aef0facb8503b5c495d4b94b3714d2845a7
   f/factory/lib/ci_fix_paths: 90b3f1763359926edfb64cb38c9ab45ef8ac6ce86d08db481cc5f1643d82b193
-  f/factory/lib/ci_fix_prompt: cc1dd1b059b33173764b76cee0a0bea1127ee88e642e93ef4f23b928af25609c
+  f/factory/lib/ci_fix_prompt: 2d77078dc99c38e1445c152d407ac463037fe9466bf37dc711e6efb34f149934
   f/factory/lib/ci_fix_round: a467dde17170d8723868cadc33142d89f402db4a0a915cfda3c8e82a9c30c8d1
   f/factory/lib/ci_log_support: 0c079813679b394691042182d5adfa552dcc12cd38836f04c74930af40b7dc69
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a

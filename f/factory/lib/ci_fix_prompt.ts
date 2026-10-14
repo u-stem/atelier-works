@@ -35,6 +35,12 @@ export type CiFixPromptInput = {
   readonly prChangedPaths: readonly string[];
 };
 
+/**
+ * プロンプトの冒頭の固定の文が、CI回だと示す語句。
+ * スキルの本文が、CI回を見分ける手がかりとして同じ語句を挙げる。
+ */
+export const CI_ROUND_PROMPT_CUE = "in a CI round";
+
 /** プロンプトに載せるPRの変更ファイルの数の上限。超えた分は件数だけを示す。 */
 export const CI_FIX_PROMPT_MAX_CHANGED_PATHS = 100;
 
@@ -115,7 +121,7 @@ export function buildCiFixPrompt(
   const nonce = pickNonce(uuid, [...bodies, changedPaths]);
 
   const sections: string[] = [
-    "You are the fix stage of a Software Factory PR-fix pipeline, in a CI round.",
+    `You are the fix stage of a Software Factory PR-fix pipeline, ${CI_ROUND_PROMPT_CUE}.`,
     "The CI of the pull request below failed. Read the excerpts of the failed",
     "job logs and edit the repository so that the failure is fixed at its",
     "cause. The caller runs the checks after your edit and pushes the result.",

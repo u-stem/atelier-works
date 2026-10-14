@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CI_ROUND_PROMPT_CUE } from "../../f/factory/lib/ci_fix_prompt.ts";
 import {
   CI_FIX_SKILL_MARKER,
   hasCiFixSkillMarker,
@@ -28,5 +29,9 @@ describe("factory-fix skill marker", () => {
     const expected = `${CI_SECTION_HEADING}\n\n<!-- ${CI_FIX_SKILL_MARKER} -->\n`;
 
     expect(skillText).toContain(expected);
+  });
+
+  test("names the cue that the CI round prompt carries", () => {
+    expect(skillText).toContain(`\`${CI_ROUND_PROMPT_CUE}\``);
   });
 });

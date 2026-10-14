@@ -3,6 +3,7 @@ import {
   buildCiFixPrompt,
   CI_FIX_PROMPT_MAX_CHANGED_PATHS,
   CI_FIX_SCHEMA,
+  CI_ROUND_PROMPT_CUE,
   type CiFixPromptInput,
 } from "../../f/factory/lib/ci_fix_prompt.ts";
 import { VolatileCiExcerpt } from "../../f/factory/lib/ci_log_support.ts";
@@ -66,6 +67,10 @@ describe("buildCiFixPrompt", () => {
   test("puts the log excerpt inside a nonce fence", () => {
     const text = prompt({ excerpt: excerptOf("LOG-LINE-UNIQUE") });
     expect(outsideFences(text)).not.toContain("LOG-LINE-UNIQUE");
+  });
+
+  test("states the CI round cue outside the fences", () => {
+    expect(outsideFences(prompt())).toContain(CI_ROUND_PROMPT_CUE);
   });
 
   test("contains the log excerpt", () => {
