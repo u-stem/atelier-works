@@ -34,8 +34,8 @@ export type Manifest = {
 };
 
 // SHA-1(40桁)とSHA-256(64桁)の小文字の16進数。
-export const COMMIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
-export const DIGEST = /^[0-9a-f]{64}$/;
+const COMMIT_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const DIGEST = /^[0-9a-f]{64}$/;
 
 // パスの1区間。英数字か`_`で始め、`.`と`..`と隠しファイルを含めない。
 const SEGMENT = "[A-Za-z0-9_][A-Za-z0-9_.-]*";

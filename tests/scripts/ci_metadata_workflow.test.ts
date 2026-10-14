@@ -130,10 +130,9 @@ describe("the metadata job", () => {
     );
   });
 
-  test("passes the commits to the collection through the environment", () => {
+  test("passes the head and merge commits to the collection, and reads the base from the merge commit", () => {
     expect(recordAt(stepNamed("Collect the metadata patch"), "env")).toEqual({
       HEAD_SHA: `${OPEN} github.event.pull_request.head.sha }}`,
-      BASE_SHA: `${OPEN} github.event.pull_request.base.sha }}`,
       MERGE_SHA: `${OPEN} github.sha }}`,
     });
   });

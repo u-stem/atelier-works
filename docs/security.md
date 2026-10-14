@@ -174,7 +174,7 @@ bunfigの`ignoreScripts`が止めるのは、依存のinstall scriptである。
 Bunのmacroと、Pythonのsdistのビルドは、bunfigでは止まらない。
 再生成の中でこれらが動くかは、確かめていない。
 
-残るリスクとして、これらが動いても、被害は限られるので受け入れる。
+残るリスクとして、Bunのmacroとsdistのビルドが動いても、被害は次の理由で限られるので受け入れる。
 ランナーに本番の秘密は無く、ジョブの権限は`contents: read`だけである。
 さらに、受け取る側の内容の制限が、パッチの影響を絞る。
 
@@ -183,7 +183,7 @@ Bunのmacroと、Pythonのsdistのビルドは、bunfigでは止まらない。
 - GitHub Actionsのランナーでの動作。
 - レジストリのパッケージでのinstall scriptの停止。試験に使ったのは、ローカルの`file:`の依存である。
 - Windmillがnpmを呼ぶ経路が実在するか。
-- Windmillの版を上げたときの、環境の絞り方とbunfigの読み方の変化。版を上げるときは、上の確認を繰り返す。
+- Windmillの版を上げたときの、環境の絞り方とbunfigの読み方の変化。`mise.toml`の`WM_VERSION`を上げたときは、上の表を確かめ直す。
 
 #### artifactの扱い
 
@@ -213,6 +213,15 @@ artifactを取る実行は、次をすべて満たすものに限る。
 - 実行の`pull_requests`に、対象のPRの番号がある。
 - 実行の`head_sha`が、PRの今のheadと一致する。
 - 実行の結論が`failure`で、原因が`metadata`ジョブの失敗である。
+- PRの差分(`base...head`)が、次のCIの定義と抽出の部品に触れていない。
+  - `.github/`、`mise.toml`、`infra/`
+  - `scripts/metadata-patch.ts`、`scripts/ci-metadata-*.sh`、`scripts/check-metadata-fresh.sh`
+  - `f/factory/lib/metadata_patch_manifest.*`
+
+最後の条件は、触れていれば、パッチを適用しない。
+出どころの層を取り戻すためである。
+プロンプトを注入されたimplementフローが、これらを書き換えうる。
+書き換えられると、artifactの中身も実行の条件も、PRが決められる。
 
 `metadata`ジョブは、パッチを出した後も失敗で終わる。
 そのため、成功した実行だけを探すと、パッチが見つからない。
@@ -231,23 +240,32 @@ Factoryが`main`を取り込み、CIが再実行されるのを待つ。
 含むときは、merge木とheadの`f/`と`wmill-lock.yaml`が一致する。
 そのため、パッチはファイル単位で置き換えてよい。
 
+`baseSha`は、merge commitの第1親、つまりbaseの先端である。
+イベントのペイロードの`pull_request.base.sha`ではなく、merge木を作った時点の値を、CIがmerge commitから読んで書く。
+`baseSha`は、merge-baseではない。
+
 ##### 再検証
 
 PRの版の`scripts/metadata-patch.ts`が出した結果は、信用しない。
 
 - `main`の版の`isAllowedMetadataPath`と`parseManifest`で、manifestの全項目を再検査する。
-- `headSha`、`baseSha`、`sha256`を照合する。`baseSha`は、PRのbaseの今のshaとも照合する。
-- `mergeSha`のcommitをAPIで取得し、親が`baseSha`と`headSha`に一致することを確かめる。取得できないときは拒否する。
+- `headSha`と`sha256`を照合する。
+- `baseSha`が、PRのbaseの今のshaの祖先であること(`--is-ancestor`)を確かめる。
+- `mergeSha`のcommitをAPIで取得し、第1親が`baseSha`、第2親が`headSha`に一致することを確かめる。取得できないときは拒否する。
+
+`baseSha`の照合を、一致ではなく祖先にする。
+一致を求めると、`main`が進むたびに適用が先送りされるためである。
+headが`baseSha`を含めば、merge木とheadの木は同じで、パッチはheadに対して正しいままである。
 
 ##### パスと削除の制限
 
 - 保護パス(`f/factory/lib/protected_paths.ts`の`matchesForbiddenPath`)に当たるパスを拒否する。
 - 削除を拒否する。
-- `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)がbaseと違えば拒否する。
+- `*.script.yaml`は、`schema`以外のキー(`tag`、`timeout`、`lock`の参照先など)が、headの今の版と違えば拒否する。summaryなどを正当に変えたPRを、拒否しないためである。
 
 ##### lockの制限
 
-`*.script.lock`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
+`*.script.lock`と`*.script.yaml`を変えてよいのは、PRの差分で`f/**/*.ts`が変わったscriptと、それをimportするscriptに限る。
 importするscriptの範囲は、`main`の版のコードで、headの木の相対importの推移閉包を計算して決める。
 対応する`.ts`が保護パスに当たるscriptのlockは、lock自身が保護パスでなくても拒否する(例: `steps/dependabot_*.ts`)。
 
@@ -257,13 +275,16 @@ lockは、構造として解析する。
 - 前半のキーは`dependencies`だけにする。値は、semverの版か範囲に限る。URL、`file:`、`git`、`github:`、`link:`、`npm:`の別名を拒否する。
 - 後半のキーは、`lockfileVersion`、`configVersion`、`workspaces`、`packages`だけにする。
 - 各パッケージの取得元が既定のレジストリ(空文字)で、integrityが`sha512-`で始まることを確かめる。
-- 版が同じでも、取得元かintegrityがbaseと違うものは拒否する。可能なら、レジストリの公開値と照合する。
+- 版が同じでも、取得元かintegrityが`main`の版と違うものは拒否する。安全のため、比べる相手はheadではなく`main`の版にする。可能なら、レジストリの公開値と照合する。
 - `postinstall`などのscripts、`trustedDependencies`、`overrides`を拒否する。
+
+依存の無いlockは、後半が`<empty>`の1語になる。これは受け付ける。
+後半のbun.lockは、末尾のカンマを許すJSONCである。`JSON.parse`では読めないので、JSONCを読めるパーサーを使う。
 
 依存の差分は、コミットメッセージかPR本文に列挙する。
 列挙には、版に加えて、取得元とintegrityの変化も含める。
 
-##### wmill-lock.yamlの制限
+##### ロックのハッシュの制限
 
 `wmill-lock.yaml`は、YAMLとして解析する。
 
@@ -274,7 +295,8 @@ lockは、構造として解析する。
 ##### 新規scriptの制限
 
 - `.script.yaml`の追加を許すのは、同じPRで`.ts`を追加したscriptだけである。
-- キーは、許可リスト(`summary`、`description`、`lock`、`kind`、`schema`)に限る。`lock`は、`'!inline <同じ名前>.script.lock'`に固定する。
+- キーは、許可リスト(`summary`、`description`、`lock`、`kind`、`schema`)に限る。
+- `lock`は、フルパスの`'!inline f/<dir>/<name>.script.lock'`に固定する。
 - `tag`、`timeout`、`concurrency`などのキーは拒否する。
 - 対応する`.ts`が無い`.script.lock`と`.script.yaml`の追加を拒否する。
 
@@ -290,6 +312,14 @@ lockは、構造として解析する。
 出どころの確認と再検証は、偽のartifactや書き換えられたartifactを受け取らないための層である。
 内容の制限は、出どころが破られたときに、被害を限る層である。
 内容の制限だけでは、偽のartifactを受け取り続けるので、どちらも外さない。
+
+##### 受け取る側の実装で決めること
+
+次は、受け取る側を実装するときに決める。ここでは決めない。
+
+- 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
+- `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
+- `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
 
 ### 開発セッションのsubagent
 
@@ -1979,6 +2009,7 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
+CIが出すメタデータのパッチを検査する`f/factory/lib/metadata_patch_manifest.ts`と、その`.script.yaml`、`.script.lock`も止める。書き換えられると、パッチの受け取り側の検査が緩むためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 

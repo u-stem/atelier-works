@@ -157,6 +157,36 @@ describe("parseManifest", () => {
     expect(parseManifest(manifestJson({ headSha: "main" }))).toBeNull();
   });
 
+  test("accepts a head sha of 64 digits", () => {
+    expect(
+      parseManifest(manifestJson({ headSha: "a".repeat(64) })),
+    ).not.toBeNull();
+  });
+
+  test("rejects a head sha of 41 digits", () => {
+    expect(parseManifest(manifestJson({ headSha: "a".repeat(41) }))).toBeNull();
+  });
+
+  test("accepts exactly the entry limit", () => {
+    const entries = Array.from({ length: 500 }, (_, index) => ({
+      path: `f/n${index}.script.lock`,
+      status: "deleted",
+    }));
+    expect(parseManifest(manifestJson({ entries }))).not.toBeNull();
+  });
+
+  test("rejects a size that is not an integer", () => {
+    const entries = [
+      {
+        path: "f/a.script.lock",
+        status: "added",
+        sha256: SHA256_OF_ABC,
+        size: 1.5,
+      },
+    ];
+    expect(parseManifest(manifestJson({ entries }))).toBeNull();
+  });
+
   test("rejects an upper-case head sha", () => {
     expect(parseManifest(manifestJson({ headSha: "A".repeat(40) }))).toBeNull();
   });
@@ -178,7 +208,12 @@ describe("parseManifest", () => {
 
   test("rejects an unknown status", () => {
     const entries = [
-      { path: "f/a.script.lock", status: "renamed", sha256: "0", size: 3 },
+      {
+        path: "f/a.script.lock",
+        status: "renamed",
+        sha256: SHA256_OF_ABC,
+        size: 3,
+      },
     ];
     expect(parseManifest(manifestJson({ entries }))).toBeNull();
   });

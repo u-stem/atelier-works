@@ -180,7 +180,8 @@ PRのコードが動く作り直しを、Factoryが作るPRに限るためであ
 3. `mise run metadata`で`wmill generate-metadata --yes`を実行する。
    失敗したときは、パッチを作らない。
 4. `scripts/metadata-patch.ts`が、作業ツリーの変更を検査し、パッチを書く。
-   書く前に、チェックアウトしたcommitが`MERGE_SHA`で、第1親が`BASE_SHA`、第2親が`HEAD_SHA`であることを確かめる。
+   書く前に、チェックアウトしたcommitが`MERGE_SHA`で、第2親が`HEAD_SHA`であることを確かめる。
+   baseのshaは、merge木の第1親から読んで記録する。
    一致しないときと、許可リストの外の変更が1つでもあるときは、何も書かずに失敗する。
 5. `actions/upload-artifact`で、`metadata-patch`という名前で上げる。
    保持は7日で、秘密は入れない。
@@ -215,14 +216,14 @@ artifactの中身は次のとおりである。
 
 | パス | 内容 |
 | --- | --- |
-| `manifest.json` | 版(`version`)、PRのheadのsha(`headSha`)、PRのbaseのsha(`baseSha`)、作り直したmerge木のcommit(`mergeSha`)、変更の一覧(`entries`) |
+| `manifest.json` | 版(`version`)、PRのheadのsha(`headSha`)、merge木の第1親のsha(`baseSha`)、作り直したmerge木のcommit(`mergeSha`)、変更の一覧(`entries`) |
 | `files/<リポジトリ相対のパス>` | 追加と変更のファイルの内容そのもの |
 
 `entries`の各項目は、`path`、`status`(`added`、`modified`、`deleted`)、`sha256`、`size`を持つ。
 削除は`path`と`status`だけを記録し、`files/`にはファイルを置かない。
 作り直しは、PRのheadそのものではなく、baseとのmerge木(`mergeSha`)に対して行う。
-そのため、パッチを適用してよいのは、`headSha`と`baseSha`が今も変わっていないときだけである。
-どちらかが動いていれば、merge木が変わっていて、パッチは今のmerge木に対する結果ではなくなる。
+そのため、パッチを適用してよいのは、PRのheadが`baseSha`を含むときだけである。
+含まないときは、merge木とheadの木が違い、パッチはheadに対する結果ではなくなる。
 manifestを読む判定は、同じファイルの`parseManifest`にある。
 
 仕組みの権限と前提は、[セキュリティ](security.md#ciのメタデータの再生成)に書く。

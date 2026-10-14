@@ -17,9 +17,9 @@ import {
 } from "../../f/factory/lib/metadata_patch_manifest.ts";
 import {
   type CollectOptions,
-  checkMergeShape,
   collectPatch,
   parseStatusOutput,
+  readMergeShape,
 } from "../../scripts/metadata-patch.ts";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -190,7 +190,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -213,7 +212,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -231,7 +229,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -249,7 +246,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -265,7 +261,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -283,7 +278,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -301,7 +295,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -317,7 +310,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -333,27 +325,10 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
     expect(readManifest(out)?.mergeSha).toBe(MERGE);
-  });
-
-  test("fails for a base sha that is not a commit id", () => {
-    const repo = repoWith(baseFiles);
-    const out = outPath();
-    write(repo, "wmill-lock.yaml", "x");
-
-    const result = collect({
-      repoDir: repo,
-      outDir: out,
-      headSha: HEAD,
-      baseSha: "",
-      mergeSha: MERGE,
-    });
-
-    expect(result).toEqual({ ok: false, reason: "invalid sha" });
   });
 
   test("fails for a merge sha that is not a commit id", () => {
@@ -365,7 +340,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: "HEAD",
     });
 
@@ -387,7 +361,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -409,7 +382,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -431,7 +403,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -449,7 +420,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -469,7 +439,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -486,7 +455,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -507,7 +475,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -524,7 +491,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -540,7 +506,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -557,7 +522,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -573,7 +537,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -594,7 +557,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -611,7 +573,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
       readStatus: () => "?? f/link/a.script.lock\0",
     });
@@ -633,7 +594,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -649,7 +609,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -669,7 +628,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -684,7 +642,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -700,7 +657,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: "main",
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -717,7 +673,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -732,7 +687,6 @@ describe("collectPatch", () => {
       repoDir: notARepo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -747,7 +701,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
       readStatus: () => " M f/factory/a.ts\0",
     });
@@ -771,7 +724,6 @@ describe("collectPatch", () => {
       repoDir: repo,
       outDir: out,
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
       readStatus: () => lines,
     });
@@ -780,61 +732,77 @@ describe("collectPatch", () => {
   });
 });
 
-describe("checkMergeShape", () => {
-  const expected = { headSha: HEAD, baseSha: BASE, mergeSha: MERGE };
+describe("readMergeShape", () => {
+  const expected = { headSha: HEAD, mergeSha: MERGE };
+  const OTHER = "d".repeat(40);
 
-  test("accepts a merge commit whose parents are the base and the head", () => {
-    expect(checkMergeShape(`${MERGE} ${BASE} ${HEAD}\n`, expected)).toBeNull();
+  test("returns the first parent as the base sha", () => {
+    expect(readMergeShape(`${MERGE} ${BASE} ${HEAD}\n`, expected)).toEqual({
+      ok: true,
+      baseSha: BASE,
+    });
   });
 
-  test("rejects a first parent that is not the base", () => {
-    expect(
-      checkMergeShape(`${MERGE} ${"d".repeat(40)} ${HEAD}\n`, expected),
-    ).toBe("base sha mismatch");
+  test("accepts any first parent", () => {
+    expect(readMergeShape(`${MERGE} ${OTHER} ${HEAD}\n`, expected)).toEqual({
+      ok: true,
+      baseSha: OTHER,
+    });
   });
 
   test("rejects a second parent that is not the head", () => {
-    expect(
-      checkMergeShape(`${MERGE} ${BASE} ${"d".repeat(40)}\n`, expected),
-    ).toBe("head sha mismatch");
+    expect(readMergeShape(`${MERGE} ${BASE} ${OTHER}\n`, expected)).toEqual({
+      ok: false,
+      reason: "head sha mismatch",
+    });
   });
 
   test("rejects a current commit that is not the merge sha", () => {
-    expect(
-      checkMergeShape(`${"d".repeat(40)} ${BASE} ${HEAD}\n`, expected),
-    ).toBe("merge sha mismatch");
+    expect(readMergeShape(`${OTHER} ${BASE} ${HEAD}\n`, expected)).toEqual({
+      ok: false,
+      reason: "merge sha mismatch",
+    });
   });
 
-  test("rejects the base and the head in the other order", () => {
-    expect(checkMergeShape(`${MERGE} ${HEAD} ${BASE}\n`, expected)).toBe(
-      "base sha mismatch",
-    );
+  test("rejects the head in the first parent position", () => {
+    expect(readMergeShape(`${MERGE} ${HEAD} ${BASE}\n`, expected)).toEqual({
+      ok: false,
+      reason: "head sha mismatch",
+    });
   });
 
   test("rejects a commit with one parent", () => {
-    expect(checkMergeShape(`${MERGE} ${BASE}\n`, expected)).toBe(
-      "not a merge commit",
-    );
+    expect(readMergeShape(`${MERGE} ${BASE}\n`, expected)).toEqual({
+      ok: false,
+      reason: "not a merge commit",
+    });
   });
 
   test("rejects a commit without a parent", () => {
-    expect(checkMergeShape(`${MERGE}\n`, expected)).toBe("not a merge commit");
+    expect(readMergeShape(`${MERGE}\n`, expected)).toEqual({
+      ok: false,
+      reason: "not a merge commit",
+    });
   });
 
   test("rejects a commit with three parents", () => {
     expect(
-      checkMergeShape(`${MERGE} ${BASE} ${HEAD} ${HEAD}\n`, expected),
-    ).toBe("not a merge commit");
+      readMergeShape(`${MERGE} ${BASE} ${HEAD} ${HEAD}\n`, expected),
+    ).toEqual({ ok: false, reason: "not a merge commit" });
   });
 
   test("rejects an output that is not commit ids", () => {
-    expect(checkMergeShape("fatal: bad revision\n", expected)).toBe(
-      "not a merge commit",
-    );
+    expect(readMergeShape("fatal: bad revision\n", expected)).toEqual({
+      ok: false,
+      reason: "not a merge commit",
+    });
   });
 
   test("rejects an empty output", () => {
-    expect(checkMergeShape("", expected)).toBe("not a merge commit");
+    expect(readMergeShape("", expected)).toEqual({
+      ok: false,
+      reason: "not a merge commit",
+    });
   });
 });
 
@@ -880,39 +848,6 @@ describe("collectPatch against a real merge commit", () => {
   const files = { "f/factory/a.script.lock": "old\n" };
 
   test("accepts the shas of the merge commit", () => {
-    const { repo, baseSha, headSha, mergeSha } = mergeRepoWith(files);
-    write(repo, "f/factory/a.script.lock", "abc");
-
-    const result = collectPatch({
-      repoDir: repo,
-      outDir: outPath(),
-      headSha,
-      baseSha,
-      mergeSha,
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  test("accepts the shas of the merge commit in a shallow clone", () => {
-    const { repo, baseSha, headSha, mergeSha } = mergeRepoWith(files);
-    const parent = tempDir("metadata-patch-shallow-");
-    git(parent, "clone", "-q", "--depth", "1", `file://${repo}`, "clone");
-    const clone = join(parent, "clone");
-    write(clone, "f/factory/a.script.lock", "abc");
-
-    const result = collectPatch({
-      repoDir: clone,
-      outDir: outPath(),
-      headSha,
-      baseSha,
-      mergeSha,
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  test("rejects a base sha that is not the first parent", () => {
     const { repo, headSha, mergeSha } = mergeRepoWith(files);
     write(repo, "f/factory/a.script.lock", "abc");
 
@@ -920,22 +855,43 @@ describe("collectPatch against a real merge commit", () => {
       repoDir: repo,
       outDir: outPath(),
       headSha,
-      baseSha: "d".repeat(40),
       mergeSha,
     });
 
-    expect(result).toEqual({ ok: false, reason: "base sha mismatch" });
+    expect(result.ok).toBe(true);
+  });
+
+  test("reads the base sha from the first parent in a shallow clone", () => {
+    const { repo, baseSha, headSha, mergeSha } = mergeRepoWith(files);
+    const parent = tempDir("metadata-patch-shallow-");
+    git(parent, "clone", "-q", "--depth", "1", `file://${repo}`, "clone");
+    const clone = join(parent, "clone");
+    const out = outPath();
+    write(clone, "f/factory/a.script.lock", "abc");
+
+    collectPatch({ repoDir: clone, outDir: out, headSha, mergeSha });
+
+    expect(readManifest(out)?.baseSha).toBe(baseSha);
+  });
+
+  test("records the first parent of the merge commit as the base sha", () => {
+    const { repo, baseSha, headSha, mergeSha } = mergeRepoWith(files);
+    const out = outPath();
+    write(repo, "f/factory/a.script.lock", "abc");
+
+    collectPatch({ repoDir: repo, outDir: out, headSha, mergeSha });
+
+    expect(readManifest(out)?.baseSha).toBe(baseSha);
   });
 
   test("rejects a head sha that is not the second parent", () => {
-    const { repo, baseSha, mergeSha } = mergeRepoWith(files);
+    const { repo, mergeSha } = mergeRepoWith(files);
     write(repo, "f/factory/a.script.lock", "abc");
 
     const result = collectPatch({
       repoDir: repo,
       outDir: outPath(),
       headSha: "d".repeat(40),
-      baseSha,
       mergeSha,
     });
 
@@ -943,14 +899,13 @@ describe("collectPatch against a real merge commit", () => {
   });
 
   test("rejects a merge sha that is not the current commit", () => {
-    const { repo, baseSha, headSha } = mergeRepoWith(files);
+    const { repo, headSha } = mergeRepoWith(files);
     write(repo, "f/factory/a.script.lock", "abc");
 
     const result = collectPatch({
       repoDir: repo,
       outDir: outPath(),
       headSha,
-      baseSha,
       mergeSha: "d".repeat(40),
     });
 
@@ -966,7 +921,6 @@ describe("collectPatch against a real merge commit", () => {
       repoDir: repo,
       outDir: outPath(),
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: sha,
     });
 
@@ -974,15 +928,14 @@ describe("collectPatch against a real merge commit", () => {
   });
 
   test("writes nothing when the shas do not match", () => {
-    const { repo, headSha, mergeSha } = mergeRepoWith(files);
+    const { repo, mergeSha } = mergeRepoWith(files);
     const out = outPath();
     write(repo, "f/factory/a.script.lock", "abc");
 
     collectPatch({
       repoDir: repo,
       outDir: out,
-      headSha,
-      baseSha: "d".repeat(40),
+      headSha: "d".repeat(40),
       mergeSha,
     });
 
@@ -994,7 +947,6 @@ describe("collectPatch against a real merge commit", () => {
       repoDir: tempDir("metadata-patch-plain-"),
       outDir: outPath(),
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
     });
 
@@ -1008,7 +960,6 @@ describe("collectPatch against a real merge commit", () => {
       repoDir: repo,
       outDir: outPath(),
       headSha: HEAD,
-      baseSha: BASE,
       mergeSha: MERGE,
       readParents: () => null,
     });
@@ -1028,7 +979,6 @@ describe("the command line", () => {
       env: {
         ...gitEnv(tempDir("metadata-patch-home-")),
         HEAD_SHA: merge.headSha,
-        BASE_SHA: merge.baseSha,
         MERGE_SHA: merge.mergeSha,
         ...extra,
       },
@@ -1066,14 +1016,6 @@ describe("the command line", () => {
     expect(run(merge, out, { HEAD_SHA: "" }).exitCode).toBe(1);
   });
 
-  test("exits with 1 without the base sha", () => {
-    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
-    const out = outPath();
-    write(merge.repo, "f/factory/a.script.lock", "abc");
-
-    expect(run(merge, out, { BASE_SHA: "" }).exitCode).toBe(1);
-  });
-
   test("exits with 1 without the merge sha", () => {
     const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
     const out = outPath();
@@ -1082,15 +1024,25 @@ describe("the command line", () => {
     expect(run(merge, out, { MERGE_SHA: "" }).exitCode).toBe(1);
   });
 
-  test("exits with 1 when the base sha is not the first parent", () => {
+  test("exits with 1 when the head sha is not the second parent", () => {
     const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
     const out = outPath();
     write(merge.repo, "f/factory/a.script.lock", "abc");
 
-    expect(run(merge, out, { BASE_SHA: "d".repeat(40) }).exitCode).toBe(1);
+    expect(run(merge, out, { HEAD_SHA: "d".repeat(40) }).exitCode).toBe(1);
   });
 
-  test("names all three variables in the usage message", () => {
+  test("records the first parent as the base sha", () => {
+    const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
+    const out = outPath();
+    write(merge.repo, "f/factory/a.script.lock", "abc");
+
+    run(merge, out);
+
+    expect(readManifest(out)?.baseSha).toBe(merge.baseSha);
+  });
+
+  test("names both variables in the usage message", () => {
     const merge = mergeRepoWith({ "f/factory/a.script.lock": "old\n" });
     const result = Bun.spawnSync(["bun", SCRIPT], {
       cwd: merge.repo,
@@ -1100,7 +1052,7 @@ describe("the command line", () => {
     });
 
     expect(result.stderr.toString()).toContain(
-      "HEAD_SHA=<sha> BASE_SHA=<sha> MERGE_SHA=<sha>",
+      "HEAD_SHA=<sha> MERGE_SHA=<sha>",
     );
   });
 

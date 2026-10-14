@@ -7,9 +7,11 @@
 // 変更の一覧とsha256を`<outDir>/manifest.json`に書く。削除はmanifestだけに記録する。
 // 再生成はPRのheadそのものではなく、baseとのmerge木に対して行う。
 // manifestにPRのheadのsha(headSha)、baseのsha(baseSha)、merge木のcommit(mergeSha)を入れるのは、
-// 適用する側が、headとbaseが今も変わっていないときだけ適用するため。
+// 適用する側が、headがbaseを含むときだけ適用するため。
+// baseShaはイベントのペイロードではなく、merge木の第1親から読む。
+// ペイロードのbaseのshaは、merge木を作った時点のbaseの先端とずれうるため。
 //
-// 使い方: HEAD_SHA=<sha> BASE_SHA=<sha> MERGE_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>
+// 使い方: HEAD_SHA=<sha> MERGE_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>
 // 外部パッケージを使わない。依存を入れる前のジョブで動かすため。
 // パスの許可リストとmanifestの検査は、受け取る側と共有するため`f/factory/lib/metadata_patch_manifest.ts`にある。
 
@@ -76,7 +78,6 @@ export type CollectFailure =
   | "git failed"
   | "not a merge commit"
   | "merge sha mismatch"
-  | "base sha mismatch"
   | "head sha mismatch"
   | "unexpected status"
   | "no changes"
@@ -100,7 +101,6 @@ export type CollectOptions = {
   readonly repoDir: string;
   readonly outDir: string;
   readonly headSha: string;
-  readonly baseSha: string;
   readonly mergeSha: string;
   /** `git status`の出力を返す。gitが失敗したらnull。省略すると実際のgitを呼ぶ。 */
   readonly readStatus?: (repoDir: string) => string | null;
@@ -166,34 +166,36 @@ export function readGitParents(repoDir: string): string | null {
   return [head.stdout.toString().trim(), ...parents].join(" ");
 }
 
+export type MergeShape =
+  | { readonly ok: true; readonly baseSha: string }
+  | { readonly ok: false; readonly reason: CollectFailure };
+
 /**
  * 作業ツリーのcommitが、PRのmerge木であることを実体と突き合わせる。
- * 現在のcommitが`mergeSha`、第1親が`baseSha`、第2親が`headSha`に等しいときだけ、nullを返す。
+ * 現在のcommitが`mergeSha`、第2親が`headSha`に等しいときに、第1親を`baseSha`として返す。
  * manifestに書くshaが、実際に再生成した木のものであることを、書く前に保証するため。
  */
-export function checkMergeShape(
+export function readMergeShape(
   output: string,
-  expected: {
-    readonly headSha: string;
-    readonly baseSha: string;
-    readonly mergeSha: string;
-  },
-): CollectFailure | null {
+  expected: { readonly headSha: string; readonly mergeSha: string },
+): MergeShape {
   const parts = output.trim().split(" ");
-  if (parts.length !== 3 || !parts.every((part) => isSha(part))) {
-    return "not a merge commit";
-  }
   const [merge, firstParent, secondParent] = parts;
-  if (merge !== expected.mergeSha) {
-    return "merge sha mismatch";
+  if (
+    parts.length !== 3 ||
+    !isSha(merge) ||
+    !isSha(firstParent) ||
+    !isSha(secondParent)
+  ) {
+    return { ok: false, reason: "not a merge commit" };
   }
-  if (firstParent !== expected.baseSha) {
-    return "base sha mismatch";
+  if (merge !== expected.mergeSha) {
+    return { ok: false, reason: "merge sha mismatch" };
   }
   if (secondParent !== expected.headSha) {
-    return "head sha mismatch";
+    return { ok: false, reason: "head sha mismatch" };
   }
-  return null;
+  return { ok: true, baseSha: firstParent };
 }
 
 /**
@@ -278,8 +280,8 @@ function isPlanned(value: Planned | CollectResult): value is Planned {
  * 書き込みの途中で失敗したときは、書きかけの`outDir`を消す。
  */
 export function collectPatch(options: CollectOptions): CollectResult {
-  const { repoDir, outDir, headSha, baseSha, mergeSha } = options;
-  if (![headSha, baseSha, mergeSha].every((sha) => isSha(sha))) {
+  const { repoDir, outDir, headSha, mergeSha } = options;
+  if (![headSha, mergeSha].every((sha) => isSha(sha))) {
     return fail("invalid sha");
   }
   if (existsSync(outDir)) {
@@ -289,10 +291,11 @@ export function collectPatch(options: CollectOptions): CollectResult {
   if (parents === null) {
     return fail("git failed");
   }
-  const shape = checkMergeShape(parents, { headSha, baseSha, mergeSha });
-  if (shape !== null) {
-    return fail(shape);
+  const shape = readMergeShape(parents, { headSha, mergeSha });
+  if (!shape.ok) {
+    return fail(shape.reason);
   }
+  const baseSha = shape.baseSha;
   const output = (options.readStatus ?? readGitStatus)(repoDir);
   if (output === null) {
     return fail("git failed");
@@ -366,7 +369,7 @@ function main(): void {
   const outDir = process.argv[2];
   if (outDir === undefined || outDir === "") {
     console.error(
-      "usage: HEAD_SHA=<sha> BASE_SHA=<sha> MERGE_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>",
+      "usage: HEAD_SHA=<sha> MERGE_SHA=<sha> bun ./scripts/metadata-patch.ts <outDir>",
     );
     process.exitCode = 1;
     return;
@@ -375,7 +378,6 @@ function main(): void {
     repoDir: process.cwd(),
     outDir,
     headSha: process.env.HEAD_SHA ?? "",
-    baseSha: process.env.BASE_SHA ?? "",
     mergeSha: process.env.MERGE_SHA ?? "",
   });
   if (!result.ok) {
