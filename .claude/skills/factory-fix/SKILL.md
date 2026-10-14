@@ -291,15 +291,15 @@ flow側も、変更を許可リストで検査し、範囲外の変更は止め�
 | フックと環境のディレクトリ | `.husky/`、`.githooks/`、`.yarn/`、`.devcontainer/` |
 | Windmillの定義 | `*__flow/`の配下、`*.script.lock`、`*.schedule.yaml`、`*.variable.yaml`、`*.resource.yaml`、`*.resource-type.yaml`、`*.trigger.yaml`、`wmill.yaml`、`wmill-lock.yaml` |
 | 環境と秘密値の検査 | `.env`と`.env.*`、`.gitleaksignore`、`.gitleaks.toml` |
-| タスクランナー | `Makefile`、`justfile`、`Taskfile.yml`、`turbo.json`、`nx.json`、`.pre-commit-config.yaml` |
-| 所有者と実行の設定 | `CODEOWNERS`、`mise.toml`、`mise.*.toml`、`lefthook.yml`、`bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`.mcp.json` |
+| タスクランナー | `Makefile`、`justfile`、`Taskfile.yml`、`Taskfile.yaml`、`turbo.json`、`nx.json`、`deno.json`、`deno.jsonc`、`.pre-commit-config.yaml` |
+| 所有者と実行の設定 | `CODEOWNERS`、`mise.toml`、`mise.*.toml`、`.mise.toml`、`lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`.mcp.json` |
 | 版の指定 | `.tool-versions`、`.nvmrc`、`.node-version`、`.bun-version`、`.python-version`、`rust-toolchain` |
-| 依存のマニフェストとロックファイル | `package.json`の全体、`bun.lock`、`package-lock.json`、`pnpm-lock.yaml`、`yarn.lock`、`pyproject.toml`、`requirements*.txt`、`Cargo.toml`、`go.mod`、`Gemfile`、`composer.json`など |
-| ツールと型とlintの設定 | `tsconfig*.json`、`biome.json`、`*.config.js`と`*.config.ts`(`.cjs`、`.mjs`、`.cts`、`.mts`を含む)、`.eslintrc*`、`.prettierrc*`、`.markdownlint.jsonc`など、`.textlintrc*`、`.editorconfig` |
+| 依存のマニフェストとロックファイル | `package.json`の全体、`bun.lock`、`package-lock.json`、`pnpm-lock.yaml`、`yarn.lock`、`.pnpmfile.cjs`、`.yarnrc`、`.yarnrc.yml`、`pyproject.toml`、`requirements*.txt`、`Cargo.toml`、`go.mod`、`Gemfile`、`composer.json`など |
+| ツールと型とlintの設定 | `tsconfig*.json`、`biome.json`、`*.config.js`と`*.config.ts`(`.cjs`、`.mjs`、`.cts`、`.mts`を含む)、`.eslintrc*`、`.babelrc*`、`.prettierrc*`、`.markdownlint.jsonc`など、`.textlintrc*`、`.editorconfig` |
 | 無視ファイル | `.gitignore`、`.dockerignore`など`.`で始まり`ignore`で終わる名前 |
 | テスト実行の設定 | `conftest.py`、`pytest.ini`、`tox.ini`、`.mocharc*`、`.nycrc*`、`.c8rc*`、`.coveragerc`、`vitest.setup.*`、`jest.setup.*` |
 | Factoryの安全装置 | `f/factory/lib/`の`claude.`、`protected_paths.`、`ci_`、`pr_ci_`、`main_ci_`などで始まるファイル、`f/factory/steps/pr_fix_`で始まるファイル |
-| 個別の保護ファイル | `console/index.html`、`console/drawio-viewer.json`、`console/vite.config.ts`、`infra/Caddyfile`、`f/factory/dependabot__flow/`、dependabotの`lib/dependabot_`で始まるファイルなど |
+| 個別の保護ファイル | `console/index.html`、`console/drawio-viewer.json`、`console/vite.config.ts`、`infra/Caddyfile`、`f/factory/dependabot__flow/`、dependabotの`f/factory/lib/dependabot_support.ts`など、名前で挙げた個別のファイル |
 
 無視ファイルとテスト実行の設定は、`tests/`の配下の新規ファイルでも拒否される。
 保護パスを拒否するのは、CI回のClaudeが自分を止める検査や、実行されるコマンドを書き換えられないようにするためである。
@@ -343,7 +343,8 @@ flow側も、変更を許可リストで検査し、範囲外の変更は止め�
 次のときは、編集を推測で作らず、`outcome: "blocked"`で終える。
 
 - ログの抜粋だけでは、原因が分からない。
-- 原因がソースにない。不安定なテスト、環境、依存、生成されたファイルが該当する。
+- 原因がソースにない。
+  不安定なテスト、環境、依存、生成されたファイルが該当する。
 - 直すには、変更してよいファイルの外を変える必要がある。
 - 直すには、要件や設計を変える必要がある。
   CI回では`requirements_gap`を使えないので、これも`blocked`で報告する。

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildCiFixPrompt,
+  CI_FENCE_LABEL_CHANGED_FILES,
+  CI_FENCE_LABEL_FAILURE_PREFIX,
   CI_FIX_PROMPT_MAX_CHANGED_PATHS,
   CI_FIX_SCHEMA,
   CI_ROUND_PROMPT_CUE,
@@ -96,7 +98,9 @@ describe("buildCiFixPrompt", () => {
       { jobName: "a", failedSteps: [], text: "one" },
       { jobName: "b", failedSteps: [], text: "two" },
     ]);
-    const fences = prompt({ excerpt }).split(`<<<DATA-${NONCE} (ci failure`);
+    const fences = prompt({ excerpt }).split(
+      `<<<DATA-${NONCE} (${CI_FENCE_LABEL_FAILURE_PREFIX}`,
+    );
     expect(fences.length - 1).toBe(2);
   });
 
@@ -230,7 +234,11 @@ describe("buildCiFixPrompt changed files", () => {
   });
 
   test("labels the list as pull request changed files", () => {
-    expect(prompt()).toContain("(pull request changed files)");
+    expect(prompt()).toContain(`(${CI_FENCE_LABEL_CHANGED_FILES})`);
+  });
+
+  test("labels each log excerpt with the failure label prefix and its number", () => {
+    expect(prompt()).toContain(`(${CI_FENCE_LABEL_FAILURE_PREFIX} 1)`);
   });
 
   test("leaves out an unsafe path", () => {

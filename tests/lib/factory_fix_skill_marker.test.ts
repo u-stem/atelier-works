@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CI_ROUND_PROMPT_CUE } from "../../f/factory/lib/ci_fix_prompt.ts";
+import {
+  CI_FENCE_LABEL_CHANGED_FILES,
+  CI_FENCE_LABEL_FAILURE_PREFIX,
+  CI_ROUND_PROMPT_CUE,
+} from "../../f/factory/lib/ci_fix_prompt.ts";
 import {
   CI_FIX_SKILL_MARKER,
   hasCiFixSkillMarker,
@@ -33,5 +37,13 @@ describe("factory-fix skill marker", () => {
 
   test("names the cue that the CI round prompt carries", () => {
     expect(skillText).toContain(`\`${CI_ROUND_PROMPT_CUE}\``);
+  });
+
+  test("names the fence label of the changed files", () => {
+    expect(skillText).toContain(`\`${CI_FENCE_LABEL_CHANGED_FILES}\``);
+  });
+
+  test("names the fence label prefix of the failure logs", () => {
+    expect(skillText).toContain(`\`${CI_FENCE_LABEL_FAILURE_PREFIX} <番号>\``);
   });
 });

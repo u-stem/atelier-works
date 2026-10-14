@@ -41,6 +41,18 @@ export type CiFixPromptInput = {
  */
 export const CI_ROUND_PROMPT_CUE = "in a CI round";
 
+/**
+ * PRの変更ファイルの囲みのラベル。
+ * スキルの本文が、変更してよいファイルの根拠として同じラベルを挙げる。
+ */
+export const CI_FENCE_LABEL_CHANGED_FILES = "pull request changed files";
+
+/**
+ * ジョブごとのログの囲みのラベルの接頭辞。ラベルは、これに1始まりの番号を続けたもの。
+ * スキルの本文が、同じ接頭辞を挙げる。
+ */
+export const CI_FENCE_LABEL_FAILURE_PREFIX = "ci failure";
+
 /** プロンプトに載せるPRの変更ファイルの数の上限。超えた分は件数だけを示す。 */
 export const CI_FIX_PROMPT_MAX_CHANGED_PATHS = 100;
 
@@ -146,12 +158,16 @@ export function buildCiFixPrompt(
   if (pr.runUrl !== null) sections.push(`Run: ${pr.runUrl}`);
   sections.push(
     "",
-    dataFence(nonce, "pull request changed files", changedPaths),
+    dataFence(nonce, CI_FENCE_LABEL_CHANGED_FILES, changedPaths),
     "",
   );
   bodies.forEach((body, index) => {
     sections.push(
-      dataFence(nonce, `ci failure ${String(index + 1)}`, body),
+      dataFence(
+        nonce,
+        `${CI_FENCE_LABEL_FAILURE_PREFIX} ${String(index + 1)}`,
+        body,
+      ),
       "",
     );
   });
@@ -162,7 +178,7 @@ export function buildCiFixPrompt(
     "- Do not weaken tests: do not skip, delete, or loosen a test or its expected values to make it pass.",
     "- Do not add suppression comments such as biome-ignore, @ts-ignore, @ts-expect-error, or eslint-disable.",
     "- Do not change the CI definition, the configuration files, the lock files, package.json, the scripts directory, or the agent settings.",
-    '- Edit only the files listed in the "pull request changed files" block.',
+    `- Edit only the files listed in the "${CI_FENCE_LABEL_CHANGED_FILES}" block.`,
     "  You may add a new test file when the fix needs one.",
     "- Use only what the log excerpt and the files show. When the excerpt is",
     "  not enough to find the cause, or the failure does not come from the",
