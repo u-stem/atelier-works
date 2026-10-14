@@ -1716,6 +1716,37 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
 
+### Consoleのtagの許可を確かめる
+
+Consoleのscriptは、tag`console`を持つ。
+superadminでない主体は、インスタンスのカスタムtagに許可されたtagしか使えない。
+許可が無いと、Consoleのscriptの呼び出しが`Tag console is not included in the allowed CUSTOM_TAGS`で拒まれる。
+運用者のアカウントはsuperadminなので、許可が無くても動き、漏れに気づきにくい。
+
+許可は`mise run doctor`の「カスタムtag」で確かめる。
+doctorは、死活を確かめたポート(`WM_HTTP_PORT`)の`127.0.0.1`にだけ、管理者の資格情報を送る。
+ログインの前に`/api/version`がWindmillの応答かを確かめ、違えば送らずに止まる。
+`WM_BASE_URL`は使わない。
+`WM_HTTP_PORT`だけを変えたときに、ポートの取り違えで別のサービスへパスワードを誤って送らないためである。
+Windmillを装うローカルのプロセスは防がない。残るリスクは[セキュリティ](security.md)の「Console用workerの境界」にある。
+
+| 表示 | 意味 | 対処 |
+| --- | --- | --- |
+| `OK` | tag`console`が許可されている | 要らない |
+| `NG` | tag`console`が許可されていない | `mise run instance:tags`を実行する |
+| `WARN` | 確かめられていない。失敗には数えない。終了コードと、標準エラーの先頭行が添えられる | 添えられた理由を見る。ログインが拒まれたなら、`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる |
+
+`NG`になるのは、確認のコマンドが「許可されていない」という専用の終了コードを返したときだけである。
+bunやmiseの失敗は、`WARN`として理由を添えて表示する。
+環境の不具合を、許可の漏れと取り違えないためである。
+
+`mise run instance:tags`は、既存のtagを保ち、`console`が無いときだけ足す。
+書き込みの後は、実効の値に`console`が現れるまで、数秒の間に数回読み直す。
+何度実行しても結果は同じである。
+読み取りと書き込みの間に排他は無い。
+同じ設定を、Windmillの画面や別の`instance:tags`で同時に編集すると、後の書き込みが先の変更を上書きしうる。
+同時には実行しない。
+
 ### workerの負荷の記録を確かめる
 
 `sample_worker_load`が2分ごとに、defaultのworkerの負荷を1行ずつ`factory.worker_samples`に記録する。

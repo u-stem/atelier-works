@@ -30,6 +30,13 @@ report() {
   fi
 }
 
+# 確認できなかった項目を警告として1行出す。失敗には数えない。
+# 使い方: warn <label> [detail]
+warn() {
+  local label="$1" detail="${2:-}"
+  printf '  WARN %-31s %s\n' "${label}" "${detail}"
+}
+
 echo "=== Software Factory環境診断 ==="
 echo
 
@@ -243,6 +250,43 @@ if [[ "${windmill_is_up}" -eq 1 ]]; then
   fi
 else
   report "初期パスワード" ok "Windmill未起動のためスキップしました"
+fi
+
+# 13. インスタンスのカスタムtagに`console`があるか(Windmillが応答している場合だけ)
+# Consoleのscriptは`console`のtagを持つ。superadminでない主体は、インスタンスが
+# 許可したtagのscriptしか実行できない。管理者でログインして確かめるが、
+# パスワードは引数に載せず、`scripts/custom-tags.ts`が環境変数から読む。
+# 宛先は、手順9で死活を確かめた`127.0.0.1:${wm_http_port}`と同じにする。
+# `WM_BASE_URL`はmise.tomlの固定の値なので、`WM_HTTP_PORT`だけを変えたときに、
+# 確かめていない別のプロセスへパスワードを送ってしまう。
+# 終了コードは、0が許可済み、10が未許可、それ以外は確認できなかったことを表す。
+# bunの未捕捉の例外やmiseの失敗が返す1を未許可と取り違えないよう、
+# 未許可には専用の値を使い、それ以外は失敗にせず警告にする。
+if [[ "${windmill_is_up}" -eq 1 ]]; then
+  if ! command -v mise >/dev/null 2>&1; then
+    warn "カスタムtag" "miseが無いため確認できません"
+  else
+    tag_status=0
+    # 標準出力は捨て、標準エラーだけを受け取る。
+    tag_stderr="$(cd "${REPO_ROOT}" && WM_CHECK_BASE_URL="http://127.0.0.1:${wm_http_port}" \
+      mise exec -- bun run scripts/custom-tags.ts check console 2>&1 >/dev/null)" || tag_status=$?
+    case "${tag_status}" in
+      0) report "カスタムtag" ok "consoleが許可されています" ;;
+      10) report "カスタムtag" ng "consoleが許可されていません('mise run instance:tags' を実行してください)" ;;
+      *)
+        # 理由として標準エラーの先頭行だけを添える。万一パスワードが含まれても伏せる。
+        # 切り詰めの後に伏せると、200文字目をまたぐパスワードの前半が残るので、伏せるのを先にする。
+        tag_reason="$(printf '%s\n' "${tag_stderr}" | head -n1)"
+        if [[ -n "${WM_ADMIN_PASSWORD:-}" ]]; then
+          tag_reason="${tag_reason//"${WM_ADMIN_PASSWORD}"/***}"
+        fi
+        tag_reason="$(printf '%s' "${tag_reason}" | cut -c1-200)"
+        warn "カスタムtag" "確認できませんでした(終了コード: ${tag_status}${tag_reason:+、${tag_reason}})"
+        ;;
+    esac
+  fi
+else
+  report "カスタムtag" ok "Windmill未起動のためスキップしました"
 fi
 
 echo

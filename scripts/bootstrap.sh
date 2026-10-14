@@ -24,6 +24,11 @@
 # 経由)。この動作は実際のインスタンスで通しで確かめた。`SESSION_TOKEN`は、
 # それを要するトークンの入れ替えが終わったらすぐにログアウトする。
 #
+# 引数に`custom-tags`を渡すと、手順0と1の後、カスタムtagの設定(手順3の後半)と
+# ログアウト(手順9)だけを行って終わる(`mise run instance:tags`)。bootstrap済みの
+# インスタンスに、カスタムtagの設定だけを当てるため。引数が無ければ、下の手順を
+# すべて行う。
+#
 # 手順(冪等で、実行し直しても安全):
 #   0. `WM_ADMIN_PASSWORD`が既定の"changeme"か12文字未満なら実行を拒む。
 #   1. インスタンスの管理者でログインする(設定したパスワードで、初回は
@@ -43,6 +48,10 @@
 #      付与し直すので、毎回実行しても安全。これをしないと、新しいインスタンスの
 #      datatableを初めて使うとき`wmill datatable migrate up`が
 #      "permission denied for schema public"で失敗する。
+#      続けて、インスタンスのカスタムtag(global setting `custom_tags`)に
+#      `console`を足す(既存のtagは保ち、無いときだけ書く)。これも
+#      superadminだけの操作。Consoleのscriptは`console`のtagを持ち、superadminで
+#      ない主体はインスタンスが許可したtagのscriptしか実行できないため。
 #   4. ワークスペースに絞ったAPIトークン(ラベル`factory-bootstrap`、
 #      `workspace_id`は`factory`、期限180日)を発行する。-> `PERSISTENT_TOKEN`
 #   5. セッションのトークンでもう一度`wmill workspace add`を実行する
@@ -98,6 +107,12 @@ require_cmd curl
 require_cmd mise
 require_cmd jq
 
+MODE="${1:-full}"
+case "${MODE}" in
+  full | custom-tags) ;;
+  *) die "unknown argument: ${MODE} (expected no argument or 'custom-tags')" ;;
+esac
+
 # --- 必須の設定(秘密でないもの、インスタンスの秘密) -------------------------
 : "${WM_BASE_URL:?run via 'mise run bootstrap' (mise.toml [env] sets this)}"
 : "${WM_ADMIN_EMAIL:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_EMAIL=...}"
@@ -116,7 +131,7 @@ GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"
 for optional in GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN DISCORD_WEBHOOK_URL; do
-  if [ -z "${!optional}" ]; then
+  if [ "${MODE}" = "full" ] && [ -z "${!optional}" ]; then
     log "note: ${optional} is not set; the matching variable will be created empty"
   fi
 done
@@ -266,6 +281,76 @@ change_workspace_name_body() {
   bun_eval 'process.stdout.write(JSON.stringify({ new_name: "Factory" }));'
 }
 
+# Consoleのscriptが持つtag。インスタンスのカスタムtagに含まれていなければ、
+# superadminでない主体が呼ぶと拒否される。
+CONSOLE_TAG="console"
+
+custom_tags_set_body() {
+  # $1 = カスタムtagのJSON配列
+  WM_TMP_TAGS="$1" bun_eval '
+    const value = JSON.parse(process.env.WM_TMP_TAGS ?? "[]");
+    process.stdout.write(JSON.stringify({ value }));
+  '
+}
+
+# 書き込んだ後に`/workers/custom_tags`を読み戻す回数と間隔(秒)。
+# 実効の値への反映が書き込みより遅れることがあるため、数回読み直す。
+CUSTOM_TAGS_READBACK_ATTEMPTS=5
+CUSTOM_TAGS_READBACK_INTERVAL=1
+
+# インスタンスのカスタムtag(global setting `custom_tags`)に`console`を足す。
+# superadminのセッションのトークンで呼ぶこと。保存済みの値があればそれを保ち、
+# 無いとき(未設定)はインスタンスが実際に許可している値を起点にする。
+# 何を書くかの判定は`scripts/custom-tags.ts`の`plan`が行う。
+# 読み取りと書き込みの間に排他は無い。同じ設定を同時に編集すると、
+# 後の書き込みが先の変更を上書きしうるので、同時に実行しない。
+ensure_instance_custom_tag() {
+  local status stored effective plan kind tags attempt
+  status="$(api_get /settings/global/custom_tags)"
+  case "${status}" in
+    200) stored="$(cat "${RESP_FILE}")" ;;
+    404) stored="null" ;;
+    *) die "failed to read the instance custom_tags setting (status ${status})" ;;
+  esac
+  [ -n "${stored}" ] || stored="null"
+  effective="null"
+  if [ "${stored}" = "null" ]; then
+    # 保存済みの値が無いときだけ、実効の値が起点になる。読めないまま進めると、
+    # 既定のtagを失う書き込みになりうるので、ここで止める。
+    status="$(api_get /workers/custom_tags)"
+    [ "${status}" = "200" ] || die "failed to read effective custom tags (status ${status})"
+    effective="$(cat "${RESP_FILE}")"
+  fi
+  plan="$(WM_TMP_STORED="${stored}" WM_TMP_EFFECTIVE="${effective}" \
+    run_in_repo bun run scripts/custom-tags.ts plan "${CONSOLE_TAG}")"
+  kind="$(printf '%s' "${plan}" | jq -r '.kind')"
+  case "${kind}" in
+    present)
+      log "instance custom tag '${CONSOLE_TAG}' already allowed"
+      return 0
+      ;;
+    add)
+      tags="$(printf '%s' "${plan}" | jq -c '.tags')"
+      status="$(custom_tags_set_body "${tags}" | api_post /settings/global/custom_tags)"
+      [ "${status}" = "200" ] || die "failed to set the instance custom_tags (status ${status})"
+      for attempt in $(seq 1 "${CUSTOM_TAGS_READBACK_ATTEMPTS}"); do
+        status="$(api_get /workers/custom_tags)"
+        if [ "${status}" = "200" ] && jq -e --arg tag "${CONSOLE_TAG}" 'index($tag) != null' "${RESP_FILE}" >/dev/null; then
+          log "instance custom tags set to ${tags}"
+          return 0
+        fi
+        if [ "${attempt}" -lt "${CUSTOM_TAGS_READBACK_ATTEMPTS}" ]; then
+          sleep "${CUSTOM_TAGS_READBACK_INTERVAL}"
+        fi
+      done
+      die "set the instance custom_tags to ${tags}, but '${CONSOLE_TAG}' is not listed when read back (status ${status})"
+      ;;
+    *)
+      die "the instance custom_tags setting has an unexpected shape; fix it in the Windmill UI (Instance settings > Workers) and run again"
+      ;;
+  esac
+}
+
 # --- 手順1: ログインし、初回は管理者の初期パスワードを変える ----------------
 status="$(login_body "${WM_ADMIN_PASSWORD}" | api_post /auth/login)"
 if [ "${status}" = "200" ]; then
@@ -285,6 +370,13 @@ else
   fi
 fi
 set_auth_token "${SESSION_TOKEN}"
+
+if [ "${MODE}" = "custom-tags" ]; then
+  ensure_instance_custom_tag
+  logout_status="$(api_post_no_body /auth/logout)"
+  log "session token logged out (status ${logout_status})"
+  exit 0
+fi
 
 # --- 手順2: ワークスペース。絞ったトークンはまだ無いので、セッションのトークンで作る ---
 # 対話無しでCLIにトークンを渡す方法は`--token`しかなく、標準入力やファイルから
@@ -326,7 +418,7 @@ datatable_main_resource_path() {
   '
 }
 
-# --- 手順3: インスタンスが持つPostgresのデータベース(CREATE DATABASEと権限付与) --
+# --- 手順3: インスタンスの設定(Postgresのデータベース、カスタムtag) ------------
 # superadminの権限が要り、手順4で発行するワークスペース用のトークンは意図して
 # それを持たない。そのため、そのトークンを発行する前にセッションのトークンで行う。
 # "datatable_db"は、このWindmillの版(1.817.0 CE)が新しいインスタンスの
@@ -391,6 +483,8 @@ else
     die "could not set up instance pg database '${INSTANCE_DB_NAME}'"
   fi
 fi
+
+ensure_instance_custom_tag
 
 # --- 手順4: ワークスペースに絞った期限付きのトークンを発行する --------------
 status="$(persistent_token_body | api_post /users/tokens/create)"

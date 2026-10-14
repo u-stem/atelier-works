@@ -511,6 +511,18 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 `factory_console`は配信中のJSの置き場所なので、書き込みでマウントしない。
 読み取り専用で付けるのは、取り込みの失敗を見張るscriptが`status.json`を読むためである。
 
+tag`console`を使える主体は、インスタンスのカスタムtagで決まる。
+superadminは、許可の有無にかかわらず使える。
+superadminでない主体は、許可されたtagしか使えない。
+Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bootstrap`と`mise run instance:tags`がカスタムtagに`console`を足す。
+許可しても、このworkerのマウントとDBへの到達は変わらない。
+変わるのは、このworkerでscriptを動かせる主体である。
+
+許可の確認(`doctor`)は、管理者の資格情報を送る宛先を、死活を確かめたポートの`127.0.0.1`に限る。
+`WM_BASE_URL`は使わない。
+ログインの前に`/api/version`がWindmillの応答かを確かめ、違えば資格情報を送らない。
+`WM_HTTP_PORT`だけを変えたときに、ポートの取り違えで別のサービスへパスワードを誤って送らないためである。
+
 Consoleから押せる書き込みには、読むsecret変数の上限を決める。
 `github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。
 `audit_kickoff`と`notice_resolve`は、どのsecret変数も読まない。
@@ -562,7 +574,14 @@ Podmanは対象外である。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
 - 要件定義書と図は読める。Consoleが表示するのと同じ内容である。
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
+  `console`をカスタムtagに許可しているので、superadminでない者が付けたscriptも、このworkerで動く。
   tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
+- 許可した主体は、Console用workerの依存キャッシュ(`worker_console_dependency_cache`)に書ける。defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
+- Console用workerの枠は2つである。長く動くjobで枠を埋めると、Consoleの問い合わせと承認が止まる。可用性の問題で、秘密の漏れではない。
+- 許可はすべてのワークスペースに及ぶ。ワークスペースに絞る書式(`console(factory)`)は、実機で確かめていないので採用していない。
+- 許可の確認(`doctor`)の宛先の照合が防ぐのは、ポートの取り違えだけである。
+  Windmillを装うローカルのプロセスには、資格情報が渡る。
+  照合とログインは別の接続なので、その間に宛先が入れ替わる隙もある。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 - `factory_state_init`の確認の後にも隙がある。
   Console用のworkerは、`factory_state_init`を経ない起動のたびに、サブパスを解決し直す。
