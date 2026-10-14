@@ -9,6 +9,7 @@ import {
   MAX_CATCHUP_DAYS,
   parseSummaryState,
   planSummaryDays,
+  previousDayLabel,
 } from "../../f/factory/lib/summary_support.ts";
 import {
   DAILY_GAP_THRESHOLD_SECONDS,
@@ -191,6 +192,19 @@ describe("planSummaryDays", () => {
 
   test("reports no future day when there is no saved state", () => {
     expect(planSummaryDays(null, NOW).future_last_day).toBeNull();
+  });
+
+  test("reports yesterday when days are planned", () => {
+    expect(planSummaryDays("2026-10-10", NOW).yesterday).toBe("2026-10-13");
+  });
+
+  test("reports yesterday when nothing is planned", () => {
+    expect(planSummaryDays("2026-10-13", NOW).yesterday).toBe("2026-10-13");
+  });
+
+  test("reports yesterday as the last planned day", () => {
+    const plan = planSummaryDays("2026-10-01", NOW);
+    expect(plan.days.at(-1)?.label).toBe(plan.yesterday);
   });
 
   test("crosses a month boundary", () => {
@@ -713,5 +727,27 @@ describe("getWorkerLoadSummary", () => {
     await expect(getWorkerLoadSummary(RANGE, sql)).rejects.toThrow(
       'row field "mem_anon_max_bytes" is not numeric',
     );
+  });
+});
+
+describe("previousDayLabel", () => {
+  test("returns the day before", () => {
+    expect(previousDayLabel("2026-10-13")).toBe("2026-10-12");
+  });
+
+  test("crosses a month boundary", () => {
+    expect(previousDayLabel("2026-11-01")).toBe("2026-10-31");
+  });
+
+  test("crosses a year boundary", () => {
+    expect(previousDayLabel("2027-01-01")).toBe("2026-12-31");
+  });
+
+  test("handles a leap day", () => {
+    expect(previousDayLabel("2028-03-01")).toBe("2028-02-29");
+  });
+
+  test("throws when the label is not a real date", () => {
+    expect(() => previousDayLabel("2026-02-30")).toThrow("previousDayLabel");
   });
 });

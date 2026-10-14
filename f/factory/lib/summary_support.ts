@@ -68,6 +68,18 @@ function parseDayLabel(label: string): number | null {
   return formatDateUtc(new Date(ms)) === label ? ms : null;
 }
 
+/**
+ * `YYYY-MM-DD`の前日を同じ形式で返す。実在しない日付は例外を投げる。
+ * 届かなかった日の前日を「最後に出した日」として保存するのに使う。
+ */
+export function previousDayLabel(label: string): string {
+  const ms = parseDayLabel(label);
+  if (ms === null) {
+    throw new Error(`previousDayLabel: "${label}" is not a valid date`);
+  }
+  return formatDateUtc(new Date(ms - DAY_MS));
+}
+
 /** 一度の実行で遡って出す日数の上限。 */
 export const MAX_CATCHUP_DAYS = 7;
 
@@ -101,6 +113,11 @@ export function parseSummaryState(value: unknown): SummaryStateReading {
 }
 
 export type SummaryPlan = {
+  /**
+   * `now`の前日(`YYYY-MM-DD`)。`days`が空でないとき、`days`の最後と一致する。
+   * 呼び出し側が「その実行で最後に出す日」を知るのに使う。
+   */
+  readonly yesterday: string;
   /** 要約を出す日。古い順。 */
   readonly days: readonly DayRange[];
   /** 上限を超えたために出さずに飛ばす日数。 */
@@ -133,11 +150,13 @@ export function planSummaryDays(
 ): SummaryPlan {
   const yesterdayMs = todayShiftedMidnightMs(now) - DAY_MS;
   const parsedMs = lastDay === null ? null : parseDayLabel(lastDay);
+  const yesterday = formatDateUtc(new Date(yesterdayMs));
   const isFuture = parsedMs !== null && parsedMs > yesterdayMs;
   const lastMs = isFuture ? null : parsedMs;
   const firstMs = lastMs === null ? yesterdayMs : lastMs + DAY_MS;
   if (firstMs > yesterdayMs) {
     return {
+      yesterday,
       days: [],
       skipped_count: 0,
       skipped_from: null,
@@ -152,6 +171,7 @@ export function planSummaryDays(
     days.push(dayRangeFromShiftedMidnight(ms));
   }
   return {
+    yesterday,
     days,
     skipped_count: skipped,
     skipped_from: skipped > 0 ? formatDateUtc(new Date(firstMs)) : null,

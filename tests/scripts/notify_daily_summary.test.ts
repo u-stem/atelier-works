@@ -466,7 +466,7 @@ describe("runDailySummary", () => {
   const NOW = "2026-10-14T00:05:00Z";
   const NEXT_DAY = "2026-10-15T00:05:00Z";
 
-  test("rejects when a day carried over from an earlier run was not sent", async () => {
+  test("rejects when a day older than yesterday was not sent", async () => {
     const { run } = setup({
       state: { last_day: "2026-10-11" },
       delivery: () => ({ status: "not_sent", reason: "http 500" }),
@@ -474,7 +474,7 @@ describe("runDailySummary", () => {
     await expect(run(NOW)).rejects.toThrow("not delivered");
   });
 
-  test("keeps the state of the days delivered before a carried-over day", async () => {
+  test("keeps the state of the days delivered before an older day", async () => {
     const { run, store } = setup({
       state: { last_day: "2026-10-10" },
       delivery: (range) =>
@@ -517,6 +517,43 @@ describe("runDailySummary", () => {
     const { run } = setup({
       state: { last_day: "2026-10-12" },
       delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    await run(NOW);
+    await expect(run(NEXT_DAY)).rejects.toThrow("2026-10-13");
+  });
+
+  test("saves the day before the one that was not sent", async () => {
+    const { run, store } = setup({
+      state: null,
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    await run(NOW);
+    expect(store.value).toEqual({ last_day: "2026-10-12" });
+  });
+
+  // 記録なし、読めない値、未来の日付のいずれでも、
+  // 届かなかった昨日が翌日の実行で昨日より古い日になることを確かめる。
+  const NOT_SENT = { status: "not_sent", reason: "http 500" } as const;
+
+  test("rejects the next run when yesterday was not sent and there was no state", async () => {
+    const { run } = setup({ state: null, delivery: () => NOT_SENT });
+    await run(NOW);
+    await expect(run(NEXT_DAY)).rejects.toThrow("2026-10-13");
+  });
+
+  test("rejects the next run when yesterday was not sent and the state was unreadable", async () => {
+    const { run } = setup({
+      state: { last_day: "2026-02-30" },
+      delivery: () => NOT_SENT,
+    });
+    await run(NOW);
+    await expect(run(NEXT_DAY)).rejects.toThrow("2026-10-13");
+  });
+
+  test("rejects the next run when yesterday was not sent and the state was in the future", async () => {
+    const { run } = setup({
+      state: { last_day: "2026-10-20" },
+      delivery: () => NOT_SENT,
     });
     await run(NOW);
     await expect(run(NEXT_DAY)).rejects.toThrow("2026-10-13");
