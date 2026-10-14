@@ -114,7 +114,8 @@ export async function summarizePendingDays(
   if (plan.skipped_count > 0) {
     deps.log.warn("daily summaries skipped beyond the catch-up limit", {
       skipped_count: plan.skipped_count,
-      first_day: plan.days[0]?.label ?? null,
+      skipped_from: plan.skipped_from,
+      skipped_to: plan.skipped_to,
     });
   }
   if (plan.future_last_day !== null) {
@@ -150,13 +151,18 @@ export async function summarizePendingDays(
 }
 
 /**
- * 通知が届かなかった日があれば、例外を投げる。
+ * 前の実行から持ち越した日の通知が届かなかったときだけ、例外を投げる。
+ * 届かなかった日が`yesterday`(その実行で最後に出すはずの日)のときは、
+ * 次の実行が自動で出し直すので、人の操作は要らず、例外にしない。
  * 成功で終えると、Discordに届かない状態が続いても、ジョブのログの警告しか残らない。
- * 例外にすると、`on_error_schedule`が失敗を`job_failures`に記録するので、Consoleに残る。
+ * 持ち越した日まで届かないときは、例外にして`on_error_schedule`に失敗を`job_failures`へ記録させ、Consoleに残す。
  * 届いた日の保存は`summarizePendingDays`が済ませているので、次の実行は届かなかった日から再開する。
  */
-export function assertAllDelivered(result: CatchupResult): CatchupResult {
-  if (result.undelivered_day !== null) {
+export function assertAllDelivered(
+  result: CatchupResult,
+  yesterday: string | null,
+): CatchupResult {
+  if (result.undelivered_day !== null && result.undelivered_day !== yesterday) {
     throw new Error(
       `daily summary for ${result.undelivered_day} was not delivered: ${result.undelivered_reason ?? "unknown"}`,
     );
@@ -176,7 +182,8 @@ export type DailySummaryDeps = {
 
 /**
  * stateを読み、出す日を決め、1日ずつ集計して通知し、そのたびにstateを保存する。
- * 通知が届かない日があれば、最後に例外を投げる(`assertAllDelivered`)。
+ * 持ち越した日の通知が届かなければ、最後に例外を投げる(`assertAllDelivered`)。
+ * 前日の通知だけが届かないときは、警告を残して成功で返す。
  * `main`から例外が外れると、Discordに届かない状態が失敗として残らないので、ここにまとめてテストする。
  */
 export async function runDailySummary(
@@ -186,16 +193,24 @@ export async function runDailySummary(
   if (reading.unreadable) {
     deps.log.warn("summary state could not be read; treated as no record");
   }
-  const result = await summarizePendingDays(
-    planSummaryDays(reading.last_day, deps.now()),
-    {
-      summarizeDay: deps.summarizeDay,
-      saveLastDay: (label) => deps.setState({ last_day: label }),
-      sleep: deps.sleep,
-      log: deps.log,
-    },
-  );
-  return assertAllDelivered(result);
+  const plan = planSummaryDays(reading.last_day, deps.now());
+  const yesterday = plan.days.at(-1)?.label ?? null;
+  const result = await summarizePendingDays(plan, {
+    summarizeDay: deps.summarizeDay,
+    saveLastDay: (label) => deps.setState({ last_day: label }),
+    sleep: deps.sleep,
+    log: deps.log,
+  });
+  if (result.undelivered_day !== null && result.undelivered_day === yesterday) {
+    deps.log.warn(
+      "yesterday's daily summary was not delivered; it will be retried in the next run",
+      {
+        day: result.undelivered_day,
+        reason: result.undelivered_reason,
+      },
+    );
+  }
+  return assertAllDelivered(result, yesterday);
 }
 
 export async function main(): Promise<CatchupResult> {

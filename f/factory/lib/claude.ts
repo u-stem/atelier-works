@@ -770,7 +770,7 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
  * 日次予算はJSTの日付で区切るため、UTCの0時は使わない。
  * `lib/summary_support.ts`にもJSTの0時の計算があるが、あちらは前日の
  * 閉じた範囲を求め、こちらは「今日のこれまで」(終わりを持たない`since`)を求めるので、
- * `computeYesterdayRangeJst`とは分けている。
+ * 共通にはしていない。
  */
 export function jstMidnightTodayIso(now: Date): string {
   const jstShifted = new Date(now.getTime() + JST_OFFSET_MS);

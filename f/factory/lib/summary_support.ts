@@ -53,15 +53,6 @@ function todayShiftedMidnightMs(now: Date): number {
   );
 }
 
-/**
- * `now`が属するJSTの日の前日を、UTCの時刻の範囲`[start, end)`と
- * `YYYY-MM-DD`のラベルで返す(JSTはUTC+9固定、夏時間なし)。
- * 毎日09:00(Asia/Tokyo)に動く`notify_daily_summary.ts`の「前日」に当たる。
- */
-export function computeYesterdayRangeJst(now: Date): DayRange {
-  return dayRangeFromShiftedMidnight(todayShiftedMidnightMs(now) - DAY_MS);
-}
-
 const DAY_LABEL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /**
@@ -114,6 +105,10 @@ export type SummaryPlan = {
   readonly days: readonly DayRange[];
   /** 上限を超えたために出さずに飛ばす日数。 */
   readonly skipped_count: number;
+  /** 飛ばす日のうち最も古い日(`YYYY-MM-DD`)。飛ばす日が無いとき`null`。 */
+  readonly skipped_from: string | null;
+  /** 飛ばす日のうち最も新しい日(`YYYY-MM-DD`)。飛ばす日が無いとき`null`。 */
+  readonly skipped_to: string | null;
   /**
    * 最後に出した日が前日より後(時計のずれなど)のとき、その日。
    * 記録なしと同じに扱って前日を出し、stateを上書きして直す。呼び出し側が警告に残す。
@@ -128,7 +123,7 @@ export type SummaryPlan = {
  * - `lastDay`が前日より後(時計のずれによる未来)のときは、記録なしと同じに前日だけを出し、
  *   `future_last_day`にその日を返す。放置すると、日付が追い付くまで要約が止まるため。
  * - 対象が`maxDays`を超えるときは、新しい方の`maxDays`日だけを出し、
- *   古い日は飛ばして`skipped_count`に数える。
+ *   古い日は飛ばして`skipped_count`に数え、その範囲を`skipped_from`と`skipped_to`に返す。
  *   日次の要約は古い日ほど読まれにくく、長い停止の後に何通も続けて出さないため。
  */
 export function planSummaryDays(
@@ -142,7 +137,13 @@ export function planSummaryDays(
   const lastMs = isFuture ? null : parsedMs;
   const firstMs = lastMs === null ? yesterdayMs : lastMs + DAY_MS;
   if (firstMs > yesterdayMs) {
-    return { days: [], skipped_count: 0, future_last_day: null };
+    return {
+      days: [],
+      skipped_count: 0,
+      skipped_from: null,
+      skipped_to: null,
+      future_last_day: null,
+    };
   }
   const total = Math.round((yesterdayMs - firstMs) / DAY_MS) + 1;
   const skipped = Math.max(0, total - maxDays);
@@ -153,6 +154,11 @@ export function planSummaryDays(
   return {
     days,
     skipped_count: skipped,
+    skipped_from: skipped > 0 ? formatDateUtc(new Date(firstMs)) : null,
+    skipped_to:
+      skipped > 0
+        ? formatDateUtc(new Date(firstMs + (skipped - 1) * DAY_MS))
+        : null,
     future_last_day: isFuture ? lastDay : null,
   };
 }

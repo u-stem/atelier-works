@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { NotifyBestEffortResult } from "../../f/factory/lib/discord.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import {
-  computeYesterdayRangeJst,
   type DayRange,
   planSummaryDays,
 } from "../../f/factory/lib/summary_support.ts";
@@ -17,7 +16,14 @@ import {
   summarizePendingDays,
 } from "../../f/factory/notify_daily_summary.ts";
 
-const RANGE = computeYesterdayRangeJst(new Date("2026-10-13T00:05:00Z"));
+const [RANGE_OR_UNDEFINED] = planSummaryDays(
+  null,
+  new Date("2026-10-14T00:05:00Z"),
+).days;
+if (RANGE_OR_UNDEFINED === undefined) {
+  throw new Error("no day planned");
+}
+const RANGE: DayRange = RANGE_OR_UNDEFINED;
 
 const SUMMARY: WorkerLoadSummary = {
   sample_count: 718,
@@ -101,6 +107,7 @@ describe("summarizePendingDays", () => {
   // 2026-10-14T00:05:00ZはJSTで2026-10-14 09:05。昨日は2026-10-13。
   const NOW = new Date("2026-10-14T00:05:00Z");
   const SENT: NotifyBestEffortResult = { status: "sent" };
+  const YESTERDAY = "2026-10-13";
 
   function resultFor(range: DayRange): DailySummaryResult {
     return {
@@ -249,7 +256,9 @@ describe("summarizePendingDays", () => {
           ? { status: "not_sent", reason: "http 500" }
           : SENT,
     });
-    await expect(run().then(assertAllDelivered)).rejects.toThrow("2026-10-12");
+    await expect(
+      run().then((result) => assertAllDelivered(result, YESTERDAY)),
+    ).rejects.toThrow("2026-10-12");
   });
 
   test("keeps the state of the days delivered before the failure", async () => {
@@ -261,23 +270,49 @@ describe("summarizePendingDays", () => {
           : SENT,
     });
     await run()
-      .then(assertAllDelivered)
+      .then((result) => assertAllDelivered(result, YESTERDAY))
       .catch(() => undefined);
     expect(saved).toEqual(["2026-10-11"]);
   });
 
   test("includes the reason in the rejection", async () => {
     const { run } = setup({
-      lastDay: "2026-10-12",
+      lastDay: "2026-10-11",
       delivery: () => ({ status: "not_sent", reason: "http 500" }),
     });
-    await expect(run().then(assertAllDelivered)).rejects.toThrow("http 500");
+    await expect(
+      run().then((result) => assertAllDelivered(result, YESTERDAY)),
+    ).rejects.toThrow("http 500");
   });
 
   test("returns the result when every notification was sent", async () => {
     const { run } = setup({ lastDay: "2026-10-12" });
-    const result = await run().then(assertAllDelivered);
+    const result = await run().then((result) =>
+      assertAllDelivered(result, YESTERDAY),
+    );
     expect(result.days.map((day) => day.day)).toEqual(["2026-10-13"]);
+  });
+
+  test("does not reject when only yesterday was not sent", async () => {
+    const { run } = setup({
+      lastDay: "2026-10-12",
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    const result = await run().then((r) => assertAllDelivered(r, YESTERDAY));
+    expect(result.undelivered_day).toBe(YESTERDAY);
+  });
+
+  test("rejects when a day older than yesterday was not sent", async () => {
+    const { run } = setup({
+      lastDay: "2026-10-11",
+      delivery: (range) =>
+        range.label === "2026-10-12"
+          ? { status: "not_sent", reason: "http 500" }
+          : SENT,
+    });
+    await expect(
+      run().then((r) => assertAllDelivered(r, YESTERDAY)),
+    ).rejects.toThrow("2026-10-12");
   });
 
   test("saves the day when no webhook is configured", async () => {
@@ -364,6 +399,18 @@ describe("summarizePendingDays", () => {
     expect(lines.join("\n")).toContain("skipped");
   });
 
+  test("reports the oldest skipped day in the warning", async () => {
+    const { run, lines } = setup({ lastDay: "2026-10-01" });
+    await run();
+    expect(lines.join("\n")).toContain('"skipped_from":"2026-10-02"');
+  });
+
+  test("reports the newest skipped day in the warning", async () => {
+    const { run, lines } = setup({ lastDay: "2026-10-01" });
+    await run();
+    expect(lines.join("\n")).toContain('"skipped_to":"2026-10-06"');
+  });
+
   test("does not warn when no day is skipped", async () => {
     const { run, lines } = setup({ lastDay: "2026-10-10" });
     await run();
@@ -419,21 +466,60 @@ describe("runDailySummary", () => {
   const NOW = "2026-10-14T00:05:00Z";
   const NEXT_DAY = "2026-10-15T00:05:00Z";
 
-  test("rejects when a notification was not sent", async () => {
+  test("rejects when a day carried over from an earlier run was not sent", async () => {
     const { run } = setup({
-      state: { last_day: "2026-10-12" },
+      state: { last_day: "2026-10-11" },
       delivery: () => ({ status: "not_sent", reason: "http 500" }),
     });
     await expect(run(NOW)).rejects.toThrow("not delivered");
   });
 
-  test("keeps the state of the day whose notification was not sent", async () => {
+  test("keeps the state of the days delivered before a carried-over day", async () => {
+    const { run, store } = setup({
+      state: { last_day: "2026-10-10" },
+      delivery: (range) =>
+        range.label === "2026-10-12"
+          ? { status: "not_sent", reason: "http 500" }
+          : { status: "sent" },
+    });
+    await run(NOW).catch(() => undefined);
+    expect(store.value).toEqual({ last_day: "2026-10-11" });
+  });
+
+  test("succeeds when only yesterday was not sent", async () => {
+    const { run } = setup({
+      state: { last_day: "2026-10-12" },
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    const result = await run(NOW);
+    expect(result.undelivered_day).toBe("2026-10-13");
+  });
+
+  test("keeps the state when only yesterday was not sent", async () => {
     const { run, store } = setup({
       state: { last_day: "2026-10-12" },
       delivery: () => ({ status: "not_sent", reason: "http 500" }),
     });
-    await run(NOW).catch(() => undefined);
+    await run(NOW);
     expect(store.value).toEqual({ last_day: "2026-10-12" });
+  });
+
+  test("warns when only yesterday was not sent", async () => {
+    const { run, lines } = setup({
+      state: { last_day: "2026-10-12" },
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    await run(NOW);
+    expect(lines.join("\n")).toContain("will be retried");
+  });
+
+  test("rejects when the day that was not sent yesterday is still not sent", async () => {
+    const { run } = setup({
+      state: { last_day: "2026-10-12" },
+      delivery: () => ({ status: "not_sent", reason: "http 500" }),
+    });
+    await run(NOW);
+    await expect(run(NEXT_DAY)).rejects.toThrow("2026-10-13");
   });
 
   test("starts the next run from the day after the saved one", async () => {

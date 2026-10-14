@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
-  computeYesterdayRangeJst,
+  type DayRange,
   getAgentRunSummary,
   getApprovalSummary,
   getCleanupSummary,
@@ -64,31 +64,16 @@ function untypedTimeParameters(call: FakeCall | undefined): number[] {
   return untyped;
 }
 
-describe("computeYesterdayRangeJst", () => {
-  test("labels the JST calendar day before `now`'s JST calendar day", () => {
-    // 2026-09-26T00:05:00ZはJSTで2026-09-26 09:05。
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
-    expect(range.label).toBe("2026-09-25");
-  });
+/** 初回(stateなし)に出す日、つまり`now`の前日の範囲を返す。 */
+function yesterdayRange(now: Date): DayRange {
+  const [day] = planSummaryDays(null, now).days;
+  if (day === undefined) {
+    throw new Error("no day planned");
+  }
+  return day;
+}
 
-  test("start is yesterday's 00:00 JST expressed in real UTC", () => {
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
-    expect(range.start.toISOString()).toBe("2026-09-24T15:00:00.000Z");
-  });
-
-  test("end is today's 00:00 JST expressed in real UTC", () => {
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
-    expect(range.end.toISOString()).toBe("2026-09-25T15:00:00.000Z");
-  });
-
-  test("a `now` just before JST midnight still resolves to the same JST day", () => {
-    // 2026-09-26T14:59:59ZはJSTで2026-09-26 23:59:59(まだ27日ではない)。
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T14:59:59Z"));
-    expect(range.label).toBe("2026-09-25");
-  });
-});
-
-const RANGE = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
+const RANGE = yesterdayRange(new Date("2026-09-26T00:05:00Z"));
 
 describe("parseSummaryState", () => {
   test("reads the last summarized day", () => {
@@ -264,9 +249,35 @@ describe("planSummaryDays", () => {
     expect(day?.end.toISOString()).toBe("2026-10-12T15:00:00.000Z");
   });
 
-  test("matches computeYesterdayRangeJst for yesterday", () => {
-    const [day] = planSummaryDays(null, NOW).days;
-    expect(day).toEqual(computeYesterdayRangeJst(NOW));
+  test("starts the first day of an initial run at yesterday's 00:00 JST in UTC", () => {
+    expect(
+      yesterdayRange(new Date("2026-09-26T00:05:00Z")).start.toISOString(),
+    ).toBe("2026-09-24T15:00:00.000Z");
+  });
+
+  test("ends the first day of an initial run at today's 00:00 JST in UTC", () => {
+    expect(
+      yesterdayRange(new Date("2026-09-26T00:05:00Z")).end.toISOString(),
+    ).toBe("2026-09-25T15:00:00.000Z");
+  });
+
+  test("resolves a `now` just before JST midnight to the same JST day", () => {
+    // 2026-09-26T14:59:59ZはJSTで2026-09-26 23:59:59(まだ27日ではない)。
+    expect(yesterdayRange(new Date("2026-09-26T14:59:59Z")).label).toBe(
+      "2026-09-25",
+    );
+  });
+
+  test("reports no skipped range when no day is skipped", () => {
+    expect(planSummaryDays("2026-10-06", NOW).skipped_from).toBeNull();
+  });
+
+  test("reports the oldest skipped day", () => {
+    expect(planSummaryDays("2026-10-01", NOW).skipped_from).toBe("2026-10-02");
+  });
+
+  test("reports the newest skipped day", () => {
+    expect(planSummaryDays("2026-10-01", NOW).skipped_to).toBe("2026-10-06");
   });
 });
 
