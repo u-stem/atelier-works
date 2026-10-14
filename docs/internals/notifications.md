@@ -233,7 +233,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `workspace_disk_usage` | `cleanup_workspaces` | 作業領域のディスク使用量(MiB) |
 | `main_ci_failed` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、コミットの先頭7文字、失敗した実行のリンク、次の操作 |
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
-| `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、失敗した実行のリンク、次の操作 |
+| `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、自動修正の保留の理由(あれば)、リンク、次の操作 |
 | `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
@@ -253,7 +253,11 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 `main_ci_check_denied`は、実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
 詳細は[mainのCI監視の仕様](main-ci.md)にある。
 
-`pr_ci_failed`は、失敗を確定したPRのheadごとに1件残す。Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。リンクはPRのページで、説明に理由コード、「次の操作」を載せる。
+`pr_ci_failed`は、失敗を確定したPRのheadごとに、通常は1件残す。
+保留が続いたと知らせた後で決定的な保留へ変わると、2件目が残る。本文は違う([PRのCI監視の仕様](pr-ci.md)の既知の限界)。
+Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。リンクはPRのページで、説明に理由コード、「次の操作」を載せる。
+自動で直す対象の失敗は、確定した時点では残さず、直せるかが決まってから残す。本文には自動修正の保留の理由を足し、「次の操作」はその理由の固定文にする。リンクはPRのページになる。
+直す作業が止まった保留(`fix_stopped`)は、止めたフローがDiscordに通知しているので、noticeだけを残す。
 本文は固定文で、workflowの名前、結論、ログは載せない。外部の文字列は、`pr_ci_checks`の`summary`列にだけ残す。
 同じheadの再実行が通ったとき、新しいheadが通ったとき、PRが閉じたときに、`watch_pr_ci`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
 `pr_ci_check_denied`は、PRか実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。

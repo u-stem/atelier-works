@@ -37,7 +37,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d1a31969da1507c7e0d959f55897dec7360835451e901fdc84bd984c6b195e53
   f/factory/lib/console_worker: e7207cbd3017b5e9f86f7143af330e0a3aa414bf00de675c4f0c80ca5082815c
-  f/factory/lib/db: 0067fe632877fb3f5d32720aa8bec06b1018687cd45b93e0fbc0dc82c3c9c1e8
+  f/factory/lib/db: 28e4ae9a8ff11851bbdc40c7e474efe033dc8130106f5c692d34c5b5bfaeb2fa
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -67,8 +67,9 @@ locks:
   f/factory/lib/poll_support: 64a0543f1d628ee92270a939a06f0eab81d7eed0b133f363b9f35692cd7f5004
   f/factory/lib/pr_ci_fix_claim: 1ab366b9b3ff0506e71b69b04c0802f7b6d6bb846400788678dfdd33d51ccf25
   f/factory/lib/pr_ci_fix_recovery: 0efbdfe837c32add26d3d0af3d761dab2deb3fd61240e677430783f71dcaeec2
-  f/factory/lib/pr_ci_support: 52c1b518f09d220b15992e27a7f7d7676a361a885ead3352a934a495757a0289
-  f/factory/lib/pr_ci_watch: f1fb5840f44b57605989a7d38d1d5b5ea99260782475dc3dc2e8811f9cfac46b
+  f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
+  f/factory/lib/pr_ci_support: 7831702917509497ad6d76b6adc29bcfca7f52e5cef0a8d78c0b36b08b9bb711
+  f/factory/lib/pr_ci_watch: c4d4bc8a3862dca0e25458f36fe656d875a266b4ac5c54e7f23415c4acc2e3bd
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: 84e0cc498ef2a01e60f9cf869b762c031731f0ea9dd5ad7f5b51a78b81de4bea
@@ -126,4 +127,4 @@ locks:
   f/factory/steps/pr_workflow_support: ad9eb1efa68e2dc8a32fbe543ca4d295227e471a5feea5dd7b4dfecd7d75afcc
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: 6b197f8bf7a2689c8f1906fcae64b328c9815890b6344796ab0e6cff6585e958
-  f/factory/watch_pr_ci: db59eafbda1f2c08bfb97a1cb50a8577004f065cce30235f81800ca3c541407e
+  f/factory/watch_pr_ci: f32860b80a2c353c5a53fc261ba3d3aa5d7b56bed0af6b981acc39baede79024

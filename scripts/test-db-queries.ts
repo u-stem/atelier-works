@@ -52,6 +52,7 @@ import {
   listPrCiChecksForPr,
   listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
+  listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
   type NewWorkerSample,
@@ -3520,6 +3521,105 @@ check(
 check(
   "review for head: a review of another pull request is not a match",
   (await hasPrReviewForHead("qfix", "app", 607, FIX_SHA_1, sql)) === false,
+);
+
+// 通知を保留した失敗: 失敗で、まだ通知していない行だけを、更新の古い順に返す。
+const unnotifiedPrs = async () =>
+  (await listUnnotifiedFailedPrCiChecks(1000, sql))
+    .filter((row) => row.owner === FIX.owner && row.pr_number >= 700)
+    .map((row) => row.pr_number)
+    .join(",");
+const unnotifiedOld = await failedFixRow(701, FIX_SHA_1);
+const unnotifiedNew = await failedFixRow(702, FIX_SHA_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET updated_at = now() - interval '1 hour' WHERE id = ${String(unnotifiedOld.id)}`,
+);
+const unnotifiedDone = await failedFixRow(703, FIX_SHA_1);
+await markPrCiNotified(unnotifiedDone.id, "ci_failure", sql);
+await recordPrCiCheck(fixRowNew(704, FIX_SHA_1), sql);
+check(
+  "unnotified failures: failed rows without a notified reason are listed, oldest update first",
+  (await unnotifiedPrs()) === "701,702",
+  await unnotifiedPrs(),
+);
+check(
+  "unnotified failures: a notified row is not listed",
+  !(await unnotifiedPrs()).split(",").includes("703"),
+);
+check(
+  "unnotified failures: a pending row is not listed",
+  !(await unnotifiedPrs()).split(",").includes("704"),
+);
+await touchPrCiCheck(unnotifiedOld.id, sql);
+check(
+  "unnotified failures: reading a row again does not move it in the order",
+  (await unnotifiedPrs()) === "701,702",
+  await unnotifiedPrs(),
+);
+await setPrCiFixHold(unnotifiedOld.id, "not_reviewed", {}, sql);
+check(
+  "unnotified failures: writing the hold reason moves the update time of the row",
+  (await unnotifiedPrs()) === "702,701",
+  await unnotifiedPrs(),
+);
+check(
+  "unnotified failures: the limit cuts the list",
+  (await listUnnotifiedFailedPrCiChecks(1, sql)).length === 1,
+);
+
+// 起動は通知した理由を空に戻す。保留が続いたと知らせた後でも、直す作業の結果を改めて通知できる。
+await markPrCiNotified(unnotifiedNew.id, "ci_failure", sql);
+check(
+  "claim: a row that was notified while it was held is notified again after its claim",
+  (await fixClaim(unnotifiedNew.id, FIX_SHA_1)) !== null &&
+    (await fixRowOf(unnotifiedNew.id))?.notified_reason === null,
+  await fixRowOf(unnotifiedNew.id),
+);
+
+// 決定的な保留へ変わった行は、通知した理由を空に戻す。一時的な保留への変更と解除では残す。
+const resetHold = await failedFixRow(705, FIX_SHA_1);
+await markPrCiNotified(resetHold.id, "ci_failure", sql);
+await setPrCiFixHold(resetHold.id, "not_reviewed", {}, sql);
+check(
+  "hold: a temporary hold keeps the notified reason",
+  (await fixRowOf(resetHold.id))?.notified_reason === "ci_failure",
+  await fixRowOf(resetHold.id),
+);
+await setPrCiFixHold(
+  resetHold.id,
+  "rounds_exhausted",
+  { resetNotified: true },
+  sql,
+);
+check(
+  "hold: a deterministic hold clears the notified reason",
+  (await fixRowOf(resetHold.id))?.notified_reason === null,
+  await fixRowOf(resetHold.id),
+);
+check(
+  "hold: the cleared row is listed as unnotified again",
+  (await unnotifiedPrs()).split(",").includes("705"),
+  await unnotifiedPrs(),
+);
+
+const resetRelease = await failedFixRow(706, FIX_SHA_1);
+const resetReleaseId = await fixClaim(resetRelease.id, FIX_SHA_1);
+await markPrCiNotified(resetRelease.id, "ci_failure", sql);
+await releaseFixingPrCiCheck(
+  resetRelease.id,
+  {
+    fixWorkItemId: resetReleaseId ?? 0,
+    holdReason: "fix_stopped",
+    resetNotified: true,
+  },
+  sql,
+);
+check(
+  "release: a deterministic hold clears the notified reason",
+  (await fixRowOf(resetRelease.id))?.notified_reason === null &&
+    (await fixRowOf(resetRelease.id))?.fix_hold_reason === "fix_stopped",
+  await fixRowOf(resetRelease.id),
 );
 
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'");
