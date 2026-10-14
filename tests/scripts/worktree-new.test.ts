@@ -44,10 +44,25 @@ function git(cwd: string, args: string[]): string {
 
 type Run = { exitCode: number; stdout: string; stderr: string };
 
-function runScript(cwd: string, args: string[], bun: string): Run {
-  const result = Bun.spawnSync(["bash", SCRIPT, ...args], {
+type RunOptions = {
+  // 環境変数の追加。PATHの先頭に偽のgitを置くときなどに使う。
+  env?: Record<string, string>;
+  // trueなら、標準出力を閉じた状態でスクリプトを起動する。
+  closeStdout?: boolean;
+};
+
+function runScript(
+  cwd: string,
+  args: string[],
+  bun: string,
+  options: RunOptions = {},
+): Run {
+  const command = options.closeStdout
+    ? ["bash", "-c", 'bash "$0" "$@" >&-', SCRIPT, ...args]
+    : ["bash", SCRIPT, ...args];
+  const result = Bun.spawnSync(command, {
     cwd,
-    env: { ...cleanEnv(), WORKTREE_NEW_BUN: bun },
+    env: { ...cleanEnv(), WORKTREE_NEW_BUN: bun, ...options.env },
   });
   return {
     exitCode: result.exitCode,
@@ -62,10 +77,16 @@ function makeTempRoot(prefix: string): string {
 }
 
 // 呼ばれた作業ディレクトリと引数を1行ずつ記録し、本物と同じく`node_modules`を作るだけのbun。
-function writeFakeBun(path: string, log: string, exitCode: number): void {
+// `extra`は終了の直前に実行するシェルの行で、worktreeに追加のファイルやコミットを作るのに使う。
+function writeFakeBun(
+  path: string,
+  log: string,
+  exitCode: number,
+  extra = "",
+): void {
   writeFileSync(
     path,
-    `#!/usr/bin/env bash\necho "$PWD $*" >> "${log}"\nmkdir -p node_modules\ntouch node_modules/marker\nexit ${exitCode}\n`,
+    `#!/usr/bin/env bash\necho "$PWD $*" >> "${log}"\nmkdir -p node_modules\ntouch node_modules/marker\n${extra}\nexit ${exitCode}\n`,
   );
   chmodSync(path, 0o755);
 }
@@ -325,7 +346,7 @@ describe("worktree-new.sh", () => {
 
     const result = runScript(mainDir, ["feat/foo"], fakeBun);
 
-    expect(result.stderr).toContain("rerun: scripts/worktree-new.sh feat/foo");
+    expect(result.stderr).toContain("Fix the cause and rerun");
   });
 
   test("succeeds when rerun with the same argument after an install failure", () => {
@@ -413,6 +434,195 @@ describe("worktree-new.sh", () => {
     runScript(originDir, ["feat/foo"], fakeBun);
 
     expect(existsSync(join(root, ".claude"))).toBe(false);
+  });
+
+  describe("when the plain worktree remove is refused", () => {
+    // gitignoreに載らない新規のファイルがあると、通常のremoveは拒まれる。
+    beforeEach(() => {
+      writeFakeBun(fakeBun, bunLog, 3, "echo x > untracked.txt");
+    });
+
+    test("keeps the exit code of the failed install", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(result.exitCode).toBe(3);
+    });
+
+    test("keeps the worktree directory", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(existsSync(join(target(), "untracked.txt"))).toBe(true);
+    });
+
+    test("keeps the branch", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(branchExists("feat/foo")).toBe(true);
+    });
+
+    test("tells how to check the contents", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(result.stderr).toContain("git status --short");
+    });
+
+    test("does not suggest forcing in its own guidance", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      // gitが自分で出す`fatal:`の行は、スクリプトの案内ではないので除く。
+      const own = result.stderr
+        .split("\n")
+        .filter((line) => !line.startsWith("fatal:"));
+      expect(own.join("\n")).not.toContain("--force");
+    });
+
+    test("does not suggest deleting the branch by force in the guidance", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(result.stderr).not.toContain("branch -D");
+    });
+  });
+
+  describe("when the branch has moved on from the start commit", () => {
+    beforeEach(() => {
+      writeFakeBun(
+        fakeBun,
+        bunLog,
+        1,
+        "git commit --quiet --allow-empty --no-gpg-sign -m extra",
+      );
+    });
+
+    test("keeps the branch", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(branchExists("feat/foo")).toBe(true);
+    });
+
+    test("removes the worktree", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(existsSync(target())).toBe(false);
+    });
+
+    test("tells that the branch remains", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(result.stderr).toContain("branch feat/foo remains");
+    });
+  });
+
+  describe("when the origin check fails after a successful fetch", () => {
+    let fakeBin: string;
+
+    beforeEach(() => {
+      fakeBin = join(root, "fakebin");
+      mkdirSync(fakeBin);
+      const realGit = Bun.which("git") ?? "git";
+      writeFileSync(
+        join(fakeBin, "git"),
+        `#!/usr/bin/env bash\nif [ "$1" = "ls-remote" ]; then echo "fatal: fake failure" >&2; exit 128; fi\nexec "${realGit}" "$@"\n`,
+      );
+      chmodSync(join(fakeBin, "git"), 0o755);
+    });
+
+    const withFakeGit = () => ({
+      env: { PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+    });
+
+    test("fails", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun, withFakeGit());
+
+      expect(result.exitCode).toBe(1);
+    });
+
+    test("does not create the directory", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun, withFakeGit());
+
+      expect(existsSync(target())).toBe(false);
+    });
+
+    test("does not create the branch", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun, withFakeGit());
+
+      expect(branchExists("feat/foo")).toBe(false);
+    });
+  });
+
+  test("keeps the finished worktree when stdout is closed", () => {
+    runScript(mainDir, ["feat/foo"], fakeBun, { closeStdout: true });
+
+    expect(existsSync(join(target(), "node_modules", "marker"))).toBe(true);
+  });
+
+  test("keeps the branch when stdout is closed", () => {
+    runScript(mainDir, ["feat/foo"], fakeBun, { closeStdout: true });
+
+    expect(branchExists("feat/foo")).toBe(true);
+  });
+
+  describe("when interrupted during the install", () => {
+    // 偽のbunがスクリプトにINTを送り、子が終わった後にtrapが働く。
+    beforeEach(() => {
+      writeFakeBun(fakeBun, bunLog, 0, 'kill -INT "$PPID"\nsleep 0.5');
+    });
+
+    test("exits with 130", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(result.exitCode).toBe(130);
+    });
+
+    test("removes the worktree directory", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(existsSync(target())).toBe(false);
+    });
+
+    test("removes the branch", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(branchExists("feat/foo")).toBe(false);
+    });
+
+    test("does not run the second install", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(readFileSync(bunLog, "utf8").trim().split("\n")).toHaveLength(1);
+    });
+  });
+
+  describe("when git worktree add itself fails", () => {
+    // post-checkoutのフックが失敗すると、worktreeを作った後で`git worktree add`が失敗する。
+    beforeEach(() => {
+      const hook = join(mainDir, ".git", "hooks", "post-checkout");
+      writeFileSync(hook, "#!/bin/sh\nexit 1\n");
+      chmodSync(hook, 0o755);
+    });
+
+    test("fails", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(result.exitCode).toBe(1);
+    });
+
+    test("removes nothing", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(existsSync(target())).toBe(true);
+    });
+
+    test("tells that nothing was removed", () => {
+      const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(result.stderr).toContain("nothing was removed");
+    });
+
+    test("does not run the install", () => {
+      runScript(mainDir, ["feat/foo"], fakeBun);
+
+      expect(existsSync(bunLog)).toBe(false);
+    });
   });
 
   test("fails when the branch already exists", () => {
