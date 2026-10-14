@@ -101,9 +101,14 @@ describe("worktree-prune.sh", () => {
 
   // worktreeのブランチに、origin/mainに無いcommitを足してshaを返す。
   function commitIn(path: string): string {
-    writeFileSync(join(path, "work.txt"), "w\n");
-    git(path, ["add", "work.txt"]);
-    git(path, ["commit", "--quiet", "--no-gpg-sign", "-m", "work"]);
+    git(path, [
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "--no-gpg-sign",
+      "-m",
+      "work",
+    ]);
     return git(path, ["rev-parse", "HEAD"]);
   }
 
@@ -116,6 +121,15 @@ describe("worktree-prune.sh", () => {
     git(other, ["commit", "--quiet", "--no-gpg-sign", "-m", "advance"]);
     git(other, ["push", "--quiet", "origin", "main"]);
     git(mainDir, ["fetch", "--quiet", "origin"]);
+  }
+
+  // worktreeを作って1コミットし、そのcommitをfast-forwardでorigin/mainに入れる。
+  function addMergedWorktree(name: string, branch: string): string {
+    const path = addWorktree(name, branch);
+    const sha = commitIn(path);
+    git(path, ["push", "--quiet", "origin", `${sha}:refs/heads/main`]);
+    git(mainDir, ["fetch", "--quiet", "origin"]);
+    return path;
   }
 
   beforeEach(() => {
@@ -170,8 +184,7 @@ describe("worktree-prune.sh", () => {
     let path: string;
 
     beforeEach(() => {
-      path = addWorktree("docs-old", "docs/old");
-      advanceOrigin();
+      path = addMergedWorktree("docs-old", "docs/old");
     });
 
     test("is listed as would remove in the dry run", () => {
@@ -224,6 +237,54 @@ describe("worktree-prune.sh", () => {
       const result = run();
 
       expect(result.stdout).not.toContain("gh unavailable");
+    });
+  });
+
+  describe("a branch that was created and never used", () => {
+    let path: string;
+
+    beforeEach(() => {
+      path = addWorktree("docs-fresh", "docs/fresh");
+      advanceOrigin();
+    });
+
+    test("is kept as unused even though origin/main moved on", () => {
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/fresh): unused`);
+    });
+
+    test("is not removed with --apply", () => {
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
+    });
+
+    test("keeps its branch with --apply", () => {
+      run(["--apply"]);
+
+      expect(branchExists("docs/fresh")).toBe(true);
+    });
+  });
+
+  describe("a branch whose reflog is gone", () => {
+    let path: string;
+
+    beforeEach(() => {
+      path = addMergedWorktree("docs-nolog", "docs/nolog");
+      rmSync(join(mainDir, ".git", "logs", "refs", "heads", "docs", "nolog"));
+    });
+
+    test("is kept as unused", () => {
+      const result = run();
+
+      expect(result.stdout).toContain(`kept: ${path} (docs/nolog): unused`);
+    });
+
+    test("is not removed with --apply", () => {
+      run(["--apply"]);
+
+      expect(existsSync(path)).toBe(true);
     });
   });
 
@@ -441,10 +502,9 @@ describe("worktree-prune.sh", () => {
   });
 
   test("works when run from another worktree", () => {
-    const old = addWorktree("docs-old", "docs/old");
+    const old = addMergedWorktree("docs-old", "docs/old");
     const other = addWorktree("fix-other", "fix/other");
     commitIn(other);
-    advanceOrigin();
 
     run(["--apply"], other);
 
@@ -452,8 +512,7 @@ describe("worktree-prune.sh", () => {
   });
 
   test("summarizes the counts at the end of the dry run", () => {
-    addWorktree("docs-old", "docs/old");
-    advanceOrigin();
+    addMergedWorktree("docs-old", "docs/old");
 
     const result = run();
 
@@ -463,8 +522,7 @@ describe("worktree-prune.sh", () => {
   });
 
   test("summarizes the counts at the end of --apply", () => {
-    addWorktree("docs-old", "docs/old");
-    advanceOrigin();
+    addMergedWorktree("docs-old", "docs/old");
 
     const result = run(["--apply"]);
 

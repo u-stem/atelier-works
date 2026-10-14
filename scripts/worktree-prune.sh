@@ -14,6 +14,8 @@
 #   - ブランチの先頭が、`origin/main`の祖先か、マージ済みのPRの先頭のcommitと同じである。
 #     後者はsquashマージに当たる。ローカルにpushしていないcommitがあれば一致しないので残る。
 #     ghの失敗や認証切れは、未マージとして残す。
+#     祖先の場合は、ブランチのreflogにcommitの記録もあるときに限る。作ったまま使っていない
+#     ブランチは、origin/mainが進むと祖先に見えるため、残す。
 # 消し方は、`git worktree remove`(強制しない)の後に、ブランチを確かめたcommitを期待値にして
 # `git update-ref -d`で消す。確認の後にブランチが進んでいれば、gitが拒むのでブランチだけが残る。
 # リモートのブランチには触れない。
@@ -89,6 +91,19 @@ consider() {
 
   local how=""
   if git merge-base --is-ancestor "$wt_head" refs/remotes/origin/main 2>/dev/null; then
+    # 作ったまま使っていないブランチは、origin/mainが進めば祖先に見える。
+    # reflogが作成の記録だけ(または読めない)なら、commitがあった証拠が無いので残す。
+    local reflog_out="" reflog_lines=0 reflog_line
+    reflog_out="$(git reflog show --format=%H "refs/heads/$wt_branch" 2>/dev/null)" || reflog_out=""
+    if [ -n "$reflog_out" ]; then
+      while IFS= read -r reflog_line; do
+        reflog_lines=$((reflog_lines + 1))
+      done <<<"$reflog_out"
+    fi
+    if [ "$reflog_lines" -lt 2 ]; then
+      keep "unused"
+      return
+    fi
     how="ancestor of origin/main"
   else
     local gh_status=0 gh_out=""
