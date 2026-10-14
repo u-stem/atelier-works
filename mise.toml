@@ -179,3 +179,7 @@ run = "scripts/verify-check-sandbox.sh"
 [tasks."check:comment-only"]
 description = "Fail if the diff against a base ref (default main) changes anything but comments"
 run = "bun run scripts/check-comment-only-diff.ts"
+
+[tasks."worktree:new"]
+description = "Create a worktree for type/name from origin/main and install its dependencies"
+run = "scripts/worktree-new.sh"
