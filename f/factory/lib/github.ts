@@ -234,7 +234,7 @@ function rateLimitDetail(
     : wait;
 }
 
-function isRateLimited(response: GhApiResponse): boolean {
+export function isRateLimited(response: GhApiResponse): boolean {
   if (response.status !== 403 && response.status !== 429) return false;
   if (response.headers.has("retry-after")) return true;
   return response.headers.get("x-ratelimit-remaining") === "0";
@@ -245,7 +245,7 @@ function isRateLimited(response: GhApiResponse): boolean {
  * (余裕の`RATE_LIMIT_RESET_MARGIN_MS`を足す)から求める。
  * どちらも無いか読めなければnullを返す。
  */
-function rateLimitWaitMs(
+export function rateLimitWaitMs(
   headers: ReadonlyMap<string, string>,
   now: () => Date,
 ): number | null {
@@ -4756,6 +4756,106 @@ async function fetchWorkflowJobLog(
     return { kind: "log_unavailable" };
   }
   throw new GitHubCiLogError(response.status);
+}
+
+/**
+ * workflowの実行のartifact1件。検査に使う項目だけを持つ。
+ * `digest`は`sha256:<64桁の16進数>`の形で返ることがあり、GitHubが付けなければnull。
+ * `runId`、`headSha`、`headBranch`は、artifactを上げた実行の値で、応答に無ければnull。
+ */
+export type WorkflowRunArtifact = {
+  readonly id: number;
+  readonly name: string;
+  readonly sizeInBytes: number;
+  readonly expired: boolean;
+  readonly digest: string | null;
+  readonly runId: number | null;
+  readonly headSha: string | null;
+  readonly headBranch: string | null;
+};
+
+/** artifactの一覧を読むページ数の上限。超えたら全体を読めていないので`GitHubPaginationLimitError`にする。 */
+export const WORKFLOW_RUN_ARTIFACTS_MAX_PAGES = 3;
+
+function isNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function toWorkflowRunArtifacts(
+  parsed: unknown,
+  context: string,
+  runId: number,
+): WorkflowRunArtifact[] {
+  const shapeError = () => new Error(`${context}: unexpected response shape`);
+  if (!isRecord(parsed) || !Array.isArray(parsed.artifacts)) throw shapeError();
+  return parsed.artifacts.map((raw: unknown): WorkflowRunArtifact => {
+    if (
+      !isRecord(raw) ||
+      !isPositiveSafeInteger(raw.id) ||
+      typeof raw.name !== "string" ||
+      typeof raw.size_in_bytes !== "number" ||
+      !Number.isSafeInteger(raw.size_in_bytes) ||
+      raw.size_in_bytes < 0 ||
+      typeof raw.expired !== "boolean" ||
+      !isNullableString(raw.digest)
+    ) {
+      throw shapeError();
+    }
+    const run = raw.workflow_run ?? null;
+    if (run !== null && !isRecord(run)) throw shapeError();
+    const runIdOfArtifact = run?.id ?? null;
+    if (runIdOfArtifact !== null && !isPositiveSafeInteger(runIdOfArtifact)) {
+      throw shapeError();
+    }
+    if (
+      !isNullableString(run?.head_sha) ||
+      !isNullableString(run?.head_branch)
+    ) {
+      throw shapeError();
+    }
+    if (runIdOfArtifact !== null && runIdOfArtifact !== runId) {
+      throw new GitHubResponseError(
+        `${context}: the response holds an artifact of another run`,
+      );
+    }
+    return {
+      id: raw.id,
+      name: raw.name,
+      sizeInBytes: raw.size_in_bytes,
+      expired: raw.expired,
+      digest: raw.digest ?? null,
+      runId: runIdOfArtifact,
+      headSha: run?.head_sha ?? null,
+      headBranch: run?.head_branch ?? null,
+    };
+  });
+}
+
+/**
+ * workflowの実行(`runId`)のartifactを、`name`を指定したときはその名前のものだけ読む。
+ * `runId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
+ * 応答のartifactの`workflow_run.id`が`runId`と違えば、別の実行のものを取り違えないよう
+ * `GitHubResponseError`を投げる。応答の形が違えば例外を投げる。
+ * ページ数が`WORKFLOW_RUN_ARTIFACTS_MAX_PAGES`を超えたら`GitHubPaginationLimitError`を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRunArtifacts(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  runId: number,
+  name?: string,
+): Promise<WorkflowRunArtifact[]> {
+  validateOwnerRepo(owner, repo);
+  assertRunId(runId);
+  const filter = name === undefined ? "" : `&name=${encodeURIComponent(name)}`;
+  const endpoint = `repos/${owner}/${repo}/actions/runs/${String(runId)}/artifacts?per_page=100${filter}`;
+  return paginateGhApi(
+    client,
+    endpoint,
+    (parsed, context) => toWorkflowRunArtifacts(parsed, context, runId),
+    WORKFLOW_RUN_ARTIFACTS_MAX_PAGES,
+  );
 }
 
 export type PullRequestUpdate = {

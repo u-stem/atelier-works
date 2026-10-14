@@ -81,8 +81,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * `windmill-client`の版を上げる変更で書き換わらないので、正当な変更を止めない。
  * 一方、窓口の`poll_dependabot.script.lock`と`steps/dependabot_*.script.lock`は守らない。
  * `windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
- * CIが出すメタデータのパッチを検査する部品(`lib/metadata_patch_manifest.ts`)とその`.script.yaml`、`.script.lock`も守る。
- * パスの許可リストとmanifestの形を決める。書き換えられると、パッチの受け取り側の検査が緩む。
+ * CIが出すメタデータのパッチを取得して検査する部品(`lib/metadata_patch_*.ts`の6つ)と、それぞれの`.script.yaml`、`.script.lock`も守る。
+ * 6つは、manifest、zip、yaml、verify、imports、downloadである。
+ * パスの許可リスト、manifestの形、zipの読み方、yamlの許可するキー、importの読み方、適用の条件、
+ * トークンの渡し先と取得先を決める。書き換えられると、パッチの受け取り側の検査が緩む。
  * lockは依存が無く、`windmill-client`の版を上げる変更で書き換わらないので、正当な変更を止めない。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
@@ -140,6 +142,21 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/metadata_patch_manifest.ts",
   "f/factory/lib/metadata_patch_manifest.script.yaml",
   "f/factory/lib/metadata_patch_manifest.script.lock",
+  "f/factory/lib/metadata_patch_zip.ts",
+  "f/factory/lib/metadata_patch_zip.script.yaml",
+  "f/factory/lib/metadata_patch_zip.script.lock",
+  "f/factory/lib/metadata_patch_yaml.ts",
+  "f/factory/lib/metadata_patch_yaml.script.yaml",
+  "f/factory/lib/metadata_patch_yaml.script.lock",
+  "f/factory/lib/metadata_patch_verify.ts",
+  "f/factory/lib/metadata_patch_verify.script.yaml",
+  "f/factory/lib/metadata_patch_verify.script.lock",
+  "f/factory/lib/metadata_patch_imports.ts",
+  "f/factory/lib/metadata_patch_imports.script.yaml",
+  "f/factory/lib/metadata_patch_imports.script.lock",
+  "f/factory/lib/metadata_patch_download.ts",
+  "f/factory/lib/metadata_patch_download.script.yaml",
+  "f/factory/lib/metadata_patch_download.script.lock",
 ];
 
 /**

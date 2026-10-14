@@ -7,6 +7,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/ci_log_support.ts`、`lib/ci_fix_classify.ts`
 - `lib/ci_fix_prompt.ts`、`lib/ci_fix_paths.ts`
 - `lib/ci_fix_round.ts`
+- `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
 
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
@@ -469,6 +470,140 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 違反の報告に載せるパスは、不可視文字を除き、120字に切る。
 パスは外部由来の文字列だからである。
 
+## メタデータのパッチの受け取り
+
+CIの`metadata`ジョブが出すパッチ(artifact)を、取得し、検査し、書き込む内容の一覧にする部品である。
+artifactはPRの作者が完全に決められるので、安全は内容の制限で成り立たせる。
+取り決めは[セキュリティ](../security.md#受け取る側が必ず確かめること)にある。
+
+| ファイル | 責務 |
+| --- | --- |
+| `lib/github.ts` | 実行のartifactの一覧(`listWorkflowRunArtifacts`) |
+| `lib/metadata_patch_download.ts` | zipのバイト列の取得(`downloadArtifactZip`)。トークンの渡し先と取得先の制限 |
+| `lib/metadata_patch_zip.ts` | zipの安全な読み取り。結果は、パスから内容への対応 |
+| `lib/metadata_patch_manifest.ts` | パスの許可リストと、manifestの形と上限 |
+| `lib/metadata_patch_imports.ts` | scriptのimportの読み取り。相対importの閉包と、裸のimportの検出 |
+| `lib/metadata_patch_yaml.ts` | `.script.yaml`と`wmill-lock.yaml`の検査 |
+| `lib/metadata_patch_verify.ts` | 適用条件の検査。通れば書き込む内容を、通らなければ失敗の種別を返す |
+
+### パッチの取得
+
+zipは`fetch`で取得する。
+`gh api`の出力は文字列に復号されるので、バイナリのzipが壊れるためである。
+トークンはGitHubのAPIへの最初の要求にだけ載せ、リダイレクトはたどらない。
+返った302の`Location`が、`https`のAzureのblob storageでなければ断る。
+次の要求にはトークンを付けず、リダイレクトをたどらない。
+この制限は、トークンを別のホストへ渡さないために、`github.ts`から分けた`metadata_patch_download.ts`に置き、保護パスにする。
+
+取得の前に、期限切れと、申告された大きさ(`size_in_bytes`)が上限を超えるものを断る。
+取得の間は、実際に受け取ったバイト数が上限を超えた時点で読むのをやめる。
+上限は`metadata_patch_zip.ts`の`MAX_ZIP_BYTES`で、呼び出し側が渡す。
+
+失敗は`GitHubArtifactDownloadError`で、種別とHTTPのステータスだけを持つ。
+署名付きURL、本文、トークンは、例外とログに載せない。
+取得したバイト列は、ログとDBに載せない。
+
+### zipの読み取り
+
+`readMetadataPatchZip`は、中央ディレクトリを自前で読み、`inflateRawSync`で展開する。
+結果は`{ ok: true, files }`か`{ ok: false, reason }`で、`reason`は固定の種別である。
+zipの中の文字列は、`reason`に載せない。
+断る内容は、[セキュリティ](../security.md#zipの内容の制限)にある。
+
+### importの読み取り
+
+`metadata_patch_imports.ts`は、`Bun.Transpiler`の`scanImports`で、import文、`export from`、動的import、requireの呼び出しを読む。
+トランスパイラは構文を解析するので、コメントや文字列の中のimport風の文字列は拾わず、コメントで引用符を挟んだ隠し方も見抜く。
+トランスパイラが落とす型だけのimport、波括弧の中が型修飾子だけのimport、型の位置の動的importは、正規表現で足す。
+型の位置でしか使わないimportでも、`import { Foo } from "x"`の形は、トランスパイラが返す。
+
+指定子は、局所と裸に分ける。
+局所は、相対の指定子と、`/f/`で始まる指定子である。
+`resolveLocal`が、局所の指定子を、headの木の`f/`の下の`.ts`の一覧(`listHeadSources`)に解決する。
+`/f/`は`f/`と読む。候補は、そのままのパス、`.ts`の補完、`.js`の読み替え、`index.ts`で、一覧にあるものだけを選ぶ。
+拡張子のないファイルは、一覧に無いので選ばない。
+閉包の計算と、依存の集合をたどる処理は、同じ関数を使う。
+
+次のimportは、指定子を決められないので、追えないものとして扱う。
+引数に単独の文字列リテラルを取らない動的importとrequireの呼び出しと、import属性は、トランスパイラに渡さない。
+
+- 引数が、エスケープを含まない単独の文字列リテラルでない動的importとrequireの呼び出し。連結を含む。
+- メソッドとして呼ぶrequire(`import.meta.require`や`loader.require`)。
+- import属性。語の`with`か`assert`の直後が、開き波括弧かコメントの開始であるもの。
+  間に空白や改行を挟んでも、コメントを挟んでも断る。`type: "macro"`はビルド時にコードを実行するためである。
+  コメントは終端を探さず、開始だけで断る。終端を探すと、入力によっては計算量が2乗になる。
+- `/u/`と、`/f/`以外の`/`で始まる指定子。
+- 局所の指定子が、一覧のファイルに解決できないもの。
+- トランスパイラが読めないソースと、1ファイルの上限を超えるファイル。
+
+呼び出しの形と属性の形は、コメントや文字列の中の出現も追えないものに倒す。誤って断る側である。
+`f/`の下のすべての`.ts`が、追えるものとして読めることを、テストで確かめる。
+
+ファイルの読み取りとimportの解析は、パスごとに1回だけ行い、結果を使い回す。
+
+### 適用条件の検査
+
+`verifyMetadataPatch`は、実行とPRの事実、zipの展開結果、読み取りのポートを受け取る。
+自分ではI/Oをしない。
+ポートは、履歴の祖先の判定、merge commitの親の取得、headの木の`f/`の下の`.ts`の一覧(`listHeadSources`)、headの木とbaseの木のファイルの読み取りである。
+baseの木は、baseブランチの今の先端(`PrFacts.baseSha`)の木である。
+manifestの`baseSha`と`mergeSha`は出どころの照合にだけ使い、内容の比較には使わない。過去のcommitを選ばれないためである。
+`isAncestor`は、判定できないことをnullで伝える。
+`readHeadFile`と`readBaseFile`は、無いことと読めないことを分けて返し、読めないときは検査が断る。
+ほかのポートは、失敗を例外で伝え、検査は例外をそのまま投げる。
+
+検査は次の順に行い、最初に当たった失敗を返す。
+
+1. 実行の出どころとPRの差分
+2. manifestと、実体の大きさとsha256、削除、保護パス
+3. 履歴。`baseSha`がbaseの今の先端の祖先であること、headがbaseの今の先端を含むこと、`mergeSha`の親の順序。
+   headが先端を含まないときは`head_lacks_base`で断り、`main`を取り込んだ後の再実行を待つ。依存の比較のずれで、人の手に回さない。
+4. ファイルごとの内容
+
+PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならない。
+呼び出し側は、APIの件数の上限で切れたときに`diffTruncated`を真にする。
+真のときは、許可リストの外のパスを見落とすので、検査はパッチを断る。
+
+ファイルごとの検査の条件は、[セキュリティ](../security.md#lockの制限)にある。
+
+成功の結果は、書き込む内容の一覧(`writes`)である。
+書き込む側は、headの木のsymlinkをたどって木の外へ書かないよう、書き込む前に確かめる。
+失敗の結果は、固定の種別(`code`)と、無害化した補足(`detail`)である。
+補足はパスなど入力に由来する値を含み、PRの作者が決められる。
+補足は、制御文字、書式文字、行の区切りを除き、バッククォートを`'`に置き換え、JSONの文字列にして長さを切る。
+PR本文やコメントに載せるときは、コードスパンで囲み、メンションとリンクを無効にする。
+置き換え済みなので、補足は囲んだコードスパンを内側から閉じられない。
+
+### 配線で決めること
+
+次は、検査を呼び出す側を実装するときに決める。
+検査は、これらを前提にしない。
+最初の3項目は、呼び出し側が守る契約である。
+
+- 出どころの検査を先に呼ぶ。
+  `checkProvenance`は、実行の事実とPRの差分だけを見る。artifactもポートも渡さない。
+  呼び出し側は、`listWorkflowRunArtifacts`と`downloadArtifactZip`より前にこれを呼び、失敗ならダウンロードも展開もしない。
+  出どころで断れるものを、ネットワークとメモリを使う前に断るためである。
+  `verifyMetadataPatch`も先頭で同じ検査をもう一度行うので、呼び忘れても通ることはない。
+- ポート(`listHeadSources`、`readHeadFile`、`readBaseFile`、`isAncestor`、`readCommitParents`)は、ローカルのcloneで実装する。
+  木の一覧は`git ls-tree`、ファイルは`git cat-file`を使い、GitHubのREST APIで読まない。
+  ファイルごとの読み取りでPATのrate limitを使い切らないためである。
+- `ci.yml`が、artifactのIDとdigestを`metadata`ジョブのログに出す処理は、まだ無い。
+  追加は保護パス(`.github/`)の変更なので、別に行う。
+  照合できない間は、パッチを適用しない。
+- フローのキー(`__flow+...`)が変わるパッチの扱い。
+- 検査の後にheadが動く競合の扱い。
+- artifactのIDとdigestを、`metadata`ジョブのログの値と照合する手順。
+- `mergeSha`を本物のPRのmerge commitに結び付けること。適用の前に、GitHub APIのPRの`merge_commit_sha`と照合する。
+  lockの比較先はheadの木とbaseの先端の木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
+- `main`の依存更新のたびに、閉包の多くのscriptで、依存の集合かlockが食い違う場合の扱い。検査の前に、`main`を取り込む。
+- Factory自身が`wmill-lock.yaml`のhashと`schema`を計算して書く案。artifactを経由しない。
+  wmillのhashの算法とパーサーの結び付きが前提で、この検査の大半(zip、取得、出どころ、manifest)が要らなくなる。
+  配線の前に、この案を比べるかどうかを決める。
+- 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
+- `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
+- `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
+
 ## 既知の限界
 
 - 抑制の記述の検出は、追加行を1行ずつ見る文字列の照合である。
@@ -497,3 +632,18 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
   この呼び出しはGitHub APIのページ送りなので、応答が遅いと、ロックを長く持つ。
 - 認証情報が別のホストへ渡らないことは、`gh`の挙動に頼る。
 - `agent_runs.error`には、`lib/claude.ts`が実行の詳細を書く。検査を通っていない出力の抜粋がDBに残る。
+- パッチの`.script.yaml`の`schema`は、許可リストにない文字(`\`、`!`、`&`、`*`、`%`、タブ、`$`)と`x-windmill`を含むものを拒む。
+  説明文などに、これらの文字を正当に含むscriptは、自動では直らない。
+- `.script.yaml`と`wmill-lock.yaml`は、完全なYAMLとして解析しない。wmillが書く形から外れたものは、正当でも断る。
+- 型だけのimportの読み取りは、正規表現で、コメントで引用符を挟んだ隠し方を見抜けない。
+  型は実行時の依存ではなく、閉包の範囲にだけ効く。
+- `Bun.Transpiler`が、Windmillのworkerのbunと`bun test`のbunで、同じ結果を返す前提である。
+  結果が同じことを確かめるテストは無い。
+- Windmillが依存を決めるimportの読み方と、`Bun.Transpiler`の読み方は、同じとは限らない。
+  食い違いは、依存の変化の検出に効く。
+  最後の防御は、次の2つである。
+  閉包の既存のscriptのlockを、headの木とbaseの先端の木の両方と同一に限ること。
+  局所importの解決を、閉包と依存の集合で一致させること。
+  古いlockに新しいhashが残る形は、import集合の比較と、解決の一致で防ぐ。
+- パッチの`.script.yaml`の`schema`のうち、`default`、`enum`、`format`、`resourceType`の中身は読まない。
+  コードの既定値と違う`default`を、Factoryのcommitに置ける。

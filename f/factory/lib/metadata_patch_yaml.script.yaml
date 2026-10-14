@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのパッチのyamlの検査'
+description: 内部ライブラリです。直接実行するものではありません。CIが再生成したscriptのyamlとwmill-lock.yamlを、決まった形に合わせて検査します。
+lock: '!inline f/factory/lib/metadata_patch_yaml.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

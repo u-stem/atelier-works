@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのパッチの適用条件の検査'
+description: 内部ライブラリです。直接実行するものではありません。CIが出したメタデータのパッチを、実行の出どころ、履歴、内容の制限に照らして検査し、書き込む内容を返します。
+lock: '!inline f/factory/lib/metadata_patch_verify.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
