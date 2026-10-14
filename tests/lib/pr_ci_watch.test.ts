@@ -89,6 +89,7 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     mergeable: null,
     mergeableState: null,
     authorLogin: "factory-bot",
+    authorId: null,
     authorType: "User",
     autoMergeEnabled: false,
     ...overrides,

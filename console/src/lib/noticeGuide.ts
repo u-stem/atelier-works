@@ -84,8 +84,11 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "labeler_denied",
     guide(
-      "許可されていない人が、または付与者を特定できないまま、トリガーラベルを付けました。",
-      "拾わせるなら、ラベルを外して、許可された人が付け直してください。付ける人を増やすなら、allowed_labeler_loginsに足します。",
+      "許可されていない人が、または付与者を特定できないまま、トリガーラベルを付けました。allowed_labeler_idsにIDを入れたアカウントは、名前が同じでもIDが違う人(改名の後に名前を取得された場合を含む)のラベルを拒否します。IDを入れていないアカウントは、名前だけで照合します。",
+      "拾わせるなら、ラベルを外して、許可された人が付け直してください。付ける人を増やすなら、allowed_labeler_loginsに足します。許可した本人のアカウントなのに拒否されたときは、allowed_labeler_idsのIDが合っているか確かめてください。IDは次のコマンドで調べます。",
+      {
+        commands: ["gh api users/<ログイン名> --jq .id"],
+      },
     ),
   ],
   [

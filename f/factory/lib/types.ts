@@ -894,6 +894,12 @@ export type FactoryConfig = {
    * 空なら、PATのアカウントが付けたラベルだけに反応する。大文字小文字は区別しない。
    */
   allowed_labeler_logins: string[];
+  /**
+   * `allowed_labeler_logins`のうち、GitHubの数値IDも照合するアカウント。キーがログイン名、
+   * 値が数値IDである。載せたアカウントは、同じ名前でもIDが違う人が付けたラベルを許可しない。
+   * 載せないアカウントは名前だけで照合する。
+   */
+  allowed_labeler_ids: Record<string, number>;
   model: string;
   heavy_model: string;
   max_attempts: number;

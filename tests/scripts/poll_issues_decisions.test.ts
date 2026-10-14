@@ -15,6 +15,7 @@ import {
 const VIEWER_ONLY: LabelerPolicy = {
   viewerLogin: "octo-owner",
   allowedLogins: [],
+  allowedIds: {},
 };
 
 function candidate(overrides: Partial<IssueCandidate> = {}): IssueCandidate {
@@ -150,13 +151,88 @@ describe("isAllowedLabeler", () => {
   });
 
   test("denies when the viewer could not be fetched", () => {
-    const policy = { viewerLogin: null, allowedLogins: [] };
+    const policy = { viewerLogin: null, allowedLogins: [], allowedIds: {} };
     expect(isAllowedLabeler("octo-owner", policy)).toBe(false);
   });
 
   test("denies a listed login when the viewer could not be fetched", () => {
-    const policy = { viewerLogin: null, allowedLogins: ["alice"] };
+    const policy = {
+      viewerLogin: null,
+      allowedLogins: ["alice"],
+      allowedIds: {},
+    };
     expect(isAllowedLabeler("alice", policy)).toBe(false);
+  });
+});
+
+describe("isAllowedLabeler with numeric IDs", () => {
+  const WITH_ID: LabelerPolicy = {
+    ...VIEWER_ONLY,
+    allowedLogins: ["alice", "bob"],
+    allowedIds: { alice: 1001 },
+  };
+
+  test("allows a listed login whose id matches", () => {
+    expect(isAllowedLabeler("alice", WITH_ID, 1001)).toBe(true);
+  });
+
+  test("denies a listed login whose id differs", () => {
+    expect(isAllowedLabeler("alice", WITH_ID, 2002)).toBe(false);
+  });
+
+  test("denies a listed login whose id is unknown", () => {
+    expect(isAllowedLabeler("alice", WITH_ID, null)).toBe(false);
+  });
+
+  test("denies a listed login whose id is not given", () => {
+    expect(isAllowedLabeler("alice", WITH_ID)).toBe(false);
+  });
+
+  test("compares the login case-insensitively before checking the id", () => {
+    expect(isAllowedLabeler("ALICE", WITH_ID, 1001)).toBe(true);
+  });
+
+  test("denies a differently cased login whose id differs", () => {
+    expect(isAllowedLabeler("ALICE", WITH_ID, 2002)).toBe(false);
+  });
+
+  test("matches by name only for a listed login without a configured id", () => {
+    expect(isAllowedLabeler("bob", WITH_ID, 2002)).toBe(true);
+  });
+
+  test("matches by name only for a listed login without a configured id and no actor id", () => {
+    expect(isAllowedLabeler("bob", WITH_ID, null)).toBe(true);
+  });
+
+  test("keeps the viewer name-only even when the actor id is unknown", () => {
+    expect(isAllowedLabeler("octo-owner", WITH_ID, null)).toBe(true);
+  });
+
+  test("keeps the viewer name-only when the viewer is also listed with an id", () => {
+    const policy: LabelerPolicy = {
+      ...WITH_ID,
+      allowedLogins: ["octo-owner"],
+      allowedIds: { "octo-owner": 9 },
+    };
+    expect(isAllowedLabeler("octo-owner", policy, 1)).toBe(true);
+  });
+
+  test("allows a listed login named like an Object.prototype member without an id", () => {
+    const policy: LabelerPolicy = {
+      ...VIEWER_ONLY,
+      allowedLogins: ["constructor"],
+      allowedIds: {},
+    };
+    expect(isAllowedLabeler("constructor", policy, null)).toBe(true);
+  });
+
+  test("denies an unlisted login even when an id is configured for another", () => {
+    expect(isAllowedLabeler("mallory", WITH_ID, 1001)).toBe(false);
+  });
+
+  test("denies a configured id when the viewer could not be fetched", () => {
+    const policy = { ...WITH_ID, viewerLogin: null };
+    expect(isAllowedLabeler("alice", policy, 1001)).toBe(false);
   });
 });
 
@@ -202,6 +278,7 @@ describe("decideIssueActions", () => {
     const decisions = decideIssueActions([candidate()], {
       viewerLogin: null,
       allowedLogins: [],
+      allowedIds: {},
     });
     expect(decisions[0]?.action).toBe("skip_labeler");
   });
@@ -217,5 +294,35 @@ describe("decideIssueActions", () => {
       { ...VIEWER_ONLY, allowedLogins: ["alice"] },
     );
     expect(decisions[0]?.action).toBe("claim");
+  });
+
+  const WITH_ID: LabelerPolicy = {
+    ...VIEWER_ONLY,
+    allowedLogins: ["alice"],
+    allowedIds: { alice: 1001 },
+  };
+
+  test("claims an issue labeled by a listed login with the configured id", () => {
+    const decisions = decideIssueActions(
+      [candidate({ labelerLogin: "alice", labelerId: 1001 })],
+      WITH_ID,
+    );
+    expect(decisions[0]?.action).toBe("claim");
+  });
+
+  test("skips an issue labeled by a person who took over a listed name", () => {
+    const decisions = decideIssueActions(
+      [candidate({ labelerLogin: "alice", labelerId: 2002 })],
+      WITH_ID,
+    );
+    expect(decisions[0]?.action).toBe("skip_labeler");
+  });
+
+  test("skips an issue whose labeler id is unknown for a listed login with an id", () => {
+    const decisions = decideIssueActions(
+      [candidate({ labelerLogin: "alice" })],
+      WITH_ID,
+    );
+    expect(decisions[0]?.action).toBe("skip_labeler");
   });
 });

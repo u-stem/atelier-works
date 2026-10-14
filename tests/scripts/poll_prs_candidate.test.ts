@@ -45,6 +45,8 @@ const labeled = (login: string | null, label: string) =>
 type World = {
   readonly labels: readonly string[];
   readonly author?: string | null;
+  /** PRの作者の数値ID。省略は応答に`id`が無い。 */
+  readonly authorId?: number;
   /** PRのheadのリポジトリの`full_name`。省略は`null`(取得できない)。 */
   readonly headRepo?: string;
   readonly baseRepo?: string;
@@ -81,7 +83,13 @@ function world(w: World) {
           repo: w.baseRepo === undefined ? null : { full_name: w.baseRepo },
         },
         mergeable_state: "clean",
-        user: w.author === null ? null : { login: w.author ?? "octo-owner" },
+        user:
+          w.author === null
+            ? null
+            : {
+                login: w.author ?? "octo-owner",
+                ...(w.authorId === undefined ? {} : { id: w.authorId }),
+              },
       });
     }
     if (endpoint.endsWith("/issues/7")) {
@@ -123,6 +131,25 @@ describe("buildPrCandidate labelers", () => {
       "2026-10-01T00:00:01Z",
     ),
     labelEventNode("labeled", "bob", "factory:fix", "2026-10-01T00:00:02Z"),
+  ]);
+
+  const BOTH_WITH_IDS = labelEventsOk([
+    labelEventNode(
+      "labeled",
+      "alice",
+      "factory:review",
+      "2026-10-01T00:00:01Z",
+      "User",
+      1001,
+    ),
+    labelEventNode(
+      "labeled",
+      "bob",
+      "factory:fix",
+      "2026-10-01T00:00:02Z",
+      "User",
+      2002,
+    ),
   ]);
 
   test("takes the review label's labeler for the review label", async () => {
@@ -178,6 +205,38 @@ describe("buildPrCandidate labelers", () => {
     expect(candidate.reviewLabelerLogin).toBeNull();
   });
 
+  test("takes the review label's labeler id for the review label", async () => {
+    const { candidate } = await build({
+      labels: ["factory:review", "factory:fix"],
+      events: BOTH_WITH_IDS,
+    });
+    expect(candidate.reviewLabelerId).toBe(1001);
+  });
+
+  test("takes the fix label's labeler id for the fix label", async () => {
+    const { candidate } = await build({
+      labels: ["factory:review", "factory:fix"],
+      events: BOTH_WITH_IDS,
+    });
+    expect(candidate.fixLabelerId).toBe(2002);
+  });
+
+  test("leaves the labeler id empty when the response has none", async () => {
+    const { candidate } = await build({
+      labels: ["factory:review"],
+      events: BOTH,
+    });
+    expect(candidate.reviewLabelerId).toBeNull();
+  });
+
+  test("leaves the labeler id empty when the label is not on the PR", async () => {
+    const { candidate } = await build({
+      labels: ["factory:review"],
+      events: BOTH_WITH_IDS,
+    });
+    expect(candidate.fixLabelerId).toBeNull();
+  });
+
   test("throws LabelerCheckLimitError when the label is not among the latest events", async () => {
     const result = build({
       labels: ["factory:review"],
@@ -203,6 +262,25 @@ describe("buildPrCandidate author", () => {
       events: labelEventsOk([]),
     });
     expect(candidate.authorLogin).toBe("mallory");
+  });
+
+  test("carries the PR author's numeric id", async () => {
+    const { candidate } = await build({
+      labels: [],
+      author: "alice",
+      authorId: 1001,
+      events: labelEventsOk([]),
+    });
+    expect(candidate.authorId).toBe(1001);
+  });
+
+  test("leaves the author id empty when the response has none", async () => {
+    const { candidate } = await build({
+      labels: [],
+      author: "alice",
+      events: labelEventsOk([]),
+    });
+    expect(candidate.authorId).toBeNull();
   });
 
   test("leaves the author empty when the PR has no user", async () => {
@@ -337,6 +415,7 @@ describe("pr_review and pr_fix decisions with a row created by poll_dependabot",
   const POLICY: LabelerPolicy = {
     viewerLogin: "octo-owner",
     allowedLogins: [],
+    allowedIds: {},
   };
   const HEAD_OF_WORLD = "aaaaaaa";
 
