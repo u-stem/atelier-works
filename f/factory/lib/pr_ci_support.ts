@@ -454,13 +454,14 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `unfixable_job`: 失敗したジョブが、ソースの編集では直せない種類(metadataなど)。
  * - `other_conclusion`: 失敗ではなく、取り消しや期限切れなどで終わった。
  * - `log_unavailable`: 失敗のログを読めない。
- * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
  * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まった。
  *   止めた理由が語彙に写せない`blocked`は含めない。起動し直す回数は、回数の上限が止める。
  * - `rounds_exhausted`: 直す回数の上限に達した。
  * - `not_factory_head`: 最後のpushがFactoryのものでない。
  *
  * 一時的な理由は、解ければ外してよい理由である。
+ * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
+ *   スキルが入れば、毎巡回の見直しで外れて起動できる。
  * - `main_ci_failed`: mainのCIが赤い。
  * - `budget_exceeded`: 日次の予算を使い切った。
  * - `not_reviewed`: 今のheadの自動レビューがまだ無い。
@@ -543,15 +544,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     stopAction:
       "失敗のログをFactoryが読めません。PATのActions権限とログの保持期限を確かめ、人が直してください",
   },
-  marker_missing: {
-    temporary: false,
-    notice: "immediate",
-    discord: true,
-    nextAction:
-      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節が無い。クローンを更新するまで、人が直す",
-    stopAction:
-      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節がありません。クローンを更新するまで、人が直してください",
-  },
   fix_stopped: {
     temporary: false,
     notice: "immediate",
@@ -577,6 +569,15 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "最後のpushがFactoryのものでないので、自動では直さない。人が直してPRにpushする",
     stopAction:
       "最後のpushがFactoryのものでないので、自動では直しません。人が直してPRにpushしてください",
+  },
+  marker_missing: {
+    temporary: true,
+    notice: "prolonged",
+    discord: true,
+    nextAction:
+      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節が無い。スキルがクローンに入るまで待つ",
+    stopAction:
+      "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節がありません。スキルがクローンに入るまで待ってください",
   },
   main_ci_failed: {
     temporary: true,
@@ -620,6 +621,15 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にしてください",
   },
 };
+
+/**
+ * 解ければ外してよい理由の一覧。毎巡回で見直す行を、DBが絞り込むのに使う。
+ * 決定的な理由の行は、同じheadでは見直さない。
+ */
+export const PR_CI_FIX_TEMPORARY_HOLD_REASONS: readonly PrCiFixHoldReason[] =
+  PR_CI_FIX_HOLD_REASONS.filter(
+    (reason) => PR_CI_FIX_HOLD_INFO[reason].temporary,
+  );
 
 /** 保留の理由の性質と、人が次にすることの固定文(常体の`nextAction`と敬体の`stopAction`)。 */
 export function prCiFixHoldInfo(reason: PrCiFixHoldReason): PrCiFixHoldInfo {

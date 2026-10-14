@@ -559,8 +559,32 @@ describe("pr_ci_fix_enabled", () => {
     const config = parseFactoryConfig({
       ...LEGACY_RAW_CONFIG,
       pr_ci_fix_enabled: true,
+      pr_ci_fix_enabled_since: "2026-10-13T03:00:00Z",
     });
     expect(config.pr_ci_fix_enabled).toBe(true);
+  });
+
+  test("throws when pr_ci_fix_enabled is true and pr_ci_fix_enabled_since is absent", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_fix_enabled: true };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_ci_fix_enabled is true and pr_ci_fix_enabled_since is null", () => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_enabled: true,
+      pr_ci_fix_enabled_since: null,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts pr_ci_fix_enabled false with pr_ci_fix_enabled_since null", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_fix_enabled: false,
+      pr_ci_fix_enabled_since: null,
+    });
+    expect(config.pr_ci_fix_enabled).toBe(false);
   });
 
   test("throws when pr_ci_fix_enabled is present but not a boolean", () => {

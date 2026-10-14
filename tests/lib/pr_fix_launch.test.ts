@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   launchPrFixFlow,
   PR_FIX_FLOW_PATH,
+  PrFixFlowJobIdRecordError,
 } from "../../f/factory/lib/pr_fix_launch.ts";
 
 const JOB_ID = "0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f";
@@ -66,5 +67,47 @@ describe("launchPrFixFlow", () => {
     const { calls, deps } = setup("Internal Server Error");
     await launchPrFixFlow(41, deps).catch(() => undefined);
     expect(calls.recorded).toEqual([]);
+  });
+
+  test("throws a record error when the flow started but the job id was not saved", async () => {
+    const { deps } = setup(JOB_ID);
+    const failing = {
+      ...deps,
+      setFlowJobId: async () => {
+        throw new Error("db down");
+      },
+    };
+    await expect(launchPrFixFlow(41, failing)).rejects.toBeInstanceOf(
+      PrFixFlowJobIdRecordError,
+    );
+  });
+
+  test("names the job id of the flow that started in the record error", async () => {
+    const { deps } = setup(JOB_ID);
+    const failing = {
+      ...deps,
+      setFlowJobId: async () => {
+        throw new Error("db down");
+      },
+    };
+    const error = await launchPrFixFlow(41, failing).catch(
+      (caught: unknown) => caught,
+    );
+    expect(
+      error instanceof PrFixFlowJobIdRecordError ? error.flowJobId : null,
+    ).toBe(JOB_ID);
+  });
+
+  test("does not wrap the failure of starting the flow", async () => {
+    const failing = {
+      runFlowAsync: async (): Promise<string> => {
+        throw new Error("server down");
+      },
+      setFlowJobId: async () => undefined,
+    };
+    const error = await launchPrFixFlow(41, failing).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error instanceof PrFixFlowJobIdRecordError).toBe(false);
   });
 });

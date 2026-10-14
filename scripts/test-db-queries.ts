@@ -32,6 +32,7 @@ import {
   hasNewerMainCiRun,
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
+  hasPrReviewForHead,
   insertCleanupRun,
   insertDependabotWorkItemUnlessActive,
   insertWorkerSample,
@@ -41,6 +42,7 @@ import {
   latestMainCiRunCreatedAt,
   listActivePrFixWorkItems,
   listAutoRetryCandidates,
+  listClaimablePrCiChecks,
   listFailedPrCiChecks,
   listFixingPrCiChecks,
   listMainCiRunsBySha,
@@ -73,6 +75,7 @@ import {
   transitionMainCiRun,
   transitionPrCiCheck,
   updateIntakeIfRegenerating,
+  updateStatus,
   updateStatusIfCurrent,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
@@ -3021,8 +3024,8 @@ check(
 const fixHold = await failedFixRow(506, FIX_SHA_1);
 check(
   "hold: a failed row gets a hold reason once",
-  (await setPrCiFixHold(fixHold.id, "main_ci_failed", sql)) === true &&
-    (await setPrCiFixHold(fixHold.id, "main_ci_failed", sql)) === false,
+  (await setPrCiFixHold(fixHold.id, "main_ci_failed", {}, sql)) === true &&
+    (await setPrCiFixHold(fixHold.id, "main_ci_failed", {}, sql)) === false,
 );
 check(
   "hold: a row on hold is not claimed",
@@ -3031,8 +3034,8 @@ check(
 );
 check(
   "hold: clearing the hold reason is written once",
-  (await setPrCiFixHold(fixHold.id, null, sql)) === true &&
-    (await setPrCiFixHold(fixHold.id, null, sql)) === false,
+  (await setPrCiFixHold(fixHold.id, null, {}, sql)) === true &&
+    (await setPrCiFixHold(fixHold.id, null, {}, sql)) === false,
 );
 check(
   "hold: after the hold is cleared the row is claimed",
@@ -3040,17 +3043,17 @@ check(
 );
 check(
   "hold: a row that is not failed gets no hold reason",
-  (await setPrCiFixHold(fixHold.id, "main_ci_failed", sql)) === false,
+  (await setPrCiFixHold(fixHold.id, "main_ci_failed", {}, sql)) === false,
 );
 check(
   "hold: an empty reason is refused before the database",
-  await setPrCiFixHold(fixHold.id, "", sql)
+  await setPrCiFixHold(fixHold.id, "", {}, sql)
     .then(() => false)
     .catch(() => true),
 );
 check(
   "hold: a reason of 65 characters is refused before the database",
-  await setPrCiFixHold(fixHold.id, "x".repeat(65), sql)
+  await setPrCiFixHold(fixHold.id, "x".repeat(65), {}, sql)
     .then(() => false)
     .catch(() => true),
 );
@@ -3276,7 +3279,7 @@ check(
     .catch(() => true),
 );
 const fixReopen = await failedFixRow(509, FIX_SHA_1);
-await setPrCiFixHold(fixReopen.id, "log_unavailable", sql);
+await setPrCiFixHold(fixReopen.id, "log_unavailable", {}, sql);
 await transitionPrCiCheck(fixReopen.id, "failed", { state: "superseded" }, sql);
 await transitionPrCiCheck(
   fixReopen.id,
@@ -3363,6 +3366,161 @@ check(
   (await isLatestMainCiRunFailed(MAIN_RED.owner, MAIN_RED.repo, sql)) === false,
 );
 execPsql(target, "DELETE FROM factory.main_ci_runs WHERE owner = 'qfix'");
+
+// 起動の候補: 失敗の行のうち、保留がないか一時的な保留で、時刻の条件を満たす行だけを返す。
+const CLAIM_SINCE = new Date(Date.now() - 60 * 60 * 1000);
+const CLAIM_TEMPORARY = ["main_ci_failed", "budget_exceeded"];
+const claimCandidates = async () =>
+  (await listClaimablePrCiChecks(CLAIM_SINCE, CLAIM_TEMPORARY, 1000, sql))
+    .filter((row) => row.owner === FIX.owner)
+    .map((row) => row.pr_number)
+    .sort((a, b) => a - b)
+    .join(",");
+const claimPlain = await failedFixRow(601, FIX_SHA_1);
+const claimTemporary = await failedFixRow(602, FIX_SHA_1);
+await setPrCiFixHold(claimTemporary.id, "main_ci_failed", {}, sql);
+const claimDeterministic = await failedFixRow(603, FIX_SHA_1);
+await setPrCiFixHold(claimDeterministic.id, "rounds_exhausted", {}, sql);
+const claimOld = await failedFixRow(604, FIX_SHA_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '2 hours' WHERE id = ${String(claimOld.id)}`,
+);
+await recordPrCiCheck(fixRowNew(605, FIX_SHA_1), sql);
+check(
+  "claim candidates: rows without a hold or with a temporary hold are listed, others are not",
+  (await claimCandidates()) === "601,602",
+  await claimCandidates(),
+);
+check(
+  "claim candidates: a row seen before the since time is not listed",
+  !(await claimCandidates()).split(",").includes("604"),
+);
+check(
+  "claim candidates: a pending row is not listed",
+  !(await claimCandidates()).split(",").includes("605"),
+);
+
+// 保留を外すときは、読んだ理由のままの行だけを外す。
+check(
+  "hold: a hold that is not the reason that was read is not cleared",
+  (await setPrCiFixHold(
+    claimTemporary.id,
+    null,
+    { expected: "budget_exceeded" },
+    sql,
+  )) === false &&
+    (await fixRowOf(claimTemporary.id))?.fix_hold_reason === "main_ci_failed",
+  await fixRowOf(claimTemporary.id),
+);
+check(
+  "hold: a hold that is the reason that was read is cleared",
+  (await setPrCiFixHold(
+    claimTemporary.id,
+    null,
+    { expected: "main_ci_failed" },
+    sql,
+  )) === true && (await fixRowOf(claimTemporary.id))?.fix_hold_reason === null,
+  await fixRowOf(claimTemporary.id),
+);
+check(
+  "hold: a row without a hold gets a reason when none was expected",
+  (await setPrCiFixHold(
+    claimTemporary.id,
+    "main_ci_failed",
+    { expected: null },
+    sql,
+  )) === true,
+);
+check(
+  "hold: a row with a hold gets no new reason when none was expected",
+  (await setPrCiFixHold(
+    claimTemporary.id,
+    "budget_exceeded",
+    { expected: null },
+    sql,
+  )) === false &&
+    (await fixRowOf(claimTemporary.id))?.fix_hold_reason === "main_ci_failed",
+  await fixRowOf(claimTemporary.id),
+);
+
+// 起動から回復まで: 起動した行は候補から外れ、作業項目が失敗で終わって戻すと、また候補になる。
+const claimedId = await fixClaim(claimPlain.id, FIX_SHA_1);
+check(
+  "claim to recovery: a claimed row leaves the candidates",
+  claimedId !== null && (await claimCandidates()) === "602",
+  await claimCandidates(),
+);
+if (claimedId !== null) {
+  await updateStatus(claimedId, "failed", "qfix test", sql);
+  await releaseFixingPrCiCheck(
+    claimPlain.id,
+    { fixWorkItemId: claimedId },
+    sql,
+  );
+}
+check(
+  "claim to recovery: a released row is a candidate again",
+  (await claimCandidates()) === "601,602",
+  await claimCandidates(),
+);
+check(
+  "claim to recovery: a work item that failed before its flow started is not counted as a round",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, sql)) === 0,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = '0192d4a0-7b1c-7e2a-9f3d-1a2b3c4d5e6f' WHERE id = ${String(claimedId)}`,
+);
+check(
+  "claim to recovery: a work item that failed after its flow started is counted toward the limit",
+  (await countPrCiFixRounds(FIX.owner, FIX.repo, 601, sql)) === 1,
+);
+check(
+  "claim to recovery: the attempts of the row keep counting the failed launch",
+  Number((await fixRowOf(claimPlain.id))?.fix_attempts) === 1,
+);
+
+// 現headのレビュー: pr_reviewの作業項目に、そのheadのレビューの行があるかを、大文字小文字を問わず調べる。
+const reviewItem = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_review",
+    owner: "QFix",
+    repo: "App",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 606,
+    title: "qfix review",
+    body: null,
+    status: "reviewed",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: FIX_SHA_1,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary) VALUES (${String(reviewItem)}, '${FIX_SHA_1}', 'comment', 'qfix')`,
+);
+check(
+  "review for head: a review row of the head is found whatever the case of the names",
+  (await hasPrReviewForHead("qfix", "app", 606, FIX_SHA_1, sql)) === true,
+);
+check(
+  "review for head: a review row of another head is not a match",
+  (await hasPrReviewForHead("qfix", "app", 606, FIX_SHA_2, sql)) === false,
+);
+check(
+  "review for head: a review of another pull request is not a match",
+  (await hasPrReviewForHead("qfix", "app", 607, FIX_SHA_1, sql)) === false,
+);
 
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'");
 execPsql(target, "DELETE FROM factory.work_items WHERE lower(owner) = 'qfix'");

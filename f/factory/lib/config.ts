@@ -539,6 +539,22 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
   }
 
   const factoryRepoId = optionalPositiveIntegerField(raw, "factory_repo_id");
+  const prCiFixEnabled = booleanField(
+    raw,
+    "pr_ci_fix_enabled",
+    DEFAULTS.pr_ci_fix_enabled,
+  );
+  const prCiFixEnabledSince = isoDateTimeOrNullField(
+    raw,
+    "pr_ci_fix_enabled_since",
+    DEFAULTS.pr_ci_fix_enabled_since,
+  );
+  // 起動を有効にしたのに時刻が無いと、有効にする前から残る失敗まで、一度に直しに行ってしまう。
+  if (prCiFixEnabled && prCiFixEnabledSince === null) {
+    throw new ConfigValidationError(
+      '"pr_ci_fix_enabled_since" is required when "pr_ci_fix_enabled" is true',
+    );
+  }
 
   const allowedLabelerAssociations = raw.allowed_labeler_associations;
   const resolvedAllowedLabelerAssociations =
@@ -719,11 +735,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "pr_ci_watch_enabled",
       DEFAULTS.pr_ci_watch_enabled,
     ),
-    pr_ci_fix_enabled: booleanField(
-      raw,
-      "pr_ci_fix_enabled",
-      DEFAULTS.pr_ci_fix_enabled,
-    ),
+    pr_ci_fix_enabled: prCiFixEnabled,
     pr_ci_fix_max_rounds: atMost(
       "pr_ci_fix_max_rounds",
       positiveIntegerField(
@@ -733,11 +745,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       ),
       PR_CI_FIX_MAX_ROUNDS_LIMIT,
     ),
-    pr_ci_fix_enabled_since: isoDateTimeOrNullField(
-      raw,
-      "pr_ci_fix_enabled_since",
-      DEFAULTS.pr_ci_fix_enabled_since,
-    ),
+    pr_ci_fix_enabled_since: prCiFixEnabledSince,
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
       DEFAULTS.check_commands_by_repo,

@@ -18,6 +18,7 @@ import {
   PR_CI_FAILED_KIND,
   PR_CI_FIX_HOLD_REASON_MAX_LENGTH,
   PR_CI_FIX_HOLD_REASONS,
+  PR_CI_FIX_TEMPORARY_HOLD_REASONS,
   PR_CI_REASONS,
   PR_CI_STATES,
   PR_CI_SUMMARY_MAX_LENGTH,
@@ -1096,13 +1097,13 @@ const DETERMINISTIC_HOLDS = [
   "unfixable_job",
   "other_conclusion",
   "log_unavailable",
-  "marker_missing",
   "fix_stopped",
   "rounds_exhausted",
   "not_factory_head",
 ] as const;
 
 const TEMPORARY_HOLDS = [
+  "marker_missing",
   "main_ci_failed",
   "budget_exceeded",
   "not_reviewed",
@@ -1125,6 +1126,14 @@ describe("PR_CI_FIX_HOLD_REASONS", () => {
           reason.length <= PR_CI_FIX_HOLD_REASON_MAX_LENGTH,
       ),
     ).toBe(true);
+  });
+});
+
+describe("PR_CI_FIX_TEMPORARY_HOLD_REASONS", () => {
+  test("lists exactly the temporary reasons", () => {
+    expect([...PR_CI_FIX_TEMPORARY_HOLD_REASONS].sort()).toEqual(
+      [...TEMPORARY_HOLDS].sort(),
+    );
   });
 });
 

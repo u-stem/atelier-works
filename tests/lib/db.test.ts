@@ -6654,6 +6654,14 @@ describe("countPrCiFixRounds", () => {
     );
   });
 
+  test("does not count a work item that failed before its flow started", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain(
+      "AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)",
+    );
+  });
+
   test("lowercases the owner and repo", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
     await countPrCiFixRounds("Acme", "Widgets", 12, sql);
@@ -6826,41 +6834,59 @@ describe("releaseFixingPrCiCheck", () => {
 describe("setPrCiFixHold", () => {
   test("changes only a failed row", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
-    await setPrCiFixHold(9, "main_ci_failed", sql);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
     expect(calls[0]?.text).toContain("AND state = 'failed'");
   });
 
   test("writes only when the reason differs", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
-    await setPrCiFixHold(9, "main_ci_failed", sql);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
     expect(calls[0]?.text).toContain("fix_hold_reason IS DISTINCT FROM");
+  });
+
+  test("writes only when the current reason is the one that was read", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, null, { expected: "budget_exceeded" }, sql);
+    expect(calls[0]?.text).toContain("fix_hold_reason IS NOT DISTINCT FROM");
+  });
+
+  test("passes the reason that was read", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, null, { expected: "budget_exceeded" }, sql);
+    expect(calls[0]?.values).toContain("budget_exceeded");
+  });
+
+  test("does not check the current reason without an expectation", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
+    expect(calls[0]?.values).toContain(false);
   });
 
   test("clears the reason with null", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
-    await setPrCiFixHold(9, null, sql);
+    await setPrCiFixHold(9, null, {}, sql);
     expect(calls[0]?.values).toContain(null);
   });
 
   test("returns true when the reason was written", async () => {
     const { sql } = createFakeSqlClient([[{ id: 9 }]]);
-    expect(await setPrCiFixHold(9, "main_ci_failed", sql)).toBe(true);
+    expect(await setPrCiFixHold(9, "main_ci_failed", {}, sql)).toBe(true);
   });
 
   test("returns false when the reason was already recorded", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await setPrCiFixHold(9, "main_ci_failed", sql)).toBe(false);
+    expect(await setPrCiFixHold(9, "main_ci_failed", {}, sql)).toBe(false);
   });
 
   test("rejects an empty reason, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
-    await setPrCiFixHold(9, "", sql).catch(() => undefined);
+    await setPrCiFixHold(9, "", {}, sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 
   test("rejects a reason longer than 64 characters, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
-    await setPrCiFixHold(9, "x".repeat(65), sql).catch(() => undefined);
+    await setPrCiFixHold(9, "x".repeat(65), {}, sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 });
