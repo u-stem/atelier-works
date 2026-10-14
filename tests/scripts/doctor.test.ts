@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import {
   chmodSync,
   mkdtempSync,
@@ -11,6 +18,11 @@ import { join, resolve } from "node:path";
 
 const SCRIPT = resolve(import.meta.dir, "../../scripts/doctor.sh");
 const BASH = Bun.which("bash") ?? "bash";
+
+// このファイルのテストは、どれもdoctor.shの全項目をbashの子プロセスで走らせ、
+// カスタムtagの検査では本物のbunの起動も挟む。手元で約0.5秒でも、CIの負荷で
+// 伸びてbunの既定の5秒を超えることがあるため、このファイルだけ30秒にする。
+setDefaultTimeout(30_000);
 
 let dir: string;
 
