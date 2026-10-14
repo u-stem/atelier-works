@@ -978,7 +978,7 @@ describe("describeWorkerLoad", () => {
 
   test("points to the schedule when there is no record", () => {
     expect(describeWorkerLoad({ kind: "no_record" })).toBe(
-      "前日の記録なし(sample_worker_loadのスケジュールを確かめる)",
+      "その日の記録なし(sample_worker_loadのスケジュールを確かめる)",
     );
   });
 

@@ -7,7 +7,7 @@
 
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
-import { isNumber, isString } from "./types.ts";
+import { isNumber, isRecord, isString } from "./types.ts";
 import {
   DAILY_GAP_THRESHOLD_SECONDS,
   DAILY_LAG_THRESHOLD_SECONDS,
@@ -34,23 +34,152 @@ function formatDateUtc(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-/**
- * `now`が属するJSTの日の前日を、UTCの時刻の範囲`[start, end)`と
- * `YYYY-MM-DD`のラベルで返す(JSTはUTC+9固定、夏時間なし)。
- * 毎日09:00(Asia/Tokyo)に動く`notify_daily_summary.ts`の「前日」に当たる。
- */
-export function computeYesterdayRangeJst(now: Date): DayRange {
+/** JSTの日付の0時を「UTCの0時」として表した時刻(ミリ秒)から、その日の範囲を作る。 */
+function dayRangeFromShiftedMidnight(shiftedMidnightMs: number): DayRange {
+  return {
+    start: new Date(shiftedMidnightMs - JST_OFFSET_MS),
+    end: new Date(shiftedMidnightMs + DAY_MS - JST_OFFSET_MS),
+    label: formatDateUtc(new Date(shiftedMidnightMs)),
+  };
+}
+
+/** `now`が属するJSTの日の0時を、「UTCの0時」として表した時刻(ミリ秒)で返す。 */
+function todayShiftedMidnightMs(now: Date): number {
   const jstShifted = new Date(now.getTime() + JST_OFFSET_MS);
-  const todayJstMidnightUtcMs = Date.UTC(
+  return Date.UTC(
     jstShifted.getUTCFullYear(),
     jstShifted.getUTCMonth(),
     jstShifted.getUTCDate(),
   );
-  const yesterdayJstMidnightUtcMs = todayJstMidnightUtcMs - DAY_MS;
+}
+
+const DAY_LABEL_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * `YYYY-MM-DD`を、その日のJSTの0時を「UTCの0時」として表した時刻(ミリ秒)にする。
+ * 形式が違うときと、存在しない日付(2月30日など)は`null`を返す。
+ */
+function parseDayLabel(label: string): number | null {
+  const match = DAY_LABEL_PATTERN.exec(label);
+  if (match === null) {
+    return null;
+  }
+  const ms = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return formatDateUtc(new Date(ms)) === label ? ms : null;
+}
+
+/**
+ * `YYYY-MM-DD`の前日を同じ形式で返す。実在しない日付は例外を投げる。
+ * 出す日の最初の日の前日を、「最後に出した日」としてそろえて保存するのに使う。
+ */
+export function previousDayLabel(label: string): string {
+  const ms = parseDayLabel(label);
+  if (ms === null) {
+    throw new Error(`previousDayLabel: "${label}" is not a valid date`);
+  }
+  return formatDateUtc(new Date(ms - DAY_MS));
+}
+
+/** 一度の実行で遡って出す日数の上限。 */
+export const MAX_CATCHUP_DAYS = 7;
+
+/** stateを読んだ結果。`unreadable`は、値があるのに解釈できなかったことを表す。 */
+export type SummaryStateReading = {
+  /** 最後に要約を出した日。記録が無い、または読めないときは`null`。 */
+  readonly last_day: string | null;
+  /** 初回ではない値が入っていたのに、解釈できなかったとき`true`。呼び出し側が警告に残す。 */
+  readonly unreadable: boolean;
+};
+
+/**
+ * Windmillのstateに保存した、最後に要約を出した日(JSTの`YYYY-MM-DD`)を読む。
+ * - 初回の空のstate(`null`、`undefined`、`last_day`の無いオブジェクト)は、記録なしとして`unreadable: false`で返す。
+ * - 値があるのに形が違うもの(実在しない日付を含む)は、記録なしと同じに扱いつつ`unreadable: true`で返す。
+ */
+export function parseSummaryState(value: unknown): SummaryStateReading {
+  if (value === null || value === undefined) {
+    return { last_day: null, unreadable: false };
+  }
+  if (!isRecord(value)) {
+    return { last_day: null, unreadable: true };
+  }
+  const lastDay = value.last_day;
+  if (lastDay === undefined || lastDay === null) {
+    return { last_day: null, unreadable: false };
+  }
+  return isString(lastDay) && parseDayLabel(lastDay) !== null
+    ? { last_day: lastDay, unreadable: false }
+    : { last_day: null, unreadable: true };
+}
+
+export type SummaryPlan = {
+  /**
+   * `now`の前日(`YYYY-MM-DD`)。`days`が空でないとき、`days`の最後と一致する。
+   * 呼び出し側が「その実行で最後に出す日」を知るのに使う。
+   */
+  readonly yesterday: string;
+  /** 要約を出す日。古い順。 */
+  readonly days: readonly DayRange[];
+  /** 上限を超えたために出さずに飛ばす日数。 */
+  readonly skipped_count: number;
+  /** 飛ばす日のうち最も古い日(`YYYY-MM-DD`)。飛ばす日が無いとき`null`。 */
+  readonly skipped_from: string | null;
+  /** 飛ばす日のうち最も新しい日(`YYYY-MM-DD`)。飛ばす日が無いとき`null`。 */
+  readonly skipped_to: string | null;
+  /**
+   * 最後に出した日が前日より後(時計のずれなど)のとき、その日。
+   * 記録なしと同じに扱って前日を出し、stateを上書きして直す。呼び出し側が警告に残す。
+   */
+  readonly future_last_day: string | null;
+};
+
+/**
+ * 最後に要約を出した日`lastDay`の翌日から`now`の前日までを、古い順に並べる。
+ * - `lastDay`が`null`(初回、または読めない値)のときは、前日だけを出し、過去を遡らない。
+ * - `lastDay`が前日のときは、出す日が無い。
+ * - `lastDay`が前日より後(時計のずれによる未来)のときは、記録なしと同じに前日だけを出し、
+ *   `future_last_day`にその日を返す。放置すると、日付が追い付くまで要約が止まるため。
+ * - 対象が`maxDays`を超えるときは、新しい方の`maxDays`日だけを出し、
+ *   古い日は飛ばして`skipped_count`に数え、その範囲を`skipped_from`と`skipped_to`に返す。
+ *   日次の要約は古い日ほど読まれにくく、長い停止の後に何通も続けて出さないため。
+ */
+export function planSummaryDays(
+  lastDay: string | null,
+  now: Date,
+  maxDays: number = MAX_CATCHUP_DAYS,
+): SummaryPlan {
+  const yesterdayMs = todayShiftedMidnightMs(now) - DAY_MS;
+  const parsedMs = lastDay === null ? null : parseDayLabel(lastDay);
+  const yesterday = formatDateUtc(new Date(yesterdayMs));
+  const isFuture = parsedMs !== null && parsedMs > yesterdayMs;
+  const lastMs = isFuture ? null : parsedMs;
+  const firstMs = lastMs === null ? yesterdayMs : lastMs + DAY_MS;
+  if (firstMs > yesterdayMs) {
+    return {
+      yesterday,
+      days: [],
+      skipped_count: 0,
+      skipped_from: null,
+      skipped_to: null,
+      future_last_day: null,
+    };
+  }
+  const total = Math.round((yesterdayMs - firstMs) / DAY_MS) + 1;
+  const skipped = Math.max(0, total - maxDays);
+  const days: DayRange[] = [];
+  for (let ms = firstMs + skipped * DAY_MS; ms <= yesterdayMs; ms += DAY_MS) {
+    days.push(dayRangeFromShiftedMidnight(ms));
+  }
   return {
-    start: new Date(yesterdayJstMidnightUtcMs - JST_OFFSET_MS),
-    end: new Date(todayJstMidnightUtcMs - JST_OFFSET_MS),
-    label: formatDateUtc(new Date(yesterdayJstMidnightUtcMs)),
+    yesterday,
+    days,
+    skipped_count: skipped,
+    skipped_from: skipped > 0 ? formatDateUtc(new Date(firstMs)) : null,
+    skipped_to:
+      skipped > 0
+        ? formatDateUtc(new Date(firstMs + (skipped - 1) * DAY_MS))
+        : null,
+    future_last_day: isFuture ? lastDay : null,
   };
 }
 
@@ -129,8 +258,8 @@ export async function getAgentRunSummary(
       coalesce(sum(cost_usd), 0) AS total_cost_usd,
       count(*) FILTER (WHERE exit_code IS DISTINCT FROM 0) AS failure_count
     FROM factory.agent_runs
-    WHERE created_at >= ${range.start.toISOString()}
-      AND created_at < ${range.end.toISOString()}
+    WHERE created_at >= ${range.start.toISOString()}::timestamptz
+      AND created_at < ${range.end.toISOString()}::timestamptz
   `.fetch();
   return toAgentRunSummary(rows[0]);
 }
@@ -177,7 +306,7 @@ export async function getWorkerLoadSummary(
         mem_oom_kill
       FROM factory.worker_samples
       WHERE sampled_at >= ${range.start.toISOString()}::timestamptz - interval '10 minutes'
-        AND sampled_at < ${range.end.toISOString()}
+        AND sampled_at < ${range.end.toISOString()}::timestamptz
     ),
     timed AS (
       SELECT
@@ -328,8 +457,8 @@ export async function getApprovalSummary(
       count(*) FILTER (WHERE status = 'rejected') AS rejected_count
     FROM factory.approval_requests
     WHERE kind = 'requirements'
-      AND decided_at >= ${range.start.toISOString()}
-      AND decided_at < ${range.end.toISOString()}
+      AND decided_at >= ${range.start.toISOString()}::timestamptz
+      AND decided_at < ${range.end.toISOString()}::timestamptz
   `.fetch();
   return toApprovalSummary(rows[0]);
 }
@@ -361,8 +490,8 @@ export async function getCleanupSummary(
       coalesce(sum(pr_ci_checks_deleted), 0) AS pr_ci_checks_deleted,
       coalesce(sum(doc_dirs_deleted), 0) AS doc_dirs_deleted
     FROM factory.cleanup_runs
-    WHERE ran_at >= ${range.start.toISOString()}
-      AND ran_at < ${range.end.toISOString()}
+    WHERE ran_at >= ${range.start.toISOString()}::timestamptz
+      AND ran_at < ${range.end.toISOString()}::timestamptz
   `.fetch();
   const row = rows[0];
   if (row === undefined || parseNumericLike(row.run_count, "run_count") === 0) {
