@@ -1011,6 +1011,13 @@ export type FactoryConfig = {
    */
   pr_ci_watch_enabled: boolean;
   /**
+   * `watch_pr_ci`が、許可された人が作ったPR(開いていて、下書きでなく、forkでなく、Factoryが作っていないもの)のCIの失敗も通知するか。
+   * 通知だけで、直す作業項目は起動しない。既定は`false`。
+   * 許可された人は、PATのアカウントと`allowed_labeler_logins`のアカウントである。
+   * `pr_ci_watch_enabled`が偽のときは、発見も通知もしない。
+   */
+  pr_ci_watch_human_prs: boolean;
+  /**
    * CIの失敗を直す作業項目を、`watch_pr_ci`が起動してよいか。既定は`false`で、偽の間は何も起動しない。
    * 真にするには`pr_ci_fix_enabled_since`が要る。`pr_ci_watch_enabled`が偽のときも起動しない。
    */

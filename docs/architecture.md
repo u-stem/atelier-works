@@ -220,7 +220,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `cleanup_runs` | DBの掃除1回ごとの削除件数 |
 | `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
-| `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
+| `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRの行も持つ。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。人のPRの行は、作業項目のIDが空である。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
 | `worker_samples` | defaultのworkerの負荷の2分ごとの記録。枠を使うジョブの数とscriptごとの内訳、待つジョブの数と最長の待ち、予定時刻と開始の遅れ、コンテナのメモリを1行に並べる。読めなかった値は空のまま残す。作業項目とは独立した読み取り専用の記録で、保持期間を過ぎた行はDBの掃除が消す |
 
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
@@ -320,7 +320,7 @@ Consoleの一覧と集計は次のviewを読む。
 | sample_worker_load | `30 */2 * * * *` | `f/factory/sample_worker_load` | 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。workerの並列数やポーリングの間隔を見直す根拠にします。 |
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 | watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
-| watch_pr_ci | `0 */5 * * * *` | `f/factory/watch_pr_ci` | 5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。設定で有効にしたときは、失敗を直す作業項目も起動し、自動で直す対象の失敗は直せるかが決まってから通知します。PRには書き込まず、ログも読みません。 |
+| watch_pr_ci | `0 */5 * * * *` | `f/factory/watch_pr_ci` | 5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。設定で有効にしたときは、失敗を直す作業項目も起動し、自動で直す対象の失敗は直せるかが決まってから通知します。設定で有効にしたときは、許可された人が作ったPRの失敗も通知します。PRには書き込まず、ログも読みません。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -441,6 +441,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/requirements_doc` | script | [LIB] 要件定義ファイルの検査 |
 | `f/factory/lib/pipeline_lease` | script | [LIB] 要件定義フローのリース判定 |
 | `f/factory/lib/config` | script | [LIB] 設定の読み込み |
+| `f/factory/lib/pr_ci_human_support` | script | [LIB] 許可された人のPRの判定の純粋ロジック |
 | `f/factory/lib/poll_support` | script | [LIB] 巡回の純粋ロジック |
 | `f/factory/steps/console_query` | script | [OP-0-1/1] Console用データ取得 |
 | `f/factory/manual_intake` | flow | [OP-1-1] 手動投入フォーム(Issueを作成して工程に乗せる) |
@@ -672,12 +673,15 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 ## 工程4のPRのCI監視
 
 `watch_pr_ci`が5分ごとに、Factoryが作ったPRのGitHub Actionsの実行を、headのコミット単位で判定する。
-対象は、状態が`pr_open`の作業項目が指すPRのうち、開いていて下書きでなく、forkでないものである。人が作ったPRは見ない。
+対象は、状態が`pr_open`の作業項目が指すPRのうち、開いていて下書きでなく、forkでないものである。
+設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRも対象にする。
+対象は、開いていて下書きでなく、forkでなく、Factoryが作っていないものである。
+人のPRは、失敗の通知だけを行い、直す作業項目は起動しない。
 記録は`pr_ci_checks`に残す。PRとリポジトリへの書き込みと、ログの読み取りはしない。
 設定`pr_ci_fix_enabled`が`true`のときは、失敗したheadを直す作業項目(`pr_fix`のCI回)も起動する。ログを読んで直すのは、起動した作業項目である。
 失敗したheadは要対応の通知とDiscordで知らせる。自動で直す対象の失敗は、直せるかが決まってから知らせる。
 同じheadの再実行か新しいheadが通ったときと、PRが閉じたときに、通知を自動で解決する。
-1回の実行は、発見、回復、判定、起動、保留した失敗の通知の順に進む。監視を無効にしたときは、回復と保留した失敗の通知だけが動く。
+1回の実行は、発見、回復、判定、起動、人のPRの発見、保留した失敗の通知の順に進む。監視を無効にしたときは、回復と保留した失敗の通知だけが動く。
 GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
 判定の順序、通知、自動解決、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md)に書く。
 

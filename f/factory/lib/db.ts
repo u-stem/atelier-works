@@ -3838,7 +3838,10 @@ export type PrCiCheck = {
   readonly summary: string;
   /** 通知した理由コード。通知していなければnull。 */
   readonly notified_reason: string | null;
-  /** PRを作ったFactoryの作業項目のID。外部キーは持たない。 */
+  /**
+   * PRを作ったFactoryの作業項目のID。外部キーは持たない。
+   * NULLは、許可された人が作ったPRの行である(出所を表す別の列は持たない)。
+   */
   readonly work_item_id: number | null;
   /** いま失敗を直している作業項目のID。`fixing`の間だけ値を持つ。外部キーは持たない。 */
   readonly fix_work_item_id: number | null;
@@ -4039,6 +4042,8 @@ export async function hasCiRoundDiffToReview(
 
 /**
  * 判定を待っている行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
+ * FactoryのPRの行(`work_item_id`がNULLでない)を先、人のPRの行(NULL)を後に並べる。
+ * 人の行が、Factoryの行の読み直しを後ろに回さないためである。
  * 後ろの行が飢えないためには、呼び出し側が、読み直すたびに`checked_at`を進める必要がある。
  * 例外で読み直しが途中で終わる経路でも、`touchPrCiCheck`か状態の移行(`transitionPrCiCheck`)で進める前提である。
  * 進めないと、同じ行が先頭に残り続け、上限を超える分の行が読み直されない。
@@ -4053,7 +4058,7 @@ export async function listPendingPrCiChecks(
            checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'pending'
-    ORDER BY checked_at ASC
+    ORDER BY (work_item_id IS NULL) ASC, checked_at ASC
     LIMIT ${limit}::bigint
   `.fetch();
   return rows.map(toPrCiCheck);
@@ -4061,6 +4066,7 @@ export async function listPendingPrCiChecks(
 
 /**
  * 失敗の行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
+ * `listPendingPrCiChecks`と同じく、FactoryのPRの行を先、人のPRの行を後に並べる。
  * 同じheadの再実行が通ったかを、巡回のたびに読み直すために使う。
  * 後ろの行が飢えないためには、呼び出し側が、読み直すたびに`checked_at`を進める必要がある。
  * 例外で読み直しが途中で終わる経路でも、`touchPrCiCheck`か状態の移行(`transitionPrCiCheck`)で進める前提である。
@@ -4075,7 +4081,7 @@ export async function listFailedPrCiChecks(
            checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'failed'
-    ORDER BY checked_at ASC
+    ORDER BY (work_item_id IS NULL) ASC, checked_at ASC
     LIMIT ${limit}::bigint
   `.fetch();
   return rows.map(toPrCiCheck);
@@ -4085,6 +4091,8 @@ export async function listFailedPrCiChecks(
  * 失敗を直す作業項目を起動する候補の行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
  * 次をすべて満たす行である。
  * - `failed`である。
+ * - 作業項目に結ばれている(`work_item_id`がNULLでない)。人のPRの行(NULL)は、通知だけで起動しないので、
+ *   起動の候補の枠を食わないよう除く。
  * - `first_seen_at`が`since`以後である。比較はSQLのtimestamptzで行う。
  * - 保留がない(`fix_hold_reason`がNULL)か、保留の理由が`temporaryHolds`に含まれる。
  *   決定的な理由で保留された行は、同じheadでは起動し直さないので返さない。
@@ -4106,6 +4114,7 @@ export async function listClaimablePrCiChecks(
            checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'failed'
+      AND work_item_id IS NOT NULL
       AND first_seen_at >= ${since.toISOString()}::timestamptz
       AND (fix_hold_reason IS NULL OR fix_hold_reason = ANY(${holds}::text[]))
     ORDER BY checked_at ASC
@@ -4217,6 +4226,7 @@ export async function transitionPrCiCheck(
  * `checked_at`が`checkedBefore`以前の`no_ci`の行のうち、そのPRで最新の行を、読み直していない順に最大`limit`件返す。
  * 実行が遅れて作られた場合に、判定し直すために使う。PRで最新の行だけを返すのは、古いheadの`no_ci`は読み直す意味がないため。
  * 間隔は呼び出し側が`checkedBefore`で決める。判定待ちより遅い間隔で読み直せる。
+ * `listPendingPrCiChecks`と同じく、FactoryのPRの行を先、人のPRの行を後に並べる。
  * 後ろの行が飢えないためには、`listPendingPrCiChecks`と同じく、読み直すたびに`checked_at`を進める必要がある。
  */
 export async function listNoCiPrCiChecksToRecheck(
@@ -4237,7 +4247,7 @@ export async function listNoCiPrCiChecksToRecheck(
           AND newer.pr_number = r.pr_number
           AND (newer.first_seen_at, newer.id) > (r.first_seen_at, r.id)
       )
-    ORDER BY r.checked_at ASC
+    ORDER BY (r.work_item_id IS NULL) ASC, r.checked_at ASC
     LIMIT ${limit}::bigint
   `.fetch();
   return rows.map(toPrCiCheck);

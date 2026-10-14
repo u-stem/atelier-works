@@ -33,6 +33,7 @@ import {
   getPr,
   getPrDiff,
   getPrFiles,
+  getPrWithoutWait,
   getRepositoryId,
   getRepositoryOwnerId,
   getViewer,
@@ -61,6 +62,7 @@ import {
   resolveReviewThread,
   searchDependabotPrs,
   searchIssues,
+  searchOpenAuthoredPrs,
   searchPrs,
   setLabels,
   updatePullRequest,
@@ -3166,6 +3168,181 @@ describe("searchPrs", () => {
   });
 });
 
+describe("searchOpenAuthoredPrs", () => {
+  const OWNER_SCOPE = {
+    kind: "owner" as const,
+    owner: "acme",
+    ownerKind: "user" as const,
+  };
+
+  function item(id: number, number: number): unknown {
+    return {
+      id,
+      number,
+      title: `pr ${String(number)}`,
+      body: null,
+      html_url: `https://github.com/acme/widgets/pull/${String(number)}`,
+      repository_url: "https://api.github.com/repos/acme/widgets",
+      user: { login: "alice" },
+      updated_at: "2026-10-14T00:00:00Z",
+    };
+  }
+
+  async function queryOf(
+    scope: Parameters<typeof searchOpenAuthoredPrs>[1]["scope"],
+    author = "alice",
+  ): Promise<string> {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [] })]);
+    await searchOpenAuthoredPrs(
+      { run: fake.run, ghToken: "tok" },
+      { scope, author },
+    );
+    return decodeURIComponent(fake.calls[0]?.argv.join(" ") ?? "");
+  }
+
+  test("asks for open pull requests", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("is:pr is:open");
+  });
+
+  test("leaves out draft pull requests", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("draft:false");
+  });
+
+  test("narrows the search to the author", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("author:alice");
+  });
+
+  test("sorts by the latest update", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("sort:updated-desc");
+  });
+
+  test("scopes a user owner with the user qualifier", async () => {
+    expect(await queryOf(OWNER_SCOPE)).toContain("user:acme");
+  });
+
+  test("scopes an organization owner with the org qualifier", async () => {
+    expect(
+      await queryOf({ kind: "owner", owner: "acme", ownerKind: "org" }),
+    ).toContain("org:acme");
+  });
+
+  test("scopes a repository with the repo qualifier", async () => {
+    expect(
+      await queryOf({ kind: "repo", owner: "acme", repo: "widgets" }),
+    ).toContain("repo:acme/widgets");
+  });
+
+  test("reads a single page even when the response links to the next one", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(
+          200,
+          { items: [item(1, 10)] },
+          {
+            link: '<https://api.github.com/search/issues?q=x&page=2>; rel="next"',
+          },
+        ),
+      ),
+    ]);
+    await searchOpenAuthoredPrs(
+      { run: fake.run, ghToken: "tok" },
+      { scope: OWNER_SCOPE, author: "alice" },
+    );
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("returns the repository and the number of every hit", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ items: [item(1, 10), item(2, 11)] }),
+    ]);
+    const items = await searchOpenAuthoredPrs(
+      { run: fake.run, ghToken: "tok" },
+      { scope: OWNER_SCOPE, author: "alice" },
+    );
+    expect(
+      items.map((found) => `${found.owner}/${found.repo}#${found.number}`),
+    ).toEqual(["acme/widgets#10", "acme/widgets#11"]);
+  });
+
+  test("returns the time of the last update of every hit", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [item(1, 10)] })]);
+    const items = await searchOpenAuthoredPrs(
+      { run: fake.run, ghToken: "tok" },
+      { scope: OWNER_SCOPE, author: "alice" },
+    );
+    expect(items.map((found) => found.updatedAtMs)).toEqual([
+      Date.parse("2026-10-14T00:00:00Z"),
+    ]);
+  });
+
+  test("rejects a hit without the time of the last update", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        items: [
+          {
+            id: 1,
+            number: 10,
+            title: "pr 10",
+            body: null,
+            html_url: "https://github.com/acme/widgets/pull/10",
+            repository_url: "https://api.github.com/repos/acme/widgets",
+            user: { login: "alice" },
+          },
+        ],
+      }),
+    ]);
+    await expect(
+      searchOpenAuthoredPrs(
+        { run: fake.run, ghToken: "tok" },
+        { scope: OWNER_SCOPE, author: "alice" },
+      ),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+
+  test("rejects an author name that carries a search qualifier", async () => {
+    await expect(queryOf(OWNER_SCOPE, "alice label:secret")).rejects.toThrow(
+      /invalid GitHub name/,
+    );
+  });
+
+  test("rejects an owner name that carries a search qualifier", async () => {
+    await expect(
+      queryOf({ kind: "owner", owner: "acme -user:x", ownerKind: "user" }),
+    ).rejects.toThrow(/invalid GitHub name/);
+  });
+
+  test("rejects a repository name that carries a search qualifier", async () => {
+    await expect(
+      queryOf({ kind: "repo", owner: "acme", repo: "widgets is:issue" }),
+    ).rejects.toThrow(/invalid GitHub name/);
+  });
+
+  test("throws the rate limit error without waiting for the limit to reset", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" })),
+      ghApiOk({ items: [] }),
+    ]);
+    await expect(
+      searchOpenAuthoredPrs(
+        { run: fake.run, ghToken: "tok" },
+        { scope: OWNER_SCOPE, author: "alice" },
+      ),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("does not send a second request after the rate limit", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" })),
+      ghApiOk({ items: [] }),
+    ]);
+    await searchOpenAuthoredPrs(
+      { run: fake.run, ghToken: "tok" },
+      { scope: OWNER_SCOPE, author: "alice" },
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+});
+
 describe("searchDependabotPrs", () => {
   const SCOPE = {
     kind: "repo" as const,
@@ -3243,6 +3420,46 @@ describe("searchDependabotPrs", () => {
 
     await expect(
       searchDependabotPrs({ run: fake.run, ghToken: "tok" }, SCOPE),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
+  });
+});
+
+describe("getPrWithoutWait", () => {
+  const RATE_LIMITED = () =>
+    ok(ghApiStdout(403, { message: "rate limited" }, { "retry-after": "1" }));
+
+  test("throws the rate limit error without waiting for the limit to reset", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await expect(
+      getPrWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
+  test("does not send a second request after the rate limit", async () => {
+    const fake = createFakeCommandRunner([RATE_LIMITED(), RATE_LIMITED()]);
+    await getPrWithoutWait(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("reports an unexpected response shape as a response error", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ number: "12" })]);
+    await expect(
+      getPrWithoutWait(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
     ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 });

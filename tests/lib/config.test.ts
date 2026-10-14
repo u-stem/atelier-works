@@ -664,6 +664,26 @@ describe("pr_ci_watch_enabled", () => {
   });
 });
 
+describe("pr_ci_watch_human_prs", () => {
+  test("defaults pr_ci_watch_human_prs to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_ci_watch_human_prs).toBe(false);
+  });
+
+  test("passes through an explicit pr_ci_watch_human_prs true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_ci_watch_human_prs: true,
+    });
+    expect(config.pr_ci_watch_human_prs).toBe(true);
+  });
+
+  test("throws when pr_ci_watch_human_prs is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_ci_watch_human_prs: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("pr_ci_fix_enabled", () => {
   test("defaults pr_ci_fix_enabled to false when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

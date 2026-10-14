@@ -894,6 +894,8 @@ type SearchIssueItemPayload = {
   readonly user: { readonly login: string } | null;
   /** 作成の時刻。読む関数(`searchDependabotPrs`)だけが形を確かめる。 */
   readonly created_at?: unknown;
+  /** 更新の時刻。読む関数(`searchOpenAuthoredPrs`)だけが形を確かめる。 */
+  readonly updated_at?: unknown;
 };
 
 function isSearchIssueItemPayload(
@@ -2224,6 +2226,112 @@ export async function searchPrs(
     }
   }
   return items;
+}
+
+/**
+ * rate limitの解除を待たないクライアントを返す。
+ * 解除まで待つ代わりに、待ちが要るとすぐ`GitHubRateLimitError`を投げる。
+ * ghの起動失敗と5xxの再試行は、待たずにすぐ行う。補助の読み取りが、最大120秒眠って全体の時間を使わないためである。
+ */
+function noWaitClient(client: GhClient, endpoint: string): GhClient {
+  return {
+    ...client,
+    transientRetryDelayMs: 0,
+    sleep: async (ms) => {
+      if (ms === 0) return;
+      throw new GitHubRateLimitError(endpoint, ms, false);
+    },
+  };
+}
+
+/**
+ * `getPr`と同じだが、rate limitの解除を待たずに`GitHubRateLimitError`を投げる。
+ * 人のPRの発見が、PATのcoreの枠を使い切った回に、全体の時間を使わないために使う。
+ */
+export async function getPrWithoutWait(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PullRequest> {
+  return getPr(
+    noWaitClient(client, `repos/${owner}/${repo}/pulls/${String(number)}`),
+    owner,
+    repo,
+    number,
+  );
+}
+
+/** 人のPRを探す範囲。オーナーの全体か、1つのリポジトリ。 */
+export type OpenAuthoredPrsScope =
+  | {
+      readonly kind: "owner";
+      readonly owner: string;
+      readonly ownerKind: FactoryOwnerKind;
+    }
+  | {
+      readonly kind: "repo";
+      readonly owner: string;
+      readonly repo: string;
+    };
+
+export type OpenAuthoredPrSearchItem = PrSearchItem & {
+  /** PRの最後の更新の時刻(epochミリ秒)。範囲と作者をまたいで新しい順に並べるのに使う。 */
+  readonly updatedAtMs: number;
+};
+
+export type SearchOpenAuthoredPrsOptions = {
+  readonly scope: OpenAuthoredPrsScope;
+  /** PRの作者のログイン名。 */
+  readonly author: string;
+};
+
+/**
+ * `GET /search/issues`で、`author`が作った、開いていて下書きでないPRを、更新の新しい順に1ページ(最大100件)返す。
+ * 更新の時刻を読めない項目があれば`GitHubResponseError`を投げる。
+ * 検索は候補を絞るだけで、作者の種別、fork、ブランチは呼び出し側がPRを読み直して確かめる。
+ * 補助の検索なので、rate limitの解除を待たない。拒まれたら待たずに`GitHubRateLimitError`を投げ、
+ * 呼び出し側は検索だけを飛ばす。ghの起動失敗と5xxの再試行は、待たずにすぐ行う。
+ * オーナーとリポジトリと作者の名前は、検索の修飾子が紛れ込まないよう検証する。
+ */
+export async function searchOpenAuthoredPrs(
+  client: GhClient,
+  opts: SearchOpenAuthoredPrsOptions,
+): Promise<OpenAuthoredPrSearchItem[]> {
+  assertGitHubName(opts.author);
+  assertGitHubName(opts.scope.owner);
+  let qualifier: string;
+  if (opts.scope.kind === "repo") {
+    assertGitHubName(opts.scope.repo);
+    qualifier = `repo:${opts.scope.owner}/${opts.scope.repo}`;
+  } else {
+    qualifier = ownerQualifier(opts.scope.owner, opts.scope.ownerKind);
+  }
+  const query = `is:pr is:open draft:false author:${opts.author} ${qualifier} sort:updated-desc`;
+  const endpoint = `search/issues?q=${encodeURIComponent(query)}&per_page=100`;
+  const response = await callGhApi(noWaitClient(client, endpoint), endpoint);
+  const context = `GET ${endpoint}`;
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isSearchIssuesPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.items.map((item) => {
+    const updatedAtMs =
+      typeof item.updated_at === "string" ? Date.parse(item.updated_at) : NaN;
+    if (!Number.isFinite(updatedAtMs)) {
+      throw unexpectedShape("search open authored prs");
+    }
+    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
+    return {
+      owner,
+      repo,
+      number: item.number,
+      title: item.title,
+      htmlUrl: item.html_url,
+      updatedAtMs,
+    };
+  });
 }
 
 /**
