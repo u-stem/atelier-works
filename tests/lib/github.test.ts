@@ -4,6 +4,7 @@ import {
   addLabels,
   type ClaimIssueResult,
   ClaimOwnershipUnknownError,
+  callGhApi,
   claimIssue,
   commentIssue,
   compareCommits,
@@ -28,7 +29,7 @@ import {
   getBranchSha,
   getFileAtRef,
   getIssue,
-  getLabelerLogin,
+  getLabelerActor,
   getPr,
   getPrDiff,
   getPrFiles,
@@ -158,6 +159,31 @@ describe("isFactoryPost", () => {
     expect(
       isFactoryPost(undefined, "factory-bot", "READMEも直してください"),
     ).toBe(false);
+  });
+});
+
+describe("allowEscapeSequences", () => {
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  test("adds --allow-escape-sequences when the option is true", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await callGhApi(client(fake), "user", { allowEscapeSequences: true });
+    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
+  });
+
+  test("omits --allow-escape-sequences by default", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({})]);
+    await callGhApi(client(fake), "user");
+    expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
+  });
+
+  test("omits --allow-escape-sequences from the other API calls", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
+    await getViewer(client(fake));
+    expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
   });
 });
 
@@ -1466,7 +1492,7 @@ describe("getIssue closing fields", () => {
   });
 });
 
-describe("getLabelerLogin", () => {
+describe("getLabelerActor labeler selection", () => {
   const at = (n: number) => `2026-10-01T00:00:${String(n).padStart(2, "0")}Z`;
   const labeled = (login: string | null, label: string, n = 1) =>
     labelEventNode("labeled", login, label, at(n));
@@ -1475,16 +1501,14 @@ describe("getLabelerLogin", () => {
 
   async function loginOf(responses: readonly CommandResult[], label: string) {
     const fake = createFakeCommandRunner(responses);
-    return {
-      fake,
-      login: await getLabelerLogin(
-        { run: fake.run, ghToken: "tok" },
-        "acme",
-        "widgets",
-        5,
-        label,
-      ),
-    };
+    const actor = await getLabelerActor(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      label,
+    );
+    return { fake, login: actor === null ? null : actor.login };
   }
 
   test("reads the label events through GraphQL", async () => {
@@ -1785,7 +1809,7 @@ describe("getLabelerLogin", () => {
       ok(ghApiStdout(400, { message: "bad" })),
     ]);
     await expect(
-      getLabelerLogin(
+      getLabelerActor(
         { run: fake.run, ghToken: "tok" },
         "acme",
         "widgets",
@@ -1793,6 +1817,110 @@ describe("getLabelerLogin", () => {
         "factory",
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("getLabelerActor", () => {
+  const at = (n: number) => `2026-10-01T00:00:${String(n).padStart(2, "0")}Z`;
+  const labeledBy = (
+    login: string | null,
+    databaseId?: unknown,
+    actorType = "User",
+    n = 1,
+  ) =>
+    labelEventNode("labeled", login, "factory", at(n), actorType, databaseId);
+
+  async function actorOf(responses: readonly CommandResult[]) {
+    const fake = createFakeCommandRunner(responses);
+    const actor = await getLabelerActor(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      5,
+      "factory",
+    );
+    return { fake, actor };
+  }
+
+  test("asks for the databaseId of the label event actor", async () => {
+    const { fake } = await actorOf([labelEventsOk([])]);
+    const body: unknown = JSON.parse(fake.calls[0]?.options?.stdin ?? "{}");
+    const query =
+      isRecord(body) && typeof body.query === "string" ? body.query : "";
+    expect(query.match(/\.\.\. on User \{ databaseId \}/g)?.length).toBe(4);
+  });
+
+  test("returns the login and the databaseId of the last labeler", async () => {
+    const { actor } = await actorOf([
+      labelEventsOk([labeledBy("alice", 1001)]),
+    ]);
+    expect(actor).toEqual({ login: "alice", databaseId: 1001 });
+  });
+
+  test("returns a null databaseId when the response has none", async () => {
+    const { actor } = await actorOf([labelEventsOk([labeledBy("alice")])]);
+    expect(actor).toEqual({ login: "alice", databaseId: null });
+  });
+
+  test("returns a null databaseId when it is not a number", async () => {
+    const { actor } = await actorOf([
+      labelEventsOk([labeledBy("alice", "1001")]),
+    ]);
+    expect(actor?.databaseId).toBeNull();
+  });
+
+  test("returns a null databaseId when it is zero", async () => {
+    const { actor } = await actorOf([labelEventsOk([labeledBy("alice", 0)])]);
+    expect(actor?.databaseId).toBeNull();
+  });
+
+  test("returns a null databaseId when it is negative", async () => {
+    const { actor } = await actorOf([labelEventsOk([labeledBy("alice", -3)])]);
+    expect(actor?.databaseId).toBeNull();
+  });
+
+  test("returns a null databaseId when it is not an integer", async () => {
+    const { actor } = await actorOf([labelEventsOk([labeledBy("alice", 1.5)])]);
+    expect(actor?.databaseId).toBeNull();
+  });
+
+  test("returns a null databaseId when it is not a safe integer", async () => {
+    const { actor } = await actorOf([
+      labelEventsOk([labeledBy("alice", Number.MAX_SAFE_INTEGER + 1)]),
+    ]);
+    expect(actor?.databaseId).toBeNull();
+  });
+
+  test("uses the databaseId of the last labeled event", async () => {
+    const { actor } = await actorOf([
+      labelEventsOk([
+        labeledBy("alice", 1001, "User", 1),
+        labeledBy("alice", 2002, "User", 3),
+      ]),
+    ]);
+    expect(actor?.databaseId).toBe(2002);
+  });
+
+  test("returns null when the actor is not a user", async () => {
+    const { actor } = await actorOf([
+      labelEventsOk([labeledBy("alice", 1001, "Bot")]),
+    ]);
+    expect(actor).toBeNull();
+  });
+
+  test("returns null when the labeled event has no actor", async () => {
+    const { actor } = await actorOf([labelEventsOk([labeledBy(null)])]);
+    expect(actor).toBeNull();
+  });
+
+  test("returns null when the last event is unlabeled", async () => {
+    const { actor } = await actorOf([
+      labelEventsOk([
+        labeledBy("alice", 1001, "User", 1),
+        labelEventNode("unlabeled", "alice", "factory", at(2)),
+      ]),
+    ]);
+    expect(actor).toBeNull();
   });
 });
 
@@ -3170,6 +3298,7 @@ describe("getPr", () => {
       mergeable: true,
       mergeableState: "clean",
       authorLogin: "alice",
+      authorId: null,
       authorType: "User",
       autoMergeEnabled: false,
     });
@@ -3240,6 +3369,64 @@ describe("getPr", () => {
       15,
     );
     expect(pr.autoMergeEnabled).toBe(true);
+  });
+
+  async function authorIdFor(user: unknown) {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 18,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "f", repo: { full_name: "acme/widgets" } },
+        base: { ref: "main", repo: { full_name: "acme/widgets" } },
+        mergeable: true,
+        mergeable_state: "clean",
+        user,
+        auto_merge: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      18,
+    );
+    return pr.authorId;
+  }
+
+  test("reads the numeric id of the author", async () => {
+    expect(await authorIdFor({ login: "alice", type: "User", id: 1001 })).toBe(
+      1001,
+    );
+  });
+
+  test("returns a null authorId when the user has no id", async () => {
+    expect(await authorIdFor({ login: "alice", type: "User" })).toBeNull();
+  });
+
+  test("returns a null authorId when the id is not a number", async () => {
+    expect(
+      await authorIdFor({ login: "alice", type: "User", id: "1001" }),
+    ).toBeNull();
+  });
+
+  test("returns a null authorId when the id is zero", async () => {
+    expect(
+      await authorIdFor({ login: "alice", type: "User", id: 0 }),
+    ).toBeNull();
+  });
+
+  test("returns a null authorId when the id is not a safe integer", async () => {
+    expect(
+      await authorIdFor({
+        login: "alice",
+        type: "User",
+        id: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).toBeNull();
   });
 
   // `auto_merge`が読めない形のときは、無効と決めつけず有効として扱い、修正を止める。

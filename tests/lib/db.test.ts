@@ -30,6 +30,7 @@ import {
   getIssueProposal,
   getLatestDeployment,
   getLatestPrCiCheck,
+  getLatestScheduleFailure,
   getNoticeById,
   getPrCiCheckById,
   getPreviousMainCiRun,
@@ -86,6 +87,7 @@ import {
   listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
   newestNewerIssueCycle,
@@ -4683,6 +4685,33 @@ describe("getLatestDeployment", () => {
   });
 });
 
+describe("getLatestScheduleFailure", () => {
+  test("returns null when no failure was recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestScheduleFailure("f/factory/x", sql)).toBeNull();
+  });
+
+  test("returns the error of the newest row", async () => {
+    const { sql } = createFakeSqlClient([[{ job_id: "j1", error: "boom" }]]);
+    expect(await getLatestScheduleFailure("f/factory/x", sql)).toEqual({
+      job_id: "j1",
+      error: "boom",
+    });
+  });
+
+  test("reads only the rows recorded by the failure handler", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestScheduleFailure("f/factory/x", sql);
+    expect(calls[0]?.text).toContain("step IS NULL");
+  });
+
+  test("orders by newest first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestScheduleFailure("f/factory/x", sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
+  });
+});
+
 describe("resolveNoticesBeforeSuccessfulDeployment", () => {
   const call = (sql: SqlClient) =>
     resolveNoticesBeforeSuccessfulDeployment(
@@ -6212,6 +6241,28 @@ describe("listFailedPrCiChecks", () => {
   });
 });
 
+describe("listUnnotifiedFailedPrCiChecks", () => {
+  test("selects only failed rows that were not notified", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnnotifiedFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE state = 'failed' AND notified_reason IS NULL",
+    );
+  });
+
+  test("orders by the update time, which a re-read does not move", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnnotifiedFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY updated_at ASC, id ASC");
+  });
+
+  test("binds the limit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnnotifiedFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+});
+
 describe("listNoCiPrCiChecksToRecheck", () => {
   const before = new Date("2026-10-13T00:00:00.000Z");
 
@@ -6509,6 +6560,14 @@ describe("claimPrCiCheckForFix", () => {
     );
   });
 
+  test("clears the notified reason so that the result of the fix is announced again", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /fix_attempts = r\.fix_attempts \+ 1,\s*notified_reason = NULL,/,
+    );
+  });
+
   test("claims only a failed row of the head that is still current", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
     await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
@@ -6766,6 +6825,24 @@ describe("releaseFixingPrCiCheck", () => {
     );
   });
 
+  test("clears the notified reason when asked", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(
+      9,
+      { holdReason: "fix_stopped", resetNotified: true },
+      sql,
+    );
+    expect(calls[0]?.text).toMatch(
+      /notified_reason = CASE WHEN  \? ::boolean THEN NULL ELSE notified_reason END/,
+    );
+  });
+
+  test("keeps the notified reason by default", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { holdReason: "fix_stopped" }, sql);
+    expect(calls[0]?.values).not.toContain(true);
+  });
+
   test("restricts the row to one fix work item when asked", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
     await releaseFixingPrCiCheck(9, { fixWorkItemId: 31 }, sql);
@@ -6876,6 +6953,26 @@ describe("setPrCiFixHold", () => {
   test("returns false when the reason was already recorded", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await setPrCiFixHold(9, "main_ci_failed", {}, sql)).toBe(false);
+  });
+
+  test("clears the notified reason when asked", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "rounds_exhausted", { resetNotified: true }, sql);
+    expect(calls[0]?.text).toMatch(
+      /notified_reason = CASE WHEN  \? ::boolean THEN NULL ELSE notified_reason END/,
+    );
+  });
+
+  test("binds the request to clear the notified reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "rounds_exhausted", { resetNotified: true }, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("keeps the notified reason by default", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
+    expect(calls[0]?.values).not.toContain(true);
   });
 
   test("rejects an empty reason, without querying", async () => {

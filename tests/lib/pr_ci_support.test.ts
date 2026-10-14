@@ -1017,6 +1017,48 @@ describe("prCiFailedNoticeMessage", () => {
   test("never carries a workflow name", () => {
     expect(prCiFailedNoticeMessage(input)).not.toContain("CI (");
   });
+
+  describe("with a hold reason of the automatic fix", () => {
+    const held = { ...input, hold: "rounds_exhausted" as const };
+
+    test("carries the hold reason code", () => {
+      expect(prCiFailedNoticeMessage(held)).toContain(
+        "自動修正の保留: rounds_exhausted",
+      );
+    });
+
+    test("carries the next action of the hold reason", () => {
+      expect(prCiFailedNoticeMessage(held)).toContain(
+        prCiFixHoldInfo("rounds_exhausted").nextAction,
+      );
+    });
+
+    test("does not carry the next action of the failure reason", () => {
+      expect(prCiFailedNoticeMessage(held)).not.toContain(
+        prCiNextAction("ci_failure"),
+      );
+    });
+
+    test("still starts with the pull request prefix", () => {
+      expect(
+        prCiFailedNoticeMessage(held).startsWith("acme/widgets#12: "),
+      ).toBe(true);
+    });
+
+    test("still ends with the link", () => {
+      expect(
+        prCiFailedNoticeMessage(held).endsWith(
+          "実行: https://github.com/acme/widgets/actions/runs/9",
+        ),
+      ).toBe(true);
+    });
+
+    test("differs between hold reasons", () => {
+      expect(prCiFailedNoticeMessage(held)).not.toBe(
+        prCiFailedNoticeMessage({ ...held, hold: "not_reviewed" }),
+      );
+    });
+  });
 });
 
 describe("PR_CI_FAILED_KIND", () => {
@@ -1168,18 +1210,6 @@ describe("prCiFixHoldInfo", () => {
     expect(
       TEMPORARY_HOLDS.map((reason) => prCiFixHoldInfo(reason).temporary),
     ).toEqual(TEMPORARY_HOLDS.map(() => true));
-  });
-
-  test("announces a deterministic reason as soon as it is held", () => {
-    expect(
-      DETERMINISTIC_HOLDS.map((reason) => prCiFixHoldInfo(reason).notice),
-    ).toEqual(DETERMINISTIC_HOLDS.map(() => "immediate"));
-  });
-
-  test("announces a temporary reason only after it lasts", () => {
-    expect(
-      TEMPORARY_HOLDS.map((reason) => prCiFixHoldInfo(reason).notice),
-    ).toEqual(TEMPORARY_HOLDS.map(() => "prolonged"));
   });
 
   test("gives every reason a next action", () => {

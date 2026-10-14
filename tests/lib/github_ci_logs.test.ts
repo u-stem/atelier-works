@@ -1,14 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import {
   CI_JOB_LOG_MAX_BYTES,
+  GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubCiLogError,
+  GitHubCiLogIncompleteError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
   getWorkflowJobLog,
   listWorkflowRunJobs,
   WORKFLOW_RUN_JOBS_MAX_PAGES,
 } from "../../f/factory/lib/github.ts";
-import { omittedMarker } from "../../f/factory/lib/workspace.ts";
+import {
+  type CommandResult,
+  omittedMarker,
+} from "../../f/factory/lib/workspace.ts";
 import {
   createFakeCommandRunner,
   fail,
@@ -204,6 +209,12 @@ describe("getWorkflowJobLog", () => {
     );
   });
 
+  test("asks gh to output a log that has terminal escape sequences", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    await get(fake);
+    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
+  });
+
   test("passes the byte cap to the runner", async () => {
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
     await get(fake);
@@ -244,6 +255,188 @@ describe("getWorkflowJobLog", () => {
     );
     const fake = createFakeCommandRunner([ok(stdout)]);
     expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
+  });
+
+  /** ghが終了コードを非0にして終わった実行。stderrの中身は判定に使わない。 */
+  const exited = (
+    exitCode: number,
+    stdout: string,
+    stderr = "",
+  ): CommandResult => ({ stdout, stderr, exitCode, timedOut: false });
+
+  /** 取り直しても同じ失敗が続くように、同じ実行を2回分用意する。 */
+  const exitedTwice = (exitCode: number, stdout: string, stderr = "") => [
+    exited(exitCode, stdout, stderr),
+    exited(exitCode, stdout, stderr),
+  ];
+
+  const cappedStdout = ghApiStdout(
+    200,
+    `head${omittedMarker(9_000_000)}${"x".repeat(CI_JOB_LOG_MAX_BYTES)}`,
+  );
+
+  test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a 2xx status with an empty body", async () => {
+    const fake = createFakeCommandRunner(exitedTwice(1, ghApiStdout(200, "")));
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
+  });
+
+  test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a partial body", async () => {
+    const fake = createFakeCommandRunner(
+      exitedTwice(1, ghApiStdout(200, "line 1\nline 2")),
+    );
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
+  });
+
+  test("returns the log when gh exits zero after a 2xx status", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: false });
+  });
+
+  test("throws a GitHubCiLogIncompleteError when the output hit the cap and gh exits non-zero", async () => {
+    const fake = createFakeCommandRunner(exitedTwice(143, cappedStdout));
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
+  });
+
+  test("returns a truncated log when the output hit the cap and gh exits zero", async () => {
+    const fake = createFakeCommandRunner([ok(cappedStdout)]);
+    expect(await get(fake)).toMatchObject({ kind: "ok", truncated: true });
+  });
+
+  test("returns the log when the second fetch exits zero after a non-zero first fetch", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(200, "line 1")),
+      ok(ghApiStdout(200, "line 1\nline 2")),
+    ]);
+    const result = await get(fake);
+    expect(result.kind === "ok" ? result.log.reveal() : null).toBe(
+      "line 1\nline 2",
+    );
+  });
+
+  test("fetches the log only once more after an incomplete first fetch", async () => {
+    const fake = createFakeCommandRunner([
+      ...exitedTwice(1, ghApiStdout(200, "")),
+      ok(ghApiStdout(200, "line")),
+    ]);
+    await get(fake).catch(() => undefined);
+    expect(fake.calls).toHaveLength(2);
+  });
+
+  test("fetches the log once when gh exits zero", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    await get(fake);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  /** 実行とsleepの呼び出しを順に記録し、待ちの位置と長さを確かめられるようにする。 */
+  const recordingClient = (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    transientRetryDelayMs?: number,
+  ) => {
+    const events: string[] = [];
+    const sleeps: number[] = [];
+    return {
+      events,
+      sleeps,
+      client: {
+        run: async (...args: Parameters<typeof fake.run>) => {
+          events.push("run");
+          return fake.run(...args);
+        },
+        ghToken: "tok",
+        sleep: async (ms: number) => {
+          events.push("sleep");
+          sleeps.push(ms);
+        },
+        ...(transientRetryDelayMs === undefined
+          ? {}
+          : { transientRetryDelayMs }),
+      },
+    };
+  };
+
+  const incompleteThenOk = () =>
+    createFakeCommandRunner([
+      exited(1, ghApiStdout(200, "line 1")),
+      ok(ghApiStdout(200, "line 1\nline 2")),
+    ]);
+
+  test("waits once between an incomplete first fetch and the second fetch", async () => {
+    const { client: recording, events } = recordingClient(incompleteThenOk());
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(events).toEqual(["run", "sleep", "run"]);
+  });
+
+  test("waits for the transientRetryDelayMs of the client before the second fetch", async () => {
+    const { client: recording, sleeps } = recordingClient(
+      incompleteThenOk(),
+      1234,
+    );
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(sleeps).toEqual([1234]);
+  });
+
+  test("waits for the default delay before the second fetch when the client has no transientRetryDelayMs", async () => {
+    const { client: recording, sleeps } = recordingClient(incompleteThenOk());
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
+  });
+
+  test("does not wait when the first fetch succeeds", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "line"))]);
+    const { client: recording, sleeps } = recordingClient(fake);
+    await getWorkflowJobLog(recording, "acme", "widgets", 9001);
+    expect(sleeps).toEqual([]);
+  });
+
+  test("states a fixed message for the incomplete log error", async () => {
+    const fake = createFakeCommandRunner(exitedTwice(1, ghApiStdout(200, "")));
+    expect(await messageOf(fake)).toBe(
+      "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
+    );
+  });
+
+  test("keeps the stderr of gh out of the incomplete log error", async () => {
+    const stderr =
+      "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway";
+    const fake = createFakeCommandRunner(
+      exitedTwice(1, ghApiStdout(200, ""), stderr),
+    );
+    expect(await messageOf(fake)).not.toContain("--allow-escape-sequences");
+  });
+
+  test("keeps the partial body out of the incomplete log error", async () => {
+    const fake = createFakeCommandRunner(
+      exitedTwice(1, ghApiStdout(200, "PARTIAL-BODY-MARKER")),
+    );
+    expect(await messageOf(fake)).not.toContain("PARTIAL-BODY-MARKER");
+  });
+
+  test("does not look at the exit code for a 403", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(403, { message: "Resource not accessible" })),
+    ]);
+    expect(await get(fake)).toEqual({ kind: "forbidden" });
+  });
+
+  test("does not look at the exit code for a 404", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(404, { message: "Not Found" })),
+    ]);
+    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
+  });
+
+  test("does not look at the exit code for a 410", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ghApiStdout(410, { message: "Gone" })),
+    ]);
+    expect(await get(fake)).toEqual({ kind: "log_unavailable" });
+  });
+
+  test("throws a GitHubCiLogError for an unexpected status with a non-zero exit code", async () => {
+    const body = exited(1, ghApiStdout(422, "unprocessable"));
+    const fake = createFakeCommandRunner([body]);
+    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogError);
   });
 
   test("returns forbidden for 403", async () => {

@@ -9,7 +9,8 @@
 // defaultのworkerで動く`self_update`が呼ぶ。Console用workerと同じworkerで確かめると、
 // そのworkerが止まっているときに確かめる処理も動かないため。
 // Consoleが止まるとConsoleの中のnoticeは読めないので、noticeを新しく残したときはDiscordにも送る。
-// 確認そのものが続けて失敗すると停止に気づけないので、失敗の回数を数え、続いたらnoticeにする。
+// 確認そのものが続けて失敗すると停止に気づけないので、最初に確かめられなかった時刻を残し、一定の時間続いたらnoticeにする。
+// 回数で数えると、`self_update`の周期を変えるたびに「続いた時間」の意味が変わるため、時刻で数える。
 
 import type {
   ListCompletedJobsData,
@@ -34,8 +35,15 @@ export const CONSOLE_FETCH_WATCH_PATH = "f/factory/console_fetch_watch";
 /** 確認が終わるまで待つ上限。確認が止まっても自己更新の反映を遅らせないための値。 */
 export const CONSOLE_WORKER_CHECK_TIMEOUT_MS = 10_000;
 
-/** 確認できない状態がこの回数(自己更新は2分ごとなので1時間)続いたら、noticeにする。 */
-export const CONSOLE_WORKER_UNKNOWN_LIMIT = 30;
+/** 最初に確認できなかった時刻から、この時間(ミリ秒)続けて確認できなかったら、noticeにする。 */
+export const CONSOLE_WORKER_UNKNOWN_GRACE_MS = 60 * 60 * 1000;
+
+/** Windmillのstateのうち、最初に確認できなかった時刻(epochミリ秒)を保存するキー。 */
+export const CONSOLE_WORKER_UNKNOWN_SINCE_KEY =
+  "console_worker_unknown_since_ms";
+
+/** stateに残る回数のキー。時刻だけを持つ形にそろえるため、読まず、stateを書くときに消す。 */
+const LEGACY_UNKNOWN_COUNT_KEY = "console_worker_unknown_count";
 
 const MISSING_CAUSE = `Consoleのジョブが${CONSOLE_JOB_WAIT_SECONDS / 60}分以上待たされています。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、ジョブを受けていません。Consoleのジョブがqueueに溜まり、Consoleが止まります`;
 const MISSING_ACTION =
@@ -327,23 +335,31 @@ export async function checkConsoleWorker(
   );
 }
 
-/** 保存したstateから、確認できなかった回数を読む。読めなければ0。 */
-export function parseUnknownCount(state: unknown): number {
+/** 保存したstateから、最初に確認できなかった時刻を読む。読めなければ`null`。 */
+export function parseUnknownSince(state: unknown): number | null {
   if (!isRecord(state)) {
-    return 0;
+    return null;
   }
-  const count = state.console_worker_unknown_count;
-  return typeof count === "number" && Number.isInteger(count) && count >= 0
-    ? count
-    : 0;
+  const since = state[CONSOLE_WORKER_UNKNOWN_SINCE_KEY];
+  return typeof since === "number" && Number.isFinite(since) && since >= 0
+    ? since
+    : null;
 }
 
-/** 確認できなかったときは1足し、確認できたときは0に戻す。 */
-export function nextUnknownCount(
-  previous: number,
+/**
+ * 確認できなかったときは、最初に確認できなかった時刻を引き継ぐ。まだ無ければ今にする。
+ * 確認できたときは`null`に戻す。
+ * 保存した時刻が今より後のとき(時計が戻ったとき)は、経過時間が負になって通知を止め続けないよう、今に数え直す。
+ */
+export function nextUnknownSince(
+  previous: number | null,
   result: ConsoleWorkerCheck,
-): number {
-  return result === "unknown" ? previous + 1 : 0;
+  nowMs: number,
+): number | null {
+  if (result !== "unknown") {
+    return null;
+  }
+  return previous !== null && previous <= nowMs ? previous : nowMs;
 }
 
 export type WatchConsoleWorkerDeps = ConsoleWorkerCheckDeps & {
@@ -354,11 +370,11 @@ export type WatchConsoleWorkerDeps = ConsoleWorkerCheckDeps & {
 };
 
 /**
- * Console用のworkerが受けているかを確かめ、確認できなかった回数をstateに数える。
- * `CONSOLE_WORKER_UNKNOWN_LIMIT`回続けて確認できなかったら、noticeを残す(新しく挿入したときだけDiscordにも送る)。
- * 確認できたら回数を0に戻す。stateを読めたときは、ほかのキーを保って書く。
- * stateを読めなかったとき(例外、時間切れ)は書かない。読めない間は積み上げた回数を知らず、
- * 0として書くと、続けて確認できなかった回数が0に戻ってしまうため。
+ * Console用のworkerが受けているかを確かめ、最初に確認できなかった時刻をstateに残す。
+ * その時刻から`CONSOLE_WORKER_UNKNOWN_GRACE_MS`以上続けて確認できなかったら、noticeを残す(新しく挿入したときだけDiscordにも送る)。
+ * 確認できたら時刻を消す。stateを読めたときは、ほかのキーを保って書く。
+ * stateを読めなかったとき(例外、時間切れ)は書かない。読めない間は残した時刻を知らず、
+ * 今の時刻として書くと、続けて確認できなかった時間が0に戻ってしまうため。
  * 書けなければ警告だけにして、noticeの判定は続ける。
  * 呼び出し元の処理を止めないよう、例外は投げない。
  */
@@ -380,20 +396,29 @@ export async function watchConsoleWorker(
         error: maskSecrets(String(err)),
       });
     }
-    const previous = parseUnknownCount(stored);
-    const count = nextUnknownCount(previous, result);
-    if (stateReadable && count !== previous) {
+    const previous = parseUnknownSince(stored);
+    const nowMs = deps.now();
+    const since = nextUnknownSince(previous, result, nowMs);
+    const hasLegacyKey = LEGACY_UNKNOWN_COUNT_KEY in stored;
+    if (stateReadable && (since !== previous || hasLegacyKey)) {
       try {
         // stateの全体を置き換える書き込みなので、ほかのキーは読んだ値のまま残す。
-        await deps.setState({ ...stored, console_worker_unknown_count: count });
+        const { [LEGACY_UNKNOWN_COUNT_KEY]: _legacy, ...rest } = stored;
+        const next: Record<string, unknown> = { ...rest };
+        if (since !== null) {
+          next[CONSOLE_WORKER_UNKNOWN_SINCE_KEY] = since;
+        } else {
+          delete next[CONSOLE_WORKER_UNKNOWN_SINCE_KEY];
+        }
+        await deps.setState(next);
       } catch (err) {
-        // 書けなくても、noticeの判定は数えた回数で続ける。
+        // 書けなくても、noticeの判定は数えた時刻で続ける。
         deps.log.warn("could not write the console worker check state", {
           error: maskSecrets(String(err)),
         });
       }
     }
-    if (count >= CONSOLE_WORKER_UNKNOWN_LIMIT) {
+    if (since !== null && nowMs - since >= CONSOLE_WORKER_UNKNOWN_GRACE_MS) {
       await recordAndNotify(deps, CONSOLE_WORKER_CHECK_FAILED_NOTICE, {
         kind: "console_worker_check_failed",
         instance_name: deps.instanceName,

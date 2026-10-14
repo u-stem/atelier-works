@@ -417,11 +417,17 @@ export type PrCiFailedNoticeInput = {
   /** `prCiFailureLink`が返した、検証済みのリンク。 */
   readonly link: string;
   readonly reason: PrCiReason;
+  /**
+   * 自動修正を保留している理由。渡すと、次の操作は保留の理由の固定文(`prCiFixHoldInfo`)になる。
+   * 渡さなければ、失敗の理由コードの固定文(`prCiNextAction`)になる。
+   */
+  readonly hold?: PrCiFixHoldReason;
 };
 
 /**
  * PRのCIが失敗したnoticeの本文。固定文に、PR、コミットの先頭7文字、理由コード、次の操作、
  * リンクだけを入れる。workflow名や結論、ログは入れない。
+ * 自動修正の保留の理由(`hold`)を渡したときは、その理由コードも入れ、次の操作は保留の理由のものにする。
  * リンクは、そのリポジトリの実行のURLか、PRのページでなければ例外を投げる。
  */
 export function prCiFailedNoticeMessage(input: PrCiFailedNoticeInput): string {
@@ -436,7 +442,11 @@ export function prCiFailedNoticeMessage(input: PrCiFailedNoticeInput): string {
     throw new Error("prCiFailedNoticeMessage: invalid link");
   }
   const prefix = prCiNoticePrefix(input.owner, input.repo, input.prNumber);
-  return `${prefix}PRのコミット${sha}でCIが失敗しました。理由: ${input.reason}。次の操作: ${prCiNextAction(input.reason)}。実行: ${input.link}`;
+  const head = `${prefix}PRのコミット${sha}でCIが失敗しました。理由: ${input.reason}`;
+  if (input.hold === undefined) {
+    return `${head}。次の操作: ${prCiNextAction(input.reason)}。実行: ${input.link}`;
+  }
+  return `${head}。自動修正の保留: ${input.hold}。次の操作: ${prCiFixHoldInfo(input.hold).nextAction}。実行: ${input.link}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,12 +504,6 @@ export function isPrCiFixHoldReason(
 export type PrCiFixHoldInfo = {
   /** 解ければ外してよい理由か。そうでなければ、同じheadでは起動し直さない。 */
   readonly temporary: boolean;
-  /**
-   * 保留を知らせる`pr_ci_failed`のnoticeを出す時機。
-   * 決定的な理由は保留した時点(`immediate`)、一時的な理由は保留が続いたとき(`prolonged`)だけ出す。
-   * 一時的な保留は、解ければ何も知らせずに済むためである。
-   */
-  readonly notice: "immediate" | "prolonged";
   /** noticeと一緒にDiscordにも送るか。直す作業の流れがすでに送った理由は送らない。 */
   readonly discord: boolean;
   /**
@@ -519,7 +523,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
 > = {
   unfixable_job: {
     temporary: false,
-    notice: "immediate",
     discord: true,
     nextAction:
       "失敗したジョブはソースの編集では直せない。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットする",
@@ -528,7 +531,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   other_conclusion: {
     temporary: false,
-    notice: "immediate",
     discord: true,
     nextAction:
       "失敗ではなく、取り消しや期限切れなどで終わっている。実行を確かめ、取り消しやフレークなら再実行する",
@@ -537,7 +539,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   log_unavailable: {
     temporary: false,
-    notice: "immediate",
     discord: true,
     nextAction:
       "失敗のログをFactoryが読めない。PATのActions権限とログの保持期限を確かめ、人が直す",
@@ -546,7 +547,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   fix_stopped: {
     temporary: false,
-    notice: "immediate",
     discord: false,
     nextAction:
       "直す作業が人の判断待ちで止まった。作業項目の理由を確かめ、人が直してPRにpushする",
@@ -555,7 +555,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   rounds_exhausted: {
     temporary: false,
-    notice: "immediate",
     discord: true,
     nextAction: "自動で直す回数の上限に達した。人が直してPRにpushする",
     stopAction:
@@ -563,7 +562,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   not_factory_head: {
     temporary: false,
-    notice: "immediate",
     discord: true,
     nextAction:
       "最後のpushがFactoryのものでないので、自動では直さない。人が直してPRにpushする",
@@ -572,7 +570,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   marker_missing: {
     temporary: true,
-    notice: "prolonged",
     discord: true,
     nextAction:
       "Factoryのクローンのfactory-fixスキルに、CIの失敗を直す節が無い。スキルがクローンに入るまで待つ",
@@ -581,14 +578,12 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   main_ci_failed: {
     temporary: true,
-    notice: "prolonged",
     discord: true,
     nextAction: "mainのCIが失敗している。mainが直るまで待つ",
     stopAction: "mainのCIが失敗しています。mainが直るまで待ってください",
   },
   budget_exceeded: {
     temporary: true,
-    notice: "prolonged",
     discord: true,
     nextAction:
       "1日あたりのClaude利用予算に達している。翌日まで待つか、daily_budget_usdを引き上げる",
@@ -597,7 +592,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   not_reviewed: {
     temporary: true,
-    notice: "prolonged",
     discord: true,
     nextAction: "今のheadの自動レビューが無い。レビューが付くまで待つ",
     stopAction:
@@ -605,7 +599,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   last_fix_unsettled: {
     temporary: true,
-    notice: "prolonged",
     discord: true,
     nextAction: "直近の直す作業が、まだ終わっていない。終わるまで待つ",
     stopAction:
@@ -613,7 +606,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
   },
   pr_draft_or_auto_merge: {
     temporary: true,
-    notice: "prolonged",
     discord: true,
     nextAction:
       "PRがドラフトか、auto-mergeが有効である。ドラフトを解除し、auto-mergeを無効にする",

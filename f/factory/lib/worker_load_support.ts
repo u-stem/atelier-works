@@ -596,7 +596,7 @@ export type WorkerLoadSummary = {
 };
 
 /**
- * 日次のまとめに載せる前日の負荷の読み取り結果。
+ * 日次のまとめに載せる、集計の対象の日の負荷の読み取り結果。
  * 記録が無かったことと、集計を読めなかったことは、次の操作が違うので分ける。
  */
 export type WorkerLoadReport =
@@ -734,13 +734,13 @@ export function summarizeWorkerLoad(summary: WorkerLoadSummary): string {
     .join("\n");
 }
 
-/** 前日の負荷の読み取り結果を、Discordの欄の文にする。記録が無い場合と読めない場合は、次の操作を添える。 */
+/** その日の負荷の読み取り結果を、Discordの欄の文にする。記録が無い場合と読めない場合は、次の操作を添える。 */
 export function describeWorkerLoad(report: WorkerLoadReport): string {
   switch (report.kind) {
     case "summary":
       return summarizeWorkerLoad(report.summary);
     case "no_record":
-      return "前日の記録なし(sample_worker_loadのスケジュールを確かめる)";
+      return "その日の記録なし(sample_worker_loadのスケジュールを確かめる)";
     case "read_failed":
       return "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)";
   }

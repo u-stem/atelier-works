@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { noticeSeverity } from "../../f/factory/lib/console_support.ts";
 import {
   CONSOLE_JOB_WAIT_SECONDS,
   CONSOLE_WORKER_CHECK_FAILED_NOTICE,
   CONSOLE_WORKER_MISSING_NOTICE,
-  CONSOLE_WORKER_UNKNOWN_LIMIT,
+  CONSOLE_WORKER_UNKNOWN_GRACE_MS,
+  CONSOLE_WORKER_UNKNOWN_SINCE_KEY,
   checkConsoleWorker,
   consoleQueueQuery,
   judgeConsoleQueue,
-  nextUnknownCount,
-  parseUnknownCount,
+  nextUnknownSince,
+  parseUnknownSince,
   watchConsoleWorker,
   watchRunsQuery,
 } from "../../f/factory/lib/console_worker.ts";
@@ -394,54 +394,63 @@ describe("notices", () => {
   });
 });
 
-describe("parseUnknownCount", () => {
-  test("reads a stored count", () => {
-    expect(parseUnknownCount({ console_worker_unknown_count: 3 })).toBe(3);
+describe("parseUnknownSince", () => {
+  test("reads a stored time", () => {
+    expect(
+      parseUnknownSince({ [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: 1000 }),
+    ).toBe(1000);
   });
 
-  test("is zero for null", () => {
-    expect(parseUnknownCount(null)).toBe(0);
+  test("is null for null", () => {
+    expect(parseUnknownSince(null)).toBeNull();
   });
 
-  test("is zero for an empty object", () => {
-    expect(parseUnknownCount({})).toBe(0);
+  test("is null for an empty object", () => {
+    expect(parseUnknownSince({})).toBeNull();
   });
 
-  test("is zero for a negative count", () => {
-    expect(parseUnknownCount({ console_worker_unknown_count: -1 })).toBe(0);
+  test("is null for a negative time", () => {
+    expect(
+      parseUnknownSince({ [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: -1 }),
+    ).toBeNull();
   });
 
-  test("is zero for a non-integer count", () => {
-    expect(parseUnknownCount({ console_worker_unknown_count: 1.5 })).toBe(0);
+  test("is null for a string time", () => {
+    expect(
+      parseUnknownSince({ [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: "1000" }),
+    ).toBeNull();
   });
 
-  test("is zero for a string count", () => {
-    expect(parseUnknownCount({ console_worker_unknown_count: "3" })).toBe(0);
+  test("is null for a non-finite time", () => {
+    expect(
+      parseUnknownSince({ [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: Number.NaN }),
+    ).toBeNull();
+  });
+
+  test("ignores the legacy count key", () => {
+    expect(parseUnknownSince({ console_worker_unknown_count: 5 })).toBeNull();
   });
 });
 
-describe("nextUnknownCount", () => {
-  test("adds one when the check was unknown", () => {
-    expect(nextUnknownCount(2, "unknown")).toBe(3);
+describe("nextUnknownSince", () => {
+  test("starts at now when the check was unknown for the first time", () => {
+    expect(nextUnknownSince(null, "unknown", NOW)).toBe(NOW);
   });
 
-  test("resets to zero when the queue is ok", () => {
-    expect(nextUnknownCount(5, "ok")).toBe(0);
+  test("keeps the first time while the check stays unknown", () => {
+    expect(nextUnknownSince(NOW - 5000, "unknown", NOW)).toBe(NOW - 5000);
   });
 
-  test("resets to zero when the queue is stalled", () => {
-    expect(nextUnknownCount(5, "stalled")).toBe(0);
+  test("restarts at now when the stored time is in the future", () => {
+    expect(nextUnknownSince(NOW + 5000, "unknown", NOW)).toBe(NOW);
   });
 
-  test("covers one hour at the self_update interval", () => {
-    const schedule = readFileSync(
-      new URL("../../f/factory/self_update.schedule.yaml", import.meta.url),
-      "utf8",
-    );
-    const cron = /^schedule: 0 \*\/(\d+) \* \* \* \*$/m.exec(schedule);
-    const minutes = Number(cron?.[1]);
+  test("clears the time when the queue is ok", () => {
+    expect(nextUnknownSince(NOW - 5000, "ok", NOW)).toBeNull();
+  });
 
-    expect(CONSOLE_WORKER_UNKNOWN_LIMIT * minutes).toBe(60);
+  test("clears the time when the queue is stalled", () => {
+    expect(nextUnknownSince(NOW - 5000, "stalled", NOW)).toBeNull();
   });
 });
 
@@ -456,7 +465,7 @@ type Harness = {
 function harness(options: {
   readonly response: () => Promise<unknown>;
   readonly recent?: () => Promise<unknown>;
-  readonly storedCount?: number;
+  readonly storedSinceMs?: number;
   readonly storedState?: unknown;
   readonly noticeInserted?: boolean;
   readonly addNoticeThrows?: boolean;
@@ -490,9 +499,9 @@ function harness(options: {
       getState: async () => {
         if (options.getStateThrows === true) throw new Error("state down");
         if (options.storedState !== undefined) return options.storedState;
-        return options.storedCount === undefined
+        return options.storedSinceMs === undefined
           ? null
-          : { console_worker_unknown_count: options.storedCount };
+          : { [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: options.storedSinceMs };
       },
       setState: async (state) => {
         if (options.setStateThrows === true) throw new Error("state down");
@@ -670,34 +679,34 @@ describe("checkConsoleWorker", () => {
 });
 
 describe("watchConsoleWorker", () => {
-  test("counts an unknown result", async () => {
-    const h = harness({ response: FAILS, storedCount: 2 });
+  test("keeps the first unknown time without rewriting the state", async () => {
+    const h = harness({ response: FAILS, storedSinceMs: NOW - 5000 });
     await watchConsoleWorker(h.deps);
-    expect(h.states).toEqual([{ console_worker_unknown_count: 3 }]);
+    expect(h.states).toEqual([]);
   });
 
-  test("does not raise before the limit", async () => {
+  test("does not raise before the grace period ends", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 2,
+      storedSinceMs: NOW - CONSOLE_WORKER_UNKNOWN_GRACE_MS + 1,
     });
     await watchConsoleWorker(h.deps);
     expect(h.notices).toEqual([]);
   });
 
-  test("raises the check failed notice on the unknown that reaches the limit", async () => {
+  test("raises the check failed notice on the unknown that reaches the grace period", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
+      storedSinceMs: NOW - CONSOLE_WORKER_UNKNOWN_GRACE_MS,
     });
     await watchConsoleWorker(h.deps);
     expect(h.notices).toEqual([CONSOLE_WORKER_CHECK_FAILED_NOTICE]);
   });
 
-  test("raises the check failed notice on the unknown that reaches the limit even when the state cannot be written", async () => {
+  test("raises the check failed notice on the unknown that reaches the grace period even when the state cannot be written", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
+      storedSinceMs: NOW - CONSOLE_WORKER_UNKNOWN_GRACE_MS,
       setStateThrows: true,
     });
     await watchConsoleWorker(h.deps);
@@ -707,7 +716,6 @@ describe("watchConsoleWorker", () => {
   test("warns when the state cannot be written", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
       setStateThrows: true,
     });
     await watchConsoleWorker(h.deps);
@@ -721,7 +729,7 @@ describe("watchConsoleWorker", () => {
   test("sends Discord when the check failed notice is newly inserted", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
+      storedSinceMs: NOW - CONSOLE_WORKER_UNKNOWN_GRACE_MS,
     });
     await watchConsoleWorker(h.deps);
     expect(h.events[0]).toMatchObject({
@@ -733,29 +741,29 @@ describe("watchConsoleWorker", () => {
   test("does not send Discord while the check failed notice is unresolved", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT + 1,
+      storedSinceMs: NOW - CONSOLE_WORKER_UNKNOWN_GRACE_MS - 60000,
       noticeInserted: false,
     });
     await watchConsoleWorker(h.deps);
     expect(h.events).toEqual([]);
   });
 
-  test("resets the count when the check succeeds", async () => {
-    const h = harness({ response: PRESENT, storedCount: 4 });
+  test("clears the time when the check succeeds", async () => {
+    const h = harness({ response: PRESENT, storedSinceMs: NOW - 5000 });
     await watchConsoleWorker(h.deps);
-    expect(h.states).toEqual([{ console_worker_unknown_count: 0 }]);
+    expect(h.states).toEqual([{}]);
   });
 
-  test("does not write the state when the count stays zero", async () => {
+  test("does not write the state when there is no time to clear", async () => {
     const h = harness({ response: PRESENT });
     await watchConsoleWorker(h.deps);
     expect(h.states).toEqual([]);
   });
 
-  test("resets the count when the queue is stalled", async () => {
-    const h = harness({ response: ABSENT, storedCount: 3 });
+  test("clears the time when the queue is stalled", async () => {
+    const h = harness({ response: ABSENT, storedSinceMs: NOW - 5000 });
     await watchConsoleWorker(h.deps);
-    expect(h.states).toEqual([{ console_worker_unknown_count: 0 }]);
+    expect(h.states).toEqual([{}]);
   });
 
   test("still sends the missing notice when the queue is stalled", async () => {
@@ -789,37 +797,70 @@ describe("watchConsoleWorker", () => {
   test("keeps the other keys of the stored state", async () => {
     const h = harness({
       response: FAILS,
-      storedState: { other_key: "kept", console_worker_unknown_count: 2 },
+      storedState: {
+        other_key: "kept",
+        [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: NOW + 1000,
+      },
     });
     await watchConsoleWorker(h.deps);
     expect(h.states).toEqual([
-      { other_key: "kept", console_worker_unknown_count: 3 },
+      { other_key: "kept", [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: NOW },
     ]);
   });
 
-  test("keeps the other keys when the count resets", async () => {
+  test("keeps the other keys when the time clears", async () => {
     const h = harness({
       response: PRESENT,
-      storedState: { other_key: "kept", console_worker_unknown_count: 2 },
+      storedState: {
+        other_key: "kept",
+        [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: NOW - 5000,
+      },
     });
     await watchConsoleWorker(h.deps);
-    expect(h.states).toEqual([
-      { other_key: "kept", console_worker_unknown_count: 0 },
-    ]);
+    expect(h.states).toEqual([{ other_key: "kept" }]);
   });
 
-  test("adds the count to a state that has no count yet", async () => {
+  test("adds the time to a state that has no time yet", async () => {
     const h = harness({ response: FAILS, storedState: { other_key: "kept" } });
     await watchConsoleWorker(h.deps);
     expect(h.states).toEqual([
-      { other_key: "kept", console_worker_unknown_count: 1 },
+      { other_key: "kept", [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: NOW },
     ]);
   });
 
   test("starts a fresh state when the stored state is not an object", async () => {
     const h = harness({ response: FAILS, storedState: "garbage" });
     await watchConsoleWorker(h.deps);
-    expect(h.states).toEqual([{ console_worker_unknown_count: 1 }]);
+    expect(h.states).toEqual([{ [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: NOW }]);
+  });
+
+  test("drops the legacy count key and starts the time from now", async () => {
+    const h = harness({
+      response: FAILS,
+      storedState: { other_key: "kept", console_worker_unknown_count: 29 },
+    });
+    await watchConsoleWorker(h.deps);
+    expect(h.states).toEqual([
+      { other_key: "kept", [CONSOLE_WORKER_UNKNOWN_SINCE_KEY]: NOW },
+    ]);
+  });
+
+  test("does not raise on the legacy count alone", async () => {
+    const h = harness({
+      response: FAILS,
+      storedState: { console_worker_unknown_count: 99 },
+    });
+    await watchConsoleWorker(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("restarts the time when the stored time is in the future", async () => {
+    const h = harness({
+      response: FAILS,
+      storedSinceMs: NOW + CONSOLE_WORKER_UNKNOWN_GRACE_MS,
+    });
+    await watchConsoleWorker(h.deps);
+    expect(h.notices).toEqual([]);
   });
 
   test("returns the check result", async () => {
@@ -830,7 +871,7 @@ describe("watchConsoleWorker", () => {
   test("does not throw when the notice cannot be recorded", async () => {
     const h = harness({
       response: FAILS,
-      storedCount: CONSOLE_WORKER_UNKNOWN_LIMIT - 1,
+      storedSinceMs: NOW - CONSOLE_WORKER_UNKNOWN_GRACE_MS,
       addNoticeThrows: true,
     });
     expect(await watchConsoleWorker(h.deps)).toBe("unknown");

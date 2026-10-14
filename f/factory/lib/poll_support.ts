@@ -4,7 +4,7 @@
 import { isRepoAllowed } from "./config.ts";
 import { ACTIONABLE_WORK_ITEM_STATUSES } from "./console_support.ts";
 import { isViewerBumpBranch } from "./drawio_viewer_bump.ts";
-import { type GhClient, GitHubHttpError, getLabelerLogin } from "./github.ts";
+import { type GhClient, GitHubHttpError, getLabelerActor } from "./github.ts";
 import { isFlowJobId } from "./implement_launch_support.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
@@ -470,21 +470,39 @@ export async function runDeployedShaCheck(
  * トリガーラベルを付けてよい人の決まり。
  * `viewerLogin`はFactoryのPATのアカウントで、取得できなかったときは`null`にする。
  * `allowedLogins`は`config.allowed_labeler_logins`である。
+ * `allowedIds`は`config.allowed_labeler_ids`のキーを小文字にしたもので、
+ * `allowedLogins`のうち数値IDも照合するアカウントを表す。
  */
 export type LabelerPolicy = {
   readonly viewerLogin: string | null;
   readonly allowedLogins: readonly string[];
+  readonly allowedIds: Readonly<Record<string, number>>;
 };
 
 /**
- * `viewerLogin`と設定の`allowed_labeler_logins`から、付与者の決まりを作る。
- * `poll_issues`と`poll_prs`が同じ決まりを使うための組み立てである。
+ * `viewerLogin`と設定の`allowed_labeler_logins`、`allowed_labeler_ids`から、
+ * 付与者の決まりを作る。`poll_issues`と`poll_prs`が同じ決まりを使うための組み立てである。
  */
 export function labelerPolicyFor(
   viewerLogin: string | null,
-  config: Pick<FactoryConfig, "allowed_labeler_logins">,
+  config: Pick<FactoryConfig, "allowed_labeler_logins" | "allowed_labeler_ids">,
 ): LabelerPolicy {
-  return { viewerLogin, allowedLogins: config.allowed_labeler_logins };
+  const allowedIds: Record<string, number> = {};
+  for (const [login, id] of Object.entries(config.allowed_labeler_ids)) {
+    // `__proto__`のキーは、代入では自身のプロパティにならず値が黙って落ちる。
+    // 落ちるとIDなしの扱いになるので、定義で自身のプロパティにする。
+    Object.defineProperty(allowedIds, login.toLowerCase(), {
+      value: id,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return {
+    viewerLogin,
+    allowedLogins: config.allowed_labeler_logins,
+    allowedIds,
+  };
 }
 
 /**
@@ -492,6 +510,11 @@ export function labelerPolicyFor(
  * PRの作成者が許可されたアカウントかの判定にも使う。
  * 許可するのは、`viewerLogin`のアカウントと、`allowedLogins`に含まれるログイン名である。
  * 大文字小文字は区別しない。
+ * `allowedLogins`経由で許可されるログイン名が`allowedIds`に載っているときは、
+ * `actorId`が載っているIDと一致する場合に限って許可する。
+ * 改名の後に古い名前を別人が取得しても、IDが違うので許可されない。
+ * `actorId`が`null`か省略のときは、IDを確かめられないので拒否する。
+ * `viewerLogin`の一致と、`allowedIds`に載っていないログイン名は、名前だけで判定する。
  * 付与者を特定できないとき(`actorLogin`が`null`)と、`viewerLogin`が`null`のときは、
  * 判定できないものとして拒否する。
  * ラベルを付けられる人はGitHub上で書き込み権限を持つ人に限られず、公開リポジトリでは
@@ -500,11 +523,17 @@ export function labelerPolicyFor(
 export function isAllowedLabeler(
   actorLogin: string | null,
   policy: LabelerPolicy,
+  actorId?: number | null,
 ): boolean {
   if (actorLogin === null || policy.viewerLogin === null) return false;
   const actor = actorLogin.toLowerCase();
   if (actor === policy.viewerLogin.toLowerCase()) return true;
-  return policy.allowedLogins.some((login) => login.toLowerCase() === actor);
+  if (!policy.allowedLogins.some((login) => login.toLowerCase() === actor)) {
+    return false;
+  }
+  // `constructor`などの継承したプロパティを、載せたIDと取り違えない。
+  if (!Object.hasOwn(policy.allowedIds, actor)) return true;
+  return actorId === policy.allowedIds[actor];
 }
 
 /**
@@ -523,14 +552,15 @@ export async function confirmLabeler(
   label: string,
   policy: LabelerPolicy,
 ): Promise<boolean> {
-  const login = await getLabelerLogin(
+  const actor = await getLabelerActor(
     client,
     target.owner,
     target.repo,
     target.number,
     label,
   );
-  return isAllowedLabeler(login, policy);
+  if (actor === null) return false;
+  return isAllowedLabeler(actor.login, policy, actor.databaseId);
 }
 
 /**
@@ -630,6 +660,11 @@ export type IssueCandidate = {
    */
   readonly labelerLogin: string | null;
   /**
+   * 付与者の数値ID。取得できなかったときは`null`、省略は`null`と同じ扱い。
+   * `allowed_labeler_ids`に載っているアカウントの照合に使う。
+   */
+  readonly labelerId?: number | null;
+  /**
    * この(owner, repo, number)に、終了していない`work_items`の行がすでにあるか。
    * トリガーラベルは着手時に外すが、同じIssueに重ねて着手しないよう念のため確かめる。
    * 判断の根拠は`listActive`だけである(作業中ラベルで検索から除く仕組みは無い)。
@@ -650,7 +685,9 @@ export function decideIssueActions(
     if (candidate.hasActiveWorkItem) {
       return { action: "skip_active", candidate };
     }
-    if (!isAllowedLabeler(candidate.labelerLogin, policy)) {
+    if (
+      !isAllowedLabeler(candidate.labelerLogin, policy, candidate.labelerId)
+    ) {
       return { action: "skip_labeler", candidate };
     }
     return { action: "claim", candidate };
@@ -680,6 +717,11 @@ export type PrCandidate = {
    */
   readonly authorLogin: string | null;
   /**
+   * PRの作成者の数値ID。取得できなかったときは`null`、省略は`null`と同じ扱い。
+   * `allowed_labeler_ids`に載っているアカウントの照合に使う。
+   */
+  readonly authorId?: number | null;
+  /**
    * PRのheadが、baseと同じリポジトリにあるか。
    * forkのPRと、headのリポジトリを取得できないPRは`false`。
    * レビューは、`false`のPRでは始めない。forkの内容は第三者が書いたもので、
@@ -700,6 +742,10 @@ export type PrCandidate = {
   readonly reviewLabelerLogin: string | null;
   /** `fix_label`の付与者。意味は`reviewLabelerLogin`と同じ。 */
   readonly fixLabelerLogin: string | null;
+  /** `review_label`の付与者の数値ID。意味は`labelerId`と同じ。 */
+  readonly reviewLabelerId?: number | null;
+  /** `fix_label`の付与者の数値ID。意味は`labelerId`と同じ。 */
+  readonly fixLabelerId?: number | null;
   /** このPRに、終了していない`pr_review`の作業項目がすでにあるか。 */
   readonly hasActiveReviewingItem: boolean;
   /**
@@ -779,11 +825,21 @@ export function decidePrActions(
     const hasReviewLabel = hasLabel(candidate.labels, reviewLabel);
     const hasFixLabel = hasLabel(candidate.labels, fixLabel);
     const reviewLabelAllowed =
-      hasReviewLabel && isAllowedLabeler(candidate.reviewLabelerLogin, policy);
+      hasReviewLabel &&
+      isAllowedLabeler(
+        candidate.reviewLabelerLogin,
+        policy,
+        candidate.reviewLabelerId,
+      );
     const fixLabelAllowed =
-      hasFixLabel && isAllowedLabeler(candidate.fixLabelerLogin, policy);
+      hasFixLabel &&
+      isAllowedLabeler(
+        candidate.fixLabelerLogin,
+        policy,
+        candidate.fixLabelerId,
+      );
     const mayDetect =
-      isAllowedLabeler(candidate.authorLogin, policy) &&
+      isAllowedLabeler(candidate.authorLogin, policy, candidate.authorId) &&
       (!hasReviewLabel || reviewLabelAllowed) &&
       (!hasFixLabel || fixLabelAllowed);
 

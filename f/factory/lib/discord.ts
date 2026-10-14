@@ -197,12 +197,12 @@ export type NotifyEvent =
       approved_count: number;
       rejected_count: number;
       /**
-       * 前日の`cleanup_db.ts`の実行結果。その日の実行記録が無いとき
+       * 集計の対象の日の`cleanup_db.ts`の実行結果。その日の実行記録が無いとき
        * (立ち上げ直後でまだ一度も動いていないときなど)は`null`。
        */
       cleanup: CleanupCounts | null;
       /**
-       * 前日のdefaultのworkerの負荷。集計、その日の記録が無いこと、
+       * 集計の対象の日のdefaultのworkerの負荷。集計、その日の記録が無いこと、
        * 集計を読めなかったことのどれかを表す。
        */
       worker_load: WorkerLoadReport;
@@ -488,7 +488,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
             name: "DB掃除",
             value:
               event.cleanup === null
-                ? "前日の掃除記録なし"
+                ? "その日の掃除記録なし"
                 : summarizeCleanup(event.cleanup),
           },
           {

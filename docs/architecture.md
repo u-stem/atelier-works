@@ -313,14 +313,14 @@ Consoleの一覧と集計は次のviewを読む。
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
-| notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。 |
+| notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。 |
 | poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
 | sample_worker_load | `30 */2 * * * *` | `f/factory/sample_worker_load` | 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。workerの並列数やポーリングの間隔を見直す根拠にします。 |
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 | watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
-| watch_pr_ci | `0 */5 * * * *` | `f/factory/watch_pr_ci` | 5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。設定で有効にしたときは、失敗を直す作業項目も起動します。PRには書き込まず、ログも読みません。 |
+| watch_pr_ci | `0 */5 * * * *` | `f/factory/watch_pr_ci` | 5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。設定で有効にしたときは、失敗を直す作業項目も起動し、自動で直す対象の失敗は直せるかが決まってから通知します。PRには書き込まず、ログも読みません。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -333,7 +333,7 @@ cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Toky
 | `cleanup_workspaces` | 期限を過ぎたworktree(`req-<N>`、実装ブランチのworktree、`review-*`、pr_fixのgtrのworktree)、worktreeが無くなったプロセスのロックファイル、孤児になったheadless Claudeのプロセス、終了時に消されなかったジョブごとの一時ディレクトリ。dependabotの作業ツリー(`dependabot-<PR番号>-<sha7>`)は期限を待たず、終端でないdependabotの作業項目が使っていなければ消す。信頼していない依存を入れた作業ツリーで、処理し直すときは準備のステップが作り直すためである。生き残りのプロセスが使っているworktreeは消さず、noticeを残す。ディスクの使用量も記録する |
 | `console_fetch_watch` | Consoleの取り込みが共有ボリュームに書く状態(`status.json`)。原因を最初に見た時刻をWindmillのstateに残し、一時的な失敗が続いた長さを測る。重複は通知の側で防ぐ |
 | `sample_worker_load` | defaultのworkerの枠の占有、queueの待ち、コンテナのcgroupのメモリ。読めない値は空のまま記録し、例外は投げない。完全には記録できない回をWindmillのstateに数え、続いたときだけnoticeにする |
-| `notify_daily_summary` | 前日のコスト、件数、失敗、DBの掃除の件数、defaultのworkerの負荷の集計。負荷は`worker_samples`を1回のクエリで集計し、読めなくても他の項目は通知する |
+| `notify_daily_summary` | 集計の対象の日のコスト、件数、失敗、DBの掃除の件数、defaultのworkerの負荷の集計。負荷は`worker_samples`を1回のクエリで集計し、読めなくても他の項目は通知する。最後に出した日をWindmillのstateに残し、飛んだ日は古い順に追い付いて出す |
 
 複数のインスタンスを同時に動かすときの排他は、GitHub側のclaimで取る。
 Issueはassigneeを追加してからトリガーラベルを外し、外す要求に成功したインスタンスが受け持つ。
@@ -416,6 +416,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/self_update_pull_requests` | script | [LIB] 反映に含まれるPRの解析 |
 | `f/factory/lib/intake_refresh` | script | [LIB] 取り込み内容の更新と記録 |
 | `f/factory/lib/pr_ci_fix_claim` | script | [LIB] 失敗した行を直してよいかの判断 |
+| `f/factory/lib/pr_ci_notify` | script | [LIB] 失敗の通知を出す時機の判断 |
 | `f/factory/lib/pr_ci_fix_recovery` | script | [LIB] 失敗を直した行の回復 |
 | `f/factory/lib/implement_finish_support` | script | [LIB] 実装フローの完了処理の判定 |
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
@@ -559,7 +560,8 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 これらはホスト側のcheckoutをpullしたうえで、`mise run up`で起動したときに反映される。
 `mise run up`は終わりに、ホストのcheckoutのHEADをworkerの共有ボリュームへ書く。
 `self_update`はこのHEADを毎回読み、通知の版を含むか、ホスト側の作業が要るパスの内容が通知の版と同じなら、通知を解決する。
-通知の解決の後に、毎回`auto_retry_stale_image`を別のジョブで起動する。
+通知の解決の後に、通知を解決した回と、再開できる候補が残っている回だけ、`auto_retry_stale_image`を別のジョブで起動する。
+候補が無い回に起動しないのは、何もしないジョブが2分ごとにジョブ履歴とqueueを埋めるためである。
 このscriptが、イメージが古くて止まった実装とPR修正を再開する([実装フローの仕様](internals/implement.md)の「イメージが古くて止まったとき」)。
 CIの失敗を直す回は再開しない。
 反映した時点でそうなっていれば、通知を出さない。
@@ -586,7 +588,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
 `job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3000秒は切り詰められない。
 
-3000秒は、全部が最悪のときの長さ2906.2秒に余裕を足した値である。
+3000秒は、全部が最悪のときの長さ2936.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -596,7 +598,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | git | 11 | 60秒 | 13秒 | 803秒 |
 | ホストの印を確かめるローカルのgit | 9 | 10秒 | 13秒 | 207秒 |
 | `wmill sync push`、`wmill datatable migrate up` | 2 | 300秒 | 13秒 | 626秒 |
-| 区切った呼び出し | 24 | 30秒 | なし | 720秒 |
+| 区切った呼び出し | 25 | 30秒 | なし | 750秒 |
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 
@@ -607,14 +609,14 @@ PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒
 どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
 ローカルのgitは、オブジェクトを参照するだけで、ネットワークとワークツリーに触れないので、上限を10秒にする。
 `mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
-区切った呼び出しの24回は、設定の取得が1回、リポジトリIDの照合が3回、更新が8回、最後の確認が4回、ホスト側の作業の通知が8回に分かれる。
+区切った呼び出しの25回は、設定の取得が1回、リポジトリIDの照合が3回、更新が8回、最後の確認が4回、ホスト側の作業の通知が9回に分かれる。
 リポジトリIDの照合の3回は、IDの取得、失敗の記録、noticeの挿入である。
 更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
 残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
 成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので、両方を数える。
 時間切れの後に中断されず残る処理は、この合計に含めない。
 最後の確認では、stateの読みと書き、noticeの挿入、通知先の取得を区切る。
-ホスト側の作業の通知の8回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得、止まった作業項目の再開の起動である。
+ホスト側の作業の通知の9回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得、止まった作業項目の再開の候補の確認、再開の起動である。
 Discordへの通知の2回は、ホスト側の作業の通知と、最後の確認の通知である。
 値を変えるときは、`tests/scripts/self_update_timeout.test.ts`が次の2点を確かめる。
 
@@ -673,7 +675,9 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 対象は、状態が`pr_open`の作業項目が指すPRのうち、開いていて下書きでなく、forkでないものである。人が作ったPRは見ない。
 記録は`pr_ci_checks`に残す。PRとリポジトリへの書き込みと、ログの読み取りはしない。
 設定`pr_ci_fix_enabled`が`true`のときは、失敗したheadを直す作業項目(`pr_fix`のCI回)も起動する。ログを読んで直すのは、起動した作業項目である。
-失敗したheadは要対応の通知とDiscordで知らせ、同じheadの再実行か新しいheadが通ったときと、PRが閉じたときに、通知を自動で解決する。
+失敗したheadは要対応の通知とDiscordで知らせる。自動で直す対象の失敗は、直せるかが決まってから知らせる。
+同じheadの再実行か新しいheadが通ったときと、PRが閉じたときに、通知を自動で解決する。
+1回の実行は、発見、回復、判定、起動、保留した失敗の通知の順に進む。監視を無効にしたときは、回復と保留した失敗の通知だけが動く。
 GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
 判定の順序、通知、自動解決、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md)に書く。
 
