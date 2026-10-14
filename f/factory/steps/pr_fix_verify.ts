@@ -3,17 +3,52 @@
 // 検査コマンドで確かめる。
 
 import * as wmill from "windmill-client@1.817.0";
+import { readFile } from "node:fs/promises";
+import {
+  type CheckCommandResult,
+  runAllowedCheckCommands,
+} from "../lib/check_runner.ts";
+import {
+  CheckEnvironmentError,
+  checkSandboxFromEnv,
+  kernelWarningText,
+} from "../lib/check_sandbox.ts";
+import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
+import {
+  buildCiGatherDeps,
+  CI_FIX_ALLOWED_TOOLS,
+  CI_FIX_TOOLS,
+  CI_ROUND_REPLIES_REASON,
+  type CiFixApplyResult,
+  ciClaudeFailureText,
+  ciTextScanner,
+  gatherCiFailureInput,
+  guardCiRoundReasons,
+  inspectCiFixChanges,
+  localCheckJobs,
+  removeIgnoredFilesIfPointerIntact,
+  requireCiRoundHeadSha,
+  runCiFixApply,
+} from "../lib/ci_fix_round.ts";
 import {
   buildSystemPrompt,
   type DailyBudgetStatus,
   dailyBudgetStatus,
+  type RunClaudeFailureReason,
   recordClaudeRuns,
   runClaude,
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
-import { addNotice, latestDraft, recordAgentRun } from "../lib/db.ts";
-import { type GhClient, getPr } from "../lib/github.ts";
+import {
+  addNoticeUnlessUnresolved,
+  countPrFixFailures,
+  latestDraft,
+  recordAgentRun,
+} from "../lib/db.ts";
+import { type GhClient, getPr, getPrFiles } from "../lib/github.ts";
+import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { escapeReasonSeparator, logger } from "../lib/log.ts";
+import { prFixRetryModel } from "../lib/model_policy.ts";
 import {
   lockJobIdFromEnv,
   withWorktreeProcessLock,
@@ -23,27 +58,32 @@ import { type CheckFailure, FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
+  type CommandRunner,
+  removeIgnoredFiles,
   runCommand,
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
 import {
-  type CheckCommandResult,
   type CollectedComment,
   type CollectedReview,
   claudeBlockedReason,
   type FixClaudeOutput,
   type ForbiddenChangeResult,
   inspectUncommittedChanges,
+  isCiFixClaudeOutput,
   isFixClaudeOutput,
   localHeadStopReason,
   PR_HEAD_NOT_RECORDED_REASON,
   recordedGitPointerStopReason,
-  runAllowedCheckCommands,
   WORKTREE_GIT_POINTER_NOT_RECORDED_REASON,
 } from "./pr_workflow_support.ts";
 
 export type PrFixVerifyResult = {
-  readonly outcome: FixOutcome;
+  /**
+   * `guard_blocked`は、workerが検査の前提を満たさず検査を実行できなかったときだけ返す。
+   * 完了のステップが修正のラウンドを記録せずに`blocked`にするので、モデルの失敗に数えない。
+   */
+  readonly outcome: FixOutcome | "guard_blocked";
   readonly reason: string | null;
   readonly summary: string;
   readonly replies: FixReply[];
@@ -55,14 +95,50 @@ export type PrFixVerifyResult = {
 export type PrFixRetryResult =
   | {
       readonly outcome: "failure";
-      readonly reason: string;
+      readonly reason: RunClaudeFailureReason;
       readonly detail: string;
     }
   | { readonly outcome: "success"; readonly output: FixClaudeOutput };
 
+/**
+ * CI回の修正の結果(`runCiFixApply`)を、再実行の結果にする。
+ * Claudeを起動せずに止めたときと、出力の検査で止めたときは、理由を持つ`blocked`の出力として返す。
+ * 検証ステップは、`blocked`の出力を理由つきで`blocked`にする。
+ */
+export function ciRetryResult(result: CiFixApplyResult): PrFixRetryResult {
+  if (result.kind === "claude_failure") {
+    // 実行の詳細は、秘密値の検査を通っていないので持たせない。
+    return { outcome: "failure", reason: result.reason, detail: "" };
+  }
+  if (result.kind === "blocked") {
+    return {
+      outcome: "success",
+      output: {
+        outcome: "blocked",
+        summary: "",
+        replies: [],
+        blocked_reason: result.reason,
+        commit_subject: "",
+        commit_body: null,
+      },
+    };
+  }
+  return {
+    outcome: "success",
+    output: {
+      outcome: result.outcome,
+      summary: result.summary,
+      replies: [],
+      blocked_reason: result.reason,
+      commit_subject: result.commit_subject ?? "",
+      commit_body: result.commit_body,
+    },
+  };
+}
+
 /** `runPrFixVerify`が使うI/O。テストでは偽物に差し替える。 */
 export type PrFixVerifyDeps = {
-  /** 検査コマンドをサンドボックスなしで実行することをnoticeに記録する。 */
+  /** 検査コマンドをコンテナの分離なしで実行することをnoticeに記録する。 */
   readonly announceChecks: () => Promise<void>;
   /** worktreeの`.git`を`expected`と比べ、違えば`WorktreeGitPointerModifiedError`を投げる。 */
   readonly assertGitPointer: (expected: string) => Promise<void>;
@@ -81,6 +157,10 @@ export type PrFixVerifyDeps = {
     failures: readonly CheckFailure[],
   ) => Promise<PrFixRetryResult>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
+  /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
+  readonly reportCheckImageStale: (
+    error: CheckEnvironmentError,
+  ) => Promise<void>;
 };
 
 export type PrFixVerifyInput = {
@@ -91,6 +171,11 @@ export type PrFixVerifyInput = {
   /** PRのheadブランチ。準備ステップの結果に無ければnullか空文字列。 */
   readonly branch: string | null;
   readonly hasCheckCommands: boolean;
+  /**
+   * CIの失敗を直す回か。真のときは、返信を持つ結果を受け付けない。
+   * 返信する指摘が無く、ログに仕込まれた指示で返信が投稿されるのを防ぐため。
+   */
+  readonly ciRound?: boolean;
   /** `pr_fix_apply.ts`が"done"で返した結果。 */
   readonly apply: {
     readonly summary: string;
@@ -113,7 +198,11 @@ export type PrFixVerifyInput = {
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
  * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
+ * workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
+ * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
+ * 準備の関門と同じく修正のラウンドを記録させず、モデルの失敗に数えないためである。
  * `assertGitPointer`が`WorktreeGitPointerModifiedError`以外を投げたときは、そのまま投げる。
+ * CIの失敗を直す回(`input.ciRound`)は、返信を持つ結果(修正の結果と再実行の結果)を、検査より前に"blocked"にする。
  */
 export async function runPrFixVerify(
   deps: PrFixVerifyDeps,
@@ -153,6 +242,10 @@ export async function runPrFixVerify(
       input.apply.replies,
     );
   }
+  const ciRound = input.ciRound === true;
+  if (ciRound && input.apply.replies.length > 0) {
+    return blocked(CI_ROUND_REPLIES_REASON, input.apply.summary, []);
+  }
   // 検査コマンドがあるときは、準備ステップの記録がそろっていることを確かめた後、最初の検査より前に告知する。
   if (input.hasCheckCommands) await deps.announceChecks();
   /** `.git`とHEADを照合してから変更を調べ、止める理由を返す。問題が無ければnull。 */
@@ -185,7 +278,33 @@ export async function runPrFixVerify(
   };
   if (!input.hasCheckCommands) return applyDone;
 
-  const firstChecks = await deps.runChecks();
+  /** 検査コマンドを実行する。workerが前提を満たさず実行できなければ、知らせてからその例外を返す。 */
+  const runChecks = async (): Promise<
+    readonly CheckCommandResult[] | CheckEnvironmentError
+  > => {
+    try {
+      return await deps.runChecks();
+    } catch (error) {
+      if (!(error instanceof CheckEnvironmentError)) throw error;
+      await deps.reportCheckImageStale(error);
+      return error;
+    }
+  };
+
+  /** workerが前提を満たさず検査を実行できなかったときの結果。 */
+  const staleImage = (
+    error: CheckEnvironmentError,
+    summary: string,
+    replies: FixReply[],
+  ): PrFixVerifyResult => ({
+    ...blocked(error.message, summary, replies),
+    outcome: "guard_blocked",
+  });
+
+  const firstChecks = await runChecks();
+  if (firstChecks instanceof CheckEnvironmentError) {
+    return staleImage(firstChecks, input.apply.summary, input.apply.replies);
+  }
   if (firstChecks.every((result) => result.ok)) {
     const afterChecksReason = await inspect();
     return afterChecksReason === null
@@ -240,12 +359,17 @@ export async function runPrFixVerify(
       );
     }
     return blocked(
-      `check-fix retry pass failed (${retry.reason}): ${retry.detail}`,
+      ciRound
+        ? ciClaudeFailureText(retry.reason)
+        : `check-fix retry pass failed (${retry.reason}): ${retry.detail}`,
       input.apply.summary,
       input.apply.replies,
     );
   }
   const output = retry.output;
+  if (ciRound && output.replies.length > 0) {
+    return blocked(CI_ROUND_REPLIES_REASON, output.summary, []);
+  }
   if (output.outcome !== "done") {
     return {
       outcome: output.outcome,
@@ -261,7 +385,10 @@ export async function runPrFixVerify(
   if (afterRetryReason !== null) {
     return blocked(afterRetryReason, output.summary, output.replies);
   }
-  const secondChecks = await deps.runChecks();
+  const secondChecks = await runChecks();
+  if (secondChecks instanceof CheckEnvironmentError) {
+    return staleImage(secondChecks, output.summary, output.replies);
+  }
   if (!secondChecks.every((result) => result.ok)) {
     return blocked(
       "repository checks still failing after one automated fix retry",
@@ -292,6 +419,8 @@ export async function runPrFixVerify(
  * Claudeがcommitを作らないと判断したため検証するものが無く、そのまま返す。
  * `worktree_git_pointer`・`head_sha`・`branch`は`pr_fix_prepare.ts`が記録した`.git`の中身、PRのheadのsha、headブランチ。
  * 準備ステップの結果にこれらが無いときは渡らないので、既定をnullにして"blocked"で止める。
+ * CIの失敗を直す回(`ci_check_id`が非NULL)は、通常の回の検査に加えて、変更を許可リスト方式で検査する(`inspectCiFixChanges`)。
+ * 検査コマンドの後は、無視されたファイルを消す。再実行は、CIのログの抜粋を取り直して渡す(`runCiRetry`)。
  */
 export async function main(
   work_item_id: number,
@@ -313,6 +442,7 @@ export async function main(
   worktree_git_pointer: string | null = null,
   head_sha: string | null = null,
   branch: string | null = null,
+  ci_check_id: number | null = null,
 ): Promise<PrFixVerifyResult> {
   const lockedRun = withWorktreeProcessLock(
     runCommand,
@@ -338,37 +468,102 @@ export async function main(
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
+  const ciRound = ci_check_id !== null;
+  // CI回の変更の検査に使う、PRがすでに変更したファイルのパス。最初に要るときに1回だけ読む。
+  let prChangedPathsRead: Promise<string[]> | null = null;
+  const loadPrChangedPaths = (): Promise<string[]> => {
+    prChangedPathsRead ??= (async () => {
+      const ghToken = await wmill.getVariable("f/factory/github_token");
+      const client: GhClient = { run: runCommand, ghToken };
+      return (await getPrFiles(client, owner, repo, pr_number)).map(
+        (file) => file.filename,
+      );
+    })();
+    return prChangedPathsRead;
+  };
 
   const timeoutMs = config.claude_timeout_sec * 1000;
+  // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  // 枠を片付けられずに飛ばしたときと、読めない枠の記録を退避したときは、検査を止めずにnoticeで知らせる。
+  // 同じ状況が続いても検査のたびに積み上がらないよう、同じ本文の未解決のnoticeがあれば足さない。
+  const checkSandbox =
+    config.allowed_check_commands.length > 0
+      ? checkSandboxFromEnv(process.env, async (notice) => {
+          await addNoticeUnlessUnresolved(notice);
+        })
+      : null;
 
   return await runPrFixVerify(
     {
       // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
-      // worker内でサンドボックスなしにroot権限で実行する。
+      // workerのコンテナの中で、コンテナの分離なしに実行する。
       // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
-      // 1日1回ではなく実行のたびにnoticeを記録する。
+      // 本文は件数と対象のPRと作業項目で決まるので、作業項目ごとに記録する。
+      // 同じ本文の未解決のnoticeは重ねず、1日を過ぎていれば作成時刻を更新して、一覧に出し続ける。
       announceChecks: async () => {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: "unsandboxed_check_commands",
-          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、サンドボックス分離なしでroot権限により${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
         });
       },
       assertGitPointer: (expected) =>
         assertWorktreeGitPointer(worktree_dir, expected),
       checkHead: (expectedSha, headBranch) =>
         localHeadStopReason(runCommand, worktree_dir, expectedSha, headBranch),
-      inspectChanges: () =>
-        inspectUncommittedChanges(runCommand, worktree_dir, {
-          maxChangedFiles: config.max_fix_changed_files,
-          maxDiffLines: config.max_fix_diff_lines,
-        }),
-      runChecks: () =>
-        runAllowedCheckCommands(
+      inspectChanges: async () => {
+        const inspected = await inspectUncommittedChanges(
+          runCommand,
+          worktree_dir,
+          {
+            maxChangedFiles: config.max_fix_changed_files,
+            maxDiffLines: config.max_fix_diff_lines,
+          },
+        );
+        if (!ciRound) return inspected;
+        // CI回は、通常の回の検査に加えて、許可リスト方式で変更を検査する。
+        // 無視されたファイルも対象にする。検査コマンドの動き方を変えうるためである。
+        // 理由に入るパスは秘密値の検査を通っていないので、外へ出す前に検査する。
+        const reasons = inspected.blocked
+          ? inspected.reasons
+          : await inspectCiFixChanges(
+              runCommand,
+              worktree_dir,
+              requireCiRoundHeadSha(head_sha),
+              await loadPrChangedPaths(),
+              { source: "worktree" },
+            );
+        const safeReasons = await guardCiRoundReasons(
+          reasons,
+          ciTextScanner(runCommand),
+        );
+        return { blocked: safeReasons.length > 0, reasons: safeReasons };
+      },
+      runChecks: async () => {
+        const results = await runAllowedCheckCommands(
           lockedRun,
           worktree_dir,
           config.allowed_check_commands,
           timeoutMs,
-        ),
+          undefined,
+          undefined,
+          checkSandbox,
+        );
+        // 検査コマンドの生成物(無視されたファイル)を捨てる。残すと、次の検査で、
+        // Claudeが書いた無視されたファイルと見分けられない。
+        if (ciRound && worktree_git_pointer !== null) {
+          const pointer = worktree_git_pointer;
+          await removeIgnoredFilesIfPointerIntact({
+            assertPointer: () =>
+              assertWorktreeGitPointer(worktree_dir, pointer),
+            remove: () =>
+              removeIgnoredFiles({
+                run: runCommand,
+                worktreeDir: worktree_dir,
+              }),
+          });
+        }
+        return results;
+      },
       budgetStatus: () => dailyBudgetStatus(config),
       runRetry: async (checkFailures) => {
         const ghToken = await wmill.getVariable("f/factory/github_token");
@@ -376,6 +571,26 @@ export async function main(
           "f/factory/claude_oauth_token",
         );
         const client: GhClient = { run: runCommand, ghToken };
+        if (ciRound) {
+          return ciRetryResult(
+            await runCiRetry({
+              client,
+              oauthToken,
+              config,
+              checkFailures,
+              workItemId: work_item_id,
+              owner,
+              repo,
+              prNumber: pr_number,
+              headSha: requireCiRoundHeadSha(head_sha),
+              worktreeDir: worktree_dir,
+              factoryCloneDir: factory_clone_dir,
+              attempt,
+              recordedPointer: worktree_git_pointer,
+              lockedRun,
+            }),
+          );
+        }
         const pr = await getPr(client, owner, repo, pr_number);
         const requirements =
           parent_work_item_id === null
@@ -405,12 +620,13 @@ export async function main(
           factoryCloneDir: factory_clone_dir,
         });
         try {
+          const sonnetFailures = await countPrFixFailures(work_item_id);
           const retryResult = await runClaude({
             run: lockedRun,
             workItemId: work_item_id,
             stage: "pr_fix_verify_retry",
             attempt,
-            model: config.model,
+            model: prFixRetryModel(config, sonnetFailures),
             prompt: retryPrompt,
             appendSystemPromptFile: systemPrompt.path,
             jsonSchema: FIX_SCHEMA,
@@ -445,12 +661,22 @@ export async function main(
         }
       },
       warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
+      reportCheckImageStale: (error) =>
+        recordCheckEnvironmentNotice(
+          {
+            readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+            addNotice: addNoticeUnlessUnresolved,
+            log,
+          },
+          error,
+        ),
     },
     {
       worktreeGitPointer: worktree_git_pointer,
       headSha: head_sha,
       branch,
       hasCheckCommands: config.allowed_check_commands.length > 0,
+      ciRound,
       apply: {
         summary: apply_summary,
         replies: apply_replies,
@@ -459,4 +685,101 @@ export async function main(
       },
     },
   );
+}
+
+type CiRetryInput = {
+  readonly client: GhClient;
+  readonly oauthToken: string;
+  readonly config: Awaited<ReturnType<typeof loadConfig>>;
+  readonly checkFailures: readonly CheckFailure[];
+  readonly workItemId: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly worktreeDir: string;
+  readonly factoryCloneDir: string;
+  readonly attempt: number;
+  readonly recordedPointer: string | null;
+  readonly lockedRun: CommandRunner;
+};
+
+/**
+ * CI回の検査コマンドが失敗した後の、Claudeの再実行。
+ * CIのログの抜粋を取り直し(取得のたびに整形と秘密値の検査を通す)、
+ * ローカルの検査の失敗の出力も、同じ手順で抜粋に加える。
+ * 修正ステップと同じく、Claudeには`Bash`を渡さない。
+ */
+async function runCiRetry(input: CiRetryInput): Promise<CiFixApplyResult> {
+  const { client, owner, repo, headSha, config } = input;
+  const target = { owner, repo, prNumber: input.prNumber, headSha };
+  const gatherDeps = buildCiGatherDeps(client, target, runCommand);
+  return await runCiFixApply({
+    readSkillText: () =>
+      readFile(
+        `${input.factoryCloneDir}/.claude/skills/factory-fix/SKILL.md`,
+        "utf8",
+      ),
+    gather: () =>
+      gatherCiFailureInput(
+        gatherDeps,
+        target,
+        localCheckJobs(input.checkFailures),
+      ),
+    buildPrompt: (ready) =>
+      buildCiFixPrompt({
+        pr: {
+          owner,
+          repo,
+          number: input.prNumber,
+          headSha,
+          runUrl: ready.runUrl,
+        },
+        excerpt: ready.excerpt,
+        prChangedPaths: ready.prChangedPaths,
+      }),
+    startClaude: async (prompt) => {
+      const systemPrompt = await buildSystemPrompt({
+        skillNames: ["factory-fix"],
+        factoryCloneDir: input.factoryCloneDir,
+      });
+      try {
+        const sonnetFailures = await countPrFixFailures(input.workItemId);
+        const run = await runClaude({
+          run: input.lockedRun,
+          workItemId: input.workItemId,
+          stage: "pr_fix_verify_retry",
+          attempt: input.attempt,
+          model: prFixRetryModel(config, sonnetFailures),
+          prompt: prompt.reveal(),
+          appendSystemPromptFile: systemPrompt.path,
+          jsonSchema: CI_FIX_SCHEMA,
+          isStructuredOutput: isCiFixClaudeOutput,
+          tools: CI_FIX_TOOLS,
+          permissionMode: "dontAsk",
+          allowedTools: CI_FIX_ALLOWED_TOOLS,
+          settingSources: ["user"],
+          maxTurns: config.max_turns,
+          maxBudgetUsd: config.max_budget_usd_per_run,
+          cwd: input.worktreeDir,
+          oauthToken: input.oauthToken,
+          timeoutMs: config.claude_timeout_sec * 1000,
+          beforeRetry: () =>
+            input.recordedPointer === null
+              ? Promise.resolve(false)
+              : worktreeGitPointerMatches(
+                  input.worktreeDir,
+                  input.recordedPointer,
+                ),
+        });
+        await recordClaudeRuns(run, recordAgentRun);
+        return run.outcome === "success"
+          ? { kind: "success", output: run.structuredOutput }
+          : { kind: "failure", reason: run.reason };
+      } finally {
+        await systemPrompt.cleanup();
+      }
+    },
+    scan: ciTextScanner(runCommand),
+  });
 }

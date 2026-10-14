@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -29,13 +30,17 @@ import {
   ensureFactoryClone,
   ensureHeadOnBranch,
   ensureRepo,
+  FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT,
+  FIXED_GIT_CONFIG,
   factoryCloneLockPath,
   fetchPrHeadRef,
   formatGitleaksReport,
   type GitleaksConfigDir,
   isCappedOutput,
+  isReviewWorktreeOf,
   type LockFs,
   listWorktrees,
+  localGitEnv,
   mapDiffLineToFile,
   mergeBaseSha,
   OUTPUT_ABANDONED_NOTE,
@@ -72,6 +77,7 @@ import {
   worktreeGitPointerMatches,
   writeTextFile,
 } from "../../f/factory/lib/workspace.ts";
+import { buildReviewWorktreeDir } from "../../f/factory/steps/pr_review_prepare.ts";
 import { createFakeCommandRunner, fail, ok } from "./testSupport.ts";
 
 describe("runCommand", () => {
@@ -93,6 +99,30 @@ describe("runCommand", () => {
   test("kills the process and reports timedOut after the timeout elapses", async () => {
     const result = await runCommand(["sleep", "5"], { timeoutMs: 50 });
     expect(result.timedOut).toBe(true);
+  });
+});
+
+// workerのイメージは`LD_LIBRARY_PATH=.`を持つ。rootの子プロセスに渡ると、cwdのworktreeに検査用のユーザーが置いた
+// 共有ライブラリを読み込むので、子プロセスの環境は渡したものだけになることを確かめる。
+describe("runCommand environment", () => {
+  const saved = process.env.LD_LIBRARY_PATH;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.LD_LIBRARY_PATH;
+    else process.env.LD_LIBRARY_PATH = saved;
+  });
+
+  test("does not pass the runner's LD_LIBRARY_PATH to a child given an environment", async () => {
+    process.env.LD_LIBRARY_PATH = ".";
+    const result = await runCommand(["/usr/bin/env"], {
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(result.stdout).not.toContain("LD_LIBRARY_PATH");
+  });
+
+  test("does not pass the runner's LD_LIBRARY_PATH to a child given no environment", async () => {
+    process.env.LD_LIBRARY_PATH = ".";
+    const result = await runCommand(["/usr/bin/env"]);
+    expect(result.stdout).not.toContain("LD_LIBRARY_PATH");
   });
 });
 
@@ -428,7 +458,7 @@ describe("ensureRepo", () => {
     expect(dashDashIndex).toBeGreaterThan(-1);
   });
 
-  test("resets credential.helper and disables hooks/fsmonitor on every call", async () => {
+  test("disables hooks with core.hooksPath on the fetch call", async () => {
     const fake = createFakeCommandRunner([ok(), ok(), ok()]);
     await ensureRepo({
       run: fake.run,
@@ -537,6 +567,202 @@ describe("ensureRepo", () => {
   });
 });
 
+/** gitのargvにある`-c key=value`の`key=value`を、並んだ順に返す。 */
+function commandLineConfig(argv: readonly string[]): string[] {
+  return argv.flatMap((arg, index) =>
+    arg === "-c" && argv[index + 1] !== undefined
+      ? [argv[index + 1] ?? ""]
+      : [],
+  );
+}
+
+describe("git config isolation", () => {
+  /** `ensureRepo`が、fetch(ネットワーク)と`git config`(ローカル)の順に実行したgitの呼び出しを返す。 */
+  async function fetchAndConfigCalls() {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureRepo({
+      run: fake.run,
+      owner: "acme",
+      repo: "widgets",
+      ghToken: "gh-token",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    return { network: fake.calls[1], local: fake.calls[2] };
+  }
+
+  test("local git does not read the global config", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+  });
+
+  test("local git does not read the system config (GIT_CONFIG_NOSYSTEM)", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  test("local git does not read the system config (GIT_CONFIG_SYSTEM)", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_CONFIG_SYSTEM).toBe("/dev/null");
+  });
+
+  test("local git does not read the system attributes", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_ATTR_NOSYSTEM).toBe("1");
+  });
+
+  test("network git does not read the global config", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+  });
+
+  test("network git does not read the system config", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
+  });
+
+  test("fixes exactly these config keys", () => {
+    expect(FIXED_GIT_CONFIG.map(([key]) => key).sort()).toEqual([
+      "commit.gpgsign",
+      "core.askPass",
+      "core.attributesFile",
+      "core.excludesFile",
+      "core.fsmonitor",
+      "core.hooksPath",
+      "core.symlinks",
+      "credential.helper",
+      "push.gpgSign",
+    ]);
+  });
+
+  test.each([...FIXED_GIT_CONFIG])(
+    "local git fixes %s=%s on the command line",
+    async (key, value) => {
+      const { local } = await fetchAndConfigCalls();
+      expect(commandLineConfig(local?.argv ?? [])).toContain(`${key}=${value}`);
+    },
+  );
+
+  test.each([...FIXED_GIT_CONFIG])(
+    "network git fixes %s=%s on the command line",
+    async (key, value) => {
+      const { network } = await fetchAndConfigCalls();
+      expect(commandLineConfig(network?.argv ?? [])).toContain(
+        `${key}=${value}`,
+      );
+    },
+  );
+
+  test("network git adds the gh credential helper after the fixed empty one", async () => {
+    const { network } = await fetchAndConfigCalls();
+    const config = commandLineConfig(network?.argv ?? []);
+    expect(config.slice(-2)).toEqual([
+      "credential.helper=",
+      "credential.helper=!gh auth git-credential",
+    ]);
+  });
+
+  test("local git allows only https, over protocol.*.allow in the repo config", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test("network git allows only https, so GH_TOKEN never reaches another transport", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test("local git points TMPDIR at the given job directory", () => {
+    const env = localGitEnv("/home/x", "/usr/bin", "/run/factory-tmp/fj-x");
+    expect(env.TMPDIR).toBe("/run/factory-tmp/fj-x");
+  });
+
+  test("local git leaves TMPDIR unset outside a job", () => {
+    const env = localGitEnv("/home/x", "/usr/bin");
+    expect(env.TMPDIR).toBeUndefined();
+  });
+
+  test("keeps the global config off when HOME is unset", async () => {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      const fake = createFakeCommandRunner([ok("abc\n")]);
+      await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
+      expect(fake.calls[0]?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    } finally {
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+    }
+  });
+
+  test("does not pass HOME when HOME is unset", async () => {
+    const savedHome = process.env.HOME;
+    delete process.env.HOME;
+    try {
+      const fake = createFakeCommandRunner([ok("abc\n")]);
+      await resolveDefaultBranchHeadSha(fake.run, "/repo/main");
+      expect(fake.calls[0]?.options?.env).not.toHaveProperty("HOME");
+    } finally {
+      if (savedHome !== undefined) process.env.HOME = savedHome;
+    }
+  });
+});
+
+describe("git config isolation (real git)", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** 一時ディレクトリに空のリポジトリを作る。`HOME`は別の空のディレクトリにする。 */
+  async function initRepo(prefix: string) {
+    const root = mkdtempSync(join(tmpdir(), prefix));
+    roots.push(root);
+    const repo = join(root, "repo");
+    const home = join(root, "home");
+    mkdirSync(repo);
+    mkdirSync(home);
+    const env = { PATH: process.env.PATH ?? "", HOME: root };
+    const init = await runCommand(["git", "init", "-q", repo], { env });
+    expect(init.exitCode).toBe(0);
+    return { root, repo, home };
+  }
+
+  /**
+   * `$HOME/.config/git/ignore`は設定ファイルではないので、`GIT_CONFIG_GLOBAL`では止まらない。
+   * 読まれると、`git clean -fdX`が、リポジトリの`.gitignore`にないファイルを消す。
+   */
+  test("does not read the ignore file under HOME", async () => {
+    const { repo, home } = await initRepo("git-isolation-ignore-");
+    mkdirSync(join(home, ".config", "git"), { recursive: true });
+    writeFileSync(join(home, ".config", "git", "ignore"), "*.cache\n");
+    writeFileSync(join(repo, "work.cache"), "x");
+    await removeIgnoredFiles({ run: runCommand, worktreeDir: repo, home });
+    expect(existsSync(join(repo, "work.cache"))).toBe(true);
+  });
+
+  /**
+   * 検査コマンドが`.git/config`に`protocol.ext.allow=always`と`ext::`のURLを書いても、
+   * `GIT_ALLOW_PROTOCOL`が優先され、コマンドは実行されない。
+   */
+  test("does not run an ext:: remote even if the repo config allows it", async () => {
+    const { root, repo, home } = await initRepo("git-isolation-ext-");
+    const marker = join(root, "marker");
+    const script = join(root, "evil.sh");
+    writeFileSync(script, `#!/bin/sh\ntouch ${marker}\n`);
+    chmodSync(script, 0o755);
+    const config = (args: readonly string[]) =>
+      runCommand(["git", "-C", repo, "config", ...args], {
+        env: { PATH: process.env.PATH ?? "", HOME: root },
+      });
+    await config(["protocol.ext.allow", "always"]);
+    await config(["remote.origin.url", `ext::${script}`]);
+    await fetchPrHeadRef(runCommand, repo, 1, "gh-token", home).catch(
+      () => undefined,
+    );
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
 describe("factoryCloneLockPath", () => {
   test("is the sibling <dir>.lock file, not the worktree helpers' lock", () => {
     // 準備
@@ -598,6 +824,7 @@ describe("ensureFactoryClone", () => {
     const fake = createFakeCommandRunner([
       ok(),
       ok(),
+      ok(),
       ok(`${TRACKING_SHA}\n`),
       ok(),
     ]);
@@ -613,10 +840,10 @@ describe("ensureFactoryClone", () => {
       dir: "/workspaces/factory/atelier-works",
       action: "pulled",
     });
-    expect(fake.calls[0]?.argv).toEqual(
+    expect(fake.calls[1]?.argv).toEqual(
       expect.arrayContaining(["fetch", "origin", "--", "main"]),
     );
-    expect(fake.calls[3]?.argv).toEqual(
+    expect(fake.calls[4]?.argv).toEqual(
       expect.arrayContaining([
         "checkout",
         "-B",
@@ -626,8 +853,9 @@ describe("ensureFactoryClone", () => {
     );
   });
 
-  test("discards local modifications (reset --hard) between fetch and checkout -B", async () => {
+  test("runs FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT git commands when the clone dir already exists", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),
@@ -641,13 +869,33 @@ describe("ensureFactoryClone", () => {
       exists: async () => true,
       lockFs: createInMemoryLockFs(),
     });
-    expect(fake.calls[1]?.argv).toEqual(
+    expect(fake.calls).toHaveLength(FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT);
+  });
+
+  test("discards local modifications (reset --hard) between fetch and checkout -B", async () => {
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[2]?.argv).toEqual(
       expect.arrayContaining(["reset", "--hard"]),
     );
   });
 
   test("checks out -B the *configured* branch even when the existing clone was left on a different one (a prior caller defaulting to main must not stick)", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),
@@ -661,7 +909,7 @@ describe("ensureFactoryClone", () => {
       exists: async () => true,
       lockFs: createInMemoryLockFs(),
     });
-    expect(fake.calls[0]?.argv).toEqual(
+    expect(fake.calls[1]?.argv).toEqual(
       expect.arrayContaining([
         "fetch",
         "origin",
@@ -669,7 +917,7 @@ describe("ensureFactoryClone", () => {
         "feat/factory-foundation",
       ]),
     );
-    expect(fake.calls[3]?.argv).toEqual(
+    expect(fake.calls[4]?.argv).toEqual(
       expect.arrayContaining([
         "checkout",
         "-B",
@@ -679,8 +927,125 @@ describe("ensureFactoryClone", () => {
     );
   });
 
+  test("points origin at the configured repo URL before fetching, so a stale origin is never fetched", async () => {
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(),
+      ok(`${TRACKING_SHA}\n`),
+      ok(),
+    ]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[0]?.argv.slice(-5)).toEqual([
+      "remote",
+      "set-url",
+      "origin",
+      "--",
+      "https://github.com/acme/atelier-works.git",
+    ]);
+  });
+
+  test("does not fetch when pointing origin at the configured URL fails", async () => {
+    const fake = createFakeCommandRunner([fail("No such remote")]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+    }).catch(() => undefined);
+    expect(fake.calls.some((call) => call.argv.includes("fetch"))).toBe(false);
+  });
+
+  test("does not touch origin when it clones", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => false,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls.some((call) => call.argv.includes("set-url"))).toBe(
+      false,
+    );
+  });
+
+  test("runs beforeUpdate while holding the lock", async () => {
+    const lockFs = createInMemoryLockFs();
+    let lockHeld = false;
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => false,
+      lockFs,
+      beforeUpdate: async () => {
+        lockHeld =
+          (await lockFs.read("/workspaces/factory/atelier-works.lock")) !==
+          null;
+      },
+    });
+    expect(lockHeld).toBe(true);
+  });
+
+  test("runs no git command when beforeUpdate throws", async () => {
+    const fake = createFakeCommandRunner([ok(), ok(), ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs: createInMemoryLockFs(),
+      beforeUpdate: () => Promise.reject(new Error("not verified")),
+    }).catch(() => undefined);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("runs no git command on a first clone when beforeUpdate throws", async () => {
+    const fake = createFakeCommandRunner([ok()]);
+    await ensureFactoryClone({
+      run: fake.run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => false,
+      lockFs: createInMemoryLockFs(),
+      beforeUpdate: () => Promise.reject(new Error("not verified")),
+    }).catch(() => undefined);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("releases the lock when beforeUpdate throws", async () => {
+    const lockFs = createInMemoryLockFs();
+    await ensureFactoryClone({
+      run: createFakeCommandRunner([]).run,
+      repoUrl: "https://github.com/acme/atelier-works.git",
+      ghToken: "gh-token",
+      branch: "main",
+      exists: async () => true,
+      lockFs,
+      beforeUpdate: () => Promise.reject(new Error("not verified")),
+    }).catch(() => undefined);
+    expect(await lockFs.read("/workspaces/factory/atelier-works.lock")).toBe(
+      null,
+    );
+  });
+
   test("throws when the fetch fails", async () => {
-    const fake = createFakeCommandRunner([fail("could not fetch")]);
+    const fake = createFakeCommandRunner([ok(), fail("could not fetch")]);
     await expect(
       ensureFactoryClone({
         run: fake.run,
@@ -694,7 +1059,12 @@ describe("ensureFactoryClone", () => {
   });
 
   test("throws without checking out when the tracking ref does not exist", async () => {
-    const fake = createFakeCommandRunner([ok(), ok(), fail("not a valid ref")]);
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(),
+      ok(),
+      fail("not a valid ref"),
+    ]);
     await ensureFactoryClone({
       run: fake.run,
       repoUrl: "https://github.com/acme/atelier-works.git",
@@ -710,6 +1080,7 @@ describe("ensureFactoryClone", () => {
 
   test("throws when the checkout fails", async () => {
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),
@@ -731,6 +1102,7 @@ describe("ensureFactoryClone", () => {
     const lockFs = createInMemoryLockFs();
     let sawLockDuringRun = false;
     const fake = createFakeCommandRunner([
+      ok(),
       ok(),
       ok(),
       ok(`${TRACKING_SHA}\n`),
@@ -1036,18 +1408,29 @@ describe("pruneWorktrees", () => {
 // 再利用の経路で、追跡refの読み取りが返すsha。
 const TRACKING_SHA = "c".repeat(40);
 
-// 実際に採取した`git worktree list --porcelain`の出力。
-// パスは一般的な名前に置き換えた。
-const REAL_WORKTREE_PORCELAIN = [
-  "worktree /tmp/repo",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/main",
-  "",
-  "worktree /tmp/repo-worktrees/contract-smoke-branch",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/contract-smoke-branch",
-  "",
-].join("\n");
+/**
+ * `git worktree list --porcelain -z`の出力を組み立てる。
+ * 各行をNULで終え、各レコードの後にもう1つNULを置く。
+ */
+function porcelainZ(records: readonly (readonly string[])[]): string {
+  return records
+    .map((lines) => `${lines.map((line) => `${line}\0`).join("")}\0`)
+    .join("");
+}
+
+// 実際の`git worktree list --porcelain -z`の出力の形に合わせて組み立てたもの。
+const REAL_WORKTREE_PORCELAIN = porcelainZ([
+  [
+    "worktree /tmp/repo",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/main",
+  ],
+  [
+    "worktree /tmp/repo-worktrees/contract-smoke-branch",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/contract-smoke-branch",
+  ],
+]);
 
 describe("listWorktrees", () => {
   test("parses a real captured `git worktree list --porcelain` sample", async () => {
@@ -1071,16 +1454,101 @@ describe("listWorktrees", () => {
     ]);
   });
 
+  test("asks git for NUL-separated output", async () => {
+    const fake = createFakeCommandRunner([ok(REAL_WORKTREE_PORCELAIN)]);
+    await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(fake.calls[0]?.argv.slice(-4)).toEqual([
+      "worktree",
+      "list",
+      "--porcelain",
+      "-z",
+    ]);
+  });
+
+  test("returns no entries for empty output", async () => {
+    const fake = createFakeCommandRunner([ok("")]);
+    const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(entries).toEqual([]);
+  });
+
+  test("keeps a path that contains a newline as one path", async () => {
+    const path = "/tmp/repo-worktrees/a\nb";
+    const fake = createFakeCommandRunner([
+      ok(porcelainZ([[`worktree ${path}`, "HEAD deadbeef", "detached"]])),
+    ]);
+    const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(entries.map((entry) => entry.path)).toEqual([path]);
+  });
+
+  test("does not read a line inside a path as an attribute", async () => {
+    const path = "/tmp/wt\nbranch refs/heads/victim";
+    const fake = createFakeCommandRunner([
+      ok(porcelainZ([[`worktree ${path}`, "HEAD deadbeef", "detached"]])),
+    ]);
+    const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
+    expect(entries.map((entry) => entry.branch)).toEqual([null]);
+  });
+
+  test("throws when the output ends before the last record is terminated", async () => {
+    const complete = porcelainZ([
+      ["worktree /repo", "HEAD deadbeef", "branch refs/heads/main"],
+    ]);
+    const fake = createFakeCommandRunner([ok(complete.slice(0, -1))]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("throws when the output ends in the middle of an attribute", async () => {
+    const fake = createFakeCommandRunner([
+      ok("worktree /repo\0HEAD deadbeef\0branch refs/hea"),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("throws when the output stops after an attribute with no record end", async () => {
+    const fake = createFakeCommandRunner([
+      ok("worktree /repo\0HEAD deadbeef\0"),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  test("throws when a record has no worktree line", async () => {
+    const fake = createFakeCommandRunner([
+      ok(porcelainZ([["HEAD deadbeef", "branch refs/heads/main"]])),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/unexpected 'git worktree list --porcelain -z' record/);
+  });
+
+  test("throws when the output was abandoned even if it ends at a complete record", async () => {
+    const fake = createFakeCommandRunner([
+      { ...ok(REAL_WORKTREE_PORCELAIN), outputAbandoned: true },
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/output was abandoned/);
+  });
+
+  test("throws when a record is empty", async () => {
+    const fake = createFakeCommandRunner([
+      ok(`${porcelainZ([["worktree /repo", "bare"]])}\0`),
+    ]);
+    await expect(
+      listWorktrees({ run: fake.run, repoDir: "/repo" }),
+    ).rejects.toThrow(/empty record/);
+  });
+
   test("parses bare and detached markers", async () => {
-    const porcelain = [
-      "worktree /repo",
-      "bare",
-      "",
-      "worktree /repo/wt",
-      "HEAD deadbeef",
-      "detached",
-      "",
-    ].join("\n");
+    const porcelain = porcelainZ([
+      ["worktree /repo", "bare"],
+      ["worktree /repo/wt", "HEAD deadbeef", "detached"],
+    ]);
     const fake = createFakeCommandRunner([ok(porcelain)]);
     const entries = await listWorktrees({ run: fake.run, repoDir: "/repo" });
     expect(entries).toEqual([
@@ -1102,21 +1570,101 @@ describe("listWorktrees", () => {
   });
 });
 
-/** 別のworktreeが`contract-smoke-branch`をcheckoutしている`git worktree list --porcelain`の出力。 */
-const BRANCH_IN_ANOTHER_WORKTREE = [
-  "worktree /tmp/repo",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/main",
-  "",
-  `worktree ${REUSED_WT}`,
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/other",
-  "",
-  "worktree /tmp/repo-worktrees/elsewhere",
-  "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-  "branch refs/heads/contract-smoke-branch",
-  "",
-].join("\n");
+describe("listWorktrees (real git)", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** 実際のgitが、改行を含むパスのworktreeを1件として返すことを確かめる。 */
+  test("reads a worktree whose path contains a newline as one entry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "list-worktrees-"));
+    roots.push(root);
+    const repo = join(root, "repo");
+    const home = join(root, "home");
+    const worktree = join(root, "wt\nbranch refs/heads/victim");
+    mkdirSync(repo);
+    mkdirSync(home);
+    const git = async (cwd: string, args: readonly string[]) => {
+      const result = await runCommand(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.invalid",
+          ...args,
+        ],
+        {
+          cwd,
+          env: {
+            PATH: process.env.PATH ?? "",
+            HOME: home,
+            GIT_CONFIG_NOSYSTEM: "1",
+          },
+        },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+    };
+    await git(repo, ["init", "-q", "-b", "main"]);
+    await git(repo, ["commit", "-q", "--allow-empty", "-m", "init"]);
+    await git(repo, ["worktree", "add", "-q", "--detach", worktree]);
+    const entries = await listWorktrees({
+      run: runCommand,
+      repoDir: repo,
+      home,
+    });
+    expect(entries.map((entry) => entry.branch)).toEqual(["main", null]);
+  });
+
+  /**
+   * HOMEのグローバル設定が、gitの実行に効かないことを確かめる。
+   * `safe.bareRepository=explicit`はグローバル設定からだけ読まれ、
+   * 暗黙に見つけたbareリポジトリでのgitを拒否するため、読まれたかどうかが結果に出る。
+   */
+  test("does not read the global config under HOME", async () => {
+    const root = mkdtempSync(join(tmpdir(), "list-worktrees-global-"));
+    roots.push(root);
+    const bare = join(root, "bare.git");
+    const home = join(root, "home");
+    mkdirSync(home);
+    writeFileSync(
+      join(home, ".gitconfig"),
+      "[safe]\n\tbareRepository = explicit\n",
+    );
+    const init = await runCommand(["git", "init", "-q", "--bare", bare], {
+      env: { PATH: process.env.PATH ?? "", HOME: root },
+    });
+    expect(init.exitCode).toBe(0);
+    const entries = await listWorktrees({
+      run: runCommand,
+      repoDir: bare,
+      home,
+    });
+    expect(entries).toHaveLength(1);
+  });
+});
+
+/** 別のworktreeが`contract-smoke-branch`をcheckoutしている`git worktree list --porcelain -z`の出力。 */
+const BRANCH_IN_ANOTHER_WORKTREE = porcelainZ([
+  [
+    "worktree /tmp/repo",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/main",
+  ],
+  [
+    `worktree ${REUSED_WT}`,
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/other",
+  ],
+  [
+    "worktree /tmp/repo-worktrees/elsewhere",
+    "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+    "branch refs/heads/contract-smoke-branch",
+  ],
+]);
 
 /** プロセスが残っていないとみなす(何も止めなかった)`assertProcessesIdle`。 */
 const idle = async (): Promise<boolean> => false;
@@ -1534,10 +2082,10 @@ describe("createGtrWorktree", () => {
       const { fake, created } = reuse(ok("refs/heads/other\n"), switched());
       await created;
       expect({
-        argv: fake.calls[6]?.argv.slice(-3),
+        argv: fake.calls[6]?.argv.slice(-4),
         cwd: fake.calls[6]?.options?.cwd,
       }).toEqual({
-        argv: ["worktree", "list", "--porcelain"],
+        argv: ["worktree", "list", "--porcelain", "-z"],
         cwd: REUSED_WT,
       });
     });
@@ -1769,7 +2317,7 @@ describe("createGtrWorktree", () => {
     ]);
   });
 
-  test("passes core.symlinks=false to git gtr new via GIT_CONFIG_* env vars (gtr's own argv can't carry -c)", async () => {
+  test("passes core.symlinks=false to git gtr new with -c, which reaches gtr's child gits through the environment", async () => {
     const gtrPorcelain =
       "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
     const fake = createFakeCommandRunner([
@@ -1787,10 +2335,31 @@ describe("createGtrWorktree", () => {
       assertProcessesIdle: idle,
       lockFs: createInMemoryLockFs(),
     });
-    const env = fake.calls[2]?.options?.env ?? {};
-    expect(env.GIT_CONFIG_COUNT).toBe("1");
-    expect(env.GIT_CONFIG_KEY_0).toBe("core.symlinks");
-    expect(env.GIT_CONFIG_VALUE_0).toBe("false");
+    const argv = fake.calls[2]?.argv ?? [];
+    expect(argv.slice(0, argv.indexOf("gtr")).join(" ")).toContain(
+      "-c core.symlinks=false",
+    );
+  });
+
+  test("git gtr new does not read the global config either", async () => {
+    const gtrPorcelain =
+      "path\t/tmp/repo-worktrees/new-branch\nbranch\tnew-branch\nhook_status\tnone\n";
+    const fake = createFakeCommandRunner([
+      ok(),
+      ok(""),
+      ok(gtrPorcelain),
+      ok(`${NEW_HEAD_SHA}\n`),
+      ok(`${NEW_HEAD_SHA}\n`), // refs/remotes/origin/<branch>
+    ]);
+    await createGtrWorktree({
+      run: fake.run,
+      repoDir: "/repo",
+      branch: "new-branch",
+      ghToken: "gh-token",
+      assertProcessesIdle: idle,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(fake.calls[2]?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
   });
 
   describe("processes left by an earlier run", () => {
@@ -2388,16 +2957,13 @@ describe("ensureHeadOnBranch (real git)", () => {
 describe("ensureHeadOnBranch (fake git)", () => {
   const DIR = "/tmp/repo-worktrees/target";
   const listing = (...entries: readonly (readonly [string, string])[]) =>
-    entries
-      .map(([path, branch]) =>
-        [
-          `worktree ${path}`,
-          "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-          `branch refs/heads/${branch}`,
-          "",
-        ].join("\n"),
-      )
-      .join("\n");
+    porcelainZ(
+      entries.map(([path, branch]) => [
+        `worktree ${path}`,
+        "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+        `branch refs/heads/${branch}`,
+      ]),
+    );
   const ensureWith = (
     responses: readonly CommandResult[],
     realpathOf: (path: string) => Promise<string>,
@@ -2439,12 +3005,13 @@ describe("ensureHeadOnBranch (fake git)", () => {
   });
 
   const entry = (path: string, ...lines: readonly string[]) =>
-    [
-      `worktree ${path}`,
-      "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
-      ...lines,
-      "",
-    ].join("\n");
+    porcelainZ([
+      [
+        `worktree ${path}`,
+        "HEAD c4c85336fb74d3bc13cca578c870a39583722c58",
+        ...lines,
+      ],
+    ]);
   const switchesWith = (listed: string) =>
     ensureWith(
       [ok("refs/heads/other\n"), ok(listed), ok(), ok("refs/heads/target\n")],
@@ -2459,7 +3026,7 @@ describe("ensureHeadOnBranch (fake git)", () => {
 
   test("does not block on a bare entry in the list", async () => {
     await expect(
-      switchesWith(["worktree /elsewhere/bare", "bare", ""].join("\n")),
+      switchesWith(porcelainZ([["worktree /elsewhere/bare", "bare"]])),
     ).resolves.toBeUndefined();
   });
 
@@ -3899,6 +4466,8 @@ describe("remote ref reads (real git)", () => {
           PATH: process.env.PATH ?? "",
           HOME: home,
           GIT_CONFIG_NOSYSTEM: "1",
+          // モジュールのgitは本番のhttpsだけを許す。テストのoriginはローカルのパスなので、fileも許す。
+          GIT_ALLOW_PROTOCOL: "https:file",
         },
       });
     const git = async (
@@ -4705,6 +5274,8 @@ describe("pushNewBranch (real git)", () => {
           PATH: process.env.PATH ?? "",
           HOME: home,
           GIT_CONFIG_NOSYSTEM: "1",
+          // モジュールのgitは本番のhttpsだけを許す。テストのoriginはローカルのパスなので、fileも許す。
+          GIT_ALLOW_PROTOCOL: "https:file",
         },
       });
     const git = async (
@@ -5922,7 +6493,8 @@ describe("runGitleaksOnWorktree", () => {
   test("diffs the scanned tree against the base sha as text, without drivers or context", async () => {
     const fake = createFakeCommandRunner([ok(), ok(TREE), ok(DIFF), ok("[]")]);
     await scan(fake);
-    expect(fake.calls[2]?.argv.slice(7)).toEqual([
+    const argv = fake.calls[2]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("diff"))).toEqual([
       "diff",
       "--text",
       "--no-ext-diff",
@@ -6236,5 +6808,101 @@ describe("runGitleaksOnWorktree against a real git repository", () => {
         scannedTreeSha: repo.treeSha,
       }),
     ).toEqual([WORKTREE_CHANGED_AFTER_SECRET_SCAN_REASON]);
+  });
+});
+
+describe("isReviewWorktreeOf", () => {
+  const REPO_DIR = "/workspaces/acme/widgets/main";
+
+  test("matches the path buildReviewWorktreeDir creates", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      true,
+    );
+  });
+
+  test("does not match a worktree of another pr", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 421, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a worktree that is not detached", () => {
+    const path = buildReviewWorktreeDir(REPO_DIR, 42, "abc1234");
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: false })).toBe(
+      false,
+    );
+  });
+
+  test("does not match the same name under another directory", () => {
+    const path = "/workspaces/acme/other/review-42-abc1234";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a directory nested below the repo's parent", () => {
+    const path = "/workspaces/acme/widgets/x/review-42-abc1234";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+
+  test("does not match a name whose suffix is not a 7-digit hex sha", () => {
+    const path = "/workspaces/acme/widgets/review-42-abc1234-extra";
+    expect(isReviewWorktreeOf(REPO_DIR, 42, { path, detached: true })).toBe(
+      false,
+    );
+  });
+});
+
+describe("git remote set-url as used by ensureFactoryClone", () => {
+  // フックの中で動くとGIT_DIRなどが入るので、テスト用のリポジトリに漏らさない。
+  // グローバルとシステムのgit設定も読ませない。
+  function cleanGitEnv(): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined && !key.startsWith("GIT_")) {
+        env[key] = value;
+      }
+    }
+    env.GIT_CONFIG_GLOBAL = "/dev/null";
+    env.GIT_CONFIG_NOSYSTEM = "1";
+    return env;
+  }
+
+  /** gitを実行して標準出力を返す。終了コードが0でなければ投げる。 */
+  function git(cwd: string, args: string[]): string {
+    const result = Bun.spawnSync(["git", ...args], {
+      cwd,
+      env: cleanGitEnv(),
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `git ${args.join(" ")} failed: ${result.stderr.toString()}`,
+      );
+    }
+    return result.stdout.toString().trim();
+  }
+
+  test("replaces the origin URL of a real repository", () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-clone-origin-"));
+    try {
+      git(dir, ["init", "-q"]);
+      git(dir, ["remote", "add", "origin", "https://example.com/old/repo.git"]);
+      git(dir, [
+        "remote",
+        "set-url",
+        "origin",
+        "--",
+        "https://example.com/new/repo.git",
+      ]);
+      expect(git(dir, ["config", "--get", "remote.origin.url"])).toBe(
+        "https://example.com/new/repo.git",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

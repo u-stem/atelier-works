@@ -1,9 +1,7 @@
-// `pr_fix_verify.ts`が使う`pr_workflow_support.ts`の、禁止された変更の検出と
-// `allowed_check_commands`の実行のテスト。
+// `pr_fix_verify.ts`が使う`pr_workflow_support.ts`の、禁止された変更の検出のテスト。
 
 import { afterEach, describe, expect, test } from "bun:test";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -16,12 +14,11 @@ import { fixPrompt } from "../../f/factory/lib/prompts.ts";
 import type { RequirementDraft } from "../../f/factory/lib/types.ts";
 import {
   type CommandRunner,
+  FIXED_GIT_CONFIG,
   runCommand,
 } from "../../f/factory/lib/workspace.ts";
-import type { CreateCheckHomeDir } from "../../f/factory/steps/pr_workflow_support.ts";
 import {
   anyPackageJsonScriptsChanged,
-  CHECK_COMMAND_MAX_OUTPUT_BYTES,
   countUntrackedFileLines,
   detectEscapingSymlinks,
   detectForbiddenChanges,
@@ -53,33 +50,13 @@ import {
   parseWcLineCount,
   probeChangedPathsOnDisk,
   resolveSymlinkTarget,
-  runAllowedCheckCommands,
   sumDiffNumstatLines,
 } from "../../f/factory/steps/pr_workflow_support.ts";
-import {
-  createFakeCommandRunner,
-  fail,
-  ok,
-  timeout,
-} from "../lib/testSupport.ts";
+import { createFakeCommandRunner, fail, ok } from "../lib/testSupport.ts";
 
 /** 出力の読み取りを打ち切った結果(別セッションへ抜けたプロセスがパイプを握っていた)。 */
 function abandoned(stdout: string) {
   return { ...ok(stdout), outputAbandoned: true };
-}
-
-function fakeCheckHomeDir(path = "/fake-check-home"): {
-  readonly factory: CreateCheckHomeDir;
-  readonly state: { cleanupCalls: number };
-} {
-  const state = { cleanupCalls: 0 };
-  const factory: CreateCheckHomeDir = async () => ({
-    path,
-    cleanup: async () => {
-      state.cleanupCalls += 1;
-    },
-  });
-  return { factory, state };
 }
 
 describe("parseGitStatusPorcelainZ", () => {
@@ -557,6 +534,16 @@ type FakePathFsOptions = {
   readonly missing?: readonly string[];
 };
 
+/**
+ * gitのargvから、先頭の`git`と`-c key=value`の組を除いた、サブコマンド以降を返す。
+ * 固定する設定が増減しても、サブコマンドとその引数の確認が動くようにするため。
+ */
+function afterGitOptions(argv: readonly string[]): string[] {
+  let index = 1;
+  while (argv[index] === "-c") index += 2;
+  return argv.slice(index);
+}
+
 /** パスごとに、symlink・通常のファイル以外・無いものを返す偽のfs。それ以外は通常のファイルとして返す。 */
 function fakePathFs(
   options: FakePathFsOptions = {},
@@ -748,7 +735,7 @@ describe("inspectUncommittedChanges", () => {
       LIMITS,
       fakePathFs({ links: { "/wt/link": "/dev/zero" } }),
     );
-    expect(calls.map((call) => call.argv.slice(7))).toEqual([
+    expect(calls.map((call) => afterGitOptions(call.argv))).toEqual([
       [
         "status",
         "--porcelain",
@@ -885,7 +872,7 @@ describe("localHeadStopReason", () => {
       ok("refs/heads/fix/x\n"),
     ]);
     await localHeadStopReason(run, "/wt", HEAD, "fix/x");
-    expect(calls.map((call) => call.argv.slice(7))).toEqual([
+    expect(calls.map((call) => afterGitOptions(call.argv))).toEqual([
       ["rev-parse", "--verify", "HEAD"],
       ["symbolic-ref", "-q", "HEAD"],
     ]);
@@ -976,7 +963,7 @@ describe("inspectStagedChanges", () => {
   test("diffs the index against the base sha", async () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
     await inspectStagedChanges(run, "/wt", BASE);
-    expect(calls.map((call) => call.argv.slice(7))).toEqual([
+    expect(calls.map((call) => afterGitOptions(call.argv))).toEqual([
       [
         "diff",
         "--cached",
@@ -1148,14 +1135,7 @@ describe("getDiffNumstat", () => {
   test("runs git diff --numstat -z in the worktree", async () => {
     const { run, calls } = createFakeCommandRunner([ok("")]);
     await getDiffNumstat(run, "/work");
-    expect(calls[0]?.argv).toEqual([
-      "git",
-      "-c",
-      "core.hooksPath=/dev/null",
-      "-c",
-      "core.fsmonitor=false",
-      "-c",
-      "credential.helper=",
+    expect(afterGitOptions(calls[0]?.argv ?? [])).toEqual([
       "diff",
       "--numstat",
       "-z",
@@ -1265,170 +1245,6 @@ describe("evaluateUncommittedDiffSize", () => {
       8,
     );
     expect(reasons).toEqual(["diff line total 9 exceeds max_fix_diff_lines 8"]);
-  });
-});
-
-describe("runAllowedCheckCommands", () => {
-  test("marks a zero-exit command as ok", async () => {
-    const { run } = createFakeCommandRunner([ok("all good")]);
-    const results = await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["mise run check"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    expect(results[0]?.ok).toBe(true);
-  });
-
-  test("marks a non-zero-exit command as not ok", async () => {
-    const { run } = createFakeCommandRunner([fail("boom")]);
-    const results = await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["mise run check"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    expect(results[0]?.ok).toBe(false);
-  });
-
-  test("marks a timed-out command as not ok", async () => {
-    const { run } = createFakeCommandRunner([timeout()]);
-    const results = await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["mise run check"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    expect(results[0]?.timedOut).toBe(true);
-  });
-
-  test("splits a command string into argv", async () => {
-    const { run, calls } = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["mise run check"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    const checkCall = calls.find((call) => call.argv[0] === "mise");
-    expect(checkCall?.argv).toEqual(["mise", "run", "check"]);
-  });
-
-  test("does not carry the caller's inherited env beyond PATH/HOME", async () => {
-    const { run, calls } = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["true"],
-      1000,
-      fakeCheckHomeDir("/fake-check-home").factory,
-      "/usr/bin",
-    );
-    const checkCall = calls[0];
-    expect(checkCall?.options?.env).toEqual({
-      HOME: "/fake-check-home",
-      PATH: "/usr/bin",
-    });
-  });
-
-  test("cleans up the HOME dir after every command finishes", async () => {
-    const { run } = createFakeCommandRunner([ok("")]);
-    const homeDir = fakeCheckHomeDir();
-    await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["true"],
-      1000,
-      homeDir.factory,
-    );
-    expect(homeDir.state.cleanupCalls).toBe(1);
-  });
-
-  test("cleans up the HOME dir even when a command fails", async () => {
-    const { run } = createFakeCommandRunner([fail("boom")]);
-    const homeDir = fakeCheckHomeDir();
-    await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["true"],
-      1000,
-      homeDir.factory,
-    );
-    expect(homeDir.state.cleanupCalls).toBe(1);
-  });
-
-  test("the real default createHomeDir provides a HOME dir that no longer exists after the run", async () => {
-    const { run, calls } = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(run, "/work", ["true"], 1000);
-    const homeUsed = calls[0]?.options?.env?.HOME;
-    expect(homeUsed !== undefined && existsSync(homeUsed)).toBe(false);
-  });
-
-  test("two runs using the real default createHomeDir get different HOME dirs", async () => {
-    const first = createFakeCommandRunner([ok("")]);
-    const second = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(first.run, "/work", ["true"], 1000);
-    await runAllowedCheckCommands(second.run, "/work", ["true"], 1000);
-    const firstHome = first.calls[0]?.options?.env?.HOME;
-    const secondHome = second.calls[0]?.options?.env?.HOME;
-    expect(firstHome).not.toBe(secondHome);
-  });
-
-  test("output carries the whole combined stdout and stderr", async () => {
-    const { run } = createFakeCommandRunner([ok("out-line", "err-line")]);
-    const results = await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["bun test"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    expect(results[0]?.output).toBe("out-line\nerr-line");
-  });
-
-  test("output is masked", async () => {
-    const secret = `sk-ant-${"x".repeat(20)}`;
-    const { run } = createFakeCommandRunner([fail(`leaked ${secret}`)]);
-    const results = await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["bun test"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    expect(results[0]?.output).toBe("leaked ***");
-  });
-
-  test("caps each stream of a check command", async () => {
-    const { run, calls } = createFakeCommandRunner([ok("")]);
-    await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["bun test"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    expect(calls[0]?.options?.maxOutputBytes).toBe(
-      CHECK_COMMAND_MAX_OUTPUT_BYTES,
-    );
-  });
-
-  test("marks a command whose output was abandoned as not ok", async () => {
-    const { run } = createFakeCommandRunner([
-      { ...ok("1 pass"), outputAbandoned: true },
-    ]);
-    const results = await runAllowedCheckCommands(
-      run,
-      "/work",
-      ["bun test"],
-      1000,
-      fakeCheckHomeDir().factory,
-    );
-    expect(results[0]?.ok).toBe(false);
   });
 });
 
@@ -1606,6 +1422,31 @@ describe("listUncommittedChangedPaths", () => {
     expect(detectForbiddenChanges(paths, false).blocked).toBe(true);
   });
 
+  test("runs git without the global config", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+    await listUncommittedChangedPaths(run, "/wt");
+    expect(calls[0]?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+  });
+
+  test("runs git with only https allowed", async () => {
+    const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+    await listUncommittedChangedPaths(run, "/wt");
+    expect(calls[0]?.options?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test.each([...FIXED_GIT_CONFIG])(
+    "runs git with %s=%s fixed on the command line",
+    async (key, value) => {
+      const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
+      await listUncommittedChangedPaths(run, "/wt");
+      const argv = calls[0]?.argv ?? [];
+      const pairs = argv.flatMap((arg, index) =>
+        arg === "-c" ? [argv[index + 1]] : [],
+      );
+      expect(pairs).toContain(`${key}=${value}`);
+    },
+  );
+
   test("runs git without replace objects", async () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
     await listUncommittedChangedPaths(run, "/wt");
@@ -1615,16 +1456,11 @@ describe("listUncommittedChangedPaths", () => {
   test("runs both with -z and the hardening flags in the worktree", async () => {
     const { run, calls } = createFakeCommandRunner([ok(""), ok("")]);
     await listUncommittedChangedPaths(run, "/wt");
-    expect(calls.map((call) => [call.argv, call.options?.cwd])).toEqual([
+    expect(
+      calls.map((call) => [afterGitOptions(call.argv), call.options?.cwd]),
+    ).toEqual([
       [
         [
-          "git",
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "core.fsmonitor=false",
-          "-c",
-          "credential.helper=",
           "status",
           "--porcelain",
           "-z",
@@ -1633,21 +1469,7 @@ describe("listUncommittedChangedPaths", () => {
         ],
         "/wt",
       ],
-      [
-        [
-          "git",
-          "-c",
-          "core.hooksPath=/dev/null",
-          "-c",
-          "core.fsmonitor=false",
-          "-c",
-          "credential.helper=",
-          "diff",
-          "--name-only",
-          "-z",
-        ],
-        "/wt",
-      ],
+      [["diff", "--name-only", "-z"], "/wt"],
     ]);
   });
 

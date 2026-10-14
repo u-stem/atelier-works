@@ -2,13 +2,15 @@
 // 放っておくと行が際限なく増えるため。対象は、`config.retention_work_items_days`を
 // 過ぎた終端状態の作業項目(と、それを`ON DELETE CASCADE`で参照する表の行)と、
 // `config.retention_logs_days`を過ぎた`job_failures`・`deployments`・
-// 解決済みのnoticeで、作業項目とは別々に掃除する。同じ期間を過ぎた未解決の`info`のnoticeは、
-// 削除せず解決済みにする。
+// 解決済みのnotice・判定済みの`main_ci_runs`・`pr_ci_checks`・`worker_samples`で、作業項目とは別々に掃除する。
+// 判定を待つ`main_ci_runs`の行、判定を待つか修正中の`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行は、古くても削除しない。
+// 各PRの最新の`pr_ci_checks`の行は、保持期間の4倍まで残す。
+// 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
 // このファイルは入出力をつなぐだけ。掃除は表ごとに独立しており、
 // 1つの表の削除が失敗してもログと`factory.notices`の行に残して残りを続ける。
-// 各catchの中の`addNotice`は例外を捕まえないので、DBに接続できないときは
+// 各catchの中の`addNoticeUnlessUnresolved`は例外を捕まえないので、DBに接続できないときは
 // その呼び出しも失敗して`main`の外へ伝わる。
 // こうして、接続障害を全件0件の結果として握りつぶさずに表に出す。
 //
@@ -28,12 +30,15 @@ import {
 import { loadConfig } from "./lib/config.ts";
 import { INFO_NOTICE_KINDS } from "./lib/console_support.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   type DeletedWorkItemRef,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
+  deleteMainCiRunsBefore,
+  deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
+  deleteWorkerSamplesBefore,
   insertCleanupRun,
   resolveStaleInfoNoticesBefore,
 } from "./lib/db.ts";
@@ -68,7 +73,7 @@ async function cleanupWorkItems(
     log.error("cleanup_db: failed to delete terminal work items", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `終端work itemの削除に失敗しました: ${message}`,
     });
@@ -101,7 +106,7 @@ async function cleanupDocDirs(
         wiDir,
         error: message,
       });
-      await addNotice({
+      await addNoticeUnlessUnresolved({
         kind: "cleanup_db_failed",
         message: `要件定義ディレクトリの削除に失敗しました(${wiDir}): ${message}`,
       });
@@ -116,7 +121,7 @@ async function cleanupJobFailures(cutoff: Date, log: Logger): Promise<number> {
   } catch (err) {
     const message = errorMessage(err);
     log.error("cleanup_db: failed to delete job_failures", { error: message });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `失敗記録の削除に失敗しました: ${message}`,
     });
@@ -130,9 +135,66 @@ async function cleanupDeployments(cutoff: Date, log: Logger): Promise<number> {
   } catch (err) {
     const message = errorMessage(err);
     log.error("cleanup_db: failed to delete deployments", { error: message });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `デプロイ記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
+/** 判定済みのmainのCIの記録を、最後の更新から保持期間を過ぎたものだけ削除する。判定を待つ行と、各リポジトリの最新の行は消さない。 */
+async function cleanupMainCiRuns(cutoff: Date, log: Logger): Promise<number> {
+  try {
+    return await deleteMainCiRunsBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete main_ci_runs", { error: message });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `mainのCIの記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
+/**
+ * 判定済みのPRのCIの記録を、最後の更新から保持期間を過ぎたものだけ削除する。
+ * 判定を待つ行と修正中の行は消さない。各PRの最新の行は、保持期間の4倍を過ぎるまで消さない。
+ */
+async function cleanupPrCiChecks(
+  cutoff: Date,
+  latestCutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await deletePrCiChecksBefore(cutoff, latestCutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete pr_ci_checks", { error: message });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `PRのCIの記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
+/** workerの負荷の記録を、測った時刻から保持期間を過ぎたものだけ削除する。 */
+async function cleanupWorkerSamples(
+  cutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await deleteWorkerSamplesBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete worker_samples", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `workerの負荷の記録の削除に失敗しました: ${message}`,
     });
     return 0;
   }
@@ -147,7 +209,7 @@ async function cleanupNotices(cutoff: Date, log: Logger): Promise<number> {
     log.error("cleanup_db: failed to delete resolved notices", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `解決済みの通知の削除に失敗しました: ${message}`,
     });
@@ -170,7 +232,7 @@ async function cleanupInfoNotices(cutoff: Date, log: Logger): Promise<number> {
     log.error("cleanup_db: failed to resolve stale info notices", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `古い情報の通知の解決に失敗しました: ${message}`,
     });
@@ -191,7 +253,7 @@ async function recordRun(counts: CleanupCounts, log: Logger): Promise<void> {
     log.error("cleanup_db: failed to record cleanup_runs row", {
       error: message,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "cleanup_db_failed",
       message: `掃除結果の記録に失敗しました: ${message}`,
     });
@@ -211,6 +273,16 @@ export async function main(): Promise<CleanupCounts> {
   const deploymentsDeleted = await cleanupDeployments(cutoffs.logsBefore, log);
   const noticesDeleted = await cleanupNotices(cutoffs.logsBefore, log);
   const infoNoticesResolved = await cleanupInfoNotices(cutoffs.logsBefore, log);
+  const mainCiRunsDeleted = await cleanupMainCiRuns(cutoffs.logsBefore, log);
+  const prCiChecksDeleted = await cleanupPrCiChecks(
+    cutoffs.logsBefore,
+    cutoffs.latestLogsBefore,
+    log,
+  );
+  const workerSamplesDeleted = await cleanupWorkerSamples(
+    cutoffs.logsBefore,
+    log,
+  );
 
   const counts: CleanupCounts = {
     work_items_deleted: workItems.work_items_deleted,
@@ -219,6 +291,9 @@ export async function main(): Promise<CleanupCounts> {
     deployments_deleted: deploymentsDeleted,
     notices_deleted: noticesDeleted,
     info_notices_resolved: infoNoticesResolved,
+    main_ci_runs_deleted: mainCiRunsDeleted,
+    worker_samples_deleted: workerSamplesDeleted,
+    pr_ci_checks_deleted: prCiChecksDeleted,
     doc_dirs_deleted: docDirsDeleted,
   };
 

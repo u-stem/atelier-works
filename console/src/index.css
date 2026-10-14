@@ -3,23 +3,71 @@
 /*
  * 色の定義はここの変数だけにする。light-dark()は、要素のcolor-schemeに従って値を選ぶ。
  * 既定はOSの設定に従い、htmlにdata-themeがあればその色に固定する。
- * data-themeは、theme-initのscriptとテーマの切り替えのボタンが設定する。
+ * data-themeは、theme-initのscriptとテーマの切り替えが設定する。
+ *
+ * 面は背景、面(card)、浮いた面(popover)の3段で重ねる。ダークは明るさの差、ライトは影と線で階層を出す。
+ * アクセントは藍(primary)の1色で、選択中の帯、主要な操作、フォーカスの輪に使う。
+ * 意味の色は、承認=青、失敗=赤(destructive)、通知=琥珀(warning)、成功=緑で、点・バッジ・ラベルに使う。
+ * 文字の濃さは、主(foreground)、副(muted-foreground)、補足(subtle-foreground)の3段である。
+ * 文字と背景の組はWCAG AAの4.5:1以上、入力欄などの境界は3:1以上を保つ。
  */
 :root {
   color-scheme: light dark;
-  --background: light-dark(oklch(1 0 0), oklch(0.145 0 0));
-  --foreground: light-dark(oklch(0.145 0 0), oklch(0.985 0 0));
-  --muted: light-dark(oklch(0.97 0 0), oklch(0.269 0 0));
-  --muted-foreground: light-dark(oklch(0.45 0 0), oklch(0.75 0 0));
-  --primary: light-dark(oklch(0.205 0 0), oklch(0.922 0 0));
-  --primary-foreground: light-dark(oklch(0.985 0 0), oklch(0.205 0 0));
-  --destructive: light-dark(
-    oklch(0.505 0.213 27.518),
-    oklch(0.704 0.191 22.216)
+
+  --background: light-dark(oklch(0.972 0.005 265), oklch(0.185 0.013 265));
+  --foreground: light-dark(oklch(0.2 0.02 265), oklch(0.96 0.006 265));
+  --card: light-dark(oklch(1 0 0), oklch(0.23 0.015 265));
+  --card-foreground: light-dark(oklch(0.2 0.02 265), oklch(0.96 0.006 265));
+  --popover: light-dark(oklch(1 0 0), oklch(0.275 0.016 265));
+  --popover-foreground: light-dark(oklch(0.2 0.02 265), oklch(0.96 0.006 265));
+  --muted: light-dark(oklch(0.95 0.006 265), oklch(0.25 0.014 265));
+  --muted-foreground: light-dark(oklch(0.38 0.02 265), oklch(0.8 0.012 265));
+  --subtle-foreground: light-dark(oklch(0.46 0.02 265), oklch(0.7 0.014 265));
+
+  --primary: light-dark(oklch(0.46 0.19 272), oklch(0.7 0.15 275));
+  --primary-foreground: light-dark(oklch(0.99 0.005 272), oklch(0.15 0.03 275));
+  --selected: light-dark(oklch(0.945 0.025 275), oklch(0.28 0.035 275));
+  --selected-foreground: light-dark(oklch(0.25 0.06 275), oklch(0.96 0.02 275));
+  --secondary: light-dark(oklch(0.95 0.006 265), oklch(0.27 0.015 265));
+  --secondary-foreground: light-dark(
+    oklch(0.2 0.02 265),
+    oklch(0.96 0.006 265)
   );
-  --destructive-foreground: light-dark(oklch(0.985 0 0), oklch(0.145 0 0));
-  --border: light-dark(oklch(0.922 0 0), oklch(0.371 0 0));
-  --ring: light-dark(oklch(0.556 0 0), oklch(0.708 0 0));
+  --accent: light-dark(oklch(0.94 0.008 265), oklch(0.27 0.015 265));
+  --accent-foreground: light-dark(oklch(0.2 0.02 265), oklch(0.96 0.006 265));
+
+  --approval: light-dark(oklch(0.48 0.17 250), oklch(0.9 0.08 245));
+  --destructive: light-dark(oklch(0.5 0.2 27), oklch(0.93 0.07 22));
+  --destructive-foreground: light-dark(
+    oklch(0.99 0.005 27),
+    oklch(0.15 0.02 265)
+  );
+  --warning: light-dark(oklch(0.48 0.11 70), oklch(0.9 0.12 85));
+  --warning-foreground: light-dark(oklch(0.99 0.005 70), oklch(0.15 0.02 265));
+  --notice-mark: light-dark(oklch(0.6 0.14 70), oklch(0.9 0.12 85));
+  --success: light-dark(oklch(0.44 0.12 152), oklch(0.88 0.12 155));
+  --success-foreground: light-dark(oklch(0.99 0.005 152), oklch(0.15 0.02 265));
+
+  --border: light-dark(oklch(0.9 0.008 265), oklch(0.3 0.014 265));
+  --input: light-dark(oklch(0.6 0.02 265), oklch(0.52 0.02 265));
+  --ring: light-dark(oklch(0.5 0.18 272), oklch(0.72 0.14 275));
+
+  --sidebar: light-dark(oklch(0.955 0.007 265), oklch(0.155 0.013 265));
+  --sidebar-foreground: light-dark(oklch(0.2 0.02 265), oklch(0.96 0.006 265));
+  --sidebar-primary: light-dark(oklch(0.46 0.19 272), oklch(0.7 0.15 275));
+  --sidebar-primary-foreground: light-dark(
+    oklch(0.99 0.005 272),
+    oklch(0.15 0.03 275)
+  );
+  --sidebar-accent: light-dark(oklch(0.925 0.01 265), oklch(0.235 0.015 265));
+  --sidebar-accent-foreground: light-dark(
+    oklch(0.2 0.02 265),
+    oklch(0.96 0.006 265)
+  );
+  --sidebar-border: light-dark(oklch(0.89 0.008 265), oklch(0.27 0.014 265));
+  --sidebar-ring: light-dark(oklch(0.5 0.18 272), oklch(0.72 0.14 275));
+
+  --shadow-color: light-dark(oklch(0.2 0.02 265 / 0.1), oklch(0 0 0 / 0.5));
 }
 
 :root[data-theme="light"] {
@@ -31,19 +79,95 @@
 }
 
 @theme inline {
+  --font-sans:
+    "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP",
+    "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.5;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.6;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.7;
+  --text-lead: 1rem;
+  --text-lead--line-height: 1.7;
+  --text-title: 1.25rem;
+  --text-title--line-height: 1.4;
+  --text-display: 1.5rem;
+  --text-display--line-height: 1.3;
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-subtle: var(--subtle-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-selected: var(--selected);
+  --color-selected-foreground: var(--selected-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-approval: var(--approval);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-failure: var(--destructive);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-notice: var(--warning);
+  --color-notice-mark: var(--notice-mark);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-border: var(--border);
+  --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --shadow-raised:
+    0 1px 2px var(--shadow-color), 0 8px 20px -6px var(--shadow-color);
 }
 
 body {
   background-color: var(--background);
   color: var(--foreground);
+  font-size: var(--text-body);
+  line-height: 1.7;
+  letter-spacing: 0.015em;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: var(--selected);
+  color: var(--selected-foreground);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--input) transparent;
+}
+
+/* 動きを減らす設定の利用者には、遷移と回転を止める。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: 利用者の設定を、画面の個別の指定より優先させる。 */
+    animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
+    animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: 同上。 */
+    transition-duration: 0.01ms !important;
+  }
 }

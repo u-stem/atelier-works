@@ -7,17 +7,34 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
-import { getWorkItem, setHeadSha } from "../lib/db.ts";
-import { type GhClient, getPr } from "../lib/github.ts";
+import {
+  addNoticeUnlessUnresolved,
+  getWorkItem,
+  setHeadSha,
+  updateStatusIfCurrent,
+} from "../lib/db.ts";
+import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
+import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
+import { logger } from "../lib/log.ts";
+import {
+  type RepoOwnerGateResult,
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import { assertGitHubName, assertSha } from "../lib/types.ts";
 import {
   addDetachedWorktree,
-  ensureFactoryClone,
   ensureRepo,
   fetchPrHeadRef,
   runCommand,
 } from "../lib/workspace.ts";
-import { decideReviewPrepare } from "./pr_workflow_support.ts";
+import {
+  decideReviewPrepare,
+  describeReason,
+  evaluateSameRepoHeadGuard,
+  nextActionFor,
+} from "./pr_workflow_support.ts";
 
 export type PrReviewPrepareResult = {
   readonly skip: boolean;
@@ -96,67 +113,212 @@ export async function main(
 
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
+  const prNumber = workItem.pr_number;
 
-  const factoryClone = await ensureFactoryClone({
-    run: runCommand,
-    repoUrl: config.factory_repo,
-    ghToken,
-    branch: config.factory_branch,
-  });
-
-  const { dir: repoDir } = await ensureRepo({
-    run: runCommand,
-    owner: workItem.owner,
-    repo: workItem.repo,
-    ghToken,
-  });
-
-  await fetchPrHeadRef(runCommand, repoDir, workItem.pr_number, ghToken);
-
-  const prBeforeWorktree = await getPr(
-    client,
-    workItem.owner,
-    workItem.repo,
-    workItem.pr_number,
+  return prepareReviewWorktree(
+    {
+      work_item_id,
+      owner: workItem.owner,
+      repo: workItem.repo,
+      pr_number: prNumber,
+      parent_work_item_id: workItem.parent_work_item_id,
+      attempt: workItem.attempt,
+    },
+    {
+      checkRepoOwner: () =>
+        verifyRepoOwnerId(
+          config,
+          workItem.owner,
+          workItem.repo,
+          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
+      getPr: (owner, repo, number) => getPr(client, owner, repo, number),
+      ensureFactoryClone: () =>
+        openFactoryClone(config, { run: runCommand, ghToken }),
+      ensureRepo: (owner, repo) =>
+        ensureRepo({ run: runCommand, owner, repo, ghToken }),
+      fetchPrHeadRef: (repoDir, number) =>
+        fetchPrHeadRef(runCommand, repoDir, number, ghToken),
+      addDetachedWorktree: async (input) => {
+        await addDetachedWorktree({ run: runCommand, ghToken, ...input });
+      },
+      setHeadSha,
+      blockReview: async (reason) => {
+        await blockReview(
+          {
+            work_item_id,
+            owner: workItem.owner,
+            repo: workItem.repo,
+            pr_number: prNumber,
+            instance_name: config.instance_name,
+            reason,
+          },
+          {
+            updateStatusIfCurrent,
+            notify: async (event) => {
+              await notifyBestEffort(
+                await wmill.getVariable("f/factory/discord_webhook_url"),
+                event,
+                logger("pr_review_prepare"),
+              );
+            },
+          },
+        );
+      },
+    },
   );
+}
+
+export type BlockReviewInput = {
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly instance_name: string;
+  readonly reason: string;
+};
+
+export type BlockReviewDeps = {
+  readonly updateStatusIfCurrent: typeof updateStatusIfCurrent;
+  readonly notify: (event: NotifyEvent) => Promise<void>;
+};
+
+/**
+ * 準備の関門(オーナーの数値IDの照合、forkのPR)で見送った`pr_review`を、
+ * 終端の`blocked`にして理由を残し、人にDiscordで知らせる。
+ * `pr_fix`の準備の関門(`guard_blocked`)と同じ扱いである。
+ * `reviewing`のまま残すと、reconcileが理由の分からない失敗として扱うためである。
+ * すでにほかの処理が状態を進めていたときは、何も記録も通知もしない。
+ */
+export async function blockReview(
+  input: BlockReviewInput,
+  deps: BlockReviewDeps,
+): Promise<void> {
+  const moved = await deps.updateStatusIfCurrent(
+    input.work_item_id,
+    "reviewing",
+    "blocked",
+    input.reason,
+  );
+  if (!moved) return;
+  await deps.notify({
+    kind: "needs_human",
+    instance_name: input.instance_name,
+    owner: input.owner,
+    repo: input.repo,
+    url: `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pr_number)}`,
+    reason: describeReason(input.reason),
+    target: { kind: "pr", number: input.pr_number },
+    next_action: nextActionFor(input.reason),
+  });
+}
+
+export type ReviewPrepareTarget = {
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly parent_work_item_id: number | null;
+  readonly attempt: number;
+};
+
+/** `prepareReviewWorktree`が使う入出力。テストで差し替える。 */
+export type ReviewPrepareDeps = {
+  /**
+   * リポジトリのオーナーの数値IDを、設定の`owners`と照合する(`verifyRepoOwnerId`)。
+   * 通らなければ、PRの読み取りより前に止める。
+   */
+  readonly checkRepoOwner: () => Promise<RepoOwnerGateResult>;
+  readonly getPr: (
+    owner: string,
+    repo: string,
+    number: number,
+  ) => Promise<PullRequest>;
+  readonly ensureFactoryClone: () => Promise<{ readonly dir: string }>;
+  readonly ensureRepo: (
+    owner: string,
+    repo: string,
+  ) => Promise<{ readonly dir: string }>;
+  readonly fetchPrHeadRef: (repoDir: string, prNumber: number) => Promise<void>;
+  readonly addDetachedWorktree: (input: {
+    readonly repoDir: string;
+    readonly sha: string;
+    readonly dir: string;
+  }) => Promise<void>;
+  readonly setHeadSha: (id: number, sha: string) => Promise<void>;
+  /** 準備の関門でPRのレビューを見送るとき、作業項目を終端にして人に知らせる。 */
+  readonly blockReview: (reason: string) => Promise<void>;
+};
+
+/**
+ * 多層防御のため、まずリポジトリのオーナーの数値IDを設定の`owners`と照合する。
+ * 通らないときは、PRの読み取りもcloneもfetchもworktreeの作成もせずに、
+ * 作業項目を`blockReview`で終端にして、理由つきで`skip`を返す。
+ * 次に、PRのheadがbaseと同じリポジトリにあるかを確かめる。
+ * `poll_prs.ts`は、headがbaseと同じリポジトリにないPRのレビューを始めないが、
+ * 作業項目を手で追加するなどの経路は止められない。
+ * 通らないときは、forkの内容をcloneにもfetchにも入れず、worktreeも作らずに、
+ * 同じく作業項目を`blockReview`で終端にして飛ばす。
+ */
+export async function prepareReviewWorktree(
+  target: ReviewPrepareTarget,
+  deps: ReviewPrepareDeps,
+): Promise<PrReviewPrepareResult> {
+  const { owner, repo, pr_number } = target;
+
+  const ownerGate = await deps.checkRepoOwner();
+  if (!ownerGate.ok) {
+    await deps.blockReview(ownerGate.reason);
+    return { skip: true, reason: ownerGate.reason, ...SKIPPED_BASE };
+  }
+
+  const prForRepoCheck = await deps.getPr(owner, repo, pr_number);
+  const sameRepoHead = evaluateSameRepoHeadGuard(
+    prForRepoCheck.headRepoFullName,
+    prForRepoCheck.baseRepoFullName,
+  );
+  if (!sameRepoHead.ok) {
+    await deps.blockReview(sameRepoHead.reason);
+    return { skip: true, reason: sameRepoHead.reason, ...SKIPPED_BASE };
+  }
+
+  const factoryClone = await deps.ensureFactoryClone();
+  const { dir: repoDir } = await deps.ensureRepo(owner, repo);
+
+  await deps.fetchPrHeadRef(repoDir, pr_number);
+
+  const prBeforeWorktree = await deps.getPr(owner, repo, pr_number);
   assertSha(prBeforeWorktree.headSha);
 
   const sha7 = prBeforeWorktree.headSha.slice(0, 7);
-  const worktreeDir = buildReviewWorktreeDir(repoDir, workItem.pr_number, sha7);
+  const worktreeDir = buildReviewWorktreeDir(repoDir, pr_number, sha7);
 
-  await addDetachedWorktree({
-    run: runCommand,
+  await deps.addDetachedWorktree({
     repoDir,
     sha: prBeforeWorktree.headSha,
     dir: worktreeDir,
-    ghToken,
   });
 
   // 上の`getPr`から今までにPRへ新しいコミットが積まれている場合がある。
   // そのときは新しい`head_sha`を保存するが、レビューはcheckout済みのshaのまま続ける。
   // 新しいコミットは、次の`poll_prs`の周期で別のレビューとして拾われる
   // (1コミットにつき1レビュー)。
-  const prAfterWorktree = await getPr(
-    client,
-    workItem.owner,
-    workItem.repo,
-    workItem.pr_number,
-  );
+  const prAfterWorktree = await deps.getPr(owner, repo, pr_number);
   if (prAfterWorktree.headSha !== prBeforeWorktree.headSha) {
-    await setHeadSha(work_item_id, prAfterWorktree.headSha);
+    await deps.setHeadSha(target.work_item_id, prAfterWorktree.headSha);
   }
 
   return {
     skip: false,
     reason: null,
-    owner: workItem.owner,
-    repo: workItem.repo,
-    pr_number: workItem.pr_number,
+    owner,
+    repo,
+    pr_number,
     review_sha: prBeforeWorktree.headSha,
     repo_dir: repoDir,
     worktree_dir: worktreeDir,
     factory_clone_dir: factoryClone.dir,
-    parent_work_item_id: workItem.parent_work_item_id,
-    attempt: workItem.attempt,
+    parent_work_item_id: target.parent_work_item_id,
+    attempt: target.attempt,
   };
 }

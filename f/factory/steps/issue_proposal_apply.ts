@@ -7,6 +7,8 @@ import * as wmill from "windmill-client@1.817.0";
 import { formatAuditPeriodLabel } from "../lib/audit_support.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
+  addNoticeUnlessUnresolved,
+  claimIssueCreation,
   countPendingIssueProposals,
   decideIssueProposal,
   getApprovalRequest,
@@ -30,6 +32,12 @@ import {
   withMarker,
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import {
+  isFactoryRepoIdCheckReason,
+  type RepoOwnerGateResult,
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import { type IssueProposalOrigin, isBoolean } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
 import {
@@ -45,6 +53,16 @@ import {
   renderIssueProposalApprovedReply,
   renderIssueProposalRejectedReply,
 } from "./pr_workflow_support.ts";
+
+/**
+ * Issueを作る処理の印の有効期間(秒)。
+ * 印を取った呼び出しが途中で止まったときに、やり直しが塞がれる最長の時間になる。
+ * 最悪の経路は、マーカーの検索(約380秒)の後にIssueの作成(約250秒)が続く約630秒である。
+ * これを覆い、余裕を持たせて900秒(15分)にする。
+ * Consoleの画面がやり直しを止める時間(`REDO_COOLDOWN_MS`)も、同じ長さにそろえる。
+ * 印に持ち主の識別子は無いので、期限を超えた処理と、取り直した処理が重なる可能性は、理論上残る。
+ */
+export const ISSUE_CREATION_LEASE_SECONDS = 900;
 
 export type IssueProposalApplyResult = {
   readonly ok: boolean;
@@ -72,8 +90,10 @@ export function readWithFactoryLabel(
  * パイプラインに戻してよいのは、そのリポジトリが`factory_config`
  * (owners / repo_allowlist)で許可されているときだけ。
  * 許可されていなければラベルを付けず、黙って落とさずに、ログに残す`reason`を返す。
- * `isRepoAllowed`は`factory_repo`を常に許すため、`repoAllowed`は通常は真になる。
- * 偽になるのは、`factory_repo`と作業項目の`owner`/`repo`が食い違ったときだけ。
+ * `isRepoAllowed`は`factory_repo`を常に許すため、`audit`の提案の`repoAllowed`は通常は真になる。
+ * 偽になるのは、作業項目の`owner`/`repo`が`factory_repo`と食い違い、
+ * かつ`owners`と`repo_allowlist`にも許されないときだけである。
+ * `owners`に無いオーナーのリポジトリは、この判定の前に、承認の経路が止める(`ensureProposalRepoOwner`)。
  */
 export function resolveFactoryLabel(input: {
   readonly requested: boolean;
@@ -89,6 +109,100 @@ export function resolveFactoryLabel(input: {
     };
   }
   return { apply: true, reason: null };
+}
+
+/**
+ * 提案が指す保存済みのリポジトリのオーナーを照合し(`verify`)、止めるなら理由を返す。通れば`null`を返す。
+ * 名前が別の人に渡っていると、Issueの起票も返信も、その人のリポジトリに書き込んでしまうためである。
+ * noticeは`verify`が残す。
+ */
+export async function proposalRepoOwnerStop(
+  verify: () => Promise<RepoOwnerGateResult>,
+): Promise<string | null> {
+  const gate = await verify();
+  return gate.ok ? null : gate.reason;
+}
+
+/**
+ * 承認の前に、`proposalRepoOwnerStop`で照合し、止めるなら例外を投げる。
+ * 判断の記録もGitHubへの書き込みもしないので、行の状態は変わらない。
+ * 承認依頼は`approved`のまま、Issueが作られるまでConsoleの要対応に残る。
+ * 例外の文の次の操作は、理由に応じて分ける。
+ * `factory_repo_id`の食い違いなら`factory_repo`と`factory_repo_id`、それ以外なら`owners`を見直す。
+ * 見直した後に同じ承認をやり直すと、`approval_decide`が起動し直し、続きから処理する。
+ * 記録済みの承認は、却下に変えられない。
+ * 照合そのものが失敗したとき(404以外の取得の失敗)は、その例外をそのまま投げる。
+ */
+export async function ensureProposalRepoOwner(
+  verify: () => Promise<RepoOwnerGateResult>,
+): Promise<void> {
+  const stop = await proposalRepoOwnerStop(verify);
+  if (stop !== null) {
+    const review = isFactoryRepoIdCheckReason(stop)
+      ? "factory_configのfactory_repoとfactory_repo_id"
+      : "factory_configのowners";
+    throw new Error(
+      `issue_proposal_apply: ${stop}。${review}を見直してから、Consoleの要対応から再度承認してください`,
+    );
+  }
+}
+
+/** 却下の返信を止める理由。 */
+export type RejectionReplyStop =
+  /** 照合が`ok: false`を返した。意図した停止である。 */
+  | { readonly kind: "stopped"; readonly reason: string }
+  /** 照合そのものが失敗した(404以外の取得の失敗、想定外の例外)。`error`は秘密をマスクした文。 */
+  | {
+      readonly kind: "check_failed";
+      readonly error: string;
+      readonly errorName: string;
+    };
+
+/**
+ * 却下の返信の前に照合し、返信を止める理由を返す。通れば`null`を返す。
+ * `ensureProposalRepoOwner`と違い、照合そのものの失敗(404以外の取得の失敗を含む)も例外にせず、
+ * `check_failed`にして返信を止める側へ倒す。
+ * 判断は記録済みで、例外にすると、承認依頼が`rejected`のままConsoleが操作を出さず、
+ * 作業項目が人の対応待ちのまま止まるためである。
+ * 意図した停止(`stopped`)と照合の失敗(`check_failed`)は、呼び出し側が別のログに残せるよう区別する。
+ */
+export async function rejectionReplyStop(
+  verify: () => Promise<RepoOwnerGateResult>,
+): Promise<RejectionReplyStop | null> {
+  try {
+    const reason = await proposalRepoOwnerStop(verify);
+    return reason === null ? null : { kind: "stopped", reason };
+  } catch (err) {
+    return {
+      kind: "check_failed",
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+      errorName: err instanceof Error ? err.name : "UnknownError",
+    };
+  }
+}
+
+/**
+ * 却下の返信を止めたことを、理由の種類に合わせたログに残す。
+ * 意図した停止(`stopped`)は警告、照合そのものの失敗(`check_failed`)はエラーである。
+ * 失敗は、マスク済みの文とエラーの名前を載せる。
+ */
+export function logRejectionReplyStop(
+  stop: RejectionReplyStop,
+  proposalId: number,
+  log: Logger,
+): void {
+  if (stop.kind === "stopped") {
+    log.warn("rejected reply not posted: repository owner check stopped", {
+      proposal_id: proposalId,
+      reason: stop.reason,
+    });
+    return;
+  }
+  log.error("rejected reply not posted: repository owner check failed", {
+    proposal_id: proposalId,
+    error: stop.error,
+    error_name: stop.errorName,
+  });
 }
 
 /**
@@ -144,16 +258,28 @@ function requirePrNumber(prNumber: number | null, workItemId: number): number {
  * `setIssueProposalCreatedIssue`が`created_issue_number`/`created_issue_url`を書く。
  * (a)の後、(b)の前に再起動されたら、Issueを作るか再利用する段階からやり直し、
  * 2つ目のIssueは作らない。
+ * 同時に2つの呼び出しが走っても、Issueを作る段階は1つだけが通る。
+ * Issueを作るか探す前に、`claimIssueCreation`の条件付きUPDATEで印を取り、取れなかった呼び出しは何もしない。
+ * マーカーでの検索はGitHubの索引の反映が遅れ、同時の呼び出しがどちらも空振りしうるためである。
+ * 印は期限付きなので、印を取った呼び出しが止まっても、期限後のやり直しは塞がれない。
  * 却下も同じく、判断を先に記録してから返信する。
  *
  * 未完了の承認を見えるままにする: Issueの番号が分かる前にIssueの作成・再利用が失敗したら、
  * 行を"pending"に戻す(`revertIssueProposalToPending`)。
- * `created_issue_number`がnullの"approved"のまま残すと、ConsoleのInboxのどこにも出ないため。
+ * `created_issue_number`がnullの"approved"のまま残すと、Consoleの要対応のどこにも出ないため。
  * `console_query.ts`のinboxも、Issueが作られていない"approved"の行を表示する。
  * そのため、Issueが既にGitHubにある状態で後の段階(`setIssueProposalCreatedIssue`の書き込み、
  * 返信、スレッドの解決、状態の切り替え)が失敗しても、提案は人が再試行できるよう見えている。
  * この場合は意図して"pending"に戻さない。
  * Issueは既にあり、戻して作り直すと重複するおそれがあるため。
+ *
+ * GitHubへ書き込む前に、保存済みのリポジトリのオーナーを`owners`と照合する。
+ * 承認は、判断を記録する前に照合する(`ensureProposalRepoOwner`)。
+ * 通らなければ、何も記録も書き込みもせずに例外を投げる。
+ * 承認依頼は`approved`のまま、Consoleの要対応に残る(`console_query.ts`の要約と同じ条件)。
+ * 却下は、判断を記録した後、返信の前に照合する(`rejectionReplyStop`)。
+ * 通らないときは、返信だけを止め、警告のログを残して作業項目は先へ進める。
+ * 照合そのものが失敗したときも、返信を止めて先へ進むが、エラーのログに残す。
  *
  * 承認依頼・Issue提案・作業項目・判断者・auditのレポートが無いとき、
  * 依頼のkindが違うとき、判定で拒否されたときは例外を投げる。
@@ -232,6 +358,16 @@ async function run(
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const client: GhClient = { run: runCommand, ghToken };
 
+  // 承認の経路は判断の記録の前に、却下の経路は返信の前に、保存済みのリポジトリのオーナーを照合する。
+  // どちらの経路も、照合は1回である。
+  const verifyOwner = () =>
+    verifyRepoOwnerId(
+      config,
+      owner,
+      repo,
+      repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+    );
+
   // `pr_fix`の提案は、Issue本文に元のPRのURLと番号を入れる。
   // `audit`の提案にはリンクするPRが無いので、提案元の監査レポートの期間を入れる。
   let body: string;
@@ -283,6 +419,7 @@ async function run(
   let labelApplied = false;
 
   if (decision === "approve") {
+    await ensureProposalRepoOwner(verifyOwner);
     // 楽観ロック: 行がまだ"pending"のときだけ遷移させる。
     // この呼び出しが誤りになる場合(本当の食い違いや、完了済みの承認)は
     // `classification`で除いてあるので、falseが返るのは、並行するか先行する
@@ -314,6 +451,17 @@ async function run(
       // 決め直さずに記録済みの判断を反映する。
       labelApplied = current.with_factory_label ?? false;
     } else {
+      // Issueを作る呼び出しを1つに絞る。マーカーでの検索はGitHubの索引の反映が遅れるので、
+      // 同時の呼び出しがどちらも空振りして、Issueが2件できうる。
+      // 印を取れなかった呼び出しは、別の呼び出しが作っている最中なので、何もせずに終える。
+      const claimed = await claimIssueCreation(
+        proposal_id,
+        ISSUE_CREATION_LEASE_SECONDS,
+      );
+      if (!claimed) {
+        log.info("another call is creating the issue, no-op", { proposal_id });
+        return { ok: true, status: "in_progress", label_applied: false };
+      }
       try {
         const markerSearchTerm = issueProposalMarkerSearchTerm(proposal_id);
         const existingIssue = await findIssueByMarker(
@@ -351,10 +499,11 @@ async function run(
       } catch (err) {
         // この時点ではIssueの番号が分からない。
         // このままだと行は`created_issue_number`がnullの"approved"で止まり、人から見えなくなる。
-        // "pending"に戻し、再試行できるようConsoleのInboxに再び出す。
+        // "pending"に戻し、再試行できるようConsoleの要対応に再び出す。
+        // 印は残す。Issueが作られていた場合に、期限が切れるまで次の承認が何もせず終わる。
         await revertIssueProposalToPending(proposal_id);
         throw new Error(
-          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの承認タブから再度承認してください`,
+          `issue_proposal_apply: Issueの起票に失敗しました: ${maskSecrets(err instanceof Error ? err.message : String(err))}。Consoleの要対応から再度承認してください`,
         );
       }
       await setIssueProposalCreatedIssue(proposal_id, {
@@ -400,16 +549,23 @@ async function run(
       created_issue_url: null,
     });
     if (proposal.origin === "pr_fix") {
-      const prNumber = requirePrNumber(
-        workItem.pr_number,
-        proposal.work_item_id,
-      );
-      const replyBody = withMarker(
-        "pr_fix",
-        workItemId,
-        renderIssueProposalRejectedReply(reason),
-      );
-      await postDecisionReply(proposal, prNumber, replyBody);
+      // 却下は判断を記録済みなので、照合に落ちたときは返信だけを止め、作業項目は先へ進める。
+      // 止めて例外にすると、提案が残らないのに作業項目が人の対応待ちのまま動かなくなる。
+      const stop = await rejectionReplyStop(verifyOwner);
+      if (stop === null) {
+        const prNumber = requirePrNumber(
+          workItem.pr_number,
+          proposal.work_item_id,
+        );
+        const replyBody = withMarker(
+          "pr_fix",
+          workItemId,
+          renderIssueProposalRejectedReply(reason),
+        );
+        await postDecisionReply(proposal, prNumber, replyBody);
+      } else {
+        logRejectionReplyStop(stop, proposal_id, log);
+      }
     }
   }
 

@@ -3,6 +3,7 @@
 // needs_humanの次の操作、Discordの`pr_opened`イベントを扱う。
 // 入出力は注入された依存を通してだけ行う。
 
+import { CheckEnvironmentError } from "./check_sandbox.ts";
 import { normalizeRepoUrl } from "./config.ts";
 import type { NotifyEvent } from "./discord.ts";
 import { ImplementLeaseLostError } from "./implement_launch_support.ts";
@@ -72,12 +73,13 @@ export function decideImplementFinishAction(
       return { kind: "cancel" };
     // worktreeができる前の停止には残す作業が無い。
     // 検証を経ていないラウンドでの停止(シンボリックリンク、Claudeの実行失敗、
-    // `.git`ポインタの書き換え、判定とgitleaksの間のworktreeの変化)の後は何もpushしない。
+    // `.git`ポインタの書き換え、判定とgitleaksの間のworktreeの変化、workerが前提を満たさず検査を実行できない)の後は何もpushしない。
     case "needs_human":
     case "symlink":
     case "claude_error":
     case "git_pointer_modified":
     case "worktree_changed":
+    case "check_image_stale":
       return { kind: "needs_human", preserveWork: false };
     case "checks_passed":
     case "checks_skipped":
@@ -106,6 +108,34 @@ export function shouldDeleteBranchOnGap(state: {
   return (
     state.prUrl === null && state.openPrNumber === null && !state.prLookupFailed
   );
+}
+
+/** requirements_gapでのブランチの扱い。`stop`は照合に落ちたことで、理由を伴う。 */
+export type GapBranchCleanup =
+  | { readonly kind: "delete" }
+  | { readonly kind: "keep" }
+  | { readonly kind: "stop"; readonly reason: string };
+
+/**
+ * requirements_gapのとき、リモートブランチの削除に進んでよいかを、削除の直前の照合で決める。
+ * 削除の対象でなければ照合せず、ブランチを残す。
+ * 照合に落ちたら`stop`を返し、削除しない。
+ * 照合の取得に失敗したら、`onCheckError`に例外を渡してブランチを残す。
+ * ブランチが残るだけで差し戻しは続けられるので、一時的な障害で差し戻し全体を止めない。
+ */
+export async function decideGapBranchCleanup(deps: {
+  readonly shouldDelete: boolean;
+  readonly ensureRepoOwner: () => Promise<string | null>;
+  readonly onCheckError: (err: unknown) => void;
+}): Promise<GapBranchCleanup> {
+  if (!deps.shouldDelete) return { kind: "keep" };
+  try {
+    const reason = await deps.ensureRepoOwner();
+    return reason === null ? { kind: "delete" } : { kind: "stop", reason };
+  } catch (err) {
+    deps.onCheckError(err);
+    return { kind: "keep" };
+  }
 }
 
 /**
@@ -167,6 +197,7 @@ export function implementCommitGuards(branch: string): {
  * worktreeのロックを持つプロセスが残っていないかを`ensureLockFree`で確かめ、残っていれば止める理由を返す(いなければnull)。
  * `ensureLockFree`は何も止めずに`WorktreeBusyError`を投げるもの(`ensureWorktreeLockFree`の`policy: null`)を渡す。
  * 検証ステップの後に残ったClaudeや検査コマンドは、検査とcommitの間にworktreeを書き換えうるため、pushの前に呼ぶ。
+ * 残った所有権を、workerが検査の前提を満たさず取り戻せないとき(`CheckEnvironmentError`)も、そのメッセージを止める理由として返す。
  * それ以外の例外はそのまま投げる。
  */
 export async function worktreeBusyStopReason(
@@ -176,7 +207,11 @@ export async function worktreeBusyStopReason(
     await ensureLockFree();
     return null;
   } catch (err) {
-    if (err instanceof WorktreeBusyError) return err.message;
+    if (
+      err instanceof WorktreeBusyError ||
+      err instanceof CheckEnvironmentError
+    )
+      return err.message;
     throw err;
   }
 }
@@ -230,6 +265,11 @@ export type PreserveWorkDeps = {
   readonly ensureLockFree: () => Promise<void>;
   /** 文脈の`worktree_git_pointer`に対して`assertWorktreeGitPointer`を実行する。 */
   readonly assertGitPointer: () => Promise<void>;
+  /**
+   * pushの直前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
+   * 通らないときは、止める理由を返す。通るときは`null`。
+   */
+  readonly ensureRepoOwner: () => Promise<string | null>;
   /** implementのworktreeに`runGitleaksOnWorktree`を実行する。 */
   readonly scanForSecrets: () => Promise<GitleaksScan>;
   /**
@@ -248,6 +288,7 @@ export type PreserveWorkDeps = {
  * worktreeのロックを持つプロセスが残っていればpushしない。
  * `.git`ポインタが変わったworktreeではgitを実行しない。
  * 秘密の検査で検出された変更や、検査できなかった変更、検査した後に変わった変更もpushしない。
+ * pushの直前に、リポジトリのオーナーの数値IDを照合し、通らなければpushしない。
  * `needs_human`の理由に付け足す注記(英語)の配列を返す。
  * 例外は`ImplementLeaseLostError`(依存がリースを失ったと知らせた)だけを投げ直し、
  * それ以外は注記にする。リースを失った実行は、注記を付けて人に知らせるのではなく、何もせずに終えるため。
@@ -269,6 +310,8 @@ export async function preserveWork(deps: PreserveWorkDeps): Promise<string[]> {
   }
   if (!scan.ok) return [SECRETS_NOT_PUSHED_REASON];
   try {
+    const ownerStop = await deps.ensureRepoOwner();
+    if (ownerStop !== null) return [ownerStop];
     const pushed = await deps.commitAndPush(scan.treeSha);
     return pushed.outcome === "head_changed"
       ? [`branch head moved to ${pushed.currentSha} while implementing`]

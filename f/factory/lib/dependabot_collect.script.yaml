@@ -1,0 +1,9 @@
+summary: '[LIB] dependabot更新のゲート入力の収集'
+description: 内部ライブラリです。dependabotのセキュリティ更新PR1件について、GitHubとnpm registryから事実を集め、ゲートの入力を組み立てます。
+lock: '!inline f/factory/lib/dependabot_collect.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

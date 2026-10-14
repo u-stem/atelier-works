@@ -6,17 +6,23 @@ import * as wmill from "windmill-client@1.817.0";
 import { buildConsoleUrl } from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   getApprovalRequest,
   getWorkItem,
   recordFailure,
   setFlowJobIdIfUnset,
+  updateIntakeIfRegenerating,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
 import { notify, notifyBestEffort } from "../lib/discord.ts";
-import { commentIssue, type GhClient, getViewer } from "../lib/github.ts";
+import {
+  commentIssue,
+  type GhClient,
+  getIssue,
+  getViewer,
+} from "../lib/github.ts";
 import { REQUIREMENTS_REGENERATION_FAILED_REASON } from "../lib/implement_finish_support.ts";
 import {
   parseFlowJobId,
@@ -24,6 +30,11 @@ import {
   startImplement,
 } from "../lib/implement_launch_support.ts";
 import { IMPLEMENT_FLOW_PATH } from "../lib/implement_loop.ts";
+import {
+  buildIntakeRefreshedNoticeMessage,
+  INTAKE_REFRESHED_NOTICE_KIND,
+  refreshIntakeFromIssue,
+} from "../lib/intake_refresh.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "../lib/pipeline_lease.ts";
 import { type FactoryConfig, isNumber, type WorkItem } from "../lib/types.ts";
@@ -56,10 +67,8 @@ export function shouldProceed(status: WorkItem["status"]): boolean {
  * Consoleへのリンクを1つだけ載せる。
  * リンクはMarkdownの形で書く。URLを裸で書くと、GitHubの自動リンクが
  * 直後の`(work_item_id`までURLに含めてしまい、リンクが壊れるため。
- * URLに加えて`work_item_id`も書くのは、Consoleがディープリンクの
- * フラグメントを読めないとき(opaque originのraw app。
- * `lib/approval_support.ts`の`buildConsoleUrl`を参照)の手動の代替手段にするため。
- * 人はこの値を要件定義タブの`work_item_id`フィルタに貼り付けられる。
+ * URLに加えて`work_item_id`も書くのは、リンクが開けないときでも、
+ * 人がどの作業項目の承認かを特定できるようにするため。
  */
 export function buildApprovedComment(
   consoleUrl: string,
@@ -195,6 +204,12 @@ export type RejectedRetryDeps = {
    * 失敗してもwarnを残すだけで投げない約束だが、約束が破られても起動を止めないよう、呼び出し側でも捕まえる。
    */
   readonly removeWorktree: () => Promise<void>;
+  /**
+   * 作業項目に取り込んだ題名と本文を、現在のIssueの内容に更新する(`refreshIntakeFromIssue`)。
+   * 比較交換の後、pipelineを起動する前に呼ぶ。pipelineは起動後に作業項目を読むので、新しい内容で作り直される。
+   * 更新できなくても作り直しは止めないので、投げない約束だが、約束が破られても起動を止めないよう、呼び出し側でも捕まえる。
+   */
+  readonly refreshIntake: () => Promise<unknown>;
   /** `runFlowAsync(PIPELINE_FLOW_PATH, ...)`の戻り値をそのまま返す。ジョブIDの解析は呼び出し先が行う。 */
   readonly launchPipeline: () => Promise<string>;
   /** `setFlowJobIdIfUnset`でジョブIDを記録する。別の実行が先にリースを取っていれば`false`を返す。 */
@@ -207,7 +222,7 @@ export type RejectedRetryDeps = {
   /**
    * 比較交換が一致した直後に呼ぶ。以降の失敗は作業項目のIDを付けて記録させる。
    * 以降の失敗では作業項目が`needs_human`に戻るか、reconcileが`failed`にするので、
-   * ConsoleのFailuresタブから`retry_work_item`で再開できるため。
+   * Consoleの要対応から`retry_work_item`で再開できるため。
    */
   readonly markRestartable: () => void;
   readonly log: (message: string, fields: Record<string, unknown>) => void;
@@ -216,6 +231,7 @@ export type RejectedRetryDeps = {
 /**
  * 却下された要件定義を作り直すため、作業項目を`requirements_generating`へ移してpipelineを起動する。
  * 比較交換が一致しなければ何もせずに`not_moved`を返す。
+ * 移した後、起動の前に、取り込んだ題名と本文を現在のIssueの内容に更新する(`refreshIntake`)。
  *
  * 比較交換で`flow_job_id`(pipelineのリース)を空にし、起動したジョブIDは空のときだけ記録する。
  * pipelineは起動するとすぐ準備ステップで作業項目を読み直すので、worktreeの片付けは起動より先に行う。
@@ -234,6 +250,14 @@ export async function relaunchPipelineAfterRejection(
     await deps.removeWorktree();
   } catch (err) {
     deps.log("failed to remove requirements worktree", {
+      error: messageOf(err),
+    });
+  }
+
+  try {
+    await deps.refreshIntake();
+  } catch (err) {
+    deps.log("failed to refresh the intake content", {
       error: messageOf(err),
     });
   }
@@ -428,6 +452,7 @@ async function run(
     }
     const consoleUrl = buildConsoleUrl(config.windmill_public_url, {
       work_item_id: workItem.id,
+      attempt,
     });
     const issueNumber = workItem.issue_number;
     const launchImplement = (): Promise<StartImplementOutcome> =>
@@ -462,7 +487,7 @@ async function run(
           });
         },
         addNotice: async (reason) => {
-          await addNotice({
+          await addNoticeUnlessUnresolved({
             kind: "implement_launch_failed",
             message: buildImplementLaunchNoticeMessage(
               {
@@ -508,7 +533,7 @@ async function run(
         );
       },
       addCommentFailedNotice: async (reason) => {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: "approval_comment_failed",
           message: buildApprovalCommentFailedMessage(
             {
@@ -548,6 +573,7 @@ async function run(
   // ここからは却下のとき。
   const rejectedOutcome = decideRejectedOutcome(attempt, config.max_attempts);
   if (rejectedOutcome === "retry") {
+    const intakeIssueNumber = workItem.issue_number;
     const relaunched = await relaunchPipelineAfterRejection({
       casToGenerating: () =>
         updateStatusIfCurrentClearingFlowJobId(
@@ -557,6 +583,48 @@ async function run(
           request.reason,
         ),
       removeWorktree: () => removeReqWorktree(workItem),
+      refreshIntake: () =>
+        refreshIntakeFromIssue({
+          snapshot: workItem,
+          getIssue: () =>
+            getIssue(client, workItem.owner, workItem.repo, intakeIssueNumber),
+          writeIntake: (intake, note) =>
+            updateIntakeIfRegenerating(workItem.id, intake, note),
+          announce: async (updated) => {
+            // noticeの失敗でDiscordへの通知を止めない。どちらも承認者に知らせる手段である。
+            try {
+              await addNoticeUnlessUnresolved({
+                kind: INTAKE_REFRESHED_NOTICE_KIND,
+                message: buildIntakeRefreshedNoticeMessage({
+                  owner: workItem.owner,
+                  repo: workItem.repo,
+                  issue_number: intakeIssueNumber,
+                  work_item_id: workItem.id,
+                }),
+              });
+            } catch (err) {
+              log.warn("failed to record the intake refresh notice", {
+                work_item_id: workItem.id,
+                error: messageOf(err),
+              });
+            }
+            await notifyBestEffort(
+              webhookUrl,
+              {
+                kind: "intake_refreshed",
+                instance_name: config.instance_name,
+                owner: workItem.owner,
+                repo: workItem.repo,
+                issue_number: intakeIssueNumber,
+                issue_url: workItem.issue_url ?? "",
+                title: updated.title,
+              },
+              log,
+            );
+          },
+          log: (message, fields) =>
+            log.warn(message, { work_item_id: workItem.id, ...fields }),
+        }),
       launchPipeline: () =>
         wmill.runFlowAsync(PIPELINE_FLOW_PATH, {
           work_item_id: workItem.id,
@@ -626,7 +694,7 @@ async function run(
  * そのため例外はここで捕まえ、`factory.job_failures`に記録して
  * Discordへ通知してから投げ直す(`on_error_schedule.ts`と同じ自己完結の処理)。
  * 作業項目のIDを付けて記録するのは、却下の作り直しで`requirements_generating`へ移した後の失敗だけである。
- * その作業項目は`retry_work_item`で再開できる状態で終わるので、ConsoleのFailuresタブから再実行できる。
+ * その作業項目は`retry_work_item`で再開できる状態で終わるので、Consoleの要対応から再実行できる。
  * 比較交換より前の失敗では作業項目が`awaiting_approval`のままで、`retry_work_item`では再開できないため、IDを付けない。
  * その場合は同じ判断で`approval_decide`を実行し直す。
  * 承認後のimplementフローの起動の失敗は、`startImplement`が作業項目のIDを付けて記録する。

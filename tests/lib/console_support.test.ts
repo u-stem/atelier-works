@@ -1,18 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
+  countHiddenCharacters,
+  countHtmlCommentOpeners,
   INFO_NOTICE_KINDS,
   INFO_NOTICE_WINDOW_DAYS,
   isNoticeResolvable,
   NOTICE_SEVERITY,
   noticeSeverity,
+  truncateChars,
   UNRESOLVABLE_NOTICE_KINDS,
 } from "../../f/factory/lib/console_support.ts";
 
-/** `docs/operations.md`の「Consoleの通知タブ」の表から、種類の列を取り出す。 */
+/** `docs/operations.md`の「通知の種類」の表から、種類の列を取り出す。 */
 async function documentedNoticeKinds(): Promise<string[]> {
   const doc = await Bun.file("docs/operations.md").text();
-  const start = doc.indexOf("### Consoleの通知タブ");
+  const start = doc.indexOf("### 通知の種類");
   const rest = doc.slice(start + 1);
   const end = rest.search(/\n#{2,3} /);
   const section = end === -1 ? rest : rest.slice(0, end);
@@ -36,6 +39,26 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("implement_launch_failed")).toBe("action");
   });
 
+  test("treats a held draw.io viewer bump as action", () => {
+    expect(noticeSeverity("drawio_viewer_bump_held")).toBe("action");
+  });
+
+  test("treats a failed main CI as action", () => {
+    expect(noticeSeverity("main_ci_failed")).toBe("action");
+  });
+
+  test("treats a denied main CI check as action", () => {
+    expect(noticeSeverity("main_ci_check_denied")).toBe("action");
+  });
+
+  test("treats a failed pull request CI as action", () => {
+    expect(noticeSeverity("pr_ci_failed")).toBe("action");
+  });
+
+  test("treats a denied pull request CI check as action", () => {
+    expect(noticeSeverity("pr_ci_check_denied")).toBe("action");
+  });
+
   test("returns action for an unknown kind", () => {
     expect(noticeSeverity("some_future_kind")).toBe("action");
   });
@@ -52,6 +75,16 @@ describe("noticeSeverity", () => {
   });
 });
 
+describe("host_action_required", () => {
+  test("is an action notice", () => {
+    expect(noticeSeverity("host_action_required")).toBe("action");
+  });
+
+  test("can be resolved from the Console", () => {
+    expect(isNoticeResolvable("host_action_required")).toBe(true);
+  });
+});
+
 describe("INFO_NOTICE_KINDS", () => {
   test("lists exactly the kinds whose severity is info", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual(
@@ -62,14 +95,15 @@ describe("INFO_NOTICE_KINDS", () => {
     );
   });
 
-  test("contains the nine kinds that need no action", () => {
+  test("contains the ten kinds that need no action", () => {
     expect([...INFO_NOTICE_KINDS].sort()).toEqual([
       "approval_notify_failed",
       "claim_race_lost",
       "cleanup_worktrees_skipped",
       "fix_feedback_association_excluded",
+      "fork_head_denied",
       "implement_needs_human",
-      "labeler_association_denied",
+      "labeler_denied",
       "supersede_failed",
       "unsandboxed_check_commands",
       "workspace_disk_usage",
@@ -81,7 +115,7 @@ describe("UNRESOLVABLE_NOTICE_KINDS", () => {
   test("contains the security-related kinds", () => {
     expect([...UNRESOLVABLE_NOTICE_KINDS].sort()).toEqual([
       "fix_feedback_association_excluded",
-      "labeler_association_denied",
+      "labeler_denied",
       "unsandboxed_check_commands",
     ]);
   });
@@ -138,5 +172,65 @@ describe("operations.md notice table", () => {
   test("documents no kind that NOTICE_SEVERITY lacks", async () => {
     const documented = await documentedNoticeKinds();
     expect(documented.filter((kind) => !(kind in NOTICE_SEVERITY))).toEqual([]);
+  });
+});
+
+describe("truncateChars", () => {
+  test("returns a short text unchanged", () => {
+    expect(truncateChars("abc", 5)).toEqual({ text: "abc", truncated: false });
+  });
+
+  test("returns a text of exactly the limit unchanged", () => {
+    expect(truncateChars("abcde", 5)).toEqual({
+      text: "abcde",
+      truncated: false,
+    });
+  });
+
+  test("cuts a longer text to the limit", () => {
+    expect(truncateChars("abcdef", 5)).toEqual({
+      text: "abcde",
+      truncated: true,
+    });
+  });
+
+  test("counts a surrogate pair as one character", () => {
+    expect(truncateChars("a😀b", 2)).toEqual({ text: "a😀", truncated: true });
+  });
+});
+
+describe("countHiddenCharacters", () => {
+  test("counts nothing in ordinary text with newlines and tabs", () => {
+    expect(countHiddenCharacters("a\r\nb\tc 日本語")).toBe(0);
+  });
+
+  test("counts a zero width space", () => {
+    expect(countHiddenCharacters("a\u200Bb")).toBe(1);
+  });
+
+  test("counts a tag character", () => {
+    expect(countHiddenCharacters("a\u{E0041}b")).toBe(1);
+  });
+
+  test("counts a bidirectional override", () => {
+    expect(countHiddenCharacters("a\u202Eb")).toBe(1);
+  });
+
+  test("counts a variation selector", () => {
+    expect(countHiddenCharacters("a\uFE0F\u{E0100}")).toBe(2);
+  });
+
+  test("counts a control character other than the line break and tab", () => {
+    expect(countHiddenCharacters("a\u0007b")).toBe(1);
+  });
+});
+
+describe("countHtmlCommentOpeners", () => {
+  test("counts nothing without a comment", () => {
+    expect(countHtmlCommentOpeners("a <b> c")).toBe(0);
+  });
+
+  test("counts each opener", () => {
+    expect(countHtmlCommentOpeners("<!-- a --> x <!-- b")).toBe(2);
   });
 });

@@ -8,13 +8,17 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 
 | ステップ | 処理 |
 | --- | --- |
-| `pipeline_prepare` | attemptを保存し、対象リポジトリの既定ブランチの先頭に要件定義用のworktreeを用意する。Issueが閉じていれば取り消す |
+| `pipeline_prepare` | attemptを保存し、リポジトリのオーナーを`owners`と照合してから、対象リポジトリの既定ブランチの先頭に要件定義用のworktreeを用意する。Issueが閉じていれば取り消す |
 | `pipeline_generate` | 日次予算を確かめ、headless Claudeに要件定義書と図を書かせ、検査してドラフトとして保存する |
 | `pipeline_request_approval` | 承認依頼を記録して通知し、人の判断を待たずにフローを終える |
 
 要件定義用のworktreeは`/workspaces/<owner>/<repo>/req-<N>`に置く。既存のworktreeが既定ブランチの今の先頭と違えば、消して作り直す。
 
 日次予算を超えていれば、`pipeline_generate`はClaudeを起動しない。作業項目を人の対応待ち(`needs_human`)にし、Discordに通知する。
+
+リポジトリのオーナーの照合に通らないときは、`pipeline_prepare`が、対象リポジトリをcloneせずに、作業項目を人の対応待ちにしてDiscordに通知する。
+後続のステップは飛ばす。
+照合は[運用](../operations.md)の「オーナーの数値IDを固定する」に書く。
 
 ## 要件定義ファイルの置き場所
 
@@ -24,7 +28,7 @@ pipelineフロー(`f/factory/pipeline`)は次の3つのステップで動く。�
 /var/lib/factory/requirements/<owner>/<repo>/issue-<N>/wi-<work_item_id>/attempt-<attempt>/
 ```
 
-`/var/lib/factory`は、名前付きボリューム`factory_state`である。defaultのworkerが読み書きし、Console用のworkerが読み取り専用でマウントする。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
+`/var/lib/factory`は、名前付きボリューム`factory_state`である。defaultのworkerが読み書きし、Console用のworkerはサブパス`requirements`だけを読み取り専用でマウントする。このディレクトリはコミットしない。`owner`と`repo`は、GitHubの名前として正しいかを確かめてからパスに埋め込む。
 
 ディレクトリには、要件定義書の`requirements.md`と、図の`<name>.drawio`だけを置く。DBの`requirement_drafts`には、本文(`markdown`)、図の参照(`{name, file}`)、未確定事項、`doc_dir`を保存する。図のXMLはDBに保存しない。
 
@@ -44,6 +48,7 @@ Consoleのbackendがどのworkerで動くかは、scriptの`tag`で決まる。�
 | 対象リポジトリ | worktreeを`--add-dir`で読み取り専用として渡す。カレントディレクトリにはしない |
 | スキル | `factory-requirements`と`drawio-diagram` |
 | 構造化出力 | `{summary, open_questions}` |
+| モデル | `heavy_model` |
 | 上限 | `max_turns`、`max_budget_usd_per_run`、`claude_timeout_sec` |
 
 Claudeは`requirements.md`を`Edit`で埋め、図があれば`<name>.drawio`を`Write`で横に置く。`Write`と`Edit`を許可しても、`--restricted`によって書き込みはカレントディレクトリの下に閉じる。
@@ -76,9 +81,19 @@ Claudeの出力が検査を通らないときは、問題点をプロンプト�
 
 ## Consoleでの表示
 
-Consoleの**要件定義**タブと、**承認**タブの要件定義の詳細は、どちらも`f/factory/steps/console_query.ts`の`requirements_doc`ビューを使う。このビューは`requirements_doc.ts`の検査とは別のものである。
+Consoleの**作業項目**の要件定義書の画面と、**要対応**の要件定義の詳細は、どちらも`f/factory/steps/console_query.ts`の`requirements_doc`ビューを使う。このビューは`requirements_doc.ts`の検査とは別のものである。
 
-ビューは、DBの行の`doc_dir`から`requirements.md`と各図のファイルを読み戻す(`readDocFromDisk`)。raw appの`components/RequirementsDocument.tsx`、`Markdown.tsx`、`DrawioViewer.tsx`が、本文、目次、図をページの中に描画する。見た目はConfluenceの文書ページに近い。
+ビューは、DBの行の`doc_dir`から`requirements.md`と各図のファイルを読み戻す(`readDocFromDisk`)。
+Consoleの要件定義書の画面(`/console/items/:id/requirements`)が、本文、目次、試行の切り替え、図を描画する。
+実装は`src/screens/items/RequirementsDocumentView.tsx`である。
+本文は`src/components/markdown/Markdown.tsx`、図は`src/components/drawio/DrawioFrame.tsx`が描く。
+左に本文、右に目次を置く。
+本文のリンクは、作業項目と同じリポジトリのIssueとPRのURLと、見出しへのフラグメントだけをリンクにする。
+図は、読み戻すときにも`validateDrawioXml`で検査し、通らない図は落として、名前を`rejected_diagrams`で返す。
+本文は、落とした図を「安全の検査を通らなかったので表示しません」と出す。
+通った図は、隔離したiframeの中で描く。
+画面の仕様は[Consoleの仕様](console.md)の「要件定義書の画面」にある。
+理由は[セキュリティ](../security.md)の「draw.ioの図の描画」と「要件定義書のリンク」にある。
 
 読み戻しの規則は次のとおり。
 
@@ -117,7 +132,7 @@ Consoleの**要件定義**タブと、**承認**タブの要件定義の詳細�
 
 ### 決定の記録
 
-人はConsoleの**承認**タブから承認か却下をする。Consoleは`f/factory/approval_decide`を実行する。却下には理由が必須で、承認には要らない。補足(`note`)は理由に織り込んで記録する。判断側のオプション(`options`)は`decision_options`列に記録する。
+人はConsoleの**要対応**から承認か却下をする。Consoleは`f/factory/approval_decide`を実行する。却下には理由が必須で、承認には要らない。補足(`note`)は理由に織り込んで記録する。判断側のオプション(`options`)は`decision_options`列に記録する。
 
 `approval_decide`は、行の今の状態と今回の決定を比べて扱いを決める(`classifyExistingDecision`)。
 
@@ -135,13 +150,51 @@ Consoleの**要件定義**タブと、**承認**タブの要件定義の詳細�
 
 承認者(`decided_by`)は引数ではなく、ジョブの実行文脈から決める(`deriveApprover`)。`WM_USERNAME`を使い、無ければ`WM_EMAIL`を使う。どちらも無ければ例外にし、承認者が分からないまま記録しない。
 
+### 承認の前のIssueの確認
+
+要件定義を承認するときは、決定を記録する前に、現在のIssueの題名と本文が取り込み時点(`work_items.title`、`body`)と同じかを確かめる。実装のClaudeに渡るのは取り込み時点の内容なので、承認者が見た内容と一致させるためである。
+
+確認は`approval_decide`の中で行う。
+`approval_decide`はConsole用のworkerで動き、`gh`を起動できない。
+そのため、`github_token`を読み、GitHubのREST APIを`fetch`で直接呼ぶ(`fetchIssueContent`)。読むのは`GET /repos/<owner>/<repo>/issues/<番号>`である。
+別のscriptに頼むと、defaultのworkerの待ち行列に並ぶ間、Console用workerの枠を塞ぐためである。
+通信の決まりは次のとおりである。
+
+- 宛先は`https://api.github.com`に固定し、ownerとrepoは検査してから使う。
+- `github_token`は`Authorization`ヘッダだけに載せる。
+- リダイレクトは辿らない。
+- 10秒の締め切りを付ける。
+- エラーの文とログに、トークンとIssueの内容を含めない。
+
+判定は次の3つである。
+
+| 判定 | 意味 | 承認 |
+| --- | --- | --- |
+| `match` | 題名と本文が同じ。改行コードと本文の前後の空白の違いは無視する | 記録する |
+| `changed` | 取り込み後に題名か本文が変わった | 断る |
+| `unavailable` | 作業項目やIssue番号が無い、トークンを読めない、通信の失敗、締め切りの超過、2xx以外の応答(3xx、4xx、5xxを含む)、形の違う応答のどれかで、比べられなかった | 断る |
+
+確認するのは、要件定義の承認を新しく記録するときだけである(`needsIssueCheck`)。却下、決定が記録済みの行への再実行、Issue化の提案は確認しない。
+
+断るときのエラーは、Issueが変わった旨と、承認者が取れる手を示す。
+1つは、Issueを取り込み時点の内容に戻して、もう一度承認することである。
+もう1つは、却下することである。却下による作り直しは、現在のIssueの題名と本文を取り込み直し、更新したことを承認者に知らせる([作業項目の状態とリース](work-items.md)の「却下と再生成」)。作り直した要件定義には、あらためて承認が要る。
+`unavailable`はしばらく待ってからやり直す。
+
+確認から決定の記録までの間のIssueの書き換えは防げない。
+承認者が見た内容のハッシュに結び付ければ防げるが、`approval_decide`がそのハッシュを受け取らないので、今は採れない。
+実装を終えたときの、PR本文の注記が残りを拾う。
+
+Console用のworkerで動くscriptのうち、`github_token`を読むのは、`retry_work_item`と`approval_decide`である。
+`approval_decide`は2つ目の例外にあたる([セキュリティ](../security.md)の「Console用workerの境界」を参照)。
+
 ### 要件定義の承認の反映
 
 `requirements_apply`は、作業項目が承認待ち(`awaiting_approval`)のときだけ処理する。それ以外の状態なら何もしない。
 
 承認なら、作業項目を承認済み(`approved`)にする。続けてIssueへのコメント、Discordへの通知、`req-<N>`のworktreeの削除を順に実行する。Issueへのコメントは、Consoleの要件定義へのリンク1件だけである。本文と図はIssueに書かない。
 
-リンクの末尾には`#requirements/<work_item_id>`を付け、コメントには`work_item_id`も書く。Consoleがこのフラグメントを読めない環境でも、IDで探せるようにするためである。
+リンクは、承認した試行の要件定義書のページ(`/console/items/<work_item_id>/requirements?attempt=<k>`)を指す。コメントには`work_item_id`も書き、リンクが開けないときでも、どの作業項目の承認かを特定できるようにする。
 
 `implement_enabled`が真なら、続けて実装フローを起動する。却下のときの遷移と、実装フローの起動の手順は[作業項目の状態とリース](work-items.md)に書く。
 

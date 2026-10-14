@@ -78,40 +78,52 @@ export function buildRecordedReason(
 }
 
 /**
- * Factory ConsoleのWindmill Appのパス。
- * 承認フローのスクリプトはすべてこの定数からConsoleへのリンクを作る。
- * 実際のURLを確かめて直す必要が出たときに、1行の変更で済むよう1箇所にまとめている。
+ * Consoleの入口のパス。承認フローのscriptはすべてここからConsoleへのリンクを作る。
+ * 末尾の`/`を含める。Caddyは`/console/`の下だけをConsoleのSPAとして配るため。
  */
-const FACTORY_CONSOLE_APP_PATH = "f/factory/factory_console";
+const CONSOLE_ENTRANCE_PATH = "/console/";
 
 /**
- * Factory Console AppのInboxのURLを返す。このURLはログインを求める。
- * 承認・却下を求めるときに投稿するリンクはこれだけで、
- * 漏れると困るsuspendの権限付きURLはもう存在しない。
+ * ConsoleのURLを返す。このURLはログインを求める。
+ * 承認・却下を求めるときに投稿するリンクは、ログインを求めるConsoleのURLだけにする。
+ * `getResumeUrls()`の署名付きURLは、見た人が承認の記録を残さずに止まったフローを再開できるため載せない。
  *
- * `target.work_item_id`を渡すと`#requirements/<id>`のフラグメントを付け、
- * Consoleの要件定義タブがその作業項目の要件定義書を直接開けるようにする
- * (raw appの`lib/deepLink.ts`を参照)。
- * ただし、raw appは親フレームのURLを読めない場合があるため、これは保証ではない。
- * 手で辿れるよう、呼び出し側はどれもURLと一緒に`work_item_id`も書き出す
- * (IssueのコメントやDiscordのフィールド)。
+ * `target`を渡すと、その作業項目の要件定義書のページ
+ * (`/console/items/<work_item_id>/requirements`)を指す。
+ * `target.attempt`があるとその試行の要件定義書を、無ければ最新の試行を開く。
+ * 経路の形は`console/src/app/screens.ts`の表に合わせる。
  */
 export function buildConsoleUrl(
   windmillPublicUrl: string,
-  target?: { work_item_id: number },
+  target?: { work_item_id: number; attempt?: number },
 ): string {
-  const base = `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}`;
-  return target === undefined
-    ? base
-    : `${base}#requirements/${String(target.work_item_id)}`;
+  const entrance = `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}`;
+  if (target === undefined) {
+    return entrance;
+  }
+  const page = `${entrance}items/${String(target.work_item_id)}/requirements`;
+  return target.attempt === undefined
+    ? page
+    : `${page}?attempt=${String(target.attempt)}`;
 }
 
-/** 監査レポート1件を開くConsoleのURL(監査タブ、`#audit/<work_item_id>`)を返す。 */
+/**
+ * 承認依頼1件を選んだ状態のConsoleの要対応のURL(`/console/?approval=<id>`)を返す。
+ * 承認と却下はこの画面で行う。
+ */
+export function buildApprovalConsoleUrl(
+  windmillPublicUrl: string,
+  approvalRequestId: number,
+): string {
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}?approval=${String(approvalRequestId)}`;
+}
+
+/** 監査レポート1件を開くConsoleのURL(`/console/reports/audit/<work_item_id>`)を返す。 */
 export function buildAuditConsoleUrl(
   windmillPublicUrl: string,
   workItemId: number,
 ): string {
-  return `${windmillPublicUrl}/apps/get/${FACTORY_CONSOLE_APP_PATH}#audit/${String(workItemId)}`;
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}reports/audit/${String(workItemId)}`;
 }
 
 /**
@@ -139,4 +151,62 @@ export function expiredRequirementsRequests<
   T extends { kind: ApprovalRequestKind },
 >(requests: readonly T[]): T[] {
   return requests.filter((request) => request.kind === "requirements");
+}
+
+/**
+ * Issueの確認の結果。
+ * - `match`: 現在のIssueの題名と本文が取り込み時点と同じ。
+ * - `changed`: 取り込み後に題名か本文が変わった。
+ * - `not_applicable`: 承認の対象がIssueに基づく要件定義ではない。
+ * - `unavailable`: GitHubから取得できないなどで、比べられなかった。
+ */
+export type IssueCheckVerdict =
+  | "match"
+  | "changed"
+  | "not_applicable"
+  | "unavailable";
+
+/**
+ * 決定を記録する前に、Issueを取り込み時点と比べる必要があるかを返す。副作用は無い。
+ * 比べるのは、要件定義を承認し、これから決定を記録するときだけである。
+ * 却下は実装に渡る内容を決めない。
+ * 記録済みの決定の再実行(`redispatch`)は、記録のときに確認を済ませている。
+ * Issue提案には取り込み時点の内容が無い。
+ */
+export function needsIssueCheck(
+  action: ExistingDecisionAction,
+  decision: "approve" | "reject",
+  kind: ApprovalRequestKind,
+): boolean {
+  return (
+    action === "record_and_dispatch" &&
+    decision === "approve" &&
+    kind === "requirements"
+  );
+}
+
+/**
+ * Issueの確認の判定から、承認を断る理由を返す。承認してよいときはnullを返す。
+ * 承認者が見た取り込み時点の内容と、実装のClaudeが受け取る内容を一致させるため、
+ * 比べられなかったときも断る(安全側)。
+ * 現在のIssueの内容を使うには、却下する。却下による作り直しは、現在のIssueの内容を取り込み直す。
+ */
+export function issueCheckRefusal(
+  verdict: IssueCheckVerdict,
+  approvalRequestId: number,
+): string | null {
+  switch (verdict) {
+    case "match":
+    case "not_applicable":
+      return null;
+    case "changed":
+      return [
+        `approval_decide: the issue title or body changed after intake, so approval request ${String(approvalRequestId)} was not approved.`,
+        "Claude implements the content captured at intake, which the Inbox of the new Console (/console/) shows.",
+        "To approve it, restore the issue to that content and approve again.",
+        "To use the current issue instead, reject the request; the requirements are regenerated from the current issue and need a new approval.",
+      ].join(" ");
+    case "unavailable":
+      return `approval_decide: the issue could not be compared with the intake content, so approval request ${String(approvalRequestId)} was not approved. Wait a moment and try again. If the issue was transferred or deleted, reject the request.`;
+  }
 }

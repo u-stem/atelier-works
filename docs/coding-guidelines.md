@@ -21,7 +21,7 @@
   - `§`などのセクション記号と、設計文書・計画書の章番号やファイル名。リポジトリの外にある文書は読み手が辿れない。
   - 変更の経緯(「〜から移した」「PR #Nで追加」など)。経緯はコミットとPRに残す。
   - TODO。今やるかIssueにする。
-- 既知の制限を説明するためにIssue番号を書くのはよい(例: 「検査コマンドはworkerの中でrootのまま実行し、隔離しない(#39)」)。
+- 既知の制限を説明するためにIssue番号を書くのはよい(例: 「検査コマンドはworkerと同じコンテナで動き、networkを分離しない(#146)」)。
 
 ```ts
 // 悪い例: 英語、外部文書の章番号、経緯
@@ -104,7 +104,7 @@ if (!isClaudeResult(parsed)) {
 | サイズ | 対象 | 実行 |
 | --- | --- | --- |
 | small | DB、ネットワーク、コンテナを使わない単体テスト。`f/factory/lib/**`の大半がここに入り、外部プロセスの起動や`fetch`は注入したダミーに差し替える | `mise run test`(`bun test`) |
-| medium | composeのPostgresを使うSQLのスモークテストなど、1台のマシンの中の依存を使うテスト | `mise run test:db` |
+| medium | composeのPostgresを使うSQLのスモークテストや、workerのイメージの使い捨てのコンテナで実際のsetpriv・flock・chownを使う検査コマンドの境界のテストなど、1台のマシンの中の依存を使うテスト | `mise run test:db`、`mise run test:check-sandbox` |
 | large | 実際にIssueを起票して確かめるE2E | `factory-dev`スキルの「E2Eの動作確認」の手順 |
 
 ## Windmill scriptの作法
@@ -136,6 +136,22 @@ PRを出す前に必ず通す。
 どちらも`--ignore-scripts`を必ず付ける。
 bunは依存のinstall scriptを既定では実行しないが、既定の信頼する一覧(trustedDependencies)にある有名なパッケージだけは実行するためである。
 
+### 依存の脆弱性
+
+ルートで`bun audit`を実行し、指摘が出たら更新で解消できるかを先に確かめる。
+修正版が出ているのに親のパッケージが古い版を求めるときは、ルートの`package.json`の`overrides`で修正版に固定する。
+親が修正版を取り込んだら、`overrides`を外す。
+固定したままだと、親が新しい版へ移っても古い版に留まるためである。
+
+今、`overrides`で固定しているのは次の2つである。
+
+| パッケージ | 固定する理由 |
+| --- | --- |
+| `katex` | micromark-extension-mathが`^0.16.0`を求め、0.16系に修正版が無い |
+| `smol-toml` | markdownlint-cli2が1.8.0に厳密固定している |
+
+修正版が無い指摘の受け入れと、その確認の手順は[セキュリティ](security.md#依存の脆弱性)に書く。
+
 ## PRとコミット
 
 PRの本文は`.github/PULL_REQUEST_TEMPLATE.md`の章立てに従う。
@@ -162,6 +178,35 @@ Software Factoryが作るコミットには、`lib/workspace.ts`の`commitAndPus
 Co-Authored-By: Claude <noreply@anthropic.com>
 Generated-By: Software Factory (<instance_name>)
 ```
+
+## Claudeのモデルの使い分け
+
+このリポジトリでClaudeを使うときも、Factoryの工程も、同じ方針でモデルを選ぶ。
+間違えたときにやり直しが高くつく作業は上位のモデルに任せ、安く直せる作業は既定のモデルで済ませる。
+
+| モデル | 使う場面 |
+| --- | --- |
+| Sonnet | 既定。実装、review-loopのcode-reviewer、文書の追従 |
+| Opus | 設計の判断、原因が分からないバグ、大きな計画とレビュー、Sonnetで2回失敗した課題 |
+| Fable | 最難関の課題だけ。subagentの定義やFactoryの既定には入れない |
+
+review-loopでimplementerをOpusで起動し直す条件は、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)が定める。
+
+`.claude/settings.json`の`model`は`opusplan`にしている。計画モードだけがOpusで、実装はSonnetで動く。
+`/model opus`は人が打つコマンドで、Claudeの親のセッションは自分で切り替えられない。
+review-loopの親が指摘の判定を覆すときや、`[Q]`に答えるときのように、重い判断をする場面では、次のように分ける。
+人が見ているセッションでは、人が`/model opus`に切り替える。
+クラウドやheadlessでは、重い判断の材料をOpusのsubagent(triage、devil-advocate)に出させる。
+subagentのモデルは、各定義の`model`で決める。
+implementer、code-reviewer、doc-writerはSonnetで動く。
+design-reviewer、requirements-reviewer、security-auditor、devil-advocate、triageはOpusで動く。
+Opusで起動できないときの扱いは、review-loopスキルにある。
+
+Factoryも同じ方針で、`f/factory/factory_config`の`model`(既定はSonnet)と`heavy_model`(既定はOpus)を使い分ける。
+実装とPR修正は、同じ作業でSonnetが続けて2回失敗したら、`heavy_model`で動く。
+Sonnetが成功すれば、失敗の数を数え直す。PR修正は、再レビューが続いて3ラウンド目に入っても`heavy_model`で動く。
+FactoryのPRのレビューは、失敗の数にかかわらず`heavy_model`で動く。
+工程ごとの割り当てと、既存のリソースの書き換えは[運用](operations.md)の「モデルを使い分ける」にある。
 
 ## PRチェックリスト
 

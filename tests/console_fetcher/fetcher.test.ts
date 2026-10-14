@@ -37,6 +37,7 @@ import {
 import {
   artifactJson,
   buildRelease,
+  ciWorkflowRun,
   FAKE_BLOB_HOST,
   fakeGitHub,
   workflowRun,
@@ -208,6 +209,43 @@ async function readCorruptCopies(): Promise<string[]> {
 /** 管理者(root)は書き込みの権限の制限を受けないので、権限で失敗を起こすテストは飛ばす。 */
 const itFailsOnPermission = process.getuid?.() === 0 ? test.skip : test;
 
+describe("runOnce with the draw.io directory", () => {
+  const drawioFiles = {
+    ...filesFor("A"),
+    "drawio/drawio-viewer-bc7586cb.js": "viewer",
+    "drawio/drawio-frame-ca735013.js": "frame",
+  };
+
+  function githubServingDrawio() {
+    const zip = buildRelease(SHA_A, drawioFiles);
+    return fakeGitHub({
+      runs: [workflowRun(1, SHA_A)],
+      artifacts: { 1: [artifactJson(101, SHA_A, zip)] },
+      blobs: { 101: zip },
+    });
+  }
+
+  test("serves the draw.io files through current", async () => {
+    await runOnce(deps(githubServingDrawio().fetch));
+    expect(
+      await readFile(
+        join(root, "current", "drawio", "drawio-viewer-bc7586cb.js"),
+        "utf8",
+      ),
+    ).toBe("viewer");
+  });
+
+  test("keeps the draw.io files out of the shared assets", async () => {
+    await runOnce(deps(githubServingDrawio().fetch));
+    expect(await readdir(join(root, "assets"))).toEqual(["index-A0000000.js"]);
+  });
+
+  test("reports ok for a release with the draw.io directory", async () => {
+    const status = await runOnce(deps(githubServingDrawio().fetch));
+    expect(status.state).toBe("ok");
+  });
+});
+
 describe("runOnce", () => {
   test("points current at the new release with a relative link", async () => {
     await deploy(SHA_A, "A", 1);
@@ -297,7 +335,7 @@ describe("runOnce", () => {
     github.calls.length = 0;
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
-      "/repos/o/r/actions/workflows/ci.yml/runs",
+      "/repos/o/r/actions/workflows/console-dist.yml/runs",
     ]);
   });
 
@@ -465,6 +503,204 @@ describe("runOnce", () => {
     expect(status.error).toBe("no_successful_run");
   });
 
+  describe("with the ci.yml result", () => {
+    function githubWithCi(ciRuns: readonly Record<string, unknown>[]) {
+      const zip = buildRelease(SHA_A, filesFor("A"));
+      return fakeGitHub({
+        runs: [workflowRun(1, SHA_A)],
+        ciRuns,
+        artifacts: { 1: [artifactJson(101, SHA_A, zip)] },
+        blobs: { 101: zip },
+      });
+    }
+
+    test("reports no_successful_run when ci.yml has no successful run for the commit", async () => {
+      const status = await runOnce(deps(githubWithCi([]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("does not point current at a commit whose ci.yml did not succeed", async () => {
+      await runOnce(deps(githubWithCi([]).fetch));
+      expect(await exists(join(root, "current"))).toBe(false);
+    });
+
+    test("does not download the artifact while ci.yml has not succeeded", async () => {
+      const github = githubWithCi([]);
+      await runOnce(deps(github.fetch));
+      expect(
+        github.calls.filter((call) => call.url.includes("/artifacts")),
+      ).toEqual([]);
+    });
+
+    test("ignores a ci.yml run of another commit", async () => {
+      const status = await runOnce(
+        deps(githubWithCi([ciWorkflowRun(5, SHA_B)]).fetch),
+      );
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("ignores a ci.yml run on a branch other than main", async () => {
+      const onTag = { ...ciWorkflowRun(5, SHA_A), head_branch: "v1" };
+      const status = await runOnce(deps(githubWithCi([onTag]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("ignores a ci.yml run that failed", async () => {
+      const failed = { ...ciWorkflowRun(5, SHA_A), conclusion: "failure" };
+      const status = await runOnce(deps(githubWithCi([failed]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("ignores a ci.yml run that is a pull_request run", async () => {
+      const pr = { ...ciWorkflowRun(5, SHA_A), event: "pull_request" };
+      const status = await runOnce(deps(githubWithCi([pr]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+
+    test("deploys when ci.yml succeeded for the commit", async () => {
+      const status = await runOnce(
+        deps(githubWithCi([ciWorkflowRun(5, SHA_A)]).fetch),
+      );
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("asks ci.yml for the commit on main pushes", async () => {
+      const github = githubWithCi([ciWorkflowRun(5, SHA_A)]);
+      await runOnce(deps(github.fetch));
+      const ciCall = github.calls.find((call) =>
+        call.url.includes("/workflows/ci.yml/runs"),
+      );
+      expect(
+        Object.fromEntries(new URL(ciCall?.url ?? "").searchParams),
+      ).toMatchObject({
+        head_sha: SHA_A,
+        branch: "main",
+        event: "push",
+        status: "success",
+      });
+    });
+
+    test("falls back to the newest commit that both workflows passed", async () => {
+      const zipA = buildRelease(SHA_A, filesFor("A"));
+      const zipB = buildRelease(SHA_B, filesFor("B"));
+      const github = fakeGitHub({
+        runs: [
+          workflowRun(1, SHA_A, "2026-10-07T00:00:00Z"),
+          workflowRun(2, SHA_B, "2026-10-08T00:00:00Z"),
+        ],
+        ciRuns: [ciWorkflowRun(5, SHA_A)],
+        artifacts: {
+          1: [artifactJson(101, SHA_A, zipA)],
+          2: [artifactJson(102, SHA_B, zipB)],
+        },
+        blobs: { 101: zipA, 102: zipB },
+      });
+      const status = await runOnce(deps(github.fetch));
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("reports github_unavailable when the ci.yml run list fails", async () => {
+      const github = fakeGitHub({
+        runs: [workflowRun(1, SHA_A)],
+        ciRunsStatus: 500,
+      });
+      const status = await runOnce(deps(github.fetch));
+      expect(status.error).toBe("github_unavailable");
+    });
+  });
+
+  describe("version order and revocation", () => {
+    /** 古い順に並べた版を、console-dist.ymlの成功した実行として配る。ci.ymlは`ciShas`の版だけ成功している。 */
+    function githubWith(shas: readonly string[], ciShas: readonly string[]) {
+      const runs: Record<string, unknown>[] = [];
+      const artifacts: Record<number, unknown[]> = {};
+      const blobs: Record<number, Uint8Array> = {};
+      shas.forEach((sha, index) => {
+        const id = index + 1;
+        const zip = buildRelease(sha, filesFor(sha.slice(0, 1).toUpperCase()));
+        runs.push(workflowRun(id, sha, `2026-10-0${index + 1}T00:00:00Z`));
+        artifacts[id] = [artifactJson(100 + id, sha, zip)];
+        blobs[100 + id] = zip;
+      });
+      return fakeGitHub({
+        runs,
+        ciRuns: ciShas.map((sha, index) => ciWorkflowRun(50 + index, sha)),
+        artifacts,
+        blobs,
+      });
+    }
+
+    test("stays on the served commit even when its ci.yml run is no longer listed", async () => {
+      await deploy(SHA_B, "B", 2);
+      const status = await runOnce(
+        deps(githubWith([SHA_A, SHA_B], [SHA_A]).fetch),
+      );
+      expect(status.sha).toBe(SHA_B);
+    });
+
+    test("does not check ci.yml once it reaches the served commit", async () => {
+      await deploy(SHA_B, "B", 2);
+      const github = githubWith([SHA_A, SHA_B], [SHA_A]);
+      await runOnce(deps(github.fetch));
+      expect(
+        github.calls.filter((call) => call.url.includes("/workflows/ci.yml/")),
+      ).toEqual([]);
+    });
+
+    test("deploys a newer commit that passed both workflows", async () => {
+      await deploy(SHA_A, "A", 1);
+      const status = await runOnce(
+        deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch),
+      );
+      expect(status.sha).toBe(SHA_B);
+    });
+
+    test("skips a revoked commit and serves the previous one", async () => {
+      await writeRevoked([SHA_B]);
+      const status = await runOnce(
+        deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch),
+      );
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("keeps the revoked record after skipping the commit", async () => {
+      await writeRevoked([SHA_B]);
+      await runOnce(deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch));
+      expect((await readRevoked()).shas).toEqual([SHA_B]);
+    });
+
+    test("does not bring the revoked commit back on a later run", async () => {
+      await writeRevoked([SHA_B]);
+      const github = githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]);
+      await runOnce(deps(github.fetch));
+      const status = await runOnce(deps(github.fetch));
+      expect(status.sha).toBe(SHA_A);
+    });
+
+    test("keeps current on the previous commit while the revoked one is newest", async () => {
+      await deploy(SHA_A, "A", 1);
+      await writeRevoked([SHA_B]);
+      await runOnce(deps(githubWith([SHA_A, SHA_B], [SHA_A, SHA_B]).fetch));
+      expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+    });
+
+    test("reports no_successful_run when the only candidate is revoked", async () => {
+      await writeRevoked([SHA_B]);
+      const status = await runOnce(deps(githubWith([SHA_B], [SHA_B]).fetch));
+      expect(status.error).toBe("no_successful_run");
+    });
+  });
+
+  test("reports no_successful_run when only a ci.yml run is listed", async () => {
+    const ciRun = {
+      ...workflowRun(1, SHA_A),
+      name: "CI",
+      path: ".github/workflows/ci.yml",
+    };
+    const status = await runOnce(deps(fakeGitHub({ runs: [ciRun] }).fetch));
+    expect(status.error).toBe("no_successful_run");
+  });
+
   test("refuses a redirect to an unexpected host", async () => {
     const zip = buildRelease(SHA_A, filesFor("A"));
     const github = fakeGitHub({
@@ -538,6 +774,7 @@ describe("runOnce", () => {
     const github = githubServing(SHA_B, "B", 2);
     await runOnce(deps(github.fetch));
     expect(github.calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/repos/o/r/actions/workflows/console-dist.yml/runs",
       "/repos/o/r/actions/workflows/ci.yml/runs",
     ]);
   });
@@ -609,15 +846,15 @@ describe("runOnce", () => {
     expect(await exists(join(root, "releases", SHA_B))).toBe(true);
   });
 
-  test("prunes the revoked shas whose releases are gone", async () => {
+  test("keeps the revoked shas whose releases are gone", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await writeRevoked([SHA_A, SHA_D]);
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
-    expect((await readRevoked()).shas).toEqual([]);
+    expect((await readRevoked()).shas).toEqual([SHA_A, SHA_D]);
   });
 
-  test("keeps the revoked digests when pruning", async () => {
+  test("keeps the revoked digests after removing the revoked release", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     const digest = await digestOfRelease(SHA_A);
@@ -706,7 +943,7 @@ describe("runOnce", () => {
     await rm(join(root, "current"));
     await symlink(`releases/${SHA_A}`, join(root, "current"));
     await writeRevoked([SHA_B], [await digestOfRelease(SHA_B)]);
-    await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
+    await runOnce(deps(githubServing(SHA_C, "B", 3).fetch));
     expect((await readRevoked()).shas).toEqual([]);
   });
 
@@ -785,14 +1022,14 @@ describe("runOnce", () => {
     expect(events).toContain("revoked_digest_clear_failed");
   });
 
-  test("drops the sha of a released version even when its digest was not recorded", async () => {
+  test("keeps the sha of a revoked version when its digest was not recorded", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rm(join(root, "current"));
     await symlink(`releases/${SHA_A}`, join(root, "current"));
     await writeRevoked([SHA_B], []);
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
-    expect((await readRevoked()).shas).toEqual([]);
+    expect((await readRevoked()).shas).toEqual([SHA_B]);
   });
 });
 
@@ -1238,13 +1475,22 @@ describe("rollback", () => {
     ).toEqual(digests);
   });
 
-  test("downloads the release rolled back from again after unpinning", async () => {
+  test("does not bring the commit rolled back from back after unpinning", async () => {
     await deploy(SHA_A, "A", 1);
     await deploy(SHA_B, "B", 2);
     await rollback(root, () => NOW);
     await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
     await runOnce(deps(githubServing(SHA_B, "B", 2).fetch));
-    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_B}`);
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_A}`);
+  });
+
+  test("serves a new commit with the content rolled back from after unpinning", async () => {
+    await deploy(SHA_A, "A", 1);
+    await deploy(SHA_B, "B", 2);
+    await rollback(root, () => NOW);
+    await unpin(unpinDeps(failingFetch), { force: true, ignoreCleanup: false });
+    await runOnce(deps(githubServing(SHA_C, "B", 3).fetch));
+    expect(await readlink(join(root, "current"))).toBe(`releases/${SHA_C}`);
   });
 
   test("reports the cleanup as done", async () => {

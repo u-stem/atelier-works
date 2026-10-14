@@ -1,0 +1,9 @@
+summary: '[LIB] dependabot更新のnpm registry取得'
+description: 内部ライブラリです。npm registryからパッケージの記録を取得し、公開日時、インストール時スクリプト、整合性ハッシュ、メンテナの情報を読みます。
+lock: '!inline f/factory/lib/dependabot_registry.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -1,6 +1,5 @@
-// factory_consoleのraw appが読む、読み取り専用のデータ源。
-// Appの各タブが読む`factory.v_*`ビューを1つのスクリプトの背後にまとめ、
-// AppのバックエンドのrunnableをインラインSQLの無い`type: script`の参照のままにする。
+// Console(`console/`のSPA)が読む、読み取り専用のデータ源。
+// 各画面が読む`factory.v_*`ビューを、`view`の名前で引く1つのscriptの背後にまとめる。
 
 import * as wmill from "windmill-client@1.817.0";
 import { isAbsolute, resolve } from "node:path";
@@ -13,19 +12,31 @@ import {
 } from "../lib/console_status.ts";
 import {
   ACTIONABLE_WORK_ITEM_STATUSES,
+  countHiddenCharacters,
+  countHtmlCommentOpeners,
   INFO_NOTICE_KINDS,
   INFO_NOTICE_WINDOW_DAYS,
+  INTAKE_BODY_MAX_CHARS,
+  INTAKE_REFRESHED_NOTE_PREFIX,
+  INTAKE_TITLE_MAX_CHARS,
   isNoticeResolvable,
   type NoticeSeverity,
   noticeSeverity,
+  truncateChars,
 } from "../lib/console_support.ts";
 import {
   CLEANUP_RESOLVER,
   defaultSqlClient,
+  fetchDeploymentRows,
   type SqlClient,
   type SqlRow,
 } from "../lib/db.ts";
-import { logger } from "../lib/log.ts";
+import {
+  type DrawioValidationResult,
+  validateDrawioXml,
+} from "../lib/drawio.ts";
+import { parseJobId } from "../lib/job_ids.ts";
+import { logger, maskSecrets } from "../lib/log.ts";
 import {
   DIAGRAM_NAME_PATTERN,
   REQUIREMENTS_BASE_DIR,
@@ -35,6 +46,8 @@ import {
   APPROVAL_REQUEST_STATUSES,
   type ApprovalRequestKind,
   type ApprovalRequestStatus,
+  assertPullRequestUrl,
+  type DeploymentPullRequest,
   type Diagram,
   type FixReply,
   ISSUE_PROPOSAL_ORIGINS,
@@ -45,8 +58,10 @@ import {
   isOneOf,
   isRecord,
   isString,
+  PULL_REQUEST_ORIGINS,
   type ReviewFinding,
   type ReviewSeverity,
+  sanitizePullRequestTitle,
 } from "../lib/types.ts";
 import { type ReadTextFile, readTextFile } from "../lib/workspace.ts";
 
@@ -62,8 +77,10 @@ const CONSOLE_ROW_VIEWS = [
   "fix_rounds",
   "requirements_index",
   "requirements_doc",
+  "intake_snapshot",
   "audit_index",
   "audit_doc",
+  "deployments",
 ] as const;
 
 /** 1つのオブジェクトを返すビュー。行の配列を返す`CONSOLE_ROW_VIEWS`とは返り値の形が違う。 */
@@ -332,7 +349,7 @@ export type InboxRowBase = {
 /**
  * 要件定義の承認依頼のInboxの行。
  * 文書の全体(markdown、図、open_questions)はこの行に持たせず、行を選んだときに
- * "requirements_doc"ビューで取得する(`RequirementsTab.tsx` / `InboxTab.tsx`)。
+ * "requirements_doc"ビューで取得する(要件定義書の画面と要対応の画面)。
  * 数KBの図のXMLを含みうる文書を、Inboxの一覧の全行について取らないため。
  */
 export type RequirementsInboxRow = InboxRowBase & {
@@ -709,7 +726,7 @@ function asIssueProposalStatus(value: unknown): IssueProposalStatus {
 }
 
 /**
- * "requirements_index"ビュー(要件定義タブの一覧)の1行。
+ * "requirements_index"ビュー(作業項目の画面の要件定義の一覧)の1行。
  * 要件定義の下書きが1つ以上ある`kind = 'issue'`の作業項目と、その最新の試行回数。
  */
 export type RequirementsIndexRow = {
@@ -756,7 +773,7 @@ export type RequirementsDiagramContent = {
  */
 export type DocDirSource = "file" | "db_fallback";
 
-/** "requirements_doc"ビューの1行。要件定義タブの詳細と、Inboxタブの要件定義の詳細が使う。 */
+/** "requirements_doc"ビューの1行。要件定義書の画面の本文と、要対応の要件定義の詳細が使う。 */
 export type RequirementsDocRow = {
   readonly work_item_id: number;
   readonly owner: string;
@@ -769,6 +786,12 @@ export type RequirementsDocRow = {
   readonly summary: string;
   readonly markdown: string;
   readonly diagrams: RequirementsDiagramContent[];
+  /**
+   * 読み戻した図のうち、安全の検査(`validateDrawioXml`)を通らなかった図の名前。
+   * Consoleは、「見つかりません」と区別して「通らなかったので表示しません」と出す。
+   * 図の中身と理由は返さない。`doc_dir_source`が`"db_fallback"`のときは空。
+   */
+  readonly rejected_diagrams: string[];
   readonly open_questions: string[];
   readonly doc_dir_source: DocDirSource;
 };
@@ -776,7 +799,8 @@ export type RequirementsDocRow = {
 /**
  * doc dirの`requirements.md`と、宣言された図のファイルをディスクから読んで返す。
  * `readFile`はテスト用に差し替えられる。
- * このランナブルと、ファイルを書く`pipeline_generate.ts`は同じworkerのコンテナで動くので、
+ * このランナブルはConsole用のworkerで動き、ファイルを書く`pipeline_generate.ts`はdefaultのworkerで動く。
+ * Console用のworkerは、書き込み先の`requirements`だけを同じパスに読み取り専用でマウントするので、
  * 普通のファイル読み込みで読める。
  *
  * `docDir`は絶対パスで、`..`を字面で解決した後に`REQUIREMENTS_BASE_DIR`の下でなければならない。
@@ -790,6 +814,11 @@ export type RequirementsDocRow = {
  * `name`/`file`が`DIAGRAM_NAME_PATTERN`/`DIAGRAM_FILE_PATTERN`の規則に合わない図も、
  * `file`を`docDir`に連結する前に同じく落とし、警告をログに残す。
  * 壊れた`diagrams`列の値(例: `"../../etc/passwd.drawio"`)を読ませないため。
+ * 読み戻した図のXMLには、生成の時点と同じ`validateDrawioXml`をかけ、通らない図は
+ * ファイル名の不正と同じく警告をログに残して落とし、名前を`rejected_diagrams`に返す。
+ * ディスクのファイルは生成の後に書き換わりうるので、生成時の検査を信用しない。
+ * 検査が例外で終わった図も、拒否した図として扱い、警告をログに残す(閉じる側に倒す)。
+ * `validate`はテスト用に差し替えられる。
  * 図のXMLはGitHubやDiscordには載せず、Consoleの図ビューア
  * (`components/DrawioViewer.tsx`)のためだけにここで読む。
  */
@@ -797,9 +826,11 @@ export async function readDocFromDisk(
   docDir: string,
   diagrams: readonly Diagram[],
   readFile: ReadTextFile = readTextFile,
+  validate: (xml: string) => DrawioValidationResult = validateDrawioXml,
 ): Promise<{
   readonly markdown: string;
   readonly diagrams: RequirementsDiagramContent[];
+  readonly rejected_diagrams: string[];
 } | null> {
   if (!isAbsolute(docDir)) {
     return null;
@@ -817,6 +848,7 @@ export async function readDocFromDisk(
     return null;
   }
   const resolvedDiagrams: RequirementsDiagramContent[] = [];
+  const rejectedDiagrams: string[] = [];
   const log = logger("console_query");
   for (const diagram of diagrams) {
     if (
@@ -829,14 +861,40 @@ export async function readDocFromDisk(
       });
       continue;
     }
+    let xml: string;
     try {
-      const xml = await readFile(`${dir}/${diagram.file}`);
-      resolvedDiagrams.push({ name: diagram.name, xml });
+      xml = await readFile(`${dir}/${diagram.file}`);
     } catch {
       // 図のファイルが無いか読めなければ、この図だけを落とす。
+      continue;
     }
+    let validation: DrawioValidationResult;
+    try {
+      validation = validate(xml);
+    } catch (error) {
+      // 検査が例外で終わった図は、安全と確かめられないので拒否した図として扱う。
+      log.warn("skipping diagram because validation threw", {
+        name: diagram.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      rejectedDiagrams.push(diagram.name);
+      continue;
+    }
+    if (!validation.valid) {
+      log.warn("skipping diagram that fails validation", {
+        name: diagram.name,
+        reason: validation.reason,
+      });
+      rejectedDiagrams.push(diagram.name);
+      continue;
+    }
+    resolvedDiagrams.push({ name: diagram.name, xml });
   }
-  return { markdown, diagrams: resolvedDiagrams };
+  return {
+    markdown,
+    diagrams: resolvedDiagrams,
+    rejected_diagrams: rejectedDiagrams,
+  };
 }
 
 async function toRequirementsDocRow(
@@ -860,13 +918,62 @@ async function toRequirementsDocRow(
     summary: asStr(row.summary, "summary"),
     markdown: fromDisk?.markdown ?? asStr(row.markdown, "markdown"),
     diagrams: fromDisk?.diagrams ?? [],
+    rejected_diagrams: fromDisk?.rejected_diagrams ?? [],
     open_questions: parseStringArray(row.open_questions, "open_questions"),
     doc_dir_source: fromDisk === null ? "db_fallback" : "file",
   };
 }
 
 /**
- * "audit_index"ビュー(監査タブの一覧)の1行。
+ * "intake_snapshot"ビューの1行。作業項目に取り込んだ時点のIssueの題名と本文。
+ * 実装のClaudeに渡る内容で、承認者がGitHub上の現在のIssueと別に確かめるために返す。
+ * Issueの起票者が書いた信頼できない入力なので、Consoleは文字列として描き、解釈しない。
+ * 本文は`INTAKE_BODY_MAX_CHARS`で切り、切ったときは`body_truncated`が真になる。
+ * 切った後ろの部分は、承認者がConsoleでもGitHubでも確かめられない。
+ * そこにHTMLのコメントの開始と画面に出せない文字があれば、その数を返し、Consoleが警告する。
+ * `refreshed`は、却下や再実行による作り直しで、取り込み内容を現在のIssueに更新したことがあるか。
+ */
+export type IntakeSnapshotRow = {
+  readonly work_item_id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly issue_number: number;
+  readonly issue_url: string;
+  readonly title: string;
+  readonly body: string;
+  readonly body_truncated: boolean;
+  readonly body_tail_html_comments: number;
+  readonly body_tail_hidden_chars: number;
+  readonly refreshed: boolean;
+};
+
+function toIntakeSnapshotRow(row: SqlRow): IntakeSnapshotRow {
+  const title = truncateChars(
+    asStr(row.title, "title"),
+    INTAKE_TITLE_MAX_CHARS,
+  );
+  const rawBody = asStr(row.body, "body");
+  const body = truncateChars(rawBody, INTAKE_BODY_MAX_CHARS);
+  const tail = body.truncated
+    ? Array.from(rawBody).slice(INTAKE_BODY_MAX_CHARS).join("")
+    : "";
+  return {
+    work_item_id: asId(row.work_item_id, "work_item_id"),
+    owner: asStr(row.owner, "owner"),
+    repo: asStr(row.repo, "repo"),
+    issue_number: asNumeric(row.issue_number, "issue_number"),
+    issue_url: asStr(row.issue_url, "issue_url"),
+    title: title.text,
+    body: body.text,
+    body_truncated: body.truncated,
+    body_tail_html_comments: countHtmlCommentOpeners(tail),
+    body_tail_hidden_chars: countHiddenCharacters(tail),
+    refreshed: asBool(row.refreshed, "refreshed"),
+  };
+}
+
+/**
+ * "audit_index"ビュー(レポートの画面の監査の一覧)の1行。
  * `factory.v_audit_reports`から、`factory.audit_reports`の各行に、
  * 持ち主の作業項目と提案の判断の件数を合わせたもの。
  */
@@ -915,7 +1022,7 @@ function toAuditIndexRow(row: SqlRow): AuditIndexRow {
 }
 
 /**
- * "audit_doc"ビュー(監査タブの詳細)の1行。
+ * "audit_doc"ビュー(監査レポートの画面の本文)の1行。
  * `AuditIndexRow`に、`factory.audit_reports`のレポート本文を加えたもの。
  * 数KBのMarkdownは行を選んだときだけ取るよう、"audit_index"の一覧の行には持たせない
  * ("requirements_doc"と"requirements_index"の関係と同じ)。
@@ -1108,6 +1215,7 @@ export async function runConsoleSummary(
       SELECT e.note, e.occurred_at
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+        AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true
@@ -1336,7 +1444,13 @@ function toWorkItemRoundRow(row: SqlRow): WorkItemRoundRow {
 export type WorkItemFailureRow = {
   readonly job_failure_id: number;
   readonly flow_path: string;
-  readonly job_id: string;
+  /**
+   * 失敗の記録に渡されたジョブID。UUIDの形のものだけで、形が違う値(取れなかったときの`unknown`など)は`null`。
+   * フローの失敗ではフローのルートのジョブで、失敗したステップのジョブではない。
+   */
+  readonly job_id: string | null;
+  /** 失敗を記録したジョブのルートジョブID。UUIDの形のものだけで、記録が無いか形が違えば`null`。 */
+  readonly root_job_id: string | null;
   readonly step: string | null;
   readonly error: string;
   readonly occurred_at: string;
@@ -1346,10 +1460,47 @@ function toWorkItemFailureRow(row: SqlRow): WorkItemFailureRow {
   return {
     job_failure_id: asId(row.job_failure_id, "job_failure_id"),
     flow_path: asStr(row.flow_path, "flow_path"),
-    job_id: asStr(row.job_id, "job_id"),
+    job_id: asNullableJobId(row.job_id),
+    root_job_id: asNullableJobId(row.root_job_id),
     step: asNullableStr(row.step, "step"),
     error: asStr(row.error, "error"),
     occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+  };
+}
+
+/**
+ * 状態の遷移1回分。遷移を起こしたジョブのIDを持つ。
+ * Consoleはこれらのジョブの画面へのリンクを作る。ジョブの無い遷移(移行や、フローの外の操作)では両方`null`。
+ */
+export type WorkItemTransitionRow = {
+  readonly event_id: number;
+  readonly from_status: string | null;
+  readonly to_status: string;
+  readonly note: string | null;
+  readonly occurred_at: string;
+  /** 遷移を起こしたステップ(またはscript)のジョブID。UUIDの形のものだけで、無いか形が違えば`null`。 */
+  readonly job_id: string | null;
+  /** そのステップを含むフローのルートジョブID。UUIDの形のものだけで、無いか形が違えば`null`。 */
+  readonly root_job_id: string | null;
+};
+
+/**
+ * DBから読んだジョブIDを、UUIDの形のものだけ通す。
+ * Consoleがリンクの一部に使うので、形の違う値は返さず`null`にする。
+ */
+function asNullableJobId(value: unknown): string | null {
+  return isString(value) ? parseJobId(value) : null;
+}
+
+function toWorkItemTransitionRow(row: SqlRow): WorkItemTransitionRow {
+  return {
+    event_id: asId(row.event_id, "event_id"),
+    from_status: asNullableStr(row.from_status, "from_status"),
+    to_status: asStr(row.to_status, "to_status"),
+    note: asNullableStr(row.note, "note"),
+    occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+    job_id: asNullableJobId(row.job_id),
+    root_job_id: asNullableJobId(row.root_job_id),
   };
 }
 
@@ -1411,6 +1562,8 @@ const DETAIL_FAILURE_LIMIT = 20;
 /** 詳細に載せるPRのレビューと修正の件数の上限(それぞれ新しい順)。 */
 const DETAIL_LIST_LIMIT = 50;
 const DETAIL_ERROR_LIMIT = 4000;
+/** 詳細に載せる状態の遷移の件数の上限(新しい順)。 */
+const DETAIL_TRANSITION_LIMIT = 100;
 
 /** "work_item_detail"ビューの結果。作業項目1件の概要と、その履歴。 */
 export type WorkItemDetail = {
@@ -1419,6 +1572,11 @@ export type WorkItemDetail = {
   readonly approvals: WorkItemApprovalRow[];
   readonly implement_rounds: WorkItemRoundRow[];
   readonly failures: WorkItemFailureRow[];
+  /**
+   * 状態の遷移と、それを起こしたジョブ。新しい順。
+   * 試行やラウンドの境は、遷移の時刻と各試行・ラウンドの`created_at`で対応づける。
+   */
+  readonly transitions: WorkItemTransitionRow[];
   /** PRの作業項目のレビュー。Issueの作業項目では空。 */
   readonly reviews: WorkItemReviewRow[];
   /** PRの作業項目の修正。Issueの作業項目では空。 */
@@ -1427,7 +1585,7 @@ export type WorkItemDetail = {
 
 /**
  * 作業項目`workItemId`の概要、要件定義の試行、承認の履歴、実装のラウンド、失敗、
- * PRのレビューと修正の一覧(件数だけ)を返す。
+ * 状態の遷移とそのジョブID、PRのレビューと修正の一覧(件数だけ)を返す。
  * 作業項目が無ければ例外を投げる。実装のラウンドに`check_output`は含めない。
  */
 export async function runWorkItemDetail(
@@ -1447,6 +1605,7 @@ export async function runWorkItemDetail(
       SELECT e.note
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+        AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true
@@ -1500,7 +1659,7 @@ export async function runWorkItemDetail(
 
   const failureRows = await sql`
     SELECT
-      id AS job_failure_id, flow_path, job_id, step,
+      id AS job_failure_id, flow_path, job_id, root_job_id, step,
       left(error, ${DETAIL_ERROR_LIMIT}::integer) AS error, occurred_at
     FROM factory.job_failures
     WHERE work_item_id = ${workItemId}::bigint
@@ -1532,12 +1691,24 @@ export async function runWorkItemDetail(
     LIMIT ${DETAIL_LIST_LIMIT}::integer
   `.fetch();
 
+  const transitionRows = await sql`
+    SELECT
+      e.id AS event_id, e.from_status, e.to_status,
+      left(e.note, ${SUMMARY_TEXT_LIMIT}::integer) AS note, e.occurred_at,
+      e.job_id, e.root_job_id
+    FROM factory.work_item_events e
+    WHERE e.work_item_id = ${workItemId}::bigint
+    ORDER BY e.occurred_at DESC, e.id DESC
+    LIMIT ${DETAIL_TRANSITION_LIMIT}::integer
+  `.fetch();
+
   return {
     work_item: toWorkItemOverview(overview),
     attempts: attemptRows.map(toWorkItemAttemptRow),
     approvals: approvalRows.map(toWorkItemApprovalRow),
     implement_rounds: roundRows.map(toWorkItemRoundRow),
     failures: failureRows.map(toWorkItemFailureRow),
+    transitions: transitionRows.map(toWorkItemTransitionRow),
     reviews: reviewRows.map(toWorkItemReviewRow),
     fix_rounds: fixRoundRows.map(toWorkItemFixRoundRow),
   };
@@ -1564,6 +1735,89 @@ function toDeploymentRow(row: SqlRow): DeploymentRow {
     result: asStr(row.result, "result"),
     needs_host_action: asBool(row.needs_host_action, "needs_host_action"),
     occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+  };
+}
+
+/** "deployments"ビューの1行。反映1回と、それに含まれるPR。 */
+export type DeploymentHistoryRow = {
+  readonly deployment_id: number;
+  readonly sha_from: string | null;
+  readonly sha_to: string;
+  readonly result: string;
+  readonly needs_host_action: boolean;
+  readonly occurred_at: string;
+  readonly pull_requests: DeploymentPullRequest[];
+  /**
+   * 失敗の理由。記録に無ければ(成功の行と、理由を記録する前の失敗の行)`null`。
+   * 外部のコマンドの出力を含みうる、信頼できない文字列で、画面には文字としてだけ出す。
+   */
+  readonly error: string | null;
+};
+
+/**
+ * `deployments.error`を読む。記録の時点で伏せ字にしてあるが、読むときにも`maskSecrets`を通す。
+ * 文字列でない値と空文字は、理由が無いものとして`null`にする。
+ */
+function parseDeploymentError(value: unknown): string | null {
+  if (!isString(value) || value.length === 0) return null;
+  return maskSecrets(value);
+}
+
+/**
+ * `deployments.pull_requests`の1要素を解析する。形が違えば`null`を返す。
+ * 値はコミットメッセージ由来でDBに入っているが、画面にリンクと文字として出るので、
+ * 読むたびに型と長さとURLの形を確かめ直す。
+ * 作り手が知らない値なら`unknown`に、URLが同じ形でなければ`null`にする。
+ */
+function parseDeploymentPullRequest(
+  value: unknown,
+): DeploymentPullRequest | null {
+  if (!isRecord(value)) return null;
+  const { number, title, origin, url } = value;
+  if (!isNumber(number) || !Number.isSafeInteger(number) || number < 1) {
+    return null;
+  }
+  let safeUrl: string | null = null;
+  if (isString(url)) {
+    try {
+      assertPullRequestUrl(url);
+      safeUrl = url;
+    } catch {
+      safeUrl = null;
+    }
+  }
+  return {
+    number,
+    title: isString(title) ? sanitizePullRequestTitle(title) : null,
+    origin: isOneOf(origin, PULL_REQUEST_ORIGINS) ? origin : "unknown",
+    url: safeUrl,
+  };
+}
+
+/** 配列でない値や、解析できない要素は捨てる。1つの壊れた記録で、反映の履歴の全体を落とさないため。 */
+function parseDeploymentPullRequests(value: unknown): DeploymentPullRequest[] {
+  let array: unknown[];
+  try {
+    array = asJsonArray(value, "pull_requests");
+  } catch {
+    return [];
+  }
+  return array.flatMap((item) => {
+    const parsed = parseDeploymentPullRequest(item);
+    return parsed === null ? [] : [parsed];
+  });
+}
+
+function toDeploymentHistoryRow(row: SqlRow): DeploymentHistoryRow {
+  return {
+    deployment_id: asId(row.deployment_id, "deployment_id"),
+    sha_from: asNullableStr(row.sha_from, "sha_from"),
+    sha_to: asStr(row.sha_to, "sha_to"),
+    result: asStr(row.result, "result"),
+    needs_host_action: asBool(row.needs_host_action, "needs_host_action"),
+    occurred_at: asIsoDate(row.occurred_at, "occurred_at"),
+    pull_requests: parseDeploymentPullRequests(row.pull_requests),
+    error: parseDeploymentError(row.error),
   };
 }
 
@@ -1766,8 +2020,10 @@ export type ConsoleQueryRow =
   | FixRoundRow
   | RequirementsIndexRow
   | RequirementsDocRow
+  | IntakeSnapshotRow
   | AuditIndexRow
-  | AuditDocRow;
+  | AuditDocRow
+  | DeploymentHistoryRow;
 
 /**
  * `view`に対応する許可済みのクエリを`sql`(既定は実際のdatatableクライアント)で実行し、
@@ -1778,9 +2034,9 @@ export type ConsoleQueryRow =
  *
  * `days`は、履歴として増え続けるビューの時刻の列を直近N日に絞る。
  * inbox(未決の承認依頼に絞り済み)とnotices(未解決に絞り済み)は期間で絞らない。
- * 古い未決の承認依頼や未解決のnoticeが、それを見せるためのタブから黙って消えてはならないため。
+ * 古い未決の承認依頼や未解決のnoticeが、それを見せる画面から黙って消えてはならないため。
  *
- * "requirements_doc"と"audit_doc"で`workItemId`が無ければ例外を投げる。
+ * "requirements_doc"と"intake_snapshot"と"audit_doc"で`workItemId`が無ければ例外を投げる。
  * テストで偽の`SqlClient`を渡し、実際のDBなしでクエリ文と行の解析を確かめられるよう、
  * `main`に畳み込まずにexportしている。
  */
@@ -1797,7 +2053,7 @@ export async function runConsoleQuery(
 
   switch (view) {
     case "inbox": {
-      // 期間では絞らない。未決の承認依頼が、それを見せるためのタブから黙って消えてはならない。
+      // 期間では絞らない。未決の承認依頼が、それを見せる画面から黙って消えてはならない。
       // Issueがまだ作られていない"approved"のIssue提案も含める。
       // 承認の記録はIssueの作成より先に行うため、その間で失敗する(GitHubがエラーを返すなど)と、
       // `status = 'pending'`だけを選ぶ条件では、その行が人から永久に見えなくなる。
@@ -1954,6 +2210,28 @@ export async function runConsoleQuery(
       }
       return [await toRequirementsDocRow(rows[0], readFile)];
     }
+    case "intake_snapshot": {
+      if (workItemId === null) {
+        throw new Error(
+          'console_query: "work_item_id" is required for view "intake_snapshot"',
+        );
+      }
+      const rows = await sql`
+        SELECT
+          wi.id AS work_item_id, wi.owner, wi.repo, wi.issue_number,
+          wi.issue_url, wi.title, wi.body,
+          EXISTS (
+            SELECT 1 FROM factory.work_item_events e
+            WHERE e.work_item_id = wi.id
+              AND starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX})
+          ) AS refreshed
+        FROM factory.work_items wi
+        WHERE wi.id = ${workItemId}::bigint
+          AND wi.kind = 'issue'
+        LIMIT 1
+      `.fetch();
+      return rows.map(toIntakeSnapshotRow);
+    }
     case "audit_index": {
       const rows = await sql`
         SELECT
@@ -1982,6 +2260,31 @@ export async function runConsoleQuery(
         WHERE v.work_item_id = ${workItemId}::bigint
       `.fetch();
       return rows.map(toAuditDocRow);
+    }
+    case "deployments": {
+      // 変更したパスの一覧は大きくなりうるので選ばない。画面が使うのは版とPRと失敗の理由だけである。
+      // `error`列を足すmigrationが当たる前は、その列を選ばない問い合わせで読み直す。
+      const rows = await fetchDeploymentRows(
+        sql`
+          SELECT
+            id AS deployment_id, sha_from, sha_to, result, needs_host_action,
+            occurred_at, pull_requests, error
+          FROM factory.deployments
+          WHERE occurred_at >= ${since}::timestamptz
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT ${limit}::integer
+        `,
+        () => sql`
+          SELECT
+            id AS deployment_id, sha_from, sha_to, result, needs_host_action,
+            occurred_at, pull_requests
+          FROM factory.deployments
+          WHERE occurred_at >= ${since}::timestamptz
+          ORDER BY occurred_at DESC, id DESC
+          LIMIT ${limit}::integer
+        `,
+      );
+      return rows.map(toDeploymentHistoryRow);
     }
   }
 }

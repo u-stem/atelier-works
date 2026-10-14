@@ -1,55 +1,111 @@
 import { describe, expect, test } from "bun:test";
+import { INFO_NOTICE_KINDS } from "../../f/factory/lib/console_support.ts";
 import {
   acquireImplementLease,
-  addNotice,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
+  claimIssueCreation,
+  claimPrCiCheckForFix,
+  countImplementFailedRounds,
   countPendingIssueProposals,
+  countPrCiFixRounds,
+  countPrFixFailures,
+  DEPENDABOT_REPROCESSABLE_CANCEL_NOTES,
   decideApprovalRequestIfPending,
   decideIssueProposal,
   deleteDeploymentsBefore,
   deleteJobFailuresBefore,
+  deleteMainCiRunsBefore,
+  deletePrCiChecksBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
+  deleteWorkerSamplesBefore,
+  dependabotGateWaitingCancels,
   expireApprovalRequestIfPending,
+  fetchDeploymentRows,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
+  findOrphanFixingPrCiChecks,
   getApprovalRequest,
   getIssueProposal,
+  getLatestDeployment,
+  getLatestPrCiCheck,
+  getLatestScheduleFailure,
   getNoticeById,
+  getPrCiCheckById,
+  getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
+  hasCiRoundDiffToReview,
+  hasDependabotItemForHead,
+  hasIntakeRefreshEvent,
+  hasMainCiRuns,
+  hasNewerMainCiRun,
+  hasNewerUnsettledOrFailedMainCiRun,
+  hasNonTerminalPrWorkItem,
+  hasPassedMainCiRunAfter,
   hasPriorReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
   insertAuditReport,
   insertAuditWorkItem,
   insertCleanupRun,
+  insertDependabotWorkItemUnlessActive,
   insertFixRound,
   insertImplementRound,
   insertIssueProposal,
   insertIssueWorkItemUnlessActive,
   insertReview,
+  insertWorkerSample,
   insertWorkItem,
   isActiveIssueUniqueViolation,
+  isActivePrFixUniqueViolation,
+  isLatestMainCiRunFailed,
+  isMissingDeploymentErrorColumnError,
   latestDraft,
   latestFixRound,
+  latestMainCiRunCreatedAt,
   latestPrWorkItem,
   latestRequirementsApproval,
+  latestStatusEvent,
+  listActionableWorkItems,
   listActive,
   listActiveIssueWorkItems,
+  listActivePrFixWorkItems,
+  listAutoRetryCandidates,
   listExpiredPendingApprovalRequests,
+  listFailedPrCiChecks,
+  listFixingPrCiChecks,
   listImplementRounds,
+  listMainCiRunsBySha,
+  listNoCiPrCiChecksToRecheck,
   listPendingIssueProposals,
+  listPendingMainCiRuns,
+  listPendingPrCiChecks,
+  listPrCiChecksForPr,
+  listPrOpenIssueWorkItems,
+  listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  listUnnotifiedFailedPrCiChecks,
+  listUnresolvedNoticesByKind,
+  markPrCiNotified,
   newestNewerIssueCycle,
+  newestNewerPrWorkItem,
   nextCycleForIssue,
   recordAgentRun,
   recordDeployment,
   recordFailure,
+  recordMainCiRun,
+  recordPrCiCheck,
+  recordWorkspaceDiskUsageNotice,
+  releaseFixingPrCiCheck,
   resolveNoticeIfUnresolved,
+  resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
+  resolveUnresolvedNoticesByMessage,
+  resolveUnresolvedNoticesByPrefix,
+  restartStoppedWorkItem,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -61,6 +117,7 @@ import {
   setHeadSha,
   setIssueProposalCreatedIssue,
   setObservedWatermarks,
+  setPrCiFixHold,
   setWorkItemBranch,
   setWorkItemPrUrl,
   sumAgentCostSince,
@@ -71,6 +128,10 @@ import {
   toIssueProposal,
   toRequirementDraft,
   toReviewRecord,
+  touchPrCiCheck,
+  transitionMainCiRun,
+  transitionPrCiCheck,
+  updateIntakeIfRegenerating,
   updateStatus,
   updateStatusIfCurrent,
   updateStatusIfCurrentClearingFlowJobId,
@@ -79,6 +140,7 @@ import {
 } from "../../f/factory/lib/db.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
+import { DEPENDABOT_CANCEL_NOTE } from "../../f/factory/steps/dependabot_prepare.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -105,6 +167,12 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
 }
 
 const NOW = new Date("2026-09-26T00:00:00.000Z");
+
+/** ジョブの外で動いたときの記録。環境変数に頼らず、値の並びを固定するために明示して渡す。 */
+const NO_JOBS = { job_id: null, root_job_id: null };
+
+/** 何も出さないログ。警告の有無を確かめないテストに渡す。 */
+const SILENT_LOG: Logger = { info() {}, warn() {}, error() {} };
 
 const WORK_ITEM_ROW: SqlRow = {
   id: 1,
@@ -209,8 +277,21 @@ describe("insertIssueWorkItemUnlessActive", () => {
 
   test("passes the issue, the new cycle and the new id to the sweep", async () => {
     const { sql, calls } = createFakeSqlClient([WON, []]);
-    await insertIssueWorkItemUnlessActive(NEW_WORK_ITEM, sql);
-    expect(calls[1]?.values).toEqual(["octo-owner", "atelier-works", 42, 1, 7]);
+    await insertIssueWorkItemUnlessActive(
+      NEW_WORK_ITEM,
+      sql,
+      undefined,
+      NO_JOBS,
+    );
+    expect(calls[1]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      42,
+      1,
+      7,
+      null,
+      null,
+    ]);
   });
 
   test("records an event for each cancelled work item", async () => {
@@ -260,6 +341,297 @@ describe("insertIssueWorkItemUnlessActive", () => {
   });
 });
 
+const DEPENDABOT_SHA = "0123456789abcdef0123456789abcdef01234567";
+
+const NEW_DEPENDABOT_ITEM = {
+  owner: "octo-owner",
+  repo: "atelier-works",
+  pr_number: 77,
+  title: "Bump left-pad from 1.0.0 to 1.0.1",
+  status: "picked" as const,
+  claimed_by: "factory-local",
+  head_sha: DEPENDABOT_SHA,
+};
+
+describe("insertDependabotWorkItemUnlessActive", () => {
+  test("inserts into factory.work_items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_items");
+  });
+
+  test("skips the insert on any unique violation", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.text).toContain("ON CONFLICT DO NOTHING");
+  });
+
+  test("inserts the dependabot kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.text).toContain("1, 'issue', 'dependabot',");
+  });
+
+  test("binds only the fields of the pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql);
+    expect(calls[0]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      77,
+      "Bump left-pad from 1.0.0 to 1.0.1",
+      "picked",
+      "factory-local",
+      DEPENDABOT_SHA,
+    ]);
+  });
+
+  test("returns the inserted id", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(
+      await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql),
+    ).toBe(5);
+  });
+
+  test("returns null when an active work item already exists for the pull request", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await insertDependabotWorkItemUnlessActive(NEW_DEPENDABOT_ITEM, sql),
+    ).toBeNull();
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await insertDependabotWorkItemUnlessActive(
+      { ...NEW_DEPENDABOT_ITEM, owner: "a b" },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a pull request number that is not positive", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      insertDependabotWorkItemUnlessActive(
+        { ...NEW_DEPENDABOT_ITEM, pr_number: 0 },
+        sql,
+      ),
+    ).rejects.toThrow("invalid pull request number");
+  });
+
+  test("rejects a terminal status without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    // 型は開始の状態だけを受け付けるので、型を通らない値はJSONから作る。
+    const terminal = {
+      ...NEW_DEPENDABOT_ITEM,
+      ...JSON.parse('{"status":"needs_human"}'),
+    };
+    await insertDependabotWorkItemUnlessActive(terminal, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("names the status in the error for a status that cannot start", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const terminal = {
+      ...NEW_DEPENDABOT_ITEM,
+      ...JSON.parse('{"status":"needs_human"}'),
+    };
+    await expect(
+      insertDependabotWorkItemUnlessActive(terminal, sql),
+    ).rejects.toThrow("invalid dependabot start status: needs_human");
+  });
+
+  test("rejects a head sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      insertDependabotWorkItemUnlessActive(
+        { ...NEW_DEPENDABOT_ITEM, head_sha: "abc1234" },
+        sql,
+      ),
+    ).rejects.toThrow("invalid commit sha");
+  });
+});
+
+describe("hasDependabotItemForHead", () => {
+  test("returns true when a row exists for the pull request and the head", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(
+      await hasDependabotItemForHead(
+        "octo-owner",
+        "atelier-works",
+        77,
+        DEPENDABOT_SHA,
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("returns false when no row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await hasDependabotItemForHead(
+        "octo-owner",
+        "atelier-works",
+        77,
+        DEPENDABOT_SHA,
+        sql,
+      ),
+    ).toBe(false);
+  });
+
+  test("looks only at dependabot work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.text).toContain("kind = 'dependabot'");
+  });
+
+  test("binds the owner, repo, pull request number, head sha and the reprocessable cancel notes", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      [...DEPENDABOT_REPROCESSABLE_CANCEL_NOTES],
+    ]);
+  });
+
+  test("treats exactly the cancel notes of the dependabot flow as reprocessable", () => {
+    expect([...DEPENDABOT_REPROCESSABLE_CANCEL_NOTES].sort()).toEqual(
+      Object.values(DEPENDABOT_CANCEL_NOTE).sort(),
+    );
+  });
+
+  test("limits the lookup to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+    expect(calls[0]?.text).toContain("LIMIT 1");
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasDependabotItemForHead(
+      "octo-owner",
+      "..",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a head sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      hasDependabotItemForHead("octo-owner", "atelier-works", 77, "abc", sql),
+    ).rejects.toThrow("invalid commit sha");
+  });
+});
+
+describe("dependabotGateWaitingCancels", () => {
+  test("returns the count and the time of the latest cancellation", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ count: "2", last_at: "2026-10-12T00:00:00.000Z" }],
+    ]);
+
+    const result = await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(result).toEqual({
+      count: 2,
+      lastAt: new Date("2026-10-12T00:00:00.000Z"),
+    });
+  });
+
+  test("returns zero and no time when the head was never cancelled to wait", async () => {
+    const { sql } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    const result = await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(result).toEqual({ count: 0, lastAt: null });
+  });
+
+  test("looks only at dependabot work items", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(calls[0]?.text).toContain("wi.kind = 'dependabot'");
+  });
+
+  test("binds the target and the gate waiting cancel note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      sql,
+    );
+
+    expect(calls[0]?.values).toEqual([
+      "octo-owner",
+      "atelier-works",
+      77,
+      DEPENDABOT_SHA,
+      DEPENDABOT_CANCEL_NOTE.gateWaiting,
+    ]);
+  });
+
+  test("rejects a head sha that is not a full commit sha before touching the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ count: 0, last_at: null }]]);
+
+    await dependabotGateWaitingCancels(
+      "octo-owner",
+      "atelier-works",
+      77,
+      "abc",
+      sql,
+    ).catch(() => undefined);
+
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("newestNewerIssueCycle", () => {
   test("returns the id and status of the newest larger cycle", async () => {
     const { sql } = createFakeSqlClient([[{ id: 9, status: "failed" }]]);
@@ -299,6 +671,40 @@ describe("newestNewerIssueCycle", () => {
   });
 });
 
+describe("newestNewerPrWorkItem", () => {
+  test("returns the id and status of the newest larger row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9, status: "reviewed" }]]);
+    expect(
+      await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql),
+    ).toEqual({ id: 9, status: "reviewed" });
+  });
+
+  test("returns null when no larger row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql),
+    ).toBeNull();
+  });
+
+  test("looks only at larger ids", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("id >  ? ::bigint");
+  });
+
+  test("takes the newest of them", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_review", "o", "r", 7, 3, sql);
+    expect(calls[0]?.text).toContain("ORDER BY id DESC");
+  });
+
+  test("passes the kind, the pull request and the id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await newestNewerPrWorkItem("pr_fix", "o", "r", 7, 3, sql);
+    expect(calls[0]?.values).toEqual(["pr_fix", "o", "r", 7, 3]);
+  });
+});
+
 describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
   function failingSweepSql(noticeFails = false): {
     sql: SqlClient;
@@ -319,7 +725,7 @@ describe("insertIssueWorkItemUnlessActive when the sweep fails", () => {
           if (call === 2) return Promise.reject(new Error("sweep failed"));
           return noticeFails
             ? Promise.reject(new Error("notice failed"))
-            : Promise.resolve([{ id: 1 }]);
+            : Promise.resolve([{ id: 1, inserted: true }]);
         },
         execute: () => Promise.resolve(),
       };
@@ -445,7 +851,20 @@ describe("insertWorkItem", () => {
       null,
       null,
       null,
+      null,
     ]);
+  });
+
+  test("binds the ci check id when given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem({ ...NEW_WORK_ITEM, ci_check_id: 33 }, sql);
+    expect(calls[0]?.values.at(-1)).toBe(33);
+  });
+
+  test("inserts into the ci_check_id column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("parent_work_item_id, ci_check_id");
   });
 
   test("returns the inserted id", async () => {
@@ -732,6 +1151,7 @@ describe("updateStatusIfLeaseHolderClearingFlowJobId", () => {
       "job-1",
       "note",
       sql,
+      NO_JOBS,
     );
     expect(calls[0]?.values).toEqual([
       "requirements_generating",
@@ -741,6 +1161,8 @@ describe("updateStatusIfLeaseHolderClearingFlowJobId", () => {
       "pr_open",
       "requirements_generating",
       "note",
+      null,
+      null,
     ]);
   });
 
@@ -811,6 +1233,20 @@ describe("getWorkItem", () => {
     expect(item).toBeNull();
   });
 
+  test("parses the ci check id of a round that fixes a CI failure", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, ci_check_id: "33" }],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.ci_check_id).toBe(33);
+  });
+
+  test("reads a missing ci check id as null", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.ci_check_id).toBeNull();
+  });
+
   test("parses branch and pr_url (工程3 columns)", async () => {
     const { sql } = createFakeSqlClient([
       [
@@ -853,6 +1289,98 @@ describe("listActive", () => {
       [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
     ]);
     const items = await listActive(sql);
+    expect(items).toHaveLength(2);
+  });
+});
+
+describe("latestStatusEvent", () => {
+  test("returns null when no transition was recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await latestStatusEvent(1, "cancelled", sql)).toBeNull();
+  });
+
+  test("reads the previous status and the note", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ from_status: "failed", note: "reconcile: closed (actionable)" }],
+    ]);
+    expect(await latestStatusEvent(1, "cancelled", sql)).toEqual({
+      from_status: "failed",
+      note: "reconcile: closed (actionable)",
+    });
+  });
+
+  test("rejects an unknown previous status", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ from_status: "bogus", note: null }],
+    ]);
+    await expect(latestStatusEvent(1, "cancelled", sql)).rejects.toThrow(
+      "unknown status",
+    );
+  });
+
+  test("looks at the newest transition into the status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestStatusEvent(1, "cancelled", sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
+  });
+});
+
+describe("hasNonTerminalPrWorkItem", () => {
+  test("is true when a row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }]]);
+    expect(await hasNonTerminalPrWorkItem("o", "r", 7, sql)).toBe(true);
+  });
+
+  test("is false when no row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasNonTerminalPrWorkItem("o", "r", 7, sql)).toBe(false);
+  });
+
+  test("passes the terminal statuses as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNonTerminalPrWorkItem("o", "r", 7, sql);
+    expect(calls[0]?.values).toContainEqual(
+      expect.arrayContaining(["cancelled", "failed"]),
+    );
+  });
+});
+
+describe("listActionableWorkItems", () => {
+  test("passes the actionable statuses as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.values[0]).toEqual(["failed", "needs_human", "expired"]);
+  });
+
+  test("leaves out audit items", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("wi.kind != 'audit'");
+  });
+
+  test("leaves out an issue item that has a newer cycle", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("n.cycle > wi.cycle");
+  });
+
+  test("leaves out a pr item that has a newer row of the same kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("n.id > wi.id");
+  });
+
+  test("orders by id so the rotation is stable", async () => {
+    const { sql, calls } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    await listActionableWorkItems(sql);
+    expect(calls[0]?.text).toContain("ORDER BY wi.id ASC");
+  });
+
+  test("parses every returned row", async () => {
+    const { sql } = createFakeSqlClient([
+      [WORK_ITEM_ROW, { ...WORK_ITEM_ROW, id: 2 }],
+    ]);
+    const items = await listActionableWorkItems(sql);
     expect(items).toHaveLength(2);
   });
 });
@@ -1132,10 +1660,67 @@ describe("recordDeployment", () => {
         changed_paths: ["f/factory/lib/db.ts"],
         result: "ok",
         needs_host_action: false,
+        pull_requests: [],
       },
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.deployments");
+  });
+
+  test("stores the pull requests as a jsonb array", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    const pull = {
+      number: 7,
+      title: "fix: a",
+      origin: "human" as const,
+      url: "https://github.com/o/r/pull/7",
+    };
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: false,
+        pull_requests: [pull],
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(JSON.stringify([pull]));
+  });
+
+  test("writes the pull_requests column when there are pull requests", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: false,
+        pull_requests: [
+          { number: 7, title: "fix: a", origin: "human", url: null },
+        ],
+      },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("pull_requests");
+  });
+
+  test("does not name the pull_requests column when there are none", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
+      {
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "ok",
+        needs_host_action: false,
+        pull_requests: [],
+      },
+      sql,
+    );
+    expect(calls[0]?.text).not.toContain("pull_requests");
   });
 
   test("casts needs_host_action to ::boolean", async () => {
@@ -1147,24 +1732,170 @@ describe("recordDeployment", () => {
         changed_paths: [],
         result: "ok",
         needs_host_action: true,
+        pull_requests: [],
       },
       sql,
     );
     expect(calls[0]?.text).toContain("::boolean");
   });
-});
 
-describe("addNotice", () => {
-  test("inserts into factory.notices", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
-    await addNotice(
+  const FAILED_RECORD = {
+    sha_from: "aaa",
+    sha_to: "bbb",
+    changed_paths: [],
+    result: "failed",
+    needs_host_action: false,
+    pull_requests: [],
+    error: "wmill sync push failed: boom",
+  };
+
+  test("writes the reason of a failure in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls[0]?.values).toContain("wmill sync push failed: boom");
+  });
+
+  test("names the error column for a failure with a reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls[0]?.text).toContain("error)");
+  });
+
+  test("records a failure with a reason in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(FAILED_RECORD, sql, SILENT_LOG);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("does not name the error column for a success", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 13 }]]);
+    await recordDeployment(
       {
-        kind: "sha_mismatch",
-        message: "self clone SHA does not match deployed_sha",
+        sha_from: "aaa",
+        sha_to: "bbb",
+        changed_paths: [],
+        result: "success",
+        needs_host_action: false,
+        pull_requests: [],
+        error: null,
       },
       sql,
     );
-    expect(calls[0]?.text).toContain("INSERT INTO factory.notices");
+    expect(calls[0]?.text).not.toContain("error");
+  });
+
+  test("records the failure without the reason when the error column is missing", async () => {
+    const calls: FakeCall[] = [];
+    const sql: SqlClient = (strings, ...values) => {
+      calls.push({ text: strings.join(" ? "), values });
+      const failing = calls.length === 1;
+      return {
+        fetch: () =>
+          failing
+            ? Promise.reject(
+                new Error(
+                  'column "error" of relation "deployments" does not exist',
+                ),
+              )
+            : Promise.resolve([{ id: 14 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    expect(await recordDeployment(FAILED_RECORD, sql, SILENT_LOG)).toBe(14);
+  });
+
+  test("rethrows a failure other than a missing error column", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(
+      recordDeployment(FAILED_RECORD, sql, SILENT_LOG),
+    ).rejects.toThrow("db down");
+  });
+});
+
+describe("isMissingDeploymentErrorColumnError", () => {
+  test("recognizes the undefined_column code", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        Object.assign(new Error("x"), { code: "42703" }),
+      ),
+    ).toBe(true);
+  });
+
+  test("recognizes the message in the body of an API error", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        Object.assign(new Error("Bad Request"), {
+          body: 'column "error" of relation "deployments" does not exist',
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not match another failure", () => {
+    expect(isMissingDeploymentErrorColumnError(new Error("db down"))).toBe(
+      false,
+    );
+  });
+});
+
+describe("isMissingDeploymentErrorColumnError for a read", () => {
+  test("recognizes the message of a select that names the missing column", () => {
+    expect(
+      isMissingDeploymentErrorColumnError(
+        new Error('column "error" does not exist'),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("fetchDeploymentRows", () => {
+  const missingColumn = Object.assign(new Error("undefined column"), {
+    code: "42703",
+  });
+
+  function handle(result: () => Promise<SqlRow[]>) {
+    return { fetch: result, execute: () => Promise.resolve() };
+  }
+
+  test("returns the rows of the query that names the error column", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.resolve([{ id: 1, error: "boom" }])),
+      () => handle(() => Promise.reject(new Error("must not run"))),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 1, error: "boom" }]);
+  });
+
+  test("reads again without the error column when it is missing", async () => {
+    const rows = await fetchDeploymentRows(
+      handle(() => Promise.reject(missingColumn)),
+      () => handle(() => Promise.resolve([{ id: 2 }])),
+      SILENT_LOG,
+    );
+    expect(rows).toEqual([{ id: 2, error: null }]);
+  });
+
+  test("rethrows a failure other than a missing error column", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(new Error("db down"))),
+        () => handle(() => Promise.resolve([])),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
+  });
+
+  test("rethrows a failure of the second read", async () => {
+    await expect(
+      fetchDeploymentRows(
+        handle(() => Promise.reject(missingColumn)),
+        () => handle(() => Promise.reject(new Error("db down"))),
+        SILENT_LOG,
+      ),
+    ).rejects.toThrow("db down");
   });
 });
 
@@ -1174,37 +1905,139 @@ describe("addNoticeUnlessUnresolved", () => {
     message: "head abc1234 differs from deployed def5678",
   };
 
-  test("guards the insert with NOT EXISTS", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+  test("targets the partial unique index over unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     await addNoticeUnlessUnresolved(record, sql);
-    expect(calls[0]?.text).toContain("WHERE NOT EXISTS");
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (kind, md5(message)) WHERE resolved = false",
+    );
   });
 
-  test("looks only at unresolved notices", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+  test("refreshes created_at of the open notice on a conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     await addNoticeUnlessUnresolved(record, sql);
-    expect(calls[0]?.text).toContain("resolved = false");
+    expect(calls[0]?.text).toContain("DO UPDATE SET created_at = now()");
   });
 
-  test("passes the kind and the message to both the insert and the existence check", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 15 }]]);
+  test("refreshes only a notice created more than a day ago", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE factory.notices.created_at < now() - interval '1 day'",
+    );
+  });
+
+  test("refreshes only a notice of an info kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
+    await addNoticeUnlessUnresolved(record, sql);
+    expect(calls[0]?.text).toContain("AND factory.notices.kind = ANY(");
+  });
+
+  test("passes the kind, the message and the info kinds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     await addNoticeUnlessUnresolved(record, sql);
     expect(calls[0]?.values).toEqual([
       record.kind,
       record.message,
-      record.kind,
-      record.message,
+      [...INFO_NOTICE_KINDS],
     ]);
   });
 
   test("returns the new id when a row was inserted", async () => {
-    const { sql } = createFakeSqlClient([[{ id: 15 }]]);
+    const { sql } = createFakeSqlClient([[{ id: 15, inserted: true }]]);
     expect(await addNoticeUnlessUnresolved(record, sql)).toBe(15);
   });
 
-  test("returns null when an unresolved notice already exists", async () => {
+  test("returns null when an open notice was refreshed", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9, inserted: false }]]);
+    expect(await addNoticeUnlessUnresolved(record, sql)).toBeNull();
+  });
+
+  test("returns null when an open notice was left as it is", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(await addNoticeUnlessUnresolved(record, sql)).toBeNull();
+  });
+});
+
+describe("recordWorkspaceDiskUsageNotice", () => {
+  const message = "/workspacesのディスク使用量は約2.0 MiBです。";
+
+  test("resolves the open disk usage notices first", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE kind = 'workspace_disk_usage'\n      AND resolved = false",
+    );
+  });
+
+  test("keeps the newest open notice unresolved", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain(
+      "AND id <> (\n        SELECT id FROM factory.notices\n        WHERE kind = 'workspace_disk_usage' AND resolved = false\n        ORDER BY created_at DESC, id DESC\n        LIMIT 1",
+    );
+  });
+
+  test("records the cleanup as the resolver of the extra notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.values).toEqual(["cleanup_workspaces"]);
+  });
+
+  test("records when the extra notices were resolved", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[0]?.text).toContain("SET resolved = true");
+  });
+
+  test("inserts a notice of the disk usage kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "INSERT INTO factory.notices (kind, message)\n    VALUES ('workspace_disk_usage', ",
+    );
+  });
+
+  test("passes only the message to the insert", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.values).toEqual([message]);
+  });
+
+  test("targets the partial unique index over the open disk usage notice", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "ON CONFLICT (kind) WHERE resolved = false AND kind = 'workspace_disk_usage'",
+    );
+  });
+
+  test("updates the message of the open notice on a conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "DO UPDATE SET message = EXCLUDED.message",
+    );
+  });
+
+  test("refreshes created_at of the open notice on every conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ id: 21 }]]);
+    await recordWorkspaceDiskUsageNotice(message, sql);
+    expect(calls[1]?.text).toContain(
+      "DO UPDATE SET message = EXCLUDED.message, created_at = now()\n    RETURNING id",
+    );
+  });
+
+  test("returns the id of the open notice", async () => {
+    const { sql } = createFakeSqlClient([[], [{ id: 21 }]]);
+    expect(await recordWorkspaceDiskUsageNotice(message, sql)).toBe(21);
+  });
+
+  test("throws when the upsert returns no row", async () => {
+    const { sql } = createFakeSqlClient([[], []]);
+    await expect(recordWorkspaceDiskUsageNotice(message, sql)).rejects.toThrow(
+      "recordWorkspaceDiskUsageNotice",
+    );
   });
 });
 
@@ -1743,6 +2576,12 @@ describe("revertIssueProposalToPending", () => {
     expect(reverted).toBe(true);
   });
 
+  test("keeps the claim on the Issue creation until it expires", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await revertIssueProposalToPending(3, sql);
+    expect(calls[0]?.text).not.toContain("issue_creation_claimed_at");
+  });
+
   test("guards the update with status = 'approved' AND created_issue_number IS NULL", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
     await revertIssueProposalToPending(3, sql);
@@ -1754,6 +2593,38 @@ describe("revertIssueProposalToPending", () => {
     const { sql } = createFakeSqlClient([[]]);
     const reverted = await revertIssueProposalToPending(3, sql);
     expect(reverted).toBe(false);
+  });
+});
+
+describe("claimIssueCreation", () => {
+  test("returns true when the claim is taken", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 3 }]]);
+    expect(await claimIssueCreation(3, 600, sql)).toBe(true);
+  });
+
+  test("returns false when another call holds the claim", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await claimIssueCreation(3, 600, sql)).toBe(false);
+  });
+
+  test("takes the claim only for an approved row with no created Issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await claimIssueCreation(3, 600, sql);
+    expect(calls[0]?.text).toContain(
+      "status = 'approved'\n      AND created_issue_number IS NULL",
+    );
+  });
+
+  test("takes over a claim whose lease has run out", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await claimIssueCreation(3, 600, sql);
+    expect(calls[0]?.text).toContain("issue_creation_claimed_at < now()");
+  });
+
+  test("passes the lease length as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 3 }]]);
+    await claimIssueCreation(3, 600, sql);
+    expect(calls[0]?.values).toContain(600);
   });
 });
 
@@ -1769,6 +2640,162 @@ describe("countPendingIssueProposals", () => {
     const { sql } = createFakeSqlClient([[]]);
     const count = await countPendingIssueProposals(1, sql);
     expect(count).toBe(0);
+  });
+});
+
+describe("countImplementFailedRounds", () => {
+  test("returns the failed round count for the attempt", async () => {
+    const { sql } = createFakeSqlClient([[{ failed_rounds: "3" }]]);
+    expect(await countImplementFailedRounds(1, 2, sql)).toBe(3);
+  });
+
+  test("counts only check_failed, stalled and error rounds", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain(
+      "outcome IN ('check_failed', 'stalled', 'error')",
+    );
+  });
+
+  test("counts only the failed rounds after the latest round that did not fail", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain(
+      "outcome NOT IN ('check_failed', 'stalled', 'error')",
+    );
+  });
+
+  test("compares the round numbers to find the failures after the latest success", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain("AND round > COALESCE(");
+  });
+
+  test("filters by the attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ failed_rounds: 0 }]]);
+    await countImplementFailedRounds(1, 2, sql);
+    expect(calls[0]?.text).toContain("attempt = ");
+  });
+
+  test("returns 0 when no row is returned", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await countImplementFailedRounds(1, 1, sql)).toBe(0);
+  });
+});
+
+describe("countPrFixFailures", () => {
+  const ZERO = {
+    fix_round: 1,
+    blocked_rounds: 0,
+    verify_retry_items: 0,
+    failed_runs: 0,
+  };
+
+  test("adds blocked rounds, verify retries and failed runs", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          fix_round: 1,
+          blocked_rounds: "1",
+          verify_retry_items: 1,
+          failed_runs: "3",
+        },
+      ],
+    ]);
+    expect(await countPrFixFailures(1, sql)).toBe(5);
+  });
+
+  test("leaves out the rounds that fix a CI failure", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("AND wi.ci_check_id IS NULL");
+  });
+
+  test("counts only blocked rounds in which Claude ran", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("ar.stage = 'pr_fix'");
+  });
+
+  test("counts verify retries once per work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("GROUP BY ar.work_item_id");
+  });
+
+  test("counts failed runs by the error column of both Claude stages", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "ar.stage IN ('pr_fix', 'pr_fix_verify_retry')",
+    );
+  });
+
+  test("counts every failed run instead of one per work item and stage", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).not.toContain("SELECT DISTINCT");
+  });
+
+  test("leaves out a failed run only when a blocked round comes after it", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("fr.created_at >= ar.created_at");
+  });
+
+  test("leaves out a failed run only when no other run comes before the blocked round", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("later.created_at <= fr.created_at");
+  });
+
+  test("leaves out the discarded first attempt of an output retry", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "next_run.created_at <= ar.created_at + interval '10 seconds'",
+    );
+  });
+
+  test("counts only the failures after the latest round that did not end blocked", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("fr.outcome <> 'blocked'");
+  });
+
+  test("compares the time of every failure with the latest success", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain(
+      "> COALESCE((SELECT at FROM last_success), '-infinity'::timestamptz)",
+    );
+  });
+
+  test("raises the count to the rounds before this one when they exceed it", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ZERO, fix_round: 3 }]]);
+    expect(await countPrFixFailures(1, sql)).toBe(2);
+  });
+
+  test("keeps the failure count when it exceeds the rounds before this one", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ZERO, fix_round: 2, failed_runs: 4 }],
+    ]);
+    expect(await countPrFixFailures(1, sql)).toBe(4);
+  });
+
+  test("does not count the first round as a prior round", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ZERO, fix_round: 1 }]]);
+    expect(await countPrFixFailures(1, sql)).toBe(0);
+  });
+
+  test("treats a missing round number as no prior round", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ZERO, fix_round: null }]]);
+    expect(await countPrFixFailures(1, sql)).toBe(0);
+  });
+
+  test("returns 0 when no row is returned", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await countPrFixFailures(1, sql)).toBe(0);
   });
 });
 
@@ -2877,6 +3904,32 @@ describe("getNoticeById", () => {
   });
 });
 
+describe("listUnresolvedNoticesByKind", () => {
+  test("returns the id and message of each row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "5", message: "m" }]]);
+    expect(await listUnresolvedNoticesByKind("k", sql)).toEqual([
+      { id: 5, message: "m" },
+    ]);
+  });
+
+  test("returns an empty list when nothing is unresolved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await listUnresolvedNoticesByKind("k", sql)).toEqual([]);
+  });
+
+  test("selects only unresolved rows of the kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnresolvedNoticesByKind("k", sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("passes the kind as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnresolvedNoticesByKind("k", sql);
+    expect(calls[0]?.values).toContain("k");
+  });
+});
+
 describe("resolveNoticeIfUnresolved", () => {
   test("returns true when a row was resolved", async () => {
     const { sql } = createFakeSqlClient([[{ id: 5 }]]);
@@ -2990,6 +4043,109 @@ describe("resolveStaleInfoNoticesBefore", () => {
   });
 });
 
+describe("resolveUnresolvedNoticesByMessage", () => {
+  const MESSAGE = "octo-owner/atelier-works#7: factory:review";
+
+  test("updates only unresolved notices of the given kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).toMatch(
+      /UPDATE factory\.notices[\s\S]*resolved = false[\s\S]*kind =\s*\?/,
+    );
+  });
+
+  test("matches the message exactly", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).toMatch(/message =\s*\?/);
+  });
+
+  test("does not use a prefix match or LIKE", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.text).not.toMatch(/starts_with|LIKE/);
+  });
+
+  test("passes the kind, message and resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql);
+    expect(calls[0]?.values).toEqual(["poll_prs", "k", MESSAGE]);
+  });
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(
+      await resolveUnresolvedNoticesByMessage("k", MESSAGE, "poll_prs", sql),
+    ).toBe(2);
+  });
+});
+
+describe("resolveUnresolvedNoticesByPrefix", () => {
+  const PREFIX = "octo-owner/atelier-works#12: ";
+
+  test("updates factory.notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("UPDATE factory.notices");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+
+  test("records the given resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain("poll_issues");
+  });
+
+  test("only touches unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toContain("resolved = false");
+  });
+
+  test("only touches the given kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain("k");
+  });
+
+  test("matches the message prefix with starts_with", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).toMatch(/starts_with\(message,\s*\?\s*\)/);
+  });
+
+  test("passes the prefix as is, without LIKE wildcards", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.values).toContain(PREFIX);
+  });
+
+  test("does not use LIKE", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql);
+    expect(calls[0]?.text).not.toContain("LIKE");
+  });
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(
+      await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql),
+    ).toBe(2);
+  });
+
+  test("returns 0 when nothing matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await resolveUnresolvedNoticesByPrefix("k", PREFIX, "poll_issues", sql),
+    ).toBe(0);
+  });
+});
+
 describe("insertCleanupRun", () => {
   test("inserts into factory.cleanup_runs and returns its id", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
@@ -3001,6 +4157,9 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 5,
         notices_deleted: 2,
         info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3019,6 +4178,9 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 0,
         notices_deleted: 0,
         info_notices_resolved: 4,
+        main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3036,6 +4198,9 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 0,
         notices_deleted: 0,
         info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3053,6 +4218,9 @@ describe("insertCleanupRun", () => {
         deployments_deleted: 5,
         notices_deleted: 2,
         info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
       sql,
@@ -3375,6 +4543,67 @@ describe("isActiveIssueUniqueViolation with a server body", () => {
   });
 });
 
+describe("isActivePrFixUniqueViolation", () => {
+  const KEY_BODY =
+    'ERROR: duplicate key value violates unique constraint "work_items_active_pr_fix_key"';
+
+  test("recognises a violation of the active pr_fix index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+    );
+    expect(isActivePrFixUniqueViolation(err)).toBe(true);
+  });
+
+  test("does not match a violation of the active issue index", () => {
+    const err = new Error(
+      'duplicate key value violates unique constraint "work_items_active_issue_key"',
+    );
+    expect(isActivePrFixUniqueViolation(err)).toBe(false);
+  });
+
+  test("does not match an unrelated error", () => {
+    expect(isActivePrFixUniqueViolation(new Error("db down"))).toBe(false);
+  });
+
+  test("does not match a value that is not an error", () => {
+    expect(isActivePrFixUniqueViolation("work_items_active_pr_fix_key")).toBe(
+      false,
+    );
+  });
+
+  test("recognises the constraint name in a string body", () => {
+    const err = Object.assign(new Error("Conflict"), { body: KEY_BODY });
+    expect(isActivePrFixUniqueViolation(err)).toBe(true);
+  });
+
+  test("ignores a body that is not a string", () => {
+    const err = Object.assign(new Error("Conflict"), {
+      body: { message: KEY_BODY },
+    });
+    expect(isActivePrFixUniqueViolation(err)).toBe(false);
+  });
+});
+
+describe("listActivePrFixWorkItems", () => {
+  test("filters by owner, repo and pull request number", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("o", "r", 7, sql);
+    expect(calls[0]?.values).toContain(7);
+  });
+
+  test("selects pr_fix work items that are not terminal", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("o", "r", 7, sql);
+    expect(calls[0]?.text).toContain("kind = 'pr_fix'");
+  });
+
+  test("passes the terminal statuses as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("o", "r", 7, sql);
+    expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
+  });
+});
+
 describe("listActiveIssueWorkItems", () => {
   test("filters by owner, repo and issue number", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
@@ -3392,5 +4621,2506 @@ describe("listActiveIssueWorkItems", () => {
     const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
     const items = await listActiveIssueWorkItems("o", "r", 12, sql);
     expect(items.map((item) => item.id)).toEqual([9]);
+  });
+});
+
+describe("listPrOpenIssueWorkItems", () => {
+  const SINCE = new Date("2026-10-01T00:00:00Z");
+
+  test("selects issue-kind work items in the pr_open status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.text).toContain("kind = 'issue' AND status = 'pr_open'");
+  });
+
+  test("selects only work items that have a pull request url", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.text).toContain("pr_url IS NOT NULL");
+  });
+
+  test("filters by the update time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.values).toContain(SINCE.toISOString());
+  });
+
+  test("limits the number of rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(calls[0]?.values).toContain(10);
+  });
+
+  test("returns the mapped rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...WORK_ITEM_ROW, id: 9 }]]);
+    const items = await listPrOpenIssueWorkItems(SINCE, 10, sql);
+    expect(items.map((item) => item.id)).toEqual([9]);
+  });
+});
+
+describe("getLatestDeployment", () => {
+  test("returns null when there is no deployment", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestDeployment(sql)).toBeNull();
+  });
+
+  test("returns the result of the newest row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ result: "failed", sha_to: "bbb" }],
+    ]);
+    expect((await getLatestDeployment(sql))?.result).toBe("failed");
+  });
+
+  test("returns the target sha of the newest row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ result: "failed", sha_to: "bbb" }],
+    ]);
+    expect((await getLatestDeployment(sql))?.sha_to).toBe("bbb");
+  });
+
+  test("orders by newest first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestDeployment(sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC");
+  });
+});
+
+describe("getLatestScheduleFailure", () => {
+  test("returns null when no failure was recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestScheduleFailure("f/factory/x", sql)).toBeNull();
+  });
+
+  test("returns the error of the newest row", async () => {
+    const { sql } = createFakeSqlClient([[{ job_id: "j1", error: "boom" }]]);
+    expect(await getLatestScheduleFailure("f/factory/x", sql)).toEqual({
+      job_id: "j1",
+      error: "boom",
+    });
+  });
+
+  test("reads only the rows recorded by the failure handler", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestScheduleFailure("f/factory/x", sql);
+    expect(calls[0]?.text).toContain("step IS NULL");
+  });
+
+  test("orders by newest first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestScheduleFailure("f/factory/x", sql);
+    expect(calls[0]?.text).toContain("ORDER BY occurred_at DESC, id DESC");
+  });
+});
+
+describe("resolveNoticesBeforeSuccessfulDeployment", () => {
+  const call = (sql: SqlClient) =>
+    resolveNoticesBeforeSuccessfulDeployment(
+      "deployed_sha_mismatch",
+      "bbb",
+      "poll_issues",
+      sql,
+    );
+
+  test("returns the number of resolved rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await call(sql)).toBe(2);
+  });
+
+  test("returns 0 when nothing is resolved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await call(sql)).toBe(0);
+  });
+
+  test("updates factory.notices in a single statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls.length).toBe(1);
+  });
+
+  test("only touches unresolved notices", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("AND resolved = false");
+  });
+
+  test("only touches notices created before the deployment", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("created_at < (");
+  });
+
+  test("uses the newest occurred_at as the reference", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain(
+      "SELECT max(occurred_at) FROM factory.deployments",
+    );
+  });
+
+  test("counts only successful deployments", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("result = 'success'");
+  });
+
+  test("filters the deployment by the target sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("bbb");
+  });
+
+  test("filters the notices by kind", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("deployed_sha_mismatch");
+  });
+
+  test("records the resolver", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.values).toContain("poll_issues");
+  });
+
+  test("stamps resolved_at with now()", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await call(sql);
+    expect(calls[0]?.text).toContain("resolved_at = now()");
+  });
+});
+
+describe("updateIntakeIfRegenerating", () => {
+  test("writes the title, body and note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await updateIntakeIfRegenerating(
+      1,
+      { title: "T", body: "B" },
+      "N",
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.values).toEqual(["T", "B", 1, "N", null, null]);
+  });
+
+  test("only updates an issue work item that is regenerating without a lease", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await updateIntakeIfRegenerating(
+      1,
+      { title: "T", body: "B" },
+      "N",
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain(
+      "kind = 'issue' AND status = 'requirements_generating' AND flow_job_id IS NULL",
+    );
+  });
+
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await updateIntakeIfRegenerating(
+      1,
+      { title: "T", body: "B" },
+      "N",
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("records the job ids on the event", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql, {
+      job_id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+      root_job_id: "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+    });
+    expect(calls[0]?.values.slice(4)).toEqual([
+      "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+      "0190a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+    ]);
+  });
+
+  test("returns true when a row was updated", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(
+      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql),
+    ).toBe(true);
+  });
+
+  test("returns false when the work item moved on", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await updateIntakeIfRegenerating(1, { title: "T", body: "B" }, "N", sql),
+    ).toBe(false);
+  });
+});
+
+describe("hasIntakeRefreshEvent", () => {
+  test("is true when an event note starts with the prefix", async () => {
+    const { sql } = createFakeSqlClient([[{ found: 1 }]]);
+    expect(await hasIntakeRefreshEvent(1, "intake refreshed", sql)).toBe(true);
+  });
+
+  test("is false when no event matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasIntakeRefreshEvent(1, "intake refreshed", sql)).toBe(false);
+  });
+
+  test("binds the work item and the prefix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasIntakeRefreshEvent(1, "intake refreshed", sql);
+    expect(calls[0]?.values).toEqual([1, "intake refreshed"]);
+  });
+});
+
+describe("listAutoRetryCandidates", () => {
+  const params = {
+    reasonPrefixes: ["worker image is stale: "],
+    noticeKind: "host_action_required",
+    noticeMarker: "workerのイメージが古く",
+    resolvedBy: "self_update",
+    notePrefix: "auto_retry: ",
+    maxRestarts: 3,
+    limit: 50,
+  };
+
+  test("parses the candidate rows", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: "7",
+          kind: "pr_fix",
+          status: "blocked",
+          attempt: 1,
+          flow_job_id: "job-1",
+        },
+      ],
+    ]);
+    expect(await listAutoRetryCandidates(params, sql)).toEqual([
+      {
+        id: 7,
+        kind: "pr_fix",
+        status: "blocked",
+        attempt: 1,
+        flow_job_id: "job-1",
+      },
+    ]);
+  });
+
+  test("rejects a kind that cannot be restarted automatically", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: 7,
+          kind: "audit",
+          status: "blocked",
+          attempt: 1,
+          flow_job_id: null,
+        },
+      ],
+    ]);
+    await expect(listAutoRetryCandidates(params, sql)).rejects.toThrow();
+  });
+
+  test("passes the reason prefixes as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContainEqual(["worker image is stale: "]);
+  });
+
+  test("requires a notice resolved after the stop", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("n.resolved_at > last.occurred_at");
+  });
+
+  test("passes the resolver as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContain("self_update");
+  });
+
+  test("excludes an issue that a newer cycle replaced", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("newer.cycle");
+  });
+
+  test("excludes a pr_fix item that a newer row of the same pull request replaced", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("newer_fix.id");
+  });
+
+  test("excludes a pr_fix item whose pull request has another active pr_fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("active_fix.id <> w.id");
+  });
+
+  test("excludes a CI round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("w.ci_check_id IS NULL");
+  });
+
+  test("excludes an item that used up its restarts", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("c.work_item_id = w.id");
+  });
+
+  test("passes the restart cap as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.values).toContain(3);
+  });
+});
+
+describe("restartStoppedWorkItem", () => {
+  const params = {
+    id: 7,
+    expectedFrom: "needs_human",
+    to: "implementing",
+    reasonPrefixes: ["worker image is stale: "],
+    clearFlowJobId: true,
+    notePrefix: "auto_retry: ",
+    maxRestarts: 3,
+    noticeKind: "host_action_required",
+    noticeMarker: "workerのイメージが古く",
+    resolvedBy: "self_update",
+    note: "auto_retry: restarted from needs_human",
+  } as const;
+
+  test("returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 7 }]]);
+    expect(await restartStoppedWorkItem(params, sql, NO_JOBS)).toBe(true);
+  });
+
+  test("returns false when the status or the reason no longer matches", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await restartStoppedWorkItem(params, sql, NO_JOBS)).toBe(false);
+  });
+
+  test("guards the update with the latest event note of the expected status", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("e.to_status = ");
+  });
+
+  test("passes the reason prefixes as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContainEqual(["worker image is stale: "]);
+  });
+
+  test("passes the restart cap as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain(3);
+  });
+
+  test("guards the update against a CI round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("AND ci_check_id IS NULL");
+  });
+
+  test("guards the update against a newer cycle of the same Issue", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("newer.cycle");
+  });
+
+  test("requires a notice resolved after the stop", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("n.resolved_at");
+  });
+
+  test("passes the resolver as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain("self_update");
+  });
+
+  test("guards the update against a newer pr_fix row of the same pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("newer_fix.id");
+  });
+
+  test("guards the update against another active pr_fix of the same pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("active_fix.id <> factory.work_items.id");
+  });
+
+  test("returns false when another active pr_fix appears before the update", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () =>
+        Promise.reject(
+          new Error(
+            'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+          ),
+        ),
+      execute: () => Promise.resolve(),
+    });
+    expect(await restartStoppedWorkItem(params, sql, NO_JOBS)).toBe(false);
+  });
+
+  test("rethrows an error that is not the active pr_fix violation", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(restartStoppedWorkItem(params, sql, NO_JOBS)).rejects.toThrow(
+      "db down",
+    );
+  });
+
+  test("records the event in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.work_item_events");
+  });
+
+  test("issues a single query", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("insertCleanupRun worker_samples_deleted", () => {
+  const counts = {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 0,
+    info_notices_resolved: 0,
+    main_ci_runs_deleted: 0,
+    worker_samples_deleted: 8,
+    pr_ci_checks_deleted: 0,
+    doc_dirs_deleted: 0,
+  };
+
+  test("inserts into the worker_samples_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.text).toContain("worker_samples_deleted");
+  });
+
+  test("records the deleted count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.values).toContain(8);
+  });
+});
+
+describe("insertCleanupRun main_ci_runs_deleted", () => {
+  const counts = {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 0,
+    info_notices_resolved: 0,
+    main_ci_runs_deleted: 6,
+    worker_samples_deleted: 0,
+    pr_ci_checks_deleted: 0,
+    doc_dirs_deleted: 0,
+  };
+
+  test("inserts into the main_ci_runs_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.text).toContain("main_ci_runs_deleted");
+  });
+
+  test("records the deleted count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.values).toContain(6);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// main_ci_runs
+// ---------------------------------------------------------------------------
+
+const CI_SHA = "a".repeat(40);
+
+const MAIN_CI_ROW: SqlRow = {
+  id: "5",
+  owner: "acme",
+  repo: "widgets",
+  head_sha: CI_SHA,
+  state: "pending",
+  summary: "",
+  prev_failed: false,
+  first_seen_at: "2026-10-12T03:00:00.000Z",
+  run_created_at: null,
+  created_at: "2026-10-12T03:00:00.000Z",
+  updated_at: "2026-10-12T03:00:00.000Z",
+};
+
+const NEW_CI_RUN = {
+  owner: "acme",
+  repo: "widgets",
+  head_sha: CI_SHA,
+  state: "pending" as const,
+  run_created_at: new Date("2026-10-12T03:00:00.000Z"),
+};
+
+describe("recordMainCiRun", () => {
+  test("rejects non 40-hex sha", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordMainCiRun({ ...NEW_CI_RUN, head_sha: "abc1234" }, sql),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("does not touch the database for a rejected sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun({ ...NEW_CI_RUN, head_sha: "abc1234" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid owner", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordMainCiRun({ ...NEW_CI_RUN, owner: "a b" }, sql),
+    ).rejects.toThrow("invalid GitHub name");
+  });
+
+  test("inserts into factory.main_ci_runs", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun(NEW_CI_RUN, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.main_ci_runs");
+  });
+
+  test("leaves an existing row alone on conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun(NEW_CI_RUN, sql);
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (owner, repo, head_sha) DO NOTHING",
+    );
+  });
+
+  test("casts run_created_at to timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun(NEW_CI_RUN, sql);
+    expect(calls[0]?.text).toContain("::timestamptz");
+  });
+
+  test("returns true when the row was inserted", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await recordMainCiRun(NEW_CI_RUN, sql)).toBe(true);
+  });
+
+  test("returns false when the sha was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await recordMainCiRun(NEW_CI_RUN, sql)).toBe(false);
+  });
+
+  test("records a baseline row with its state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordMainCiRun({ ...NEW_CI_RUN, state: "baseline" }, sql);
+    expect(calls[0]?.values).toContain("baseline");
+  });
+});
+
+describe("hasMainCiRuns", () => {
+  test("returns true when the repository has a row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await hasMainCiRuns("acme", "widgets", sql)).toBe(true);
+  });
+
+  test("returns false when the repository has no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasMainCiRuns("acme", "widgets", sql)).toBe(false);
+  });
+
+  test("limits the lookup to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasMainCiRuns("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain("LIMIT 1");
+  });
+
+  test("rejects an invalid owner or repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasMainCiRuns("a b", "widgets", sql).catch(() => undefined);
+    await hasMainCiRuns("acme", "..", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("latestMainCiRunCreatedAt", () => {
+  test("returns the newest recorded run time", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ latest: "2026-10-12T03:00:00.000Z" }],
+    ]);
+    expect(await latestMainCiRunCreatedAt("acme", "widgets", sql)).toEqual(
+      new Date("2026-10-12T03:00:00.000Z"),
+    );
+  });
+
+  test("returns null when the repository has no row", async () => {
+    const { sql } = createFakeSqlClient([[{ latest: null }]]);
+    expect(await latestMainCiRunCreatedAt("acme", "widgets", sql)).toBeNull();
+  });
+
+  test("takes the maximum over every state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ latest: null }]]);
+    await latestMainCiRunCreatedAt("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain(
+      "max(COALESCE(run_created_at, first_seen_at))",
+    );
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestMainCiRunCreatedAt("a b", "widgets", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("listMainCiRunsBySha", () => {
+  test("rejects a sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      listMainCiRunsBySha("acme", "widgets", ["abc"], sql),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("rejects an invalid owner without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listMainCiRunsBySha("a b", "widgets", [CI_SHA], sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("returns nothing without querying when no sha is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listMainCiRunsBySha("acme", "widgets", [], sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[MAIN_CI_ROW]]);
+    const rows = await listMainCiRunsBySha("acme", "widgets", [CI_SHA], sql);
+    expect(rows[0]).toMatchObject({
+      id: 5,
+      head_sha: CI_SHA,
+      state: "pending",
+      prev_failed: false,
+      run_created_at: null,
+    });
+  });
+
+  test("matches the shas with an array cast", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listMainCiRunsBySha("acme", "widgets", [CI_SHA], sql);
+    expect(calls[0]?.text).toContain("ANY( ? ::text[])");
+  });
+});
+
+describe("listPendingMainCiRuns", () => {
+  test("selects only pending rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingMainCiRuns(50, sql);
+    expect(calls[0]?.text).toContain("WHERE state = 'pending'");
+  });
+
+  test("orders by the first seen time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingMainCiRuns(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY first_seen_at ASC");
+  });
+
+  test("passes the limit as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingMainCiRuns(50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+
+  test("rejects an unexpected state in a row", async () => {
+    const { sql } = createFakeSqlClient([[{ ...MAIN_CI_ROW, state: "done" }]]);
+    await expect(listPendingMainCiRuns(50, sql)).rejects.toThrow(
+      'row field "state"',
+    );
+  });
+});
+
+describe("transitionMainCiRun", () => {
+  const settled = {
+    state: "failed" as const,
+    summary: "失敗したworkflow: CI (failure)",
+    prevFailed: true,
+  };
+
+  test("transition is idempotent: it only updates a pending row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).toContain("AND state = 'pending'");
+  });
+
+  test("returns true when this call changed the row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(await transitionMainCiRun(5, settled, sql)).toBe(true);
+  });
+
+  test("returns false when the row had already left pending", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await transitionMainCiRun(5, settled, sql)).toBe(false);
+  });
+
+  test("refreshes updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).toContain("updated_at = now()");
+  });
+
+  test("rejects a summary longer than 400 characters before the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(
+      5,
+      { ...settled, summary: "x".repeat(401) },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("accepts a summary of exactly 400 characters", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    expect(
+      await transitionMainCiRun(
+        5,
+        { ...settled, summary: "x".repeat(400) },
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("rejects a summary that is too long with an error", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 5 }]]);
+    await expect(
+      transitionMainCiRun(5, { ...settled, summary: "x".repeat(401) }, sql),
+    ).rejects.toThrow("summary is too long");
+  });
+
+  test("rejects a state a pending row cannot move to", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    // 型を通らない値を、外から来た値として渡す。
+    const to = JSON.parse(JSON.stringify({ ...settled, state: "baseline" }));
+    await transitionMainCiRun(5, to, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("casts the boolean", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).toContain("? ::boolean");
+  });
+
+  test("does not touch run_created_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 5 }]]);
+    await transitionMainCiRun(5, settled, sql);
+    expect(calls[0]?.text).not.toContain("run_created_at");
+  });
+});
+
+describe("getPreviousMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns the newest row older than the given run time", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...MAIN_CI_ROW, state: "failed" }],
+    ]);
+    const row = await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(row?.state).toBe("failed");
+  });
+
+  test("returns null when no older row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getPreviousMainCiRun("acme", "widgets", at, sql)).toBeNull();
+  });
+
+  test("orders by the same key as the cleanup and the watermark", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(calls[0]?.text).toContain(
+      "ORDER BY COALESCE(run_created_at, first_seen_at) DESC, id DESC",
+    );
+  });
+
+  test("compares strictly before the given run time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "widgets", at, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE(run_created_at, first_seen_at) < ",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPreviousMainCiRun("acme", "..", at, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("hasPassedMainCiRunAfter", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns true when a newer passed row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql)).toBe(
+      true,
+    );
+  });
+
+  test("returns false when no newer passed row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql)).toBe(
+      false,
+    );
+  });
+
+  test("looks only at passed rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain("state = 'passed'");
+  });
+
+  test("compares the (time, id) pair strictly", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain(
+      "(COALESCE(run_created_at, first_seen_at), id) >",
+    );
+  });
+
+  test("passes the id as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain("::bigint");
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasPassedMainCiRunAfter("acme", "..", at, 5, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("hasNewerMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns true when a newer row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await hasNewerMainCiRun("acme", "widgets", at, 5, sql)).toBe(true);
+  });
+
+  test("returns false when no newer row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await hasNewerMainCiRun("acme", "widgets", at, 5, sql)).toBe(false);
+  });
+
+  test("does not filter by state", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).not.toContain("state");
+  });
+
+  test("compares the (time, id) pair strictly", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain(
+      "(COALESCE(run_created_at, first_seen_at), id) >",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerMainCiRun("acme", "..", at, 5, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("hasNewerUnsettledOrFailedMainCiRun", () => {
+  const at = new Date("2026-10-12T03:00:00.000Z");
+
+  test("returns true when a newer pending or failed row exists", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when no newer pending or failed row exists", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql),
+    ).toBe(false);
+  });
+
+  test("looks only at pending and failed rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain("state IN ('pending', 'failed')");
+  });
+
+  test("compares the (time, id) pair strictly", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerUnsettledOrFailedMainCiRun("acme", "widgets", at, 5, sql);
+    expect(calls[0]?.text).toContain(
+      "(COALESCE(run_created_at, first_seen_at), id) >",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasNewerUnsettledOrFailedMainCiRun("acme", "..", at, 5, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("deleteMainCiRunsBefore", () => {
+  const cutoff = new Date("2026-09-12T00:00:00.000Z");
+
+  test("cleanup keeps pending rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteMainCiRunsBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("state <> 'pending'");
+  });
+
+  test("keeps the newest row of each repository", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteMainCiRunsBefore(cutoff, sql);
+    expect(calls[0]?.text).toMatch(
+      /COALESCE\(newer\.run_created_at, newer\.first_seen_at\)[\s\S]*COALESCE\(r\.run_created_at, r\.first_seen_at\)/,
+    );
+  });
+
+  test("ages a row by its updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteMainCiRunsBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("updated_at <=");
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await deleteMainCiRunsBefore(cutoff, sql)).toBe(2);
+  });
+});
+
+describe("deleteWorkerSamplesBefore", () => {
+  const cutoff = new Date("2026-09-12T00:00:00.000Z");
+
+  test("deletes from factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("DELETE FROM factory.worker_samples");
+  });
+
+  test("ages a row by its sampled_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.text).toContain("sampled_at <=");
+  });
+
+  test("binds the cutoff as a timestamp", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deleteWorkerSamplesBefore(cutoff, sql);
+    expect(calls[0]?.values).toEqual([cutoff.toISOString()]);
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }, { id: 3 }]]);
+    expect(await deleteWorkerSamplesBefore(cutoff, sql)).toBe(3);
+  });
+});
+
+describe("insertWorkerSample", () => {
+  const sample = {
+    sampled_at: new Date("2026-10-12T03:10:30.000Z"),
+    scheduled_for: new Date("2026-10-12T03:08:30.000Z"),
+    slots: 3,
+    running_jobs: 2,
+    running_by_script: { "f/factory/poll_prs": 2 },
+    waiting_jobs: 0,
+    max_wait_seconds: 0,
+    lag_seconds: 1,
+    mem_current_bytes: 323907584,
+    mem_anon_bytes: 80125952,
+    mem_working_set_bytes: 273625088,
+    mem_peak_bytes: 1371127808,
+    mem_limit_bytes: 4294967296,
+    mem_events_max: 0,
+    mem_oom: 0,
+    mem_oom_kill: 0,
+    mem_pressure_total_us: null,
+  };
+
+  test("inserts into factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.worker_samples");
+  });
+
+  test("returns the id of the inserted row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "41" }]]);
+    expect(await insertWorkerSample(sample, sql)).toBe(41);
+  });
+
+  test("casts the running_by_script value to jsonb", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text).toContain("::jsonb");
+  });
+
+  test("passes running_by_script as a JSON string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain('{"f/factory/poll_prs":2}');
+  });
+
+  test("casts the scheduled_for and sampled_at values to timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::timestamptz/g)).toHaveLength(2);
+  });
+
+  test("passes scheduled_for as an ISO string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain("2026-10-12T03:08:30.000Z");
+  });
+
+  test("inserts into the sampled_at column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text).toContain("sampled_at");
+  });
+
+  test("passes sampled_at as an ISO string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain("2026-10-12T03:10:30.000Z");
+  });
+
+  test("casts the byte counts to bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::bigint/g)).toHaveLength(9);
+  });
+
+  test("casts the job counts to smallint", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::smallint/g)).toHaveLength(2);
+  });
+
+  test("casts the other counts to integer", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.text.match(/::integer/g)).toHaveLength(3);
+  });
+
+  test("passes an unreadable value as null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample(sample, sql);
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("passes a missing running_by_script as null, not as a string", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await insertWorkerSample({ ...sample, running_by_script: null }, sql);
+    expect(calls[0]?.values).not.toContain("null");
+  });
+
+  test("rejects a response without a row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(insertWorkerSample(sample, sql)).rejects.toThrow(
+      "insertWorkerSample",
+    );
+  });
+});
+
+describe("listRecentWorkerSamples", () => {
+  const row = {
+    id: "9",
+    sampled_at: "2026-10-12T03:10:31.000Z",
+    scheduled_for: "2026-10-12T03:10:30.000Z",
+    slots: 3,
+    running_jobs: 1,
+    running_by_script: { "f/factory/poll_prs": 1 },
+    waiting_jobs: 0,
+    max_wait_seconds: 0,
+    lag_seconds: 1,
+    mem_current_bytes: "323907584",
+    mem_anon_bytes: "80125952",
+    mem_working_set_bytes: "273625088",
+    mem_peak_bytes: "1371127808",
+    mem_limit_bytes: "4294967296",
+    mem_events_max: "0",
+    mem_oom: "0",
+    mem_oom_kill: "0",
+    mem_pressure_total_us: null,
+  };
+
+  test("selects from factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listRecentWorkerSamples(30, sql);
+    expect(calls[0]?.text).toContain("FROM factory.worker_samples");
+  });
+
+  test("selects the newest rows first", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listRecentWorkerSamples(30, sql);
+    expect(calls[0]?.text).toContain("ORDER BY sampled_at DESC");
+  });
+
+  test("passes the limit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listRecentWorkerSamples(30, sql);
+    expect(calls[0]?.values).toEqual([30]);
+  });
+
+  test("reads a bigint column returned as a string", async () => {
+    const { sql } = createFakeSqlClient([[row]]);
+    expect((await listRecentWorkerSamples(1, sql))[0]?.mem_current_bytes).toBe(
+      323907584,
+    );
+  });
+
+  test("reads a null column as null", async () => {
+    const { sql } = createFakeSqlClient([[row]]);
+    expect(
+      (await listRecentWorkerSamples(1, sql))[0]?.mem_pressure_total_us,
+    ).toBeNull();
+  });
+
+  test("reads running_by_script returned as a JSON string", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...row, running_by_script: '{"f/factory/a":2}' }],
+    ]);
+    expect(
+      (await listRecentWorkerSamples(1, sql))[0]?.running_by_script,
+    ).toEqual({ "f/factory/a": 2 });
+  });
+
+  test("reads sampled_at as a date", async () => {
+    const { sql } = createFakeSqlClient([[row]]);
+    expect(
+      (await listRecentWorkerSamples(1, sql))[0]?.sampled_at.toISOString(),
+    ).toBe("2026-10-12T03:10:31.000Z");
+  });
+
+  test("rejects a row with a column that is not a number", async () => {
+    const { sql } = createFakeSqlClient([[{ ...row, waiting_jobs: "many" }]]);
+    await expect(listRecentWorkerSamples(1, sql)).rejects.toThrow(
+      "waiting_jobs",
+    );
+  });
+});
+
+describe("insertCleanupRun pr_ci_checks_deleted", () => {
+  const counts = {
+    work_items_deleted: 0,
+    approval_requests_deleted: 0,
+    job_failures_deleted: 0,
+    deployments_deleted: 0,
+    notices_deleted: 0,
+    info_notices_resolved: 0,
+    main_ci_runs_deleted: 0,
+    worker_samples_deleted: 0,
+    pr_ci_checks_deleted: 13,
+    doc_dirs_deleted: 0,
+  };
+
+  test("inserts into the pr_ci_checks_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.text).toContain("pr_ci_checks_deleted");
+  });
+
+  test("records the deleted count", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertCleanupRun(counts, sql);
+    expect(calls[0]?.values).toContain(13);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pr_ci_checks
+// ---------------------------------------------------------------------------
+
+const PR_CI_ROW: SqlRow = {
+  id: "9",
+  owner: "acme",
+  repo: "widgets",
+  pr_number: 12,
+  head_sha: CI_SHA,
+  state: "pending",
+  run_created_at: null,
+  summary: "",
+  notified_reason: null,
+  work_item_id: null,
+  fix_work_item_id: null,
+  fix_attempts: 0,
+  fix_hold_reason: null,
+  checked_at: "2026-10-13T03:00:00.000Z",
+  first_seen_at: "2026-10-13T03:00:00.000Z",
+  created_at: "2026-10-13T03:00:00.000Z",
+  updated_at: "2026-10-13T03:00:00.000Z",
+};
+
+const NEW_PR_CI = {
+  owner: "acme",
+  repo: "widgets",
+  pr_number: 12,
+  head_sha: CI_SHA,
+  work_item_id: 7,
+  run_created_at: null,
+};
+
+describe("recordPrCiCheck", () => {
+  test("rejects non 40-hex sha", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, head_sha: "abc1234" }, sql),
+    ).rejects.toThrow("invalid commit sha");
+  });
+
+  test("does not touch the database for a rejected sha", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck({ ...NEW_PR_CI, head_sha: "abc1234" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid owner", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, owner: "a b" }, sql),
+    ).rejects.toThrow("invalid GitHub name");
+  });
+
+  test("rejects a pull request number that is not positive", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, pr_number: 0 }, sql),
+    ).rejects.toThrow("invalid pull request number");
+  });
+
+  test("rejects a work item id that is not positive", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    await expect(
+      recordPrCiCheck({ ...NEW_PR_CI, work_item_id: -1 }, sql),
+    ).rejects.toThrow("invalid work item id");
+  });
+
+  test("inserts into factory.pr_ci_checks", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(NEW_PR_CI, sql);
+    expect(calls[0]?.text).toContain("INSERT INTO factory.pr_ci_checks");
+  });
+
+  test("leaves an existing row alone on conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(NEW_PR_CI, sql);
+    expect(calls[0]?.text).toContain(
+      "ON CONFLICT (owner, repo, pr_number, head_sha) DO NOTHING",
+    );
+  });
+
+  test("casts the nullable columns explicitly", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(NEW_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /\? ::bigint[\s\S]*\? ::timestamptz|\? ::timestamptz[\s\S]*\? ::bigint/,
+    );
+  });
+
+  test("binds a missing work item id as null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck({ ...NEW_PR_CI, work_item_id: null }, sql);
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("returns true when the row was inserted", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }]]);
+    expect(await recordPrCiCheck(NEW_PR_CI, sql)).toBe(true);
+  });
+
+  test("returns false when the head was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await recordPrCiCheck(NEW_PR_CI, sql)).toBe(false);
+  });
+});
+
+describe("listPrCiChecksForPr", () => {
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]).toMatchObject({
+      id: 9,
+      pr_number: 12,
+      head_sha: CI_SHA,
+      state: "pending",
+      run_created_at: null,
+      notified_reason: null,
+      work_item_id: null,
+    });
+  });
+
+  test("filters by owner, repo and pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE owner =  ?  AND repo =  ?  AND pr_number =  ? ::integer",
+    );
+  });
+
+  test("rejects an invalid repo without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrCiChecksForPr("acme", "..", 12, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an unexpected state in a row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, state: "baseline" }],
+    ]);
+    await expect(
+      listPrCiChecksForPr("acme", "widgets", 12, sql),
+    ).rejects.toThrow('row field "state"');
+  });
+
+  test("reads the last check time", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.checked_at).toEqual(new Date("2026-10-13T03:00:00.000Z"));
+  });
+
+  test("reads the work item id of a row that has one", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, work_item_id: "7" }],
+    ]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.work_item_id).toBe(7);
+  });
+
+  test("reads the fix work item id of a row that is being fixed", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, state: "fixing", fix_work_item_id: "31" }],
+    ]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.fix_work_item_id).toBe(31);
+  });
+
+  test("reads a missing fix work item id as null", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.fix_work_item_id).toBeNull();
+  });
+
+  test("reads the number of fix attempts", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, fix_attempts: "2" }],
+    ]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.fix_attempts).toBe(2);
+  });
+
+  test("rejects a row without the number of fix attempts", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, fix_attempts: undefined }],
+    ]);
+    await expect(
+      listPrCiChecksForPr("acme", "widgets", 12, sql),
+    ).rejects.toThrow('row field "fix_attempts"');
+  });
+
+  test("reads the hold reason of a failed row", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, state: "failed", fix_hold_reason: "log_unavailable" }],
+    ]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.fix_hold_reason).toBe("log_unavailable");
+  });
+
+  test("reads a missing hold reason as null", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(rows[0]?.fix_hold_reason).toBeNull();
+  });
+
+  test("rejects an empty hold reason", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, fix_hold_reason: "" }],
+    ]);
+    await expect(
+      listPrCiChecksForPr("acme", "widgets", 12, sql),
+    ).rejects.toThrow('row field "fix_hold_reason"');
+  });
+
+  test("selects the columns that track the fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_work_item_id, fix_attempts, fix_hold_reason",
+    );
+  });
+});
+
+describe("getLatestPrCiCheck", () => {
+  test("returns the row", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const row = await getLatestPrCiCheck("acme", "widgets", 12, sql);
+    expect(row?.id).toBe(9);
+  });
+
+  test("returns null when the pull request has no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getLatestPrCiCheck("acme", "widgets", 12, sql)).toBeNull();
+  });
+
+  test("orders by the first seen time, then the id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestPrCiCheck("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("ORDER BY first_seen_at DESC, id DESC");
+  });
+
+  test("limits the lookup to one row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestPrCiCheck("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("LIMIT 1");
+  });
+});
+
+describe("getPrCiCheckById", () => {
+  test("returns the row", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const row = await getPrCiCheckById(9, sql);
+    expect(row?.head_sha).toBe(CI_SHA);
+  });
+
+  test("returns null when the row does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getPrCiCheckById(9, sql)).toBeNull();
+  });
+
+  test("looks the row up by its id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPrCiCheckById(9, sql);
+    expect(calls[0]?.text).toContain("WHERE id = ");
+  });
+
+  test("selects the columns that track the fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPrCiCheckById(9, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_work_item_id, fix_attempts, fix_hold_reason",
+    );
+  });
+
+  test("rejects an id that is not a positive integer", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(getPrCiCheckById(0, sql)).rejects.toThrow("pr ci check id");
+  });
+});
+
+describe("hasCiRoundDiffToReview", () => {
+  test("is true when a CI round of the pull request pushed the reviewed commit", async () => {
+    const { sql } = createFakeSqlClient([[{ pushed_by_ci_round: true }]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(true);
+  });
+
+  test("is false when the reviewed commit was pushed by a person", async () => {
+    const { sql } = createFakeSqlClient([[{ pushed_by_ci_round: false }]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
+  });
+
+  test("is false when the query returns no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe(false);
+  });
+
+  test("looks only at pr_fix work items that carry a CI check", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).toMatch(
+      /w\.kind = 'pr_fix'\s+AND w\.ci_check_id IS NOT NULL/,
+    );
+  });
+
+  test("looks for the reviewed commit among the commits that the rounds pushed", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).toContain(
+      "jsonb_array_elements_text(r.commit_shas)",
+    );
+  });
+
+  test("does not depend on whether the pr_fix is the latest", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).not.toContain("LIMIT 1");
+  });
+
+  test("does not depend on the status of the pr_fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).not.toContain("w.status");
+  });
+
+  test("matches the owner and the repository without regard to case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await hasCiRoundDiffToReview("Acme", "Widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.values).toEqual(["acme", "widgets", 12, CI_SHA]);
+  });
+
+  test("rejects a review sha that is not a full commit sha", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(
+      hasCiRoundDiffToReview("acme", "widgets", 12, "abc", sql),
+    ).rejects.toThrow();
+  });
+});
+
+describe("listPendingPrCiChecks", () => {
+  test("selects only pending rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("WHERE state = 'pending'");
+  });
+
+  test("orders by the last check, so that no row is starved", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY checked_at ASC");
+  });
+
+  test("passes the limit as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPendingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+});
+
+describe("listFailedPrCiChecks", () => {
+  test("selects only failed rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("WHERE state = 'failed'");
+  });
+
+  test("orders by the last check, so that no row is starved", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY checked_at ASC");
+  });
+});
+
+describe("listUnnotifiedFailedPrCiChecks", () => {
+  test("selects only failed rows that were not notified", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnnotifiedFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain(
+      "WHERE state = 'failed' AND notified_reason IS NULL",
+    );
+  });
+
+  test("orders by the update time, which a re-read does not move", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnnotifiedFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY updated_at ASC, id ASC");
+  });
+
+  test("binds the limit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listUnnotifiedFailedPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+});
+
+describe("listNoCiPrCiChecksToRecheck", () => {
+  const before = new Date("2026-10-13T00:00:00.000Z");
+
+  test("selects only no_ci rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("WHERE r.state = 'no_ci'");
+  });
+
+  test("selects only rows last checked at or before the given time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("r.checked_at <=");
+  });
+
+  test("selects only the newest row of a pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toMatch(
+      /NOT EXISTS \([\s\S]*newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)/,
+    );
+  });
+
+  test("orders by the last check, so that no row is starved", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY r.checked_at ASC");
+  });
+
+  test("passes the limit as a bigint", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(calls[0]?.text).toContain("LIMIT  ? ::bigint");
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...PR_CI_ROW, state: "no_ci" }]]);
+    const rows = await listNoCiPrCiChecksToRecheck(before, 50, sql);
+    expect(rows[0]?.state).toBe("no_ci");
+  });
+});
+
+describe("transitionPrCiCheck", () => {
+  test("only updates a row that is still in the expected state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain("AND state =  ? ");
+  });
+
+  test("returns true when this call changed the row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await transitionPrCiCheck(9, "pending", { state: "passed" }, sql),
+    ).toBe(true);
+  });
+
+  test("returns false when the row had already moved", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await transitionPrCiCheck(9, "pending", { state: "passed" }, sql),
+    ).toBe(false);
+  });
+
+  test("refreshes updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain("updated_at = now()");
+  });
+
+  test("keeps the summary when none is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain("COALESCE( ? ::text, summary)");
+  });
+
+  test("keeps the run time when none is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE( ? ::timestamptz, run_created_at)",
+    );
+  });
+
+  test("rejects a transition that is not allowed, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "passed", { state: "failed" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("names the refused transition in the error", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    await expect(
+      transitionPrCiCheck(9, "passed", { state: "failed" }, sql),
+    ).rejects.toThrow("passed -> failed");
+  });
+
+  test("rejects a summary longer than 400 characters before the database", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(
+      9,
+      "pending",
+      { state: "failed", summary: "x".repeat(401) },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("accepts a summary of exactly 400 characters", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await transitionPrCiCheck(
+        9,
+        "pending",
+        { state: "failed", summary: "x".repeat(400) },
+        sql,
+      ),
+    ).toBe(true);
+  });
+
+  test("clears the fix work item when the row leaves fixing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "fixing", { state: "superseded" }, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_work_item_id = CASE WHEN state = 'fixing' THEN NULL ELSE fix_work_item_id END",
+    );
+  });
+
+  test("moves a fixing row to superseded", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(
+      await transitionPrCiCheck(9, "fixing", { state: "superseded" }, sql),
+    ).toBe(true);
+  });
+
+  test("refuses to move a row to fixing, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "failed", { state: "fixing" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("names claimPrCiCheckForFix when it refuses to move a row to fixing", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    await expect(
+      transitionPrCiCheck(9, "failed", { state: "fixing" }, sql),
+    ).rejects.toThrow("claimPrCiCheckForFix");
+  });
+
+  test("rejects a state that is not a known state", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    // 型を通らない値を、外から来た値として渡す。
+    const to = JSON.parse(JSON.stringify({ state: "baseline" }));
+    await transitionPrCiCheck(9, "pending", to, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("transitionPrCiCheck reopen", () => {
+  const reopen = { state: "pending" as const, reopen: true };
+
+  test("restarts the first seen time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain(
+      "first_seen_at = CASE WHEN  ? ::boolean THEN now() ELSE first_seen_at END",
+    );
+  });
+
+  test("clears the notified reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain(
+      "notified_reason = CASE WHEN  ? ::boolean THEN NULL ELSE notified_reason END",
+    );
+  });
+
+  test("clears the hold reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_hold_reason = CASE WHEN  ? ::boolean THEN NULL ELSE fix_hold_reason END",
+    );
+  });
+
+  test("clears the summary", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain(
+      "summary = CASE WHEN  ? ::boolean THEN ''",
+    );
+  });
+
+  test("binds the reopen flag as true", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("binds the reopen flag as false for an ordinary transition", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(calls[0]?.values).toContain(false);
+  });
+
+  test("refuses to leave superseded without the reopen flag, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", { state: "pending" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("refuses the reopen flag on a transition that is not a reopen", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    await expect(
+      transitionPrCiCheck(9, "pending", { state: "passed", reopen: true }, sql),
+    ).rejects.toThrow("reopen");
+  });
+
+  test("restarts the last check time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await transitionPrCiCheck(9, "superseded", reopen, sql);
+    expect(calls[0]?.text).toContain("checked_at = now()");
+  });
+});
+
+describe("touchPrCiCheck", () => {
+  test("records the check time", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await touchPrCiCheck(9, sql);
+    expect(calls[0]?.text).toContain("SET checked_at = now()");
+  });
+
+  test("touches only a row that is still waiting, failed, being fixed or without ci", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await touchPrCiCheck(9, sql);
+    expect(calls[0]?.text).toContain(
+      "state IN ('pending', 'failed', 'no_ci', 'fixing')",
+    );
+  });
+
+  test("does not extend the retention of the row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await touchPrCiCheck(9, sql);
+    expect(calls[0]?.text).not.toContain("updated_at");
+  });
+
+  test("returns true when the row was touched", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await touchPrCiCheck(9, sql)).toBe(true);
+  });
+
+  test("returns false when the row had already left", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await touchPrCiCheck(9, sql)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pr_ci_checks: 失敗を直す作業項目の状態
+// ---------------------------------------------------------------------------
+
+const CLAIM_PR_CI = {
+  id: 9,
+  owner: "Acme",
+  repo: "Widgets",
+  headSha: CI_SHA,
+  title: "Add feature",
+  claimedBy: "factory-local",
+};
+
+describe("claimPrCiCheckForFix", () => {
+  test("runs one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("takes the id of the work item from the sequence before the update", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toContain(
+      "nextval(pg_get_serial_sequence('factory.work_items', 'id'))",
+    );
+  });
+
+  test("moves a failed row to fixing and counts the attempt", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /SET state = 'fixing',\s*fix_work_item_id = \(SELECT id FROM nid\),\s*fix_attempts = r\.fix_attempts \+ 1/,
+    );
+  });
+
+  test("clears the notified reason so that the result of the fix is announced again", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /fix_attempts = r\.fix_attempts \+ 1,\s*notified_reason = NULL,/,
+    );
+  });
+
+  test("claims only a failed row of the head that is still current", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /WHERE r\.id = {2}\? ::bigint AND r\.state = 'failed' AND r\.head_sha = {1,2} /,
+    );
+  });
+
+  test("matches the row by lowercased owner", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.values).toContain("acme");
+  });
+
+  test("does not claim while a fix of the same pull request is not terminal", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /NOT EXISTS \(\s*SELECT 1 FROM factory\.work_items AS active[\s\S]*active\.kind = 'pr_fix'[\s\S]*active\.status != ALL\(/,
+    );
+  });
+
+  test("binds every terminal status to the check for a running fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
+  });
+
+  test("inserts a pr_fix work item that is already fixing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /INSERT INTO factory\.work_items \([^)]*ci_check_id[^)]*\)\s*SELECT[\s\S]*'pr_fix',\s+\?[\s\S]*'fixing'/,
+    );
+  });
+
+  test("copies the round and the watermarks from the latest pr_fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toMatch(
+      /COALESCE\(\(SELECT fix_round FROM prev\), 0\)[\s\S]*COALESCE\(\(SELECT last_review_id FROM prev\), 0\)[\s\S]*COALESCE\(\(SELECT last_comment_id FROM prev\), 0\)[\s\S]*COALESCE\(\(SELECT last_review_comment_id FROM prev\), 0\)/,
+    );
+  });
+
+  test("takes the latest pr_fix by creation order", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(calls[0]?.text).toContain(
+      "ORDER BY previous.created_at DESC, previous.id DESC",
+    );
+  });
+
+  test("returns the id of the new work item", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "31" }]]);
+    expect(await claimPrCiCheckForFix(CLAIM_PR_CI, sql)).toBe(31);
+  });
+
+  test("returns null when no row was claimed", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await claimPrCiCheckForFix(CLAIM_PR_CI, sql)).toBeNull();
+  });
+
+  test("returns null when a fix of the same pull request started in the meantime", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () =>
+        Promise.reject(
+          new Error(
+            'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+          ),
+        ),
+      execute: () => Promise.resolve(),
+    });
+    expect(await claimPrCiCheckForFix(CLAIM_PR_CI, sql)).toBeNull();
+  });
+
+  test("rethrows an error that is not that unique violation", async () => {
+    const sql: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("connection reset")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(claimPrCiCheckForFix(CLAIM_PR_CI, sql)).rejects.toThrow(
+      "connection reset",
+    );
+  });
+
+  test("rejects a sha that is not a commit sha, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(
+      { ...CLAIM_PR_CI, headSha: "abc1234" },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an id that is not positive, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix({ ...CLAIM_PR_CI, id: 0 }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid repo, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix({ ...CLAIM_PR_CI, repo: ".." }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("casts a missing title and claimant", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "31" }]]);
+    await claimPrCiCheckForFix(
+      { ...CLAIM_PR_CI, title: null, claimedBy: null },
+      sql,
+    );
+    expect(calls[0]?.text).toMatch(/\? ::text/);
+  });
+});
+
+describe("countPrCiFixRounds", () => {
+  test("returns the number of rounds", async () => {
+    const { sql } = createFakeSqlClient([[{ rounds: "2" }]]);
+    expect(await countPrCiFixRounds("Acme", "Widgets", 12, sql)).toBe(2);
+  });
+
+  test("returns 0 when no row is returned", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await countPrCiFixRounds("acme", "widgets", 12, sql)).toBe(0);
+  });
+
+  test("counts only the work items that fix a CI failure", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("wi.ci_check_id IS NOT NULL");
+  });
+
+  test("counts only the rounds after the latest passed row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toMatch(
+      /wi\.created_at > COALESCE\([\s\S]*p\.state = 'passed'/,
+    );
+  });
+
+  test("does not count a work item that failed before its flow started", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain(
+      "AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)",
+    );
+  });
+
+  test("lowercases the owner and repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+
+  test("rejects an invalid pull request number, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrCiFixRounds("acme", "widgets", 0, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("listFixingPrCiChecks", () => {
+  test("selects only fixing rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listFixingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("WHERE state = 'fixing'");
+  });
+
+  test("does not depend on the repositories found", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listFixingPrCiChecks(50, sql);
+    expect(calls[0]?.text).not.toContain("owner =");
+  });
+
+  test("orders by the last check, so that no row is starved", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listFixingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("ORDER BY checked_at ASC");
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, state: "fixing", fix_work_item_id: 31 }],
+    ]);
+    const rows = await listFixingPrCiChecks(50, sql);
+    expect(rows[0]?.fix_work_item_id).toBe(31);
+  });
+});
+
+describe("findOrphanFixingPrCiChecks", () => {
+  test("selects only fixing rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findOrphanFixingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toContain("r.state = 'fixing'");
+  });
+
+  test("selects a row without a fix work item once ten minutes passed", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findOrphanFixingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toMatch(
+      /r\.fix_work_item_id IS NULL AND r\.updated_at <= now\(\) - interval '10 minutes'/,
+    );
+  });
+
+  test("selects a row whose fix work item does not exist", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findOrphanFixingPrCiChecks(50, sql);
+    expect(calls[0]?.text).toMatch(
+      /r\.fix_work_item_id IS NOT NULL AND NOT EXISTS \(\s*SELECT 1 FROM factory\.work_items AS wi WHERE wi\.id = r\.fix_work_item_id/,
+    );
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...PR_CI_ROW, state: "fixing", fix_work_item_id: null }],
+    ]);
+    const rows = await findOrphanFixingPrCiChecks(50, sql);
+    expect(rows[0]?.state).toBe("fixing");
+  });
+});
+
+describe("releaseFixingPrCiCheck", () => {
+  test("moves only a row that is still fixing", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, {}, sql);
+    expect(calls[0]?.text).toMatch(
+      /WHERE id = {2}\? ::bigint AND state = 'fixing'/,
+    );
+  });
+
+  test("moves the row back to failed and clears the work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, {}, sql);
+    expect(calls[0]?.text).toMatch(
+      /SET state = 'failed',\s*fix_work_item_id = NULL/,
+    );
+  });
+
+  test("binds a hold reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { holdReason: "no_push" }, sql);
+    expect(calls[0]?.values).toContain("no_push");
+  });
+
+  test("keeps the hold reason when none is given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, {}, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_hold_reason = COALESCE( ? ::text, fix_hold_reason)",
+    );
+  });
+
+  test("clears the notified reason when asked", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(
+      9,
+      { holdReason: "fix_stopped", resetNotified: true },
+      sql,
+    );
+    expect(calls[0]?.text).toMatch(
+      /notified_reason = CASE WHEN  \? ::boolean THEN NULL ELSE notified_reason END/,
+    );
+  });
+
+  test("keeps the notified reason by default", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { holdReason: "fix_stopped" }, sql);
+    expect(calls[0]?.values).not.toContain(true);
+  });
+
+  test("restricts the row to one fix work item when asked", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.text).toContain(
+      "AND ( ? ::bigint IS NULL OR fix_work_item_id =  ? ::bigint)",
+    );
+  });
+
+  test("restricts the row to one without a fix work item when asked", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { withoutFixWorkItem: true }, sql);
+    expect(calls[0]?.text).toContain(
+      "AND (NOT  ? ::boolean OR fix_work_item_id IS NULL)",
+    );
+  });
+
+  test("binds the restriction to a row without a fix work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { withoutFixWorkItem: true }, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("does not restrict to a row without a fix work item by default", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, {}, sql);
+    expect(calls[0]?.values).not.toContain(true);
+  });
+
+  test("rejects a restriction to both a work item and none, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(
+      9,
+      { fixWorkItemId: 31, withoutFixWorkItem: true },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("returns true when this call released the row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await releaseFixingPrCiCheck(9, {}, sql)).toBe(true);
+  });
+
+  test("returns false when the row had already left fixing", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await releaseFixingPrCiCheck(9, {}, sql)).toBe(false);
+  });
+
+  test("rejects an empty hold reason, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { holdReason: "" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a hold reason longer than 64 characters, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await releaseFixingPrCiCheck(9, { holdReason: "x".repeat(65) }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("setPrCiFixHold", () => {
+  test("changes only a failed row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
+    expect(calls[0]?.text).toContain("AND state = 'failed'");
+  });
+
+  test("writes only when the reason differs", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
+    expect(calls[0]?.text).toContain("fix_hold_reason IS DISTINCT FROM");
+  });
+
+  test("writes only when the current reason is the one that was read", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, null, { expected: "budget_exceeded" }, sql);
+    expect(calls[0]?.text).toContain("fix_hold_reason IS NOT DISTINCT FROM");
+  });
+
+  test("passes the reason that was read", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, null, { expected: "budget_exceeded" }, sql);
+    expect(calls[0]?.values).toContain("budget_exceeded");
+  });
+
+  test("does not check the current reason without an expectation", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
+    expect(calls[0]?.values).toContain(false);
+  });
+
+  test("clears the reason with null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, null, {}, sql);
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("returns true when the reason was written", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await setPrCiFixHold(9, "main_ci_failed", {}, sql)).toBe(true);
+  });
+
+  test("returns false when the reason was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await setPrCiFixHold(9, "main_ci_failed", {}, sql)).toBe(false);
+  });
+
+  test("clears the notified reason when asked", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "rounds_exhausted", { resetNotified: true }, sql);
+    expect(calls[0]?.text).toMatch(
+      /notified_reason = CASE WHEN  \? ::boolean THEN NULL ELSE notified_reason END/,
+    );
+  });
+
+  test("binds the request to clear the notified reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "rounds_exhausted", { resetNotified: true }, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("keeps the notified reason by default", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "main_ci_failed", {}, sql);
+    expect(calls[0]?.values).not.toContain(true);
+  });
+
+  test("rejects an empty reason, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "", {}, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a reason longer than 64 characters, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await setPrCiFixHold(9, "x".repeat(65), {}, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("isLatestMainCiRunFailed", () => {
+  test("returns true when the latest row failed", async () => {
+    const { sql } = createFakeSqlClient([[{ state: "failed" }]]);
+    expect(await isLatestMainCiRunFailed("acme", "widgets", sql)).toBe(true);
+  });
+
+  test("returns false when the latest row did not fail", async () => {
+    const { sql } = createFakeSqlClient([[{ state: "passed" }]]);
+    expect(await isLatestMainCiRunFailed("acme", "widgets", sql)).toBe(false);
+  });
+
+  test("returns false when the repository has no row", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await isLatestMainCiRunFailed("acme", "widgets", sql)).toBe(false);
+  });
+
+  test("reads one row by the same order as the newest row kept by the cleanup", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await isLatestMainCiRunFailed("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain(
+      "ORDER BY COALESCE(run_created_at, first_seen_at) DESC, id DESC\n    LIMIT 1",
+    );
+  });
+
+  test("matches the repository ignoring case", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await isLatestMainCiRunFailed("Acme", "Widgets", sql);
+    expect(calls[0]?.values).toEqual(["acme", "widgets"]);
+  });
+
+  test("rejects an invalid repo, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await isLatestMainCiRunFailed("acme", "..", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("pr_ci_checks owner and repo", () => {
+  test("lowercases the owner and repo when recording", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(
+      { ...NEW_PR_CI, owner: "Acme", repo: "Widgets" },
+      sql,
+    );
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+
+  test("lowercases the owner and repo when listing a pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrCiChecksForPr("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+
+  test("lowercases the owner and repo when reading the latest row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getLatestPrCiCheck("Acme", "Widgets", 12, sql);
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+});
+
+describe("markPrCiNotified", () => {
+  test("writes the reason only when it differs from the recorded one", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await markPrCiNotified(9, "ci_failure", sql);
+    expect(calls[0]?.text).toContain("notified_reason IS DISTINCT FROM");
+  });
+
+  test("returns true when the reason was newly written", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 9 }]]);
+    expect(await markPrCiNotified(9, "ci_failure", sql)).toBe(true);
+  });
+
+  test("returns false when the reason was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await markPrCiNotified(9, "ci_failure", sql)).toBe(false);
+  });
+
+  test("rejects a reason that is not a reason code, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    await markPrCiNotified(9, "because", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("deletePrCiChecksBefore", () => {
+  const cutoff = new Date("2026-09-12T00:00:00.000Z");
+  const latestCutoff = new Date("2026-05-15T00:00:00.000Z");
+
+  test("keeps pending and fixing rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
+    expect(calls[0]?.text).toContain("state NOT IN ('pending', 'fixing')");
+  });
+
+  test("deletes the newest row of a pull request only after the longer retention", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
+    expect(calls[0]?.text).toMatch(
+      /EXISTS \([\s\S]*newer\.pr_number = r\.pr_number[\s\S]*\(newer\.first_seen_at, newer\.id\)\s*>\s*\(r\.first_seen_at, r\.id\)\s*\)\s*OR r\.updated_at <=/,
+    );
+  });
+
+  test("does not keep the newest row by its state", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
+    expect(calls[0]?.text).not.toContain("'failed'");
+  });
+
+  test("ages a row by its updated_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
+    expect(calls[0]?.text).toContain("updated_at <=");
+  });
+
+  test("binds both cutoffs as timestamps", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(cutoff, latestCutoff, sql);
+    expect(calls[0]?.values).toEqual([
+      cutoff.toISOString(),
+      latestCutoff.toISOString(),
+    ]);
+  });
+
+  test("refuses a latest cutoff that is later than the cutoff, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await deletePrCiChecksBefore(latestCutoff, cutoff, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await deletePrCiChecksBefore(cutoff, latestCutoff, sql)).toBe(2);
   });
 });

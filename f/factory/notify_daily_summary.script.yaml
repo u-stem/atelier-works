@@ -1,5 +1,5 @@
 summary: '[SYS-3] 日次サマリ通知'
-description: 毎日9:00(Asia/Tokyo)に、前日分の実行回数・コスト・失敗回数と、承認/却下の件数を集計し、Discordへ日次サマリとして投稿します。
+description: 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。
 lock: '!inline f/factory/notify_daily_summary.script.lock'
 kind: script
 schema:
@@ -7,3 +7,4 @@ schema:
   type: object
   properties: {}
   required: []
+timeout: 600

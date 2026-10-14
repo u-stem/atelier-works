@@ -47,7 +47,7 @@ describe("buildApprovalNotifyFailedMessage", () => {
 
   test("says that the approval request is waiting in the Console", () => {
     expect(buildApprovalNotifyFailedMessage(TARGET, "boom")).toContain(
-      "承認依頼はConsoleの承認タブで待っています。",
+      "承認依頼はConsoleの要対応で待っています。",
     );
   });
 });

@@ -8,7 +8,7 @@ schema:
   properties:
     approval_request_id:
       type: number
-      description: 承認または差し戻しの対象となる承認依頼のID。Consoleの承認タブに記載されています。
+      description: 承認または差し戻しの対象となる承認依頼のID。Consoleの要対応に記載されています。
       default: null
     decision:
       type: string

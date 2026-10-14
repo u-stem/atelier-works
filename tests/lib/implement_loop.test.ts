@@ -8,6 +8,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  CHECK_IMAGE_STALE_REASON,
+  CheckImageStaleError,
+  CheckRuntimeUnsafeError,
+} from "../../f/factory/lib/check_sandbox.ts";
 import type {
   ClaudeRunResult,
   RunClaudeResult,
@@ -45,6 +50,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   type ImplementClaudeOutput,
 } from "../../f/factory/lib/implement_support.ts";
+import { modelChangesAfterFailure } from "../../f/factory/lib/model_policy.ts";
 import { IMPLEMENT_SCHEMA } from "../../f/factory/lib/prompts.ts";
 import type {
   AgentRunRecord,
@@ -55,6 +61,8 @@ import {
   type WorktreeFingerprint,
   WorktreeGitPointerModifiedError,
 } from "../../f/factory/lib/workspace.ts";
+
+const MODEL_CONFIG = { model: "light-model", heavy_model: "heavy-model" };
 
 const DONE: ImplementClaudeOutput = {
   outcome: "done",
@@ -97,7 +105,7 @@ const CONTEXT: ImplementContext = {
   requirements_diagrams: [],
   requirements_doc_dir: DOC_DIR,
   requirements_console_url:
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/3",
+    "http://127.0.0.1:8080/console/items/3/requirements",
   is_factory_repo: false,
   worktree_git_pointer:
     "gitdir: /workspaces/acme/widgets/main/.git/worktrees/factory-issue-7-wi-3\n",
@@ -158,12 +166,14 @@ const RUN_INPUT: ImplementClaudeRunInput = {
   run: async () => ({ stdout: "", stderr: "", exitCode: 0, timedOut: false }),
   config: {
     model: "claude-test",
+    heavy_model: "claude-test-heavy",
     implement_max_turns: 80,
     implement_max_budget_usd_per_run: 10,
     implement_timeout_sec: 3600,
   },
   workItemId: 3,
   attempt: 1,
+  sonnetFailures: 0,
   stage: "implement",
   prompt: "prompt",
   systemPromptPath: "/tmp/system-prompt.md",
@@ -449,6 +459,28 @@ describe("toImplementClaudeRound", () => {
 });
 
 describe("buildImplementClaudeOptions", () => {
+  test("uses model when no round has failed", () => {
+    expect(buildImplementClaudeOptions(RUN_INPUT).model).toBe("claude-test");
+  });
+
+  test("uses model after one failed round", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, sonnetFailures: 1 }).model,
+    ).toBe("claude-test");
+  });
+
+  test("uses heavy_model after two failed rounds", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, sonnetFailures: 2 }).model,
+    ).toBe("claude-test-heavy");
+  });
+
+  test("does not escalate on the attempt number alone", () => {
+    expect(
+      buildImplementClaudeOptions({ ...RUN_INPUT, attempt: 3 }).model,
+    ).toBe("claude-test");
+  });
+
   test("passes the flow deadline to runClaude", () => {
     expect(buildImplementClaudeOptions(RUN_INPUT).deadlineAt).toBe(
       1_900_000_000_000,
@@ -670,26 +702,42 @@ type HarnessOptions = {
   readonly checks?: readonly (readonly LoopCheckResult[])[];
   readonly fixRounds?: readonly ImplementClaudeRound[];
   readonly budgetExceeded?: boolean;
+  /** `modelChangesAfterFailure`が、呼び出しの順に返す値。最後の値を繰り返す。既定はfalse。 */
+  readonly modelChangesNext?: readonly boolean[];
   /** `holdsLease`が、0始まりで`from`回目以降の呼び出しでfalseを返す(リースを失った)。 */
   readonly leaseLostFrom?: number;
   /** `assertGitPointer`が、0始まりで`from`回目以降の呼び出しで投げる例外。 */
   readonly pointerError?: { readonly from: number; readonly error: Error };
   /** `now`が返す時刻(epoch ms)。既定は0。 */
   readonly now?: number;
+  /** `runChecks`が投げる例外。 */
+  readonly checksError?: Error;
+  /** `at`回目(0から数える)以降の`runChecks`が投げる例外。 */
+  readonly checksErrorFrom?: { readonly at: number; readonly error: Error };
 };
 
 type Harness = {
   readonly deps: ImplementLoopDeps;
   readonly recorded: ImplementRoundRecord[];
   readonly fixRequests: FixRoundRequest[];
-  readonly calls: { gitleaks: number; checks: number; fingerprint: number };
+  readonly calls: {
+    gitleaks: number;
+    checks: number;
+    fingerprint: number;
+    modelChange: number;
+  };
   readonly events: string[];
 };
 
 function harness(options: HarnessOptions = {}): Harness {
   const recorded: ImplementRoundRecord[] = [];
   const fixRequests: FixRoundRequest[] = [];
-  const calls = { gitleaks: 0, checks: 0, fingerprint: 0 };
+  const calls = {
+    gitleaks: 0,
+    checks: 0,
+    fingerprint: 0,
+    modelChange: 0,
+  };
   const events: string[] = [];
   let lastTreeSha = "";
   const deps: ImplementLoopDeps = {
@@ -722,6 +770,12 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     runChecks: async () => {
       events.push("checks");
+      if (options.checksError !== undefined) throw options.checksError;
+      if (
+        options.checksErrorFrom !== undefined &&
+        calls.checks >= options.checksErrorFrom.at
+      )
+        throw options.checksErrorFrom.error;
       const value = pick(options.checks ?? [[PASS]], calls.checks);
       calls.checks += 1;
       return value;
@@ -737,6 +791,14 @@ function harness(options: HarnessOptions = {}): Harness {
       recorded.push(record);
     },
     dailyBudgetExceeded: async () => options.budgetExceeded ?? false,
+    modelChangesAfterFailure: async () => {
+      const value = pick(
+        options.modelChangesNext ?? [false],
+        calls.modelChange,
+      );
+      calls.modelChange += 1;
+      return value;
+    },
     holdsLease: async () => {
       const index = events.filter((event) => event === "lease").length;
       events.push("lease");
@@ -746,6 +808,9 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     now: () => options.now ?? 0,
     log: () => {},
+    reportCheckImageStale: async (error) => {
+      events.push(`stale ${error.message}`);
+    },
   };
   return { deps, recorded, fixRequests, calls, events };
 }
@@ -999,6 +1064,106 @@ describe("runImplementVerifyLoop", () => {
     ).toBe("stalled");
   });
 
+  test("runs a fix round past a stall when the next failure changes the model", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    expect((await run(h)).rounds).toBe(3);
+  });
+
+  test("tells the fix round the previous round stalled when the stall check was skipped", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    await run(h);
+    expect(
+      h.fixRequests.map((request) => request.previousRoundStalled),
+    ).toEqual([false, true]);
+  });
+
+  test("does not flag a stall when the model changes but the round made progress", async () => {
+    const h = harness({
+      checks: [[FAIL], [LINT_FAIL]],
+      fingerprints: [FP_1, FP_2],
+      modelChangesNext: [true],
+    });
+    await run(h);
+    expect(h.fixRequests[0]?.previousRoundStalled).toBe(false);
+  });
+
+  test("exits stalled once the model no longer changes", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [false, true, false],
+    });
+    expect((await run(h)).exit).toBe("stalled");
+  });
+
+  test("skips the stall check only once when the model changes from the recorded failures", async () => {
+    const h = harness({ checks: [[FAIL]], fingerprints: [FP_1] });
+    const failedOutcomes: readonly string[] = [
+      "check_failed",
+      "stalled",
+      "error",
+    ];
+    const deps: ImplementLoopDeps = {
+      ...h.deps,
+      modelChangesAfterFailure: async () =>
+        modelChangesAfterFailure(
+          MODEL_CONFIG,
+          "implement",
+          h.recorded.filter((record) => failedOutcomes.includes(record.outcome))
+            .length,
+        ),
+    };
+    const result = await runImplementVerifyLoop(deps, loopInput());
+    expect({ exit: result.exit, rounds: result.rounds }).toEqual({
+      exit: "stalled",
+      rounds: 3,
+    });
+  });
+
+  test("still exits max_rounds when the next failure changes the model", async () => {
+    const h = harness({
+      checks: [[FAIL]],
+      fingerprints: [FP_1],
+      modelChangesNext: [true],
+    });
+    expect(
+      (await run(h, loopInput(outputRound(), { maxRounds: 2 }))).exit,
+    ).toBe("max_rounds");
+  });
+
+  test("asks whether the model changes only for a failed round", async () => {
+    const h = harness({ checks: [[PASS]] });
+    await run(h);
+    expect(h.calls.modelChange).toBe(0);
+  });
+
+  test("asks whether the model changes before recording the failed round", async () => {
+    const order: string[] = [];
+    const h = harness({ checks: [[FAIL], [PASS]], fingerprints: [FP_1, FP_2] });
+    const base = h.deps;
+    const deps: ImplementLoopDeps = {
+      ...base,
+      modelChangesAfterFailure: async () => {
+        order.push("count");
+        return base.modelChangesAfterFailure();
+      },
+      recordRound: async (record) => {
+        order.push("record");
+        await base.recordRound(record);
+      },
+    };
+    await runImplementVerifyLoop(deps, loopInput());
+    expect(order).toEqual(["count", "record", "record"]);
+  });
+
   test("exits daily_budget when the budget is spent", async () => {
     expect(
       (await run(harness({ checks: [[FAIL]], budgetExceeded: true }))).exit,
@@ -1013,6 +1178,90 @@ describe("runImplementVerifyLoop", () => {
       },
     });
     expect((await run(h)).exit).toBe("symlink");
+  });
+
+  // イメージの問題と稼働中のworkerの問題は、運用者の操作が違うだけで、ループの扱いは同じである。
+  const ENVIRONMENT_ERRORS = [
+    {
+      name: "a stale image",
+      error: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    },
+    {
+      name: "an unsafe running worker",
+      error: new CheckRuntimeUnsafeError([
+        "world-writable paths created at runtime: /tmp/open",
+      ]),
+    },
+  ];
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "exits check_image_stale on $name",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      expect((await run(h)).exit).toBe("check_image_stale");
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "gives $name as the reason",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      expect((await run(h)).reason).toBe(error.message);
+    },
+  );
+
+  test("gives the stale image as a reason that asks for mise run up", async () => {
+    const h = harness({
+      checksError: new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+    });
+    expect((await run(h)).reason).toBe(
+      `${CHECK_IMAGE_STALE_REASON}: /usr/bin/getfacl is missing`,
+    );
+  });
+
+  test.each(ENVIRONMENT_ERRORS)("reports $name once", async ({ error }) => {
+    const h = harness({ checksError: error });
+    await run(h);
+    expect(h.events.filter((event) => event.startsWith("stale "))).toEqual([
+      `stale ${error.message}`,
+    ]);
+  });
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "does not start a fix round on $name",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      await run(h);
+      expect(h.fixRequests).toEqual([]);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "does not record the round $name stopped, so that it is not counted as a failure",
+    async ({ error }) => {
+      const h = harness({ checksError: error });
+      await run(h);
+      expect(h.recorded).toEqual([]);
+    },
+  );
+
+  test.each(ENVIRONMENT_ERRORS)(
+    "keeps the failed rounds before $name",
+    async ({ error }) => {
+      const h = harness({
+        checks: [[FAIL]],
+        checksErrorFrom: { at: 1, error },
+      });
+      await run(h);
+      expect(h.recorded.map((record) => record.outcome)).toEqual([
+        "check_failed",
+      ]);
+    },
+  );
+
+  test("passes another error from the checks through", async () => {
+    const h = harness({ checksError: new Error("disk full") });
+    await expect(run(h)).rejects.toThrow("disk full");
   });
 
   test("exits worktree_changed when gitleaks scanned another tree than the inspected one", async () => {

@@ -20,8 +20,10 @@ import {
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import { validateDrawioXml } from "../lib/drawio.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import {
   holdsPipelineLease,
   PIPELINE_LEASE_LOST_REASON,
@@ -45,7 +47,6 @@ import {
 import {
   copyFileTo,
   ensureEmptyDir,
-  ensureFactoryClone,
   readDirEntries,
   readTextFile,
   removePath,
@@ -330,11 +331,9 @@ export async function main(
     return { outcome: "budget_exceeded" };
   }
 
-  const factoryClone = await ensureFactoryClone({
+  const factoryClone = await openFactoryClone(config, {
     run: runCommand,
-    repoUrl: config.factory_repo,
     ghToken,
-    branch: config.factory_branch,
   });
   const systemPrompt = await buildSystemPrompt({
     skillNames: ["factory-requirements", "drawio-diagram"],
@@ -380,7 +379,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "generate_requirements",
       attempt,
-      model: config.model,
+      model: modelFor(config, "requirements", 0),
       prompt,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: REQUIREMENTS_SCHEMA,

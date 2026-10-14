@@ -8,9 +8,11 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
+import { INTAKE_REFRESHED_NOTE_PREFIX } from "../lib/console_support.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   getWorkItem,
+  hasIntakeRefreshEvent,
   setFlowJobId,
   setWorkItemPrUrl,
   updateStatusIfLeaseHolder,
@@ -32,6 +34,7 @@ import {
 import {
   buildPrOpenedEvent,
   decideAfterCommit,
+  decideGapBranchCleanup,
   decideGapReroute,
   decideImplementFinishAction,
   decideVerifiedTree,
@@ -83,6 +86,10 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import {
+  repoOwnerGateDeps,
+  repoOwnerStopReason,
+} from "../lib/repo_owner_gate.ts";
 import { isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
@@ -225,6 +232,9 @@ type PrAttempt =
  * commitの直前には、`commitAndPush`がステージし直した索引のツリーを、途中経過ではgitleaksが検査したツリーと、
  * 最終commitではループで検証したツリーと比べ、違えばcommitしない。
  *
+ * originへの書き込み(途中経過と最終のpush、リモートブランチの削除)の直前には、リポジトリのオーナーの数値IDを照合する。
+ * 通らなければ書かずに、理由つきでneeds_humanで終える。
+ *
  * 外への副作用(途中経過と最終のcommitとpush、worktreeとリモートブランチの削除、
  * PRの作成と更新、`pr_url`の記録、ラベル)の直前には、作業項目を読み直してリースを確かめる
  * (`assertImplementLease`)。失っていれば、最初の確認と同じく何もせずに終える。
@@ -329,6 +339,17 @@ async function finishImplement(
   const client: GhClient = { run: runCommand, ghToken };
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
+  // origin(push、ブランチの削除)への書き込みの直前に呼ぶ。準備の入口の照合から長い実行を挟むので、
+  // その間に名前が別の人に渡っていても、ローカルにしか無いオブジェクトを相手に渡さない。
+  // 通らなければ止める理由を返す。noticeは照合が残す。
+  const ownerStopReason = (): Promise<string | null> =>
+    repoOwnerStopReason(
+      config,
+      owner,
+      repo,
+      repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+    );
+
   /**
    * 作業項目をneeds_humanに遷移させ、遷移できたらnoticeを記録してDiscordへ通知する。
    * `from`はCASで期待する状態(`implementing`、または差し戻しを始められなかった後の
@@ -358,7 +379,7 @@ async function finishImplement(
         : `${describeReason(reason)}\n${options.detail}`;
     if (moved) {
       try {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: "implement_needs_human",
           message: `${owner}/${repo}#${String(issueNumber)} (work item ${String(work_item_id)}): ${described}`,
         });
@@ -431,6 +452,7 @@ async function finishImplement(
   const preserveWorkDeps = (ctx: ImplementContext): PreserveWorkDeps => ({
     ensureLockFree: ensureLockFree(ctx),
     assertGitPointer: assertGitPointer(ctx),
+    ensureRepoOwner: ownerStopReason,
     scanForSecrets: () =>
       runGitleaksOnWorktree({
         run: runCommand,
@@ -457,6 +479,13 @@ async function finishImplement(
   const hasPr =
     (context !== null && context.existing_pr_number !== null) ||
     recordedPrUrl !== null;
+
+  // 取り込み内容を作り直しのときに更新した作業項目は、更新後の値と現在のIssueを比べても
+  // 書き換えを拾えないので、更新の履歴からPR本文に注記する。
+  const intakeRefreshed = await hasIntakeRefreshEvent(
+    work_item_id,
+    INTAKE_REFRESHED_NOTE_PREFIX,
+  );
 
   // openの再確認で取得したIssueを、取り込み時点との比較にも使う(追加のAPI呼び出しをしない)。
   let issueUpdatedAfterIntake = false;
@@ -546,13 +575,32 @@ async function finishImplement(
         error: errorText(err),
       });
     }
-    if (
-      shouldDeleteBranchOnGap({
-        prUrl: recordedPrUrl,
-        openPrNumber,
-        prLookupFailed,
-      })
-    ) {
+    const shouldDelete = shouldDeleteBranchOnGap({
+      prUrl: recordedPrUrl,
+      openPrNumber,
+      prLookupFailed,
+    });
+    if (shouldDelete) await confirmLease();
+    // 削除の直前に照合する。取得に失敗したら、PRの検索に失敗したときと同じく、ブランチを残して差し戻しを続ける。
+    const cleanup = await decideGapBranchCleanup({
+      shouldDelete,
+      ensureRepoOwner: ownerStopReason,
+      onCheckError: (err) => {
+        log.warn("owner id check failed; keeping the branch", {
+          error: errorText(err),
+        });
+      },
+    });
+    if (cleanup.kind === "stop") {
+      // 差し戻し理由をnoticeとDiscordに残す。差し戻しを続けないので、他に伝える経路が無い。
+      return finalizeNeedsHuman(
+        cleanup.reason,
+        nextActionFor(cleanup.reason, "implement"),
+        { detail: gapReportNoticeDetail(gapReport) },
+      );
+    }
+    if (cleanup.kind === "delete") {
+      // 照合の往復でリースを失っていないかを、削除の直前に確かめる。
       await confirmLease();
       try {
         await deleteRemoteBranch({
@@ -660,6 +708,10 @@ async function finishImplement(
         },
         config.instance_name,
       );
+      // 最初の書き込み(push)の直前に、オーナーの数値IDを照合する。
+      // 以降のPRの作成と更新、ラベルの付与は、このpushに続けて行う。
+      const ownerStop = await ownerStopReason();
+      if (ownerStop !== null) return { ok: false, reason: ownerStop };
       // `commitAndPush`はステージし直すので、commitする索引そのものが検証したツリーかも確かめる。
       const pushed = await commitAndPush({
         ...(await commitOptions(ctx, message)),
@@ -700,6 +752,7 @@ async function finishImplement(
         changedPaths: loop.changed_paths,
         deployChecklist: ctx.is_factory_repo,
         issueUpdatedAfterIntake,
+        intakeRefreshed,
       });
       let pr: PullRequestRef;
       await confirmLease();

@@ -11,6 +11,12 @@ ARG WM_VERSION=1.817.0
 FROM ghcr.io/windmill-labs/windmill:${WM_VERSION}
 
 ARG CLAUDE_VERSION
+# 検査コマンドを動かす非特権ユーザーの先頭のuidと、その数。`mise.toml`の`[env]`と
+# 同じ値を`docker-compose.yml`が渡す。既定値は、`--build-arg`無しの`docker build`でも
+# 検査用のuidが決まるようにするためだけにある。
+# 数は、workerの同時実行数(`NUM_WORKERS`)以上にする。
+ARG FACTORY_CHECK_UID=10001
+ARG FACTORY_CHECK_POOL_SIZE=8
 ARG GH_VERSION
 ARG GITLEAKS_VERSION
 ARG GTR_REF
@@ -21,13 +27,37 @@ ARG WMILL_VERSION
 
 # ベースのイメージにはbun・node・npm・git・curl・jqが入っている。
 # 以降の手順で実際に足りないパッケージだけを足す。
+# 検査コマンドの後始末は、`util-linux`の`setpriv`と`flock`、`procps`の`kill`、
+# `acl`の`getfacl`と`setfacl`を絶対パスで呼ぶ。`acl`は、検査用のユーザーが
+# worktreeに付けたACLを、所有権を取り戻すときに消すために使う。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        acl \
         ca-certificates \
         curl \
         git \
         jq \
+        procps \
+        util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+# 検査コマンドを実行するための非特権ユーザー`factory-check-0`、`factory-check-1`、…。
+# 並行して動く検査が同じuidを共有しないよう、実行ごとに空いている1つを使う。
+# uidを固定するのは、worktreeの所有者や`setpriv`の引数がuidで決まり、再ビルドで
+# 変わってはいけないため。ホームもログインシェルも持たせない。
+# `setpriv`(util-linux)で切り替える。Windmillのジョブには、workerの環境変数が
+# ほとんど渡らない。workerのscriptはこのユーザーのuidを`/etc/passwd`から読む。
+RUN set -eux; \
+    for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1))); do \
+        useradd -u "$((FACTORY_CHECK_UID + i))" -M -s /usr/sbin/nologin "factory-check-${i}"; \
+    done
+
+# ベースのイメージは、Windmillの実行ファイルと共有ライブラリを置く`/usr/src/app`と、
+# `/tmp/.cache`を、誰でも書き込めてstickyでない(0777)ようにしている。
+# 開いたままだと、検査用のユーザーがrootの実行するファイルを差し替えられるので、
+# 中のファイルも含めて、グループとその他が書き込めないようにする。
+# workerはrootで動くので、書き込みに困らない。
+RUN chmod -R go-w /usr/src/app /tmp/.cache
 
 # gh CLI: 公式のリリースのtarball(アーキテクチャ別)から入れ、リリースの
 # `checksums.txt`で検証する。壊れた・改ざんされたダウンロードを黙って入れず、
@@ -87,16 +117,43 @@ RUN set -eux; \
 # 食い違っても`WMILL_VERSION`だけを正とする。
 RUN npm install -g --force "windmill-cli@${WMILL_VERSION}"
 
-# Claude Code CLI。`/root/.local/bin`に入る。
+# Claude Code CLI。インストーラーは`/root/.local/bin`に置くので、名前で起動
+# できるよう`/usr/local/bin`にsymlinkを張る。
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/var/lib/factory/claude \
     GH_CONFIG_DIR=/var/lib/factory/gh \
     GIT_TERMINAL_PROMPT=0
-RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
-ENV PATH="/root/.local/bin:${PATH}"
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}" \
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+
+# workerのPATHから、rootのホームと、誰でも書き込める`/tmp`の下を外す。
+# ベースのイメージのPATHは`/root/.local/bin`と`/tmp/.local/bin`を含むので、
+# 継承せず明示的に書く。`/tmp/.local/bin`は、workerの`windmill`の実行ファイルに
+# 参照が無く、稼働中のコンテナにも存在しない。非特権のuidが同名の実行ファイルを
+# 置いて、rootの名前解決を奪えるので、残さない。
+# 値はベースのイメージのPATHから、この2つを除いたものである。
+# `WM_VERSION`を上げるときは、新しいベースの`docker image inspect`でPATHを確かめ、
+# 必要なディレクトリが増えていないか突き合わせる。
+ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin"
 
 # ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
 # 気づくのではなく、その場でビルドを失敗させる。
-RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version
+# `claude`はPATHの名前で解決して確かめる。
+# `setpriv`は、検査の実行と同じ引数で、すべての枠について、切り替えた先のuidと、
+# ケーパビリティの上限が空であること、`no_new_privs`が立つことを確かめる。
+# 検査の後始末が絶対パスで呼ぶ`kill`、`getfacl`、`setfacl`があることも確かめる。
+# 誰でも書き込めるもの(symlinkを除く、ファイルを含む)が、検査の後始末が片付ける共有の一時ディレクトリ
+# (`f/factory/lib/check_sandbox.ts`の`SHARED_TMP_DIRS`)そのものだけであることも確かめる。
+# `/tmp/windmill`は、検査の前に所有者だけが入れるように閉じるので除く。
+RUN claude --version && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
+    && test -x /usr/bin/kill && test -x /usr/bin/getfacl && test -x /usr/bin/setfacl \
+    && test -z "$(find / -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 -print | grep -vxE '/tmp|/var/tmp|/dev/shm|/dev/mqueue|/run/lock')" \
+    && for i in $(seq 0 $((FACTORY_CHECK_POOL_SIZE - 1))); do \
+        uid="$((FACTORY_CHECK_UID + i))"; \
+        [ "$(setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- id -u)" = "${uid}" ] \
+        && setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- grep -Eq '^CapBnd:[[:space:]]*0+$' /proc/self/status \
+        && setpriv --reuid="${uid}" --regid="${uid}" --groups=1000000 --bounding-set=-all --inh-caps=-all --no-new-privs -- grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/self/status \
+        || exit 1; \
+    done
 
 CMD ["windmill"]

@@ -26,6 +26,8 @@ PR修正は5つのステップでできている。
 
 PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信だけである。失敗、人の対応待ち、ブロック、要件の不足といった運用上の知らせは、PRに書かずDiscordで知らせる。Issue化の提案の承認と却下の結果は、PRのスレッドに返信する。
 
+実装フローが作ったPRのCIの失敗も、PRには書かずDiscordとnoticeで知らせる。この監視はレビューと修正のフローとは独立している。設定`pr_ci_fix_enabled`が`true`のときは、失敗したPRを直す修正(CI回)を起動し、自動で直す対象の失敗は、直せるかが決まってから知らせる。内容は[PRのCI監視の仕様](pr-ci.md)に書く。
+
 ## 起動条件
 
 `poll_prs`がPRを見つけて作業項目を作り、フローを起動する。
@@ -35,10 +37,31 @@ PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信�
 | PRレビュー | PRに`factory:review`ラベルが付いた |
 | PRレビュー | PRのレビューの依頼先かassigneeがこのインスタンスのGitHubアカウントで、未処理のhead(`head_sha`)がある |
 | PR修正 | PRに`factory:fix`ラベルが付いた |
+| PR修正のCI回 | `watch_pr_ci`が、失敗したheadの行を直すと判断した。条件は[PRのCI監視の仕様](pr-ci.md)の「起動」に書く |
 
 トリガーのラベルは、着手(claim)したときに消費して外す。レビューの依頼とassigneeの経路には、消費するラベルが無い。ラベル名は`factory_config`の`review_label`と`fix_label`で決める。
 
-PR修正はラベルからしか起動しない。コメントやcommitのpushだけでは起動しない。次のラウンドを始めるには、PRに`factory:fix`ラベルを付け直す。PRレビューが終わった(`reviewed`)PRにも付けられる。
+ブランチ名が`factory/drawio-viewer-`で始まるPR(draw.ioのビューアの固定を上げるPR)には、`factory:fix`ラベルが付いていてもPR修正を始めない。
+`decidePrActions`が`headRef`で判定し、ラベルは消費せずに残す。ラベルは外れず、修正は人が行う。
+判定はブランチ名だけで行うので、`factory_repo`に限らず、担当するすべてのリポジトリに効く。
+`pr_fix_prepare`も同じ判定(`evaluateHumanOnlyBranchGuard`)で止め、作業項目をblockedにする。
+修正を許すと、固定のファイル以外も書き換えたcommitを、人が気づかずにマージするおそれがある。このPRは人が直す。レビューは動く。
+
+PR修正の通常の回は、ラベルからしか起動しない。コメントやcommitのpushだけでは起動しない。CI回だけは、`watch_pr_ci`が起動する。次のラウンドを始めるには、PRに`factory:fix`ラベルを付け直す。PRレビューが終わった(`reviewed`)PRにも付けられる。
+
+同じPRに終了していないPR修正があるとき、許可された人が付けた`factory:fix`ラベルは、PR修正を始めない。
+`decidePrActions`が、候補の`activeFixItemId`で判定し、ラベルは消費せずに残す。
+保留の理由は、PRと進行中の作業項目のidを`poll_prs`のinfoログに残す。noticeは出さない。
+修正中に付けたラベルは保留され、その修正が終わった後に1回だけ新しいラウンドが始まる。
+同じPRのPR修正が並んで動くと、同じブランチへ別々にpushして競合する。
+部分一意インデックス`work_items_active_pr_fix_key`が、終了していないPR修正を、PRごとの1件までに制限する。
+
+判定は、ポーリングの先頭で読んだ作業項目の状態に基づく。
+読んだ後に別のPR修正が始まると、ラベルの消費の後にある挿入が、このインデックスに阻まれる。
+このとき、消費したラベルを付け直し、失敗ではなく見送りとして数える。
+人の依頼は失われず、その修正が終わった後のポーリングが拾う。
+ラベルの付け直しも失敗したときは、ラベルが外れたままになる。
+取得の確認に失敗したときの付け直しと同じく、失敗に記録して人へ知らせる。
 
 修正への指示は、ラベルを付ける前に、PRへ通常のコメントとして書く。`pr_fix_collect`が、ほかの人のコメントと同じくフィードバックとして集める。
 
@@ -46,7 +69,34 @@ PR修正はラベルからしか起動しない。コメントやcommitのpush�
 
 レビューとコメントの投稿者の`author_association`が`allowed_labeler_associations`に含まれないとき、その投稿は起動の対象から外す。既定値は`OWNER`、`MEMBER`、`COLLABORATOR`である。
 
-`factory:review`と`factory:fix`のラベル自体は、タイムラインを照会しない。ラベルを付けるにはGitHubでtriage以上の権限が要るので、その制約だけに頼る。この制約はラベルを付ける操作に対するものなので、ラベルが消費された後も弱まらない。
+### ラベルの付与者の確認
+
+`poll_prs`は、`factory:review`と`factory:fix`のそれぞれについて、そのラベルを最後に付けた人を、ラベルの`labeled`イベントの`actor`で確かめる。
+許可されるのは、FactoryのPATのアカウントと、`allowed_labeler_logins`に挙げたアカウントである。
+`allowed_labeler_ids`にIDを入れたアカウントは、`actor`の数値IDも一致するときだけ許可する。
+許可されない人が付けたラベルと、付与者を特定できないラベルは、外さずに残し、起動しない。
+取得の直前にも、同じ確認をもう一度行う。
+イベントを取得できなかったPRは、そのポーリングでは対象にしない。
+付与者を判定できないPR(直近100件のラベルのイベントにトリガーラベルのイベントが無い)は、`labeler_check_limit`のnoticeを残し、ラベルを外して付け直すまで対象にしない。
+仕組みの全体は[ラベル付与の制限](../security.md#ラベル付与の制限)にある。
+
+レビュー依頼かassigneeによる起動と、追跡中のPRの新しいcommitによる再レビューは、ラベルを介さない。
+この2つは、PRの作成者が許可されたアカウントのときに限る。
+トリガーラベルが拒否された状態で付いているPRでも、始めない。
+同じリポジトリのブランチから出した第三者のPRは、許可されたアカウントがラベルを付けたときだけレビューされ、新しいcommitのたびにラベルの付け直しが要る。
+
+PRのheadが対象のリポジトリにないとき(forkのPRと、headのリポジトリを取得できないPR)は、ラベルの経路もラベルを介さない経路も、レビューを始めない。
+`decidePrActions`が、始めるはずだったレビューを見送りとして返し、`poll_prs`が`fork_head_denied`のnoticeを残す。
+ラベルは外さない。
+`pr_review_prepare`も、作業項目を手で作るなどの経路に備えて、clone、fetch、worktreeの前に同じ確認をする。
+通らなければ、作業項目を終端の`blocked`にして理由を残し、Discordで人に知らせてから、処理を飛ばす。
+同じ判定は、PR修正の準備のステップの「forkからでない」確認と共有する。
+
+`pr_review_prepare`は、forkの確認より先に、リポジトリのオーナーを`owners`と照合する。
+通らなければ、PRを読む前に、処理を飛ばす。
+そのとき、作業項目を終端の`blocked`にして理由を残し、Discordで人に知らせる。
+forkのPRを見送るときと同じ終わり方である。
+照合は[運用](../operations.md)の「オーナーの数値IDを固定する」に書く。
 
 ### 対象のリポジトリ
 
@@ -56,7 +106,7 @@ PR修正はラベルからしか起動しない。コメントやcommitのpush�
 
 ### ラベルを外した後の追跡
 
-Factoryが扱ったPRには、トリガーのラベルのほかにラベルを付けない。状態は作業項目の状態(`work_items.status`)だけで表し、Consoleの**パイプライン**タブに表示する。
+Factoryが扱ったPRには、トリガーのラベルのほかにラベルを付けない。状態は作業項目の状態(`work_items.status`)だけで表し、Consoleの**作業項目**に表示する。
 
 ラベルが外れた後も追跡を続けるため、`poll_prs`はDBからPRを見つけ直す。`f/factory/lib/db.ts`の`listTrackedPrs`が、次の条件をすべて満たす作業項目を返す。
 
@@ -64,7 +114,7 @@ Factoryが扱ったPRには、トリガーのラベルのほかにラベルを�
 - 状態が取り消し(`cancelled`)でない。
 - `tracked_pr_days`以内に更新された。
 
-`poll_prs`は、そのPRがまだopenであることを`getPr`で確かめてから候補にする。人が新しいcommitをpushすると、この経路でPRレビューが自動で起動する。1回のpushにつき、Claudeの実行は1回である。
+`poll_prs`は、そのPRが`owners`(`id`の照合を通ったオーナー)と`repo_allowlist`に合い、まだopenであることを`getPr`で確かめてから候補にする。人が新しいcommitをpushすると、この経路でPRレビューが自動で起動する。1回のpushにつき、Claudeの実行は1回である。
 
 `review_post_mode`が`gated`のときは、レビューを投稿しない。`gated`は検証用に予約した値で、承認を経て投稿する画面はまだ無い。このモードでは、PRはレビューの依頼かassigneeの経路でだけ見つけ直す。
 
@@ -98,6 +148,9 @@ PR修正は、`git gtr new`で作るPRのブランチのworktreeを使う。PR�
 ## レビュー
 
 生成のステップ(`pr_review_generate`)は、`factory-review`スキルと読み取り専用のツールで、headless Claudeを実行する。作業ディレクトリはレビュー用のworktreeである。
+
+レビューの観点は、`factory-review`スキルの「レビューの観点」にある。
+依存の宣言か取得を変えるPRには、サプライチェーン攻撃の観点も当てる([依存の変更のレビュー](../security.md#依存の変更のレビュー))。
 
 Claudeへの入力は次のとおりである。
 
@@ -163,6 +216,12 @@ PRレビューが終わると、作業項目はレビュー済み(`reviewed`)に
 ## 投稿の冪等性
 
 投稿のステップ(`pr_review_post`)は、投稿の前に、同じ作業項目が同じ`review_sha`に対して投稿済みのレビューを探す(`findPostedReview`)。見つかれば投稿せずに、そのレビューのidで`factory.reviews`に記録する。投稿と記録の間でステップが落ちても、再実行でレビューを二重に投稿しないためである。
+
+投稿の直前には、リポジトリのオーナーの数値IDも照合する。
+準備の入口の照合から、Claudeの実行を挟むので、その間に名前が別の人に渡っても、レビューの文面を相手に渡さないためである。
+通らなければ、投稿もスレッドの解決もせずに、作業項目を終端の`blocked`にして、Discordで人に知らせる。
+投稿済みのレビューを再利用するときは書き込まないので、照合しない。
+照合は[運用](../operations.md)の「オーナーの数値IDを固定する」に書く。
 
 総評には、レビューしたcommitのshaを表す目印(`<!-- factory-review-sha:<sha> -->`)を入れる。shaの目印は、PRレビューの目印(`<!-- factory:pr_review:<work_item_id> -->`)の前の行に置く(`withReviewMarkers`)。PRレビューの目印が最後の行に残るので、自己再発火の判定とPR修正の指摘の収集の読み方は変わらない。
 
@@ -242,7 +301,7 @@ Claudeは修正の結果(`outcome`)、理由、要約、各コメントへの返
 
 ### commitとpush
 
-完了のステップ(`pr_fix_finish`)は、commitの前に[コミットの前の再確認](#コミットの前の再確認)をする。続けてcommitしてpushし、各コメントに返信して、再レビューを依頼する。作業項目は再レビューの依頼済み(`rereview_requested`)になる。
+完了のステップ(`pr_fix_finish`)は、commitの前に[コミットの前の再確認](#コミットの前の再確認)をする。commitとpushの直前には、リポジトリのオーナーの数値IDを照合する。準備の入口から長い実行を挟み、その間に名前が別の人に渡りうるためである。通らなければ、pushと返信をせずに、作業項目を`blocked`にしてDiscordで人に知らせる。通ったら、commitしてpushし、各コメントに返信して、再レビューを依頼する。作業項目は再レビューの依頼済み(`rereview_requested`)になる。
 
 コミットメッセージは、Claudeが提案する件名(`commit_subject`)と、任意の本文(`commit_body`)をフローがつないで作る。
 
@@ -272,6 +331,63 @@ pushするcommitが無くても、溜めた返信は投稿する。Claudeがす�
 依頼のAPIが失敗したときは、人がGitHubのPRでレビュアーを依頼する必要がある。
 依頼の前のPRの取得(`getPr`)の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合も、APIの失敗として扱う。
 
+## CIの失敗を直す回
+
+CIの失敗を直す回(CI回)は、PRのCIが失敗したとき、失敗したジョブのログから修正するための回である。
+`pr_fix`のフローを、作業項目の`ci_check_id`が非NULLのときだけ、次のように変えて動かす。
+`ci_check_id`は、直す失敗の行(`pr_ci_checks`)のIDである。
+失敗の行の状態は[PRのCI監視の仕様](pr-ci.md)に、ログとプロンプトの部品は[CIの失敗を直す部品の仕様](ci-fix.md)に書く。
+
+### 通常の回との違い
+
+| ステップ | CI回 |
+| --- | --- |
+| 準備 | 修正ラウンドの上限を確かめない。失敗の行が、いまのheadについて、この作業項目で修正中であることを確かめる。worktreeを用意した後、無視されたファイルを消す |
+| 収集 | レビューもコメントも集めない |
+| 修正 | 失敗した実行のログの抜粋をClaudeに渡す。`Bash`は渡さない |
+| 検証 | 変更を許可リスト方式でも検査する。返信を持つ結果は受け付けない |
+| 完了 | 返信を投稿せず、作業項目のheadと処理済みの位置を更新しない。pushの直前にPRの状態を確かめる |
+
+修正ラウンドの上限を確かめないのは、CI回が`fix_round`を前の値のまま写すためである。
+指摘の修正が上限に達したPRでも、CI回を止めない。
+CI回の回数の上限は、`pr_ci_fix_max_rounds`が決める。
+
+失敗の行が合わないときは、準備のステップの結果を`skip`ではなく`guard_blocked`にする。
+`skip`にすると、完了のステップが何もせず、作業項目が修正中のまま残るためである。
+
+CI回の作業項目は、`parent_work_item_id`を持たない。
+要件の不足は差し戻さず、人の対応待ちにする。
+
+### 作業項目のheadを更新しない理由
+
+通常の回は、pushしたshaを作業項目の`head_sha`に記録する。
+CI回は記録しない。
+`poll_prs`の自動のレビューは、PRの最新の作業項目の`head_sha`とPRのheadが違うときに起動する。
+CI回が記録すると、pushしたheadが「処理済み」になり、再レビューは起動しない。
+通常の回と逆なので、完了のステップの配線を調べるテストで固定している。
+
+### 再レビューへの入力
+
+CI回がpushしたheadのレビューには、CI回の差分であることを、プロンプトの固定文で伝える。
+そのPRの`pr_fix`のうちCI回のどれかが、pushしたcommitにレビューするshaを含むときに限る。
+最新かどうかと状態は問わない。
+pushしたcommitは、依頼の前後で変わらないためである。
+人が後からpushしたheadのレビューには伝えない。
+この問い合わせが失敗したときは、固定文を足さず警告を残し、通常のレビューを続ける。
+値はDBから決める真偽値だけで、PRの内容からは決めない。
+固定文は、テストの弱体化、抑制のコメントの追加、原因を隠すだけの修正、失敗の原因と無関係な振る舞いの追加(外への通信、環境変数の読み取り)、無視ファイルとツールの設定の変更を重点的に見るよう頼む。
+CI回のClaudeは、通るように直す立場なので、検査を弱めて通す誘惑があるためである。
+
+再レビューの依頼(`requestRereview`)は通常の回と同じである。
+CI回は集めたレビューとコメントが無いので、`default_reviewers`が空なら、依頼先が無く、依頼しない。
+
+### 再開
+
+CI回の`pr_fix`は、手動の再開(`retry_work_item`)でも、イメージが古いときの自動の再開でも再開しない。
+作業項目だけを再開すると、失敗の行が`fixing`のまま食い違うためである。
+回が終わると、`watch_pr_ci`が失敗の行を`failed`か`superseded`に戻す([PRのCI監視の仕様](pr-ci.md)の「回復」)。
+PRにpushしてheadが変わると、新しい失敗として判定される。
+
 ## 返信の形式
 
 返信は運用者自身のアカウントで投稿する。そのため、フローが固定の構造で組み立てる(`renderFixReply`)。1行目がロールタグ、続いて本文、末尾が対応の行である。形式は`.claude/skills/factory-fix/SKILL.md`の「返信形式」に書く。
@@ -294,11 +410,11 @@ Claudeは`propose_issue`を選んだとき、修正を強行せず、Issueの`ti
 - コメントがPRのレビューコメントか、通常のIssueコメントかは、`is_inline`列に記録する。
 - `matchReviewThreadForComment`は、コメントの`databaseId`でスレッドを照合し、`(path, line)`には頼らない。
 
-提案が1件でもあるラウンドは、再レビューの依頼済みではなく人の対応待ちで終わり、レビュアーへの依頼もしない。Discordには「Consoleの承認タブで提案を承認または却下してください」と通知する。commitするものが無いラウンドでも、提案は記録する。
+提案が1件でもあるラウンドは、再レビューの依頼済みではなく人の対応待ちで終わり、レビュアーへの依頼もしない。Discordには「Consoleの要対応で提案を承認または却下してください」と通知する。commitするものが無いラウンドでも、提案は記録する。
 
 ### 承認と却下の反映
 
-人がConsoleの**承認**タブで決定すると、`f/factory/approval_decide`が決定を記録し、`f/factory/steps/issue_proposal_apply`を起動する。承認依頼の種類(`kind`)は`issue_proposal`である。要件定義の承認と同じく、人が判断してから進む仕組みである。
+人がConsoleの**要対応**で決定すると、`f/factory/approval_decide`が決定を記録し、`f/factory/steps/issue_proposal_apply`を起動する。承認依頼の種類(`kind`)は`issue_proposal`である。要件定義の承認と同じく、人が判断してから進む仕組みである。
 
 | 決定 | 処理 |
 | --- | --- |
@@ -320,9 +436,10 @@ Claudeは`propose_issue`を選んだとき、修正を強行せず、Issueの`ti
 - 承認者(`decided_by`)は、要件定義の承認と同じくfail-closedで導出する。
 - 決定は、状態が`pending`であることを条件にしたUPDATEで1回だけ記録する(楽観ロック)。
 - 作ったIssueの本文に`<!-- factory:issue_proposal:<id> -->`の目印を入れる。再実行では`findIssueByMarker`でこのIssueを探して再利用する。
+- Issueを作る前に、`claimIssueCreation`が提案の行の印を条件付きのUPDATEで取る。取れた呼び出しだけがIssueを作り、取れなかった呼び出しは何もせずに終える。GitHubの検索は索引の反映が遅れ、同時の呼び出しがどちらも目印の検索を空振りしうるためである。印は15分で切れる。例外で終わった呼び出しの印も、期限まで残す。Windmillの同時実行の制限(`concurrent_limit`)は設定しない。有償版でしか効かず、印だけで直列化する。
 - 決定済みの提案に違う決定を送ると、上書きせずにエラーで拒否する。
 
-起票に失敗した提案は**承認**タブに残る。Issueの作成自体が失敗したときは、決定の前の`pending`に戻す。Issueの作成の後の返信、スレッドの解決、状態の遷移が失敗したときは、「承認済み・起票未完了」として残す。どちらも、もう一度承認すれば続きから起票する。
+起票に失敗した提案は**要対応**に残る。Issueの作成自体が失敗したときは、決定の前の`pending`に戻す。Issueの作成の後の返信、スレッドの解決、状態の遷移が失敗したときは、「承認済み・起票未完了」として残す。どちらも、もう一度承認すれば続きから起票する。
 
 ## watermark
 
@@ -336,6 +453,7 @@ watermarkを進めるのは、そのラウンドのフィードバックを実�
 | pushに成功し、Issue化の提案があって人の対応待ちで終わった | 進める |
 | 要件の不足を親のIssueに差し戻した | 進める |
 | 失敗、人の対応待ち、ブロック | 進めない |
+| CI回がpushに成功した | 進めない |
 | 差し戻しに失敗した | 進めない |
 | pushが反映されなかった(コミットメッセージが無い、headが動いた、commitするものが無い) | 進めない |
 
@@ -374,19 +492,34 @@ PRワークフローは`f/factory/factory_config`の次の値を読む。
 | --- | --- | --- |
 | `review_label` | `factory:review` | PRレビューを起動するラベル |
 | `fix_label` | `factory:fix` | PR修正を起動するラベル |
-| `allowed_labeler_associations` | `["OWNER", "MEMBER", "COLLABORATOR"]` | 起動の対象にする投稿者の関係 |
+| `allowed_labeler_logins` | `[]` | ラベルを付けてよいアカウント。FactoryのPATのアカウントに加えて許可する |
+| `allowed_labeler_ids` | `{}` | `allowed_labeler_logins`のアカウントの数値ID。名前をキーにする。入れたアカウントは、IDも一致するときだけ許可する |
+| `allowed_labeler_associations` | `["OWNER", "MEMBER", "COLLABORATOR"]` | 修正の材料にする投稿者の関係 |
 | `repo_allowlist` | `[]` | 対象のリポジトリ。空なら`owners`のすべて |
 | `tracked_pr_days` | `30` | ラベルが外れた後もPRを追跡する日数 |
 | `review_post_mode` | `comment_only` | `gated`ならレビューを投稿しない |
 | `diff_max_lines` | `3000` | レビューに渡す差分の行数の上限 |
 | `claude_timeout_sec` | `1800` | Claude 1回の実行と、PR修正の検査コマンド1件を打ち切る秒数 |
-| `max_fix_rounds` | `3` | PR修正のラウンドの上限 |
+| `max_fix_rounds` | `3` | PR修正のラウンドの上限。上げると、失敗の下限により3ラウンド目以降は`heavy_model`で動く |
 | `allowed_check_commands` | `[]` | PR修正の検査コマンド |
 | `max_fix_changed_files` | `30` | PR修正で変えてよいファイル数の上限 |
 | `max_fix_diff_lines` | `1500` | PR修正の追加と削除の行数の上限 |
 | `default_reviewers` | `[]` | 再レビューを依頼する人 |
 | `daily_budget_usd` | `50` | 全フローで共有する1日の費用の上限(USD) |
 | `max_attempts` | `3` | 要件定義の試行回数の上限 |
+| `model` | `claude-sonnet-5-5` | PR修正のモデル。同じPRの修正が続けて2回失敗した後は`heavy_model`を使う |
+| `heavy_model` | `claude-opus-5-5` | PRレビューのモデルと、続けて2回失敗した後のPR修正のモデル |
+
+モデルの昇格に使う失敗の数は、同じPRの`pr_fix`の作業項目から数え、次の2つの大きいほうにする。
+CIの失敗を直す作業項目(`ci_check_id`を持つもの)は、どちらにも数えない。
+
+- 直近に連続した失敗。`blocked`でないラウンド(`done`か`requirements_gap`)で最後に終えた時刻より後の、次の3つの合計である。
+  - Claudeが動いて`blocked`で終えた`fix_rounds`の行
+  - 検査の再実行(`pr_fix_verify_retry`)をした作業項目
+  - `agent_runs.error`がある失敗した実行の行
+- 作業項目の`fix_round`から1を引いた値。毎回`done`で終えても再レビューが続くと、失敗の記録が残らないためである。
+
+除く条件と数の理由は、[運用](../operations.md)の「モデルを使い分ける」にある。
 
 PR修正のラウンドが`max_fix_rounds`を超えると、準備のステップが止め、作業項目は人の対応待ちになる。ラウンドの番号(`fix_round`)は、`poll_prs`が作業項目を作るときに入れる。PR修正の各ラウンドは別の作業項目になり、完了のステップは番号を増やさない。
 
@@ -416,10 +549,23 @@ Claudeは`claude_timeout_sec`で打ち切り、不正な出力の後に1回だ�
 | PRレビューの生成 | 2 × (`claude_timeout_sec` + 15) + 600 | Claudeを起動せず、人の対応待ちにする |
 | PR修正の修正 | 2 × (`claude_timeout_sec` + 15) + 600 | 準備でworktreeに触れずにブロックにする |
 | PR修正の検証 | (2 + 2 × 検査コマンド数) × (`claude_timeout_sec` + 15) + 600 | 準備でworktreeに触れずにブロックにする |
+| CI回の修正 | 2 × (`claude_timeout_sec` + 15) + 5 × 135 + 600 | 準備でworktreeに触れずにブロックにする |
+| CI回の検証 | (2 + 2 × 検査コマンド数) × (`claude_timeout_sec` + 15) + 6 × 135 + 2 × 75 + 4 × 345 + 600 | 準備でworktreeに触れずにブロックにする |
 
 検証の見積もりは、検査コマンドがあるときだけ確かめる。検査コマンドが無ければ、検証のステップは検査とClaudeを実行しない。
 
 既定値では、生成と修正の見積もりは4230秒である。`claude_timeout_sec`は3285秒まで収まる。PR修正の検証は、既定値なら検査コマンド4件まで収まる。
+
+CI回の式の135秒は、gitleaks 1回のタイムアウト120秒と停止の15秒である。
+修正の5回は、抜粋の4回と出力の1回である。
+検証の6回は、再実行の5回と、止める理由の検査の1回である。
+75秒は、gitの1回のタイムアウト60秒と停止の15秒で、検査コマンドの後の`git clean`が2回ある。
+345秒は、変更を読む1回の上限で、読む時間の上限120秒と、上限を超えた時点で実行中のgit 3回分の225秒である。
+変更を読むのは4回ある。
+ファイルごとにgitを実行するので、時間の上限が無いと、1回の読み取りがステップのtimeoutを超えうる。
+CI回は、通常の回の確認に加えて、この2つも確かめる。
+既定値では、CI回の修正は4905秒で、`claude_timeout_sec`は2947秒まで収まる。
+CI回の検証は、既定値なら検査コマンド4件まで収まる。
 
 PR修正で時間設定を確かめるのは準備のステップだけである。そのため、PR修正の実行中は時間設定を変えない。
 
@@ -458,7 +604,12 @@ PR修正の完了のステップで、pushの後のGitHub APIの呼び出しは�
 
 ## 再実行と中断
 
-`retry_work_item`は、失敗、人の対応待ち、ブロックのPR修正の作業項目を再実行できる。watermarkはpushの成功か差し戻しでしか進まないので、それ以外の終わり方から再実行すると、前回と同じフィードバックを集め直す。
+`retry_work_item`は、失敗、人の対応待ち、ブロックのPR修正の作業項目を再実行できる。ただしCIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す回))。watermarkはpushの成功か差し戻しでしか進まないので、それ以外の終わり方から再実行すると、前回と同じフィードバックを集め直す。
+同じPRに終了していない別のPR修正があるとき、止まったPR修正は再実行できない。
+`retry_work_item`は、進行中の作業項目のIDを示して断り、進行中のものに従わせる。
+再実行は部分一意インデックスに阻まれるためである。
+同じPRに終了していない別のPR修正があるPR修正は、自動の再開でも候補と比較交換の両方から外し、見送る。
+headがforkのPRのレビューが`blocked`になったときは、再実行すると、準備のステップが同じ理由でまた止め、Discordにも再通知する。PRを同一リポジトリのブランチから出し直す。
 
 人の対応待ちとブロックの通知の次の操作は、修正のどこで止めたかで分ける(`nextAction`に渡すフロー`pr_fix`)。
 
@@ -466,10 +617,23 @@ PR修正の完了のステップで、pushの後のGitHub APIの呼び出しは�
 | --- | --- | --- |
 | 修正の前(準備のステップ) | PRがドラフト、親のIssueかブランチの実装フローが実行中、worktreeの使用中、時間設定 | `retry_work_item`で同じ作業項目を再実行する |
 | 修正の後 | 要件定義への差し戻しの見送り、commitしたツリーが検査したツリーと違う、秘密情報の検査の後にworktreeが変わった、worktreeのHEADが動いた | `factory:fix`を付け直す |
+| CI回で止めた、保留の理由に写せる理由(CI回が作る理由は`ci round`で始まる。通常の回と共通の理由はそのまま通る) | ログを読めない、直せない種類のジョブ、スキルにマーカーが無い | 保留の理由ごとの敬体の固定文(`prCiFixHoldInfo`の`stopAction`) |
+| CI回で止めた、写せない理由 | 秘密値の検査に当たった、許可されない変更 | 原因を確かめて直し、PRにpushする |
+| CI回で止めた、人が取る手順がある理由 | PRがドラフト、PRのauto-mergeが有効 | 手順を残して待つ(ドラフトなら「ドラフトを解除してから、保留が解けるまで待つか、PRにpushしてください」) |
 
 修正の前に止めたときは、修正のラウンドを使っていない。
 `factory:fix`を付け直すと新しい作業項目で修正のラウンドを1つ使うので、同じ作業項目のまま再実行させる。
 修正の後に止めたときは、修正のClaudeを実行してそのラウンドを使い終わっているので、新しいラウンドとして付け直させる。
+CI回では、再実行と付け直しのどちらも案内しない。
+作業項目を再実行しても、付け直しても、失敗の行は動かないためである。
+人が基盤を直す手順がある理由は、手順を残し、再実行の部分だけを差し替える。
+手順がある理由は、worktreeの使用中、検査の枠の記録の片付け、workerのイメージが古い、検査コマンドが残したプロセスなどである。
+差し替える案内は、保留の理由が一時的な理由(ドラフト、auto-merge)なら「保留が解けるまで待つか、PRにpushしてください」である。
+待った後にFactoryが何かを始めるとは書かない。
+イメージが古い理由は、保留の理由ではない。失敗の行が止まってから24時間後に保留なしで戻ることと、待てないときはPRにpushすることを案内する。
+それ以外の理由なら「PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します」である。
+手順が無い理由は、保留の理由に写せればその敬体の固定文を使う。
+写せなければ、原因を確かめて直し、PRへpushする案内を使う。
 
 PR修正の準備は、worktreeを使っているプロセスがいても何も止めない。同じPR修正の前の実行のプロセスでも止めない。PR修正は実装フローのリースを持たないので、保持者が終わった実行の生き残りだと言えないためである。保持者を理由に載せてブロックにする。
 人は、載ったプロセスが終わるのを待つか、workerのコンテナで止めてから、`retry_work_item`で再実行する。
@@ -497,9 +661,39 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 対象リポジトリの検査(lint、typecheck、testに当たるもの)は、Claudeではなく検証のステップが実行する。実行するのは`factory_config.allowed_check_commands`に書いたコマンドで、例えば`["mise run check"]`である。結果は、Claudeの2回目の実行(修正)への入力にする。
 
-検査コマンドは、対象リポジトリのコードをworkerのコンテナ内でrootとして実行する。環境変数を最小にしても隔離にはならず、同じuidなので`/proc`を経由してジョブのトークンに届きうる。そのため、サンドボックス(別のコンテナ、非root、network none)ができるまで、既定値の`[]`を保つ。空でなければ、実行のたびにnoticeの`unsandboxed_check_commands`を記録する。
+検査コマンドは、対象リポジトリのコードをworkerのコンテナ内で、非特権のユーザー(`factory-check-N`)として実行する。
+コンテナとnetworkは分けない。別のコンテナでnetworkなしに動かせるまで、既定値の`[]`を保つ。
+空でなければ、実行する作業項目ごとにnoticeの`unsandboxed_check_commands`を記録する。
+同じ本文の未解決のnoticeがあれば新しく作らない。作成から1日を過ぎていれば、時刻を更新する。
 
-検査コマンドには、`PATH`と、実行ごとに作る非公開の`HOME`だけを渡し、秘密情報は引き継がない。終わったら`HOME`のディレクトリを消す。
+検査コマンドには、許可リストの環境変数だけを渡し、workerの環境変数は引き継がない。
+許可するのは、固定の`PATH`、実行ごとに作る非公開の`HOME`とその下の`TMPDIR`、`LANG`、worktreeだけを`safe.directory`にするgitの設定である。
+実行の前に、空いている枠を取って前の実行の残りを片付け、枠の記録を書いてから、worktreeと`HOME`の所有者をその枠のユーザーにする。
+実行の後は、所有者をrootに戻してから`HOME`のディレクトリを消し、共有の一時ディレクトリから枠のユーザーのものを消して、枠の記録を消す。
+コマンドごとに、枠のユーザーの残りのプロセスを止める。止まらなければ、所有権を戻さずにステップを失敗させる。
+戻せなかった所有権と`HOME`は、枠の記録を通して、次にその枠を取る検査が片付ける。
+
+準備のステップは、`allowed_check_commands`を設定していれば、Claudeより前に、イメージと実行時の前提([検査コマンドの権限](../security.md#検査コマンドの権限))を確かめる。
+満たさなければ、関門と同じ`guard_blocked`で止め、作業項目は`blocked`になる。
+前提を満たさないまま進むと、Claudeの修正を1回使ってから検証で止まるためである。
+検証のステップも検査の前に確かめ直し、満たさなければClaudeの修正を再実行せずに`guard_blocked`を返す。
+準備から検証までの間に、イメージも稼働中のworkerも変わりうるためである。
+完了のステップが、commitの前に残った所有権を同じ理由で取り戻せずに止まったときも、`blocked`にする。
+どれも修正のラウンド(`fix_rounds`)を記録しない。
+Claudeが直せる検査の失敗ではないので、Sonnetの失敗として数え(`countPrFixFailures`)、`heavy_model`への切り替えを早めないためである。
+理由と要対応の通知は、原因によって次のとおりである。
+
+| 原因 | 理由の先頭 | 要対応の通知 |
+| --- | --- | --- |
+| イメージが古い | `worker image is stale: run mise run up` | `host_action_required`([運用](../operations.md#fとworkerのイメージを両方変えたとき)) |
+| 稼働中のworkerの問題 | `worker runtime is unsafe for checks:` | `check_runtime_unsafe`([運用](../operations.md#稼働中のworkerが検査の前提を満たさないとき)) |
+
+イメージが古く、稼働中のworkerの問題も一緒に見つかったときは、両方の通知を残す([Consoleのnotice](notifications.md#consoleのnotice))。
+`host_action_required`は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+イメージが古くて止まった`blocked`は、通知の自動の解決の後に、自動で`fixing`へ戻って再開する([実装フロー](implement.md#イメージが古くて止まったとき))。
+CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す回))。
+
+`PATH`の値と、workerの値を使わない理由、uidの切り替えと所有権の受け渡しは、[検査コマンドはフローが実行する](../security.md#検査コマンドはフローが実行する)と[検査コマンドの権限](../security.md#検査コマンドの権限)にある。
 
 検査コマンドが指す先(対象リポジトリの`mise.toml`や`package.json`のscriptsなど)は、信頼できない内容として扱う。workerのmiseは対象リポジトリの`mise.toml`をtrustしない(`mise --yes trust`をしない)。`mise.toml`に頼るコマンドと、`MISE_TRUSTED_CONFIG_PATHS`を使わずには実行できないコマンドは、実行せずにブロックとして報告する。
 
@@ -509,8 +703,9 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 修正の差分に次のどれかが含まれると、検証のステップが止める結果を返す。作業項目は人の対応待ちになる。
 
-- `.claude/`、`.agents/`、`.github/workflows/`、`.mise/`、`.config/mise/`、`.lefthook/`、`console/public/`の下のファイル
-- `console/index.html`
+- `.claude/`、`.agents/`、`.github/workflows/`、`.github/actions/`、`.mise/`、`.config/mise/`、`.lefthook/`の下のファイル
+- `console/public/`、`infra/console_fetcher/`の下のファイル
+- 個別のファイル(一覧は下の説明を参照)
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
@@ -532,6 +727,27 @@ PR修正のClaudeに渡すツールは`Read,Glob,Grep,Edit,Write`だけで、`Ba
 
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
+個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
+一覧には、次の7種類が入る。
+
+- Consoleのページの入口: `console/index.html`
+- draw.ioのビューアの固定: `console/drawio-viewer.json`
+- 固定を書き換えるPRを作る側: `f/factory/drawio_viewer_bump*`と、それが使う`f/factory/lib/`の3ファイル
+- 固定を強制し、配信物を作って検査する側: `console/scripts/`の一部、`console/vite.config.ts`、`scripts/check-console-lockfile.ts`
+- 配信の設定: `infra/Caddyfile`
+- 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
+- CIの実行の範囲を決める側: `scripts/ci-scope.ts`
+
+`console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
+書き換えられると、別のスクリプトが固定の値として配信される。
+固定を書き換えるPRを作る側は、書き換えられると、人の確認なしに別の版や取得元を固定するPRを作れる。
+固定を強制する側のスクリプトは、書き換えられると、検査をすり抜けた内容が配信物に混ざる。
+`scripts/ci-scope.ts`は、書き換えられると、検査のジョブを黙って飛ばせる。
+`infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
+`infra/console_fetcher/`は、配信物を検証して配信する。
+どちらも書き換えられると、検証や隔離をすり抜けた内容が運用者のブラウザで動く。
+図を隔離して描くiframeの検査は、書き換えられると役目を果たさなくなる。
+sandboxを外したり、別のページをiframeに読ませたりしても、検査を通るためである。
 
 markdownlint-cli2の設定は、`customRules`、`markdownItPlugins`、`modulePaths`で任意のモジュールを`import()`できる。
 textlintの設定は、`rules`の名前からモジュールを解決して読み込む。
@@ -554,7 +770,11 @@ symlinkのモードを引くときは`--literal-pathspecs`でパスを文字ど�
 
 ### symlinkと特殊なファイルの検出
 
-main cloneのconfigには`core.symlinks=false`を書いておく。PR修正の検証は、symlinkの新規作成(未追跡のものを含む)、変更、削除、typechangeで止める結果を返す。symlinkは次の3つで探し、どれかで見つかれば止める。
+main cloneのconfigには`core.symlinks=false`を書いておく。
+このモジュールが実行するgitには、`-c core.symlinks=false`も付ける。
+`-c`は`.git/config`や`config.worktree`より優先されるので、検査コマンドがそこで`true`に戻しても、このモジュールのgitには効かない([セキュリティ](../security.md)の「gitが読む設定を限る」)。
+configに書いた値は、このモジュールを通さずにClaudeや検査コマンドが実行するgit向けの既定である。
+PR修正の検証は、symlinkの新規作成(未追跡のものを含む)、変更、削除、typechangeで止める結果を返す。symlinkは次の3つで探し、どれかで見つかれば止める。
 
 | 探し方 | 見つけるもの |
 | --- | --- |
@@ -668,6 +888,7 @@ PR修正の準備のステップは、worktreeを作る前に次を確かめる(
 | 確かめること | 通らないとき |
 | --- | --- |
 | リポジトリが許可リストに含まれる | ブロック |
+| リポジトリのオーナーが`owners`にある(`factory_repo`を除く)。`id`があれば、現在のIDと一致する | ブロック |
 | `fix_round`が`max_fix_rounds`以下である | 人の対応待ち |
 | 時間設定がステップのtimeoutに収まる | ブロック |
 | 親のIssueの作業項目が実装中でない | ブロック |
@@ -675,7 +896,25 @@ PR修正の準備のステップは、worktreeを作る前に次を確かめる(
 | PRがopenである | ブロック |
 | `head.repo`が`base.repo`と同じである(forkのPRにはpushしない) | ブロック |
 | PRがdraftでない | ブロック |
-| baseのブランチが保護ブランチでない | ブロック |
+| PRのauto-mergeが有効でない | ブロック |
+| headのブランチの状態を読める | 失敗(`failed`)。`job_failed`で通知する |
+| headのブランチがデフォルトブランチでない | ブロック |
+| headのブランチが保護ブランチでない | ブロック |
+| headのブランチにrulesetのruleが適用されていない | ブロック |
+
+PR修正がpushするのはheadのブランチなので、headの保護を確かめる。
+baseが保護されていても、headが普通のブランチなら止めない。
+保護の有無は、branches APIの`protected`で読む。
+`main`を保護するruleset(対象は既定のブランチ)は、`protected: true`として返ることを確かめた。
+globで対象を指定するrulesetなどが`protected`に反映されるかは確かめていない。
+そのため、headのブランチに効くrulesetの規則も、`GET repos/{owner}/{repo}/rules/branches/{branch}`で読む。
+1件でもあれば、理由`head branch has rules`でブロックにする。
+ruleの種類は問わずに止める。
+止めすぎは安全側で、`protected`に反映されないrulesetを見落とさないためである。
+auto-mergeが有効なPRを止めるのは、Factoryの修正pushがレビューを経ずにマージされうるからである。
+headの状態は、GitHubのAPIで読む。
+読めなかったときは例外になり、flowの失敗ハンドラが作業項目を失敗(`failed`)にして、`job_failed`で通知する。ブロックにはならない。
+デフォルトブランチは保護されていることが多いので、デフォルトブランチを先に判定し、理由を区別する。
 
 親のIssueの作業項目と実装の作業項目を確かめるのは、実装フローとPR修正がPRのブランチのworktreeを共有するからである。ブランチ名から引くのは、ブランチ名が`factory/issue-<N>-wi-<id>`の形のときで、親の行が無いPRでも止まる。理由を分けているので、どちらで止まったかを見分けられる。
 

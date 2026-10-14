@@ -37,10 +37,10 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 `mise run doctor`、`mise run up`、`mise run bootstrap`の後で、次を確かめる。PRの修正のE2Eは、本番のIssueやブランチではなく、捨てブランチと捨てPRで行う。
 
 1. sandboxのリポジトリで、Issueのテンプレートを使ってIssueを作り、`factory`ラベルを付ける。
-2. `poll_issues`の周期である5分以内に、Discordに通知が届き、Consoleの承認タブに表示されることを確かめる。
+2. `poll_issues`の周期である5分以内に、Discordに通知が届き、Consoleの**要対応**に表示されることを確かめる。
 3. 理由を付けて一度差し戻し、要件定義が作り直されて、もう一度通知が来ることを確かめる。
 4. 承認し、IssueにConsoleへのリンクを含むコメントが1件だけ投稿されることを確かめる。要件定義の本文や図は転記されない。ラベルは起動のためだけに使うので、承認してもIssueのラベルは変わらない。
-5. Consoleの分析タブに、コストとトークン数が出ることを確かめる。
+5. Consoleの**レポート**の分析に、コストとトークン数が出ることを確かめる。
 6. 何かの変更をself cloneに反映させ、`self_update`のスケジュールが最新のSHAを取り込むことを確かめる。
 
 ## 実装フローをE2Eで確かめる
@@ -55,7 +55,7 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 
 2. `implement_enabled`をtrueにする。
 3. Issueを起票し、要件定義を作らせ、Consoleで承認する。
-4. 実装フローが走ることを確かめる。Consoleのパイプラインタブで状態が`implementing`になり、ブランチの列にブランチが出る。
+4. 実装フローが走ることを確かめる。Consoleの**作業項目**の表で状態が`implementing`になり、ブランチの列にブランチが出る。
 5. PRができると状態が`pr_open`になり、PRの列にPRが出て、Discordに`pr_opened`の通知が届くことを確かめる。
 6. PR本文の章立て(受入条件、動作確認結果、確認して欲しい点、`Closes #N`)を確かめる。
 7. `poll_prs`がPRを拾い、`pr_review`が自動で走ることを確かめる。実装フローの`implement_finish`が`factory:review`のラベルを付けているので、ラベルを付け直さなくてよい。
@@ -65,7 +65,7 @@ description: 本リポジトリ(atelier-works)の開発環境をセットアッ�
 検査コマンドについては、次の点に注意する。
 
 - 検査の前に`git clean -fdX`が`node_modules/`などを消す。依存関係のあるリポジトリでは、先頭のコマンドでインストールする。`package.json`が無いリポジトリなら`bun test`だけでよい。
-- 検査コマンドは、Claudeが書いたコードをrootで、隔離せずに実行する。Issueを信頼できる人だけが起票するリポジトリにだけ設定する。
+- 検査コマンドは、Claudeが書いたコードを非特権のユーザーで、コンテナの分離なしに実行する。Issueを信頼できる人だけが起票するリポジトリにだけ設定する。
 
 `implement_enabled`については、次の点に注意する。
 

@@ -31,6 +31,8 @@ import {
 } from "./types.ts";
 import { withCommitTrailers } from "./workspace.ts";
 
+export { parseImplementBranchWorkItemId } from "./types.ts";
+
 /**
  * Claude自身が返す2つの結果(`IMPLEMENT_SCHEMA`)。
  * `implement_rounds.outcome`のそれ以外の値(`check_failed` / `checks_skipped` /
@@ -280,13 +282,6 @@ export function buildImplementBranchName(
   return branch;
 }
 
-/** 実装ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを返す。形が違えばnull。pr_fixが、親の行が無くても同じブランチの実装フローを見つけるのに使う。 */
-export function parseImplementBranchWorkItemId(branch: string): number | null {
-  const match = /^factory\/issue-[1-9]\d*-wi-([1-9]\d*)$/.exec(branch);
-  const id = match?.[1] === undefined ? Number.NaN : Number(match[1]);
-  return Number.isSafeInteger(id) ? id : null;
-}
-
 // ---------------------------------------------------------------------------
 // classifyProtectedChanges: 保護パスの変更を記録する(止めはしない)
 // ---------------------------------------------------------------------------
@@ -385,15 +380,24 @@ export function truncateCheckOutput(
 export const ISSUE_UPDATED_AFTER_INTAKE_NOTE =
   "この実装は要件定義を作ったときのIssueの内容に基づいており、その後にIssueの題名か本文が更新されています。";
 
+/**
+ * PR本文の「確認して欲しい点」に出す注記。取り込み内容を、却下や再実行による作り直しのときに
+ * 現在のIssueへ更新したことがある作業項目だけに出す。
+ * `ISSUE_UPDATED_AFTER_INTAKE_NOTE`は更新後の内容と比べるので、更新したときの書き換えは拾えない。
+ */
+export const INTAKE_REFRESHED_PR_NOTE =
+  "実装の入力は、却下や再実行による作り直しのときに、取り込み後に書き換えられたIssueの内容で更新されています。更新の前後の題名と本文は、作業項目の履歴に文字数とハッシュで残っています。";
+
 /** 改行コードを`\n`に揃え、前後の空白を除く。GitHubの編集画面は内容を変えずに改行コードを`\r\n`にすることがある。 */
 function normalizeIssueText(text: string | null): string {
-  return (text ?? "").replaceAll("\r\n", "\n").trim();
+  return (text ?? "").replace(/\r\n?/g, "\n").trim();
 }
 
 /**
  * 取り込み時点のIssue(work_items.title / body。要件定義の生成に使った内容)と現在のIssueで、
- * 題名か本文が違えばtrueを返す。実装のプロンプトは常に取り込み時点の内容を使い、
- * この判定はPR本文に注記を足すためだけに使う。
+ * 題名か本文が違えばtrueを返す。実装のプロンプトは常に取り込み時点の内容を使う。
+ * この判定は、PR本文の注記、承認の前の確認(`approval_decide`)、
+ * 作り直しの前の取り込み直し(`refreshIntakeFromIssue`)で使う。
  */
 export function issueChangedSinceIntake(
   snapshot: { readonly title: string | null; readonly body: string | null },
@@ -430,8 +434,8 @@ export type DeployNeeds = {
   readonly autoApply: boolean;
   /**
    * `infra/`か`mise.toml`が変わった。
-   * `self_update`は反映せず、次にホストで`mise run up`して起動したときに
-   * 反映される(通知はしない)。
+   * `self_update`は反映せず、ホストで`mise run up`して起動したときに反映される。
+   * 反映した版は、`self_update`が要対応の通知で知らせる。
    */
   readonly onNextUp: boolean;
   /**
@@ -495,7 +499,7 @@ export type ImplementPrBodyInput = {
   readonly protectedChanges: readonly string[];
   /** Claudeの`notes_for_reviewer`。呼び出し側が先に正規化する。 */
   readonly notesForReviewer: readonly string[];
-  /** `approval_support.ts`の`buildConsoleUrl(url, { work_item_id })`の値。 */
+  /** `approval_support.ts`の`buildConsoleUrl`に作業項目と承認した試行を渡した値。 */
   readonly requirementsConsoleUrl: string;
   readonly issueNumber: number;
   readonly changedPaths: readonly string[];
@@ -507,6 +511,8 @@ export type ImplementPrBodyInput = {
   readonly deployChecklist: boolean;
   /** trueなら「確認して欲しい点」のConsoleリンクの直前にISSUE_UPDATED_AFTER_INTAKE_NOTEを出す。 */
   readonly issueUpdatedAfterIntake: boolean;
+  /** trueなら、ISSUE_UPDATED_AFTER_INTAKE_NOTEの直前にINTAKE_REFRESHED_PR_NOTEを出す。 */
+  readonly intakeRefreshed: boolean;
 };
 
 /*
@@ -636,6 +642,7 @@ function renderChecks(checks: ImplementCheckSummary): string {
  * - 受入条件: 要件定義書の表
  * - 動作確認結果: 最後のラウンドの検証結果(実行しなかったときは「検査未実施」と理由)
  * - 確認して欲しい点: 保護対象の変更、レビュアーへの注記、
+ *   取り込み内容を更新した注記(`intakeRefreshed`のときだけ)、
  *   Issueの取り込み後の更新の注記(`issueUpdatedAfterIntake`のときだけ)、
  *   承認済みの要件定義を開くConsoleのリンク
  * - 関連リンク: `Closes #N`。PRの作業項目をIssueに結び付ける。
@@ -648,6 +655,7 @@ export function buildImplementPrBody(input: ImplementPrBodyInput): string {
   const attention = [
     ...input.protectedChanges.map((line) => `- ${sanitizePrLine(line)}`),
     ...input.notesForReviewer.map((line) => `- ${sanitizePrLine(line)}`),
+    ...(input.intakeRefreshed ? [`- ${INTAKE_REFRESHED_PR_NOTE}`] : []),
     ...(input.issueUpdatedAfterIntake
       ? [`- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`]
       : []),
@@ -708,6 +716,11 @@ export type ImplementRoundExitInput = {
   readonly dailyBudgetExceeded: boolean;
   /** 検査に失敗した後、期限までの残りが修正ラウンドの最悪の所要時間(fixRoundWorstCaseSec)に足りない。 */
   readonly deadlineReached: boolean;
+  /**
+   * このラウンドの失敗で、次の修正ラウンドのモデルが`heavy_model`に変わる。
+   * trueのときは、同じ失敗を新しいモデルで直せるかを確かめるため、停滞の判定を飛ばす。
+   */
+  readonly modelChangesNext: boolean;
   /** このラウンドの検証出力全体の`stallHash`。何も実行しなかったときは`null`。 */
   readonly checkOutputHash: string | null;
   readonly previousCheckOutputHash: string | null;
@@ -824,6 +837,7 @@ export function implementTimeoutMisfit(
  * 4. ガードとして、ラウンド上限、日次予算、フロー全体の期限、停滞の検出を確かめる。
  *    停滞は、差分か検証出力が前のラウンドと同じ状態で、
  *    もう1回修正しても予算を使うだけになる。
+ *    ただし、この失敗で次のモデルが変わるときは、モデルを上げた修正を1回試すため停滞を判定しない。
  * `continue`は、検証が失敗し、どのガードにも当たらなかったことを表す。
  * 終了の理由から`implement_rounds.outcome`への対応は`roundOutcomeForExit`が決める。
  */
@@ -836,20 +850,36 @@ export function decideImplementRoundExit(
   if (state.round >= state.maxRounds) return "max_rounds";
   if (state.dailyBudgetExceeded) return "daily_budget";
   if (state.deadlineReached) return "deadline";
+  if (state.modelChangesNext) return "continue";
+  if (roundIsStalled(state)) return "stalled";
+  return "continue";
+}
+
+/**
+ * このラウンドが前のラウンドから進んでいないかを返す。
+ * 差分か検証出力のどちらかが前のラウンドと同じなら、進んでいないとみなす。
+ * 前のラウンドが無い(指紋が`null`)ときは進んでいないとみなさない。
+ */
+export function roundIsStalled(
+  state: Pick<
+    ImplementRoundExitInput,
+    | "diffHash"
+    | "previousDiffHash"
+    | "checkOutputHash"
+    | "previousCheckOutputHash"
+  >,
+): boolean {
   if (
     state.previousDiffHash !== null &&
     state.diffHash === state.previousDiffHash
   ) {
-    return "stalled";
+    return true;
   }
-  if (
+  return (
     state.checkOutputHash !== null &&
     state.previousCheckOutputHash !== null &&
     state.checkOutputHash === state.previousCheckOutputHash
-  ) {
-    return "stalled";
-  }
-  return "continue";
+  );
 }
 
 /**

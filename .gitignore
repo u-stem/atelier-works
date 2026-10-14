@@ -25,3 +25,7 @@ mise.*.local.toml
 
 # Python bytecode (e.g. from running vendored skill scripts)
 __pycache__/
+console/.cache/
+
+# Playwright MCPがリポジトリ直下に作る作業ディレクトリ
+.playwright-mcp/

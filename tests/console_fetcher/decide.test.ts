@@ -11,6 +11,7 @@ import {
   describeRollbackNotice,
   describeUnpinRefusal,
   findUnknownUnpinFlags,
+  hasCiSuccess,
   isAllowedDownloadUrl,
   isLockStale,
   isReadablePin,
@@ -30,8 +31,8 @@ import {
   parseRevokedState,
   parseUnpinFlags,
   parseWorkflowRuns,
-  pruneRevokedState,
   REVOKED_DIGEST_LIMIT,
+  rankReleaseRuns,
   referencedAssetNames,
   selectAssetsToDelete,
   selectCorruptCopiesToDelete,
@@ -75,7 +76,8 @@ function run(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     event: "push",
     status: "completed",
     conclusion: "success",
-    path: ".github/workflows/ci.yml",
+    name: "Console dist",
+    path: ".github/workflows/console-dist.yml",
     createdAt: "2026-10-08T00:00:00Z",
     ...overrides,
   };
@@ -153,7 +155,8 @@ describe("parseWorkflowRuns", () => {
             event: "push",
             status: "completed",
             conclusion: "success",
-            path: ".github/workflows/ci.yml",
+            name: "Console dist",
+            path: ".github/workflows/console-dist.yml",
             created_at: "2026-10-08T00:00:00Z",
           },
         ],
@@ -163,6 +166,25 @@ describe("parseWorkflowRuns", () => {
 
   test("skips a malformed run", () => {
     expect(parseWorkflowRuns({ workflow_runs: [{ id: "7" }] })).toEqual([]);
+  });
+
+  test("skips a run without a workflow name", () => {
+    expect(
+      parseWorkflowRuns({
+        workflow_runs: [
+          {
+            id: 7,
+            head_sha: SHA_A,
+            head_branch: "main",
+            event: "push",
+            status: "completed",
+            conclusion: "success",
+            path: ".github/workflows/console-dist.yml",
+            created_at: "2026-10-08T00:00:00Z",
+          },
+        ],
+      }),
+    ).toEqual([]);
   });
 
   test("rejects a body without workflow_runs", () => {
@@ -199,8 +221,100 @@ describe("selectLatestRun", () => {
     ).toBeNull();
   });
 
+  test("ignores the ci.yml workflow that other jobs can upload from", () => {
+    expect(
+      selectLatestRun([run({ path: ".github/workflows/ci.yml", name: "CI" })]),
+    ).toBeNull();
+  });
+
+  test("ignores a run whose workflow name differs", () => {
+    expect(selectLatestRun([run({ name: "CI" })])).toBeNull();
+  });
+
+  test("ignores a run whose path carries a ref suffix", () => {
+    expect(
+      selectLatestRun([
+        run({ path: ".github/workflows/console-dist.yml@refs/heads/main" }),
+      ]),
+    ).toBeNull();
+  });
+
+  test("ignores a run that is not completed", () => {
+    expect(selectLatestRun([run({ status: "in_progress" })])).toBeNull();
+  });
+
   test("ignores a malformed head sha", () => {
     expect(selectLatestRun([run({ headSha: "abc" })])).toBeNull();
+  });
+});
+
+function ciRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
+  return run({
+    name: "CI",
+    path: ".github/workflows/ci.yml",
+    ...overrides,
+  });
+}
+
+describe("rankReleaseRuns", () => {
+  test("orders the qualifying runs newest first", () => {
+    const older = run({ id: 1, createdAt: "2026-10-07T00:00:00Z" });
+    const newer = run({
+      id: 2,
+      headSha: SHA_B,
+      createdAt: "2026-10-08T00:00:00Z",
+    });
+    expect(rankReleaseRuns([older, newer]).map((r) => r.id)).toEqual([2, 1]);
+  });
+
+  test("leaves out a run that does not qualify", () => {
+    expect(rankReleaseRuns([run({ headBranch: "v1" })])).toEqual([]);
+  });
+});
+
+describe("hasCiSuccess", () => {
+  test("accepts a successful ci.yml push run on main for the sha", () => {
+    expect(hasCiSuccess([ciRun()], SHA_A)).toBe(true);
+  });
+
+  test("rejects a run of another commit", () => {
+    expect(hasCiSuccess([ciRun({ headSha: SHA_B })], SHA_A)).toBe(false);
+  });
+
+  test("rejects a failed run", () => {
+    expect(hasCiSuccess([ciRun({ conclusion: "failure" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects a run that is not completed", () => {
+    expect(
+      hasCiSuccess([ciRun({ status: "in_progress", conclusion: null })], SHA_A),
+    ).toBe(false);
+  });
+
+  test("rejects a run on a branch other than main", () => {
+    expect(hasCiSuccess([ciRun({ headBranch: "v1" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects a pull_request run", () => {
+    expect(hasCiSuccess([ciRun({ event: "pull_request" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects another workflow file", () => {
+    expect(
+      hasCiSuccess([ciRun({ path: ".github/workflows/other.yml" })], SHA_A),
+    ).toBe(false);
+  });
+
+  test("rejects a run whose workflow name differs", () => {
+    expect(hasCiSuccess([ciRun({ name: "Console dist" })], SHA_A)).toBe(false);
+  });
+
+  test("rejects the console-dist.yml run itself", () => {
+    expect(hasCiSuccess([run()], SHA_A)).toBe(false);
+  });
+
+  test("rejects an empty list", () => {
+    expect(hasCiSuccess([], SHA_A)).toBe(false);
   });
 });
 
@@ -424,6 +538,15 @@ describe("parseManifest", () => {
         files: { ...valid.files, "assets/x/a.js": HASH_1 },
       }),
     ).toBeNull();
+  });
+
+  test("accepts a file under the draw.io directory", () => {
+    expect(
+      parseManifest({
+        ...valid,
+        files: { ...valid.files, "drawio/drawio-viewer-bc7586cb.js": HASH_1 },
+      })?.files.get("drawio/drawio-viewer-bc7586cb.js"),
+    ).toBe(HASH_1);
   });
 
   test("rejects an invalid hash", () => {
@@ -1218,6 +1341,24 @@ describe("mergeRevokedState", () => {
     ).toEqual({ shas: [SHA_A], digests: [HASH_1] });
   });
 
+  test("caps the number of shas", () => {
+    const shas = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(40, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas, digests: [] }, [SHA_A], []).shas,
+    ).toHaveLength(REVOKED_DIGEST_LIMIT);
+  });
+
+  test("keeps the newest shas beyond the limit", () => {
+    const shas = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
+      i.toString(16).padStart(40, "0"),
+    );
+    expect(
+      mergeRevokedState({ shas, digests: [] }, [SHA_A], []).shas.at(-1),
+    ).toBe(SHA_A);
+  });
+
   test("keeps the newest digests beyond the limit", () => {
     const digests = Array.from({ length: REVOKED_DIGEST_LIMIT }, (_, i) =>
       i.toString(16).padStart(64, "0"),
@@ -1320,14 +1461,6 @@ describe("selectRevokedReleases", () => {
         digests: [contentDigestOf(HASH_2)],
       }),
     ).toEqual([SHA_A, SHA_B]);
-  });
-});
-
-describe("pruneRevokedState", () => {
-  test("drops the shas whose releases are gone", () => {
-    expect(
-      pruneRevokedState({ shas: [SHA_A, SHA_B], digests: [HASH_1] }, [SHA_B]),
-    ).toEqual({ shas: [SHA_B], digests: [HASH_1] });
   });
 });
 

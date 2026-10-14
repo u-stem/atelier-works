@@ -1,11 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import {
-  computeYesterdayRangeJst,
+  type DayRange,
   getAgentRunSummary,
   getApprovalSummary,
   getCleanupSummary,
+  getWorkerLoadSummary,
+  MAX_CATCHUP_DAYS,
+  parseSummaryState,
+  planSummaryDays,
+  previousDayLabel,
 } from "../../f/factory/lib/summary_support.ts";
+import {
+  DAILY_GAP_THRESHOLD_SECONDS,
+  DAILY_LAG_THRESHOLD_SECONDS,
+  WORKER_SAMPLES_PER_DAY,
+} from "../../f/factory/lib/worker_load_support.ts";
 
 type FakeCall = { text: string; values: unknown[] };
 
@@ -32,31 +42,258 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
   return { sql, calls };
 }
 
-describe("computeYesterdayRangeJst", () => {
-  test("labels the JST calendar day before `now`'s JST calendar day", () => {
-    // 2026-09-26T00:05:00ZはJSTで2026-09-26 09:05。
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
-    expect(range.label).toBe("2026-09-25");
+const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+/**
+ * 時刻の文字列をパラメータに渡しているのに、直後に`::timestamptz`が無い位置を返す。
+ * 型の無い文字列のパラメータはtextで束縛され、timestamptz列との比較が
+ * `operator does not exist: timestamp with time zone >= text`で失敗する。
+ */
+function untypedTimeParameters(call: FakeCall | undefined): number[] {
+  if (call === undefined) {
+    return [-1];
+  }
+  const segments = call.text.split(" ? ");
+  const untyped: number[] = [];
+  call.values.forEach((value, index) => {
+    const isTime = typeof value === "string" && ISO_TIMESTAMP.test(value);
+    const next = segments[index + 1] ?? "";
+    if (isTime && !next.startsWith("::timestamptz")) {
+      untyped.push(index);
+    }
+  });
+  return untyped;
+}
+
+/** 初回(stateなし)に出す日、つまり`now`の前日の範囲を返す。 */
+function yesterdayRange(now: Date): DayRange {
+  const [day] = planSummaryDays(null, now).days;
+  if (day === undefined) {
+    throw new Error("no day planned");
+  }
+  return day;
+}
+
+const RANGE = yesterdayRange(new Date("2026-09-26T00:05:00Z"));
+
+describe("parseSummaryState", () => {
+  test("reads the last summarized day", () => {
+    expect(parseSummaryState({ last_day: "2026-10-13" }).last_day).toBe(
+      "2026-10-13",
+    );
   });
 
-  test("start is yesterday's 00:00 JST expressed in real UTC", () => {
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
-    expect(range.start.toISOString()).toBe("2026-09-24T15:00:00.000Z");
+  test("is readable when the last day is valid", () => {
+    expect(parseSummaryState({ last_day: "2026-10-13" }).unreadable).toBe(
+      false,
+    );
   });
 
-  test("end is today's 00:00 JST expressed in real UTC", () => {
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
-    expect(range.end.toISOString()).toBe("2026-09-25T15:00:00.000Z");
+  test("returns no day for the initial empty state", () => {
+    expect(parseSummaryState(null).last_day).toBeNull();
   });
 
-  test("a `now` just before JST midnight still resolves to the same JST day", () => {
-    // 2026-09-26T14:59:59ZはJSTで2026-09-26 23:59:59(まだ27日ではない)。
-    const range = computeYesterdayRangeJst(new Date("2026-09-26T14:59:59Z"));
-    expect(range.label).toBe("2026-09-25");
+  test("is not unreadable for the initial empty state", () => {
+    expect(parseSummaryState(null).unreadable).toBe(false);
+  });
+
+  test("is not unreadable for an undefined state", () => {
+    expect(parseSummaryState(undefined).unreadable).toBe(false);
+  });
+
+  test("is not unreadable when last_day is absent", () => {
+    expect(parseSummaryState({}).unreadable).toBe(false);
+  });
+
+  test("returns no day when last_day is not a string", () => {
+    expect(parseSummaryState({ last_day: 20261013 }).last_day).toBeNull();
+  });
+
+  test("is unreadable when last_day is not a string", () => {
+    expect(parseSummaryState({ last_day: 20261013 }).unreadable).toBe(true);
+  });
+
+  test("returns no day when last_day is not YYYY-MM-DD", () => {
+    expect(parseSummaryState({ last_day: "2026/10/13" }).last_day).toBeNull();
+  });
+
+  test("is unreadable when last_day is not YYYY-MM-DD", () => {
+    expect(parseSummaryState({ last_day: "2026/10/13" }).unreadable).toBe(true);
+  });
+
+  test("returns no day when last_day is not a real calendar day", () => {
+    expect(parseSummaryState({ last_day: "2026-02-30" }).last_day).toBeNull();
+  });
+
+  test("is unreadable when last_day is not a real calendar day", () => {
+    expect(parseSummaryState({ last_day: "2026-02-30" }).unreadable).toBe(true);
+  });
+
+  test("is unreadable when the state is not an object", () => {
+    expect(parseSummaryState("2026-10-13").unreadable).toBe(true);
   });
 });
 
-const RANGE = computeYesterdayRangeJst(new Date("2026-09-26T00:05:00Z"));
+describe("planSummaryDays", () => {
+  // 2026-10-14T00:05:00ZはJSTで2026-10-14 09:05。昨日は2026-10-13。
+  const NOW = new Date("2026-10-14T00:05:00Z");
+
+  function labels(lastDay: string | null, now: Date = NOW): string[] {
+    return planSummaryDays(lastDay, now).days.map((day) => day.label);
+  }
+
+  test("summarizes only yesterday when there is no saved state", () => {
+    expect(labels(null)).toEqual(["2026-10-13"]);
+  });
+
+  test("summarizes only yesterday when the last summary was the day before", () => {
+    expect(labels("2026-10-12")).toEqual(["2026-10-13"]);
+  });
+
+  test("lists every missed day from oldest to newest", () => {
+    expect(labels("2026-10-10")).toEqual([
+      "2026-10-11",
+      "2026-10-12",
+      "2026-10-13",
+    ]);
+  });
+
+  test("summarizes nothing when yesterday was already summarized", () => {
+    expect(labels("2026-10-13")).toEqual([]);
+  });
+
+  test("summarizes only yesterday when the saved day is in the future (clock skew)", () => {
+    expect(labels("2026-10-20")).toEqual(["2026-10-13"]);
+  });
+
+  test("summarizes only yesterday when the saved day is today", () => {
+    expect(labels("2026-10-14")).toEqual(["2026-10-13"]);
+  });
+
+  test("skips none when the saved day is in the future", () => {
+    expect(planSummaryDays("2026-10-20", NOW).skipped_count).toBe(0);
+  });
+
+  test("reports no future day when the saved day is yesterday", () => {
+    expect(planSummaryDays("2026-10-13", NOW).future_last_day).toBeNull();
+  });
+
+  test("reports the saved day when it is later than yesterday", () => {
+    expect(planSummaryDays("2026-10-20", NOW).future_last_day).toBe(
+      "2026-10-20",
+    );
+  });
+
+  test("reports the saved day when it is today", () => {
+    expect(planSummaryDays("2026-10-14", NOW).future_last_day).toBe(
+      "2026-10-14",
+    );
+  });
+
+  test("reports no future day when there is no saved state", () => {
+    expect(planSummaryDays(null, NOW).future_last_day).toBeNull();
+  });
+
+  test("reports yesterday when days are planned", () => {
+    expect(planSummaryDays("2026-10-10", NOW).yesterday).toBe("2026-10-13");
+  });
+
+  test("reports yesterday when nothing is planned", () => {
+    expect(planSummaryDays("2026-10-13", NOW).yesterday).toBe("2026-10-13");
+  });
+
+  test("reports yesterday as the last planned day", () => {
+    const plan = planSummaryDays("2026-10-01", NOW);
+    expect(plan.days.at(-1)?.label).toBe(plan.yesterday);
+  });
+
+  test("crosses a month boundary", () => {
+    // 2026-11-02T00:05:00ZはJSTで2026-11-02 09:05。昨日は2026-11-01。
+    expect(labels("2026-10-30", new Date("2026-11-02T00:05:00Z"))).toEqual([
+      "2026-10-31",
+      "2026-11-01",
+    ]);
+  });
+
+  test("crosses a year boundary", () => {
+    expect(labels("2026-12-30", new Date("2027-01-02T00:05:00Z"))).toEqual([
+      "2026-12-31",
+      "2027-01-01",
+    ]);
+  });
+
+  test("crosses a leap day", () => {
+    expect(labels("2028-02-27", new Date("2028-03-01T00:05:00Z"))).toEqual([
+      "2028-02-28",
+      "2028-02-29",
+    ]);
+  });
+
+  test("keeps all days when the gap is exactly the limit", () => {
+    expect(labels("2026-10-06")).toHaveLength(MAX_CATCHUP_DAYS);
+  });
+
+  test("skips none when the gap is exactly the limit", () => {
+    expect(planSummaryDays("2026-10-06", NOW).skipped_count).toBe(0);
+  });
+
+  test("keeps only the newest days when the gap exceeds the limit", () => {
+    expect(labels("2026-10-01")).toEqual([
+      "2026-10-07",
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-10",
+      "2026-10-11",
+      "2026-10-12",
+      "2026-10-13",
+    ]);
+  });
+
+  test("counts the days dropped beyond the limit", () => {
+    expect(planSummaryDays("2026-10-01", NOW).skipped_count).toBe(5);
+  });
+
+  test("gives each day the 00:00 JST start expressed in UTC", () => {
+    const [day] = planSummaryDays("2026-10-11", NOW).days;
+    expect(day?.start.toISOString()).toBe("2026-10-11T15:00:00.000Z");
+  });
+
+  test("gives each day a one-day span ending at the next 00:00 JST", () => {
+    const [day] = planSummaryDays("2026-10-11", NOW).days;
+    expect(day?.end.toISOString()).toBe("2026-10-12T15:00:00.000Z");
+  });
+
+  test("starts the first day of an initial run at yesterday's 00:00 JST in UTC", () => {
+    expect(
+      yesterdayRange(new Date("2026-09-26T00:05:00Z")).start.toISOString(),
+    ).toBe("2026-09-24T15:00:00.000Z");
+  });
+
+  test("ends the first day of an initial run at today's 00:00 JST in UTC", () => {
+    expect(
+      yesterdayRange(new Date("2026-09-26T00:05:00Z")).end.toISOString(),
+    ).toBe("2026-09-25T15:00:00.000Z");
+  });
+
+  test("resolves a `now` just before JST midnight to the same JST day", () => {
+    // 2026-09-26T14:59:59ZはJSTで2026-09-26 23:59:59(まだ27日ではない)。
+    expect(yesterdayRange(new Date("2026-09-26T14:59:59Z")).label).toBe(
+      "2026-09-25",
+    );
+  });
+
+  test("reports no skipped range when no day is skipped", () => {
+    expect(planSummaryDays("2026-10-06", NOW).skipped_from).toBeNull();
+  });
+
+  test("reports the oldest skipped day", () => {
+    expect(planSummaryDays("2026-10-01", NOW).skipped_from).toBe("2026-10-02");
+  });
+
+  test("reports the newest skipped day", () => {
+    expect(planSummaryDays("2026-10-01", NOW).skipped_to).toBe("2026-10-06");
+  });
+});
 
 describe("getAgentRunSummary", () => {
   test("queries factory.agent_runs", async () => {
@@ -65,6 +302,12 @@ describe("getAgentRunSummary", () => {
     ]);
     await getAgentRunSummary(RANGE, sql);
     expect(calls[0]?.text).toContain("FROM factory.agent_runs");
+  });
+
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getAgentRunSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
   });
 
   test("parses a numeric-string total_cost_usd (Postgres numeric column)", async () => {
@@ -103,6 +346,12 @@ describe("getApprovalSummary", () => {
     expect(calls[0]?.text).toContain("FROM factory.approval_requests");
   });
 
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getApprovalSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
+  });
+
   test("counts only requirement-draft decisions (kind = requirements)", async () => {
     const { sql, calls } = createFakeSqlClient([
       [{ approved_count: "0", rejected_count: "0" }],
@@ -138,6 +387,9 @@ describe("getCleanupSummary", () => {
           deployments_deleted: 5,
           notices_deleted: 2,
           info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -157,6 +409,9 @@ describe("getCleanupSummary", () => {
           deployments_deleted: "5",
           notices_deleted: "2",
           info_notices_resolved: "0",
+          main_ci_runs_deleted: "0",
+          worker_samples_deleted: "0",
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: "0",
         },
       ],
@@ -169,6 +424,9 @@ describe("getCleanupSummary", () => {
       deployments_deleted: 5,
       notices_deleted: 2,
       info_notices_resolved: 0,
+      main_ci_runs_deleted: 0,
+      worker_samples_deleted: 0,
+      pr_ci_checks_deleted: 0,
       doc_dirs_deleted: 0,
     });
   });
@@ -184,12 +442,105 @@ describe("getCleanupSummary", () => {
           deployments_deleted: 0,
           notices_deleted: 0,
           info_notices_resolved: "4",
+          main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
     ]);
     const summary = await getCleanupSummary(RANGE, sql);
     expect(summary?.info_notices_resolved).toBe(4);
+  });
+
+  test("sums the deleted main ci records", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          info_notices_resolved: 0,
+          main_ci_runs_deleted: "9",
+          worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary?.main_ci_runs_deleted).toBe(9);
+  });
+
+  test("sums the deleted worker samples", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
+          worker_samples_deleted: "1440",
+          pr_ci_checks_deleted: 0,
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary?.worker_samples_deleted).toBe(1440);
+  });
+
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
+  });
+
+  test("selects the worker_samples_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("sum(worker_samples_deleted)");
+  });
+
+  test("selects the main_ci_runs_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("sum(main_ci_runs_deleted)");
+  });
+
+  test("sums the deleted pr ci checks", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          run_count: 1,
+          work_items_deleted: 0,
+          approval_requests_deleted: 0,
+          job_failures_deleted: 0,
+          deployments_deleted: 0,
+          notices_deleted: 0,
+          info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
+          pr_ci_checks_deleted: "7",
+          doc_dirs_deleted: 0,
+        },
+      ],
+    ]);
+    const summary = await getCleanupSummary(RANGE, sql);
+    expect(summary?.pr_ci_checks_deleted).toBe(7);
+  });
+
+  test("selects the pr_ci_checks_deleted column", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getCleanupSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("sum(pr_ci_checks_deleted)");
   });
 
   test("selects the info_notices_resolved column", async () => {
@@ -209,6 +560,9 @@ describe("getCleanupSummary", () => {
           deployments_deleted: 0,
           notices_deleted: 0,
           info_notices_resolved: 0,
+          main_ci_runs_deleted: 0,
+          worker_samples_deleted: 0,
+          pr_ci_checks_deleted: 0,
           doc_dirs_deleted: 0,
         },
       ],
@@ -221,5 +575,179 @@ describe("getCleanupSummary", () => {
     const { sql } = createFakeSqlClient([[]]);
     const summary = await getCleanupSummary(RANGE, sql);
     expect(summary).toBeNull();
+  });
+});
+
+describe("getWorkerLoadSummary", () => {
+  const FULL_ROW: SqlRow = {
+    sample_count: "718",
+    lag_max_seconds: 45,
+    lag_over_count: "3",
+    lag_over_total_seconds: "120",
+    gap_count: "2",
+    gap_longest_seconds: "5400.000",
+    gap_longest_from: "2026-10-09T17:10:00.000Z",
+    gap_longest_to: new Date("2026-10-09T18:40:00.000Z"),
+    running_jobs_max: 2,
+    slots_max: "3",
+    mem_anon_max_bytes: "83886080",
+    mem_anon_max_ratio: 0.0195,
+    mem_working_set_max_bytes: "272629760",
+    mem_oom_increase: "0",
+    mem_oom_kill_increase: "1",
+    max_wait_max_seconds: 120,
+  };
+
+  const NULL_ROW: SqlRow = {
+    sample_count: 2,
+    lag_max_seconds: null,
+    lag_over_count: 0,
+    lag_over_total_seconds: 0,
+    gap_count: 0,
+    gap_longest_seconds: null,
+    gap_longest_from: null,
+    gap_longest_to: null,
+    running_jobs_max: null,
+    slots_max: 3,
+    mem_anon_max_bytes: null,
+    mem_anon_max_ratio: null,
+    mem_working_set_max_bytes: null,
+    mem_oom_increase: null,
+    mem_oom_kill_increase: null,
+    max_wait_max_seconds: null,
+  };
+
+  // SQLの文面の回帰検知。集計の中身は、scripts/test-db-queries.tsが本物のPostgreSQLで確かめる。
+  test("regression: queries factory.worker_samples", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls[0]?.text).toContain("FROM factory.worker_samples");
+  });
+
+  test("regression: binds every time parameter as timestamptz", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(untypedTimeParameters(calls[0])).toEqual([]);
+  });
+
+  test("aggregates in a single query", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("passes the range, the lag threshold and the gap threshold", async () => {
+    const { sql, calls } = createFakeSqlClient([[FULL_ROW]]);
+    await getWorkerLoadSummary(RANGE, sql);
+    expect(calls[0]?.values).toEqual([
+      RANGE.start.toISOString(),
+      RANGE.start.toISOString(),
+      RANGE.end.toISOString(),
+      RANGE.start.toISOString(),
+      RANGE.end.toISOString(),
+      DAILY_GAP_THRESHOLD_SECONDS,
+      DAILY_LAG_THRESHOLD_SECONDS,
+      DAILY_LAG_THRESHOLD_SECONDS,
+    ]);
+  });
+
+  test("reads the aggregates, accepting numeric strings", async () => {
+    const { sql } = createFakeSqlClient([[FULL_ROW]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toEqual({
+      sample_count: 718,
+      expected_count: WORKER_SAMPLES_PER_DAY,
+      lag_max_seconds: 45,
+      lag_over_count: 3,
+      lag_over_total_seconds: 120,
+      gap_count: 2,
+      gap_longest_seconds: 5400,
+      gap_longest_from: new Date("2026-10-09T17:10:00.000Z"),
+      gap_longest_to: new Date("2026-10-09T18:40:00.000Z"),
+      running_jobs_max: 2,
+      slots_max: 3,
+      mem_anon_max_bytes: 83886080,
+      mem_anon_max_ratio: 0.0195,
+      mem_working_set_max_bytes: 272629760,
+      mem_oom_increase: 0,
+      mem_oom_kill_increase: 1,
+      max_wait_max_seconds: 120,
+    });
+  });
+
+  test("keeps null for values that no sample could read", async () => {
+    const { sql } = createFakeSqlClient([[NULL_ROW]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toEqual({
+      sample_count: 2,
+      expected_count: WORKER_SAMPLES_PER_DAY,
+      lag_max_seconds: null,
+      lag_over_count: 0,
+      lag_over_total_seconds: 0,
+      gap_count: 0,
+      gap_longest_seconds: null,
+      gap_longest_from: null,
+      gap_longest_to: null,
+      running_jobs_max: null,
+      slots_max: 3,
+      mem_anon_max_bytes: null,
+      mem_anon_max_ratio: null,
+      mem_working_set_max_bytes: null,
+      mem_oom_increase: null,
+      mem_oom_kill_increase: null,
+      max_wait_max_seconds: null,
+    });
+  });
+
+  test("returns null when no sample falls in range", async () => {
+    const { sql } = createFakeSqlClient([[{ ...NULL_ROW, sample_count: 0 }]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toBeNull();
+  });
+
+  test("returns null when the query returns no row at all", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const summary = await getWorkerLoadSummary(RANGE, sql);
+    expect(summary).toBeNull();
+  });
+
+  test("throws when the start of the longest gap is not a timestamp", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...FULL_ROW, gap_longest_from: "yesterday" }],
+    ]);
+    await expect(getWorkerLoadSummary(RANGE, sql)).rejects.toThrow(
+      'row field "gap_longest_from" is not a valid timestamp',
+    );
+  });
+
+  test("throws when an aggregate is not numeric", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...FULL_ROW, mem_anon_max_bytes: "many" }],
+    ]);
+    await expect(getWorkerLoadSummary(RANGE, sql)).rejects.toThrow(
+      'row field "mem_anon_max_bytes" is not numeric',
+    );
+  });
+});
+
+describe("previousDayLabel", () => {
+  test("returns the day before", () => {
+    expect(previousDayLabel("2026-10-13")).toBe("2026-10-12");
+  });
+
+  test("crosses a month boundary", () => {
+    expect(previousDayLabel("2026-11-01")).toBe("2026-10-31");
+  });
+
+  test("crosses a year boundary", () => {
+    expect(previousDayLabel("2027-01-01")).toBe("2026-12-31");
+  });
+
+  test("handles a leap day", () => {
+    expect(previousDayLabel("2028-03-01")).toBe("2028-02-29");
+  });
+
+  test("throws when the label is not a real date", () => {
+    expect(() => previousDayLabel("2026-02-30")).toThrow("previousDayLabel");
   });
 });

@@ -1,0 +1,9 @@
+summary: '[LIB] workerの負荷の記録の部品'
+description: 内部ライブラリです。直接実行するものではありません。cgroupのメモリのファイルの解析、queueの応答の集計、記録が続けて取れなかった回数の数え方を持ちます。
+lock: '!inline f/factory/lib/worker_load_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -2,6 +2,7 @@
 // 入出力(gitのworktree操作、`ps`とシグナル、`du`)はあちらのスクリプトが行う。
 
 import { dirname } from "node:path";
+import { isOwnershipRestoreFailure } from "./process_lock.ts";
 import type { FactoryConfig } from "./types.ts";
 import type { WorktreeEntry } from "./workspace.ts";
 
@@ -38,7 +39,7 @@ export function requirementsWorktreeDir(
 /**
  * リポジトリについて、worktreeのプロセスのロックファイルを探すディレクトリを返す。
  * ロックファイルはworktreeの隣に置かれるので、メインのクローンの親(`req-<N>`と`review-*`の置き場所)と、一覧にある各worktreeの親を、重複を除いて返す。
- * `worktrees`は、そのリポジトリの`git worktree list --porcelain`を解析したもの。
+ * `worktrees`は、そのリポジトリの`git worktree list --porcelain -z`を解析したもの。
  * 一覧から消えたworktreeの親は分からないので、そこに残るロックファイルは、同じ親に別のworktreeが一覧に載るまで探さない。
  */
 export function lockFileDirs(
@@ -71,7 +72,7 @@ export type IssueWorktreeSource = {
  * 対象は、一覧にあれば要件定義用のdetachedな`req-<N>`(`requirementsWorktreeDir`)と、
  * 作業項目にブランチがあれば`item.branch`(implementブランチ、`work_items.branch`)を
  * チェックアウトしたworktreeである。
- * `worktrees`は、そのリポジトリの`git worktree list --porcelain`を解析したもの。
+ * `worktrees`は、そのリポジトリの`git worktree list --porcelain -z`を解析したもの。
  * fetch専用のメインのクローン(`mainRepoDir`)は、たまたまそのブランチにあっても返さない。
  */
 export function issueWorktreePaths(
@@ -231,9 +232,10 @@ export function unresolvedHoldersNoticeMessage(
 }
 
 /**
- * 前の実行のプロセスがまだ使っているので消さなかったworktreeについてのnoticeの文言を返す。
- * 掃除は誰のプロセスも止めないので、人が止めない限り毎日同じworktreeを飛ばし続ける。
- * 運用者が止めるプロセスを選べるよう、保持者を載せた`reason`(`WorktreeBusyError`のメッセージ)をそのまま含める。
+ * 使用中として消さなかったworktreeについてのnoticeの文言を返す。
+ * 掃除は誰のプロセスも止めないので、人が対処しない限り毎日同じworktreeを飛ばし続ける。
+ * 運用者が原因を選べるよう、`reason`(`WorktreeBusyError`のメッセージ)をそのまま含める。
+ * 検査用のユーザーから所有権を取り戻せなかった理由(`isOwnershipRestoreFailure`)なら、プロセスではなく枠の記録を片付ける手順を示す。
  */
 export function busyWorktreeNoticeMessage(input: {
   readonly owner: string;
@@ -242,7 +244,11 @@ export function busyWorktreeNoticeMessage(input: {
   readonly worktreeDir: string;
   readonly reason: string;
 }): string {
-  return `${input.owner}/${input.repo}の作業項目${String(input.workItemId)}のworktree(${input.worktreeDir})は、プロセスがまだ使っているため削除しませんでした(${input.reason})。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。`;
+  const target = `${input.owner}/${input.repo}の作業項目${String(input.workItemId)}のworktree(${input.worktreeDir})`;
+  if (isOwnershipRestoreFailure(input.reason)) {
+    return `${target}は、検査用のユーザーからrootに戻せないため削除しませんでした(${input.reason})。運用の文書の「検査の枠の記録を片付ける」の手順で片付けると、次の掃除で削除されます。`;
+  }
+  return `${target}は、プロセスがまだ使っているため削除しませんでした(${input.reason})。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。`;
 }
 
 // ---------------------------------------------------------------------------
@@ -438,4 +444,55 @@ export function parseDiskUsageKb(duOutput: string): number {
 export function formatDiskUsageMessage(usageKb: number, path: string): string {
   const usageMib = (usageKb / 1024).toFixed(1);
   return `${path}のディスク使用量は約${usageMib} MiBです。`;
+}
+
+export type RecordDiskUsageDeps = {
+  /** `du -sk <path>`を実行し、終了コードと出力を返す。 */
+  readonly measure: () => Promise<{
+    readonly exitCode: number;
+    readonly stdout: string;
+    readonly stderr: string;
+  }>;
+  /** 本文を、ディスク使用量の未解決の通知として記録する。 */
+  readonly record: (message: string) => Promise<unknown>;
+  /** 測定や記録の失敗を残す。 */
+  readonly warn: (message: string, error: string) => void;
+};
+
+/**
+ * `path`のディスク使用量を測り、通知として記録して、使用量(KiB)を返す。
+ * 測定に失敗したら記録せず0を返し、既存の通知には触れない。
+ * 記録に失敗しても例外を投げず、測った使用量を返す。掃除の他の処理の結果を変えないため。
+ */
+export async function recordDiskUsage(
+  path: string,
+  deps: RecordDiskUsageDeps,
+): Promise<number> {
+  const duResult = await deps.measure();
+  if (duResult.exitCode !== 0) {
+    deps.warn(
+      "cleanup: du failed, skipping disk usage notice",
+      duResult.stderr.trim(),
+    );
+    return 0;
+  }
+  let usageKb: number;
+  try {
+    usageKb = parseDiskUsageKb(duResult.stdout);
+  } catch (err) {
+    deps.warn(
+      "cleanup: unexpected du output, skipping disk usage notice",
+      err instanceof Error ? err.message : String(err),
+    );
+    return 0;
+  }
+  try {
+    await deps.record(formatDiskUsageMessage(usageKb, path));
+  } catch (err) {
+    deps.warn(
+      "cleanup: failed to record disk usage notice",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+  return usageKb;
 }

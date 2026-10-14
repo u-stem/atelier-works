@@ -1,5 +1,5 @@
 // f/factory/pipelineフローの3ステップ中1番目。
-// 作業項目と設定を読み、Factory自身のcloneと、
+// 作業項目と設定を読み、リポジトリのオーナーの数値IDを`owners`と照合してから、Factory自身のcloneと、
 // 対象リポジトリのfetchだけを行うmainのcloneを用意する。
 // デフォルトブランチのheadのshaを求め、要件生成ステージが読む
 // 読み取り専用のdetachedのworktreeを
@@ -12,10 +12,13 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import {
+  addNoticeUnlessUnresolved,
   getWorkItem,
   setAttemptIfLeaseHolder,
   updateStatusIfLeaseHolder,
 } from "../lib/db.ts";
+import { notifyBestEffort } from "../lib/discord.ts";
+import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getIssue } from "../lib/github.ts";
 import { rootFlowJobId } from "../lib/implement_launch_support.ts";
 import { logger } from "../lib/log.ts";
@@ -25,11 +28,14 @@ import {
   PIPELINE_LEASE_POLL_MS,
   PIPELINE_LEASE_WAIT_MS,
 } from "../lib/pipeline_lease.ts";
+import {
+  repoOwnerGateDeps,
+  verifyRepoOwnerId,
+} from "../lib/repo_owner_gate.ts";
 import type { WorkItemStatus } from "../lib/types.ts";
 import { TERMINAL_WORK_ITEM_STATUSES } from "../lib/types.ts";
 import {
   addDetachedWorktree,
-  ensureFactoryClone,
   ensureRepo,
   listWorktrees,
   removeWorktree,
@@ -37,6 +43,7 @@ import {
   runCommand,
   type WorktreeEntry,
 } from "../lib/workspace.ts";
+import { describeReason, nextActionFor } from "./pr_workflow_support.ts";
 
 export type PipelinePrepareResult =
   | { readonly skip: true; readonly reason: string }
@@ -114,6 +121,30 @@ export function shouldCancelForClosedIssue(issueState: string): boolean {
 export const PIPELINE_PREPARE_MOVED_ON_REASON =
   "work item status or flow_job_id changed during prepare";
 
+export type RepoOwnerStopDeps = {
+  /** リースを条件にした比較交換で、作業項目を`needs_human`にする。一致しなければ`false`。 */
+  readonly moveToNeedsHuman: (reason: string) => Promise<boolean>;
+  /** 人にDiscordで知らせる。届かなくても、状態は記録済みなので失敗にしない。 */
+  readonly notify: (reason: string) => Promise<void>;
+};
+
+/**
+ * リポジトリのオーナーの数値IDの照合に通らなかった作業項目を、`needs_human`にして終える。
+ * 準備のほかのステップが`isRepoAllowed`を偽と見たときに終える扱いに合わせて、
+ * 作業領域は用意せず、後続のステップは`skip`で飛ばす。
+ * 状態の比較交換が一致しなければ、何も書かず通知せずに、`movedOn`と同じ結果を返す。
+ */
+export async function stopForRepoOwner(
+  reason: string,
+  deps: RepoOwnerStopDeps,
+): Promise<PipelinePrepareResult> {
+  if (!(await deps.moveToNeedsHuman(reason))) {
+    return { skip: true, reason: PIPELINE_PREPARE_MOVED_ON_REASON };
+  }
+  await deps.notify(reason);
+  return { skip: true, reason };
+}
+
 /** 状態の比較交換が一致しなかったことをログに残し、何も書かずに終える結果を返す。 */
 function movedOn(
   workItemId: number,
@@ -136,6 +167,9 @@ function movedOn(
  * 失敗扱いにしないのは、別の実行が持ち主なら作業項目はその実行が進めるからである。
  * 状態の書き換えは、リースを確かめた時点の状態と`flow_job_id`のままのときだけ行う比較交換で、
  * 一致しなければ状態を書き換えずに`skip`を返す(attemptの保存とworktreeの用意は済んでいる)。
+ * リースを確かめて`attempt`を保存した後、リポジトリをcloneする前に、
+ * リポジトリのオーナーの数値IDを`owners`と照合する(`verifyRepoOwnerId`)。
+ * 通らなければ、作業項目を`needs_human`にして人に知らせ、作業領域を用意せずに`skip`を返す(`stopForRepoOwner`)。
  * 作業項目が無い、種類がissueでない、Issue番号が無い、フローのルートジョブIDを得られないときは例外を投げる。
  */
 export async function main(
@@ -165,7 +199,8 @@ export async function main(
     });
     return { skip: true, reason: `already_terminal:${workItem.status}` };
   }
-  if (workItem.issue_number === null) {
+  const issueNumber = workItem.issue_number;
+  if (issueNumber === null) {
     throw new Error(
       `pipeline_prepare: work item ${work_item_id} has no issue_number`,
     );
@@ -199,11 +234,46 @@ export async function main(
   if (!(await setAttemptIfLeaseHolder(work_item_id, attempt, leaseJobId)))
     return movedOn(work_item_id, leaseJobId);
 
-  await ensureFactoryClone({
+  // 対象リポジトリのcloneより前に、オーナーの数値IDを`owners`と照合する。
+  // 承認の差し戻しや再実行の間に名前が別の人に渡っていても、そのコードをClaudeに読ませない。
+  const ownerGuard = await verifyRepoOwnerId(
+    config,
+    workItem.owner,
+    workItem.repo,
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+  );
+  if (!ownerGuard.ok) {
+    return stopForRepoOwner(ownerGuard.reason, {
+      moveToNeedsHuman: (reason) =>
+        updateStatusIfLeaseHolder(
+          work_item_id,
+          leasedStatus,
+          "needs_human",
+          leaseJobId,
+          reason,
+        ),
+      notify: async (reason) => {
+        await notifyBestEffort(
+          await wmill.getVariable("f/factory/discord_webhook_url"),
+          {
+            kind: "needs_human",
+            instance_name: config.instance_name,
+            owner: workItem.owner,
+            repo: workItem.repo,
+            url: workItem.issue_url ?? "",
+            reason: describeReason(reason),
+            target: { kind: "issue", number: issueNumber },
+            next_action: nextActionFor(reason),
+          },
+          log,
+        );
+      },
+    });
+  }
+
+  await openFactoryClone(config, {
     run: runCommand,
-    repoUrl: config.factory_repo,
     ghToken,
-    branch: config.factory_branch,
   });
 
   const repo = await ensureRepo({
@@ -218,7 +288,7 @@ export async function main(
   const worktreeDir = buildRequirementsWorktreeDir(
     workItem.owner,
     workItem.repo,
-    workItem.issue_number,
+    issueNumber,
   );
   const existing = await listWorktrees({ run: runCommand, repoDir: repo.dir });
   const existingEntry = findWorktreeEntry(existing, worktreeDir);
@@ -251,12 +321,12 @@ export async function main(
     client,
     workItem.owner,
     workItem.repo,
-    workItem.issue_number,
+    issueNumber,
   );
   if (shouldCancelForClosedIssue(issue.state)) {
     log.info("issue no longer open, cancelling", {
       work_item_id,
-      issue_number: workItem.issue_number,
+      issue_number: issueNumber,
     });
     const cancelled = await updateStatusIfLeaseHolder(
       work_item_id,
@@ -290,7 +360,7 @@ export async function main(
     worktree_dir: worktreeDir,
     owner: workItem.owner,
     repo: workItem.repo,
-    issue_number: workItem.issue_number,
+    issue_number: issueNumber,
     head_sha: headSha,
   };
 }

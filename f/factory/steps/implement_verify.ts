@@ -3,6 +3,11 @@
 // 検査が通るまでClaudeによる修正ラウンドを繰り返す。
 
 import * as wmill from "windmill-client@1.817.0";
+import { runAllowedCheckCommands } from "../lib/check_runner.ts";
+import {
+  checkSandboxFromEnv,
+  kernelWarningText,
+} from "../lib/check_sandbox.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -10,11 +15,13 @@ import {
 } from "../lib/claude.ts";
 import { implementCheckCommandsFor, loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
+  countImplementFailedRounds,
   getWorkItem,
   insertImplementRound,
   recordAgentRun,
 } from "../lib/db.ts";
+import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import {
   rootFlowJobId,
   stillHoldsImplementLease,
@@ -38,6 +45,7 @@ import {
   requireDeadlineAt,
 } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
+import { modelChangesAfterFailure } from "../lib/model_policy.ts";
 import {
   withWorktreeProcessLock,
   worktreeLockFor,
@@ -58,7 +66,6 @@ import {
   IMPLEMENT_DIFF_SIZE_LIMIT_NAMES,
   listChangedPaths,
   listSymlinkChanges,
-  runAllowedCheckCommands,
 } from "./pr_workflow_support.ts";
 
 /**
@@ -108,8 +115,8 @@ async function inspectChanges(
  * 失敗すれば、リースを確かめてから(失っていれば止める)`implementFixPrompt`で修正ラウンドを走らせる。
  * リースの値は、フローのルートジョブID(`rootFlowJobId`)。
  * 修正ラウンドごとに`doc_dir`の読み取り専用コピーを新しく作り、
- * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。
- * 検査コマンドがあるときは、サンドボックスなしで実行することを
+ * Claudeの実行1回ごとに`implement_rounds`へ1行記録する。workerが検査の前提を満たさず検査を実行できなかったラウンドは記録しない。
+ * 検査コマンドがあるときは、コンテナの分離なしで非特権のuidにより実行することを
  * noticeとして記録する。
  * `first_round.kind`が想定外なら例外を投げる。
  */
@@ -141,14 +148,23 @@ export async function main(
     context.owner,
     context.repo,
   );
+  // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
+  // 枠を片付けられずに飛ばしたときと、読めない枠の記録を退避したときは、検査を止めずにnoticeで知らせる。
+  // 同じ状況が続いても検査のたびに積み上がらないよう、同じ本文の未解決のnoticeがあれば足さない。
+  const checkSandbox =
+    commands.length > 0
+      ? checkSandboxFromEnv(process.env, async (notice) => {
+          await addNoticeUnlessUnresolved(notice);
+        })
+      : null;
   // `pr_fix_verify`と同じ常設リスクの告知。
   // 検査コマンドは、対象リポジトリの検証されていないコードを、
-  // worker内でサンドボックスなしにroot権限で実行する。
+  // workerのコンテナの中で、コンテナの分離なしに実行する。
   // generateがリースを失っていたときは検査を実行しないので告知しない。
   if (commands.length > 0 && first_round.kind !== "lease_lost") {
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "unsandboxed_check_commands",
-      message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、サンドボックス分離なしでroot権限により${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。`,
+      message: `implement_verifyはこれから${String(commands.length)}件の検査コマンドを、コンテナの分離なしで非特権の検査用ユーザーにより${context.owner}/${context.repo}#${String(context.issue_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
     });
   }
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
@@ -202,48 +218,77 @@ export async function main(
             worktreeDir,
             commands,
             config.implement_check_timeout_sec * 1000,
+            undefined,
+            undefined,
+            checkSandbox,
           ),
-        runFixRound: (request) =>
-          withReadOnlyDocDirCopy(context.requirements_doc_dir, (docDir) =>
-            runImplementClaudeRound(
-              { runClaude, recordAgentRun },
-              {
-                run: lockedRun,
-                config,
-                workItemId: work_item_id,
-                attempt: context.attempt,
-                stage: "implement_fix",
-                prompt: implementFixPrompt({
-                  ...implementPromptInput(context, docDir),
-                  checkFailures: request.failures,
-                  round: request.round,
-                  maxRounds: config.implement_max_rounds,
-                  ...(request.contractViolated
-                    ? { outputContractNote: IMPLEMENT_OUTPUT_CONTRACT_NOTE }
-                    : {}),
-                }),
-                systemPromptPath: systemPrompt.path,
-                worktreeDir,
-                docDir,
-                oauthToken,
-                deadlineAt,
-                beforeRetry: () =>
-                  worktreeGitPointerMatches(
-                    worktreeDir,
-                    context.worktree_git_pointer,
-                  ),
-              },
-            ),
-          ),
+        runFixRound: async (request) => {
+          // 直前のラウンドは記録済みなので、その失敗も数に入る。
+          const sonnetFailures = await countImplementFailedRounds(
+            work_item_id,
+            context.attempt,
+          );
+          return withReadOnlyDocDirCopy(
+            context.requirements_doc_dir,
+            (docDir) =>
+              runImplementClaudeRound(
+                { runClaude, recordAgentRun },
+                {
+                  run: lockedRun,
+                  config,
+                  workItemId: work_item_id,
+                  attempt: context.attempt,
+                  sonnetFailures,
+                  stage: "implement_fix",
+                  prompt: implementFixPrompt({
+                    ...implementPromptInput(context, docDir),
+                    checkFailures: request.failures,
+                    round: request.round,
+                    maxRounds: config.implement_max_rounds,
+                    ...(request.contractViolated
+                      ? { outputContractNote: IMPLEMENT_OUTPUT_CONTRACT_NOTE }
+                      : {}),
+                    previousRoundStalled: request.previousRoundStalled,
+                  }),
+                  systemPromptPath: systemPrompt.path,
+                  worktreeDir,
+                  docDir,
+                  oauthToken,
+                  deadlineAt,
+                  beforeRetry: () =>
+                    worktreeGitPointerMatches(
+                      worktreeDir,
+                      context.worktree_git_pointer,
+                    ),
+                },
+              ),
+          );
+        },
         recordRound: async (record) => {
           await insertImplementRound(record);
         },
         dailyBudgetExceeded: async () =>
           (await dailyBudgetStatus(config)).exceeded,
+        modelChangesAfterFailure: async () =>
+          modelChangesAfterFailure(
+            config,
+            "implement",
+            await countImplementFailedRounds(work_item_id, context.attempt),
+          ),
         holdsLease: () =>
           stillHoldsImplementLease(() => getWorkItem(work_item_id), leaseJobId),
         now: Date.now,
         log: (message, fields) => log.info(message, fields),
+        reportCheckImageStale: (error) =>
+          recordCheckEnvironmentNotice(
+            {
+              readDeployedSha: () =>
+                wmill.getVariable("f/factory/deployed_sha"),
+              addNotice: addNoticeUnlessUnresolved,
+              log,
+            },
+            error,
+          ),
       },
       {
         workItemId: work_item_id,

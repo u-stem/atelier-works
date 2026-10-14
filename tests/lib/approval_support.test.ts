@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   APPROVAL_TIMEOUT_SEC,
+  buildApprovalConsoleUrl,
   buildAuditConsoleUrl,
   buildConsoleUrl,
   buildRecordedReason,
@@ -9,6 +10,8 @@ import {
   expiredRequirementsRequests,
   handlerPathFor,
   isExpired,
+  issueCheckRefusal,
+  needsIssueCheck,
 } from "../../f/factory/lib/approval_support.ts";
 
 describe("computeExpiresAt", () => {
@@ -99,9 +102,9 @@ describe("buildRecordedReason", () => {
 });
 
 describe("buildConsoleUrl", () => {
-  test("builds the App's view URL under windmill_public_url", () => {
+  test("builds the entrance of the new Console under windmill_public_url", () => {
     expect(buildConsoleUrl("http://127.0.0.1:8080")).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+      "http://127.0.0.1:8080/console/",
     );
   });
 
@@ -109,15 +112,34 @@ describe("buildConsoleUrl", () => {
     expect(buildConsoleUrl("http://127.0.0.1:8080")).not.toContain("token=");
   });
 
-  test("appends a requirements deep-link fragment when a target is given", () => {
+  test("links the requirements page of the work item when a target is given", () => {
     expect(buildConsoleUrl("http://127.0.0.1:8080", { work_item_id: 42 })).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/42",
+      "http://127.0.0.1:8080/console/items/42/requirements",
     );
   });
 
-  test("buildAuditConsoleUrl appends the #audit fragment", () => {
+  test("adds the attempt query when the target has an attempt", () => {
+    expect(
+      buildConsoleUrl("http://127.0.0.1:8080", {
+        work_item_id: 42,
+        attempt: 3,
+      }),
+    ).toBe("http://127.0.0.1:8080/console/items/42/requirements?attempt=3");
+  });
+});
+
+describe("buildApprovalConsoleUrl", () => {
+  test("selects the approval in the inbox of the Console", () => {
+    expect(buildApprovalConsoleUrl("http://127.0.0.1:8080", 9)).toBe(
+      "http://127.0.0.1:8080/console/?approval=9",
+    );
+  });
+});
+
+describe("buildAuditConsoleUrl", () => {
+  test("links the audit report page", () => {
     expect(buildAuditConsoleUrl("http://127.0.0.1:8080", 12)).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
+      "http://127.0.0.1:8080/console/reports/audit/12",
     );
   });
 });
@@ -150,5 +172,75 @@ describe("expiredRequirementsRequests", () => {
   test("returns an empty array when none are requirements-kind", () => {
     const requests = [{ kind: "issue_proposal" as const, id: 2 }];
     expect(expiredRequirementsRequests(requests)).toEqual([]);
+  });
+});
+
+describe("needsIssueCheck", () => {
+  test("checks a new approval of requirements", () => {
+    expect(
+      needsIssueCheck("record_and_dispatch", "approve", "requirements"),
+    ).toBe(true);
+  });
+
+  test("does not check a rejection", () => {
+    expect(
+      needsIssueCheck("record_and_dispatch", "reject", "requirements"),
+    ).toBe(false);
+  });
+
+  test("does not check the rerun of a recorded decision", () => {
+    expect(needsIssueCheck("redispatch", "approve", "requirements")).toBe(
+      false,
+    );
+  });
+
+  test("does not check a refused decision", () => {
+    expect(needsIssueCheck("refuse", "approve", "requirements")).toBe(false);
+  });
+
+  test("does not check an issue proposal", () => {
+    expect(
+      needsIssueCheck("record_and_dispatch", "approve", "issue_proposal"),
+    ).toBe(false);
+  });
+});
+
+describe("issueCheckRefusal", () => {
+  test("allows approval when the issue matches the intake snapshot", () => {
+    expect(issueCheckRefusal("match", 7)).toBeNull();
+  });
+
+  test("allows approval when the check does not apply", () => {
+    expect(issueCheckRefusal("not_applicable", 7)).toBeNull();
+  });
+
+  test("refuses approval when the issue changed after intake", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain("changed after intake");
+  });
+
+  test("tells the approver that rejecting regenerates from the current issue", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain(
+      "reject the request; the requirements are regenerated from the current issue",
+    );
+  });
+
+  test("names the screen that shows the intake content", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain(
+      "Inbox of the new Console",
+    );
+  });
+
+  test("refuses approval when the issue could not be fetched", () => {
+    expect(issueCheckRefusal("unavailable", 7)).toContain("try again");
+  });
+
+  test("tells the approver to reject when the issue was moved or deleted", () => {
+    expect(issueCheckRefusal("unavailable", 7)).toContain(
+      "If the issue was transferred or deleted, reject the request.",
+    );
+  });
+
+  test("names the approval request in the refusal", () => {
+    expect(issueCheckRefusal("changed", 7)).toContain("approval request 7");
   });
 });

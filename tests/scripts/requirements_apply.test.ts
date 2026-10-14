@@ -49,6 +49,9 @@ function rejectedDeps(overrides: Partial<RejectedRetryDeps> = {}): {
     removeWorktree: async () => {
       calls.push("remove_worktree");
     },
+    refreshIntake: async () => {
+      calls.push("refresh_intake");
+    },
     launchPipeline: async () => {
       calls.push("launch");
       return JOB_A;
@@ -118,8 +121,7 @@ describe("shouldProceed", () => {
 });
 
 describe("buildApprovedComment", () => {
-  const CONSOLE_URL =
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7";
+  const CONSOLE_URL = "http://127.0.0.1:8080/console/items/7/requirements";
 
   test("states that requirements are approved", () => {
     expect(buildApprovedComment(CONSOLE_URL, 7)).toContain(
@@ -149,8 +151,7 @@ describe("buildApprovalCommentFailedMessage", () => {
     issue_number: 42,
     work_item_id: 7,
   };
-  const CONSOLE_URL =
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7";
+  const CONSOLE_URL = "http://127.0.0.1:8080/console/items/7/requirements";
 
   test("names the issue and the work item", () => {
     expect(
@@ -384,9 +385,30 @@ describe("relaunchPipelineAfterRejection", () => {
       "cas",
       "mark_restartable",
       "remove_worktree",
+      "refresh_intake",
       "launch",
       "record",
     ]);
+  });
+
+  test("refreshes the intake after the move and before the launch", async () => {
+    const h = rejectedDeps();
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls.indexOf("refresh_intake")).toBeLessThan(
+      h.calls.indexOf("launch"),
+    );
+  });
+
+  test("does not refresh the intake when the CAS did not match", async () => {
+    const h = rejectedDeps({ casToGenerating: async () => false });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).not.toContain("refresh_intake");
+  });
+
+  test("launches even when the intake refresh throws", async () => {
+    const h = rejectedDeps({ refreshIntake: boom });
+    await relaunchPipelineAfterRejection(h.deps);
+    expect(h.calls).toContain("launch");
   });
 
   test("does not mark restartable when the CAS throws", async () => {

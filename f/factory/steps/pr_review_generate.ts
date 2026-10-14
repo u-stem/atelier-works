@@ -5,6 +5,7 @@
 // detachedのworktreeである。
 
 import * as wmill from "windmill-client@1.817.0";
+import { ciRoundDiffOrFalse } from "../lib/ci_fix_round.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -13,6 +14,7 @@ import {
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
+  hasCiRoundDiffToReview,
   latestDraft,
   recordAgentRun,
   updateStatusIfCurrent,
@@ -27,6 +29,7 @@ import {
   listReviewThreads,
 } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import { REVIEW_SCHEMA, reviewPrompt } from "../lib/prompts.ts";
 import type { ReviewFinding, ReviewVerdict } from "../lib/types.ts";
 import { runCommand } from "../lib/workspace.ts";
@@ -163,6 +166,18 @@ export async function main(
   // 最初のレビューではスレッドがまだ無いので空になる。
   const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
 
+  // レビューするcommitが、CI回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
+  // 値はDBから決めた真偽値だけで、PRの内容からは決めない。
+  // 問い合わせに失敗しても通常のレビューは止めない。偽に倒して警告を残す。
+  const ciRoundDiff = await ciRoundDiffOrFalse(
+    () => hasCiRoundDiffToReview(owner, repo, pr_number, review_sha),
+    (message) =>
+      log.warn("could not look up the CI round diff, reviewing without it", {
+        work_item_id,
+        error: message,
+      }),
+  );
+
   const promptText = reviewPrompt({
     pr: {
       owner,
@@ -178,6 +193,7 @@ export async function main(
     changedFiles: prFiles,
     requirements,
     openFindings,
+    ciRoundDiff,
   });
 
   const systemPrompt = await buildSystemPrompt({
@@ -191,7 +207,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "pr_review",
       attempt,
-      model: config.model,
+      model: modelFor(config, "pr_review", 0),
       prompt: promptText,
       appendSystemPromptFile: systemPrompt.path,
       jsonSchema: REVIEW_SCHEMA,

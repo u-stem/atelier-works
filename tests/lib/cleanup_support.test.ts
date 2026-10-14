@@ -11,6 +11,7 @@ import {
   orphanClaudeThresholdSec,
   parseDiskUsageKb,
   partitionRepoGroups,
+  recordDiskUsage,
   requirementsWorktreeDir,
   selectOrphanClaudePids,
   terminateOrphans,
@@ -270,6 +271,103 @@ describe("formatDiskUsageMessage", () => {
   });
 });
 
+function measured(stdout: string, exitCode = 0) {
+  return async () => ({
+    exitCode,
+    stdout,
+    stderr: "du: permission denied\n",
+  });
+}
+
+describe("recordDiskUsage", () => {
+  test("records the measured usage as the notice message", async () => {
+    const recorded: string[] = [];
+    await recordDiskUsage("/workspaces", {
+      measure: measured("2048\t/workspaces\n"),
+      record: async (message) => {
+        recorded.push(message);
+      },
+      warn: () => {},
+    });
+    expect(recorded).toEqual(["/workspacesのディスク使用量は約2.0 MiBです。"]);
+  });
+
+  test("returns the measured usage in KiB", async () => {
+    const usageKb = await recordDiskUsage("/workspaces", {
+      measure: measured("2048\t/workspaces\n"),
+      record: async () => {},
+      warn: () => {},
+    });
+    expect(usageKb).toBe(2048);
+  });
+
+  test("does not record a notice when du fails", async () => {
+    const recorded: string[] = [];
+    await recordDiskUsage("/workspaces", {
+      measure: measured("", 1),
+      record: async (message) => {
+        recorded.push(message);
+      },
+      warn: () => {},
+    });
+    expect(recorded).toEqual([]);
+  });
+
+  test("returns zero when du fails", async () => {
+    const usageKb = await recordDiskUsage("/workspaces", {
+      measure: measured("", 1),
+      record: async () => {},
+      warn: () => {},
+    });
+    expect(usageKb).toBe(0);
+  });
+
+  test("warns with the du error when du fails", async () => {
+    const warnings: string[] = [];
+    await recordDiskUsage("/workspaces", {
+      measure: measured("", 1),
+      record: async () => {},
+      warn: (_message, error) => {
+        warnings.push(error);
+      },
+    });
+    expect(warnings).toEqual(["du: permission denied"]);
+  });
+
+  test("does not record a notice when the du output is unexpected", async () => {
+    const recorded: string[] = [];
+    await recordDiskUsage("/workspaces", {
+      measure: measured("not a du line"),
+      record: async (message) => {
+        recorded.push(message);
+      },
+      warn: () => {},
+    });
+    expect(recorded).toEqual([]);
+  });
+
+  test("returns the measured usage when recording the notice fails", async () => {
+    const usageKb = await recordDiskUsage("/workspaces", {
+      measure: measured("2048\t/workspaces\n"),
+      record: () => Promise.reject(new Error("db down")),
+      warn: () => {},
+    });
+    expect(usageKb).toBe(2048);
+  });
+
+  test("warns when recording the notice fails", async () => {
+    const warnings: string[] = [];
+    await recordDiskUsage("/workspaces", {
+      measure: measured("2048\t/workspaces\n"),
+      record: () => Promise.reject(new Error("db down")),
+      warn: (_message, error) => {
+        warnings.push(error);
+      },
+    });
+    expect(warnings).toEqual(["db down"]);
+  });
+});
+
 describe("excludeActiveWorktrees", () => {
   const OWNER = "octo-owner";
   const REPO = "atelier-works";
@@ -423,6 +521,21 @@ describe("busyWorktreeNoticeMessage", () => {
       }),
     ).toBe(
       "acme/widgetsの作業項目7のworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、プロセスがまだ使っているため削除しませんでした(worktree is still used by processes from an earlier run: pid 42 (3600s, implement:7:job-a) `bun test`)。使っているプロセス(検査コマンドの生き残りなど)をworkerのコンテナで止めると、次の掃除で削除されます。",
+    );
+  });
+
+  test("does not blame processes when the check user's ownership could not be taken back", () => {
+    expect(
+      busyWorktreeNoticeMessage({
+        owner: "acme",
+        repo: "widgets",
+        workItemId: 7,
+        worktreeDir: "/workspaces/acme/widgets/factory-issue-7-wi-7",
+        reason:
+          "worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: denied",
+      }),
+    ).toBe(
+      "acme/widgetsの作業項目7のworktree(/workspaces/acme/widgets/factory-issue-7-wi-7)は、検査用のユーザーからrootに戻せないため削除しませんでした(worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: denied)。運用の文書の「検査の枠の記録を片付ける」の手順で片付けると、次の掃除で削除されます。",
     );
   });
 });

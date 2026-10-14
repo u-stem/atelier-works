@@ -5,6 +5,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
 import {
+  addNoticeUnlessUnresolved,
   getWorkItem,
   hasPriorReview,
   insertReview,
@@ -24,11 +25,16 @@ import {
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
 import {
+  repoOwnerGateDeps,
+  repoOwnerStopReason,
+} from "../lib/repo_owner_gate.ts";
+import {
   isOneOf,
   type ReviewFinding,
   type ReviewVerdict,
 } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
+import { blockReview } from "./pr_review_prepare.ts";
 import {
   countOpenMustThreads,
   decideReviewBodyMode,
@@ -162,6 +168,9 @@ export async function main(
  * 再利用するときにスレッドの一覧を取得できなければ、記録する前に例外を投げる。
  * 投稿済みのレビューを探すのに要るviewerとレビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  *
+ * 投稿の直前に、リポジトリのオーナーの数値IDを照合する。通らなければ、投稿もスレッドの解決もせず、
+ * 作業項目を`blocked`にしてDiscordで知らせ、`skip`で返す。投稿済みのレビューを再利用するときは書き込まないので照合しない。
+ *
  * `review_post_mode`が"gated"のときは、レビューを記録して"reviewed"に進め
  * noticeを残すが、`createPrReview`は呼ばない。
  * "gated"は予約済みの値で、承認を経て投稿するUIはまだ無い。
@@ -261,6 +270,11 @@ export type PublishReviewInput = {
   readonly priorReview: boolean;
   /** 偽なら("gated")投稿もスレッドの解決もしない。 */
   readonly post: boolean;
+  /**
+   * 投稿の直前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
+   * 通らないときは、止める理由を返す。通るときは`null`。
+   */
+  readonly ensureRepoOwner: () => Promise<string | null>;
 };
 
 export type PublishReviewResult = {
@@ -270,6 +284,8 @@ export type PublishReviewResult = {
   readonly reused: boolean;
   /** 解決の後に残る、Factory自身の未解決の`[MUST]`のスレッドの数。 */
   readonly openMustCount: number;
+  /** オーナーの照合に落ちて、投稿もスレッドの解決もしなかったときの理由。それ以外は`null`。 */
+  readonly ownerStopReason: string | null;
 };
 
 /**
@@ -345,10 +361,33 @@ export async function publishReview(
   );
 
   if (!input.post) {
-    return { postedReviewId: null, reused: false, openMustCount };
+    return {
+      postedReviewId: null,
+      reused: false,
+      openMustCount,
+      ownerStopReason: null,
+    };
   }
   if (existingId !== null) {
-    return { postedReviewId: existingId, reused: true, openMustCount };
+    return {
+      postedReviewId: existingId,
+      reused: true,
+      openMustCount,
+      ownerStopReason: null,
+    };
+  }
+
+  // 書き込み(レビューの投稿と、続くスレッドの解決)の直前に、オーナーの数値IDを照合する。
+  // 準備の入口の照合から、Claudeの実行を挟むので、その間に名前が別の人に渡っていても、
+  // コードの抜粋を含みうるレビューの文面を相手に渡さない。
+  const ownerStop = await input.ensureRepoOwner();
+  if (ownerStop !== null) {
+    return {
+      postedReviewId: null,
+      reused: false,
+      openMustCount,
+      ownerStopReason: ownerStop,
+    };
   }
 
   const mode = decideReviewBodyMode(
@@ -387,7 +426,12 @@ export async function publishReview(
       });
     }
   }
-  return { postedReviewId, reused: false, openMustCount };
+  return {
+    postedReviewId,
+    reused: false,
+    openMustCount,
+    ownerStopReason: null,
+  };
 }
 
 /** `runPrReviewPost`のworktreeの削除を除いた本体。 */
@@ -464,9 +508,40 @@ async function postReview(
       droppedFindings,
       priorReview,
       post,
+      ensureRepoOwner: () =>
+        repoOwnerStopReason(
+          config,
+          owner,
+          repo,
+          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
     },
     log,
   );
+  if (published.ownerStopReason !== null) {
+    // 何も書かずに、作業項目を止めて人に知らせる。準備の入口で止めたときと同じ終わり方にする。
+    await blockReview(
+      {
+        work_item_id,
+        owner,
+        repo,
+        pr_number,
+        instance_name: config.instance_name,
+        reason: published.ownerStopReason,
+      },
+      {
+        updateStatusIfCurrent,
+        notify: async (event) => {
+          await notifyBestEffort(
+            await wmill.getVariable("f/factory/discord_webhook_url"),
+            event,
+            log,
+          );
+        },
+      },
+    );
+    return { skip: true, posted: false, posted_review_id: null };
+  }
   const openMustCount = published.openMustCount;
   const postedReviewId =
     published.postedReviewId === null ? null : String(published.postedReviewId);

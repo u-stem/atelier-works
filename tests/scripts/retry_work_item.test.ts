@@ -1,14 +1,25 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { GitHubHttpError } from "../../f/factory/lib/github.ts";
 import { IMPLEMENT_FLOW_PATH } from "../../f/factory/lib/implement_loop.ts";
-import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
+import { actionableCancelNote } from "../../f/factory/lib/poll_support.ts";
+import type { WorkItem, WorkItemStatus } from "../../f/factory/lib/types.ts";
 import {
   activeIssueConflictError,
   activeIssueConflictErrorFrom,
+  activePrFixConflictError,
+  activePrFixConflictErrorFrom,
+  asBeforeActionableCancel,
+  cancelledRestartRefusal,
+  closedTargetRefusal,
   computeRestartPlan,
   launchFailureError,
   newerCycleRefusal,
+  newerPrRowRefusal,
   retryResult,
   runningFlowRefusal,
+  shouldRefreshIntakeOnRestart,
   usesFlowJobIdLease,
 } from "../../f/factory/retry_work_item.ts";
 
@@ -394,6 +405,80 @@ describe("activeIssueConflictErrorFrom", () => {
   });
 });
 
+describe("activePrFixConflictError", () => {
+  const base = {
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+    kind: "pr_fix" as const,
+  };
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+  };
+
+  test("names the active pr_fix of the same pull request", () => {
+    const error = activePrFixConflictError(target, [
+      { ...base, id: 9 },
+      { ...base, id: 3 },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: work item 9 (active) is already fixing the same pull request, work item 3 will not be resumed, follow work item 9",
+    );
+  });
+
+  test("ignores active work items of other pull requests", () => {
+    const error = activePrFixConflictError(target, [
+      { ...base, id: 9, pr_number: 99 },
+      { ...base, id: 4 },
+    ]);
+    expect(error.message).toContain("work item 4 (active)");
+  });
+
+  test("ignores active work items that are not pr_fix", () => {
+    const error = activePrFixConflictError(target, [
+      { ...base, id: 9, kind: "pr_review" as const },
+    ]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
+    );
+  });
+
+  test("omits the id when the active work item is not found", () => {
+    const error = activePrFixConflictError(target, [{ ...base, id: 3 }]);
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
+    );
+  });
+});
+
+describe("activePrFixConflictErrorFrom", () => {
+  const target = {
+    id: 3,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    pr_number: 7,
+  };
+
+  test("names the active work item returned by the lookup", async () => {
+    const error = await activePrFixConflictErrorFrom(target, async () => [
+      { ...target, id: 9, kind: "pr_fix" as const },
+    ]);
+    expect(error.message).toContain("work item 9 (active)");
+  });
+
+  test("falls back to the message without an id when the lookup fails", async () => {
+    const error = await activePrFixConflictErrorFrom(target, async () => {
+      throw new Error("db down");
+    });
+    expect(error.message).toBe(
+      "retry_work_item: another work item is already fixing the same pull request, work item 3 will not be resumed",
+    );
+  });
+});
+
 describe("computeRestartPlan for a cancelled work item", () => {
   test("refuses to restart a work item that a newer cycle superseded", () => {
     expect(() =>
@@ -402,6 +487,272 @@ describe("computeRestartPlan for a cancelled work item", () => {
         { implementReady: true, implementEnabled: true },
       ),
     ).toThrow(/not restartable/);
+  });
+});
+
+describe("computeRestartPlan for a dependabot work item", () => {
+  test("refuses to restart a dependabot work item", () => {
+    expect(() =>
+      computeRestartPlan(
+        { id: 1, status: "failed", kind: "dependabot", attempt: 1 },
+        { implementReady: false, implementEnabled: false },
+      ),
+    ).toThrow(/dependabot/);
+  });
+});
+
+describe("asBeforeActionableCancel", () => {
+  const cancelled: Pick<WorkItem, "id" | "status" | "kind" | "attempt"> = {
+    id: 1,
+    status: "cancelled",
+    kind: "issue",
+    attempt: 1,
+  };
+
+  test("restores the status before a closed-target cancellation", () => {
+    const item = asBeforeActionableCancel(cancelled, {
+      from_status: "failed",
+      note: actionableCancelNote("closed"),
+    });
+    expect(item.status).toBe("failed");
+  });
+
+  test("restores a needs_human work item cancelled with the pr note", () => {
+    const item = asBeforeActionableCancel(cancelled, {
+      from_status: "needs_human",
+      note: actionableCancelNote("pr_closed"),
+    });
+    expect(item.status).toBe("needs_human");
+  });
+
+  test("keeps a cancellation made for another reason", () => {
+    const item = asBeforeActionableCancel(cancelled, {
+      from_status: "approved",
+      note: "superseded by work item 9",
+    });
+    expect(item.status).toBe("cancelled");
+  });
+
+  test("keeps a cancelled work item without a recorded transition", () => {
+    expect(asBeforeActionableCancel(cancelled, null).status).toBe("cancelled");
+  });
+
+  test("keeps a work item that is not cancelled", () => {
+    const failed: typeof cancelled = { ...cancelled, status: "failed" };
+    const item = asBeforeActionableCancel(failed, {
+      from_status: "expired",
+      note: actionableCancelNote("closed"),
+    });
+    expect(item.status).toBe("failed");
+  });
+
+  test("lets the restored work item restart like the one before cancellation", () => {
+    const restored = asBeforeActionableCancel(
+      { ...cancelled, kind: "pr_fix" as const },
+      { from_status: "failed", note: actionableCancelNote("pr_closed") },
+    );
+    const plan = computeRestartPlan(restored, {
+      implementReady: false,
+      implementEnabled: false,
+    });
+    expect(plan.flowPath).toBe("f/factory/pr_fix");
+  });
+
+  test("restarts a restored expired issue like an expired one", () => {
+    const restored = asBeforeActionableCancel(cancelled, {
+      from_status: "expired",
+      note: actionableCancelNote("closed"),
+    });
+    const plan = computeRestartPlan(restored, {
+      implementReady: false,
+      implementEnabled: false,
+    });
+    expect(plan.toStatus).toBe("requirements_generating");
+  });
+});
+
+describe("closedTargetRefusal", () => {
+  const issueItem = {
+    id: 5,
+    kind: "issue" as const,
+    owner: "octo-owner",
+    repo: "atelier-works",
+    issue_number: 10,
+    pr_number: null,
+  };
+
+  test("allows a restart when the target is open", async () => {
+    expect(await closedTargetRefusal(issueItem, async () => "open")).toBeNull();
+  });
+
+  test("refuses when the target is still closed", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => "closed");
+    expect(refusal).toContain(
+      "octo-owner/atelier-works#10 is still closed; reopen it",
+    );
+  });
+
+  test("checks the pr number for a pr work item", async () => {
+    const asked: number[] = [];
+    await closedTargetRefusal(
+      { ...issueItem, kind: "pr_fix", issue_number: null, pr_number: 20 },
+      async (_owner, _repo, number) => {
+        asked.push(number);
+        return "open";
+      },
+    );
+    expect(asked).toEqual([20]);
+  });
+
+  test("refuses when the lookup fails", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => {
+      throw new Error("HTTP 502");
+    });
+    expect(refusal).toContain(
+      "could not be checked (HTTP 502); try again later",
+    );
+  });
+
+  test.each([301, 302, 307, 308])(
+    "says a %d redirect cannot be restarted instead of asking to try again",
+    async (status) => {
+      const refusal = await closedTargetRefusal(issueItem, async () => {
+        throw new GitHubHttpError(`HTTP ${String(status)}`, status);
+      });
+      expect(refusal).toContain(
+        "octo-owner/atelier-works#10 was redirected (the issue or repository moved); it cannot be restarted",
+      );
+    },
+  );
+
+  test("still asks to try again later for a server error", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => {
+      throw new GitHubHttpError("HTTP 502", 502);
+    });
+    expect(refusal).toContain("try again later");
+  });
+
+  test("masks a secret in the lookup failure", async () => {
+    const refusal = await closedTargetRefusal(issueItem, async () => {
+      throw new Error("bad token ghp_0123456789abcdefghijklmnopqrstuvwxyz");
+    });
+    expect(refusal).not.toContain("ghp_0123456789");
+  });
+
+  test("refuses when the work item has no number to check", async () => {
+    const refusal = await closedTargetRefusal(
+      { ...issueItem, issue_number: null },
+      async () => "open",
+    );
+    expect(refusal).toContain("no number to check");
+  });
+});
+
+describe("newerPrRowRefusal", () => {
+  test("allows the restart when no newer row exists", () => {
+    expect(newerPrRowRefusal({ id: 3, kind: "pr_review" }, null)).toBeNull();
+  });
+
+  test("refuses when a newer row of the same pull request exists", () => {
+    expect(
+      newerPrRowRefusal(
+        { id: 3, kind: "pr_fix" },
+        { id: 9, status: "reviewed" },
+      ),
+    ).toBe(
+      "retry_work_item: work item 3 was cancelled when its target was closed, and work item 9 (status reviewed) now tracks the same pull request, so work item 3 will not be restarted, follow work item 9",
+    );
+  });
+
+  test("does not apply to an issue work item", () => {
+    expect(
+      newerPrRowRefusal({ id: 3, kind: "issue" }, { id: 9, status: "failed" }),
+    ).toBeNull();
+  });
+});
+
+describe("cancelledRestartRefusal", () => {
+  const prFix = {
+    id: 3,
+    kind: "pr_fix" as const,
+    status: "cancelled" as const,
+    owner: "o",
+    repo: "r",
+    issue_number: null,
+    pr_number: 20,
+  };
+  const issue = {
+    ...prFix,
+    kind: "issue" as const,
+    issue_number: 10,
+    pr_number: null,
+  };
+  const newer = { id: 9, status: "reviewed" as const };
+
+  function deps(row: typeof newer | null = null, state = "open") {
+    const calls = { newerPrRow: 0, getState: 0 };
+    return {
+      calls,
+      deps: {
+        newerPrRow: async () => {
+          calls.newerPrRow += 1;
+          return row;
+        },
+        getState: async () => {
+          calls.getState += 1;
+          return state;
+        },
+      },
+    };
+  }
+
+  test("checks nothing for a work item that was not cancelled", async () => {
+    const { deps: d, calls } = deps(newer, "closed");
+    await cancelledRestartRefusal(prFix, { status: "cancelled" }, d);
+    expect(calls).toEqual({ newerPrRow: 0, getState: 0 });
+  });
+
+  test("refuses a cancelled pr work item that has a newer row", async () => {
+    const { deps: d } = deps(newer);
+    expect(
+      await cancelledRestartRefusal(prFix, { status: "failed" }, d),
+    ).toContain("now tracks the same pull request");
+  });
+
+  test("does not ask GitHub when a newer row refuses", async () => {
+    const { deps: d, calls } = deps(newer);
+    await cancelledRestartRefusal(prFix, { status: "failed" }, d);
+    expect(calls.getState).toBe(0);
+  });
+
+  test("does not look for newer rows of an issue work item", async () => {
+    const { deps: d, calls } = deps(newer);
+    await cancelledRestartRefusal(issue, { status: "failed" }, d);
+    expect(calls.newerPrRow).toBe(0);
+  });
+
+  test("does not look for newer rows without a pr number", async () => {
+    const { deps: d, calls } = deps(newer);
+    await cancelledRestartRefusal(
+      { ...prFix, pr_number: null },
+      { status: "failed" },
+      d,
+    );
+    expect(calls.newerPrRow).toBe(0);
+  });
+
+  test("falls through to the closed target check when no newer row exists", async () => {
+    const { deps: d } = deps(null, "closed");
+    expect(
+      await cancelledRestartRefusal(prFix, { status: "failed" }, d),
+    ).toContain("is still closed");
+  });
+
+  test("allows the restart when the target is open and no newer row exists", async () => {
+    const { deps: d } = deps(null, "open");
+    expect(
+      await cancelledRestartRefusal(prFix, { status: "failed" }, d),
+    ).toBeNull();
   });
 });
 
@@ -471,5 +822,59 @@ describe("newerCycleRefusal", () => {
         "factory",
       ),
     ).toBeNull();
+  });
+});
+
+describe("shouldRefreshIntakeOnRestart", () => {
+  test("refreshes when an issue work item goes back to requirements_generating", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "issue", issue_number: 42 },
+        { toStatus: "requirements_generating" },
+      ),
+    ).toBe(true);
+  });
+
+  test("does not refresh when the implement flow is resumed", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "issue", issue_number: 42 },
+        { toStatus: "implementing" },
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refresh a pull request work item", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "pr_review", issue_number: null },
+        { toStatus: "reviewing" },
+      ),
+    ).toBe(false);
+  });
+
+  test("does not refresh an issue work item without an issue number", () => {
+    expect(
+      shouldRefreshIntakeOnRestart(
+        { kind: "issue", issue_number: null },
+        { toStatus: "requirements_generating" },
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("main: CI round refusal", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/retry_work_item.ts"),
+    "utf8",
+  );
+
+  test("refuses a CI round right after reading the work item", () => {
+    const afterRead = source.slice(
+      source.indexOf("await getWorkItem(work_item_id)"),
+    );
+    expect(afterRead.indexOf("ciRoundRetryRefusal(workItem)")).toBeLessThan(
+      afterRead.indexOf("computeRestartPlan(restartItem"),
+    );
   });
 });

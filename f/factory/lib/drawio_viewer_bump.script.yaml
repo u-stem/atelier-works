@@ -1,0 +1,9 @@
+summary: '[LIB] draw.ioのビューアの固定の更新'
+description: 内部ライブラリです。直接実行するものではありません。リリースの選別、取得物の照合、固定のファイルの書き換え、PR本文の組み立てを行います。
+lock: '!inline f/factory/lib/drawio_viewer_bump.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

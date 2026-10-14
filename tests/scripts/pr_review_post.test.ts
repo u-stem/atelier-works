@@ -828,6 +828,7 @@ describe("posting a review once per sha", () => {
       droppedFindings: [],
       priorReview: true,
       post: true,
+      ensureRepoOwner: async () => null,
       ...overrides,
     };
   }
@@ -866,9 +867,12 @@ describe("posting a review once per sha", () => {
     });
 
     test("rejects when listing the reviews fails", async () => {
-      const fake = createFakeCommandRunner([serverError()]);
+      const fake = createFakeCommandRunner([serverError(), serverError()]);
       await expect(
-        findPostedReview({ run: fake.run, ghToken: "tok" }, TARGET),
+        findPostedReview(
+          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          TARGET,
+        ),
       ).rejects.toThrow("HTTP 500");
     });
   });
@@ -984,19 +988,24 @@ describe("posting a review once per sha", () => {
     });
 
     test("rejects when listing the reviews fails", async () => {
-      const fake = createFakeCommandRunner([serverError()]);
+      const fake = createFakeCommandRunner([serverError(), serverError()]);
       await expect(
-        publishReview({ run: fake.run, ghToken: "tok" }, rerunInput(), SILENT),
+        publishReview(
+          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          rerunInput(),
+          SILENT,
+        ),
       ).rejects.toThrow("HTTP 500");
     });
 
     test("does not post when listing the reviews fails", async () => {
       const fake = createFakeCommandRunner([
         serverError(),
+        serverError(),
         ghApiOk({ id: 99 }),
       ]);
       await publishReview(
-        { run: fake.run, ghToken: "tok" },
+        { run: fake.run, ghToken: "tok", sleep: async () => {} },
         rerunInput(),
         SILENT,
       ).catch(() => {});
@@ -1009,9 +1018,14 @@ describe("posting a review once per sha", () => {
       const fake = createFakeCommandRunner([
         ghApiOk([postedReview(55)]),
         serverError(),
+        serverError(),
       ]);
       await expect(
-        publishReview({ run: fake.run, ghToken: "tok" }, rerunInput(), SILENT),
+        publishReview(
+          { run: fake.run, ghToken: "tok", sleep: async () => {} },
+          rerunInput(),
+          SILENT,
+        ),
       ).rejects.toThrow("HTTP 500");
     });
 
@@ -1033,6 +1047,104 @@ describe("posting a review once per sha", () => {
         SILENT,
       );
       expect(fake.calls.some(isResolveCall)).toBe(true);
+    });
+
+    const OWNER_STOP = async (): Promise<string | null> =>
+      "repository owner is not in factory_config owners: acme/widgets";
+
+    test("does not post when the owner check fails", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false, ensureRepoOwner: OWNER_STOP }),
+        SILENT,
+      );
+      expect(fake.calls.some(isCreateReviewCall)).toBe(false);
+    });
+
+    test("resolves no thread when the owner check fails", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        openMustThreads(),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ ensureRepoOwner: OWNER_STOP }),
+        SILENT,
+      );
+      expect(fake.calls.some(isResolveCall)).toBe(false);
+    });
+
+    test("reports the reason when the owner check fails", async () => {
+      const fake = createFakeCommandRunner([ghApiOk([humanReview(1)])]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false, ensureRepoOwner: OWNER_STOP }),
+        SILENT,
+      );
+      expect(result.ownerStopReason).toBe(
+        "repository owner is not in factory_config owners: acme/widgets",
+      );
+    });
+
+    test("does not check the owner when a review for the sha is reused", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([postedReview(55)]),
+        openMustThreads(),
+      ]);
+      let checks = 0;
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          ensureRepoOwner: async () => {
+            checks += 1;
+            return null;
+          },
+        }),
+        SILENT,
+      );
+      expect(checks).toBe(0);
+    });
+
+    test("does not check the owner when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      let checks = 0;
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          post: false,
+          ensureRepoOwner: async () => {
+            checks += 1;
+            return null;
+          },
+        }),
+        SILENT,
+      );
+      expect(checks).toBe(0);
+    });
+
+    test("checks the owner once before posting", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      let checks = 0;
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          priorReview: false,
+          comments: COMMENTS,
+          ensureRepoOwner: async () => {
+            checks += 1;
+            return null;
+          },
+        }),
+        SILENT,
+      );
+      expect(checks).toBe(1);
     });
 
     test("does not list the reviews when posting is gated", async () => {

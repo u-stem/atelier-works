@@ -60,6 +60,95 @@ shopt -u nullglob
 [ ${#up_files[@]} -gt 0 ] || die "no migrations found in ${MIGRATIONS_DIR}"
 
 ACTIVE_ISSUE_MIGRATION="20261009120000_active_issue_key.up.sql"
+NOTICES_DEDUP_MIGRATION="20261011170000_notices_unresolved_dedup.up.sql"
+DISK_USAGE_NOTICE_MIGRATION="20261013100300_disk_usage_notice_single.up.sql"
+PR_CI_FIX_SCHEMA_MIGRATION="20261013100400_pr_ci_fix_schema.up.sql"
+ACTIVE_PR_FIX_MIGRATION="20261013100500_active_pr_fix_key.up.sql"
+
+# ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
+# migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
+seed_disk_usage_notices() {
+  psql_exec "${SCRATCH_DB}" <<'SQL' >/dev/null
+INSERT INTO factory.notices (kind, message, resolved, created_at) VALUES
+  ('workspace_disk_usage', 'oldest', false, '2026-10-01 00:00:00+00'),
+  ('workspace_disk_usage', 'newest', false, '2026-10-03 00:00:00+00'),
+  ('workspace_disk_usage', 'middle', false, '2026-10-02 00:00:00+00'),
+  ('workspace_disk_usage', 'history', true, '2026-09-30 00:00:00+00');
+SQL
+}
+
+# migrationが最も新しい1件だけを残し、残りを解決者migrationで解決済みにし、
+# 解決済みの履歴には触れず、索引が本文の異なる2件目の未解決を拒むことを確かめる。
+verify_disk_usage_notice_index() {
+  local kept
+  kept="$(printf "SELECT string_agg(message || ':' || resolved || ':' || COALESCE(resolved_by, '-'), ',' ORDER BY message) FROM factory.notices WHERE kind = 'workspace_disk_usage';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the disk usage notices"
+  [ "${kept}" = "history:true:-,middle:true:migration,newest:false:-,oldest:true:migration" ] \
+    || die "unexpected disk usage notices after the migration: ${kept}"
+  local rejected
+  if rejected="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('workspace_disk_usage', 'another');\n" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+    die "a second unresolved disk usage notice was accepted"
+  fi
+  case "${rejected}" in
+    *notices_unresolved_disk_usage_key*) ;;
+    *) die "the second disk usage notice was rejected, but not by notices_unresolved_disk_usage_key: ${rejected}" ;;
+  esac
+  printf "DELETE FROM factory.notices WHERE kind = 'workspace_disk_usage';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "unresolved disk usage notices are unique per kind"
+}
+
+# 未解決の通知の部分一意索引を足す前に、重複した未解決の通知を入れておく。
+# migrationが最古の1件だけを残して解決済みにし、索引を作れることを確かめるため。
+seed_notice_duplicates() {
+  psql_exec "${SCRATCH_DB}" <<'SQL' >/dev/null
+INSERT INTO factory.notices (kind, message, resolved, created_at) VALUES
+  ('dup_probe', 'same', false, '2026-10-01 00:00:00+00'),
+  ('dup_probe', 'same', false, '2026-10-02 00:00:00+00'),
+  ('dup_probe', 'same', false, '2026-10-02 00:00:00+00'),
+  ('dup_probe', 'other', false, '2026-10-03 00:00:00+00'),
+  ('dup_probe', 'done', true, '2026-10-01 00:00:00+00'),
+  ('dup_probe', 'done', false, '2026-10-02 00:00:00+00');
+SQL
+}
+
+# migrationが最古の1件だけを残し、残りを解決者migrationで解決済みにし、
+# 解決済みの履歴には触れず、索引が2件目の未解決を拒み、ON CONFLICT DO NOTHINGでは挿入しないことを確かめる。
+verify_notice_dedup_index() {
+  local kept
+  kept="$(printf "SELECT string_agg(message || ':' || resolved || ':' || COALESCE(resolved_by, '-'), ',' ORDER BY message, id) FROM factory.notices WHERE kind = 'dup_probe';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the deduplicated notices"
+  [ "${kept}" = "done:true:-,done:false:-,other:false:-,same:false:-,same:true:migration,same:true:migration" ] \
+    || die "unexpected notices after the dedup migration: ${kept}"
+  local oldest
+  oldest="$(printf "SELECT created_at::date FROM factory.notices WHERE kind = 'dup_probe' AND message = 'same' AND resolved = false;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the kept notice"
+  [ "$(printf '%s' "${oldest}" | tr -d '[:space:]')" = "2026-10-01" ] \
+    || die "expected the oldest notice to be kept, got '${oldest}'"
+  local rejected
+  if rejected="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('dup_probe', 'same');\n" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+    die "a second unresolved notice with the same kind and message was accepted"
+  fi
+  case "${rejected}" in
+    *notices_unresolved_key*) ;;
+    *) die "the duplicate notice was rejected, but not by notices_unresolved_key: ${rejected}" ;;
+  esac
+  # アプリのコードは`ON CONFLICT DO NOTHING`を使わない(競合は`DO UPDATE`で受ける)。
+  # ここでは、索引が`ON CONFLICT`の衝突先として働くことだけを確かめる。
+  local skipped
+  skipped="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('dup_probe', 'same') ON CONFLICT DO NOTHING RETURNING id;\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "ON CONFLICT DO NOTHING failed instead of skipping the notice insert"
+  [ -z "$(printf '%s' "${skipped}" | tr -d '[:space:]')" ] \
+    || die "ON CONFLICT DO NOTHING inserted a second unresolved notice"
+  printf "INSERT INTO factory.notices (kind, message, resolved) VALUES ('dup_probe', 'same', true);\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null \
+    || die "a resolved notice with the same kind and message was rejected"
+  printf "DELETE FROM factory.notices WHERE kind = 'dup_probe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "unresolved notices are unique per kind and message"
+}
 
 # 稼働中のIssueの作業項目の部分一意インデックスを足す前に、重複した稼働中の行を入れておく。
 # migrationが古い方を取り消し、インデックスを作れることを確かめるため。
@@ -146,7 +235,11 @@ verify_active_issue_index() {
     *work_items_active_issue_key*) ;;
     *) die "moving the approved work item was rejected, but not by work_items_active_issue_key: ${reverted}" ;;
   esac
-  # `insertIssueWorkItemUnlessActive`の2つの文を、本物のPostgreSQLで確かめる。
+}
+
+# `insertIssueWorkItemUnlessActive`の2つの文を、全migrationの適用後に確かめる。
+# 取り消しの文は、後のmigrationが足す列(work_item_eventsのジョブID)にも書くため。
+verify_issue_intake() {
   # 1つ目は挿入、2つ目は古いサイクルの承認済みの項目の取り消しである。
   # Issue(6): cycle 1がapproved、cycle 2がfailed。cycle 3の挿入が通り、cycle 1だけが取り消され、イベントが残る。
   # Issue(7): cycle 1がapproved、cycle 2が稼働中。cycle 3の挿入が負け、何も取り消されない。
@@ -166,7 +259,8 @@ SQL
       || die "the intake insert failed for issue ${issue}"
     new_id="$(printf '%s' "${new_id}" | tr -d '[:space:]')"
     [ -n "${new_id}" ] || return 0
-    psql_exec "${SCRATCH_DB}" -q -t -A -v owner=o -v repo=r -v issue="${issue}" -v cycle=3 -v new_id="${new_id}" >/dev/null <<'SQL' \
+    psql_exec "${SCRATCH_DB}" -q -t -A -v owner=o -v repo=r -v issue="${issue}" -v cycle=3 -v new_id="${new_id}" \
+      -v job_id=0198a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b -v root_job_id=0198a1b2-0000-7000-8000-000000000001 >/dev/null <<'SQL' \
       || die "the sweep statement failed for issue ${issue}"
 WITH cancelled AS (
       UPDATE factory.work_items AS wi
@@ -178,8 +272,9 @@ WITH cancelled AS (
       RETURNING wi.id, wi.attempt
     ),
     recorded AS (
-      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note)
-      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || :'new_id'::bigint || ')'
+      INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+      SELECT id, 'approved', 'cancelled', 'superseded by a newer cycle (work item ' || :'new_id'::bigint || ')',
+        :'job_id'::text, :'root_job_id'::text
       FROM cancelled
       RETURNING work_item_id
     )
@@ -223,7 +318,141 @@ SQL
     || die "could not read the superseded events"
   [ "$(printf '%s' "${superseded_events}" | tr -d '[:space:]')" = "1" ] \
     || die "expected exactly one superseded event, got '${superseded_events}'"
-  log "active issue index rejects a second active work item"
+  local superseded_root
+  superseded_root="$(printf "SELECT root_job_id FROM factory.work_item_events WHERE note LIKE 'superseded by a newer cycle%%';\n" \
+    | psql_exec "${SCRATCH_DB}" -q -t -A)" \
+    || die "could not read the root job id of the superseded event"
+  [ "$(printf '%s' "${superseded_root}" | tr -d '[:space:]')" = "0198a1b2-0000-7000-8000-000000000001" ] \
+    || die "expected the superseded event to record the root job id, got '${superseded_root}'"
+  log "issue intake supersedes only the older approved work items and records the job ids"
+}
+
+# CIの失敗を直す仕組みの土台のmigrationが、状態`fixing`を受け入れ、不正な状態、負の回数、長すぎる保留の理由を拒み、
+# 戻したときに`fixing`の行だけを`failed`へ移して列と索引を落とし、もう一度適用できることを確かめる。
+# このmigrationの適用直後に呼ぶ。もう一度適用し直すので、最新のmigrationでなくなったときは呼ぶ位置を見直すこと。
+verify_pr_ci_fix_schema() {
+  local up_file="${MIGRATIONS_DIR}/${PR_CI_FIX_SCHEMA_MIGRATION}"
+  local down_file="${MIGRATIONS_DIR}/${PR_CI_FIX_SCHEMA_MIGRATION%.up.sql}.down.sql"
+  [ -f "${up_file}" ] || die "missing migration: ${up_file}"
+  [ -f "${down_file}" ] || die "missing migration: ${down_file}"
+  local sha
+  sha="$(printf 'a%.0s' $(seq 1 40))"
+  local insert_prefix="INSERT INTO factory.pr_ci_checks (owner, repo, pr_number, head_sha, state"
+
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  expect_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+
+  printf "%s, fix_work_item_id, fix_attempts, fix_hold_reason) VALUES ('fixprobe', 'r', 1, '%s', 'fixing', 7, 1, 'probe');\n" "${insert_prefix}" "${sha}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a fixing row was rejected"
+  printf "%s) VALUES ('fixprobe', 'r', 2, '%s', 'failed');\n" "${insert_prefix}" "${sha}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a failed row without the fix columns was rejected"
+  local defaults
+  defaults="$(scalar "SELECT fix_attempts || ':' || COALESCE(fix_work_item_id::text, '-') || ':' || COALESCE(fix_hold_reason, '-') FROM factory.pr_ci_checks WHERE owner = 'fixprobe' AND pr_number = 2")"
+  [ "${defaults}" = "0:-:-" ] || die "unexpected defaults of the fix columns: ${defaults}"
+  expect_rejected "${insert_prefix}) VALUES ('fixprobe', 'r', 3, '${sha}', 'bogus')" pr_ci_checks_state_check
+  expect_rejected "${insert_prefix}, fix_attempts) VALUES ('fixprobe', 'r', 3, '${sha}', 'failed', -1)" pr_ci_checks_fix_attempts_check
+  expect_rejected "${insert_prefix}, fix_hold_reason) VALUES ('fixprobe', 'r', 3, '${sha}', 'failed', repeat('x', 65))" pr_ci_checks_fix_hold_reason_length_check
+  expect_rejected "${insert_prefix}, fix_hold_reason) VALUES ('fixprobe', 'r', 3, '${sha}', 'failed', '')" pr_ci_checks_fix_hold_reason_check
+  printf "%s, fix_hold_reason) VALUES ('fixprobe', 'r', 6, '%s', 'failed', repeat('x', 64));\n" "${insert_prefix}" "${sha}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a fix_hold_reason of exactly 64 characters was rejected"
+  printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status, ci_check_id) VALUES (1, 'issue', 'issue', 'fixprobe', 'r', 1, 'https://github.com/fixprobe/r/issues/1', 't', 'failed', 5);\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a work item with ci_check_id was rejected"
+  local stored_ci_check_id
+  stored_ci_check_id="$(scalar "SELECT ci_check_id FROM factory.work_items WHERE owner = 'fixprobe'")"
+  [ "${stored_ci_check_id}" = "5" ] || die "expected ci_check_id to be stored, got '${stored_ci_check_id}'"
+  local index_def
+  index_def="$(scalar "SELECT indexdef FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_ci_check_id_idx'")"
+  case "${index_def}" in
+    *"WHERE(ci_check_idISNOTNULL)"*) ;;
+    *) die "work_items_ci_check_id_idx is not a partial index over ci_check_id: ${index_def}" ;;
+  esac
+  printf "DELETE FROM factory.work_items WHERE owner = 'fixprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+
+  # 戻すと、fixingの行だけがfailedになり、足した列と索引が消える。
+  printf "%s) VALUES ('fixprobe', 'r', 5, '%s', 'passed');\n" "${insert_prefix}" "${sha}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a passed row was rejected"
+  log "rolling back pr_ci_fix_schema"
+  psql_exec "${SCRATCH_DB}" -q <"${down_file}" >/dev/null || die "could not roll back pr_ci_fix_schema"
+  local moved
+  moved="$(scalar "SELECT state FROM factory.pr_ci_checks WHERE owner = 'fixprobe' AND pr_number = 1")"
+  [ "${moved}" = "failed" ] || die "expected the fixing row to become failed after the rollback, got '${moved}'"
+  local kept
+  kept="$(scalar "SELECT state FROM factory.pr_ci_checks WHERE owner = 'fixprobe' AND pr_number = 5")"
+  [ "${kept}" = "passed" ] || die "expected the passed row to stay passed after the rollback, got '${kept}'"
+  local remaining
+  remaining="$(scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND ((table_name = 'pr_ci_checks' AND column_name IN ('fix_work_item_id', 'fix_attempts', 'fix_hold_reason')) OR (table_name = 'work_items' AND column_name = 'ci_check_id'))")"
+  [ "${remaining}" = "0" ] || die "expected the four columns to be dropped by the rollback, ${remaining} remain"
+  local indexes
+  indexes="$(scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_ci_check_id_idx'")"
+  [ "${indexes}" = "0" ] || die "expected the index to be dropped by the rollback, ${indexes} remain"
+  expect_rejected "${insert_prefix}) VALUES ('fixprobe', 'r', 4, '${sha}', 'fixing')" pr_ci_checks_state_check
+
+  # もう一度適用すると、足した列が戻り、fixingを再び受け入れる。
+  log "re-applying pr_ci_fix_schema"
+  psql_exec "${SCRATCH_DB}" -q <"${up_file}" >/dev/null || die "could not re-apply pr_ci_fix_schema"
+  remaining="$(scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND ((table_name = 'pr_ci_checks' AND column_name IN ('fix_work_item_id', 'fix_attempts', 'fix_hold_reason')) OR (table_name = 'work_items' AND column_name = 'ci_check_id'))")"
+  [ "${remaining}" = "4" ] || die "expected the four columns after re-applying, found ${remaining}"
+  indexes="$(scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_ci_check_id_idx'")"
+  [ "${indexes}" = "1" ] || die "expected the index after re-applying, found ${indexes}"
+  printf "%s) VALUES ('fixprobe', 'r', 4, '%s', 'fixing');\n" "${insert_prefix}" "${sha}" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null || die "a fixing row was rejected after re-applying"
+  printf "DELETE FROM factory.pr_ci_checks WHERE owner = 'fixprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "pr_ci_fix_schema accepts fixing, rejects invalid values, and round-trips"
+}
+
+# 同じPRの終端でない2件目のpr_fixを拒み、終端の行、pr_review、別のPR、別のリポジトリ、
+# pr_numberがNULLの行とは共存できることを確かめる。拒否の文に制約名が含まれること
+# (`isActivePrFixUniqueViolation`が頼る形)と、終端の行を稼働中へ戻す更新も拒まれることも確かめる。
+# このmigrationの適用直後に呼ぶ。
+verify_active_pr_fix_index() {
+  local insert_prefix="INSERT INTO factory.work_items (cycle, source, kind, owner, repo, pr_number, title, status) VALUES (1, 'issue',"
+  # 文を実行して成功を確かめる。
+  expect_accepted() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" >/dev/null || die "the statement was rejected: $1"
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  expect_rejected() {
+    local statement="$1" constraint="work_items_active_pr_fix_key" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'fixing')"
+  expect_rejected "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'fixing')"
+  expect_rejected "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'picked')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'rereview_requested')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'blocked')"
+  expect_accepted "${insert_prefix} 'pr_review', 'fixprobe', 'r', 1, 't', 'reviewing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 2, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'other', 1, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', NULL, 't', 'fixing')"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', NULL, 't', 'fixing')"
+
+  # 終端の行を稼働中へ戻す更新(retry_work_itemの再開)も、同じPRの稼働中の行に拒まれる。
+  expect_rejected "UPDATE factory.work_items SET status = 'fixing' WHERE owner = 'fixprobe' AND repo = 'r' AND pr_number = 1 AND kind = 'pr_fix' AND status = 'blocked'"
+  # 稼働中の行が終端になれば、同じPRに新しい稼働中の行を入れられる。
+  expect_accepted "UPDATE factory.work_items SET status = 'failed' WHERE owner = 'fixprobe' AND repo = 'r' AND pr_number = 1 AND kind = 'pr_fix' AND status = 'fixing'"
+  expect_accepted "${insert_prefix} 'pr_fix', 'fixprobe', 'r', 1, 't', 'fixing')"
+  printf "DELETE FROM factory.work_items WHERE owner = 'fixprobe';\n" | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "pr_fix work items are limited to one active row per pull request"
 }
 
 for up_file in "${up_files[@]}"; do
@@ -231,12 +460,32 @@ for up_file in "${up_files[@]}"; do
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
     seed_active_issue_duplicates
   fi
+  if [ "${up_name}" = "${NOTICES_DEDUP_MIGRATION}" ]; then
+    seed_notice_duplicates
+  fi
+  if [ "${up_name}" = "${DISK_USAGE_NOTICE_MIGRATION}" ]; then
+    seed_disk_usage_notices
+  fi
   log "applying ${up_name}"
   psql_exec "${SCRATCH_DB}" <"${up_file}"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
     verify_active_issue_index
   fi
+  if [ "${up_name}" = "${NOTICES_DEDUP_MIGRATION}" ]; then
+    verify_notice_dedup_index
+  fi
+  if [ "${up_name}" = "${DISK_USAGE_NOTICE_MIGRATION}" ]; then
+    verify_disk_usage_notice_index
+  fi
+  if [ "${up_name}" = "${PR_CI_FIX_SCHEMA_MIGRATION}" ]; then
+    verify_pr_ci_fix_schema
+  fi
+  if [ "${up_name}" = "${ACTIVE_PR_FIX_MIGRATION}" ]; then
+    verify_active_pr_fix_index
+  fi
 done
+
+verify_issue_intake
 
 views=(v_inbox v_pipeline v_agent_cost_daily v_approval_stats v_lead_time v_failures v_notices v_reviews v_fix_rounds v_issue_proposals v_approval_requests)
 for view in "${views[@]}"; do
@@ -251,6 +500,22 @@ notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe
   || die "could not write the notice resolution columns"
 [ "${notice_row}" = "op" ] || die "expected resolved_by to be 'op', got '${notice_row}'"
 log "notices resolution columns are writable"
+
+# 通知の種類名を改めるmigrationが、未解決の旧い種類だけを書き換え、解決済みの履歴には触れないことを確かめる。
+# 全migrationの適用後は旧い種類の行が無いので、行を入れてからmigrationを適用し直す。
+rename_sql="${MIGRATIONS_DIR}/20261011120000_rename_labeler_notice_kind.up.sql"
+[ -f "${rename_sql}" ] || die "missing migration: ${rename_sql}"
+printf "INSERT INTO factory.notices (kind, message, resolved) VALUES ('labeler_association_denied', 'o/r#1: open', false), ('labeler_association_denied', 'o/r#2: done', true);\n" \
+  | psql_exec "${SCRATCH_DB}" -q >/dev/null || die "could not insert the legacy notices"
+psql_exec "${SCRATCH_DB}" -q <"${rename_sql}" >/dev/null || die "could not re-apply the rename migration"
+rename_rows="$(printf "SELECT message || '=' || kind FROM factory.notices WHERE message IN ('o/r#1: open', 'o/r#2: done') ORDER BY message;\n" \
+  | psql_exec "${SCRATCH_DB}" -q -t -A | paste -sd ',' -)" \
+  || die "could not read the renamed notices"
+[ "${rename_rows}" = "o/r#1: open=labeler_denied,o/r#2: done=labeler_association_denied" ] \
+  || die "unexpected notice kinds after the rename migration: '${rename_rows}'"
+printf "DELETE FROM factory.notices WHERE message IN ('o/r#1: open', 'o/r#2: done');\n" \
+  | psql_exec "${SCRATCH_DB}" -q >/dev/null
+log "notice kind rename rewrites only unresolved rows"
 
 # アプリのコードが組み立てるSQL文(`resolveNoticeIfUnresolved`、summaryの失敗のクエリ、
 # system_status、work_item_detail、通知の掃除)を、最小の行を入れた

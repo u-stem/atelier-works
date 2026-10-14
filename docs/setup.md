@@ -5,6 +5,15 @@
 ## 前提
 
 ホストに要るのは、Docker(Docker DesktopかOrbStack)とmiseだけである。node、bun、gh、windmill-cliなどほかのツールは、`mise run setup`の中の`mise install`で入る。
+テストを動かすホストのgitと、workerのgitは、2.44以上が要る([実装フローの仕様](internals/implement.md)を参照)。
+
+Dockerは、Engineを26.0以上(API 1.45以上)、Composeを2.26.0以上にする。
+Console用のworkerが、ボリュームのサブパスをマウントするためである。
+Composeが2.26.0以上でEngineが26.0未満だと、Engineがサブパスを気づかないうちに無視し、`factory_state`のボリューム全体がマウントされうる。
+そのため`mise run up`と`mise run deploy`は、起動の前に版を確かめ、満たさなければ止まる。
+この強制が止めるのは、この2つのタスクを通した起動だけである。`mise exec -- docker compose ... up`を直接実行した場合や、restart policyによる再起動は止めない。
+`mise run doctor`も同じ検査を報告する。
+Podmanは対象外である。
 
 設定に`.env`系のファイルは使わない。`infra/.env`と`infra/secrets.env`は存在しない。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。理由は[セキュリティ](security.md)の「シークレットの扱い」にある。
 
@@ -98,7 +107,7 @@ mise run doctor
 
 `GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`が空でも、`bootstrap`は完了する。対応するWindmillの変数が空で作られる。`doctor`はこれらが空だとNGを報告するので、運用を始める前に値を投入する。
 
-`bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。表示名はダッシュボードのApp(Factory Console)などの表記にそろえる。
+`bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。表示名はダッシュボード(Factory Console)などの表記にそろえる。
 
 ## カスタムtagを許可する
 
@@ -141,23 +150,117 @@ LEFTHOOK_EXCLUDE=wmill-metadata-check git push
 
 CIの`metadata`ジョブも、メタデータが最新かを検査する。
 使い捨てのWindmillをdbとサーバーだけで起動し、空のワークスペースを作って`mise run metadata:check`を実行する。
-`main`へのpushでは、変更に関わらず毎回検査する。
-`main`のCIの結果は、`main`全体の状態を表すためである。
-
-PRと`main`以外へのpushでは、次のどれにも触れないとき、検査を飛ばして成功にする。
-
-- メタデータの入力: `f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`
-- このジョブの定義
-  - `.github/workflows/ci.yml`
-  - `infra/docker-compose.yml`と`infra/docker-compose.ci.yml`
-  - `scripts/ci-metadata-login.sh`と`scripts/check-metadata-fresh.sh`
-  - `mise.toml`
-
-比べる範囲は、PRではマージ基点からの変更、pushでは前回のpushからの変更である。
-新しいブランチの初回pushでは、`origin/main`とのマージ基点からの変更を見る。
-基点や差分を求められないときは、安全のために検査する。
+このジョブを動かす条件は、「CIの実行の範囲」にある。
 
 フックを飛ばしてコミットしたPRは、手元で`mise run metadata`を実行してpushし直すまで、このジョブで失敗する。
+
+### CIの実行の範囲
+
+`ci.yml`は、次のときに動く。
+
+- `push`は`main`だけで動かす。
+  ほかのブランチは、PRの実行が検査する。
+- タグのpushでは動かさない。
+  `main`という名前のタグで動くと、その実行は「mainの最新の成功した実行」に見える。
+  `scope`ジョブが差分の基点を誤るため、動かさない。
+- `pull_request`は、変更したパスで絞らない。
+  文書だけのPRも、lint:docsと秘密情報の検査のために動く。
+- 同じ参照の古いPRの実行は、新しい実行が始まると止める。
+- `main`の実行は止めない。
+  止めると、そのcommitの検査が終わらないまま残るためである。
+
+Consoleの配布物は`ci.yml`ではなく、`console-dist.yml`が`main`へのpushで上げる。
+`console-dist.yml`は、変更したパスで絞らず、毎回動かす。
+`console_fetcher`が、そのcommitの成果物を取り込むためである。
+`scope`ジョブの判定は受けない。
+
+動いた実行の中では、`scope`ジョブが変更したファイルを見て、後続のジョブを動かすかを決める。
+判定は`scripts/ci-scope.ts`にあり、結果を6つのフラグ(`db`、`worker`、`caddy`、`fetcher`、`metadata`、`console`)で各ジョブに渡す。
+飛ばしたジョブは課金されない。
+関係しないジョブを飛ばすと、GitHub Actionsの無料枠の消費が減る。
+`check`ジョブは常に動かす。
+ただし、`check`ジョブの中のworkerイメージのビルドとプロセスロックのテストは、`worker`が偽のときに飛ばす。
+
+変更したパスは、次の順に規則を当てて、動かすジョブを決める。
+
+1. 個別の規則: 先に当たった規則だけを使う。
+2. 入力が決まっているパスの規則: 当たった規則のジョブをすべて動かす。
+3. 許可リスト: `check`の検査だけで足りるパス。どのジョブも動かさない。
+4. どれにも当たらないパス: すべてのフラグを真にする。
+
+どれにも当たらないパスは、読むジョブが分からない。
+検査を見逃すより、余分に動かすほうが安全なため、すべてのジョブを動かす。
+許可リストには、迷うパスを入れない。
+
+次のパスが変わると、すべてのフラグが真になる。
+CI自身と環境の定義が変わると、どのジョブの結果も変わりうるためである。
+
+- `.github/workflows/`
+- `.github/`のうち、IssueとPRのテンプレート以外
+- `infra/`のうち、`Caddyfile`、`console_fetcher/`、`worker/`以外(`docker-compose*.yml`を含む)
+- `mise.toml`、`package.json`、`bun.lock`、`wmill.yaml`
+- ルートの`tsconfig*.json`
+- `scripts/`の下の`.sh`ファイル(次の表に挙げたものを除く)
+- `scripts/ci-scope.ts`と`tests/scripts/ci-scope.test.ts`(判定自身。誤ると検査を飛ばすため)
+- 次の表と許可リストのどちらにも無いパス(例: `.mise.toml`、`.tool-versions`、`bunfig.toml`、`.npmrc`、`.gitattributes`)
+
+次の表のパスは、表のジョブだけを動かす。
+
+| パス | 動かすジョブ |
+| --- | --- |
+| `infra/Caddyfile` | `caddyfile` |
+| `infra/console_fetcher/` | `console-fetcher-image` |
+| `infra/worker/` | `check`の中のworkerのステップ |
+| `migrations/`、`scripts/test-db`で始まるファイル | `test-db` |
+| `test:db`が読み込む`f/factory/`の下のファイル | `test-db`と`metadata` |
+| `f/factory/lib/process_lock`と`tests/lib/process_lock`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
+| `f/factory/lib/check_sandbox`と`f/factory/lib/check_runner`で始まるファイル、`tests/lib/check_sandbox_integration`で始まるファイル、そのテストが読み込むファイル | `check`の中のworkerのステップ |
+| `f/`、`dependencies/`、`wmill-lock.yaml` | `metadata` |
+| `scripts/check-metadata-fresh.sh`、`scripts/ci-metadata-login.sh` | `metadata` |
+| `console/`、`scripts/check-console-lockfile.ts` | `console` |
+
+許可リストは、次のパスである。
+どれも、読むのは`check`のステップだけで、他のジョブは読まない。
+
+| パス | 理由 |
+| --- | --- |
+| `docs/`、`.md`ファイル | lint:docsとdocs:gen --checkが検査する |
+| `tests/` | テストは`check`だけが実行する(プロセスロックとCIの判定のテストは、上の規則が先に当たる) |
+| `.claude/`、`.agents/`、`templates/` | CIのジョブは読まない |
+| `rt.d.ts`、ルートの`c_factory_config.resource-type.yaml` | `wmill.yaml`の同期の対象(`f/**`)の外で、メタデータの入力ではない |
+| `biome.json`、`lefthook.yml`、`.gitleaks.toml`、`.textlintrc.json`、`.markdownlint`で始まるファイル、`.gitignore`、`LICENSE` | lintと走査の設定で、`check`のステップが読む |
+| `scripts/`の下の`.ts`ファイル | 上の規則に当たらないものは、`check`のテストが担う |
+| IssueとPRのテンプレート、`scripts/claude-hooks/run.sh`、`scripts/check-commit-msg.sh` | `check`の文書の検査とテストが担う |
+
+`console`ジョブは、型検査、lint、テストをしない。
+`check`ジョブの`mise run check`がConsoleの検査(`console:check`)を含むためである。
+`console`ジョブは、lockfileの検査、ビルド、draw.ioのビューアの取得と照合、マニフェストの書き出しだけをする。
+成果物は上げない。
+
+差分の基点は、イベントで決める。
+
+- PRは、マージ基点から先頭までの変更を見る。
+- `main`へのpushは、直近で成功した`ci.yml`の`main`のpushの実行のcommitから、今のcommitまでの変更を見る。
+  直前のpushを基点にすると、直前の実行が失敗していても、無関係な次のpushで失敗したジョブが飛ばされ、実行が成功になるためである。
+  成功した実行を基点にすれば、失敗したcommitの変更は、次の実行で必ず検査し直される。
+
+次のときは、すべてのフラグを真にする。
+検査を見逃すより、余分に動かすほうが安全なためである。
+
+- 差分を取れないとき
+- `main`へのpushで、成功した実行を取得できないとき、結果が空のとき、結果の形が不正なとき
+- `main`へのpushで、基点が今のcommitと同じとき、または今のcommitの履歴に無いとき
+- イベントを判別できないとき
+
+理由は、`scope`ジョブのログに`scope fallback: <理由>`の1行で出る。
+
+ファイル名は、改行や空白を含んでいても壊れない形で読む。
+名前の変更は、変更前と変更後の両方のパスを変更として扱う。
+
+後続のジョブは、`scope`の出力が欠けても動く。
+`scope`ジョブが失敗しても、後続のジョブは動かし、実行は失敗になる。
+
+条件で飛ばしたジョブは、成功として扱われる。
 
 ### git worktreeのログイン情報
 
@@ -202,6 +305,7 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 | 環境の診断 | `mise run doctor` | すべての項目が`OK`で、最後に`=== 全項目OK ===`が出る。終了コードは0 |
 | Windmillサーバーの応答 | `curl http://127.0.0.1:8080/api/version` | `CE v`に続いて、`mise.toml`の`WM_VERSION`の値が出る |
 | ローカルとリモートの一致 | `mise exec -- wmill sync push --dry-run` | `0 changes` |
+| 検査コマンドの境界 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査用のuidに落ちること、workerの秘密に届かないこと、所有権が戻ること、枠の取得と待ちなど、すべてのテストが通る。`mise run up`や`mise run build`でイメージを作った後に実行する |
 | Data Tableのmigration | `mise run test:db` | すべてのview(`v_inbox`など)のSELECTと、down migrationでの戻しが成功し、最後に`[test-db] OK`が出る |
 | Consoleの取り込み | `mise exec -- docker compose -f infra/docker-compose.yml logs --tail 20 console_fetcher` | `"event":"status","state":"ok"`の行が出る。初回は`"event":"deployed"`も出る。`config_missing`なら、`CONSOLE_GITHUB_TOKEN`の投入と`mise run up`を確かめる |
 | Consoleの配信 | `curl -sI http://127.0.0.1:8080/console/` | `HTTP/1.1 200`と`Content-Security-Policy`が出る。`/`と`/api/version`には`Content-Security-Policy`が付かない |
@@ -213,8 +317,9 @@ post-checkoutのフックは、メイン作業ツリーの`.wmill`へのシン�
 | ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定する。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする |
 | `doctor`が「カスタムtag」でNGになる | インスタンスがtag`console`を許可していない。`mise run instance:tags`を実行する |
 | `doctor`が「カスタムtag」でWARNになる | 管理者でログインできず、許可の有無を確かめられていない。`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる |
+| `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新した後で`mise run up`を実行し直し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`でConsole用workerを作り直す。Dockerの更新で止まったworkerはrestart policyで元のマウントのまま起動し直し、`mise run up`は設定の変わらないworkerを作り直さないためである。その後で`mise run doctor`を実行し、`docker version`と`console worker mount`の行が`OK`になることを確かめる(手順は[運用](operations.md#console用workerを確かめる)) |
 | `doctor`が「初期パスワード」でNGになる | パスワードが`changeme`のままである。`mise run bootstrap`がログインした後にパスワードを変える |
-| `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する |
+| `required variable ... is missing a value: run via mise`と出る | `docker compose`を`mise run`を通さずに実行している。composeの環境変数はmiseからしか渡らないので、`mise run <task>`か`mise exec -- docker compose ...`で実行する。スタックの起動には、版の検査を通る`mise run up`を使う |
 | workerのイメージを作り直したい | `mise run build`で、`windmill_worker`のサービスだけを作り直す |
 | すべてを初期化したい | `mise exec -- docker compose -f infra/docker-compose.yml down -v`を実行する。下の警告を読んでから行う |
 | ホストのCPUアーキテクチャが合うか気になる | 対応は要らない。Windmillの公式イメージとworkerのイメージは、arm64とamd64の両方に対応している |

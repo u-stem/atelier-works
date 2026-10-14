@@ -11,14 +11,15 @@ Factoryは次の5つの工程で動く。
 | 1. 拾う | `factory`ラベルの付いたIssueと、`factory:review`・`factory:fix`ラベルの付いたPRを定期的に探し、取り込む | 実装済み |
 | 2. 要件定義 | headless Claudeが要件定義のドラフトを書き、人が承認するか差し戻す | 実装済み |
 | 3. 実装とPR | 承認された要件定義からworktreeで実装してPRを作り、PRのレビューと修正を回す | 実装済み。Issueからの実装は`implement_enabled`で有効にする |
-| 4. マージ後の監視 | マージ後のCIを監視する | 未実装 |
+| 4. mainのCI監視 | 対象リポジトリのmainのCIをコミット単位で監視し、失敗を通知する | 実装済み |
+| 4. PRのCI監視 | Factoryが作ったPRのCIをheadのコミット単位で監視し、失敗を通知する。設定で有効にしたときは、失敗を直す作業項目も起動する | 実装済み |
 | 5. 自己改善 | 運用の記録を監査し、改善の提案をIssueにする | 実装済み |
 
 工程のほかに、次のものが動く。
 
 - Docker Composeで動くWindmillのスタックと、claude・gh・gitleaks・gtr・wmillを入れたworkerのイメージ
 - Data Table、`doctor`、`bootstrap`
-- ダッシュボードのApp(Factory Console)
+- ダッシュボード(Factory Console。`/console/`で開く)
 - 自己更新と、失敗したジョブの通知
 
 Discordからの双方向の操作は未実装である。Discordには通知だけを送る。
@@ -85,6 +86,7 @@ Discordからの双方向の操作は未実装である。Discordには通知だ
 | `mise run typecheck` | `tsc --noEmit`で型を検査する |
 | `mise run test` | `bun test`でsmallのテストを実行する。`console/`は除き、Consoleのテストは`mise run console:check`で実行する |
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
+| `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
 
 ## リポジトリの構成
@@ -107,7 +109,7 @@ atelier-works/
   f/factory/                       # Windmillのscript、flow、resource、variable、schedule
   infra/                           # Docker Compose、workerのDockerfile、console_fetcher、Caddyfile
   migrations/datatable/main/       # Data Tableのmigration
-  scripts/                         # doctor.sh、bootstrap.sh、test-db.sh、検査のスクリプト、Claude Codeのフック
+  scripts/                         # doctor.sh、bootstrap.sh、test-db.sh、check-caddy-origin.sh、検査のスクリプト、Claude Codeのフック
   templates/                       # factory_configの初期値のテンプレート
   tests/                           # bun testのテスト
 ```
@@ -127,4 +129,7 @@ atelier-works/
 | [実装フローの仕様](docs/internals/implement.md) | 実装フローの仕組みと安全策の詳細 |
 | [PRワークフローの仕様](docs/internals/pr-workflow.md) | PRのレビューと修正の仕組みと安全策の詳細 |
 | [監査の仕様](docs/internals/audit.md) | 監査と改善提案の仕組み |
+| [dependabotの更新の仕様](docs/internals/dependabot.md) | dependabotのPRの選び方、自動マージの流れ、作業項目の状態 |
+| [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
+| [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ |
 | [通知の仕様](docs/internals/notifications.md) | Discordへの通知の仕組み |

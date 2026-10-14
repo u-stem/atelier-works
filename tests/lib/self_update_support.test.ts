@@ -1,18 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import {
   assertBranchMatches,
-  buildNpmCiArgv,
   buildWmillArgv,
   buildWmillEnv,
+  CallTimeoutError,
   classifyChangedPaths,
   decideUpdate,
+  deploymentFailureMessage,
   extractMiseHostSections,
+  MAX_DEPLOYMENT_ERROR_LENGTH,
   miseTomlNeedsHostAction,
   parseNulSeparatedPaths,
-  RAW_APP_RELATIVE_DIR,
+  readDeployedSha,
+  recordFailedDeployment,
+  recordSuccessDeployment,
   resolveWmillCliContext,
+  SELF_UPDATE_CALL_TIMEOUT_MS,
+  setDeployedSha,
   truncateOutput,
+  withCallTimeout,
 } from "../../f/factory/lib/self_update_support.ts";
+import type { DeploymentRecord } from "../../f/factory/lib/types.ts";
 
 describe("decideUpdate", () => {
   test("returns unchanged when the shas are equal", () => {
@@ -282,6 +290,11 @@ describe("buildWmillEnv", () => {
     expect(env).toMatchObject({ HOME: "/home/factory", PATH: "/usr/bin:/bin" });
   });
 
+  test("carries TMPDIR through when set", () => {
+    const env = buildWmillEnv({ TMPDIR: "/run/factory-tmp/fj-x" });
+    expect(env.TMPDIR).toBe("/run/factory-tmp/fj-x");
+  });
+
   test("omits HOME and PATH when unset", () => {
     const env = buildWmillEnv({});
     expect(Object.keys(env)).toEqual(["NPM_CONFIG_IGNORE_SCRIPTS"]);
@@ -295,8 +308,7 @@ describe("buildWmillEnv", () => {
     ]);
   });
 
-  // `wmill sync push`のバンドルがraw appに対して走らせるnpmも、
-  // 依存のinstall scriptを動かさないようにする。
+  // `wmill`のサブプロセスがnpmを走らせても、依存のinstall scriptを動かさない。
   test("tells npm run by wmill to skip install scripts", () => {
     const env = buildWmillEnv({});
     expect(env.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
@@ -311,59 +323,6 @@ describe("truncateOutput", () => {
   test("truncates to exactly max characters when over the max", () => {
     const text = "a".repeat(20);
     expect(truncateOutput(text, 10)).toBe("a".repeat(10));
-  });
-});
-
-describe("buildNpmCiArgv", () => {
-  test("runs npm ci against the raw app dir without touching the lockfile", () => {
-    expect(buildNpmCiArgv("/clone/f/factory/factory_console__raw_app")).toEqual(
-      [
-        "npm",
-        "ci",
-        "--prefix",
-        "/clone/f/factory/factory_console__raw_app",
-        "--no-audit",
-        "--no-fund",
-        "--ignore-scripts",
-      ],
-    );
-  });
-});
-
-describe("raw app dependencies", () => {
-  async function readLockPackages(): Promise<Record<string, unknown>> {
-    const lock: unknown = await Bun.file(
-      `${import.meta.dir}/../../${RAW_APP_RELATIVE_DIR}/package-lock.json`,
-    ).json();
-    if (typeof lock !== "object" || lock === null || !("packages" in lock)) {
-      throw new Error("package-lock.json has no packages field");
-    }
-    const packages = lock.packages;
-    if (typeof packages !== "object" || packages === null) {
-      throw new Error("package-lock.json packages is not an object");
-    }
-    return Object.fromEntries(Object.entries(packages));
-  }
-
-  // `buildNpmCiArgv`は`--ignore-scripts`で依存のinstall scriptを動かさない。
-  // install scriptが無いと組み立てが壊れる依存が入ったら、ここで気づけるようにする。
-  test("lockfile has a packages object", async () => {
-    const packages = await readLockPackages();
-    expect(Object.keys(packages).length).toBeGreaterThan(0);
-  });
-
-  test("contain no package that needs an install script", async () => {
-    const packages = await readLockPackages();
-    const withInstallScript = Object.entries(packages)
-      .filter(
-        ([, entry]) =>
-          typeof entry === "object" &&
-          entry !== null &&
-          "hasInstallScript" in entry &&
-          entry.hasInstallScript === true,
-      )
-      .map(([path]) => path);
-    expect(withInstallScript).toEqual([]);
   });
 });
 
@@ -416,6 +375,458 @@ describe("extractMiseHostSections", () => {
   test("keeps only [tools] and [env] entries", () => {
     expect(extractMiseHostSections(MISE_BASE)).toBe(
       'tools:bun = "1.4.2"\nenv:WM_VERSION = "1.817.0"',
+    );
+  });
+});
+
+describe("withCallTimeout", () => {
+  test("returns the value of work that finishes in time", async () => {
+    const result = await withCallTimeout("call", async () => 42, 50);
+
+    expect(result).toBe(42);
+  });
+
+  test("rejects with the label when work does not finish in time", async () => {
+    const pending = withCallTimeout(
+      "getVariable",
+      () => new Promise<never>(() => {}),
+      10,
+    );
+
+    await expect(pending).rejects.toThrow("getVariable timed out after 10ms");
+  });
+
+  test("passes through the error of work that fails in time", async () => {
+    const pending = withCallTimeout(
+      "call",
+      async () => {
+        throw new Error("boom");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("boom");
+  });
+
+  test("turns a synchronous throw of work into a rejection", async () => {
+    const pending = withCallTimeout(
+      "call",
+      () => {
+        throw new Error("sync boom");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("sync boom");
+  });
+
+  test("uses SELF_UPDATE_CALL_TIMEOUT_MS by default", () => {
+    expect(SELF_UPDATE_CALL_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+const NEVER = (): Promise<never> => new Promise<never>(() => {});
+
+describe("CallTimeoutError", () => {
+  test("is what withCallTimeout rejects with on a time out", async () => {
+    const pending = withCallTimeout("call", NEVER, 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+});
+
+describe("readDeployedSha", () => {
+  const FAILS_READ = async (): Promise<string> => {
+    throw new Error("Variable not found at f/factory/deployed_sha");
+  };
+
+  test("returns the value of the variable", async () => {
+    const sha = await readDeployedSha(
+      async () => "abc1234",
+      async () => true,
+      50,
+    );
+
+    expect(sha).toBe("abc1234");
+  });
+
+  test("does not check the existence when the read succeeds", async () => {
+    let checks = 0;
+
+    await readDeployedSha(
+      async () => "abc1234",
+      async () => {
+        checks += 1;
+        return true;
+      },
+      50,
+    );
+
+    expect(checks).toBe(0);
+  });
+
+  test("returns an empty string when the read fails and the variable does not exist", async () => {
+    const sha = await readDeployedSha(FAILS_READ, async () => false, 50);
+
+    expect(sha).toBe("");
+  });
+
+  test("rejects when the read fails and the variable exists", async () => {
+    const pending = readDeployedSha(FAILS_READ, async () => true, 50);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check fails", async () => {
+    const pending = readDeployedSha(
+      FAILS_READ,
+      async () => {
+        throw new Error("500");
+      },
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check times out", async () => {
+    const pending = readDeployedSha(FAILS_READ, NEVER, 10);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read fails and the existence check is not a boolean", async () => {
+    const pending = readDeployedSha(FAILS_READ, async () => "no", 50);
+
+    await expect(pending).rejects.toThrow("Variable not found");
+  });
+
+  test("rejects when the read times out instead of treating it as not deployed", async () => {
+    const pending = readDeployedSha(NEVER, async () => false, 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+});
+
+describe("setDeployedSha", () => {
+  test("does not read back when the write succeeds", async () => {
+    let reads = 0;
+
+    await setDeployedSha(
+      {
+        set: async () => {},
+        get: async () => {
+          reads += 1;
+          return "";
+        },
+      },
+      "abc1234",
+      50,
+    );
+
+    expect(reads).toBe(0);
+  });
+
+  test("succeeds when the write times out but the variable holds the sha", async () => {
+    const pending = setDeployedSha(
+      { set: NEVER, get: async () => "abc1234" },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  test("rejects when the write times out and the variable holds another value", async () => {
+    const pending = setDeployedSha(
+      { set: NEVER, get: async () => "old0000" },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rejects with the write time out when the read back fails", async () => {
+    const pending = setDeployedSha(
+      {
+        set: NEVER,
+        get: async () => {
+          throw new Error("down");
+        },
+      },
+      "abc1234",
+      10,
+    );
+
+    await expect(pending).rejects.toThrow("setVariable deployed_sha");
+  });
+
+  test("rejects when the read back times out", async () => {
+    const pending = setDeployedSha({ set: NEVER, get: NEVER }, "abc1234", 10);
+
+    await expect(pending).rejects.toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rejects with the original error when the write fails for another reason", async () => {
+    const pending = setDeployedSha(
+      {
+        set: async () => {
+          throw new Error("forbidden");
+        },
+        get: async () => "abc1234",
+      },
+      "abc1234",
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("forbidden");
+  });
+
+  test("does not read back when the write fails for another reason", async () => {
+    let reads = 0;
+
+    await setDeployedSha(
+      {
+        set: async () => {
+          throw new Error("forbidden");
+        },
+        get: async () => {
+          reads += 1;
+          return "abc1234";
+        },
+      },
+      "abc1234",
+      50,
+    ).catch(() => {});
+
+    expect(reads).toBe(0);
+  });
+});
+
+describe("recordSuccessDeployment", () => {
+  test("does not report a timeout when the record succeeds", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(
+      async () => {},
+      (err) => timeouts.push(err),
+      50,
+    );
+
+    expect(timeouts).toEqual([]);
+  });
+
+  test("reports a timeout instead of throwing when the record times out", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(NEVER, (err) => timeouts.push(err), 10);
+
+    expect(timeouts[0]).toBeInstanceOf(CallTimeoutError);
+  });
+
+  test("rethrows a failure other than a timeout", async () => {
+    const pending = recordSuccessDeployment(
+      async () => {
+        throw new Error("db down");
+      },
+      () => {},
+      50,
+    );
+
+    await expect(pending).rejects.toThrow("db down");
+  });
+
+  test("does not report a timeout when the record fails for another reason", async () => {
+    const timeouts: Error[] = [];
+
+    await recordSuccessDeployment(
+      async () => {
+        throw new Error("db down");
+      },
+      (err) => timeouts.push(err),
+      50,
+    ).catch(() => {});
+
+    expect(timeouts).toEqual([]);
+  });
+});
+
+describe("recordFailedDeployment", () => {
+  const SHA_FROM = "a".repeat(40);
+  const SHA_TO = "b".repeat(40);
+  const WMILL_TOKEN = "wmill-token-value-0123456789";
+
+  /** 記録された行を集め、`recordFailedDeployment`を1回呼ぶ。 */
+  async function recordOnce(
+    error: unknown,
+    secrets: readonly string[] = [WMILL_TOKEN],
+  ): Promise<{ records: DeploymentRecord[]; message: string }> {
+    const records: DeploymentRecord[] = [];
+    const message = await recordFailedDeployment(
+      {
+        record: async (record) => {
+          records.push(record);
+        },
+        onRecordError: () => {},
+      },
+      { shaFrom: SHA_FROM, shaTo: SHA_TO, error, secrets },
+      50,
+    );
+    return { records, message };
+  }
+
+  test("records a failed result when the sync push fails", async () => {
+    const { records } = await recordOnce(
+      new Error("wmill sync push failed (exit 1, timed_out=false): boom"),
+    );
+    expect(records[0]?.result).toBe("failed");
+  });
+
+  test("records the error of the sync push as the reason", async () => {
+    const { records } = await recordOnce(
+      new Error("wmill sync push failed (exit 1, timed_out=false): boom"),
+    );
+    expect(records[0]?.error).toBe(
+      "wmill sync push failed (exit 1, timed_out=false): boom",
+    );
+  });
+
+  test("records the error of the datatable migration as the reason", async () => {
+    const { records } = await recordOnce(
+      new Error(
+        "wmill datatable migrate up failed (exit 1, timed_out=false): relation exists",
+      ),
+    );
+    expect(records[0]?.error).toBe(
+      "wmill datatable migrate up failed (exit 1, timed_out=false): relation exists",
+    );
+  });
+
+  test("records a thrown value that is not an Error as text", async () => {
+    const { records } = await recordOnce("plain failure");
+    expect(records[0]?.error).toBe("plain failure");
+  });
+
+  test("keeps the versions of the deployment", async () => {
+    const { records } = await recordOnce(new Error("boom"));
+    expect([records[0]?.sha_from, records[0]?.sha_to]).toEqual([
+      SHA_FROM,
+      SHA_TO,
+    ]);
+  });
+
+  test("masks the token of the wmill CLI in the reason", async () => {
+    const { records } = await recordOnce(
+      new Error(`wmill sync push failed: --token ${WMILL_TOKEN}`),
+    );
+    expect(records[0]?.error).not.toContain(WMILL_TOKEN);
+  });
+
+  test("replaces the token of the wmill CLI with the mask", async () => {
+    const { records } = await recordOnce(
+      new Error(`wmill sync push failed: --token ${WMILL_TOKEN}`),
+    );
+    expect(records[0]?.error).toBe("wmill sync push failed: --token ***");
+  });
+
+  test("masks a GitHub token in the reason", async () => {
+    const token = `ghp_${"x".repeat(36)}`;
+    const { records } = await recordOnce(new Error(`clone failed: ${token}`));
+    expect(records[0]?.error).toBe("clone failed: ***");
+  });
+
+  test("returns the same masked text that it records", async () => {
+    const { records, message } = await recordOnce(
+      new Error(`failed: ${WMILL_TOKEN}`),
+    );
+    expect(records[0]?.error).toBe(message);
+  });
+
+  test("cuts a long reason to the limit", async () => {
+    const { records } = await recordOnce(
+      new Error("x".repeat(MAX_DEPLOYMENT_ERROR_LENGTH + 500)),
+    );
+    expect(records[0]?.error?.length).toBe(MAX_DEPLOYMENT_ERROR_LENGTH);
+  });
+
+  test("keeps the head of a long reason", async () => {
+    const head = "wmill sync push failed: ";
+    const { records } = await recordOnce(
+      new Error(`${head}${"y".repeat(MAX_DEPLOYMENT_ERROR_LENGTH)}`),
+    );
+    expect(records[0]?.error).toBe(
+      `${head}${"y".repeat(MAX_DEPLOYMENT_ERROR_LENGTH - head.length)}`,
+    );
+  });
+
+  test("counts a character outside the BMP as one when cutting", async () => {
+    const { records } = await recordOnce(
+      new Error("🙂".repeat(MAX_DEPLOYMENT_ERROR_LENGTH + 1)),
+    );
+    expect(Array.from(records[0]?.error ?? "").length).toBe(
+      MAX_DEPLOYMENT_ERROR_LENGTH,
+    );
+  });
+
+  test("masks the token before cutting so that no part of it remains", async () => {
+    const prefix = "z".repeat(MAX_DEPLOYMENT_ERROR_LENGTH - 5);
+    const { records } = await recordOnce(new Error(`${prefix}${WMILL_TOKEN}`));
+    expect(records[0]?.error).toBe(`${prefix}***`);
+  });
+
+  test("reports a failure of the record instead of throwing", async () => {
+    const reported: string[] = [];
+    await recordFailedDeployment(
+      {
+        record: async () => {
+          throw new Error(`db down ${WMILL_TOKEN}`);
+        },
+        onRecordError: (message) => reported.push(message),
+      },
+      {
+        shaFrom: null,
+        shaTo: SHA_TO,
+        error: new Error("boom"),
+        secrets: [WMILL_TOKEN],
+      },
+      50,
+    );
+    expect(reported).toEqual(["db down ***"]);
+  });
+
+  test("reports a timeout of the record instead of throwing", async () => {
+    const reported: string[] = [];
+    await recordFailedDeployment(
+      {
+        record: NEVER,
+        onRecordError: (message) => reported.push(message),
+      },
+      { shaFrom: null, shaTo: SHA_TO, error: new Error("boom"), secrets: [] },
+      10,
+    );
+    expect(reported).toEqual(["recordDeployment failed timed out after 10ms"]);
+  });
+
+  test("still returns the reason when the record fails", async () => {
+    const message = await recordFailedDeployment(
+      {
+        record: async () => {
+          throw new Error("db down");
+        },
+        onRecordError: () => {},
+      },
+      { shaFrom: null, shaTo: SHA_TO, error: new Error("boom"), secrets: [] },
+      50,
+    );
+    expect(message).toBe("boom");
+  });
+});
+
+describe("deploymentFailureMessage", () => {
+  test("masks the given secrets", () => {
+    expect(deploymentFailureMessage(new Error("a s3cr3t b"), ["s3cr3t"])).toBe(
+      "a *** b",
     );
   });
 });

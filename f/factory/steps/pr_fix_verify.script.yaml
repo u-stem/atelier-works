@@ -48,6 +48,10 @@ schema:
       description: ''
       default: null
       originalType: string
+    ci_check_id:
+      type: number
+      description: ''
+      default: null
     comments:
       type: array
       description: 収集したPRコメントの一覧。

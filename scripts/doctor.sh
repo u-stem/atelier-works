@@ -41,8 +41,10 @@ echo "=== Software Factory環境診断 ==="
 echo
 
 # 1. docker CLIとdaemon
+docker_ready=0
 if command -v docker >/dev/null 2>&1; then
   if docker info >/dev/null 2>&1; then
+    docker_ready=1
     report "docker" ok "CLI / daemonともに利用できます"
   else
     report "docker" ng "docker CLIはありますがdaemonに接続できません"
@@ -58,14 +60,28 @@ else
   report "docker compose" ng "docker compose (v2プラグイン)が見つかりません"
 fi
 
-# 3. miseの有無
+# 3. Dockerの版
+# Console用workerの`volume.subpath`は、Engineが26.0(API 1.45)未満だと黙って無視され、
+# `factory_state`のボリューム全体がマウントされうる。下限は`check-docker-version.sh`が定め、
+# `mise run up`と`mise run deploy`も同じ検査で起動の前に止まる。
+if [[ "${docker_ready}" -eq 1 ]]; then
+  if version_output="$("${SCRIPT_DIR}/check-docker-version.sh" 2>&1)"; then
+    report "docker version" ok "${version_output}"
+  else
+    report "docker version" ng "$(printf '%s' "${version_output}" | tr '\n' ' ')"
+  fi
+else
+  report "docker version" ng "daemonに接続できないため確認できません"
+fi
+
+# 4. miseの有無
 if command -v mise >/dev/null 2>&1; then
   report "mise" ok "$(mise --version 2>/dev/null || true)"
 else
   report "mise" ng "miseコマンドが見つかりません"
 fi
 
-# 4. `mise.toml`がtrustされているか
+# 5. `mise.toml`がtrustされているか
 # `mise trust --show`は`~/path/to/repo: trusted`のように、ホームディレクトリの
 # 下を`~`に縮めたディレクトリ単位の行で出す(ファイル名は付かない)。
 # `REPO_ROOT`の`$HOME`の部分を`~`に置き換えた文字列と、念のため絶対パスの
@@ -83,7 +99,7 @@ else
   report "mise.toml trust" ng "miseが無いため確認できません"
 fi
 
-# 5. mise経由でツールが入っているか
+# 6. mise経由でツールが入っているか
 if command -v mise >/dev/null 2>&1; then
   for name in wmill gh bun node; do
     case "${name}" in
@@ -102,7 +118,7 @@ else
   report "tool: wmill/gh/bun/node" ng "miseが無いため確認できません"
 fi
 
-# 6. 必須環境変数が設定されているか。
+# 7. 必須環境変数が設定されているか。
 # 値そのものはログに一切出さず、有無だけを確かめる。miseの`[env]`と
 # `mise.local.toml`から渡す前提なので、直接ではなく`mise run doctor`で
 # 実行しているかを確かめること。
@@ -133,14 +149,14 @@ else
   report "環境変数" ok "必須キー${#required_vars[@]}件すべて設定されています"
 fi
 
-# 7. `mise.local.toml`がgitignoreされているか(秘密の誤コミットを防ぐ)
+# 8. `mise.local.toml`がgitignoreされているか(秘密の誤コミットを防ぐ)
 if git -C "${REPO_ROOT}" check-ignore -q mise.local.toml; then
   report "mise.local.toml" ok "gitignore対象です"
 else
   report "mise.local.toml" ng "gitignoreされていません。秘密情報が誤ってコミットされる恐れがあります"
 fi
 
-# 8. ポートが空いているか、またはWindmillが応答しているか
+# 9. ポートが空いているか、またはWindmillが応答しているか
 wm_http_port="${WM_HTTP_PORT:-8080}"
 
 windmill_is_up=0
@@ -155,7 +171,7 @@ else
   report "port ${wm_http_port}" ok "空いています(未起動)"
 fi
 
-# 9. workerのコンテナ内のツールの確認(スタックが起動している場合だけ)
+# 10. workerのコンテナ内のツールの確認(スタックが起動している場合だけ)
 if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
   worker_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker 2>/dev/null || true)"
   worker_running=0
@@ -182,7 +198,46 @@ else
   report "workerコンテナ" ng "dockerまたはdocker-compose.ymlが見つからず確認できません"
 fi
 
-# 10. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
+# 11. Console用workerのマウント(起動中のコンテナがある場合だけ)
+# 正しい設定では、`/var/lib/factory`はコンテナのrootfsにあり、その下にはマウント先の
+# `requirements`しか無い。直下に`claude`、`gh`、`audits`のどれかが見えれば、ボリューム全体を
+# `/var/lib/factory`にマウントする設定で作られたworkerが残っている。直下の名前はowner名とぶつからない。
+# ここでボリューム全体とは、`factory_state`の最上位を指す。
+# `volume.subpath`が無視されると、`requirements`のサブパスではなく`factory_state`のボリューム全体が
+# `/var/lib/factory/requirements`にマウントされる。`docker inspect`のSourceはサブパスを反映しないので、
+# コンテナ内の見え方で判定する。ボリューム全体には`factory_state_init`が必ず`requirements`を作るため、
+# ボリューム全体がマウントされていれば`/var/lib/factory/requirements/requirements`が見える。
+# 対象リポジトリのownerが`requirements`だと、正常でもこのパスが見えてNGになる。
+# 判定が見分けるのはボリューム全体がマウントされたかどうかだけで、symlinkの先がマウントされた場合は見分けられない。
+# 判定は1回の`exec`にまとめ、シェルの終了コードで結果を返す。composeの失敗(1、126、127など)と
+# ぶつからないよう、専用の値を使う。
+#   11: マウント先が見え、ボリューム全体はマウントされていない
+#   10: 直下か、マウント先の下にボリューム全体がマウントされている証拠が見える
+#   3: マウント先が見えない
+# 直下の確認を先に行うのは、`requirements`がまだ無いボリューム全体が`/var/lib/factory`にマウントされた場合も
+# 10で返すためである。
+# `sh -c`の文字列は固定にし、外から来る値を組み込まない。
+console_probe='test -e /var/lib/factory/claude || test -e /var/lib/factory/gh || test -e /var/lib/factory/audits && exit 10; test -d /var/lib/factory/requirements || exit 3; test -e /var/lib/factory/requirements/requirements && exit 10; exit 11'
+console_id=""
+if command -v docker >/dev/null 2>&1 && [[ -f "${COMPOSE_FILE}" ]]; then
+  console_id="$(docker compose -f "${COMPOSE_FILE}" ps -q windmill_worker_console 2>/dev/null || true)"
+fi
+if [[ -n "${console_id}" ]] && [[ "$(docker inspect -f '{{.State.Running}}' "${console_id}" 2>/dev/null || echo false)" == "true" ]]; then
+  # `set -e`の下でも終了コードを受け取れるよう、`|| status=$?`と書く。
+  console_probe_status=0
+  docker compose -f "${COMPOSE_FILE}" exec -T windmill_worker_console \
+    sh -c "${console_probe}" >/dev/null 2>&1 || console_probe_status=$?
+  case "${console_probe_status}" in
+    11) report "console worker mount" ok "factory_stateのボリューム全体はマウントされていません" ;;
+    10) report "console worker mount" ng "/var/lib/factory/requirements/requirementsか、/var/lib/factoryの直下のclaude、gh、auditsが見えます。factory_stateのボリューム全体がマウントされている恐れがあります(見えたのがrequirements/requirementsだけで、対象リポジトリのownerがrequirementsのときは、ボリューム全体がマウントされたのかサブパスだけがマウントされたのか見分けられません)" ;;
+    3) report "console worker mount" ng "/var/lib/factory/requirementsが見えません。マウントが設定どおりに付いていません(終了コード: ${console_probe_status})" ;;
+    *) report "console worker mount" ok "windmill_worker_consoleでマウントを確認できないため確かめられません(終了コード: ${console_probe_status})" ;;
+  esac
+else
+  report "console worker mount" ok "windmill_worker_consoleが起動していないため確かめられません"
+fi
+
+# 12. 初期パスワードのままログインできてしまわないか(Windmillが応答している場合だけ)
 if [[ "${windmill_is_up}" -eq 1 ]]; then
   login_status="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
     "http://127.0.0.1:${wm_http_port}/api/auth/login" \

@@ -3,10 +3,13 @@
 // pipelineのリース(`flow_job_id`がこのフローのジョブID)を持たなければ、何も書かずに終わる。
 
 import * as wmill from "windmill-client@1.817.0";
-import { buildConsoleUrl, computeExpiresAt } from "../lib/approval_support.ts";
+import {
+  buildApprovalConsoleUrl,
+  computeExpiresAt,
+} from "../lib/approval_support.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   expireApprovalRequestIfPending,
   getWorkItem,
   insertApprovalRequest,
@@ -71,7 +74,7 @@ export function buildApprovalNotifyFailedMessage(
   },
   reason: string,
 ): string {
-  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認依頼のDiscord通知を送れませんでした(${reason})。承認依頼はConsoleの承認タブで待っています。`;
+  return `${target.owner}/${target.repo}#${String(target.issue_number)} (work item ${String(target.work_item_id)}): 承認依頼のDiscord通知を送れませんでした(${reason})。承認依頼はConsoleの要対応で待っています。`;
 }
 
 /**
@@ -184,9 +187,10 @@ export async function main(
     return { ok: false, reason: APPROVAL_REQUEST_WITHDRAWN_REASON };
   }
 
-  const inboxUrl = buildConsoleUrl(config.windmill_public_url, {
-    work_item_id,
-  });
+  const inboxUrl = buildApprovalConsoleUrl(
+    config.windmill_public_url,
+    approvalRequestId,
+  );
 
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
   const issueNumber = workItem.issue_number;
@@ -207,7 +211,7 @@ export async function main(
   await reportApprovalNotifyFailure(
     notifyResult,
     async (reason) => {
-      await addNotice({
+      await addNoticeUnlessUnresolved({
         kind: "approval_notify_failed",
         message: buildApprovalNotifyFailedMessage(
           {

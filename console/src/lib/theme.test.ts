@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  nextThemePreference,
   parseThemePreference,
+  THEME_OPTIONS,
   themePreferenceLabel,
 } from "./theme.ts";
 
@@ -27,17 +27,21 @@ describe("parseThemePreference", () => {
   });
 });
 
-describe("nextThemePreference", () => {
-  test("moves from system to light", () => {
-    expect(nextThemePreference("system")).toBe("light");
+describe("THEME_OPTIONS", () => {
+  test("lists light, dark and system in order", () => {
+    expect(THEME_OPTIONS.map((option) => option.value)).toEqual([
+      "light",
+      "dark",
+      "system",
+    ]);
   });
 
-  test("moves from light to dark", () => {
-    expect(nextThemePreference("light")).toBe("dark");
-  });
-
-  test("moves from dark back to system", () => {
-    expect(nextThemePreference("dark")).toBe("system");
+  test("labels every option in Japanese", () => {
+    expect(THEME_OPTIONS.map((option) => option.label)).toEqual([
+      "ライト",
+      "ダーク",
+      "OSに合わせる",
+    ]);
   });
 });
 

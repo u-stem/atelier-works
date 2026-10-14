@@ -1,0 +1,320 @@
+import { describe, expect, test } from "bun:test";
+import type { SummaryNotice } from "../api/guards/summary.ts";
+import {
+  describeNotice,
+  MAX_NOTICE_TARGETS,
+  noticeSeverityLabel,
+  noticeTargets,
+  SUMMARY_MESSAGE_LIMIT,
+  shortSha,
+  splitNoticeMessage,
+} from "./noticeView.ts";
+
+const FULL_SHA = "0123456789abcdef0123456789abcdef01234567";
+const OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98";
+
+function notice(overrides: Partial<SummaryNotice> = {}): SummaryNotice {
+  return {
+    notice_id: 21,
+    kind: "cleanup_db_failed",
+    message: "disk full",
+    resolved: false,
+    created_at: "2026-10-03T00:00:00.000Z",
+    severity: "action",
+    resolvable: true,
+    ...overrides,
+  };
+}
+
+describe("noticeSeverityLabel", () => {
+  test("labels an action notice", () => {
+    expect(noticeSeverityLabel("action")).toBe("要対応");
+  });
+
+  test("labels an info notice", () => {
+    expect(noticeSeverityLabel("info")).toBe("情報");
+  });
+
+  test("treats an unknown severity as needing action", () => {
+    expect(noticeSeverityLabel("loud")).toBe("要対応");
+  });
+});
+
+describe("noticeTargets", () => {
+  test("reads a target at the start of the body", () => {
+    expect(noticeTargets("o/r#12 (work item 3): reason")).toEqual([
+      { label: "o/r#12", url: "https://github.com/o/r/issues/12", index: 0 },
+    ]);
+  });
+
+  test("records where each target first appears", () => {
+    expect(
+      noticeTargets("b/y#2 then a/x#1 and b/y#2").map((target) => target.index),
+    ).toEqual([0, 11]);
+  });
+
+  test("reads a target in the middle of the body", () => {
+    expect(
+      noticeTargets("failed for acme/web-app#7: label factory").map(
+        (target) => target.label,
+      ),
+    ).toEqual(["acme/web-app#7"]);
+  });
+
+  test("keeps each target once, in order of appearance", () => {
+    expect(
+      noticeTargets("b/y#2 then a/x#1 and b/y#2").map((target) => target.label),
+    ).toEqual(["b/y#2", "a/x#1"]);
+  });
+
+  test("returns nothing when the body names no target", () => {
+    expect(noticeTargets("disk full")).toEqual([]);
+  });
+
+  test("ignores a number that has no repository", () => {
+    expect(noticeTargets("see #12")).toEqual([]);
+  });
+
+  test("ignores an owner that GitHub would not accept", () => {
+    expect(noticeTargets("-bad/r#12")).toEqual([]);
+  });
+
+  test("reads at most the limit of targets", () => {
+    const body = Array.from({ length: 12 }, (_, index) => `o/r#${index + 1}`);
+    expect(noticeTargets(body.join(" ")).length).toBe(MAX_NOTICE_TARGETS);
+  });
+
+  test("does not read a path of a URL as a target", () => {
+    expect(noticeTargets("https://github.com/o/r/issues/1")).toEqual([]);
+  });
+});
+
+describe("describeNotice", () => {
+  test("titles the notice with the Japanese kind label", () => {
+    expect(describeNotice(notice()).title).toBe("データベースの掃除の失敗");
+  });
+
+  test("lets an unresolved resolvable notice be resolved", () => {
+    expect(describeNotice(notice()).canResolve).toBe(true);
+  });
+
+  test("does not let an unresolvable notice be resolved", () => {
+    expect(describeNotice(notice({ resolvable: false })).canResolve).toBe(
+      false,
+    );
+  });
+
+  test("does not let a resolved notice be resolved again", () => {
+    expect(describeNotice(notice({ resolved: true })).canResolve).toBe(false);
+  });
+
+  test("explains why an unresolvable notice has no button", () => {
+    expect(
+      describeNotice(notice({ resolvable: false })).unresolvableReason,
+    ).toContain("Consoleからは解決できません");
+  });
+
+  test("gives no reason for a notice that can be resolved", () => {
+    expect(describeNotice(notice()).unresolvableReason).toBeNull();
+  });
+
+  test("gives no reason for a resolved notice", () => {
+    expect(
+      describeNotice(notice({ resolved: true, resolvable: false }))
+        .unresolvableReason,
+    ).toBeNull();
+  });
+
+  test("replaces hidden characters in the body", () => {
+    expect(describeNotice(notice({ message: "a‮b" })).message).toBe("a�b");
+  });
+
+  test("tells that a hidden character was replaced", () => {
+    expect(describeNotice(notice({ message: "a‮b" })).messageReplaced).toBe(
+      true,
+    );
+  });
+
+  test("keeps the body as plain text", () => {
+    expect(describeNotice(notice({ message: "<b>x</b>" })).message).toBe(
+      "<b>x</b>",
+    );
+  });
+
+  test("takes the guide from the kind", () => {
+    expect(
+      describeNotice(notice({ kind: "host_action_required" })).guide.commands,
+    ).toEqual(["git pull", "mise install", "mise run up"]);
+  });
+
+  test("lists the targets named in the body", () => {
+    expect(
+      describeNotice(notice({ message: "o/r#5 (work item 2): x" })).targets,
+    ).toEqual([
+      { label: "o/r#5", url: "https://github.com/o/r/issues/5", index: 0 },
+    ]);
+  });
+});
+
+describe("noticeTargets for a cut body", () => {
+  test("drops a target that touches the cut", () => {
+    expect(
+      noticeTargets("a/b#1 and o/r#12", true).map((target) => target.label),
+    ).toEqual(["a/b#1"]);
+  });
+
+  test("keeps a target that ends before the cut", () => {
+    expect(
+      noticeTargets("o/r#12 and more", true).map((target) => target.label),
+    ).toEqual(["o/r#12"]);
+  });
+
+  test("keeps a target at the end of a body that is not cut", () => {
+    expect(
+      noticeTargets("a/b#1 and o/r#12").map((target) => target.label),
+    ).toEqual(["a/b#1", "o/r#12"]);
+  });
+});
+
+describe("describeNotice for a cut body", () => {
+  const limit = SUMMARY_MESSAGE_LIMIT;
+  // 末尾が`o/r#12`で、全体がちょうど上限の文字数になる本文。
+  const endsWithTarget = `${"x ".repeat((limit - 6) / 2)}o/r#12`;
+
+  test("says the body is cut when it has exactly the limit of characters", () => {
+    expect(
+      describeNotice(notice({ message: "x".repeat(limit) })).messageTruncated,
+    ).toBe(true);
+  });
+
+  test("says nothing when the body is shorter than the limit", () => {
+    expect(
+      describeNotice(notice({ message: "x".repeat(limit - 1) }))
+        .messageTruncated,
+    ).toBe(false);
+  });
+
+  test("counts characters outside the basic plane once", () => {
+    expect(
+      describeNotice(notice({ message: "\u{1F600}".repeat(limit) }))
+        .messageTruncated,
+    ).toBe(true);
+  });
+
+  test("says nothing about a body read in full", () => {
+    expect(
+      describeNotice(notice({ message: "x".repeat(limit) }), "full")
+        .messageTruncated,
+    ).toBe(false);
+  });
+
+  test("does not link a target at the cut", () => {
+    expect(describeNotice(notice({ message: endsWithTarget })).targets).toEqual(
+      [],
+    );
+  });
+
+  test("links the same target when the body is read in full", () => {
+    expect(
+      describeNotice(notice({ message: endsWithTarget }), "full").targets.map(
+        (target) => target.label,
+      ),
+    ).toEqual(["o/r#12"]);
+  });
+});
+
+describe("shortSha", () => {
+  test("keeps the first seven characters", () => {
+    expect(shortSha(FULL_SHA)).toBe("0123456");
+  });
+});
+
+describe("splitNoticeMessage", () => {
+  test("leaves a body without a version as one text part", () => {
+    expect(splitNoticeMessage("disk full")).toEqual([{ text: "disk full" }]);
+  });
+
+  test("shortens a full version and keeps the full one", () => {
+    expect(splitNoticeMessage(`deployed(${FULL_SHA}) is behind`)).toEqual([
+      { text: "deployed(" },
+      { text: "0123456", sha: FULL_SHA },
+      { text: ") is behind" },
+    ]);
+  });
+
+  test("does not shorten a hex run longer than a version", () => {
+    expect(splitNoticeMessage(`${FULL_SHA}0`)).toEqual([
+      { text: `${FULL_SHA}0` },
+    ]);
+  });
+
+  test("does not shorten a hex run shorter than a version", () => {
+    expect(splitNoticeMessage("abcdef0")).toEqual([{ text: "abcdef0" }]);
+  });
+
+  test("does not take a version that touches the cut end of the body", () => {
+    expect(splitNoticeMessage(`deployed(${FULL_SHA}`, true)).toEqual([
+      { text: `deployed(${FULL_SHA}` },
+    ]);
+  });
+
+  test("takes a version that ends before the cut end of the body", () => {
+    expect(
+      splitNoticeMessage(`deployed(${FULL_SHA}) is`, true).map(
+        (part) => part.sha,
+      ),
+    ).toEqual([undefined, FULL_SHA, undefined]);
+  });
+
+  test("takes a version at the end of a body that is read in full", () => {
+    expect(
+      splitNoticeMessage(`deployed(${FULL_SHA}`, false).map((part) => part.sha),
+    ).toEqual([undefined, FULL_SHA]);
+  });
+});
+
+describe("describeNotice versions in a cut body", () => {
+  test("does not list a version at the cut end of the summary body", () => {
+    const message = `${"x ".repeat((SUMMARY_MESSAGE_LIMIT - 40) / 2)}${FULL_SHA}`;
+    expect(describeNotice(notice({ message })).shas).toEqual([]);
+  });
+
+  test("lists the same version when the body is read in full", () => {
+    const message = `${"x ".repeat((SUMMARY_MESSAGE_LIMIT - 40) / 2)}${FULL_SHA}`;
+    expect(describeNotice(notice({ message }), "full").shas).toEqual([
+      FULL_SHA,
+    ]);
+  });
+});
+
+describe("describeNotice versions", () => {
+  test("lists each version once, in order of appearance", () => {
+    const message = `${OTHER_SHA} then ${FULL_SHA} ${OTHER_SHA}`;
+    expect(describeNotice(notice({ message })).shas).toEqual([
+      OTHER_SHA,
+      FULL_SHA,
+    ]);
+  });
+
+  test("has no version for an ordinary body", () => {
+    expect(describeNotice(notice()).shas).toEqual([]);
+  });
+
+  test("splits the displayed body into parts", () => {
+    expect(
+      describeNotice(notice({ message: `v ${FULL_SHA}` })).messageParts,
+    ).toEqual([{ text: "v " }, { text: "0123456", sha: FULL_SHA }]);
+  });
+});
+
+describe("describeNotice badge", () => {
+  test("merges the kind and the severity of an action notice", () => {
+    expect(describeNotice(notice()).badgeLabel).toBe("要対応の通知");
+  });
+
+  test("merges the kind and the severity of an info notice", () => {
+    expect(describeNotice(notice({ severity: "info" })).badgeLabel).toBe(
+      "情報の通知",
+    );
+  });
+});

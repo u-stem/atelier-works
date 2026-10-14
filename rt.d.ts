@@ -5,6 +5,7 @@ declare namespace RT {
 
   type CFactoryConfig = {
     model: string,
+    heavy_model: string,
     owners: object[],
     fix_label: string,
     max_turns: number,
@@ -32,6 +33,8 @@ declare namespace RT {
     retention_logs_days: number,
     retention_work_items_days: number,
     allowed_labeler_associations: string[],
+    allowed_labeler_logins: string[],
+    allowed_labeler_ids: object,
     implement_enabled: boolean,
     implement_max_rounds: number,
     implement_max_turns: number,
@@ -41,6 +44,12 @@ declare namespace RT {
     implement_flow_timeout_sec: number,
     implement_max_changed_files: number,
     implement_max_diff_lines: number,
+    dependabot_enabled: boolean,
+    dependabot_merge_enabled: boolean,
+    dependabot_min_published_days: number,
+    pr_ci_watch_enabled: boolean,
+    pr_ci_fix_enabled: boolean,
+    pr_ci_fix_max_rounds: number,
     check_commands_by_repo: object
   }
 }

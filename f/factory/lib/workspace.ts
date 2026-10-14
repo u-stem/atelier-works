@@ -21,8 +21,8 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
   assertBranchName,
@@ -89,7 +89,8 @@ export class SpawnError extends Error {
   }
 }
 
-const DEFAULT_TIMEOUT_MS = 60_000;
+/** `CommandRunner`に`timeoutMs`を渡さないときの、コマンド1回の上限(ミリ秒)。 */
+export const DEFAULT_TIMEOUT_MS = 60_000;
 /** setTimeoutが受け付ける上限(2^31-1ミリ秒)。超えると約1ミリ秒に丸められ、即時にタイムアウトしてしまう。 */
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const DEFAULT_KILL_GRACE_MS = 5_000;
@@ -247,6 +248,14 @@ const OMITTED_MARKER_PATTERN = /\[\.\.\. \d+ bytes omitted \.\.\.\]/;
 /** `readStreamCapped`が、保持した先頭と末尾の間に入れる文字列を返す。 */
 export function omittedMarker(bytes: number): string {
   return `\n[... ${String(bytes)} bytes omitted ...]\n`;
+}
+
+/**
+ * `readStreamCapped`が間を捨てたときの`omittedMarker`の位置(文字数)を返す。無ければ-1。
+ * 位置より前が、保持した先頭である。
+ */
+export function omittedMarkerIndex(text: string): number {
+  return text.search(OMITTED_MARKER_PATTERN);
 }
 
 /**
@@ -452,11 +461,40 @@ export type GitCommandOptions = {
 };
 
 /**
+ * 設定ファイルの値にかかわらず、すべてのgitの実行に固定する設定。
+ * `-c`はコマンドラインの設定で、`.git/config`、`config.worktree`、
+ * グローバル、システムのどの設定ファイルよりも優先される。
+ * `extensions.worktreeConfig`は`-c`では無効にできず、`config.worktree`は
+ * 有効にされると読まれる。だから、読まれて困る項目は設定ファイルの側ではなく、ここで固定する。
+ * - `core.hooksPath`、`core.fsmonitor`、`core.askPass`:
+ *   設定ファイルに書かれたプログラムを、gitに実行させない。
+ *   `core.askPass`は空にすると、環境変数`SSH_ASKPASS`も読まれなくなる。
+ * - `commit.gpgsign`、`push.gpgSign`: commitとpushの署名で、`gpg.program`に書かれたプログラムを実行させない。
+ * - `core.symlinks`: worktreeの検証が前提にする値。
+ *   `.git/config`や`config.worktree`で`true`に戻させない。
+ * - `core.excludesFile`、`core.attributesFile`: `/dev/null`にして、
+ *   `$HOME/.config/git/ignore`と`$HOME/.config/git/attributes`(設定が無いときの既定の置き場)を読ませない。
+ *   `GIT_CONFIG_GLOBAL`では、この2つのファイルは止まらない。
+ * - `credential.helper`: 空にして、設定ファイルのcredential helperを消す。
+ */
+export const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
+  ["core.hooksPath", "/dev/null"],
+  ["core.fsmonitor", "false"],
+  ["core.askPass", ""],
+  ["core.symlinks", "false"],
+  ["core.excludesFile", "/dev/null"],
+  ["core.attributesFile", "/dev/null"],
+  ["commit.gpgsign", "false"],
+  ["push.gpgSign", "false"],
+  ["credential.helper", ""],
+];
+
+/**
  * `args`の前に共通の安全策のオプションを付けた、gitのargvを返す。
- * `credential.helper`を空にしてシステムやグローバルの設定を消し、
- * フックとfsmonitorを無効にする。
- * 悪意のあるcloneに、任意のフックやfsmonitorのヘルパーを実行させないため。
+ * `FIXED_GIT_CONFIG`の設定を`-c`で固定する。
+ * 悪意のあるcloneや検査コマンドが書いた設定で、任意のプログラムを実行させないため。
  * ネットワーク操作のときだけ、ghのcredential helperを加え直す。
+ * システムとグローバルの設定は、`localGitEnv`の環境変数で読まない。
  *
  * このモジュールのgitの実行では、ほかに次を守る。
  * - `GH_TOKEN`は、ネットワーク操作(clone、fetch、push)の
@@ -492,18 +530,13 @@ export type GitCommandOptions = {
  *   下を指すことを確かめる。
  *   `.git`ファイルの差し替えなどで別の場所に向けられたworktreeを操作しないため。
  */
-function buildGitArgv(
+export function buildGitArgv(
   args: readonly string[],
   options: GitCommandOptions = {},
 ): string[] {
   return [
     "git",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "credential.helper=",
+    ...FIXED_GIT_CONFIG.flatMap(([key, value]) => ["-c", `${key}=${value}`]),
     ...(options.network === true
       ? ["-c", "credential.helper=!gh auth git-credential"]
       : []),
@@ -526,18 +559,45 @@ function remoteTrackingRef(branch: string): string {
   return `${REMOTE_TRACKING_PREFIX}${branch}`;
 }
 
-/** ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。 */
-function localGitEnv(home?: string, path?: string): Record<string, string> {
-  // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
-  // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
+/**
+ * ネットワークを使わないgitの操作の環境変数を返す。`GH_TOKEN`は含めない。
+ * 渡す環境変数は、ここで挙げるものとHOMEとPATH、ジョブの中ではジョブごとのTMPDIRだけである。
+ * HOMEは、gitが起動するghなどの子プロセスと、gitの`~`の展開
+ * (`.git/config`のパスの`~`、httpsの`$HOME/.netrc`)のために渡す。
+ * workerのHOMEには`.netrc`を置かない前提である。
+ * グローバルの設定としては、下の環境変数と`FIXED_GIT_CONFIG`で読ませない。
+ * `pr_workflow_support.ts`も、gitの実行にこの関数と`buildGitArgv`を使う。
+ */
+export function localGitEnv(
+  home?: string,
+  path?: string,
+  tmpDir?: string,
+): Record<string, string> {
   const env: Record<string, string> = {
     GIT_TERMINAL_PROMPT: "0",
+    // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
+    // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
     GIT_NO_REPLACE_OBJECTS: "1",
+    // システムとグローバル(`$HOME/.gitconfig`、XDGの`git/config`)の設定と、システムのgitattributesを読まない。
+    // 実行する環境ごとに値が違い、リポジトリの設定と検証の前提が食い違うため。
+    // コミットのauthorは`GIT_AUTHOR_*`、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
+    // `GIT_CONFIG_GLOBAL`を指定すると、`$HOME/.gitconfig`と`$XDG_CONFIG_HOME/git/config`の両方が読まれなくなる。
+    // XDGの`ignore`と`attributes`は設定ファイルではないので止まらず、`FIXED_GIT_CONFIG`で止める。
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_ATTR_NOSYSTEM: "1",
+    // httpsだけを許す。`.git/config`の`protocol.<name>.allow`や`remote.origin.url`で、
+    // `ext::`などの別の転送を使わせないため。この環境変数は`protocol.*`の設定より優先される。
+    // `GH_TOKEN`や非公開のコミットを、`ext::`のコマンドに渡さない。
+    GIT_ALLOW_PROTOCOL: "https",
   };
   const resolvedHome = home ?? process.env.HOME;
   if (resolvedHome !== undefined) env.HOME = resolvedHome;
   const resolvedPath = path ?? process.env.PATH;
   if (resolvedPath !== undefined) env.PATH = resolvedPath;
+  const resolvedTmp = tmpDir ?? jobTmpEnv().TMPDIR;
+  if (resolvedTmp !== undefined) env.TMPDIR = resolvedTmp;
   return env;
 }
 
@@ -550,29 +610,6 @@ function networkGitEnv(
   path?: string,
 ): Record<string, string> {
   return { ...localGitEnv(home, path), GH_TOKEN: ghToken };
-}
-
-/**
- * `overrides`を環境変数`GIT_CONFIG_COUNT`、`GIT_CONFIG_KEY_<i>`、
- * `GIT_CONFIG_VALUE_<i>`にして返す。
- * 結果は`networkGitEnv(...)`や`localGitEnv(...)`に混ぜて使う。
- * gitはこれらを、どのサブコマンドやラッパーから起動されても`-c key=value`と同じに読む。
- * `git gtr`は外部のサブコマンドで、
- * 直接の`git`のように途中の`-c`を受け付けるとは限らないため、
- * 設定の上書きを環境変数で渡す(`--`を付けないのと同じ理由)。
- */
-function gitConfigEnvOverrides(
-  overrides: Readonly<Record<string, string>>,
-): Record<string, string> {
-  const entries = Object.entries(overrides);
-  const env: Record<string, string> = {
-    GIT_CONFIG_COUNT: String(entries.length),
-  };
-  entries.forEach(([key, value], index) => {
-    env[`GIT_CONFIG_KEY_${index}`] = key;
-    env[`GIT_CONFIG_VALUE_${index}`] = value;
-  });
-  return env;
 }
 
 /**
@@ -625,7 +662,7 @@ export async function readExactRef(opts: {
  * 出力を値として判断に使うコマンドで、出力の読み取りを打ち切っていれば(`outputAbandoned`)例外を投げる。
  * 打ち切った出力は途中で切れていることがあり、終了コードが0でも、検査や照合に使うと見落としになるため。
  * 対象は、秘密情報の検査に渡す差分とそのレポート、保護パス・symlink・`package.json`のscriptsの判定に使う変更の一覧と中身、
- * 差分の大きさ、検証したツリーの照合に使う`write-tree`である。
+ * 差分の大きさ、検証したツリーの照合に使う`write-tree`、worktreeの一覧である。
  */
 export function assertOutputComplete(
   context: string,
@@ -637,18 +674,17 @@ export function assertOutputComplete(
 
 /**
  * `dir`の設定に`core.symlinks false`を書き込む。失敗したら例外を投げる。
- * `addDetachedWorktree`の`worktree add`に付ける`-c core.symlinks=false`
- * (と`git gtr new`の`GIT_CONFIG_*`)は、その1回の実行にしか効かない。
- * 設定を書き込まないと、同じリポジトリでの以後の操作
- * (`git status`、`add -A`、`commit`、
- * 特に`createGtrWorktree`の再利用時の`reset --hard`)は、
+ * このモジュールのgitは`buildGitArgv`の`-c core.symlinks=false`で動くので、
+ * ここで書く値は、このモジュールを通さずに実行されるgit
+ * (worktreeの中でClaudeや検査コマンドが実行するもの)のための既定である。
+ * 書かないと、そのgit(`git status`、`add -A`、`commit`、`reset --hard`)は、
  * gitの既定の`core.symlinks=true`で動く。
  * すると`reset --hard`がコミットされたシンボリックリンクを本物のリンクとして作り直し、
  * 次のコミットで`typechange`として現れる。
  * worktreeはどれもメインのcloneの`.git/config`を読むため、
  * メインのcloneに書けば全worktreeに効く。
  * `ensureRepo`がclone・fetchの成功のたびに呼ぶ。
- * 他の箇所の実行ごとの`-c`や`GIT_CONFIG_*`も残してある(今は重複するが害は無い)。
+ * `.git/config`や`config.worktree`の値は、`-c`が優先されるので、このモジュールのgitには効かない。
  */
 async function persistNoSymlinksConfig(
   run: CommandRunner,
@@ -895,6 +931,11 @@ function parseLockToken(content: string): string | null {
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** `withRepoLock`がロックを取れるまで待つ上限(ミリ秒)の既定。 */
+export const REPO_LOCK_MAX_WAIT_MS = 5 * 60_000;
+/** `withRepoLock`がロックの空きを確かめる間隔(ミリ秒)の既定。 */
+export const REPO_LOCK_POLL_MS = 200;
+
 export type WithRepoLockOptions<T> = {
   readonly lockPath: string;
   readonly fn: () => Promise<T>;
@@ -928,11 +969,11 @@ export async function withRepoLock<T>(
   const now = opts.now ?? (() => new Date());
   const sleep = opts.sleep ?? defaultSleep;
   const staleMs = opts.staleMs ?? 10 * 60_000;
-  const pollMs = opts.pollMs ?? 200;
-  // 5分。このロックは最初のclone・fetchだけでなく、リポジトリ配下のgitの操作すべて
+  const pollMs = opts.pollMs ?? REPO_LOCK_POLL_MS;
+  // このロックは最初のclone・fetchだけでなく、リポジトリ配下のgitの操作すべて
   // (ensureRepo、addDetachedWorktree、createGtrWorktree、removeWorktree、commitAndPush)で
   // 共有するので、先に並んだ遅いclone・checkoutを待てるだけの余裕が要る。
-  const maxWaitMs = opts.maxWaitMs ?? 5 * 60_000;
+  const maxWaitMs = opts.maxWaitMs ?? REPO_LOCK_MAX_WAIT_MS;
   const deadline = now().getTime() + maxWaitMs;
   const token = crypto.randomUUID();
 
@@ -1377,6 +1418,12 @@ export type EnsureFactoryCloneOptions = {
    * 既定値のブランチに固定してしまう。
    */
   readonly branch: string;
+  /**
+   * cloneのロックを取った直後、cloneにもoriginにも触れる前に呼ぶ。
+   * 投げると、何も変えずに失敗する。
+   * `factory_repo_id`の照合に使う。照合から取得までの間を、ロックの待ちで延ばさないため。
+   */
+  readonly beforeUpdate?: () => Promise<void>;
   readonly home?: string;
   readonly path?: string;
   readonly exists?: PathExists;
@@ -1389,6 +1436,14 @@ export type EnsureFactoryCloneResult = {
   readonly dir: string;
   readonly action: "cloned" | "pulled";
 };
+
+/**
+ * 既存のcloneを更新するとき、`ensureFactoryClone`が走らせるgitの回数。
+ * originのURLの付け替え(remote set-url)、fetch、reset、追跡refの確認(show-ref)、checkoutの5回。
+ * `self_update`のジョブの上限の見積もりが使う。gitの呼び出しを増減したら、この値も直す
+ * (`tests/lib/workspace.test.ts`が、更新での呼び出しの回数と一致することを確かめる)。
+ */
+export const FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT = 5;
 
 /**
  * `dir`にあるFactory自身のcloneを守るロックのパス(隣の`<dir>.lock`)を返す。
@@ -1416,6 +1471,7 @@ export function factoryCloneLockPath(dir: string): string {
  * `git pull --ff-only`は今checkoutしているブランチを進めるだけで、ブランチを切り替えず、
  * 設定したブランチと食い違っていても気づかないので使わない。
  * このcloneはfetchして読むだけで、その場で編集しないので、強制的に合わせても失うものは無い。
+ * 既存のcloneは、fetchの前にoriginのURLを`opts.repoUrl`に付け替える。照合したURLと取得するURLを、cloneした時点のURLに左右させず1つにするため。
  *
  * `factoryCloneLockPath(dir)`のロックの下で直列に実行する。
  * `NUM_WORKERS`が2以上だと、各フローの最初のステップと`poll_issues`が同じ`dir`に対して
@@ -1437,7 +1493,23 @@ export async function ensureFactoryClone(
     ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async () => {
+      await opts.beforeUpdate?.();
       if (await exists(dir)) {
+        // cloneのoriginは、cloneした時点のURLのままである。fetchの前に毎回、
+        // 呼び出し側が渡したURLに合わせ、照合したURLと取得するURLを1つにする。
+        const setUrlResult = await opts.run(
+          buildGitArgv(["remote", "set-url", "origin", "--", opts.repoUrl]),
+          {
+            cwd: dir,
+            env: localGitEnv(opts.home, opts.path),
+          },
+        );
+        if (setUrlResult.exitCode !== 0) {
+          throw gitError(
+            "git remote set-url origin failed for factory clone",
+            setUrlResult,
+          );
+        }
         const fetchResult = await opts.run(
           buildGitArgv(["fetch", "origin", "--", branch], { network: true }),
           {
@@ -1452,10 +1524,8 @@ export async function ensureFactoryClone(
           );
         }
         // 先にローカルの変更をすべて捨てる。Factoryはこのcloneを読むだけだが、
-        // `wmill sync push`がその場でraw appをバンドルし、その`npm install`が
-        // `package-lock.json`を書き換える。実際のworkerでは、これで`checkout -B`が
-        // 切り替えを拒み(「Your local changes ... would be overwritten」)、
-        // `self_update`がずっと進まなくなった。
+        // 作業ツリーに変更が残ると`checkout -B`が切り替えを拒み
+        // (「Your local changes ... would be overwritten」)、`self_update`が進まなくなる。
         const resetResult = await opts.run(buildGitArgv(["reset", "--hard"]), {
           cwd: dir,
           env: localGitEnv(opts.home, opts.path),
@@ -1572,23 +1642,11 @@ export async function addDetachedWorktree(
         throw gitError(`git fetch ${opts.sha} failed`, fetchResult);
       }
 
-      // `-c core.symlinks=false`を付ける。
-      // 付けないと、コミットされたシンボリックリンク
-      // (`/proc/self/environ`などworktreeの外を指すもの)が、
-      // 本物のリンクとしてcheckoutされる。
-      // 付ければ`git clone -c core.symlinks=false`と同じく、リンク先のパスを書いた
-      // ただのテキストファイルとしてcheckoutされる。
+      // `buildGitArgv`の`-c core.symlinks=false`が効くので、
+      // コミットされたシンボリックリンク(`/proc/self/environ`などworktreeの外を指すもの)は、
+      // 本物のリンクではなく、リンク先のパスを書いたただのテキストファイルとしてcheckoutされる。
       const addResult = await opts.run(
-        buildGitArgv([
-          "-c",
-          "core.symlinks=false",
-          "worktree",
-          "add",
-          "--detach",
-          "--",
-          opts.dir,
-          opts.sha,
-        ]),
+        buildGitArgv(["worktree", "add", "--detach", "--", opts.dir, opts.sha]),
         { cwd: opts.repoDir, env: localGitEnv(opts.home, opts.path) },
       );
       if (addResult.exitCode !== 0) {
@@ -1802,45 +1860,105 @@ export type WorktreeEntry = {
   readonly detached: boolean;
 };
 
-function parseWorktreeListPorcelain(stdout: string): WorktreeEntry[] {
-  const blocks = stdout
-    .split("\n\n")
-    .map((block) => block.trim())
-    .filter((block) => block.length > 0);
-
-  return blocks.map((block) => {
-    let path: string | null = null;
-    let headSha: string | null = null;
-    let branch: string | null = null;
-    let bare = false;
-    let detached = false;
-
-    for (const line of block.split("\n")) {
-      if (line.startsWith("worktree ")) {
-        path = line.slice("worktree ".length);
-      } else if (line.startsWith("HEAD ")) {
-        headSha = line.slice("HEAD ".length);
-      } else if (line.startsWith("branch ")) {
-        const ref = line.slice("branch ".length);
-        branch = ref.startsWith("refs/heads/")
-          ? ref.slice("refs/heads/".length)
-          : ref;
-      } else if (line === "bare") {
-        bare = true;
-      } else if (line === "detached") {
-        detached = true;
-      }
-    }
-
-    if (path === null) {
-      throw new Error(
-        `unexpected 'git worktree list --porcelain' block: ${block}`,
-      );
-    }
-    return { path, headSha, branch, bare, detached };
-  });
+/**
+ * `entry`が、PR番号`prNumber`のレビューのworktree(`buildReviewWorktreeDir`が作るパス)かを返す。
+ * `repoDir`と同じ親の直下にある`review-<PR番号>-<sha7>`というdetachedのworktreeだけを対象にする。
+ * パスの一部が一致しただけで選ぶと、別の場所のdirectoryやブランチのworktreeまで消しうるためである。
+ * パスは文字列の前方一致で比べるので、列挙されたパスと`repoDir`が同じ綴りでなければ、
+ * 何も選ばれない。workerの`/workspaces`はボリュームのマウント先そのものでsymlinkを挟まないので、
+ * `/workspaces/<owner>/<repo>/main`のcloneのworktreeは、同じ綴りで列挙される。
+ */
+export function isReviewWorktreeOf(
+  repoDir: string,
+  prNumber: number,
+  entry: Pick<WorktreeEntry, "path" | "detached">,
+): boolean {
+  if (!entry.detached) return false;
+  const prefix = `${repoDir.replace(/\/main$/, "")}/`;
+  if (!entry.path.startsWith(prefix)) return false;
+  const name = entry.path.slice(prefix.length);
+  return new RegExp(`^review-${String(prNumber)}-[0-9a-f]{7}$`).test(name);
 }
 
+/**
+ * `git worktree list --porcelain -z`の出力を読む。
+ * -zの形式は、各行をNULで終え、各レコードの後にもう1つNULを置く。
+ * 改行はレコードの区切りにならないので、改行を含むパスを1つのパスとして読める。
+ * 出力が空(worktreeが無い)でない限り、末尾が完全なレコードの終わりでなければ、
+ * 途中で切れた出力として例外を投げる。
+ * 使用中のworktreeを読み落とすと、別のworktreeが使うブランチを確かめずに通してしまうため。
+ */
+function parseWorktreeListPorcelain(stdout: string): WorktreeEntry[] {
+  if (stdout === "") return [];
+
+  const fields = stdout.split("\0");
+  // NULで終わる出力を分けると、最後に空の要素が残る。残らなければ、最後の行が終わっていない。
+  if (fields.pop() !== "") {
+    throw new Error(
+      "unexpected 'git worktree list --porcelain -z' output: truncated",
+    );
+  }
+
+  const entries: WorktreeEntry[] = [];
+  let lines: string[] = [];
+  for (const field of fields) {
+    if (field !== "") {
+      lines.push(field);
+      continue;
+    }
+    if (lines.length === 0) {
+      throw new Error(
+        "unexpected 'git worktree list --porcelain -z' output: empty record",
+      );
+    }
+    entries.push(parseWorktreeRecord(lines));
+    lines = [];
+  }
+  // 最後のレコードを終えるNULが無い。
+  if (lines.length > 0) {
+    throw new Error(
+      "unexpected 'git worktree list --porcelain -z' output: truncated",
+    );
+  }
+  return entries;
+}
+
+function parseWorktreeRecord(lines: readonly string[]): WorktreeEntry {
+  let path: string | null = null;
+  let headSha: string | null = null;
+  let branch: string | null = null;
+  let bare = false;
+  let detached = false;
+
+  for (const line of lines) {
+    if (line.startsWith("worktree ")) {
+      path = line.slice("worktree ".length);
+    } else if (line.startsWith("HEAD ")) {
+      headSha = line.slice("HEAD ".length);
+    } else if (line.startsWith("branch ")) {
+      const ref = line.slice("branch ".length);
+      branch = ref.startsWith("refs/heads/")
+        ? ref.slice("refs/heads/".length)
+        : ref;
+    } else if (line === "bare") {
+      bare = true;
+    } else if (line === "detached") {
+      detached = true;
+    }
+  }
+
+  if (path === null) {
+    throw new Error(
+      `unexpected 'git worktree list --porcelain -z' record: ${lines.join(" | ")}`,
+    );
+  }
+  return { path, headSha, branch, bare, detached };
+}
+
+/**
+ * `repoDir`の`git worktree list --porcelain -z`を読む。
+ * -zはgit 2.36以上が要る。失敗したときと、出力が途中で切れたときは例外を投げる。
+ */
 export async function listWorktrees(opts: {
   readonly run: CommandRunner;
   readonly repoDir: string;
@@ -1848,7 +1966,7 @@ export async function listWorktrees(opts: {
   readonly path?: string;
 }): Promise<WorktreeEntry[]> {
   const result = await opts.run(
-    buildGitArgv(["worktree", "list", "--porcelain"]),
+    buildGitArgv(["worktree", "list", "--porcelain", "-z"]),
     {
       cwd: opts.repoDir,
       env: localGitEnv(opts.home, opts.path),
@@ -1857,6 +1975,7 @@ export async function listWorktrees(opts: {
   if (result.exitCode !== 0) {
     throw gitError("git worktree list failed", result);
   }
+  assertOutputComplete("git worktree list", result);
   return parseWorktreeListPorcelain(result.stdout);
 }
 
@@ -2224,12 +2343,8 @@ export async function createGtrWorktree(
         ),
         {
           cwd: opts.repoDir,
-          // `core.symlinks=false`は`-c`ではなく環境変数で渡す
-          // (`gitConfigEnvOverrides`を参照。`gtr`はcore gitではない外部のラッパー)。
-          env: {
-            ...networkGitEnv(opts.ghToken, opts.home, opts.path),
-            ...gitConfigEnvOverrides({ "core.symlinks": "false" }),
-          },
+          // `buildGitArgv`の`-c`は、環境変数`GIT_CONFIG_PARAMETERS`で`git-gtr`の子のgitにも渡る。
+          env: networkGitEnv(opts.ghToken, opts.home, opts.path),
         },
       );
       if (result.exitCode !== 0) {
@@ -2446,7 +2561,8 @@ function isNonFastForwardRejection(stderr: string): boolean {
 const CLAUDE_COAUTHOR_TRAILER =
   "Co-Authored-By: Claude <noreply@anthropic.com>";
 
-function generatedByTrailer(instanceName: string): string {
+/** Factoryが作るコミットの末尾に付ける、生成元を示すトレーラーの行。 */
+export function generatedByTrailer(instanceName: string): string {
   return `Generated-By: Software Factory (${instanceName})`;
 }
 
@@ -2809,7 +2925,7 @@ function parseLsRemoteSymref(stdout: string): LsRemoteRefs {
  * - リモートの`HEAD`が`refs/heads/<baseBranch>`でない。
  * - リモートに`refs/heads/<baseBranch>`が無い。
  * - ローカルの追跡ref(`refs/remotes/origin/<baseBranch>`)が、リモートの既定のブランチの先頭と違う。
- * ローカルの`origin/HEAD`と追跡refは、隔離せずrootで動く検査コマンドが書き換えうるためである。
+ * ローカルの`origin/HEAD`と追跡refは、検査コマンドが別のuidで動き書けない前提が崩れても、書き換えを検出するためである。
  * `--prune`なしのfetchは、書き換えられた`origin/HEAD`を直さない。
  * 照合は、リモートにブランチがあるときもする。返す`baseSha`から準備が比較の基準を求めるので、
  * そのcommitがローカルにあり(追跡refと同じ)、検査コマンドに差し替えられていないことを確かめるためである。
@@ -3339,7 +3455,7 @@ const GITLEAKS_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const GITLEAKS_MAX_DIFF_BYTES = 32 * 1024 * 1024;
 
 const defaultCreateGitleaksConfigDir = async (): Promise<GitleaksConfigDir> => {
-  const dir = await mkdtemp(join(tmpdir(), "factory-gitleaks-"));
+  const dir = await mkdtemp(join(jobTmpBase(), "factory-gitleaks-"));
   try {
     await writeFile(
       join(dir, GITLEAKS_CONFIG_FILE),
@@ -3488,6 +3604,31 @@ export function dropRemovedDiffLines(diffText: string): string {
 }
 
 /**
+ * gitleaksの`stdin`のJSONのレポートを、検出1件につき`describe`が返す1行にして返す。
+ * 形の違う検出は件数をまとめた1行にする。一致した文字列は出さない。
+ * `stdout`がJSONの配列でなければ`null`を返す。
+ */
+function formatGitleaksFindings(
+  stdout: string,
+  describe: (finding: GitleaksFinding) => string,
+): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const lines = parsed.filter(isGitleaksFinding).map(describe);
+  const unexpected = parsed.length - lines.length;
+  if (unexpected > 0)
+    lines.push(
+      `- (${String(unexpected)} more finding(s) in an unexpected shape)`,
+    );
+  return lines.join("\n");
+}
+
+/**
  * gitleaksの`stdin`のJSONのレポートを、検出1件につき`- <rule>: <file>`の1行にして返す。
  * ファイルは、検出の行番号から`diffText`で引く(`mapDiffLineToFile`)。
  * 差分の中の行番号は読み手にとって意味が無いので出さない。
@@ -3498,25 +3639,11 @@ export function formatGitleaksReport(
   stdout: string,
   diffText: string,
 ): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
-  const lines = parsed
-    .filter(isGitleaksFinding)
-    .map(
-      (finding) =>
-        `- ${finding.RuleID}: ${mapDiffLineToFile(diffText, finding.StartLine) ?? "(unknown file)"}`,
-    );
-  const unexpected = parsed.length - lines.length;
-  if (unexpected > 0)
-    lines.push(
-      `- (${String(unexpected)} more finding(s) in an unexpected shape)`,
-    );
-  return lines.join("\n");
+  return formatGitleaksFindings(
+    stdout,
+    (finding) =>
+      `- ${finding.RuleID}: ${mapDiffLineToFile(diffText, finding.StartLine) ?? "(unknown file)"}`,
+  );
 }
 
 /**
@@ -3579,6 +3706,34 @@ export async function runGitleaksOnWorktree(
   if (isCappedOutput(diff.stdout))
     throw new Error("the staged diff exceeded the scan cap");
   const scanned = dropRemovedDiffLines(diff.stdout);
+  const result = await runGitleaksStdin(opts, scanned, (stdout) =>
+    formatGitleaksReport(stdout, scanned),
+  );
+  return { ...result, treeSha };
+}
+
+/** `runGitleaksStdin`が必要とする依存と設定。 */
+type GitleaksStdinOptions = {
+  readonly run: CommandRunner;
+  readonly home?: string;
+  readonly path?: string;
+  readonly timeoutMs: number;
+  readonly createConfigDir?: () => Promise<GitleaksConfigDir>;
+};
+
+/**
+ * `input`を、専用の一時ディレクトリで動く`gitleaks stdin`に渡す。
+ * 終了コード0なら`ok: true`、終了コード1で`formatReport`がレポートを読めれば、
+ * その整形結果(伏せ字済み)を持つ`ok: false`を返す。
+ * 出力の読み取りの打ち切り、上限で切れたレポート、読めないレポート、
+ * それ以外の終了コード、タイムアウトは例外を投げ、「漏洩なし」とはみなさない。
+ * 検査をリポジトリの設定から独立させるため、設定と無視ファイルは専用のディレクトリのものだけを読ませる。
+ */
+async function runGitleaksStdin(
+  opts: GitleaksStdinOptions,
+  input: string,
+  formatReport: (stdout: string) => string | null,
+): Promise<GitleaksResult> {
   const configDir = await (
     opts.createConfigDir ?? defaultCreateGitleaksConfigDir
   )();
@@ -3607,7 +3762,7 @@ export async function runGitleaksOnWorktree(
       {
         cwd: configDir.path,
         env: localGitEnv(opts.home, opts.path),
-        stdin: scanned,
+        stdin: input,
         timeoutMs: opts.timeoutMs,
         maxOutputBytes: GITLEAKS_MAX_OUTPUT_BYTES,
       },
@@ -3615,18 +3770,17 @@ export async function runGitleaksOnWorktree(
     if (result.timedOut)
       throw new Error(`gitleaks timed out after ${String(opts.timeoutMs)}ms`);
     assertOutputComplete("gitleaks", result);
-    if (result.exitCode === 0) return { ok: true, output: "", treeSha };
+    if (result.exitCode === 0) return { ok: true, output: "" };
     if (result.exitCode === GITLEAKS_LEAKS_EXIT_CODE) {
       if (isCappedOutput(result.stdout))
         throw new Error("gitleaks report exceeded the output cap");
-      const report = formatGitleaksReport(result.stdout, scanned);
+      const report = formatReport(result.stdout);
       if (report !== null) {
         return {
           ok: false,
           output: maskSecrets(
             report.length === 0 ? "gitleaks reported a leak" : report,
           ),
-          treeSha,
         };
       }
     }
@@ -3638,4 +3792,21 @@ export async function runGitleaksOnWorktree(
   } finally {
     await configDir.cleanup();
   }
+}
+
+/**
+ * 文字列`text`を、`runGitleaksOnWorktree`と同じ固定の設定の`gitleaks stdin`で検査する。
+ * 信頼できない入力(Actionsのログ、Claudeが書いた文)をプロンプトや投稿に使う前の検査に使う。
+ * 終了コード0なら`ok: true`を返す。終了コード1でJSONのレポートがあれば、
+ * 検出1件につき`- <rule>`の1行(一致した文字列は含まない)の`ok: false`を返す。
+ * 検査できなかったとき(タイムアウト、読み取りの打ち切り、上限で切れたレポート、
+ * 想定外の終了コード)は例外を投げる。呼び出し側は、例外を「検出あり」として扱う(fail-closed)。
+ */
+export async function runGitleaksOnText(
+  opts: GitleaksStdinOptions,
+  text: string,
+): Promise<GitleaksResult> {
+  return runGitleaksStdin(opts, text, (stdout) =>
+    formatGitleaksFindings(stdout, (finding) => `- ${finding.RuleID}`),
+  );
 }

@@ -648,7 +648,7 @@ else
 fi
 
 # --- 手順13: ローカルのsyncの状態をpushする ------------------------------------
-# バンドルがraw appに対して走らせるnpmにも、依存のinstall scriptを動かさせない。
+# `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさせない。
 NPM_CONFIG_IGNORE_SCRIPTS=true run_wmill sync push --yes --keep-deleted >&2
 log "sync push complete"
 

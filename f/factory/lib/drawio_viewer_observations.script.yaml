@@ -1,0 +1,9 @@
+summary: '[LIB] draw.ioのリリースの観測の記録'
+description: 内部ライブラリです。直接実行するものではありません。リリースのタグを最初に見たcommitと時刻を記録します。
+lock: '!inline f/factory/lib/drawio_viewer_observations.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

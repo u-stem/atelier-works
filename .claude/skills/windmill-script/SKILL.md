@@ -28,7 +28,7 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 
 - このリポジトリのscriptは、`child_process`や`fs`で`git` / `gh` / `claude` / `wmill`をサブプロセスとして起動する。そのため、native runtime(`//native`の指定)は使わない。
 - 管理スキルがnativeを推奨していても、このリポジトリでは通常のbun runtimeを使う。先頭に`//native`を書かない。
-- `windmill_worker_native`コンテナは、Appの軽量なrunnableのような別の用途のために残っている。factoryのscriptは、そこでは動かさない前提で書く。
+- `windmill_worker_native`コンテナは、nativeのジョブのために残っている。factoryのscriptは、そこでは動かさない前提で書く。
 
 ## シークレットの扱い
 
@@ -112,8 +112,8 @@ function isClaudeResult(value: unknown): value is ClaudeResult {
 - 実装者(implementer)は、lockのバージョンの変化(差分)を、レビューを依頼する前に報告する。
 - libの`.script.yaml`と`.lock`も、生成物としてコミットする。
 - デプロイは`mise run push`で行う。内部では`wmill sync push --yes --keep-deleted`を実行する。
-- `--keep-deleted`は、UIで作成途中のAppのような、リポジトリに未反映のリモートの項目を誤って消さないために付ける。
-- リモートの項目を自動で削除しない。削除が必要な場合は、人が個別に判断して行う。通常の`push`タスクには削除を含めない。
+- `--keep-deleted`は、UIで作成途中のものなど、リポジトリに未反映のリモートの項目を誤って消さないために付ける。
+- リモートの項目を自動で削除しない。削除が必要な場合は、人が`mise run push:prune`で行う。通常の`push`タスクには削除を含めない。
 
 ## 外部サービスの契約と実装上の注意
 
@@ -203,7 +203,7 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 
 - 成功すると、stdoutにTAB区切りの次の3行が出る: `path\t<worktree のディレクトリ>`、`branch\t<ブランチ名>`、`hook_status\tnone`。
 - `origin`リモートの無いリポジトリでは、`fatal: invalid reference: origin/main`を出してexit code 1で終わる。対象のリポジトリに`origin`があることを前提にする。
-- worktreeの一覧は`git worktree list --porcelain`で確かめる。`git gtr`独自のリスト機能には頼らない。
+- worktreeの一覧は`git worktree list --porcelain -z`(NUL区切り、git 2.36以上)で確かめる。`git gtr`独自のリスト機能には頼らない。
 
 ### GitHub CLIのAPI呼び出し
 
@@ -229,6 +229,7 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 
 - `pipeline_request_approval`は`pending`行を記録して、すぐにフローを終える。以降、フローは待機しない。
 - 人がConsoleから承認か却下をすると、`approval_decide`が決定を`approval_requests`に記録する。記録には、`decideApprovalRequestIfPending`(`WHERE status = 'pending'`の楽観ロック)を使う。
+- 要件定義を承認するときは、記録の前に、現在のIssueが取り込み時点と同じかを確かめる。`approval_decide`の中で、`github_token`を`Authorization`ヘッダだけに載せ、GitHubのREST APIを`fetch`で読む。別のscriptに頼むと、defaultのworkerの待ち行列に並ぶ間、Console用workerの枠を塞ぐためである。
 - 続けて`approval_decide`は、`kind`に応じたapplyスクリプトを`wmill.runScriptByPathAsync`で起動する。実際の反映はapplyスクリプトが行う。
   - `requirements`: `steps/requirements_apply`
   - `issue_proposal`: `steps/issue_proposal_apply`

@@ -8,10 +8,19 @@
 // 外すラベルも付ける状態ラベルも無い。
 
 import { describe, expect, test } from "bun:test";
+import { DEPENDABOT_FLOW_PATH } from "../../f/factory/lib/dependabot_flow_support.ts";
+import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
+import type { FailureRecord, WorkItem } from "../../f/factory/lib/types.ts";
 import {
+  type FlowFailureDeps,
+  type FlowFailureInput,
   failureWorkItemRef,
+  handleFlowFailure,
   shouldMarkFailed,
+  UNKNOWN_INSTANCE_NAME,
 } from "../../f/factory/on_error_flow.ts";
+import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const IMPLEMENT = "f/factory/implement";
 const PIPELINE = "f/factory/pipeline";
@@ -69,5 +78,287 @@ describe("failureWorkItemRef", () => {
 
   test("returns null when the lookup found no row (avoids the FK violation)", () => {
     expect(failureWorkItemRef(null, 999999)).toBeNull();
+  });
+});
+
+// ---- handleFlowFailure ----
+// 失敗の記録、作業項目の`failed`への遷移、通知を、注入した偽の依存で確かめる。
+
+const DATE = new Date("2026-10-12T00:00:00Z");
+const ROOT_JOB = "0191f1a2-0000-7000-8000-000000000001";
+const ERROR_MESSAGE =
+  "dependabot_finish: assess input differs from the prepare result";
+
+function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
+  return {
+    id: 7,
+    cycle: 1,
+    source: "issue",
+    kind: "dependabot",
+    owner: "acme",
+    repo: "widgets",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 12,
+    title: null,
+    body: null,
+    status: "picked",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: ROOT_JOB,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: "a".repeat(40),
+    last_review_id: null,
+    last_comment_id: null,
+    last_review_comment_id: null,
+    observed_review_id: null,
+    observed_comment_id: null,
+    observed_review_comment_id: null,
+    fix_round: 0,
+    parent_work_item_id: null,
+    branch: null,
+    pr_url: null,
+    ci_check_id: null,
+    created_at: DATE,
+    updated_at: DATE,
+    ...overrides,
+  };
+}
+
+type StatusCall = {
+  readonly id: number;
+  readonly from: string;
+  readonly to: string;
+  readonly flowJobId: string | null;
+  readonly note: string;
+};
+
+type FakeFailureWorld = {
+  readonly item?: WorkItem | null;
+  readonly instanceName?: () => Promise<string>;
+  readonly updateStatus?: () => Promise<boolean>;
+  readonly webhookUrl?: string;
+};
+
+function fakeFailureDeps(world: FakeFailureWorld = {}) {
+  const statusCalls: StatusCall[] = [];
+  const failures: FailureRecord[] = [];
+  const events: NotifyEvent[] = [];
+  const silent: Logger = { info: () => {}, warn: () => {}, error: () => {} };
+  const deps: FlowFailureDeps = {
+    getWorkItem: async () =>
+      world.item === undefined ? workItem() : world.item,
+    recordFailure: async (record) => {
+      failures.push(record);
+    },
+    updateStatusIfLeaseHolder: async (id, from, to, flowJobId, note) => {
+      statusCalls.push({ id, from, to, flowJobId, note });
+      return world.updateStatus === undefined ? true : world.updateStatus();
+    },
+    readInstanceName: world.instanceName ?? (async () => "test-instance"),
+    readWebhookUrl: async () => world.webhookUrl ?? "https://discord.example/x",
+    notify: async (_url, event) => {
+      events.push(event);
+    },
+    log: silent,
+  };
+  return { deps, statusCalls, failures, events };
+}
+
+function failureInput(
+  overrides: Partial<FlowFailureInput> = {},
+): FlowFailureInput {
+  return {
+    error: { message: ERROR_MESSAGE, step_id: "dependabot_finish" },
+    workItemId: 7,
+    path: DEPENDABOT_FLOW_PATH,
+    jobId: undefined,
+    rootJobId: ROOT_JOB,
+    currentJobId: null,
+    ...overrides,
+  };
+}
+
+/** 送った通知のうち、`job_failed`の最初の1件を返す。 */
+function jobFailed(
+  events: readonly NotifyEvent[],
+): Extract<NotifyEvent, { kind: "job_failed" }> | undefined {
+  for (const event of events) {
+    if (event.kind === "job_failed") return event;
+  }
+  return undefined;
+}
+
+describe("handleFlowFailure for the dependabot flow", () => {
+  test("marks a picked work item failed under this run's lease", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(fake.statusCalls).toEqual([
+      {
+        id: 7,
+        from: "picked",
+        to: "failed",
+        flowJobId: ROOT_JOB,
+        note: ERROR_MESSAGE,
+      },
+    ]);
+  });
+
+  test("does not touch a work item that a step already closed", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ status: "reviewed" }) });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("does not mark a work item of another kind failed", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({ kind: "pr_fix", status: "fixing" }),
+    });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(fake.statusCalls).toHaveLength(0);
+  });
+
+  test("records the failure against the work item", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(fake.failures).toEqual([
+      {
+        work_item_id: 7,
+        flow_path: DEPENDABOT_FLOW_PATH,
+        job_id: ROOT_JOB,
+        step: "dependabot_finish",
+        error: ERROR_MESSAGE,
+      },
+    ]);
+  });
+
+  test("notifies the failure of the dependabot flow", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.flow_path).toBe(DEPENDABOT_FLOW_PATH);
+  });
+
+  test("gives the dependabot next action in the notification", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.next_action).toBe(
+      nextActionFor(ERROR_MESSAGE, "dependabot"),
+    );
+  });
+
+  test("never points to retry_work_item in the notification", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.next_action).not.toContain(
+      "retry_work_item",
+    );
+  });
+
+  test("names the pull request of the work item in the notification", async () => {
+    const fake = fakeFailureDeps();
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toEqual({
+      owner: "acme",
+      repo: "widgets",
+      number: 12,
+    });
+  });
+
+  test("names no pull request when the work item cannot be found", async () => {
+    const fake = fakeFailureDeps({ item: null });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
+  test("names no pull request when the work item has none", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ pr_number: null }) });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
+  test("names no pull request when the owner is not a GitHub name", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ owner: "../x" }) });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
+  test("still marks the work item failed when the config cannot be read", async () => {
+    const fake = fakeFailureDeps({
+      instanceName: async () => {
+        throw new Error("factory_config is invalid");
+      },
+    });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(fake.statusCalls.map((call) => call.to)).toEqual(["failed"]);
+  });
+
+  test("still notifies when the config cannot be read", async () => {
+    const fake = fakeFailureDeps({
+      instanceName: async () => {
+        throw new Error("factory_config is invalid");
+      },
+    });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)?.instance_name).toBe(UNKNOWN_INSTANCE_NAME);
+  });
+
+  test("still notifies when marking the work item failed throws", async () => {
+    const fake = fakeFailureDeps({
+      updateStatus: async () => {
+        throw new Error("db down");
+      },
+    });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(jobFailed(fake.events)).toBeDefined();
+  });
+
+  test("does not notify when the webhook url is empty", async () => {
+    const fake = fakeFailureDeps({ webhookUrl: "" });
+    await handleFlowFailure(fake.deps, failureInput());
+    expect(fake.events).toHaveLength(0);
+  });
+});
+
+describe("handleFlowFailure for other flows", () => {
+  test("gives no next action for a flow without its own rule", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ kind: "pr_fix" }) });
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({ path: "f/factory/pr_fix" }),
+    );
+    expect(jobFailed(fake.events)?.next_action).toBeUndefined();
+  });
+
+  test("names no pull request for a flow without its own rule", async () => {
+    const fake = fakeFailureDeps({ item: workItem({ kind: "pr_fix" }) });
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({ path: "f/factory/pr_fix" }),
+    );
+    expect(jobFailed(fake.events)?.pr).toBeUndefined();
+  });
+
+  test("marks an item failed without checking its kind", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({ kind: "pr_fix", status: "fixing" }),
+    });
+    await handleFlowFailure(
+      fake.deps,
+      failureInput({ path: "f/factory/pr_fix" }),
+    );
+    expect(fake.statusCalls.map((call) => call.to)).toEqual(["failed"]);
+  });
+
+  test("does not mark a pipeline failed while no flow_job_id is recorded", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({
+        kind: "issue",
+        status: "requirements_generating",
+        flow_job_id: null,
+      }),
+    });
+    await handleFlowFailure(fake.deps, failureInput({ path: PIPELINE }));
+    expect(fake.statusCalls).toHaveLength(0);
   });
 });

@@ -3,15 +3,13 @@
 // リース判定の純関数もここに置く。
 // フロー自身のルートジョブIDを返す`rootFlowJobId`は、pipelineのステップもリースの値として使う。
 
+import { isJobId } from "./job_ids.ts";
 import { maskSecrets } from "./log.ts";
 import type { WorkItem } from "./types.ts";
 
-const JOB_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** `value`がWindmillのジョブID(UUID。大文字と小文字は区別しない)の形ならtrueを返す。 */
 export function isFlowJobId(value: string): boolean {
-  return JOB_ID_PATTERN.test(value);
+  return isJobId(value);
 }
 
 /**
@@ -171,7 +169,7 @@ async function attempt(
  *   移行したかどうか分からないので、`needs_human`へは移さない。
  * - フローの起動が例外を投げるか、戻り値がジョブIDでない場合は、
  *   リースが空のときだけ`needs_human`へ移し、`job_failures`への記録
- *   (ConsoleのFailuresタブから再実行できる)、noticeの追加、Discordへの通知を行い、`launch_failed`を返す。
+ *   (Consoleの要対応から再実行できる)、noticeの追加、Discordへの通知を行い、`launch_failed`を返す。
  *   `needs_human`への移行が`false`を返すとき(フローが既にリースを取っている、または別の処理が動かした)は、
  *   フローが動いているので何も残さず`flow_holds_lease`を返す。
  *   移行自体が例外を投げたときは、フローが動いている確証がないので、人に知らせて`launch_failed`を返す。

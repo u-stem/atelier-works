@@ -12,6 +12,25 @@
         }
 }
 
+# draw.ioの図を描くページ(/console/drawio.html)だけに付けるヘッダー。
+# 不透明なオリジンのsandbox iframeの中で、同梱のビューアが図のXMLを描く。
+# 外への取得は、scriptも含めてすべて拒否する。frame-ancestorsは、Console自身のページからの埋め込みだけを許す。
+# sandboxの文書は不透明なオリジンになり、'self'に一致しないので、script-srcと同じく、明示のオリジンで書く。
+# sandboxは、親のiframeを経ずに直接開かれても、不透明なオリジンで動かすためである。
+# scriptは/console/drawio/の同梱のファイル(ビューアと受け口)だけにする。
+# Console本体のCSPは/console/assets/しか許さないので、本体のページからは、このscriptを読めない。
+# 本体にHTMLが注入されても、信頼されたオリジンでビューアを動かす足場にならないようにするためである。
+# 不透明なオリジンでは'self'が使えないので、console_headersと同じく、ブラウザが使ったオリジンをplaceholderで入れる。
+(drawio_headers) {
+        header {
+                Content-Security-Policy "default-src 'none'; script-src {http.request.scheme}://{http.request.hostport}/console/drawio/; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors {http.request.scheme}://{http.request.hostport}; sandbox allow-scripts"
+                X-Content-Type-Options "nosniff"
+                Referrer-Policy "no-referrer"
+                # frame-ancestorsを解釈するブラウザでは、そちらが優先される。これは、解釈しない古いブラウザ向けの備えである。
+                X-Frame-Options "SAMEORIGIN"
+        }
+}
+
 # CSPはパスの`%2f`を区切りとみなさないが、Caddyは区切りに戻してから振り分ける。
 # `/console/assets/..%2f...`がscript-srcを通ったまま別のファイルを指さないよう、
 # 生のパスに符号化した区切り(`%2f`と`%5c`)があれば400にする。
@@ -45,12 +64,69 @@
                 header Sec-Fetch-Site same-site
         }
 
+        # Sec-Fetch-Siteを送らない古いブラウザでも、他のサイトからAPIを呼ばせない。
+        # Originがあり、ブラウザが開いたホスト名とポートのオリジンと違う要求を止める。
+        # スキームは、httpとhttpsのどちらも許す(前段でTLSを終端する公開に備える)。
+        # 前段のプロキシは、ブラウザが使ったHostを保つこと。
+        # Originを送らないCLIと、同じオリジンのGETは通す。Originがnullの要求(sandboxのiframeなど)は止める。
+        # 許可するホストを固定の一覧にすると、WM_HTTP_PORTを変えたときに黙って壊れる。
+        @cross_origin_api {
+                path /api/*
+                expression `{http.request.header.Origin} != "" && {http.request.header.Origin} != "http://" + {http.request.hostport} && {http.request.header.Origin} != "https://" + {http.request.hostport}`
+        }
+
+        # GETなのに副作用のあるAPIは、fetchとXHR(Sec-Fetch-Destがempty)からしか呼ばせない。
+        # 同じオリジンの<img>やリンクは、Sec-Fetch-Site: same-originでOriginも付かず、
+        # 上の2つの規則を通り抜けて、Cookieの持ち主の権限でジョブを起動できるためである。
+        # ジョブを起動するrun_wait_resultとrun_and_stream、Slack/Teamsへ送るapproval、S3のファイルを動かすmove_s3_fileを止める。
+        # 作業スペースの部分は`/`をまたいで一致させ、`/`の重なりも許す。余分に止めても害は無い。
+        # <a download>はSec-Fetch-Destがemptyでも、Sec-Fetch-Modeがnavigateになるので、これも止める。
+        # Sec-Fetch-Destが無い古いブラウザやHTTPで公開したブラウザは、Cookieを持つときだけ止める。
+        # CLIはSec-Fetch-*もCookieも送らないので通る。
+        # 署名付きの承認リンク(jobs_u/resume、jobs_u/cancel)はメールから開くので、対象にしない。
+        @side_effect_get_api {
+                method GET HEAD
+                path_regexp (?i)^/+api/+w/.+/(jobs/+(run_wait_result|run_and_stream|slack_approval|teams_approval)|job_helpers/+move_s3_file)(/|$)
+                expression `({http.request.header.Sec-Fetch-Dest} != "empty" && ({http.request.header.Sec-Fetch-Dest} != "" || {http.request.header.Cookie} != "")) || {http.request.header.Sec-Fetch-Mode} == "navigate"`
+        }
+
+        # ページの移動(navigate)で送られる書き込みを止める。
+        # 同じオリジンに注入された<form method=post>は、Sec-Fetch-Site: same-originでOriginも一致するので、
+        # 上の規則を通り抜ける。ConsoleとWindmillのUIのAPI呼び出しはfetchで、Sec-Fetch-Modeはcorsかsame-originになる。
+        # GETとHEADは止めない。ナビゲーションで開く読み取りの導線(ダウンロード、OAuth、署名付きの承認リンク)があるためで、
+        # 副作用のあるGETは上の規則が止める。
+        # Sec-Fetch-Modeが無い古いブラウザやHTTPで公開したブラウザは、止めない。
+        # 止めるとfetchの書き込みも巻き込み、UIが動かなくなる。
+        @navigate_write_api {
+                path /api/*
+                not {
+                        method GET HEAD
+                }
+                header Sec-Fetch-Mode navigate
+                header Sec-Fetch-Mode nested-navigate
+        }
+
+        # 旧Console(Windmillのraw app)のURLと、その配下。
+        # 過去のDiscordの通知、Issueのコメント、PRの本文に残る旧Consoleのリンクを、新しいConsoleの入口に飛ばす。
+        # `(?i)`と`/+`は、大文字小文字と重なった`/`の違いで、飛ばし損ねないためである。
+        @legacy_console path_regexp (?i)^/+apps(_raw)?/+get/+f/+factory/+factory_console(/.*)?$
+
         # Caddyはhandleをmatcherの種類で並べ替えるので、routeで書いた順に評価させる。
-        # Consoleの経路と@console_rawを、どのreverse_proxyよりも先に置く。
+        # 旧Consoleの転送、Consoleの経路、@console_rawを、どのreverse_proxyよりも先に置く。
         route {
+                # 行き先は固定の/console/にする。旧URLのパスとクエリから行き先を作らないので、
+                # オープンリダイレクトにならない。#requirements/<id>のようなフラグメントはブラウザが保ち、
+                # 新しいConsoleが読み替える。一時的な転送(302)にするのは、
+                # ブラウザに転送を覚えさせず、戻す(Caddyfileを戻す)ときに旧Consoleへ届かなくなるのを防ぐため。
+                handle @legacy_console {
+                        header Cache-Control "no-store"
+                        redir * /console/ 302
+                }
+
                 handle /console {
                         import console_headers
-                        redir * /console/ 308
+                        # ?approval=<id>などのクエリを保つ。クエリが無いときは?を付けない。
+                        redir * /console/{?query} 308
                 }
 
                 # console_fetcherの状態。開いたままのタブが、版の取り下げを確かめるために読む。
@@ -75,9 +151,35 @@
                         file_server
                 }
 
+                # draw.ioのビューアと受け口のscript。ハッシュ付きの名前なので長期のキャッシュにする。
+                # 今の版(current)のdrawio/を返し、無いファイルは404にする(handle_errorsが返す)。
+                # Consoleの本体より先に置く。Consoleのヘッダーは付けず、drawio_headersを付ける。
+                handle_path /console/drawio/* {
+                        import drawio_headers
+                        import console_reject_encoded_separator
+                        root * /srv/console/current/drawio
+                        header Cache-Control "public, max-age=31536000, immutable"
+                        file_server
+                }
+
+                # draw.ioの図を描くページ。Consoleの本体より先に置き、別のヘッダー(drawio_headers)を付ける。
+                # 今の版(current)のdrawio.htmlを返す。無ければ404にする(handle_errorsが返す)。
+                handle /console/drawio.html {
+                        import drawio_headers
+                        import console_reject_encoded_separator
+                        rewrite * /drawio.html
+                        root * /srv/console/current
+                        header Cache-Control "no-cache"
+                        file_server
+                }
+
                 # Consoleの本体。今の版(current)を返し、無いパスはSPAのindex.htmlに落とす。
                 # index.htmlは毎回確かめさせる(付け替えの後、すぐ新しい版を読ませるため)。
+                # draw.ioのページとscriptは、drawio_headers(sandbox付き)でしか返さない。
+                # 区切りを重ねた要求などでここに落ちても、Consoleのヘッダー(sandboxなし)では返さず、404にする。
                 handle_path /console/* {
+                        @drawio path /drawio.html /drawio.html/* /drawio /drawio/*
+                        error @drawio 404
                         import console_headers
                         import console_reject_encoded_separator
                         root * /srv/console/current
@@ -94,6 +196,18 @@
                 }
 
                 handle @cross_site_api {
+                        respond 403
+                }
+
+                handle @cross_origin_api {
+                        respond 403
+                }
+
+                handle @side_effect_get_api {
+                        respond 403
+                }
+
+                handle @navigate_write_api {
                         respond 403
                 }
 

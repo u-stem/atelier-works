@@ -14,6 +14,10 @@
       },
     },
   },
+  "overrides": {
+    "katex": "0.18.11",
+    "smol-toml": "1.9.0",
+  },
   "packages": {
     "@azu/format-text": ["@azu/format-text@1.0.2", "", {}, "sha512-Swi4N7Edy1Eqq82GxgEECXSSLyn6GOb5htRFPzBDdUkECGXtlf12ynO5oJSpWKPwCaUssOu7NfhDcCWpIC6Ywg=="],
 
@@ -237,7 +241,7 @@
 
     "comma-separated-tokens": ["comma-separated-tokens@1.0.8", "", {}, "sha512-GHuDRO12Sypu2cV70d1dkA2EUmXHgntrzbpvOB+Qy+49ypNfGgFQIC2fhhXbnyrJRynDCAARsT7Ou0M6hirpfw=="],
 
-    "commander": ["commander@8.3.0", "", {}, "sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww=="],
+    "commander": ["commander@15.0.0", "", {}, "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="],
 
     "commandpost": ["commandpost@1.4.0", "", {}, "sha512-aE2Y4MTFJ870NuB/+2z1cXBhSBBzRydVVjzhFC4gtenEhpnj15yu0qptWGJsO9YGrcPZ3ezX8AWb1VA391MKpQ=="],
 
@@ -483,7 +487,7 @@
 
     "jsonpointer": ["jsonpointer@5.0.1", "", {}, "sha512-p/nXbhSEcu3pZRdkW1OfJhpsVtW1gd4Wa1fnQc9YLiTfAjn0312eMKimbdIQzuZl9aa9xUGaRlP9T/CJE/ditQ=="],
 
-    "katex": ["katex@0.16.47", "", { "dependencies": { "commander": "^8.3.0" }, "bin": { "katex": "cli.js" } }, "sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg=="],
+    "katex": ["katex@0.18.11", "", { "dependencies": { "commander": "^15.0.0" }, "bin": { "katex": "cli.js" } }, "sha512-yvyz/2VMKqoho/35Hat5w37wIEdWJ5ElVMidTAlWrxr5uW4aBGsEpveTmKh18/zw08v/7lGswCPon4OhqmqrTA=="],
 
     "keyv": ["keyv@5.6.0", "", { "dependencies": { "@keyv/serialize": "^1.1.1" } }, "sha512-CYDD3SOtsHtyXeEORYRx2qBtpDJFjRTGXUtmNEMGyzYOKj1TE3tycdlho7kA1Ufx9OYWZzg52QFBGALTirzDSw=="],
 
@@ -745,7 +749,7 @@
 
     "slide": ["slide@1.1.6", "", {}, "sha512-NwrtjCg+lZoqhFU8fOwl4ay2ei8PaqCBOUV3/ektPY9trO1yQ1oXEfmHAhKArUVUr/hOHvy5f6AdP17dCM0zMw=="],
 
-    "smol-toml": ["smol-toml@1.8.0", "", {}, "sha512-kCZr2V3ch9i00x8zXRhjUNVcjG9ijES5dDudkXvUVCT5QlJNQWElSJdZqyPemffHoLNUYwOcou0Fy+ojN0uHSQ=="],
+    "smol-toml": ["smol-toml@1.9.0", "", {}, "sha512-hpd+HLON7HdZXqYchMM/+LaTTbdK0AU3NngIJ4KVyWbY9bfQqdL9cD+4yf6dUoU2Ap4VsU0JkQi6FxAI1B2mXQ=="],
 
     "space-separated-tokens": ["space-separated-tokens@1.1.5", "", {}, "sha512-q/JSVd1Lptzhf5bkYm4ob4iWPjx0KiRe3sRFBNrVqbJkFaBm5vbbowy1mymoPNLRa52+oadOhJ+K49wsSeSjTA=="],
 

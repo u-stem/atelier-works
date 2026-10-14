@@ -108,9 +108,8 @@ pushは親のセッションが、運用者の確認を経て行う。
 
 ## モデルを指定したsubagentが起動しないとき
 
-security-auditorとdevil-advocateは、定義でモデルを指定している(`fable`)。
-そのモデルで起動できなかったときは、起動のたびに`model: opus`を指定して起動し直す。
-それも起動できなければ、`model: sonnet`で起動する。
+design-reviewer、requirements-reviewer、security-auditor、devil-advocate、triageは、定義でモデルを指定している(`opus`)。
+そのモデルで起動できなかったときは、起動のたびに`model: sonnet`を指定して起動し直す。
 どのモデルで動かしたかを、完了の報告に載せる。
 ゲートを飛ばさない。
 
@@ -119,6 +118,9 @@ security-auditorとdevil-advocateは、定義でモデルを指定している(`
 - 指摘は、コードを読んで正しいかを確かめてから直す。
 - 誤った指摘は直さず、根拠を「決着した論点」に書いて次のラウンドに渡す。
 - 同じ指摘が2ラウンド続けて直らないときは、直し方ではなく前提を疑い、原因を調べ直す。
+- 同じ`[MUST]`の指摘か、devil-advocateの同じ致命的な反証が2ラウンド続けて直らず、判定役が直し方の問題と判定したときは、implementerを`model: opus`で起動し直す。
+  どのモデルで動かしたかを、完了の報告に載せる。
+  前提の問題と判定したときは、`rules.md`の「差し戻し先」に従って差し戻す。
 
 ## 完了の報告
 
@@ -151,3 +153,23 @@ security-auditorとdevil-advocateは、定義でモデルを指定している(`
 ```
 
 PRを作った後は、Factoryの`pr_review`(`factory:review`ラベル)が別のレビューとして加わる。
+
+## 終わった作業ツリーの片付け
+
+対話セッションのsubagentが作った作業ツリー(`.claude/worktrees/agent-*`)は、PRのマージ後に親が片付ける。
+Factoryが作る作業ツリーは、`cleanup_workspaces`が片付けるので対象にしない。
+
+- 親は、主の作業ツリーから実行する。
+  先に`git fetch origin`を実行し、`origin/main`を最新にする。
+- 対象は、次の3つを満たすものである。
+  - ブランチが`git branch --merged origin/main`の一覧にある。
+  - `git status --short`が空である。
+  - その作業ツリーを使うagentが残っていない。
+- `git worktree remove <パス>`で消し、続けて`git branch -d <ブランチ>`でローカルのブランチを消す。
+  `--force`、`git branch -D`、`rm -rf`は使わない。
+  未マージのコミットや、コミットしていない変更を失わないためである。
+- 次のものは消さずに残し、片付けを終えたときの親の報告に、消したものと並べて一覧で載せる。
+  - `--merged`の一覧に無いブランチ
+  - 変更が残っているもの
+  - `git worktree remove`か`git branch -d`が拒んだもの(ロックされた作業ツリーを含む)
+- リモートのブランチは、マージ時にGitHubが消す設定なので、手で消さない。

@@ -108,6 +108,126 @@ const rateLimitedByBodyFor = (seconds: number) => () =>
 
 const ok = () => jsonResponse(204, {});
 
+describe("buildEmbed host_action_required", () => {
+  const event: NotifyEvent = {
+    kind: "host_action_required",
+    instance_name: "local",
+    cause: "反映した版: abc。ホスト側の作業が要る変更を含みます",
+    next_action: "mise run upを実行する",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe(
+      "反映した版: abc。ホスト側の作業が要る変更を含みます",
+    );
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "mise run upを実行する",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("says the host needs work in the title", () => {
+    expect(buildEmbed(event).title).toBe("ホスト側の作業が必要です");
+  });
+});
+
+describe("buildEmbed job_failed", () => {
+  test("shows the next action as a field when the event has one", () => {
+    expect(
+      buildEmbed({ ...JOB_FAILED_EVENT, next_action: "PRを確認してください" })
+        .fields,
+    ).toContainEqual({ name: "次の操作", value: "PRを確認してください" });
+  });
+
+  test("links the pull request when the event names one", () => {
+    expect(
+      buildEmbed({
+        ...JOB_FAILED_EVENT,
+        pr: { owner: "acme", repo: "widgets", number: 12 },
+      }).url,
+    ).toBe("https://github.com/acme/widgets/pull/12");
+  });
+
+  test("shows the pull request as the target when the event names one", () => {
+    expect(
+      buildEmbed({
+        ...JOB_FAILED_EVENT,
+        pr: { owner: "acme", repo: "widgets", number: 12 },
+      }).fields,
+    ).toContainEqual({ name: "対象", value: "acme/widgets#12" });
+  });
+
+  test("has no link when the event names no pull request", () => {
+    expect(buildEmbed(JOB_FAILED_EVENT).url).toBeNull();
+  });
+
+  test("shows no target field when the event names no pull request", () => {
+    expect(
+      buildEmbed(JOB_FAILED_EVENT).fields.map((field) => field.name),
+    ).not.toContain("対象");
+  });
+
+  test("shows no next action field when the event has none", () => {
+    expect(
+      buildEmbed(JOB_FAILED_EVENT).fields.map((field) => field.name),
+    ).not.toContain("次の操作");
+  });
+});
+
+describe("buildEmbed main_ci_failed", () => {
+  const event: Extract<NotifyEvent, { kind: "main_ci_failed" }> = {
+    kind: "main_ci_failed",
+    instance_name: "local",
+    owner: "acme",
+    repo: "widgets",
+    sha7: "abc1234",
+    url: "https://github.com/acme/widgets/actions/runs/9",
+    next_action: "実行のログを確かめて、原因を直す",
+  };
+
+  test("names the repository and the commit in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "mainのCIが失敗しました: acme/widgets@abc1234",
+    );
+  });
+
+  test("links to the run", () => {
+    expect(buildEmbed(event).url).toBe(
+      "https://github.com/acme/widgets/actions/runs/9",
+    );
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "実行のログを確かめて、原因を直す",
+    });
+  });
+
+  test("includes the repository field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "リポジトリ",
+      value: "acme/widgets",
+    });
+  });
+
+  test("names the commit in the description", () => {
+    expect(buildEmbed(event).description).toBe(
+      "mainのコミットabc1234でCIが失敗しました。",
+    );
+  });
+});
+
 describe("buildEmbed console_worker_missing", () => {
   const event: NotifyEvent = {
     kind: "console_worker_missing",
@@ -134,8 +254,10 @@ describe("buildEmbed console_worker_missing", () => {
     });
   });
 
-  test("names the console worker in the title", () => {
-    expect(buildEmbed(event).title).toContain("Console用のworker");
+  test("says the worker does not take jobs in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "Console用のworkerがジョブを受けていません",
+    );
   });
 });
 
@@ -165,8 +287,10 @@ describe("buildEmbed console_worker_check_failed", () => {
     });
   });
 
-  test("says the check cannot be made in the title", () => {
-    expect(buildEmbed(event).title).toContain("確認できません");
+  test("says the worker's activity cannot be checked in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "Console用のworkerの動きを確かめられません",
+    );
   });
 });
 
@@ -246,6 +370,7 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.description).toBe("エージェント実行3件、$1.50消費。");
   });
@@ -261,10 +386,11 @@ describe("buildEmbed", () => {
       approved_count: 2,
       rejected_count: 1,
       cleanup: null,
+      worker_load: { kind: "no_record" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
-      value: "前日の掃除記録なし",
+      value: "その日の掃除記録なし",
     });
   });
 
@@ -285,13 +411,103 @@ describe("buildEmbed", () => {
         deployments_deleted: 5,
         notices_deleted: 2,
         info_notices_resolved: 0,
+        main_ci_runs_deleted: 0,
+        worker_samples_deleted: 0,
+        pr_ci_checks_deleted: 0,
         doc_dirs_deleted: 0,
       },
+      worker_load: { kind: "no_record" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
       value:
         "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
+    });
+  });
+
+  test("shows a 'no record' worker load field when there is no record", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value: "その日の記録なし(sample_worker_loadのスケジュールを確かめる)",
+    });
+  });
+
+  test("shows a 'read failed' worker load field when the summary could not be read", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "read_failed" },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value:
+        "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)",
+    });
+  });
+
+  test("summarizes the worker load in its own field when present", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: {
+        kind: "summary",
+        summary: {
+          sample_count: 700,
+          expected_count: 720,
+          lag_max_seconds: 5,
+          lag_over_count: 0,
+          lag_over_total_seconds: 0,
+          gap_count: 0,
+          gap_longest_seconds: null,
+          gap_longest_from: null,
+          gap_longest_to: null,
+          running_jobs_max: 1,
+          slots_max: 3,
+          mem_anon_max_bytes: 100 * 1024 * 1024,
+          mem_anon_max_ratio: 0.025,
+          mem_working_set_max_bytes: 200 * 1024 * 1024,
+          mem_oom_increase: 0,
+          mem_oom_kill_increase: 0,
+          max_wait_max_seconds: 0,
+        },
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "workerの負荷",
+      value: [
+        "記録700/720件(欠け3%)",
+        "遅れ: 最大5秒、30秒以上0件(計0秒)",
+        "空白: 4分超なし",
+        "他のジョブの枠の使用: 最大1件(記録の枠を除く、上限2)",
+        "メモリ: anon最大100MiB(上限の3%)、working set最大200MiB、OOMなし",
+        "待ちの最長: 0秒以上",
+      ].join("\n"),
     });
   });
 
@@ -345,11 +561,11 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Consoleの承認タブで承認または却下してください",
+      next_action: "Consoleの要対応で承認または却下してください",
     });
     expect(embed.fields).toContainEqual({
       name: "次の操作",
-      value: "Consoleの承認タブで承認または却下してください",
+      value: "Consoleの要対応で承認または却下してください",
     });
   });
 
@@ -362,7 +578,7 @@ describe("buildEmbed", () => {
       url: "https://github.com/octo-owner/atelier-works/issues/42",
       reason: "承認がタイムアウトしました",
       target: { kind: "issue", number: 42 },
-      next_action: "Consoleの承認タブで承認または却下してください",
+      next_action: "Consoleの要対応で承認または却下してください",
     });
     expect(embed.title).toBe("人による対応が必要です: Issue #42");
   });
@@ -463,11 +679,9 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+      inbox_url: "http://127.0.0.1:8080/console/?approval=9",
     });
-    expect(embed.url).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
-    );
+    expect(embed.url).toBe("http://127.0.0.1:8080/console/?approval=9");
   });
 
   test("still includes the issue url as a field on approval_requested", () => {
@@ -479,12 +693,28 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      inbox_url: "http://127.0.0.1:8080/apps/get/f/factory/factory_console",
+      inbox_url: "http://127.0.0.1:8080/console/?approval=9",
     });
     expect(embed.fields).toContainEqual({
       name: "Issue",
       value: "https://github.com/octo-owner/atelier-works/issues/42",
     });
+  });
+
+  test("links the intake_refreshed embed to the issue and asks for a check", () => {
+    const embed = buildEmbed({
+      kind: "intake_refreshed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      issue_number: 42,
+      issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
+      title: "Add feature",
+    });
+    expect([embed.url, embed.description]).toEqual([
+      "https://github.com/octo-owner/atelier-works/issues/42",
+      "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。Consoleの要対応で更新後の内容を確かめてから承認してください。",
+    ]);
   });
 
   test("sets the embed url to the Console deep link on requirements_approved", () => {
@@ -496,11 +726,10 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+      console_url: "http://127.0.0.1:8080/console/items/7/requirements",
     });
     expect(embed.url).toBe(
-      "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+      "http://127.0.0.1:8080/console/items/7/requirements",
     );
   });
 
@@ -513,8 +742,7 @@ describe("buildEmbed", () => {
       issue_number: 42,
       issue_url: "https://github.com/octo-owner/atelier-works/issues/42",
       title: "Add feature",
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+      console_url: "http://127.0.0.1:8080/console/items/7/requirements",
     });
     expect(embed.fields).toContainEqual({
       name: "Issue",
@@ -528,26 +756,24 @@ describe("buildEmbed", () => {
       instance_name: "local",
       period_label: "2026-09-22〜2026-09-28",
       proposal_count: 2,
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
+      console_url: "http://127.0.0.1:8080/console/reports/audit/12",
       work_item_id: 12,
     });
     expect(embed.fields.map((f) => f.name)).toContain("次の操作");
   });
 
-  test("audit_completed points to the 承認 tab of the Console", () => {
+  test("audit_completed points to the inbox of the Console", () => {
     const embed = buildEmbed({
       kind: "audit_completed",
       instance_name: "local",
       period_label: "2026-09-22〜2026-09-28",
       proposal_count: 2,
-      console_url:
-        "http://127.0.0.1:8080/apps/get/f/factory/factory_console#audit/12",
+      console_url: "http://127.0.0.1:8080/console/reports/audit/12",
       work_item_id: 12,
     });
     expect(embed.fields).toContainEqual({
       name: "次の操作",
-      value: "Consoleの承認タブで提案を承認または却下してください",
+      value: "Consoleの要対応で提案を承認または却下してください",
     });
   });
 

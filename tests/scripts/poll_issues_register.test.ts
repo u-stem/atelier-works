@@ -20,7 +20,7 @@ const CANDIDATE: IssueCandidate = {
   title: "Add a thing",
   body: "please add a thing",
   htmlUrl: "https://github.com/octo-owner/atelier-works/issues/12",
-  labelerAssociation: "OWNER",
+  labelerLogin: "octo-owner",
   hasActiveWorkItem: false,
 };
 

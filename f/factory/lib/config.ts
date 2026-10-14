@@ -3,9 +3,11 @@
 // 項目を後から足しても、
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
+import { JOB_TMP_MAX_AGE_SEC } from "./job_tmp.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
+  type FactoryOwnerKind,
   isBoolean,
   isNumber,
   isOneOf,
@@ -31,6 +33,12 @@ const LABELER_ASSOCIATIONS: readonly LabelerAssociation[] = [
 const REVIEW_POST_MODES: readonly ReviewPostMode[] = ["comment_only", "gated"];
 const OWNER_KINDS = ["user", "org"];
 /**
+ * `model`と`heavy_model`に許す形。`claude --model`の引数に渡すので、
+ * 先頭が`-`の値(オプションとして読まれる)や空白、シェルの特殊文字を通さない。
+ * `claude-opus-5-5`や`claude-opus-5-5[1m]`のような名前は通る。
+ */
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._[\]-]*$/;
+/**
  * `check_commands_by_repo`のキーを正規化した結果が従う形。
  * スキームとホストを含まず、スラッシュが1つだけの`owner/repo`。
  */
@@ -44,7 +52,10 @@ const OWNER_SLASH_REPO = /^[^/\s]+\/[^/\s]+$/;
 type DefaultableField =
   | "trigger_label"
   | "allowed_labeler_associations"
+  | "allowed_labeler_logins"
+  | "allowed_labeler_ids"
   | "model"
+  | "heavy_model"
   | "max_attempts"
   | "max_turns"
   | "max_budget_usd_per_run"
@@ -76,6 +87,13 @@ type DefaultableField =
   | "implement_flow_timeout_sec"
   | "implement_max_changed_files"
   | "implement_max_diff_lines"
+  | "dependabot_enabled"
+  | "dependabot_merge_enabled"
+  | "dependabot_min_published_days"
+  | "pr_ci_watch_enabled"
+  | "pr_ci_fix_enabled"
+  | "pr_ci_fix_max_rounds"
+  | "pr_ci_fix_enabled_since"
   | "check_commands_by_repo";
 
 /**
@@ -85,7 +103,10 @@ type DefaultableField =
 const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   trigger_label: "factory",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
-  model: "claude-opus-5-5",
+  allowed_labeler_logins: [],
+  allowed_labeler_ids: {},
+  model: "claude-sonnet-5-5",
+  heavy_model: "claude-opus-5-5",
   max_attempts: 3,
   max_turns: 40,
   max_budget_usd_per_run: 5,
@@ -126,22 +147,72 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   implement_flow_timeout_sec: 14400,
   implement_max_changed_files: 60,
   implement_max_diff_lines: 3000,
+  // dependabotの自動処理は既定で無効にし、リモートのリソースで有効にする。
+  dependabot_enabled: false,
+  // マージは、結果を人が確かめてから別に有効にする。無効の間は、マージ可の判定も人に回す。
+  dependabot_merge_enabled: false,
+  dependabot_min_published_days: 7,
+  // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
+  pr_ci_watch_enabled: true,
+  // CIの失敗を直す作業項目はPRにpushするので、既定で無効にし、リモートのリソースで有効にする。
+  pr_ci_fix_enabled: false,
+  pr_ci_fix_max_rounds: 2,
+  pr_ci_fix_enabled_since: null,
   check_commands_by_repo: {},
 };
 
-function isFactoryOwner(value: unknown): value is FactoryOwner {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    isString(value.name) &&
-    isString(value.kind) &&
-    OWNER_KINDS.includes(value.kind)
-  );
+/** `owners`の1要素の`kind`に使える値か。 */
+function isOwnerKind(value: unknown): value is FactoryOwnerKind {
+  return isString(value) && OWNER_KINDS.includes(value);
 }
 
-function isFactoryOwnerArray(value: unknown): value is FactoryOwner[] {
-  return Array.isArray(value) && value.every(isFactoryOwner);
+/**
+ * `owners`の1要素をパースする。形が違えば`null`を返す。
+ * `id`は、`null`、`undefined`、省略をどれも「id無し」として扱い、
+ * 結果には`id`のキーを持たせない。値があるときは、正の整数だけを許す。
+ */
+function parseFactoryOwner(value: unknown): FactoryOwner | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const { name, kind, id } = value;
+  if (!isString(name) || !isOwnerKind(kind)) {
+    return null;
+  }
+  if (id === undefined || id === null) {
+    return { name, kind };
+  }
+  if (!isNumber(id) || !Number.isInteger(id) || id <= 0) {
+    return null;
+  }
+  return { name, kind, id };
+}
+
+/**
+ * `owners`をパースする。
+ * 要素に1つでも形の違うものがあるか、名前が重複していれば`null`を返す。
+ * 名前の比較は大文字と小文字を区別しない(GitHubのログイン名と同じ)。
+ * `id`付きと`id`無しの同名が並ぶと、`id`の照合をすり抜けるため、重複を許さない。
+ */
+function parseFactoryOwners(value: unknown): FactoryOwner[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const owners: FactoryOwner[] = [];
+  const names = new Set<string>();
+  for (const item of value) {
+    const owner = parseFactoryOwner(item);
+    if (owner === null) {
+      return null;
+    }
+    const key = owner.name.toLowerCase();
+    if (names.has(key)) {
+      return null;
+    }
+    names.add(key);
+    owners.push(owner);
+  }
+  return owners;
 }
 
 function isLabelerAssociationArray(
@@ -155,6 +226,24 @@ function isLabelerAssociationArray(
 
 function isReviewPostMode(value: unknown): value is ReviewPostMode {
   return isOneOf(value, REVIEW_POST_MODES);
+}
+
+/**
+ * `stringField`の値が、`MODEL_NAME`の許可リストに合うことまで検証して返す。
+ * 合わなければ例外を投げる。
+ */
+function modelField(
+  raw: Record<string, unknown>,
+  field: "model" | "heavy_model",
+  fallback: string,
+): string {
+  const value = stringField(raw, field, fallback);
+  if (!MODEL_NAME.test(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must match ${String(MODEL_NAME)}`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -191,6 +280,38 @@ function numberField(
 }
 
 /**
+ * ジョブごとの一時ディレクトリの掃除は、この期限を過ぎたものを消す。
+ * ジョブの実行時間を決める設定がこれを超えるのは想定外なので、超える値は拒否する。
+ * 動いているジョブのディレクトリを守る一次の仕組みではなく、安全側の追加の歯止めである。
+ */
+function withinJobTmpAge(field: string, value: number): number {
+  if (value > JOB_TMP_MAX_AGE_SEC) {
+    throw new ConfigValidationError(
+      `"${field}" must not exceed ${String(JOB_TMP_MAX_AGE_SEC)} seconds`,
+    );
+  }
+  return value;
+}
+
+/**
+ * 任意の正の整数の項目を読む。`null`、`undefined`、省略は「値無し」として`undefined`を返す。
+ * 値があるときは正の整数だけを許す。
+ */
+function optionalPositiveIntegerField(
+  raw: Record<string, unknown>,
+  field: string,
+): number | undefined {
+  const value = raw[field];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isNumber(value) || !Number.isInteger(value) || value <= 0) {
+    throw new ConfigValidationError(`"${field}" must be a positive integer`);
+  }
+  return value;
+}
+
+/**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、正の整数でなければ例外を投げる。
  */
 function positiveIntegerField(
@@ -208,6 +329,86 @@ function positiveIntegerField(
   return value;
 }
 
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(?:Z|[+-](\d{2}):(\d{2}))$/;
+
+/**
+ * 秒まで書いたタイムゾーン付きのRFC 3339の日時か。
+ * `Date.parse`は存在しない日(2月30日)や24時を黙って繰り上げるので、成分を自分で確かめる。
+ */
+function isIsoDateTime(value: string): boolean {
+  const match = ISO_DATE_TIME.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const [year, month, day, hour, minute, second, offsetHour, offsetMinute] =
+    match.slice(1).map((part) => (part === undefined ? 0 : Number(part)));
+  if (
+    year === undefined ||
+    month === undefined ||
+    day === undefined ||
+    hour === undefined ||
+    minute === undefined ||
+    second === undefined ||
+    offsetHour === undefined ||
+    offsetMinute === undefined
+  ) {
+    return false;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day &&
+    hour <= 23 &&
+    minute <= 59 &&
+    second <= 59 &&
+    offsetHour <= 23 &&
+    offsetMinute <= 59
+  );
+}
+
+/**
+ * `raw[field]`を`Date`にして返す。値が無ければ`fallback`を返す。
+ * `null`は値無しとして`null`を返す。文字列は、秒まで書いたタイムゾーン付きの
+ * RFC 3339の日時だけを通す。それ以外は例外を投げる。
+ */
+function isoDateTimeOrNullField(
+  raw: Record<string, unknown>,
+  field: string,
+  fallback: Date | null,
+): Date | null {
+  const value = raw[field];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (!isString(value) || !isIsoDateTime(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must be an RFC 3339 date-time with seconds and a time zone, or null`,
+    );
+  }
+  return new Date(value);
+}
+
+/**
+ * `pr_ci_fix_max_rounds`の上限。直す作業項目はPRにpushするので、設定の書き損じで
+ * 回数が際限なく増えないようにする。
+ */
+const PR_CI_FIX_MAX_ROUNDS_LIMIT = 10;
+
+/** `value`が`limit`を超えるときは例外を投げる。 */
+function atMost(field: string, value: number, limit: number): number {
+  if (value > limit) {
+    throw new ConfigValidationError(
+      `"${field}" must not exceed ${String(limit)}`,
+    );
+  }
+  return value;
+}
+
 function stringArrayField(
   raw: Record<string, unknown>,
   field: string,
@@ -221,6 +422,92 @@ function stringArrayField(
     throw new ConfigValidationError(`"${field}" must be an array of strings`);
   }
   return value;
+}
+
+/**
+ * `allowed_labeler_logins`を返す。値が無ければ既定値を返す。
+ * `[bot]`で終わるログイン名はGitHub Appのアカウントで、第三者の入力に応じて
+ * ラベルを付ける自動化になりうる。そのアカウントが付けたラベルを許可すると、
+ * 付与者の確認が素通りになるため、例外を投げる。
+ */
+function labelerLoginsField(raw: Record<string, unknown>): string[] {
+  const logins = stringArrayField(
+    raw,
+    "allowed_labeler_logins",
+    DEFAULTS.allowed_labeler_logins,
+  );
+  for (const login of logins) {
+    if (login.toLowerCase().endsWith("[bot]")) {
+      throw new ConfigValidationError(
+        `"allowed_labeler_logins" must not contain an automation account: ${JSON.stringify(login)}`,
+      );
+    }
+  }
+  return logins;
+}
+
+/**
+ * `allowed_labeler_ids`を返す。値が無ければ既定値を返す。
+ * キーは許可するログイン名、値はそのアカウントのGitHubの数値IDである。
+ * 名前だけの照合では、改名の後に古い名前を取得した別人が許可されるため、IDでも照合させる。
+ * 次のときは例外を投げる。
+ * - オブジェクトでないとき、値が正の安全な整数でないとき。
+ * - キーが`[bot]`で終わるとき。`allowed_labeler_logins`と同じく、自動化のアカウントは許可しない。
+ * - キーが`logins`(`allowed_labeler_logins`)に含まれないとき。綴りの誤りで、
+ *   IDを設定したつもりのアカウントが名前だけの照合になるのを防ぐ。大文字小文字は区別しない。
+ * - 大文字小文字だけが違うキーが重なるとき。どちらのIDを使うかが決まらないため。
+ * 型アサーションなしで型を付けるため、エントリーを1つずつ詰め直す。
+ */
+function labelerIdsField(
+  raw: Record<string, unknown>,
+  logins: readonly string[],
+): Record<string, number> {
+  const field = "allowed_labeler_ids";
+  const value = raw[field];
+  if (value === undefined) {
+    return DEFAULTS.allowed_labeler_ids;
+  }
+  if (!isRecord(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must be an object of GitHub numeric IDs`,
+    );
+  }
+  const allowed = new Set(logins.map((login) => login.toLowerCase()));
+  const seen = new Set<string>();
+  const result: Record<string, number> = {};
+  for (const [key, id] of Object.entries(value)) {
+    const lower = key.toLowerCase();
+    if (lower.endsWith("[bot]")) {
+      throw new ConfigValidationError(
+        `"${field}" must not contain an automation account: ${JSON.stringify(key)}`,
+      );
+    }
+    if (!allowed.has(lower)) {
+      throw new ConfigValidationError(
+        `"${field}" key ${JSON.stringify(key)} must be listed in "allowed_labeler_logins"`,
+      );
+    }
+    if (seen.has(lower)) {
+      throw new ConfigValidationError(
+        `"${field}" must not contain keys that differ only in case: ${JSON.stringify(key)}`,
+      );
+    }
+    seen.add(lower);
+    if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
+      throw new ConfigValidationError(
+        `"${field}"[${JSON.stringify(key)}] must be a positive integer`,
+      );
+    }
+    // `__proto__`のキーは、代入では自身のプロパティにならず値が黙って落ちる。
+    // 落ちるとIDなしの設定に変わるので、定義で自身のプロパティにする。
+    Object.defineProperty(result, key, {
+      value: id,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return result;
 }
 
 /**
@@ -310,10 +597,28 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     throw new ConfigValidationError("resource value must be an object");
   }
 
-  const owners = raw.owners;
-  if (!isFactoryOwnerArray(owners)) {
+  const owners = parseFactoryOwners(raw.owners);
+  if (owners === null) {
     throw new ConfigValidationError(
-      '"owners" is required and must be an array of { name: string, kind: "user" | "org" }',
+      '"owners" is required and must be an array of { name: string, kind: "user" | "org", id?: positive integer } with unique names (case-insensitive)',
+    );
+  }
+
+  const factoryRepoId = optionalPositiveIntegerField(raw, "factory_repo_id");
+  const prCiFixEnabled = booleanField(
+    raw,
+    "pr_ci_fix_enabled",
+    DEFAULTS.pr_ci_fix_enabled,
+  );
+  const prCiFixEnabledSince = isoDateTimeOrNullField(
+    raw,
+    "pr_ci_fix_enabled_since",
+    DEFAULTS.pr_ci_fix_enabled_since,
+  );
+  // 起動を有効にしたのに時刻が無いと、有効にする前から残る失敗まで、一度に直しに行ってしまう。
+  if (prCiFixEnabled && prCiFixEnabledSince === null) {
+    throw new ConfigValidationError(
+      '"pr_ci_fix_enabled_since" is required when "pr_ci_fix_enabled" is true',
     );
   }
 
@@ -341,11 +646,16 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
             );
           })();
 
+  const allowedLabelerLogins = labelerLoginsField(raw);
+
   return {
     owners,
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
-    model: stringField(raw, "model", DEFAULTS.model),
+    allowed_labeler_logins: allowedLabelerLogins,
+    allowed_labeler_ids: labelerIdsField(raw, allowedLabelerLogins),
+    model: modelField(raw, "model", DEFAULTS.model),
+    heavy_model: modelField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),
     max_turns: numberField(raw, "max_turns", DEFAULTS.max_turns),
     max_budget_usd_per_run: numberField(
@@ -358,10 +668,9 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "daily_budget_usd",
       DEFAULTS.daily_budget_usd,
     ),
-    claude_timeout_sec: numberField(
-      raw,
+    claude_timeout_sec: withinJobTmpAge(
       "claude_timeout_sec",
-      DEFAULTS.claude_timeout_sec,
+      numberField(raw, "claude_timeout_sec", DEFAULTS.claude_timeout_sec),
     ),
     worktree_ttl_days: numberField(
       raw,
@@ -379,6 +688,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       DEFAULTS.retention_logs_days,
     ),
     factory_repo: requiredStringField(raw, "factory_repo"),
+    ...(factoryRepoId === undefined ? {} : { factory_repo_id: factoryRepoId }),
     factory_branch: stringField(raw, "factory_branch", DEFAULTS.factory_branch),
     instance_name: requiredStringField(raw, "instance_name"),
     windmill_public_url: stringField(
@@ -446,10 +756,13 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_budget_usd_per_run",
       DEFAULTS.implement_max_budget_usd_per_run,
     ),
-    implement_timeout_sec: positiveIntegerField(
-      raw,
+    implement_timeout_sec: withinJobTmpAge(
       "implement_timeout_sec",
-      DEFAULTS.implement_timeout_sec,
+      positiveIntegerField(
+        raw,
+        "implement_timeout_sec",
+        DEFAULTS.implement_timeout_sec,
+      ),
     ),
     implement_check_timeout_sec: positiveIntegerField(
       raw,
@@ -471,6 +784,37 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       "implement_max_diff_lines",
       DEFAULTS.implement_max_diff_lines,
     ),
+    dependabot_enabled: booleanField(
+      raw,
+      "dependabot_enabled",
+      DEFAULTS.dependabot_enabled,
+    ),
+    dependabot_merge_enabled: booleanField(
+      raw,
+      "dependabot_merge_enabled",
+      DEFAULTS.dependabot_merge_enabled,
+    ),
+    dependabot_min_published_days: positiveIntegerField(
+      raw,
+      "dependabot_min_published_days",
+      DEFAULTS.dependabot_min_published_days,
+    ),
+    pr_ci_watch_enabled: booleanField(
+      raw,
+      "pr_ci_watch_enabled",
+      DEFAULTS.pr_ci_watch_enabled,
+    ),
+    pr_ci_fix_enabled: prCiFixEnabled,
+    pr_ci_fix_max_rounds: atMost(
+      "pr_ci_fix_max_rounds",
+      positiveIntegerField(
+        raw,
+        "pr_ci_fix_max_rounds",
+        DEFAULTS.pr_ci_fix_max_rounds,
+      ),
+      PR_CI_FIX_MAX_ROUNDS_LIMIT,
+    ),
+    pr_ci_fix_enabled_since: prCiFixEnabledSince,
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
       DEFAULTS.check_commands_by_repo,
@@ -547,7 +891,7 @@ export function isRepoAllowed(
  * そのリポジトリを明示した`check_commands_by_repo`のエントリーだけを使い
  * (キーの照合は`checkCommandsFor`と同じ)、無ければ`[]`を返す。
  * `allowed_check_commands`は決して使わない。
- * 検査コマンドはClaudeが書いたコード(テストやソース)をworkerのrootで実行するため、
+ * 検査コマンドはClaudeが書いたコード(テストやソース)を、workerのコンテナの中で非特権のuidとして、コンテナの分離なしに実行するため、
  * リポジトリごとに名前を挙げて有効にさせる(docs/security.md)。
  */
 export function implementCheckCommandsFor(

@@ -5,26 +5,40 @@
 // GitHubのコメントやDiscordの通知を作るときに使う。
 
 import { describe, expect, test } from "bun:test";
-import { RUNNER_MAX_STOP_OVERHEAD_MS } from "../../f/factory/lib/workspace.ts";
+import { CheckRuntimeUnsafeError } from "../../f/factory/lib/check_sandbox.ts";
+import {
+  type CommandRunner,
+  RUNNER_MAX_STOP_OVERHEAD_MS,
+} from "../../f/factory/lib/workspace.ts";
 import {
   describeReason,
   earlyExitBase,
   evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
+  evaluateHumanOnlyBranchGuard,
   evaluateParentImplementingGuard,
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
+  evaluateSameRepoHeadGuard,
+  fetchPrFixHeadBranchState,
   nextActionFor,
   PR_COMMAND_STOP_OVERHEAD_SEC,
   prFixTimeoutMisfit,
+  shouldReadPrFixHeadState,
 } from "../../f/factory/steps/pr_workflow_support.ts";
+import { ghApiOk, ghApiStdout, ok } from "../lib/testSupport.ts";
 
 const SAFE_INPUT = {
   open: true,
   headRepoFullName: "octo-owner/atelier-works",
   baseRepoFullName: "octo-owner/atelier-works",
   draft: false,
-  baseProtected: false,
+  autoMergeEnabled: false,
+  headBranch: {
+    headProtected: false,
+    headHasRules: false,
+    headIsDefaultBranch: false,
+  },
 };
 
 describe("evaluatePrFixSafetyGuards", () => {
@@ -58,12 +72,126 @@ describe("evaluatePrFixSafetyGuards", () => {
     expect(result.ok).toBe(false);
   });
 
-  test("fails when the base branch is protected", () => {
+  test("fails when the head branch is protected", () => {
     const result = evaluatePrFixSafetyGuards({
       ...SAFE_INPUT,
-      baseProtected: true,
+      headBranch: {
+        headProtected: true,
+        headHasRules: false,
+        headIsDefaultBranch: false,
+      },
     });
-    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toBe("head branch is protected");
+  });
+
+  test("fails when the head branch is the default branch", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: {
+        headProtected: false,
+        headHasRules: false,
+        headIsDefaultBranch: true,
+      },
+    });
+    expect(!result.ok && result.reason).toBe(
+      "head branch is the default branch",
+    );
+  });
+
+  test("fails when only rules apply to the head branch", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: {
+        headProtected: false,
+        headHasRules: true,
+        headIsDefaultBranch: false,
+      },
+    });
+    expect(!result.ok && result.reason).toBe("head branch has rules");
+  });
+
+  test("reports the protected reason when the branch is protected and has rules", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: {
+        headProtected: true,
+        headHasRules: true,
+        headIsDefaultBranch: false,
+      },
+    });
+    expect(!result.ok && result.reason).toBe("head branch is protected");
+  });
+
+  test("fails when auto-merge is enabled on the PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      autoMergeEnabled: true,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "pull request has auto-merge enabled",
+    );
+  });
+
+  test("reports the draft reason before the auto-merge reason", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      draft: true,
+      autoMergeEnabled: true,
+    });
+    expect(!result.ok && result.reason).toBe("pull request is a draft");
+  });
+
+  test("reports the auto-merge reason before the unavailable state", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      autoMergeEnabled: true,
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "pull request has auto-merge enabled",
+    );
+  });
+
+  test("fails when the head branch state is unavailable for an open, same-repo, non-draft PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toBe(
+      "head branch state is unavailable",
+    );
+  });
+
+  test("reports the draft reason, not the unavailable state, for a draft PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      draft: true,
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toBe("pull request is a draft");
+  });
+
+  test("reports the fork reason, not the unavailable state, for a fork PR", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headRepoFullName: "someone-else/atelier-works",
+      headBranch: null,
+    });
+    expect(!result.ok && result.reason).toContain("fork PR");
+  });
+
+  test("reports the default-branch reason when the default branch is also protected", () => {
+    const result = evaluatePrFixSafetyGuards({
+      ...SAFE_INPUT,
+      headBranch: {
+        headProtected: true,
+        headHasRules: false,
+        headIsDefaultBranch: true,
+      },
+    });
+    expect(!result.ok && result.reason).toBe(
+      "head branch is the default branch",
+    );
   });
 
   test("reports the not-open reason first when multiple guards fail", () => {
@@ -73,6 +201,232 @@ describe("evaluatePrFixSafetyGuards", () => {
       draft: true,
     });
     expect(!result.ok && result.reason).toContain("open");
+  });
+});
+
+// リポジトリのAPIの応答を、問い合わせ先のendpointごとに返す偽のコマンド実行。
+// 保護されたbase(`main`)向けのPRのheadが、保護されていない普通のブランチである状況を作る。
+function createBranchApiRunner(headProtected: boolean, headRules = 0) {
+  const endpoints: string[] = [];
+  const run: CommandRunner = async (argv) => {
+    const endpoint = argv[2] ?? "";
+    endpoints.push(endpoint);
+    if (endpoint === "repos/acme/widgets") {
+      return ghApiOk({ default_branch: "main" });
+    }
+    if (endpoint.startsWith("repos/acme/widgets/rules/branches/")) {
+      return ghApiOk(Array.from({ length: headRules }, () => ({ type: "x" })));
+    }
+    if (endpoint === "repos/acme/widgets/branches/main") {
+      return ghApiOk({ protected: true });
+    }
+    return ghApiOk({ protected: headProtected });
+  };
+  return { run, endpoints };
+}
+
+describe("fetchPrFixHeadBranchState", () => {
+  test("reads the protection of the head branch, not the base branch", async () => {
+    const api = createBranchApiRunner(false);
+    await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(api.endpoints).toContain("repos/acme/widgets/branches/feature%2Fx");
+  });
+
+  test("never reads the base branch", async () => {
+    const api = createBranchApiRunner(false);
+    await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(api.endpoints).not.toContain("repos/acme/widgets/branches/main");
+  });
+
+  test("reports a protected head branch", async () => {
+    const api = createBranchApiRunner(true);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(state.headProtected).toBe(true);
+  });
+
+  test("reads the rules that apply to the head branch", async () => {
+    const api = createBranchApiRunner(false);
+    await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(api.endpoints).toContain(
+      "repos/acme/widgets/rules/branches/feature%2Fx",
+    );
+  });
+
+  test("reports a head branch that a ruleset applies to", async () => {
+    const api = createBranchApiRunner(false, 1);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "release/*",
+    );
+    expect(state.headHasRules).toBe(true);
+  });
+
+  test("propagates the error when the rules cannot be read", async () => {
+    const run: CommandRunner = async (argv) => {
+      const endpoint = argv[2] ?? "";
+      if (endpoint.startsWith("repos/acme/widgets/rules/branches/")) {
+        return ok(ghApiStdout(403, { message: "Resource not accessible" }));
+      }
+      if (endpoint === "repos/acme/widgets") {
+        return ghApiOk({ default_branch: "main" });
+      }
+      return ghApiOk({ protected: false });
+    };
+    await expect(
+      fetchPrFixHeadBranchState(
+        { run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        "feature/x",
+      ),
+    ).rejects.toBeInstanceOf(Error);
+  });
+
+  test("reports a head branch that no ruleset applies to", async () => {
+    const api = createBranchApiRunner(false, 0);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(state.headHasRules).toBe(false);
+  });
+
+  test("reports a head branch that is the default branch", async () => {
+    const api = createBranchApiRunner(true);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "main",
+    );
+    expect(state.headIsDefaultBranch).toBe(true);
+  });
+
+  test("reports a head branch that is not the default branch", async () => {
+    const api = createBranchApiRunner(false);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(state.headIsDefaultBranch).toBe(false);
+  });
+
+  test("lets a PR to the protected main through when its head is not protected", async () => {
+    const api = createBranchApiRunner(false);
+    const state = await fetchPrFixHeadBranchState(
+      { run: api.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      "feature/x",
+    );
+    expect(
+      evaluatePrFixSafetyGuards({ ...SAFE_INPUT, headBranch: state }),
+    ).toEqual({
+      ok: true,
+    });
+  });
+});
+
+describe("shouldReadPrFixHeadState", () => {
+  const SAME = "octo-owner/atelier-works";
+
+  test("is true for an open, non-draft PR from the same repository", () => {
+    expect(shouldReadPrFixHeadState(true, false, SAME, SAME)).toBe(true);
+  });
+
+  test("is false when the PR is not open", () => {
+    expect(shouldReadPrFixHeadState(false, false, SAME, SAME)).toBe(false);
+  });
+
+  test("is false when the PR is a draft", () => {
+    expect(shouldReadPrFixHeadState(true, true, SAME, SAME)).toBe(false);
+  });
+
+  test("is false when the head repository is a fork", () => {
+    expect(
+      shouldReadPrFixHeadState(true, false, "someone-else/atelier-works", SAME),
+    ).toBe(false);
+  });
+
+  test("is false when the head repository is unavailable", () => {
+    expect(shouldReadPrFixHeadState(true, false, null, SAME)).toBe(false);
+  });
+});
+
+describe("evaluateHumanOnlyBranchGuard", () => {
+  test("passes for an ordinary branch", () => {
+    expect(evaluateHumanOnlyBranchGuard("feature/x")).toEqual({ ok: true });
+  });
+
+  test("blocks a draw.io viewer pin update branch", () => {
+    expect(
+      evaluateHumanOnlyBranchGuard("factory/drawio-viewer-32.5.0").ok,
+    ).toBe(false);
+  });
+
+  test("explains that a person fixes it", () => {
+    const result = evaluateHumanOnlyBranchGuard("factory/drawio-viewer-32.5.0");
+    expect(!result.ok && result.reason).toContain("person only");
+  });
+
+  test("does not block an implementation branch", () => {
+    expect(evaluateHumanOnlyBranchGuard("factory/issue-7-wi-3")).toEqual({
+      ok: true,
+    });
+  });
+});
+
+describe("evaluateSameRepoHeadGuard", () => {
+  test("passes when the head repo is the base repo", () => {
+    const result = evaluateSameRepoHeadGuard(
+      "octo-owner/atelier-works",
+      "octo-owner/atelier-works",
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  test("fails when the head repo differs from the base repo", () => {
+    const result = evaluateSameRepoHeadGuard(
+      "someone-else/atelier-works",
+      "octo-owner/atelier-works",
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  test("fails when the head repo is unavailable", () => {
+    const result = evaluateSameRepoHeadGuard(null, "octo-owner/atelier-works");
+    expect(result.ok).toBe(false);
+  });
+
+  test("explains the fork in the reason", () => {
+    const result = evaluateSameRepoHeadGuard(null, "octo-owner/atelier-works");
+    expect(!result.ok && result.reason).toContain("fork PR");
   });
 });
 
@@ -88,6 +442,11 @@ describe("evaluateFixRoundGuard", () => {
   test("fails when fix_round exceeds the max", () => {
     const result = evaluateFixRoundGuard(4, 3);
     expect(result.ok).toBe(false);
+  });
+
+  test("passes a CI round whose fix_round exceeds the max", () => {
+    // CIの回はfix_roundを前の値のまま写すので、指摘修正が上限のPRでも止めない。
+    expect(evaluateFixRoundGuard(4, 3, true)).toEqual({ ok: true });
   });
 });
 
@@ -232,6 +591,42 @@ describe("describeReason", () => {
     expect(describeReason("pull request is a draft")).toBe("PRがドラフトです");
   });
 
+  test("translates the protected head branch reason", () => {
+    expect(describeReason("head branch is protected")).toBe(
+      "headブランチが保護されています",
+    );
+  });
+
+  test("translates the default head branch reason", () => {
+    expect(describeReason("head branch is the default branch")).toBe(
+      "headブランチがデフォルトブランチです",
+    );
+  });
+
+  test("still translates the base branch reason kept in earlier records", () => {
+    expect(describeReason("base branch is protected")).toBe(
+      "baseブランチが保護されています",
+    );
+  });
+
+  test("translates the unavailable head branch state reason", () => {
+    expect(describeReason("head branch state is unavailable")).toBe(
+      "headブランチの状態を読めませんでした",
+    );
+  });
+
+  test("translates the head branch rules reason", () => {
+    expect(describeReason("head branch has rules")).toBe(
+      "headブランチに適用されるrulesetのruleがあります",
+    );
+  });
+
+  test("translates the auto-merge reason", () => {
+    expect(describeReason("pull request has auto-merge enabled")).toBe(
+      "PRのauto-mergeが有効です",
+    );
+  });
+
   test("translates a dynamic fix-round-exhausted reason, keeping the numbers", () => {
     expect(describeReason("fix_round 4 exceeds max_fix_rounds 3")).toBe(
       "fix_round 4がmax_fix_rounds 3を超えました",
@@ -316,6 +711,36 @@ describe("nextActionFor", () => {
     );
   });
 
+  test("asks a person to fix the PR when the head branch is protected", () => {
+    expect(nextActionFor("head branch is protected")).toBe(
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+    );
+  });
+
+  test("asks a person to fix the PR when the head branch is the default branch", () => {
+    expect(nextActionFor("head branch is the default branch")).toBe(
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+    );
+  });
+
+  test("asks a person to fix the PR when rules apply to the head branch", () => {
+    expect(nextActionFor("head branch has rules")).toBe(
+      "Factoryは修正をpushしません。人が直すか、作業用のブランチからPRを作り直してください",
+    );
+  });
+
+  test("asks to disable auto-merge and relabel when auto-merge is enabled", () => {
+    expect(nextActionFor("pull request has auto-merge enabled")).toBe(
+      "PRのauto-mergeを無効にしてから、あらためて`factory:fix`ラベルを付けてください",
+    );
+  });
+
+  test("asks to rerun the same work item when the head branch state is unavailable", () => {
+    expect(nextActionFor("head branch state is unavailable")).toBe(
+      "Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
   test("tells the operator to reopen or withdraw when the PR is not open", () => {
     expect(nextActionFor("pull request is not open")).toBe(
       "PRを再オープンするか、この作業を取り下げてください",
@@ -334,7 +759,7 @@ describe("nextActionFor", () => {
 
   test("tells the operator to check the Inbox when approval timed out", () => {
     expect(nextActionFor("approval timed out")).toBe(
-      "Consoleの承認タブで承認または却下してください",
+      "Consoleの要対応で承認または却下してください",
     );
   });
 
@@ -346,13 +771,13 @@ describe("nextActionFor", () => {
 
   test("falls back to pointing at the Console for an unrecognized reason", () => {
     expect(nextActionFor("some future guard reason nobody mapped yet")).toBe(
-      "通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
   test("tells the operator to decide in the Inbox for an issue-proposal reason", () => {
     expect(nextActionFor("Issue化の提案が1件あります")).toBe(
-      "Consoleの承認タブで提案を承認または却下してください",
+      "Consoleの要対応で提案を承認または却下してください",
     );
   });
 
@@ -376,7 +801,12 @@ describe("earlyExitBase", () => {
     parent_work_item_id: null,
     attempt: 1,
     fix_round: 4,
+    ci_check_id: 9,
   };
+
+  test("keeps the CI check id so that pr_fix_finish knows it is a CI round", () => {
+    expect(earlyExitBase(workItem).ci_check_id).toBe(9);
+  });
 
   test("keeps the PR coordinates so pr_fix_finish can relabel the PR", () => {
     expect(earlyExitBase(workItem).pr_number).toBe(3);
@@ -695,7 +1125,7 @@ describe("nextActionFor (implement flow)", () => {
     expect(
       nextActionFor("implement flow job id could not be recorded: boom"),
     ).toBe(
-      "実装フローは動いているので、終わるのを待ち、Consoleのパイプラインタブで作業項目の状態を確認してください",
+      "実装フローは動いているので、終わるのを待ち、Consoleの作業項目で状態を確認してください",
     );
   });
 
@@ -920,7 +1350,7 @@ describe("nextActionFor (implement flow)", () => {
         "claude run failed (timeout): claude -p timed out after 5ms; implement flow deadline passed during round 1",
       ),
     ).toBe(
-      "通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -965,7 +1395,7 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
 
   test("keeps the generic action for a finish failure that is not a rate limit", () => {
     expect(nextActionFor("implement finish failed: HTTP 422")).toBe(
-      "通知の理由とConsoleの通知タブで原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+      "通知の理由とConsoleのシステム画面で原因を確かめ、取り除いてから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
     );
   });
 
@@ -973,5 +1403,71 @@ describe("describeReason / nextActionFor (GitHub rate limit)", () => {
     expect(nextActionFor(`failed to request reviewers: ${RATE_LIMIT}`)).toBe(
       "GitHubのレビュアー設定を確認し、必要なら再度`factory:fix`を付け直してください",
     );
+  });
+});
+
+describe("describeReason / nextActionFor (stale worker image)", () => {
+  const STALE =
+    "worker image is stale: run mise run up: /usr/bin/getfacl is missing, no factory-check-N user for uid 10001";
+
+  test("translates a stale worker image with what it lacks", () => {
+    expect(describeReason(STALE)).toBe(
+      "workerのイメージが古く、検査コマンドを非特権のユーザーで実行できません(/usr/bin/getfacl is missing, no factory-check-N user for uid 10001)",
+    );
+  });
+
+  test("asks to rebuild the image with mise run up and then rerun", () => {
+    expect(nextActionFor(STALE)).toBe(
+      "ホストのcheckoutでgit pullし、mise installとmise run upでworkerのイメージを作り直してください。作り直した後は、止まった作業項目が自動で再開します。自動の再開が3回の上限に達したときと、通知に版が載らないときだけ、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+});
+
+describe("describeReason / nextActionFor (a running worker unsafe for checks)", () => {
+  const RUNTIME = new CheckRuntimeUnsafeError([
+    "world-writable paths created at runtime: /tmp/open",
+  ]).message;
+
+  test("translates the runtime problem with its paths", () => {
+    expect(describeReason(RUNTIME)).toBe(
+      "workerの稼働中に、検査コマンドを非特権のユーザーで安全に実行できない状態になりました(world-writable paths created at runtime: /tmp/open)",
+    );
+  });
+
+  test("asks to close the paths or recreate the worker, not to rebuild the image", () => {
+    expect(nextActionFor(RUNTIME)).toBe(
+      "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
+    );
+  });
+});
+
+describe("describeReason / nextActionFor (ownership the check sandbox could not take back)", () => {
+  const RESTORE_FAILED =
+    "worktree is still used by processes from an earlier run: check sandbox: the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: entries with an ACL remain";
+
+  test("says the worktree could not be taken back from the check user, not that processes use it", () => {
+    expect(describeReason(RESTORE_FAILED)).toBe(
+      "検査用のユーザーに渡したworktreeを、rootに戻せませんでした(the worktree recorded by slot factory-check-1 (uid 10002) could not be taken back: entries with an ACL remain)",
+    );
+  });
+
+  test("points to the procedure that cleans up the check slot records", () => {
+    expect(nextActionFor(RESTORE_FAILED, "implement")).toBe(
+      "運用の文書(docs/operations.md)の「検査の枠の記録を片付ける」の手順で、枠の記録が指すworktreeをrootに戻して記録を消してから、Windmillで`f/factory/retry_work_item`を作業項目のIDで実行してください",
+    );
+  });
+
+  test("gives a pr_fix the same procedure", () => {
+    expect(nextActionFor(RESTORE_FAILED, "pr_fix")).toBe(
+      nextActionFor(RESTORE_FAILED, "implement"),
+    );
+  });
+
+  test("keeps the process rule for a slot another run holds", () => {
+    expect(
+      describeReason(
+        "worktree is still used by processes from an earlier run: check slot factory-check-2 (uid 10003) that recorded the worktree is held by another run",
+      ),
+    ).toStartWith("前の実行のプロセスがまだworktreeを使っています");
   });
 });

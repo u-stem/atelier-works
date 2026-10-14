@@ -9,7 +9,7 @@
 // 403/429のレート制限のヘッダー(`retry-after`、`x-ratelimit-remaining`)を
 // 2回目の要求なしに読める。レート制限の待ちには上限があり、超えるなら
 // 待たずに`GitHubRateLimitError`を投げる(`callGhApi`を参照)。
-// ghプロセスの起動失敗と、応答の無い通信断には、短い待機の後に1回だけ再試行する
+// ghプロセスの起動失敗と、冪等な要求の通信断と5xxには、短い待機の後に1回だけ再試行する
 // (`sendGhApi`を参照)。
 //
 // 自己再入の防止: Factoryが投稿するコメント・レビュー・返信には、すべて
@@ -19,13 +19,28 @@
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
+import { VolatileCiLog } from "./ci_log_support.ts";
+import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
+import {
+  assertCommitSha,
+  isCommitSha,
+  WORKFLOW_RUNS_BY_SHA_MAX_PAGES,
+  WORKFLOW_RUNS_BY_SHA_PER_PAGE,
+  WORKFLOW_RUNS_PER_PAGE,
+  type WorkflowRun,
+} from "./main_ci_support.ts";
 import type {
   FactoryOwnerKind,
   GitIdentity,
   LabelerAssociation,
 } from "./types.ts";
-import { assertBranchName, assertGitHubName } from "./types.ts";
+import {
+  assertBranchName,
+  assertGitHubName,
+  hasLabel,
+  isRecord,
+} from "./types.ts";
 import {
   type CommandResult,
   type CommandRunner,
@@ -33,7 +48,7 @@ import {
 } from "./workspace.ts";
 
 /** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
-function validateOwnerRepo(owner: string, repo: string): void {
+export function validateOwnerRepo(owner: string, repo: string): void {
   assertGitHubName(owner);
   assertGitHubName(repo);
 }
@@ -69,6 +84,8 @@ export type GhClient = {
   readonly ghToken: string;
   readonly home?: string;
   readonly path?: string;
+  /** ghの一時ファイルの置き場。既定はジョブごとの0700のディレクトリで、ジョブの外では渡さない。 */
+  readonly tmpDir?: string;
   /**
    * レート制限で1回だけ再試行する前の待機。既定は`setTimeout`による実際の待機。
    * 待つ時間は`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えない。
@@ -88,6 +105,8 @@ function buildGhEnv(client: GhClient): Record<string, string> {
   if (home !== undefined) env.HOME = home;
   const path = client.path ?? process.env.PATH;
   if (path !== undefined) env.PATH = path;
+  const tmpDir = client.tmpDir ?? jobTmpEnv().TMPDIR;
+  if (tmpDir !== undefined) env.TMPDIR = tmpDir;
   return env;
 }
 
@@ -103,6 +122,19 @@ export type GhApiResponse = {
   /** ヘッダー名は小文字にそろえる。 */
   readonly headers: ReadonlyMap<string, string>;
   readonly bodyText: string;
+  /**
+   * `maxOutputBytes`を指定した要求で、出力が上限を超えた(runnerが間を捨てた)ときだけ真になる。
+   * 判定は出力全体のバイト数で行う。保持する量は上限に省略の注記を足した分なので、
+   * 上限を超えたかを、本文に書かれた注記の文字列には頼らずに決められる。
+   */
+  readonly capped?: true;
+  /**
+   * `gh`プロセスの終了コード。`attemptGhApi`が付ける。
+   * ステータスが2xxでも、本文が欠けたまま`gh`が失敗したことを呼び出し側が見分けるために使う。
+   * 省略可能なのは、出力を読んだ直後の応答が終了コードを持たず、後から付けるため。
+   * 省略された応答は、終了コードが0だと確かめられていないので、呼び出し側は失敗として扱う(fail-closed)。
+   */
+  readonly exitCode?: number;
 };
 
 function parseGhApiOutput(stdout: string): GhApiResponse {
@@ -244,10 +276,24 @@ export type GhApiCallOptions = {
   readonly acceptHeader?: string;
   /**
    * 同じ要求を何度送っても、GitHub上の状態が変わらないか。
-   * 応答の無い通信断で再送してよいかの判断に使う。省略するとGETだけが該当する。
+   * 応答の無い通信断と5xxで再送してよいかの判断に使う。省略するとGETだけが該当する。
    * GraphQLの読み取りのqueryはPOSTで送るので、呼び出し側が`true`を明示する。
    */
   readonly idempotent?: boolean;
+  /**
+   * `gh`の出力(ヘッダーと本文)で保持するバイト数の上限。
+   * 大きく信頼できない本文(Actionsのログ)を受け取るときに指定する。
+   * 超えたときは先頭と末尾を残し、間を`omittedMarker`でつなぐ。
+   * ヘッダーは先頭にあるので、先頭の半分が上限より小さい限り読める。
+   */
+  readonly maxOutputBytes?: number;
+  /**
+   * `gh`に`--allow-escape-sequences`を渡す。
+   * ghは、応答に端末の制御列を含むと、本文を出さずに拒否の文だけを出す。
+   * 制御列を含みうる本文(Actionsのログ)を受け取るときに指定する。
+   * 制御列の除去は呼び出し側の整形が行う。
+   */
+  readonly allowEscapeSequences?: boolean;
 };
 
 /**
@@ -304,6 +350,9 @@ async function attemptGhApi(
   if (options.acceptHeader !== undefined)
     argv.push("-H", `Accept: ${options.acceptHeader}`);
   if (options.body !== undefined) argv.push("--input", "-");
+  if (options.allowEscapeSequences === true) {
+    argv.push("--allow-escape-sequences");
+  }
 
   const stdin =
     options.body !== undefined ? JSON.stringify(options.body) : undefined;
@@ -312,12 +361,23 @@ async function attemptGhApi(
     commandResult = await client.run(argv, {
       env: buildGhEnv(client),
       ...(stdin !== undefined ? { stdin } : {}),
+      ...(options.maxOutputBytes !== undefined
+        ? { maxOutputBytes: options.maxOutputBytes }
+        : {}),
     });
   } catch (error) {
     if (isTransientSpawnError(error)) return { kind: "spawn_failed", error };
     throw error;
   }
-  const response = parseGhApiOutput(commandResult.stdout);
+  const parsed = parseGhApiOutput(commandResult.stdout);
+  const capped =
+    options.maxOutputBytes !== undefined &&
+    Buffer.byteLength(commandResult.stdout) > options.maxOutputBytes;
+  const response: GhApiResponse = {
+    ...parsed,
+    ...(capped ? { capped: true as const } : {}),
+    exitCode: commandResult.exitCode,
+  };
   return {
     kind: "completed",
     response,
@@ -333,27 +393,35 @@ function isIdempotentRequest(options: GhApiCallOptions): boolean {
   );
 }
 
+/** サーバー側の一時的な障害を示す、ステータス行のあるHTTPのステータスか(500から599)。 */
+function isServerErrorStatus(status: number): boolean {
+  return status >= 500 && status <= 599;
+}
+
 /**
  * 再試行してよい失敗かを返す。
  * - プロセスの起動失敗: 要求はGitHubに届いていないので、どの要求でも再試行してよい。
  * - 応答の無い通信断: 要求が届いた後に応答だけが失われたかもしれない。
  *   届いていた場合、コメント・レビュー・ラベル・PRの作成などの変更は二重に実行される。
- *   そのため、冪等な要求だけを再試行する。冪等かどうかは`options.idempotent`で決め、
+ * - ステータス行のある5xx: サーバー側の一時的な障害かもしれないが、
+ *   変更が途中まで効いている可能性は通信断と同じである。
+ *   そのため、通信断と5xxは冪等な要求だけを再試行する。冪等かどうかは`options.idempotent`で決め、
  *   省略したときはGET(メソッドの指定なしを含む)を冪等とみなす。
- *   冪等でない要求は再試行せず、HTTP 0の失敗として記録する。
+ *   冪等でない要求は再試行せず、通信断はHTTP 0の失敗として、5xxはその応答のまま記録する。
  */
 function isRetryable(
   attempt: GhApiAttempt,
   options: GhApiCallOptions,
 ): boolean {
   if (attempt.kind === "spawn_failed") return true;
-  return attempt.noResponse && isIdempotentRequest(options);
+  if (!isIdempotentRequest(options)) return false;
+  return attempt.noResponse || isServerErrorStatus(attempt.response.status);
 }
 
 /**
  * 要求を1回送る。一時的な失敗(`isRetryable`)なら、短く待ってから1回だけ再送する。
- * 再送も失敗したら、ghの起動失敗はその例外を投げ、応答の無い通信断は
- * ステータス0の応答として返す(呼び出し側の`ensureSuccess`が失敗にする)。
+ * 再送も失敗したら、ghの起動失敗はその例外を投げ、応答の無い通信断はステータス0の、
+ * 5xxはその5xxの応答として返す(呼び出し側の`ensureSuccess`が失敗にする)。
  * レート制限は扱わない(`callGhApi`を参照)。
  */
 async function sendGhApi(
@@ -378,11 +446,11 @@ async function sendGhApi(
  * 必要な待ちが`GITHUB_RATE_LIMIT_MAX_WAIT_MS`を超えるときは待たずに、
  * 再試行も拒まれたときはその時点で、`GitHubRateLimitError`を投げる。
  * 待ちがstepのtimeoutより長引いて、副作用の途中でstepが打ち切られることを防ぐ。
- * ghの起動失敗と応答の無い通信断の再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
+ * ghの起動失敗、応答の無い通信断、冪等な要求の5xxの再試行は、それぞれの要求の中で行う(`sendGhApi`を参照)。
  * レート制限以外のHTTPのエラーのステータスでは例外を投げない。
  * 呼び出し側が`response.status`を確かめる(`ensureSuccess`を参照)。
  */
-async function callGhApi(
+export async function callGhApi(
   client: GhClient,
   endpoint: string,
   options: GhApiCallOptions = {},
@@ -421,7 +489,18 @@ export class GitHubHttpError extends Error {
   }
 }
 
-function ensureSuccess(response: GhApiResponse, context: string): void {
+/**
+ * 応答を読めない(形が違う、JSONでない、内容が返らない)か、応答が欠けている(件数の上限で切り詰められた)ときの例外。
+ * 待っても直らないので、呼び出し側は再試行ではなく人の確認に回せる。
+ */
+export class GitHubResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitHubResponseError";
+  }
+}
+
+export function ensureSuccess(response: GhApiResponse, context: string): void {
   if (response.status >= 200 && response.status < 300) return;
   throw new GitHubHttpError(
     maskSecrets(
@@ -431,12 +510,15 @@ function ensureSuccess(response: GhApiResponse, context: string): void {
   );
 }
 
-function parseJsonBody(response: GhApiResponse, context: string): unknown {
+export function parseJsonBody(
+  response: GhApiResponse,
+  context: string,
+): unknown {
   try {
     return JSON.parse(response.bodyText);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(
+    throw new GitHubResponseError(
       maskSecrets(`${context}: response body is not valid JSON (${reason})`),
     );
   }
@@ -477,7 +559,7 @@ export class GitHubPaginationLimitError extends Error {
  * (timeline・comments・reviewsは裸のJSON配列、`/search/issues`は
  * `{ items: [...] }`で包まれている)。
  */
-async function paginateGhApi<T>(
+export async function paginateGhApi<T>(
   client: GhClient,
   endpoint: string,
   extractPage: (parsed: unknown, context: string) => readonly T[],
@@ -619,10 +701,8 @@ export function isFactoryPost(
 }
 
 /**
- * コメント・レビュー・timelineイベントの投稿者についてのGitHubの
- * `author_association`の値を返す。無ければ`null`。
- * `LabeledTimelineEvent.authorAssociation`と同じ型で、
- * `allowed_labeler_associations`の検査と、pr_fixで人のフィードバックを
+ * コメントとレビューの投稿者についてのGitHubの`author_association`の値を返す。
+ * 無ければ`null`。pr_fixで人のフィードバックを`allowed_labeler_associations`で
  * 絞り込むのに使う。
  */
 function parseAuthorAssociation(
@@ -650,6 +730,21 @@ function isLoginPayload(value: unknown): value is LoginPayload {
 }
 
 /**
+ * GitHubのユーザーのオブジェクトからログイン名を読む。
+ * ユーザーでないとき、ログイン名が空文字列のときは`null`を返す。
+ */
+function readLogin(value: unknown): string | null {
+  return isLoginPayload(value) && value.login !== "" ? value.login : null;
+}
+
+/** オブジェクトの文字列のフィールドを読む。オブジェクトでない、文字列でない、空文字列のときは`null`。 */
+function readStringField(value: unknown, field: string): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw: unknown = Reflect.get(value, field);
+  return typeof raw === "string" && raw !== "" ? raw : null;
+}
+
+/**
  * `getViewer`が必要とする`GET /user`の応答の形。
  * `LoginPayload`に、GitHubのnoreplyのコミット用メールアドレスを組み立てる
  * (`gitIdentityForViewer`)ための数値のアカウント`id`を加えたもの。
@@ -670,6 +765,74 @@ export async function getViewer(client: GhClient): Promise<Viewer> {
     throw new Error("GET /user: unexpected response shape");
   }
   return { login: parsed.login, id: parsed.id };
+}
+
+/**
+ * アカウント(ユーザーか組織)の現在の数値IDを取得する。
+ * 組織でも`GET /users/{name}`で数値のIDが取れるので、`kind`によらず同じ経路を使う。
+ */
+export async function getAccountId(
+  client: GhClient,
+  name: string,
+): Promise<number> {
+  const context = "GET /users/{name}";
+  const response = await callGhApi(client, `users/${encodeURIComponent(name)}`);
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isViewerPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.id;
+}
+
+/**
+ * `GET repos/{owner}/{repo}`で、リポジトリの現在の数値IDを取得する。
+ * 名前を別の人が取得していれば、その人のリポジトリのIDが返る。
+ * 改名や移管の後の旧名で、GitHubの転送が効くかは確かめていない。
+ */
+export async function getRepositoryId(
+  client: GhClient,
+  owner: string,
+  repo: string,
+): Promise<number> {
+  const context = "GET /repos/{owner}/{repo}";
+  const response = await callGhApi(
+    client,
+    `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isIdPayload(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.id;
+}
+
+/**
+ * `GET repos/{owner}/{repo}`で、リポジトリを持つオーナー(ユーザーか組織)の現在の数値IDを取得する。
+ * 名前を別の人が取得していれば、その人のIDが返る。
+ * リポジトリの存在の確認と同じ1回の呼び出しで取れるので、オーナーのIDだけを別に引かない。
+ */
+export async function getRepositoryOwnerId(
+  client: GhClient,
+  owner: string,
+  repo: string,
+): Promise<number> {
+  const context = "GET /repos/{owner}/{repo}";
+  const response = await callGhApi(
+    client,
+    `repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  const ownerPayload: unknown =
+    typeof parsed === "object" && parsed !== null
+      ? Reflect.get(parsed, "owner")
+      : undefined;
+  if (!isIdPayload(ownerPayload)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return ownerPayload.id;
 }
 
 /**
@@ -729,6 +892,8 @@ type SearchIssueItemPayload = {
   readonly html_url: string;
   readonly repository_url: string;
   readonly user: { readonly login: string } | null;
+  /** 作成の時刻。読む関数(`searchDependabotPrs`)だけが形を確かめる。 */
+  readonly created_at?: unknown;
 };
 
 function isSearchIssueItemPayload(
@@ -821,6 +986,17 @@ export type Issue = {
   readonly htmlUrl: string;
   readonly state: string;
   readonly authorLogin: string;
+  /**
+   * 閉じた人のログイン名。開いているときと、GitHubが閉じた人を返さないときは`null`。
+   * PRのマージでは、マージした人が入ると想定している(実機で確かめる)。
+   */
+  readonly closedByLogin: string | null;
+  /** 閉じた人の種別(`User`、`Bot`など)。閉じた人が無いとき、応答に無いときは`null`。 */
+  readonly closedByType: string | null;
+  /** PRがマージされた時刻。マージされていないとき、PRでないときは`null`。 */
+  readonly mergedAt: string | null;
+  /** 作者の`author_association`。応答に無ければ`null`。 */
+  readonly authorAssociation: string | null;
   readonly labels: string[];
   readonly assignees: string[];
 };
@@ -850,7 +1026,7 @@ type IssuePayload = {
   readonly body: string | null;
   readonly html_url: string;
   readonly state: string;
-  readonly user: { readonly login: string } | null;
+  readonly user: LoginPayload | null;
   readonly labels: readonly unknown[];
   readonly assignees: readonly unknown[];
 };
@@ -872,6 +1048,7 @@ function isIssuePayload(value: unknown): value is IssuePayload {
   if (record.body !== null && typeof record.body !== "string") return false;
   if (typeof record.html_url !== "string") return false;
   if (typeof record.state !== "string") return false;
+  if (record.user !== null && !isLoginPayload(record.user)) return false;
   if (!Array.isArray(record.labels)) return false;
   if (!Array.isArray(record.assignees)) return false;
   return true;
@@ -914,68 +1091,350 @@ export async function getIssue(
     htmlUrl: parsed.html_url,
     state: parsed.state,
     authorLogin: parsed.user?.login ?? "",
+    closedByLogin: readLogin(Reflect.get(parsed, "closed_by")),
+    closedByType: readStringField(Reflect.get(parsed, "closed_by"), "type"),
+    mergedAt: readStringField(Reflect.get(parsed, "pull_request"), "merged_at"),
+    authorAssociation: parseAuthorAssociation(
+      Reflect.get(parsed, "author_association"),
+    ),
     labels,
     assignees,
   };
 }
 
-export type LabeledTimelineEvent = {
-  readonly event: "labeled";
-  readonly actorLogin: string;
-  readonly authorAssociation: LabelerAssociation | string | null;
-  readonly label: string;
-  readonly createdAt: string | null;
-};
+/** `fetchIssueState`が使う`fetch`の最小の形。テストで差し替える。 */
+export type FetchLike = (
+  url: string,
+  init: RequestInit,
+) => Promise<Pick<Response, "status" | "json">>;
 
-type TimelineEventPayload = {
+const FETCH_ISSUE_TIMEOUT_MS = 10_000;
+
+/**
+ * `GET /repos/.../issues/<番号>`を`fetch`で読み、JSONのオブジェクトを返す。
+ * `gh`を起動できないworker(Console用のworker)から使うためのもので、
+ * 宛先は`api.github.com`に固定し、資格情報は`Authorization`ヘッダだけに載せる。
+ * リダイレクトは辿らない。移したIssueの新しい宛先へ`Authorization`を送らず、
+ * 確かめられないものとして扱うためである。
+ * 10秒の締め切りを付け、超えると`fetch`が拒否される。
+ * 応答が2xxでなければ`GitHubHttpError`を、形が違えば`Error`を投げる。
+ * エラーの文に、資格情報とIssueの内容は含めない。
+ */
+async function fetchIssueObject(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{ readonly context: string; readonly body: object }> {
+  validateOwnerRepo(owner, repo);
+  const context = `GET issue ${owner}/${repo}#${number}`;
+  const response = await fetchFn(
+    `https://api.github.com/repos/${owner}/${repo}/issues/${number}`,
+    {
+      headers: {
+        Authorization: `Bearer ${ghToken}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(FETCH_ISSUE_TIMEOUT_MS),
+    },
+  );
+  if (response.status < 200 || response.status >= 300) {
+    throw new GitHubHttpError(
+      `${context} failed with HTTP ${response.status}`,
+      response.status,
+    );
+  }
+  const body: unknown = await response.json();
+  if (typeof body !== "object" || body === null) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return { context, body };
+}
+
+/**
+ * IssueまたはPRの`state`(`open`か`closed`)を、`fetch`で読む。
+ * 通信の決まりは`fetchIssueObject`にある。
+ */
+export async function fetchIssueState(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string> {
+  const { context, body } = await fetchIssueObject(
+    fetchFn,
+    ghToken,
+    owner,
+    repo,
+    number,
+  );
+  const state = Reflect.get(body, "state");
+  if (typeof state !== "string") {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return state;
+}
+
+/**
+ * Issueの題名と本文を、`fetch`で読む。本文が無い(`null`)Issueは空文字にする。
+ * 通信の決まりは`fetchIssueObject`にある。
+ */
+export async function fetchIssueContent(
+  fetchFn: FetchLike,
+  ghToken: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{ readonly title: string; readonly body: string }> {
+  const { context, body } = await fetchIssueObject(
+    fetchFn,
+    ghToken,
+    owner,
+    repo,
+    number,
+  );
+  const title = Reflect.get(body, "title");
+  const text = Reflect.get(body, "body");
+  if (
+    typeof title !== "string" ||
+    (text !== null && typeof text !== "string")
+  ) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return { title, body: text ?? "" };
+}
+
+type LabelEventPayload = {
   readonly event: unknown;
   readonly actor: unknown;
   readonly label: unknown;
-  readonly author_association: unknown;
-  readonly created_at: unknown;
 };
 
-function isTimelineEventPayload(value: unknown): value is TimelineEventPayload {
+function isLabelEventPayload(value: unknown): value is LabelEventPayload {
   return typeof value === "object" && value !== null && "event" in value;
 }
 
 /**
- * `GET .../timeline`をページ送りしながら取得し、最後の`labeled`イベントだけを返す。
- * ラベルは外されて別の人に付け直されていることがある。そのため
- * `poll_issues`が`docs/security.md`の「ラベル付与の制限」に
- * 照らして確かめるべきなのは、いずれかのラベル付与ではなく最新のラベル付与である。
- * ラベルが一度も付いていなければ`null`を返す(ラベルで絞った検索で見つけた
- * Issueでは起こらないはずだが、念のため扱う)。
+ * 付与者を判定できないときの例外。
+ * 直近のラベルのイベント(`LABEL_EVENTS_WINDOW`件)の中に、確認しているラベルのイベントが無く、
+ * それより古いイベントが残っている。そのラベルの付与者は、読んだ範囲では分からない。
+ * `label`は確認していたトリガーラベルで、呼び出し側が人へ知らせる。
  */
-export async function getIssueTimeline(
+export class LabelerCheckLimitError extends Error {
+  readonly label: string;
+  constructor(label: string) {
+    super(
+      `labeler of label ${label} is not among the latest ${LABEL_EVENTS_WINDOW} label events`,
+    );
+    this.name = "LabelerCheckLimitError";
+    this.label = label;
+  }
+}
+
+/** 付与者の確認で読むラベルのイベント(`labeled`と`unlabeled`)の件数。 */
+const LABEL_EVENTS_WINDOW = 100;
+
+/**
+ * IssueとPRの直近のラベルのイベントを読むクエリ。
+ * `timelineItems`の`itemTypes`でラベルのイベントだけに絞る。
+ * コメントや参照のイベントは含まないので、第三者はイベントの数を増やせない。
+ * ラベルのイベントを作れるのは、ラベルを付け外しできる権限(triage以上)を持つ人に限られる。
+ * IssueとPRで型が異なるので、同じ選択を両方に書く。
+ */
+const LABEL_EVENTS_QUERY = `
+  query($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      issueOrPullRequest(number: $number) {
+        ... on Issue {
+          timelineItems(last: ${LABEL_EVENTS_WINDOW}, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
+            pageInfo { hasPreviousPage }
+            nodes {
+              __typename
+              ... on LabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+            }
+          }
+        }
+        ... on PullRequest {
+          timelineItems(last: ${LABEL_EVENTS_WINDOW}, itemTypes: [LABELED_EVENT, UNLABELED_EVENT]) {
+            pageInfo { hasPreviousPage }
+            nodes {
+              __typename
+              ... on LabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+              ... on UnlabeledEvent { createdAt actor { __typename login ... on User { databaseId } } label { name } }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+type LabelEvent = {
+  readonly kind: "labeled" | "unlabeled";
+  readonly createdAt: number;
+  /** 種類が`User`のactorのログイン名。actorが無いときと、`User`でないときは`null`。 */
+  readonly actorLogin: string | null;
+  /**
+   * actorの数値ID(`databaseId`)。`actorLogin`が`null`のときと、応答に無いとき、
+   * 正の安全な整数でないときは`null`。
+   */
+  readonly actorId: number | null;
+  readonly label: string;
+};
+
+type LabelEventsPayload = {
+  readonly hasPreviousPage: boolean;
+  readonly nodes: readonly unknown[];
+};
+
+function parseLabelEventsPayload(data: unknown): LabelEventsPayload | null {
+  if (!isRecord(data)) return null;
+  const repository = data.repository;
+  if (!isRecord(repository)) return null;
+  const target = repository.issueOrPullRequest;
+  if (!isRecord(target)) return null;
+  const items = target.timelineItems;
+  if (!isRecord(items)) return null;
+  const { nodes, pageInfo } = items;
+  if (!Array.isArray(nodes)) return null;
+  if (!isRecord(pageInfo)) return null;
+  const hasPreviousPage = pageInfo.hasPreviousPage;
+  if (typeof hasPreviousPage !== "boolean") return null;
+  return { hasPreviousPage, nodes };
+}
+
+/**
+ * ラベルのイベント1件を読む。
+ * `nodes`の`null`と、ラベルのイベント以外の種類のノードは、`null`を返して読み飛ばす。
+ * ラベルのイベントなのに`createdAt`か`label`を読めないノードは、読み飛ばさず例外を投げる。
+ * 読み飛ばすと、最新のイベントが落ちて、古い許可の`labeled`が最後になるためである。
+ * スキーマ上、`label`は必須の項目なので、読めないのは想定外の応答である。
+ */
+function parseLabelEvent(raw: unknown, context: string): LabelEvent | null {
+  if (raw === null) return null;
+  const unexpected = new Error(`${context}: unexpected response shape`);
+  if (!isRecord(raw)) throw unexpected;
+  const typename = raw.__typename;
+  if (typename !== "LabeledEvent" && typename !== "UnlabeledEvent") return null;
+  const createdAtText = raw.createdAt;
+  if (typeof createdAtText !== "string") throw unexpected;
+  const createdAt = Date.parse(createdAtText);
+  if (Number.isNaN(createdAt)) throw unexpected;
+  const label = labelName(raw.label);
+  if (label === null) throw unexpected;
+  const actor = raw.actor;
+  const actorLogin =
+    isRecord(actor) &&
+    actor.__typename === "User" &&
+    typeof actor.login === "string"
+      ? actor.login
+      : null;
+  const actorId =
+    actorLogin !== null &&
+    isRecord(actor) &&
+    isPositiveSafeInteger(actor.databaseId)
+      ? actor.databaseId
+      : null;
+  return {
+    kind: typename === "LabeledEvent" ? "labeled" : "unlabeled",
+    createdAt,
+    actorLogin,
+    actorId,
+    label,
+  };
+}
+
+/**
+ * `label`の最後のイベントを返す。
+ * 次のときは`null`を返す。
+ * - そのラベルのイベントが無い。
+ * - 作成時刻が最大のイベントが2件以上ある。`createdAt`は秒精度で、同じ秒のイベントの順は
+ *   IDからも決められないので、どちらが後かを判定できない。
+ * 「最後」は、配列の並びではなく、`createdAt`の最大で決める。
+ * ラベル名はGitHubが大文字小文字を区別しないので、比較も区別しない。
+ * 直近のラベルのイベントの中に`label`のイベントが無く、それより古いイベントが残っているときは、
+ * 付与者を判定できないので`LabelerCheckLimitError`を投げる。
+ */
+async function lastLabelEvent(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
-): Promise<LabeledTimelineEvent | null> {
+  label: string,
+): Promise<LabelEvent | null> {
   validateOwnerRepo(owner, repo);
-
-  const parsed = await callGhApiAll(
+  const context = `GraphQL labelEvents ${owner}/${repo}#${number}`;
+  const data = await callGhGraphql(
     client,
-    `repos/${owner}/${repo}/issues/${number}/timeline?per_page=100`,
+    LABEL_EVENTS_QUERY,
+    { owner, repo, number },
+    context,
+    true,
   );
-
-  let last: LabeledTimelineEvent | null = null;
-  for (const raw of parsed) {
-    if (!isTimelineEventPayload(raw)) continue;
-    if (raw.event !== "labeled") continue;
-    const actorLogin = isLoginPayload(raw.actor) ? raw.actor.login : null;
-    const resolvedLabelName = labelName(raw.label);
-    if (actorLogin === null || resolvedLabelName === null) continue;
-    last = {
-      event: "labeled",
-      actorLogin,
-      authorAssociation: parseAuthorAssociation(raw.author_association),
-      label: resolvedLabelName,
-      createdAt: typeof raw.created_at === "string" ? raw.created_at : null,
-    };
+  const payload = parseLabelEventsPayload(data);
+  if (payload === null) {
+    throw new Error(`${context}: unexpected response shape`);
   }
-  return last;
+
+  const wanted = label.toLowerCase();
+  let last: LabelEvent | null = null;
+  let tied = false;
+  for (const raw of payload.nodes) {
+    const event = parseLabelEvent(raw, context);
+    if (event === null || event.label.toLowerCase() !== wanted) continue;
+    if (last === null || event.createdAt > last.createdAt) {
+      last = event;
+      tied = false;
+    } else if (event.createdAt === last.createdAt) {
+      tied = true;
+    }
+  }
+  if (last === null && payload.hasPreviousPage) {
+    throw new LabelerCheckLimitError(label);
+  }
+  return tied ? null : last;
+}
+
+/** トリガーラベルを付けた人。 */
+export type LabelerActor = {
+  readonly login: string;
+  /** GitHubの数値ID。応答に無いとき、正の安全な整数でないときは`null`。 */
+  readonly databaseId: number | null;
+};
+
+/**
+ * `label`を最後に付けた人を、ログイン名と数値IDで返す。IssueとPRのどちらにも使える。
+ * ラベルは外されて別の人に付け直されていることがある。そのため
+ * 見るべきなのは、いずれかのラベル付与ではなく、そのラベルの最新のイベントである。
+ * 他のラベルのイベントは見ない。
+ * 数値IDは、ラベルのイベントと同じ応答で取れる。追加のAPI呼び出しは要らない。
+ * 次のときは`null`を返す。呼び出し側は、判定できないものとして拒否する。
+ * - そのラベルのイベントが無い。
+ * - 最後のイベントが`unlabeled`である(今付いているラベルの付与者を特定できない)。
+ * - 作成時刻が最大のイベントが同じ秒に2件以上ある(どちらが後かを判定できない)。
+ * - 最後の`labeled`イベントに`actor`が無い(削除されたユーザーなど)。
+ * - actorの種類が`User`でない。GitHub Appなどのログイン名は`[bot]`を伴わないので、
+ *   人のログイン名と取り違えないようにする。
+ * 取得に失敗したときは例外を投げる。
+ * 直近のラベルのイベントの中にそのラベルのイベントが無いときは`LabelerCheckLimitError`を投げる。
+ */
+export async function getLabelerActor(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  label: string,
+): Promise<LabelerActor | null> {
+  const last = await lastLabelEvent(client, owner, repo, number, label);
+  if (last === null || last.kind !== "labeled" || last.actorLogin === null) {
+    return null;
+  }
+  return { login: last.actorLogin, databaseId: last.actorId };
 }
 
 export type ClaimIssueOptions = {
@@ -1062,12 +1521,13 @@ const CLAIM_TIMELINE_MAX_PAGES = 20;
 
 /**
  * `read`を最大`CLAIM_REREAD_BACKOFF_MS.length + 1`回まで試す。GETなので繰り返してよい。
+ * `claimIssue`と、PRの取得(`poll_prs.ts`の`claimPr`)が、ラベルを外した後の確認に使う。
  * 失敗した試行は、そのたびに`log`へ警告として残す。
  * `GitHubRateLimitError`は繰り返さずに投げる。`callGhApi`が上限までの待機と再試行を
  * 済ませたうえで投げるので、ここで重ねても同じ制限に当たり、待ちが長引くだけである。
  * `GitHubPaginationLimitError`も、繰り返しても同じ長さなので繰り返さずに投げる。
  */
-async function rereadWithRetries<T>(
+export async function rereadWithRetries<T>(
   client: GhClient,
   context: {
     readonly log: Logger | undefined;
@@ -1123,9 +1583,10 @@ async function lastUnlabeledActor(
   );
   let actor: string | null = null;
   for (const raw of events) {
-    if (!isTimelineEventPayload(raw)) continue;
+    if (!isLabelEventPayload(raw)) continue;
     if (raw.event !== "labeled" && raw.event !== "unlabeled") continue;
-    if (labelName(raw.label) !== label) continue;
+    const name = labelName(raw.label);
+    if (name === null || name.toLowerCase() !== label.toLowerCase()) continue;
     actor =
       raw.event === "unlabeled" && isLoginPayload(raw.actor)
         ? raw.actor.login
@@ -1241,7 +1702,7 @@ async function resolveUndeterminedRemoval(
   } catch (err) {
     throw unknown(err);
   }
-  if (reread.labels.includes(opts.triggerLabel)) {
+  if (hasLabel(reread.labels, opts.triggerLabel)) {
     opts.log?.warn("claim deferred: trigger label is still present", {
       target,
     });
@@ -1501,6 +1962,9 @@ export async function removeLabel(
  * GitHubの`POST .../labels`は追加で、全体を置き換える`setLabels`のPUTとは異なる。
  * POSTするだけで、再取得による確認はしない。
  * `claimIssue`と違い、assigneeは設定しない。
+ * `options.idempotent`を`true`にすると、応答の無い通信断と5xxを1回再送する
+ * (`isRetryable`を参照)。既に付いているラベルの追加は状態を変えないので、
+ * 呼び出し側が再送してよいと判断できるときだけ指定する。省略するとPOSTなので再送しない。
  */
 export async function addLabels(
   client: GhClient,
@@ -1508,6 +1972,7 @@ export async function addLabels(
   repo: string,
   number: number,
   labels: readonly string[],
+  options: { readonly idempotent?: boolean } = {},
 ): Promise<void> {
   validateOwnerRepo(owner, repo);
   const response = await callGhApi(
@@ -1516,6 +1981,9 @@ export async function addLabels(
     {
       method: "POST",
       body: { labels },
+      ...(options.idempotent !== undefined
+        ? { idempotent: options.idempotent }
+        : {}),
     },
   );
   ensureSuccess(response, `POST issue labels ${owner}/${repo}#${number}`);
@@ -1758,6 +2226,50 @@ export async function searchPrs(
   return items;
 }
 
+/**
+ * dependabotのPRを探す範囲。1つのリポジトリに限る。
+ * オーナーの全リポジトリは探さない。自動でマージする対象を、明示したリポジトリに限るためである。
+ */
+export type DependabotPrSearchScope = {
+  readonly kind: "repo";
+  readonly owner: string;
+  readonly repo: string;
+};
+
+export type DependabotPrSearchItem = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+  /** PRを作った時刻(epochミリ秒)。待ちの上限を数える起点にする。 */
+  readonly createdAtMs: number;
+};
+
+/**
+ * `GET /search/issues`で、dependabotのアプリが開いた、`main`をbaseにする、draftでない、開いたPRを返す。
+ * 検索は候補を絞るだけで、作者とbaseとdraftは呼び出し側がPRを読み直して確かめる。
+ * 作成の時刻を読めない項目があれば`GitHubResponseError`を投げる。
+ */
+export async function searchDependabotPrs(
+  client: GhClient,
+  scope: DependabotPrSearchScope,
+): Promise<DependabotPrSearchItem[]> {
+  validateOwnerRepo(scope.owner, scope.repo);
+  const query = `is:pr state:open draft:false base:main author:app/dependabot repo:${scope.owner}/${scope.repo}`;
+  const items = await callGhApiAllSearchItems(
+    client,
+    `search/issues?q=${encodeURIComponent(query)}&per_page=100`,
+  );
+  return items.map((item) => {
+    const createdAtMs =
+      typeof item.created_at === "string" ? Date.parse(item.created_at) : NaN;
+    if (!Number.isFinite(createdAtMs)) {
+      throw unexpectedShape("search dependabot prs");
+    }
+    const { owner, repo } = repoFromRepositoryUrl(item.repository_url);
+    return { owner, repo, number: item.number, createdAtMs };
+  });
+}
+
 export type PullRequest = {
   readonly number: number;
   readonly title: string;
@@ -1769,9 +2281,25 @@ export type PullRequest = {
   readonly headRef: string;
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
+  /**
+   * ベースのリポジトリのID。実行のheadのリポジトリとIDで比べるために使う。
+   * 無いか、正の安全な整数でなければ`null`。
+   */
+  readonly baseRepoId: number | null;
   readonly baseRef: string;
+  /** GitHubがまだ計算していないときは`null`。真偽に丸めない。 */
+  readonly mergeable: boolean | null;
   readonly mergeableState: string | null;
   readonly authorLogin: string;
+  /**
+   * 作者の数値ID(RESTの`user.id`)。作者が無いとき、応答に無いとき、
+   * 正の安全な整数でないときは`null`。
+   */
+  readonly authorId: number | null;
+  /** 作者のアカウント種別(`User` / `Bot`など)。作者が無いか不明なら`null`。 */
+  readonly authorType: string | null;
+  /** PRにauto-mergeが設定されているか。有効なら、条件が揃った時点でGitHubがマージする。 */
+  readonly autoMergeEnabled: boolean;
 };
 
 type PrPayload = {
@@ -1788,10 +2316,15 @@ type PrPayload = {
   };
   readonly base: {
     readonly ref: string;
-    readonly repo: { readonly full_name: unknown } | null;
+    readonly repo: {
+      readonly full_name: unknown;
+      readonly id?: unknown;
+    } | null;
   };
+  readonly mergeable: unknown;
   readonly mergeable_state: unknown;
-  readonly user: { readonly login: string } | null;
+  readonly user: unknown;
+  readonly auto_merge?: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -1836,9 +2369,7 @@ export async function getPr(
   ensureSuccess(response, `GET pr ${owner}/${repo}#${number}`);
   const parsed = parseJsonBody(response, `GET pr ${owner}/${repo}#${number}`);
   if (!isPrPayload(parsed)) {
-    throw new Error(
-      `GET pr ${owner}/${repo}#${number}: unexpected response shape`,
-    );
+    throw unexpectedShape(`GET pr ${owner}/${repo}#${number}`);
   }
   const headRepoFullName =
     parsed.head.repo !== null && typeof parsed.head.repo.full_name === "string"
@@ -1848,6 +2379,13 @@ export async function getPr(
     parsed.base.repo !== null && typeof parsed.base.repo.full_name === "string"
       ? parsed.base.repo.full_name
       : "";
+  const baseRepoIdRaw = parsed.base.repo?.id;
+  const baseRepoId =
+    typeof baseRepoIdRaw === "number" &&
+    Number.isSafeInteger(baseRepoIdRaw) &&
+    baseRepoIdRaw > 0
+      ? baseRepoIdRaw
+      : null;
   return {
     number: parsed.number,
     title: parsed.title,
@@ -1859,12 +2397,28 @@ export async function getPr(
     headRef: parsed.head.ref,
     headRepoFullName,
     baseRepoFullName,
+    baseRepoId,
     baseRef: parsed.base.ref,
+    mergeable: typeof parsed.mergeable === "boolean" ? parsed.mergeable : null,
     mergeableState:
       typeof parsed.mergeable_state === "string"
         ? parsed.mergeable_state
         : null,
-    authorLogin: parsed.user?.login ?? "",
+    authorLogin:
+      isRecord(parsed.user) && typeof parsed.user.login === "string"
+        ? parsed.user.login
+        : "",
+    authorId:
+      isRecord(parsed.user) && isPositiveSafeInteger(parsed.user.id)
+        ? parsed.user.id
+        : null,
+    authorType:
+      isRecord(parsed.user) && typeof parsed.user.type === "string"
+        ? parsed.user.type
+        : null,
+    // 無効と読むのは、`auto_merge`が明示的に`null`のときだけ。
+    // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
+    autoMergeEnabled: parsed.auto_merge !== null,
   };
 }
 
@@ -1967,6 +2521,591 @@ export async function getPrFiles(
     });
   }
   return items;
+}
+
+// ---------------------------------------------------------------------------
+// マージとPRの事実の取得(dependabotのゲート判定の入力)
+// ---------------------------------------------------------------------------
+
+function unexpectedShape(context: string): GitHubResponseError {
+  return new GitHubResponseError(`${context}: unexpected response shape`);
+}
+
+export type MergePullRequestResult =
+  | { readonly merged: true; readonly sha: string }
+  | {
+      readonly merged: false;
+      readonly status: 405 | 409;
+      readonly message: string;
+    };
+
+/** 応答の本文から`message`を読む。JSONでないか文字列でなければ空文字にする。 */
+function readErrorMessage(bodyText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(bodyText);
+    if (isRecord(parsed) && typeof parsed.message === "string") {
+      return maskSecrets(parsed.message.slice(0, 500));
+    }
+  } catch {
+    // 本文がJSONでなければ、読める理由が無いものとして扱う。
+  }
+  return "";
+}
+
+/**
+ * `PUT .../pulls/{number}/merge`でsquashマージする。
+ * `sha`にレビューした時点のheadを渡し、その後にheadが動いたときはGitHubに拒ませる。
+ * shaは小文字の40桁だけを受け付ける。URLのパスと要求の本文に入る値を、短い形で曖昧にしないため。
+ * squashのコミットの題名は固定で、本文は空にする。PRのタイトルや本文を使わないため。
+ * 405(マージできない状態)と409(headの不一致)は、マージしなかった結果として
+ * `status`と応答の`message`つきで返す。理由は呼び出し側が見分ける。
+ * 403(権限不足)や404などは`GitHubHttpError`を投げる。呼び出し側が権限不足を見分けて先送りできるようにするため。
+ * マージ要求の送信後に投げられる例外はすべて(`GitHubHttpError`、200で形が不正な場合や
+ * 200で`merged: false`の場合の通常の`Error`)、要求がGitHubに届いてマージされた可能性が残る。
+ * `merged: false`を返す場合も同じである。呼び出し側は`getPr`で`merged`を読み直してから判断する。
+ */
+export async function mergePullRequest(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+  expectedHeadSha: string,
+): Promise<MergePullRequestResult> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(expectedHeadSha);
+  const context = `PUT pr merge ${owner}/${repo}#${number}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/merge`,
+    {
+      method: "PUT",
+      body: {
+        merge_method: "squash",
+        sha: expectedHeadSha,
+        commit_title: `chore: dependabotの依存更新をマージ(#${number})`,
+        commit_message: "",
+      },
+    },
+  );
+  if (response.status === 405 || response.status === 409) {
+    return {
+      merged: false,
+      status: response.status,
+      message: readErrorMessage(response.bodyText),
+    };
+  }
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.sha !== "string" ||
+    typeof parsed.merged !== "boolean"
+  ) {
+    throw unexpectedShape(context);
+  }
+  if (!parsed.merged) throw new Error(`${context}: GitHub did not merge`);
+  return { merged: true, sha: parsed.sha };
+}
+
+type CheckRunRow = {
+  /** 削除されたAppが作ったチェックでは`null`。 */
+  readonly appId: number | null;
+  readonly name: string;
+  readonly conclusion: string | null;
+  readonly unfinished: boolean;
+  readonly startedMs: number;
+  readonly completedMs: number;
+};
+
+function parseTimestampMs(value: unknown): number | null {
+  if (value === null) return 0;
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function parseCheckRun(value: unknown, context: string): CheckRunRow {
+  if (!isRecord(value)) throw unexpectedShape(context);
+  const { name, status, conclusion, app } = value;
+  if (typeof name !== "string" || typeof status !== "string") {
+    throw unexpectedShape(context);
+  }
+  let appId: number | null = null;
+  if (app !== null) {
+    if (!isRecord(app) || typeof app.id !== "number") {
+      throw unexpectedShape(context);
+    }
+    appId = app.id;
+  }
+  if (conclusion !== null && typeof conclusion !== "string") {
+    throw unexpectedShape(context);
+  }
+  const unfinished = status !== "completed";
+  if (!unfinished && conclusion === null) throw unexpectedShape(context);
+  const startedMs = parseTimestampMs(value.started_at);
+  const completedMs = parseTimestampMs(value.completed_at);
+  if (startedMs === null || completedMs === null) {
+    throw unexpectedShape(context);
+  }
+  return {
+    appId,
+    name,
+    conclusion: unfinished ? null : conclusion,
+    unfinished,
+    startedMs,
+    completedMs,
+  };
+}
+
+/**
+ * 同じ名前のチェックのうち、`candidate`が`current`より新しいか。
+ * 未完了は最新として扱う。開始と完了の時刻が同じで決められないときは、
+ * successでない方を選ぶ(取りこぼしで通さないため)。
+ */
+function isNewerCheckRun(
+  candidate: CheckRunRow,
+  current: CheckRunRow,
+): boolean {
+  if (candidate.unfinished !== current.unfinished) return candidate.unfinished;
+  if (candidate.startedMs !== current.startedMs) {
+    return candidate.startedMs > current.startedMs;
+  }
+  if (candidate.completedMs !== current.completedMs) {
+    return candidate.completedMs > current.completedMs;
+  }
+  return current.conclusion === "success" && candidate.conclusion !== "success";
+}
+
+/**
+ * `GET .../commits/{sha}/check-runs`を最後のページまで読み、
+ * チェックを作ったApp(`app.id`)と名前の組ごとに、最新の1件の結論を返す。
+ * 再実行された古い結果で判定しないためである。
+ * 別のAppが同じ名前で作ったチェックは畳まず、すべて返す。一方の成功で他方の失敗を隠さないため。
+ * 削除されたAppが作ったチェックは`app`が`null`になる。`app`が無い応答は不正として例外にする。
+ * 戻り値の`appId`は`app.id`で、削除されたAppでは`null`にする。呼び出し側がチェックの主体を絞るために使う。
+ * `headSha`は小文字の40桁だけを受け付ける。
+ * 未完了のチェックの`conclusion`は`null`にする。
+ */
+export async function listPrChecks(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  headSha: string,
+): Promise<
+  { name: string; appId: number | null; conclusion: string | null }[]
+> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(headSha);
+  const rows = await paginateGhApi<CheckRunRow>(
+    client,
+    `repos/${owner}/${repo}/commits/${headSha}/check-runs?per_page=100`,
+    (parsed, context) => {
+      if (!isRecord(parsed) || !Array.isArray(parsed.check_runs)) {
+        throw unexpectedShape(context);
+      }
+      return parsed.check_runs.map((run: unknown) =>
+        parseCheckRun(run, context),
+      );
+    },
+  );
+  const latest = new Map<string, CheckRunRow>();
+  for (const row of rows) {
+    const key = `${String(row.appId)}\u0000${row.name}`;
+    const current = latest.get(key);
+    if (current === undefined || isNewerCheckRun(row, current)) {
+      latest.set(key, row);
+    }
+  }
+  return [...latest.values()].map((row) => ({
+    name: row.name,
+    appId: row.appId,
+    conclusion: row.conclusion,
+  }));
+}
+
+/** `pulls/{number}/files`が返せる件数の上限。 */
+const PR_FILES_API_CAP = 3000;
+
+/**
+ * `GET .../pulls/{number}/files`を最後のページまで読み、変更されたファイルのパスを返す。
+ * 名前の変更では、移動元のパスも含める。保護すべきパスからの移動を見逃さないため。
+ * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ * PR番号で引くので、headのshaに固定されない。ゲートに渡す入力は、headのshaを固定した比較から作る。
+ */
+export async function listPrFiles(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string[]> {
+  validateOwnerRepo(owner, repo);
+  const paths = await paginateGhApi<string[]>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/files?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown) => {
+        if (!isRecord(entry) || typeof entry.filename !== "string") {
+          throw unexpectedShape(context);
+        }
+        const previous = entry.previous_filename;
+        if (previous === undefined || previous === null) {
+          return [entry.filename];
+        }
+        if (typeof previous !== "string") throw unexpectedShape(context);
+        return [entry.filename, previous];
+      });
+    },
+  );
+  if (paths.length >= PR_FILES_API_CAP) {
+    throw new GitHubResponseError(
+      `GET pr files ${owner}/${repo}#${number}: the file list may be truncated at ${String(PR_FILES_API_CAP)} files`,
+    );
+  }
+  return [...new Set(paths.flat())];
+}
+
+/** `pulls/{number}/commits`が返せる件数の上限。 */
+const PR_COMMITS_API_CAP = 250;
+/** 件数の上限を1ページ100件で読み切るページ数に、終端の確認の1ページを足した値。 */
+const PR_COMMITS_MAX_PAGES = Math.ceil(PR_COMMITS_API_CAP / 100) + 1;
+
+export type PrCommit = {
+  readonly sha: string;
+  readonly authorLogin: string | null;
+  readonly authorType: string | null;
+  readonly committerLogin: string | null;
+  /** GitHubが署名を検証できたか。 */
+  readonly verified: boolean;
+  /** 親の数。2以上ならmergeのcommit。 */
+  readonly parentCount: number;
+};
+
+function parseCommitAccount(
+  value: unknown,
+  context: string,
+): { login: string; type: string | null } | null {
+  if (value === null || value === undefined) return null;
+  if (!isRecord(value) || typeof value.login !== "string") {
+    throw unexpectedShape(context);
+  }
+  return {
+    login: value.login,
+    type: typeof value.type === "string" ? value.type : null,
+  };
+}
+
+/**
+ * コミットの1件分の応答を読む。
+ * `verified`は`commit.verification.verified`、`parentCount`は`parents`の長さで、
+ * どちらも応答に無いか形が違うときは例外にする。判定に使う値を推測で補わないため。
+ */
+function parsePrCommit(entry: unknown, context: string): PrCommit {
+  if (!isRecord(entry) || typeof entry.sha !== "string") {
+    throw unexpectedShape(context);
+  }
+  const author = parseCommitAccount(entry.author, context);
+  const committer = parseCommitAccount(entry.committer, context);
+  const { commit, parents } = entry;
+  if (
+    !isRecord(commit) ||
+    !isRecord(commit.verification) ||
+    typeof commit.verification.verified !== "boolean" ||
+    !Array.isArray(parents)
+  ) {
+    throw unexpectedShape(context);
+  }
+  return {
+    sha: entry.sha,
+    authorLogin: author?.login ?? null,
+    authorType: author?.type ?? null,
+    committerLogin: committer?.login ?? null,
+    verified: commit.verification.verified,
+    parentCount: parents.length,
+  };
+}
+
+/**
+ * `GET .../pulls/{number}/commits`を最後のページまで読む。
+ * `authorLogin`と`committerLogin`はGitHubのアカウントで、紐づくアカウントが無いcommitでは`null`にする。
+ * APIの上限に達して切り詰められた可能性があるときは例外にする。
+ * PR番号で引くので、headのshaに固定されない。ゲートに渡す入力は、headのshaを固定した比較から作る。
+ */
+export async function listPrCommits(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrCommit[]> {
+  validateOwnerRepo(owner, repo);
+  const commits = await paginateGhApi<PrCommit>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/commits?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown) => parsePrCommit(entry, context));
+    },
+    PR_COMMITS_MAX_PAGES,
+  );
+  if (commits.length >= PR_COMMITS_API_CAP) {
+    throw new GitHubResponseError(
+      `GET pr commits ${owner}/${repo}#${number}: the commit list may be truncated at ${String(PR_COMMITS_API_CAP)} commits`,
+    );
+  }
+  return commits;
+}
+
+/**
+ * `compare`が変更ファイルとして返せる件数の上限。
+ * 変更ファイルは最初のページにだけ載り、300件で打ち切られる(2ページ目以降に`files`は無い)。
+ * 300件に達したときは、切り詰められた可能性があるものとして扱う。
+ */
+const COMPARE_FILES_API_CAP = 300;
+
+export type PrCommitMessages = {
+  /** PRのcommitの本文(件名とトレーラーを含む全文)。古いcommitから順に並ぶ。 */
+  readonly messages: readonly string[];
+  /** APIの上限(250件)に達し、切り詰められた可能性がある。 */
+  readonly truncated: boolean;
+};
+
+/**
+ * `GET .../pulls/{number}/commits`を最後のページまで読み、commitの本文を返す。
+ * トレーラーの有無を調べる用途に限り、読み取りだけを行う。
+ * 応答の形が違うときの例外には、本文を載せない。
+ * 上限に達したときは例外にせず`truncated`を立てる。切り詰められた一覧では、全commitの検査ができないためである。
+ */
+export async function listPrCommitMessages(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrCommitMessages> {
+  validateOwnerRepo(owner, repo);
+  const messages = await paginateGhApi<string>(
+    client,
+    `repos/${owner}/${repo}/pulls/${number}/commits?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed.map((entry: unknown) => {
+        if (
+          !isRecord(entry) ||
+          !isRecord(entry.commit) ||
+          typeof entry.commit.message !== "string"
+        ) {
+          throw unexpectedShape(context);
+        }
+        return entry.commit.message;
+      });
+    },
+    PR_COMMITS_MAX_PAGES,
+  );
+  return { messages, truncated: messages.length >= PR_COMMITS_API_CAP };
+}
+
+/**
+ * `GET repos/{owner}/{repo}/git/ref/heads/{branch}`で、ブランチの先頭のshaを返す。
+ * `heads/`で名前空間を固定するので、同名のタグがあっても取り違えない。
+ * ブランチ名の`/`は残し、区切りごとにエンコードする。
+ * ブランチでないref、commitでないオブジェクト、小文字40桁でないshaは`GitHubResponseError`にする。
+ */
+export async function getBranchSha(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<string> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const context = `GET branch ref ${owner}/${repo}@${branch}`;
+  const encoded = branch.split("/").map(encodeURIComponent).join("/");
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/git/ref/heads/${encoded}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (
+    !isRecord(parsed) ||
+    parsed.ref !== `refs/heads/${branch}` ||
+    !isRecord(parsed.object) ||
+    parsed.object.type !== "commit" ||
+    !isCommitSha(parsed.object.sha)
+  ) {
+    throw unexpectedShape(context);
+  }
+  return parsed.object.sha;
+}
+
+export type CompareFile = {
+  readonly filename: string;
+  /** 名前の変更の移動元。名前の変更でなければ`null`。 */
+  readonly previousFilename: string | null;
+  readonly status: string;
+};
+
+export type CommitComparison = {
+  /** baseとheadの共通の祖先。 */
+  readonly mergeBaseSha: string;
+  readonly files: CompareFile[];
+  readonly commits: PrCommit[];
+};
+
+function parseCompareFile(entry: unknown, context: string): CompareFile {
+  if (
+    !isRecord(entry) ||
+    typeof entry.filename !== "string" ||
+    typeof entry.status !== "string"
+  ) {
+    throw unexpectedShape(context);
+  }
+  const previous = entry.previous_filename;
+  if (
+    previous !== undefined &&
+    previous !== null &&
+    typeof previous !== "string"
+  ) {
+    throw unexpectedShape(context);
+  }
+  return {
+    filename: entry.filename,
+    previousFilename: previous ?? null,
+    status: entry.status,
+  };
+}
+
+/**
+ * `GET .../compare/{baseSha}...{headSha}`(三点: merge-baseからheadまで)を最後のページまで読む。
+ * baseとheadはどちらも小文字40桁のshaに限る。短いブランチ名は同名のタグと曖昧になり、
+ * merge-baseを偽られうるので受け付けない。ブランチのshaは`getBranchSha`で読む。
+ * shaに固定するので、PR番号で引く`listPrFiles`と`listPrCommits`と違い、
+ * 比較の途中でheadが動いても結果は変わらない。
+ * ファイルは最初のページにだけ載る。ファイルが`COMPARE_FILES_API_CAP`件、commitが250件に達したときは、
+ * 切り詰められた可能性があるので`GitHubResponseError`にする。
+ * 応答の形が違うとき(merge baseのshaが40桁でない、`verified`が無い、`parents`が配列でないなど)も例外にする。
+ */
+export async function compareCommits(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  headSha: string,
+): Promise<CommitComparison> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(baseSha);
+  assertCommitSha(headSha);
+  const found: { mergeBaseSha: string | null; pages: number } = {
+    mergeBaseSha: null,
+    pages: 0,
+  };
+  const files: CompareFile[] = [];
+  const commits = await paginateGhApi<PrCommit>(
+    client,
+    `repos/${owner}/${repo}/compare/${baseSha}...${headSha}?per_page=100`,
+    (parsed, context) => {
+      if (!isRecord(parsed) || !Array.isArray(parsed.commits)) {
+        throw unexpectedShape(context);
+      }
+      const mergeBase = parsed.merge_base_commit;
+      if (!isRecord(mergeBase) || !isCommitSha(mergeBase.sha)) {
+        throw unexpectedShape(context);
+      }
+      if (found.mergeBaseSha !== null && found.mergeBaseSha !== mergeBase.sha) {
+        throw unexpectedShape(context);
+      }
+      found.mergeBaseSha = mergeBase.sha;
+      const pageFiles = parsed.files;
+      if (pageFiles === undefined) {
+        if (found.pages === 0) throw unexpectedShape(context);
+      } else if (!Array.isArray(pageFiles)) {
+        throw unexpectedShape(context);
+      } else {
+        files.push(
+          ...pageFiles.map((entry: unknown) =>
+            parseCompareFile(entry, context),
+          ),
+        );
+      }
+      found.pages += 1;
+      return parsed.commits.map((entry: unknown) =>
+        parsePrCommit(entry, context),
+      );
+    },
+    PR_COMMITS_MAX_PAGES,
+  );
+  const context = `GET compare ${owner}/${repo}`;
+  if (found.mergeBaseSha === null) throw unexpectedShape(context);
+  if (files.length >= COMPARE_FILES_API_CAP) {
+    throw new GitHubResponseError(
+      `${context}: the file list may be truncated at ${String(COMPARE_FILES_API_CAP)} files`,
+    );
+  }
+  if (commits.length >= PR_COMMITS_API_CAP) {
+    throw new GitHubResponseError(
+      `${context}: the commit list may be truncated at ${String(PR_COMMITS_API_CAP)} commits`,
+    );
+  }
+  return { mergeBaseSha: found.mergeBaseSha, files, commits };
+}
+
+const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function assertRepoFilePath(path: string): void {
+  const segments = path.split("/");
+  const valid =
+    path !== "" &&
+    !path.includes("\\") &&
+    segments.every(
+      (segment) => segment !== "" && segment !== "." && segment !== "..",
+    );
+  if (!valid) throw new Error("github: file path is not a repository path");
+}
+
+/**
+ * `GET .../contents/{path}?ref={ref}`で、その版のファイルの内容をUTF-8の文字列で返す。
+ * ファイルが無いときは`null`を返す。refが存在しないときも404になるので、
+ * 呼び出し側はrefが存在することを別に確かめる。
+ * 内容が返らない(1MBを超える)ときと、ファイルでないときは例外にする。
+ */
+export async function getFileAtRef(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  path: string,
+  ref: string,
+): Promise<string | null> {
+  validateOwnerRepo(owner, repo);
+  assertRepoFilePath(path);
+  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const context = `GET file ${owner}/${repo}:${path}@${ref}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`,
+  );
+  if (response.status === 404) return null;
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  // symlinkをたどって別のファイルの内容が返ることを防ぐため、要求したパスと一致するものだけを受け付ける。
+  if (!isRecord(parsed) || parsed.type !== "file" || parsed.path !== path) {
+    throw unexpectedShape(context);
+  }
+  if (parsed.encoding === "none") {
+    throw new GitHubResponseError(
+      `${context}: content is not returned (file is too large)`,
+    );
+  }
+  if (parsed.encoding !== "base64" || typeof parsed.content !== "string") {
+    throw unexpectedShape(context);
+  }
+  const base64 = parsed.content.replace(/\r?\n/g, "");
+  if (!BASE64_PATTERN.test(base64)) throw unexpectedShape(context);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      Buffer.from(base64, "base64"),
+    );
+  } catch {
+    throw new GitHubResponseError(`${context}: content is not valid UTF-8`);
+  }
 }
 
 export type PrReview = {
@@ -2327,6 +3466,30 @@ export async function getBranchProtected(
   return parsed.protected;
 }
 
+/**
+ * `GET repos/{owner}/{repo}/rules/branches/{branch}`が返す、ブランチに効くrulesetの規則の数を返す。
+ * globで対象を指定したrulesetも含む。`getBranchProtected`の`protected`に反映されない場合に備えて併用する。
+ */
+export async function getBranchRuleCount(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<number> {
+  validateOwnerRepo(owner, repo);
+  const context = `GET branch rules ${owner}/${repo}@${branch}`;
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/rules/branches/${encodeURIComponent(branch)}`,
+  );
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.length;
+}
+
 // ---------------------------------------------------------------------------
 // レビュースレッド(GraphQL)。再レビューで指摘が0件のとき、
 // `pr_review_post.ts`はPR上でまだ解決していないFactory自身の`pr_review`の
@@ -2393,7 +3556,7 @@ function isGraphqlDataPayload(value: unknown): value is GraphqlDataPayload {
  * (`RATE_LIMITED`なら`GitHubRateLimitError`、それ以外は一般のエラー)。こうして、
  * HTTPのステータスだけを確かめた呼び出し側がGraphQLの失敗を成功と取り違えないようにする。
  * `idempotent`は、読み取りのqueryなら`true`、mutationなら`false`にする。
- * `true`のときだけ、応答の無い通信断を再試行する(`isRetryable`を参照)。
+ * `true`のときだけ、応答の無い通信断と5xxを再試行する(`isRetryable`を参照)。
  */
 async function callGhGraphql(
   client: GhClient,
@@ -2873,6 +4036,618 @@ export async function listPullRequestNumbersByHead(
     }
     return item.number;
   });
+}
+
+type WorkflowRunPayload = {
+  id: number;
+  name: string | null;
+  head_sha: string;
+  head_branch: string | null;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  created_at: string;
+  html_url: string;
+};
+
+function isWorkflowRunPayload(value: unknown): value is WorkflowRunPayload {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== "number") return false;
+  if (value.name !== null && typeof value.name !== "string") return false;
+  if (typeof value.head_sha !== "string") return false;
+  if (value.head_branch !== null && typeof value.head_branch !== "string") {
+    return false;
+  }
+  if (typeof value.event !== "string") return false;
+  if (typeof value.status !== "string") return false;
+  if (value.conclusion !== null && typeof value.conclusion !== "string") {
+    return false;
+  }
+  if (typeof value.created_at !== "string") return false;
+  if (Number.isNaN(new Date(value.created_at).getTime())) return false;
+  return typeof value.html_url === "string";
+}
+
+/**
+ * `listWorkflowRuns`が、そのコミットの実行を判定に使えないときに投げる例外。
+ * コミットを指定した読み取りで、上限のページまで埋まって実行を読み切れないとき、
+ * 照会したコミットと違う`head_sha`の実行が返ったとき、ブランチやeventの合わない実行が返ったときがある。
+ * 呼び出し側は、コミットごとに`instanceof`で見分けて、そのコミットを今回は判定しない。
+ */
+export class WorkflowRunsIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkflowRunsIncompleteError";
+  }
+}
+
+function toWorkflowRuns(
+  parsed: unknown,
+  context: string,
+  branch: string,
+  expectedSha: string | undefined,
+): WorkflowRun[] {
+  if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.workflow_runs.flatMap((raw: unknown): WorkflowRun[] => {
+    if (!isWorkflowRunPayload(raw)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    if (raw.head_branch !== branch || raw.event !== "push") {
+      // ブランチの一覧では、ブランチと同じ名前のタグのpushの実行が混ざりうる。判定の対象ではないので捨てる。
+      // コミットを指定した読み取りでは、一部を捨てた実行で判定しないよう、例外にする。
+      if (expectedSha === undefined) return [];
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another branch or event`,
+      );
+    }
+    if (expectedSha !== undefined && raw.head_sha !== expectedSha) {
+      throw new WorkflowRunsIncompleteError(
+        `${context}: the response holds a run of another commit`,
+      );
+    }
+    return [
+      {
+        id: raw.id,
+        name: raw.name ?? "",
+        headSha: raw.head_sha,
+        status: raw.status,
+        conclusion: raw.conclusion,
+        createdAt: new Date(raw.created_at),
+        htmlUrl: raw.html_url,
+      },
+    ];
+  });
+}
+
+/**
+ * `branch`へのpushで始まったworkflowの実行を読む。使い方は2つある。
+ * - `headSha`なし: ブランチの最新の実行を、新しい順に1ページ(`WORKFLOW_RUNS_PER_PAGE`件)だけ読む。
+ *   新しいコミットを見つけるための一覧で、1つのコミットの実行が全部そろっているとは限らない。
+ * - `headSha`あり: そのコミットの実行を、1ページ`WORKFLOW_RUNS_BY_SHA_PER_PAGE`件で最大
+ *   `WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読む。判定に使うのはこちらである。
+ *   上限のページまで埋まったら、実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。
+ *   応答に別のコミットの実行が混ざったときも同じ例外を投げる。
+ *   ブランチと同じ名前のタグのpushで動いた実行は、ブランチ名がそのブランチで返りうる。
+ *   各実行の`head_branch`が`branch`と、`event`が`push`と合わなければ、同じ例外を投げる。
+ *   ブランチも条件に付けるのは、同じコミットを別のブランチにpushした実行を混ぜないため。
+ *   `headSha`なしの一覧では、これらに合わない実行は捨てて、残りを返す。
+ * `headSha`と、応答の各実行の`head_sha`は、完全なコミットshaでなければ例外を投げる。
+ * 応答の形が違えば例外を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRuns(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+  headSha?: string,
+): Promise<WorkflowRun[]> {
+  validateOwnerRepo(owner, repo);
+  assertBranchName(branch);
+  const base = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(branch)}`;
+  if (headSha === undefined) {
+    const context = `GET workflow runs ${owner}/${repo}@${branch}`;
+    const endpoint = `${base}&event=push&per_page=${String(WORKFLOW_RUNS_PER_PAGE)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    return toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      branch,
+      undefined,
+    );
+  }
+  assertCommitSha(headSha);
+  const context = `GET workflow runs ${owner}/${repo}@${headSha}`;
+  const runs: WorkflowRun[] = [];
+  for (let page = 1; page <= WORKFLOW_RUNS_BY_SHA_MAX_PAGES; page += 1) {
+    const endpoint = `${base}&head_sha=${headSha}&event=push&per_page=${String(WORKFLOW_RUNS_BY_SHA_PER_PAGE)}&page=${String(page)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    const items = toWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      branch,
+      headSha,
+    );
+    runs.push(...items);
+    if (items.length < WORKFLOW_RUNS_BY_SHA_PER_PAGE) return runs;
+  }
+  throw new WorkflowRunsIncompleteError(
+    `${context}: the runs may be incomplete (too many runs)`,
+  );
+}
+
+/** PRのheadの実行として扱うevent。それ以外のevent(手動、定期など)の実行は、PRの判定に使わない。 */
+const PR_HEAD_RUN_EVENTS: readonly string[] = ["pull_request", "push"];
+
+type PrHeadRunExtras = {
+  readonly workflowId: number | undefined;
+  readonly headRepository: {
+    readonly id: number | null;
+    readonly fullName: string;
+  } | null;
+  readonly pullRequestNumbers: number[];
+  readonly runAttempt: number;
+};
+
+function parsePrHeadRunExtras(
+  raw: Record<string, unknown>,
+  context: string,
+): PrHeadRunExtras {
+  const shapeError = () => new Error(`${context}: unexpected response shape`);
+  const workflowId = raw.workflow_id;
+  if (
+    workflowId !== undefined &&
+    (typeof workflowId !== "number" ||
+      !Number.isSafeInteger(workflowId) ||
+      workflowId <= 0)
+  ) {
+    throw shapeError();
+  }
+  let headRepository: PrHeadRunExtras["headRepository"] = null;
+  const repository = raw.head_repository;
+  if (repository !== null && repository !== undefined) {
+    if (!isRecord(repository) || typeof repository.full_name !== "string") {
+      throw shapeError();
+    }
+    headRepository = {
+      id: typeof repository.id === "number" ? repository.id : null,
+      fullName: repository.full_name,
+    };
+  }
+  const pullRequests = raw.pull_requests ?? [];
+  if (!Array.isArray(pullRequests)) throw shapeError();
+  const pullRequestNumbers: number[] = [];
+  for (const item of pullRequests) {
+    if (!isRecord(item) || !Number.isSafeInteger(item.number)) {
+      throw shapeError();
+    }
+    if (typeof item.number === "number") pullRequestNumbers.push(item.number);
+  }
+  const runAttempt = raw.run_attempt ?? 1;
+  if (typeof runAttempt !== "number" || !Number.isSafeInteger(runAttempt)) {
+    throw shapeError();
+  }
+  return { workflowId, headRepository, pullRequestNumbers, runAttempt };
+}
+
+/** `listPrHeadWorkflowRuns`の読み方の指定。 */
+export type PrHeadWorkflowRunsOptions = {
+  /** ベースのリポジトリのID。headのリポジトリをIDで比べる。名前は付け替えられるので比べない。 */
+  readonly baseRepoId: number;
+  /** PRの番号。あれば、`pull_requests`が空でなくこのPRを含まない実行を捨てる。 */
+  readonly prNumber?: number;
+};
+
+/** `listPrHeadWorkflowRuns`の結果。判定に使う実行と、捨てた実行の件数。 */
+export type PrHeadWorkflowRuns = {
+  readonly runs: WorkflowRun[];
+  /** headのリポジトリがベースと違う(fork、削除されたfork)ため捨てた件数。 */
+  readonly droppedOtherRepository: number;
+  /** `pull_requests`が空でなく、対象のPRを含まないため捨てた件数。 */
+  readonly droppedOtherPullRequest: number;
+};
+
+function toPrHeadWorkflowRuns(
+  parsed: unknown,
+  context: string,
+  expected: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly headSha: string;
+    readonly headRef: string;
+    readonly options: PrHeadWorkflowRunsOptions;
+  },
+): PrHeadWorkflowRuns & { rawCount: number } {
+  if (!isRecord(parsed) || !Array.isArray(parsed.workflow_runs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  const { baseRepoId, prNumber } = expected.options;
+  const incomplete = (what: string) =>
+    new WorkflowRunsIncompleteError(`${context}: the response holds ${what}`);
+  const runs: WorkflowRun[] = [];
+  let droppedOtherRepository = 0;
+  let droppedOtherPullRequest = 0;
+  for (const raw of parsed.workflow_runs) {
+    if (!isWorkflowRunPayload(raw)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    if (!Number.isSafeInteger(raw.id) || raw.id <= 0) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    if (raw.head_sha !== expected.headSha) {
+      throw incomplete("a run of another commit");
+    }
+    if (raw.head_branch !== expected.headRef) {
+      throw incomplete("a run of another branch");
+    }
+    if (!PR_HEAD_RUN_EVENTS.includes(raw.event)) continue;
+    const extras = parsePrHeadRunExtras(raw, context);
+    const repository = extras.headRepository;
+    // forkの実行は、同じブランチ名とshaでも別のリポジトリの実行なので、捨てて続ける。
+    if (repository === null || repository.id !== baseRepoId) {
+      droppedOtherRepository += 1;
+      continue;
+    }
+    // pull_requests[]はGitHubが結び付けた時だけ入るので、空でも採用する。入っていて、このPRを含まなければ、別のPRの実行として捨てる。
+    if (
+      prNumber !== undefined &&
+      extras.pullRequestNumbers.length > 0 &&
+      !extras.pullRequestNumbers.includes(prNumber)
+    ) {
+      droppedOtherPullRequest += 1;
+      continue;
+    }
+    runs.push({
+      id: raw.id,
+      ...(extras.workflowId === undefined
+        ? {}
+        : { workflowId: extras.workflowId }),
+      name: raw.name ?? "",
+      headSha: raw.head_sha,
+      status: raw.status,
+      conclusion: raw.conclusion,
+      createdAt: new Date(raw.created_at),
+      htmlUrl: raw.html_url,
+      event: raw.event,
+      headRepositoryFullName: repository.fullName,
+      pullRequestNumbers: extras.pullRequestNumbers,
+      runAttempt: extras.runAttempt,
+    });
+  }
+  return {
+    runs,
+    droppedOtherRepository,
+    droppedOtherPullRequest,
+    rawCount: parsed.workflow_runs.length,
+  };
+}
+
+function finishPrHeadWorkflowRuns(
+  context: string,
+  result: PrHeadWorkflowRuns,
+): PrHeadWorkflowRuns {
+  if (result.runs.length === 0 && result.droppedOtherRepository > 0) {
+    throw new WorkflowRunsIncompleteError(
+      `${context}: every run was dropped as one of another repository`,
+    );
+  }
+  return result;
+}
+
+/**
+ * PRのheadのコミット(`headSha`)について、workflowの実行を読む。
+ * 対象は、head側のブランチ(`headRef`)で、eventが`pull_request`か`push`の実行である。
+ * 1ページ100件で最大`WORKFLOW_RUNS_BY_SHA_MAX_PAGES`ページ読み、上限まで埋まったら
+ * 実行の一部を読めていないので`WorkflowRunsIncompleteError`を投げる。埋まったかは、
+ * 捨てる前の件数で決める。
+ * 別のコミットや別のブランチの実行が返ったときも同じ例外を投げ、そのコミットを今回は判定させない。
+ * 次の実行は通常は捨てて続け、捨てた件数を結果に持たせる。呼び出し側はログに残せる。
+ * - headのあるリポジトリが、ベースのリポジトリと違う実行(forkや削除されたfork)。
+ *   `options.baseRepoId`とリポジトリのIDで比べる。
+ *   読んだ実行がすべてこれで捨てられ、判定に使える実行が1件も残らないときだけは、
+ *   捨てて続けずに`WorkflowRunsIncompleteError`を投げる。
+ *   本物の実行を取り違えて全部捨てると、実行が無いのと見分けがつかず、判定が黙って`no_ci`に倒れるため。
+ * - `options.prNumber`を渡したときは、`pull_requests`が空でなく、そのPRを含まない実行。
+ *   `pull_requests`が空の実行は、GitHubがPRを結び付けていないだけなので採用する。
+ * 手動や定期など、ほかのeventの実行も捨てる(件数には数えない)。
+ * `workflow_id`があれば`workflowId`に詰める。同じworkflowの実行をまとめるのに使う。
+ * `headSha`と応答の各実行の`head_sha`は完全なコミットshaで、実行と`workflow_id`のIDは正の安全な整数でなければ例外を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listPrHeadWorkflowRuns(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  headSha: string,
+  headRef: string,
+  options: PrHeadWorkflowRunsOptions,
+): Promise<PrHeadWorkflowRuns> {
+  validateOwnerRepo(owner, repo);
+  assertCommitSha(headSha);
+  assertBranchName(headRef);
+  const context = `GET pr workflow runs ${owner}/${repo}@${headSha}`;
+  const runs: WorkflowRun[] = [];
+  let droppedOtherRepository = 0;
+  let droppedOtherPullRequest = 0;
+  for (let page = 1; page <= WORKFLOW_RUNS_BY_SHA_MAX_PAGES; page += 1) {
+    const endpoint = `repos/${owner}/${repo}/actions/runs?branch=${encodeURIComponent(headRef)}&head_sha=${headSha}&per_page=${String(WORKFLOW_RUNS_BY_SHA_PER_PAGE)}&page=${String(page)}`;
+    const response = await callGhApi(client, endpoint);
+    ensureSuccess(response, context);
+    const items = toPrHeadWorkflowRuns(
+      parseJsonBody(response, context),
+      context,
+      { owner, repo, headSha, headRef, options },
+    );
+    runs.push(...items.runs);
+    droppedOtherRepository += items.droppedOtherRepository;
+    droppedOtherPullRequest += items.droppedOtherPullRequest;
+    if (items.rawCount < WORKFLOW_RUNS_BY_SHA_PER_PAGE) {
+      return finishPrHeadWorkflowRuns(context, {
+        runs,
+        droppedOtherRepository,
+        droppedOtherPullRequest,
+      });
+    }
+  }
+  throw new WorkflowRunsIncompleteError(
+    `${context}: the runs may be incomplete (too many runs)`,
+  );
+}
+
+/** 正の安全な整数か。endpointに入れるIDは、この条件を満たすものだけにする。 */
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+/** workflowの実行のIDが正の安全な整数でなければ例外を投げる。 */
+function assertRunId(runId: number): void {
+  if (!isPositiveSafeInteger(runId)) {
+    throw new Error(`invalid run id: ${String(runId)}`);
+  }
+}
+
+/** ジョブのIDが正の安全な整数でなければ例外を投げる。 */
+function assertJobId(jobId: number): void {
+  if (!isPositiveSafeInteger(jobId)) {
+    throw new Error(`invalid job id: ${String(jobId)}`);
+  }
+}
+
+/** workflowのジョブの1つのstep。 */
+export type WorkflowJobStep = {
+  readonly name: string;
+  readonly conclusion: string | null;
+  readonly number: number;
+};
+
+/**
+ * workflowの実行のジョブ1件。`listWorkflowRunJobs`が形を検証してから返す。
+ * `name`とstepの`name`はリポジトリへ書ける人が決める文字列なので、表示や
+ * プロンプトに使う前に無害化する。
+ */
+export type WorkflowRunJob = {
+  readonly id: number;
+  readonly runId: number;
+  readonly headSha: string;
+  readonly name: string;
+  readonly status: string;
+  readonly conclusion: string | null;
+  readonly steps: readonly WorkflowJobStep[];
+};
+
+/** ジョブの一覧を読むページ数の上限。超えたら全体を読めていないので`GitHubPaginationLimitError`にする。 */
+export const WORKFLOW_RUN_JOBS_MAX_PAGES = 3;
+
+function toWorkflowJobStep(raw: unknown, context: string): WorkflowJobStep {
+  if (
+    !isRecord(raw) ||
+    typeof raw.name !== "string" ||
+    !Number.isSafeInteger(raw.number) ||
+    typeof raw.number !== "number" ||
+    (raw.conclusion !== null &&
+      raw.conclusion !== undefined &&
+      typeof raw.conclusion !== "string")
+  ) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return {
+    name: raw.name,
+    conclusion: raw.conclusion ?? null,
+    number: raw.number,
+  };
+}
+
+function toWorkflowRunJobs(
+  parsed: unknown,
+  context: string,
+  expected: { readonly runId: number; readonly headSha: string },
+): WorkflowRunJob[] {
+  if (!isRecord(parsed) || !Array.isArray(parsed.jobs)) {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  return parsed.jobs.map((raw: unknown): WorkflowRunJob => {
+    if (
+      !isRecord(raw) ||
+      !isPositiveSafeInteger(raw.id) ||
+      !isPositiveSafeInteger(raw.run_id) ||
+      typeof raw.head_sha !== "string" ||
+      typeof raw.name !== "string" ||
+      typeof raw.status !== "string" ||
+      (raw.conclusion !== null && typeof raw.conclusion !== "string") ||
+      (raw.steps !== undefined && !Array.isArray(raw.steps))
+    ) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    assertCommitSha(raw.head_sha);
+    if (raw.run_id !== expected.runId) {
+      throw new GitHubResponseError(
+        `${context}: the response holds a job of another run`,
+      );
+    }
+    if (raw.head_sha !== expected.headSha) {
+      throw new GitHubResponseError(
+        `${context}: the response holds a job of another commit`,
+      );
+    }
+    const rawSteps: unknown[] = raw.steps ?? [];
+    return {
+      id: raw.id,
+      runId: raw.run_id,
+      headSha: raw.head_sha,
+      name: raw.name,
+      status: raw.status,
+      conclusion: raw.conclusion,
+      steps: rawSteps.map((step) => toWorkflowJobStep(step, context)),
+    };
+  });
+}
+
+/**
+ * workflowの実行(`runId`)の最新の試行のジョブを、stepつきですべて読む。
+ * `runId`は正の安全な整数、`headSha`は完全なコミットshaでなければ、API呼び出しの前に例外を投げる。
+ * 応答のジョブの`run_id`が`runId`と、`head_sha`が`headSha`と違えば、
+ * 別の実行のログを取り違えないよう`GitHubResponseError`を投げる。
+ * 応答の形が違えば例外を投げる。ページ数が`WORKFLOW_RUN_JOBS_MAX_PAGES`を超えたら
+ * `GitHubPaginationLimitError`を投げる。
+ * 403と404は`GitHubHttpError`で、rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function listWorkflowRunJobs(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  runId: number,
+  headSha: string,
+): Promise<WorkflowRunJob[]> {
+  validateOwnerRepo(owner, repo);
+  assertRunId(runId);
+  assertCommitSha(headSha);
+  const endpoint = `repos/${owner}/${repo}/actions/runs/${String(runId)}/jobs?filter=latest&per_page=100`;
+  return paginateGhApi(
+    client,
+    endpoint,
+    (parsed, context) => toWorkflowRunJobs(parsed, context, { runId, headSha }),
+    WORKFLOW_RUN_JOBS_MAX_PAGES,
+  );
+}
+
+/**
+ * ジョブのログを読むときに保持するバイト数の上限(8MB)。
+ * 超えたログは先頭と末尾だけを残す。失敗の原因は末尾に出るのが普通なので、末尾を使う。
+ */
+export const CI_JOB_LOG_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * `getWorkflowJobLog`の結果。例外にしない結果は、呼び出し側が扱いを分けるもの。
+ * - `forbidden`: 403。トークンの権限が足りない。
+ * - `log_unavailable`: 404か410。ログが無い、または保存期間が過ぎた。
+ */
+export type WorkflowJobLogResult =
+  | {
+      readonly kind: "ok";
+      /** 生のログ本文。揮発する値で、`buildCiExcerpt`に渡す直前に`reveal`する。 */
+      readonly log: VolatileCiLog;
+      /** 上限を超えて間を捨てたか。出力のバイト数で決め、本文の文字列は見ない。 */
+      readonly truncated: boolean;
+    }
+  | { readonly kind: "forbidden" }
+  | { readonly kind: "log_unavailable" };
+
+/**
+ * ログの取得に失敗したときの例外。
+ * ログの本文、応答のヘッダー、リダイレクト先の署名付きURLを載せない。載せるのはHTTPのステータスだけである。
+ * `status`が0のときは応答が返らなかった(通信断やtimeout)。
+ */
+export class GitHubCiLogError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`GET workflow job log failed with HTTP ${String(status)}`);
+    this.name = "GitHubCiLogError";
+    this.status = status;
+  }
+}
+
+/**
+ * ログの本文が欠けたまま`gh`が終わったときの例外。
+ * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、拒否、
+ * 本文の途中の切断、timeoutで止めた取得で起きる。
+ * 本文の欠けたログを使わないために投げる。本文、stderr、終了コードを載せない。
+ * HTTPの失敗ではないので、ステータスを持たない。
+ */
+export class GitHubCiLogIncompleteError extends Error {
+  constructor() {
+    super(
+      "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
+    );
+    this.name = "GitHubCiLogIncompleteError";
+  }
+}
+
+/**
+ * ジョブ(`jobId`)のログを読む。ログはJSONではないので、本文をそのまま文字列で返す。
+ * 取得先は署名付きURLへの302で、`gh`が内部でたどる。URLは受け取らず、エラーにも戻り値にも出さない。
+ * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
+ * 本文は`CI_JOB_LOG_MAX_BYTES`で切り、切ったかは`truncated`で返す。
+ * 本文は`VolatileCiLog`で包んで返す。
+ * ログは端末の制御列を含むので、`gh`に`--allow-escape-sequences`を渡す。
+ * 2xxなのに`gh`の終了コードが0以外(終了コードが無い場合を含む)のときは、
+ * 上限に達したかによらず、本文の欠けたログとして扱う。
+ * runnerは上限に達してもプロセスを止めず、先頭と末尾を残して最後まで読むので、
+ * 上限に達した正常なログは終了コード0で`truncated`のログとして返る。
+ * 一時的な切断をCIの回に持ち込まないため、欠けたときは、GETが冪等であることを使って1回だけ取り直す。
+ * 取り直しても欠けたときは、`GitHubCiLogIncompleteError`を投げる。
+ * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
+ * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
+ * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
+ */
+export async function getWorkflowJobLog(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  jobId: number,
+): Promise<WorkflowJobLogResult> {
+  validateOwnerRepo(owner, repo);
+  assertJobId(jobId);
+  try {
+    return await fetchWorkflowJobLog(client, owner, repo, jobId);
+  } catch (error) {
+    if (!(error instanceof GitHubCiLogIncompleteError)) throw error;
+  }
+  const sleep = client.sleep ?? defaultSleep;
+  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
+  return fetchWorkflowJobLog(client, owner, repo, jobId);
+}
+
+/** `getWorkflowJobLog`の1回分。2xxで終了コードが0でなければ`GitHubCiLogIncompleteError`を投げる。 */
+async function fetchWorkflowJobLog(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  jobId: number,
+): Promise<WorkflowJobLogResult> {
+  const response = await callGhApi(
+    client,
+    `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs`,
+    { maxOutputBytes: CI_JOB_LOG_MAX_BYTES, allowEscapeSequences: true },
+  );
+  if (response.status >= 200 && response.status < 300) {
+    if (response.exitCode !== 0) throw new GitHubCiLogIncompleteError();
+    return {
+      kind: "ok",
+      log: VolatileCiLog.of(response.bodyText),
+      truncated: response.capped === true,
+    };
+  }
+  if (response.status === 403) return { kind: "forbidden" };
+  if (response.status === 404 || response.status === 410) {
+    return { kind: "log_unavailable" };
+  }
+  throw new GitHubCiLogError(response.status);
 }
 
 export type PullRequestUpdate = {

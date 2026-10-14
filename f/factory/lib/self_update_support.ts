@@ -2,6 +2,9 @@
 // I/Oは持たない。git・wmill CLIのサブプロセス、Data Tableへの記録、
 // Discordへの通知は`self_update.ts`が行う。
 
+import { maskSecrets } from "./log.ts";
+import type { DeploymentRecord } from "./types.ts";
+
 // ---------------------------------------------------------------------------
 // decideUpdate: 再デプロイが必要かの判定
 // ---------------------------------------------------------------------------
@@ -273,17 +276,18 @@ export function buildWmillArgv(
 export type WmillEnvInput = {
   readonly HOME?: string | undefined;
   readonly PATH?: string | undefined;
+  readonly TMPDIR?: string | undefined;
 };
 
 /**
  * `wmill sync push` / `wmill datatable migrate up`のサブプロセスに渡す
  * 最小限の環境変数を作る。
  * 入れるのは`HOME`(CLIの設定ディレクトリ用)と`PATH`(`wmill`本体を探す用)、
- * それに`NPM_CONFIG_IGNORE_SCRIPTS`である。`process.env`全体は渡さず、
+ * `TMPDIR`(一時ファイルの置き場)、それに`NPM_CONFIG_IGNORE_SCRIPTS`である。`process.env`全体は渡さず、
  * workerのプロセスがたまたま持つほかの値がサブプロセスに漏れないようにする。
- * `NPM_CONFIG_IGNORE_SCRIPTS`は、`wmill sync push`がraw appのバンドルで
- * 走らせるnpmにも、依存のinstall scriptを動かさせないためのものである
- * (`npm ci`の`--ignore-scripts`はそのバンドルには効かない)。
+ * `NPM_CONFIG_IGNORE_SCRIPTS`は、`wmill`がnpmを走らせることがあっても、
+ * 依存のinstall scriptを動かさせないためのものである。
+ * install scriptはworkerの権限のまま、ネットワークにも出られる状態で動く。
  * workspace・base-url・tokenは意図して環境変数にしない。
  * このCLIはそれらを環境変数から読まないことを実測で確かめている
  * (この節の前にある、wmill CLIの接続の節の冒頭コメントを参照)。
@@ -292,6 +296,7 @@ export function buildWmillEnv(env: WmillEnvInput): Record<string, string> {
   const result: Record<string, string> = { NPM_CONFIG_IGNORE_SCRIPTS: "true" };
   if (env.HOME !== undefined) result.HOME = env.HOME;
   if (env.PATH !== undefined) result.PATH = env.PATH;
+  if (env.TMPDIR !== undefined) result.TMPDIR = env.TMPDIR;
   return result;
 }
 
@@ -309,35 +314,201 @@ export function truncateOutput(text: string, max: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// raw appの依存: `wmill sync push`はConsoleのraw appをその場でバンドルし、
-// importをself clone内の`node_modules`から解決する。
+// withCallTimeout: 上限の無いSDKとDBの呼び出しを時間で区切る
 // ---------------------------------------------------------------------------
 
 /**
- * Consoleのraw appのディレクトリ(リポジトリからの相対パス)。
- * `wmill sync push`でバンドルする前に、npmの依存を入れておく必要がある。
+ * `self_update`が、上限を持たないSDKとDBの呼び出し(変数の取得と更新、stateの読み書き、
+ * DBへの記録、Discordへの通知)1回に許す時間(ミリ秒)。
+ * ジョブ全体の`timeout`は、子プロセスの実行中に当たると子が残りうる最後の砦なので、
+ * 通常はこの上限で先に終わらせる。
  */
-export const RAW_APP_RELATIVE_DIR = "f/factory/factory_console__raw_app";
+export const SELF_UPDATE_CALL_TIMEOUT_MS = 30_000;
+
+/** `withCallTimeout`が時間切れのときに投げる例外。ほかの失敗と見分けるために型を分ける。 */
+export class CallTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${String(timeoutMs)}ms`);
+    this.name = "CallTimeoutError";
+  }
+}
 
 /**
- * raw appに対する`npm ci`の引数を返す。
- * `npm ci`は`package-lock.json`が固定するものをそのまま入れ、ファイルを
- * 書き換えない。self clone内で`npm install`を使うと`package-lock.json`が
- * 書き換わったまま残り、次の`git checkout -B`を妨げたことがある。
- * `--no-audit --no-fund`は出力を減らし、オフラインでも動きやすくする。
- * `--ignore-scripts`は依存のinstall scriptを動かさない。install scriptは
- * workerの権限のまま、ネットワークにも出られる状態で動くため。
- * raw appの依存にinstall scriptを要するものは無く(`package-lock.json`に
- * `hasInstallScript`が無い)、バンドルは`wmill`が行うので、組み立ては変わらない。
+ * `work`が`timeoutMs`以内に終わらなければ、`CallTimeoutError`を投げる。
+ * `work`自体は中断しないので、副作用が後から完了することはありうる。
+ * `label`は例外の文に入る。秘密値を含めてはならない。
  */
-export function buildNpmCiArgv(rawAppDir: string): string[] {
-  return [
-    "npm",
-    "ci",
-    "--prefix",
-    rawAppDir,
-    "--no-audit",
-    "--no-fund",
-    "--ignore-scripts",
-  ];
+export async function withCallTimeout<T>(
+  label: string,
+  work: () => Promise<T>,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new CallTimeoutError(label, timeoutMs));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([work(), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 前回デプロイしたコミットのshaを読む。変数が無いときだけ、未デプロイとして空文字を返す。
+ * `windmill-client`の`getVariable`は、変数が無い場合もほかの失敗も、同じ形の通常の`Error`にして
+ * 投げるので、失敗した理由では見分けられない。そこで読み取りが失敗したら、`exists`で変数の有無を確かめる。
+ * `false`が返ったときだけ未デプロイとし、`true`のとき、`exists`が失敗か時間切れのとき、
+ * 真偽値でない値を返したときは、最初の失敗を投げる。時間切れも同じく投げる。
+ * 一時的な失敗を未デプロイと取り違えると、実際はデプロイ済みなのに全体を反映し直す。
+ */
+export async function readDeployedSha(
+  get: () => Promise<string>,
+  exists: () => Promise<unknown>,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<string> {
+  try {
+    return await withCallTimeout("getVariable deployed_sha", get, timeoutMs);
+  } catch (err) {
+    if (err instanceof CallTimeoutError) throw err;
+    let found: unknown;
+    try {
+      found = await withCallTimeout(
+        "existsVariable deployed_sha",
+        exists,
+        timeoutMs,
+      );
+    } catch {
+      throw err;
+    }
+    if (found === false) return "";
+    throw err;
+  }
+}
+
+/**
+ * 成功した反映を`deployments`に記録する。記録が時間切れになったときは`onTimeout`を呼び、例外にしない。
+ * 区切りは記録を中断しないので、後から成功の行が入りうる。時間切れを失敗として扱って失敗の行を足すと、
+ * 同じコミットに成功と失敗の行が並び、件数に誤った失敗が混ざる。反映は済んでいて、
+ * `deployed_sha`も更新済みなので、次の回は記録し直さない。時間切れ以外の失敗はそのまま投げる。
+ */
+export async function recordSuccessDeployment(
+  record: () => Promise<unknown>,
+  onTimeout: (err: CallTimeoutError) => void,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await withCallTimeout("recordDeployment success", record, timeoutMs);
+  } catch (err) {
+    if (!(err instanceof CallTimeoutError)) throw err;
+    onTimeout(err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// recordFailedDeployment: 失敗した反映を、理由と一緒に記録する
+// ---------------------------------------------------------------------------
+
+/**
+ * `deployments.error`に保存する失敗の理由の上限(文字数。サロゲートペアは1字と数える)。
+ * 原因の手掛かりを残しつつ、記録と画面の応答を重くしないための値である。
+ */
+export const MAX_DEPLOYMENT_ERROR_LENGTH = 2000;
+
+/**
+ * 失敗の例外から、ログに出す文を作る。既知の形式の秘密情報と`secrets`の値を伏せ字にする。
+ * ログと`deployments.error`の両方にこの文を使い、同じ伏せ字処理を通す。
+ */
+export function deploymentFailureMessage(
+  err: unknown,
+  secrets: readonly string[],
+): string {
+  return maskSecrets(err instanceof Error ? err.message : String(err), secrets);
+}
+
+/**
+ * 伏せ字処理済みの`message`を、`MAX_DEPLOYMENT_ERROR_LENGTH`字までの先頭に切り詰める。
+ * 伏せ字にした後で切るので、秘密情報の一部だけが残ることはない。
+ */
+export function truncateDeploymentError(message: string): string {
+  const chars = Array.from(message);
+  return chars.length <= MAX_DEPLOYMENT_ERROR_LENGTH
+    ? message
+    : chars.slice(0, MAX_DEPLOYMENT_ERROR_LENGTH).join("");
+}
+
+/**
+ * 失敗した反映を、伏せ字処理と切り詰めを済ませた理由と一緒に1つの記録として書き、ログに出した文を返す。
+ * 理由はログに出す文と同じもので、反映、migration、版の記録のどの段階の失敗でも同じ道を通る。
+ * 記録に失敗しても例外は投げず、`onRecordError`に伏せ字処理済みの文を渡す。
+ * 呼び出し側が元の例外を投げ直せるようにするためである。
+ */
+export async function recordFailedDeployment(
+  deps: {
+    readonly record: (record: DeploymentRecord) => Promise<unknown>;
+    readonly onRecordError: (message: string) => void;
+  },
+  input: {
+    readonly shaFrom: string | null;
+    readonly shaTo: string;
+    readonly error: unknown;
+    readonly secrets: readonly string[];
+  },
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<string> {
+  const message = deploymentFailureMessage(input.error, input.secrets);
+  try {
+    await withCallTimeout(
+      "recordDeployment failed",
+      () =>
+        deps.record({
+          sha_from: input.shaFrom,
+          sha_to: input.shaTo,
+          changed_paths: [],
+          result: "failed",
+          needs_host_action: false,
+          pull_requests: [],
+          error: truncateDeploymentError(message),
+        }),
+      timeoutMs,
+    );
+  } catch (recordErr) {
+    deps.onRecordError(deploymentFailureMessage(recordErr, input.secrets));
+  }
+  return message;
+}
+
+/**
+ * デプロイしたコミットのshaを変数に書く。書き込みが時間切れになったときは、書き込みが後から
+ * 済んでいることがあるので、変数を読み直し、`sha`と同じなら成功として扱う。
+ * 読み直せないとき、値が違うときは、最初の時間切れを投げる。時間切れ以外の失敗はそのまま投げる。
+ */
+export async function setDeployedSha(
+  deps: {
+    readonly set: () => Promise<void>;
+    readonly get: () => Promise<string>;
+  },
+  sha: string,
+  timeoutMs: number = SELF_UPDATE_CALL_TIMEOUT_MS,
+): Promise<void> {
+  try {
+    await withCallTimeout("setVariable deployed_sha", deps.set, timeoutMs);
+    return;
+  } catch (err) {
+    if (!(err instanceof CallTimeoutError)) throw err;
+    let current: string | null = null;
+    try {
+      current = await withCallTimeout(
+        "getVariable deployed_sha (confirm)",
+        deps.get,
+        timeoutMs,
+      );
+    } catch {
+      current = null;
+    }
+    if (current === sha) return;
+    throw err;
+  }
 }

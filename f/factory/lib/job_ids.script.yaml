@@ -1,0 +1,9 @@
+summary: '[LIB] WindmillのジョブIDの検査'
+description: 内部ライブラリです。直接実行するものではありません。実行中のジョブのIDを環境変数から読み、UUIDの形のものだけを記録に渡します。
+lock: '!inline f/factory/lib/job_ids.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

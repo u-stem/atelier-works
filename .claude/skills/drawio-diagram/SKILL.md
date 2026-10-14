@@ -7,9 +7,30 @@ description: 要件定義や設計の図をdraw.io (mxGraph)のXMLとして手�
 
 ## この図の使われ方
 
-生成したXMLファイルは、Consoleがdiagrams.netの埋め込みビューアーでインライン描画する。URLには載せない。
+生成したXMLファイルは、Consoleが同梱のdiagrams.netのビューアーで、隔離したiframeの中にインライン描画する。URLには載せない。
+ビューアーは外部へ通信しないので、AWSなどの外部の図形ライブラリは使えず、図形が描かれない。toolbar、ズーム、レイヤも使えない。
 XML自体が、すべての情報を含む自己完結した文書である必要がある。
 外部ファイルの参照や、相対パスの画像は使わない。
+
+図にリンクを入れない。`link`属性と、ラベルのHTMLの属性付きの`<a>`、`<area>`、`<map>`、`<meta>`、`<object>`、`<embed>`、`<form>`、`<img>`、`<image>`などは使わない。
+HTMLのタグの中の`onclick=`のようなイベントハンドラ属性も使わない。
+ラベルに、HTMLのコメント(`<!--`)と、`<!`か`<?`で始まる構文は使えない。
+`x </ y`のように、`</`の後ろが英字でない書き方も使えない。
+ラベルに次の要素は使えない。属性の有無を問わず拒否する。
+
+- `<textarea>`、`<title>`、`<xmp>`、`<noscript>`、`<noembed>`、`<noframes>`、`<plaintext>`、`<iframe>`、`<style>`、`<script>`
+- `<svg>`、`<math>`
+- `<set>`、`<animate>`、`<animateMotion>`、`<animateTransform>`
+
+`Map<title>`のように、型の表記がこれらの要素名と同じになるときは、型の名前を変えるか、文章で書く。
+タグの外の文章にある`one = 1`や`online=true`は拒否しない。
+`usemap=`、`formaction=`、`srcdoc=`も使わない。
+`placeholders`属性と、`<mxfile>`の`vars`属性は使わない。
+`placeholders`は、どの要素にあっても、値を問わずFactoryが拒否する。
+ラベルの`%名前%`が祖先のセルの属性、ページの名前、`vars`の値に置き換わり、置き換えた後のラベルを検査で確かめきれないためである。
+`Promise<Object>`のように、属性を持たない要素名だけの表記は使ってよい。
+`<A extends B = C>`のように、型引数の名前が`a`や`map`などの要素名と同じで、後ろに`名前=`が続く表記は、属性付きの要素とみなして拒否することがある。そのときは、型引数の名前を変えるか、文章で書く。
+図のXMLは信頼できない入力として描くので、リンクや圧縮で検査をすり抜ける図は、Factoryが生成の時点と読み戻しの時点で拒否するためである。
 
 ## 最小スケルトン
 
@@ -74,6 +95,7 @@ XML自体が、すべての情報を含む自己完結した文書である必�
 
 - `<mxfile>`に`compressed="true"`を付けない。属性ごと省略してもよい。
 - deflateとbase64で圧縮したペイロードではなく、人が読めるプレーンなXMLをそのまま出力する。
+- `<diagram>`の中に、空白以外のテキストやCDATAを入れない。要素と属性だけで書く。
 - このスキルの責務は、妥当な非圧縮のXMLを作るところまでである。XMLの検証はFactory側(`f/factory/lib/drawio.ts`)が行い、表示はConsoleが行う。
 
 ## エスケープ規則
@@ -106,7 +128,7 @@ Issue受付から承認までの簡易フロー図を示す。
         <mxCell id="n2" value="claim して要件生成" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
           <mxGeometry x="40" y="160" width="160" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="n3" value="承認待ち(承認タブ)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
+        <mxCell id="n3" value="承認待ち(要対応)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1">
           <mxGeometry x="40" y="280" width="160" height="60" as="geometry" />
         </mxCell>
         <mxCell id="n4" value="承認済み" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
@@ -130,6 +152,7 @@ Issue受付から承認までの簡易フロー図を示す。
 ## セルフチェック
 
 - `<mxfile>`がルート要素で、`compressed`属性が無いか`false`である。
+- `placeholders`属性と、`<mxfile>`の`vars`属性が無い。
 - すべての`vertex` / `edge`の`parent`が`"1"`を辿れる。孤立したセルが無い。
 - すべての`source` / `target`が、実在する`vertex`の`id`を指している。
 - `&` `<` `>` `"`がエスケープされている。ファイルの内容やユーザー入力に由来するラベルのテキストは特に注意する。

@@ -15,19 +15,34 @@
 // `pending`なら記録して起動し、同じ決定が記録済みなら起動だけをやり直す
 // (決定の記録後にハンドラの起動が失敗した場合の冪等な再試行)。
 // 異なる決定が記録済みの行と、期限切れの行は拒否する。
+//
+// 要件定義を承認するときは、記録の前に、現在のIssueの題名と本文が取り込み時点と
+// 同じかを確かめ、違うか確かめられなければ承認を拒否する。
+// 承認者が見た内容と、実装のClaudeに渡る内容を一致させるためである。
+// このscriptはConsole用workerで動き、`gh`を起動できない。そのため、GitHubのREST APIを
+// `fetch`で直接読む(`fetchIssueContent`)。別のworkerのscriptに確認を頼むと、
+// defaultのworkerの待ち行列で、Console用workerの枠を塞ぐためである。
+// `github_token`は`Authorization`ヘッダだけに載せる。
 
 import * as wmill from "windmill-client@1.817.0";
 import {
   buildRecordedReason,
   classifyExistingDecision,
   handlerPathFor,
+  type IssueCheckVerdict,
+  issueCheckRefusal,
+  needsIssueCheck,
 } from "./lib/approval_support.ts";
 import { deriveApprover } from "./lib/approver.ts";
 import {
   decideApprovalRequestIfPending,
   getApprovalRequest,
+  getWorkItem,
 } from "./lib/db.ts";
-import { isOneOf } from "./lib/types.ts";
+import { type FetchLike, fetchIssueContent } from "./lib/github.ts";
+import { issueChangedSinceIntake } from "./lib/implement_support.ts";
+import { logger, maskSecrets } from "./lib/log.ts";
+import { isOneOf, type WorkItem } from "./lib/types.ts";
 
 const DECISIONS = ["approve", "reject"] as const;
 type Decision = (typeof DECISIONS)[number];
@@ -51,11 +66,112 @@ export function assertValidApprovalDecideInput(
   }
 }
 
+export type IssueCheckDeps = {
+  readonly getWorkItem: (
+    id: number,
+  ) => Promise<Pick<
+    WorkItem,
+    "owner" | "repo" | "issue_number" | "title" | "body"
+  > | null>;
+  readonly getToken: () => Promise<string>;
+  readonly fetchFn: FetchLike;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
+};
+
+/**
+ * 作業項目に取り込んだ時点の題名・本文と、GitHub上の現在のIssueを比べる。
+ * 比べられなかったとき(作業項目やIssue番号が無い、トークンを読めない、
+ * 通信の失敗、締め切り超過、2xx以外の応答、形の違う応答)は、例外を投げずに`unavailable`を返す。
+ * 警告のログには、理由を`maskSecrets`に通して残す。Issueの内容は載せない。
+ */
+export async function checkIssueAgainstIntake(
+  workItemId: number,
+  deps: IssueCheckDeps,
+): Promise<Exclude<IssueCheckVerdict, "not_applicable">> {
+  try {
+    const workItem = await deps.getWorkItem(workItemId);
+    if (workItem === null || workItem.issue_number === null) {
+      deps.warn("work item has no issue to compare", {
+        work_item_id: workItemId,
+      });
+      return "unavailable";
+    }
+    const live = await fetchIssueContent(
+      deps.fetchFn,
+      await deps.getToken(),
+      workItem.owner,
+      workItem.repo,
+      workItem.issue_number,
+    );
+    return issueChangedSinceIntake(workItem, live) ? "changed" : "match";
+  } catch (err) {
+    deps.warn("the issue could not be read", {
+      work_item_id: workItemId,
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+    return "unavailable";
+  }
+}
+
+/**
+ * Issueが取り込み時点と同じかを確かめ、違うか、確かめられなかったときは例外を投げる。
+ * 呼び出し側は、承認を記録する前に、`needsIssueCheck`が真のときだけ呼ぶ。
+ * 確認から記録までの間のIssueの書き換えは防げない。
+ * 実装を終えたときの比較(PR本文の注記)が残りを拾う。
+ */
+export async function assertIssueMatchesIntake(
+  approvalRequestId: number,
+  workItemId: number,
+  deps: IssueCheckDeps,
+): Promise<void> {
+  const verdict = await checkIssueAgainstIntake(workItemId, deps);
+  const refusal = issueCheckRefusal(verdict, approvalRequestId);
+  if (refusal !== null) {
+    throw new Error(refusal);
+  }
+}
+
+/**
+ * 承認依頼が無いときの例外の文。Consoleは、この文を日本語の固定文に直す。
+ * 文を変えたら`tests/scripts/console_approval_refusal_contract.test.ts`が落ちる。
+ */
+export function missingApprovalRequestMessage(
+  approvalRequestId: number,
+): string {
+  return `approval_decide: no approval request with id ${approvalRequestId}`;
+}
+
+/**
+ * 記録済みの決定が今回の決定と違うか、期限が切れているときに、上書きを断る例外の文。
+ * Consoleは、この文を日本語の固定文に直す。
+ * 文を変えたら`tests/scripts/console_approval_refusal_contract.test.ts`が落ちる。
+ */
+export function recordedDecisionRefusalMessage(
+  approvalRequestId: number,
+  status: string,
+  recordedStatus: string,
+): string {
+  return `approval_decide: approval request ${approvalRequestId} already has a recorded decision (${status}) that differs from this request (${recordedStatus}), or has expired — refusing to overwrite it`;
+}
+
 export type ApprovalDecideResult = {
   readonly ok: boolean;
   readonly status: string;
   readonly job_id: string;
 };
+
+/** 決定に対して`approval_requests.status`へ記録する値。 */
+export function recordedStatusFor(decision: Decision): "approved" | "rejected" {
+  return decision === "approve" ? "approved" : "rejected";
+}
+
+/** 決定を記録し、ハンドラを起動した後の戻り値。Consoleの型ガードと突き合わせるため、関数に切り出している。 */
+export function buildApprovalDecideResult(
+  decision: Decision,
+  jobId: string,
+): ApprovalDecideResult {
+  return { ok: true, status: recordedStatusFor(decision), job_id: jobId };
+}
 
 export async function main(
   approval_request_id: number,
@@ -73,18 +189,20 @@ export async function main(
 
   const request = await getApprovalRequest(approval_request_id);
   if (request === null) {
-    throw new Error(
-      `approval_decide: no approval request with id ${approval_request_id}`,
-    );
+    throw new Error(missingApprovalRequestMessage(approval_request_id));
   }
 
-  const recordedStatus = decision === "approve" ? "approved" : "rejected";
+  const recordedStatus = recordedStatusFor(decision);
 
   function classify(status: string): "record_and_dispatch" | "redispatch" {
     const action = classifyExistingDecision(status, recordedStatus);
     if (action === "refuse") {
       throw new Error(
-        `approval_decide: approval request ${approval_request_id} already has a recorded decision (${status}) that differs from this request (${recordedStatus}), or has expired — refusing to overwrite it`,
+        recordedDecisionRefusalMessage(
+          approval_request_id,
+          status,
+          recordedStatus,
+        ),
       );
     }
     return action;
@@ -93,6 +211,20 @@ export async function main(
   const initialAction = classify(request.status);
 
   if (initialAction === "record_and_dispatch") {
+    // 状態を変える記録の前に、必ず確認を済ませる。断られたときは、記録に進まない。
+    if (needsIssueCheck(initialAction, decision, request.kind)) {
+      await assertIssueMatchesIntake(
+        approval_request_id,
+        request.work_item_id,
+        {
+          getWorkItem: (id) => getWorkItem(id),
+          getToken: () => wmill.getVariable("f/factory/github_token"),
+          fetchFn: fetch,
+          warn: (message, fields) =>
+            logger("approval_decide").warn(message, fields),
+        },
+      );
+    }
     const approver = deriveApprover({
       WM_USERNAME: process.env.WM_USERNAME,
       WM_EMAIL: process.env.WM_EMAIL,
@@ -120,5 +252,5 @@ export async function main(
     approval_request_id,
   });
 
-  return { ok: true, status: recordedStatus, job_id: jobId };
+  return buildApprovalDecideResult(decision, jobId);
 }

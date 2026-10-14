@@ -3,9 +3,21 @@
 // 作業項目の状態遷移、GitHubへの副作用、Discordへの通知を行う。
 
 import * as wmill from "windmill-client@1.817.0";
+import {
+  CI_ROUND_REPLIES_REASON,
+  ciAddedPathsStopReason,
+  ciRoundPushGuardReason,
+  ciTextScanner,
+  guardCiRoundReasons,
+  inspectCiFixChanges,
+  isCiRound,
+  listCiAddedPathsInTree,
+  nothingToCommitReason,
+  runPostPushBookkeeping,
+} from "../lib/ci_fix_round.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  addNotice,
+  addNoticeUnlessUnresolved,
   bumpWatermarks,
   getWorkItem,
   insertApprovalRequest,
@@ -21,6 +33,7 @@ import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   type GhClient,
   getPr,
+  getPrFiles,
   getViewer,
   gitIdentityForViewer,
   listReviewThreads,
@@ -37,6 +50,10 @@ import {
   ensureWorktreeLockFree,
   worktreeLockFor,
 } from "../lib/process_lock.ts";
+import {
+  repoOwnerGateDeps,
+  repoOwnerStopReason,
+} from "../lib/repo_owner_gate.ts";
 import { type FixReply, isOneOf, type WorkItemStatus } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
@@ -63,6 +80,7 @@ import {
   listReviewThreadsBestEffort,
   matchReviewThreadForComment,
   nextActionFor,
+  nextActionForPrFix,
   PR_HEAD_NOT_RECORDED_REASON,
   type PrFixFinishOutcome,
   prFixPushGateReason,
@@ -193,6 +211,16 @@ export async function requestRereview(
  * トリガーの`fix_label`は着手時に消費済みなので、終端の遷移で外すラベルは無い。
  * gtrのworktreeは消さずに残し、後で`cleanup_workspaces`が片付ける。
  *
+ * CIの失敗を直す回(`ci_check_id`が非NULL)は、通常の回と次の点が違う。
+ * - 返信を投稿せず、作業項目のheadも処理済みの位置も更新しない。
+ *   作業項目のheadを進めないのは、その差(作業項目のheadとPRのhead)が`poll_prs`の自動のレビューを起動するためで、
+ *   通常の回と逆である。
+ * - ステージした内容を、保護パスの検査に加えて、許可リスト方式でも検査する(`inspectCiFixChanges`)。
+ * - pushの直前に、PRが開いていて、draftでなく、auto-mergeが無効で、headが修正の前提のままであることを確かめる。
+ * - pushの直前に、リポジトリのオーナーの数値IDを照合する。通らなければpushも返信もせず、`blocked`にする。
+ * - 返信を持つ結果は受け付けない。
+ * 失敗の行(`pr_ci_checks`)には触れない。行の整理は`watch_pr_ci`の役目である。
+ *
  * `fix_round`はここでは増やさない。
  * `poll_prs.ts`が作業項目を作る時点で、その行が表すラウンド番号を
  * `fix_round`に入れている(`setFixRound(workItemId, previousFixRound + 1)`)。
@@ -224,11 +252,13 @@ export async function main(
   max_review_comment_id: number,
   worktree_git_pointer: string | null = null,
   branch: string | null = null,
+  ci_check_id: number | null = null,
 ): Promise<PrFixFinishResult> {
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
   }
   const action = decideFixFinishAction(outcome, parent_work_item_id !== null);
+  const ciRound = isCiRound({ ci_check_id });
 
   if (action.kind === "noop") {
     return {
@@ -281,7 +311,7 @@ export async function main(
       // 日本語への変換は表示用。記録する`status_reason`は変換前の英語のまま保つ。
       reason: describeReason(discordReason),
       target: { kind: "pr", number: pr_number },
-      next_action: nextActionFor(discordReason, "pr_fix"),
+      next_action: nextActionForPrFix(discordReason, ciRound),
     };
     await notifyBestEffort(webhookUrl, event, log);
   }
@@ -453,6 +483,9 @@ export async function main(
       notice: "missing commit_message",
     };
   }
+  if (ciRound && replies.length > 0) {
+    return stopBeforeCommit(CI_ROUND_REPLIES_REASON);
+  }
   // Claudeが提案した件名と本文は、`pr_fix_apply.ts`から`pr_fix_verify.ts`まで別々に運ばれ、
   // コミットメッセージの文字列につなぐのはここだけ。
   // Co-Authored-By / Generated-Byのトレーラーは、この後`commitAndPush`の
@@ -490,16 +523,16 @@ export async function main(
    * `factory.issue_proposals`の行を登録する。
    * 登録が失敗したら、その返信は投稿せず、`issue_proposal_record_failed`のnoticeを記録する。
    * どこにも記録されていないIssueの検討を約束するPRコメントを出さず、
-   * ConsoleのNoticesタブで人に失敗を知らせるため。
+   * Consoleの要対応で人に失敗を知らせるため。
    * 行を登録した後に返信の投稿が失敗しても、致命的ではない。
-   * GitHubに返信が出るかどうかに関わらず、提案はConsoleのInboxに見えている。
+   * GitHubに返信が出るかどうかに関わらず、提案はConsoleの要対応に見えている。
    * `thread_id`は、このラウンドの全提案で共有する1回の`listReviewThreads`から
    * ベストエフォートで求める。取得に失敗したら(rate limitを含む)`thread_id`を付けずに続ける。
    * 通常のIssueコメントにはレビュースレッドが無いので、
    * インラインの提案が1つ以上あるときだけ取得する。
    * 返信の投稿に失敗しても(rate limitを含む)ステップは止めず、残りの返信を続ける。
    * 失敗が1件以上あれば、最後に`fix_reply_post_failed`のnoticeを1件だけ記録し、
-   * ConsoleのNoticesタブでPRに人が返信するよう知らせる。Discordには通知しない。
+   * Consoleの要対応でPRに人が返信するよう知らせる。Discordには通知しない。
    * noticeの記録に失敗しても、警告を残して続ける。
    */
   async function postFixReplies(newSha: string | null): Promise<void> {
@@ -558,7 +591,7 @@ export async function main(
             error: message,
           });
           try {
-            await addNotice({
+            await addNoticeUnlessUnresolved({
               kind: "issue_proposal_record_failed",
               message: `${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}): 提案の記録に失敗しました: ${message}`,
             });
@@ -614,7 +647,7 @@ export async function main(
     );
     if (notice === null) return;
     try {
-      await addNotice(notice);
+      await addNoticeUnlessUnresolved(notice);
     } catch (noticeErr) {
       log.warn("failed to record fix_reply_post_failed notice", {
         error: maskSecrets(
@@ -624,19 +657,24 @@ export async function main(
     }
   }
 
-  /** commitせずに止めたラウンドを記録し、止めた理由を`status_reason`に入れてneeds_humanにする。 */
+  /**
+   * commitせずに止め、止めた理由を`status_reason`に入れる。遷移とラウンドの記録は`stopBeforeCommitTerminal`が決める。
+   * workerが検査の前提を満たさないときはラウンドを記録せずに`blocked`にし、それ以外はラウンドを記録して`needs_human`にする。
+   */
   async function stopBeforeCommit(
     stopReason: string,
   ): Promise<PrFixFinishResult> {
-    await insertFixRound({
-      work_item_id,
-      round: fix_round,
-      trigger_review_ids,
-      outcome: "blocked",
-      replies,
-      commit_shas: [],
-    });
     const terminal = stopBeforeCommitTerminal(stopReason);
+    if (terminal.recordsRound) {
+      await insertFixRound({
+        work_item_id,
+        round: fix_round,
+        trigger_review_ids,
+        outcome: "blocked",
+        replies,
+        commit_shas: [],
+      });
+    }
     await finalizeTerminal(
       terminal.toStatus,
       terminal.discordReason,
@@ -686,8 +724,31 @@ export async function main(
       }
       return scan;
     },
-    inspectChanges: () =>
-      inspectStagedChanges(runCommand, worktree_dir, head_sha),
+    inspectChanges: async () => {
+      const staged = await inspectStagedChanges(
+        runCommand,
+        worktree_dir,
+        head_sha,
+      );
+      if (!ciRound) return staged;
+      const prChangedPaths = (
+        await getPrFiles(client, owner, repo, pr_number)
+      ).map((file) => file.filename);
+      // 理由に入るパスは秘密値の検査を通っていないので、外へ出す前に検査する。
+      return await guardCiRoundReasons(
+        [
+          ...staged,
+          ...(await inspectCiFixChanges(
+            runCommand,
+            worktree_dir,
+            head_sha,
+            prChangedPaths,
+            { source: "staged" },
+          )),
+        ],
+        ciTextScanner(runCommand),
+      );
+    },
     inspectTree: (scannedTreeSha) =>
       scannedTreeStopReasons({
         run: runCommand,
@@ -696,6 +757,67 @@ export async function main(
       }),
   });
   if (scanned.kind === "stop") return stopBeforeCommit(scanned.reason);
+
+  if (ciRound) {
+    // commitに加わる新規ファイルの名前は外へ出る。許可された新規ファイルの名前に秘密値を
+    // 載せて流出させないよう、検査したツリーの新規パスを秘密値の検査にかける。
+    // 時間のかかる検査なので、リポジトリのロックの外で先に行う。
+    // 内容が検査したツリーのままであることは、`commitAndPush`の`expectedTreeSha`が保証する。
+    const pathStop = await ciAddedPathsStopReason(
+      await listCiAddedPathsInTree(
+        runCommand,
+        worktree_dir,
+        head_sha,
+        scanned.treeSha,
+      ),
+      ciTextScanner(runCommand),
+      (rules) =>
+        log.warn("a staged path matched the secret scan", {
+          work_item_id,
+          rules,
+        }),
+    );
+    if (pathStop !== null) return stopBeforeCommit(pathStop);
+  }
+
+  /** pushの前後に、PRのheadが動いていたと分かったときの終わり方。ラウンドを記録して`blocked`にする。 */
+  async function finishHeadChanged(
+    currentSha: string,
+  ): Promise<PrFixFinishResult> {
+    await insertFixRound({
+      work_item_id,
+      round: fix_round,
+      trigger_review_ids,
+      outcome: "blocked",
+      replies,
+      commit_shas: [],
+    });
+    await finalizeTerminal(
+      "blocked",
+      `PR head moved to ${currentSha} while the fix was in progress`,
+    );
+    return { ok: true, final_status: "blocked", notice: "head_changed" };
+  }
+
+  if (ciRound) {
+    // CI回は人の指摘に答える回ではなく、レビューを経ずにマージされうる状態では押せない。
+    // commitAndPushが確かめるheadに加えて、PRの状態もpushの直前に読み直す。
+    const latest = await getPr(client, owner, repo, pr_number);
+    if (latest.headSha !== head_sha) return finishHeadChanged(latest.headSha);
+    const pushStop = ciRoundPushGuardReason(latest, head_sha);
+    if (pushStop !== null) return stopBeforeCommit(pushStop);
+  }
+
+  // 最初の書き込み(push)の直前に、オーナーの数値IDを照合する。
+  // 準備の入口の照合から、Claudeの実行と検査を挟むので、その間に名前が別の人に渡っていても、
+  // ローカルにしか無いオブジェクトを相手に渡さない。以降の返信は、このpushに続けて行う。
+  const ownerStop = await repoOwnerStopReason(
+    config,
+    owner,
+    repo,
+    repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+  );
+  if (ownerStop !== null) return stopBeforeCommit(ownerStop);
 
   let pushResult: CommitAndPushResult;
   try {
@@ -719,19 +841,7 @@ export async function main(
   }
 
   if (pushResult.outcome === "head_changed") {
-    await insertFixRound({
-      work_item_id,
-      round: fix_round,
-      trigger_review_ids,
-      outcome: "blocked",
-      replies,
-      commit_shas: [],
-    });
-    await finalizeTerminal(
-      "blocked",
-      `PR head moved to ${pushResult.currentSha} while the fix was in progress`,
-    );
-    return { ok: true, final_status: "blocked", notice: "head_changed" };
+    return finishHeadChanged(pushResult.currentSha);
   }
 
   if (pushResult.outcome === "nothing_to_commit") {
@@ -746,18 +856,18 @@ export async function main(
     // pushするcommitが無くても溜めた返信は投稿する。
     // Claudeがすべてを"skipped"(または差分の無い"fixed")にしたこともあり、
     // その返信も黙って捨てずにGitHubへ届ける。
-    await postFixReplies(null);
+    if (!ciRound) await postFixReplies(null);
     // commitするものが無いラウンドでも、Claudeが指摘を対象外と判断することがあるため、
     // push成功の経路だけでなくここでも`propose_issue`の返信を記録する。
     // `factory.issue_proposals`の行は、上の`postFixReplies`が返信の投稿前に登録済み。
     // 1件以上記録したときは、Discordの理由に汎用の「commitするものが無い」ではなく
-    // 提案を挙げ、ConsoleのInboxへ案内する。
+    // 提案を挙げ、Consoleの要対応へ案内する。
     const nothingToCommitProposals = selectProposeIssueReplies(repliesToPost);
     await finalizeTerminal(
       "needs_human",
       nothingToCommitProposals.length > 0
         ? buildIssueProposalReason(nothingToCommitProposals.length)
-        : "no changes to commit; replies posted",
+        : nothingToCommitReason(ciRound),
     );
     return {
       ok: true,
@@ -777,22 +887,25 @@ export async function main(
     commit_shas: [newSha],
   });
 
-  await postFixReplies(newSha);
-
-  await setHeadSha(work_item_id, newSha);
   // 修正をcommitしてpushし、きっかけのコメントに返信したので、
   // 今回のフィードバックは消費済みになる。
   // push経路でwatermarkを進めるのはここだけ(`shouldAdvanceWatermarks`の説明を参照)。
-  if (shouldAdvanceWatermarks("push_success")) {
-    await bumpWatermarks(work_item_id, {
-      last_review_id: max_review_id,
-      last_comment_id: max_comment_id,
-      last_review_comment_id: max_review_comment_id,
-    });
-  }
+  // CI回は、返信も、作業項目のheadと処理済みの位置の更新もしない(`runPostPushBookkeeping`)。
+  await runPostPushBookkeeping(ciRound, {
+    postReplies: () => postFixReplies(newSha),
+    setHeadSha: () => setHeadSha(work_item_id, newSha),
+    bumpWatermarks: async () => {
+      if (!shouldAdvanceWatermarks("push_success")) return;
+      await bumpWatermarks(work_item_id, {
+        last_review_id: max_review_id,
+        last_comment_id: max_comment_id,
+        last_review_comment_id: max_review_comment_id,
+      });
+    },
+  });
 
   // このラウンドで`propose_issue`の返信を1件以上記録したら、PRはまだ再レビューに進めない。
-  // 人が先にConsoleのInboxで提案したIssueを承認か却下する必要がある
+  // 人が先にConsoleの要対応で提案したIssueを承認か却下する必要がある
   // (`approval_decide.ts`が`steps/issue_proposal_apply.ts`へ渡す)。
   // そのためrereview_requestedではなくneeds_humanで終え、下のレビュアー依頼も飛ばす。
   // この作業項目の全提案が判断されると、`issue_proposal_apply.ts`が
@@ -858,7 +971,7 @@ export async function main(
   if (moved) {
     if (reviewerReport.note !== null && reviewerReport.noticeKind !== null) {
       try {
-        await addNotice({
+        await addNoticeUnlessUnresolved({
           kind: reviewerReport.noticeKind,
           message: `${owner}/${repo}#${String(pr_number)} (work item ${String(work_item_id)}): ${reviewerReport.note}`,
         });

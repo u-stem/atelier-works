@@ -12,8 +12,9 @@
 // フロー結果のJSONを経由すると型が保てない。
 
 import * as wmill from "windmill-client@1.817.0";
+import { isCiRound } from "../lib/ci_fix_round.ts";
 import { loadConfig } from "../lib/config.ts";
-import { addNotice, getWorkItem } from "../lib/db.ts";
+import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
 import {
   type GhClient,
   getViewer,
@@ -43,6 +44,28 @@ export type PrFixCollectResult = {
   readonly max_review_comment_id: number;
 };
 
+/**
+ * CIの失敗を直す回の収集結果。指摘もコメントも集めず、修正ステップへ進める。
+ * その回の入力は、レビューやコメントではなく、失敗したジョブのログだけである。
+ * 処理済みの位置は進めない(完了ステップも位置を進めない)。
+ */
+export function ciRoundCollectResult(): PrFixCollectResult {
+  return {
+    outcome: "proceed",
+    reason: null,
+    reviews: [],
+    comments: [],
+    trigger_review_ids: [],
+    max_review_id: 0,
+    max_comment_id: 0,
+    max_review_comment_id: 0,
+  };
+}
+
+/**
+ * 作業項目の処理済みの位置より新しい指摘とコメントを集める。
+ * CIの失敗を直す回(`ci_check_id`が非NULL)は、GitHubを読まずに`ciRoundCollectResult`を返す。
+ */
 export async function main(
   work_item_id: number,
   owner: string,
@@ -50,14 +73,14 @@ export async function main(
   pr_number: number,
 ): Promise<PrFixCollectResult> {
   const log = logger("pr_fix_collect");
-  const config = await loadConfig(() =>
-    wmill.getResource("f/factory/factory_config"),
-  );
-
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null) {
     throw new Error(`pr_fix_collect: no work item with id ${work_item_id}`);
   }
+  if (isCiRound(workItem)) return ciRoundCollectResult();
+  const config = await loadConfig(() =>
+    wmill.getResource("f/factory/factory_config"),
+  );
   const lastReviewId = workItem.last_review_id ?? 0;
   const lastCommentId = workItem.last_comment_id ?? 0;
   // インラインのレビューコメントは、IssueコメントとはGitHubのid空間が別なので、
@@ -118,7 +141,7 @@ export async function main(
       pr_number,
       authors: excludedAuthors,
     });
-    await addNotice({
+    await addNoticeUnlessUnresolved({
       kind: "fix_feedback_association_excluded",
       message: `${owner}/${repo}#${String(pr_number)}: allowed_labeler_associationsに含まれていないため${excludedAuthors.join(", ")}のフィードバックを除外しました(work item ${String(work_item_id)})`,
     });

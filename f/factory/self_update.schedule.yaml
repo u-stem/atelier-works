@@ -1,14 +1,14 @@
 summary: '[SYS-1] Software Factory自身を最新化'
 description: >-
-  10分ごとに実行します。Software
-  Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更は次にホストで起動したときに反映されるため、通知はしません。更新の最後に、Console用のworkerが居るかを確かめ、居なければ通知を残してDiscordにも知らせます。
+  2分ごとに実行します。Software
+  Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。
 args: {}
 cron_version: v2
 enabled: true
 is_flow: false
 no_flow_overlap: true
 on_failure: f/factory/on_error_schedule
-schedule: 0 */10 * * * *
+schedule: 0 */2 * * * *
 script_path: f/factory/self_update
 timezone: Asia/Tokyo
 ws_error_handler_muted: false

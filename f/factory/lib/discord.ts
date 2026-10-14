@@ -4,6 +4,10 @@
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import type { ImplementDiffStat } from "./types.ts";
+import {
+  describeWorkerLoad,
+  type WorkerLoadReport,
+} from "./worker_load_support.ts";
 
 export type DiscordEmbedField = {
   name: string;
@@ -41,7 +45,8 @@ export type NotifyEvent =
       issue_url: string;
       title: string;
       /**
-       * 認証付きのAppのInboxのURLだけを入れる。
+       * 承認依頼を選んだ状態の、ログインを求めるConsoleのURLだけを入れる
+       * (`lib/approval_support.ts`の`buildApprovalConsoleUrl`)。
        * `getResumeUrls()`の署名付き`approvalPage`のURLは入れない。
        * そのURLを見た人は誰でも`approval_decide.ts`を通さずに停止中のフローを
        * 再開・取消でき、承認の記録が残らないため。
@@ -58,11 +63,20 @@ export type NotifyEvent =
       title: string;
       /**
        * Consoleの要件定義ページへのリンク(`lib/approval_support.ts`の
-       * `buildConsoleUrl`に`{work_item_id}`を渡したもの)。
+       * `buildConsoleUrl`に作業項目と承認した試行を渡したもの)。
        * Discordから開いたときに承認済みの文書が表示されるよう、
        * 埋め込みのリンク先はIssueではなくこちらにする(Issueはフィールドに出す)。
        */
       console_url: string;
+    }
+  | {
+      kind: "intake_refreshed";
+      instance_name: string;
+      owner: string;
+      repo: string;
+      issue_number: number;
+      issue_url: string;
+      title: string;
     }
   | {
       kind: "needs_human";
@@ -80,6 +94,18 @@ export type NotifyEvent =
        * 専用のフィールドに出す。
        */
       target: { kind: "pr" | "issue"; number: number };
+      next_action: string;
+    }
+  | {
+      kind: "main_ci_failed";
+      instance_name: string;
+      owner: string;
+      repo: string;
+      /** 失敗したコミットのsha先頭7文字。 */
+      sha7: string;
+      /** 失敗した実行へのリンク。検証済みのGitHubのURLだけを入れる(`parseRunUrl`)。 */
+      url: string;
+      /** 運用者がまず行う操作の1文。固定文を入れる。 */
       next_action: string;
     }
   | {
@@ -118,6 +144,16 @@ export type NotifyEvent =
       flow_path: string;
       job_id: string;
       error: string;
+      /**
+       * 運用者がまず行う操作の1文。再実行の案内が当たらないフロー(dependabot)だけが載せる。
+       * 無ければ欄を出さない。
+       */
+      next_action?: string;
+      /**
+       * 失敗した作業項目のPR。人が対応するPRを示すフロー(dependabot)だけが載せる。
+       * あればPRへのリンクと「対象」の欄を出す。
+       */
+      pr?: { owner: string; repo: string; number: number };
     }
   | {
       kind: "console_fetch_problem";
@@ -128,9 +164,17 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "host_action_required";
+      instance_name: string;
+      /** 反映した版と、ホスト側の作業が要る理由。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
       kind: "console_worker_missing";
       instance_name: string;
-      /** tag `console`を受けるworkerが居ないこと。 */
+      /** Console用のworkerがtag `console`のジョブを受けていないこと。 */
       cause: string;
       /** 運用者がまず行う操作の1文。 */
       next_action: string;
@@ -138,7 +182,7 @@ export type NotifyEvent =
   | {
       kind: "console_worker_check_failed";
       instance_name: string;
-      /** Console用のworkerの有無を、続けて確認できていないこと。 */
+      /** Console用のworkerがジョブを受けているかを、続けて確かめられていないこと。 */
       cause: string;
       /** 運用者がまず行う操作の1文。 */
       next_action: string;
@@ -153,10 +197,15 @@ export type NotifyEvent =
       approved_count: number;
       rejected_count: number;
       /**
-       * 前日の`cleanup_db.ts`の実行結果。その日の実行記録が無いとき
+       * 集計の対象の日の`cleanup_db.ts`の実行結果。その日の実行記録が無いとき
        * (立ち上げ直後でまだ一度も動いていないときなど)は`null`。
        */
       cleanup: CleanupCounts | null;
+      /**
+       * 集計の対象の日のdefaultのworkerの負荷。集計、その日の記録が無いこと、
+       * 集計を読めなかったことのどれかを表す。
+       */
+      worker_load: WorkerLoadReport;
     }
   | {
       kind: "audit_completed";
@@ -296,6 +345,17 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           { name: "Issue", value: event.issue_url },
         ],
       };
+    case "intake_refreshed":
+      return {
+        title: `取り込み内容を更新: #${event.issue_number} ${event.title}`,
+        description:
+          "Issueが取り込み後に書き換えられたので、取り込み内容を現在のIssueで更新しました。Consoleの要対応で更新後の内容を確かめてから承認してください。",
+        url: event.issue_url,
+        fields: [
+          instanceField(event.instance_name),
+          repoField(event.owner, event.repo),
+        ],
+      };
     case "needs_human": {
       const targetLabel = event.target.kind === "pr" ? "PR" : "Issue";
       return {
@@ -309,6 +369,17 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         ],
       };
     }
+    case "main_ci_failed":
+      return {
+        title: `mainのCIが失敗しました: ${event.owner}/${event.repo}@${event.sha7}`,
+        description: `mainのコミット${event.sha7}でCIが失敗しました。`,
+        url: event.url,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+          repoField(event.owner, event.repo),
+        ],
+      };
     case "pr_reviewed": {
       const stateText =
         event.result === "changes_requested"
@@ -343,8 +414,22 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       return {
         title: `ジョブ失敗: ${event.flow_path}`,
         description: event.error,
-        url: null,
+        url:
+          event.pr === undefined
+            ? null
+            : `https://github.com/${event.pr.owner}/${event.pr.repo}/pull/${String(event.pr.number)}`,
         fields: [
+          ...(event.next_action === undefined
+            ? []
+            : [{ name: "次の操作", value: event.next_action }]),
+          ...(event.pr === undefined
+            ? []
+            : [
+                {
+                  name: "対象",
+                  value: `${event.pr.owner}/${event.pr.repo}#${String(event.pr.number)}`,
+                },
+              ]),
           instanceField(event.instance_name),
           { name: "ジョブ", value: event.job_id },
         ],
@@ -359,9 +444,19 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           instanceField(event.instance_name),
         ],
       };
+    case "host_action_required":
+      return {
+        title: "ホスト側の作業が必要です",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
     case "console_worker_missing":
       return {
-        title: "Console用のworkerが居ません",
+        title: "Console用のworkerがジョブを受けていません",
         description: event.cause,
         url: null,
         fields: [
@@ -371,7 +466,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
       };
     case "console_worker_check_failed":
       return {
-        title: "Console用のworkerの有無を確認できません",
+        title: "Console用のworkerの動きを確かめられません",
         description: event.cause,
         url: null,
         fields: [
@@ -393,8 +488,12 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
             name: "DB掃除",
             value:
               event.cleanup === null
-                ? "前日の掃除記録なし"
+                ? "その日の掃除記録なし"
                 : summarizeCleanup(event.cleanup),
+          },
+          {
+            name: "workerの負荷",
+            value: describeWorkerLoad(event.worker_load),
           },
         ],
       };
@@ -406,7 +505,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         fields: [
           {
             name: "次の操作",
-            value: "Consoleの承認タブで提案を承認または却下してください",
+            value: "Consoleの要対応で提案を承認または却下してください",
           },
           instanceField(event.instance_name),
           { name: "work_item_id", value: String(event.work_item_id) },

@@ -16,6 +16,7 @@ import {
   IMPLEMENT_CHECK_SKIP_REASONS,
   IMPLEMENT_CLAUDE_OUTCOMES,
   IMPLEMENT_STEP_TIMEOUT_SEC,
+  INTAKE_REFRESHED_PR_NOTE,
   ISSUE_UPDATED_AFTER_INTAKE_NOTE,
   implementDeadlineAt,
   implementOutputProseIssues,
@@ -27,6 +28,7 @@ import {
   neutralizeIssueRefs,
   parseImplementBranchWorkItemId,
   requireDeadlineAt,
+  roundIsStalled,
   roundOutcomeForExit,
   stallHash,
   truncateCheckOutput,
@@ -539,12 +541,12 @@ const PR_BODY_INPUT = {
   },
   protectedChanges: [],
   notesForReviewer: ["区切り文字はカンマ固定と仮置きしました。"],
-  requirementsConsoleUrl:
-    "http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+  requirementsConsoleUrl: "http://127.0.0.1:8080/console/items/7/requirements",
   issueNumber: 42,
   changedPaths: ["src/export.ts", "tests/export.test.ts"],
   deployChecklist: true,
   issueUpdatedAfterIntake: false,
+  intakeRefreshed: false,
 };
 
 describe("extractAcceptanceCriteria", () => {
@@ -690,7 +692,7 @@ describe("buildImplementPrBody", () => {
         "",
         "- 保護パスを変更: infra/worker/Dockerfile",
         "- 区切り文字はカンマ固定と仮置きしました。",
-        "- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7",
+        "- 要件定義(Console): http://127.0.0.1:8080/console/items/7/requirements",
         "",
       ].join("\n"),
     );
@@ -857,7 +859,31 @@ describe("buildImplementPrBody", () => {
     expect(
       buildImplementPrBody({ ...PR_BODY_INPUT, issueUpdatedAfterIntake: true }),
     ).toContain(
-      `- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}\n- 要件定義(Console): http://127.0.0.1:8080/apps/get/f/factory/factory_console#requirements/7`,
+      `- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}\n- 要件定義(Console): http://127.0.0.1:8080/console/items/7/requirements`,
+    );
+  });
+
+  test("notes an intake refresh before the Issue-updated note", () => {
+    expect(
+      buildImplementPrBody({
+        ...PR_BODY_INPUT,
+        intakeRefreshed: true,
+        issueUpdatedAfterIntake: true,
+      }),
+    ).toContain(
+      `- ${INTAKE_REFRESHED_PR_NOTE}\n- ${ISSUE_UPDATED_AFTER_INTAKE_NOTE}`,
+    );
+  });
+
+  test("notes an intake refresh even when the live Issue equals the refreshed content", () => {
+    expect(
+      buildImplementPrBody({ ...PR_BODY_INPUT, intakeRefreshed: true }),
+    ).toContain(`- ${INTAKE_REFRESHED_PR_NOTE}\n- 要件定義(Console):`);
+  });
+
+  test("omits the refresh note when the intake was never refreshed", () => {
+    expect(buildImplementPrBody(PR_BODY_INPUT)).not.toContain(
+      INTAKE_REFRESHED_PR_NOTE,
     );
   });
 
@@ -875,11 +901,40 @@ const CONTINUE_STATE = {
   maxRounds: 5,
   dailyBudgetExceeded: false,
   deadlineReached: false,
+  modelChangesNext: false,
   checkOutputHash: "h1",
   previousCheckOutputHash: null,
   diffHash: "d1",
   previousDiffHash: null,
 };
+
+describe("roundIsStalled", () => {
+  test("is false for the first round", () => {
+    expect(roundIsStalled(CONTINUE_STATE)).toBe(false);
+  });
+
+  test("is true when the diff matches the previous round", () => {
+    expect(roundIsStalled({ ...CONTINUE_STATE, previousDiffHash: "d1" })).toBe(
+      true,
+    );
+  });
+
+  test("is true when the check output matches the previous round", () => {
+    expect(
+      roundIsStalled({ ...CONTINUE_STATE, previousCheckOutputHash: "h1" }),
+    ).toBe(true);
+  });
+
+  test("is false when both the diff and the check output changed", () => {
+    expect(
+      roundIsStalled({
+        ...CONTINUE_STATE,
+        previousDiffHash: "d0",
+        previousCheckOutputHash: "h0",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("decideImplementRoundExit", () => {
   test("continues when checks failed and no guard fired", () => {
@@ -936,6 +991,57 @@ describe("decideImplementRoundExit", () => {
         previousCheckOutputHash: "h1",
       }),
     ).toBe("stalled");
+  });
+
+  test("continues past a repeated diff when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        previousDiffHash: "d1",
+        modelChangesNext: true,
+      }),
+    ).toBe("continue");
+  });
+
+  test("continues past a repeated check output when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        previousCheckOutputHash: "h1",
+        modelChangesNext: true,
+      }),
+    ).toBe("continue");
+  });
+
+  test("still exits with max_rounds when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        round: 5,
+        previousDiffHash: "d1",
+        modelChangesNext: true,
+      }),
+    ).toBe("max_rounds");
+  });
+
+  test("still exits with daily_budget when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        dailyBudgetExceeded: true,
+        modelChangesNext: true,
+      }),
+    ).toBe("daily_budget");
+  });
+
+  test("still exits with deadline when the next failure changes the model", () => {
+    expect(
+      decideImplementRoundExit({
+        ...CONTINUE_STATE,
+        deadlineReached: true,
+        modelChangesNext: true,
+      }),
+    ).toBe("deadline");
   });
 
   test("does not treat a null check output hash as a repeat", () => {
@@ -1136,6 +1242,15 @@ describe("issueChangedSinceIntake", () => {
     ).toBe(false);
   });
 
+  test("ignores a lone CR-only difference", () => {
+    expect(
+      issueChangedSinceIntake(
+        { title: "CSV出力", body: "一行目\n二行目" },
+        { title: "CSV出力", body: "一行目\r二行目" },
+      ),
+    ).toBe(false);
+  });
+
   test("ignores surrounding whitespace", () => {
     expect(
       issueChangedSinceIntake(SNAPSHOT, {
@@ -1152,6 +1267,14 @@ describe("issueChangedSinceIntake", () => {
         { title: "CSV出力", body: "" },
       ),
     ).toBe(false);
+  });
+});
+
+describe("INTAKE_REFRESHED_PR_NOTE", () => {
+  test("says the input was updated by a rework", () => {
+    expect(INTAKE_REFRESHED_PR_NOTE).toContain(
+      "取り込み後に書き換えられたIssueの内容で更新されています",
+    );
   });
 });
 

@@ -42,7 +42,9 @@ import {
 } from "../lib/db.ts";
 import { notifyBestEffort } from "../lib/discord.ts";
 import { parseGitHubRepoUrl } from "../lib/github.ts";
+import { jobTmpEnv } from "../lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { modelFor } from "../lib/model_policy.ts";
 import { AUDIT_SCHEMA, auditPrompt } from "../lib/prompts.ts";
 import {
   type AuditIssueProposal,
@@ -181,7 +183,10 @@ export type AuditGenerateResult = {
 // ---------------------------------------------------------------------------
 
 function selfCloneGitEnv(): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  const env: Record<string, string> = {
+    GIT_TERMINAL_PROMPT: "0",
+    ...jobTmpEnv(),
+  };
   if (process.env.HOME !== undefined) env.HOME = process.env.HOME;
   if (process.env.PATH !== undefined) env.PATH = process.env.PATH;
   return env;
@@ -480,7 +485,7 @@ export async function main(
       workItemId: work_item_id,
       stage: "audit",
       attempt: 1,
-      model: config.model,
+      model: modelFor(config, "audit", 0),
       prompt: auditPrompt({
         instanceName: config.instance_name,
         periodLabel: formatAuditPeriodLabel(period.start, period.end),

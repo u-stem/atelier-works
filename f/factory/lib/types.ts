@@ -80,6 +80,16 @@ export type GitIdentity = {
  */
 const GITHUB_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/**
+ * `labels`に`label`が付いているかを返す。
+ * GitHubのラベル名は大文字小文字を区別せず、検索もイベントも区別しないので、
+ * 比較も区別しない。
+ */
+export function hasLabel(labels: readonly string[], label: string): boolean {
+  const wanted = label.toLowerCase();
+  return labels.some((name) => name.toLowerCase() === wanted);
+}
+
 export function assertGitHubName(name: string): void {
   if (name === "." || name === "..") {
     throw new Error(`invalid GitHub name: ${JSON.stringify(name)}`);
@@ -183,12 +193,18 @@ export const WORK_ITEM_SOURCES: readonly WorkItemSource[] = [
 ];
 
 /** 作業項目のサイクルが扱うGitHubの対象の種類。 */
-export type WorkItemKind = "issue" | "pr_review" | "pr_fix" | "audit";
+export type WorkItemKind =
+  | "issue"
+  | "pr_review"
+  | "pr_fix"
+  | "audit"
+  | "dependabot";
 export const WORK_ITEM_KINDS: readonly WorkItemKind[] = [
   "issue",
   "pr_review",
   "pr_fix",
   "audit",
+  "dependabot",
 ];
 
 /**
@@ -317,6 +333,11 @@ export type WorkItem = {
    * Issue側の行には持たせず、意図してURLで記録する。
    */
   pr_url: string | null;
+  /**
+   * この作業項目が直しているCIの判定(`pr_ci_checks`の行)のID。
+   * CIの失敗を直す`pr_fix`の作業項目だけが持ち、それ以外は`null`。外部キーは持たない。
+   */
+  ci_check_id: number | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -484,7 +505,7 @@ export type FixOutcome = "done" | "requirements_gap" | "blocked";
  * - `"fixed"`: コードを変更して対応した。
  * - `"skipped"`: 意図して変更しなかった。
  * - `"propose_issue"`: 妥当だがこのPRの範囲外。修正も見送りもせず、
- *   ClaudeがGitHub Issueの候補を下書きし、人がConsoleのInboxから
+ *   ClaudeがGitHub Issueの候補を下書きし、人がConsoleの要対応から
  *   `issue_proposal_apply.ts`を通して承認・却下する。
  *
  * `pr_workflow_support.ts`の`renderFixReply`の最終行がこれで決まる
@@ -627,7 +648,7 @@ export type ImplementRound = ImplementRoundRecord & {
 };
 
 // ---------------------------------------------------------------------------
-// issue_proposals: GitHub Issueの候補。人がConsoleのInboxから
+// issue_proposals: GitHub Issueの候補。人がConsoleの要対応から
 // (`issue_proposal_apply.ts`を通して)承認・却下するのを待つ。
 // ---------------------------------------------------------------------------
 
@@ -731,6 +752,57 @@ export type FailureRecord = {
   error: string;
 };
 
+/**
+ * 反映に含まれるPRを誰が作ったか。
+ * `factory`はFactoryの実装ブランチから作られたPR、`human`はそれ以外のブランチから作られたPR、
+ * `unknown`はマージのコミットからブランチを読めなかったPRである。
+ */
+export const PULL_REQUEST_ORIGINS = ["factory", "human", "unknown"] as const;
+export type PullRequestOrigin = (typeof PULL_REQUEST_ORIGINS)[number];
+
+/** 反映に記録するPRの題名の長さの上限(文字数)。 */
+export const MAX_PULL_REQUEST_TITLE_LENGTH = 200;
+
+/**
+ * 題名から取り除く文字。空白に置き換える。
+ * - 制御文字と行・段落の区切り(`\p{Cc}\p{Zl}\p{Zp}`)
+ * - 書字方向の制御文字(U+061C、U+200E、U+200F、U+202A-202E、U+2066-2069)
+ * - 幅の無い空白と、見えない演算子など、形を変えない書式文字(U+200B、U+2060-2064、U+FEFF)
+ * - タグ文字(U+E0000-E007F)
+ * ZWJ(U+200D)とZWNJ(U+200C)は残す。絵文字の列やペルシア語、インド系の文字の題名が崩れるためである。
+ */
+const TITLE_REMOVED_CHARS =
+  /[\p{Cc}\p{Zl}\p{Zp}\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/gu;
+
+/**
+ * PRの題名として記録、表示してよい形にする。
+ * `TITLE_REMOVED_CHARS`を空白にし、連続する空白を1つにして、
+ * `MAX_PULL_REQUEST_TITLE_LENGTH`文字で切る。空になれば`null`を返す。
+ * 題名はPRの作者が決める文字列で、表示だけに使い、承認の判断には使わない。
+ * 記録するときと読み出すときの両方で通し、表示を崩す文字を持ち込ませない。
+ */
+export function sanitizePullRequestTitle(raw: string): string | null {
+  const cleaned = raw
+    .replace(TITLE_REMOVED_CHARS, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length === 0) return null;
+  return Array.from(cleaned)
+    .slice(0, MAX_PULL_REQUEST_TITLE_LENGTH)
+    .join("")
+    .trim();
+}
+
+/** 1回の反映に含まれるPR。`factory.deployments.pull_requests`のJSON配列の要素。 */
+export type DeploymentPullRequest = {
+  readonly number: number;
+  /** マージのコミットの本文から取った題名。取れなければnull。画面には文字として出す。 */
+  readonly title: string | null;
+  readonly origin: PullRequestOrigin;
+  /** `https://github.com/<owner>/<repo>/pull/<n>`の形。作れなければnull。 */
+  readonly url: string | null;
+};
+
 /** `db.recordDeployment`に渡す、`factory.deployments`の1行。 */
 export type DeploymentRecord = {
   sha_from: string | null;
@@ -738,9 +810,21 @@ export type DeploymentRecord = {
   changed_paths: string[];
   result: string;
   needs_host_action: boolean;
+  pull_requests: DeploymentPullRequest[];
+  /**
+   * 失敗の理由。伏せ字処理と切り詰めを済ませた文(`recordFailedDeployment`を参照)。
+   * 成功の記録では`null`にする。省くと`null`と同じ扱いになる。
+   */
+  error?: string | null;
 };
 
-/** `db.addNotice`に渡す、`factory.notices`の1行。 */
+/** `factory.deployments`の最新の1行のうち、反映の成否と対象の版を表す列。 */
+export type LatestDeployment = {
+  readonly result: string;
+  readonly sha_to: string;
+};
+
+/** `db.addNoticeUnlessUnresolved`に渡す、`factory.notices`の1行。 */
 export type NoticeRecord = {
   kind: string;
   message: string;
@@ -770,6 +854,14 @@ export type FactoryOwnerKind = "user" | "org";
 export type FactoryOwner = {
   name: string;
   kind: FactoryOwnerKind;
+  /**
+   * GitHubのアカウントの数値ID(正の整数)。
+   * 指定すると、`poll_issues`と`poll_prs`が検索の前に現在のIDと照合する。
+   * 作業項目を進める準備のステップも、リポジトリを取得する前に、リポジトリのオーナーのIDを照合する。
+   * オーナーが改名し、別の人がその名前を取得した場合に、その人のIssueとPRを検索の候補に入れず、保存済みの作業項目も進めないため。
+   * 省略すると、名前だけで照合する。
+   */
+  id?: number;
 };
 
 export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
@@ -791,8 +883,25 @@ export type ReviewPostMode = "comment_only" | "gated";
 export type FactoryConfig = {
   owners: FactoryOwner[];
   trigger_label: string;
+  /**
+   * PRのレビューと修正のコメントの投稿者を、GitHubの`author_association`で絞る。
+   * トリガーラベルの付与者の確認には使わない(ラベルの`labeled`イベントは
+   * `author_association`を持たないため)。
+   */
   allowed_labeler_associations: LabelerAssociation[];
+  /**
+   * トリガーラベルを付けてよい、FactoryのPATのアカウント以外のGitHubのログイン名。
+   * 空なら、PATのアカウントが付けたラベルだけに反応する。大文字小文字は区別しない。
+   */
+  allowed_labeler_logins: string[];
+  /**
+   * `allowed_labeler_logins`のうち、GitHubの数値IDも照合するアカウント。キーがログイン名、
+   * 値が数値IDである。載せたアカウントは、同じ名前でもIDが違う人が付けたラベルを許可しない。
+   * 載せないアカウントは名前だけで照合する。
+   */
+  allowed_labeler_ids: Record<string, number>;
   model: string;
+  heavy_model: string;
   max_attempts: number;
   max_turns: number;
   max_budget_usd_per_run: number;
@@ -810,6 +919,13 @@ export type FactoryConfig = {
    */
   retention_logs_days: number;
   factory_repo: string;
+  /**
+   * `factory_repo`のGitHubリポジトリの数値ID(正の整数)。
+   * 指定すると、Factory自身のcloneを使う処理が取得の前に現在のIDと照合し、食い違うときは取得しない。
+   * オーナーが改名して別の人がその名前を取得しても、その人のリポジトリを使わないため。
+   * 省略すると、名前だけで取得する。
+   */
+  factory_repo_id?: number;
   /**
    * `self_update.ts`がこのSoftware Factory自身のリポジトリから更新するときに
    * 追う`factory_repo`のブランチ。`ensureFactoryClone`が毎回fetchし、
@@ -877,6 +993,41 @@ export type FactoryConfig = {
   implement_max_changed_files: number;
   /** implementフローの差分の規模の上限のうち、追加と削除の行数の合計。 */
   implement_max_diff_lines: number;
+  // dependabotのセキュリティ更新PRの自動処理。リソース型ではどちらも省略可能で、既定値がある。
+  /** dependabotのセキュリティ更新PRを自動で処理するか。既定は`false`。 */
+  dependabot_enabled: boolean;
+  /**
+   * dependabotのフローがマージしてよいか。既定は`false`。
+   * 偽の間は、マージできると判断したPRもマージせず、人に回す(試運転)。
+   */
+  dependabot_merge_enabled: boolean;
+  /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
+  dependabot_min_published_days: number;
+  /**
+   * `watch_pr_ci`がFactoryのPRのCIを観測して通知するか。
+   * 観測と通知だけで、PRにもリポジトリにも書き込まない。既定は`true`。
+   * `false`でも、直す作業項目が終わった行を戻す回復は動く。回復はオーナーの照合をせず、照合に伴う通知は足さない。
+   * ただし、回復がPRを読めず403か404になると、権限の不足の通知は足しうる。判定が動かない間は、解決されない。
+   */
+  pr_ci_watch_enabled: boolean;
+  /**
+   * CIの失敗を直す作業項目を、`watch_pr_ci`が起動してよいか。既定は`false`で、偽の間は何も起動しない。
+   * 真にするには`pr_ci_fix_enabled_since`が要る。`pr_ci_watch_enabled`が偽のときも起動しない。
+   */
+  pr_ci_fix_enabled: boolean;
+  /**
+   * 1つのPRで、CIの失敗を直すラウンドを起動できる回数の上限。1以上10以下の整数。既定は2。
+   * 直近に通ったheadより後のラウンドを数え、通ると数え直す。
+   */
+  pr_ci_fix_max_rounds: number;
+  /**
+   * この時刻より前に見つけた失敗は、直す対象にしない。「見つけた時刻」は`pr_ci_checks.first_seen_at`で、
+   * 比較は`Date`かSQLのtimestamptzで行い、文字列では比べない。
+   * 設定には秒まで書いたRFC 3339の日時(タイムゾーン付き)を書き、読み込み後は`Date`になる。
+   * `pr_ci_fix_enabled`が真なら`null`にできない。無いと、有効にする前から残る失敗まで、一度に直しに行くためである。
+   * 既定は`null`。
+   */
+  pr_ci_fix_enabled_since: Date | null;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
@@ -886,3 +1037,10 @@ export type FactoryConfig = {
    */
   check_commands_by_repo: Record<string, string[]>;
 };
+
+/** 実装ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを返す。形が違えばnull。pr_fixが、親の行が無くても同じブランチの実装フローを見つけるのに使う。PRのCIの判定も、Factoryのブランチかの照合に使う。 */
+export function parseImplementBranchWorkItemId(branch: string): number | null {
+  const match = /^factory\/issue-[1-9]\d*-wi-([1-9]\d*)$/.exec(branch);
+  const id = match?.[1] === undefined ? Number.NaN : Number(match[1]);
+  return Number.isSafeInteger(id) ? id : null;
+}
