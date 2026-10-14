@@ -101,12 +101,11 @@ export type CatchupDeps = {
 
 /**
  * `plan`の日を古い順に1日ずつ集計して通知し、そのたびに最後に出した日を保存する。
+ * 呼び出し側は、stateが`plan`の最初の日の前日を指す状態で渡す(`runDailySummary`が整える)。
+ * stateは常に次に出す日の前日を指すので、止まった日をここで保存し直す必要は無い。
  * - 集計が例外になったら、その日で止まり、保存を進めない。次の実行が同じ日から再開する。
- * - 通知が届かなかった(`not_sent`)ら、その日で止まり、届かなかった日の前日を保存する。
- *   届かなかった日そのものは保存しない。進めると、その日の要約が二度と出ないため。
- *   前日を保存するのは、stateが記録なし・読めない値・未来の日付のときも、
- *   次の実行が届かなかった日から始まり、その日を昨日より古い日として扱えるようにするため。
- *   すでに保存した日と同じなら、重ねて保存しない。
+ * - 通知が届かなかった(`not_sent`)ら、その日で止まり、保存を進めない。
+ *   進めると、その日の要約が二度と出ないため。次の実行が同じ日から再開する。
  *   ここでは例外にせず、`undelivered_day`に残して返す。例外にするのは`assertAllDelivered`である。
  * - webhookが未設定(`no_webhook`)なら、送る先が無いので保存を進める。
  * - 2通目以降は、直前の日を送った後に`CATCHUP_INTERVAL_MS`待ってから集計する。
@@ -128,7 +127,6 @@ export async function summarizePendingDays(
     });
   }
   const days: DailySummaryResult[] = [];
-  let savedLabel: string | null = null;
   let sentPrevious = false;
   for (const range of plan.days) {
     if (sentPrevious) {
@@ -136,10 +134,6 @@ export async function summarizePendingDays(
     }
     const { result, delivery } = await deps.summarizeDay(range);
     if (delivery.status === "not_sent") {
-      const previous = previousDayLabel(range.label);
-      if (previous !== savedLabel) {
-        await deps.saveLastDay(previous);
-      }
       return {
         days,
         skipped_count: plan.skipped_count,
@@ -148,7 +142,6 @@ export async function summarizePendingDays(
       };
     }
     await deps.saveLastDay(range.label);
-    savedLabel = range.label;
     days.push(result);
     sentPrevious = delivery.status === "sent";
   }
@@ -167,7 +160,7 @@ export async function summarizePendingDays(
  * 次の実行が自動で出し直すので、人の操作は要らず、例外にしない。
  * 成功で終えると、Discordに届かない状態が続いても、ジョブのログの警告しか残らない。
  * 昨日より古い日まで届かないときは、例外にして`on_error_schedule`に失敗を`job_failures`へ記録させ、Consoleに残す。
- * 届いた日の保存は`summarizePendingDays`が済ませているので、次の実行は届かなかった日から再開する。
+ * stateは次に出す日の前日を指しているので、次の実行は届かなかった日から再開する。
  */
 export function assertAllDelivered(
   result: CatchupResult,
@@ -193,6 +186,12 @@ export type DailySummaryDeps = {
 
 /**
  * stateを読み、出す日を決め、1日ずつ集計して通知し、そのたびにstateを保存する。
+ * 送る前に、stateを計画の最初の日の前日にそろえて保存する。
+ * stateが記録なし・読めない値・未来の日付でも、集計の例外や`not_sent`で止まった日から、
+ * 次の実行が始まるようにするためである。
+ * 有効な`last_day`がすでにその日なら、書かない。計画が空なら何もしない。
+ * 7日の窓を超えるときは、窓の前日まで進み、飛ばした日は出さない。
+ * そろえる保存が失敗したら、何も送らずに例外で終える。次の実行が同じ状態から再開する。
  * 昨日より古い日の通知が届かなければ、最後に例外を投げる(`assertAllDelivered`)。
  * 昨日の通知だけが届かないときは、警告を残して成功で返す。
  * `main`から例外が外れると、Discordに届かない状態が失敗として残らないので、ここにまとめてテストする。
@@ -205,6 +204,13 @@ export async function runDailySummary(
     deps.log.warn("summary state could not be read; treated as no record");
   }
   const plan = planSummaryDays(reading.last_day, deps.now());
+  const [firstDay] = plan.days;
+  if (firstDay !== undefined) {
+    const expected = previousDayLabel(firstDay.label);
+    if (reading.last_day !== expected) {
+      await deps.setState({ last_day: expected });
+    }
+  }
   const result = await summarizePendingDays(plan, {
     summarizeDay: deps.summarizeDay,
     saveLastDay: (label) => deps.setState({ last_day: label }),

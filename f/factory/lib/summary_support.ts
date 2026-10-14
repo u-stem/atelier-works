@@ -70,7 +70,7 @@ function parseDayLabel(label: string): number | null {
 
 /**
  * `YYYY-MM-DD`の前日を同じ形式で返す。実在しない日付は例外を投げる。
- * 届かなかった日の前日を「最後に出した日」として保存するのに使う。
+ * 出す日の最初の日の前日を、「最後に出した日」としてそろえて保存するのに使う。
  */
 export function previousDayLabel(label: string): string {
   const ms = parseDayLabel(label);

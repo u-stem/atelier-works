@@ -438,19 +438,28 @@ describe("runDailySummary", () => {
   function setup(options: {
     state: unknown;
     delivery?: (range: DayRange) => NotifyBestEffortResult;
+    /** この日の集計を、最初の1回だけ例外にする。 */
+    failOnce?: string;
   }) {
     const { log, lines } = captureLog();
     const store = { value: options.state };
     const summarized: string[] = [];
+    const writes: unknown[] = [];
+    const failed = new Set<string>();
     const run = (now: string) =>
       runDailySummary({
         getState: () => Promise.resolve(store.value),
         setState: (state) => {
+          writes.push(state);
           store.value = state;
           return Promise.resolve();
         },
         summarizeDay: (range) => {
           summarized.push(range.label);
+          if (range.label === options.failOnce && !failed.has(range.label)) {
+            failed.add(range.label);
+            return Promise.reject(new Error("aggregate failed"));
+          }
           return Promise.resolve({
             result: resultFor(range),
             delivery: options.delivery?.(range) ?? SENT,
@@ -460,7 +469,7 @@ describe("runDailySummary", () => {
         now: () => new Date(now),
         log,
       });
-    return { run, store, summarized, lines };
+    return { run, store, summarized, writes, lines };
   }
 
   const NOW = "2026-10-14T00:05:00Z";
@@ -557,6 +566,73 @@ describe("runDailySummary", () => {
     });
     await run(NOW);
     await expect(run(NEXT_DAY)).rejects.toThrow("2026-10-13");
+  });
+
+  // 集計が例外になった日は、stateが記録なし、読めない値、未来の日付のいずれでも、
+  // 次の実行が同じ日から再開することを確かめる。
+  const BROKEN_STATES: readonly [string, unknown][] = [
+    ["there was no state", null],
+    ["the state was unreadable", { last_day: "2026-02-30" }],
+    ["the state was in the future", { last_day: "2026-10-20" }],
+  ];
+
+  for (const [name, state] of BROKEN_STATES) {
+    test(`retries the same day in the next run when aggregation failed and ${name}`, async () => {
+      const { run, summarized } = setup({ state, failOnce: "2026-10-13" });
+      await run(NOW).catch(() => undefined);
+      await run(NEXT_DAY);
+      expect(summarized).toEqual(["2026-10-13", "2026-10-13", "2026-10-14"]);
+    });
+
+    test(`starts the next run from the same day when yesterday was not sent and ${name}`, async () => {
+      const { run, summarized } = setup({ state, delivery: () => NOT_SENT });
+      await run(NOW);
+      await run(NEXT_DAY).catch(() => undefined);
+      expect(summarized.slice(0, 2)).toEqual(["2026-10-13", "2026-10-13"]);
+    });
+  }
+
+  test("does not write the state on a normal day when yesterday was not sent", async () => {
+    const { run, writes } = setup({
+      state: { last_day: "2026-10-12" },
+      delivery: () => NOT_SENT,
+    });
+    await run(NOW);
+    expect(writes).toEqual([]);
+  });
+
+  test("writes the state once on a normal day when yesterday was sent", async () => {
+    const { run, writes } = setup({ state: { last_day: "2026-10-12" } });
+    await run(NOW);
+    expect(writes).toEqual([{ last_day: "2026-10-13" }]);
+  });
+
+  test("moves the state to the day before the window when days were skipped", async () => {
+    const { run, store } = setup({
+      state: { last_day: "2026-10-01" },
+      delivery: (range) =>
+        range.label === "2026-10-07" ? NOT_SENT : { status: "sent" },
+    });
+    await run(NOW).catch(() => undefined);
+    expect(store.value).toEqual({ last_day: "2026-10-06" });
+  });
+
+  test("does not summarize anything when the state cannot be normalized", async () => {
+    const { log } = captureLog();
+    const summarized: string[] = [];
+    const rejected = runDailySummary({
+      getState: () => Promise.resolve(null),
+      setState: () => Promise.reject(new Error("state write failed")),
+      summarizeDay: (range) => {
+        summarized.push(range.label);
+        return Promise.resolve({ result: resultFor(range), delivery: SENT });
+      },
+      sleep: () => Promise.resolve(),
+      now: () => new Date(NOW),
+      log,
+    }).catch(() => undefined);
+    await rejected;
+    expect(summarized).toEqual([]);
   });
 
   test("starts the next run from the day after the saved one", async () => {
