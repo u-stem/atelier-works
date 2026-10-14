@@ -576,9 +576,9 @@ export function symlinksArgv(
 }
 
 /**
- * `dir`の下のsymlinkの、inode番号と中身を、`symlinksArgv`の一覧と同じ順に、`\0`区切りで`file`に書き出すargv。
- * 1件につき「inode番号、中身」の2つを書く。パスを使わないので、パスの長さがPATH_MAXを超えるsymlinkも扱える。
- * 木はrootの所有で書き込めない状態で走査するので、一覧とこの書き出しは同じ順になる。
+ * `dir`の下のsymlinkの、パスとinode番号と中身を、`\0`区切りで`file`に書き出すargv。
+ * 1件につき「パス、inode番号、中身」の3つを書く。`find`は出力にパスを書くだけで、パスで開かないので、パスの長さがPATH_MAXを超えるsymlinkも扱える。
+ * 先頭のパスは、`symlinksArgv`の一覧の名前との突き合わせに使う。
  * 大きさの制限は`symlinksArgv`と同じである。
  */
 export function symlinkDetailsArgv(
@@ -600,7 +600,7 @@ export function symlinkDetailsArgv(
     "l",
     "-fprintf",
     file,
-    "%i\\0%l\\0",
+    "%p\\0%i\\0%l\\0",
   ];
 }
 
@@ -1784,7 +1784,7 @@ function contentEscapes(content: BytePath): boolean {
 
 /**
  * `entries`(一覧の名前)のうち`indexes`番目のsymlinkの、inode番号と中身を、パスを使わずに読む。
- * 書き出しの件数が一覧と合わないとき、書き出しが途中で切れたとき、`find`が失敗したときは、nullを返す。
+ * 書き出しの件数が一覧と合わないとき、パスが一覧と食い違うとき、書き出しが途中で切れたとき、`find`が失敗したときは、nullを返す。
  * 呼び出し側は、読めなかったものとして全消しの後始末に任せる。
  */
 async function readPathlessLinks(
@@ -1793,6 +1793,7 @@ async function readPathlessLinks(
   name: string,
   entries: readonly BytePath[],
   indexes: readonly number[],
+  warn: Logger,
 ): Promise<Map<BytePath, PathlessLink> | null> {
   let listed: Buffer | null;
   try {
@@ -1807,21 +1808,26 @@ async function readPathlessLinks(
       LINK_LIST_MAX_BYTES,
       `${name}.details`,
     );
-  } catch {
+  } catch (error) {
+    warn.warn("the symlink contents could not be listed", {
+      error: failureSummary(error),
+    });
     return null;
   }
   if (listed === null) return null;
   const fields = toBytePath(listed).split("\0");
   if ((fields.pop() ?? "") !== "") return null;
-  if (fields.length !== entries.length * 2) return null;
+  if (fields.length !== entries.length * 3) return null;
   const found = new Map<BytePath, PathlessLink>();
   for (const index of indexes) {
     const path = entries[index];
-    const inode = fields[index * 2];
-    const content = fields[index * 2 + 1];
+    const listedPath = fields[index * 3];
+    const inode = fields[index * 3 + 1];
+    const content = fields[index * 3 + 2];
     if (path === undefined || inode === undefined || content === undefined) {
       return null;
     }
+    if (listedPath !== path) return null;
     if (!/^[0-9]+$/.test(inode)) return null;
     found.set(path, { inode, content });
   }
@@ -1925,6 +1931,7 @@ async function collectEscapingLinks(
       name,
       entries,
       unreadableAt,
+      warn,
     );
     for (const position of unreadableAt) {
       const path = entries[position] ?? "";

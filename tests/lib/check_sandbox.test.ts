@@ -571,11 +571,11 @@ describe("symlinksArgv", () => {
 });
 
 describe("symlinkDetailsArgv", () => {
-  test("writes the inode number and content of each symlink to a file without using paths", () => {
+  test("writes the path, inode number, and content of each symlink to a file", () => {
     expect(
       symlinkDetailsArgv(DIRS.worktreeDir, "/scratch/out").slice(4).join(" "),
     ).toBe(
-      `/usr/bin/find -P ${DIRS.worktreeDir} -type l -fprintf /scratch/out %i\\0%l\\0`,
+      `/usr/bin/find -P ${DIRS.worktreeDir} -type l -fprintf /scratch/out %p\\0%i\\0%l\\0`,
     );
   });
 
@@ -1826,6 +1826,8 @@ function fakeSandboxDeps(opts?: {
   readonly unreadablePaths?: readonly string[];
   /** パスを使わない書き出し(inode番号と中身)を成功させる。既定は失敗させ、読めないsymlinkを全消しに任せる。 */
   readonly readableByInode?: boolean;
+  /** パスを使わない書き出しを、壊れた形にする。 */
+  readonly brokenDetails?: "short" | "cut" | "inode" | "path";
   /** inode番号で消すコマンドを失敗させる。 */
   readonly failInodeDelete?: boolean;
   /** `removeLink`が失敗するパス。 */
@@ -1884,9 +1886,17 @@ function fakeSandboxDeps(opts?: {
       if (responded !== undefined) return responded;
       if (argv.includes("-fprintf")) {
         if (opts?.readableByInode !== true) return fail("details failed", 1);
+        const broken = opts?.brokenDetails;
         listing = [...symlinks.entries()]
-          .map(([, link], index) => `${String(index + 1)}\0${link.content}\0`)
+          .map(([path, link], index) => {
+            const shown = broken === "path" ? `${path}x` : path;
+            const inode = broken === "inode" ? "1;" : String(index + 1);
+            return `${shown}\0${inode}\0${link.content}\0`;
+          })
           .join("");
+        if (broken === "short")
+          listing = listing.split("\0").slice(3).join("\0");
+        if (broken === "cut") listing = listing.slice(0, -1);
         return ok();
       }
       if (argv.includes("-inum")) {
@@ -2781,6 +2791,19 @@ describe("escapingSymlinks", () => {
       await sandbox.escapingSymlinks(DIRS);
       expect(argvOf(fake.calls)).toContainEqual(sweepLinksArgv(WT));
     });
+
+    for (const broken of ["short", "cut", "inode", "path"] as const) {
+      test(`falls back to the sweep when the contents are broken (${broken})`, async () => {
+        const { fake, sandbox } = await preparedWith({
+          ...opts,
+          brokenDetails: broken,
+        });
+        fake.symlinks.set(LONG, OUT);
+        fake.symlinks.set(`${WT}/other`, OUT);
+        await sandbox.escapingSymlinks(DIRS);
+        expect(argvOf(fake.calls)).toContainEqual(sweepLinksArgv(WT));
+      });
+    }
 
     test("falls back to the sweep when the contents cannot be read", async () => {
       const { fake, sandbox } = await preparedWith({
