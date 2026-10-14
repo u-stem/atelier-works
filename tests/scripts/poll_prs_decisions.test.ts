@@ -13,7 +13,11 @@ import { hasLabel } from "../../f/factory/lib/types.ts";
 
 const REVIEW_LABEL = "factory:review";
 const FIX_LABEL = "factory:fix";
-const POLICY: LabelerPolicy = { viewerLogin: "octo-owner", allowedLogins: [] };
+const POLICY: LabelerPolicy = {
+  viewerLogin: "octo-owner",
+  allowedLogins: [],
+  allowedIds: {},
+};
 
 function candidate(overrides: Partial<PrCandidate> = {}): PrCandidate {
   return {
@@ -361,7 +365,7 @@ describe("decidePrActions — labeler check", () => {
   test("denies every review label when the viewer is unknown", () => {
     const review = reviewOf(
       { reviewLabelerLogin: "octo-owner" },
-      { viewerLogin: null, allowedLogins: [] },
+      { viewerLogin: null, allowedLogins: [], allowedIds: {} },
     );
     expect(review).toEqual({ kind: "deny_labeler" });
   });
@@ -398,6 +402,106 @@ describe("decidePrActions — labeler check", () => {
       POLICY,
     );
     expect(decision?.fix).toEqual({ kind: "deny_labeler" });
+  });
+});
+
+describe("decidePrActions — numeric IDs", () => {
+  const WITH_ID: LabelerPolicy = {
+    viewerLogin: "octo-owner",
+    allowedLogins: ["alice"],
+    allowedIds: { alice: 1001 },
+  };
+  const UNPROCESSED = {
+    lastKnownHeadSha: "bbbbbbb2222222222222222222222222222222",
+  };
+
+  function decisionOf(overrides: Partial<PrCandidate>) {
+    const [decision] = decidePrActions(
+      [candidate(overrides)],
+      REVIEW_LABEL,
+      FIX_LABEL,
+      WITH_ID,
+    );
+    return decision;
+  }
+
+  test("allows a review label from a listed login with the configured id", () => {
+    const decision = decisionOf({
+      labels: [REVIEW_LABEL],
+      reviewLabelerLogin: "alice",
+      reviewLabelerId: 1001,
+    });
+    expect(decision?.review.kind).toBe("trigger_review");
+  });
+
+  test("denies a review label from a person who took over a listed name", () => {
+    const decision = decisionOf({
+      labels: [REVIEW_LABEL],
+      reviewLabelerLogin: "alice",
+      reviewLabelerId: 2002,
+    });
+    expect(decision?.review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("denies a review label when the labeler id is unknown", () => {
+    const decision = decisionOf({
+      labels: [REVIEW_LABEL],
+      reviewLabelerLogin: "alice",
+      reviewLabelerId: null,
+    });
+    expect(decision?.review).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("allows a fix label from a listed login with the configured id", () => {
+    const decision = decisionOf({
+      labels: [FIX_LABEL],
+      fixLabelerLogin: "alice",
+      fixLabelerId: 1001,
+    });
+    expect(decision?.fix.kind).toBe("trigger_fix");
+  });
+
+  test("denies a fix label from a person who took over a listed name", () => {
+    const decision = decisionOf({
+      labels: [FIX_LABEL],
+      fixLabelerLogin: "alice",
+      fixLabelerId: 2002,
+    });
+    expect(decision?.fix).toEqual({ kind: "deny_labeler" });
+  });
+
+  test("judges the review label by its own labeler id, not the fix label's", () => {
+    const decision = decisionOf({
+      labels: [REVIEW_LABEL, FIX_LABEL],
+      reviewLabelerLogin: "alice",
+      reviewLabelerId: 1001,
+      fixLabelerLogin: "alice",
+      fixLabelerId: 2002,
+    });
+    expect(decision?.review.kind).toBe("trigger_review");
+  });
+
+  test("starts a review of an unprocessed commit of the author with the configured id", () => {
+    const decision = decisionOf({
+      ...UNPROCESSED,
+      authorLogin: "alice",
+      authorId: 1001,
+    });
+    expect(decision?.review.kind).toBe("trigger_review");
+  });
+
+  test("does not start a review of a PR whose author took over a listed name", () => {
+    const decision = decisionOf({
+      ...UNPROCESSED,
+      authorLogin: "alice",
+      authorId: 2002,
+    });
+    expect(decision?.review).toEqual({ kind: "none" });
+  });
+
+  test("does not start a review of a PR whose author id is unknown", () => {
+    const decision = decisionOf({ ...UNPROCESSED, authorLogin: "alice" });
+    expect(decision?.review).toEqual({ kind: "none" });
   });
 });
 
@@ -587,6 +691,7 @@ describe("labelerPolicyFor", () => {
   test("takes the viewer login as given", () => {
     const policy = labelerPolicyFor("octo-owner", {
       allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: {},
     });
     expect(policy.viewerLogin).toBe("octo-owner");
   });
@@ -594,8 +699,17 @@ describe("labelerPolicyFor", () => {
   test("takes allowed_labeler_logins as the allowed logins", () => {
     const policy = labelerPolicyFor("octo-owner", {
       allowed_labeler_logins: ["alice"],
+      allowed_labeler_ids: {},
     });
     expect(policy.allowedLogins).toEqual(["alice"]);
+  });
+
+  test("takes allowed_labeler_ids as the allowed ids with lower-cased keys", () => {
+    const policy = labelerPolicyFor("octo-owner", {
+      allowed_labeler_logins: ["Alice"],
+      allowed_labeler_ids: { Alice: 1001 },
+    });
+    expect(policy.allowedIds).toEqual({ alice: 1001 });
   });
 });
 

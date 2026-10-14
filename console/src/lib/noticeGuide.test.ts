@@ -118,6 +118,24 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells that a denied labeler may be another account with the same name", () => {
+    expect(noticeGuide("labeler_denied").meaning).toContain(
+      "名前が同じでも別のアカウント",
+    );
+  });
+
+  test("tells to check the configured id when the allowed person is denied", () => {
+    expect(noticeGuide("labeler_denied").action).toContain(
+      "allowed_labeler_idsのIDが合っているか",
+    );
+  });
+
+  test("gives the command that looks up an account id", () => {
+    expect(noticeGuide("labeler_denied").commands).toEqual([
+      "gh api users/<ログイン名> --jq .id",
+    ]);
+  });
+
   test("tells when a lost claim needs no action", () => {
     expect(noticeGuide("claim_race_lost").note).toContain(
       "同じ本文の未解決の通知がある",

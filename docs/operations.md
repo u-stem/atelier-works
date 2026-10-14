@@ -249,16 +249,42 @@ Issue化の提案の承認も、判断の記録の前に照合する。
   どれも、書き込みの直前には照合しない。
 - `drawio_viewer_bump`。`factory_repo`の名前だけで、ブランチとPRとラベルを作る。送る内容は公開物である。
 
-#### ラベルの付与者の判定
+### ラベルの付与者の数値IDを固定する
 
-ラベルの付与者は、名前で判定する。
-タイムラインのラベルのイベントは、GraphQLでユーザーの数値IDを返せる。
-しかし、`allowed_labeler_logins`は名前だけを持つ。
-名前から数値IDを引くと、今その名前を持つ人のIDが返るので、IDで比べても名前を取得した人は通る。
-IDで判定するには、許可するアカウントのIDを設定に持たせる必要があり、今はその設定を持たない。
+ラベルの付与者は、名前に加えて数値IDでも照合できる。
+名前だけの照合では、アカウントが改名した後に別の人がその名前を取得すると、同じアカウントに見える。
+`factory_config`の`allowed_labeler_ids`に、許可するアカウントの名前とIDを対で入れると、そのアカウントはIDでも照合する。
+IDはラベルのイベントの応答に含まれるので、照合のためにGitHubへの呼び出しは増えない。
+PRの作成者は、PRの応答の`user.id`で照合する。
 
+IDは次のコマンドで調べる。
+
+```bash
+gh api users/<名前> --jq .id
+```
+
+`allowed_labeler_ids`は、名前をキー、IDを値にして書く。
+
+```yaml
+allowed_labeler_logins:
+  - alice
+allowed_labeler_ids:
+  alice: 1001
+```
+
+キーには、`allowed_labeler_logins`の要素と同じ名前を書く。
+含まれない名前、`[bot]`で終わる名前、大文字小文字だけが違う重複したキー、正の整数でない値は、設定の検証が拒否する。
+綴りの誤りで、IDを入れたつもりのアカウントが名前だけの照合に戻るのを防ぐためである。
+
+IDを入れたアカウントでは、名前が同じでもIDの違う人のラベルを許可しない。
+改名の後に別の人が古い名前を取得しても、そのラベルは拒否される。
+イベントにIDが無いときは、IDを確かめられないので拒否する。
+拒否の流れは名前の不一致と同じで、ラベルを外さずに`labeler_denied`を残す。
+許可した本人のラベルが拒否されたときは、設定のIDが合っているかを確かめる。
+
+IDを入れないアカウントと、FactoryのPATのアカウントは、名前だけで照合する。
 古い名前が`allowed_labeler_logins`に残ると、その名前を取得した人が、許可されたラベル付与者になりうる。
-名前を変えたアカウントは、`allowed_labeler_logins`から外す。
+名前を変えたアカウントは、`allowed_labeler_logins`から古い名前を外して新しい名前を足し、`allowed_labeler_ids`のキーも合わせる。
 ラベルを付けられる人は、書き込み権限を持つ人に限られない。
 公開リポジトリでは、起票者が自分のIssueにラベルを付けられることもある。
 
@@ -338,6 +364,7 @@ Issueに`factory`ラベルを付けると、Factoryがそれを拾う。
 
 - FactoryのPATのアカウント。
 - `factory_config`の`allowed_labeler_logins`に挙げたアカウント。
+  `allowed_labeler_ids`にIDを入れたアカウントは、IDも一致するときだけである。
 
 通常は、Factoryを動かすアカウントでラベルを付ける。
 確認の仕組みは[ラベル付与の制限](security.md#ラベル付与の制限)にある。
@@ -1525,7 +1552,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `pr_fix_reviewer_request_failed` | 再レビューの依頼のAPIが失敗した。PRの取得の失敗と、Botや削除済みの作成者の名前で依頼を組み立てられない場合を含む | GitHubのPRで人がレビュアーを依頼する |
 | `issue_proposal_record_failed` | Issue化の提案を記録できなかった | PRのスレッドを確かめ、必要なら人がIssueを起票する |
 | `fix_feedback_association_excluded` | 許可されていない関係の人のコメントを、修正の材料から除いた | 必要なら許可された人が指示を書き直す |
-| `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す |
+| `labeler_denied` | 許可されていない人が、または付与者を特定できないままトリガーラベルを付けた。名前が同じでも、`allowed_labeler_ids`のIDと違う人は許可されない。Issueの`factory`と、PRの`factory:review`、`factory:fix`が対象 | 拾わせるなら、ラベルを外して、許可された人が付け直す。付ける人を増やすなら`allowed_labeler_logins`に足す。許可した本人のラベルが拒否されたときは、`allowed_labeler_ids`のIDが合っているかを確かめる([ラベルの付与者の数値IDを固定する](#ラベルの付与者の数値idを固定する)) |
 | `fork_head_denied` | PRのheadのリポジトリが、このリポジトリと同一でない(fork、または取得できない)ので、レビューを始めなかった。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRごとに残る | 同じリポジトリにブランチを作ってPRを出し直す。止めるなら、`factory:review`ラベルとassignee、レビュー依頼を外すか、PRを閉じる。外すまでは、解決しても出直す |
 | `owner_id_mismatch` | `owners`の名前か`id`をGitHubの現在の状態と照合できないか、作業項目のオーナーが`owners`に無い。そのオーナーの検索を飛ばしているか、そのオーナーのリポジトリの作業項目を、取得の前に止めている | [オーナーの数値IDを固定する](#オーナーの数値idを固定する)の手順で`owners`を見直し、止めた作業項目を再実行する |
 | `factory_repo_id_mismatch` | `factory_repo`の`factory_repo_id`をGitHubの現在のIDと照合できず、自己更新が取得も反映もしていない。Factory自身のリポジトリを使うほかの処理は、取得の前に失敗する | [Factory自身のリポジトリの数値IDを固定する](#factory自身のリポジトリの数値idを固定する)の手順で`factory_repo`と`factory_repo_id`を見直す |
