@@ -576,6 +576,9 @@ Podmanは対象外である。
 - このworkerで動かすのはリポジトリのscriptの想定だが、これを強制する仕組みは無い。ワークスペースでscriptを編集できる者は、任意のscriptにtag`console`を付けられる。
   `console`をカスタムtagに許可しているので、superadminでない者が付けたscriptも、このworkerで動く。
   tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
+- 許可した主体は、Console用workerの依存キャッシュ(`worker_console_dependency_cache`)に書ける。defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
+- Console用workerの枠は2つである。長く動くjobで枠を埋めると、Consoleの問い合わせと承認が止まる。可用性の問題で、秘密の漏れではない。
+- 許可はすべてのワークスペースに及ぶ。ワークスペースに絞る書式(`console(factory)`)は、実機で確かめていないので採用していない。
 - composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 - `factory_state_init`の確認の後にも隙がある。
   Console用のworkerは、`factory_state_init`を経ない起動のたびに、サブパスを解決し直す。
