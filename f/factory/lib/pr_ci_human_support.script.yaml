@@ -1,0 +1,9 @@
+summary: '[LIB] 許可された人のPRの判定の純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。許可された人が作ったPRの作者の確認、記録の対象の判定、通知の方針の選択のロジックです。
+lock: '!inline f/factory/lib/pr_ci_human_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

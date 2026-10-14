@@ -1164,6 +1164,7 @@ workerの時計とGitHubの時計が数分ずれても、確定を待つ時間�
 
 `watch_pr_ci`が5分ごとに、Factoryが作ったPRのGitHub Actionsの結果を、headのコミット単位で確かめる。
 失敗を通知する。設定で有効にしたときは、失敗を直す作業項目も起動する([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。
+設定で有効にしたときは、許可された人が作ったPRの失敗も通知する([人のPRの失敗を通知する](#人のprの失敗を通知する))。
 `watch_pr_ci`自身は、PRとリポジトリへは書き込まず、ログも読まない。
 設定`pr_ci_watch_enabled`を`false`にすると、発見、判定、新しい失敗の通知、作業項目の起動をしない。失敗を直す作業項目が終わった行を戻す回復と、保留していた失敗の通知だけは、対象の行があれば動く。行が無ければ、何も読まずに終わる。
 保留していた失敗の通知はGitHubを読まず、起動もしないので、すぐ届く。
@@ -1180,7 +1181,8 @@ workerの時計とGitHubの時計が数分ずれても、確定を待つ時間�
 - headのブランチが`factory/issue-<N>-wi-<id>`の形で、その作業項目が同じPRを指している。
 - リポジトリが、`factory_repo`か、`repo_allowlist`と照合を通った`owners`に合う。
 
-人が作ったPRとforkのPRは、追跡せず、通知もしない。自動で書き込む対象を、Factoryが作ったPRに限るためである。
+forkのPRは、追跡せず、通知もしない。
+人が作ったPRは、`pr_ci_watch_human_prs`が`false`の間は、追跡せず、通知もしない。
 
 事前に、PATに`Actions: Read-only`を付ける([GitHubのPAT](security.md#githubのpat))。
 付けていなくても動き、権限が足りないリポジトリごとに、通知`pr_ci_check_denied`が1件残る。
@@ -1211,6 +1213,37 @@ PRのCIが新しいpushで古い実行を取り消す設定のリポジトリを
 監視を有効にした直後の最初の巡回では、そのとき赤い開いたFactoryのPRが、すべて通知される。
 
 見落としうる限界と内部の挙動は[PRのCI監視の仕様](internals/pr-ci.md)にある。
+
+### 人のPRの失敗を通知する
+
+設定`pr_ci_watch_human_prs`を`true`にすると、許可された人が作ったPRのCIの失敗も、`watch_pr_ci`が通知する。
+既定は`false`である。`pr_ci_watch_enabled`が`false`のときは、`true`でも動かない。
+通知だけを行い、直す作業項目は起動しない。通知の文面と、通知が自動で解決される条件は、FactoryのPRと同じである。
+
+対象は、次の条件をすべて満たすPRである。
+
+- 作者が、PATのアカウントか、`allowed_labeler_logins`のアカウントである。
+- 開いていて、下書きでなく、forkでない。
+- headのブランチが`factory/issue-<N>-wi-<id>`の形でなく、Factoryが作ったPRでない。
+- リポジトリが、`factory_repo`か、`repo_allowlist`と照合を通った`owners`に合う。
+
+PATのアカウントが運用者本人のアカウントなら、運用者のPRの失敗がすべて通知される。
+1回の実行で記録するのは20件までで、作者ごとに更新が新しい100件から探す。
+
+有効にする手順は次のとおりである。
+
+1. 通知先を確かめる。通知は、Consoleの要対応と、Discordの`needs_human`に届く。
+2. 対象のアカウントを確かめる。PATのアカウントと`allowed_labeler_logins`の全員のPRが、通知の対象になる。
+3. 有効にした最初の巡回で、そのとき赤い開いた人のPRはすべて通知される。数が多いときは、先に片付ける。
+4. `factory_config`の`pr_ci_watch_human_prs`を`true`にする。
+5. 次の巡回の後、`watch_pr_ci`のログに`pr ci human discovery finished`が出ることと、記録した数が想定と合うことを確かめる。
+
+戻すときは、`pr_ci_watch_human_prs`を`false`にする。
+新しい人の行は作られなくなる。
+記録済みの人の行は読み直され、PRが閉じる、headが進む、通るのどれかでそのまま決着する。
+失敗の行は期限切れにしない。
+解決されずに残った通知`pr_ci_failed`は、Consoleから手で解決する。
+検索のrate limitや、PATのアカウントを読めない失敗は、人のPRの発見だけを飛ばす。FactoryのPRの監視は止まらない。
 
 ### 失敗の自動修正を有効にする
 

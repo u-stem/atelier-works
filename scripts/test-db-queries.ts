@@ -3388,10 +3388,21 @@ execPsql(
   `UPDATE factory.pr_ci_checks SET first_seen_at = now() - interval '2 hours' WHERE id = ${String(claimOld.id)}`,
 );
 await recordPrCiCheck(fixRowNew(605, FIX_SHA_1), sql);
+// 人のPRの行(`work_item_id`がNULL)は起動の候補にしない。他の行は作業項目に結ぶ。
+const claimHuman = await failedFixRow(606, FIX_SHA_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET work_item_id = 1 WHERE id IN (${[claimPlain, claimTemporary, claimDeterministic, claimOld].map((row) => String(row.id)).join(", ")})`,
+);
 check(
   "claim candidates: rows without a hold or with a temporary hold are listed, others are not",
   (await claimCandidates()) === "601,602",
   await claimCandidates(),
+);
+check(
+  "claim candidates: a failed row of a human pull request is not listed",
+  !(await claimCandidates()).split(",").includes(String(606)) &&
+    claimHuman.work_item_id === null,
 );
 check(
   "claim candidates: a row seen before the since time is not listed",

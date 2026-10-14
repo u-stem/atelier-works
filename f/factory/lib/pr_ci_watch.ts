@@ -14,6 +14,10 @@
 // 外部の文字列(workflow名、実行の結論、ログ)は、通知の本文にもDiscordにも載せない。
 // 要約(`summary`列)にだけ、検証・整形した名前を残す。
 //
+// 発見の最後に、許可された人が作ったPRも記録する(`humanDiscovery`を渡したときだけ)。
+// 人のPRの行は`work_item_id`がNULLで、失敗は確定した時点で通知するだけにする。
+// 直す作業項目は起動せず、回復の対象にもならない。
+//
 // 1つの行の判定は、実行を読む、PRのheadを読む、判定する、の順に行う。
 // 先にPRのheadを読むと、読んでいる間に進んだheadの実行を、今のheadの失敗として扱ってしまう。
 
@@ -28,15 +32,20 @@ import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
   GitHubHttpError,
   GitHubRateLimitError,
+  type OpenAuthoredPrsScope,
   type PrCommitMessages,
   type PrHeadWorkflowRuns,
   type PrHeadWorkflowRunsOptions,
+  type PrSearchItem,
   type PullRequest,
+  parseGitHubRepoUrl,
+  type Viewer,
   type WorkflowRunJob,
   WorkflowRunsIncompleteError,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
 import type { WorkflowRun } from "./main_ci_support.ts";
+import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
   classifyHeadFailure,
   decideFixClaim,
@@ -46,6 +55,13 @@ import {
   decideFixingRecovery,
   type FixItemState,
 } from "./pr_ci_fix_recovery.ts";
+import {
+  humanPrAuthors,
+  isAllowedPrAuthor,
+  isHumanPrCandidate,
+  notifyPolicyFor,
+  pullRequestKey,
+} from "./pr_ci_human_support.ts";
 import {
   decideDeferredNotice,
   defersFailureNotice,
@@ -108,6 +124,19 @@ export const ORPHAN_FIXING_BATCH_LIMIT = 50;
 
 /** 1回の実行で起動の候補にする、失敗の行の最大の数。 */
 export const CLAIM_BATCH_LIMIT = 50;
+
+/**
+ * 1回の実行で、人のPRとして記録する数の上限。
+ * 追跡対象のFactoryのPRと、作者が許可されていないPRなどを除いた後に数える。
+ * 除く前に数えると、Factoryのブランチなどが枠を埋めて、人のPRを見落とすためである。
+ */
+export const HUMAN_PR_LIMIT = 20;
+
+/**
+ * 人のPRの発見(検索とPRの読み取り)に使える時間。
+ * 判定と起動の時間を、人のPRの発見が食わないようにする。
+ */
+export const HUMAN_DISCOVERY_BUDGET_MS = 30_000;
 
 /** 1回の実行で、保留した失敗の通知を判断する行の最大の数。 */
 export const DEFERRED_NOTICE_BATCH_LIMIT = 200;
@@ -213,6 +242,56 @@ export function buildRecoveryRepoGates(
 }
 
 /**
+ * 人のPRの発見の依存を組む。設定が偽のときは、PATのアカウントを読まずに`undefined`を返す。
+ * PATのアカウントを読めなかったときも`undefined`を返し、失敗を記録する。人のPRの発見だけを飛ばし、
+ * FactoryのPRの監視は止めないためである。
+ * 検索する範囲は、照合を通ったオーナーである。`factory_repo`のオーナーがその中に無ければ、
+ * `factory_repo`のリポジトリを足す。`factory_repo`は許可リストに関わらず常に対象だからである。
+ */
+export async function buildHumanDiscovery(input: {
+  readonly config: Pick<
+    FactoryConfig,
+    | "pr_ci_watch_human_prs"
+    | "allowed_labeler_logins"
+    | "allowed_labeler_ids"
+    | "factory_repo"
+  >;
+  readonly verifiedOwners: readonly FactoryOwner[];
+  readonly getViewer: () => Promise<Viewer>;
+  readonly search: PrCiHumanDiscoveryDeps["search"];
+  readonly recordFailure: (step: string, err: unknown) => Promise<void>;
+}): Promise<PrCiHumanDiscoveryDeps | undefined> {
+  const { config } = input;
+  if (!config.pr_ci_watch_human_prs) return undefined;
+  let viewer: Viewer;
+  try {
+    viewer = await input.getViewer();
+  } catch (err) {
+    await input.recordFailure("human_discovery_viewer", err);
+    return undefined;
+  }
+  const scopes: OpenAuthoredPrsScope[] = input.verifiedOwners.map((owner) => ({
+    kind: "owner",
+    owner: owner.name,
+    ownerKind: owner.kind,
+  }));
+  try {
+    const factoryRepo = parseGitHubRepoUrl(config.factory_repo);
+    const searched = input.verifiedOwners.some(
+      (owner) => owner.name.toLowerCase() === factoryRepo.owner.toLowerCase(),
+    );
+    if (!searched) scopes.push({ kind: "repo", ...factoryRepo });
+  } catch (err) {
+    await input.recordFailure("human_discovery_factory_repo", err);
+  }
+  return {
+    policy: labelerPolicyFor(viewer.login, config),
+    scopes,
+    search: input.search,
+  };
+}
+
+/**
  * 失敗した行から、直す作業項目を起動する依存。渡さなければ起動しない。
  * リポジトリ名の綴りは、引く先で違う。作業項目を引く`hasActiveFix`と、起動の`claim`には、
  * PRが示すGitHubの正規の綴りを渡す。ほかの関数には、行と同じ小文字を渡す。
@@ -276,9 +355,29 @@ export type PrCiClaimDeps = {
   readonly cancelFlow: (jobId: string, reason: string) => Promise<void>;
 };
 
+/**
+ * 許可された人が作ったPRを見つけて記録する依存。渡さなければ見つけない。
+ * 作者は、`policy`のPATのアカウントと許可されたログイン名である。
+ */
+export type PrCiHumanDiscoveryDeps = {
+  readonly policy: LabelerPolicy;
+  /** 検索する範囲。オーナーごと、または`factory_repo`のリポジトリ。 */
+  readonly scopes: readonly OpenAuthoredPrsScope[];
+  /**
+   * 範囲と作者で、開いていて下書きでないPRを検索する(`searchOpenAuthoredPrs`)。
+   * rate limitのときは、待たずに`GitHubRateLimitError`を投げる。
+   */
+  readonly search: (
+    scope: OpenAuthoredPrsScope,
+    author: string,
+  ) => Promise<PrSearchItem[]>;
+};
+
 export type PrCiWatchDeps = {
   /** 渡したときだけ、判定の後に失敗した行の起動を行う。 */
   readonly claim?: PrCiClaimDeps;
+  /** 渡したときだけ、発見の最後に許可された人のPRを記録する。 */
+  readonly humanDiscovery?: PrCiHumanDiscoveryDeps;
   /**
    * 失敗の通知を保留するかと、保留した通知を出す時機を決める設定。
    * 自動修正が無効なら、失敗は確定した時点で通知する。
@@ -462,7 +561,7 @@ function repoKey(ref: { owner: string; repo: string }): string {
 }
 
 function prKey(ref: PullRequestRef): string {
-  return `${repoKey(ref)}#${String(ref.number)}`;
+  return pullRequestKey(ref);
 }
 
 function rowRef(row: PrCiCheck): PullRequestRef {
@@ -688,6 +787,11 @@ async function discover(context: Context): Promise<void> {
     await recordFailureOf(context, "list_tracked", err);
     return;
   }
+  const trackedPrKeys = new Set<string>();
+  for (const item of items) {
+    const ref = item.prUrl === null ? null : parsePullRequestUrl(item.prUrl);
+    if (ref !== null) trackedPrKeys.add(prKey(ref));
+  }
   for (const item of items) {
     if (state.rateLimited || overBudget(context)) break;
     const ref = item.prUrl === null ? null : parsePullRequestUrl(item.prUrl);
@@ -701,6 +805,7 @@ async function discover(context: Context): Promise<void> {
       }
     }
   }
+  await discoverHuman(context, trackedPrKeys);
 }
 
 async function discoverPr(
@@ -708,7 +813,7 @@ async function discoverPr(
   item: FactoryWorkItemRef,
   ref: PullRequestRef,
 ): Promise<void> {
-  const { deps, counters } = context;
+  const { deps } = context;
   // `parsePullRequestUrl`は先頭が`.`のリポジトリ名も通すが、DBへの記録は通さない。
   // 例外にすると毎回失敗として記録されるので、読まずに飛ばす。
   try {
@@ -731,6 +836,20 @@ async function discoverPr(
   if (!isSameRepoHead(pr) || !isFactoryPrBranch(pr.headRef, ref, item)) return;
   context.state.discoveredPrs.add(prKey(ref));
   if (pr.draft) return;
+  await recordPrHead(context, ref, pr, item.id);
+}
+
+/**
+ * PRの今のheadの行を記録し、古いheadの行を整理する。
+ * `workItemId`はFactoryのPRなら作業項目のID、人のPRなら`null`である。
+ */
+async function recordPrHead(
+  context: Context,
+  ref: PullRequestRef,
+  pr: PullRequest,
+  workItemId: number | null,
+): Promise<void> {
+  const { deps, counters } = context;
   const rows = await deps.listRowsForPr(ref.owner, ref.repo, ref.number);
   const plan = planPrHead(
     pr.headSha,
@@ -747,7 +866,7 @@ async function discoverPr(
       repo: ref.repo,
       pr_number: ref.number,
       head_sha: pr.headSha,
-      work_item_id: item.id,
+      work_item_id: workItemId,
       run_created_at: null,
     });
     if (inserted) counters.recorded += 1;
@@ -764,6 +883,115 @@ async function discoverPr(
       reopen: true,
     });
   }
+}
+
+/** 検索の範囲を、失敗の記録の手順名に使う短い名前にする。 */
+function humanScopeLabel(scope: OpenAuthoredPrsScope): string {
+  return scope.kind === "repo" ? `${scope.owner}/${scope.repo}` : scope.owner;
+}
+
+/**
+ * 許可された人が作ったPRを検索し、見つかったPRの今のheadを記録する。
+ * 行の`work_item_id`はNULLにする。追跡対象のFactoryのPRと、Factoryの実装ブランチの形のブランチは記録しない。
+ * 検索は範囲(`scopes`)と作者ごとに1回で、1ページだけ読む。
+ * 検索がrate limitで拒まれても、全体のrate limitにはせず、残りの検索を止める。
+ * 判定と起動を飢えさせないよう、発見の最後に置き、全体の経過時間と`HUMAN_DISCOVERY_BUDGET_MS`の両方を見る。
+ * 記録した数が`HUMAN_PR_LIMIT`に達したら、残りは読まない。
+ */
+async function discoverHuman(
+  context: Context,
+  trackedPrKeys: ReadonlySet<string>,
+): Promise<void> {
+  const { deps, state } = context;
+  const human = deps.humanDiscovery;
+  if (human === undefined) return;
+  if (state.rateLimited || overBudget(context)) return;
+  const startedAt = deps.now().getTime();
+  const outOfTime = (): boolean =>
+    overBudget(context) ||
+    deps.now().getTime() - startedAt >= HUMAN_DISCOVERY_BUDGET_MS;
+
+  const found: PrSearchItem[] = [];
+  let searching = true;
+  for (const scope of human.scopes) {
+    for (const author of humanPrAuthors(human.policy)) {
+      if (!searching) break;
+      if (outOfTime()) {
+        deps.log.warn("pr ci human search stopped by the time budget");
+        searching = false;
+        break;
+      }
+      try {
+        found.push(...(await human.search(scope, author)));
+      } catch (err) {
+        if (err instanceof GitHubRateLimitError) {
+          deps.log.warn("pr ci human search stopped by the rate limit", {
+            error: errorMessage(err),
+          });
+          searching = false;
+          break;
+        }
+        await recordFailureOf(
+          context,
+          `search_human_prs:${humanScopeLabel(scope)}:${author}`,
+          err,
+        );
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  let accepted = 0;
+  for (const hit of found) {
+    if (accepted >= HUMAN_PR_LIMIT) break;
+    if (state.rateLimited || outOfTime()) {
+      deps.log.warn("pr ci human discovery stopped by the time budget");
+      break;
+    }
+    const ref: PullRequestRef = {
+      owner: hit.owner.toLowerCase(),
+      repo: hit.repo.toLowerCase(),
+      number: hit.number,
+    };
+    const key = prKey(ref);
+    if (seen.has(key) || trackedPrKeys.has(key)) continue;
+    seen.add(key);
+    if (!deps.isRepoAllowed(ref.owner, ref.repo)) continue;
+    try {
+      assertGitHubName(ref.owner);
+      assertGitHubName(ref.repo);
+    } catch {
+      deps.log.warn("pr ci skipped a repository whose name is not supported", {
+        repo: repoKey(ref),
+        pr: ref.number,
+      });
+      continue;
+    }
+    try {
+      const pr = await readPr(context, ref);
+      const author = {
+        login: pr.authorLogin,
+        id: pr.authorId,
+        type: pr.authorType,
+      };
+      if (
+        !isAllowedPrAuthor(author, human.policy) ||
+        !isHumanPrCandidate({ pr, ref, trackedPrKeys })
+      ) {
+        continue;
+      }
+      accepted += 1;
+      await recordPrHead(context, ref, pr, null);
+    } catch (err) {
+      if ((await absorbReadError(context, ref, err)) === null) {
+        await recordFailureOf(context, `discover_human_pr:${key}`, err);
+      }
+    }
+  }
+  deps.log.info("pr ci human discovery finished", {
+    found: found.length,
+    accepted,
+  });
 }
 
 /**
@@ -1350,7 +1578,7 @@ async function settleFailed(
     defersFailureNotice({
       reason,
       firstSeenAt: row.first_seen_at,
-      policy: deps.notifyPolicy,
+      policy: notifyPolicyFor(row, deps.notifyPolicy),
     })
   ) {
     // 自動で直す対象の失敗は、状態だけを`failed`にする。通知は、直せるかが決まってから`notifyDeferred`が出す。
@@ -1461,7 +1689,7 @@ async function notifyDeferred(context: Context): Promise<void> {
         firstSeenAt: row.first_seen_at,
         updatedAt: row.updated_at,
       },
-      policy: deps.notifyPolicy,
+      policy: notifyPolicyFor(row, deps.notifyPolicy),
       now: context.now,
     });
     if (decision.kind === "wait") continue;

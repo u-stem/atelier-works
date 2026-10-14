@@ -12,9 +12,11 @@ import type {
 import {
   GitHubHttpError,
   GitHubRateLimitError,
+  type OpenAuthoredPrsScope,
   type PrCommitMessages,
   type PrHeadWorkflowRuns,
   type PrHeadWorkflowRunsOptions,
+  type PrSearchItem,
   type PullRequest,
   type WorkflowRunJob,
   WorkflowRunsIncompleteError,
@@ -25,6 +27,7 @@ import {
   PENDING_EXPIRES_AFTER_MS,
   type WorkflowRun,
 } from "../../f/factory/lib/main_ci_support.ts";
+import { labelerPolicyFor } from "../../f/factory/lib/poll_support.ts";
 import type { FixItemState } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import {
   HOLD_PROLONGED_AFTER_MS,
@@ -41,11 +44,14 @@ import {
   prCiNextAction,
 } from "../../f/factory/lib/pr_ci_support.ts";
 import {
+  buildHumanDiscovery,
   buildRecoveryRepoGates,
   buildRepoGates,
   CLAIM_BATCH_LIMIT,
   CLAIMS_PER_RUN_LIMIT,
   deniedNoticeMessage,
+  HUMAN_DISCOVERY_BUDGET_MS,
+  HUMAN_PR_LIMIT,
   NO_CI_RECHECK_INTERVAL_MS,
   PR_CI_CHECK_DENIED_KIND,
   PR_CI_RESOLVED_BY,
@@ -207,9 +213,32 @@ type Setup = {
   readTakesMs?: number;
   /** 最初のPRを読んだ後、時計を予算の分だけ進める。 */
   budgetUsedAfterFirstPr?: boolean;
+  /** 人のPRの発見。渡したときだけ`humanDiscovery`を組む。 */
+  human?: HumanSetup;
   /** 差し替える依存。 */
   override?: Partial<PrCiWatchDeps>;
 };
+
+type HumanSetup = {
+  /** 検索する範囲。省略すると`acme`の1つ。 */
+  scopes?: OpenAuthoredPrsScope[];
+  /** 許可する名前。省略すると`alice`だけ。PATのアカウントは`factory-bot`。 */
+  allowedLogins?: string[];
+  /** 作者ごとの検索結果。無い作者は0件。`Error`なら検索が失敗する。 */
+  found?: Record<string, PrSearchItem[] | Error>;
+  /** 検索のたびに時計を進める時間(ミリ秒)。 */
+  searchTakesMs?: number;
+};
+
+function hit(number: number, repo = "widgets"): PrSearchItem {
+  return {
+    owner: "acme",
+    repo,
+    number,
+    title: `pr ${String(number)}`,
+    htmlUrl: `https://github.com/acme/${repo}/pull/${String(number)}`,
+  };
+}
 
 type Transition = {
   readonly id: number;
@@ -246,6 +275,8 @@ type Harness = {
     };
   }[];
   readonly fixItemReads: number[];
+  /** 人のPRの検索の呼び出し。 */
+  readonly searches: { scope: OpenAuthoredPrsScope; author: string }[];
 };
 
 function asRuns(value: PrHeadWorkflowRuns | WorkflowRun[]): PrHeadWorkflowRuns {
@@ -270,6 +301,7 @@ function harness(setup: Setup = {}): Harness {
   const noCiQueries: { checkedBefore: Date; limit: number }[] = [];
   const released: Harness["released"] = [];
   const fixItemReads: number[] = [];
+  const searches: Harness["searches"] = [];
   const prCursor = new Map<string, number>();
   let elapsedMs = 0;
   const log: Logger = {
@@ -398,6 +430,26 @@ function harness(setup: Setup = {}): Harness {
     recordFailure: async (step) => {
       failures.push(step);
     },
+    ...(setup.human === undefined
+      ? {}
+      : {
+          humanDiscovery: {
+            policy: labelerPolicyFor("factory-bot", {
+              allowed_labeler_logins: setup.human.allowedLogins ?? ["alice"],
+              allowed_labeler_ids: {},
+            }),
+            scopes: setup.human.scopes ?? [
+              { kind: "owner", owner: "acme", ownerKind: "user" },
+            ],
+            search: async (scope, author) => {
+              searches.push({ scope, author });
+              elapsedMs += setup.human?.searchTakesMs ?? 0;
+              const found = setup.human?.found?.[author] ?? [];
+              if (found instanceof Error) throw found;
+              return found;
+            },
+          },
+        }),
     ...setup.override,
   };
   return {
@@ -417,6 +469,7 @@ function harness(setup: Setup = {}): Harness {
     noCiQueries,
     released,
     fixItemReads,
+    searches,
   };
 }
 
@@ -4259,5 +4312,597 @@ describe("notifying a deferred failure", () => {
     const h = harness(deferredSetup());
     const result = await runPrCiWatch(h.deps);
     expect(result.notified).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 許可された人のPR
+// ---------------------------------------------------------------------------
+
+const HUMAN_KEY = "acme/widgets#40";
+
+/** 許可された作者`alice`が、同じリポジトリの普通のブランチから開いたPR。 */
+function humanPr(overrides: Partial<PullRequest> = {}): PullRequest {
+  return pr({
+    number: 40,
+    headRef: "feature/x",
+    authorLogin: "alice",
+    authorId: 11,
+    authorType: "User",
+    ...overrides,
+  });
+}
+
+/** `alice`のPR40が1件見つかる設定。 */
+function humanSetup(overrides: Setup = {}): Setup {
+  return {
+    human: { found: { alice: [hit(40)] } },
+    prs: { [HUMAN_KEY]: humanPr() },
+    ...overrides,
+  };
+}
+
+function humanRow(overrides: Partial<PrCiCheck> = {}): PrCiCheck {
+  return row({ id: 9, pr_number: 40, work_item_id: null, ...overrides });
+}
+
+function rateLimitError(): GitHubRateLimitError {
+  return new GitHubRateLimitError("search/issues", 1000, false);
+}
+
+describe("discovery of the pull requests of allowed people", () => {
+  test("records a row without a work item for the head of the pull request", async () => {
+    const h = harness(humanSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([
+      {
+        owner: "acme",
+        repo: "widgets",
+        pr_number: 40,
+        head_sha: SHA_A,
+        work_item_id: null,
+        run_created_at: null,
+      },
+    ]);
+  });
+
+  test("searches once for every owner and author", async () => {
+    const h = harness(humanSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.searches.map((search) => search.author)).toEqual([
+      "factory-bot",
+      "alice",
+    ]);
+  });
+
+  test("searches every scope for every author", async () => {
+    const h = harness(
+      humanSetup({
+        human: {
+          found: {},
+          scopes: [
+            { kind: "owner", owner: "acme", ownerKind: "user" },
+            { kind: "repo", owner: "other", repo: "tools" },
+          ],
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toHaveLength(4);
+  });
+
+  test("reads a pull request found by two searches only once", async () => {
+    const h = harness(
+      humanSetup({
+        human: { found: { "factory-bot": [hit(40)], alice: [hit(40)] } },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([HUMAN_KEY]);
+  });
+
+  test("does not search without the human discovery dependency", async () => {
+    const h = harness(trackedSetup());
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toEqual([]);
+  });
+
+  test("does not record a pull request of an author who is not allowed", async () => {
+    const h = harness(
+      humanSetup({
+        prs: { [HUMAN_KEY]: humanPr({ authorLogin: "mallory", authorId: 5 }) },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not record a pull request of a bot with an allowed login", async () => {
+    const h = harness(
+      humanSetup({ prs: { [HUMAN_KEY]: humanPr({ authorType: "Bot" }) } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not record a fork pull request", async () => {
+    const h = harness(
+      humanSetup({
+        prs: {
+          [HUMAN_KEY]: humanPr({ headRepoFullName: "alice/widgets" }),
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not record a draft pull request", async () => {
+    const h = harness(
+      humanSetup({ prs: { [HUMAN_KEY]: humanPr({ draft: true }) } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not record a pull request that is closed by the time it is read", async () => {
+    const h = harness(
+      humanSetup({ prs: { [HUMAN_KEY]: humanPr({ state: "closed" }) } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not record a pull request on a branch named like a factory branch", async () => {
+    const h = harness(
+      humanSetup({
+        prs: { [HUMAN_KEY]: humanPr({ headRef: "factory/issue-7-wi-90" }) },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("records a pull request on the branch of a viewer bump", async () => {
+    const h = harness(
+      humanSetup({
+        prs: {
+          [HUMAN_KEY]: humanPr({ headRef: "factory/drawio-viewer-v1.2.3" }),
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toHaveLength(1);
+  });
+
+  test("does not record a pull request that a tracked work item points at", async () => {
+    const h = harness({
+      items: [item({ prUrl: "https://github.com/acme/widgets/pull/40" })],
+      human: { found: { alice: [hit(40)] } },
+      prs: { [HUMAN_KEY]: humanPr() },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toEqual([]);
+  });
+
+  test("does not read a pull request of a repository the allowlist rejects", async () => {
+    const h = harness(
+      humanSetup({
+        human: { found: { alice: [hit(41, "secret")] } },
+        allowed: (_owner, repo) => repo !== "secret",
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([]);
+  });
+
+  test("does not read a pull request of a repository whose name starts with a dot", async () => {
+    const h = harness(
+      humanSetup({ human: { found: { alice: [hit(41, ".github")] } } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([]);
+  });
+
+  test("counts the limit after the exclusions", async () => {
+    const prs: Record<string, PullRequest> = {};
+    const hits: PrSearchItem[] = [];
+    for (let number = 100; number < 130; number += 1) {
+      hits.push(hit(number));
+      prs[`acme/widgets#${String(number)}`] = humanPr({
+        number,
+        authorLogin: number < 105 ? "mallory" : "alice",
+      });
+    }
+    const h = harness({ human: { found: { alice: hits } }, prs });
+    await runPrCiWatch(h.deps);
+    expect(h.recorded.map((record) => record.pr_number)).toEqual(
+      Array.from({ length: HUMAN_PR_LIMIT }, (_, index) => 105 + index),
+    );
+  });
+
+  test("supersedes the old row when the head has moved", async () => {
+    const h = harness(
+      humanSetup({
+        prs: { [HUMAN_KEY]: humanPr({ headSha: SHA_B }) },
+        rowsForPr: {
+          40: [humanRow({ id: 5, state: "failed", head_sha: SHA_A })],
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([
+      { id: 5, from: "failed", to: { state: "superseded" } },
+    ]);
+  });
+
+  test("stops searching after the rate limit", async () => {
+    const h = harness(
+      humanSetup({
+        human: { found: { "factory-bot": rateLimitError(), alice: [hit(40)] } },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toHaveLength(1);
+  });
+
+  test("does not record a failure for the rate limit of the search", async () => {
+    const h = harness(
+      humanSetup({ human: { found: { "factory-bot": rateLimitError() } } }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual([]);
+  });
+
+  test("still records the head of a factory pull request after the rate limit of the search", async () => {
+    const h = harness(
+      trackedSetup({
+        human: { found: { "factory-bot": rateLimitError() } },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded.map((record) => record.work_item_id)).toEqual([33]);
+  });
+
+  test("still judges a factory row after the rate limit of the search", async () => {
+    const h = harness(
+      trackedSetup({
+        human: { found: { "factory-bot": rateLimitError() } },
+        pending: [row()],
+        runs: { [SHA_A]: [run()] },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.transitions.map((entry) => entry.to.state)).toEqual(["passed"]);
+  });
+
+  test("records the failure of a search and goes on to the next author", async () => {
+    const h = harness(
+      humanSetup({
+        human: {
+          found: { "factory-bot": new Error("boom"), alice: [hit(40)] },
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["search_human_prs:acme:factory-bot"]);
+  });
+
+  test("records the pull request found after a failed search", async () => {
+    const h = harness(
+      humanSetup({
+        human: {
+          found: { "factory-bot": new Error("boom"), alice: [hit(40)] },
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.recorded).toHaveLength(1);
+  });
+
+  test("goes on to the next pull request after one that could not be read", async () => {
+    const h = harness({
+      human: { found: { alice: [hit(40), hit(41)] } },
+      prs: {
+        [HUMAN_KEY]: new Error("boom"),
+        "acme/widgets#41": humanPr({ number: 41 }),
+      },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.recorded.map((record) => record.pr_number)).toEqual([41]);
+  });
+
+  test("does not search when the run budget is already used", async () => {
+    let reads = 0;
+    const h = harness(
+      humanSetup({
+        override: {
+          now: () =>
+            new Date(NOW.getTime() + (reads++ === 0 ? 0 : RUN_BUDGET_MS)),
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toEqual([]);
+  });
+
+  test("stops searching when the budget of the human discovery is used", async () => {
+    const h = harness(
+      humanSetup({
+        human: {
+          found: { alice: [hit(40)] },
+          searchTakesMs: HUMAN_DISCOVERY_BUDGET_MS,
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.searches).toHaveLength(1);
+  });
+
+  test("does not read a pull request when the budget of the human discovery is used", async () => {
+    const h = harness(
+      humanSetup({
+        human: {
+          found: { "factory-bot": [hit(40)] },
+          searchTakesMs: HUMAN_DISCOVERY_BUDGET_MS,
+        },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.prCalls).toEqual([]);
+  });
+
+  test("does not discover anything in the recovery that runs without the watch", async () => {
+    const h = harness(humanSetup());
+    await runPrCiRecovery(h.deps);
+    expect(h.searches).toEqual([]);
+  });
+});
+
+describe("the rows of the pull requests of allowed people", () => {
+  test("supersedes the row of a pull request that has been closed", async () => {
+    const h = harness({
+      prs: { [HUMAN_KEY]: humanPr({ state: "closed" }) },
+      pending: [humanRow()],
+      rowsForPr: { 40: [humanRow()] },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.transitions).toEqual([
+      { id: 9, from: "pending", to: { state: "superseded" } },
+    ]);
+  });
+
+  test("does not claim the failed row", async () => {
+    const c = claimHarness({
+      candidates: [candidateRow({ id: 9, pr_number: 40, work_item_id: null })],
+    });
+    const h = harness(
+      claimSetup(
+        c,
+        humanSetup({ items: [], runs: { [SHA_A]: [failingRun()] } }),
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("notifies a failure at once even when the automatic fix is enabled", async () => {
+    const h = harness({
+      prs: { [HUMAN_KEY]: humanPr() },
+      pending: [humanRow()],
+      runs: { [SHA_A]: [failingRun()] },
+      policy: { fixEnabled: true, fixEnabledSince: minutesBefore(60) },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.notices.map((notice) => notice.kind)).toEqual([PR_CI_FAILED_KIND]);
+  });
+
+  test("records the reason of a failure that was notified at once", async () => {
+    const h = harness({
+      prs: { [HUMAN_KEY]: humanPr() },
+      pending: [humanRow()],
+      runs: { [SHA_A]: [failingRun()] },
+      policy: { fixEnabled: true, fixEnabledSince: minutesBefore(60) },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: 9, reason: "ci_failure" }]);
+  });
+
+  test("holds the notice of a failure of a factory row in the same setting", async () => {
+    const h = harness({
+      prs: { [HUMAN_KEY]: humanPr() },
+      pending: [humanRow({ work_item_id: 33 })],
+      runs: { [SHA_A]: [failingRun()] },
+      policy: { fixEnabled: true, fixEnabledSince: minutesBefore(60) },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("notifies a failed row that was not notified yet without a hold", async () => {
+    const h = harness({
+      unnotified: [
+        humanRow({
+          state: "failed",
+          updated_at: minutesBefore(1),
+          first_seen_at: minutesBefore(10),
+        }),
+      ],
+      policy: { fixEnabled: true, fixEnabledSince: minutesBefore(60) },
+    });
+    await runPrCiWatch(h.deps);
+    expect(h.notices.map((notice) => notice.message)).toEqual([
+      prCiFailedNoticeMessage({
+        owner: "acme",
+        repo: "widgets",
+        prNumber: 40,
+        headSha: SHA_A,
+        link: "https://github.com/acme/widgets/pull/40",
+        reason: "ci_failure",
+      }),
+    ]);
+  });
+});
+
+describe("buildHumanDiscovery", () => {
+  type BuildInput = Parameters<typeof buildHumanDiscovery>[0];
+
+  function buildInput(overrides: Partial<BuildInput> = {}): {
+    readonly input: BuildInput;
+    readonly viewerCalls: number[];
+    readonly failures: string[];
+    readonly searched: string[];
+  } {
+    const viewerCalls: number[] = [];
+    const failures: string[] = [];
+    const searched: string[] = [];
+    const input: BuildInput = {
+      config: {
+        pr_ci_watch_human_prs: true,
+        allowed_labeler_logins: ["alice"],
+        allowed_labeler_ids: {},
+        factory_repo: "https://github.com/acme/factory.git",
+      },
+      verifiedOwners: [{ name: "acme", kind: "user" }],
+      getViewer: async () => {
+        viewerCalls.push(1);
+        return { login: "factory-bot", id: 1 };
+      },
+      search: async (scope, author) => {
+        searched.push(`${scope.owner}:${author}`);
+        return [];
+      },
+      recordFailure: async (step) => {
+        failures.push(step);
+      },
+      ...overrides,
+    };
+    return { input, viewerCalls, failures, searched };
+  }
+
+  test("returns nothing when the setting is off", async () => {
+    const built = buildInput({
+      config: {
+        pr_ci_watch_human_prs: false,
+        allowed_labeler_logins: [],
+        allowed_labeler_ids: {},
+        factory_repo: "https://github.com/acme/factory.git",
+      },
+    });
+    expect(await buildHumanDiscovery(built.input)).toBeUndefined();
+  });
+
+  test("does not ask for the viewer when the setting is off", async () => {
+    const built = buildInput({
+      config: {
+        pr_ci_watch_human_prs: false,
+        allowed_labeler_logins: [],
+        allowed_labeler_ids: {},
+        factory_repo: "https://github.com/acme/factory.git",
+      },
+    });
+    await buildHumanDiscovery(built.input);
+    expect(built.viewerCalls).toEqual([]);
+  });
+
+  test("returns nothing when the viewer cannot be read", async () => {
+    const built = buildInput({
+      getViewer: async () => {
+        throw new Error("boom");
+      },
+    });
+    expect(await buildHumanDiscovery(built.input)).toBeUndefined();
+  });
+
+  test("records the failure to read the viewer", async () => {
+    const built = buildInput({
+      getViewer: async () => {
+        throw new Error("boom");
+      },
+    });
+    await buildHumanDiscovery(built.input);
+    expect(built.failures).toEqual(["human_discovery_viewer"]);
+  });
+
+  test("builds the policy from the viewer and the allowed logins", async () => {
+    const built = buildInput();
+    const discovery = await buildHumanDiscovery(built.input);
+    expect(discovery?.policy).toEqual(
+      labelerPolicyFor("factory-bot", {
+        allowed_labeler_logins: ["alice"],
+        allowed_labeler_ids: {},
+      }),
+    );
+  });
+
+  test("searches every verified owner with its kind", async () => {
+    const built = buildInput({
+      verifiedOwners: [
+        { name: "acme", kind: "user" },
+        { name: "guild", kind: "org" },
+      ],
+    });
+    const discovery = await buildHumanDiscovery(built.input);
+    expect(discovery?.scopes.slice(0, 2)).toEqual([
+      { kind: "owner", owner: "acme", ownerKind: "user" },
+      { kind: "owner", owner: "guild", ownerKind: "org" },
+    ]);
+  });
+
+  test("does not add the factory repository when its owner is searched", async () => {
+    const built = buildInput({
+      verifiedOwners: [{ name: "ACME", kind: "user" }],
+    });
+    const discovery = await buildHumanDiscovery(built.input);
+    expect(discovery?.scopes).toHaveLength(1);
+  });
+
+  test("adds the factory repository when its owner is not searched", async () => {
+    const built = buildInput({
+      verifiedOwners: [{ name: "guild", kind: "org" }],
+    });
+    const discovery = await buildHumanDiscovery(built.input);
+    expect(discovery?.scopes).toEqual([
+      { kind: "owner", owner: "guild", ownerKind: "org" },
+      { kind: "repo", owner: "acme", repo: "factory" },
+    ]);
+  });
+
+  test("keeps the owners when the factory repository cannot be parsed", async () => {
+    const built = buildInput({
+      config: {
+        pr_ci_watch_human_prs: true,
+        allowed_labeler_logins: [],
+        allowed_labeler_ids: {},
+        factory_repo: "not a url",
+      },
+    });
+    const discovery = await buildHumanDiscovery(built.input);
+    expect(discovery?.scopes).toEqual([
+      { kind: "owner", owner: "acme", ownerKind: "user" },
+    ]);
+  });
+
+  test("records the failure to parse the factory repository", async () => {
+    const built = buildInput({
+      config: {
+        pr_ci_watch_human_prs: true,
+        allowed_labeler_logins: [],
+        allowed_labeler_ids: {},
+        factory_repo: "not a url",
+      },
+    });
+    await buildHumanDiscovery(built.input);
+    expect(built.failures).toEqual(["human_discovery_factory_repo"]);
+  });
+
+  test("passes a search to the injected function", async () => {
+    const built = buildInput();
+    const discovery = await buildHumanDiscovery(built.input);
+    await discovery?.search(
+      { kind: "owner", owner: "acme", ownerKind: "user" },
+      "alice",
+    );
+    expect(built.searched).toEqual(["acme:alice"]);
   });
 });

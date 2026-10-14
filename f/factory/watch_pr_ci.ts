@@ -3,6 +3,11 @@
 // 同じPRのheadが通ったら、失敗のnoticeを自動で解決する。閉じたPRの行は整理する。
 // PRにもリポジトリにも書き込まず、ログも読まない。
 //
+// 設定`pr_ci_watch_human_prs`が真のときは、許可された人(PATのアカウントと`allowed_labeler_logins`)が作った
+// PR(開いていて、下書きでなく、forkでなく、Factoryが作っていないもの)も同じ手順で判定し、失敗を知らせる。
+// 人のPRの失敗は、自動修正の設定に関わらず確定した時点で知らせ、直す作業項目は起動しない。
+// PATのアカウントを読めないときは、人のPRの発見だけを飛ばす。
+//
 // 設定`pr_ci_fix_enabled`が真のときは、失敗した行を直す作業項目(pr_fixのCI回)を起動する。
 // ログを読んでClaudeに渡すのは、起動した作業項目である。
 // 自動で直す対象の失敗は、確定した時点では通知せず、直せるかが決まるたびに通知し、同じ状態では重ねない。
@@ -14,8 +19,8 @@
 // 保留した通知はDBだけを読み、GitHubを読まない。作業項目の起動は、監視が有効なときだけ行う。
 //
 // 流れと判断は`./lib/pr_ci_watch.ts`にあり、このファイルは入出力をつなぐだけ。
-// 対象は、作業項目の`pr_url`から引いたPRのうち、許可リスト(`repo_allowlist`と照合済みの`owners`、
-// 常に対象の`factory_repo`)に合うリポジトリのものである。
+// FactoryのPRの対象は、作業項目の`pr_url`から引いたPRのうち、許可リスト(`repo_allowlist`と照合済みの`owners`、
+// 常に対象の`factory_repo`)に合うリポジトリのものである。人のPRも、同じ許可リストに合うリポジトリに限る。
 // GITHUB_TOKENにActionsの読み取り権限が無いリポジトリは、`pr_ci_check_denied`のnoticeで知らせる。
 // 設定`pr_ci_watch_enabled`が`false`のときは、回復と保留した通知だけを行い、発見と判定と新しい失敗の通知はしない。
 // このときはオーナーの照合も行わず、設定に合うリポジトリのPRだけを読む(`buildRecoveryRepoGates`)。
@@ -64,10 +69,12 @@ import {
   getAccountId,
   getFileAtRef,
   getPr,
+  getViewer,
   listPrCommitMessages,
   listPrHeadWorkflowRuns,
   listWorkflowRunJobs,
   parseGitHubRepoUrl,
+  searchOpenAuthoredPrs,
 } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
@@ -75,6 +82,7 @@ import { readFixItemState } from "./lib/pr_ci_fix_recovery.ts";
 import type { PrCiNotifyPolicy } from "./lib/pr_ci_notify.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "./lib/pr_ci_support.ts";
 import {
+  buildHumanDiscovery,
   buildRecoveryRepoGates,
   buildRepoGates,
   PR_CI_WATCH_IDLE_RESULT,
@@ -197,21 +205,34 @@ export async function main(): Promise<PrCiWatchResult> {
 
   // 名前の付け替えで別のアカウントを読まないよう、`repo_allowlist`は照合を通ったオーナーのものだけを通す。
   // 無効のときは、照合のGitHubの呼び出しとnoticeの追加を避けるため、照合せずに設定だけで決める。
-  const gates = config.pr_ci_watch_enabled
-    ? buildRepoGates(
-        config,
-        (
-          await filterVerifiedOwners(config.owners, {
-            getAccountId: (name) => getAccountId(client, name),
-            recordFailure: (step, err) => recordFailureSafe(step, err, log),
-            addNotice: (record) => addNoticeUnlessUnresolved(record),
-          })
-        ).owners,
-      )
-    : buildRecoveryRepoGates(config);
+  const verifiedOwners = config.pr_ci_watch_enabled
+    ? (
+        await filterVerifiedOwners(config.owners, {
+          getAccountId: (name) => getAccountId(client, name),
+          recordFailure: (step, err) => recordFailureSafe(step, err, log),
+          addNotice: (record) => addNoticeUnlessUnresolved(record),
+        })
+      ).owners
+    : null;
+  const gates =
+    verifiedOwners === null
+      ? buildRecoveryRepoGates(config)
+      : buildRepoGates(config, verifiedOwners);
   const claim = config.pr_ci_watch_enabled
     ? buildClaimDeps(config, client)
     : undefined;
+  // 人のPRの発見は監視が有効なときだけ行う。無効のときは、PATのアカウントも読まない。
+  const humanDiscovery =
+    verifiedOwners === null
+      ? undefined
+      : await buildHumanDiscovery({
+          config,
+          verifiedOwners,
+          getViewer: () => getViewer(client),
+          search: (scope, author) =>
+            searchOpenAuthoredPrs(client, { scope, author }),
+          recordFailure: (step, err) => recordFailureSafe(step, err, log),
+        });
   // 監視が無効なら起動もしないので、保留していた通知はすぐ出す。
   const notifyPolicy: PrCiNotifyPolicy = {
     fixEnabled: config.pr_ci_watch_enabled && config.pr_ci_fix_enabled,
@@ -220,6 +241,7 @@ export async function main(): Promise<PrCiWatchResult> {
   };
   const deps: PrCiWatchDeps = {
     ...(claim === undefined ? {} : { claim }),
+    ...(humanDiscovery === undefined ? {} : { humanDiscovery }),
     notifyPolicy,
     now: () => new Date(),
     log,

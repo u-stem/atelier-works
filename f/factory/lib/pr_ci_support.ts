@@ -283,7 +283,7 @@ function sameName(a: string, b: string): boolean {
  * ブランチ名(`factory/issue-<N>-wi-<id>`)から作業項目のIDを読み、
  * その作業項目(`item`)がこのPRを指していることまで確かめる。
  * 同じ形の名前のブランチを作った人のPRを、Factoryのものとして扱わないため。
- * 人のPRには、判定も通知もしない。
+ * 人のPRは、これが偽でも別に扱う(`pr_ci_human_support.ts`)。
  */
 export function isFactoryPrBranch(
   headRef: string,

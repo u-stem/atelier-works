@@ -4085,6 +4085,8 @@ export async function listFailedPrCiChecks(
  * 失敗を直す作業項目を起動する候補の行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
  * 次をすべて満たす行である。
  * - `failed`である。
+ * - 作業項目に結ばれている(`work_item_id`がNULLでない)。人のPRの行(NULL)は、通知だけで起動しないので、
+ *   起動の候補の枠を食わないよう除く。
  * - `first_seen_at`が`since`以後である。比較はSQLのtimestamptzで行う。
  * - 保留がない(`fix_hold_reason`がNULL)か、保留の理由が`temporaryHolds`に含まれる。
  *   決定的な理由で保留された行は、同じheadでは起動し直さないので返さない。
@@ -4106,6 +4108,7 @@ export async function listClaimablePrCiChecks(
            checked_at, first_seen_at, created_at, updated_at
     FROM factory.pr_ci_checks
     WHERE state = 'failed'
+      AND work_item_id IS NOT NULL
       AND first_seen_at >= ${since.toISOString()}::timestamptz
       AND (fix_hold_reason IS NULL OR fix_hold_reason = ANY(${holds}::text[]))
     ORDER BY checked_at ASC

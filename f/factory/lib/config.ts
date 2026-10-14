@@ -91,6 +91,7 @@ type DefaultableField =
   | "dependabot_merge_enabled"
   | "dependabot_min_published_days"
   | "pr_ci_watch_enabled"
+  | "pr_ci_watch_human_prs"
   | "pr_ci_fix_enabled"
   | "pr_ci_fix_max_rounds"
   | "pr_ci_fix_enabled_since"
@@ -154,6 +155,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   dependabot_min_published_days: 7,
   // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
   pr_ci_watch_enabled: true,
+  // 人のPRの失敗の通知は、通知先と対象のアカウントを確かめてから、リモートのリソースで有効にする。
+  pr_ci_watch_human_prs: false,
   // CIの失敗を直す作業項目はPRにpushするので、既定で無効にし、リモートのリソースで有効にする。
   pr_ci_fix_enabled: false,
   pr_ci_fix_max_rounds: 2,
@@ -803,6 +806,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "pr_ci_watch_enabled",
       DEFAULTS.pr_ci_watch_enabled,
+    ),
+    pr_ci_watch_human_prs: booleanField(
+      raw,
+      "pr_ci_watch_human_prs",
+      DEFAULTS.pr_ci_watch_human_prs,
     ),
     pr_ci_fix_enabled: prCiFixEnabled,
     pr_ci_fix_max_rounds: atMost(

@@ -48,6 +48,7 @@ declare namespace RT {
     dependabot_merge_enabled: boolean,
     dependabot_min_published_days: number,
     pr_ci_watch_enabled: boolean,
+    pr_ci_watch_human_prs: boolean,
     pr_ci_fix_enabled: boolean,
     pr_ci_fix_max_rounds: number,
     check_commands_by_repo: object
