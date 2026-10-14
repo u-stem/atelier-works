@@ -3183,6 +3183,7 @@ describe("searchOpenAuthoredPrs", () => {
       html_url: `https://github.com/acme/widgets/pull/${String(number)}`,
       repository_url: "https://api.github.com/repos/acme/widgets",
       user: { login: "alice" },
+      updated_at: "2026-10-14T00:00:00Z",
     };
   }
 
@@ -3260,6 +3261,41 @@ describe("searchOpenAuthoredPrs", () => {
     expect(
       items.map((found) => `${found.owner}/${found.repo}#${found.number}`),
     ).toEqual(["acme/widgets#10", "acme/widgets#11"]);
+  });
+
+  test("returns the time of the last update of every hit", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ items: [item(1, 10)] })]);
+    const items = await searchOpenAuthoredPrs(
+      { run: fake.run, ghToken: "tok" },
+      { scope: OWNER_SCOPE, author: "alice" },
+    );
+    expect(items.map((found) => found.updatedAtMs)).toEqual([
+      Date.parse("2026-10-14T00:00:00Z"),
+    ]);
+  });
+
+  test("rejects a hit without the time of the last update", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        items: [
+          {
+            id: 1,
+            number: 10,
+            title: "pr 10",
+            body: null,
+            html_url: "https://github.com/acme/widgets/pull/10",
+            repository_url: "https://api.github.com/repos/acme/widgets",
+            user: { login: "alice" },
+          },
+        ],
+      }),
+    ]);
+    await expect(
+      searchOpenAuthoredPrs(
+        { run: fake.run, ghToken: "tok" },
+        { scope: OWNER_SCOPE, author: "alice" },
+      ),
+    ).rejects.toBeInstanceOf(GitHubResponseError);
   });
 
   test("rejects an author name that carries a search qualifier", async () => {

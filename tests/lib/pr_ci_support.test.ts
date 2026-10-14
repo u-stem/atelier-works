@@ -27,6 +27,7 @@ import {
   prCiFailedNoticeMessage,
   prCiFailureLink,
   prCiFixHoldInfo,
+  prCiHeadNoticePrefix,
   prCiNextAction,
   prCiNoticePrefix,
   prCiSummary,
@@ -924,6 +925,41 @@ describe("prCiNoticePrefix", () => {
     expect(message.startsWith(prCiNoticePrefix("acme", "widgets", 1))).toBe(
       false,
     );
+  });
+});
+
+describe("prCiHeadNoticePrefix", () => {
+  const input = {
+    owner: "acme",
+    repo: "widgets",
+    prNumber: 12,
+    headSha: SHA_A,
+    link: "https://github.com/acme/widgets/actions/runs/9",
+    reason: "ci_failure" as const,
+  };
+
+  test("starts the failure notice of the same head", () => {
+    expect(
+      prCiFailedNoticeMessage(input).startsWith(
+        prCiHeadNoticePrefix("acme", "widgets", 12, SHA_A),
+      ),
+    ).toBe(true);
+  });
+
+  test("does not start the failure notice of another head", () => {
+    expect(
+      prCiFailedNoticeMessage(input).startsWith(
+        prCiHeadNoticePrefix("acme", "widgets", 12, SHA_B),
+      ),
+    ).toBe(false);
+  });
+
+  test("does not start the failure notice of another pull request", () => {
+    expect(
+      prCiFailedNoticeMessage(input).startsWith(
+        prCiHeadNoticePrefix("acme", "widgets", 1, SHA_A),
+      ),
+    ).toBe(false);
   });
 });
 

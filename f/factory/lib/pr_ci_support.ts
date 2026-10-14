@@ -409,6 +409,20 @@ export function prCiNoticePrefix(
   return `${owner}/${repo}#${String(prNumber)}: `;
 }
 
+/**
+ * このPRの、このheadの失敗のnoticeの本文の接頭辞。
+ * 同じPRの古いheadのnoticeだけを選んで解決するのに使う。
+ * コミットは先頭7文字で表すので、先頭7文字が同じ別のheadの本文にも当たる。
+ */
+export function prCiHeadNoticePrefix(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  headSha: string,
+): string {
+  return `${prCiNoticePrefix(owner, repo, prNumber)}PRのコミット${shortSha(headSha)}でCIが失敗しました。`;
+}
+
 export type PrCiFailedNoticeInput = {
   readonly owner: string;
   readonly repo: string;
@@ -434,15 +448,19 @@ export function prCiFailedNoticeMessage(input: PrCiFailedNoticeInput): string {
   assertGitHubName(input.owner);
   assertGitHubName(input.repo);
   assertPullRequestNumber(input.prNumber);
-  const sha = shortSha(input.headSha);
   const validLink =
     parseRunUrl(input.link, input.owner, input.repo) === input.link ||
     input.link === pullRequestPageUrl(input.owner, input.repo, input.prNumber);
   if (!validLink) {
     throw new Error("prCiFailedNoticeMessage: invalid link");
   }
-  const prefix = prCiNoticePrefix(input.owner, input.repo, input.prNumber);
-  const head = `${prefix}PRのコミット${sha}でCIが失敗しました。理由: ${input.reason}`;
+  const prefix = prCiHeadNoticePrefix(
+    input.owner,
+    input.repo,
+    input.prNumber,
+    input.headSha,
+  );
+  const head = `${prefix}理由: ${input.reason}`;
   if (input.hold === undefined) {
     return `${head}。次の操作: ${prCiNextAction(input.reason)}。実行: ${input.link}`;
   }

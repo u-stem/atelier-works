@@ -3400,9 +3400,12 @@ check(
   await claimCandidates(),
 );
 check(
+  "claim candidates: a row of a human pull request is recorded without a work item",
+  claimHuman.work_item_id === null,
+);
+check(
   "claim candidates: a failed row of a human pull request is not listed",
-  !(await claimCandidates()).split(",").includes(String(606)) &&
-    claimHuman.work_item_id === null,
+  !(await claimCandidates()).split(",").includes(String(606)),
 );
 check(
   "claim candidates: a row seen before the since time is not listed",

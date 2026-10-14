@@ -3,7 +3,7 @@
 // 判定(判定待ち、失敗、実行なしの行を読み直して確定する)を行う。
 // 失敗は通知し、通ったheadはそのPRの失敗の通知を解決し、閉じたPRの行は整理する。
 // 発見と判定の間に、回復(失敗を直す作業項目が終わった`fixing`の行を戻す)を行う。
-// 判定の後に、起動(失敗した行を直す作業項目を起動する)を行い、最後に保留した失敗の通知(`notifyDeferred`)を行う。
+// 判定の後に、起動(失敗した行を直す作業項目を起動する)と人のPRの発見を行い、最後に保留した失敗の通知(`notifyDeferred`)を行う。
 // 起動は`deps.claim`を渡したときだけ動く。起動してよいかの判断は`pr_ci_fix_claim.ts`にあり、
 // ここは読み取りと書き込みの順序を受け持つ。
 // 回復と保留した通知は監視の設定に依らず動き、作業項目の起動はしない(`runPrCiRecovery`)。
@@ -14,7 +14,8 @@
 // 外部の文字列(workflow名、実行の結論、ログ)は、通知の本文にもDiscordにも載せない。
 // 要約(`summary`列)にだけ、検証・整形した名前を残す。
 //
-// 発見の最後に、許可された人が作ったPRも記録する(`humanDiscovery`を渡したときだけ)。
+// 起動の後に、許可された人が作ったPRも記録する(`humanDiscovery`を渡したときだけ)。
+// FactoryのPRの判定と起動が、人のPRの発見に時間を使われないための順序である。新しい行の判定は次の回になる。
 // 人のPRの行は`work_item_id`がNULLで、失敗は確定した時点で通知するだけにする。
 // 直す作業項目は起動せず、回復の対象にもならない。
 //
@@ -32,11 +33,11 @@ import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
   GitHubHttpError,
   GitHubRateLimitError,
+  type OpenAuthoredPrSearchItem,
   type OpenAuthoredPrsScope,
   type PrCommitMessages,
   type PrHeadWorkflowRuns,
   type PrHeadWorkflowRunsOptions,
-  type PrSearchItem,
   type PullRequest,
   parseGitHubRepoUrl,
   type Viewer,
@@ -82,6 +83,7 @@ import {
   prCiFailedNoticeMessage,
   prCiFailureLink,
   prCiFixHoldInfo,
+  prCiHeadNoticePrefix,
   prCiNextAction,
   prCiNoticePrefix,
   prCiSummary,
@@ -131,6 +133,12 @@ export const CLAIM_BATCH_LIMIT = 50;
  * 除く前に数えると、Factoryのブランチなどが枠を埋めて、人のPRを見落とすためである。
  */
 export const HUMAN_PR_LIMIT = 20;
+
+/**
+ * 1回の実行で、人のPRとして読む(PRを取得する)数の上限。
+ * 記録済みでheadが動いていないPRは記録の枠を使わないので、読み取りの数にも上限を置く。
+ */
+export const HUMAN_PR_READ_LIMIT = 60;
 
 /**
  * 人のPRの発見(検索とPRの読み取り)に使える時間。
@@ -370,7 +378,7 @@ export type PrCiHumanDiscoveryDeps = {
   readonly search: (
     scope: OpenAuthoredPrsScope,
     author: string,
-  ) => Promise<PrSearchItem[]>;
+  ) => Promise<OpenAuthoredPrSearchItem[]>;
 };
 
 export type PrCiWatchDeps = {
@@ -520,6 +528,11 @@ type WatchState = {
   claimsStarted: number;
   /** この回に読んだPR。判定の最初に使う。判定の最後のheadの確認には使わず、必ず読み直す。 */
   readonly snapshots: Map<string, PullRequest>;
+  /**
+   * 追跡対象の作業項目が指すPRの鍵(`pullRequestKey`)。人のPRの発見が、FactoryのPRを除くのに使う。
+   * 作業項目の一覧を読めなかった回は`null`で、人のPRの発見をしない。
+   */
+  trackedPrKeys: Set<string> | null;
   /** 権限の不足を、この回に知らせたリポジトリ。 */
   readonly deniedRepos: Set<string>;
   /** 実行を読めたことを確かめて、権限の不足の通知を解決したリポジトリ。 */
@@ -627,6 +640,7 @@ export async function runPrCiWatch(
   await recoverFixing(context);
   await recheck(context);
   await claimFixes(context);
+  await discoverHuman(context);
   await notifyDeferred(context);
   return context.counters;
 }
@@ -658,6 +672,7 @@ function newContext(deps: PrCiWatchDeps): Context {
       failedStarted: 0,
       claimsStarted: 0,
       snapshots: new Map(),
+      trackedPrKeys: null,
       deniedRepos: new Set(),
       readableRepos: new Set(),
       closedPrs: new Set(),
@@ -805,7 +820,7 @@ async function discover(context: Context): Promise<void> {
       }
     }
   }
-  await discoverHuman(context, trackedPrKeys);
+  state.trackedPrKeys = trackedPrKeys;
 }
 
 async function discoverPr(
@@ -842,14 +857,16 @@ async function discoverPr(
 /**
  * PRの今のheadの行を記録し、古いheadの行を整理する。
  * `workItemId`はFactoryのPRなら作業項目のID、人のPRなら`null`である。
+ * 新しい行を記録したか、`superseded`の行を`pending`に戻したときに`true`を返す。
  */
 async function recordPrHead(
   context: Context,
   ref: PullRequestRef,
   pr: PullRequest,
   workItemId: number | null,
-): Promise<void> {
+): Promise<boolean> {
   const { deps, counters } = context;
+  let added = false;
   const rows = await deps.listRowsForPr(ref.owner, ref.repo, ref.number);
   const plan = planPrHead(
     pr.headSha,
@@ -869,7 +886,10 @@ async function recordPrHead(
       work_item_id: workItemId,
       run_created_at: null,
     });
-    if (inserted) counters.recorded += 1;
+    if (inserted) {
+      counters.recorded += 1;
+      added = true;
+    }
   }
   for (const old of plan.supersede) {
     const moved = await deps.transition(old.id, old.from, {
@@ -878,11 +898,13 @@ async function recordPrHead(
     if (moved) counters.superseded += 1;
   }
   if (plan.reopenId !== null) {
-    await deps.transition(plan.reopenId, "superseded", {
+    const reopened = await deps.transition(plan.reopenId, "superseded", {
       state: "pending",
       reopen: true,
     });
+    if (reopened) added = true;
   }
+  return added;
 }
 
 /** 検索の範囲を、失敗の記録の手順名に使う短い名前にする。 */
@@ -894,24 +916,27 @@ function humanScopeLabel(scope: OpenAuthoredPrsScope): string {
  * 許可された人が作ったPRを検索し、見つかったPRの今のheadを記録する。
  * 行の`work_item_id`はNULLにする。追跡対象のFactoryのPRと、Factoryの実装ブランチの形のブランチは記録しない。
  * 検索は範囲(`scopes`)と作者ごとに1回で、1ページだけ読む。
+ * 検索結果は、範囲と作者をまたいで更新の新しい順に並べ直してから読む。
  * 検索がrate limitで拒まれても、全体のrate limitにはせず、残りの検索を止める。
- * 判定と起動を飢えさせないよう、発見の最後に置き、全体の経過時間と`HUMAN_DISCOVERY_BUDGET_MS`の両方を見る。
- * 記録した数が`HUMAN_PR_LIMIT`に達したら、残りは読まない。
+ * 作者が改名や削除で検索を拒まれた(422)ときは、その作者の検索を飛ばし、失敗は記録しない。
+ * FactoryのPRの判定と起動を人のPRの発見が遅らせないよう、起動の後に置き、全体の経過時間と
+ * `HUMAN_DISCOVERY_BUDGET_MS`の両方を見る。ここで記録した行の判定は、次の回に行う。
+ * 新しく記録した行と、`reopen`した行の数が`HUMAN_PR_LIMIT`に達したら、残りは読まない。
+ * 記録済みでheadが動いていないPRは数えない。読む数は`HUMAN_PR_READ_LIMIT`までである。
+ * 読んでrate limitに拒まれたら、全体のrate limitにはせず、残りのPRだけを止める。
  */
-async function discoverHuman(
-  context: Context,
-  trackedPrKeys: ReadonlySet<string>,
-): Promise<void> {
+async function discoverHuman(context: Context): Promise<void> {
   const { deps, state } = context;
   const human = deps.humanDiscovery;
-  if (human === undefined) return;
+  const trackedPrKeys = state.trackedPrKeys;
+  if (human === undefined || trackedPrKeys === null) return;
   if (state.rateLimited || overBudget(context)) return;
   const startedAt = deps.now().getTime();
   const outOfTime = (): boolean =>
     overBudget(context) ||
     deps.now().getTime() - startedAt >= HUMAN_DISCOVERY_BUDGET_MS;
 
-  const found: PrSearchItem[] = [];
+  const found: OpenAuthoredPrSearchItem[] = [];
   let searching = true;
   for (const scope of human.scopes) {
     for (const author of humanPrAuthors(human.policy)) {
@@ -931,6 +956,13 @@ async function discoverHuman(
           searching = false;
           break;
         }
+        if (err instanceof GitHubHttpError && err.status === 422) {
+          deps.log.warn(
+            "pr ci human search skipped an author that GitHub rejected",
+            { scope: humanScopeLabel(scope), author },
+          );
+          continue;
+        }
         await recordFailureOf(
           context,
           `search_human_prs:${humanScopeLabel(scope)}:${author}`,
@@ -939,11 +971,13 @@ async function discoverHuman(
       }
     }
   }
+  found.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 
   const seen = new Set<string>();
-  let accepted = 0;
+  let reads = 0;
+  let added = 0;
   for (const hit of found) {
-    if (accepted >= HUMAN_PR_LIMIT) break;
+    if (added >= HUMAN_PR_LIMIT || reads >= HUMAN_PR_READ_LIMIT) break;
     if (state.rateLimited || outOfTime()) {
       deps.log.warn("pr ci human discovery stopped by the time budget");
       break;
@@ -967,6 +1001,7 @@ async function discoverHuman(
       });
       continue;
     }
+    reads += 1;
     try {
       const pr = await readPr(context, ref);
       const author = {
@@ -980,9 +1015,14 @@ async function discoverHuman(
       ) {
         continue;
       }
-      accepted += 1;
-      await recordPrHead(context, ref, pr, null);
+      if (await recordPrHead(context, ref, pr, null)) added += 1;
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        deps.log.warn("pr ci human discovery stopped by the rate limit", {
+          error: errorMessage(err),
+        });
+        break;
+      }
       if ((await absorbReadError(context, ref, err)) === null) {
         await recordFailureOf(context, `discover_human_pr:${key}`, err);
       }
@@ -990,7 +1030,8 @@ async function discoverHuman(
   }
   deps.log.info("pr ci human discovery finished", {
     found: found.length,
-    accepted,
+    reads,
+    added,
   });
 }
 
@@ -1553,6 +1594,32 @@ async function settlePassed(
   if (moved) counters.passed += 1;
 }
 
+/**
+ * 人のPRの行に限り、同じPRの古いheadの失敗のnoticeを解決する。
+ * 人のPRは、直された後も新しいheadで失敗が続くことがあり、古いheadのnoticeが残ると、
+ * 1つのPRに未解決のnoticeが重なる。FactoryのPRの行は変えない。
+ * 今のheadのnoticeは解決しない。通知をやり直した回に、同じ本文が重複と見なされ、Discordが重ならないためである。
+ * 古いheadは、そのPRの記録済みの行から求める。解決は冪等なので、通知の登録より先に行う。
+ */
+async function resolveOlderHeadNotices(
+  context: Context,
+  row: PrCiCheck,
+): Promise<void> {
+  if (row.work_item_id !== null) return;
+  const { deps } = context;
+  const rows = await deps.listRowsForPr(row.owner, row.repo, row.pr_number);
+  const olderHeads = new Set(
+    rows.map((other) => other.head_sha).filter((sha) => sha !== row.head_sha),
+  );
+  for (const sha of olderHeads) {
+    await deps.resolveNotices(
+      PR_CI_FAILED_KIND,
+      prCiHeadNoticePrefix(row.owner, row.repo, row.pr_number, sha),
+      PR_CI_RESOLVED_BY,
+    );
+  }
+}
+
 async function settleFailed(
   context: Context,
   row: PrCiCheck,
@@ -1611,6 +1678,7 @@ async function settleFailed(
     link,
     reason,
   });
+  await resolveOlderHeadNotices(context, row);
   // 通知を先に登録する。状態の更新が先に成功して通知が失敗すると、通知が永久に出ないため。
   const noticeId = await deps.addNotice({ kind: PR_CI_FAILED_KIND, message });
   if (noticeId !== null) {
@@ -1735,6 +1803,7 @@ async function sendDeferredNotice(
     reason,
     ...(hold === null ? {} : { hold }),
   });
+  await resolveOlderHeadNotices(context, row);
   const noticeId = await deps.addNotice({ kind: PR_CI_FAILED_KIND, message });
   if (noticeId !== null && discord) {
     const sent = await deps.notify({

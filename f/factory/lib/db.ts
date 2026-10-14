@@ -3838,7 +3838,10 @@ export type PrCiCheck = {
   readonly summary: string;
   /** 通知した理由コード。通知していなければnull。 */
   readonly notified_reason: string | null;
-  /** PRを作ったFactoryの作業項目のID。外部キーは持たない。 */
+  /**
+   * PRを作ったFactoryの作業項目のID。外部キーは持たない。
+   * NULLは、許可された人が作ったPRの行である(出所を表す別の列は持たない)。
+   */
   readonly work_item_id: number | null;
   /** いま失敗を直している作業項目のID。`fixing`の間だけ値を持つ。外部キーは持たない。 */
   readonly fix_work_item_id: number | null;
