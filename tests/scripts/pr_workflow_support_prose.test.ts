@@ -57,4 +57,26 @@ describe("fixOutputProseIssues", () => {
 
     expect(issues).toHaveLength(1);
   });
+
+  test("reports a polite ending in the commit body of a CI round, which has no replies", () => {
+    const issues = fixOutputProseIssues(
+      [],
+      "fix: ログの解析を直す",
+      "- 失敗の原因を直しました",
+    );
+
+    expect(issues).toEqual([
+      "commit_body: 1行目: 常体で書く文章に、別の文体の文末があります(ました)",
+    ]);
+  });
+
+  test("accepts a plain commit body of a CI round", () => {
+    const issues = fixOutputProseIssues(
+      [],
+      "fix: ログの解析を直す",
+      "- 失敗の原因を直す",
+    );
+
+    expect(issues).toEqual([]);
+  });
 });

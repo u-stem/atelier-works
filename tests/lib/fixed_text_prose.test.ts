@@ -26,10 +26,11 @@ const EXCLUDED_FILES = new Set(["f/factory/lib/prompts.ts"]);
 /**
  * 検査しない行。役割タグは投稿の1行目を見分ける固定の文字列で、
  * 既に投稿したコメントとの照合に使うため変えられない。
- * 英語の文の中で画面の項目名を引く行は、英語の語の区切りとしてスペースが要る。
+ * 英語の文の中で画面の項目名を引く行と、文体の指示で「です・ます」「だ・である」を引く行は、
+ * 英語の語の区切りとしてスペースが要る。文体の指示は`commit_message_style.test.ts`が文面を固定する。
  */
 const EXCLUDED_LINE_PATTERN =
-  /自動レビュー\]|自動返信\]|今すぐ監査 in the Console/;
+  /自動レビュー\]|自動返信\]|今すぐ監査 in the Console|polite です・ます form|plain だ・である form/;
 
 const STRING_LITERAL_PATTERN =
   /"(?:[^"\\\n]|\\.)*"|`(?:[^`\\\n]|\\.)*`|'(?:[^'\\\n]|\\.)*'/g;
