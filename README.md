@@ -87,7 +87,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run test:db` | Data Tableのmigrationを使い捨てのDBに適用し、すべてのviewをSELECTする(medium) |
 | `mise run test:check-sandbox` | workerのイメージの使い捨てのコンテナで、検査コマンドの境界(uid、秘密、書き込み先、所有権、後始末)を確かめる(medium) |
 | `mise run check:comment-only` | 基準のref(既定は`main`)との差分が、コメントの変更だけであることを確かめる |
-| `mise run worktree:new` | `mise run worktree:new -- feat/foo`の形で渡した`<type>/<name>`のブランチを、`origin/main`からメインのcheckoutの下のworktreeに作る。依存を入れ、作業ディレクトリのパスを最後の行に出す |
+| `mise run worktree:new` | `mise run worktree:new -- feat/foo`で、`origin/main`から`feat/foo`のブランチとworktreeを作る。worktreeはメインのcheckoutの下に置き、依存を入れて、作業ディレクトリのパスを最後の行に出す。依存の導入に失敗したら、作ったブランチとworktreeを消す |
 
 ## リポジトリの構成
 

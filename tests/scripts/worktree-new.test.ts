@@ -61,11 +61,11 @@ function makeTempRoot(prefix: string): string {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-// 呼ばれた作業ディレクトリと引数を1行ずつ記録するだけのbun。
+// 呼ばれた作業ディレクトリと引数を1行ずつ記録し、本物と同じく`node_modules`を作るだけのbun。
 function writeFakeBun(path: string, log: string, exitCode: number): void {
   writeFileSync(
     path,
-    `#!/usr/bin/env bash\necho "$PWD $*" >> "${log}"\nexit ${exitCode}\n`,
+    `#!/usr/bin/env bash\necho "$PWD $*" >> "${log}"\nmkdir -p node_modules\ntouch node_modules/marker\nexit ${exitCode}\n`,
   );
   chmodSync(path, 0o755);
 }
@@ -95,7 +95,8 @@ describe("worktree-new.sh", () => {
     git(root, ["clone", "--quiet", originDir, mainDir]);
     git(mainDir, ["checkout", "--quiet", "-b", "main"]);
     writeFileSync(join(mainDir, "README.md"), "x\n");
-    git(mainDir, ["add", "README.md"]);
+    writeFileSync(join(mainDir, ".gitignore"), "node_modules/\n");
+    git(mainDir, ["add", "README.md", ".gitignore"]);
     git(mainDir, ["commit", "--quiet", "--no-gpg-sign", "-m", "init"]);
     git(mainDir, ["push", "--quiet", "origin", "main"]);
   });
@@ -117,40 +118,54 @@ describe("worktree-new.sh", () => {
 
   const target = () => join(mainDir, ".claude", "worktrees", "feat-foo");
 
+  function branchExists(branch: string): boolean {
+    const result = Bun.spawnSync(
+      ["git", "show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+      { cwd: mainDir, env: cleanEnv() },
+    );
+    return result.exitCode === 0;
+  }
+
+  test("creates nothing under .claude on a bad argument", () => {
+    runScript(mainDir, ["wip/foo"], fakeBun);
+
+    expect(existsSync(join(mainDir, ".claude"))).toBe(false);
+  });
+
   test("rejects a type outside the allowed list", () => {
     const result = runScript(mainDir, ["wip/foo"], fakeBun);
 
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(2);
   });
 
   test("rejects a name with an uppercase letter", () => {
     const result = runScript(mainDir, ["feat/Foo"], fakeBun);
 
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(2);
   });
 
   test("rejects a name with an underscore", () => {
     const result = runScript(mainDir, ["feat/foo_bar"], fakeBun);
 
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(2);
   });
 
   test("rejects a name that contains a slash", () => {
     const result = runScript(mainDir, ["feat/foo/bar"], fakeBun);
 
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(2);
   });
 
   test("rejects an argument without a slash", () => {
     const result = runScript(mainDir, ["feat"], fakeBun);
 
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(2);
   });
 
   test("rejects a missing argument", () => {
     const result = runScript(mainDir, [], fakeBun);
 
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(2);
   });
 
   test("prints the usage to stderr on a bad argument", () => {
@@ -268,7 +283,136 @@ describe("worktree-new.sh", () => {
 
     const result = runScript(mainDir, ["feat/foo"], fakeBun);
 
+    expect(result.exitCode).toBe(1);
+  });
+
+  test("runs the install before the install failure", () => {
+    writeFakeBun(fakeBun, bunLog, 1);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(existsSync(bunLog)).toBe(true);
+  });
+
+  test("removes the worktree directory when the install fails", () => {
+    writeFakeBun(fakeBun, bunLog, 1);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(existsSync(target())).toBe(false);
+  });
+
+  test("removes the branch when the install fails", () => {
+    writeFakeBun(fakeBun, bunLog, 1);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(branchExists("feat/foo")).toBe(false);
+  });
+
+  test("unregisters the worktree when the install fails", () => {
+    writeFakeBun(fakeBun, bunLog, 1);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(git(mainDir, ["worktree", "list", "--porcelain"])).not.toContain(
+      "feat-foo",
+    );
+  });
+
+  test("tells how to rerun when the install fails", () => {
+    writeFakeBun(fakeBun, bunLog, 1);
+
+    const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(result.stderr).toContain("rerun: scripts/worktree-new.sh feat/foo");
+  });
+
+  test("succeeds when rerun with the same argument after an install failure", () => {
+    writeFakeBun(fakeBun, bunLog, 1);
+    runScript(mainDir, ["feat/foo"], fakeBun);
+    writeFakeBun(fakeBun, bunLog, 0);
+
+    const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("keeps a pre-existing worktree of another name when the install fails", () => {
+    runScript(mainDir, ["fix/first"], fakeBun);
+    writeFakeBun(fakeBun, bunLog, 1);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(
+      existsSync(join(mainDir, ".claude", "worktrees", "fix-first", ".git")),
+    ).toBe(true);
+  });
+
+  test("prints the first push command to stderr on success", () => {
+    const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(result.stderr).toContain("git push -u origin HEAD");
+  });
+
+  test("fails when the branch already exists on origin", () => {
+    git(mainDir, ["push", "--quiet", "origin", "main:refs/heads/feat/foo"]);
+
+    const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(result.exitCode).toBe(1);
+  });
+
+  test("does not create the directory when the branch exists on origin", () => {
+    git(mainDir, ["push", "--quiet", "origin", "main:refs/heads/feat/foo"]);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(existsSync(target())).toBe(false);
+  });
+
+  test("does not create the local branch when the branch exists on origin", () => {
+    git(mainDir, ["push", "--quiet", "origin", "main:refs/heads/feat/foo"]);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(branchExists("feat/foo")).toBe(false);
+  });
+
+  test("fails when the fetch fails", () => {
+    git(mainDir, ["remote", "set-url", "origin", join(root, "missing.git")]);
+
+    const result = runScript(mainDir, ["feat/foo"], fakeBun);
+
     expect(result.exitCode).not.toBe(0);
+  });
+
+  test("does not create the directory when the fetch fails", () => {
+    git(mainDir, ["remote", "set-url", "origin", join(root, "missing.git")]);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(existsSync(target())).toBe(false);
+  });
+
+  test("does not create the branch when the fetch fails", () => {
+    git(mainDir, ["remote", "set-url", "origin", join(root, "missing.git")]);
+
+    runScript(mainDir, ["feat/foo"], fakeBun);
+
+    expect(branchExists("feat/foo")).toBe(false);
+  });
+
+  test("fails when run from a bare repository", () => {
+    const result = runScript(originDir, ["feat/foo"], fakeBun);
+
+    expect(result.exitCode).toBe(1);
+  });
+
+  test("creates nothing next to a bare repository", () => {
+    runScript(originDir, ["feat/foo"], fakeBun);
+
+    expect(existsSync(join(root, ".claude"))).toBe(false);
   });
 
   test("fails when the branch already exists", () => {
