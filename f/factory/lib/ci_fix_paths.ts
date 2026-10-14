@@ -138,7 +138,8 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * ステムで終わらせる。
  * Claudeの実行、保護パスの判定、ログの機密保持、作業ディレクトリ、検査の隔離、pr_fixのstep、
  * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、pr_fixフローの起動(`pr_fix_launch`)、
- * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)である。
+ * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)、
+ * メタデータのパッチの検査と`wmill-lock.yaml`のhashの再計算(`metadata_`で始まる部品)である。
  */
 const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/claude.",
@@ -161,6 +162,7 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/pr_ci_",
   "f/factory/lib/pr_fix_launch.",
   "f/factory/lib/main_ci_",
+  "f/factory/lib/metadata_",
   "f/factory/watch_pr_ci.",
   "f/factory/watch_main_ci.",
   "f/factory/steps/pr_fix_",

@@ -113,6 +113,11 @@ function scriptExtension(path: string): string | null {
   );
 }
 
+/** wmillがscriptのファイルとみなす拡張子で終わるパスか。 */
+export function isScriptPath(path: string): boolean {
+  return scriptExtension(path) !== null;
+}
+
 function isFileResource(path: string): boolean {
   const parts = path.split(".");
   return (
