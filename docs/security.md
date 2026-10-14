@@ -197,8 +197,11 @@ manifestは、PRのheadのsha(`headSha`)、baseのsha(`baseSha`)、作り直し�
 
 #### 受け取る側が必ず確かめること
 
-publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名のartifactを上げられる。
-ワークフローのパスの照合は、中身が`main`の版であることを保証しない。PRが`ci.yml`を書き換えうるためである。
+artifactの中身は、攻撃者が完全に決められるものとして扱う。安全は、内容の制限だけで成り立たせる。
+出どころの確認は、無関係な第三者のartifactを避けるための補助にとどまる。
+同じ実行の別のジョブ(`check`など)で動くPRのコードは、ランナーのトークンを使って、同名のartifactを上げ直せる。
+ブランチやworkflowのパスの照合では、これを防げない。
+publicなリポジトリでは、forkのPRが`ci.yml`を書き換えて、同名のartifactを上げることもできる。
 そのため、受け取る側はartifactを信用しない前提で扱い、次のすべてを守る。
 確かめるコードは、`f/factory/lib/metadata_patch_manifest.ts`の`isAllowedMetadataPath`、`parseManifest`、上限の定数を使う。
 判定を1か所に置くためである。
@@ -213,14 +216,16 @@ artifactを取る実行は、次をすべて満たすものに限る。
 - 実行の`pull_requests`に、対象のPRの番号がある。
 - 実行の`head_sha`が、PRの今のheadと一致する。
 - 実行の結論が`failure`で、原因が`metadata`ジョブの失敗である。
-- PRの差分(`base...head`)が、次のCIの定義と抽出の部品に触れていない。
-  - `.github/`、`mise.toml`、`infra/`
-  - `scripts/metadata-patch.ts`、`scripts/ci-metadata-*.sh`、`scripts/check-metadata-fresh.sh`
-  - `f/factory/lib/metadata_patch_manifest.*`
+- PRの差分(`base...head`)が、`f/**`、`migrations/**`、`docs/**`、`tests/**`のパスだけである。
 
-最後の条件は、触れていれば、パッチを適用しない。
-出どころの層を取り戻すためである。
-プロンプトを注入されたimplementフローが、これらを書き換えうる。
+最後の条件は、これら以外に触れていれば、パッチを適用しない。
+該当するのは、次のようなパスである。
+
+- 設定: `bunfig.toml`、`mise*.toml`、`.mise*`、`.config/mise*`、`.tool-versions`、`wmill.yaml`、`package.json`、`tsconfig.json`
+- CIと実行の定義: `.github/`、`infra/`、`scripts/`
+
+収集のステップが読む設定は多く、拒否リストでは漏れるため、許可リストにする。
+プロンプトを注入されたimplementフローは、これらを書き換えうる。
 書き換えられると、artifactの中身も実行の条件も、PRが決められる。
 
 `metadata`ジョブは、パッチを出した後も失敗で終わる。
@@ -229,6 +234,12 @@ artifactを取る実行は、次をすべて満たすものに限る。
 
 artifactは、その実行のIDに紐づくものだけを取る。
 ブランチ名やartifact名だけで実行を探さない。
+
+取ったartifactのIDとdigestは、`metadata`ジョブのログに残った値と照合する。
+値は、`Upload the metadata patch`ステップが出す`artifact-id`と`artifact-digest`である。
+別のジョブが上げ直したartifactは、IDとdigestが違うため、見分けられる。
+ログへの出力は、`ci.yml`にまだ実装されていない。
+PR 2または後続で実装する。それまでは、この取り決めだけを書く。
 
 ##### 適用先と方式
 
@@ -275,6 +286,8 @@ lockは、構造として解析する。
 - 前半のキーは`dependencies`だけにする。値は、semverの版か範囲に限る。URL、`file:`、`git`、`github:`、`link:`、`npm:`の別名を拒否する。
 - 後半のキーは、`lockfileVersion`、`configVersion`、`workspaces`、`packages`だけにする。
 - 各パッケージの取得元が既定のレジストリ(空文字)で、integrityが`sha512-`で始まることを確かめる。
+- `main`の版に無い版や、版が上がるものは、レジストリの公開から`dependabot_min_published_days`日(既定7日)以上たったものに限る。
+  日数はdependabotの更新とそろえる。公開から日が浅い版を取り込まないためである。
 - 版が同じでも、取得元かintegrityが`main`の版と違うものは拒否する。安全のため、比べる相手はheadではなく`main`の版にする。可能なら、レジストリの公開値と照合する。
 - `postinstall`などのscripts、`trustedDependencies`、`overrides`を拒否する。
 
@@ -309,9 +322,15 @@ lockは、構造として解析する。
 
 ##### 層の関係
 
-出どころの確認と再検証は、偽のartifactや書き換えられたartifactを受け取らないための層である。
-内容の制限は、出どころが破られたときに、被害を限る層である。
-内容の制限だけでは、偽のartifactを受け取り続けるので、どちらも外さない。
+内容の制限と再検証は、攻撃者が決めたartifactでも被害を限るための層で、安全はこの層だけで成り立たせる。
+出どころの確認は、無関係な第三者のartifactを避けるための補助である。
+出どころが破られうる前提なので、出どころの確認を理由に、内容の制限を緩めない。
+
+##### 受け入れる残りのリスク
+
+`windmill_worker_ci`の上流イメージは、タグ(`WM_VERSION`)で固定していて、digestでは固定していない。
+既存のserverと同じ固定の仕方である。
+ランナーに秘密が無く、受け取る側がlockのintegrityを`main`の版と照合するため、このリスクは受け入れる。
 
 ##### 受け取る側の実装で決めること
 
