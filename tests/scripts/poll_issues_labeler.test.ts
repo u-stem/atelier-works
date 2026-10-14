@@ -33,11 +33,18 @@ const ITEM: IssueSearchItem = {
 const VIEWER_ONLY: LabelerPolicy = {
   viewerLogin: "octo-owner",
   allowedLogins: [],
+  allowedIds: {},
 };
 
 const at = (n: number) => `2026-10-01T00:00:${String(n).padStart(2, "0")}Z`;
 const labeled = (login: string | null, label: string, n = 1) =>
   labelEventNode("labeled", login, label, at(n));
+const labeledWithId = (
+  login: string,
+  label: string,
+  databaseId: number,
+  n = 1,
+) => labelEventNode("labeled", login, label, at(n), "User", databaseId);
 const unlabeled = (login: string, label: string, n = 2) =>
   labelEventNode("unlabeled", login, label, at(n));
 
@@ -196,7 +203,7 @@ describe("issue claim by the trigger label's labeler", () => {
   test("skips every issue when the viewer could not be fetched", async () => {
     const { action } = await actionFor(
       [labelEventsOk([labeled("octo-owner", "factory")])],
-      { viewerLogin: null, allowedLogins: [] },
+      { viewerLogin: null, allowedLogins: [], allowedIds: {} },
     );
     expect(action).toBe("skip_labeler");
   });
@@ -214,6 +221,36 @@ describe("issue claim by the trigger label's labeler", () => {
       { ...VIEWER_ONLY, allowedLogins: ["alice"] },
     );
     expect(action).toBe("claim");
+  });
+
+  const WITH_ID: LabelerPolicy = {
+    ...VIEWER_ONLY,
+    allowedLogins: ["alice"],
+    allowedIds: { alice: 1001 },
+  };
+
+  test("claims an issue a listed login with the configured id labeled", async () => {
+    const { action } = await actionFor(
+      [labelEventsOk([labeledWithId("alice", "factory", 1001)])],
+      WITH_ID,
+    );
+    expect(action).toBe("claim");
+  });
+
+  test("skips an issue labeled by a person with the same name and another id", async () => {
+    const { action } = await actionFor(
+      [labelEventsOk([labeledWithId("alice", "factory", 2002)])],
+      WITH_ID,
+    );
+    expect(action).toBe("skip_labeler");
+  });
+
+  test("skips an issue whose labeler id is missing from the response", async () => {
+    const { action } = await actionFor(
+      [labelEventsOk([labeled("alice", "factory")])],
+      WITH_ID,
+    );
+    expect(action).toBe("skip_labeler");
   });
 });
 
@@ -256,8 +293,29 @@ describe("confirmLabeler", () => {
     expect(await confirm(MIXED, "factory:fix", policy)).toBe(true);
   });
 
+  const WITH_ID: LabelerPolicy = {
+    ...VIEWER_ONLY,
+    allowedLogins: ["alice"],
+    allowedIds: { alice: 1001 },
+  };
+
+  test("confirms a listed login whose id matches", async () => {
+    const events = [labeledWithId("alice", "factory", 1001)];
+    expect(await confirm(events, "factory", WITH_ID)).toBe(true);
+  });
+
+  test("rejects a listed login whose id differs", async () => {
+    const events = [labeledWithId("alice", "factory", 2002)];
+    expect(await confirm(events, "factory", WITH_ID)).toBe(false);
+  });
+
+  test("rejects a listed login with an id when the response has no id", async () => {
+    const events = [labeled("alice", "factory")];
+    expect(await confirm(events, "factory", WITH_ID)).toBe(false);
+  });
+
   test("rejects every label when the viewer is unknown", async () => {
-    const policy = { viewerLogin: null, allowedLogins: [] };
+    const policy = { viewerLogin: null, allowedLogins: [], allowedIds: {} };
     expect(await confirm(MIXED, "factory", policy)).toBe(false);
   });
 

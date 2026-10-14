@@ -53,6 +53,7 @@ type DefaultableField =
   | "trigger_label"
   | "allowed_labeler_associations"
   | "allowed_labeler_logins"
+  | "allowed_labeler_ids"
   | "model"
   | "heavy_model"
   | "max_attempts"
@@ -103,6 +104,7 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   trigger_label: "factory",
   allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
   allowed_labeler_logins: [],
+  allowed_labeler_ids: {},
   model: "claude-sonnet-5-5",
   heavy_model: "claude-opus-5-5",
   max_attempts: 3,
@@ -445,6 +447,70 @@ function labelerLoginsField(raw: Record<string, unknown>): string[] {
 }
 
 /**
+ * `allowed_labeler_ids`を返す。値が無ければ既定値を返す。
+ * キーは許可するログイン名、値はそのアカウントのGitHubの数値IDである。
+ * 名前だけの照合では、改名の後に古い名前を取得した別人が許可されるため、IDでも照合させる。
+ * 次のときは例外を投げる。
+ * - オブジェクトでないとき、値が正の安全な整数でないとき。
+ * - キーが`[bot]`で終わるとき。`allowed_labeler_logins`と同じく、自動化のアカウントは許可しない。
+ * - キーが`logins`(`allowed_labeler_logins`)に含まれないとき。綴りの誤りで、
+ *   IDを設定したつもりのアカウントが名前だけの照合になるのを防ぐ。大文字小文字は区別しない。
+ * - 大文字小文字だけが違うキーが重なるとき。どちらのIDを使うかが決まらないため。
+ * 型アサーションなしで型を付けるため、エントリーを1つずつ詰め直す。
+ */
+function labelerIdsField(
+  raw: Record<string, unknown>,
+  logins: readonly string[],
+): Record<string, number> {
+  const field = "allowed_labeler_ids";
+  const value = raw[field];
+  if (value === undefined) {
+    return DEFAULTS.allowed_labeler_ids;
+  }
+  if (!isRecord(value)) {
+    throw new ConfigValidationError(
+      `"${field}" must be an object of GitHub numeric IDs`,
+    );
+  }
+  const allowed = new Set(logins.map((login) => login.toLowerCase()));
+  const seen = new Set<string>();
+  const result: Record<string, number> = {};
+  for (const [key, id] of Object.entries(value)) {
+    const lower = key.toLowerCase();
+    if (lower.endsWith("[bot]")) {
+      throw new ConfigValidationError(
+        `"${field}" must not contain an automation account: ${JSON.stringify(key)}`,
+      );
+    }
+    if (!allowed.has(lower)) {
+      throw new ConfigValidationError(
+        `"${field}" key ${JSON.stringify(key)} must be listed in "allowed_labeler_logins"`,
+      );
+    }
+    if (seen.has(lower)) {
+      throw new ConfigValidationError(
+        `"${field}" must not contain keys that differ only in case: ${JSON.stringify(key)}`,
+      );
+    }
+    seen.add(lower);
+    if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
+      throw new ConfigValidationError(
+        `"${field}"[${JSON.stringify(key)}] must be a positive integer`,
+      );
+    }
+    // `__proto__`のキーは、代入では自身のプロパティにならず値が黙って落ちる。
+    // 落ちるとIDなしの設定に変わるので、定義で自身のプロパティにする。
+    Object.defineProperty(result, key, {
+      value: id,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return result;
+}
+
+/**
  * `raw[field]`を返す。値が無ければ`fallback`を返し、真偽値でなければ例外を投げる。
  */
 function booleanField(
@@ -580,11 +646,14 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
             );
           })();
 
+  const allowedLabelerLogins = labelerLoginsField(raw);
+
   return {
     owners,
     trigger_label: stringField(raw, "trigger_label", DEFAULTS.trigger_label),
     allowed_labeler_associations: resolvedAllowedLabelerAssociations,
-    allowed_labeler_logins: labelerLoginsField(raw),
+    allowed_labeler_logins: allowedLabelerLogins,
+    allowed_labeler_ids: labelerIdsField(raw, allowedLabelerLogins),
     model: modelField(raw, "model", DEFAULTS.model),
     heavy_model: modelField(raw, "heavy_model", DEFAULTS.heavy_model),
     max_attempts: numberField(raw, "max_attempts", DEFAULTS.max_attempts),

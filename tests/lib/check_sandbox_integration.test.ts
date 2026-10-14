@@ -2008,61 +2008,70 @@ suite("symlinks with names that are not plain text", () => {
   });
 });
 
-suite("a symlink scan that cannot read a symlink", () => {
+suite("a symlink scan with a symlink whose path is longer than PATH_MAX", () => {
   const fx = makeRepo();
   const lockDir = join(fx.base, "slots");
   let worktree = "";
   let detected = "";
-  let names: string[] = [];
+  let remaining: string[] = [];
 
   beforeAll(async () => {
     mkdirSync(WINDMILL_TMP_DIR, { recursive: true });
-    worktree = fx.addWorktree("unreadable");
+    worktree = fx.addWorktree("longpath");
+    // ディレクトリのパスは4096バイトに収め、その中のsymlinkのパスだけが4096バイトを超えるようにする。
+    // ディレクトリごと長いと、`getfacl`のような道具が先に失敗するためである。
     writeFileSync(
-      join(worktree, "unreadable.sh"),
+      join(worktree, "longpath.sh"),
       [
-        "ln -s /etc/passwd evil",
-        "ln -s ../ok dotdot",
-        "ln -s ok inside",
+        'pad() { printf "$1%.0s" $(seq 1 "$2"); }',
+        "step=$(pad a 200)",
+        'len() { printf %s "$PWD" | wc -c; }',
+        'while [ $(($(len) + 201)) -lt 3950 ]; do mkdir "$step"; cd "$step"; done',
+        "last=$(pad b $((4000 - $(len) - 1)))",
+        'mkdir "$last"; cd "$last"',
+        'ln -s /etc/passwd "$(pad e 200)"',
+        'ln -s ../ok "$(pad d 200)"',
+        'ln -s ok "$(pad i 200)"',
         "",
       ].join("\n"),
     );
-    const base = defaultSandboxDeps(lockDir);
-    // 中身を読めないsymlinkがあった場合に、全消しの後始末へ倒れることを確かめる。
     const results = await runChecks(
       worktree,
-      ["sh ./unreadable.sh"],
-      createCheckSandbox({
-        uids: POOL,
-        deps: {
-          ...base,
-          readLink: async (path) => {
-            if (path.toString() === join(worktree, "evil")) {
-              throw new Error("ENAMETOOLONG");
-            }
-            return base.readLink(path);
-          },
-        },
-      }),
+      ["sh ./longpath.sh"],
+      createCheckSandbox({ uids: POOL, deps: defaultSandboxDeps(lockDir) }),
     );
     detected = results.at(-1)?.output ?? "";
-    names = readdirSync(worktree);
+    remaining = Bun.spawnSync([
+      "find",
+      worktree,
+      "-type",
+      "l",
+      "-printf",
+      "%l\\n",
+    ])
+      .stdout.toString()
+      .split("\n")
+      .filter((line) => line !== "");
   }, 60_000);
 
   afterAll(() => {
     fx.cleanup();
   });
 
-  test("the failed check says every symlink with an absolute or .. content was removed", () => {
-    expect(detected).toContain("was incomplete, so every symlink");
+  test("the scan is not reported as incomplete", () => {
+    expect(detected).not.toContain("was incomplete");
   });
 
-  test("a symlink to an absolute path is removed", () => {
-    expect(names).not.toContain("evil");
+  test("a long-path symlink to an absolute path is removed", () => {
+    expect(remaining).not.toContain("/etc/passwd");
   });
 
-  test("a symlink with .. in its content is removed", () => {
-    expect(names).not.toContain("dotdot");
+  test("a long-path symlink with .. in its content is removed", () => {
+    expect(remaining).not.toContain("../ok");
+  });
+
+  test("a long-path symlink to a sibling is kept", () => {
+    expect(remaining).toContain("ok");
   });
 });
 
