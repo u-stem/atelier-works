@@ -802,10 +802,12 @@ Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bo
 許可しても、このworkerのマウントとDBへの到達は変わらない。
 変わるのは、このworkerでscriptを動かせる主体である。
 
-許可の確認(`doctor`)は、管理者の資格情報を送る宛先を、死活を確かめたポートの`127.0.0.1`に限る。
+管理者の資格情報を送る`doctor`と`bootstrap`は、宛先を`WM_HTTP_PORT`のポートの`127.0.0.1`に限る。
 `WM_BASE_URL`は使わない。
-ログインの前に`/api/version`がWindmillの応答かを確かめ、違えば資格情報を送らない。
-`WM_HTTP_PORT`だけを変えたときに、ポートの取り違えで別のサービスへパスワードを誤って送らないためである。
+`mise.toml`では`WM_BASE_URL`が8080に固定されていて、`WM_HTTP_PORT`だけを変えたときに、ポートの取り違えで別のサービスへパスワードを誤って送るためである。
+ログインの前に`/api/version`がWindmillの応答かを確かめ、違えば資格情報を送らずに止まる。
+`bootstrap`の`curl`はリダイレクトを追わない。
+追うと、資格情報が確かめていない別の宛先へ届くためである。
 
 Consoleから押せる書き込みには、読むsecret変数の上限を決める。
 `github_token`を読んでよいのは、`approval_decide`と`retry_work_item`だけである。

@@ -109,6 +109,11 @@ mise run doctor
 
 `bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。表示名はダッシュボード(Factory Console)などの表記にそろえる。
 
+`bootstrap`と`mise run instance:tags`は、管理者の資格情報を`http://127.0.0.1:${WM_HTTP_PORT}`にだけ送る。
+`WM_BASE_URL`は読まない。
+ログインの前に`/api/version`がWindmillの応答かを確かめ、違えば資格情報を送らずに止まる。
+止まったときは、そのポートを使うほかのプロセスを止めるか、`WM_HTTP_PORT`をWindmillのポートに合わせて`mise run up`をやり直す。
+
 ## カスタムtagを許可する
 
 Consoleのscriptは、tag`console`を持つ。
@@ -494,7 +499,8 @@ mise run worktree:prune -- --apply
 
 | 症状 | 原因と対処 |
 | --- | --- |
-| ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定する。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする |
+| ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定し、`mise run up`をやり直す。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする。`bootstrap`と`doctor`は、`WM_BASE_URL`を使わず、このポートに合わせて宛先を決める |
+| `bootstrap`が「did not answer as Windmill」と出て止まる | `WM_HTTP_PORT`のポートで、Windmill以外が応答している。資格情報は送られていない。そのポートを使うプロセスを止めるか、`WM_HTTP_PORT`を別のポートにして`mise run up`をやり直す |
 | `doctor`が「カスタムtag」でNGになる | インスタンスがtag`console`を許可していない。`mise run instance:tags`を実行する |
 | `doctor`が「カスタムtag」でWARNになる | 許可の有無を確かめられていない。行に添えられた理由を見る。ログインが拒まれたなら、`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる。`doctor`は`WM_HTTP_PORT`のポートにだけ資格情報を送り、Windmillの応答でなければ送らない |
 | `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新した後で`mise run up`を実行し直し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`でConsole用workerを作り直す。Dockerの更新で止まったworkerはrestart policyで元のマウントのまま起動し直し、`mise run up`は設定の変わらないworkerを作り直さないためである。その後で`mise run doctor`を実行し、`docker version`と`console worker mount`の行が`OK`になることを確かめる(手順は[運用](operations.md#console用workerを確かめる)) |
