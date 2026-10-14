@@ -55,10 +55,7 @@ import {
   resolveTagCommit,
 } from "./lib/drawio_viewer_bump_github.ts";
 import { recordViewerObservation } from "./lib/drawio_viewer_observations.ts";
-import {
-  FactoryRepoIdMismatchError,
-  verifyFactoryRepoId,
-} from "./lib/factory_repo_gate.ts";
+import { isFactoryRepoIdVerified } from "./lib/factory_repo_gate.ts";
 import {
   addLabels,
   createPullRequest,
@@ -530,19 +527,12 @@ export async function main(approved_version = ""): Promise<BumpResult> {
           expectedHeadSha,
         };
       },
-      verifyFactoryRepo: async () => {
-        try {
-          await verifyFactoryRepoId(config, {
-            getRepositoryId: (owner, repo) =>
-              getRepositoryId(client, owner, repo),
-            addNotice: addNoticeUnlessUnresolved,
-          });
-          return true;
-        } catch (error) {
-          if (error instanceof FactoryRepoIdMismatchError) return false;
-          throw error;
-        }
-      },
+      verifyFactoryRepo: () =>
+        isFactoryRepoIdVerified(config, {
+          getRepositoryId: (owner, repo) =>
+            getRepositoryId(client, owner, repo),
+          addNotice: addNoticeUnlessUnresolved,
+        }),
       requestReview: (pullRequestNumber) =>
         addLabels(client, repoRef.owner, repoRef.repo, pullRequestNumber, [
           config.review_label,

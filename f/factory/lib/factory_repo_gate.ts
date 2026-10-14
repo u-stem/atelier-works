@@ -111,6 +111,24 @@ export async function verifyFactoryRepoId(
   }
 }
 
+/**
+ * `verifyFactoryRepoId`の結果を、通ったかどうかの真偽にする。
+ * 照合に落ちた(`FactoryRepoIdMismatchError`)ときはnoticeが残るので、falseを返して呼び出し側が書き込まずに止める。
+ * 一時的でありうる取得の失敗は、止める根拠にならないので、元の例外をそのまま投げる。
+ */
+export async function isFactoryRepoIdVerified(
+  config: Pick<FactoryConfig, "factory_repo" | "factory_repo_id">,
+  deps: FactoryRepoVerifyDeps,
+): Promise<boolean> {
+  try {
+    await verifyFactoryRepoId(config, deps);
+    return true;
+  } catch (err) {
+    if (err instanceof FactoryRepoIdMismatchError) return false;
+    throw err;
+  }
+}
+
 async function rejectWithNotice(
   message: string,
   deps: FactoryRepoVerifyDeps,

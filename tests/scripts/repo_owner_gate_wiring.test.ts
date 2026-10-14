@@ -201,11 +201,11 @@ describe("the owner id check before the writes of the finish steps", () => {
     ).toEqual(["shouldDelete,", "ensureRepoOwner: ownerStopReason,"]);
   });
 
-  test("implement_finish deletes the remote branch only inside the passing branch", async () => {
+  test("implement_finish confirms the lease right before the remote branch deletion", async () => {
     const text = await source("implement_finish.ts");
     expect(
-      statementsAfter(text, 'if (cleanup.kind === "delete") {', 2),
-    ).toEqual(["try {", "await deleteRemoteBranch({"]);
+      statementsAfter(text, 'if (cleanup.kind === "delete") {', 3),
+    ).toEqual(["await confirmLease();", "try {", "await deleteRemoteBranch({"]);
   });
 
   test("implement_finish keeps the gap report when the cleanup stops", async () => {
@@ -275,6 +275,8 @@ describe("the owner id check before the writes of the finish steps", () => {
     const text = await Bun.file(
       new URL("../../f/factory/drawio_viewer_bump.ts", import.meta.url),
     ).text();
-    expect(text).toContain("verifyFactoryRepo: async () =>");
+    expect(text).toContain(
+      "verifyFactoryRepo: () =>\n        isFactoryRepoIdVerified(config, {",
+    );
   });
 });

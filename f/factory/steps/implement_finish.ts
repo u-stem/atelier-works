@@ -600,6 +600,8 @@ async function finishImplement(
       );
     }
     if (cleanup.kind === "delete") {
+      // 照合の往復でリースを失っていないかを、削除の直前に確かめる。
+      await confirmLease();
       try {
         await deleteRemoteBranch({
           run: runCommand,
