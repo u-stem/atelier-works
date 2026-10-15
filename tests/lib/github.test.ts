@@ -4075,12 +4075,19 @@ describe("getPrDiff", () => {
     expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
   });
 
-  test("strips terminal escape sequences from the diff", async () => {
+  test("writes control characters of the diff as visible code points", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(200, `+hello ${ESC}[31mred${ESC}[0m\n+ok`)),
     ]);
     const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
-    expect(diff.diff).toBe("+hello red\n+ok");
+    expect(diff.diff).toBe("+hello <U+001B>[31mred<U+001B>[0m\n+ok");
+  });
+
+  test("does not hide code between an escape introducer and a terminator", async () => {
+    const line = `+const t = "${ESC}]"; exec(evil); "\u0007";`;
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, line))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toContain("exec(evil)");
   });
 
   test("throws when gh exits non-zero after a 2xx status, so an empty diff is never reviewed", async () => {

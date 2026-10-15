@@ -64,19 +64,24 @@ const REMOVED_CHARS =
   /(?!\n)(?:[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u115F\u1160\u3164\uFFA0\u2800]|[\uFE00-\uFE0F]|[\u180B-\u180D\u180F]|[\u17B4\u17B5]|[\u{E0100}-\u{E01EF}]|\u034F)/gu;
 
 /**
- * 取り除く制御文字(C0、DEL、C1)。タブ、改行、復帰は残す。
- * 差分のように、字下げと行末の形が意味を持つ本文に使う。
+ * 見える表記に置き換える文字。制御文字(C0、DEL、C1)と書式文字(書字方向の制御、ゼロ幅、タグ文字、BOM)で、
+ * タブ、改行、復帰は残す。書式文字を含めるのは、識別子の見た目と中身をずらす文字を見えるようにするため。
  */
-const CONTROL_CHARS = /(?![\t\n\r])\p{Cc}/gu;
+const REVEALED_CHARS = /(?![\t\n\r])[\p{Cc}\p{Cf}]/gu;
 
 /**
- * 本文から、端末の制御列と制御文字だけを取り除く。
- * 字下げ、改行、タイムスタンプの形、不可視文字は変えない。
+ * 本文の制御文字と書式文字を、`<U+001B>`の形(4桁以上の大文字の16進数)の見える表記に置き換える。
+ * 何も取り除かないので、制御列の後ろの文字は残る。列の終端まで消す方式だと、
+ * 差分の作者が実行されるコードを読み手から隠せるため、列の照合はしない。
+ * 1文字ずつの置き換えなので、行数と字下げは変わらず、処理の時間は入力の長さに比例する。
  * 差分のようにログ以外の本文を、`gh`の拒否を避けて受け取った後に、プロンプトへ渡す前に使う。
- * `cleanLogText`は行の切り詰めやタブの置き換えまで行うので、本文の形を保ちたい場面には使わない。
+ * ログの整形(`cleanLogText`)とは別で、そちらの挙動は変えない。
  */
-export function stripTerminalControls(text: string): string {
-  return text.replace(TERMINAL_SEQUENCE, "").replace(CONTROL_CHARS, "");
+export function revealControlChars(text: string): string {
+  return text.replace(REVEALED_CHARS, (char) => {
+    const codePoint = char.codePointAt(0) ?? 0;
+    return `<U+${codePoint.toString(16).toUpperCase().padStart(4, "0")}>`;
+  });
 }
 
 /** Actionsのログの行頭にあるタイムスタンプ。 */

@@ -19,7 +19,7 @@
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
-import { stripTerminalControls, VolatileCiLog } from "./ci_log_support.ts";
+import { revealControlChars, VolatileCiLog } from "./ci_log_support.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
@@ -295,8 +295,8 @@ export type GhApiCallOptions = {
   /**
    * `gh`に`--allow-escape-sequences`を渡す。
    * ghは、応答に端末の制御列を含むと、本文を出さずに拒否の文だけを出す。
-   * 制御列を含みうる本文(Actionsのログ)を受け取るときに指定する。
-   * 制御列の除去は呼び出し側の整形が行う。
+   * 制御列を含みうる本文(Actionsのログ、PRの差分)を受け取るときに指定する。
+   * 制御列の除去や置き換えは、呼び出し側が行う。
    */
   readonly allowEscapeSequences?: boolean;
 };
@@ -2599,7 +2599,8 @@ export type PrDiff = {
  * `maxLines`行に切り詰める。
  * 差分は、PRの作者が決める端末の制御列(ESCなど)を含みうる。`gh`は含む本文を出さずに
  * 終了コード1で終わるので、`--allow-escape-sequences`を渡して受け取り、
- * プロンプトに渡す前に制御列と制御文字を除く。
+ * プロンプトに渡す前に、制御文字を`<U+001B>`の形の見える表記に置き換える。
+ * 取り除くと、制御列の中に書いたコードを読み手から隠せるため、何も取り除かない。
  * 2xxなのに`gh`の終了コードが0以外のときは、差分が空のまま読まれないよう、
  * `GitHubRawBodyIncompleteError`を投げる。
  */
@@ -2622,7 +2623,7 @@ export async function getPrDiff(
   const context = `GET pr diff ${owner}/${repo}#${number}`;
   ensureSuccess(response, context);
   ensureRawBodyComplete(response, context);
-  const bodyText = stripTerminalControls(response.bodyText);
+  const bodyText = revealControlChars(response.bodyText);
   const lines = bodyText.split("\n");
   if (lines.length <= maxLines) {
     return {
