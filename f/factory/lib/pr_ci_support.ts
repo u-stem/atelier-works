@@ -479,7 +479,9 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * DBの検査は長さだけなので、書く側をこの型で縛る。
  *
  * 決定的な理由は、同じheadでは起動し直さない。headが進んで新しい行になるまで残る。
- * - `unfixable_job`: 失敗したジョブが、ソースの編集では直せない種類(metadataなど)。
+ * - `unfixable_job`: 失敗したジョブに名前が無く、直せる種類を決められない。
+ * - `metadata_manual`: `metadata`ジョブの失敗を、hashの再計算では直せない。
+ *   依存や入力の`schema`が変わるPR、PRがmainの先端を含まない場合などで、人が`mise run metadata`を実行して直す。
  * - `other_conclusion`: 失敗ではなく、取り消しや期限切れなどで終わった。
  * - `log_unavailable`: 失敗のログを読めない。
  * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まった。
@@ -498,6 +500,7 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  */
 export const PR_CI_FIX_HOLD_REASONS = [
   "unfixable_job",
+  "metadata_manual",
   "other_conclusion",
   "log_unavailable",
   "marker_missing",
@@ -543,9 +546,17 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: false,
     discord: true,
     nextAction:
-      "失敗したジョブはソースの編集では直せない。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットする",
+      "失敗したジョブに名前が無く、直せる種類を決められない。実行のログを確かめ、人が直してPRにpushする",
     stopAction:
-      "失敗したジョブはソースの編集では直せません。実行のログを確かめ、metadataジョブの失敗なら「mise run metadata」を実行して差分をコミットしてください",
+      "失敗したジョブに名前が無く、直せる種類を決められません。実行のログを確かめ、人が直してPRにpushしてください",
+  },
+  metadata_manual: {
+    temporary: false,
+    discord: true,
+    nextAction:
+      "metadataジョブの失敗を、hashの再計算では直せない。依存や入力のschemaが変わるときや、PRがmainの先端を含まないときである。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushする",
+    stopAction:
+      "metadataジョブの失敗を、hashの再計算では直せません。依存や入力のschemaが変わるときや、PRがmainの先端を含まないときです。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushしてください",
   },
   other_conclusion: {
     temporary: false,

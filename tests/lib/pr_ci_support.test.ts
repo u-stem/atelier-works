@@ -1173,6 +1173,7 @@ describe("pullRequestPageUrl", () => {
 
 const DETERMINISTIC_HOLDS = [
   "unfixable_job",
+  "metadata_manual",
   "other_conclusion",
   "log_unavailable",
   "fix_stopped",
@@ -1234,6 +1235,40 @@ const POLITE_ENDING = /(です|ます|ません|ました|でした|ください
 function sentencesOf(action: string): string[] {
   return action.split("。").filter((sentence) => sentence !== "");
 }
+
+describe("prCiFixHoldInfo for the metadata job", () => {
+  test("points an unnamed job to the log, not to the metadata command", () => {
+    expect(prCiFixHoldInfo("unfixable_job").nextAction).not.toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("points an unnamed job to the log in the stop notice", () => {
+    expect(prCiFixHoldInfo("unfixable_job").stopAction).not.toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("tells a human to run the metadata command when the lock cannot be recomputed", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("tells a human to run the metadata command in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("mentions the merge of the base branch for a human", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain("main");
+  });
+
+  test("notifies Discord because a human must act", () => {
+    expect(prCiFixHoldInfo("metadata_manual").discord).toBe(true);
+  });
+});
 
 describe("prCiFixHoldInfo", () => {
   test("marks every deterministic reason as not temporary", () => {

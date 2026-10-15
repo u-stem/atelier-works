@@ -194,7 +194,7 @@ ownerとrepoは、行との照合では小文字で比べる。
 
 ## 保留の理由の語彙
 
-`fix_hold_reason`に書く値は、`lib/pr_ci_support.ts`の`PR_CI_FIX_HOLD_REASONS`の12個に限る。
+`fix_hold_reason`に書く値は、`lib/pr_ci_support.ts`の`PR_CI_FIX_HOLD_REASONS`の13個に限る。
 DBの検査は長さだけなので、書く側をこの型で縛る。
 値ごとの性質と、人が次にすることの固定文は`prCiFixHoldInfo`が返す。
 固定文は2種類ある。
@@ -206,7 +206,8 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 
 | 理由 | 種類 | 意味 |
 | --- | --- | --- |
-| `unfixable_job` | 決定的 | 失敗したジョブが、名前が無く、直せる種類を決められない |
+| `unfixable_job` | 決定的 | 失敗したジョブに名前が無く、直せる種類を決められない |
+| `metadata_manual` | 決定的 | `metadata`ジョブの失敗を、hashの再計算では直せない。依存や入力の`schema`が変わるPR、mainの先端を含まないPRなど |
 | `other_conclusion` | 決定的 | 失敗ではなく、取り消しや期限切れなどで終わった |
 | `log_unavailable` | 決定的 | 失敗のログを読めない |
 | `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まった |
@@ -286,6 +287,7 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 | --- | --- |
 | スキルにCI回のマーカーが無い | `marker_missing` |
 | ジョブの名前が無く、直せる種類を決められない | `unfixable_job` |
+| `metadata`ジョブの失敗を、hashの再計算では直せない | `metadata_manual` |
 | ジョブが失敗でなく、ほかの結論で終わった | `other_conclusion` |
 | トークンがログを読めない、ログが取得できない | `log_unavailable` |
 | 日次予算の超過 | `budget_exceeded` |

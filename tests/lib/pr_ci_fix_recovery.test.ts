@@ -47,6 +47,30 @@ describe("holdReasonForStoppedItem", () => {
     ).toBe("unfixable_job");
   });
 
+  test("maps a lock that cannot be recomputed automatically", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "ci round: the lock cannot be recomputed automatically (dependency_changed)",
+      ),
+    ).toBe("metadata_manual");
+  });
+
+  test("maps the wait for the base branch to be merged as a lock that cannot be recomputed", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "ci round: the lock cannot be recomputed automatically (head_lacks_base)",
+      ),
+    ).toBe("metadata_manual");
+  });
+
+  test("does not map text that only mentions the lock in the middle", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "ci round: claude blocked: the lock cannot be recomputed automatically (x)",
+      ),
+    ).toBeNull();
+  });
+
   test("maps a job that ended with another conclusion", () => {
     expect(
       holdReasonForStoppedItem(

@@ -49,6 +49,9 @@ export function holdReasonForStoppedItem(
   if (note.startsWith(ciRoundReason(CI_ROUND_DETAILS.unfixableJob))) {
     return "unfixable_job";
   }
+  if (note.startsWith(ciRoundReason(CI_ROUND_DETAILS.metadataManual))) {
+    return "metadata_manual";
+  }
   if (note.startsWith(ciRoundReason(CI_ROUND_DETAILS.otherConclusion))) {
     return "other_conclusion";
   }

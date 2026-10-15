@@ -621,47 +621,66 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
 PR本文やコメントに載せるときは、コードスパンで囲み、メンションとリンクを無効にする。
 置き換え済みなので、補足は囲んだコードスパンを内側から閉じられない。
 
+### 配線で決めたこと
+
+hashの再計算をCI回のflowへ配線する際の決定は、次のとおりである。
+流れは[metadataジョブの失敗を直す経路](#metadataジョブの失敗を直す経路)に書く。
+
+- artifactを経由しない再計算を、artifactの適用の代わりに、先に試す。
+  `metadata`ジョブだけが落ちたCI回は、修正のステップがまず再計算を試し、Claudeを起動しない。
+  再計算は`schema`を書かないので、`main`の引数が変わるPRは、事前検査が人の手に回す。
+- ポートは、ローカルのcloneで実装した(`metadata_git_ports.ts`)。
+  木の一覧は`git ls-tree`、ファイルは`git cat-file blob`、祖先の判定は`git merge-base --is-ancestor`である。
+  GitHubのREST APIでは読まない。ファイルごとの読み取りでPATのrate limitを使い切らないためである。
+- ポートは、gitを引数の配列で呼び、シェルを通さない。
+  blobは、木の項目の`oid`で読む。PRの作者が決められるパスを、gitの引数にもシェルの文字列にも使わない。
+- baseの先端は、GitHubのAPIでbaseブランチの先端のshaを読み、ローカルに取り込んで使う。
+  PRのAPIの`base.sha`は使わない。baseブランチの今の先端とは限らないためである。
+- 再計算が書き込むcommitの親は、`head_sha`に固定する。
+  `commitAndPush`が、ローカルのHEADが`head_sha`であることと、リモートのブランチの先端が`head_sha`であることを確かめる。
+  pushは強制しないので、先端が動いていればpushは拒否される。`--force*`は使わない。
+- 検査の後にheadが動く競合は、完了のステップが、pushの直前にPRのheadを読み直して確かめる。
+- baseの先端が動く競合は、照合の中と、pushの直前の2か所で確かめる。
+  動いていれば、pushせず、新しい先端で確かめ直す。取り直しは3回までで、本文が変わるときは回を止める。
+- `main`が進んでPRのheadがbaseの先端を含まなくなる(`head_lacks_base`)ときは、人の手に回す。
+  待つ扱いにしない。mainを取り込むのは人のcommitなので、Factoryのcommitだけを自動で直すという前提から外れ、待っても再計算は始まらない。
+  通知は`metadata_manual`で、必要ならmainを取り込んで`mise run metadata`を実行する案内になる。
+- 再計算と`main`の取り込みを繰り返さないので、その回数の上限は無い。
+  再計算の回は、`pr_ci_fix_max_rounds`が数える回に含める。決定的な回だけを別に数えるには、DBの列か問い合わせの追加が要り、今は持たないためである。
+  Claudeが`f/`のscriptを直すと、その後に`metadata`が落ちて再計算の回が要るので、Claudeの回に使える数が減る。
+- 再計算が直せるPRの割合は、人の手に回った作業項目の理由で測る。
+  理由は`ci round: the lock cannot be recomputed automatically (<種別>)`で、種別は事前検査の固定の語彙である。
+  作業項目の理由を種別ごとに数える。
+- `ls-tree`の出力が上限で切れたときは、ポートが例外を投げ、検査は`port_error`で人の手に回す。
+- ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)は、再計算がそのまま残す。
+- 再計算はwmill CLIを起動しない。workerのwmill CLIの版が`mise.toml`の版と違っても、結果に影響しない。
+  算法は、固定した版の挙動を写したもので、版の変更は[算法を固定するテスト](#算法を固定するテスト)が見つける。
+- 再計算のcommitの後、PRの状態は通常のCI回と同じになる。
+  作業項目のheadを記録しないので、`poll_prs`が新しいheadの再レビューを起動する。
+- `main`の取り込みで`wmill-lock.yaml`が衝突したときは、人が解消する。
+
 ### 配線で決めること
 
-次は、検査を呼び出す側を実装するときに決める。
+次は、artifactのパッチを適用する側を実装するときに決める。
 検査は、これらを前提にしない。
-最初の5項目は、呼び出し側が守る契約である。
+最初の項目は、呼び出し側が守る契約である。
 
 - 出どころの検査を先に呼ぶ。
   `checkProvenance`は、実行の事実とPRの差分だけを見る。artifactもポートも渡さない。
   呼び出し側は、`listWorkflowRunArtifacts`と`downloadArtifactZip`より前にこれを呼び、失敗ならダウンロードも展開もしない。
   出どころで断れるものを、ネットワークとメモリを使う前に断るためである。
   `verifyMetadataPatch`も先頭で同じ検査をもう一度行うので、呼び忘れても通ることはない。
-- ポート(`listHeadSources`、`readHeadFile`、`readBaseFile`、`isAncestor`、`readCommitParents`)は、ローカルのcloneで実装する。
-  木の一覧は`git ls-tree`、ファイルは`git cat-file`を使い、GitHubのREST APIで読まない。
-  ファイルごとの読み取りでPATのrate limitを使い切らないためである。
-- hashの再計算が書き込むcommitは、親を`headSha`に固定する。
-  書き込む前に、ブランチの先端が`headSha`から動いていたら、pushせずに検査からやり直す。`--force*`は使わない。
-  検査の後にheadが動く競合は、artifactの適用だけでなく、hashの再計算にも当てはまる。
-- hashの再計算のポートは、gitを引数の配列で呼び、シェルを通さない。
-  blobは、木の項目の`oid`で読む(`git cat-file blob <oid>`)。
-  PRの作者が決められる文字列(パス)を、シェルの文字列に結合しない。
+- artifactの適用でも、ポートはローカルのcloneで実装する。
+  対象は、`listHeadSources`、`readHeadFile`、`readBaseFile`、`isAncestor`、`readCommitParents`である。
+- artifactの適用でも、commitの親を`headSha`に固定し、pushの直前にブランチの先端とbaseの先端を確かめる。
 - `ci.yml`が、artifactのIDとdigestを`metadata`ジョブのログに出す処理は、まだ無い。
   追加は保護パス(`.github/`)の変更なので、別に行う。
   照合できない間は、パッチを適用しない。
 - フローのキー(`__flow+...`)が変わるパッチの扱い。
-- 検査の後にheadが動く競合の扱い(artifactの適用)。hashの再計算の契約は、上に書いた。
 - artifactのIDとdigestを、`metadata`ジョブのログの値と照合する手順。
 - `mergeSha`を本物のPRのmerge commitに結び付けること。適用の前に、GitHub APIのPRの`merge_commit_sha`と照合する。
   lockの比較先はheadの木とbaseの先端の木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
 - `main`の依存更新のたびに、閉包の多くのscriptで、依存の集合かlockが食い違う場合の扱い。検査の前に、`main`を取り込む。
-- artifactを経由しない[hashの再計算](#メタデータのhashの再計算)を、artifactの適用の代わりに使うか、先に試すか。
-  再計算は`schema`を書かないので、`main`の引数が変わるPRは人の手に回る。
-- `main`が進むたびに、PRのheadがbaseの先端を含まなくなり、再計算が`head_lacks_base`で止まる。
-  `main`を取り込んでから再計算する手順と、その回数の上限を決める。
-- 再計算が実際のPRのうち、どれだけを直せるかを測る。測り方を決めて、人の手に回った理由の種類ごとに数える。
-- `listTree`が切り捨てた木を、検査が見分ける方法。呼び出し側が、切り捨ての有無を知らせる。
-- ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)の扱い。再計算はそのまま残す。
-- worker側のwmill CLIの版と、`mise.toml`で固定した版が食い違うときの扱い。
-- 再計算と`main`の取り込みを繰り返す回数の上限。
-- pushの直前に、baseの先端が動いていないかを再確認する。動いていたら、検査からやり直す。
-- 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
-- `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
 
 ## メタデータのhashの再計算

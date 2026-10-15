@@ -1198,8 +1198,11 @@ metadataジョブの失敗なら、`mise run metadata`を実行して差分を�
 `mise run metadata`はローカルのWindmillに接続する。
 先に`mise run up`でスタックを起動しておく([セットアップ](setup.md#gitのフック))。
 metadataジョブはWindmillの起動やログインでも落ちるので、`mise run metadata`で差分が出ないときは、実行をやり直す。
+Factoryが作るPRで、自動修正が有効なときは、metadataジョブだけの失敗を、Factoryがhashの再計算で直してpushする([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。
+依存や入力のschemaが変わるPR、PRがmainの先端を含まないPRは、再計算では直らず、保留`metadata_manual`で通知が出る。
+このときは、必要ならmainを取り込み、人が`mise run metadata`を実行して差分をコミットする。
 Factoryが作るPR(同じリポジトリの`factory/`ブランチ)では、CIが再生成の結果をartifact(`metadata-patch`)に出す([CIのメタデータの検査](setup.md#ciのメタデータの検査))。
-artifactが出ていても、PRには適用されない。人が`mise run metadata`を実行して差分をコミットする。
+artifactが出ていても、PRには適用されない。
 取り消しやフレークなら、実行をやり直す。
 通知は、次のときに自動で解決される。
 
@@ -1302,9 +1305,11 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 - 失敗を見つけた時刻が、`pr_ci_fix_enabled_since`以後である。
 - PRのすべてのcommitが、Factoryのトレーラーを持つ。トレーラーの無いcommitを含むPRは、自動で直さない。
 - 今のheadのFactoryのレビューがある。ドラフトでなく、auto-mergeが有効でもない。
-- 失敗が`failure`で、ソースの編集で直せる種類である。metadataジョブの失敗や、取り消しなどで終わった実行は、直さない。
+- 失敗が`failure`で、自動で直せる種類である。取り消しなどで終わった実行と、名前の無いジョブの失敗は、直さない。
+  metadataジョブの失敗は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す。依存や入力のschemaが変わるPRは、再計算では直らず、人が直す。
 - 同じPRで動いている直す作業項目が無い。
-- 日次の予算が残っていて、mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
+- mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
+  日次の予算も残っている。ただし、metadataジョブだけが失敗しているときは、Claudeを起動しないので、予算を問わない。
 - Factoryのリポジトリの`factory_branch`にあるfactory-fixスキルが、CI回の節(マーカー`ci-fix-skill:v1`)を持つ。ファイルはGitHubのAPIで読む。
   `pr_fix`の準備は毎回`factory_branch`をfetchしてhard resetする。
   起動した後にスキルが変わって作業項目が準備で失敗すると、保留`marker_missing`になり、次の巡回で外れて起動し直す。

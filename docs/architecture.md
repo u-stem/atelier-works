@@ -705,6 +705,6 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
-- CIが出したメタデータのパッチ(`metadata-patch`)の適用か、Factory自身による`wmill-lock.yaml`のhashの再計算で、PRを直すこと。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

@@ -344,9 +344,12 @@ CIの失敗を直す回(CI回)は、PRのCIが失敗したとき、失敗した�
 | --- | --- |
 | 準備 | 修正ラウンドの上限を確かめない。失敗の行が、いまのheadについて、この作業項目で修正中であることを確かめる。worktreeを用意した後、無視されたファイルを消す |
 | 収集 | レビューもコメントも集めない |
-| 修正 | 失敗した実行のログの抜粋をClaudeに渡す。`Bash`は渡さない |
-| 検証 | 変更を許可リスト方式でも検査する。返信を持つ結果は受け付けない |
-| 完了 | 返信を投稿せず、作業項目のheadと処理済みの位置を更新しない。pushの直前にPRの状態を確かめる |
+| 修正 | 失敗した実行のログの抜粋をClaudeに渡す。`Bash`は渡さない。`metadata`ジョブが落ちていれば、Claudeを起動せず、`wmill-lock.yaml`のhashを再計算する |
+| 検証 | 変更を許可リスト方式でも検査する。返信を持つ結果は受け付けない。変更が再計算と一致する`wmill-lock.yaml`だけのときは、検査コマンドを実行しない |
+| 完了 | 返信を投稿せず、作業項目のheadと処理済みの位置を更新しない。pushの直前にPRの状態を確かめる。再計算の出力は、baseの先端も確かめ直す |
+
+`metadata`ジョブの失敗を再計算で直す流れは、[CIの失敗を直す部品の仕様](ci-fix.md#metadataジョブの失敗を直す経路)に書く。
+再計算で直せないPRは、固定の理由で人の対応待ちになり、`mise run metadata`を案内する通知が出る。
 
 修正ラウンドの上限を確かめないのは、CI回が`fix_round`を前の値のまま写すためである。
 指摘の修正が上限に達したPRでも、CI回を止めない。
@@ -738,7 +741,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
 - CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`、`.script.lock`
-- `wmill-lock.yaml`のhashを再計算する側: `lib/metadata_{hash,precheck,signature}`の`.ts`、`.script.yaml`、`.script.lock`
+- hashの再計算の側: `lib/metadata_{hash,precheck,signature,git_ports}`の`.ts`、`.script.yaml`、`.script.lock`
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。
@@ -747,7 +750,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 `scripts/ci-scope.ts`は、書き換えられると、検査のジョブを黙って飛ばせる。
 `f/factory/lib/metadata_patch_*.ts`は、パッチの取得先とトークンの渡し先、zipの読み方、パッチに載せてよい内容を決める。
 書き換えられると、パッチの受け取り側の検査が緩む。
-hashを再計算する3つのファイルは、hashの算法、再計算してよい条件、`main`の引数の比べ方を決める。
+hashを再計算する4つのファイルは、hashの算法、再計算してよい条件、`main`の引数の比べ方、検査が読むオブジェクトの取り方を決める。
 書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
 `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
 `infra/console_fetcher/`は、配信物を検証して配信する。
