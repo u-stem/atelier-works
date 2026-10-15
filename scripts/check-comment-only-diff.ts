@@ -106,15 +106,12 @@ export function transpiledCode(path: string, text: string): string {
  * テストが無効化を確かめるためのexportである。
  *
  * `macro: false`は型定義に無いBunのオプションで、型定義の`macro`は`MacroMap`である。
- * 型に嘘を書かないよう、`Reflect.set`で足し、入ったことを実行時に確かめる。
+ * 型に嘘を書かないよう、`Reflect.set`で足す。
+ * Bunが`macro: false`を受け付けることは、テストで固定している。
  */
 export function comparisonTranspiler(path: string): Bun.Transpiler {
   const options: Bun.TranspilerOptions = { loader: loaderOf(path) };
   Reflect.set(options, "macro", false);
-  const applied: unknown = Reflect.get(options, "macro");
-  if (applied !== false) {
-    throw new Error("macros could not be disabled for the comparison");
-  }
   return new Bun.Transpiler(options);
 }
 
