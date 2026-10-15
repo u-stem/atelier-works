@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   BlobMismatchError,
   createTreeReader,
+  planMetadataRehash,
 } from "../../f/factory/lib/metadata_precheck.ts";
 import {
   BASE_TIP,
@@ -12,6 +13,7 @@ import {
   HEAD,
   outcome,
   plan,
+  portsOf,
   SCRIPT_YAML,
   type World,
   world,
@@ -180,6 +182,39 @@ describe("planMetadataRehash and the values from the ports", () => {
         w.headEntryEdits.set("docs/readme.md", { size: 1.5 }),
       ),
     ).toBe("invalid_tree");
+  });
+
+  test("refuses a path of the head that holds a replacement character", async () => {
+    expect(
+      await reasonAfter((w) => w.head.set("f/factory/bad�name.ts", FOO)),
+    ).toBe("invalid_tree");
+  });
+
+  test("refuses a path of the base that holds a replacement character", async () => {
+    expect(
+      await reasonAfter((w) => w.base.set("f/factory/bad�name.ts", FOO)),
+    ).toBe("invalid_tree");
+  });
+
+  test("refuses a tree that lists the same path twice", async () => {
+    const w = world();
+    const ports = portsOf(w);
+    const result = await planMetadataRehash(
+      w.input,
+      {
+        ...ports,
+        listTree: async (ref) => {
+          const entries = await ports.listTree(ref);
+          const first = entries[0];
+          return first === undefined || ref !== HEAD
+            ? entries
+            : [...entries, first];
+        },
+      },
+      w.limits,
+      w.selfCheck,
+    );
+    expect(result.ok ? "ok" : result.reason).toBe("invalid_tree");
   });
 
   test("accepts a 64 digit object id", async () => {

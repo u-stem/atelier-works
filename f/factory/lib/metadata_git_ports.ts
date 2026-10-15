@@ -5,7 +5,6 @@
 
 import type { FileRead } from "./metadata_patch_imports.ts";
 import type { PrecheckPorts, TreeEntry } from "./metadata_precheck.ts";
-import { assertBranchName } from "./types.ts";
 import {
   buildGitArgv,
   type CommandRunner,
@@ -218,32 +217,43 @@ export function createGitPrecheckPorts(
 }
 
 /**
- * baseブランチの今の先端を、ローカルのcloneに取り込む。
+ * baseの先端のcommit`sha`を、ローカルのcloneに取り込む。
  * 事前検査は、baseの先端のcommitの木を読むので、そのオブジェクトがローカルに無いと読めない。
+ * すでにあるときは、取り込まない。無いときは、shaを指定して取り込む(`git fetch origin -- <sha>`)。
+ * 取り込み先の指定が無いので、追跡ref(`refs/remotes/origin/<branch>`)も、ブランチも、タグも動かさない。
+ * 追跡refを動かす`git fetch`は`commitAndPush`がリポジトリのロックの中で行うので、
+ * ロックの外から同じrefを更新して、refのロックの衝突で失敗することを避けるためである。
  * 認証はghのcredential helperと環境変数の`GH_TOKEN`で行い、リモートのURLにトークンを入れない。
  * 失敗は例外にする。例外の文に、gitの標準エラーは入れない。
  */
-export async function fetchBranch(opts: {
+export async function fetchCommit(opts: {
   readonly cwd: string;
-  readonly branch: string;
+  readonly sha: string;
   readonly ghToken: string;
   readonly run?: CommandRunner;
   readonly timeoutMs?: number;
+  /** gitの環境変数。省略時は`localGitEnv()`である。`GH_TOKEN`は、この値に足す。 */
+  readonly env?: Readonly<Record<string, string>>;
 }): Promise<void> {
-  assertBranchName(opts.branch);
+  assertCommitSha(opts.sha);
   const run = opts.run ?? runCommand;
+  const env = opts.env ?? localGitEnv();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const present = await run(
+    buildGitArgv(["cat-file", "-e", `${opts.sha}^{commit}`]),
+    { cwd: opts.cwd, env, timeoutMs },
+  );
+  if (!present.timedOut && present.exitCode === 0) return;
   const result = await run(
     buildGitArgv(
-      ["fetch", "--no-recurse-submodules", "origin", "--", opts.branch],
-      { network: true },
+      ["fetch", "--no-recurse-submodules", "origin", "--", opts.sha],
+      {
+        network: true,
+      },
     ),
-    {
-      cwd: opts.cwd,
-      env: { ...localGitEnv(), GH_TOKEN: opts.ghToken },
-      timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    },
+    { cwd: opts.cwd, env: { ...env, GH_TOKEN: opts.ghToken }, timeoutMs },
   );
   if (result.timedOut || result.exitCode !== 0) {
-    throw new Error("git fetch of the base branch failed");
+    throw new Error("git fetch of the base commit failed");
   }
 }

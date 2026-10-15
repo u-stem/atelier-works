@@ -209,7 +209,9 @@ export type PrFixVerifyInput = {
  * 検査コマンドは対象リポジトリのコードで、保護パスのファイルやsymlinkを作れるため。
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
- * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
+ * 検査コマンドを実行するときは、変更の検査を通った後、最初の検査コマンドの直前に1回だけ`announceChecks`を呼ぶ。
+ * 実行しない回(検査コマンドが無い、変更の検査で止めた、再計算の出力を照合できた)は、呼ばない。
+ * 「検査コマンドを未検証コードに実行する」という告知を、実行しない回に残さないためである。
  * workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
  * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
  * 準備の関門と同じく修正のラウンドを記録させず、モデルの失敗に数えないためである。
@@ -258,8 +260,6 @@ export async function runPrFixVerify(
   if (ciRound && input.apply.replies.length > 0) {
     return blocked(CI_ROUND_REPLIES_REASON, input.apply.summary, []);
   }
-  // 検査コマンドがあるときは、準備ステップの記録がそろっていることを確かめた後、最初の検査より前に告知する。
-  if (input.hasCheckCommands) await deps.announceChecks();
   /** `.git`とHEADを照合してから変更を調べ、止める理由を返す。問題が無ければnull。 */
   const inspect = async (): Promise<string | null> => {
     const pointerReason = await recordedGitPointerStopReason(
@@ -290,6 +290,7 @@ export async function runPrFixVerify(
   };
   if (!input.hasCheckCommands) return applyDone;
   if (ciRound && deps.rehashVerified?.() === true) return applyDone;
+  await deps.announceChecks();
 
   /** 検査コマンドを実行する。workerが前提を満たさず実行できなければ、知らせてからその例外を返す。 */
   const runChecks = async (): Promise<

@@ -183,14 +183,25 @@ function guarded<Args extends unknown[], Result>(
   };
 }
 
+/**
+ * 木の項目の形が正しいか。
+ * パスにU+FFFDがあれば断る。パスを文字列に復号したときに、不正なUTF-8が置き換わった跡で、
+ * 別々のパスが同じ文字列になり、表のキーが衝突して項目が消えるためである。
+ */
 function isValidEntry(entry: TreeEntry): boolean {
   return (
     typeof entry.path === "string" &&
+    !entry.path.includes("\uFFFD") &&
     typeof entry.mode === "string" &&
     OBJECT_ID.test(entry.oid) &&
     Number.isSafeInteger(entry.size) &&
     entry.size >= 0
   );
+}
+
+/** 同じパスの項目が2つ以上あるか。表にすると、後の項目が前の項目を隠すためである。 */
+function hasDuplicatePath(entries: readonly TreeEntry[]): boolean {
+  return new Set(entries.map((entry) => entry.path)).size !== entries.length;
 }
 
 function isTracked(path: string): boolean {
@@ -547,7 +558,12 @@ async function plan(
   }
   const baseTree = await ports.listTree(input.baseSha);
   const headTree = await ports.listTree(input.headSha);
-  if (!baseTree.every(isValidEntry) || !headTree.every(isValidEntry)) {
+  if (
+    !baseTree.every(isValidEntry) ||
+    !headTree.every(isValidEntry) ||
+    hasDuplicatePath(baseTree) ||
+    hasDuplicatePath(headTree)
+  ) {
     return fail("invalid_tree");
   }
   const base = new Map(baseTree.map((entry) => [entry.path, entry]));

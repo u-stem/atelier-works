@@ -1265,6 +1265,26 @@ describe("prCiFixHoldInfo for the metadata job", () => {
     expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain("main");
   });
 
+  test("points to the reason recorded in the work item", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "理由は作業項目に記録した",
+    );
+  });
+
+  test("points to the reason recorded in the work item in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "理由は作業項目に記録しました",
+    );
+  });
+
+  test("does not claim that the cause is a dependency change", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).not.toContain("依存");
+  });
+
+  test("is not a temporary reason, so the same head is not started again", () => {
+    expect(prCiFixHoldInfo("metadata_manual").temporary).toBe(false);
+  });
+
   test("notifies Discord because a human must act", () => {
     expect(prCiFixHoldInfo("metadata_manual").discord).toBe(true);
   });

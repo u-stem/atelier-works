@@ -1200,6 +1200,8 @@ metadataジョブの失敗なら、`mise run metadata`を実行して差分を�
 metadataジョブはWindmillの起動やログインでも落ちるので、`mise run metadata`で差分が出ないときは、実行をやり直す。
 Factoryが作るPRで、自動修正が有効なときは、metadataジョブだけの失敗を、Factoryがhashの再計算で直してpushする([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。
 依存や入力のschemaが変わるPR、PRがmainの先端を含まないPRは、再計算では直らず、保留`metadata_manual`で通知が出る。
+metadataジョブがWindmillの起動やログインなどで落ちたときも、再計算しても本文が変わらないので、同じ保留になる。
+保留した理由の種別は、作業項目の理由に残る。一時的な失敗でも、同じheadでは起動し直さないので、人がpushする。
 このときは、必要ならmainを取り込み、人が`mise run metadata`を実行して差分をコミットする。
 Factoryが作るPR(同じリポジトリの`factory/`ブランチ)では、CIが再生成の結果をartifact(`metadata-patch`)に出す([CIのメタデータの検査](setup.md#ciのメタデータの検査))。
 artifactが出ていても、PRには適用されない。
@@ -1309,7 +1311,8 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
   metadataジョブの失敗は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す。依存や入力のschemaが変わるPRは、再計算では直らず、人が直す。
 - 同じPRで動いている直す作業項目が無い。
 - mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
-  日次の予算も残っている。ただし、metadataジョブだけが失敗しているときは、Claudeを起動しないので、予算を問わない。
+  日次の予算も残っている。ただし、metadataジョブが失敗しているときは、再計算に費用がかからないので、予算を問わない。
+  `check`などが同時に落ちているときは、再計算の後にClaudeを起動する前で、予算を確かめる。
 - Factoryのリポジトリの`factory_branch`にあるfactory-fixスキルが、CI回の節(マーカー`ci-fix-skill:v1`)を持つ。ファイルはGitHubのAPIで読む。
   `pr_fix`の準備は毎回`factory_branch`をfetchしてhard resetする。
   起動した後にスキルが変わって作業項目が準備で失敗すると、保留`marker_missing`になり、次の巡回で外れて起動し直す。

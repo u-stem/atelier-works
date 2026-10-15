@@ -266,6 +266,34 @@ describe("decideFixClaim", () => {
     expect(events.includes("budget")).toBe(false);
   });
 
+  test("claims a mixed failure even when the daily budget is used up", async () => {
+    const { decision } = decide({
+      classification: "fixable_with_metadata",
+      budgetExceeded: true,
+    });
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("does not read the budget for a mixed failure", async () => {
+    const { decision, events } = decide({
+      classification: "fixable_with_metadata",
+    });
+    await decision;
+    expect(events.includes("budget")).toBe(false);
+  });
+
+  test("holds a mixed failure at the round limit", async () => {
+    const { decision } = decide(
+      { classification: "fixable_with_metadata", rounds: 2 },
+      {},
+      2,
+    );
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "rounds_exhausted",
+    });
+  });
+
   test("holds a metadata-only failure when the main branch is red", async () => {
     const { decision } = decide({
       classification: "metadata_only",
@@ -487,12 +515,12 @@ describe("classifyHeadFailure", () => {
     expect(verdict).toBe("metadata_only");
   });
 
-  test("reports a fixable failure for a metadata job next to a check job", async () => {
+  test("reports a fixable failure with a metadata failure for a metadata job next to a check job", async () => {
     const verdict = await classifyHeadFailure([run()], async () => [
       job("metadata", "failure"),
       job("check", "failure"),
     ]);
-    expect(verdict).toBe("fixable");
+    expect(verdict).toBe("fixable_with_metadata");
   });
 
   test("reports an unfixable job for a failed job without a name", async () => {

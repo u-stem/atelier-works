@@ -207,7 +207,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | 理由 | 種類 | 意味 |
 | --- | --- | --- |
 | `unfixable_job` | 決定的 | 失敗したジョブに名前が無く、直せる種類を決められない |
-| `metadata_manual` | 決定的 | `metadata`ジョブの失敗を、hashの再計算では直せない。依存や入力の`schema`が変わるPR、mainの先端を含まないPRなど |
+| `metadata_manual` | 決定的 | `metadata`ジョブの失敗を、再計算では直せない。事前検査が通らない(依存や入力の`schema`が変わる、mainの先端を含まないなど)か、再計算しても本文が変わらない。種別は作業項目の理由に残る |
 | `other_conclusion` | 決定的 | 失敗ではなく、取り消しや期限切れなどで終わった |
 | `log_unavailable` | 決定的 | 失敗のログを読めない |
 | `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まった |
@@ -287,7 +287,7 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 | --- | --- |
 | スキルにCI回のマーカーが無い | `marker_missing` |
 | ジョブの名前が無く、直せる種類を決められない | `unfixable_job` |
-| `metadata`ジョブの失敗を、hashの再計算では直せない | `metadata_manual` |
+| `metadata`ジョブの失敗を、再計算では直せない | `metadata_manual` |
 | ジョブが失敗でなく、ほかの結論で終わった | `other_conclusion` |
 | トークンがログを読めない、ログが取得できない | `log_unavailable` |
 | 日次予算の超過 | `budget_exceeded` |
@@ -338,7 +338,8 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
    ファイルが無いときも、マーカーが無いものとして扱う。スキルが入れば、毎巡回の見直しで外れて起動できる。
 7. 失敗したジョブを分類する。名前が無く種類を決められないなら`unfixable_job`、失敗でない結論なら`other_conclusion`で保留する。失敗したジョブが無ければ、何もしない。
 8. 日次の予算を使い切っていれば`budget_exceeded`で保留する。
-   `metadata`だけが失敗しているときは、Claudeを起動せずhashの再計算で直すので、予算では保留しない。
+   `metadata`が失敗しているときは、`check`などが同時に落ちていても、予算では保留しない。
+   再計算に費用はかからず、Claudeを起動する修正のステップが、再計算の後に予算を確かめるためである。
    mainのCIが赤ければ`main_ci_failed`で保留する。
    直近の`passed`より後に起動した数が`pr_ci_fix_max_rounds`に達していれば、`rounds_exhausted`で保留する。
    数えるのは、ジョブIDが記録された作業項目である。`failed`で`flow_job_id`が空の作業項目は数えない。

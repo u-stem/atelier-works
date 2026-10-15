@@ -17,9 +17,7 @@ import {
 } from "../lib/ci_fix_round.ts";
 import {
   githubRehashPlanner,
-  METADATA_REHASH_COMMIT_BODY,
-  METADATA_REHASH_COMMIT_SUBJECT,
-  METADATA_REHASH_SUMMARY,
+  metadataApplyResult,
   rehashMetadataLock,
   runMetadataRound,
   writeRootWmillLock,
@@ -331,16 +329,7 @@ async function applyMetadataRound(
         writeLock: (text) => writeRootWmillLock(worktreeDir, text),
       }),
   });
-  if (round === null) return null;
-  if (round.kind === "manual") return blockedResult(round.reason);
-  return {
-    outcome: "done",
-    reason: null,
-    summary: METADATA_REHASH_SUMMARY,
-    replies: [],
-    commit_subject: METADATA_REHASH_COMMIT_SUBJECT,
-    commit_body: METADATA_REHASH_COMMIT_BODY,
-  };
+  return round === null ? null : metadataApplyResult(round);
 }
 
 type CiRoundApplyInput = {

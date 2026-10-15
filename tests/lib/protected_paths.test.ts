@@ -576,6 +576,9 @@ describe("metadata patch manifest files", () => {
     "f/factory/lib/metadata_git_ports.ts",
     "f/factory/lib/metadata_git_ports.script.yaml",
     "f/factory/lib/metadata_git_ports.script.lock",
+    "f/factory/lib/ci_metadata_rehash.ts",
+    "f/factory/lib/ci_metadata_rehash.script.yaml",
+    "f/factory/lib/ci_metadata_rehash.script.lock",
   ];
   const NEAR_MISSES = [
     "f/factory/lib/metadata_patch_manifest.test.ts",
@@ -586,6 +589,9 @@ describe("metadata patch manifest files", () => {
     "f/factory/lib/metadata_patch_verify.test.ts",
     "tests/lib/metadata_patch_verify.test.ts",
     "f/factory/lib/metadata_hash.test.ts",
+    "f/factory/lib/ci_metadata_rehash.test.ts",
+    "f/factory/lib/ci_metadata_rehash.ts.orig",
+    "tests/lib/ci_metadata_rehash.test.ts",
     "f/factory/lib/metadata_hash.ts.orig",
     "tests/lib/metadata_hash.test.ts",
     "tests/lib/metadata_precheck.test.ts",

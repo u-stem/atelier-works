@@ -481,7 +481,10 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * 決定的な理由は、同じheadでは起動し直さない。headが進んで新しい行になるまで残る。
  * - `unfixable_job`: 失敗したジョブに名前が無く、直せる種類を決められない。
  * - `metadata_manual`: `metadata`ジョブの失敗を、hashの再計算では直せない。
- *   依存や入力の`schema`が変わるPR、PRがmainの先端を含まない場合などで、人が`mise run metadata`を実行して直す。
+ *   再計算の事前検査が通らない場合(依存や入力の`schema`が変わるPR、PRがmainの先端を含まない場合など)と、
+ *   再計算しても本文が変わらない場合(`metadata`ジョブがhash以外の原因で落ちている)である。
+ *   理由の種別は、作業項目の理由に残る。
+ *   読み取りの失敗(`port_error`など)のような一時的な理由でも、同じheadでは起動し直さない。人がpushして新しいheadにする。
  * - `other_conclusion`: 失敗ではなく、取り消しや期限切れなどで終わった。
  * - `log_unavailable`: 失敗のログを読めない。
  * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まった。
@@ -554,9 +557,9 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: false,
     discord: true,
     nextAction:
-      "metadataジョブの失敗を、hashの再計算では直せない。依存や入力のschemaが変わるときや、PRがmainの先端を含まないときである。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushする",
+      "metadataジョブの失敗を、再計算では直せない。再計算の事前検査が通らなかったか、再計算しても本文が変わらない。理由は作業項目に記録した。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushする",
     stopAction:
-      "metadataジョブの失敗を、hashの再計算では直せません。依存や入力のschemaが変わるときや、PRがmainの先端を含まないときです。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushしてください",
+      "metadataジョブの失敗を、再計算では直せません。再計算の事前検査が通らなかったか、再計算しても本文が変わりません。理由は作業項目に記録しました。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushしてください",
   },
   other_conclusion: {
     temporary: false,

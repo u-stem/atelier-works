@@ -11,11 +11,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CiFailureRead } from "../../f/factory/lib/ci_fix_round.ts";
 import {
+  bytesEqual,
   CI_ROUND_REHASH_STALE_REASON,
   confirmRehash,
+  LockNotWritableError,
   METADATA_REHASH_COMMIT_BODY,
   METADATA_REHASH_COMMIT_SUBJECT,
   METADATA_REHASH_SUMMARY,
+  metadataApplyResult,
   metadataManualReason,
   REHASH_CONFIRM_ATTEMPTS,
   type RehashPlanner,
@@ -27,8 +30,10 @@ import {
   runMetadataRound,
   writeRootWmillLock,
 } from "../../f/factory/lib/ci_metadata_rehash.ts";
+import type { BytesRunner } from "../../f/factory/lib/metadata_git_ports.ts";
 import type { PlanResult } from "../../f/factory/lib/metadata_precheck.ts";
-import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
+
+const ENC = new TextEncoder();
 
 const OK_PLAN: PlanResult = {
   ok: true,
@@ -153,6 +158,89 @@ describe("runMetadataRound", () => {
   });
 });
 
+describe("runMetadataRound when the lock is already up to date", () => {
+  const SAME: PlanResult = { ok: true, newLock: "same\n", changedKeys: [] };
+  const CHECK_JOB = {
+    id: 1,
+    runId: 2,
+    headSha: "a".repeat(40),
+    name: "check",
+    status: "completed",
+    conclusion: "failure",
+    steps: [],
+  };
+
+  test("hands a metadata-only failure to a human with a fixed reason", async () => {
+    const { deps: d } = deps(fixable(), SAME);
+    expect(await runMetadataRound(d)).toEqual({
+      kind: "manual",
+      reason: metadataManualReason("lock_up_to_date"),
+    });
+  });
+
+  test("does not write a lock that would not change", async () => {
+    const { deps: d, probe } = deps(fixable(), SAME);
+    await runMetadataRound(d);
+    expect(probe.writes).toEqual([]);
+  });
+
+  test("goes on with the other failed jobs when a check job also failed", async () => {
+    const { deps: d } = deps(fixable({ jobs: [CHECK_JOB] }), SAME);
+    expect(await runMetadataRound(d)).toBeNull();
+  });
+
+  test("does not write a lock that would not change when a check job also failed", async () => {
+    const { deps: d, probe } = deps(fixable({ jobs: [CHECK_JOB] }), SAME);
+    await runMetadataRound(d);
+    expect(probe.writes).toEqual([]);
+  });
+
+  test("states the reason without a path", () => {
+    expect(metadataManualReason("lock_up_to_date")).toBe(
+      "ci round: the lock cannot be recomputed automatically (lock_up_to_date)",
+    );
+  });
+
+  test("hands the lock to a human when it cannot be written", async () => {
+    const result = await runMetadataRound({
+      readFailure: async () => fixable(),
+      rehash: () =>
+        rehashMetadataLock({
+          plan: async () => OK_PLAN,
+          writeLock: async () => {
+            throw new LockNotWritableError();
+          },
+        }),
+    });
+    expect(result).toEqual({
+      kind: "manual",
+      reason: metadataManualReason("lock_not_writable"),
+    });
+  });
+
+  test("lets another error of the write go up for a retry", async () => {
+    await expect(
+      rehashMetadataLock({
+        plan: async () => OK_PLAN,
+        writeLock: async () => {
+          throw new Error("disk hiccup");
+        },
+      }),
+    ).rejects.toThrow("disk hiccup");
+  });
+
+  test("lets an error of the plan go up for a retry", async () => {
+    await expect(
+      rehashMetadataLock({
+        plan: async () => {
+          throw new Error("fetch failed");
+        },
+        writeLock: async () => {},
+      }),
+    ).rejects.toThrow("fetch failed");
+  });
+});
+
 describe("metadataManualReason", () => {
   test("starts with the prefix of a CI round", () => {
     expect(metadataManualReason("head_lacks_base")).toBe(
@@ -180,6 +268,35 @@ describe("commit text of a recomputation", () => {
 
   test("has a summary that is not empty", () => {
     expect(METADATA_REHASH_SUMMARY.length).toBeGreaterThan(0);
+  });
+});
+
+describe("metadataApplyResult", () => {
+  test("returns done with the fixed commit text and no reply for a rewritten lock", () => {
+    expect(metadataApplyResult({ kind: "rewritten" })).toEqual({
+      outcome: "done",
+      reason: null,
+      summary: METADATA_REHASH_SUMMARY,
+      replies: [],
+      commit_subject: METADATA_REHASH_COMMIT_SUBJECT,
+      commit_body: METADATA_REHASH_COMMIT_BODY,
+    });
+  });
+
+  test("returns blocked with the reason and no commit text for a lock that cannot be recomputed", () => {
+    expect(
+      metadataApplyResult({
+        kind: "manual",
+        reason: metadataManualReason("dependency_changed"),
+      }),
+    ).toEqual({
+      outcome: "blocked",
+      reason: metadataManualReason("dependency_changed"),
+      summary: "",
+      replies: [],
+      commit_subject: null,
+      commit_body: null,
+    });
   });
 });
 
@@ -215,6 +332,37 @@ describe("writeRootWmillLock", () => {
     writeFileSync(join(dir, "target.txt"), "keep\n");
     symlinkSync("target.txt", join(dir, "wmill-lock.yaml"));
     await expect(writeRootWmillLock(dir, "new\n")).rejects.toThrow();
+  });
+
+  test("reports a symlink as a lock that cannot be written", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "target.txt"), "keep\n");
+    symlinkSync("target.txt", join(dir, "wmill-lock.yaml"));
+    await expect(writeRootWmillLock(dir, "new\n")).rejects.toBeInstanceOf(
+      LockNotWritableError,
+    );
+  });
+
+  test("reports a directory as a lock that cannot be written", async () => {
+    const dir = worktree();
+    mkdirSync(join(dir, "wmill-lock.yaml"));
+    await expect(writeRootWmillLock(dir, "new\n")).rejects.toBeInstanceOf(
+      LockNotWritableError,
+    );
+  });
+
+  test("reports a missing file as a lock that cannot be written", async () => {
+    await expect(
+      writeRootWmillLock(worktree(), "new\n"),
+    ).rejects.toBeInstanceOf(LockNotWritableError);
+  });
+
+  test("writes every byte of a long body", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "wmill-lock.yaml"), "x\n");
+    const body = `${"日本語 ".repeat(50_000)}\n`;
+    await writeRootWmillLock(dir, body);
+    expect(readFileSync(join(dir, "wmill-lock.yaml"), "utf-8")).toBe(body);
   });
 
   test("leaves the target of a symlink untouched", async () => {
@@ -262,7 +410,12 @@ describe("confirmRehash", () => {
             over.plan?.(base) ?? { ok: true, newLock: OK_LOCK, changedKeys: [] }
           );
         },
-        readLock: async () => (over.lock === undefined ? OK_LOCK : over.lock),
+        readLock: async () =>
+          over.lock === undefined
+            ? ENC.encode(OK_LOCK)
+            : over.lock === null
+              ? null
+              : ENC.encode(over.lock),
       },
     };
   }
@@ -272,7 +425,7 @@ describe("confirmRehash", () => {
     expect(await confirmRehash(deps)).toEqual({
       ok: true,
       baseSha: "b".repeat(40),
-      lockText: OK_LOCK,
+      lockBytes: ENC.encode(OK_LOCK),
     });
   });
 
@@ -291,6 +444,24 @@ describe("confirmRehash", () => {
   test("refuses when the lock cannot be read", async () => {
     const { deps } = io({ lock: null });
     expect((await confirmRehash(deps)).ok).toBe(false);
+  });
+
+  test("refuses a lock that differs only by a leading byte order mark", async () => {
+    const { deps } = io();
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf, ...ENC.encode(OK_LOCK)]);
+    expect(
+      (await confirmRehash({ ...deps, readLock: async () => bom })).ok,
+    ).toBe(false);
+  });
+
+  test("refuses a lock whose bytes are not the UTF-8 of the recomputation", async () => {
+    const { deps } = io({
+      plan: () => ({ ok: true, newLock: "\uFFFD\n", changedKeys: [] }),
+    });
+    const invalid = new Uint8Array([0xff, 0x0a]);
+    expect(
+      (await confirmRehash({ ...deps, readLock: async () => invalid })).ok,
+    ).toBe(false);
   });
 
   test("plans again when the base tip moved while it planned", async () => {
@@ -321,7 +492,7 @@ describe("confirmRehash", () => {
         newLock: OK_LOCK,
         changedKeys: [],
       }),
-      readLock: async () => OK_LOCK,
+      readLock: async () => ENC.encode(OK_LOCK),
     };
     expect((await confirmRehash(deps)).ok).toBe(false);
   });
@@ -338,7 +509,7 @@ describe("confirmRehash", () => {
         plans += 1;
         return { ok: true, newLock: OK_LOCK, changedKeys: [] };
       },
-      readLock: async () => OK_LOCK,
+      readLock: async () => ENC.encode(OK_LOCK),
     });
     expect(plans).toBe(REHASH_CONFIRM_ATTEMPTS);
   });
@@ -348,7 +519,7 @@ describe("rehashPushStopReason", () => {
   const CONFIRMED = {
     ok: true as const,
     baseSha: "1".repeat(40),
-    lockText: "new lock\n",
+    lockBytes: ENC.encode("new lock\n"),
   };
 
   function planner(
@@ -432,8 +603,8 @@ describe("rehashPlanner", () => {
         calls.push(`sha:${branch}`);
         return "c".repeat(40);
       },
-      fetchBranch: async (branch) => {
-        calls.push(`fetch:${branch}`);
+      fetchCommit: async (sha) => {
+        calls.push(`fetch:${sha.slice(0, 1)}`);
       },
       plan: async (base) => {
         calls.push(`plan:${base.slice(0, 1)}`);
@@ -451,7 +622,7 @@ describe("rehashPlanner", () => {
   test("fetches the base branch before it plans", async () => {
     const { subject, calls } = planner();
     await subject.planWith("c".repeat(40));
-    expect(calls).toEqual(["ref", "fetch:main", "plan:c"]);
+    expect(calls).toEqual(["fetch:c", "plan:c"]);
   });
 
   test("reads the name of the base branch once", async () => {
@@ -473,10 +644,29 @@ describe("readRootWmillLock", () => {
     return root;
   }
 
-  test("reads the text of a regular file", async () => {
+  test("reads the bytes of a regular file", async () => {
     const dir = worktree();
     writeFileSync(join(dir, "wmill-lock.yaml"), "日本語\n");
-    expect(await readRootWmillLock(dir)).toBe("日本語\n");
+    expect(await readRootWmillLock(dir)).toEqual(
+      new Uint8Array(Buffer.from("日本語\n", "utf-8")),
+    );
+  });
+
+  test("keeps a leading byte order mark", async () => {
+    const dir = worktree();
+    writeFileSync(
+      join(dir, "wmill-lock.yaml"),
+      new Uint8Array([0xef, 0xbb, 0xbf, 0x61]),
+    );
+    expect(await readRootWmillLock(dir)).toEqual(
+      new Uint8Array([0xef, 0xbb, 0xbf, 0x61]),
+    );
+  });
+
+  test("keeps bytes that are not valid UTF-8", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "wmill-lock.yaml"), new Uint8Array([0xff, 0x0a]));
+    expect(await readRootWmillLock(dir)).toEqual(new Uint8Array([0xff, 0x0a]));
   });
 
   test("does not follow a symlink", async () => {
@@ -491,25 +681,41 @@ describe("readRootWmillLock", () => {
   });
 });
 
+describe("bytesEqual", () => {
+  test("is true for the same bytes", () => {
+    expect(bytesEqual(new Uint8Array([1, 2]), new Uint8Array([1, 2]))).toBe(
+      true,
+    );
+  });
+
+  test("is false for different bytes", () => {
+    expect(bytesEqual(new Uint8Array([1, 2]), new Uint8Array([1, 3]))).toBe(
+      false,
+    );
+  });
+
+  test("is false for different lengths", () => {
+    expect(bytesEqual(new Uint8Array([1]), new Uint8Array([1, 2]))).toBe(false);
+  });
+});
+
 describe("readStagedRootLock", () => {
   function runner(
     over: Partial<{
-      stdout: string;
+      stdout: Uint8Array;
       exitCode: number;
-      outputAbandoned: boolean;
+      timedOut: boolean;
     }> = {},
-  ): { run: CommandRunner; seen: string[][] } {
+  ): { run: BytesRunner; seen: string[][] } {
     const seen: string[][] = [];
     return {
       seen,
       run: async (argv) => {
         seen.push([...argv]);
         return {
-          stdout: over.stdout ?? "text\n",
-          stderr: "",
+          stdout: over.stdout ?? ENC.encode("text\n"),
           exitCode: over.exitCode ?? 0,
-          timedOut: false,
-          ...(over.outputAbandoned === true ? { outputAbandoned: true } : {}),
+          timedOut: over.timedOut ?? false,
         };
       },
     };
@@ -525,8 +731,24 @@ describe("readStagedRootLock", () => {
     ]);
   });
 
-  test("returns the text of the blob", async () => {
-    expect(await readStagedRootLock(runner().run, "/w")).toBe("text\n");
+  test("returns the bytes of the blob", async () => {
+    expect(await readStagedRootLock(runner().run, "/w")).toEqual(
+      ENC.encode("text\n"),
+    );
+  });
+
+  test("keeps a leading byte order mark", async () => {
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf, 0x61]);
+    expect(await readStagedRootLock(runner({ stdout: bom }).run, "/w")).toEqual(
+      bom,
+    );
+  });
+
+  test("keeps bytes that are not valid UTF-8", async () => {
+    const bad = new Uint8Array([0xff, 0xfe, 0x0a]);
+    expect(await readStagedRootLock(runner({ stdout: bad }).run, "/w")).toEqual(
+      bad,
+    );
   });
 
   test("returns null when the command fails", async () => {
@@ -535,14 +757,22 @@ describe("readStagedRootLock", () => {
     ).toBeNull();
   });
 
-  test("returns null when the output was abandoned", async () => {
+  test("returns null when the command timed out", async () => {
     expect(
-      await readStagedRootLock(runner({ outputAbandoned: true }).run, "/w"),
+      await readStagedRootLock(runner({ timedOut: true }).run, "/w"),
     ).toBeNull();
   });
 });
 
 describe("rehashMetadataLock", () => {
+  test("reports a plan that changes no key as up to date", async () => {
+    const outcome = await rehashMetadataLock({
+      plan: async () => ({ ok: true, newLock: "x\n", changedKeys: [] }),
+      writeLock: async () => {},
+    });
+    expect(outcome).toEqual({ kind: "up_to_date" });
+  });
+
   test("returns the reason of the plan for a failure", async () => {
     const outcome = await rehashMetadataLock({
       plan: async () => ({ ok: false, reason: "base_stale" }),

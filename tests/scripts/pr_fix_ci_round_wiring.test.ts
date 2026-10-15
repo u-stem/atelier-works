@@ -90,6 +90,104 @@ describe("the finish step of a CI round", () => {
   });
 });
 
+describe("the fix step of a recomputed lock", () => {
+  test("tries the recomputation before the daily budget is checked", async () => {
+    const text = await source("pr_fix_apply.ts");
+    expect(
+      text.indexOf("await applyMetadataRound({") <
+        text.indexOf("dailyBudgetStatus(config)"),
+    ).toBe(true);
+  });
+
+  test("tries the recomputation only in a CI round", async () => {
+    const text = await source("pr_fix_apply.ts");
+    expect(
+      count(
+        text,
+        "if (ci_check_id !== null) {\n    const metadataResult = await applyMetadataRound({",
+      ),
+    ).toBe(1);
+  });
+
+  test("calls the recomputation in one place", async () => {
+    const text = await source("pr_fix_apply.ts");
+    expect(count(text, "await applyMetadataRound(")).toBe(1);
+  });
+
+  test("turns the result of the round into the result of the step through one function", async () => {
+    const text = await source("pr_fix_apply.ts");
+    expect(count(text, "metadataApplyResult(round)")).toBe(1);
+  });
+});
+
+describe("the finish step of a recomputed lock", () => {
+  test("passes the confirmed recomputation to the check of the staged changes", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      count(
+        text,
+        "rehashCheck: async () => {\n                const confirmed = rehash.confirmed;",
+      ),
+    ).toBe(1);
+  });
+
+  test("compares the staged lock with the confirmed one inside the check", async () => {
+    const text = await source("pr_fix_finish.ts");
+    const start = text.indexOf("rehashCheck: async () => {");
+    const body = text.slice(start, start + 600);
+    expect(
+      body.includes("readStagedRootLock(") &&
+        body.includes("bytesEqual(staged, confirmed.lockBytes)"),
+    ).toBe(true);
+  });
+
+  test("reads the staged lock as bytes", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      count(text, "readStagedRootLock(\n                  runCommandBytes,"),
+    ).toBe(1);
+  });
+
+  test("checks the base tip again before the commit and the push", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      text.indexOf("await rehashPushStopReason(") <
+        text.indexOf("commitAndPush({"),
+    ).toBe(true);
+  });
+
+  test("builds the planner only in a CI round", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      text.indexOf(
+        "if (ciRound) {\n    const planner = githubRehashPlanner({",
+      ) > 0,
+    ).toBe(true);
+  });
+
+  test("builds the planner nowhere else", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(count(text, "githubRehashPlanner({")).toBe(1);
+  });
+});
+
+describe("the verify step of a recomputed lock", () => {
+  test("confirms the lock against an independent recomputation", async () => {
+    const text = await source("pr_fix_verify.ts");
+    expect(count(text, "rehashCheck: async () => {")).toBe(1);
+  });
+
+  test("resets the confirmation at every inspection", async () => {
+    const text = await source("pr_fix_verify.ts");
+    expect(
+      count(
+        text,
+        "inspectChanges: async () => {\n        rehashVerified = false;",
+      ),
+    ).toBe(1);
+  });
+});
+
 describe("the review generate step", () => {
   test("looks up the CI round diff through the helper that falls back to false", async () => {
     const text = await source("pr_review_generate.ts");

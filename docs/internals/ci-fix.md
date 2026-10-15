@@ -9,6 +9,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/ci_fix_round.ts`
 - `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
 - `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、`lib/metadata_git_ports.ts`
+- `lib/ci_metadata_rehash.ts`
 
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
@@ -165,34 +166,65 @@ commitする変更が無いときの理由は、返信を投稿したとは書�
 
 1. `readCiFailure`で、PRが開いていて、headが失敗のheadのままであることと、失敗の分類を確かめる。
    `metadata`が落ちていなければ、通常の流れに進む。
-2. GitHubのAPIでPRのbaseブランチ名とその今の先端を読み、先端をローカルに取り込む(`fetchBranch`)。
+2. GitHubのAPIでPRのbaseブランチ名とその今の先端のshaを読み、そのcommitをローカルに取り込む(`fetchCommit`)。
    事前検査は、baseの先端の木を読むためである。
-3. `planMetadataRehash`が、worktreeのgitのオブジェクトからhashを再計算する。
-   通れば、worktreeの根の`wmill-lock.yaml`を書き換える(`writeRootWmillLock`)。
+   取り込みはshaを指定し、取り込み先を指定しない。
+   ローカルに無いときだけ取り込み、追跡ref(`refs/remotes/origin/<base>`)も、ブランチも、タグも動かさない。
+   `commitAndPush`は、追跡refを動かす取り込みをリポジトリのロックの中で行う。
+   ロックの外から同じrefを更新すると、refのロックが衝突して失敗しうるためである。
+3. `planMetadataRehash`が、worktreeのオブジェクトからhashを再計算する。
+   通って、本文が変わるときは、worktreeの根の`wmill-lock.yaml`を書き換える(`writeRootWmillLock`)。
    `O_NOFOLLOW`で開き、通常のファイルでなければ書かない。ファイルは作らない。書き先はこの1つだけである。
-4. 結果は、固定の件名と本文(`METADATA_REHASH_COMMIT_SUBJECT`と`METADATA_REHASH_COMMIT_BODY`)を持つ`done`で返す。返信は空である。
-5. 事前検査が通らないとき(依存やschemaが変わるPR、mainの取り込み待ちなど)は、`blocked`で返す。
+   書いた後に、ファイルの大きさが本文のバイト数と同じことを確かめる。
+4. 書き換えたときは、固定の件名と本文(`METADATA_REHASH_COMMIT_SUBJECT`と`METADATA_REHASH_COMMIT_BODY`)を持つ`done`で返す。
+   返信は空である。
+5. 次のときは、`blocked`で返す。
+   - 事前検査が通らない。依存やschemaが変わるPR、mainを取り込んでいないPRなどである。
+   - 再計算しても本文が変わらず、`metadata`だけが落ちている(`lock_up_to_date`)。
+     `metadata`ジョブが、Windmillの起動やログインなど、hash以外の原因で落ちているので、再計算では直らない。
+   - 根の`wmill-lock.yaml`が、symlink、通常のファイルでないもの、無いファイル、書き込めないファイルである(`lock_not_writable`)。
+
    理由は`ci round: the lock cannot be recomputed automatically (<種別>)`である。
-   種別は事前検査の固定の語彙で、PRの作者が決めるパスと補足は入れない。
+   種別は固定の語彙で、PRの作者が決めるパスと補足は入れない。
+   種別は作業項目の理由に残り、再計算が直せるPRの割合を、種別ごとに数えて測れる。
+6. 再計算しても本文が変わらず、`check`などほかのジョブも落ちているときは、書き換えずに通常の流れに進む。
+   Claudeがそのジョブを直す。この流れは、Claudeを起動する前に日次予算を確かめる。
 
 `check`などの直せる失敗と同時に落ちたときも、先に再計算する。
 hashの食い違いは、`check`をClaudeが直しても残るためである。
 再計算のcommitをpushした後のCIの再実行で、残りの失敗が分かる。
 再計算できないときは、`check`だけを直しても`metadata`が落ち続けるので、Claudeを起動せずに止める。
 
-検証のステップと完了のステップは、flowの定義を変えず、前のステップの出力を信用しない。
-修正のステップが再計算したかを、中間の結果で受け取らず、worktreeの変更から決める。
-次の2つを満たすときに限り、この変更を許す(`confirmRehash`)。
+起動の判断(`decideFixClaim`)は、`metadata`が落ちているときは、`check`などが同時に落ちていても、日次予算で保留しない。
+再計算に費用はかからず、予算はClaudeを起動する修正のステップが、再計算の後に確かめるためである。
+再計算の回も、`pr_ci_fix_max_rounds`が数える回に含まれる。
+Claudeが`f/`のscriptを直すと、その後に`metadata`が落ちて再計算の回が要るので、Claudeに使える回数が減る。
+
+一時的な失敗の扱いは、次のとおりである。
+
+- 読み取り、取り込み、GitHubのAPI、書き込みの`open`以外の失敗は、例外のまま投げる。
+  修正のステップはflowが2回まで再試行し、再計算は何度行っても同じ結果になる。
+- 再試行しても直らない種類(`lock_not_writable`)は、例外にせず、固定の理由の`blocked`にする。
+- 事前検査の`port_error`、`ancestry_unknown`、`internal_error`、`invalid_ref`のような一時的な理由も、保留`metadata_manual`にする。
+  この保留は、同じheadでは起動し直さない。人がpushして新しいheadにする。
+- 検証と完了のステップの照合は、例外を投げたとき、ステップが失敗し、行は回復が戻す。
+
+検証のステップと完了のステップは、前のステップの結果を受け取る欄を足さず、worktreeの変更から再計算の出力かを決める。
+前のステップの出力を信用しないためである。
+次の2つをどちらも満たすときに限り、この変更を許す(`confirmRehash`)。
 
 - 変更が、根の`wmill-lock.yaml`1件だけである。モードは`100644`で、状態は`modified`である。
-- その本文が、PRのheadの木から独立して再計算した結果と、バイト列まで同じである。
+- その本文が、PRのheadの木から独立して再計算した結果と、バイト列まで同じである。比べるのは、文字列ではなくバイト列である。
+  文字列に復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
 
 この例外は、許可リスト方式の検査`checkCiFixChanges`ではなく、呼び出し側の`inspectCiFixChanges`に置く。
-1つでも外れれば、保護パスの違反として拒否する。
+どちらか一方でも外れたときは、例外を使わず、保護パスの違反として拒否する。
 
 - 検証のステップは、この形が確かめられたとき、検査コマンドを実行しない。
   hashだけを書き換えた変更は、検査コマンドが確かめるコードを含まず、対象リポジトリのコードを実行する危険だけが残るためである。
-- 完了のステップは、リポジトリのロックの外で同じ照合をする。ロックの中では、ステージした本文が照合済みの本文と同じかを確かめる。
+  実行しないので、検査コマンドの告知(`unsandboxed_check_commands`)も出さない。
+  告知は、最初の検査コマンドの直前に、1回だけ出す。
+- 完了のステップは、リポジトリのロックの外で同じ照合をする。ロックの中では、ステージしたバイト列が照合済みのバイト列と同じかを確かめる。
   秘密値の検査、ツリーの照合、保護パスの検査、PRの状態の確認、オーナーの数値IDの照合、headの確認は、通常どおり通す。
 - commitの親は、`commitAndPush`が`head_sha`に固定する。
   ローカルのHEADが`head_sha`でなければcommitせず、pushは強制しないので、ブランチの先端が動いていればpushは拒否される。
@@ -621,21 +653,22 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
 PR本文やコメントに載せるときは、コードスパンで囲み、メンションとリンクを無効にする。
 置き換え済みなので、補足は囲んだコードスパンを内側から閉じられない。
 
-### 配線で決めたこと
+### 再計算の配線の方針
 
 hashの再計算をCI回のflowへ配線する際の決定は、次のとおりである。
 流れは[metadataジョブの失敗を直す経路](#metadataジョブの失敗を直す経路)に書く。
 
 - artifactを経由しない再計算を、artifactの適用の代わりに、先に試す。
-  `metadata`ジョブだけが落ちたCI回は、修正のステップがまず再計算を試し、Claudeを起動しない。
+  `metadata`ジョブが落ちたCI回は、修正のステップがまず再計算を試す。
   再計算は`schema`を書かないので、`main`の引数が変わるPRは、事前検査が人の手に回す。
 - ポートは、ローカルのcloneで実装した(`metadata_git_ports.ts`)。
   木の一覧は`git ls-tree`、ファイルは`git cat-file blob`、祖先の判定は`git merge-base --is-ancestor`である。
   GitHubのREST APIでは読まない。ファイルごとの読み取りでPATのrate limitを使い切らないためである。
 - ポートは、gitを引数の配列で呼び、シェルを通さない。
   blobは、木の項目の`oid`で読む。PRの作者が決められるパスを、gitの引数にもシェルの文字列にも使わない。
-- baseの先端は、GitHubのAPIでbaseブランチの先端のshaを読み、ローカルに取り込んで使う。
+- baseの先端は、GitHubのAPIでbaseブランチの先端のshaを読んで使う。
   PRのAPIの`base.sha`は使わない。baseブランチの今の先端とは限らないためである。
+  そのcommitがローカルに無いときだけ、shaを指定して取り込む。追跡refは動かさない。
 - 再計算が書き込むcommitの親は、`head_sha`に固定する。
   `commitAndPush`が、ローカルのHEADが`head_sha`であることと、リモートのブランチの先端が`head_sha`であることを確かめる。
   pushは強制しないので、先端が動いていればpushは拒否される。`--force*`は使わない。
@@ -643,15 +676,16 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
 - baseの先端が動く競合は、照合の中と、pushの直前の2か所で確かめる。
   動いていれば、pushせず、新しい先端で確かめ直す。取り直しは3回までで、本文が変わるときは回を止める。
 - `main`が進んでPRのheadがbaseの先端を含まなくなる(`head_lacks_base`)ときは、人の手に回す。
-  待つ扱いにしない。mainを取り込むのは人のcommitなので、Factoryのcommitだけを自動で直すという前提から外れ、待っても再計算は始まらない。
+  待つ扱いにしない。mainを取り込むのは人のcommitで、Factoryのcommitだけを自動で直す前提から外れ、待っても再計算は始まらない。
   通知は`metadata_manual`で、必要ならmainを取り込んで`mise run metadata`を実行する案内になる。
 - 再計算と`main`の取り込みを繰り返さないので、その回数の上限は無い。
-  再計算の回は、`pr_ci_fix_max_rounds`が数える回に含める。決定的な回だけを別に数えるには、DBの列か問い合わせの追加が要り、今は持たないためである。
-  Claudeが`f/`のscriptを直すと、その後に`metadata`が落ちて再計算の回が要るので、Claudeの回に使える数が減る。
+  再計算の回は、`pr_ci_fix_max_rounds`が数える回に含める。
 - 再計算が直せるPRの割合は、人の手に回った作業項目の理由で測る。
-  理由は`ci round: the lock cannot be recomputed automatically (<種別>)`で、種別は事前検査の固定の語彙である。
+  理由は`ci round: the lock cannot be recomputed automatically (<種別>)`で、種別は固定の語彙である。
   作業項目の理由を種別ごとに数える。
 - `ls-tree`の出力が上限で切れたときは、ポートが例外を投げ、検査は`port_error`で人の手に回す。
+- パスにU+FFFDを含む項目と、同じパスの重複は、事前検査が`invalid_tree`で人の手に回す。
+  不正なUTF-8のパスを文字列にすると、別のパスが同じ文字列になり、表の項目が消えるためである。
 - ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)は、再計算がそのまま残す。
 - 再計算はwmill CLIを起動しない。workerのwmill CLIの版が`mise.toml`の版と違っても、結果に影響しない。
   算法は、固定した版の挙動を写したもので、版の変更は[算法を固定するテスト](#算法を固定するテスト)が見つける。
@@ -659,7 +693,7 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
   作業項目のheadを記録しないので、`poll_prs`が新しいheadの再レビューを起動する。
 - `main`の取り込みで`wmill-lock.yaml`が衝突したときは、人が解消する。
 
-### 配線で決めること
+### artifactの適用で残る論点
 
 次は、artifactのパッチを適用する側を実装するときに決める。
 検査は、これらを前提にしない。
@@ -682,6 +716,15 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
   lockの比較先はheadの木とbaseの先端の木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
 - `main`の依存更新のたびに、閉包の多くのscriptで、依存の集合かlockが食い違う場合の扱い。検査の前に、`main`を取り込む。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
+
+再計算の配線で、今は扱わないこともある。
+
+- 決定的な回だけを別に数えること。
+  数えるには、作業項目に印を持たせる列か、`agent_runs`を使う問い合わせの追加が要る。DBの変更を伴うので、別に行う。
+- `head_lacks_base`のPRを待ち扱いにすること。
+  Factoryがmainを取り込む仕組みが先に要る。
+  仕組みを決めるために、過去のFactoryのPRで、`metadata`ジョブが落ちた回にheadがbaseの先端を含んでいた割合を測る。
+  この割合が、再計算が直せるPRの上限の目安になる。
 
 ## メタデータのhashの再計算
 
@@ -763,7 +806,7 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 
 | 確かめること | 外れたときの種別 |
 | --- | --- |
-| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
+| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。パスにU+FFFDが無く、同じパスの重複も無い。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
 | 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `internal_error` |
 | 読んだ内容が、木の項目の`oid`と一致する。木に無いパスで内容が返らない。`readBlob`の戻り値の形が正しい | `blob_mismatch`、`port_error` |
 | headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |

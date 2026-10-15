@@ -1,7 +1,7 @@
 // `metadata`ジョブだけが落ちたCI回を、Claudeを起動せずに直す決定的な経路。
 // PRのheadの木から`wmill-lock.yaml`のhashを再計算し(`planMetadataRehash`)、worktreeのファイルを書き換える。
 // 依存や`schema`が変わるPRなど、事前検査が通らないものは、人の手に回す理由を返す。
-// 書き換えたファイルは、検証と完了のステップが、同じ再計算でもう一度照合する(`verifyRehashChanges`)。
+// 書き換えたファイルは、検証と完了のステップが、同じ再計算でもう一度照合する(`confirmRehash`)。
 // I/Oは引数で受け取り、テストでは差し替える。
 
 import { constants } from "node:fs";
@@ -12,13 +12,17 @@ import {
   ciRoundReason,
 } from "./ci_fix_round.ts";
 import { type GhClient, getBranchSha, getPr } from "./github.ts";
-import { createGitPrecheckPorts, fetchBranch } from "./metadata_git_ports.ts";
+import {
+  type BytesRunner,
+  createGitPrecheckPorts,
+  fetchCommit,
+} from "./metadata_git_ports.ts";
 import {
   type PlanResult,
   planMetadataRehash,
   type RehashFailureReason,
 } from "./metadata_precheck.ts";
-import { buildGitArgv, type CommandRunner, localGitEnv } from "./workspace.ts";
+import { buildGitArgv, DEFAULT_TIMEOUT_MS, localGitEnv } from "./workspace.ts";
 
 /** 再計算のcommitの件名。Factoryが固定の文で作る。件名の長さは60字以内である。 */
 export const METADATA_REHASH_COMMIT_SUBJECT =
@@ -35,11 +39,32 @@ export const METADATA_REHASH_SUMMARY =
   "wmill-lock.yamlのhashを、PRのheadの内容から再計算した。";
 
 /**
- * 再計算で直せないときに止める理由。接頭辞は`ci round: `で、続けて固定の文と、事前検査の失敗の種別を付ける。
+ * 再計算では直せない理由の種別。事前検査の失敗の種別に、次の2つを足す。
+ * - `lock_up_to_date`: 再計算しても本文が変わらない。`metadata`ジョブが、hash以外の原因で落ちている。
+ * - `lock_not_writable`: 根の`wmill-lock.yaml`が、通常のファイルとして書き換えられない。
+ */
+export type MetadataManualReason =
+  | RehashFailureReason
+  | "lock_up_to_date"
+  | "lock_not_writable";
+
+/**
+ * 再計算で直せないときに止める理由。接頭辞は`ci round: `で、続けて固定の文と、種別を付ける。
  * 種別は固定の語彙で、PRの作者が決められるパスや補足は入れない。
  */
-export function metadataManualReason(reason: RehashFailureReason): string {
+export function metadataManualReason(reason: MetadataManualReason): string {
   return ciRoundReason(`${CI_ROUND_DETAILS.metadataManual}${reason})`);
+}
+
+/**
+ * 根の`wmill-lock.yaml`を書き換えられないことを表す。symlink、通常のファイルでないもの、無いファイル、権限が足りないものである。
+ * 再試行しても直らない種類なので、呼び出し側は、例外にせず固定の理由で止める。
+ */
+export class LockNotWritableError extends Error {
+  constructor() {
+    super("wmill-lock.yaml cannot be written as a regular file");
+    this.name = "LockNotWritableError";
+  }
 }
 
 /** `rehashMetadataLock`が使うI/O。 */
@@ -52,15 +77,30 @@ export type RehashLockDeps = {
 
 export type MetadataRehashOutcome =
   | { readonly kind: "rewritten" }
-  | { readonly kind: "manual"; readonly reason: RehashFailureReason };
+  /** 再計算が通ったが、本文が変わらない。書き換えない。 */
+  | { readonly kind: "up_to_date" }
+  | { readonly kind: "manual"; readonly reason: MetadataManualReason };
 
-/** 再計算できるときだけ、ファイルを書き換える。できないときは、種別だけを返し、何も書かない。 */
+/**
+ * 再計算できて、本文が変わるときだけ、ファイルを書き換える。
+ * 再計算できないときは、種別だけを返し、何も書かない。本文が変わらないときは`up_to_date`を返し、何も書かない。
+ * 書き換えられないlockは`lock_not_writable`にする。
+ * 一時的な失敗(読み取りや取り込みの例外、書き込みのその他の例外)は、そのまま投げる。呼び出し側のflowの再試行に任せる。
+ */
 export async function rehashMetadataLock(
   deps: RehashLockDeps,
 ): Promise<MetadataRehashOutcome> {
   const plan = await deps.plan();
   if (!plan.ok) return { kind: "manual", reason: plan.reason };
-  await deps.writeLock(plan.newLock);
+  if (plan.changedKeys.length === 0) return { kind: "up_to_date" };
+  try {
+    await deps.writeLock(plan.newLock);
+  } catch (error) {
+    if (error instanceof LockNotWritableError) {
+      return { kind: "manual", reason: "lock_not_writable" };
+    }
+    throw error;
+  }
   return { kind: "rewritten" };
 }
 
@@ -80,6 +120,9 @@ export type MetadataRoundResult =
  * `check`などの直せる失敗と同時のときも、先に再計算する。
  * hashの食い違いは、`check`をClaudeが直しても残るためで、再計算のcommitをpushした後のCIの再実行で、残りの失敗が分かる。
  * PRを読めないときなど、直せる失敗として分類できなければ`null`を返す。理由は通常の流れが同じ検査で出す。
+ * 再計算しても本文が変わらないときは、`metadata`ジョブが、hash以外の原因(Windmillの起動やログインなど)で落ちている。
+ * `metadata`だけが落ちているなら、再計算では直せないので、固定の理由(`lock_up_to_date`)で人の手に回す。
+ * ほかのジョブも落ちているなら、書き換えずに`null`を返し、通常の流れでClaudeが、そのジョブを直す。
  */
 export async function runMetadataRound(
   deps: MetadataRoundDeps,
@@ -88,7 +131,49 @@ export async function runMetadataRound(
   if (failure.kind !== "fixable" || !failure.metadataFailed) return null;
   const outcome = await deps.rehash();
   if (outcome.kind === "rewritten") return outcome;
+  if (outcome.kind === "up_to_date") {
+    if (failure.jobs.length > 0) return null;
+    return { kind: "manual", reason: metadataManualReason("lock_up_to_date") };
+  }
   return { kind: "manual", reason: metadataManualReason(outcome.reason) };
+}
+
+/** 修正のステップが返す、再計算の回の結果。`PrFixApplyResult`と同じ形で、返信は空である。 */
+export type MetadataApplyResult = {
+  readonly outcome: "done" | "blocked";
+  readonly reason: string | null;
+  readonly summary: string;
+  readonly replies: [];
+  readonly commit_subject: string | null;
+  readonly commit_body: string | null;
+};
+
+/**
+ * 再計算の回の結果を、修正のステップの結果にする。
+ * 書き換えたときは、固定の件名と本文を持つ`done`にする。直せないときは、固定の理由を持つ`blocked`にする。
+ * 返信は、どちらも空である。
+ */
+export function metadataApplyResult(
+  round: MetadataRoundResult,
+): MetadataApplyResult {
+  if (round.kind === "manual") {
+    return {
+      outcome: "blocked",
+      reason: round.reason,
+      summary: "",
+      replies: [],
+      commit_subject: null,
+      commit_body: null,
+    };
+  }
+  return {
+    outcome: "done",
+    reason: null,
+    summary: METADATA_REHASH_SUMMARY,
+    replies: [],
+    commit_subject: METADATA_REHASH_COMMIT_SUBJECT,
+    commit_body: METADATA_REHASH_COMMIT_BODY,
+  };
 }
 
 /** `rehashPlanner`が使うI/O。 */
@@ -97,8 +182,8 @@ export type RehashIo = {
   readonly readBaseRef: () => Promise<string>;
   /** ブランチの今の先端のsha。GitHubのAPIで読む。 */
   readonly readBranchSha: (branch: string) => Promise<string>;
-  /** ブランチの今の先端を、ローカルのcloneに取り込む。 */
-  readonly fetchBranch: (branch: string) => Promise<void>;
+  /** commit`sha`を、ローカルのcloneに取り込む。追跡refは動かさない。 */
+  readonly fetchCommit: (sha: string) => Promise<void>;
   /** baseの先端`baseSha`を基準に、事前検査と再計算を行う。 */
   readonly plan: (baseSha: string) => Promise<PlanResult>;
 };
@@ -110,8 +195,10 @@ export type RehashPlanner = {
 };
 
 /**
- * baseブランチの名前を1回だけ読み、先端の読み取りと、取り込んでからの再計算を組み立てる。
+ * baseブランチの名前を1回だけ読み、先端の読み取りと、先端のcommitを取り込んでからの再計算を組み立てる。
  * 再計算の前に取り込むのは、事前検査がbaseの先端の木をローカルのオブジェクトから読むためである。
+ * 取り込むのは、読んだ先端のshaそのものである。ブランチ名で取り込むと、追跡refを更新し、
+ * リポジトリのロックの外から、`commitAndPush`と同じrefを動かしてしまう。
  */
 export function rehashPlanner(io: RehashIo): RehashPlanner {
   let baseRef: Promise<string> | null = null;
@@ -122,7 +209,7 @@ export function rehashPlanner(io: RehashIo): RehashPlanner {
   return {
     readBase: async () => io.readBranchSha(await ref()),
     planWith: async (baseSha) => {
-      await io.fetchBranch(await ref());
+      await io.fetchCommit(baseSha);
       return io.plan(baseSha);
     },
   };
@@ -143,7 +230,7 @@ export function githubRehashPlanner(input: {
     readBaseRef: async () =>
       (await getPr(client, owner, repo, input.prNumber)).baseRef,
     readBranchSha: (branch) => getBranchSha(client, owner, repo, branch),
-    fetchBranch: (branch) => fetchBranch({ cwd: worktreeDir, branch, ghToken }),
+    fetchCommit: (sha) => fetchCommit({ cwd: worktreeDir, sha, ghToken }),
     plan: (baseSha) =>
       planMetadataRehash(
         { baseSha, headSha },
@@ -152,10 +239,18 @@ export function githubRehashPlanner(input: {
   });
 }
 
+/** 2つのバイト列が、長さも内容も同じか。 */
+export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
+}
+
 /** `confirmRehash`が使うI/O。 */
 export type RehashConfirmDeps = RehashPlanner & {
-  /** 確かめる`wmill-lock.yaml`の本文(worktreeか、ステージした内容)。読めなければ`null`。 */
-  readonly readLock: () => Promise<string | null>;
+  /**
+   * 確かめる`wmill-lock.yaml`のバイト列(worktreeか、ステージした内容)。読めなければ`null`。
+   * 文字列に復号しない。復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
+   */
+  readonly readLock: () => Promise<Uint8Array | null>;
 };
 
 export type RehashConfirmation =
@@ -163,8 +258,8 @@ export type RehashConfirmation =
       readonly ok: true;
       /** 確かめた時点の、baseの先端。 */
       readonly baseSha: string;
-      /** 再計算と一致した、`wmill-lock.yaml`の本文。 */
-      readonly lockText: string;
+      /** 再計算のUTF-8のバイト列と一致した、`wmill-lock.yaml`のバイト列。 */
+      readonly lockBytes: Uint8Array;
     }
   | { readonly ok: false };
 
@@ -174,12 +269,16 @@ export type RehashConfirmed = Extract<RehashConfirmation, { ok: true }>;
 /** baseの先端が動いたときに、再計算を取り直す回数の上限。 */
 export const REHASH_CONFIRM_ATTEMPTS = 3;
 
+const utf8 = new TextEncoder();
+
 /**
- * `wmill-lock.yaml`の本文が、独立した再計算の結果と一致することを確かめる。
- * baseの先端を読み、その先端で再計算し、本文と比べる。比べた後にbaseの先端がもう一度読み直して同じなら、確認済みとする。
+ * `wmill-lock.yaml`のバイト列が、独立した再計算の結果と一致することを確かめる。
+ * baseの先端を読み、その先端で再計算し、再計算の本文のUTF-8のバイト列と比べる。
+ * 比べた後にbaseの先端をもう一度読み直して同じなら、確認済みとする。
  * 先端が動いていたら、新しい先端で最初からやり直す。上限(`REHASH_CONFIRM_ATTEMPTS`)を超えても動き続けるときは、確認できないとする。
- * 再計算できない、本文が違う、本文を読めないときも、確認できない。
- * 通った本文は、修正のステップが書いた本文とバイト列まで同じであり、依存や`schema`を書き換えていない。
+ * 再計算できない、バイト列が違う、バイト列を読めないときも、確認できない。
+ * 通ったバイト列は、修正のステップが書いたものと同じであり、依存や`schema`を書き換えていない。
+ * 読み取りや取り込みの例外は、そのまま投げる。一時的な失敗なので、呼び出し側が再試行する。
  */
 export async function confirmRehash(
   deps: RehashConfirmDeps,
@@ -189,9 +288,11 @@ export async function confirmRehash(
   for (let attempt = 0; attempt < REHASH_CONFIRM_ATTEMPTS; attempt += 1) {
     const baseSha = await deps.readBase();
     const plan = await deps.planWith(baseSha);
-    if (!plan.ok || plan.newLock !== lock) return { ok: false };
+    if (!plan.ok || !bytesEqual(utf8.encode(plan.newLock), lock)) {
+      return { ok: false };
+    }
     if ((await deps.readBase()) === baseSha) {
-      return { ok: true, baseSha, lockText: lock };
+      return { ok: true, baseSha, lockBytes: lock };
     }
   }
   return { ok: false };
@@ -205,7 +306,7 @@ export const CI_ROUND_REHASH_STALE_REASON = ciRoundReason(
 /**
  * pushの直前に、baseの先端が確認したときのままかを確かめ、止める理由を返す。問題が無ければ`null`を返す。
  * 動いていたら、pushせず、新しい先端でもう一度確認する(`confirmRehash`)。
- * 確認し直しても、確認済みの本文と同じ本文が再計算の結果なら、そのままpushしてよい。
+ * 確認し直しても、確認済みのバイト列と同じものが再計算の結果なら、そのままpushしてよい。
  * 違う、または確認できなければ、`CI_ROUND_REHASH_STALE_REASON`を返す。`--force`は使わない。
  * baseの先端はpushの後にも動きうるが、それは次のCIの実行が検査する。
  */
@@ -216,18 +317,18 @@ export async function rehashPushStopReason(
   if ((await planner.readBase()) === confirmed.baseSha) return null;
   const again = await confirmRehash({
     ...planner,
-    readLock: async () => confirmed.lockText,
+    readLock: async () => confirmed.lockBytes,
   });
   return again.ok ? null : CI_ROUND_REHASH_STALE_REASON;
 }
 
 /**
- * worktreeの根の`wmill-lock.yaml`の本文を読む。
+ * worktreeの根の`wmill-lock.yaml`のバイト列を読む。
  * `O_NOFOLLOW`で開き、symlinkはたどらない。通常のファイルでないとき、読めないときは`null`を返す。
  */
 export async function readRootWmillLock(
   worktreeDir: string,
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(
@@ -240,7 +341,7 @@ export async function readRootWmillLock(
   try {
     const info = await handle.stat();
     if (!info.isFile()) return null;
-    return await handle.readFile({ encoding: "utf8" });
+    return new Uint8Array(await handle.readFile());
   } catch {
     return null;
   } finally {
@@ -249,42 +350,66 @@ export async function readRootWmillLock(
 }
 
 /**
- * ステージした`wmill-lock.yaml`の本文を、索引から読む(`git cat-file blob :wmill-lock.yaml`)。
- * commitされる内容そのものである。gitが失敗したときと、出力を打ち切ったときは`null`を返す。
+ * ステージした`wmill-lock.yaml`のバイト列を、索引から読む(`git cat-file blob :wmill-lock.yaml`)。
+ * commitされる内容そのものである。文字列に復号せず、バイト列のまま返す。
+ * gitが失敗したときと、時間を超えたときは`null`を返す。
  */
 export async function readStagedRootLock(
-  run: CommandRunner,
+  runBytes: BytesRunner,
   worktreeDir: string,
-): Promise<string | null> {
-  const result = await run(
+): Promise<Uint8Array | null> {
+  const result = await runBytes(
     buildGitArgv(["cat-file", "blob", ":wmill-lock.yaml"]),
-    { cwd: worktreeDir, env: localGitEnv() },
+    { cwd: worktreeDir, env: localGitEnv(), timeoutMs: DEFAULT_TIMEOUT_MS },
   );
-  if (result.exitCode !== 0 || result.outputAbandoned === true) return null;
+  if (result.timedOut || result.exitCode !== 0) return null;
   return result.stdout;
 }
+
+/** `open`が、再試行しても直らない理由で失敗したときの`errno`の名前。 */
+const UNWRITABLE_ERRNO: ReadonlySet<string> = new Set([
+  "ELOOP",
+  "EACCES",
+  "EPERM",
+  "EISDIR",
+  "ENOENT",
+  "ENOTDIR",
+  "EROFS",
+]);
 
 /**
  * worktreeの根の`wmill-lock.yaml`を、通常のファイルとして書き換える。
  * `O_NOFOLLOW`で開き、symlinkはたどらない。`O_CREAT`は付けないので、無いファイルは作らない。
- * 開いたファイルが通常のファイルでなければ、書かずに例外を投げる。
+ * 開いたファイルが通常のファイルでないとき、symlink、無いファイル、権限が足りないときは、`LockNotWritableError`を投げる。
+ * それ以外の失敗は、そのまま投げる。
+ * 書いた後に、ファイルの大きさが本文のバイト数と同じことを確かめる。
  * 書き先は、根の直下のこのファイルだけである。パスは呼び出し側が決めず、PRの作者が決めた名前を使わない。
  */
 export async function writeRootWmillLock(
   worktreeDir: string,
   text: string,
 ): Promise<void> {
-  const handle = await open(
-    `${worktreeDir}/wmill-lock.yaml`,
-    constants.O_WRONLY | constants.O_NOFOLLOW,
-  );
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(
+      `${worktreeDir}/wmill-lock.yaml`,
+      constants.O_WRONLY | constants.O_NOFOLLOW,
+    );
+  } catch (error) {
+    const code = error instanceof Error ? Reflect.get(error, "code") : null;
+    if (typeof code === "string" && UNWRITABLE_ERRNO.has(code)) {
+      throw new LockNotWritableError();
+    }
+    throw error;
+  }
   try {
     const info = await handle.stat();
-    if (!info.isFile()) {
-      throw new Error("wmill-lock.yaml is not a regular file");
-    }
+    if (!info.isFile()) throw new LockNotWritableError();
     await handle.truncate(0);
-    await handle.write(text, 0, "utf8");
+    await handle.writeFile(text, "utf8");
+    if ((await handle.stat()).size !== Buffer.byteLength(text, "utf8")) {
+      throw new Error("wmill-lock.yaml was not written completely");
+    }
   } finally {
     await handle.close();
   }

@@ -12,7 +12,7 @@ import { join } from "node:path";
 import {
   type BytesRunner,
   createGitPrecheckPorts,
-  fetchBranch,
+  fetchCommit,
   parseLsTreeZ,
   runCommandBytes,
 } from "../../f/factory/lib/metadata_git_ports.ts";
@@ -389,11 +389,12 @@ describe("createGitPrecheckPorts with planMetadataRehash on this repository", ()
   }, 120_000);
 });
 
-describe("fetchBranch", () => {
+describe("fetchCommit with a fake runner", () => {
+  const SHA = "d".repeat(40);
   type Seen = { argv: readonly string[]; env: Record<string, string> };
+  /** `cat-file -e`の終了コードと、fetchの終了コードを指定できる偽のrunner。 */
   function spy(
-    exitCode = 0,
-    timedOut = false,
+    opts: { present?: boolean; fetchExit?: number; timedOut?: boolean } = {},
   ): {
     run: CommandRunner;
     seen: Seen[];
@@ -403,61 +404,166 @@ describe("fetchBranch", () => {
       seen,
       run: async (argv, options) => {
         seen.push({ argv, env: { ...(options?.env ?? {}) } });
-        return { stdout: "", stderr: "secret", exitCode, timedOut };
+        if (argv.includes("cat-file")) {
+          return {
+            stdout: "",
+            stderr: "",
+            exitCode: opts.present === true ? 0 : 1,
+            timedOut: false,
+          };
+        }
+        return {
+          stdout: "",
+          stderr: "secret",
+          exitCode: opts.fetchExit ?? 0,
+          timedOut: opts.timedOut ?? false,
+        };
       },
     };
   }
 
-  test("fetches only the branch, after a double dash", async () => {
+  test("does not fetch a commit that is already in the clone", async () => {
+    const { run, seen } = spy({ present: true });
+    await fetchCommit({ cwd: "/x", sha: SHA, ghToken: "t", run });
+    expect(seen.length).toBe(1);
+  });
+
+  test("looks for the commit object by its sha", async () => {
+    const { run, seen } = spy({ present: true });
+    await fetchCommit({ cwd: "/x", sha: SHA, ghToken: "t", run });
+    expect(seen[0]?.argv.slice(-3)).toEqual([
+      "cat-file",
+      "-e",
+      `${SHA}^{commit}`,
+    ]);
+  });
+
+  test("fetches only the sha, after a double dash, without a destination", async () => {
     const { run, seen } = spy();
-    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run });
-    expect(seen[0]?.argv.slice(-5)).toEqual([
+    await fetchCommit({ cwd: "/x", sha: SHA, ghToken: "t", run });
+    expect(seen[1]?.argv.slice(-5)).toEqual([
       "fetch",
       "--no-recurse-submodules",
       "origin",
       "--",
-      "main",
+      SHA,
     ]);
   });
 
   test("gives the token only through the environment", async () => {
     const { run, seen } = spy();
-    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "tok", run });
-    expect(seen[0]?.argv.join(" ")).not.toContain("tok");
+    await fetchCommit({ cwd: "/x", sha: SHA, ghToken: "tok", run });
+    expect(seen[1]?.argv.join(" ")).not.toContain("tok");
   });
 
   test("passes the token as GH_TOKEN", async () => {
     const { run, seen } = spy();
-    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "tok", run });
-    expect(seen[0]?.env.GH_TOKEN).toBe("tok");
+    await fetchCommit({ cwd: "/x", sha: SHA, ghToken: "tok", run });
+    expect(seen[1]?.env.GH_TOKEN).toBe("tok");
   });
 
   test("adds the credential helper of gh", async () => {
     const { run, seen } = spy();
-    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run });
-    expect(seen[0]?.argv).toContain(
+    await fetchCommit({ cwd: "/x", sha: SHA, ghToken: "t", run });
+    expect(seen[1]?.argv).toContain(
       "credential.helper=!gh auth git-credential",
     );
   });
 
-  test("rejects a branch name that starts with a dash", async () => {
+  test("rejects a ref that is not a full commit sha", async () => {
     const { run } = spy();
     await expect(
-      fetchBranch({ cwd: "/x", branch: "--upload-pack=x", ghToken: "t", run }),
+      fetchCommit({ cwd: "/x", sha: "--upload-pack=x", ghToken: "t", run }),
     ).rejects.toThrow();
   });
 
   test("throws a message without the standard error when git fails", async () => {
-    const { run } = spy(128);
+    const { run } = spy({ fetchExit: 128 });
     await expect(
-      fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run }),
-    ).rejects.toThrow("git fetch of the base branch failed");
+      fetchCommit({ cwd: "/x", sha: SHA, ghToken: "t", run }),
+    ).rejects.toThrow("git fetch of the base commit failed");
   });
 
   test("throws when git timed out", async () => {
-    const { run } = spy(0, true);
+    const { run } = spy({ timedOut: true });
     await expect(
-      fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run }),
+      fetchCommit({ cwd: "/x", sha: SHA, ghToken: "t", run }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("fetchCommit in a real clone", () => {
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** 元のリポジトリと、その複製。元に2つ目のcommitを足し、複製はまだ取り込まない。 */
+  function world() {
+    const base = mkdtempSync(join(tmpdir(), "fetch-commit-"));
+    dirs.push(base);
+    const home = join(base, "home");
+    const remote = join(base, "remote");
+    const work = join(base, "work");
+    mkdirSync(home);
+    mkdirSync(remote);
+    git(remote, home, ["init", "-q", "-b", "main"]);
+    git(remote, home, ["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(base, home, ["clone", "-q", remote, work]);
+    git(remote, home, ["commit", "-q", "--allow-empty", "-m", "two"]);
+    return {
+      home,
+      work,
+      newSha: git(remote, home, ["rev-parse", "HEAD"]),
+      tracked: () => git(work, home, ["rev-parse", "refs/remotes/origin/main"]),
+      env: { ...localGitEnv(home), GIT_ALLOW_PROTOCOL: "file" },
+    };
+  }
+
+  test("brings a commit that the clone does not have", async () => {
+    const w = world();
+    await fetchCommit({
+      cwd: w.work,
+      sha: w.newSha,
+      ghToken: "t",
+      env: w.env,
+    });
+    expect(git(w.work, w.home, ["cat-file", "-t", w.newSha])).toBe("commit");
+  });
+
+  test("does not move the remote-tracking ref", async () => {
+    const w = world();
+    const before = w.tracked();
+    await fetchCommit({
+      cwd: w.work,
+      sha: w.newSha,
+      ghToken: "t",
+      env: w.env,
+    });
+    expect(w.tracked()).toBe(before);
+  });
+
+  test("does not create a branch or a tag", async () => {
+    const w = world();
+    const before = git(w.work, w.home, ["for-each-ref"]);
+    await fetchCommit({
+      cwd: w.work,
+      sha: w.newSha,
+      ghToken: "t",
+      env: w.env,
+    });
+    expect(git(w.work, w.home, ["for-each-ref"])).toBe(before);
+  });
+
+  test("fails for a commit that the remote does not have", async () => {
+    const w = world();
+    await expect(
+      fetchCommit({
+        cwd: w.work,
+        sha: "0".repeat(40),
+        ghToken: "t",
+        env: w.env,
+      }),
     ).rejects.toThrow();
   });
 });
