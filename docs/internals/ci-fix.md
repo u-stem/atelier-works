@@ -730,11 +730,23 @@ Windmillのトリガーのファイル名は`*.http_trigger.yaml`などの形で
 型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
 読み方は、`trimUnusedImports`を有効にした`Bun.Transpiler`の`scanImports`だけである。
 実行しない読み方だけを使う理由は、[セキュリティ](../security.md#hashの再計算)にある。
-実測の根拠は、「実機で確かめた」の一覧と、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
+マクロの実測の根拠は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
+閉包の実測の根拠は、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
 値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
 PRが触っていないscriptも、すべて確かめる。
 追えないimportが1つでもあれば、その1つのために全体が人の手に回る。
 局所importの解決は、headの木の`f/`の下の`.ts`の一覧で、両方の木に同じように行う。
+
+上限の値は、次の定数が持つ。
+
+| 上限 | 定数 | 置き場所 |
+| --- | --- | --- |
+| 1ファイルの大きさ | `MAX_FILE_BYTES` | `metadata_patch_manifest.ts` |
+| `f/`のファイル数 | `MAX_SOURCES` | `metadata_patch_verify.ts` |
+| 読むバイト数の合計 | `DEFAULT_MAX_READ_BYTES` | `metadata_precheck.ts` |
+| 訪問と局所importの解決の合計 | `DEFAULT_MAX_TRACE_VISITS` | `metadata_precheck.ts` |
+| 1scriptがたどるファイル数 | `MAX_TRACED_FILES` | `metadata_patch_imports.ts` |
+| 型宣言の字句の数 | `MAX_DECLARATION_STEPS` | `metadata_signature.ts` |
 
 ### 人の手に回す条件
 
@@ -791,7 +803,8 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   値として使うimportの追加は、変える。
 - 字句の読み取りは、括弧が対応する入力を前提にする。
   `checkDependencies`が先に、headのすべての`.ts`をトランスパイラに通すので、構文が不正な入力はそこで断られる。
-  型宣言の範囲を数える処理は、仕事量に字句の数の上限を置いて有界にした。超えたら`main_unparsable`で人の手に回る。
+  型宣言の範囲を数える処理は、数える字句の数に上限を置き、仕事量を有界にしている。
+  超えたら`main_unparsable`で人の手に回る。
   括弧が対応する入力を前提にする点は、この順序に頼る。
 
 ### 算法を固定するテスト

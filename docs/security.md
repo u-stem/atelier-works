@@ -395,6 +395,7 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
 - importを読むときも、コードを実行しない。
   Bunの`transformSync`は、マクロを指定したimport属性のimportを、読む側のプロセスで実行する。
   空白、改行、コメントを挟んだ形でも実行されることを、Bun 1.4.0(worker)と1.4.2で確かめた。
+  挟んだ文字の一覧は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
   そのため、`transformSync`は使わず、実行しない`scanImports`だけで読む。
   `scanImports`は、同じ入力でマクロを実行しないことを、両方の版で確かめた。
   加えて、import属性の検出は、JavaScriptの空白と行区切りをすべて数える。
@@ -414,13 +415,14 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   また、hashが変わるのは、PRが`.ts`を変えたscriptと、baseの先端の値に戻すキーだけに限る。
 - 置き換えるのは、既存のキーのhashだけである。
   キーの追加と削除を許さないので、lockの対象を増やせない。
-- 入力の大きさ、ファイルの数、たどる回数、字句の数に上限を置く。
+- 1ファイルの大きさ、`f/`のファイル数、1scriptがたどるファイル数、訪問と解決の合計、読むバイト数の合計、型宣言の字句の数に上限を置く。
   PRの作者が大きな入力を作って、workerの時間とメモリを使わせるのを防ぐためである。
-  値はコードの定数が持ち、上限が覆わない範囲は[既知の限界](internals/ci-fix.md#既知の限界)にある。
+  定数は[事前検査](internals/ci-fix.md#事前検査)にあり、上限が覆わない範囲は[既知の限界](internals/ci-fix.md#既知の限界)にある。
   閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
 - Windmillの注釈、`preprocessor`、flowの定義、インラインscriptを持つflowは、人の手に回す。
   これらは、依存の解決、workerの種類、`.script.yaml`の項目を変えうるのに、hashだけを直しても追いつけないためである。
-- ポートが返す値と上限の値は、入口で検査し、正しくないときは断る。NaNで上限が外れないようにするためである。
+- ポートが返す値と上限の値は、入口で検査し、正しくないときは断る。
+  上限の値は正の整数だけを通す。NaNで上限が外れるのを防ぐためである。
 
 事前検査は、悪意のあるPRに対する境界ではない。
 hashは`.script.lock`の中身を含まない。
@@ -2124,9 +2126,13 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
-hashを再計算する`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`も止める。
 それぞれの`.script.yaml`と`.script.lock`も止める。
-書き換えられると、パッチの受け取り側の検査が緩み、依存が変わるPRのlockを人の確認なしに書き換えさせられるためである。
+書き換えられると、パッチの受け取り側の検査が緩むためである。
+
+`wmill-lock.yaml`のhashを再計算する`f/factory/lib/`の`metadata_hash`、`metadata_precheck`、`metadata_signature`も止める。
+それぞれの`.script.yaml`と`.script.lock`も止める。
+書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられるためである。
+
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 

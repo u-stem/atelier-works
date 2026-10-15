@@ -738,7 +738,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
 - CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`、`.script.lock`
-- `wmill-lock.yaml`のhashを再計算する側: `f/factory/lib/`の`metadata_hash`、`metadata_precheck`、`metadata_signature`
+- `wmill-lock.yaml`のhashを再計算する側: `lib/metadata_{hash,precheck,signature}`の`.ts`、`.script.yaml`、`.script.lock`
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。
@@ -748,7 +748,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 `f/factory/lib/metadata_patch_*.ts`は、パッチの取得先とトークンの渡し先、zipの読み方、パッチに載せてよい内容を決める。
 書き換えられると、パッチの受け取り側の検査が緩む。
 hashを再計算する3つのファイルは、hashの算法、再計算してよい条件、`main`の引数の比べ方を決める。
-書き換えられると、依存が変わるPRのlockを人の確認なしに書き換えさせられる。
+書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
 `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
 `infra/console_fetcher/`は、配信物を検証して配信する。
 どちらも書き換えられると、検証や隔離をすり抜けた内容が運用者のブラウザで動く。
