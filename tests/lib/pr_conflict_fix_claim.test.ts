@@ -470,7 +470,10 @@ describe("decideConflictNotify", () => {
   test("does not notify an episode that started exactly when the fix was enabled", () => {
     expect(
       decideConflictNotify(
-        notifyInput({}, { episode_started_at: ENABLED_SINCE }),
+        notifyInput(
+          { now: new Date(ENABLED_SINCE.getTime() + 30 * 60_000) },
+          { episode_started_at: ENABLED_SINCE },
+        ),
       ),
     ).toBe("claim");
   });
@@ -591,7 +594,62 @@ describe("decideConflictNotify", () => {
     ).toBe("notify");
   });
 
-  test("claims a row with no hold and no fix work item", () => {
-    expect(decideConflictNotify(notifyInput())).toBe("claim");
+  test("claims a row with no hold and no fix work item inside the grace", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          {},
+          { episode_started_at: new Date(NOW.getTime() - 59 * 60_000) },
+        ),
+      ),
+    ).toBe("claim");
+  });
+
+  test("notifies a row with no hold and no fix work item exactly when the grace is over", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          {},
+          { episode_started_at: new Date(NOW.getTime() - 60 * 60_000) },
+        ),
+      ),
+    ).toBe("notify");
+  });
+
+  test("notifies a row with no hold and no fix work item after the grace", () => {
+    expect(decideConflictNotify(notifyInput())).toBe("notify");
+  });
+
+  test("claims a row with no hold one millisecond before the grace is over", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          {},
+          { episode_started_at: new Date(NOW.getTime() - 60 * 60_000 + 1) },
+        ),
+      ),
+    ).toBe("claim");
+  });
+
+  test("notifies a row with no hold at once when the grace is zero", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput({ graceMin: 0 }, { episode_started_at: NOW }),
+      ),
+    ).toBe("notify");
+  });
+
+  test("keeps deferring a bound row however old the episode is", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          { enabledSince: new Date(NOW.getTime() - 10 * 24 * 60 * 60_000) },
+          {
+            fix_work_item_id: 4,
+            episode_started_at: new Date(NOW.getTime() - 5 * 24 * 60 * 60_000),
+          },
+        ),
+      ),
+    ).toBe("defer");
   });
 });

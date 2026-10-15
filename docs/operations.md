@@ -1442,14 +1442,15 @@ PATがリポジトリを読めなくなったときは、通知を解決せず�
 | 項目 | 既定値 | 内容 |
 | --- | --- | --- |
 | `pr_conflict_watch_enabled` | `false` | 競合を検知して通知するか |
-| `pr_conflict_fix_enabled` | `false` | 競合を直す作業項目を起動してよいか。`true`には`pr_conflict_watch_enabled`も`true`で、`pr_conflict_fix_enabled_since`が必須 |
+| `pr_conflict_fix_enabled` | `false` | 競合を直す作業項目を起動してよいか。`true`にするには、`pr_conflict_watch_enabled`も`true`にし、`pr_conflict_fix_enabled_since`を書く |
 | `pr_conflict_fix_enabled_since` | 無し | この時刻より前に始まった競合の回は直さない |
 | `pr_conflict_fix_max_rounds` | `2` | 競合の1回で起動できる数。1以上5以下 |
-| `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数。2以上10以下で、`pr_conflict_fix_max_rounds`より大きい |
-| `pr_conflict_fix_notify_grace_min` | `60` | 解ければ外れる理由で保留している競合を、通知するまで待つ分数。0以上1440以下 |
+| `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数。2以上10以下。`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_fix_max_rounds`より大きい |
+| `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下 |
 
 競合を直す設定の組み合わせが上の条件を満たさないと、設定の読み込みが拒否する。
 Factoryのほかの処理も止まるので、関連する項目は同じ編集で書く。
+現状、これらの設定と判断関数を呼ぶ処理は無く、`pr_conflict_fix_enabled`を`true`にしても起動しない。
 
 有効にする手順は次のとおりである。
 有効にした最初の巡回で、そのとき競合している開いたFactoryのPRが、すべて通知されるためである。

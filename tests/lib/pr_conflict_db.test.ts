@@ -666,7 +666,25 @@ describe("releasePrConflictFix", () => {
   test("keeps the current hold when no reason is passed", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await releasePrConflictFix(7, {}, sql);
-    expect(calls[0]?.text).toContain("fix_hold_reason = COALESCE(");
+    expect(calls[0]?.text).toContain("THEN COALESCE(");
+  });
+
+  test("writes the hold only when the work item belongs to the episode of the row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { holdReason: "fix_stopped" }, sql);
+    expect(calls[0]?.text).toContain("w.conflict_episode = r.episode");
+  });
+
+  test("checks that the work item is tied to the same row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { holdReason: "fix_stopped" }, sql);
+    expect(calls[0]?.text).toContain("w.conflict_check_id = r.id");
+  });
+
+  test("keeps the current hold when the episodes differ", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { holdReason: "fix_stopped" }, sql);
+    expect(calls[0]?.text).toContain("ELSE r.fix_hold_reason END");
   });
 
   test("returns true when it unbound the row", async () => {

@@ -161,9 +161,9 @@ export type ConflictNotifyInput = {
  *    有効になった時刻が分からないときも`notify`する。
  * 3. 最終の保留は、猶予を待たずに`notify`する。語彙に無い保留も最終として扱う。
  * 4. 直す作業項目が動いていれば`defer`する。
- * 5. 一時の保留は、競合の回の開始から猶予が過ぎたら`notify`し、それまでは`claim`する。
+ * 5. 一時の保留がある行と、保留も作業項目も無い行は、競合の回の開始から猶予が過ぎたら`notify`し、それまでは`claim`する。
  *    猶予は保留を書いた時刻でなく、競合の回の開始から数える。保留が付け外しされても、通知が遅れ続けないためである。
- * 6. 保留も作業項目も無ければ`claim`する。
+ *    保留が無い行にも猶予を掛けるのは、起動の判断が例外を投げ続けたり、起動の文が`null`を返し続けたりしても、通知を必ず出すためである。
  */
 export function decideConflictNotify(
   input: ConflictNotifyInput,
@@ -178,9 +178,8 @@ export function decideConflictNotify(
   }
   if (isFinalPrConflictFixHold(row.fix_hold_reason)) return "notify";
   if (row.fix_work_item_id !== null) return "defer";
-  if (row.fix_hold_reason !== null) {
-    const graceEnd = row.episode_started_at.getTime() + input.graceMin * 60_000;
-    return input.now.getTime() >= graceEnd ? "notify" : "claim";
-  }
-  return "claim";
+  // 保留があってもなくても、競合の回の開始から猶予が過ぎたら通知する。
+  // 保留なしのまま起動できない行(判断の例外が続く、起動の文が毎回`null`を返す)で、通知が永久に出なくなるのを防ぐ。
+  const graceEnd = row.episode_started_at.getTime() + input.graceMin * 60_000;
+  return input.now.getTime() >= graceEnd ? "notify" : "claim";
 }

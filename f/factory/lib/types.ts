@@ -1075,7 +1075,7 @@ export type FactoryConfig = {
    */
   pr_conflict_fix_max_rounds: number;
   /**
-   * 1つのPRで、競合を直す作業項目を起動できる回数の上限。2以上10以下の整数で、`pr_conflict_fix_max_rounds`より大きい。既定は5。
+   * 1つのPRで、競合を直す作業項目を起動できる回数の上限。2以上10以下の整数。`pr_conflict_fix_enabled`が真なら、`pr_conflict_fix_max_rounds`より大きくなければならない。既定は5。
    * 競合の行が掃除で消えても戻らないよう、競合の回数はepisodeを超えて数える。
    */
   pr_conflict_fix_max_rounds_per_pr: number;
@@ -1086,8 +1086,8 @@ export type FactoryConfig = {
    */
   pr_conflict_fix_enabled_since: Date | null;
   /**
-   * 最終でない保留(解ければ外れる理由)のまま、競合の回の開始から通知を待つ時間(分)。0以上1440以下の整数。既定は60。
-   * 過ぎれば、保留のままでも通知する。最終の保留は待たずに通知する。
+   * 競合の回の開始から通知を待つ時間(分)。0以上1440以下の整数。既定は60。
+   * 過ぎれば、保留のままでも、保留が無くても通知する。最終の保留は待たずに通知する。
    */
   pr_conflict_fix_notify_grace_min: number;
   /**

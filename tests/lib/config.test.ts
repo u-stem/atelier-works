@@ -996,17 +996,44 @@ describe("pr_conflict_fix_max_rounds_per_pr", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
-  test("throws when pr_conflict_fix_max_rounds_per_pr equals pr_conflict_fix_max_rounds", () => {
+  test("throws when the fix is enabled and pr_conflict_fix_max_rounds_per_pr equals pr_conflict_fix_max_rounds", () => {
     const raw = {
-      ...LEGACY_RAW_CONFIG,
+      ...CONFLICT_FIX_ENABLED_RAW,
       pr_conflict_fix_max_rounds: 3,
       pr_conflict_fix_max_rounds_per_pr: 3,
     };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
-  test("throws when the default per-PR limit is not larger than a raised pr_conflict_fix_max_rounds", () => {
-    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_max_rounds: 5 };
+  test("throws when the fix is enabled and the default per-PR limit is not larger than a raised pr_conflict_fix_max_rounds", () => {
+    const raw = { ...CONFLICT_FIX_ENABLED_RAW, pr_conflict_fix_max_rounds: 5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts an equal per-PR limit while the fix is disabled", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds: 3,
+      pr_conflict_fix_max_rounds_per_pr: 3,
+    });
+    expect(config.pr_conflict_fix_max_rounds_per_pr).toBe(3);
+  });
+
+  test("accepts a raised pr_conflict_fix_max_rounds with the default per-PR limit while the fix is disabled", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds: 5,
+    });
+    expect(config.pr_conflict_fix_max_rounds).toBe(5);
+  });
+
+  test("still rejects a per-PR limit out of range while the fix is disabled", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_max_rounds_per_pr: 11 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("still rejects max rounds out of range while the fix is disabled", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_max_rounds: 6 };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 });

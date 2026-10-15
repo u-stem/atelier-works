@@ -26,6 +26,10 @@ export type ConflictFixItemState = {
   readonly pushed: boolean;
   /** フローのジョブIDが記録されているか。偽なら、フローの起動より前に失敗した。 */
   readonly launched: boolean;
+  /** 作業項目が直していた競合の回(`work_items.conflict_episode`)。 */
+  readonly conflictEpisode: number | null;
+  /** 作業項目が結ばれた行の、今の競合の回(`pr_conflict_checks.episode`)。 */
+  readonly rowEpisode: number;
 };
 
 /** 注記の固定文と、写す保留の理由の対応。照合は完全一致だけで行う。 */
@@ -93,7 +97,7 @@ function isTerminal(status: WorkItemStatus): boolean {
  *   起動し直す回数は、行の起動の回数の上限が止める。フローが起動した後の`failed`は、理由を写せれば写し、写せなければ`fix_stopped`で保留する。
  * - ほかの終端(`cancelled`など)は、保留なしで結びを外す。
  */
-export function decideConflictFixRecovery(
+function decideRecoveryByState(
   item: ConflictFixItemState | null,
   now: Date,
 ): ConflictFixRecovery {
@@ -135,4 +139,25 @@ export function decideConflictFixRecovery(
     };
   }
   return { kind: "release", hold: null };
+}
+
+/**
+ * 作業項目が直していた競合の回と、行の今の回が違うときは、保留を書かずに結びだけを外す。
+ * 古い回の作業項目が止まった理由を、新しい回の行に最終の保留として書くと、新しい競合を直せなくなるためである。
+ * 行の回が進んでも、行は結びを保持する(`recordPrConflict`)ので、起こりうる。
+ */
+export function decideConflictFixRecovery(
+  item: ConflictFixItemState | null,
+  now: Date,
+): ConflictFixRecovery {
+  const recovery = decideRecoveryByState(item, now);
+  if (
+    item !== null &&
+    recovery.kind === "release" &&
+    recovery.hold !== null &&
+    item.conflictEpisode !== item.rowEpisode
+  ) {
+    return { kind: "release", hold: null };
+  }
+  return recovery;
 }

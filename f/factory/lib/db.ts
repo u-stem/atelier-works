@@ -5967,6 +5967,9 @@ export type ReleasePrConflictFixOptions = {
  * この呼び出しで外したら`true`を返す。結ばれていない行は書き換えず、`false`を返す。
  * 同じ呼び出しを繰り返しても結果は変わらない。行の状態は条件にしない。
  * 作業項目が動いている間に競合が解けた(`resolved`)行や閉じた(`closed`)行も、結びは外す必要があるためである。
+ * `holdReason`を書くのは、結ばれた作業項目の`conflict_episode`が、行の今の`episode`と同じときだけである。
+ * 違うときは、結びだけを外し、保留は今の値のままにする。行は新しい回に進んでも結びを保持するので、
+ * 古い回の作業項目が止まった理由を、新しい回の行に最終の保留として書かないためである。
  * `fix_attempts`は減らさない。
  * `holdReason`が空か64字を超えるときと、`fixWorkItemId`が正の整数でないときは、DBに触れずに例外を投げる。
  */
@@ -5983,13 +5986,19 @@ export async function releasePrConflictFix(
   const holdReason = options.holdReason ?? null;
   const fixWorkItemId = options.fixWorkItemId ?? null;
   const rows = await sql`
-    UPDATE factory.pr_conflict_checks
+    UPDATE factory.pr_conflict_checks AS r
     SET fix_work_item_id = NULL,
-        fix_hold_reason = COALESCE(${holdReason}::text, fix_hold_reason),
+        fix_hold_reason = CASE
+          WHEN EXISTS (
+            SELECT 1 FROM factory.work_items AS w
+            WHERE w.id = r.fix_work_item_id AND w.conflict_check_id = r.id
+              AND w.conflict_episode = r.episode
+          ) THEN COALESCE(${holdReason}::text, r.fix_hold_reason)
+          ELSE r.fix_hold_reason END,
         updated_at = now()
-    WHERE id = ${id}::bigint AND fix_work_item_id IS NOT NULL
-      AND (${fixWorkItemId}::bigint IS NULL OR fix_work_item_id = ${fixWorkItemId}::bigint)
-    RETURNING id
+    WHERE r.id = ${id}::bigint AND r.fix_work_item_id IS NOT NULL
+      AND (${fixWorkItemId}::bigint IS NULL OR r.fix_work_item_id = ${fixWorkItemId}::bigint)
+    RETURNING r.id
   `.fetch();
   return rows.length > 0;
 }

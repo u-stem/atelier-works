@@ -323,14 +323,14 @@ schema:
       minimum: 2
       maximum: 10
       description: >-
-        1つのPRで、競合を直す作業項目を起動できる回数の上限です。競合の記録が掃除で消えても戻らないよう、競合の回をまたいで数えます。2以上10以下で、pr_conflict_fix_max_roundsより大きい整数にします。
+        1つのPRで、競合を直す作業項目を起動できる回数の上限です。競合の記録が掃除で消えても戻らないよう、競合の回をまたいで数えます。2以上10以下の整数にします。pr_conflict_fix_enabledがtrueのときは、pr_conflict_fix_max_roundsより大きくします。
       default: 5
     pr_conflict_fix_notify_grace_min:
       type: integer
       minimum: 0
       maximum: 1440
       description: >-
-        解ければ外れる理由で自動修正を保留している競合を、通知するまで待つ時間(分)です。競合の回が始まってからこの時間が過ぎたら、保留のままでも通知します。解けない理由の保留は、待たずに通知します。0以上1440以下の整数にします。
+        競合を直す起動が有効なとき、競合を通知するまで待つ時間(分)です。競合の回が始まってからこの時間が過ぎたら、保留のままでも、保留が無くても通知します。解けない理由の保留は、待たずに通知します。0以上1440以下の整数にします。
       default: 60
     pr_ci_watch_enabled:
       type: boolean

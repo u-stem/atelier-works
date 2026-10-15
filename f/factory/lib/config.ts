@@ -715,7 +715,12 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     );
   }
   // PR全体の上限が競合1回の上限以下だと、競合1回の上限に達する前にPR全体が止まる。
-  if (prConflictFixMaxRoundsPerPr <= prConflictFixMaxRounds) {
+  // 無効の間は検査しない。使わない設定の組み合わせで読み込みが例外を投げると、Factory全体が止まるためである。
+  // 各値の範囲は、有効かどうかによらず上で検査する。
+  if (
+    prConflictFixEnabled &&
+    prConflictFixMaxRoundsPerPr <= prConflictFixMaxRounds
+  ) {
     throw new ConfigValidationError(
       '"pr_conflict_fix_max_rounds_per_pr" must be greater than "pr_conflict_fix_max_rounds"',
     );

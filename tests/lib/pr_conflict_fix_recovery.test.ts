@@ -26,6 +26,8 @@ function item(
     note: null,
     pushed: false,
     launched: true,
+    conflictEpisode: 1,
+    rowEpisode: 1,
     ...overrides,
   };
 }
@@ -257,5 +259,64 @@ describe("decideConflictFixRecovery", () => {
       kind: "release",
       hold: null,
     });
+  });
+
+  test.each([
+    [
+      "needs_human",
+      { note: conflictRoundReason(CONFLICT_ROUND_DETAILS.protectedPath) },
+    ],
+    [
+      "blocked",
+      { note: conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed) },
+    ],
+    ["needs_human", {}],
+    ["failed", {}],
+  ] as const)(
+    "releases a %s work item of an earlier episode without a hold",
+    (status, overrides) => {
+      expect(
+        decideConflictFixRecovery(
+          item(status, { ...overrides, conflictEpisode: 1, rowEpisode: 2 }),
+          NOW,
+        ),
+      ).toEqual({ kind: "release", hold: null });
+    },
+  );
+
+  test("keeps a running work item of an earlier episode", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("fixing", { conflictEpisode: 1, rowEpisode: 2 }),
+        NOW,
+      ),
+    ).toEqual({ kind: "keep" });
+  });
+
+  test("still reports a push of an earlier episode", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("rereview_requested", { conflictEpisode: 1, rowEpisode: 2 }),
+        NOW,
+      ),
+    ).toEqual({ kind: "pushed" });
+  });
+
+  test("releases a work item without a conflict episode without a hold", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("needs_human", { conflictEpisode: null }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("holds a work item of the same later episode", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("needs_human", { conflictEpisode: 2, rowEpisode: 2 }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
   });
 });
