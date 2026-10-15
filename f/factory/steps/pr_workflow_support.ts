@@ -3797,6 +3797,27 @@ const DEPENDABOT_IMPACT_NEXT_ACTION =
   "PRのコメントの所見を確認し、問題なければ手でマージするか閉じてください。この作業項目は再実行できません。新しいコミットが積まれると、自動で再び対象になります";
 
 /**
+ * リポジトリのオーナーの数値IDの照合に落ちた理由(`isRepoOwnerStopReason`)で人に回すときの次の操作。
+ * 名前が別の人に渡った疑いで止めたPRなので、手でマージする案内にしない。
+ * dependabotの作業項目は`retry_work_item`が拒否するので、再実行は案内しない。
+ */
+const DEPENDABOT_OWNER_STOP_NEXT_ACTION =
+  "GitHubでそのオーナーとリポジトリが意図した持ち主のものか確かめ、factory_configのownersとfactory_repo_idを見直してください。確かめるまで、このPRをマージしないでください。持ち主が変わっていたら、現在のIDを書き写さずに、そのオーナーをownersから外してください。この作業項目は再実行できません。見直した後に新しいコミットが積まれると、自動で再び対象になります";
+
+/** 詳細が関門の理由なら日本語に訳し、そうでなければそのまま返す。 */
+function dependabotDetailText(detail: string | undefined): string {
+  if (detail === undefined) return "";
+  return isRepoOwnerStopReason(detail) ? describeReason(detail) : detail;
+}
+
+/** 詳細が関門の理由なら、オーナーの見直しの案内を、そうでなければ手でマージする案内を返す。 */
+function dependabotNextActionForDetail(detail: string | undefined): string {
+  return detail !== undefined && isRepoOwnerStopReason(detail)
+    ? DEPENDABOT_OWNER_STOP_NEXT_ACTION
+    : DEPENDABOT_MANUAL_NEXT_ACTION;
+}
+
+/**
  * dependabotの理由の規則(`lib/dependabot_flow_support.ts`の`dependabotReason`と固定の理由)。
  * 詳細にほかの規則の文字列が入りうるので、`REASON_RULES`の先頭に置き、ほかの規則より先に当てる。
  * どの規則も再実行を案内しない。dependabotの作業項目は`retry_work_item`が拒否するため。
@@ -3863,14 +3884,14 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.finish, "([\\s\\S]+)$"),
     describe: (m) =>
-      `dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(${m[1]})`,
-    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+      `dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(${dependabotDetailText(m[1])})`,
+    nextAction: (m) => dependabotNextActionForDetail(m[1]),
   },
   {
     pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.poll, "([\\s\\S]+)$"),
     describe: (m) =>
-      `dependabotの更新を、PRを取得する処理で人に回しました(${m[1]})`,
-    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+      `dependabotの更新を、PRを取得する処理で人に回しました(${dependabotDetailText(m[1])})`,
+    nextAction: (m) => dependabotNextActionForDetail(m[1]),
   },
   {
     pattern: reasonPattern(DEPENDABOT_DRY_RUN_REASON, ""),
