@@ -8,6 +8,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/ci_fix_prompt.ts`、`lib/ci_fix_paths.ts`
 - `lib/ci_fix_round.ts`
 - `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
+- `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`
 
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
@@ -434,6 +435,7 @@ gitは呼ばない。
   - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
   - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`
   - `f/factory/lib/`の`ci_`、`pr_ci_`、`main_ci_`、`pr_fix_launch`
+  - `f/factory/lib/`の`metadata_`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
   - `f/factory/`の`watch_pr_ci`と`watch_main_ci`
 
@@ -528,6 +530,7 @@ zipの中の文字列は、`reason`に載せない。
 引数に単独の文字列リテラルを取らない動的importとrequireの呼び出しと、import属性は、トランスパイラに渡さない。
 
 - 引数が、エスケープを含まない単独の文字列リテラルでない動的importとrequireの呼び出し。連結を含む。
+  指定子の後ろに第2引数(import属性など)や末尾のコンマが付く形も、含む。
 - メソッドとして呼ぶrequire(`import.meta.require`や`loader.require`)。
 - import属性。語の`with`か`assert`の直後が、開き波括弧かコメントの開始であるもの。
   間に空白や改行を挟んでも、コメントを挟んでも断る。`type: "macro"`はビルド時にコードを実行するためである。
@@ -578,7 +581,7 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 
 次は、検査を呼び出す側を実装するときに決める。
 検査は、これらを前提にしない。
-最初の3項目は、呼び出し側が守る契約である。
+最初の5項目は、呼び出し側が守る契約である。
 
 - 出どころの検査を先に呼ぶ。
   `checkProvenance`は、実行の事実とPRの差分だけを見る。artifactもポートも渡さない。
@@ -588,21 +591,246 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - ポート(`listHeadSources`、`readHeadFile`、`readBaseFile`、`isAncestor`、`readCommitParents`)は、ローカルのcloneで実装する。
   木の一覧は`git ls-tree`、ファイルは`git cat-file`を使い、GitHubのREST APIで読まない。
   ファイルごとの読み取りでPATのrate limitを使い切らないためである。
+- hashの再計算が書き込むcommitは、親を`headSha`に固定する。
+  書き込む前に、ブランチの先端が`headSha`から動いていたら、pushせずに検査からやり直す。`--force*`は使わない。
+  検査の後にheadが動く競合は、artifactの適用だけでなく、hashの再計算にも当てはまる。
+- hashの再計算のポートは、gitを引数の配列で呼び、シェルを通さない。
+  blobは、木の項目の`oid`で読む(`git cat-file blob <oid>`)。
+  PRの作者が決められる文字列(パス)を、シェルの文字列に結合しない。
 - `ci.yml`が、artifactのIDとdigestを`metadata`ジョブのログに出す処理は、まだ無い。
   追加は保護パス(`.github/`)の変更なので、別に行う。
   照合できない間は、パッチを適用しない。
 - フローのキー(`__flow+...`)が変わるパッチの扱い。
-- 検査の後にheadが動く競合の扱い。
+- 検査の後にheadが動く競合の扱い(artifactの適用)。hashの再計算の契約は、上に書いた。
 - artifactのIDとdigestを、`metadata`ジョブのログの値と照合する手順。
 - `mergeSha`を本物のPRのmerge commitに結び付けること。適用の前に、GitHub APIのPRの`merge_commit_sha`と照合する。
   lockの比較先はheadの木とbaseの先端の木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
 - `main`の依存更新のたびに、閉包の多くのscriptで、依存の集合かlockが食い違う場合の扱い。検査の前に、`main`を取り込む。
-- Factory自身が`wmill-lock.yaml`のhashと`schema`を計算して書く案。artifactを経由しない。
-  wmillのhashの算法とパーサーの結び付きが前提で、この検査の大半(zip、取得、出どころ、manifest)が要らなくなる。
-  配線の前に、この案を比べるかどうかを決める。
+- artifactを経由しない[hashの再計算](#メタデータのhashの再計算)を、artifactの適用の代わりに使うか、先に試すか。
+  再計算は`schema`を書かないので、`main`の引数が変わるPRは人の手に回る。
+- `main`が進むたびに、PRのheadがbaseの先端を含まなくなり、再計算が`head_lacks_base`で止まる。
+  `main`を取り込んでから再計算する手順と、その回数の上限を決める。
+- 再計算が実際のPRのうち、どれだけを直せるかを測る。測り方を決めて、人の手に回った理由の種類ごとに数える。
+- `listTree`が切り捨てた木を、検査が見分ける方法。呼び出し側が、切り捨ての有無を知らせる。
+- ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)の扱い。再計算はそのまま残す。
+- worker側のwmill CLIの版と、`mise.toml`で固定した版が食い違うときの扱い。
+- 再計算と`main`の取り込みを繰り返す回数の上限。
+- pushの直前に、baseの先端が動いていないかを再確認する。動いていたら、検査からやり直す。
 - 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
 - `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
+
+## メタデータのhashの再計算
+
+wmill CLIとバックエンドを使わずに、Factory自身が`wmill-lock.yaml`のhashを計算し直す部品である。
+共有のlibを変えたPRは、CIの`metadata`ジョブが、hashの食い違いで落ちる。
+再計算は、このうち依存が変わらないPRだけを直す。
+artifactを経由しないので、取得、zip、出どころ、manifestの検査は要らない。
+未信頼のPRのheadを読むだけで、scriptの実行も、wmill CLIの起動もしない。
+事前検査は、悪意のあるPRに対する境界ではなく、悪意のないPRで古い`schema`やlockが最新のように書き直されるのを防ぐ、正しさの検査である。
+取り決めは[セキュリティ](../security.md#hashの再計算)にある。
+
+### 再計算の部品
+
+| ファイル | 責務 |
+| --- | --- |
+| `lib/metadata_hash.ts` | ファイルの内容から、`wmill-lock.yaml`の全キーのhashを計算する(`computeLockEntries`)。既存のlockの行ごとの値だけを置き換える(`patchWmillLock`) |
+| `lib/metadata_precheck.ts` | gitの木を読み、依存が変わらない再生成かを確かめる(`planMetadataRehash`)。確かめられたときだけ、新しい本文と、変わったキーを返す。正しさを守る検査で、敵対的な入力に対する境界ではない |
+| `lib/metadata_signature.ts` | `main`と`preprocessor`の署名、トップレベルの型宣言、Windmillの注釈を、字句で読んで比べる |
+
+3つとも、保護パスである。
+
+### hashの算法
+
+算法は、`mise.toml`で固定したwmill CLIの版(`ASSUMED_WMILL_CLI_VERSION`)から写した。
+写し元は、`generateScriptHash`、`generateFlowHash`、`generate-metadata rehash`の分岐である。
+
+- scriptのhashは、ワークスペースの依存のJSON、scriptのソース、`.script.yaml`の全文を、この順につなげたsha256である。
+  `dependencies/`が無いので、依存のJSONは`{}`に固定する。
+- scriptのキーは、拡張子を除いたパスである。
+  wmillは最初の`.`までをキーにするので、拡張子の前に`.`を含む名前は扱わない。
+- flow全体のhashは、フォルダ直下のscriptのファイルごとのhashを、キーでソートして並べたJSONのsha256である。
+  キーは`<フォルダ>+__flow_hash`である。
+  インラインscript(フォルダの中のscriptの拡張子のファイル)を持つflowは、実物のwmillと照合できていないので扱わない。
+  扱うのは、インラインscriptを持たないflowだけで、hashは空のオブジェクトのsha256になる。
+- `flow.yaml`、`.script.lock`、依存先のscript、`wmill.yaml`、言語は、hashに入らない。
+- 先頭のBOMは、1つだけ取り除いてからhashに入れる。
+  wmill CLI 1.817.0に、BOM付きのコピーで`generate-metadata rehash`をかけて確かめた。
+  2つ目のBOMは残るので、`.ts`と`.script.yaml`の両方で、2つ並んだBOMは別のhashになる。
+
+`patchWmillLock`は、既存の行の値だけを置き換える。
+引用符、キーの順、改行は変えない。
+置き換えた結果は`parseWmillLock`で読み直し、形が崩れていないことを確かめる。
+再計算したキーが元のlockに無いときは、置き換えず、失敗として返す。
+元のlockのキーに再計算した値が無いときも、同じく失敗として返す。
+ただし、ファイルが無いまま残っている項目は例外である。
+wmillも消さない項目なので、baseの先端の木で、ファイルから決まらなかったキーは、そのまま残す。
+
+### 事前検査
+
+`planMetadataRehash`は、baseの先端とheadのcommitを受け取る。
+読み取りは、木の一覧(`listTree`)、blobの読み取り(`readBlob`)、祖先の判定(`isAncestor`)の3つのポートで行う。
+ポートを実装するときは、gitのオブジェクトから読む。
+作業ツリーのファイルは開かない。
+このリポジトリの部品は、ポートの型と、受け取った値の検査だけを持つ。gitを使うポートの実装は、配線で行う。
+PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
+名前の変更は、削除と追加の2件に見えるので、scriptの集合が変わったものとして扱う。
+
+ポートの値は、受け取った入口で検査する。
+`baseSha`と`headSha`は40桁の小文字の16進数、木の項目の`oid`は40桁か64桁の小文字の16進数、`size`は0以上の整数でなければならない。
+`readBlob`の戻り値は、`kind`が3つのどれかで、見つかったときの内容がバイト列でなければならない。
+形が合わないときは`port_error`を返す。
+`readBlob`の内容は、木の項目の`oid`と照合する。
+`blob <長さ>`と空文字(NUL)を前に付けた内容のハッシュで、`oid`が40桁ならSHA-1、64桁ならSHA-256を使う。
+ポートが別のrefや作業ツリーを読んだ誤りを、断つためである。
+`isAncestor`は、`true`のときだけ祖先とみなす。
+`listTree`を実装するときは、`git ls-tree -r -l -z`を使う。
+`-z`を付けないと、非ASCIIのパスが引用符つきで返り、実際のパスと一致しなくなる。
+
+次の表の順に確かめ、最初に外れた条件の種別を返す。
+
+| 確かめること | 外れたときの種別 |
+| --- | --- |
+| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
+| 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `internal_error` |
+| 読んだ内容が、木の項目の`oid`と一致する。木に無いパスで内容が返らない。`readBlob`の戻り値の形が正しい | `blob_mismatch`、`port_error` |
+| headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
+| `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleが無い | `special_file` |
+| 上の4つのファイルと`f/`のファイルが、大きさと件数の上限以下 | `file_too_large`、`too_many_files` |
+| 申告の大きさの合計と、読んだバイト数の合計が、headとbaseのそれぞれで上限以下 | `too_much_input` |
+| headに`dependencies/`が無い | `workspace_dependencies` |
+| `wmill.yaml`がbaseの先端と同一 | `wmill_yaml_changed` |
+| PRの差分に、scriptとflowのファイルの追加、削除、名前の変更が無い。許可リストにない種類のファイルの追加と削除も無い | `script_set_changed` |
+| PRの差分に、`.script.lock`とflowのlockが無い | `lock_file_changed` |
+| PRの差分に、flowの定義の変更が無い | `flow_changed` |
+| PRの差分に、`.script.yaml`が無い | `script_yaml_changed` |
+| 変更されたscriptが、TypeScript(bun)である | `unsupported_script` |
+| すべてのscriptで、実行時に残る裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪問と局所importの解決の合計が上限を超えるときは`too_much_input` |
+| 変更された`.ts`の注釈、`main`と`preprocessor`の署名、型宣言が、baseの先端と同じ | `annotation_changed`、`main_changed`、`main_presence_changed`、`preprocessor_changed`、`declaration_changed`、読めないときは`main_unparsable` |
+| hashを計算できる形である。インラインscriptを持つflowは計算できない | `unsupported_script`、`missing_metadata`、`not_text`、`duplicate_key` |
+| baseの先端のscriptとflowから計算したhashが、baseの先端の`wmill-lock.yaml`の値と、すべてのキーで一致する | `base_stale` |
+| 再計算したキーの集合が、headのlockのキーの集合と一致する | `lock_key_set_mismatch`、`wmill_lock_invalid` |
+| hashが変わるキーが、PRが`.ts`を変えたscriptのキーか、baseの先端のlockの値に戻すキーだけである | `unexpected_key_change` |
+
+ポートが例外を投げたときは、`port_error`を返す。
+それ以外の想定外の例外は、`internal_error`を返す。
+種別は固定で、例外の内容は載せない。
+閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
+hashの計算では、木ごとに、入力のファイルをまとめて保持する。
+保持量は、読む合計の上限までである。
+
+追加と削除を許す種類の許可リストは、次の名前の末尾である。
+これらは、scriptのhashに関わらない。
+
+- `.schedule.yaml`、`.variable.yaml`、`.resource.yaml`、`.resource-type.yaml`
+- `folder.meta.yaml`、`.md`
+
+トリガーのファイルは、許可リストに入れない。
+Windmillのトリガーのファイル名は`*.http_trigger.yaml`などの形である。
+`wmill.yaml`の`includeTriggers`が無効で、このリポジトリのトリガーはsyncしないので、追加と削除は人の手に回ってよい。
+
+失敗の`path`はPRの作者が決められるので、PR本文やコメントに載せるときは無害化する。
+
+裸のimportの閉包は、[importの読み取り](#importの読み取り)と同じ関数で求める。
+ただし、実行時に残るimportだけを数える(`runtimeOnly`)。
+型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
+読み方は、`trimUnusedImports`を有効にした`Bun.Transpiler`の`scanImports`だけである。
+実行しない読み方だけを使う理由は、[セキュリティ](../security.md#hashの再計算)にある。
+マクロの実測の根拠は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
+閉包の実測の根拠は、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
+値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
+PRが触っていないscriptも、すべて確かめる。
+追えないimportが1つでもあれば、その1つのために全体が人の手に回る。
+局所importの解決は、headの木の`f/`の下の`.ts`の一覧で、両方の木に同じように行う。
+
+上限の値は、次の定数が持つ。
+
+| 上限 | 定数 | 置き場所 |
+| --- | --- | --- |
+| 1ファイルの大きさ | `MAX_FILE_BYTES` | `metadata_patch_manifest.ts` |
+| `f/`のファイル数 | `MAX_SOURCES` | `metadata_patch_verify.ts` |
+| 読むバイト数の合計 | `DEFAULT_MAX_READ_BYTES` | `metadata_precheck.ts` |
+| 訪問と局所importの解決の合計 | `DEFAULT_MAX_TRACE_VISITS` | `metadata_precheck.ts` |
+| 1scriptがたどるファイル数 | `MAX_TRACED_FILES` | `metadata_patch_imports.ts` |
+| 型宣言の範囲を数える字句の数(範囲を探す字句と、ダイジェストのために読む字句の合計) | `MAX_DECLARATION_STEPS` | `metadata_signature.ts` |
+
+### 人の手に回す条件
+
+事前検査が失敗の種別を返したときは、再計算せず、人が手元で`mise run metadata`を実行して直す。
+判断できないとき、読めないとき、字句の切れ目に確信が持てないときは、通さずに人の手に回す。
+通すと依存の変化を見落とし、回すと人の作業が増えるだけで済むためである。
+
+### mainの引数の比べ方
+
+`.script.yaml`のうち、コードから決まる項目は、`schema`と`has_preprocessor`である。
+そこで、`main`と`preprocessor`の署名と型宣言が同じなら、`.script.yaml`も同じとみなす。
+`metadata_signature.ts`は、構文木を作らず、字句で読む。
+workerで動くwasmのパーサーに、依存を増やさないためである。
+
+- コメントを除き、文字列、テンプレート、正規表現を1つの字句にして、括弧の対応を数える。
+- 署名は、`export function main`(`async`つきを含む)から、本体の開き波括弧の前までである。
+  引数の既定値と戻り値の型を含むので、`schema`の`default`が変わるときも署名が変わる。
+- トップレベルの`type`、`interface`、`enum`、`class`の宣言文も、署名とあわせて比べる。
+  同じファイルの型宣言の中身を変えると、`schema`が変わる(実測)ためである。
+  比べる宣言は、`main`の署名が参照するものに絞らず、ファイルのすべてにする。
+  `.script.yaml`が変わらない変更でも人の手に回りうるが、安全側の措置である。
+- 型宣言は、`main`と`preprocessor`のどちらかがあるファイルだけで比べる。
+  どちらも無いファイル(lib)は、型のフィールド、enumの値、classのメソッドの追加と変更が、`.script.yaml`を変えなかった(実測)。
+- 空白とコメントの違いは、違いとして扱わない。
+- 字句を読み切れないときは、読めないものとして断る。
+  閉じない文字列とコメント、閉じ波括弧の後の`/`、括弧の不一致がこれにあたる。
+- `main`と`preprocessor`が`export function`以外の形で公開されるとき(変数、既定のexport、`export { main }`)と、2つ以上あるときも断る。
+  `export`の次の12字句までを、`=`、`(`、`;`で止めて見る。改行では止めない。
+- Windmillの注釈に見えるコメント行(`//npm`、`//nodejs`、`//native`、`// package_json: x`など)の集合も比べる。
+  形は、`//`の後に1語、続けて任意で`:`と値、とする。ファイルのどこにあっても拾う。
+  1語だけの普通のコメントも拾うので、その追加や変更は人の手に回る。
+- テンプレートの`${}`の入れ子は64段までにし、超えたら読めないものとして断る。
+  字句に分ける処理が例外を投げたときも、読めないものとして断る。
+
+実機で確かめた、コードと`.script.yaml`、`.script.lock`の関係は次のとおりである(wmill CLI 1.817.0、ローカルのWindmill)。
+
+- 同じファイルの`type`宣言の中身を変えると、`.script.yaml`の`schema`が変わる(`properties`の追加、`enum`の値の追加)。
+- 別のファイルからimportした型の中身と、型をimportする元のファイルは、`.script.yaml`を変えない。引数の型は、型名(`Opts`なら`format: resource-opts`)で決まる。
+- `main`のJSDoc、引数の前後のコメント、`main`の本体のコメントは、`.script.yaml`を変えない。
+- `preprocessor`の追加は、`has_preprocessor: true`を足す。署名の変更は`.script.yaml`を変えないが、署名も比べる。
+- `//npm`の追加は、`.script.lock`のbun.lockの部分を変える。
+- `//nodejs`、`//nobundling`、`//native`、`//bun`は、`.script.lock`を変えなかった。
+  ただし、実行の仕方を変えるので、比べる。
+- `//npm foo`、`//nobundling // x`、`//npm,nodejs`は、`.script.lock`を変えなかった。注釈の形を、1語の後ろに任意の文字を許す形に広げる必要は無い。
+- `// package_json: {…}`と値を同じ行に書く形は、`.script.lock`を`// workspace-dependencies-mode: manual`に変える。
+- `// package_json:`と`//extra_package_json:`の後ろの行に値を書く形は、このWindmillでは、`.script.lock`を作れず失敗する。
+  失敗の理由は、このworkerが、インラインのworkspace dependenciesとextra modeを使えないことである。
+  依存が実際に解決される形は確かめられなかったので、`:`で終わる注釈と、`:`の後に値がある注釈に続く`//`の行を、注釈として集めて比べる。
+- exportの付かない`function main(x: string) {}`の追加は、`schema`を変える。`export default function main`は、`.script.yaml`を変えなかった。
+  exportの有無にかかわらず、`main`の宣言を見つけたら人の手に回す。
+- アロー関数の`const main = (a: string) => {}`は、`export`の有無を問わず、追加と変更のどちらでも、`.script.yaml`を変えなかった。
+  `export const main`は安全側に人の手に回すが、`schema`の元にはならない。
+- 使われないimportと、型の位置でしか使わないimportの追加は、`.script.lock`の`dependencies`を変えない。
+  値として使うimportの追加は、変える。
+- 字句の読み取りは、括弧が対応する入力を前提にする。
+  `checkDependencies`が先に、headのすべての`.ts`をトランスパイラに通すので、構文が不正な入力はそこで断られる。
+  型宣言の範囲を数える処理は、数える字句の数に上限を置き、仕事量を有界にしている。
+  範囲を探すために進めた字句と、宣言のダイジェストのために読んだ字句を、あわせて数える。
+  宣言は文字列として持たず、sha256のダイジェストだけを持つ。
+  範囲が重なる宣言(`class A1 extends class A2 extends …`のように入れ子にした形)が、同じ本体を何度も保持しないためである。
+  超えたら`main_unparsable`で人の手に回る。
+  括弧が対応する入力を前提にする点は、この順序に頼る。
+
+### 算法を固定するテスト
+
+`tests/lib/metadata_hash.test.ts`は、リポジトリのcommit済みのファイルから計算したhashを、`wmill-lock.yaml`のすべての項目と比べる。
+ファイルが無いまま残っている項目だけが、一覧で例外になる。
+`mise.toml`のwmill CLIの版が、`ASSUMED_WMILL_CLI_VERSION`と違うときも、このテストが落ちる。
+
+テストが落ちたときは、算法を確かめ直す。
+
+1. 新しい版の`generateScriptHash`、`generateFlowHash`、`generate-metadata rehash`の分岐を読む。
+2. 摂動を加えたコピーで、`wmill generate-metadata rehash`の出力と`patchWmillLock`の結果を、バイトで比べる。
+3. 再計算したlockで、`wmill generate-metadata --dry-run`が、すべて最新だと答えることを確かめる。
+4. `ASSUMED_WMILL_CLI_VERSION`を直す。
+
+`rehash`はバックエンドなしで動き、依存が変わらないPRでは、通常の再生成と同じ`wmill-lock.yaml`を出す。
+確かめ直すときの照合に使い、テストの本体には入れない。
 
 ## 既知の限界
 
@@ -647,3 +875,26 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
   古いlockに新しいhashが残る形は、import集合の比較と、解決の一致で防ぐ。
 - パッチの`.script.yaml`の`schema`のうち、`default`、`enum`、`format`、`resourceType`の中身は読まない。
   コードの既定値と違う`default`を、Factoryのcommitに置ける。
+- `main`の署名の比較は、字句の近似である。
+  正規表現と除算の見分けや、型宣言の範囲を、完全には決められない。
+  決められない形は断るが、字句の読み違いで、署名の違いを見落とす入力がありうる。
+- 実行時に残るimportの読み方は、Bunの版にも依存する。
+  worker(1.4.0)とローカル(1.4.2)で、リポジトリの全scriptの閉包のパッケージ名が`.script.lock`の`dependencies`と一致することを、両方で確かめた。
+  較正のテストは、`Bun.version`を失敗の説明に残す。
+  `scanImports`がマクロを実行しないことを確かめたのは、Bun 1.4.0と1.4.2だけである。
+  workerのBunを上げるときは、実行時のimportのテストを、workerのイメージで流し直す。
+  検査の入口の自己検査は、型だけのimport、副作用のimport、値のimport、再export、名前空間import、リテラルの動的importを、固定の入力で確かめる。
+  import属性を持つimportが、読む前に断られることも、入口で確かめる。
+  想定と違う結果を見つけたときは、`internal_error`で止め、補足にBunの版を載せる。
+  Bunの版の許可リストは持たない。版が変わっても、自己検査を通ればよい。
+- 手元で`mise run check:comment-only`を未信頼のブランチに流すと、マクロが実行されうる。
+  `scripts/check-comment-only-diff.ts`が`transformSync`を使うためである。
+  この部品の外にある、別の経路である。
+- 上限を置いていない範囲もある。
+  検査は、`listTree`が返す項目の数を数えない。`f/`以外の項目は、形の検査と表の構築の分だけ、項目の数に比例する。
+  ポートの呼び出しの時間には、検査は期限を持たない。
+  1つのファイルの字句の分割とimportの読み取りは、ファイルの大きさに比例し、時間の上限を持たない。
+  ファイルの大きさと読む合計に上限があるので、時間は有界だが、時間そのものの上限は置いていない。
+- hashの算法は、`ASSUMED_WMILL_CLI_VERSION`の版だけで確かめた。
+  `dependencies/`、`__mod`のフォルダ、JSONのflowのように、このリポジトリに無い形は、写さずに人の手に回す。
+  算法を固定するテストが見つけられるのは、版の変更と、リポジトリの現物との食い違いだけである。

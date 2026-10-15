@@ -124,6 +124,7 @@ const REVIEW_ROWS: SqlRow[] = [
     review_id: "4",
     head_sha: "abc1234",
     verdict: "comment",
+    result: "reviewed",
     finding_count: 2,
     posted_review_id: "999",
     created_at: new Date(T0),

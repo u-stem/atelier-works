@@ -212,7 +212,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `job_failures` | フローの失敗の記録。失敗を記録したジョブのルートジョブIDも持つ。トークンはマスクしてから書く |
 | `deployments` | 自己更新によるデプロイの結果。変更したパスと、含まれるPR(`pull_requests`)、失敗の理由(`error`)も持つ |
 | `notices` | 人が対応すべき事項。PATの失効やSHAの不一致など。解決した人と時刻(`resolved_by`、`resolved_at`)も持ち、DBの掃除が解決した行の`resolved_by`は`cleanup_db`になる |
-| `reviews` | pr_reviewの実行1回ごとの判定、総評、指摘、投稿したレビューのID |
+| `reviews` | pr_reviewの実行1回ごとの判定、修正必須の指摘の有無(`result`)、総評、指摘、投稿したレビューのID |
 | `fix_rounds` | pr_fixの実行1回ごとの結果、返信、コミット |
 | `implement_rounds` | 実装フローのClaude実行1ラウンドごとの記録 |
 | `issue_proposals` | Issue化の提案の題名と本文、決定の履歴 |
@@ -411,6 +411,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
+| `f/factory/lib/metadata_hash` | script | [LIB] メタデータのhashの再計算 |
+| `f/factory/lib/metadata_precheck` | script | [LIB] メタデータのhashの再計算の事前検査 |
+| `f/factory/lib/metadata_signature` | script | [LIB] メタデータのmainの引数の比較 |
 | `f/factory/lib/metadata_patch_imports` | script | [LIB] メタデータのパッチのimportの読み取り |
 | `f/factory/lib/metadata_patch_yaml` | script | [LIB] メタデータのパッチのyamlの検査 |
 | `f/factory/lib/metadata_patch_zip` | script | [LIB] メタデータのパッチのzipの読み取り |
@@ -703,6 +706,6 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
-- CIが出したメタデータのパッチ(`metadata-patch`)をFactoryが適用して、PRを直すこと。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- CIが出したメタデータのパッチ(`metadata-patch`)の適用か、Factory自身による`wmill-lock.yaml`のhashの再計算で、PRを直すこと。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

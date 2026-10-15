@@ -70,9 +70,11 @@ import {
   isRecord,
   isString,
   type LabelerAssociation,
+  type NewReviewRecord,
   type NoticeRecord,
   type ReviewFinding,
   type ReviewFindingKind,
+  type ReviewResult,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
@@ -196,9 +198,35 @@ export function normalizeJapaneseText(text: string): string {
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
   openMustCount: number,
-): "changes_requested" | "reviewed" {
+): ReviewResult {
   const hasMustFinding = findings.some((finding) => finding.kind === "must");
   return hasMustFinding || openMustCount > 0 ? "changes_requested" : "reviewed";
+}
+
+/**
+ * `factory.reviews`に書く行を組み立てる。
+ * `result`は、今回の指摘と`openMustCount`から`reviewResultFor`で決める。
+ * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
+ * `verdict`が`approve`で今回の指摘が0件でも、未解決の`[MUST]`が残れば`changes_requested`になる。
+ */
+export function buildReviewRecord(input: {
+  readonly workItemId: number;
+  readonly headSha: string;
+  readonly verdict: ReviewVerdict;
+  readonly summary: string;
+  readonly findings: readonly ReviewFinding[];
+  readonly openMustCount: number;
+  readonly postedReviewId: string | null;
+}): NewReviewRecord {
+  return {
+    work_item_id: input.workItemId,
+    head_sha: input.headSha,
+    verdict: input.verdict,
+    result: reviewResultFor(input.findings, input.openMustCount),
+    summary: input.summary,
+    findings: [...input.findings],
+    posted_review_id: input.postedReviewId,
+  };
 }
 
 // ---------------------------------------------------------------------------

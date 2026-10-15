@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
+import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import {
   GitHubHttpError,
   type ReviewComment,
@@ -21,9 +22,13 @@ import {
   type PublishReviewInput,
   postMarkedReview,
   publishReview,
+  reviewedNotifyEvent,
   runPrReviewPost,
+  sendReviewedNotification,
+  shouldPostReview,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
+  buildReviewRecord,
   commentedFindingsOf,
   countOpenMustThreads,
   decideReviewBodyMode,
@@ -640,6 +645,62 @@ describe("reviewResultFor", () => {
     expect(reviewResultFor([finding({ kind: "nits" })], 2)).toBe(
       "changes_requested",
     );
+  });
+});
+
+describe("buildReviewRecord", () => {
+  const base = {
+    workItemId: 7,
+    headSha: "abc1234",
+    summary: "no new findings",
+    postedReviewId: "99",
+  };
+
+  test("marks an approving review with no new finding as changes_requested while a must is open", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 1,
+      }).result,
+    ).toBe("changes_requested");
+  });
+
+  test("marks an approving review with no new finding and no open must as reviewed", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 0,
+      }).result,
+    ).toBe("reviewed");
+  });
+
+  test("keeps the verdict as Claude returned it", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 1,
+      }).verdict,
+    ).toBe("approve");
+  });
+
+  test("carries the identifiers of the work item, the commit and the posted review", () => {
+    const record = buildReviewRecord({
+      ...base,
+      verdict: "comment",
+      findings: [],
+      openMustCount: 0,
+    });
+    expect([
+      record.work_item_id,
+      record.head_sha,
+      record.posted_review_id,
+    ]).toEqual([7, "abc1234", "99"]);
   });
 });
 
@@ -1455,5 +1516,151 @@ describe("posting a review once per sha", () => {
       );
       expect(fake.calls.some(isCreateReviewCall)).toBe(false);
     });
+
+    test("returns no posted review id when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      expect(result.postedReviewId).toBeNull();
+    });
+
+    test("does not mark the review as reused when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      expect(result.reused).toBe(false);
+    });
+
+    test("yields no review notification when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      const event = reviewedNotifyEvent({
+        posted: result.postedReviewId !== null,
+        instance_name: "factory-a",
+        owner: TARGET.owner,
+        repo: TARGET.repo,
+        pr_number: TARGET.pr_number,
+        verdict: "request_changes",
+        findings: [finding({ kind: "must" })],
+        openMustCount: result.openMustCount,
+      });
+      expect(event).toBeNull();
+    });
+  });
+});
+
+describe("reviewedNotifyEvent", () => {
+  const base = {
+    instance_name: "factory-a",
+    owner: "octo",
+    repo: "app",
+    pr_number: 7,
+    verdict: "request_changes",
+  };
+
+  test("returns a pr_reviewed event when the review was posted", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      posted: true,
+      findings: [finding({ kind: "must" })],
+      openMustCount: 0,
+    });
+    expect(event).toEqual({
+      kind: "pr_reviewed",
+      instance_name: "factory-a",
+      owner: "octo",
+      repo: "app",
+      pr_number: 7,
+      pr_url: "https://github.com/octo/app/pull/7",
+      verdict: "request_changes",
+      finding_count: 1,
+      result: "changes_requested",
+    });
+  });
+
+  test("reports changes_requested for a posted review with open must threads only", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      posted: true,
+      findings: [],
+      openMustCount: 2,
+    });
+    expect(event).toMatchObject({ result: "changes_requested" });
+  });
+
+  test.each([
+    ["a must finding", [finding({ kind: "must" })], 0],
+    ["no findings", [], 0],
+    ["open must threads only", [], 2],
+  ])(
+    "returns null when the review was not posted (%s)",
+    (_name, findings, openMustCount) => {
+      const event = reviewedNotifyEvent({
+        ...base,
+        posted: false,
+        findings,
+        openMustCount,
+      });
+      expect(event).toBeNull();
+    },
+  );
+});
+
+describe("shouldPostReview", () => {
+  test("posts in comment_only mode", () => {
+    expect(shouldPostReview("comment_only")).toBe(true);
+  });
+
+  test("does not post in gated mode", () => {
+    expect(shouldPostReview("gated")).toBe(false);
+  });
+});
+
+describe("sendReviewedNotification", () => {
+  const event: NotifyEvent = {
+    kind: "pr_reviewed",
+    instance_name: "factory-a",
+    owner: "octo",
+    repo: "app",
+    pr_number: 7,
+    pr_url: "https://github.com/octo/app/pull/7",
+    verdict: "approve",
+    finding_count: 0,
+    result: "reviewed",
+  };
+
+  test("does not read the webhook when there is no event", async () => {
+    const calls: string[] = [];
+    await sendReviewedNotification(null, {
+      getWebhookUrl: async () => {
+        calls.push("getWebhookUrl");
+        return "https://example.test/hook";
+      },
+      notify: async () => {
+        calls.push("notify");
+      },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("sends the event to the webhook when there is one", async () => {
+    const calls: [string, NotifyEvent][] = [];
+    await sendReviewedNotification(event, {
+      getWebhookUrl: async () => "https://example.test/hook",
+      notify: async (url, sent) => {
+        calls.push([url, sent]);
+      },
+    });
+    expect(calls).toEqual([["https://example.test/hook", event]]);
   });
 });

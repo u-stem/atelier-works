@@ -57,6 +57,7 @@ const REVIEW: WorkItemReview = {
   review_id: 1,
   head_sha: "abc1234",
   verdict: "comment",
+  result: "reviewed",
   finding_count: 2,
   posted_review_id: null,
   created_at: T0,

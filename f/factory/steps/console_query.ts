@@ -1514,6 +1514,8 @@ export type WorkItemReviewRow = {
   readonly review_id: number;
   readonly head_sha: string;
   readonly verdict: string;
+  /** `reviewResultFor`の結果。結果を記録する前の行では`null`。 */
+  readonly result: string | null;
   readonly finding_count: number;
   readonly posted_review_id: string | null;
   readonly created_at: string;
@@ -1524,6 +1526,7 @@ function toWorkItemReviewRow(row: SqlRow): WorkItemReviewRow {
     review_id: asId(row.review_id, "review_id"),
     head_sha: asStr(row.head_sha, "head_sha"),
     verdict: asStr(row.verdict, "verdict"),
+    result: asNullableStr(row.result, "result"),
     finding_count: asNumeric(row.finding_count, "finding_count"),
     posted_review_id: asNullableStr(row.posted_review_id, "posted_review_id"),
     created_at: asIsoDate(row.created_at, "created_at"),
@@ -1672,7 +1675,7 @@ export async function runWorkItemDetail(
 
   const reviewRows = await sql`
     SELECT
-      id AS review_id, head_sha, verdict,
+      id AS review_id, head_sha, verdict, result,
       jsonb_array_length(findings) AS finding_count,
       posted_review_id, created_at
     FROM factory.reviews

@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのhashの再計算の事前検査'
+description: 内部ライブラリです。直接実行するものではありません。gitの木から、依存が変わらない再生成かを確かめ、確かめられたときだけwmill-lock.yamlの新しい本文を返します。
+lock: '!inline f/factory/lib/metadata_precheck.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
