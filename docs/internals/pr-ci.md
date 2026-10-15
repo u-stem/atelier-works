@@ -904,7 +904,7 @@ Factoryのレビューの記録は要求しない。
 | 予算を使い切った、ドラフトかauto-mergeが有効、の固定文 | `budget_exceeded`、`pr_draft_or_auto_merge` |
 
 Claudeの出力には、固定文の前に接頭辞が付く。接頭辞は「conflict round: claude blocked: 」である。
-そのため、出力の中の文字列で、保留の理由を選ばれない。
+そのため、Claudeの出力の中の文字列が、保留の理由を決めることは無い。
 
 ### 競合を直す作業項目と行の結び
 
