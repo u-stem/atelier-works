@@ -166,7 +166,8 @@ PRが要件定義に紐づくのは、Factoryの実装フローが作ったPRか
 
 再レビューでは、実質的に同じ内容の指摘を新しい指摘として投稿しない。新しい指摘と、変化があった指摘だけを報告する。差分で解消済みと判断できる指摘は何も報告しない。スレッドの解決は別の処理が行う。
 
-レビューは常にGitHubのCOMMENTレビューとして投稿する。承認(approve)と変更の要求(request changes)は使わない。スキルが返す判定(`verdict`)は`factory.reviews`とDiscordに残すだけで、投稿の種類には使わない。
+レビューは常にGitHubのCOMMENTレビューとして投稿する。承認(approve)と変更の要求(request changes)は使わない。スキルが返す判定(`verdict`)は`factory.reviews`に残すだけで、投稿の種類にも、通知とConsoleの状態にも使わない。
+通知とConsoleのレビュー行は、flowが決めた結果(`factory.reviews`の`result`)を使う。結果は、修正必須の指摘の有無で決まる(通知の規則は[通知](notifications.md)にある)。
 
 ### 投稿の形
 

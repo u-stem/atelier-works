@@ -488,11 +488,22 @@ export type ReviewFinding = {
  */
 export type ReviewVerdict = "approve" | "comment" | "request_changes";
 
-/** `db.insertReview`に渡す、`factory.reviews`の1行。 */
+/**
+ * 投稿したレビューの結果。Discordの通知とConsoleのレビュー行が、同じ基準で状態を出す。
+ * `changes_requested`は、修正必須の指摘が未解決の状態である。
+ * `reviewed`は、修正必須の指摘が無く、人の承認を待つ状態である。
+ */
+export type ReviewResult = "changes_requested" | "reviewed";
+
+/**
+ * `db.insertReview`に渡す、`factory.reviews`の1行。
+ * `result`は、結果を記録する前に作られた行を読むときだけ`null`になる。
+ */
 export type ReviewRecord = {
   work_item_id: number;
   head_sha: string;
   verdict: ReviewVerdict;
+  result: ReviewResult | null;
   summary: string;
   findings: ReviewFinding[];
   posted_review_id: string | null;

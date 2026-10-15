@@ -55,6 +55,7 @@ const REVIEW = {
   review_id: 4,
   head_sha: "abc1234",
   verdict: "comment",
+  result: "reviewed",
   finding_count: 2,
   posted_review_id: "999",
   created_at: T0,
@@ -247,6 +248,18 @@ describe("isWorkItemDetail", () => {
         ...DETAIL,
         transitions: [{ ...TRANSITION, occurred_at: null }],
       }),
+    ).toBe(false);
+  });
+
+  test("accepts a review without a recorded result", () => {
+    expect(
+      isWorkItemDetail({ ...DETAIL, reviews: [{ ...REVIEW, result: null }] }),
+    ).toBe(true);
+  });
+
+  test("rejects a review whose result is a number", () => {
+    expect(
+      isWorkItemDetail({ ...DETAIL, reviews: [{ ...REVIEW, result: 1 }] }),
     ).toBe(false);
   });
 

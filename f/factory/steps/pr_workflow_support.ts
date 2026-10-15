@@ -73,6 +73,7 @@ import {
   type NoticeRecord,
   type ReviewFinding,
   type ReviewFindingKind,
+  type ReviewResult,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
@@ -196,7 +197,7 @@ export function normalizeJapaneseText(text: string): string {
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
   openMustCount: number,
-): "changes_requested" | "reviewed" {
+): ReviewResult {
   const hasMustFinding = findings.some((finding) => finding.kind === "must");
   return hasMustFinding || openMustCount > 0 ? "changes_requested" : "reviewed";
 }

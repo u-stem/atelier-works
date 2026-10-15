@@ -143,7 +143,7 @@ export async function main(
  * `verdict`が想定外の値なら例外を投げる。
  *
  * GitHubのレビューのeventは常にCOMMENTで、approve / request_changesは使わない
- * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`とDiscordにだけ残す。
+ * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`にだけ残す。
  * トリガーの`review_label`は着手時に消費済みなので、ここで外すラベルも、
  * 付けるPRの状態ラベルも無い。
  * 投稿後に結果を決め、今回の指摘に`kind === "must"`があるか、
@@ -556,10 +556,14 @@ async function postReview(
     ? null
     : "review_post_mode is gated: recorded without posting";
 
+  // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、
+  // 未解決の[MUST]を数えた結果を、レビューと一緒に記録する。
+  const result = reviewResultFor(findings, openMustCount);
   await insertReview({
     work_item_id,
     head_sha: review_sha,
     verdict,
+    result,
     summary,
     findings,
     posted_review_id: postedReviewId,
@@ -574,7 +578,6 @@ async function postReview(
   if (moved) {
     // トリガーの`review_label`は`poll_prs.ts`が着手時に消費済みなので、
     // ここで外すラベルも、付けるPRの状態ラベルも無い。
-    const result = reviewResultFor(findings, openMustCount);
     const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
     const event: NotifyEvent = {
       kind: "pr_reviewed",

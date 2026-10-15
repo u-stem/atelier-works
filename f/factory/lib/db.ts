@@ -77,6 +77,7 @@ import {
   type ReviewFinding,
   type ReviewFindingKind,
   type ReviewRecord,
+  type ReviewResult,
   type ReviewSeverity,
   type ReviewVerdict,
   TERMINAL_WORK_ITEM_STATUSES,
@@ -1973,6 +1974,10 @@ const REVIEW_VERDICTS: readonly ReviewVerdict[] = [
   "comment",
   "request_changes",
 ];
+const REVIEW_RESULTS: readonly ReviewResult[] = [
+  "changes_requested",
+  "reviewed",
+];
 const REVIEW_SEVERITIES: readonly ReviewSeverity[] = [
   "blocker",
   "major",
@@ -1992,9 +1997,9 @@ export async function insertReview(
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const statement = sql`
-    INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary, findings, posted_review_id)
+    INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, findings, posted_review_id)
     VALUES (
-      ${record.work_item_id}::bigint, ${record.head_sha}, ${record.verdict}, ${record.summary},
+      ${record.work_item_id}::bigint, ${record.head_sha}, ${record.verdict}, ${record.result}, ${record.summary},
       ${JSON.stringify(record.findings)}::jsonb, ${record.posted_review_id}
     )
     RETURNING id
@@ -2077,6 +2082,10 @@ export function toReviewRecord(row: SqlRow): ReviewRecord {
     work_item_id: parseId(row.work_item_id, "work_item_id"),
     head_sha: parseRequiredString(row.head_sha, "head_sha"),
     verdict: parseEnum<ReviewVerdict>(row.verdict, REVIEW_VERDICTS, "verdict"),
+    result:
+      row.result === null || row.result === undefined
+        ? null
+        : parseEnum<ReviewResult>(row.result, REVIEW_RESULTS, "result"),
     summary: parseRequiredString(row.summary, "summary"),
     findings,
     posted_review_id: parseNullableString(

@@ -2049,6 +2049,7 @@ describe("insertReview", () => {
         work_item_id: 1,
         head_sha: "abc1234",
         verdict: "approve",
+        result: "reviewed",
         summary: "looks good",
         findings: [],
         posted_review_id: "review-1",
@@ -2058,6 +2059,23 @@ describe("insertReview", () => {
     expect(calls[0]?.text).toContain("INSERT INTO factory.reviews");
   });
 
+  test("records the result of an approving review that still has an open must", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview(
+      {
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "approve",
+        result: "changes_requested",
+        summary: "no new findings",
+        findings: [],
+        posted_review_id: "review-1",
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain("changes_requested");
+  });
+
   test("casts work_item_id to ::bigint", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
     await insertReview(
@@ -2065,6 +2083,7 @@ describe("insertReview", () => {
         work_item_id: 1,
         head_sha: "abc1234",
         verdict: "approve",
+        result: "reviewed",
         summary: "looks good",
         findings: [],
         posted_review_id: "review-1",
@@ -2076,6 +2095,46 @@ describe("insertReview", () => {
 });
 
 describe("toReviewRecord", () => {
+  test("parses the recorded result", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "approve",
+      result: "changes_requested",
+      summary: "s",
+      findings: [],
+      posted_review_id: null,
+    });
+    expect(review.result).toBe("changes_requested");
+  });
+
+  test("reads a row without a recorded result as null", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "approve",
+      result: null,
+      summary: "s",
+      findings: [],
+      posted_review_id: null,
+    });
+    expect(review.result).toBeNull();
+  });
+
+  test("rejects a result that is not known", () => {
+    expect(() =>
+      toReviewRecord({
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "approve",
+        result: "zeta",
+        summary: "s",
+        findings: [],
+        posted_review_id: null,
+      }),
+    ).toThrow();
+  });
+
   test("parses findings from a jsonb row", () => {
     const review = toReviewRecord({
       work_item_id: 1,

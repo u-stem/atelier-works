@@ -639,6 +639,16 @@ describe("reviewResultFor", () => {
   });
 });
 
+describe("pr_review_post result recording", () => {
+  test("records the result that the notification also uses", async () => {
+    const text = await Bun.file(
+      new URL("../../f/factory/steps/pr_review_post.ts", import.meta.url),
+    ).text();
+    const record = text.slice(text.indexOf("await insertReview({"));
+    expect(record.slice(0, record.indexOf("});"))).toContain("result,");
+  });
+});
+
 describe("runPrReviewPost worktree cleanup", () => {
   const REPO_DIR = "/workspaces/acme/widgets/main";
   const WORKTREE_DIR = "/workspaces/acme/widgets/review-1-abc1234";

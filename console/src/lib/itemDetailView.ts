@@ -433,16 +433,22 @@ export function describeRound(round: WorkItemRound): RoundView {
   };
 }
 
-const VERDICT_LABELS: ReadonlyMap<string, string> = new Map([
-  ["approve", "承認"],
-  ["comment", "コメント"],
-  ["request_changes", "修正を依頼"],
+/**
+ * レビュー行の状態は、Discordの通知と同じ基準(未解決の修正必須の指摘の有無)で出す。
+ * Claudeの判定(`verdict`)は、前のラウンドから残った未解決の指摘を数えないため使わない。
+ */
+const RESULT_LABELS: ReadonlyMap<string, string> = new Map([
+  ["changes_requested", "修正必須の指摘が未解決"],
+  ["reviewed", "修正必須の指摘なし"],
 ]);
 
-const VERDICT_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> = new Map([
-  ["approve", "success"],
-  ["request_changes", "warning"],
+const RESULT_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> = new Map([
+  ["changes_requested", "warning"],
+  ["reviewed", "success"],
 ]);
+
+/** 結果を記録する前に作られた行に出す表示。 */
+const RESULT_MISSING_LABEL = "判定の記録なし";
 
 /** コミットの表示に使う先頭の桁数。 */
 const SHORT_SHA_LENGTH = 7;
@@ -450,8 +456,8 @@ const SHORT_SHA_LENGTH = 7;
 export type ReviewView = {
   readonly key: number;
   readonly shaLabel: string;
-  readonly verdictLabel: string;
-  readonly verdictVariant: PipelineStatusVariant;
+  readonly resultLabel: string;
+  readonly resultVariant: PipelineStatusVariant;
   readonly findingLabel: string;
   readonly createdAt: string;
 };
@@ -460,9 +466,14 @@ export function describeReview(review: WorkItemReview): ReviewView {
   return {
     key: review.review_id,
     shaLabel: plain(review.head_sha).slice(0, SHORT_SHA_LENGTH),
-    verdictLabel:
-      VERDICT_LABELS.get(review.verdict) ?? unknownLabel(review.verdict),
-    verdictVariant: VERDICT_VARIANTS.get(review.verdict) ?? "muted",
+    resultLabel:
+      review.result === null
+        ? RESULT_MISSING_LABEL
+        : (RESULT_LABELS.get(review.result) ?? unknownLabel(review.result)),
+    resultVariant:
+      review.result === null
+        ? "muted"
+        : (RESULT_VARIANTS.get(review.result) ?? "muted"),
     findingLabel: `指摘 ${review.finding_count}件`,
     createdAt: review.created_at,
   };

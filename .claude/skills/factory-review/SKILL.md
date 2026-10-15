@@ -191,7 +191,8 @@ dependabotの更新を自動でマージする前の影響調査は、`factory-d
 
 `verdict`はGitHub上の投稿には反映されない。
 GitHub APIの制約から、PRレビューの投稿種別は常に`COMMENT`にし、`approve`や`request_changes`としては投稿しない。
-`verdict`はData Tableの`factory.reviews`テーブルに記録され、Consoleの表示とDiscordの通知に使われる。
+`verdict`はData Tableの`factory.reviews`テーブルに記録するだけで、Consoleの表示にもDiscordの通知にも使われない。
+どちらも、修正必須の指摘の有無(今回の`[MUST]`と、前のラウンドから残った未解決の`[MUST]`)から、flowが状態を決める。
 
 ### summary
 
