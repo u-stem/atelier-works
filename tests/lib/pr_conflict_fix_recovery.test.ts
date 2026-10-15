@@ -1,0 +1,261 @@
+import { describe, expect, test } from "bun:test";
+import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
+import {
+  CONFLICT_ROUND_DETAILS,
+  conflictRoundReason,
+} from "../../f/factory/lib/conflict_fix_round.ts";
+import { STALE_IMAGE_WAIT_MS } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
+import {
+  type ConflictFixItemState,
+  decideConflictFixRecovery,
+  holdReasonForConflictStoppedItem,
+} from "../../f/factory/lib/pr_conflict_fix_recovery.ts";
+import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
+
+const NOW = new Date("2026-10-15T12:00:00Z");
+const STALE_IMAGE_NOTE =
+  "worker image is stale: run mise run up: sudo is missing";
+
+function item(
+  status: WorkItemStatus,
+  overrides: Partial<ConflictFixItemState> = {},
+): ConflictFixItemState {
+  return {
+    status,
+    updatedAt: new Date(NOW.getTime() - 60_000),
+    note: null,
+    pushed: false,
+    launched: true,
+    ...overrides,
+  };
+}
+
+describe("holdReasonForConflictStoppedItem", () => {
+  test.each([
+    [CONFLICT_ROUND_DETAILS.baseNotDefault, "base_not_default"],
+    [CONFLICT_ROUND_DETAILS.baseChangesWorkflows, "base_changes_workflows"],
+    [CONFLICT_ROUND_DETAILS.protectedPath, "protected_path"],
+    [CONFLICT_ROUND_DETAILS.unresolvable, "unresolvable"],
+    [CONFLICT_ROUND_DETAILS.checkFailed, "check_failed"],
+    [CONFLICT_ROUND_DETAILS.markerMissing, "marker_missing"],
+  ] as const)("maps the fixed note %s", (detail, reason) => {
+    expect(holdReasonForConflictStoppedItem(conflictRoundReason(detail))).toBe(
+      reason,
+    );
+  });
+
+  test("maps the daily budget note", () => {
+    expect(
+      holdReasonForConflictStoppedItem(
+        "daily budget exceeded ($50.00 >= $50.00)",
+      ),
+    ).toBe("budget_exceeded");
+  });
+
+  test.each(["pull request is a draft", "pull request has auto-merge enabled"])(
+    "maps the push guard note %s",
+    (note) => {
+      expect(holdReasonForConflictStoppedItem(note)).toBe(
+        "pr_draft_or_auto_merge",
+      );
+    },
+  );
+
+  test("returns null for no note", () => {
+    expect(holdReasonForConflictStoppedItem(null)).toBeNull();
+  });
+
+  test("returns null for a note that is not fixed text", () => {
+    expect(holdReasonForConflictStoppedItem("something else")).toBeNull();
+  });
+
+  test("does not map a note without the prefix", () => {
+    expect(
+      holdReasonForConflictStoppedItem(CONFLICT_ROUND_DETAILS.unresolvable),
+    ).toBeNull();
+  });
+
+  test("does not map a note that continues after the fixed text", () => {
+    expect(
+      holdReasonForConflictStoppedItem(
+        `${conflictRoundReason(CONFLICT_ROUND_DETAILS.protectedPath)}; extra`,
+      ),
+    ).toBeNull();
+  });
+
+  test("does not map text quoted inside a Claude block reason", () => {
+    expect(
+      holdReasonForConflictStoppedItem(
+        `${conflictRoundReason("claude blocked: ")}${conflictRoundReason(
+          CONFLICT_ROUND_DETAILS.protectedPath,
+        )}`,
+      ),
+    ).toBeNull();
+  });
+
+  test("does not map a CI round note", () => {
+    expect(
+      holdReasonForConflictStoppedItem(
+        "ci round: the factory-fix skill lacks the ci-fix-skill:v1 marker",
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("decideConflictFixRecovery", () => {
+  test("releases a row whose work item does not exist, without a hold", () => {
+    expect(decideConflictFixRecovery(null, NOW)).toEqual({
+      kind: "release",
+      hold: null,
+    });
+  });
+
+  test("keeps a row whose work item is still fixing", () => {
+    expect(decideConflictFixRecovery(item("fixing"), NOW)).toEqual({
+      kind: "keep",
+    });
+  });
+
+  test("reports a push for rereview_requested", () => {
+    expect(decideConflictFixRecovery(item("rereview_requested"), NOW)).toEqual({
+      kind: "pushed",
+    });
+  });
+
+  test("reports a push for a stopped work item with a pushed commit", () => {
+    expect(
+      decideConflictFixRecovery(item("needs_human", { pushed: true }), NOW),
+    ).toEqual({ kind: "pushed" });
+  });
+
+  test("reports up_to_date for a reviewed work item with the fixed note", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("reviewed", {
+          note: conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate),
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "up_to_date" });
+  });
+
+  test("tells up_to_date apart from a push", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("reviewed", {
+          note: conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate),
+        }),
+        NOW,
+      ).kind,
+    ).not.toBe("pushed");
+  });
+
+  test("releases a reviewed work item without the up_to_date note, without a hold", () => {
+    expect(
+      decideConflictFixRecovery(item("reviewed", { note: "other" }), NOW),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test.each([
+    [CONFLICT_ROUND_DETAILS.baseNotDefault, "base_not_default"],
+    [CONFLICT_ROUND_DETAILS.baseChangesWorkflows, "base_changes_workflows"],
+    [CONFLICT_ROUND_DETAILS.protectedPath, "protected_path"],
+    [CONFLICT_ROUND_DETAILS.unresolvable, "unresolvable"],
+    [CONFLICT_ROUND_DETAILS.checkFailed, "check_failed"],
+  ] as const)(
+    "holds a needs_human work item stopped by %s",
+    (detail, reason) => {
+      expect(
+        decideConflictFixRecovery(
+          item("needs_human", { note: conflictRoundReason(detail) }),
+          NOW,
+        ),
+      ).toEqual({ kind: "release", hold: reason });
+    },
+  );
+
+  test("holds fix_stopped for a needs_human work item with an unmapped note", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("needs_human", { note: "conflict round: claude blocked: x" }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test("holds fix_stopped for a needs_human work item without a note", () => {
+    expect(decideConflictFixRecovery(item("needs_human"), NOW)).toEqual({
+      kind: "release",
+      hold: "fix_stopped",
+    });
+  });
+
+  test("holds a blocked work item by its mapped note", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("blocked", {
+          note: conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed),
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "check_failed" });
+  });
+
+  test("holds fix_stopped for a blocked work item with an unmapped note", () => {
+    expect(
+      decideConflictFixRecovery(item("blocked", { note: "boom" }), NOW),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test("the stale image note is one of the auto retry reasons", () => {
+    expect(
+      AUTO_RETRY_REASON_PREFIXES.some((prefix) =>
+        STALE_IMAGE_NOTE.startsWith(prefix),
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps a blocked work item stopped by a stale image inside the wait", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("blocked", {
+          note: STALE_IMAGE_NOTE,
+          updatedAt: new Date(NOW.getTime() - STALE_IMAGE_WAIT_MS + 1),
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "keep" });
+  });
+
+  test("releases a blocked work item stopped by a stale image after the wait, without a hold", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("blocked", {
+          note: STALE_IMAGE_NOTE,
+          updatedAt: new Date(NOW.getTime() - STALE_IMAGE_WAIT_MS),
+        }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("releases a failed work item that never started a flow, without a hold", () => {
+    expect(
+      decideConflictFixRecovery(item("failed", { launched: false }), NOW),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("holds fix_stopped for a failed work item that started a flow", () => {
+    expect(decideConflictFixRecovery(item("failed"), NOW)).toEqual({
+      kind: "release",
+      hold: "fix_stopped",
+    });
+  });
+
+  test("releases a cancelled work item without a hold", () => {
+    expect(decideConflictFixRecovery(item("cancelled"), NOW)).toEqual({
+      kind: "release",
+      hold: null,
+    });
+  });
+});

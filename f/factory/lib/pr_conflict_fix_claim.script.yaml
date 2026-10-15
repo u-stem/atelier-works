@@ -1,0 +1,9 @@
+summary: '[LIB] 競合の行を直してよいかの判断'
+description: 内部ライブラリです。直接実行するものではありません。競合の行について、直す作業項目を起動してよいか、通知するか待つかを決めます。
+lock: '!inline f/factory/lib/pr_conflict_fix_claim.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

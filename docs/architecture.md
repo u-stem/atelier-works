@@ -451,6 +451,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/audit_support` | script | [LIB] 監査の期間計算と起動判定 |
 | `f/factory/lib/audit_evidence` | script | [LIB] 監査の証跡収集 |
 | `f/factory/lib/audit_doc` | script | [LIB] 監査レポートの検査 |
+| `f/factory/lib/pr_conflict_fix_claim` | script | [LIB] 競合の行を直してよいかの判断 |
+| `f/factory/lib/pr_conflict_fix_recovery` | script | [LIB] 競合を直した行の回復 |
+| `f/factory/lib/conflict_fix_round` | script | [LIB] 競合回の共通部品 |
 | `f/factory/lib/schedule_failing` | script | [LIB] 続けて失敗するスケジュールの検知 |
 | `f/factory/lib/auto_retry_reasons` | script | [LIB] 自動で再開してよい止まった理由 |
 | `f/factory/lib/self_update_support` | script | [LIB] 自己更新の純粋ロジック |

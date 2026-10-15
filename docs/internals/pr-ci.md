@@ -786,6 +786,89 @@ PR全体の上限が競合1回の上限以下の設定は、拒否する。
 範囲を外れた値も既定値に倒さず拒否する。
 設定を書き損じると、設定の読み込み全体が設定エラーで止まり、Factoryのほかの処理も動かなくなる。
 
+### 保留の理由の語彙
+
+`fix_hold_reason`に書く値は、`lib/pr_conflict_support.ts`の`PR_CONFLICT_FIX_HOLD_REASONS`の14個に限る。
+DBの検査は長さだけなので、書く側をこの型で縛る。
+種別は`PR_CONFLICT_FIX_HOLD_INFO`が持つ。
+一時の理由は、解ければ外れる。最終の理由は、人が直すまで起動し直さない。
+
+| 理由 | 種別 | 意味 |
+| --- | --- | --- |
+| `last_fix_unsettled` | 一時 | 直近の直す作業項目が、まだ終わっていない |
+| `budget_exceeded` | 一時 | 日次の予算を使い切った |
+| `recently_fixed` | 一時 | 直近の直す作業項目が終わってから5分に満たない。GitHubが競合の有無を更新するまで待つ |
+| `marker_missing` | 一時 | Factoryのクローンのスキルが、競合を直す節を持たない |
+| `main_ci_failed` | 一時 | 既定のブランチの先頭のmainのCIが失敗している |
+| `pr_draft_or_auto_merge` | 最終 | PRがドラフトか、auto-mergeが有効である |
+| `not_factory_head` | 最終 | PRのコミットに、Factoryのものでないものがある |
+| `rounds_exhausted` | 最終 | 直す回数の上限に達した |
+| `base_not_default` | 最終 | PRのbaseが、リポジトリの既定のブランチでない |
+| `base_changes_workflows` | 最終 | 既定のブランチの更新が、`.github/workflows/`を変える |
+| `protected_path` | 最終 | 競合したパスが保護パスである |
+| `unresolvable` | 最終 | 競合が自動で解ける形でない |
+| `check_failed` | 最終 | 解消した後の検査コマンドが失敗した |
+| `fix_stopped` | 最終 | 直す作業項目が、上のどれにも当たらない理由で止まった |
+
+語彙に無い値は、最終として扱う。人に知らせず放置するより、通知に倒すためである。
+
+### 競合を直す判断
+
+判断は`lib/pr_conflict_fix_claim.ts`と`lib/pr_conflict_fix_recovery.ts`の関数が行う。
+どちらも事実を引数で受け取り、DBとGitHubには書かない。
+
+`decideConflictFixClaim`は、競合の行について、直す作業項目を起動してよいかを決める。
+次の順に確かめ、最初に当たったもので止める。
+安く確かめられるものが先で、事実は必要になるまで読まない。
+
+1. 直す作業項目が動いていれば、`last_fix_unsettled`で保留する。
+2. PRを読み直す。閉じていれば、行のheadから進んでいれば、何もしない。baseが既定のブランチでなければ`base_not_default`、ドラフトかauto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
+3. コミットがすべてFactoryのものでなければ、`not_factory_head`で保留する。
+4. スキルのマーカーが無ければ`marker_missing`、予算を使い切っていれば`budget_exceeded`で保留する。
+5. 既定のブランチの先頭のmainのCIが失敗していれば、`main_ci_failed`で保留する。記録が無い、判定待ち、期限切れ、CIなし、基準の行のときは止めない。
+6. 競合の1回の起動数、PR全体の起動数、行の起動の回数のどれかが上限に達していれば、`rounds_exhausted`で保留する。
+7. 直近の直す作業項目が終わってから5分に満たなければ、`recently_fixed`で保留する。
+
+作業項目の状態をPRより先に読むのは、読んでいる間に直す作業項目がpushしたとき、古いheadの行を起動しないためである。
+Factoryのレビューの記録は要求しない。
+行の起動の回数の上限は、競合の1回の上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数である。
+フローが起動しないまま起動し直し続けるのを止める。
+
+`decideConflictNotify`は、通知していない競合の行の扱いを決める。
+扱いは、通知、待機、起動の判断のどれかである。
+
+- 起動が無効なら、常に通知する。
+- 起動を有効にした時刻より前に始まった競合の回は、起動の対象外なので通知する。
+- 最終の保留は、猶予を待たずに通知する。
+- 直す作業項目が動いていれば、待つ。
+- 一時の保留は、競合の回の開始(`episode_started_at`)から猶予が過ぎたら通知する。それまでは、解ければ外れるので、起動の判断に回して見直す。
+- 保留と作業項目がどちらも無ければ、起動の判断に回す。
+
+猶予を保留を書いた時刻から数えないのは、保留が付け外しされても通知が遅れ続けないためである。
+
+`decideConflictFixRecovery`は、直す作業項目が結ばれた行について、行き先を決める。
+
+- 作業項目が存在しないとき(掃除で消えた)は、終端として扱い、保留なしで結びを外す。
+- 動いていれば、そのままにする。
+- pushしていれば、結びを外す。pushした回と、何も変えずに終えた回(`reviewed`で注記が`conflict round: up_to_date`)は区別する。
+- `needs_human`と`blocked`は、止めた理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留する。
+- フローの起動より前に失敗した`failed`は、保留なしで結びを外す。
+
+止めた理由の注記は、固定文への完全一致だけで保留の理由に写す。
+
+| 注記 | 保留の理由 |
+| --- | --- |
+| `conflict round: base is not the default branch` | `base_not_default` |
+| `conflict round: base changes workflows` | `base_changes_workflows` |
+| `conflict round: a conflicted path is protected` | `protected_path` |
+| `conflict round: unresolvable conflict` | `unresolvable` |
+| `conflict round: check failed` | `check_failed` |
+| `conflict round: the factory-fix skill lacks the conflict-fix-skill:v1 marker` | `marker_missing` |
+| 予算を使い切った、ドラフトかauto-mergeが有効、の固定文 | `budget_exceeded`、`pr_draft_or_auto_merge` |
+
+Claudeの出力には、固定文の前に接頭辞が付く。接頭辞は「conflict round: claude blocked: 」である。
+そのため、出力の中の文字列で、保留の理由を選ばれない。
+
 ### 通知
 
 通知は、競合の1回につき1回である。通知した時刻が空の競合は、次の順に通知する。

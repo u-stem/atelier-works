@@ -36,6 +36,7 @@ locks:
   f/factory/lib/cleanup_db_support: b89484ba7a0b54af40fe9788bb2abe73ed096ea1c02a3f778f23c7c903abf2ea
   f/factory/lib/cleanup_support: 81d98d59d095338a46ffc844fbb47254e89c113652498cfbe39c38cad3bf37da
   f/factory/lib/config: 156f02b0281c526d109d29c8bef8cc2dcc695fb3eb9dea2305d13dd8a642eb73
+  f/factory/lib/conflict_fix_round: 1abcba6e282a521b35a35fa6dc2980c2a5bd07aa98685d7ef08653e1aed24c83
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 35834e2fc4097c747dd824164479ca5abf08f425fe2e18556dff1ecfdce640f0
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
@@ -78,12 +79,14 @@ locks:
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: ea5981391d7d989101f28cbbc9b17905691a9b15c398e829997712e56cd85f96
   f/factory/lib/pr_ci_fix_claim: 94334daa4d968bb2f5bc3534a633b82ccd45ff7c98ba15864d82be7ac30beb9d
-  f/factory/lib/pr_ci_fix_recovery: 47f35c42c97923c1e75fd879ee30b10f7e5c64ec60b82941efaa701e609b7c74
+  f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
   f/factory/lib/pr_ci_human_support: 54c81204509fce685adcce54cdc93893f7485897bf10a5af5faf30ee421a2f83
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: dc6a9b082e47c9dd6fe948b652f138ba0b58b1c245514454bb253ed2eddf4a55
   f/factory/lib/pr_ci_watch: ea96ee25dc2c28ff8630899068d33126ad23a92d4ce2dc59f4b4991e885edf7f
-  f/factory/lib/pr_conflict_support: b82b5bb79b6cecf159942a7f1489c2909971dcc4ae91e1f0e52906aa22a53425
+  f/factory/lib/pr_conflict_fix_claim: 23d089665fa8e0571f5752519fda8e7c5d92a6e70c130e63ca358d7ffcfc418f
+  f/factory/lib/pr_conflict_fix_recovery: a75f3ca198223904857acadc22bfe49c90ac64abd88e3b8c1a0c0d215f93c0a5
+  f/factory/lib/pr_conflict_support: 9fb239931bc35f47db21f5eef2bcc7a3df08bae04a52f97506c654b626890de6
   f/factory/lib/pr_conflict_watch: 72ef072e1508eb2fa067b0f2f3b67141e32ce5902a0c110875d21e09ec47bee8
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
   f/factory/lib/pr_review_retry: 4ea1d6f0e62b7c3a9594d38d073b6c2650ffe65d2cfd5c11ef9a2a91a2507630
