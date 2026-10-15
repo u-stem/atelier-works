@@ -296,6 +296,90 @@ describe("buildCiFixPrompt changed files", () => {
   });
 });
 
+describe("buildCiFixPrompt protected changed files", () => {
+  const protectedPaths = [
+    ".github/workflows/ci.yml",
+    "migrations/datatable/main/001.sql",
+    "f/factory/lib/ci_fix_paths.ts",
+    "package.json",
+  ];
+
+  test("leaves a protected path out of the changed files", () => {
+    const text = prompt({
+      prChangedPaths: ["src/ok.ts", ".github/workflows/ci.yml"],
+    });
+    expect(text).not.toContain(".github/workflows/ci.yml");
+  });
+
+  test("leaves out a protected path whose case differs", () => {
+    const text = prompt({
+      prChangedPaths: ["src/ok.ts", ".GitHub/Workflows/ci.yml"],
+    });
+    expect(text).not.toContain(".GitHub/Workflows/ci.yml");
+  });
+
+  test("keeps an editable path next to protected ones", () => {
+    const text = prompt({ prChangedPaths: ["src/ok.ts", ...protectedPaths] });
+    expect(text).toContain("src/ok.ts");
+  });
+
+  test("lists exactly the editable paths in the fence", () => {
+    const text = prompt({ prChangedPaths: ["src/ok.ts", ...protectedPaths] });
+    const open = `<<<DATA-${NONCE} (${CI_FENCE_LABEL_CHANGED_FILES})`;
+    const start = text.indexOf(open) + open.length;
+    const end = text.indexOf(`>>>DATA-${NONCE}`, start);
+    expect(text.slice(start, end).trim()).toBe("src/ok.ts");
+  });
+
+  test("states the number of protected files outside the fences", () => {
+    const text = prompt({ prChangedPaths: ["src/ok.ts", ...protectedPaths] });
+    expect(outsideFences(text)).toContain(
+      "Protected files changed by the pull request: 4.",
+    );
+  });
+
+  test("counts a protected path once when it is repeated", () => {
+    const text = prompt({
+      prChangedPaths: ["src/ok.ts", "package.json", "package.json"],
+    });
+    expect(outsideFences(text)).toContain(
+      "Protected files changed by the pull request: 1.",
+    );
+  });
+
+  test("does not count an unsafe path as protected", () => {
+    const text = prompt({ prChangedPaths: ["src/ok.ts", "../package.json"] });
+    expect(outsideFences(text)).not.toContain(
+      "Protected files changed by the pull request",
+    );
+  });
+
+  test("omits the notice when no path is protected", () => {
+    expect(outsideFences(prompt())).not.toContain(
+      "Protected files changed by the pull request",
+    );
+  });
+
+  test("says there are none when every changed path is protected", () => {
+    const text = prompt({ prChangedPaths: protectedPaths });
+    expect(text).toContain(`(${CI_FENCE_LABEL_CHANGED_FILES})\n(none)`);
+  });
+
+  test("applies the cap after removing protected paths", () => {
+    const many = Array.from(
+      { length: CI_FIX_PROMPT_MAX_CHANGED_PATHS },
+      (_, i) => `src/file-${String(i)}.ts`,
+    );
+    const text = prompt({ prChangedPaths: [...protectedPaths, ...many] });
+    expect(text).not.toContain("more not shown");
+  });
+
+  test("keeps the notice free of the protected paths themselves", () => {
+    const text = prompt({ prChangedPaths: ["src/ok.ts", ...protectedPaths] });
+    expect(outsideFences(text)).not.toContain("ci_fix_paths");
+  });
+});
+
 describe("CI_FIX_SCHEMA", () => {
   test("rejects extra properties", () => {
     expect(CI_FIX_SCHEMA.additionalProperties).toBe(false);
