@@ -6,6 +6,7 @@
 
 import {
   callGhApi,
+  ensureRawBodyComplete,
   ensureSuccess,
   type GhClient,
   paginateGhApi,
@@ -163,7 +164,11 @@ export async function getRepoFileMeta(
   return { sha: readObjectId(parsed.sha, context), size: parsed.size };
 }
 
-/** `ref`の時点のファイルを、文字列として読む。1MB以下のファイルに使う。 */
+/**
+ * `ref`の時点のファイルを、文字列として読む。1MB以下のファイルに使う。
+ * 内容を書き換えてコミットするので、制御列を除いて受け取ることはしない。
+ * 制御列を含んで`gh`が本文を出さなかったときは、空のファイルとして読まず例外にする。
+ */
 export async function getRepoFileText(
   client: GhClient,
   owner: string,
@@ -179,6 +184,7 @@ export async function getRepoFileText(
     { acceptHeader: "application/vnd.github.raw+json" },
   );
   ensureSuccess(response, context);
+  ensureRawBodyComplete(response, context);
   return response.bodyText;
 }
 

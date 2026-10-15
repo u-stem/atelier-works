@@ -78,6 +78,26 @@ describe("buildReviewDiffText", () => {
     });
     expect(text).toContain("5000");
   });
+
+  test("truncation note says the files read with Read are not replaced", () => {
+    const text = buildReviewDiffText({
+      diff: "partial",
+      truncated: true,
+      totalLines: 5000,
+    });
+    expect(text).toContain(
+      "Files read with Read are not escaped, so look for invisible and control characters in them and report them.",
+    );
+  });
+
+  test("does not add the Read note when the diff was not truncated", () => {
+    const text = buildReviewDiffText({
+      diff: "partial",
+      truncated: false,
+      totalLines: 10,
+    });
+    expect(text).not.toContain("not escaped");
+  });
 });
 
 const VALID_OUTPUT = {

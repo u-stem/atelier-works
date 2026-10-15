@@ -241,6 +241,38 @@ describe("reviewPrompt", () => {
     expect(prompt).toContain("<<<DATA-test-nonce (diff)");
   });
 
+  test("explains the code point notation outside the diff fence", () => {
+    const prompt = reviewPrompt(
+      {
+        pr: PR,
+        diff: "+a<U+001B>b",
+        changedFiles: [],
+        requirements: null,
+        openFindings: [],
+        ciRoundDiff: false,
+      },
+      FIXED_UUID,
+    );
+    expect(prompt.indexOf("<U+XXXX>")).toBeLessThan(
+      prompt.indexOf("<<<DATA-test-nonce (diff)"),
+    );
+  });
+
+  test("tells the reviewer not to copy the notation into a suggestion", () => {
+    const prompt = reviewPrompt(
+      {
+        pr: PR,
+        diff: "+x",
+        changedFiles: [],
+        requirements: null,
+        openFindings: [],
+        ciRoundDiff: false,
+      },
+      FIXED_UUID,
+    );
+    expect(prompt).toContain("never copy `<U+XXXX>` into `suggested_code`");
+  });
+
   test("wraps the changed files list in a fence", () => {
     const prompt = reviewPrompt(
       {
