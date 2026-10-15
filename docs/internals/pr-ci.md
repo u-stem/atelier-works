@@ -765,6 +765,27 @@ PRの今の状態から、次の順に扱いを決める(`decidePrConflict`)。
 
 既存の行の`episode_started_at`は、列を足した時刻になる。競合の本来の開始時刻は記録していないためである。
 
+### 競合を直す設定
+
+次の5項目は`factory_config`で決める。既存のリソースにこれらの項目が無くても、既定値で動く。
+
+| 項目 | 既定値 | 意味 |
+| --- | --- | --- |
+| `pr_conflict_fix_enabled` | `false` | 競合を直す作業項目を起動してよいか。偽の間は何も起動せず、通知の挙動も変わらない |
+| `pr_conflict_fix_max_rounds` | `2` | 競合の1回(`episode`)で起動できる数の上限。1以上5以下の整数 |
+| `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数の上限。2以上10以下の整数で、`pr_conflict_fix_max_rounds`より大きい |
+| `pr_conflict_fix_enabled_since` | 無し | 今の競合の回が始まった時刻(`episode_started_at`)がこの時刻より前の競合を、直す対象にしない。`pr_conflict_fix_enabled`が`true`なら必須 |
+| `pr_conflict_fix_notify_grace_min` | `60` | 解ければ外れる理由で保留している競合を、通知するまで待つ分数。0以上1440以下の整数 |
+
+`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_watch_enabled`も`true`でなければならない。
+直す対象は検知が記録した行なので、検知が止まっていれば何も起動できず、設定の食い違いに気づけないためである。
+`pr_conflict_fix_enabled_since`は、`pr_ci_fix_enabled_since`と同じ形の日時にする。
+時刻が無いと、有効にする前から残る競合を、すべて直しにいくためである。
+PR全体の上限が競合1回の上限以下の設定は、拒否する。
+競合1回の上限へ達する前に、PR全体の上限が起動を止めるためである。
+範囲を外れた値も既定値に倒さず拒否する。
+設定を書き損じると、設定の読み込み全体が設定エラーで止まり、Factoryのほかの処理も動かなくなる。
+
 ### 通知
 
 通知は、競合の1回につき1回である。通知した時刻が空の競合は、次の順に通知する。

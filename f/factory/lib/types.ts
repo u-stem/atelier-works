@@ -1058,6 +1058,31 @@ export type FactoryConfig = {
    */
   pr_conflict_watch_enabled: boolean;
   /**
+   * 競合を直す作業項目を、`watch_pr_conflicts`が起動してよいか。既定は`false`で、偽の間は何も起動せず、通知の挙動は変わらない。
+   * 真にするには`pr_conflict_watch_enabled`も真で、`pr_conflict_fix_enabled_since`が要る。
+   */
+  pr_conflict_fix_enabled: boolean;
+  /**
+   * 競合の1回(episode)で、競合を直す作業項目を起動できる回数の上限。1以上5以下の整数。既定は2。
+   */
+  pr_conflict_fix_max_rounds: number;
+  /**
+   * 1つのPRで、競合を直す作業項目を起動できる回数の上限。2以上10以下の整数で、`pr_conflict_fix_max_rounds`より大きい。既定は5。
+   * 競合の行が掃除で消えても戻らないよう、競合の回数はepisodeを超えて数える。
+   */
+  pr_conflict_fix_max_rounds_per_pr: number;
+  /**
+   * この時刻より前に始まった競合の回は、直す対象にしない。基準は`pr_conflict_checks.episode_started_at`。
+   * 設定には秒まで書いたRFC 3339の日時(タイムゾーン付き)を書き、読み込み後は`Date`になる。
+   * `pr_conflict_fix_enabled`が真なら`null`にできない。既定は`null`。
+   */
+  pr_conflict_fix_enabled_since: Date | null;
+  /**
+   * 最終でない保留(解ければ外れる理由)のまま、競合の回の開始から通知を待つ時間(分)。0以上1440以下の整数。既定は60。
+   * 過ぎれば、保留のままでも通知する。最終の保留は待たずに通知する。
+   */
+  pr_conflict_fix_notify_grace_min: number;
+  /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
    * `implementCheckCommandsFor`)。エントリの無いリポジトリでは
