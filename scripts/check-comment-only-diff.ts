@@ -15,9 +15,11 @@
 // - [見逃し] tsxと、トークン化できないts / jsは、`Bun.Transpiler`がコメントを落とした
 //   出力の比較で判定する。Transpilerは型注釈も落とすため、型だけの変更は見逃す。
 //   未使用のimportの削除など、変換で消えるコードの変更も同様に見逃しうる。
-// - [誤検知] import属性(`with`、`assert`の後の波括弧)になりうる形を含むファイルは、
-//   Transpilerのマクロ実行を避けるため変換せず、変更ありとして報告する。
-//   文字列やコメントの中の同じ形も報告する。
+// - [誤検知] Transpilerで比べる経路(tsxと、スキャナーが止まったts / js)では、マクロを指定
+//   しうる形のソースを変換せず、変更ありとして報告する。マクロの実行を避けるためである。
+//   形は、import属性(`with`、`assert`の後の波括弧)と、`macro:`で始まるimport指定子である。
+//   属性は字句で見るので、文字列やコメントの中の同じ形も報告する。
+//   スキャナーが通るts / jsはTranspilerを使わず、この形を含んでいても比較できる。
 // - `git diff`は未追跡ファイルを出さないため、未追跡の新規ファイルは対象外。
 
 import { readFileSync } from "node:fs";
@@ -78,15 +80,22 @@ function loaderOf(path: string): TranspilerLoader {
 /**
  * `Bun.Transpiler`でコメントを落としたコードを返す。構文エラーは例外になる。
  * 型注釈も落ちるので、この出力の比較は型だけの変更を区別できない。
- * `transformSync`は、import属性でマクロを指定したimportのマクロを、読む側のプロセスで実行する。
- * 未信頼のブランチを基準にしても端末でコードが動かないよう、import属性になりうる形を含む
- * ソースは、変換せずに固定の文の例外で断る。文字列やコメントの中の出現も断る側に倒す。
+ * `transformSync`は、マクロを指定したimportのマクロを、読む側のプロセスで実行する。
+ * マクロの指定には、import属性(`with`、`assert`)と、指定子の`macro:`接頭辞の2つがある。
+ * どちらも、変換の前に固定の文の例外で断る。
+ * 属性は、`hasAttribute`が字句で見る。文字列やコメントの中の出現も断る側に倒す。
+ * 接頭辞は、エスケープ(`macro:`)で書かれても見落とさないよう、`scanImports`が
+ * 返す復号後の指定子で見る。`scanImports`はマクロを実行しない。
  */
 export function transpiledCode(path: string, text: string): string {
   if (hasAttribute(text)) {
     throw new Error("import attributes are not allowed in compared sources");
   }
-  return new Bun.Transpiler({ loader: loaderOf(path) }).transformSync(text);
+  const transpiler = new Bun.Transpiler({ loader: loaderOf(path) });
+  if (transpiler.scanImports(text).some((e) => e.path.startsWith("macro:"))) {
+    throw new Error("macro imports are not allowed in compared sources");
+  }
+  return transpiler.transformSync(text);
 }
 
 function sameTranspiled(path: string, before: string, after: string): boolean {

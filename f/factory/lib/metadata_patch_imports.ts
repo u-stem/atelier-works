@@ -100,7 +100,7 @@ function previousNonSpace(code: string, index: number): string | undefined {
 
 /**
  * import属性になりうる形を含むか。
- * 語の`with`か`assert`の直後(空白を除く)が開き波括弧か、コメントの開始なら真を返す。
+ * 語の`with`か`assert`の直後(空白を除く)が開き波括弧か、コメントの開始(旧式のHTML風コメントを含む)なら真を返す。
  * コメントは終端を探さず、開始だけで断る。終端を探すと、入力によっては計算量が2乗になる。
  * 文字列やコメントの中の出現も断る側に倒す。
  */
@@ -118,6 +118,10 @@ export function hasAttribute(code: string): boolean {
       next === "/" &&
       (code[cursor + 1] === "*" || code[cursor + 1] === "/")
     ) {
+      return true;
+    }
+    // 行頭の`-->`と`<!--`は、旧式のHTML風1行コメントの開始である。
+    if (code.startsWith("-->", cursor) || code.startsWith("<!--", cursor)) {
       return true;
     }
   }
