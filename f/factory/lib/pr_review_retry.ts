@@ -89,21 +89,20 @@ function isTransientStatus(err: GitHubHttpError): boolean {
   return err.timedOut || err.exitCode !== GH_EXIT_AUTH_REQUIRED;
 }
 
-export type TransientFailureAction = "recover" | "needs_human" | "job_failed";
+export type TransientFailureAction = "defer" | "job_failed";
 
 /**
  * 失敗したフローの通知を決める。
- * - `recover`: 一時的な失敗で、再開の余地がある。通知しない。
- * - `needs_human`: 一時的な失敗で、再開の回数を使い切った。人に知らせる。
+ * - `defer`: 一時的な失敗で、再開の巡回(`auto_retry_pr_review`)に任せる。ここでは通知しない。
+ *   再開できるうちは巡回が再開し、使い切った後と、再開されないまま残ったときは、巡回が人に知らせる。
  * - `job_failed`: それ以外。従来どおり失敗を知らせる。
  * `markedFailed`は、この呼び出しが作業項目を`failed`にできたか。
- * `failed`でなければ再開の対象にならないので、知らせる側に倒す。
+ * `failed`でなければ巡回の対象にならないので、知らせる側に倒す。
  */
 export function decideTransientFailureAction(
   flowPath: string | null,
   message: string,
   markedFailed: boolean,
-  restartsUsed: number,
 ): TransientFailureAction {
   if (
     flowPath !== PR_REVIEW_FLOW_PATH ||
@@ -112,31 +111,47 @@ export function decideTransientFailureAction(
   ) {
     return "job_failed";
   }
-  return restartsUsed < AUTO_RETRY_MAX_RESTARTS ? "recover" : "needs_human";
+  return "defer";
 }
 
 /** 再開を使い切ったときの`needs_human`の通知。対象のPRのリンクと、次の操作を載せる。 */
 export function transientReviewExhaustedNotice(input: {
   readonly instanceName: string;
-  readonly owner: string;
-  readonly repo: string;
-  readonly prNumber: number;
-  readonly workItemId: number;
-  readonly message: string;
+  readonly candidate: TransientReviewCandidate;
 }): Extract<NotifyEvent, { kind: "needs_human" }> {
-  const detail = input.message.startsWith(TRANSIENT_GITHUB_REASON_PREFIX)
-    ? input.message.slice(TRANSIENT_GITHUB_REASON_PREFIX.length)
-    : input.message;
+  const { candidate } = input;
+  const detail = candidate.failure_note.startsWith(
+    TRANSIENT_GITHUB_REASON_PREFIX,
+  )
+    ? candidate.failure_note.slice(TRANSIENT_GITHUB_REASON_PREFIX.length)
+    : candidate.failure_note;
   return {
     kind: "needs_human",
     instance_name: input.instanceName,
-    owner: input.owner,
-    repo: input.repo,
-    url: `https://github.com/${input.owner}/${input.repo}/pull/${String(input.prNumber)}`,
+    owner: candidate.owner,
+    repo: candidate.repo,
+    url: pullUrl(candidate),
     reason: `GitHubの一時的な障害でレビューを投稿できず、自動の再開を${String(AUTO_RETRY_MAX_RESTARTS)}回行っても直りませんでした: ${detail}`,
-    target: { kind: "pr", number: input.prNumber },
-    next_action: `GitHubの障害が収まったことを確かめ、Windmillで\`f/factory/retry_work_item\`を作業項目のID${String(input.workItemId)}で実行してください`,
+    target: { kind: "pr", number: candidate.pr_number },
+    next_action: `GitHubの障害が収まったことを確かめ、Windmillで\`f/factory/retry_work_item\`を作業項目のID${String(candidate.id)}で実行してください`,
   };
+}
+
+export function pullUrl(candidate: TransientReviewCandidate): string {
+  return `https://github.com/${candidate.owner}/${candidate.repo}/pull/${String(candidate.pr_number)}`;
+}
+
+/**
+ * 巡回が人に知らせる通知を選ぶ。自動の再開を使い切っていれば使い切りの通知、
+ * そうでなければ再開されないまま残っている旨の通知である。
+ */
+export function transientReviewNotice(input: {
+  readonly instanceName: string;
+  readonly candidate: TransientReviewCandidate;
+}): Extract<NotifyEvent, { kind: "needs_human" }> {
+  return input.candidate.restarts >= AUTO_RETRY_MAX_RESTARTS
+    ? transientReviewExhaustedNotice(input)
+    : transientReviewStalledNotice(input);
 }
 
 /** 再開を見送ったまま止まっているPRレビューの、人への通知。対象のPRのリンクと次の操作を載せる。 */
@@ -150,7 +165,7 @@ export function transientReviewStalledNotice(input: {
     instance_name: input.instanceName,
     owner: candidate.owner,
     repo: candidate.repo,
-    url: `https://github.com/${candidate.owner}/${candidate.repo}/pull/${String(candidate.pr_number)}`,
+    url: pullUrl(candidate),
     reason:
       "GitHubの一時的な障害で止まったレビューが、自動で再開されないまま残っています",
     target: { kind: "pr", number: candidate.pr_number },
@@ -274,12 +289,20 @@ export async function retryTransientPrReviews(
   return counts;
 }
 
+/** 通知の結果。`no_webhook`は知らせる先が無いこと、`not_sent`は送れなかったこと。 */
+export type StallDelivery = "sent" | "no_webhook" | "not_sent";
+
 export type StalledTransientDeps = {
-  /** 待ちと猶予を過ぎても再開されず、まだ知らせていない候補を返す。 */
+  /**
+   * 待ちと猶予を過ぎても再開されず、まだ知らせていない候補を返す。
+   * 自動の再開を使い切ったものも含める。
+   */
   readonly listStalled: () => Promise<readonly TransientReviewCandidate[]>;
-  /** 人に知らせる。届いた(`status === "sent"`)ときだけ`true`を返す。 */
-  readonly notify: (candidate: TransientReviewCandidate) => Promise<boolean>;
-  /** 知らせたことを記録する。 */
+  /** 人に知らせる。 */
+  readonly notify: (
+    candidate: TransientReviewCandidate,
+  ) => Promise<StallDelivery>;
+  /** 知らせたことを記録する。すでに記録があれば`false`を返す。 */
   readonly recordStall: (
     candidate: TransientReviewCandidate,
   ) => Promise<boolean>;
@@ -287,10 +310,12 @@ export type StalledTransientDeps = {
 };
 
 /**
- * 再開されないまま止まっているPRレビューを、人に知らせる。届いた件数を返す。
- * 送ってから記録する。日次サマリーと同じく、届いたときだけ記録を残すので、
- * 配信に失敗した作業項目は、次の巡回でもう一度送る。
- * 記録に失敗したときも次の巡回で送り直すので、重複することはあっても、黙ることは無い。
+ * 再開されないまま止まっているPRレビューと、自動の再開を使い切ったPRレビューを、人に知らせる。
+ * 届いた件数を返す。
+ * 送ってから記録する。日次サマリーと同じく、届いた(`sent`)ときだけ記録を残すので、
+ * 配信に失敗した作業項目は、次の巡回でもう一度送る。通知が届くまで、巡回の間隔(5分)ごとに繰り返す。
+ * 記録に失敗したときも送り直すので、重複することはあっても、黙ることは無い。
+ * `no_webhook`は知らせる先が無い状態で、巡回のたびに警告を出さないよう情報のログにとどめる。
  * 候補を取得できなければ例外を投げる。
  */
 export async function notifyStalledTransientReviews(
@@ -300,14 +325,25 @@ export async function notifyStalledTransientReviews(
   let notified = 0;
   for (const candidate of stalled) {
     try {
-      if (!(await deps.notify(candidate))) {
+      const delivery = await deps.notify(candidate);
+      if (delivery === "no_webhook") {
+        deps.log.info("pr_review stall notice has no webhook to go to", {
+          work_item_id: candidate.id,
+        });
+        continue;
+      }
+      if (delivery === "not_sent") {
         deps.log.warn("pr_review stall notice was not delivered", {
           work_item_id: candidate.id,
         });
         continue;
       }
       notified += 1;
-      await deps.recordStall(candidate);
+      if (!(await deps.recordStall(candidate))) {
+        deps.log.warn("pr_review stall was already recorded", {
+          work_item_id: candidate.id,
+        });
+      }
     } catch (err) {
       deps.log.warn("pr_review stall could not be reported", {
         work_item_id: candidate.id,

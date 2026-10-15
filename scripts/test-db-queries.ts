@@ -52,6 +52,7 @@ import {
   listPrCiChecksForPr,
   listPrOpenIssueWorkItems,
   listRecentWorkerSamples,
+  listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
@@ -60,6 +61,7 @@ import {
   recordFailure,
   recordMainCiRun,
   recordPrCiCheck,
+  recordTransientStall,
   recordWorkspaceDiskUsageNotice,
   releaseFixingPrCiCheck,
   resolveNoticeIfUnresolved,
@@ -68,6 +70,7 @@ import {
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
+  restartTransientPrReview,
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
   setPrCiFixHold,
@@ -4704,6 +4707,213 @@ check(
 execPsql(
   target,
   "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
+);
+
+// 一時的な失敗で止まったPRレビューの再開。候補の一覧、比較交換、見送りの記録を、実DBで確かめる。
+// 待ちは再開の回数に応じて伸び、使い切ったものは再開せず、見送りの一覧にだけ出る。
+const transientQuery = {
+  reasonPrefix: "github_transient: ",
+  notePrefix: "auto_retry: ",
+  maxRestarts: 3,
+  delaysSeconds: [300, 900, 2700],
+  stallNotePrefix: "auto_retry_stalled: ",
+};
+function eventAgo(
+  workItemId: number,
+  toStatus: string,
+  note: string,
+  secondsAgo: number,
+): void {
+  execPsql(
+    target,
+    `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, occurred_at) VALUES (${String(workItemId)}, 'reviewing', '${toStatus}', '${note}', now() - interval '${String(secondsAgo)} seconds')`,
+  );
+}
+async function statusAndLease(
+  id: number,
+): Promise<{ status: unknown; flow_job_id: unknown }> {
+  const rows = await sql`
+    SELECT status, flow_job_id FROM factory.work_items WHERE id = ${id}::bigint
+  `.fetch();
+  return { status: rows[0]?.status, flow_job_id: rows[0]?.flow_job_id };
+}
+const transientOld = await prWorkItem(
+  "pr_review",
+  9301,
+  "failed",
+  "qdb transient old",
+);
+eventAgo(transientOld, "failed", "github_transient: boom", 600);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET flow_job_id = 'job-old' WHERE id = ${String(transientOld)}`,
+);
+const transientFresh = await prWorkItem(
+  "pr_review",
+  9302,
+  "failed",
+  "qdb transient fresh",
+);
+eventAgo(transientFresh, "failed", "github_transient: boom", 10);
+const transientExhausted = await prWorkItem(
+  "pr_review",
+  9303,
+  "failed",
+  "qdb transient exhausted",
+);
+for (let i = 0; i < 3; i += 1) {
+  eventAgo(
+    transientExhausted,
+    "reviewing",
+    "auto_retry: restarted from failed",
+    5000,
+  );
+}
+eventAgo(transientExhausted, "failed", "github_transient: boom", 10);
+const transientStuck = await prWorkItem(
+  "pr_review",
+  9304,
+  "failed",
+  "qdb transient stuck",
+);
+eventAgo(transientStuck, "failed", "github_transient: boom", 3000);
+const transientOther = await prWorkItem(
+  "pr_review",
+  9305,
+  "failed",
+  "qdb transient other",
+);
+eventAgo(transientOther, "failed", "HTTP 422 boom", 3000);
+const transientListed = async (
+  extra: {
+    extraGraceSeconds?: number;
+    unnotifiedOnly?: boolean;
+    includeExhausted?: boolean;
+  } = {},
+): Promise<number[]> =>
+  (
+    await listTransientReviewCandidates(
+      { ...transientQuery, limit: 100, ...extra },
+      sql,
+    )
+  ).map((candidate) => candidate.id);
+const restartList = await transientListed();
+check(
+  "transient review: a failure past its wait is a restart candidate",
+  restartList.includes(transientOld) && restartList.includes(transientStuck),
+  restartList,
+);
+check(
+  "transient review: a failure still inside its wait is not a restart candidate",
+  !restartList.includes(transientFresh),
+);
+check(
+  "transient review: a review whose restarts are used up is not a restart candidate",
+  !restartList.includes(transientExhausted),
+);
+check(
+  "transient review: a failure without the transient reason is not a restart candidate",
+  !restartList.includes(transientOther),
+);
+const stalledList = await transientListed({
+  extraGraceSeconds: 1800,
+  unnotifiedOnly: true,
+  includeExhausted: true,
+});
+check(
+  "transient review: a failure past its wait and the grace period is listed as stalled",
+  stalledList.includes(transientStuck),
+  stalledList,
+);
+check(
+  "transient review: a review whose restarts are used up is listed as stalled at once",
+  stalledList.includes(transientExhausted),
+);
+check(
+  "transient review: a failure inside the grace period is not listed as stalled",
+  !stalledList.includes(transientOld) && !stalledList.includes(transientFresh),
+);
+check(
+  "transient review: restarts are not counted from a wait that has not passed",
+  (await restartTransientPrReview(
+    {
+      ...transientQuery,
+      id: transientFresh,
+      note: "auto_retry: restarted from failed",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+check(
+  "transient review: the first restart moves the review to reviewing",
+  (await restartTransientPrReview(
+    {
+      ...transientQuery,
+      id: transientOld,
+      note: "auto_retry: restarted from failed",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === true && (await statusAndLease(transientOld)).status === "reviewing",
+);
+check(
+  "transient review: the restart clears the flow job id",
+  (await statusAndLease(transientOld)).flow_job_id === null,
+);
+check(
+  "transient review: a second restart of the same review is refused",
+  (await restartTransientPrReview(
+    {
+      ...transientQuery,
+      id: transientOld,
+      note: "auto_retry: restarted from failed",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+check(
+  "transient review: a review whose restarts are used up is not restarted",
+  (await restartTransientPrReview(
+    {
+      ...transientQuery,
+      id: transientExhausted,
+      note: "auto_retry: restarted from failed",
+    },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+check(
+  "transient review: the first stall record is written",
+  (await recordTransientStall(
+    { stallNotePrefix: transientQuery.stallNotePrefix, id: transientStuck },
+    sql,
+    NO_JOB_IDS,
+  )) === true,
+);
+check(
+  "transient review: the same failure is not recorded twice",
+  (await recordTransientStall(
+    { stallNotePrefix: transientQuery.stallNotePrefix, id: transientStuck },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+check(
+  "transient review: a recorded stall is not listed as stalled again",
+  !(
+    await transientListed({
+      extraGraceSeconds: 1800,
+      unnotifiedOnly: true,
+      includeExhausted: true,
+    })
+  ).includes(transientStuck),
+);
+check(
+  "transient review: the stall record does not hide the failure reason from the restart list",
+  (await transientListed()).includes(transientStuck),
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

@@ -604,11 +604,14 @@ export function renderReviewSummary(
   return lines.join("\n");
 }
 
+/** 総評に並べる`path`。改行は空白にまとめ、`<!--`は無害にする。 */
+function oneLinePath(path: string): string {
+  return neutralizeHtmlComment(path.replace(/\s*[\r\n]+\s*/g, " "));
+}
+
 /** 指摘の位置。範囲の指摘は`path:line-end_line`、1行の指摘は`path:line`、行が無ければ`path`だけ。 */
 function findingLocation(finding: ReviewFinding): string {
-  const path = neutralizeHtmlComment(
-    finding.path.replace(/\s*[\r\n]+\s*/g, " "),
-  );
+  const path = oneLinePath(finding.path);
   if (finding.line === null) return path;
   const end =
     finding.end_line !== null && finding.end_line > finding.line
@@ -631,7 +634,7 @@ function renderUnanchoredFindingLines(
     const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
     const location = commented.includes(finding)
       ? findingLocation(finding)
-      : neutralizeHtmlComment(finding.path.replace(/\s*[\r\n]+\s*/g, " "));
+      : oneLinePath(finding.path);
     const message = neutralizeHtmlComment(
       normalizeJapaneseText(finding.message),
     );

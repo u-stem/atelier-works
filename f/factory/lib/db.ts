@@ -1237,22 +1237,6 @@ export async function restartStoppedWorkItem(
   }
 }
 
-/**
- * 作業項目の自動の再開の回数を返す。
- * 数えるのは、`note`が`notePrefix`で始まる`factory.work_item_events`の行である。
- */
-export async function countAutoRestarts(
-  id: number,
-  notePrefix: string,
-  sql: SqlClient = defaultSqlClient,
-): Promise<number> {
-  const rows = await sql`
-    SELECT count(*)::integer AS restarts FROM factory.work_item_events
-    WHERE work_item_id = ${id}::bigint AND starts_with(note, ${notePrefix})
-  `.fetch();
-  return parseRequiredNumber(rows[0]?.restarts, "restarts");
-}
-
 /** 一時的な失敗で止まったPRレビューの再開の候補。 */
 export type TransientReviewCandidate = {
   readonly id: number;
@@ -1260,6 +1244,10 @@ export type TransientReviewCandidate = {
   readonly repo: string;
   readonly pr_number: number;
   readonly flow_job_id: string | null;
+  /** これまでの自動の再開の回数。 */
+  readonly restarts: number;
+  /** 失敗へ移った最新の遷移の注記。失敗の文を含む。 */
+  readonly failure_note: string;
 };
 
 /** 一時的な失敗の再開に関わる3つの問い合わせが共有する条件。 */
@@ -1287,19 +1275,22 @@ export type TransientReviewQuery = {
  * 新しい行に置き換えられているか、並んで動くので除く。
  * `extraGraceSeconds`は待ちに足す秒数で、再開の見送りを探すときに0より大きくする。
  * `unnotifiedOnly`が真なら、見送りをまだ知らせていないものだけを返す。
+ * `includeExhausted`が真なら、自動の再開を使い切ったものも、待ちを問わず返す(再開の対象にはならない)。
  */
 export async function listTransientReviewCandidates(
   params: TransientReviewQuery & {
     readonly limit: number;
     readonly extraGraceSeconds?: number;
     readonly unnotifiedOnly?: boolean;
+    readonly includeExhausted?: boolean;
   },
   sql: SqlClient = defaultSqlClient,
 ): Promise<TransientReviewCandidate[]> {
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const delays = [...params.delaysSeconds];
   const rows = await sql`
-    SELECT w.id, w.owner, w.repo, w.pr_number, w.flow_job_id
+    SELECT w.id, w.owner, w.repo, w.pr_number, w.flow_job_id,
+      restarts.n AS restarts, last.note AS failure_note
     FROM factory.work_items w
     JOIN LATERAL (
       SELECT e.note, e.occurred_at FROM factory.work_item_events e
@@ -1314,10 +1305,14 @@ export async function listTransientReviewCandidates(
     ) restarts ON true
     WHERE w.kind = 'pr_review' AND w.status = 'failed' AND w.pr_number IS NOT NULL
       AND starts_with(last.note, ${params.reasonPrefix})
-      AND restarts.n < ${params.maxRestarts}::integer
-      AND last.occurred_at <= now() - make_interval(secs =>
-        (${delays}::integer[])[least(restarts.n + 1, cardinality(${delays}::integer[]))]
-        + ${params.extraGraceSeconds ?? 0}::integer)
+      AND (
+        (restarts.n < ${params.maxRestarts}::integer
+          AND last.occurred_at <= now() - make_interval(secs =>
+            (${delays}::integer[])[least(restarts.n + 1, cardinality(${delays}::integer[]))]
+            + ${params.extraGraceSeconds ?? 0}::integer))
+        OR (${params.includeExhausted ?? false}::boolean
+          AND restarts.n >= ${params.maxRestarts}::integer)
+      )
       AND (NOT ${params.unnotifiedOnly ?? false}::boolean OR NOT EXISTS (
         SELECT 1 FROM factory.work_item_events s
         WHERE s.work_item_id = w.id AND starts_with(s.note, ${params.stallNotePrefix})
@@ -1339,6 +1334,8 @@ export async function listTransientReviewCandidates(
     repo: parseRequiredString(row.repo, "repo"),
     pr_number: parseRequiredNumber(row.pr_number, "pr_number"),
     flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
+    restarts: parseRequiredNumber(row.restarts, "restarts"),
+    failure_note: parseRequiredString(row.failure_note, "failure_note"),
   }));
 }
 

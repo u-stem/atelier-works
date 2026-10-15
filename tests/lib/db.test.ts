@@ -6,7 +6,6 @@ import {
   bumpWatermarks,
   claimIssueCreation,
   claimPrCiCheckForFix,
-  countAutoRestarts,
   countImplementFailedRounds,
   countPendingIssueProposals,
   countPrCiFixRounds,
@@ -7160,6 +7159,15 @@ describe("transient pr_review restart", () => {
     expect(calls[0]?.values).toContainEqual([300, 900, 2700]);
   });
 
+  test("passes whether the used-up reviews are included", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates(
+      { ...query, limit: 50, includeExhausted: true },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(true);
+  });
+
   test("skips the stall records when it looks for the failure reason", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
@@ -7197,6 +7205,8 @@ describe("transient pr_review restart", () => {
           repo: "widgets",
           pr_number: 12,
           flow_job_id: null,
+          restarts: 1,
+          failure_note: "github_transient: failed",
         },
       ],
     ]);
@@ -7209,6 +7219,8 @@ describe("transient pr_review restart", () => {
         repo: "widgets",
         pr_number: 12,
         flow_job_id: null,
+        restarts: 1,
+        failure_note: "github_transient: failed",
       },
     ]);
   });
@@ -7270,10 +7282,5 @@ describe("transient pr_review restart", () => {
     };
     await restartTransientPrReview(params, sql, NO_JOBS);
     expect(calls[0]?.values).toContain("github_transient: ");
-  });
-
-  test("counts the automatic restarts of a work item", async () => {
-    const { sql } = createFakeSqlClient([[{ restarts: 2 }]]);
-    expect(await countAutoRestarts(7, "auto_retry: ", sql)).toBe(2);
   });
 });

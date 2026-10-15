@@ -8,7 +8,6 @@
 // 外すラベルも付ける状態ラベルも無い。
 
 import { describe, expect, test } from "bun:test";
-import { AUTO_RETRY_MAX_RESTARTS } from "../../f/factory/lib/auto_retry.ts";
 import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
 import { DEPENDABOT_FLOW_PATH } from "../../f/factory/lib/dependabot_flow_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
@@ -141,8 +140,6 @@ type FakeFailureWorld = {
   readonly instanceName?: () => Promise<string>;
   readonly updateStatus?: () => Promise<boolean>;
   readonly webhookUrl?: string;
-  /** これまでの自動の再開の回数。 */
-  readonly restarts?: number;
 };
 
 function fakeFailureDeps(world: FakeFailureWorld = {}) {
@@ -160,7 +157,6 @@ function fakeFailureDeps(world: FakeFailureWorld = {}) {
       statusCalls.push({ id, from, to, flowJobId, note });
       return world.updateStatus === undefined ? true : world.updateStatus();
     },
-    countAutoRestarts: async () => world.restarts ?? 0,
     readInstanceName: world.instanceName ?? (async () => "test-instance"),
     readWebhookUrl: async () => world.webhookUrl ?? "https://discord.example/x",
     notify: async (_url, event) => {
@@ -388,41 +384,20 @@ describe("handleFlowFailure for a transient pr_review failure", () => {
     expect(fake.statusCalls.map((call) => call.to)).toEqual(["failed"]);
   });
 
-  test("sends no notification while restarts remain", async () => {
-    const fake = fakeFailureDeps({ item: reviewItem(), restarts: 0 });
+  test("sends no notification, because the retry sweep tells the human", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem() });
     await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
     expect(fake.events).toEqual([]);
   });
 
-  test("still records the failure while restarts remain", async () => {
-    const fake = fakeFailureDeps({ item: reviewItem(), restarts: 0 });
+  test("still records the failure", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem() });
     await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
     expect(fake.failures).toHaveLength(1);
   });
 
-  test("sends needs_human once the restarts are used up", async () => {
-    const fake = fakeFailureDeps({
-      item: reviewItem(),
-      restarts: AUTO_RETRY_MAX_RESTARTS,
-    });
-    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
-    expect(fake.events.map((event) => event.kind)).toEqual(["needs_human"]);
-  });
-
-  test("links the needs_human notification to the pull request", async () => {
-    const fake = fakeFailureDeps({
-      item: reviewItem(),
-      restarts: AUTO_RETRY_MAX_RESTARTS,
-    });
-    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
-    const event = fake.events[0];
-    expect(event?.kind === "needs_human" && event.url).toBe(
-      "https://github.com/acme/widgets/pull/12",
-    );
-  });
-
   test("reports a failure without the transient prefix as job_failed", async () => {
-    const fake = fakeFailureDeps({ item: reviewItem(), restarts: 0 });
+    const fake = fakeFailureDeps({ item: reviewItem() });
     await handleFlowFailure(
       fake.deps,
       reviewInput("POST pr review acme/widgets#12 failed with HTTP 422"),

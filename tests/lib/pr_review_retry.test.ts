@@ -20,20 +20,26 @@ import {
   TRANSIENT_RETRY_DELAYS_SECONDS,
   type TransientReviewCandidate,
   type TransientReviewDeps,
-  transientReviewExhaustedNotice,
+  transientReviewNotice,
   transientReviewQuery,
   transientReviewStalledNotice,
 } from "../../f/factory/lib/pr_review_retry.ts";
 
 const SILENT: Logger = { info: () => {}, warn: () => {}, error: () => {} };
 
-function candidate(id: number): TransientReviewCandidate {
+function candidate(
+  id: number,
+  overrides: Partial<TransientReviewCandidate> = {},
+): TransientReviewCandidate {
   return {
     id,
     owner: "acme",
     repo: "widgets",
     pr_number: 12,
     flow_job_id: null,
+    restarts: 0,
+    failure_note: `${TRANSIENT_GITHUB_REASON_PREFIX}failed with HTTP 502`,
+    ...overrides,
   };
 }
 
@@ -92,37 +98,15 @@ describe("markTransientGitHubFailure", () => {
 describe("decideTransientFailureAction", () => {
   const marked = `${TRANSIENT_GITHUB_REASON_PREFIX}failed with HTTP 502`;
 
-  test("recovers silently while restarts remain", () => {
+  test("leaves a transient failure of the review to the retry sweep", () => {
     expect(
-      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, true, 0),
-    ).toBe("recover");
-  });
-
-  test("still recovers on the last allowed restart", () => {
-    expect(
-      decideTransientFailureAction(
-        PR_REVIEW_FLOW_PATH,
-        marked,
-        true,
-        AUTO_RETRY_MAX_RESTARTS - 1,
-      ),
-    ).toBe("recover");
-  });
-
-  test("asks a human once the restarts are used up", () => {
-    expect(
-      decideTransientFailureAction(
-        PR_REVIEW_FLOW_PATH,
-        marked,
-        true,
-        AUTO_RETRY_MAX_RESTARTS,
-      ),
-    ).toBe("needs_human");
+      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, true),
+    ).toBe("defer");
   });
 
   test("reports the failure when the work item was not marked failed", () => {
     expect(
-      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, false, 0),
+      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, false),
     ).toBe("job_failed");
   });
 
@@ -132,39 +116,50 @@ describe("decideTransientFailureAction", () => {
         PR_REVIEW_FLOW_PATH,
         "failed with HTTP 422",
         true,
-        0,
       ),
     ).toBe("job_failed");
   });
 
   test("reports a transient failure of another flow", () => {
-    expect(
-      decideTransientFailureAction("f/factory/pr_fix", marked, true, 0),
-    ).toBe("job_failed");
+    expect(decideTransientFailureAction("f/factory/pr_fix", marked, true)).toBe(
+      "job_failed",
+    );
   });
 });
 
-describe("transientReviewExhaustedNotice", () => {
-  const notice = transientReviewExhaustedNotice({
+describe("transientReviewNotice", () => {
+  const exhausted = transientReviewNotice({
     instanceName: "test",
-    owner: "acme",
-    repo: "widgets",
-    prNumber: 12,
-    workItemId: 7,
-    message: `${TRANSIENT_GITHUB_REASON_PREFIX}failed with HTTP 502`,
+    candidate: candidate(7, { restarts: AUTO_RETRY_MAX_RESTARTS }),
+  });
+
+  test("uses the used-up notice when the restarts are used up", () => {
+    expect(exhausted.reason).toContain("直りませんでした");
+  });
+
+  test("uses the stalled notice while restarts remain", () => {
+    const notice = transientReviewNotice({
+      instanceName: "test",
+      candidate: candidate(7, { restarts: 1 }),
+    });
+    expect(notice.reason).toContain("再開されないまま");
   });
 
   test("links to the pull request", () => {
-    expect(notice.url).toBe("https://github.com/acme/widgets/pull/12");
+    expect(exhausted.url).toBe("https://github.com/acme/widgets/pull/12");
   });
 
   test("names the pull request as the target", () => {
-    expect(notice.target).toEqual({ kind: "pr", number: 12 });
+    expect(exhausted.target).toEqual({ kind: "pr", number: 12 });
   });
 
   test("tells the next action with the work item id", () => {
-    expect(notice.next_action).toContain("retry_work_item");
-    expect(notice.next_action).toContain("7");
+    expect(exhausted.next_action).toContain("retry_work_item");
+    expect(exhausted.next_action).toContain("7");
+  });
+
+  test("carries the failure into the reason without the mark", () => {
+    expect(exhausted.reason).toContain(": failed with HTTP 502");
   });
 });
 
@@ -298,7 +293,7 @@ describe("notifyStalledTransientReviews", () => {
       listStalled: async () => stalled,
       notify: async (c) => {
         notified.push(c.id);
-        return true;
+        return "sent";
       },
       recordStall: async (c) => {
         recorded.push(c.id);
@@ -323,7 +318,9 @@ describe("notifyStalledTransientReviews", () => {
   });
 
   test("does not record the stall when the notice was not delivered", async () => {
-    const fake = stalledDeps([candidate(7)], { notify: async () => false });
+    const fake = stalledDeps([candidate(7)], {
+      notify: async () => "not_sent",
+    });
     await notifyStalledTransientReviews(fake.deps);
     expect(fake.recorded).toEqual([]);
   });
@@ -340,7 +337,7 @@ describe("notifyStalledTransientReviews", () => {
 
   test("counts only the notices that were delivered", async () => {
     const fake = stalledDeps([candidate(7), candidate(8)], {
-      notify: async (c) => c.id === 8,
+      notify: async (c) => (c.id === 8 ? "sent" : "not_sent"),
     });
     expect(await notifyStalledTransientReviews(fake.deps)).toBe(1);
   });
@@ -349,11 +346,29 @@ describe("notifyStalledTransientReviews", () => {
     const fake = stalledDeps([candidate(7), candidate(8)], {
       notify: async (c) => {
         if (c.id === 7) throw new Error("variable missing");
-        return true;
+        return "sent";
       },
     });
     await notifyStalledTransientReviews(fake.deps);
     expect(fake.recorded).toEqual([8]);
+  });
+
+  test("does not record the stall when there is no webhook", async () => {
+    const fake = stalledDeps([candidate(7)], {
+      notify: async () => "no_webhook",
+    });
+    await notifyStalledTransientReviews(fake.deps);
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("warns when the stall was already recorded", async () => {
+    const warnings: string[] = [];
+    const fake = stalledDeps([candidate(7)], {
+      recordStall: async () => false,
+      log: { ...SILENT, warn: (message) => warnings.push(message) },
+    });
+    await notifyStalledTransientReviews(fake.deps);
+    expect(warnings).toEqual(["pr_review stall was already recorded"]);
   });
 
   test("rejects when the stalled candidates cannot be listed", async () => {
