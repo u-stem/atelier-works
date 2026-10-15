@@ -846,6 +846,263 @@ describe("pr_ci_fix_enabled_since", () => {
   });
 });
 
+const CONFLICT_FIX_ENABLED_RAW = {
+  ...LEGACY_RAW_CONFIG,
+  pr_conflict_watch_enabled: true,
+  pr_conflict_fix_enabled: true,
+  pr_conflict_fix_enabled_since: "2026-10-15T03:00:00Z",
+};
+
+describe("pr_conflict_fix_enabled", () => {
+  test("defaults pr_conflict_fix_enabled to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_conflict_fix_enabled).toBe(false);
+  });
+
+  test("passes through an explicit pr_conflict_fix_enabled true", () => {
+    const config = parseFactoryConfig(CONFLICT_FIX_ENABLED_RAW);
+    expect(config.pr_conflict_fix_enabled).toBe(true);
+  });
+
+  test("throws when pr_conflict_fix_enabled is not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_enabled: "true" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_conflict_fix_enabled is true and pr_conflict_fix_enabled_since is absent", () => {
+    const { pr_conflict_fix_enabled_since: _since, ...raw } =
+      CONFLICT_FIX_ENABLED_RAW;
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_conflict_fix_enabled is true and pr_conflict_fix_enabled_since is null", () => {
+    const raw = {
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_enabled_since: null,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_conflict_fix_enabled is true and pr_conflict_watch_enabled is absent", () => {
+    const { pr_conflict_watch_enabled: _watch, ...raw } =
+      CONFLICT_FIX_ENABLED_RAW;
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when pr_conflict_fix_enabled is true and pr_conflict_watch_enabled is false", () => {
+    const raw = {
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_watch_enabled: false,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts pr_conflict_fix_enabled false with pr_conflict_watch_enabled false", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_enabled: false,
+      pr_conflict_watch_enabled: false,
+    });
+    expect(config.pr_conflict_fix_enabled).toBe(false);
+  });
+});
+
+describe("pr_conflict_fix_enabled_since", () => {
+  test("defaults pr_conflict_fix_enabled_since to null when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_conflict_fix_enabled_since).toBeNull();
+  });
+
+  test("returns a time with an offset as a Date of the same instant", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_enabled_since: "2026-10-15T12:00:00+09:00",
+    });
+    expect(config.pr_conflict_fix_enabled_since?.toISOString()).toBe(
+      "2026-10-15T03:00:00.000Z",
+    );
+  });
+
+  test.each([
+    ["an empty string", ""],
+    ["a date without a time", "2026-10-15"],
+    ["a time without an offset", "2026-10-15T03:00:00"],
+    ["a number", 1760000000],
+  ])("throws when pr_conflict_fix_enabled_since is %s", (_name, value) => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_enabled_since: value };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("pr_conflict_fix_max_rounds", () => {
+  test("defaults pr_conflict_fix_max_rounds to 2 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_conflict_fix_max_rounds).toBe(2);
+  });
+
+  test("accepts 1 as pr_conflict_fix_max_rounds", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds: 1,
+    });
+    expect(config.pr_conflict_fix_max_rounds).toBe(1);
+  });
+
+  test("accepts 5 as pr_conflict_fix_max_rounds with a larger per-PR limit", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds: 5,
+      pr_conflict_fix_max_rounds_per_pr: 6,
+    });
+    expect(config.pr_conflict_fix_max_rounds).toBe(5);
+  });
+
+  test.each([
+    ["zero", 0],
+    ["six", 6],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["a string", "2"],
+  ])("throws when pr_conflict_fix_max_rounds is %s", (_name, value) => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_max_rounds: value };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("pr_conflict_fix_max_rounds_per_pr", () => {
+  test("defaults pr_conflict_fix_max_rounds_per_pr to 5 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_conflict_fix_max_rounds_per_pr).toBe(5);
+  });
+
+  test("accepts 10 as pr_conflict_fix_max_rounds_per_pr", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds_per_pr: 10,
+    });
+    expect(config.pr_conflict_fix_max_rounds_per_pr).toBe(10);
+  });
+
+  test.each([
+    ["one", 1],
+    ["eleven", 11],
+    ["fractional", 3.5],
+    ["a string", "5"],
+  ])("throws when pr_conflict_fix_max_rounds_per_pr is %s", (_name, value) => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds_per_pr: value,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when the fix is enabled and pr_conflict_fix_max_rounds_per_pr equals pr_conflict_fix_max_rounds", () => {
+    const raw = {
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_max_rounds: 3,
+      pr_conflict_fix_max_rounds_per_pr: 3,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when the fix is enabled and the default per-PR limit is not larger than a raised pr_conflict_fix_max_rounds", () => {
+    const raw = { ...CONFLICT_FIX_ENABLED_RAW, pr_conflict_fix_max_rounds: 5 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts an equal per-PR limit while the fix is disabled", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds: 3,
+      pr_conflict_fix_max_rounds_per_pr: 3,
+    });
+    expect(config.pr_conflict_fix_max_rounds_per_pr).toBe(3);
+  });
+
+  test("accepts a raised pr_conflict_fix_max_rounds with the default per-PR limit while the fix is disabled", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_max_rounds: 5,
+    });
+    expect(config.pr_conflict_fix_max_rounds).toBe(5);
+  });
+
+  test("still rejects a per-PR limit out of range while the fix is disabled", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_max_rounds_per_pr: 11 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("still rejects max rounds out of range while the fix is disabled", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, pr_conflict_fix_max_rounds: 6 };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
+describe("pr_conflict_fix_notify_grace_min", () => {
+  test("defaults pr_conflict_fix_notify_grace_min to 60 when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.pr_conflict_fix_notify_grace_min).toBe(60);
+  });
+
+  test("accepts 0 as pr_conflict_fix_notify_grace_min", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_notify_grace_min: 0,
+    });
+    expect(config.pr_conflict_fix_notify_grace_min).toBe(0);
+  });
+
+  test("accepts 1440 as pr_conflict_fix_notify_grace_min", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_notify_grace_min: 1440,
+    });
+    expect(config.pr_conflict_fix_notify_grace_min).toBe(1440);
+  });
+
+  test("throws when the fix is enabled and the grace is zero", () => {
+    const raw = {
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_notify_grace_min: 0,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when the fix is enabled and the grace is below the patrol interval", () => {
+    const raw = {
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_notify_grace_min: 9,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts 10 as the grace while the fix is enabled", () => {
+    const config = parseFactoryConfig({
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_notify_grace_min: 10,
+    });
+    expect(config.pr_conflict_fix_notify_grace_min).toBe(10);
+  });
+
+  test("accepts the default grace while the fix is enabled", () => {
+    const config = parseFactoryConfig(CONFLICT_FIX_ENABLED_RAW);
+    expect(config.pr_conflict_fix_notify_grace_min).toBe(60);
+  });
+
+  test.each([
+    ["negative", -1],
+    ["1441", 1441],
+    ["fractional", 1.5],
+    ["a string", "60"],
+  ])("throws when pr_conflict_fix_notify_grace_min is %s", (_name, value) => {
+    const raw = {
+      ...LEGACY_RAW_CONFIG,
+      pr_conflict_fix_notify_grace_min: value,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("implement settings (工程3)", () => {
   test("defaults the seven scalar implement settings when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

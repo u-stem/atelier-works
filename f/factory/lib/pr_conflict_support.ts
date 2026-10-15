@@ -75,6 +75,17 @@ export function decidePrConflict(pr: PrConflictFacts): PrConflictDecision {
   return { kind: "conflict", headSha: pr.headSha };
 }
 
+export {
+  isFinalPrConflictFixHold,
+  isPrConflictFixHoldReason,
+  PR_CONFLICT_FIX_HOLD_INFO,
+  PR_CONFLICT_FIX_HOLD_REASON_MAX_LENGTH,
+  PR_CONFLICT_FIX_HOLD_REASONS,
+  PR_CONFLICT_FIX_TEMPORARY_HOLD_REASONS,
+  type PrConflictFixHoldInfo,
+  type PrConflictFixHoldReason,
+} from "./pr_conflict_fix_holds.ts";
+
 /**
  * このPRのnoticeの本文の接頭辞。
  * 自動解決は、種類とこの接頭辞で対象を選ぶ。末尾の区切りまで含めるので、

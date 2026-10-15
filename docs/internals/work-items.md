@@ -121,13 +121,19 @@ Consoleに出る取り込み時点の内容は更新後の値で、実装に渡�
 | issue | 承認済みだが、承認がattemptに一致しない | 拒否する | なし |
 | issue | 上記以外 | 要件定義の生成中 | `f/factory/pipeline`(attempt+1) |
 | pr_review | なし | レビュー中 | `f/factory/pr_review` |
-| pr_fix | CIの失敗を直す回以外(`ci_check_id`がNULL) | 修正中 | `f/factory/pr_fix` |
+| pr_fix | CIの失敗を直す回でも競合を直す回でもない(`ci_check_id`と`conflict_check_id`がNULL) | 修正中 | `f/factory/pr_fix` |
 | pr_fix | CIの失敗を直す回(`ci_check_id`が非NULL) | 拒否する | なし |
+| pr_fix | 競合を直す回(`conflict_check_id`が非NULL) | 拒否する | なし |
 | audit | なし | 拒否する | なし |
 | dependabot | なし | 拒否する | なし |
 
 CIの失敗を直す回の再実行は、作業項目だけを再開すると失敗の行と食い違うため、拒否する。
 回が終わると、`watch_pr_ci`が失敗の行を戻す([PRワークフロー](pr-workflow.md)の「CIの失敗を直す回」)。
+競合を直す回の再実行も拒否する。競合の行が、直している作業項目を結んだままになるためである。
+
+競合を直す回は、止まっていても、自動の再開の候補に入れず、比較交換でも再開しない。
+指摘への対応の失敗の数(モデルを`heavy_model`に上げる判定)にも数えない。
+CIの失敗を直す回と同じ扱いである。
 
 承認済みの要件定義があるのに実装フローが無効なとき、pipelineで再開すると人が承認した要件定義を作り直してしまう。そのため状態を問わず拒否する。
 

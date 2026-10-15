@@ -26,10 +26,11 @@ export type FixItemState = {
   readonly pushed: boolean;
 };
 
-const BUDGET_REASON = /^daily budget exceeded \(\$[\d.]+ >= \$[\d.]+\)$/;
+/** 日次の予算を使い切ったときの止める理由。競合を直す回の回復も同じ文を写す。 */
+export const BUDGET_REASON = /^daily budget exceeded \(\$[\d.]+ >= \$[\d.]+\)$/;
 
-/** 準備の関門と、pushの直前の確認が出す固定文。 */
-const DRAFT_OR_AUTO_MERGE_REASONS: readonly string[] = [
+/** 準備の関門と、pushの直前の確認が出す固定文。競合を直す回の回復も同じ文を写す。 */
+export const DRAFT_OR_AUTO_MERGE_REASONS: readonly string[] = [
   "pull request is a draft",
   "pull request has auto-merge enabled",
 ];

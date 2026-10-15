@@ -13,6 +13,10 @@
 import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import {
+  CONFLICT_ROUND_DETAILS,
+  conflictRoundReason,
+} from "./conflict_fix_round.ts";
+import {
   ACTIONABLE_WORK_ITEM_STATUSES,
   INFO_NOTICE_KINDS,
 } from "./console_support.ts";
@@ -35,6 +39,7 @@ import {
   PR_CI_SUMMARY_MAX_LENGTH,
   type PrCiState,
 } from "./pr_ci_support.ts";
+import { PR_CONFLICT_FIX_TEMPORARY_HOLD_REASONS } from "./pr_conflict_fix_holds.ts";
 import {
   type AgentRunRecord,
   APPROVAL_REQUEST_KINDS,
@@ -341,6 +346,11 @@ function toWorkItem(row: SqlRow): WorkItem {
     branch: parseNullableString(row.branch, "branch"),
     pr_url: parseNullableString(row.pr_url, "pr_url"),
     ci_check_id: parseNullableId(row.ci_check_id, "ci_check_id"),
+    conflict_check_id: parseNullableId(
+      row.conflict_check_id,
+      "conflict_check_id",
+    ),
+    conflict_episode: parseNullableId(row.conflict_episode, "conflict_episode"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
   };
@@ -383,6 +393,10 @@ export type NewWorkItem = {
   parent_work_item_id: number | null;
   /** この作業項目が直しているCIの判定(`pr_ci_checks`の行)のID。省略するとNULL。 */
   ci_check_id?: number | null;
+  /** この作業項目が直しているマージの競合(`pr_conflict_checks`の行)のID。省略するとNULL。 */
+  conflict_check_id?: number | null;
+  /** 直している競合のepisode。`conflict_check_id`と同時に指定する。省略するとNULL。 */
+  conflict_episode?: number | null;
 };
 
 /** `factory.work_items`に新しい行を挿入し、そのIDを返す。 */
@@ -394,13 +408,15 @@ export async function insertWorkItem(
     INSERT INTO factory.work_items (
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
-      cancel_url, head_sha, parent_work_item_id, ci_check_id
+      cancel_url, head_sha, parent_work_item_id, ci_check_id,
+      conflict_check_id, conflict_episode
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
-      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint
+      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
+      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer
     )
     RETURNING id
   `;
@@ -499,13 +515,15 @@ export async function insertIssueWorkItemUnlessActive(
     INSERT INTO factory.work_items (
       cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
       title, body, status, attempt, claimed_by, flow_job_id, resume_url,
-      cancel_url, head_sha, parent_work_item_id, ci_check_id
+      cancel_url, head_sha, parent_work_item_id, ci_check_id,
+      conflict_check_id, conflict_episode
     ) VALUES (
       ${item.cycle}::integer, ${item.source}, ${item.kind}, ${item.owner}, ${item.repo},
       ${item.issue_number}::integer, ${item.issue_url}, ${item.pr_number}::integer, ${item.title},
       ${item.body}, ${item.status}, ${item.attempt}::integer, ${item.claimed_by},
       ${item.flow_job_id}, ${item.resume_url}, ${item.cancel_url}, ${item.head_sha},
-      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint
+      ${item.parent_work_item_id}::bigint, ${item.ci_check_id ?? null}::bigint,
+      ${item.conflict_check_id ?? null}::bigint, ${item.conflict_episode ?? null}::integer
     )
     ON CONFLICT DO NOTHING
     RETURNING id
@@ -1058,6 +1076,8 @@ export type AutoRetryCandidate = {
  * 再開できない項目が`limit`件を占めて、後ろの項目を締め出さないためである。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は除く。失敗の行は`fixing`のまま食い違うので、
  * 作業項目だけを再開しても直らない。回が終わると`watch_pr_ci`が行を戻す。
+ * 競合を直す回(`conflict_check_id`が非NULL)も除く。競合の行が直している作業項目を結んだままで、
+ * 作業項目だけを再開すると、行と食い違うためである。
  * 要件が未承認の項目のように、DBの条件だけでは除けないものは、呼び出し側が飛ばす。
  * noticeの解決の時刻が止まった時刻より後であることが、止まった後に原因が直ったことの印になる。
  * 止まった後の解決に限るので、再開後に同じ理由で止まった作業項目は、次の解決まで対象にならない。
@@ -1087,6 +1107,7 @@ export async function listAutoRetryCandidates(
     WHERE ((w.kind = 'issue' AND w.status = 'needs_human')
         OR (w.kind = 'pr_fix' AND w.status = 'blocked'))
       AND w.ci_check_id IS NULL
+      AND w.conflict_check_id IS NULL
       AND EXISTS (
         SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
         WHERE starts_with(last.note, p.prefix)
@@ -1136,7 +1157,7 @@ export async function listAutoRetryCandidates(
 
 /**
  * 止まった作業項目を、理由を条件にした比較と交換で再開の状態へ移す。
- * 状態が`expectedFrom`で、CIの失敗を直す回(`ci_check_id`が非NULL)でなく、
+ * 状態が`expectedFrom`で、CIの失敗を直す回(`ci_check_id`が非NULL)でも競合を直す回(`conflict_check_id`が非NULL)でもなく、
  * その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満で、
  * 同じIssueに新しいサイクルの`issue`が無く、同じPRに`id`の大きい`pr_fix`も、終端でない別の`pr_fix`も無く、
@@ -1174,6 +1195,7 @@ export async function restartStoppedWorkItem(
           updated_at = now()
       WHERE id = ${params.id}::bigint AND status = ${params.expectedFrom}
         AND ci_check_id IS NULL
+        AND conflict_check_id IS NULL
         AND EXISTS (
           SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
           WHERE starts_with((
@@ -5169,9 +5191,10 @@ export async function countImplementFailedRounds(
  *     別の実行の行は、flowの再試行の60秒の待ちか、flowとClaudeの実行のやり直しを経てから
  *     書かれるので、10秒以内には来ない。
  *
- * CIの失敗を直すラウンド(`ci_check_id`を持つ作業項目)は、数える対象に入れない。
- * 回数の上限は`countPrCiFixRounds`で別に見るので、指摘の対応の失敗に混ぜると、
- * レビューの修正に使うモデルの昇格を、CIの失敗の回数が早めてしまう。
+ * CIの失敗を直すラウンド(`ci_check_id`を持つ作業項目)と、競合を直すラウンド(`conflict_check_id`を持つ作業項目)は、
+ * 数える対象に入れない。
+ * 回数の上限は`countPrCiFixRounds`と`countPrConflictFixRounds`で別に見るので、指摘の対応の失敗に混ぜると、
+ * レビューの修正に使うモデルの昇格を、CIの失敗や競合の回数が早めてしまう。
  *
  * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
  * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
@@ -5194,6 +5217,7 @@ export async function countPrFixFailures(
         ON wi.owner = cur.owner AND wi.repo = cur.repo AND wi.pr_number = cur.pr_number
       WHERE cur.id = ${workItemId}::bigint AND wi.kind = 'pr_fix'
         AND wi.ci_check_id IS NULL
+        AND wi.conflict_check_id IS NULL
     ),
     last_success AS (
       SELECT MAX(fr.created_at) AS at
@@ -5538,6 +5562,14 @@ export type PrConflictCheck = {
   readonly episode: number;
   /** 今の競合で通知した時刻。通知していなければnull。 */
   readonly notified_at: Date | null;
+  /** いま競合を直している作業項目のID。直していなければnull。 */
+  readonly fix_work_item_id: number | null;
+  /** 直す作業項目を起動した回数。今の競合の回(`episode`)の中で数える。 */
+  readonly fix_attempts: number;
+  /** 起動を保留している理由。保留していなければnull。 */
+  readonly fix_hold_reason: string | null;
+  /** 今の競合の回が始まった時刻。 */
+  readonly episode_started_at: Date;
   readonly checked_at: Date;
   readonly created_at: Date;
   readonly updated_at: Date;
@@ -5567,6 +5599,10 @@ function toPrConflictCheck(row: SqlRow): PrConflictCheck {
     state: parseEnum(row.state, PR_CONFLICT_STATES, "state"),
     episode: parseNumericLike(row.episode, "episode"),
     notified_at: parseNullableDate(row.notified_at, "notified_at"),
+    fix_work_item_id: parseNullableId(row.fix_work_item_id, "fix_work_item_id"),
+    fix_attempts: parseNumericLike(row.fix_attempts, "fix_attempts"),
+    fix_hold_reason: parseFixHoldReason(row.fix_hold_reason),
+    episode_started_at: parseDate(row.episode_started_at, "episode_started_at"),
     checked_at: parseDate(row.checked_at, "checked_at"),
     created_at: parseDate(row.created_at, "created_at"),
     updated_at: parseDate(row.updated_at, "updated_at"),
@@ -5577,7 +5613,10 @@ function toPrConflictCheck(row: SqlRow): PrConflictCheck {
  * 競合しているPRを`factory.pr_conflict_checks`に記録し、その行を返す。PRごとに1行で、無ければ作り、あれば書き換える。
  * 競合は、行が無い状態か、競合から離れた状態(`resolved`か`closed`)から`conflicted`になった時点で始まる。
  * 始まったときだけ、通知した時刻(`notified_at`)を空にして、通知できるようにし、競合の回(`episode`)を1つ増やす。
- * 競合のままの行は、通知した時刻を残し、`head_sha`だけを今のheadに書き換える。headが進んでも通知は重ねない。
+ * 同じときに、回の開始時刻(`episode_started_at`)を今にし、直す作業項目の起動の回数(`fix_attempts`)を0に、
+ * 起動の保留の理由(`fix_hold_reason`)を空に戻す。回数と保留は、競合の回ごとに数え直す。
+ * 直している作業項目(`fix_work_item_id`)は戻さない。その作業項目の終わりを、回復が行に戻すためである。
+ * 競合のままの行は、通知した時刻と、直す作業に関する列を残し、`head_sha`だけを今のheadに書き換える。headが進んでも通知は重ねない。
  * 戻り値の`started`は、この呼び出しで競合が始まったかを示すログ用の値で、通知するかの判断には使わない(判断は`notified_at`で行う)。
  * 更新前の状態は文の開始時点のスナップショットから読むので、並行する実行と重なると実際とずれうる。
  * 並行して同じ行を`resolved`にされた直後は偽に、行が無いときに2つの実行が同時に挿入すると両方が真になりうる。
@@ -5604,10 +5643,15 @@ export async function recordPrConflict(
       notified_at = CASE WHEN c.state = 'conflicted' THEN c.notified_at ELSE NULL END,
       updated_at = CASE WHEN c.state = 'conflicted' THEN c.updated_at ELSE now() END,
       episode = CASE WHEN c.state = 'conflicted' THEN c.episode ELSE c.episode + 1 END,
+      episode_started_at = CASE WHEN c.state = 'conflicted' THEN c.episode_started_at ELSE now() END,
+      fix_attempts = CASE WHEN c.state = 'conflicted' THEN c.fix_attempts ELSE 0 END,
+      fix_hold_reason = CASE WHEN c.state = 'conflicted' THEN c.fix_hold_reason ELSE NULL END,
       head_sha = EXCLUDED.head_sha,
       state = 'conflicted',
       checked_at = now()
-    RETURNING id, owner, repo, pr_number, head_sha, state, episode, notified_at, checked_at, created_at, updated_at,
+    RETURNING id, owner, repo, pr_number, head_sha, state, episode, notified_at,
+      fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at,
+      checked_at, created_at, updated_at,
       (SELECT state FROM prior) AS prior_state
   `.fetch();
   const row = rows[0];
@@ -5702,7 +5746,9 @@ export async function listConflictedPrConflictChecks(
   sql: SqlClient = defaultSqlClient,
 ): Promise<PrConflictCheck[]> {
   const rows = await sql`
-    SELECT id, owner, repo, pr_number, head_sha, state, episode, notified_at, checked_at, created_at, updated_at
+    SELECT id, owner, repo, pr_number, head_sha, state, episode, notified_at,
+           fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at,
+           checked_at, created_at, updated_at
     FROM factory.pr_conflict_checks
     WHERE state = 'conflicted'
     ORDER BY checked_at ASC, id ASC
@@ -5756,4 +5802,344 @@ export async function listPrConflictRepos(
     owner: parseRequiredString(row.owner, "owner"),
     repo: parseRequiredString(row.repo, "repo"),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// pr_conflict_checks: 競合を直す作業項目
+// ---------------------------------------------------------------------------
+
+/** `claimPrConflictForFix`の入力。 */
+export type ClaimPrConflictInput = {
+  /** 直す行(`pr_conflict_checks`)のID。 */
+  readonly id: number;
+  /** PRのowner。作業項目にそのまま書くGitHubの正規の綴りで、行の照合には小文字にして使う。 */
+  readonly owner: string;
+  readonly repo: string;
+  /** 呼び出し側がいま読んだPRのhead。行の`head_sha`と同じでなければ起動しない。 */
+  readonly headSha: string;
+  /** 作業項目の`title`。PRの題名。 */
+  readonly title: string | null;
+  /** 作業項目の`claimed_by`。 */
+  readonly claimedBy: string | null;
+};
+
+/**
+ * 競合の行に直す作業項目を結び、`pr_fix`の作業項目を挿入して、そのIDを返す。
+ * 起動できなかったら`null`を返す。1つの文で、行の更新と作業項目の挿入を不可分に行う。
+ * 同じ行を1つの文で2回更新できないので、作業項目のIDは先に`nextval`で取り、行の`fix_work_item_id`にも書く。
+ * 行の状態(`state`)は変えない。競合のままで、直している作業項目は`fix_work_item_id`が示す。
+ *
+ * 次のどれかなら、何も書かず`null`を返す。
+ * - 行が競合(`conflicted`)でない。別の実行が先に解いた場合である。
+ * - 行の`head_sha`が`headSha`と違う。PRのheadが進んだ場合である。
+ * - 行が通知済み(`notified_at`が非NULL)である。
+ * - 行にすでに直す作業項目が結ばれている(`fix_work_item_id`が非NULL)。
+ * - 行が最終の保留(`fix_hold_reason`が一時の理由でない)である。一時の理由の保留は、起動したら同じ文で外す。
+ * - 同じPRに、終端でない`pr_fix`の作業項目がある。同じブランチへ別々にpushして競合するのを防ぐ。
+ * 上の確認をすり抜けた並行する起動は、一意索引`work_items_active_pr_fix_key`が拒む。
+ * その違反は、文全体が取り消されるので、行も変わらず`null`を返す。
+ *
+ * 作業項目の`owner`と`repo`は、PRが示す正規の綴りを渡す。一意索引と既存の照合は大文字小文字を区別するためである。
+ * 行との照合には小文字を使うので、`pr_conflict_checks`の小文字の綴りをそのまま渡さない。
+ * 作業項目は、状態`fixing`、サイクルと試行は1で挿入する。
+ * `fix_round`と、処理済みの位置(`last_review_id`、`last_comment_id`、`last_review_comment_id`)は、
+ * 同じPRの直近の`pr_fix`から写す。無ければ0にする。競合の回は、ラウンドの番号も位置も進めない。
+ * `conflict_check_id`には直す行のID、`conflict_episode`には行の競合の回を入れ、競合の回を見分ける印にする。
+ */
+export async function claimPrConflictForFix(
+  input: ClaimPrConflictInput,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number | null> {
+  assertPositiveId(input.id, "pr conflict check id");
+  assertGitHubName(input.owner);
+  assertGitHubName(input.repo);
+  assertCommitSha(input.headSha);
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const temporaryHolds: string[] = [...PR_CONFLICT_FIX_TEMPORARY_HOLD_REASONS];
+  try {
+    const rows = await sql`
+      WITH nid AS (
+        SELECT nextval(pg_get_serial_sequence('factory.work_items', 'id')) AS id
+      ),
+      c AS (
+        UPDATE factory.pr_conflict_checks AS r
+        SET fix_work_item_id = (SELECT id FROM nid),
+            fix_attempts = r.fix_attempts + 1,
+            fix_hold_reason = NULL,
+            updated_at = now()
+        WHERE r.id = ${input.id}::bigint AND r.state = 'conflicted' AND r.head_sha = ${input.headSha}
+          AND r.owner = ${input.owner.toLowerCase()} AND r.repo = ${input.repo.toLowerCase()}
+          AND r.fix_work_item_id IS NULL AND r.notified_at IS NULL
+          AND (r.fix_hold_reason IS NULL OR r.fix_hold_reason = ANY(${temporaryHolds}::text[]))
+          AND NOT EXISTS (
+            SELECT 1 FROM factory.work_items AS active
+            WHERE active.kind = 'pr_fix'
+              AND lower(active.owner) = r.owner AND lower(active.repo) = r.repo
+              AND active.pr_number = r.pr_number
+              AND active.status != ALL(${terminal})
+          )
+        RETURNING r.id, r.pr_number, r.head_sha, r.episode
+      ),
+      prev AS (
+        SELECT previous.fix_round, previous.last_review_id, previous.last_comment_id,
+               previous.last_review_comment_id
+        FROM factory.work_items AS previous
+        WHERE previous.kind = 'pr_fix'
+          AND lower(previous.owner) = ${input.owner.toLowerCase()}
+          AND lower(previous.repo) = ${input.repo.toLowerCase()}
+          AND previous.pr_number = (SELECT pr_number FROM c)
+        ORDER BY previous.created_at DESC, previous.id DESC
+        LIMIT 1
+      ),
+      w AS (
+        INSERT INTO factory.work_items (
+          id, cycle, source, kind, owner, repo, issue_number, issue_url, pr_number,
+          title, body, status, attempt, claimed_by, head_sha, conflict_check_id, conflict_episode,
+          fix_round, last_review_id, last_comment_id, last_review_comment_id
+        )
+        SELECT (SELECT id FROM nid), 1, 'issue', 'pr_fix', ${input.owner}, ${input.repo},
+               NULL, NULL, c.pr_number,
+               ${input.title}::text, NULL, 'fixing', 1, ${input.claimedBy}::text, c.head_sha, c.id, c.episode,
+               COALESCE((SELECT fix_round FROM prev), 0),
+               COALESCE((SELECT last_review_id FROM prev), 0),
+               COALESCE((SELECT last_comment_id FROM prev), 0),
+               COALESCE((SELECT last_review_comment_id FROM prev), 0)
+        FROM c
+        RETURNING id
+      )
+      SELECT id FROM w
+    `.fetch();
+    const row = rows[0];
+    return row === undefined ? null : parseId(row.id, "id");
+  } catch (err) {
+    if (isActivePrFixUniqueViolation(err)) return null;
+    throw err;
+  }
+}
+
+export type SetPrConflictFixHoldOptions = {
+  /**
+   * 渡せば、いまの理由がこの値(`null`は保留なし)と同じ行だけを書き換える。
+   * 読んでから書くまでの間に、別の実行が書いた理由を上書きしないためである。
+   */
+  readonly expected?: string | null;
+};
+
+/**
+ * 競合の行の、直す作業項目を起動しない理由(`fix_hold_reason`)を設定する。`null`で解除する。
+ * 今の値と違うときだけ書き、書いたら`true`を返す。競合でない行と、直す作業項目が結ばれた行は書き換えない。
+ * 結ばれた行の保留は、結びを外す`releasePrConflictFix`が同時に書く。
+ * `options.expected`を渡したときは、いまの理由がそれと違う行も書き換えない。
+ * `reason`が空か64字を超えるときは、DBに触れずに例外を投げる。
+ */
+export async function setPrConflictFixHold(
+  id: number,
+  reason: string | null,
+  options: SetPrConflictFixHoldOptions = {},
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPositiveId(id, "pr conflict check id");
+  if (reason !== null) assertFixHoldReason(reason);
+  const checkExpected = options.expected !== undefined;
+  const expected = options.expected ?? null;
+  const rows = await sql`
+    UPDATE factory.pr_conflict_checks
+    SET fix_hold_reason = ${reason}::text,
+        updated_at = now()
+    WHERE id = ${id}::bigint
+      AND state = 'conflicted' AND fix_work_item_id IS NULL
+      AND fix_hold_reason IS DISTINCT FROM ${reason}::text
+      AND (NOT ${checkExpected}::boolean OR fix_hold_reason IS NOT DISTINCT FROM ${expected}::text)
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
+}
+
+export type ReleasePrConflictFixOptions = {
+  /** 渡せば、保留の理由として書く。渡さなければ今の値を残す。1〜64字。 */
+  readonly holdReason?: string;
+  /**
+   * 結びを外す作業項目のID。`fix_work_item_id`がこの作業項目の行だけを戻す。
+   * 別の作業項目に起動し直された行を戻さないため、省略できない。
+   */
+  readonly fixWorkItemId: number;
+};
+
+/**
+ * 競合の行から、直す作業項目の結び(`fix_work_item_id`)を外す。
+ * この呼び出しで外したら`true`を返す。行が`fixWorkItemId`の作業項目に結ばれていなければ書き換えず、`false`を返す。
+ * 同じ呼び出しを繰り返しても結果は変わらない。行の状態は条件にしない。
+ * 作業項目が動いている間に競合が解けた(`resolved`)行や閉じた(`closed`)行も、結びは外す必要があるためである。
+ * `holdReason`を書くのは、結ばれた作業項目の`conflict_episode`が、行の今の`episode`と同じときだけである。
+ * 違うときは、結びだけを外し、保留は今の値のままにする。行は新しい回に進んでも結びを保持するので、
+ * 古い回の作業項目が止まった理由を、新しい回の行に最終の保留として書かないためである。
+ * `fix_attempts`は減らさない。
+ * `holdReason`が空か64字を超えるときと、`fixWorkItemId`が正の整数でないときは、DBに触れずに例外を投げる。
+ */
+export async function releasePrConflictFix(
+  id: number,
+  options: ReleasePrConflictFixOptions,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  assertPositiveId(id, "pr conflict check id");
+  assertPositiveId(options.fixWorkItemId, "work item id");
+  if (options.holdReason !== undefined) assertFixHoldReason(options.holdReason);
+  const holdReason = options.holdReason ?? null;
+  const fixWorkItemId = options.fixWorkItemId;
+  const rows = await sql`
+    UPDATE factory.pr_conflict_checks AS r
+    SET fix_work_item_id = NULL,
+        fix_hold_reason = CASE
+          WHEN EXISTS (
+            SELECT 1 FROM factory.work_items AS w
+            WHERE w.id = r.fix_work_item_id AND w.conflict_check_id = r.id
+              AND w.conflict_episode = r.episode
+          ) THEN COALESCE(${holdReason}::text, r.fix_hold_reason)
+          ELSE r.fix_hold_reason END,
+        updated_at = now()
+    WHERE r.id = ${id}::bigint
+      AND r.fix_work_item_id = ${fixWorkItemId}::bigint
+    RETURNING r.id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 直す作業項目が結ばれた行を、読み直していない順(`checked_at`の古い順)に最大`limit`件返す。
+ * 行の状態は問わない。作業項目が動いている間に競合が解けた行や、閉じた行も、結びを外す回復の対象だからである。
+ * PRの発見やリポジトリの設定に頼らないので、リポジトリが設定から外れた後の行も返す。
+ * 後ろの行が飢えないためには、呼び出し側が、見るたびに`checked_at`を進める必要がある(`touchPrConflictCheck`)。
+ */
+export async function listPrConflictFixing(
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrConflictCheck[]> {
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, episode, notified_at,
+           fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at,
+           checked_at, created_at, updated_at
+    FROM factory.pr_conflict_checks
+    WHERE fix_work_item_id IS NOT NULL
+    ORDER BY checked_at ASC, id ASC
+    LIMIT ${limit}::integer
+  `.fetch();
+  return rows.map(toPrConflictCheck);
+}
+
+/**
+ * 競合を直したラウンドの数を数える範囲。
+ * - `episode`: 競合の1回。行のIDと`episode`の組で指す。
+ * - `pr`: PR全体。`pr_conflict_checks`の行を経由せず、`work_items`を直接数える。
+ *   掃除で行が消えても、数えた回数が戻らないためである。ownerとrepoは小文字で照合する。
+ */
+export type PrConflictFixRoundScope =
+  | {
+      readonly kind: "episode";
+      readonly checkId: number;
+      readonly episode: number;
+    }
+  | {
+      readonly kind: "pr";
+      readonly owner: string;
+      readonly repo: string;
+      readonly prNumber: number;
+    };
+
+/**
+ * 競合を直したラウンド(`conflict_check_id`を持つ`pr_fix`の作業項目)の数を返す。
+ * 範囲は`PrConflictFixRoundScope`で決める。どちらの範囲も、同じ条件で数える。
+ * 次のものは数えない。
+ * - `failed`で`flow_job_id`が空の作業項目。フローの起動に失敗した回のほか、ジョブIDが記録されないまま
+ *   回復や失敗の処理が`failed`にした回も含む。Claudeを走らせていない回で、直す機会を使い切らないためである。
+ *   数えない回が続く行は、行の`fix_attempts`の上限が止める。
+ * - 何も変えずに終えた作業項目(状態が`reviewed`で、その状態へ移った最新の遷移の注記が`up_to_date`のもの)。
+ *   ベースの更新がすでに取り込まれていて、直す作業が無かった回である。
+ * - イメージが古い理由で止まった作業項目(状態が`blocked`で、その状態へ移った最新の遷移の注記が、
+ *   `staleImageNotePrefixes`のどれかで始まるもの)。準備がClaudeを動かす前に止めた回で、フローのジョブIDを持つ。
+ *   そのため、1つ目の条件(`flow_job_id`が空の`failed`)では除けない。
+ *   数えると、イメージが古い間に起動と停止を繰り返して回数を使い切り、人がイメージを直しても自動で直らなくなる。
+ *   呼び出し側は`AUTO_RETRY_REASON_PREFIXES`を渡す。一覧を引数にするのは、`db.ts`が検査のサンドボックスの部品に依存しないようにするためである。
+ *
+ * 数えない回の繰り返しは、行の`fix_attempts`の上限(`pr_conflict_fix_max_rounds`に3を足した数)だけが止める。
+ * 巡回は5分ごとなので、イメージが古い状態が約20〜25分(既定の設定のとき)を超えると、その回(episode)は
+ * `rounds_exhausted`(最終の保留)で通知に進む。通知の理由はイメージの古さを示さない。
+ * その後に人がイメージを直しても、その回は自動では直らない。新しい回で再び起動する。
+ * 準備の段階で止まる回はClaudeを使わないので、予算は使わない。
+ *
+ * 範囲ごとの2つの問い合わせは、数えない条件を同じ文で書き写している。条件を変えるときは両方を直す。
+ * `staleImageNotePrefixes`に空文字があるときは、DBに触れずに例外を投げる。空の接頭辞はすべての注記に一致し、
+ * `blocked`の回を残らず除いてしまうためである。
+ */
+export async function countPrConflictFixRounds(
+  scope: PrConflictFixRoundScope,
+  staleImageNotePrefixes: readonly string[],
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  if (staleImageNotePrefixes.some((prefix) => prefix === "")) {
+    throw new Error("countPrConflictFixRounds: empty stale image note prefix");
+  }
+  const upToDateNote = conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate);
+  const staleImagePrefixes: string[] = [...staleImageNotePrefixes];
+  if (scope.kind === "episode") {
+    assertPositiveId(scope.checkId, "pr conflict check id");
+    assertPositiveId(scope.episode, "pr conflict episode");
+    const rows = await sql`
+      SELECT COUNT(*) AS rounds
+      FROM factory.work_items AS wi
+      WHERE wi.kind = 'pr_fix' AND wi.conflict_check_id IS NOT NULL
+        AND wi.conflict_check_id = ${scope.checkId}::bigint AND wi.conflict_episode = ${scope.episode}::integer
+        AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)
+        AND NOT (
+          wi.status = 'reviewed' AND COALESCE((
+            SELECT e.note FROM factory.work_item_events AS e
+            WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1
+          ), '') = ${upToDateNote}::text
+        )
+        AND NOT (
+          wi.status = 'blocked' AND EXISTS (
+            SELECT 1 FROM unnest(${staleImagePrefixes}::text[]) AS p(prefix)
+            WHERE starts_with(COALESCE((
+              SELECT e.note FROM factory.work_item_events AS e
+              WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+              ORDER BY e.occurred_at DESC, e.id DESC
+              LIMIT 1
+            ), ''), p.prefix)
+          )
+        )
+    `.fetch();
+    const row = rows[0];
+    return row === undefined ? 0 : parseNumericLike(row.rounds, "rounds");
+  }
+  assertPrCiTarget(scope.owner, scope.repo, scope.prNumber);
+  const rows = await sql`
+    SELECT COUNT(*) AS rounds
+    FROM factory.work_items AS wi
+    WHERE wi.kind = 'pr_fix' AND wi.conflict_check_id IS NOT NULL
+      AND lower(wi.owner) = ${scope.owner.toLowerCase()} AND lower(wi.repo) = ${scope.repo.toLowerCase()}
+      AND wi.pr_number = ${scope.prNumber}::integer
+      AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)
+      AND NOT (
+        wi.status = 'reviewed' AND COALESCE((
+          SELECT e.note FROM factory.work_item_events AS e
+          WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ), '') = ${upToDateNote}::text
+      )
+      AND NOT (
+        wi.status = 'blocked' AND EXISTS (
+          SELECT 1 FROM unnest(${staleImagePrefixes}::text[]) AS p(prefix)
+          WHERE starts_with(COALESCE((
+            SELECT e.note FROM factory.work_item_events AS e
+            WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1
+          ), ''), p.prefix)
+        )
+      )
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? 0 : parseNumericLike(row.rounds, "rounds");
 }

@@ -7,11 +7,7 @@ import {
   checkImageGate,
   checkImageProblemsFromEnv,
 } from "../lib/check_sandbox.ts";
-import {
-  ciRoundApplyTimeoutMisfit,
-  ciRoundVerifyTimeoutMisfit,
-  evaluateCiRoundPrepareGuard,
-} from "../lib/ci_fix_round.ts";
+import { evaluateCiRoundPrepareGuard } from "../lib/ci_fix_round.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -43,6 +39,7 @@ import {
   runCommand,
 } from "../lib/workspace.ts";
 import {
+  ciRoundTimeoutMisfit,
   earlyExitBase,
   evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
@@ -51,21 +48,11 @@ import {
   evaluatePrFixSafetyGuards,
   evaluateRepoAllowedGuard,
   fetchPrFixHeadBranchState,
-  PR_COMMAND_STOP_OVERHEAD_SEC,
-  PR_FIX_APPLY_STEP_TIMEOUT_SEC,
-  PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
-  PR_STEP_OVERRUN_BASE_SEC,
   type PrFixGateOutcome,
   type PrFixHeadBranchState,
   prFixTimeoutMisfit,
   shouldReadPrFixHeadState,
 } from "./pr_workflow_support.ts";
-
-/** CI回の時間の見積もりに使う、通常の回と同じ余裕。 */
-const CI_ROUND_OVERHEAD = {
-  commandStopSec: PR_COMMAND_STOP_OVERHEAD_SEC,
-  baseSec: PR_STEP_OVERRUN_BASE_SEC,
-} as const;
 
 export type PrFixPrepareResult = {
   readonly outcome: PrFixGateOutcome;
@@ -192,21 +179,9 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
 
   // 修正・検証ステップの最悪の所要時間がflow.yamlのtimeoutに収まらない設定では、
   // Windmillがアプリ側のtimeoutより先にステップを打ち切るため、worktreeに触れる前に止める。
-  const timeoutMisfit =
-    prFixTimeoutMisfit(config) ??
-    (ciRound
-      ? (ciRoundApplyTimeoutMisfit(
-          config.claude_timeout_sec,
-          PR_FIX_APPLY_STEP_TIMEOUT_SEC,
-          CI_ROUND_OVERHEAD,
-        ) ??
-        ciRoundVerifyTimeoutMisfit(
-          config.claude_timeout_sec,
-          config.allowed_check_commands.length,
-          PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
-          CI_ROUND_OVERHEAD,
-        ))
-      : null);
+  const timeoutMisfit = ciRound
+    ? ciRoundTimeoutMisfit(config)
+    : prFixTimeoutMisfit(config);
   if (timeoutMisfit !== null) {
     return {
       outcome: "guard_blocked",

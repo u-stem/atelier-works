@@ -1,0 +1,9 @@
+summary: '[LIB] 競合を直す作業の保留の理由'
+description: 内部ライブラリです。直接実行するものではありません。競合を直す作業項目を起動しない理由の語彙と、一時か最終かの種別を持ちます。
+lock: '!inline f/factory/lib/pr_conflict_fix_holds.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

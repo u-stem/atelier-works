@@ -76,6 +76,8 @@ function item(overrides: Partial<WorkItem> = {}): WorkItem {
     branch: null,
     pr_url: null,
     ci_check_id: null,
+    conflict_check_id: null,
+    conflict_episode: null,
     created_at: DATE,
     updated_at: DATE,
     ...overrides,

@@ -98,6 +98,7 @@ function decide(
     fix_attempts?: number;
   } = {},
   maxRounds = 2,
+  configMisfit: string | null = null,
 ) {
   const built = readers(setup);
   const decision = decideFixClaim({
@@ -109,6 +110,7 @@ function decide(
     },
     instanceName: "local",
     maxRounds,
+    configMisfit,
     readers: built.readers,
   });
   return { decision, events: built.events };
@@ -314,6 +316,31 @@ describe("decideFixClaim", () => {
       kind: "hold",
       reason: "rounds_exhausted",
     });
+  });
+
+  test("holds config_misfit when the time settings do not fit the step timeout", async () => {
+    const { decision } = decide({}, {}, 2, "time settings do not fit");
+    expect(await decision).toEqual({ kind: "hold", reason: "config_misfit" });
+  });
+
+  test("holds config_misfit even for a metadata-only failure", async () => {
+    const { decision } = decide(
+      { classification: "metadata_only" },
+      {},
+      2,
+      "time settings do not fit",
+    );
+    expect(await decision).toEqual({ kind: "hold", reason: "config_misfit" });
+  });
+
+  test("does not hold config_misfit when nothing failed", async () => {
+    const { decision } = decide(
+      { classification: "no_failure" },
+      {},
+      2,
+      "time settings do not fit",
+    );
+    expect(await decision).toEqual({ kind: "skip", why: "no_failure" });
   });
 
   test("holds main_ci_failed when the main branch is red", async () => {
