@@ -1004,6 +1004,21 @@ describe("runPrConflictWatch: finding repositories by search", () => {
     expect(result.rateLimited).toBe(false);
   });
 
+  test("does not search the remaining owners after the rate limit of the search", async () => {
+    const h = setup({
+      searchOwners: [
+        { name: "acme", kind: "org" },
+        { name: "beta", kind: "org" },
+      ],
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+        beta: [],
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["acme:factory-bot"]);
+  });
+
   test("does not search when the account is unreadable", async () => {
     const h = setup({ failViewer: true, searchOwners: owners });
     await runPrConflictWatch(h.deps);

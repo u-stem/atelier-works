@@ -418,7 +418,7 @@ async function collectRepos(
         deps.log.warn("pr conflict search stopped by the rate limit", {
           owner: owner.name,
         });
-        continue;
+        break;
       }
       if (isStatus(err, 401)) {
         await absorbReadError(context, "search_open_repos", owner.name, err);
