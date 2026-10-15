@@ -12,11 +12,16 @@ import type { Logger } from "../../f/factory/lib/log.ts";
 import {
   decideTransientFailureAction,
   markTransientGitHubFailure,
+  notifyStalledTransientReviews,
   PR_REVIEW_FLOW_PATH,
   retryTransientPrReviews,
+  type StalledTransientDeps,
+  TRANSIENT_RETRY_DELAYS_SECONDS,
   type TransientReviewCandidate,
   type TransientReviewDeps,
   transientReviewExhaustedNotice,
+  transientReviewQuery,
+  transientReviewStalledNotice,
 } from "../../f/factory/lib/pr_review_retry.ts";
 
 const SILENT: Logger = { info: () => {}, warn: () => {}, error: () => {} };
@@ -227,14 +232,15 @@ describe("retryTransientPrReviews", () => {
     expect(result.failed).toBe(1);
   });
 
-  test("returns zero counts when the candidates cannot be listed", async () => {
+  // 失敗の通知は、この巡回が再開することを前提に控えている。
+  // 候補を取得できないことを握りつぶすと、誰にも届かないまま止まる。
+  test("rejects when the candidates cannot be listed", async () => {
     const fake = fakeDeps([], {
       listCandidates: async () => {
         throw new Error("db down");
       },
     });
-    const result = await retryTransientPrReviews(fake.deps);
-    expect(result).toEqual({ restarted: 0, skipped: 0, failed: 0 });
+    await expect(retryTransientPrReviews(fake.deps)).rejects.toThrow("db down");
   });
 
   test("stops after the per-run limit", async () => {
@@ -244,5 +250,109 @@ describe("retryTransientPrReviews", () => {
     const fake = fakeDeps(many);
     await retryTransientPrReviews(fake.deps);
     expect(fake.restarted).toHaveLength(AUTO_RETRY_LIMIT_PER_RUN);
+  });
+});
+
+describe("notifyStalledTransientReviews", () => {
+  function stalledDeps(
+    stalled: readonly TransientReviewCandidate[],
+    overrides: Partial<StalledTransientDeps> = {},
+  ) {
+    const notified: number[] = [];
+    const deps: StalledTransientDeps = {
+      listStalled: async () => stalled,
+      recordStall: async () => true,
+      notify: async (c) => {
+        notified.push(c.id);
+      },
+      log: SILENT,
+      ...overrides,
+    };
+    return { deps, notified };
+  }
+
+  test("tells a human about a work item that was not restarted", async () => {
+    const fake = stalledDeps([candidate(7)]);
+    await notifyStalledTransientReviews(fake.deps);
+    expect(fake.notified).toEqual([7]);
+  });
+
+  test("does not tell again when the stall was already recorded", async () => {
+    const fake = stalledDeps([candidate(7)], {
+      recordStall: async () => false,
+    });
+    await notifyStalledTransientReviews(fake.deps);
+    expect(fake.notified).toEqual([]);
+  });
+
+  test("does not tell when the stall could not be recorded", async () => {
+    const fake = stalledDeps([candidate(7)], {
+      recordStall: async () => {
+        throw new Error("db down");
+      },
+    });
+    await notifyStalledTransientReviews(fake.deps);
+    expect(fake.notified).toEqual([]);
+  });
+
+  test("continues with the next work item after a failure", async () => {
+    const fake = stalledDeps([candidate(7), candidate(8)], {
+      recordStall: async (c) => {
+        if (c.id === 7) throw new Error("db down");
+        return true;
+      },
+    });
+    await notifyStalledTransientReviews(fake.deps);
+    expect(fake.notified).toEqual([8]);
+  });
+
+  test("returns the number of work items it told about", async () => {
+    const fake = stalledDeps([candidate(7), candidate(8)]);
+    expect(await notifyStalledTransientReviews(fake.deps)).toBe(2);
+  });
+
+  test("rejects when the stalled candidates cannot be listed", async () => {
+    const fake = stalledDeps([], {
+      listStalled: async () => {
+        throw new Error("db down");
+      },
+    });
+    await expect(notifyStalledTransientReviews(fake.deps)).rejects.toThrow(
+      "db down",
+    );
+  });
+});
+
+describe("transientReviewStalledNotice", () => {
+  const notice = transientReviewStalledNotice({
+    instanceName: "test",
+    candidate: candidate(7),
+  });
+
+  test("links to the pull request", () => {
+    expect(notice.url).toBe("https://github.com/acme/widgets/pull/12");
+  });
+
+  test("tells the next action with the work item id", () => {
+    expect(notice.next_action).toContain("ID7");
+  });
+});
+
+describe("retry delays", () => {
+  test("cover every allowed restart", () => {
+    expect(TRANSIENT_RETRY_DELAYS_SECONDS.length).toBeGreaterThanOrEqual(
+      AUTO_RETRY_MAX_RESTARTS,
+    );
+  });
+
+  test("grow with the number of restarts", () => {
+    const sorted = [...TRANSIENT_RETRY_DELAYS_SECONDS].sort((a, b) => a - b);
+    expect(TRANSIENT_RETRY_DELAYS_SECONDS).toEqual(sorted);
+  });
+
+  test("are shared with the queries through one object", () => {
+    expect(transientReviewQuery().delaysSeconds).toBe(
+      TRANSIENT_RETRY_DELAYS_SECONDS,
+    );
   });
 });

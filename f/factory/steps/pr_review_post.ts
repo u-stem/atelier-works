@@ -38,11 +38,13 @@ import {
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { blockReview } from "./pr_review_prepare.ts";
 import {
+  commentedFindingsOf,
   countOpenMustThreads,
   decideReviewBodyMode,
   findPostedReviewId,
   mapFindingsToReviewComments,
   renderReviewSummary,
+  renderUnresolvedLineSummary,
   reviewResultFor,
   selectThreadsToResolve,
   withReviewMarkers,
@@ -83,6 +85,14 @@ export type PrReviewPostDeps = {
     dir: string,
   ) => Promise<void>;
   readonly log: Logger;
+  /**
+   * 投稿と記録の本体。省くと`postReview`を使う。
+   * GitHubの呼び出しの失敗が、一時的な失敗の印を付けて投げ直されることを、テストで確かめるための入口である。
+   */
+  readonly postReview?: (
+    input: PrReviewPostInput,
+    log: Logger,
+  ) => Promise<PrReviewPostResult>;
 };
 
 const SKIPPED_POST: PrReviewPostResult = {
@@ -186,7 +196,7 @@ export async function runPrReviewPost(
   deps: PrReviewPostDeps,
 ): Promise<PrReviewPostResult> {
   try {
-    return await postReview(input, deps.log);
+    return await (deps.postReview ?? postReview)(input, deps.log);
   } catch (err) {
     // GitHubの一時的な失敗には印を付け、自動の再開に回す。
     throw markTransientGitHubFailure(err);
@@ -239,6 +249,13 @@ export async function findPostedReview(
   );
 }
 
+export type PostMarkedReviewOptions = {
+  /** 422で投稿し直すときの本文。省くと`summaryBody`を使う。 */
+  readonly fallbackBody?: string;
+  /** 投稿し直すときの警告の出力先。 */
+  readonly log?: Logger;
+};
+
 /**
  * COMMENTのレビューを投稿し、そのidを返す。
  * 本文は`summaryBody`に`withReviewMarkers`で目印を足したもの。
@@ -254,9 +271,9 @@ export async function postMarkedReview(
   target: PostReviewTarget,
   summaryBody: string,
   comments: readonly ReviewComment[],
-  fallbackBody: string = summaryBody,
-  log?: Logger,
+  options: PostMarkedReviewOptions = {},
 ): Promise<number> {
+  const { fallbackBody = summaryBody, log } = options;
   const post = async (
     body: string,
     inline: readonly ReviewComment[],
@@ -442,20 +459,16 @@ export async function publishReview(
     openMustCount,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
-  const fallbackBody = renderReviewSummary(
-    input.prAuthorLogin,
-    0,
-    "findings",
-    [...input.commentedFindings, ...droppedFindings],
-    openMustCount,
-  );
+  const fallbackBody = renderUnresolvedLineSummary(input.prAuthorLogin, [
+    ...input.commentedFindings,
+    ...droppedFindings,
+  ]);
   const postedReviewId = await postMarkedReview(
     client,
     target,
     summaryBody,
     comments,
-    fallbackBody,
-    log,
+    { fallbackBody, log },
   );
 
   // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドを解決する。
@@ -553,9 +566,7 @@ async function postReview(
       },
       prAuthorLogin: pr.authorLogin,
       comments,
-      commentedFindings: findings.filter(
-        (finding) => !droppedFindings.includes(finding),
-      ),
+      commentedFindings: commentedFindingsOf(findings, droppedFindings),
       droppedFindings,
       priorReview,
       post,

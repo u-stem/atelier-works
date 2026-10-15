@@ -5,9 +5,11 @@
 // 投稿の書式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節に従う。
 
 import { describe, expect, test } from "bun:test";
-import type {
-  ReviewComment,
-  ReviewThread,
+import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
+import {
+  GitHubHttpError,
+  type ReviewComment,
+  type ReviewThread,
 } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { ReviewFinding } from "../../f/factory/lib/types.ts";
@@ -22,6 +24,7 @@ import {
   runPrReviewPost,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
+  commentedFindingsOf,
   countOpenMustThreads,
   decideReviewBodyMode,
   fenceFor,
@@ -29,6 +32,7 @@ import {
   mapFindingsToReviewComments,
   renderInlineComment,
   renderReviewSummary,
+  renderUnresolvedLineSummary,
   reviewResultFor,
   selectThreadsToResolve,
   withReviewMarkers,
@@ -730,6 +734,111 @@ describe("runPrReviewPost worktree cleanup", () => {
   });
 });
 
+// GitHubの呼び出しの失敗が、一時的なものだけ印を付けて投げ直されることを確かめる。
+describe("runPrReviewPost failure marking", () => {
+  const SILENT = logger("pr_review_post", { sink: () => {} });
+  const INPUT: PrReviewPostInput = {
+    work_item_id: 1,
+    skip: false,
+    owner: "acme",
+    repo: "widgets",
+    pr_number: 1,
+    review_sha: "abc1234",
+    summary: "",
+    verdict: "comment",
+    findings: [],
+    pr_files: [],
+    worktree_dir: "",
+    repo_dir: "",
+  };
+
+  function failingWith(status: number) {
+    return {
+      removeReviewWorktree: async () => {},
+      log: SILENT,
+      postReview: async () => {
+        throw new GitHubHttpError(
+          `POST pr review failed with HTTP ${status}`,
+          status,
+        );
+      },
+    };
+  }
+
+  test("marks a 502 from GitHub as a transient failure", async () => {
+    await expect(runPrReviewPost(INPUT, failingWith(502))).rejects.toThrow(
+      `${TRANSIENT_GITHUB_REASON_PREFIX}POST pr review failed with HTTP 502`,
+    );
+  });
+
+  test("marks a failure without a response as a transient failure", async () => {
+    await expect(runPrReviewPost(INPUT, failingWith(0))).rejects.toThrow(
+      TRANSIENT_GITHUB_REASON_PREFIX,
+    );
+  });
+
+  test("leaves a 403 from GitHub without the mark", async () => {
+    const error = await runPrReviewPost(INPUT, failingWith(403)).catch(
+      (err: unknown) => err,
+    );
+    expect(error instanceof Error && error.message).toBe(
+      "POST pr review failed with HTTP 403",
+    );
+  });
+});
+
+describe("commentedFindingsOf", () => {
+  const inline = finding({ message: "inline" });
+  const unanchored = finding({ path: "b.ts", message: "unanchored" });
+  const files = ["a.ts"];
+
+  test("keeps the findings that became inline comments in order", () => {
+    const { droppedFindings } = mapFindingsToReviewComments(
+      [inline, unanchored],
+      files,
+    );
+    expect(commentedFindingsOf([inline, unanchored], droppedFindings)).toEqual([
+      inline,
+    ]);
+  });
+
+  test("together with the dropped findings gives back every finding", () => {
+    const findings = [inline, unanchored, finding({ line: null })];
+    const { droppedFindings } = mapFindingsToReviewComments(findings, files);
+    const commented = commentedFindingsOf(findings, droppedFindings);
+    expect(commented.length + droppedFindings.length).toBe(findings.length);
+  });
+
+  test("matches the number of inline comments", () => {
+    const findings = [inline, unanchored, finding({ line: 3 })];
+    const { comments, droppedFindings } = mapFindingsToReviewComments(
+      findings,
+      files,
+    );
+    expect(commentedFindingsOf(findings, droppedFindings)).toHaveLength(
+      comments.length,
+    );
+  });
+});
+
+describe("renderUnresolvedLineSummary", () => {
+  const body = renderUnresolvedLineSummary("alice", [
+    finding({ message: "first problem" }),
+  ]);
+
+  test("does not claim any inline comment", () => {
+    expect(body).not.toContain("件コメントしました");
+  });
+
+  test("says the lines could not be resolved", () => {
+    expect(body).toContain("GitHubが行を解決できなかった");
+  });
+
+  test("lists the finding", () => {
+    expect(body).toContain("first problem");
+  });
+});
+
 // 投稿の後、記録する前にステップが落ちて再実行されたとき、
 // 同じshaのレビューをもう一度投稿しないことと、
 // 投稿済みのレビューの指摘を勝手に解決しないことを確かめる。
@@ -930,7 +1039,7 @@ describe("posting a review once per sha", () => {
         TARGET,
         SUMMARY,
         COMMENTS,
-        FALLBACK,
+        { fallbackBody: FALLBACK },
       );
       expect(id).toBe(99);
     });
@@ -945,7 +1054,7 @@ describe("posting a review once per sha", () => {
         TARGET,
         SUMMARY,
         COMMENTS,
-        FALLBACK,
+        { fallbackBody: FALLBACK },
       );
       expect(postedBody(fake.calls[1])).toMatchObject({ comments: [] });
     });
@@ -960,7 +1069,7 @@ describe("posting a review once per sha", () => {
         TARGET,
         SUMMARY,
         COMMENTS,
-        FALLBACK,
+        { fallbackBody: FALLBACK },
       );
       expect(postedBody(fake.calls[1])).toMatchObject({
         body: withReviewMarkers(FALLBACK, 7, SHA),
@@ -978,7 +1087,7 @@ describe("posting a review once per sha", () => {
           TARGET,
           SUMMARY,
           COMMENTS,
-          FALLBACK,
+          { fallbackBody: FALLBACK },
         ),
       ).rejects.toThrow("HTTP 403");
     });
@@ -994,7 +1103,7 @@ describe("posting a review once per sha", () => {
           TARGET,
           SUMMARY,
           COMMENTS,
-          FALLBACK,
+          { fallbackBody: FALLBACK },
         ),
       ).rejects.toThrow("HTTP 422");
     });
@@ -1007,7 +1116,7 @@ describe("posting a review once per sha", () => {
           TARGET,
           SUMMARY,
           [],
-          FALLBACK,
+          { fallbackBody: FALLBACK },
         ),
       ).rejects.toThrow("HTTP 422");
     });

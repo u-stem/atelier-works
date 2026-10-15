@@ -1,13 +1,13 @@
 summary: '[SYS-10] GitHubの一時的な失敗で止まったPRレビューを再開'
 description: >-
-  5分ごとに実行します。GitHubの5xxや通信断で失敗したPRレビューを、失敗から2分が過ぎていれば同じ作業項目のまま再開します。ラベルは付け直さず、再開は同じ作業項目につき3回までです。
+  5分ごとに実行します。GitHubの5xxや通信断で失敗したPRレビューを、失敗から再開の回数に応じた待ち(5分、15分、45分)が過ぎていれば同じ作業項目のまま再開します。ラベルは付け直さず、再開は同じ作業項目につき3回までです。
 args: {}
 cron_version: v2
 enabled: true
 is_flow: false
 no_flow_overlap: true
 on_failure: f/factory/on_error_schedule
-schedule: 0 */5 * * * *
+schedule: 30 2-59/5 * * * *
 script_path: f/factory/auto_retry_pr_review
 timezone: Asia/Tokyo
 ws_error_handler_muted: false

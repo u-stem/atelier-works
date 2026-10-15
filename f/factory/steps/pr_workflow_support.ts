@@ -600,20 +600,55 @@ export function renderReviewSummary(
       );
       break;
   }
-  if (droppedFindings.length > 0) {
-    lines.push("", "(行に紐づけられなかった指摘)");
-    for (const finding of droppedFindings) {
-      const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-      const path = neutralizeHtmlComment(
-        finding.path.replace(/\s*[\r\n]+\s*/g, " "),
-      );
-      const message = neutralizeHtmlComment(
-        normalizeJapaneseText(finding.message),
-      );
-      lines.push(`- ${prefix} ${path}: ${message}`);
-    }
-  }
+  lines.push(...renderUnanchoredFindingLines(droppedFindings));
   return lines.join("\n");
+}
+
+/** 行に紐づけられなかった指摘の見出しと箇条書き。指摘が無ければ空。 */
+function renderUnanchoredFindingLines(
+  findings: readonly ReviewFinding[],
+): string[] {
+  if (findings.length === 0) return [];
+  const lines = ["", "(行に紐づけられなかった指摘)"];
+  for (const finding of findings) {
+    const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
+    const path = neutralizeHtmlComment(
+      finding.path.replace(/\s*[\r\n]+\s*/g, " "),
+    );
+    const message = neutralizeHtmlComment(
+      normalizeJapaneseText(finding.message),
+    );
+    lines.push(`- ${prefix} ${path}: ${message}`);
+  }
+  return lines;
+}
+
+/**
+ * GitHubが行コメントの行を解決できず、レビューを拒否したときの総評を組み立てる。
+ * 行コメントにするはずだった指摘も、行に紐づけられなかった指摘と同じ形で並べる。
+ * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
+ */
+export function renderUnresolvedLineSummary(
+  authorLogin: string,
+  findings: readonly ReviewFinding[],
+): string {
+  return [
+    `${ROLE_TAGS.pr_review} @${authorLogin}`,
+    "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。確認お願いします。",
+    ...renderUnanchoredFindingLines(findings),
+  ].join("\n");
+}
+
+/**
+ * 行コメントになった指摘を返す。`findings`のうち、行に紐づけられず総評に回った`droppedFindings`
+ * (`mapFindingsToReviewComments`の戻り値)に含まれないものを、元の順で返す。
+ * 行コメントになった指摘と総評に回った指摘の和は、元の指摘と一致する。
+ */
+export function commentedFindingsOf(
+  findings: readonly ReviewFinding[],
+  droppedFindings: readonly ReviewFinding[],
+): ReviewFinding[] {
+  return findings.filter((finding) => !droppedFindings.includes(finding));
 }
 
 /**

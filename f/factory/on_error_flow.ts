@@ -138,21 +138,14 @@ export function failureTargetPr(
   item: Pick<WorkItem, "owner" | "repo" | "pr_number"> | null,
 ): { owner: string; repo: string; number: number } | undefined {
   if (path !== DEPENDABOT_FLOW_PATH || item === null) return undefined;
-  if (item.pr_number === null) return undefined;
-  try {
-    assertGitHubName(item.owner);
-    assertGitHubName(item.repo);
-  } catch {
-    return undefined;
-  }
-  return { owner: item.owner, repo: item.repo, number: item.pr_number };
+  return workItemPrTarget(item);
 }
 
 /**
- * 通知のリンクに使うPRを返す。作業項目にPR番号が無いか、ownerとrepoがGitHubの名前の形でなければ返さない。
- * 返さないときは、リンクを作れないので従来の失敗の通知にする。
+ * 作業項目が指すPRを、通知のリンクに使える形で返す。
+ * PR番号が無いか、ownerとrepoがGitHubの名前の形でなければ返さない。
  */
-function failureTargetReview(
+function workItemPrTarget(
   item: Pick<WorkItem, "owner" | "repo" | "pr_number">,
 ): { owner: string; repo: string; number: number } | undefined {
   if (item.pr_number === null) return undefined;
@@ -343,7 +336,8 @@ export async function handleFlowFailure(
   try {
     const webhookUrl = await deps.readWebhookUrl();
     if (webhookUrl.length > 0 && action === "needs_human" && item !== null) {
-      const target = failureTargetReview(item);
+      // リンクを作れないときは、従来の失敗の通知にする。
+      const target = workItemPrTarget(item);
       if (target !== undefined) {
         await deps.notify(
           webhookUrl,

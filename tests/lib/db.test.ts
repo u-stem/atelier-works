@@ -100,6 +100,7 @@ import {
   recordFailure,
   recordMainCiRun,
   recordPrCiCheck,
+  recordTransientStall,
   recordWorkspaceDiskUsageNotice,
   releaseFixingPrCiCheck,
   resolveNoticeIfUnresolved,
@@ -7139,8 +7140,53 @@ describe("transient pr_review restart", () => {
     reasonPrefix: "github_transient: ",
     notePrefix: "auto_retry: ",
     maxRestarts: 3,
-    minAgeSeconds: 120,
+    delaysSeconds: [300, 900, 2700],
+    stallNotePrefix: "auto_retry_stalled: ",
   };
+
+  test("passes the delays by restart count as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContainEqual([300, 900, 2700]);
+  });
+
+  test("passes the delays to the compare-and-swap too", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.values).toContainEqual([300, 900, 2700]);
+  });
+
+  test("skips the stall records when it looks for the failure reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContain("auto_retry_stalled: ");
+  });
+
+  test("records a stall once", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 7 }]]);
+    expect(
+      await recordTransientStall(
+        { stallNotePrefix: "auto_retry_stalled: ", id: 7 },
+        sql,
+        NO_JOBS,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not record a stall that was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await recordTransientStall(
+        { stallNotePrefix: "auto_retry_stalled: ", id: 7 },
+        sql,
+        NO_JOBS,
+      ),
+    ).toBe(false);
+  });
 
   test("parses the candidate rows", async () => {
     const { sql } = createFakeSqlClient([
