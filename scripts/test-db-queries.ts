@@ -13,8 +13,10 @@ import {
   addNoticeUnlessUnresolved,
   claimIssueCreation,
   claimPrCiCheckForFix,
+  claimPrConflictForFix,
   countImplementFailedRounds,
   countPrCiFixRounds,
+  countPrConflictFixRounds,
   countPrFixFailures,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
@@ -53,6 +55,7 @@ import {
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
+  listPrConflictFixing,
   listPrConflictRepos,
   listPrOpenIssueWorkItems,
   listPrOpenRepos,
@@ -71,6 +74,7 @@ import {
   recordTransientStall,
   recordWorkspaceDiskUsageNotice,
   releaseFixingPrCiCheck,
+  releasePrConflictFix,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -81,6 +85,7 @@ import {
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
   setPrCiFixHold,
+  setPrConflictFixHold,
   settlePrConflictCheck,
   setWorkItemPrUrl,
   touchPrCiCheck,
@@ -4940,6 +4945,506 @@ check(
 execPsql(
   target,
   `DELETE FROM factory.pr_conflict_checks WHERE id = ${String(raced.row.id)}`,
+);
+
+// 競合を直す作業項目: 起動は1つの文で行の更新と作業項目の挿入を行い、条件に合わなければ何も書かない。
+const CF = { owner: "qcfix", repo: "app" };
+const CF_HEAD_1 = "6".repeat(40);
+const CF_HEAD_2 = "7".repeat(40);
+/** 競合を記録し、その行を返す。 */
+async function conflictFixRow(prNumber: number, head: string) {
+  return (
+    await recordPrConflict({ ...CF, pr_number: prNumber, head_sha: head }, sql)
+  ).row;
+}
+const cfRowOf = async (id: number) => {
+  const rows = await sql`
+    SELECT id, state, head_sha, episode, notified_at, fix_work_item_id, fix_attempts,
+           fix_hold_reason, episode_started_at
+    FROM factory.pr_conflict_checks WHERE id = ${id}::bigint
+  `.fetch();
+  return rows[0];
+};
+const cfClaim = (
+  id: number,
+  headSha: string,
+  names: { owner: string; repo: string } = CF,
+) =>
+  claimPrConflictForFix(
+    { id, ...names, headSha, title: "conflict title", claimedBy: "qcfix-bot" },
+    sql,
+  );
+const cfWorkItemCount = async (prNumber: number) =>
+  (
+    await sql`
+      SELECT id FROM factory.work_items
+      WHERE lower(owner) = 'qcfix' AND kind = 'pr_fix' AND pr_number = ${prNumber}::integer
+    `.fetch()
+  ).length;
+/** 競合を直す回の作業項目を、指定の状態で挿入する。 */
+async function conflictRoundItem(
+  prNumber: number,
+  checkId: number,
+  episode: number,
+  status: WorkItemStatus,
+  flowJobId: string | null,
+  names: { owner: string; repo: string } = CF,
+) {
+  return insertWorkItem(
+    {
+      cycle: 1,
+      source: "issue",
+      kind: "pr_fix",
+      ...names,
+      issue_number: null,
+      issue_url: null,
+      pr_number: prNumber,
+      title: null,
+      body: null,
+      status,
+      attempt: 1,
+      claimed_by: null,
+      flow_job_id: flowJobId,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: null,
+      parent_work_item_id: null,
+      conflict_check_id: checkId,
+      conflict_episode: episode,
+    },
+    sql,
+  );
+}
+function conflictNote(workItemId: number, status: string, note: string): void {
+  execPsql(
+    target,
+    `INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note) VALUES (${String(workItemId)}, 'fixing', '${status}', '${note}')`,
+  );
+}
+
+// 成功した起動は、行に作業項目を結び、作業項目を同じ文で入れる。行の状態は競合のままである。
+const cfOk = await conflictFixRow(701, CF_HEAD_1);
+const cfOkId = await cfClaim(cfOk.id, CF_HEAD_1);
+check(
+  "conflict claim: a conflicted row of the current head is claimed and returns the new work item id",
+  typeof cfOkId === "number",
+  cfOkId,
+);
+const cfOkRow = await cfRowOf(cfOk.id);
+check(
+  "conflict claim: the row stays conflicted and points at the new work item",
+  cfOkRow?.state === "conflicted" &&
+    Number(cfOkRow.fix_work_item_id) === cfOkId,
+  cfOkRow,
+);
+check(
+  "conflict claim: the attempt of the row is counted",
+  Number(cfOkRow?.fix_attempts) === 1,
+  cfOkRow,
+);
+const cfOkItem = cfOkId === null ? null : await getWorkItem(cfOkId, sql);
+check(
+  "conflict claim: the work item is a pr_fix that is already fixing, tied to the row and the episode",
+  cfOkItem?.kind === "pr_fix" &&
+    cfOkItem.status === "fixing" &&
+    cfOkItem.conflict_check_id === cfOk.id &&
+    cfOkItem.conflict_episode === cfOk.episode &&
+    cfOkItem.pr_number === 701 &&
+    cfOkItem.head_sha === CF_HEAD_1,
+  cfOkItem,
+);
+check(
+  "conflict claim: the work item is not tied to a CI check",
+  cfOkItem?.ci_check_id === null,
+  cfOkItem,
+);
+check(
+  "conflict claim: the work item carries the title and the claimant",
+  cfOkItem?.title === "conflict title" && cfOkItem.claimed_by === "qcfix-bot",
+  cfOkItem,
+);
+check(
+  "conflict claim: without an earlier pr_fix the round and the watermarks start at zero",
+  cfOkItem?.fix_round === 0 &&
+    cfOkItem.last_review_id === 0 &&
+    cfOkItem.last_comment_id === 0 &&
+    cfOkItem.last_review_comment_id === 0,
+  cfOkItem,
+);
+check(
+  "conflict claim: a row that already points at a work item is not claimed again",
+  (await cfClaim(cfOk.id, CF_HEAD_1)) === null &&
+    (await cfWorkItemCount(701)) === 1,
+);
+
+// 条件に合わなければ、行にも作業項目にも何も書かない。
+const cfMoved = await conflictFixRow(702, CF_HEAD_1);
+check(
+  "conflict claim: a row whose head the pull request left is not claimed",
+  (await cfClaim(cfMoved.id, CF_HEAD_2)) === null &&
+    (await cfRowOf(cfMoved.id))?.fix_work_item_id === null &&
+    (await cfWorkItemCount(702)) === 0,
+);
+const cfNotified = await conflictFixRow(703, CF_HEAD_1);
+await markPrConflictNotified(cfNotified.id, sql);
+check(
+  "conflict claim: a notified row is not claimed",
+  (await cfClaim(cfNotified.id, CF_HEAD_1)) === null &&
+    (await cfWorkItemCount(703)) === 0,
+);
+const cfResolved = await conflictFixRow(704, CF_HEAD_1);
+await settlePrConflictCheck(cfResolved.id, "resolved", sql);
+check(
+  "conflict claim: a row that is no longer conflicted is not claimed",
+  (await cfClaim(cfResolved.id, CF_HEAD_1)) === null &&
+    (await cfWorkItemCount(704)) === 0,
+);
+const cfOtherName = await conflictFixRow(705, CF_HEAD_1);
+check(
+  "conflict claim: a row of another repository is not claimed",
+  (await cfClaim(cfOtherName.id, CF_HEAD_1, {
+    owner: "qcfix",
+    repo: "other",
+  })) === null && (await cfWorkItemCount(705)) === 0,
+);
+
+// 最終の保留は起動を止め、一時の保留は起動と同じ文で外れる。
+const cfFinalHold = await conflictFixRow(706, CF_HEAD_1);
+await setPrConflictFixHold(cfFinalHold.id, "protected_path", {}, sql);
+check(
+  "conflict claim: a row with a final hold is not claimed",
+  (await cfClaim(cfFinalHold.id, CF_HEAD_1)) === null &&
+    (await cfWorkItemCount(706)) === 0,
+);
+const cfTempHold = await conflictFixRow(707, CF_HEAD_1);
+await setPrConflictFixHold(cfTempHold.id, "main_ci_failed", {}, sql);
+check(
+  "conflict claim: a row with a temporary hold is claimed",
+  typeof (await cfClaim(cfTempHold.id, CF_HEAD_1)) === "number",
+);
+check(
+  "conflict claim: the temporary hold is cleared by the claim",
+  (await cfRowOf(cfTempHold.id))?.fix_hold_reason === null,
+  await cfRowOf(cfTempHold.id),
+);
+
+// 同じPRに終端でないpr_fixがあれば、綴りが違っても起動しない。
+const cfBusy = await conflictFixRow(708, CF_HEAD_1);
+await conflictRoundItem(708, 999, 1, "fixing", "job-active", {
+  owner: "QCFix",
+  repo: "App",
+});
+check(
+  "conflict claim: a pull request with an active pr_fix is not claimed, whatever the spelling",
+  (await cfClaim(cfBusy.id, CF_HEAD_1)) === null &&
+    (await cfRowOf(cfBusy.id))?.fix_work_item_id === null,
+);
+
+// 直近のpr_fixから、ラウンドの番号と処理済みの位置を写す。
+const cfCopy = await conflictFixRow(709, CF_HEAD_1);
+const cfCopyPrev = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    ...CF,
+    issue_number: null,
+    issue_url: null,
+    pr_number: 709,
+    title: null,
+    body: null,
+    status: "rereview_requested",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+  },
+  sql,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET fix_round = 3, last_review_id = 11, last_comment_id = 12, last_review_comment_id = 13 WHERE id = ${String(cfCopyPrev)}`,
+);
+const cfCopyId = await cfClaim(cfCopy.id, CF_HEAD_1);
+const cfCopyItem = cfCopyId === null ? null : await getWorkItem(cfCopyId, sql);
+check(
+  "conflict claim: the round and the watermarks are copied from the latest pr_fix of the pull request",
+  cfCopyItem?.fix_round === 3 &&
+    cfCopyItem.last_review_id === 11 &&
+    cfCopyItem.last_comment_id === 12 &&
+    cfCopyItem.last_review_comment_id === 13,
+  cfCopyItem,
+);
+
+// owner と repo の綴りが違っても行に当たり、作業項目には渡した綴りを書く。
+const cfCase = await conflictFixRow(710, CF_HEAD_1);
+const cfCaseId = await cfClaim(cfCase.id, CF_HEAD_1, {
+  owner: "QCFix",
+  repo: "App",
+});
+const cfCaseItem = cfCaseId === null ? null : await getWorkItem(cfCaseId, sql);
+check(
+  "conflict claim: the work item keeps the spelling that was passed, and the row is found by any case",
+  cfCaseItem?.owner === "QCFix" && cfCaseItem.repo === "App",
+  cfCaseItem,
+);
+
+// 保留の設定: 結ばれていない競合の行にだけ書く。
+const cfHold = await conflictFixRow(711, CF_HEAD_1);
+check(
+  "conflict hold: a hold reason is written once",
+  (await setPrConflictFixHold(cfHold.id, "recently_fixed", {}, sql)) === true &&
+    (await setPrConflictFixHold(cfHold.id, "recently_fixed", {}, sql)) ===
+      false &&
+    (await cfRowOf(cfHold.id))?.fix_hold_reason === "recently_fixed",
+  await cfRowOf(cfHold.id),
+);
+check(
+  "conflict hold: a hold is not written when the expected reason differs",
+  (await setPrConflictFixHold(
+    cfHold.id,
+    "budget_exceeded",
+    { expected: "main_ci_failed" },
+    sql,
+  )) === false &&
+    (await cfRowOf(cfHold.id))?.fix_hold_reason === "recently_fixed",
+);
+check(
+  "conflict hold: a hold is written when the expected reason matches",
+  (await setPrConflictFixHold(
+    cfHold.id,
+    "budget_exceeded",
+    { expected: "recently_fixed" },
+    sql,
+  )) === true,
+);
+check(
+  "conflict hold: a null reason clears the hold",
+  (await setPrConflictFixHold(cfHold.id, null, {}, sql)) === true &&
+    (await cfRowOf(cfHold.id))?.fix_hold_reason === null,
+);
+check(
+  "conflict hold: a row that points at a work item is not written",
+  (await setPrConflictFixHold(cfOk.id, "recently_fixed", {}, sql)) === false &&
+    (await cfRowOf(cfOk.id))?.fix_hold_reason === null,
+);
+check(
+  "conflict hold: a row that is no longer conflicted is not written",
+  (await setPrConflictFixHold(cfResolved.id, "recently_fixed", {}, sql)) ===
+    false,
+);
+check(
+  "conflict hold: the table refuses an empty hold reason",
+  (() => {
+    try {
+      execPsql(
+        target,
+        `UPDATE factory.pr_conflict_checks SET fix_hold_reason = '' WHERE id = ${String(cfHold.id)}`,
+      );
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
+);
+check(
+  "conflict hold: a reason longer than the column is refused before the query",
+  await setPrConflictFixHold(cfHold.id, "x".repeat(65), {}, sql)
+    .then(() => false)
+    .catch(() => true),
+);
+
+// 結びを外す: 状態を問わず、結ばれた行だけを外す。作業項目の指定があれば、その作業項目の行だけを外す。
+check(
+  "conflict release: a row that points at another work item is not released",
+  (await releasePrConflictFix(
+    cfOk.id,
+    { fixWorkItemId: (cfOkId ?? 0) + 1000 },
+    sql,
+  )) === false && Number((await cfRowOf(cfOk.id))?.fix_work_item_id) === cfOkId,
+);
+check(
+  "conflict release: the row of that work item is released with a hold reason",
+  (await releasePrConflictFix(
+    cfOk.id,
+    { fixWorkItemId: cfOkId ?? 0, holdReason: "fix_stopped" },
+    sql,
+  )) === true &&
+    (await cfRowOf(cfOk.id))?.fix_work_item_id === null &&
+    (await cfRowOf(cfOk.id))?.fix_hold_reason === "fix_stopped",
+  await cfRowOf(cfOk.id),
+);
+check(
+  "conflict release: a released row keeps its attempts and stays conflicted",
+  Number((await cfRowOf(cfOk.id))?.fix_attempts) === 1 &&
+    (await cfRowOf(cfOk.id))?.state === "conflicted",
+  await cfRowOf(cfOk.id),
+);
+check(
+  "conflict release: a row that points at no work item is not released again",
+  (await releasePrConflictFix(cfOk.id, {}, sql)) === false,
+);
+const cfRelease = await conflictFixRow(712, CF_HEAD_1);
+await cfClaim(cfRelease.id, CF_HEAD_1);
+await settlePrConflictCheck(cfRelease.id, "resolved", sql);
+check(
+  "conflict release: a row that was resolved while its work item ran is released and stays resolved",
+  (await releasePrConflictFix(cfRelease.id, {}, sql)) === true &&
+    (await cfRowOf(cfRelease.id))?.fix_work_item_id === null &&
+    (await cfRowOf(cfRelease.id))?.state === "resolved",
+  await cfRowOf(cfRelease.id),
+);
+check(
+  "conflict release: a hold reason longer than the column is refused before the query",
+  await releasePrConflictFix(cfRelease.id, { holdReason: "x".repeat(65) }, sql)
+    .then(() => false)
+    .catch(() => true),
+);
+
+// 結ばれた行の一覧: 状態を問わず、読み直していない順に返す。
+const cfListA = await conflictFixRow(713, CF_HEAD_1);
+const cfListB = await conflictFixRow(714, CF_HEAD_1);
+const cfListC = await conflictFixRow(715, CF_HEAD_1);
+await cfClaim(cfListA.id, CF_HEAD_1);
+await cfClaim(cfListB.id, CF_HEAD_1);
+await settlePrConflictCheck(cfListB.id, "resolved", sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET checked_at = now() - interval '2 hours' WHERE id = ${String(cfListB.id)}`,
+);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET checked_at = now() - interval '1 hour' WHERE id = ${String(cfListA.id)}`,
+);
+const cfListed = (await listPrConflictFixing(1000, sql)).filter(
+  (row) => row.owner === "qcfix",
+);
+check(
+  "conflict list: rows that point at a work item are listed, whatever the state, least recently checked first",
+  cfListed
+    .filter((row) => [cfListA.id, cfListB.id, cfListC.id].includes(row.id))
+    .map((row) => row.id)
+    .join(",") === [cfListB.id, cfListA.id].join(","),
+  cfListed.map((row) => row.id),
+);
+check(
+  "conflict list: a row without a work item is not listed",
+  !cfListed.some((row) => row.id === cfListC.id),
+);
+check(
+  "conflict list: the limit caps the number of rows",
+  (await listPrConflictFixing(1, sql)).length === 1,
+);
+
+// ラウンドの数: 競合の1回とPR全体を、同じ条件で数える。
+const cfCount = await conflictFixRow(716, CF_HEAD_1);
+const cfCountOther = await conflictFixRow(717, CF_HEAD_1);
+await conflictRoundItem(716, cfCount.id, 1, "rereview_requested", "job-1");
+await conflictRoundItem(716, cfCount.id, 1, "needs_human", "job-2");
+await conflictRoundItem(716, cfCount.id, 1, "failed", null);
+await conflictRoundItem(716, cfCount.id, 1, "failed", "job-3");
+await conflictRoundItem(717, cfCountOther.id, 1, "rereview_requested", "job-4");
+await conflictRoundItem(716, cfCount.id, 2, "rereview_requested", "job-5");
+check(
+  "conflict rounds: the episode counts its own rounds, without the ones that never started a flow",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    sql,
+  )) === 3,
+);
+check(
+  "conflict rounds: another episode of the same row is counted apart",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 2 },
+    sql,
+  )) === 1,
+);
+check(
+  "conflict rounds: the pull request counts the rounds of every episode",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "QCFix", repo: "App", prNumber: 716 },
+    sql,
+  )) === 4,
+);
+check(
+  "conflict rounds: a round of another pull request is not counted",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "qcfix", repo: "app", prNumber: 717 },
+    sql,
+  )) === 1,
+);
+check(
+  "conflict rounds: a pull request without a round counts zero",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "qcfix", repo: "app", prNumber: 799 },
+    sql,
+  )) === 0,
+);
+const cfUpToDate = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "reviewed",
+  "job-6",
+);
+conflictNote(cfUpToDate, "reviewed", "conflict round: up_to_date");
+check(
+  "conflict rounds: a round that ended up to date is not counted",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    sql,
+  )) === 3,
+);
+const cfReviewedOther = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "reviewed",
+  "job-7",
+);
+conflictNote(cfReviewedOther, "reviewed", "something else");
+check(
+  "conflict rounds: a reviewed round with another note is counted",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    sql,
+  )) === 4,
+);
+const cfNoteLatest = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "reviewed",
+  "job-8",
+);
+conflictNote(cfNoteLatest, "reviewed", "conflict round: up_to_date");
+conflictNote(cfNoteLatest, "reviewed", "something else");
+check(
+  "conflict rounds: the latest note of the reviewed status decides",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    sql,
+  )) === 5,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.pr_conflict_checks WHERE id = ${String(cfCount.id)}`,
+);
+check(
+  "conflict rounds: the pull request still counts the rounds after the row was deleted",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
+    sql,
+  )) === 6,
+);
+// 後で適用するdown migrationが、新しい状態の行に引っかからないよう、この節で用意した行を消す。
+execPsql(target, "DELETE FROM factory.work_items WHERE lower(owner) = 'qcfix'");
+execPsql(
+  target,
+  "DELETE FROM factory.pr_conflict_checks WHERE owner = 'qcfix'",
 );
 
 // 一時的な失敗で止まったPRレビューの再開。候補の一覧、比較交換、見送りの記録を、実DBで確かめる。

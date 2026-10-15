@@ -367,6 +367,8 @@ describe("buildPrCandidate with dependabot work items", () => {
     branch: null,
     pr_url: null,
     ci_check_id: null,
+    conflict_check_id: null,
+    conflict_episode: null,
     created_at: new Date("2026-10-12T00:00:00Z"),
     updated_at: new Date("2026-10-12T00:00:00Z"),
   };
@@ -450,6 +452,8 @@ describe("pr_review and pr_fix decisions with a row created by poll_dependabot",
       branch: null,
       pr_url: null,
       ci_check_id: null,
+      conflict_check_id: null,
+      conflict_episode: null,
       created_at: new Date("2026-10-12T00:00:00Z"),
       updated_at: new Date("2026-10-12T00:00:00Z"),
     };
@@ -557,6 +561,8 @@ describe("buildPrCandidate with active pr_fix work items", () => {
     branch: null,
     pr_url: null,
     ci_check_id: null,
+    conflict_check_id: null,
+    conflict_episode: null,
     created_at: new Date("2026-10-12T00:00:00Z"),
     updated_at: new Date("2026-10-12T00:00:00Z"),
   };

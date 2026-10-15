@@ -856,13 +856,45 @@ describe("insertWorkItem", () => {
       null,
       null,
       null,
+      null,
+      null,
     ]);
   });
 
   test("binds the ci check id when given", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await insertWorkItem({ ...NEW_WORK_ITEM, ci_check_id: 33 }, sql);
-    expect(calls[0]?.values.at(-1)).toBe(33);
+    expect(calls[0]?.values.at(-3)).toBe(33);
+  });
+
+  test("binds the conflict check id when given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(
+      { ...NEW_WORK_ITEM, conflict_check_id: 44, conflict_episode: 2 },
+      sql,
+    );
+    expect(calls[0]?.values.at(-2)).toBe(44);
+  });
+
+  test("binds the conflict episode when given", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(
+      { ...NEW_WORK_ITEM, conflict_check_id: 44, conflict_episode: 2 },
+      sql,
+    );
+    expect(calls[0]?.values.at(-1)).toBe(2);
+  });
+
+  test("binds no conflict columns when they are omitted", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.values.slice(-2)).toEqual([null, null]);
+  });
+
+  test("inserts into the conflict columns", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await insertWorkItem(NEW_WORK_ITEM, sql);
+    expect(calls[0]?.text).toContain("conflict_check_id, conflict_episode");
   });
 
   test("inserts into the ci_check_id column", async () => {
@@ -1249,6 +1281,28 @@ describe("getWorkItem", () => {
     const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
     const item = await getWorkItem(1, sql);
     expect(item?.ci_check_id).toBeNull();
+  });
+
+  test("parses the conflict check id of a round that fixes a merge conflict", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, conflict_check_id: "44", conflict_episode: 2 }],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.conflict_check_id).toBe(44);
+  });
+
+  test("parses the conflict episode of a round that fixes a merge conflict", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...WORK_ITEM_ROW, conflict_check_id: "44", conflict_episode: 2 }],
+    ]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.conflict_episode).toBe(2);
+  });
+
+  test("reads a missing conflict check id as null", async () => {
+    const { sql } = createFakeSqlClient([[WORK_ITEM_ROW]]);
+    const item = await getWorkItem(1, sql);
+    expect(item?.conflict_check_id).toBeNull();
   });
 
   test("parses branch and pr_url (工程3 columns)", async () => {

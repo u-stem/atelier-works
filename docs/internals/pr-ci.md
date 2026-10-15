@@ -788,7 +788,9 @@ PR全体の上限が競合1回の上限以下の設定は、拒否する。
 
 ### 保留の理由の語彙
 
-`fix_hold_reason`に書く値は、`lib/pr_conflict_support.ts`の`PR_CONFLICT_FIX_HOLD_REASONS`の14個に限る。
+`fix_hold_reason`に書く値は、`lib/pr_conflict_fix_holds.ts`の`PR_CONFLICT_FIX_HOLD_REASONS`の14個に限る。
+`lib/pr_conflict_support.ts`が同じ名前で再エクスポートする。
+DBの関数が一時の理由の一覧を読むので、依存を持たない小さなモジュールに置く。
 DBの検査は長さだけなので、書く側をこの型で縛る。
 種別は`PR_CONFLICT_FIX_HOLD_INFO`が持つ。
 一時の理由は、解ければ外れる。最終の理由は、人が直すまで起動し直さない。
@@ -868,6 +870,37 @@ Factoryのレビューの記録は要求しない。
 
 Claudeの出力には、固定文の前に接頭辞が付く。接頭辞は「conflict round: claude blocked: 」である。
 そのため、出力の中の文字列で、保留の理由を選ばれない。
+
+### 競合を直す作業項目と行の結び
+
+`lib/db.ts`の関数が、行と直す作業項目の結びを書く。
+行の状態(`state`)は、直している間も`conflicted`のままである。直している作業項目は`fix_work_item_id`が示す。
+
+`claimPrConflictForFix`は、行に作業項目を結び、`pr_fix`の作業項目を挿入して、そのIDを返す。
+行の更新と挿入は1つの文で行うので、片方だけが書かれることはない。
+次のどれかなら、何も書かず`null`を返す。
+
+- 行が競合でない、または`head_sha`が渡したheadと違う。
+- 行が通知済みである。
+- 行にすでに作業項目が結ばれている。
+- 行が最終の保留である。一時の保留は、起動と同じ文で外す。
+- 同じPRに、終端でない`pr_fix`がある。綴りの大文字小文字は区別しない。
+
+一意索引`work_items_active_pr_fix_key`に違反したときも、文全体が取り消されるので`null`を返す。
+作業項目は状態`fixing`で挿入し、`conflict_check_id`に行のID、`conflict_episode`に行の競合の回を入れる。
+ラウンドの番号と処理済みの位置は、同じPRの直近の`pr_fix`から写す。無ければ0にする。
+
+`setPrConflictFixHold`は、結ばれていない競合の行の保留の理由を書く。今の値と違うときだけ書き、`null`で外す。
+結ばれた行の保留は、結びを外す`releasePrConflictFix`が同時に書く。
+`releasePrConflictFix`は、行の状態を問わず、結びを外す。作業項目が動いている間に競合が解けた行も、結びは外す必要があるためである。
+`listPrConflictFixing`は、結ばれた行を、読み直していない順に返す。
+
+`countPrConflictFixRounds`は、競合を直したラウンドを数える。
+範囲は、競合の1回(行のIDと回の組)かPR全体である。PR全体は、掃除で行が消えても回数が戻らないよう、行を経由せず作業項目を直接数える。
+どちらも同じ条件で数え、次のものは数えない。
+
+- 状態が`failed`で、フローのジョブIDが無い作業項目。Claudeを走らせていない回で、直す機会を使い切らないためである。
+- 何も変えずに終えた作業項目。状態が`reviewed`で、その状態へ移った最新の注記が`conflict round: up_to_date`である。
 
 ### 通知
 

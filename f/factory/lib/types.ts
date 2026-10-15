@@ -338,6 +338,14 @@ export type WorkItem = {
    * CIの失敗を直す`pr_fix`の作業項目だけが持ち、それ以外は`null`。外部キーは持たない。
    */
   ci_check_id: number | null;
+  /**
+   * この作業項目が直しているマージの競合(`pr_conflict_checks`の行)のID。
+   * 競合を直す`pr_fix`の作業項目だけが持ち、それ以外は`null`。外部キーは持たない。
+   * `ci_check_id`とは同時に持たない。
+   */
+  conflict_check_id: number | null;
+  /** 直している競合のepisode。`conflict_check_id`と同時に値を持ち、同時に`null`になる。 */
+  conflict_episode: number | null;
   created_at: Date;
   updated_at: Date;
 };
