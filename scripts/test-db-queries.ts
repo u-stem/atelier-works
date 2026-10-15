@@ -4949,6 +4949,82 @@ check(
   "transient review: the newer row itself is not superseded by the older finished one",
   (await hasSupersedingPrReview(transientNewer, sql)) === false,
 );
+// 起動に失敗した再開は、再開の遷移で1回に数え、戻した遷移(auto_retry:で始めない)で二重に数えない。
+const transientLaunchFailed = await prWorkItem(
+  "pr_review",
+  9306,
+  "failed",
+  "qdb transient launch failed",
+);
+eventAgo(
+  transientLaunchFailed,
+  "reviewing",
+  "auto_retry: restarted from failed",
+  5000,
+);
+eventAgo(
+  transientLaunchFailed,
+  "failed",
+  "github_transient: auto_retry_launch_failed: f/factory/pr_review could not be started: down",
+  10,
+);
+const launchFailedListed = (
+  await listTransientReviewCandidates({ ...transientQuery, limit: 100 }, sql)
+).map((candidate) => candidate.id);
+check(
+  "transient review: a launch failure inside its wait is not a restart candidate",
+  !launchFailedListed.includes(transientLaunchFailed),
+);
+const launchFailedStalled = (
+  await listTransientReviewCandidates(
+    {
+      ...transientQuery,
+      limit: 100,
+      extraGraceSeconds: 1800,
+      unnotifiedOnly: true,
+      includeExhausted: true,
+    },
+    sql,
+  )
+).find((candidate) => candidate.id === transientLaunchFailed);
+check(
+  "transient review: the launch failure note is not counted as a restart",
+  launchFailedStalled === undefined,
+  launchFailedStalled,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_item_events SET occurred_at = now() - interval '1000 seconds' WHERE work_item_id = ${String(transientLaunchFailed)} AND to_status = 'failed'`,
+);
+const launchFailedAfterWait = (
+  await listTransientReviewCandidates({ ...transientQuery, limit: 100 }, sql)
+).find((candidate) => candidate.id === transientLaunchFailed);
+check(
+  "transient review: after the first wait a launch failure counts exactly one restart",
+  launchFailedAfterWait?.restarts === 1,
+  launchFailedAfterWait,
+);
+const transientThreeRestarts = await prWorkItem(
+  "pr_review",
+  9307,
+  "failed",
+  "qdb transient three restarts",
+);
+for (let i = 0; i < 3; i += 1) {
+  eventAgo(
+    transientThreeRestarts,
+    "reviewing",
+    "auto_retry: restarted from failed",
+    5000,
+  );
+}
+eventAgo(transientThreeRestarts, "failed", "github_transient: boom", 10);
+check(
+  "transient review: a review with three restarts is listed when the used-up ones are included",
+  (await transientListed({ includeExhausted: true })).includes(
+    transientThreeRestarts,
+  ),
+);
 check(
   "transient review: the stall record does not hide the failure reason from the restart list",
   (await transientListed()).includes(transientStuck),

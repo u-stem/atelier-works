@@ -130,18 +130,27 @@ export function transientReviewExhaustedNotice(input: {
   readonly candidate: TransientReviewCandidate;
 }): Extract<NotifyEvent, { kind: "needs_human" }> {
   const { candidate } = input;
-  const detail = candidate.failure_note.startsWith(
+  const unmarked = candidate.failure_note.startsWith(
     TRANSIENT_GITHUB_REASON_PREFIX,
   )
     ? candidate.failure_note.slice(TRANSIENT_GITHUB_REASON_PREFIX.length)
     : candidate.failure_note;
+  // 再開したフローを起動できずに戻した失敗は、GitHubの障害ではない。内部の接頭辞は載せず、
+  // 次の操作もWindmillの状態を確かめるものにする。
+  const launchFailed = unmarked.startsWith(TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX);
+  const detail = launchFailed
+    ? unmarked.slice(TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX.length)
+    : unmarked;
+  const check = launchFailed
+    ? "Windmillでフローを起動できる状態か確かめ"
+    : "GitHubの障害が収まったことを確かめ";
   return {
     kind: "needs_human",
     instance_name: input.instanceName,
     ...pullTarget(candidate),
     reason: `PRレビューの自動の再開を${String(AUTO_RETRY_MAX_RESTARTS)}回行っても直りませんでした: ${detail}`,
     target: { kind: "pr", number: candidate.pr_number },
-    next_action: `GitHubの障害が収まったことを確かめ、Windmillで\`f/factory/retry_work_item\`を作業項目のID${String(candidate.id)}で実行してください`,
+    next_action: `${check}、Windmillで\`f/factory/retry_work_item\`を作業項目のID${String(candidate.id)}で実行してください`,
   };
 }
 

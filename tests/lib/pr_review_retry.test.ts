@@ -17,6 +17,7 @@ import {
   PR_REVIEW_FLOW_PATH,
   retryTransientPrReviews,
   type StalledTransientDeps,
+  TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX,
   TRANSIENT_RETRY_DELAYS_SECONDS,
   type TransientReviewCandidate,
   type TransientReviewDeps,
@@ -179,6 +180,42 @@ describe("transientReviewNotice", () => {
       candidate: candidate(7, { owner: "../x", repo: "y" }),
     });
     expect(notice.owner).toBe("unknown");
+  });
+
+  describe("when the restart could not start the flow", () => {
+    const launchFailed = transientReviewNotice({
+      instanceName: "test",
+      candidate: candidate(7, {
+        restarts: AUTO_RETRY_MAX_RESTARTS,
+        failure_note: `${TRANSIENT_GITHUB_REASON_PREFIX}${TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX}f/factory/pr_review could not be started: down`,
+      }),
+    });
+
+    test("asks to check that Windmill can start the flow", () => {
+      expect(launchFailed.next_action).toContain(
+        "Windmillでフローを起動できる状態か確かめ",
+      );
+    });
+
+    test("does not mention a GitHub outage in the next action", () => {
+      expect(launchFailed.next_action).not.toContain("GitHubの障害");
+    });
+
+    test("does not show the internal prefix in the reason", () => {
+      expect(launchFailed.reason).not.toContain("auto_retry_launch_failed");
+    });
+
+    test("still shows what failed in the reason", () => {
+      expect(launchFailed.reason).toContain(
+        "f/factory/pr_review could not be started: down",
+      );
+    });
+  });
+
+  test("asks to check the GitHub outage for a GitHub failure", () => {
+    expect(exhausted.next_action).toContain(
+      "GitHubの障害が収まったことを確かめ",
+    );
   });
 
   test("carries the failure into the reason without the mark", () => {
