@@ -675,7 +675,14 @@ describe("describeReview", () => {
 
   test("marks a review without a recorded result as unknown", () => {
     expect(describeReview(review({ result: null })).resultLabel).toBe(
-      "判定の記録なし",
+      "修正必須の有無の記録なし",
+    );
+  });
+
+  test("labels a review whose result key is missing like one without a record", () => {
+    const { result: _result, ...withoutResult } = review();
+    expect(describeReview(withoutResult).resultLabel).toBe(
+      "修正必須の有無の記録なし",
     );
   });
 

@@ -36,12 +36,12 @@ import {
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { blockReview } from "./pr_review_prepare.ts";
 import {
+  buildReviewRecord,
   countOpenMustThreads,
   decideReviewBodyMode,
   findPostedReviewId,
   mapFindingsToReviewComments,
   renderReviewSummary,
-  reviewResultFor,
   selectThreadsToResolve,
   withReviewMarkers,
 } from "./pr_workflow_support.ts";
@@ -558,16 +558,16 @@ async function postReview(
 
   // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、
   // 未解決の[MUST]を数えた結果を、レビューと一緒に記録する。
-  const result = reviewResultFor(findings, openMustCount);
-  await insertReview({
-    work_item_id,
-    head_sha: review_sha,
+  const record = buildReviewRecord({
+    workItemId: work_item_id,
+    headSha: review_sha,
     verdict,
-    result,
     summary,
     findings,
-    posted_review_id: postedReviewId,
+    openMustCount,
+    postedReviewId,
   });
+  await insertReview(record);
 
   const moved = await updateStatusIfCurrent(
     work_item_id,
@@ -588,7 +588,7 @@ async function postReview(
       pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
       verdict,
       finding_count: findings.length,
-      result,
+      result: record.result,
     };
     await notifyBestEffort(webhookUrl, event, log);
   }

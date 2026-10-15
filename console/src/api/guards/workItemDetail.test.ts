@@ -257,6 +257,13 @@ describe("isWorkItemDetail", () => {
     ).toBe(true);
   });
 
+  test("accepts a review whose result key is missing", () => {
+    const { result: _result, ...withoutResult } = REVIEW;
+    expect(isWorkItemDetail({ ...DETAIL, reviews: [withoutResult] })).toBe(
+      true,
+    );
+  });
+
   test("rejects a review whose result is a number", () => {
     expect(
       isWorkItemDetail({ ...DETAIL, reviews: [{ ...REVIEW, result: 1 }] }),

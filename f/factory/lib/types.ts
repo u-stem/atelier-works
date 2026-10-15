@@ -496,7 +496,7 @@ export type ReviewVerdict = "approve" | "comment" | "request_changes";
 export type ReviewResult = "changes_requested" | "reviewed";
 
 /**
- * `db.insertReview`に渡す、`factory.reviews`の1行。
+ * `factory.reviews`の1行。
  * `result`は、結果を記録する前に作られた行を読むときだけ`null`になる。
  */
 export type ReviewRecord = {
@@ -507,6 +507,11 @@ export type ReviewRecord = {
   summary: string;
   findings: ReviewFinding[];
   posted_review_id: string | null;
+};
+
+/** `db.insertReview`に渡す行。書き込むときは、結果を必ず持つ。 */
+export type NewReviewRecord = Omit<ReviewRecord, "result"> & {
+  result: ReviewResult;
 };
 
 export type FixOutcome = "done" | "requirements_gap" | "blocked";

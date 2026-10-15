@@ -447,8 +447,8 @@ const RESULT_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> = new Map([
   ["reviewed", "success"],
 ]);
 
-/** 結果を記録する前に作られた行に出す表示。 */
-const RESULT_MISSING_LABEL = "判定の記録なし";
+/** 結果を記録する前に作られた行と、結果を返す前のbackendの応答に出す表示。 */
+const RESULT_MISSING_LABEL = "修正必須の有無の記録なし";
 
 /** コミットの表示に使う先頭の桁数。 */
 const SHORT_SHA_LENGTH = 7;
@@ -467,11 +467,11 @@ export function describeReview(review: WorkItemReview): ReviewView {
     key: review.review_id,
     shaLabel: plain(review.head_sha).slice(0, SHORT_SHA_LENGTH),
     resultLabel:
-      review.result === null
+      review.result === null || review.result === undefined
         ? RESULT_MISSING_LABEL
         : (RESULT_LABELS.get(review.result) ?? unknownLabel(review.result)),
     resultVariant:
-      review.result === null
+      review.result === null || review.result === undefined
         ? "muted"
         : (RESULT_VARIANTS.get(review.result) ?? "muted"),
     findingLabel: `指摘 ${review.finding_count}件`,

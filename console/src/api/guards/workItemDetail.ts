@@ -192,7 +192,11 @@ export type WorkItemReview = {
   readonly review_id: number;
   readonly head_sha: string;
   readonly verdict: string;
-  readonly result: string | null;
+  /**
+   * `reviewResultFor`の結果。結果を記録する前の行では`null`で、
+   * 結果を返す前のbackendの応答では欠ける。
+   */
+  readonly result?: string | null;
   readonly finding_count: number;
   readonly posted_review_id: string | null;
   readonly created_at: string;
@@ -204,7 +208,7 @@ function isWorkItemReview(value: unknown): value is WorkItemReview {
     isPositiveInteger(value.review_id) &&
     isString(value.head_sha) &&
     isString(value.verdict) &&
-    isNullableString(value.result) &&
+    (value.result === undefined || isNullableString(value.result)) &&
     isNonNegativeInteger(value.finding_count) &&
     isNullableString(value.posted_review_id) &&
     isIsoTimestamp(value.created_at)

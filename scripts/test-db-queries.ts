@@ -507,7 +507,7 @@ const prItem = await insertWorkItem(
 );
 execPsql(
   target,
-  `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, summary, findings) VALUES (${String(prItem)}, 'abc1234', 'request_changes', 'long summary', '[{"a":1},{"a":2}]'::jsonb)`,
+  `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, findings) VALUES (${String(prItem)}, 'abc1234', 'request_changes', 'changes_requested', 'long summary', '[{"a":1},{"a":2}]'::jsonb)`,
 );
 execPsql(
   target,
@@ -519,6 +519,21 @@ check(
   prDetail.reviews.length === 1 && prDetail.reviews[0]?.finding_count === 2,
   prDetail.reviews,
 );
+check(
+  "work_item_detail: a review keeps the result that was recorded",
+  prDetail.reviews[0]?.result === "changes_requested",
+  prDetail.reviews,
+);
+let reviewResultRejected = false;
+try {
+  execPsql(
+    target,
+    `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary) VALUES (${String(prItem)}, 'abc1234', 'comment', 'zeta', 's')`,
+  );
+} catch {
+  reviewResultRejected = true;
+}
+check("reviews: the table rejects a result out of range", reviewResultRejected);
 check(
   "work_item_detail: a pr work item lists its fix rounds as counts",
   prDetail.fix_rounds.length === 1 &&
