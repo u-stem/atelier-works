@@ -6,16 +6,18 @@
 // `pr_ci_watch_enabled`には依らず、CIの監視とは独立に有効にできる。
 //
 // 流れと判断は`./lib/pr_conflict_watch.ts`にあり、このファイルは入出力をつなぐだけ。
-// 対象は、作業項目の`pr_url`から引いたPRのうち、許可リスト(`repo_allowlist`と照合済みの`owners`、
-// 常に対象の`factory_repo`)に合うリポジトリのものである。人のPRは対象にしない。
+// 対象は、状態が`pr_open`の作業項目を持つリポジトリのうち、許可リスト(`repo_allowlist`と照合済みの`owners`、
+// 常に対象の`factory_repo`)に合うものの、開いているFactoryのPRである。人のPRは対象にしない。
+// 作業項目の更新時刻や件数の窓には頼らない。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
+  getWorkItem,
   listConflictedPrConflictChecks,
-  listPrOpenIssueWorkItems,
+  listPrOpenRepos,
   markPrConflictNotified,
   recordFailure,
   recordPrConflict,
@@ -24,18 +26,21 @@ import {
   touchPrConflictCheck,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
-import { type GhClient, getAccountId, getPr } from "./lib/github.ts";
+import {
+  type GhClient,
+  getAccountId,
+  getPr,
+  listOpenPullRequests,
+} from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
-import { buildRepoGates, TRACKED_PR_LIMIT } from "./lib/pr_ci_watch.ts";
+import { buildRepoGates } from "./lib/pr_ci_watch.ts";
 import {
   PR_CONFLICT_WATCH_IDLE_RESULT,
   type PrConflictWatchResult,
   runPrConflictWatch,
 } from "./lib/pr_conflict_watch.ts";
 import { runCommand } from "./lib/workspace.ts";
-
-const DAY_MS = 24 * 60 * 60_000;
 
 async function recordFailureSafe(
   step: string,
@@ -89,24 +94,24 @@ export async function main(): Promise<PrConflictWatchResult> {
     log,
     instanceName: config.instance_name,
     isRepoAllowed: gates.isRepoAllowed,
-    listTrackedItems: async () => {
-      const items = await listPrOpenIssueWorkItems(
-        new Date(Date.now() - config.tracked_pr_days * DAY_MS),
-        TRACKED_PR_LIMIT,
-      );
-      return items.map((item) => ({
-        id: item.id,
-        kind: item.kind,
-        owner: item.owner,
-        repo: item.repo,
-        prUrl: item.pr_url,
-      }));
+    listOpenRepos: () => listPrOpenRepos(),
+    listOpenPrs: (owner, repo) => listOpenPullRequests(client, owner, repo),
+    getWorkItemRef: async (id) => {
+      const item = await getWorkItem(id);
+      return item === null
+        ? null
+        : {
+            id: item.id,
+            kind: item.kind,
+            owner: item.owner,
+            repo: item.repo,
+            prUrl: item.pr_url,
+          };
     },
     getPr: (owner, repo, number) => getPr(client, owner, repo, number),
     listConflicted: (limit) => listConflictedPrConflictChecks(limit),
     record: (observation) => recordPrConflict(observation),
-    markNotified: (id, headSha, baseSha) =>
-      markPrConflictNotified(id, headSha, baseSha),
+    markNotified: (id) => markPrConflictNotified(id),
     settle: (id, to) => settlePrConflictCheck(id, to),
     touch: (id) => touchPrConflictCheck(id),
     addNotice: (record) => addNoticeUnlessUnresolved(record),

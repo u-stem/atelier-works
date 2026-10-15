@@ -25,7 +25,6 @@ import {
   findOrphanFixingPrCiChecks,
   getLatestPrCiCheck,
   getNoticeById,
-  getPrConflictCheck,
   getPreviousMainCiRun,
   getWorkItem,
   hasDependabotItemForHead,
@@ -54,6 +53,7 @@ import {
   listPendingPrCiChecks,
   listPrCiChecksForPr,
   listPrOpenIssueWorkItems,
+  listPrOpenRepos,
   listRecentWorkerSamples,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
@@ -4713,95 +4713,102 @@ execPsql(
   "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
 );
 
-// PRの競合の記録: PRごとに1行で、headとbaseが同じ間は通知した時刻を残す。
+// 競合の監視は、`pr_open`の作業項目を持つリポジトリごとに、開いているPRを列挙する。
+check(
+  "pr_open repos: each repository of the pr_open issue items with a pull request url is listed once",
+  (await listPrOpenRepos(sql))
+    .filter((entry) => entry.owner === OWNER)
+    .map((entry) => entry.repo)
+    .join(",") === "r",
+);
+
+// PRの競合の記録: PRごとに1行で、競合の1回につき1回だけ通知できる。
 const conflictHead = "1".repeat(40);
-const conflictBase = "2".repeat(40);
 const conflictObservation = {
   owner: "QDB",
   repo: "Conflict",
   pr_number: 91,
   head_sha: conflictHead,
-  base_sha: conflictBase,
 };
 const conflictFirst = await recordPrConflict(conflictObservation, sql);
 check(
   "pr_conflict_checks: a new conflict is recorded as conflicted without a notified time",
-  conflictFirst.state === "conflicted" &&
-    conflictFirst.notified_at === null &&
-    conflictFirst.owner === "qdb",
+  conflictFirst.row.state === "conflicted" &&
+    conflictFirst.row.notified_at === null &&
+    conflictFirst.row.owner === "qdb",
   conflictFirst,
 );
 check(
-  "pr_conflict_checks: the notified time is written once for the recorded head and base",
-  (await markPrConflictNotified(
-    conflictFirst.id,
-    conflictHead,
-    conflictBase,
-    sql,
-  )) &&
-    !(await markPrConflictNotified(
-      conflictFirst.id,
-      conflictHead,
-      conflictBase,
-      sql,
-    )),
+  "pr_conflict_checks: a new conflict reports that it started",
+  conflictFirst.started,
+  conflictFirst,
 );
 check(
-  "pr_conflict_checks: the same head and base keep the notified time",
-  (await recordPrConflict(conflictObservation, sql)).notified_at !== null,
+  "pr_conflict_checks: the notified time is written once for a conflict",
+  (await markPrConflictNotified(conflictFirst.row.id, sql)) &&
+    !(await markPrConflictNotified(conflictFirst.row.id, sql)),
+);
+const conflictAgain = await recordPrConflict(conflictObservation, sql);
+check(
+  "pr_conflict_checks: the same conflict keeps the notified time and does not start again",
+  conflictAgain.row.notified_at !== null && !conflictAgain.started,
+  conflictAgain,
+);
+const conflictMoved = await recordPrConflict(
+  { ...conflictObservation, head_sha: "3".repeat(40) },
+  sql,
 );
 check(
-  "pr_conflict_checks: a moved base clears the notified time on the same row",
-  await (async () => {
-    const moved = await recordPrConflict(
-      { ...conflictObservation, base_sha: "3".repeat(40) },
-      sql,
-    );
-    return moved.id === conflictFirst.id && moved.notified_at === null;
-  })(),
-);
-check(
-  "pr_conflict_checks: the notified time of a stale pair is not written",
-  !(await markPrConflictNotified(
-    conflictFirst.id,
-    conflictHead,
-    conflictBase,
-    sql,
-  )),
+  "pr_conflict_checks: a moved head overwrites the head and keeps the notified time",
+  conflictMoved.row.id === conflictFirst.row.id &&
+    conflictMoved.row.head_sha === "3".repeat(40) &&
+    conflictMoved.row.notified_at !== null &&
+    !conflictMoved.started,
+  conflictMoved,
 );
 check(
   "pr_conflict_checks: a conflicted row is listed",
   (await listConflictedPrConflictChecks(100, sql)).some(
-    (row) => row.id === conflictFirst.id,
+    (row) => row.id === conflictFirst.row.id,
   ),
 );
 check(
   "pr_conflict_checks: touching a row keeps it conflicted",
-  (await touchPrConflictCheck(conflictFirst.id, sql)) &&
-    (await getPrConflictCheck("qdb", "conflict", 91, sql))?.state ===
-      "conflicted",
+  (await touchPrConflictCheck(conflictFirst.row.id, sql)) &&
+    (await listConflictedPrConflictChecks(100, sql)).some(
+      (row) => row.id === conflictFirst.row.id,
+    ),
 );
 check(
   "pr_conflict_checks: a row moves to resolved once",
-  (await settlePrConflictCheck(conflictFirst.id, "resolved", sql)) &&
-    !(await settlePrConflictCheck(conflictFirst.id, "resolved", sql)),
+  (await settlePrConflictCheck(conflictFirst.row.id, "resolved", sql)) &&
+    !(await settlePrConflictCheck(conflictFirst.row.id, "resolved", sql)),
 );
 check(
   "pr_conflict_checks: a resolved row is not listed as conflicted",
   !(await listConflictedPrConflictChecks(100, sql)).some(
-    (row) => row.id === conflictFirst.id,
+    (row) => row.id === conflictFirst.row.id,
   ),
 );
+const conflictReopened = await recordPrConflict(conflictObservation, sql);
 check(
-  "pr_conflict_checks: a new conflict reopens the resolved row",
-  (await recordPrConflict(conflictObservation, sql)).state === "conflicted",
+  "pr_conflict_checks: a new conflict reopens the resolved row, starts again, and clears the notified time",
+  conflictReopened.row.state === "conflicted" &&
+    conflictReopened.row.notified_at === null &&
+    conflictReopened.started,
+  conflictReopened,
 );
 check(
   "pr_conflict_checks: a conflicted row is not deleted however old it is",
   (await deletePrConflictChecksBefore(new Date(Date.now() + 60_000), sql)) ===
     0,
 );
-await settlePrConflictCheck(conflictFirst.id, "closed", sql);
+await settlePrConflictCheck(conflictFirst.row.id, "closed", sql);
+check(
+  "pr_conflict_checks: a closed row can be reopened by a new conflict",
+  (await recordPrConflict(conflictObservation, sql)).started,
+);
+await settlePrConflictCheck(conflictFirst.row.id, "closed", sql);
 check(
   "pr_conflict_checks: a settled row is deleted after the cutoff",
   (await deletePrConflictChecksBefore(new Date(Date.now() + 60_000), sql)) >= 1,

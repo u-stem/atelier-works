@@ -245,7 +245,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 | `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、自動修正の保留の理由(あれば)、リンク、次の操作 |
 | `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
-| `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、PRのコミットとベースのコミットの先頭7文字、次の操作、PRのリンク |
+| `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、次の操作、PRのリンク |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
 `check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。
@@ -274,10 +274,10 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 `pr_ci_check_denied`は、PRか実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
 詳細は[PRのCI監視の仕様](pr-ci.md)にある。
 
-`pr_conflict`は、競合を見つけたPRのheadとベースのコミットの組ごとに、通常は1件残す。
+`pr_conflict`は、PRの競合1回につき、通常は1件残す。競合のままheadが進んでも、重ねない。
 Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。
 本文は固定文で、PRの題名やブランチ名は載せない。
-競合が解けたとき、PRが閉じたとき、headかベースのコミットが進んだときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
+競合が解けたとき、PRが閉じたとき、監視の対象から外れたときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
 詳細は[PRのCI監視の仕様](pr-ci.md#競合の検知)にある。
 
 ### 重複の抑止

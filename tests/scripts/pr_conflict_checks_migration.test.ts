@@ -26,10 +26,8 @@ describe("20261015100000_pr_conflict_checks.up.sql", () => {
     );
   });
 
-  test("limits base_sha to 40 lowercase hex characters", async () => {
-    expect(await Bun.file(UP).text()).toContain(
-      "CONSTRAINT pr_conflict_checks_base_sha_check CHECK (base_sha ~ '^[0-9a-f]{40}$')",
-    );
+  test("does not keep a base commit", async () => {
+    expect(await Bun.file(UP).text()).not.toContain("base_sha");
   });
 
   test("limits state to the three states", async () => {
@@ -42,8 +40,8 @@ describe("20261015100000_pr_conflict_checks.up.sql", () => {
     expect(await Bun.file(UP).text()).toContain("CHECK (pr_number > 0)");
   });
 
-  test("keeps the fix attempts as a non-negative integer", async () => {
-    expect(await Bun.file(UP).text()).toContain("CHECK (fix_attempts >= 0)");
+  test("does not keep a count of fix attempts", async () => {
+    expect(await Bun.file(UP).text()).not.toContain("fix_attempts");
   });
 
   test("keeps notified_at as a nullable timestamp", async () => {

@@ -2395,8 +2395,6 @@ export type PullRequest = {
    */
   readonly baseRepoId: number | null;
   readonly baseRef: string;
-  /** ベースブランチの先頭のコミット。応答に無いか文字列でなければ`null`。 */
-  readonly baseSha: string | null;
   /** GitHubがまだ計算していないときは`null`。真偽に丸めない。 */
   readonly mergeable: boolean | null;
   readonly mergeableState: string | null;
@@ -2426,7 +2424,6 @@ type PrPayload = {
   };
   readonly base: {
     readonly ref: string;
-    readonly sha?: unknown;
     readonly repo: {
       readonly full_name: unknown;
       readonly id?: unknown;
@@ -2510,7 +2507,6 @@ export async function getPr(
     baseRepoFullName,
     baseRepoId,
     baseRef: parsed.base.ref,
-    baseSha: typeof parsed.base.sha === "string" ? parsed.base.sha : null,
     mergeable: typeof parsed.mergeable === "boolean" ? parsed.mergeable : null,
     mergeableState:
       typeof parsed.mergeable_state === "string"
@@ -4115,6 +4111,75 @@ export async function findOpenPullRequestByHead(
     throw new Error(`${context}: unexpected response shape`);
   }
   return { number: first.number, htmlUrl: first.html_url };
+}
+
+/** `listOpenPullRequests`が返す、開いているPRの一覧の1件。 */
+export type OpenPullRequest = {
+  readonly number: number;
+  readonly draft: boolean;
+  readonly headRef: string;
+  /** headのリポジトリの`owner/repo`。削除されたforkは`null`。 */
+  readonly headRepoFullName: string | null;
+  readonly baseRepoFullName: string;
+};
+
+function isOpenPullRequestPayload(value: unknown): value is {
+  number: number;
+  draft: boolean;
+  head: { ref: string; repo: unknown };
+  base: { repo: { full_name: string } };
+} {
+  if (!isRecord(value)) return false;
+  if (typeof value.number !== "number") return false;
+  if (typeof value.draft !== "boolean") return false;
+  if (!isRecord(value.head) || typeof value.head.ref !== "string") return false;
+  if (!isRecord(value.base) || !isRecord(value.base.repo)) return false;
+  return typeof value.base.repo.full_name === "string";
+}
+
+/** `listOpenPullRequests`が読むページ数の既定の上限。1ページ100件なので、1000件までである。 */
+export const OPEN_PULL_REQUESTS_MAX_PAGES = 10;
+
+/**
+ * `GET /repos/{owner}/{repo}/pulls?state=open`で、開いているPRを、ページ送りしながらすべて返す。
+ * 一覧は、PRの番号、下書きか、headのブランチ、headとbaseのリポジトリだけを返す。マージ可否は一覧に載らないので、`getPr`で読む。
+ * 続きのページが`maxPages`を超えるときは、一部だけを返さず`GitHubPaginationLimitError`を投げる。
+ * 一部だけでは、返さなかったPRを「開いていない」と取り違えうるためである。
+ * 応答の形が違えば例外を投げる。
+ */
+export async function listOpenPullRequests(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  maxPages: number = OPEN_PULL_REQUESTS_MAX_PAGES,
+): Promise<OpenPullRequest[]> {
+  validateOwnerRepo(owner, repo);
+  const items = await paginateGhApi(
+    client,
+    `repos/${owner}/${repo}/pulls?state=open&per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) {
+        throw new Error(`${context}: expected an array response`);
+      }
+      return parsed.map((entry) => {
+        if (!isOpenPullRequestPayload(entry)) {
+          throw new Error(`${context}: unexpected response shape`);
+        }
+        return entry;
+      });
+    },
+    maxPages,
+  );
+  return items.map((entry) => ({
+    number: entry.number,
+    draft: entry.draft,
+    headRef: entry.head.ref,
+    headRepoFullName:
+      isRecord(entry.head.repo) && typeof entry.head.repo.full_name === "string"
+        ? entry.head.repo.full_name
+        : null,
+    baseRepoFullName: entry.base.repo.full_name,
+  }));
 }
 
 /**

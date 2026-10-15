@@ -1,28 +1,37 @@
 // FactoryのPRのマージの競合の監視(`watch_pr_conflicts`)の流れを、外部の操作を注入して組み立てる。
 // 検知と通知だけを行い、PRにもリポジトリにも書き込まず、修正は起動しない。
 //
-// 対象は、作業項目の`pr_url`から引いたPRのうち、許可リストに合うリポジトリの、
-// 開いていて、下書きでなく、forkでなく、Factoryのブランチのものである。
+// 対象のPRは、作業項目の更新時刻や件数の窓に頼らずに見つける。
+// 状態が`pr_open`の作業項目を持つリポジトリごとに、開いているPRを列挙し、
+// Factoryのブランチのもの(下書きでなく、forkでなく、作業項目が同じPRを指す)だけをPRとして読む。
+// `pr_open`はPRがマージされた後も変わらないので、作業項目から引くと、閉じたPRを読み続けたり、古い開いたPRを取り逃がしたりする。
+// 開いているPRの一覧から引けば、読むのは開いているPRだけで、放置された古いPRも漏れない。
+//
 // 競合とみなすのは、`mergeable`が偽で`mergeable_state`が`dirty`のときだけである(`decidePrConflict`)。
 // GitHubが計算していない(`mergeable`が`null`)PRは何もせず、次の回に判定し直す。
 //
-// 競合は、PRごとの行にheadとbaseのコミットを記録する。同じPR・同じhead・同じbaseでは通知を重ねない。
-// headかbaseが進んだら、古い通知を解決して通知し直す。競合が解けたら通知を解決し、PRが閉じたら通知を解決して行を閉じる。
-// 通知の登録とDiscordの後に、通知した時刻を記録する。記録が先に成功して通知が失敗すると、通知が出なくなるためである。
+// 通知は競合の1回につき1回である。競合は、行が無い状態か、競合から離れた状態から競合に移った時点で始まる。
+// 競合のままheadが進んでも、通知は重ねない。通知の登録とDiscordの後に、通知した時刻を記録する。
+// 記録が先に成功して通知が失敗すると、通知が出なくなるためである。
+// 通知の解決は、競合が終わった(解けた、PRが閉じた、監視の対象から外れた)ときだけ行う。
+// 始まったときには解決しない。並んだ2つの実行の一方が、他方の出したばかりの通知を解決してしまうのを避けるためである。
 //
-// 作業項目が追跡から外れた(PRがマージされた後など)競合の行は、PRを読み直して、解けたか閉じたかを確かめる。
+// 開いているPRの一覧に無い(マージされた、閉じた)PRや、一覧を読めなかったリポジトリの競合の行は、
+// PRを読み直して、解けたか閉じたかを確かめる。許可リストから外れたリポジトリの行と、PRが見つからない(404)行は閉じる。
 // 外部由来の文字列(題名、ブランチ名)は、通知にもログにも載せない。
-// 例外は、PRごとに捕まえて、他のPRを止めない。rate limitは、以降の読み取りを止める。
+// 例外は、PRごと、リポジトリごとに捕まえて、他を止めない。rate limitは、以降の読み取りを止める。
 
 import type {
   PrConflictCheck,
   PrConflictObservation,
+  PrConflictRecorded,
   PrConflictSettledState,
 } from "./db.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
   GitHubHttpError,
   GitHubRateLimitError,
+  type OpenPullRequest,
   type PullRequest,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
@@ -31,7 +40,6 @@ import {
   type FactoryWorkItemRef,
   isFactoryPrBranch,
   type PullRequestRef,
-  parsePullRequestUrl,
   pullRequestPageUrl,
 } from "./pr_ci_support.ts";
 import { isSameRepoHead, RUN_BUDGET_MS } from "./pr_ci_watch.ts";
@@ -44,9 +52,13 @@ import {
   prConflictNoticeMessage,
   prConflictNoticePrefix,
 } from "./pr_conflict_support.ts";
-import { assertGitHubName, type NoticeRecord } from "./types.ts";
+import {
+  assertGitHubName,
+  type NoticeRecord,
+  parseImplementBranchWorkItemId,
+} from "./types.ts";
 
-/** 1回の実行で読む、競合している行の最大の数。追跡の上限より多く取り、追跡から外れた行の整理も受け持つ。 */
+/** 1回の実行で読む、競合している行の最大の数。 */
 export const CONFLICT_ROW_LIMIT = 200;
 
 export type PrConflictWatchDeps = {
@@ -55,8 +67,15 @@ export type PrConflictWatchDeps = {
   readonly instanceName: string;
   /** 許可リストと、照合を通ったオーナーに合うリポジトリか(`buildRepoGates`)。 */
   readonly isRepoAllowed: (owner: string, repo: string) => boolean;
-  /** PRを作ったまま`pr_open`の作業項目。新しい順に、最大`TRACKED_PR_LIMIT`件(`pr_ci_watch.ts`)。 */
-  readonly listTrackedItems: () => Promise<FactoryWorkItemRef[]>;
+  /** 状態が`pr_open`の作業項目を持つリポジトリ。重複は無い。 */
+  readonly listOpenRepos: () => Promise<{ owner: string; repo: string }[]>;
+  /** リポジトリの開いているPRをすべて返す。多すぎて読み切れないときは例外を投げる。 */
+  readonly listOpenPrs: (
+    owner: string,
+    repo: string,
+  ) => Promise<OpenPullRequest[]>;
+  /** 作業項目の照合に使う列を返す。無ければ`null`。 */
+  readonly getWorkItemRef: (id: number) => Promise<FactoryWorkItemRef | null>;
   readonly getPr: (
     owner: string,
     repo: string,
@@ -64,16 +83,12 @@ export type PrConflictWatchDeps = {
   ) => Promise<PullRequest>;
   /** 競合している行を、読み直していない順に返す。 */
   readonly listConflicted: (limit: number) => Promise<PrConflictCheck[]>;
-  /** 競合を記録し、その行を返す(`recordPrConflict`)。 */
+  /** 競合を記録し、その行と、新しい競合が始まったかを返す(`recordPrConflict`)。 */
   readonly record: (
     observation: PrConflictObservation,
-  ) => Promise<PrConflictCheck>;
-  /** 通知した時刻を記録する。この呼び出しで書いたら`true`。 */
-  readonly markNotified: (
-    id: number,
-    headSha: string,
-    baseSha: string,
-  ) => Promise<boolean>;
+  ) => Promise<PrConflictRecorded>;
+  /** 今の競合で通知した時刻を記録する。この呼び出しで書いたら`true`。 */
+  readonly markNotified: (id: number) => Promise<boolean>;
   /** 行を競合から離れた状態に移す。この呼び出しで移したら`true`。 */
   readonly settle: (id: number, to: PrConflictSettledState) => Promise<boolean>;
   /** 状態を変えずに読み直した時刻を進める。 */
@@ -100,9 +115,11 @@ export type PrConflictWatchResult = {
   readonly notified: number;
   /** 競合が解けて、通知を解決した数。 */
   readonly resolved: number;
-  /** 閉じられたPRの行を閉じた数。 */
+  /** 閉じた行の数。PRが閉じたときと、監視の対象から外れたときを含む。 */
   readonly closed: number;
-  /** 失敗したPRの数。 */
+  /** 判定を見送ったPRの数。 */
+  readonly skipped: number;
+  /** 失敗したPRとリポジトリの数。 */
   readonly errors: number;
   /** rate limitで読み取りを止めたか。 */
   readonly rateLimited: boolean;
@@ -115,6 +132,7 @@ export const PR_CONFLICT_WATCH_IDLE_RESULT: PrConflictWatchResult = {
   notified: 0,
   resolved: 0,
   closed: 0,
+  skipped: 0,
   errors: 0,
   rateLimited: false,
 };
@@ -125,6 +143,7 @@ type Counters = {
   notified: number;
   resolved: number;
   closed: number;
+  skipped: number;
   errors: number;
   rateLimited: boolean;
 };
@@ -134,13 +153,11 @@ type Context = {
   readonly startedAt: Date;
   readonly counters: Counters;
   /** この回の最初に読んだ、競合している行。PRの鍵で引く。 */
-  readonly rows: Map<string, PrConflictCheck>;
+  readonly rows: ReadonlyMap<string, PrConflictCheck>;
 };
 
-function isDenied(err: unknown): boolean {
-  return (
-    err instanceof GitHubHttpError && (err.status === 403 || err.status === 404)
-  );
+function isStatus(err: unknown, ...statuses: number[]): boolean {
+  return err instanceof GitHubHttpError && statuses.includes(err.status);
 }
 
 function errorMessage(err: unknown): string {
@@ -157,32 +174,6 @@ function stopped(context: Context): boolean {
   return context.counters.rateLimited || overBudget(context);
 }
 
-/**
- * PRのマージの競合の監視を1回分実行する。
- * 競合している行を読めなければ、何も読まずに失敗として記録して終わる。
- */
-export async function runPrConflictWatch(
-  deps: PrConflictWatchDeps,
-): Promise<PrConflictWatchResult> {
-  const context: Context = {
-    deps,
-    startedAt: deps.now(),
-    counters: { ...PR_CONFLICT_WATCH_IDLE_RESULT },
-    rows: new Map(),
-  };
-  try {
-    for (const row of await deps.listConflicted(CONFLICT_ROW_LIMIT)) {
-      context.rows.set(pullRequestKey(rowRef(row)), row);
-    }
-  } catch (err) {
-    await recordFailureOf(context, "list_conflicted", err);
-    return context.counters;
-  }
-  const seen = await watchTracked(context);
-  await watchUntracked(context, seen);
-  return context.counters;
-}
-
 function rowRef(row: PrConflictCheck): PullRequestRef {
   return { owner: row.owner, repo: row.repo, number: row.pr_number };
 }
@@ -197,82 +188,134 @@ async function recordFailureOf(
 }
 
 /**
- * 読み取りの失敗を扱う。rate limitは以降の読み取りを止め、権限の不足(403、404)は読み飛ばし、
- * それ以外は失敗として記録する。
+ * rate limitなら以降の読み取りを止め、権限の不足(403、404)ならログだけに残し、それ以外は失敗として記録する。
  */
-async function absorbError(
+async function absorbReadError(
   context: Context,
-  ref: PullRequestRef,
+  step: string,
+  subject: string,
   err: unknown,
 ): Promise<void> {
   const { deps, counters } = context;
-  const key = pullRequestKey(ref);
   if (err instanceof GitHubRateLimitError) {
     counters.rateLimited = true;
     deps.log.warn("pr conflict reading stopped by the rate limit", {
-      pr: key,
+      subject,
       error: errorMessage(err),
     });
     return;
   }
-  if (isDenied(err)) {
-    deps.log.warn("pr conflict skipped a pull request that is not readable", {
-      pr: key,
+  if (isStatus(err, 403, 404)) {
+    deps.log.warn("pr conflict skipped something that is not readable", {
+      subject,
       error: errorMessage(err),
     });
     return;
   }
-  await recordFailureOf(context, `pr_conflict:${key}`, err);
+  await recordFailureOf(context, step, err);
 }
 
-/** 追跡中の作業項目のPRを読んで扱う。読んだPRの鍵の集合を返す。 */
-async function watchTracked(context: Context): Promise<Set<string>> {
-  const { deps, counters } = context;
-  const seen = new Set<string>();
-  let items: FactoryWorkItemRef[];
+/**
+ * 競合の監視を1回分実行する。
+ * 競合している行を読めなければ、何も読まずに失敗として記録して終わる。
+ */
+export async function runPrConflictWatch(
+  deps: PrConflictWatchDeps,
+): Promise<PrConflictWatchResult> {
+  const counters = { ...PR_CONFLICT_WATCH_IDLE_RESULT };
+  const startedAt = deps.now();
+  const rows = new Map<string, PrConflictCheck>();
   try {
-    items = await deps.listTrackedItems();
+    for (const row of await deps.listConflicted(CONFLICT_ROW_LIMIT)) {
+      rows.set(pullRequestKey(rowRef(row)), row);
+    }
   } catch (err) {
-    await recordFailureOf(context, "list_tracked", err);
+    await recordFailureOf(
+      { deps, startedAt, counters, rows },
+      "list_conflicted",
+      err,
+    );
+    return counters;
+  }
+  const context: Context = { deps, startedAt, counters, rows };
+  const seen = await watchOpenPrs(context);
+  await watchRemainingRows(context, seen);
+  return counters;
+}
+
+/** 開いているPRのうち、Factoryのブランチのものか。下書きとforkは対象にしない。 */
+function isCandidate(pr: OpenPullRequest): boolean {
+  return (
+    !pr.draft &&
+    isSameRepoHead(pr) &&
+    parseImplementBranchWorkItemId(pr.headRef) !== null
+  );
+}
+
+/** 開いているFactoryのPRを読んで扱う。読んだPRの鍵の集合を返す。 */
+async function watchOpenPrs(context: Context): Promise<Set<string>> {
+  const { deps } = context;
+  const seen = new Set<string>();
+  let repos: { owner: string; repo: string }[];
+  try {
+    repos = await deps.listOpenRepos();
+  } catch (err) {
+    await recordFailureOf(context, "list_open_repos", err);
     return seen;
   }
-  for (const item of items) {
+  for (const { owner, repo } of repos) {
     if (stopped(context)) break;
-    const ref = item.prUrl === null ? null : parsePullRequestUrl(item.prUrl);
-    if (ref === null || !deps.isRepoAllowed(ref.owner, ref.repo)) continue;
+    if (!deps.isRepoAllowed(owner, repo)) continue;
     // `parsePullRequestUrl`は先頭が`.`のリポジトリ名も通すが、記録は通さない。読まずに飛ばす。
     try {
-      assertGitHubName(ref.owner);
-      assertGitHubName(ref.repo);
+      assertGitHubName(owner);
+      assertGitHubName(repo);
     } catch {
       continue;
     }
-    seen.add(pullRequestKey(ref));
-    counters.tracked += 1;
+    let open: OpenPullRequest[];
     try {
-      await handleTracked(context, item, ref);
+      open = await deps.listOpenPrs(owner, repo);
     } catch (err) {
-      await absorbError(context, ref, err);
+      await absorbReadError(
+        context,
+        `list_open_prs:${owner}/${repo}`,
+        `${owner}/${repo}`,
+        err,
+      );
+      continue;
+    }
+    for (const candidate of open.filter(isCandidate)) {
+      if (stopped(context)) break;
+      await watchOpenPr(context, owner, repo, candidate, seen);
     }
   }
   return seen;
 }
 
-async function handleTracked(
+async function watchOpenPr(
   context: Context,
-  item: FactoryWorkItemRef,
-  ref: PullRequestRef,
+  owner: string,
+  repo: string,
+  candidate: OpenPullRequest,
+  seen: Set<string>,
 ): Promise<void> {
-  const pr = await context.deps.getPr(ref.owner, ref.repo, ref.number);
-  // 閉じたPRは、forkかどうかに依らず、行と通知を整理する。
-  // 開いているPRは、forkのPRとFactoryのものでないブランチを対象にしない。
-  if (
-    pr.state === "open" &&
-    (!isSameRepoHead(pr) || !isFactoryPrBranch(pr.headRef, ref, item))
-  ) {
-    return;
+  const { deps, counters } = context;
+  const ref: PullRequestRef = { owner, repo, number: candidate.number };
+  const key = pullRequestKey(ref);
+  try {
+    const workItemId = parseImplementBranchWorkItemId(candidate.headRef);
+    if (workItemId === null) return;
+    const item = await deps.getWorkItemRef(workItemId);
+    // 同じ形の名前のブランチを作った人のPRを、Factoryのものとして扱わない。
+    if (!isFactoryPrBranch(candidate.headRef, ref, item)) return;
+    seen.add(key);
+    counters.tracked += 1;
+    const pr = await deps.getPr(owner, repo, candidate.number);
+    await applyDecision(context, ref, pr);
+  } catch (err) {
+    await absorbReadError(context, `pr_conflict:${key}`, key, err);
   }
-  await applyDecision(context, ref, pr);
 }
 
 /** PRの今の状態から決めた扱いを、書き込みに移す。 */
@@ -281,107 +324,71 @@ async function applyDecision(
   ref: PullRequestRef,
   pr: PullRequest,
 ): Promise<void> {
+  const { deps, counters } = context;
   const decision = decidePrConflict(pr);
-  const row = context.rows.get(pullRequestKey(ref));
   switch (decision.kind) {
     case "close":
-      if (row !== undefined) await leaveConflict(context, ref, row, "closed");
+      await leaveConflict(context, ref, "closed");
       return;
     case "clear":
-      if (row !== undefined) await leaveConflict(context, ref, row, "resolved");
+      await leaveConflict(context, ref, "resolved");
       return;
     case "skip":
+      skip(context, ref, decision.reason);
       return;
-    case "conflict":
-      await settleConflict(
-        context,
-        ref,
-        row,
-        decision.headSha,
-        decision.baseSha,
-      );
+    case "conflict": {
+      counters.conflicted += 1;
+      const { row, started } = await deps.record({
+        owner: ref.owner,
+        repo: ref.repo,
+        pr_number: ref.number,
+        head_sha: decision.headSha,
+      });
+      if (started) {
+        deps.log.info("pr conflict started", { pr: pullRequestKey(ref) });
+      }
+      if (row.notified_at === null) await notifyConflict(context, ref, row.id);
       return;
+    }
+  }
+}
+
+/** 判定を見送った理由を数え、見送るはずのない理由はlogに残す。 */
+function skip(context: Context, ref: PullRequestRef, reason: string): void {
+  context.counters.skipped += 1;
+  if (reason === "not_dirty" || reason === "invalid_sha") {
+    context.deps.log.warn("pr conflict skipped an unusual pull request", {
+      pr: pullRequestKey(ref),
+      reason,
+    });
   }
 }
 
 /**
- * 競合から離れた行を整理する。通知を解決してから、行を移す。
- * 通知の解決が失敗した回は、行を競合のまま残し、次の回にやり直す。
+ * 競合を通知する。通知(notice)を登録し、新しく登録したときだけDiscordに送り、通知した時刻を記録する。
+ * 通知を先に登録する。通知した時刻の記録が先に成功して登録が失敗すると、通知が永久に出ないため。
  */
-async function leaveConflict(
+async function notifyConflict(
   context: Context,
   ref: PullRequestRef,
-  row: PrConflictCheck,
-  to: PrConflictSettledState,
+  rowId: number,
 ): Promise<void> {
   const { deps, counters } = context;
-  await deps.resolveNotices(
-    PR_CONFLICT_KIND,
-    prConflictNoticePrefix(ref.owner, ref.repo, ref.number),
-    PR_CONFLICT_RESOLVED_BY,
-  );
-  const moved = await deps.settle(row.id, to);
-  if (!moved) return;
-  if (to === "resolved") counters.resolved += 1;
-  else counters.closed += 1;
-  deps.log.info("pr conflict row settled", {
-    pr: pullRequestKey(ref),
-    state: to,
-  });
-}
-
-/**
- * 競合を記録し、まだ通知していない組なら通知する。
- * 前回と同じheadとbaseなら、通知を解決せずに記録する。通知の登録だけが済んだ回の通知を、重ねないためである。
- * headかbaseが違う(または初めての)組は、古い通知を解決してから記録する。
- */
-async function settleConflict(
-  context: Context,
-  ref: PullRequestRef,
-  prior: PrConflictCheck | undefined,
-  headSha: string,
-  baseSha: string,
-): Promise<void> {
-  const { deps, counters } = context;
-  const sameKey =
-    prior !== undefined &&
-    prior.head_sha === headSha &&
-    prior.base_sha === baseSha;
-  if (!sameKey) {
-    await deps.resolveNotices(
-      PR_CONFLICT_KIND,
-      prConflictNoticePrefix(ref.owner, ref.repo, ref.number),
-      PR_CONFLICT_RESOLVED_BY,
-    );
-  }
-  const row = await deps.record({
-    owner: ref.owner,
-    repo: ref.repo,
-    pr_number: ref.number,
-    head_sha: headSha,
-    base_sha: baseSha,
-  });
-  counters.conflicted += 1;
-  if (row.notified_at !== null) return;
-  // 通知を先に登録する。通知した時刻の記録が先に成功して登録が失敗すると、通知が永久に出ないため。
   const noticeId = await deps.addNotice({
     kind: PR_CONFLICT_KIND,
     message: prConflictNoticeMessage({
       owner: ref.owner,
       repo: ref.repo,
       prNumber: ref.number,
-      headSha,
-      baseSha,
     }),
   });
   if (noticeId !== null) {
-    const url = pullRequestPageUrl(ref.owner, ref.repo, ref.number);
     const sent = await deps.notify({
       kind: "needs_human",
       instance_name: deps.instanceName,
       owner: ref.owner,
       repo: ref.repo,
-      url,
+      url: pullRequestPageUrl(ref.owner, ref.repo, ref.number),
       reason: PR_CONFLICT_REASON,
       target: { kind: "pr", number: ref.number },
       next_action: PR_CONFLICT_NEXT_ACTION,
@@ -395,18 +402,47 @@ async function settleConflict(
       });
     }
   }
-  if (await deps.markNotified(row.id, headSha, baseSha)) {
+  if (await deps.markNotified(rowId)) {
     counters.notified += 1;
     deps.log.warn("pr conflict notified", { pr: pullRequestKey(ref) });
   }
 }
 
 /**
- * 追跡から外れた競合の行を整理する。PRを読み直し、閉じたか競合が解けたときだけ行を移す。
- * それ以外は、読み直した時刻だけを進める。通知は出さない。
- * 許可リストから外れたリポジトリの行は、読まずに時刻だけを進めて、ほかの行を押し出さないようにする。
+ * 競合が終わったPRの通知を解決し、競合の行があれば移す。
+ * 通知の解決を先にする。解決に失敗した回は、行を競合のまま残し、次の回にやり直す。
+ * 行が無いPRは、通知も行も触らない。
  */
-async function watchUntracked(
+async function leaveConflict(
+  context: Context,
+  ref: PullRequestRef,
+  to: PrConflictSettledState,
+): Promise<void> {
+  const { deps, counters } = context;
+  const target = context.rows.get(pullRequestKey(ref));
+  if (target === undefined) return;
+  await deps.resolveNotices(
+    PR_CONFLICT_KIND,
+    prConflictNoticePrefix(ref.owner, ref.repo, ref.number),
+    PR_CONFLICT_RESOLVED_BY,
+  );
+  const moved = await deps.settle(target.id, to);
+  if (!moved) return;
+  if (to === "resolved") counters.resolved += 1;
+  else counters.closed += 1;
+  deps.log.info("pr conflict row settled", {
+    pr: pullRequestKey(ref),
+    state: to,
+  });
+}
+
+/**
+ * 開いているPRの一覧で読まなかった競合の行を整理する。PRを読み直し、閉じたか競合が解けたときだけ行を移す。
+ * それ以外は、読み直した時刻だけを進める。通知は出さない。
+ * 許可リストから外れたリポジトリの行と、PRが見つからない(404)行は、読まずに、または読んで、閉じる。
+ * 権限の不足(403)は一時的かもしれないので、閉じずにログだけに残す。
+ */
+async function watchRemainingRows(
   context: Context,
   seen: ReadonlySet<string>,
 ): Promise<void> {
@@ -417,20 +453,30 @@ async function watchUntracked(
     const ref = rowRef(row);
     try {
       if (!deps.isRepoAllowed(ref.owner, ref.repo)) {
-        await deps.touch(row.id);
+        await leaveConflict(context, ref, "closed");
         continue;
       }
       const pr = await deps.getPr(ref.owner, ref.repo, ref.number);
       const decision = decidePrConflict(pr);
       if (decision.kind === "close") {
-        await leaveConflict(context, ref, row, "closed");
+        await leaveConflict(context, ref, "closed");
       } else if (decision.kind === "clear") {
-        await leaveConflict(context, ref, row, "resolved");
+        await leaveConflict(context, ref, "resolved");
       } else {
+        if (decision.kind === "skip") skip(context, ref, decision.reason);
         await deps.touch(row.id);
       }
     } catch (err) {
-      await absorbError(context, ref, err);
+      if (isStatus(err, 404)) {
+        try {
+          await leaveConflict(context, ref, "closed");
+        } catch (closeErr) {
+          await recordFailureOf(context, `pr_conflict:${key}`, closeErr);
+        }
+        continue;
+      }
+      await absorbReadError(context, `pr_conflict:${key}`, key, err);
+      if (isStatus(err, 403)) await deps.touch(row.id).catch(() => false);
     }
   }
 }

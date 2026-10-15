@@ -95,7 +95,6 @@ function pr(overrides: Partial<PullRequest> = {}): PullRequest {
     baseRepoFullName: "acme/widgets",
     baseRepoId: 100,
     baseRef: "main",
-    baseSha: null,
     mergeable: null,
     mergeableState: null,
     authorLogin: "factory-bot",

@@ -10,7 +10,6 @@ import {
 } from "../../f/factory/lib/pr_conflict_support.ts";
 
 const HEAD = "a".repeat(40);
-const BASE = "b".repeat(40);
 
 function facts(overrides: Partial<PrConflictFacts> = {}): PrConflictFacts {
   return {
@@ -18,7 +17,6 @@ function facts(overrides: Partial<PrConflictFacts> = {}): PrConflictFacts {
     merged: false,
     draft: false,
     headSha: HEAD,
-    baseSha: BASE,
     mergeable: false,
     mergeableState: "dirty",
     ...overrides,
@@ -30,7 +28,6 @@ describe("decidePrConflict", () => {
     expect(decidePrConflict(facts())).toEqual({
       kind: "conflict",
       headSha: HEAD,
-      baseSha: BASE,
     });
   });
 
@@ -92,13 +89,6 @@ describe("decidePrConflict", () => {
     });
   });
 
-  test("skips a conflict whose base sha is unknown", () => {
-    expect(decidePrConflict(facts({ baseSha: null }))).toEqual({
-      kind: "skip",
-      reason: "invalid_sha",
-    });
-  });
-
   test("skips a conflict whose head sha is not a full commit sha", () => {
     expect(decidePrConflict(facts({ headSha: "abc123" }))).toEqual({
       kind: "skip",
@@ -106,10 +96,10 @@ describe("decidePrConflict", () => {
     });
   });
 
-  test("closes a closed pull request even when its shas are unusable", () => {
-    expect(
-      decidePrConflict(facts({ state: "closed", headSha: "", baseSha: null })),
-    ).toEqual({ kind: "close" });
+  test("closes a closed pull request even when its head sha is unusable", () => {
+    expect(decidePrConflict(facts({ state: "closed", headSha: "" }))).toEqual({
+      kind: "close",
+    });
   });
 });
 
@@ -130,23 +120,11 @@ describe("prConflictNoticePrefix", () => {
 });
 
 describe("prConflictNoticeMessage", () => {
-  const input = {
-    owner: "acme",
-    repo: "app",
-    prNumber: 12,
-    headSha: HEAD,
-    baseSha: BASE,
-  };
+  const input = { owner: "acme", repo: "app", prNumber: 12 };
 
   test("starts with the pull request prefix", () => {
     expect(prConflictNoticeMessage(input).startsWith("acme/app#12: ")).toBe(
       true,
-    );
-  });
-
-  test("names the head and base commits by their first seven characters", () => {
-    expect(prConflictNoticeMessage(input)).toContain(
-      "PRのコミットaaaaaaaとベースのコミットbbbbbbb",
     );
   });
 
@@ -164,10 +142,14 @@ describe("prConflictNoticeMessage", () => {
     ).toBe(true);
   });
 
-  test("differs when the base commit differs", () => {
-    expect(prConflictNoticeMessage(input)).not.toBe(
-      prConflictNoticeMessage({ ...input, baseSha: "c".repeat(40) }),
+  test("is the same for every commit so that a duplicate notice is not added", () => {
+    expect(prConflictNoticeMessage(input)).toBe(
+      prConflictNoticeMessage({ ...input }),
     );
+  });
+
+  test("names no commit", () => {
+    expect(prConflictNoticeMessage(input)).not.toMatch(/[0-9a-f]{7}/);
   });
 
   test("rejects an owner that is not a GitHub name", () => {
@@ -176,10 +158,8 @@ describe("prConflictNoticeMessage", () => {
     ).toThrow();
   });
 
-  test("rejects a head sha that is not a full commit sha", () => {
-    expect(() =>
-      prConflictNoticeMessage({ ...input, headSha: "abc123" }),
-    ).toThrow();
+  test("rejects a pull request number that is not positive", () => {
+    expect(() => prConflictNoticeMessage({ ...input, prNumber: 0 })).toThrow();
   });
 });
 

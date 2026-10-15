@@ -79,6 +79,16 @@ describe("watch_pr_conflicts script", () => {
     expect(source).not.toMatch(/config\.pr_ci_watch_enabled/);
   });
 
+  test("does not find the pull requests through the update window of the work items", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).not.toContain("listPrOpenIssueWorkItems");
+  });
+
+  test("lists the open pull requests of the repositories that have pr_open items", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain("listPrOpenRepos");
+  });
+
   test("does not start any fix", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
     expect(source).not.toContain("launchPrFixFlow");

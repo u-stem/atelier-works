@@ -1,9 +1,9 @@
 // FactoryのPRのマージの競合を判断する純粋関数群。
 // I/Oは持たない。GitHubの読み取り、DB、通知は`pr_conflict_watch.ts`が行う。
-// 通知の本文には、検証したshaと固定文とPRのリンクだけを載せ、外部由来の文字列は載せない。
+// 通知の本文には、固定文とPRのリンクだけを載せ、外部由来の文字列は載せない。
 
 import type { PullRequest } from "./github.ts";
-import { isCommitSha, shortSha } from "./main_ci_support.ts";
+import { isCommitSha } from "./main_ci_support.ts";
 import { pullRequestPageUrl } from "./pr_ci_support.ts";
 import { assertGitHubName } from "./types.ts";
 
@@ -26,13 +26,7 @@ export const PR_CONFLICT_NEXT_ACTION =
 /** 判断に使う、PRの列。 */
 export type PrConflictFacts = Pick<
   PullRequest,
-  | "state"
-  | "merged"
-  | "draft"
-  | "headSha"
-  | "baseSha"
-  | "mergeable"
-  | "mergeableState"
+  "state" | "merged" | "draft" | "headSha" | "mergeable" | "mergeableState"
 >;
 
 /**
@@ -40,7 +34,7 @@ export type PrConflictFacts = Pick<
  * - `draft`: 下書きのPRは対象にしない。
  * - `unknown`: GitHubがまだ計算していない(`mergeable`が`null`)。真偽に丸めず、次の巡回で判定し直す。
  * - `not_dirty`: 競合していないとは言えないが、競合とも言えない(`mergeable`は偽で`mergeable_state`が`dirty`でない)。
- * - `invalid_sha`: 競合しているが、headかbaseが完全なコミットshaでなく、記録の鍵にできない。
+ * - `invalid_sha`: 競合しているが、headが完全なコミットshaでなく、記録できない。
  */
 export const PR_CONFLICT_SKIP_REASONS = [
   "draft",
@@ -61,12 +55,8 @@ export function isPrConflictSkipReason(
 export type PrConflictDecision =
   /** PRが閉じられたか、マージされた。 */
   | { readonly kind: "close" }
-  /** 競合している。記録の鍵になるheadとbaseのコミット。 */
-  | {
-      readonly kind: "conflict";
-      readonly headSha: string;
-      readonly baseSha: string;
-    }
+  /** 競合している。記録するheadのコミット。 */
+  | { readonly kind: "conflict"; readonly headSha: string }
   /** 競合していない(`mergeable`が真)。 */
   | { readonly kind: "clear" }
   | { readonly kind: "skip"; readonly reason: PrConflictSkipReason };
@@ -85,10 +75,8 @@ export function decidePrConflict(pr: PrConflictFacts): PrConflictDecision {
   if (pr.mergeableState !== "dirty") {
     return { kind: "skip", reason: "not_dirty" };
   }
-  if (!isCommitSha(pr.headSha) || !isCommitSha(pr.baseSha)) {
-    return { kind: "skip", reason: "invalid_sha" };
-  }
-  return { kind: "conflict", headSha: pr.headSha, baseSha: pr.baseSha };
+  if (!isCommitSha(pr.headSha)) return { kind: "skip", reason: "invalid_sha" };
+  return { kind: "conflict", headSha: pr.headSha };
 }
 
 /**
@@ -110,14 +98,13 @@ export type PrConflictNoticeInput = {
   readonly owner: string;
   readonly repo: string;
   readonly prNumber: number;
-  readonly headSha: string;
-  readonly baseSha: string;
 };
 
 /**
- * 競合を知らせるnoticeの本文。接頭辞、headとbaseのコミットの先頭7文字、次の操作、PRのリンクだけを入れる。
- * PRの題名やブランチ名のような、外部由来の文字列は入れない。
- * `owner`と`repo`がGitHubの名前の形でないとき、shaが完全なコミットshaでないとき、PR番号が正の整数でないときは例外を投げる。
+ * 競合を知らせるnoticeの本文。接頭辞、次の操作、PRのリンクだけを入れる。
+ * コミットのshaも、PRの題名やブランチ名のような外部由来の文字列も入れない。
+ * 同じPRの本文は常に同じになり、未解決の通知がある間は重ねて登録されない。
+ * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないときは例外を投げる。
  */
 export function prConflictNoticeMessage(input: PrConflictNoticeInput): string {
   const link = pullRequestPageUrl(input.owner, input.repo, input.prNumber);
@@ -126,5 +113,5 @@ export function prConflictNoticeMessage(input: PrConflictNoticeInput): string {
     input.repo,
     input.prNumber,
   );
-  return `${prefix}PRのコミット${shortSha(input.headSha)}とベースのコミット${shortSha(input.baseSha)}で、マージの競合があります。次の操作: ${PR_CONFLICT_NEXT_ACTION}。PR: ${link}`;
+  return `${prefix}マージの競合があります。次の操作: ${PR_CONFLICT_NEXT_ACTION}。PR: ${link}`;
 }

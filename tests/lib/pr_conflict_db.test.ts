@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   deletePrConflictChecksBefore,
-  getPrConflictCheck,
   listConflictedPrConflictChecks,
+  listPrOpenRepos,
   markPrConflictNotified,
   recordPrConflict,
   settlePrConflictCheck,
@@ -37,7 +37,6 @@ function createFakeSqlClient(responses: SqlRow[][] = []): {
 }
 
 const HEAD = "a".repeat(40);
-const BASE = "b".repeat(40);
 
 const ROW: SqlRow = {
   id: "7",
@@ -45,13 +44,12 @@ const ROW: SqlRow = {
   repo: "widgets",
   pr_number: 12,
   head_sha: HEAD,
-  base_sha: BASE,
   state: "conflicted",
-  fix_attempts: 0,
   notified_at: null,
   checked_at: new Date("2026-10-15T00:00:00.000Z"),
   created_at: new Date("2026-10-15T00:00:00.000Z"),
   updated_at: new Date("2026-10-15T00:00:00.000Z"),
+  prior_state: null,
 };
 
 const OBSERVATION = {
@@ -59,21 +57,43 @@ const OBSERVATION = {
   repo: "Widgets",
   pr_number: 12,
   head_sha: HEAD,
-  base_sha: BASE,
 };
 
 describe("recordPrConflict", () => {
   test("returns the parsed row", async () => {
     const { sql } = createFakeSqlClient([[ROW]]);
-    expect(await recordPrConflict(OBSERVATION, sql)).toMatchObject({
+    expect((await recordPrConflict(OBSERVATION, sql)).row).toMatchObject({
       id: 7,
       owner: "acme",
       pr_number: 12,
       head_sha: HEAD,
-      base_sha: BASE,
       state: "conflicted",
       notified_at: null,
     });
+  });
+
+  test("reports a started conflict when the pull request had no row", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, prior_state: null }]]);
+    expect((await recordPrConflict(OBSERVATION, sql)).started).toBe(true);
+  });
+
+  test("reports a started conflict when the row was resolved", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, prior_state: "resolved" }],
+    ]);
+    expect((await recordPrConflict(OBSERVATION, sql)).started).toBe(true);
+  });
+
+  test("reports a started conflict when the row was closed", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, prior_state: "closed" }]]);
+    expect((await recordPrConflict(OBSERVATION, sql)).started).toBe(true);
+  });
+
+  test("reports a continuing conflict when the row was already conflicted", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...ROW, prior_state: "conflicted" }],
+    ]);
+    expect((await recordPrConflict(OBSERVATION, sql)).started).toBe(false);
   });
 
   test("lowercases the owner and repo", async () => {
@@ -90,25 +110,29 @@ describe("recordPrConflict", () => {
     );
   });
 
-  test("keeps the notified time only when the state, head and base are unchanged", async () => {
+  test("keeps the notified time only while the row stays conflicted", async () => {
     const { sql, calls } = createFakeSqlClient([[ROW]]);
     await recordPrConflict(OBSERVATION, sql);
-    expect(calls[0]?.text).toMatch(
-      /notified_at = CASE\s+WHEN c\.state = 'conflicted'\s+AND c\.head_sha = EXCLUDED\.head_sha\s+AND c\.base_sha = EXCLUDED\.base_sha\s+THEN c\.notified_at\s+ELSE NULL\s+END/,
+    expect(calls[0]?.text).toContain(
+      "notified_at = CASE WHEN c.state = 'conflicted' THEN c.notified_at ELSE NULL END",
     );
+  });
+
+  test("overwrites the head without clearing the notified time", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain("head_sha = EXCLUDED.head_sha");
+  });
+
+  test("does not touch a base commit", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).not.toContain("base_sha");
   });
 
   test("rejects a head sha that is not a full commit sha, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[ROW]]);
     await recordPrConflict({ ...OBSERVATION, head_sha: "abc123" }, sql).catch(
-      () => undefined,
-    );
-    expect(calls).toHaveLength(0);
-  });
-
-  test("rejects a base sha that is not a full commit sha, without querying", async () => {
-    const { sql, calls } = createFakeSqlClient([[ROW]]);
-    await recordPrConflict({ ...OBSERVATION, base_sha: "abc123" }, sql).catch(
       () => undefined,
     );
     expect(calls).toHaveLength(0);
@@ -145,50 +169,28 @@ describe("recordPrConflict", () => {
   });
 });
 
-describe("getPrConflictCheck", () => {
-  test("returns null when the pull request has no row", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    expect(await getPrConflictCheck("acme", "widgets", 12, sql)).toBeNull();
-  });
-
-  test("parses the notified time", async () => {
-    const notifiedAt = new Date("2026-10-15T01:00:00.000Z");
-    const { sql } = createFakeSqlClient([
-      [{ ...ROW, notified_at: notifiedAt }],
-    ]);
-    const row = await getPrConflictCheck("acme", "widgets", 12, sql);
-    expect(row?.notified_at).toEqual(notifiedAt);
-  });
-
-  test("lowercases the owner and repo", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
-    await getPrConflictCheck("Acme", "Widgets", 12, sql);
-    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
-  });
-});
-
 describe("markPrConflictNotified", () => {
-  test("writes only for the head and base that were notified", async () => {
+  test("writes only for a conflicted row that was not notified", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await markPrConflictNotified(7, HEAD, BASE, sql);
+    await markPrConflictNotified(7, sql);
     expect(calls[0]?.text).toMatch(
-      /head_sha =\s+\?\s+AND base_sha =\s+\?\s+AND state = 'conflicted'\s+AND notified_at IS NULL/,
+      /WHERE id =\s+\?\s*::bigint AND state = 'conflicted' AND notified_at IS NULL/,
     );
   });
 
   test("returns true when the time was newly written", async () => {
     const { sql } = createFakeSqlClient([[{ id: 7 }]]);
-    expect(await markPrConflictNotified(7, HEAD, BASE, sql)).toBe(true);
+    expect(await markPrConflictNotified(7, sql)).toBe(true);
   });
 
-  test("returns false when the row changed or was already notified", async () => {
+  test("returns false when the row was already notified", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await markPrConflictNotified(7, HEAD, BASE, sql)).toBe(false);
+    expect(await markPrConflictNotified(7, sql)).toBe(false);
   });
 
-  test("rejects a sha that is not a full commit sha, without querying", async () => {
+  test("rejects an id that is not positive, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await markPrConflictNotified(7, "abc", BASE, sql).catch(() => undefined);
+    await markPrConflictNotified(0, sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 });
@@ -259,5 +261,22 @@ describe("deletePrConflictChecksBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
     expect(await deletePrConflictChecksBefore(cutoff, sql)).toBe(2);
+  });
+});
+
+describe("listPrOpenRepos", () => {
+  test("lists each repository of the pr_open issue items once", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrOpenRepos(sql);
+    expect(calls[0]?.text).toMatch(
+      /SELECT DISTINCT owner, repo FROM factory\.work_items\s+WHERE kind = 'issue' AND status = 'pr_open' AND pr_url IS NOT NULL/,
+    );
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[{ owner: "acme", repo: "widgets" }]]);
+    expect(await listPrOpenRepos(sql)).toEqual([
+      { owner: "acme", repo: "widgets" },
+    ]);
   });
 });

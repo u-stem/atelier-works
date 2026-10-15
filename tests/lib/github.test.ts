@@ -21,6 +21,7 @@ import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
+  GitHubPaginationLimitError,
   GitHubRateLimitError,
   GitHubResponseError,
   getAccountId,
@@ -43,6 +44,7 @@ import {
   isOwnPost,
   LabelerCheckLimitError,
   listIssueComments,
+  listOpenPullRequests,
   listPrChecks,
   listPrCommitMessages,
   listPrCommits,
@@ -3486,11 +3488,7 @@ describe("getPr", () => {
           ref: "feature-x",
           repo: { full_name: "acme/widgets-fork" },
         },
-        base: {
-          ref: "main",
-          sha: "b".repeat(40),
-          repo: { full_name: "acme/widgets", id: 99 },
-        },
+        base: { ref: "main", repo: { full_name: "acme/widgets", id: 99 } },
         mergeable: true,
         mergeable_state: "clean",
         user: { login: "alice", type: "User" },
@@ -3516,7 +3514,6 @@ describe("getPr", () => {
       baseRepoFullName: "acme/widgets",
       baseRepoId: 99,
       baseRef: "main",
-      baseSha: "b".repeat(40),
       mergeable: true,
       mergeableState: "clean",
       authorLogin: "alice",
@@ -3524,32 +3521,6 @@ describe("getPr", () => {
       authorType: "User",
       autoMergeEnabled: false,
     });
-  });
-
-  test("returns a null base sha when the response has none", async () => {
-    const fake = createFakeCommandRunner([
-      ghApiOk({
-        number: 12,
-        title: "t",
-        body: "b",
-        draft: false,
-        state: "open",
-        merged: false,
-        head: { sha: "abc123", ref: "feature-x", repo: null },
-        base: { ref: "main", repo: null },
-        mergeable: null,
-        mergeable_state: "unknown",
-        user: null,
-        auto_merge: null,
-      }),
-    ]);
-    const pr = await getPr(
-      { run: fake.run, ghToken: "tok" },
-      "acme",
-      "widgets",
-      12,
-    );
-    expect(pr.baseSha).toBeNull();
   });
 
   // 実行のheadのリポジトリとIDで比べるために使うので、安全な正の整数でなければnullにする。
@@ -3913,6 +3884,117 @@ describe("getPrFiles", () => {
       12,
     );
     expect(files.map((f) => f.filename)).toEqual(["a.ts", "b.ts"]);
+  });
+});
+
+describe("listOpenPullRequests", () => {
+  function openPr(number: number, overrides: Record<string, unknown> = {}) {
+    return {
+      number,
+      draft: false,
+      head: {
+        ref: `factory/issue-${String(number)}-wi-9`,
+        repo: { full_name: "acme/widgets" },
+      },
+      base: { repo: { full_name: "acme/widgets" } },
+      ...overrides,
+    };
+  }
+
+  test("asks for the open pull requests of the repository, 100 per page", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/pulls?state=open&per_page=100",
+    );
+  });
+
+  test("returns the number, draft flag, head branch and repositories", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([openPr(12)])]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs).toEqual([
+      {
+        number: 12,
+        draft: false,
+        headRef: "factory/issue-12-wi-9",
+        headRepoFullName: "acme/widgets",
+        baseRepoFullName: "acme/widgets",
+      },
+    ]);
+  });
+
+  test("returns a null head repository for a deleted fork", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { head: { ref: "x", repo: null } })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.headRepoFullName).toBeNull();
+  });
+
+  test("follows the next page", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(200, [openPr(1)], {
+          link: '<https://api.github.com/repos/acme/widgets/pulls?state=open&per_page=100&page=2>; rel="next"',
+        }),
+      ),
+      ghApiOk([openPr(2)]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs.map((pr) => pr.number)).toEqual([1, 2]);
+  });
+
+  test("fails when the pages exceed the limit, instead of returning a partial list", async () => {
+    const next = {
+      link: '<https://api.github.com/repos/acme/widgets/pulls?state=open&per_page=100&page=2>; rel="next"',
+    };
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, [openPr(1)], next)),
+      ok(ghApiStdout(200, [openPr(2)], next)),
+      ghApiOk([openPr(3)]),
+    ]);
+    await expect(
+      listOpenPullRequests(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        2,
+      ),
+    ).rejects.toBeInstanceOf(GitHubPaginationLimitError);
+  });
+
+  test("rejects an entry of an unexpected shape", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([{ number: "x" }])]);
+    await expect(
+      listOpenPullRequests(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a repository name that is not a GitHub name", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await expect(
+      listOpenPullRequests({ run: fake.run, ghToken: "tok" }, "acme", ".."),
+    ).rejects.toThrow("invalid GitHub name");
   });
 });
 
