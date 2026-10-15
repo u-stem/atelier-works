@@ -268,6 +268,10 @@ type FakeOptions = {
   /** `getBranchSha`が返すbaseのsha。省略時は影響調査の入力と同じ。 */
   readonly baseSha?: string;
   readonly getBranchShaError?: Error;
+  /** オーナーの数値IDの照合が返す止める理由。省略時は通る(`null`)。 */
+  readonly ownerStop?: string;
+  /** オーナーの数値IDの照合が投げる例外(404以外の取得の失敗)。 */
+  readonly ownerCheckError?: Error;
 };
 
 function fake(options: FakeOptions = {}): {
@@ -311,6 +315,11 @@ function fake(options: FakeOptions = {}): {
         throw options.getBranchShaError;
       }
       return options.baseSha ?? BASE_SHA;
+    },
+    ensureRepoOwner: async (owner, repo) => {
+      record("ensureRepoOwner", owner, repo);
+      if (options.ownerCheckError !== undefined) throw options.ownerCheckError;
+      return options.ownerStop ?? null;
     },
     getViewerLogin: async () => {
       record("getViewerLogin");
@@ -1766,6 +1775,137 @@ describe("runDependabotFinish when the outcome is needs_human", () => {
     });
 
     expect(named(calls, "createPrReview")).toHaveLength(0);
+  });
+});
+
+// ---- オーナーの数値IDの照合 ----
+
+const OWNER_STOP =
+  "repository owner id differs from factory_config owners: acme/widgets (expected 1, actual 2)";
+
+const OWNER_STOP_NOTE = dependabotReason("finish", OWNER_STOP);
+
+describe("runDependabotFinish checks the repository owner before it writes", () => {
+  const outcomes: readonly [string, () => FinishInput][] = [
+    ["merge", mergeInput],
+    ["fix", () => fixInput()],
+    ["needs_human", () => humanInput()],
+  ];
+
+  test("checks once after the pull request is re-read and before any write", async () => {
+    const { calls } = await run(mergeInput());
+
+    expect(
+      calls
+        .map((call) => call.name)
+        .filter((name) =>
+          ["getPr", "ensureRepoOwner", "mergePullRequest"].includes(name),
+        ),
+    ).toEqual(["getPr", "ensureRepoOwner", "mergePullRequest"]);
+  });
+
+  for (const [name, input] of outcomes) {
+    test(`checks exactly once on the ${name} outcome`, async () => {
+      const { calls } = await run(input());
+
+      expect(named(calls, "ensureRepoOwner")).toHaveLength(1);
+    });
+  }
+
+  for (const [name, input] of outcomes) {
+    test(`does not merge when the check stops the ${name} outcome`, async () => {
+      const { calls } = await run(input(), { ownerStop: OWNER_STOP });
+
+      expect(named(calls, "mergePullRequest")).toHaveLength(0);
+    });
+
+    test(`does not post to the pull request when the check stops the ${name} outcome`, async () => {
+      const { calls } = await run(input(), { ownerStop: OWNER_STOP });
+
+      expect(named(calls, "createPrReview")).toHaveLength(0);
+    });
+
+    test(`does not add a label when the check stops the ${name} outcome`, async () => {
+      const { calls } = await run(input(), { ownerStop: OWNER_STOP });
+
+      expect(named(calls, "addLabels")).toHaveLength(0);
+    });
+  }
+
+  test("checks the repository of the work item", async () => {
+    const { calls } = await run(mergeInput());
+
+    expect(named(calls, "ensureRepoOwner").map((c) => c.args)).toEqual([
+      ["acme", "widgets"],
+    ]);
+  });
+
+  test("hands the item to a human with the reason of the check", async () => {
+    const { calls } = await run(mergeInput(), { ownerStop: OWNER_STOP });
+
+    expect(statusUpdates(calls)).toEqual([
+      [WORK_ITEM_ID, "picked", "needs_human", OWNER_STOP_NOTE],
+    ]);
+  });
+
+  test("returns needs_human with the reason of the check", async () => {
+    const { result } = await run(mergeInput(), { ownerStop: OWNER_STOP });
+
+    expect(result).toEqual({
+      workItemId: WORK_ITEM_ID,
+      action: "needs_human",
+      status: "needs_human",
+      reason: OWNER_STOP_NOTE,
+    });
+  });
+
+  test("notifies the stop with the pull request as the target", async () => {
+    const { calls } = await run(mergeInput(), { ownerStop: OWNER_STOP });
+
+    expect(needsHumanEvent(calls)?.target).toEqual({ kind: "pr", number: 12 });
+  });
+
+  test("does not check when the pull request no longer matches", async () => {
+    const { calls } = await run(mergeInput(), {
+      pr: openPr({ headSha: OTHER_HEAD }),
+    });
+
+    expect(named(calls, "ensureRepoOwner")).toHaveLength(0);
+  });
+
+  test("does not write when the check cannot read the owner", async () => {
+    const calls = await callsOfFailingRun(mergeInput(), {
+      ownerCheckError: new GitHubHttpError(
+        "GET repo failed with HTTP 502",
+        502,
+      ),
+    });
+
+    expect(
+      named(calls, "mergePullRequest").length +
+        named(calls, "createPrReview").length +
+        named(calls, "updateStatus").length,
+    ).toBe(0);
+  });
+
+  test("throws the error of the check when it cannot read the owner", async () => {
+    const { deps } = fake({
+      ownerCheckError: new GitHubHttpError(
+        "GET repo failed with HTTP 502",
+        502,
+      ),
+    });
+
+    await expect(
+      runDependabotFinish(deps, {
+        workItemId: WORK_ITEM_ID,
+        input: mergeInput(),
+        instanceName: INSTANCE,
+        fixLabel: FIX_LABEL,
+        enabled: true,
+        mergeEnabled: true,
+      }),
+    ).rejects.toBeInstanceOf(GitHubHttpError);
   });
 });
 

@@ -6,7 +6,11 @@
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "../lib/config.ts";
-import { getWorkItem, updateStatusIfCurrent } from "../lib/db.ts";
+import {
+  addNoticeUnlessUnresolved,
+  getWorkItem,
+  updateStatusIfCurrent,
+} from "../lib/db.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
@@ -34,6 +38,10 @@ import {
   withMarker,
 } from "../lib/github.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import {
+  repoOwnerGateDeps,
+  repoOwnerStopReason,
+} from "../lib/repo_owner_gate.ts";
 import type { WorkItem } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import {
@@ -273,6 +281,15 @@ export type DependabotFinishDeps = {
     repo: string,
     branch: string,
   ) => Promise<string>;
+  /**
+   * GitHubへ書く直前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
+   * 通らないときは止める理由を返し、通るときは`null`を返す。noticeは照合が残す。
+   * 取得の失敗(404以外)は例外のまま投げる。
+   */
+  readonly ensureRepoOwner: (
+    owner: string,
+    repo: string,
+  ) => Promise<string | null>;
   readonly getViewerLogin: () => Promise<string>;
   readonly listPrReviews: (
     owner: string,
@@ -350,6 +367,9 @@ function errorText(error: unknown): string {
  * 7. `decideAssessedOutcome`で結論を出す。GitHubに書く前に、PRを読み直す。
  *    閉じたかマージ済みなら取り消し(`pr_closed`)、headが動いていれば取り消し(`head_moved`)、
  *    baseがこのリポジトリの`main`でない、headが別のリポジトリにあるときは人に回す。
+ *    読み直しを通ったら、書き込みの直前に1回だけ、リポジトリのオーナーの数値IDを照合する。
+ *    通らないときは、マージも所見の投稿もラベルの付与もせず、その理由で人に回す。
+ *    準備の入口の照合から影響調査を挟むので、その間に名前が別の人に渡っていても、相手のPRに書かないためである。
  *    `dependabot_merge_enabled`が偽(試運転)なら、マージの直前の確認を終えた後、マージせずに人に回す。
  * 8. マージ: headのshaを固定して1回だけマージを要求し、成功したら`reviewed`(`merged`)を1回だけ記録する。
  *    記録がfalse(ほかの処理が先に動かした)か例外のときは、警告だけ残してステップは成功で返す。
@@ -535,6 +555,9 @@ export async function runDependabotFinish(
   const outcome = decideAssessedOutcome(assessed);
   const stop = await recheck();
   if (stop !== null) return stop;
+
+  const ownerStop = await deps.ensureRepoOwner(owner, repo);
+  if (ownerStop !== null) return toHuman(dependabotReason("finish", ownerStop));
 
   if (outcome.outcome === "merge") {
     /**
@@ -757,6 +780,13 @@ export async function main(
         mergePullRequest(client, owner, repo, number, headSha),
       getBranchSha: (owner, repo, branch) =>
         getBranchSha(client, owner, repo, branch),
+      ensureRepoOwner: (owner, repo) =>
+        repoOwnerStopReason(
+          config,
+          owner,
+          repo,
+          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
       getViewerLogin: async () => (await getViewer(client)).login,
       listPrReviews: async (owner, repo, number, viewer) =>
         (await listPrReviews(client, owner, repo, number, viewer)).items,

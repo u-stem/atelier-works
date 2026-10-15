@@ -160,14 +160,16 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 - dependabotのPRの取得(`poll_dependabot`)。作業項目を作る前に照合する。
 - フォームで投入する`manual_intake_create_issue`。Issueを作る前に照合する。
 - Issue化の提案を処理する`issue_proposal_apply`。承認は判断の記録の前に、却下は返信の前に、1回だけ照合する。
-- 長い実行を挟んだ後の書き込みのうち、次の4つの処理。Claudeの実行と検査の間に名前が別の人に渡りうるので、準備の入口に加えて、書き込みの直前にも1回照合する。
+- 長い実行を挟んだ後の書き込みのうち、次の5つの処理。Claudeの実行と検査の間に名前が別の人に渡りうるので、準備の入口に加えて、書き込みの直前にも1回照合する。
   実装の終了処理(`implement_finish`)は、pushとリモートブランチの削除の前に照合する。
   PR修正の終了処理(`pr_fix_finish`)は、pushの前に照合する。
   PRレビューの投稿(`pr_review_post`)は、レビューの投稿の前に照合する。
+  dependabotの終了処理(`dependabot_finish`)は、PRを読み直した後、マージ、所見の投稿、ラベルの付与の前に照合する。
   draw.ioのビューアを上げる`drawio_viewer_bump`は、`factory_repo_id`をブランチの作成の前に照合する。
 
-dependabotの終了処理(`dependabot_finish`)は、この照合の対象に含まれない。
-理由と残る余地は、[セキュリティ](security.md#オーナーの数値idの照合)の残るリスクにある。
+書き込みの直前の照合に落ちた処理は、書かずに止める。
+dependabotの終了処理では、作業項目を人に回し、`owner_id_mismatch`のnoticeを残す。
+残る余地は、[セキュリティ](security.md#オーナーの数値idの照合)の残るリスクにある。
 
 照合は、リポジトリのオーナーの名前で`owners`を引いて行う。
 大文字と小文字は区別しない。
