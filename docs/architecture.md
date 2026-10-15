@@ -410,6 +410,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/metadata_hash` | script | [LIB] メタデータのhashの再計算 |
+| `f/factory/lib/metadata_git_ports` | script | [LIB] メタデータのhashの再計算が読むgitのポート |
 | `f/factory/lib/metadata_precheck` | script | [LIB] メタデータのhashの再計算の事前検査 |
 | `f/factory/lib/metadata_signature` | script | [LIB] メタデータのmainの引数の比較 |
 | `f/factory/lib/metadata_patch_imports` | script | [LIB] メタデータのパッチのimportの読み取り |

@@ -573,6 +573,9 @@ describe("metadata patch manifest files", () => {
     "f/factory/lib/metadata_signature.ts",
     "f/factory/lib/metadata_signature.script.yaml",
     "f/factory/lib/metadata_signature.script.lock",
+    "f/factory/lib/metadata_git_ports.ts",
+    "f/factory/lib/metadata_git_ports.script.yaml",
+    "f/factory/lib/metadata_git_ports.script.lock",
   ];
   const NEAR_MISSES = [
     "f/factory/lib/metadata_patch_manifest.test.ts",

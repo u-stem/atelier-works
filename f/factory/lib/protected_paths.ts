@@ -86,10 +86,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * パスの許可リスト、manifestの形、zipの読み方、yamlの許可するキー、importの読み方、適用の条件、
  * トークンの渡し先と取得先を決める。書き換えられると、パッチの受け取り側の検査が緩む。
  * lockは依存が無く、`windmill-client`の版を上げる変更で書き換わらないので、正当な変更を止めない。
- * `wmill-lock.yaml`のhashを自前で再計算する部品(`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`)と、
- * それぞれの`.script.yaml`、`.script.lock`も守る。
- * hashの算法、再計算してよい条件、`main`の引数の比べ方を決める。書き換えられると、依存が変わるPRや、
- * 入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
+ * `wmill-lock.yaml`のhashを自前で再計算する部品(`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、
+ * `lib/metadata_git_ports.ts`)と、それぞれの`.script.yaml`、`.script.lock`も守る。
+ * hashの算法、再計算してよい条件、`main`の引数の比べ方、検査が読むgitのオブジェクトの取り方を決める。
+ * 書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
  * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
@@ -170,6 +170,9 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/metadata_signature.ts",
   "f/factory/lib/metadata_signature.script.yaml",
   "f/factory/lib/metadata_signature.script.lock",
+  "f/factory/lib/metadata_git_ports.ts",
+  "f/factory/lib/metadata_git_ports.script.yaml",
+  "f/factory/lib/metadata_git_ports.script.lock",
 ];
 
 /**

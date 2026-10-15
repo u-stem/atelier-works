@@ -8,7 +8,7 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/ci_fix_prompt.ts`、`lib/ci_fix_paths.ts`
 - `lib/ci_fix_round.ts`
 - `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
-- `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`
+- `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、`lib/metadata_git_ports.ts`
 
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
@@ -639,8 +639,9 @@ artifactを経由しないので、取得、zip、出どころ、manifestの検�
 | `lib/metadata_hash.ts` | ファイルの内容から、`wmill-lock.yaml`の全キーのhashを計算する(`computeLockEntries`)。既存のlockの行ごとの値だけを置き換える(`patchWmillLock`) |
 | `lib/metadata_precheck.ts` | gitの木を読み、依存が変わらない再生成かを確かめる(`planMetadataRehash`)。確かめられたときだけ、新しい本文と、変わったキーを返す。正しさを守る検査で、敵対的な入力に対する境界ではない |
 | `lib/metadata_signature.ts` | `main`と`preprocessor`の署名、トップレベルの型宣言、Windmillの注釈を、字句で読んで比べる |
+| `lib/metadata_git_ports.ts` | 事前検査が読むポートを、ローカルのcloneのgitで実装する(`createGitPrecheckPorts`) |
 
-3つとも、保護パスである。
+4つとも、保護パスである。
 
 ### hashの算法
 
@@ -674,7 +675,15 @@ wmillも消さない項目なので、baseの先端の木で、ファイルか�
 読み取りは、木の一覧(`listTree`)、blobの読み取り(`readBlob`)、祖先の判定(`isAncestor`)の3つのポートで行う。
 ポートを実装するときは、gitのオブジェクトから読む。
 作業ツリーのファイルは開かない。
-このリポジトリの部品は、ポートの型と、受け取った値の検査だけを持つ。gitを使うポートの実装は、配線で行う。
+`metadata_precheck.ts`は、ポートの型と、受け取った値の検査だけを持つ。gitを使うポートは`metadata_git_ports.ts`が実装する。
+
+- `listTree`は、`git ls-tree -r -z -l <sha>`を実行する。submoduleの大きさ(`-`)は0にする。出力が上限(32MiB)で切れたとき、時間を超えたとき、gitが失敗したときは例外を投げる。
+- `readBlob`は、同じcommitの木の項目から`oid`を引き、`git cat-file blob <oid>`を実行する。パスはgitの引数にしない。木は、commitごとに1回だけ読む。
+- blobの標準出力は、文字列に復号せず、バイト列で受け取る。復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わり、hashの入力が変わるためである。
+- 木に無いパスは`missing`にする。blobでない項目、gitの失敗、時間切れ、大きさが木の申告と違う内容は`failed`にする。
+- `isAncestor`は、`git merge-base --is-ancestor`の終了コード0を`true`、1を`false`にし、それ以外は`null`にする。
+- `ref`は40桁の小文字の16進数に限る。短い名前は、別のrefに解決されうるためである。
+- gitは引数の配列で実行し、`buildGitArgv`の固定の設定と`localGitEnv`の環境変数を使う。
 PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 名前の変更は、削除と追加の2件に見えるので、scriptの集合が変わったものとして扱う。
 
