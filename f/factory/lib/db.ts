@@ -5958,13 +5958,16 @@ export async function setPrConflictFixHold(
 export type ReleasePrConflictFixOptions = {
   /** 渡せば、保留の理由として書く。渡さなければ今の値を残す。1〜64字。 */
   readonly holdReason?: string;
-  /** 渡せば、`fix_work_item_id`がこの作業項目の行だけを戻す。別の作業項目に起動し直された行を戻さないため。 */
-  readonly fixWorkItemId?: number;
+  /**
+   * 結びを外す作業項目のID。`fix_work_item_id`がこの作業項目の行だけを戻す。
+   * 別の作業項目に起動し直された行を戻さないため、省略できない。
+   */
+  readonly fixWorkItemId: number;
 };
 
 /**
  * 競合の行から、直す作業項目の結び(`fix_work_item_id`)を外す。
- * この呼び出しで外したら`true`を返す。結ばれていない行は書き換えず、`false`を返す。
+ * この呼び出しで外したら`true`を返す。行が`fixWorkItemId`の作業項目に結ばれていなければ書き換えず、`false`を返す。
  * 同じ呼び出しを繰り返しても結果は変わらない。行の状態は条件にしない。
  * 作業項目が動いている間に競合が解けた(`resolved`)行や閉じた(`closed`)行も、結びは外す必要があるためである。
  * `holdReason`を書くのは、結ばれた作業項目の`conflict_episode`が、行の今の`episode`と同じときだけである。
@@ -5975,16 +5978,14 @@ export type ReleasePrConflictFixOptions = {
  */
 export async function releasePrConflictFix(
   id: number,
-  options: ReleasePrConflictFixOptions = {},
+  options: ReleasePrConflictFixOptions,
   sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
   assertPositiveId(id, "pr conflict check id");
+  assertPositiveId(options.fixWorkItemId, "work item id");
   if (options.holdReason !== undefined) assertFixHoldReason(options.holdReason);
-  if (options.fixWorkItemId !== undefined) {
-    assertPositiveId(options.fixWorkItemId, "work item id");
-  }
   const holdReason = options.holdReason ?? null;
-  const fixWorkItemId = options.fixWorkItemId ?? null;
+  const fixWorkItemId = options.fixWorkItemId;
   const rows = await sql`
     UPDATE factory.pr_conflict_checks AS r
     SET fix_work_item_id = NULL,
@@ -5997,7 +5998,7 @@ export async function releasePrConflictFix(
           ELSE r.fix_hold_reason END,
         updated_at = now()
     WHERE r.id = ${id}::bigint AND r.fix_work_item_id IS NOT NULL
-      AND (${fixWorkItemId}::bigint IS NULL OR r.fix_work_item_id = ${fixWorkItemId}::bigint)
+      AND r.fix_work_item_id = ${fixWorkItemId}::bigint
     RETURNING r.id
   `.fetch();
   return rows.length > 0;

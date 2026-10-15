@@ -4,7 +4,6 @@ import {
   CONFLICT_ROUND_DETAILS,
   conflictRoundReason,
 } from "../../f/factory/lib/conflict_fix_round.ts";
-import { STALE_IMAGE_WAIT_MS } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import {
   type ConflictFixItemState,
   decideConflictFixRecovery,
@@ -12,7 +11,6 @@ import {
 } from "../../f/factory/lib/pr_conflict_fix_recovery.ts";
 import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 
-const NOW = new Date("2026-10-15T12:00:00Z");
 const STALE_IMAGE_NOTE =
   "worker image is stale: run mise run up: sudo is missing";
 
@@ -22,7 +20,6 @@ function item(
 ): ConflictFixItemState {
   return {
     status,
-    updatedAt: new Date(NOW.getTime() - 60_000),
     note: null,
     pushed: false,
     launched: true,
@@ -106,27 +103,27 @@ describe("holdReasonForConflictStoppedItem", () => {
 
 describe("decideConflictFixRecovery", () => {
   test("releases a row whose work item does not exist, without a hold", () => {
-    expect(decideConflictFixRecovery(null, NOW)).toEqual({
+    expect(decideConflictFixRecovery(null)).toEqual({
       kind: "release",
       hold: null,
     });
   });
 
   test("keeps a row whose work item is still fixing", () => {
-    expect(decideConflictFixRecovery(item("fixing"), NOW)).toEqual({
+    expect(decideConflictFixRecovery(item("fixing"))).toEqual({
       kind: "keep",
     });
   });
 
   test("reports a push for rereview_requested", () => {
-    expect(decideConflictFixRecovery(item("rereview_requested"), NOW)).toEqual({
+    expect(decideConflictFixRecovery(item("rereview_requested"))).toEqual({
       kind: "pushed",
     });
   });
 
   test("reports a push for a stopped work item with a pushed commit", () => {
     expect(
-      decideConflictFixRecovery(item("needs_human", { pushed: true }), NOW),
+      decideConflictFixRecovery(item("needs_human", { pushed: true })),
     ).toEqual({ kind: "pushed" });
   });
 
@@ -136,7 +133,6 @@ describe("decideConflictFixRecovery", () => {
         item("reviewed", {
           note: conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate),
         }),
-        NOW,
       ),
     ).toEqual({ kind: "up_to_date" });
   });
@@ -147,14 +143,13 @@ describe("decideConflictFixRecovery", () => {
         item("reviewed", {
           note: conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate),
         }),
-        NOW,
       ).kind,
     ).not.toBe("pushed");
   });
 
   test("releases a reviewed work item without the up_to_date note, without a hold", () => {
     expect(
-      decideConflictFixRecovery(item("reviewed", { note: "other" }), NOW),
+      decideConflictFixRecovery(item("reviewed", { note: "other" })),
     ).toEqual({ kind: "release", hold: null });
   });
 
@@ -170,7 +165,6 @@ describe("decideConflictFixRecovery", () => {
       expect(
         decideConflictFixRecovery(
           item("needs_human", { note: conflictRoundReason(detail) }),
-          NOW,
         ),
       ).toEqual({ kind: "release", hold: reason });
     },
@@ -180,13 +174,12 @@ describe("decideConflictFixRecovery", () => {
     expect(
       decideConflictFixRecovery(
         item("needs_human", { note: "conflict round: claude blocked: x" }),
-        NOW,
       ),
     ).toEqual({ kind: "release", hold: "fix_stopped" });
   });
 
   test("holds fix_stopped for a needs_human work item without a note", () => {
-    expect(decideConflictFixRecovery(item("needs_human"), NOW)).toEqual({
+    expect(decideConflictFixRecovery(item("needs_human"))).toEqual({
       kind: "release",
       hold: "fix_stopped",
     });
@@ -198,14 +191,13 @@ describe("decideConflictFixRecovery", () => {
         item("blocked", {
           note: conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed),
         }),
-        NOW,
       ),
     ).toEqual({ kind: "release", hold: "check_failed" });
   });
 
   test("holds fix_stopped for a blocked work item with an unmapped note", () => {
     expect(
-      decideConflictFixRecovery(item("blocked", { note: "boom" }), NOW),
+      decideConflictFixRecovery(item("blocked", { note: "boom" })),
     ).toEqual({ kind: "release", hold: "fix_stopped" });
   });
 
@@ -217,45 +209,35 @@ describe("decideConflictFixRecovery", () => {
     ).toBe(true);
   });
 
-  test("keeps a blocked work item stopped by a stale image inside the wait", () => {
+  test("releases a blocked work item stopped by a stale image at once, without a hold", () => {
     expect(
-      decideConflictFixRecovery(
-        item("blocked", {
-          note: STALE_IMAGE_NOTE,
-          updatedAt: new Date(NOW.getTime() - STALE_IMAGE_WAIT_MS + 1),
-        }),
-        NOW,
-      ),
-    ).toEqual({ kind: "keep" });
+      decideConflictFixRecovery(item("blocked", { note: STALE_IMAGE_NOTE })),
+    ).toEqual({ kind: "release", hold: null });
   });
 
-  test("releases a blocked work item stopped by a stale image after the wait, without a hold", () => {
+  test("does not hold a stale image stop even when the episodes differ", () => {
     expect(
       decideConflictFixRecovery(
-        item("blocked", {
-          note: STALE_IMAGE_NOTE,
-          updatedAt: new Date(NOW.getTime() - STALE_IMAGE_WAIT_MS),
-        }),
-        NOW,
+        item("blocked", { note: STALE_IMAGE_NOTE, rowEpisode: 2 }),
       ),
     ).toEqual({ kind: "release", hold: null });
   });
 
   test("releases a failed work item that never started a flow, without a hold", () => {
     expect(
-      decideConflictFixRecovery(item("failed", { launched: false }), NOW),
+      decideConflictFixRecovery(item("failed", { launched: false })),
     ).toEqual({ kind: "release", hold: null });
   });
 
   test("holds fix_stopped for a failed work item that started a flow", () => {
-    expect(decideConflictFixRecovery(item("failed"), NOW)).toEqual({
+    expect(decideConflictFixRecovery(item("failed"))).toEqual({
       kind: "release",
       hold: "fix_stopped",
     });
   });
 
   test("releases a cancelled work item without a hold", () => {
-    expect(decideConflictFixRecovery(item("cancelled"), NOW)).toEqual({
+    expect(decideConflictFixRecovery(item("cancelled"))).toEqual({
       kind: "release",
       hold: null,
     });
@@ -278,7 +260,6 @@ describe("decideConflictFixRecovery", () => {
       expect(
         decideConflictFixRecovery(
           item(status, { ...overrides, conflictEpisode: 1, rowEpisode: 2 }),
-          NOW,
         ),
       ).toEqual({ kind: "release", hold: null });
     },
@@ -288,7 +269,6 @@ describe("decideConflictFixRecovery", () => {
     expect(
       decideConflictFixRecovery(
         item("fixing", { conflictEpisode: 1, rowEpisode: 2 }),
-        NOW,
       ),
     ).toEqual({ kind: "keep" });
   });
@@ -297,17 +277,13 @@ describe("decideConflictFixRecovery", () => {
     expect(
       decideConflictFixRecovery(
         item("rereview_requested", { conflictEpisode: 1, rowEpisode: 2 }),
-        NOW,
       ),
     ).toEqual({ kind: "pushed" });
   });
 
   test("releases a work item without a conflict episode without a hold", () => {
     expect(
-      decideConflictFixRecovery(
-        item("needs_human", { conflictEpisode: null }),
-        NOW,
-      ),
+      decideConflictFixRecovery(item("needs_human", { conflictEpisode: null })),
     ).toEqual({ kind: "release", hold: null });
   });
 
@@ -315,7 +291,6 @@ describe("decideConflictFixRecovery", () => {
     expect(
       decideConflictFixRecovery(
         item("needs_human", { conflictEpisode: 2, rowEpisode: 2 }),
-        NOW,
       ),
     ).toEqual({ kind: "release", hold: "fix_stopped" });
   });

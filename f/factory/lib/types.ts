@@ -1087,6 +1087,7 @@ export type FactoryConfig = {
   pr_conflict_fix_enabled_since: Date | null;
   /**
    * 競合の回の開始から通知を待つ時間(分)。0以上1440以下の整数。既定は60。
+   * `pr_conflict_fix_enabled`が真なら、10以上でなければならない。巡回の間隔は5分で、0だと最初の巡回から通知が先に出て、起動の判断が一度も回らない。
    * 過ぎれば、保留のままでも、保留が無くても通知する。最終の保留は待たずに通知する。
    */
   pr_conflict_fix_notify_grace_min: number;

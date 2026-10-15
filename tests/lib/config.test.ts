@@ -1060,6 +1060,35 @@ describe("pr_conflict_fix_notify_grace_min", () => {
     expect(config.pr_conflict_fix_notify_grace_min).toBe(1440);
   });
 
+  test("throws when the fix is enabled and the grace is zero", () => {
+    const raw = {
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_notify_grace_min: 0,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("throws when the fix is enabled and the grace is below the patrol interval", () => {
+    const raw = {
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_notify_grace_min: 9,
+    };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+
+  test("accepts 10 as the grace while the fix is enabled", () => {
+    const config = parseFactoryConfig({
+      ...CONFLICT_FIX_ENABLED_RAW,
+      pr_conflict_fix_notify_grace_min: 10,
+    });
+    expect(config.pr_conflict_fix_notify_grace_min).toBe(10);
+  });
+
+  test("accepts the default grace while the fix is enabled", () => {
+    const config = parseFactoryConfig(CONFLICT_FIX_ENABLED_RAW);
+    expect(config.pr_conflict_fix_notify_grace_min).toBe(60);
+  });
+
   test.each([
     ["negative", -1],
     ["1441", 1441],

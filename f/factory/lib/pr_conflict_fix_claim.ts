@@ -76,7 +76,7 @@ function hold(reason: PrConflictFixHoldReason): ConflictFixClaimDecision {
 /**
  * 競合の行を起動してよいかを決める。次の順に確かめ、最初に当たったものを返す。
  * 1. 直す作業項目が動いていれば`last_fix_unsettled`で保留する。
- * 2. その後でPRを読み直す。閉じていれば、行のheadから進んでいれば、skipする。
+ * 2. その後でPRを読み直す。閉じているか、headが行から進んでいれば、skipする。
  *    baseが既定のブランチでなければ`base_not_default`、ドラフトかauto-mergeが有効なら
  *    `pr_draft_or_auto_merge`で保留する。
  *    作業項目の状態を先に読むのは、読んでいる間に直す作業項目がpushしたとき、

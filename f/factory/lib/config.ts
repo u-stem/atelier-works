@@ -426,6 +426,12 @@ const PR_CONFLICT_FIX_MAX_ROUNDS_PER_PR_RANGE = { min: 2, max: 10 } as const;
 const PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE = { min: 0, max: 1440 } as const;
 
 /**
+ * 競合を直す起動が有効なときの、`pr_conflict_fix_notify_grace_min`の下限(分)。
+ * 巡回の間隔は5分で、10分なら巡回が2回、猶予の内側に入る。0だと最初の巡回で通知が先に出て、起動が一度も起きない。
+ */
+const PR_CONFLICT_FIX_NOTIFY_GRACE_MIN_WHEN_ENABLED = 10;
+
+/**
  * `raw[field]`を、`min`以上`max`以下の整数として返す。値が無ければ`fallback`を返す。
  * 範囲を外れたときと、整数でないときは例外を投げる。
  */
@@ -714,6 +720,22 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       '"pr_conflict_fix_enabled_since" is required when "pr_conflict_fix_enabled" is true',
     );
   }
+  const prConflictFixNotifyGraceMin = integerInRangeField(
+    raw,
+    "pr_conflict_fix_notify_grace_min",
+    DEFAULTS.pr_conflict_fix_notify_grace_min,
+    PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE,
+  );
+  // 猶予が巡回の間隔(5分)に満たないと、最初の巡回で通知が先に出て、起動の判断が一度も回らない。
+  // 無効の間は検査しない。使わない設定の値で読み込みが例外を投げると、Factory全体が止まるためである。
+  if (
+    prConflictFixEnabled &&
+    prConflictFixNotifyGraceMin < PR_CONFLICT_FIX_NOTIFY_GRACE_MIN_WHEN_ENABLED
+  ) {
+    throw new ConfigValidationError(
+      `"pr_conflict_fix_notify_grace_min" must be at least ${String(PR_CONFLICT_FIX_NOTIFY_GRACE_MIN_WHEN_ENABLED)} when "pr_conflict_fix_enabled" is true`,
+    );
+  }
   // PR全体の上限が競合1回の上限以下だと、競合1回の上限に達する前にPR全体が止まる。
   // 無効の間は検査しない。使わない設定の組み合わせで読み込みが例外を投げると、Factory全体が止まるためである。
   // 各値の範囲は、有効かどうかによらず上で検査する。
@@ -929,12 +951,7 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     pr_conflict_fix_max_rounds: prConflictFixMaxRounds,
     pr_conflict_fix_max_rounds_per_pr: prConflictFixMaxRoundsPerPr,
     pr_conflict_fix_enabled_since: prConflictFixEnabledSince,
-    pr_conflict_fix_notify_grace_min: integerInRangeField(
-      raw,
-      "pr_conflict_fix_notify_grace_min",
-      DEFAULTS.pr_conflict_fix_notify_grace_min,
-      PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE,
-    ),
+    pr_conflict_fix_notify_grace_min: prConflictFixNotifyGraceMin,
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
       DEFAULTS.check_commands_by_repo,

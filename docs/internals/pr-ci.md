@@ -329,7 +329,7 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 1. 通知した理由が`ci_other_conclusion`なら、`other_conclusion`で保留する。
 2. そのPRに、終端でない直す作業項目があれば、`last_fix_unsettled`で保留する。
 3. 行のheadのレビューの行(`factory.reviews`の`head_sha`)が無ければ、`not_reviewed`で保留する。
-4. PRを読み直す。閉じていれば、行のheadから進んでいれば、何もしない。ドラフトか、auto-mergeが有効なら、`pr_draft_or_auto_merge`で保留する。
+4. PRを読み直す。閉じているか、headが行から進んでいれば、何もしない。ドラフトか、auto-mergeが有効なら、`pr_draft_or_auto_merge`で保留する。
 5. PRのすべてのcommit(250件まで)の本文の最後の段落に、次の行が無ければ、`not_factory_head`で保留する。
    `Generated-By: Software Factory (<instance_name>)`
    250件に達したときも保留する。
@@ -783,12 +783,14 @@ PRの今の状態から、次の順に扱いを決める(`decidePrConflict`)。
 | `pr_conflict_fix_max_rounds` | `2` | 競合の1回(`episode`)で起動できる数の上限。1以上5以下の整数 |
 | `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数の上限。2以上10以下の整数。`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_fix_max_rounds`より大きい |
 | `pr_conflict_fix_enabled_since` | 無し | 今の競合の回が始まった時刻(`episode_started_at`)がこの時刻より前の競合を、直す対象にしない。`pr_conflict_fix_enabled`が`true`なら必須 |
-| `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下の整数 |
+| `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下の整数。`pr_conflict_fix_enabled`が`true`なら、10以上 |
 
 `pr_conflict_fix_enabled`が`true`なら、`pr_conflict_watch_enabled`も`true`でなければならない。
 起動の対象は検知が記録した行なので、検知が止まっていると何も起動できない。この食い違いは、設定の読み込みで拒否する。
 `pr_conflict_fix_enabled_since`は、`pr_ci_fix_enabled_since`と同じ形の日時にする。
 時刻が無いと、有効にする前から残る競合を、すべて直しにいくためである。
+起動が有効なとき、猶予は巡回の間隔(5分)より大きい10分以上でなければならない。
+猶予が0だと、最初の巡回から通知が先に出て、起動の判断が一度も回らないためである。
 起動が有効なとき、PR全体の上限が競合1回の上限以下の設定は拒否する。
 競合1回の上限へ達する前に、PR全体の上限が起動を止めるためである。
 起動が無効の間は、この組み合わせを検査しない。使わない設定の食い違いで読み込みが失敗し、Factory全体が止まるのを避けるためである。
@@ -861,13 +863,18 @@ Factoryのレビューの記録は要求しない。
 その場合は、`pr_conflict_fix_notify_grace_min`を運用で調整する。
 
 `decideConflictFixRecovery`は、直す作業項目が結ばれた行について、行き先を決める。
+作業項目の状態ごとに、次のように決める。
 
-- 作業項目が存在しないとき(掃除で消えた)は、終端として扱い、保留なしで結びを外す。
-- 作業項目が直していた競合の回が、行の今の回と違うときは、保留を書かずに結びだけを外す。古い回の作業項目の終わり方を、新しい回の行に最終の保留として書かないためである。
-- 動いていれば、そのままにする。
-- pushしていれば、結びを外す。pushした回と、何も変えずに終えた回(`reviewed`で注記が`conflict round: up_to_date`)は区別する。
-- `needs_human`と`blocked`は、止めた理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留する。
-- フローの起動より前に失敗した`failed`は、保留なしで結びを外す。
+- 存在しない(掃除で消えた): 終端として扱い、保留なしで結びを外す。
+- 動いている(終端でない): そのままにする。
+- pushした(`rereview_requested`か、直す回がpushしたcommitを記録している): 結びを外す。
+- 何も変えずに終えた(`reviewed`で注記が`conflict round: up_to_date`): 結びを外す。pushしていないので、pushした回と区別する。注記がそれ以外の`reviewed`は、保留なしで結びを外す。
+- `needs_human`と`blocked`(次の行を除く): 止めた理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
+- イメージが古い理由で止まった`blocked`: 待たずに、保留なしで結びを外す。待つと、その間は通知されず、起動もされないためである。起動し直しは、行の起動の回数の上限と`recently_fixed`が止める。
+- `failed`: フローの起動より前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。起動した後なら、止めた理由を写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
+- `cancelled`などのほかの終端: 保留なしで結びを外す。
+
+保留を書く場合でも、作業項目が直していた競合の回が行の今の回と違うときは、保留を書かずに結びだけを外す。古い回の作業項目の終わり方を、新しい回の行に最終の保留として書かないためである。
 
 止めた理由の注記は、固定文への完全一致だけで保留の理由に写す。
 

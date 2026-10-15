@@ -10,7 +10,6 @@ import {
 import {
   BUDGET_REASON,
   DRAFT_OR_AUTO_MERGE_REASONS,
-  STALE_IMAGE_WAIT_MS,
 } from "./pr_ci_fix_recovery.ts";
 import type { PrConflictFixHoldReason } from "./pr_conflict_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
@@ -18,8 +17,6 @@ import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
 /** 直す作業項目の状態のうち、行の行き先を決めるのに要る部分。 */
 export type ConflictFixItemState = {
   readonly status: WorkItemStatus;
-  /** 状態が最後に動いた時刻。 */
-  readonly updatedAt: Date;
   /** 今の状態へ移った最新の遷移の注記。止めた理由が入る。 */
   readonly note: string | null;
   /** 直す回が、commitをpushした記録(`fix_rounds.commit_shas`)を持つか。 */
@@ -90,16 +87,15 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - 何も変えずに終えた作業項目(`reviewed`で注記が`up_to_date`)は、`up_to_date`にする。pushしていないので、`pushed`と区別する。
  *   注記が違う`reviewed`は、保留なしで結びを外す。
  * - `needs_human`と`blocked`は、理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留する。
- *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった`blocked`は、人がイメージを作り直す猶予として
- *   `STALE_IMAGE_WAIT_MS`の間は結びを外さず、過ぎたら保留なしで外す。待たずに起動し直すと、同じ理由で止まる回を重ねる。
- *   競合回は`retry_work_item`も自動の再開も対象外なので、この待ちの間に再開されることはない。
+ *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった`blocked`は、待たずに保留なしで結びを外す。
+ *   待つと、その間は通知も起動もされない。競合回は進行中の作業が無く、人が競合を直すと急ぐ必要も無いので、
+ *   CI回のような猶予は置かない。起動し直しは、行の起動の回数の上限と`recently_fixed`が止める。
  * - `failed`は、フローを起動する前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。
  *   起動し直す回数は、行の起動の回数の上限が止める。フローが起動した後の`failed`は、理由を写せれば写し、写せなければ`fix_stopped`で保留する。
  * - ほかの終端(`cancelled`など)は、保留なしで結びを外す。
  */
 function decideRecoveryByState(
   item: ConflictFixItemState | null,
-  now: Date,
 ): ConflictFixRecovery {
   if (item === null) return { kind: "release", hold: null };
   if (!isTerminal(item.status)) return { kind: "keep" };
@@ -123,9 +119,7 @@ function decideRecoveryByState(
       note !== null &&
       AUTO_RETRY_REASON_PREFIXES.some((prefix) => note.startsWith(prefix))
     ) {
-      return now.getTime() - item.updatedAt.getTime() < STALE_IMAGE_WAIT_MS
-        ? { kind: "keep" }
-        : { kind: "release", hold: null };
+      return { kind: "release", hold: null };
     }
     return {
       kind: "release",
@@ -148,9 +142,8 @@ function decideRecoveryByState(
  */
 export function decideConflictFixRecovery(
   item: ConflictFixItemState | null,
-  now: Date,
 ): ConflictFixRecovery {
-  const recovery = decideRecoveryByState(item, now);
+  const recovery = decideRecoveryByState(item);
   if (
     item !== null &&
     recovery.kind === "release" &&

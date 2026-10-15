@@ -647,61 +647,93 @@ describe("setPrConflictFixHold", () => {
 describe("releasePrConflictFix", () => {
   test("unbinds only a row that has a fix work item", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, {}, sql);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
     expect(calls[0]?.text).toContain("fix_work_item_id IS NOT NULL");
+  });
+
+  test("releases only the row bound to the given work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.text).toMatch(
+      /AND r\.fix_work_item_id =\s+\?\s*::bigint\s+RETURNING/,
+    );
+  });
+
+  test("binds the given work item id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.values).toContain(31);
   });
 
   test("clears the fix work item id", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, {}, sql);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
     expect(calls[0]?.text).toContain("SET fix_work_item_id = NULL");
   });
 
   test("does not require the row to be conflicted", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, {}, sql);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
     expect(calls[0]?.text).not.toContain("state = 'conflicted'");
   });
 
   test("keeps the current hold when no reason is passed", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, {}, sql);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
     expect(calls[0]?.text).toContain("THEN COALESCE(");
   });
 
   test("writes the hold only when the work item belongs to the episode of the row", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, { holdReason: "fix_stopped" }, sql);
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "fix_stopped" },
+      sql,
+    );
     expect(calls[0]?.text).toContain("w.conflict_episode = r.episode");
   });
 
   test("checks that the work item is tied to the same row", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, { holdReason: "fix_stopped" }, sql);
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "fix_stopped" },
+      sql,
+    );
     expect(calls[0]?.text).toContain("w.conflict_check_id = r.id");
   });
 
   test("keeps the current hold when the episodes differ", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, { holdReason: "fix_stopped" }, sql);
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "fix_stopped" },
+      sql,
+    );
     expect(calls[0]?.text).toContain("ELSE r.fix_hold_reason END");
   });
 
   test("returns true when it unbound the row", async () => {
     const { sql } = createFakeSqlClient([[{ id: 7 }]]);
-    expect(await releasePrConflictFix(7, {}, sql)).toBe(true);
+    expect(await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql)).toBe(
+      true,
+    );
   });
 
   test("returns false when the row was not bound", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await releasePrConflictFix(7, {}, sql)).toBe(false);
+    expect(await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql)).toBe(
+      false,
+    );
   });
 
   test("rejects an empty hold reason, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, { holdReason: "" }, sql).catch(
-      () => undefined,
-    );
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "" },
+      sql,
+    ).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 

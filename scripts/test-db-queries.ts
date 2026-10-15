@@ -5562,14 +5562,19 @@ check(
 );
 check(
   "conflict release: a row that points at no work item is not released again",
-  (await releasePrConflictFix(cfOk.id, {}, sql)) === false,
+  (await releasePrConflictFix(cfOk.id, { fixWorkItemId: cfOkId ?? 0 }, sql)) ===
+    false,
 );
 const cfRelease = await conflictFixRow(712, CF_HEAD_1);
-await cfClaim(cfRelease.id, CF_HEAD_1);
+const cfReleaseId = await cfClaim(cfRelease.id, CF_HEAD_1);
 await settlePrConflictCheck(cfRelease.id, "resolved", sql);
 check(
   "conflict release: a row that was resolved while its work item ran is released",
-  (await releasePrConflictFix(cfRelease.id, {}, sql)) === true,
+  (await releasePrConflictFix(
+    cfRelease.id,
+    { fixWorkItemId: cfReleaseId ?? 0 },
+    sql,
+  )) === true,
 );
 check(
   "conflict release: a released row that was resolved no longer points at a work item",
@@ -5581,7 +5586,11 @@ check(
 );
 check(
   "conflict release: a hold reason longer than the column is refused before the query",
-  await releasePrConflictFix(cfRelease.id, { holdReason: "x".repeat(65) }, sql)
+  await releasePrConflictFix(
+    cfRelease.id,
+    { fixWorkItemId: cfReleaseId ?? 0, holdReason: "x".repeat(65) },
+    sql,
+  )
     .then(() => false)
     .catch(() => true),
 );
