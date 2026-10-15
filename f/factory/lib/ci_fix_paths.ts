@@ -137,7 +137,8 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * 拡張子の違うファイル(`.ts`、`.script.yaml`、`.script.lock`)をまとめて拒否するため、
  * ステムで終わらせる。
  * Claudeの実行、保護パスの判定、ログの機密保持、作業ディレクトリ、検査の隔離、pr_fixのstep、
- * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、pr_fixフローの起動(`pr_fix_launch`)、
+ * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、
+ * 競合の検知と競合を直す回の判断・プロンプト(`pr_conflict_`と`conflict_fix_`で始まる部品)、pr_fixフローの起動(`pr_fix_launch`)、
  * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)、
  * メタデータのパッチの検査と`wmill-lock.yaml`のhashの再計算(`metadata_`で始まる部品)である。
  */
@@ -160,10 +161,13 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/factory_repo_gate.",
   "f/factory/lib/ci_",
   "f/factory/lib/pr_ci_",
+  "f/factory/lib/pr_conflict_",
+  "f/factory/lib/conflict_fix_",
   "f/factory/lib/pr_fix_launch.",
   "f/factory/lib/main_ci_",
   "f/factory/lib/metadata_",
   "f/factory/watch_pr_ci.",
+  "f/factory/watch_pr_conflicts.",
   "f/factory/watch_main_ci.",
   "f/factory/steps/pr_fix_",
   "f/factory/steps/pr_workflow_support.",

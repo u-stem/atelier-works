@@ -550,10 +550,10 @@ gitは呼ばない。
   - `f/factory/lib/`の`claude`、`protected_paths`、`log`、`workspace`、`check_sandbox`、`check_runner`、`prompts`、`github`
   - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
   - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`
-  - `f/factory/lib/`の`ci_`、`pr_ci_`、`main_ci_`、`pr_fix_launch`
+  - `f/factory/lib/`の`ci_`、`pr_ci_`、`pr_conflict_`、`conflict_fix_`、`main_ci_`、`pr_fix_launch`
   - `f/factory/lib/`の`metadata_`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
-  - `f/factory/`の`watch_pr_ci`と`watch_main_ci`
+  - `f/factory/`の`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci`
 
 CI回のClaudeがこれらを書き換えると、自分を止める検査を弱められるためである。
 無視ファイルとテストの実行を変えるファイルは、`tests/`の配下の新規ファイルでも拒否する。
@@ -565,7 +565,8 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 拒否した安全装置が直接importするモジュールは、拒否するか、受け入れる理由を書いた表に載せる。
 表は`tests/lib/ci_fix_paths.test.ts`の`ACCEPTED_DEPENDENCIES`にあり、静的なimportを数えるテストが、一覧に無い依存や使われなくなった項目で失敗する。
 受け入れたのは、ほかのフローが日常的に直す共有モジュールで、拒否すると正当な修正を止めるものである。
-`db`、`discord`、`poll_support`、`implement_*`、`factory_clone`、`self_update_support`、`job_ids`、`prose_check`がこれにあたる。
+`db`、`discord`、`poll_support`、`implement_*`、`factory_clone`、`self_update_support`がこれにあたる。
+`job_ids`、`prose_check`、`console_support`もこれにあたる。
 
 テストのパスは、`tests`などのディレクトリの配下か、`*.test.ts`と`*.spec.ts`の形のものである。
 テストは追加だけを許す。
