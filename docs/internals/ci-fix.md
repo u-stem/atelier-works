@@ -352,13 +352,15 @@ stepの戻り値に混ざると、黙って記録されず、そのstepが失敗
 
 | 結果 | 条件 |
 | --- | --- |
-| `fixable` | 失敗したジョブがすべてソースの編集で直せる種類(`check`など)。失敗したジョブを返す |
-| `unfixable_job` | 名前が`metadata`で始まる、または名前が空。理由は`metadata_job`か`unnamed_job` |
+| `fixable` | 失敗したジョブがすべて、Factoryが自動で直せる種類。`metadata`以外で失敗したジョブ(`jobs`)と、`metadata`の失敗の有無(`metadataFailed`)を返す |
+| `unfixable_job` | 名前が空で、種類を決められない失敗がある |
 | `other_conclusion` | `failure`以外の結論。`cancelled`、`timed_out`、`startup_failure`、`action_required`、`stale`、`unknown` |
 | `no_failure` | 失敗したジョブが無い |
 
-`metadata`ジョブは`generate-metadata`で直す種類である。
-CI回のClaudeには、シェルもロックファイルを書く権限も無い。
+名前が`metadata`で始まるジョブの失敗は、Claudeではなく、`wmill-lock.yaml`のhashの再計算で直す。
+CI回のClaudeには、シェルもロックファイルを書く権限も無いためである。
+`metadata`だけが失敗したときは、`jobs`が空の`fixable`になる。ログは読まず、Claudeも起動しない。
+`check`などと同時に失敗したときは、`jobs`に`check`などだけが入り、`metadataFailed`が真になる。
 名前は正規化(互換文字を畳み、小文字にする)して比べる。
 複数のジョブが当たるときは、`unfixable_job`、`other_conclusion`、`fixable`の順に優先する。
 直せない失敗が混ざったまま一部だけを直しても、CIは通らないためである。

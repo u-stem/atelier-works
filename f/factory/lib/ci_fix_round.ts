@@ -462,26 +462,37 @@ export type CiGatherOutcome =
     }
   | { readonly kind: "blocked"; readonly reason: string };
 
-function blocked(detail: string): CiGatherOutcome {
+function blocked(detail: string): {
+  readonly kind: "blocked";
+  readonly reason: string;
+} {
   return { kind: "blocked", reason: `${REASON_PREFIX}: ${detail}` };
 }
 
+/** `readCiFailure`の結果。直せる失敗のときだけ、`fixable`で分類を返す。 */
+export type CiFailureRead =
+  | {
+      readonly kind: "fixable";
+      /** ジョブを読んだ失敗の実行。古い順に最大`CI_ROUND_MAX_RUNS`件。 */
+      readonly runs: readonly WorkflowRun[];
+      /** `metadata`以外で失敗したジョブ。`metadata`だけが失敗したときは空である。 */
+      readonly jobs: readonly WorkflowRunJob[];
+      /** `metadata`ジョブが失敗した。`wmill-lock.yaml`のhashの再計算で直す。 */
+      readonly metadataFailed: boolean;
+    }
+  | { readonly kind: "blocked"; readonly reason: string };
+
 /**
- * 失敗した実行のログから、プロンプトに渡す抜粋を作る。
- * 次の順に確かめ、満たさなければ、Claudeを起動せずに止めるための`blocked`を返す。
+ * PRの状態を確かめ、そのheadの失敗を分類する。ログは読まない。
+ * 次の順に確かめ、満たさなければ、直せないものとして`blocked`を返す。
  * 1. PRが開いていて、headが直す失敗のheadのままである。
  * 2. そのheadの実行のうち、workflowごとの最新で失敗したものがある。
- * 3. 失敗したジョブが、すべてソースの編集で直せる種類である(`classifyCiFailure`)。
- * 4. ログを読める。
- * 5. 秘密値の検査を通り、使える本文が残る(`buildCiExcerpt`)。
- * 生のログは、この関数の中で抜粋に変えて捨てる。戻り値には、抜粋だけを載せる。
- * `extraJobs`は、ローカルの検査の失敗の出力など、CIのログと同じ手順で扱う入力で、CIのログより先に並べる。
+ * 3. 失敗したジョブが、Factoryが自動で直せる種類である(`classifyCiFailure`)。
  */
-export async function gatherCiFailureInput(
+export async function readCiFailure(
   deps: CiGatherDeps,
   target: CiGatherTarget,
-  extraJobs: readonly CiLogJobInput[] = [],
-): Promise<CiGatherOutcome> {
+): Promise<CiFailureRead> {
   const pr = await deps.readPr();
   if (pr.state !== "open") return blocked("pull request is not open");
   if (pr.headSha !== target.headSha) {
@@ -505,10 +516,33 @@ export async function gatherCiFailureInput(
   if (verdict.kind === "no_failure") {
     return blocked("no failed job in the failed runs");
   }
+  return {
+    kind: "fixable",
+    runs,
+    jobs: verdict.jobs,
+    metadataFailed: verdict.metadataFailed,
+  };
+}
 
+/**
+ * 失敗したジョブのログから、プロンプトに渡す抜粋を作る。
+ * ログを読めないとき、秘密値の検査に通らないとき、読むジョブが無いときは、
+ * Claudeを起動せずに止めるための`blocked`を返す。
+ * 生のログは、この関数の中で抜粋に変えて捨てる。戻り値には、抜粋だけを載せる。
+ * `extraJobs`は、ローカルの検査の失敗の出力など、CIのログと同じ手順で扱う入力で、CIのログより先に並べる。
+ */
+export async function gatherCiLogs(
+  deps: CiGatherDeps,
+  target: CiGatherTarget,
+  failure: Extract<CiFailureRead, { kind: "fixable" }>,
+  extraJobs: readonly CiLogJobInput[] = [],
+): Promise<CiGatherOutcome> {
+  if (failure.jobs.length === 0) {
+    return blocked("no failed job to read the log of");
+  }
   const logSlots = Math.max(1, CI_LOG_MAX_JOBS - extraJobs.length);
   const ciJobs: CiLogJobInput[] = [];
-  for (const failed of verdict.jobs.slice(0, logSlots)) {
+  for (const failed of failure.jobs.slice(0, logSlots)) {
     const log = await deps.getLog(failed.id);
     if (log.kind === "forbidden") {
       return blocked(CI_ROUND_DETAILS.tokenCannotReadLog);
@@ -534,7 +568,7 @@ export async function gatherCiFailureInput(
       `the CI job log matched the secret scan (${excerpt.reason})`,
     );
   }
-  const first = runs[0];
+  const first = failure.runs[0];
   return {
     kind: "ready",
     excerpt: excerpt.excerpt,
@@ -544,6 +578,20 @@ export async function gatherCiFailureInput(
         ? null
         : parseRunUrl(first.htmlUrl, target.owner, target.repo),
   };
+}
+
+/**
+ * 失敗した実行のログから、プロンプトに渡す抜粋を作る。`readCiFailure`と`gatherCiLogs`を続けて呼ぶ。
+ * 直せない失敗や、ログを読めない失敗のときは、Claudeを起動せずに止めるための`blocked`を返す。
+ */
+export async function gatherCiFailureInput(
+  deps: CiGatherDeps,
+  target: CiGatherTarget,
+  extraJobs: readonly CiLogJobInput[] = [],
+): Promise<CiGatherOutcome> {
+  const failure = await readCiFailure(deps, target);
+  if (failure.kind === "blocked") return failure;
+  return gatherCiLogs(deps, target, failure, extraJobs);
 }
 
 /**

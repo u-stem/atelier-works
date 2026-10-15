@@ -252,6 +252,40 @@ describe("decideFixClaim", () => {
     expect(await decision).toEqual({ kind: "hold", reason: "budget_exceeded" });
   });
 
+  test("claims a metadata-only failure even when the daily budget is used up", async () => {
+    const { decision } = decide({
+      classification: "metadata_only",
+      budgetExceeded: true,
+    });
+    expect((await decision).kind).toBe("claim");
+  });
+
+  test("does not read the budget for a metadata-only failure", async () => {
+    const { decision, events } = decide({ classification: "metadata_only" });
+    await decision;
+    expect(events.includes("budget")).toBe(false);
+  });
+
+  test("holds a metadata-only failure when the main branch is red", async () => {
+    const { decision } = decide({
+      classification: "metadata_only",
+      mainCiFailed: true,
+    });
+    expect(await decision).toEqual({ kind: "hold", reason: "main_ci_failed" });
+  });
+
+  test("holds a metadata-only failure at the round limit", async () => {
+    const { decision } = decide(
+      { classification: "metadata_only", rounds: 2 },
+      {},
+      2,
+    );
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "rounds_exhausted",
+    });
+  });
+
   test("holds main_ci_failed when the main branch is red", async () => {
     const { decision } = decide({ mainCiFailed: true });
     expect(await decision).toEqual({ kind: "hold", reason: "main_ci_failed" });
@@ -446,9 +480,24 @@ describe("classifyHeadFailure", () => {
     expect(verdict).toBe("fixable");
   });
 
-  test("reports an unfixable job for a failed metadata job", async () => {
+  test("reports a metadata-only failure for a failed metadata job", async () => {
     const verdict = await classifyHeadFailure([run()], async () => [
       job("metadata", "failure"),
+    ]);
+    expect(verdict).toBe("metadata_only");
+  });
+
+  test("reports a fixable failure for a metadata job next to a check job", async () => {
+    const verdict = await classifyHeadFailure([run()], async () => [
+      job("metadata", "failure"),
+      job("check", "failure"),
+    ]);
+    expect(verdict).toBe("fixable");
+  });
+
+  test("reports an unfixable job for a failed job without a name", async () => {
+    const verdict = await classifyHeadFailure([run()], async () => [
+      job("", "failure"),
     ]);
     expect(verdict).toBe("unfixable_job");
   });
