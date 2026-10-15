@@ -279,12 +279,14 @@ export type PrDiffLike = {
  * `reviewPrompt`に渡すdiffの末尾に、切り詰めたことの注記を足す。
  * 残りの部分は、別に渡す変更ファイルの一覧からClaudeが`Read`できる。
  * 注記は、切り詰めたことを本文の中で明示するためのもの。
+ * `Read`で読むファイルは、差分と違って制御文字の置き換えを通らないので、
+ * 見えない文字と制御文字を自分で探して指摘するよう、固定の文で促す。
  */
 export function buildReviewDiffText(prDiff: PrDiffLike): string {
   if (!prDiff.truncated) {
     return prDiff.diff;
   }
-  return `${prDiff.diff}\n\n[diff truncated: showing a prefix of ${prDiff.totalLines} total diff lines. See the changed files list below and use Read to inspect the rest.]`;
+  return `${prDiff.diff}\n\n[diff truncated: showing a prefix of ${prDiff.totalLines} total diff lines. See the changed files list below and use Read to inspect the rest. Files read with Read are not escaped, so look for invisible and control characters in them and report them.]`;
 }
 
 // ---------------------------------------------------------------------------

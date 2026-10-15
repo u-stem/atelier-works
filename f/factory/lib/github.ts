@@ -19,7 +19,7 @@
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
-import { VolatileCiLog } from "./ci_log_support.ts";
+import { revealControlChars, VolatileCiLog } from "./ci_log_support.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
@@ -295,8 +295,8 @@ export type GhApiCallOptions = {
   /**
    * `gh`に`--allow-escape-sequences`を渡す。
    * ghは、応答に端末の制御列を含むと、本文を出さずに拒否の文だけを出す。
-   * 制御列を含みうる本文(Actionsのログ)を受け取るときに指定する。
-   * 制御列の除去は呼び出し側の整形が行う。
+   * 制御列を含みうる本文(Actionsのログ、PRの差分)を受け取るときに指定する。
+   * 制御列の除去や置き換えは、呼び出し側が行う。
    */
   readonly allowEscapeSequences?: boolean;
 };
@@ -533,6 +533,39 @@ export function ensureSuccess(response: GhApiResponse, context: string): void {
       timedOut: response.timedOut === true,
     },
   );
+}
+
+/**
+ * JSONでない本文(差分、ファイルの生の内容)が欠けたまま`gh`が終わったときの例外。
+ * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、端末の制御列を含む本文の拒否、
+ * 本文の途中の切断、timeoutで止めた取得で起きる。
+ * 拒否のときの本文は空になるので、欠けた本文を空の内容として使わないために投げる。
+ * メッセージは呼び出し側の`context`だけで組み立て、本文、stderr、終了コードを載せない。
+ * HTTPの失敗ではないので、ステータスを持たない。
+ */
+export class GitHubRawBodyIncompleteError extends Error {
+  constructor(context: string) {
+    super(
+      maskSecrets(
+        `${context} ended incomplete: gh exited non-zero after a 2xx status`,
+      ),
+    );
+    this.name = "GitHubRawBodyIncompleteError";
+  }
+}
+
+/**
+ * `ensureSuccess`を通った後の、JSONでない本文の応答を確かめる。
+ * `gh`の終了コードが0でない(終了コードが無い場合を含む)ときは、本文が欠けているので
+ * `GitHubRawBodyIncompleteError`を投げる。JSONの応答はESCがエスケープされ、
+ * 構文の検査が欠けを見つけるので、この確認は要らない。
+ */
+export function ensureRawBodyComplete(
+  response: GhApiResponse,
+  context: string,
+): void {
+  if (response.exitCode === 0) return;
+  throw new GitHubRawBodyIncompleteError(context);
 }
 
 export function parseJsonBody(
@@ -2562,8 +2595,45 @@ export type PrDiff = {
 };
 
 /**
+ * `getPrDiff`が返す差分の文字数の上限(UTF-16の符号単位)。置き換えの後の長さで数える。
+ * 置き換えは1文字を最大10文字に増やすので、行数の上限だけでは、
+ * プロンプトの大きさが、行数と1行の長さと増え方の積で決まってしまう。
+ * 置き換えの前の長さに上限をかけても、増えた分は抑えられないので、後の長さで数える。
+ * 値は、`diff_max_lines`の既定(3000行)に、1行133字の差分が収まる大きさである。
+ * 1行の平均がそれを超える差分は、行数の上限より先に切れ、切り詰めの注記つきでレビューが進む。
+ */
+export const PR_DIFF_MAX_CHARS = 400_000;
+
+/**
+ * 行の途中で切ったときの末尾に残る、壊れた断片。
+ * サロゲートペアの前半と、閉じていない置き換え表記(`<`、`<U`、`<U+`、`<U+00`など)である。
+ */
+const CUT_FRAGMENT = /(?:[\ud800-\udbff]|<(?:U(?:\+[0-9A-F]{0,6})?)?)$/;
+
+/**
+ * `text`を`maxChars`字以内に切る。行の途中で切らないよう、収まる最後の行の末尾で切る。
+ * 1行が上限を超えて行の途中で切るときだけ、末尾の壊れた断片を落とす。
+ */
+function cutToChars(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const head = text.slice(0, maxChars);
+  if (text[maxChars] === "\n") return head;
+  const lineEnd = head.lastIndexOf("\n");
+  if (lineEnd > 0) return head.slice(0, lineEnd);
+  return head.replace(CUT_FRAGMENT, "");
+}
+
+/**
  * メディアタイプ`application/vnd.github.v3.diff`で生のunified diffを取得し、
- * `maxLines`行に切り詰める。
+ * `maxLines`行と`maxChars`字に切り詰める。
+ * 差分は、PRの作者が決める端末の制御列(ESCなど)を含みうる。`gh`は含む本文を出さずに
+ * 終了コード1で終わるので、`--allow-escape-sequences`を渡して受け取り、
+ * プロンプトに渡す前に、制御文字と見えない文字を`<U+001B>`の形の見える表記に置き換える。
+ * 取り除くと、制御列の中に書いたコードを読み手から隠せるため、何も取り除かない。
+ * 置き換えは行数を変えない。切り詰めは置き換えの後に、行数、文字数の順で行い、
+ * どちらで切っても`truncated`を真にする。`totalLines`は切る前の行数。
+ * 2xxなのに`gh`の終了コードが0以外のときは、差分が空のまま読まれないよう、
+ * `GitHubRawBodyIncompleteError`を投げる。
  */
 export async function getPrDiff(
   client: GhClient,
@@ -2571,6 +2641,7 @@ export async function getPrDiff(
   repo: string,
   number: number,
   maxLines: number,
+  maxChars: number = PR_DIFF_MAX_CHARS,
 ): Promise<PrDiff> {
   validateOwnerRepo(owner, repo);
   const response = await callGhApi(
@@ -2578,20 +2649,20 @@ export async function getPrDiff(
     `repos/${owner}/${repo}/pulls/${number}`,
     {
       acceptHeader: "application/vnd.github.v3.diff",
+      allowEscapeSequences: true,
     },
   );
-  ensureSuccess(response, `GET pr diff ${owner}/${repo}#${number}`);
-  const lines = response.bodyText.split("\n");
-  if (lines.length <= maxLines) {
-    return {
-      diff: response.bodyText,
-      truncated: false,
-      totalLines: lines.length,
-    };
-  }
+  const context = `GET pr diff ${owner}/${repo}#${number}`;
+  ensureSuccess(response, context);
+  ensureRawBodyComplete(response, context);
+  const bodyText = revealControlChars(response.bodyText);
+  const lines = bodyText.split("\n");
+  const byLines =
+    lines.length <= maxLines ? bodyText : lines.slice(0, maxLines).join("\n");
+  const diff = cutToChars(byLines, maxChars);
   return {
-    diff: lines.slice(0, maxLines).join("\n"),
-    truncated: true,
+    diff,
+    truncated: diff.length < bodyText.length,
     totalLines: lines.length,
   };
 }

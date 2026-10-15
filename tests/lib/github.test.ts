@@ -12,6 +12,7 @@ import {
   createPrReview,
   createPullRequest,
   ensureLabel,
+  ensureRawBodyComplete,
   ensureSuccess,
   type FetchLike,
   fetchIssueContent,
@@ -19,12 +20,14 @@ import {
   findIssueByMarker,
   findOpenPullRequestByHead,
   GH_EXIT_AUTH_REQUIRED,
+  type GhApiResponse,
   type GhClient,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
+  GitHubRawBodyIncompleteError,
   GitHubResponseError,
   getAccountId,
   getBranchProtected,
@@ -58,6 +61,7 @@ import {
   listReviewThreads,
   listWorkflowRuns,
   mergePullRequest,
+  PR_DIFF_MAX_CHARS,
   parseGitHubRepoUrl,
   postIssueComment,
   removeLabel,
@@ -4058,6 +4062,188 @@ describe("getPrDiff", () => {
       2,
     );
     expect(diff).toEqual({ diff: "l1\nl2", truncated: true, totalLines: 5 });
+  });
+
+  const ESC = String.fromCharCode(0x1b);
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  test("asks gh to output a body that carries terminal escape sequences", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "+line"))]);
+    await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
+  });
+
+  test("writes control characters of the diff as visible code points", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, `+hello ${ESC}[31mred${ESC}[0m\n+ok`)),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+hello <U+001B>[31mred<U+001B>[0m\n+ok");
+  });
+
+  test("counts lines after replacing, so a replacement does not change the line count", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, `l1${ESC}\nl2${ESC}\nl3\nl4`)),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    expect(diff).toEqual({
+      diff: "l1<U+001B>\nl2<U+001B>",
+      truncated: true,
+      totalLines: 4,
+    });
+  });
+
+  test("truncates by characters after replacing, at a line boundary", async () => {
+    const line = `+${ESC.repeat(10)}`;
+    const body = Array.from({ length: 4 }, () => line).join("\n");
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const revealedLine = `+${"<U+001B>".repeat(10)}`;
+    const diff = await getPrDiff(
+      client(fake),
+      "acme",
+      "widgets",
+      12,
+      100,
+      revealedLine.length * 2 + 1,
+    );
+    expect(diff).toEqual({
+      diff: `${revealedLine}\n${revealedLine}`,
+      truncated: true,
+      totalLines: 4,
+    });
+  });
+
+  test("cuts inside a single line longer than the character limit", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, "x".repeat(50))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 10);
+    expect(diff).toEqual({
+      diff: "x".repeat(10),
+      truncated: true,
+      totalLines: 1,
+    });
+  });
+
+  test("drops an unfinished replacement marker when it cuts inside a line", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, ESC.repeat(10))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 20);
+    expect(diff.diff).toBe("<U+001B><U+001B>");
+  });
+
+  test.each([
+    [17, "<U+001B><U+001B>"],
+    [18, "<U+001B><U+001B>"],
+    [19, "<U+001B><U+001B>"],
+  ])(
+    "drops every prefix of a marker when it cuts at %i characters",
+    async (maxChars, expected) => {
+      const fake = createFakeCommandRunner([
+        ok(ghApiStdout(200, ESC.repeat(10))),
+      ]);
+      const diff = await getPrDiff(
+        client(fake),
+        "acme",
+        "widgets",
+        12,
+        100,
+        maxChars,
+      );
+      expect(diff.diff).toBe(expected);
+    },
+  );
+
+  test("keeps a complete marker at the cut", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, ESC.repeat(10))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 16);
+    expect(diff.diff).toBe("<U+001B><U+001B>");
+  });
+
+  test("keeps the text at a line boundary even when it looks like a marker prefix", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a<U\nb"))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 3);
+    expect(diff.diff).toBe("a<U");
+  });
+
+  test("does not split a surrogate pair when it cuts by characters", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, "ab\u{1F600}cd")),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 3);
+    expect(diff.diff).toBe("ab");
+  });
+
+  test("applies a default character limit to a replaced body", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, ESC.repeat(PR_DIFF_MAX_CHARS))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff.length).toBeLessThanOrEqual(PR_DIFF_MAX_CHARS);
+  });
+
+  test("does not hide code between an escape introducer and a terminator", async () => {
+    const line = `+const t = "${ESC}]"; exec(evil); "\u0007";`;
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, line))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toContain("exec(evil)");
+  });
+
+  test("throws when gh exits non-zero after a 2xx status, so an empty diff is never reviewed", async () => {
+    const rejected: CommandResult = {
+      stdout: ghApiStdout(200, ""),
+      stderr:
+        "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway",
+      exitCode: 1,
+      timedOut: false,
+    };
+    const fake = createFakeCommandRunner([rejected]);
+    await expect(
+      getPrDiff(client(fake), "acme", "widgets", 12, 100),
+    ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+
+  test("returns an empty diff when gh exits zero with an empty body", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, ""))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("");
+  });
+});
+
+describe("ensureRawBodyComplete", () => {
+  const withExit = (exitCode: number | undefined): GhApiResponse => ({
+    status: 200,
+    headers: new Map(),
+    bodyText: "partial body",
+    ...(exitCode !== undefined ? { exitCode } : {}),
+  });
+
+  test("passes when gh exited zero", () => {
+    expect(() => ensureRawBodyComplete(withExit(0), "GET x")).not.toThrow();
+  });
+
+  test("throws when gh exited non-zero", () => {
+    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+      GitHubRawBodyIncompleteError,
+    );
+  });
+
+  test("throws when the exit code is unknown", () => {
+    expect(() => ensureRawBodyComplete(withExit(undefined), "GET x")).toThrow(
+      GitHubRawBodyIncompleteError,
+    );
+  });
+
+  test("names the request without the body in the message", () => {
+    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+      "GET x ended incomplete: gh exited non-zero after a 2xx status",
+    );
   });
 });
 
