@@ -383,11 +383,11 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "pr_reviewed": {
       const stateText =
         event.result === "changes_requested"
-          ? "修正必須の指摘あり(修正待ち)"
+          ? "修正必須の指摘が未解決(要修正)"
           : "修正必須の指摘なし(人のApprove待ち)";
       return {
         title: `PRレビュー完了: #${event.pr_number}`,
-        description: `指摘${String(event.finding_count)}件。状態: ${stateText}`,
+        description: `今回の指摘${String(event.finding_count)}件。状態: ${stateText}`,
         url: event.pr_url,
         fields: [
           instanceField(event.instance_name),
