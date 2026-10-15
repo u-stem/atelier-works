@@ -63,6 +63,22 @@ const LINE_BREAK_LIKE = /[\u0085\u2028\u2029]/g;
 const REMOVED_CHARS =
   /(?!\n)(?:[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u115F\u1160\u3164\uFFA0\u2800]|[\uFE00-\uFE0F]|[\u180B-\u180D\u180F]|[\u17B4\u17B5]|[\u{E0100}-\u{E01EF}]|\u034F)/gu;
 
+/**
+ * 取り除く制御文字(C0、DEL、C1)。タブ、改行、復帰は残す。
+ * 差分のように、字下げと行末の形が意味を持つ本文に使う。
+ */
+const CONTROL_CHARS = /(?![\t\n\r])\p{Cc}/gu;
+
+/**
+ * 本文から、端末の制御列と制御文字だけを取り除く。
+ * 字下げ、改行、タイムスタンプの形、不可視文字は変えない。
+ * 差分のようにログ以外の本文を、`gh`の拒否を避けて受け取った後に、プロンプトへ渡す前に使う。
+ * `cleanLogText`は行の切り詰めやタブの置き換えまで行うので、本文の形を保ちたい場面には使わない。
+ */
+export function stripTerminalControls(text: string): string {
+  return text.replace(TERMINAL_SEQUENCE, "").replace(CONTROL_CHARS, "");
+}
+
 /** Actionsのログの行頭にあるタイムスタンプ。 */
 const TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/gm;
 

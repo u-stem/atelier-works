@@ -12,6 +12,7 @@ import {
   createPrReview,
   createPullRequest,
   ensureLabel,
+  ensureRawBodyComplete,
   ensureSuccess,
   type FetchLike,
   fetchIssueContent,
@@ -19,12 +20,14 @@ import {
   findIssueByMarker,
   findOpenPullRequestByHead,
   GH_EXIT_AUTH_REQUIRED,
+  type GhApiResponse,
   type GhClient,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
+  GitHubRawBodyIncompleteError,
   GitHubResponseError,
   getAccountId,
   getBranchProtected,
@@ -4058,6 +4061,77 @@ describe("getPrDiff", () => {
       2,
     );
     expect(diff).toEqual({ diff: "l1\nl2", truncated: true, totalLines: 5 });
+  });
+
+  const ESC = String.fromCharCode(0x1b);
+  const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
+    run: fake.run,
+    ghToken: "tok",
+  });
+
+  test("asks gh to output a body that carries terminal escape sequences", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "+line"))]);
+    await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(fake.calls[0]?.argv).toContain("--allow-escape-sequences");
+  });
+
+  test("strips terminal escape sequences from the diff", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, `+hello ${ESC}[31mred${ESC}[0m\n+ok`)),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+hello red\n+ok");
+  });
+
+  test("throws when gh exits non-zero after a 2xx status, so an empty diff is never reviewed", async () => {
+    const rejected: CommandResult = {
+      stdout: ghApiStdout(200, ""),
+      stderr:
+        "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway",
+      exitCode: 1,
+      timedOut: false,
+    };
+    const fake = createFakeCommandRunner([rejected]);
+    await expect(
+      getPrDiff(client(fake), "acme", "widgets", 12, 100),
+    ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+
+  test("returns an empty diff when gh exits zero with an empty body", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, ""))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("");
+  });
+});
+
+describe("ensureRawBodyComplete", () => {
+  const withExit = (exitCode: number | undefined): GhApiResponse => ({
+    status: 200,
+    headers: new Map(),
+    bodyText: "partial body",
+    ...(exitCode !== undefined ? { exitCode } : {}),
+  });
+
+  test("passes when gh exited zero", () => {
+    expect(() => ensureRawBodyComplete(withExit(0), "GET x")).not.toThrow();
+  });
+
+  test("throws when gh exited non-zero", () => {
+    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+      GitHubRawBodyIncompleteError,
+    );
+  });
+
+  test("throws when the exit code is unknown", () => {
+    expect(() => ensureRawBodyComplete(withExit(undefined), "GET x")).toThrow(
+      GitHubRawBodyIncompleteError,
+    );
+  });
+
+  test("names the request without the body in the message", () => {
+    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+      "GET x ended incomplete: gh exited non-zero after a 2xx status",
+    );
   });
 });
 

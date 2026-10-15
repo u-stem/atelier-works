@@ -169,6 +169,24 @@ PRが要件定義に紐づくのは、Factoryの実装フローが作ったPRか
 レビューは常にGitHubのCOMMENTレビューとして投稿する。承認(approve)と変更の要求(request changes)は使わない。スキルが返す判定(`verdict`)は`factory.reviews`に残すだけで、投稿の種類にも、通知とConsoleの状態にも使わない。
 通知とConsoleのレビュー行は、flowが決めた結果(`factory.reviews`の`result`)を使う。結果は、修正必須の指摘の有無で決まる(通知の規則は[通知](notifications.md)にある)。
 
+### 差分の取得
+
+PRの差分は、`application/vnd.github.v3.diff`で取るJSONでない本文である。
+PRの作者がESCなどの制御文字を含むファイルを足すと、`gh`は本文を出さず、ステータスが200のまま終了コード1で終わる。
+本文が空に見えると、差分が空のままレビューが進み、作者が差分を隠せてしまう。
+
+`getPrDiff`は次のように扱う。
+
+- `--allow-escape-sequences`を付けて、本文を受け取る。
+- 端末の制御列と制御文字を除いてから、行数の上限で切り詰める。字下げ、改行、タブは変えない。
+- ステータスが2xxなのに`gh`の終了コードが0以外のときは、`GitHubRawBodyIncompleteError`を投げ、Claudeを起動しない。例外は固定の文だけを持ち、本文とstderrを載せない。
+
+例外は`pr_review_generate`を失敗で止め、失敗の記録と通知に流れる。
+終了コードが0で本文が空のときは、差分の無いPRなので、そのままレビューする。
+
+ファイルの生の内容を取る`getRepoFileText`(draw.ioのビューアの固定を上げる処理が使う)も、終了コードが0以外なら同じ例外を投げる。
+内容を書き換えてコミットするので、制御列は除かない。
+
 ### 投稿の形
 
 Factoryはレビューの開始のコメントを投稿しない。投稿するのは、インラインの指摘(コードの提案を含む)と総評だけである。指摘の形は`.claude/skills/factory-review/SKILL.md`の「投稿形式」に書く。

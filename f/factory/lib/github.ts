@@ -19,7 +19,7 @@
 // `isFactoryPost`(`isOwnPost`によるログイン名の一致と`hasMarker`の両方)で
 // 区別する。
 
-import { VolatileCiLog } from "./ci_log_support.ts";
+import { stripTerminalControls, VolatileCiLog } from "./ci_log_support.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
@@ -533,6 +533,39 @@ export function ensureSuccess(response: GhApiResponse, context: string): void {
       timedOut: response.timedOut === true,
     },
   );
+}
+
+/**
+ * JSONでない本文(差分、ファイルの生の内容)が欠けたまま`gh`が終わったときの例外。
+ * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、端末の制御列を含む本文の拒否、
+ * 本文の途中の切断、timeoutで止めた取得で起きる。
+ * 拒否のときの本文は空になるので、欠けた本文を空の内容として使わないために投げる。
+ * メッセージは呼び出し側の`context`だけで組み立て、本文、stderr、終了コードを載せない。
+ * HTTPの失敗ではないので、ステータスを持たない。
+ */
+export class GitHubRawBodyIncompleteError extends Error {
+  constructor(context: string) {
+    super(
+      maskSecrets(
+        `${context} ended incomplete: gh exited non-zero after a 2xx status`,
+      ),
+    );
+    this.name = "GitHubRawBodyIncompleteError";
+  }
+}
+
+/**
+ * `ensureSuccess`を通った後の、JSONでない本文の応答を確かめる。
+ * `gh`の終了コードが0でない(終了コードが無い場合を含む)ときは、本文が欠けているので
+ * `GitHubRawBodyIncompleteError`を投げる。JSONの応答はESCがエスケープされ、
+ * 構文の検査が欠けを見つけるので、この確認は要らない。
+ */
+export function ensureRawBodyComplete(
+  response: GhApiResponse,
+  context: string,
+): void {
+  if (response.exitCode === 0) return;
+  throw new GitHubRawBodyIncompleteError(context);
 }
 
 export function parseJsonBody(
@@ -2564,6 +2597,11 @@ export type PrDiff = {
 /**
  * メディアタイプ`application/vnd.github.v3.diff`で生のunified diffを取得し、
  * `maxLines`行に切り詰める。
+ * 差分は、PRの作者が決める端末の制御列(ESCなど)を含みうる。`gh`は含む本文を出さずに
+ * 終了コード1で終わるので、`--allow-escape-sequences`を渡して受け取り、
+ * プロンプトに渡す前に制御列と制御文字を除く。
+ * 2xxなのに`gh`の終了コードが0以外のときは、差分が空のまま読まれないよう、
+ * `GitHubRawBodyIncompleteError`を投げる。
  */
 export async function getPrDiff(
   client: GhClient,
@@ -2578,13 +2616,17 @@ export async function getPrDiff(
     `repos/${owner}/${repo}/pulls/${number}`,
     {
       acceptHeader: "application/vnd.github.v3.diff",
+      allowEscapeSequences: true,
     },
   );
-  ensureSuccess(response, `GET pr diff ${owner}/${repo}#${number}`);
-  const lines = response.bodyText.split("\n");
+  const context = `GET pr diff ${owner}/${repo}#${number}`;
+  ensureSuccess(response, context);
+  ensureRawBodyComplete(response, context);
+  const bodyText = stripTerminalControls(response.bodyText);
+  const lines = bodyText.split("\n");
   if (lines.length <= maxLines) {
     return {
-      diff: response.bodyText,
+      diff: bodyText,
       truncated: false,
       totalLines: lines.length,
     };

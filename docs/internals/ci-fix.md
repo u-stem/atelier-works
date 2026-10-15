@@ -314,8 +314,9 @@ Claudeの回では、`deny`にして、保護パスの違反として拒否す�
 `GitHubCiLogIncompleteError`は、固定の文だけを持つ。
 どちらも、本文、ヘッダー、`gh`のstderrは載せない。
 
-ログは端末の制御列を含むので、`getWorkflowJobLog`だけが`gh api`に`--allow-escape-sequences`を渡す。
+ログは端末の制御列を含むので、`getWorkflowJobLog`は`gh api`に`--allow-escape-sequences`を渡す。
 制御列の除去は、取得ではなく[ログの整形](#ログの整形)が行う。
+JSONでない本文を取るほかの呼び出しの扱いは、[差分の取得](pr-workflow.md#差分の取得)にある。
 
 2xxのステータスを受けた後でも、`gh`は本文を欠いたまま終わることがある。
 次の場合は、本文が空か欠けて、終了コードが0以外になる。

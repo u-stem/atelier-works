@@ -29,7 +29,7 @@ locks:
   f/factory/lib/ci_fix_paths: 9796dcbe523eb019a153fe4cd7ea8c278640d94b4e2347848e38e9705565b1f7
   f/factory/lib/ci_fix_prompt: c96988f34a27420e9493ab7ad0f904b49a39c17b11036f5a44f9de42a2885a47
   f/factory/lib/ci_fix_round: 24afe7eeafd38b4983123530208a8ffb4243b9871a7987b078673f2a430a204c
-  f/factory/lib/ci_log_support: 0c079813679b394691042182d5adfa552dcc12cd38836f04c74930af40b7dc69
+  f/factory/lib/ci_log_support: 84005a48f87c7c89006044fdb81890e195641ae5bba8b11056ab71596b859c66
   f/factory/lib/ci_metadata_rehash: 990a7c9511d17bfe01682e83716b065765d1cf7eaad98e3682737c613d18a4e3
   f/factory/lib/claim_support: a1a20cdbf0b277b24529f736e86cf4d439ba0c93030c74a4d211feb439ff583a
   f/factory/lib/claude: 92593ece319126f562400efbd5fed079cd72c1835811bd2f1aab638583338aeb
@@ -48,11 +48,11 @@ locks:
   f/factory/lib/discord: f154f6df19be07f70c103dcebdfade9f68c569cc9ee4e0fa7820dc650c264316
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
-  f/factory/lib/drawio_viewer_bump_github: 15b3ba986a6ece3a53dda277ec91680765319fce1137707e5c65e32ba6b8c124
+  f/factory/lib/drawio_viewer_bump_github: 97e0b3b97c5d4bcf6d3049c27b936dd0523cf0cae7c5020fa163e7db278ea4a4
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
-  f/factory/lib/github: 029c0fda622b58f0d1186c622669f5ac8a868be5a6e61f3517b5b374092b824b
+  f/factory/lib/github: 49d1cac7dbe87ed98ef4546cc943500c1d90cf612c8325bf795eb9671f1368bf
   f/factory/lib/host_action: dc0d09838934a55630d453e9c3af9aaaaaaef637325f1133eab9a809327e7123
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77

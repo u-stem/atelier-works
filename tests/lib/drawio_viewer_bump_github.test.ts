@@ -9,7 +9,10 @@ import {
   listReleases,
   resolveTagCommit,
 } from "../../f/factory/lib/drawio_viewer_bump_github.ts";
-import { GitHubPaginationLimitError } from "../../f/factory/lib/github.ts";
+import {
+  GitHubPaginationLimitError,
+  GitHubRawBodyIncompleteError,
+} from "../../f/factory/lib/github.ts";
 import {
   createFakeCommandRunner,
   ghApiOk,
@@ -141,6 +144,19 @@ describe("getRepoFileText", () => {
     expect(
       await getRepoFileText(client, "acme", "widgets", "a.txt", "main"),
     ).toBe("line one\nline two\n");
+  });
+
+  test("throws when gh exits non-zero after a 2xx status, so a rejected body is not read as an empty file", async () => {
+    const rejected = {
+      stdout: ghApiStdout(200, ""),
+      stderr: "the response contains terminal escape sequences",
+      exitCode: 1,
+      timedOut: false,
+    };
+    const { client } = clientFor([rejected]);
+    await expect(
+      getRepoFileText(client, "acme", "widgets", "a.txt", "main"),
+    ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
   });
 
   test("asks for the raw media type", async () => {
