@@ -380,7 +380,7 @@ lockの意味(版の範囲、パッケージの入れ子、取得元、integrity
 
 ##### 受け取る側の実装で決めること
 
-受け取る側を呼び出す配線で決める項目は、[内部仕様](internals/ci-fix.md#配線で決めること)にまとめる。
+artifactの適用で残る論点は、[内部仕様](internals/ci-fix.md#artifactの適用で残る論点)にまとめる。
 この文書は、それらを前提にせず、内容の制限を定める。
 
 #### hashの再計算
@@ -426,6 +426,46 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   これらは、依存の解決、workerの種類、`.script.yaml`の項目を変えうるのに、hashだけを直しても追いつけないためである。
 - ポートが返す値と上限の値は、入口で検査し、正しくないときは断る。
   上限の値は正の整数だけを通す。NaNで上限が外れるのを防ぐためである。
+
+`metadata`ジョブだけが落ちたCI回の再計算の経路は、次で守る。
+流れは[metadataジョブの失敗を直す経路](internals/ci-fix.md#metadataジョブの失敗を直す経路)にある。
+
+- Claudeを起動しない。失敗のログは読まず、通知にも載せない。
+  外部入力で動くのは、事前検査の字句の読み取りだけである。
+- 書き込む先は、worktreeの根の`wmill-lock.yaml`だけで、パスはコードが決める。
+  `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。通常のファイルでないとき、ほかにhard linkがあるときは書かない。無いファイルは作らない。
+- 検証と完了のステップは、修正のステップの出力を信用しない。
+  worktreeの変更が、根の`wmill-lock.yaml`1件の`modified`(モード`100644`)で、本文がPRのheadの木からの再計算とバイト列まで同じときに限り、許す。
+  許可リスト方式の検査(`checkCiFixChanges`)は変えず、例外は呼び出し側の`inspectCiFixChanges`だけに置く。
+  次のものは、保護パスの一覧に入れない。日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
+  - 例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)。
+  - `ci_fix_round.ts`の`isLockOnlyChange`、`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、`readCiFailure`。
+  - `ci_fix_classify.ts`の`classifyCiFailure`。この結果が、`metadata`だけが落ちた回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
+  - `workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)。再計算が読むgitの動き方を決める。
+
+  これらを書き換えて条件を緩める変更は、マージ前の人のレビューで止める。CI回のClaudeには、CI回の拒否が別に止める。
+  本文が再計算と違うときと、確認できないときは、保護パスの違反として拒否する。
+  再試行しても直らない理由で再計算できないときは、再計算の回に限り、固定の理由を返し、保護パスの違反にはしない。
+  回の種類は、CIの実行から読み直して決める。Claudeの回では、保護パスの違反として拒否する。
+  一時的な失敗は、拒否せず、例外にして再試行する。
+- 比べるのは、文字列ではなくバイト列である。
+  文字列に復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
+- baseの先端のcommitは、shaを指定して取り込み、追跡refを動かさない。
+  リポジトリのロックの外から追跡refを更新して、`commitAndPush`と衝突することを避けるためである。
+- 完了のステップの既存の関門は、すべて通る。
+  秘密値の検査、検査したツリーとの照合、保護パスの検査、PRの状態とheadの確認、オーナーの数値IDの照合である。
+- commitの親は、`head_sha`に固定する。pushは強制しない。
+  ブランチの先端が動いていればpushは拒否され、動いた回は、新しい失敗として判定し直される。
+- baseの先端は、PRのAPIの`base.sha`ではなく、baseブランチの今の先端をAPIで読んで使う。
+  照合の中と、pushの直前に読み直し、動いていれば新しい先端で確かめ直す。
+- 人の手に回す理由は、次の固定の語彙だけである。
+  事前検査の種別、`lock_up_to_date`、`lock_not_writable`である。
+  pushの直前に、baseの先端が動いて本文が合わなくなった場合(`CI_ROUND_REHASH_STALE_REASON`)も含む。
+  一時的な失敗(`port_error`、`ancestry_unknown`)は、人の手に回さず、例外にして再試行する。
+  再試行で直らない失敗(想定外の例外の`internal_error`、自己検査の`scan_unavailable`、木の一覧が読めない`tree_unreadable`)は、人の手に回す。
+  PRの作者が決めるパスは、通知にも作業項目の理由にも載せない。
+  補足は、`scan_unavailable`のworkerのBunの版(`bun <版>`)と、`internal_error`の例外の種類(標準のエラーの名前だけ)に限る。
+- 検査コマンドは、この形のとき実行しない。hashだけを書き換えた変更に、対象リポジトリのコードを実行する意味が無いためである。
 
 事前検査は、悪意のあるPRに対する境界ではない。
 hashは`.script.lock`の中身を含まない。

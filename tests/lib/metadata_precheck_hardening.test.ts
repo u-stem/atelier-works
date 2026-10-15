@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   BlobMismatchError,
   createTreeReader,
+  planMetadataRehash,
 } from "../../f/factory/lib/metadata_precheck.ts";
 import {
   BASE_TIP,
@@ -12,6 +13,7 @@ import {
   HEAD,
   outcome,
   plan,
+  portsOf,
   SCRIPT_YAML,
   type World,
   world,
@@ -182,6 +184,39 @@ describe("planMetadataRehash and the values from the ports", () => {
     ).toBe("invalid_tree");
   });
 
+  test("refuses a path of the head that holds a replacement character", async () => {
+    expect(
+      await reasonAfter((w) => w.head.set("f/factory/bad�name.ts", FOO)),
+    ).toBe("invalid_tree");
+  });
+
+  test("refuses a path of the base that holds a replacement character", async () => {
+    expect(
+      await reasonAfter((w) => w.base.set("f/factory/bad�name.ts", FOO)),
+    ).toBe("invalid_tree");
+  });
+
+  test("refuses a tree that lists the same path twice", async () => {
+    const w = world();
+    const ports = portsOf(w);
+    const result = await planMetadataRehash(
+      w.input,
+      {
+        ...ports,
+        listTree: async (ref) => {
+          const entries = await ports.listTree(ref);
+          const first = entries[0];
+          return first === undefined || ref !== HEAD
+            ? entries
+            : [...entries, first];
+        },
+      },
+      w.limits,
+      w.selfCheck,
+    );
+    expect(result.ok ? "ok" : result.reason).toBe("invalid_tree");
+  });
+
   test("accepts a 64 digit object id", async () => {
     expect(
       await reasonAfter((w) =>
@@ -202,6 +237,14 @@ describe("planMetadataRehash and the values from the ports", () => {
     ).toBe("port_error");
   });
 
+  test("returns an unreadable tree when the listing of a tree cannot be read", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.unreadableTree = true;
+      }),
+    ).toBe("tree_unreadable");
+  });
+
   test("returns a port error when the ancestry check throws", async () => {
     expect(
       await reasonAfter((w) => {
@@ -214,6 +257,31 @@ describe("planMetadataRehash and the values from the ports", () => {
     expect(
       await reasonAfter((w) => w.brokenReads.add(`${HEAD}:f/factory/foo.ts`)),
     ).toBe("internal_error");
+  });
+
+  test("leaves the kind of the error in the detail of an internal error", async () => {
+    const w = world();
+    w.brokenReads.add(`${HEAD}:f/factory/foo.ts`);
+    const result = await plan(w);
+    expect(!result.ok && result.detail).toBe("Error");
+  });
+
+  test("keeps a standard error name in the detail of an internal error", async () => {
+    const w = world();
+    w.brokenReads.add(`${HEAD}:f/factory/foo.ts`);
+    w.brokenError = new TypeError("secret path f/x");
+    const result = await plan(w);
+    expect(!result.ok && result.detail).toBe("TypeError");
+  });
+
+  test("replaces a custom error name with Error in the detail of an internal error", async () => {
+    const w = world();
+    w.brokenReads.add(`${HEAD}:f/factory/foo.ts`);
+    const custom = new Error("secret path f/x");
+    custom.name = "SecretPathError";
+    w.brokenError = custom;
+    const result = await plan(w);
+    expect(!result.ok && result.detail).toBe("Error");
   });
 
   test("sends a script that is not UTF-8 to a human", async () => {
@@ -527,7 +595,7 @@ describe("planMetadataRehash and the self check of the reading", () => {
       await reasonAfter((w) => {
         w.selfCheck = () => false;
       }),
-    ).toBe("internal_error");
+    ).toBe("scan_unavailable");
   });
 
   test("leaves the version of Bun in the detail of the failure", async () => {

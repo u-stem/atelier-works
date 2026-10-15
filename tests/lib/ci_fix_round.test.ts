@@ -394,9 +394,20 @@ describe("classifyFailedRuns", () => {
 
   test("classifies the jobs of the failed runs together", async () => {
     const result = await classifyFailedRuns([run()], async () => [
-      job({ name: "metadata" }),
+      job({ name: "" }),
     ]);
     expect(result.verdict?.kind).toBe("unfixable_job");
+  });
+
+  test("classifies a failed metadata job as fixable with no job to read", async () => {
+    const result = await classifyFailedRuns([run()], async () => [
+      job({ name: "metadata" }),
+    ]);
+    expect(result.verdict).toEqual({
+      kind: "fixable",
+      jobs: [],
+      metadataFailed: true,
+    });
   });
 
   test("reads at most the limit of failed runs", async () => {
@@ -522,12 +533,32 @@ describe("gatherCiFailureInput", () => {
     expect(calls.logs).toEqual([]);
   });
 
-  test("names the kind of an unfixable job in the reason", async () => {
+  test("blocks a metadata job because no other failed job has a log", async () => {
     const { deps } = gatherDeps({
       listJobs: async () => [job({ name: "metadata" })],
     });
     expect(blockedReason(await gatherCiFailureInput(deps, TARGET))).toBe(
-      "ci round: the failed CI job cannot be fixed by editing the source (metadata_job)",
+      "ci round: no failed job to read the log of",
+    );
+  });
+
+  test("reads only the log of the check job next to a metadata failure", async () => {
+    const { deps, calls } = gatherDeps({
+      listJobs: async () => [
+        job({ id: 1, name: "metadata" }),
+        job({ id: 2, name: "check" }),
+      ],
+    });
+    await gatherCiFailureInput(deps, TARGET);
+    expect(calls.logs).toEqual([2]);
+  });
+
+  test("names the kind of an unfixable job in the reason", async () => {
+    const { deps } = gatherDeps({
+      listJobs: async () => [job({ name: "" })],
+    });
+    expect(blockedReason(await gatherCiFailureInput(deps, TARGET))).toBe(
+      "ci round: the failed CI job cannot be fixed by editing the source (unnamed_job)",
     );
   });
 

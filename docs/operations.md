@@ -1197,9 +1197,21 @@ CIが失敗したheadを見つけると、通知`pr_ci_failed`を残し、Discor
 metadataジョブの失敗なら、`mise run metadata`を実行して差分をコミットする。
 `mise run metadata`はローカルのWindmillに接続する。
 先に`mise run up`でスタックを起動しておく([セットアップ](setup.md#gitのフック))。
-metadataジョブはWindmillの起動やログインでも落ちるので、`mise run metadata`で差分が出ないときは、実行をやり直す。
+Factoryが作るPRで、自動修正が有効なときは、metadataジョブだけの失敗を、Factoryがhashの再計算で直してpushする([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。
+読み取りなど一時的な失敗は、保留にせず、flowの再試行に任せる。
+再計算では直らないときは、保留`metadata_manual`で通知が出る。
+保留した理由の種別は、作業項目の理由に残る。
+人の作業は、種別で分かれる。
+
+- 事前検査が通らない保留は、必要ならmainを取り込み、人が`mise run metadata`を実行して差分をコミットする。
+  依存や入力のschemaが変わるPR、PRがmainの先端を含まないPRなどである。
+  理由の補足で原因を確かめる。
+  workerのBunの版が合わない保留(`scan_unavailable`)は`bun <版>`、想定外の例外の保留(`internal_error`)は例外の種類である。
+- 再計算しても本文が変わらない保留(`lock_up_to_date`)は、metadataジョブがWindmillの起動やログインで落ちている。
+  人の手順は要らず、実行をやり直す。`mise run metadata`で差分が出ないときも、同じ原因である。
+
 Factoryが作るPR(同じリポジトリの`factory/`ブランチ)では、CIが再生成の結果をartifact(`metadata-patch`)に出す([CIのメタデータの検査](setup.md#ciのメタデータの検査))。
-artifactが出ていても、PRには適用されない。人が`mise run metadata`を実行して差分をコミットする。
+artifactが出ていても、PRには適用されない。
 取り消しやフレークなら、実行をやり直す。
 通知は、次のときに自動で解決される。
 
@@ -1302,9 +1314,12 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 - 失敗を見つけた時刻が、`pr_ci_fix_enabled_since`以後である。
 - PRのすべてのcommitが、Factoryのトレーラーを持つ。トレーラーの無いcommitを含むPRは、自動で直さない。
 - 今のheadのFactoryのレビューがある。ドラフトでなく、auto-mergeが有効でもない。
-- 失敗が`failure`で、ソースの編集で直せる種類である。metadataジョブの失敗や、取り消しなどで終わった実行は、直さない。
+- 失敗が`failure`で、自動で直せる種類である。取り消しなどで終わった実行と、名前の無いジョブの失敗は、直さない。
+  metadataジョブの失敗は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す。依存や入力のschemaが変わるPRは、再計算では直らず、人が直す。
 - 同じPRで動いている直す作業項目が無い。
-- 日次の予算が残っていて、mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
+- mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
+  日次の予算も残っている。ただし、metadataジョブだけが失敗しているときは、Claudeを起動せず再計算で直すので、予算を問わない。
+  `check`などが同時に落ちているときは、Claudeが先に直すので、予算を確かめる。metadataジョブは、次の回で再計算が直す。
 - Factoryのリポジトリの`factory_branch`にあるfactory-fixスキルが、CI回の節(マーカー`ci-fix-skill:v1`)を持つ。ファイルはGitHubのAPIで読む。
   `pr_fix`の準備は毎回`factory_branch`をfetchしてhard resetする。
   起動した後にスキルが変わって作業項目が準備で失敗すると、保留`marker_missing`になり、次の巡回で外れて起動し直す。
@@ -1337,7 +1352,7 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
    何も出ないときは、`grep`を外した`gh api`単体が成功するかを先に確かめる。ファイルを読めていないだけのことがある。
 
    マーカーは、保護パスのスキルへの人のPRで入れる。PRがマージされるまで、有効にしない。
-   持たないと、すべての失敗が保留`marker_missing`になる。スキルが入れば、次の巡回で外れる。
+   持たないと、`metadata`ジョブだけの失敗を除くすべての失敗が、保留`marker_missing`になる。スキルが入れば、次の巡回で外れる。
 2. 有効にする前から残る失敗(`failed`の行)を片付ける。PRを直すか閉じる。さらに、赤いFactoryのPRが残っていないかを確かめる。
 3. `pr_ci_fix_max_rounds`を`1`にし、`daily_budget_usd`を「当日の使用額に1ラウンド分を足した値」にする。
    当日の使用額は、Factoryが予算の判定に使う集計と同じ式で読む。日の区切りはJSTの0時である。

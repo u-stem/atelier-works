@@ -81,6 +81,8 @@ export const DEFAULT_MAX_TRACE_VISITS = 200_000;
 export type RehashFailureReason =
   | "port_error"
   | "internal_error"
+  | "scan_unavailable"
+  | "tree_unreadable"
   | "invalid_ref"
   | "invalid_tree"
   | "invalid_limit"
@@ -129,7 +131,10 @@ export type PlanResult =
       readonly ok: false;
       readonly reason: RehashFailureReason;
       readonly path?: string;
-      /** 固定の補足。`internal_error`のときは、実行しているBunの版を載せる。 */
+      /**
+       * 固定の補足。`scan_unavailable`のときは、実行しているBunの版を載せる。
+       * `internal_error`のときは、例外の種類(標準のエラーの名前だけ)を載せる。
+       */
       readonly detail?: string;
     };
 
@@ -141,8 +146,35 @@ function fail(reason: RehashFailureReason, path?: string): Failure {
     : { ok: false, reason, path };
 }
 
+const STANDARD_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "ReferenceError",
+  "EvalError",
+  "URIError",
+]);
+
+/**
+ * 例外の種類を、標準のエラーの名前に限って返す。それ以外は`Error`にする。
+ * 例外の内容は、入力のパスなどを含みうるので載せない。
+ */
+function errorKind(error: unknown): string {
+  return error instanceof Error && STANDARD_ERROR_NAMES.has(error.name)
+    ? error.name
+    : "Error";
+}
+
 /** ポートが投げた例外。内容は載せずに、`port_error`として返す。 */
 class PortError extends Error {}
+
+/**
+ * 木の一覧が読めず、同じcommitで何度読んでも読めないことを表す。
+ * 出力が上限で切れたときと、形が合わないときに、ポートが投げる。`tree_unreadable`として返す。
+ * gitの失敗や時間切れは一時的なので、これを使わず、`port_error`に任せる。
+ */
+export class TreeUnreadableError extends Error {}
 
 /** 読む合計のバイト数の上限を超えた。 */
 class LimitError extends Error {}
@@ -177,20 +209,34 @@ function guarded<Args extends unknown[], Result>(
   return async (...args) => {
     try {
       return await port(...args);
-    } catch {
+    } catch (error) {
+      if (error instanceof TreeUnreadableError) {
+        throw error;
+      }
       throw new PortError();
     }
   };
 }
 
+/**
+ * 木の項目の形が正しいか。
+ * パスにU+FFFDがあれば断る。パスを文字列に復号したときに、不正なUTF-8が置き換わった跡で、
+ * 別々のパスが同じ文字列になり、表のキーが衝突して項目が消えるためである。
+ */
 function isValidEntry(entry: TreeEntry): boolean {
   return (
     typeof entry.path === "string" &&
+    !entry.path.includes("\uFFFD") &&
     typeof entry.mode === "string" &&
     OBJECT_ID.test(entry.oid) &&
     Number.isSafeInteger(entry.size) &&
     entry.size >= 0
   );
+}
+
+/** 同じパスの項目が2つ以上あるか。表にすると、後の項目が前の項目を隠すためである。 */
+function hasDuplicatePath(entries: readonly TreeEntry[]): boolean {
+  return new Set(entries.map((entry) => entry.path)).size !== entries.length;
 }
 
 function isTracked(path: string): boolean {
@@ -547,7 +593,12 @@ async function plan(
   }
   const baseTree = await ports.listTree(input.baseSha);
   const headTree = await ports.listTree(input.headSha);
-  if (!baseTree.every(isValidEntry) || !headTree.every(isValidEntry)) {
+  if (
+    !baseTree.every(isValidEntry) ||
+    !headTree.every(isValidEntry) ||
+    hasDuplicatePath(baseTree) ||
+    hasDuplicatePath(headTree)
+  ) {
     return fail("invalid_tree");
   }
   const base = new Map(baseTree.map((entry) => [entry.path, entry]));
@@ -684,6 +735,10 @@ async function plan(
  * - `limits`の各値が、正の安全な整数である。読んだ内容が、木の項目の`oid`と一致する。
  *   実行時に残るimportの読み方が、固定の入力で想定どおりに動く(Bunの版に依存するため)。
  * 想定外の例外も、固定の種別(`internal_error`)にして返す。
+ * 一時的な失敗(`port_error`、`ancestry_unknown`)と、再試行で直らない失敗
+ * (`internal_error`、`scan_unavailable`、`tree_unreadable`など)は、種別で分ける。
+ * `internal_error`は、ポートの例外をすべて`port_error`などに変えた後に残る、純粋な計算の例外なので、
+ * 同じ入力では同じ結果になる。
  */
 export async function planMetadataRehash(
   input: RehashInput,
@@ -703,7 +758,7 @@ export async function planMetadataRehash(
   if (!selfCheck()) {
     return {
       ok: false,
-      reason: "internal_error",
+      reason: "scan_unavailable",
       detail: `bun ${Bun.version}`,
     };
   }
@@ -721,12 +776,19 @@ export async function planMetadataRehash(
     if (error instanceof PortError) {
       return fail("port_error");
     }
+    if (error instanceof TreeUnreadableError) {
+      return fail("tree_unreadable");
+    }
     if (error instanceof LimitError) {
       return fail("too_much_input");
     }
     if (error instanceof BlobMismatchError) {
       return fail("blob_mismatch");
     }
-    return fail("internal_error");
+    return {
+      ok: false,
+      reason: "internal_error",
+      detail: errorKind(error),
+    };
   }
 }

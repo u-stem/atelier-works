@@ -1,5 +1,5 @@
 summary: '[LIB] CIの失敗の分類'
-description: 内部ライブラリです。直接実行するものではありません。失敗したジョブの名前と結論から、CI回のClaudeがソースの編集で直せる種類かを決めます。
+description: 内部ライブラリです。直接実行するものではありません。失敗したジョブの名前と結論から、CI回で自動で直せる種類かを決めます。metadataジョブの失敗は、Claudeではなくhashの再計算で直す種類として示します。
 lock: '!inline f/factory/lib/ci_fix_classify.script.lock'
 kind: script
 schema:

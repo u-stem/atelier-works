@@ -31,6 +31,14 @@ import {
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
 import {
+  confirmationVerdict,
+  confirmRehash,
+  githubRehashPlanner,
+  type RehashPlanner,
+  readRootWmillLock,
+  rehashRoundProbe,
+} from "../lib/ci_metadata_rehash.ts";
+import {
   buildSystemPrompt,
   type DailyBudgetStatus,
   dailyBudgetStatus,
@@ -157,6 +165,12 @@ export type PrFixVerifyDeps = {
     failures: readonly CheckFailure[],
   ) => Promise<PrFixRetryResult>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
+  /**
+   * 直前の`inspectChanges`が、変更を`wmill-lock.yaml`の1件だけと確かめ、その本文が独立した再計算と一致したときに真を返す。
+   * CI回が真を受けたときは、検査コマンドを飛ばす。検査コマンドは、Claudeが書いたコードを確かめるもので、
+   * hashだけを書き換えた変更には意味が無く、対象リポジトリのコードを実行する危険だけが残るためである。
+   */
+  readonly rehashVerified?: () => boolean;
   /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
   readonly reportCheckImageStale: (
     error: CheckEnvironmentError,
@@ -197,7 +211,9 @@ export type PrFixVerifyInput = {
  * 検査コマンドは対象リポジトリのコードで、保護パスのファイルやsymlinkを作れるため。
  * 検査が失敗したら、日次予算の範囲で、失敗の出力を添えてClaudeの修正を1回だけ追加で走らせ、
  * 変更の検査と検査コマンドをもう一度行う。それでも失敗するときは"blocked"にする。
- * 検査コマンドがあれば、準備ステップの記録がそろっていることを確かめた後、最初の検査の前に`announceChecks`を呼ぶ。
+ * 検査コマンドを実行するときは、変更の検査を通った後、最初の検査コマンドの直前に1回だけ`announceChecks`を呼ぶ。
+ * 実行しない回(検査コマンドが無い、変更の検査で止めた、再計算の出力を照合できた)は、呼ばない。
+ * 「検査コマンドを未検証コードに実行する」という告知を、実行しない回に残さないためである。
  * workerが検査の前提を満たさず検査を実行できなければ(`CheckEnvironmentError`)、`reportCheckImageStale`で知らせ、
  * Claudeを再実行せずに"guard_blocked"にする。Claudeが直せる検査の失敗ではないので、
  * 準備の関門と同じく修正のラウンドを記録させず、モデルの失敗に数えないためである。
@@ -246,8 +262,6 @@ export async function runPrFixVerify(
   if (ciRound && input.apply.replies.length > 0) {
     return blocked(CI_ROUND_REPLIES_REASON, input.apply.summary, []);
   }
-  // 検査コマンドがあるときは、準備ステップの記録がそろっていることを確かめた後、最初の検査より前に告知する。
-  if (input.hasCheckCommands) await deps.announceChecks();
   /** `.git`とHEADを照合してから変更を調べ、止める理由を返す。問題が無ければnull。 */
   const inspect = async (): Promise<string | null> => {
     const pointerReason = await recordedGitPointerStopReason(
@@ -277,6 +291,8 @@ export async function runPrFixVerify(
     commit_body: input.apply.commitBody,
   };
   if (!input.hasCheckCommands) return applyDone;
+  if (ciRound && deps.rehashVerified?.() === true) return applyDone;
+  await deps.announceChecks();
 
   /** 検査コマンドを実行する。workerが前提を満たさず実行できなければ、知らせてからその例外を返す。 */
   const runChecks = async (): Promise<
@@ -481,6 +497,41 @@ export async function main(
     })();
     return prChangedPathsRead;
   };
+  // hashの再計算の確認に使う、baseの先端の読み取りと再計算。最初に要るときに1回だけ組む。
+  // 回の種類(再計算の回か)を読み直す関数も、同じ認証で組む。
+  let rehashPlannerBuilt: Promise<{
+    readonly planner: RehashPlanner;
+    readonly isRehashRound: () => Promise<boolean>;
+  }> | null = null;
+  const rehashPlannerOnce = () => {
+    rehashPlannerBuilt ??= (async () => {
+      const ghToken = await wmill.getVariable("f/factory/github_token");
+      const client: GhClient = { run: runCommand, ghToken };
+      const headSha = requireCiRoundHeadSha(head_sha);
+      return {
+        planner: githubRehashPlanner({
+          client,
+          owner,
+          repo,
+          prNumber: pr_number,
+          headSha,
+          worktreeDir: worktree_dir,
+          ghToken,
+        }),
+        isRehashRound: rehashRoundProbe({
+          client,
+          owner,
+          repo,
+          prNumber: pr_number,
+          headSha,
+          run: runCommand,
+        }),
+      };
+    })();
+    return rehashPlannerBuilt;
+  };
+  // 直前の変更の検査が、再計算と一致する`wmill-lock.yaml`の1件だけと確かめたか。検査のたびに戻す。
+  let rehashVerified = false;
 
   const timeoutMs = config.claude_timeout_sec * 1000;
   // 検査コマンドは、検査用の非特権uidに落として実行する。rootのまま実行することはしない。
@@ -510,7 +561,9 @@ export async function main(
         assertWorktreeGitPointer(worktree_dir, expected),
       checkHead: (expectedSha, headBranch) =>
         localHeadStopReason(runCommand, worktree_dir, expectedSha, headBranch),
+      rehashVerified: () => rehashVerified,
       inspectChanges: async () => {
+        rehashVerified = false;
         const inspected = await inspectUncommittedChanges(
           runCommand,
           worktree_dir,
@@ -530,7 +583,19 @@ export async function main(
               worktree_dir,
               requireCiRoundHeadSha(head_sha),
               await loadPrChangedPaths(),
-              { source: "worktree" },
+              {
+                source: "worktree",
+                // 変更が`wmill-lock.yaml`の1件だけのときに限り、PRのheadの木からの独立した再計算と照合する。
+                rehashCheck: async () => {
+                  const { planner, isRehashRound } = await rehashPlannerOnce();
+                  const confirmation = await confirmRehash({
+                    ...planner,
+                    readLock: () => readRootWmillLock(worktree_dir),
+                  });
+                  rehashVerified = confirmation.ok;
+                  return await confirmationVerdict(confirmation, isRehashRound);
+                },
+              },
             );
         const safeReasons = await guardCiRoundReasons(
           reasons,

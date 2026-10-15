@@ -1173,6 +1173,7 @@ describe("pullRequestPageUrl", () => {
 
 const DETERMINISTIC_HOLDS = [
   "unfixable_job",
+  "metadata_manual",
   "other_conclusion",
   "log_unavailable",
   "fix_stopped",
@@ -1234,6 +1235,90 @@ const POLITE_ENDING = /(です|ます|ません|ました|でした|ください
 function sentencesOf(action: string): string[] {
   return action.split("。").filter((sentence) => sentence !== "");
 }
+
+describe("prCiFixHoldInfo for the metadata job", () => {
+  test("points an unnamed job to the log, not to the metadata command", () => {
+    expect(prCiFixHoldInfo("unfixable_job").nextAction).not.toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("points an unnamed job to the log in the stop notice", () => {
+    expect(prCiFixHoldInfo("unfixable_job").stopAction).not.toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("tells a human to run the metadata command when the lock cannot be recomputed", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("tells a human to run the metadata command in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "mise run metadata",
+    );
+  });
+
+  test("mentions the merge of the base branch for a human", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain("main");
+  });
+
+  test("points to the reason recorded in the work item", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "理由は作業項目に記録した",
+    );
+  });
+
+  test("points to the reason recorded in the work item in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "理由は作業項目に記録しました",
+    );
+  });
+
+  test("tells a human to run the job again when it failed to start Windmill", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "Windmillの起動やログインで落ちたときは、実行をやり直す",
+    );
+  });
+
+  test("tells a human to run the job again in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "Windmillの起動やログインで落ちたときは、実行をやり直してください",
+    );
+  });
+
+  test("lists the base branch that moved in the middle of a recomputation as a cause", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "再計算の途中でbaseが動いた",
+    );
+  });
+
+  test("lists the lock that cannot be written as a cause", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "lockを書き込めない",
+    );
+  });
+
+  test("lists the base branch that moved as a cause in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "再計算の途中でbaseが動いた",
+    );
+  });
+
+  test("does not claim that the cause is a dependency change", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).not.toContain("依存");
+  });
+
+  test("is not a temporary reason, so the same head is not started again", () => {
+    expect(prCiFixHoldInfo("metadata_manual").temporary).toBe(false);
+  });
+
+  test("notifies Discord because a human must act", () => {
+    expect(prCiFixHoldInfo("metadata_manual").discord).toBe(true);
+  });
+});
 
 describe("prCiFixHoldInfo", () => {
   test("marks every deterministic reason as not temporary", () => {
