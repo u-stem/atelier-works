@@ -1110,7 +1110,7 @@ worktreeの差分から秘密情報を取り除いてから、人が修正する
 
 それ以上追跡させたくないPRは、closeするか、`tracked_pr_days`を過ぎるまで待つ。
 
-`review_post_mode`を`gated`にすると、レビューを投稿しない。検証用の予約のモードで、PRはレビュー依頼かassigneeからだけ見つけ直す。
+`review_post_mode`を`gated`にすると、レビューを投稿しない。検証用の予約のモードで、PRはレビュー依頼かassigneeからだけ見つけ直す。PRレビュー完了の通知も届かない。結果はConsoleの作業項目で見る。
 
 ### 人が作ったPRを要件と紐づける
 

@@ -5,6 +5,7 @@
 // 投稿の書式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節に従う。
 
 import { describe, expect, test } from "bun:test";
+import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type {
   ReviewComment,
   ReviewThread,
@@ -21,6 +22,8 @@ import {
   publishReview,
   reviewedNotifyEvent,
   runPrReviewPost,
+  sendReviewedNotification,
+  shouldPostReview,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
   countOpenMustThreads,
@@ -1182,7 +1185,7 @@ describe("reviewedNotifyEvent", () => {
   test("returns a pr_reviewed event when the review was posted", () => {
     const event = reviewedNotifyEvent({
       ...base,
-      post: true,
+      posted: true,
       findings: [finding({ kind: "must" })],
       openMustCount: 0,
     });
@@ -1199,45 +1202,79 @@ describe("reviewedNotifyEvent", () => {
     });
   });
 
-  test("returns null when the review was not posted (gated)", () => {
-    const event = reviewedNotifyEvent({
-      ...base,
-      post: false,
-      findings: [finding({ kind: "must" })],
-      openMustCount: 0,
-    });
-    expect(event).toBeNull();
-  });
-
-  test("returns null when not posted even with no findings", () => {
-    const event = reviewedNotifyEvent({
-      ...base,
-      post: false,
-      findings: [],
-      openMustCount: 0,
-    });
-    expect(event).toBeNull();
-  });
-
-  test("returns null when not posted even with open must threads", () => {
-    const event = reviewedNotifyEvent({
-      ...base,
-      post: false,
-      findings: [],
-      openMustCount: 2,
-    });
-    expect(event).toBeNull();
-  });
-
   test("reports changes_requested for a posted review with open must threads only", () => {
     const event = reviewedNotifyEvent({
       ...base,
-      post: true,
+      posted: true,
       findings: [],
       openMustCount: 2,
     });
-    expect(event?.kind === "pr_reviewed" ? event.result : null).toBe(
-      "changes_requested",
-    );
+    expect(event).toMatchObject({ result: "changes_requested" });
+  });
+
+  test.each([
+    ["a must finding", [finding({ kind: "must" })], 0],
+    ["no findings", [], 0],
+    ["open must threads only", [], 2],
+  ])(
+    "returns null when the review was not posted (%s)",
+    (_name, findings, openMustCount) => {
+      const event = reviewedNotifyEvent({
+        ...base,
+        posted: false,
+        findings,
+        openMustCount,
+      });
+      expect(event).toBeNull();
+    },
+  );
+});
+
+describe("shouldPostReview", () => {
+  test("posts in comment_only mode", () => {
+    expect(shouldPostReview("comment_only")).toBe(true);
+  });
+
+  test("does not post in gated mode", () => {
+    expect(shouldPostReview("gated")).toBe(false);
+  });
+});
+
+describe("sendReviewedNotification", () => {
+  const event: NotifyEvent = {
+    kind: "pr_reviewed",
+    instance_name: "factory-a",
+    owner: "octo",
+    repo: "app",
+    pr_number: 7,
+    pr_url: "https://github.com/octo/app/pull/7",
+    verdict: "approve",
+    finding_count: 0,
+    result: "reviewed",
+  };
+
+  test("does not read the webhook when there is no event", async () => {
+    const calls: string[] = [];
+    await sendReviewedNotification(null, {
+      getWebhookUrl: async () => {
+        calls.push("getWebhookUrl");
+        return "https://example.test/hook";
+      },
+      notify: async () => {
+        calls.push("notify");
+      },
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test("sends the event to the webhook when there is one", async () => {
+    const calls: [string, NotifyEvent][] = [];
+    await sendReviewedNotification(event, {
+      getWebhookUrl: async () => "https://example.test/hook",
+      notify: async (url, sent) => {
+        calls.push([url, sent]);
+      },
+    });
+    expect(calls).toEqual([["https://example.test/hook", event]]);
   });
 });
