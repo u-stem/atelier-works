@@ -19,6 +19,7 @@ import {
   type PublishReviewInput,
   postMarkedReview,
   publishReview,
+  reviewedNotifyEvent,
   runPrReviewPost,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
@@ -1166,5 +1167,77 @@ describe("posting a review once per sha", () => {
       );
       expect(fake.calls.some(isCreateReviewCall)).toBe(false);
     });
+  });
+});
+
+describe("reviewedNotifyEvent", () => {
+  const base = {
+    instance_name: "factory-a",
+    owner: "octo",
+    repo: "app",
+    pr_number: 7,
+    verdict: "request_changes",
+  };
+
+  test("returns a pr_reviewed event when the review was posted", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      post: true,
+      findings: [finding({ kind: "must" })],
+      openMustCount: 0,
+    });
+    expect(event).toEqual({
+      kind: "pr_reviewed",
+      instance_name: "factory-a",
+      owner: "octo",
+      repo: "app",
+      pr_number: 7,
+      pr_url: "https://github.com/octo/app/pull/7",
+      verdict: "request_changes",
+      finding_count: 1,
+      result: "changes_requested",
+    });
+  });
+
+  test("returns null when the review was not posted (gated)", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      post: false,
+      findings: [finding({ kind: "must" })],
+      openMustCount: 0,
+    });
+    expect(event).toBeNull();
+  });
+
+  test("returns null when not posted even with no findings", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      post: false,
+      findings: [],
+      openMustCount: 0,
+    });
+    expect(event).toBeNull();
+  });
+
+  test("returns null when not posted even with open must threads", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      post: false,
+      findings: [],
+      openMustCount: 2,
+    });
+    expect(event).toBeNull();
+  });
+
+  test("reports changes_requested for a posted review with open must threads only", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      post: true,
+      findings: [],
+      openMustCount: 2,
+    });
+    expect(event?.kind === "pr_reviewed" ? event.result : null).toBe(
+      "changes_requested",
+    );
   });
 });

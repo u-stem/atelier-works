@@ -174,6 +174,7 @@ export async function main(
  * `review_post_mode`が"gated"のときは、レビューを記録して"reviewed"に進め
  * noticeを残すが、`createPrReview`は呼ばない。
  * "gated"は予約済みの値で、承認を経て投稿するUIはまだ無い。
+ * 投稿しないレビューは、PRに指摘が見えず人にできる操作も無いので、Discordの通知は送らない。
  */
 export async function runPrReviewPost(
   input: PrReviewPostInput,
@@ -434,6 +435,43 @@ export async function publishReview(
   };
 }
 
+/** `reviewedNotifyEvent`の入力。 */
+export type ReviewedNotifyInput = {
+  /** レビューをGitHubに投稿したか。偽なら("gated")PRに指摘が見えない。 */
+  readonly post: boolean;
+  readonly instance_name: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly verdict: string;
+  readonly findings: readonly ReviewFinding[];
+  readonly openMustCount: number;
+};
+
+/**
+ * 「PRレビュー完了」の通知を組み立てる。送らないときはnullを返す。
+ * 投稿していないレビューは、通知のリンクを開いてもPRに指摘が見えず、
+ * 受け取った人にできる操作が無いので送らない。
+ */
+export function reviewedNotifyEvent(
+  input: ReviewedNotifyInput,
+): NotifyEvent | null {
+  if (!input.post) {
+    return null;
+  }
+  return {
+    kind: "pr_reviewed",
+    instance_name: input.instance_name,
+    owner: input.owner,
+    repo: input.repo,
+    pr_number: input.pr_number,
+    pr_url: `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pr_number)}`,
+    verdict: input.verdict,
+    finding_count: input.findings.length,
+    result: reviewResultFor(input.findings, input.openMustCount),
+  };
+}
+
 /** `runPrReviewPost`のworktreeの削除を除いた本体。 */
 async function postReview(
   input: PrReviewPostInput,
@@ -574,20 +612,22 @@ async function postReview(
   if (moved) {
     // トリガーの`review_label`は`poll_prs.ts`が着手時に消費済みなので、
     // ここで外すラベルも、付けるPRの状態ラベルも無い。
-    const result = reviewResultFor(findings, openMustCount);
-    const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-    const event: NotifyEvent = {
-      kind: "pr_reviewed",
+    const event = reviewedNotifyEvent({
+      post,
       instance_name: config.instance_name,
       owner,
       repo,
       pr_number,
-      pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
       verdict,
-      finding_count: findings.length,
-      result,
-    };
-    await notifyBestEffort(webhookUrl, event, log);
+      findings,
+      openMustCount,
+    });
+    if (event !== null) {
+      const webhookUrl = await wmill.getVariable(
+        "f/factory/discord_webhook_url",
+      );
+      await notifyBestEffort(webhookUrl, event, log);
+    }
   }
 
   return {
