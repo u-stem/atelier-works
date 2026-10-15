@@ -16,6 +16,7 @@ import {
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
 import {
+  githubRehashPlanner,
   METADATA_REHASH_COMMIT_BODY,
   METADATA_REHASH_COMMIT_SUBJECT,
   METADATA_REHASH_SUMMARY,
@@ -31,13 +32,8 @@ import {
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
-import { type GhClient, getBranchSha, getPr } from "../lib/github.ts";
+import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
-import {
-  createGitPrecheckPorts,
-  fetchBranch,
-} from "../lib/metadata_git_ports.ts";
-import { planMetadataRehash } from "../lib/metadata_precheck.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import {
   lockJobIdFromEnv,
@@ -318,21 +314,22 @@ async function applyMetadataRound(
   const client: GhClient = { run: runCommand, ghToken };
   const target = { owner, repo, prNumber: input.prNumber, headSha };
   const gatherDeps = buildCiGatherDeps(client, target, runCommand);
+  const planner = githubRehashPlanner({
+    client,
+    owner,
+    repo,
+    prNumber: input.prNumber,
+    headSha,
+    worktreeDir,
+    ghToken,
+  });
   const round = await runMetadataRound({
     readFailure: () => readCiFailure(gatherDeps, target),
-    rehash: async () => {
-      const pr = await getPr(client, owner, repo, input.prNumber);
-      const baseSha = await getBranchSha(client, owner, repo, pr.baseRef);
-      await fetchBranch({ cwd: worktreeDir, branch: pr.baseRef, ghToken });
-      return rehashMetadataLock({
-        plan: () =>
-          planMetadataRehash(
-            { baseSha, headSha },
-            createGitPrecheckPorts({ cwd: worktreeDir }),
-          ),
+    rehash: () =>
+      rehashMetadataLock({
+        plan: async () => planner.planWith(await planner.readBase()),
         writeLock: (text) => writeRootWmillLock(worktreeDir, text),
-      });
-    },
+      }),
   });
   if (round === null) return null;
   if (round.kind === "manual") return blockedResult(round.reason);

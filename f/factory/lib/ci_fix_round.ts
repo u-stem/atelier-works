@@ -930,7 +930,31 @@ export type CiChangeOptions = {
   readonly fs?: CiChangeFs;
   /** 現在時刻(ミリ秒)。省略時は`Date.now`。時間の上限(`CI_ROUND_COLLECT_BUDGET_MS`)の測定に使う。 */
   readonly now?: () => number;
+  /**
+   * 変更が、根の`wmill-lock.yaml`の通常の変更1件だけのときに、その内容が独立した再計算と一致するかを確かめる。
+   * `true`なら、その変更を許す。渡さないとき、`false`のとき、ほかの変更を含むときは、許可リストの検査に任せる。
+   * `checkCiFixChanges`は変えず、呼び出し側のこの検査だけが例外を置く。
+   */
+  readonly rehashCheck?: () => Promise<boolean>;
 };
+
+/** 再計算が書き換えてよい、根のlockのパス。 */
+const ROOT_LOCK_PATH = "wmill-lock.yaml";
+
+/**
+ * 変更が、根の`wmill-lock.yaml`の通常のファイルの変更(モード`100644`の`modified`)1件だけか。
+ * hashの再計算の出力の形である。追加、削除、モードの変更、ほかのファイルの変更を含めば偽になる。
+ */
+export function isLockOnlyChange(changes: readonly CiFixChange[]): boolean {
+  const [only, ...rest] = changes;
+  return (
+    rest.length === 0 &&
+    only !== undefined &&
+    only.path === ROOT_LOCK_PATH &&
+    only.status === "modified" &&
+    only.mode === "100644"
+  );
+}
 
 function splitLines(text: string): string[] {
   if (text === "") return [];
@@ -1215,6 +1239,13 @@ export async function inspectCiFixChanges(
   if (timedOut) return [`${REASON_PREFIX} took too long to read the changes`];
   if (overflow)
     return [`${REASON_PREFIX} changed more than ${String(max)} files`];
+  if (
+    options.rehashCheck !== undefined &&
+    isLockOnlyChange(changes) &&
+    (await options.rehashCheck())
+  ) {
+    return [];
+  }
   const verdict = checkCiFixChanges({ changes, prChangedPaths });
   if (verdict.ok) return [];
   return verdict.violations.map((violation) =>

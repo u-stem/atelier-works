@@ -11,15 +11,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CiFailureRead } from "../../f/factory/lib/ci_fix_round.ts";
 import {
+  CI_ROUND_REHASH_STALE_REASON,
+  confirmRehash,
   METADATA_REHASH_COMMIT_BODY,
   METADATA_REHASH_COMMIT_SUBJECT,
   METADATA_REHASH_SUMMARY,
   metadataManualReason,
+  REHASH_CONFIRM_ATTEMPTS,
+  type RehashPlanner,
+  readRootWmillLock,
+  readStagedRootLock,
   rehashMetadataLock,
+  rehashPlanner,
+  rehashPushStopReason,
   runMetadataRound,
   writeRootWmillLock,
 } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import type { PlanResult } from "../../f/factory/lib/metadata_precheck.ts";
+import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 
 const OK_PLAN: PlanResult = {
   ok: true,
@@ -225,6 +234,311 @@ describe("writeRootWmillLock", () => {
   test("does not create a file that is missing", async () => {
     const dir = worktree();
     await expect(writeRootWmillLock(dir, "new\n")).rejects.toThrow();
+  });
+});
+
+describe("confirmRehash", () => {
+  const OK_LOCK = "new lock\n";
+
+  function io(
+    over: {
+      bases?: readonly string[];
+      plan?: (base: string) => PlanResult;
+      lock?: string | null;
+    } = {},
+  ) {
+    const bases = [...(over.bases ?? ["b".repeat(40)])];
+    const planned: string[] = [];
+    return {
+      planned,
+      deps: {
+        readBase: async () => {
+          const next = bases.length > 1 ? bases.shift() : bases[0];
+          return next ?? "b".repeat(40);
+        },
+        planWith: async (base: string): Promise<PlanResult> => {
+          planned.push(base);
+          return (
+            over.plan?.(base) ?? { ok: true, newLock: OK_LOCK, changedKeys: [] }
+          );
+        },
+        readLock: async () => (over.lock === undefined ? OK_LOCK : over.lock),
+      },
+    };
+  }
+
+  test("confirms a lock that equals the recomputation", async () => {
+    const { deps } = io();
+    expect(await confirmRehash(deps)).toEqual({
+      ok: true,
+      baseSha: "b".repeat(40),
+      lockText: OK_LOCK,
+    });
+  });
+
+  test("refuses a lock that differs from the recomputation", async () => {
+    const { deps } = io({ lock: "other\n" });
+    expect((await confirmRehash(deps)).ok).toBe(false);
+  });
+
+  test("refuses when the recomputation is not possible", async () => {
+    const { deps } = io({
+      plan: () => ({ ok: false, reason: "dependency_changed" }),
+    });
+    expect((await confirmRehash(deps)).ok).toBe(false);
+  });
+
+  test("refuses when the lock cannot be read", async () => {
+    const { deps } = io({ lock: null });
+    expect((await confirmRehash(deps)).ok).toBe(false);
+  });
+
+  test("plans again when the base tip moved while it planned", async () => {
+    const { deps, planned } = io({
+      bases: ["1".repeat(40), "2".repeat(40), "2".repeat(40)],
+    });
+    await confirmRehash(deps);
+    expect(planned).toEqual(["1".repeat(40), "2".repeat(40)]);
+  });
+
+  test("confirms with the base tip it settled on", async () => {
+    const { deps } = io({
+      bases: ["1".repeat(40), "2".repeat(40), "2".repeat(40)],
+    });
+    const result = await confirmRehash(deps);
+    expect(result.ok && result.baseSha).toBe("2".repeat(40));
+  });
+
+  test("gives up when the base tip keeps moving", async () => {
+    let n = 0;
+    const deps = {
+      readBase: async () => {
+        n += 1;
+        return String(n).padStart(40, "0");
+      },
+      planWith: async (): Promise<PlanResult> => ({
+        ok: true,
+        newLock: OK_LOCK,
+        changedKeys: [],
+      }),
+      readLock: async () => OK_LOCK,
+    };
+    expect((await confirmRehash(deps)).ok).toBe(false);
+  });
+
+  test("limits the number of plans while the base tip moves", async () => {
+    let plans = 0;
+    let n = 0;
+    await confirmRehash({
+      readBase: async () => {
+        n += 1;
+        return String(n).padStart(40, "0");
+      },
+      planWith: async (): Promise<PlanResult> => {
+        plans += 1;
+        return { ok: true, newLock: OK_LOCK, changedKeys: [] };
+      },
+      readLock: async () => OK_LOCK,
+    });
+    expect(plans).toBe(REHASH_CONFIRM_ATTEMPTS);
+  });
+});
+
+describe("rehashPushStopReason", () => {
+  const CONFIRMED = {
+    ok: true as const,
+    baseSha: "1".repeat(40),
+    lockText: "new lock\n",
+  };
+
+  function planner(
+    bases: readonly string[],
+    plan: PlanResult,
+  ): { subject: RehashPlanner; planned: string[] } {
+    const queue = [...bases];
+    const planned: string[] = [];
+    return {
+      planned,
+      subject: {
+        readBase: async () =>
+          (queue.length > 1 ? queue.shift() : queue[0]) ?? "",
+        planWith: async (base) => {
+          planned.push(base);
+          return plan;
+        },
+      },
+    };
+  }
+
+  const SAME: PlanResult = { ok: true, newLock: "new lock\n", changedKeys: [] };
+
+  test("allows the push when the base tip is the confirmed one", async () => {
+    const { subject } = planner(["1".repeat(40)], SAME);
+    expect(await rehashPushStopReason(CONFIRMED, subject)).toBeNull();
+  });
+
+  test("does not plan again when the base tip is the confirmed one", async () => {
+    const { subject, planned } = planner(["1".repeat(40)], SAME);
+    await rehashPushStopReason(CONFIRMED, subject);
+    expect(planned).toEqual([]);
+  });
+
+  test("plans again with the new tip when the base moved", async () => {
+    const { subject, planned } = planner(["2".repeat(40)], SAME);
+    await rehashPushStopReason(CONFIRMED, subject);
+    expect(planned).toEqual(["2".repeat(40)]);
+  });
+
+  test("allows the push when the new tip gives the same lock", async () => {
+    const { subject } = planner(["2".repeat(40)], SAME);
+    expect(await rehashPushStopReason(CONFIRMED, subject)).toBeNull();
+  });
+
+  test("stops the push when the new tip gives another lock", async () => {
+    const { subject } = planner(["2".repeat(40)], {
+      ok: true,
+      newLock: "other\n",
+      changedKeys: [],
+    });
+    expect(await rehashPushStopReason(CONFIRMED, subject)).toBe(
+      CI_ROUND_REHASH_STALE_REASON,
+    );
+  });
+
+  test("stops the push when the new tip cannot be recomputed", async () => {
+    const { subject } = planner(["2".repeat(40)], {
+      ok: false,
+      reason: "head_lacks_base",
+    });
+    expect(await rehashPushStopReason(CONFIRMED, subject)).toBe(
+      CI_ROUND_REHASH_STALE_REASON,
+    );
+  });
+
+  test("states the stop in a sentence of a CI round", () => {
+    expect(CI_ROUND_REHASH_STALE_REASON.startsWith("ci round: ")).toBe(true);
+  });
+});
+
+describe("rehashPlanner", () => {
+  function planner() {
+    const calls: string[] = [];
+    const subject = rehashPlanner({
+      readBaseRef: async () => {
+        calls.push("ref");
+        return "main";
+      },
+      readBranchSha: async (branch) => {
+        calls.push(`sha:${branch}`);
+        return "c".repeat(40);
+      },
+      fetchBranch: async (branch) => {
+        calls.push(`fetch:${branch}`);
+      },
+      plan: async (base) => {
+        calls.push(`plan:${base.slice(0, 1)}`);
+        return { ok: false, reason: "base_stale" };
+      },
+    });
+    return { subject, calls };
+  }
+
+  test("reads the tip of the branch the PR targets", async () => {
+    const { subject } = planner();
+    expect(await subject.readBase()).toBe("c".repeat(40));
+  });
+
+  test("fetches the base branch before it plans", async () => {
+    const { subject, calls } = planner();
+    await subject.planWith("c".repeat(40));
+    expect(calls).toEqual(["ref", "fetch:main", "plan:c"]);
+  });
+
+  test("reads the name of the base branch once", async () => {
+    const { subject, calls } = planner();
+    await subject.readBase();
+    await subject.readBase();
+    expect(calls.filter((call) => call === "ref").length).toBe(1);
+  });
+});
+
+describe("readRootWmillLock", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+  function worktree(): string {
+    const root = mkdtempSync(join(tmpdir(), "read-root-lock-"));
+    roots.push(root);
+    return root;
+  }
+
+  test("reads the text of a regular file", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "wmill-lock.yaml"), "日本語\n");
+    expect(await readRootWmillLock(dir)).toBe("日本語\n");
+  });
+
+  test("does not follow a symlink", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "target.txt"), "secret\n");
+    symlinkSync("target.txt", join(dir, "wmill-lock.yaml"));
+    expect(await readRootWmillLock(dir)).toBeNull();
+  });
+
+  test("returns null for a missing file", async () => {
+    expect(await readRootWmillLock(worktree())).toBeNull();
+  });
+});
+
+describe("readStagedRootLock", () => {
+  function runner(
+    over: Partial<{
+      stdout: string;
+      exitCode: number;
+      outputAbandoned: boolean;
+    }> = {},
+  ): { run: CommandRunner; seen: string[][] } {
+    const seen: string[][] = [];
+    return {
+      seen,
+      run: async (argv) => {
+        seen.push([...argv]);
+        return {
+          stdout: over.stdout ?? "text\n",
+          stderr: "",
+          exitCode: over.exitCode ?? 0,
+          timedOut: false,
+          ...(over.outputAbandoned === true ? { outputAbandoned: true } : {}),
+        };
+      },
+    };
+  }
+
+  test("reads the blob of the index by its name in the index", async () => {
+    const { run, seen } = runner();
+    await readStagedRootLock(run, "/w");
+    expect(seen[0]?.slice(-3)).toEqual([
+      "cat-file",
+      "blob",
+      ":wmill-lock.yaml",
+    ]);
+  });
+
+  test("returns the text of the blob", async () => {
+    expect(await readStagedRootLock(runner().run, "/w")).toBe("text\n");
+  });
+
+  test("returns null when the command fails", async () => {
+    expect(
+      await readStagedRootLock(runner({ exitCode: 128 }).run, "/w"),
+    ).toBeNull();
+  });
+
+  test("returns null when the output was abandoned", async () => {
+    expect(
+      await readStagedRootLock(runner({ outputAbandoned: true }).run, "/w"),
+    ).toBeNull();
   });
 });
 

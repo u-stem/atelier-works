@@ -631,6 +631,61 @@ describe("runPrFixVerify: a worker that cannot run the checks", () => {
   });
 });
 
+describe("runPrFixVerify: a recomputed lock", () => {
+  const CI_INPUT: PrFixVerifyInput = { ...INPUT, ciRound: true };
+
+  function withVerified(verified: boolean, options: HarnessOptions = {}) {
+    const h = harness(options);
+    const deps: PrFixVerifyDeps = { ...h.deps, rehashVerified: () => verified };
+    return { deps, calls: h.calls };
+  }
+
+  test("skips the check commands for a lock that the recomputation confirmed", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).not.toContain("runChecks");
+  });
+
+  test("returns done with the commit message of the apply step", async () => {
+    const { deps } = withVerified(true);
+    const result = await runPrFixVerify(deps, CI_INPUT);
+    expect(result).toEqual({
+      outcome: "done",
+      reason: null,
+      summary: "apply summary",
+      replies: [],
+      commit_subject: "fix: 指摘を直す",
+      commit_body: null,
+    });
+  });
+
+  test("inspects the worktree before it trusts the confirmation", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).toContain("inspectChanges");
+  });
+
+  test("blocks when the inspection refuses, even if a confirmation was recorded", async () => {
+    const { deps } = withVerified(true, {
+      inspections: [forbidden("ci round change not allowed (x): y")],
+    });
+    const result = await runPrFixVerify(deps, CI_INPUT);
+    expect(result.outcome).toBe("blocked");
+  });
+
+  test("runs the check commands when the lock was not confirmed", async () => {
+    const { deps, calls } = withVerified(false);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).toContain("runChecks");
+  });
+
+  test("ignores a confirmation in a round that is not a CI round", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, INPUT);
+    expect(calls).toContain("runChecks");
+  });
+});
+
 describe("runPrFixVerify: CI round", () => {
   const CI_INPUT: PrFixVerifyInput = { ...INPUT, ciRound: true };
   const REPLY: FixReply = {
