@@ -733,5 +733,6 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- 競合を直す作業項目の起動。設定と判断の関数は`lib/`にあるが、これらを呼ぶ処理が無く、`pr_conflict_fix_enabled`を`true`にしても起動しない
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

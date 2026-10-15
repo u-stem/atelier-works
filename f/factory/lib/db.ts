@@ -5997,7 +5997,7 @@ export async function releasePrConflictFix(
           ) THEN COALESCE(${holdReason}::text, r.fix_hold_reason)
           ELSE r.fix_hold_reason END,
         updated_at = now()
-    WHERE r.id = ${id}::bigint AND r.fix_work_item_id IS NOT NULL
+    WHERE r.id = ${id}::bigint
       AND r.fix_work_item_id = ${fixWorkItemId}::bigint
     RETURNING r.id
   `.fetch();
@@ -6054,12 +6054,19 @@ export type PrConflictFixRoundScope =
  *   数えない回が続く行は、行の`fix_attempts`の上限が止める。
  * - 何も変えずに終えた作業項目(状態が`reviewed`で、その状態へ移った最新の遷移の注記が`up_to_date`のもの)。
  *   ベースの更新がすでに取り込まれていて、直す作業が無かった回である。
+ * - イメージが古い理由で止まった作業項目(状態が`blocked`で、その状態へ移った最新の遷移の注記が、
+ *   `staleImageNotePrefixes`のどれかで始まるもの)。呼び出し側は`AUTO_RETRY_REASON_PREFIXES`を渡す。
+ *   一覧を引数にするのは、`db.ts`が検査のサンドボックスの部品に依存しないようにするためである。準備がClaudeを動かす前に止めた回で、フローのジョブIDを持つ。
+ *   数えると、イメージが古い間に起動と停止を繰り返して回数を使い切り、人がイメージを直しても自動で直らなくなる。
+ *   繰り返しは、行の`fix_attempts`の上限が止める。
  */
 export async function countPrConflictFixRounds(
   scope: PrConflictFixRoundScope,
+  staleImageNotePrefixes: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const upToDateNote = conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate);
+  const staleImagePrefixes: string[] = [...staleImageNotePrefixes];
   if (scope.kind === "episode") {
     assertPositiveId(scope.checkId, "pr conflict check id");
     assertPositiveId(scope.episode, "pr conflict episode");
@@ -6076,6 +6083,17 @@ export async function countPrConflictFixRounds(
             ORDER BY e.occurred_at DESC, e.id DESC
             LIMIT 1
           ), '') = ${upToDateNote}::text
+        )
+        AND NOT (
+          wi.status = 'blocked' AND EXISTS (
+            SELECT 1 FROM unnest(${staleImagePrefixes}::text[]) AS p(prefix)
+            WHERE starts_with(COALESCE((
+              SELECT e.note FROM factory.work_item_events AS e
+              WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+              ORDER BY e.occurred_at DESC, e.id DESC
+              LIMIT 1
+            ), ''), p.prefix)
+          )
         )
     `.fetch();
     const row = rows[0];
@@ -6096,6 +6114,17 @@ export async function countPrConflictFixRounds(
           ORDER BY e.occurred_at DESC, e.id DESC
           LIMIT 1
         ), '') = ${upToDateNote}::text
+      )
+      AND NOT (
+        wi.status = 'blocked' AND EXISTS (
+          SELECT 1 FROM unnest(${staleImagePrefixes}::text[]) AS p(prefix)
+          WHERE starts_with(COALESCE((
+            SELECT e.note FROM factory.work_item_events AS e
+            WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1
+          ), ''), p.prefix)
+        )
       )
   `.fetch();
   const row = rows[0];

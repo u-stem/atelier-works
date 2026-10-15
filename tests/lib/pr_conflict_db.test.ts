@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
 import {
   claimPrConflictForFix,
   countPrConflictFixRounds,
@@ -645,12 +646,6 @@ describe("setPrConflictFixHold", () => {
 });
 
 describe("releasePrConflictFix", () => {
-  test("unbinds only a row that has a fix work item", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
-    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
-    expect(calls[0]?.text).toContain("fix_work_item_id IS NOT NULL");
-  });
-
   test("releases only the row bound to the given work item", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
@@ -778,17 +773,33 @@ describe("countPrConflictFixRounds", () => {
 
   test("returns the count", async () => {
     const { sql } = createFakeSqlClient([[{ rounds: "3" }]]);
-    expect(await countPrConflictFixRounds(EPISODE, sql)).toBe(3);
+    expect(
+      await countPrConflictFixRounds(
+        EPISODE,
+        [...AUTO_RETRY_REASON_PREFIXES],
+        sql,
+      ),
+    ).toBe(3);
   });
 
   test("returns zero when no row comes back", async () => {
     const { sql } = createFakeSqlClient([[]]);
-    expect(await countPrConflictFixRounds(EPISODE, sql)).toBe(0);
+    expect(
+      await countPrConflictFixRounds(
+        EPISODE,
+        [...AUTO_RETRY_REASON_PREFIXES],
+        sql,
+      ),
+    ).toBe(0);
   });
 
   test("counts the episode by the check id and the episode", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(EPISODE, sql);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
     expect(calls[0]?.text).toMatch(
       /wi\.conflict_check_id =\s+\?\s*::bigint AND wi\.conflict_episode =\s+\?\s*::integer/,
     );
@@ -796,13 +807,13 @@ describe("countPrConflictFixRounds", () => {
 
   test("counts the pull request from the work items, not through the conflict rows", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(PR, sql);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
     expect(calls[0]?.text).not.toContain("pr_conflict_checks");
   });
 
   test("counts the pull request by the lower-case owner and repo", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(PR, sql);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
     expect(calls[0]?.values).toEqual(
       expect.arrayContaining(["acme", "widgets"]),
     );
@@ -810,7 +821,7 @@ describe("countPrConflictFixRounds", () => {
 
   test("counts only conflict rounds of pr_fix", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(PR, sql);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
     expect(calls[0]?.text).toContain(
       "wi.kind = 'pr_fix' AND wi.conflict_check_id IS NOT NULL",
     );
@@ -818,7 +829,11 @@ describe("countPrConflictFixRounds", () => {
 
   test("does not count a failed work item that never started a flow", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(EPISODE, sql);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
     expect(calls[0]?.text).toContain(
       "NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)",
     );
@@ -826,29 +841,83 @@ describe("countPrConflictFixRounds", () => {
 
   test("does not count a round that ended up to date", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(EPISODE, sql);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
     expect(calls[0]?.values).toContain("conflict round: up_to_date");
   });
 
   test("tells an up to date round by the reviewed status and the note", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(EPISODE, sql);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
     expect(calls[0]?.text).toContain("wi.status = 'reviewed'");
+  });
+
+  test("does not count a blocked round that was stopped by a stale image, per episode", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.text).toContain("wi.status = 'blocked'");
+  });
+
+  test("does not count a blocked round that was stopped by a stale image, per pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
+    expect(calls[0]?.text).toContain("wi.status = 'blocked'");
+  });
+
+  test("binds the reasons of a stale image as note prefixes, per episode", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.values).toContainEqual([...AUTO_RETRY_REASON_PREFIXES]);
+  });
+
+  test("binds the reasons of a stale image as note prefixes, per pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
+    expect(calls[0]?.values).toContainEqual([...AUTO_RETRY_REASON_PREFIXES]);
+  });
+
+  test("reads the note by the latest event of the blocked status", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.text).toContain("starts_with(");
   });
 
   test("rejects an episode check id that is not positive, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds({ ...EPISODE, checkId: 0 }, sql).catch(
-      () => undefined,
-    );
+    await countPrConflictFixRounds(
+      { ...EPISODE, checkId: 0 },
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    ).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 
   test("rejects an owner that is not a GitHub name, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds({ ...PR, owner: "a b" }, sql).catch(
-      () => undefined,
-    );
+    await countPrConflictFixRounds(
+      { ...PR, owner: "a b" },
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    ).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 });

@@ -89,7 +89,8 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - `needs_human`と`blocked`は、理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留する。
  *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった`blocked`は、待たずに保留なしで結びを外す。
  *   待つと、その間は通知も起動もされない。競合回は進行中の作業が無く、人が競合を直すと急ぐ必要も無いので、
- *   CI回のような猶予は置かない。起動し直しは、行の起動の回数の上限と`recently_fixed`が止める。
+ *   CI回のような猶予は置かない。この回は回数に数えない(`countPrConflictFixRounds`)ので、起動し直しを止めるのは、
+ *   行の起動の回数(`fix_attempts`)の上限だけである。
  * - `failed`は、フローを起動する前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。
  *   起動し直す回数は、行の起動の回数の上限が止める。フローが起動した後の`failed`は、理由を写せれば写し、写せなければ`fix_stopped`で保留する。
  * - ほかの終端(`cancelled`など)は、保留なしで結びを外す。

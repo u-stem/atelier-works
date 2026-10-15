@@ -5041,6 +5041,8 @@ execPsql(
 );
 
 // 競合を直す作業項目: 起動は1つの文で行の更新と作業項目の挿入を行い、条件に合わなければ何も書かない。
+/** イメージが古い理由の注記の接頭辞。`AUTO_RETRY_REASON_PREFIXES`と同じ値で、依存を増やさないため値を書く。 */
+const STALE_IMAGE_NOTE_PREFIXES = ["worker image is stale: "];
 const CF = { owner: "qcfix", repo: "app" };
 const CF_HEAD_1 = "6".repeat(40);
 const CF_HEAD_2 = "7".repeat(40);
@@ -5687,6 +5689,7 @@ check(
   "conflict rounds: the episode counts its own rounds, without the ones that never started a flow",
   (await countPrConflictFixRounds(
     { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 3,
 );
@@ -5694,6 +5697,7 @@ check(
   "conflict rounds: another episode of the same row is counted apart",
   (await countPrConflictFixRounds(
     { kind: "episode", checkId: cfCount.id, episode: 2 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 1,
 );
@@ -5701,6 +5705,7 @@ check(
   "conflict rounds: the pull request counts the rounds of every episode",
   (await countPrConflictFixRounds(
     { kind: "pr", owner: "QCFix", repo: "App", prNumber: 716 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 4,
 );
@@ -5708,6 +5713,7 @@ check(
   "conflict rounds: a round of another pull request is not counted",
   (await countPrConflictFixRounds(
     { kind: "pr", owner: "qcfix", repo: "app", prNumber: 717 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 1,
 );
@@ -5715,6 +5721,7 @@ check(
   "conflict rounds: a pull request without a round counts zero",
   (await countPrConflictFixRounds(
     { kind: "pr", owner: "qcfix", repo: "app", prNumber: 799 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 0,
 );
@@ -5730,6 +5737,7 @@ check(
   "conflict rounds: a round that ended up to date is not counted",
   (await countPrConflictFixRounds(
     { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 3,
 );
@@ -5745,6 +5753,7 @@ check(
   "conflict rounds: a reviewed round with another note is counted",
   (await countPrConflictFixRounds(
     { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 4,
 );
@@ -5761,8 +5770,91 @@ check(
   "conflict rounds: the latest note of the reviewed status decides",
   (await countPrConflictFixRounds(
     { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 5,
+);
+// イメージが古い理由で止まった回は、Claudeを動かす前に準備が止めた回なので、数えない。
+const cfStaleBlocked = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-9",
+);
+conflictNote(cfStaleBlocked, "blocked", "worker image is stale: probe");
+check(
+  "conflict rounds: a blocked round stopped by a stale image is not counted, per episode",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 5,
+);
+check(
+  "conflict rounds: a blocked round stopped by a stale image is not counted, per pull request",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 6,
+);
+const cfOtherBlocked = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-10",
+);
+conflictNote(cfOtherBlocked, "blocked", "conflict round: claude blocked: x");
+check(
+  "conflict rounds: a blocked round with another note is counted, per episode",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 6,
+);
+check(
+  "conflict rounds: a blocked round with another note is counted, per pull request",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 7,
+);
+const cfNoNoteBlocked = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-11",
+);
+check(
+  "conflict rounds: a blocked round without a note is counted",
+  cfNoNoteBlocked > 0 &&
+    (await countPrConflictFixRounds(
+      { kind: "episode", checkId: cfCount.id, episode: 1 },
+      STALE_IMAGE_NOTE_PREFIXES,
+      sql,
+    )) === 7,
+);
+const cfStaleLatest = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-12",
+);
+conflictNote(cfStaleLatest, "blocked", "worker image is stale: probe");
+conflictNote(cfStaleLatest, "blocked", "conflict round: claude blocked: y");
+check(
+  "conflict rounds: the latest note of the blocked status decides",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 8,
 );
 execPsql(
   target,
@@ -5772,8 +5864,9 @@ check(
   "conflict rounds: the pull request still counts the rounds after the row was deleted",
   (await countPrConflictFixRounds(
     { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
+    STALE_IMAGE_NOTE_PREFIXES,
     sql,
-  )) === 6,
+  )) === 9,
 );
 // 新しい競合の回は、回の開始時刻、起動の回数、保留を戻し、結んだ作業項目は残す。競合のままでは何も戻さない。
 const cfEpisode = await conflictFixRow(720, CF_HEAD_1);

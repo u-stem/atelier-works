@@ -40,7 +40,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 35834e2fc4097c747dd824164479ca5abf08f425fe2e18556dff1ecfdce640f0
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
-  f/factory/lib/db: 44e50f5af651d963ba0d90c13cf70614c3946528e8aa870109019564b904c32e
+  f/factory/lib/db: 2252193af4d90cdf20aa5da0d386d8e576dad7b6e88258ec8d19b8bc8f600409
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -86,7 +86,7 @@ locks:
   f/factory/lib/pr_ci_watch: ea96ee25dc2c28ff8630899068d33126ad23a92d4ce2dc59f4b4991e885edf7f
   f/factory/lib/pr_conflict_fix_claim: 0964d5b8d8ffd6aabc3ea83f4c4d9ce4f23e1cc6e4a3259710d9e897bbacc019
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
-  f/factory/lib/pr_conflict_fix_recovery: 7127d13d1af880877952794e9a27e950e1626f327045fc0785c154f863a53da5
+  f/factory/lib/pr_conflict_fix_recovery: 50d6bd45e5e9d5bfa81691db8e4892237a0e809e4cf57845cd199156765c13eb
   f/factory/lib/pr_conflict_support: 7fe9d6f9903c4f53b335e16f6bb0f4a70ff31d2b9e694848ccfb1971358b86f2
   f/factory/lib/pr_conflict_watch: 72ef072e1508eb2fa067b0f2f3b67141e32ce5902a0c110875d21e09ec47bee8
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b

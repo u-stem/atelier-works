@@ -362,6 +362,27 @@ describe("decideConflictFixClaim", () => {
     });
   });
 
+  test("holds rounds_exhausted by the attempts of the row when no round is counted, as after stale image stops", async () => {
+    const { decision } = decide(
+      { episodeRounds: 0, prRounds: 0 },
+      { fix_attempts: 3 + LAUNCH_FAILURE_ALLOWANCE },
+      { maxRounds: 3 },
+    );
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "rounds_exhausted",
+    });
+  });
+
+  test("claims one attempt below the limit of the row when no round is counted", async () => {
+    const { decision } = decide(
+      { episodeRounds: 0, prRounds: 0 },
+      { fix_attempts: 3 + LAUNCH_FAILURE_ALLOWANCE - 1 },
+      { maxRounds: 3 },
+    );
+    expect((await decision).kind).toBe("claim");
+  });
+
   test("claims a row that was started fewer times than the allowance", async () => {
     const { decision } = decide(
       {},
