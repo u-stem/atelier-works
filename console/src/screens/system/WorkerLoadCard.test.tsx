@@ -57,6 +57,12 @@ describe("WorkerLoadCard", () => {
     );
   });
 
+  test("tells that a load of a different shape cannot be shown", () => {
+    expect(
+      renderToStaticMarkup(<WorkerLoadCard load={{ sample_count: "x" }} />),
+    ).toContain("表示できません");
+  });
+
   test("treats a missing load like no sample", () => {
     expect(renderToStaticMarkup(<WorkerLoadCard load={undefined} />)).toContain(
       "集計を読めませんでした",

@@ -16,7 +16,6 @@ import {
   isRecord,
   isString,
 } from "./primitives.ts";
-import { isWorkerLoad, type WorkerLoad } from "./workerLoad.ts";
 
 // 取り込みの状態と判定は表示にしか使わないので文字列で受け、日本語への変換(`systemView.ts`)で知らない値を受け止める。
 // backendが先に新しい値を反映した間も、画面の全体が消えないためである。
@@ -78,9 +77,11 @@ export type SystemStatus = {
   readonly resolved_notices: SystemResolvedNotice[];
   /**
    * workerの負荷。窓に記録が無いか、読めなかったときは`null`。
-   * 負荷を返す前のbackendの応答では欠ける。Consoleが先に配信されても、画面を壊さないためである。
+   * 負荷を返す前のbackendの応答では欠ける。
+   * 形は型ガードで確かめず、カードが`isWorkerLoad`で確かめる。
+   * 形が違う値で、システムの画面の全体を消さず、カードだけを「読めない」にするためである。
    */
-  readonly worker_load?: WorkerLoad | null;
+  readonly worker_load?: unknown;
 };
 
 const isStringList: Guard<string[]> = isArrayOf(isString);
@@ -156,9 +157,6 @@ export function isSystemStatus(value: unknown): value is SystemStatus {
     isSystemFetcher(value.fetcher) &&
     isOrphanFailureList(value.orphan_failures) &&
     isNoticeRows(value.info_notices) &&
-    isResolvedNoticeList(value.resolved_notices) &&
-    (value.worker_load === undefined ||
-      value.worker_load === null ||
-      isWorkerLoad(value.worker_load))
+    isResolvedNoticeList(value.resolved_notices)
   );
 }

@@ -22,7 +22,6 @@ function sample(
     sampled_at: new Date(NEWEST - index * 2 * MINUTE_MS),
     mem_anon_bytes: 0.1 * GIB,
     mem_limit_bytes: 4 * GIB,
-    mem_events_max: 0,
     mem_oom_kill: 0,
     ...overrides,
   };
@@ -48,6 +47,13 @@ describe("evaluateWorkerAlerts memory", () => {
   test("is quiet when the limit could not be read", () => {
     const samples = [
       sample(0, { mem_anon_bytes: 3.9 * GIB, mem_limit_bytes: null }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
+  });
+
+  test("is quiet when the limit is zero", () => {
+    const samples = [
+      sample(0, { mem_anon_bytes: 3.9 * GIB, mem_limit_bytes: 0 }),
     ];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
   });
@@ -92,6 +98,26 @@ describe("evaluateWorkerAlerts oom kill", () => {
     ).toEqual([]);
   });
 
+  test("compares across an hour of unreadable samples", () => {
+    const unreadable = Array.from({ length: 28 }, (_, index) =>
+      sample(index + 1, { mem_oom_kill: null }),
+    );
+    const samples = [
+      sample(0, { mem_oom_kill: 1 }),
+      ...unreadable,
+      sample(29, { mem_oom_kill: 0 }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual(["oom_kill"]);
+  });
+
+  test("is quiet when the count is the same on both sides of a restart", () => {
+    const samples = [
+      sample(0, { mem_oom_kill: 2 }),
+      sample(1, { mem_oom_kill: 2 }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
+  });
+
   test("is quiet when the newest count could not be read", () => {
     const samples = [sample(0, { mem_oom_kill: null }), sample(1)];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
@@ -123,48 +149,15 @@ describe("evaluateWorkerAlerts oom kill", () => {
   });
 });
 
-describe("evaluateWorkerAlerts limit reached", () => {
-  test("raises limit_reached when the count grew since the previous sample", () => {
-    const samples = [
-      sample(0, { mem_events_max: 5 }),
-      sample(1, { mem_events_max: 4 }),
-    ];
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([
-      "limit_reached",
-    ]);
-  });
-
-  test("is quiet when the count stayed the same", () => {
-    const samples = [
-      sample(0, { mem_events_max: 4 }),
-      sample(1, { mem_events_max: 4 }),
-    ];
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
-  });
-
-  test("is quiet when the count could not be read", () => {
-    const samples = [
-      sample(0, { mem_events_max: null }),
-      sample(1, { mem_events_max: 4 }),
-    ];
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
-  });
-});
-
 describe("evaluateWorkerAlerts causes together", () => {
   test("lists every cause that applies", () => {
     const samples = [
-      sample(0, {
-        mem_anon_bytes: 3.5 * GIB,
-        mem_oom_kill: 1,
-        mem_events_max: 2,
-      }),
+      sample(0, { mem_anon_bytes: 3.5 * GIB, mem_oom_kill: 1 }),
       sample(1),
     ];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([
       "memory",
       "oom_kill",
-      "limit_reached",
     ]);
   });
 
@@ -189,15 +182,21 @@ describe("workerAlertNotice", () => {
   });
 
   test("carries the next action", () => {
-    expect(
-      workerAlertNotice("limit_reached", THRESHOLDS, URL).message,
-    ).toContain("次の操作:");
+    expect(workerAlertNotice("oom_kill", THRESHOLDS, URL).message).toContain(
+      "次の操作:",
+    );
   });
 
   test("shows the threshold of the memory ratio as a percentage", () => {
     expect(workerAlertNotice("memory", THRESHOLDS, URL).message).toContain(
       "80%",
     );
+  });
+
+  test("shows a ratio that rounds to zero with one decimal", () => {
+    expect(
+      workerAlertNotice("memory", { memoryRatio: 0.001 }, URL).message,
+    ).toContain("0.1%");
   });
 
   test("keeps the text equal across calls so a repeat is not notified twice", () => {

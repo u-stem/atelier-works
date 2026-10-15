@@ -39,7 +39,6 @@ function recentSample(
     sampled_at: new Date(NOW),
     mem_anon_bytes: 0.1 * GIB,
     mem_limit_bytes: 4 * GIB,
-    mem_events_max: 0,
     mem_oom_kill: 0,
     ...overrides,
   };

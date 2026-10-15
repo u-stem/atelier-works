@@ -1,4 +1,4 @@
-import type { WorkerLoad } from "../../api/guards/workerLoad.ts";
+import { isWorkerLoad } from "../../api/guards/workerLoad.ts";
 import { describeWorkerLoad } from "../../lib/workerLoadView.ts";
 import { EmptyNote } from "./SystemSection.tsx";
 
@@ -6,16 +6,20 @@ import { EmptyNote } from "./SystemSection.tsx";
  * defaultのworkerの負荷。直近24時間の枠の使用、queueの待ち、メモリを出す。
  * 値は数だけで、外部の文字列を含まない。
  * 負荷を返す前のbackendの応答では`undefined`になるので、記録なしと同じに扱う。
+ * 形が違う値は、このカードだけを「読めない」にし、画面の他の節は出す。
  */
-export function WorkerLoadCard({
-  load,
-}: {
-  load: WorkerLoad | null | undefined;
-}) {
+export function WorkerLoadCard({ load }: { load: unknown }) {
   if (load === null || load === undefined) {
     return (
       <EmptyNote>
         直近24時間の記録がないか、集計を読めませんでした。sample_worker_loadのスケジュールが有効かと、console_queryのジョブログの警告を確かめてください
+      </EmptyNote>
+    );
+  }
+  if (!isWorkerLoad(load)) {
+    return (
+      <EmptyNote>
+        workerの負荷の応答の形が想定と違うため、表示できません。ConsoleとFactoryの版がそろっているかを確かめてください
       </EmptyNote>
     );
   }

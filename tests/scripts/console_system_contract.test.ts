@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { isSystemStatus } from "../../console/src/api/guards/systemStatus.ts";
+import { isWorkerLoad } from "../../console/src/api/guards/workerLoad.ts";
 import * as systemView from "../../console/src/lib/systemView.ts";
 import {
   resolverLabel,
@@ -141,7 +142,7 @@ describe("system_status contract between console_query and the console guard", (
     expect(isSystemStatus(await statusAsDelivered(FULL))).toBe(true);
   });
 
-  test("accepts a status whose worker load was recorded", async () => {
+  test("delivers a worker load that the console card can read", async () => {
     const delivered = await statusAsDelivered([
       [],
       [],
@@ -149,7 +150,9 @@ describe("system_status contract between console_query and the console guard", (
       [],
       [WORKER_LOAD_ROW],
     ]);
-    expect(isSystemStatus(delivered)).toBe(true);
+    expect(isRecord(delivered) && isWorkerLoad(delivered.worker_load)).toBe(
+      true,
+    );
   });
 
   test("returns the worker load in the delivered status", async () => {

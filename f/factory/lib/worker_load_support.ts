@@ -536,10 +536,12 @@ export function nextFailureCount(previous: number, complete: boolean): number {
 export const WORKER_LOAD_HIGH_KIND = "worker_load_high";
 
 /**
- * 判定に読む記録の件数。最新の1件と、増分を求めるために比べる相手を読めるだけ取る。
- * 比べる相手は、値の読めた直近の行である。値が読めない行が続いても、5件あれば足りる。
+ * 判定に読む記録の件数。最新の1件と、OOMの増分を求めるために比べる相手を読めるだけ取る。
+ * 比べる相手は、値の読めた直近の行である。
+ * 1時間(30件)の間に値が読めた行が無ければ、比べる相手が無いので増分を判定しない。
+ * 窓を伸ばすほど読めない期間をまたいで比べられるが、読む行が増えるので、1時間で区切る。
  */
-export const WORKER_ALERT_SAMPLE_LIMIT = 5;
+export const WORKER_ALERT_SAMPLE_LIMIT = 30;
 
 /** 通知の閾値。設定(`factory_config`)の`worker_alert_memory_ratio`から作る。 */
 export type WorkerAlertThresholds = {
@@ -552,7 +554,6 @@ export type WorkerAlertSample = {
   readonly sampled_at: Date;
   readonly mem_anon_bytes: number | null;
   readonly mem_limit_bytes: number | null;
-  readonly mem_events_max: number | null;
   readonly mem_oom_kill: number | null;
 };
 
@@ -560,9 +561,12 @@ export type WorkerAlertSample = {
  * 通知の原因。
  * - `memory`: anonのメモリが上限の閾値以上
  * - `oom_kill`: OOMで止められたプロセスが増えた
- * - `limit_reached`: メモリが上限に達した回数が増えた
+ *
+ * 上限に達した回数(`mem_events_max`)の増分は、条件に使わない。
+ * この回数は、確保が上限を超えそうになって回収に入るたびに、回収が成功しても増える。
+ * ページキャッシュが上限まで溜まった後は、平常時の入出力でも増え続けるので、行動不要の通知になる。
  */
-export type WorkerAlertCause = "memory" | "oom_kill" | "limit_reached";
+export type WorkerAlertCause = "memory" | "oom_kill";
 
 function memoryExceeded(
   newest: WorkerAlertSample,
@@ -603,10 +607,9 @@ function counterIncreased(
 
 /**
  * 新しい順の記録から、通知を出す原因を返す。副作用は無い。
- * メモリの割合は最新の1件で判定し、OOMと上限への到達は最新の行での増分で判定する。
+ * メモリの割合は最新の1件で判定し、OOMは最新の行での増分で判定する。
  * 割合は回収できないメモリを表すanonで判定する。ページキャッシュを含む値で判定すると、
  * 上限に近くても逼迫と限らず、行動不要の通知が出るためである。
- * キャッシュの圧迫で回収が追いつかない状態は、上限への到達の増分で拾う。
  * 解決は人が行うので、閾値を下回っても通知を取り消さない。
  */
 export function evaluateWorkerAlerts(
@@ -624,10 +627,14 @@ export function evaluateWorkerAlerts(
   if (counterIncreased(samples, (sample) => sample.mem_oom_kill)) {
     causes.push("oom_kill");
   }
-  if (counterIncreased(samples, (sample) => sample.mem_events_max)) {
-    causes.push("limit_reached");
-  }
   return causes;
+}
+
+/** 割合を百分率で返す。丸めると0%になる正の割合は、小数1桁で出す。 */
+function ratioText(ratio: number): string {
+  return ratio > 0 && Math.round(ratio * 100) === 0
+    ? `${(ratio * 100).toFixed(1)}%`
+    : percent(ratio);
 }
 
 function causeText(
@@ -636,11 +643,9 @@ function causeText(
 ): string {
   switch (cause) {
     case "memory":
-      return `defaultのworkerのメモリ(anon)が、上限の${percent(thresholds.memoryRatio)}以上になりました`;
+      return `defaultのworkerのメモリ(anon)が、上限の${ratioText(thresholds.memoryRatio)}以上になりました`;
     case "oom_kill":
       return "defaultのworkerで、メモリ不足(OOM)により止められたプロセスが増えました";
-    case "limit_reached":
-      return "defaultのworkerのメモリが、上限に達した回数が増えました";
   }
 }
 
