@@ -462,18 +462,27 @@ export type ReviewView = {
   readonly createdAt: string;
 };
 
+/** 結果の表示。キーが欠けた応答は、`null`と同じく記録なしとして扱う。 */
+function describeReviewResult(result: string | null | undefined): {
+  readonly label: string;
+  readonly variant: PipelineStatusVariant;
+} {
+  if (result === null || result === undefined) {
+    return { label: RESULT_MISSING_LABEL, variant: "muted" };
+  }
+  return {
+    label: RESULT_LABELS.get(result) ?? unknownLabel(result),
+    variant: RESULT_VARIANTS.get(result) ?? "muted",
+  };
+}
+
 export function describeReview(review: WorkItemReview): ReviewView {
+  const result = describeReviewResult(review.result);
   return {
     key: review.review_id,
     shaLabel: plain(review.head_sha).slice(0, SHORT_SHA_LENGTH),
-    resultLabel:
-      review.result === null || review.result === undefined
-        ? RESULT_MISSING_LABEL
-        : (RESULT_LABELS.get(review.result) ?? unknownLabel(review.result)),
-    resultVariant:
-      review.result === null || review.result === undefined
-        ? "muted"
-        : (RESULT_VARIANTS.get(review.result) ?? "muted"),
+    resultLabel: result.label,
+    resultVariant: result.variant,
     findingLabel: `指摘 ${review.finding_count}件`,
     createdAt: review.created_at,
   };
