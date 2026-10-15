@@ -549,7 +549,7 @@ gitは呼ばない。
 - Factoryの安全装置は、次の名前で始まるファイルである。
   - `f/factory/lib/`の`claude`、`protected_paths`、`log`、`workspace`、`check_sandbox`、`check_runner`、`prompts`、`github`
   - `f/factory/lib/`の`types`、`job_tmp`、`repo_owner_gate`、`model_policy`、`config`
-  - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`
+  - `f/factory/lib/`の`host_action`、`process_lock`、`factory_repo_gate`、`auto_retry_reasons`
   - `f/factory/lib/`の`ci_`、`pr_ci_`、`pr_conflict_`、`conflict_fix_`、`main_ci_`、`pr_fix_launch`
   - `f/factory/lib/`の`metadata_`
   - `f/factory/steps/`の`pr_fix_`と`pr_workflow_support`
