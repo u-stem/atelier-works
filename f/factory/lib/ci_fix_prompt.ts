@@ -126,6 +126,7 @@ function deniedNotice(deniedCount: number): string[] {
   return [
     `Protected files changed by the pull request: ${String(deniedCount)}.`,
     "They are not listed above and cannot be edited. Do not try to edit them.",
+    'If the fix needs one of them, set outcome to "blocked".',
   ];
 }
 

@@ -301,7 +301,7 @@ describe("buildCiFixPrompt protected changed files", () => {
     ".github/workflows/ci.yml",
     "migrations/datatable/main/001.sql",
     "f/factory/lib/ci_fix_paths.ts",
-    "package.json",
+    "biome.json",
   ];
 
   test("leaves a protected path out of the changed files", () => {
@@ -374,9 +374,26 @@ describe("buildCiFixPrompt protected changed files", () => {
     expect(text).not.toContain("more not shown");
   });
 
-  test("keeps the notice free of the protected paths themselves", () => {
+  test.each(protectedPaths)(
+    "keeps %s out of the text outside the fences",
+    (path) => {
+      const text = prompt({ prChangedPaths: ["src/ok.ts", ...protectedPaths] });
+      expect(outsideFences(text)).not.toContain(path);
+    },
+  );
+
+  test("tells Claude that the protected files cannot be edited", () => {
     const text = prompt({ prChangedPaths: ["src/ok.ts", ...protectedPaths] });
-    expect(outsideFences(text)).not.toContain("ci_fix_paths");
+    expect(outsideFences(text)).toContain(
+      "They are not listed above and cannot be edited. Do not try to edit them.",
+    );
+  });
+
+  test("tells Claude to block when the fix needs a protected file", () => {
+    const text = prompt({ prChangedPaths: ["src/ok.ts", ...protectedPaths] });
+    expect(outsideFences(text)).toContain(
+      'If the fix needs one of them, set outcome to "blocked".',
+    );
   });
 });
 
