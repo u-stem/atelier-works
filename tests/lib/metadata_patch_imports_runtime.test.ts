@@ -1,8 +1,12 @@
 // 実行時に残るimportだけを数える読み方(`runtimeOnly`)。
 // Windmillのlockは、型だけのimportと、使われないimportの先の依存を含めない。
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createFileScanner,
+  runtimeScanSelfCheck,
   scanImports,
   traceBareImports,
 } from "../../f/factory/lib/metadata_patch_imports.ts";
@@ -106,6 +110,159 @@ describe("traceBareImports with runtimeOnly", () => {
   });
 });
 
+describe("scanImports with runtimeOnly on other shapes of import", () => {
+  test("reads a re-export of a package", () => {
+    expect(runtime('export { x } from "pkg";').bare).toEqual(["pkg"]);
+  });
+
+  test("reads a star re-export of a package", () => {
+    expect(runtime('export * from "pkg";').bare).toEqual(["pkg"]);
+  });
+
+  test("reads a star re-export of a local file as an edge", () => {
+    expect(runtime('export * from "./x.ts";').local).toEqual(["./x.ts"]);
+  });
+
+  test("reads a default import that is used as a value", () => {
+    expect(
+      runtime('import d from "pkg-default";\nexport const v = d;').bare,
+    ).toEqual(["pkg-default"]);
+  });
+
+  test("reads a namespace import that is used as a value", () => {
+    expect(
+      runtime('import * as ns from "pkg-ns";\nexport const v = ns.x;').bare,
+    ).toEqual(["pkg-ns"]);
+  });
+
+  test("reads a dynamic import in an ordinary position", () => {
+    expect(runtime('const m = await import("pkg-dynamic");').bare).toEqual([
+      "pkg-dynamic",
+    ]);
+  });
+
+  test("reads an import that is exported again by name", () => {
+    expect(runtime('import { a } from "x";\nexport { a };').bare).toEqual([
+      "x",
+    ]);
+  });
+});
+
+describe("a macro import is never executed while the imports are read", () => {
+  const SPACES: Record<string, string> = {
+    "a space": " ",
+    "a vertical tab": String.fromCharCode(0x0b),
+    "a form feed": String.fromCharCode(0x0c),
+    "a no-break space": String.fromCharCode(0xa0),
+    "a byte order mark": String.fromCharCode(0xfeff),
+    "a line separator": String.fromCharCode(0x2028),
+    "a paragraph separator": String.fromCharCode(0x2029),
+    "an ideographic space": String.fromCharCode(0x3000),
+    "a newline": "\n",
+    "a block comment": "/* c */",
+  };
+
+  /** マクロは、印のファイルを書く。印ができたら、importを読む処理がマクロを実行したことになる。 */
+  function macroProbe(): {
+    dir: string;
+    marker: string;
+    make: (gap: string, keyword: string) => string;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), "macro-probe-"));
+    const marker = join(dir, "marker");
+    const macro = join(dir, "m.ts");
+    writeFileSync(
+      macro,
+      `import { writeFileSync } from "node:fs";\nexport function f() { writeFileSync(${JSON.stringify(marker)}, "ran"); return 1; }\n`,
+    );
+    return {
+      dir,
+      marker,
+      make: (gap, keyword) =>
+        `import { f } from ${JSON.stringify(macro)} ${keyword}${gap}{ type: "macro" };\nexport const x = f();\n`,
+    };
+  }
+
+  test.each(Object.entries(SPACES))(
+    "does not run a macro that follows with and %s",
+    (_name, gap) => {
+      const probe = macroProbe();
+      try {
+        scanImports(probe.make(gap, "with"), { runtimeOnly: true });
+        expect(existsSync(probe.marker)).toBe(false);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(Object.entries(SPACES))(
+    "does not run a macro that follows assert and %s",
+    (_name, gap) => {
+      const probe = macroProbe();
+      try {
+        scanImports(probe.make(gap, "assert"), { runtimeOnly: true });
+        expect(existsSync(probe.marker)).toBe(false);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("does not run a macro when the Bun transpiler alone reads the imports", () => {
+    const probe = macroProbe();
+    try {
+      new Bun.Transpiler({
+        loader: "ts",
+        trimUnusedImports: true,
+      }).scanImports(probe.make(String.fromCharCode(0xa0), "with"));
+      expect(existsSync(probe.marker)).toBe(false);
+    } finally {
+      rmSync(probe.dir, { recursive: true, force: true });
+    }
+  });
+
+  test.each(Object.entries(SPACES))(
+    "marks an import attribute after with and %s as untraceable",
+    (_name, gap) => {
+      const code = `import j from "./a.json" with${gap}{ type: "json" };`;
+      expect(scanImports(code, { runtimeOnly: true }).untraceable).toBe(true);
+    },
+  );
+
+  test("does not mark an English sentence that contains the word with as untraceable", () => {
+    const code =
+      'export const p = "Reply with a short answer, as with the others.";';
+    expect(scanImports(code, { runtimeOnly: true }).untraceable).toBe(false);
+  });
+});
+
+describe("the self check of the runtime reading", () => {
+  test("passes with the real reading", () => {
+    expect(runtimeScanSelfCheck()).toBe(true);
+  });
+
+  test("fails when a type-only import is read as a dependency", () => {
+    const wrong = (code: string) => scanImports(code);
+    expect(runtimeScanSelfCheck(wrong)).toBe(false);
+  });
+
+  test("fails when a value import is not read", () => {
+    const nothing = () => ({ local: [], bare: [], untraceable: false });
+    expect(runtimeScanSelfCheck(nothing)).toBe(false);
+  });
+});
+
+describe("the file that holds many local specifiers", () => {
+  test("is close to the size limit of one file", () => {
+    const specifiers = Array.from(
+      { length: 38_000 },
+      (_unused, index) => `import "./${index}/../a.ts";`,
+    ).join("\n");
+    expect(specifiers.length).toBeGreaterThan(900_000);
+  });
+});
+
 describe("traceBareImports and the shared budget", () => {
   test("counts every local specifier of a file against the budget", async () => {
     const specifiers = Array.from(
@@ -124,7 +281,6 @@ describe("traceBareImports and the shared budget", () => {
             content: new TextEncoder().encode(content),
           } as const);
     };
-    expect(specifiers.length).toBeGreaterThan(900_000);
     const budget = { remaining: 1000 };
     const result = await traceBareImports(
       "f/a.ts",
@@ -216,7 +372,10 @@ describe("runtime imports and the lock files of this repository", () => {
         mismatched.push(source);
       }
     }
-    expect(mismatched).toEqual([]);
+    expect(
+      mismatched,
+      `bun ${Bun.version}: the runtime closure of these scripts differs from the dependencies of their script.lock`,
+    ).toEqual([]);
   });
 
   test("the calibration covers the scripts that have a lock", () => {

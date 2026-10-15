@@ -124,6 +124,8 @@ export type World = {
   settle: boolean;
   /** `world()`が作ったときの、`wmill-lock.yaml`の本文。 */
   originalLock: string;
+  /** 真のとき、木の`oid`をSHA-256で作る(SHA-256のリポジトリ)。 */
+  sha256Oids: boolean;
   /** `planMetadataRehash`に渡す入力。 */
   input: { baseSha: string; headSha: string };
   limits: PlanLimits | undefined;
@@ -154,10 +156,22 @@ export function world(): World {
     readRefs: new Set(),
     readCount: 0,
     settle: true,
+    sha256Oids: false,
     originalLock: String(base.get("wmill-lock.yaml")),
     input: { baseSha: BASE_TIP, headSha: HEAD },
     limits: undefined,
   };
+}
+
+/** blobのoid。`blob <長さ>\0`の接頭辞を付けた内容のハッシュである。 */
+export function blobOid(
+  bytes: Uint8Array,
+  algorithm: "sha1" | "sha256",
+): string {
+  return createHash(algorithm)
+    .update(`blob ${bytes.byteLength}\0`)
+    .update(bytes)
+    .digest("hex");
 }
 
 function entryOf(
@@ -165,6 +179,7 @@ function entryOf(
   modes: Map<string, string>,
   sizes: Map<string, number>,
   edits: Map<string, Partial<TreeEntry>>,
+  algorithm: "sha1" | "sha256",
 ): TreeEntry[] {
   return [...files].map(([path, content]) => {
     const bytes = bytesOf(content);
@@ -172,7 +187,7 @@ function entryOf(
       path,
       mode: modes.get(path) ?? "100644",
       size: sizes.get(path) ?? bytes.byteLength,
-      oid: createHash("sha1").update(bytes).digest("hex"),
+      oid: blobOid(bytes, algorithm),
       ...edits.get(path),
     };
   });
@@ -192,8 +207,20 @@ export function portsOf(w: World): PrecheckPorts {
         throw new Error("boom");
       }
       return ref === HEAD
-        ? entryOf(w.head, w.headModes, w.headSizes, w.headEntryEdits)
-        : entryOf(w.base, w.baseModes, w.baseSizes, new Map());
+        ? entryOf(
+            w.head,
+            w.headModes,
+            w.headSizes,
+            w.headEntryEdits,
+            w.sha256Oids ? "sha256" : "sha1",
+          )
+        : entryOf(
+            w.base,
+            w.baseModes,
+            w.baseSizes,
+            new Map(),
+            w.sha256Oids ? "sha256" : "sha1",
+          );
     },
     readBlob: async (ref, path): Promise<FileRead> => {
       w.readRefs.add(ref);

@@ -113,6 +113,15 @@ function scriptExtension(path: string): string | null {
   );
 }
 
+/**
+ * scriptのファイルの、`wmill-lock.yaml`のキー(拡張子を除いたパス)。scriptのファイルでなければ、パスをそのまま返す。
+ * `foo.bun.ts`のような、`.ts`より長い拡張子も、`computeLockEntries`と同じに取り除く。
+ */
+export function scriptKeyOf(path: string): string {
+  const extension = scriptExtension(path);
+  return extension === null ? path : path.slice(0, -extension.length);
+}
+
 /** wmillがscriptのファイルとみなす拡張子で終わるパスか。 */
 export function isScriptPath(path: string): boolean {
   return scriptExtension(path) !== null;

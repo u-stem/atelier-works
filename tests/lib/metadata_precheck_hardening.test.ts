@@ -1,6 +1,7 @@
 // 事前検査が、Windmillの注釈、preprocessor、flow、入力の検証、資源の上限、想定外の失敗で、
 // 人の手に回す側に倒れることを確かめる。
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   BASE_TIP,
   FOO,
@@ -436,7 +437,7 @@ describe("planMetadataRehash and the metadata of the base tip", () => {
     expect(await reasonAfter(() => undefined)).toBe("ok");
   });
 
-  test("sends a lock hash of a script that the pull request did not change to a human", async () => {
+  test("repairs a hash of a script that the pull request did not change when the lock was resolved wrongly", async () => {
     expect(
       await reasonAfter((w) => {
         w.head.set(
@@ -444,7 +445,17 @@ describe("planMetadataRehash and the metadata of the base tip", () => {
           staleHash(String(w.head.get("wmill-lock.yaml")), "f/factory/foo"),
         );
       }),
-    ).toBe("unexpected_key_change");
+    ).toBe("ok");
+  });
+
+  test("restores the hash of the base tip for that script", async () => {
+    const w = world();
+    w.head.set(
+      "wmill-lock.yaml",
+      staleHash(String(w.head.get("wmill-lock.yaml")), "f/factory/foo"),
+    );
+    const result = await plan(w);
+    expect(result.ok && result.changedKeys).toContain("f/factory/foo");
   });
 
   test("limits the changed keys to the scripts the pull request changed", async () => {
@@ -455,5 +466,74 @@ describe("planMetadataRehash and the metadata of the base tip", () => {
       "f/factory/foo",
       "f/factory/lib/bar",
     ]);
+  });
+});
+
+describe("planMetadataRehash and the limits", () => {
+  test.each([
+    ["NaN", Number.NaN],
+    ["zero", 0],
+    ["a negative number", -1],
+    ["a fraction", 1.5],
+    ["infinity", Number.POSITIVE_INFINITY],
+  ])("refuses a read limit that is %s", async (_name, value) => {
+    expect(
+      await reasonAfter((w) => {
+        w.limits = { maxReadBytes: value };
+      }),
+    ).toBe("invalid_limit");
+  });
+
+  test("refuses a visit limit that is NaN", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.limits = { maxTraceVisits: Number.NaN };
+      }),
+    ).toBe("invalid_limit");
+  });
+
+  test("accepts limits that are positive safe integers", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.limits = { maxReadBytes: 1_000_000, maxTraceVisits: 10_000 };
+      }),
+    ).toBe("ok");
+  });
+});
+
+describe("planMetadataRehash and the content of a blob", () => {
+  test("refuses a blob whose content does not match the object id of the tree", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.headEntryEdits.set("f/factory/foo.ts", { oid: "1".repeat(40) }),
+      ),
+    ).toBe("blob_mismatch");
+  });
+
+  test("refuses a blob that does not match when the object id has 64 digits", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.sha256Oids = true;
+        w.headEntryEdits.set("f/factory/foo.ts", { oid: "1".repeat(64) });
+      }),
+    ).toBe("blob_mismatch");
+  });
+
+  test("accepts a tree of a repository whose object ids have 64 digits", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.sha256Oids = true;
+      }),
+    ).toBe("ok");
+  });
+
+  test("does not accept the hash of the bare content as the object id", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.headEntryEdits.set("f/factory/foo.ts", {
+          oid: createHash("sha1").update(FOO).digest("hex"),
+        }),
+      ),
+    ).toBe("blob_mismatch");
   });
 });

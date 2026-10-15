@@ -400,7 +400,7 @@ function exportsNameElsewhere(
     const braced = tokens[index + 1]?.text === "{";
     const limit = braced
       ? (findClosing(tokens, depth, index + 1) ?? tokens.length)
-      : Math.min(tokens.length, index + 13);
+      : Math.min(tokens.length, index + 12);
     for (let cursor = index + 1; cursor <= limit; cursor += 1) {
       const token = tokens[cursor];
       if (token === undefined) {
@@ -725,6 +725,8 @@ export type ShapeDiff =
 /**
  * 2つのソースの形を比べる。どちらかが読めなければ`unparsable`を返す。
  * 違いが無ければ`change`はnull。注釈、`main`の有無、`main`の署名、`preprocessor`、型宣言のどれが違うかを返す。
+ * 型宣言は、`main`と`preprocessor`のどちらかがあるファイルだけで比べる。
+ * どちらも無いファイル(lib)の型宣言は、`.script.yaml`を変えないことを実機で確かめた。
  */
 export function diffSourceShape(base: string, head: string): ShapeDiff {
   const before = readSourceShape(base);
@@ -746,7 +748,10 @@ export function diffSourceShape(base: string, head: string): ShapeDiff {
   if (before.shape.preprocessor !== after.shape.preprocessor) {
     return { ok: true, change: "preprocessor_changed" };
   }
+  const hasEntryPoint =
+    before.shape.main !== null || before.shape.preprocessor !== null;
   if (
+    hasEntryPoint &&
     before.shape.declarations.join("\n") !== after.shape.declarations.join("\n")
   ) {
     return { ok: true, change: "declaration_changed" };

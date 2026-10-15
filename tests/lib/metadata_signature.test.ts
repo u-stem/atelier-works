@@ -389,6 +389,23 @@ describe("diffSourceShape", () => {
     );
   });
 
+  test("accepts a changed type declaration in a file without main and preprocessor", () => {
+    expect(
+      difference(
+        "export type Opts = { a: string };\nexport class K { m() { return 1; } }\n",
+        "export type Opts = { a: string; b: number };\nexport class K { m() { return 2; } }\n",
+      ),
+    ).toBe("same");
+  });
+
+  test("detects a changed type declaration in a file with only a preprocessor", () => {
+    const withPre = (field: string) =>
+      `type Local = { ${field} };\nexport async function preprocessor(event: string) { return event; }\n`;
+    expect(difference(withPre("a: string"), withPre("a: number"))).toBe(
+      "declaration_changed",
+    );
+  });
+
   test("detects an added main", () => {
     expect(difference("export const x = 1;\n", base)).toBe(
       "main_presence_changed",

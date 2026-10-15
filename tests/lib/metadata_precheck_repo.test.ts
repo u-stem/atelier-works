@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 import type { FileRead } from "../../f/factory/lib/metadata_patch_imports.ts";
 import { parseWmillLock } from "../../f/factory/lib/metadata_patch_yaml.ts";
 import {
+  DEFAULT_MAX_TRACE_VISITS,
+  type PlanLimits,
   type PlanResult,
   planMetadataRehash,
   type TreeEntry,
@@ -31,11 +33,17 @@ function entriesOf(files: ReadonlyMap<string, Uint8Array>): TreeEntry[] {
     path,
     mode: "100644",
     size: content.byteLength,
-    oid: createHash("sha1").update(content).digest("hex"),
+    oid: createHash("sha1")
+      .update(`blob ${content.byteLength}\0`)
+      .update(content)
+      .digest("hex"),
   }));
 }
 
-function planWith(head: ReadonlyMap<string, Uint8Array>): Promise<PlanResult> {
+function planWith(
+  head: ReadonlyMap<string, Uint8Array>,
+  limits?: PlanLimits,
+): Promise<PlanResult> {
   const base = relevant();
   return planMetadataRehash(
     { baseSha: BASE, headSha: HEAD },
@@ -49,6 +57,7 @@ function planWith(head: ReadonlyMap<string, Uint8Array>): Promise<PlanResult> {
       },
       isAncestor: async () => true,
     },
+    limits,
   );
 }
 
@@ -96,6 +105,13 @@ describe("planMetadataRehash on the files of this repository", () => {
     expect(result.ok && result.newLock.split("\n").length).toBe(
       old.split("\n").length,
     );
+  });
+
+  test("finishes within a tenth of the default budget of visits and resolutions", async () => {
+    const result = await planWith(relevant(), {
+      maxTraceVisits: DEFAULT_MAX_TRACE_VISITS / 10,
+    });
+    expect(result.ok).toBe(true);
   });
 
   test("sends a changed parameter of main to a human", async () => {

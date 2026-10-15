@@ -49,7 +49,12 @@ function scanner(): Bun.Transpiler {
   return transpiler;
 }
 
-/** 型と、使われないimportを省くトランスパイラ。実行時に残るimportだけを残す。 */
+/**
+ * 型と、使われないimportを省くトランスパイラ。実行時に残るimportだけを返す。
+ * `scanImports`だけを使い、`transformSync`は使わない。`transformSync`は変換を最後まで行い、
+ * マクロを指定したimport属性のimportのマクロを、ソースを読む側のプロセスで実行する(実測した)。
+ * `scanImports`はマクロを実行しない(Bun 1.4.0と1.4.2で実測した)。
+ */
 function runtimeScanner(): Bun.Transpiler {
   runtimeTranspiler ??= new Bun.Transpiler({
     loader: "ts",
@@ -69,8 +74,18 @@ export type ScanOptions = {
   readonly runtimeOnly?: boolean;
 };
 
+/**
+ * JavaScriptの空白と行区切りの文字コード。ECMAScriptの`WhiteSpace`と`LineTerminator`に当たる。
+ * 空白の違いで、import属性の検出を避けられないように、4種類ではなくすべてを数える。
+ */
+const SPACE_CODES: ReadonlySet<number> = new Set([
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002,
+  0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028,
+  0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+]);
+
 function isSpace(char: string | undefined): boolean {
-  return char === " " || char === "\t" || char === "\n" || char === "\r";
+  return char !== undefined && SPACE_CODES.has(char.charCodeAt(0));
 }
 
 /** `index`の直前の、空白でない文字。 */
@@ -162,15 +177,10 @@ export function scanImports(
     return none;
   }
   try {
-    if (options.runtimeOnly === true) {
-      const emitted = runtimeScanner().transformSync(code);
-      for (const entry of runtimeScanner().scanImports(emitted)) {
-        specifiers.push(entry.path);
-      }
-    } else {
-      for (const entry of scanner().scanImports(code)) {
-        specifiers.push(entry.path);
-      }
+    const transpiler =
+      options.runtimeOnly === true ? runtimeScanner() : scanner();
+    for (const entry of transpiler.scanImports(code)) {
+      specifiers.push(entry.path);
     }
   } catch {
     return none;
@@ -354,4 +364,30 @@ export async function traceBareImports(
     }
   }
   return { ok: true, bare };
+}
+
+/**
+ * 実行時に残るimportの読み方が、想定どおりに動くかを、固定の小さな入力で確かめる。
+ * 読み方はBunの版に依存するので、検査の入口で呼び、想定と違えば偽を返す。
+ * 確かめるのは、型の位置でしか使わないimportが残らないこと、副作用のimportが残ること、
+ * 値として使うimportが残ることである。
+ */
+export function runtimeScanSelfCheck(
+  scan: (code: string) => ImportScan = (code) =>
+    scanImports(code, { runtimeOnly: true }),
+): boolean {
+  const cases: readonly (readonly [string, readonly string[]])[] = [
+    ['import { A } from "t";\nlet a: A;', []],
+    ['import "s";', ["s"]],
+    ['import { B } from "u";\nB();', ["u"]],
+  ];
+  return cases.every(([code, expected]) => {
+    const result = scan(code);
+    return (
+      !result.untraceable &&
+      result.local.length === 0 &&
+      result.bare.length === expected.length &&
+      result.bare.every((specifier, index) => specifier === expected[index])
+    );
+  });
 }

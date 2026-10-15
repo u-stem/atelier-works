@@ -608,6 +608,7 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)の扱い。再計算はそのまま残す。
 - worker側のwmill CLIの版と、`mise.toml`で固定した版が食い違うときの扱い。
 - 再計算と`main`の取り込みを繰り返す回数の上限。
+- pushの直前に、baseの先端が動いていないかを再確認する。動いていたら、検査からやり直す。
 - 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
 - `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
@@ -669,6 +670,9 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 
 ポートの値は、受け取った入口で検査する。
 `baseSha`と`headSha`は40桁の小文字の16進数、木の項目の`oid`は40桁か64桁の小文字の16進数、`size`は0以上の整数でなければならない。
+`readBlob`の内容は、木の項目の`oid`と照合する。
+`blob <長さ>`と空文字(NUL)を前に付けた内容のハッシュで、`oid`が40桁ならSHA-1、64桁ならSHA-256を使う。
+ポートが別のrefや作業ツリーを読んだ誤りを、断つためである。
 `isAncestor`は、`true`のときだけ祖先とみなす。
 `listTree`は`git ls-tree -r -l -z`で実装する。
 `-z`を付けないと、非ASCIIのパスが引用符つきで返り、実際のパスと一致しなくなる。
@@ -677,7 +681,9 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 
 | 確かめること | 外れたときの種別 |
 | --- | --- |
-| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい | `invalid_ref`、`invalid_tree` |
+| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
+| 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `internal_error` |
+| 読んだ内容が、木の項目の`oid`と一致する | `blob_mismatch` |
 | headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
 | `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleが無い | `special_file` |
 | 上の4つのファイルが1MiB以下で、`f/`のファイルが5000件以下 | `file_too_large`、`too_many_files` |
@@ -689,12 +695,12 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | PRの差分に、flowの定義の変更が無い | `flow_changed` |
 | PRの差分に、`.script.yaml`が無い | `script_yaml_changed` |
 | 変更されたscriptが、TypeScript(bun)である | `unsupported_script` |
-| すべてのscriptで、実行時に残る裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪ねる回数の合計が200000を超えるときは`too_much_input` |
+| すべてのscriptで、実行時に残る裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪問と局所importの解決の合計が200000を超えるときは`too_much_input` |
 | 変更された`.ts`の注釈、`main`と`preprocessor`の署名、型宣言が、baseの先端と同じ | `annotation_changed`、`main_changed`、`main_presence_changed`、`preprocessor_changed`、`declaration_changed`、読めないときは`main_unparsable` |
 | hashを計算できる形である。インラインscriptを持つflowは計算できない | `unsupported_script`、`missing_metadata`、`not_text`、`duplicate_key` |
 | baseの先端のscriptとflowから計算したhashが、baseの先端の`wmill-lock.yaml`の値と、すべてのキーで一致する | `base_stale` |
 | 再計算したキーの集合が、headのlockのキーの集合と一致する | `lock_key_set_mismatch`、`wmill_lock_invalid` |
-| hashが変わるキーが、PRが`.ts`を変えたscriptのキーだけである | `unexpected_key_change` |
+| hashが変わるキーが、PRが`.ts`を変えたscriptのキーか、baseの先端のlockの値に戻すキーだけである | `unexpected_key_change` |
 
 ポートが例外を投げたときは、`port_error`を返す。
 それ以外の想定外の例外は、`internal_error`を返す。
@@ -714,6 +720,12 @@ hashの計算では、木ごとに、入力のファイルをまとめて保持�
 裸のimportの閉包は、[importの読み取り](#importの読み取り)と同じ関数で求める。
 ただし、実行時に残るimportだけを数える(`runtimeOnly`)。
 型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
+読み方は、`trimUnusedImports`を有効にした`Bun.Transpiler`の`scanImports`だけである。
+`transformSync`は、マクロを指定したimport属性のimportを実行する。
+標準の形のほかに、`with`と`{`の間へ次のものを挟んだ形も、すべて実行された(Bun 1.4.0と1.4.2)。
+挟んだのは、垂直タブ、改ページ、NBSP、BOM、行区切り、段落区切り、全角空白、改行、コメントである。
+`scanImports`は、同じ入力で実行しなかった(両方の版)。
+import属性の検出は、これに加えて、JavaScriptの空白と行区切りをすべて数える。
 実測の根拠は、「実機で確かめた」の一覧と、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
 値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
 PRが触っていないscriptも、すべて確かめる。
@@ -740,6 +752,8 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   同じファイルの型宣言の中身を変えると、`schema`が変わる(実測)ためである。
   比べる宣言は、`main`の署名が参照するものに絞らず、ファイルのすべてにする。
   `.script.yaml`が変わらない変更でも人の手に回りうるが、安全側の措置である。
+- 型宣言は、`main`と`preprocessor`のどちらかがあるファイルだけで比べる。
+  どちらも無いファイル(lib)は、型のフィールド、enumの値、classのメソッドの追加と変更が、`.script.yaml`を変えなかった(実測)。
 - 空白とコメントの違いは、違いとして扱わない。
 - 字句を読み切れないときは、読めないものとして断る。
   閉じない文字列とコメント、閉じ波括弧の後の`/`、括弧の不一致がこれにあたる。
@@ -767,6 +781,8 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   依存が実際に解決される形は確かめられなかったので、`:`で終わる注釈と、`:`の後に値がある注釈に続く`//`の行を、注釈として集めて比べる。
 - exportの付かない`function main(x: string) {}`の追加は、`schema`を変える。`export default function main`は、`.script.yaml`を変えなかった。
   exportの有無にかかわらず、`main`の宣言を見つけたら人の手に回す。
+- アロー関数の`const main = (a: string) => {}`は、`export`の有無を問わず、追加と変更のどちらでも、`.script.yaml`を変えなかった。
+  `export const main`は安全側に人の手に回すが、`schema`の元にはならない。
 - 使われないimportと、型の位置でしか使わないimportの追加は、`.script.lock`の`dependencies`を変えない。
   値として使うimportの追加は、変える。
 - 字句の読み取りは、括弧が対応する入力を前提にする。
@@ -835,6 +851,10 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - `main`の署名の比較は、字句の近似である。
   正規表現と除算の見分けや、型宣言の範囲を、完全には決められない。
   決められない形は断るが、字句の読み違いで、署名の違いを見落とす入力がありうる。
+- 実行時に残るimportの読み方は、Bunの版にも依存する。
+  worker(1.4.0)とローカル(1.4.2)で、リポジトリの全script(126件)の閉包のパッケージ名が`.script.lock`の`dependencies`と一致することを、両方で確かめた。
+  較正のテストは、`Bun.version`を失敗の説明に残す。
+  検査の入口の自己検査が、固定の入力で想定と違う結果を見つけたときは、`internal_error`で止める。
 - hashの算法は、`ASSUMED_WMILL_CLI_VERSION`の版だけで確かめた。
   `dependencies/`、`__mod`のフォルダ、JSONのflowのように、このリポジトリに無い形は、写さずに人の手に回す。
   算法を固定するテストが見つけられるのは、版の変更と、リポジトリの現物との食い違いだけである。

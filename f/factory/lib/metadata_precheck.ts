@@ -6,17 +6,20 @@
 // `main`と`preprocessor`の署名、型宣言、キーの集合である。
 // 未信頼のPRが入力の大きさを決められるので、読む合計のバイト数とたどる回数に上限を置く。
 
+import { createHash } from "node:crypto";
 import {
   computeLockEntries,
   decodeText,
   isHashInput,
   isScriptPath,
   patchWmillLock,
+  scriptKeyOf,
   scriptLanguage,
 } from "./metadata_hash.ts";
 import {
   createFileScanner,
   type FileRead,
+  runtimeScanSelfCheck,
   type TraceBudget,
   traceBareImports,
 } from "./metadata_patch_imports.ts";
@@ -80,6 +83,8 @@ export type RehashFailureReason =
   | "internal_error"
   | "invalid_ref"
   | "invalid_tree"
+  | "invalid_limit"
+  | "blob_mismatch"
   | "read_failed"
   | "too_much_input"
   | "ancestry_unknown"
@@ -139,6 +144,9 @@ class PortError extends Error {}
 
 /** 読む合計のバイト数の上限を超えた。 */
 class LimitError extends Error {}
+
+/** 読んだ内容が、木の項目の`oid`と合わない。 */
+class BlobMismatchError extends Error {}
 
 const WMILL_YAML = "wmill.yaml";
 const WMILL_LOCK = "wmill-lock.yaml";
@@ -307,9 +315,19 @@ function checkChanges(changes: readonly Change[]): Failure | null {
 
 type Reader = (path: string) => Promise<FileRead>;
 
+/** blobのoid。`blob <長さ>\0`の接頭辞を付けた内容のハッシュで、oidの桁数でSHA-1かSHA-256を選ぶ。 */
+function blobOid(content: Uint8Array, length: number): string {
+  return createHash(length === 64 ? "sha256" : "sha1")
+    .update(`blob ${content.byteLength}\0`)
+    .update(content)
+    .digest("hex");
+}
+
 /**
  * 1つの木を読む関数を作る。読んだバイト数の合計が`limit`を超えたら、`LimitError`を投げる。
  * 内容は保持せず、必要なら読み直す。木にあるファイルが`missing`で返ったときは、読めなかったものとして扱う。
+ * 読んだ内容は、木の項目の`oid`と照合する。合わなければ`BlobMismatchError`を投げる。
+ * ポートが別のrefや作業ツリーを読んだ誤りを、断つためである。
  */
 function treeReader(
   ref: string,
@@ -327,6 +345,13 @@ function treeReader(
       total += result.content.byteLength;
       if (total > limit) {
         throw new LimitError();
+      }
+      const entry = entries.get(path);
+      if (
+        entry !== undefined &&
+        blobOid(result.content, entry.oid.length) !== entry.oid
+      ) {
+        throw new BlobMismatchError();
       }
     }
     return result;
@@ -603,10 +628,11 @@ async function plan(
       .filter(
         (change) => change.kind === "modified" && change.path.endsWith(".ts"),
       )
-      .map((change) => change.path.slice(0, -".ts".length)),
+      .map((change) => scriptKeyOf(change.path)),
   );
   for (const key of patched.changedKeys) {
-    if (!changedScripts.has(key)) {
+    const restoresBase = headEntries.get(key) === parsedBase.locks.get(key);
+    if (!changedScripts.has(key) && !restoresBase) {
       return fail("unexpected_key_change", key);
     }
   }
@@ -630,7 +656,11 @@ async function plan(
  *   ファイルが無いまま、baseの先端の`wmill-lock.yaml`に残っている項目は、そのまま残す。
  * - baseの先端のscriptから計算したhashが、baseの先端の`wmill-lock.yaml`と一致する。メタデータの生成を飛ばした
  *   commitが`main`に入っていても、PRと関係の無い古い`schema`やlockを、最新のように書き直さないためである。
- * - hashが変わるキーが、PRが`.ts`を変えたscriptのキーだけである。
+ * - hashが変わるキーが、PRが`.ts`を変えたscriptのキーか、baseの先端のlockの値に戻すキーだけである。
+ *   mainの取り込みで衝突したlockをPR側で誤って解消した場合は、baseの値に戻す。
+ *   baseの値の正しさは、`base_stale`の検査で確かめ済みなので、戻してよい。
+ * - `limits`の各値が、正の安全な整数である。読んだ内容が、木の項目の`oid`と一致する。
+ *   実行時に残るimportの読み方が、固定の入力で想定どおりに動く(Bunの版に依存するため)。
  * 想定外の例外も、固定の種別(`internal_error`)にして返す。
  */
 export async function planMetadataRehash(
@@ -638,6 +668,18 @@ export async function planMetadataRehash(
   ports: PrecheckPorts,
   limits: PlanLimits = {},
 ): Promise<PlanResult> {
+  const given = [limits.maxReadBytes, limits.maxTraceVisits];
+  if (
+    given.some(
+      (value) =>
+        value !== undefined && !(Number.isSafeInteger(value) && value > 0),
+    )
+  ) {
+    return fail("invalid_limit");
+  }
+  if (!runtimeScanSelfCheck()) {
+    return fail("internal_error");
+  }
   const safe: PrecheckPorts = {
     listTree: guarded(ports.listTree),
     readBlob: guarded(ports.readBlob),
@@ -654,6 +696,9 @@ export async function planMetadataRehash(
     }
     if (error instanceof LimitError) {
       return fail("too_much_input");
+    }
+    if (error instanceof BlobMismatchError) {
+      return fail("blob_mismatch");
     }
     return fail("internal_error");
   }
