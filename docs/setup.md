@@ -115,7 +115,7 @@ mise run doctor
 止まったときは、そのポートを使うほかのプロセスを止めるか、`WM_HTTP_PORT`をWindmillのポートに合わせて`mise run up`をやり直す。
 `WM_BIND`を`0.0.0.0`と`::`以外の特定のアドレスにすると、`127.0.0.1`に待ち受けが無いので、`bootstrap`は止まる。
 
-`WM_HTTP_PORT`を変えるときは、`wmill.yaml`の`workspaces.factory.baseUrl`のポートも手元で合わせる。
+`WM_HTTP_PORT`を変えるときは、`wmill.yaml`の`workspaces.factory.baseUrl`も`http://127.0.0.1:${WM_HTTP_PORT}`に手元で合わせる。
 `bootstrap`は、全手順のモードで状態を変える前に両者を照合し、食い違うと止まる。
 `wmill`は、`wmill.yaml`でワークスペースを選ぶ場面(ブランチ名が`factory`のときなど)で、`baseUrl`と合うプロファイルを探す。
 合うものが無いと、ワークスペースの作成の後に失敗しうるためである。
@@ -506,10 +506,10 @@ mise run worktree:prune -- --apply
 
 | 症状 | 原因と対処 |
 | --- | --- |
-| ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定し、`wmill.yaml`の`workspaces.factory.baseUrl`のポートも手元で合わせて(コミットしない)、`mise run up`をやり直す。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする。`bootstrap`と`doctor`は、`WM_BASE_URL`を使わず、このポートに合わせて宛先を決める |
+| ポートが衝突する | `mise.local.toml`の`WM_HTTP_PORT`で別のポートを指定し、`wmill.yaml`の`workspaces.factory.baseUrl`も`http://127.0.0.1:`の後に新しいポートを付けたURLへ手元で合わせて(コミットしない)、`mise run up`をやり直す。投入は[秘密値を投入する](#秘密値を投入する)と同じコマンドで、`KEY`を`WM_HTTP_PORT`にする。`bootstrap`と`doctor`は、`WM_BASE_URL`を使わず、このポートに合わせて宛先を決める |
 | `bootstrap`が「did not answer as Windmill」と出て止まる | `WM_HTTP_PORT`のポートで、Windmillの形の応答が無い。資格情報は送られていない。そのポートを使うプロセスを止めるか、`WM_HTTP_PORT`を別のポートにして`mise run up`をやり直す |
 | `bootstrap`が「may still be starting」と出て止まる | `WM_HTTP_PORT`のポートが5xxを返した。Windmillが起動の途中のことがある。資格情報は送られていない。数十秒待ってから実行し直す。続くなら、別のプロセスがそのポートを使っていないかを確かめる |
-| `bootstrap`が「baseUrl in wmill.yaml」と出て止まる | `wmill.yaml`の`workspaces.factory.baseUrl`のポートが`WM_HTTP_PORT`と違う。資格情報は送られていない。`baseUrl`のポートを合わせて(コミットしない)、実行し直す |
+| `bootstrap`が「baseUrl in wmill.yaml」と出て止まる | `wmill.yaml`の`workspaces.factory.baseUrl`が`http://127.0.0.1:${WM_HTTP_PORT}`と違う。ホストだけが違う場合も止まる。資格情報は送られていない。`baseUrl`をこのURLに合わせて(コミットしない)、実行し直す。「could not read wmill.yaml」と出たときは、ファイルが無いか壊れているので、gitで戻してから実行し直す |
 | `doctor`が「カスタムtag」でNGになる | インスタンスがtag`console`を許可していない。`mise run instance:tags`を実行する |
 | `doctor`が「カスタムtag」でWARNになる | 許可の有無を確かめられていない。行に添えられた理由を見る。ログインが拒まれたなら、`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる。`doctor`は`WM_HTTP_PORT`のポートにだけ資格情報を送り、Windmillの応答でなければ送らない |
 | `mise run up`が「Docker Engine API ... is older than 1.45」か「Docker Compose ... is older than 2.26.0」と出て止まる | DockerのEngineかComposeが下限に届いていない。Docker DesktopかOrbStackを更新するか、Engineを26.0以上、Composeを2.26.0以上にする。更新した後で`mise run up`を実行し直し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`でConsole用workerを作り直す。Dockerの更新で止まったworkerはrestart policyで元のマウントのまま起動し直し、`mise run up`は設定の変わらないworkerを作り直さないためである。その後で`mise run doctor`を実行し、`docker version`と`console worker mount`の行が`OK`になることを確かめる(手順は[運用](operations.md#console用workerを確かめる)) |

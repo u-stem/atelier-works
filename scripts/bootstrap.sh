@@ -206,25 +206,40 @@ curl_local() {
 # `custom-tags`のモードは`wmill`を使わないので呼ばない。
 verify_wmill_yaml_target() {
   local result
+  # 標準出力は次のどれか。`match`、読めない(`unreadable`)、`baseUrl`が無い(`unset`)、
+  # 食い違い(`differs:`の後に実際の値)。
   result="$(WM_TMP_EXPECTED="${BASE_URL}" bun_eval '
     const expected = new URL(process.env.WM_TMP_EXPECTED ?? "").toString();
-    let actual = "";
+    let url;
     try {
       const doc = Bun.YAML.parse(await Bun.file("wmill.yaml").text());
-      const url = doc?.workspaces?.factory?.baseUrl;
-      if (typeof url === "string") {
-        actual = url;
-      }
-    } catch {}
+      url = doc?.workspaces?.factory?.baseUrl;
+    } catch {
+      process.stdout.write("unreadable");
+      process.exit(0);
+    }
+    if (typeof url !== "string" || url === "") {
+      process.stdout.write("unset");
+      process.exit(0);
+    }
     let same = false;
     try {
-      same = new URL(actual).toString() === expected;
+      same = new URL(url).toString() === expected;
     } catch {}
-    process.stdout.write(same ? "match" : actual);
+    process.stdout.write(same ? "match" : `differs:${url}`);
   ')" || die "could not read wmill.yaml"
-  if [ "${result}" != "match" ]; then
-    die "baseUrl in wmill.yaml (workspaces.factory) is '${result:-unset}', not ${BASE_URL}; no credentials were sent and nothing was changed. wmill looks up its profile by that baseUrl, so set its port to ${WM_HTTP_PORT} (a local edit; do not commit it) and run again"
-  fi
+  case "${result}" in
+    match) ;;
+    unreadable)
+      die "could not read wmill.yaml (missing or malformed); no credentials were sent and nothing was changed. Restore it with git, or check its YAML syntax, and run again"
+      ;;
+    unset)
+      die "baseUrl in wmill.yaml is unset (workspaces.factory.baseUrl); no credentials were sent and nothing was changed. wmill looks up its profile by that baseUrl, so set it to ${BASE_URL} (a local edit; do not commit it) and run again"
+      ;;
+    *)
+      die "baseUrl in wmill.yaml (workspaces.factory) is '${result#differs:}', not ${BASE_URL}; no credentials were sent and nothing was changed. wmill looks up its profile by that baseUrl, so set it to ${BASE_URL} (a local edit; do not commit it) and run again"
+      ;;
+  esac
 }
 
 # 宛先がWindmillかを確かめる。ログインの前に呼び、違えば資格情報を送らずに止まる。

@@ -179,14 +179,16 @@ describe("bootstrap.sh destination", () => {
   // REPO_ROOTがスクリプトの親になるので、複製先の`wmill.yaml`が読まれる。
   async function runFull(
     env: Record<string, string>,
-    wmillYaml: string,
+    wmillYaml: string | undefined,
     args: string[] = [],
   ): Promise<{ code: number; output: string }> {
     const scripts = join(tmp, "scripts");
     mkdirSync(scripts, { recursive: true });
     const script = join(scripts, "bootstrap.sh");
     copyFileSync(BOOTSTRAP, script);
-    writeFileSync(join(tmp, "wmill.yaml"), wmillYaml);
+    if (wmillYaml !== undefined) {
+      writeFileSync(join(tmp, "wmill.yaml"), wmillYaml);
+    }
     return runBootstrap(env, { script, args });
   }
 
@@ -531,6 +533,117 @@ describe("bootstrap.sh destination", () => {
       ]);
 
       expect(loginCalls(windmill)).toHaveLength(1);
+    });
+  });
+
+  describe("when wmill.yaml names another host on the same port", () => {
+    const localhostYaml = (port: string): string =>
+      `workspaces:\n  factory:\n    baseUrl: http://localhost:${port}\n    workspaceId: factory\n`;
+
+    test("sends nothing", async () => {
+      const windmill = serve(windmillVersion);
+
+      await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        localhostYaml(portOf(windmill)),
+      );
+
+      expect(windmill.calls).toEqual([]);
+    });
+
+    test("tells the operator to set the whole URL", async () => {
+      const windmill = serve(windmillVersion);
+
+      const { output } = await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        localhostYaml(portOf(windmill)),
+      );
+
+      expect(output).toContain(
+        `set it to http://127.0.0.1:${portOf(windmill)}`,
+      );
+    });
+  });
+
+  describe("when wmill.yaml cannot be read", () => {
+    test("says that it could not be read when the file is missing", async () => {
+      const windmill = serve(windmillVersion);
+
+      const { output } = await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        undefined,
+      );
+
+      expect(output).toContain("could not read wmill.yaml");
+    });
+
+    test("sends nothing when the file is missing", async () => {
+      const windmill = serve(windmillVersion);
+
+      await runFull({ WM_HTTP_PORT: portOf(windmill) }, undefined);
+
+      expect(windmill.calls).toEqual([]);
+    });
+
+    test("says that it could not be read when the file is malformed", async () => {
+      const windmill = serve(windmillVersion);
+
+      const { output } = await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        "workspaces: [unclosed\n  a: b",
+      );
+
+      expect(output).toContain("could not read wmill.yaml");
+    });
+
+    test("sends nothing when the file is malformed", async () => {
+      const windmill = serve(windmillVersion);
+
+      await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        "workspaces: [unclosed\n  a: b",
+      );
+
+      expect(windmill.calls).toEqual([]);
+    });
+  });
+
+  describe("when wmill.yaml has no baseUrl", () => {
+    const noBaseUrl = "workspaces:\n  factory:\n    workspaceId: factory\n";
+
+    test("says that the baseUrl is unset", async () => {
+      const windmill = serve(windmillVersion);
+
+      const { output } = await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        noBaseUrl,
+      );
+
+      expect(output).toContain("baseUrl in wmill.yaml is unset");
+    });
+
+    test("does not say that the file could not be read", async () => {
+      const windmill = serve(windmillVersion);
+
+      const { output } = await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        noBaseUrl,
+      );
+
+      expect(output).not.toContain("could not read wmill.yaml");
+    });
+
+    test("tells the operator to set the whole URL", async () => {
+      const windmill = serve(windmillVersion);
+
+      const { output } = await runFull(
+        { WM_HTTP_PORT: portOf(windmill) },
+        noBaseUrl,
+      );
+
+      expect(output).toContain(
+        `set it to http://127.0.0.1:${portOf(windmill)}`,
+      );
     });
   });
 
