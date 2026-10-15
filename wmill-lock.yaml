@@ -27,7 +27,7 @@ locks:
   f/factory/lib/check_sandbox: e9b4ea1b259df408ed1b4ba2269e8f81b6282f0ac100cc5ae1040e6fa8e12d1e
   f/factory/lib/ci_fix_classify: eb35e7112fa3b72e97c4b37137f7bcc4d6942b52a60736d4b5a959a436b11092
   f/factory/lib/ci_fix_paths: 9796dcbe523eb019a153fe4cd7ea8c278640d94b4e2347848e38e9705565b1f7
-  f/factory/lib/ci_fix_prompt: bac5d66b094df01b6135cebf169b7925bf0f10c232863b326321d63083d956b5
+  f/factory/lib/ci_fix_prompt: c96988f34a27420e9493ab7ad0f904b49a39c17b11036f5a44f9de42a2885a47
   f/factory/lib/ci_fix_round: 24afe7eeafd38b4983123530208a8ffb4243b9871a7987b078673f2a430a204c
   f/factory/lib/ci_log_support: 0c079813679b394691042182d5adfa552dcc12cd38836f04c74930af40b7dc69
   f/factory/lib/ci_metadata_rehash: 990a7c9511d17bfe01682e83716b065765d1cf7eaad98e3682737c613d18a4e3
