@@ -61,6 +61,7 @@ import {
   listReviewThreads,
   listWorkflowRuns,
   mergePullRequest,
+  PR_DIFF_MAX_CHARS,
   parseGitHubRepoUrl,
   postIssueComment,
   removeLabel,
@@ -4081,6 +4082,66 @@ describe("getPrDiff", () => {
     ]);
     const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+hello <U+001B>[31mred<U+001B>[0m\n+ok");
+  });
+
+  test("counts lines after replacing, so a replacement does not change the line count", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, `l1${ESC}\nl2${ESC}\nl3\nl4`)),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    expect(diff).toEqual({
+      diff: "l1<U+001B>\nl2<U+001B>",
+      truncated: true,
+      totalLines: 4,
+    });
+  });
+
+  test("truncates by characters after replacing, at a line boundary", async () => {
+    const line = `+${ESC.repeat(10)}`;
+    const body = Array.from({ length: 4 }, () => line).join("\n");
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const revealedLine = `+${"<U+001B>".repeat(10)}`;
+    const diff = await getPrDiff(
+      client(fake),
+      "acme",
+      "widgets",
+      12,
+      100,
+      revealedLine.length * 2 + 1,
+    );
+    expect(diff).toEqual({
+      diff: `${revealedLine}\n${revealedLine}`,
+      truncated: true,
+      totalLines: 4,
+    });
+  });
+
+  test("cuts inside a single line longer than the character limit", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, "x".repeat(50))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 10);
+    expect(diff).toEqual({
+      diff: "x".repeat(10),
+      truncated: true,
+      totalLines: 1,
+    });
+  });
+
+  test("does not split a surrogate pair when it cuts by characters", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, "ab\u{1F600}cd")),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 3);
+    expect(diff.diff).toBe("ab");
+  });
+
+  test("applies a default character limit to a replaced body", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, ESC.repeat(PR_DIFF_MAX_CHARS))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff.length).toBeLessThanOrEqual(PR_DIFF_MAX_CHARS);
   });
 
   test("does not hide code between an escape introducer and a terminator", async () => {

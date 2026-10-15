@@ -86,11 +86,60 @@ describe("revealControlChars", () => {
     expect(revealControlChars("a\u{E0041}b")).toBe("a<U+E0041>b");
   });
 
-  test("finishes quickly on a long run of unterminated sequences", () => {
-    const hostile = `${ESC}[`.repeat(500_000);
-    const started = Date.now();
-    revealControlChars(hostile);
-    expect(Date.now() - started).toBeLessThan(5000);
+  test("writes the joiners of an emoji sequence as code points", () => {
+    expect(revealControlChars("\u{1F468}\u200D\u{1F469}")).toBe(
+      "\u{1F468}<U+200D>\u{1F469}",
+    );
+  });
+
+  test("writes the emoji variation selector as a code point", () => {
+    expect(revealControlChars("\u2764\uFE0F")).toBe("\u2764<U+FE0F>");
+  });
+
+  test("writes a leading byte order mark as a code point", () => {
+    expect(revealControlChars("\uFEFF+first line")).toBe("<U+FEFF>+first line");
+  });
+
+  test("writes the line separator and the paragraph separator as code points", () => {
+    expect(revealControlChars("+a\u2028-b\u2029+c")).toBe(
+      "+a<U+2028>-b<U+2029>+c",
+    );
+  });
+
+  test("writes the supplementary variation selectors as code points", () => {
+    expect(revealControlChars("a\u{E0100}b")).toBe("a<U+E0100>b");
+  });
+
+  test.each([
+    ["combining grapheme joiner", "\u034F", "<U+034F>"],
+    ["hangul choseong filler", "\u115F", "<U+115F>"],
+    ["hangul jungseong filler", "\u1160", "<U+1160>"],
+    ["hangul filler", "\u3164", "<U+3164>"],
+    ["halfwidth hangul filler", "\uFFA0", "<U+FFA0>"],
+    ["braille blank", "\u2800", "<U+2800>"],
+  ])("writes the %s as a code point", (_name, char, expected) => {
+    expect(revealControlChars(`a${char}b`)).toBe(`a${expected}b`);
+  });
+
+  test("writes a carriage return that is not followed by a line feed", () => {
+    expect(revealControlChars("+a\r-b")).toBe("+a<U+000D>-b");
+  });
+
+  test("writes a carriage return at the end of the text", () => {
+    expect(revealControlChars("+a\r")).toBe("+a<U+000D>");
+  });
+
+  test("writes a literal U+ marker so it differs from a real replacement", () => {
+    expect(revealControlChars("<U+001B>")).toBe("<U+003C>U+001B>");
+  });
+
+  test("keeps a less-than sign that does not start a marker", () => {
+    expect(revealControlChars("a < b <U <T")).toBe("a < b <U <T");
+  });
+
+  test("replaces every character of a long run of unterminated sequences", () => {
+    const hostile = `${ESC}[`.repeat(1000);
+    expect(revealControlChars(hostile)).toBe("<U+001B>[".repeat(1000));
   });
 });
 

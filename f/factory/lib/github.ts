@@ -2595,12 +2595,35 @@ export type PrDiff = {
 };
 
 /**
+ * `getPrDiff`が返す差分の文字数の上限(UTF-16の符号単位)。置き換えの後の長さで数える。
+ * 置き換えは1文字を最大10文字に増やすので、行数の上限だけでは、
+ * プロンプトの大きさが、行数と1行の長さと増え方の積で決まってしまう。
+ * 置き換えの前の長さに上限をかけても、増えた分は抑えられないので、後の長さで数える。
+ * 値は、`diff_max_lines`の既定(3000行)に、1行133字の差分が収まる大きさである。
+ * 1行の平均がそれを超える差分は、行数の上限より先に切れ、切り詰めの注記つきでレビューが進む。
+ */
+export const PR_DIFF_MAX_CHARS = 400_000;
+
+/** `text`を`maxChars`字以内に切る。行の途中で切らないよう、収まる最後の行の末尾で切る。 */
+function cutToChars(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const head = text.slice(0, maxChars);
+  const lineEnd = head.lastIndexOf("\n");
+  const whole =
+    text[maxChars] === "\n" || lineEnd <= 0 ? head : head.slice(0, lineEnd);
+  // 1行が上限を超えて行の途中で切るときに、サロゲートペアの前半を残さない。
+  return /[\ud800-\udbff]$/.test(whole) ? whole.slice(0, -1) : whole;
+}
+
+/**
  * メディアタイプ`application/vnd.github.v3.diff`で生のunified diffを取得し、
- * `maxLines`行に切り詰める。
+ * `maxLines`行と`maxChars`字に切り詰める。
  * 差分は、PRの作者が決める端末の制御列(ESCなど)を含みうる。`gh`は含む本文を出さずに
  * 終了コード1で終わるので、`--allow-escape-sequences`を渡して受け取り、
- * プロンプトに渡す前に、制御文字を`<U+001B>`の形の見える表記に置き換える。
+ * プロンプトに渡す前に、制御文字と見えない文字を`<U+001B>`の形の見える表記に置き換える。
  * 取り除くと、制御列の中に書いたコードを読み手から隠せるため、何も取り除かない。
+ * 置き換えは行数を変えない。切り詰めは置き換えの後に、行数、文字数の順で行い、
+ * どちらで切っても`truncated`を真にする。`totalLines`は切る前の行数。
  * 2xxなのに`gh`の終了コードが0以外のときは、差分が空のまま読まれないよう、
  * `GitHubRawBodyIncompleteError`を投げる。
  */
@@ -2610,6 +2633,7 @@ export async function getPrDiff(
   repo: string,
   number: number,
   maxLines: number,
+  maxChars: number = PR_DIFF_MAX_CHARS,
 ): Promise<PrDiff> {
   validateOwnerRepo(owner, repo);
   const response = await callGhApi(
@@ -2625,16 +2649,12 @@ export async function getPrDiff(
   ensureRawBodyComplete(response, context);
   const bodyText = revealControlChars(response.bodyText);
   const lines = bodyText.split("\n");
-  if (lines.length <= maxLines) {
-    return {
-      diff: bodyText,
-      truncated: false,
-      totalLines: lines.length,
-    };
-  }
+  const byLines =
+    lines.length <= maxLines ? bodyText : lines.slice(0, maxLines).join("\n");
+  const diff = cutToChars(byLines, maxChars);
   return {
-    diff: lines.slice(0, maxLines).join("\n"),
-    truncated: true,
+    diff,
+    truncated: diff.length < bodyText.length,
     totalLines: lines.length,
   };
 }
