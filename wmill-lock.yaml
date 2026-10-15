@@ -40,7 +40,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: 35834e2fc4097c747dd824164479ca5abf08f425fe2e18556dff1ecfdce640f0
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
-  f/factory/lib/db: 82f35dea68dde0042720188179f5dcfb74825f201742c01328441683684cffe7
+  f/factory/lib/db: f8c71fb690310c038ee6ac9f44fea9b9bd9b8bb92700a11bb88341a35d4ad744
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -85,7 +85,7 @@ locks:
   f/factory/lib/pr_ci_support: dc6a9b082e47c9dd6fe948b652f138ba0b58b1c245514454bb253ed2eddf4a55
   f/factory/lib/pr_ci_watch: ea96ee25dc2c28ff8630899068d33126ad23a92d4ce2dc59f4b4991e885edf7f
   f/factory/lib/pr_conflict_fix_claim: 23d089665fa8e0571f5752519fda8e7c5d92a6e70c130e63ca358d7ffcfc418f
-  f/factory/lib/pr_conflict_fix_holds: b5708069fa1ca161cda882a4d1b508e514640ae651aaf155be00200129bbf559
+  f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: a75f3ca198223904857acadc22bfe49c90ac64abd88e3b8c1a0c0d215f93c0a5
   f/factory/lib/pr_conflict_support: 7fe9d6f9903c4f53b335e16f6bb0f4a70ff31d2b9e694848ccfb1971358b86f2
   f/factory/lib/pr_conflict_watch: 72ef072e1508eb2fa067b0f2f3b67141e32ce5902a0c110875d21e09ec47bee8
@@ -117,7 +117,7 @@ locks:
   f/factory/poll_prs: f4ed672ecda6ad1303dbf89d0317ca48303305dc75bdb7783df6af0d3b1ca041
   f/factory/pr_fix__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
-  f/factory/retry_work_item: 48fd35502158c689dcb4ad7ac0b5c57017e174bc8d43963d96f8eb9811e4a13f
+  f/factory/retry_work_item: 8d3914cde850b0d224eb94adf5f632f56caf599c16ba99beb0c6f0b353e56750
   f/factory/sample_worker_load: accfb18cd3625e2fa65418e76ff0413108b5bc8f9b4be7389dc1464f7a031a6c
   f/factory/self_update: 9098ff48de7436b3648b07b8bda06f380ba755efa04eb90ff6d0b1e80658f5c2
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12

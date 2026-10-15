@@ -80,7 +80,7 @@ export const PR_CONFLICT_FIX_HOLD_INFO: Readonly<
 
 /**
  * 保留の理由が最終か。保留が無ければ偽である。
- * 語彙に無い値は最終として扱う。人に知らせず放置するより、通知に倒すためである。
+ * 語彙に無い値は最終として扱う。通知を出さずに放置しないためである。
  */
 export function isFinalPrConflictFixHold(reason: string | null): boolean {
   if (reason === null) return false;

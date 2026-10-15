@@ -949,6 +949,53 @@ check(
   (await countPrFixFailures(ciRoundItem, sql)) === 0,
 );
 
+// 競合を直すラウンド(conflict_check_id を持つ作業項目)の失敗も、同じPRの指摘の対応の失敗に数えない。
+const conflictFailRound = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    owner: OWNER,
+    repo: "r",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 111,
+    title: "qdb conflict round",
+    body: null,
+    status: "needs_human",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+    conflict_check_id: 424243,
+    conflict_episode: 1,
+  },
+  sql,
+);
+const reviewRoundItem111 = await prFixItem(111);
+execPsql(
+  target,
+  `INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, error, created_at) VALUES ${[
+    runRow(conflictFailRound, "pr_fix", 900, "timeout"),
+    runRow(conflictFailRound, "pr_fix_verify_retry", 800, null),
+  ].join(", ")}`,
+);
+execPsql(
+  target,
+  `INSERT INTO factory.fix_rounds (work_item_id, round, outcome, created_at) VALUES ${roundRow(conflictFailRound, "blocked", 700)}`,
+);
+check(
+  "countPrFixFailures: the failures of a round that fixes a merge conflict are not counted",
+  (await countPrFixFailures(reviewRoundItem111, sql)) === 0,
+);
+check(
+  "countPrFixFailures: a round that fixes a merge conflict counts nothing for itself either",
+  (await countPrFixFailures(conflictFailRound, sql)) === 0,
+);
+
 // ---------------------------------------------------------------------------
 // 通知の解決
 // ---------------------------------------------------------------------------
@@ -4136,6 +4183,52 @@ check(
 check(
   "active pr_fix: a stopped pr_fix is restarted once the active one ends",
   (await restartStoppedWorkItem(restartParams, sql, NO_JOB_IDS)) === true,
+);
+
+// 競合を直す回は、止まっていても、自動の再開の候補にも比較交換にも入らない。
+const conflictStopped = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    owner: OWNER,
+    repo: "r",
+    issue_number: null,
+    issue_url: null,
+    pr_number: 9202,
+    title: "qdb stopped conflict round",
+    body: null,
+    status: "blocked",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: null,
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+    conflict_check_id: 424244,
+    conflict_episode: 1,
+  },
+  sql,
+);
+event(conflictStopped, "blocked", "worker image is stale: probe");
+check(
+  "conflict round: a stopped round is not an auto retry candidate",
+  !(await listAutoRetryCandidates({ ...autoRetryParams, limit: 100 }, sql))
+    .map((candidate) => candidate.id)
+    .includes(conflictStopped),
+);
+check(
+  "conflict round: a stopped round is not restarted",
+  (await restartStoppedWorkItem(
+    { ...restartParams, id: conflictStopped },
+    sql,
+    NO_JOB_IDS,
+  )) === false,
+);
+check(
+  "conflict round: a stopped round stays blocked",
+  (await getWorkItem(conflictStopped, sql))?.status === "blocked",
 );
 // フロー自身が取り消した行(4つの注記)は数えず、同じheadを処理し直せる。
 // ほかの処理が取り消した行と、ほかの終端(終えた、失敗した)は処理済みとして数える。

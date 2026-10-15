@@ -2828,6 +2828,12 @@ describe("countPrFixFailures", () => {
     expect(calls[0]?.text).toContain("AND wi.ci_check_id IS NULL");
   });
 
+  test("leaves out the rounds that fix a merge conflict", async () => {
+    const { sql, calls } = createFakeSqlClient([[ZERO]]);
+    await countPrFixFailures(1, sql);
+    expect(calls[0]?.text).toContain("AND wi.conflict_check_id IS NULL");
+  });
+
   test("counts only blocked rounds in which Claude ran", async () => {
     const { sql, calls } = createFakeSqlClient([[ZERO]]);
     await countPrFixFailures(1, sql);
@@ -5080,6 +5086,12 @@ describe("listAutoRetryCandidates", () => {
     expect(calls[0]?.text).toContain("w.ci_check_id IS NULL");
   });
 
+  test("excludes a conflict round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listAutoRetryCandidates(params, sql);
+    expect(calls[0]?.text).toContain("AND w.conflict_check_id IS NULL");
+  });
+
   test("excludes an item that used up its restarts", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listAutoRetryCandidates(params, sql);
@@ -5140,6 +5152,12 @@ describe("restartStoppedWorkItem", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartStoppedWorkItem(params, sql, NO_JOBS);
     expect(calls[0]?.text).toContain("AND ci_check_id IS NULL");
+  });
+
+  test("guards the update against a conflict round", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartStoppedWorkItem(params, sql, NO_JOBS);
+    expect(calls[0]?.text).toContain("AND conflict_check_id IS NULL");
   });
 
   test("guards the update against a newer cycle of the same Issue", async () => {

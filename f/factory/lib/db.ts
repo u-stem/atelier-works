@@ -1076,6 +1076,8 @@ export type AutoRetryCandidate = {
  * 再開できない項目が`limit`件を占めて、後ろの項目を締め出さないためである。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は除く。失敗の行は`fixing`のまま食い違うので、
  * 作業項目だけを再開しても直らない。回が終わると`watch_pr_ci`が行を戻す。
+ * 競合を直す回(`conflict_check_id`が非NULL)も除く。競合の行が直している作業項目を結んだままで、
+ * 作業項目だけを再開すると、行と食い違うためである。
  * 要件が未承認の項目のように、DBの条件だけでは除けないものは、呼び出し側が飛ばす。
  * noticeの解決の時刻が止まった時刻より後であることが、止まった後に原因が直ったことの印になる。
  * 止まった後の解決に限るので、再開後に同じ理由で止まった作業項目は、次の解決まで対象にならない。
@@ -1105,6 +1107,7 @@ export async function listAutoRetryCandidates(
     WHERE ((w.kind = 'issue' AND w.status = 'needs_human')
         OR (w.kind = 'pr_fix' AND w.status = 'blocked'))
       AND w.ci_check_id IS NULL
+      AND w.conflict_check_id IS NULL
       AND EXISTS (
         SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
         WHERE starts_with(last.note, p.prefix)
@@ -1154,7 +1157,7 @@ export async function listAutoRetryCandidates(
 
 /**
  * 止まった作業項目を、理由を条件にした比較と交換で再開の状態へ移す。
- * 状態が`expectedFrom`で、CIの失敗を直す回(`ci_check_id`が非NULL)でなく、
+ * 状態が`expectedFrom`で、CIの失敗を直す回(`ci_check_id`が非NULL)でも競合を直す回(`conflict_check_id`が非NULL)でもなく、
  * その状態へ移った最新の遷移の注記が`reasonPrefixes`のどれかで始まり、
  * 注記が`notePrefix`で始まる遷移(これまでの自動の再開)が`maxRestarts`回未満で、
  * 同じIssueに新しいサイクルの`issue`が無く、同じPRに`id`の大きい`pr_fix`も、終端でない別の`pr_fix`も無く、
@@ -1192,6 +1195,7 @@ export async function restartStoppedWorkItem(
           updated_at = now()
       WHERE id = ${params.id}::bigint AND status = ${params.expectedFrom}
         AND ci_check_id IS NULL
+        AND conflict_check_id IS NULL
         AND EXISTS (
           SELECT 1 FROM unnest(${[...params.reasonPrefixes]}::text[]) AS p(prefix)
           WHERE starts_with((
@@ -5187,9 +5191,10 @@ export async function countImplementFailedRounds(
  *     別の実行の行は、flowの再試行の60秒の待ちか、flowとClaudeの実行のやり直しを経てから
  *     書かれるので、10秒以内には来ない。
  *
- * CIの失敗を直すラウンド(`ci_check_id`を持つ作業項目)は、数える対象に入れない。
- * 回数の上限は`countPrCiFixRounds`で別に見るので、指摘の対応の失敗に混ぜると、
- * レビューの修正に使うモデルの昇格を、CIの失敗の回数が早めてしまう。
+ * CIの失敗を直すラウンド(`ci_check_id`を持つ作業項目)と、競合を直すラウンド(`conflict_check_id`を持つ作業項目)は、
+ * 数える対象に入れない。
+ * 回数の上限は`countPrCiFixRounds`と`countPrConflictFixRounds`で別に見るので、指摘の対応の失敗に混ぜると、
+ * レビューの修正に使うモデルの昇格を、CIの失敗や競合の回数が早めてしまう。
  *
  * 新しい指摘でラベルが付き直しただけのラウンドは数えない。
  * Claudeが動いたかは作業項目の単位で見るので、同じ作業項目で前にClaudeが動いていれば、
@@ -5212,6 +5217,7 @@ export async function countPrFixFailures(
         ON wi.owner = cur.owner AND wi.repo = cur.repo AND wi.pr_number = cur.pr_number
       WHERE cur.id = ${workItemId}::bigint AND wi.kind = 'pr_fix'
         AND wi.ci_check_id IS NULL
+        AND wi.conflict_check_id IS NULL
     ),
     last_success AS (
       SELECT MAX(fr.created_at) AS at
