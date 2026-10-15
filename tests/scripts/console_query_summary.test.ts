@@ -403,6 +403,7 @@ const REVIEW_ROW: SqlRow = {
   review_id: 12,
   head_sha: "abc1234",
   verdict: "request_changes",
+  result: "changes_requested",
   finding_count: "3",
   posted_review_id: "9001",
   created_at: T0,
@@ -719,11 +720,26 @@ describe("runWorkItemDetail result", () => {
         review_id: 12,
         head_sha: "abc1234",
         verdict: "request_changes",
+        result: "changes_requested",
         finding_count: 3,
         posted_review_id: "9001",
         created_at: T0,
       },
     ]);
+  });
+
+  test("parses a review without a recorded result as null", async () => {
+    const responses = detailResponses();
+    responses[5] = [{ ...REVIEW_ROW, result: null }];
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.reviews[0]?.result).toBeNull();
+  });
+
+  test("reads the result column of the reviews", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[5]?.text).toContain("result");
   });
 
   test("parses a fix round as counts only", async () => {

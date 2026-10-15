@@ -268,7 +268,7 @@ describe("the owner id check before the writes of the finish steps", () => {
     const text = await source("pr_review_post.ts");
     expect(
       positionOf(text, "if (published.ownerStopReason !== null) {"),
-    ).toBeLessThan(positionOf(text, "await insertReview({"));
+    ).toBeLessThan(positionOf(text, "await insertReview(record)"));
   });
 
   test("drawio_viewer_bump hands the factory_repo_id check to the bump", async () => {

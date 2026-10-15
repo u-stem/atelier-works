@@ -626,6 +626,7 @@ function review(overrides: Partial<WorkItemReview> = {}): WorkItemReview {
     review_id: 1,
     head_sha: "abc1234",
     verdict: "comment",
+    result: "reviewed",
     finding_count: 2,
     posted_review_id: null,
     created_at: T0,
@@ -640,14 +641,59 @@ describe("describeReview", () => {
     ).toBe("0123456");
   });
 
-  test("labels the verdict", () => {
-    expect(
-      describeReview(review({ verdict: "request_changes" })).verdictLabel,
-    ).toBe("修正を依頼");
+  test("labels a review without an open must as free of required fixes", () => {
+    expect(describeReview(review({ result: "reviewed" })).resultLabel).toBe(
+      "修正必須の指摘なし",
+    );
   });
 
-  test("leaves a verdict that is not known yet plain", () => {
-    expect(describeReview(review({ verdict: "zeta" })).verdictVariant).toBe(
+  test("labels a review with a must as having unresolved required fixes", () => {
+    expect(
+      describeReview(review({ result: "changes_requested" })).resultLabel,
+    ).toBe("修正必須の指摘が未解決");
+  });
+
+  test("warns about unresolved required fixes even when the verdict approves and no finding is new", () => {
+    expect(
+      describeReview(
+        review({
+          verdict: "approve",
+          result: "changes_requested",
+          finding_count: 0,
+        }),
+      ).resultVariant,
+    ).toBe("warning");
+  });
+
+  test("does not show an approving verdict as success when required fixes remain", () => {
+    expect(
+      describeReview(
+        review({ verdict: "approve", result: "changes_requested" }),
+      ).resultVariant,
+    ).not.toBe("success");
+  });
+
+  test("marks a review without a recorded result as unknown", () => {
+    expect(describeReview(review({ result: null })).resultLabel).toBe(
+      "修正必須の有無の記録なし",
+    );
+  });
+
+  test("labels a review whose result key is missing like one without a record", () => {
+    const { result: _result, ...withoutResult } = review();
+    expect(describeReview(withoutResult).resultLabel).toBe(
+      "修正必須の有無の記録なし",
+    );
+  });
+
+  test("leaves a review without a recorded result plain", () => {
+    expect(describeReview(review({ result: null })).resultVariant).toBe(
+      "muted",
+    );
+  });
+
+  test("leaves a result that is not known yet plain", () => {
+    expect(describeReview(review({ result: "zeta" })).resultVariant).toBe(
       "muted",
     );
   });

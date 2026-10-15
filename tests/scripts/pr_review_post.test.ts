@@ -26,6 +26,7 @@ import {
   shouldPostReview,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
+  buildReviewRecord,
   countOpenMustThreads,
   decideReviewBodyMode,
   fenceFor,
@@ -640,6 +641,62 @@ describe("reviewResultFor", () => {
     expect(reviewResultFor([finding({ kind: "nits" })], 2)).toBe(
       "changes_requested",
     );
+  });
+});
+
+describe("buildReviewRecord", () => {
+  const base = {
+    workItemId: 7,
+    headSha: "abc1234",
+    summary: "no new findings",
+    postedReviewId: "99",
+  };
+
+  test("marks an approving review with no new finding as changes_requested while a must is open", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 1,
+      }).result,
+    ).toBe("changes_requested");
+  });
+
+  test("marks an approving review with no new finding and no open must as reviewed", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 0,
+      }).result,
+    ).toBe("reviewed");
+  });
+
+  test("keeps the verdict as Claude returned it", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 1,
+      }).verdict,
+    ).toBe("approve");
+  });
+
+  test("carries the identifiers of the work item, the commit and the posted review", () => {
+    const record = buildReviewRecord({
+      ...base,
+      verdict: "comment",
+      findings: [],
+      openMustCount: 0,
+    });
+    expect([
+      record.work_item_id,
+      record.head_sha,
+      record.posted_review_id,
+    ]).toEqual([7, "abc1234", "99"]);
   });
 });
 

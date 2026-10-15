@@ -37,6 +37,7 @@ import {
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
 import { blockReview } from "./pr_review_prepare.ts";
 import {
+  buildReviewRecord,
   countOpenMustThreads,
   decideReviewBodyMode,
   findPostedReviewId,
@@ -144,7 +145,7 @@ export async function main(
  * `verdict`が想定外の値なら例外を投げる。
  *
  * GitHubのレビューのeventは常にCOMMENTで、approve / request_changesは使わない
- * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`とDiscordにだけ残す。
+ * (factory-reviewスキルの方針)。`verdict`は`factory.reviews`にだけ残す。
  * トリガーの`review_label`は着手時に消費済みなので、ここで外すラベルも、
  * 付けるPRの状態ラベルも無い。
  * 投稿後に結果を決め、今回の指摘に`kind === "must"`があるか、
@@ -619,14 +620,18 @@ async function postReview(
     ? null
     : "review_post_mode is gated: recorded without posting";
 
-  await insertReview({
-    work_item_id,
-    head_sha: review_sha,
+  // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、
+  // 未解決の[MUST]を数えた結果を、レビューと一緒に記録する。
+  const record = buildReviewRecord({
+    workItemId: work_item_id,
+    headSha: review_sha,
     verdict,
     summary,
     findings,
-    posted_review_id: postedReviewId,
+    openMustCount,
+    postedReviewId,
   });
+  await insertReview(record);
 
   const moved = await updateStatusIfCurrent(
     work_item_id,
