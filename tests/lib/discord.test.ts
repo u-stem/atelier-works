@@ -640,7 +640,26 @@ describe("buildEmbed", () => {
       finding_count: 3,
       result: "changes_requested",
     });
-    expect(embed.description).toBe("指摘3件。状態: 修正が必要な指摘あり");
+    expect(embed.description).toBe(
+      "今回の指摘3件。状態: 修正必須の指摘が未解決(要修正)",
+    );
+  });
+
+  test("states unresolved must findings even when this round has no findings", () => {
+    const embed = buildEmbed({
+      kind: "pr_reviewed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      verdict: "request_changes",
+      finding_count: 0,
+      result: "changes_requested",
+    });
+    expect(embed.description).toBe(
+      "今回の指摘0件。状態: 修正必須の指摘が未解決(要修正)",
+    );
   });
 
   test("states the finding count and result when no changes are requested", () => {
@@ -655,7 +674,26 @@ describe("buildEmbed", () => {
       finding_count: 0,
       result: "reviewed",
     });
-    expect(embed.description).toBe("指摘0件。状態: 指摘なし(人のApprove待ち)");
+    expect(embed.description).toBe(
+      "今回の指摘0件。状態: 修正必須の指摘なし(人のApprove待ち)",
+    );
+  });
+
+  test("does not call the state no-findings when non-blocking findings exist", () => {
+    const embed = buildEmbed({
+      kind: "pr_reviewed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      verdict: "approve",
+      finding_count: 1,
+      result: "reviewed",
+    });
+    expect(embed.description).toBe(
+      "今回の指摘1件。状態: 修正必須の指摘なし(人のApprove待ち)",
+    );
   });
 
   test("truncates a field value longer than 1024 characters", () => {
