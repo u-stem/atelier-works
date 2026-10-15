@@ -5,6 +5,7 @@ import {
   CI_ROUND_REPLIES_REASON,
   ciClaudeFailureText,
 } from "../../f/factory/lib/ci_fix_round.ts";
+import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import { prCiFixHoldInfo } from "../../f/factory/lib/pr_ci_support.ts";
 import {
   describeReason,
@@ -81,9 +82,40 @@ describe("nextActionFor a CI round", () => {
   test("gives the action of the hold reason for a job that cannot be fixed", () => {
     expect(
       nextActionFor(
-        "ci round: the failed CI job cannot be fixed by editing the source (metadata job)",
+        "ci round: the failed CI job cannot be fixed by editing the source (unnamed_job)",
       ),
     ).toBe(prCiFixHoldInfo("unfixable_job").stopAction);
+  });
+
+  test("gives the action of the hold reason for a lock that cannot be recomputed", () => {
+    expect(
+      nextActionFor(
+        "ci round: the lock cannot be recomputed automatically (dependency_changed)",
+      ),
+    ).toBe(prCiFixHoldInfo("metadata_manual").stopAction);
+  });
+
+  test("gives the action of the hold reason for a lock that cannot be recomputed in a CI round", () => {
+    expect(
+      nextActionForPrFix(
+        "ci round: the lock cannot be recomputed automatically (head_lacks_base)",
+        true,
+      ),
+    ).toBe(prCiFixHoldInfo("metadata_manual").stopAction);
+  });
+
+  test("gives the action of the hold reason when the base branch moved before a push", () => {
+    expect(nextActionFor(CI_ROUND_REHASH_STALE_REASON)).toBe(
+      prCiFixHoldInfo("metadata_manual").stopAction,
+    );
+  });
+
+  test("describes a lock that cannot be recomputed as a stopped CI round", () => {
+    expect(
+      describeReason(
+        "ci round: the lock cannot be recomputed automatically (dependency_changed)",
+      ),
+    ).toContain("CIの失敗を直す回を止めました");
   });
 
   test("gives the action of the hold reason for another conclusion", () => {

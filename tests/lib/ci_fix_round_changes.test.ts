@@ -3,9 +3,12 @@ import {
   type CiChangeFs,
   collectCiFixChanges,
   inspectCiFixChanges,
+  isLockOnlyChange,
+  isRehashCandidate,
   listCiAddedPathsInTree,
   parseRawDiffZ,
   parseZeroContextPatch,
+  type RehashCheckVerdict,
 } from "../../f/factory/lib/ci_fix_round.ts";
 import type {
   CommandResult,
@@ -603,6 +606,222 @@ describe("inspectCiFixChanges", () => {
       fs,
     });
     expect(reasons.every((reason) => !reason.includes("; "))).toBe(true);
+  });
+});
+
+describe("inspectCiFixChanges for a recomputed lock", () => {
+  const ALLOW: RehashCheckVerdict = { kind: "allow" };
+  const DENY: RehashCheckVerdict = { kind: "deny" };
+  const LOCK_PATCH = { "wmill-lock.yaml": "@@ -1 +1 @@\n-a\n+b\n" };
+
+  function lockRun(
+    mode = "100644",
+    code = "M",
+    extra: readonly (readonly [string, string, string, string])[] = [],
+  ) {
+    return fakeGit({
+      tracked: raw([mode, mode, code, "wmill-lock.yaml"], ...extra),
+      patches: LOCK_PATCH,
+    }).run;
+  }
+
+  function options(rehashCheck?: () => Promise<RehashCheckVerdict>) {
+    return {
+      ...WORKTREE,
+      fs: fakeFs({}).fs,
+      ...(rehashCheck === undefined ? {} : { rehashCheck }),
+    };
+  }
+
+  test("rejects a changed lock as a protected path without a check", async () => {
+    expect(
+      await inspectCiFixChanges(lockRun(), DIR, SHA, [], options()),
+    ).toEqual([
+      "ci round change not allowed (protected_path): wmill-lock.yaml",
+    ]);
+  });
+
+  test("allows a changed lock that the check confirms", async () => {
+    expect(
+      await inspectCiFixChanges(
+        lockRun(),
+        DIR,
+        SHA,
+        [],
+        options(async () => ALLOW),
+      ),
+    ).toEqual([]);
+  });
+
+  test("rejects a changed lock that the check refuses", async () => {
+    expect(
+      await inspectCiFixChanges(
+        lockRun(),
+        DIR,
+        SHA,
+        [],
+        options(async () => DENY),
+      ),
+    ).toEqual([
+      "ci round change not allowed (protected_path): wmill-lock.yaml",
+    ]);
+  });
+
+  test("stops with the reason of the check, not as a protected path", async () => {
+    const reason =
+      "ci round: the lock cannot be recomputed automatically (dependency_changed)";
+    expect(
+      await inspectCiFixChanges(
+        lockRun(),
+        DIR,
+        SHA,
+        [],
+        options(async () => ({ kind: "stop", reason })),
+      ),
+    ).toEqual([reason]);
+  });
+
+  test("rejects a lock that changes together with another file", async () => {
+    const run = lockRun("100644", "M", [["100644", "100644", "M", "f/a.ts"]]);
+    const reasons = await inspectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      ["f/a.ts"],
+      options(async () => ALLOW),
+    );
+    expect(reasons).toEqual([
+      "ci round change not allowed (protected_path): wmill-lock.yaml",
+    ]);
+  });
+
+  test("does not ask the check when another file changes with the lock", async () => {
+    let asked = 0;
+    const run = lockRun("100644", "M", [["100644", "100644", "M", "f/a.ts"]]);
+    await inspectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      ["f/a.ts"],
+      options(async () => {
+        asked += 1;
+        return ALLOW;
+      }),
+    );
+    expect(asked).toBe(0);
+  });
+
+  test("rejects a lock whose mode is executable", async () => {
+    const reasons = await inspectCiFixChanges(
+      lockRun("100755"),
+      DIR,
+      SHA,
+      [],
+      options(async () => ALLOW),
+    );
+    expect(reasons).toEqual([
+      "ci round change not allowed (protected_path): wmill-lock.yaml",
+    ]);
+  });
+
+  test("rejects a lock that is added instead of modified", async () => {
+    const reasons = await inspectCiFixChanges(
+      lockRun("100644", "A"),
+      DIR,
+      SHA,
+      [],
+      options(async () => ALLOW),
+    );
+    expect(reasons).toEqual([
+      "ci round change not allowed (protected_path): wmill-lock.yaml",
+    ]);
+  });
+
+  test("rejects a lock that is deleted", async () => {
+    const reasons = await inspectCiFixChanges(
+      lockRun("100644", "D"),
+      DIR,
+      SHA,
+      [],
+      options(async () => ALLOW),
+    );
+    expect(reasons).toEqual([
+      "ci round change not allowed (protected_path): wmill-lock.yaml",
+    ]);
+  });
+
+  test("does not allow a lock in a subdirectory", async () => {
+    const { run } = fakeGit({
+      tracked: raw(["100644", "100644", "M", "sub/wmill-lock.yaml"]),
+    });
+    const reasons = await inspectCiFixChanges(
+      run,
+      DIR,
+      SHA,
+      [],
+      options(async () => ALLOW),
+    );
+    expect(reasons).toEqual([
+      "ci round change not allowed (protected_path): sub/wmill-lock.yaml",
+    ]);
+  });
+});
+
+describe("isRehashCandidate", () => {
+  const lock = {
+    path: "wmill-lock.yaml",
+    status: "modified" as const,
+    mode: "100644",
+    addedLines: [],
+    removedLineCount: 0,
+  };
+  const collected = { changes: [lock], overflow: false, timedOut: false };
+
+  test("is true for one modified regular lock that was read completely", () => {
+    expect(isRehashCandidate(collected)).toBe(true);
+  });
+
+  test("is false when the changes overflowed", () => {
+    expect(isRehashCandidate({ ...collected, overflow: true })).toBe(false);
+  });
+
+  test("is false when reading the changes timed out", () => {
+    expect(isRehashCandidate({ ...collected, timedOut: true })).toBe(false);
+  });
+
+  test("is false when another file changed too", () => {
+    expect(
+      isRehashCandidate({
+        ...collected,
+        changes: [lock, { ...lock, path: "a.ts" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isLockOnlyChange", () => {
+  const lock = {
+    path: "wmill-lock.yaml",
+    status: "modified" as const,
+    mode: "100644",
+    addedLines: [],
+    removedLineCount: 0,
+  };
+
+  test("is true for one modified regular lock", () => {
+    expect(isLockOnlyChange([lock])).toBe(true);
+  });
+
+  test("is false for no change", () => {
+    expect(isLockOnlyChange([])).toBe(false);
+  });
+
+  test("is false for a symlink", () => {
+    expect(isLockOnlyChange([{ ...lock, mode: "120000" }])).toBe(false);
+  });
+
+  test("is false for two changes", () => {
+    expect(isLockOnlyChange([lock, { ...lock, path: "a.ts" }])).toBe(false);
   });
 });
 

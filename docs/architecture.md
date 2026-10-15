@@ -400,6 +400,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
 | `f/factory/lib/main_ci_watch` | script | [LIB] mainのCI監視の流れ |
+| `f/factory/lib/ci_metadata_rehash` | script | [LIB] metadataジョブの失敗をhashの再計算で直す |
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
@@ -412,6 +413,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/metadata_hash` | script | [LIB] メタデータのhashの再計算 |
+| `f/factory/lib/metadata_git_ports` | script | [LIB] メタデータのhashの再計算が読むgitのポート |
 | `f/factory/lib/metadata_precheck` | script | [LIB] メタデータのhashの再計算の事前検査 |
 | `f/factory/lib/metadata_signature` | script | [LIB] メタデータのmainの引数の比較 |
 | `f/factory/lib/metadata_patch_imports` | script | [LIB] メタデータのパッチのimportの読み取り |
@@ -706,6 +708,6 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 ## 未実装の機能
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
-- CIが出したメタデータのパッチ(`metadata-patch`)の適用か、Factory自身による`wmill-lock.yaml`のhashの再計算で、PRを直すこと。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
+- CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

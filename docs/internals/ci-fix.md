@@ -8,7 +8,8 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/ci_fix_prompt.ts`、`lib/ci_fix_paths.ts`
 - `lib/ci_fix_round.ts`
 - `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
-- `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`
+- `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、`lib/metadata_git_ports.ts`
+- `lib/ci_metadata_rehash.ts`
 
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
@@ -25,10 +26,12 @@ CIのログはリポジトリへ書ける人が決める外部入力である。
 | --- | --- |
 | `lib/github.ts` | ジョブの一覧とログ本文の取得。IDと応答の照合 |
 | `lib/ci_log_support.ts` | ログの整形と絞り込み。秘密値の検査。揮発する値の型。Claudeの出力文字列の検査 |
-| `lib/ci_fix_classify.ts` | 失敗が、ソースの編集で直せる種類かの分類 |
+| `lib/ci_fix_classify.ts` | 失敗が、自動で直せる種類かの分類。`metadata`の失敗は、hashの再計算の経路として分ける |
 | `lib/ci_fix_prompt.ts` | CI回のプロンプトと出力のJSON schema |
 | `lib/ci_fix_paths.ts` | Claudeが加えた変更の許可リスト方式の検査 |
-| `lib/ci_fix_round.ts` | 上の部品をつなぐ流れ。ログから抜粋まで、変更の入力の組み立て、通常の回との違いの判断 |
+| `lib/ci_fix_round.ts` | 上の部品をつなぐ流れ。PRの状態の確認と分類(`readCiFailure`)、ログから抜粋まで(`gatherCiLogs`)、変更の入力の組み立て、通常の回との違いの判断。`wmill-lock.yaml`だけの変更の形の判定(`isLockOnlyChange`) |
+| `lib/ci_metadata_rehash.ts` | `metadata`だけが落ちた回の再計算の流れ。書き込み、独立した照合(`confirmRehash`)、pushの直前の再確認、固定の理由 |
+| `lib/metadata_git_ports.ts` | 事前検査が読むポートのgitの実装。baseの先端のcommitの取り込み |
 | `lib/workspace.ts` | 文字列をgitleaksで検査する実行(`runGitleaksOnText`) |
 
 ## CI回のflowが守る前提
@@ -157,6 +160,109 @@ commitする変更が無いときの理由は、返信を投稿したとは書�
 手順が無い理由の次の操作は、保留の理由に写せる理由なら、その理由の敬体の固定文(`prCiFixHoldInfo`の`stopAction`)にする。
 写せない理由は、原因を確かめて直し、PRへpushする案内とする。
 保留の理由の語彙と、止めた理由を写す規則は[PRのCI監視の仕様](pr-ci.md)に書く。
+
+### metadataジョブの失敗を直す経路
+
+`metadata`ジョブだけが落ちたCI回は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す(決定的な経路)。
+修正のステップは、日次予算の検査より前に、この経路を試す。費用がかからないためである。
+`metadata`だけが落ちた行は、Claudeを使わないので、起動の判断(claim)も、factory-fixスキルのマーカーを確かめない。
+修正のステップのマーカーの確認は、この経路より後ろにあるので、この経路はマーカーの確認を経由しない。
+
+`check`などの直せる失敗と`metadata`が同時に落ちたときは、再計算せず、Claudeが先に`check`などを直す。
+Claudeが`f/`のscriptを直すと、hashが再び古くなる。
+先に再計算すると、その後にもう一度再計算が要り、`pr_ci_fix_max_rounds`(既定2)を使い切って`rounds_exhausted`になる。
+Claudeを先にすれば、1回目でClaudeが直し、次のCIで`metadata`だけが落ちて、2回目に再計算で直る。
+混在の回は、通常の`fixable`と同じに、日次予算で保留する。
+予算を使い切った日に、混在の行を予算の免除でclaimすると、巡回のたびにラウンドを消費するためである。
+保留した行は、巡回のたびに読み直すだけで、ラウンドを消費しない。
+
+1. `readCiFailure`で、PRが開いていて、headが失敗のheadのままであることと、失敗の分類を確かめる。
+   `metadata`だけが落ちているのでなければ、通常の流れに進む。
+2. GitHubのAPIでPRのbaseブランチ名とその今の先端のshaを読み、そのcommitをローカルに取り込む(`fetchCommit`)。
+   事前検査は、baseの先端の木を読むためである。
+   取り込みはshaを指定し、取り込み先を指定しない。
+   ローカルに無いときだけ取り込み、追跡ref(`refs/remotes/origin/<base>`)も、ブランチも、タグも動かさない。
+   `commitAndPush`は、追跡refを動かす取り込みをリポジトリのロックの中で行う。
+   ロックの外から同じrefを更新すると、refのロックが衝突して失敗しうるためである。
+3. `planMetadataRehash`が、worktreeのオブジェクトからhashを再計算する。
+   通って、本文が変わるときは、worktreeの根の`wmill-lock.yaml`を書き換える(`writeRootWmillLock`)。
+   `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。通常のファイルでないとき、ほかにhard linkがあるときは書かない。
+   ファイルは作らない。書き先はこの1つだけである。
+   hard linkがあると、別のパスのファイルまで書き換えてしまうためである。
+   書いた後に、ファイルの大きさが本文のバイト数と同じことを確かめる。
+4. 書き換えたときは、固定の件名と本文(`METADATA_REHASH_COMMIT_SUBJECT`と`METADATA_REHASH_COMMIT_BODY`)を持つ`done`で返す。
+   返信は空である。
+5. 次のときは、`blocked`で返す。
+   - 事前検査が、固定の理由で通らない。依存やschemaが変わるPR、mainを取り込んでいないPRなどである。
+   - 再計算しても本文が変わらない(`lock_up_to_date`)。
+     `metadata`ジョブが、Windmillの起動やログインなど、hash以外の原因で落ちているので、再計算では直らない。
+   - 根の`wmill-lock.yaml`が、symlink、通常のファイルでないもの、実行権限のあるもの、無いファイル、書き込めないファイルである(`lock_not_writable`)。
+     実行権限のあるファイルは、モード`100755`でcommitされ、後のステップが`100644`だけを許すためである。
+
+   理由は`ci round: the lock cannot be recomputed automatically (<種別>)`である。
+   種別は固定の語彙で、PRの作者が決めるパスは入れない。
+   補足を足すのは、`scan_unavailable`(workerのBunの版)と`internal_error`(例外の種類)の2つだけである。
+   形は`scan_unavailable: bun <版>`のように、種別に続けて入れる。
+   運用者が、workerのイメージの更新で直るかや、原因の見当を見分けるためである。
+   種別は作業項目の理由に残り、再計算が直せるPRの割合を、種別ごとに数えて測れる。
+
+再計算の回も、`pr_ci_fix_max_rounds`が数える回に含まれる。
+Claudeの回と再計算の回は、同じ上限を分け合う。
+
+失敗は、一時的なものと、再試行しても直らないものに分け、検証と完了のステップの照合も同じ分け方に従う。
+
+- 一時的な失敗は、例外にして投げ、`metadata_manual`にしない。
+  修正のステップはflowが2回まで再試行し、再計算は何度行っても同じ結果になるためである。
+  - 事前検査の`port_error`(gitコマンドの失敗、時間切れ、ポートの値の形の誤り)と`ancestry_unknown`。
+  - 取り込み、GitHubのAPI、書き込みの`open`以外の失敗。
+- 再試行しても直らない失敗は、例外にせず、固定の理由で止める。
+  - `lock_not_writable`。
+  - 事前検査の固定の理由。`dependency_changed`、`head_lacks_base`、`base_stale`などである。
+  - 実行時に残るimportの自己検査の失敗(`scan_unavailable`)。workerのBunの版が合わない状態で、何度行っても外れる。
+  - 木の一覧が読めないこと(`tree_unreadable`)。`ls-tree`の出力が上限で切れたときと、形が合わないときである。
+  - 想定外の例外(`internal_error`)。ポートの例外はすべて`port_error`か`tree_unreadable`に変わるので、残るのは純粋な計算の例外である。
+    同じ入力では同じ結果になる。補足に、例外の種類を、標準のエラーの名前に限って載せる。
+- 検証と完了のステップの照合は、一時的な失敗のとき、例外を投げる。ステップが失敗し、行は回復が戻す。
+  flowの再試行があるのは修正のステップだけである。検証と完了のステップは再試行されず、失敗すると`on_error_flow`から回復が行を戻す。
+  再試行しても直らない理由のときは、再計算の回では、保護パスの違反にせず、修正のステップと同じ固定の理由(`metadataManualReason`)で止める。
+  Claudeの回では、保護パスの違反(`deny`)になる(判定は、下の`stop`の段落に書く)。
+  回復は、この理由を`metadata_manual`に写す。
+
+検証のステップと完了のステップは、前のステップの結果を受け取る欄を足さず、worktreeの変更から再計算の出力かを決める。
+前のステップの出力を信用しないためである。
+次の2つをどちらも満たすときに限り、この変更を許す(`confirmRehash`)。
+
+- 変更が、根の`wmill-lock.yaml`1件だけである。モードは`100644`で、状態は`modified`である。
+- その本文が、PRのheadの木から独立して再計算した結果と、バイト列まで同じである。比べるのは、文字列ではなくバイト列である。
+  文字列に復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
+
+この例外は、許可リスト方式の検査`checkCiFixChanges`ではなく、呼び出し側の`inspectCiFixChanges`に置く。
+照合の結果は、次の3つのどれかになる(`RehashCheckVerdict`)。
+
+- 確認できた(`allow`)。変更を許す。
+- 形が外れた、本文が再計算と違う、本文を読めない、baseの先端が動き続けた(`deny`)。
+  例外を使わず、保護パスの違反として拒否する。
+- 再計算が、再試行しても直らない理由で失敗した(`stop`)。保護パスの違反にはせず、固定の理由を返す。
+  一時的な失敗は、この3つに入れず、例外を投げる。
+
+`stop`にするのは、再計算の回(`metadata`だけが落ちた回)に限る。
+Claudeの回で`wmill-lock.yaml`だけが変わったときに、「metadataジョブの失敗を直せない」と案内しないためである。
+Claudeの回では、`deny`にして、保護パスの違反として拒否する。
+回の種類は、検証と完了のステップが、PRのheadのCIの実行から読み直して決める(`rehashRoundProbe`)。
+修正のステップの出力を信用しないためである。読み直すのは、固定の理由で直せないとわかったときだけである。
+
+- 検証のステップは、この形が確かめられたとき、検査コマンドを実行しない。
+  hashだけを書き換えた変更は、検査コマンドが確かめるコードを含まず、対象リポジトリのコードを実行する危険だけが残るためである。
+  実行しないので、検査コマンドの告知(`unsandboxed_check_commands`)も出さない。
+  告知は、最初の検査コマンドの直前に、1回だけ出す。
+- 完了のステップは、リポジトリのロックの外で同じ照合をする。ロックの中では、ステージしたバイト列が照合済みのバイト列と同じかを確かめる(`stagedRehashGate`)。
+  変更が候補でないとき、ステージが照合済みと違うときは、許さない。
+  秘密値の検査、ツリーの照合、保護パスの検査、PRの状態の確認、オーナーの数値IDの照合、headの確認は、通常どおり通す。
+- commitの親は、`commitAndPush`が`head_sha`に固定する。
+  ローカルのHEADが`head_sha`でなければcommitせず、pushは強制しないので、ブランチの先端が動いていればpushは拒否される。
+- 照合では、baseの先端を読み、その先端で再計算し、比べた後にもう一度先端を読む。動いていれば、新しい先端で取り直す。取り直しは3回までである。
+- pushの直前に、baseの先端をもう一度読む。動いていれば、pushせず、新しい先端で確かめ直し、本文が変わるならこの回を止める(`CI_ROUND_REHASH_STALE_REASON`)。
+  先端はpushの後にも動きうるが、その差は次のCIの実行が検査する。
 
 ## ログの取得
 
@@ -352,13 +458,16 @@ stepの戻り値に混ざると、黙って記録されず、そのstepが失敗
 
 | 結果 | 条件 |
 | --- | --- |
-| `fixable` | 失敗したジョブがすべてソースの編集で直せる種類(`check`など)。失敗したジョブを返す |
-| `unfixable_job` | 名前が`metadata`で始まる、または名前が空。理由は`metadata_job`か`unnamed_job` |
+| `fixable` | 失敗したジョブがすべて、Factoryが自動で直せる種類。`metadata`以外で失敗したジョブ(`jobs`)と、`metadata`の失敗の有無(`metadataFailed`)を返す |
+| `unfixable_job` | 名前が空で、種類を決められない失敗がある |
 | `other_conclusion` | `failure`以外の結論。`cancelled`、`timed_out`、`startup_failure`、`action_required`、`stale`、`unknown` |
 | `no_failure` | 失敗したジョブが無い |
 
-`metadata`ジョブは`generate-metadata`で直す種類である。
-CI回のClaudeには、シェルもロックファイルを書く権限も無い。
+名前が`metadata`で始まるジョブの失敗は、Claudeではなく、`wmill-lock.yaml`のhashの再計算で直す。
+CI回のClaudeには、シェルもロックファイルを書く権限も無いためである。
+`metadata`だけが失敗したときは、`jobs`が空の`fixable`になる。ログは読まず、Claudeも起動しない。
+`check`などと同時に失敗したときは、`jobs`に`check`などだけが入り、`metadataFailed`が真になる。
+この混在の回は、Claudeが先に`check`などを直し、再計算は、`metadata`だけが落ちた回に行う。
 名前は正規化(互換文字を畳み、小文字にする)して比べる。
 複数のジョブが当たるときは、`unfixable_job`、`other_conclusion`、`fixable`の順に優先する。
 直せない失敗が混ざったまま一部だけを直しても、CIは通らないためである。
@@ -584,48 +693,101 @@ PRの差分(`PrFacts.diff`)は、`base...head`の全件でなければならな�
 PR本文やコメントに載せるときは、コードスパンで囲み、メンションとリンクを無効にする。
 置き換え済みなので、補足は囲んだコードスパンを内側から閉じられない。
 
-### 配線で決めること
+### 再計算の配線の仕様
 
-次は、検査を呼び出す側を実装するときに決める。
+hashの再計算をCI回のflowへ配線する仕様は、次のとおりである。
+流れは[metadataジョブの失敗を直す経路](#metadataジョブの失敗を直す経路)に書く。
+
+- artifactを経由しない再計算を、artifactの適用の代わりに、先に試す。
+  `metadata`ジョブが落ちたCI回は、修正のステップがまず再計算を試す。
+  再計算は`schema`を書かないので、`main`の引数が変わるPRは、事前検査が人の手に回す。
+- ポートの実装は、`metadata_git_ports.ts`にある。
+  木の一覧は`git ls-tree`、ファイルは`git cat-file blob`、祖先の判定は`git merge-base --is-ancestor`である。
+  GitHubのREST APIでは読まない。ファイルごとの読み取りでPATのrate limitを使い切らないためである。
+- ポートは、gitを引数の配列で呼び、シェルを通さない。
+  blobは、木の項目の`oid`で読む。PRの作者が決められるパスを、gitの引数にもシェルの文字列にも使わない。
+- baseの先端は、GitHubのAPIでbaseブランチの先端のshaを読んで使う。
+  PRのAPIの`base.sha`は使わない。baseブランチの今の先端とは限らないためである。
+  そのcommitがローカルに無いときだけ、shaを指定して取り込む。追跡refは動かさない。
+- 再計算が書き込むcommitの親は、`head_sha`に固定する。
+  `commitAndPush`が、ローカルのHEADが`head_sha`であることと、リモートのブランチの先端が`head_sha`であることを確かめる。
+  pushは強制しないので、先端が動いていればpushは拒否される。`--force*`は使わない。
+- 検査の後にheadが動く競合は、完了のステップが、pushの直前にPRのheadを読み直して確かめる。
+- baseの先端が動く競合は、照合の中と、pushの直前の2か所で確かめる。
+  動いていれば、pushせず、新しい先端で確かめ直す。取り直しは3回までで、本文が変わるときは回を止める。
+- `main`が進んでPRのheadがbaseの先端を含まなくなる(`head_lacks_base`)ときは、人の手に回す。
+  待つ扱いにしない。mainを取り込むのは人のcommitで、Factoryのcommitだけを自動で直す前提から外れ、待っても再計算は始まらない。
+  通知は`metadata_manual`で、必要ならmainを取り込んで`mise run metadata`を実行する案内になる。
+- 再計算と`main`の取り込みを繰り返さないので、その回数の上限は無い。
+  再計算の回は、`pr_ci_fix_max_rounds`が数える回に含める。
+- 再計算が直せるPRの割合は、人の手に回った作業項目の理由で測る。
+  理由は`ci round: the lock cannot be recomputed automatically (<種別>)`で、種別は固定の語彙である。
+  作業項目の理由を種別ごとに数える。
+- `ls-tree`の出力が上限で切れたときと、形が合わないときは、同じcommitで何度読んでも直らない。
+  ポートは`TreeUnreadableError`を投げ、検査は`tree_unreadable`を返して、人の手に回す。
+  時間切れとgitの失敗は一時的なので、ふつうの例外を投げ、検査は`port_error`を返す。
+  修正のステップは、`port_error`を例外にして、flowの再試行に任せる。
+- `readBlob`の戻り値の形が合わないのは、ポートの実装の誤りである。
+  検査は`port_error`を返し、再試行に任せる。実装の誤りは、ポートのテストが見つける。
+- パスにU+FFFDを含む項目と、同じパスの重複は、事前検査が`invalid_tree`で人の手に回す。
+  不正なUTF-8のパスを文字列にすると、別のパスが同じ文字列になり、表の項目が消えるためである。
+- ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)は、再計算がそのまま残す。
+- 再計算はwmill CLIを起動しない。workerのwmill CLIの版が`mise.toml`の版と違っても、結果に影響しない。
+  算法は、固定した版の挙動を写したもので、版の変更は[算法を固定するテスト](#算法を固定するテスト)が見つける。
+- 再計算のcommitの後、PRの状態は通常のCI回と同じになる。
+  作業項目のheadを記録しないので、`poll_prs`が新しいheadの再レビューを起動する。
+- `main`の取り込みで`wmill-lock.yaml`が衝突したときは、人が解消する。
+
+### artifactの適用で残る論点
+
+次は、artifactのパッチを適用する側を実装するときに決める。
 検査は、これらを前提にしない。
-最初の5項目は、呼び出し側が守る契約である。
+最初の項目は、呼び出し側が守る契約である。
 
 - 出どころの検査を先に呼ぶ。
   `checkProvenance`は、実行の事実とPRの差分だけを見る。artifactもポートも渡さない。
   呼び出し側は、`listWorkflowRunArtifacts`と`downloadArtifactZip`より前にこれを呼び、失敗ならダウンロードも展開もしない。
   出どころで断れるものを、ネットワークとメモリを使う前に断るためである。
   `verifyMetadataPatch`も先頭で同じ検査をもう一度行うので、呼び忘れても通ることはない。
-- ポート(`listHeadSources`、`readHeadFile`、`readBaseFile`、`isAncestor`、`readCommitParents`)は、ローカルのcloneで実装する。
-  木の一覧は`git ls-tree`、ファイルは`git cat-file`を使い、GitHubのREST APIで読まない。
-  ファイルごとの読み取りでPATのrate limitを使い切らないためである。
-- hashの再計算が書き込むcommitは、親を`headSha`に固定する。
-  書き込む前に、ブランチの先端が`headSha`から動いていたら、pushせずに検査からやり直す。`--force*`は使わない。
-  検査の後にheadが動く競合は、artifactの適用だけでなく、hashの再計算にも当てはまる。
-- hashの再計算のポートは、gitを引数の配列で呼び、シェルを通さない。
-  blobは、木の項目の`oid`で読む(`git cat-file blob <oid>`)。
-  PRの作者が決められる文字列(パス)を、シェルの文字列に結合しない。
+- artifactの適用でも、ポートはローカルのcloneで実装する。
+  対象は、`listHeadSources`、`readHeadFile`、`readBaseFile`、`isAncestor`、`readCommitParents`である。
+- artifactの適用でも、commitの親を`headSha`に固定し、pushの直前にブランチの先端とbaseの先端を確かめる。
 - `ci.yml`が、artifactのIDとdigestを`metadata`ジョブのログに出す処理は、まだ無い。
   追加は保護パス(`.github/`)の変更なので、別に行う。
   照合できない間は、パッチを適用しない。
 - フローのキー(`__flow+...`)が変わるパッチの扱い。
-- 検査の後にheadが動く競合の扱い(artifactの適用)。hashの再計算の契約は、上に書いた。
 - artifactのIDとdigestを、`metadata`ジョブのログの値と照合する手順。
 - `mergeSha`を本物のPRのmerge commitに結び付けること。適用の前に、GitHub APIのPRの`merge_commit_sha`と照合する。
   lockの比較先はheadの木とbaseの先端の木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
 - `main`の依存更新のたびに、閉包の多くのscriptで、依存の集合かlockが食い違う場合の扱い。検査の前に、`main`を取り込む。
-- artifactを経由しない[hashの再計算](#メタデータのhashの再計算)を、artifactの適用の代わりに使うか、先に試すか。
-  再計算は`schema`を書かないので、`main`の引数が変わるPRは人の手に回る。
-- `main`が進むたびに、PRのheadがbaseの先端を含まなくなり、再計算が`head_lacks_base`で止まる。
-  `main`を取り込んでから再計算する手順と、その回数の上限を決める。
-- 再計算が実際のPRのうち、どれだけを直せるかを測る。測り方を決めて、人の手に回った理由の種類ごとに数える。
-- `listTree`が切り捨てた木を、検査が見分ける方法。呼び出し側が、切り捨ての有無を知らせる。
-- ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)の扱い。再計算はそのまま残す。
-- worker側のwmill CLIの版と、`mise.toml`で固定した版が食い違うときの扱い。
-- 再計算と`main`の取り込みを繰り返す回数の上限。
-- pushの直前に、baseの先端が動いていないかを再確認する。動いていたら、検査からやり直す。
-- 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
-- `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
+
+### 再計算の配線の限界
+
+再計算の配線には、次の限界がある。
+
+- 再計算が固定の理由で直せず、その後にCIの状態が変わると、再計算の回でも`deny`になる。
+  回の種類を読み直すのは、固定の理由で直せないときだけだからである。
+  状態が変わるのは、人が`metadata`ジョブを再実行した場合、PRが閉じた場合、headが動いた場合である。
+  保護パスの違反になり、保留は`fix_stopped`で、`metadata_manual`の案内は付かず、`fix_stopped`の汎用の案内になる。
+- 照合の`deny`に、一時的な原因が含まれる。
+  `mismatch`になるのは、`readRootWmillLock`が読めないときと、baseの先端が3回動き続けたときである。
+  `readStagedRootLock`の失敗は、`stagedRehashGate`が直接`deny`を返す。
+  どちらも保護パスの違反として扱うので、保留は`fix_stopped`になる。
+- `scan_unavailable`で保留した行は、workerを更新しても、headが進むまで外れない。
+  決定的な理由は同じheadでは起動し直さないためである。
+- 同じheadで`RehashTransientError`が続いても、決定的な失敗には切り替わらない。
+  修正のステップは再試行の上限で失敗し、検証と完了のステップは再試行されずに失敗する。
+  どちらも回復が行を戻す。
+- 再計算の回だけを数える列は無い。
+  作業項目に回の種類の印を持たないので、再計算の回は`pr_ci_fix_max_rounds`が数える回に含まれる。
+  そのため、再計算の回も上限(既定2)をClaudeの回と分け合って消費する。
+- `head_lacks_base`のPRは、待たずに人の手に回る(理由は[再計算の配線の仕様](#再計算の配線の仕様)にある)。
+  再確認の基準は、`merge-base(baseの先端, head)`ではなくbaseの先端なので、mainが進むほど人の手に回る頻度が増える。
+- 直せる失敗と`metadata`が同時に落ちた回では、Claudeを起動する前に事前検査を試さない。
+  Claudeが`f/`を触るかは、起動の前には決められないためである。
+- `lock_up_to_date`で止めた回の、失敗したジョブを自動では再実行しない。
+  Windmillの起動やログインで落ちた実行のやり直しには、ActionsのPATの書き込み権限が要るためである。
 
 ## メタデータのhashの再計算
 
@@ -644,12 +806,13 @@ artifactを経由しないので、取得、zip、出どころ、manifestの検�
 | `lib/metadata_hash.ts` | ファイルの内容から、`wmill-lock.yaml`の全キーのhashを計算する(`computeLockEntries`)。既存のlockの行ごとの値だけを置き換える(`patchWmillLock`) |
 | `lib/metadata_precheck.ts` | gitの木を読み、依存が変わらない再生成かを確かめる(`planMetadataRehash`)。確かめられたときだけ、新しい本文と、変わったキーを返す。正しさを守る検査で、敵対的な入力に対する境界ではない |
 | `lib/metadata_signature.ts` | `main`と`preprocessor`の署名、トップレベルの型宣言、Windmillの注釈を、字句で読んで比べる |
+| `lib/metadata_git_ports.ts` | 事前検査が読むポートを、ローカルのcloneのgitで実装する(`createGitPrecheckPorts`) |
 
-3つとも、保護パスである。
+4つとも、保護パスである。
 
 ### hashの算法
 
-算法は、`mise.toml`で固定したwmill CLIの版(`ASSUMED_WMILL_CLI_VERSION`)から写した。
+算法は、`mise.toml`で固定したwmill CLIの版(`ASSUMED_WMILL_CLI_VERSION`)の挙動を写したものである。
 写し元は、`generateScriptHash`、`generateFlowHash`、`generate-metadata rehash`の分岐である。
 
 - scriptのhashは、ワークスペースの依存のJSON、scriptのソース、`.script.yaml`の全文を、この順につなげたsha256である。
@@ -679,7 +842,21 @@ wmillも消さない項目なので、baseの先端の木で、ファイルか�
 読み取りは、木の一覧(`listTree`)、blobの読み取り(`readBlob`)、祖先の判定(`isAncestor`)の3つのポートで行う。
 ポートを実装するときは、gitのオブジェクトから読む。
 作業ツリーのファイルは開かない。
-このリポジトリの部品は、ポートの型と、受け取った値の検査だけを持つ。gitを使うポートの実装は、配線で行う。
+`metadata_precheck.ts`は、ポートの型と、受け取った値の検査だけを持つ。gitを使うポートは`metadata_git_ports.ts`が実装する。
+
+- `listTree`は、`git ls-tree -r -z -l <sha>`を実行する。submoduleの大きさ(`-`)は0にする。
+  失敗は2つに分ける。
+  - 出力が上限(32MiB)で切れたときと、形が合わないときは、`TreeUnreadableError`を投げる。同じcommitでは何度読んでも直らない。
+  - 時間を超えたときと、gitが失敗したときは、ふつうの例外を投げる。一時的な失敗である。
+- `readBlob`は、同じcommitの木の項目から`oid`を引き、`git cat-file blob <oid>`を実行する。パスはgitの引数にしない。木は、commitごとに1回だけ読む。
+- blobの標準出力は、文字列に復号せず、バイト列で受け取る。復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わり、hashの入力が変わるためである。
+- 木に無いパスは`missing`にする。blobでない項目と、大きさが木の申告と違う内容は`failed`にする。
+- 木の項目の大きさが1ファイルの上限を超えるときは、`cat-file`を実行せず、`failed`にする。
+- `readBlob`のgitの失敗と時間切れは、一時的なので、`failed`にせず例外を投げる。
+  `failed`は、検査が`read_failed`として人の手に回すので、一時的な失敗を含めない。
+- `isAncestor`は、`git merge-base --is-ancestor`の終了コード0を`true`、1を`false`にし、それ以外は`null`にする。
+- `ref`は40桁の小文字の16進数に限る。短い名前は、別のrefに解決されうるためである。
+- gitは引数の配列で実行し、`buildGitArgv`の固定の設定と`localGitEnv`の環境変数を使う。
 PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 名前の変更は、削除と追加の2件に見えるので、scriptの集合が変わったものとして扱う。
 
@@ -698,8 +875,8 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 
 | 確かめること | 外れたときの種別 |
 | --- | --- |
-| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
-| 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `internal_error` |
+| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。パスにU+FFFDが無く、同じパスの重複も無い。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
+| 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `scan_unavailable` |
 | 読んだ内容が、木の項目の`oid`と一致する。木に無いパスで内容が返らない。`readBlob`の戻り値の形が正しい | `blob_mismatch`、`port_error` |
 | headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
 | `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleが無い | `special_file` |
@@ -720,8 +897,12 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | hashが変わるキーが、PRが`.ts`を変えたscriptのキーか、baseの先端のlockの値に戻すキーだけである | `unexpected_key_change` |
 
 ポートが例外を投げたときは、`port_error`を返す。
+ただし、`listTree`が`TreeUnreadableError`を投げたときは、`tree_unreadable`を返す。
+表の自己検査が外れたときは、`scan_unavailable`を返す。
 それ以外の想定外の例外は、`internal_error`を返す。
-種別は固定で、例外の内容は載せない。
+一時的な種別は、`port_error`と`ancestry_unknown`だけである。ほかは、再試行しても変わらない。
+`read_failed`は、木にあるのに内容が無いときと、大きさが木の申告と合わないときだけ返す。
+種別は固定で、例外の内容は載せない。補足は、`scan_unavailable`のBunの版と、`internal_error`の例外の種類だけである。
 閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
 hashの計算では、木ごとに、入力のファイルをまとめて保持する。
 保持量は、読む合計の上限までである。
@@ -763,7 +944,8 @@ PRが触っていないscriptも、すべて確かめる。
 
 ### 人の手に回す条件
 
-事前検査が失敗の種別を返したときは、再計算せず、人が手元で`mise run metadata`を実行して直す。
+事前検査が、再試行しても直らない種別を返したときは、再計算せず、人が手元で`mise run metadata`を実行して直す。
+一時的な種別は、人の手に回さず、例外にして再試行する([事前検査](#事前検査))。
 判断できないとき、読めないとき、字句の切れ目に確信が持てないときは、通さずに人の手に回す。
 通すと依存の変化を見落とし、回すと人の作業が増えるだけで済むためである。
 
@@ -892,11 +1074,32 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   workerのBunを上げるときは、実行時のimportのテストを、workerのイメージで流し直す。
   検査の入口の自己検査は、型だけのimport、副作用のimport、値のimport、再export、名前空間import、リテラルの動的importを、固定の入力で確かめる。
   import属性を持つimportが、読む前に断られることも、入口で確かめる。
-  想定と違う結果を見つけたときは、`internal_error`で止め、補足にBunの版を載せる。
+  想定と違う結果を見つけたときは、`scan_unavailable`で止め、補足にBunの版を載せる。
+  同じworkerでは何度行っても外れるので、一時的な失敗として再試行せず、人の手に回す。
   Bunの版の許可リストは持たない。版が変わっても、自己検査を通ればよい。
-- 手元で`mise run check:comment-only`を未信頼のブランチに流すと、マクロが実行されうる。
-  `scripts/check-comment-only-diff.ts`が`transformSync`を使うためである。
-  この部品の外にある、別の経路である。
+- 手元の`mise run check:comment-only`は、この部品の外にある、別の経路である。
+  何も設定していない`transformSync`は、マクロを読む側のプロセスで実行する。
+  `scripts/check-comment-only-diff.ts`は、これを使うので、次の防ぎを置く。
+  マクロの指定には、import属性と、指定子の`macro:`接頭辞がある。
+  属性は、`with`と`assert`の後の波括弧のほか、`-->`を挟む形でも実行された。
+  防ぎ方は2重である。
+  1つ目は、`transformSync`に通す前の拒否である。
+  この部品と同じ`hasAttribute`で属性になりうる形を断り、`scanImports`が返す指定子で`macro:`接頭辞を断る。
+  断ったファイルは、変更ありとして報告する。
+  2つ目は、変換に使うトランスパイラでマクロを無効にすることである。
+  拒否を通り抜けた入力があっても、マクロはビルドエラーで止まる。
+  この無効化に使う`macro: false`は、型定義に無いBunの未文書のオプションで、Bun 1.4.2で確かめた。
+  無効にするのは`false`だけで、`{}`と`null`は無効にしない(実測した)。
+  Bunの版が上がって挙動が変わったときは、マクロが無効であることを確かめるテストが落ちて気づく。
+  この2つが防ぐのは、トランスパイラで比べる経路での、比較対象のソース(基準のrefと作業ツリー)に書かれたマクロの実行である。
+  その経路は、tsxと、スキャナーが止まったts / jsである。
+  スキャナーが通るts / jsは、トランスパイラを使わない。
+  作業ツリーに未信頼のブランチを置いて流してはならない。
+  未信頼のブランチ自身のスクリプトや`bunfig.toml`は、この検査の防ぎの外で実行されうる。
+  これは実測していない。
+  Bun 1.4.2で実測した範囲では、`import type`の`macro:`、動的importの属性の引数、タグ付きテンプレートでのマクロの呼び出しは、素の`transformSync`でも実行されなかった。
+  `<!--`を挟む形は構文エラーで実行されないが、断る側に倒している。
+  試した入力以外で実行されないことは、確かめていない。
 - 上限を置いていない範囲もある。
   検査は、`listTree`が返す項目の数を数えない。`f/`以外の項目は、形の検査と表の構築の分だけ、項目の数に比例する。
   ポートの呼び出しの時間には、検査は期限を持たない。

@@ -4,6 +4,7 @@ import {
   CI_ROUND_DETAILS,
   ciRoundReason,
 } from "../../f/factory/lib/ci_fix_round.ts";
+import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import {
   decideFixingRecovery,
   type FixItemState,
@@ -45,6 +46,42 @@ describe("holdReasonForStoppedItem", () => {
         "ci round: the failed CI job cannot be fixed by editing the source (metadata job)",
       ),
     ).toBe("unfixable_job");
+  });
+
+  test("maps a lock that cannot be recomputed automatically", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "ci round: the lock cannot be recomputed automatically (dependency_changed)",
+      ),
+    ).toBe("metadata_manual");
+  });
+
+  test("maps the wait for the base branch to be merged as a lock that cannot be recomputed", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "ci round: the lock cannot be recomputed automatically (head_lacks_base)",
+      ),
+    ).toBe("metadata_manual");
+  });
+
+  test("maps the stop before a push when the base branch moved", () => {
+    expect(holdReasonForStoppedItem(CI_ROUND_REHASH_STALE_REASON)).toBe(
+      "metadata_manual",
+    );
+  });
+
+  test("does not map the stop before a push when text follows it", () => {
+    expect(
+      holdReasonForStoppedItem(`${CI_ROUND_REHASH_STALE_REASON} and more`),
+    ).toBeNull();
+  });
+
+  test("does not map text that only mentions the lock in the middle", () => {
+    expect(
+      holdReasonForStoppedItem(
+        "ci round: claude blocked: the lock cannot be recomputed automatically (x)",
+      ),
+    ).toBeNull();
   });
 
   test("maps a job that ended with another conclusion", () => {

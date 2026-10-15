@@ -100,11 +100,11 @@ function previousNonSpace(code: string, index: number): string | undefined {
 
 /**
  * import属性になりうる形を含むか。
- * 語の`with`か`assert`の直後(空白を除く)が開き波括弧か、コメントの開始なら真を返す。
+ * 語の`with`か`assert`の直後(空白を除く)が開き波括弧か、コメントの開始(旧式のHTML風コメントを含む)なら真を返す。
  * コメントは終端を探さず、開始だけで断る。終端を探すと、入力によっては計算量が2乗になる。
  * 文字列やコメントの中の出現も断る側に倒す。
  */
-function hasAttribute(code: string): boolean {
+export function hasAttribute(code: string): boolean {
   for (const match of code.matchAll(ATTRIBUTE_KEYWORD)) {
     let cursor = match.index + match[0].length;
     while (isSpace(code[cursor])) {
@@ -118,6 +118,11 @@ function hasAttribute(code: string): boolean {
       next === "/" &&
       (code[cursor + 1] === "*" || code[cursor + 1] === "/")
     ) {
+      return true;
+    }
+    // 行頭の`-->`は、旧式のHTML風1行コメントの開始で、`transformSync`は読んでマクロを実行する(実測した)。
+    // `<!--`は今のBunでは構文エラーで実行されないが、版が変わっても安全なよう断る側に倒す。
+    if (code.startsWith("-->", cursor) || code.startsWith("<!--", cursor)) {
       return true;
     }
   }

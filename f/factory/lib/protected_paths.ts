@@ -86,10 +86,21 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * パスの許可リスト、manifestの形、zipの読み方、yamlの許可するキー、importの読み方、適用の条件、
  * トークンの渡し先と取得先を決める。書き換えられると、パッチの受け取り側の検査が緩む。
  * lockは依存が無く、`windmill-client`の版を上げる変更で書き換わらないので、正当な変更を止めない。
- * `wmill-lock.yaml`のhashを自前で再計算する部品(`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`)と、
- * それぞれの`.script.yaml`、`.script.lock`も守る。
- * hashの算法、再計算してよい条件、`main`の引数の比べ方を決める。書き換えられると、依存が変わるPRや、
- * 入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
+ * `wmill-lock.yaml`のhashを自前で再計算する部品(`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、
+ * `lib/metadata_git_ports.ts`)と、それぞれの`.script.yaml`、`.script.lock`も守る。
+ * hashの算法、再計算してよい条件、`main`の引数の比べ方、検査が読むgitのオブジェクトの取り方を決める。
+ * 書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
+ * 再計算の出力を配線する`lib/ci_metadata_rehash.ts`と、その`.script.yaml`、`.script.lock`も守る。
+ * `wmill-lock.yaml`だけの変更を許す条件(`confirmRehash`、`rehashPushStopReason`、`readStagedRootLock`)と、書き込み先を決める。
+ * 一方、次のものは、このリストに入れない。
+ * 例外を開くコールバックの本体(`steps/pr_fix_verify.ts`と`steps/pr_fix_finish.ts`)と、
+ * 変更の形を判定する`isLockOnlyChange`と、それを呼ぶ`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、
+ * 回の分類を読む`readCiFailure`(いずれも`lib/ci_fix_round.ts`)、失敗したジョブを分類する`classifyCiFailure`(`lib/ci_fix_classify.ts`)である。
+ * `classifyCiFailure`の結果が、`metadata`だけが落ちた回(`metadata_only`)を決め、起動の判断の免除(予算とマーカーの確認)を決める。
+ * 再計算が読むgitの動き方を決める、`lib/workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)も入れない。
+ * ほかのCI回の部品と同じく、日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
+ * これらを書き換えて例外の条件を緩める変更は、マージ前の人のレビューで差分を確かめて止める。
+ * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
  * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
@@ -170,6 +181,12 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/metadata_signature.ts",
   "f/factory/lib/metadata_signature.script.yaml",
   "f/factory/lib/metadata_signature.script.lock",
+  "f/factory/lib/metadata_git_ports.ts",
+  "f/factory/lib/metadata_git_ports.script.yaml",
+  "f/factory/lib/metadata_git_ports.script.lock",
+  "f/factory/lib/ci_metadata_rehash.ts",
+  "f/factory/lib/ci_metadata_rehash.script.yaml",
+  "f/factory/lib/ci_metadata_rehash.script.lock",
 ];
 
 /**

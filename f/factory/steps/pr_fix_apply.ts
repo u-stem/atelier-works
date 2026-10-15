@@ -12,8 +12,16 @@ import {
   ciClaudeFailureText,
   ciTextScanner,
   gatherCiFailureInput,
+  readCiFailure,
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
+import {
+  githubRehashPlanner,
+  metadataApplyResult,
+  rehashMetadataLock,
+  runMetadataRound,
+  writeRootWmillLock,
+} from "../lib/ci_metadata_rehash.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -62,6 +70,7 @@ export type PrFixApplyResult = {
  * 使えるツールはRead/Glob/Grep/Edit/Writeに限り、Bashは渡さない。
  * コミットの件名と本文はClaudeが提案したものを使い、`outcome`が"done"のときだけ返す。
  * 日次予算を超えていればClaudeを起動せず"blocked"を返す。
+ * CIの失敗を直す回で`metadata`ジョブだけが落ちていれば、予算の検査より前に、Claudeを起動せずhashを再計算する(`applyMetadataRound`)。
  * worktreeの`.git`が`worktree_git_pointer`(準備ステップの記録)と一致しないとき、
  * 準備ステップの結果に`worktree_git_pointer`が無いときも、Claudeを起動せず"blocked"を返す。
  * 不正な出力への再試行の前にも`.git`を確かめ、一致しなければ再試行しない。
@@ -107,6 +116,20 @@ export async function main(
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
+
+  // `metadata`ジョブが落ちたCI回は、Claudeを起動せず、hashの再計算で直す。
+  // 費用がかからないので、日次予算の検査より前に行う。
+  if (ci_check_id !== null) {
+    const metadataResult = await applyMetadataRound({
+      owner,
+      repo,
+      prNumber: pr_number,
+      headSha: head_sha,
+      worktreeDir: worktree_dir,
+      ghToken: await wmill.getVariable("f/factory/github_token"),
+    });
+    if (metadataResult !== null) return metadataResult;
+  }
 
   // `pipeline_generate.ts`と同じ日次予算の検査。
   // 状態遷移や通知をここで重複して書かず"blocked"を返すのは、
@@ -264,6 +287,51 @@ function blockedResult(reason: string): PrFixApplyResult {
     commit_subject: null,
     commit_body: null,
   };
+}
+
+type MetadataRoundInput = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly worktreeDir: string;
+  readonly ghToken: string;
+};
+
+/**
+ * `metadata`ジョブだけが落ちているときに限り、`wmill-lock.yaml`のhashを再計算して書き換える。
+ * `check`などほかのジョブも落ちているとき、`metadata`が落ちていないときは`null`を返す。前者はClaudeが先に直す。
+ * baseの先端は、GitHubのAPIで読んだ今の先端である。ローカルに無ければ取り込む。
+ * 読むのはgitのオブジェクトだけで、worktreeのファイルは開かず、scriptも実行しない。
+ * 事前検査が通らないときは、固定の理由(`ci round: the lock cannot be recomputed automatically (<種別>)`)で`blocked`を返す。
+ * 案内は、通知が出す。
+ * 書き換えた内容は、検証と完了のステップが、同じ再計算で照合する。
+ */
+async function applyMetadataRound(
+  input: MetadataRoundInput,
+): Promise<PrFixApplyResult | null> {
+  const { owner, repo, headSha, worktreeDir, ghToken } = input;
+  const client: GhClient = { run: runCommand, ghToken };
+  const target = { owner, repo, prNumber: input.prNumber, headSha };
+  const gatherDeps = buildCiGatherDeps(client, target, runCommand);
+  const planner = githubRehashPlanner({
+    client,
+    owner,
+    repo,
+    prNumber: input.prNumber,
+    headSha,
+    worktreeDir,
+    ghToken,
+  });
+  const round = await runMetadataRound({
+    readFailure: () => readCiFailure(gatherDeps, target),
+    rehash: () =>
+      rehashMetadataLock({
+        plan: async () => planner.planWith(await planner.readBase()),
+        writeLock: (text) => writeRootWmillLock(worktreeDir, text),
+      }),
+  });
+  return round === null ? null : metadataApplyResult(round);
 }
 
 type CiRoundApplyInput = {

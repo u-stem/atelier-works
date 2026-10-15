@@ -276,6 +276,20 @@ describe("a macro import is never executed while the imports are read", () => {
     },
   );
 
+  // `-->`は`transformSync`が読んでマクロを実行する(実測した)。
+  // `<!--`は今のBunでは構文エラーだが、版が変わっても安全なよう断る側に倒す。
+  test.each([
+    ["with and an html close comment", "with", "\n--> c\n"],
+    ["assert and an html close comment", "assert", "\n--> c\n"],
+    ["with and an html open comment", "with", "\n<!-- c\n"],
+  ] as const)(
+    "marks an import attribute after %s as untraceable",
+    (_name, keyword, gap) => {
+      const code = `import j from "./a.json" ${keyword}${gap}{ type: "json" };`;
+      expect(scanImports(code, { runtimeOnly: true }).untraceable).toBe(true);
+    },
+  );
+
   test("does not mark an English sentence that contains the word with as untraceable", () => {
     const code =
       'export const p = "Reply with a short answer, as with the others.";';

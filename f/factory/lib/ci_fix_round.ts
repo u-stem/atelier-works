@@ -62,11 +62,12 @@ export const CI_FIX_SKILL_MARKER = "ci-fix-skill:v1";
  * 修正の前に止める理由のうち、`watch_pr_ci`が保留の理由(`fix_hold_reason`)に写すものの固定文。
  * 接頭辞の`ci round: `は含まない。止める側(`ciRoundReason`)と写す側が同じ文を使うので、
  * 片方だけを変えて写せなくなることがない。
- * `unfixableJob`と`otherConclusion`は、後ろに分類の詳細が続くので、固定の前半だけを持つ。
+ * `unfixableJob`と`metadataManual`と`otherConclusion`は、後ろに分類の詳細が続くので、固定の前半だけを持つ。
  */
 export const CI_ROUND_DETAILS = {
   markerMissing: `the factory-fix skill lacks the ${CI_FIX_SKILL_MARKER} marker`,
   unfixableJob: "the failed CI job cannot be fixed by editing the source (",
+  metadataManual: "the lock cannot be recomputed automatically (",
   otherConclusion: "the CI job did not fail but ended with ",
   tokenCannotReadLog: "the token cannot read the CI job log",
   logUnavailable: "the CI job log is unavailable",
@@ -462,26 +463,37 @@ export type CiGatherOutcome =
     }
   | { readonly kind: "blocked"; readonly reason: string };
 
-function blocked(detail: string): CiGatherOutcome {
+function blocked(detail: string): {
+  readonly kind: "blocked";
+  readonly reason: string;
+} {
   return { kind: "blocked", reason: `${REASON_PREFIX}: ${detail}` };
 }
 
+/** `readCiFailure`の結果。直せる失敗のときだけ、`fixable`で分類を返す。 */
+export type CiFailureRead =
+  | {
+      readonly kind: "fixable";
+      /** ジョブを読んだ失敗の実行。古い順に最大`CI_ROUND_MAX_RUNS`件。 */
+      readonly runs: readonly WorkflowRun[];
+      /** `metadata`以外で失敗したジョブ。`metadata`だけが失敗したときは空である。 */
+      readonly jobs: readonly WorkflowRunJob[];
+      /** `metadata`ジョブが失敗した。`wmill-lock.yaml`のhashの再計算で直す。 */
+      readonly metadataFailed: boolean;
+    }
+  | { readonly kind: "blocked"; readonly reason: string };
+
 /**
- * 失敗した実行のログから、プロンプトに渡す抜粋を作る。
- * 次の順に確かめ、満たさなければ、Claudeを起動せずに止めるための`blocked`を返す。
+ * PRの状態を確かめ、そのheadの失敗を分類する。ログは読まない。
+ * 次の順に確かめ、満たさなければ、直せないものとして`blocked`を返す。
  * 1. PRが開いていて、headが直す失敗のheadのままである。
  * 2. そのheadの実行のうち、workflowごとの最新で失敗したものがある。
- * 3. 失敗したジョブが、すべてソースの編集で直せる種類である(`classifyCiFailure`)。
- * 4. ログを読める。
- * 5. 秘密値の検査を通り、使える本文が残る(`buildCiExcerpt`)。
- * 生のログは、この関数の中で抜粋に変えて捨てる。戻り値には、抜粋だけを載せる。
- * `extraJobs`は、ローカルの検査の失敗の出力など、CIのログと同じ手順で扱う入力で、CIのログより先に並べる。
+ * 3. 失敗したジョブが、Factoryが自動で直せる種類である(`classifyCiFailure`)。
  */
-export async function gatherCiFailureInput(
+export async function readCiFailure(
   deps: CiGatherDeps,
   target: CiGatherTarget,
-  extraJobs: readonly CiLogJobInput[] = [],
-): Promise<CiGatherOutcome> {
+): Promise<CiFailureRead> {
   const pr = await deps.readPr();
   if (pr.state !== "open") return blocked("pull request is not open");
   if (pr.headSha !== target.headSha) {
@@ -505,10 +517,33 @@ export async function gatherCiFailureInput(
   if (verdict.kind === "no_failure") {
     return blocked("no failed job in the failed runs");
   }
+  return {
+    kind: "fixable",
+    runs,
+    jobs: verdict.jobs,
+    metadataFailed: verdict.metadataFailed,
+  };
+}
 
+/**
+ * 失敗したジョブのログから、プロンプトに渡す抜粋を作る。
+ * ログを読めないとき、秘密値の検査に通らないとき、読むジョブが無いときは、
+ * Claudeを起動せずに止めるための`blocked`を返す。
+ * 生のログは、この関数の中で抜粋に変えて捨てる。戻り値には、抜粋だけを載せる。
+ * `extraJobs`は、ローカルの検査の失敗の出力など、CIのログと同じ手順で扱う入力で、CIのログより先に並べる。
+ */
+export async function gatherCiLogs(
+  deps: CiGatherDeps,
+  target: CiGatherTarget,
+  failure: Extract<CiFailureRead, { kind: "fixable" }>,
+  extraJobs: readonly CiLogJobInput[] = [],
+): Promise<CiGatherOutcome> {
+  if (failure.jobs.length === 0) {
+    return blocked("no failed job to read the log of");
+  }
   const logSlots = Math.max(1, CI_LOG_MAX_JOBS - extraJobs.length);
   const ciJobs: CiLogJobInput[] = [];
-  for (const failed of verdict.jobs.slice(0, logSlots)) {
+  for (const failed of failure.jobs.slice(0, logSlots)) {
     const log = await deps.getLog(failed.id);
     if (log.kind === "forbidden") {
       return blocked(CI_ROUND_DETAILS.tokenCannotReadLog);
@@ -534,7 +569,7 @@ export async function gatherCiFailureInput(
       `the CI job log matched the secret scan (${excerpt.reason})`,
     );
   }
-  const first = runs[0];
+  const first = failure.runs[0];
   return {
     kind: "ready",
     excerpt: excerpt.excerpt,
@@ -544,6 +579,20 @@ export async function gatherCiFailureInput(
         ? null
         : parseRunUrl(first.htmlUrl, target.owner, target.repo),
   };
+}
+
+/**
+ * 失敗した実行のログから、プロンプトに渡す抜粋を作る。`readCiFailure`と`gatherCiLogs`を続けて呼ぶ。
+ * 直せない失敗や、ログを読めない失敗のときは、Claudeを起動せずに止めるための`blocked`を返す。
+ */
+export async function gatherCiFailureInput(
+  deps: CiGatherDeps,
+  target: CiGatherTarget,
+  extraJobs: readonly CiLogJobInput[] = [],
+): Promise<CiGatherOutcome> {
+  const failure = await readCiFailure(deps, target);
+  if (failure.kind === "blocked") return failure;
+  return gatherCiLogs(deps, target, failure, extraJobs);
 }
 
 /**
@@ -881,7 +930,59 @@ export type CiChangeOptions = {
   readonly fs?: CiChangeFs;
   /** 現在時刻(ミリ秒)。省略時は`Date.now`。時間の上限(`CI_ROUND_COLLECT_BUDGET_MS`)の測定に使う。 */
   readonly now?: () => number;
+  /**
+   * 変更が、根の`wmill-lock.yaml`の通常の変更1件だけのときに、その内容が独立した再計算と一致するかを確かめる。
+   * `allow`ならその変更を許し、`stop`ならその理由で止める。
+   * 渡さないとき、`deny`のとき、ほかの変更を含むときは、許可リストの検査に任せる。
+   * `checkCiFixChanges`は変えず、呼び出し側のこの検査だけが例外を置く。
+   */
+  readonly rehashCheck?: () => Promise<RehashCheckVerdict>;
 };
+
+/**
+ * hashの再計算の照合の結果。
+ * - `allow`: 独立した再計算と一致した。その変更を許す。
+ * - `deny`: 一致しない、または確認できない。許可リストの検査に任せる。
+ * - `stop`: 再計算では直せないことが決まった。保護パスの違反とは別の、固定の理由で止める。
+ */
+export type RehashCheckVerdict =
+  | { readonly kind: "allow" }
+  | { readonly kind: "deny" }
+  | { readonly kind: "stop"; readonly reason: string };
+
+/** 再計算が書き換えてよい、根のlockのパス。 */
+const ROOT_LOCK_PATH = "wmill-lock.yaml";
+
+/**
+ * 変更が、根の`wmill-lock.yaml`の通常のファイルの変更(モード`100644`の`modified`)1件だけか。
+ * hashの再計算の出力の形である。追加、削除、モードの変更、ほかのファイルの変更を含めば偽になる。
+ */
+export function isLockOnlyChange(changes: readonly CiFixChange[]): boolean {
+  const [only, ...rest] = changes;
+  return (
+    rest.length === 0 &&
+    only !== undefined &&
+    only.path === ROOT_LOCK_PATH &&
+    only.status === "modified" &&
+    only.mode === "100644"
+  );
+}
+
+/**
+ * 読み取りの結果が、再計算の出力の候補か。変更を読み切り(件数の超過も時間切れも無い)、
+ * 根の`wmill-lock.yaml`の通常の変更1件だけであること。読み切れなかった結果は、変更を見落としているので候補にしない。
+ */
+export function isRehashCandidate(collected: {
+  readonly changes: readonly CiFixChange[];
+  readonly overflow: boolean;
+  readonly timedOut: boolean;
+}): boolean {
+  return (
+    !collected.overflow &&
+    !collected.timedOut &&
+    isLockOnlyChange(collected.changes)
+  );
+}
 
 function splitLines(text: string): string[] {
   if (text === "") return [];
@@ -1166,6 +1267,11 @@ export async function inspectCiFixChanges(
   if (timedOut) return [`${REASON_PREFIX} took too long to read the changes`];
   if (overflow)
     return [`${REASON_PREFIX} changed more than ${String(max)} files`];
+  if (options.rehashCheck !== undefined && isLockOnlyChange(changes)) {
+    const verdict = await options.rehashCheck();
+    if (verdict.kind === "allow") return [];
+    if (verdict.kind === "stop") return [verdict.reason];
+  }
   const verdict = checkCiFixChanges({ changes, prChangedPaths });
   if (verdict.ok) return [];
   return verdict.violations.map((violation) =>
