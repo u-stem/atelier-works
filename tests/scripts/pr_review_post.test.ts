@@ -1170,6 +1170,46 @@ describe("posting a review once per sha", () => {
       );
       expect(fake.calls.some(isCreateReviewCall)).toBe(false);
     });
+
+    test("returns no posted review id when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      expect(result.postedReviewId).toBeNull();
+    });
+
+    test("does not mark the review as reused when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      expect(result.reused).toBe(false);
+    });
+
+    test("yields no review notification when posting is gated", async () => {
+      const fake = createFakeCommandRunner([openMustThreads()]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ post: false }),
+        SILENT,
+      );
+      const event = reviewedNotifyEvent({
+        posted: result.postedReviewId !== null,
+        instance_name: "factory-a",
+        owner: TARGET.owner,
+        repo: TARGET.repo,
+        pr_number: TARGET.pr_number,
+        verdict: "request_changes",
+        findings: [finding({ kind: "must" })],
+        openMustCount: result.openMustCount,
+      });
+      expect(event).toBeNull();
+    });
   });
 });
 
