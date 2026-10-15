@@ -8,7 +8,8 @@
 // 流れと判断は`./lib/pr_conflict_watch.ts`にあり、このファイルは入出力をつなぐだけ。
 // 対象は、許可リスト(`repo_allowlist`と照合済みの`owners`、常に対象の`factory_repo`)に合うリポジトリの、
 // 開いているFactoryのPRである。人のPRは対象にしない。
-// 列挙するリポジトリは、`pr_open`の作業項目を持つもの、競合の記録の行を持つもの、設定で明示されたものの和集合である。
+// 列挙するリポジトリは、`pr_open`の作業項目を持つもの、競合の記録の行を持つもの、設定で明示されたもの、
+// PATのアカウントが作った開いているPRを検索で見つけたものの和集合である。
 // 作業項目は`cleanup_db`が消すので、PRがFactoryのものかは、ブランチ名の形とPATのアカウントが作者であることで決める。
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
@@ -33,6 +34,7 @@ import {
   getPr,
   getViewer,
   listOpenPullRequests,
+  searchOpenAuthoredPrs,
 } from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
@@ -103,6 +105,21 @@ export async function main(): Promise<PrConflictWatchResult> {
         explicitRepos: configuredRepos(config),
         listOpenRepos: () => listPrOpenRepos(),
         listConflictRepos: () => listPrConflictRepos(),
+        searchOwners: verifiedOwners,
+        searchOpenRepos: async (owner, author) =>
+          (
+            await searchOpenAuthoredPrs(client, {
+              scope: {
+                kind: "owner",
+                owner: owner.name,
+                ownerKind: owner.kind,
+              },
+              author,
+            })
+          ).map(({ owner: itemOwner, repo }) => ({
+            owner: itemOwner,
+            repo,
+          })),
         listOpenPrs: (owner, repo) => listOpenPullRequests(client, owner, repo),
         getPr: (owner, repo, number) => getPr(client, owner, repo, number),
         listConflicted: (limit) => listConflictedPrConflictChecks(limit),

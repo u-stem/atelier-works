@@ -8,6 +8,7 @@
 -- conflictedに移った時点で始まる。始まったときだけ、notified_atを空にする。
 -- 競合のままheadが進んでも、head_shaを書き換えるだけで、notified_atは残す。
 -- 競合が始まるたびにepisodeを1つ増やし、PRの何回目の競合かを区別する。
+-- 競合の1回は、行のidとepisodeの組で指す。
 --
 -- state:
 --   conflicted 競合している。head_shaは、競合を最後に見た時点のheadである。

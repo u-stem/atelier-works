@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   decidePrConflict,
-  isPrConflictSkipReason,
   PR_CONFLICT_KIND,
   PR_CONFLICT_NEXT_ACTION,
   type PrConflictFacts,
@@ -108,16 +107,6 @@ describe("decidePrConflict", () => {
     expect(decidePrConflict(facts({ state: "closed", headSha: "" }))).toEqual({
       kind: "close",
     });
-  });
-});
-
-describe("isPrConflictSkipReason", () => {
-  test("accepts a known reason", () => {
-    expect(isPrConflictSkipReason("unknown")).toBe(true);
-  });
-
-  test("rejects an unknown reason", () => {
-    expect(isPrConflictSkipReason("because")).toBe(false);
   });
 });
 

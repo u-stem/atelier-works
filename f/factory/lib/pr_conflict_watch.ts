@@ -5,11 +5,13 @@
 // 次の和集合のリポジトリごとに、開いているPRを列挙する。
 // - 状態が`pr_open`の作業項目を持つリポジトリ。
 // - 競合の記録(`pr_conflict_checks`)の行を持つリポジトリ。
+// - PATのアカウントが作った開いているPRを、照合を通ったオーナーごとに検索して見つけたリポジトリ。
+//   検索はリポジトリを見つけるためだけに使い、PRの判定は一覧と`getPr`で行う。
 // - 設定で明示されたリポジトリ(`factory_repo`と、`repo_allowlist`の各項目)。`owners`は展開しない。
 // 列挙したPRのうち、Factoryのブランチ(`factory/issue-<N>-wi-<id>`)で、PATのアカウントが作った、
 // 下書きでなく、forkでないものだけを、PRとして読む。
 // 作業項目は`cleanup_db`が消すので、判定に使わない。
-// 上の和集合に入らないリポジトリ(作業項目も競合の行も無く、設定にも明示されていない)のPRは、見つけられない。
+// 上の和集合に入らないリポジトリ(作業項目も競合の行も無く、検索にも現れず、設定にも明示されていない)のPRは、見つけられない。
 //
 // 競合とみなすのは、`mergeable`が偽で`mergeable_state`が`dirty`のときだけである(`decidePrConflict`)。
 // GitHubが計算していない(`mergeable`が`null`)PRは何もせず、次の回に判定し直す。
@@ -52,12 +54,14 @@ import {
   PR_CONFLICT_NEXT_ACTION,
   PR_CONFLICT_REASON,
   PR_CONFLICT_RESOLVED_BY,
+  type PrConflictSkipReason,
   prConflictNoticeMessage,
   prConflictNoticePrefix,
 } from "./pr_conflict_support.ts";
 import {
   assertGitHubName,
   type FactoryConfig,
+  type FactoryOwner,
   type NoticeRecord,
   parseImplementBranchWorkItemId,
 } from "./types.ts";
@@ -86,6 +90,16 @@ export type PrConflictWatchDeps = {
   readonly listOpenRepos: () => Promise<RepoRef[]>;
   /** 競合の記録の行を持つリポジトリ。重複は無い。 */
   readonly listConflictRepos: () => Promise<RepoRef[]>;
+  /** 開いているPRを検索するオーナー。オーナーの照合を通ったものである。 */
+  readonly searchOwners: readonly FactoryOwner[];
+  /**
+   * そのオーナーで、`author`が作った開いているPRを検索し、そのリポジトリを返す(`searchOpenAuthoredPrs`)。
+   * リポジトリを見つけるためだけに使う。rate limitの解除は待たず、拒まれたら`GitHubRateLimitError`を投げる。
+   */
+  readonly searchOpenRepos: (
+    owner: FactoryOwner,
+    author: string,
+  ) => Promise<RepoRef[]>;
   /** リポジトリの開いているPRをすべて返す。多すぎて読み切れないときは例外を投げる。 */
   readonly listOpenPrs: (
     owner: string,
@@ -143,6 +157,8 @@ export type PrConflictWatchResult = {
   readonly deferred: number;
   /** rate limitで読み取りを止めたか。 */
   readonly rateLimited: boolean;
+  /** PATが拒まれて(401)読み取りを止めたか。 */
+  readonly unauthorized: boolean;
 };
 
 /** 何も読まずに終わったときの結果。 */
@@ -156,6 +172,7 @@ export const PR_CONFLICT_WATCH_IDLE_RESULT: PrConflictWatchResult = {
   errors: 0,
   deferred: 0,
   rateLimited: false,
+  unauthorized: false,
 };
 
 type Counters = {
@@ -168,6 +185,7 @@ type Counters = {
   errors: number;
   deferred: number;
   rateLimited: boolean;
+  unauthorized: boolean;
 };
 
 type Deferred = { repos: number; prs: number; rows: number };
@@ -196,7 +214,8 @@ function overBudget(context: Context): boolean {
 }
 
 function stopped(context: Context): boolean {
-  return context.counters.rateLimited || overBudget(context);
+  const { rateLimited, unauthorized } = context.counters;
+  return rateLimited || unauthorized || overBudget(context);
 }
 
 function rowRef(row: PrConflictCheck): PullRequestRef {
@@ -213,7 +232,8 @@ async function recordFailureOf(
 }
 
 /**
- * rate limitなら以降の読み取りを止め、権限の不足(403、404)ならログだけに残し、それ以外は失敗として記録する。
+ * rate limitなら以降の読み取りを止める。PATが拒まれた(401)ときも以降の読み取りを止め、失敗を1件だけ記録する。
+ * 権限の不足(403、404)ならログだけに残し、それ以外は失敗として記録する。
  * 404は、リポジトリを読む権限を失った場合にも返るので、PRが無くなったとは扱わない。
  */
 async function absorbReadError(
@@ -229,6 +249,13 @@ async function absorbReadError(
       subject,
       error: errorMessage(err),
     });
+    return;
+  }
+  if (isStatus(err, 401)) {
+    if (!counters.unauthorized) {
+      counters.unauthorized = true;
+      await recordFailureOf(context, step, err);
+    }
     return;
   }
   if (isStatus(err, 403, 404)) {
@@ -342,8 +369,14 @@ function isCandidate(pr: OpenPullRequest, viewer: Viewer): boolean {
   );
 }
 
-/** 列挙するリポジトリの和集合を作る。読めない元は失敗として記録し、読めた元だけで進める。 */
-async function collectRepos(context: Context): Promise<RepoRef[]> {
+/**
+ * 列挙するリポジトリの和集合を作る。読めない元は失敗として記録し、読めた元だけで進める。
+ * 検索のrate limitは別の枠なので、記録せず、ほかの読み取りも止めない。
+ */
+async function collectRepos(
+  context: Context,
+  viewer: Viewer,
+): Promise<RepoRef[]> {
   const { deps } = context;
   const read = async (
     step: string,
@@ -358,7 +391,41 @@ async function collectRepos(context: Context): Promise<RepoRef[]> {
   };
   const open = await read("list_open_repos", deps.listOpenRepos);
   const conflict = await read("list_conflict_repos", deps.listConflictRepos);
-  return mergeRepos(open, conflict, deps.explicitRepos);
+  const searched: RepoRef[] = [];
+  for (const owner of deps.searchOwners) {
+    if (stopped(context)) break;
+    try {
+      searched.push(...(await deps.searchOpenRepos(owner, viewer.login)));
+    } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        deps.log.warn("pr conflict search stopped by the rate limit", {
+          owner: owner.name,
+        });
+        continue;
+      }
+      if (isStatus(err, 401)) {
+        await absorbReadError(context, "search_open_repos", owner.name, err);
+        break;
+      }
+      await recordFailureOf(context, `search_open_repos:${owner.name}`, err);
+    }
+  }
+  return mergeRepos(open, conflict, searched, deps.explicitRepos);
+}
+
+/**
+ * このリポジトリの開いているPRを読むか。許可リストと照合に合い、名前を記録できるものだけである。
+ * 先頭が`.`などの名前は、記録が通さないので読まない。
+ */
+function isReadable(deps: PrConflictWatchDeps, entry: RepoRef): boolean {
+  if (!deps.isRepoAllowed(entry.owner, entry.repo)) return false;
+  try {
+    assertGitHubName(entry.owner);
+    assertGitHubName(entry.repo);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** 開いているFactoryのPRを読んで扱う。読めたPRの鍵の集合を返す。 */
@@ -369,22 +436,16 @@ async function watchOpenPrs(context: Context): Promise<Set<string>> {
   try {
     viewer = await deps.getViewer();
   } catch (err) {
-    await recordFailureOf(context, "viewer", err);
+    await absorbReadError(context, "viewer", "viewer", err);
     return seen;
   }
-  const repos = await collectRepos(context);
+  const repos = (await collectRepos(context, viewer)).filter((entry) =>
+    isReadable(deps, entry),
+  );
   for (const [index, { owner, repo }] of repos.entries()) {
     if (stopped(context)) {
       deferred.repos += repos.length - index;
       break;
-    }
-    if (!deps.isRepoAllowed(owner, repo)) continue;
-    // 名前が先頭の`.`などで始まるリポジトリは、記録が通さない。読まずに飛ばす。
-    try {
-      assertGitHubName(owner);
-      assertGitHubName(repo);
-    } catch {
-      continue;
     }
     let open: OpenPullRequest[];
     try {
@@ -448,6 +509,11 @@ async function applyDecision(
       return;
     case "skip":
       skip(context, ref, decision.reason);
+      // 競合の行を持つPRは、読み直した時刻を進めて、順番を後ろに回す。
+      {
+        const row = context.rows.get(pullRequestKey(ref));
+        if (row !== undefined) await deps.touch(row.id);
+      }
       return;
     case "conflict": {
       counters.conflicted += 1;
@@ -467,7 +533,11 @@ async function applyDecision(
 }
 
 /** 判定を見送った理由を数え、見送るはずのない理由はlogに残す。 */
-function skip(context: Context, ref: PullRequestRef, reason: string): void {
+function skip(
+  context: Context,
+  ref: PullRequestRef,
+  reason: PrConflictSkipReason,
+): void {
   context.counters.skipped += 1;
   if (reason === "not_dirty" || reason === "invalid_sha") {
     context.deps.log.warn("pr conflict skipped an unusual pull request", {
@@ -549,6 +619,22 @@ async function leaveConflict(
   });
 }
 
+/** 読み直した時刻を進める。進められなくても失敗として記録して、他の行を続ける。 */
+async function touchSafely(
+  context: Context,
+  row: PrConflictCheck,
+): Promise<void> {
+  try {
+    await context.deps.touch(row.id);
+  } catch (err) {
+    await recordFailureOf(
+      context,
+      `touch_row:${pullRequestKey(rowRef(row))}`,
+      err,
+    );
+  }
+}
+
 /**
  * 開いているPRの一覧で読めなかった競合の行を整理する。PRを読み直し、閉じたか競合が解けたときだけ行を移す。
  * それ以外は、読み直した時刻だけを進める。通知は出さない。
@@ -592,7 +678,7 @@ async function watchRemainingRows(
       }
     } catch (err) {
       await absorbReadError(context, `pr_conflict:${key}`, key, err);
-      if (isStatus(err, 403, 404)) await deps.touch(row.id).catch(() => false);
+      if (isStatus(err, 403, 404)) await touchSafely(context, row);
     }
   }
 }

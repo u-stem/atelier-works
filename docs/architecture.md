@@ -703,7 +703,7 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 
 `watch_pr_conflicts`が5分ごとに、Factoryが作ったPRにマージの競合があるかを確かめる。
 対象は、Factoryがブランチ`factory/issue-<N>-wi-<id>`に作った、開いていて下書きでなく、forkでないPRである。PATのアカウントが作ったPRだけを見る。人が作ったPRと、draw.ioのビューアを上げるPRは対象にしない。
-作業項目は`cleanup_db`が消すので、判定に使わない。作業項目、競合の記録、設定が示すリポジトリの、開いているPRの一覧から見つける。
+作業項目は`cleanup_db`が消すので、判定に使わない。作業項目、競合の記録、PATのアカウントのPRの検索、設定が示すリポジトリの、開いているPRの一覧から見つける。
 それらに入らないリポジトリの古いPRは見つけられない。限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
 競合とみなすのは、GitHubのマージ可否が偽で、その状態が`dirty`のときだけである。
 計算前のPRは、次の回に判定し直す。

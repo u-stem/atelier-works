@@ -45,12 +45,6 @@ export const PR_CONFLICT_SKIP_REASONS = [
 
 export type PrConflictSkipReason = (typeof PR_CONFLICT_SKIP_REASONS)[number];
 
-export function isPrConflictSkipReason(
-  value: unknown,
-): value is PrConflictSkipReason {
-  return PR_CONFLICT_SKIP_REASONS.some((reason) => reason === value);
-}
-
 /** PRの今の状態から決めた扱い。 */
 export type PrConflictDecision =
   /** PRが閉じられたか、マージされた。 */

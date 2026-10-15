@@ -100,6 +100,16 @@ describe("watch_pr_conflicts script", () => {
     expect(source).toContain("listPrOpenRepos");
   });
 
+  test("finds repositories by searching the open pull requests of the account", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain("searchOpenAuthoredPrs");
+  });
+
+  test("searches only the owners whose account id was verified", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain("searchOwners: verifiedOwners");
+  });
+
   test("does not start any fix", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
     expect(source).not.toContain("launchPrFixFlow");

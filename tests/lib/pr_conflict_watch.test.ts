@@ -27,7 +27,7 @@ import {
   runPrConflictWatch,
   runPrConflictWatchIfEnabled,
 } from "../../f/factory/lib/pr_conflict_watch.ts";
-import type { NoticeRecord } from "../../f/factory/lib/types.ts";
+import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const HEAD = "a".repeat(40);
 const NEW_HEAD = "d".repeat(40);
@@ -95,6 +95,7 @@ function check(overrides: Partial<PrConflictCheck> = {}): PrConflictCheck {
 type Harness = {
   readonly deps: PrConflictWatchDeps;
   readonly listed: string[];
+  readonly searched: string[];
   readonly reads: string[];
   readonly records: PrConflictObservation[];
   readonly marked: number[];
@@ -116,6 +117,16 @@ type Setup = {
   /** PATのアカウント。 */
   readonly viewer?: Viewer;
   readonly failViewer?: boolean;
+  /** PATのアカウントの読み取りが投げる例外。 */
+  readonly viewerError?: Error;
+  /** 開いているPRを検索するオーナー(照合を通ったもの)。 */
+  readonly searchOwners?: FactoryOwner[];
+  /** オーナーごとの検索の結果。キーはオーナー名。 */
+  readonly searchRepos?: Record<
+    string,
+    { owner: string; repo: string }[] | Error
+  >;
+  readonly failTouch?: boolean;
   /** `pr_conflict_checks`に行を持つリポジトリ。 */
   readonly conflictRepos?: { owner: string; repo: string }[];
   /** 設定で明示されたリポジトリ。 */
@@ -136,6 +147,7 @@ type Setup = {
 
 function setup(options: Setup = {}): Harness {
   const listed: string[] = [];
+  const searched: string[] = [];
   const reads: string[] = [];
   const records: PrConflictObservation[] = [];
   const marked: number[] = [];
@@ -164,8 +176,17 @@ function setup(options: Setup = {}): Harness {
     isRepoAllowed: options.allowed ?? (() => true),
     isRepoConfigured: options.configured ?? (() => true),
     getViewer: async () => {
+      if (options.viewerError) throw options.viewerError;
       if (options.failViewer) throw new Error("viewer down");
       return options.viewer ?? VIEWER;
+    },
+    searchOwners: options.searchOwners ?? [],
+    searchOpenRepos: async (owner, author) => {
+      searched.push(`${owner.name}:${author}`);
+      const found = options.searchRepos?.[owner.name];
+      if (found === undefined) return [];
+      if (found instanceof Error) throw found;
+      return found;
     },
     explicitRepos: options.explicitRepos ?? [],
     listOpenRepos: async () => options.repos ?? [REPO],
@@ -219,6 +240,7 @@ function setup(options: Setup = {}): Harness {
       return true;
     },
     touch: async (id) => {
+      if (options.failTouch) throw new Error("db down");
       touched.push(id);
       return true;
     },
@@ -245,6 +267,7 @@ function setup(options: Setup = {}): Harness {
   return {
     deps,
     listed,
+    searched,
     reads,
     records,
     marked,
@@ -427,6 +450,30 @@ describe("runPrConflictWatch: mergeability that is not decided", () => {
     });
     await runPrConflictWatch(h.deps);
     expect(h.order).toEqual([]);
+  });
+
+  test("moves a conflicted row that was skipped to the back of the queue", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": pr({ mergeable: null }) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.touched).toEqual([7]);
+  });
+
+  test("moves a conflicted row that is not dirty to the back of the queue", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": pr({ mergeableState: "blocked" }) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.touched).toEqual([7]);
+  });
+
+  test("does not touch anything when a skipped pull request has no row", async () => {
+    const h = setup({ prs: { "acme/widgets#12": pr({ mergeable: null }) } });
+    await runPrConflictWatch(h.deps);
+    expect(h.touched).toEqual([]);
   });
 
   test("counts the pull request that was skipped", async () => {
@@ -698,7 +745,7 @@ describe("runPrConflictWatch: finding the pull requests", () => {
     expect(h.settled).toEqual([{ id: 7, to: "closed" }]);
   });
 
-  test("records a failure to list the repositories and still checks the rows", async () => {
+  test("still checks the rows when the repositories cannot be listed", async () => {
     const h = setup({
       rows: [check({ notified_at: NOW })],
       prs: { "acme/widgets#12": pr({ state: "closed" }) },
@@ -711,6 +758,227 @@ describe("runPrConflictWatch: finding the pull requests", () => {
     };
     await runPrConflictWatch(deps);
     expect(h.settled).toEqual([{ id: 7, to: "closed" }]);
+  });
+});
+
+describe("runPrConflictWatch: failing sources of repositories", () => {
+  function failingList(): Setup {
+    return { rows: [check({ notified_at: NOW })] };
+  }
+
+  test("records a failure to list the repositories", async () => {
+    const h = setup(failingList());
+    const deps: PrConflictWatchDeps = {
+      ...h.deps,
+      listOpenRepos: async () => {
+        throw new Error("db down");
+      },
+    };
+    await runPrConflictWatch(deps);
+    expect(h.failures).toEqual(["list_open_repos"]);
+  });
+
+  test("lists the other repositories when one source fails", async () => {
+    const h = setup({
+      ...failingList(),
+      conflictRepos: [{ owner: "acme", repo: "legacy" }],
+      openPrs: { "acme/legacy": [] },
+    });
+    const deps: PrConflictWatchDeps = {
+      ...h.deps,
+      listOpenRepos: async () => {
+        throw new Error("db down");
+      },
+    };
+    await runPrConflictWatch(deps);
+    expect(h.listed).toEqual(["acme/legacy"]);
+  });
+});
+
+describe("runPrConflictWatch: finding repositories by search", () => {
+  const owners: FactoryOwner[] = [
+    { name: "acme", kind: "org" },
+    { name: "alice", kind: "user" },
+  ];
+
+  test("searches each verified owner for the open pull requests of the account", async () => {
+    const h = setup({ searchOwners: owners });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["acme:factory-bot", "alice:factory-bot"]);
+  });
+
+  test("lists a repository that only the search found", async () => {
+    const h = setup({
+      repos: [],
+      searchOwners: owners,
+      searchRepos: { acme: [{ owner: "acme", repo: "found" }] },
+      openPrs: { "acme/found": [] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/found"]);
+  });
+
+  test("lists a repository once when the search and another source both name it", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: { acme: [{ owner: "Acme", repo: "Widgets" }] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("does not list a repository that the search found but that is not allowed", async () => {
+    const h = setup({
+      repos: [],
+      allowed: () => false,
+      searchOwners: owners,
+      searchRepos: { acme: [{ owner: "acme", repo: "found" }] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("uses the search only to find repositories, and reads pull requests from the list", async () => {
+    const h = setup({
+      repos: [],
+      searchOwners: owners,
+      searchRepos: { acme: [{ owner: "acme", repo: "widgets" }] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12"]);
+  });
+
+  test("keeps searching the other owners after one search fails", async () => {
+    const h = setup({
+      repos: [],
+      searchOwners: owners,
+      searchRepos: {
+        acme: new Error("search down"),
+        alice: [{ owner: "alice", repo: "found" }],
+      },
+      openPrs: { "alice/found": [] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["alice/found"]);
+  });
+
+  test("records the failure of a search", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: { acme: new Error("search down") },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["search_open_repos:acme"]);
+  });
+
+  test("still lists the other sources when the search fails", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: { acme: new Error("search down") },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("does not record the rate limit of the search as a failure", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual([]);
+  });
+
+  test("does not stop the reads of pull requests at the rate limit of the search", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: {
+        acme: new GitHubRateLimitError("GET search", 60_000, false),
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.rateLimited).toBe(false);
+  });
+
+  test("does not search when the account is unreadable", async () => {
+    const h = setup({ failViewer: true, searchOwners: owners });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual([]);
+  });
+});
+
+describe("runPrConflictWatch: an invalid token", () => {
+  const unauthorized = new GitHubHttpError("bad credentials", 401);
+
+  test("stops reading and records one failure", async () => {
+    const h = setup({
+      repos: [REPO, { owner: "acme", repo: "other" }],
+      openPrs: { "acme/widgets": unauthorized, "acme/other": unauthorized },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["list_open_prs:acme/widgets"]);
+  });
+
+  test("does not list the next repository", async () => {
+    const h = setup({
+      repos: [REPO, { owner: "acme", repo: "other" }],
+      openPrs: { "acme/widgets": unauthorized, "acme/other": [] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
+  test("reports that the token was rejected", async () => {
+    const h = setup({ prs: { "acme/widgets#12": unauthorized } });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.unauthorized).toBe(true);
+  });
+
+  test("records one failure when a pull request is rejected and rows follow", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW }), check({ id: 8, pr_number: 13 })],
+      prs: { "acme/widgets#12": unauthorized },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["pr_conflict:acme/widgets#12"]);
+  });
+
+  test("does not read the rows after the token was rejected", async () => {
+    const h = setup({
+      rows: [check({ id: 8, pr_number: 13 })],
+      prs: { "acme/widgets#12": unauthorized },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12"]);
+  });
+
+  test("records one failure when the account cannot be read", async () => {
+    const h = setup({
+      viewerError: unauthorized,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["viewer"]);
+  });
+
+  test("does not read the rows when the account is rejected", async () => {
+    const h = setup({
+      viewerError: unauthorized,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("counts the reads left after the token was rejected", async () => {
+    const h = setup({
+      repos: [REPO, { owner: "acme", repo: "other" }],
+      openPrs: { "acme/widgets": unauthorized, "acme/other": [] },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(1);
   });
 });
 
@@ -944,6 +1212,34 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
     expect(h.settled).toEqual([]);
   });
 
+  test("records a failure to move a row that cannot be read", async () => {
+    const h = setup({
+      repos: [],
+      failTouch: true,
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": new GitHubHttpError("not found", 404) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["touch_row:acme/widgets#12"]);
+  });
+
+  test("goes on to the next row when a row cannot be moved", async () => {
+    const h = setup({
+      repos: [],
+      failTouch: true,
+      rows: [
+        check({ notified_at: NOW }),
+        check({ id: 8, pr_number: 13, notified_at: NOW }),
+      ],
+      prs: {
+        "acme/widgets#12": new GitHubHttpError("not found", 404),
+        "acme/widgets#13": new GitHubHttpError("not found", 404),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12", "acme/widgets#13"]);
+  });
+
   test("moves a row that cannot be read to the back of the queue", async () => {
     const h = setup({
       repos: [],
@@ -1165,6 +1461,16 @@ describe("runPrConflictWatch: reads left for the next run", () => {
     });
     const result = await runPrConflictWatch(h.deps);
     expect(result.deferred).toBe(2);
+  });
+
+  test("does not count a repository that would not be read anyway", async () => {
+    const h = setup({
+      now: exhausted(),
+      repos: [REPO, { owner: "other", repo: "skipped" }],
+      allowed: (owner) => owner === "acme",
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(1);
   });
 
   test("counts what the rate limit left", async () => {
