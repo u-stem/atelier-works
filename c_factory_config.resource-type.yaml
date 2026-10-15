@@ -55,6 +55,7 @@ schema:
     - pr_ci_fix_enabled
     - pr_ci_fix_max_rounds
     - pr_ci_fix_enabled_since
+    - pr_conflict_watch_enabled
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -290,6 +291,11 @@ schema:
       description: >-
         1つのPRで、CIの失敗を直すラウンドを起動できる回数の上限です。直近に通ったコミットより後のラウンドを数え、通ると数え直します。1以上10以下の整数にします。
       default: 2
+    pr_conflict_watch_enabled:
+      type: boolean
+      description: >-
+        FactoryのPRのマージの競合を検知して、通知するかどうかです。検知と通知だけで、PRにもリポジトリにも書き込みません。falseの間は、`watch_pr_conflicts`はGitHubもDBも読まず、何も書きません。pr_ci_watch_enabledには依りません。
+      default: false
     pr_ci_watch_enabled:
       type: boolean
       description: >-

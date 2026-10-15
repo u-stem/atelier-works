@@ -95,6 +95,7 @@ type DefaultableField =
   | "pr_ci_fix_enabled"
   | "pr_ci_fix_max_rounds"
   | "pr_ci_fix_enabled_since"
+  | "pr_conflict_watch_enabled"
   | "check_commands_by_repo";
 
 /**
@@ -161,6 +162,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   pr_ci_fix_enabled: false,
   pr_ci_fix_max_rounds: 2,
   pr_ci_fix_enabled_since: null,
+  // 競合の検知はPRにもリポジトリにも書き込まないが、通知の出方を確かめてから、リモートのリソースで有効にする。
+  pr_conflict_watch_enabled: false,
   check_commands_by_repo: {},
 };
 
@@ -823,6 +826,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       PR_CI_FIX_MAX_ROUNDS_LIMIT,
     ),
     pr_ci_fix_enabled_since: prCiFixEnabledSince,
+    pr_conflict_watch_enabled: booleanField(
+      raw,
+      "pr_conflict_watch_enabled",
+      DEFAULTS.pr_conflict_watch_enabled,
+    ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
       DEFAULTS.check_commands_by_repo,

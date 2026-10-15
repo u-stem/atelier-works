@@ -1,0 +1,9 @@
+summary: '[LIB] PRの競合の判断'
+description: 内部ライブラリです。直接実行するものではありません。PRの状態から、競合しているか、解けたか、閉じたかを決め、通知の本文を作ります。
+lock: '!inline f/factory/lib/pr_conflict_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

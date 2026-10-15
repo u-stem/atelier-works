@@ -55,6 +55,10 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("pr_ci_failed")).toBe("action");
   });
 
+  test("treats a merge conflict of a pull request as action", () => {
+    expect(noticeSeverity("pr_conflict")).toBe("action");
+  });
+
   test("treats a denied pull request CI check as action", () => {
     expect(noticeSeverity("pr_ci_check_denied")).toBe("action");
   });

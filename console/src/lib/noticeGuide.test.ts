@@ -24,6 +24,14 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("tells how to resolve the merge conflict of a pull request", () => {
+    expect(noticeGuide("pr_conflict").action).toContain("mergeして");
+  });
+
+  test("tells that the merge conflict notice is resolved automatically", () => {
+    expect(noticeGuide("pr_conflict").note).toContain("自動で解決");
+  });
+
   test("tells how to read the failed run of the pull request CI", () => {
     expect(noticeGuide("pr_ci_failed").action).toContain("実行のログ");
   });

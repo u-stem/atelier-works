@@ -1391,6 +1391,107 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 
 直す作業項目が`cancelled`になるのは、PRが閉じたときだけである。閉じたPRの行は、`superseded`になる。
 
+## PRの競合を検知する
+
+`watch_pr_conflicts`が5分ごとに、Factoryが作ったPRにマージの競合があるかを確かめる。
+競合したPRは、通知`pr_conflict`を残し、Discordにも`needs_human`として届ける。
+`watch_pr_conflicts`自身は、PRとリポジトリへ書き込まず、競合を解く作業も起動しない。
+競合は人が解消する。
+既定は無効で、設定`pr_conflict_watch_enabled`を`true`にしたときだけ動く。
+`false`の間は、GitHubとDBを読まない。CIの監視(`pr_ci_watch_enabled`)とは別に切り替える。
+
+次の条件をすべて満たすPRだけを見る。
+
+- 開いていて、下書きでなく、headのリポジトリがベースと同じである。
+- headのブランチが`factory/issue-<N>-wi-<id>`の形である。
+- PRの作者が、PATのアカウントである。
+- リポジトリが、`factory_repo`か、`repo_allowlist`と照合を通った`owners`に合う。
+
+人が作ったPRは、対象にしない。draw.ioのビューアを上げるPRなど、別の形のブランチのPRも対象にしない。
+作業項目は`cleanup_db`が消すので、PRの判定には使わない。
+
+`watch_pr_conflicts`は、次のどれかに入るリポジトリの、開いているPRの一覧を読む。
+
+- 状態が`pr_open`の作業項目を持つ。
+- 競合の記録の行を持つ。
+- PATのアカウントが作った開いているPRを、照合を通ったオーナーごとに検索して、見つかった。
+- `factory_repo`か、`repo_allowlist`に明示されている。
+
+`owners`だけで許されているリポジトリは、展開しない。
+検索は、リポジトリを見つけるためだけに使う。検索の索引は数分遅れる。1つのオーナーで読むのは、更新が新しい100件までである。
+作業項目が消え、競合の記録も無く、検索にも現れないリポジトリの古いPRは、見つけられない。
+このとき`repo_allowlist`にリポジトリを足してはならない。1件でも入れると、`repo_allowlist`が対象のリポジトリを絞り、書かなかったリポジトリがFactory全体で対象から外れる。
+1つのリポジトリで読むのは、1000件までである。超えたリポジトリは飛ばす。検索だけが見つけたリポジトリはログの警告だけで、それ以外は失敗として記録する。
+競合の行を持たないマージ済みのPRは、読まない。
+
+競合とみなすのは、GitHubのマージ可否が偽で、その状態が`dirty`のときだけである。
+GitHubはマージ可否を、PRを読まれたときに計算する。計算前は値が空で、何もせずに次の回に判定し直す。
+通知は、競合の1回につき1回である。競合が続く間にPRのコミットが進んでも、通知を重ねない。
+通知は、次のときに自動で解決される。
+
+- 競合が解けた。
+- PRを閉じたか、マージした。
+- 設定が、リポジトリを対象から外した。
+
+競合が解けた後に、再び競合したときは、新しい通知が出る。
+PATがリポジトリを読めなくなったときは、通知を解決せず、行も閉じない。GitHubは、読む権限を失ったときも404を返す。
+オーナーの照合が一時的に失敗した回も、通知を解決しない。
+
+設定は、WindmillのResourcesの`factory_config`で直す。
+
+| 項目 | 既定値 | 内容 |
+| --- | --- | --- |
+| `pr_conflict_watch_enabled` | `false` | 競合を検知して通知するか |
+
+有効にする手順は次のとおりである。
+有効にした最初の巡回で、そのとき競合している開いたFactoryのPRが、すべて通知されるためである。
+
+1. migrationが反映済みであることを確かめる。競合の記録の表(`pr_conflict_checks`)を作るmigrationは、`self_update`が反映する。デプロイの記録で、反映が成功していることを見る。
+2. 開いているFactoryのPRの数を、リポジトリごとに数える。リポジトリを`-R`で指定し、PATのアカウントのログイン名を`--author`に渡す。下書きは数えない。
+
+   ```bash
+   gh pr list -R <owner>/<repo> --author <PATのアカウント> --state open --limit 200 --search "draft:false head:factory/issue-" --json number --jq length
+   ```
+
+   各リポジトリの数を合計して、あとで`tracked`と比べる。`gh pr list`は、`-R`で指定した1つのリポジトリしか数えず、`--limit`の既定は30である。
+   `head:`の検索が接頭辞に合わないときは、`--search`を外し、`--json headRefName,isDraft`で、`factory/issue-`で始まり下書きでないものに絞って数える。
+3. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
+4. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
+5. 最初の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。結果の項目は、次のとおりである。
+   - `tracked`は読んだPRの数、`conflicted`は競合しているPRの数、`skipped`は見送ったPRの数である。
+   - `errors`は0で、`unauthorized`と`rateLimited`は偽である。Consoleの失敗の記録に、`f/factory/watch_pr_conflicts`の行が無い。
+   - 最初の回は、GitHubがマージ可否をまだ計算しておらず(`null`)、`skipped`が多く出やすい。
+6. 2回目の巡回の後、`skipped`が減り、`conflicted`が揃ったことを確かめる。`tracked`は、2で合計した数と近いはずである。
+7. 競合しているPRがあれば、通知`pr_conflict`が1件ずつ残ることを確かめる。解消した後の巡回で、通知が自動で解決されることを確かめる。
+
+有効にした時点で競合するPRが無かったときは、通知、Discord、自動解決の経路は未確認のままである。最初の実際の競合で確かめる。
+通知が1件残ること、Discordに`needs_human`が届くこと、競合が解けると通知が自動で解決されることを見る。Discordに届かなかったときは、ログ`pr conflict notice was not delivered`が出る。
+
+`tracked`が0で、`errors`も0のときは、PRの一覧の`user.login`や`user.id`が期待どおりに載っていない可能性がある。作者がPATのアカウントと合わないと、PRを見つけられないためである。
+
+リポジトリを見つける元の動作は、ログ`pr conflict repositories collected`の件数で確かめる。リポジトリ名は出さない。
+
+| 項目 | 意味 |
+| --- | --- |
+| `work_items` | 作業項目を持つリポジトリの数 |
+| `conflict_rows` | 競合の記録の行を持つリポジトリの数 |
+| `explicit` | 設定で明示されたリポジトリの数 |
+| `searched` | 検索が返したPRの件数。リポジトリの数ではなく、同じリポジトリが重なり、Factory以外のPRも含む |
+| `total` | 重複を除いたリポジトリの数 |
+
+検索が働いたかは、PATのアカウントが開いているPRを持つのに、`searched`が0になっていないかで確かめる。0のままなら、検索の索引か権限を疑う。
+`total`は、4つの元を合わせた和集合の数なので、`work_items`、`conflict_rows`、`explicit`の和に、検索だけが見つけたリポジトリを足した数以下になる。
+
+止めるときは、`pr_conflict_watch_enabled`を`false`にする。
+止めた後に残った通知は、そのままにしておく。再開した後に、競合が続く間は通知が残り、競合が解けると自動で解決される。
+手で解決した通知は、その競合が解けるかPRが閉じるまで、再び出ない。
+
+1回の実行は、経過時間の予算(120秒)かrate limitで、読み残すことがある。読み残した数は、ログの警告と結果の`deferred`に出る。rate limitに当たったリポジトリとPRそのものも数える。
+読み残したものは、次の回に読む。
+PATが拒まれた(401)ときは、以降の読み取りを止め、失敗を1件だけ記録する。
+PATがリポジトリを読めなくなったときの専用の通知は無い。この監視だけを有効にしているときは、ログの警告だけが残る。
+読めなかったPRと、GitHubのrate limitの扱いは、[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
+
 ## 監査を使う
 
 Factory自身の運用記録の監査は、毎週月曜09:30に自動で走る(`audit_kickoff`)。Consoleの**レポート**の**今すぐ監査**で前倒しできる。
@@ -1737,6 +1838,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `main_ci_check_denied` | 対象リポジトリの既定のブランチのCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのmainのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される。権限を戻すと、最新の失敗は通知され、より新しい行がある古い失敗は通知されない([PATの権限](security.md#githubのpat)) |
 | `pr_ci_failed` | Factoryが作ったPRのheadのコミットで、CI(GitHub Actionsのpull_requestかpushの実行)が失敗した。本文は`<owner>/<repo>#<PR番号>:`で始まり、コミットの先頭7文字、理由、次の操作、リンクが載る。リンクは、失敗した実行か、PRのページである。自動で直す対象の失敗は、直せるかが決まってから残り、本文に自動修正の保留の理由が載る。Discordにも届く。ただし、直す作業が止まったときは、止めたフローがDiscordに通知する | 本文の「次の操作」に従う。保留の理由が無ければ、リンク先の実行のログで原因を確かめ、PRに修正を入れる。metadataジョブの失敗なら、`mise run metadata`を実行して差分をコミットする。取り消しやフレークなら、実行をやり直す。同じheadの実行をやり直して通ったとき、PRに新しいheadをpushして通ったとき、PRを閉じたときは、自動で解決される |
 | `pr_ci_check_denied` | 対象リポジトリのPRかCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのPRのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される([PATの権限](security.md#githubのpat)) |
+| `pr_conflict` | Factoryが作ったPRが、ベースブランチとマージできない競合の状態である。本文は`<owner>/<repo>#<PR番号>:`で始まり、次の操作とPRのリンクが載る。Discordにも届く | 本文の「次の操作」に従う。PRのブランチにベースブランチをmergeして競合を解消し、pushする。競合が解けたとき、PRを閉じたときは、自動で解決される。競合が続く間は、PRのコミットが進んでも通知は重ならない |
 
 ### Console用のworkerの検知を確かめる
 

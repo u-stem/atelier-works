@@ -633,7 +633,9 @@ async function touchSafely(context: Context, row: PrCiCheck): Promise<void> {
 }
 
 /** headのリポジトリがベースと同じか。forkと、削除されたforkは同じでない。 */
-function isSameRepoHead(pr: PullRequest): boolean {
+export function isSameRepoHead(
+  pr: Pick<PullRequest, "headRepoFullName" | "baseRepoFullName">,
+): boolean {
   return (
     pr.headRepoFullName !== null &&
     pr.headRepoFullName.toLowerCase() === pr.baseRepoFullName.toLowerCase()

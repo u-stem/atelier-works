@@ -23,6 +23,7 @@ import {
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubHttpError,
+  GitHubPaginationLimitError,
   GitHubRateLimitError,
   GitHubResponseError,
   getAccountId,
@@ -45,6 +46,7 @@ import {
   isOwnPost,
   LabelerCheckLimitError,
   listIssueComments,
+  listOpenPullRequests,
   listPrChecks,
   listPrCommitMessages,
   listPrCommits,
@@ -3884,6 +3886,144 @@ describe("getPrFiles", () => {
       12,
     );
     expect(files.map((f) => f.filename)).toEqual(["a.ts", "b.ts"]);
+  });
+});
+
+describe("listOpenPullRequests", () => {
+  function openPr(number: number, overrides: Record<string, unknown> = {}) {
+    return {
+      number,
+      draft: false,
+      head: {
+        ref: `factory/issue-${String(number)}-wi-9`,
+        repo: { full_name: "acme/widgets" },
+      },
+      base: { repo: { full_name: "acme/widgets" } },
+      user: { login: "factory-bot", id: 5 },
+      ...overrides,
+    };
+  }
+
+  test("asks for the open pull requests of the repository, 100 per page", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(fake.calls[0]?.argv).toContain(
+      "repos/acme/widgets/pulls?state=open&per_page=100",
+    );
+  });
+
+  test("returns the number, draft flag, head branch and repositories", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([openPr(12)])]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs).toEqual([
+      {
+        number: 12,
+        draft: false,
+        headRef: "factory/issue-12-wi-9",
+        headRepoFullName: "acme/widgets",
+        baseRepoFullName: "acme/widgets",
+        authorLogin: "factory-bot",
+        authorId: 5,
+      },
+    ]);
+  });
+
+  test("returns a null author when the pull request has none", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { user: null })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.authorLogin).toBeNull();
+  });
+
+  test("returns a null author id when the id is not a positive integer", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { user: { login: "factory-bot", id: "x" } })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.authorId).toBeNull();
+  });
+
+  test("returns a null head repository for a deleted fork", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { head: { ref: "x", repo: null } })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.headRepoFullName).toBeNull();
+  });
+
+  test("follows the next page", async () => {
+    const fake = createFakeCommandRunner([
+      ok(
+        ghApiStdout(200, [openPr(1)], {
+          link: '<https://api.github.com/repos/acme/widgets/pulls?state=open&per_page=100&page=2>; rel="next"',
+        }),
+      ),
+      ghApiOk([openPr(2)]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs.map((pr) => pr.number)).toEqual([1, 2]);
+  });
+
+  test("fails when the pages exceed the limit, instead of returning a partial list", async () => {
+    const next = {
+      link: '<https://api.github.com/repos/acme/widgets/pulls?state=open&per_page=100&page=2>; rel="next"',
+    };
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, [openPr(1)], next)),
+      ok(ghApiStdout(200, [openPr(2)], next)),
+      ghApiOk([openPr(3)]),
+    ]);
+    await expect(
+      listOpenPullRequests(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        2,
+      ),
+    ).rejects.toBeInstanceOf(GitHubPaginationLimitError);
+  });
+
+  test("rejects an entry of an unexpected shape", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([{ number: "x" }])]);
+    await expect(
+      listOpenPullRequests(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("rejects a repository name that is not a GitHub name", async () => {
+    const fake = createFakeCommandRunner([ghApiOk([])]);
+    await expect(
+      listOpenPullRequests({ run: fake.run, ghToken: "tok" }, "acme", ".."),
+    ).rejects.toThrow("invalid GitHub name");
   });
 });
 

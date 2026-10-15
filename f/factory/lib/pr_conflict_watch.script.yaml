@@ -1,0 +1,9 @@
+summary: '[LIB] PRの競合の監視の流れ'
+description: 内部ライブラリです。直接実行するものではありません。FactoryのPRのマージの競合を検知して通知し、競合が解けたときと、PRが閉じたときに通知を解決する流れを組み立てます。
+lock: '!inline f/factory/lib/pr_conflict_watch.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
