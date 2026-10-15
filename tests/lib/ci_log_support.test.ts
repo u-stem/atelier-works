@@ -121,6 +121,34 @@ describe("revealControlChars", () => {
     expect(revealControlChars(`a${char}b`)).toBe(`a${expected}b`);
   });
 
+  test.each([
+    ["an unassigned code point reserved for ignorables", "\u2065", "<U+2065>"],
+    ["a specials block code point", "\uFFF0", "<U+FFF0>"],
+    [
+      "a tag block code point before the tag characters",
+      "\u{E0000}",
+      "<U+E0000>",
+    ],
+    ["an unassigned tag block code point", "\u{E0080}", "<U+E0080>"],
+    [
+      "an unassigned variation selector block code point",
+      "\u{E01F0}",
+      "<U+E01F0>",
+    ],
+    ["a Mongolian free variation selector", "\u180F", "<U+180F>"],
+  ])("writes %s as a code point", (_name, char, expected) => {
+    expect(revealControlChars(`a${char}b`)).toBe(`a${expected}b`);
+  });
+
+  test("keeps the number of lines when it replaces default ignorable code points", () => {
+    const text = "a\u2065\nb\u{E0080}\nc";
+    expect(revealControlChars(text).split("\n")).toHaveLength(3);
+  });
+
+  test("keeps a visible code point next to default ignorable ones", () => {
+    expect(revealControlChars("\u2764\uFE0F!")).toBe("\u2764<U+FE0F>!");
+  });
+
   test("writes a carriage return that is not followed by a line feed", () => {
     expect(revealControlChars("+a\r-b")).toBe("+a<U+000D>-b");
   });
