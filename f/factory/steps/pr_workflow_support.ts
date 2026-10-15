@@ -3978,6 +3978,14 @@ const TIME_SETTINGS_CI_NEXT_ACTION =
   "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します";
 
 /**
+ * リポジトリが許可リストに無くて止まったCI回の次の操作。
+ * 失敗の行は保留なしで戻り、設定が直れば、監視が次の巡回で起動し直すのでpushは要らない。
+ * ただし、設定から外れたリポジトリの行は、最初に失敗を見てから24時間たつと閉じるので、その後はpushが要る。
+ */
+const REPO_NOT_ALLOWED_CI_NEXT_ACTION =
+  "factory_configのowners / repo_allowlistを見直してください。直すと、Factoryが次の巡回で自動で起動し直します。最初に失敗を見てから24時間たった行は閉じるので、そのときはPRにpushしてください";
+
+/**
  * 修正の前に止めた理由の次の操作。保留の理由(`fix_hold_reason`)に写せる理由は、その理由の敬体の固定文(`stopAction`)を使う。
  * 写せない理由は、`CI_ROUND_NEXT_ACTION`にする。
  * `match.input`は、規則が一致した理由の1項目である。
@@ -4069,9 +4077,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
       /^repository is not allowed by factory_config \(owners \/ repo_allowlist\)$/,
     describe: () =>
       "factory_config(owners / repo_allowlist)で許可されていないリポジトリです",
-    ...procedureThenRerun(
-      "factory_configのowners / repo_allowlistを見直してから、",
-    ),
+    nextAction: () =>
+      `factory_configのowners / repo_allowlistを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+    ciNextAction: () => REPO_NOT_ALLOWED_CI_NEXT_ACTION,
   },
   // `lib/repo_owner_gate.ts`の`verifyRepoOwnerId`。各準備のステップが、リポジトリを取得する前に止める。
   {

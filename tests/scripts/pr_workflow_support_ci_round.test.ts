@@ -165,7 +165,7 @@ describe("nextActionFor a CI round", () => {
         true,
       ),
     ).toBe(
-      "factory_configのowners / repo_allowlistを見直してから、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します",
+      "factory_configのowners / repo_allowlistを見直してください。直すと、Factoryが次の巡回で自動で起動し直します。最初に失敗を見てから24時間たった行は閉じるので、そのときはPRにpushしてください",
     );
   });
 

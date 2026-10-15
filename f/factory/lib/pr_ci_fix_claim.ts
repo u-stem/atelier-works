@@ -161,13 +161,14 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  *    マーカーの確認の後に、直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
  *    失敗したジョブが無ければskipする。
  * 6. 時間設定が修正・検証ステップのtimeoutに収まらなければ`config_misfit`で保留する。準備のステップが同じ理由で止めるので、
- *    起動の前に確かめ、ラウンドと通知を使わない。設定を直せば、次の巡回で外れる。
- *    予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
+ *    起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない(保留が30分続くと、行ごとに保留の通知が出る)。
+ *    設定を直せば、次の巡回で外れる。
+ * 7. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
  *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
  *    日次の予算は、`metadata`だけが失敗しているときには確かめない。Claudeを起動せず、費用がかからないためである。
  *    Claudeが直すジョブも落ちているときは、予算を確かめる。使い切っていれば保留し、行は巡回のたびに読み直すだけで、ラウンドを消費しない。
- * 7. どれにも当たらなければ起動する。
+ * 8. どれにも当たらなければ起動する。
  */
 export async function decideFixClaim(
   input: FixClaimInput,
