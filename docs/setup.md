@@ -113,7 +113,7 @@ mise run doctor
 `WM_BASE_URL`は読まない。
 ログインの前に`/api/version`がWindmillの応答かを確かめ、違えば資格情報を送らずに止まる。
 止まったときは、そのポートを使うほかのプロセスを止めるか、`WM_HTTP_PORT`をWindmillのポートに合わせて`mise run up`をやり直す。
-`WM_BIND`を`0.0.0.0`と`::`以外の特定のアドレスにすると、`127.0.0.1`に待ち受けが無いので、`bootstrap`は止まる。
+`WM_BIND`を`127.0.0.1`、`0.0.0.0`、`::`以外の特定のアドレスにすると、`127.0.0.1`に待ち受けが無いので、`bootstrap`は止まる。
 
 `WM_HTTP_PORT`を変えるときは、`wmill.yaml`の`workspaces.factory.baseUrl`も`http://127.0.0.1:${WM_HTTP_PORT}`に手元で合わせる。
 `bootstrap`は、全手順のモードで状態を変える前に両者を照合し、食い違うと止まる。
