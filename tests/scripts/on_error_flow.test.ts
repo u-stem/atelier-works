@@ -140,6 +140,8 @@ type FakeFailureWorld = {
   readonly instanceName?: () => Promise<string>;
   readonly updateStatus?: () => Promise<boolean>;
   readonly webhookUrl?: string;
+  /** 同じPRに置き換えた行か並走する行があるか。 */
+  readonly superseded?: boolean;
 };
 
 function fakeFailureDeps(world: FakeFailureWorld = {}) {
@@ -157,6 +159,7 @@ function fakeFailureDeps(world: FakeFailureWorld = {}) {
       statusCalls.push({ id, from, to, flowJobId, note });
       return world.updateStatus === undefined ? true : world.updateStatus();
     },
+    hasSupersedingPrReview: async () => world.superseded ?? false,
     readInstanceName: world.instanceName ?? (async () => "test-instance"),
     readWebhookUrl: async () => world.webhookUrl ?? "https://discord.example/x",
     notify: async (_url, event) => {
@@ -394,6 +397,24 @@ describe("handleFlowFailure for a transient pr_review failure", () => {
     const fake = fakeFailureDeps({ item: reviewItem() });
     await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
     expect(fake.failures).toHaveLength(1);
+  });
+
+  test("reports job_failed when a newer review of the same pull request exists", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem(), superseded: true });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.events.map((event) => event.kind)).toEqual(["job_failed"]);
+  });
+
+  test("reports job_failed when the work item has no pull request number", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({
+        kind: "pr_review",
+        status: "reviewing",
+        pr_number: null,
+      }),
+    });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.events.map((event) => event.kind)).toEqual(["job_failed"]);
   });
 
   test("reports a failure without the transient prefix as job_failed", async () => {

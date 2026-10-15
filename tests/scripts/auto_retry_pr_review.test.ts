@@ -123,7 +123,7 @@ describe("runAutoRetryPrReview", () => {
     expect(fake.leaseCalls[0]?.slice(0, 4)).toEqual([
       7,
       "reviewing",
-      "needs_human",
+      "failed",
       null,
     ]);
   });

@@ -83,7 +83,8 @@ export type NotifyEvent =
       instance_name: string;
       owner: string;
       repo: string;
-      url: string;
+      /** 対象へのリンク。リンクを作れないときは`null`にして、リンク無しで通知する。 */
+      url: string | null;
       reason: string;
       /**
        * `needs_human`の通知には、何に対応が要るかと、何をすればよいかを必ず載せる。

@@ -49,7 +49,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `poll_prs` | PRのトリガーラベルを外した後に取得を確認できず、ラベルが外れたままになった(理由は`claimed pr trigger label was left removed`) |
 | `implement_finish` | 実装フローが人の対応待ちで止まった |
 | `pr_review_generate` | レビューの生成を止めた |
-| `auto_retry_pr_review` | 自動の再開でPRレビューのフローを起動できず、作業項目を`needs_human`に戻した。GitHubの一時的な失敗で止まったPRレビューが、再開の待ちに猶予の30分を足しても再開されないまま残った。または、自動の再開を3回行っても直らなかった。後の2つは、対象のPRにリンクし、理由と`retry_work_item`を作業項目のIDで実行する次の操作を載せる。届いたときだけ記録し、届くまで巡回の間隔の5分ごとに送り直す |
+| `auto_retry_pr_review` | GitHubの一時的な失敗で止まったPRレビューが、再開の待ちに猶予の30分を足しても再開されないまま残った。または、自動の再開を3回行っても直らなかった。フローを起動できなかった再開も、失敗に戻して数えるので、使い切れば同じ通知になる。対象のPRにリンクし(リポジトリ名が不正な行はリンクを省く)、理由と`retry_work_item`を作業項目のIDで実行する次の操作を載せる。届いたときだけ記録し、届くまで巡回の間隔の5分ごとに送り直す |
 | `pr_fix_finish` | 修正が人の対応待ちで止まった。Issue化の提案がある |
 | `watch_pr_ci` | Factoryが作ったPRのCIが失敗し、通知を新しく残した(理由は`ci_failure`か`ci_other_conclusion`) |
 | `poll_dependabot` | dependabotのPRを人に回すと決めた。待ちが上限を超えた、収集かゲートが止めた、リポジトリの照合に落ちた、フローの起動に失敗した、などである。作業項目を作った直後に人の対応待ちにして、1回だけ送る |
@@ -66,7 +66,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 
 | 処理 | 送るとき |
 | --- | --- |
-| `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、再開の巡回が通知を引き受けるので送らない |
+| `on_error_flow` | フロー(pipeline、implement、pr_review、pr_fix、manual_intake、dependabotなど)が失敗した。設定を読めないときも、インスタンス名を`unknown`にして送る。GitHubの一時的な失敗で止まったPRレビューは、作業項目を`failed`にでき、再開の巡回の対象になるときだけ送らない。`failed`にできなかったときと、同じPRに置き換えた行か並走する行があるときは、巡回が拾わないので`job_failed`を送る |
 | `on_error_schedule` | スケジュールのジョブが失敗した。同じスケジュールの連続した失敗の初回と、前回の失敗からエラー文が変わったときだけ送る。以降の同じ失敗は、下の`schedule_failing`に任せる。直前の実行(飛ばされた回と人が取り消した回を除く)が成功なら初回である。失敗なら、その実行のジョブIDを持つ`job_failures`の最新の行(`step`がNULL)のエラー文と比べる。ジョブ履歴、その記録、直前の実行のどれかを読めないときや、記録が別の実行のものなら、送る側に倒す。`schedule_failing`のnoticeを新しく残したときは、Discordにも`job_failed`を送り直す。初回の通知が届かなかった連続を、Discordで見落とさないためである。GitHubのPATの失効は、`poll_issues`の冒頭の確認が失敗してここに来る。直近3回の実行(飛ばされた回と人が取り消した回を除き、ジョブの上限で打ち切られた回は、`canceled_by`が`timeout`の取り消しとみなして失敗に数える。この値は実機で未確認である)が続けて失敗すると、要対応の通知`schedule_failing`も残す。ジョブ履歴を読めないときは、`schedule_failing_check_failed`を残す |
 | `poll_issues`の点検 | 閉じたIssue・PRや孤児のジョブを見つけ、作業項目を取り消しか失敗にした。dependabotの作業項目を、PRが閉じたことで終えたときは送らない。マージされていればマージ済みとして記録し、マージされずに閉じたのはdependabotが置き換えたPRを自分で閉じた場合で、どちらも人の行動が要らないためである |
 | `requirements_apply` | 承認の反映の処理が例外で終わった。却下の後の作り直しを起動できなかったときも含む |

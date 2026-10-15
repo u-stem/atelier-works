@@ -100,13 +100,19 @@ describe("decideTransientFailureAction", () => {
 
   test("leaves a transient failure of the review to the retry sweep", () => {
     expect(
-      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, true),
+      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, true, true),
     ).toBe("defer");
   });
 
   test("reports the failure when the work item was not marked failed", () => {
     expect(
-      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, false),
+      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, false, true),
+    ).toBe("job_failed");
+  });
+
+  test("reports the failure when the retry sweep will not pick the review up", () => {
+    expect(
+      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, true, false),
     ).toBe("job_failed");
   });
 
@@ -116,14 +122,15 @@ describe("decideTransientFailureAction", () => {
         PR_REVIEW_FLOW_PATH,
         "failed with HTTP 422",
         true,
+        true,
       ),
     ).toBe("job_failed");
   });
 
   test("reports a transient failure of another flow", () => {
-    expect(decideTransientFailureAction("f/factory/pr_fix", marked, true)).toBe(
-      "job_failed",
-    );
+    expect(
+      decideTransientFailureAction("f/factory/pr_fix", marked, true, true),
+    ).toBe("job_failed");
   });
 });
 
@@ -158,6 +165,22 @@ describe("transientReviewNotice", () => {
     expect(exhausted.next_action).toContain("7");
   });
 
+  test("omits the link and the names when the owner is not a GitHub name", () => {
+    const notice = transientReviewNotice({
+      instanceName: "test",
+      candidate: candidate(7, { owner: "a b", restarts: 1 }),
+    });
+    expect(notice.url).toBeNull();
+  });
+
+  test("still sends the notice when the owner is not a GitHub name", () => {
+    const notice = transientReviewNotice({
+      instanceName: "test",
+      candidate: candidate(7, { owner: "../x", repo: "y" }),
+    });
+    expect(notice.owner).toBe("unknown");
+  });
+
   test("carries the failure into the reason without the mark", () => {
     expect(exhausted.reason).toContain(": failed with HTTP 502");
   });
@@ -167,7 +190,6 @@ type Fake = {
   readonly deps: TransientReviewDeps;
   readonly launched: string[];
   readonly restarted: number[];
-  readonly notified: number[];
 };
 
 function fakeDeps(
@@ -176,7 +198,6 @@ function fakeDeps(
 ): Fake {
   const launched: string[] = [];
   const restarted: number[] = [];
-  const notified: number[] = [];
   const deps: TransientReviewDeps = {
     listCandidates: async () => candidates,
     isFlowJobFinished: async () => true,
@@ -190,13 +211,10 @@ function fakeDeps(
     },
     recordFlowJobId: async () => true,
     rollBack: async () => true,
-    notifyRollBack: async (c) => {
-      notified.push(c.id);
-    },
     log: SILENT,
     ...overrides,
   };
-  return { deps, launched, restarted, notified };
+  return { deps, launched, restarted };
 }
 
 describe("retryTransientPrReviews", () => {
@@ -226,14 +244,19 @@ describe("retryTransientPrReviews", () => {
     expect(fake.launched).toEqual([]);
   });
 
-  test("tells a human when the flow cannot be started", async () => {
+  test("rolls back a launch failure as a transient failure so that the sweep picks it up", async () => {
+    const reasons: string[] = [];
     const fake = fakeDeps([candidate(7)], {
       launchFlow: async () => {
         throw new Error("windmill is down");
       },
+      rollBack: async (_c, reason) => {
+        reasons.push(reason);
+        return true;
+      },
     });
     await retryTransientPrReviews(fake.deps);
-    expect(fake.notified).toEqual([7]);
+    expect(reasons[0]?.startsWith(TRANSIENT_GITHUB_REASON_PREFIX)).toBe(true);
   });
 
   test("writes a launch failure note that is not counted as a restart", async () => {

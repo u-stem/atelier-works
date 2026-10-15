@@ -21,13 +21,14 @@
 // Discordの`job_failed`通知である。設定を読めないときも、インスタンス名を伏せて通知する。
 // dependabotのフローの通知には、対象のPRと、再実行を案内しない次の操作を載せる。
 // dependabotの作業項目は`retry_work_item`が再開しないためである。
-// GitHubの一時的な失敗で止まったpr_reviewは`auto_retry_pr_review`が再開するので、
-// 使い切った通知も巡回が送るので、ここでは`job_failed`を送らない。
+// GitHubの一時的な失敗で止まったpr_reviewは、`auto_retry_pr_review`が再開し、使い切った後の通知も送る。
+// 作業項目を`failed`にでき、巡回の対象になるときだけ、ここで`job_failed`を送らない。
 
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
 import {
   getWorkItem,
+  hasSupersedingPrReview,
   recordFailure,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
@@ -35,7 +36,10 @@ import { DEPENDABOT_FLOW_PATH } from "./lib/dependabot_flow_support.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
-import { decideTransientFailureAction } from "./lib/pr_review_retry.ts";
+import {
+  decideTransientFailureAction,
+  isTransientPrReviewFailure,
+} from "./lib/pr_review_retry.ts";
 import {
   assertGitHubName,
   type FailureRecord,
@@ -157,6 +161,8 @@ function workItemPrTarget(
 export type FlowFailureDeps = {
   readonly getWorkItem: (id: number) => Promise<WorkItem | null>;
   readonly recordFailure: (record: FailureRecord) => Promise<unknown>;
+  /** 同じPRに、置き換えた行か並走する行がPRレビューの他にあるか。 */
+  readonly hasSupersedingPrReview: (id: number) => Promise<boolean>;
   readonly updateStatusIfLeaseHolder: (
     id: number,
     from: WorkItemStatus,
@@ -302,9 +308,35 @@ export async function handleFlowFailure(
   // GitHubの一時的な失敗で止まったPRレビューは、`auto_retry_pr_review`が再開する。
   // 再開できるうちも、使い切った後も、ここでは知らせない。
   // 使い切った通知は、巡回が届いたときだけ記録する形で送るので、配信に失敗しても送り直される。
+  // 巡回の対象にならない作業項目(PR番号が無い、置き換えた行か並走する行がある)は、誰にも届かないので、
+  // 従来どおり知らせる。
+  let sweepable = false;
   if (
-    decideTransientFailureAction(path ?? null, message, markedFailed) ===
-    "defer"
+    item !== null &&
+    markedFailed &&
+    isTransientPrReviewFailure(path ?? null, message)
+  ) {
+    try {
+      sweepable =
+        item.kind === "pr_review" &&
+        item.pr_number !== null &&
+        !(await deps.hasSupersedingPrReview(item.id));
+    } catch (lookupErr) {
+      log.error("failed to check whether the pr_review can be restarted", {
+        work_item_id,
+        error: maskSecrets(
+          lookupErr instanceof Error ? lookupErr.message : String(lookupErr),
+        ),
+      });
+    }
+  }
+  if (
+    decideTransientFailureAction(
+      path ?? null,
+      message,
+      markedFailed,
+      sweepable,
+    ) === "defer"
   ) {
     log.info("transient failure; the pr_review is left to the retry sweep", {
       work_item_id,
@@ -345,6 +377,7 @@ export async function main(
   await handleFlowFailure(
     {
       getWorkItem: (id) => getWorkItem(id),
+      hasSupersedingPrReview: (id) => hasSupersedingPrReview(id),
       recordFailure: (record) => recordFailure(record),
       updateStatusIfLeaseHolder: (id, from, to, flowJobId, note) =>
         updateStatusIfLeaseHolder(id, from, to, flowJobId, note),

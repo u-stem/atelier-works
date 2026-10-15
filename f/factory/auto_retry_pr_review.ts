@@ -27,7 +27,6 @@ import { type Logger, logger } from "./lib/log.ts";
 import { readJobState } from "./lib/poll_support.ts";
 import {
   notifyStalledTransientReviews,
-  pullUrl,
   retryTransientPrReviews,
   type StalledTransientDeps,
   TRANSIENT_STALL_GRACE_SECONDS,
@@ -35,7 +34,6 @@ import {
   transientReviewNotice,
   transientReviewQuery,
 } from "./lib/pr_review_retry.ts";
-import { nextActionFor } from "./steps/pr_workflow_support.ts";
 
 export type AutoRetryPrReviewResult = AutoRetryResult & {
   readonly stalled_notified: number;
@@ -85,30 +83,15 @@ export function buildRetryDeps(
       launchFlow: (flowPath, args) => io.runFlowAsync(flowPath, args),
       recordFlowJobId: (id, jobId) => io.setFlowJobIdIfUnset(id, jobId),
       // 再開の状態交換が空にした`flow_job_id`を、リースの保持者として照合する。
+      // `failed`へ戻すので、再開の候補に戻り、使い切れば巡回が人に知らせる。
       rollBack: (candidate, reason) =>
         io.updateStatusIfLeaseHolder(
           candidate.id,
           "reviewing",
-          "needs_human",
+          "failed",
           null,
           reason,
         ),
-      notifyRollBack: async (candidate, reason) => {
-        await io.notifyBestEffort(
-          await io.getWebhookUrl(),
-          {
-            kind: "needs_human",
-            instance_name: instanceName,
-            owner: candidate.owner,
-            repo: candidate.repo,
-            url: pullUrl(candidate),
-            reason,
-            target: { kind: "pr", number: candidate.pr_number },
-            next_action: nextActionFor(reason),
-          },
-          log,
-        );
-      },
       log,
     },
     stalled: {

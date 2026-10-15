@@ -45,6 +45,7 @@ import {
   hasNonTerminalPrWorkItem,
   hasPassedMainCiRunAfter,
   hasPriorReview,
+  hasSupersedingPrReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
   insertAuditReport,
@@ -7172,6 +7173,11 @@ describe("transient pr_review restart", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
     expect(calls[0]?.values).toContain("auto_retry_stalled: ");
+  });
+
+  test("tells whether a newer or concurrent review exists", async () => {
+    const { sql } = createFakeSqlClient([[{ superseded: true }]]);
+    expect(await hasSupersedingPrReview(7, sql)).toBe(true);
   });
 
   test("records a stall once", async () => {

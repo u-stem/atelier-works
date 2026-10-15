@@ -1403,11 +1403,39 @@ export async function restartTransientPrReview(
 }
 
 /**
+ * 同じPRに、置き換えた行と並走する行が、このPRレビューの他にあるかを返す。
+ * `id`の大きいPRレビューか、終了していない別のPRレビューがあれば真である。
+ * `listTransientReviewCandidates`が候補から外す条件と同じで、真のPRレビューは再開の巡回に拾われない。
+ * 失敗を記録する処理は、これが真のときは巡回に任せず、従来どおり失敗を知らせる。
+ */
+export async function hasSupersedingPrReview(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM factory.work_items w
+      JOIN factory.work_items other
+        ON other.kind = 'pr_review'
+        AND other.owner = w.owner AND other.repo = w.repo
+        AND other.pr_number = w.pr_number AND other.id <> w.id
+      WHERE w.id = ${id}::bigint
+        AND (other.id > w.id OR other.status != ALL(${terminal}))
+    ) AS superseded
+  `.fetch();
+  return parseBoolean(rows[0]?.superseded, "superseded");
+}
+
+/**
  * 再開の見送りを知らせたことを、`failed`から`failed`への遷移として記録する。
  * 注記は`stallNotePrefix`に、見送りの元になった失敗の注記を続けたもの。
  * 状態は変わらず、失敗の理由は注記の後半に残る。
  * 失敗へ移った最新の遷移の後に、同じ記録がすでにあるとき、または`failed`でなくなったときは、
- * 何も書かずに`false`を返す。`true`を返した呼び出し側だけが通知を送ることで、通知は失敗ごとに1回になる。
+ * 何も書かずに`false`を返す。
+ * 呼び出し側は、通知が届いた後にこれを呼ぶので、記録に失敗すると同じ失敗を送り直し、通知が重なることはある。
+ * 記録があれば送らないので、届いた後の通知は失敗ごとに1回で止まる。
  */
 export async function recordTransientStall(
   params: Pick<TransientReviewQuery, "stallNotePrefix"> & {

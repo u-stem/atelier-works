@@ -33,6 +33,7 @@ import {
   hasNewerUnsettledOrFailedMainCiRun,
   hasPassedMainCiRunAfter,
   hasPrReviewForHead,
+  hasSupersedingPrReview,
   insertCleanupRun,
   insertDependabotWorkItemUnlessActive,
   insertWorkerSample,
@@ -4910,6 +4911,43 @@ check(
       includeExhausted: true,
     })
   ).includes(transientStuck),
+);
+check(
+  "transient review: a recorded used-up review is not listed as stalled again",
+  (await recordTransientStall(
+    { stallNotePrefix: transientQuery.stallNotePrefix, id: transientExhausted },
+    sql,
+    NO_JOB_IDS,
+  )) === true &&
+    !(
+      await transientListed({
+        extraGraceSeconds: 1800,
+        unnotifiedOnly: true,
+        includeExhausted: true,
+      })
+    ).includes(transientExhausted),
+);
+const transientNewer = await prWorkItem(
+  "pr_review",
+  9301,
+  "reviewing",
+  "qdb transient newer",
+);
+check(
+  "transient review: a review with a newer row of the same pull request is superseded",
+  (await hasSupersedingPrReview(transientOld, sql)) === true,
+);
+check(
+  "transient review: a review alone on its pull request is not superseded",
+  (await hasSupersedingPrReview(transientStuck, sql)) === false,
+);
+execPsql(
+  target,
+  `UPDATE factory.work_items SET status = 'reviewed' WHERE id = ${String(transientOld)}`,
+);
+check(
+  "transient review: the newer row itself is not superseded by the older finished one",
+  (await hasSupersedingPrReview(transientNewer, sql)) === false,
 );
 check(
   "transient review: the stall record does not hide the failure reason from the restart list",
