@@ -1859,6 +1859,23 @@ describe("runDependabotFinish checks the repository owner before it writes", () 
     });
   });
 
+  test("stops with the reason of the check, not the dry run reason, in the dry run", async () => {
+    const { result } = await run(mergeInput(), {
+      ownerStop: OWNER_STOP,
+      mergeEnabled: false,
+    });
+
+    expect(result.reason).toBe(OWNER_STOP_NOTE);
+  });
+
+  test("notifies the owners review as the next action", async () => {
+    const { calls } = await run(mergeInput(), { ownerStop: OWNER_STOP });
+
+    expect(needsHumanEvent(calls)?.next_action).toBe(
+      nextActionFor(OWNER_STOP_NOTE, "dependabot"),
+    );
+  });
+
   test("notifies the stop with the pull request as the target", async () => {
     const { calls } = await run(mergeInput(), { ownerStop: OWNER_STOP });
 

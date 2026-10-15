@@ -168,7 +168,9 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
   draw.ioのビューアを上げる`drawio_viewer_bump`は、`factory_repo_id`をブランチの作成の前に照合する。
 
 書き込みの直前の照合に落ちた処理は、書かずに止める。
-dependabotの終了処理では、作業項目を人に回し、`owner_id_mismatch`のnoticeを残す。
+dependabotの終了処理では、作業項目を人に回し、関門のnoticeを残す。
+noticeは、`owner_id_mismatch`である。
+`factory_repo`で`factory_repo_id`が設定されているときは、リポジトリIDの食い違いが`factory_repo_id_mismatch`になる。
 残る余地は、[セキュリティ](security.md#オーナーの数値idの照合)の残るリスクにある。
 
 照合は、リポジトリのオーナーの名前で`owners`を引いて行う。
