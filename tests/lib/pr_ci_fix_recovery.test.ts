@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
+import { CheckRuntimeUnsafeError } from "../../f/factory/lib/check_sandbox.ts";
 import {
   CI_ROUND_DETAILS,
+  ciRoundApplyTimeoutMisfit,
   ciRoundReason,
+  ciRoundVerifyTimeoutMisfit,
 } from "../../f/factory/lib/ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import {
@@ -12,7 +15,15 @@ import {
   readFixItemState,
   STALE_IMAGE_WAIT_MS,
 } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
+import {
+  factoryRepoIdCheckReason,
+  REPO_NOT_ALLOWED_REASON,
+  repoOwnerIdMismatchReason,
+  repoOwnerNotConfiguredReason,
+  repoOwnerNotFoundReason,
+} from "../../f/factory/lib/repo_owner_gate.ts";
 import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
+import { prFixTimeoutMisfit } from "../../f/factory/steps/pr_workflow_support.ts";
 
 const NOW = new Date("2026-10-13T12:00:00Z");
 const STALE_IMAGE_NOTE =
@@ -124,6 +135,79 @@ describe("holdReasonForStoppedItem", () => {
     ).toBe("pr_draft_or_auto_merge");
   });
 
+  test("maps a repository that factory_config does not allow", () => {
+    expect(holdReasonForStoppedItem(REPO_NOT_ALLOWED_REASON)).toBe(
+      "setup_blocked",
+    );
+  });
+
+  test("maps an owner id that differs from factory_config", () => {
+    expect(
+      holdReasonForStoppedItem(repoOwnerIdMismatchReason("acme/app", 1, 2)),
+    ).toBe("setup_blocked");
+  });
+
+  test("maps a repository that was not found while checking the owner", () => {
+    expect(
+      holdReasonForStoppedItem(repoOwnerNotFoundReason("acme/app", 1)),
+    ).toBe("setup_blocked");
+  });
+
+  test("maps an owner that factory_config does not list", () => {
+    expect(
+      holdReasonForStoppedItem(repoOwnerNotConfiguredReason("acme/app")),
+    ).toBe("setup_blocked");
+  });
+
+  test("maps a failed factory repository id check", () => {
+    expect(
+      holdReasonForStoppedItem(factoryRepoIdCheckReason("acme/factory")),
+    ).toBe("setup_blocked");
+  });
+
+  test("maps pr_fix time settings that do not fit the step timeout", () => {
+    expect(
+      holdReasonForStoppedItem(
+        prFixTimeoutMisfit({
+          claude_timeout_sec: 10_000,
+          allowed_check_commands: [],
+        }),
+      ),
+    ).toBe("setup_blocked");
+  });
+
+  test("maps CI round time settings that do not fit the apply step timeout", () => {
+    expect(
+      holdReasonForStoppedItem(ciRoundApplyTimeoutMisfit(10_000, 7_200)),
+    ).toBe("setup_blocked");
+  });
+
+  test("maps CI round time settings that do not fit the verify step timeout", () => {
+    expect(
+      holdReasonForStoppedItem(ciRoundVerifyTimeoutMisfit(3_000, 5, 21_600)),
+    ).toBe("setup_blocked");
+  });
+
+  test("maps a worker runtime that is unsafe for checks", () => {
+    expect(
+      holdReasonForStoppedItem(
+        new CheckRuntimeUnsafeError(["/workspaces is writable"]).message,
+      ),
+    ).toBe("setup_blocked");
+  });
+
+  test("does not map a worker image that is stale", () => {
+    expect(holdReasonForStoppedItem(STALE_IMAGE_NOTE)).toBeNull();
+  });
+
+  test("does not map a setup text that only appears after a prefix", () => {
+    expect(
+      holdReasonForStoppedItem(
+        `ci round: claude blocked: ${repoOwnerNotConfiguredReason("acme/app")}`,
+      ),
+    ).toBeNull();
+  });
+
   test("shares the fixed texts with the side that stops the round", () => {
     expect(
       holdReasonForStoppedItem(ciRoundReason(CI_ROUND_DETAILS.logUnavailable)),
@@ -225,6 +309,15 @@ describe("decideFixingRecovery", () => {
         NOW,
       ),
     ).toEqual({ kind: "release", hold: "log_unavailable" });
+  });
+
+  test("holds a blocked work item that stopped on the setup by setup_blocked", () => {
+    expect(
+      decideFixingRecovery(
+        item("blocked", { note: REPO_NOT_ALLOWED_REASON }),
+        NOW,
+      ),
+    ).toEqual({ kind: "release", hold: "setup_blocked" });
   });
 
   test("holds a needs_human work item with an unknown reason as stopped", () => {

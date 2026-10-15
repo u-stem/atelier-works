@@ -71,7 +71,15 @@ export const CI_ROUND_DETAILS = {
   otherConclusion: "the CI job did not fail but ended with ",
   tokenCannotReadLog: "the token cannot read the CI job log",
   logUnavailable: "the CI job log is unavailable",
+  timeMisfit: "time settings do not fit the flow step timeout: ",
 } as const;
+
+/**
+ * `pr_fix`の準備のステップが、時間設定が修正・検証ステップのtimeoutに収まらないときに出す理由の先頭。
+ * 作業項目の状態の注記に残り、回復が保留の理由に写すときに同じ文を照合する。
+ */
+export const PR_FIX_TIMEOUT_MISFIT_REASON =
+  "pr_fix time settings do not fit the flow step timeout";
 
 /** 固定文`detail`に接頭辞を付けた、CI回の止める理由。 */
 export function ciRoundReason(detail: string): string {
@@ -270,7 +278,7 @@ export function ciRoundApplyTimeoutMisfit(
     5 * scanSec +
     overhead.baseSec;
   if (total <= stepTimeoutSec) return null;
-  return `${REASON_PREFIX}: time settings do not fit the flow step timeout: 2 claude runs and 5 secret scans need ${String(total)}s but the step allows ${String(stepTimeoutSec)}s`;
+  return `${ciRoundReason(CI_ROUND_DETAILS.timeMisfit)}2 claude runs and 5 secret scans need ${String(total)}s but the step allows ${String(stepTimeoutSec)}s`;
 }
 
 /**
@@ -306,7 +314,7 @@ export function ciRoundVerifyTimeoutMisfit(
     4 * collectSec +
     overhead.baseSec;
   if (total <= stepTimeoutSec) return null;
-  return `${REASON_PREFIX}: time settings do not fit the flow step timeout: the verify step needs ${String(total)}s for ${String(checkCount)} check commands but the step allows ${String(stepTimeoutSec)}s`;
+  return `${ciRoundReason(CI_ROUND_DETAILS.timeMisfit)}the verify step needs ${String(total)}s for ${String(checkCount)} check commands but the step allows ${String(stepTimeoutSec)}s`;
 }
 
 // ---------------------------------------------------------------------------

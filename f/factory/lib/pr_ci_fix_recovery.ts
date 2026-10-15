@@ -3,9 +3,18 @@
 // I/Oは持たない。読み取りと更新は`pr_ci_watch.ts`が行う。
 
 import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
-import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
+import { CHECK_RUNTIME_UNSAFE_REASON } from "./check_sandbox.ts";
+import {
+  CI_ROUND_DETAILS,
+  ciRoundReason,
+  PR_FIX_TIMEOUT_MISFIT_REASON,
+} from "./ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "./ci_metadata_rehash.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
+import {
+  isRepoOwnerStopReason,
+  REPO_NOT_ALLOWED_REASON,
+} from "./repo_owner_gate.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
 
 /**
@@ -33,6 +42,21 @@ const DRAFT_OR_AUTO_MERGE_REASONS: readonly string[] = [
   "pull request is a draft",
   "pull request has auto-merge enabled",
 ];
+
+/**
+ * 設定か環境の問題で、準備のステップが止まった理由かを返す。人が直すまで、起動し直しても同じ理由で止まる。
+ * 一時的な理由(worktreeの使用中、実装の実行中、イメージが古い)は含めない。
+ * イメージが古い理由は、作り直しの猶予を待つ規則(`STALE_IMAGE_WAIT_MS`)が別に扱う。
+ */
+function isSetupBlockedNote(note: string): boolean {
+  return (
+    note === REPO_NOT_ALLOWED_REASON ||
+    isRepoOwnerStopReason(note) ||
+    note.startsWith(`${PR_FIX_TIMEOUT_MISFIT_REASON}: `) ||
+    note.startsWith(ciRoundReason(CI_ROUND_DETAILS.timeMisfit)) ||
+    note.startsWith(`${CHECK_RUNTIME_UNSAFE_REASON}: `)
+  );
+}
 
 /**
  * 止めた理由を、保留の理由に写す。写せなければ`null`を返す。
@@ -69,6 +93,7 @@ export function holdReasonForStoppedItem(
   if (DRAFT_OR_AUTO_MERGE_REASONS.includes(note)) {
     return "pr_draft_or_auto_merge";
   }
+  if (isSetupBlockedNote(note)) return "setup_blocked";
   return null;
 }
 

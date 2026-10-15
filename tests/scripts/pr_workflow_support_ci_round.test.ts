@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CI_ROUND_REPLIES_REASON,
   ciClaudeFailureText,
+  ciRoundApplyTimeoutMisfit,
 } from "../../f/factory/lib/ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import { prCiFixHoldInfo } from "../../f/factory/lib/pr_ci_support.ts";
@@ -136,6 +137,12 @@ describe("nextActionFor a CI round", () => {
     expect(
       nextActionForPrFix("ci round: the CI job log is unavailable", true),
     ).toBe(prCiFixHoldInfo("log_unavailable").stopAction);
+  });
+
+  test("gives the action of the setup hold for CI round time settings that do not fit", () => {
+    expect(
+      nextActionForPrFix(ciRoundApplyTimeoutMisfit(10_000, 7_200) ?? "", true),
+    ).toBe(prCiFixHoldInfo("setup_blocked").stopAction);
   });
 
   test("does not give the action of a hold reason that Claude repeats", () => {

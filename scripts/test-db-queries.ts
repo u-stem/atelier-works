@@ -92,6 +92,7 @@ import {
   updateStatusIfCurrent,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
+import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
 import {
   getCleanupSummary,
   getWorkerLoadSummary,
@@ -3723,6 +3724,27 @@ check(
   (await fixRowOf(resetRelease.id))?.notified_reason === null &&
     (await fixRowOf(resetRelease.id))?.fix_hold_reason === "fix_stopped",
   await fixRowOf(resetRelease.id),
+);
+
+// 設定か環境の理由で止まった行の保留は、決定的な保留なので、起動の候補に戻らない。
+const setupHeld = await failedFixRow(707, FIX_SHA_1);
+await setPrCiFixHold(setupHeld.id, "setup_blocked", {}, sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET work_item_id = 1 WHERE id = ${String(setupHeld.id)}`,
+);
+check(
+  "hold: a setup_blocked row is stored and is not a claim candidate",
+  (await fixRowOf(setupHeld.id))?.fix_hold_reason === "setup_blocked" &&
+    !(
+      await listClaimablePrCiChecks(
+        new Date(Date.now() - 60 * 60 * 1000),
+        PR_CI_FIX_TEMPORARY_HOLD_REASONS,
+        1000,
+        sql,
+      )
+    ).some((row) => row.id === setupHeld.id),
+  await fixRowOf(setupHeld.id),
 );
 
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'");

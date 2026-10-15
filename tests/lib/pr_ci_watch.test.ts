@@ -66,6 +66,7 @@ import {
   UNREADABLE_EXPIRES_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_watch.ts";
 import { PrFixFlowJobIdRecordError } from "../../f/factory/lib/pr_fix_launch.ts";
+import { REPO_NOT_ALLOWED_REASON } from "../../f/factory/lib/repo_owner_gate.ts";
 import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
@@ -2471,6 +2472,16 @@ describe("recovery of a fixing row", () => {
     await runPrCiWatch(h.deps);
     expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
       "fix_stopped",
+    ]);
+  });
+
+  test("holds the row as a setup problem when the work item was blocked by the setup", async () => {
+    const h = harness(
+      fixingSetup(fixItem("blocked", { note: REPO_NOT_ALLOWED_REASON })),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
+      "setup_blocked",
     ]);
   });
 

@@ -14,6 +14,7 @@ import {
 import {
   CI_ROUND_REASON_PREFIX,
   isCiFixOutputAllowed,
+  PR_FIX_TIMEOUT_MISFIT_REASON,
 } from "../lib/ci_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
@@ -57,7 +58,10 @@ import {
   isNewShellScript,
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
-import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
+import {
+  isRepoOwnerStopReason,
+  REPO_NOT_ALLOWED_REASON,
+} from "../lib/repo_owner_gate.ts";
 import {
   assertSha,
   type FactoryConfig,
@@ -1126,8 +1130,7 @@ export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
     ? { ok: true }
     : {
         ok: false,
-        reason:
-          "repository is not allowed by factory_config (owners / repo_allowlist)",
+        reason: REPO_NOT_ALLOWED_REASON,
       };
 }
 
@@ -1182,9 +1185,6 @@ export const PR_STEP_OVERRUN_BASE_SEC = 600;
 
 /** Claude 1回か検査コマンド1件が、timeoutの後に上乗せしうる停止と出力待ちの時間(秒)。ランナーの最大13秒を切り上げた値。worktreeのロックを待つ時間はコマンドのtimeoutの内側で数えるので含めない。 */
 export const PR_COMMAND_STOP_OVERHEAD_SEC = 15;
-
-export const PR_FIX_TIMEOUT_MISFIT_REASON =
-  "pr_fix time settings do not fit the flow step timeout";
 
 export const PR_REVIEW_TIMEOUT_MISFIT_REASON =
   "pr_review time settings do not fit the flow step timeout";

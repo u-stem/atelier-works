@@ -195,7 +195,7 @@ ownerとrepoは、行との照合では小文字で比べる。
 
 ## 保留の理由の語彙
 
-`fix_hold_reason`に書く値は、`lib/pr_ci_support.ts`の`PR_CI_FIX_HOLD_REASONS`の13個に限る。
+`fix_hold_reason`に書く値は、`lib/pr_ci_support.ts`の`PR_CI_FIX_HOLD_REASONS`の14個に限る。
 DBの検査は長さだけなので、書く側をこの型で縛る。
 値ごとの性質と、人が次にすることの固定文は`prCiFixHoldInfo`が返す。
 固定文は2種類ある。
@@ -214,6 +214,7 @@ DBの検査は長さだけなので、書く側をこの型で縛る。
 | `fix_stopped` | 決定的 | 直す作業項目が、pushしないまま人の判断待ちで止まった |
 | `rounds_exhausted` | 決定的 | 直す回数の上限に達した |
 | `not_factory_head` | 決定的 | 最後のpushがFactoryのものでない |
+| `setup_blocked` | 決定的 | 直す作業項目が、設定か環境の問題で、準備のステップで止まった。人が設定か環境を直すまで、起動し直しても同じ理由で止まる |
 | `marker_missing` | 一時的 | Factoryのクローンのスキルが、CIの失敗を直す節を持たない。スキルが入れば外れる |
 | `main_ci_failed` | 一時的 | mainのCIが赤い |
 | `budget_exceeded` | 一時的 | 日次の予算を使い切った |
@@ -225,7 +226,7 @@ noticeを出す時機は、決定的な理由なら保留した時点、一時�
 一時的な保留は、解ければ何も知らせずに済むためである。
 保留が続いたと見なす時間は、`not_reviewed`と`last_fix_unsettled`では`claude_timeout_sec`の2倍、ほかの一時的な理由では30分になる。
 自動レビューや直す作業項目が走っている間は、この2つが長く続いても異常でないためである。
-Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr_fix_finish`がすでに送っているので、noticeだけにする。
+Discordも送るかは理由ごとに決める。`fix_stopped`と`setup_blocked`は、止めた`pr_fix_finish`がすでに送っているので、noticeだけにする。
 通知の手順は[保留した失敗の通知](#保留した失敗の通知)に書く。
 
 ## 回復
@@ -251,7 +252,7 @@ Discordも送るかは理由ごとに決める。`fix_stopped`は、止めた`pr
 | 動いている(終端でない) | そのままにする。読み直した時刻だけを進める |
 | pushした(`rereview_requested`か、直す回がpushしたcommitを記録している) | `superseded`にする。PRのheadは読まない。headの読み遅れで、古いheadの行を起動し直さないためである |
 | イメージが古い理由(自動の再開の対象の理由)で`blocked`になった | 止まってから24時間は戻さない。24時間後に保留なしで戻す。保留の理由ではなく、人がイメージを作り直す猶予である |
-| それ以外の`blocked` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ、保留なしで`failed`に戻す。起動し直す回数は、直す回数の上限が止める |
+| それ以外の`blocked` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ、保留なしで`failed`に戻す。写せない理由で起動し直す回数は、直す回数の上限が止める |
 | `needs_human` | 止めた理由を保留の理由に写して`failed`に戻す。写せなければ`fix_stopped`にする |
 | 存在しない、または上の行に当たらない終端の状態(`failed`、`cancelled`、`expired`、`reviewed`、`approved`、`rejected`など) | 保留なしで`failed`に戻す |
 
@@ -294,9 +295,27 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 | トークンがログを読めない、ログが取得できない | `log_unavailable` |
 | 日次予算の超過 | `budget_exceeded` |
 | PRがドラフトか、auto-mergeが有効 | `pr_draft_or_auto_merge` |
+| 準備のステップが、設定か環境の問題で止めた(次の5つ) | `setup_blocked` |
+
+`setup_blocked`に写す理由は、次の5つである。
+いずれも、人が設定か環境を直すまで、起動し直しても同じ理由で止まる。
+
+- リポジトリが`factory_config`の許可リスト(`owners`、`repo_allowlist`)に無い。
+- リポジトリのオーナーの照合に落ちた。IDの食い違い、リポジトリが見つからない、`owners`に無いオーナー、`factory_repo_id`の食い違いを含む。
+- `pr_fix`の時間設定が、修正・検証ステップのtimeoutに収まらない。
+- CI回の時間設定が、修正・検証ステップのtimeoutに収まらない。
+- 稼働中のworkerが、検査コマンドを安全に実行できない。
+
+写さずに残す理由は、待てば解ける一時的な理由である。
+例は、前の実行のプロセスがworktreeを使っている、実装の実行中である、イメージが古い(24時間の待ちが別にある)である。
+これらは保留なしで戻り、直す回数を使う。
 
 保留なしで戻した行は、直す作業を起動し直せる。
 直す回数の上限(`pr_ci_fix_max_rounds`)が、起動し直しの歯止めになる。
+
+設定か環境の問題で止まった回は、1回で保留に移る。
+止まった回の通知は`pr_fix_finish`のDiscordの1件だけで、保留の通知はnoticeだけにする。
+保留に移さないと、止まるたびに直す回数を使い、上限の2回で`rounds_exhausted`になるまで、同じ通知が繰り返される。
 
 ## 起動
 
@@ -664,7 +683,7 @@ rate limitの待ちが重なると、timeoutを超えうる。そのときはjob
 - トレーラーの無いcommitを含むPRは、自動で直さない。人がPRを直し終えた後も、同じPRのCIの失敗は人が直す。
 - 人がFactoryのcommitをamend、rebase、cherry-pickすると、トレーラーが残り、Factoryのcommitとして扱う。人が書き換えたPRを、自動で直しうる。
 - `last_fix_unsettled`で保留するのは、終端でない`pr_fix`がある場合だけである。直近の`pr_fix`が失敗や`needs_human`で終わっていても起動する。意図した縮小である。
-- 準備の段階で止まる`guard_blocked`の連続は、直す回数を使う。上限に達すると止まる。受け入れた挙動である。
+- 準備の段階で止まる`guard_blocked`のうち、待てば解ける一時的な理由の連続は、直す回数を使う。上限に達すると止まる。受け入れた挙動である。設定か環境の理由は、`setup_blocked`にして最初の1回で保留する。
 - 取り消された実行を再実行して失敗した行の`other_conclusion`と`unfixable_job`の保留は、外れない。意図した挙動である。
 - 予算(`daily_budget_usd`)は、走行中の分を数えない。1日の上限を、走行中のClaudeの費用の分だけ超えうる。
 - ジョブIDの記録と取り消しの両方が失敗した回は、Claudeが走ってもラウンドに数えないことがある。歯止めは、`fix_attempts`の上限と日次の予算である。

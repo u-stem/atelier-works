@@ -1179,6 +1179,7 @@ const DETERMINISTIC_HOLDS = [
   "fix_stopped",
   "rounds_exhausted",
   "not_factory_head",
+  "setup_blocked",
 ] as const;
 
 const TEMPORARY_HOLDS = [
@@ -1417,6 +1418,10 @@ describe("prCiFixHoldInfo", () => {
 
   test("leaves the discord message of a stopped fix to the fix flow", () => {
     expect(prCiFixHoldInfo("fix_stopped").discord).toBe(false);
+  });
+
+  test("leaves the discord message of a setup problem to the fix flow", () => {
+    expect(prCiFixHoldInfo("setup_blocked").discord).toBe(false);
   });
 
   test("sends the discord message when the rounds are exhausted", () => {
