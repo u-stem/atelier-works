@@ -120,7 +120,8 @@ export function hasAttribute(code: string): boolean {
     ) {
       return true;
     }
-    // 行頭の`-->`と`<!--`は、旧式のHTML風1行コメントの開始である。
+    // 行頭の`-->`は、旧式のHTML風1行コメントの開始で、`transformSync`は読んでマクロを実行する(実測した)。
+    // `<!--`は今のBunでは構文エラーで実行されないが、版が変わっても安全なよう断る側に倒す。
     if (code.startsWith("-->", cursor) || code.startsWith("<!--", cursor)) {
       return true;
     }

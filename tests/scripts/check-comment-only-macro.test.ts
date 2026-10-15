@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  comparisonTranspiler,
   isCommentOnlyChange,
   transpiledCode,
 } from "../../scripts/check-comment-only-diff.ts";
@@ -22,6 +23,8 @@ const SPACES: Record<string, string> = {
   "an ideographic space": String.fromCharCode(0x3000),
   "a newline": "\n",
   "a block comment": "/* c */",
+  // `-->`は`transformSync`が読んでマクロを実行する(実測した)。
+  // `<!--`は今のBunでは構文エラーになり実行されないが、版が変わっても安全なよう断る側に倒す。
   "an html close comment": "\n--> c\n",
   "an html open comment": "\n<!-- c\n",
 };
@@ -31,12 +34,12 @@ type Make = (note: string) => string;
 type Probe = {
   readonly dir: string;
   readonly marker: string;
+  readonly macroPath: string;
   readonly attribute: (gap: string, keyword: string) => Make;
   readonly prefixed: (kind: PrefixKind) => Make;
 };
 type PrefixKind =
   | "absolute"
-  | "relative"
   | "node builtin"
   | "dynamic import"
   | "re-export"
@@ -60,7 +63,6 @@ function macroProbe(): Probe {
   );
   const prefixed: Record<PrefixKind, string> = {
     absolute: `import { f } from ${prefixedMacro};\nexport const x = f();\n`,
-    relative: `import { f } from "macro:./m.ts";\nexport const x = f();\n`,
     "node builtin": `import { writeFileSync } from "macro:node:fs";\nexport const x = writeFileSync(${quotedMarker}, "ran");\n`,
     "dynamic import": `export const x = await import(${prefixedMacro});\n`,
     "re-export": `export { f } from ${prefixedMacro};\n`,
@@ -69,6 +71,7 @@ function macroProbe(): Probe {
   return {
     dir,
     marker,
+    macroPath: macro,
     attribute: (gap, keyword) => (note) =>
       `// ${note}\nimport { f } from ${quotedMacro} ${keyword}${gap}{ type: "macro" };\nexport const x = f();\n`,
     prefixed: (kind) => (note) => `// ${note}\n${prefixed[kind]}`,
@@ -94,9 +97,11 @@ const ATTRIBUTE_VARIANTS = Object.entries(SPACES).flatMap(([name, gap]) =>
       ] as const,
   ),
 );
+// 相対パスの`macro:./m.ts`は、一時ディレクトリでなく実行時の作業ディレクトリ基準で解決され、
+// 印を書けないので、変種に入れない。断ることは、固定の文のテストで確かめる。
+// タグ付きテンプレートでのマクロの呼び出しは、Bunが拒否するので実行されない(実測した)。
 const PREFIX_KINDS: readonly PrefixKind[] = [
   "absolute",
-  "relative",
   "node builtin",
   "dynamic import",
   "re-export",
@@ -171,6 +176,10 @@ describe("control: a plain transformSync runs the macro", () => {
     ["with and a space", (probe: Probe) => probe.attribute(" ", "with")],
     ["assert and a space", (probe: Probe) => probe.attribute(" ", "assert")],
     [
+      "with and an html close comment",
+      (probe: Probe) => probe.attribute("\n--> c\n", "with"),
+    ],
+    [
       "with and a no-break space",
       (probe: Probe) => probe.attribute(String.fromCharCode(0xa0), "with"),
     ],
@@ -193,6 +202,63 @@ describe("control: a plain transformSync runs the macro", () => {
         // マクロの戻り値をASTにできないときの例外。印の有無だけを見る。
       }
       expect(existsSync(probe.marker)).toBe(true);
+    });
+  });
+});
+
+// 事前の拒否を通り抜ける入力が将来あっても、マクロ自体が無効なら実行されない。
+// 版が上がって`macro: false`の挙動が変わったときに、ここで気づく。
+describe("the transpiler of the comparison has macros disabled", () => {
+  test.each(VARIANTS)("so it does not run the macro of %s", (_name, build) => {
+    withProbe((probe) => {
+      try {
+        comparisonTranspiler("a.tsx").transformSync(build(probe)("n"));
+      } catch {
+        // 無効なマクロの例外や構文エラーは想定内。印の有無だけを見る。
+      }
+      expect(existsSync(probe.marker)).toBe(false);
+    });
+  });
+
+  test("so it still transpiles a source without a macro as the default does", () => {
+    const code = "// c\nexport const x: number = 1;\n";
+    expect(comparisonTranspiler("a.tsx").transformSync(code)).toBe(
+      new Bun.Transpiler({ loader: "tsx" }).transformSync(code),
+    );
+  });
+
+  test("so it still transpiles a json import attribute", () => {
+    const code =
+      'import j from "./a.json" with { type: "json" };\nexport { j };\n';
+    expect(comparisonTranspiler("a.tsx").transformSync(code)).toBe(
+      new Bun.Transpiler({ loader: "tsx" }).transformSync(code),
+    );
+  });
+});
+
+// 次の形は、素の`transformSync`でもマクロを実行しない(Bun 1.4.2で実測した)。
+// 型だけのimportは変換で消え、動的importの第2引数は読まれず、タグ付きテンプレートでの
+// マクロの呼び出しはBunが拒否する。
+describe("forms that a plain transformSync does not run", () => {
+  const FORMS: Record<string, (probe: Probe) => string> = {
+    "a type-only import with a macro prefix": (probe) =>
+      `import type { f } from "macro:${probe.macroPath}";\nexport const x = 1;\n`,
+    "a dynamic import with an attribute argument": (probe) =>
+      `export const x = await import(${JSON.stringify(probe.macroPath)}, { with: { type: "macro" } });\n`,
+    "a dynamic import with a macro prefix": (probe) =>
+      `export const x = await import("macro:${probe.macroPath}");\n`,
+    "a tagged template call of a macro": (probe) =>
+      `import { f } from ${JSON.stringify(probe.macroPath)} with { type: "macro" };\nexport const x = f\`a\`;\n`,
+  };
+
+  test.each(Object.entries(FORMS))("%s", (_name, build) => {
+    withProbe((probe) => {
+      try {
+        new Bun.Transpiler({ loader: "tsx" }).transformSync(build(probe));
+      } catch {
+        // タグ付きテンプレートの拒否の例外。印の有無だけを見る。
+      }
+      expect(existsSync(probe.marker)).toBe(false);
     });
   });
 });

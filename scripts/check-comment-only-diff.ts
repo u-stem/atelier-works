@@ -17,7 +17,8 @@
 //   未使用のimportの削除など、変換で消えるコードの変更も同様に見逃しうる。
 // - [誤検知] Transpilerで比べる経路(tsxと、スキャナーが止まったts / js)では、マクロを指定
 //   しうる形のソースを変換せず、変更ありとして報告する。マクロの実行を避けるためである。
-//   形は、import属性(`with`、`assert`の後の波括弧)と、`macro:`で始まるimport指定子である。
+//   形は、import属性(`with`、`assert`の後の波括弧、またはコメントの開始
+//   `/*`、`//`、`-->`、`<!--`)と、`macro:`で始まるimport指定子である。
 //   属性は字句で見るので、文字列やコメントの中の同じ形も報告する。
 //   スキャナーが通るts / jsはTranspilerを使わず、この形を含んでいても比較できる。
 // - `git diff`は未追跡ファイルを出さないため、未追跡の新規ファイルは対象外。
@@ -84,18 +85,38 @@ function loaderOf(path: string): TranspilerLoader {
  * マクロの指定には、import属性(`with`、`assert`)と、指定子の`macro:`接頭辞の2つがある。
  * どちらも、変換の前に固定の文の例外で断る。
  * 属性は、`hasAttribute`が字句で見る。文字列やコメントの中の出現も断る側に倒す。
- * 接頭辞は、エスケープ(`macro:`)で書かれても見落とさないよう、`scanImports`が
+ * 接頭辞は、`\u006d`のようなエスケープで書かれても見落とさないよう、`scanImports`が
  * 返す復号後の指定子で見る。`scanImports`はマクロを実行しない。
+ * 変換に使うTranspilerはマクロを無効にしてあり、上の拒否を通り抜けた入力にも備える。
  */
 export function transpiledCode(path: string, text: string): string {
   if (hasAttribute(text)) {
     throw new Error("import attributes are not allowed in compared sources");
   }
-  const transpiler = new Bun.Transpiler({ loader: loaderOf(path) });
+  const transpiler = comparisonTranspiler(path);
   if (transpiler.scanImports(text).some((e) => e.path.startsWith("macro:"))) {
     throw new Error("macro imports are not allowed in compared sources");
   }
   return transpiler.transformSync(text);
+}
+
+// `macro: false`でマクロを無効にする。Bun 1.4.2は受け付けるが、型定義の`macro`は
+// `MacroMap`で`false`を許さない。型を曲げずに通すため、JSONから読んだ値を型ガードで確かめる。
+const MACRO_DISABLED: unknown = JSON.parse('{"macro":false}');
+
+function isTranspilerOptions(value: unknown): value is Bun.TranspilerOptions {
+  return typeof value === "object" && value !== null;
+}
+
+/**
+ * 比較に使う`Bun.Transpiler`を返す。マクロは無効で、マクロを指定したimportはビルドエラーになる。
+ * 型だけの比較には影響しない(マクロの無いソースの出力は既定と同じことをテストで固定している)。
+ */
+export function comparisonTranspiler(path: string): Bun.Transpiler {
+  if (!isTranspilerOptions(MACRO_DISABLED)) {
+    throw new Error("macro option must be an object");
+  }
+  return new Bun.Transpiler({ ...MACRO_DISABLED, loader: loaderOf(path) });
 }
 
 function sameTranspiled(path: string, before: string, after: string): boolean {
