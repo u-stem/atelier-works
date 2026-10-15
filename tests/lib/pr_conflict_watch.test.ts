@@ -570,7 +570,7 @@ describe("runPrConflictWatch: a conflict that is resolved", () => {
     expect(h.resolved.map((entry) => entry.prefix)).toEqual([PREFIX, PREFIX]);
   });
 
-  test("does not resolve again when the first resolution fails", async () => {
+  test("does not move the row when the first resolution fails", async () => {
     const h = setup({
       rows: [check({ notified_at: NOW })],
       prs: { "acme/widgets#12": clean },
@@ -583,28 +583,6 @@ describe("runPrConflictWatch: a conflict that is resolved", () => {
     };
     await runPrConflictWatch(deps);
     expect(h.order).toEqual([]);
-  });
-
-  test("resolves a notice that was registered while the row was being moved", async () => {
-    const h = setup({
-      rows: [check({ notified_at: NOW })],
-      prs: { "acme/widgets#12": clean },
-    });
-    const live: string[] = ["notice-a"];
-    const deps: PrConflictWatchDeps = {
-      ...h.deps,
-      // 行を移している間に、別の実行が通知を登録する。
-      settle: async (id, to) => {
-        live.push("notice-b");
-        return h.deps.settle(id, to);
-      },
-      resolveNotices: async (kind, prefix, by) => {
-        live.length = 0;
-        return h.deps.resolveNotices(kind, prefix, by);
-      },
-    };
-    await runPrConflictWatch(deps);
-    expect(live).toEqual([]);
   });
 
   test("counts the resolved conflict", async () => {

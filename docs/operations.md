@@ -1427,23 +1427,41 @@ PATがリポジトリを読めなくなったときは、通知を解決せず�
 有効にする手順は次のとおりである。
 有効にした最初の巡回で、そのとき競合している開いたFactoryのPRが、すべて通知されるためである。
 
-1. 開いているFactoryのPRの数を数える。PATのアカウントで、次のように実行する。数は、あとで`tracked`と突き合わせる。
+1. migrationが反映済みであることを確かめる。競合の記録の表(`pr_conflict_checks`)を作るmigrationは、`self_update`が反映する。デプロイの記録で、反映が成功していることを見る。
+2. 開いているFactoryのPRの数を、リポジトリごとに数える。リポジトリを`-R`で指定し、PATのアカウントのログイン名を`--author`に渡す。下書きは数えない。
 
    ```bash
-   gh pr list --author @me --state open --search "head:factory/issue-" --json number --jq length
+   gh pr list -R <owner>/<repo> --author <PATのアカウント> --state open --limit 200 --search "draft:false head:factory/issue-" --json number --jq length
    ```
 
-2. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
-3. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
-4. 最初の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。結果の項目は、次のとおりである。
+   各リポジトリの数を合計して、あとで`tracked`と比べる。`gh pr list`は、`-R`で指定した1つのリポジトリしか数えず、`--limit`の既定は30である。
+   `head:`の検索が接頭辞に合わないときは、`--search`を外し、`--json headRefName,isDraft`で、`factory/issue-`で始まり下書きでないものに絞って数える。
+3. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
+4. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
+5. 最初の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。結果の項目は、次のとおりである。
    - `tracked`は読んだPRの数、`conflicted`は競合しているPRの数、`skipped`は見送ったPRの数である。
+   - `errors`は0で、`unauthorized`と`rateLimited`は偽である。Consoleの失敗の記録に、`f/factory/watch_pr_conflicts`の行が無い。
    - 最初の回は、GitHubがマージ可否をまだ計算しておらず(`null`)、`skipped`が多く出やすい。
-5. 2回目の巡回の後、`skipped`が減り、`conflicted`が揃ったことを確かめる。`tracked`は、1で数えた数と近いはずである。
-6. 競合しているPRがあれば、通知`pr_conflict`が1件ずつ残ることを確かめる。解消した後の巡回で、通知が自動で解決されることを確かめる。
+6. 2回目の巡回の後、`skipped`が減り、`conflicted`が揃ったことを確かめる。`tracked`は、2で合計した数と近いはずである。
+7. 競合しているPRがあれば、通知`pr_conflict`が1件ずつ残ることを確かめる。解消した後の巡回で、通知が自動で解決されることを確かめる。
+
+有効にした時点で競合するPRが無かったときは、通知、Discord、自動解決の経路は未確認のままである。最初の実際の競合で確かめる。
+通知が1件残ること、Discordに`needs_human`が届くこと、競合が解けると通知が自動で解決されることを見る。Discordに届かなかったときは、ログ`pr conflict notice was not delivered`が出る。
 
 `tracked`が0で、`errors`も0のときは、PRの一覧の`user.login`や`user.id`が期待どおりに載っていない可能性がある。作者がPATのアカウントと合わないと、PRを見つけられないためである。
-リポジトリを見つける元の動作は、ログ`pr conflict repositories collected`の件数で確かめる。
-件数は、作業項目、競合の行、設定の明示、検索の順に出る。リポジトリ名は出さない。検索の件数が0のままなら、検索の索引か権限を疑う。
+
+リポジトリを見つける元の動作は、ログ`pr conflict repositories collected`の件数で確かめる。リポジトリ名は出さない。
+
+| 項目 | 意味 |
+| --- | --- |
+| `work_items` | 作業項目を持つリポジトリの数 |
+| `conflict_rows` | 競合の記録の行を持つリポジトリの数 |
+| `explicit` | 設定で明示されたリポジトリの数 |
+| `searched` | 検索が返したPRの件数。リポジトリの数ではなく、同じリポジトリが重なり、Factory以外のPRも含む |
+| `total` | 重複を除いたリポジトリの数 |
+
+検索が働いたかは、PATのアカウントが開いているPRを持つのに、`searched`が0になっていないかで確かめる。0のままなら、検索の索引か権限を疑う。
+`total`は、4つの元を合わせた和集合の数なので、`work_items`、`conflict_rows`、`explicit`の和に、検索だけが見つけたリポジトリを足した数以下になる。
 
 止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 止めた後に残った通知は、そのままにしておく。再開した後に、競合が続く間は通知が残り、競合が解けると自動で解決される。
