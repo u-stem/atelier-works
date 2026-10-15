@@ -4,6 +4,7 @@ import {
   collectCiFixChanges,
   inspectCiFixChanges,
   isLockOnlyChange,
+  isRehashCandidate,
   listCiAddedPathsInTree,
   parseRawDiffZ,
   parseZeroContextPatch,
@@ -746,6 +747,38 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
     expect(reasons).toEqual([
       "ci round change not allowed (protected_path): sub/wmill-lock.yaml",
     ]);
+  });
+});
+
+describe("isRehashCandidate", () => {
+  const lock = {
+    path: "wmill-lock.yaml",
+    status: "modified" as const,
+    mode: "100644",
+    addedLines: [],
+    removedLineCount: 0,
+  };
+  const collected = { changes: [lock], overflow: false, timedOut: false };
+
+  test("is true for one modified regular lock that was read completely", () => {
+    expect(isRehashCandidate(collected)).toBe(true);
+  });
+
+  test("is false when the changes overflowed", () => {
+    expect(isRehashCandidate({ ...collected, overflow: true })).toBe(false);
+  });
+
+  test("is false when reading the changes timed out", () => {
+    expect(isRehashCandidate({ ...collected, timedOut: true })).toBe(false);
+  });
+
+  test("is false when another file changed too", () => {
+    expect(
+      isRehashCandidate({
+        ...collected,
+        changes: [lock, { ...lock, path: "a.ts" }],
+      }),
+    ).toBe(false);
   });
 });
 

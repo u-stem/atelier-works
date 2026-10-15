@@ -1,6 +1,11 @@
 // CI回の配線の構造のテスト。
 // 各ステップのmainはWindmillとDBを直接使うので、配線はソースの並びで確かめる。
 // 部品そのものの判定は`tests/lib/ci_fix_round.test.ts`が確かめる。
+//
+// このテストには限界がある。
+// ソースの文字列と完全に一致するかを見るので、整形(biome)や変数名の変更で落ちる。落ちたときは、配線が変わったかを確かめて、文字列を直す。
+// 結合の誤りを捕まえるのは、呼び出しの前後関係を見るテスト(`indexOf`で順序を比べるもの)である。
+// 文字列の一致は、その呼び出しが1か所にあることしか保証しない。呼び出しの引数や条件の中身は、部品のテストが確かめる。
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -36,18 +41,22 @@ describe("the tools of Claude in a CI round", () => {
 
   test("is used by the fix step", async () => {
     const text = await source("pr_fix_apply.ts");
-    expect([
-      count(text, "tools: CI_FIX_TOOLS,"),
-      count(text, "allowedTools: CI_FIX_ALLOWED_TOOLS,"),
-    ]).toEqual([1, 1]);
+    expect(count(text, "tools: CI_FIX_TOOLS,")).toBe(1);
+  });
+
+  test("allows only the shared tools in the fix step", async () => {
+    const text = await source("pr_fix_apply.ts");
+    expect(count(text, "allowedTools: CI_FIX_ALLOWED_TOOLS,")).toBe(1);
   });
 
   test("is used by the retry in the verify step", async () => {
     const text = await source("pr_fix_verify.ts");
-    expect([
-      count(text, "tools: CI_FIX_TOOLS,"),
-      count(text, "allowedTools: CI_FIX_ALLOWED_TOOLS,"),
-    ]).toEqual([1, 1]);
+    expect(count(text, "tools: CI_FIX_TOOLS,")).toBe(1);
+  });
+
+  test("allows only the shared tools in the retry of the verify step", async () => {
+    const text = await source("pr_fix_verify.ts");
+    expect(count(text, "allowedTools: CI_FIX_ALLOWED_TOOLS,")).toBe(1);
   });
 });
 
@@ -131,14 +140,23 @@ describe("the finish step of a recomputed lock", () => {
     ).toBe(1);
   });
 
+  test("reads the staged lock inside the check", async () => {
+    const text = await source("pr_fix_finish.ts");
+    const start = text.indexOf("rehashCheck: async () => {");
+    expect(text.slice(start, start + 600)).toContain("readStagedRootLock(");
+  });
+
   test("compares the staged lock with the confirmed one inside the check", async () => {
     const text = await source("pr_fix_finish.ts");
     const start = text.indexOf("rehashCheck: async () => {");
-    const body = text.slice(start, start + 600);
-    expect(
-      body.includes("readStagedRootLock(") &&
-        body.includes("bytesEqual(staged, confirmed.lockBytes)"),
-    ).toBe(true);
+    expect(text.slice(start, start + 600)).toContain(
+      "bytesEqual(staged, confirmed.lockBytes)",
+    );
+  });
+
+  test("takes a recomputed lock as a candidate only when the changes were read completely", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(count(text, "if (isRehashCandidate(collected)) {")).toBe(1);
   });
 
   test("reads the staged lock as bytes", async () => {

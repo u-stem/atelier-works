@@ -484,7 +484,7 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  *   再計算の事前検査が通らない場合(依存や入力の`schema`が変わるPR、PRがmainの先端を含まない場合など)と、
  *   再計算しても本文が変わらない場合(`metadata`ジョブがhash以外の原因で落ちている)である。
  *   理由の種別は、作業項目の理由に残る。
- *   読み取りの失敗(`port_error`など)のような一時的な理由でも、同じheadでは起動し直さない。人がpushして新しいheadにする。
+ *   読み取りの失敗(`port_error`など)のような一時的な理由は、この保留にしない。例外として投げ、flowの再試行に任せる。
  * - `other_conclusion`: 失敗ではなく、取り消しや期限切れなどで終わった。
  * - `log_unavailable`: 失敗のログを読めない。
  * - `fix_stopped`: 直す作業が、pushしないまま人の判断待ちで止まった。
@@ -557,9 +557,9 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     temporary: false,
     discord: true,
     nextAction:
-      "metadataジョブの失敗を、再計算では直せない。再計算の事前検査が通らなかったか、再計算しても本文が変わらない。理由は作業項目に記録した。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushする",
+      "metadataジョブの失敗を、再計算では直せない。再計算の事前検査が通らなかったか、再計算しても本文が変わらない。理由は作業項目に記録した。metadataジョブがWindmillの起動やログインで落ちたときは、実行をやり直す。それ以外は、必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushする",
     stopAction:
-      "metadataジョブの失敗を、再計算では直せません。再計算の事前検査が通らなかったか、再計算しても本文が変わりません。理由は作業項目に記録しました。必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushしてください",
+      "metadataジョブの失敗を、再計算では直せません。再計算の事前検査が通らなかったか、再計算しても本文が変わりません。理由は作業項目に記録しました。metadataジョブがWindmillの起動やログインで落ちたときは、実行をやり直してください。それ以外は、必要ならmainを取り込み、「mise run metadata」を実行して差分をコミットし、PRにpushしてください",
   },
   other_conclusion: {
     temporary: false,

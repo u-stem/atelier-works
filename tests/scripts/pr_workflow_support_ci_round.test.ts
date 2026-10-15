@@ -5,6 +5,7 @@ import {
   CI_ROUND_REPLIES_REASON,
   ciClaudeFailureText,
 } from "../../f/factory/lib/ci_fix_round.ts";
+import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import { prCiFixHoldInfo } from "../../f/factory/lib/pr_ci_support.ts";
 import {
   describeReason,
@@ -101,6 +102,12 @@ describe("nextActionFor a CI round", () => {
         true,
       ),
     ).toBe(prCiFixHoldInfo("metadata_manual").stopAction);
+  });
+
+  test("gives the action of the hold reason when the base branch moved before a push", () => {
+    expect(nextActionFor(CI_ROUND_REHASH_STALE_REASON)).toBe(
+      prCiFixHoldInfo("metadata_manual").stopAction,
+    );
   });
 
   test("describes a lock that cannot be recomputed as a stopped CI round", () => {

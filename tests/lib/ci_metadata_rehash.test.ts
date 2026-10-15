@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -105,7 +106,28 @@ describe("runMetadataRound", () => {
     expect(probe.writes).toEqual(["new lock\n"]);
   });
 
-  test("rewrites the lock first even when a check job also failed", async () => {
+  test("leaves a mixed failure to Claude without recomputing", async () => {
+    const { deps: d, probe } = deps(
+      fixable({
+        jobs: [
+          {
+            id: 1,
+            runId: 2,
+            headSha: "a".repeat(40),
+            name: "check",
+            status: "completed",
+            conclusion: "failure",
+            steps: [],
+          },
+        ],
+      }),
+      OK_PLAN,
+    );
+    expect(await runMetadataRound(d)).toBeNull();
+    expect(probe.rehashes).toBe(0);
+  });
+
+  test("writes nothing for a mixed failure", async () => {
     const { deps: d, probe } = deps(
       fixable({
         jobs: [
@@ -123,7 +145,7 @@ describe("runMetadataRound", () => {
       OK_PLAN,
     );
     await runMetadataRound(d);
-    expect(probe.writes.length).toBe(1);
+    expect(probe.writes).toEqual([]);
   });
 
   test("hands the lock to a human when the plan fails", async () => {
@@ -184,15 +206,10 @@ describe("runMetadataRound when the lock is already up to date", () => {
     expect(probe.writes).toEqual([]);
   });
 
-  test("goes on with the other failed jobs when a check job also failed", async () => {
-    const { deps: d } = deps(fixable({ jobs: [CHECK_JOB] }), SAME);
-    expect(await runMetadataRound(d)).toBeNull();
-  });
-
-  test("does not write a lock that would not change when a check job also failed", async () => {
+  test("does not plan when a check job also failed", async () => {
     const { deps: d, probe } = deps(fixable({ jobs: [CHECK_JOB] }), SAME);
     await runMetadataRound(d);
-    expect(probe.writes).toEqual([]);
+    expect(probe.plans).toBe(0);
   });
 
   test("states the reason without a path", () => {
@@ -227,6 +244,46 @@ describe("runMetadataRound when the lock is already up to date", () => {
         },
       }),
     ).rejects.toThrow("disk hiccup");
+  });
+
+  test.each(["port_error", "ancestry_unknown", "internal_error"] as const)(
+    "lets the transient failure %s of the precheck go up for a retry",
+    async (reason) => {
+      await expect(
+        rehashMetadataLock({
+          plan: async () => ({ ok: false, reason }),
+          writeLock: async () => {},
+        }),
+      ).rejects.toThrow(reason);
+    },
+  );
+
+  test.each([
+    "dependency_changed",
+    "head_lacks_base",
+    "base_stale",
+    "main_changed",
+  ] as const)(
+    "hands the fixed failure %s of the precheck to a human",
+    async (reason) => {
+      expect(
+        await rehashMetadataLock({
+          plan: async () => ({ ok: false, reason }),
+          writeLock: async () => {},
+        }),
+      ).toEqual({ kind: "manual", reason });
+    },
+  );
+
+  test("does not write when the precheck failed for a transient reason", async () => {
+    const writes: string[] = [];
+    await rehashMetadataLock({
+      plan: async () => ({ ok: false, reason: "port_error" }),
+      writeLock: async (text) => {
+        writes.push(text);
+      },
+    }).catch(() => undefined);
+    expect(writes).toEqual([]);
   });
 
   test("lets an error of the plan go up for a retry", async () => {
@@ -341,6 +398,23 @@ describe("writeRootWmillLock", () => {
     await expect(writeRootWmillLock(dir, "new\n")).rejects.toBeInstanceOf(
       LockNotWritableError,
     );
+  });
+
+  test("reports an executable lock as a lock that cannot be written", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "wmill-lock.yaml"), "old\n");
+    chmodSync(join(dir, "wmill-lock.yaml"), 0o755);
+    await expect(writeRootWmillLock(dir, "new\n")).rejects.toBeInstanceOf(
+      LockNotWritableError,
+    );
+  });
+
+  test("leaves an executable lock untouched", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "wmill-lock.yaml"), "old\n");
+    chmodSync(join(dir, "wmill-lock.yaml"), 0o755);
+    await writeRootWmillLock(dir, "new\n").catch(() => undefined);
+    expect(readFileSync(join(dir, "wmill-lock.yaml"), "utf-8")).toBe("old\n");
   });
 
   test("reports a directory as a lock that cannot be written", async () => {

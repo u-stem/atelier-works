@@ -26,10 +26,12 @@ CIのログはリポジトリへ書ける人が決める外部入力である。
 | --- | --- |
 | `lib/github.ts` | ジョブの一覧とログ本文の取得。IDと応答の照合 |
 | `lib/ci_log_support.ts` | ログの整形と絞り込み。秘密値の検査。揮発する値の型。Claudeの出力文字列の検査 |
-| `lib/ci_fix_classify.ts` | 失敗が、ソースの編集で直せる種類かの分類 |
+| `lib/ci_fix_classify.ts` | 失敗が、自動で直せる種類かの分類。`metadata`の失敗は、hashの再計算の経路として分ける |
 | `lib/ci_fix_prompt.ts` | CI回のプロンプトと出力のJSON schema |
 | `lib/ci_fix_paths.ts` | Claudeが加えた変更の許可リスト方式の検査 |
-| `lib/ci_fix_round.ts` | 上の部品をつなぐ流れ。ログから抜粋まで、変更の入力の組み立て、通常の回との違いの判断 |
+| `lib/ci_fix_round.ts` | 上の部品をつなぐ流れ。PRの状態の確認と分類(`readCiFailure`)、ログから抜粋まで(`gatherCiLogs`)、変更の入力の組み立て、通常の回との違いの判断。`wmill-lock.yaml`だけの変更の形の判定(`isLockOnlyChange`) |
+| `lib/ci_metadata_rehash.ts` | `metadata`だけが落ちた回の再計算の流れ。書き込み、独立した照合(`confirmRehash`)、pushの直前の再確認、固定の理由 |
+| `lib/metadata_git_ports.ts` | 事前検査が読むポートのgitの実装。baseの先端のcommitの取り込み |
 | `lib/workspace.ts` | 文字列をgitleaksで検査する実行(`runGitleaksOnText`) |
 
 ## CI回のflowが守る前提
@@ -161,11 +163,19 @@ commitする変更が無いときの理由は、返信を投稿したとは書�
 
 ### metadataジョブの失敗を直す経路
 
-`metadata`ジョブが落ちたCI回は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す(決定的な経路)。
+`metadata`ジョブだけが落ちたCI回は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す(決定的な経路)。
 修正のステップは、日次予算の検査より前に、この経路を試す。費用がかからないためである。
 
+`check`などの直せる失敗と`metadata`が同時に落ちたときは、再計算せず、Claudeが先に`check`などを直す。
+Claudeが`f/`のscriptを直すと、hashが再び古くなる。
+先に再計算すると、その後にもう一度再計算が要り、`pr_ci_fix_max_rounds`(既定2)を使い切って`rounds_exhausted`になる。
+Claudeを先にすれば、1回目でClaudeが直し、次のCIで`metadata`だけが落ちて、2回目に再計算で直る。
+混在の回は、通常の`fixable`と同じに、日次予算で保留する。
+予算を使い切った日に、混在の行を予算の免除でclaimすると、巡回のたびにラウンドを消費するためである。
+保留した行は、巡回のたびに読み直すだけで、ラウンドを消費しない。
+
 1. `readCiFailure`で、PRが開いていて、headが失敗のheadのままであることと、失敗の分類を確かめる。
-   `metadata`が落ちていなければ、通常の流れに進む。
+   `metadata`だけが落ちているのでなければ、通常の流れに進む。
 2. GitHubのAPIでPRのbaseブランチ名とその今の先端のshaを読み、そのcommitをローカルに取り込む(`fetchCommit`)。
    事前検査は、baseの先端の木を読むためである。
    取り込みはshaを指定し、取り込み先を指定しない。
@@ -179,34 +189,27 @@ commitする変更が無いときの理由は、返信を投稿したとは書�
 4. 書き換えたときは、固定の件名と本文(`METADATA_REHASH_COMMIT_SUBJECT`と`METADATA_REHASH_COMMIT_BODY`)を持つ`done`で返す。
    返信は空である。
 5. 次のときは、`blocked`で返す。
-   - 事前検査が通らない。依存やschemaが変わるPR、mainを取り込んでいないPRなどである。
-   - 再計算しても本文が変わらず、`metadata`だけが落ちている(`lock_up_to_date`)。
+   - 事前検査が、固定の理由で通らない。依存やschemaが変わるPR、mainを取り込んでいないPRなどである。
+   - 再計算しても本文が変わらない(`lock_up_to_date`)。
      `metadata`ジョブが、Windmillの起動やログインなど、hash以外の原因で落ちているので、再計算では直らない。
-   - 根の`wmill-lock.yaml`が、symlink、通常のファイルでないもの、無いファイル、書き込めないファイルである(`lock_not_writable`)。
+   - 根の`wmill-lock.yaml`が、symlink、通常のファイルでないもの、実行権限のあるもの、無いファイル、書き込めないファイルである(`lock_not_writable`)。
+     実行権限のあるファイルは、モード`100755`でcommitされ、後のステップが`100644`だけを許すためである。
 
    理由は`ci round: the lock cannot be recomputed automatically (<種別>)`である。
    種別は固定の語彙で、PRの作者が決めるパスと補足は入れない。
    種別は作業項目の理由に残り、再計算が直せるPRの割合を、種別ごとに数えて測れる。
-6. 再計算しても本文が変わらず、`check`などほかのジョブも落ちているときは、書き換えずに通常の流れに進む。
-   Claudeがそのジョブを直す。この流れは、Claudeを起動する前に日次予算を確かめる。
 
-`check`などの直せる失敗と同時に落ちたときも、先に再計算する。
-hashの食い違いは、`check`をClaudeが直しても残るためである。
-再計算のcommitをpushした後のCIの再実行で、残りの失敗が分かる。
-再計算できないときは、`check`だけを直しても`metadata`が落ち続けるので、Claudeを起動せずに止める。
-
-起動の判断(`decideFixClaim`)は、`metadata`が落ちているときは、`check`などが同時に落ちていても、日次予算で保留しない。
-再計算に費用はかからず、予算はClaudeを起動する修正のステップが、再計算の後に確かめるためである。
 再計算の回も、`pr_ci_fix_max_rounds`が数える回に含まれる。
-Claudeが`f/`のscriptを直すと、その後に`metadata`が落ちて再計算の回が要るので、Claudeに使える回数が減る。
+Claudeの回と再計算の回は、同じ上限を分け合う。
 
 一時的な失敗の扱いは、次のとおりである。
 
-- 読み取り、取り込み、GitHubのAPI、書き込みの`open`以外の失敗は、例外のまま投げる。
-  修正のステップはflowが2回まで再試行し、再計算は何度行っても同じ結果になる。
-- 再試行しても直らない種類(`lock_not_writable`)は、例外にせず、固定の理由の`blocked`にする。
-- 事前検査の`port_error`、`ancestry_unknown`、`internal_error`、`invalid_ref`のような一時的な理由も、保留`metadata_manual`にする。
-  この保留は、同じheadでは起動し直さない。人がpushして新しいheadにする。
+- 事前検査の`port_error`、`ancestry_unknown`、`internal_error`は、一時的な理由として、例外にして投げる。
+  `metadata_manual`にしない。修正のステップはflowが2回まで再試行し、再計算は何度行っても同じ結果になる。
+- 取り込み、GitHubのAPI、書き込みの`open`以外の失敗も、例外のまま投げ、同じ再試行に任せる。
+- 次の失敗は、例外にせず、固定の理由の`blocked`にする。
+  - 再試行しても直らない`lock_not_writable`。
+  - 固定の理由の事前検査の失敗。`dependency_changed`、`head_lacks_base`、`base_stale`などである。
 - 検証と完了のステップの照合は、例外を投げたとき、ステップが失敗し、行は回復が戻す。
 
 検証のステップと完了のステップは、前のステップの結果を受け取る欄を足さず、worktreeの変更から再計算の出力かを決める。
@@ -435,6 +438,7 @@ stepの戻り値に混ざると、黙って記録されず、そのstepが失敗
 CI回のClaudeには、シェルもロックファイルを書く権限も無いためである。
 `metadata`だけが失敗したときは、`jobs`が空の`fixable`になる。ログは読まず、Claudeも起動しない。
 `check`などと同時に失敗したときは、`jobs`に`check`などだけが入り、`metadataFailed`が真になる。
+この混在の回は、Claudeが先に`check`などを直し、再計算は、`metadata`だけが落ちた回に行う。
 名前は正規化(互換文字を畳み、小文字にする)して比べる。
 複数のジョブが当たるときは、`unfixable_job`、`other_conclusion`、`fixable`の順に優先する。
 直せない失敗が混ざったまま一部だけを直しても、CIは通らないためである。
@@ -683,7 +687,8 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
 - 再計算が直せるPRの割合は、人の手に回った作業項目の理由で測る。
   理由は`ci round: the lock cannot be recomputed automatically (<種別>)`で、種別は固定の語彙である。
   作業項目の理由を種別ごとに数える。
-- `ls-tree`の出力が上限で切れたときは、ポートが例外を投げ、検査は`port_error`で人の手に回す。
+- `ls-tree`の出力が上限で切れたときは、ポートが例外を投げ、検査は`port_error`を返す。
+  修正のステップは、`port_error`を例外にして、flowの再試行に任せる。
 - パスにU+FFFDを含む項目と、同じパスの重複は、事前検査が`invalid_tree`で人の手に回す。
   不正なUTF-8のパスを文字列にすると、別のパスが同じ文字列になり、表の項目が消えるためである。
 - ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)は、再計算がそのまま残す。
@@ -725,6 +730,8 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
   Factoryがmainを取り込む仕組みが先に要る。
   仕組みを決めるために、過去のFactoryのPRで、`metadata`ジョブが落ちた回にheadがbaseの先端を含んでいた割合を測る。
   この割合が、再計算が直せるPRの上限の目安になる。
+  測るものには、CIが落ちてから監視が拾うまでの間に、mainが進んでheadがbaseの先端を含まなくなる割合も含める。
+  これらの測定は、再計算の配線の外で行う。
 
 ## メタデータのhashの再計算
 

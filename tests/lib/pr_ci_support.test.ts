@@ -1277,6 +1277,18 @@ describe("prCiFixHoldInfo for the metadata job", () => {
     );
   });
 
+  test("tells a human to run the job again when it failed to start Windmill", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "Windmillの起動やログインで落ちたときは、実行をやり直す",
+    );
+  });
+
+  test("tells a human to run the job again in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "Windmillの起動やログインで落ちたときは、実行をやり直してください",
+    );
+  });
+
   test("does not claim that the cause is a dependency change", () => {
     expect(prCiFixHoldInfo("metadata_manual").nextAction).not.toContain("依存");
   });

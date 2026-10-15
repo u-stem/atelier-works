@@ -4,6 +4,7 @@
 
 import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
 import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
+import { CI_ROUND_REHASH_STALE_REASON } from "./ci_metadata_rehash.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
 
@@ -49,7 +50,10 @@ export function holdReasonForStoppedItem(
   if (note.startsWith(ciRoundReason(CI_ROUND_DETAILS.unfixableJob))) {
     return "unfixable_job";
   }
-  if (note.startsWith(ciRoundReason(CI_ROUND_DETAILS.metadataManual))) {
+  if (
+    note.startsWith(ciRoundReason(CI_ROUND_DETAILS.metadataManual)) ||
+    note === CI_ROUND_REHASH_STALE_REASON
+  ) {
     return "metadata_manual";
   }
   if (note.startsWith(ciRoundReason(CI_ROUND_DETAILS.otherConclusion))) {

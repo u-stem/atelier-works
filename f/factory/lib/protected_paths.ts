@@ -92,9 +92,12 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられる。
  * 再計算の出力を配線する`lib/ci_metadata_rehash.ts`と、その`.script.yaml`、`.script.lock`も守る。
  * `wmill-lock.yaml`だけの変更を許す条件(`confirmRehash`、`rehashPushStopReason`、`readStagedRootLock`)と、書き込み先を決める。
- * 一方、`lib/ci_fix_round.ts`は守らない。ほかのCI回の部品と同じく、日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
- * そこに置いた例外の入口(`rehashCheck`)は、`ci_metadata_rehash.ts`の検査を通らない限り開かない。
- * CI回のClaudeには、`ci_`で始まる部品を、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
+ * 一方、次のものは、このリストに入れない。
+ * 例外を開くコールバックの本体(`steps/pr_fix_verify.ts`と`steps/pr_fix_finish.ts`)と、
+ * 変更の形を判定する`isLockOnlyChange`(`lib/ci_fix_round.ts`)である。
+ * ほかのCI回の部品と同じく、日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
+ * これらを書き換えて例外の条件を緩める変更は、マージ前の人のレビューで差分を確かめて止める。
+ * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
  * どれもほかのフローが日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。

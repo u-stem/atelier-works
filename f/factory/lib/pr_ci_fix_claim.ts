@@ -17,13 +17,12 @@ import { generatedByTrailer } from "./workspace.ts";
  * 起動前の分類の結果。
  * `fixable`は、Claudeが直すジョブだけが失敗している。
  * `metadata_only`は、`metadata`だけが失敗している。Claudeを起動せず、hashの再計算で直す。
- * `fixable_with_metadata`は、Claudeが直すジョブと`metadata`が同時に失敗している。
- * 修正のステップが、先に再計算だけを行う。再計算に費用はかからない。
+ * Claudeが直すジョブと`metadata`が同時に失敗しているときも`fixable`である。Claudeが先にそのジョブを直し、
+ * `metadata`は、次の回で`metadata_only`になったときに再計算で直す。
  */
 export type HeadFailureClass =
   | "fixable"
   | "metadata_only"
-  | "fixable_with_metadata"
   | "unfixable_job"
   | "other_conclusion"
   | "no_failure"
@@ -40,10 +39,8 @@ export async function classifyHeadFailure(
 ): Promise<HeadFailureClass> {
   const { verdict } = await classifyFailedRuns(runs, listJobs);
   if (verdict === null) return "no_failure";
-  if (verdict.kind === "fixable" && verdict.metadataFailed) {
-    return verdict.jobs.length === 0
-      ? "metadata_only"
-      : "fixable_with_metadata";
+  if (verdict.kind === "fixable" && verdict.jobs.length === 0) {
+    return "metadata_only";
   }
   return verdict.kind;
 }
@@ -160,8 +157,8 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 6. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
  *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
- *    日次の予算は、`metadata`が失敗しているときには確かめない。再計算に費用はかからないためである。
- *    Claudeが直すジョブも落ちているときは、修正のステップが、再計算の後にClaudeを起動する前で予算を確かめる。
+ *    日次の予算は、`metadata`だけが失敗しているときには確かめない。Claudeを起動せず、費用がかからないためである。
+ *    Claudeが直すジョブも落ちているときは、予算を確かめる。使い切っていれば保留し、行は巡回のたびに読み直すだけで、ラウンドを消費しない。
  * 7. どれにも当たらなければ起動する。
  */
 export async function decideFixClaim(
@@ -191,9 +188,7 @@ export async function decideFixClaim(
   if (failure === "no_failure") return { kind: "skip", why: "no_failure" };
   if (failure === "unreadable") return { kind: "skip", why: "unreadable" };
 
-  const metadataFailed =
-    failure === "metadata_only" || failure === "fixable_with_metadata";
-  if (!metadataFailed && (await readers.budgetExceeded())) {
+  if (failure !== "metadata_only" && (await readers.budgetExceeded())) {
     return hold("budget_exceeded");
   }
   if (await readers.mainCiFailed()) return hold("main_ci_failed");

@@ -12,7 +12,7 @@ import {
   guardCiRoundReasons,
   inspectCiFixChanges,
   isCiRound,
-  isLockOnlyChange,
+  isRehashCandidate,
   listCiAddedPathsInTree,
   nothingToCommitReason,
   runPostPushBookkeeping,
@@ -743,7 +743,7 @@ export async function main(
       head_sha,
       { source: "worktree" },
     );
-    if (!collected.overflow && isLockOnlyChange(collected.changes)) {
+    if (isRehashCandidate(collected)) {
       const confirmation = await confirmRehash({
         ...planner,
         readLock: () => readRootWmillLock(worktree_dir),

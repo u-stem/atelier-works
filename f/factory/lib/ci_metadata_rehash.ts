@@ -82,8 +82,27 @@ export type MetadataRehashOutcome =
   | { readonly kind: "manual"; readonly reason: MetadataManualReason };
 
 /**
+ * 事前検査の失敗のうち、同じ入力でやり直せば通りうる、一時的なもの。
+ * 人の手に回さず、例外にして、flowの再試行に任せる。再計算は何度行っても同じ結果になる。
+ */
+const TRANSIENT_REHASH_REASONS: ReadonlySet<RehashFailureReason> = new Set([
+  "port_error",
+  "ancestry_unknown",
+  "internal_error",
+]);
+
+/** 事前検査が一時的な理由で失敗したことを表す。固定の種別だけを持つ。 */
+export class RehashTransientError extends Error {
+  constructor(reason: RehashFailureReason) {
+    super(`metadata rehash precheck failed (${reason})`);
+    this.name = "RehashTransientError";
+  }
+}
+
+/**
  * 再計算できて、本文が変わるときだけ、ファイルを書き換える。
- * 再計算できないときは、種別だけを返し、何も書かない。本文が変わらないときは`up_to_date`を返し、何も書かない。
+ * 再計算できないときは、種別だけを返し、何も書かない。ただし、一時的な種別(`port_error`、`ancestry_unknown`、`internal_error`)は、
+ * `RehashTransientError`を投げる。本文が変わらないときは`up_to_date`を返し、何も書かない。
  * 書き換えられないlockは`lock_not_writable`にする。
  * 一時的な失敗(読み取りや取り込みの例外、書き込みのその他の例外)は、そのまま投げる。呼び出し側のflowの再試行に任せる。
  */
@@ -91,7 +110,12 @@ export async function rehashMetadataLock(
   deps: RehashLockDeps,
 ): Promise<MetadataRehashOutcome> {
   const plan = await deps.plan();
-  if (!plan.ok) return { kind: "manual", reason: plan.reason };
+  if (!plan.ok) {
+    if (TRANSIENT_REHASH_REASONS.has(plan.reason)) {
+      throw new RehashTransientError(plan.reason);
+    }
+    return { kind: "manual", reason: plan.reason };
+  }
   if (plan.changedKeys.length === 0) return { kind: "up_to_date" };
   try {
     await deps.writeLock(plan.newLock);
@@ -117,22 +141,21 @@ export type MetadataRoundResult =
 
 /**
  * `metadata`ジョブが失敗しているときだけ、再計算を行う。失敗していなければ`null`を返し、呼び出し側が通常の流れを続ける。
- * `check`などの直せる失敗と同時のときも、先に再計算する。
- * hashの食い違いは、`check`をClaudeが直しても残るためで、再計算のcommitをpushした後のCIの再実行で、残りの失敗が分かる。
+ * `check`などの直せる失敗と同時のときは、再計算せず`null`を返す。Claudeが先にそのジョブを直す。
+ * Claudeが`f/`を触るとhashが再び古くなるので、再計算は、`metadata`だけが落ちた次の回に行う。
  * PRを読めないときなど、直せる失敗として分類できなければ`null`を返す。理由は通常の流れが同じ検査で出す。
  * 再計算しても本文が変わらないときは、`metadata`ジョブが、hash以外の原因(Windmillの起動やログインなど)で落ちている。
- * `metadata`だけが落ちているなら、再計算では直せないので、固定の理由(`lock_up_to_date`)で人の手に回す。
- * ほかのジョブも落ちているなら、書き換えずに`null`を返し、通常の流れでClaudeが、そのジョブを直す。
+ * 再計算では直せないので、固定の理由(`lock_up_to_date`)で人の手に回す。
  */
 export async function runMetadataRound(
   deps: MetadataRoundDeps,
 ): Promise<MetadataRoundResult | null> {
   const failure = await deps.readFailure();
   if (failure.kind !== "fixable" || !failure.metadataFailed) return null;
+  if (failure.jobs.length > 0) return null;
   const outcome = await deps.rehash();
   if (outcome.kind === "rewritten") return outcome;
   if (outcome.kind === "up_to_date") {
-    if (failure.jobs.length > 0) return null;
     return { kind: "manual", reason: metadataManualReason("lock_up_to_date") };
   }
   return { kind: "manual", reason: metadataManualReason(outcome.reason) };
@@ -380,7 +403,7 @@ const UNWRITABLE_ERRNO: ReadonlySet<string> = new Set([
 /**
  * worktreeの根の`wmill-lock.yaml`を、通常のファイルとして書き換える。
  * `O_NOFOLLOW`で開き、symlinkはたどらない。`O_CREAT`は付けないので、無いファイルは作らない。
- * 開いたファイルが通常のファイルでないとき、symlink、無いファイル、権限が足りないときは、`LockNotWritableError`を投げる。
+ * 開いたファイルが通常のファイルでないとき、実行権限があるとき、symlink、無いファイル、権限が足りないときは、`LockNotWritableError`を投げる。
  * それ以外の失敗は、そのまま投げる。
  * 書いた後に、ファイルの大きさが本文のバイト数と同じことを確かめる。
  * 書き先は、根の直下のこのファイルだけである。パスは呼び出し側が決めず、PRの作者が決めた名前を使わない。
@@ -404,7 +427,10 @@ export async function writeRootWmillLock(
   }
   try {
     const info = await handle.stat();
-    if (!info.isFile()) throw new LockNotWritableError();
+    // 実行権限のあるファイルは、モード`100755`でcommitされる。後のステップが`100644`だけを許すので、書かずに止める。
+    if (!info.isFile() || (info.mode & 0o111) !== 0) {
+      throw new LockNotWritableError();
+    }
     await handle.truncate(0);
     await handle.writeFile(text, "utf8");
     if ((await handle.stat()).size !== Buffer.byteLength(text, "utf8")) {

@@ -70,7 +70,7 @@ export type PrFixApplyResult = {
  * 使えるツールはRead/Glob/Grep/Edit/Writeに限り、Bashは渡さない。
  * コミットの件名と本文はClaudeが提案したものを使い、`outcome`が"done"のときだけ返す。
  * 日次予算を超えていればClaudeを起動せず"blocked"を返す。
- * CIの失敗を直す回で`metadata`ジョブが落ちていれば、予算の検査より前に、Claudeを起動せずhashを再計算する(`applyMetadataRound`)。
+ * CIの失敗を直す回で`metadata`ジョブだけが落ちていれば、予算の検査より前に、Claudeを起動せずhashを再計算する(`applyMetadataRound`)。
  * worktreeの`.git`が`worktree_git_pointer`(準備ステップの記録)と一致しないとき、
  * 準備ステップの結果に`worktree_git_pointer`が無いときも、Claudeを起動せず"blocked"を返す。
  * 不正な出力への再試行の前にも`.git`を確かめ、一致しなければ再試行しない。
@@ -299,10 +299,12 @@ type MetadataRoundInput = {
 };
 
 /**
- * `metadata`ジョブが落ちているときだけ、`wmill-lock.yaml`のhashを再計算して書き換える。落ちていなければ`null`を返す。
+ * `metadata`ジョブだけが落ちているときに限り、`wmill-lock.yaml`のhashを再計算して書き換える。
+ * `check`などほかのジョブも落ちているとき、`metadata`が落ちていないときは`null`を返す。前者はClaudeが先に直す。
  * baseの先端は、GitHubのAPIで読んだ今の先端である。ローカルに無ければ取り込む。
  * 読むのはgitのオブジェクトだけで、worktreeのファイルは開かず、scriptも実行しない。
- * 事前検査が通らないときは、`mise run metadata`を案内する固定の理由で`blocked`を返す。
+ * 事前検査が通らないときは、固定の理由(`ci round: the lock cannot be recomputed automatically (<種別>)`)で`blocked`を返す。
+ * 案内は、通知が出す。
  * 書き換えた内容は、検証と完了のステップが、同じ再計算で照合する。
  */
 async function applyMetadataRound(

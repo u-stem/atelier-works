@@ -956,6 +956,22 @@ export function isLockOnlyChange(changes: readonly CiFixChange[]): boolean {
   );
 }
 
+/**
+ * 読み取りの結果が、再計算の出力の候補か。変更を読み切り(件数の超過も時間切れも無い)、
+ * 根の`wmill-lock.yaml`の通常の変更1件だけであること。読み切れなかった結果は、変更を見落としているので候補にしない。
+ */
+export function isRehashCandidate(collected: {
+  readonly changes: readonly CiFixChange[];
+  readonly overflow: boolean;
+  readonly timedOut: boolean;
+}): boolean {
+  return (
+    !collected.overflow &&
+    !collected.timedOut &&
+    isLockOnlyChange(collected.changes)
+  );
+}
+
 function splitLines(text: string): string[] {
   if (text === "") return [];
   const lines = text.split("\n");
