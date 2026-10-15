@@ -166,6 +166,7 @@ describe("ensure_instance_custom_tag", () => {
       'bun() { "$BUN_BIN" "$@"; }',
       'run_in_repo() { (cd -- "$REPO_ROOT" && "$@"); }',
       'bun_eval() { run_in_repo bun -e "$1"; }',
+      extractFunction("curl_local"),
       extractFunction("api_get"),
       extractFunction("api_post"),
       extractFunction("custom_tags_set_body"),
@@ -367,7 +368,7 @@ describe("bootstrap.sh custom-tags argument", () => {
       env: {
         PATH: `${join(tmp, "bin")}:${process.env.PATH ?? ""}`,
         HOME: tmp,
-        WM_BASE_URL: `http://127.0.0.1:${server.port}`,
+        WM_HTTP_PORT: String(server.port),
         WM_ADMIN_EMAIL: "admin@example.com",
         WM_ADMIN_PASSWORD: "a-strong-password-123",
       },
