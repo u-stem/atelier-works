@@ -270,6 +270,9 @@ describe("repository-owned Claude config", () => {
     "## 種類",
     "## 原因の分類",
     "## 出力の対応",
+    "## 致命的な反証",
+    "## ループの終わりと残る指摘",
+    "## 変更の種類と規模",
     "## 取り入れる基準",
     "## 範囲外の指摘",
     "## 差し戻し先",
@@ -287,4 +290,66 @@ describe("repository-owned Claude config", () => {
       expect(readFileSync(RULES, "utf8")).toContain(`| ${cause} |`);
     },
   );
+});
+
+describe("review-loop scaling rules", () => {
+  const SKILL = join(ROOT, ".claude/skills/review-loop/SKILL.md");
+  const skillText = (): string => readFileSync(SKILL, "utf8");
+
+  /** `Bash`で実行してよいコマンドの一覧(「実行してよいのは」から「実行しない」まで)を返す。 */
+  function allowedBash(name: string): string {
+    const text = body(name);
+    const start = text.indexOf("実行してよいのは");
+    const end = text.indexOf("実行しない", start);
+    return text.slice(start, end);
+  }
+
+  const SKILL_HEADINGS = [
+    "## 変更の種類",
+    "### 数え方",
+    "### 設計レビュー",
+    "## 前提の検証",
+    "## 範囲の固定",
+    "### 致命的な反証",
+    "## テスト先行の確認",
+    "## mainを取り込んだとき",
+  ];
+
+  test.each(SKILL_HEADINGS)("keeps %s in the review-loop skill", (heading) => {
+    expect(skillText()).toContain(heading);
+  });
+
+  test("measures the size against the merge base", () => {
+    expect(skillText()).toContain("git diff --numstat origin/main...HEAD");
+  });
+
+  test("runs triage in the loop", () => {
+    expect(skillText()).toContain("triageを起動する");
+  });
+
+  test("keeps mise run check out of devil-advocate's allowed commands", () => {
+    expect(allowedBash("devil-advocate")).not.toContain("mise run check");
+  });
+
+  test("makes devil-advocate name the kind of ground", () => {
+    expect(body("devil-advocate")).toContain("根拠の種類:");
+  });
+
+  test("leaves the definition of a fatal rebuttal to the review rules", () => {
+    expect(body("devil-advocate")).toContain("`rules.md`の「致命的な反証」");
+  });
+
+  test("makes implementer report the test-first record", () => {
+    expect(body("implementer")).toContain("## テスト先行の記録");
+  });
+
+  test("makes implementer report the verified premises", () => {
+    expect(body("implementer")).toContain("## 前提の検証");
+  });
+
+  test("makes code-reviewer check the commit order of the tests", () => {
+    expect(body("code-reviewer")).toContain(
+      "git log --reverse --stat origin/main..HEAD",
+    );
+  });
 });

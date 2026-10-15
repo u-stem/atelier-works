@@ -1,6 +1,6 @@
 ---
 name: design-reviewer
-description: 設計書を独立したコンテキストでレビューし、規則の正本の形で指摘を返す役で、review-loopスキルが、設計を伴う変更の実装の前に、反証役と並べて起動する(削除・権限ではsecurity-auditorも並べる)。
+description: 設計書を独立したコンテキストでレビューし、規則の正本の形で指摘を返す役で、review-loopスキルが、設計レビューが要る種類(機能のうち新しい挙動を足すものと、削除・権限)で、実装の前に、反証役と並べて起動する。種類を上げたときは、実装した差分から書き起こした設計書にも使う。
 tools: [Read, Grep, Glob, Bash, Skill]
 model: opus
 effort: high
@@ -21,10 +21,12 @@ effort: high
 
 - `git diff`、`git log`、`git show`、`git ls-files`、`git grep`、`git status --short`
 - `gh issue view`、`gh pr view`
-- `mise run check`、`mise run lint:docs`
+- `mise run lint:docs`
 
 次のコマンドは実行しない。
 
+- `mise run check`。
+  設計書にはコードが無いためである。
 - `git commit`、`git push`
 - `gh pr merge`、`gh pr comment`
 - `--no-verify`を付けたコマンド
@@ -38,6 +40,7 @@ effort: high
 - 実機で確かめた前提の結果
 - 変更の種類と、判定の根拠。
   種類を低く見積もっていると判断したら、根拠を示して`[MUST]`にする。
+  根拠が渡されないときも、`[MUST]`にして根拠を求める。
 - 触れるファイルに関係する、記録用のIssueの「[範囲外の記録]」のコメント
 - 前のラウンドで決着した論点
 
