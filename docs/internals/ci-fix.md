@@ -887,9 +887,10 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   import属性を持つimportが、読む前に断られることも、入口で確かめる。
   想定と違う結果を見つけたときは、`internal_error`で止め、補足にBunの版を載せる。
   Bunの版の許可リストは持たない。版が変わっても、自己検査を通ればよい。
-- 手元で`mise run check:comment-only`を未信頼のブランチに流すと、マクロが実行されうる。
-  `scripts/check-comment-only-diff.ts`が`transformSync`を使うためである。
-  この部品の外にある、別の経路である。
+- 手元の`mise run check:comment-only`は、この部品の外にある、別の経路である。
+  `scripts/check-comment-only-diff.ts`が使う`transformSync`は、マクロを読む側のプロセスで実行する。
+  未信頼のブランチを基準にしても端末でコードが動かないよう、変換の前に、この部品と同じ`hasAttribute`でimport属性になりうる形を断る。
+  断ったファイルは、変更ありとして報告する。
 - 上限を置いていない範囲もある。
   検査は、`listTree`が返す項目の数を数えない。`f/`以外の項目は、形の検査と表の構築の分だけ、項目の数に比例する。
   ポートの呼び出しの時間には、検査は期限を持たない。

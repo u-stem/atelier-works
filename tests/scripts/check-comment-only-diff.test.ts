@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   classifyFile,
   isCommentOnlyChange,
@@ -233,6 +236,123 @@ describe("transpiledCode", () => {
 
   test("keeps the code in the output", () => {
     expect(transpiledCode("a.tsx", withComments)).toContain("hi");
+  });
+});
+
+// マクロは印のファイルを書く。印ができたら、変換がマクロを実行したことになる。
+describe("a macro import is never executed while the sources are compared", () => {
+  const SPACES: Record<string, string> = {
+    "a space": " ",
+    "a vertical tab": String.fromCharCode(0x0b),
+    "a no-break space": String.fromCharCode(0xa0),
+    "an ideographic space": String.fromCharCode(0x3000),
+    "a newline": "\n",
+    "a block comment": "/* c */",
+  };
+  const KEYWORDS = ["with", "assert"] as const;
+  const VARIANTS = Object.entries(SPACES).flatMap(([name, gap]) =>
+    KEYWORDS.map(
+      (keyword) => [`${keyword} and ${name}`, gap, keyword] as const,
+    ),
+  );
+
+  function macroProbe(): {
+    dir: string;
+    marker: string;
+    make: (gap: string, keyword: string, note: string) => string;
+  } {
+    const dir = mkdtempSync(join(tmpdir(), "comment-only-macro-"));
+    const marker = join(dir, "marker");
+    const macro = join(dir, "m.ts");
+    writeFileSync(
+      macro,
+      `import { writeFileSync } from "node:fs";\nexport function f() { writeFileSync(${JSON.stringify(marker)}, "ran"); return 1; }\n`,
+    );
+    return {
+      dir,
+      marker,
+      make: (gap, keyword, note) =>
+        `// ${note}\nimport { f } from ${JSON.stringify(macro)} ${keyword}${gap}{ type: "macro" };\nexport const x = f();\n`,
+    };
+  }
+
+  test.each(VARIANTS)(
+    "does not run a macro in transpiledCode after %s",
+    (_name, gap, keyword) => {
+      const probe = macroProbe();
+      try {
+        try {
+          transpiledCode("a.tsx", probe.make(gap, keyword, "n"));
+        } catch {
+          // 拒否の例外は想定内。印の有無だけを見る。
+        }
+        expect(existsSync(probe.marker)).toBe(false);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(VARIANTS)(
+    "does not run a macro in a tsx comparison after %s",
+    (_name, gap, keyword) => {
+      const probe = macroProbe();
+      try {
+        isCommentOnlyChange(
+          "a.tsx",
+          probe.make(gap, keyword, "old"),
+          probe.make(gap, keyword, "new"),
+        );
+        expect(existsSync(probe.marker)).toBe(false);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(VARIANTS)(
+    "does not run a macro in a ts comparison that falls back to the transpiler after %s",
+    (_name, gap, keyword) => {
+      const probe = macroProbe();
+      // `)`の後の`/`は除算とみなされ、スキャナーが止まってトランスパイラに回る。
+      const stall = "\nif (x) /#(\\d+)/.test(y);\n";
+      try {
+        isCommentOnlyChange(
+          "a.ts",
+          probe.make(gap, keyword, "old") + stall,
+          probe.make(gap, keyword, "new") + stall,
+        );
+        expect(existsSync(probe.marker)).toBe(false);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // 対照。印のファイルの作り方が誤っていると、上の「印ができない」テストは常に緑になる。
+  test("control: the same source run through transformSync does run the macro", () => {
+    const probe = macroProbe();
+    try {
+      new Bun.Transpiler({ loader: "tsx" }).transformSync(
+        probe.make(" ", "with", "n"),
+      );
+      expect(existsSync(probe.marker)).toBe(true);
+    } finally {
+      rmSync(probe.dir, { recursive: true, force: true });
+    }
+  });
+
+  test("transpiledCode throws a fixed message for an import attribute", () => {
+    const code = 'import j from "./a.json" with { type: "json" };\n';
+    expect(() => transpiledCode("a.tsx", code)).toThrow(
+      "import attributes are not allowed in compared sources",
+    );
+  });
+
+  test("treats a source with an import attribute as changed", () => {
+    const before = '// old\nimport j from "./a.json" with { type: "json" };\n';
+    const after = '// new\nimport j from "./a.json" with { type: "json" };\n';
+    expect(isCommentOnlyChange("a.tsx", before, after)).toBe(false);
   });
 });
 

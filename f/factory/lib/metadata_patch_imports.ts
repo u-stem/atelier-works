@@ -104,7 +104,7 @@ function previousNonSpace(code: string, index: number): string | undefined {
  * コメントは終端を探さず、開始だけで断る。終端を探すと、入力によっては計算量が2乗になる。
  * 文字列やコメントの中の出現も断る側に倒す。
  */
-function hasAttribute(code: string): boolean {
+export function hasAttribute(code: string): boolean {
   for (const match of code.matchAll(ATTRIBUTE_KEYWORD)) {
     let cursor = match.index + match[0].length;
     while (isSpace(code[cursor])) {

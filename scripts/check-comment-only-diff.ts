@@ -15,9 +15,13 @@
 // - [見逃し] tsxと、トークン化できないts / jsは、`Bun.Transpiler`がコメントを落とした
 //   出力の比較で判定する。Transpilerは型注釈も落とすため、型だけの変更は見逃す。
 //   未使用のimportの削除など、変換で消えるコードの変更も同様に見逃しうる。
+// - [誤検知] import属性(`with`、`assert`の後の波括弧)になりうる形を含むファイルは、
+//   Transpilerのマクロ実行を避けるため変換せず、変更ありとして報告する。
+//   文字列やコメントの中の同じ形も報告する。
 // - `git diff`は未追跡ファイルを出さないため、未追跡の新規ファイルは対象外。
 
 import { readFileSync } from "node:fs";
+import { hasAttribute } from "../f/factory/lib/metadata_patch_imports.ts";
 import {
   ScannerStallError,
   type Token,
@@ -74,8 +78,14 @@ function loaderOf(path: string): TranspilerLoader {
 /**
  * `Bun.Transpiler`でコメントを落としたコードを返す。構文エラーは例外になる。
  * 型注釈も落ちるので、この出力の比較は型だけの変更を区別できない。
+ * `transformSync`は、import属性でマクロを指定したimportのマクロを、読む側のプロセスで実行する。
+ * 未信頼のブランチを基準にしても端末でコードが動かないよう、import属性になりうる形を含む
+ * ソースは、変換せずに固定の文の例外で断る。文字列やコメントの中の出現も断る側に倒す。
  */
 export function transpiledCode(path: string, text: string): string {
+  if (hasAttribute(text)) {
+    throw new Error("import attributes are not allowed in compared sources");
+  }
   return new Bun.Transpiler({ loader: loaderOf(path) }).transformSync(text);
 }
 
