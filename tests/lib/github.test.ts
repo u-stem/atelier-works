@@ -4128,6 +4128,50 @@ describe("getPrDiff", () => {
     });
   });
 
+  test("drops an unfinished replacement marker when it cuts inside a line", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, ESC.repeat(10))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 20);
+    expect(diff.diff).toBe("<U+001B><U+001B>");
+  });
+
+  test.each([
+    [17, "<U+001B><U+001B>"],
+    [18, "<U+001B><U+001B>"],
+    [19, "<U+001B><U+001B>"],
+  ])(
+    "drops every prefix of a marker when it cuts at %i characters",
+    async (maxChars, expected) => {
+      const fake = createFakeCommandRunner([
+        ok(ghApiStdout(200, ESC.repeat(10))),
+      ]);
+      const diff = await getPrDiff(
+        client(fake),
+        "acme",
+        "widgets",
+        12,
+        100,
+        maxChars,
+      );
+      expect(diff.diff).toBe(expected);
+    },
+  );
+
+  test("keeps a complete marker at the cut", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, ESC.repeat(10))),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 16);
+    expect(diff.diff).toBe("<U+001B><U+001B>");
+  });
+
+  test("keeps the text at a line boundary even when it looks like a marker prefix", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a<U\nb"))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100, 3);
+    expect(diff.diff).toBe("a<U");
+  });
+
   test("does not split a surrogate pair when it cuts by characters", async () => {
     const fake = createFakeCommandRunner([
       ok(ghApiStdout(200, "ab\u{1F600}cd")),

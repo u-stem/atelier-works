@@ -2604,15 +2604,23 @@ export type PrDiff = {
  */
 export const PR_DIFF_MAX_CHARS = 400_000;
 
-/** `text`を`maxChars`字以内に切る。行の途中で切らないよう、収まる最後の行の末尾で切る。 */
+/**
+ * 行の途中で切ったときの末尾に残る、壊れた断片。
+ * サロゲートペアの前半と、閉じていない置き換え表記(`<`、`<U`、`<U+`、`<U+00`など)である。
+ */
+const CUT_FRAGMENT = /(?:[\ud800-\udbff]|<(?:U(?:\+[0-9A-F]{0,6})?)?)$/;
+
+/**
+ * `text`を`maxChars`字以内に切る。行の途中で切らないよう、収まる最後の行の末尾で切る。
+ * 1行が上限を超えて行の途中で切るときだけ、末尾の壊れた断片を落とす。
+ */
 function cutToChars(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   const head = text.slice(0, maxChars);
+  if (text[maxChars] === "\n") return head;
   const lineEnd = head.lastIndexOf("\n");
-  const whole =
-    text[maxChars] === "\n" || lineEnd <= 0 ? head : head.slice(0, lineEnd);
-  // 1行が上限を超えて行の途中で切るときに、サロゲートペアの前半を残さない。
-  return /[\ud800-\udbff]$/.test(whole) ? whole.slice(0, -1) : whole;
+  if (lineEnd > 0) return head.slice(0, lineEnd);
+  return head.replace(CUT_FRAGMENT, "");
 }
 
 /**
