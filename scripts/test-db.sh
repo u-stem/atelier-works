@@ -458,7 +458,7 @@ verify_active_pr_fix_index() {
 
 # 競合を直す仕組みの土台のmigrationが、列の既定値と制約を効かせ、部分索引を作り、
 # 戻したときに列、制約、索引を落とし、既存の行を壊さずにもう一度適用できることを確かめる。
-# このmigrationの適用直後に呼ぶ。もう一度適用し直すので、最新のmigrationでなくなったときは呼ぶ位置を見直すこと。
+# このmigrationの適用直後に呼ぶので、後のmigrationの影響を受けない。もう一度適用し直す。
 # 補助の関数は、ほかの検証が同じ名前を別の形で定義しているため、固有の名前にする。
 verify_pr_conflict_fix() {
   local up_file="${MIGRATIONS_DIR}/${PR_CONFLICT_FIX_MIGRATION}"
@@ -492,7 +492,7 @@ verify_pr_conflict_fix() {
       *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
     esac
   }
-  # 足した6列と索引の数を数える。
+  # 足した6列の数を数える。
   conflict_fix_columns() {
     conflict_fix_scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND ((table_name = 'pr_conflict_checks' AND ${fix_columns}) OR (table_name = 'work_items' AND ${item_columns}))"
   }

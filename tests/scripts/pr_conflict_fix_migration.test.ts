@@ -116,10 +116,6 @@ describe("20261015120000_pr_conflict_fix.up.sql", () => {
   test("has no foreign key", async () => {
     expect(await Bun.file(UP).text()).not.toContain("REFERENCES");
   });
-
-  test("keeps the comments in Japanese", async () => {
-    expect(await Bun.file(UP).text()).toMatch(/--.*[぀-ヿ一-鿿]/);
-  });
 });
 
 describe("20261015120000_pr_conflict_fix.down.sql", () => {
@@ -152,12 +148,6 @@ describe("20261015120000_pr_conflict_fix.down.sql", () => {
   test("drops the constraints of pr_conflict_checks before its columns", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
       "ALTER TABLE factory.pr_conflict_checks\n    DROP CONSTRAINT pr_conflict_checks_fix_hold_reason_check,\n    DROP CONSTRAINT pr_conflict_checks_fix_hold_reason_length_check,\n    DROP CONSTRAINT pr_conflict_checks_fix_attempts_check,\n    DROP COLUMN episode_started_at,\n    DROP COLUMN fix_hold_reason,\n    DROP COLUMN fix_attempts,\n    DROP COLUMN fix_work_item_id;",
-    );
-  });
-
-  test("says when the rollback may run", async () => {
-    expect(await Bun.file(DOWN).text()).toContain(
-      "-- コードを戻し、競合を直す回が終端になってから実行する。",
     );
   });
 

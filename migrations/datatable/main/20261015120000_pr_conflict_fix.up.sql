@@ -6,9 +6,8 @@
 --   fix_work_item_id    いま競合を直している作業項目のID。直していなければNULL。
 --   fix_attempts        今の競合(episode)で、直す作業項目を起動した回数。
 --   fix_hold_reason     直す作業項目を起動せず保留している理由コード。保留していなければNULL。
---   episode_started_at  行を挿入した時刻。新しい競合での更新は、行を書く処理が担う。
---                       通知の猶予と、自動で直す対象にする時刻の基準である。
---                       checked_atは読み直すたびに、updated_atは書くたびに進むので、基準にしない。
+--   episode_started_at  行を挿入した時刻。
+--                       checked_atは読み直すたびに、updated_atは書くたびに進むため、これらとは別に持つ。
 -- work_items:
 --   conflict_check_id   この作業項目が直しているpr_conflict_checksの行のID。競合を直す作業項目だけが持つ。
 --   conflict_episode    直している競合のepisode。競合の1回は、行のidとこの値の組で指す。
@@ -40,7 +39,7 @@ COMMENT ON COLUMN factory.pr_conflict_checks.fix_attempts IS
 COMMENT ON COLUMN factory.pr_conflict_checks.fix_hold_reason IS
     '競合を直す作業項目を起動せず保留している理由コード。保留していなければNULL。空文字は不可で、64字まで。';
 COMMENT ON COLUMN factory.pr_conflict_checks.episode_started_at IS
-    '行を挿入した時刻。新しい競合での更新は、行を書く処理が担う。通知の猶予と、自動で直す対象にする時刻の基準で、checked_atとupdated_atは基準にしない。';
+    '行を挿入した時刻。checked_atは読み直すたびに、updated_atは書くたびに進むため、これらとは別に持つ。';
 
 ALTER TABLE factory.work_items
     ADD COLUMN conflict_check_id bigint,

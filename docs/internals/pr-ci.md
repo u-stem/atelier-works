@@ -757,10 +757,10 @@ PRの今の状態から、次の順に扱いを決める(`decidePrConflict`)。
 | `fix_work_item_id` | いま競合を直している作業項目のID。直していなければNULL |
 | `fix_attempts` | 今の競合で、直す作業項目を起動した回数。既定は0で、負にならない |
 | `fix_hold_reason` | 起動を保留している理由コード。保留していなければNULL。空でなく、64字まで |
-| `episode_started_at` | 行を挿入した時刻。新しい競合での更新は、行を書く処理が担う |
+| `episode_started_at` | 行を挿入した時刻 |
 
-`episode_started_at`は、通知の猶予と、自動で直す対象にする時刻の基準である。
-`checked_at`は読み直すたびに、`updated_at`は書くたびに進む。競合が続く間も動くので、競合の始まりを表せず、基準にしない。
+`checked_at`は読み直すたびに、`updated_at`は書くたびに進む。
+行を挿入した時刻は、これらとは別に`episode_started_at`へ持つ。
 競合の1回は、行のidと`episode`の組で指す。作業項目の`conflict_check_id`と`conflict_episode`が、直している競合をこの組で結ぶ([作業項目の状態とリース](work-items.md)の「修正の回を結ぶ列」)。
 
 既存の行の`episode_started_at`は、列を足した時刻になる。競合の本来の開始時刻は記録していないためである。
