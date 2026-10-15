@@ -4,7 +4,7 @@
 --
 -- pr_conflict_checks:
 --   fix_work_item_id    いま競合を直している作業項目のID。直していなければNULL。
---   fix_attempts        今の競合(episode)で、直す作業項目を起動した回数。
+--   fix_attempts        直す作業項目を起動した回数。
 --   fix_hold_reason     直す作業項目を起動せず保留している理由コード。保留していなければNULL。
 --   episode_started_at  行を挿入した時刻。
 --                       checked_atは読み直すたびに、updated_atは書くたびに進むため、これらとは別に持つ。
@@ -35,7 +35,7 @@ ALTER TABLE factory.pr_conflict_checks
 COMMENT ON COLUMN factory.pr_conflict_checks.fix_work_item_id IS
     'いま競合を直している作業項目のID。外部キーは持たず、値だけを参照する。直していなければNULL。';
 COMMENT ON COLUMN factory.pr_conflict_checks.fix_attempts IS
-    '今の競合(episode)で、競合を直す作業項目を起動した回数。新しい競合が始まると0に戻る。';
+    '競合を直す作業項目を起動した回数。既定は0で、負にならない。';
 COMMENT ON COLUMN factory.pr_conflict_checks.fix_hold_reason IS
     '競合を直す作業項目を起動せず保留している理由コード。保留していなければNULL。空文字は不可で、64字まで。';
 COMMENT ON COLUMN factory.pr_conflict_checks.episode_started_at IS
