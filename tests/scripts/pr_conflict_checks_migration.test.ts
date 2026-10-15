@@ -1,13 +1,13 @@
-// `20261015100000_pr_conflict_checks`のmigrationが、PRの競合の記録の表を作り、戻せることを静的に確かめる。
+// `20261015110000_pr_conflict_checks`のmigrationが、PRの競合の記録の表を作り、戻せることを静的に確かめる。
 // 実際に適用して戻せることは`mise run test:db`が確かめる。
 
 import { describe, expect, test } from "bun:test";
 
 const DIR = "migrations/datatable/main";
-const UP = `${DIR}/20261015100000_pr_conflict_checks.up.sql`;
-const DOWN = `${DIR}/20261015100000_pr_conflict_checks.down.sql`;
+const UP = `${DIR}/20261015110000_pr_conflict_checks.up.sql`;
+const DOWN = `${DIR}/20261015110000_pr_conflict_checks.down.sql`;
 
-describe("20261015100000_pr_conflict_checks.up.sql", () => {
+describe("20261015110000_pr_conflict_checks.up.sql", () => {
   test("creates factory.pr_conflict_checks", async () => {
     expect(await Bun.file(UP).text()).toContain(
       "CREATE TABLE factory.pr_conflict_checks",
@@ -81,7 +81,7 @@ describe("20261015100000_pr_conflict_checks.up.sql", () => {
   });
 });
 
-describe("20261015100000_pr_conflict_checks.down.sql", () => {
+describe("20261015110000_pr_conflict_checks.down.sql", () => {
   test("drops the table", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
       "DROP TABLE factory.pr_conflict_checks;",
