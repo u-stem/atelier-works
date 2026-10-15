@@ -129,7 +129,7 @@ function Reviews({ detail, now }: { detail: WorkItemDetail; now: number }) {
             key={review.key}
             className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3"
           >
-            <Badge variant={review.verdictVariant}>{review.verdictLabel}</Badge>
+            <Badge variant={review.resultVariant}>{review.resultLabel}</Badge>
             <span className="text-body tabular-nums">
               {review.findingLabel}
             </span>

@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのhashの再計算が読むgitのポート'
+description: 内部ライブラリです。直接実行するものではありません。木の一覧、blobの内容、祖先の判定を、ローカルのcloneのgitのオブジェクトから読みます。
+lock: '!inline f/factory/lib/metadata_git_ports.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

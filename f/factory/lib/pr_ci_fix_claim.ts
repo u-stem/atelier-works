@@ -13,9 +13,16 @@ import type { WorkflowRun } from "./main_ci_support.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
 import { generatedByTrailer } from "./workspace.ts";
 
-/** 起動前の分類の結果。 */
+/**
+ * 起動前の分類の結果。
+ * `fixable`は、Claudeが直すジョブだけが失敗している。
+ * `metadata_only`は、`metadata`だけが失敗している。Claudeを起動せず、hashの再計算で直す。
+ * Claudeが直すジョブと`metadata`が同時に失敗しているときも`fixable`である。Claudeが先にそのジョブを直し、
+ * `metadata`は、次の回で`metadata_only`になったときに再計算で直す。
+ */
 export type HeadFailureClass =
   | "fixable"
+  | "metadata_only"
   | "unfixable_job"
   | "other_conclusion"
   | "no_failure"
@@ -31,7 +38,11 @@ export async function classifyHeadFailure(
   listJobs: (runId: number) => Promise<readonly WorkflowRunJob[]>,
 ): Promise<HeadFailureClass> {
   const { verdict } = await classifyFailedRuns(runs, listJobs);
-  return verdict === null ? "no_failure" : verdict.kind;
+  if (verdict === null) return "no_failure";
+  if (verdict.kind === "fixable" && verdict.jobs.length === 0) {
+    return "metadata_only";
+  }
+  return verdict.kind;
 }
 
 /**
@@ -139,13 +150,16 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  *    ドラフトか、auto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
  *    作業項目の状態を先に読むのは、読んでいる間に直す作業項目がpushしたとき、
  *    古いheadの行を起動しないためである。PRを先に読むと、その読み取りは古くなる。
- * 4. commitがすべてFactoryのものでなければ`not_factory_head`、
- *    スキルがマーカーを持たなければ`marker_missing`で保留する。
- * 5. 失敗したジョブを分類する。直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
+ * 4. commitがすべてFactoryのものでなければ`not_factory_head`で保留する。
+ * 5. 失敗したジョブを分類する。`metadata_only`でなければ、スキルがマーカーを持たないとき`marker_missing`で保留する。
+ *    `metadata_only`はClaudeを使わないので、この確認を飛ばす。
+ *    マーカーの確認の後に、直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
  *    失敗したジョブが無ければskipする。
  * 6. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
  *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
+ *    日次の予算は、`metadata`だけが失敗しているときには確かめない。Claudeを起動せず、費用がかからないためである。
+ *    Claudeが直すジョブも落ちているときは、予算を確かめる。使い切っていれば保留し、行は巡回のたびに読み直すだけで、ラウンドを消費しない。
  * 7. どれにも当たらなければ起動する。
  */
 export async function decideFixClaim(
@@ -167,15 +181,20 @@ export async function decideFixClaim(
   if (!allCommitsFromFactory(await readers.readCommits(), input.instanceName)) {
     return hold("not_factory_head");
   }
-  if (!(await readers.hasSkillMarker())) return hold("marker_missing");
 
   const failure = await readers.classify(pr);
+  // `metadata_only`の回はClaudeを使わないので、スキルのマーカーを確かめない。
+  if (failure !== "metadata_only" && !(await readers.hasSkillMarker())) {
+    return hold("marker_missing");
+  }
   if (failure === "unfixable_job") return hold("unfixable_job");
   if (failure === "other_conclusion") return hold("other_conclusion");
   if (failure === "no_failure") return { kind: "skip", why: "no_failure" };
   if (failure === "unreadable") return { kind: "skip", why: "unreadable" };
 
-  if (await readers.budgetExceeded()) return hold("budget_exceeded");
+  if (failure !== "metadata_only" && (await readers.budgetExceeded())) {
+    return hold("budget_exceeded");
+  }
   if (await readers.mainCiFailed()) return hold("main_ci_failed");
   if (
     row.fix_attempts >= input.maxRounds + LAUNCH_FAILURE_ALLOWANCE ||

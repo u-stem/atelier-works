@@ -70,9 +70,11 @@ import {
   isRecord,
   isString,
   type LabelerAssociation,
+  type NewReviewRecord,
   type NoticeRecord,
   type ReviewFinding,
   type ReviewFindingKind,
+  type ReviewResult,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
@@ -196,9 +198,35 @@ export function normalizeJapaneseText(text: string): string {
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
   openMustCount: number,
-): "changes_requested" | "reviewed" {
+): ReviewResult {
   const hasMustFinding = findings.some((finding) => finding.kind === "must");
   return hasMustFinding || openMustCount > 0 ? "changes_requested" : "reviewed";
+}
+
+/**
+ * `factory.reviews`に書く行を組み立てる。
+ * `result`は、今回の指摘と`openMustCount`から`reviewResultFor`で決める。
+ * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
+ * `verdict`が`approve`で今回の指摘が0件でも、未解決の`[MUST]`が残れば`changes_requested`になる。
+ */
+export function buildReviewRecord(input: {
+  readonly workItemId: number;
+  readonly headSha: string;
+  readonly verdict: ReviewVerdict;
+  readonly summary: string;
+  readonly findings: readonly ReviewFinding[];
+  readonly openMustCount: number;
+  readonly postedReviewId: string | null;
+}): NewReviewRecord {
+  return {
+    work_item_id: input.workItemId,
+    head_sha: input.headSha,
+    verdict: input.verdict,
+    result: reviewResultFor(input.findings, input.openMustCount),
+    summary: input.summary,
+    findings: [...input.findings],
+    posted_review_id: input.postedReviewId,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -600,20 +628,78 @@ export function renderReviewSummary(
       );
       break;
   }
-  if (droppedFindings.length > 0) {
-    lines.push("", "(行に紐づけられなかった指摘)");
-    for (const finding of droppedFindings) {
-      const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-      const path = neutralizeHtmlComment(
-        finding.path.replace(/\s*[\r\n]+\s*/g, " "),
-      );
-      const message = neutralizeHtmlComment(
-        normalizeJapaneseText(finding.message),
-      );
-      lines.push(`- ${prefix} ${path}: ${message}`);
-    }
-  }
+  lines.push(...renderUnanchoredFindingLines(droppedFindings));
   return lines.join("\n");
+}
+
+/** 総評に並べる`path`。改行は空白にまとめ、`<!--`は無害にする。 */
+function oneLinePath(path: string): string {
+  return neutralizeHtmlComment(path.replace(/\s*[\r\n]+\s*/g, " "));
+}
+
+/** 指摘の位置。範囲の指摘は`path:line-end_line`、1行の指摘は`path:line`、行が無ければ`path`だけ。 */
+function findingLocation(finding: ReviewFinding): string {
+  const path = oneLinePath(finding.path);
+  if (finding.line === null) return path;
+  const end =
+    finding.end_line !== null && finding.end_line > finding.line
+      ? `-${String(finding.end_line)}`
+      : "";
+  return `${path}:${String(finding.line)}${end}`;
+}
+
+/**
+ * 行に紐づけられなかった指摘の見出しと箇条書き。指摘が無ければ空。
+ * `commented`の指摘は、行コメントにするはずだったもので、位置(`path:line`)を添える。
+ */
+function renderUnanchoredFindingLines(
+  findings: readonly ReviewFinding[],
+  commented: readonly ReviewFinding[] = [],
+): string[] {
+  if (findings.length + commented.length === 0) return [];
+  const lines = ["", "(行に紐づけられなかった指摘)"];
+  for (const finding of [...commented, ...findings]) {
+    const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
+    const location = commented.includes(finding)
+      ? findingLocation(finding)
+      : oneLinePath(finding.path);
+    const message = neutralizeHtmlComment(
+      normalizeJapaneseText(finding.message),
+    );
+    lines.push(`- ${prefix} ${location}: ${message}`);
+  }
+  return lines;
+}
+
+/**
+ * GitHubが行コメントの行を解決できず、レビューを拒否したときの総評を組み立てる。
+ * 行コメントにするはずだった指摘(`commentedFindings`)は、位置を添えて、行に紐づけられなかった指摘(`droppedFindings`)と
+ * 同じ一覧に並べる。後者の形は通常の総評と同じにする。
+ * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
+ */
+export function renderUnresolvedLineSummary(
+  authorLogin: string,
+  commentedFindings: readonly ReviewFinding[],
+  droppedFindings: readonly ReviewFinding[],
+): string {
+  return [
+    `${ROLE_TAGS.pr_review} @${authorLogin}`,
+    "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
+    "確認お願いします。",
+    ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
+  ].join("\n");
+}
+
+/**
+ * 行コメントになった指摘を返す。`findings`のうち、行に紐づけられず総評に回った`droppedFindings`
+ * (`mapFindingsToReviewComments`の戻り値)に含まれないものを、元の順で返す。
+ * 行コメントになった指摘と総評に回った指摘の和は、元の指摘と一致する。
+ */
+export function commentedFindingsOf(
+  findings: readonly ReviewFinding[],
+  droppedFindings: readonly ReviewFinding[],
+): ReviewFinding[] {
+  return findings.filter((finding) => !droppedFindings.includes(finding));
 }
 
 /**
@@ -3711,6 +3797,27 @@ const DEPENDABOT_IMPACT_NEXT_ACTION =
   "PRのコメントの所見を確認し、問題なければ手でマージするか閉じてください。この作業項目は再実行できません。新しいコミットが積まれると、自動で再び対象になります";
 
 /**
+ * リポジトリのオーナーの数値IDの照合に落ちた理由(`isRepoOwnerStopReason`)で人に回すときの次の操作。
+ * 名前が別の人に渡った疑いで止めたPRなので、手でマージする案内にしない。
+ * dependabotの作業項目は`retry_work_item`が拒否するので、再実行は案内しない。
+ */
+const DEPENDABOT_OWNER_STOP_NEXT_ACTION =
+  "GitHubでそのオーナーとリポジトリが意図した持ち主のものか確かめ、factory_configのownersとfactory_repo_idを見直してください。確かめるまで、このPRをマージしないでください。持ち主が変わっていたら、現在のIDを書き写さずに、そのオーナーをownersから外してください。この作業項目は再実行できません。見直した後に新しいコミットが積まれると、自動で再び対象になります";
+
+/** 詳細が関門の理由なら日本語に訳し、そうでなければそのまま返す。 */
+function dependabotDetailText(detail: string | undefined): string {
+  if (detail === undefined) return "";
+  return isRepoOwnerStopReason(detail) ? describeReason(detail) : detail;
+}
+
+/** 詳細が関門の理由なら、オーナーの見直しの案内を、そうでなければ手でマージする案内を返す。 */
+function dependabotNextActionForDetail(detail: string | undefined): string {
+  return detail !== undefined && isRepoOwnerStopReason(detail)
+    ? DEPENDABOT_OWNER_STOP_NEXT_ACTION
+    : DEPENDABOT_MANUAL_NEXT_ACTION;
+}
+
+/**
  * dependabotの理由の規則(`lib/dependabot_flow_support.ts`の`dependabotReason`と固定の理由)。
  * 詳細にほかの規則の文字列が入りうるので、`REASON_RULES`の先頭に置き、ほかの規則より先に当てる。
  * どの規則も再実行を案内しない。dependabotの作業項目は`retry_work_item`が拒否するため。
@@ -3777,14 +3884,14 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
   {
     pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.finish, "([\\s\\S]+)$"),
     describe: (m) =>
-      `dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(${m[1]})`,
-    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+      `dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(${dependabotDetailText(m[1])})`,
+    nextAction: (m) => dependabotNextActionForDetail(m[1]),
   },
   {
     pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.poll, "([\\s\\S]+)$"),
     describe: (m) =>
-      `dependabotの更新を、PRを取得する処理で人に回しました(${m[1]})`,
-    nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
+      `dependabotの更新を、PRを取得する処理で人に回しました(${dependabotDetailText(m[1])})`,
+    nextAction: (m) => dependabotNextActionForDetail(m[1]),
   },
   {
     pattern: reasonPattern(DEPENDABOT_DRY_RUN_REASON, ""),

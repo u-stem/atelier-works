@@ -234,6 +234,39 @@ describe("the owner id check before the writes of the finish steps", () => {
     expect(text.split("await repoOwnerStopReason(").length - 1).toBe(1);
   });
 
+  test("dependabot_finish hands the check to the finish run", async () => {
+    const text = await source("dependabot_finish.ts");
+    expect(
+      statementsAfter(text, "ensureRepoOwner: (owner, repo) =>", 6),
+    ).toContain("repoOwnerGateDeps(client, addNoticeUnlessUnresolved),");
+  });
+
+  test("dependabot_finish builds the check from one call to the gate", async () => {
+    const text = await source("dependabot_finish.ts");
+    expect(text.split("repoOwnerStopReason(").length - 1).toBe(1);
+  });
+
+  test("dependabot_finish calls the check once", async () => {
+    const text = await source("dependabot_finish.ts");
+    expect(text.split("await deps.ensureRepoOwner(").length - 1).toBe(1);
+  });
+
+  test("dependabot_finish checks after the pull request is re-read and before it merges", async () => {
+    const text = await source("dependabot_finish.ts");
+    const body = text.slice(positionOf(text, "const stop = await recheck();"));
+    expect(positionOf(body, "await deps.ensureRepoOwner(")).toBeLessThan(
+      positionOf(body, "await deps.mergePullRequest("),
+    );
+  });
+
+  test("dependabot_finish checks before it posts the findings", async () => {
+    const text = await source("dependabot_finish.ts");
+    const body = text.slice(positionOf(text, "const stop = await recheck();"));
+    expect(positionOf(body, "await deps.ensureRepoOwner(")).toBeLessThan(
+      positionOf(body, "await postFindingsOnce("),
+    );
+  });
+
   test("pr_review_post hands the check to the review publication", async () => {
     const text = await source("pr_review_post.ts");
     expect(text).toContain("ensureRepoOwner: () =>");
@@ -268,7 +301,7 @@ describe("the owner id check before the writes of the finish steps", () => {
     const text = await source("pr_review_post.ts");
     expect(
       positionOf(text, "if (published.ownerStopReason !== null) {"),
-    ).toBeLessThan(positionOf(text, "await insertReview({"));
+    ).toBeLessThan(positionOf(text, "await insertReview(record)"));
   });
 
   test("drawio_viewer_bump hands the factory_repo_id check to the bump", async () => {

@@ -91,6 +91,21 @@ describe("runConsoleSummary queries", () => {
     expect(calls.length).toBe(3);
   });
 
+  // 再開の見送りを知らせた記録は状態が変わらない遷移なので、失敗の理由として表示しない。
+  test("skips the stall record when it reads the note of the current status", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[1]?.values).toContain("auto_retry_stalled: ");
+  });
+
+  test("skips the stall record in the work item detail too", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls.some((c) => c.values.includes("auto_retry_stalled: "))).toBe(
+      true,
+    );
+  });
+
   test("reads approvals from v_approval_requests", async () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);
@@ -403,6 +418,7 @@ const REVIEW_ROW: SqlRow = {
   review_id: 12,
   head_sha: "abc1234",
   verdict: "request_changes",
+  result: "changes_requested",
   finding_count: "3",
   posted_review_id: "9001",
   created_at: T0,
@@ -719,11 +735,26 @@ describe("runWorkItemDetail result", () => {
         review_id: 12,
         head_sha: "abc1234",
         verdict: "request_changes",
+        result: "changes_requested",
         finding_count: 3,
         posted_review_id: "9001",
         created_at: T0,
       },
     ]);
+  });
+
+  test("parses a review without a recorded result as null", async () => {
+    const responses = detailResponses();
+    responses[5] = [{ ...REVIEW_ROW, result: null }];
+    const { sql } = createFakeSqlClient(responses);
+    const detail = await runWorkItemDetail(7, sql);
+    expect(detail.reviews[0]?.result).toBeNull();
+  });
+
+  test("reads the result column of the reviews", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls[5]?.text).toContain("result");
   });
 
   test("parses a fix round as counts only", async () => {

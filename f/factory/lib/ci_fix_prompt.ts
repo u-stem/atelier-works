@@ -5,7 +5,7 @@
 // Claudeには、シェルを持たせない前提で書く。ツールの許可は呼び出し側が決める。
 // 抜粋を含むプロンプトは`VolatileCiPrompt`で返し、stepの結果やDBに載せられないようにする。
 
-import { isSafeRepoPath } from "./ci_fix_paths.ts";
+import { isDeniedPath, isSafeRepoPath } from "./ci_fix_paths.ts";
 import {
   type CiFailureExcerpt,
   type VolatileCiExcerpt,
@@ -30,7 +30,8 @@ export type CiFixPromptInput = {
   readonly excerpt: VolatileCiExcerpt;
   /**
    * PRがすでに変更したファイルのパス。Claudeが編集してよい範囲を示す。
-   * 外部由来なので、`isSafeRepoPath`を通るものだけを、重複を除いて載せる。
+   * 外部由来なので、`isSafeRepoPath`を通り、`isDeniedPath`に当たらないものだけを、重複を除いて載せる。
+   * 拒否されるパスは載せず、その件数を囲みの外の固定文で伝える。
    */
   readonly prChangedPaths: readonly string[];
 };
@@ -87,18 +88,46 @@ function validatePr(pr: CiFixPromptPr): void {
   }
 }
 
+/** PRの変更ファイルのパスの仕分け。 */
+type ChangedPathsSplit = {
+  /** 編集してよい既存ファイルのパス。安全で、拒否されず、重複が無い。 */
+  readonly editable: readonly string[];
+  /** 安全だが拒否されるパスの数。重複は1件に数える。 */
+  readonly deniedCount: number;
+};
+
 /**
- * 囲みの中に入れる、PRの変更ファイルの一覧。
- * 安全でないパスと重複を除き、上限を超えた分は件数にする。1件も無ければ`(none)`。
+ * PRの変更ファイルのパスを、編集してよいものと拒否されるものに分ける。
+ * 安全でないパスはどちらにも入れない。拒否されるパスを囲みに載せると、
+ * 囲みを「編集してよい既存ファイル」と読んだClaudeが編集し、flowの検査に止められるため。
  */
-function changedPathsBody(paths: readonly string[]): string {
+function splitChangedPaths(paths: readonly string[]): ChangedPathsSplit {
   const safe = [...new Set(paths.filter(isSafeRepoPath))];
-  if (safe.length === 0) return "(none)";
-  const shown = safe.slice(0, CI_FIX_PROMPT_MAX_CHANGED_PATHS);
-  const omitted = safe.length - shown.length;
+  const editable = safe.filter((path) => !isDeniedPath(path));
+  return { editable, deniedCount: safe.length - editable.length };
+}
+
+/**
+ * 囲みの中に入れる、編集してよい変更ファイルの一覧。
+ * 上限を超えた分は件数にする。1件も無ければ`(none)`。
+ */
+function changedPathsBody(editable: readonly string[]): string {
+  if (editable.length === 0) return "(none)";
+  const shown = editable.slice(0, CI_FIX_PROMPT_MAX_CHANGED_PATHS);
+  const omitted = editable.length - shown.length;
   return omitted > 0
     ? [...shown, `(${String(omitted)} more not shown)`].join("\n")
     : shown.join("\n");
+}
+
+/** 拒否されるパスの件数を伝える、囲みの外の固定文。件数が0なら無い。パスは含めない。 */
+function deniedNotice(deniedCount: number): string[] {
+  if (deniedCount === 0) return [];
+  return [
+    `Protected files changed by the pull request: ${String(deniedCount)}.`,
+    "They are not listed above and cannot be edited. Do not try to edit them.",
+    'If the fix needs one of them, set outcome to "blocked".',
+  ];
 }
 
 /** 囲みの中に入れる、ジョブ1件分の文字列。名前は引用符で括り、1行に収める。 */
@@ -128,7 +157,8 @@ export function buildCiFixPrompt(
   if (failures.length === 0) throw new Error("no log excerpt to fix from");
 
   const bodies = failures.map(failureBody);
-  const changedPaths = changedPathsBody(input.prChangedPaths);
+  const { editable, deniedCount } = splitChangedPaths(input.prChangedPaths);
+  const changedPaths = changedPathsBody(editable);
   const uuid = deps.uuid ?? (() => crypto.randomUUID());
   const nonce = pickNonce(uuid, [...bodies, changedPaths]);
 
@@ -159,6 +189,7 @@ export function buildCiFixPrompt(
   sections.push(
     "",
     dataFence(nonce, CI_FENCE_LABEL_CHANGED_FILES, changedPaths),
+    ...deniedNotice(deniedCount),
     "",
   );
   bodies.forEach((body, index) => {

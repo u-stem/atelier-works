@@ -17,6 +17,7 @@ import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import { type GhClient, getPr, type PullRequest } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import { markTransientGitHubFailure } from "../lib/pr_review_retry.ts";
 import {
   type RepoOwnerGateResult,
   repoOwnerGateDeps,
@@ -76,9 +77,21 @@ const SKIPPED_BASE = {
   attempt: 1,
 } as const;
 
+/**
+ * GitHubの5xxや通信断で落ちたときは、例外の文の先頭に印を付けて投げる(`markTransientGitHubFailure`)。
+ * 印の付いた失敗は、`auto_retry_pr_review`が作業項目の状態で自動に再開する。
+ */
 export async function main(
   work_item_id: number,
 ): Promise<PrReviewPrepareResult> {
+  try {
+    return await prepare(work_item_id);
+  } catch (err) {
+    throw markTransientGitHubFailure(err);
+  }
+}
+
+async function prepare(work_item_id: number): Promise<PrReviewPrepareResult> {
   const workItem = await getWorkItem(work_item_id);
   if (workItem === null) {
     throw new Error(`pr_review_prepare: no work item with id ${work_item_id}`);

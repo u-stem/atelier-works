@@ -232,7 +232,9 @@ CIを通すだけなら検査を弱めれば足りるので、通すことを目
   値は、リポジトリ、PR番号、headのshaと、失敗した実行のURLである。
   実行のURLが無い場合は載らない。
 - `pull request changed files`の囲み。
-  PRがすでに変更したファイルのパスが入る。
+  PRがすでに変更したファイルのうち、編集してよいもののパスが入る。
+  保護パスのファイルは載らない。
+  囲みの外の固定文が、保護パスのファイルの件数だけを伝える。
   囲みに載るパスは100件までで、超えた分は`(N more not shown)`の1行になる。
   囲みに無くても、PRが変更済みのファイルがありうる。
 - `ci failure <番号>`の囲み。
@@ -274,38 +276,34 @@ flow側も、変更を許可リストで検査し、範囲外の変更は止め�
 変更してよいのは、次の両方を満たすファイルだけである。
 
 1. PRがすでに変更したファイル、または新規のテストファイルである。
-   PRがすでに変更したファイルは、`pull request changed files`の囲みに挙がっている。
+   PRがすでに変更したファイルのうち、編集してよいものは、`pull request changed files`の囲みに挙がっている。
    新規のテストファイルは、PRのheadに無く、この回で新しく作るテストのパスのファイルである。
 2. flowが拒否する保護パスに当たらない。
 
-囲みに挙がっていても、保護パスはflowが拒否する。
+囲みに挙がっているファイルは、拒否される保護パスを含まない。
+保護パスのファイルは囲みに載らず、件数だけが固定文で伝えられる。
+削除されたファイル、テストの既存の行の変更と削除、シンボリックリンクは、囲みに載っていても別の検査で止まりうる。
 保護パスに触れる必要があるとき、または当たるか迷うときは、`outcome: "blocked"`にする。
 
-保護パスの主なものは、次の表のとおりである。
+保護パスの主なものは、次のとおりである。
 大文字小文字を区別せずに判定する。
-表に無くても当たることがあるので、迷うときは触らない。
+CI回では、前の「変更してはいけないファイル」の表より広く拒否される。
+CI回の判断には、この概要を表より優先する。
+ここに無くても当たることがあるので、迷うときは触らない。
 
-| 種類 | 拒否されるパス |
-| --- | --- |
-| ディレクトリ | `.github/`の全体、`infra/`、`migrations/`、`console/src/`、`console/public/`、`scripts/`、`.claude/`、`.agents/`、`.mise/`、`.config/mise/`、`.lefthook/` |
-| フックと環境のディレクトリ | `.husky/`、`.githooks/`、`.yarn/`、`.devcontainer/` |
-| Windmillの定義 | `*__flow/`の配下、`*.script.lock`、`*.schedule.yaml`、`*.variable.yaml`、`*.resource.yaml`、`*.resource-type.yaml`、`*.trigger.yaml`、`wmill.yaml`、`wmill-lock.yaml` |
-| 環境と秘密値の検査 | `.env`と`.env.*`、`.gitleaksignore`、`.gitleaks.toml` |
-| タスクランナー | `Makefile`、`justfile`、`Taskfile.yml`、`Taskfile.yaml`、`turbo.json`、`nx.json`、`deno.json`、`deno.jsonc`、`.pre-commit-config.yaml` |
-| 所有者と実行の設定 | `CODEOWNERS`、`mise.toml`、`mise.*.toml`、`.mise.toml`、`lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`、`bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`、`.mcp.json` |
-| 版の指定 | `.tool-versions`、`.nvmrc`、`.node-version`、`.bun-version`、`.python-version`、`rust-toolchain` |
-| 依存のマニフェストとロックファイル | `package.json`の全体、`bun.lock`、`package-lock.json`、`pnpm-lock.yaml`、`yarn.lock`、`.pnpmfile.cjs`、`.yarnrc`、`.yarnrc.yml`、`pyproject.toml`、`requirements*.txt`、`Cargo.toml`、`go.mod`、`Gemfile`、`composer.json`など |
-| ツールと型とlintの設定 | `tsconfig*.json`、`biome.json`、`*.config.js`と`*.config.ts`(`.cjs`、`.mjs`、`.cts`、`.mts`を含む)、`.eslintrc*`、`.babelrc*`、`.prettierrc*`、`.markdownlint.jsonc`など、`.textlintrc*`、`.editorconfig` |
-| 無視ファイル | `.gitignore`、`.dockerignore`など`.`で始まり`ignore`で終わる名前 |
-| テスト実行の設定 | `conftest.py`、`pytest.ini`、`tox.ini`、`.mocharc*`、`.nycrc*`、`.c8rc*`、`.coveragerc`、`vitest.setup.*`、`jest.setup.*` |
-| Factoryの安全装置 | `f/factory/lib/`の`claude.`、`protected_paths.`、`ci_`、`pr_ci_`、`main_ci_`などで始まるファイル、`f/factory/steps/pr_fix_`で始まるファイル |
-| 個別の保護ファイル | `console/index.html`、`console/drawio-viewer.json`、`console/vite.config.ts`、`infra/Caddyfile`、`f/factory/dependabot__flow/`、dependabotの`f/factory/lib/dependabot_support.ts`など、名前で挙げた個別のファイル |
+- CIの定義、Windmillのflow・schedule・variable・resourceの定義とscriptのロックファイル、DBのmigrationのディレクトリ。
+- エージェントの設定とスキル、インフラ、`scripts`ディレクトリ。
+- Consoleのソース全体と配信物。
+- 依存のマニフェストとロックファイル、ツール・型・lintの設定、タスクランナーとフックの設定、無視ファイル。
+- `.env`系、秘密値の検査の設定、`CODEOWNERS`、`.mcp.json`、`.tool-versions`や`.nvmrc`などの版の指定。
+- テストの収集と実行を変える設定。
+- Factoryの安全装置にあたる、`f/factory/lib/`と`f/factory/steps/`の一部のファイル。
 
-無視ファイルとテスト実行の設定は、`tests/`の配下の新規ファイルでも拒否される。
+無視ファイルと、テストの収集と実行を変える設定は、`tests/`の配下の新規ファイルでも拒否される。
 保護パスを拒否するのは、CI回のClaudeが自分を止める検査や、実行されるコマンドを書き換えられないようにするためである。
 人が読む全体の一覧は、[変更するファイルの検査](../../../docs/internals/ci-fix.md#変更するファイルの検査)にある。
 作業ディレクトリは対象リポジトリなので、この文書はClaudeには読めないことがある。
-判断には、このスキルの表を使う。
+判断には、上の保護パスの概要を使う。
 
 ### テストの変更
 

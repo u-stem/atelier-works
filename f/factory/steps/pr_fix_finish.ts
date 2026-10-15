@@ -8,13 +8,26 @@ import {
   ciAddedPathsStopReason,
   ciRoundPushGuardReason,
   ciTextScanner,
+  collectCiFixChanges,
   guardCiRoundReasons,
   inspectCiFixChanges,
   isCiRound,
+  isRehashCandidate,
   listCiAddedPathsInTree,
   nothingToCommitReason,
   runPostPushBookkeeping,
 } from "../lib/ci_fix_round.ts";
+import {
+  confirmRehash,
+  githubRehashPlanner,
+  type RehashPlanner,
+  readRootWmillLock,
+  readStagedRootLock,
+  rehashPushStopReason,
+  rehashRoundProbe,
+  type StagedRehashGate,
+  stagedRehashGate,
+} from "../lib/ci_metadata_rehash.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -45,6 +58,7 @@ import {
 } from "../lib/github.ts";
 import { GITLEAKS_TIMEOUT_MS } from "../lib/implement_loop.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
+import { runCommandBytes } from "../lib/metadata_git_ports.ts";
 import {
   defaultLockReleaseDeps,
   ensureWorktreeLockFree,
@@ -706,6 +720,49 @@ export async function main(
     return stopBeforeCommit(gateReason ?? PR_HEAD_NOT_RECORDED_REASON);
   }
 
+  // hashの再計算の出力(根の`wmill-lock.yaml`だけの変更)は、検証のステップとは別に、PRのheadの木からもう一度再計算して照合する。
+  // 照合はネットワークとgitのオブジェクトの読み取りを伴うので、リポジトリのロックの外で先に行い、
+  // ロックの中では、ステージした本文が照合済みの本文と同じかだけを確かめる。
+  const rehash: {
+    gate: StagedRehashGate | null;
+    planner: RehashPlanner | null;
+  } = { gate: null, planner: null };
+  if (ciRound) {
+    const planner = githubRehashPlanner({
+      client,
+      owner,
+      repo,
+      prNumber: pr_number,
+      headSha: head_sha,
+      worktreeDir: worktree_dir,
+      ghToken,
+    });
+    rehash.planner = planner;
+    const collected = await collectCiFixChanges(
+      runCommand,
+      worktree_dir,
+      head_sha,
+      { source: "worktree" },
+    );
+    rehash.gate = await stagedRehashGate({
+      candidate: isRehashCandidate(collected),
+      confirm: () =>
+        confirmRehash({
+          ...planner,
+          readLock: () => readRootWmillLock(worktree_dir),
+        }),
+      readStaged: () => readStagedRootLock(runCommandBytes, worktree_dir),
+      isRehashRound: rehashRoundProbe({
+        client,
+        owner,
+        repo,
+        prNumber: pr_number,
+        headSha: head_sha,
+        run: runCommand,
+      }),
+    });
+  }
+
   // gitleaksは長くかかりうるので、`commitAndPush`のリポジトリのロックの外で先に実行する。
   const scanned = await scanPrFixBeforeCommit({
     scanForSecrets: async () => {
@@ -743,7 +800,14 @@ export async function main(
             worktree_dir,
             head_sha,
             prChangedPaths,
-            { source: "staged" },
+            {
+              source: "staged",
+              // ステージした本文が、照合済みの再計算の本文と同じときだけ、`wmill-lock.yaml`だけの変更を許す。
+              rehashCheck: async () =>
+                rehash.gate === null
+                  ? { kind: "deny" }
+                  : await rehash.gate.check(),
+            },
           )),
         ],
         ciTextScanner(runCommand),
@@ -806,6 +870,13 @@ export async function main(
     if (latest.headSha !== head_sha) return finishHeadChanged(latest.headSha);
     const pushStop = ciRoundPushGuardReason(latest, head_sha);
     if (pushStop !== null) return stopBeforeCommit(pushStop);
+    // hashの再計算は、baseの先端に依る。照合した後に先端が動いていれば、pushせず、新しい先端で確かめ直す。
+    // commitの親は`commitAndPush`が`head_sha`に固定し、pushは強制しないので、ブランチの先端が動いていてもpushは通らない。
+    const confirmed = rehash.gate?.confirmed ?? null;
+    if (confirmed !== null && rehash.planner !== null) {
+      const rehashStop = await rehashPushStopReason(confirmed, rehash.planner);
+      if (rehashStop !== null) return stopBeforeCommit(rehashStop);
+    }
   }
 
   // 最初の書き込み(push)の直前に、オーナーの数値IDを照合する。

@@ -39,19 +39,25 @@ const NON_FAILURE_CONCLUSIONS: readonly string[] = [
 
 /**
  * 分類の結果。
- * - `fixable`: 失敗したジョブがすべてソースの編集で直せる種類。`jobs`は失敗したジョブ。
- * - `unfixable_job`: ソースの編集では直せないジョブが失敗した。
- *   `metadata_job`は`generate-metadata`で直す種類、`unnamed_job`は名前が無く種類を決められない。
+ * - `fixable`: 失敗したジョブがすべて、Factoryが自動で直せる種類。
+ *   `jobs`は、`metadata`以外で失敗したジョブで、`metadata`だけが失敗したときは空になる。
+ *   `metadataFailed`は、`metadata`ジョブが失敗したことを表す。
+ *   `metadata`は、Claudeではなく、`wmill-lock.yaml`のhashの再計算(決定的な経路)で直す。
+ * - `unfixable_job`: 名前が無く、種類を決められないジョブが失敗した。
  * - `other_conclusion`: `failure`以外の結論。一時的な原因のことがあり、再実行や待ちで変わりうる。
  * - `no_failure`: 失敗したジョブが無い。
  * 複数のジョブが当たるときは、`unfixable_job`、`other_conclusion`、`fixable`の順に優先する。
  * 直せない失敗が混ざったまま一部だけを直しても、CIは通らないため。
  */
 export type CiFailureClass<T extends CiJobFacts> =
-  | { readonly kind: "fixable"; readonly jobs: readonly T[] }
+  | {
+      readonly kind: "fixable";
+      readonly jobs: readonly T[];
+      readonly metadataFailed: boolean;
+    }
   | {
       readonly kind: "unfixable_job";
-      readonly reason: "metadata_job" | "unnamed_job";
+      readonly reason: "unnamed_job";
       /** 表示用に無害化し、長さを制限した名前。 */
       readonly jobName: string;
     }
@@ -72,7 +78,7 @@ function comparableName(raw: string): string {
   return shown.normalize("NFKC").toLowerCase().trim();
 }
 
-/** `generate-metadata`で直すジョブか。名前が`metadata`で始まるものをすべて含める。 */
+/** `wmill-lock.yaml`のhashを再計算して直すジョブか。名前が`metadata`で始まるものをすべて含める。 */
 function isMetadataJob(comparable: string): boolean {
   return comparable.startsWith("metadata");
 }
@@ -80,10 +86,8 @@ function isMetadataJob(comparable: string): boolean {
 type JobVerdict =
   | { readonly kind: "ignored" }
   | { readonly kind: "failure" }
-  | {
-      readonly kind: "unfixable_job";
-      readonly reason: "metadata_job" | "unnamed_job";
-    }
+  | { readonly kind: "metadata_failure" }
+  | { readonly kind: "unnamed_failure" }
   | {
       readonly kind: "other_conclusion";
       readonly conclusion: CiOtherConclusion;
@@ -96,11 +100,8 @@ function judgeJob(job: CiJobFacts): JobVerdict {
   }
   if (conclusion === "failure") {
     const comparable = comparableName(job.name);
-    if (comparable === "")
-      return { kind: "unfixable_job", reason: "unnamed_job" };
-    if (isMetadataJob(comparable)) {
-      return { kind: "unfixable_job", reason: "metadata_job" };
-    }
+    if (comparable === "") return { kind: "unnamed_failure" };
+    if (isMetadataJob(comparable)) return { kind: "metadata_failure" };
     return { kind: "failure" };
   }
   const known = OTHER_CONCLUSIONS.find((candidate) => candidate === conclusion);
@@ -108,25 +109,29 @@ function judgeJob(job: CiJobFacts): JobVerdict {
 }
 
 /**
- * 実行のジョブを分類する。結論が`failure`のジョブの名前から「ソースの編集で直せるか」を決める。
- * `metadata`で始まるジョブと、名前が空(不可視文字だけを含む)のジョブは直せない種類にする。
- * それ以外の`failure`(`check`など)は直せる種類にする。
+ * 実行のジョブを分類する。結論が`failure`のジョブの名前から「自動で直せるか」を決める。
+ * 名前が空(不可視文字だけを含む)のジョブは、種類を決められないので直せない種類にする。
+ * `metadata`で始まるジョブは、`metadataFailed`で示し、`jobs`には入れない。
+ * それ以外の`failure`(`check`など)は、`jobs`に入れる。
  * `failure`以外の結論(`cancelled`、`timed_out`、`startup_failure`など)は、結論で区別して返す。
  */
 export function classifyCiFailure<T extends CiJobFacts>(
   jobs: readonly T[],
 ): CiFailureClass<T> {
   const failed: T[] = [];
+  let metadataFailed = false;
   let unfixable: CiFailureClass<T> | null = null;
   let other: CiFailureClass<T> | null = null;
   for (const job of jobs) {
     const verdict = judgeJob(job);
     if (verdict.kind === "failure") {
       failed.push(job);
-    } else if (verdict.kind === "unfixable_job") {
+    } else if (verdict.kind === "metadata_failure") {
+      metadataFailed = true;
+    } else if (verdict.kind === "unnamed_failure") {
       unfixable ??= {
         kind: "unfixable_job",
-        reason: verdict.reason,
+        reason: "unnamed_job",
         jobName: sanitizeExternalName(job.name),
       };
     } else if (verdict.kind === "other_conclusion") {
@@ -139,6 +144,8 @@ export function classifyCiFailure<T extends CiJobFacts>(
   }
   if (unfixable !== null) return unfixable;
   if (other !== null) return other;
-  if (failed.length > 0) return { kind: "fixable", jobs: failed };
+  if (failed.length > 0 || metadataFailed) {
+    return { kind: "fixable", jobs: failed, metadataFailed };
+  }
   return { kind: "no_failure" };
 }

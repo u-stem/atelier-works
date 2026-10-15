@@ -433,16 +433,22 @@ export function describeRound(round: WorkItemRound): RoundView {
   };
 }
 
-const VERDICT_LABELS: ReadonlyMap<string, string> = new Map([
-  ["approve", "承認"],
-  ["comment", "コメント"],
-  ["request_changes", "修正を依頼"],
+/**
+ * レビュー行の状態は、Discordの通知と同じ基準(未解決の修正必須の指摘の有無)で出す。
+ * Claudeの判定(`verdict`)は、前のラウンドから残った未解決の指摘を数えないため使わない。
+ */
+const RESULT_LABELS: ReadonlyMap<string, string> = new Map([
+  ["changes_requested", "修正必須の指摘が未解決"],
+  ["reviewed", "修正必須の指摘なし"],
 ]);
 
-const VERDICT_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> = new Map([
-  ["approve", "success"],
-  ["request_changes", "warning"],
+const RESULT_VARIANTS: ReadonlyMap<string, PipelineStatusVariant> = new Map([
+  ["changes_requested", "warning"],
+  ["reviewed", "success"],
 ]);
+
+/** 結果を記録する前に作られた行と、結果を返す前のbackendの応答に出す表示。 */
+const RESULT_MISSING_LABEL = "修正必須の有無の記録なし";
 
 /** コミットの表示に使う先頭の桁数。 */
 const SHORT_SHA_LENGTH = 7;
@@ -450,19 +456,33 @@ const SHORT_SHA_LENGTH = 7;
 export type ReviewView = {
   readonly key: number;
   readonly shaLabel: string;
-  readonly verdictLabel: string;
-  readonly verdictVariant: PipelineStatusVariant;
+  readonly resultLabel: string;
+  readonly resultVariant: PipelineStatusVariant;
   readonly findingLabel: string;
   readonly createdAt: string;
 };
 
+/** 結果の表示。キーが欠けた応答は、`null`と同じく記録なしとして扱う。 */
+function describeReviewResult(result: string | null | undefined): {
+  readonly label: string;
+  readonly variant: PipelineStatusVariant;
+} {
+  if (result === null || result === undefined) {
+    return { label: RESULT_MISSING_LABEL, variant: "muted" };
+  }
+  return {
+    label: RESULT_LABELS.get(result) ?? unknownLabel(result),
+    variant: RESULT_VARIANTS.get(result) ?? "muted",
+  };
+}
+
 export function describeReview(review: WorkItemReview): ReviewView {
+  const result = describeReviewResult(review.result);
   return {
     key: review.review_id,
     shaLabel: plain(review.head_sha).slice(0, SHORT_SHA_LENGTH),
-    verdictLabel:
-      VERDICT_LABELS.get(review.verdict) ?? unknownLabel(review.verdict),
-    verdictVariant: VERDICT_VARIANTS.get(review.verdict) ?? "muted",
+    resultLabel: result.label,
+    resultVariant: result.variant,
     findingLabel: `指摘 ${review.finding_count}件`,
     createdAt: review.created_at,
   };

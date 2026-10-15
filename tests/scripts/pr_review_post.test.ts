@@ -5,10 +5,12 @@
 // 投稿の書式は`.claude/skills/factory-review/SKILL.md`の「投稿形式」節に従う。
 
 import { describe, expect, test } from "bun:test";
+import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
-import type {
-  ReviewComment,
-  ReviewThread,
+import {
+  GitHubHttpError,
+  type ReviewComment,
+  type ReviewThread,
 } from "../../f/factory/lib/github.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import type { ReviewFinding } from "../../f/factory/lib/types.ts";
@@ -26,6 +28,8 @@ import {
   shouldPostReview,
 } from "../../f/factory/steps/pr_review_post.ts";
 import {
+  buildReviewRecord,
+  commentedFindingsOf,
   countOpenMustThreads,
   decideReviewBodyMode,
   fenceFor,
@@ -33,6 +37,7 @@ import {
   mapFindingsToReviewComments,
   renderInlineComment,
   renderReviewSummary,
+  renderUnresolvedLineSummary,
   reviewResultFor,
   selectThreadsToResolve,
   withReviewMarkers,
@@ -643,6 +648,62 @@ describe("reviewResultFor", () => {
   });
 });
 
+describe("buildReviewRecord", () => {
+  const base = {
+    workItemId: 7,
+    headSha: "abc1234",
+    summary: "no new findings",
+    postedReviewId: "99",
+  };
+
+  test("marks an approving review with no new finding as changes_requested while a must is open", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 1,
+      }).result,
+    ).toBe("changes_requested");
+  });
+
+  test("marks an approving review with no new finding and no open must as reviewed", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 0,
+      }).result,
+    ).toBe("reviewed");
+  });
+
+  test("keeps the verdict as Claude returned it", () => {
+    expect(
+      buildReviewRecord({
+        ...base,
+        verdict: "approve",
+        findings: [],
+        openMustCount: 1,
+      }).verdict,
+    ).toBe("approve");
+  });
+
+  test("carries the identifiers of the work item, the commit and the posted review", () => {
+    const record = buildReviewRecord({
+      ...base,
+      verdict: "comment",
+      findings: [],
+      openMustCount: 0,
+    });
+    expect([
+      record.work_item_id,
+      record.head_sha,
+      record.posted_review_id,
+    ]).toEqual([7, "abc1234", "99"]);
+  });
+});
+
 describe("runPrReviewPost worktree cleanup", () => {
   const REPO_DIR = "/workspaces/acme/widgets/main";
   const WORKTREE_DIR = "/workspaces/acme/widgets/review-1-abc1234";
@@ -731,6 +792,141 @@ describe("runPrReviewPost worktree cleanup", () => {
       log: SILENT,
     }).catch(() => {});
     expect(remover.calls).toEqual([[REPO_DIR, WORKTREE_DIR]]);
+  });
+});
+
+// GitHubの呼び出しの失敗が、一時的なものだけ印を付けて投げ直されることを確かめる。
+describe("runPrReviewPost failure marking", () => {
+  const SILENT = logger("pr_review_post", { sink: () => {} });
+  const INPUT: PrReviewPostInput = {
+    work_item_id: 1,
+    skip: false,
+    owner: "acme",
+    repo: "widgets",
+    pr_number: 1,
+    review_sha: "abc1234",
+    summary: "",
+    verdict: "comment",
+    findings: [],
+    pr_files: [],
+    worktree_dir: "",
+    repo_dir: "",
+  };
+
+  function failingWith(status: number) {
+    return {
+      removeReviewWorktree: async () => {},
+      log: SILENT,
+      postReview: async () => {
+        throw new GitHubHttpError(
+          `POST pr review failed with HTTP ${status}`,
+          status,
+        );
+      },
+    };
+  }
+
+  test("marks a 502 from GitHub as a transient failure", async () => {
+    await expect(runPrReviewPost(INPUT, failingWith(502))).rejects.toThrow(
+      `${TRANSIENT_GITHUB_REASON_PREFIX}POST pr review failed with HTTP 502`,
+    );
+  });
+
+  test("marks a failure without a response as a transient failure", async () => {
+    await expect(runPrReviewPost(INPUT, failingWith(0))).rejects.toThrow(
+      TRANSIENT_GITHUB_REASON_PREFIX,
+    );
+  });
+
+  test("leaves a 403 from GitHub without the mark", async () => {
+    const error = await runPrReviewPost(INPUT, failingWith(403)).catch(
+      (err: unknown) => err,
+    );
+    expect(error instanceof Error && error.message).toBe(
+      "POST pr review failed with HTTP 403",
+    );
+  });
+});
+
+describe("commentedFindingsOf", () => {
+  const inline = finding({ message: "inline" });
+  const unanchored = finding({ path: "b.ts", message: "unanchored" });
+  const files = ["a.ts"];
+
+  test("keeps the findings that became inline comments in order", () => {
+    const { droppedFindings } = mapFindingsToReviewComments(
+      [inline, unanchored],
+      files,
+    );
+    expect(commentedFindingsOf([inline, unanchored], droppedFindings)).toEqual([
+      inline,
+    ]);
+  });
+
+  test("together with the dropped findings gives back every finding", () => {
+    const findings = [inline, unanchored, finding({ line: null })];
+    const { droppedFindings } = mapFindingsToReviewComments(findings, files);
+    const commented = commentedFindingsOf(findings, droppedFindings);
+    expect(commented.length + droppedFindings.length).toBe(findings.length);
+  });
+
+  test("matches the number of inline comments", () => {
+    const findings = [inline, unanchored, finding({ line: 3 })];
+    const { comments, droppedFindings } = mapFindingsToReviewComments(
+      findings,
+      files,
+    );
+    expect(commentedFindingsOf(findings, droppedFindings)).toHaveLength(
+      comments.length,
+    );
+  });
+});
+
+describe("renderUnresolvedLineSummary", () => {
+  const commented = finding({
+    line: 10,
+    end_line: null,
+    message: "first problem",
+  });
+  const ranged = finding({
+    path: "c.ts",
+    line: 4,
+    end_line: 8,
+    message: "second problem",
+  });
+  const dropped = finding({
+    path: "b.ts",
+    line: null,
+    message: "third problem",
+  });
+  const body = renderUnresolvedLineSummary(
+    "alice",
+    [commented, ranged],
+    [dropped],
+  );
+
+  test("does not claim any inline comment", () => {
+    expect(body).not.toContain("件コメントしました");
+  });
+
+  test("asks for confirmation on its own line", () => {
+    expect(body.split("\n")).toContain("確認お願いします。");
+  });
+
+  test("says the lines could not be resolved", () => {
+    expect(body).toContain("GitHubが行を解決できなかった");
+  });
+
+  test("shows the line of a finding that would have been an inline comment", () => {
+    expect(body).toContain("- [MUST] a.ts:10: first problem");
+  });
+
+  test("shows the range of a multi-line finding", () => {
+    expect(body).toContain("- [MUST] c.ts:4-8: second problem");
+  });
+
+  test("keeps the form of a finding that had no line", () => {
+    expect(body).toContain("- [MUST] b.ts: third problem");
   });
 });
 
@@ -829,6 +1025,7 @@ describe("posting a review once per sha", () => {
       target: TARGET,
       prAuthorLogin: "alice",
       comments: [],
+      commentedFindings: [],
       droppedFindings: [],
       priorReview: true,
       post: true,
@@ -905,6 +1102,155 @@ describe("posting a review once per sha", () => {
         COMMENTS,
       );
       expect(id).toBe(99);
+    });
+  });
+
+  describe("postMarkedReview when GitHub cannot resolve a comment line", () => {
+    const FALLBACK = "[pr_review 自動レビュー] @alice\n1件コメントしました。";
+    const LINE_ERROR = {
+      message: "Unprocessable Entity",
+      errors: ["Line could not be resolved"],
+    };
+
+    function unresolvedLine(): CommandResult {
+      return ok(ghApiStdout(422, LINE_ERROR));
+    }
+
+    function postedBody(call: FakeCall | undefined): unknown {
+      return JSON.parse(call?.options?.stdin ?? "{}");
+    }
+
+    test("posts again when GitHub answers 422", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const id = await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        { fallbackBody: FALLBACK },
+      );
+      expect(id).toBe(99);
+    });
+
+    test("sends the second post without inline comments", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        { fallbackBody: FALLBACK },
+      );
+      expect(postedBody(fake.calls[1])).toMatchObject({ comments: [] });
+    });
+
+    test("sends the second post with the fallback body and the markers", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        { fallbackBody: FALLBACK },
+      );
+      expect(postedBody(fake.calls[1])).toMatchObject({
+        body: withReviewMarkers(FALLBACK, 7, SHA),
+      });
+    });
+
+    test("logs the 422 message of GitHub so that the cause can be told", async () => {
+      const lines: string[] = [];
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        {
+          fallbackBody: FALLBACK,
+          log: logger("pr_review_post", { sink: (line) => lines.push(line) }),
+        },
+      );
+      expect(lines.join("\n")).toContain("Line could not be resolved");
+    });
+
+    test("does not post again for an error other than 422", async () => {
+      const fake = createFakeCommandRunner([
+        ok(ghApiStdout(403, { message: "Forbidden" })),
+        ghApiOk({ id: 99 }),
+      ]);
+      await expect(
+        postMarkedReview(
+          { run: fake.run, ghToken: "tok" },
+          TARGET,
+          SUMMARY,
+          COMMENTS,
+          { fallbackBody: FALLBACK },
+        ),
+      ).rejects.toThrow("HTTP 403");
+    });
+
+    test("rejects when the post without inline comments also fails", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ok(ghApiStdout(422, { message: "Validation Failed" })),
+      ]);
+      await expect(
+        postMarkedReview(
+          { run: fake.run, ghToken: "tok" },
+          TARGET,
+          SUMMARY,
+          COMMENTS,
+          { fallbackBody: FALLBACK },
+        ),
+      ).rejects.toThrow("HTTP 422");
+    });
+
+    test("rejects without a second post when there were no inline comments", async () => {
+      const fake = createFakeCommandRunner([unresolvedLine()]);
+      await expect(
+        postMarkedReview(
+          { run: fake.run, ghToken: "tok" },
+          TARGET,
+          SUMMARY,
+          [],
+          { fallbackBody: FALLBACK },
+        ),
+      ).rejects.toThrow("HTTP 422");
+    });
+
+    test("publishReview lists the inline findings in the summary of the second post", async () => {
+      const inline = finding({ message: "inline finding text" });
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          priorReview: false,
+          comments: COMMENTS,
+          commentedFindings: [inline],
+        }),
+        SILENT,
+      );
+      const body = postedBody(fake.calls[2]);
+      expect(body).toMatchObject({
+        body: expect.stringContaining("inline finding text"),
+      });
     });
   });
 

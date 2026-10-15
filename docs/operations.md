@@ -160,14 +160,18 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 - dependabotのPRの取得(`poll_dependabot`)。作業項目を作る前に照合する。
 - フォームで投入する`manual_intake_create_issue`。Issueを作る前に照合する。
 - Issue化の提案を処理する`issue_proposal_apply`。承認は判断の記録の前に、却下は返信の前に、1回だけ照合する。
-- 長い実行を挟んだ後の書き込みのうち、次の4つの処理。Claudeの実行と検査の間に名前が別の人に渡りうるので、準備の入口に加えて、書き込みの直前にも1回照合する。
+- 長い実行を挟んだ後の書き込みのうち、次の5つの処理。Claudeの実行と検査の間に名前が別の人に渡りうるので、準備の入口に加えて、書き込みの直前にも1回照合する。
   実装の終了処理(`implement_finish`)は、pushとリモートブランチの削除の前に照合する。
   PR修正の終了処理(`pr_fix_finish`)は、pushの前に照合する。
   PRレビューの投稿(`pr_review_post`)は、レビューの投稿の前に照合する。
+  dependabotの終了処理(`dependabot_finish`)は、PRを読み直した後、マージ、所見の投稿、ラベルの付与の前に照合する。
   draw.ioのビューアを上げる`drawio_viewer_bump`は、`factory_repo_id`をブランチの作成の前に照合する。
 
-dependabotの終了処理(`dependabot_finish`)は、この照合の対象に含まれない。
-理由と残る余地は、[セキュリティ](security.md#オーナーの数値idの照合)の残るリスクにある。
+書き込みの直前の照合に落ちた処理は、書かずに止める。
+dependabotの終了処理では、作業項目を人に回し、関門のnoticeを残す。
+noticeは、`owner_id_mismatch`である。
+`factory_repo`で`factory_repo_id`が設定されているときは、リポジトリIDの食い違いが`factory_repo_id_mismatch`になる。
+残る余地は、[セキュリティ](security.md#オーナーの数値idの照合)の残るリスクにある。
 
 照合は、リポジトリのオーナーの名前で`owners`を引いて行う。
 大文字と小文字は区別しない。
@@ -1197,9 +1201,21 @@ CIが失敗したheadを見つけると、通知`pr_ci_failed`を残し、Discor
 metadataジョブの失敗なら、`mise run metadata`を実行して差分をコミットする。
 `mise run metadata`はローカルのWindmillに接続する。
 先に`mise run up`でスタックを起動しておく([セットアップ](setup.md#gitのフック))。
-metadataジョブはWindmillの起動やログインでも落ちるので、`mise run metadata`で差分が出ないときは、実行をやり直す。
+Factoryが作るPRで、自動修正が有効なときは、metadataジョブだけの失敗を、Factoryがhashの再計算で直してpushする([失敗の自動修正を有効にする](#失敗の自動修正を有効にする))。
+読み取りなど一時的な失敗は、保留にせず、flowの再試行に任せる。
+再計算では直らないときは、保留`metadata_manual`で通知が出る。
+保留した理由の種別は、作業項目の理由に残る。
+人の作業は、種別で分かれる。
+
+- 事前検査が通らない保留は、必要ならmainを取り込み、人が`mise run metadata`を実行して差分をコミットする。
+  依存や入力のschemaが変わるPR、PRがmainの先端を含まないPRなどである。
+  理由の補足で原因を確かめる。
+  workerのBunの版が合わない保留(`scan_unavailable`)は`bun <版>`、想定外の例外の保留(`internal_error`)は例外の種類である。
+- 再計算しても本文が変わらない保留(`lock_up_to_date`)は、metadataジョブがWindmillの起動やログインで落ちている。
+  人の手順は要らず、実行をやり直す。`mise run metadata`で差分が出ないときも、同じ原因である。
+
 Factoryが作るPR(同じリポジトリの`factory/`ブランチ)では、CIが再生成の結果をartifact(`metadata-patch`)に出す([CIのメタデータの検査](setup.md#ciのメタデータの検査))。
-artifactが出ていても、PRには適用されない。人が`mise run metadata`を実行して差分をコミットする。
+artifactが出ていても、PRには適用されない。
 取り消しやフレークなら、実行をやり直す。
 通知は、次のときに自動で解決される。
 
@@ -1302,9 +1318,12 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 - 失敗を見つけた時刻が、`pr_ci_fix_enabled_since`以後である。
 - PRのすべてのcommitが、Factoryのトレーラーを持つ。トレーラーの無いcommitを含むPRは、自動で直さない。
 - 今のheadのFactoryのレビューがある。ドラフトでなく、auto-mergeが有効でもない。
-- 失敗が`failure`で、ソースの編集で直せる種類である。metadataジョブの失敗や、取り消しなどで終わった実行は、直さない。
+- 失敗が`failure`で、自動で直せる種類である。取り消しなどで終わった実行と、名前の無いジョブの失敗は、直さない。
+  metadataジョブの失敗は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す。依存や入力のschemaが変わるPRは、再計算では直らず、人が直す。
 - 同じPRで動いている直す作業項目が無い。
-- 日次の予算が残っていて、mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
+- mainのCIが赤くなく、そのPRで起動した数が`pr_ci_fix_max_rounds`に満たない。
+  日次の予算も残っている。ただし、metadataジョブだけが失敗しているときは、Claudeを起動せず再計算で直すので、予算を問わない。
+  `check`などが同時に落ちているときは、Claudeが先に直すので、予算を確かめる。metadataジョブは、次の回で再計算が直す。
 - Factoryのリポジトリの`factory_branch`にあるfactory-fixスキルが、CI回の節(マーカー`ci-fix-skill:v1`)を持つ。ファイルはGitHubのAPIで読む。
   `pr_fix`の準備は毎回`factory_branch`をfetchしてhard resetする。
   起動した後にスキルが変わって作業項目が準備で失敗すると、保留`marker_missing`になり、次の巡回で外れて起動し直す。
@@ -1337,7 +1356,7 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
    何も出ないときは、`grep`を外した`gh api`単体が成功するかを先に確かめる。ファイルを読めていないだけのことがある。
 
    マーカーは、保護パスのスキルへの人のPRで入れる。PRがマージされるまで、有効にしない。
-   持たないと、すべての失敗が保留`marker_missing`になる。スキルが入れば、次の巡回で外れる。
+   持たないと、`metadata`ジョブだけの失敗を除くすべての失敗が、保留`marker_missing`になる。スキルが入れば、次の巡回で外れる。
 2. 有効にする前から残る失敗(`failed`の行)を片付ける。PRを直すか閉じる。さらに、赤いFactoryのPRが残っていないかを確かめる。
 3. `pr_ci_fix_max_rounds`を`1`にし、`daily_budget_usd`を「当日の使用額に1ラウンド分を足した値」にする。
    当日の使用額は、Factoryが予算の判定に使う集計と同じ式で読む。日の区切りはJSTの0時である。

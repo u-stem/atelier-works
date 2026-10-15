@@ -224,10 +224,26 @@ describe("runPrFixVerify: recorded values from the prepare step", () => {
     expect(h.calls).toEqual([]);
   });
 
-  test("announces the check commands before the first inspection", async () => {
+  test("announces the check commands right before the first check command", async () => {
     const h = harness();
     await runPrFixVerify(h.deps, INPUT);
-    expect(h.calls[0]).toBe("announceChecks");
+    expect(h.calls.indexOf("announceChecks")).toBe(
+      h.calls.indexOf("runChecks") - 1,
+    );
+  });
+
+  test("announces the check commands once for two runs of the checks", async () => {
+    const h = harness({ checks: [false, true] });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls.filter((call) => call === "announceChecks").length).toBe(1);
+  });
+
+  test("does not announce check commands that never run because an inspection refused", async () => {
+    const h = harness({
+      inspections: [forbidden("forbidden path changed: x")],
+    });
+    await runPrFixVerify(h.deps, INPUT);
+    expect(h.calls).not.toContain("announceChecks");
   });
 
   test("does not announce check commands when there are none", async () => {
@@ -250,7 +266,7 @@ describe("runPrFixVerify: worktree .git pointer and HEAD", () => {
   test("does not inspect changes when the pointer changed", async () => {
     const h = harness({ pointerModified: [true] });
     await runPrFixVerify(h.deps, INPUT);
-    expect(h.calls).toEqual(["announceChecks", "assertGitPointer:recorded"]);
+    expect(h.calls).toEqual(["assertGitPointer:recorded"]);
   });
 
   test("blocks when a passing check command changed the pointer", async () => {
@@ -389,8 +405,8 @@ describe("runPrFixVerify: re-inspection after check commands", () => {
     const h = harness();
     await runPrFixVerify(h.deps, INPUT);
     expect(h.calls).toEqual([
-      "announceChecks",
       ...INSPECTION,
+      "announceChecks",
       "runChecks",
       ...INSPECTION,
     ]);
@@ -422,8 +438,8 @@ describe("runPrFixVerify: re-inspection after check commands", () => {
     const h = harness({ checks: [false, true] });
     await runPrFixVerify(h.deps, INPUT);
     expect(h.calls).toEqual([
-      "announceChecks",
       ...INSPECTION,
+      "announceChecks",
       "runChecks",
       "budgetStatus",
       "assertGitPointer:recorded",
@@ -628,6 +644,73 @@ describe("runPrFixVerify: a worker that cannot run the checks", () => {
       checksError: { at: 0, error: new Error("disk full") },
     });
     await expect(runPrFixVerify(h.deps, INPUT)).rejects.toThrow("disk full");
+  });
+});
+
+describe("runPrFixVerify: a recomputed lock", () => {
+  const CI_INPUT: PrFixVerifyInput = { ...INPUT, ciRound: true };
+
+  function withVerified(verified: boolean, options: HarnessOptions = {}) {
+    const h = harness(options);
+    const deps: PrFixVerifyDeps = { ...h.deps, rehashVerified: () => verified };
+    return { deps, calls: h.calls };
+  }
+
+  test("skips the check commands for a lock that the recomputation confirmed", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).not.toContain("runChecks");
+  });
+
+  test("does not announce check commands that do not run for a confirmed lock", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).not.toContain("announceChecks");
+  });
+
+  test("announces the check commands when the lock was not confirmed", async () => {
+    const { deps, calls } = withVerified(false);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).toContain("announceChecks");
+  });
+
+  test("returns done with the commit message of the apply step", async () => {
+    const { deps } = withVerified(true);
+    const result = await runPrFixVerify(deps, CI_INPUT);
+    expect(result).toEqual({
+      outcome: "done",
+      reason: null,
+      summary: "apply summary",
+      replies: [],
+      commit_subject: "fix: 指摘を直す",
+      commit_body: null,
+    });
+  });
+
+  test("inspects the worktree before it trusts the confirmation", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).toContain("inspectChanges");
+  });
+
+  test("blocks when the inspection refuses, even if a confirmation was recorded", async () => {
+    const { deps } = withVerified(true, {
+      inspections: [forbidden("ci round change not allowed (x): y")],
+    });
+    const result = await runPrFixVerify(deps, CI_INPUT);
+    expect(result.outcome).toBe("blocked");
+  });
+
+  test("runs the check commands when the lock was not confirmed", async () => {
+    const { deps, calls } = withVerified(false);
+    await runPrFixVerify(deps, CI_INPUT);
+    expect(calls).toContain("runChecks");
+  });
+
+  test("ignores a confirmation in a round that is not a CI round", async () => {
+    const { deps, calls } = withVerified(true);
+    await runPrFixVerify(deps, INPUT);
+    expect(calls).toContain("runChecks");
   });
 });
 

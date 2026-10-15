@@ -8,6 +8,7 @@
 // 外すラベルも付ける状態ラベルも無い。
 
 import { describe, expect, test } from "bun:test";
+import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
 import { DEPENDABOT_FLOW_PATH } from "../../f/factory/lib/dependabot_flow_support.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
@@ -139,6 +140,8 @@ type FakeFailureWorld = {
   readonly instanceName?: () => Promise<string>;
   readonly updateStatus?: () => Promise<boolean>;
   readonly webhookUrl?: string;
+  /** 同じPRに置き換えた行か並走する行があるか。 */
+  readonly superseded?: boolean;
 };
 
 function fakeFailureDeps(world: FakeFailureWorld = {}) {
@@ -156,6 +159,7 @@ function fakeFailureDeps(world: FakeFailureWorld = {}) {
       statusCalls.push({ id, from, to, flowJobId, note });
       return world.updateStatus === undefined ? true : world.updateStatus();
     },
+    hasSupersedingPrReview: async () => world.superseded ?? false,
     readInstanceName: world.instanceName ?? (async () => "test-instance"),
     readWebhookUrl: async () => world.webhookUrl ?? "https://discord.example/x",
     notify: async (_url, event) => {
@@ -360,5 +364,74 @@ describe("handleFlowFailure for other flows", () => {
     });
     await handleFlowFailure(fake.deps, failureInput({ path: PIPELINE }));
     expect(fake.statusCalls).toHaveLength(0);
+  });
+});
+
+describe("handleFlowFailure for a transient pr_review failure", () => {
+  const TRANSIENT_MESSAGE = `${TRANSIENT_GITHUB_REASON_PREFIX}POST pr review acme/widgets#12 failed with HTTP 502`;
+
+  function reviewInput(message: string): FlowFailureInput {
+    return failureInput({
+      path: "f/factory/pr_review",
+      error: { message, step_id: "pr_review_post" },
+    });
+  }
+
+  function reviewItem(): WorkItem {
+    return workItem({ kind: "pr_review", status: "reviewing" });
+  }
+
+  test("marks the work item failed so the retry can pick it up", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem() });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.statusCalls.map((call) => call.to)).toEqual(["failed"]);
+  });
+
+  test("sends no notification, because the retry sweep tells the human", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem() });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.events).toEqual([]);
+  });
+
+  test("still records the failure", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem() });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.failures).toHaveLength(1);
+  });
+
+  test("reports job_failed when a newer review of the same pull request exists", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem(), superseded: true });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.events.map((event) => event.kind)).toEqual(["job_failed"]);
+  });
+
+  test("reports job_failed when the work item has no pull request number", async () => {
+    const fake = fakeFailureDeps({
+      item: workItem({
+        kind: "pr_review",
+        status: "reviewing",
+        pr_number: null,
+      }),
+    });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.events.map((event) => event.kind)).toEqual(["job_failed"]);
+  });
+
+  test("reports a failure without the transient prefix as job_failed", async () => {
+    const fake = fakeFailureDeps({ item: reviewItem() });
+    await handleFlowFailure(
+      fake.deps,
+      reviewInput("POST pr review acme/widgets#12 failed with HTTP 422"),
+    );
+    expect(fake.events.map((event) => event.kind)).toEqual(["job_failed"]);
+  });
+
+  test("reports job_failed when the work item could not be marked failed", async () => {
+    const fake = fakeFailureDeps({
+      item: reviewItem(),
+      updateStatus: async () => false,
+    });
+    await handleFlowFailure(fake.deps, reviewInput(TRANSIENT_MESSAGE));
+    expect(fake.events.map((event) => event.kind)).toEqual(["job_failed"]);
   });
 });

@@ -22,6 +22,7 @@ import {
   isNoticeResolvable,
   type NoticeSeverity,
   noticeSeverity,
+  TRANSIENT_STALL_NOTE_PREFIX,
   truncateChars,
 } from "../lib/console_support.ts";
 import {
@@ -1216,6 +1217,7 @@ export async function runConsoleSummary(
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
         AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
+        AND NOT coalesce(starts_with(e.note, ${TRANSIENT_STALL_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true
@@ -1512,6 +1514,8 @@ export type WorkItemReviewRow = {
   readonly review_id: number;
   readonly head_sha: string;
   readonly verdict: string;
+  /** `reviewResultFor`の結果。結果を記録する前の行では`null`。 */
+  readonly result: string | null;
   readonly finding_count: number;
   readonly posted_review_id: string | null;
   readonly created_at: string;
@@ -1522,6 +1526,7 @@ function toWorkItemReviewRow(row: SqlRow): WorkItemReviewRow {
     review_id: asId(row.review_id, "review_id"),
     head_sha: asStr(row.head_sha, "head_sha"),
     verdict: asStr(row.verdict, "verdict"),
+    result: asNullableStr(row.result, "result"),
     finding_count: asNumeric(row.finding_count, "finding_count"),
     posted_review_id: asNullableStr(row.posted_review_id, "posted_review_id"),
     created_at: asIsoDate(row.created_at, "created_at"),
@@ -1606,6 +1611,7 @@ export async function runWorkItemDetail(
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
         AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
+        AND NOT coalesce(starts_with(e.note, ${TRANSIENT_STALL_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true
@@ -1669,7 +1675,7 @@ export async function runWorkItemDetail(
 
   const reviewRows = await sql`
     SELECT
-      id AS review_id, head_sha, verdict,
+      id AS review_id, head_sha, verdict, result,
       jsonb_array_length(findings) AS finding_count,
       posted_review_id, created_at
     FROM factory.reviews

@@ -45,6 +45,7 @@ import {
   hasNonTerminalPrWorkItem,
   hasPassedMainCiRunAfter,
   hasPriorReview,
+  hasSupersedingPrReview,
   hasUnfinishedPrRun,
   insertApprovalRequest,
   insertAuditReport,
@@ -87,6 +88,7 @@ import {
   listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
@@ -98,6 +100,7 @@ import {
   recordFailure,
   recordMainCiRun,
   recordPrCiCheck,
+  recordTransientStall,
   recordWorkspaceDiskUsageNotice,
   releaseFixingPrCiCheck,
   resolveNoticeIfUnresolved,
@@ -106,6 +109,7 @@ import {
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
+  restartTransientPrReview,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -2049,6 +2053,7 @@ describe("insertReview", () => {
         work_item_id: 1,
         head_sha: "abc1234",
         verdict: "approve",
+        result: "reviewed",
         summary: "looks good",
         findings: [],
         posted_review_id: "review-1",
@@ -2058,6 +2063,23 @@ describe("insertReview", () => {
     expect(calls[0]?.text).toContain("INSERT INTO factory.reviews");
   });
 
+  test("records the result of an approving review that still has an open must", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
+    await insertReview(
+      {
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "approve",
+        result: "changes_requested",
+        summary: "no new findings",
+        findings: [],
+        posted_review_id: "review-1",
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain("changes_requested");
+  });
+
   test("casts work_item_id to ::bigint", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 17 }]]);
     await insertReview(
@@ -2065,6 +2087,7 @@ describe("insertReview", () => {
         work_item_id: 1,
         head_sha: "abc1234",
         verdict: "approve",
+        result: "reviewed",
         summary: "looks good",
         findings: [],
         posted_review_id: "review-1",
@@ -2076,6 +2099,46 @@ describe("insertReview", () => {
 });
 
 describe("toReviewRecord", () => {
+  test("parses the recorded result", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "approve",
+      result: "changes_requested",
+      summary: "s",
+      findings: [],
+      posted_review_id: null,
+    });
+    expect(review.result).toBe("changes_requested");
+  });
+
+  test("reads a row without a recorded result as null", () => {
+    const review = toReviewRecord({
+      work_item_id: 1,
+      head_sha: "abc1234",
+      verdict: "approve",
+      result: null,
+      summary: "s",
+      findings: [],
+      posted_review_id: null,
+    });
+    expect(review.result).toBeNull();
+  });
+
+  test("rejects a result that is not known", () => {
+    expect(() =>
+      toReviewRecord({
+        work_item_id: 1,
+        head_sha: "abc1234",
+        verdict: "approve",
+        result: "zeta",
+        summary: "s",
+        findings: [],
+        posted_review_id: null,
+      }),
+    ).toThrow();
+  });
+
   test("parses findings from a jsonb row", () => {
     const review = toReviewRecord({
       work_item_id: 1,
@@ -7128,5 +7191,161 @@ describe("deletePrCiChecksBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
     expect(await deletePrCiChecksBefore(cutoff, latestCutoff, sql)).toBe(2);
+  });
+});
+
+describe("transient pr_review restart", () => {
+  const query = {
+    reasonPrefix: "github_transient: ",
+    notePrefix: "auto_retry: ",
+    maxRestarts: 3,
+    delaysSeconds: [300, 900, 2700],
+    stallNotePrefix: "auto_retry_stalled: ",
+  };
+
+  test("passes the delays by restart count as a parameter", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContainEqual([300, 900, 2700]);
+  });
+
+  test("passes the delays to the compare-and-swap too", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.values).toContainEqual([300, 900, 2700]);
+  });
+
+  test("passes whether the used-up reviews are included", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates(
+      { ...query, limit: 50, includeExhausted: true },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("skips the stall records when it looks for the failure reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContain("auto_retry_stalled: ");
+  });
+
+  test("tells whether a newer or concurrent review exists", async () => {
+    const { sql } = createFakeSqlClient([[{ superseded: true }]]);
+    expect(await hasSupersedingPrReview(7, sql)).toBe(true);
+  });
+
+  test("records a stall once", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 7 }]]);
+    expect(
+      await recordTransientStall(
+        { stallNotePrefix: "auto_retry_stalled: ", id: 7 },
+        sql,
+        NO_JOBS,
+      ),
+    ).toBe(true);
+  });
+
+  test("does not record a stall that was already recorded", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await recordTransientStall(
+        { stallNotePrefix: "auto_retry_stalled: ", id: 7 },
+        sql,
+        NO_JOBS,
+      ),
+    ).toBe(false);
+  });
+
+  test("parses the candidate rows", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: "7",
+          owner: "acme",
+          repo: "widgets",
+          pr_number: 12,
+          flow_job_id: null,
+          restarts: 1,
+          failure_note: "github_transient: failed",
+        },
+      ],
+    ]);
+    expect(
+      await listTransientReviewCandidates({ ...query, limit: 50 }, sql),
+    ).toEqual([
+      {
+        id: 7,
+        owner: "acme",
+        repo: "widgets",
+        pr_number: 12,
+        flow_job_id: null,
+        restarts: 1,
+        failure_note: "github_transient: failed",
+      },
+    ]);
+  });
+
+  test("lists only failed reviews that stopped for the transient reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContain("github_transient: ");
+  });
+
+  test("lists only reviews below the restart cap", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContain(3);
+  });
+
+  test("excludes a review that a newer row of the same pull request replaced", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("other.id > w.id");
+  });
+
+  test("restart returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 7 }]]);
+    const params = {
+      ...query,
+      id: 7,
+      note: "auto_retry: restarted from failed",
+    };
+    expect(await restartTransientPrReview(params, sql, NO_JOBS)).toBe(true);
+  });
+
+  test("restart returns false when the work item moved on", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const params = {
+      ...query,
+      id: 7,
+      note: "auto_retry: restarted from failed",
+    };
+    expect(await restartTransientPrReview(params, sql, NO_JOBS)).toBe(false);
+  });
+
+  test("restart clears the flow job id so that the job id is recorded as a lease", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
+  test("restart guards the update with the stop reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    const params = {
+      ...query,
+      id: 7,
+      note: "auto_retry: restarted from failed",
+    };
+    await restartTransientPrReview(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain("github_transient: ");
   });
 });
