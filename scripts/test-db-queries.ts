@@ -5440,6 +5440,70 @@ check(
     sql,
   )) === 6,
 );
+// 新しい競合の回は、回の開始時刻、起動の回数、保留を戻し、結んだ作業項目は残す。競合のままでは何も戻さない。
+const cfEpisode = await conflictFixRow(720, CF_HEAD_1);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET episode_started_at = now() - interval '1 day', fix_attempts = 2, fix_hold_reason = 'main_ci_failed', fix_work_item_id = 555 WHERE id = ${String(cfEpisode.id)}`,
+);
+const cfEpisodeBefore = await cfRowOf(cfEpisode.id);
+const cfContinued = await recordPrConflict(
+  { ...CF, pr_number: 720, head_sha: CF_HEAD_2 },
+  sql,
+);
+const cfContinuedRow = await cfRowOf(cfEpisode.id);
+check(
+  "conflict episode: a conflict that continues keeps the attempts, the hold and the work item",
+  cfContinued.started === false &&
+    Number(cfContinuedRow?.fix_attempts) === 2 &&
+    cfContinuedRow?.fix_hold_reason === "main_ci_failed" &&
+    Number(cfContinuedRow?.fix_work_item_id) === 555,
+  cfContinuedRow,
+);
+check(
+  "conflict episode: a conflict that continues keeps the start time of the episode",
+  new Date(String(cfContinuedRow?.episode_started_at)).getTime() ===
+    new Date(String(cfEpisodeBefore?.episode_started_at)).getTime(),
+  cfContinuedRow,
+);
+await settlePrConflictCheck(cfEpisode.id, "resolved", sql);
+const cfRestarted = await recordPrConflict(
+  { ...CF, pr_number: 720, head_sha: CF_HEAD_2 },
+  sql,
+);
+const cfRestartedRow = await cfRowOf(cfEpisode.id);
+check(
+  "conflict episode: a new conflict starts the next episode with no attempts and no hold",
+  cfRestarted.started === true &&
+    cfRestarted.row.episode === cfEpisode.episode + 1 &&
+    Number(cfRestartedRow?.fix_attempts) === 0 &&
+    cfRestartedRow?.fix_hold_reason === null,
+  cfRestartedRow,
+);
+check(
+  "conflict episode: a new conflict starts the episode now",
+  Date.now() - new Date(String(cfRestartedRow?.episode_started_at)).getTime() <
+    60_000,
+  cfRestartedRow,
+);
+check(
+  "conflict episode: a new conflict keeps the work item that is still bound",
+  Number(cfRestartedRow?.fix_work_item_id) === 555,
+  cfRestartedRow,
+);
+execPsql(
+  target,
+  `UPDATE factory.pr_conflict_checks SET fix_attempts = 3, fix_hold_reason = 'unresolvable' WHERE id = ${String(cfEpisode.id)}`,
+);
+await settlePrConflictCheck(cfEpisode.id, "closed", sql);
+await recordPrConflict({ ...CF, pr_number: 720, head_sha: CF_HEAD_1 }, sql);
+check(
+  "conflict episode: a conflict that starts after the row was closed also starts with no attempts and no hold",
+  Number((await cfRowOf(cfEpisode.id))?.fix_attempts) === 0 &&
+    (await cfRowOf(cfEpisode.id))?.fix_hold_reason === null,
+  await cfRowOf(cfEpisode.id),
+);
+
 // 後で適用するdown migrationが、新しい状態の行に引っかからないよう、この節で用意した行を消す。
 execPsql(target, "DELETE FROM factory.work_items WHERE lower(owner) = 'qcfix'");
 execPsql(

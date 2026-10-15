@@ -358,6 +358,30 @@ describe("listPrConflictRepos", () => {
 });
 
 describe("recordPrConflict: the fix columns", () => {
+  test("restarts the episode time only when a conflict starts again", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain(
+      "episode_started_at = CASE WHEN c.state = 'conflicted' THEN c.episode_started_at ELSE now() END",
+    );
+  });
+
+  test("resets the fix attempts only when a conflict starts again", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_attempts = CASE WHEN c.state = 'conflicted' THEN c.fix_attempts ELSE 0 END",
+    );
+  });
+
+  test("clears the fix hold reason only when a conflict starts again", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_hold_reason = CASE WHEN c.state = 'conflicted' THEN c.fix_hold_reason ELSE NULL END",
+    );
+  });
+
   test("does not write the fix work item id", async () => {
     const { sql, calls } = createFakeSqlClient([[ROW]]);
     await recordPrConflict(OBSERVATION, sql);

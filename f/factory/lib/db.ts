@@ -5607,7 +5607,10 @@ function toPrConflictCheck(row: SqlRow): PrConflictCheck {
  * 競合しているPRを`factory.pr_conflict_checks`に記録し、その行を返す。PRごとに1行で、無ければ作り、あれば書き換える。
  * 競合は、行が無い状態か、競合から離れた状態(`resolved`か`closed`)から`conflicted`になった時点で始まる。
  * 始まったときだけ、通知した時刻(`notified_at`)を空にして、通知できるようにし、競合の回(`episode`)を1つ増やす。
- * 競合のままの行は、通知した時刻を残し、`head_sha`だけを今のheadに書き換える。headが進んでも通知は重ねない。
+ * 同じときに、回の開始時刻(`episode_started_at`)を今にし、直す作業項目の起動の回数(`fix_attempts`)を0に、
+ * 起動の保留の理由(`fix_hold_reason`)を空に戻す。回数と保留は、競合の回ごとに数え直す。
+ * 直している作業項目(`fix_work_item_id`)は戻さない。その作業項目の終わりを、回復が行に戻すためである。
+ * 競合のままの行は、通知した時刻と、直す作業に関する列を残し、`head_sha`だけを今のheadに書き換える。headが進んでも通知は重ねない。
  * 戻り値の`started`は、この呼び出しで競合が始まったかを示すログ用の値で、通知するかの判断には使わない(判断は`notified_at`で行う)。
  * 更新前の状態は文の開始時点のスナップショットから読むので、並行する実行と重なると実際とずれうる。
  * 並行して同じ行を`resolved`にされた直後は偽に、行が無いときに2つの実行が同時に挿入すると両方が真になりうる。
@@ -5634,6 +5637,9 @@ export async function recordPrConflict(
       notified_at = CASE WHEN c.state = 'conflicted' THEN c.notified_at ELSE NULL END,
       updated_at = CASE WHEN c.state = 'conflicted' THEN c.updated_at ELSE now() END,
       episode = CASE WHEN c.state = 'conflicted' THEN c.episode ELSE c.episode + 1 END,
+      episode_started_at = CASE WHEN c.state = 'conflicted' THEN c.episode_started_at ELSE now() END,
+      fix_attempts = CASE WHEN c.state = 'conflicted' THEN c.fix_attempts ELSE 0 END,
+      fix_hold_reason = CASE WHEN c.state = 'conflicted' THEN c.fix_hold_reason ELSE NULL END,
       head_sha = EXCLUDED.head_sha,
       state = 'conflicted',
       checked_at = now()
