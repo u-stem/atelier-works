@@ -209,18 +209,64 @@ describe("a macro import is never executed while the imports are read", () => {
     },
   );
 
-  test("does not run a macro when the Bun transpiler alone reads the imports", () => {
-    const probe = macroProbe();
-    try {
-      new Bun.Transpiler({
-        loader: "ts",
-        trimUnusedImports: true,
-      }).scanImports(probe.make(String.fromCharCode(0xa0), "with"));
-      expect(existsSync(probe.marker)).toBe(false);
-    } finally {
-      rmSync(probe.dir, { recursive: true, force: true });
-    }
-  });
+  const RAW_VARIANTS = Object.entries(SPACES).flatMap(([name, gap]) =>
+    (["with", "assert"] as const).map(
+      (keyword) => [`${keyword} and ${name}`, gap, keyword] as const,
+    ),
+  );
+
+  test.each(RAW_VARIANTS)(
+    "does not run a macro when the Bun transpiler alone scans the imports after %s",
+    (_name, gap, keyword) => {
+      const probe = macroProbe();
+      try {
+        new Bun.Transpiler({ loader: "ts" }).scanImports(
+          probe.make(gap, keyword),
+        );
+        expect(existsSync(probe.marker)).toBe(false);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.each(RAW_VARIANTS)(
+    "does not run a macro when the trimming Bun transpiler alone scans the imports after %s",
+    (_name, gap, keyword) => {
+      const probe = macroProbe();
+      try {
+        new Bun.Transpiler({
+          loader: "ts",
+          trimUnusedImports: true,
+        }).scanImports(probe.make(gap, keyword));
+        expect(existsSync(probe.marker)).toBe(false);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // 対照。同じ入力を`transformSync`に通すと、マクロが実行されて印ができる。
+  // 印のファイルの作り方やimportの書き方が誤っていると、上の「印ができない」テストは常に緑になる。
+  test.each([
+    ["with and a space", " ", "with"],
+    ["assert and a space", " ", "assert"],
+    ["with and a vertical tab", String.fromCharCode(0x0b), "with"],
+    ["with and a no-break space", String.fromCharCode(0xa0), "with"],
+  ] as const)(
+    "control: transformSync runs the macro that follows %s",
+    (_name, gap, keyword) => {
+      const probe = macroProbe();
+      try {
+        new Bun.Transpiler({ loader: "ts" }).transformSync(
+          probe.make(gap, keyword),
+        );
+        expect(existsSync(probe.marker)).toBe(true);
+      } finally {
+        rmSync(probe.dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   test.each(Object.entries(SPACES))(
     "marks an import attribute after with and %s as untraceable",
@@ -245,6 +291,30 @@ describe("the self check of the runtime reading", () => {
   test("fails when a type-only import is read as a dependency", () => {
     const wrong = (code: string) => scanImports(code);
     expect(runtimeScanSelfCheck(wrong)).toBe(false);
+  });
+
+  test("fails when a re-export is not read", () => {
+    const blind = (code: string) =>
+      code.includes("export")
+        ? { local: [], bare: [], untraceable: false }
+        : scanImports(code, { runtimeOnly: true });
+    expect(runtimeScanSelfCheck(blind)).toBe(false);
+  });
+
+  test("fails when a namespace import is not read", () => {
+    const blind = (code: string) =>
+      code.includes("* as")
+        ? { local: [], bare: [], untraceable: false }
+        : scanImports(code, { runtimeOnly: true });
+    expect(runtimeScanSelfCheck(blind)).toBe(false);
+  });
+
+  test("fails when a dynamic import is not read", () => {
+    const blind = (code: string) =>
+      code.includes("await")
+        ? { local: [], bare: [], untraceable: false }
+        : scanImports(code, { runtimeOnly: true });
+    expect(runtimeScanSelfCheck(blind)).toBe(false);
   });
 
   test("fails when a value import is not read", () => {

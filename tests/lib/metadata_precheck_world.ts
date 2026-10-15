@@ -103,6 +103,8 @@ export type World = {
   throwingReads: Set<string>;
   /** 読み取りで、`byteLength`が例外を投げる内容を返す`ref:path`。 */
   brokenReads: Set<string>;
+  /** 想定外の形の値を返す`ref:path`。値は、`readBlob`の戻り値の型に合わない。 */
+  malformedReads: Map<string, string>;
   /** `listTree`が投げるか。 */
   throwOnList: boolean;
   /** `isAncestor`が投げるか。 */
@@ -124,6 +126,8 @@ export type World = {
   settle: boolean;
   /** `world()`が作ったときの、`wmill-lock.yaml`の本文。 */
   originalLock: string;
+  /** `planMetadataRehash`に渡す自己検査。省略したときは本物を使う。 */
+  selfCheck: (() => boolean) | undefined;
   /** 真のとき、木の`oid`をSHA-256で作る(SHA-256のリポジトリ)。 */
   sha256Oids: boolean;
   /** `planMetadataRehash`に渡す入力。 */
@@ -148,6 +152,7 @@ export function world(): World {
     missingReads: new Set(),
     throwingReads: new Set(),
     brokenReads: new Set(),
+    malformedReads: new Map(),
     throwOnList: false,
     throwOnAncestor: false,
     headSizes: new Map(),
@@ -157,6 +162,7 @@ export function world(): World {
     readCount: 0,
     settle: true,
     sha256Oids: false,
+    selfCheck: undefined,
     originalLock: String(base.get("wmill-lock.yaml")),
     input: { baseSha: BASE_TIP, headSha: HEAD },
     limits: undefined,
@@ -235,6 +241,10 @@ export function portsOf(w: World): PrecheckPorts {
       if (w.missingReads.has(key)) {
         return { kind: "missing" };
       }
+      const malformed = w.malformedReads.get(key);
+      if (malformed !== undefined) {
+        return JSON.parse(malformed);
+      }
       if (w.brokenReads.has(key)) {
         return { kind: "found", content: new BrokenBytes(4) };
       }
@@ -274,7 +284,7 @@ function settleBase(w: World): void {
 
 export function plan(w: World): Promise<PlanResult> {
   settleBase(w);
-  return planMetadataRehash(w.input, portsOf(w), w.limits);
+  return planMetadataRehash(w.input, portsOf(w), w.limits, w.selfCheck);
 }
 
 /** 失敗の種別。成功なら`ok`。 */

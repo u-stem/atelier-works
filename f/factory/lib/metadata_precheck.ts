@@ -129,6 +129,8 @@ export type PlanResult =
       readonly ok: false;
       readonly reason: RehashFailureReason;
       readonly path?: string;
+      /** 固定の補足。`internal_error`のときは、実行しているBunの版を載せる。 */
+      readonly detail?: string;
     };
 
 type Failure = Extract<PlanResult, { ok: false }>;
@@ -146,7 +148,7 @@ class PortError extends Error {}
 class LimitError extends Error {}
 
 /** 読んだ内容が、木の項目の`oid`と合わない。 */
-class BlobMismatchError extends Error {}
+export class BlobMismatchError extends Error {}
 
 const WMILL_YAML = "wmill.yaml";
 const WMILL_LOCK = "wmill-lock.yaml";
@@ -157,13 +159,14 @@ const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 /**
  * 追加と削除をしても、scriptのhashに関わらないファイルの名前の末尾。
  * ここに無い種類の追加と削除は、scriptやflowの構成を変えうるので、人の手に回す。
+ * トリガーのファイル(`*.http_trigger.yaml`など、Windmillの形式の名前)は入れない。
+ * `wmill.yaml`の`includeTriggers`が無効で、このリポジトリのトリガーはsyncしないので、人の手に回ってよい。
  */
 const HARMLESS_SUFFIXES: readonly string[] = [
   ".schedule.yaml",
   ".variable.yaml",
   ".resource.yaml",
   ".resource-type.yaml",
-  ".trigger.yaml",
   "folder.meta.yaml",
   ".md",
 ];
@@ -329,7 +332,7 @@ function blobOid(content: Uint8Array, length: number): string {
  * 読んだ内容は、木の項目の`oid`と照合する。合わなければ`BlobMismatchError`を投げる。
  * ポートが別のrefや作業ツリーを読んだ誤りを、断つためである。
  */
-function treeReader(
+export function createTreeReader(
   ref: string,
   entries: ReadonlyMap<string, TreeEntry>,
   readBlob: PrecheckPorts["readBlob"],
@@ -337,7 +340,11 @@ function treeReader(
 ): Reader {
   let total = 0;
   return async (path) => {
-    const result = await readBlob(ref, path);
+    const returned: unknown = await readBlob(ref, path);
+    if (!isFileRead(returned)) {
+      throw new PortError();
+    }
+    const result = returned;
     if (result.kind === "missing" && entries.has(path)) {
       return { kind: "failed" };
     }
@@ -348,7 +355,7 @@ function treeReader(
       }
       const entry = entries.get(path);
       if (
-        entry !== undefined &&
+        entry === undefined ||
         blobOid(result.content, entry.oid.length) !== entry.oid
       ) {
         throw new BlobMismatchError();
@@ -356,6 +363,21 @@ function treeReader(
     }
     return result;
   };
+}
+
+/** `readBlob`の戻り値が、`FileRead`の形か。`kind`が3つのどれかで、`found`なら内容が`Uint8Array`である。 */
+function isFileRead(value: unknown): value is FileRead {
+  if (typeof value !== "object" || value === null || !("kind" in value)) {
+    return false;
+  }
+  if (value.kind === "missing" || value.kind === "failed") {
+    return true;
+  }
+  return (
+    value.kind === "found" &&
+    "content" in value &&
+    value.content instanceof Uint8Array
+  );
 }
 
 /**
@@ -555,13 +577,13 @@ async function plan(
     return changeFailure;
   }
 
-  const readHead = treeReader(
+  const readHead = createTreeReader(
     input.headSha,
     head,
     ports.readBlob,
     limits.maxReadBytes,
   );
-  const readBase = treeReader(
+  const readBase = createTreeReader(
     input.baseSha,
     base,
     ports.readBlob,
@@ -667,6 +689,7 @@ export async function planMetadataRehash(
   input: RehashInput,
   ports: PrecheckPorts,
   limits: PlanLimits = {},
+  selfCheck: () => boolean = runtimeScanSelfCheck,
 ): Promise<PlanResult> {
   const given = [limits.maxReadBytes, limits.maxTraceVisits];
   if (
@@ -677,8 +700,12 @@ export async function planMetadataRehash(
   ) {
     return fail("invalid_limit");
   }
-  if (!runtimeScanSelfCheck()) {
-    return fail("internal_error");
+  if (!selfCheck()) {
+    return {
+      ok: false,
+      reason: "internal_error",
+      detail: `bun ${Bun.version}`,
+    };
   }
   const safe: PrecheckPorts = {
     listTree: guarded(ports.listTree),

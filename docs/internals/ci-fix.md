@@ -530,6 +530,7 @@ zipの中の文字列は、`reason`に載せない。
 引数に単独の文字列リテラルを取らない動的importとrequireの呼び出しと、import属性は、トランスパイラに渡さない。
 
 - 引数が、エスケープを含まない単独の文字列リテラルでない動的importとrequireの呼び出し。連結を含む。
+  指定子の後ろに第2引数(import属性など)や末尾のコンマが付く形も、含む。
 - メソッドとして呼ぶrequire(`import.meta.require`や`loader.require`)。
 - import属性。語の`with`か`assert`の直後が、開き波括弧かコメントの開始であるもの。
   間に空白や改行を挟んでも、コメントを挟んでも断る。`type: "macro"`はビルド時にコードを実行するためである。
@@ -663,18 +664,21 @@ wmillも消さない項目なので、baseの先端の木で、ファイルか�
 
 `planMetadataRehash`は、baseの先端とheadのcommitを受け取る。
 読み取りは、木の一覧(`listTree`)、blobの読み取り(`readBlob`)、祖先の判定(`isAncestor`)の3つのポートで行う。
-ポートは、gitのオブジェクトから実装する。
+ポートを実装するときは、gitのオブジェクトから読む。
 作業ツリーのファイルは開かない。
+このリポジトリの部品は、ポートの型と、受け取った値の検査だけを持つ。gitを使うポートの実装は、配線で行う。
 PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 名前の変更は、削除と追加の2件に見えるので、scriptの集合が変わったものとして扱う。
 
 ポートの値は、受け取った入口で検査する。
 `baseSha`と`headSha`は40桁の小文字の16進数、木の項目の`oid`は40桁か64桁の小文字の16進数、`size`は0以上の整数でなければならない。
+`readBlob`の戻り値は、`kind`が3つのどれかで、見つかったときの内容がバイト列でなければならない。
+形が合わないときは`port_error`を返す。
 `readBlob`の内容は、木の項目の`oid`と照合する。
 `blob <長さ>`と空文字(NUL)を前に付けた内容のハッシュで、`oid`が40桁ならSHA-1、64桁ならSHA-256を使う。
 ポートが別のrefや作業ツリーを読んだ誤りを、断つためである。
 `isAncestor`は、`true`のときだけ祖先とみなす。
-`listTree`は`git ls-tree -r -l -z`で実装する。
+`listTree`を実装するときは、`git ls-tree -r -l -z`を使う。
 `-z`を付けないと、非ASCIIのパスが引用符つきで返り、実際のパスと一致しなくなる。
 
 次の表の順に確かめ、最初に外れた条件の種別を返す。
@@ -683,7 +687,7 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | --- | --- |
 | `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
 | 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `internal_error` |
-| 読んだ内容が、木の項目の`oid`と一致する | `blob_mismatch` |
+| 読んだ内容が、木の項目の`oid`と一致する。木に無いパスで内容が返らない。`readBlob`の戻り値の形が正しい | `blob_mismatch`、`port_error` |
 | headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
 | `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleが無い | `special_file` |
 | 上の4つのファイルが1MiB以下で、`f/`のファイルが5000件以下 | `file_too_large`、`too_many_files` |
@@ -712,8 +716,12 @@ hashの計算では、木ごとに、入力のファイルをまとめて保持�
 追加と削除を許す種類の許可リストは、次の名前の末尾である。
 これらは、scriptのhashに関わらない。
 
-- `.schedule.yaml`、`.variable.yaml`、`.resource.yaml`、`.resource-type.yaml`、`.trigger.yaml`
+- `.schedule.yaml`、`.variable.yaml`、`.resource.yaml`、`.resource-type.yaml`
 - `folder.meta.yaml`、`.md`
+
+トリガーのファイルは、許可リストに入れない。
+Windmillのトリガーのファイル名は`*.http_trigger.yaml`などの形である。
+`wmill.yaml`の`includeTriggers`が無効で、このリポジトリのトリガーはsyncしないので、追加と削除は人の手に回ってよい。
 
 失敗の`path`はPRの作者が決められるので、PR本文やコメントに載せるときは無害化する。
 
@@ -787,7 +795,8 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   値として使うimportの追加は、変える。
 - 字句の読み取りは、括弧が対応する入力を前提にする。
   `checkDependencies`が先に、headのすべての`.ts`をトランスパイラに通すので、構文が不正な入力はそこで断られる。
-  型宣言の範囲を数える処理は、この順序に頼る。
+  型宣言の範囲を数える処理は、仕事量に上限(2000000字句)を置いて有界にした。超えたら`main_unparsable`で人の手に回る。
+  括弧が対応する入力を前提にする点は、この順序に頼る。
 
 ### 算法を固定するテスト
 
@@ -852,9 +861,16 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   正規表現と除算の見分けや、型宣言の範囲を、完全には決められない。
   決められない形は断るが、字句の読み違いで、署名の違いを見落とす入力がありうる。
 - 実行時に残るimportの読み方は、Bunの版にも依存する。
-  worker(1.4.0)とローカル(1.4.2)で、リポジトリの全script(126件)の閉包のパッケージ名が`.script.lock`の`dependencies`と一致することを、両方で確かめた。
+  worker(1.4.0)とローカル(1.4.2)で、リポジトリの全scriptの閉包のパッケージ名が`.script.lock`の`dependencies`と一致することを、両方で確かめた。
   較正のテストは、`Bun.version`を失敗の説明に残す。
-  検査の入口の自己検査が、固定の入力で想定と違う結果を見つけたときは、`internal_error`で止める。
+  検査の入口の自己検査は、型だけのimport、副作用のimport、値のimport、再export、名前空間import、リテラルの動的importを、固定の入力で確かめる。
+  想定と違う結果を見つけたときは、`internal_error`で止め、補足にBunの版を載せる。
+  Bunの版の許可リストは持たない。版が変わっても、自己検査を通ればよい。
+- 上限を置いていない範囲もある。
+  検査は、`listTree`が返す項目の数を数えない。`f/`以外の項目は、形の検査と表の構築の分だけ、項目の数に比例する。
+  ポートの呼び出しの時間には、検査は期限を持たない。
+  1つのファイルの字句の分割とimportの読み取りは、ファイルの大きさに比例し、時間の上限を持たない。
+  ファイルは1MiB、読む合計は64MiBまでなので、時間は有界だが、上限を置いてはいない。
 - hashの算法は、`ASSUMED_WMILL_CLI_VERSION`の版だけで確かめた。
   `dependencies/`、`__mod`のフォルダ、JSONのflowのように、このリポジトリに無い形は、写さずに人の手に回す。
   算法を固定するテストが見つけられるのは、版の変更と、リポジトリの現物との食い違いだけである。

@@ -30,8 +30,9 @@ export type ImportScan = {
 
 // 動的importとrequireの呼び出しの開き括弧まで。直前が識別子の一部のものは含めない。
 const CALL = /(?<![\w$])(?:import|require)\s*\(/g;
-// 呼び出しの引数が、エスケープを含まない文字列リテラル1つだけで始まる形。
-const SOLE_LITERAL = /\s*(["'])([^"'\\\n]*)\1\s*[,)]/y;
+// 呼び出しの引数が、エスケープを含まない文字列リテラル1つだけの形。リテラルの後ろは閉じ括弧に限る。
+// 第2引数(動的importのimport属性など)が付く形と、末尾のコンマは、追えないものにする。
+const SOLE_LITERAL = /\s*(["'])([^"'\\\n]*)\1\s*\)/y;
 // import属性のキーワード。語の境界で区切る。
 const ATTRIBUTE_KEYWORD = /\b(?:with|assert)\b/g;
 // トランスパイラが返さない、型だけのimportとexport。型は実行時の依存ではないが、閉包には含める。
@@ -369,8 +370,9 @@ export async function traceBareImports(
 /**
  * 実行時に残るimportの読み方が、想定どおりに動くかを、固定の小さな入力で確かめる。
  * 読み方はBunの版に依存するので、検査の入口で呼び、想定と違えば偽を返す。
- * 確かめるのは、型の位置でしか使わないimportが残らないこと、副作用のimportが残ること、
- * 値として使うimportが残ることである。
+ * 確かめるのは、型の位置でしか使わないimportが残らないこと、副作用のimport、値として使うimport、
+ * 再export、名前空間import、リテラルの動的importが残ることである。
+ * Bunの版の許可リストは持たない。版が変わっても、この結果が想定どおりなら通る。
  */
 export function runtimeScanSelfCheck(
   scan: (code: string) => ImportScan = (code) =>
@@ -380,6 +382,11 @@ export function runtimeScanSelfCheck(
     ['import { A } from "t";\nlet a: A;', []],
     ['import "s";', ["s"]],
     ['import { B } from "u";\nB();', ["u"]],
+    ['export { x } from "r";', ["r"]],
+    ['export * from "s2";', ["s2"]],
+    ['import * as ns from "n";\nexport const v = ns.x;', ["n"]],
+    // 呼び出しの形をソースに直接書くと、このファイル自身の依存として読まれるので、つなげて作る。
+    [["const m = await ", "import", '("d");'].join(""), ["d"]],
   ];
   return cases.every(([code, expected]) => {
     const result = scan(code);

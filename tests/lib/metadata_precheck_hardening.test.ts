@@ -3,6 +3,10 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  BlobMismatchError,
+  createTreeReader,
+} from "../../f/factory/lib/metadata_precheck.ts";
+import {
   BASE_TIP,
   FOO,
   HEAD,
@@ -103,6 +107,22 @@ describe("planMetadataRehash and added or removed files", () => {
       await reasonAfter((w) => {
         w.base.set("f/factory/data.bin", "x");
       }),
+    ).toBe("script_set_changed");
+  });
+
+  test("sends an added trigger definition to a human", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set("f/factory/hook.http_trigger.yaml", "route_path: x\n"),
+      ),
+    ).toBe("script_set_changed");
+  });
+
+  test("sends an added file with the old trigger suffix to a human", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set("f/factory/hook.trigger.yaml", "route_path: x\n"),
+      ),
     ).toBe("script_set_changed");
   });
 
@@ -498,6 +518,78 @@ describe("planMetadataRehash and the limits", () => {
         w.limits = { maxReadBytes: 1_000_000, maxTraceVisits: 10_000 };
       }),
     ).toBe("ok");
+  });
+});
+
+describe("planMetadataRehash and the self check of the reading", () => {
+  test("stops when the self check of the reading fails", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.selfCheck = () => false;
+      }),
+    ).toBe("internal_error");
+  });
+
+  test("leaves the version of Bun in the detail of the failure", async () => {
+    const w = world();
+    w.selfCheck = () => false;
+    const result = await plan(w);
+    expect(!result.ok && result.detail).toContain(Bun.version);
+  });
+
+  test("runs the real self check by default", async () => {
+    expect(await reasonAfter(() => undefined)).toBe("ok");
+  });
+});
+
+describe("planMetadataRehash and the shape of what readBlob returns", () => {
+  test("returns a port error when the kind is not one of the three", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.malformedReads.set(`${HEAD}:f/factory/foo.ts`, '{"kind":"odd"}'),
+      ),
+    ).toBe("port_error");
+  });
+
+  test("returns a port error when the content of a found file is a string", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.malformedReads.set(
+          `${HEAD}:f/factory/foo.ts`,
+          '{"kind":"found","content":"text"}',
+        ),
+      ),
+    ).toBe("port_error");
+  });
+
+  test("returns a port error when the result is null", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.malformedReads.set(`${HEAD}:f/factory/foo.ts`, "null"),
+      ),
+    ).toBe("port_error");
+  });
+
+  test("refuses a found file at a path that is not in the tree", async () => {
+    const read = createTreeReader(
+      HEAD,
+      new Map(),
+      async () => ({ kind: "found", content: new Uint8Array([1]) }),
+      1000,
+    );
+    await expect(read("f/factory/phantom.ts")).rejects.toBeInstanceOf(
+      BlobMismatchError,
+    );
+  });
+
+  test("returns missing for a path that is not in the tree and not found", async () => {
+    const read = createTreeReader(
+      HEAD,
+      new Map(),
+      async () => ({ kind: "missing" }),
+      1000,
+    );
+    expect(await read("f/factory/phantom.ts")).toEqual({ kind: "missing" });
   });
 });
 

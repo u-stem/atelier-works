@@ -448,12 +448,13 @@ function findExported(
       starts.push(index);
     }
   }
-  const declared = tokens.filter(
-    (token, index) =>
-      depth[index] === 0 &&
-      token.text === "function" &&
-      tokens[index + 1]?.text === name,
-  ).length;
+  const declared = tokens.filter((token, index) => {
+    if (depth[index] !== 0 || token.text !== "function") {
+      return false;
+    }
+    const nameAt = tokens[index + 1]?.text === "*" ? index + 2 : index + 1;
+    return tokens[nameAt]?.text === name;
+  }).length;
   if (declared > starts.length) {
     return "ambiguous";
   }
@@ -501,6 +502,21 @@ const DECLARATION_KEYWORDS: ReadonlySet<string> = new Set([
   "interface",
   "enum",
   "class",
+]);
+/** `declare`の後ろに来て、新しい文が始まることを示す語。 */
+const DECLARE_TARGETS: ReadonlySet<string> = new Set([
+  "const",
+  "let",
+  "var",
+  "function",
+  "class",
+  "interface",
+  "type",
+  "enum",
+  "namespace",
+  "module",
+  "global",
+  "abstract",
 ]);
 const DECLARATION_PREFIXES: ReadonlySet<string> = new Set([
   "export",
@@ -555,15 +571,63 @@ function isDeclarationAt(tokens: readonly Token[], index: number): boolean {
   return after === "=" || after === "<";
 }
 
-/** 宣言の終わりの次の位置。`interface`、`enum`、`class`は本体の閉じ波括弧まで、`type`は文の終わりまで。 */
+/** 宣言の範囲を数える仕事量の上限。入力が仕事量を2乗にできないようにする。 */
+const MAX_DECLARATION_STEPS = 2_000_000;
+
+type StepBudget = { remaining: number };
+
+/** 続きの行の先頭に来たとき、型の別名の終わりを示す文の先頭の語か。型の続きになりうる形は、終わりとみなさない。 */
+function startsStatement(tokens: readonly Token[], index: number): boolean {
+  const token = tokens[index];
+  if (token?.kind !== "word" || !STATEMENT_START.has(token.text)) {
+    return false;
+  }
+  const next = tokens[index + 1]?.text;
+  switch (token.text) {
+    case "abstract":
+      return next === "class";
+    case "declare":
+      return next !== undefined && DECLARE_TARGETS.has(next);
+    case "import":
+      return next !== "(";
+    case "type":
+    case "interface":
+    case "enum":
+    case "class":
+      return isDeclarationAt(tokens, index);
+    default:
+      return true;
+  }
+}
+
+/**
+ * 宣言の終わりの次の位置。決められないときはnull。
+ * `interface`、`enum`、`class`は、本体の閉じ波括弧までである。本体の開き波括弧は、`<>`の入れ子の外にある最初の`{`とする。
+ * `type`は、`;`か、文の先頭の語(`startsStatement`)までである。
+ * 数える字句の数を`budget`で減らし、尽きたらnullを返す。
+ */
 function endOfDeclaration(
   tokens: readonly Token[],
   depth: readonly number[],
   keyword: number,
+  budget: StepBudget,
 ): number | null {
   if (tokens[keyword]?.text !== "type") {
+    let angle = 0;
     for (let index = keyword + 1; index < tokens.length; index += 1) {
-      if (tokens[index]?.text === "{" && depth[index] === 0) {
+      budget.remaining -= 1;
+      if (budget.remaining < 0) {
+        return null;
+      }
+      const token = tokens[index];
+      if (depth[index] !== 0 || token === undefined) {
+        continue;
+      }
+      if (token.kind === "punct" && token.text === "<") {
+        angle += 1;
+      } else if (token.kind === "punct" && token.text === ">") {
+        angle = Math.max(0, angle - 1);
+      } else if (token.text === "{" && angle === 0) {
         const closing = findClosing(tokens, depth, index);
         return closing === null ? null : closing + 1;
       }
@@ -571,6 +635,10 @@ function endOfDeclaration(
     return null;
   }
   for (let index = keyword + 1; index < tokens.length; index += 1) {
+    budget.remaining -= 1;
+    if (budget.remaining < 0) {
+      return null;
+    }
     const token = tokens[index];
     if (depth[index] !== 0 || token === undefined) {
       continue;
@@ -578,11 +646,7 @@ function endOfDeclaration(
     if (token.kind === "punct" && token.text === ";") {
       return index + 1;
     }
-    if (
-      token.newline &&
-      token.kind === "word" &&
-      STATEMENT_START.has(token.text)
-    ) {
+    if (token.newline && startsStatement(tokens, index)) {
       return index;
     }
   }
@@ -594,6 +658,7 @@ function collectDeclarations(
   depth: readonly number[],
 ): string[] | null {
   const found: string[] = [];
+  const budget: StepBudget = { remaining: MAX_DECLARATION_STEPS };
   for (let index = 0; index < tokens.length; index += 1) {
     if (depth[index] !== 0 || !isDeclarationAt(tokens, index)) {
       continue;
@@ -606,7 +671,7 @@ function collectDeclarations(
     ) {
       start -= 1;
     }
-    const end = endOfDeclaration(tokens, depth, index);
+    const end = endOfDeclaration(tokens, depth, index, budget);
     if (end === null) {
       return null;
     }

@@ -54,6 +54,18 @@ describe("scanImports", () => {
     ]);
   });
 
+  test.each([
+    [
+      "a second argument that is an object",
+      'import("./m.ts", { with: { type: "macro" } });',
+    ],
+    ["a second argument written after a space", 'import("./m.ts" , {});'],
+    ["a trailing comma", 'import("./m.ts",);'],
+    ["a require call with a second argument", 'require("./m.ts", 1);'],
+  ])("marks a call with %s as untraceable", (_name, code) => {
+    expect(scanImports(code).untraceable).toBe(true);
+  });
+
   test("reads a require call with a literal", () => {
     expect(scanImports('const m = require("left-pad@1.3.0");').bare).toEqual([
       "left-pad@1.3.0",
@@ -105,11 +117,11 @@ describe("scanImports", () => {
     expect(scanImports(code).untraceable).toBe(true);
   });
 
-  test("does not mark a literal followed by an options argument", () => {
+  test("marks a literal followed by an options argument as untraceable", () => {
     expect(
       scanImports('await import("./a.ts", { with: { type: "json" } });')
         .untraceable,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("does not mark a literal followed by a closing parenthesis and a call", () => {

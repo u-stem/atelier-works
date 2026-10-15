@@ -239,6 +239,106 @@ describe("readSourceShape functions that are not exported", () => {
   });
 });
 
+describe("readSourceShape and the extent of declarations", () => {
+  test("gives up on many type aliases that are not closed within the work limit", () => {
+    const code = "type A = 1\n{}".repeat(80_000);
+    expect(readSourceShape(code).ok).toBe(false);
+  });
+
+  test("gives up on many type aliases quickly", () => {
+    const code = "type A = 1\n{}".repeat(80_000);
+    const started = performance.now();
+    readSourceShape(code);
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  test("reads many declarations that each end at once", () => {
+    const code = "type A = 1;\n".repeat(20_000);
+    expect(readSourceShape(code).ok).toBe(true);
+  });
+
+  test("keeps the whole class when its heritage has an object type", () => {
+    const code =
+      "export class A extends Base<{ a: string }> { m() { return 1; } }\nexport function main() {}\n";
+    expect(declarationsOf(code)).toEqual([
+      "export class A extends Base < { a : string } > { m ( ) { return 1 ; } }",
+    ]);
+  });
+
+  test("detects a changed method body of a class whose heritage has an object type", () => {
+    const base =
+      "export class A extends Base<{ a: string }> { m() { return 1; } }\nexport function main() {}\n";
+    expect(difference(base, base.replace("return 1", "return 2"))).toBe(
+      "declaration_changed",
+    );
+  });
+
+  test("keeps the whole interface when its heritage has an object type", () => {
+    const code =
+      "export interface I extends Base<{ a: string }> { b: number }\n";
+    expect(declarationsOf(code)).toEqual([
+      "export interface I extends Base < { a : string } > { b : number }",
+    ]);
+  });
+
+  test("keeps a type alias whose next line starts with an abstract constructor type", () => {
+    const code = "type A =\n  abstract new () => string\ntype B = number\n";
+    expect(declarationsOf(code)).toEqual([
+      "type A = abstract new ( ) => string",
+      "type B = number",
+    ]);
+  });
+
+  test("keeps a type alias whose next line starts with a type import", () => {
+    const code = 'type A =\n  import("x").T\ntype B = number\n';
+    expect(declarationsOf(code)).toEqual([
+      'type A = import ( "x" ) . T',
+      "type B = number",
+    ]);
+  });
+
+  test("still ends a type alias at an abstract class", () => {
+    const code = "type A = string\nabstract class C { m() {} }\n";
+    expect(declarationsOf(code)).toEqual([
+      "abstract class C { m ( ) { } }",
+      "type A = string",
+    ]);
+  });
+
+  test("gives up on a class whose body cannot be found", () => {
+    expect(
+      readSourceShape("export class A extends B<{ a: string }>;\n").ok,
+    ).toBe(false);
+  });
+});
+
+describe("readSourceShape generator functions", () => {
+  test("gives up on a main generator function that is not exported", () => {
+    expect(mainOf("function* main() {}\n")).toBe("unparsable");
+  });
+
+  test("gives up on an async main generator function that is not exported", () => {
+    expect(mainOf("async function* main() {}\n")).toBe("unparsable");
+  });
+
+  test("gives up on an exported main generator function", () => {
+    expect(mainOf("export function* main() {}\n")).toBe("unparsable");
+  });
+
+  test("gives up on a preprocessor generator function that is not exported", () => {
+    expect(readSourceShape("function* preprocessor() {}\n").ok).toBe(false);
+  });
+});
+
+describe("readSourceShape and a long annotation line", () => {
+  test("reads a line of spaces of 1MiB quickly", () => {
+    const code = `//${" ".repeat(1_000_000)}a${" ".repeat(40_000)}b\n`;
+    const started = performance.now();
+    readSourceShape(code);
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+});
+
 describe("readSourceShape preprocessor", () => {
   test("reads the exported preprocessor signature", () => {
     const result = readSourceShape(
