@@ -158,6 +158,28 @@ commitする変更が無いときの理由は、返信を投稿したとは書�
 写せない理由は、原因を確かめて直し、PRへpushする案内とする。
 保留の理由の語彙と、止めた理由を写す規則は[PRのCI監視の仕様](pr-ci.md)に書く。
 
+### metadataジョブの失敗を直す経路
+
+`metadata`ジョブが落ちたCI回は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す(決定的な経路)。
+修正のステップは、日次予算の検査より前に、この経路を試す。費用がかからないためである。
+
+1. `readCiFailure`で、PRが開いていて、headが失敗のheadのままであることと、失敗の分類を確かめる。
+   `metadata`が落ちていなければ、通常の流れに進む。
+2. GitHubのAPIでPRのbaseブランチ名とその今の先端を読み、先端をローカルに取り込む(`fetchBranch`)。
+   事前検査は、baseの先端の木を読むためである。
+3. `planMetadataRehash`が、worktreeのgitのオブジェクトからhashを再計算する。
+   通れば、worktreeの根の`wmill-lock.yaml`を書き換える(`writeRootWmillLock`)。
+   `O_NOFOLLOW`で開き、通常のファイルでなければ書かない。ファイルは作らない。書き先はこの1つだけである。
+4. 結果は、固定の件名と本文(`METADATA_REHASH_COMMIT_SUBJECT`と`METADATA_REHASH_COMMIT_BODY`)を持つ`done`で返す。返信は空である。
+5. 事前検査が通らないとき(依存やschemaが変わるPR、mainの取り込み待ちなど)は、`blocked`で返す。
+   理由は`ci round: the lock cannot be recomputed automatically (<種別>)`である。
+   種別は事前検査の固定の語彙で、PRの作者が決めるパスと補足は入れない。
+
+`check`などの直せる失敗と同時に落ちたときも、先に再計算する。
+hashの食い違いは、`check`をClaudeが直しても残るためである。
+再計算のcommitをpushした後のCIの再実行で、残りの失敗が分かる。
+再計算できないときは、`check`だけを直しても`metadata`が落ち続けるので、Claudeを起動せずに止める。
+
 ## ログの取得
 
 `listWorkflowRunJobs`は、実行のジョブを、stepつきで読む。

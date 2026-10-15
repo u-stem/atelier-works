@@ -12,8 +12,17 @@ import {
   ciClaudeFailureText,
   ciTextScanner,
   gatherCiFailureInput,
+  readCiFailure,
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
+import {
+  METADATA_REHASH_COMMIT_BODY,
+  METADATA_REHASH_COMMIT_SUBJECT,
+  METADATA_REHASH_SUMMARY,
+  rehashMetadataLock,
+  runMetadataRound,
+  writeRootWmillLock,
+} from "../lib/ci_metadata_rehash.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -22,8 +31,13 @@ import {
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
-import { type GhClient, getPr } from "../lib/github.ts";
+import { type GhClient, getBranchSha, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
+import {
+  createGitPrecheckPorts,
+  fetchBranch,
+} from "../lib/metadata_git_ports.ts";
+import { planMetadataRehash } from "../lib/metadata_precheck.ts";
 import { modelFor } from "../lib/model_policy.ts";
 import {
   lockJobIdFromEnv,
@@ -62,6 +76,7 @@ export type PrFixApplyResult = {
  * 使えるツールはRead/Glob/Grep/Edit/Writeに限り、Bashは渡さない。
  * コミットの件名と本文はClaudeが提案したものを使い、`outcome`が"done"のときだけ返す。
  * 日次予算を超えていればClaudeを起動せず"blocked"を返す。
+ * CIの失敗を直す回で`metadata`ジョブが落ちていれば、予算の検査より前に、Claudeを起動せずhashを再計算する(`applyMetadataRound`)。
  * worktreeの`.git`が`worktree_git_pointer`(準備ステップの記録)と一致しないとき、
  * 準備ステップの結果に`worktree_git_pointer`が無いときも、Claudeを起動せず"blocked"を返す。
  * 不正な出力への再試行の前にも`.git`を確かめ、一致しなければ再試行しない。
@@ -107,6 +122,20 @@ export async function main(
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
+
+  // `metadata`ジョブが落ちたCI回は、Claudeを起動せず、hashの再計算で直す。
+  // 費用がかからないので、日次予算の検査より前に行う。
+  if (ci_check_id !== null) {
+    const metadataResult = await applyMetadataRound({
+      owner,
+      repo,
+      prNumber: pr_number,
+      headSha: head_sha,
+      worktreeDir: worktree_dir,
+      ghToken: await wmill.getVariable("f/factory/github_token"),
+    });
+    if (metadataResult !== null) return metadataResult;
+  }
 
   // `pipeline_generate.ts`と同じ日次予算の検査。
   // 状態遷移や通知をここで重複して書かず"blocked"を返すのは、
@@ -263,6 +292,57 @@ function blockedResult(reason: string): PrFixApplyResult {
     replies: [],
     commit_subject: null,
     commit_body: null,
+  };
+}
+
+type MetadataRoundInput = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly worktreeDir: string;
+  readonly ghToken: string;
+};
+
+/**
+ * `metadata`ジョブが落ちているときだけ、`wmill-lock.yaml`のhashを再計算して書き換える。落ちていなければ`null`を返す。
+ * baseの先端は、GitHubのAPIで読んだ今の先端である。ローカルに無ければ取り込む。
+ * 読むのはgitのオブジェクトだけで、worktreeのファイルは開かず、scriptも実行しない。
+ * 事前検査が通らないときは、`mise run metadata`を案内する固定の理由で`blocked`を返す。
+ * 書き換えた内容は、検証と完了のステップが、同じ再計算で照合する。
+ */
+async function applyMetadataRound(
+  input: MetadataRoundInput,
+): Promise<PrFixApplyResult | null> {
+  const { owner, repo, headSha, worktreeDir, ghToken } = input;
+  const client: GhClient = { run: runCommand, ghToken };
+  const target = { owner, repo, prNumber: input.prNumber, headSha };
+  const gatherDeps = buildCiGatherDeps(client, target, runCommand);
+  const round = await runMetadataRound({
+    readFailure: () => readCiFailure(gatherDeps, target),
+    rehash: async () => {
+      const pr = await getPr(client, owner, repo, input.prNumber);
+      const baseSha = await getBranchSha(client, owner, repo, pr.baseRef);
+      await fetchBranch({ cwd: worktreeDir, branch: pr.baseRef, ghToken });
+      return rehashMetadataLock({
+        plan: () =>
+          planMetadataRehash(
+            { baseSha, headSha },
+            createGitPrecheckPorts({ cwd: worktreeDir }),
+          ),
+        writeLock: (text) => writeRootWmillLock(worktreeDir, text),
+      });
+    },
+  });
+  if (round === null) return null;
+  if (round.kind === "manual") return blockedResult(round.reason);
+  return {
+    outcome: "done",
+    reason: null,
+    summary: METADATA_REHASH_SUMMARY,
+    replies: [],
+    commit_subject: METADATA_REHASH_COMMIT_SUBJECT,
+    commit_body: METADATA_REHASH_COMMIT_BODY,
   };
 }
 

@@ -5,6 +5,7 @@
 
 import type { FileRead } from "./metadata_patch_imports.ts";
 import type { PrecheckPorts, TreeEntry } from "./metadata_precheck.ts";
+import { assertBranchName } from "./types.ts";
 import {
   buildGitArgv,
   type CommandRunner,
@@ -214,4 +215,35 @@ export function createGitPrecheckPorts(
   }
 
   return { listTree, readBlob, isAncestor };
+}
+
+/**
+ * baseブランチの今の先端を、ローカルのcloneに取り込む。
+ * 事前検査は、baseの先端のcommitの木を読むので、そのオブジェクトがローカルに無いと読めない。
+ * 認証はghのcredential helperと環境変数の`GH_TOKEN`で行い、リモートのURLにトークンを入れない。
+ * 失敗は例外にする。例外の文に、gitの標準エラーは入れない。
+ */
+export async function fetchBranch(opts: {
+  readonly cwd: string;
+  readonly branch: string;
+  readonly ghToken: string;
+  readonly run?: CommandRunner;
+  readonly timeoutMs?: number;
+}): Promise<void> {
+  assertBranchName(opts.branch);
+  const run = opts.run ?? runCommand;
+  const result = await run(
+    buildGitArgv(
+      ["fetch", "--no-recurse-submodules", "origin", "--", opts.branch],
+      { network: true },
+    ),
+    {
+      cwd: opts.cwd,
+      env: { ...localGitEnv(), GH_TOKEN: opts.ghToken },
+      timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    },
+  );
+  if (result.timedOut || result.exitCode !== 0) {
+    throw new Error("git fetch of the base branch failed");
+  }
 }

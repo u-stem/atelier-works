@@ -62,11 +62,12 @@ export const CI_FIX_SKILL_MARKER = "ci-fix-skill:v1";
  * 修正の前に止める理由のうち、`watch_pr_ci`が保留の理由(`fix_hold_reason`)に写すものの固定文。
  * 接頭辞の`ci round: `は含まない。止める側(`ciRoundReason`)と写す側が同じ文を使うので、
  * 片方だけを変えて写せなくなることがない。
- * `unfixableJob`と`otherConclusion`は、後ろに分類の詳細が続くので、固定の前半だけを持つ。
+ * `unfixableJob`と`metadataManual`と`otherConclusion`は、後ろに分類の詳細が続くので、固定の前半だけを持つ。
  */
 export const CI_ROUND_DETAILS = {
   markerMissing: `the factory-fix skill lacks the ${CI_FIX_SKILL_MARKER} marker`,
   unfixableJob: "the failed CI job cannot be fixed by editing the source (",
+  metadataManual: "the lock cannot be recomputed automatically (",
   otherConclusion: "the CI job did not fail but ended with ",
   tokenCannotReadLog: "the token cannot read the CI job log",
   logUnavailable: "the CI job log is unavailable",

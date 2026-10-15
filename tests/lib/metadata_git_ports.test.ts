@@ -12,6 +12,7 @@ import { join } from "node:path";
 import {
   type BytesRunner,
   createGitPrecheckPorts,
+  fetchBranch,
   parseLsTreeZ,
   runCommandBytes,
 } from "../../f/factory/lib/metadata_git_ports.ts";
@@ -386,6 +387,79 @@ describe("createGitPrecheckPorts with planMetadataRehash on this repository", ()
     );
     expect(result.ok && result.changedKeys).toEqual([]);
   }, 120_000);
+});
+
+describe("fetchBranch", () => {
+  type Seen = { argv: readonly string[]; env: Record<string, string> };
+  function spy(
+    exitCode = 0,
+    timedOut = false,
+  ): {
+    run: CommandRunner;
+    seen: Seen[];
+  } {
+    const seen: Seen[] = [];
+    return {
+      seen,
+      run: async (argv, options) => {
+        seen.push({ argv, env: { ...(options?.env ?? {}) } });
+        return { stdout: "", stderr: "secret", exitCode, timedOut };
+      },
+    };
+  }
+
+  test("fetches only the branch, after a double dash", async () => {
+    const { run, seen } = spy();
+    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run });
+    expect(seen[0]?.argv.slice(-5)).toEqual([
+      "fetch",
+      "--no-recurse-submodules",
+      "origin",
+      "--",
+      "main",
+    ]);
+  });
+
+  test("gives the token only through the environment", async () => {
+    const { run, seen } = spy();
+    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "tok", run });
+    expect(seen[0]?.argv.join(" ")).not.toContain("tok");
+  });
+
+  test("passes the token as GH_TOKEN", async () => {
+    const { run, seen } = spy();
+    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "tok", run });
+    expect(seen[0]?.env.GH_TOKEN).toBe("tok");
+  });
+
+  test("adds the credential helper of gh", async () => {
+    const { run, seen } = spy();
+    await fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run });
+    expect(seen[0]?.argv).toContain(
+      "credential.helper=!gh auth git-credential",
+    );
+  });
+
+  test("rejects a branch name that starts with a dash", async () => {
+    const { run } = spy();
+    await expect(
+      fetchBranch({ cwd: "/x", branch: "--upload-pack=x", ghToken: "t", run }),
+    ).rejects.toThrow();
+  });
+
+  test("throws a message without the standard error when git fails", async () => {
+    const { run } = spy(128);
+    await expect(
+      fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run }),
+    ).rejects.toThrow("git fetch of the base branch failed");
+  });
+
+  test("throws when git timed out", async () => {
+    const { run } = spy(0, true);
+    await expect(
+      fetchBranch({ cwd: "/x", branch: "main", ghToken: "t", run }),
+    ).rejects.toThrow();
+  });
 });
 
 describe("parseLsTreeZ", () => {
