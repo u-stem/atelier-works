@@ -4768,6 +4768,36 @@ check(
   conflictFirst.row.episode === 1,
   conflictFirst,
 );
+// 競合を直す列は、記録した行では既定値のままで、既存の記録と通知の動きを変えない。
+const conflictFixColumnsOf = async (id: number) => {
+  const rows = await sql`
+    SELECT fix_work_item_id, fix_attempts, fix_hold_reason,
+           episode_started_at >= checked_at AND episode_started_at <= now() AS started_at_insertion
+    FROM factory.pr_conflict_checks WHERE id = ${id}::bigint
+  `.fetch();
+  return rows[0];
+};
+const conflictFixColumns = await conflictFixColumnsOf(conflictFirst.row.id);
+check(
+  "pr_conflict_checks: a new row starts without a fix work item",
+  conflictFixColumns?.fix_work_item_id === null,
+  conflictFixColumns,
+);
+check(
+  "pr_conflict_checks: a new row starts with no fix attempts",
+  Number(conflictFixColumns?.fix_attempts) === 0,
+  conflictFixColumns,
+);
+check(
+  "pr_conflict_checks: a new row starts without a fix hold reason",
+  conflictFixColumns?.fix_hold_reason === null,
+  conflictFixColumns,
+);
+check(
+  "pr_conflict_checks: a new row records the time of insertion as the start of the episode",
+  conflictFixColumns?.started_at_insertion === true,
+  conflictFixColumns,
+);
 check(
   "pr_conflict_checks: the repository of a row is listed",
   (await listPrConflictRepos(sql)).some(

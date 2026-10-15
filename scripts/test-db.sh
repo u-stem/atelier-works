@@ -64,6 +64,7 @@ NOTICES_DEDUP_MIGRATION="20261011170000_notices_unresolved_dedup.up.sql"
 DISK_USAGE_NOTICE_MIGRATION="20261013100300_disk_usage_notice_single.up.sql"
 PR_CI_FIX_SCHEMA_MIGRATION="20261013100400_pr_ci_fix_schema.up.sql"
 ACTIVE_PR_FIX_MIGRATION="20261013100500_active_pr_fix_key.up.sql"
+PR_CONFLICT_FIX_MIGRATION="20261015120000_pr_conflict_fix.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -455,6 +456,119 @@ verify_active_pr_fix_index() {
   log "pr_fix work items are limited to one active row per pull request"
 }
 
+# 競合を直す仕組みの土台のmigrationが、列の既定値と制約を効かせ、部分索引を作り、
+# 戻したときに列、制約、索引を落とし、既存の行を壊さずにもう一度適用できることを確かめる。
+# このmigrationの適用直後に呼ぶので、後のmigrationの影響を受けない。もう一度適用し直す。
+# 補助の関数は、ほかの検証が同じ名前を別の形で定義しているため、固有の名前にする。
+verify_pr_conflict_fix() {
+  local up_file="${MIGRATIONS_DIR}/${PR_CONFLICT_FIX_MIGRATION}"
+  local down_file="${MIGRATIONS_DIR}/${PR_CONFLICT_FIX_MIGRATION%.up.sql}.down.sql"
+  [ -f "${up_file}" ] || die "missing migration: ${up_file}"
+  [ -f "${down_file}" ] || die "missing migration: ${down_file}"
+  local sha
+  sha="$(printf 'b%.0s' $(seq 1 40))"
+  local check_prefix="INSERT INTO factory.pr_conflict_checks (owner, repo, pr_number, head_sha"
+  local item_prefix="INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status"
+  local item_values="1, 'issue', 'issue', 'conflictprobe', 'r', 1, 'https://github.com/conflictprobe/r/issues/1', 't', 'failed'"
+  local fix_columns="column_name IN ('fix_work_item_id', 'fix_attempts', 'fix_hold_reason', 'episode_started_at')"
+  local item_columns="column_name IN ('conflict_check_id', 'conflict_episode')"
+
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  conflict_fix_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  # 文が成功することを確かめる。
+  conflict_fix_accepted() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" >/dev/null || die "the statement was rejected: $1"
+  }
+  # 文が制約名つきで拒まれることを確かめる。
+  conflict_fix_rejected() {
+    local statement="$1" constraint="$2" rejected
+    if rejected="$(printf '%s;\n' "${statement}" | psql_exec "${SCRATCH_DB}" 2>&1)"; then
+      die "the statement was accepted, expected ${constraint} to reject it: ${statement}"
+    fi
+    case "${rejected}" in
+      *"${constraint}"*) ;;
+      *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
+    esac
+  }
+  # 足した6列の数を数える。
+  conflict_fix_columns() {
+    conflict_fix_scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND ((table_name = 'pr_conflict_checks' AND ${fix_columns}) OR (table_name = 'work_items' AND ${item_columns}))"
+  }
+  conflict_fix_indexes() {
+    conflict_fix_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_conflict_check_id_idx'"
+  }
+
+  # 適用の直後は、足した列が既定値で入り、制約が不正な値を拒む。
+  conflict_fix_accepted "${check_prefix}) VALUES ('conflictprobe', 'r', 1, '${sha}')"
+  local defaults
+  defaults="$(conflict_fix_scalar "SELECT fix_attempts || ':' || COALESCE(fix_work_item_id::text, '-') || ':' || COALESCE(fix_hold_reason, '-') || ':' || (episode_started_at IS NOT NULL) FROM factory.pr_conflict_checks WHERE owner = 'conflictprobe' AND pr_number = 1")"
+  [ "${defaults}" = "0:-:-:true" ] || die "unexpected defaults of the conflict fix columns: ${defaults}"
+  conflict_fix_rejected "${check_prefix}, fix_attempts) VALUES ('conflictprobe', 'r', 2, '${sha}', -1)" pr_conflict_checks_fix_attempts_check
+  conflict_fix_rejected "${check_prefix}, fix_hold_reason) VALUES ('conflictprobe', 'r', 2, '${sha}', '')" pr_conflict_checks_fix_hold_reason_check
+  conflict_fix_rejected "${check_prefix}, fix_hold_reason) VALUES ('conflictprobe', 'r', 2, '${sha}', repeat('x', 65))" pr_conflict_checks_fix_hold_reason_length_check
+  conflict_fix_accepted "${check_prefix}, fix_hold_reason) VALUES ('conflictprobe', 'r', 3, '${sha}', repeat('x', 64))"
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode, ci_check_id) VALUES (${item_values}, 1, 1, 2)" work_items_conflict_check_id_exclusive_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id) VALUES (${item_values}, 1)" work_items_conflict_episode_check
+  conflict_fix_rejected "${item_prefix}, conflict_episode) VALUES (${item_values}, 1)" work_items_conflict_episode_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 5, 0)" work_items_conflict_episode_min_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 5, -1)" work_items_conflict_episode_min_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 0, 1)" work_items_conflict_check_id_min_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, -1, 1)" work_items_conflict_check_id_min_check
+  conflict_fix_accepted "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 5, 2)"
+  local stored
+  stored="$(conflict_fix_scalar "SELECT conflict_check_id || ':' || conflict_episode FROM factory.work_items WHERE owner = 'conflictprobe'")"
+  [ "${stored}" = "5:2" ] || die "expected conflict_check_id and conflict_episode to be stored, got '${stored}'"
+  conflict_fix_accepted "DELETE FROM factory.work_items WHERE owner = 'conflictprobe'"
+  conflict_fix_accepted "${item_prefix}, ci_check_id) VALUES (${item_values}, 5)"
+  conflict_fix_accepted "DELETE FROM factory.work_items WHERE owner = 'conflictprobe'"
+  conflict_fix_accepted "DELETE FROM factory.pr_conflict_checks WHERE owner = 'conflictprobe'"
+
+  # 部分索引は、値のある行だけを対象にする。
+  local index_def
+  index_def="$(conflict_fix_scalar "SELECT indexdef FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_conflict_check_id_idx'")"
+  case "${index_def}" in
+    *"WHERE(conflict_check_idISNOTNULL)"*) ;;
+    *) die "work_items_conflict_check_id_idx is not a partial index over conflict_check_id: ${index_def}" ;;
+  esac
+  local remaining
+  remaining="$(conflict_fix_columns)"
+  [ "${remaining}" = "6" ] || die "expected the six columns after applying, found ${remaining}"
+  local constraint_names="'pr_conflict_checks_fix_attempts_check', 'pr_conflict_checks_fix_hold_reason_check', 'pr_conflict_checks_fix_hold_reason_length_check', 'work_items_conflict_check_id_exclusive_check', 'work_items_conflict_episode_check', 'work_items_conflict_check_id_min_check', 'work_items_conflict_episode_min_check'"
+  local constraints
+  constraints="$(conflict_fix_scalar "SELECT count(*) FROM pg_constraint WHERE conname IN (${constraint_names})")"
+  [ "${constraints}" = "7" ] || die "expected the seven constraints after applying, found ${constraints}"
+
+  # 戻すと、足した列と索引が消える。
+  log "rolling back pr_conflict_fix"
+  psql_exec "${SCRATCH_DB}" -q <"${down_file}" >/dev/null || die "could not roll back pr_conflict_fix"
+  remaining="$(conflict_fix_columns)"
+  [ "${remaining}" = "0" ] || die "expected the six columns to be dropped by the rollback, ${remaining} remain"
+  local indexes
+  indexes="$(conflict_fix_indexes)"
+  [ "${indexes}" = "0" ] || die "expected the index to be dropped by the rollback, ${indexes} remain"
+  constraints="$(conflict_fix_scalar "SELECT count(*) FROM pg_constraint WHERE conname IN (${constraint_names})")"
+  [ "${constraints}" = "0" ] || die "expected the seven constraints to be dropped by the rollback, ${constraints} remain"
+
+  # 戻した状態で入れた既存の行は、もう一度適用しても壊れず、新しい列は既定値かNULLになる。
+  conflict_fix_accepted "${check_prefix}) VALUES ('conflictprobe', 'r', 4, '${sha}')"
+  conflict_fix_accepted "${item_prefix}, ci_check_id) VALUES (${item_values}, 9)"
+  log "re-applying pr_conflict_fix"
+  psql_exec "${SCRATCH_DB}" -q <"${up_file}" >/dev/null || die "could not re-apply pr_conflict_fix over existing rows"
+  remaining="$(conflict_fix_columns)"
+  [ "${remaining}" = "6" ] || die "expected the six columns after re-applying, found ${remaining}"
+  indexes="$(conflict_fix_indexes)"
+  [ "${indexes}" = "1" ] || die "expected the index after re-applying, found ${indexes}"
+  defaults="$(conflict_fix_scalar "SELECT fix_attempts || ':' || COALESCE(fix_work_item_id::text, '-') || ':' || COALESCE(fix_hold_reason, '-') || ':' || (episode_started_at IS NOT NULL) FROM factory.pr_conflict_checks WHERE owner = 'conflictprobe' AND pr_number = 4")"
+  [ "${defaults}" = "0:-:-:true" ] || die "unexpected defaults of an existing row after re-applying: ${defaults}"
+  stored="$(conflict_fix_scalar "SELECT ci_check_id || ':' || COALESCE(conflict_check_id::text, '-') || ':' || COALESCE(conflict_episode::text, '-') FROM factory.work_items WHERE owner = 'conflictprobe'")"
+  [ "${stored}" = "9:-:-" ] || die "unexpected columns of an existing work item after re-applying: ${stored}"
+  conflict_fix_accepted "DELETE FROM factory.work_items WHERE owner = 'conflictprobe'"
+  conflict_fix_accepted "DELETE FROM factory.pr_conflict_checks WHERE owner = 'conflictprobe'"
+  log "pr_conflict_fix applies over existing rows, rejects invalid values, and round-trips"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -482,6 +596,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${ACTIVE_PR_FIX_MIGRATION}" ]; then
     verify_active_pr_fix_index
+  fi
+  if [ "${up_name}" = "${PR_CONFLICT_FIX_MIGRATION}" ]; then
+    verify_pr_conflict_fix
   fi
 done
 

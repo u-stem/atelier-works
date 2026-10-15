@@ -140,6 +140,22 @@ CIの失敗を直す回の再実行は、作業項目だけを再開すると失
 起動したジョブIDを、別の実行が先にリースを取っていたために記録しなかったときは、Consoleから再実行した場合、その旨が警告として出る。
 Windmillで`retry_work_item`を直接実行したときは、実行結果(`ok: false`、`flow_job_id: null`)にだけ現れる。
 
+### 修正の回を結ぶ列
+
+`pr_fix`の作業項目は、直している対象の行を、次の列で指す。
+`ci_check_id`と`conflict_check_id`は、どちらも外部キーを持たない。対象の行は作業項目の削除に連なって消えず、作業項目も行の掃除に連なって消えない。
+
+| 列 | 意味 |
+| --- | --- |
+| `ci_check_id` | CIの失敗を直す回が直している`pr_ci_checks`の行のID。それ以外はNULL |
+| `conflict_check_id` | マージの競合を直す回が直している`pr_conflict_checks`の行のID。それ以外はNULL。値は正の整数 |
+| `conflict_episode` | 直している競合の回(`episode`)。`conflict_check_id`と同時に値を持ち、同時にNULLになる。値は1以上 |
+
+1つの作業項目が直す対象は1つだけなので、`ci_check_id`と`conflict_check_id`は同時に値を持たない。
+`ci_check_id`と`conflict_check_id`の索引には、値のある作業項目だけを入れる。
+競合の1回は、行のIDと回の組で指す。行は競合が解けて再び競合しても同じ行のままで、回だけが進むためである。
+`pr_conflict_checks`の列の意味は、[PRのCI監視の内部仕様](pr-ci.md)の「記録」にある。
+
 ### 新しいサイクルによる取り消し
 
 Issueの新しいサイクルの作業項目を挿入すると、同じIssueの古いサイクルの`approved`の作業項目を取り消す。
