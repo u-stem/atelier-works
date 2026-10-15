@@ -31,6 +31,7 @@ import {
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
 import {
+  confirmationVerdict,
   confirmRehash,
   githubRehashPlanner,
   type RehashPlanner,
@@ -575,7 +576,7 @@ export async function main(
                     readLock: () => readRootWmillLock(worktree_dir),
                   });
                   rehashVerified = confirmation.ok;
-                  return confirmation.ok;
+                  return confirmationVerdict(confirmation);
                 },
               },
             );

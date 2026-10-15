@@ -8,6 +8,7 @@ import {
   listCiAddedPathsInTree,
   parseRawDiffZ,
   parseZeroContextPatch,
+  type RehashCheckVerdict,
 } from "../../f/factory/lib/ci_fix_round.ts";
 import type {
   CommandResult,
@@ -609,6 +610,8 @@ describe("inspectCiFixChanges", () => {
 });
 
 describe("inspectCiFixChanges for a recomputed lock", () => {
+  const ALLOW: RehashCheckVerdict = { kind: "allow" };
+  const DENY: RehashCheckVerdict = { kind: "deny" };
   const LOCK_PATCH = { "wmill-lock.yaml": "@@ -1 +1 @@\n-a\n+b\n" };
 
   function lockRun(
@@ -622,7 +625,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
     }).run;
   }
 
-  function options(rehashCheck?: () => Promise<boolean>) {
+  function options(rehashCheck?: () => Promise<RehashCheckVerdict>) {
     return {
       ...WORKTREE,
       fs: fakeFs({}).fs,
@@ -645,7 +648,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
         DIR,
         SHA,
         [],
-        options(async () => true),
+        options(async () => ALLOW),
       ),
     ).toEqual([]);
   });
@@ -657,11 +660,25 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
         DIR,
         SHA,
         [],
-        options(async () => false),
+        options(async () => DENY),
       ),
     ).toEqual([
       "ci round change not allowed (protected_path): wmill-lock.yaml",
     ]);
+  });
+
+  test("stops with the reason of the check, not as a protected path", async () => {
+    const reason =
+      "ci round: the lock cannot be recomputed automatically (dependency_changed)";
+    expect(
+      await inspectCiFixChanges(
+        lockRun(),
+        DIR,
+        SHA,
+        [],
+        options(async () => ({ kind: "stop", reason })),
+      ),
+    ).toEqual([reason]);
   });
 
   test("rejects a lock that changes together with another file", async () => {
@@ -671,7 +688,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
       DIR,
       SHA,
       ["f/a.ts"],
-      options(async () => true),
+      options(async () => ALLOW),
     );
     expect(reasons).toEqual([
       "ci round change not allowed (protected_path): wmill-lock.yaml",
@@ -688,7 +705,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
       ["f/a.ts"],
       options(async () => {
         asked += 1;
-        return true;
+        return ALLOW;
       }),
     );
     expect(asked).toBe(0);
@@ -700,7 +717,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
       DIR,
       SHA,
       [],
-      options(async () => true),
+      options(async () => ALLOW),
     );
     expect(reasons).toEqual([
       "ci round change not allowed (protected_path): wmill-lock.yaml",
@@ -713,7 +730,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
       DIR,
       SHA,
       [],
-      options(async () => true),
+      options(async () => ALLOW),
     );
     expect(reasons).toEqual([
       "ci round change not allowed (protected_path): wmill-lock.yaml",
@@ -726,7 +743,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
       DIR,
       SHA,
       [],
-      options(async () => true),
+      options(async () => ALLOW),
     );
     expect(reasons).toEqual([
       "ci round change not allowed (protected_path): wmill-lock.yaml",
@@ -742,7 +759,7 @@ describe("inspectCiFixChanges for a recomputed lock", () => {
       DIR,
       SHA,
       [],
-      options(async () => true),
+      options(async () => ALLOW),
     );
     expect(reasons).toEqual([
       "ci round change not allowed (protected_path): sub/wmill-lock.yaml",

@@ -932,11 +932,23 @@ export type CiChangeOptions = {
   readonly now?: () => number;
   /**
    * 変更が、根の`wmill-lock.yaml`の通常の変更1件だけのときに、その内容が独立した再計算と一致するかを確かめる。
-   * `true`なら、その変更を許す。渡さないとき、`false`のとき、ほかの変更を含むときは、許可リストの検査に任せる。
+   * `allow`ならその変更を許し、`stop`ならその理由で止める。
+   * 渡さないとき、`deny`のとき、ほかの変更を含むときは、許可リストの検査に任せる。
    * `checkCiFixChanges`は変えず、呼び出し側のこの検査だけが例外を置く。
    */
-  readonly rehashCheck?: () => Promise<boolean>;
+  readonly rehashCheck?: () => Promise<RehashCheckVerdict>;
 };
+
+/**
+ * hashの再計算の照合の結果。
+ * - `allow`: 独立した再計算と一致した。その変更を許す。
+ * - `deny`: 一致しない、または確認できない。許可リストの検査に任せる。
+ * - `stop`: 再計算では直せないことが決まった。保護パスの違反とは別の、固定の理由で止める。
+ */
+export type RehashCheckVerdict =
+  | { readonly kind: "allow" }
+  | { readonly kind: "deny" }
+  | { readonly kind: "stop"; readonly reason: string };
 
 /** 再計算が書き換えてよい、根のlockのパス。 */
 const ROOT_LOCK_PATH = "wmill-lock.yaml";
@@ -1255,12 +1267,10 @@ export async function inspectCiFixChanges(
   if (timedOut) return [`${REASON_PREFIX} took too long to read the changes`];
   if (overflow)
     return [`${REASON_PREFIX} changed more than ${String(max)} files`];
-  if (
-    options.rehashCheck !== undefined &&
-    isLockOnlyChange(changes) &&
-    (await options.rehashCheck())
-  ) {
-    return [];
+  if (options.rehashCheck !== undefined && isLockOnlyChange(changes)) {
+    const verdict = await options.rehashCheck();
+    if (verdict.kind === "allow") return [];
+    if (verdict.kind === "stop") return [verdict.reason];
   }
   const verdict = checkCiFixChanges({ changes, prChangedPaths });
   if (verdict.ok) return [];

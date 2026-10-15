@@ -4,7 +4,11 @@
 // gitは引数の配列で実行し、シェルを通さない。PRの作者が決められるパスは、シェルの文字列に結合しない。
 
 import type { FileRead } from "./metadata_patch_imports.ts";
-import type { PrecheckPorts, TreeEntry } from "./metadata_precheck.ts";
+import {
+  type PrecheckPorts,
+  type TreeEntry,
+  TreeUnreadableError,
+} from "./metadata_precheck.ts";
 import {
   buildGitArgv,
   type CommandRunner,
@@ -127,7 +131,8 @@ function assertCommitSha(ref: string): void {
 
 /**
  * `PrecheckPorts`を、gitのオブジェクトから読む実装にする。
- * - `listTree`は、`git ls-tree -r -z -l <sha>`の結果を返す。出力が切れたとき、時間を超えたとき、gitが失敗したときは例外を投げる。
+ * - `listTree`は、`git ls-tree -r -z -l <sha>`の結果を返す。出力が上限で切れたときと、形が合わないときは、`TreeUnreadableError`を投げる。
+ *   時間を超えたとき、gitが失敗したときは、ふつうの例外を投げる。
  * - `readBlob`は、木の項目の`oid`で`git cat-file blob <oid>`を実行する。木に無いパスは`missing`、
  *   blobでない項目、gitの失敗、時間切れ、大きさが木の申告と違う内容は`failed`にする。
  *   木は、同じcommitについて1回だけ読み、使い回す。
@@ -159,9 +164,14 @@ export function createGitPrecheckPorts(
     }
     if (result.exitCode !== 0) throw new Error("git ls-tree failed");
     if (isCappedOutput(result.stdout)) {
-      throw new Error("git ls-tree: the listing is too large");
+      throw new TreeUnreadableError("git ls-tree: the listing is too large");
     }
-    const entries = parseLsTreeZ(result.stdout);
+    let entries: readonly TreeEntry[];
+    try {
+      entries = parseLsTreeZ(result.stdout);
+    } catch {
+      throw new TreeUnreadableError("git ls-tree: unexpected listing");
+    }
     trees.set(ref, new Map(entries.map((entry) => [entry.path, entry])));
     return entries;
   }

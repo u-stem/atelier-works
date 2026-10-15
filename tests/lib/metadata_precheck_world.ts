@@ -8,6 +8,7 @@ import {
   type PrecheckPorts,
   planMetadataRehash,
   type TreeEntry,
+  TreeUnreadableError,
 } from "../../f/factory/lib/metadata_precheck.ts";
 
 export const BASE_TIP = "b".repeat(40);
@@ -107,6 +108,7 @@ export type World = {
   malformedReads: Map<string, string>;
   /** `listTree`が投げるか。 */
   throwOnList: boolean;
+  unreadableTree: boolean;
   /** `isAncestor`が投げるか。 */
   throwOnAncestor: boolean;
   /** `size`を差し替えるパス。 */
@@ -154,6 +156,7 @@ export function world(): World {
     brokenReads: new Set(),
     malformedReads: new Map(),
     throwOnList: false,
+    unreadableTree: false,
     throwOnAncestor: false,
     headSizes: new Map(),
     baseSizes: new Map(),
@@ -211,6 +214,9 @@ export function portsOf(w: World): PrecheckPorts {
     listTree: async (ref) => {
       if (w.throwOnList) {
         throw new Error("boom");
+      }
+      if (w.unreadableTree) {
+        throw new TreeUnreadableError();
       }
       return ref === HEAD
         ? entryOf(

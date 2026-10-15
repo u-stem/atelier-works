@@ -288,6 +288,7 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 | スキルにCI回のマーカーが無い | `marker_missing` |
 | ジョブの名前が無く、直せる種類を決められない | `unfixable_job` |
 | `metadata`ジョブの失敗を、再計算では直せない | `metadata_manual` |
+| 完了のステップが、pushの直前に、baseの先端が動き、再計算の結果が確認済みの本文と合わなくなったと判断した(`CI_ROUND_REHASH_STALE_REASON`) | `metadata_manual` |
 | ジョブが失敗でなく、ほかの結論で終わった | `other_conclusion` |
 | トークンがログを読めない、ログが取得できない | `log_unavailable` |
 | 日次予算の超過 | `budget_exceeded` |
@@ -332,12 +333,15 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
    `Generated-By: Software Factory (<instance_name>)`
    250件に達したときも保留する。
    トレーラーの無いcommitを含むPRは、自動で直さない。commitのauthorは、人が同じアカウントでpushしても同じになるので使わない。
-6. factory-fixスキルがCI回のマーカーを持たなければ、`marker_missing`で保留する。マーカーは、Factoryのリポジトリの`factory_branch`にあるファイルをGitHubのAPIで読んで確かめる。`pr_fix`の準備は、毎回`factory_branch`をfetchしてhard resetするので、cloneのスキルは準備の時点の`factory_branch`と同じになる。
+6. 失敗したジョブを分類する。
+7. `metadata`だけの失敗でなく、factory-fixスキルがCI回のマーカーを持たなければ、`marker_missing`で保留する。
+   `metadata`だけの失敗は、Claudeを使わないので、マーカーを確かめない。
+   マーカーは、Factoryのリポジトリの`factory_branch`にあるファイルをGitHubのAPIで読んで確かめる。`pr_fix`の準備は、毎回`factory_branch`をfetchしてhard resetするので、cloneのスキルは準備の時点の`factory_branch`と同じになる。
    APIで読んだ値とcloneの値がずれるのは、起動から準備までの数秒の間にスキルが変わったときだけである。
    その間に`pr_fix`が止まると、回復が`marker_missing`を書く。次の巡回で保留が外れて起動し直し、`pr_ci_fix_max_rounds`に達すると`rounds_exhausted`で保留する。損失は最大でも1ラウンド分である。
    ファイルが無いときも、マーカーが無いものとして扱う。スキルが入れば、毎巡回の見直しで外れて起動できる。
-7. 失敗したジョブを分類する。名前が無く種類を決められないなら`unfixable_job`、失敗でない結論なら`other_conclusion`で保留する。失敗したジョブが無ければ、何もしない。
-8. 日次の予算を使い切っていれば`budget_exceeded`で保留する。
+8. 分類の結果で止める。名前が無く種類を決められないなら`unfixable_job`、失敗でない結論なら`other_conclusion`で保留する。失敗したジョブが無ければ、何もしない。
+9. 日次の予算を使い切っていれば`budget_exceeded`で保留する。
    `metadata`だけが失敗しているときは、Claudeを起動せずhashの再計算で直すので、予算では保留しない。
    `check`などが同時に落ちているときは、予算で保留する。保留した行は、巡回のたびに読み直すだけで、ラウンドを消費しない。
    mainのCIが赤ければ`main_ci_failed`で保留する。
@@ -346,7 +350,7 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
    これには、フローの起動に失敗した回のほかに、ジョブIDが記録されないまま回復や失敗の処理が`failed`にした回も含む。
    Claudeを走らせていない回で、直す機会を使い切らないためである。
    ただし、行の起動の回数(`fix_attempts`)が`pr_ci_fix_max_rounds`に3を足した数に達したときも、`rounds_exhausted`で保留する。数えない回が続いても、起動し直し続けないための歯止めである。
-9. どれにも当たらなければ起動する。
+10. どれにも当たらなければ起動する。
 
 ジョブの分類は、workflowごとの最新の実行のうち、失敗した実行を古い順に最大5件まで読む。CI回の収集と同じ関数(`classifyFailedRuns`)で、同じ範囲を読む。
 ログは読まない。ログを読めないときは、CI回が止まり、回復が`log_unavailable`で保留する。

@@ -237,6 +237,14 @@ describe("planMetadataRehash and the values from the ports", () => {
     ).toBe("port_error");
   });
 
+  test("returns an unreadable tree when the listing of a tree cannot be read", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.unreadableTree = true;
+      }),
+    ).toBe("tree_unreadable");
+  });
+
   test("returns a port error when the ancestry check throws", async () => {
     expect(
       await reasonAfter((w) => {
@@ -562,7 +570,7 @@ describe("planMetadataRehash and the self check of the reading", () => {
       await reasonAfter((w) => {
         w.selfCheck = () => false;
       }),
-    ).toBe("internal_error");
+    ).toBe("scan_unavailable");
   });
 
   test("leaves the version of Bun in the detail of the failure", async () => {

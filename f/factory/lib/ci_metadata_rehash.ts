@@ -10,6 +10,7 @@ import {
   CI_ROUND_DETAILS,
   type CiFailureRead,
   ciRoundReason,
+  type RehashCheckVerdict,
 } from "./ci_fix_round.ts";
 import { type GhClient, getBranchSha, getPr } from "./github.ts";
 import {
@@ -50,10 +51,17 @@ export type MetadataManualReason =
 
 /**
  * 再計算で直せないときに止める理由。接頭辞は`ci round: `で、続けて固定の文と、種別を付ける。
- * 種別は固定の語彙で、PRの作者が決められるパスや補足は入れない。
+ * 種別は固定の語彙で、PRの作者が決められるパスは入れない。
+ * 補足(`detail`)は、`scan_unavailable`のときだけ、`: <補足>`として足す。workerのBunの版(`bun <版>`)で、
+ * 運用者が、workerの更新で直るかを見分けるためである。ほかの種別の補足は捨てる。
  */
-export function metadataManualReason(reason: MetadataManualReason): string {
-  return ciRoundReason(`${CI_ROUND_DETAILS.metadataManual}${reason})`);
+export function metadataManualReason(
+  reason: MetadataManualReason,
+  detail?: string,
+): string {
+  const suffix =
+    reason === "scan_unavailable" && detail !== undefined ? `: ${detail}` : "";
+  return ciRoundReason(`${CI_ROUND_DETAILS.metadataManual}${reason}${suffix})`);
 }
 
 /**
@@ -79,11 +87,18 @@ export type MetadataRehashOutcome =
   | { readonly kind: "rewritten" }
   /** 再計算が通ったが、本文が変わらない。書き換えない。 */
   | { readonly kind: "up_to_date" }
-  | { readonly kind: "manual"; readonly reason: MetadataManualReason };
+  | {
+      readonly kind: "manual";
+      readonly reason: MetadataManualReason;
+      readonly detail?: string;
+    };
 
 /**
  * 事前検査の失敗のうち、同じ入力でやり直せば通りうる、一時的なもの。
+ * gitコマンドや読み取りの失敗(`port_error`)、祖先の判定の失敗、想定外の例外である。
  * 人の手に回さず、例外にして、flowの再試行に任せる。再計算は何度行っても同じ結果になる。
+ * 自己検査の失敗(`scan_unavailable`)や、木の一覧が読めないこと(`tree_unreadable`)は、
+ * 再試行しても直らないので、ここに含めない。
  */
 const TRANSIENT_REHASH_REASONS: ReadonlySet<RehashFailureReason> = new Set([
   "port_error",
@@ -114,7 +129,9 @@ export async function rehashMetadataLock(
     if (TRANSIENT_REHASH_REASONS.has(plan.reason)) {
       throw new RehashTransientError(plan.reason);
     }
-    return { kind: "manual", reason: plan.reason };
+    return plan.detail === undefined
+      ? { kind: "manual", reason: plan.reason }
+      : { kind: "manual", reason: plan.reason, detail: plan.detail };
   }
   if (plan.changedKeys.length === 0) return { kind: "up_to_date" };
   try {
@@ -158,7 +175,10 @@ export async function runMetadataRound(
   if (outcome.kind === "up_to_date") {
     return { kind: "manual", reason: metadataManualReason("lock_up_to_date") };
   }
-  return { kind: "manual", reason: metadataManualReason(outcome.reason) };
+  return {
+    kind: "manual",
+    reason: metadataManualReason(outcome.reason, outcome.detail),
+  };
 }
 
 /** 修正のステップが返す、再計算の回の結果。`PrFixApplyResult`と同じ形で、返信は空である。 */
@@ -276,6 +296,13 @@ export type RehashConfirmDeps = RehashPlanner & {
   readonly readLock: () => Promise<Uint8Array | null>;
 };
 
+/**
+ * 照合の結果。確認できなかったときは、2つに分ける。
+ * - `mismatch`: 再計算はできたが、`wmill-lock.yaml`が再計算と違う、読めない、またはbaseの先端が動き続けた。
+ *   修正のステップ以外が書いた内容かもしれないので、呼び出し側は、保護パスの検査に任せる。
+ * - `manual`: 再計算が、再試行では直らない理由でできない。固定の理由で人の手に回す。
+ *   一時的な失敗は、この型にせず、`RehashTransientError`を投げる。
+ */
 export type RehashConfirmation =
   | {
       readonly ok: true;
@@ -284,10 +311,31 @@ export type RehashConfirmation =
       /** 再計算のUTF-8のバイト列と一致した、`wmill-lock.yaml`のバイト列。 */
       readonly lockBytes: Uint8Array;
     }
-  | { readonly ok: false };
+  | { readonly ok: false; readonly kind: "mismatch" }
+  | {
+      readonly ok: false;
+      readonly kind: "manual";
+      readonly reason: MetadataManualReason;
+      readonly detail?: string;
+    };
 
 /** 再計算と一致すると確認できた結果。 */
 export type RehashConfirmed = Extract<RehashConfirmation, { ok: true }>;
+
+/**
+ * 照合の結果を、`inspectCiFixChanges`が使う判定にする。
+ * 確認できたら許し、固定の理由で直せないときはその理由で止め、そのほかは保護パスの検査に任せる。
+ */
+export function confirmationVerdict(
+  confirmation: RehashConfirmation,
+): RehashCheckVerdict {
+  if (confirmation.ok) return { kind: "allow" };
+  if (confirmation.kind === "mismatch") return { kind: "deny" };
+  return {
+    kind: "stop",
+    reason: metadataManualReason(confirmation.reason, confirmation.detail),
+  };
+}
 
 /** baseの先端が動いたときに、再計算を取り直す回数の上限。 */
 export const REHASH_CONFIRM_ATTEMPTS = 3;
@@ -299,26 +347,86 @@ const utf8 = new TextEncoder();
  * baseの先端を読み、その先端で再計算し、再計算の本文のUTF-8のバイト列と比べる。
  * 比べた後にbaseの先端をもう一度読み直して同じなら、確認済みとする。
  * 先端が動いていたら、新しい先端で最初からやり直す。上限(`REHASH_CONFIRM_ATTEMPTS`)を超えても動き続けるときは、確認できないとする。
- * 再計算できない、バイト列が違う、バイト列を読めないときも、確認できない。
+ * 再試行で直らない理由で再計算できないときは`manual`、バイト列が違う、バイト列を読めないときは`mismatch`を返す。
  * 通ったバイト列は、修正のステップが書いたものと同じであり、依存や`schema`を書き換えていない。
- * 読み取りや取り込みの例外は、そのまま投げる。一時的な失敗なので、呼び出し側が再試行する。
+ * 再計算が一時的な理由で失敗したとき(`port_error`、`ancestry_unknown`、`internal_error`)は、`RehashTransientError`を投げる。
+ * 読み取りや取り込みの例外も、そのまま投げる。一時的な失敗なので、呼び出し側が再試行する。
  */
 export async function confirmRehash(
   deps: RehashConfirmDeps,
 ): Promise<RehashConfirmation> {
   const lock = await deps.readLock();
-  if (lock === null) return { ok: false };
+  if (lock === null) return { ok: false, kind: "mismatch" };
   for (let attempt = 0; attempt < REHASH_CONFIRM_ATTEMPTS; attempt += 1) {
     const baseSha = await deps.readBase();
     const plan = await deps.planWith(baseSha);
-    if (!plan.ok || !bytesEqual(utf8.encode(plan.newLock), lock)) {
-      return { ok: false };
+    if (!plan.ok) {
+      if (TRANSIENT_REHASH_REASONS.has(plan.reason)) {
+        throw new RehashTransientError(plan.reason);
+      }
+      return plan.detail === undefined
+        ? { ok: false, kind: "manual", reason: plan.reason }
+        : {
+            ok: false,
+            kind: "manual",
+            reason: plan.reason,
+            detail: plan.detail,
+          };
+    }
+    if (!bytesEqual(utf8.encode(plan.newLock), lock)) {
+      return { ok: false, kind: "mismatch" };
     }
     if ((await deps.readBase()) === baseSha) {
       return { ok: true, baseSha, lockBytes: lock };
     }
   }
-  return { ok: false };
+  return { ok: false, kind: "mismatch" };
+}
+
+/** `stagedRehashGate`の結果の型。 */
+export type StagedRehashGate = {
+  readonly confirmed: RehashConfirmed | null;
+  readonly check: () => Promise<RehashCheckVerdict>;
+};
+
+/** `stagedRehashGate`が使うI/O。 */
+export type StagedRehashDeps = {
+  /** ステージ前の変更が、再計算の出力の候補か(`isRehashCandidate`)。 */
+  readonly candidate: boolean;
+  /** worktreeの`wmill-lock.yaml`を、独立した再計算と照合する(`confirmRehash`)。 */
+  readonly confirm: () => Promise<RehashConfirmation>;
+  /** ステージした`wmill-lock.yaml`のバイト列。読めなければ`null`。 */
+  readonly readStaged: () => Promise<Uint8Array | null>;
+};
+
+/**
+ * 完了のステップの照合。候補のときだけ、worktreeの内容を再計算と照合する(時間のかかる前段)。
+ * 返す`check`は、リポジトリのロックの中で呼ぶ。ステージした本文が、照合済みの本文と同じときだけ許す。
+ * 候補でないとき、ステージが違うとき、読めないときは`deny`を返し、保護パスの検査に任せる。
+ * 照合が固定の理由で直せないとわかったときは、`stop`を返す。
+ * `confirmed`は、pushの直前に、baseの先端が動いていないかを確かめるために返す。
+ * 照合が一時的な理由で失敗したときは、`RehashTransientError`を投げる。
+ */
+export async function stagedRehashGate(
+  deps: StagedRehashDeps,
+): Promise<StagedRehashGate> {
+  if (!deps.candidate) {
+    return { confirmed: null, check: async () => ({ kind: "deny" }) };
+  }
+  const confirmation = await deps.confirm();
+  if (!confirmation.ok) {
+    const verdict = confirmationVerdict(confirmation);
+    return { confirmed: null, check: async () => verdict };
+  }
+  return {
+    confirmed: confirmation,
+    check: async () => {
+      const staged = await deps.readStaged();
+      return staged !== null && bytesEqual(staged, confirmation.lockBytes)
+        ? { kind: "allow" }
+        : { kind: "deny" };
+    },
+  };
 }
 
 /** pushの直前に、baseの先端が動き、確認し直した再計算が、確認済みの本文と合わなくなったときの理由。 */

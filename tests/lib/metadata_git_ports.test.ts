@@ -16,7 +16,10 @@ import {
   parseLsTreeZ,
   runCommandBytes,
 } from "../../f/factory/lib/metadata_git_ports.ts";
-import { planMetadataRehash } from "../../f/factory/lib/metadata_precheck.ts";
+import {
+  planMetadataRehash,
+  TreeUnreadableError,
+} from "../../f/factory/lib/metadata_precheck.ts";
 import type { CommandRunner } from "../../f/factory/lib/workspace.ts";
 import { localGitEnv, runCommand } from "../../f/factory/lib/workspace.ts";
 import { REPO_ROOT } from "./metadata_repo_tree.ts";
@@ -181,7 +184,7 @@ describe("createGitPrecheckPorts.listTree", () => {
     await expect(ports().listTree("0".repeat(40))).rejects.toThrow();
   });
 
-  test("throws when the output was capped", async () => {
+  test("throws the deterministic error when the output was capped", async () => {
     const capped: CommandRunner = async () => ({
       stdout: "[... 12 bytes omitted ...]",
       stderr: "",
@@ -190,7 +193,39 @@ describe("createGitPrecheckPorts.listTree", () => {
     });
     await expect(
       ports({ run: capped }).listTree(fixture.second),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(TreeUnreadableError);
+  });
+
+  test("throws the deterministic error when the listing is in an unexpected form", async () => {
+    const garbled: CommandRunner = async () => ({
+      stdout: "garbage\0",
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+    });
+    await expect(
+      ports({ run: garbled }).listTree(fixture.second),
+    ).rejects.toBeInstanceOf(TreeUnreadableError);
+  });
+
+  test("does not throw the deterministic error when git fails", async () => {
+    const error = await ports()
+      .listTree("0".repeat(40))
+      .catch((caught: unknown) => caught);
+    expect(error instanceof TreeUnreadableError).toBe(false);
+  });
+
+  test("does not throw the deterministic error when git timed out", async () => {
+    const timedOut: CommandRunner = async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 143,
+      timedOut: true,
+    });
+    const error = await ports({ run: timedOut })
+      .listTree(fixture.second)
+      .catch((caught: unknown) => caught);
+    expect(error instanceof TreeUnreadableError).toBe(false);
   });
 
   test("throws when git timed out", async () => {

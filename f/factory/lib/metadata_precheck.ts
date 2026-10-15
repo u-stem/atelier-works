@@ -81,6 +81,8 @@ export const DEFAULT_MAX_TRACE_VISITS = 200_000;
 export type RehashFailureReason =
   | "port_error"
   | "internal_error"
+  | "scan_unavailable"
+  | "tree_unreadable"
   | "invalid_ref"
   | "invalid_tree"
   | "invalid_limit"
@@ -129,7 +131,7 @@ export type PlanResult =
       readonly ok: false;
       readonly reason: RehashFailureReason;
       readonly path?: string;
-      /** 固定の補足。`internal_error`のときは、実行しているBunの版を載せる。 */
+      /** 固定の補足。`scan_unavailable`のときは、実行しているBunの版を載せる。 */
       readonly detail?: string;
     };
 
@@ -143,6 +145,13 @@ function fail(reason: RehashFailureReason, path?: string): Failure {
 
 /** ポートが投げた例外。内容は載せずに、`port_error`として返す。 */
 class PortError extends Error {}
+
+/**
+ * 木の一覧が読めず、同じcommitで何度読んでも読めないことを表す。
+ * 出力が上限で切れたときと、形が合わないときに、ポートが投げる。`tree_unreadable`として返す。
+ * gitの失敗や時間切れは一時的なので、これを使わず、`port_error`に任せる。
+ */
+export class TreeUnreadableError extends Error {}
 
 /** 読む合計のバイト数の上限を超えた。 */
 class LimitError extends Error {}
@@ -177,7 +186,10 @@ function guarded<Args extends unknown[], Result>(
   return async (...args) => {
     try {
       return await port(...args);
-    } catch {
+    } catch (error) {
+      if (error instanceof TreeUnreadableError) {
+        throw error;
+      }
       throw new PortError();
     }
   };
@@ -700,6 +712,8 @@ async function plan(
  * - `limits`の各値が、正の安全な整数である。読んだ内容が、木の項目の`oid`と一致する。
  *   実行時に残るimportの読み方が、固定の入力で想定どおりに動く(Bunの版に依存するため)。
  * 想定外の例外も、固定の種別(`internal_error`)にして返す。
+ * 一時的な失敗(`port_error`、`ancestry_unknown`、`internal_error`)と、再試行で直らない失敗
+ * (`scan_unavailable`、`tree_unreadable`など)は、種別で分ける。
  */
 export async function planMetadataRehash(
   input: RehashInput,
@@ -719,7 +733,7 @@ export async function planMetadataRehash(
   if (!selfCheck()) {
     return {
       ok: false,
-      reason: "internal_error",
+      reason: "scan_unavailable",
       detail: `bun ${Bun.version}`,
     };
   }
@@ -736,6 +750,9 @@ export async function planMetadataRehash(
   } catch (error) {
     if (error instanceof PortError) {
       return fail("port_error");
+    }
+    if (error instanceof TreeUnreadableError) {
+      return fail("tree_unreadable");
     }
     if (error instanceof LimitError) {
       return fail("too_much_input");

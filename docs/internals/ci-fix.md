@@ -165,6 +165,8 @@ commitする変更が無いときの理由は、返信を投稿したとは書�
 
 `metadata`ジョブだけが落ちたCI回は、Claudeを起動せず、`wmill-lock.yaml`のhashの再計算で直す(決定的な経路)。
 修正のステップは、日次予算の検査より前に、この経路を試す。費用がかからないためである。
+`metadata`だけが落ちた行は、Claudeを使わないので、起動の判断が、factory-fixスキルのマーカーも確かめない。
+修正のステップのマーカーの確認は、この経路より後ろにあるので、この経路は通らない。
 
 `check`などの直せる失敗と`metadata`が同時に落ちたときは、再計算せず、Claudeが先に`check`などを直す。
 Claudeが`f/`のscriptを直すと、hashが再び古くなる。
@@ -196,21 +198,28 @@ Claudeを先にすれば、1回目でClaudeが直し、次のCIで`metadata`だ�
      実行権限のあるファイルは、モード`100755`でcommitされ、後のステップが`100644`だけを許すためである。
 
    理由は`ci round: the lock cannot be recomputed automatically (<種別>)`である。
-   種別は固定の語彙で、PRの作者が決めるパスと補足は入れない。
+   種別は固定の語彙で、PRの作者が決めるパスは入れない。
+   `scan_unavailable`だけは、種別に続けて、workerのBunの版を`scan_unavailable: bun <版>`の形で入れる。
+   運用者が、workerのイメージの更新で直るかを見分けるためである。
    種別は作業項目の理由に残り、再計算が直せるPRの割合を、種別ごとに数えて測れる。
 
 再計算の回も、`pr_ci_fix_max_rounds`が数える回に含まれる。
 Claudeの回と再計算の回は、同じ上限を分け合う。
 
-一時的な失敗の扱いは、次のとおりである。
+失敗は、一時的なものと、再試行しても直らないものに分け、検証と完了のステップの照合も同じ分け方に従う。
 
-- 事前検査の`port_error`、`ancestry_unknown`、`internal_error`は、一時的な理由として、例外にして投げる。
-  `metadata_manual`にしない。修正のステップはflowが2回まで再試行し、再計算は何度行っても同じ結果になる。
-- 取り込み、GitHubのAPI、書き込みの`open`以外の失敗も、例外のまま投げ、同じ再試行に任せる。
-- 次の失敗は、例外にせず、固定の理由の`blocked`にする。
-  - 再試行しても直らない`lock_not_writable`。
-  - 固定の理由の事前検査の失敗。`dependency_changed`、`head_lacks_base`、`base_stale`などである。
-- 検証と完了のステップの照合は、例外を投げたとき、ステップが失敗し、行は回復が戻す。
+- 一時的な失敗は、例外にして投げ、`metadata_manual`にしない。
+  修正のステップはflowが2回まで再試行し、再計算は何度行っても同じ結果になるためである。
+  - 事前検査の`port_error`(gitコマンドや読み取りの失敗)、`ancestry_unknown`、`internal_error`(想定外の例外)。
+  - 取り込み、GitHubのAPI、書き込みの`open`以外の失敗。
+- 再試行しても直らない失敗は、例外にせず、固定の理由で止める。
+  - `lock_not_writable`。
+  - 事前検査の固定の理由。`dependency_changed`、`head_lacks_base`、`base_stale`などである。
+  - 実行時に残るimportの自己検査の失敗(`scan_unavailable`)。workerのBunの版が合わない状態で、何度行っても外れる。
+  - 木の一覧が読めないこと(`tree_unreadable`)。`ls-tree`の出力が上限で切れたときと、形が合わないときである。
+- 検証と完了のステップの照合は、一時的な失敗のとき、例外を投げる。ステップが失敗し、行は回復が戻す。
+  再試行しても直らない理由のときは、保護パスの違反にせず、修正のステップと同じ固定の理由(`metadataManualReason`)で止める。
+  回復は、この理由を`metadata_manual`に写す。
 
 検証のステップと完了のステップは、前のステップの結果を受け取る欄を足さず、worktreeの変更から再計算の出力かを決める。
 前のステップの出力を信用しないためである。
@@ -221,13 +230,20 @@ Claudeの回と再計算の回は、同じ上限を分け合う。
   文字列に復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
 
 この例外は、許可リスト方式の検査`checkCiFixChanges`ではなく、呼び出し側の`inspectCiFixChanges`に置く。
-どちらか一方でも外れたときは、例外を使わず、保護パスの違反として拒否する。
+照合の結果は、次の3つのどれかになる(`RehashCheckVerdict`)。
+
+- 確認できた(`allow`)。変更を許す。
+- 形が外れた、本文が再計算と違う、本文を読めない、baseの先端が動き続けた(`deny`)。
+  例外を使わず、保護パスの違反として拒否する。
+- 再計算が、再試行しても直らない理由で失敗した(`stop`)。保護パスの違反にはせず、固定の理由を返す。
+  一時的な失敗は、この3つに入れず、例外を投げる。
 
 - 検証のステップは、この形が確かめられたとき、検査コマンドを実行しない。
   hashだけを書き換えた変更は、検査コマンドが確かめるコードを含まず、対象リポジトリのコードを実行する危険だけが残るためである。
   実行しないので、検査コマンドの告知(`unsandboxed_check_commands`)も出さない。
   告知は、最初の検査コマンドの直前に、1回だけ出す。
-- 完了のステップは、リポジトリのロックの外で同じ照合をする。ロックの中では、ステージしたバイト列が照合済みのバイト列と同じかを確かめる。
+- 完了のステップは、リポジトリのロックの外で同じ照合をする。ロックの中では、ステージしたバイト列が照合済みのバイト列と同じかを確かめる(`stagedRehashGate`)。
+  変更が候補でないとき、ステージが照合済みと違うときは、許さない。
   秘密値の検査、ツリーの照合、保護パスの検査、PRの状態の確認、オーナーの数値IDの照合、headの確認は、通常どおり通す。
 - commitの親は、`commitAndPush`が`head_sha`に固定する。
   ローカルのHEADが`head_sha`でなければcommitせず、pushは強制しないので、ブランチの先端が動いていればpushは拒否される。
@@ -665,7 +681,7 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
 - artifactを経由しない再計算を、artifactの適用の代わりに、先に試す。
   `metadata`ジョブが落ちたCI回は、修正のステップがまず再計算を試す。
   再計算は`schema`を書かないので、`main`の引数が変わるPRは、事前検査が人の手に回す。
-- ポートは、ローカルのcloneで実装した(`metadata_git_ports.ts`)。
+- ポートの実装は、`metadata_git_ports.ts`にある。
   木の一覧は`git ls-tree`、ファイルは`git cat-file blob`、祖先の判定は`git merge-base --is-ancestor`である。
   GitHubのREST APIでは読まない。ファイルごとの読み取りでPATのrate limitを使い切らないためである。
 - ポートは、gitを引数の配列で呼び、シェルを通さない。
@@ -687,8 +703,12 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
 - 再計算が直せるPRの割合は、人の手に回った作業項目の理由で測る。
   理由は`ci round: the lock cannot be recomputed automatically (<種別>)`で、種別は固定の語彙である。
   作業項目の理由を種別ごとに数える。
-- `ls-tree`の出力が上限で切れたときは、ポートが例外を投げ、検査は`port_error`を返す。
+- `ls-tree`の出力が上限で切れたときと、形が合わないときは、同じcommitで何度読んでも直らない。
+  ポートは`TreeUnreadableError`を投げ、検査は`tree_unreadable`を返して、人の手に回す。
+  時間切れとgitの失敗は一時的なので、ふつうの例外を投げ、検査は`port_error`を返す。
   修正のステップは、`port_error`を例外にして、flowの再試行に任せる。
+- `readBlob`の戻り値の形が合わないのは、ポートの実装の誤りである。
+  検査は`port_error`を返し、再試行に任せる。実装の誤りは、ポートのテストが見つける。
 - パスにU+FFFDを含む項目と、同じパスの重複は、事前検査が`invalid_tree`で人の手に回す。
   不正なUTF-8のパスを文字列にすると、別のパスが同じ文字列になり、表の項目が消えるためである。
 - ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)は、再計算がそのまま残す。
@@ -732,6 +752,14 @@ hashの再計算をCI回のflowへ配線する際の決定は、次のとおり�
   この割合が、再計算が直せるPRの上限の目安になる。
   測るものには、CIが落ちてから監視が拾うまでの間に、mainが進んでheadがbaseの先端を含まなくなる割合も含める。
   これらの測定は、再計算の配線の外で行う。
+- 再確認の基準を、baseの先端ではなく`merge-base(baseの先端, head)`にすること。
+  mainが進むと、再確認が`head_lacks_base`になり、人の手に回る頻度が上がる。
+  上の割合の測定と合わせて、基準を変える効果を測ってから決める。
+- 直せる失敗と`metadata`が同時に落ちた回で、Claudeを起動する前に事前検査を試すこと。
+  Claudeが`f/`を触るかは、起動の前には決められない。今は混在の回を、Claudeが先に直す。
+- `lock_up_to_date`で止めた回の、失敗したジョブの自動の再実行。
+  Windmillの起動やログインで落ちた実行をやり直すには、ActionsのPATの書き込み権限が要る。
+- 反映の前に`unfixable_job`で保留した行の案内の描き直し。反映の手順で扱う。
 
 ## メタデータのhashの再計算
 
@@ -814,7 +842,7 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | 確かめること | 外れたときの種別 |
 | --- | --- |
 | `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい。パスにU+FFFDが無く、同じパスの重複も無い。上限の値が正の安全な整数である | `invalid_ref`、`invalid_tree`、`invalid_limit` |
-| 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `internal_error` |
+| 実行時に残るimportの読み方が、固定の小さな入力で想定どおりである | `scan_unavailable` |
 | 読んだ内容が、木の項目の`oid`と一致する。木に無いパスで内容が返らない。`readBlob`の戻り値の形が正しい | `blob_mismatch`、`port_error` |
 | headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
 | `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleが無い | `special_file` |
@@ -835,7 +863,9 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | hashが変わるキーが、PRが`.ts`を変えたscriptのキーか、baseの先端のlockの値に戻すキーだけである | `unexpected_key_change` |
 
 ポートが例外を投げたときは、`port_error`を返す。
+ただし、`listTree`が`TreeUnreadableError`を投げたときは、`tree_unreadable`を返す。
 それ以外の想定外の例外は、`internal_error`を返す。
+一時的な種別は、`port_error`、`ancestry_unknown`、`internal_error`である。ほかは、再試行しても変わらない。
 種別は固定で、例外の内容は載せない。
 閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
 hashの計算では、木ごとに、入力のファイルをまとめて保持する。
@@ -1007,7 +1037,8 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   workerのBunを上げるときは、実行時のimportのテストを、workerのイメージで流し直す。
   検査の入口の自己検査は、型だけのimport、副作用のimport、値のimport、再export、名前空間import、リテラルの動的importを、固定の入力で確かめる。
   import属性を持つimportが、読む前に断られることも、入口で確かめる。
-  想定と違う結果を見つけたときは、`internal_error`で止め、補足にBunの版を載せる。
+  想定と違う結果を見つけたときは、`scan_unavailable`で止め、補足にBunの版を載せる。
+  同じworkerでは何度行っても外れるので、一時的な失敗として再試行せず、人の手に回す。
   Bunの版の許可リストは持たない。版が変わっても、自己検査を通ればよい。
 - 手元で`mise run check:comment-only`を未信頼のブランチに流すと、マクロが実行されうる。
   `scripts/check-comment-only-diff.ts`が`transformSync`を使うためである。

@@ -150,9 +150,10 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  *    ドラフトか、auto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
  *    作業項目の状態を先に読むのは、読んでいる間に直す作業項目がpushしたとき、
  *    古いheadの行を起動しないためである。PRを先に読むと、その読み取りは古くなる。
- * 4. commitがすべてFactoryのものでなければ`not_factory_head`、
- *    スキルがマーカーを持たなければ`marker_missing`で保留する。
- * 5. 失敗したジョブを分類する。直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
+ * 4. commitがすべてFactoryのものでなければ`not_factory_head`で保留する。
+ * 5. 失敗したジョブを分類する。`metadata_only`でなければ、スキルがマーカーを持たないとき`marker_missing`で保留する。
+ *    `metadata_only`はClaudeを使わないので、この確認を飛ばす。
+ *    マーカーの確認の後に、直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
  *    失敗したジョブが無ければskipする。
  * 6. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
@@ -180,9 +181,12 @@ export async function decideFixClaim(
   if (!allCommitsFromFactory(await readers.readCommits(), input.instanceName)) {
     return hold("not_factory_head");
   }
-  if (!(await readers.hasSkillMarker())) return hold("marker_missing");
 
   const failure = await readers.classify(pr);
+  // `metadata_only`の回はClaudeを使わないので、スキルのマーカーを確かめない。
+  if (failure !== "metadata_only" && !(await readers.hasSkillMarker())) {
+    return hold("marker_missing");
+  }
   if (failure === "unfixable_job") return hold("unfixable_job");
   if (failure === "other_conclusion") return hold("other_conclusion");
   if (failure === "no_failure") return { kind: "skip", why: "no_failure" };

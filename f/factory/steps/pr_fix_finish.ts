@@ -18,14 +18,14 @@ import {
   runPostPushBookkeeping,
 } from "../lib/ci_fix_round.ts";
 import {
-  bytesEqual,
   confirmRehash,
   githubRehashPlanner,
-  type RehashConfirmed,
   type RehashPlanner,
   readRootWmillLock,
   readStagedRootLock,
   rehashPushStopReason,
+  type StagedRehashGate,
+  stagedRehashGate,
 } from "../lib/ci_metadata_rehash.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
@@ -723,9 +723,9 @@ export async function main(
   // 照合はネットワークとgitのオブジェクトの読み取りを伴うので、リポジトリのロックの外で先に行い、
   // ロックの中では、ステージした本文が照合済みの本文と同じかだけを確かめる。
   const rehash: {
-    confirmed: RehashConfirmed | null;
+    gate: StagedRehashGate | null;
     planner: RehashPlanner | null;
-  } = { confirmed: null, planner: null };
+  } = { gate: null, planner: null };
   if (ciRound) {
     const planner = githubRehashPlanner({
       client,
@@ -743,13 +743,15 @@ export async function main(
       head_sha,
       { source: "worktree" },
     );
-    if (isRehashCandidate(collected)) {
-      const confirmation = await confirmRehash({
-        ...planner,
-        readLock: () => readRootWmillLock(worktree_dir),
-      });
-      if (confirmation.ok) rehash.confirmed = confirmation;
-    }
+    rehash.gate = await stagedRehashGate({
+      candidate: isRehashCandidate(collected),
+      confirm: () =>
+        confirmRehash({
+          ...planner,
+          readLock: () => readRootWmillLock(worktree_dir),
+        }),
+      readStaged: () => readStagedRootLock(runCommandBytes, worktree_dir),
+    });
   }
 
   // gitleaksは長くかかりうるので、`commitAndPush`のリポジトリのロックの外で先に実行する。
@@ -792,17 +794,10 @@ export async function main(
             {
               source: "staged",
               // ステージした本文が、照合済みの再計算の本文と同じときだけ、`wmill-lock.yaml`だけの変更を許す。
-              rehashCheck: async () => {
-                const confirmed = rehash.confirmed;
-                if (confirmed === null) return false;
-                const staged = await readStagedRootLock(
-                  runCommandBytes,
-                  worktree_dir,
-                );
-                return (
-                  staged !== null && bytesEqual(staged, confirmed.lockBytes)
-                );
-              },
+              rehashCheck: async () =>
+                rehash.gate === null
+                  ? { kind: "deny" }
+                  : await rehash.gate.check(),
             },
           )),
         ],
@@ -868,11 +863,9 @@ export async function main(
     if (pushStop !== null) return stopBeforeCommit(pushStop);
     // hashの再計算は、baseの先端に依る。照合した後に先端が動いていれば、pushせず、新しい先端で確かめ直す。
     // commitの親は`commitAndPush`が`head_sha`に固定し、pushは強制しないので、ブランチの先端が動いていてもpushは通らない。
-    if (rehash.confirmed !== null && rehash.planner !== null) {
-      const rehashStop = await rehashPushStopReason(
-        rehash.confirmed,
-        rehash.planner,
-      );
+    const confirmed = rehash.gate?.confirmed ?? null;
+    if (confirmed !== null && rehash.planner !== null) {
+      const rehashStop = await rehashPushStopReason(confirmed, rehash.planner);
       if (rehashStop !== null) return stopBeforeCommit(rehashStop);
     }
   }

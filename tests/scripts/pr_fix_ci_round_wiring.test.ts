@@ -130,39 +130,25 @@ describe("the fix step of a recomputed lock", () => {
 });
 
 describe("the finish step of a recomputed lock", () => {
-  test("passes the confirmed recomputation to the check of the staged changes", async () => {
+  test("passes the check of the staged lock to the inspection of the staged changes", async () => {
     const text = await source("pr_fix_finish.ts");
-    expect(
-      count(
-        text,
-        "rehashCheck: async () => {\n                const confirmed = rehash.confirmed;",
-      ),
-    ).toBe(1);
+    expect(count(text, "rehashCheck: async () =>")).toBe(1);
   });
 
-  test("reads the staged lock inside the check", async () => {
+  test("builds the gate of the staged lock in one place", async () => {
     const text = await source("pr_fix_finish.ts");
-    const start = text.indexOf("rehashCheck: async () => {");
-    expect(text.slice(start, start + 600)).toContain("readStagedRootLock(");
-  });
-
-  test("compares the staged lock with the confirmed one inside the check", async () => {
-    const text = await source("pr_fix_finish.ts");
-    const start = text.indexOf("rehashCheck: async () => {");
-    expect(text.slice(start, start + 600)).toContain(
-      "bytesEqual(staged, confirmed.lockBytes)",
-    );
+    expect(count(text, "await stagedRehashGate({")).toBe(1);
   });
 
   test("takes a recomputed lock as a candidate only when the changes were read completely", async () => {
     const text = await source("pr_fix_finish.ts");
-    expect(count(text, "if (isRehashCandidate(collected)) {")).toBe(1);
+    expect(count(text, "candidate: isRehashCandidate(collected),")).toBe(1);
   });
 
   test("reads the staged lock as bytes", async () => {
     const text = await source("pr_fix_finish.ts");
     expect(
-      count(text, "readStagedRootLock(\n                  runCommandBytes,"),
+      count(text, "readStagedRootLock(runCommandBytes, worktree_dir)"),
     ).toBe(1);
   });
 
@@ -177,10 +163,8 @@ describe("the finish step of a recomputed lock", () => {
   test("builds the planner only in a CI round", async () => {
     const text = await source("pr_fix_finish.ts");
     expect(
-      text.indexOf(
-        "if (ciRound) {\n    const planner = githubRehashPlanner({",
-      ) > 0,
-    ).toBe(true);
+      count(text, "if (ciRound) {\n    const planner = githubRehashPlanner({"),
+    ).toBe(1);
   });
 
   test("builds the planner nowhere else", async () => {
@@ -193,6 +177,11 @@ describe("the verify step of a recomputed lock", () => {
   test("confirms the lock against an independent recomputation", async () => {
     const text = await source("pr_fix_verify.ts");
     expect(count(text, "rehashCheck: async () => {")).toBe(1);
+  });
+
+  test("turns the confirmation into the verdict through one function", async () => {
+    const text = await source("pr_fix_verify.ts");
+    expect(count(text, "return confirmationVerdict(confirmation);")).toBe(1);
   });
 
   test("resets the confirmation at every inspection", async () => {
