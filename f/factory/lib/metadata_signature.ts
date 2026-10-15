@@ -4,6 +4,8 @@
 // 括弧の対応を数える。字句の切れ目に確信が持てないときは、読めないものとして断る。
 // 副作用を持たない純粋な関数だけを置く。
 
+import { createHash } from "node:crypto";
+
 type TokenKind = "word" | "number" | "punct" | "string" | "template" | "regex";
 
 type Token = {
@@ -571,10 +573,53 @@ function isDeclarationAt(tokens: readonly Token[], index: number): boolean {
   return after === "=" || after === "<";
 }
 
-/** 宣言の範囲を数える仕事量の上限。入力が仕事量を2乗にできないようにする。 */
+/**
+ * 宣言の範囲を数える仕事量の上限。入力が仕事量とメモリを2乗にできないようにする。
+ * 範囲を探すために進めた字句の数と、宣言のダイジェストを作るために読んだ字句の数を、あわせて数える。
+ * 範囲が重なる宣言が同じ大きな本体を含んでも、合計がこの上限を超えたら読めないものとして断る。
+ */
 const MAX_DECLARATION_STEPS = 2_000_000;
 
 type StepBudget = { remaining: number };
+
+/** `findClosing`と同じ。進めた字句の数を`budget`から引き、尽きたらnullを返す。 */
+function findClosingWithin(
+  tokens: readonly Token[],
+  depth: readonly number[],
+  open: number,
+  budget: StepBudget,
+): number | null {
+  const level = depth[open];
+  for (let index = open + 1; index < tokens.length; index += 1) {
+    budget.remaining -= 1;
+    if (budget.remaining < 0) {
+      return null;
+    }
+    if (depth[index] === level && tokens[index]?.kind === "punct") {
+      return index;
+    }
+  }
+  return null;
+}
+
+/**
+ * 宣言の字句を空白でつないだ文字列のsha256(16進数)。つないだ文字列は作らず、字句を順に流し込む。
+ * 宣言を文字列として保持すると、重なった宣言が同じ大きな本体を何度も保持するので、固定の長さの値だけを持つ。
+ */
+function declarationDigest(
+  tokens: readonly Token[],
+  from: number,
+  to: number,
+): string {
+  const hash = createHash("sha256");
+  for (let index = from; index < to; index += 1) {
+    if (index > from) {
+      hash.update(" ");
+    }
+    hash.update(tokens[index]?.text ?? "");
+  }
+  return hash.digest("hex");
+}
 
 /** 続きの行の先頭に来たとき、型の別名の終わりを示す文の先頭の語か。型の続きになりうる形は、終わりとみなさない。 */
 function startsStatement(tokens: readonly Token[], index: number): boolean {
@@ -628,7 +673,7 @@ function endOfDeclaration(
       } else if (token.kind === "punct" && token.text === ">") {
         angle = Math.max(0, angle - 1);
       } else if (token.text === "{" && angle === 0) {
-        const closing = findClosing(tokens, depth, index);
+        const closing = findClosingWithin(tokens, depth, index, budget);
         return closing === null ? null : closing + 1;
       }
     }
@@ -675,14 +720,18 @@ function collectDeclarations(
     if (end === null) {
       return null;
     }
-    found.push(joined(tokens, start, end));
+    budget.remaining -= end - start;
+    if (budget.remaining < 0) {
+      return null;
+    }
+    found.push(declarationDigest(tokens, start, end));
   }
   return found.sort();
 }
 
 /**
  * scriptの形。
- * `main`と`preprocessor`の署名(無ければnull)、トップレベルの型宣言の文(ソート済み)、
+ * `main`と`preprocessor`の署名(無ければnull)、トップレベルの型宣言ごとのダイジェスト(ソート済み)、
  * Windmillの注釈に見えるコメント行(ソート済み)である。
  */
 export type SourceShape = {

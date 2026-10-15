@@ -581,7 +581,7 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 
 次は、検査を呼び出す側を実装するときに決める。
 検査は、これらを前提にしない。
-最初の3項目は、呼び出し側が守る契約である。
+最初の5項目は、呼び出し側が守る契約である。
 
 - 出どころの検査を先に呼ぶ。
   `checkProvenance`は、実行の事実とPRの差分だけを見る。artifactもポートも渡さない。
@@ -591,11 +591,17 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - ポート(`listHeadSources`、`readHeadFile`、`readBaseFile`、`isAncestor`、`readCommitParents`)は、ローカルのcloneで実装する。
   木の一覧は`git ls-tree`、ファイルは`git cat-file`を使い、GitHubのREST APIで読まない。
   ファイルごとの読み取りでPATのrate limitを使い切らないためである。
+- hashの再計算が書き込むcommitは、親を`headSha`に固定する。
+  書き込む前に、ブランチの先端が`headSha`から動いていたら、pushせずに検査からやり直す。`--force*`は使わない。
+  検査の後にheadが動く競合は、artifactの適用だけでなく、hashの再計算にも当てはまる。
+- hashの再計算のポートは、gitを引数の配列で呼び、シェルを通さない。
+  blobは、木の項目の`oid`で読む(`git cat-file blob <oid>`)。
+  PRの作者が決められる文字列(パス)を、シェルの文字列に結合しない。
 - `ci.yml`が、artifactのIDとdigestを`metadata`ジョブのログに出す処理は、まだ無い。
   追加は保護パス(`.github/`)の変更なので、別に行う。
   照合できない間は、パッチを適用しない。
 - フローのキー(`__flow+...`)が変わるパッチの扱い。
-- 検査の後にheadが動く競合の扱い。
+- 検査の後にheadが動く競合の扱い(artifactの適用)。hashの再計算の契約は、上に書いた。
 - artifactのIDとdigestを、`metadata`ジョブのログの値と照合する手順。
 - `mergeSha`を本物のPRのmerge commitに結び付けること。適用の前に、GitHub APIのPRの`merge_commit_sha`と照合する。
   lockの比較先はheadの木とbaseの先端の木で、過去のcommitを選べないので、残るリスクは出どころの補助が破られる程度である。
@@ -746,7 +752,7 @@ PRが触っていないscriptも、すべて確かめる。
 | 読むバイト数の合計 | `DEFAULT_MAX_READ_BYTES` | `metadata_precheck.ts` |
 | 訪問と局所importの解決の合計 | `DEFAULT_MAX_TRACE_VISITS` | `metadata_precheck.ts` |
 | 1scriptがたどるファイル数 | `MAX_TRACED_FILES` | `metadata_patch_imports.ts` |
-| 型宣言の字句の数 | `MAX_DECLARATION_STEPS` | `metadata_signature.ts` |
+| 型宣言の範囲を数える字句の数(範囲を探す字句と、ダイジェストのために読む字句の合計) | `MAX_DECLARATION_STEPS` | `metadata_signature.ts` |
 
 ### 人の手に回す条件
 
@@ -804,6 +810,9 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - 字句の読み取りは、括弧が対応する入力を前提にする。
   `checkDependencies`が先に、headのすべての`.ts`をトランスパイラに通すので、構文が不正な入力はそこで断られる。
   型宣言の範囲を数える処理は、数える字句の数に上限を置き、仕事量を有界にしている。
+  範囲を探すために進めた字句と、宣言のダイジェストのために読んだ字句を、あわせて数える。
+  宣言は文字列として持たず、sha256のダイジェストだけを持つ。
+  範囲が重なる宣言(`class A1 extends class A2 extends …`のように入れ子にした形)が、同じ本体を何度も保持しないためである。
   超えたら`main_unparsable`で人の手に回る。
   括弧が対応する入力を前提にする点は、この順序に頼る。
 
@@ -872,9 +881,15 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - 実行時に残るimportの読み方は、Bunの版にも依存する。
   worker(1.4.0)とローカル(1.4.2)で、リポジトリの全scriptの閉包のパッケージ名が`.script.lock`の`dependencies`と一致することを、両方で確かめた。
   較正のテストは、`Bun.version`を失敗の説明に残す。
+  `scanImports`がマクロを実行しないことを確かめたのは、Bun 1.4.0と1.4.2だけである。
+  workerのBunを上げるときは、実行時のimportのテストを、workerのイメージで流し直す。
   検査の入口の自己検査は、型だけのimport、副作用のimport、値のimport、再export、名前空間import、リテラルの動的importを、固定の入力で確かめる。
+  import属性を持つimportが、読む前に断られることも、入口で確かめる。
   想定と違う結果を見つけたときは、`internal_error`で止め、補足にBunの版を載せる。
   Bunの版の許可リストは持たない。版が変わっても、自己検査を通ればよい。
+- 手元で`mise run check:comment-only`を未信頼のブランチに流すと、マクロが実行されうる。
+  `scripts/check-comment-only-diff.ts`が`transformSync`を使うためである。
+  この部品の外にある、別の経路である。
 - 上限を置いていない範囲もある。
   検査は、`listTree`が返す項目の数を数えない。`f/`以外の項目は、形の検査と表の構築の分だけ、項目の数に比例する。
   ポートの呼び出しの時間には、検査は期限を持たない。

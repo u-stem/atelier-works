@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   diffSourceShape,
   readSourceShape,
@@ -13,6 +14,16 @@ function mainOf(code: string): string | null | "unparsable" {
 function declarationsOf(code: string): readonly string[] | "unparsable" {
   const result = readSourceShape(code);
   return result.ok ? result.shape.declarations : "unparsable";
+}
+
+/** 宣言の文の字句を空白でつないだ文字列の、sha256の16進数。検査が持つ宣言の表現と同じ。 */
+function digest(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+/** 宣言の文から、検査が持つ形(ダイジェストのソート済みの一覧)を作る。 */
+function digests(texts: readonly string[]): string[] {
+  return texts.map(digest).sort();
 }
 
 function difference(base: string, head: string): string {
@@ -260,9 +271,11 @@ describe("readSourceShape and the extent of declarations", () => {
   test("keeps the whole class when its heritage has an object type", () => {
     const code =
       "export class A extends Base<{ a: string }> { m() { return 1; } }\nexport function main() {}\n";
-    expect(declarationsOf(code)).toEqual([
-      "export class A extends Base < { a : string } > { m ( ) { return 1 ; } }",
-    ]);
+    expect(declarationsOf(code)).toEqual(
+      digests([
+        "export class A extends Base < { a : string } > { m ( ) { return 1 ; } }",
+      ]),
+    );
   });
 
   test("detects a changed method body of a class whose heritage has an object type", () => {
@@ -276,33 +289,32 @@ describe("readSourceShape and the extent of declarations", () => {
   test("keeps the whole interface when its heritage has an object type", () => {
     const code =
       "export interface I extends Base<{ a: string }> { b: number }\n";
-    expect(declarationsOf(code)).toEqual([
-      "export interface I extends Base < { a : string } > { b : number }",
-    ]);
+    expect(declarationsOf(code)).toEqual(
+      digests([
+        "export interface I extends Base < { a : string } > { b : number }",
+      ]),
+    );
   });
 
   test("keeps a type alias whose next line starts with an abstract constructor type", () => {
     const code = "type A =\n  abstract new () => string\ntype B = number\n";
-    expect(declarationsOf(code)).toEqual([
-      "type A = abstract new ( ) => string",
-      "type B = number",
-    ]);
+    expect(declarationsOf(code)).toEqual(
+      digests(["type A = abstract new ( ) => string", "type B = number"]),
+    );
   });
 
   test("keeps a type alias whose next line starts with a type import", () => {
     const code = 'type A =\n  import("x").T\ntype B = number\n';
-    expect(declarationsOf(code)).toEqual([
-      'type A = import ( "x" ) . T',
-      "type B = number",
-    ]);
+    expect(declarationsOf(code)).toEqual(
+      digests(['type A = import ( "x" ) . T', "type B = number"]),
+    );
   });
 
   test("still ends a type alias at an abstract class", () => {
     const code = "type A = string\nabstract class C { m() {} }\n";
-    expect(declarationsOf(code)).toEqual([
-      "abstract class C { m ( ) { } }",
-      "type A = string",
-    ]);
+    expect(declarationsOf(code)).toEqual(
+      digests(["abstract class C { m ( ) { } }", "type A = string"]),
+    );
   });
 
   test("gives up on a class whose body cannot be found", () => {
@@ -327,6 +339,50 @@ describe("readSourceShape generator functions", () => {
 
   test("gives up on a preprocessor generator function that is not exported", () => {
     expect(readSourceShape("function* preprocessor() {}\n").ok).toBe(false);
+  });
+});
+
+describe("readSourceShape and the memory held for declarations", () => {
+  /** `class A1 extends class A2 extends … class Ak { 本体 } {} {} …`。範囲が重なる宣言が、同じ本体を含む。 */
+  function nestedClasses(count: number, bodyBytes: number): string {
+    const body = "x = 1;\n".repeat(Math.ceil(bodyBytes / 7));
+    const heads = Array.from(
+      { length: count },
+      (_unused, index) => `class A${index} extends `,
+    ).join("");
+    return `${heads}class Last { ${body} } ${"{} ".repeat(count - 1)}`;
+  }
+
+  test("gives up on overlapping declarations that each contain a large body", () => {
+    expect(readSourceShape(nestedClasses(1100, 1_000_000)).ok).toBe(false);
+  });
+
+  test("gives up on overlapping declarations quickly", () => {
+    const code = nestedClasses(1100, 1_000_000);
+    const started = performance.now();
+    readSourceShape(code);
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  test("holds only a fixed-length digest for each declaration", () => {
+    const result = readSourceShape(
+      "type A = { a: string };\nexport interface B { b: number }\nenum C { X, Y }\n",
+    );
+    expect(result.ok && result.shape.declarations.map((d) => d.length)).toEqual(
+      [64, 64, 64],
+    );
+  });
+
+  test("holds a digest of the same length for a declaration with a large body", () => {
+    const body = "x = 1;\n".repeat(100_000);
+    const result = readSourceShape(`export class Big { ${body} }\n`);
+    expect(result.ok && result.shape.declarations.map((d) => d.length)).toEqual(
+      [64],
+    );
+  });
+
+  test("reads a few declarations that share a large body within the work limit", () => {
+    expect(readSourceShape(nestedClasses(2, 300_000)).ok).toBe(true);
   });
 });
 
@@ -438,18 +494,20 @@ describe("readSourceShape declarations", () => {
           "export class D { d = 1 }",
         ].join("\n"),
       ),
-    ).toEqual([
-      "enum C { X , Y }",
-      "export class D { d = 1 }",
-      "export interface B { b : number }",
-      "type A = { a : string } ;",
-    ]);
+    ).toEqual(
+      digests([
+        "enum C { X , Y }",
+        "export class D { d = 1 }",
+        "export interface B { b : number }",
+        "type A = { a : string } ;",
+      ]),
+    );
   });
 
   test("ends a type alias without a semicolon at the next statement", () => {
     expect(
       declarationsOf("type A =\n  | 'a'\n  | 'b'\nconst x = 1;\n"),
-    ).toEqual(["type A = | 'a' | 'b'"]);
+    ).toEqual(digests(["type A = | 'a' | 'b'"]));
   });
 
   test("does not collect a type declared inside a function", () => {

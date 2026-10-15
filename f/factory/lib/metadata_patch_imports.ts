@@ -388,6 +388,15 @@ export function runtimeScanSelfCheck(
     // 呼び出しの形をソースに直接書くと、このファイル自身の依存として読まれるので、つなげて作る。
     [["const m = await ", "import", '("d");'].join(""), ["d"]],
   ];
+  // import属性は、マクロを使わない形でも、読む前に断られる。事前の拒否が効いていることを確かめる。
+  const attributeCode = [
+    'import j from "./a.json" ',
+    "with",
+    ' { type: "json" };',
+  ].join("");
+  if (!scan(attributeCode).untraceable) {
+    return false;
+  }
   return cases.every(([code, expected]) => {
     const result = scan(code);
     return (

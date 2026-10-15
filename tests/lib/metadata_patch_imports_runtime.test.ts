@@ -317,6 +317,14 @@ describe("the self check of the runtime reading", () => {
     expect(runtimeScanSelfCheck(blind)).toBe(false);
   });
 
+  test("fails when an import attribute is not refused in advance", () => {
+    const lenient = (code: string) =>
+      code.includes('type: "json"')
+        ? { local: [], bare: [], untraceable: false }
+        : scanImports(code, { runtimeOnly: true });
+    expect(runtimeScanSelfCheck(lenient)).toBe(false);
+  });
+
   test("fails when a value import is not read", () => {
     const nothing = () => ({ local: [], bare: [], untraceable: false });
     expect(runtimeScanSelfCheck(nothing)).toBe(false);
