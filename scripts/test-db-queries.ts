@@ -5271,6 +5271,7 @@ for (const sample of [
     mem_anon_bytes: 900 * MIB,
     mem_limit_bytes: 1000 * MIB,
   }),
+  loadSample("2027-02-28T09:58:00.000Z"),
   loadSample("2027-02-28T10:00:00.000Z", {
     running_jobs: 2,
     lag_seconds: 45,
@@ -5310,7 +5311,12 @@ const loadView = (await runSystemStatus(50, loadViewDeps(loadViewNow)))
   .worker_load;
 check(
   "system_status worker_load: only the rows in the window are counted",
-  loadView?.sample_count === 2 && loadView.busy_samples === 1,
+  loadView?.sample_count === 3 && loadView.busy_samples === 1,
+  loadView,
+);
+check(
+  "system_status worker_load: rows with unreadable running jobs are not in the busy denominator",
+  loadView?.running_readable_samples === 2,
   loadView,
 );
 check(

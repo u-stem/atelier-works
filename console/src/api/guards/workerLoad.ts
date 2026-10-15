@@ -51,6 +51,8 @@ export type WorkerLoad = {
   readonly expected_count: number;
   readonly latest: WorkerLoadLatest;
   readonly max: WorkerLoadMax;
+  /** `running_jobs`が読めた記録の数。枠が塞がっていた記録の割合の分母。 */
+  readonly running_readable_samples: number;
   readonly busy_samples: number;
   readonly lag_over_samples: number;
 };
@@ -96,6 +98,7 @@ export function isWorkerLoad(value: unknown): value is WorkerLoad {
     isInteger(value.expected_count) &&
     isWorkerLoadLatest(value.latest) &&
     isWorkerLoadMax(value.max) &&
+    isInteger(value.running_readable_samples) &&
     isInteger(value.busy_samples) &&
     isInteger(value.lag_over_samples)
   );

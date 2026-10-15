@@ -1,19 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   evaluateWorkerAlerts,
-  WORKER_ALERT_MIN_SAMPLES,
-  WORKER_ALERT_WINDOW_MINUTES,
   WORKER_LOAD_HIGH_KIND,
   type WorkerAlertSample,
   type WorkerAlertThresholds,
   workerAlertNotice,
 } from "../../f/factory/lib/worker_load_support.ts";
 
-const THRESHOLDS: WorkerAlertThresholds = {
-  memoryRatio: 0.8,
-  waitSeconds: 300,
-  busyRatio: 0.5,
-};
+const THRESHOLDS: WorkerAlertThresholds = { memoryRatio: 0.8 };
 
 const NEWEST = Date.parse("2026-10-15T12:00:00.000Z");
 const MINUTE_MS = 60_000;
@@ -26,22 +20,19 @@ function sample(
 ): WorkerAlertSample {
   return {
     sampled_at: new Date(NEWEST - index * 2 * MINUTE_MS),
-    slots: 3,
-    running_jobs: 0,
-    max_wait_seconds: 0,
     mem_anon_bytes: 0.1 * GIB,
     mem_limit_bytes: 4 * GIB,
+    mem_events_max: 0,
+    mem_oom_kill: 0,
     ...overrides,
   };
 }
 
-function quiet(count: number): WorkerAlertSample[] {
-  return Array.from({ length: count }, (_, index) => sample(index));
-}
-
 describe("evaluateWorkerAlerts memory", () => {
   test("is quiet when the memory is far below the limit", () => {
-    expect(evaluateWorkerAlerts(quiet(3), THRESHOLDS)).toEqual([]);
+    expect(evaluateWorkerAlerts([sample(0), sample(1)], THRESHOLDS)).toEqual(
+      [],
+    );
   });
 
   test("raises memory when the anon memory reaches the ratio", () => {
@@ -66,95 +57,118 @@ describe("evaluateWorkerAlerts memory", () => {
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
   });
 
-  test("judges the newest sample only", () => {
+  test("judges the ratio on the newest sample only", () => {
     const samples = [sample(0), sample(1, { mem_anon_bytes: 3.9 * GIB })];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
   });
 });
 
-describe("evaluateWorkerAlerts wait", () => {
-  test("raises wait when another job holds a slot and the wait is long", () => {
-    const samples = [sample(0, { running_jobs: 1, max_wait_seconds: 300 })];
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual(["wait"]);
+describe("evaluateWorkerAlerts oom kill", () => {
+  test("raises oom_kill when the count grew since the previous sample", () => {
+    const samples = [sample(0, { mem_oom_kill: 1 }), sample(1)];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual(["oom_kill"]);
   });
 
-  test("is quiet when the wait is just below the threshold", () => {
-    const samples = [sample(0, { running_jobs: 1, max_wait_seconds: 299 })];
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
-  });
-
-  test("is quiet when no other job runs, as after a host sleep", () => {
-    const samples = [sample(0, { running_jobs: 0, max_wait_seconds: 12_000 })];
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
-  });
-
-  test("is quiet when the running jobs could not be read", () => {
+  test("is quiet when the count stayed the same", () => {
     const samples = [
-      sample(0, { running_jobs: null, max_wait_seconds: 12_000 }),
+      sample(0, { mem_oom_kill: 3 }),
+      sample(1, { mem_oom_kill: 3 }),
     ];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
   });
 
-  test("is quiet when the wait could not be read", () => {
-    const samples = [sample(0, { running_jobs: 2, max_wait_seconds: null })];
+  test("compares with the latest readable sample when the previous one is unreadable", () => {
+    const samples = [
+      sample(0, { mem_oom_kill: 2 }),
+      sample(1, { mem_oom_kill: null }),
+      sample(2, { mem_oom_kill: 1 }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual(["oom_kill"]);
+  });
+
+  test("is quiet when there is nothing to compare with", () => {
+    expect(
+      evaluateWorkerAlerts([sample(0, { mem_oom_kill: 5 })], THRESHOLDS),
+    ).toEqual([]);
+  });
+
+  test("is quiet when the newest count could not be read", () => {
+    const samples = [sample(0, { mem_oom_kill: null }), sample(1)];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
+  });
+
+  test("raises oom_kill after a restart when the new count is positive", () => {
+    const samples = [
+      sample(0, { mem_oom_kill: 1 }),
+      sample(1, { mem_oom_kill: 4 }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual(["oom_kill"]);
+  });
+
+  test("is quiet after a restart when the new count is zero", () => {
+    const samples = [
+      sample(0, { mem_oom_kill: 0 }),
+      sample(1, { mem_oom_kill: 4 }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
+  });
+
+  test("does not raise again once the count stopped growing", () => {
+    const samples = [
+      sample(0, { mem_oom_kill: 1 }),
+      sample(1, { mem_oom_kill: 1 }),
+      sample(2, { mem_oom_kill: 0 }),
+    ];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
   });
 });
 
-describe("evaluateWorkerAlerts busy", () => {
-  function busyWindow(busy: number, total: number): WorkerAlertSample[] {
-    return Array.from({ length: total }, (_, index) =>
-      sample(index, { running_jobs: index < busy ? 2 : 0 }),
-    );
-  }
-
-  test("raises busy when half of the window had every other slot taken", () => {
-    expect(evaluateWorkerAlerts(busyWindow(15, 30), THRESHOLDS)).toEqual([
-      "busy",
+describe("evaluateWorkerAlerts limit reached", () => {
+  test("raises limit_reached when the count grew since the previous sample", () => {
+    const samples = [
+      sample(0, { mem_events_max: 5 }),
+      sample(1, { mem_events_max: 4 }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([
+      "limit_reached",
     ]);
   });
 
-  test("is quiet when less than the ratio was busy", () => {
-    expect(evaluateWorkerAlerts(busyWindow(14, 30), THRESHOLDS)).toEqual([]);
-  });
-
-  test("does not count a sample that left a slot free", () => {
-    const samples = Array.from({ length: 30 }, (_, index) =>
-      sample(index, { running_jobs: 1 }),
-    );
+  test("is quiet when the count stayed the same", () => {
+    const samples = [
+      sample(0, { mem_events_max: 4 }),
+      sample(1, { mem_events_max: 4 }),
+    ];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
   });
 
-  test("is quiet when the window has too few samples", () => {
-    const few = WORKER_ALERT_MIN_SAMPLES - 1;
-    expect(evaluateWorkerAlerts(busyWindow(few, few), THRESHOLDS)).toEqual([]);
-  });
-
-  test("raises busy at the minimum number of samples", () => {
-    const enough = WORKER_ALERT_MIN_SAMPLES;
-    expect(
-      evaluateWorkerAlerts(busyWindow(enough, enough), THRESHOLDS),
-    ).toEqual(["busy"]);
-  });
-
-  test("ignores samples older than the window", () => {
-    const old = Array.from({ length: 20 }, (_, index) =>
-      sample(WORKER_ALERT_WINDOW_MINUTES / 2 + 1 + index, { running_jobs: 2 }),
-    );
-    const recent = Array.from({ length: 12 }, (_, index) => sample(index));
-    expect(evaluateWorkerAlerts([...recent, ...old], THRESHOLDS)).toEqual([]);
-  });
-
-  test("skips samples whose running jobs could not be read", () => {
-    const samples = Array.from({ length: 30 }, (_, index) =>
-      sample(index, { running_jobs: index < 15 ? 2 : null }),
-    );
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual(["busy"]);
+  test("is quiet when the count could not be read", () => {
+    const samples = [
+      sample(0, { mem_events_max: null }),
+      sample(1, { mem_events_max: 4 }),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
   });
 });
 
-describe("evaluateWorkerAlerts without samples", () => {
-  test("is quiet", () => {
+describe("evaluateWorkerAlerts causes together", () => {
+  test("lists every cause that applies", () => {
+    const samples = [
+      sample(0, {
+        mem_anon_bytes: 3.5 * GIB,
+        mem_oom_kill: 1,
+        mem_events_max: 2,
+      }),
+      sample(1),
+    ];
+    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([
+      "memory",
+      "oom_kill",
+      "limit_reached",
+    ]);
+  });
+
+  test("is quiet without samples", () => {
     expect(evaluateWorkerAlerts([], THRESHOLDS)).toEqual([]);
   });
 });
@@ -169,23 +183,21 @@ describe("workerAlertNotice", () => {
   });
 
   test("carries the link to the system screen", () => {
-    expect(workerAlertNotice("wait", THRESHOLDS, URL).message).toContain(URL);
+    expect(workerAlertNotice("oom_kill", THRESHOLDS, URL).message).toContain(
+      URL,
+    );
   });
 
   test("carries the next action", () => {
-    expect(workerAlertNotice("busy", THRESHOLDS, URL).message).toContain(
-      "次の操作:",
-    );
+    expect(
+      workerAlertNotice("limit_reached", THRESHOLDS, URL).message,
+    ).toContain("次の操作:");
   });
 
   test("shows the threshold of the memory ratio as a percentage", () => {
     expect(workerAlertNotice("memory", THRESHOLDS, URL).message).toContain(
       "80%",
     );
-  });
-
-  test("shows the threshold of the wait in minutes", () => {
-    expect(workerAlertNotice("wait", THRESHOLDS, URL).message).toContain("5分");
   });
 
   test("keeps the text equal across calls so a repeat is not notified twice", () => {
@@ -196,7 +208,7 @@ describe("workerAlertNotice", () => {
 
   test("differs between the causes", () => {
     expect(workerAlertNotice("memory", THRESHOLDS, URL).message).not.toBe(
-      workerAlertNotice("busy", THRESHOLDS, URL).message,
+      workerAlertNotice("oom_kill", THRESHOLDS, URL).message,
     );
   });
 });

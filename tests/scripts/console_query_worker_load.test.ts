@@ -24,6 +24,7 @@ const ROW: SqlRow = {
   max_mem_anon_ratio: 0.042,
   max_mem_working_set_bytes: "200000000",
   max_mem_peak_bytes: "1371127808",
+  running_readable_samples: "690",
   busy_samples: "7",
   lag_over_samples: "10",
   latest_sampled_at: new Date("2026-10-15T11:58:30.000Z"),
@@ -165,6 +166,18 @@ describe("runSystemStatus worker load result", () => {
       status.worker_load?.busy_samples,
       status.worker_load?.lag_over_samples,
     ]).toEqual([7, 10]);
+  });
+
+  test("counts the samples whose running jobs were readable", async () => {
+    const d = deps([ROW]);
+    const status = await runSystemStatus(200, d.deps);
+    expect(status.worker_load?.running_readable_samples).toBe(690);
+  });
+
+  test("counts the readable running jobs in SQL, leaving out unreadable rows", async () => {
+    const d = deps([ROW]);
+    await runSystemStatus(200, d.deps);
+    expect(d.calls[WORKER_LOAD_INDEX]?.text).toContain("count(running_jobs)");
   });
 
   test("keeps a value that could not be read as null", async () => {

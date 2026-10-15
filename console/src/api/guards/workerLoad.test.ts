@@ -30,6 +30,7 @@ const LOAD = {
     mem_working_set_bytes: 200000000,
     mem_peak_bytes: 1371127808,
   },
+  running_readable_samples: 690,
   busy_samples: 7,
   lag_over_samples: 10,
 };

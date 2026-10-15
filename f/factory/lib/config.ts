@@ -97,8 +97,6 @@ type DefaultableField =
   | "pr_ci_fix_enabled_since"
   | "pr_conflict_watch_enabled"
   | "worker_alert_memory_ratio"
-  | "worker_alert_wait_seconds"
-  | "worker_alert_busy_ratio"
   | "check_commands_by_repo";
 
 /**
@@ -167,11 +165,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   pr_ci_fix_enabled_since: null,
   // 競合の検知はPRにもリポジトリにも書き込まないが、通知の出方を確かめてから、リモートのリソースで有効にする。
   pr_conflict_watch_enabled: false,
-  // メモリは上限の8割を既定にする。待ちの5分はConsole用のworkerの検知と同じ、塞がりの割合は暫定値である。
-  // 根拠と見直し方は`docs/operations.md`の「workerの負荷の通知」にある。
+  // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
   worker_alert_memory_ratio: 0.8,
-  worker_alert_wait_seconds: 300,
-  worker_alert_busy_ratio: 0.5,
   check_commands_by_repo: {},
 };
 
@@ -861,16 +856,6 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "worker_alert_memory_ratio",
       DEFAULTS.worker_alert_memory_ratio,
-    ),
-    worker_alert_wait_seconds: positiveIntegerField(
-      raw,
-      "worker_alert_wait_seconds",
-      DEFAULTS.worker_alert_wait_seconds,
-    ),
-    worker_alert_busy_ratio: ratioField(
-      raw,
-      "worker_alert_busy_ratio",
-      DEFAULTS.worker_alert_busy_ratio,
     ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,

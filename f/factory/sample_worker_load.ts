@@ -6,11 +6,14 @@
 // 読めなかった値はNULLで残し、ほかの値は記録する。例外は投げない。
 // 投げると失敗のhandlerが毎回通知し、2分ごとだと1日に720件になるため、
 // 完全には記録できなかった回数をstateに数え、続いたときだけnoticeにする。
-// 記録の後に直近の記録を読み、メモリ、queueの待ち、枠の塞がりが設定の閾値を超えたら、原因ごとにnoticeを残す。
+// 記録の後に直近の記録を読み、メモリが設定の割合を超えたか、OOMと上限への到達が増えたら、原因ごとにnoticeを残す。
+// 待ちと枠の塞がりは、記録のジョブが枠の空きを待って動くので、最も詰まった間は記録が途切れて判定できない。
+// そのため通知にせず、Consoleの表示と日次のまとめで見る。
 // 閾値の判定は記録の成否に影響させず、失敗は警告に残す。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { readFile } from "node:fs/promises";
+import { buildSystemConsoleUrl } from "./lib/approval_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -45,7 +48,6 @@ import {
   type WorkerAlertThresholds,
   waitingQueueQuery,
   workerAlertNotice,
-  workerLoadConsoleUrl,
 } from "./lib/worker_load_support.ts";
 
 /** コンテナのcgroup v2のメモリのファイルがあるディレクトリ。 */
@@ -466,12 +468,8 @@ export async function main(): Promise<SampleResult> {
             loadConfig(() => wmill.getResource("f/factory/factory_config")),
           );
           return {
-            thresholds: {
-              memoryRatio: config.worker_alert_memory_ratio,
-              waitSeconds: config.worker_alert_wait_seconds,
-              busyRatio: config.worker_alert_busy_ratio,
-            },
-            consoleUrl: workerLoadConsoleUrl(config.windmill_public_url),
+            thresholds: { memoryRatio: config.worker_alert_memory_ratio },
+            consoleUrl: buildSystemConsoleUrl(config.windmill_public_url),
           };
         },
         listRecent: (limit) =>

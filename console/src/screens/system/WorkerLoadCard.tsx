@@ -15,7 +15,7 @@ export function WorkerLoadCard({
   if (load === null || load === undefined) {
     return (
       <EmptyNote>
-        直近24時間の記録がありません。sample_worker_loadのスケジュールが有効かを確かめてください
+        直近24時間の記録がないか、集計を読めませんでした。sample_worker_loadのスケジュールが有効かと、console_queryのジョブログの警告を確かめてください
       </EmptyNote>
     );
   }

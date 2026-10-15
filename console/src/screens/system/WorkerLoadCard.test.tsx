@@ -33,6 +33,7 @@ const LOAD: WorkerLoad = {
     mem_working_set_bytes: 190 * MIB,
     mem_peak_bytes: 1307 * MIB,
   },
+  running_readable_samples: 690,
   busy_samples: 7,
   lag_over_samples: 10,
 };
@@ -58,7 +59,7 @@ describe("WorkerLoadCard", () => {
 
   test("treats a missing load like no sample", () => {
     expect(renderToStaticMarkup(<WorkerLoadCard load={undefined} />)).toContain(
-      "記録がありません",
+      "集計を読めませんでした",
     );
   });
 });

@@ -1058,20 +1058,10 @@ export type FactoryConfig = {
    */
   pr_conflict_watch_enabled: boolean;
   /**
-   * `sample_worker_load`が通知を出すメモリの割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
+   * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。
    */
   worker_alert_memory_ratio: number;
-  /**
-   * `sample_worker_load`が通知を出すqueueの待ち(秒)。他のジョブが枠を使っているときに、
-   * `max_wait_seconds`がこの値以上なら通知する。1以上の整数。既定は300。
-   */
-  worker_alert_wait_seconds: number;
-  /**
-   * `sample_worker_load`が通知を出す、枠が塞がっていた記録の割合。直近の窓の記録のうち、
-   * 他のジョブが枠をすべて使っていた記録の割合がこの値以上のとき通知する。0を超え1以下。既定は0.5。
-   */
-  worker_alert_busy_ratio: number;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の

@@ -25,8 +25,22 @@ export function formatMebibytes(bytes: number | null): string {
     : `${String(Math.round(bytes / BYTES_PER_MIB))}MiB`;
 }
 
+/** 割合を百分率で返す。丸めると0になる正の割合は、小数1桁で出す。 */
 function percent(ratio: number): string {
-  return `${String(Math.round(ratio * 100))}%`;
+  const rounded = Math.round(ratio * 100);
+  return ratio > 0 && rounded === 0
+    ? `${(ratio * 100).toFixed(1)}%`
+    : `${String(rounded)}%`;
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** ISO文字列の時刻を、JSTの`HH:MM`で返す。 */
+function jstClock(iso: string): string {
+  const shifted = new Date(Date.parse(iso) + JST_OFFSET_MS);
+  const hours = String(shifted.getUTCHours()).padStart(2, "0");
+  const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 function jobs(count: number | null): string {
@@ -38,13 +52,16 @@ function slotsLatest(load: WorkerLoad): string {
   // 記録のジョブ自身が枠を1つ使うので、他のジョブが使える枠は1つ少ない。
   return running === null
     ? UNKNOWN
-    : `${String(running)}件 / 他のジョブの上限${String(slots - 1)}件`;
+    : `${String(running)}件 / 他のジョブの上限${String(slots - 1)}件(${jstClock(load.latest.sampled_at)}時点)`;
 }
 
+/** 分母は、`running_jobs`が読めた記録だけにする。読めなかった記録は塞がりかどうか分からない。 */
 function busySamples(load: WorkerLoad): string {
-  const share =
-    load.sample_count === 0 ? 0 : load.busy_samples / load.sample_count;
-  return `${String(load.busy_samples)}件(${String(load.sample_count)}件中${percent(share)})`;
+  const readable = load.running_readable_samples;
+  if (readable === 0) {
+    return UNKNOWN;
+  }
+  return `${String(load.busy_samples)}件(読めた記録${String(readable)}件中${percent(load.busy_samples / readable)})`;
 }
 
 function waitMax(load: WorkerLoad): string {
@@ -68,7 +85,7 @@ function memoryLatest(load: WorkerLoad): string {
     latest.mem_limit_bytes === null
       ? "上限不明"
       : `上限${formatMebibytes(latest.mem_limit_bytes)}`;
-  return `anon ${formatMebibytes(latest.mem_anon_bytes)}、working set ${formatMebibytes(latest.mem_working_set_bytes)}、${limit}`;
+  return `anon ${formatMebibytes(latest.mem_anon_bytes)}、working set ${formatMebibytes(latest.mem_working_set_bytes)}、${limit}(${jstClock(latest.sampled_at)}時点)`;
 }
 
 function memoryMax(load: WorkerLoad): string {

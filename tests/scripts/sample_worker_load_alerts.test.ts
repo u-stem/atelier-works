@@ -18,11 +18,7 @@ const SELF = "self-job";
 const GIB = 1024 * 1024 * 1024;
 const CONSOLE_URL = "http://127.0.0.1:8080/console/system";
 
-const THRESHOLDS: WorkerAlertThresholds = {
-  memoryRatio: 0.8,
-  waitSeconds: 300,
-  busyRatio: 0.5,
-};
+const THRESHOLDS: WorkerAlertThresholds = { memoryRatio: 0.8 };
 
 function selfJob() {
   return {
@@ -41,11 +37,10 @@ function recentSample(
 ): WorkerAlertSample {
   return {
     sampled_at: new Date(NOW),
-    slots: DEFAULT_WORKER_SLOTS,
-    running_jobs: 0,
-    max_wait_seconds: 0,
     mem_anon_bytes: 0.1 * GIB,
     mem_limit_bytes: 4 * GIB,
+    mem_events_max: 0,
+    mem_oom_kill: 0,
     ...overrides,
   };
 }
@@ -130,11 +125,8 @@ describe("runSample load alerts", () => {
   test("adds one notice per cause", async () => {
     const h = harness(() =>
       Promise.resolve([
-        recentSample({
-          mem_anon_bytes: 3.5 * GIB,
-          running_jobs: 1,
-          max_wait_seconds: 400,
-        }),
+        recentSample({ mem_anon_bytes: 3.5 * GIB, mem_oom_kill: 1 }),
+        recentSample(),
       ]),
     );
     await runSample(h.deps);
@@ -193,11 +185,8 @@ describe("runSample load alerts", () => {
     const h = harness(
       () =>
         Promise.resolve([
-          recentSample({
-            mem_anon_bytes: 3.5 * GIB,
-            running_jobs: 1,
-            max_wait_seconds: 400,
-          }),
+          recentSample({ mem_anon_bytes: 3.5 * GIB, mem_oom_kill: 1 }),
+          recentSample(),
         ]),
       {
         addNotice: () => {

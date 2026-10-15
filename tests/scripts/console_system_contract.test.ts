@@ -72,6 +72,7 @@ const WORKER_LOAD_ROW: SqlRow = {
   max_mem_anon_ratio: 0.042,
   max_mem_working_set_bytes: "200000000",
   max_mem_peak_bytes: "1371127808",
+  running_readable_samples: "690",
   busy_samples: "7",
   lag_over_samples: "10",
   latest_sampled_at: new Date("2026-10-15T11:58:30.000Z"),

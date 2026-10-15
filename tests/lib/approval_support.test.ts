@@ -5,6 +5,7 @@ import {
   buildAuditConsoleUrl,
   buildConsoleUrl,
   buildRecordedReason,
+  buildSystemConsoleUrl,
   classifyExistingDecision,
   computeExpiresAt,
   expiredRequirementsRequests,
@@ -140,6 +141,14 @@ describe("buildAuditConsoleUrl", () => {
   test("links the audit report page", () => {
     expect(buildAuditConsoleUrl("http://127.0.0.1:8080", 12)).toBe(
       "http://127.0.0.1:8080/console/reports/audit/12",
+    );
+  });
+});
+
+describe("buildSystemConsoleUrl", () => {
+  test("links the system screen", () => {
+    expect(buildSystemConsoleUrl("http://127.0.0.1:8080")).toBe(
+      "http://127.0.0.1:8080/console/system",
     );
   });
 });

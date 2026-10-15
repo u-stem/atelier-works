@@ -33,6 +33,7 @@ const LOAD: WorkerLoad = {
     mem_working_set_bytes: 190 * MIB,
     mem_peak_bytes: 1307 * MIB,
   },
+  running_readable_samples: 690,
   busy_samples: 7,
   lag_over_samples: 10,
 };
@@ -54,7 +55,9 @@ describe("formatMebibytes", () => {
 
 describe("describeWorkerLoad slots", () => {
   test("shows the running jobs of the latest sample against the slots", () => {
-    expect(rowValue(LOAD, "枠の使用(最新)")).toBe("1件 / 他のジョブの上限2件");
+    expect(rowValue(LOAD, "枠の使用(最新)")).toBe(
+      "1件 / 他のジョブの上限2件(20:58時点)",
+    );
   });
 
   test("shows the maximum running jobs of the window", () => {
@@ -62,7 +65,36 @@ describe("describeWorkerLoad slots", () => {
   });
 
   test("shows how many samples had every other slot taken", () => {
-    expect(rowValue(LOAD, "枠が塞がっていた記録")).toBe("7件(700件中1%)");
+    expect(rowValue(LOAD, "枠が塞がっていた記録")).toBe(
+      "7件(読めた記録690件中1%)",
+    );
+  });
+
+  test("shows a share that rounds to zero with one decimal", () => {
+    const rare = { ...LOAD, running_readable_samples: 2000, busy_samples: 1 };
+    expect(rowValue(rare, "枠が塞がっていた記録")).toBe(
+      "1件(読めた記録2000件中0.1%)",
+    );
+  });
+
+  test("shows an unknown share when no running count was readable", () => {
+    const none = { ...LOAD, running_readable_samples: 0, busy_samples: 0 };
+    expect(rowValue(none, "枠が塞がっていた記録")).toBe("不明");
+  });
+
+  test("shows a zero share as 0%", () => {
+    const none = { ...LOAD, busy_samples: 0 };
+    expect(rowValue(none, "枠が塞がっていた記録")).toBe(
+      "0件(読めた記録690件中0%)",
+    );
+  });
+
+  test("shows the time of the latest sample in JST", () => {
+    const late = {
+      ...LOAD,
+      latest: { ...LOAD.latest, sampled_at: "2026-10-15T15:05:00.000Z" },
+    };
+    expect(rowValue(late, "メモリ(最新)")).toContain("(00:05時点)");
   });
 
   test("shows an unreadable running count as unknown", () => {
@@ -86,7 +118,7 @@ describe("describeWorkerLoad queue", () => {
 describe("describeWorkerLoad memory", () => {
   test("shows the latest anon memory with its share of the limit", () => {
     expect(rowValue(LOAD, "メモリ(最新)")).toBe(
-      "anon 76MiB、working set 261MiB、上限4096MiB",
+      "anon 76MiB、working set 261MiB、上限4096MiB(20:58時点)",
     );
   });
 

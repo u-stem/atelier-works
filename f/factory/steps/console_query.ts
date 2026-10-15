@@ -1933,6 +1933,8 @@ export type WorkerLoadView = {
     readonly mem_working_set_bytes: number | null;
     readonly mem_peak_bytes: number | null;
   };
+  /** `running_jobs`が読めた記録の数。枠が塞がっていた記録の割合の分母で、読めなかった記録は数えない。 */
+  readonly running_readable_samples: number;
   /** 他のジョブが枠をすべて使っていた記録(`running_jobs >= slots - 1`)の数。 */
   readonly busy_samples: number;
   /** `lag_seconds`が30秒以上の記録の数。 */
@@ -2032,6 +2034,10 @@ function toWorkerLoadView(row: SqlRow | undefined): WorkerLoadView | null {
         "max_mem_peak_bytes",
       ),
     },
+    running_readable_samples: asNumeric(
+      row.running_readable_samples,
+      "running_readable_samples",
+    ),
     busy_samples: asNumeric(row.busy_samples, "busy_samples"),
     lag_over_samples: asNumeric(row.lag_over_samples, "lag_over_samples"),
   };
@@ -2069,6 +2075,7 @@ async function readWorkerLoad(
           WHERE mem_limit_bytes > 0) AS max_mem_anon_ratio,
         (SELECT max(mem_working_set_bytes) FROM recent) AS max_mem_working_set_bytes,
         (SELECT max(mem_peak_bytes) FROM recent) AS max_mem_peak_bytes,
+        (SELECT count(running_jobs) FROM recent) AS running_readable_samples,
         (SELECT count(*) FROM recent WHERE running_jobs >= slots - 1) AS busy_samples,
         (SELECT count(*) FROM recent
           WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}::integer) AS lag_over_samples,

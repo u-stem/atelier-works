@@ -57,8 +57,6 @@ schema:
     - pr_ci_fix_enabled_since
     - pr_conflict_watch_enabled
     - worker_alert_memory_ratio
-    - worker_alert_wait_seconds
-    - worker_alert_busy_ratio
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -304,21 +302,8 @@ schema:
       exclusiveMinimum: 0
       maximum: 1
       description: >-
-        defaultのworkerのメモリの通知を出す割合です。anonのメモリが上限のこの割合以上になった記録があると、通知します。0を超え1以下の数にします。
+        defaultのworkerのメモリの通知を出す割合です。最新の記録でanonのメモリが上限のこの割合以上になると、通知します。0を超え1以下の数にします。
       default: 0.8
-    worker_alert_wait_seconds:
-      type: integer
-      minimum: 1
-      description: >-
-        defaultのworkerのqueueの待ちの通知を出す秒数です。他のジョブが枠を使っているときに、予定時刻から開始までの待ちがこの秒数以上のジョブがあると、通知します。
-      default: 300
-    worker_alert_busy_ratio:
-      type: number
-      exclusiveMinimum: 0
-      maximum: 1
-      description: >-
-        defaultのworkerの枠の塞がりの通知を出す割合です。直近1時間の記録のうち、他のジョブが枠をすべて使っていた記録の割合がこの値以上になると、通知します。0を超え1以下の数にします。
-      default: 0.5
     pr_ci_watch_enabled:
       type: boolean
       description: >-

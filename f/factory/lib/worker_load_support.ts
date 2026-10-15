@@ -535,41 +535,34 @@ export function nextFailureCount(previous: number, complete: boolean): number {
 /** 負荷の閾値を超えたことを知らせるnoticeの種類。原因ごとに本文を変える。 */
 export const WORKER_LOAD_HIGH_KIND = "worker_load_high";
 
-/** 枠の塞がりの割合を数える窓(分)。 */
-export const WORKER_ALERT_WINDOW_MINUTES = 60;
-
 /**
- * 窓の中の記録の数の下限。これより少ないと、割合が数件の偏りで決まるので判定しない。
- * 窓の記録は最大30件なので、20分(10件)分を最低とする。
+ * 判定に読む記録の件数。最新の1件と、増分を求めるために比べる相手を読めるだけ取る。
+ * 比べる相手は、値の読めた直近の行である。値が読めない行が続いても、5件あれば足りる。
  */
-export const WORKER_ALERT_MIN_SAMPLES = 10;
+export const WORKER_ALERT_SAMPLE_LIMIT = 5;
 
-/** 窓に必要な記録を読む件数。窓の分数を記録の間隔で割った値で、取りこぼさないよう余裕を持たせる。 */
-export const WORKER_ALERT_SAMPLE_LIMIT =
-  WORKER_ALERT_WINDOW_MINUTES / SAMPLE_INTERVAL_MINUTES + 2;
-
-/** 通知の閾値。設定(`factory_config`)の`worker_alert_*`から作る。 */
+/** 通知の閾値。設定(`factory_config`)の`worker_alert_memory_ratio`から作る。 */
 export type WorkerAlertThresholds = {
   /** `mem_anon_bytes / mem_limit_bytes`がこの値以上なら、メモリの通知を出す。 */
   readonly memoryRatio: number;
-  /** 他のジョブが枠を使っているときに、`max_wait_seconds`がこの秒数以上なら、待ちの通知を出す。 */
-  readonly waitSeconds: number;
-  /** 窓の記録のうち、他のジョブが枠をすべて使っていた記録の割合がこの値以上なら、塞がりの通知を出す。 */
-  readonly busyRatio: number;
 };
 
 /** 判定に使う記録の列。`WorkerSample`の一部で、読めなかった値は`null`。 */
 export type WorkerAlertSample = {
   readonly sampled_at: Date;
-  readonly slots: number;
-  readonly running_jobs: number | null;
-  readonly max_wait_seconds: number | null;
   readonly mem_anon_bytes: number | null;
   readonly mem_limit_bytes: number | null;
+  readonly mem_events_max: number | null;
+  readonly mem_oom_kill: number | null;
 };
 
-/** 通知の原因。 */
-export type WorkerAlertCause = "memory" | "wait" | "busy";
+/**
+ * 通知の原因。
+ * - `memory`: anonのメモリが上限の閾値以上
+ * - `oom_kill`: OOMで止められたプロセスが増えた
+ * - `limit_reached`: メモリが上限に達した回数が増えた
+ */
+export type WorkerAlertCause = "memory" | "oom_kill" | "limit_reached";
 
 function memoryExceeded(
   newest: WorkerAlertSample,
@@ -585,58 +578,35 @@ function memoryExceeded(
 }
 
 /**
- * 待ちは、他のジョブが枠を使っているときだけ数える。
- * 実行中のジョブが無いのに待ちが長いのは、ホストのスリープや再起動で予定が遅れた場合で、
- * 枠の塞がりではなく、人の操作も要らない。
+ * 累積の回数が、最新の行で増えたかを返す。
+ * 比べる相手は、最新より前で、値の読めた最も新しい行である。
+ * 最新の値が読めないとき、比べる相手が無いときは、増えたと言えないので偽を返す。
+ * 累積が戻った(コンテナの再起動)ときは、新しいコンテナで現在値の回数が起きたので、現在値が1以上なら増えたとする。
  */
-function waitExceeded(
-  newest: WorkerAlertSample,
-  thresholds: WorkerAlertThresholds,
-): boolean {
-  const { running_jobs: running, max_wait_seconds: wait } = newest;
-  return (
-    running !== null &&
-    running >= 1 &&
-    wait !== null &&
-    wait >= thresholds.waitSeconds
-  );
-}
-
-/**
- * 窓の中で、他のジョブが枠をすべて使っていた記録(`running_jobs >= slots - 1`)の割合を判定する。
- * 記録のジョブ自身が枠を1つ使うので、他のジョブが使える枠は`slots - 1`である。
- * 実行中の数が読めなかった記録は、分母にも分子にも数えない。
- */
-function busyExceeded(
+function counterIncreased(
   samples: readonly WorkerAlertSample[],
-  newest: WorkerAlertSample,
-  thresholds: WorkerAlertThresholds,
+  read: (sample: WorkerAlertSample) => number | null,
 ): boolean {
-  const windowStartMs =
-    newest.sampled_at.getTime() - WORKER_ALERT_WINDOW_MINUTES * 60_000;
-  let readable = 0;
-  let busy = 0;
-  for (const sample of samples) {
-    if (
-      sample.sampled_at.getTime() < windowStartMs ||
-      sample.running_jobs === null
-    ) {
-      continue;
-    }
-    readable += 1;
-    if (sample.running_jobs >= sample.slots - 1) {
-      busy += 1;
+  const [newest, ...earlier] = samples;
+  const current = newest === undefined ? null : read(newest);
+  if (current === null) {
+    return false;
+  }
+  for (const sample of earlier) {
+    const previous = read(sample);
+    if (previous !== null) {
+      return current < previous ? current > 0 : current > previous;
     }
   }
-  return (
-    readable >= WORKER_ALERT_MIN_SAMPLES &&
-    busy / readable >= thresholds.busyRatio
-  );
+  return false;
 }
 
 /**
  * 新しい順の記録から、通知を出す原因を返す。副作用は無い。
- * メモリと待ちは最新の1件で判定し、塞がりは直近の窓の割合で判定する。
+ * メモリの割合は最新の1件で判定し、OOMと上限への到達は最新の行での増分で判定する。
+ * 割合は回収できないメモリを表すanonで判定する。ページキャッシュを含む値で判定すると、
+ * 上限に近くても逼迫と限らず、行動不要の通知が出るためである。
+ * キャッシュの圧迫で回収が追いつかない状態は、上限への到達の増分で拾う。
  * 解決は人が行うので、閾値を下回っても通知を取り消さない。
  */
 export function evaluateWorkerAlerts(
@@ -651,18 +621,13 @@ export function evaluateWorkerAlerts(
   if (memoryExceeded(newest, thresholds)) {
     causes.push("memory");
   }
-  if (waitExceeded(newest, thresholds)) {
-    causes.push("wait");
+  if (counterIncreased(samples, (sample) => sample.mem_oom_kill)) {
+    causes.push("oom_kill");
   }
-  if (busyExceeded(samples, newest, thresholds)) {
-    causes.push("busy");
+  if (counterIncreased(samples, (sample) => sample.mem_events_max)) {
+    causes.push("limit_reached");
   }
   return causes;
-}
-
-/** Consoleのシステムの画面のURL。 */
-export function workerLoadConsoleUrl(windmillPublicUrl: string): string {
-  return `${windmillPublicUrl}/console/system`;
 }
 
 function causeText(
@@ -672,22 +637,15 @@ function causeText(
   switch (cause) {
     case "memory":
       return `defaultのworkerのメモリ(anon)が、上限の${percent(thresholds.memoryRatio)}以上になりました`;
-    case "wait":
-      return `他のジョブが枠を使っている間に、予定時刻から${String(thresholds.waitSeconds / 60)}分以上開始を待つジョブがありました`;
-    case "busy":
-      return `直近${String(WORKER_ALERT_WINDOW_MINUTES)}分の記録の${percent(thresholds.busyRatio)}以上で、他のジョブが枠をすべて使っていました`;
+    case "oom_kill":
+      return "defaultのworkerで、メモリ不足(OOM)により止められたプロセスが増えました";
+    case "limit_reached":
+      return "defaultのworkerのメモリが、上限に達した回数が増えました";
   }
 }
 
-function actionText(cause: WorkerAlertCause): string {
-  switch (cause) {
-    case "memory":
-      return "実行中のジョブのscriptの内訳を見て、メモリを使うジョブが並列で動いていないかを確かめる。続くなら、並列数を下げるかメモリの上限を上げるかを判断する";
-    case "wait":
-    case "busy":
-      return "実行中のジョブを見て、長く枠を使うジョブを確かめる。続くなら、並列数を上げるか、軽いジョブを別のworkerに分けるかを判断する";
-  }
-}
+const ACTION_TEXT =
+  "実行中のジョブのscriptの内訳を見て、メモリを使うジョブが並列で動いていないかを確かめる。続くなら、並列数を下げるかメモリの上限を上げるかを判断する";
 
 /**
  * 通知の本文を作る。値は閾値だけを載せ、そのときの測定値は載せない。
@@ -701,7 +659,7 @@ export function workerAlertNotice(
 ): NoticeRecord {
   return {
     kind: WORKER_LOAD_HIGH_KIND,
-    message: `${causeText(cause, thresholds)}。対象: ${consoleUrl}(workerの負荷)。次の操作: ${actionText(cause)}`,
+    message: `${causeText(cause, thresholds)}。対象: ${consoleUrl}(workerの負荷)。次の操作: ${ACTION_TEXT}`,
   };
 }
 

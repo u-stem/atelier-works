@@ -52,53 +52,21 @@ describe("worker_alert_memory_ratio", () => {
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
-  test("throws when not a number", () => {
-    const raw = { ...BASE_RAW_CONFIG, worker_alert_memory_ratio: "high" };
-    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
-  });
-});
-
-describe("worker_alert_busy_ratio", () => {
-  test("defaults to 0.5 when absent", () => {
-    const config = parseFactoryConfig(BASE_RAW_CONFIG);
-    expect(config.worker_alert_busy_ratio).toBe(0.5);
-  });
-
-  test("passes through an explicit value", () => {
+  test("accepts a small positive value", () => {
     const config = parseFactoryConfig({
       ...BASE_RAW_CONFIG,
-      worker_alert_busy_ratio: 0.25,
+      worker_alert_memory_ratio: 0.01,
     });
-    expect(config.worker_alert_busy_ratio).toBe(0.25);
+    expect(config.worker_alert_memory_ratio).toBe(0.01);
   });
 
   test("throws when negative", () => {
-    const raw = { ...BASE_RAW_CONFIG, worker_alert_busy_ratio: -0.1 };
-    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
-  });
-});
-
-describe("worker_alert_wait_seconds", () => {
-  test("defaults to 300 when absent", () => {
-    const config = parseFactoryConfig(BASE_RAW_CONFIG);
-    expect(config.worker_alert_wait_seconds).toBe(300);
-  });
-
-  test("passes through an explicit value", () => {
-    const config = parseFactoryConfig({
-      ...BASE_RAW_CONFIG,
-      worker_alert_wait_seconds: 600,
-    });
-    expect(config.worker_alert_wait_seconds).toBe(600);
-  });
-
-  test("throws when not an integer", () => {
-    const raw = { ...BASE_RAW_CONFIG, worker_alert_wait_seconds: 1.5 };
+    const raw = { ...BASE_RAW_CONFIG, worker_alert_memory_ratio: -0.1 };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 
-  test("throws when zero", () => {
-    const raw = { ...BASE_RAW_CONFIG, worker_alert_wait_seconds: 0 };
+  test("throws when not a number", () => {
+    const raw = { ...BASE_RAW_CONFIG, worker_alert_memory_ratio: "high" };
     expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
   });
 });

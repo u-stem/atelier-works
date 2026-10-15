@@ -37,7 +37,9 @@ describe("noticeGuide", () => {
   });
 
   test("tells how to tune the worker load alert", () => {
-    expect(noticeGuide("worker_load_high").note).toContain("worker_alert_");
+    expect(noticeGuide("worker_load_high").note).toContain(
+      "worker_alert_memory_ratio",
+    );
   });
 
   test("tells how to read the failed run of the pull request CI", () => {

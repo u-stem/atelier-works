@@ -251,7 +251,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、自動修正の保留の理由(あれば)、リンク、次の操作 |
 | `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 | `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、次の操作、PRのリンク |
-| `worker_load_high` | `sample_worker_load` | 原因、閾値、システムの画面のリンク、次の操作 |
+| `worker_load_high` | `sample_worker_load` | 原因(メモリの割合、OOMの増加、上限への到達の増加)、閾値、システムの画面のリンク、次の操作 |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
 `check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。
@@ -286,7 +286,7 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 競合が解けたとき、PRが閉じたとき、設定が対象から外したときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
 詳細は[PRのCI監視の仕様](pr-ci.md#競合の検知)にある。
 
-`worker_load_high`は、原因(メモリ、queueの待ち、枠の塞がり)ごとに本文が決まっている。
+`worker_load_high`は、原因(メモリの割合、OOMの増加、上限への到達の増加)ごとに本文が決まっている。
 本文には閾値だけを載せ、測定した値は載せないので、同じ原因の未解決の通知は重ならない。
 Discordには通知せず、Consoleの要対応に出す。
 閾値を下回っても自動では解決せず、人が確かめて解決する。
