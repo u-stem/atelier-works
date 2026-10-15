@@ -40,8 +40,14 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
 1. 文書。
    変更が、`docs/`とREADMEの文言だけで、2の削除・権限に当たらない。
    次の7つのファイルは含めない。
-   AGENTS.md、CLAUDE.md、AGENTS.wmill.md、`docs/security.md`、`docs/coding-guidelines.md`である。
-   AGENTS.mdが手順を任せる`docs/setup.md`と`docs/operations.md`も含めない。
+   - AGENTS.md
+   - CLAUDE.md
+   - AGENTS.wmill.md
+   - `docs/security.md`
+   - `docs/coding-guidelines.md`
+   - `docs/setup.md`
+   - `docs/operations.md`
+   最後の2つは、AGENTS.mdが手順を任せるファイルである。
    コード、テスト、設定、スキル、subagentの定義を含まない。
 2. 削除・権限。
    次のどれかに当たる。
@@ -256,7 +262,8 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
 
 致命的な反証の定義は、`rules.md`の「致命的な反証」にある。
 ここには重ねて書かない。
-致命的な反証を外せるのは、triageが基準1で見送ったときだけである。
+致命的な反証を見送れるのは、triageの基準1(根拠が無い)と、基準3(新しい根拠の無い蒸し返しに限る)だけである。
+基準2と基準4は当てない。
 親は、自分の判断で外さない。
 
 - 再現できない疑いがあるときは、triageに判定させる。
@@ -442,7 +449,9 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 テストを足すコミットのshaとテストのファイルは、親が`git log --reverse --name-only origin/main..HEAD`の出力から取る。
 implementerの報告の値は、照合にだけ使う。
 テストを足すコミットが複数あるときは、最初のものを確かめる。
-shaは`^[0-9a-f]{40}$`に、ファイル名は`^tests/[A-Za-z0-9_./-]+\.test\.tsx?$`に合うときだけ、コマンドに渡す。
+shaは`^[0-9a-f]{40}$`に、ファイル名は`^(tests|console)/[A-Za-z0-9_./-]+\.test\.tsx?$`に合うときだけ、コマンドに渡す。
+`/\.\.(\/|$)/`に当たる名前は、渡さない。
+親のディレクトリへ出るパスを避けるためである。
 合わないときは、シェルが記号を解釈するのを避けるため、この手順を「未実施」として報告する。
 ファイル名は、引用して1つずつ渡す。
 

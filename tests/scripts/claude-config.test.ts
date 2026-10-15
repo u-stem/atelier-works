@@ -464,6 +464,25 @@ describe("review-loop scaling rules", () => {
     }
   });
 
+  const FATAL_CRITERIA =
+    "基準1(根拠が無い)と、基準3(新しい根拠の無い蒸し返しに限る)だけ";
+
+  test.each([
+    ".claude/skills/review-loop/rules.md",
+    ".claude/skills/review-loop/SKILL.md",
+    ".claude/agents/triage.md",
+  ])("names the same criteria for a fatal rebuttal in %s", (path) => {
+    expect(readFileSync(join(ROOT, path), "utf8")).toContain(FATAL_CRITERIA);
+  });
+
+  test("lets test files under console/ pass the file-name check", () => {
+    expect(skillText()).toContain("^(tests|console)/[A-Za-z0-9_./-]+");
+  });
+
+  test("refuses a file name with a parent-directory segment", () => {
+    expect(skillText()).toContain("/\\.\\.(\\/|$)/");
+  });
+
   test("keeps mise run check out of devil-advocate's allowed commands", () => {
     expect(allowedBash("devil-advocate")).not.toContain("mise run check");
   });
