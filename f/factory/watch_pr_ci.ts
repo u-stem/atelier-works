@@ -97,6 +97,7 @@ import {
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
 import type { FactoryConfig } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
+import { ciRoundTimeoutMisfit } from "./steps/pr_workflow_support.ts";
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -116,6 +117,7 @@ function buildClaimDeps(
   if (!config.pr_ci_fix_enabled || since === null) return undefined;
   return {
     maxRounds: config.pr_ci_fix_max_rounds,
+    configMisfit: ciRoundTimeoutMisfit(config),
     enabledSince: since,
     listCandidates: (from, limit) =>
       listClaimablePrCiChecks(from, PR_CI_FIX_TEMPORARY_HOLD_REASONS, limit),

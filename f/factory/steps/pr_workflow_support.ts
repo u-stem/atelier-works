@@ -12,9 +12,12 @@ import {
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
 import {
+  CI_ROUND_DETAILS,
   CI_ROUND_REASON_PREFIX,
+  ciRoundApplyTimeoutMisfit,
+  ciRoundReason,
+  ciRoundVerifyTimeoutMisfit,
   isCiFixOutputAllowed,
-  PR_FIX_TIMEOUT_MISFIT_REASON,
 } from "../lib/ci_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
@@ -58,10 +61,7 @@ import {
   isNewShellScript,
   matchesForbiddenPath,
 } from "../lib/protected_paths.ts";
-import {
-  isRepoOwnerStopReason,
-  REPO_NOT_ALLOWED_REASON,
-} from "../lib/repo_owner_gate.ts";
+import { isRepoOwnerStopReason } from "../lib/repo_owner_gate.ts";
 import {
   assertSha,
   type FactoryConfig,
@@ -1130,7 +1130,8 @@ export function evaluateRepoAllowedGuard(allowed: boolean): PrFixGuardResult {
     ? { ok: true }
     : {
         ok: false,
-        reason: REPO_NOT_ALLOWED_REASON,
+        reason:
+          "repository is not allowed by factory_config (owners / repo_allowlist)",
       };
 }
 
@@ -1186,6 +1187,9 @@ export const PR_STEP_OVERRUN_BASE_SEC = 600;
 /** Claude 1回か検査コマンド1件が、timeoutの後に上乗せしうる停止と出力待ちの時間(秒)。ランナーの最大13秒を切り上げた値。worktreeのロックを待つ時間はコマンドのtimeoutの内側で数えるので含めない。 */
 export const PR_COMMAND_STOP_OVERHEAD_SEC = 15;
 
+export const PR_FIX_TIMEOUT_MISFIT_REASON =
+  "pr_fix time settings do not fit the flow step timeout";
+
 export const PR_REVIEW_TIMEOUT_MISFIT_REASON =
   "pr_review time settings do not fit the flow step timeout";
 
@@ -1233,6 +1237,36 @@ export function prFixTimeoutMisfit(
     PR_STEP_OVERRUN_BASE_SEC;
   if (verifyTotal <= PR_FIX_VERIFY_STEP_TIMEOUT_SEC) return null;
   return `${PR_FIX_TIMEOUT_MISFIT_REASON}: (2 claude runs + 2 x ${String(checkCount)} check commands) x (claude_timeout_sec ${String(config.claude_timeout_sec)} + ${String(PR_COMMAND_STOP_OVERHEAD_SEC)}) + ${String(PR_STEP_OVERRUN_BASE_SEC)} = ${String(verifyTotal)}s exceeds ${String(PR_FIX_VERIFY_STEP_TIMEOUT_SEC)}s`;
+}
+
+/** CI回の時間の見積もりに使う、通常の回と同じ余裕。 */
+const CI_ROUND_OVERHEAD = {
+  commandStopSec: PR_COMMAND_STOP_OVERHEAD_SEC,
+  baseSec: PR_STEP_OVERRUN_BASE_SEC,
+} as const;
+
+/**
+ * CIの失敗を直す回の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まらなければ理由を返し、収まればnullを返す。
+ * 通常の回の見積もり(`prFixTimeoutMisfit`)に、CI回だけの追加の作業を足して確かめる。
+ * 準備のステップが止める条件であり、`watch_pr_ci`が起動の前に同じ条件で保留する。設定だけで決まる。
+ */
+export function ciRoundTimeoutMisfit(
+  config: Pick<FactoryConfig, "claude_timeout_sec" | "allowed_check_commands">,
+): string | null {
+  return (
+    prFixTimeoutMisfit(config) ??
+    ciRoundApplyTimeoutMisfit(
+      config.claude_timeout_sec,
+      PR_FIX_APPLY_STEP_TIMEOUT_SEC,
+      CI_ROUND_OVERHEAD,
+    ) ??
+    ciRoundVerifyTimeoutMisfit(
+      config.claude_timeout_sec,
+      config.allowed_check_commands.length,
+      PR_FIX_VERIFY_STEP_TIMEOUT_SEC,
+      CI_ROUND_OVERHEAD,
+    )
+  );
 }
 
 /**
@@ -3644,6 +3678,14 @@ const CI_WAIT_ACTION =
   "保留が解けるまで待つか、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
 
 /**
+ * CI回で稼働中のworkerの問題で止まったときの、人が直した後の案内。
+ * 失敗の行は、止まってから`RUNTIME_UNSAFE_WAIT_MS`(1時間)後に保留なしで戻る。
+ * 列挙の失敗のような一時的な原因でも同じ経路で起動し直すので、pushは要らない。
+ */
+const CI_RUNTIME_UNSAFE_FOLLOW_UP =
+  "失敗の行は止まってから1時間後に保留なしで戻り、Factoryが自動で起動し直します。待てないときは、PRにpushしてください";
+
+/**
  * CI回で止めた理由のうち、同じheadでは評価し直さない理由の案内。
  * 作業項目を再実行しても、`factory:fix`を付け直しても、失敗の行は動かない。
  * PRにpushしてheadが変わると、`watch_pr_ci`が新しい失敗として判定し直す。
@@ -3936,11 +3978,22 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
 const CI_ROUND_NEXT_ACTION = `原因を確かめて人が直してから、${CI_PUSH_ACTION}`;
 
 /**
+ * 時間設定が修正・検証ステップのtimeoutに収まらない回の、CI回での次の操作。
+ * 起動の前に`watch_pr_ci`が同じ設定を確かめ、収まらない間は起動しない。
+ * 設定を直せば、止まった行は保留なしで戻り、pushなしで次の巡回で起動し直すので、pushは案内しない。
+ */
+const TIME_SETTINGS_CI_NEXT_ACTION =
+  "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します";
+
+/**
  * 修正の前に止めた理由の次の操作。保留の理由(`fix_hold_reason`)に写せる理由は、その理由の敬体の固定文(`stopAction`)を使う。
  * 写せない理由は、`CI_ROUND_NEXT_ACTION`にする。
  * `match.input`は、規則が一致した理由の1項目である。
  */
 function ciRoundStopAction(match: RegExpMatchArray): string {
+  if (match.input?.startsWith(ciRoundReason(CI_ROUND_DETAILS.timeMisfit))) {
+    return TIME_SETTINGS_CI_NEXT_ACTION;
+  }
   const hold = holdReasonForStoppedItem(match.input ?? null);
   return hold === null
     ? CI_ROUND_NEXT_ACTION
@@ -4024,8 +4077,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
       /^repository is not allowed by factory_config \(owners \/ repo_allowlist\)$/,
     describe: () =>
       "factory_config(owners / repo_allowlist)で許可されていないリポジトリです",
-    nextAction: () =>
-      "factory_configのowners / repo_allowlistを見直してください",
+    ...procedureThenRerun(
+      "factory_configのowners / repo_allowlistを見直してから、",
+    ),
   },
   // `lib/repo_owner_gate.ts`の`verifyRepoOwnerId`。各準備のステップが、リポジトリを取得する前に止める。
   {
@@ -4568,6 +4622,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
     ...procedureThenRerun(
       "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、",
       "(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
+      CI_RUNTIME_UNSAFE_FOLLOW_UP,
     ),
   },
   {
@@ -4610,9 +4665,9 @@ export const REASON_RULES: readonly ReasonRule[] = [
       /^pr_fix time settings do not fit the flow step timeout: ([\s\S]+)$/,
     describe: (m) =>
       `PR修正の時間設定が、flow.yamlの修正・検証ステップのtimeoutに収まりません(${m[1]})`,
-    ...procedureThenRerun(
-      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、",
-    ),
+    nextAction: () =>
+      `claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてから、${RETRY_WORK_ITEM_ACTION}`,
+    ciNextAction: () => TIME_SETTINGS_CI_NEXT_ACTION,
   },
   {
     pattern:

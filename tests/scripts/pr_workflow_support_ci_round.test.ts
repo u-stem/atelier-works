@@ -139,10 +139,43 @@ describe("nextActionFor a CI round", () => {
     ).toBe(prCiFixHoldInfo("log_unavailable").stopAction);
   });
 
-  test("gives the action of the setup hold for CI round time settings that do not fit", () => {
+  test("tells the CI round time settings to be reduced, and that the restart is automatic", () => {
     expect(
       nextActionForPrFix(ciRoundApplyTimeoutMisfit(10_000, 7_200) ?? "", true),
-    ).toBe(prCiFixHoldInfo("setup_blocked").stopAction);
+    ).toBe(
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
+    );
+  });
+
+  test("tells the pr_fix time settings to be reduced in a CI round, without a push", () => {
+    expect(
+      nextActionForPrFix(
+        "pr_fix time settings do not fit the flow step timeout: x",
+        true,
+      ),
+    ).toBe(
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
+    );
+  });
+
+  test("tells a repository outside the allow list to be fixed by a push in a CI round", () => {
+    expect(
+      nextActionForPrFix(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+        true,
+      ),
+    ).toBe(
+      "factory_configのowners / repo_allowlistを見直してから、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します",
+    );
+  });
+
+  test("tells an unsafe worker runtime to be fixed, and that the row returns by itself in a CI round", () => {
+    expect(
+      nextActionForPrFix(
+        "worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: world-writable paths could not be listed",
+        true,
+      ),
+    ).toContain("1時間後に保留なしで戻り、Factoryが自動で起動し直します");
   });
 
   test("does not give the action of a hold reason that Claude repeats", () => {

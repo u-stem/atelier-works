@@ -21,13 +21,6 @@ import { OWNER_ID_MISMATCH_KIND } from "./poll_support.ts";
 import type { FactoryConfig, NoticeRecord } from "./types.ts";
 
 /**
- * リポジトリが`factory_config`の許可リスト(`owners` / `repo_allowlist`)に無いときの、止める理由。
- * 準備の関門が作業項目の状態の注記に残し、CI回の回復が保留の理由に写すときに同じ文を照合する。
- */
-export const REPO_NOT_ALLOWED_REASON =
-  "repository is not allowed by factory_config (owners / repo_allowlist)";
-
-/**
  * IDが食い違ったnoticeの本文。
  * リポジトリとオーナーと2つのIDだけで決まるので、同じ食い違いが続くあいだは
  * 同じ本文の未解決のnoticeが重ならない。

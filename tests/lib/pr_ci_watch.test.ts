@@ -66,7 +66,6 @@ import {
   UNREADABLE_EXPIRES_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_watch.ts";
 import { PrFixFlowJobIdRecordError } from "../../f/factory/lib/pr_fix_launch.ts";
-import { REPO_NOT_ALLOWED_REASON } from "../../f/factory/lib/repo_owner_gate.ts";
 import type { FactoryOwner, NoticeRecord } from "../../f/factory/lib/types.ts";
 
 const SHA_A = "a".repeat(40);
@@ -2475,16 +2474,6 @@ describe("recovery of a fixing row", () => {
     ]);
   });
 
-  test("holds the row as a setup problem when the work item was blocked by the setup", async () => {
-    const h = harness(
-      fixingSetup(fixItem("blocked", { note: REPO_NOT_ALLOWED_REASON })),
-    );
-    await runPrCiWatch(h.deps);
-    expect(h.released.map((entry) => entry.options.holdReason)).toEqual([
-      "setup_blocked",
-    ]);
-  });
-
   test("holds the row by the known reason the work item stopped on", async () => {
     const h = harness(
       fixingSetup(
@@ -2889,6 +2878,8 @@ type ClaimSetup = {
   readonly budgetExceeded?: boolean;
   readonly mainCiFailed?: boolean;
   readonly rounds?: number;
+  /** 時間設定が、修正・検証ステップのtimeoutに収まらない理由。収まるときは省く。 */
+  readonly configMisfit?: string | null;
   readonly claimResults?: (number | null)[];
   readonly launchFails?: boolean;
   /** フローは起動したが、ジョブIDを作業項目に記録できなかった。 */
@@ -2966,6 +2957,7 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
   const deps: PrCiClaimDeps = {
     enabledSince: SINCE,
     maxRounds: 2,
+    configMisfit: setup.configMisfit ?? null,
     listCandidates: async (since, limit) => {
       listed.push({ since, limit });
       if (setup.listCandidatesFails === true) throw new Error("list failed");
@@ -3621,6 +3613,23 @@ describe("holding a row", () => {
     const h = harness(claimSetup(c));
     await runPrCiWatch(h.deps);
     expect(c.holds).toEqual([{ id: 5, reason: "budget_exceeded" }]);
+  });
+
+  test("holds a failure as config_misfit without claiming while the time settings do not fit", async () => {
+    const c = claimHarness({ configMisfit: "time settings do not fit" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "config_misfit" }]);
+  });
+
+  test("clears config_misfit once the time settings fit, without a push", async () => {
+    const c = claimHarness({
+      configMisfit: null,
+      candidates: [candidateRow({ fix_hold_reason: "config_misfit" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: null }]);
   });
 
   test("clears a temporary hold that no longer applies", async () => {

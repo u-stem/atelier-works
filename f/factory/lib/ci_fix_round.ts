@@ -74,13 +74,6 @@ export const CI_ROUND_DETAILS = {
   timeMisfit: "time settings do not fit the flow step timeout: ",
 } as const;
 
-/**
- * `pr_fix`の準備のステップが、時間設定が修正・検証ステップのtimeoutに収まらないときに出す理由の先頭。
- * 作業項目の状態の注記に残り、回復が保留の理由に写すときに同じ文を照合する。
- */
-export const PR_FIX_TIMEOUT_MISFIT_REASON =
-  "pr_fix time settings do not fit the flow step timeout";
-
 /** 固定文`detail`に接頭辞を付けた、CI回の止める理由。 */
 export function ciRoundReason(detail: string): string {
   return `${REASON_PREFIX}: ${detail}`;

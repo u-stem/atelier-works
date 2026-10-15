@@ -492,10 +492,6 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  *   止めた理由が語彙に写せない`blocked`は含めない。起動し直す回数は、回数の上限が止める。
  * - `rounds_exhausted`: 直す回数の上限に達した。
  * - `not_factory_head`: 最後のpushがFactoryのものでない。
- * - `setup_blocked`: 直す作業が、設定か環境の問題で、準備のステップで止まった。
- *   許可リスト外のリポジトリ、オーナーの照合の失敗、時間設定の不整合、検査コマンドを実行できないworkerである。
- *   人が設定か環境を直すまで同じ理由で止まるので、起動し直さない。
- *   起動し直すと、止まるたびに回数と通知を使う。
  *
  * 一時的な理由は、解ければ外してよい理由である。
  * - `marker_missing`: Factoryのクローンのスキルが、CIの失敗を直す節を持たない。
@@ -505,6 +501,8 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `not_reviewed`: 今のheadの自動レビューがまだ無い。
  * - `last_fix_unsettled`: 直近の直す作業が、まだ終わっていない(動いている)。
  * - `pr_draft_or_auto_merge`: PRがドラフトか、auto-mergeが有効である。
+ * - `config_misfit`: 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。
+ *   設定だけで決まるので、起動の前に確かめて保留する。ラウンドを使わない。設定を直せば、次の巡回でpushなしに外れる。
  */
 export const PR_CI_FIX_HOLD_REASONS = [
   "unfixable_job",
@@ -515,12 +513,12 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "fix_stopped",
   "rounds_exhausted",
   "not_factory_head",
-  "setup_blocked",
   "main_ci_failed",
   "budget_exceeded",
   "not_reviewed",
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
+  "config_misfit",
 ] as const;
 
 export type PrCiFixHoldReason = (typeof PR_CI_FIX_HOLD_REASONS)[number];
@@ -606,14 +604,6 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
     stopAction:
       "最後のpushがFactoryのものでないので、自動では直しません。人が直してPRにpushしてください",
   },
-  setup_blocked: {
-    temporary: false,
-    discord: false,
-    nextAction:
-      "設定か環境の問題で、直す作業を始められなかった。作業項目の理由を確かめ、設定か環境を直し、PRにpushする",
-    stopAction:
-      "設定か環境の問題で、直す作業を始められませんでした。作業項目の理由を確かめ、設定か環境を直し、PRにpushしてください",
-  },
   marker_missing: {
     temporary: true,
     discord: true,
@@ -657,6 +647,14 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "PRがドラフトか、auto-mergeが有効である。ドラフトを解除し、auto-mergeを無効にする",
     stopAction:
       "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にしてください",
+  },
+  config_misfit: {
+    temporary: true,
+    discord: true,
+    nextAction:
+      "時間設定が、修正・検証ステップのtimeoutに収まらない。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らす。直すと、次の巡回で自動で起動し直す",
+    stopAction:
+      "時間設定が、修正・検証ステップのtimeoutに収まりません。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
   },
 };
 
