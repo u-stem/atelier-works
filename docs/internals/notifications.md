@@ -277,7 +277,7 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 `pr_conflict`は、PRの競合1回につき、通常は1件残す。競合のままheadが進んでも、重ねない。
 Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。
 本文は固定文で、PRの題名やブランチ名は載せない。
-競合が解けたとき、PRが閉じたとき、監視の対象から外れたときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
+競合が解けたとき、PRが閉じたとき、設定が対象から外したときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
 詳細は[PRのCI監視の仕様](pr-ci.md#競合の検知)にある。
 
 ### 重複の抑止

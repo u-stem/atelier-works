@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   deletePrConflictChecksBefore,
   listConflictedPrConflictChecks,
+  listPrConflictRepos,
   listPrOpenRepos,
   markPrConflictNotified,
   recordPrConflict,
@@ -45,6 +46,7 @@ const ROW: SqlRow = {
   pr_number: 12,
   head_sha: HEAD,
   state: "conflicted",
+  episode: 1,
   notified_at: null,
   checked_at: new Date("2026-10-15T00:00:00.000Z"),
   created_at: new Date("2026-10-15T00:00:00.000Z"),
@@ -94,6 +96,19 @@ describe("recordPrConflict", () => {
       [{ ...ROW, prior_state: "conflicted" }],
     ]);
     expect((await recordPrConflict(OBSERVATION, sql)).started).toBe(false);
+  });
+
+  test("returns the episode of the conflict", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, episode: "3" }]]);
+    expect((await recordPrConflict(OBSERVATION, sql)).row.episode).toBe(3);
+  });
+
+  test("counts up the episode only when a conflict starts again", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain(
+      "episode = CASE WHEN c.state = 'conflicted' THEN c.episode ELSE c.episode + 1 END",
+    );
   });
 
   test("lowercases the owner and repo", async () => {
@@ -276,6 +291,23 @@ describe("listPrOpenRepos", () => {
   test("parses the rows", async () => {
     const { sql } = createFakeSqlClient([[{ owner: "acme", repo: "widgets" }]]);
     expect(await listPrOpenRepos(sql)).toEqual([
+      { owner: "acme", repo: "widgets" },
+    ]);
+  });
+});
+
+describe("listPrConflictRepos", () => {
+  test("lists each repository of the conflict rows once, whatever the state", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listPrConflictRepos(sql);
+    expect(calls[0]?.text).toMatch(
+      /SELECT DISTINCT owner, repo FROM factory\.pr_conflict_checks/,
+    );
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[{ owner: "acme", repo: "widgets" }]]);
+    expect(await listPrConflictRepos(sql)).toEqual([
       { owner: "acme", repo: "widgets" },
     ]);
   });

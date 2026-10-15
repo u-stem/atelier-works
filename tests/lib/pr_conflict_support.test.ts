@@ -82,6 +82,14 @@ describe("decidePrConflict", () => {
     });
   });
 
+  test("clears the conflict of a draft pull request when mergeable is true", () => {
+    expect(
+      decidePrConflict(
+        facts({ draft: true, mergeable: true, mergeableState: "clean" }),
+      ),
+    ).toEqual({ kind: "clear" });
+  });
+
   test("skips a draft pull request", () => {
     expect(decidePrConflict(facts({ draft: true }))).toEqual({
       kind: "skip",
@@ -114,6 +122,10 @@ describe("isPrConflictSkipReason", () => {
 });
 
 describe("prConflictNoticePrefix", () => {
+  test("lowercases the owner and repo so that it matches the notice of any spelling", () => {
+    expect(prConflictNoticePrefix("Acme", "MyApp", 12)).toBe("acme/myapp#12: ");
+  });
+
   test("ends with the separator so that #1 does not match #12", () => {
     expect(prConflictNoticePrefix("acme", "app", 1)).toBe("acme/app#1: ");
   });
@@ -150,6 +162,18 @@ describe("prConflictNoticeMessage", () => {
 
   test("names no commit", () => {
     expect(prConflictNoticeMessage(input)).not.toMatch(/[0-9a-f]{7}/);
+  });
+
+  test("lowercases the owner and repo", () => {
+    expect(
+      prConflictNoticeMessage({ ...input, owner: "Acme", repo: "MyApp" }),
+    ).toStartWith("acme/myapp#12: ");
+  });
+
+  test("starts with the prefix that resolves it, whatever the spelling", () => {
+    expect(
+      prConflictNoticeMessage({ ...input, owner: "Acme", repo: "MyApp" }),
+    ).toStartWith(prConflictNoticePrefix("acme", "myapp", 12));
   });
 
   test("rejects an owner that is not a GitHub name", () => {

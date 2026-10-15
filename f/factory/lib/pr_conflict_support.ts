@@ -66,12 +66,14 @@ export type PrConflictDecision =
  * 競合とみなすのは、`mergeable`が偽で`mergeable_state`が`dirty`のときだけである。
  * `mergeable`が`null`のときは、GitHubが計算中なので何も決めない。
  * 競合が解けたとみなすのは、`mergeable`が真のときだけである。checksやレビューで`blocked`でも、競合はしていない。
+ * 下書きは新しい競合の対象にしないが、競合が解けたかの判定は行う。
  */
 export function decidePrConflict(pr: PrConflictFacts): PrConflictDecision {
   if (pr.state === "closed" || pr.merged) return { kind: "close" };
+  // 競合が解けた判定は、下書きでも行う。下書きに戻したPRの通知を残さないためである。
+  if (pr.mergeable === true) return { kind: "clear" };
   if (pr.draft) return { kind: "skip", reason: "draft" };
   if (pr.mergeable === null) return { kind: "skip", reason: "unknown" };
-  if (pr.mergeable) return { kind: "clear" };
   if (pr.mergeableState !== "dirty") {
     return { kind: "skip", reason: "not_dirty" };
   }
@@ -83,6 +85,7 @@ export function decidePrConflict(pr: PrConflictFacts): PrConflictDecision {
  * このPRのnoticeの本文の接頭辞。
  * 自動解決は、種類とこの接頭辞で対象を選ぶ。末尾の区切りまで含めるので、
  * `acme/app#1: `は`acme/app#12: `に当たらない。
+ * `owner`と`repo`は小文字にして作る。GitHubが返す綴りが場面によって違っても、通知と解決の接頭辞が一致するためである。
  */
 export function prConflictNoticePrefix(
   owner: string,
@@ -91,7 +94,7 @@ export function prConflictNoticePrefix(
 ): string {
   assertGitHubName(owner);
   assertGitHubName(repo);
-  return `${owner}/${repo}#${String(prNumber)}: `;
+  return `${owner}/${repo}#${String(prNumber)}: `.toLowerCase();
 }
 
 export type PrConflictNoticeInput = {

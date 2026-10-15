@@ -4121,6 +4121,10 @@ export type OpenPullRequest = {
   /** headのリポジトリの`owner/repo`。削除されたforkは`null`。 */
   readonly headRepoFullName: string | null;
   readonly baseRepoFullName: string;
+  /** PRの作者のログイン名。作者が無いときは`null`。 */
+  readonly authorLogin: string | null;
+  /** PRの作者の数値ID。無いか、正の安全な整数でなければ`null`。 */
+  readonly authorId: number | null;
 };
 
 function isOpenPullRequestPayload(value: unknown): value is {
@@ -4128,6 +4132,7 @@ function isOpenPullRequestPayload(value: unknown): value is {
   draft: boolean;
   head: { ref: string; repo: unknown };
   base: { repo: { full_name: string } };
+  user?: unknown;
 } {
   if (!isRecord(value)) return false;
   if (typeof value.number !== "number") return false;
@@ -4179,6 +4184,14 @@ export async function listOpenPullRequests(
         ? entry.head.repo.full_name
         : null,
     baseRepoFullName: entry.base.repo.full_name,
+    authorLogin:
+      isRecord(entry.user) && typeof entry.user.login === "string"
+        ? entry.user.login
+        : null,
+    authorId:
+      isRecord(entry.user) && isPositiveSafeInteger(entry.user.id)
+        ? entry.user.id
+        : null,
   }));
 }
 

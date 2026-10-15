@@ -1,11 +1,15 @@
 // FactoryのPRのマージの競合の監視(`watch_pr_conflicts`)の流れを、外部の操作を注入して組み立てる。
 // 検知と通知だけを行い、PRにもリポジトリにも書き込まず、修正は起動しない。
 //
-// 対象のPRは、作業項目の更新時刻や件数の窓に頼らずに見つける。
-// 状態が`pr_open`の作業項目を持つリポジトリごとに、開いているPRを列挙し、
-// Factoryのブランチのもの(下書きでなく、forkでなく、作業項目が同じPRを指す)だけをPRとして読む。
-// `pr_open`はPRがマージされた後も変わらないので、作業項目から引くと、閉じたPRを読み続けたり、古い開いたPRを取り逃がしたりする。
-// 開いているPRの一覧から引けば、読むのは開いているPRだけで、放置された古いPRも漏れない。
+// 対象のPRは、作業項目の存在や更新時刻に頼らずに見つける。
+// 次の和集合のリポジトリごとに、開いているPRを列挙する。
+// - 状態が`pr_open`の作業項目を持つリポジトリ。
+// - 競合の記録(`pr_conflict_checks`)の行を持つリポジトリ。
+// - 設定で明示されたリポジトリ(`factory_repo`と、`repo_allowlist`の各項目)。`owners`は展開しない。
+// 列挙したPRのうち、Factoryのブランチ(`factory/issue-<N>-wi-<id>`)で、PATのアカウントが作った、
+// 下書きでなく、forkでないものだけを、PRとして読む。
+// 作業項目は`cleanup_db`が消すので、判定に使わない。
+// 上の和集合に入らないリポジトリ(作業項目も競合の行も無く、設定にも明示されていない)のPRは、見つけられない。
 //
 // 競合とみなすのは、`mergeable`が偽で`mergeable_state`が`dirty`のときだけである(`decidePrConflict`)。
 // GitHubが計算していない(`mergeable`が`null`)PRは何もせず、次の回に判定し直す。
@@ -13,11 +17,13 @@
 // 通知は競合の1回につき1回である。競合は、行が無い状態か、競合から離れた状態から競合に移った時点で始まる。
 // 競合のままheadが進んでも、通知は重ねない。通知の登録とDiscordの後に、通知した時刻を記録する。
 // 記録が先に成功して通知が失敗すると、通知が出なくなるためである。
-// 通知の解決は、競合が終わった(解けた、PRが閉じた、監視の対象から外れた)ときだけ行う。
+// 通知の解決は、競合が終わった(解けた、PRが閉じた、設定が対象から外した)ときだけ行う。
 // 始まったときには解決しない。並んだ2つの実行の一方が、他方の出したばかりの通知を解決してしまうのを避けるためである。
 //
-// 開いているPRの一覧に無い(マージされた、閉じた)PRや、一覧を読めなかったリポジトリの競合の行は、
-// PRを読み直して、解けたか閉じたかを確かめる。許可リストから外れたリポジトリの行と、PRが見つからない(404)行は閉じる。
+// 開いているPRの一覧で読まなかった競合の行は、PRを読み直して、解けたか閉じたかを確かめる。
+// PRが閉じたと読めた行と、設定が対象から外したリポジトリの行だけを閉じる。
+// PATがリポジトリを読めなくなっただけ(403、404)では、通知を解決せず、行も閉じない。
+// オーナーの照合に失敗した回も、設定は変わっていないので、行を閉じない。
 // 外部由来の文字列(題名、ブランチ名)は、通知にもログにも載せない。
 // 例外は、PRごと、リポジトリごとに捕まえて、他を止めない。rate limitは、以降の読み取りを止める。
 
@@ -33,15 +39,12 @@ import {
   GitHubRateLimitError,
   type OpenPullRequest,
   type PullRequest,
+  parseGitHubRepoUrl,
+  type Viewer,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
 import { pullRequestKey } from "./pr_ci_human_support.ts";
-import {
-  type FactoryWorkItemRef,
-  isFactoryPrBranch,
-  type PullRequestRef,
-  pullRequestPageUrl,
-} from "./pr_ci_support.ts";
+import { type PullRequestRef, pullRequestPageUrl } from "./pr_ci_support.ts";
 import { isSameRepoHead, RUN_BUDGET_MS } from "./pr_ci_watch.ts";
 import {
   decidePrConflict,
@@ -54,6 +57,7 @@ import {
 } from "./pr_conflict_support.ts";
 import {
   assertGitHubName,
+  type FactoryConfig,
   type NoticeRecord,
   parseImplementBranchWorkItemId,
 } from "./types.ts";
@@ -61,21 +65,32 @@ import {
 /** 1回の実行で読む、競合している行の最大の数。 */
 export const CONFLICT_ROW_LIMIT = 200;
 
+type RepoRef = { owner: string; repo: string };
+
 export type PrConflictWatchDeps = {
   readonly now: () => Date;
   readonly log: Logger;
   readonly instanceName: string;
-  /** 許可リストと、照合を通ったオーナーに合うリポジトリか(`buildRepoGates`)。 */
+  /** 許可リストと、照合を通ったオーナーに合うリポジトリか(`buildRepoGates`)。読み取りの対象を決める。 */
   readonly isRepoAllowed: (owner: string, repo: string) => boolean;
+  /**
+   * 同じ規則を、照合前の`owners`に当てた結果(`buildRepoGates`)。設定だけで決まり、照合の成否に依らない。
+   * 行を閉じるかどうかは、こちらで決める。照合の一時的な失敗で、行を閉じないためである。
+   */
+  readonly isRepoConfigured: (owner: string, repo: string) => boolean;
+  /** PATのアカウントを返す。Factoryが作ったPRの作者の確認に使う。 */
+  readonly getViewer: () => Promise<Viewer>;
+  /** 設定で明示されたリポジトリ(`factory_repo`と`repo_allowlist`の項目)。 */
+  readonly explicitRepos: readonly RepoRef[];
   /** 状態が`pr_open`の作業項目を持つリポジトリ。重複は無い。 */
-  readonly listOpenRepos: () => Promise<{ owner: string; repo: string }[]>;
+  readonly listOpenRepos: () => Promise<RepoRef[]>;
+  /** 競合の記録の行を持つリポジトリ。重複は無い。 */
+  readonly listConflictRepos: () => Promise<RepoRef[]>;
   /** リポジトリの開いているPRをすべて返す。多すぎて読み切れないときは例外を投げる。 */
   readonly listOpenPrs: (
     owner: string,
     repo: string,
   ) => Promise<OpenPullRequest[]>;
-  /** 作業項目の照合に使う列を返す。無ければ`null`。 */
-  readonly getWorkItemRef: (id: number) => Promise<FactoryWorkItemRef | null>;
   readonly getPr: (
     owner: string,
     repo: string,
@@ -115,12 +130,17 @@ export type PrConflictWatchResult = {
   readonly notified: number;
   /** 競合が解けて、通知を解決した数。 */
   readonly resolved: number;
-  /** 閉じた行の数。PRが閉じたときと、監視の対象から外れたときを含む。 */
+  /** 閉じた行の数。PRが閉じたときと、設定が対象から外したときを含む。 */
   readonly closed: number;
   /** 判定を見送ったPRの数。 */
   readonly skipped: number;
   /** 失敗したPRとリポジトリの数。 */
   readonly errors: number;
+  /**
+   * 予算かrate limitで読み残した数。読み残したリポジトリ、PR、競合の行の合計である。
+   * 読み残したものは、次の回に回る。
+   */
+  readonly deferred: number;
   /** rate limitで読み取りを止めたか。 */
   readonly rateLimited: boolean;
 };
@@ -134,6 +154,7 @@ export const PR_CONFLICT_WATCH_IDLE_RESULT: PrConflictWatchResult = {
   closed: 0,
   skipped: 0,
   errors: 0,
+  deferred: 0,
   rateLimited: false,
 };
 
@@ -145,13 +166,17 @@ type Counters = {
   closed: number;
   skipped: number;
   errors: number;
+  deferred: number;
   rateLimited: boolean;
 };
+
+type Deferred = { repos: number; prs: number; rows: number };
 
 type Context = {
   readonly deps: PrConflictWatchDeps;
   readonly startedAt: Date;
   readonly counters: Counters;
+  readonly deferred: Deferred;
   /** この回の最初に読んだ、競合している行。PRの鍵で引く。 */
   readonly rows: ReadonlyMap<string, PrConflictCheck>;
 };
@@ -189,6 +214,7 @@ async function recordFailureOf(
 
 /**
  * rate limitなら以降の読み取りを止め、権限の不足(403、404)ならログだけに残し、それ以外は失敗として記録する。
+ * 404は、リポジトリを読む権限を失った場合にも返るので、PRが無くなったとは扱わない。
  */
 async function absorbReadError(
   context: Context,
@@ -216,6 +242,39 @@ async function absorbReadError(
 }
 
 /**
+ * 設定で明示されたリポジトリ。`factory_repo`と、`repo_allowlist`の各項目である。
+ * `owners`はオーナーの全リポジトリを指すので展開しない。読めない項目は飛ばす。
+ */
+export function configuredRepos(
+  config: Pick<FactoryConfig, "factory_repo" | "repo_allowlist">,
+): RepoRef[] {
+  const repos: RepoRef[] = [];
+  for (const url of [config.factory_repo, ...config.repo_allowlist]) {
+    try {
+      repos.push(parseGitHubRepoUrl(url));
+    } catch {
+      // 読めない項目は、許可の判定にも合わないので、列挙の対象にしない。
+    }
+  }
+  return mergeRepos(repos);
+}
+
+/** 重複を除いて重ねる。大文字小文字は区別せず、最初の綴りを残す。 */
+function mergeRepos(...lists: readonly (readonly RepoRef[])[]): RepoRef[] {
+  const seen = new Set<string>();
+  const merged: RepoRef[] = [];
+  for (const list of lists) {
+    for (const entry of list) {
+      const key = `${entry.owner}/${entry.repo}`.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ owner: entry.owner, repo: entry.repo });
+    }
+  }
+  return merged;
+}
+
+/**
  * 競合の監視を1回分実行する。
  * 競合している行を読めなければ、何も読まずに失敗として記録して終わる。
  */
@@ -223,6 +282,7 @@ export async function runPrConflictWatch(
   deps: PrConflictWatchDeps,
 ): Promise<PrConflictWatchResult> {
   const counters = { ...PR_CONFLICT_WATCH_IDLE_RESULT };
+  const deferred: Deferred = { repos: 0, prs: 0, rows: 0 };
   const startedAt = deps.now();
   const rows = new Map<string, PrConflictCheck>();
   try {
@@ -230,43 +290,96 @@ export async function runPrConflictWatch(
       rows.set(pullRequestKey(rowRef(row)), row);
     }
   } catch (err) {
-    await recordFailureOf(
-      { deps, startedAt, counters, rows },
-      "list_conflicted",
-      err,
-    );
+    counters.errors += 1;
+    await deps.recordFailure("list_conflicted", err);
     return counters;
   }
-  const context: Context = { deps, startedAt, counters, rows };
+  const context: Context = { deps, startedAt, counters, deferred, rows };
   const seen = await watchOpenPrs(context);
   await watchRemainingRows(context, seen);
+  counters.deferred = deferred.repos + deferred.prs + deferred.rows;
+  if (counters.deferred > 0) {
+    deps.log.warn("pr conflict left reads to the next run", {
+      repos: deferred.repos,
+      prs: deferred.prs,
+      rows: deferred.rows,
+      rate_limited: counters.rateLimited,
+    });
+  }
   return counters;
 }
 
-/** 開いているPRのうち、Factoryのブランチのものか。下書きとforkは対象にしない。 */
-function isCandidate(pr: OpenPullRequest): boolean {
+/**
+ * 設定が有効なときだけ、`start`を呼んで監視を実行する。無効なら`start`を呼ばず、何も読まず何も書かずに終わる。
+ * `start`は、変数の取得、GitHubの照合、DBの読み取りを含む。無効のときにそれらが起きないことを、ここで保証する。
+ */
+export async function runPrConflictWatchIfEnabled(
+  enabled: boolean,
+  log: Logger,
+  start: () => Promise<PrConflictWatchResult>,
+): Promise<PrConflictWatchResult> {
+  if (!enabled) {
+    log.info("pr conflict watch is disabled");
+    return PR_CONFLICT_WATCH_IDLE_RESULT;
+  }
+  return start();
+}
+
+/**
+ * 開いているPRのうち、Factoryが作ったPRか。
+ * Factoryのブランチの形で、PATのアカウントが作り、下書きでなく、forkでないものである。
+ * 同じ形の名前のブランチを作った他の人のPRを、Factoryのものとして扱わないために、作者を確かめる。
+ * 数値IDが分かるときは、名前の付け替えを避けるためIDも確かめる。
+ */
+function isCandidate(pr: OpenPullRequest, viewer: Viewer): boolean {
   return (
     !pr.draft &&
     isSameRepoHead(pr) &&
-    parseImplementBranchWorkItemId(pr.headRef) !== null
+    parseImplementBranchWorkItemId(pr.headRef) !== null &&
+    pr.authorLogin !== null &&
+    pr.authorLogin.toLowerCase() === viewer.login.toLowerCase() &&
+    (pr.authorId === null || pr.authorId === viewer.id)
   );
 }
 
-/** 開いているFactoryのPRを読んで扱う。読んだPRの鍵の集合を返す。 */
-async function watchOpenPrs(context: Context): Promise<Set<string>> {
+/** 列挙するリポジトリの和集合を作る。読めない元は失敗として記録し、読めた元だけで進める。 */
+async function collectRepos(context: Context): Promise<RepoRef[]> {
   const { deps } = context;
+  const read = async (
+    step: string,
+    load: () => Promise<RepoRef[]>,
+  ): Promise<RepoRef[]> => {
+    try {
+      return await load();
+    } catch (err) {
+      await recordFailureOf(context, step, err);
+      return [];
+    }
+  };
+  const open = await read("list_open_repos", deps.listOpenRepos);
+  const conflict = await read("list_conflict_repos", deps.listConflictRepos);
+  return mergeRepos(open, conflict, deps.explicitRepos);
+}
+
+/** 開いているFactoryのPRを読んで扱う。読めたPRの鍵の集合を返す。 */
+async function watchOpenPrs(context: Context): Promise<Set<string>> {
+  const { deps, deferred } = context;
   const seen = new Set<string>();
-  let repos: { owner: string; repo: string }[];
+  let viewer: Viewer;
   try {
-    repos = await deps.listOpenRepos();
+    viewer = await deps.getViewer();
   } catch (err) {
-    await recordFailureOf(context, "list_open_repos", err);
+    await recordFailureOf(context, "viewer", err);
     return seen;
   }
-  for (const { owner, repo } of repos) {
-    if (stopped(context)) break;
+  const repos = await collectRepos(context);
+  for (const [index, { owner, repo }] of repos.entries()) {
+    if (stopped(context)) {
+      deferred.repos += repos.length - index;
+      break;
+    }
     if (!deps.isRepoAllowed(owner, repo)) continue;
-    // `parsePullRequestUrl`は先頭が`.`のリポジトリ名も通すが、記録は通さない。読まずに飛ばす。
+    // 名前が先頭の`.`などで始まるリポジトリは、記録が通さない。読まずに飛ばす。
     try {
       assertGitHubName(owner);
       assertGitHubName(repo);
@@ -285,9 +398,13 @@ async function watchOpenPrs(context: Context): Promise<Set<string>> {
       );
       continue;
     }
-    for (const candidate of open.filter(isCandidate)) {
-      if (stopped(context)) break;
-      await watchOpenPr(context, owner, repo, candidate, seen);
+    const candidates = open.filter((pr) => isCandidate(pr, viewer));
+    for (const [at, candidate] of candidates.entries()) {
+      if (stopped(context)) {
+        deferred.prs += candidates.length - at;
+        break;
+      }
+      await watchOpenPr(context, owner, repo, candidate.number, seen);
     }
   }
   return seen;
@@ -297,21 +414,17 @@ async function watchOpenPr(
   context: Context,
   owner: string,
   repo: string,
-  candidate: OpenPullRequest,
+  number: number,
   seen: Set<string>,
 ): Promise<void> {
   const { deps, counters } = context;
-  const ref: PullRequestRef = { owner, repo, number: candidate.number };
+  const ref: PullRequestRef = { owner, repo, number };
   const key = pullRequestKey(ref);
   try {
-    const workItemId = parseImplementBranchWorkItemId(candidate.headRef);
-    if (workItemId === null) return;
-    const item = await deps.getWorkItemRef(workItemId);
-    // 同じ形の名前のブランチを作った人のPRを、Factoryのものとして扱わない。
-    if (!isFactoryPrBranch(candidate.headRef, ref, item)) return;
+    const pr = await deps.getPr(owner, repo, number);
+    // 読めたPRだけを、読んだものとして数える。読めなかったPRの行は、あとの整理で読み直す。
     seen.add(key);
     counters.tracked += 1;
-    const pr = await deps.getPr(owner, repo, candidate.number);
     await applyDecision(context, ref, pr);
   } catch (err) {
     await absorbReadError(context, `pr_conflict:${key}`, key, err);
@@ -437,23 +550,34 @@ async function leaveConflict(
 }
 
 /**
- * 開いているPRの一覧で読まなかった競合の行を整理する。PRを読み直し、閉じたか競合が解けたときだけ行を移す。
+ * 開いているPRの一覧で読めなかった競合の行を整理する。PRを読み直し、閉じたか競合が解けたときだけ行を移す。
  * それ以外は、読み直した時刻だけを進める。通知は出さない。
- * 許可リストから外れたリポジトリの行と、PRが見つからない(404)行は、読まずに、または読んで、閉じる。
- * 権限の不足(403)は一時的かもしれないので、閉じずにログだけに残す。
+ * - 設定が対象から外したリポジトリの行は、PRを読まずに閉じる。設定だけで決め、照合の成否には依らない。
+ * - オーナーの照合に失敗した回のリポジトリの行は、読まずに時刻だけを進める。
+ * - PRを読めない(403、404)行は、閉じずにログと時刻だけにする。権限を失っただけで、通知を消さないためである。
  */
 async function watchRemainingRows(
   context: Context,
   seen: ReadonlySet<string>,
 ): Promise<void> {
-  const { deps } = context;
-  for (const [key, row] of context.rows) {
-    if (seen.has(key)) continue;
-    if (stopped(context)) break;
+  const { deps, deferred } = context;
+  const pending = [...context.rows].filter(([key]) => !seen.has(key));
+  for (const [index, [key, row]] of pending.entries()) {
+    if (stopped(context)) {
+      deferred.rows += pending.length - index;
+      break;
+    }
     const ref = rowRef(row);
     try {
-      if (!deps.isRepoAllowed(ref.owner, ref.repo)) {
+      if (!deps.isRepoConfigured(ref.owner, ref.repo)) {
         await leaveConflict(context, ref, "closed");
+        continue;
+      }
+      if (!deps.isRepoAllowed(ref.owner, ref.repo)) {
+        deps.log.warn("pr conflict kept a row whose owner is not verified", {
+          pr: key,
+        });
+        await deps.touch(row.id);
         continue;
       }
       const pr = await deps.getPr(ref.owner, ref.repo, ref.number);
@@ -467,16 +591,8 @@ async function watchRemainingRows(
         await deps.touch(row.id);
       }
     } catch (err) {
-      if (isStatus(err, 404)) {
-        try {
-          await leaveConflict(context, ref, "closed");
-        } catch (closeErr) {
-          await recordFailureOf(context, `pr_conflict:${key}`, closeErr);
-        }
-        continue;
-      }
       await absorbReadError(context, `pr_conflict:${key}`, key, err);
-      if (isStatus(err, 403)) await deps.touch(row.id).catch(() => false);
+      if (isStatus(err, 403, 404)) await deps.touch(row.id).catch(() => false);
     }
   }
 }

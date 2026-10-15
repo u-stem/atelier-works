@@ -44,6 +44,12 @@ describe("20261015100000_pr_conflict_checks.up.sql", () => {
     expect(await Bun.file(UP).text()).not.toContain("fix_attempts");
   });
 
+  test("numbers the conflicts of a pull request from 1", async () => {
+    expect(await Bun.file(UP).text()).toContain(
+      "episode integer NOT NULL DEFAULT 1,",
+    );
+  });
+
   test("keeps notified_at as a nullable timestamp", async () => {
     expect(await Bun.file(UP).text()).toContain("notified_at timestamptz,");
   });

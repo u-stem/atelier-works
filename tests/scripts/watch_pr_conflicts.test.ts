@@ -59,19 +59,30 @@ describe("watch_pr_conflicts script", () => {
     expect(source).not.toContain("//native");
   });
 
-  test("returns before reading any variable when the setting is off", async () => {
-    const source = await read("f/factory/watch_pr_conflicts.ts");
-    const disabled = source.indexOf("if (!config.pr_conflict_watch_enabled)");
-    const firstVariable = source.indexOf("wmill.getVariable");
-    expect(disabled).toBeGreaterThan(-1);
-    expect(disabled).toBeLessThan(firstVariable);
-  });
-
-  test("returns the idle result when the setting is off", async () => {
+  // `main`はWindmillのクライアントに直接依存するので、テストでは呼べない。
+  // 無効のときに何も呼ばないことは、`runPrConflictWatchIfEnabled`の動作を`tests/lib/pr_conflict_watch.test.ts`が確かめる。
+  // ここでは、`main`が設定をその関数に渡し、変数の取得などの読み取りをすべて渡した関数の中に置いていることを確かめる。
+  test("passes the setting to the guard", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
     expect(source).toMatch(
-      /if \(!config\.pr_conflict_watch_enabled\) \{[^}]*return PR_CONFLICT_WATCH_IDLE_RESULT;/,
+      /runPrConflictWatchIfEnabled\(\s*config\.pr_conflict_watch_enabled,/,
     );
+  });
+
+  test("reads a variable somewhere in the file", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source.indexOf("wmill.getVariable")).toBeGreaterThan(-1);
+  });
+
+  test("reads every variable inside the guarded function", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    const guard = source.indexOf("runPrConflictWatchIfEnabled(");
+    expect(source.indexOf("wmill.getVariable")).toBeGreaterThan(guard);
+  });
+
+  test("does not check the setting by itself", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).not.toContain("if (!config.pr_conflict_watch_enabled)");
   });
 
   test("does not depend on the CI watch setting", async () => {

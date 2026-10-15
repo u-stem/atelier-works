@@ -52,6 +52,7 @@ import {
   listPendingMainCiRuns,
   listPendingPrCiChecks,
   listPrCiChecksForPr,
+  listPrConflictRepos,
   listPrOpenIssueWorkItems,
   listPrOpenRepos,
   listRecentWorkerSamples,
@@ -4744,6 +4745,17 @@ check(
   conflictFirst,
 );
 check(
+  "pr_conflict_checks: the first conflict is episode 1",
+  conflictFirst.row.episode === 1,
+  conflictFirst,
+);
+check(
+  "pr_conflict_checks: the repository of a row is listed",
+  (await listPrConflictRepos(sql)).some(
+    (entry) => entry.owner === "qdb" && entry.repo === "conflict",
+  ),
+);
+check(
   "pr_conflict_checks: the notified time is written once for a conflict",
   (await markPrConflictNotified(conflictFirst.row.id, sql)) &&
     !(await markPrConflictNotified(conflictFirst.row.id, sql)),
@@ -4751,7 +4763,9 @@ check(
 const conflictAgain = await recordPrConflict(conflictObservation, sql);
 check(
   "pr_conflict_checks: the same conflict keeps the notified time and does not start again",
-  conflictAgain.row.notified_at !== null && !conflictAgain.started,
+  conflictAgain.row.notified_at !== null &&
+    !conflictAgain.started &&
+    conflictAgain.row.episode === 1,
   conflictAgain,
 );
 const conflictMoved = await recordPrConflict(
@@ -4763,7 +4777,8 @@ check(
   conflictMoved.row.id === conflictFirst.row.id &&
     conflictMoved.row.head_sha === "3".repeat(40) &&
     conflictMoved.row.notified_at !== null &&
-    !conflictMoved.started,
+    !conflictMoved.started &&
+    conflictMoved.row.episode === 1,
   conflictMoved,
 );
 check(
@@ -4795,7 +4810,8 @@ check(
   "pr_conflict_checks: a new conflict reopens the resolved row, starts again, and clears the notified time",
   conflictReopened.row.state === "conflicted" &&
     conflictReopened.row.notified_at === null &&
-    conflictReopened.started,
+    conflictReopened.started &&
+    conflictReopened.row.episode === 2,
   conflictReopened,
 );
 check(
@@ -4805,8 +4821,11 @@ check(
 );
 await settlePrConflictCheck(conflictFirst.row.id, "closed", sql);
 check(
-  "pr_conflict_checks: a closed row can be reopened by a new conflict",
-  (await recordPrConflict(conflictObservation, sql)).started,
+  "pr_conflict_checks: a closed row is reopened by a new conflict as the next episode",
+  await (async () => {
+    const reopened = await recordPrConflict(conflictObservation, sql);
+    return reopened.started && reopened.row.episode === 3;
+  })(),
 );
 await settlePrConflictCheck(conflictFirst.row.id, "closed", sql);
 check(

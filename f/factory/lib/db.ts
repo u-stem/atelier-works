@@ -5294,6 +5294,8 @@ export type PrConflictCheck = {
   /** 競合を最後に見た時点のPRのhead。通知の鍵ではなく、見たときの記録である。 */
   readonly head_sha: string;
   readonly state: PrConflictState;
+  /** PRの何回目の競合か。1から始まり、新しい競合が始まるたびに1つ増える。 */
+  readonly episode: number;
   /** 今の競合で通知した時刻。通知していなければnull。 */
   readonly notified_at: Date | null;
   readonly checked_at: Date;
@@ -5323,6 +5325,7 @@ function toPrConflictCheck(row: SqlRow): PrConflictCheck {
     pr_number: parseNumericLike(row.pr_number, "pr_number"),
     head_sha: parseRequiredString(row.head_sha, "head_sha"),
     state: parseEnum(row.state, PR_CONFLICT_STATES, "state"),
+    episode: parseNumericLike(row.episode, "episode"),
     notified_at: parseNullableDate(row.notified_at, "notified_at"),
     checked_at: parseDate(row.checked_at, "checked_at"),
     created_at: parseDate(row.created_at, "created_at"),
@@ -5333,7 +5336,7 @@ function toPrConflictCheck(row: SqlRow): PrConflictCheck {
 /**
  * 競合しているPRを`factory.pr_conflict_checks`に記録し、その行を返す。PRごとに1行で、無ければ作り、あれば書き換える。
  * 競合は、行が無い状態か、競合から離れた状態(`resolved`か`closed`)から`conflicted`になった時点で始まる。
- * 始まったときだけ、通知した時刻(`notified_at`)を空にして、通知できるようにする。
+ * 始まったときだけ、通知した時刻(`notified_at`)を空にして、通知できるようにし、競合の回(`episode`)を1つ増やす。
  * 競合のままの行は、通知した時刻を残し、`head_sha`だけを今のheadに書き換える。headが進んでも通知は重ねない。
  * 戻り値の`started`は、この呼び出しで競合が始まったかを示す。
  * `owner`と`repo`は小文字にして記録する。
@@ -5358,10 +5361,11 @@ export async function recordPrConflict(
     ON CONFLICT (owner, repo, pr_number) DO UPDATE SET
       notified_at = CASE WHEN c.state = 'conflicted' THEN c.notified_at ELSE NULL END,
       updated_at = CASE WHEN c.state = 'conflicted' THEN c.updated_at ELSE now() END,
+      episode = CASE WHEN c.state = 'conflicted' THEN c.episode ELSE c.episode + 1 END,
       head_sha = EXCLUDED.head_sha,
       state = 'conflicted',
       checked_at = now()
-    RETURNING id, owner, repo, pr_number, head_sha, state, notified_at, checked_at, created_at, updated_at,
+    RETURNING id, owner, repo, pr_number, head_sha, state, episode, notified_at, checked_at, created_at, updated_at,
       (SELECT state FROM prior) AS prior_state
   `.fetch();
   const row = rows[0];
@@ -5434,7 +5438,7 @@ export async function listConflictedPrConflictChecks(
   sql: SqlClient = defaultSqlClient,
 ): Promise<PrConflictCheck[]> {
   const rows = await sql`
-    SELECT id, owner, repo, pr_number, head_sha, state, notified_at, checked_at, created_at, updated_at
+    SELECT id, owner, repo, pr_number, head_sha, state, episode, notified_at, checked_at, created_at, updated_at
     FROM factory.pr_conflict_checks
     WHERE state = 'conflicted'
     ORDER BY checked_at ASC, id ASC
@@ -5468,6 +5472,20 @@ export async function listPrOpenRepos(
   const rows = await sql`
     SELECT DISTINCT owner, repo FROM factory.work_items
     WHERE kind = 'issue' AND status = 'pr_open' AND pr_url IS NOT NULL
+    ORDER BY owner, repo
+  `.fetch();
+  return rows.map((row) => ({
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+  }));
+}
+
+/** 競合の記録(`pr_conflict_checks`)がある、すべての状態の行のリポジトリを、重複なく返す。小文字で記録している。 */
+export async function listPrConflictRepos(
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ owner: string; repo: string }[]> {
+  const rows = await sql`
+    SELECT DISTINCT owner, repo FROM factory.pr_conflict_checks
     ORDER BY owner, repo
   `.fetch();
   return rows.map((row) => ({

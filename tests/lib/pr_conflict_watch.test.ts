@@ -11,9 +11,9 @@ import {
   GitHubRateLimitError,
   type OpenPullRequest,
   type PullRequest,
+  type Viewer,
 } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
-import type { FactoryWorkItemRef } from "../../f/factory/lib/pr_ci_support.ts";
 import { RUN_BUDGET_MS } from "../../f/factory/lib/pr_ci_watch.ts";
 import {
   PR_CONFLICT_KIND,
@@ -21,8 +21,11 @@ import {
 } from "../../f/factory/lib/pr_conflict_support.ts";
 import {
   CONFLICT_ROW_LIMIT,
+  configuredRepos,
+  PR_CONFLICT_WATCH_IDLE_RESULT,
   type PrConflictWatchDeps,
   runPrConflictWatch,
+  runPrConflictWatchIfEnabled,
 } from "../../f/factory/lib/pr_conflict_watch.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 
@@ -33,6 +36,7 @@ const BRANCH = "factory/issue-5-wi-33";
 const PR_PAGE = "https://github.com/acme/widgets/pull/12";
 const PREFIX = "acme/widgets#12: ";
 const REPO = { owner: "acme", repo: "widgets" };
+const VIEWER: Viewer = { login: "factory-bot", id: 5 };
 
 function pr(overrides: Partial<PullRequest> = {}): PullRequest {
   return {
@@ -65,17 +69,8 @@ function open(overrides: Partial<OpenPullRequest> = {}): OpenPullRequest {
     headRef: BRANCH,
     headRepoFullName: "acme/widgets",
     baseRepoFullName: "acme/widgets",
-    ...overrides,
-  };
-}
-
-function item(overrides: Partial<FactoryWorkItemRef> = {}): FactoryWorkItemRef {
-  return {
-    id: 33,
-    kind: "issue",
-    owner: "acme",
-    repo: "widgets",
-    prUrl: PR_PAGE,
+    authorLogin: "factory-bot",
+    authorId: 5,
     ...overrides,
   };
 }
@@ -88,6 +83,7 @@ function check(overrides: Partial<PrConflictCheck> = {}): PrConflictCheck {
     pr_number: 12,
     head_sha: HEAD,
     state: "conflicted",
+    episode: 1,
     notified_at: null,
     checked_at: NOW,
     created_at: NOW,
@@ -117,8 +113,15 @@ type Setup = {
   readonly repos?: { owner: string; repo: string }[];
   /** リポジトリごとの開いているPRの一覧。 */
   readonly openPrs?: Record<string, OpenPullRequest[] | Error>;
-  /** 作業項目。 */
-  readonly items?: Record<number, FactoryWorkItemRef>;
+  /** PATのアカウント。 */
+  readonly viewer?: Viewer;
+  readonly failViewer?: boolean;
+  /** `pr_conflict_checks`に行を持つリポジトリ。 */
+  readonly conflictRepos?: { owner: string; repo: string }[];
+  /** 設定で明示されたリポジトリ。 */
+  readonly explicitRepos?: { owner: string; repo: string }[];
+  /** 設定だけで決める許可(照合の結果に依らない)。 */
+  readonly configured?: (owner: string, repo: string) => boolean;
   /** PRの読み取り。 */
   readonly prs?: Record<string, PullRequest | Error>;
   /** 記録済みの行。競合している行だけが、競合の一覧に出る。 */
@@ -147,7 +150,6 @@ function setup(options: Setup = {}): Harness {
   const rows = options.rows ?? [];
   const prs = options.prs ?? { "acme/widgets#12": pr() };
   const openPrs = options.openPrs ?? { "acme/widgets": [open()] };
-  const items = options.items ?? { 33: item() };
   const log: Logger = {
     info() {},
     warn(message) {
@@ -160,7 +162,14 @@ function setup(options: Setup = {}): Harness {
     log,
     instanceName: "local",
     isRepoAllowed: options.allowed ?? (() => true),
+    isRepoConfigured: options.configured ?? (() => true),
+    getViewer: async () => {
+      if (options.failViewer) throw new Error("viewer down");
+      return options.viewer ?? VIEWER;
+    },
+    explicitRepos: options.explicitRepos ?? [],
     listOpenRepos: async () => options.repos ?? [REPO],
+    listConflictRepos: async () => options.conflictRepos ?? [],
     listOpenPrs: async (owner, repo) => {
       const key = `${owner}/${repo}`;
       listed.push(key);
@@ -169,7 +178,6 @@ function setup(options: Setup = {}): Harness {
       if (found instanceof Error) throw found;
       return found;
     },
-    getWorkItemRef: async (id) => items[id] ?? null,
     getPr: async (owner, repo, number) => {
       const key = `${owner}/${repo}#${String(number)}`;
       reads.push(key);
@@ -529,17 +537,89 @@ describe("runPrConflictWatch: finding the pull requests", () => {
     expect(h.listed).toEqual(["acme/widgets", "acme/other"]);
   });
 
+  test("also lists a repository that only has conflict rows", async () => {
+    const h = setup({
+      repos: [],
+      conflictRepos: [{ owner: "acme", repo: "legacy" }],
+      openPrs: { "acme/legacy": [] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/legacy"]);
+  });
+
+  test("also lists a repository named in the settings", async () => {
+    const h = setup({
+      repos: [],
+      explicitRepos: [{ owner: "acme", repo: "named" }],
+      openPrs: { "acme/named": [] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/named"]);
+  });
+
+  test("lists a repository once even when several sources name it in different spellings", async () => {
+    const h = setup({
+      repos: [REPO],
+      conflictRepos: [{ owner: "Acme", repo: "Widgets" }],
+      explicitRepos: [{ owner: "ACME", repo: "WIDGETS" }],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual(["acme/widgets"]);
+  });
+
   test("does not list a repository that is not allowed", async () => {
     const h = setup({ allowed: () => false });
     await runPrConflictWatch(h.deps);
     expect(h.listed).toEqual([]);
   });
 
-  test("reads only the open Factory pull request", async () => {
+  test("reads an open Factory pull request without any work item", async () => {
+    const h = setup();
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12"]);
+  });
+
+  test("does not read a pull request on a branch that is not the Factory branch", async () => {
     const h = setup({
       openPrs: {
-        "acme/widgets": [open(), open({ number: 13, headRef: "feature/x" })],
+        "acme/widgets": [open({ number: 13, headRef: "feature/x" })],
       },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("does not read a pull request that someone else made on a Factory branch", async () => {
+    const h = setup({
+      openPrs: {
+        "acme/widgets": [open({ authorLogin: "mallory", authorId: 9 })],
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("does not read a pull request whose author id differs from the account", async () => {
+    const h = setup({
+      openPrs: { "acme/widgets": [open({ authorId: 99 })] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("does not read a pull request without an author", async () => {
+    const h = setup({
+      openPrs: {
+        "acme/widgets": [open({ authorLogin: null, authorId: null })],
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("matches the author login without regard to case", async () => {
+    const h = setup({
+      openPrs: { "acme/widgets": [open({ authorLogin: "Factory-Bot" })] },
     });
     await runPrConflictWatch(h.deps);
     expect(h.reads).toEqual(["acme/widgets#12"]);
@@ -569,22 +649,6 @@ describe("runPrConflictWatch: finding the pull requests", () => {
     expect(h.reads).toEqual([]);
   });
 
-  test("does not read a pull request on a branch whose work item is unknown", async () => {
-    const h = setup({ items: {} });
-    await runPrConflictWatch(h.deps);
-    expect(h.reads).toEqual([]);
-  });
-
-  test("does not read a pull request that its work item does not point to", async () => {
-    const h = setup({
-      items: {
-        33: item({ prUrl: "https://github.com/acme/widgets/pull/99" }),
-      },
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.reads).toEqual([]);
-  });
-
   test("does not read a merged pull request that is no longer open", async () => {
     const h = setup({ openPrs: { "acme/widgets": [] } });
     await runPrConflictWatch(h.deps);
@@ -597,10 +661,41 @@ describe("runPrConflictWatch: finding the pull requests", () => {
     expect(h.reads).toEqual(["acme/widgets#12"]);
   });
 
+  test("reads a pull request again among the rows when its first read was forbidden", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": new GitHubHttpError("forbidden", 403) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual(["acme/widgets#12", "acme/widgets#12"]);
+  });
+
   test("counts the pull requests that were read", async () => {
     const h = setup();
     const result = await runPrConflictWatch(h.deps);
     expect(result.tracked).toBe(1);
+  });
+
+  test("records a failure to read the account", async () => {
+    const h = setup({ failViewer: true });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["viewer"]);
+  });
+
+  test("does not list any repository when the account is unreadable", async () => {
+    const h = setup({ failViewer: true });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([]);
+  });
+
+  test("still checks the rows when the account is unreadable", async () => {
+    const h = setup({
+      failViewer: true,
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": pr({ state: "closed" }) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.settled).toEqual([{ id: 7, to: "closed" }]);
   });
 
   test("records a failure to list the repositories and still checks the rows", async () => {
@@ -616,6 +711,34 @@ describe("runPrConflictWatch: finding the pull requests", () => {
     };
     await runPrConflictWatch(deps);
     expect(h.settled).toEqual([{ id: 7, to: "closed" }]);
+  });
+});
+
+describe("runPrConflictWatch: the spelling of the owner and repository", () => {
+  const mixed = {
+    repos: [{ owner: "Acme", repo: "MyApp" }],
+    openPrs: { "Acme/MyApp": [open()] },
+    prs: { "Acme/MyApp#12": pr() },
+  };
+
+  test("writes the notice with the lowercase owner and repository", async () => {
+    const h = setup(mixed);
+    await runPrConflictWatch(h.deps);
+    expect(h.notices[0]?.message).toStartWith("acme/myapp#12: ");
+  });
+
+  test("resolves the notice after the pull request has left the open list", async () => {
+    const first = setup(mixed);
+    await runPrConflictWatch(first.deps);
+    const second = setup({
+      repos: [],
+      rows: [check({ owner: "acme", repo: "myapp", notified_at: NOW })],
+      prs: { "acme/myapp#12": pr({ state: "closed", merged: true }) },
+    });
+    await runPrConflictWatch(second.deps);
+    expect(first.notices[0]?.message).toStartWith(
+      second.resolved[0]?.prefix ?? "?",
+    );
   });
 });
 
@@ -662,6 +785,31 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
     expect(h.settled).toEqual([{ id: 7, to: "resolved" }]);
   });
 
+  test("resolves the conflict of a pull request that went back to a draft", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      openPrs: { "acme/widgets": [open({ draft: true })] },
+      prs: {
+        "acme/widgets#12": pr({
+          draft: true,
+          mergeable: true,
+          mergeableState: "draft",
+        }),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.settled).toEqual([{ id: 7, to: "resolved" }]);
+  });
+
+  test("does not notify a new conflict of a pull request that is a draft", async () => {
+    const h = setup({
+      rows: [],
+      openPrs: { "acme/widgets": [open({ draft: true })] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
   test("only touches a row that is still conflicted", async () => {
     const h = setup({ repos: [], rows: [check({ notified_at: NOW })] });
     await runPrConflictWatch(h.deps);
@@ -674,7 +822,71 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
     expect(h.notices).toEqual([]);
   });
 
-  test("closes the row of a repository that is no longer allowed, without reading it", async () => {
+  test("does not read a repository that the settings no longer allow", async () => {
+    const h = setup({
+      repos: [],
+      configured: () => false,
+      allowed: () => false,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.reads).toEqual([]);
+  });
+
+  test("marks the row of a repository that the settings no longer allow as closed", async () => {
+    const h = setup({
+      repos: [],
+      configured: () => false,
+      allowed: () => false,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.settled).toEqual([{ id: 7, to: "closed" }]);
+  });
+
+  test("resolves the notices of a repository that the settings no longer allow", async () => {
+    const h = setup({
+      repos: [],
+      configured: () => false,
+      allowed: () => false,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolved).toHaveLength(1);
+  });
+
+  test("keeps the row of a repository whose owner could not be verified this time", async () => {
+    const h = setup({
+      repos: [],
+      configured: () => true,
+      allowed: () => false,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.settled).toEqual([]);
+  });
+
+  test("keeps the notices of a repository whose owner could not be verified this time", async () => {
+    const h = setup({
+      repos: [],
+      allowed: () => false,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolved).toEqual([]);
+  });
+
+  test("only touches the row of a repository whose owner could not be verified", async () => {
+    const h = setup({
+      repos: [],
+      allowed: () => false,
+      rows: [check({ notified_at: NOW })],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.touched).toEqual([7]);
+  });
+
+  test("does not read a repository whose owner could not be verified", async () => {
     const h = setup({
       repos: [],
       allowed: () => false,
@@ -684,34 +896,42 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
     expect(h.reads).toEqual([]);
   });
 
-  test("marks the row of a repository that is no longer allowed as closed", async () => {
-    const h = setup({
-      repos: [],
-      allowed: () => false,
-      rows: [check({ notified_at: NOW })],
-    });
+  test("does not notify again once the owner is verified", async () => {
+    const h = setup({ rows: [check({ notified_at: NOW })] });
     await runPrConflictWatch(h.deps);
-    expect(h.settled).toEqual([{ id: 7, to: "closed" }]);
+    expect(h.notices).toEqual([]);
   });
 
-  test("resolves the notices of a repository that is no longer allowed", async () => {
-    const h = setup({
-      repos: [],
-      allowed: () => false,
-      rows: [check({ notified_at: NOW })],
-    });
-    await runPrConflictWatch(h.deps);
-    expect(h.resolved).toHaveLength(1);
-  });
-
-  test("closes the row of a pull request that GitHub reports as not found", async () => {
+  test("keeps the row of a pull request that GitHub reports as not found", async () => {
     const h = setup({
       repos: [],
       rows: [check({ notified_at: NOW })],
       prs: { "acme/widgets#12": new GitHubHttpError("not found", 404) },
     });
     await runPrConflictWatch(h.deps);
-    expect(h.settled).toEqual([{ id: 7, to: "closed" }]);
+    expect(h.settled).toEqual([]);
+  });
+
+  test("keeps the notices of a pull request that GitHub reports as not found", async () => {
+    const h = setup({
+      repos: [],
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": new GitHubHttpError("not found", 404) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolved).toEqual([]);
+  });
+
+  test("warns about a pull request that GitHub reports as not found", async () => {
+    const h = setup({
+      repos: [],
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": new GitHubHttpError("not found", 404) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).toEqual([
+      "pr conflict skipped something that is not readable",
+    ]);
   });
 
   test("keeps the row of a pull request that GitHub forbids reading", async () => {
@@ -724,6 +944,16 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
     expect(h.settled).toEqual([]);
   });
 
+  test("moves a row that cannot be read to the back of the queue", async () => {
+    const h = setup({
+      repos: [],
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": new GitHubHttpError("not found", 404) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.touched).toEqual([7]);
+  });
+
   test("does not record a forbidden read as a job failure", async () => {
     const h = setup({
       repos: [],
@@ -732,6 +962,16 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
     });
     await runPrConflictWatch(h.deps);
     expect(h.failures).toEqual([]);
+  });
+
+  test("keeps the rows of a repository whose open list is not found", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      openPrs: { "acme/widgets": new GitHubHttpError("not found", 404) },
+      prs: { "acme/widgets#12": new GitHubHttpError("not found", 404) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.settled).toEqual([]);
   });
 });
 
@@ -743,13 +983,6 @@ describe("runPrConflictWatch: failures", () => {
           open({ number: 13, headRef: "factory/issue-6-wi-34" }),
           open(),
         ],
-      },
-      items: {
-        33: item(),
-        34: item({
-          id: 34,
-          prUrl: "https://github.com/acme/widgets/pull/13",
-        }),
       },
       prs: {
         "acme/widgets#13": new Error("boom"),
@@ -887,6 +1120,156 @@ describe("runPrConflictWatch: failures", () => {
     });
     await runPrConflictWatch(h.deps);
     expect(h.reads).toEqual([]);
+  });
+});
+
+describe("runPrConflictWatch: reads left for the next run", () => {
+  function exhausted(): () => Date {
+    const times = [NOW, new Date(NOW.getTime() + RUN_BUDGET_MS)];
+    let index = 0;
+    return () => times[Math.min(index++, times.length - 1)] ?? NOW;
+  }
+
+  test("counts the repositories and rows left when the budget runs out", async () => {
+    const h = setup({
+      now: exhausted(),
+      repos: [REPO, { owner: "acme", repo: "other" }],
+      rows: [check({ notified_at: NOW })],
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(3);
+  });
+
+  test("warns once with the left reads when the budget runs out", async () => {
+    const h = setup({
+      now: exhausted(),
+      repos: [REPO, { owner: "acme", repo: "other" }],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).toEqual(["pr conflict left reads to the next run"]);
+  });
+
+  test("counts the pull requests left when the budget runs out between them", async () => {
+    const times = [NOW, NOW, NOW, new Date(NOW.getTime() + RUN_BUDGET_MS)];
+    let index = 0;
+    const h = setup({
+      now: () => times[Math.min(index++, times.length - 1)] ?? NOW,
+      openPrs: {
+        "acme/widgets": [open(), open({ number: 13 }), open({ number: 14 })],
+      },
+      prs: {
+        "acme/widgets#12": pr(),
+        "acme/widgets#13": pr({ number: 13 }),
+        "acme/widgets#14": pr({ number: 14 }),
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(2);
+  });
+
+  test("counts what the rate limit left", async () => {
+    const h = setup({
+      repos: [REPO, { owner: "acme", repo: "other" }],
+      openPrs: {
+        "acme/widgets": new GitHubRateLimitError("GET pulls", 60_000, true),
+        "acme/other": [],
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(1);
+  });
+
+  test("counts nothing and does not warn when everything was read", async () => {
+    const h = setup();
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(0);
+  });
+
+  test("does not warn about left reads when everything was read", async () => {
+    const h = setup();
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).not.toContain("pr conflict left reads to the next run");
+  });
+});
+
+describe("configuredRepos", () => {
+  test("includes the Factory repository", () => {
+    expect(
+      configuredRepos({
+        factory_repo: "https://github.com/acme/factory",
+        repo_allowlist: [],
+      }),
+    ).toEqual([{ owner: "acme", repo: "factory" }]);
+  });
+
+  test("includes each repository of the allowlist", () => {
+    expect(
+      configuredRepos({
+        factory_repo: "https://github.com/acme/factory",
+        repo_allowlist: ["https://github.com/acme/app.git"],
+      }),
+    ).toEqual([
+      { owner: "acme", repo: "factory" },
+      { owner: "acme", repo: "app" },
+    ]);
+  });
+
+  test("lists a repository once when the allowlist repeats it", () => {
+    expect(
+      configuredRepos({
+        factory_repo: "https://github.com/acme/factory",
+        repo_allowlist: ["https://github.com/ACME/Factory"],
+      }),
+    ).toEqual([{ owner: "acme", repo: "factory" }]);
+  });
+
+  test("skips an entry that is not a repository url", () => {
+    expect(
+      configuredRepos({
+        factory_repo: "https://github.com/acme/factory",
+        repo_allowlist: ["not a url"],
+      }),
+    ).toEqual([{ owner: "acme", repo: "factory" }]);
+  });
+});
+
+describe("runPrConflictWatchIfEnabled", () => {
+  const silent: Logger = { info() {}, warn() {}, error() {} };
+
+  test("does not start anything when the setting is off", async () => {
+    let started = false;
+    await runPrConflictWatchIfEnabled(false, silent, async () => {
+      started = true;
+      return PR_CONFLICT_WATCH_IDLE_RESULT;
+    });
+    expect(started).toBe(false);
+  });
+
+  test("returns the idle result when the setting is off", async () => {
+    const result = await runPrConflictWatchIfEnabled(
+      false,
+      silent,
+      async () => ({ ...PR_CONFLICT_WATCH_IDLE_RESULT, tracked: 9 }),
+    );
+    expect(result).toEqual(PR_CONFLICT_WATCH_IDLE_RESULT);
+  });
+
+  test("starts the watch when the setting is on", async () => {
+    let started = false;
+    await runPrConflictWatchIfEnabled(true, silent, async () => {
+      started = true;
+      return PR_CONFLICT_WATCH_IDLE_RESULT;
+    });
+    expect(started).toBe(true);
+  });
+
+  test("returns the result of the watch when the setting is on", async () => {
+    const result = await runPrConflictWatchIfEnabled(
+      true,
+      silent,
+      async () => ({ ...PR_CONFLICT_WATCH_IDLE_RESULT, tracked: 9 }),
+    );
+    expect(result.tracked).toBe(9);
   });
 });
 

@@ -3897,6 +3897,7 @@ describe("listOpenPullRequests", () => {
         repo: { full_name: "acme/widgets" },
       },
       base: { repo: { full_name: "acme/widgets" } },
+      user: { login: "factory-bot", id: 5 },
       ...overrides,
     };
   }
@@ -3927,8 +3928,34 @@ describe("listOpenPullRequests", () => {
         headRef: "factory/issue-12-wi-9",
         headRepoFullName: "acme/widgets",
         baseRepoFullName: "acme/widgets",
+        authorLogin: "factory-bot",
+        authorId: 5,
       },
     ]);
+  });
+
+  test("returns a null author when the pull request has none", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { user: null })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.authorLogin).toBeNull();
+  });
+
+  test("returns a null author id when the id is not a positive integer", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk([openPr(12, { user: { login: "factory-bot", id: "x" } })]),
+    ]);
+    const prs = await listOpenPullRequests(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+    );
+    expect(prs[0]?.authorId).toBeNull();
   });
 
   test("returns a null head repository for a deleted fork", async () => {

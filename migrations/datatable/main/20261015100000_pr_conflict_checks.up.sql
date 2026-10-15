@@ -7,6 +7,7 @@
 -- 通知は競合の1回につき1回である。競合は、行が無い状態か、resolvedかclosedの状態から
 -- conflictedに移った時点で始まる。始まったときだけ、notified_atを空にする。
 -- 競合のままheadが進んでも、head_shaを書き換えるだけで、notified_atは残す。
+-- 競合が始まるたびにepisodeを1つ増やし、PRの何回目の競合かを区別する。
 --
 -- state:
 --   conflicted 競合している。head_shaは、競合を最後に見た時点のheadである。
@@ -29,12 +30,14 @@ CREATE TABLE factory.pr_conflict_checks (
     pr_number integer NOT NULL,
     head_sha text NOT NULL,
     state text NOT NULL DEFAULT 'conflicted',
+    episode integer NOT NULL DEFAULT 1,
     notified_at timestamptz,
     checked_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT pr_conflict_checks_pr_number_check CHECK (pr_number > 0),
     CONSTRAINT pr_conflict_checks_head_sha_check CHECK (head_sha ~ '^[0-9a-f]{40}$'),
+    CONSTRAINT pr_conflict_checks_episode_check CHECK (episode >= 1),
     CONSTRAINT pr_conflict_checks_state_check
         CHECK (state IN ('conflicted', 'resolved', 'closed')),
     UNIQUE (owner, repo, pr_number)
@@ -44,6 +47,8 @@ COMMENT ON TABLE factory.pr_conflict_checks IS
     'FactoryのPRのマージの競合の記録。PRごとに1行で、作業項目には影響しない。';
 COMMENT ON COLUMN factory.pr_conflict_checks.head_sha IS
     '競合を最後に見た時点のPRのheadのコミット。通知の鍵ではない。';
+COMMENT ON COLUMN factory.pr_conflict_checks.episode IS
+    'PRの何回目の競合か。1から始まり、競合が始まるたびに1つ増える。競合のままheadが進んでも増えない。';
 COMMENT ON COLUMN factory.pr_conflict_checks.notified_at IS
     '今の競合で通知した時刻。通知していなければNULL。新しい競合が始まるとNULLに戻り、同じ競合では通知を重ねない。';
 COMMENT ON COLUMN factory.pr_conflict_checks.checked_at IS
