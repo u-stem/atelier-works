@@ -1,0 +1,13 @@
+summary: '[SF-4-3] PRの競合を検知して通知'
+description: >-
+  5分ごとに実行します。Factoryが作ったPRにマージの競合があるかを調べ、競合したPRは要対応の通知とDiscordで知らせます。競合が解けたら通知を自動で解決し、閉じたPRの記録は整理します。設定で有効にしたときだけ動き、無効のときはGitHubもDBも読みません。PRには書き込まず、競合を解く作業は起動しません。
+args: {}
+cron_version: v2
+enabled: true
+is_flow: false
+no_flow_overlap: true
+on_failure: f/factory/on_error_schedule
+schedule: 30 */5 * * * *
+script_path: f/factory/watch_pr_conflicts
+timezone: Asia/Tokyo
+ws_error_handler_muted: false

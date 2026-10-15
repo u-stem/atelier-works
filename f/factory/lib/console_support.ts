@@ -55,6 +55,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   main_ci_check_denied: "action",
   pr_ci_failed: "action",
   pr_ci_check_denied: "action",
+  pr_conflict: "action",
 };
 
 /** 重要度が`info`の種類。「要対応」の一覧には出さず、システム画面に7日だけ出す。 */

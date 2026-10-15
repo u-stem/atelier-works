@@ -221,6 +221,7 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `drawio_viewer_observations` | draw.ioのリリースのタグごとに、最初に見たcommitと時刻。ビューアの固定を上げる処理が、14日の待ちを数えるのに使う |
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
 | `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRの行も持つ。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。人のPRの行は、作業項目のIDが空である。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
+| `pr_conflict_checks` | FactoryのPRのマージの競合の記録。PRごとに1行で、競合を見つけたPRだけが行を持つ。競合を見たときのheadとベースのコミットと、通知した時刻を持つ。作業項目とは独立した記録で、外部キーを持たない。競合から離れた行はDBの掃除が消す([PRのCI監視の内部仕様](internals/pr-ci.md#競合の検知)) |
 | `worker_samples` | defaultのworkerの負荷の2分ごとの記録。枠を使うジョブの数とscriptごとの内訳、待つジョブの数と最長の待ち、予定時刻と開始の遅れ、コンテナのメモリを1行に並べる。読めなかった値は空のまま残す。作業項目とは独立した読み取り専用の記録で、保持期間を過ぎた行はDBの掃除が消す |
 
 `work_items`の列は種別によって使うものが違う。実装ブランチ(`branch`)と作成したPRのURL(`pr_url`)はIssueの作業項目だけが持ち、PR番号(`pr_number`)はPRの作業項目だけが持つ。PR番号をIssueの作業項目に入れないのは、PRの作業項目の束ね方がこの列で決まるためである。実装ブランチの名前は`factory/issue-<N>-wi-<id>`である。
@@ -321,6 +322,7 @@ Consoleの一覧と集計は次のviewを読む。
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 | watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
 | watch_pr_ci | `0 */5 * * * *` | `f/factory/watch_pr_ci` | 5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。設定で有効にしたときは、失敗を直す作業項目も起動し、自動で直す対象の失敗は直せるかが決まってから通知します。設定で有効にしたときは、許可された人が作ったPRの失敗も通知します。PRには書き込まず、ログも読みません。 |
+| watch_pr_conflicts | `30 */5 * * * *` | `f/factory/watch_pr_conflicts` | 5分ごとに実行します。Factoryが作ったPRにマージの競合があるかを調べ、競合したPRは要対応の通知とDiscordで知らせます。競合が解けたら通知を自動で解決し、閉じたPRの記録は整理します。設定で有効にしたときだけ動き、無効のときはGitHubもDBも読みません。PRには書き込まず、競合を解く作業は起動しません。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -401,6 +403,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_fix_launch` | script | [LIB] pr_fixフローの起動 |
 | `f/factory/lib/pr_ci_support` | script | [LIB] PRのCIの判定の純粋ロジック |
 | `f/factory/lib/pr_ci_watch` | script | [LIB] PRのCI監視の流れ |
+| `f/factory/lib/pr_conflict_support` | script | [LIB] PRの競合の判断 |
+| `f/factory/lib/pr_conflict_watch` | script | [LIB] PRの競合の監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
@@ -489,6 +493,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/dependabot_finish` | script | [SF-3-5/3] 依存の更新のマージと終了 |
 | `f/factory/watch_main_ci` | script | [SF-4-1] mainのCIを監視して失敗を通知 |
 | `f/factory/watch_pr_ci` | script | [SF-4-2] PRのCIを監視して失敗を通知 |
+| `f/factory/watch_pr_conflicts` | script | [SF-4-3] PRの競合を検知して通知 |
 | `f/factory/audit_kickoff` | script | [SF-5-1] 週次監査の起動 |
 | `f/factory/audit` | flow | [SF-5-2] 運用記録の監査と改善提案 |
 | `f/factory/steps/audit_prepare` | script | [SF-5-2/1] 証跡の収集と作業領域の準備 |
@@ -693,6 +698,19 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 1回の実行は、発見、回復、判定、起動、人のPRの発見、保留した失敗の通知の順に進む。監視を無効にしたときは、回復と保留した失敗の通知だけが動く。
 GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md#githubのpat))。
 判定の順序、通知、自動解決、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md)に書く。
+
+## 工程4のPRの競合の検知
+
+`watch_pr_conflicts`が5分ごとに、Factoryが作ったPRにマージの競合があるかを確かめる。
+対象は、状態が`pr_open`の作業項目が指すPRのうち、開いていて下書きでなく、forkでないものである。人が作ったPRは対象にしない。
+競合とみなすのは、GitHubのマージ可否が偽で、その状態が`dirty`のときだけである。
+計算前のPRは、次の回に判定し直す。
+競合したPRは、要対応の通知とDiscordで知らせる。同じPR、同じheadのコミット、同じベースのコミットでは、通知を重ねない。
+競合が解けたときと、PRが閉じたときに、通知を自動で解決する。
+記録は`pr_conflict_checks`に残す。PRとリポジトリへは書き込まず、競合を解く作業も起動しない。
+有効にするのは設定`pr_conflict_watch_enabled`で、CIの監視とは別に切り替える。
+既定は`false`で、偽の間はGitHubとDBを読まない。
+判定、通知、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
 
 ## 工程5の監査
 

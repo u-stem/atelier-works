@@ -18,12 +18,14 @@ import {
   countPrFixFailures,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
+  deletePrConflictChecksBefore,
   deleteResolvedNoticesBefore,
   deleteWorkerSamplesBefore,
   dependabotGateWaitingCancels,
   findOrphanFixingPrCiChecks,
   getLatestPrCiCheck,
   getNoticeById,
+  getPrConflictCheck,
   getPreviousMainCiRun,
   getWorkItem,
   hasDependabotItemForHead,
@@ -43,6 +45,7 @@ import {
   listActivePrFixWorkItems,
   listAutoRetryCandidates,
   listClaimablePrCiChecks,
+  listConflictedPrConflictChecks,
   listFailedPrCiChecks,
   listFixingPrCiChecks,
   listMainCiRunsBySha,
@@ -55,11 +58,13 @@ import {
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
+  markPrConflictNotified,
   type NewWorkerSample,
   recordDeployment,
   recordFailure,
   recordMainCiRun,
   recordPrCiCheck,
+  recordPrConflict,
   recordWorkspaceDiskUsageNotice,
   releaseFixingPrCiCheck,
   resolveNoticeIfUnresolved,
@@ -71,8 +76,10 @@ import {
   revertIssueProposalToPending,
   setIssueProposalCreatedIssue,
   setPrCiFixHold,
+  settlePrConflictCheck,
   setWorkItemPrUrl,
   touchPrCiCheck,
+  touchPrConflictCheck,
   transitionMainCiRun,
   transitionPrCiCheck,
   updateIntakeIfRegenerating,
@@ -4704,6 +4711,100 @@ check(
 execPsql(
   target,
   "DELETE FROM factory.notices WHERE kind = 'pr_ci_check_denied'",
+);
+
+// PRの競合の記録: PRごとに1行で、headとbaseが同じ間は通知した時刻を残す。
+const conflictHead = "1".repeat(40);
+const conflictBase = "2".repeat(40);
+const conflictObservation = {
+  owner: "QDB",
+  repo: "Conflict",
+  pr_number: 91,
+  head_sha: conflictHead,
+  base_sha: conflictBase,
+};
+const conflictFirst = await recordPrConflict(conflictObservation, sql);
+check(
+  "pr_conflict_checks: a new conflict is recorded as conflicted without a notified time",
+  conflictFirst.state === "conflicted" &&
+    conflictFirst.notified_at === null &&
+    conflictFirst.owner === "qdb",
+  conflictFirst,
+);
+check(
+  "pr_conflict_checks: the notified time is written once for the recorded head and base",
+  (await markPrConflictNotified(
+    conflictFirst.id,
+    conflictHead,
+    conflictBase,
+    sql,
+  )) &&
+    !(await markPrConflictNotified(
+      conflictFirst.id,
+      conflictHead,
+      conflictBase,
+      sql,
+    )),
+);
+check(
+  "pr_conflict_checks: the same head and base keep the notified time",
+  (await recordPrConflict(conflictObservation, sql)).notified_at !== null,
+);
+check(
+  "pr_conflict_checks: a moved base clears the notified time on the same row",
+  await (async () => {
+    const moved = await recordPrConflict(
+      { ...conflictObservation, base_sha: "3".repeat(40) },
+      sql,
+    );
+    return moved.id === conflictFirst.id && moved.notified_at === null;
+  })(),
+);
+check(
+  "pr_conflict_checks: the notified time of a stale pair is not written",
+  !(await markPrConflictNotified(
+    conflictFirst.id,
+    conflictHead,
+    conflictBase,
+    sql,
+  )),
+);
+check(
+  "pr_conflict_checks: a conflicted row is listed",
+  (await listConflictedPrConflictChecks(100, sql)).some(
+    (row) => row.id === conflictFirst.id,
+  ),
+);
+check(
+  "pr_conflict_checks: touching a row keeps it conflicted",
+  (await touchPrConflictCheck(conflictFirst.id, sql)) &&
+    (await getPrConflictCheck("qdb", "conflict", 91, sql))?.state ===
+      "conflicted",
+);
+check(
+  "pr_conflict_checks: a row moves to resolved once",
+  (await settlePrConflictCheck(conflictFirst.id, "resolved", sql)) &&
+    !(await settlePrConflictCheck(conflictFirst.id, "resolved", sql)),
+);
+check(
+  "pr_conflict_checks: a resolved row is not listed as conflicted",
+  !(await listConflictedPrConflictChecks(100, sql)).some(
+    (row) => row.id === conflictFirst.id,
+  ),
+);
+check(
+  "pr_conflict_checks: a new conflict reopens the resolved row",
+  (await recordPrConflict(conflictObservation, sql)).state === "conflicted",
+);
+check(
+  "pr_conflict_checks: a conflicted row is not deleted however old it is",
+  (await deletePrConflictChecksBefore(new Date(Date.now() + 60_000), sql)) ===
+    0,
+);
+await settlePrConflictCheck(conflictFirst.id, "closed", sql);
+check(
+  "pr_conflict_checks: a settled row is deleted after the cutoff",
+  (await deletePrConflictChecksBefore(new Date(Date.now() + 60_000), sql)) >= 1,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

@@ -5,6 +5,7 @@
 // 解決済みのnotice・判定済みの`main_ci_runs`・`pr_ci_checks`・`worker_samples`で、作業項目とは別々に掃除する。
 // 判定を待つ`main_ci_runs`の行、判定を待つか修正中の`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行は、古くても削除しない。
 // 各PRの最新の`pr_ci_checks`の行は、保持期間の4倍まで残す。
+// 競合から離れた`pr_conflict_checks`の行も、保持期間で削除する(競合したままの行は残す)。件数はログだけに残す。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
@@ -36,6 +37,7 @@ import {
   deleteJobFailuresBefore,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
+  deletePrConflictChecksBefore,
   deleteResolvedNoticesBefore,
   deleteTerminalWorkItemsBefore,
   deleteWorkerSamplesBefore,
@@ -180,6 +182,29 @@ async function cleanupPrCiChecks(
   }
 }
 
+/**
+ * 競合から離れたPRの競合の記録を、最後の更新から保持期間を過ぎたものだけ削除する。
+ * 競合したままの行は消さない。件数は`cleanup_runs`に記録せず、ログに残す。
+ */
+async function cleanupPrConflictChecks(
+  cutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await deletePrConflictChecksBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete pr_conflict_checks", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `PRの競合の記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
 /** workerの負荷の記録を、測った時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupWorkerSamples(
   cutoff: Date,
@@ -279,6 +304,10 @@ export async function main(): Promise<CleanupCounts> {
     cutoffs.latestLogsBefore,
     log,
   );
+  const prConflictChecksDeleted = await cleanupPrConflictChecks(
+    cutoffs.logsBefore,
+    log,
+  );
   const workerSamplesDeleted = await cleanupWorkerSamples(
     cutoffs.logsBefore,
     log,
@@ -298,6 +327,9 @@ export async function main(): Promise<CleanupCounts> {
   };
 
   await recordRun(counts, log);
-  log.info(summarizeCleanup(counts), counts);
+  log.info(summarizeCleanup(counts), {
+    ...counts,
+    pr_conflict_checks_deleted: prConflictChecksDeleted,
+  });
   return counts;
 }

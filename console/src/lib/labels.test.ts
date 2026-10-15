@@ -111,6 +111,10 @@ describe("noticeKindLabel", () => {
     expect(noticeKindLabel("pr_ci_failed")).toBe("PRのCIの失敗");
   });
 
+  test("names the merge conflict of a pull request", () => {
+    expect(noticeKindLabel("pr_conflict")).toBe("PRのマージの競合");
+  });
+
   test("names the denied pull request CI check", () => {
     expect(noticeKindLabel("pr_ci_check_denied")).toBe(
       "PRのCIを読む権限の不足",

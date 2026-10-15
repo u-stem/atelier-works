@@ -1372,6 +1372,52 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 
 直す作業項目が`cancelled`になるのは、PRが閉じたときだけである。閉じたPRの行は、`superseded`になる。
 
+## PRの競合を検知する
+
+`watch_pr_conflicts`が5分ごとに、Factoryが作ったPRにマージの競合があるかを確かめる。
+競合したPRは、通知`pr_conflict`を残し、Discordにも`needs_human`として届ける。
+`watch_pr_conflicts`自身は、PRとリポジトリへ書き込まず、競合を解く作業も起動しない。
+競合は人が解消する。
+既定は無効で、設定`pr_conflict_watch_enabled`を`true`にしたときだけ動く。
+`false`の間は、GitHubとDBを読まない。CIの監視(`pr_ci_watch_enabled`)とは別に切り替える。
+
+次の条件をすべて満たすPRだけを見る。
+
+- 実装フローが作ったPRで、作業項目が`tracked_pr_days`(既定30日)以内に更新されている。
+- 開いていて、下書きでなく、headのリポジトリがベースと同じである。
+- headのブランチが`factory/issue-<N>-wi-<id>`の形で、その作業項目が同じPRを指している。
+- リポジトリが、`factory_repo`か、`repo_allowlist`と照合を通った`owners`に合う。
+
+人が作ったPRは、対象にしない。
+
+競合とみなすのは、GitHubのマージ可否が偽で、その状態が`dirty`のときだけである。
+GitHubはマージ可否を、PRを読まれたときに計算する。計算前は値が空で、何もせずに次の回に判定し直す。
+同じPR、同じheadのコミット、同じベースのコミットでは、通知を重ねない。
+通知は、次のときに自動で解決される。
+
+- 競合が解けた。
+- PRを閉じたか、マージした。
+- headかベースのコミットが進んだ。競合が続くときは、新しい通知が出る。
+
+設定は、WindmillのResourcesの`factory_config`で直す。
+
+| 項目 | 既定値 | 内容 |
+| --- | --- | --- |
+| `pr_conflict_watch_enabled` | `false` | 競合を検知して通知するか |
+
+有効にする手順は次のとおりである。
+有効にした最初の巡回で、そのとき競合している開いたFactoryのPRが、すべて通知されるためである。
+
+1. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
+2. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
+3. 次の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。`tracked`は読んだPRの数、`conflicted`は競合しているPRの数である。
+4. 競合しているPRがあれば、通知`pr_conflict`が1件ずつ残ることを確かめる。解消した後の巡回で、通知が自動で解決されることを確かめる。
+
+止めるときは、`pr_conflict_watch_enabled`を`false`にする。
+止めた後は、残っている通知が自動では解決されない。Consoleから手で解決する。
+
+読めなかったPRと、GitHubのrate limitの扱いは、[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
+
 ## 監査を使う
 
 Factory自身の運用記録の監査は、毎週月曜09:30に自動で走る(`audit_kickoff`)。Consoleの**レポート**の**今すぐ監査**で前倒しできる。
@@ -1718,6 +1764,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `main_ci_check_denied` | 対象リポジトリの既定のブランチのCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのmainのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される。権限を戻すと、最新の失敗は通知され、より新しい行がある古い失敗は通知されない([PATの権限](security.md#githubのpat)) |
 | `pr_ci_failed` | Factoryが作ったPRのheadのコミットで、CI(GitHub Actionsのpull_requestかpushの実行)が失敗した。本文は`<owner>/<repo>#<PR番号>:`で始まり、コミットの先頭7文字、理由、次の操作、リンクが載る。リンクは、失敗した実行か、PRのページである。自動で直す対象の失敗は、直せるかが決まってから残り、本文に自動修正の保留の理由が載る。Discordにも届く。ただし、直す作業が止まったときは、止めたフローがDiscordに通知する | 本文の「次の操作」に従う。保留の理由が無ければ、リンク先の実行のログで原因を確かめ、PRに修正を入れる。metadataジョブの失敗なら、`mise run metadata`を実行して差分をコミットする。取り消しやフレークなら、実行をやり直す。同じheadの実行をやり直して通ったとき、PRに新しいheadをpushして通ったとき、PRを閉じたときは、自動で解決される |
 | `pr_ci_check_denied` | 対象リポジトリのPRかCIの実行を、GitHubから読めなかった(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできない。読めない間は、そのリポジトリのPRのCIの失敗に気づけない。リポジトリごとに1件残る | GitHubのfine-grained PATで、Repository accessに対象リポジトリが入っているか、Actions: Read-onlyが付いているかを確かめる。権限を足してもPATの値は変わらないので、Windmillの変数は更新しない。組織のリポジトリでは、組織の承認が再び要ることがある。読めるようになると、次の回に自動で解決される([PATの権限](security.md#githubのpat)) |
+| `pr_conflict` | Factoryが作ったPRが、ベースブランチとマージできない競合の状態である。本文は`<owner>/<repo>#<PR番号>:`で始まり、PRのコミットとベースのコミットの先頭7文字、次の操作、PRのリンクが載る。Discordにも届く | 本文の「次の操作」に従う。PRのブランチにベースブランチをmergeして競合を解消し、pushする。競合が解けたとき、PRを閉じたときは、自動で解決される。ベースかPRのコミットが進んで競合が続くときは、古い通知が解決され、新しい通知が出る |
 
 ### Console用のworkerの検知を確かめる
 
