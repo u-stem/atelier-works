@@ -5394,30 +5394,28 @@ export type PrConflictMarkResult =
  * 今の競合で通知した時刻を記録し、結果を区別して返す。
  * 競合のままで、まだ記録していない行にだけ書く。
  * 並んだ2つの実行の一方だけが書けるので、書けなかった側は通知を出し直さない。
- * 行の状態は、書く文と同じ文の中で読む。書けなかった理由を区別するためである。
+ * 書けなかったときだけ、別の文で行の状態を読み、理由を区別する。
+ * 書く文と同じ文の中で読むと、読み取りが文の開始時点の状態を見るため、
+ * 待っている間に別の実行が`resolved`にした行を、競合のままと取り違える。
+ * 別の文なら、新しい状態を読める。
  */
 export async function markPrConflictNotified(
   id: number,
   sql: SqlClient = defaultSqlClient,
 ): Promise<PrConflictMarkResult> {
   assertPositiveId(id, "pr conflict check id");
-  const rows = await sql`
-    WITH updated AS (
-      UPDATE factory.pr_conflict_checks
-      SET notified_at = now(), updated_at = now()
-      WHERE id = ${id}::bigint AND state = 'conflicted' AND notified_at IS NULL
-      RETURNING id
-    )
-    SELECT
-      (SELECT count(*) FROM updated)::integer AS updated,
-      (SELECT state FROM factory.pr_conflict_checks WHERE id = ${id}::bigint) AS state
+  const written = await sql`
+    UPDATE factory.pr_conflict_checks
+    SET notified_at = now(), updated_at = now()
+    WHERE id = ${id}::bigint AND state = 'conflicted' AND notified_at IS NULL
+    RETURNING id
   `.fetch();
-  const row = rows[0];
-  if (row === undefined) {
-    throw new Error("markPrConflictNotified: the database returned no row");
-  }
-  if (parseNumericLike(row.updated, "updated") > 0) return "marked";
-  return parseNullableString(row.state, "state") === "conflicted"
+  if (written.length > 0) return "marked";
+  const rows = await sql`
+    SELECT state FROM factory.pr_conflict_checks
+    WHERE id = ${id}::bigint
+  `.fetch();
+  return parseNullableString(rows[0]?.state, "state") === "conflicted"
     ? "already_notified"
     : "not_conflicted";
 }

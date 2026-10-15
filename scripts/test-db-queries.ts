@@ -4846,6 +4846,53 @@ check(
   (await deletePrConflictChecksBefore(new Date(Date.now() + 60_000), sql)) >= 1,
 );
 
+// 通知した時刻を書く文が0行のとき、行の状態は別の文で読む。
+// 別の実行が行をロックして`resolved`に変えている間に`markPrConflictNotified`を呼ぶ。
+// 書く文は、ロックが外れて`resolved`がcommitされるまで待ち、0行で終わる。
+// 状態を新しい文で読むので、`not_conflicted`になる。書く文と同じ文で読むと、文の開始時点の
+// `conflicted`を読み、`already_notified`に取り違える。
+const raced = await recordPrConflict(
+  { ...conflictObservation, pr_number: 92 },
+  sql,
+);
+const holder = Bun.spawn({
+  cmd: [
+    "docker",
+    "compose",
+    "-f",
+    target.composeFile,
+    "exec",
+    "-T",
+    "db",
+    "psql",
+    "-X",
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-U",
+    "postgres",
+    "-d",
+    target.database,
+    "-q",
+    "-c",
+    `UPDATE factory.pr_conflict_checks SET state = 'resolved' WHERE id = ${String(raced.row.id)}; SELECT pg_sleep(3)`,
+  ],
+  stdout: "ignore",
+  stderr: "pipe",
+});
+// 別の実行がロックを取るまで待つ。
+await Bun.sleep(1500);
+const racedResult = await markPrConflictNotified(raced.row.id, sql);
+await holder.exited;
+check(
+  "pr_conflict_checks: a mark that waited for a concurrent resolve reports not_conflicted",
+  racedResult === "not_conflicted",
+  racedResult,
+);
+execPsql(
+  target,
+  `DELETE FROM factory.pr_conflict_checks WHERE id = ${String(raced.row.id)}`,
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);

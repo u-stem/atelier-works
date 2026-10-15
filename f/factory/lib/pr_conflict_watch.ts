@@ -427,8 +427,17 @@ async function collectRepos(
       await recordFailureOf(context, `search_open_repos:${owner.name}`, err);
     }
   }
+  const repos = mergeRepos(open, conflict, deps.explicitRepos, searched);
+  // リポジトリ名は出さず、元ごとの件数だけを出す。検索が期待どおり動いたかを、件数で確かめられる。
+  deps.log.info("pr conflict repositories collected", {
+    work_items: open.length,
+    conflict_rows: conflict.length,
+    explicit: deps.explicitRepos.length,
+    searched: searched.length,
+    total: repos.length,
+  });
   return {
-    repos: mergeRepos(open, conflict, deps.explicitRepos, searched),
+    repos,
     searchOnly: onlyFound(searched, [open, conflict, deps.explicitRepos]),
   };
 }
@@ -639,6 +648,8 @@ async function notifyConflict(
 /**
  * 競合が終わったPRの通知を解決し、競合の行があれば移す。
  * 通知の解決を先にする。解決に失敗した回は、行を競合のまま残し、次の回にやり直す。
+ * 行を移した後に、もう一度解決する。行を移す前の解決と移した後の間に、別の実行が通知を登録することがあり、
+ * 通知を登録した実行が行の状態を確かめるのは、その後だからである。
  * 行が無いPRは、通知も行も触らない。
  */
 async function leaveConflict(
@@ -655,6 +666,11 @@ async function leaveConflict(
     PR_CONFLICT_RESOLVED_BY,
   );
   const moved = await deps.settle(target.id, to);
+  await deps.resolveNotices(
+    PR_CONFLICT_KIND,
+    prConflictNoticePrefix(ref.owner, ref.repo, ref.number),
+    PR_CONFLICT_RESOLVED_BY,
+  );
   if (!moved) return;
   if (to === "resolved") counters.resolved += 1;
   else counters.closed += 1;

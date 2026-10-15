@@ -1427,10 +1427,23 @@ PATがリポジトリを読めなくなったときは、通知を解決せず�
 有効にする手順は次のとおりである。
 有効にした最初の巡回で、そのとき競合している開いたFactoryのPRが、すべて通知されるためである。
 
-1. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
-2. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
-3. 次の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。`tracked`は読んだPRの数、`conflicted`は競合しているPRの数である。
-4. 競合しているPRがあれば、通知`pr_conflict`が1件ずつ残ることを確かめる。解消した後の巡回で、通知が自動で解決されることを確かめる。
+1. 開いているFactoryのPRの数を数える。PATのアカウントで、次のように実行する。数は、あとで`tracked`と突き合わせる。
+
+   ```bash
+   gh pr list --author @me --state open --search "head:factory/issue-" --json number --jq length
+   ```
+
+2. 競合している開いたFactoryのPRが多いときは、先に解消するか閉じる。
+3. `factory_config`の`pr_conflict_watch_enabled`を`true`にする。
+4. 最初の巡回(最大5分後)の後、`watch_pr_conflicts`のログに`pr conflict watch finished`が出ることを確かめる。結果の項目は、次のとおりである。
+   - `tracked`は読んだPRの数、`conflicted`は競合しているPRの数、`skipped`は見送ったPRの数である。
+   - 最初の回は、GitHubがマージ可否をまだ計算しておらず(`null`)、`skipped`が多く出やすい。
+5. 2回目の巡回の後、`skipped`が減り、`conflicted`が揃ったことを確かめる。`tracked`は、1で数えた数と近いはずである。
+6. 競合しているPRがあれば、通知`pr_conflict`が1件ずつ残ることを確かめる。解消した後の巡回で、通知が自動で解決されることを確かめる。
+
+`tracked`が0で、`errors`も0のときは、PRの一覧の`user.login`や`user.id`が期待どおりに載っていない可能性がある。作者がPATのアカウントと合わないと、PRを見つけられないためである。
+リポジトリを見つける元の動作は、ログ`pr conflict repositories collected`の件数で確かめる。
+件数は、作業項目、競合の行、設定の明示、検索の順に出る。リポジトリ名は出さない。検索の件数が0のままなら、検索の索引か権限を疑う。
 
 止めるときは、`pr_conflict_watch_enabled`を`false`にする。
 止めた後に残った通知は、そのままにしておく。再開した後に、競合が続く間は通知が残り、競合が解けると自動で解決される。

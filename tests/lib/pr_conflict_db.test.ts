@@ -186,49 +186,55 @@ describe("recordPrConflict", () => {
 
 describe("markPrConflictNotified", () => {
   test("writes only for a conflicted row that was not notified", async () => {
-    const { sql, calls } = createFakeSqlClient([
-      [{ updated: 1, state: "conflicted" }],
-    ]);
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
     await markPrConflictNotified(7, sql);
     expect(calls[0]?.text).toMatch(
       /WHERE id =\s+\?\s*::bigint AND state = 'conflicted' AND notified_at IS NULL/,
     );
   });
 
-  test("reads the state of the row in the same statement", async () => {
-    const { sql, calls } = createFakeSqlClient([
-      [{ updated: 1, state: "conflicted" }],
-    ]);
-    await markPrConflictNotified(7, sql);
-    expect(calls[0]?.text).toContain("WITH updated AS");
-  });
-
   test("reports that the time was newly written", async () => {
-    const { sql } = createFakeSqlClient([
-      [{ updated: "1", state: "conflicted" }],
-    ]);
+    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
     expect(await markPrConflictNotified(7, sql)).toBe("marked");
   });
 
+  test("does not read the state again when the time was newly written", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await markPrConflictNotified(7, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("reads the state in a separate statement when nothing was written", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ state: "conflicted" }]]);
+    await markPrConflictNotified(7, sql);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("reads the state of the same row", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [{ state: "conflicted" }]]);
+    await markPrConflictNotified(7, sql);
+    expect(calls[1]?.text).toMatch(
+      /SELECT state FROM factory\.pr_conflict_checks\s+WHERE id =/,
+    );
+  });
+
   test("reports that another run had already recorded the notification", async () => {
-    const { sql } = createFakeSqlClient([
-      [{ updated: 0, state: "conflicted" }],
-    ]);
+    const { sql } = createFakeSqlClient([[], [{ state: "conflicted" }]]);
     expect(await markPrConflictNotified(7, sql)).toBe("already_notified");
   });
 
   test("reports that the row is no longer conflicted when it was resolved", async () => {
-    const { sql } = createFakeSqlClient([[{ updated: 0, state: "resolved" }]]);
+    const { sql } = createFakeSqlClient([[], [{ state: "resolved" }]]);
     expect(await markPrConflictNotified(7, sql)).toBe("not_conflicted");
   });
 
   test("reports that the row is no longer conflicted when it was closed", async () => {
-    const { sql } = createFakeSqlClient([[{ updated: 0, state: "closed" }]]);
+    const { sql } = createFakeSqlClient([[], [{ state: "closed" }]]);
     expect(await markPrConflictNotified(7, sql)).toBe("not_conflicted");
   });
 
   test("reports that the row is no longer conflicted when it is gone", async () => {
-    const { sql } = createFakeSqlClient([[{ updated: 0, state: null }]]);
+    const { sql } = createFakeSqlClient([[], []]);
     expect(await markPrConflictNotified(7, sql)).toBe("not_conflicted");
   });
 

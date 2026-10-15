@@ -108,6 +108,7 @@ type Harness = {
   readonly events: NotifyEvent[];
   readonly failures: string[];
   readonly warnings: string[];
+  readonly infos: { message: string; fields: unknown }[];
   readonly order: string[];
 };
 
@@ -163,12 +164,15 @@ function setup(options: Setup = {}): Harness {
   const events: NotifyEvent[] = [];
   const failures: string[] = [];
   const warnings: string[] = [];
+  const infos: { message: string; fields: unknown }[] = [];
   const order: string[] = [];
   const rows = options.rows ?? [];
   const prs = options.prs ?? { "acme/widgets#12": pr() };
   const openPrs = options.openPrs ?? { "acme/widgets": [open()] };
   const log: Logger = {
-    info() {},
+    info(message, fields) {
+      infos.push({ message, fields });
+    },
     warn(message) {
       warnings.push(message);
     },
@@ -289,6 +293,7 @@ function setup(options: Setup = {}): Harness {
     events,
     failures,
     warnings,
+    infos,
     order,
   };
 }
@@ -531,9 +536,11 @@ describe("runPrConflictWatch: a conflict that is resolved", () => {
       prs: { "acme/widgets#12": clean },
     });
     await runPrConflictWatch(h.deps);
-    expect(h.resolved).toEqual([
-      { kind: PR_CONFLICT_KIND, prefix: PREFIX, by: PR_CONFLICT_RESOLVED_BY },
-    ]);
+    expect(h.resolved[0]).toEqual({
+      kind: PR_CONFLICT_KIND,
+      prefix: PREFIX,
+      by: PR_CONFLICT_RESOLVED_BY,
+    });
   });
 
   test("moves the row to resolved", async () => {
@@ -545,13 +552,59 @@ describe("runPrConflictWatch: a conflict that is resolved", () => {
     expect(h.settled).toEqual([{ id: 7, to: "resolved" }]);
   });
 
-  test("resolves the notices before moving the row", async () => {
+  test("resolves the notices before and after moving the row", async () => {
     const h = setup({
       rows: [check({ notified_at: NOW })],
       prs: { "acme/widgets#12": clean },
     });
     await runPrConflictWatch(h.deps);
-    expect(h.order).toEqual(["resolve", "settle"]);
+    expect(h.order).toEqual(["resolve", "settle", "resolve"]);
+  });
+
+  test("resolves the notices of the same pull request both times", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": clean },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolved.map((entry) => entry.prefix)).toEqual([PREFIX, PREFIX]);
+  });
+
+  test("does not resolve again when the first resolution fails", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": clean },
+    });
+    const deps: PrConflictWatchDeps = {
+      ...h.deps,
+      resolveNotices: async () => {
+        throw new Error("db down");
+      },
+    };
+    await runPrConflictWatch(deps);
+    expect(h.order).toEqual([]);
+  });
+
+  test("resolves a notice that was registered while the row was being moved", async () => {
+    const h = setup({
+      rows: [check({ notified_at: NOW })],
+      prs: { "acme/widgets#12": clean },
+    });
+    const live: string[] = ["notice-a"];
+    const deps: PrConflictWatchDeps = {
+      ...h.deps,
+      // 行を移している間に、別の実行が通知を登録する。
+      settle: async (id, to) => {
+        live.push("notice-b");
+        return h.deps.settle(id, to);
+      },
+      resolveNotices: async (kind, prefix, by) => {
+        live.length = 0;
+        return h.deps.resolveNotices(kind, prefix, by);
+      },
+    };
+    await runPrConflictWatch(deps);
+    expect(live).toEqual([]);
   });
 
   test("counts the resolved conflict", async () => {
@@ -803,6 +856,66 @@ describe("runPrConflictWatch: failing sources of repositories", () => {
     };
     await runPrConflictWatch(deps);
     expect(h.listed).toEqual(["acme/legacy"]);
+  });
+});
+
+describe("runPrConflictWatch: the count of repositories by source", () => {
+  function collected(
+    h: Harness,
+  ): { message: string; fields: unknown } | undefined {
+    return h.infos.find(
+      (entry) => entry.message === "pr conflict repositories collected",
+    );
+  }
+
+  const sources: Setup = {
+    repos: [{ owner: "acme", repo: "a-work" }],
+    conflictRepos: [
+      { owner: "acme", repo: "b-row" },
+      { owner: "acme", repo: "b-row2" },
+    ],
+    explicitRepos: [{ owner: "acme", repo: "c-explicit" }],
+    searchOwners: [{ name: "acme", kind: "org" }],
+    searchRepos: { acme: [{ owner: "acme", repo: "d-search" }] },
+  };
+
+  test("logs how many repositories each source gave", async () => {
+    const h = setup(sources);
+    await runPrConflictWatch(h.deps);
+    expect(collected(h)?.fields).toEqual({
+      work_items: 1,
+      conflict_rows: 2,
+      explicit: 1,
+      searched: 1,
+      total: 5,
+    });
+  });
+
+  test("counts a repository once in the total when two sources name it", async () => {
+    const h = setup({
+      repos: [REPO],
+      conflictRepos: [REPO],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(collected(h)?.fields).toMatchObject({ total: 1 });
+  });
+
+  test("does not put a repository name in the log", async () => {
+    const h = setup(sources);
+    await runPrConflictWatch(h.deps);
+    expect(JSON.stringify(collected(h)?.fields)).not.toContain("acme");
+  });
+
+  test("logs a source that failed as zero", async () => {
+    const h = setup(sources);
+    const deps: PrConflictWatchDeps = {
+      ...h.deps,
+      listOpenRepos: async () => {
+        throw new Error("db down");
+      },
+    };
+    await runPrConflictWatch(deps);
+    expect(collected(h)?.fields).toMatchObject({ work_items: 0, total: 4 });
   });
 });
 
@@ -1182,7 +1295,7 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
       prs: { "acme/widgets#12": pr({ state: "closed", merged: true }) },
     });
     await runPrConflictWatch(h.deps);
-    expect(h.resolved).toHaveLength(1);
+    expect(h.resolved[0]?.kind).toBe(PR_CONFLICT_KIND);
   });
 
   test("counts the closed pull request", async () => {
@@ -1274,7 +1387,7 @@ describe("runPrConflictWatch: rows whose pull request is not in the open list", 
       rows: [check({ notified_at: NOW })],
     });
     await runPrConflictWatch(h.deps);
-    expect(h.resolved).toHaveLength(1);
+    expect(h.resolved[0]?.kind).toBe(PR_CONFLICT_KIND);
   });
 
   test("keeps the row of a repository whose owner could not be verified this time", async () => {
