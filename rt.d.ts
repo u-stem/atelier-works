@@ -51,6 +51,7 @@ declare namespace RT {
     pr_ci_watch_human_prs: boolean,
     pr_ci_fix_enabled: boolean,
     pr_ci_fix_max_rounds: number,
+    pr_conflict_watch_enabled: boolean,
     check_commands_by_repo: object
   }
 }

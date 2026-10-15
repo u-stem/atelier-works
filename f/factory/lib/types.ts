@@ -1036,6 +1036,12 @@ export type FactoryConfig = {
    */
   pr_ci_fix_enabled_since: Date | null;
   /**
+   * `watch_pr_conflicts`が、FactoryのPRのマージの競合を検知して通知するか。既定は`false`。
+   * 検知と通知だけで、PRにもリポジトリにも書き込まない。偽の間は、GitHubもDBも読まず、何も書かない。
+   * `pr_ci_watch_enabled`には依らない。
+   */
+  pr_conflict_watch_enabled: boolean;
+  /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
    * `implementCheckCommandsFor`)。エントリの無いリポジトリでは
