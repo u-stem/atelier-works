@@ -390,7 +390,7 @@ export function runtimeScanSelfCheck(
   ];
   // import属性は、マクロを使わない形でも、読む前に断られる。事前の拒否が効いていることを確かめる。
   const attributeCode = [
-    'import j from "./a.json" ',
+    'import j from "attr" ',
     "with",
     ' { type: "json" };',
   ].join("");
