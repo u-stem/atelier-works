@@ -46,7 +46,7 @@ const FIXED_NOTE_HOLDS: readonly (readonly [
  * 止めた理由を、保留の理由に写す。写せなければ`null`を返す。
  * 照合は、固定文への完全一致だけで行う。部分一致や先頭一致は使わない。
  * Claudeの出力の文字列は、固定文の前に`conflict round: claude blocked: `などの接頭辞が付くので、
- * その中の文字列で保留の理由を選ばれない。
+ * Claudeの出力の中の文字列が、保留の理由を決めることは無い。
  */
 export function holdReasonForConflictStoppedItem(
   note: string | null,
