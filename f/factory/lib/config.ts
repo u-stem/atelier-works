@@ -96,6 +96,11 @@ type DefaultableField =
   | "pr_ci_fix_max_rounds"
   | "pr_ci_fix_enabled_since"
   | "pr_conflict_watch_enabled"
+  | "pr_conflict_fix_enabled"
+  | "pr_conflict_fix_max_rounds"
+  | "pr_conflict_fix_max_rounds_per_pr"
+  | "pr_conflict_fix_enabled_since"
+  | "pr_conflict_fix_notify_grace_min"
   | "check_commands_by_repo";
 
 /**
@@ -164,6 +169,12 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   pr_ci_fix_enabled_since: null,
   // 競合の検知はPRにもリポジトリにも書き込まないが、通知の出方を確かめてから、リモートのリソースで有効にする。
   pr_conflict_watch_enabled: false,
+  // 競合を直す作業項目はPRにpushするので、既定で無効にし、リモートのリソースで有効にする。
+  pr_conflict_fix_enabled: false,
+  pr_conflict_fix_max_rounds: 2,
+  pr_conflict_fix_max_rounds_per_pr: 5,
+  pr_conflict_fix_enabled_since: null,
+  pr_conflict_fix_notify_grace_min: 60,
   check_commands_by_repo: {},
 };
 
@@ -405,6 +416,48 @@ function isoDateTimeOrNullField(
  */
 const PR_CI_FIX_MAX_ROUNDS_LIMIT = 10;
 
+/** `pr_conflict_fix_max_rounds`の範囲。 */
+const PR_CONFLICT_FIX_MAX_ROUNDS_RANGE = { min: 1, max: 5 } as const;
+
+/** `pr_conflict_fix_max_rounds_per_pr`の範囲。 */
+const PR_CONFLICT_FIX_MAX_ROUNDS_PER_PR_RANGE = { min: 2, max: 10 } as const;
+
+/** `pr_conflict_fix_notify_grace_min`の範囲(分)。0は猶予なしを表す。 */
+const PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE = { min: 0, max: 1440 } as const;
+
+/**
+ * 競合を直す起動が有効なときの、`pr_conflict_fix_notify_grace_min`の下限(分)。
+ * 巡回の間隔は5分で、10分なら巡回が2回、猶予の内側に入る。0だと最初の巡回で通知が先に出て、起動が一度も起きない。
+ */
+const PR_CONFLICT_FIX_NOTIFY_GRACE_MIN_WHEN_ENABLED = 10;
+
+/**
+ * `raw[field]`を、`min`以上`max`以下の整数として返す。値が無ければ`fallback`を返す。
+ * 範囲を外れたときと、整数でないときは例外を投げる。
+ */
+function integerInRangeField(
+  raw: Record<string, unknown>,
+  field: string,
+  fallback: number,
+  range: { readonly min: number; readonly max: number },
+): number {
+  const value = raw[field];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (
+    !isNumber(value) ||
+    !Number.isInteger(value) ||
+    value < range.min ||
+    value > range.max
+  ) {
+    throw new ConfigValidationError(
+      `"${field}" must be an integer between ${String(range.min)} and ${String(range.max)}`,
+    );
+  }
+  return value;
+}
+
 /** `value`が`limit`を超えるときは例外を投げる。 */
 function atMost(field: string, value: number, limit: number): number {
   if (value > limit) {
@@ -628,6 +681,73 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     );
   }
 
+  const prConflictWatchEnabled = booleanField(
+    raw,
+    "pr_conflict_watch_enabled",
+    DEFAULTS.pr_conflict_watch_enabled,
+  );
+  const prConflictFixEnabled = booleanField(
+    raw,
+    "pr_conflict_fix_enabled",
+    DEFAULTS.pr_conflict_fix_enabled,
+  );
+  const prConflictFixEnabledSince = isoDateTimeOrNullField(
+    raw,
+    "pr_conflict_fix_enabled_since",
+    DEFAULTS.pr_conflict_fix_enabled_since,
+  );
+  const prConflictFixMaxRounds = integerInRangeField(
+    raw,
+    "pr_conflict_fix_max_rounds",
+    DEFAULTS.pr_conflict_fix_max_rounds,
+    PR_CONFLICT_FIX_MAX_ROUNDS_RANGE,
+  );
+  const prConflictFixMaxRoundsPerPr = integerInRangeField(
+    raw,
+    "pr_conflict_fix_max_rounds_per_pr",
+    DEFAULTS.pr_conflict_fix_max_rounds_per_pr,
+    PR_CONFLICT_FIX_MAX_ROUNDS_PER_PR_RANGE,
+  );
+  // 競合を直す起動は、競合の検知が記録した行を対象にするので、検知が止まっていれば何も起動できない。
+  if (prConflictFixEnabled && !prConflictWatchEnabled) {
+    throw new ConfigValidationError(
+      '"pr_conflict_watch_enabled" must be true when "pr_conflict_fix_enabled" is true',
+    );
+  }
+  // 時刻が無いと、有効にする前から残る競合まで、一度に直しに行ってしまう。
+  if (prConflictFixEnabled && prConflictFixEnabledSince === null) {
+    throw new ConfigValidationError(
+      '"pr_conflict_fix_enabled_since" is required when "pr_conflict_fix_enabled" is true',
+    );
+  }
+  const prConflictFixNotifyGraceMin = integerInRangeField(
+    raw,
+    "pr_conflict_fix_notify_grace_min",
+    DEFAULTS.pr_conflict_fix_notify_grace_min,
+    PR_CONFLICT_FIX_NOTIFY_GRACE_RANGE,
+  );
+  // 猶予が巡回の間隔(5分)に満たないと、最初の巡回で通知が先に出て、起動の判断が一度も回らない。
+  // 無効の間は検査しない。使わない設定の値で読み込みが例外を投げると、Factory全体が止まるためである。
+  if (
+    prConflictFixEnabled &&
+    prConflictFixNotifyGraceMin < PR_CONFLICT_FIX_NOTIFY_GRACE_MIN_WHEN_ENABLED
+  ) {
+    throw new ConfigValidationError(
+      `"pr_conflict_fix_notify_grace_min" must be at least ${String(PR_CONFLICT_FIX_NOTIFY_GRACE_MIN_WHEN_ENABLED)} when "pr_conflict_fix_enabled" is true`,
+    );
+  }
+  // PR全体の上限が競合1回の上限以下だと、競合1回の上限に達する前にPR全体が止まる。
+  // 無効の間は検査しない。使わない設定の組み合わせで読み込みが例外を投げると、Factory全体が止まるためである。
+  // 各値の範囲は、有効かどうかによらず上で検査する。
+  if (
+    prConflictFixEnabled &&
+    prConflictFixMaxRoundsPerPr <= prConflictFixMaxRounds
+  ) {
+    throw new ConfigValidationError(
+      '"pr_conflict_fix_max_rounds_per_pr" must be greater than "pr_conflict_fix_max_rounds"',
+    );
+  }
+
   const allowedLabelerAssociations = raw.allowed_labeler_associations;
   const resolvedAllowedLabelerAssociations =
     allowedLabelerAssociations === undefined
@@ -826,11 +946,12 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       PR_CI_FIX_MAX_ROUNDS_LIMIT,
     ),
     pr_ci_fix_enabled_since: prCiFixEnabledSince,
-    pr_conflict_watch_enabled: booleanField(
-      raw,
-      "pr_conflict_watch_enabled",
-      DEFAULTS.pr_conflict_watch_enabled,
-    ),
+    pr_conflict_watch_enabled: prConflictWatchEnabled,
+    pr_conflict_fix_enabled: prConflictFixEnabled,
+    pr_conflict_fix_max_rounds: prConflictFixMaxRounds,
+    pr_conflict_fix_max_rounds_per_pr: prConflictFixMaxRoundsPerPr,
+    pr_conflict_fix_enabled_since: prConflictFixEnabledSince,
+    pr_conflict_fix_notify_grace_min: prConflictFixNotifyGraceMin,
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
       DEFAULTS.check_commands_by_repo,

@@ -11,6 +11,7 @@ import {
   RUNNER_MAX_STOP_OVERHEAD_MS,
 } from "../../f/factory/lib/workspace.ts";
 import {
+  ciRoundTimeoutMisfit,
   describeReason,
   earlyExitBase,
   evaluateBranchImplementingGuard,
@@ -1469,5 +1470,54 @@ describe("describeReason / nextActionFor (ownership the check sandbox could not 
         "worktree is still used by processes from an earlier run: check slot factory-check-2 (uid 10003) that recorded the worktree is held by another run",
       ),
     ).toStartWith("前の実行のプロセスがまだworktreeを使っています");
+  });
+});
+
+describe("ciRoundTimeoutMisfit", () => {
+  test("returns null for the default time settings", () => {
+    expect(
+      ciRoundTimeoutMisfit({
+        claude_timeout_sec: 1800,
+        allowed_check_commands: [],
+      }),
+    ).toBeNull();
+  });
+
+  test("returns null for four check commands at the default timeout", () => {
+    expect(
+      ciRoundTimeoutMisfit({
+        claude_timeout_sec: 1800,
+        allowed_check_commands: ["a", "b", "c", "d"],
+      }),
+    ).toBeNull();
+  });
+
+  test("returns the apply step reason when only the CI round apply step does not fit", () => {
+    expect(
+      ciRoundTimeoutMisfit({
+        claude_timeout_sec: 3000,
+        allowed_check_commands: [],
+      }),
+    ).toMatch(
+      /^ci round: time settings do not fit .*2 claude runs and 5 secret scans/,
+    );
+  });
+
+  test("returns the verify step reason when only the CI round verify step does not fit", () => {
+    expect(
+      ciRoundTimeoutMisfit({
+        claude_timeout_sec: 2000,
+        allowed_check_commands: ["a", "b", "c", "d"],
+      }),
+    ).toMatch(/^ci round: time settings do not fit .*the verify step needs/);
+  });
+
+  test("returns the pr_fix reason first when the pr_fix settings do not fit either", () => {
+    expect(
+      ciRoundTimeoutMisfit({
+        claude_timeout_sec: 3300,
+        allowed_check_commands: [],
+      }),
+    ).toMatch(/^pr_fix time settings do not fit/);
   });
 });

@@ -292,6 +292,16 @@ describe("protected paths", () => {
     "f/factory/lib/host_action.ts",
     "f/factory/lib/process_lock.ts",
     "f/factory/lib/factory_repo_gate.ts",
+    "f/factory/lib/pr_conflict_support.ts",
+    "f/factory/lib/pr_conflict_fix_claim.ts",
+    "f/factory/lib/pr_conflict_fix_recovery.script.yaml",
+    "f/factory/lib/conflict_fix_round.ts",
+    "f/factory/lib/conflict_fix_prompt.ts",
+    "f/factory/watch_pr_conflicts.ts",
+    "f/factory/watch_pr_conflicts.script.yaml",
+    "f/factory/lib/auto_retry_reasons.ts",
+    "f/factory/lib/auto_retry_reasons.script.yaml",
+    "f/factory/lib/auto_retry_reasons.script.lock",
   ])("rejects %s even when the pull request changed it", (path) => {
     expect(codeOf([change(path)], [path])).toBe("protected_path");
   });
@@ -583,11 +593,11 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "Factory自身のcloneを用意する共有モジュール。ほかのフローが日常的に使う",
   "f/factory/lib/self_update_support.ts":
     "自己更新の判定と整形の純粋関数。self_updateの修正が日常的に触れる",
-  "f/factory/lib/auto_retry_reasons.ts":
-    "自動の再開の対象の理由の一覧。回復が待ち時間の判定に参照する。依存が小さい",
   "f/factory/lib/job_ids.ts": "WindmillのジョブIDの形の検査。依存が無く小さい",
   "f/factory/lib/prose_check.ts":
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
+  "f/factory/lib/console_support.ts":
+    "通知の重要度と対象の定数。通知の種類を足す変更が日常的に触れる。競合の通知の種類を読むだけで、判断には使わない",
 };
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");

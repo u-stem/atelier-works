@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CI_ROUND_REPLIES_REASON,
   ciClaudeFailureText,
+  ciRoundApplyTimeoutMisfit,
 } from "../../f/factory/lib/ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "../../f/factory/lib/ci_metadata_rehash.ts";
 import { prCiFixHoldInfo } from "../../f/factory/lib/pr_ci_support.ts";
@@ -136,6 +137,62 @@ describe("nextActionFor a CI round", () => {
     expect(
       nextActionForPrFix("ci round: the CI job log is unavailable", true),
     ).toBe(prCiFixHoldInfo("log_unavailable").stopAction);
+  });
+
+  test("tells the CI round time settings to be reduced, and that the restart is automatic", () => {
+    expect(
+      nextActionForPrFix(ciRoundApplyTimeoutMisfit(10_000, 7_200) ?? "", true),
+    ).toBe(
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
+    );
+  });
+
+  test("tells the pr_fix time settings to be reduced in a CI round, without a push", () => {
+    expect(
+      nextActionForPrFix(
+        "pr_fix time settings do not fit the flow step timeout: x",
+        true,
+      ),
+    ).toBe(
+      "claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
+    );
+  });
+
+  test("tells a repository outside the allow list to be fixed, then restarted by itself or by a push after 24 hours, in a CI round", () => {
+    expect(
+      nextActionForPrFix(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+        true,
+      ),
+    ).toBe(
+      "factory_configのowners / repo_allowlistを見直してください。直すと、Factoryが次の巡回で自動で起動し直します。最初に失敗を見てから24時間たった行は閉じるので、そのときはPRにpushしてください",
+    );
+  });
+
+  test("keeps the main wording for a repository outside the allow list in a normal round", () => {
+    expect(
+      nextActionForPrFix(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+        false,
+      ),
+    ).toBe("factory_configのowners / repo_allowlistを見直してください");
+  });
+
+  test("keeps the main wording for a repository outside the allow list without a flow", () => {
+    expect(
+      nextActionFor(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+      ),
+    ).toBe("factory_configのowners / repo_allowlistを見直してください");
+  });
+
+  test("keeps the main wording for a repository outside the allow list in the implement flow", () => {
+    expect(
+      nextActionFor(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+        "implement",
+      ),
+    ).toBe("factory_configのowners / repo_allowlistを見直してください");
   });
 
   test("does not give the action of a hold reason that Claude repeats", () => {

@@ -316,6 +316,8 @@ export async function buildHumanDiscovery(input: {
 export type PrCiClaimDeps = {
   /** 1つのPRで起動できるラウンドの上限。 */
   readonly maxRounds: number;
+  /** 時間設定が、修正・検証ステップのtimeoutに収まらない理由。収まるときは`null`。 */
+  readonly configMisfit: string | null;
   /** この時刻より前に見つけた失敗は、起動の対象にしない。 */
   readonly enabledSince: Date;
   /** 起動の候補の行(`listClaimablePrCiChecks`)。 */
@@ -2131,6 +2133,7 @@ async function claimRow(
     row,
     instanceName: deps.instanceName,
     maxRounds: claim.maxRounds,
+    configMisfit: claim.configMisfit,
     readers: claimReaders(context, claim, row, ref, names),
   });
   if (decision.kind === "skip") {

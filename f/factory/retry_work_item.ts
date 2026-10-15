@@ -10,6 +10,7 @@
 // 起動したジョブIDは空のときだけ記録する。起動の戻り値がジョブIDでなければ、
 // 状態をneeds_humanに戻して例外を投げる(`launchFailureError`)。
 // CIの失敗を直す回のpr_fixは再開できず、回が終わると失敗の行をCIの監視が戻すことを説明する(`ciRoundRetryRefusal`)。
+// 競合を直す回のpr_fixも再開できず、競合の行が作業項目を結んだままであることを説明する(`conflictRoundRetryRefusal`)。
 // 同じPRに終端でない別のpr_fixがあるpr_fixは再開できず、その作業項目に従うよう説明する
 // (`activePrFixConflictError`)。
 //
@@ -22,6 +23,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { ciRoundRetryRefusal } from "./lib/ci_fix_round.ts";
 import { loadConfig } from "./lib/config.ts";
+import { conflictRoundRetryRefusal } from "./lib/conflict_fix_round.ts";
 import {
   addNoticeUnlessUnresolved,
   getWorkItem,
@@ -547,6 +549,9 @@ export async function main(work_item_id: number): Promise<RetryWorkItemResult> {
   // CIの失敗を直す回は、終わると`watch_pr_ci`が失敗の行を戻す。作業項目だけを再開すると、行と食い違う。
   const ciRoundRefusal = ciRoundRetryRefusal(workItem);
   if (ciRoundRefusal !== null) throw new Error(ciRoundRefusal);
+  // 競合を直す回は、競合の行が作業項目を結んだままなので、作業項目だけを再開すると行と食い違う。
+  const conflictRoundRefusal = conflictRoundRetryRefusal(workItem);
+  if (conflictRoundRefusal !== null) throw new Error(conflictRoundRefusal);
 
   const newest =
     workItem.kind === "issue" && workItem.issue_number !== null
