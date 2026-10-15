@@ -272,7 +272,7 @@ describe("repository-owned Claude config", () => {
     "## 出力の対応",
     "## 致命的な反証",
     "## ループの終わりと残る指摘",
-    "## 変更の種類と規模",
+    "## 変更の種類の指摘",
     "## 取り入れる基準",
     "## 範囲外の指摘",
     "## 差し戻し先",
@@ -301,7 +301,26 @@ describe("review-loop scaling rules", () => {
     const text = body(name);
     const start = text.indexOf("実行してよいのは");
     const end = text.indexOf("実行しない", start);
+    if (start < 0 || end < 0) {
+      throw new Error(`${name} has no allowed-command list`);
+    }
     return text.slice(start, end);
+  }
+
+  /** 見出しの行そのものを探す。`###`の行は、`####`の見出しには当たらない。 */
+  function hasHeading(text: string, heading: string): boolean {
+    return text.split("\n").includes(heading);
+  }
+
+  /** 表の行を、セルの配列にして返す。 */
+  function tableRow(text: string, first: string): string[] {
+    const line = text
+      .split("\n")
+      .find((row) => row.startsWith(`| ${first} | `));
+    return (line ?? "")
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter((cell) => cell !== "");
   }
 
   const SKILL_HEADINGS = [
@@ -310,25 +329,74 @@ describe("review-loop scaling rules", () => {
     "### 設計レビュー",
     "## 前提の検証",
     "## 範囲の固定",
-    "### 致命的な反証",
+    "#### 致命的な反証",
     "## テスト先行の確認",
     "## mainを取り込んだとき",
   ];
 
   test.each(SKILL_HEADINGS)("keeps %s in the review-loop skill", (heading) => {
-    expect(skillText()).toContain(heading);
+    expect(hasHeading(skillText(), heading)).toBe(true);
+  });
+
+  test("does not match a heading by a longer heading", () => {
+    expect(hasHeading(skillText(), "### 致命的な反証")).toBe(false);
   });
 
   test("measures the size against the merge base", () => {
     expect(skillText()).toContain("git diff --numstat origin/main...HEAD");
   });
 
-  test("runs triage in the loop", () => {
-    expect(skillText()).toContain("triageを起動する");
+  const TRIAGE_TRIGGERS = [
+    "- 機能と削除・権限の、各ラウンドの後。",
+    "- 設計レビューの、各ラウンドの後。",
+    "- 種類を問わず、devil-advocateの致命的な反証があるとき。",
+    "- 種類を問わず、種類がセキュリティの`[MUST]`があるとき。",
+    "- 種類を問わず、種類がセキュリティの`[Q]`があるとき。",
+    "- 種類を問わず、security-auditorの指摘があるとき。",
+  ];
+
+  test.each(TRIAGE_TRIGGERS)("starts triage when %s", (trigger) => {
+    expect(skillText()).toContain(trigger);
+  });
+
+  test.each(["小", "機能", "削除・権限"])(
+    "runs security-auditor for the kind %s",
+    (kind) => {
+      expect(tableRow(skillText(), kind)[4]).not.toBe("不要");
+    },
+  );
+
+  test("leaves the document kind without security-auditor", () => {
+    expect(tableRow(skillText(), "文書")[4]).toBe("不要");
+  });
+
+  const GUIDANCE_FILES = [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "AGENTS.wmill.md",
+    "`docs/security.md`",
+    "`docs/coding-guidelines.md`",
+  ];
+
+  test.each(GUIDANCE_FILES)(
+    "lists %s as a file outside the document kind",
+    (file) => {
+      expect(skillText()).toContain(file);
+    },
+  );
+
+  test("keeps the loosening wording out of AGENTS.md", () => {
+    expect(readFileSync(join(ROOT, "AGENTS.md"), "utf8")).not.toContain(
+      "緩める文言",
+    );
   });
 
   test("keeps mise run check out of devil-advocate's allowed commands", () => {
     expect(allowedBash("devil-advocate")).not.toContain("mise run check");
+  });
+
+  test("keeps mise run check out of design-reviewer's allowed commands", () => {
+    expect(allowedBash("design-reviewer")).not.toContain("mise run check");
   });
 
   test("makes devil-advocate name the kind of ground", () => {

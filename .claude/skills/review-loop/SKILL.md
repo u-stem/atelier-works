@@ -38,16 +38,10 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
 次の順に当てはめて、最初に当たったものを種類とする。
 
 1. 文書。
-   変更が`docs/`、README、AGENTS.mdの文言だけである。
-   コード、テスト、設定、スキル、subagentの定義を含まない。
-   禁止や安全の規則を緩める文言を含まない。
-   AGENTS.mdの禁止事項と、`docs/security.md`の残るリスクの書き換えも、緩める文言に含める。
-   止める基準やラウンドの上限を緩める文言も、含める。
-   許可、自動実行、確認の省略の範囲を広げる文言も、含める。
-   含むものは、3の機能に回す。
-   次の5つのファイルは、文言の中身を問わず、3の機能に回す。
+   変更が、`docs/`とREADMEの文言だけである。
+   次の5つのファイルは含めない。
    AGENTS.md、CLAUDE.md、AGENTS.wmill.md、`docs/security.md`、`docs/coding-guidelines.md`である。
-   Claudeの行動と安全の規則を決めるファイルなので、security-auditorを最低1回通す。
+   コード、テスト、設定、スキル、subagentの定義を含まない。
 2. 削除・権限。
    次のどれかに当たる。
    - 保護パスに当たるファイルを変える。
@@ -61,7 +55,7 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
      本文の文言が、subagentの行動の範囲を決めるためである。
    - 依存を追加するか、版を変える。
      lockは行数から除くが、依存の変更そのものは、ここに入る。
-   - パスで決まる安全装置のファイルを変える。
+   - パスで決まる安全策のファイルを変える。
      次のファイルである。
      - `f/factory/lib/protected_paths.ts`と`f/factory/lib/ci_fix_paths.ts`
      - `protected_paths.ts`の注記が、人のレビューに任せると書いたファイル。
@@ -72,6 +66,10 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
      パスの一覧に入れると正当な変更まで止まるので、種類で人のレビューを求める。
    - ファイル、行、ブランチ、worktree、プロセスを消す処理を足すか変える。
      `rm`、`git branch -d`、`DELETE`、`DROP`、`--prune`がその例である。
+   - 禁止、安全、止める基準、ラウンドの上限を緩める文言を含む。
+     許可、自動実行、確認の省略の範囲を広げる文言も含む。
+     どのファイルの変更でも当たる。
+     AGENTS.mdの禁止事項や、`docs/security.md`の残るリスクの書き換えもその例である。
    - 権限、sandbox、トークンの範囲、秘密値の扱いを足すか変える。
    - 安全策を足すか変える。
      安全策とは、拒否、検証、確認の分岐を足すこと、またはその条件を緩めることである。
@@ -82,8 +80,8 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
    次のどれかに当たる。
    - 新しい挙動を足す。
      新しい公開関数、Windmillの資産(script、flow、schedule)、miseタスク、外部APIの呼び出し、テーブルや列がその例である。
-   - 文書から回されたもの。
-     緩める文言を含む文書と、5つのファイルの変更である。
+   - 文書の5つのファイルの変更。
+     Claudeの行動と安全の規則を決めるファイルなので、中身を問わず、ここに入る。
    - 小の上限を超える。
 4. 小。
    上のどれにも当たらず、変更するファイルが3個以下で、追加と削除の合計が100行以下である。
@@ -99,10 +97,11 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
 実測は、次のコマンドの出力で行う。
 
 ```bash
-git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.ts' ':(exclude)*.test.tsx' ':(exclude)*.script.lock' ':(exclude)*.script.yaml' ':(exclude)wmill-lock.yaml' ':(exclude)bun.lock'
+git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.ts' ':(exclude)*.test.tsx' ':(exclude)*.script.lock' ':(exclude)*.script.yaml' ':(exclude)wmill-lock.yaml' ':(exclude)**/bun.lock'
 ```
 
 出た行の数がファイル数で、1列目と2列目の合計が行数である。
+バイナリのファイルは列が`-`になるので、0行として数える。
 三点にするのは、`origin/main`が進んでいても、分岐した点からの自分の変更だけを数えるためである。
 二点にすると、進んだmainの差まで数に入る。
 除くのは、次のものである。
@@ -132,8 +131,6 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
   レビュアーには、実装済みの差分も渡す。
 - 上限は、新しい種類の値にする。
   数えたラウンドが新しい上限を超えているときは、次のラウンドを1回だけ行い、手順6から10に進む。
-- 設計レビューの2ラウンドは、実装のラウンドの上限に数えない。
-  設計の欠陥を直す修正は、設計レビューの中で行うためである。
 
 種類ごとの人数、ラウンドの上限、設計レビューの要否は、次の表のとおりである。
 
@@ -141,11 +138,11 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
 | --- | --- | --- | --- | --- |
 | 文書 | ループに通さない。`mise run lint:docs`を通し、code-reviewerを1回だけ起動して文書の判定を検証する | なし | 不要 | 不要 |
 | 小 | code-reviewerだけ | 2 | 不要 | 最後に1回 |
-| 機能 | code-reviewerとdevil-advocate | 3 | 新しい挙動を足すときは要。大きさか文書から回されて機能になったものは不要 | 最後に1回 |
+| 機能 | code-reviewerとdevil-advocate | 3 | 新しい挙動を足すときは要。大きさか、文書の5つのファイルの変更で機能になったものは不要 | 最後に1回 |
 | 削除・権限 | code-reviewerとdevil-advocate | 4 | 要 | 設計の各ラウンドと、最後に1回 |
 
 - 文書をループに通さないのは、文書の誤りは`mise run lint:docs`と読み手の指摘で直せ、実害が出る前に止める関門が要らないためである。
-  判定そのものは親1人が決めるので、code-reviewerに1回だけ検証させる。
+  判定そのものは親1人が決めるので、code-reviewerに1回だけ確かめさせる。
   種類が上がれば、その種類に従う。
 - 小でdevil-advocateを呼ばないのは、反証が必ず指摘を返し、小さな変更では指摘の数が変更の大きさを超えるためである。
 - 削除・権限の上限が最も大きいのは、直した修正が新しい経路を生みやすく、直した後の確認に余裕が要るためである。
@@ -167,11 +164,13 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
   コードが無いためである。
 - 設計のレビューは、2ラウンドを上限にする。
   設計を直し続けると、実装の前に終わりが来ないためである。
-  2ラウンドで`[MUST]`か致命的な反証が残ったら、まず範囲を狭めて、残りを別の変更に分ける。
+  各ラウンドの後に、triageが指摘を判定する。
+  2ラウンドで`[MUST]`、致命的な反証、security-auditorのCriticalかHighが残ったら、まず範囲を狭めて、残りを別の変更に分ける。
   分けても受け入れ条件を満たせないときは、`rules.md`の「戻し先の基準」に従い、要件定義へ戻す。
   切り出した残りの変更は、内容と大きさで種類を数え直す。
   内容が削除・権限に当たるものは、そのまま削除・権限にする。
 - 実装の途中で設計の欠陥が見つかったとき、設計に戻すのは1回までにする。
+  戻した設計レビューは、1ラウンドを上限にする。
   戻した後に同じ原因の欠陥が出たら、範囲を狭めて別の変更に分ける。
 - 安全策を足す修正が続くときは、足さずに設計へ戻す。
   戻して決めるのは、その経路を残るリスクとして受け入れるか、削除の範囲を狭めるかである。
@@ -189,13 +188,15 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
 
 - 検証は、親が計画を書くときか、依頼に無い前提を見つけたimplementerが、実装の前に行う。
 - 検証は、1〜数個のコマンドで、5分以内に終える。
-  一時ディレクトリか使い捨てのworktreeで、読み取りを中心に行う。
-  破壊的なコマンドは、使い捨てのリポジトリでだけ実行する。
-  本番の資源と秘密値には触れない。
+  読み取りを中心に行い、本番の資源と秘密値には触れない。
+- worktreeでは、書き込むgitコマンドを一切使わない。
+  書き込みが要る検証は、一時ディレクトリに`git init`したリポジトリで行う。
+  「使い捨てのリポジトリ」は、この一時ディレクトリのリポジトリを指し、worktreeは当たらない。
+  worktreeはメインのcheckoutのrefを共有するためである。
 - 使い捨てのworktreeは、メインのcheckoutの秘密値を引き継ぐ。
-  そこでは、`git push`、`mise run push`と`mise run push:prune`、`mise run up`を実行しない。
-  refを書き換えるgitコマンド(`git branch -f`、`git update-ref`、`git tag`、`git reset`、`git commit`)も実行しない。
-  秘密値で外へ書き込めるためである。
+  そこでは、外へ書き込めるコマンドを実行しない。
+  `git push`、`mise run push`、`mise run push:prune`、`mise run up`が、その例である。
+  `mise run deploy`、`mise run migrate`、`mise run pull`、`mise run console:rollback`、`mise run console:unpin`、`mise run worktree:prune -- --apply`も、その例である。
 - `gh`と`wmill`は、読み取りのサブコマンド(`view`、`list`、`get`、`--dry-run`)に限る。
   書き込みが要る検証は、実行せずに親へ返す。
   ワークスペースで実行される検証(`wmill script preview`など)は、使い捨ての環境が無ければ「未確認」として親へ返す。
@@ -242,10 +243,8 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
 
 `[IMO]`と`[NITS]`は、ループを延ばさない。
 扱いは、`rules.md`の「ループの終わりと残る指摘」に従う。
-範囲内の`[IMO]`を直した修正は、次のラウンドのレビューの対象にする。
-最後のラウンドで出た`[IMO]`は、直さずに報告へ回す。
+`[MUST]`が0件のラウンドの`[IMO]`は、直さずに報告へ回し、ループを終える。
 残したものは、完了の報告の「残った指摘」とPRの本文に載せる。
-範囲内の指摘を、「範囲外の記録」のIssueには回さない。
 
 `[Q]`は、ループを延ばさない。
 親が答える。
@@ -274,13 +273,23 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
 利用の上限を読み取れないときは、上限のラウンドで止めて残った指摘を報告する。
 上限に達するまで、再試行を1回で打ち切らない。
 
-security-auditorのCriticalとHighを直す修正と、その後の再レビューは、上限の外で行う。
+### security-auditorの指摘
+
+security-auditorの指摘は、triageが「直す」と判定したものを、重さを問わず、次の1本の経路で直す。
 直さずに最後の関門を通せないためである。
-上限の外で行うのは、修正と再監査の組を、最大2組までにする。
-無制限に続けると、終わらないためである。
-2組で直らなければ、triageが直すか受け入れるかを決める。
-直すと決めたものが直らないとき、受け入れられないときは、PRに進まない。
-その場合は、報告するか、`rules.md`の「差し戻し先」に回す。
+
+- 修正と再監査の組を、種類の上限の外で、最大2組まで行う。
+  無制限に続けると、終わらないためである。
+- 再レビューで新しい`[MUST]`が出たときは、同じ組の中で直す。
+  組の数は増やさない。
+- 最後のラウンドで出たMediumも、この経路で直す。
+  種類の上限の内に収まらなくても、同じである。
+- 2組の後も残るものは、triageが直すか受け入れるかを決める。
+  受け入れたものは、`docs/security.md`の残るリスクに書く。
+- 2組の後にtriageが「直す」と決めたものは、このPRでは直さず、PRに進まない。
+  `rules.md`の「差し戻し先」に回すか、範囲を狭めて別の変更に分ける。
+- 到達できる筋書きの無いLowなどは、報告に載せる。
+  残るリスクへ記録するかは、triageが決める。
 
 上限に達しても、手順6から10は飛ばさない。
 doc-writer、その差分の1回のレビュー、security-auditor、最後の`mise run check`、作業ツリーの確認を、必ず行う。
@@ -301,10 +310,17 @@ doc-writer、その差分の1回のレビュー、security-auditor、最後の`m
    プロンプトの渡し方は、次の「subagentの起動の仕方」に従う。
    レビュアーの出力がそろったら、次のときにtriageを起動する。
    - 機能と削除・権限の、各ラウンドの後。
-   - 種類を問わず、devil-advocateの致命的な反証、種類がセキュリティの`[MUST]`、security-auditorの指摘があるとき。
+   - 設計レビューの、各ラウンドの後。
+   - 種類を問わず、devil-advocateの致命的な反証があるとき。
+   - 種類を問わず、種類がセキュリティの`[MUST]`があるとき。
+   - 種類を問わず、種類がセキュリティの`[Q]`があるとき。
+   - 種類を問わず、security-auditorの指摘があるとき。
+   triageを起動しないラウンドは、親が`rules.md`の「取り入れる基準」で判定する。
 3. `[MUST]`の指摘と、devil-advocateの致命的な反証を、implementerに直させる。
    triageを起動したラウンドでは、triageが取り入れる、または直すと判定したものを直させる。
    implementerは、直した内容を新しいコミットにする。
+   文書の書き方の指摘も、implementerが直す。
+   手順7の指摘だけは、doc-writerが直す。
 4. 新しく起動した、その時点の種類の表のレビュアーで、もう一度レビューする。
 5. ループが終わるまで、手順3と4を繰り返す。
    手順4のレビューのたびに、手順2の種類の数え直しと、triageの起動を済ませる。
@@ -320,11 +336,8 @@ doc-writer、その差分の1回のレビュー、security-auditor、最後の`m
    この修正も、ラウンドに数える。
    この修正は、再レビューしない。
 8. ループの終わりに、security-auditorを起動し、その指摘をtriageに判定させる。
-   - CriticalかHighがあれば、手順3に戻る。
-     この修正と、その後の再レビューは、種類の上限の外で、最大2組まで行う(「上限」を参照)。
-   - Mediumは、majorとして数える。
-     手順3で直す。この修正は、種類の上限の内に数える。
-   - Lowは、完了の報告に載せる。
+   直すと判定された指摘は、手順3に戻って直す。
+   重さごとの扱いと、修正の回数は、「security-auditorの指摘」に従う。
    直した後は、手順4以降をもう一度通し、security-auditorを再び起動する。
 9. 最後の編集のあとに、`mise run check`をもう一度実行する。
    結果を完了の報告に載せる。
@@ -367,7 +380,9 @@ pushは親のセッションが、運用者の確認を経て行う。
   - 触ってよいファイルの一覧と、完了の条件
   - 前提の検証結果
   - 計画またはIssue
-  - 前のラウンドで決着した論点を1〜2行にまとめたもの
+  - 前のラウンドの判定役の出力にある「決着した論点」。
+    triageの出力をそのまま渡し、親の要約は渡さない。
+    triageを起動していないラウンドは、渡さない。
 - code-reviewerには、直前のimplementerの報告も渡す。
   手順7では、doc-writerの報告を渡す。
   呼んだスキルを確かめるためである。
@@ -387,7 +402,9 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 ## 指摘の扱い
 
 - 指摘は、コードを読んで正しいかを確かめてから直す。
-- 誤った指摘は直さず、根拠を「決着した論点」に書いて次のラウンドに渡す。
+- 誤った指摘は直さない。
+  根拠は、triageの出力の「決着した論点」に残る。
+  triageを起動しないラウンドは、見送った指摘と根拠を完了の報告に載せる。
   種類がセキュリティの指摘は、親が誤りと判断して外してはならない。
   外せるのは、判定役が前提の事実を否定したときだけである。
   triageの判定を親が覆せる範囲は、`rules.md`の「判定を覆したときと、見送ったとき」に従う。
@@ -413,9 +430,16 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 どちらかが欠けるか、失敗の出力がテストの確かめる内容と合わないときは、`[MUST]`にする。
 何も確かめていないテストが通ることを防ぐためである。
 スキル、subagentの定義、設定のようにテストを書けない変更は、理由が報告に書いてあればよい。
+挙動を変えない変更も、対象外である。
+理由が報告に書いてあればよい。
 文書の変更は、対象外である。
 
 機能と削除・権限では、確実に確かめるために、親が次の手順も行う。
+
+テストを足すコミットのshaとテストのファイルは、親が`git log --reverse --name-only origin/main..HEAD`の出力から取る。
+implementerの報告の値は、照合にだけ使う。
+報告は自己申告で、ファイル名の記号をシェルが解釈するためである。
+ファイル名は、引用して1つずつ渡す。
 
 1. `mise run worktree:new -- test/verify-<名前>`で、使い捨てのworktreeを作る。
    名前に使えるのは、小文字、数字、ハイフン(`[a-z0-9-]`)だけである。
@@ -426,13 +450,16 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
    テストのコミットだけを取り出すためである。
 3. 足したテストのファイルを`bun test <ファイル>`で実行し、失敗を確かめる。
    実装が無いので、直したい挙動で失敗するはずである。
-4. 元の作業ツリーに戻り、`git worktree remove <パス>`を、強制せずに実行する。
+4. `ExitWorktree`で元の作業ツリーに戻り、`git worktree remove <パス>`を、強制せずに実行する。
+   拒まれたときは、強制せず、worktreeを残して完了の報告に載せる。
    続けて`git branch -d test/verify-<名前>`を実行する。
    `origin/main`が進んでいて`-d`が拒まれたときは、ブランチを残し、完了の報告に載せる。
    ブランチは`origin/main`の祖先で、何も失わない。
-   detachedのworktreeは、`mise run worktree:prune`が残すので、手順4で消す。
+   detachedのworktreeは、`mise run worktree:prune`が残すので、ここで消す。
 
-この使い捨てのworktreeでは、「前提の検証」と同じく、`git push`、`mise run push*`、`mise run up`、refを書き換えるgitコマンドを実行しない。
+`git checkout --detach`、`git worktree remove`、`git branch -d`は、`.claude/settings.json`の許可に無い。
+確認できない実行(クラウドとheadless)では、この手順を「未実施」として完了の報告に載せ、先へ進む。
+この使い捨てのworktreeでは、「前提の検証」と同じコマンドを実行しない。
 
 新しいexportのテストは、import漏れで失敗する。
 これが先行したことにならないので、テストのコミットに最小のスタブを入れてよい。
