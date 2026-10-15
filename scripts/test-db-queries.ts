@@ -97,6 +97,7 @@ import {
   updateStatusIfCurrent,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
+import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
 import {
   getCleanupSummary,
   getWorkerLoadSummary,
@@ -3775,6 +3776,27 @@ check(
   (await fixRowOf(resetRelease.id))?.notified_reason === null &&
     (await fixRowOf(resetRelease.id))?.fix_hold_reason === "fix_stopped",
   await fixRowOf(resetRelease.id),
+);
+
+// 時間設定の不整合の保留は一時的な保留なので、保存でき、起動の候補に残る。
+const misfitHeld = await failedFixRow(707, FIX_SHA_1);
+await setPrCiFixHold(misfitHeld.id, "config_misfit", {}, sql);
+execPsql(
+  target,
+  `UPDATE factory.pr_ci_checks SET work_item_id = 1 WHERE id = ${String(misfitHeld.id)}`,
+);
+check(
+  "hold: a config_misfit row is stored and stays a claim candidate",
+  (await fixRowOf(misfitHeld.id))?.fix_hold_reason === "config_misfit" &&
+    (
+      await listClaimablePrCiChecks(
+        new Date(Date.now() - 60 * 60 * 1000),
+        PR_CI_FIX_TEMPORARY_HOLD_REASONS,
+        1000,
+        sql,
+      )
+    ).some((row) => row.id === misfitHeld.id),
+  await fixRowOf(misfitHeld.id),
 );
 
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'");

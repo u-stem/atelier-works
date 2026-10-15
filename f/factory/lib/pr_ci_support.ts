@@ -501,6 +501,8 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `not_reviewed`: 今のheadの自動レビューがまだ無い。
  * - `last_fix_unsettled`: 直近の直す作業が、まだ終わっていない(動いている)。
  * - `pr_draft_or_auto_merge`: PRがドラフトか、auto-mergeが有効である。
+ * - `config_misfit`: 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。
+ *   設定だけで決まるので、起動の前に確かめて保留する。ラウンドを使わない。設定を直せば、次の巡回でpushなしに外れる。
  */
 export const PR_CI_FIX_HOLD_REASONS = [
   "unfixable_job",
@@ -516,6 +518,7 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "not_reviewed",
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
+  "config_misfit",
 ] as const;
 
 export type PrCiFixHoldReason = (typeof PR_CI_FIX_HOLD_REASONS)[number];
@@ -644,6 +647,14 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "PRがドラフトか、auto-mergeが有効である。ドラフトを解除し、auto-mergeを無効にする",
     stopAction:
       "PRがドラフトか、auto-mergeが有効です。ドラフトを解除し、auto-mergeを無効にしてください",
+  },
+  config_misfit: {
+    temporary: true,
+    discord: true,
+    nextAction:
+      "時間設定が、修正・検証ステップのtimeoutに収まらない。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らす。直すと、次の巡回で自動で起動し直す",
+    stopAction:
+      "時間設定が、修正・検証ステップのtimeoutに収まりません。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
   },
 };
 
