@@ -21,9 +21,10 @@ import {
   type AutoRetryResult,
 } from "./auto_retry.ts";
 import { TRANSIENT_GITHUB_REASON_PREFIX } from "./auto_retry_reasons.ts";
+import { TRANSIENT_STALL_NOTE_PREFIX } from "./console_support.ts";
 import type { TransientReviewCandidate } from "./db.ts";
 import type { NotifyEvent } from "./discord.ts";
-import { GitHubHttpError } from "./github.ts";
+import { GH_EXIT_AUTH_REQUIRED, GitHubHttpError } from "./github.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 
@@ -40,12 +41,19 @@ export const TRANSIENT_RETRY_DELAYS_SECONDS: readonly number[] = [
 
 /**
  * 再開の待ちを過ぎても、まだ再開されないときに、人に知らせるまでの猶予(秒)。
- * 巡回が動いていないか、ジョブの状態を読めない状態が続いても、人に届く。
+ * 巡回が動いている間に、記録済みのジョブの状態を読めない状態が続くなどで取りこぼした作業項目を、
+ * 見送りの通知が拾う。巡回の候補の一覧を取得できないときは、例外としてスケジュールの失敗に届く。
+ * 限界として、スケジュールが無効になっていると、どちらも届かない。
  */
 export const TRANSIENT_STALL_GRACE_SECONDS = 1800;
 
-/** 再開の見送りを知らせたことを残す遷移の注記の先頭。 */
-export const TRANSIENT_STALL_NOTE_PREFIX = "auto_retry_stalled: ";
+export { TRANSIENT_STALL_NOTE_PREFIX };
+
+/**
+ * 再開したフローを起動できず`needs_human`へ戻したときの注記の先頭。
+ * 再開の回数(`AUTO_RETRY_NOTE_PREFIX`で始まる遷移)に数えないよう、別の接頭辞にする。
+ */
+export const TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX = "auto_retry_launch_failed: ";
 
 /** 再開の候補・比較交換・見送りの記録が共有する条件。 */
 export function transientReviewQuery() {
@@ -61,20 +69,24 @@ export function transientReviewQuery() {
 /**
  * GitHubの5xxか応答の無い失敗(状態0)なら、文の先頭に印を付けた例外を返す。
  * それ以外はそのまま返す。待っても結果が変わらない失敗を、自動の再開に回さないためである。
- * 状態0には、通信断とタイムアウトのほかに、`gh`自身の失敗(認証失敗など)も入る。
- * 例外が状態0の原因を持たないので、両者を見分けられず、状態0はまとめて一時的な失敗として扱う。
- * 認証失敗のように同じ入力で落ち続けるものは、再開の回数の上限と待ちの伸長で打ち切る。
+ * 状態0のうち、timeoutで打ち切られたものは一時的として扱う。
+ * `gh`が認証を求めて終わったもの(終了コード`GH_EXIT_AUTH_REQUIRED`)は、同じ入力で必ず落ちるので印を付けない。
+ * それ以外の状態0は、通信断と`gh`のほかの失敗を見分ける情報が無いので、一時的として扱い、
+ * 落ち続けるものは再開の回数の上限と待ちの伸長で打ち切る。
  */
 export function markTransientGitHubFailure(err: unknown): unknown {
-  if (
-    err instanceof GitHubHttpError &&
-    (err.status === 0 || err.status >= 500)
-  ) {
+  if (err instanceof GitHubHttpError && isTransientStatus(err)) {
     return new Error(`${TRANSIENT_GITHUB_REASON_PREFIX}${err.message}`, {
       cause: err,
     });
   }
   return err;
+}
+
+function isTransientStatus(err: GitHubHttpError): boolean {
+  if (err.status >= 500) return true;
+  if (err.status !== 0) return false;
+  return err.timedOut || err.exitCode !== GH_EXIT_AUTH_REQUIRED;
 }
 
 export type TransientFailureAction = "recover" | "needs_human" | "job_failed";
@@ -160,8 +172,15 @@ export type TransientReviewDeps = {
     flowPath: string,
     args: Readonly<Record<string, unknown>>,
   ) => Promise<string>;
-  readonly recordFlowJobId: (id: number, jobId: string) => Promise<void>;
-  /** 起動できなかった作業項目を、理由を注記にして`needs_human`へ戻す。戻せたら`true`を返す。 */
+  /**
+   * 起動したジョブIDを、空のときだけ記録する(`setFlowJobIdIfUnset`)。
+   * 再開の状態交換が`flow_job_id`を空にするので、別の実行が先に取っていれば`false`を返す。
+   */
+  readonly recordFlowJobId: (id: number, jobId: string) => Promise<boolean>;
+  /**
+   * 起動できなかった作業項目を、理由を注記にして`needs_human`へ戻す。戻せたら`true`を返す。
+   * 再開の状態交換が空にした`flow_job_id`を、リースの保持者として照合する。
+   */
   readonly rollBack: (
     candidate: TransientReviewCandidate,
     reason: string,
@@ -206,7 +225,7 @@ async function retryOne(
       "runFlowAsync",
     );
   } catch (err) {
-    const reason = `auto_retry: ${PR_REVIEW_FLOW_PATH} could not be started: ${messageOf(err)}`;
+    const reason = `${TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX}${PR_REVIEW_FLOW_PATH} could not be started: ${messageOf(err)}`;
     const movedBack = await deps.rollBack(candidate, reason);
     deps.log.warn("pr_review retry could not start the flow", {
       work_item_id: candidate.id,
@@ -216,7 +235,12 @@ async function retryOne(
     if (movedBack) await deps.notifyRollBack(candidate, reason);
     return "failed";
   }
-  await deps.recordFlowJobId(candidate.id, jobId);
+  if (!(await deps.recordFlowJobId(candidate.id, jobId))) {
+    deps.log.warn("pr_review retry did not record the flow job id", {
+      work_item_id: candidate.id,
+      job_id: jobId,
+    });
+  }
   deps.log.info("pr_review retry restarted the work item", {
     work_item_id: candidate.id,
     job_id: jobId,
@@ -253,17 +277,20 @@ export async function retryTransientPrReviews(
 export type StalledTransientDeps = {
   /** 待ちと猶予を過ぎても再開されず、まだ知らせていない候補を返す。 */
   readonly listStalled: () => Promise<readonly TransientReviewCandidate[]>;
-  /** 知らせたことを記録する。この呼び出しが初めての記録なら`true`を返す。 */
+  /** 人に知らせる。届いた(`status === "sent"`)ときだけ`true`を返す。 */
+  readonly notify: (candidate: TransientReviewCandidate) => Promise<boolean>;
+  /** 知らせたことを記録する。 */
   readonly recordStall: (
     candidate: TransientReviewCandidate,
   ) => Promise<boolean>;
-  readonly notify: (candidate: TransientReviewCandidate) => Promise<void>;
   readonly log: Logger;
 };
 
 /**
- * 再開されないまま止まっているPRレビューを、人に知らせる。知らせた件数を返す。
- * 同じ失敗には1回だけ送る(記録を先に取れた呼び出しだけが送る)。
+ * 再開されないまま止まっているPRレビューを、人に知らせる。届いた件数を返す。
+ * 送ってから記録する。日次サマリーと同じく、届いたときだけ記録を残すので、
+ * 配信に失敗した作業項目は、次の巡回でもう一度送る。
+ * 記録に失敗したときも次の巡回で送り直すので、重複することはあっても、黙ることは無い。
  * 候補を取得できなければ例外を投げる。
  */
 export async function notifyStalledTransientReviews(
@@ -273,9 +300,14 @@ export async function notifyStalledTransientReviews(
   let notified = 0;
   for (const candidate of stalled) {
     try {
-      if (!(await deps.recordStall(candidate))) continue;
-      await deps.notify(candidate);
+      if (!(await deps.notify(candidate))) {
+        deps.log.warn("pr_review stall notice was not delivered", {
+          work_item_id: candidate.id,
+        });
+        continue;
+      }
       notified += 1;
+      await deps.recordStall(candidate);
     } catch (err) {
       deps.log.warn("pr_review stall could not be reported", {
         work_item_id: candidate.id,

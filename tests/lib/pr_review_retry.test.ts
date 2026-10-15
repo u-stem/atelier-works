@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   AUTO_RETRY_LIMIT_PER_RUN,
   AUTO_RETRY_MAX_RESTARTS,
+  AUTO_RETRY_NOTE_PREFIX,
 } from "../../f/factory/lib/auto_retry.ts";
 import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
@@ -52,6 +53,24 @@ describe("markTransientGitHubFailure", () => {
       marked instanceof Error &&
         marked.message.startsWith(TRANSIENT_GITHUB_REASON_PREFIX),
     ).toBe(true);
+  });
+
+  test("marks a timeout", () => {
+    const err = new GitHubHttpError("failed with HTTP 0", 0, {
+      exitCode: 1,
+      timedOut: true,
+    });
+    expect(markTransientGitHubFailure(err)).not.toBe(err);
+  });
+
+  test("marks a connection failure of gh", () => {
+    const err = new GitHubHttpError("failed with HTTP 0", 0, { exitCode: 1 });
+    expect(markTransientGitHubFailure(err)).not.toBe(err);
+  });
+
+  test("keeps an authentication failure of gh as it is", () => {
+    const err = new GitHubHttpError("failed with HTTP 0", 0, { exitCode: 4 });
+    expect(markTransientGitHubFailure(err)).toBe(err);
   });
 
   test("keeps a 422 as it is, because the same input fails again", () => {
@@ -174,7 +193,7 @@ function fakeDeps(
       launched.push(path);
       return "01234567-89ab-cdef-0123-456789abcdef";
     },
-    recordFlowJobId: async () => {},
+    recordFlowJobId: async () => true,
     rollBack: async () => true,
     notifyRollBack: async (c) => {
       notified.push(c.id);
@@ -222,6 +241,21 @@ describe("retryTransientPrReviews", () => {
     expect(fake.notified).toEqual([7]);
   });
 
+  test("writes a launch failure note that is not counted as a restart", async () => {
+    const reasons: string[] = [];
+    const fake = fakeDeps([candidate(7)], {
+      launchFlow: async () => {
+        throw new Error("windmill is down");
+      },
+      rollBack: async (_c, reason) => {
+        reasons.push(reason);
+        return true;
+      },
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(reasons[0]?.startsWith(AUTO_RETRY_NOTE_PREFIX)).toBe(false);
+  });
+
   test("counts a launch failure as failed", async () => {
     const fake = fakeDeps([candidate(7)], {
       launchFlow: async () => {
@@ -259,16 +293,21 @@ describe("notifyStalledTransientReviews", () => {
     overrides: Partial<StalledTransientDeps> = {},
   ) {
     const notified: number[] = [];
+    const recorded: number[] = [];
     const deps: StalledTransientDeps = {
       listStalled: async () => stalled,
-      recordStall: async () => true,
       notify: async (c) => {
         notified.push(c.id);
+        return true;
+      },
+      recordStall: async (c) => {
+        recorded.push(c.id);
+        return true;
       },
       log: SILENT,
       ...overrides,
     };
-    return { deps, notified };
+    return { deps, notified, recorded };
   }
 
   test("tells a human about a work item that was not restarted", async () => {
@@ -277,38 +316,44 @@ describe("notifyStalledTransientReviews", () => {
     expect(fake.notified).toEqual([7]);
   });
 
-  test("does not tell again when the stall was already recorded", async () => {
-    const fake = stalledDeps([candidate(7)], {
-      recordStall: async () => false,
-    });
+  test("records the stall after the notice was delivered", async () => {
+    const fake = stalledDeps([candidate(7)]);
     await notifyStalledTransientReviews(fake.deps);
-    expect(fake.notified).toEqual([]);
+    expect(fake.recorded).toEqual([7]);
   });
 
-  test("does not tell when the stall could not be recorded", async () => {
+  test("does not record the stall when the notice was not delivered", async () => {
+    const fake = stalledDeps([candidate(7)], { notify: async () => false });
+    await notifyStalledTransientReviews(fake.deps);
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("does not record the stall when sending the notice throws", async () => {
     const fake = stalledDeps([candidate(7)], {
-      recordStall: async () => {
-        throw new Error("db down");
+      notify: async () => {
+        throw new Error("variable missing");
       },
     });
     await notifyStalledTransientReviews(fake.deps);
-    expect(fake.notified).toEqual([]);
+    expect(fake.recorded).toEqual([]);
+  });
+
+  test("counts only the notices that were delivered", async () => {
+    const fake = stalledDeps([candidate(7), candidate(8)], {
+      notify: async (c) => c.id === 8,
+    });
+    expect(await notifyStalledTransientReviews(fake.deps)).toBe(1);
   });
 
   test("continues with the next work item after a failure", async () => {
     const fake = stalledDeps([candidate(7), candidate(8)], {
-      recordStall: async (c) => {
-        if (c.id === 7) throw new Error("db down");
+      notify: async (c) => {
+        if (c.id === 7) throw new Error("variable missing");
         return true;
       },
     });
     await notifyStalledTransientReviews(fake.deps);
-    expect(fake.notified).toEqual([8]);
-  });
-
-  test("returns the number of work items it told about", async () => {
-    const fake = stalledDeps([candidate(7), candidate(8)]);
-    expect(await notifyStalledTransientReviews(fake.deps)).toBe(2);
+    expect(fake.recorded).toEqual([8]);
   });
 
   test("rejects when the stalled candidates cannot be listed", async () => {

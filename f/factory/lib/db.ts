@@ -1347,6 +1347,8 @@ export async function listTransientReviewCandidates(
  * `listTransientReviewCandidates`と同じ条件(待ちを含む)を、更新の文の中で確かめる比較交換である。
  * 候補を読んだ後に、人が再開したり別の実行が先に再開したりした作業項目は、条件に合わず`false`になり、
  * 二重に起動しない。ラベルは触らない。
+ * 同じ文で`flow_job_id`を空にする。記録までの間、reconcileが終わった前のジョブを見て孤児と判定せず、
+ * 未記録として猶予を待つ。起動したジョブIDは`setFlowJobIdIfUnset`で記録する。
  */
 export async function restartTransientPrReview(
   params: TransientReviewQuery & {
@@ -1361,7 +1363,7 @@ export async function restartTransientPrReview(
   const rows = await sql`
     WITH updated AS (
       UPDATE factory.work_items
-      SET status = 'reviewing', updated_at = now()
+      SET status = 'reviewing', flow_job_id = NULL, updated_at = now()
       WHERE id = ${params.id}::bigint AND kind = 'pr_review' AND status = 'failed'
         AND pr_number IS NOT NULL
         AND starts_with((

@@ -159,3 +159,10 @@ export function countHtmlCommentOpeners(text: string): number {
  */
 export const INTAKE_REFRESHED_NOTE_PREFIX =
   "intake refreshed from the current issue";
+
+/**
+ * 一時的な失敗で止まったPRレビューの再開の見送りを、人に知らせたことを残す遷移の注記の先頭。
+ * 状態は変わらない記録なので、Consoleの「今の状態へ遷移したときの注記」と、失敗の理由を探す問い合わせは、これを読み飛ばす。
+ * Consoleのビューが、再開の処理の依存を引かずに読めるよう、ここに置く。
+ */
+export const TRANSIENT_STALL_NOTE_PREFIX = "auto_retry_stalled: ";

@@ -822,9 +822,27 @@ describe("commentedFindingsOf", () => {
 });
 
 describe("renderUnresolvedLineSummary", () => {
-  const body = renderUnresolvedLineSummary("alice", [
-    finding({ message: "first problem" }),
-  ]);
+  const commented = finding({
+    line: 10,
+    end_line: null,
+    message: "first problem",
+  });
+  const ranged = finding({
+    path: "c.ts",
+    line: 4,
+    end_line: 8,
+    message: "second problem",
+  });
+  const dropped = finding({
+    path: "b.ts",
+    line: null,
+    message: "third problem",
+  });
+  const body = renderUnresolvedLineSummary(
+    "alice",
+    [commented, ranged],
+    [dropped],
+  );
 
   test("does not claim any inline comment", () => {
     expect(body).not.toContain("件コメントしました");
@@ -834,8 +852,16 @@ describe("renderUnresolvedLineSummary", () => {
     expect(body).toContain("GitHubが行を解決できなかった");
   });
 
-  test("lists the finding", () => {
-    expect(body).toContain("first problem");
+  test("shows the line of a finding that would have been an inline comment", () => {
+    expect(body).toContain("- [MUST] a.ts:10: first problem");
+  });
+
+  test("shows the range of a multi-line finding", () => {
+    expect(body).toContain("- [MUST] c.ts:4-8: second problem");
+  });
+
+  test("keeps the form of a finding that had no line", () => {
+    expect(body).toContain("- [MUST] b.ts: third problem");
   });
 });
 

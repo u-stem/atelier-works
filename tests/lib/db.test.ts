@@ -7251,6 +7251,16 @@ describe("transient pr_review restart", () => {
     expect(await restartTransientPrReview(params, sql, NO_JOBS)).toBe(false);
   });
 
+  test("restart clears the flow job id so that the job id is recorded as a lease", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await restartTransientPrReview(
+      { ...query, id: 7, note: "auto_retry: restarted from failed" },
+      sql,
+      NO_JOBS,
+    );
+    expect(calls[0]?.text).toContain("flow_job_id = NULL");
+  });
+
   test("restart guards the update with the stop reason", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     const params = {

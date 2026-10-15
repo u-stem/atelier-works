@@ -6,7 +6,7 @@ import { CHECK_IMAGE_STALE_REASON } from "./check_sandbox.ts";
 
 /**
  * GitHubの一時的な失敗(5xxと通信断)で止まったPRレビューの、失敗の文の先頭。
- * 付けるのは投稿のステップで、`pr_review_retry.ts`の再開と、失敗の通知の判定が読む。
+ * 付けるのはPRレビューの準備と投稿のステップで、`pr_review_retry.ts`の再開と、失敗の通知の判定が読む。
  * 待っても結果が変わらない失敗には付けず、自動の再開に回さない。
  */
 export const TRANSIENT_GITHUB_REASON_PREFIX = "github_transient: ";

@@ -459,10 +459,11 @@ export async function publishReview(
     openMustCount,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
-  const fallbackBody = renderUnresolvedLineSummary(input.prAuthorLogin, [
-    ...input.commentedFindings,
-    ...droppedFindings,
-  ]);
+  const fallbackBody = renderUnresolvedLineSummary(
+    input.prAuthorLogin,
+    input.commentedFindings,
+    droppedFindings,
+  );
   const postedReviewId = await postMarkedReview(
     client,
     target,

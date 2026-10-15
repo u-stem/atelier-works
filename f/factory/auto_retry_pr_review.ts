@@ -16,7 +16,7 @@ import {
   listTransientReviewCandidates,
   recordTransientStall,
   restartTransientPrReview,
-  setFlowJobId,
+  setFlowJobIdIfUnset,
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
@@ -82,13 +82,13 @@ export async function main(): Promise<AutoRetryPrReviewResult> {
           note: `${AUTO_RETRY_NOTE_PREFIX}restarted from failed`,
         }),
       launchFlow: (flowPath, args) => wmill.runFlowAsync(flowPath, args),
-      recordFlowJobId: (id, jobId) => setFlowJobId(id, jobId),
+      recordFlowJobId: (id, jobId) => setFlowJobIdIfUnset(id, jobId),
       rollBack: (candidate, reason) =>
         updateStatusIfLeaseHolder(
           candidate.id,
           "reviewing",
           "needs_human",
-          candidate.flow_job_id,
+          null,
           reason,
         ),
       notifyRollBack: async (candidate, reason) => {
@@ -122,13 +122,9 @@ export async function main(): Promise<AutoRetryPrReviewResult> {
         extraGraceSeconds: TRANSIENT_STALL_GRACE_SECONDS,
         unnotifiedOnly: true,
       }),
-    recordStall: (candidate) =>
-      recordTransientStall({
-        stallNotePrefix: query.stallNotePrefix,
-        id: candidate.id,
-      }),
+    // 届いたときだけ記録を残すので、配信に失敗した作業項目は次の巡回でもう一度送る。
     notify: async (candidate) => {
-      await notifyBestEffort(
+      const delivery = await notifyBestEffort(
         await webhookUrl(),
         transientReviewStalledNotice({
           instanceName: config.instance_name,
@@ -136,7 +132,13 @@ export async function main(): Promise<AutoRetryPrReviewResult> {
         }),
         log,
       );
+      return delivery.status === "sent";
     },
+    recordStall: (candidate) =>
+      recordTransientStall({
+        stallNotePrefix: query.stallNotePrefix,
+        id: candidate.id,
+      }),
     log,
   });
   if (retryError !== null) throw retryError;
