@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "../..");
@@ -317,7 +327,8 @@ describe("review-loop scaling rules", () => {
     const line = text
       .split("\n")
       .find((row) => row.startsWith(`| ${first} | `));
-    return (line ?? "")
+    if (line === undefined) throw new Error(`no table row for ${first}`);
+    return line
       .split("|")
       .map((cell) => cell.trim())
       .filter((cell) => cell !== "");
@@ -350,7 +361,7 @@ describe("review-loop scaling rules", () => {
     "- 機能と削除・権限の、各ラウンドの後。",
     "- 設計レビューの、各ラウンドの後。",
     "- 種類を問わず、devil-advocateの致命的な反証があるとき。",
-    "- 種類を問わず、種類がセキュリティの`[MUST]`があるとき。",
+    "- 種類を問わず、種類がセキュリティの指摘があるとき。",
     "- 種類を問わず、種類がセキュリティの`[Q]`があるとき。",
     "- 種類を問わず、security-auditorの指摘があるとき。",
   ];
@@ -370,25 +381,87 @@ describe("review-loop scaling rules", () => {
     expect(tableRow(skillText(), "文書")[4]).toBe("不要");
   });
 
+  /** 種類の定義のうち、「1. 文書。」から「2. 削除・権限。」の手前までを返す。 */
+  function documentKind(): string {
+    const text = skillText();
+    const start = text.indexOf("1. 文書。");
+    const end = text.indexOf("2. 削除・権限。");
+    if (start < 0 || end < start) throw new Error("no document kind section");
+    return text.slice(start, end);
+  }
+
   const GUIDANCE_FILES = [
     "AGENTS.md",
     "CLAUDE.md",
     "AGENTS.wmill.md",
     "`docs/security.md`",
     "`docs/coding-guidelines.md`",
+    "`docs/setup.md`",
+    "`docs/operations.md`",
   ];
 
   test.each(GUIDANCE_FILES)(
     "lists %s as a file outside the document kind",
     (file) => {
-      expect(skillText()).toContain(file);
+      expect(documentKind()).toContain(file);
     },
   );
 
-  test("keeps the loosening wording out of AGENTS.md", () => {
-    expect(readFileSync(join(ROOT, "AGENTS.md"), "utf8")).not.toContain(
-      "緩める文言",
+  test("keeps loosening wording out of the document kind", () => {
+    expect(documentKind()).toContain("2の削除・権限に当たらない");
+  });
+
+  test("puts any change under .claude/ in the deletion and permission kind", () => {
+    expect(skillText()).toContain(
+      "`.claude/`の下(skills、agents、settings、hooks)は、文言だけの変更でも、常にここに入る。",
     );
+  });
+
+  test("excludes the lockfile at every depth from the line count", () => {
+    const command = /^git diff --numstat .*$/m.exec(skillText())?.[0] ?? "";
+    const pathspecs = command.match(/':\([^']*\)[^']*'/g) ?? [];
+    const dir = mkdtempSync(join(tmpdir(), "numstat-"));
+    const git = (...args: string[]): string => {
+      const run = Bun.spawnSync(
+        [
+          "git",
+          "-c",
+          "user.name=t",
+          "-c",
+          "user.email=t@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          ...args,
+        ],
+        { cwd: dir, env: { PATH: process.env.PATH ?? "", HOME: dir } },
+      );
+      return run.stdout.toString();
+    };
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(dir, "bun.lock"), "a\n");
+      mkdirSync(join(dir, "sub"));
+      writeFileSync(join(dir, "sub/bun.lock"), "a\n");
+      writeFileSync(join(dir, "src.ts"), "a\n");
+      git("add", ".");
+      git("commit", "-q", "-m", "base");
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      writeFileSync(join(dir, "bun.lock"), "b\n");
+      writeFileSync(join(dir, "sub/bun.lock"), "b\n");
+      writeFileSync(join(dir, "src.ts"), "b\n");
+      git("commit", "-q", "-am", "change");
+      const out = git(
+        "diff",
+        "--numstat",
+        "origin/main...HEAD",
+        "--",
+        ".",
+        ...pathspecs.map((spec) => spec.slice(1, -1)),
+      );
+      expect(out.trim().split("\n")).toEqual(["1\t1\tsrc.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("keeps mise run check out of devil-advocate's allowed commands", () => {

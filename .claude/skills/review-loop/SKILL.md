@@ -38,9 +38,10 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
 次の順に当てはめて、最初に当たったものを種類とする。
 
 1. 文書。
-   変更が、`docs/`とREADMEの文言だけである。
-   次の5つのファイルは含めない。
+   変更が、`docs/`とREADMEの文言だけで、2の削除・権限に当たらない。
+   次の7つのファイルは含めない。
    AGENTS.md、CLAUDE.md、AGENTS.wmill.md、`docs/security.md`、`docs/coding-guidelines.md`である。
+   AGENTS.mdが手順を任せる`docs/setup.md`と`docs/operations.md`も含めない。
    コード、テスト、設定、スキル、subagentの定義を含まない。
 2. 削除・権限。
    次のどれかに当たる。
@@ -80,8 +81,8 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
    次のどれかに当たる。
    - 新しい挙動を足す。
      新しい公開関数、Windmillの資産(script、flow、schedule)、miseタスク、外部APIの呼び出し、テーブルや列がその例である。
-   - 文書の5つのファイルの変更。
-     Claudeの行動と安全の規則を決めるファイルなので、中身を問わず、ここに入る。
+   - 文書から外した7つのファイルの変更。
+     Claudeの行動と安全の規則、またはその手順を決めるファイルなので、中身を問わず、ここに入る。
    - 小の上限を超える。
 4. 小。
    上のどれにも当たらず、変更するファイルが3個以下で、追加と削除の合計が100行以下である。
@@ -97,7 +98,7 @@ implementerが実装し、code-reviewerとdevil-advocateが独立にレビュー
 実測は、次のコマンドの出力で行う。
 
 ```bash
-git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.ts' ':(exclude)*.test.tsx' ':(exclude)*.script.lock' ':(exclude)*.script.yaml' ':(exclude)wmill-lock.yaml' ':(exclude)**/bun.lock'
+git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.ts' ':(exclude)*.test.tsx' ':(exclude)*.script.lock' ':(exclude)*.script.yaml' ':(exclude)wmill-lock.yaml' ':(exclude,glob)**/bun.lock'
 ```
 
 出た行の数がファイル数で、1列目と2列目の合計が行数である。
@@ -138,12 +139,13 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
 | --- | --- | --- | --- | --- |
 | 文書 | ループに通さない。`mise run lint:docs`を通し、code-reviewerを1回だけ起動して文書の判定を検証する | なし | 不要 | 不要 |
 | 小 | code-reviewerだけ | 2 | 不要 | 最後に1回 |
-| 機能 | code-reviewerとdevil-advocate | 3 | 新しい挙動を足すときは要。大きさか、文書の5つのファイルの変更で機能になったものは不要 | 最後に1回 |
+| 機能 | code-reviewerとdevil-advocate | 3 | 新しい挙動を足すときは要。大きさか、文書から外した7つのファイルの変更で機能になったものは不要 | 最後に1回 |
 | 削除・権限 | code-reviewerとdevil-advocate | 4 | 要 | 設計の各ラウンドと、最後に1回 |
 
 - 文書をループに通さないのは、文書の誤りは`mise run lint:docs`と読み手の指摘で直せ、実害が出る前に止める関門が要らないためである。
   判定そのものは親1人が決めるので、code-reviewerに1回だけ確かめさせる。
   種類が上がれば、その種類に従う。
+  確かめで出た`[MUST]`は、親が直し、再確認は要らない。
 - 小でdevil-advocateを呼ばないのは、反証が必ず指摘を返し、小さな変更では指摘の数が変更の大きさを超えるためである。
 - 削除・権限の上限が最も大きいのは、直した修正が新しい経路を生みやすく、直した後の確認に余裕が要るためである。
   設計レビューで先に欠陥を拾い、上限まで使う前に終えることを狙う。
@@ -189,7 +191,7 @@ git diff --numstat origin/main...HEAD -- . ':(exclude)tests/' ':(exclude)*.test.
 - 検証は、親が計画を書くときか、依頼に無い前提を見つけたimplementerが、実装の前に行う。
 - 検証は、1〜数個のコマンドで、5分以内に終える。
   読み取りを中心に行い、本番の資源と秘密値には触れない。
-- worktreeでは、書き込むgitコマンドを一切使わない。
+- 前提の検証では、書き込むgitコマンドを使わない。
   書き込みが要る検証は、一時ディレクトリに`git init`したリポジトリで行う。
   「使い捨てのリポジトリ」は、この一時ディレクトリのリポジトリを指し、worktreeは当たらない。
   worktreeはメインのcheckoutのrefを共有するためである。
@@ -280,8 +282,9 @@ security-auditorの指摘は、triageが「直す」と判定したものを、�
 
 - 修正と再監査の組を、種類の上限の外で、最大2組まで行う。
   無制限に続けると、終わらないためである。
-- 再レビューで新しい`[MUST]`が出たときは、同じ組の中で直す。
-  組の数は増やさない。
+- 組の内側の再レビューは、1回に限る。
+  その後に残る`[MUST]`は、2組の後に残るものと同じく、triageが直すか受け入れるかを決める。
+- 範囲を狭めた差分は、組の数に関わらず、手順6から10を1回通す。
 - 最後のラウンドで出たMediumも、この経路で直す。
   種類の上限の内に収まらなくても、同じである。
 - 2組の後も残るものは、triageが直すか受け入れるかを決める。
@@ -312,7 +315,7 @@ doc-writer、その差分の1回のレビュー、security-auditor、最後の`m
    - 機能と削除・権限の、各ラウンドの後。
    - 設計レビューの、各ラウンドの後。
    - 種類を問わず、devil-advocateの致命的な反証があるとき。
-   - 種類を問わず、種類がセキュリティの`[MUST]`があるとき。
+   - 種類を問わず、種類がセキュリティの指摘があるとき。
    - 種類を問わず、種類がセキュリティの`[Q]`があるとき。
    - 種類を問わず、security-auditorの指摘があるとき。
    triageを起動しないラウンドは、親が`rules.md`の「取り入れる基準」で判定する。
@@ -438,7 +441,9 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 
 テストを足すコミットのshaとテストのファイルは、親が`git log --reverse --name-only origin/main..HEAD`の出力から取る。
 implementerの報告の値は、照合にだけ使う。
-報告は自己申告で、ファイル名の記号をシェルが解釈するためである。
+テストを足すコミットが複数あるときは、最初のものを確かめる。
+shaは`^[0-9a-f]{40}$`に、ファイル名は`^tests/[A-Za-z0-9_./-]+\.test\.tsx?$`に合うときだけ、コマンドに渡す。
+合わないときは、シェルが記号を解釈するのを避けるため、この手順を「未実施」として報告する。
 ファイル名は、引用して1つずつ渡す。
 
 1. `mise run worktree:new -- test/verify-<名前>`で、使い捨てのworktreeを作る。
@@ -459,7 +464,9 @@ implementerの報告の値は、照合にだけ使う。
 
 `git checkout --detach`、`git worktree remove`、`git branch -d`は、`.claude/settings.json`の許可に無い。
 確認できない実行(クラウドとheadless)では、この手順を「未実施」として完了の報告に載せ、先へ進む。
-この使い捨てのworktreeでは、「前提の検証」と同じコマンドを実行しない。
+この使い捨てのworktreeで実行してよいのは、次の4つだけである。
+`git checkout --detach <sha>`、`bun test <ファイル>`、`git worktree remove`、`git branch -d`である。
+「前提の検証」で禁じた、外へ書き込むコマンドは、実行しない。
 
 新しいexportのテストは、import漏れで失敗する。
 これが先行したことにならないので、テストのコミットに最小のスタブを入れてよい。
