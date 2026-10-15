@@ -1448,6 +1448,8 @@ PATがリポジトリを読めなくなったときは、通知を解決せず�
 | `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数。2以上10以下。`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_fix_max_rounds`より大きい |
 | `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下。`pr_conflict_fix_enabled`が`true`なら、10以上 |
 
+これらの設定を使う処理がまだ無く、`pr_conflict_fix_enabled`を`true`にしても起動しない。[未実装の機能](architecture.md#未実装の機能)を参照する。
+
 競合を直す設定の組み合わせが上の条件を満たさないと、設定の読み込みが拒否する。
 Factoryのほかの処理も止まるので、関連する項目は同じ編集で書く。
 `pr_conflict_fix_enabled`が`true`のとき、猶予は巡回の間隔(5分)より大きい10分以上にする。

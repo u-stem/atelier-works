@@ -6055,16 +6055,29 @@ export type PrConflictFixRoundScope =
  * - 何も変えずに終えた作業項目(状態が`reviewed`で、その状態へ移った最新の遷移の注記が`up_to_date`のもの)。
  *   ベースの更新がすでに取り込まれていて、直す作業が無かった回である。
  * - イメージが古い理由で止まった作業項目(状態が`blocked`で、その状態へ移った最新の遷移の注記が、
- *   `staleImageNotePrefixes`のどれかで始まるもの)。呼び出し側は`AUTO_RETRY_REASON_PREFIXES`を渡す。
- *   一覧を引数にするのは、`db.ts`が検査のサンドボックスの部品に依存しないようにするためである。準備がClaudeを動かす前に止めた回で、フローのジョブIDを持つ。
+ *   `staleImageNotePrefixes`のどれかで始まるもの)。準備がClaudeを動かす前に止めた回で、フローのジョブIDを持つ。
+ *   そのため、1つ目の条件(`flow_job_id`が空の`failed`)では除けない。
  *   数えると、イメージが古い間に起動と停止を繰り返して回数を使い切り、人がイメージを直しても自動で直らなくなる。
- *   繰り返しは、行の`fix_attempts`の上限が止める。
+ *   呼び出し側は`AUTO_RETRY_REASON_PREFIXES`を渡す。一覧を引数にするのは、`db.ts`が検査のサンドボックスの部品に依存しないようにするためである。
+ *
+ * 数えない回の繰り返しは、行の`fix_attempts`の上限(`pr_conflict_fix_max_rounds`に3を足した数)だけが止める。
+ * 巡回は5分ごとなので、イメージが古い状態が約20〜25分(既定の設定のとき)を超えると、その回(episode)は
+ * `rounds_exhausted`(最終の保留)で通知に進む。通知の理由はイメージの古さを示さない。
+ * その後に人がイメージを直しても、その回は自動では直らない。新しい回で再び起動する。
+ * 準備の段階で止まる回はClaudeを使わないので、予算は使わない。
+ *
+ * 範囲ごとの2つの問い合わせは、数えない条件を同じ文で書き写している。条件を変えるときは両方を直す。
+ * `staleImageNotePrefixes`に空文字があるときは、DBに触れずに例外を投げる。空の接頭辞はすべての注記に一致し、
+ * `blocked`の回を残らず除いてしまうためである。
  */
 export async function countPrConflictFixRounds(
   scope: PrConflictFixRoundScope,
   staleImageNotePrefixes: readonly string[],
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
+  if (staleImageNotePrefixes.some((prefix) => prefix === "")) {
+    throw new Error("countPrConflictFixRounds: empty stale image note prefix");
+  }
   const upToDateNote = conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate);
   const staleImagePrefixes: string[] = [...staleImageNotePrefixes];
   if (scope.kind === "episode") {

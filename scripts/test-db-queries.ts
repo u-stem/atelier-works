@@ -5042,7 +5042,7 @@ execPsql(
 
 // 競合を直す作業項目: 起動は1つの文で行の更新と作業項目の挿入を行い、条件に合わなければ何も書かない。
 /** イメージが古い理由の注記の接頭辞。`AUTO_RETRY_REASON_PREFIXES`と同じ値で、依存を増やさないため値を書く。 */
-const STALE_IMAGE_NOTE_PREFIXES = ["worker image is stale: "];
+const STALE_IMAGE_NOTE_PREFIXES = ["worker image is stale: run mise run up: "];
 const CF = { owner: "qcfix", repo: "app" };
 const CF_HEAD_1 = "6".repeat(40);
 const CF_HEAD_2 = "7".repeat(40);
@@ -5782,7 +5782,11 @@ const cfStaleBlocked = await conflictRoundItem(
   "blocked",
   "job-9",
 );
-conflictNote(cfStaleBlocked, "blocked", "worker image is stale: probe");
+conflictNote(
+  cfStaleBlocked,
+  "blocked",
+  "worker image is stale: run mise run up: probe",
+);
 check(
   "conflict rounds: a blocked round stopped by a stale image is not counted, per episode",
   (await countPrConflictFixRounds(
@@ -5846,7 +5850,11 @@ const cfStaleLatest = await conflictRoundItem(
   "blocked",
   "job-12",
 );
-conflictNote(cfStaleLatest, "blocked", "worker image is stale: probe");
+conflictNote(
+  cfStaleLatest,
+  "blocked",
+  "worker image is stale: run mise run up: probe",
+);
 conflictNote(cfStaleLatest, "blocked", "conflict round: claude blocked: y");
 check(
   "conflict rounds: the latest note of the blocked status decides",
@@ -5855,6 +5863,27 @@ check(
     STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 8,
+);
+// 実行時の問題(workerの権限など)で止まった回は、イメージが古い理由ではないので数える。
+const cfRuntimeBlocked = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-13",
+);
+conflictNote(
+  cfRuntimeBlocked,
+  "blocked",
+  "worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: probe",
+);
+check(
+  "conflict rounds: a blocked round stopped by an unsafe worker runtime is counted",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 9,
 );
 execPsql(
   target,
@@ -5866,7 +5895,7 @@ check(
     { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
     STALE_IMAGE_NOTE_PREFIXES,
     sql,
-  )) === 9,
+  )) === 10,
 );
 // 新しい競合の回は、回の開始時刻、起動の回数、保留を戻し、結んだ作業項目は残す。競合のままでは何も戻さない。
 const cfEpisode = await conflictFixRow(720, CF_HEAD_1);

@@ -859,22 +859,6 @@ describe("countPrConflictFixRounds", () => {
     expect(calls[0]?.text).toContain("wi.status = 'reviewed'");
   });
 
-  test("does not count a blocked round that was stopped by a stale image, per episode", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(
-      EPISODE,
-      [...AUTO_RETRY_REASON_PREFIXES],
-      sql,
-    );
-    expect(calls[0]?.text).toContain("wi.status = 'blocked'");
-  });
-
-  test("does not count a blocked round that was stopped by a stale image, per pull request", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
-    expect(calls[0]?.text).toContain("wi.status = 'blocked'");
-  });
-
   test("binds the reasons of a stale image as note prefixes, per episode", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
     await countPrConflictFixRounds(
@@ -891,14 +875,27 @@ describe("countPrConflictFixRounds", () => {
     expect(calls[0]?.values).toContainEqual([...AUTO_RETRY_REASON_PREFIXES]);
   });
 
-  test("reads the note by the latest event of the blocked status", async () => {
+  test("rejects an empty stale image prefix, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(EPISODE, [""], sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an empty stale image prefix among others, without querying", async () => {
     const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
     await countPrConflictFixRounds(
-      EPISODE,
-      [...AUTO_RETRY_REASON_PREFIXES],
+      PR,
+      ["worker image is stale: ", ""],
       sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an empty stale image prefix with an error", async () => {
+    const { sql } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await expect(countPrConflictFixRounds(EPISODE, [""], sql)).rejects.toThrow(
+      "stale image note prefix",
     );
-    expect(calls[0]?.text).toContain("starts_with(");
   });
 
   test("rejects an episode check id that is not positive, without querying", async () => {
