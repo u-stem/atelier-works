@@ -1,13 +1,16 @@
 -- down migration: pr_conflict_fix
 -- 足した列の値は捨てる。
+-- コードを戻し、競合を直す回が終端になってから実行する。
+-- 列を落とすと、その作業項目が通常の修正回と見分けがつかなくなるため。
 BEGIN;
 
 SET LOCAL lock_timeout = '30s';
 
-DROP INDEX factory.pr_conflict_checks_fix_work_item_id_idx;
 DROP INDEX factory.work_items_conflict_check_id_idx;
 
 ALTER TABLE factory.work_items
+    DROP CONSTRAINT work_items_conflict_episode_min_check,
+    DROP CONSTRAINT work_items_conflict_check_id_min_check,
     DROP CONSTRAINT work_items_conflict_episode_check,
     DROP CONSTRAINT work_items_conflict_check_id_exclusive_check,
     DROP COLUMN conflict_episode,

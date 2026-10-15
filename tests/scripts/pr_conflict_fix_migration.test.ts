@@ -89,15 +89,21 @@ describe("20261015120000_pr_conflict_fix.up.sql", () => {
     );
   });
 
-  test("indexes only the work items that belong to a conflict round", async () => {
+  test("requires conflict_check_id to be positive", async () => {
     expect(await Bun.file(UP).text()).toContain(
-      "CREATE INDEX work_items_conflict_check_id_idx ON factory.work_items (conflict_check_id) WHERE conflict_check_id IS NOT NULL;",
+      "ADD CONSTRAINT work_items_conflict_check_id_min_check CHECK (conflict_check_id > 0)",
     );
   });
 
-  test("indexes only the conflict rows that have a fix work item", async () => {
+  test("requires conflict_episode to be at least 1", async () => {
     expect(await Bun.file(UP).text()).toContain(
-      "CREATE INDEX pr_conflict_checks_fix_work_item_id_idx ON factory.pr_conflict_checks (fix_work_item_id) WHERE fix_work_item_id IS NOT NULL;",
+      "ADD CONSTRAINT work_items_conflict_episode_min_check CHECK (conflict_episode >= 1)",
+    );
+  });
+
+  test("indexes only the work items that belong to a conflict round", async () => {
+    expect(await Bun.file(UP).text()).toContain(
+      "CREATE INDEX work_items_conflict_check_id_idx ON factory.work_items (conflict_check_id) WHERE conflict_check_id IS NOT NULL;",
     );
   });
 
@@ -131,12 +137,6 @@ describe("20261015120000_pr_conflict_fix.down.sql", () => {
     );
   });
 
-  test("drops the fix_work_item_id index", async () => {
-    expect(await Bun.file(DOWN).text()).toContain(
-      "DROP INDEX factory.pr_conflict_checks_fix_work_item_id_idx;",
-    );
-  });
-
   test("drops the conflict_check_id index", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
       "DROP INDEX factory.work_items_conflict_check_id_idx;",
@@ -145,7 +145,7 @@ describe("20261015120000_pr_conflict_fix.down.sql", () => {
 
   test("drops the constraints of work_items before its columns", async () => {
     expect(await Bun.file(DOWN).text()).toContain(
-      "ALTER TABLE factory.work_items\n    DROP CONSTRAINT work_items_conflict_episode_check,\n    DROP CONSTRAINT work_items_conflict_check_id_exclusive_check,\n    DROP COLUMN conflict_episode,\n    DROP COLUMN conflict_check_id;",
+      "ALTER TABLE factory.work_items\n    DROP CONSTRAINT work_items_conflict_episode_min_check,\n    DROP CONSTRAINT work_items_conflict_check_id_min_check,\n    DROP CONSTRAINT work_items_conflict_episode_check,\n    DROP CONSTRAINT work_items_conflict_check_id_exclusive_check,\n    DROP COLUMN conflict_episode,\n    DROP COLUMN conflict_check_id;",
     );
   });
 
@@ -155,10 +155,16 @@ describe("20261015120000_pr_conflict_fix.down.sql", () => {
     );
   });
 
-  test("drops the indexes before the columns they cover", async () => {
+  test("says when the rollback may run", async () => {
+    expect(await Bun.file(DOWN).text()).toContain(
+      "-- コードを戻し、競合を直す回が終端になってから実行する。",
+    );
+  });
+
+  test("drops the conflict_check_id index before altering any table", async () => {
     const text = await Bun.file(DOWN).text();
-    const lastIndex = text.indexOf("DROP INDEX factory.work_items_conflict");
-    const firstColumn = text.indexOf("ALTER TABLE");
-    expect(lastIndex).toBeLessThan(firstColumn);
+    expect(text.indexOf("DROP INDEX")).toBeLessThan(
+      text.indexOf("ALTER TABLE"),
+    );
   });
 });

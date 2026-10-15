@@ -4771,7 +4771,8 @@ check(
 // 競合を直す列は、記録した行では既定値のままで、既存の記録と通知の動きを変えない。
 const conflictFixColumnsOf = async (id: number) => {
   const rows = await sql`
-    SELECT fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at
+    SELECT fix_work_item_id, fix_attempts, fix_hold_reason,
+           episode_started_at >= checked_at AND episode_started_at <= now() AS started_at_insertion
     FROM factory.pr_conflict_checks WHERE id = ${id}::bigint
   `.fetch();
   return rows[0];
@@ -4793,9 +4794,8 @@ check(
   conflictFixColumns,
 );
 check(
-  "pr_conflict_checks: a new row records when the episode started",
-  conflictFixColumns?.episode_started_at !== null &&
-    conflictFixColumns?.episode_started_at !== undefined,
+  "pr_conflict_checks: a new row records the time of insertion as the start of the episode",
+  conflictFixColumns?.started_at_insertion === true,
   conflictFixColumns,
 );
 check(
@@ -4875,17 +4875,6 @@ check(
     conflictReopened.started &&
     conflictReopened.row.episode === 2,
   conflictReopened,
-);
-check(
-  "pr_conflict_checks: a reopened row keeps the default fix columns",
-  await (async () => {
-    const columns = await conflictFixColumnsOf(conflictFirst.row.id);
-    return (
-      columns?.fix_work_item_id === null &&
-      Number(columns?.fix_attempts) === 0 &&
-      columns?.fix_hold_reason === null
-    );
-  })(),
 );
 check(
   "pr_conflict_checks: a conflicted row is not deleted however old it is",

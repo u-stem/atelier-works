@@ -492,12 +492,12 @@ verify_pr_conflict_fix() {
       *) die "the statement was rejected, but not by ${constraint}: ${rejected}" ;;
     esac
   }
-  # 足した6列と2つの索引の数を数える。
+  # 足した6列と索引の数を数える。
   conflict_fix_columns() {
     conflict_fix_scalar "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'factory' AND ((table_name = 'pr_conflict_checks' AND ${fix_columns}) OR (table_name = 'work_items' AND ${item_columns}))"
   }
   conflict_fix_indexes() {
-    conflict_fix_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname IN ('work_items_conflict_check_id_idx', 'pr_conflict_checks_fix_work_item_id_idx')"
+    conflict_fix_scalar "SELECT count(*) FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'work_items_conflict_check_id_idx'"
   }
 
   # 適用の直後は、足した列が既定値で入り、制約が不正な値を拒む。
@@ -512,6 +512,10 @@ verify_pr_conflict_fix() {
   conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode, ci_check_id) VALUES (${item_values}, 1, 1, 2)" work_items_conflict_check_id_exclusive_check
   conflict_fix_rejected "${item_prefix}, conflict_check_id) VALUES (${item_values}, 1)" work_items_conflict_episode_check
   conflict_fix_rejected "${item_prefix}, conflict_episode) VALUES (${item_values}, 1)" work_items_conflict_episode_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 5, 0)" work_items_conflict_episode_min_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 5, -1)" work_items_conflict_episode_min_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 0, 1)" work_items_conflict_check_id_min_check
+  conflict_fix_rejected "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, -1, 1)" work_items_conflict_check_id_min_check
   conflict_fix_accepted "${item_prefix}, conflict_check_id, conflict_episode) VALUES (${item_values}, 5, 2)"
   local stored
   stored="$(conflict_fix_scalar "SELECT conflict_check_id || ':' || conflict_episode FROM factory.work_items WHERE owner = 'conflictprobe'")"
@@ -528,14 +532,13 @@ verify_pr_conflict_fix() {
     *"WHERE(conflict_check_idISNOTNULL)"*) ;;
     *) die "work_items_conflict_check_id_idx is not a partial index over conflict_check_id: ${index_def}" ;;
   esac
-  index_def="$(conflict_fix_scalar "SELECT indexdef FROM pg_indexes WHERE schemaname = 'factory' AND indexname = 'pr_conflict_checks_fix_work_item_id_idx'")"
-  case "${index_def}" in
-    *"WHERE(fix_work_item_idISNOTNULL)"*) ;;
-    *) die "pr_conflict_checks_fix_work_item_id_idx is not a partial index over fix_work_item_id: ${index_def}" ;;
-  esac
   local remaining
   remaining="$(conflict_fix_columns)"
   [ "${remaining}" = "6" ] || die "expected the six columns after applying, found ${remaining}"
+  local constraint_names="'pr_conflict_checks_fix_attempts_check', 'pr_conflict_checks_fix_hold_reason_check', 'pr_conflict_checks_fix_hold_reason_length_check', 'work_items_conflict_check_id_exclusive_check', 'work_items_conflict_episode_check', 'work_items_conflict_check_id_min_check', 'work_items_conflict_episode_min_check'"
+  local constraints
+  constraints="$(conflict_fix_scalar "SELECT count(*) FROM pg_constraint WHERE conname IN (${constraint_names})")"
+  [ "${constraints}" = "7" ] || die "expected the seven constraints after applying, found ${constraints}"
 
   # 戻すと、足した列と索引が消える。
   log "rolling back pr_conflict_fix"
@@ -544,10 +547,9 @@ verify_pr_conflict_fix() {
   [ "${remaining}" = "0" ] || die "expected the six columns to be dropped by the rollback, ${remaining} remain"
   local indexes
   indexes="$(conflict_fix_indexes)"
-  [ "${indexes}" = "0" ] || die "expected the two indexes to be dropped by the rollback, ${indexes} remain"
-  local constraints
-  constraints="$(conflict_fix_scalar "SELECT count(*) FROM pg_constraint WHERE conname IN ('pr_conflict_checks_fix_attempts_check', 'pr_conflict_checks_fix_hold_reason_check', 'pr_conflict_checks_fix_hold_reason_length_check', 'work_items_conflict_check_id_exclusive_check', 'work_items_conflict_episode_check')")"
-  [ "${constraints}" = "0" ] || die "expected the five constraints to be dropped by the rollback, ${constraints} remain"
+  [ "${indexes}" = "0" ] || die "expected the index to be dropped by the rollback, ${indexes} remain"
+  constraints="$(conflict_fix_scalar "SELECT count(*) FROM pg_constraint WHERE conname IN (${constraint_names})")"
+  [ "${constraints}" = "0" ] || die "expected the seven constraints to be dropped by the rollback, ${constraints} remain"
 
   # 戻した状態で入れた既存の行は、もう一度適用しても壊れず、新しい列は既定値かNULLになる。
   conflict_fix_accepted "${check_prefix}) VALUES ('conflictprobe', 'r', 4, '${sha}')"
@@ -557,7 +559,7 @@ verify_pr_conflict_fix() {
   remaining="$(conflict_fix_columns)"
   [ "${remaining}" = "6" ] || die "expected the six columns after re-applying, found ${remaining}"
   indexes="$(conflict_fix_indexes)"
-  [ "${indexes}" = "2" ] || die "expected the two indexes after re-applying, found ${indexes}"
+  [ "${indexes}" = "1" ] || die "expected the index after re-applying, found ${indexes}"
   defaults="$(conflict_fix_scalar "SELECT fix_attempts || ':' || COALESCE(fix_work_item_id::text, '-') || ':' || COALESCE(fix_hold_reason, '-') || ':' || (episode_started_at IS NOT NULL) FROM factory.pr_conflict_checks WHERE owner = 'conflictprobe' AND pr_number = 4")"
   [ "${defaults}" = "0:-:-:true" ] || die "unexpected defaults of an existing row after re-applying: ${defaults}"
   stored="$(conflict_fix_scalar "SELECT ci_check_id || ':' || COALESCE(conflict_check_id::text, '-') || ':' || COALESCE(conflict_episode::text, '-') FROM factory.work_items WHERE owner = 'conflictprobe'")"
