@@ -537,6 +537,7 @@ function prepareDeps(collected: CollectResult): DependabotPrepareDeps {
         baseRepoFullName: "acme/widgets",
         baseRepoId: 1,
         baseRef: "main",
+        baseSha: null,
         mergeable: true,
         mergeableState: "clean",
         authorLogin: "dependabot[bot]",

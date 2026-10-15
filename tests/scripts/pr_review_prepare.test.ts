@@ -78,6 +78,7 @@ function pullRequest(headRepoFullName: string | null): PullRequest {
     baseRepoFullName: "octo-owner/atelier-works",
     baseRepoId: 1,
     baseRef: "main",
+    baseSha: null,
     mergeable: null,
     mergeableState: null,
     authorLogin: "octo-owner",

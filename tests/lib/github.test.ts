@@ -3486,7 +3486,11 @@ describe("getPr", () => {
           ref: "feature-x",
           repo: { full_name: "acme/widgets-fork" },
         },
-        base: { ref: "main", repo: { full_name: "acme/widgets", id: 99 } },
+        base: {
+          ref: "main",
+          sha: "b".repeat(40),
+          repo: { full_name: "acme/widgets", id: 99 },
+        },
         mergeable: true,
         mergeable_state: "clean",
         user: { login: "alice", type: "User" },
@@ -3512,6 +3516,7 @@ describe("getPr", () => {
       baseRepoFullName: "acme/widgets",
       baseRepoId: 99,
       baseRef: "main",
+      baseSha: "b".repeat(40),
       mergeable: true,
       mergeableState: "clean",
       authorLogin: "alice",
@@ -3519,6 +3524,32 @@ describe("getPr", () => {
       authorType: "User",
       autoMergeEnabled: false,
     });
+  });
+
+  test("returns a null base sha when the response has none", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        number: 12,
+        title: "t",
+        body: "b",
+        draft: false,
+        state: "open",
+        merged: false,
+        head: { sha: "abc123", ref: "feature-x", repo: null },
+        base: { ref: "main", repo: null },
+        mergeable: null,
+        mergeable_state: "unknown",
+        user: null,
+        auto_merge: null,
+      }),
+    ]);
+    const pr = await getPr(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(pr.baseSha).toBeNull();
   });
 
   // 実行のheadのリポジトリとIDで比べるために使うので、安全な正の整数でなければnullにする。

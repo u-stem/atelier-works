@@ -2395,6 +2395,8 @@ export type PullRequest = {
    */
   readonly baseRepoId: number | null;
   readonly baseRef: string;
+  /** ベースブランチの先頭のコミット。応答に無いか文字列でなければ`null`。 */
+  readonly baseSha: string | null;
   /** GitHubがまだ計算していないときは`null`。真偽に丸めない。 */
   readonly mergeable: boolean | null;
   readonly mergeableState: string | null;
@@ -2424,6 +2426,7 @@ type PrPayload = {
   };
   readonly base: {
     readonly ref: string;
+    readonly sha?: unknown;
     readonly repo: {
       readonly full_name: unknown;
       readonly id?: unknown;
@@ -2507,6 +2510,7 @@ export async function getPr(
     baseRepoFullName,
     baseRepoId,
     baseRef: parsed.base.ref,
+    baseSha: typeof parsed.base.sha === "string" ? parsed.base.sha : null,
     mergeable: typeof parsed.mergeable === "boolean" ? parsed.mergeable : null,
     mergeableState:
       typeof parsed.mergeable_state === "string"
