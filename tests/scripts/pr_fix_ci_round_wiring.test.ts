@@ -173,6 +173,18 @@ describe("the finish step of a recomputed lock", () => {
   });
 });
 
+describe("the kind of the round in the check of a recomputed lock", () => {
+  test("reads the kind of the round again in the verify step", async () => {
+    const text = await source("pr_fix_verify.ts");
+    expect(count(text, "isRehashRound: rehashRoundProbe({")).toBe(1);
+  });
+
+  test("reads the kind of the round again in the finish step", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(count(text, "isRehashRound: rehashRoundProbe({")).toBe(1);
+  });
+});
+
 describe("the verify step of a recomputed lock", () => {
   test("confirms the lock against an independent recomputation", async () => {
     const text = await source("pr_fix_verify.ts");
@@ -181,7 +193,7 @@ describe("the verify step of a recomputed lock", () => {
 
   test("turns the confirmation into the verdict through one function", async () => {
     const text = await source("pr_fix_verify.ts");
-    expect(count(text, "return confirmationVerdict(confirmation);")).toBe(1);
+    expect(count(text, "return await confirmationVerdict(")).toBe(1);
   });
 
   test("resets the confirmation at every inspection", async () => {

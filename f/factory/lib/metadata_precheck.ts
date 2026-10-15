@@ -131,7 +131,10 @@ export type PlanResult =
       readonly ok: false;
       readonly reason: RehashFailureReason;
       readonly path?: string;
-      /** 固定の補足。`scan_unavailable`のときは、実行しているBunの版を載せる。 */
+      /**
+       * 固定の補足。`scan_unavailable`のときは、実行しているBunの版を載せる。
+       * `internal_error`のときは、例外の種類(標準のエラーの名前だけ)を載せる。
+       */
       readonly detail?: string;
     };
 
@@ -141,6 +144,26 @@ function fail(reason: RehashFailureReason, path?: string): Failure {
   return path === undefined
     ? { ok: false, reason }
     : { ok: false, reason, path };
+}
+
+const STANDARD_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "Error",
+  "TypeError",
+  "RangeError",
+  "SyntaxError",
+  "ReferenceError",
+  "EvalError",
+  "URIError",
+]);
+
+/**
+ * 例外の種類を、標準のエラーの名前に限って返す。それ以外は`Error`にする。
+ * 例外の内容は、入力のパスなどを含みうるので載せない。
+ */
+function errorKind(error: unknown): string {
+  return error instanceof Error && STANDARD_ERROR_NAMES.has(error.name)
+    ? error.name
+    : "Error";
 }
 
 /** ポートが投げた例外。内容は載せずに、`port_error`として返す。 */
@@ -712,8 +735,10 @@ async function plan(
  * - `limits`の各値が、正の安全な整数である。読んだ内容が、木の項目の`oid`と一致する。
  *   実行時に残るimportの読み方が、固定の入力で想定どおりに動く(Bunの版に依存するため)。
  * 想定外の例外も、固定の種別(`internal_error`)にして返す。
- * 一時的な失敗(`port_error`、`ancestry_unknown`、`internal_error`)と、再試行で直らない失敗
- * (`scan_unavailable`、`tree_unreadable`など)は、種別で分ける。
+ * 一時的な失敗(`port_error`、`ancestry_unknown`)と、再試行で直らない失敗
+ * (`internal_error`、`scan_unavailable`、`tree_unreadable`など)は、種別で分ける。
+ * `internal_error`は、ポートの例外をすべて`port_error`などに変えた後に残る、純粋な計算の例外なので、
+ * 同じ入力では同じ結果になる。
  */
 export async function planMetadataRehash(
   input: RehashInput,
@@ -760,6 +785,10 @@ export async function planMetadataRehash(
     if (error instanceof BlobMismatchError) {
       return fail("blob_mismatch");
     }
-    return fail("internal_error");
+    return {
+      ok: false,
+      reason: "internal_error",
+      detail: errorKind(error),
+    };
   }
 }

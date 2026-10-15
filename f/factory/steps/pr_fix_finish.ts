@@ -24,6 +24,7 @@ import {
   readRootWmillLock,
   readStagedRootLock,
   rehashPushStopReason,
+  rehashRoundProbe,
   type StagedRehashGate,
   stagedRehashGate,
 } from "../lib/ci_metadata_rehash.ts";
@@ -751,6 +752,14 @@ export async function main(
           readLock: () => readRootWmillLock(worktree_dir),
         }),
       readStaged: () => readStagedRootLock(runCommandBytes, worktree_dir),
+      isRehashRound: rehashRoundProbe({
+        client,
+        owner,
+        repo,
+        prNumber: pr_number,
+        headSha: head_sha,
+        run: runCommand,
+      }),
     });
   }
 

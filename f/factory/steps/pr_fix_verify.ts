@@ -36,6 +36,7 @@ import {
   githubRehashPlanner,
   type RehashPlanner,
   readRootWmillLock,
+  rehashRoundProbe,
 } from "../lib/ci_metadata_rehash.ts";
 import {
   buildSystemPrompt,
@@ -497,19 +498,35 @@ export async function main(
     return prChangedPathsRead;
   };
   // hashの再計算の確認に使う、baseの先端の読み取りと再計算。最初に要るときに1回だけ組む。
-  let rehashPlannerBuilt: Promise<RehashPlanner> | null = null;
-  const rehashPlannerOnce = (): Promise<RehashPlanner> => {
+  // 回の種類(再計算の回か)を読み直す関数も、同じ認証で組む。
+  let rehashPlannerBuilt: Promise<{
+    readonly planner: RehashPlanner;
+    readonly isRehashRound: () => Promise<boolean>;
+  }> | null = null;
+  const rehashPlannerOnce = () => {
     rehashPlannerBuilt ??= (async () => {
       const ghToken = await wmill.getVariable("f/factory/github_token");
-      return githubRehashPlanner({
-        client: { run: runCommand, ghToken },
-        owner,
-        repo,
-        prNumber: pr_number,
-        headSha: requireCiRoundHeadSha(head_sha),
-        worktreeDir: worktree_dir,
-        ghToken,
-      });
+      const client: GhClient = { run: runCommand, ghToken };
+      const headSha = requireCiRoundHeadSha(head_sha);
+      return {
+        planner: githubRehashPlanner({
+          client,
+          owner,
+          repo,
+          prNumber: pr_number,
+          headSha,
+          worktreeDir: worktree_dir,
+          ghToken,
+        }),
+        isRehashRound: rehashRoundProbe({
+          client,
+          owner,
+          repo,
+          prNumber: pr_number,
+          headSha,
+          run: runCommand,
+        }),
+      };
     })();
     return rehashPlannerBuilt;
   };
@@ -570,13 +587,13 @@ export async function main(
                 source: "worktree",
                 // 変更が`wmill-lock.yaml`の1件だけのときに限り、PRのheadの木からの独立した再計算と照合する。
                 rehashCheck: async () => {
-                  const planner = await rehashPlannerOnce();
+                  const { planner, isRehashRound } = await rehashPlannerOnce();
                   const confirmation = await confirmRehash({
                     ...planner,
                     readLock: () => readRootWmillLock(worktree_dir),
                   });
                   rehashVerified = confirmation.ok;
-                  return confirmationVerdict(confirmation);
+                  return await confirmationVerdict(confirmation, isRehashRound);
                 },
               },
             );

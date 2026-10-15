@@ -308,7 +308,7 @@ describe("createGitPrecheckPorts.readBlob", () => {
     const seen: string[][] = [];
     const spy: BytesRunner = async (argv) => {
       seen.push([...argv]);
-      return { stdout: new Uint8Array(), exitCode: 1, timedOut: false };
+      return { stdout: new Uint8Array(), exitCode: 0, timedOut: false };
     };
     await ports({ runBytes: spy }).readBlob(fixture.second, "f/a.ts");
     expect(seen[0]?.slice(-3)).toEqual([
@@ -321,17 +321,15 @@ describe("createGitPrecheckPorts.readBlob", () => {
     ]);
   });
 
-  test("reports an unreadable blob when git fails", async () => {
+  test("throws, as a transient failure, when git fails", async () => {
     const failing: BytesRunner = async () => ({
       stdout: new Uint8Array(),
       exitCode: 128,
       timedOut: false,
     });
-    const result = await ports({ runBytes: failing }).readBlob(
-      fixture.second,
-      "f/a.ts",
-    );
-    expect(result.kind).toBe("failed");
+    await expect(
+      ports({ runBytes: failing }).readBlob(fixture.second, "f/a.ts"),
+    ).rejects.toThrow();
   });
 
   test("reports an unreadable blob when the size differs from the listing", async () => {
@@ -347,17 +345,27 @@ describe("createGitPrecheckPorts.readBlob", () => {
     expect(result.kind).toBe("failed");
   });
 
-  test("reports an unreadable blob when git timed out", async () => {
+  test("throws, as a transient failure, when git timed out", async () => {
     const slow: BytesRunner = async () => ({
       stdout: new Uint8Array(),
       exitCode: 0,
       timedOut: true,
     });
-    const result = await ports({ runBytes: slow }).readBlob(
-      fixture.second,
-      "f/a.ts",
-    );
-    expect(result.kind).toBe("failed");
+    await expect(
+      ports({ runBytes: slow }).readBlob(fixture.second, "f/a.ts"),
+    ).rejects.toThrow();
+  });
+
+  test("does not throw the deterministic tree error when git fails", async () => {
+    const failing: BytesRunner = async () => ({
+      stdout: new Uint8Array(),
+      exitCode: 128,
+      timedOut: false,
+    });
+    const error = await ports({ runBytes: failing })
+      .readBlob(fixture.second, "f/a.ts")
+      .catch((caught: unknown) => caught);
+    expect(error instanceof TreeUnreadableError).toBe(false);
   });
 
   test("lists a tree once for several reads of the same commit", async () => {

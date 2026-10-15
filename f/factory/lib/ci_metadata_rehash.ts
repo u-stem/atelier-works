@@ -7,10 +7,12 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import {
+  buildCiGatherDeps,
   CI_ROUND_DETAILS,
   type CiFailureRead,
   ciRoundReason,
   type RehashCheckVerdict,
+  readCiFailure,
 } from "./ci_fix_round.ts";
 import { type GhClient, getBranchSha, getPr } from "./github.ts";
 import {
@@ -23,7 +25,12 @@ import {
   planMetadataRehash,
   type RehashFailureReason,
 } from "./metadata_precheck.ts";
-import { buildGitArgv, DEFAULT_TIMEOUT_MS, localGitEnv } from "./workspace.ts";
+import {
+  buildGitArgv,
+  type CommandRunner,
+  DEFAULT_TIMEOUT_MS,
+  localGitEnv,
+} from "./workspace.ts";
 
 /** 再計算のcommitの件名。Factoryが固定の文で作る。件名の長さは60字以内である。 */
 export const METADATA_REHASH_COMMIT_SUBJECT =
@@ -52,15 +59,19 @@ export type MetadataManualReason =
 /**
  * 再計算で直せないときに止める理由。接頭辞は`ci round: `で、続けて固定の文と、種別を付ける。
  * 種別は固定の語彙で、PRの作者が決められるパスは入れない。
- * 補足(`detail`)は、`scan_unavailable`のときだけ、`: <補足>`として足す。workerのBunの版(`bun <版>`)で、
- * 運用者が、workerの更新で直るかを見分けるためである。ほかの種別の補足は捨てる。
+ * 補足(`detail`)は、`scan_unavailable`と`internal_error`のときだけ、`: <補足>`として足す。
+ * 前者はworkerのBunの版(`bun <版>`)で、運用者が、workerの更新で直るかを見分けるためである。
+ * 後者は標準のエラーの名前で、原因の見当を付けるためである。ほかの種別の補足は捨てる。
  */
 export function metadataManualReason(
   reason: MetadataManualReason,
   detail?: string,
 ): string {
   const suffix =
-    reason === "scan_unavailable" && detail !== undefined ? `: ${detail}` : "";
+    (reason === "scan_unavailable" || reason === "internal_error") &&
+    detail !== undefined
+      ? `: ${detail}`
+      : "";
   return ciRoundReason(`${CI_ROUND_DETAILS.metadataManual}${reason}${suffix})`);
 }
 
@@ -95,15 +106,15 @@ export type MetadataRehashOutcome =
 
 /**
  * 事前検査の失敗のうち、同じ入力でやり直せば通りうる、一時的なもの。
- * gitコマンドや読み取りの失敗(`port_error`)、祖先の判定の失敗、想定外の例外である。
+ * gitコマンドや読み取りの失敗(`port_error`)と、祖先の判定の失敗(`ancestry_unknown`)である。
  * 人の手に回さず、例外にして、flowの再試行に任せる。再計算は何度行っても同じ結果になる。
- * 自己検査の失敗(`scan_unavailable`)や、木の一覧が読めないこと(`tree_unreadable`)は、
- * 再試行しても直らないので、ここに含めない。
+ * 想定外の例外(`internal_error`)は、ポートの例外を`port_error`などに変えた後に残る純粋な計算の例外で、
+ * 同じ入力では同じ結果になる。自己検査の失敗(`scan_unavailable`)と、木の一覧が読めないこと(`tree_unreadable`)も、
+ * 再試行しても直らない。これらはここに含めない。
  */
 const TRANSIENT_REHASH_REASONS: ReadonlySet<RehashFailureReason> = new Set([
   "port_error",
   "ancestry_unknown",
-  "internal_error",
 ]);
 
 /** 事前検査が一時的な理由で失敗したことを表す。固定の種別だけを持つ。 */
@@ -116,7 +127,7 @@ export class RehashTransientError extends Error {
 
 /**
  * 再計算できて、本文が変わるときだけ、ファイルを書き換える。
- * 再計算できないときは、種別だけを返し、何も書かない。ただし、一時的な種別(`port_error`、`ancestry_unknown`、`internal_error`)は、
+ * 再計算できないときは、種別だけを返し、何も書かない。ただし、一時的な種別(`port_error`、`ancestry_unknown`)は、
  * `RehashTransientError`を投げる。本文が変わらないときは`up_to_date`を返し、何も書かない。
  * 書き換えられないlockは`lock_not_writable`にする。
  * 一時的な失敗(読み取りや取り込みの例外、書き込みのその他の例外)は、そのまま投げる。呼び出し側のflowの再試行に任せる。
@@ -157,6 +168,46 @@ export type MetadataRoundResult =
   | { readonly kind: "manual"; readonly reason: string };
 
 /**
+ * `metadata`ジョブだけが失敗している分類か。この回だけが、Claudeを使わない再計算の回になる。
+ * `check`などが同時に落ちている回と、`metadata`が落ちていない回は、Claudeの回である。
+ */
+export function isMetadataOnlyFailure(failure: CiFailureRead): boolean {
+  return (
+    failure.kind === "fixable" &&
+    failure.metadataFailed &&
+    failure.jobs.length === 0
+  );
+}
+
+/**
+ * 今の回が再計算の回か(`isMetadataOnlyFailure`)を、PRのheadのCIの実行から読み直して答える関数を作る。
+ * 検証と完了のステップが、修正のステップの出力を信用せずに、回の種類を決めるために使う。
+ * 呼ぶたびにGitHubを読むので、必要なときだけ呼ぶ。
+ */
+export function rehashRoundProbe(input: {
+  readonly client: GhClient;
+  readonly owner: string;
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly run: CommandRunner;
+}): () => Promise<boolean> {
+  const target = {
+    owner: input.owner,
+    repo: input.repo,
+    prNumber: input.prNumber,
+    headSha: input.headSha,
+  };
+  return async () =>
+    isMetadataOnlyFailure(
+      await readCiFailure(
+        buildCiGatherDeps(input.client, target, input.run),
+        target,
+      ),
+    );
+}
+
+/**
  * `metadata`ジョブが失敗しているときだけ、再計算を行う。失敗していなければ`null`を返し、呼び出し側が通常の流れを続ける。
  * `check`などの直せる失敗と同時のときは、再計算せず`null`を返す。Claudeが先にそのジョブを直す。
  * Claudeが`f/`を触るとhashが再び古くなるので、再計算は、`metadata`だけが落ちた次の回に行う。
@@ -168,8 +219,7 @@ export async function runMetadataRound(
   deps: MetadataRoundDeps,
 ): Promise<MetadataRoundResult | null> {
   const failure = await deps.readFailure();
-  if (failure.kind !== "fixable" || !failure.metadataFailed) return null;
-  if (failure.jobs.length > 0) return null;
+  if (!isMetadataOnlyFailure(failure)) return null;
   const outcome = await deps.rehash();
   if (outcome.kind === "rewritten") return outcome;
   if (outcome.kind === "up_to_date") {
@@ -324,13 +374,18 @@ export type RehashConfirmed = Extract<RehashConfirmation, { ok: true }>;
 
 /**
  * 照合の結果を、`inspectCiFixChanges`が使う判定にする。
- * 確認できたら許し、固定の理由で直せないときはその理由で止め、そのほかは保護パスの検査に任せる。
+ * 確認できたら許し、そのほかは、原則として保護パスの検査に任せる。
+ * 固定の理由で直せないときは、再計算の回(`isRehashRound`)に限り、その理由で止める。
+ * Claudeの回で`wmill-lock.yaml`だけが変わったときに、「metadataジョブの失敗を直せない」と案内しないためである。
+ * そのときは、保護パスの違反として拒否する。`isRehashRound`は、直せないときにだけ呼ぶ。
  */
-export function confirmationVerdict(
+export async function confirmationVerdict(
   confirmation: RehashConfirmation,
-): RehashCheckVerdict {
+  isRehashRound: () => Promise<boolean>,
+): Promise<RehashCheckVerdict> {
   if (confirmation.ok) return { kind: "allow" };
   if (confirmation.kind === "mismatch") return { kind: "deny" };
+  if (!(await isRehashRound())) return { kind: "deny" };
   return {
     kind: "stop",
     reason: metadataManualReason(confirmation.reason, confirmation.detail),
@@ -349,7 +404,7 @@ const utf8 = new TextEncoder();
  * 先端が動いていたら、新しい先端で最初からやり直す。上限(`REHASH_CONFIRM_ATTEMPTS`)を超えても動き続けるときは、確認できないとする。
  * 再試行で直らない理由で再計算できないときは`manual`、バイト列が違う、バイト列を読めないときは`mismatch`を返す。
  * 通ったバイト列は、修正のステップが書いたものと同じであり、依存や`schema`を書き換えていない。
- * 再計算が一時的な理由で失敗したとき(`port_error`、`ancestry_unknown`、`internal_error`)は、`RehashTransientError`を投げる。
+ * 再計算が一時的な理由で失敗したとき(`port_error`、`ancestry_unknown`)は、`RehashTransientError`を投げる。
  * 読み取りや取り込みの例外も、そのまま投げる。一時的な失敗なので、呼び出し側が再試行する。
  */
 export async function confirmRehash(
@@ -397,6 +452,8 @@ export type StagedRehashDeps = {
   readonly confirm: () => Promise<RehashConfirmation>;
   /** ステージした`wmill-lock.yaml`のバイト列。読めなければ`null`。 */
   readonly readStaged: () => Promise<Uint8Array | null>;
+  /** 今の回が再計算の回か。照合が固定の理由で直せないときにだけ呼ぶ(`confirmationVerdict`)。 */
+  readonly isRehashRound: () => Promise<boolean>;
 };
 
 /**
@@ -415,7 +472,7 @@ export async function stagedRehashGate(
   }
   const confirmation = await deps.confirm();
   if (!confirmation.ok) {
-    const verdict = confirmationVerdict(confirmation);
+    const verdict = await confirmationVerdict(confirmation, deps.isRehashRound);
     return { confirmed: null, check: async () => verdict };
   }
   return {

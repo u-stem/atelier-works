@@ -440,7 +440,8 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)と`isLockOnlyChange`(`ci_fix_round.ts`)は、保護パスの一覧に入れない。
   これらを書き換えて条件を緩める変更は、マージ前の人のレビューで止める。CI回のClaudeには、CI回の拒否が別に止める。
   本文が再計算と違うときと、確認できないときは、保護パスの違反として拒否する。
-  再試行しても直らない理由で再計算できないときは、固定の理由を返し、保護パスの違反にはしない。
+  再試行しても直らない理由で再計算できないときは、再計算の回に限り、固定の理由を返し、保護パスの違反にはしない。
+  回の種類は、CIの実行から読み直して決める。Claudeの回では、保護パスの違反として拒否する。
   一時的な失敗は、拒否せず、例外にして再試行する。
 - 比べるのは、文字列ではなくバイト列である。
   文字列に復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わって、違う内容が同じに見えるためである。
@@ -453,10 +454,10 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
 - baseの先端は、PRのAPIの`base.sha`ではなく、baseブランチの今の先端をAPIで読んで使う。
   照合の中と、pushの直前に読み直し、動いていれば新しい先端で確かめ直す。
 - 人の手に回す理由は、事前検査の固定の語彙と、`lock_up_to_date`、`lock_not_writable`だけである。
-  一時的な失敗(`port_error`、`ancestry_unknown`、`internal_error`)は、人の手に回さず、例外にして再試行する。
-  再試行で直らない失敗(自己検査の`scan_unavailable`、木の一覧が読めない`tree_unreadable`)は、人の手に回す。
+  一時的な失敗(`port_error`、`ancestry_unknown`)は、人の手に回さず、例外にして再試行する。
+  再試行で直らない失敗(想定外の例外の`internal_error`、自己検査の`scan_unavailable`、木の一覧が読めない`tree_unreadable`)は、人の手に回す。
   PRの作者が決めるパスは、通知にも作業項目の理由にも載せない。
-  補足は、`scan_unavailable`のworkerのBunの版(`bun <版>`)だけを載せる。
+  補足は、`scan_unavailable`のworkerのBunの版(`bun <版>`)と、`internal_error`の例外の種類(標準のエラーの名前だけ)に限る。
 - 検査コマンドは、この形のとき実行しない。hashだけを書き換えた変更に、対象リポジトリのコードを実行する意味が無いためである。
 
 事前検査は、悪意のあるPRに対する境界ではない。

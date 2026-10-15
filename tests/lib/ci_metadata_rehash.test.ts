@@ -16,6 +16,7 @@ import {
   CI_ROUND_REHASH_STALE_REASON,
   confirmationVerdict,
   confirmRehash,
+  isMetadataOnlyFailure,
   LockNotWritableError,
   METADATA_REHASH_COMMIT_BODY,
   METADATA_REHASH_COMMIT_SUBJECT,
@@ -262,7 +263,7 @@ describe("runMetadataRound when the lock is already up to date", () => {
     ).rejects.toThrow("disk hiccup");
   });
 
-  test.each(["port_error", "ancestry_unknown", "internal_error"] as const)(
+  test.each(["port_error", "ancestry_unknown"] as const)(
     "lets the transient failure %s of the precheck go up for a retry",
     async (reason) => {
       await expect(
@@ -326,6 +327,12 @@ describe("metadataManualReason with a detail", () => {
   test("adds the detail for a scan that is unavailable", () => {
     expect(metadataManualReason("scan_unavailable", "bun 1.3.0")).toBe(
       "ci round: the lock cannot be recomputed automatically (scan_unavailable: bun 1.3.0)",
+    );
+  });
+
+  test("adds the detail for an internal error", () => {
+    expect(metadataManualReason("internal_error", "TypeError")).toBe(
+      "ci round: the lock cannot be recomputed automatically (internal_error: TypeError)",
     );
   });
 
@@ -565,7 +572,7 @@ describe("confirmRehash", () => {
     });
   });
 
-  test.each(["port_error", "ancestry_unknown", "internal_error"] as const)(
+  test.each(["port_error", "ancestry_unknown"] as const)(
     "throws a transient error when the plan fails with %s",
     async (reason) => {
       const { deps } = io({ plan: () => ({ ok: false, reason }) });
@@ -735,44 +742,99 @@ describe("rehashPushStopReason", () => {
   });
 });
 
+describe("isMetadataOnlyFailure", () => {
+  const JOB = {
+    id: 1,
+    runId: 2,
+    headSha: "a".repeat(40),
+    name: "check",
+    status: "completed",
+    conclusion: "failure",
+    steps: [],
+  };
+
+  test("is true when only the metadata job failed", () => {
+    expect(isMetadataOnlyFailure(fixable())).toBe(true);
+  });
+
+  test("is false when the job that Claude fixes failed too", () => {
+    expect(isMetadataOnlyFailure(fixable({ jobs: [JOB] }))).toBe(false);
+  });
+
+  test("is false when the metadata job did not fail", () => {
+    expect(isMetadataOnlyFailure(fixable({ metadataFailed: false }))).toBe(
+      false,
+    );
+  });
+
+  test("is false when the failure cannot be fixed", () => {
+    expect(isMetadataOnlyFailure({ kind: "blocked", reason: "x" })).toBe(false);
+  });
+});
+
 describe("confirmationVerdict", () => {
-  test("allows a confirmed lock", () => {
+  const ROUND = async () => true;
+  const NOT_ROUND = async () => false;
+
+  test("allows a confirmed lock", async () => {
     expect(
-      confirmationVerdict({
-        ok: true,
-        baseSha: "1".repeat(40),
-        lockBytes: ENC.encode("x"),
-      }),
+      await confirmationVerdict(
+        { ok: true, baseSha: "1".repeat(40), lockBytes: ENC.encode("x") },
+        ROUND,
+      ),
     ).toEqual({ kind: "allow" });
   });
 
-  test("denies a mismatch, so that the protected path check decides", () => {
-    expect(confirmationVerdict({ ok: false, kind: "mismatch" })).toEqual({
-      kind: "deny",
-    });
+  test("denies a mismatch, so that the protected path check decides", async () => {
+    expect(
+      await confirmationVerdict({ ok: false, kind: "mismatch" }, ROUND),
+    ).toEqual({ kind: "deny" });
   });
 
-  test("stops with the fixed reason for a manual confirmation", () => {
+  test("stops with the fixed reason for a manual confirmation in a recomputation round", async () => {
     expect(
-      confirmationVerdict({
-        ok: false,
-        kind: "manual",
-        reason: "head_lacks_base",
-      }),
+      await confirmationVerdict(
+        { ok: false, kind: "manual", reason: "head_lacks_base" },
+        ROUND,
+      ),
     ).toEqual({
       kind: "stop",
       reason: metadataManualReason("head_lacks_base"),
     });
   });
 
-  test("keeps the detail of a scan that is unavailable in the reason", () => {
+  test("denies a manual confirmation outside a recomputation round, so that it stays a protected path violation", async () => {
     expect(
-      confirmationVerdict({
-        ok: false,
-        kind: "manual",
-        reason: "scan_unavailable",
-        detail: "bun 1.3.0",
-      }),
+      await confirmationVerdict(
+        { ok: false, kind: "manual", reason: "head_lacks_base" },
+        NOT_ROUND,
+      ),
+    ).toEqual({ kind: "deny" });
+  });
+
+  test("does not ask about the round when the lock is confirmed", async () => {
+    let asked = 0;
+    await confirmationVerdict(
+      { ok: true, baseSha: "1".repeat(40), lockBytes: ENC.encode("x") },
+      async () => {
+        asked += 1;
+        return true;
+      },
+    );
+    expect(asked).toBe(0);
+  });
+
+  test("keeps the detail of a scan that is unavailable in the reason", async () => {
+    expect(
+      await confirmationVerdict(
+        {
+          ok: false,
+          kind: "manual",
+          reason: "scan_unavailable",
+          detail: "bun 1.3.0",
+        },
+        ROUND,
+      ),
     ).toEqual({
       kind: "stop",
       reason: metadataManualReason("scan_unavailable", "bun 1.3.0"),
@@ -793,6 +855,7 @@ describe("stagedRehashGate", () => {
       candidate?: boolean;
       confirmation?: RehashConfirmation;
       staged?: Uint8Array | null;
+      rehashRound?: boolean;
     } = {},
   ) {
     const calls = { confirm: 0 };
@@ -803,6 +866,7 @@ describe("stagedRehashGate", () => {
         return over.confirmation ?? CONFIRMED;
       },
       readStaged: async () => (over.staged === undefined ? LOCK : over.staged),
+      isRehashRound: async () => over.rehashRound ?? true,
     });
     return { built, calls };
   }
@@ -860,6 +924,14 @@ describe("stagedRehashGate", () => {
     });
   });
 
+  test("denies a manual confirmation outside a recomputation round", async () => {
+    const { built } = gate({
+      confirmation: { ok: false, kind: "manual", reason: "dependency_changed" },
+      rehashRound: false,
+    });
+    expect(await (await built).check()).toEqual({ kind: "deny" });
+  });
+
   test("lets a transient failure of the confirmation through", async () => {
     const built = stagedRehashGate({
       candidate: true,
@@ -867,6 +939,7 @@ describe("stagedRehashGate", () => {
         throw new RehashTransientError("port_error");
       },
       readStaged: async () => LOCK,
+      isRehashRound: async () => true,
     });
     await expect(built).rejects.toBeInstanceOf(RehashTransientError);
   });
@@ -1054,7 +1127,7 @@ describe("rehashMetadataLock", () => {
     expect(outcome).toEqual({ kind: "up_to_date" });
   });
 
-  test.each(["port_error", "ancestry_unknown", "internal_error"] as const)(
+  test.each(["port_error", "ancestry_unknown"] as const)(
     "throws a transient error for %s",
     async (reason) => {
       await expect(
@@ -1065,6 +1138,22 @@ describe("rehashMetadataLock", () => {
       ).rejects.toBeInstanceOf(RehashTransientError);
     },
   );
+
+  test("hands an internal error to a human, with the kind of the error", async () => {
+    const outcome = await rehashMetadataLock({
+      plan: async () => ({
+        ok: false,
+        reason: "internal_error",
+        detail: "TypeError",
+      }),
+      writeLock: async () => {},
+    });
+    expect(outcome).toEqual({
+      kind: "manual",
+      reason: "internal_error",
+      detail: "TypeError",
+    });
+  });
 
   test("hands a scan that is unavailable to a human, with the detail", async () => {
     const outcome = await rehashMetadataLock({

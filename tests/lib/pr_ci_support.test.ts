@@ -1289,6 +1289,24 @@ describe("prCiFixHoldInfo for the metadata job", () => {
     );
   });
 
+  test("lists the base branch that moved in the middle of a recomputation as a cause", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "再計算の途中でbaseが動いた",
+    );
+  });
+
+  test("lists the lock that cannot be written as a cause", () => {
+    expect(prCiFixHoldInfo("metadata_manual").nextAction).toContain(
+      "lockを書き込めない",
+    );
+  });
+
+  test("lists the base branch that moved as a cause in the stop notice", () => {
+    expect(prCiFixHoldInfo("metadata_manual").stopAction).toContain(
+      "再計算の途中でbaseが動いた",
+    );
+  });
+
   test("does not claim that the cause is a dependency change", () => {
     expect(prCiFixHoldInfo("metadata_manual").nextAction).not.toContain("依存");
   });

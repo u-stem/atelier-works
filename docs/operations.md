@@ -1205,7 +1205,8 @@ Factoryが作るPRで、自動修正が有効なときは、metadataジョブだ
 
 - 事前検査が通らない保留は、必要ならmainを取り込み、人が`mise run metadata`を実行して差分をコミットする。
   依存や入力のschemaが変わるPR、PRがmainの先端を含まないPRなどである。
-  workerのBunの版が合わない保留(`scan_unavailable`)は、理由の`bun <版>`でworkerの版を確かめる。
+  理由の補足で原因を確かめる。
+  workerのBunの版が合わない保留(`scan_unavailable`)は`bun <版>`、想定外の例外の保留(`internal_error`)は例外の種類である。
 - 再計算しても本文が変わらない保留(`lock_up_to_date`)は、metadataジョブがWindmillの起動やログインで落ちている。
   人の手順は要らず、実行をやり直す。`mise run metadata`で差分が出ないときも、同じ原因である。
 

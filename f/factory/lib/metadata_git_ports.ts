@@ -134,7 +134,7 @@ function assertCommitSha(ref: string): void {
  * - `listTree`は、`git ls-tree -r -z -l <sha>`の結果を返す。出力が上限で切れたときと、形が合わないときは、`TreeUnreadableError`を投げる。
  *   時間を超えたとき、gitが失敗したときは、ふつうの例外を投げる。
  * - `readBlob`は、木の項目の`oid`で`git cat-file blob <oid>`を実行する。木に無いパスは`missing`、
- *   blobでない項目、gitの失敗、時間切れ、大きさが木の申告と違う内容は`failed`にする。
+ *   blobでない項目と、大きさが木の申告と違う内容は`failed`にする。gitの失敗と時間切れは、一時的なので例外を投げる。
  *   木は、同じcommitについて1回だけ読み、使い回す。
  * - `isAncestor`は、`git merge-base --is-ancestor`の終了コードで決める。0が祖先、1が祖先でない。
  *   それ以外(commitが無い、時間切れ)は、判定できないとして`null`を返す。
@@ -197,13 +197,10 @@ export function createGitPrecheckPorts(
       buildGitArgv(["cat-file", "blob", entry.oid]),
       { cwd: options.cwd, env, timeoutMs },
     );
-    if (
-      result.timedOut ||
-      result.exitCode !== 0 ||
-      result.stdout.byteLength !== entry.size
-    ) {
-      return { kind: "failed" };
-    }
+    // 時間切れとgitの失敗は一時的なので、例外にして、検査が`port_error`として再試行に回す。
+    if (result.timedOut) throw new Error("git cat-file timed out");
+    if (result.exitCode !== 0) throw new Error("git cat-file failed");
+    if (result.stdout.byteLength !== entry.size) return { kind: "failed" };
     return { kind: "found", content: result.stdout };
   }
 

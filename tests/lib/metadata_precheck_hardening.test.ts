@@ -259,6 +259,13 @@ describe("planMetadataRehash and the values from the ports", () => {
     ).toBe("internal_error");
   });
 
+  test("leaves the kind of the error in the detail of an internal error", async () => {
+    const w = world();
+    w.brokenReads.add(`${HEAD}:f/factory/foo.ts`);
+    const result = await plan(w);
+    expect(!result.ok && result.detail).toBe("Error");
+  });
+
   test("sends a script that is not UTF-8 to a human", async () => {
     expect(
       await reasonAfter((w) =>
