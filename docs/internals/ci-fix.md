@@ -690,8 +690,8 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | 読んだ内容が、木の項目の`oid`と一致する。木に無いパスで内容が返らない。`readBlob`の戻り値の形が正しい | `blob_mismatch`、`port_error` |
 | headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
 | `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleが無い | `special_file` |
-| 上の4つのファイルが1MiB以下で、`f/`のファイルが5000件以下 | `file_too_large`、`too_many_files` |
-| 申告の大きさの合計と、読んだバイト数の合計が、headとbaseのそれぞれで64MiB以下 | `too_much_input` |
+| 上の4つのファイルと`f/`のファイルが、大きさと件数の上限以下 | `file_too_large`、`too_many_files` |
+| 申告の大きさの合計と、読んだバイト数の合計が、headとbaseのそれぞれで上限以下 | `too_much_input` |
 | headに`dependencies/`が無い | `workspace_dependencies` |
 | `wmill.yaml`がbaseの先端と同一 | `wmill_yaml_changed` |
 | PRの差分に、scriptとflowのファイルの追加、削除、名前の変更が無い。許可リストにない種類のファイルの追加と削除も無い | `script_set_changed` |
@@ -699,7 +699,7 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | PRの差分に、flowの定義の変更が無い | `flow_changed` |
 | PRの差分に、`.script.yaml`が無い | `script_yaml_changed` |
 | 変更されたscriptが、TypeScript(bun)である | `unsupported_script` |
-| すべてのscriptで、実行時に残る裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪問と局所importの解決の合計が200000を超えるときは`too_much_input` |
+| すべてのscriptで、実行時に残る裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪問と局所importの解決の合計が上限を超えるときは`too_much_input` |
 | 変更された`.ts`の注釈、`main`と`preprocessor`の署名、型宣言が、baseの先端と同じ | `annotation_changed`、`main_changed`、`main_presence_changed`、`preprocessor_changed`、`declaration_changed`、読めないときは`main_unparsable` |
 | hashを計算できる形である。インラインscriptを持つflowは計算できない | `unsupported_script`、`missing_metadata`、`not_text`、`duplicate_key` |
 | baseの先端のscriptとflowから計算したhashが、baseの先端の`wmill-lock.yaml`の値と、すべてのキーで一致する | `base_stale` |
@@ -711,7 +711,7 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 種別は固定で、例外の内容は載せない。
 閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
 hashの計算では、木ごとに、入力のファイルをまとめて保持する。
-保持量は、読む合計の上限(64MiB)までである。
+保持量は、読む合計の上限までである。
 
 追加と削除を許す種類の許可リストは、次の名前の末尾である。
 これらは、scriptのhashに関わらない。
@@ -729,11 +729,7 @@ Windmillのトリガーのファイル名は`*.http_trigger.yaml`などの形で
 ただし、実行時に残るimportだけを数える(`runtimeOnly`)。
 型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
 読み方は、`trimUnusedImports`を有効にした`Bun.Transpiler`の`scanImports`だけである。
-`transformSync`は、マクロを指定したimport属性のimportを実行する。
-標準の形のほかに、`with`と`{`の間へ次のものを挟んだ形も、すべて実行された(Bun 1.4.0と1.4.2)。
-挟んだのは、垂直タブ、改ページ、NBSP、BOM、行区切り、段落区切り、全角空白、改行、コメントである。
-`scanImports`は、同じ入力で実行しなかった(両方の版)。
-import属性の検出は、これに加えて、JavaScriptの空白と行区切りをすべて数える。
+実行しない読み方だけを使う理由は、[セキュリティ](../security.md#hashの再計算)にある。
 実測の根拠は、「実機で確かめた」の一覧と、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
 値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
 PRが触っていないscriptも、すべて確かめる。
@@ -795,7 +791,7 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   値として使うimportの追加は、変える。
 - 字句の読み取りは、括弧が対応する入力を前提にする。
   `checkDependencies`が先に、headのすべての`.ts`をトランスパイラに通すので、構文が不正な入力はそこで断られる。
-  型宣言の範囲を数える処理は、仕事量に上限(2000000字句)を置いて有界にした。超えたら`main_unparsable`で人の手に回る。
+  型宣言の範囲を数える処理は、仕事量に字句の数の上限を置いて有界にした。超えたら`main_unparsable`で人の手に回る。
   括弧が対応する入力を前提にする点は、この順序に頼る。
 
 ### 算法を固定するテスト
@@ -870,7 +866,7 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   検査は、`listTree`が返す項目の数を数えない。`f/`以外の項目は、形の検査と表の構築の分だけ、項目の数に比例する。
   ポートの呼び出しの時間には、検査は期限を持たない。
   1つのファイルの字句の分割とimportの読み取りは、ファイルの大きさに比例し、時間の上限を持たない。
-  ファイルは1MiB、読む合計は64MiBまでなので、時間は有界だが、上限を置いてはいない。
+  ファイルの大きさと読む合計に上限があるので、時間は有界だが、時間そのものの上限は置いていない。
 - hashの算法は、`ASSUMED_WMILL_CLI_VERSION`の版だけで確かめた。
   `dependencies/`、`__mod`のフォルダ、JSONのflowのように、このリポジトリに無い形は、写さずに人の手に回す。
   算法を固定するテストが見つけられるのは、版の変更と、リポジトリの現物との食い違いだけである。

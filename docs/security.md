@@ -398,10 +398,10 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   そのため、`transformSync`は使わず、実行しない`scanImports`だけで読む。
   `scanImports`は、同じ入力でマクロを実行しないことを、両方の版で確かめた。
   加えて、import属性の検出は、JavaScriptの空白と行区切りをすべて数える。
-- 読み取りのポートは、gitのオブジェクト(`git ls-tree`と`git cat-file`)から実装する。作業ツリーのファイルは開かない。
+- 読み取りのポートは、gitのオブジェクトから実装し、作業ツリーのファイルは開かない。
   作業ツリーには、検査コマンドやClaudeが書いた、gitの管理外の内容が入りうるためである。
-  このリポジトリの部品はポートの型と検査だけを持ち、gitを使うポートの実装は、配線で行う。
-  検査は、読んだ内容と木の`oid`を照合するので、別のrefや作業ツリーを読んだ実装は断られる。
+  読んだ内容と木の`oid`を照合するので、別のrefや作業ツリーを読んだ実装は断られる。
+  ポートの値の検査は、[事前検査](internals/ci-fix.md#事前検査)にある。
 - `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleがあれば、人の手に回す。
   読むと、木の外のファイルを指しうるためである。
 - 計算するのはhashだけで、`.script.lock`と`schema`は書かない。
@@ -414,21 +414,13 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   また、hashが変わるのは、PRが`.ts`を変えたscriptと、baseの先端の値に戻すキーだけに限る。
 - 置き換えるのは、既存のキーのhashだけである。
   キーの追加と削除を許さないので、lockの対象を増やせない。
-- 次を上限にする。
+- 入力の大きさ、ファイルの数、たどる回数、字句の数に上限を置く。
   PRの作者が大きな入力を作って、workerの時間とメモリを使わせるのを防ぐためである。
-  - 1ファイルは1MiB、`f/`のファイルは5000件。
-  - 1つのscriptからたどるファイルは2000件。すべてのscriptの合計は、訪問と局所importの解決をあわせて200000回。
-  - 型宣言の範囲を数える仕事量は、2000000字句。
-  - 上限が覆わない範囲は、[既知の限界](internals/ci-fix.md#既知の限界)にある。
-  - 読むバイト数の合計は、headとbaseのそれぞれで64MiB。
-    閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
-    hashの計算では、木ごとに、入力のファイルをまとめて保持する。保持量は上限の64MiBまでである。
+  値はコードの定数が持ち、上限が覆わない範囲は[既知の限界](internals/ci-fix.md#既知の限界)にある。
+  閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
 - Windmillの注釈、`preprocessor`、flowの定義、インラインscriptを持つflowは、人の手に回す。
   これらは、依存の解決、workerの種類、`.script.yaml`の項目を変えうるのに、hashだけを直しても追いつけないためである。
-- ポートが返す値は、入口で検査する。
-  `listTree`の項目の形と、`readBlob`の戻り値の形(`kind`が3つのどれかで、見つかったときの内容がバイト列)も、検査する。
-  形が正しくない値、読んだ内容と`oid`が合わない値、想定外の例外は、固定の種別にして人の手に回す。
-  上限の値が正の整数でないときも、断る。NaNで上限が外れないようにするためである。
+- ポートが返す値と上限の値は、入口で検査し、正しくないときは断る。NaNで上限が外れないようにするためである。
 
 事前検査は、悪意のあるPRに対する境界ではない。
 hashは`.script.lock`の中身を含まない。
@@ -2132,8 +2124,9 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
+hashを再計算する`lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`も止める。
 それぞれの`.script.yaml`と`.script.lock`も止める。
-書き換えられると、パッチの受け取り側の検査が緩むためである。
+書き換えられると、パッチの受け取り側の検査が緩み、依存が変わるPRのlockを人の確認なしに書き換えさせられるためである。
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 
