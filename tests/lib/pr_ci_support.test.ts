@@ -1188,6 +1188,7 @@ const TEMPORARY_HOLDS = [
   "not_reviewed",
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
+  "config_misfit",
 ] as const;
 
 describe("PR_CI_FIX_HOLD_REASONS", () => {
@@ -1417,6 +1418,10 @@ describe("prCiFixHoldInfo", () => {
 
   test("leaves the discord message of a stopped fix to the fix flow", () => {
     expect(prCiFixHoldInfo("fix_stopped").discord).toBe(false);
+  });
+
+  test("sends the discord message when the time settings do not fit", () => {
+    expect(prCiFixHoldInfo("config_misfit").discord).toBe(true);
   });
 
   test("sends the discord message when the rounds are exhausted", () => {
