@@ -171,26 +171,34 @@ describe("a ts comparison that falls back to the transpiler reports a source wit
   });
 });
 
+// 素の`transformSync`がマクロを実行することを、対照で確かめた入力(Bun 1.4.2)。
+// マクロ無効の検証は、この入力に限る。素で実行されない入力は、無効にしたことの効果を区別できない。
+// `-->`を挟む属性は、無効側では構文エラーで止まり、`macro: false`の効果と区別できないので、
+// ここには入れず、素の対照だけに置く。
+const RUNS_PLAIN = [
+  ["with and a space", (probe: Probe) => probe.attribute(" ", "with")],
+  ["assert and a space", (probe: Probe) => probe.attribute(" ", "assert")],
+  [
+    "with and a no-break space",
+    (probe: Probe) => probe.attribute(String.fromCharCode(0xa0), "with"),
+  ],
+  ["an absolute macro prefix", (probe: Probe) => probe.prefixed("absolute")],
+  [
+    "a node builtin macro prefix",
+    (probe: Probe) => probe.prefixed("node builtin"),
+  ],
+  [
+    "an escaped macro prefix",
+    (probe: Probe) => probe.prefixed("escaped prefix"),
+  ],
+] as const;
+
 describe("control: a plain transformSync runs the macro", () => {
   const CONTROLS = [
-    ["with and a space", (probe: Probe) => probe.attribute(" ", "with")],
-    ["assert and a space", (probe: Probe) => probe.attribute(" ", "assert")],
+    ...RUNS_PLAIN,
     [
       "with and an html close comment",
       (probe: Probe) => probe.attribute("\n--> c\n", "with"),
-    ],
-    [
-      "with and a no-break space",
-      (probe: Probe) => probe.attribute(String.fromCharCode(0xa0), "with"),
-    ],
-    ["an absolute macro prefix", (probe: Probe) => probe.prefixed("absolute")],
-    [
-      "a node builtin macro prefix",
-      (probe: Probe) => probe.prefixed("node builtin"),
-    ],
-    [
-      "an escaped macro prefix",
-      (probe: Probe) => probe.prefixed("escaped prefix"),
     ],
   ] as const;
 
@@ -208,17 +216,33 @@ describe("control: a plain transformSync runs the macro", () => {
 
 // 事前の拒否を通り抜ける入力が将来あっても、マクロ自体が無効なら実行されない。
 // 版が上がって`macro: false`の挙動が変わったときに、ここで気づく。
+// 検証の入力は、素の`transformSync`が実行すると確かめた`RUNS_PLAIN`に限る。
+// 素でも実行されない形(`<!--`、動的importと再exportの`macro:`)は、無効にした効果を
+// 区別できないので入れない。それらを断ることは、上の拒否のテストが確かめている。
 describe("the transpiler of the comparison has macros disabled", () => {
-  test.each(VARIANTS)("so it does not run the macro of %s", (_name, build) => {
+  test.each(RUNS_PLAIN)("so it refuses the macro of %s", (_name, build) => {
     withProbe((probe) => {
-      try {
-        comparisonTranspiler("a.tsx").transformSync(build(probe)("n"));
-      } catch {
-        // 無効なマクロの例外や構文エラーは想定内。印の有無だけを見る。
-      }
-      expect(existsSync(probe.marker)).toBe(false);
+      const transpiler = comparisonTranspiler("a.tsx");
+      expect(() => transpiler.transformSync(build(probe)("n"))).toThrow(
+        "Macros are disabled",
+      );
     });
   });
+
+  test.each(RUNS_PLAIN)(
+    "so it does not run the macro of %s",
+    (_name, build) => {
+      withProbe((probe) => {
+        const transpiler = comparisonTranspiler("a.tsx");
+        try {
+          transpiler.transformSync(build(probe)("n"));
+        } catch {
+          // 無効なマクロの例外は、上のテストが確かめている。印の有無だけを見る。
+        }
+        expect(existsSync(probe.marker)).toBe(false);
+      });
+    },
+  );
 
   test("so it still transpiles a source without a macro as the default does", () => {
     const code = "// c\nexport const x: number = 1;\n";
@@ -247,6 +271,8 @@ describe("forms that a plain transformSync does not run", () => {
       `export const x = await import(${JSON.stringify(probe.macroPath)}, { with: { type: "macro" } });\n`,
     "a dynamic import with a macro prefix": (probe) =>
       `export const x = await import("macro:${probe.macroPath}");\n`,
+    "a re-export with a macro prefix": (probe) =>
+      `export { f } from "macro:${probe.macroPath}";\n`,
     "a tagged template call of a macro": (probe) =>
       `import { f } from ${JSON.stringify(probe.macroPath)} with { type: "macro" };\nexport const x = f\`a\`;\n`,
   };

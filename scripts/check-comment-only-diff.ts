@@ -100,23 +100,22 @@ export function transpiledCode(path: string, text: string): string {
   return transpiler.transformSync(text);
 }
 
-// `macro: false`でマクロを無効にする。Bun 1.4.2は受け付けるが、型定義の`macro`は
-// `MacroMap`で`false`を許さない。型を曲げずに通すため、JSONから読んだ値を型ガードで確かめる。
-const MACRO_DISABLED: unknown = JSON.parse('{"macro":false}');
-
-function isTranspilerOptions(value: unknown): value is Bun.TranspilerOptions {
-  return typeof value === "object" && value !== null;
-}
-
 /**
  * 比較に使う`Bun.Transpiler`を返す。マクロは無効で、マクロを指定したimportはビルドエラーになる。
  * 型だけの比較には影響しない(マクロの無いソースの出力は既定と同じことをテストで固定している)。
+ * テストが無効化を確かめるためのexportである。
+ *
+ * `macro: false`は型定義に無いBunのオプションで、型定義の`macro`は`MacroMap`である。
+ * 型に嘘を書かないよう、`Reflect.set`で足し、入ったことを実行時に確かめる。
  */
 export function comparisonTranspiler(path: string): Bun.Transpiler {
-  if (!isTranspilerOptions(MACRO_DISABLED)) {
-    throw new Error("macro option must be an object");
+  const options: Bun.TranspilerOptions = { loader: loaderOf(path) };
+  Reflect.set(options, "macro", false);
+  const applied: unknown = Reflect.get(options, "macro");
+  if (applied !== false) {
+    throw new Error("macros could not be disabled for the comparison");
   }
-  return new Bun.Transpiler({ ...MACRO_DISABLED, loader: loaderOf(path) });
+  return new Bun.Transpiler(options);
 }
 
 function sameTranspiled(path: string, before: string, after: string): boolean {
