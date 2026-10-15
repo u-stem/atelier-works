@@ -13,6 +13,9 @@
 - 文書は[文書の書き方](docs/writing-guidelines.md)と`factory-docs`スキルに従って書く。日本語の推敲には`yomiyasu`スキルを使う。
 - コードを変える作業は、[review-loopスキル](.claude/skills/review-loop/SKILL.md)で回す(コード、テスト、設定、スキル、subagentの定義を変えず、`docs/`、README、AGENTS.mdの文言だけを直す場合は除く)。
   実装した本人の確認だけでは、見落としを拾えないため。
+  レビューの人数、ラウンドの上限、設計レビューの要否は、変更の種類(文書、小、機能、削除・権限)に合わせる。
+  判定の基準と表は、review-loopスキルの「変更の種類」にある。
+  種類を問わず、コードを変える作業はレビューに通し、最後にsecurity-auditorを通す。
 - モデルは、既定をSonnetにし、判断が重い場面はOpusにする。Fableは最難関の課題だけに使う。詳細は[コーディング規約](docs/coding-guidelines.md)の「Claudeのモデルの使い分け」にある。
 - 設定は`.env`系のファイルを使わず、miseで管理する。秘密でない設定は`mise.toml`の`[env]`に、秘密値はgitignore済みの`mise.local.toml`に置く。
 - 秘密値は人が投入する。Claudeは`mise.local.toml.example`の更新までを行い、値が要るときは[セットアップ](docs/setup.md)の投入コマンドを示して、止まらずに先へ進む。
