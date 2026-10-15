@@ -266,6 +266,24 @@ describe("planMetadataRehash and the values from the ports", () => {
     expect(!result.ok && result.detail).toBe("Error");
   });
 
+  test("keeps a standard error name in the detail of an internal error", async () => {
+    const w = world();
+    w.brokenReads.add(`${HEAD}:f/factory/foo.ts`);
+    w.brokenError = new TypeError("secret path f/x");
+    const result = await plan(w);
+    expect(!result.ok && result.detail).toBe("TypeError");
+  });
+
+  test("replaces a custom error name with Error in the detail of an internal error", async () => {
+    const w = world();
+    w.brokenReads.add(`${HEAD}:f/factory/foo.ts`);
+    const custom = new Error("secret path f/x");
+    custom.name = "SecretPathError";
+    w.brokenError = custom;
+    const result = await plan(w);
+    expect(!result.ok && result.detail).toBe("Error");
+  });
+
   test("sends a script that is not UTF-8 to a human", async () => {
     expect(
       await reasonAfter((w) =>

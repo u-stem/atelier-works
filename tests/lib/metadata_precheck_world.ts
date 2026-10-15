@@ -104,6 +104,7 @@ export type World = {
   throwingReads: Set<string>;
   /** 読み取りで、`byteLength`が例外を投げる内容を返す`ref:path`。 */
   brokenReads: Set<string>;
+  brokenError: Error;
   /** 想定外の形の値を返す`ref:path`。値は、`readBlob`の戻り値の型に合わない。 */
   malformedReads: Map<string, string>;
   /** `listTree`が投げるか。 */
@@ -154,6 +155,7 @@ export function world(): World {
     missingReads: new Set(),
     throwingReads: new Set(),
     brokenReads: new Set(),
+    brokenError: new Error("broken"),
     malformedReads: new Map(),
     throwOnList: false,
     unreadableTree: false,
@@ -203,10 +205,13 @@ function entryOf(
 }
 
 /** `byteLength`を読むと例外を投げる内容。ポートが想定外の値を返したときの再現に使う。 */
-class BrokenBytes extends Uint8Array {
-  override get byteLength(): number {
-    throw new Error("broken");
+function brokenBytes(error: Error): Uint8Array {
+  class BrokenBytes extends Uint8Array {
+    override get byteLength(): number {
+      throw error;
+    }
   }
+  return new BrokenBytes(4);
 }
 
 export function portsOf(w: World): PrecheckPorts {
@@ -252,7 +257,7 @@ export function portsOf(w: World): PrecheckPorts {
         return JSON.parse(malformed);
       }
       if (w.brokenReads.has(key)) {
-        return { kind: "found", content: new BrokenBytes(4) };
+        return { kind: "found", content: brokenBytes(w.brokenError) };
       }
       const content = (ref === HEAD ? w.head : w.base).get(path);
       return content === undefined

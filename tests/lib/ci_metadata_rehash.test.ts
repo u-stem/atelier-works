@@ -812,6 +812,26 @@ describe("confirmationVerdict", () => {
     ).toEqual({ kind: "deny" });
   });
 
+  test("does not ask about the round for a mismatch", async () => {
+    let asked = 0;
+    await confirmationVerdict({ ok: false, kind: "mismatch" }, async () => {
+      asked += 1;
+      return true;
+    });
+    expect(asked).toBe(0);
+  });
+
+  test("lets a failure to read the round go up, not turn into a denial", async () => {
+    await expect(
+      confirmationVerdict(
+        { ok: false, kind: "manual", reason: "head_lacks_base" },
+        async () => {
+          throw new Error("github is down");
+        },
+      ),
+    ).rejects.toThrow("github is down");
+  });
+
   test("does not ask about the round when the lock is confirmed", async () => {
     let asked = 0;
     await confirmationVerdict(

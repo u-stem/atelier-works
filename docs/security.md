@@ -453,7 +453,9 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
   ブランチの先端が動いていればpushは拒否され、動いた回は、新しい失敗として判定し直される。
 - baseの先端は、PRのAPIの`base.sha`ではなく、baseブランチの今の先端をAPIで読んで使う。
   照合の中と、pushの直前に読み直し、動いていれば新しい先端で確かめ直す。
-- 人の手に回す理由は、事前検査の固定の語彙と、`lock_up_to_date`、`lock_not_writable`だけである。
+- 人の手に回す理由は、次の固定の語彙だけである。
+  事前検査の種別、`lock_up_to_date`、`lock_not_writable`である。
+  pushの直前に、baseの先端が動いて本文が合わなくなった場合(`CI_ROUND_REHASH_STALE_REASON`)も含む。
   一時的な失敗(`port_error`、`ancestry_unknown`)は、人の手に回さず、例外にして再試行する。
   再試行で直らない失敗(想定外の例外の`internal_error`、自己検査の`scan_unavailable`、木の一覧が読めない`tree_unreadable`)は、人の手に回す。
   PRの作者が決めるパスは、通知にも作業項目の理由にも載せない。
