@@ -15,6 +15,7 @@ import { type NotifyEvent, notifyBestEffort } from "../lib/discord.ts";
 import {
   createPrReview,
   type GhClient,
+  GitHubHttpError,
   getPr,
   getViewer,
   listPrReviews,
@@ -24,6 +25,7 @@ import {
   resolveReviewThread,
 } from "../lib/github.ts";
 import { type Logger, logger, maskSecrets } from "../lib/log.ts";
+import { markTransientGitHubFailure } from "../lib/pr_review_retry.ts";
 import {
   repoOwnerGateDeps,
   repoOwnerStopReason,
@@ -168,6 +170,10 @@ export async function main(
  * 再利用するときにスレッドの一覧を取得できなければ、記録する前に例外を投げる。
  * 投稿済みのレビューを探すのに要るviewerとレビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  *
+ * GitHubの5xxや通信断で落ちたときは、例外の文の先頭に印を付けて投げる(`markTransientGitHubFailure`)。
+ * 印の付いた失敗は、`auto_retry_pr_review`が作業項目の状態で自動に再開する。
+ * 行コメントを解決できない422は投稿の中で復旧し(`postMarkedReview`)、失敗として表に出さない。
+ *
  * 投稿の直前に、リポジトリのオーナーの数値IDを照合する。通らなければ、投稿もスレッドの解決もせず、
  * 作業項目を`blocked`にしてDiscordで知らせ、`skip`で返す。投稿済みのレビューを再利用するときは書き込まないので照合しない。
  *
@@ -181,6 +187,9 @@ export async function runPrReviewPost(
 ): Promise<PrReviewPostResult> {
   try {
     return await postReview(input, deps.log);
+  } catch (err) {
+    // GitHubの一時的な失敗には印を付け、自動の再開に回す。
+    throw markTransientGitHubFailure(err);
   } finally {
     if (input.worktree_dir !== "") {
       try {
@@ -233,29 +242,56 @@ export async function findPostedReview(
 /**
  * COMMENTのレビューを投稿し、そのidを返す。
  * 本文は`summaryBody`に`withReviewMarkers`で目印を足したもの。
+ *
+ * 行に紐づけたコメントが1件でもGitHubのdiffに解決できないと、レビュー全体が422で拒否される。
+ * 同じ入力を繰り返しても同じ行で落ちるので、422を受けたら一度だけ、行コメントを付けずに
+ * `fallbackBody`(行コメントの指摘を総評に並べた本文)で投稿し直す。
+ * 行コメントが無いときと、投稿し直しも失敗したときは、そのまま例外を投げる。
+ * 422を受けた投稿はGitHub側で拒否されているので、投稿し直しでレビューが二重になることは無い。
  */
 export async function postMarkedReview(
   client: GhClient,
   target: PostReviewTarget,
   summaryBody: string,
   comments: readonly ReviewComment[],
+  fallbackBody: string = summaryBody,
+  log?: Logger,
 ): Promise<number> {
-  const created = await createPrReview(
-    client,
-    target.owner,
-    target.repo,
-    target.pr_number,
-    {
-      event: "COMMENT",
-      body: withReviewMarkers(
-        summaryBody,
-        target.work_item_id,
-        target.review_sha,
-      ),
-      comments,
-    },
-  );
-  return created.id;
+  const post = async (
+    body: string,
+    inline: readonly ReviewComment[],
+  ): Promise<number> => {
+    const created = await createPrReview(
+      client,
+      target.owner,
+      target.repo,
+      target.pr_number,
+      {
+        event: "COMMENT",
+        body: withReviewMarkers(body, target.work_item_id, target.review_sha),
+        comments: inline,
+      },
+    );
+    return created.id;
+  };
+  try {
+    return await post(summaryBody, comments);
+  } catch (err) {
+    if (
+      !(err instanceof GitHubHttpError) ||
+      err.status !== 422 ||
+      comments.length === 0
+    ) {
+      throw err;
+    }
+    log?.warn("review was rejected with 422; posting without inline comments", {
+      owner: target.owner,
+      repo: target.repo,
+      number: target.pr_number,
+      error: maskSecrets(err.message),
+    });
+    return post(fallbackBody, []);
+  }
 }
 
 /** `publishReview`の入力。 */
@@ -264,6 +300,8 @@ export type PublishReviewInput = {
   /** PRの作成者のlogin。総評でメンションする。 */
   readonly prAuthorLogin: string;
   readonly comments: readonly ReviewComment[];
+  /** `comments`になった指摘。同じ順で並ぶ。GitHubが行を解決できないときに、総評へ移す。 */
+  readonly commentedFindings: readonly ReviewFinding[];
   /** 行に紐づけられず、総評に並べる指摘。 */
   readonly droppedFindings: readonly ReviewFinding[];
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
@@ -403,11 +441,21 @@ export async function publishReview(
     droppedFindings,
     openMustCount,
   );
+  // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
+  const fallbackBody = renderReviewSummary(
+    input.prAuthorLogin,
+    0,
+    "findings",
+    [...input.commentedFindings, ...droppedFindings],
+    openMustCount,
+  );
   const postedReviewId = await postMarkedReview(
     client,
     target,
     summaryBody,
     comments,
+    fallbackBody,
+    log,
   );
 
   // 再レビューのたびに、pr_fixが対応済みのFactory自身のスレッドを解決する。
@@ -505,6 +553,9 @@ async function postReview(
       },
       prAuthorLogin: pr.authorLogin,
       comments,
+      commentedFindings: findings.filter(
+        (finding) => !droppedFindings.includes(finding),
+      ),
       droppedFindings,
       priorReview,
       post,

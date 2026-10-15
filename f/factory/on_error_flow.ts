@@ -21,10 +21,14 @@
 // Discordの`job_failed`通知である。設定を読めないときも、インスタンス名を伏せて通知する。
 // dependabotのフローの通知には、対象のPRと、再実行を案内しない次の操作を載せる。
 // dependabotの作業項目は`retry_work_item`が再開しないためである。
+// GitHubの一時的な失敗で止まったpr_reviewは`auto_retry_pr_review`が再開するので、
+// 再開できるうちは通知せず、回数を使い切ったときだけ`needs_human`で知らせる。
 
 import * as wmill from "windmill-client@1.817.0";
+import { AUTO_RETRY_NOTE_PREFIX } from "./lib/auto_retry.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
+  countAutoRestarts,
   getWorkItem,
   recordFailure,
   updateStatusIfLeaseHolder,
@@ -33,6 +37,10 @@ import { DEPENDABOT_FLOW_PATH } from "./lib/dependabot_flow_support.ts";
 import { type NotifyEvent, notify } from "./lib/discord.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { PIPELINE_FLOW_PATH } from "./lib/pipeline_lease.ts";
+import {
+  decideTransientFailureAction,
+  transientReviewExhaustedNotice,
+} from "./lib/pr_review_retry.ts";
 import {
   assertGitHubName,
   type FailureRecord,
@@ -140,6 +148,23 @@ export function failureTargetPr(
   return { owner: item.owner, repo: item.repo, number: item.pr_number };
 }
 
+/**
+ * 通知のリンクに使うPRを返す。作業項目にPR番号が無いか、ownerとrepoがGitHubの名前の形でなければ返さない。
+ * 返さないときは、リンクを作れないので従来の失敗の通知にする。
+ */
+function failureTargetReview(
+  item: Pick<WorkItem, "owner" | "repo" | "pr_number">,
+): { owner: string; repo: string; number: number } | undefined {
+  if (item.pr_number === null) return undefined;
+  try {
+    assertGitHubName(item.owner);
+    assertGitHubName(item.repo);
+  } catch {
+    return undefined;
+  }
+  return { owner: item.owner, repo: item.repo, number: item.pr_number };
+}
+
 /** `handleFlowFailure`が使う外部の操作。テストで差し替える。 */
 export type FlowFailureDeps = {
   readonly getWorkItem: (id: number) => Promise<WorkItem | null>;
@@ -151,6 +176,8 @@ export type FlowFailureDeps = {
     flowJobId: string | null,
     note: string,
   ) => Promise<boolean>;
+  /** これまでの自動の再開の回数。一時的な失敗の通知を、再開できるうちは控えるために数える。 */
+  readonly countAutoRestarts: (id: number) => Promise<number>;
   /** `factory_config`の`instance_name`を読む。 */
   readonly readInstanceName: () => Promise<string>;
   readonly readWebhookUrl: () => Promise<string>;
@@ -231,6 +258,7 @@ export async function handleFlowFailure(
     });
   }
 
+  let markedFailed = false;
   if (item !== null && !TERMINAL_WORK_ITEM_STATUSES.includes(item.status)) {
     try {
       if (path === DEPENDABOT_FLOW_PATH && item.kind !== "dependabot") {
@@ -256,7 +284,7 @@ export async function handleFlowFailure(
         // `job_failed`通知だけが届く。
         // `shouldMarkFailed`で照合した後にflow_job_idが変わっていれば(新しい実行が起動された、
         // 実装フローがリースを取ったなど)、その実行の状態を上書きしない。
-        await deps.updateStatusIfLeaseHolder(
+        markedFailed = await deps.updateStatusIfLeaseHolder(
           item.id,
           item.status,
           "failed",
@@ -285,8 +313,52 @@ export async function handleFlowFailure(
     });
   }
 
+  // GitHubの一時的な失敗で止まったPRレビューは、`auto_retry_pr_review`が再開する。
+  // 再開できるうちは知らせず、回数を使い切ったときだけ、対象のPRと次の操作を載せて知らせる。
+  let action: ReturnType<typeof decideTransientFailureAction> = "job_failed";
+  if (item !== null) {
+    try {
+      action = decideTransientFailureAction(
+        path ?? null,
+        message,
+        markedFailed,
+        await deps.countAutoRestarts(item.id),
+      );
+    } catch (countErr) {
+      log.error("failed to count automatic restarts", {
+        work_item_id,
+        error: maskSecrets(
+          countErr instanceof Error ? countErr.message : String(countErr),
+        ),
+      });
+    }
+  }
+  if (action === "recover") {
+    log.info("transient failure; the pr_review will be restarted", {
+      work_item_id,
+    });
+    return;
+  }
+
   try {
     const webhookUrl = await deps.readWebhookUrl();
+    if (webhookUrl.length > 0 && action === "needs_human" && item !== null) {
+      const target = failureTargetReview(item);
+      if (target !== undefined) {
+        await deps.notify(
+          webhookUrl,
+          transientReviewExhaustedNotice({
+            instanceName,
+            owner: target.owner,
+            repo: target.repo,
+            prNumber: target.number,
+            workItemId: item.id,
+            message,
+          }),
+        );
+        return;
+      }
+    }
     if (webhookUrl.length > 0) {
       const nextAction = failureNextAction(path ?? null, message);
       const pr = failureTargetPr(path ?? null, item);
@@ -321,6 +393,7 @@ export async function main(
       recordFailure: (record) => recordFailure(record),
       updateStatusIfLeaseHolder: (id, from, to, flowJobId, note) =>
         updateStatusIfLeaseHolder(id, from, to, flowJobId, note),
+      countAutoRestarts: (id) => countAutoRestarts(id, AUTO_RETRY_NOTE_PREFIX),
       readInstanceName: async () =>
         (await loadConfig(() => wmill.getResource("f/factory/factory_config")))
           .instance_name,

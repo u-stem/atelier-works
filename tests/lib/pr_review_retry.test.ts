@@ -1,0 +1,248 @@
+// 一時的なGitHubの失敗で止まったpr_reviewの自動の再開を確かめる。
+// 印の付け方、通知の判定、再開の巡回の3つを、外部への依存を差し替えて確かめる。
+
+import { describe, expect, test } from "bun:test";
+import {
+  AUTO_RETRY_LIMIT_PER_RUN,
+  AUTO_RETRY_MAX_RESTARTS,
+} from "../../f/factory/lib/auto_retry.ts";
+import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
+import { GitHubHttpError } from "../../f/factory/lib/github.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
+import {
+  decideTransientFailureAction,
+  markTransientGitHubFailure,
+  PR_REVIEW_FLOW_PATH,
+  retryTransientPrReviews,
+  type TransientReviewCandidate,
+  type TransientReviewDeps,
+  transientReviewExhaustedNotice,
+} from "../../f/factory/lib/pr_review_retry.ts";
+
+const SILENT: Logger = { info: () => {}, warn: () => {}, error: () => {} };
+
+function candidate(id: number): TransientReviewCandidate {
+  return {
+    id,
+    owner: "acme",
+    repo: "widgets",
+    pr_number: 12,
+    flow_job_id: null,
+  };
+}
+
+describe("markTransientGitHubFailure", () => {
+  test("marks a 502 response with the transient prefix", () => {
+    const err = new GitHubHttpError("POST pr review failed with HTTP 502", 502);
+    const marked = markTransientGitHubFailure(err);
+    expect(marked instanceof Error && marked.message).toBe(
+      `${TRANSIENT_GITHUB_REASON_PREFIX}POST pr review failed with HTTP 502`,
+    );
+  });
+
+  test("marks a failure without a response (status 0)", () => {
+    const err = new GitHubHttpError("POST pr review failed with HTTP 0", 0);
+    const marked = markTransientGitHubFailure(err);
+    expect(
+      marked instanceof Error &&
+        marked.message.startsWith(TRANSIENT_GITHUB_REASON_PREFIX),
+    ).toBe(true);
+  });
+
+  test("keeps a 422 as it is, because the same input fails again", () => {
+    const err = new GitHubHttpError("failed with HTTP 422", 422);
+    expect(markTransientGitHubFailure(err)).toBe(err);
+  });
+
+  test("keeps a 403 as it is", () => {
+    const err = new GitHubHttpError("failed with HTTP 403", 403);
+    expect(markTransientGitHubFailure(err)).toBe(err);
+  });
+
+  test("keeps an error that is not an HTTP failure as it is", () => {
+    const err = new Error("unexpected response shape");
+    expect(markTransientGitHubFailure(err)).toBe(err);
+  });
+});
+
+describe("decideTransientFailureAction", () => {
+  const marked = `${TRANSIENT_GITHUB_REASON_PREFIX}failed with HTTP 502`;
+
+  test("recovers silently while restarts remain", () => {
+    expect(
+      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, true, 0),
+    ).toBe("recover");
+  });
+
+  test("still recovers on the last allowed restart", () => {
+    expect(
+      decideTransientFailureAction(
+        PR_REVIEW_FLOW_PATH,
+        marked,
+        true,
+        AUTO_RETRY_MAX_RESTARTS - 1,
+      ),
+    ).toBe("recover");
+  });
+
+  test("asks a human once the restarts are used up", () => {
+    expect(
+      decideTransientFailureAction(
+        PR_REVIEW_FLOW_PATH,
+        marked,
+        true,
+        AUTO_RETRY_MAX_RESTARTS,
+      ),
+    ).toBe("needs_human");
+  });
+
+  test("reports the failure when the work item was not marked failed", () => {
+    expect(
+      decideTransientFailureAction(PR_REVIEW_FLOW_PATH, marked, false, 0),
+    ).toBe("job_failed");
+  });
+
+  test("reports a failure without the transient prefix", () => {
+    expect(
+      decideTransientFailureAction(
+        PR_REVIEW_FLOW_PATH,
+        "failed with HTTP 422",
+        true,
+        0,
+      ),
+    ).toBe("job_failed");
+  });
+
+  test("reports a transient failure of another flow", () => {
+    expect(
+      decideTransientFailureAction("f/factory/pr_fix", marked, true, 0),
+    ).toBe("job_failed");
+  });
+});
+
+describe("transientReviewExhaustedNotice", () => {
+  const notice = transientReviewExhaustedNotice({
+    instanceName: "test",
+    owner: "acme",
+    repo: "widgets",
+    prNumber: 12,
+    workItemId: 7,
+    message: `${TRANSIENT_GITHUB_REASON_PREFIX}failed with HTTP 502`,
+  });
+
+  test("links to the pull request", () => {
+    expect(notice.url).toBe("https://github.com/acme/widgets/pull/12");
+  });
+
+  test("names the pull request as the target", () => {
+    expect(notice.target).toEqual({ kind: "pr", number: 12 });
+  });
+
+  test("tells the next action with the work item id", () => {
+    expect(notice.next_action).toContain("retry_work_item");
+    expect(notice.next_action).toContain("7");
+  });
+});
+
+type Fake = {
+  readonly deps: TransientReviewDeps;
+  readonly launched: string[];
+  readonly restarted: number[];
+  readonly notified: number[];
+};
+
+function fakeDeps(
+  candidates: readonly TransientReviewCandidate[],
+  overrides: Partial<TransientReviewDeps> = {},
+): Fake {
+  const launched: string[] = [];
+  const restarted: number[] = [];
+  const notified: number[] = [];
+  const deps: TransientReviewDeps = {
+    listCandidates: async () => candidates,
+    isFlowJobFinished: async () => true,
+    restart: async (c) => {
+      restarted.push(c.id);
+      return true;
+    },
+    launchFlow: async (path) => {
+      launched.push(path);
+      return "01234567-89ab-cdef-0123-456789abcdef";
+    },
+    recordFlowJobId: async () => {},
+    rollBack: async () => true,
+    notifyRollBack: async (c) => {
+      notified.push(c.id);
+    },
+    log: SILENT,
+    ...overrides,
+  };
+  return { deps, launched, restarted, notified };
+}
+
+describe("retryTransientPrReviews", () => {
+  test("starts the pr_review flow for a failed review", async () => {
+    const fake = fakeDeps([candidate(7)]);
+    await retryTransientPrReviews(fake.deps);
+    expect(fake.launched).toEqual([PR_REVIEW_FLOW_PATH]);
+  });
+
+  test("counts the restarted work item", async () => {
+    const fake = fakeDeps([candidate(7)]);
+    const result = await retryTransientPrReviews(fake.deps);
+    expect(result).toEqual({ restarted: 1, skipped: 0, failed: 0 });
+  });
+
+  test("skips a work item whose previous flow job is still running", async () => {
+    const fake = fakeDeps([candidate(7)], {
+      isFlowJobFinished: async () => false,
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(fake.restarted).toEqual([]);
+  });
+
+  test("does not launch when the compare-and-swap loses", async () => {
+    const fake = fakeDeps([candidate(7)], { restart: async () => false });
+    await retryTransientPrReviews(fake.deps);
+    expect(fake.launched).toEqual([]);
+  });
+
+  test("tells a human when the flow cannot be started", async () => {
+    const fake = fakeDeps([candidate(7)], {
+      launchFlow: async () => {
+        throw new Error("windmill is down");
+      },
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(fake.notified).toEqual([7]);
+  });
+
+  test("counts a launch failure as failed", async () => {
+    const fake = fakeDeps([candidate(7)], {
+      launchFlow: async () => {
+        throw new Error("windmill is down");
+      },
+    });
+    const result = await retryTransientPrReviews(fake.deps);
+    expect(result.failed).toBe(1);
+  });
+
+  test("returns zero counts when the candidates cannot be listed", async () => {
+    const fake = fakeDeps([], {
+      listCandidates: async () => {
+        throw new Error("db down");
+      },
+    });
+    const result = await retryTransientPrReviews(fake.deps);
+    expect(result).toEqual({ restarted: 0, skipped: 0, failed: 0 });
+  });
+
+  test("stops after the per-run limit", async () => {
+    const many = Array.from({ length: AUTO_RETRY_LIMIT_PER_RUN + 2 }, (_, i) =>
+      candidate(i + 1),
+    );
+    const fake = fakeDeps(many);
+    await retryTransientPrReviews(fake.deps);
+    expect(fake.restarted).toHaveLength(AUTO_RETRY_LIMIT_PER_RUN);
+  });
+});

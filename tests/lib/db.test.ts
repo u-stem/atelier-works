@@ -6,6 +6,7 @@ import {
   bumpWatermarks,
   claimIssueCreation,
   claimPrCiCheckForFix,
+  countAutoRestarts,
   countImplementFailedRounds,
   countPendingIssueProposals,
   countPrCiFixRounds,
@@ -87,6 +88,7 @@ import {
   listRecentWorkerSamples,
   listStaleTerminalWorkItems,
   listTrackedPrs,
+  listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
   markPrCiNotified,
@@ -106,6 +108,7 @@ import {
   resolveUnresolvedNoticesByMessage,
   resolveUnresolvedNoticesByPrefix,
   restartStoppedWorkItem,
+  restartTransientPrReview,
   revertIssueProposalToPending,
   type SqlClient,
   type SqlRow,
@@ -7128,5 +7131,93 @@ describe("deletePrCiChecksBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
     expect(await deletePrCiChecksBefore(cutoff, latestCutoff, sql)).toBe(2);
+  });
+});
+
+describe("transient pr_review restart", () => {
+  const query = {
+    reasonPrefix: "github_transient: ",
+    notePrefix: "auto_retry: ",
+    maxRestarts: 3,
+    minAgeSeconds: 120,
+  };
+
+  test("parses the candidate rows", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          id: "7",
+          owner: "acme",
+          repo: "widgets",
+          pr_number: 12,
+          flow_job_id: null,
+        },
+      ],
+    ]);
+    expect(
+      await listTransientReviewCandidates({ ...query, limit: 50 }, sql),
+    ).toEqual([
+      {
+        id: 7,
+        owner: "acme",
+        repo: "widgets",
+        pr_number: 12,
+        flow_job_id: null,
+      },
+    ]);
+  });
+
+  test("lists only failed reviews that stopped for the transient reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContain("github_transient: ");
+  });
+
+  test("lists only reviews below the restart cap", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.values).toContain(3);
+  });
+
+  test("excludes a review that a newer row of the same pull request replaced", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("other.id > w.id");
+  });
+
+  test("restart returns true when the guarded update matched a row", async () => {
+    const { sql } = createFakeSqlClient([[{ work_item_id: 7 }]]);
+    const params = {
+      ...query,
+      id: 7,
+      note: "auto_retry: restarted from failed",
+    };
+    expect(await restartTransientPrReview(params, sql, NO_JOBS)).toBe(true);
+  });
+
+  test("restart returns false when the work item moved on", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    const params = {
+      ...query,
+      id: 7,
+      note: "auto_retry: restarted from failed",
+    };
+    expect(await restartTransientPrReview(params, sql, NO_JOBS)).toBe(false);
+  });
+
+  test("restart guards the update with the stop reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    const params = {
+      ...query,
+      id: 7,
+      note: "auto_retry: restarted from failed",
+    };
+    await restartTransientPrReview(params, sql, NO_JOBS);
+    expect(calls[0]?.values).toContain("github_transient: ");
+  });
+
+  test("counts the automatic restarts of a work item", async () => {
+    const { sql } = createFakeSqlClient([[{ restarts: 2 }]]);
+    expect(await countAutoRestarts(7, "auto_retry: ", sql)).toBe(2);
   });
 });

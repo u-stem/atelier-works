@@ -1,0 +1,10 @@
+summary: '[SYS-10] GitHubの一時的な失敗で止まったPRレビューを再開'
+description: 5分ごとに実行し、GitHubの5xxや通信断で失敗したPRレビュー(failed)を、失敗から2分が過ぎていれば再開します。理由と回数を条件にした比較と交換で、ラベルを付け直さずに再開し、同じ作業項目の自動の再開は3回までです。使い切ったときの通知は、失敗を記録した側が出します。
+lock: '!inline f/factory/auto_retry_pr_review.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+timeout: 300

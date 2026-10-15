@@ -825,6 +825,7 @@ describe("posting a review once per sha", () => {
       target: TARGET,
       prAuthorLogin: "alice",
       comments: [],
+      commentedFindings: [],
       droppedFindings: [],
       priorReview: true,
       post: true,
@@ -901,6 +902,136 @@ describe("posting a review once per sha", () => {
         COMMENTS,
       );
       expect(id).toBe(99);
+    });
+  });
+
+  describe("postMarkedReview when GitHub cannot resolve a comment line", () => {
+    const FALLBACK = "[pr_review 自動レビュー] @alice\n1件コメントしました。";
+    const LINE_ERROR = {
+      message: "Unprocessable Entity",
+      errors: ["Line could not be resolved"],
+    };
+
+    function unresolvedLine(): CommandResult {
+      return ok(ghApiStdout(422, LINE_ERROR));
+    }
+
+    function postedBody(call: FakeCall | undefined): unknown {
+      return JSON.parse(call?.options?.stdin ?? "{}");
+    }
+
+    test("posts again when GitHub answers 422", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const id = await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        FALLBACK,
+      );
+      expect(id).toBe(99);
+    });
+
+    test("sends the second post without inline comments", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        FALLBACK,
+      );
+      expect(postedBody(fake.calls[1])).toMatchObject({ comments: [] });
+    });
+
+    test("sends the second post with the fallback body and the markers", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        FALLBACK,
+      );
+      expect(postedBody(fake.calls[1])).toMatchObject({
+        body: withReviewMarkers(FALLBACK, 7, SHA),
+      });
+    });
+
+    test("does not post again for an error other than 422", async () => {
+      const fake = createFakeCommandRunner([
+        ok(ghApiStdout(403, { message: "Forbidden" })),
+        ghApiOk({ id: 99 }),
+      ]);
+      await expect(
+        postMarkedReview(
+          { run: fake.run, ghToken: "tok" },
+          TARGET,
+          SUMMARY,
+          COMMENTS,
+          FALLBACK,
+        ),
+      ).rejects.toThrow("HTTP 403");
+    });
+
+    test("rejects when the post without inline comments also fails", async () => {
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ok(ghApiStdout(422, { message: "Validation Failed" })),
+      ]);
+      await expect(
+        postMarkedReview(
+          { run: fake.run, ghToken: "tok" },
+          TARGET,
+          SUMMARY,
+          COMMENTS,
+          FALLBACK,
+        ),
+      ).rejects.toThrow("HTTP 422");
+    });
+
+    test("rejects without a second post when there were no inline comments", async () => {
+      const fake = createFakeCommandRunner([unresolvedLine()]);
+      await expect(
+        postMarkedReview(
+          { run: fake.run, ghToken: "tok" },
+          TARGET,
+          SUMMARY,
+          [],
+          FALLBACK,
+        ),
+      ).rejects.toThrow("HTTP 422");
+    });
+
+    test("publishReview lists the inline findings in the summary of the second post", async () => {
+      const inline = finding({ message: "inline finding text" });
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({
+          priorReview: false,
+          comments: COMMENTS,
+          commentedFindings: [inline],
+        }),
+        SILENT,
+      );
+      const body = postedBody(fake.calls[2]);
+      expect(body).toMatchObject({
+        body: expect.stringContaining("inline finding text"),
+      });
     });
   });
 

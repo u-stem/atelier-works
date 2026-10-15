@@ -1238,6 +1238,138 @@ export async function restartStoppedWorkItem(
 }
 
 /**
+ * 作業項目の自動の再開の回数を返す。
+ * 数えるのは、`note`が`notePrefix`で始まる`factory.work_item_events`の行である。
+ */
+export async function countAutoRestarts(
+  id: number,
+  notePrefix: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    SELECT count(*)::integer AS restarts FROM factory.work_item_events
+    WHERE work_item_id = ${id}::bigint AND starts_with(note, ${notePrefix})
+  `.fetch();
+  return parseRequiredNumber(rows[0]?.restarts, "restarts");
+}
+
+/** 一時的な失敗で止まったPRレビューの再開の候補。 */
+export type TransientReviewCandidate = {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly flow_job_id: string | null;
+};
+
+/** `listTransientReviewCandidates`と`restartTransientPrReview`が共有する、再開の条件。 */
+export type TransientReviewQuery = {
+  /** 止まった理由の先頭。失敗へ移った最新の遷移の注記がこれで始まる作業項目だけを対象にする。 */
+  readonly reasonPrefix: string;
+  /** 自動の再開の遷移の注記の先頭。再開の回数をこれで数える。 */
+  readonly notePrefix: string;
+  readonly maxRestarts: number;
+  /** 失敗してからこの秒数が過ぎた作業項目だけを対象にする。 */
+  readonly minAgeSeconds: number;
+};
+
+/**
+ * 一時的な失敗で`failed`になったPRレビューを、IDの小さい順に`limit`件まで返す。
+ * 失敗へ移った最新の遷移の注記が`reasonPrefix`で始まり、その遷移から`minAgeSeconds`が過ぎていて、
+ * 自動の再開が`maxRestarts`回未満のものである。
+ * 同じPRに`id`の大きいPRレビューがあるものと、終端でない別のPRレビューがあるものは、
+ * 新しい行に置き換えられているか、並んで動くので除く。
+ */
+export async function listTransientReviewCandidates(
+  params: TransientReviewQuery & { readonly limit: number },
+  sql: SqlClient = defaultSqlClient,
+): Promise<TransientReviewCandidate[]> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT w.id, w.owner, w.repo, w.pr_number, w.flow_job_id
+    FROM factory.work_items w
+    JOIN LATERAL (
+      SELECT e.note, e.occurred_at FROM factory.work_item_events e
+      WHERE e.work_item_id = w.id AND e.to_status = 'failed'
+      ORDER BY e.occurred_at DESC, e.id DESC
+      LIMIT 1
+    ) last ON true
+    WHERE w.kind = 'pr_review' AND w.status = 'failed' AND w.pr_number IS NOT NULL
+      AND starts_with(last.note, ${params.reasonPrefix})
+      AND last.occurred_at <= now() - make_interval(secs => ${params.minAgeSeconds}::integer)
+      AND (
+        SELECT count(*) FROM factory.work_item_events c
+        WHERE c.work_item_id = w.id AND starts_with(c.note, ${params.notePrefix})
+      ) < ${params.maxRestarts}::integer
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.work_items other
+        WHERE other.kind = 'pr_review'
+          AND other.owner = w.owner AND other.repo = w.repo
+          AND other.pr_number = w.pr_number AND other.id <> w.id
+          AND (other.id > w.id OR other.status != ALL(${terminal}))
+      )
+    ORDER BY w.id
+    LIMIT ${params.limit}::integer
+  `.fetch();
+  return rows.map((row) => ({
+    id: parseId(row.id, "id"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    pr_number: parseRequiredNumber(row.pr_number, "pr_number"),
+    flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
+  }));
+}
+
+/**
+ * 一時的な失敗で止まったPRレビューを、`reviewing`へ戻す。
+ * `listTransientReviewCandidates`と同じ条件を、更新の文の中で確かめる比較交換である。
+ * 候補を読んだ後に、人が再開したり別の実行が先に再開したりした作業項目は、条件に合わず`false`になり、
+ * 二重に起動しない。ラベルは触らない。
+ */
+export async function restartTransientPrReview(
+  params: TransientReviewQuery & {
+    readonly id: number;
+    readonly note: string;
+  },
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'reviewing', updated_at = now()
+      WHERE id = ${params.id}::bigint AND kind = 'pr_review' AND status = 'failed'
+        AND pr_number IS NOT NULL
+        AND starts_with((
+          SELECT e.note FROM factory.work_item_events e
+          WHERE e.work_item_id = factory.work_items.id AND e.to_status = 'failed'
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ), ${params.reasonPrefix})
+        AND (
+          SELECT count(*) FROM factory.work_item_events c
+          WHERE c.work_item_id = factory.work_items.id AND starts_with(c.note, ${params.notePrefix})
+        ) < ${params.maxRestarts}::integer
+        AND NOT EXISTS (
+          SELECT 1 FROM factory.work_items other
+          WHERE other.kind = 'pr_review'
+            AND other.owner = factory.work_items.owner AND other.repo = factory.work_items.repo
+            AND other.pr_number = factory.work_items.pr_number
+            AND other.id <> factory.work_items.id
+            AND (other.id > factory.work_items.id OR other.status != ALL(${terminal}))
+        )
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, 'failed', 'reviewing', ${params.note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
  * 作り直しの前に、Issueの作業項目に取り込んだ題名と本文を更新する。
  * 作り直しのために`requirements_generating`へ移したばかりで、pipelineのリース
  * (`flow_job_id`)がまだ空の作業項目だけを更新する。
