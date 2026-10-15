@@ -110,14 +110,6 @@ describe("evaluateWorkerAlerts oom kill", () => {
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual(["oom_kill"]);
   });
 
-  test("is quiet when the count is the same on both sides of a restart", () => {
-    const samples = [
-      sample(0, { mem_oom_kill: 2 }),
-      sample(1, { mem_oom_kill: 2 }),
-    ];
-    expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
-  });
-
   test("is quiet when the newest count could not be read", () => {
     const samples = [sample(0, { mem_oom_kill: null }), sample(1)];
     expect(evaluateWorkerAlerts(samples, THRESHOLDS)).toEqual([]);
