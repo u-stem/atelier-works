@@ -14,6 +14,7 @@ import { INFO_NOTICE_WINDOW_DAYS } from "../../f/factory/lib/console_support.ts"
 import type { SqlClient, SqlRow } from "../../f/factory/lib/db.ts";
 import { CLEANUP_RESOLVER } from "../../f/factory/lib/db.ts";
 import { HOST_ACTION_RESOLVER } from "../../f/factory/lib/host_action.ts";
+import { isRecord } from "../../f/factory/lib/types.ts";
 import { POLL_ISSUES_RESOLVER } from "../../f/factory/poll_issues.ts";
 import { POLL_PRS_RESOLVER } from "../../f/factory/poll_prs.ts";
 import {
@@ -58,6 +59,32 @@ const RESOLVED_ROW: SqlRow = {
   created_at: T0,
   resolved_by: "operator",
   resolved_at: new Date("2026-10-08T01:00:00.000Z"),
+};
+
+const WORKER_LOAD_ROW: SqlRow = {
+  sample_count: "700",
+  max_running_jobs: "2",
+  max_waiting_jobs: "3",
+  max_wait_seconds: "45",
+  max_lag_seconds: "12",
+  max_mem_current_bytes: "400000000",
+  max_mem_anon_bytes: "180000000",
+  max_mem_anon_ratio: 0.042,
+  max_mem_working_set_bytes: "200000000",
+  max_mem_peak_bytes: "1371127808",
+  busy_samples: "7",
+  lag_over_samples: "10",
+  latest_sampled_at: new Date("2026-10-15T11:58:30.000Z"),
+  latest_slots: 3,
+  latest_running_jobs: "1",
+  latest_waiting_jobs: "0",
+  latest_max_wait_seconds: "0",
+  latest_lag_seconds: "1",
+  latest_mem_current_bytes: "323907584",
+  latest_mem_anon_bytes: "80125952",
+  latest_mem_working_set_bytes: "273625088",
+  latest_mem_peak_bytes: "1371127808",
+  latest_mem_limit_bytes: "4294967296",
 };
 
 const FRESH_STATUS = JSON.stringify({
@@ -111,6 +138,32 @@ const FULL: SqlRow[][] = [
 describe("system_status contract between console_query and the console guard", () => {
   test("accepts a status with every list filled", async () => {
     expect(isSystemStatus(await statusAsDelivered(FULL))).toBe(true);
+  });
+
+  test("accepts a status whose worker load was recorded", async () => {
+    const delivered = await statusAsDelivered([
+      [],
+      [],
+      [],
+      [],
+      [WORKER_LOAD_ROW],
+    ]);
+    expect(isSystemStatus(delivered)).toBe(true);
+  });
+
+  test("returns the worker load in the delivered status", async () => {
+    const delivered = await statusAsDelivered([
+      [],
+      [],
+      [],
+      [],
+      [WORKER_LOAD_ROW],
+    ]);
+    expect(
+      isRecord(delivered) && isRecord(delivered.worker_load)
+        ? delivered.worker_load.sample_count
+        : undefined,
+    ).toBe(700);
   });
 
   test("accepts a status with nothing recorded", async () => {

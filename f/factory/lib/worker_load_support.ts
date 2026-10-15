@@ -529,6 +529,183 @@ export function nextFailureCount(previous: number, complete: boolean): number {
 }
 
 // ---------------------------------------------------------------------------
+// 閾値の通知
+// ---------------------------------------------------------------------------
+
+/** 負荷の閾値を超えたことを知らせるnoticeの種類。原因ごとに本文を変える。 */
+export const WORKER_LOAD_HIGH_KIND = "worker_load_high";
+
+/** 枠の塞がりの割合を数える窓(分)。 */
+export const WORKER_ALERT_WINDOW_MINUTES = 60;
+
+/**
+ * 窓の中の記録の数の下限。これより少ないと、割合が数件の偏りで決まるので判定しない。
+ * 窓の記録は最大30件なので、20分(10件)分を最低とする。
+ */
+export const WORKER_ALERT_MIN_SAMPLES = 10;
+
+/** 窓に必要な記録を読む件数。窓の分数を記録の間隔で割った値で、取りこぼさないよう余裕を持たせる。 */
+export const WORKER_ALERT_SAMPLE_LIMIT =
+  WORKER_ALERT_WINDOW_MINUTES / SAMPLE_INTERVAL_MINUTES + 2;
+
+/** 通知の閾値。設定(`factory_config`)の`worker_alert_*`から作る。 */
+export type WorkerAlertThresholds = {
+  /** `mem_anon_bytes / mem_limit_bytes`がこの値以上なら、メモリの通知を出す。 */
+  readonly memoryRatio: number;
+  /** 他のジョブが枠を使っているときに、`max_wait_seconds`がこの秒数以上なら、待ちの通知を出す。 */
+  readonly waitSeconds: number;
+  /** 窓の記録のうち、他のジョブが枠をすべて使っていた記録の割合がこの値以上なら、塞がりの通知を出す。 */
+  readonly busyRatio: number;
+};
+
+/** 判定に使う記録の列。`WorkerSample`の一部で、読めなかった値は`null`。 */
+export type WorkerAlertSample = {
+  readonly sampled_at: Date;
+  readonly slots: number;
+  readonly running_jobs: number | null;
+  readonly max_wait_seconds: number | null;
+  readonly mem_anon_bytes: number | null;
+  readonly mem_limit_bytes: number | null;
+};
+
+/** 通知の原因。 */
+export type WorkerAlertCause = "memory" | "wait" | "busy";
+
+function memoryExceeded(
+  newest: WorkerAlertSample,
+  thresholds: WorkerAlertThresholds,
+): boolean {
+  const { mem_anon_bytes: anon, mem_limit_bytes: limit } = newest;
+  return (
+    anon !== null &&
+    limit !== null &&
+    limit > 0 &&
+    anon / limit >= thresholds.memoryRatio
+  );
+}
+
+/**
+ * 待ちは、他のジョブが枠を使っているときだけ数える。
+ * 実行中のジョブが無いのに待ちが長いのは、ホストのスリープや再起動で予定が遅れた場合で、
+ * 枠の塞がりではなく、人の操作も要らない。
+ */
+function waitExceeded(
+  newest: WorkerAlertSample,
+  thresholds: WorkerAlertThresholds,
+): boolean {
+  const { running_jobs: running, max_wait_seconds: wait } = newest;
+  return (
+    running !== null &&
+    running >= 1 &&
+    wait !== null &&
+    wait >= thresholds.waitSeconds
+  );
+}
+
+/**
+ * 窓の中で、他のジョブが枠をすべて使っていた記録(`running_jobs >= slots - 1`)の割合を判定する。
+ * 記録のジョブ自身が枠を1つ使うので、他のジョブが使える枠は`slots - 1`である。
+ * 実行中の数が読めなかった記録は、分母にも分子にも数えない。
+ */
+function busyExceeded(
+  samples: readonly WorkerAlertSample[],
+  newest: WorkerAlertSample,
+  thresholds: WorkerAlertThresholds,
+): boolean {
+  const windowStartMs =
+    newest.sampled_at.getTime() - WORKER_ALERT_WINDOW_MINUTES * 60_000;
+  let readable = 0;
+  let busy = 0;
+  for (const sample of samples) {
+    if (
+      sample.sampled_at.getTime() < windowStartMs ||
+      sample.running_jobs === null
+    ) {
+      continue;
+    }
+    readable += 1;
+    if (sample.running_jobs >= sample.slots - 1) {
+      busy += 1;
+    }
+  }
+  return (
+    readable >= WORKER_ALERT_MIN_SAMPLES &&
+    busy / readable >= thresholds.busyRatio
+  );
+}
+
+/**
+ * 新しい順の記録から、通知を出す原因を返す。副作用は無い。
+ * メモリと待ちは最新の1件で判定し、塞がりは直近の窓の割合で判定する。
+ * 解決は人が行うので、閾値を下回っても通知を取り消さない。
+ */
+export function evaluateWorkerAlerts(
+  samples: readonly WorkerAlertSample[],
+  thresholds: WorkerAlertThresholds,
+): WorkerAlertCause[] {
+  const newest = samples[0];
+  if (newest === undefined) {
+    return [];
+  }
+  const causes: WorkerAlertCause[] = [];
+  if (memoryExceeded(newest, thresholds)) {
+    causes.push("memory");
+  }
+  if (waitExceeded(newest, thresholds)) {
+    causes.push("wait");
+  }
+  if (busyExceeded(samples, newest, thresholds)) {
+    causes.push("busy");
+  }
+  return causes;
+}
+
+/** Consoleのシステムの画面のURL。 */
+export function workerLoadConsoleUrl(windmillPublicUrl: string): string {
+  return `${windmillPublicUrl}/console/system`;
+}
+
+function causeText(
+  cause: WorkerAlertCause,
+  thresholds: WorkerAlertThresholds,
+): string {
+  switch (cause) {
+    case "memory":
+      return `defaultのworkerのメモリ(anon)が、上限の${percent(thresholds.memoryRatio)}以上になりました`;
+    case "wait":
+      return `他のジョブが枠を使っている間に、予定時刻から${String(thresholds.waitSeconds / 60)}分以上開始を待つジョブがありました`;
+    case "busy":
+      return `直近${String(WORKER_ALERT_WINDOW_MINUTES)}分の記録の${percent(thresholds.busyRatio)}以上で、他のジョブが枠をすべて使っていました`;
+  }
+}
+
+function actionText(cause: WorkerAlertCause): string {
+  switch (cause) {
+    case "memory":
+      return "実行中のジョブのscriptの内訳を見て、メモリを使うジョブが並列で動いていないかを確かめる。続くなら、並列数を下げるかメモリの上限を上げるかを判断する";
+    case "wait":
+    case "busy":
+      return "実行中のジョブを見て、長く枠を使うジョブを確かめる。続くなら、並列数を上げるか、軽いジョブを別のworkerに分けるかを判断する";
+  }
+}
+
+/**
+ * 通知の本文を作る。値は閾値だけを載せ、そのときの測定値は載せない。
+ * 本文が同じ未解決のnoticeは重ねて記録されないので、続く間は1件に保たれる。
+ * 測定値は`consoleUrl`の画面で見る。
+ */
+export function workerAlertNotice(
+  cause: WorkerAlertCause,
+  thresholds: WorkerAlertThresholds,
+  consoleUrl: string,
+): NoticeRecord {
+  return {
+    kind: WORKER_LOAD_HIGH_KIND,
+    message: `${causeText(cause, thresholds)}。対象: ${consoleUrl}(workerの負荷)。次の操作: ${actionText(cause)}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 日次のまとめ
 // ---------------------------------------------------------------------------
 

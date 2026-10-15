@@ -78,6 +78,7 @@ const NOTICE_KIND_LABELS: ReadonlyMap<string, string> = new Map([
   ["pr_ci_failed", "PRのCIの失敗"],
   ["pr_ci_check_denied", "PRのCIを読む権限の不足"],
   ["pr_conflict", "PRのマージの競合"],
+  ["worker_load_high", "workerの負荷の超過"],
 ]);
 
 /** 作業項目の状態の日本語。表に無い状態は`UNKNOWN_STATUS_LABEL`にする。 */

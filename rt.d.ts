@@ -52,6 +52,9 @@ declare namespace RT {
     pr_ci_fix_enabled: boolean,
     pr_ci_fix_max_rounds: number,
     pr_conflict_watch_enabled: boolean,
+    worker_alert_memory_ratio: number,
+    worker_alert_wait_seconds: number,
+    worker_alert_busy_ratio: number,
     check_commands_by_repo: object
   }
 }

@@ -6,12 +6,16 @@
 // 読めなかった値はNULLで残し、ほかの値は記録する。例外は投げない。
 // 投げると失敗のhandlerが毎回通知し、2分ごとだと1日に720件になるため、
 // 完全には記録できなかった回数をstateに数え、続いたときだけnoticeにする。
+// 記録の後に直近の記録を読み、メモリ、queueの待ち、枠の塞がりが設定の閾値を超えたら、原因ごとにnoticeを残す。
+// 閾値の判定は記録の成否に影響させず、失敗は警告に残す。
 
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
 import { readFile } from "node:fs/promises";
+import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
   insertWorkerSample,
+  listRecentWorkerSamples,
   type NewWorkerSample,
   resolveUnresolvedNoticesByMessage,
 } from "./lib/db.ts";
@@ -22,6 +26,7 @@ import {
   type CgroupTexts,
   combineUnknownTags,
   DEFAULT_WORKER_SLOTS,
+  evaluateWorkerAlerts,
   findJobById,
   nextFailureCount,
   parseCgroupMemory,
@@ -33,9 +38,14 @@ import {
   summarizeWaiting,
   timingOf,
   type WaitingSummary,
+  WORKER_ALERT_SAMPLE_LIMIT,
   WORKER_SAMPLE_FAILED_NOTICE,
   WORKER_SAMPLE_FAILURE_LIMIT,
+  type WorkerAlertSample,
+  type WorkerAlertThresholds,
   waitingQueueQuery,
+  workerAlertNotice,
+  workerLoadConsoleUrl,
 } from "./lib/worker_load_support.ts";
 
 /** コンテナのcgroup v2のメモリのファイルがあるディレクトリ。 */
@@ -103,6 +113,20 @@ export type SampleDeps = {
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   /** 本文が一致する未解決のnoticeをすべて解決して、解決した件数を返す。 */
   readonly resolveNotice: (record: NoticeRecord) => Promise<number>;
+  /**
+   * 閾値の通知。無ければ判定しない。
+   * `load`は閾値とConsoleのURLを返し、設定が読めなければ例外を投げる。
+   * `listRecent`は新しい順に記録を返す。
+   */
+  readonly alerts?: {
+    readonly load: () => Promise<{
+      readonly thresholds: WorkerAlertThresholds;
+      readonly consoleUrl: string;
+    }>;
+    readonly listRecent: (
+      limit: number,
+    ) => Promise<readonly WorkerAlertSample[]>;
+  };
   readonly now: () => number;
   readonly slots: number;
   readonly log: Logger;
@@ -237,6 +261,36 @@ async function trackFailures(
   }
 }
 
+/**
+ * 記録した行を含む直近の記録を読み、閾値を超えた原因ごとにnoticeを足す。
+ * 記録の成否には影響させないので、例外は投げず、警告に残す。
+ * 同じ本文の未解決のnoticeがあれば重ならず、解決は人が行う。
+ */
+async function raiseLoadAlerts(deps: SampleDeps): Promise<void> {
+  const { alerts } = deps;
+  if (alerts === undefined) {
+    return;
+  }
+  try {
+    const { thresholds, consoleUrl } = await alerts.load();
+    const samples = await alerts.listRecent(WORKER_ALERT_SAMPLE_LIMIT);
+    for (const cause of evaluateWorkerAlerts(samples, thresholds)) {
+      try {
+        await deps.addNotice(workerAlertNotice(cause, thresholds, consoleUrl));
+      } catch (err) {
+        deps.log.warn("could not add the load alert notice", {
+          cause,
+          error: maskSecrets(String(err)),
+        });
+      }
+    }
+  } catch (err) {
+    deps.log.warn("could not check the load alerts", {
+      error: maskSecrets(String(err)),
+    });
+  }
+}
+
 /** 応答の形が違う要素や、一覧でない応答を警告に残す。取得の失敗は`attempt`が残すので、ここでは見ない。 */
 function warnAboutShape(
   log: Logger,
@@ -347,6 +401,9 @@ export async function runSample(deps: SampleDeps): Promise<SampleResult> {
     timing.scheduledFor !== null &&
     timing.lagSeconds !== null;
   await trackFailures(deps, complete);
+  if (sampleId !== null) {
+    await raiseLoadAlerts(deps);
+  }
   if (sampleId === null) {
     return { outcome: "failed", sample_id: null };
   }
@@ -403,6 +460,23 @@ export async function main(): Promise<SampleResult> {
             SAMPLE_RESOLVER,
           ),
         ),
+      alerts: {
+        load: async () => {
+          const config = await call("loadConfig", () =>
+            loadConfig(() => wmill.getResource("f/factory/factory_config")),
+          );
+          return {
+            thresholds: {
+              memoryRatio: config.worker_alert_memory_ratio,
+              waitSeconds: config.worker_alert_wait_seconds,
+              busyRatio: config.worker_alert_busy_ratio,
+            },
+            consoleUrl: workerLoadConsoleUrl(config.windmill_public_url),
+          };
+        },
+        listRecent: (limit) =>
+          call("listRecentWorkerSamples", () => listRecentWorkerSamples(limit)),
+      },
       now: () => Date.now(),
       slots: DEFAULT_WORKER_SLOTS,
       log,
