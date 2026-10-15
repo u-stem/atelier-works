@@ -338,6 +338,14 @@ export type WorkItem = {
    * CIの失敗を直す`pr_fix`の作業項目だけが持ち、それ以外は`null`。外部キーは持たない。
    */
   ci_check_id: number | null;
+  /**
+   * この作業項目が直しているマージの競合(`pr_conflict_checks`の行)のID。
+   * 競合を直す`pr_fix`の作業項目だけが持ち、それ以外は`null`。外部キーは持たない。
+   * `ci_check_id`とは同時に持たない。
+   */
+  conflict_check_id: number | null;
+  /** 直している競合のepisode。`conflict_check_id`と同時に値を持ち、同時に`null`になる。 */
+  conflict_episode: number | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -1057,6 +1065,32 @@ export type FactoryConfig = {
    * `pr_ci_watch_enabled`には依らない。
    */
   pr_conflict_watch_enabled: boolean;
+  /**
+   * 競合を直す作業項目を、`watch_pr_conflicts`が起動してよいか。既定は`false`で、偽の間は何も起動せず、通知の挙動は変わらない。
+   * 真にするには`pr_conflict_watch_enabled`も真で、`pr_conflict_fix_enabled_since`が要る。
+   */
+  pr_conflict_fix_enabled: boolean;
+  /**
+   * 競合の1回(episode)で、競合を直す作業項目を起動できる回数の上限。1以上5以下の整数。既定は2。
+   */
+  pr_conflict_fix_max_rounds: number;
+  /**
+   * 1つのPRで、競合を直す作業項目を起動できる回数の上限。2以上10以下の整数。`pr_conflict_fix_enabled`が真なら、`pr_conflict_fix_max_rounds`より大きくなければならない。既定は5。
+   * 競合の行が掃除で消えても戻らないよう、競合の回数はepisodeを超えて数える。
+   */
+  pr_conflict_fix_max_rounds_per_pr: number;
+  /**
+   * この時刻より前に始まった競合の回は、直す対象にしない。基準は`pr_conflict_checks.episode_started_at`。
+   * 設定には秒まで書いたRFC 3339の日時(タイムゾーン付き)を書き、読み込み後は`Date`になる。
+   * `pr_conflict_fix_enabled`が真なら`null`にできない。既定は`null`。
+   */
+  pr_conflict_fix_enabled_since: Date | null;
+  /**
+   * 競合の回の開始から通知を待つ時間(分)。0以上1440以下の整数。既定は60。
+   * `pr_conflict_fix_enabled`が真なら、10以上でなければならない。巡回の間隔は5分で、0だと最初の巡回から通知が先に出て、起動の判断が一度も回らない。
+   * 過ぎれば、保留のままでも、保留が無くても通知する。最終の保留は待たずに通知する。
+   */
+  pr_conflict_fix_notify_grace_min: number;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の

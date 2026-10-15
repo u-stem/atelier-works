@@ -56,6 +56,11 @@ schema:
     - pr_ci_fix_max_rounds
     - pr_ci_fix_enabled_since
     - pr_conflict_watch_enabled
+    - pr_conflict_fix_enabled
+    - pr_conflict_fix_max_rounds
+    - pr_conflict_fix_max_rounds_per_pr
+    - pr_conflict_fix_enabled_since
+    - pr_conflict_fix_notify_grace_min
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -296,6 +301,37 @@ schema:
       description: >-
         FactoryのPRのマージの競合を検知して、通知するかどうかです。検知と通知だけで、PRにもリポジトリにも書き込みません。falseの間は、`watch_pr_conflicts`はGitHubもDBも読まず、何も書きません。pr_ci_watch_enabledには依りません。
       default: false
+    pr_conflict_fix_enabled:
+      type: boolean
+      description: >-
+        FactoryのPRのマージの競合を直す作業項目を、watch_pr_conflictsが起動してよいかを表す値です。falseの間は何も起動せず、通知の挙動も変わりません。trueにするには、pr_conflict_watch_enabledもtrueにし、pr_conflict_fix_enabled_sinceを書きます。
+      default: false
+    pr_conflict_fix_enabled_since:
+      type: string
+      format: date-time
+      description: >-
+        秒まで書いたタイムゾーン付きのRFC 3339の日時です(例: 2026-10-15T03:00:00Z)。書き損じると、設定の読み込みが失敗します。指定すると、競合の記録の今の回が始まった時刻(episode_started_at)がこの時刻より前の競合は、直す対象にしません。pr_conflict_fix_enabledがtrueのときは省略できません。
+    pr_conflict_fix_max_rounds:
+      type: integer
+      minimum: 1
+      maximum: 5
+      description: >-
+        競合の1回で、競合を直す作業項目を起動できる回数の上限です。1以上5以下の整数にします。
+      default: 2
+    pr_conflict_fix_max_rounds_per_pr:
+      type: integer
+      minimum: 2
+      maximum: 10
+      description: >-
+        1つのPRで、競合を直す作業項目を起動できる回数の上限です。競合の記録が掃除で消えても戻らないよう、競合の回をまたいで数えます。2以上10以下の整数にします。pr_conflict_fix_enabledがtrueのときは、pr_conflict_fix_max_roundsより大きくします。
+      default: 5
+    pr_conflict_fix_notify_grace_min:
+      type: integer
+      minimum: 0
+      maximum: 1440
+      description: >-
+        競合を直す起動が有効なとき、競合を通知するまで待つ時間(分)です。競合の回が始まってからこの時間が過ぎたら、保留のままでも、保留が無くても通知します。解けない理由の保留は、待たずに通知します。0以上1440以下の整数にします。pr_conflict_fix_enabledがtrueのときは、10以上にします。巡回の間隔は5分で、0だと最初の巡回から通知が先に出て、起動の判断が一度も回らないためです。
+      default: 60
     pr_ci_watch_enabled:
       type: boolean
       description: >-

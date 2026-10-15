@@ -187,8 +187,8 @@ ownerとrepoは、行との照合では小文字で比べる。
 作業項目には、`poll_prs`が`startFix`に渡すownerとrepo(検索結果の`repository_url`由来)と同じ綴りを渡す。
 一意索引と既存の照合が大文字小文字を区別するためである。
 
-`countPrFixFailures`は、`ci_check_id`を持つ作業項目を数えない。
-指摘への対応の失敗から、モデルを`heavy_model`に上げるかを決める。この判定に、CIの失敗を直す作業項目の失敗を混ぜないためである。
+`countPrFixFailures`は、`ci_check_id`を持つ作業項目と、`conflict_check_id`を持つ作業項目を数えない。
+指摘への対応の失敗から、モデルを`heavy_model`に上げるかを決める。この判定に、CIの失敗や競合を直す作業項目の失敗を混ぜないためである。
 
 `fixing`の行は、掃除(`deletePrCiChecksBefore`)が削除しない。
 `touchPrCiCheck`は`fixing`の行も読み直した時刻を進める。
@@ -330,7 +330,7 @@ headが動いたか分からないまま戻すと古いheadの行を再び直し
 1. 通知した理由が`ci_other_conclusion`なら、`other_conclusion`で保留する。
 2. そのPRに、終端でない直す作業項目があれば、`last_fix_unsettled`で保留する。
 3. 行のheadのレビューの行(`factory.reviews`の`head_sha`)が無ければ、`not_reviewed`で保留する。
-4. PRを読み直す。閉じていれば、行のheadから進んでいれば、何もしない。ドラフトか、auto-mergeが有効なら、`pr_draft_or_auto_merge`で保留する。
+4. PRを読み直す。閉じているか、headが行から進んでいれば、何もしない。ドラフトか、auto-mergeが有効なら、`pr_draft_or_auto_merge`で保留する。
 5. PRのすべてのcommit(250件まで)の本文の最後の段落に、次の行が無ければ、`not_factory_head`で保留する。
    `Generated-By: Software Factory (<instance_name>)`
    250件に達したときも保留する。
@@ -760,7 +760,15 @@ PRの今の状態から、次の順に扱いを決める(`decidePrConflict`)。
 
 競合を見るたびに、行を挿入するか書き換える(`recordPrConflict`)。
 競合は、行が無い状態か、`resolved`か`closed`の状態から`conflicted`に移った時点で始まる。
-始まったときだけ、通知した時刻を空にして、競合の回(`episode`)を1つ増やす。回は、競合の行のidと組にして、競合の1回を指す。競合のままheadが進んだときは、`head_sha`だけを書き換える。通知した時刻と回は変えない。
+始まったときだけ、次の列を書く。
+
+- 通知した時刻を空にする。
+- 競合の回(`episode`)を1つ増やす。回は、競合の行のidと組にして、競合の1回を指す。
+- 回の開始時刻(`episode_started_at`)を今にする。
+- 直す作業項目の起動の回数(`fix_attempts`)を0に、起動の保留の理由(`fix_hold_reason`)を空にする。
+
+直している作業項目(`fix_work_item_id`)は、始まっても戻さない。その作業項目が終わるまで、行は結びを持ち続ける必要があるためである。
+競合のままheadが進んだときは、`head_sha`だけを書き換える。通知した時刻、回、直す作業に関する列は変えない。
 `recordPrConflict`は、新しい競合が始まったかを返す。読んで書く間に値が変わらないよう、1つの文で行う。
 `episode`は、PRの何回目の競合かを区別する。1から始める。
 
@@ -770,15 +778,172 @@ PRの今の状態から、次の順に扱いを決める(`decidePrConflict`)。
 | 列 | 意味 |
 | --- | --- |
 | `fix_work_item_id` | いま競合を直している作業項目のID。直していなければNULL |
-| `fix_attempts` | 直す作業項目を起動した回数。既定は0で、負にならない |
+| `fix_attempts` | 今の競合の回で、直す作業項目を起動した回数。既定は0で、負にならない |
 | `fix_hold_reason` | 起動を保留している理由コード。保留していなければNULL。空でなく、64字まで |
-| `episode_started_at` | 行を挿入した時刻 |
+| `episode_started_at` | 今の競合の回が始まった時刻 |
 
 `checked_at`は読み直すたびに、`updated_at`は書くたびに進む。
-行を挿入した時刻は、これらとは別に`episode_started_at`へ持つ。
+今の競合の回が始まった時刻は、これらとは別に`episode_started_at`へ持つ。
 競合の1回は、行のidと`episode`の組で指す。作業項目の`conflict_check_id`と`conflict_episode`が、直している競合をこの組で結ぶ([作業項目の状態とリース](work-items.md)の「修正の回を結ぶ列」)。
 
 既存の行の`episode_started_at`は、列を足した時刻になる。競合の本来の開始時刻は記録していないためである。
+
+### 競合を直す設定
+
+次の5項目は`factory_config`で決める。既存のリソースにこれらの項目が無くても、既定値で動く。
+
+| 項目 | 既定値 | 意味 |
+| --- | --- | --- |
+| `pr_conflict_fix_enabled` | `false` | 競合を直す作業項目を起動してよいか。偽の間は何も起動せず、通知の挙動も変わらない |
+| `pr_conflict_fix_max_rounds` | `2` | 競合の1回(`episode`)で起動できる数の上限。1以上5以下の整数 |
+| `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数の上限。2以上10以下の整数。`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_fix_max_rounds`より大きい |
+| `pr_conflict_fix_enabled_since` | 無し | 今の競合の回が始まった時刻(`episode_started_at`)がこの時刻より前の競合を、直す対象にしない。`pr_conflict_fix_enabled`が`true`なら必須 |
+| `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下の整数。`pr_conflict_fix_enabled`が`true`なら、10以上 |
+
+`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_watch_enabled`も`true`でなければならない。
+起動の対象は検知が記録した行なので、検知が止まっていると何も起動できない。この食い違いは、設定の読み込みで拒否する。
+`pr_conflict_fix_enabled_since`は、`pr_ci_fix_enabled_since`と同じ形の日時にする。
+時刻が無いと、有効にする前から残る競合を、すべて直しにいくためである。
+起動が有効なとき、猶予は巡回の間隔(5分)より大きい10分以上でなければならない。
+猶予が0だと、最初の巡回から通知が先に出て、起動の判断が一度も回らないためである。
+起動が有効なとき、PR全体の上限が競合1回の上限以下の設定は拒否する。
+競合1回の上限へ達する前に、PR全体の上限が起動を止めるためである。
+起動が無効の間は、この組み合わせを検査しない。使わない設定の食い違いで読み込みが失敗し、Factory全体が止まるのを避けるためである。
+各値の範囲は、有効かどうかによらず検査し、外れた値は既定値に直さず拒否する。
+設定を書き損じると、設定の読み込み全体が設定エラーで止まり、Factoryのほかの処理も動かなくなる。
+
+### 保留の理由の語彙
+
+`fix_hold_reason`に書く値は、`lib/pr_conflict_fix_holds.ts`の`PR_CONFLICT_FIX_HOLD_REASONS`の14個に限る。
+`lib/pr_conflict_support.ts`が同じ名前で再エクスポートする。
+DBの関数が一時の理由の一覧を読むので、依存を持たない小さなモジュールに置く。
+DBの検査は長さだけなので、書く側をこの型で縛る。
+種別は`PR_CONFLICT_FIX_HOLD_INFO`が持つ。
+一時の理由は、解ければ外れる。最終の理由は、人が直すまで起動し直さない。
+
+| 理由 | 種別 | 意味 |
+| --- | --- | --- |
+| `last_fix_unsettled` | 一時 | 直近の直す作業項目が、まだ終わっていない |
+| `budget_exceeded` | 一時 | 日次の予算を使い切った |
+| `recently_fixed` | 一時 | 直近の直す作業項目が終わってから5分に満たない。GitHubが競合の有無を更新するまで待つ |
+| `marker_missing` | 一時 | Factoryのクローンのスキルが、競合を直す節を持たない |
+| `main_ci_failed` | 一時 | 既定のブランチの先頭のmainのCIが失敗している |
+| `pr_draft_or_auto_merge` | 最終 | PRがドラフトか、auto-mergeが有効である |
+| `not_factory_head` | 最終 | PRのコミットに、Factoryのものでないものがある |
+| `rounds_exhausted` | 最終 | 直す回数の上限に達した |
+| `base_not_default` | 最終 | PRのbaseが、リポジトリの既定のブランチでない |
+| `base_changes_workflows` | 最終 | 既定のブランチの更新が、`.github/workflows/`を変える |
+| `protected_path` | 最終 | 競合したパスが保護パスである |
+| `unresolvable` | 最終 | 競合が自動で解ける形でない |
+| `check_failed` | 最終 | 解消した後の検査コマンドが失敗した |
+| `fix_stopped` | 最終 | 直す作業項目が、上のどれにも当たらない理由で止まった |
+
+語彙に無い値は、最終として扱う。通知を出さずに放置しないためである。
+
+### 競合を直す判断
+
+判断は`lib/pr_conflict_fix_claim.ts`と`lib/pr_conflict_fix_recovery.ts`の関数が行う。
+どちらも事実を引数で受け取り、DBとGitHubには書かない。
+
+`decideConflictFixClaim`は、競合の行について、直す作業項目を起動してよいかを決める。
+次の順に確かめ、最初に当たったもので止める。
+安く確かめられるものが先で、事実は必要になるまで読まない。
+
+1. 直す作業項目が動いていれば、`last_fix_unsettled`で保留する。
+2. PRを読み直す。閉じているか、行のheadから進んでいれば、何もしない。baseが既定のブランチでなければ`base_not_default`、ドラフトかauto-mergeが有効なら`pr_draft_or_auto_merge`で保留する。
+3. コミットがすべてFactoryのものでなければ、`not_factory_head`で保留する。
+4. スキルのマーカーが無ければ`marker_missing`、予算を使い切っていれば`budget_exceeded`で保留する。
+5. 既定のブランチの先頭のmainのCIが失敗していれば、`main_ci_failed`で保留する。記録が無い、判定待ち、期限切れ、CIなし、基準の行のときは止めない。
+6. 競合の1回の起動数、PR全体の起動数、行の起動の回数のどれかが上限に達していれば、`rounds_exhausted`で保留する。
+7. 直近の直す作業項目が終わってから5分に満たなければ、`recently_fixed`で保留する。
+
+作業項目の状態をPRより先に読むのは、読んでいる間に直す作業項目がpushしたとき、古いheadの行を起動しないためである。
+Factoryのレビューの記録は要求しない。
+行の起動の回数の上限は、競合の1回の上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数である。
+フローが起動しないまま起動し直し続けるのを止める。
+
+`decideConflictNotify`は、通知していない競合の行の扱いを決める。
+扱いは、通知、待機、起動の判断のどれかである。
+
+- 起動が無効なら、常に通知する。
+- 起動を有効にした時刻より前に始まった競合の回は、起動の対象外なので通知する。
+- 最終の保留は、猶予を待たずに通知する。
+- 直す作業項目が動いていれば、待つ。
+- 一時の保留がある行と、保留と作業項目のどちらも無い行は、競合の回の開始(`episode_started_at`)から猶予が過ぎたら通知する。それまでは、起動の判断に回して見直す。
+
+猶予は、保留を書いた時刻でなく、競合の回の開始から数える。保留が付け外しされても、通知が遅れ続けないためである。
+保留の無い行にも猶予を掛けるのは、起動の判断が失敗し続けたり、起動の文が`null`を返し続けたりしても、通知を必ず出すためである。
+1回目の修正が猶予より長くかかると、2回目は起動しない。
+`pr_conflict_fix_max_rounds`を2以上にしても、起動できるのは、猶予の内側に収まる修正の回数までである。
+運用では、起動したい回数に応じて猶予を決める。例えば2回起動したいときは、猶予を修正2回分の時間より長くする。
+
+`decideConflictFixRecovery`は、直す作業項目が結ばれた行について、行き先を決める。
+作業項目の状態ごとに、次のように決める。
+
+- 存在しない(掃除で消えた): 終端として扱い、保留なしで結びを外す。
+- 動いている(終端でない): そのままにする。
+- pushした(`rereview_requested`か、直す回がpushしたcommitを記録している): 結びを外す。
+- 何も変えずに終えた(`reviewed`で注記が`conflict round: up_to_date`): 結びを外す。pushしていないので、pushした回と区別する。注記がそれ以外の`reviewed`は、保留なしで結びを外す。
+- `needs_human`と`blocked`(次の行を除く): 止めた理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
+- イメージが古い理由で止まった`blocked`: 待たずに、保留なしで結びを外す。待つと、その間は通知されず、起動もされないためである。この回は回数に数えないので、起動し直しを止めるのは、行の起動の回数の上限だけである。
+- `failed`: フローの起動より前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。起動した後なら、止めた理由を写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
+- `cancelled`などのほかの終端: 保留なしで結びを外す。
+
+保留を書く場合でも、作業項目が直していた競合の回が行の今の回と違うときは、保留を書かずに結びだけを外す。古い回の作業項目の終わり方を、新しい回の行に最終の保留として書かないためである。
+
+止めた理由の注記は、固定文への完全一致だけで保留の理由に写す。
+
+| 注記 | 保留の理由 |
+| --- | --- |
+| `conflict round: base is not the default branch` | `base_not_default` |
+| `conflict round: base changes workflows` | `base_changes_workflows` |
+| `conflict round: a conflicted path is protected` | `protected_path` |
+| `conflict round: unresolvable conflict` | `unresolvable` |
+| `conflict round: check failed` | `check_failed` |
+| `conflict round: the factory-fix skill lacks the conflict-fix-skill:v1 marker` | `marker_missing` |
+| 予算を使い切った、ドラフトかauto-mergeが有効、の固定文 | `budget_exceeded`、`pr_draft_or_auto_merge` |
+
+Claudeの出力には、固定文の前に接頭辞が付く。接頭辞は「conflict round: claude blocked: 」である。
+そのため、Claudeの出力の中の文字列が、保留の理由を決めることは無い。
+
+### 競合を直す作業項目と行の結び
+
+`lib/db.ts`の関数が、行と直す作業項目の結びを書く。
+行の状態(`state`)は、直している間も`conflicted`のままである。直している作業項目は`fix_work_item_id`が示す。
+
+`claimPrConflictForFix`は、行に作業項目を結び、`pr_fix`の作業項目を挿入して、そのIDを返す。
+行の更新と挿入は1つの文で行うので、片方だけが書かれることはない。
+次のどれかなら、何も書かず`null`を返す。
+
+- 行が競合でない、または`head_sha`が渡したheadと違う。
+- 行が通知済みである。
+- 行にすでに作業項目が結ばれている。
+- 行が最終の保留である。一時の保留は、起動と同じ文で外す。
+- 同じPRに、終端でない`pr_fix`がある。綴りの大文字小文字は区別しない。
+
+一意索引`work_items_active_pr_fix_key`に違反したときも、文全体が取り消されるので`null`を返す。
+作業項目は状態`fixing`で挿入し、`conflict_check_id`に行のID、`conflict_episode`に行の競合の回を入れる。
+ラウンドの番号と処理済みの位置は、同じPRの直近の`pr_fix`から写す。無ければ0にする。
+
+`setPrConflictFixHold`は、結ばれていない競合の行の保留の理由を書く。今の値と違うときだけ書き、`null`で外す。
+結ばれた行の保留は、結びを外す`releasePrConflictFix`が同時に書く。
+`releasePrConflictFix`は、行の状態を問わず、結びを外す。作業項目が動いている間に競合が解けた行も、結びは外す必要があるためである。
+保留の理由を書くのは、作業項目の競合の回が行の今の回と同じときだけである。違うときは、結びだけを外す。
+`listPrConflictFixing`は、結ばれた行を、読み直していない順に返す。
+
+`countPrConflictFixRounds`は、競合を直したラウンドを数える。
+範囲は、競合の1回(行のIDと回の組)かPR全体である。PR全体は、掃除で行が消えても回数が戻らないよう、行を経由せず作業項目を直接数える。
+どちらも同じ条件で数え、次のものは数えない。
+
+- 状態が`failed`で、フローのジョブIDが無い作業項目。Claudeを走らせていない回で、直す機会を使い切らないためである。
+- 何も変えずに終えた作業項目。状態が`reviewed`で、その状態へ移った最新の注記が`conflict round: up_to_date`である。
+- イメージが古い理由で止まった作業項目。状態が`blocked`で、その状態へ移った最新の注記が、イメージが古い理由のどれかで始まる。Claudeを動かす前に準備が止めた回で、数えると、人がイメージを直しても回数を使い切ったままになるためである。
+
+イメージが古い理由で止まった回を数えないので、その起動の繰り返しを止めるのは、行の起動の回数の上限(`pr_conflict_fix_max_rounds`に3を足した数)だけである。
+巡回は5分ごとなので、既定の設定でイメージの古い状態が約20〜25分を超えると、その競合の回は`rounds_exhausted`(最終の保留)として通知される。
+通知の理由は、イメージの古さを示さない。
+その後に人がイメージを直しても、その回は自動では直らない。新しい競合の回で、再び起動する。
+準備の段階で止まる回はClaudeを使わないので、予算は使わない。
 
 ### 通知
 

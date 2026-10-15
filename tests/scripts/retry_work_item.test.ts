@@ -878,3 +878,29 @@ describe("main: CI round refusal", () => {
     );
   });
 });
+
+describe("main: conflict round refusal", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "../../f/factory/retry_work_item.ts"),
+    "utf8",
+  );
+
+  test("refuses a conflict round right after reading the work item", () => {
+    const afterRead = source.slice(
+      source.indexOf("await getWorkItem(work_item_id)"),
+    );
+    expect(
+      afterRead.indexOf("conflictRoundRetryRefusal(workItem)"),
+    ).toBeLessThan(afterRead.indexOf("computeRestartPlan(restartItem"));
+  });
+
+  test("calls the refusal of a conflict round", () => {
+    expect(
+      source.indexOf("conflictRoundRetryRefusal(workItem)"),
+    ).toBeGreaterThan(-1);
+  });
+
+  test("throws the refusal", () => {
+    expect(source).toContain("throw new Error(conflictRoundRefusal)");
+  });
+});

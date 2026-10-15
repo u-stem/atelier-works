@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   decidePrConflict,
+  isFinalPrConflictFixHold,
+  isPrConflictFixHoldReason,
+  PR_CONFLICT_FIX_HOLD_INFO,
+  PR_CONFLICT_FIX_HOLD_REASON_MAX_LENGTH,
+  PR_CONFLICT_FIX_HOLD_REASONS,
   PR_CONFLICT_KIND,
   PR_CONFLICT_NEXT_ACTION,
   type PrConflictFacts,
@@ -185,5 +190,100 @@ describe("prConflictNoticeMessage", () => {
 describe("PR_CONFLICT_KIND", () => {
   test("is the notice kind shown in the Console", () => {
     expect(PR_CONFLICT_KIND).toBe("pr_conflict");
+  });
+});
+
+describe("PR_CONFLICT_FIX_HOLD_REASONS", () => {
+  test("lists the fourteen reasons of the vocabulary", () => {
+    expect(PR_CONFLICT_FIX_HOLD_REASONS.map(String).sort()).toEqual(
+      [
+        "base_changes_workflows",
+        "base_not_default",
+        "budget_exceeded",
+        "check_failed",
+        "fix_stopped",
+        "last_fix_unsettled",
+        "main_ci_failed",
+        "marker_missing",
+        "not_factory_head",
+        "pr_draft_or_auto_merge",
+        "protected_path",
+        "recently_fixed",
+        "rounds_exhausted",
+        "unresolvable",
+      ].sort(),
+    );
+  });
+
+  test("keeps every reason within the length of the column", () => {
+    expect(
+      PR_CONFLICT_FIX_HOLD_REASONS.every(
+        (reason) => reason.length <= PR_CONFLICT_FIX_HOLD_REASON_MAX_LENGTH,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("PR_CONFLICT_FIX_HOLD_INFO", () => {
+  test.each([
+    "last_fix_unsettled",
+    "budget_exceeded",
+    "recently_fixed",
+    "marker_missing",
+    "main_ci_failed",
+  ] as const)("marks %s as temporary", (reason) => {
+    expect(PR_CONFLICT_FIX_HOLD_INFO[reason].temporary).toBe(true);
+  });
+
+  test.each([
+    "pr_draft_or_auto_merge",
+    "not_factory_head",
+    "rounds_exhausted",
+    "base_not_default",
+    "base_changes_workflows",
+    "protected_path",
+    "unresolvable",
+    "check_failed",
+    "fix_stopped",
+  ] as const)("marks %s as final", (reason) => {
+    expect(PR_CONFLICT_FIX_HOLD_INFO[reason].temporary).toBe(false);
+  });
+
+  test("describes every reason of the vocabulary", () => {
+    expect(Object.keys(PR_CONFLICT_FIX_HOLD_INFO).sort()).toEqual(
+      [...PR_CONFLICT_FIX_HOLD_REASONS].sort(),
+    );
+  });
+});
+
+describe("isPrConflictFixHoldReason", () => {
+  test("accepts a reason of the vocabulary", () => {
+    expect(isPrConflictFixHoldReason("protected_path")).toBe(true);
+  });
+
+  test("rejects a reason of the CI vocabulary that the conflict vocabulary lacks", () => {
+    expect(isPrConflictFixHoldReason("not_reviewed")).toBe(false);
+  });
+
+  test("rejects a value that is not a string", () => {
+    expect(isPrConflictFixHoldReason(null)).toBe(false);
+  });
+});
+
+describe("isFinalPrConflictFixHold", () => {
+  test("is true for a final reason", () => {
+    expect(isFinalPrConflictFixHold("unresolvable")).toBe(true);
+  });
+
+  test("is false for a temporary reason", () => {
+    expect(isFinalPrConflictFixHold("recently_fixed")).toBe(false);
+  });
+
+  test("is false for no hold", () => {
+    expect(isFinalPrConflictFixHold(null)).toBe(false);
+  });
+
+  test("is true for a reason that is not in the vocabulary", () => {
+    expect(isFinalPrConflictFixHold("unknown_reason")).toBe(true);
   });
 });

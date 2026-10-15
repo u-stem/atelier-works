@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
 import {
+  claimPrConflictForFix,
+  countPrConflictFixRounds,
   deletePrConflictChecksBefore,
   listConflictedPrConflictChecks,
+  listPrConflictFixing,
   listPrConflictRepos,
   listPrOpenRepos,
   markPrConflictNotified,
   recordPrConflict,
+  releasePrConflictFix,
+  setPrConflictFixHold,
   settlePrConflictCheck,
   touchPrConflictCheck,
 } from "../../f/factory/lib/db.ts";
@@ -48,6 +54,10 @@ const ROW: SqlRow = {
   state: "conflicted",
   episode: 1,
   notified_at: null,
+  fix_work_item_id: null,
+  fix_attempts: 0,
+  fix_hold_reason: null,
+  episode_started_at: new Date("2026-10-15T00:00:00.000Z"),
   checked_at: new Date("2026-10-15T00:00:00.000Z"),
   created_at: new Date("2026-10-15T00:00:00.000Z"),
   updated_at: new Date("2026-10-15T00:00:00.000Z"),
@@ -345,5 +355,566 @@ describe("listPrConflictRepos", () => {
     expect(await listPrConflictRepos(sql)).toEqual([
       { owner: "acme", repo: "widgets" },
     ]);
+  });
+});
+
+describe("recordPrConflict: the fix columns", () => {
+  test("restarts the episode time only when a conflict starts again", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain(
+      "episode_started_at = CASE WHEN c.state = 'conflicted' THEN c.episode_started_at ELSE now() END",
+    );
+  });
+
+  test("resets the fix attempts only when a conflict starts again", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_attempts = CASE WHEN c.state = 'conflicted' THEN c.fix_attempts ELSE 0 END",
+    );
+  });
+
+  test("clears the fix hold reason only when a conflict starts again", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_hold_reason = CASE WHEN c.state = 'conflicted' THEN c.fix_hold_reason ELSE NULL END",
+    );
+  });
+
+  test("does not write the fix work item id", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await recordPrConflict(OBSERVATION, sql);
+    expect(calls[0]?.text).not.toContain("fix_work_item_id =");
+  });
+
+  test("returns the fix columns of the row", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...ROW,
+          fix_work_item_id: "31",
+          fix_attempts: "2",
+          fix_hold_reason: "recently_fixed",
+        },
+      ],
+    ]);
+    expect((await recordPrConflict(OBSERVATION, sql)).row).toMatchObject({
+      fix_work_item_id: 31,
+      fix_attempts: 2,
+      fix_hold_reason: "recently_fixed",
+    });
+  });
+
+  test("returns the start time of the episode", async () => {
+    const { sql } = createFakeSqlClient([[ROW]]);
+    expect(
+      (await recordPrConflict(OBSERVATION, sql)).row.episode_started_at,
+    ).toEqual(new Date("2026-10-15T00:00:00.000Z"));
+  });
+
+  test("rejects a row whose fix attempts are not a number", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, fix_attempts: "x" }]]);
+    await expect(recordPrConflict(OBSERVATION, sql)).rejects.toThrow(
+      "fix_attempts",
+    );
+  });
+
+  test("rejects a row whose fix hold reason is empty", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, fix_hold_reason: "" }]]);
+    await expect(recordPrConflict(OBSERVATION, sql)).rejects.toThrow(
+      "fix_hold_reason",
+    );
+  });
+});
+
+const CLAIM_INPUT = {
+  id: 7,
+  owner: "Acme",
+  repo: "Widgets",
+  headSha: HEAD,
+  title: "t",
+  claimedBy: "bot",
+};
+
+describe("claimPrConflictForFix", () => {
+  test("returns the id of the new work item", async () => {
+    const { sql } = createFakeSqlClient([[{ id: "41" }]]);
+    expect(await claimPrConflictForFix(CLAIM_INPUT, sql)).toBe(41);
+  });
+
+  test("returns null when no row was claimed", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await claimPrConflictForFix(CLAIM_INPUT, sql)).toBeNull();
+  });
+
+  test("claims with one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "41" }]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("returns null when the active pr_fix index rejects the insert", async () => {
+    const sql = () => ({
+      fetch: () =>
+        Promise.reject(
+          new Error(
+            'duplicate key value violates unique constraint "work_items_active_pr_fix_key"',
+          ),
+        ),
+      execute: () => Promise.resolve(),
+    });
+    expect(await claimPrConflictForFix(CLAIM_INPUT, sql)).toBeNull();
+  });
+
+  test("rethrows another database error", async () => {
+    const sql = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.resolve(),
+    });
+    await expect(claimPrConflictForFix(CLAIM_INPUT, sql)).rejects.toThrow(
+      "db down",
+    );
+  });
+
+  test("claims only a conflicted row of the observed head", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toMatch(
+      /r\.state = 'conflicted' AND r\.head_sha =\s+\?/,
+    );
+  });
+
+  test("claims only a row that is not notified and has no fix work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toContain(
+      "r.fix_work_item_id IS NULL AND r.notified_at IS NULL",
+    );
+  });
+
+  test("refuses a row with a final hold", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toContain("r.fix_hold_reason IS NULL OR");
+  });
+
+  test("passes only the temporary reasons as the holds that may be claimed", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.values).toContainEqual([
+      "last_fix_unsettled",
+      "budget_exceeded",
+      "recently_fixed",
+      "marker_missing",
+      "main_ci_failed",
+    ]);
+  });
+
+  test("clears the hold of the claimed row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toContain("fix_hold_reason = NULL");
+  });
+
+  test("counts the attempt of the row", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toContain("fix_attempts = r.fix_attempts + 1");
+  });
+
+  test("leaves the state of the row as conflicted", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).not.toContain("SET state");
+  });
+
+  test("refuses a pull request that has an active pr_fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toContain("active.kind = 'pr_fix'");
+  });
+
+  test("copies the round and the watermarks from the latest pr_fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toContain(
+      "COALESCE((SELECT last_review_comment_id FROM prev), 0)",
+    );
+  });
+
+  test("ties the work item to the row and the episode, not to a CI check", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.text).toContain(
+      "head_sha, conflict_check_id, conflict_episode,",
+    );
+  });
+
+  test("lowercases the owner and repo for the row, and keeps the spelling for the work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await claimPrConflictForFix(CLAIM_INPUT, sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["acme", "widgets", "Acme", "Widgets"]),
+    );
+  });
+
+  test("rejects an id that is not positive, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "41" }]]);
+    await claimPrConflictForFix({ ...CLAIM_INPUT, id: 0 }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a head sha that is not a full commit sha, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "41" }]]);
+    await claimPrConflictForFix({ ...CLAIM_INPUT, headSha: "abc" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an owner that is not a GitHub name, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: "41" }]]);
+    await claimPrConflictForFix({ ...CLAIM_INPUT, owner: "a b" }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("setPrConflictFixHold", () => {
+  test("writes only to a conflicted row that has no fix work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await setPrConflictFixHold(7, "main_ci_failed", {}, sql);
+    expect(calls[0]?.text).toContain(
+      "state = 'conflicted' AND fix_work_item_id IS NULL",
+    );
+  });
+
+  test("writes only when the reason changes", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await setPrConflictFixHold(7, "main_ci_failed", {}, sql);
+    expect(calls[0]?.text).toContain("fix_hold_reason IS DISTINCT FROM");
+  });
+
+  test("returns true when it wrote", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
+    expect(await setPrConflictFixHold(7, "main_ci_failed", {}, sql)).toBe(true);
+  });
+
+  test("returns false when nothing changed", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await setPrConflictFixHold(7, "main_ci_failed", {}, sql)).toBe(
+      false,
+    );
+  });
+
+  test("clears the hold with null", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await setPrConflictFixHold(7, null, {}, sql);
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("compares with the expected reason only when it is passed", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await setPrConflictFixHold(7, "main_ci_failed", { expected: null }, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
+  test("rejects an empty reason, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await setPrConflictFixHold(7, "", {}, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a reason longer than 64 characters, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await setPrConflictFixHold(7, "x".repeat(65), {}, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an id that is not positive, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await setPrConflictFixHold(0, null, {}, sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("releasePrConflictFix", () => {
+  test("releases only the row bound to the given work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.text).toMatch(
+      /AND r\.fix_work_item_id =\s+\?\s*::bigint\s+RETURNING/,
+    );
+  });
+
+  test("binds the given work item id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.values).toContain(31);
+  });
+
+  test("clears the fix work item id", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.text).toContain("SET fix_work_item_id = NULL");
+  });
+
+  test("does not require the row to be conflicted", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.text).not.toContain("state = 'conflicted'");
+  });
+
+  test("keeps the current hold when no reason is passed", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql);
+    expect(calls[0]?.text).toContain("THEN COALESCE(");
+  });
+
+  test("writes the hold only when the work item belongs to the episode of the row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "fix_stopped" },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("w.conflict_episode = r.episode");
+  });
+
+  test("checks that the work item is tied to the same row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "fix_stopped" },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("w.conflict_check_id = r.id");
+  });
+
+  test("keeps the current hold when the episodes differ", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "fix_stopped" },
+      sql,
+    );
+    expect(calls[0]?.text).toContain("ELSE r.fix_hold_reason END");
+  });
+
+  test("returns true when it unbound the row", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
+    expect(await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql)).toBe(
+      true,
+    );
+  });
+
+  test("returns false when the row was not bound", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await releasePrConflictFix(7, { fixWorkItemId: 31 }, sql)).toBe(
+      false,
+    );
+  });
+
+  test("rejects an empty hold reason, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(
+      7,
+      { fixWorkItemId: 31, holdReason: "" },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a work item id that is not positive, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await releasePrConflictFix(7, { fixWorkItemId: 0 }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("listPrConflictFixing", () => {
+  test("lists the rows that have a fix work item, least recently checked first", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await listPrConflictFixing(10, sql);
+    expect(calls[0]?.text).toMatch(
+      /WHERE fix_work_item_id IS NOT NULL\s+ORDER BY checked_at ASC, id ASC\s+LIMIT/,
+    );
+  });
+
+  test("does not filter by state", async () => {
+    const { sql, calls } = createFakeSqlClient([[ROW]]);
+    await listPrConflictFixing(10, sql);
+    expect(calls[0]?.text).not.toContain("state =");
+  });
+
+  test("parses the rows", async () => {
+    const { sql } = createFakeSqlClient([[{ ...ROW, fix_work_item_id: "31" }]]);
+    expect((await listPrConflictFixing(10, sql))[0]?.fix_work_item_id).toBe(31);
+  });
+});
+
+describe("countPrConflictFixRounds", () => {
+  const EPISODE = { kind: "episode", checkId: 7, episode: 2 } as const;
+  const PR = {
+    kind: "pr",
+    owner: "Acme",
+    repo: "Widgets",
+    prNumber: 12,
+  } as const;
+
+  test("returns the count", async () => {
+    const { sql } = createFakeSqlClient([[{ rounds: "3" }]]);
+    expect(
+      await countPrConflictFixRounds(
+        EPISODE,
+        [...AUTO_RETRY_REASON_PREFIXES],
+        sql,
+      ),
+    ).toBe(3);
+  });
+
+  test("returns zero when no row comes back", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(
+      await countPrConflictFixRounds(
+        EPISODE,
+        [...AUTO_RETRY_REASON_PREFIXES],
+        sql,
+      ),
+    ).toBe(0);
+  });
+
+  test("counts the episode by the check id and the episode", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.text).toMatch(
+      /wi\.conflict_check_id =\s+\?\s*::bigint AND wi\.conflict_episode =\s+\?\s*::integer/,
+    );
+  });
+
+  test("counts the pull request from the work items, not through the conflict rows", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
+    expect(calls[0]?.text).not.toContain("pr_conflict_checks");
+  });
+
+  test("counts the pull request by the lower-case owner and repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["acme", "widgets"]),
+    );
+  });
+
+  test("counts only conflict rounds of pr_fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
+    expect(calls[0]?.text).toContain(
+      "wi.kind = 'pr_fix' AND wi.conflict_check_id IS NOT NULL",
+    );
+  });
+
+  test("does not count a failed work item that never started a flow", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.text).toContain(
+      "NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)",
+    );
+  });
+
+  test("does not count a round that ended up to date", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.values).toContain("conflict round: up_to_date");
+  });
+
+  test("tells an up to date round by the reviewed status and the note", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.text).toContain("wi.status = 'reviewed'");
+  });
+
+  test("binds the reasons of a stale image as note prefixes, per episode", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.values).toContainEqual([...AUTO_RETRY_REASON_PREFIXES]);
+  });
+
+  test("binds the reasons of a stale image as note prefixes, per pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
+    expect(calls[0]?.values).toContainEqual([...AUTO_RETRY_REASON_PREFIXES]);
+  });
+
+  test("rejects an empty stale image prefix, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(EPISODE, [""], sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an empty stale image prefix among others, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      PR,
+      ["worker image is stale: ", ""],
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an empty stale image prefix with an error", async () => {
+    const { sql } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await expect(countPrConflictFixRounds(EPISODE, [""], sql)).rejects.toThrow(
+      "stale image note prefix",
+    );
+  });
+
+  test("rejects an episode check id that is not positive, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      { ...EPISODE, checkId: 0 },
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an owner that is not a GitHub name, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      { ...PR, owner: "a b" },
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
   });
 });

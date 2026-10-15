@@ -1,0 +1,9 @@
+summary: '[LIB] 競合回の共通部品'
+description: 内部ライブラリです。直接実行するものではありません。競合を直す回の判定、停止の注記の固定文、スキルのマーカー、手動の再開の拒否を持ちます。
+lock: '!inline f/factory/lib/conflict_fix_round.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
