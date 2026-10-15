@@ -27,7 +27,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `requirements_approved` | 要件定義承認 | `requirements_apply` | 要件定義が承認された |
 | `intake_refreshed` | 取り込み内容を更新 | `requirements_apply` | 却下による作り直しで、取り込んだ題名と本文を現在のIssueの内容に更新した |
 | `needs_human` | 人による対応が必要です | 下の表を参照 | 作業項目が人の対応を待つ状態になった。または、Factoryが作ったPRのCIが失敗した |
-| `pr_reviewed` | PRレビュー完了 | `pr_review_post` | レビューを投稿した |
+| `pr_reviewed` | PRレビュー完了 | `pr_review_post` | レビューをGitHubに投稿した |
 | `pr_fixed` | PR修正適用 | `pr_fix_finish` | 修正をpushし、再レビューを依頼した |
 | `job_failed` | ジョブ失敗 | 下の表を参照 | フローやスケジュールが失敗した |
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
@@ -209,6 +209,7 @@ DiscordがHTTP 429を返したら、待ってから1回だけ再送する。待�
 - 承認のコメントをIssueに投稿できなかったときは、Discordには知らせず、`approval_comment_failed`のnoticeだけを残す。承認の通知はそのまま送る。
 - 実装フローが取得したIssueの題名か本文が取り込み時点と違っても、通知はしない。PR本文の「確認して欲しい点」に1行書くだけである。
 - 監査のスキップと、提案が0件の監査は通知しない。
+- レビューを投稿しなかったとき(`review_post_mode`が`gated`)は、PRレビュー完了の通知を送らない。投稿を承認する画面はまだ無く、人が進める操作も無いためである。作業項目の状態は`reviewed`に進み、状態遷移の記録(`work_item_events`)の補足に、投稿しなかった旨を残す。結果はConsoleの作業項目の詳細で確かめられる。判定は設定値ではなく、実際に投稿したかで行う。
 
 ## Consoleのnotice
 

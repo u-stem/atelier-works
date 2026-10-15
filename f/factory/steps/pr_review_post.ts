@@ -31,6 +31,7 @@ import {
 import {
   isOneOf,
   type ReviewFinding,
+  type ReviewPostMode,
   type ReviewVerdict,
 } from "../lib/types.ts";
 import { removeWorktree, runCommand } from "../lib/workspace.ts";
@@ -42,6 +43,7 @@ import {
   findPostedReviewId,
   mapFindingsToReviewComments,
   renderReviewSummary,
+  reviewResultFor,
   selectThreadsToResolve,
   withReviewMarkers,
 } from "./pr_workflow_support.ts";
@@ -172,8 +174,9 @@ export async function main(
  * 作業項目を`blocked`にしてDiscordで知らせ、`skip`で返す。投稿済みのレビューを再利用するときは書き込まないので照合しない。
  *
  * `review_post_mode`が"gated"のときは、レビューを記録して"reviewed"に進め
- * noticeを残すが、`createPrReview`は呼ばない。
- * "gated"は予約済みの値で、承認を経て投稿するUIはまだ無い。
+ * 状態遷移の記録に補足を残すが、`createPrReview`は呼ばない。
+ * "gated"は予約済みの値で、投稿を承認する画面はまだ無い。
+ * 投稿しなかったレビューは、人が進める操作が無いので、Discordの通知は送らない。
  */
 export async function runPrReviewPost(
   input: PrReviewPostInput,
@@ -434,6 +437,67 @@ export async function publishReview(
   };
 }
 
+/** `reviewedNotifyEvent`の入力。 */
+export type ReviewedNotifyInput = {
+  /** レビューを実際にGitHubに投稿したか(再利用した投稿済みのレビューを含む)。 */
+  readonly posted: boolean;
+  readonly instance_name: string;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly verdict: string;
+  readonly findings: readonly ReviewFinding[];
+  readonly openMustCount: number;
+};
+
+/**
+ * 「PRレビュー完了」の通知を組み立てる。送らないときはnullを返す。
+ * 投稿しなかったレビューは、PRに指摘が見えず、受け取った人が進める操作も無いので送らない。
+ * 判定は設定値ではなく、実際の投稿の結果で行う。
+ */
+export function reviewedNotifyEvent(
+  input: ReviewedNotifyInput,
+): NotifyEvent | null {
+  if (!input.posted) {
+    return null;
+  }
+  return {
+    kind: "pr_reviewed",
+    instance_name: input.instance_name,
+    owner: input.owner,
+    repo: input.repo,
+    pr_number: input.pr_number,
+    pr_url: `https://github.com/${input.owner}/${input.repo}/pull/${String(input.pr_number)}`,
+    verdict: input.verdict,
+    finding_count: input.findings.length,
+    result: reviewResultFor(input.findings, input.openMustCount),
+  };
+}
+
+/** `review_post_mode`から、レビューをGitHubに投稿するかを決める。"gated"は投稿しない。 */
+export function shouldPostReview(mode: ReviewPostMode): boolean {
+  return mode === "comment_only";
+}
+
+/** `sendReviewedNotification`が外に頼る処理。テストで差し替える。 */
+export type ReviewedNotificationDeps = {
+  readonly getWebhookUrl: () => Promise<string>;
+  readonly notify: (webhookUrl: string, event: NotifyEvent) => Promise<unknown>;
+};
+
+/**
+ * `reviewedNotifyEvent`の結果を送る。イベントがnullなら、webhookの取得も通知もしない。
+ */
+export async function sendReviewedNotification(
+  event: NotifyEvent | null,
+  deps: ReviewedNotificationDeps,
+): Promise<void> {
+  if (event === null) {
+    return;
+  }
+  await deps.notify(await deps.getWebhookUrl(), event);
+}
+
 /** `runPrReviewPost`のworktreeの削除を除いた本体。 */
 async function postReview(
   input: PrReviewPostInput,
@@ -491,7 +555,7 @@ async function postReview(
     work_item_id,
   );
 
-  const post = config.review_post_mode === "comment_only";
+  const post = shouldPostReview(config.review_post_mode);
   const published = await publishReview(
     client,
     {
@@ -578,19 +642,21 @@ async function postReview(
   if (moved) {
     // トリガーの`review_label`は`poll_prs.ts`が着手時に消費済みなので、
     // ここで外すラベルも、付けるPRの状態ラベルも無い。
-    const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
-    const event: NotifyEvent = {
-      kind: "pr_reviewed",
+    const event = reviewedNotifyEvent({
+      posted: postedReviewId !== null,
       instance_name: config.instance_name,
       owner,
       repo,
       pr_number,
-      pr_url: `https://github.com/${owner}/${repo}/pull/${String(pr_number)}`,
       verdict,
-      finding_count: findings.length,
-      result: record.result,
-    };
-    await notifyBestEffort(webhookUrl, event, log);
+      findings,
+      openMustCount,
+    });
+    await sendReviewedNotification(event, {
+      getWebhookUrl: () => wmill.getVariable("f/factory/discord_webhook_url"),
+      notify: (webhookUrl, notifyEvent) =>
+        notifyBestEffort(webhookUrl, notifyEvent, log),
+    });
   }
 
   return {

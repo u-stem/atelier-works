@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのhashの再計算'
+description: 内部ライブラリです。直接実行するものではありません。scriptとflowのhashをファイルの内容から計算し、既存のwmill-lock.yamlの行ごとの値だけを置き換えます。
+lock: '!inline f/factory/lib/metadata_hash.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

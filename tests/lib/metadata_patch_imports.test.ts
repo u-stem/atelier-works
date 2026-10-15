@@ -54,6 +54,18 @@ describe("scanImports", () => {
     ]);
   });
 
+  test.each([
+    [
+      "a second argument that is an object",
+      'import("./m.ts", { with: { type: "macro" } });',
+    ],
+    ["a second argument written after a space", 'import("./m.ts" , {});'],
+    ["a trailing comma", 'import("./m.ts",);'],
+    ["a require call with a second argument", 'require("./m.ts", 1);'],
+  ])("marks a call with %s as untraceable", (_name, code) => {
+    expect(scanImports(code).untraceable).toBe(true);
+  });
+
   test("reads a require call with a literal", () => {
     expect(scanImports('const m = require("left-pad@1.3.0");').bare).toEqual([
       "left-pad@1.3.0",
@@ -105,11 +117,11 @@ describe("scanImports", () => {
     expect(scanImports(code).untraceable).toBe(true);
   });
 
-  test("does not mark a literal followed by an options argument", () => {
+  test("marks a literal followed by an options argument as untraceable", () => {
     expect(
       scanImports('await import("./a.ts", { with: { type: "json" } });')
         .untraceable,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   test("does not mark a literal followed by a closing parenthesis and a call", () => {
@@ -430,6 +442,28 @@ describe("traceBareImports", () => {
       "is-odd@1.0.0",
       "left-pad@1.3.0",
     ]);
+  });
+
+  test("stops when the shared visit budget runs out", async () => {
+    const files = {
+      "f/a.ts": 'import "./b.ts";',
+      "f/b.ts": 'import "./c.ts";',
+      "f/c.ts": 'import "x@1.0.0";',
+    };
+    const { scan } = scannerOf(files);
+    const result = await traceBareImports("f/a.ts", scan, sourcesOf(files), {
+      remaining: 2,
+    });
+    expect(result.ok ? "ok" : result.reason).toBe("budget");
+  });
+
+  test("spends the shared visit budget across calls", async () => {
+    const files = { "f/a.ts": 'import "x@1.0.0";' };
+    const { scan } = scannerOf(files);
+    const budget = { remaining: 10 };
+    await traceBareImports("f/a.ts", scan, sourcesOf(files), budget);
+    await traceBareImports("f/a.ts", scan, sourcesOf(files), budget);
+    expect(budget.remaining).toBe(8);
   });
 
   test("follows a rooted import", async () => {

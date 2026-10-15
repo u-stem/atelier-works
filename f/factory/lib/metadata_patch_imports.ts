@@ -30,8 +30,9 @@ export type ImportScan = {
 
 // 動的importとrequireの呼び出しの開き括弧まで。直前が識別子の一部のものは含めない。
 const CALL = /(?<![\w$])(?:import|require)\s*\(/g;
-// 呼び出しの引数が、エスケープを含まない文字列リテラル1つだけで始まる形。
-const SOLE_LITERAL = /\s*(["'])([^"'\\\n]*)\1\s*[,)]/y;
+// 呼び出しの引数が、エスケープを含まない文字列リテラル1つだけの形。リテラルの後ろは閉じ括弧に限る。
+// 第2引数(動的importのimport属性など)が付く形と、末尾のコンマは、追えないものにする。
+const SOLE_LITERAL = /\s*(["'])([^"'\\\n]*)\1\s*\)/y;
 // import属性のキーワード。語の境界で区切る。
 const ATTRIBUTE_KEYWORD = /\b(?:with|assert)\b/g;
 // トランスパイラが返さない、型だけのimportとexport。型は実行時の依存ではないが、閉包には含める。
@@ -42,14 +43,50 @@ const BRACED =
   /\b(?:import|export)\s*\{[^}]{0,300}\}\s*from\s*["']([^"'\n]+)["']/g;
 
 let transpiler: Bun.Transpiler | null = null;
+let runtimeTranspiler: Bun.Transpiler | null = null;
 
 function scanner(): Bun.Transpiler {
   transpiler ??= new Bun.Transpiler({ loader: "ts" });
   return transpiler;
 }
 
+/**
+ * 型と、使われないimportを省くトランスパイラ。実行時に残るimportだけを返す。
+ * `scanImports`だけを使い、`transformSync`は使わない。`transformSync`は変換を最後まで行い、
+ * マクロを指定したimport属性のimportのマクロを、ソースを読む側のプロセスで実行する(実測した)。
+ * `scanImports`はマクロを実行しない(Bun 1.4.0と1.4.2で実測した)。
+ */
+function runtimeScanner(): Bun.Transpiler {
+  runtimeTranspiler ??= new Bun.Transpiler({
+    loader: "ts",
+    trimUnusedImports: true,
+  });
+  return runtimeTranspiler;
+}
+
+export type ScanOptions = {
+  /**
+   * 真のとき、実行時に残るimportだけを数える。型だけのimportは、数えない。
+   * 型だけのimportとは、`import type`、型修飾子だけの波括弧、型の位置でしか使わないものである。
+   * 型だけのexportと、使われないimportも数えない。
+   * Windmillのlockは、これらの先の依存を含めないので、依存の変化を調べるときに使う。
+   * 偽(既定)のときは、型だけのimportも閉包の辺と依存に数える。
+   */
+  readonly runtimeOnly?: boolean;
+};
+
+/**
+ * JavaScriptの空白と行区切りの文字コード。ECMAScriptの`WhiteSpace`と`LineTerminator`に当たる。
+ * 空白の違いで、import属性の検出を避けられないように、4種類ではなくすべてを数える。
+ */
+const SPACE_CODES: ReadonlySet<number> = new Set([
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002,
+  0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x2028,
+  0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+]);
+
 function isSpace(char: string | undefined): boolean {
-  return char === " " || char === "\t" || char === "\n" || char === "\r";
+  return char !== undefined && SPACE_CODES.has(char.charCodeAt(0));
 }
 
 /** `index`の直前の、空白でない文字。 */
@@ -126,25 +163,34 @@ function isLocal(specifier: string): boolean {
  * ソースのimportの指定子を読む。
  * `Bun.Transpiler`の`scanImports`が返す指定子に、トランスパイラが落とす型だけのimportと、
  * 型の位置の動的importを足す。コメントと文字列の中の同じ形は拾わない。
+ * `runtimeOnly`のときは、型だけのimportと使われないimportを足さず、トランスパイラが省いたまま数える。
+ * 動的importとrequireの呼び出しの指定子は、型の位置のものも含めて、どちらでも数える。
  * 追えないimportを見つけたら、トランスパイラに渡さずに`untraceable`を返す(マクロを実行させないため)。
  * 呼び出しの形は、コメントや文字列の中の出現も追えないものに倒す。誤って断る側である。
  */
-export function scanImports(code: string): ImportScan {
+export function scanImports(
+  code: string,
+  options: ScanOptions = {},
+): ImportScan {
   const none = { local: [], bare: [], untraceable: true } as const;
   const specifiers: string[] = [];
   if (hasAttribute(code) || inspectCalls(code, specifiers).untraceable) {
     return none;
   }
   try {
-    for (const entry of scanner().scanImports(code)) {
+    const transpiler =
+      options.runtimeOnly === true ? runtimeScanner() : scanner();
+    for (const entry of transpiler.scanImports(code)) {
       specifiers.push(entry.path);
     }
   } catch {
     return none;
   }
-  for (const pattern of [TYPE_ONLY, BRACED]) {
-    for (const match of code.matchAll(pattern)) {
-      specifiers.push(match[1] ?? "");
+  if (options.runtimeOnly !== true) {
+    for (const pattern of [TYPE_ONLY, BRACED]) {
+      for (const match of code.matchAll(pattern)) {
+        specifiers.push(match[1] ?? "");
+      }
     }
   }
   const local = new Set<string>();
@@ -209,6 +255,7 @@ const UNTRACEABLE: ImportScan = { local: [], bare: [], untraceable: true };
  */
 export function createFileScanner(
   read: (path: string) => Promise<FileRead>,
+  options: ScanOptions = {},
 ): (path: string) => Promise<FileScan> {
   const cache = new Map<string, Promise<FileScan>>();
   const scanOnce = async (path: string): Promise<FileScan> => {
@@ -225,7 +272,7 @@ export function createFileScanner(
     } catch {
       return { kind: "scanned", scan: UNTRACEABLE };
     }
-    return { kind: "scanned", scan: scanImports(code) };
+    return { kind: "scanned", scan: scanImports(code, options) };
   };
   return (path) => {
     const cached = cache.get(path);
@@ -240,7 +287,13 @@ export function createFileScanner(
 
 export type TraceResult =
   | { readonly ok: true; readonly bare: ReadonlySet<string> }
-  | { readonly ok: false; readonly reason: "untraceable" | "unreadable" };
+  | {
+      readonly ok: false;
+      readonly reason: "untraceable" | "unreadable" | "budget";
+    };
+
+/** 複数のたどりで共有する、仕事量の残り。ファイルを訪ねるたびと、局所importの指定子を解決するたびに減る。 */
+export type TraceBudget = { remaining: number };
 
 /** 1つのscriptから、たどるファイルの数の上限。 */
 const MAX_TRACED_FILES = 2000;
@@ -253,11 +306,16 @@ const MAX_TRACED_FILES = 2000;
  * - ファイルが追えない、局所importが`sources`の中のファイルに解決できない、
  *   たどるファイルが多すぎる(`untraceable`)。
  * たどる先がこの木に無いときは、読めなかったものではなく、無いものとして飛ばす。
+ * `budget`を渡すと、ファイルを訪ねるたびと、局所importの指定子を1つ解決するたびに、残りを1つ減らす。
+ * 残りが無くなったら`budget`で失敗にする。
+ * 多数のscriptをたどる呼び出し側が、合計の仕事量を有界にするために使う。
+ * 同じファイルに解決される指定子を、大量に書いたファイルでも、解決の回数が有界になる。
  */
 export async function traceBareImports(
   entry: string,
   scanFile: (path: string) => Promise<FileScan>,
   sources: ReadonlySet<string>,
+  budget?: TraceBudget,
 ): Promise<TraceResult> {
   const visited = new Set<string>([entry]);
   const bare = new Set<string>();
@@ -269,6 +327,12 @@ export async function traceBareImports(
     }
     if (visited.size > MAX_TRACED_FILES) {
       return { ok: false, reason: "untraceable" };
+    }
+    if (budget !== undefined) {
+      if (budget.remaining <= 0) {
+        return { ok: false, reason: "budget" };
+      }
+      budget.remaining -= 1;
     }
     const result = await scanFile(path);
     if (result.kind === "failed") {
@@ -284,6 +348,12 @@ export async function traceBareImports(
       bare.add(specifier);
     }
     for (const specifier of result.scan.local) {
+      if (budget !== undefined) {
+        if (budget.remaining <= 0) {
+          return { ok: false, reason: "budget" };
+        }
+        budget.remaining -= 1;
+      }
       const target = resolveLocal(path, specifier, sources);
       if (target === null) {
         return { ok: false, reason: "untraceable" };
@@ -295,4 +365,45 @@ export async function traceBareImports(
     }
   }
   return { ok: true, bare };
+}
+
+/**
+ * 実行時に残るimportの読み方が、想定どおりに動くかを、固定の小さな入力で確かめる。
+ * 読み方はBunの版に依存するので、検査の入口で呼び、想定と違えば偽を返す。
+ * 確かめるのは、型の位置でしか使わないimportが残らないこと、副作用のimport、値として使うimport、
+ * 再export、名前空間import、リテラルの動的importが残ることである。
+ * Bunの版の許可リストは持たない。版が変わっても、この結果が想定どおりなら通る。
+ */
+export function runtimeScanSelfCheck(
+  scan: (code: string) => ImportScan = (code) =>
+    scanImports(code, { runtimeOnly: true }),
+): boolean {
+  const cases: readonly (readonly [string, readonly string[]])[] = [
+    ['import { A } from "t";\nlet a: A;', []],
+    ['import "s";', ["s"]],
+    ['import { B } from "u";\nB();', ["u"]],
+    ['export { x } from "r";', ["r"]],
+    ['export * from "s2";', ["s2"]],
+    ['import * as ns from "n";\nexport const v = ns.x;', ["n"]],
+    // 呼び出しの形をソースに直接書くと、このファイル自身の依存として読まれるので、つなげて作る。
+    [["const m = await ", "import", '("d");'].join(""), ["d"]],
+  ];
+  // import属性は、マクロを使わない形でも、読む前に断られる。事前の拒否が効いていることを確かめる。
+  const attributeCode = [
+    'import j from "attr" ',
+    "with",
+    ' { type: "json" };',
+  ].join("");
+  if (!scan(attributeCode).untraceable) {
+    return false;
+  }
+  return cases.every(([code, expected]) => {
+    const result = scan(code);
+    return (
+      !result.untraceable &&
+      result.local.length === 0 &&
+      result.bare.length === expected.length &&
+      result.bare.every((specifier, index) => specifier === expected[index])
+    );
+  });
 }
