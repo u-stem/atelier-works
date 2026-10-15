@@ -1239,6 +1239,236 @@ export async function restartStoppedWorkItem(
   }
 }
 
+/** 一時的な失敗で止まったPRレビューの再開の候補。 */
+export type TransientReviewCandidate = {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly pr_number: number;
+  readonly flow_job_id: string | null;
+  /** これまでの自動の再開の回数。 */
+  readonly restarts: number;
+  /** 失敗へ移った最新の遷移の注記。失敗の文を含む。 */
+  readonly failure_note: string;
+};
+
+/** 一時的な失敗の再開に関わる3つの問い合わせが共有する条件。 */
+export type TransientReviewQuery = {
+  /** 止まった理由の先頭。失敗へ移った最新の遷移の注記がこれで始まる作業項目だけを対象にする。 */
+  readonly reasonPrefix: string;
+  /** 自動の再開の遷移の注記の先頭。再開の回数をこれで数える。 */
+  readonly notePrefix: string;
+  readonly maxRestarts: number;
+  /**
+   * 失敗してから再開するまでに置く待ち(秒)。添字はこれまでの再開の回数で、
+   * 回数が配列の長さを超えたら最後の値を使う。
+   */
+  readonly delaysSeconds: readonly number[];
+  /** 再開の見送りを知らせたことを残す遷移の注記の先頭。失敗の理由を探すときは読み飛ばす。 */
+  readonly stallNotePrefix: string;
+};
+
+/**
+ * 一時的な失敗で`failed`になったPRレビューを、IDの小さい順に`limit`件まで返す。
+ * 失敗へ移った最新の遷移(再開の見送りを知らせた記録を除く)の注記が`reasonPrefix`で始まり、
+ * その遷移から再開の回数に応じた待ち(`delaysSeconds`)が過ぎていて、
+ * 自動の再開が`maxRestarts`回未満のものである。
+ * 同じPRに`id`の大きいPRレビューがあるものと、終了していない別のPRレビューがあるものは、
+ * 新しい行に置き換えられているか、並んで動くので除く。
+ * `extraGraceSeconds`は待ちに足す秒数で、再開の見送りを探すときに0より大きくする。
+ * `unnotifiedOnly`が真なら、見送りをまだ知らせていないものだけを返す。
+ * `includeExhausted`が真なら、自動の再開を使い切ったものも、待ちを問わず返す(再開の対象にはならない)。
+ */
+export async function listTransientReviewCandidates(
+  params: TransientReviewQuery & {
+    readonly limit: number;
+    readonly extraGraceSeconds?: number;
+    readonly unnotifiedOnly?: boolean;
+    readonly includeExhausted?: boolean;
+  },
+  sql: SqlClient = defaultSqlClient,
+): Promise<TransientReviewCandidate[]> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const delays = [...params.delaysSeconds];
+  const rows = await sql`
+    SELECT w.id, w.owner, w.repo, w.pr_number, w.flow_job_id,
+      restarts.n AS restarts, last.note AS failure_note
+    FROM factory.work_items w
+    JOIN LATERAL (
+      SELECT e.note, e.occurred_at FROM factory.work_item_events e
+      WHERE e.work_item_id = w.id AND e.to_status = 'failed'
+        AND NOT coalesce(starts_with(e.note, ${params.stallNotePrefix}), false)
+      ORDER BY e.occurred_at DESC, e.id DESC
+      LIMIT 1
+    ) last ON true
+    JOIN LATERAL (
+      SELECT count(*)::integer AS n FROM factory.work_item_events c
+      WHERE c.work_item_id = w.id AND starts_with(c.note, ${params.notePrefix})
+    ) restarts ON true
+    WHERE w.kind = 'pr_review' AND w.status = 'failed' AND w.pr_number IS NOT NULL
+      AND starts_with(last.note, ${params.reasonPrefix})
+      AND (
+        (restarts.n < ${params.maxRestarts}::integer
+          AND last.occurred_at <= now() - make_interval(secs =>
+            (${delays}::integer[])[least(restarts.n + 1, cardinality(${delays}::integer[]))]
+            + ${params.extraGraceSeconds ?? 0}::integer))
+        OR (${params.includeExhausted ?? false}::boolean
+          AND restarts.n >= ${params.maxRestarts}::integer)
+      )
+      AND (NOT ${params.unnotifiedOnly ?? false}::boolean OR NOT EXISTS (
+        SELECT 1 FROM factory.work_item_events s
+        WHERE s.work_item_id = w.id AND starts_with(s.note, ${params.stallNotePrefix})
+          AND s.occurred_at >= last.occurred_at
+      ))
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.work_items other
+        WHERE other.kind = 'pr_review'
+          AND other.owner = w.owner AND other.repo = w.repo
+          AND other.pr_number = w.pr_number AND other.id <> w.id
+          AND (other.id > w.id OR other.status != ALL(${terminal}))
+      )
+    ORDER BY w.id
+    LIMIT ${params.limit}::integer
+  `.fetch();
+  return rows.map((row) => ({
+    id: parseId(row.id, "id"),
+    owner: parseRequiredString(row.owner, "owner"),
+    repo: parseRequiredString(row.repo, "repo"),
+    pr_number: parseRequiredNumber(row.pr_number, "pr_number"),
+    flow_job_id: parseNullableString(row.flow_job_id, "flow_job_id"),
+    restarts: parseRequiredNumber(row.restarts, "restarts"),
+    failure_note: parseRequiredString(row.failure_note, "failure_note"),
+  }));
+}
+
+/**
+ * 一時的な失敗で止まったPRレビューを、`reviewing`へ戻す。
+ * `listTransientReviewCandidates`と同じ条件(待ちを含む)を、更新の文の中で確かめる比較交換である。
+ * 候補を読んだ後に、人が再開したり別の実行が先に再開したりした作業項目は、条件に合わず`false`になり、
+ * 二重に起動しない。ラベルは触らない。
+ * 同じ文で`flow_job_id`を空にする。記録までの間、reconcileが終わった前のジョブを見て孤児と判定せず、
+ * 未記録として猶予を待つ。起動したジョブIDは`setFlowJobIdIfUnset`で記録する。
+ */
+export async function restartTransientPrReview(
+  params: TransientReviewQuery & {
+    readonly id: number;
+    readonly note: string;
+  },
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const delays = [...params.delaysSeconds];
+  const rows = await sql`
+    WITH updated AS (
+      UPDATE factory.work_items
+      SET status = 'reviewing', flow_job_id = NULL, updated_at = now()
+      WHERE id = ${params.id}::bigint AND kind = 'pr_review' AND status = 'failed'
+        AND pr_number IS NOT NULL
+        AND starts_with((
+          SELECT e.note FROM factory.work_item_events e
+          WHERE e.work_item_id = factory.work_items.id AND e.to_status = 'failed'
+            AND NOT coalesce(starts_with(e.note, ${params.stallNotePrefix}), false)
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ), ${params.reasonPrefix})
+        AND (
+          SELECT count(*) FROM factory.work_item_events c
+          WHERE c.work_item_id = factory.work_items.id AND starts_with(c.note, ${params.notePrefix})
+        ) < ${params.maxRestarts}::integer
+        AND (
+          SELECT e.occurred_at FROM factory.work_item_events e
+          WHERE e.work_item_id = factory.work_items.id AND e.to_status = 'failed'
+            AND NOT coalesce(starts_with(e.note, ${params.stallNotePrefix}), false)
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ) <= now() - make_interval(secs => (${delays}::integer[])[least((
+          SELECT count(*) FROM factory.work_item_events c
+          WHERE c.work_item_id = factory.work_items.id AND starts_with(c.note, ${params.notePrefix})
+        )::integer + 1, cardinality(${delays}::integer[]))])
+        AND NOT EXISTS (
+          SELECT 1 FROM factory.work_items other
+          WHERE other.kind = 'pr_review'
+            AND other.owner = factory.work_items.owner AND other.repo = factory.work_items.repo
+            AND other.pr_number = factory.work_items.pr_number
+            AND other.id <> factory.work_items.id
+            AND (other.id > factory.work_items.id OR other.status != ALL(${terminal}))
+        )
+      RETURNING id
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT updated.id, 'failed', 'reviewing', ${params.note}, ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM updated
+    RETURNING work_item_id
+  `.fetch();
+  return rows.length > 0;
+}
+
+/**
+ * 同じPRに、置き換えた行と並走する行が、このPRレビューの他にあるかを返す。
+ * `id`の大きいPRレビューか、終了していない別のPRレビューがあれば真である。
+ * `listTransientReviewCandidates`が候補から外す条件と同じで、真のPRレビューは再開の巡回に拾われない。
+ * 失敗を記録する処理は、これが真のときは巡回に任せず、従来どおり失敗を知らせる。
+ */
+export async function hasSupersedingPrReview(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT EXISTS (
+      SELECT 1
+      FROM factory.work_items w
+      JOIN factory.work_items other
+        ON other.kind = 'pr_review'
+        AND other.owner = w.owner AND other.repo = w.repo
+        AND other.pr_number = w.pr_number AND other.id <> w.id
+      WHERE w.id = ${id}::bigint
+        AND (other.id > w.id OR other.status != ALL(${terminal}))
+    ) AS superseded
+  `.fetch();
+  return parseBoolean(rows[0]?.superseded, "superseded");
+}
+
+/**
+ * 再開の見送りを知らせたことを、`failed`から`failed`への遷移として記録する。
+ * 注記は`stallNotePrefix`に、見送りの元になった失敗の注記を続けたもの。
+ * 状態は変わらず、失敗の理由は注記の後半に残る。
+ * 失敗へ移った最新の遷移の後に、同じ記録がすでにあるとき、または`failed`でなくなったときは、
+ * 何も書かずに`false`を返す。
+ * 呼び出し側は、通知が届いた後にこれを呼ぶので、記録に失敗すると同じ失敗を送り直し、通知が重なることはある。
+ * 記録があれば送らないので、届いた後の通知は失敗ごとに1回で止まる。
+ */
+export async function recordTransientStall(
+  params: Pick<TransientReviewQuery, "stallNotePrefix"> & {
+    readonly id: number;
+  },
+  sql: SqlClient = defaultSqlClient,
+  jobIds: JobIds = jobIdsFromEnv(process.env),
+): Promise<boolean> {
+  const rows = await sql`
+    WITH last AS (
+      SELECT e.note, e.occurred_at FROM factory.work_item_events e
+      WHERE e.work_item_id = ${params.id}::bigint AND e.to_status = 'failed'
+        AND NOT coalesce(starts_with(e.note, ${params.stallNotePrefix}), false)
+      ORDER BY e.occurred_at DESC, e.id DESC
+      LIMIT 1
+    )
+    INSERT INTO factory.work_item_events (work_item_id, from_status, to_status, note, job_id, root_job_id)
+    SELECT w.id, 'failed', 'failed', ${params.stallNotePrefix} || coalesce(last.note, ''),
+      ${jobIds.job_id}::text, ${jobIds.root_job_id}::text
+    FROM factory.work_items w, last
+    WHERE w.id = ${params.id}::bigint AND w.status = 'failed'
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.work_item_events s
+        WHERE s.work_item_id = w.id AND starts_with(s.note, ${params.stallNotePrefix})
+          AND s.occurred_at >= last.occurred_at
+      )
+    RETURNING work_item_id
+  `.fetch();
+  return rows.length > 0;
+}
+
 /**
  * 作り直しの前に、Issueの作業項目に取り込んだ題名と本文を更新する。
  * 作り直しのために`requirements_generating`へ移したばかりで、pipelineのリース

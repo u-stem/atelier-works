@@ -12,11 +12,13 @@ import {
   createPrReview,
   createPullRequest,
   ensureLabel,
+  ensureSuccess,
   type FetchLike,
   fetchIssueContent,
   fetchIssueState,
   findIssueByMarker,
   findOpenPullRequestByHead,
+  GH_EXIT_AUTH_REQUIRED,
   type GhClient,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
@@ -7835,5 +7837,49 @@ describe("listPrCommitMessages", () => {
     await expect(
       listPrCommitMessages(client(), "acme", "../widgets", 12),
     ).rejects.toThrow();
+  });
+});
+
+describe("GitHubHttpError details for a failure without a response", () => {
+  async function failureOf(
+    result: CommandResult,
+  ): Promise<GitHubHttpError | null> {
+    const fake = createFakeCommandRunner([result]);
+    const response = await callGhApi(
+      { run: fake.run, ghToken: "tok", sleep: async () => {} },
+      "repos/acme/widgets/pulls/1/reviews",
+      { method: "POST", body: {} },
+    );
+    try {
+      ensureSuccess(response, "POST pr review");
+    } catch (err) {
+      return err instanceof GitHubHttpError ? err : null;
+    }
+    return null;
+  }
+
+  test("carries the exit code when gh asks for authentication", async () => {
+    const error = await failureOf(fail("gh auth login", GH_EXIT_AUTH_REQUIRED));
+    expect(error?.exitCode).toBe(GH_EXIT_AUTH_REQUIRED);
+  });
+
+  test("has status 0 when gh asks for authentication", async () => {
+    const error = await failureOf(fail("gh auth login", GH_EXIT_AUTH_REQUIRED));
+    expect(error?.status).toBe(0);
+  });
+
+  test("is not marked as timed out when gh asks for authentication", async () => {
+    const error = await failureOf(fail("gh auth login", GH_EXIT_AUTH_REQUIRED));
+    expect(error?.timedOut).toBe(false);
+  });
+
+  test("is marked as timed out when the process was killed by the timeout", async () => {
+    const error = await failureOf(timeout());
+    expect(error?.timedOut).toBe(true);
+  });
+
+  test("does not carry a timeout for a plain HTTP error", async () => {
+    const error = await failureOf(ok(ghApiStdout(502, { message: "Bad" })));
+    expect(error?.timedOut).toBe(false);
   });
 });

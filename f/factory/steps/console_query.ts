@@ -22,6 +22,7 @@ import {
   isNoticeResolvable,
   type NoticeSeverity,
   noticeSeverity,
+  TRANSIENT_STALL_NOTE_PREFIX,
   truncateChars,
 } from "../lib/console_support.ts";
 import {
@@ -1216,6 +1217,7 @@ export async function runConsoleSummary(
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
         AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
+        AND NOT coalesce(starts_with(e.note, ${TRANSIENT_STALL_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true
@@ -1609,6 +1611,7 @@ export async function runWorkItemDetail(
       FROM factory.work_item_events e
       WHERE e.work_item_id = wi.id AND e.to_status = wi.status
         AND NOT coalesce(starts_with(e.note, ${INTAKE_REFRESHED_NOTE_PREFIX}), false)
+        AND NOT coalesce(starts_with(e.note, ${TRANSIENT_STALL_NOTE_PREFIX}), false)
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     ) ev ON true

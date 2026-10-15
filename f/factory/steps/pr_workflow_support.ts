@@ -628,20 +628,78 @@ export function renderReviewSummary(
       );
       break;
   }
-  if (droppedFindings.length > 0) {
-    lines.push("", "(行に紐づけられなかった指摘)");
-    for (const finding of droppedFindings) {
-      const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
-      const path = neutralizeHtmlComment(
-        finding.path.replace(/\s*[\r\n]+\s*/g, " "),
-      );
-      const message = neutralizeHtmlComment(
-        normalizeJapaneseText(finding.message),
-      );
-      lines.push(`- ${prefix} ${path}: ${message}`);
-    }
-  }
+  lines.push(...renderUnanchoredFindingLines(droppedFindings));
   return lines.join("\n");
+}
+
+/** 総評に並べる`path`。改行は空白にまとめ、`<!--`は無害にする。 */
+function oneLinePath(path: string): string {
+  return neutralizeHtmlComment(path.replace(/\s*[\r\n]+\s*/g, " "));
+}
+
+/** 指摘の位置。範囲の指摘は`path:line-end_line`、1行の指摘は`path:line`、行が無ければ`path`だけ。 */
+function findingLocation(finding: ReviewFinding): string {
+  const path = oneLinePath(finding.path);
+  if (finding.line === null) return path;
+  const end =
+    finding.end_line !== null && finding.end_line > finding.line
+      ? `-${String(finding.end_line)}`
+      : "";
+  return `${path}:${String(finding.line)}${end}`;
+}
+
+/**
+ * 行に紐づけられなかった指摘の見出しと箇条書き。指摘が無ければ空。
+ * `commented`の指摘は、行コメントにするはずだったもので、位置(`path:line`)を添える。
+ */
+function renderUnanchoredFindingLines(
+  findings: readonly ReviewFinding[],
+  commented: readonly ReviewFinding[] = [],
+): string[] {
+  if (findings.length + commented.length === 0) return [];
+  const lines = ["", "(行に紐づけられなかった指摘)"];
+  for (const finding of [...commented, ...findings]) {
+    const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
+    const location = commented.includes(finding)
+      ? findingLocation(finding)
+      : oneLinePath(finding.path);
+    const message = neutralizeHtmlComment(
+      normalizeJapaneseText(finding.message),
+    );
+    lines.push(`- ${prefix} ${location}: ${message}`);
+  }
+  return lines;
+}
+
+/**
+ * GitHubが行コメントの行を解決できず、レビューを拒否したときの総評を組み立てる。
+ * 行コメントにするはずだった指摘(`commentedFindings`)は、位置を添えて、行に紐づけられなかった指摘(`droppedFindings`)と
+ * 同じ一覧に並べる。後者の形は通常の総評と同じにする。
+ * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
+ */
+export function renderUnresolvedLineSummary(
+  authorLogin: string,
+  commentedFindings: readonly ReviewFinding[],
+  droppedFindings: readonly ReviewFinding[],
+): string {
+  return [
+    `${ROLE_TAGS.pr_review} @${authorLogin}`,
+    "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
+    "確認お願いします。",
+    ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
+  ].join("\n");
+}
+
+/**
+ * 行コメントになった指摘を返す。`findings`のうち、行に紐づけられず総評に回った`droppedFindings`
+ * (`mapFindingsToReviewComments`の戻り値)に含まれないものを、元の順で返す。
+ * 行コメントになった指摘と総評に回った指摘の和は、元の指摘と一致する。
+ */
+export function commentedFindingsOf(
+  findings: readonly ReviewFinding[],
+  droppedFindings: readonly ReviewFinding[],
+): ReviewFinding[] {
+  return findings.filter((finding) => !droppedFindings.includes(finding));
 }
 
 /**

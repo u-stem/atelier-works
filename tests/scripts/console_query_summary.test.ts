@@ -91,6 +91,21 @@ describe("runConsoleSummary queries", () => {
     expect(calls.length).toBe(3);
   });
 
+  // 再開の見送りを知らせた記録は状態が変わらない遷移なので、失敗の理由として表示しない。
+  test("skips the stall record when it reads the note of the current status", async () => {
+    const { sql, calls } = createFakeSqlClient([[], [], []]);
+    await runConsoleSummary(200, sql);
+    expect(calls[1]?.values).toContain("auto_retry_stalled: ");
+  });
+
+  test("skips the stall record in the work item detail too", async () => {
+    const { sql, calls } = createFakeSqlClient(detailResponses());
+    await runWorkItemDetail(7, sql);
+    expect(calls.some((c) => c.values.includes("auto_retry_stalled: "))).toBe(
+      true,
+    );
+  });
+
   test("reads approvals from v_approval_requests", async () => {
     const { sql, calls } = createFakeSqlClient([[], [], []]);
     await runConsoleSummary(200, sql);

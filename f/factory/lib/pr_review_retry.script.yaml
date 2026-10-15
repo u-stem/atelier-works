@@ -1,0 +1,9 @@
+summary: '[LIB] GitHubの一時的な失敗で止まったPRレビューの再開'
+description: 内部ライブラリです。直接実行するものではありません。一時的な失敗への印の付け方、通知の判定、止まったPRレビューを再開する巡回を定めます。
+lock: '!inline f/factory/lib/pr_review_retry.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
