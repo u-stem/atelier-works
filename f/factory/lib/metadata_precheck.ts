@@ -106,7 +106,9 @@ export type RehashFailureReason =
   | "preprocessor_changed"
   | "declaration_changed"
   | "wmill_lock_invalid"
-  | "lock_key_set_mismatch";
+  | "base_stale"
+  | "lock_key_set_mismatch"
+  | "unexpected_key_change";
 
 /**
  * 計画の結果。成功は、書き込む`wmill-lock.yaml`の本文と、hashが変わったキーである。
@@ -343,8 +345,8 @@ async function checkDependencies(
   readBase: Reader,
   budget: TraceBudget,
 ): Promise<Failure | null> {
-  const scanHead = createFileScanner(readHead);
-  const scanBase = createFileScanner(readBase);
+  const scanHead = createFileScanner(readHead, { runtimeOnly: true });
+  const scanBase = createFileScanner(readBase, { runtimeOnly: true });
   for (const source of [...sources].sort()) {
     const head = await traceBareImports(source, scanHead, sources, budget);
     const base = await traceBareImports(source, scanBase, sources, budget);
@@ -378,6 +380,8 @@ async function checkDependencies(
  * 変更された`.ts`について、baseの先端と比べて、次が同じであること。
  * Windmillの注釈、`main`と`preprocessor`の署名、トップレベルの型宣言。
  * これらは、`.script.yaml`の`schema`と`has_preprocessor`、依存の解決、workerの種類を決める。
+ * 字句の読み取りは、括弧が対応する入力を前提にする。`checkDependencies`が先に、headのすべての`.ts`を
+ * トランスパイラに通して、構文が不正な入力を断るので、この順序を変えないこと。
  */
 async function checkSignatures(
   changes: readonly Change[],
@@ -409,23 +413,39 @@ async function checkSignatures(
   return null;
 }
 
-/** 内容を読む必要があるファイルを、headの木から集める。 */
+/** 内容を読む必要があるファイルを、木から集める。 */
 async function collectInputs(
-  head: ReadonlyMap<string, TreeEntry>,
-  readHead: Reader,
+  tree: ReadonlyMap<string, TreeEntry>,
+  read: Reader,
 ): Promise<Map<string, Uint8Array> | Failure> {
   const files = new Map<string, Uint8Array>();
-  for (const path of [...head.keys()].sort()) {
+  for (const path of [...tree.keys()].sort()) {
     if (!isHashInput(path)) {
       continue;
     }
-    const read = await readHead(path);
-    if (read.kind !== "found") {
+    const result = await read(path);
+    if (result.kind !== "found") {
       return fail("read_failed", path);
     }
-    files.set(path, read.content);
+    files.set(path, result.content);
   }
   return files;
+}
+
+/**
+ * 木のscriptとflowのhashを計算する。
+ * 入力のファイルは、計算の間だけ保持する。headとbaseを続けて計算しても、保持量は片方の木の分で済む。
+ */
+async function lockEntriesOf(
+  tree: ReadonlyMap<string, TreeEntry>,
+  read: Reader,
+): Promise<ReadonlyMap<string, string> | Failure> {
+  const inputs = await collectInputs(tree, read);
+  if (!(inputs instanceof Map)) {
+    return inputs;
+  }
+  const computed = computeLockEntries(inputs);
+  return computed.ok ? computed.entries : fail(computed.reason, computed.path);
 }
 
 async function readText(read: Reader, path: string): Promise<string | Failure> {
@@ -541,13 +561,13 @@ async function plan(
     return signatureFailure;
   }
 
-  const inputs = await collectInputs(head, readHead);
-  if (!(inputs instanceof Map)) {
-    return inputs;
+  const headEntries = await lockEntriesOf(head, readHead);
+  if ("ok" in headEntries) {
+    return headEntries;
   }
-  const computed = computeLockEntries(inputs);
-  if (!computed.ok) {
-    return fail(computed.reason, computed.path);
+  const baseEntries = await lockEntriesOf(base, readBase);
+  if ("ok" in baseEntries) {
+    return baseEntries;
   }
   const headLock = await readText(readHead, WMILL_LOCK);
   const baseLock = await readText(readBase, WMILL_LOCK);
@@ -561,10 +581,15 @@ async function plan(
   if (!parsedBase.ok) {
     return fail("wmill_lock_invalid", WMILL_LOCK);
   }
-  const stale = staleKeys(parsedBase.locks.keys(), computed.entries, [
+  for (const [key, hash] of baseEntries) {
+    if (parsedBase.locks.get(key) !== hash) {
+      return fail("base_stale", key);
+    }
+  }
+  const stale = staleKeys(parsedBase.locks.keys(), headEntries, [
     ...head.keys(),
   ]);
-  const patched = patchWmillLock(headLock, computed.entries, stale);
+  const patched = patchWmillLock(headLock, headEntries, stale);
   if (!patched.ok) {
     return fail(
       patched.reason === "key_set_mismatch"
@@ -572,6 +597,18 @@ async function plan(
         : "wmill_lock_invalid",
       WMILL_LOCK,
     );
+  }
+  const changedScripts = new Set(
+    changes
+      .filter(
+        (change) => change.kind === "modified" && change.path.endsWith(".ts"),
+      )
+      .map((change) => change.path.slice(0, -".ts".length)),
+  );
+  for (const key of patched.changedKeys) {
+    if (!changedScripts.has(key)) {
+      return fail("unexpected_key_change", key);
+    }
   }
   return { ok: true, newLock: patched.text, changedKeys: patched.changedKeys };
 }
@@ -586,10 +623,14 @@ async function plan(
  * - PRの差分に、scriptやflowのファイルの追加、削除、名前の変更、許可リストに無い種類のファイルの追加と削除、
  *   `.script.lock`とflowのlock、flowの定義、`.script.yaml`の変更が無い。
  *   変更されたscriptは、TypeScript(bun)に限る。
- * - すべてのscriptで、局所importをたどった裸のimportの集合が、baseの先端とheadで同じである。
+ * - すべてのscriptで、局所importをたどった、実行時に残る裸のimportの集合が、baseの先端とheadで同じである。
+ *   型だけのimportと使われないimportは数えない。Windmillのlockが、その先の依存を含めないためである。
  * - 変更された`.ts`の、Windmillの注釈、`main`と`preprocessor`の署名、型宣言が、baseの先端と同じである。
  * - インラインscriptを持つflowが無く、再計算したキーの集合が、headの`wmill-lock.yaml`のキーの集合と一致する。
  *   ファイルが無いまま、baseの先端の`wmill-lock.yaml`に残っている項目は、そのまま残す。
+ * - baseの先端のscriptから計算したhashが、baseの先端の`wmill-lock.yaml`と一致する。メタデータの生成を飛ばした
+ *   commitが`main`に入っていても、PRと関係の無い古い`schema`やlockを、最新のように書き直さないためである。
+ * - hashが変わるキーが、PRが`.ts`を変えたscriptのキーだけである。
  * 想定外の例外も、固定の種別(`internal_error`)にして返す。
  */
 export async function planMetadataRehash(

@@ -604,6 +604,10 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - `main`が進むたびに、PRのheadがbaseの先端を含まなくなり、再計算が`head_lacks_base`で止まる。
   `main`を取り込んでから再計算する手順と、その回数の上限を決める。
 - 再計算が実際のPRのうち、どれだけを直せるかを測る。測り方を決めて、人の手に回った理由の種類ごとに数える。
+- `listTree`が切り捨てた木を、検査が見分ける方法。呼び出し側が、切り捨ての有無を知らせる。
+- ファイルが無いまま`wmill-lock.yaml`に残っている項目(孤児のキー)の扱い。再計算はそのまま残す。
+- worker側のwmill CLIの版と、`mise.toml`で固定した版が食い違うときの扱い。
+- 再計算と`main`の取り込みを繰り返す回数の上限。
 - 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
 - `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
@@ -615,6 +619,7 @@ wmill CLIとバックエンドを使わずに、Factory自身が`wmill-lock.yaml
 再計算は、このうち依存が変わらないPRだけを直す。
 artifactを経由しないので、取得、zip、出どころ、manifestの検査は要らない。
 未信頼のPRのheadを読むだけで、scriptの実行も、wmill CLIの起動もしない。
+事前検査は、悪意のあるPRに対する境界ではなく、悪意のないPRで古い`schema`やlockが最新のように書き直されるのを防ぐ、正しさの検査である。
 取り決めは[セキュリティ](../security.md#hashの再計算)にある。
 
 ### 再計算の部品
@@ -622,7 +627,7 @@ artifactを経由しないので、取得、zip、出どころ、manifestの検�
 | ファイル | 責務 |
 | --- | --- |
 | `lib/metadata_hash.ts` | ファイルの内容から、`wmill-lock.yaml`の全キーのhashを計算する(`computeLockEntries`)。既存のlockの行ごとの値だけを置き換える(`patchWmillLock`) |
-| `lib/metadata_precheck.ts` | gitの木を読み、依存が変わらない再生成かを確かめる(`planMetadataRehash`)。確かめられたときだけ、新しい本文と、変わったキーを返す |
+| `lib/metadata_precheck.ts` | gitの木を読み、依存が変わらない再生成かを確かめる(`planMetadataRehash`)。確かめられたときだけ、新しい本文と、変わったキーを返す。正しさを守る検査で、敵対的な入力に対する境界ではない |
 | `lib/metadata_signature.ts` | `main`と`preprocessor`の署名、トップレベルの型宣言、Windmillの注釈を、字句で読んで比べる |
 
 3つとも、保護パスである。
@@ -684,16 +689,19 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 | PRの差分に、flowの定義の変更が無い | `flow_changed` |
 | PRの差分に、`.script.yaml`が無い | `script_yaml_changed` |
 | 変更されたscriptが、TypeScript(bun)である | `unsupported_script` |
-| すべてのscriptで、裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪ねる回数の合計が200000を超えるときは`too_much_input` |
+| すべてのscriptで、実行時に残る裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪ねる回数の合計が200000を超えるときは`too_much_input` |
 | 変更された`.ts`の注釈、`main`と`preprocessor`の署名、型宣言が、baseの先端と同じ | `annotation_changed`、`main_changed`、`main_presence_changed`、`preprocessor_changed`、`declaration_changed`、読めないときは`main_unparsable` |
 | hashを計算できる形である。インラインscriptを持つflowは計算できない | `unsupported_script`、`missing_metadata`、`not_text`、`duplicate_key` |
+| baseの先端のscriptとflowから計算したhashが、baseの先端の`wmill-lock.yaml`の値と、すべてのキーで一致する | `base_stale` |
 | 再計算したキーの集合が、headのlockのキーの集合と一致する | `lock_key_set_mismatch`、`wmill_lock_invalid` |
+| hashが変わるキーが、PRが`.ts`を変えたscriptのキーだけである | `unexpected_key_change` |
 
 ポートが例外を投げたときは、`port_error`を返す。
 それ以外の想定外の例外は、`internal_error`を返す。
 種別は固定で、例外の内容は載せない。
-読んだ内容は保持せず、必要なら読み直す。
-保持量を抑えるためである。
+閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
+hashの計算では、木ごとに、入力のファイルをまとめて保持する。
+保持量は、読む合計の上限(64MiB)までである。
 
 追加と削除を許す種類の許可リストは、次の名前の末尾である。
 これらは、scriptのhashに関わらない。
@@ -704,6 +712,10 @@ PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 失敗の`path`はPRの作者が決められるので、PR本文やコメントに載せるときは無害化する。
 
 裸のimportの閉包は、[importの読み取り](#importの読み取り)と同じ関数で求める。
+ただし、実行時に残るimportだけを数える(`runtimeOnly`)。
+型だけのimport、型だけのexport、型の位置でしか使わないimport、使われないimportは、トランスパイラが省くので数えない。
+実測の根拠は、「実機で確かめた」の一覧と、リポジトリの全scriptで閉包のパッケージ名と`.script.lock`の`dependencies`のキーが一致するテストにある。
+値のimportに書き換えて本体で使い始める変更は、省かれていたimportが現れるので、依存の変化として人の手に回る。
 PRが触っていないscriptも、すべて確かめる。
 追えないimportが1つでもあれば、その1つのために全体が人の手に回る。
 局所importの解決は、headの木の`f/`の下の`.ts`の一覧で、両方の木に同じように行う。
@@ -725,7 +737,9 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - 署名は、`export function main`(`async`つきを含む)から、本体の開き波括弧の前までである。
   引数の既定値と戻り値の型を含むので、`schema`の`default`が変わるときも署名が変わる。
 - トップレベルの`type`、`interface`、`enum`、`class`の宣言文も、署名とあわせて比べる。
-  引数の型が、同じファイルの宣言を指しうるためである。
+  同じファイルの型宣言の中身を変えると、`schema`が変わる(実測)ためである。
+  比べる宣言は、`main`の署名が参照するものに絞らず、ファイルのすべてにする。
+  `.script.yaml`が変わらない変更でも人の手に回りうるが、安全側の措置である。
 - 空白とコメントの違いは、違いとして扱わない。
 - 字句を読み切れないときは、読めないものとして断る。
   閉じない文字列とコメント、閉じ波括弧の後の`/`、括弧の不一致がこれにあたる。
@@ -739,12 +753,25 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 
 実機で確かめた、コードと`.script.yaml`、`.script.lock`の関係は次のとおりである(wmill CLI 1.817.0、ローカルのWindmill)。
 
-- 型の中身と、型をimportする元のファイルは、`.script.yaml`を変えない。引数の型は、型名(`Opts`なら`format: resource-opts`)で決まる。
+- 同じファイルの`type`宣言の中身を変えると、`.script.yaml`の`schema`が変わる(`properties`の追加、`enum`の値の追加)。
+- 別のファイルからimportした型の中身と、型をimportする元のファイルは、`.script.yaml`を変えない。引数の型は、型名(`Opts`なら`format: resource-opts`)で決まる。
 - `main`のJSDoc、引数の前後のコメント、`main`の本体のコメントは、`.script.yaml`を変えない。
 - `preprocessor`の追加は、`has_preprocessor: true`を足す。署名の変更は`.script.yaml`を変えないが、署名も比べる。
 - `//npm`の追加は、`.script.lock`のbun.lockの部分を変える。
 - `//nodejs`、`//nobundling`、`//native`、`//bun`は、`.script.lock`を変えなかった。
   ただし、実行の仕方を変えるので、比べる。
+- `//npm foo`、`//nobundling // x`、`//npm,nodejs`は、`.script.lock`を変えなかった。注釈の形を、1語の後ろに任意の文字を許す形に広げる必要は無い。
+- `// package_json: {…}`と値を同じ行に書く形は、`.script.lock`を`// workspace-dependencies-mode: manual`に変える。
+- `// package_json:`と`//extra_package_json:`の後ろの行に値を書く形は、このWindmillでは、`.script.lock`を作れず失敗する。
+  失敗の理由は、このworkerが、インラインのworkspace dependenciesとextra modeを使えないことである。
+  依存が実際に解決される形は確かめられなかったので、`:`で終わる注釈と、`:`の後に値がある注釈に続く`//`の行を、注釈として集めて比べる。
+- exportの付かない`function main(x: string) {}`の追加は、`schema`を変える。`export default function main`は、`.script.yaml`を変えなかった。
+  exportの有無にかかわらず、`main`の宣言を見つけたら人の手に回す。
+- 使われないimportと、型の位置でしか使わないimportの追加は、`.script.lock`の`dependencies`を変えない。
+  値として使うimportの追加は、変える。
+- 字句の読み取りは、括弧が対応する入力を前提にする。
+  `checkDependencies`が先に、headのすべての`.ts`をトランスパイラに通すので、構文が不正な入力はそこで断られる。
+  型宣言の範囲を数える処理は、この順序に頼る。
 
 ### 算法を固定するテスト
 

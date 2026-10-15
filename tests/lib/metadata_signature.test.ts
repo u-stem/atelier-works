@@ -211,6 +211,34 @@ describe("readSourceShape bounds", () => {
   });
 });
 
+describe("readSourceShape functions that are not exported", () => {
+  test("gives up on a main function that is not exported", () => {
+    expect(mainOf("function main(x: string) {}\n")).toBe("unparsable");
+  });
+
+  test("gives up on an async main function that is not exported", () => {
+    expect(mainOf("async function main(x: string) {}\n")).toBe("unparsable");
+  });
+
+  test("gives up on a main function that is not exported next to an exported one", () => {
+    expect(
+      mainOf(
+        "function main(x: string) {}\nexport function main(y: number) {}\n",
+      ),
+    ).toBe("unparsable");
+  });
+
+  test("gives up on a preprocessor function that is not exported", () => {
+    expect(
+      readSourceShape("function preprocessor(event: string) {}\n").ok,
+    ).toBe(false);
+  });
+
+  test("does not mind a function named main inside another function", () => {
+    expect(mainOf("function outer() {\n  function main() {}\n}\n")).toBeNull();
+  });
+});
+
 describe("readSourceShape preprocessor", () => {
   test("reads the exported preprocessor signature", () => {
     const result = readSourceShape(
@@ -251,6 +279,45 @@ describe("readSourceShape annotations", () => {
     expect(annotations("// this is a comment\nexport const x = 1;\n")).toEqual(
       [],
     );
+  });
+
+  test("collects the comment lines that follow an annotation ending with a colon", () => {
+    expect(
+      annotations(
+        '//extra_package_json:\n// {"dependencies": {"left-pad": "1.3.0"}}\n// more lines\nexport const x = 1;\n',
+      ),
+    ).toEqual([
+      "// more lines",
+      '// {"dependencies": {"left-pad": "1.3.0"}}',
+      "//extra_package_json:",
+    ]);
+  });
+
+  test("collects the comment lines that follow an annotation that has a value", () => {
+    expect(
+      annotations(
+        '// package_json: {"dependencies": {}}\n// continued\nexport const x = 1;\n',
+      ),
+    ).toEqual(["// continued", '// package_json: {"dependencies": {}}']);
+  });
+
+  test("does not collect the comment lines that follow an annotation without a value", () => {
+    expect(
+      annotations("//npm\n// an ordinary remark here\nexport const x = 1;\n"),
+    ).toEqual(["//npm"]);
+  });
+
+  test("stops collecting at the first line that is not a comment", () => {
+    expect(
+      annotations(
+        "//extra_requirements:\n// numpy\nexport const x = 1;\n// after code\n",
+      ),
+    ).toEqual(["// numpy", "//extra_requirements:"]);
+  });
+
+  test("collects an annotation-like line inside a template literal on the safe side", () => {
+    const code = ["export const t = `", "//npm", "`;", ""].join("\n");
+    expect(annotations(code)).toEqual(["//npm"]);
   });
 
   test("collects an annotation below the first lines", () => {

@@ -6,6 +6,8 @@ import {
   FOO,
   HEAD,
   outcome,
+  plan,
+  SCRIPT_YAML,
   type World,
   world,
 } from "./metadata_precheck_world.ts";
@@ -302,5 +304,156 @@ describe("planMetadataRehash and the limits on the input", () => {
         w.limits = { maxReadBytes: 10 };
       }),
     ).toBe("too_much_input");
+  });
+});
+
+describe("planMetadataRehash and the imports that remain at run time", () => {
+  /** `dep.ts`は、裸のimportを持つlib。`foo.ts`が`dep.ts`をどうimportするかを、baseとheadで変える。 */
+  function withDependency(w: World, base: string, head: string) {
+    for (const files of [w.base, w.head]) {
+      files.set(
+        "f/factory/lib/dep.ts",
+        'import "left-pad@1.3.0";\nexport type T = string;\nexport const v = 1;\n',
+      );
+      files.set("f/factory/lib/dep.script.yaml", SCRIPT_YAML);
+    }
+    w.base.set("f/factory/foo.ts", base);
+    w.head.set("f/factory/foo.ts", head);
+  }
+
+  const TYPE_ONLY =
+    'import type { T } from "./lib/dep.ts";\nexport async function main(a: T) {\n  return a;\n}\n';
+  const VALUE_USED =
+    'import { T, v } from "./lib/dep.ts";\nexport async function main(a: T) {\n  return v;\n}\n';
+
+  test("sends an import type that becomes a value import used in the body to a human", async () => {
+    expect(
+      await reasonAfter((w) => withDependency(w, TYPE_ONLY, VALUE_USED)),
+    ).toBe("dependency_changed");
+  });
+
+  test("accepts a change that keeps the import type", async () => {
+    expect(
+      await reasonAfter((w) =>
+        withDependency(
+          w,
+          TYPE_ONLY,
+          TYPE_ONLY.replace("return a", "return a + a"),
+        ),
+      ),
+    ).toBe("ok");
+  });
+
+  test("accepts a value import that is used only in a type position", async () => {
+    const typeOnlyUse =
+      'import { T } from "./lib/dep.ts";\nexport async function main(a: T) {\n  return a;\n}\n';
+    expect(
+      await reasonAfter((w) =>
+        withDependency(
+          w,
+          typeOnlyUse,
+          typeOnlyUse.replace("return a", "return a + a"),
+        ),
+      ),
+    ).toBe("ok");
+  });
+
+  test("accepts dropping the type modifier when the import is still not used as a value", async () => {
+    const withoutModifier = TYPE_ONLY.replace("import type", "import");
+    expect(
+      await reasonAfter((w) => withDependency(w, TYPE_ONLY, withoutModifier)),
+    ).toBe("ok");
+  });
+
+  test("sends a value import used only in a type position that starts to be used as a value to a human", async () => {
+    const typeOnlyUse =
+      'import { T, v } from "./lib/dep.ts";\nexport async function main(a: T) {\n  return a;\n}\n';
+    expect(
+      await reasonAfter((w) => withDependency(w, typeOnlyUse, VALUE_USED)),
+    ).toBe("dependency_changed");
+  });
+});
+
+describe("planMetadataRehash and the metadata of the base tip", () => {
+  function staleHash(text: string, key: string): string {
+    return text
+      .split("\n")
+      .map((line) =>
+        line.startsWith(`  ${key}:`) ? `  ${key}: ${"0".repeat(64)}` : line,
+      )
+      .join("\n");
+  }
+
+  test("sends a base tip whose lock has an old hash to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.settle = false;
+        w.base.set(
+          "wmill-lock.yaml",
+          staleHash(String(w.base.get("wmill-lock.yaml")), "f/factory/foo"),
+        );
+      }),
+    ).toBe("base_stale");
+  });
+
+  test("sends a base tip whose script changed after its hash was made to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.settle = false;
+        for (const files of [w.base, w.head]) {
+          files.set("f/factory/foo.ts", `${FOO}// remark about foo\n`);
+        }
+      }),
+    ).toBe("base_stale");
+  });
+
+  test("sends a base tip whose script.yaml changed after its hash was made to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.settle = false;
+        for (const files of [w.base, w.head]) {
+          files.set("f/factory/foo.script.yaml", `${SCRIPT_YAML}# edited\n`);
+        }
+      }),
+    ).toBe("base_stale");
+  });
+
+  test("sends a base tip that lacks the hash of a script to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.settle = false;
+        const text = String(w.base.get("wmill-lock.yaml"))
+          .split("\n")
+          .filter((line) => !line.startsWith("  f/factory/lib/bar:"))
+          .join("\n");
+        w.base.set("wmill-lock.yaml", text);
+        w.head.set("wmill-lock.yaml", text);
+      }),
+    ).toBe("base_stale");
+  });
+
+  test("accepts the base tip when its lock was settled", async () => {
+    expect(await reasonAfter(() => undefined)).toBe("ok");
+  });
+
+  test("sends a lock hash of a script that the pull request did not change to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.head.set(
+          "wmill-lock.yaml",
+          staleHash(String(w.head.get("wmill-lock.yaml")), "f/factory/foo"),
+        );
+      }),
+    ).toBe("unexpected_key_change");
+  });
+
+  test("limits the changed keys to the scripts the pull request changed", async () => {
+    const w = world();
+    w.head.set("f/factory/foo.ts", FOO.replace("String(x)", "String(x + 1)"));
+    const result = await plan(w);
+    expect(result.ok && result.changedKeys).toEqual([
+      "f/factory/foo",
+      "f/factory/lib/bar",
+    ]);
   });
 });

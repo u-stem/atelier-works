@@ -116,6 +116,14 @@ export type World = {
   readRefs: Set<string>;
   /** `readBlob`が呼ばれた回数。 */
   readCount: number;
+  /**
+   * 真のとき、`plan`の前に、baseの木から計算した`wmill-lock.yaml`をbaseの木に置く。
+   * テストがbaseの`.ts`を変えても、baseのメタデータが最新である前提を保つため。
+   * テストがbaseの`wmill-lock.yaml`を自分で書き換えたときは、何もしない。
+   */
+  settle: boolean;
+  /** `world()`が作ったときの、`wmill-lock.yaml`の本文。 */
+  originalLock: string;
   /** `planMetadataRehash`に渡す入力。 */
   input: { baseSha: string; headSha: string };
   limits: PlanLimits | undefined;
@@ -145,6 +153,8 @@ export function world(): World {
     headEntryEdits: new Map(),
     readRefs: new Set(),
     readCount: 0,
+    settle: true,
+    originalLock: String(base.get("wmill-lock.yaml")),
     input: { baseSha: BASE_TIP, headSha: HEAD },
     limits: undefined,
   };
@@ -215,7 +225,28 @@ export function portsOf(w: World): PrecheckPorts {
   };
 }
 
+/** baseの木のメタデータを、baseの木の内容に合わせる。headのlockがbaseのlockと同じだったときは、headにも置く。 */
+function settleBase(w: World): void {
+  if (!w.settle || String(w.base.get("wmill-lock.yaml")) !== w.originalLock) {
+    return;
+  }
+  const computed = computeLockEntries(
+    new Map(
+      [...w.base].map(([path, content]) => [path, bytesOf(content)] as const),
+    ),
+  );
+  if (!computed.ok) {
+    return;
+  }
+  const text = lockText(computed.entries);
+  if (String(w.head.get("wmill-lock.yaml")) === w.originalLock) {
+    w.head.set("wmill-lock.yaml", text);
+  }
+  w.base.set("wmill-lock.yaml", text);
+}
+
 export function plan(w: World): Promise<PlanResult> {
+  settleBase(w);
   return planMetadataRehash(w.input, portsOf(w), w.limits);
 }
 

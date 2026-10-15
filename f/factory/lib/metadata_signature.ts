@@ -423,7 +423,8 @@ function exportsNameElsewhere(
 /**
  * トップレベルの`export (async )?function <name>`を探し、本体の前までを返す。
  * 見つからず、`name`という語が別の形でexportされるとき(変数、既定のexportなど)と、2つ以上あるとき、
- * 本体の位置を決められないときは、決められないものとして返す。
+ * exportの付かない`function <name>`があるとき、本体の位置を決められないときは、決められないものとして返す。
+ * exportの付かない`main`も、Windmillは`.script.yaml`の`schema`の元にするので、見落とさない。
  */
 function findExported(
   tokens: readonly Token[],
@@ -446,6 +447,15 @@ function findExported(
     ) {
       starts.push(index);
     }
+  }
+  const declared = tokens.filter(
+    (token, index) =>
+      depth[index] === 0 &&
+      token.text === "function" &&
+      tokens[index + 1]?.text === name,
+  ).length;
+  if (declared > starts.length) {
+    return "ambiguous";
   }
   if (starts.length === 0) {
     return exportsNameElsewhere(tokens, depth, name) ? "ambiguous" : "none";
@@ -624,12 +634,27 @@ export type SourceShape = {
  */
 const ANNOTATION_LINE = /^\s*\/\/\s*[A-Za-z_][\w-]*(?:\s*:.*)?\s*$/;
 
+// 注釈の値が次の行以降に続く形。コメント行である。
+const COMMENT_LINE = /^\s*\/\//;
+
+/**
+ * 注釈に見えるコメント行を集める。`:`で終わる行と、`:`の後に値がある行には、
+ * 続くコメント行(空行とコード行で終わる)も、注釈の値として集める。
+ * 値を複数行に書く注釈(`//extra_package_json:`など)の中身を、見落とさないためである。
+ */
 function readAnnotations(code: string): string[] {
-  return code
-    .split(/\r\n|[\n\r]/)
-    .filter((line) => ANNOTATION_LINE.test(line))
-    .map((line) => line.trim())
-    .sort();
+  const collected: string[] = [];
+  let continuing = false;
+  for (const line of code.split(/\r\n|[\n\r]/)) {
+    const isAnnotation = ANNOTATION_LINE.test(line);
+    if (isAnnotation || (continuing && COMMENT_LINE.test(line))) {
+      collected.push(line.trim());
+      continuing = isAnnotation ? line.includes(":") : continuing;
+    } else {
+      continuing = false;
+    }
+  }
+  return collected.sort();
 }
 
 /** 字句の入れ子(テンプレートの`${}`)の深さの上限。呼び出しの再帰を有界にする。 */
