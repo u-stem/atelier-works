@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -452,6 +453,31 @@ describe("writeRootWmillLock", () => {
     chmodSync(join(dir, "wmill-lock.yaml"), 0o755);
     await writeRootWmillLock(dir, "new\n").catch(() => undefined);
     expect(readFileSync(join(dir, "wmill-lock.yaml"), "utf-8")).toBe("old\n");
+  });
+
+  test("reports a named pipe as a lock that cannot be written, without blocking", async () => {
+    const dir = worktree();
+    Bun.spawnSync(["mkfifo", join(dir, "wmill-lock.yaml")]);
+    await expect(writeRootWmillLock(dir, "new\n")).rejects.toBeInstanceOf(
+      LockNotWritableError,
+    );
+  });
+
+  test("reports a lock with another hard link as a lock that cannot be written", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "other.txt"), "old\n");
+    linkSync(join(dir, "other.txt"), join(dir, "wmill-lock.yaml"));
+    await expect(writeRootWmillLock(dir, "new\n")).rejects.toBeInstanceOf(
+      LockNotWritableError,
+    );
+  });
+
+  test("leaves the other hard link untouched", async () => {
+    const dir = worktree();
+    writeFileSync(join(dir, "other.txt"), "old\n");
+    linkSync(join(dir, "other.txt"), join(dir, "wmill-lock.yaml"));
+    await writeRootWmillLock(dir, "new\n").catch(() => undefined);
+    expect(readFileSync(join(dir, "other.txt"), "utf-8")).toBe("old\n");
   });
 
   test("reports a directory as a lock that cannot be written", async () => {
@@ -1052,6 +1078,12 @@ describe("readRootWmillLock", () => {
 
   test("returns null for a missing file", async () => {
     expect(await readRootWmillLock(worktree())).toBeNull();
+  });
+
+  test("returns null for a named pipe without blocking", async () => {
+    const dir = worktree();
+    Bun.spawnSync(["mkfifo", join(dir, "wmill-lock.yaml")]);
+    expect(await readRootWmillLock(dir)).toBeNull();
   });
 });
 

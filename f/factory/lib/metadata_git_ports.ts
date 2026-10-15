@@ -4,6 +4,7 @@
 // gitは引数の配列で実行し、シェルを通さない。PRの作者が決められるパスは、シェルの文字列に結合しない。
 
 import type { FileRead } from "./metadata_patch_imports.ts";
+import { MAX_FILE_BYTES } from "./metadata_patch_manifest.ts";
 import {
   type PrecheckPorts,
   type TreeEntry,
@@ -193,6 +194,8 @@ export function createGitPrecheckPorts(
     if (entry.mode !== "100644" && entry.mode !== "100755") {
       return { kind: "failed" };
     }
+    // 1ファイルの上限を超える内容は、読んでも検査が断るので、`cat-file`を実行せずに読めないものとして返す。
+    if (entry.size > MAX_FILE_BYTES) return { kind: "failed" };
     const result = await runBytes(
       buildGitArgv(["cat-file", "blob", entry.oid]),
       { cwd: options.cwd, env, timeoutMs },

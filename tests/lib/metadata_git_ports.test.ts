@@ -16,6 +16,7 @@ import {
   parseLsTreeZ,
   runCommandBytes,
 } from "../../f/factory/lib/metadata_git_ports.ts";
+import { MAX_FILE_BYTES } from "../../f/factory/lib/metadata_patch_manifest.ts";
 import {
   planMetadataRehash,
   TreeUnreadableError,
@@ -297,6 +298,37 @@ describe("createGitPrecheckPorts.readBlob", () => {
   test("reports a path that is not in the tree as missing", async () => {
     const result = await ports().readBlob(fixture.second, "f/none.ts");
     expect(result.kind).toBe("missing");
+  });
+
+  describe("for an entry larger than the limit of one file", () => {
+    const OID = "a".repeat(40);
+    const listing: CommandRunner = async () => ({
+      stdout: `100644 blob ${OID} ${String(MAX_FILE_BYTES + 1)}\tf/big.ts\0`,
+      stderr: "",
+      exitCode: 0,
+      timedOut: false,
+    });
+
+    test("reports the file as unreadable", async () => {
+      const result = await ports({ run: listing }).readBlob(
+        fixture.second,
+        "f/big.ts",
+      );
+      expect(result.kind).toBe("failed");
+    });
+
+    test("does not run cat-file", async () => {
+      let calls = 0;
+      const spy: BytesRunner = async () => {
+        calls += 1;
+        return { stdout: new Uint8Array(), exitCode: 0, timedOut: false };
+      };
+      await ports({ run: listing, runBytes: spy }).readBlob(
+        fixture.second,
+        "f/big.ts",
+      );
+      expect(calls).toBe(0);
+    });
   });
 
   test("reports a submodule as unreadable", async () => {

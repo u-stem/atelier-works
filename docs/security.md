@@ -433,11 +433,16 @@ artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し�
 - Claudeを起動しない。失敗のログは読まず、通知にも載せない。
   外部入力で動くのは、事前検査の字句の読み取りだけである。
 - 書き込む先は、worktreeの根の`wmill-lock.yaml`だけで、パスはコードが決める。
-  `O_NOFOLLOW`で開き、通常のファイルでなければ書かない。無いファイルは作らない。
+  `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。通常のファイルでないとき、ほかにhard linkがあるときは書かない。無いファイルは作らない。
 - 検証と完了のステップは、修正のステップの出力を信用しない。
   worktreeの変更が、根の`wmill-lock.yaml`1件の`modified`(モード`100644`)で、本文がPRのheadの木からの再計算とバイト列まで同じときに限り、許す。
   許可リスト方式の検査(`checkCiFixChanges`)は変えず、例外は呼び出し側の`inspectCiFixChanges`だけに置く。
-  例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)と`isLockOnlyChange`(`ci_fix_round.ts`)は、保護パスの一覧に入れない。
+  次のものは、保護パスの一覧に入れない。日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
+  - 例外を開くコールバックの本体(`pr_fix_verify.ts`、`pr_fix_finish.ts`)。
+  - `ci_fix_round.ts`の`isLockOnlyChange`、`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、`readCiFailure`。
+  - `ci_fix_classify.ts`の`classifyCiFailure`。この結果が、`metadata`だけが落ちた回(`metadata_only`)を決め、起動の判断で予算とマーカーの確認を免除する。
+  - `workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)。再計算が読むgitの動き方を決める。
+
   これらを書き換えて条件を緩める変更は、マージ前の人のレビューで止める。CI回のClaudeには、CI回の拒否が別に止める。
   本文が再計算と違うときと、確認できないときは、保護パスの違反として拒否する。
   再試行しても直らない理由で再計算できないときは、再計算の回に限り、固定の理由を返し、保護パスの違反にはしない。

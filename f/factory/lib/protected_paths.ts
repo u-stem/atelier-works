@@ -94,7 +94,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * `wmill-lock.yaml`だけの変更を許す条件(`confirmRehash`、`rehashPushStopReason`、`readStagedRootLock`)と、書き込み先を決める。
  * 一方、次のものは、このリストに入れない。
  * 例外を開くコールバックの本体(`steps/pr_fix_verify.ts`と`steps/pr_fix_finish.ts`)と、
- * 変更の形を判定する`isLockOnlyChange`(`lib/ci_fix_round.ts`)である。
+ * 変更の形を判定する`isLockOnlyChange`と、それを呼ぶ`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、
+ * 回の分類を読む`readCiFailure`(いずれも`lib/ci_fix_round.ts`)、失敗したジョブを分類する`classifyCiFailure`(`lib/ci_fix_classify.ts`)である。
+ * `classifyCiFailure`の結果が、`metadata`だけが落ちた回(`metadata_only`)を決め、起動の判断の免除(予算とマーカーの確認)を決める。
+ * 再計算が読むgitの動き方を決める、`lib/workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)も入れない。
  * ほかのCI回の部品と同じく、日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
  * これらを書き換えて例外の条件を緩める変更は、マージ前の人のレビューで差分を確かめて止める。
  * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。

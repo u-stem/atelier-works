@@ -512,7 +512,8 @@ export async function rehashPushStopReason(
 
 /**
  * worktreeの根の`wmill-lock.yaml`のバイト列を読む。
- * `O_NOFOLLOW`で開き、symlinkはたどらない。通常のファイルでないとき、読めないときは`null`を返す。
+ * `O_NOFOLLOW`で開き、symlinkはたどらない。FIFOで止まらないよう`O_NONBLOCK`も付ける。
+ * 通常のファイルでないとき、読めないときは`null`を返す。
  */
 export async function readRootWmillLock(
   worktreeDir: string,
@@ -521,7 +522,7 @@ export async function readRootWmillLock(
   try {
     handle = await open(
       `${worktreeDir}/wmill-lock.yaml`,
-      constants.O_RDONLY | constants.O_NOFOLLOW,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
   } catch {
     return null;
@@ -563,12 +564,17 @@ const UNWRITABLE_ERRNO: ReadonlySet<string> = new Set([
   "ENOENT",
   "ENOTDIR",
   "EROFS",
+  // 読み手の居ないFIFOを、`O_NONBLOCK`で書き込み用に開いたときの失敗。
+  "ENXIO",
 ]);
 
 /**
  * worktreeの根の`wmill-lock.yaml`を、通常のファイルとして書き換える。
- * `O_NOFOLLOW`で開き、symlinkはたどらない。`O_CREAT`は付けないので、無いファイルは作らない。
- * 開いたファイルが通常のファイルでないとき、実行権限があるとき、symlink、無いファイル、権限が足りないときは、`LockNotWritableError`を投げる。
+ * `O_NOFOLLOW`で開き、symlinkはたどらない。FIFOで止まらないよう`O_NONBLOCK`も付ける。
+ * `O_CREAT`は付けないので、無いファイルは作らない。
+ * 開いたファイルが通常のファイルでないとき、実行権限があるとき、ほかにhard linkがあるとき、
+ * symlink、無いファイル、権限が足りないときは、`LockNotWritableError`を投げる。
+ * hard linkがあるときに書かないのは、別のパスのファイルまで書き換えてしまうためである。
  * それ以外の失敗は、そのまま投げる。
  * 書いた後に、ファイルの大きさが本文のバイト数と同じことを確かめる。
  * 書き先は、根の直下のこのファイルだけである。パスは呼び出し側が決めず、PRの作者が決めた名前を使わない。
@@ -581,7 +587,7 @@ export async function writeRootWmillLock(
   try {
     handle = await open(
       `${worktreeDir}/wmill-lock.yaml`,
-      constants.O_WRONLY | constants.O_NOFOLLOW,
+      constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     );
   } catch (error) {
     const code = error instanceof Error ? Reflect.get(error, "code") : null;
@@ -593,7 +599,7 @@ export async function writeRootWmillLock(
   try {
     const info = await handle.stat();
     // 実行権限のあるファイルは、モード`100755`でcommitされる。後のステップが`100644`だけを許すので、書かずに止める。
-    if (!info.isFile() || (info.mode & 0o111) !== 0) {
+    if (!info.isFile() || (info.mode & 0o111) !== 0 || info.nlink !== 1) {
       throw new LockNotWritableError();
     }
     await handle.truncate(0);

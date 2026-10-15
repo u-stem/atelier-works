@@ -186,7 +186,9 @@ Claudeを先にすれば、1回目でClaudeが直し、次のCIで`metadata`だ�
    ロックの外から同じrefを更新すると、refのロックが衝突して失敗しうるためである。
 3. `planMetadataRehash`が、worktreeのオブジェクトからhashを再計算する。
    通って、本文が変わるときは、worktreeの根の`wmill-lock.yaml`を書き換える(`writeRootWmillLock`)。
-   `O_NOFOLLOW`で開き、通常のファイルでなければ書かない。ファイルは作らない。書き先はこの1つだけである。
+   `O_NOFOLLOW`と`O_NONBLOCK`で開き、FIFOで止まらない。通常のファイルでないとき、ほかにhard linkがあるときは書かない。
+   ファイルは作らない。書き先はこの1つだけである。
+   hard linkがあると、別のパスのファイルまで書き換えてしまうためである。
    書いた後に、ファイルの大きさが本文のバイト数と同じことを確かめる。
 4. 書き換えたときは、固定の件名と本文(`METADATA_REHASH_COMMIT_SUBJECT`と`METADATA_REHASH_COMMIT_BODY`)を持つ`done`で返す。
    返信は空である。
@@ -842,6 +844,7 @@ wmillも消さない項目なので、baseの先端の木で、ファイルか�
 - `readBlob`は、同じcommitの木の項目から`oid`を引き、`git cat-file blob <oid>`を実行する。パスはgitの引数にしない。木は、commitごとに1回だけ読む。
 - blobの標準出力は、文字列に復号せず、バイト列で受け取る。復号すると、先頭のBOMが落ち、不正なUTF-8が置き換わり、hashの入力が変わるためである。
 - 木に無いパスは`missing`にする。blobでない項目と、大きさが木の申告と違う内容は`failed`にする。
+- 木の項目の大きさが1ファイルの上限を超えるときは、`cat-file`を実行せず、`failed`にする。
 - `readBlob`のgitの失敗と時間切れは、一時的なので、`failed`にせず例外を投げる。
   `failed`は、検査が`read_failed`として人の手に回すので、一時的な失敗を含めない。
 - `isAncestor`は、`git merge-base --is-ancestor`の終了コード0を`true`、1を`false`にし、それ以外は`null`にする。
