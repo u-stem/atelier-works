@@ -263,6 +263,10 @@ export type PostMarkedReviewOptions = {
  * 行に紐づけたコメントが1件でもGitHubのdiffに解決できないと、レビュー全体が422で拒否される。
  * 同じ入力を繰り返しても同じ行で落ちるので、422を受けたら一度だけ、行コメントを付けずに
  * `fallbackBody`(行コメントの指摘を総評に並べた本文)で投稿し直す。
+ * 対象は行の解決に限らない、すべての422である。
+ * 422の文言はGitHub側で変わりうるので、文言で絞ると復旧できなくなるためである。
+ * 行コメントと無関係な422でも、投稿し直しは1回だけで、失敗すればそのまま例外になる。
+ * 受けた422のメッセージはログに残し、原因を切り分けられるようにする。
  * 行コメントが無いときと、投稿し直しも失敗したときは、そのまま例外を投げる。
  * 422を受けた投稿はGitHub側で拒否されているので、投稿し直しでレビューが二重になることは無い。
  */
@@ -301,12 +305,15 @@ export async function postMarkedReview(
     ) {
       throw err;
     }
-    log?.warn("review was rejected with 422; posting without inline comments", {
-      owner: target.owner,
-      repo: target.repo,
-      number: target.pr_number,
-      error: maskSecrets(err.message),
-    });
+    log?.warn(
+      "received 422; posting the review again without inline comments",
+      {
+        owner: target.owner,
+        repo: target.repo,
+        number: target.pr_number,
+        github_message: maskSecrets(err.message),
+      },
+    );
     return post(fallbackBody, []);
   }
 }

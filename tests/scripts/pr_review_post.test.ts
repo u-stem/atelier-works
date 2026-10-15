@@ -848,6 +848,10 @@ describe("renderUnresolvedLineSummary", () => {
     expect(body).not.toContain("件コメントしました");
   });
 
+  test("asks for confirmation on its own line", () => {
+    expect(body.split("\n")).toContain("確認お願いします。");
+  });
+
   test("says the lines could not be resolved", () => {
     expect(body).toContain("GitHubが行を解決できなかった");
   });
@@ -1100,6 +1104,25 @@ describe("posting a review once per sha", () => {
       expect(postedBody(fake.calls[1])).toMatchObject({
         body: withReviewMarkers(FALLBACK, 7, SHA),
       });
+    });
+
+    test("logs the 422 message of GitHub so that the cause can be told", async () => {
+      const lines: string[] = [];
+      const fake = createFakeCommandRunner([
+        unresolvedLine(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await postMarkedReview(
+        { run: fake.run, ghToken: "tok" },
+        TARGET,
+        SUMMARY,
+        COMMENTS,
+        {
+          fallbackBody: FALLBACK,
+          log: logger("pr_review_post", { sink: (line) => lines.push(line) }),
+        },
+      );
+      expect(lines.join("\n")).toContain("Line could not be resolved");
     });
 
     test("does not post again for an error other than 422", async () => {

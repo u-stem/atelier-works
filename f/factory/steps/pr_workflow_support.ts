@@ -656,7 +656,8 @@ export function renderUnresolvedLineSummary(
 ): string {
   return [
     `${ROLE_TAGS.pr_review} @${authorLogin}`,
-    "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。確認お願いします。",
+    "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
+    "確認お願いします。",
     ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
   ].join("\n");
 }
