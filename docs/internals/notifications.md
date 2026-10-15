@@ -82,7 +82,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `requirements_approved` | Consoleの要件定義のページ | リポジトリ、Issue |
 | `intake_refreshed` | Issue | リポジトリ。説明に、Consoleで更新後の内容を確かめる旨 |
 | `needs_human` | 対象のIssueかPR | 説明に理由、「次の操作」、リポジトリ |
-| `pr_reviewed` | PR | 説明に指摘の件数と状態 |
+| `pr_reviewed` | PR | 説明に今回の指摘の件数と状態 |
 | `pr_fixed` | PR | 再レビュー依頼のAPIが失敗したときだけ「補足」 |
 | `job_failed` | なし。dependabotのフローではPR | 説明にエラー、ジョブのID。dependabotのフローでは「次の操作」と「対象」 |
 | `console_fetch_problem` | なし | 説明に原因、「次の操作」 |
@@ -125,8 +125,8 @@ PRレビュー完了の状態は、次の規則で決まる(`reviewResultFor`)�
 
 | 状態 | 条件 |
 | --- | --- |
-| 修正が必要な指摘あり(`changes_requested`) | 今回の指摘に`[MUST]`があるか、未解決の`[MUST]`のスレッドが残っている |
-| 指摘なし(`reviewed`) | 上記以外。人のApproveを待つ |
+| 修正必須の指摘が未解決(`changes_requested`) | 今回の指摘に`[MUST]`があるか、未解決の`[MUST]`のスレッドが残っている |
+| 修正必須の指摘なし(`reviewed`) | 上記以外。`[IMO]`、`[NITS]`、`[Q]`が残っていてもこの状態になり、人のApproveを待つ |
 
 PR作成・更新の「確認して欲しい点」には、変更された保護パスを並べる。実装フローは保護パスが変わっても止まらないので、人が先に確かめるためである。検査コマンドを動かさなかったラウンドでは、説明に「検査未実施」と理由が出る。
 
