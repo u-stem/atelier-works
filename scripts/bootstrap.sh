@@ -29,7 +29,10 @@
 # `mise.toml`では`WM_BASE_URL`が8080に固定されているため、`WM_HTTP_PORT`だけを
 # 変えたときに、8080を使う別のプロセスへパスワードを送ってしまう。
 # 加えて、ログインの前に`/api/version`の本文がWindmillの形かを確かめ、違えば
-# 資格情報を送らずに止まる。`curl`はリダイレクトを追わない。
+# 資格情報を送らずに止まる。この確認は開始時の1回だけで、確認の後の送信は
+# 別の接続になる。`curl`はリダイレクトを追わず、環境変数のプロキシも使わない。
+# 全手順のモードでは、状態を変える前に`wmill.yaml`の`baseUrl`のポートも
+# `WM_HTTP_PORT`と照合する(`verify_wmill_yaml_target`)。
 #
 # 引数に`custom-tags`を渡すと、手順0と1の後、カスタムtagの設定(手順3の後半)と
 # ログアウト(手順9)だけを行って終わる(`mise run instance:tags`)。bootstrap済みの
@@ -143,11 +146,12 @@ for optional in GITHUB_TOKEN CLAUDE_CODE_OAUTH_TOKEN DISCORD_WEBHOOK_URL; do
   fi
 done
 
-# 宛先は`WM_HTTP_PORT`だけから決める。数字以外は、URLの別の部分(ユーザー情報や
-# ホスト)になりうるので、資格情報を送る前に拒む。
-case "${WM_HTTP_PORT}" in
-  '' | *[!0-9]*) die "WM_HTTP_PORT must be a port number, got: ${WM_HTTP_PORT} (set it with: mise set -E local WM_HTTP_PORT=...)" ;;
-esac
+# 宛先は`WM_HTTP_PORT`だけから決める。範囲外の値や数字以外は、URLの別の部分
+# (ユーザー情報やホスト)になりうるので、資格情報を送る前に拒む。
+# 先頭の0は、10進か8進か、URLの正規化で消えるかが道具ごとに違うので拒む。
+if ! [[ "${WM_HTTP_PORT}" =~ ^[1-9][0-9]{0,4}$ ]] || [ "${WM_HTTP_PORT}" -gt 65535 ]; then
+  die "WM_HTTP_PORT must be a port number from 1 to 65535 without leading zeros, got: ${WM_HTTP_PORT} (set it with: mise set -E local WM_HTTP_PORT=...)"
+fi
 BASE_URL="http://127.0.0.1:${WM_HTTP_PORT}"
 
 WORKSPACE="factory"
@@ -186,25 +190,68 @@ harden_wmill_config_dir() {
 }
 
 # 宛先へのリクエストはすべてこの関数を通す。`-q`で利用者のcurlの設定
-# (`~/.curlrc`の`location`など)を読まず、`--max-redirs 0`でリダイレクトを追わない。
-# 追うと、資格情報やトークンが確かめていない別の宛先へ送られる。
+# (`~/.curlrc`の`location`など)を読まず、`--max-redirs 0`でリダイレクトを追わず、
+# `--noproxy '*'`で環境変数のプロキシ(`http_proxy`・`all_proxy`など)を使わない。
+# リダイレクトを追うかプロキシを通すと、資格情報やトークンが、確かめていない
+# 宛先へ届く。`-q`は先頭に置く必要がある。
 curl_local() {
-  curl -q --max-redirs 0 "$@"
+  curl -q --noproxy '*' --max-redirs 0 "$@"
+}
+
+# 全手順のモードでだけ呼ぶ。`wmill.yaml`の`workspaces.factory.baseUrl`が
+# `BASE_URL`と同じかを確かめ、違えば何も送らず何も変えずに止まる。
+# `wmill`は、ブランチ名が`factory`のときなど`wmill.yaml`でワークスペースを選ぶ場面で、
+# `baseUrl`と一致するプロファイルを探す。一致するものが無いと対話でプロファイルを
+# 作ろうとして止まるので、ワークスペースの作成やトークンの発行の後に失敗しうる。
+# `custom-tags`のモードは`wmill`を使わないので呼ばない。
+verify_wmill_yaml_target() {
+  local result
+  result="$(WM_TMP_EXPECTED="${BASE_URL}" bun_eval '
+    const expected = new URL(process.env.WM_TMP_EXPECTED ?? "").toString();
+    let actual = "";
+    try {
+      const doc = Bun.YAML.parse(await Bun.file("wmill.yaml").text());
+      const url = doc?.workspaces?.factory?.baseUrl;
+      if (typeof url === "string") {
+        actual = url;
+      }
+    } catch {}
+    let same = false;
+    try {
+      same = new URL(actual).toString() === expected;
+    } catch {}
+    process.stdout.write(same ? "match" : actual);
+  ')" || die "could not read wmill.yaml"
+  if [ "${result}" != "match" ]; then
+    die "baseUrl in wmill.yaml (workspaces.factory) is '${result:-unset}', not ${BASE_URL}; no credentials were sent and nothing was changed. wmill looks up its profile by that baseUrl, so set its port to ${WM_HTTP_PORT} (a local edit; do not commit it) and run again"
+  fi
 }
 
 # 宛先がWindmillかを確かめる。ログインの前に呼び、違えば資格情報を送らずに止まる。
 # 別のプロセスが宛先のポートを使っていても、パスワードを渡さないため。
 # 応答の本文は出さない(別のサービスの応答に何が入っているか分からないため)。
-# Windmillを装うローカルのプロセスは防がない。
+# 本文は4096バイトまでしか読まず、超えたら(curlの終了コード63)Windmillではないとみなす。
+# 巨大な応答でディスクやメモリを使わないため。
+# 5xxは、起動の途中のWindmill(Caddyが502や503を返す)でもありうるので、案内を分ける。
+# Windmillを装うローカルのプロセスは防がない。確認は開始時の1回だけである。
 verify_windmill_peer() {
-  local status body
-  status="$(curl_local -sS -o "${RESP_FILE}" -w '%{http_code}' --max-time 10 "${BASE_URL}/api/version")" \
-    || die "cannot reach Windmill at ${BASE_URL} (run 'mise run up' first)"
-  body="$(cat "${RESP_FILE}")"
-  if [ "${status}" != "200" ] || ! [[ "${body}" =~ ^(CE|EE)\ v[0-9] ]]; then
+  local status body rc=0
+  status="$(curl_local -sS -o "${RESP_FILE}" -w '%{http_code}' --max-time 10 --max-filesize 4096 "${BASE_URL}/api/version")" || rc=$?
+  if [ "${rc}" -ne 0 ] && [ "${rc}" -ne 63 ]; then
+    die "cannot reach Windmill at ${BASE_URL} (run 'mise run up' first)"
+  fi
+  if [[ "${status}" =~ ^5[0-9][0-9]$ ]]; then
+    die "the service at ${BASE_URL} answered with status ${status}; no credentials were sent. Windmill may still be starting: wait a few tens of seconds and run again. If it persists, check whether another process is using port ${WM_HTTP_PORT}"
+  fi
+  body=""
+  [ "${rc}" -eq 0 ] && body="$(cat "${RESP_FILE}")"
+  if [ "${rc}" -ne 0 ] || [ "${status}" != "200" ] || ! [[ "${body}" =~ ^(CE|EE)\ v[0-9] ]]; then
     die "the service at ${BASE_URL} did not answer as Windmill (status ${status}); no credentials were sent. Another process may be using port ${WM_HTTP_PORT}. Stop it, or set WM_HTTP_PORT to the port Windmill listens on (mise set -E local WM_HTTP_PORT=...) and run 'mise run up' again"
   fi
 }
+if [ "${MODE}" = "full" ]; then
+  verify_wmill_yaml_target
+fi
 verify_windmill_peer
 
 # set_auth_token TOKEN: 以降の`api_*`の呼び出しがTOKENで認証するよう、
