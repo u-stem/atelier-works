@@ -15,6 +15,7 @@
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
 import { loadConfig } from "./lib/config.ts";
+import { UNRESOLVABLE_NOTICE_KINDS } from "./lib/console_support.ts";
 import {
   addNoticeUnlessUnresolved,
   listConflictedPrConflictChecks,
@@ -23,6 +24,7 @@ import {
   markPrConflictNotified,
   recordFailure,
   recordPrConflict,
+  resolveNoticeIfUnresolved,
   resolveUnresolvedNoticesByPrefix,
   settlePrConflictCheck,
   touchPrConflictCheck,
@@ -39,6 +41,10 @@ import {
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import { buildRepoGates } from "./lib/pr_ci_watch.ts";
+import {
+  PR_CONFLICT_KIND,
+  PR_CONFLICT_RESOLVED_BY,
+} from "./lib/pr_conflict_support.ts";
 import {
   configuredRepos,
   type PrConflictWatchResult,
@@ -125,6 +131,13 @@ export async function main(): Promise<PrConflictWatchResult> {
         listConflicted: (limit) => listConflictedPrConflictChecks(limit),
         record: (observation) => recordPrConflict(observation),
         markNotified: (id) => markPrConflictNotified(id),
+        resolveNotice: (id) =>
+          resolveNoticeIfUnresolved(
+            id,
+            PR_CONFLICT_KIND,
+            PR_CONFLICT_RESOLVED_BY,
+            UNRESOLVABLE_NOTICE_KINDS,
+          ),
         settle: (id, to) => settlePrConflictCheck(id, to),
         touch: (id) => touchPrConflictCheck(id),
         addNotice: (record) => addNoticeUnlessUnresolved(record),

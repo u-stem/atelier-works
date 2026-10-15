@@ -104,7 +104,12 @@ export type PrConflictNoticeInput = {
  * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないときは例外を投げる。
  */
 export function prConflictNoticeMessage(input: PrConflictNoticeInput): string {
-  const link = pullRequestPageUrl(input.owner, input.repo, input.prNumber);
+  // GitHubのURLは大文字小文字を区別しない。接頭辞と同じ綴りにそろえる。
+  const link = pullRequestPageUrl(
+    input.owner.toLowerCase(),
+    input.repo.toLowerCase(),
+    input.prNumber,
+  );
   const prefix = prConflictNoticePrefix(
     input.owner,
     input.repo,

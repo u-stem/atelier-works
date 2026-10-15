@@ -143,6 +143,12 @@ describe("prConflictNoticeMessage", () => {
     ).toBe(true);
   });
 
+  test("links the pull request with the lowercase owner and repository", () => {
+    expect(
+      prConflictNoticeMessage({ ...input, owner: "Acme", repo: "MyApp" }),
+    ).toEndWith("https://github.com/acme/myapp/pull/12");
+  });
+
   test("is the same for every commit so that a duplicate notice is not added", () => {
     expect(prConflictNoticeMessage(input)).toBe(
       prConflictNoticeMessage({ ...input }),

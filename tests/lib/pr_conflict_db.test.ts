@@ -186,21 +186,50 @@ describe("recordPrConflict", () => {
 
 describe("markPrConflictNotified", () => {
   test("writes only for a conflicted row that was not notified", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    const { sql, calls } = createFakeSqlClient([
+      [{ updated: 1, state: "conflicted" }],
+    ]);
     await markPrConflictNotified(7, sql);
     expect(calls[0]?.text).toMatch(
       /WHERE id =\s+\?\s*::bigint AND state = 'conflicted' AND notified_at IS NULL/,
     );
   });
 
-  test("returns true when the time was newly written", async () => {
-    const { sql } = createFakeSqlClient([[{ id: 7 }]]);
-    expect(await markPrConflictNotified(7, sql)).toBe(true);
+  test("reads the state of the row in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([
+      [{ updated: 1, state: "conflicted" }],
+    ]);
+    await markPrConflictNotified(7, sql);
+    expect(calls[0]?.text).toContain("WITH updated AS");
   });
 
-  test("returns false when the row was already notified", async () => {
-    const { sql } = createFakeSqlClient([[]]);
-    expect(await markPrConflictNotified(7, sql)).toBe(false);
+  test("reports that the time was newly written", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ updated: "1", state: "conflicted" }],
+    ]);
+    expect(await markPrConflictNotified(7, sql)).toBe("marked");
+  });
+
+  test("reports that another run had already recorded the notification", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ updated: 0, state: "conflicted" }],
+    ]);
+    expect(await markPrConflictNotified(7, sql)).toBe("already_notified");
+  });
+
+  test("reports that the row is no longer conflicted when it was resolved", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: 0, state: "resolved" }]]);
+    expect(await markPrConflictNotified(7, sql)).toBe("not_conflicted");
+  });
+
+  test("reports that the row is no longer conflicted when it was closed", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: 0, state: "closed" }]]);
+    expect(await markPrConflictNotified(7, sql)).toBe("not_conflicted");
+  });
+
+  test("reports that the row is no longer conflicted when it is gone", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: 0, state: null }]]);
+    expect(await markPrConflictNotified(7, sql)).toBe("not_conflicted");
   });
 
   test("rejects an id that is not positive, without querying", async () => {

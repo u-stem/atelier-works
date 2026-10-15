@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type {
   PrConflictCheck,
+  PrConflictMarkResult,
   PrConflictObservation,
   PrConflictSettledState,
 } from "../../f/factory/lib/db.ts";
@@ -99,6 +100,7 @@ type Harness = {
   readonly reads: string[];
   readonly records: PrConflictObservation[];
   readonly marked: number[];
+  readonly resolvedNotices: number[];
   readonly settled: { id: number; to: PrConflictSettledState }[];
   readonly touched: number[];
   readonly notices: NoticeRecord[];
@@ -142,6 +144,8 @@ type Setup = {
   readonly now?: () => Date;
   readonly failList?: boolean;
   readonly failMark?: boolean;
+  /** `markNotified`の結果。 */
+  readonly markResult?: PrConflictMarkResult;
   readonly failNotice?: boolean;
 };
 
@@ -151,6 +155,7 @@ function setup(options: Setup = {}): Harness {
   const reads: string[] = [];
   const records: PrConflictObservation[] = [];
   const marked: number[] = [];
+  const resolvedNotices: number[] = [];
   const settled: { id: number; to: PrConflictSettledState }[] = [];
   const touched: number[] = [];
   const notices: NoticeRecord[] = [];
@@ -232,6 +237,11 @@ function setup(options: Setup = {}): Harness {
       if (options.failMark) throw new Error("db down");
       marked.push(id);
       order.push("mark");
+      return options.markResult ?? "marked";
+    },
+    resolveNotice: async (id) => {
+      resolvedNotices.push(id);
+      order.push("resolve_notice");
       return true;
     },
     settle: async (id, to) => {
@@ -271,6 +281,7 @@ function setup(options: Setup = {}): Harness {
     reads,
     records,
     marked,
+    resolvedNotices,
     settled,
     touched,
     notices,
@@ -909,8 +920,151 @@ describe("runPrConflictWatch: finding repositories by search", () => {
   });
 });
 
+describe("runPrConflictWatch: the order and the sources of repositories", () => {
+  const found = { owner: "acme", repo: "found" };
+
+  test("lists the repositories of the work items, the conflict rows, the settings and the search, in that order", async () => {
+    const h = setup({
+      repos: [{ owner: "acme", repo: "a-work" }],
+      conflictRepos: [{ owner: "acme", repo: "b-row" }],
+      explicitRepos: [{ owner: "acme", repo: "c-explicit" }],
+      searchOwners: [{ name: "acme", kind: "org" }],
+      searchRepos: { acme: [{ owner: "acme", repo: "d-search" }] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.listed).toEqual([
+      "acme/a-work",
+      "acme/b-row",
+      "acme/c-explicit",
+      "acme/d-search",
+    ]);
+  });
+
+  test("does not record a failure when a repository that only the search found has too many open pull requests", async () => {
+    const h = setup({
+      repos: [],
+      searchOwners: [{ name: "acme", kind: "org" }],
+      searchRepos: { acme: [found] },
+      openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual([]);
+  });
+
+  test("warns when a repository that only the search found has too many open pull requests", async () => {
+    const h = setup({
+      repos: [],
+      searchOwners: [{ name: "acme", kind: "org" }],
+      searchRepos: { acme: [found] },
+      openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).toEqual([
+      "pr conflict could not list all the open pull requests of a searched repository",
+    ]);
+  });
+
+  test("records a failure when a repository from the settings has too many open pull requests", async () => {
+    const h = setup({
+      repos: [],
+      explicitRepos: [found],
+      searchOwners: [{ name: "acme", kind: "org" }],
+      searchRepos: { acme: [found] },
+      openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["list_open_prs:acme/found"]);
+  });
+
+  test("records a failure when a repository with a conflict row has too many open pull requests", async () => {
+    const h = setup({
+      repos: [],
+      conflictRepos: [found],
+      searchOwners: [{ name: "acme", kind: "org" }],
+      searchRepos: { acme: [found] },
+      openPrs: { "acme/found": new GitHubPaginationLimitError(10) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["list_open_prs:acme/found"]);
+  });
+
+  test("records another failure of a repository that only the search found", async () => {
+    const h = setup({
+      repos: [],
+      searchOwners: [{ name: "acme", kind: "org" }],
+      searchRepos: { acme: [found] },
+      openPrs: { "acme/found": new Error("boom") },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["list_open_prs:acme/found"]);
+  });
+});
+
+describe("runPrConflictWatch: a conflict that was resolved while it was being notified", () => {
+  test("resolves the notice that this run registered when the row is no longer conflicted", async () => {
+    const h = setup({ markResult: "not_conflicted" });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolvedNotices).toEqual([100]);
+  });
+
+  test("does not resolve a notice that this run did not register", async () => {
+    const h = setup({ markResult: "not_conflicted", noticeId: null });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolvedNotices).toEqual([]);
+  });
+
+  test("does not resolve the notice when another run recorded the notification", async () => {
+    const h = setup({ markResult: "already_notified" });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolvedNotices).toEqual([]);
+  });
+
+  test("does not count a notification that another run recorded", async () => {
+    const h = setup({ markResult: "already_notified" });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.notified).toBe(0);
+  });
+
+  test("does not count a notification of a row that is no longer conflicted", async () => {
+    const h = setup({ markResult: "not_conflicted" });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.notified).toBe(0);
+  });
+});
+
 describe("runPrConflictWatch: an invalid token", () => {
   const unauthorized = new GitHubHttpError("bad credentials", 401);
+  const owners: FactoryOwner[] = [
+    { name: "acme", kind: "org" },
+    { name: "alice", kind: "user" },
+  ];
+
+  test("records one failure when a search is rejected", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: { acme: unauthorized, alice: unauthorized },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toEqual(["search_open_repos"]);
+  });
+
+  test("does not search the next owner after a search is rejected", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: { acme: unauthorized, alice: [] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.searched).toEqual(["acme:factory-bot"]);
+  });
+
+  test("reports that the token was rejected by a search", async () => {
+    const h = setup({
+      searchOwners: owners,
+      searchRepos: { acme: unauthorized },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.unauthorized).toBe(true);
+  });
 
   test("stops reading and records one failure", async () => {
     const h = setup({
@@ -1473,12 +1627,36 @@ describe("runPrConflictWatch: reads left for the next run", () => {
     expect(result.deferred).toBe(1);
   });
 
-  test("counts what the rate limit left", async () => {
+  test("counts the repository that hit the rate limit and the ones after it", async () => {
     const h = setup({
       repos: [REPO, { owner: "acme", repo: "other" }],
       openPrs: {
         "acme/widgets": new GitHubRateLimitError("GET pulls", 60_000, true),
         "acme/other": [],
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(2);
+  });
+
+  test("counts the pull request that hit the rate limit and the ones after it", async () => {
+    const h = setup({
+      openPrs: { "acme/widgets": [open(), open({ number: 13 })] },
+      prs: {
+        "acme/widgets#12": new GitHubRateLimitError("GET pr", 60_000, true),
+        "acme/widgets#13": pr({ number: 13 }),
+      },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.deferred).toBe(2);
+  });
+
+  test("counts the row that hit the rate limit", async () => {
+    const h = setup({
+      repos: [],
+      rows: [check({ notified_at: NOW })],
+      prs: {
+        "acme/widgets#12": new GitHubRateLimitError("GET pr", 60_000, true),
       },
     });
     const result = await runPrConflictWatch(h.deps);

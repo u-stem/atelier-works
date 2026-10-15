@@ -4757,8 +4757,12 @@ check(
 );
 check(
   "pr_conflict_checks: the notified time is written once for a conflict",
-  (await markPrConflictNotified(conflictFirst.row.id, sql)) &&
-    !(await markPrConflictNotified(conflictFirst.row.id, sql)),
+  (await markPrConflictNotified(conflictFirst.row.id, sql)) === "marked",
+);
+check(
+  "pr_conflict_checks: a second mark reports that the notification was already recorded",
+  (await markPrConflictNotified(conflictFirst.row.id, sql)) ===
+    "already_notified",
 );
 const conflictAgain = await recordPrConflict(conflictObservation, sql);
 check(
@@ -4798,6 +4802,15 @@ check(
   "pr_conflict_checks: a row moves to resolved once",
   (await settlePrConflictCheck(conflictFirst.row.id, "resolved", sql)) &&
     !(await settlePrConflictCheck(conflictFirst.row.id, "resolved", sql)),
+);
+check(
+  "pr_conflict_checks: a mark on a row that is no longer conflicted reports it",
+  (await markPrConflictNotified(conflictFirst.row.id, sql)) ===
+    "not_conflicted",
+);
+check(
+  "pr_conflict_checks: a mark on a row that does not exist reports it as not conflicted",
+  (await markPrConflictNotified(2_000_000_000, sql)) === "not_conflicted",
 );
 check(
   "pr_conflict_checks: a resolved row is not listed as conflicted",

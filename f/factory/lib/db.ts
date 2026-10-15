@@ -5380,22 +5380,46 @@ export async function recordPrConflict(
 }
 
 /**
- * 今の競合で通知した時刻を記録する。この呼び出しで書いたら`true`を返す。
+ * `markPrConflictNotified`の結果。
+ * - `marked`: この呼び出しで書いた。
+ * - `already_notified`: 競合のままで、他の実行がすでに記録していた。
+ * - `not_conflicted`: 行が競合でなくなっていた(解けた、閉じた、消えた)。
+ */
+export type PrConflictMarkResult =
+  | "marked"
+  | "already_notified"
+  | "not_conflicted";
+
+/**
+ * 今の競合で通知した時刻を記録し、結果を区別して返す。
  * 競合のままで、まだ記録していない行にだけ書く。
  * 並んだ2つの実行の一方だけが書けるので、書けなかった側は通知を出し直さない。
+ * 行の状態は、書く文と同じ文の中で読む。書けなかった理由を区別するためである。
  */
 export async function markPrConflictNotified(
   id: number,
   sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
+): Promise<PrConflictMarkResult> {
   assertPositiveId(id, "pr conflict check id");
   const rows = await sql`
-    UPDATE factory.pr_conflict_checks
-    SET notified_at = now(), updated_at = now()
-    WHERE id = ${id}::bigint AND state = 'conflicted' AND notified_at IS NULL
-    RETURNING id
+    WITH updated AS (
+      UPDATE factory.pr_conflict_checks
+      SET notified_at = now(), updated_at = now()
+      WHERE id = ${id}::bigint AND state = 'conflicted' AND notified_at IS NULL
+      RETURNING id
+    )
+    SELECT
+      (SELECT count(*) FROM updated)::integer AS updated,
+      (SELECT state FROM factory.pr_conflict_checks WHERE id = ${id}::bigint) AS state
   `.fetch();
-  return rows.length > 0;
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("markPrConflictNotified: the database returned no row");
+  }
+  if (parseNumericLike(row.updated, "updated") > 0) return "marked";
+  return parseNullableString(row.state, "state") === "conflicted"
+    ? "already_notified"
+    : "not_conflicted";
 }
 
 /**

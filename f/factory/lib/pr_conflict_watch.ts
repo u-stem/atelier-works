@@ -31,6 +31,7 @@
 
 import type {
   PrConflictCheck,
+  PrConflictMarkResult,
   PrConflictObservation,
   PrConflictRecorded,
   PrConflictSettledState,
@@ -38,6 +39,7 @@ import type {
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
   GitHubHttpError,
+  GitHubPaginationLimitError,
   GitHubRateLimitError,
   type OpenPullRequest,
   type PullRequest,
@@ -116,8 +118,10 @@ export type PrConflictWatchDeps = {
   readonly record: (
     observation: PrConflictObservation,
   ) => Promise<PrConflictRecorded>;
-  /** 今の競合で通知した時刻を記録する。この呼び出しで書いたら`true`。 */
-  readonly markNotified: (id: number) => Promise<boolean>;
+  /** 今の競合で通知した時刻を記録し、結果を区別して返す(`markPrConflictNotified`)。 */
+  readonly markNotified: (id: number) => Promise<PrConflictMarkResult>;
+  /** 通知(notice)をidで1件解決する。この呼び出しで解決したら`true`。 */
+  readonly resolveNotice: (id: number) => Promise<boolean>;
   /** 行を競合から離れた状態に移す。この呼び出しで移したら`true`。 */
   readonly settle: (id: number, to: PrConflictSettledState) => Promise<boolean>;
   /** 状態を変えずに読み直した時刻を進める。 */
@@ -286,13 +290,26 @@ export function configuredRepos(
   return mergeRepos(repos);
 }
 
+function repoKey(entry: RepoRef): string {
+  return `${entry.owner}/${entry.repo}`.toLowerCase();
+}
+
+/** `found`のうち、`others`のどれにも入らないリポジトリの鍵。 */
+function onlyFound(
+  found: readonly RepoRef[],
+  others: readonly (readonly RepoRef[])[],
+): Set<string> {
+  const known = new Set(others.flatMap((list) => list.map(repoKey)));
+  return new Set(found.map(repoKey).filter((key) => !known.has(key)));
+}
+
 /** 重複を除いて重ねる。大文字小文字は区別せず、最初の綴りを残す。 */
 function mergeRepos(...lists: readonly (readonly RepoRef[])[]): RepoRef[] {
   const seen = new Set<string>();
   const merged: RepoRef[] = [];
   for (const list of lists) {
     for (const entry of list) {
-      const key = `${entry.owner}/${entry.repo}`.toLowerCase();
+      const key = repoKey(entry);
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push({ owner: entry.owner, repo: entry.repo });
@@ -376,7 +393,7 @@ function isCandidate(pr: OpenPullRequest, viewer: Viewer): boolean {
 async function collectRepos(
   context: Context,
   viewer: Viewer,
-): Promise<RepoRef[]> {
+): Promise<{ repos: RepoRef[]; searchOnly: ReadonlySet<string> }> {
   const { deps } = context;
   const read = async (
     step: string,
@@ -410,7 +427,10 @@ async function collectRepos(
       await recordFailureOf(context, `search_open_repos:${owner.name}`, err);
     }
   }
-  return mergeRepos(open, conflict, searched, deps.explicitRepos);
+  return {
+    repos: mergeRepos(open, conflict, deps.explicitRepos, searched),
+    searchOnly: onlyFound(searched, [open, conflict, deps.explicitRepos]),
+  };
 }
 
 /**
@@ -439,9 +459,8 @@ async function watchOpenPrs(context: Context): Promise<Set<string>> {
     await absorbReadError(context, "viewer", "viewer", err);
     return seen;
   }
-  const repos = (await collectRepos(context, viewer)).filter((entry) =>
-    isReadable(deps, entry),
-  );
+  const collected = await collectRepos(context, viewer);
+  const repos = collected.repos.filter((entry) => isReadable(deps, entry));
   for (const [index, { owner, repo }] of repos.entries()) {
     if (stopped(context)) {
       deferred.repos += repos.length - index;
@@ -451,6 +470,19 @@ async function watchOpenPrs(context: Context): Promise<Set<string>> {
     try {
       open = await deps.listOpenPrs(owner, repo);
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) deferred.repos += 1;
+      // 検索だけが見つけたリポジトリは、設定でも作業項目でも選んでいない。
+      // 件数の上限を超えても対応できないので、毎回の失敗として記録せず、ログだけに残す。
+      if (
+        err instanceof GitHubPaginationLimitError &&
+        collected.searchOnly.has(repoKey({ owner, repo }))
+      ) {
+        deps.log.warn(
+          "pr conflict could not list all the open pull requests of a searched repository",
+          { repo: `${owner}/${repo}` },
+        );
+        continue;
+      }
       await absorbReadError(
         context,
         `list_open_prs:${owner}/${repo}`,
@@ -488,6 +520,7 @@ async function watchOpenPr(
     counters.tracked += 1;
     await applyDecision(context, ref, pr);
   } catch (err) {
+    if (err instanceof GitHubRateLimitError) context.deferred.prs += 1;
     await absorbReadError(context, `pr_conflict:${key}`, key, err);
   }
 }
@@ -509,11 +542,7 @@ async function applyDecision(
       return;
     case "skip":
       skip(context, ref, decision.reason);
-      // 競合の行を持つPRは、読み直した時刻を進めて、順番を後ろに回す。
-      {
-        const row = context.rows.get(pullRequestKey(ref));
-        if (row !== undefined) await deps.touch(row.id);
-      }
+      await touchIfTracked(context, ref);
       return;
     case "conflict": {
       counters.conflicted += 1;
@@ -530,6 +559,15 @@ async function applyDecision(
       return;
     }
   }
+}
+
+/** 競合の行を持つPRは、読み直した時刻を進めて、順番を後ろに回す。行が無ければ何もしない。 */
+async function touchIfTracked(
+  context: Context,
+  ref: PullRequestRef,
+): Promise<void> {
+  const row = context.rows.get(pullRequestKey(ref));
+  if (row !== undefined) await context.deps.touch(row.id);
 }
 
 /** 判定を見送った理由を数え、見送るはずのない理由はlogに残す。 */
@@ -585,9 +623,16 @@ async function notifyConflict(
       });
     }
   }
-  if (await deps.markNotified(rowId)) {
+  const marked = await deps.markNotified(rowId);
+  if (marked === "marked") {
     counters.notified += 1;
     deps.log.warn("pr conflict notified", { pr: pullRequestKey(ref) });
+    return;
+  }
+  // 通知の登録とDiscordの間に、競合が解けたか閉じた。解決する側は、まだ登録されていない通知を見逃したので、
+  // この実行が登録した通知を、ここで解決する。他の実行が記録済みのときは、競合が続くので解決しない。
+  if (marked === "not_conflicted" && noticeId !== null) {
+    await deps.resolveNotice(noticeId);
   }
 }
 
@@ -677,6 +722,7 @@ async function watchRemainingRows(
         await deps.touch(row.id);
       }
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) deferred.rows += 1;
       await absorbReadError(context, `pr_conflict:${key}`, key, err);
       if (isStatus(err, 403, 404)) await touchSafely(context, row);
     }
