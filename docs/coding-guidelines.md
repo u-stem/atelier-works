@@ -97,7 +97,7 @@ if (!isClaudeResult(parsed)) {
   何も確かめていないテストが通ることを防ぐためである。
   守られているかは、code-reviewerが、コミットの順序と失敗の出力で確かめる。
   手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「テスト先行の確認」にある。
-- 外部の挙動(git、gh、mise、Windmill、OSの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
+- 外部の挙動(git、gh、mise、Windmill、OS、外部サービスの出力や状態)に依存する前提は、実装の前に実機で小さく確かめる。
   手順は[review-loopスキル](../.claude/skills/review-loop/SKILL.md)の「前提の検証」にある。
 - 1テストにつきアサーションは1つ。Arrange-Act-Assertの構成にする。
 - 外部プロセス起動や`fetch`は引数として注入し、テストではダミー実装に差し替える(実プロセス・実HTTPを叩くテストは書かない)。
