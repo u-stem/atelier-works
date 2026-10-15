@@ -564,6 +564,15 @@ describe("metadata patch manifest files", () => {
     "f/factory/lib/metadata_patch_download.ts",
     "f/factory/lib/metadata_patch_download.script.yaml",
     "f/factory/lib/metadata_patch_download.script.lock",
+    "f/factory/lib/metadata_hash.ts",
+    "f/factory/lib/metadata_hash.script.yaml",
+    "f/factory/lib/metadata_hash.script.lock",
+    "f/factory/lib/metadata_precheck.ts",
+    "f/factory/lib/metadata_precheck.script.yaml",
+    "f/factory/lib/metadata_precheck.script.lock",
+    "f/factory/lib/metadata_signature.ts",
+    "f/factory/lib/metadata_signature.script.yaml",
+    "f/factory/lib/metadata_signature.script.lock",
   ];
   const NEAR_MISSES = [
     "f/factory/lib/metadata_patch_manifest.test.ts",
@@ -573,6 +582,10 @@ describe("metadata patch manifest files", () => {
     "tests/lib/metadata_patch_manifest.test.ts",
     "f/factory/lib/metadata_patch_verify.test.ts",
     "tests/lib/metadata_patch_verify.test.ts",
+    "f/factory/lib/metadata_hash.test.ts",
+    "f/factory/lib/metadata_hash.ts.orig",
+    "tests/lib/metadata_hash.test.ts",
+    "tests/lib/metadata_precheck.test.ts",
   ];
 
   test.each(EXACT)("matchesForbiddenPath matches %s", (path) => {

@@ -383,6 +383,62 @@ lockの意味(版の範囲、パッケージの入れ子、取得元、integrity
 受け取る側を呼び出す配線で決める項目は、[内部仕様](internals/ci-fix.md#配線で決めること)にまとめる。
 この文書は、それらを前提にせず、内容の制限を定める。
 
+#### hashの再計算
+
+artifactを経由せず、Factory自身が`wmill-lock.yaml`のhashを計算し直す部品がある。
+構成は[メタデータのhashの再計算](internals/ci-fix.md#メタデータのhashの再計算)にある。
+ここでは、未信頼のPRのheadを扱う前提を書く。
+
+- PRのheadは、読むだけである。
+  scriptを実行せず、wmill CLIも動かさない。
+  PRの作者が決めるコードを、Factoryのworkerで動かさないためである。
+- importを読むときも、コードを実行しない。
+  Bunの`transformSync`は、マクロを指定したimport属性のimportを、読む側のプロセスで実行する。
+  空白、改行、コメントを挟んだ形でも実行されることを、Bun 1.4.0(worker)と1.4.2で確かめた。
+  挟んだ文字の一覧は、`tests/lib/metadata_patch_imports_runtime.test.ts`にある。
+  そのため、`transformSync`は使わず、実行しない`scanImports`だけで読む。
+  `scanImports`は、同じ入力でマクロを実行しないことを、両方の版で確かめた。
+  加えて、import属性の検出は、JavaScriptの空白と行区切りをすべて数える。
+- 読み取りのポートは、gitのオブジェクトから実装し、作業ツリーのファイルは開かない。
+  作業ツリーには、検査コマンドやClaudeが書いた、gitの管理外の内容が入りうるためである。
+  読んだ内容と木の`oid`を照合するので、別のrefや作業ツリーを読んだ実装は断られる。
+  ポートの値の検査は、[事前検査](internals/ci-fix.md#事前検査)にある。
+- `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleがあれば、人の手に回す。
+  読むと、木の外のファイルを指しうるためである。
+- 計算するのはhashだけで、`.script.lock`と`schema`は書かない。
+  lockを書くには依存の解決が要り、解決はPRのコードが決めたimportに従って、外部のレジストリへ取りに行くためである。
+- 自動で直すのは、依存が変わらないPRに限る。
+  判定は[事前検査](internals/ci-fix.md#事前検査)にあり、判断できないときは通さずに人の手に回す。
+  依存の比較は、実行時に残るimportで行う。Windmillのlockが、型だけのimportと使われないimportの先の依存を含めないためである。
+- baseの先端のメタデータが最新でないときは、人の手に回す。
+  メタデータの生成を飛ばしたcommitが`main`に入りうるので、PRと関係の無い古い`schema`やlockを、最新のように書き直さないためである。
+  また、hashが変わるのは、PRが`.ts`を変えたscriptと、baseの先端の値に戻すキーだけに限る。
+- 置き換えるのは、既存のキーのhashだけである。
+  キーの追加と削除を許さないので、lockの対象を増やせない。
+- 1ファイルの大きさ、`f/`のファイル数、1scriptがたどるファイル数、訪問と解決の合計、読むバイト数の合計、型宣言の字句の数に上限を置く。
+  PRの作者が大きな入力を作って、workerの時間とメモリを使わせるのを防ぐためである。
+  定数は[事前検査](internals/ci-fix.md#事前検査)にあり、上限が覆わない範囲は[既知の限界](internals/ci-fix.md#既知の限界)にある。
+  閉包をたどる間は、読んだ内容を保持せず、必要なら読み直す。
+  型宣言の仕事量は、範囲を探すために進めた字句と、宣言のダイジェストのために読んだ字句を、あわせて数える。
+  宣言は文字列として持たず、固定の長さのダイジェストだけを持つ。
+  範囲が重なる宣言で、同じ大きな本体を何度も保持しないためである。
+- Windmillの注釈、`preprocessor`、flowの定義、インラインscriptを持つflowは、人の手に回す。
+  これらは、依存の解決、workerの種類、`.script.yaml`の項目を変えうるのに、hashだけを直しても追いつけないためである。
+- ポートが返す値と上限の値は、入口で検査し、正しくないときは断る。
+  上限の値は正の整数だけを通す。NaNで上限が外れるのを防ぐためである。
+
+事前検査は、悪意のあるPRに対する境界ではない。
+hashは`.script.lock`の中身を含まない。
+`wmill-lock.yaml`は、implementフローの保護パスではない。
+そのため、悪意のあるPRは、Factoryを通さなくても、古いメタデータと合うhashを自分で書ける。
+事前検査が防ぐのは、悪意のないPRで、古い`schema`やlockが最新のように書き直されることである。
+字句の近似の読み違いで、検査を敵対的に避けられる余地は、この前提で受け入れる。
+悪意のあるPRは、人のレビューで止める。
+
+算法は、`mise.toml`で固定したwmill CLIの版に合わせてある。
+版を上げると、算法を固定するテストが落ちて、確かめ直しを求める。
+確かめ直すまでは、版を上げた変更を取り込めない。
+
 ### 開発セッションのsubagent
 
 `.claude/agents/`のsubagentは、開発のセッションで使うものである。
@@ -2080,6 +2136,11 @@ CIが出すメタデータのパッチを取得して検査する`f/factory/lib/
 6つは、manifest、zip、yaml、verify、imports、downloadである。
 それぞれの`.script.yaml`と`.script.lock`も止める。
 書き換えられると、パッチの受け取り側の検査が緩むためである。
+
+`wmill-lock.yaml`のhashを再計算する`f/factory/lib/`の`metadata_hash`、`metadata_precheck`、`metadata_signature`も止める。
+それぞれの`.script.yaml`と`.script.lock`も止める。
+書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられるためである。
+
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
 

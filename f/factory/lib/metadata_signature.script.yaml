@@ -1,0 +1,9 @@
+summary: '[LIB] メタデータのmainの引数の比較'
+description: 内部ライブラリです。直接実行するものではありません。scriptのmainの引数、戻り値の型、トップレベルの型宣言を字句で読んで比べます。
+lock: '!inline f/factory/lib/metadata_signature.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
