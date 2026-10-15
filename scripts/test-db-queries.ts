@@ -4768,6 +4768,36 @@ check(
   conflictFirst.row.episode === 1,
   conflictFirst,
 );
+// 競合を直す列は、記録した行では既定値のままで、既存の記録と通知の動きを変えない。
+const conflictFixColumnsOf = async (id: number) => {
+  const rows = await sql`
+    SELECT fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at
+    FROM factory.pr_conflict_checks WHERE id = ${id}::bigint
+  `.fetch();
+  return rows[0];
+};
+const conflictFixColumns = await conflictFixColumnsOf(conflictFirst.row.id);
+check(
+  "pr_conflict_checks: a new row starts without a fix work item",
+  conflictFixColumns?.fix_work_item_id === null,
+  conflictFixColumns,
+);
+check(
+  "pr_conflict_checks: a new row starts with no fix attempts",
+  Number(conflictFixColumns?.fix_attempts) === 0,
+  conflictFixColumns,
+);
+check(
+  "pr_conflict_checks: a new row starts without a fix hold reason",
+  conflictFixColumns?.fix_hold_reason === null,
+  conflictFixColumns,
+);
+check(
+  "pr_conflict_checks: a new row records when the episode started",
+  conflictFixColumns?.episode_started_at !== null &&
+    conflictFixColumns?.episode_started_at !== undefined,
+  conflictFixColumns,
+);
 check(
   "pr_conflict_checks: the repository of a row is listed",
   (await listPrConflictRepos(sql)).some(
@@ -4845,6 +4875,17 @@ check(
     conflictReopened.started &&
     conflictReopened.row.episode === 2,
   conflictReopened,
+);
+check(
+  "pr_conflict_checks: a reopened row keeps the default fix columns",
+  await (async () => {
+    const columns = await conflictFixColumnsOf(conflictFirst.row.id);
+    return (
+      columns?.fix_work_item_id === null &&
+      Number(columns?.fix_attempts) === 0 &&
+      columns?.fix_hold_reason === null
+    );
+  })(),
 );
 check(
   "pr_conflict_checks: a conflicted row is not deleted however old it is",
