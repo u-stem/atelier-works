@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { computeLockEntries } from "../../f/factory/lib/metadata_hash.ts";
 import type { FileRead } from "../../f/factory/lib/metadata_patch_imports.ts";
 import {
+  type PlanLimits,
   type PlanResult,
   type PrecheckPorts,
   planMetadataRehash,
@@ -96,12 +97,28 @@ export type World = {
   ancestor: boolean | null;
   /** ポートで`failed`にする`ref:path`。 */
   failedReads: Set<string>;
+  /** 木にあるのに`missing`を返す`ref:path`。 */
+  missingReads: Set<string>;
+  /** 読み取りで例外を投げる`ref:path`。 */
+  throwingReads: Set<string>;
+  /** 読み取りで、`byteLength`が例外を投げる内容を返す`ref:path`。 */
+  brokenReads: Set<string>;
   /** `listTree`が投げるか。 */
   throwOnList: boolean;
-  /** `size`を差し替えるheadのパス。 */
+  /** `isAncestor`が投げるか。 */
+  throwOnAncestor: boolean;
+  /** `size`を差し替えるパス。 */
   headSizes: Map<string, number>;
+  baseSizes: Map<string, number>;
+  /** 木の項目を差し替えるheadのパス。 */
+  headEntryEdits: Map<string, Partial<TreeEntry>>;
   /** `readBlob`に渡された`ref`。 */
   readRefs: Set<string>;
+  /** `readBlob`が呼ばれた回数。 */
+  readCount: number;
+  /** `planMetadataRehash`に渡す入力。 */
+  input: { baseSha: string; headSha: string };
+  limits: PlanLimits | undefined;
 };
 
 /** headはbaseの先端を含み、libの`bar.ts`だけを変えた状態。`wmill-lock.yaml`は古いまま。 */
@@ -118,9 +135,18 @@ export function world(): World {
     baseModes: new Map(),
     ancestor: true,
     failedReads: new Set(),
+    missingReads: new Set(),
+    throwingReads: new Set(),
+    brokenReads: new Set(),
     throwOnList: false,
+    throwOnAncestor: false,
     headSizes: new Map(),
+    baseSizes: new Map(),
+    headEntryEdits: new Map(),
     readRefs: new Set(),
+    readCount: 0,
+    input: { baseSha: BASE_TIP, headSha: HEAD },
+    limits: undefined,
   };
 }
 
@@ -128,6 +154,7 @@ function entryOf(
   files: Files,
   modes: Map<string, string>,
   sizes: Map<string, number>,
+  edits: Map<string, Partial<TreeEntry>>,
 ): TreeEntry[] {
   return [...files].map(([path, content]) => {
     const bytes = bytesOf(content);
@@ -136,8 +163,16 @@ function entryOf(
       mode: modes.get(path) ?? "100644",
       size: sizes.get(path) ?? bytes.byteLength,
       oid: createHash("sha1").update(bytes).digest("hex"),
+      ...edits.get(path),
     };
   });
+}
+
+/** `byteLength`を読むと例外を投げる内容。ポートが想定外の値を返したときの再現に使う。 */
+class BrokenBytes extends Uint8Array {
+  override get byteLength(): number {
+    throw new Error("broken");
+  }
 }
 
 export function portsOf(w: World): PrecheckPorts {
@@ -147,25 +182,41 @@ export function portsOf(w: World): PrecheckPorts {
         throw new Error("boom");
       }
       return ref === HEAD
-        ? entryOf(w.head, w.headModes, w.headSizes)
-        : entryOf(w.base, w.baseModes, new Map());
+        ? entryOf(w.head, w.headModes, w.headSizes, w.headEntryEdits)
+        : entryOf(w.base, w.baseModes, w.baseSizes, new Map());
     },
     readBlob: async (ref, path): Promise<FileRead> => {
       w.readRefs.add(ref);
-      if (w.failedReads.has(`${ref}:${path}`)) {
+      w.readCount += 1;
+      const key = `${ref}:${path}`;
+      if (w.throwingReads.has(key)) {
+        throw new Error("boom");
+      }
+      if (w.failedReads.has(key)) {
         return { kind: "failed" };
+      }
+      if (w.missingReads.has(key)) {
+        return { kind: "missing" };
+      }
+      if (w.brokenReads.has(key)) {
+        return { kind: "found", content: new BrokenBytes(4) };
       }
       const content = (ref === HEAD ? w.head : w.base).get(path);
       return content === undefined
         ? { kind: "missing" }
         : { kind: "found", content: bytesOf(content) };
     },
-    isAncestor: async () => w.ancestor,
+    isAncestor: async () => {
+      if (w.throwOnAncestor) {
+        throw new Error("boom");
+      }
+      return w.ancestor;
+    },
   };
 }
 
 export function plan(w: World): Promise<PlanResult> {
-  return planMetadataRehash({ baseSha: BASE_TIP, headSha: HEAD }, portsOf(w));
+  return planMetadataRehash(w.input, portsOf(w), w.limits);
 }
 
 /** 失敗の種別。成功なら`ok`。 */

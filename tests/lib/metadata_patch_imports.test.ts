@@ -432,6 +432,28 @@ describe("traceBareImports", () => {
     ]);
   });
 
+  test("stops when the shared visit budget runs out", async () => {
+    const files = {
+      "f/a.ts": 'import "./b.ts";',
+      "f/b.ts": 'import "./c.ts";',
+      "f/c.ts": 'import "x@1.0.0";',
+    };
+    const { scan } = scannerOf(files);
+    const result = await traceBareImports("f/a.ts", scan, sourcesOf(files), {
+      remaining: 2,
+    });
+    expect(result.ok ? "ok" : result.reason).toBe("budget");
+  });
+
+  test("spends the shared visit budget across calls", async () => {
+    const files = { "f/a.ts": 'import "x@1.0.0";' };
+    const { scan } = scannerOf(files);
+    const budget = { remaining: 10 };
+    await traceBareImports("f/a.ts", scan, sourcesOf(files), budget);
+    await traceBareImports("f/a.ts", scan, sourcesOf(files), budget);
+    expect(budget.remaining).toBe(8);
+  });
+
   test("follows a rooted import", async () => {
     const files = {
       "f/a.ts": 'import "/f/lib/c.ts";',

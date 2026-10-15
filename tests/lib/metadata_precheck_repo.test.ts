@@ -67,28 +67,28 @@ describe("planMetadataRehash on the files of this repository", () => {
 
   test("recomputes only the library that gained a line", async () => {
     const result = await planWith(
-      appended("f/factory/lib/log.ts", "// added\n"),
+      appended("f/factory/lib/log.ts", "// one more line\n"),
     );
     expect(result.ok && result.changedKeys).toEqual(["f/factory/lib/log"]);
   });
 
   test("recomputes only the script whose body gained a line", async () => {
     const result = await planWith(
-      appended("f/factory/poll_prs.ts", "// added\n"),
+      appended("f/factory/poll_prs.ts", "// one more line\n"),
     );
     expect(result.ok && result.changedKeys).toEqual(["f/factory/poll_prs"]);
   });
 
   test("returns a lock that parseWmillLock reads for a changed library", async () => {
     const result = await planWith(
-      appended("f/factory/lib/log.ts", "// added\n"),
+      appended("f/factory/lib/log.ts", "// one more line\n"),
     );
     expect(result.ok && parseWmillLock(result.newLock).ok).toBe(true);
   });
 
   test("keeps the number of lines of wmill-lock.yaml", async () => {
     const result = await planWith(
-      appended("f/factory/lib/log.ts", "// added\n"),
+      appended("f/factory/lib/log.ts", "// one more line\n"),
     );
     const old = new TextDecoder().decode(
       readRepoFiles().get("wmill-lock.yaml") ?? new Uint8Array(),

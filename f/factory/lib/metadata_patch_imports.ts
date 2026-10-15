@@ -240,7 +240,13 @@ export function createFileScanner(
 
 export type TraceResult =
   | { readonly ok: true; readonly bare: ReadonlySet<string> }
-  | { readonly ok: false; readonly reason: "untraceable" | "unreadable" };
+  | {
+      readonly ok: false;
+      readonly reason: "untraceable" | "unreadable" | "budget";
+    };
+
+/** 複数のたどりで共有する、ファイルを訪ねる回数の残り。たどるたびに減る。 */
+export type TraceBudget = { remaining: number };
 
 /** 1つのscriptから、たどるファイルの数の上限。 */
 const MAX_TRACED_FILES = 2000;
@@ -253,11 +259,14 @@ const MAX_TRACED_FILES = 2000;
  * - ファイルが追えない、局所importが`sources`の中のファイルに解決できない、
  *   たどるファイルが多すぎる(`untraceable`)。
  * たどる先がこの木に無いときは、読めなかったものではなく、無いものとして飛ばす。
+ * `budget`を渡すと、ファイルを訪ねるたびに残りを1つ減らす。残りが無くなったら`budget`で失敗にする。
+ * 多数のscriptをたどる呼び出し側が、合計の仕事量を有界にするために使う。
  */
 export async function traceBareImports(
   entry: string,
   scanFile: (path: string) => Promise<FileScan>,
   sources: ReadonlySet<string>,
+  budget?: TraceBudget,
 ): Promise<TraceResult> {
   const visited = new Set<string>([entry]);
   const bare = new Set<string>();
@@ -269,6 +278,12 @@ export async function traceBareImports(
     }
     if (visited.size > MAX_TRACED_FILES) {
       return { ok: false, reason: "untraceable" };
+    }
+    if (budget !== undefined) {
+      if (budget.remaining <= 0) {
+        return { ok: false, reason: "budget" };
+      }
+      budget.remaining -= 1;
     }
     const result = await scanFile(path);
     if (result.kind === "failed") {

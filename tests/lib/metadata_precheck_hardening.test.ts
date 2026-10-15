@@ -1,0 +1,306 @@
+// 事前検査が、Windmillの注釈、preprocessor、flow、入力の検証、資源の上限、想定外の失敗で、
+// 人の手に回す側に倒れることを確かめる。
+import { describe, expect, test } from "bun:test";
+import {
+  BASE_TIP,
+  FOO,
+  HEAD,
+  outcome,
+  type World,
+  world,
+} from "./metadata_precheck_world.ts";
+
+async function reasonAfter(change: (w: World) => void): Promise<string> {
+  const w = world();
+  change(w);
+  return outcome(w);
+}
+
+describe("planMetadataRehash and Windmill annotations", () => {
+  test("sends an added npm annotation to a human", async () => {
+    expect(
+      await reasonAfter((w) => w.head.set("f/factory/foo.ts", `//npm\n${FOO}`)),
+    ).toBe("annotation_changed");
+  });
+
+  test("sends an added native annotation to a human", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set("f/factory/foo.ts", `//native\n${FOO}`),
+      ),
+    ).toBe("annotation_changed");
+  });
+
+  test("sends an added package_json annotation to a human", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set("f/factory/foo.ts", `// package_json: x\n${FOO}`),
+      ),
+    ).toBe("annotation_changed");
+  });
+
+  test("sends a removed annotation to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.base.set("f/factory/foo.ts", `//nodejs\n${FOO}`);
+        w.head.set("f/factory/foo.ts", FOO);
+      }),
+    ).toBe("annotation_changed");
+  });
+
+  test("accepts a changed ordinary comment", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.base.set("f/factory/foo.ts", `// first remark\n${FOO}`);
+        w.head.set("f/factory/foo.ts", `// second remark\n${FOO}`);
+      }),
+    ).toBe("ok");
+  });
+
+  test("sends an added preprocessor to a human", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set(
+          "f/factory/foo.ts",
+          `${FOO}export async function preprocessor(event: string) { return event; }\n`,
+        ),
+      ),
+    ).toBe("preprocessor_changed");
+  });
+});
+
+describe("planMetadataRehash and flows", () => {
+  test("sends a changed flow definition to a human", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set("f/factory/flow_a__flow/flow.yaml", "summary: changed\n"),
+      ),
+    ).toBe("flow_changed");
+  });
+
+  test("sends a flow with an inline script to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.base.set("f/factory/flow_a__flow/step.ts", "export const x = 1;\n");
+        w.head.set("f/factory/flow_a__flow/step.ts", "export const x = 1;\n");
+      }),
+    ).toBe("unsupported_script");
+  });
+});
+
+describe("planMetadataRehash and added or removed files", () => {
+  test("sends an added file of an unknown kind to a human", async () => {
+    expect(
+      await reasonAfter((w) => w.head.set("f/factory/data.bin", "x")),
+    ).toBe("script_set_changed");
+  });
+
+  test("sends a removed file of an unknown kind to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.base.set("f/factory/data.bin", "x");
+      }),
+    ).toBe("script_set_changed");
+  });
+
+  test("accepts an added schedule definition", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set("f/factory/other.schedule.yaml", "schedule: x\n"),
+      ),
+    ).toBe("ok");
+  });
+
+  test("accepts a removed schedule definition", async () => {
+    expect(
+      await reasonAfter((w) => w.head.delete("f/factory/job.schedule.yaml")),
+    ).toBe("ok");
+  });
+});
+
+describe("planMetadataRehash and the values from the ports", () => {
+  test("refuses a base sha that is not 40 hexadecimal digits", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.input = { baseSha: "main", headSha: HEAD };
+      }),
+    ).toBe("invalid_ref");
+  });
+
+  test("refuses a head sha in capital letters", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.input = { baseSha: BASE_TIP, headSha: HEAD.toUpperCase() };
+      }),
+    ).toBe("invalid_ref");
+  });
+
+  test("refuses an object id that is not hexadecimal", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.headEntryEdits.set("f/factory/foo.ts", { oid: "zz" }),
+      ),
+    ).toBe("invalid_tree");
+  });
+
+  test("refuses a negative size", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.headEntryEdits.set("docs/readme.md", { size: -1 }),
+      ),
+    ).toBe("invalid_tree");
+  });
+
+  test("refuses a size that is not an integer", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.headEntryEdits.set("docs/readme.md", { size: 1.5 }),
+      ),
+    ).toBe("invalid_tree");
+  });
+
+  test("accepts a 64 digit object id", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.headEntryEdits.set("docs/readme.md", { oid: "a".repeat(64) }),
+      ),
+    ).toBe("ok");
+  });
+
+  test("returns a read failure when a listed file is reported as missing", async () => {
+    expect(
+      await reasonAfter((w) => w.missingReads.add(`${HEAD}:f/factory/foo.ts`)),
+    ).toBe("read_failed");
+  });
+
+  test("returns a port error when reading a blob throws", async () => {
+    expect(
+      await reasonAfter((w) => w.throwingReads.add(`${HEAD}:f/factory/foo.ts`)),
+    ).toBe("port_error");
+  });
+
+  test("returns a port error when the ancestry check throws", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.throwOnAncestor = true;
+      }),
+    ).toBe("port_error");
+  });
+
+  test("returns an internal error when a port returns a value that breaks the check", async () => {
+    expect(
+      await reasonAfter((w) => w.brokenReads.add(`${HEAD}:f/factory/foo.ts`)),
+    ).toBe("internal_error");
+  });
+
+  test("sends a script that is not UTF-8 to a human", async () => {
+    expect(
+      await reasonAfter((w) =>
+        w.head.set("f/factory/foo.ts", new Uint8Array([0xff, 0xfe, 0x00])),
+      ),
+    ).toBe("dependency_untraceable");
+  });
+
+  test("sends metadata that is not UTF-8 to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        const broken = new Uint8Array([0xff, 0xfe, 0x00]);
+        w.base.set("f/factory/foo.script.yaml", broken);
+        w.head.set("f/factory/foo.script.yaml", broken);
+      }),
+    ).toBe("not_text");
+  });
+});
+
+describe("planMetadataRehash and the stale keys of the lock", () => {
+  const stale = `  f/factory/ghost: ${"9".repeat(64)}\n`;
+
+  function withStaleKey(w: World) {
+    for (const files of [w.base, w.head]) {
+      files.set(
+        "wmill-lock.yaml",
+        `${String(files.get("wmill-lock.yaml"))}${stale}`,
+      );
+    }
+  }
+
+  test("keeps a stale key that has no file in the head", async () => {
+    expect(await reasonAfter(withStaleKey)).toBe("ok");
+  });
+
+  test("sends a stale key to a human when a file of that name exists in the head", async () => {
+    expect(
+      await reasonAfter((w) => {
+        withStaleKey(w);
+        w.base.set("f/factory/ghost.md", "x");
+        w.head.set("f/factory/ghost.md", "x");
+      }),
+    ).toBe("lock_key_set_mismatch");
+  });
+});
+
+describe("planMetadataRehash and the limits on the input", () => {
+  /** 1ファイルがほぼ1MiBの、同じ内容の`.ts`をheadとbaseに足す。木の大きさは小さく申告させる。 */
+  function addLargeScripts(w: World, count: number) {
+    const body = `// ${"x".repeat(1_000_000)}\n`;
+    for (let index = 0; index < count; index += 1) {
+      const path = `f/factory/lib/large_${index}.ts`;
+      w.base.set(path, body);
+      w.head.set(path, body);
+      w.headSizes.set(path, 1);
+      w.baseSizes.set(path, 1);
+    }
+  }
+
+  test("sends a tree whose declared sizes exceed the limit to a human before reading", async () => {
+    const w = world();
+    for (let index = 0; index < 70; index += 1) {
+      w.headSizes.set(`f/factory/lib/declared_${index}.ts`, 1024 * 1024);
+      w.head.set(`f/factory/lib/declared_${index}.ts`, "x");
+    }
+    expect(await outcome(w)).toBe("too_much_input");
+  });
+
+  test("reads no blob when the declared sizes exceed the limit", async () => {
+    const w = world();
+    for (let index = 0; index < 70; index += 1) {
+      w.headSizes.set(`f/factory/lib/declared_${index}.ts`, 1024 * 1024);
+      w.head.set(`f/factory/lib/declared_${index}.ts`, "x");
+    }
+    await outcome(w);
+    expect(w.readCount).toBe(0);
+  });
+
+  test("stops reading once the bytes actually read exceed the limit", async () => {
+    const w = world();
+    addLargeScripts(w, 70);
+    expect(await outcome(w)).toBe("too_much_input");
+  });
+
+  test("stays within the limit while reading many large files", async () => {
+    const w = world();
+    addLargeScripts(w, 70);
+    await outcome(w);
+    expect(w.readCount).toBeLessThan(200);
+  });
+
+  test("sends a closure that needs more visits than the budget to a human", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.limits = { maxTraceVisits: 1 };
+      }),
+    ).toBe("too_much_input");
+  });
+
+  test("accepts the same change within the default limits", async () => {
+    expect(await reasonAfter(() => undefined)).toBe("ok");
+  });
+
+  test("sends a tree with too many bytes to a human when the limit is lowered", async () => {
+    expect(
+      await reasonAfter((w) => {
+        w.limits = { maxReadBytes: 10 };
+      }),
+    ).toBe("too_much_input");
+  });
+});

@@ -1,6 +1,6 @@
 // `wmill-lock.yaml`のhashを、wmillもバックエンドも使わずに、ファイルの内容から計算する。
 // scriptのhashは、ワークスペースの依存のJSON、scriptのソース、`.script.yaml`の現物を、この順につなげたsha256である。
-// flowのhashは、flowのフォルダの直下にあるscriptのファイルごとのhashと、それを並べたJSONのhashである。
+// flowのhashは、インラインscriptを持たないflowに限り、空のオブジェクトのJSONのhashである。
 // 算法は`ASSUMED_WMILL_CLI_VERSION`のwmill CLIの`generateScriptHash`、`generateFlowHash`、
 // `generate-metadata rehash`の分岐に合わせてある。版が変わったら、確かめ直すこと。
 // 副作用を持たない純粋な関数だけを置く。置き換えるのは既存の行の値だけで、YAMLは作り直さない。
@@ -180,7 +180,7 @@ function fail(reason: HashFailureReason, path?: string): ComputeResult {
 }
 
 /** UTF-8として読む。先頭の1つのBOMは取り除く(wmillと同じ)。UTF-8でないものはnull。 */
-function decodeText(content: Uint8Array): string | null {
+export function decodeText(content: Uint8Array): string | null {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(content);
   } catch {
@@ -238,41 +238,21 @@ function flowFolderOf(
 }
 
 /**
- * flowのhashを、フォルダ直下のscriptのファイルから作る。
- * ファイルごとのhashは内容と空の依存のJSON、全体のhashはキーをソートしたhashのJSONである。
- * 入れ子のフォルダの中のscriptのファイルは、wmillがhashに入れないが、確信が持てないので扱わない。
+ * flowのhashを作る。flowのhashは、フォルダ直下のscriptのファイルごとのhashを、キーでソートして並べたJSONのhashである。
+ * インラインscript(フォルダの中のscriptの拡張子のファイル)を持つflowは、実物のwmillと照合できていないので扱わない。
+ * そのため、ファイルごとのhashは作らず、全体のhashは、空のオブジェクトのhashに固定される。
  */
 function flowEntries(
   folder: string,
   files: ReadonlyMap<string, Uint8Array>,
   into: Map<string, string>,
 ): ComputeResult | null {
-  const hashes: Record<string, string> = {};
-  for (const [path, content] of files) {
-    if (!path.startsWith(`${folder}/`)) {
-      continue;
-    }
-    const relative = path.slice(folder.length + 1);
-    if (scriptExtension(relative) === null) {
-      continue;
-    }
-    if (relative.includes("/")) {
+  for (const path of files.keys()) {
+    if (path.startsWith(`${folder}/`) && scriptExtension(path) !== null) {
       return fail("unsupported_script", path);
     }
-    const text = decodeText(content);
-    if (text === null) {
-      return fail("not_text", path);
-    }
-    hashes[relative] = sha256(text + EMPTY_DEPENDENCIES);
   }
-  const sorted: Record<string, string> = {};
-  for (const key of Object.keys(hashes).sort()) {
-    sorted[key] = hashes[key] ?? "";
-  }
-  for (const [key, hash] of Object.entries(sorted)) {
-    into.set(`${folder}+${key}`, hash);
-  }
-  into.set(`${folder}+${FLOW_HASH_SUFFIX}`, sha256(JSON.stringify(sorted)));
+  into.set(`${folder}+${FLOW_HASH_SUFFIX}`, sha256(JSON.stringify({})));
   return null;
 }
 
@@ -317,10 +297,10 @@ function scriptEntry(
 
 /**
  * ツリーのファイル(パスから内容への対応)から、`wmill-lock.yaml`のキーとhashを計算する。
- * `f/`の下だけを読む。キーの形は、scriptが拡張子を除いたパス、flowが`<フォルダ>+<ファイル名>`と`<フォルダ>+__flow_hash`である。
+ * `f/`の下だけを読む。キーの形は、scriptが拡張子を除いたパス、flowが`<フォルダ>+__flow_hash`である。
  * 次のときは失敗にして、人の手に回す。算法を写していない形だからである。
  * - 言語を決められない拡張子、拡張子の前に`.`を含む名前、モジュールのフォルダ(`__mod`、`__dbt`)、
- *   ファイルのリソース、`.fileset/`、`.flow`のフォルダ、JSONで定義したflow、flowの入れ子のフォルダの中のscript。
+ *   ファイルのリソース、`.fileset/`、`.flow`のフォルダ、JSONで定義したflow、インラインscriptを持つflow。
  * - `.script.yaml`が無い、`.script.json`がある、UTF-8でない、キーが重なる。
  */
 export function computeLockEntries(

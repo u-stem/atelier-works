@@ -171,6 +171,95 @@ describe("readSourceShape main", () => {
   });
 });
 
+describe("readSourceShape exported names across line breaks", () => {
+  test("gives up when main is exported as a variable after a line break", () => {
+    expect(mainOf("export const\n  main = async (a: string) => a;\n")).toBe(
+      "unparsable",
+    );
+  });
+
+  test("gives up when main is a default export after a line break", () => {
+    expect(
+      mainOf(
+        "export default\n  async function main(a: string) { return a; }\n",
+      ),
+    ).toBe("unparsable");
+  });
+
+  test("reads an identifier with a zero width joiner as one word", () => {
+    const joiner = String.fromCharCode(0x200d);
+    expect(mainOf(`export function main(a${joiner}b) {}`)).toBe(
+      `export function main ( a${joiner}b )`,
+    );
+  });
+});
+
+describe("readSourceShape bounds", () => {
+  test("gives up on deeply nested template literals without throwing", () => {
+    const nested = "`${".repeat(350_000);
+    expect(readSourceShape(nested).ok).toBe(false);
+  });
+
+  test("gives up on nested template literals deeper than the limit", () => {
+    const nested = `${"`${".repeat(300)}1${"}`".repeat(300)}`;
+    expect(readSourceShape(nested).ok).toBe(false);
+  });
+
+  test("reads template literals nested within the limit", () => {
+    const nested = `${"`${".repeat(20)}1${"}`".repeat(20)}`;
+    expect(readSourceShape(`const a = ${nested};\n`).ok).toBe(true);
+  });
+});
+
+describe("readSourceShape preprocessor", () => {
+  test("reads the exported preprocessor signature", () => {
+    const result = readSourceShape(
+      "export async function preprocessor(event: { x: string }) { return event; }",
+    );
+    expect(result.ok && result.shape.preprocessor).toBe(
+      "export async function preprocessor ( event : { x : string } )",
+    );
+  });
+
+  test("returns null when there is no preprocessor", () => {
+    const result = readSourceShape("export function main() {}");
+    expect(result.ok && result.shape.preprocessor).toBeNull();
+  });
+
+  test("gives up when the preprocessor is exported as a variable", () => {
+    expect(
+      readSourceShape("export const preprocessor = async (e: string) => e;").ok,
+    ).toBe(false);
+  });
+});
+
+describe("readSourceShape annotations", () => {
+  const annotations = (code: string) => {
+    const result = readSourceShape(code);
+    return result.ok ? result.shape.annotations : "unparsable";
+  };
+
+  test("collects comment lines that look like Windmill annotations", () => {
+    expect(
+      annotations(
+        "//npm\n// package_json: x\n//extra_requirements: y\nexport function main() {}\n",
+      ),
+    ).toEqual(["// package_json: x", "//extra_requirements: y", "//npm"]);
+  });
+
+  test("does not collect an ordinary sentence in a comment", () => {
+    expect(annotations("// this is a comment\nexport const x = 1;\n")).toEqual(
+      [],
+    );
+  });
+
+  test("collects an annotation below the first lines", () => {
+    expect(annotations("export const x = 1;\n\n//nobundling\n")).toEqual([
+      "//nobundling",
+    ]);
+  });
+});
+
 describe("readSourceShape declarations", () => {
   test("collects top-level type, interface, enum and class declarations", () => {
     expect(
@@ -243,6 +332,53 @@ describe("diffSourceShape", () => {
     expect(difference(base, "export const x = 1;\n")).toBe(
       "main_presence_changed",
     );
+  });
+
+  test("detects an added npm annotation", () => {
+    expect(difference(base, `//npm\n${base}`)).toBe("annotation_changed");
+  });
+
+  test("detects an added native annotation", () => {
+    expect(difference(base, `//native\n${base}`)).toBe("annotation_changed");
+  });
+
+  test("detects an added package_json annotation", () => {
+    expect(difference(base, `// package_json: x\n${base}`)).toBe(
+      "annotation_changed",
+    );
+  });
+
+  test("detects a removed annotation", () => {
+    expect(difference(`//npm\n${base}`, base)).toBe("annotation_changed");
+  });
+
+  test("accepts a changed ordinary comment", () => {
+    expect(
+      difference(`// first remark\n${base}`, `// second remark\n${base}`),
+    ).toBe("same");
+  });
+
+  test("detects an added preprocessor", () => {
+    expect(
+      difference(
+        base,
+        `${base}export async function preprocessor(event: string) { return event; }\n`,
+      ),
+    ).toBe("preprocessor_changed");
+  });
+
+  test("detects a changed preprocessor signature", () => {
+    const withPre = (arg: string) =>
+      `${base}export async function preprocessor(${arg}) { return 1; }\n`;
+    expect(difference(withPre("event: string"), withPre("event: number"))).toBe(
+      "preprocessor_changed",
+    );
+  });
+
+  test("accepts a changed preprocessor body", () => {
+    const withPre = (body: string) =>
+      `${base}export async function preprocessor(event: string) { return ${body}; }\n`;
+    expect(difference(withPre("1"), withPre("2"))).toBe("same");
   });
 
   test("reports unparsable when either side cannot be read", () => {

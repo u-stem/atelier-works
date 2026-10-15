@@ -601,6 +601,9 @@ PR本文やコメントに載せるときは、コードスパンで囲み、メ
 - `main`の依存更新のたびに、閉包の多くのscriptで、依存の集合かlockが食い違う場合の扱い。検査の前に、`main`を取り込む。
 - artifactを経由しない[hashの再計算](#メタデータのhashの再計算)を、artifactの適用の代わりに使うか、先に試すか。
   再計算は`schema`を書かないので、`main`の引数が変わるPRは人の手に回る。
+- `main`が進むたびに、PRのheadがbaseの先端を含まなくなり、再計算が`head_lacks_base`で止まる。
+  `main`を取り込んでから再計算する手順と、その回数の上限を決める。
+- 再計算が実際のPRのうち、どれだけを直せるかを測る。測り方を決めて、人の手に回った理由の種類ごとに数える。
 - 適用のcommitの後に、PRの状態ラベルを`rereview`に戻すかどうか。
 - `main`の取り込みで`wmill-lock.yaml`が衝突したときの解消。キーの和を取る案がある。
 - `.script.yaml`だけの変更や、scriptの削除で、キーが変わる、または消えるときの扱い。
@@ -620,7 +623,7 @@ artifactを経由しないので、取得、zip、出どころ、manifestの検�
 | --- | --- |
 | `lib/metadata_hash.ts` | ファイルの内容から、`wmill-lock.yaml`の全キーのhashを計算する(`computeLockEntries`)。既存のlockの行ごとの値だけを置き換える(`patchWmillLock`) |
 | `lib/metadata_precheck.ts` | gitの木を読み、依存が変わらない再生成かを確かめる(`planMetadataRehash`)。確かめられたときだけ、新しい本文と、変わったキーを返す |
-| `lib/metadata_signature.ts` | `main`の引数と戻り値の型、トップレベルの型宣言を、字句で読んで比べる |
+| `lib/metadata_signature.ts` | `main`と`preprocessor`の署名、トップレベルの型宣言、Windmillの注釈を、字句で読んで比べる |
 
 3つとも、保護パスである。
 
@@ -633,11 +636,14 @@ artifactを経由しないので、取得、zip、出どころ、manifestの検�
   `dependencies/`が無いので、依存のJSONは`{}`に固定する。
 - scriptのキーは、拡張子を除いたパスである。
   wmillは最初の`.`までをキーにするので、拡張子の前に`.`を含む名前は扱わない。
-- flowのフォルダ直下にある、scriptの拡張子のファイルごとに、内容に`{}`をつなげたsha256を作る。
-  キーは`<フォルダ>+<ファイル名>`である。
-- flow全体のhashは、ファイルごとのhashを、キーでソートしたJSONにしたsha256である。
+- flow全体のhashは、フォルダ直下のscriptのファイルごとのhashを、キーでソートして並べたJSONのsha256である。
   キーは`<フォルダ>+__flow_hash`である。
+  インラインscript(フォルダの中のscriptの拡張子のファイル)を持つflowは、実物のwmillと照合できていないので扱わない。
+  扱うのは、インラインscriptを持たないflowだけで、hashは空のオブジェクトのsha256になる。
 - `flow.yaml`、`.script.lock`、依存先のscript、`wmill.yaml`、言語は、hashに入らない。
+- 先頭のBOMは、1つだけ取り除いてからhashに入れる。
+  wmill CLI 1.817.0に、BOM付きのコピーで`generate-metadata rehash`をかけて確かめた。
+  2つ目のBOMは残るので、`.ts`と`.script.yaml`の両方で、2つ並んだBOMは別のhashになる。
 
 `patchWmillLock`は、既存の行の値だけを置き換える。
 引用符、キーの順、改行は変えない。
@@ -656,26 +662,45 @@ wmillも消さない項目なので、baseの先端の木で、ファイルか�
 PRの差分は、2つの木の`f/`の下を、blobのIDで比べて求める。
 名前の変更は、削除と追加の2件に見えるので、scriptの集合が変わったものとして扱う。
 
+ポートの値は、受け取った入口で検査する。
+`baseSha`と`headSha`は40桁の小文字の16進数、木の項目の`oid`は40桁か64桁の小文字の16進数、`size`は0以上の整数でなければならない。
+`isAncestor`は、`true`のときだけ祖先とみなす。
+`listTree`は`git ls-tree -r -l -z`で実装する。
+`-z`を付けないと、非ASCIIのパスが引用符つきで返り、実際のパスと一致しなくなる。
+
 次の表の順に確かめ、最初に外れた条件の種別を返す。
 
 | 確かめること | 外れたときの種別 |
 | --- | --- |
+| `baseSha`と`headSha`が40桁の16進数で、木の項目の形が正しい | `invalid_ref`、`invalid_tree` |
 | headがbaseの先端を含む | `head_lacks_base`、判定できないときは`ancestry_unknown` |
-| `f/`、`wmill.yaml`、`wmill-lock.yaml`にsymlinkとsubmoduleが無い | `special_file` |
-| `f/`のファイルが1MiB以下で、5000件以下 | `file_too_large`、`too_many_files` |
+| `f/`、`wmill.yaml`、`wmill-lock.yaml`、`dependencies/`にsymlinkとsubmoduleが無い | `special_file` |
+| 上の4つのファイルが1MiB以下で、`f/`のファイルが5000件以下 | `file_too_large`、`too_many_files` |
+| 申告の大きさの合計と、読んだバイト数の合計が、headとbaseのそれぞれで64MiB以下 | `too_much_input` |
 | headに`dependencies/`が無い | `workspace_dependencies` |
 | `wmill.yaml`がbaseの先端と同一 | `wmill_yaml_changed` |
-| PRの差分に、scriptとflowのファイルの追加、削除、名前の変更が無い | `script_set_changed` |
+| PRの差分に、scriptとflowのファイルの追加、削除、名前の変更が無い。許可リストにない種類のファイルの追加と削除も無い | `script_set_changed` |
 | PRの差分に、`.script.lock`とflowのlockが無い | `lock_file_changed` |
+| PRの差分に、flowの定義の変更が無い | `flow_changed` |
 | PRの差分に、`.script.yaml`が無い | `script_yaml_changed` |
 | 変更されたscriptが、TypeScript(bun)である | `unsupported_script` |
-| すべてのscriptで、裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed` |
-| 変更された`.ts`の`main`の引数、戻り値の型、型宣言が、baseの先端と同じ | `main_changed`、`main_presence_changed`、`declaration_changed`、読めないときは`main_unparsable` |
-| hashを計算できる形である | `unsupported_script`、`missing_metadata`、`not_text`、`duplicate_key` |
+| すべてのscriptで、裸のimportの閉包が、baseの先端とheadで同じ | `dependency_changed`、追えないときは`dependency_untraceable`、読めないときは`read_failed`、訪ねる回数の合計が200000を超えるときは`too_much_input` |
+| 変更された`.ts`の注釈、`main`と`preprocessor`の署名、型宣言が、baseの先端と同じ | `annotation_changed`、`main_changed`、`main_presence_changed`、`preprocessor_changed`、`declaration_changed`、読めないときは`main_unparsable` |
+| hashを計算できる形である。インラインscriptを持つflowは計算できない | `unsupported_script`、`missing_metadata`、`not_text`、`duplicate_key` |
 | 再計算したキーの集合が、headのlockのキーの集合と一致する | `lock_key_set_mismatch`、`wmill_lock_invalid` |
 
 ポートが例外を投げたときは、`port_error`を返す。
+それ以外の想定外の例外は、`internal_error`を返す。
 種別は固定で、例外の内容は載せない。
+読んだ内容は保持せず、必要なら読み直す。
+保持量を抑えるためである。
+
+追加と削除を許す種類の許可リストは、次の名前の末尾である。
+これらは、scriptのhashに関わらない。
+
+- `.schedule.yaml`、`.variable.yaml`、`.resource.yaml`、`.resource-type.yaml`、`.trigger.yaml`
+- `folder.meta.yaml`、`.md`
+
 失敗の`path`はPRの作者が決められるので、PR本文やコメントに載せるときは無害化する。
 
 裸のimportの閉包は、[importの読み取り](#importの読み取り)と同じ関数で求める。
@@ -691,8 +716,8 @@ PRが触っていないscriptも、すべて確かめる。
 
 ### mainの引数の比べ方
 
-`schema`は、`main`の引数からだけ決まる。
-そこで、`main`の署名と型宣言が同じなら、`schema`も同じとみなす。
+`.script.yaml`のうち、コードから決まる項目は、`schema`と`has_preprocessor`である。
+そこで、`main`と`preprocessor`の署名と型宣言が同じなら、`.script.yaml`も同じとみなす。
 `metadata_signature.ts`は、構文木を作らず、字句で読む。
 workerで動くwasmのパーサーに、依存を増やさないためである。
 
@@ -704,7 +729,22 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - 空白とコメントの違いは、違いとして扱わない。
 - 字句を読み切れないときは、読めないものとして断る。
   閉じない文字列とコメント、閉じ波括弧の後の`/`、括弧の不一致がこれにあたる。
-- `main`が`export function main`以外の形で公開されるとき(変数、既定のexport、`export { main }`)と、2つ以上あるときも断る。
+- `main`と`preprocessor`が`export function`以外の形で公開されるとき(変数、既定のexport、`export { main }`)と、2つ以上あるときも断る。
+  `export`の次の12字句までを、`=`、`(`、`;`で止めて見る。改行では止めない。
+- Windmillの注釈に見えるコメント行(`//npm`、`//nodejs`、`//native`、`// package_json: x`など)の集合も比べる。
+  形は、`//`の後に1語、続けて任意で`:`と値、とする。ファイルのどこにあっても拾う。
+  1語だけの普通のコメントも拾うので、その追加や変更は人の手に回る。
+- テンプレートの`${}`の入れ子は64段までにし、超えたら読めないものとして断る。
+  字句に分ける処理が例外を投げたときも、読めないものとして断る。
+
+実機で確かめた、コードと`.script.yaml`、`.script.lock`の関係は次のとおりである(wmill CLI 1.817.0、ローカルのWindmill)。
+
+- 型の中身と、型をimportする元のファイルは、`.script.yaml`を変えない。引数の型は、型名(`Opts`なら`format: resource-opts`)で決まる。
+- `main`のJSDoc、引数の前後のコメント、`main`の本体のコメントは、`.script.yaml`を変えない。
+- `preprocessor`の追加は、`has_preprocessor: true`を足す。署名の変更は`.script.yaml`を変えないが、署名も比べる。
+- `//npm`の追加は、`.script.lock`のbun.lockの部分を変える。
+- `//nodejs`、`//nobundling`、`//native`、`//bun`は、`.script.lock`を変えなかった。
+  ただし、実行の仕方を変えるので、比べる。
 
 ### 算法を固定するテスト
 

@@ -1,5 +1,5 @@
-// scriptの`main`の引数と、同じファイルのトップレベルの型宣言を、字句の単位で読んで比べる。
-// `.script.yaml`の`schema`は`main`の引数からだけ決まるので、これが変わらなければ`schema`も変わらない。
+// scriptの`main`と`preprocessor`の署名、同じファイルのトップレベルの型宣言、Windmillの注釈を、字句の単位で読んで比べる。
+// `.script.yaml`の`schema`と`has_preprocessor`は、これらからだけ決まるので、変わらなければ`.script.yaml`も変わらない。
 // 構文木は作らない。コメントを除き、文字列、テンプレート、正規表現を1つの字句にして、
 // 括弧の対応を数える。字句の切れ目に確信が持てないときは、読めないものとして断る。
 // 副作用を持たない純粋な関数だけを置く。
@@ -32,7 +32,7 @@ const REGEX_KEYWORDS: ReadonlySet<string> = new Set([
 ]);
 
 const WORD_START = /[\p{ID_Start}$_]/u;
-const WORD = /[\p{ID_Start}$_][\p{ID_Continue}$‌‍]*/uy;
+const WORD = /[\p{ID_Start}$_][\p{ID_Continue}$\u200c\u200d]*/uy;
 const NUMBER = /[0-9][0-9A-Za-z_.]*/y;
 const REGEX_FLAGS = /[A-Za-z]*/y;
 const WHITESPACE = /\s/u;
@@ -121,7 +121,14 @@ function endOfRegex(code: string, start: number): number | null {
 }
 
 /** テンプレートリテラルの終わりの次の位置。`${}`の中は字句として読み、閉じないものはnull。 */
-function endOfTemplate(code: string, start: number): number | null {
+function endOfTemplate(
+  code: string,
+  start: number,
+  level: number,
+): number | null {
+  if (level >= MAX_NESTING) {
+    return null;
+  }
   let index = start + 1;
   while (index < code.length) {
     const char = code[index];
@@ -130,7 +137,7 @@ function endOfTemplate(code: string, start: number): number | null {
     } else if (char === "`") {
       return index + 1;
     } else if (char === "$" && code[index + 1] === "{") {
-      const inner = scan(code, index + 2, true);
+      const inner = scan(code, index + 2, true, level + 1);
       if (inner === null) {
         return null;
       }
@@ -146,7 +153,12 @@ function endOfTemplate(code: string, start: number): number | null {
  * `start`から字句に分ける。`nested`が真のとき、対応する開き波括弧の無い`}`の次の位置で止まる。
  * 読み切れないとき(閉じない文字列とコメント、判断できない`/`)はnull。
  */
-function scan(code: string, start: number, nested: boolean): ScanResult | null {
+function scan(
+  code: string,
+  start: number,
+  nested: boolean,
+  level: number,
+): ScanResult | null {
   const tokens: Token[] = [];
   let index = start;
   let braces = 0;
@@ -179,7 +191,7 @@ function scan(code: string, start: number, nested: boolean): ScanResult | null {
       }
       push(end, "string");
     } else if (char === "`") {
-      const end = endOfTemplate(code, index);
+      const end = endOfTemplate(code, index, level);
       if (end === null) {
         return null;
       }
@@ -371,14 +383,15 @@ function joined(tokens: readonly Token[], from: number, to: number): string {
 type MainFound = { readonly signature: string } | "none" | "ambiguous";
 
 /**
- * `export`の宣言の頭に`main`が現れるか。`export const main`、`export default function main`、`export { main }`などである。
- * 頭は、`export`の次から、`=`、`(`、`;`、改行の後の字句、または12字句までを見る。
+ * `export`の宣言の頭に`name`が現れるか。`export const main`、`export default function main`、`export { main }`などである。
+ * 頭は、`export`の次から、`=`、`(`、`;`、または12字句までを見る。改行では打ち切らない。
  * `{`で始まるときは、閉じ波括弧までを見る。
- * exportしない`main`という名前の局所変数は、`schema`に関わらないので数えない。
+ * exportしない同名の局所変数は、`schema`に関わらないので数えない。
  */
-function exportsMainElsewhere(
+function exportsNameElsewhere(
   tokens: readonly Token[],
   depth: readonly number[],
+  name: string,
 ): boolean {
   for (let index = 0; index < tokens.length; index += 1) {
     if (depth[index] !== 0 || tokens[index]?.text !== "export") {
@@ -395,14 +408,11 @@ function exportsMainElsewhere(
       }
       const ends =
         !braced &&
-        (token.text === "=" ||
-          token.text === "(" ||
-          token.text === ";" ||
-          (token.newline && cursor > index + 1));
+        (token.text === "=" || token.text === "(" || token.text === ";");
       if (ends) {
         break;
       }
-      if (token.kind === "word" && token.text === "main") {
+      if (token.kind === "word" && token.text === name) {
         return true;
       }
     }
@@ -411,13 +421,14 @@ function exportsMainElsewhere(
 }
 
 /**
- * トップレベルの`export (async )?function main`を探し、本体の前までを返す。
- * 見つからず、`main`という語が別の形で現れるとき(変数、既定のexportなど)と、2つ以上あるとき、
+ * トップレベルの`export (async )?function <name>`を探し、本体の前までを返す。
+ * 見つからず、`name`という語が別の形でexportされるとき(変数、既定のexportなど)と、2つ以上あるとき、
  * 本体の位置を決められないときは、決められないものとして返す。
  */
-function findMain(
+function findExported(
   tokens: readonly Token[],
   depth: readonly number[],
+  name: string,
 ): MainFound {
   const starts: number[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
@@ -430,14 +441,14 @@ function findMain(
     }
     if (
       tokens[cursor]?.text === "function" &&
-      tokens[cursor + 1]?.text === "main" &&
+      tokens[cursor + 1]?.text === name &&
       tokens[cursor + 1]?.kind === "word"
     ) {
       starts.push(index);
     }
   }
   if (starts.length === 0) {
-    return exportsMainElsewhere(tokens, depth) ? "ambiguous" : "none";
+    return exportsNameElsewhere(tokens, depth, name) ? "ambiguous" : "none";
   }
   const [start] = starts;
   if (starts.length > 1 || start === undefined) {
@@ -594,27 +605,60 @@ function collectDeclarations(
   return found.sort();
 }
 
-/** scriptの形。`main`の署名(無ければnull)と、トップレベルの型宣言の文(ソート済み)。 */
+/**
+ * scriptの形。
+ * `main`と`preprocessor`の署名(無ければnull)、トップレベルの型宣言の文(ソート済み)、
+ * Windmillの注釈に見えるコメント行(ソート済み)である。
+ */
 export type SourceShape = {
   readonly main: string | null;
+  readonly preprocessor: string | null;
   readonly declarations: readonly string[];
+  readonly annotations: readonly string[];
 };
+
+/**
+ * Windmillの注釈に見えるコメント行。`//npm`、`//nodejs`、`//native`、`// package_json: x`、`//extra_requirements: y`などである。
+ * 注釈は、依存の解決やworkerの種類を変える。どの注釈が効くかはWindmillの版で変わるので、形だけで拾い、
+ * 文章のコメント(空白で区切った複数の語)は拾わない。ファイルのどこにあっても拾う。
+ */
+const ANNOTATION_LINE = /^\s*\/\/\s*[A-Za-z_][\w-]*(?:\s*:.*)?\s*$/;
+
+function readAnnotations(code: string): string[] {
+  return code
+    .split(/\r\n|[\n\r]/)
+    .filter((line) => ANNOTATION_LINE.test(line))
+    .map((line) => line.trim())
+    .sort();
+}
+
+/** 字句の入れ子(テンプレートの`${}`)の深さの上限。呼び出しの再帰を有界にする。 */
+const MAX_NESTING = 64;
 
 export type ShapeResult =
   | { readonly ok: true; readonly shape: SourceShape }
   | { readonly ok: false; readonly reason: "unparsable" };
 
 /**
- * ソースの`main`の署名と、トップレベルの型宣言を読む。
+ * ソースの`main`と`preprocessor`の署名、トップレベルの型宣言、注釈のコメント行を読む。
  * 署名は、`export`から本体の開き波括弧の前までの字句を、コメントと空白の違いを除いて1つの文字列にしたものである。
  * 引数の既定値も含むので、`schema`の`default`が変わるときも署名が変わる。
  * 読めないのは次のときで、いずれも`unparsable`を返す。
  * - 文字列、テンプレート、コメント、正規表現が閉じない。判断できない`/`がある。括弧が対応しない。
- * - `main`が`export function main`以外の形で現れる。`main`が2つ以上ある。本体の位置を決められない。
+ * - `main`か`preprocessor`が`export function`以外の形でexportされる。同名が2つ以上ある。本体の位置を決められない。
+ * - テンプレートの入れ子が深すぎる。字句に分ける処理が例外を投げる。
  * - 型宣言の範囲を決められない。
  */
 export function readSourceShape(code: string): ShapeResult {
-  const scanned = scan(code, 0, false);
+  try {
+    return readShape(code);
+  } catch {
+    return { ok: false, reason: "unparsable" };
+  }
+}
+
+function readShape(code: string): ShapeResult {
+  const scanned = scan(code, 0, false, 0);
   if (scanned === null) {
     return { ok: false, reason: "unparsable" };
   }
@@ -622,8 +666,9 @@ export function readSourceShape(code: string): ShapeResult {
   if (depth === null) {
     return { ok: false, reason: "unparsable" };
   }
-  const main = findMain(scanned.tokens, depth);
-  if (main === "ambiguous") {
+  const main = findExported(scanned.tokens, depth, "main");
+  const preprocessor = findExported(scanned.tokens, depth, "preprocessor");
+  if (main === "ambiguous" || preprocessor === "ambiguous") {
     return { ok: false, reason: "unparsable" };
   }
   const declarations = collectDeclarations(scanned.tokens, depth);
@@ -634,14 +679,18 @@ export function readSourceShape(code: string): ShapeResult {
     ok: true,
     shape: {
       main: main === "none" ? null : main.signature,
+      preprocessor: preprocessor === "none" ? null : preprocessor.signature,
       declarations,
+      annotations: readAnnotations(code),
     },
   };
 }
 
 export type ShapeChange =
+  | "annotation_changed"
   | "main_presence_changed"
   | "main_changed"
+  | "preprocessor_changed"
   | "declaration_changed";
 
 export type ShapeDiff =
@@ -650,7 +699,7 @@ export type ShapeDiff =
 
 /**
  * 2つのソースの形を比べる。どちらかが読めなければ`unparsable`を返す。
- * 違いが無ければ`change`はnull。`main`の有無、`main`の署名、型宣言のどれが違うかを返す。
+ * 違いが無ければ`change`はnull。注釈、`main`の有無、`main`の署名、`preprocessor`、型宣言のどれが違うかを返す。
  */
 export function diffSourceShape(base: string, head: string): ShapeDiff {
   const before = readSourceShape(base);
@@ -658,11 +707,19 @@ export function diffSourceShape(base: string, head: string): ShapeDiff {
   if (!before.ok || !after.ok) {
     return { ok: false, reason: "unparsable" };
   }
+  if (
+    before.shape.annotations.join("\n") !== after.shape.annotations.join("\n")
+  ) {
+    return { ok: true, change: "annotation_changed" };
+  }
   if ((before.shape.main === null) !== (after.shape.main === null)) {
     return { ok: true, change: "main_presence_changed" };
   }
   if (before.shape.main !== after.shape.main) {
     return { ok: true, change: "main_changed" };
+  }
+  if (before.shape.preprocessor !== after.shape.preprocessor) {
+    return { ok: true, change: "preprocessor_changed" };
   }
   if (
     before.shape.declarations.join("\n") !== after.shape.declarations.join("\n")

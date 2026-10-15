@@ -60,6 +60,30 @@ describe("computeLockEntries for a script", () => {
     expect(entriesOf(withLock)).toEqual(entriesOf(files));
   });
 
+  test("does not strip a second byte order mark, like wmill", () => {
+    const twice = new Map(files).set(
+      "f/factory/foo.ts",
+      new Uint8Array([
+        0xef,
+        0xbb,
+        0xbf,
+        0xef,
+        0xbb,
+        0xbf,
+        ...bytes("export function main() {}\n"),
+      ]),
+    );
+    expect(entriesOf(twice)).not.toEqual(entriesOf(files));
+  });
+
+  test("strips a byte order mark in the metadata like wmill", () => {
+    const withBom = new Map(files).set(
+      "f/factory/foo.script.yaml",
+      new Uint8Array([0xef, 0xbb, 0xbf, ...bytes("summary: foo\n")]),
+    );
+    expect(entriesOf(withBom)).toEqual(entriesOf(files));
+  });
+
   test("strips a byte order mark like wmill", () => {
     const withBom = new Map(files).set(
       "f/factory/foo.ts",
@@ -162,25 +186,15 @@ describe("computeLockEntries for a flow", () => {
     );
   });
 
-  test("hashes an inline script with the empty dependencies after the source", () => {
-    expect(
-      entriesOf(flow({ "f/factory/a__flow/step.ts": "x" })).get(
-        "f/factory/a__flow+step.ts",
-      ),
-    ).toBe(sha256(`x${EMPTY_DEPENDENCIES}`));
+  test("refuses a flow with an inline script because it cannot be checked against wmill", () => {
+    expect(failureOf(flow({ "f/factory/a__flow/step.ts": "x" }))).toBe(
+      "unsupported_script",
+    );
   });
 
-  test("hashes the sorted file hashes as JSON for the flow hash", () => {
-    const entries = entriesOf(
-      flow({ "f/factory/a__flow/b.ts": "2", "f/factory/a__flow/a.py": "1" }),
-    );
-    expect(entries.get("f/factory/a__flow+__flow_hash")).toBe(
-      sha256(
-        JSON.stringify({
-          "a.py": sha256(`1${EMPTY_DEPENDENCIES}`),
-          "b.ts": sha256(`2${EMPTY_DEPENDENCIES}`),
-        }),
-      ),
+  test("refuses a flow with an inline script in another language", () => {
+    expect(failureOf(flow({ "f/factory/a__flow/step.py": "x" }))).toBe(
+      "unsupported_script",
     );
   });
 
@@ -190,10 +204,10 @@ describe("computeLockEntries for a flow", () => {
     expect(entriesOf(changed)).toEqual(entriesOf(flow()));
   });
 
-  test("does not treat an inline script as a script of its own", () => {
-    expect([
-      ...entriesOf(flow({ "f/factory/a__flow/step.ts": "x" })).keys(),
-    ]).toEqual(["f/factory/a__flow+step.ts", "f/factory/a__flow+__flow_hash"]);
+  test("keys a flow only by its flow hash", () => {
+    expect([...entriesOf(flow()).keys()]).toEqual([
+      "f/factory/a__flow+__flow_hash",
+    ]);
   });
 
   test("refuses a flow folder with the dotted suffix", () => {
@@ -299,7 +313,9 @@ describe("patchWmillLock", () => {
         ["f/c+x.ts", OLD],
       ]),
     );
-    expect(result.ok && result.text.endsWith("\n")).toBe(false);
+    expect(result.ok && result.text).toBe(
+      `version: v2\nlocks:\n  f/a: ${NEW}\n  f/b: ${OLD}\n  f/c+x.ts: ${OLD}`,
+    );
   });
 
   test("refuses a key that the old lock does not have", () => {
