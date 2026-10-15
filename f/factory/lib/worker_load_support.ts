@@ -538,8 +538,10 @@ export const WORKER_LOAD_HIGH_KIND = "worker_load_high";
 /**
  * 判定に読む記録の件数。最新の1件と、OOMの増分を求めるために比べる相手を読めるだけ取る。
  * 比べる相手は、値の読めた直近の行である。
- * 1時間(30件)の間に値が読めた行が無ければ、比べる相手が無いので増分を判定しない。
- * 窓を伸ばすほど読めない期間をまたいで比べられるが、読む行が増えるので、1時間で区切る。
+ * 読む行は時刻ではなく件数で区切るので、記録が途切れると30件は1時間より長い期間にまたがる。
+ * 途切れが無ければ1時間である。
+ * 30件の中に値が読めた行が無ければ、比べる相手が無いので増分を判定しない。
+ * 件数を増やすほど読めない期間をまたいで比べられるが、読む行が増えるので、30件で区切る。
  */
 export const WORKER_ALERT_SAMPLE_LIMIT = 30;
 
@@ -630,20 +632,13 @@ export function evaluateWorkerAlerts(
   return causes;
 }
 
-/** 割合を百分率で返す。丸めると0%になる正の割合は、小数1桁で出す。 */
-function ratioText(ratio: number): string {
-  return ratio > 0 && Math.round(ratio * 100) === 0
-    ? `${(ratio * 100).toFixed(1)}%`
-    : percent(ratio);
-}
-
 function causeText(
   cause: WorkerAlertCause,
   thresholds: WorkerAlertThresholds,
 ): string {
   switch (cause) {
     case "memory":
-      return `defaultのworkerのメモリ(anon)が、上限の${ratioText(thresholds.memoryRatio)}以上になりました`;
+      return `defaultのworkerのメモリ(anon)が、上限の${percentOrDecimal(thresholds.memoryRatio)}以上になりました`;
     case "oom_kill":
       return "defaultのworkerで、メモリ不足(OOM)により止められたプロセスが増えました";
   }
@@ -750,8 +745,8 @@ function percent(ratio: number): string {
   return `${String(Math.round(ratio * 100))}%`;
 }
 
-/** 欠けた記録があるのに、整数のパーセントでは0%に丸まるときだけ、小数1桁で出す。 */
-function missingPercent(ratio: number): string {
+/** 割合を百分率で返す。正の割合が整数のパーセントで0%に丸まるときだけ、小数1桁で出す。 */
+function percentOrDecimal(ratio: number): string {
   return ratio > 0 && Math.round(ratio * 100) === 0
     ? `${(ratio * 100).toFixed(1)}%`
     : percent(ratio);
@@ -776,7 +771,7 @@ function missingLine(summary: WorkerLoadSummary): string {
     0,
     1 - summary.sample_count / summary.expected_count,
   );
-  return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${missingPercent(missing)})`;
+  return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${percentOrDecimal(missing)})`;
 }
 
 function lagLine(summary: WorkerLoadSummary): string {

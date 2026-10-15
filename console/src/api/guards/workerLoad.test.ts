@@ -83,6 +83,11 @@ describe("isWorkerLoad", () => {
     };
     expect(isWorkerLoad(damaged)).toBe(false);
   });
+
+  test("rejects a worker load that lost the readable running count", () => {
+    const { running_readable_samples: _lost, ...older } = LOAD;
+    expect(isWorkerLoad(older)).toBe(false);
+  });
 });
 
 describe("isSystemStatus with worker_load", () => {
@@ -101,10 +106,5 @@ describe("isSystemStatus with worker_load", () => {
   test("keeps the status when the worker load has a different shape", () => {
     const damaged = { ...STATUS, worker_load: { ...LOAD, sample_count: "x" } };
     expect(isSystemStatus(damaged)).toBe(true);
-  });
-
-  test("rejects a worker load that lost the readable running count", () => {
-    const { running_readable_samples: _lost, ...older } = LOAD;
-    expect(isWorkerLoad(older)).toBe(false);
   });
 });
