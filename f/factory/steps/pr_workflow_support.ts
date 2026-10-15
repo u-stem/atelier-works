@@ -4078,7 +4078,7 @@ export const REASON_RULES: readonly ReasonRule[] = [
     describe: () =>
       "factory_config(owners / repo_allowlist)で許可されていないリポジトリです",
     nextAction: () =>
-      `factory_configのowners / repo_allowlistを見直してから、${RETRY_WORK_ITEM_ACTION}`,
+      "factory_configのowners / repo_allowlistを見直してください",
     ciNextAction: () => REPO_NOT_ALLOWED_CI_NEXT_ACTION,
   },
   // `lib/repo_owner_gate.ts`の`verifyRepoOwnerId`。各準備のステップが、リポジトリを取得する前に止める。

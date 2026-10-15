@@ -158,7 +158,7 @@ describe("nextActionFor a CI round", () => {
     );
   });
 
-  test("tells a repository outside the allow list to be fixed by a push in a CI round", () => {
+  test("tells a repository outside the allow list to be fixed, then restarted by itself or by a push after 24 hours, in a CI round", () => {
     expect(
       nextActionForPrFix(
         "repository is not allowed by factory_config (owners / repo_allowlist)",
@@ -167,6 +167,32 @@ describe("nextActionFor a CI round", () => {
     ).toBe(
       "factory_configのowners / repo_allowlistを見直してください。直すと、Factoryが次の巡回で自動で起動し直します。最初に失敗を見てから24時間たった行は閉じるので、そのときはPRにpushしてください",
     );
+  });
+
+  test("keeps the main wording for a repository outside the allow list in a normal round", () => {
+    expect(
+      nextActionForPrFix(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+        false,
+      ),
+    ).toBe("factory_configのowners / repo_allowlistを見直してください");
+  });
+
+  test("keeps the main wording for a repository outside the allow list without a flow", () => {
+    expect(
+      nextActionFor(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+      ),
+    ).toBe("factory_configのowners / repo_allowlistを見直してください");
+  });
+
+  test("keeps the main wording for a repository outside the allow list in the implement flow", () => {
+    expect(
+      nextActionFor(
+        "repository is not allowed by factory_config (owners / repo_allowlist)",
+        "implement",
+      ),
+    ).toBe("factory_configのowners / repo_allowlistを見直してください");
   });
 
   test("does not give the action of a hold reason that Claude repeats", () => {

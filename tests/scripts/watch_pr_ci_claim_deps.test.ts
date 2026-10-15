@@ -52,11 +52,14 @@ describe("buildClaimDeps", () => {
     );
   });
 
-  test("passes a misfit for time settings that do not fit", () => {
+  test("passes the verify step misfit that the number of check commands causes", () => {
     const config = parseFactoryConfig({
       ...RAW_CONFIG,
-      claude_timeout_sec: 3000,
+      claude_timeout_sec: 2000,
+      allowed_check_commands: ["a", "b", "c", "d"],
     });
-    expect(buildClaimDeps(config, CLIENT)?.configMisfit).not.toBeNull();
+    expect(buildClaimDeps(config, CLIENT)?.configMisfit).toMatch(
+      /^ci round: time settings do not fit .*the verify step needs/,
+    );
   });
 });
