@@ -1,14 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-  CHECK_IMAGE_STALE_REASON,
-  CHECK_RUNTIME_UNSAFE_REASON,
-} from "../../f/factory/lib/check_sandbox.ts";
 import { INFO_NOTICE_KINDS } from "../../f/factory/lib/console_support.ts";
 import {
   acquireImplementLease,
   addNoticeUnlessUnresolved,
   bumpWatermarks,
-  CI_ENVIRONMENT_STOP_NOTE_PREFIXES,
   claimIssueCreation,
   claimPrCiCheckForFix,
   countImplementFailedRounds,
@@ -6793,30 +6788,6 @@ describe("countPrCiFixRounds", () => {
     expect(calls[0]?.text).toContain(
       "AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)",
     );
-  });
-
-  test("does not count a work item that stopped on the worker environment", async () => {
-    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
-    await countPrCiFixRounds("acme", "widgets", 12, sql);
-    expect(calls[0]?.text).toMatch(
-      /wi\.status = 'blocked' AND EXISTS[\s\S]*starts_with\(e\.note,\s+\?\s+\)/,
-    );
-  });
-
-  test("matches the image reason of the sandbox by its prefix", () => {
-    expect(
-      CHECK_IMAGE_STALE_REASON.startsWith(
-        CI_ENVIRONMENT_STOP_NOTE_PREFIXES.image,
-      ),
-    ).toBe(true);
-  });
-
-  test("matches the runtime reason of the sandbox by its prefix", () => {
-    expect(
-      CHECK_RUNTIME_UNSAFE_REASON.startsWith(
-        CI_ENVIRONMENT_STOP_NOTE_PREFIXES.runtime,
-      ),
-    ).toBe(true);
   });
 
   test("lowercases the owner and repo", async () => {

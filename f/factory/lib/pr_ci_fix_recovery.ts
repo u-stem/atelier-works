@@ -2,10 +2,7 @@
 // 作業項目の状態と、止めた理由の注記から、行を`failed`に戻すか、`superseded`にするか、そのままにするかを決める。
 // I/Oは持たない。読み取りと更新は`pr_ci_watch.ts`が行う。
 
-import {
-  AUTO_RETRY_REASON_PREFIXES,
-  CHECK_RUNTIME_UNSAFE_PREFIX,
-} from "./auto_retry_reasons.ts";
+import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
 import { CI_ROUND_DETAILS, ciRoundReason } from "./ci_fix_round.ts";
 import { CI_ROUND_REHASH_STALE_REASON } from "./ci_metadata_rehash.ts";
 import type { PrCiFixHoldReason } from "./pr_ci_support.ts";
@@ -17,13 +14,6 @@ import { TERMINAL_WORK_ITEM_STATUSES, type WorkItemStatus } from "./types.ts";
  * 回数の上限を使い切る。CIの回は自動の再開の対象外なので、待つ間に作業項目が再開されることはない。
  */
 export const STALE_IMAGE_WAIT_MS = 24 * 60 * 60_000;
-
-/**
- * 稼働中のworkerが検査の前提を満たさない理由で止まった作業項目の行を戻すまで待つ時間。
- * 誰でも書き込めるパスの列挙に失敗した一時的な場合があり、数時間も待つと直せる失敗を放置するので、
- * イメージの作り直し(`STALE_IMAGE_WAIT_MS`)より短くする。待つ間は、止まるたびの起動と通知を重ねない。
- */
-export const RUNTIME_UNSAFE_WAIT_MS = 60 * 60_000;
 
 /** 直す作業項目の状態のうち、行の行き先を決めるのに要る部分。 */
 export type FixItemState = {
@@ -82,21 +72,6 @@ export function holdReasonForStoppedItem(
   return null;
 }
 
-/**
- * workerの環境の理由で止まった作業項目の行を戻すまで待つ時間。環境の理由でなければ`null`を返す。
- * 保留の理由には写さない。待った後は保留なしで戻し、環境が直っていれば、起動し直して直す。
- */
-function environmentWaitMs(note: string | null): number | null {
-  if (note === null) return null;
-  if (AUTO_RETRY_REASON_PREFIXES.some((prefix) => note.startsWith(prefix))) {
-    return STALE_IMAGE_WAIT_MS;
-  }
-  if (note.startsWith(CHECK_RUNTIME_UNSAFE_PREFIX)) {
-    return RUNTIME_UNSAFE_WAIT_MS;
-  }
-  return null;
-}
-
 export type FixingRecovery =
   /** 何もしない。作業項目が動いているか、待つ時間が残っている。 */
   | { readonly kind: "keep" }
@@ -121,9 +96,8 @@ function isTerminal(status: WorkItemStatus): boolean {
  *   `pr_fix`が`cancelled`になるのはPRが閉じたときだけで、設定から外れたリポジトリを除き、閉じたPRは戻す前のheadの読み取りが拾うためである。
  * - `blocked`は、理由を保留の理由に写せればその理由で保留する。写せなければ、保留なしで戻す。
  *   起動し直す回数は、回数の上限(`pr_ci_fix_max_rounds`)が止める。
- *   ただし、workerの環境の理由で止まった作業項目は、待つ間は戻さず、過ぎたら保留なしで戻す。
- *   イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)は、人がイメージを作り直す猶予として`STALE_IMAGE_WAIT_MS`、
- *   稼働中のworkerが前提を満たさない理由は、一時的な失敗の再試行を兼ねて`RUNTIME_UNSAFE_WAIT_MS`である。
+ *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった作業項目は、
+ *   人がイメージを作り直す猶予として`STALE_IMAGE_WAIT_MS`の間は戻さず、過ぎたら保留なしで戻す。
  *   CIの回は自動の再開の対象外で、この待ちの間も再開されない。
  * - `needs_human`は、理由を保留の理由に写す。写せなければ`fix_stopped`にする。
  */
@@ -143,9 +117,12 @@ export function decideFixingRecovery(
     };
   }
   if (item.status === "blocked") {
-    const waitMs = environmentWaitMs(item.note);
-    if (waitMs !== null) {
-      return now.getTime() - item.updatedAt.getTime() < waitMs
+    const note = item.note;
+    if (
+      note !== null &&
+      AUTO_RETRY_REASON_PREFIXES.some((prefix) => note.startsWith(prefix))
+    ) {
+      return now.getTime() - item.updatedAt.getTime() < STALE_IMAGE_WAIT_MS
         ? { kind: "keep" }
         : { kind: "release", hold: null };
     }

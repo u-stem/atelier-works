@@ -4699,15 +4699,6 @@ export async function claimPrCiCheckForFix(
 }
 
 /**
- * workerの環境の理由で止まった回の、状態の注記の先頭。`check_sandbox.ts`の`CHECK_IMAGE_STALE_REASON`と`CHECK_RUNTIME_UNSAFE_REASON`の先頭である。
- * このファイルは`check_sandbox.ts`を読み込まないので、同じ文字列を持ち、テストが一致を確かめる。
- */
-export const CI_ENVIRONMENT_STOP_NOTE_PREFIXES = {
-  image: "worker image is stale",
-  runtime: "worker runtime is unsafe for checks",
-} as const;
-
-/**
  * そのPRで、直近の`passed`の行より後に起動した、CIの失敗を直すラウンドの数を返す。
  * `ci_check_id`を持つ`pr_fix`の作業項目を、作成時刻で数える。`passed`の行が無ければ、すべてを数える。
  * 上限(`pr_ci_fix_max_rounds`)に達したかを見るのに使う。
@@ -4715,8 +4706,6 @@ export const CI_ENVIRONMENT_STOP_NOTE_PREFIXES = {
  * `failed`で`flow_job_id`が空の作業項目は数えない。
  * フローの起動に失敗した回のほか、ジョブIDが記録されないまま回復や失敗の処理が`failed`にした回も含む。
  * Claudeを走らせていない回で、直す機会を使い切らないためである。
- * workerの環境の理由(イメージが古い、稼働中のworkerが検査の前提を満たさない)で`blocked`になった回も数えない。
- * Claudeの修正を直せない失敗ではなく、設定を直して待つ間に上限を使い切らないためである。
  * 数えない回が続く行は、行の`fix_attempts`の上限(`pr_ci_fix_max_rounds`に3を足した数)が止める。
  * ownerとrepoは小文字で照合する。
  */
@@ -4736,16 +4725,6 @@ export async function countPrCiFixRounds(
       AND lower(wi.owner) = ${lowerOwner} AND lower(wi.repo) = ${lowerRepo}
       AND wi.pr_number = ${prNumber}::integer
       AND NOT (wi.status = 'failed' AND wi.flow_job_id IS NULL)
-      AND NOT (
-        wi.status = 'blocked' AND EXISTS (
-          SELECT 1 FROM factory.work_item_events AS e
-          WHERE e.work_item_id = wi.id AND e.to_status = 'blocked'
-            AND (
-              starts_with(e.note, ${CI_ENVIRONMENT_STOP_NOTE_PREFIXES.image})
-              OR starts_with(e.note, ${CI_ENVIRONMENT_STOP_NOTE_PREFIXES.runtime})
-            )
-        )
-      )
       AND wi.created_at > COALESCE(
         (
           SELECT MAX(p.updated_at) FROM factory.pr_ci_checks AS p

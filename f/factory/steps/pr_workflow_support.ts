@@ -3678,14 +3678,6 @@ const CI_WAIT_ACTION =
   "保留が解けるまで待つか、PRにpushしてください。headが変わると、Factoryが新しい失敗として判定し直します";
 
 /**
- * CI回で稼働中のworkerの問題で止まったときの、人が直した後の案内。
- * 失敗の行は、止まってから`RUNTIME_UNSAFE_WAIT_MS`(1時間)後に保留なしで戻る。
- * 列挙の失敗のような一時的な原因でも同じ経路で起動し直すので、pushは要らない。
- */
-const CI_RUNTIME_UNSAFE_FOLLOW_UP =
-  "失敗の行は止まってから1時間後に保留なしで戻り、Factoryが自動で起動し直します。待てないときは、PRにpushしてください";
-
-/**
  * CI回で止めた理由のうち、同じheadでは評価し直さない理由の案内。
  * 作業項目を再実行しても、`factory:fix`を付け直しても、失敗の行は動かない。
  * PRにpushしてheadが変わると、`watch_pr_ci`が新しい失敗として判定し直す。
@@ -4622,7 +4614,6 @@ export const REASON_RULES: readonly ReasonRule[] = [
     ...procedureThenRerun(
       "理由に載ったパスをmise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker chmod o-w <パス>で閉じるか、mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_workerでworkerを作り直してから、",
       "(/workspacesと/var/lib/factoryは、ボリュームのマウントポイントで、作り直しでは閉じないので、chmodで閉じてください)",
-      CI_RUNTIME_UNSAFE_FOLLOW_UP,
     ),
   },
   {

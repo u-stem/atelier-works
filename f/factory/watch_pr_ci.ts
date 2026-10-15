@@ -109,7 +109,7 @@ const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
  * 設定で起動が有効で、有効にした時刻があるときだけ組み、そうでなければ`undefined`を返す。
  * スキルのマーカーは、`pr_fix`が読むcloneと同じブランチ(`factory_branch`)のファイルで確かめる。
  */
-function buildClaimDeps(
+export function buildClaimDeps(
   config: FactoryConfig,
   client: GhClient,
 ): PrCiClaimDeps | undefined {

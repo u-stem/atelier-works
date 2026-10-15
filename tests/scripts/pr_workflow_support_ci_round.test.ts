@@ -169,15 +169,6 @@ describe("nextActionFor a CI round", () => {
     );
   });
 
-  test("tells an unsafe worker runtime to be fixed, and that the row returns by itself in a CI round", () => {
-    expect(
-      nextActionForPrFix(
-        "worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: world-writable paths could not be listed",
-        true,
-      ),
-    ).toContain("1時間後に保留なしで戻り、Factoryが自動で起動し直します");
-  });
-
   test("does not give the action of a hold reason that Claude repeats", () => {
     expect(
       nextActionFor(

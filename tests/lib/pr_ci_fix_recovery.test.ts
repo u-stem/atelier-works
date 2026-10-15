@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
-import { CheckRuntimeUnsafeError } from "../../f/factory/lib/check_sandbox.ts";
 import {
   CI_ROUND_DETAILS,
   ciRoundReason,
@@ -10,16 +9,12 @@ import {
   decideFixingRecovery,
   type FixItemState,
   holdReasonForStoppedItem,
-  RUNTIME_UNSAFE_WAIT_MS,
   readFixItemState,
   STALE_IMAGE_WAIT_MS,
 } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import type { WorkItemStatus } from "../../f/factory/lib/types.ts";
 
 const NOW = new Date("2026-10-13T12:00:00Z");
-const RUNTIME_UNSAFE_NOTE = new CheckRuntimeUnsafeError([
-  "world-writable paths could not be listed",
-]).message;
 const STALE_IMAGE_NOTE =
   "worker image is stale: run mise run up: sudo is missing";
 
@@ -127,10 +122,6 @@ describe("holdReasonForStoppedItem", () => {
     expect(
       holdReasonForStoppedItem("pull request has auto-merge enabled"),
     ).toBe("pr_draft_or_auto_merge");
-  });
-
-  test("does not map a worker runtime that is unsafe for checks, whatever the cause", () => {
-    expect(holdReasonForStoppedItem(RUNTIME_UNSAFE_NOTE)).toBeNull();
   });
 
   test("shares the fixed texts with the side that stops the round", () => {
@@ -303,34 +294,6 @@ describe("decideFixingRecovery", () => {
         NOW,
       ),
     ).toEqual({ kind: "release", hold: null });
-  });
-
-  test("keeps a row whose work item stopped on an unsafe runtime within the wait", () => {
-    expect(
-      decideFixingRecovery(
-        item("blocked", {
-          note: RUNTIME_UNSAFE_NOTE,
-          updatedAt: new Date(NOW.getTime() - RUNTIME_UNSAFE_WAIT_MS + 1),
-        }),
-        NOW,
-      ),
-    ).toEqual({ kind: "keep" });
-  });
-
-  test("releases a row without a hold once the unsafe runtime wait has passed", () => {
-    expect(
-      decideFixingRecovery(
-        item("blocked", {
-          note: RUNTIME_UNSAFE_NOTE,
-          updatedAt: new Date(NOW.getTime() - RUNTIME_UNSAFE_WAIT_MS),
-        }),
-        NOW,
-      ),
-    ).toEqual({ kind: "release", hold: null });
-  });
-
-  test("waits for an unsafe runtime for less time than for a stale image", () => {
-    expect(RUNTIME_UNSAFE_WAIT_MS).toBeLessThan(STALE_IMAGE_WAIT_MS);
   });
 
   test("holds a needs_human work item on a stale image as stopped", () => {
