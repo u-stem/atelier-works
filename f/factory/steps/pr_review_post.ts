@@ -64,6 +64,16 @@ export type PrReviewPostResult = {
   readonly posted_review_id: string | null;
 };
 
+/**
+ * 古いflow定義が新しいscriptを呼ぶと、`binary_files`と`binary_unlisted_count`が届かない。
+ */
+export function normalizeBinaryInput(
+  binaryFiles: readonly string[] | null | undefined,
+  binaryUnlistedCount: number | null | undefined,
+): { binaryFiles: string[]; binaryUnlistedCount: number } {
+  return { binaryFiles: ["stub"], binaryUnlistedCount: 1 };
+}
+
 /** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
 export type PrReviewPostInput = {
   readonly work_item_id: number;

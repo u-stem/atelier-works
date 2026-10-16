@@ -17,6 +17,7 @@ import type { ReviewFinding } from "../../f/factory/lib/types.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   findPostedReview,
+  normalizeBinaryInput,
   type PostReviewTarget,
   type PrReviewPostInput,
   type PublishReviewInput,
@@ -395,7 +396,7 @@ describe("renderReviewSummary", () => {
       [finding({ path: "dir/\nb.ts", message: "out of diff" })],
       0,
     );
-    expect(body.split("\n").at(-1)).toBe("- [MUST] dir/ b.ts: out of diff");
+    expect(body.split("\n").at(-1)).toBe("- [MUST] `dir/ b.ts`: out of diff");
   });
 
   test('mode "rereview_open" never includes the final-Approve-is-human disclaimer line', () => {
@@ -444,7 +445,7 @@ describe("renderReviewSummary with binary files", () => {
       "a.png",
       "b.bin",
     ]);
-    expect(body).toContain("- a.png\n- b.bin");
+    expect(body).toContain("- `a.png`\n- `b.bin`");
   });
 
   test("never says LGTM when a first review has binary files", () => {
@@ -539,14 +540,14 @@ describe("renderReviewSummary with binary files", () => {
     const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
       "a<!--.bin",
     ]);
-    expect(body).toContain("- a&lt;!--.bin");
+    expect(body).toContain("- `a&lt;!--.bin`");
   });
 
   test("keeps a multi-line binary path on its bullet line", () => {
     const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
       "dir/\nb.bin",
     ]);
-    expect(body.split("\n").at(-1)).toBe("- dir/ b.bin");
+    expect(body.split("\n").at(-1)).toBe("- `dir/ b.bin`");
   });
 
   test("puts the binary notice before the dropped findings", () => {
@@ -561,6 +562,130 @@ describe("renderReviewSummary with binary files", () => {
     expect(body.slice(0, body.indexOf("行に紐づけられなかった指摘"))).toContain(
       "バイナリ",
     );
+  });
+});
+
+describe("renderReviewSummary with binary paths as code spans", () => {
+  const lastLine = (paths: string[]) =>
+    renderReviewSummary("alice", 0, "first_clean", [], 0, paths)
+      .split("\n")
+      .at(-1);
+
+  test("wraps a path that looks like a mention so it is not rendered as one", () => {
+    expect(lastLine(["@alice/x.png"])).toBe("- `@alice/x.png`");
+  });
+
+  test("wraps a path containing a backtick in a longer fence", () => {
+    expect(lastLine(["a`b.png"])).toBe("- ``a`b.png``");
+  });
+
+  test("wraps a path containing a run of backticks in a fence longer than the run", () => {
+    expect(lastLine(["a``b.png"])).toBe("- ```a``b.png```");
+  });
+
+  test("pads a path that starts with a backtick so the fence is not merged", () => {
+    expect(lastLine(["`a.png"])).toBe("- `` `a.png ``");
+  });
+
+  test("pads a path that ends with a backtick so the fence is not merged", () => {
+    expect(lastLine(["a.png`"])).toBe("- `` a.png` ``");
+  });
+
+  test("keeps a path of exactly 200 characters whole", () => {
+    const path = "a".repeat(200);
+    expect(lastLine([path])).toBe(`- \`${path}\``);
+  });
+
+  test("cuts a path longer than 200 characters and marks the cut", () => {
+    expect(lastLine(["a".repeat(250)])).toBe(`- \`${"a".repeat(200)}…\``);
+  });
+
+  test("cuts a path by characters, not by UTF-16 code units", () => {
+    expect(lastLine(["😀".repeat(201)])).toBe(`- \`${"😀".repeat(200)}…\``);
+  });
+
+  test("wraps the path of an unanchored finding in a code span", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "@alice/b.ts", message: "out of diff" })],
+      0,
+    );
+    expect(body.split("\n").at(-1)).toBe("- [MUST] `@alice/b.ts`: out of diff");
+  });
+
+  test("wraps the path of an unanchored finding that has a backtick in a longer fence", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "b`.ts", message: "out of diff" })],
+      0,
+    );
+    expect(body.split("\n").at(-1)).toBe("- [MUST] ``b`.ts``: out of diff");
+  });
+
+  test("cuts the path of an unanchored finding longer than 200 characters", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "b".repeat(250), message: "out of diff" })],
+      0,
+    );
+    expect(body.split("\n").at(-1)).toBe(
+      `- [MUST] \`${"b".repeat(200)}…\`: out of diff`,
+    );
+  });
+});
+
+describe("normalizeBinaryInput", () => {
+  const plain = renderReviewSummary("alice", 0, "first_clean", [], 0);
+  const render = (input: ReturnType<typeof normalizeBinaryInput>) =>
+    renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      input.binaryFiles,
+      input.binaryUnlistedCount,
+    );
+
+  test("gives the old summary when both values are undefined", () => {
+    expect(render(normalizeBinaryInput(undefined, undefined))).toBe(plain);
+  });
+
+  test("gives the old summary when both values are null", () => {
+    expect(render(normalizeBinaryInput(null, null))).toBe(plain);
+  });
+
+  test("gives the old summary when only the files are null", () => {
+    expect(render(normalizeBinaryInput(null, 0))).toBe(plain);
+  });
+
+  test("gives the old summary when only the count is undefined", () => {
+    expect(render(normalizeBinaryInput([], undefined))).toBe(plain);
+  });
+
+  test("keeps the files and the count when they are given", () => {
+    expect(normalizeBinaryInput(["a.png"], 2)).toEqual({
+      binaryFiles: ["a.png"],
+      binaryUnlistedCount: 2,
+    });
+  });
+});
+
+// `postReview`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
+describe("binary input wiring in the post step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_post.ts", import.meta.url),
+  ).text();
+
+  test("normalizes the binary input once before publishing", async () => {
+    const needle = "normalizeBinaryInput(binary_files, binary_unlisted_count)";
+    expect((await SOURCE).split(needle).length - 1).toBe(1);
   });
 });
 
@@ -1142,15 +1267,15 @@ describe("renderUnresolvedLineSummary", () => {
   });
 
   test("shows the line of a finding that would have been an inline comment", () => {
-    expect(body).toContain("- [MUST] a.ts:10: first problem");
+    expect(body).toContain("- [MUST] `a.ts:10`: first problem");
   });
 
   test("shows the range of a multi-line finding", () => {
-    expect(body).toContain("- [MUST] c.ts:4-8: second problem");
+    expect(body).toContain("- [MUST] `c.ts:4-8`: second problem");
   });
 
   test("keeps the form of a finding that had no line", () => {
-    expect(body).toContain("- [MUST] b.ts: third problem");
+    expect(body).toContain("- [MUST] `b.ts`: third problem");
   });
 });
 

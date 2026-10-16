@@ -4329,6 +4329,21 @@ describe("getPrDiff", () => {
     expect(diff.binaryFiles).toEqual(["x and y.bin"]);
   });
 
+  test("prefers the split where both sides name the same path", async () => {
+    const body =
+      "Binary files a/x and b/evil.png and b/x and b/evil.png differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x and b/evil.png"]);
+  });
+
+  test("falls back to the last and b/ when a rename has different sides", async () => {
+    const body = "Binary files a/old.png and b/new and b/x.png differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x.png"]);
+  });
+
   test("keeps the whole added path when it contains and", async () => {
     const body = "Binary files /dev/null and b/x and y.bin differ";
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
