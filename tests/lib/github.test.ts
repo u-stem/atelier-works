@@ -5088,7 +5088,11 @@ function plainReviewThreadNode(id: string): unknown {
   });
 }
 
-function requestBodyOf(call: { options?: { stdin?: string } } | undefined) {
+function requestBodyOf(
+  call:
+    | { readonly options?: { readonly stdin?: string } | undefined }
+    | undefined,
+) {
   const parsed: unknown = JSON.parse(call?.options?.stdin ?? "");
   if (!isRecord(parsed)) {
     throw new Error("expected a JSON request body");

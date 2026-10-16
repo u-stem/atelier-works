@@ -3942,11 +3942,26 @@ export type ReviewThread = {
   readonly allCommentIds: number[];
 };
 
+type ReviewThreadsPageInfo = {
+  readonly hasNextPage: boolean;
+  readonly endCursor: string | null;
+};
+
+function isReviewThreadsPageInfo(
+  value: unknown,
+): value is ReviewThreadsPageInfo {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as { hasNextPage: unknown; endCursor: unknown };
+  if (typeof record.hasNextPage !== "boolean") return false;
+  return record.endCursor === null || typeof record.endCursor === "string";
+}
+
 type ReviewThreadsGraphqlPayload = {
   readonly repository: {
     readonly pullRequest: {
       readonly reviewThreads: {
         readonly nodes: readonly unknown[];
+        readonly pageInfo: ReviewThreadsPageInfo;
       };
     };
   };
@@ -3965,7 +3980,9 @@ function isReviewThreadsGraphqlPayload(
   if (typeof reviewThreads !== "object" || reviewThreads === null) {
     return false;
   }
-  return Array.isArray((reviewThreads as { nodes: unknown }).nodes);
+  const connection = reviewThreads as { nodes: unknown; pageInfo: unknown };
+  if (!Array.isArray(connection.nodes)) return false;
+  return isReviewThreadsPageInfo(connection.pageInfo);
 }
 
 /**
@@ -4058,9 +4075,53 @@ function isReviewThreadDatabaseIdNodePayload(
   return record.databaseId === null || typeof record.databaseId === "number";
 }
 
+/** `listReviewThreads`が辿るページ数の上限(1ページ100件なので1000件まで)。 */
+export const REVIEW_THREADS_MAX_PAGES = 10;
+
 /**
- * PRのレビュースレッド(先頭の100件。この節の冒頭コメントを参照)を、
- * 読み取りのGraphQLクエリで取得する。スレッドごとに次のものを返す。
+ * 1ページ分のノードを、`ReviewThread`に変換する。
+ * 形が合わないノードは、黙って捨てずに例外を投げる。
+ * 捨てると、そのスレッドの未解決の`[MUST]`を数えずに0件と判断してしまうため。
+ */
+function parseReviewThreadNode(
+  rawNode: unknown,
+  context: string,
+): ReviewThread {
+  if (!isReviewThreadNodePayload(rawNode)) {
+    throw new Error(`${context}: malformed review thread node`);
+  }
+  const firstComment = rawNode.firstComments.nodes[0];
+  const lastComment = rawNode.lastComments.nodes[0];
+  if (
+    !isReviewThreadCommentPayload(firstComment) ||
+    !isReviewThreadCommentPayload(lastComment)
+  ) {
+    throw new Error(
+      `${context}: malformed review thread ${rawNode.id}: no readable comment`,
+    );
+  }
+  const allCommentIds = rawNode.allComments.nodes
+    .filter(isReviewThreadDatabaseIdNodePayload)
+    .map((node) => node.databaseId)
+    .filter((id): id is number => id !== null);
+  return {
+    id: rawNode.id,
+    isResolved: rawNode.isResolved,
+    path: rawNode.path,
+    line: rawNode.line,
+    firstCommentAuthorLogin: firstComment.author?.login ?? "",
+    firstCommentBody: firstComment.body,
+    lastCommentAuthorLogin: lastComment.author?.login ?? "",
+    lastCommentBody: lastComment.body,
+    firstCommentDatabaseId: firstComment.databaseId ?? null,
+    allCommentIds,
+  };
+}
+
+/**
+ * PRのレビュースレッドを、読み取りのGraphQLクエリで全件取得する。
+ * 1ページ100件で、`pageInfo`の`hasNextPage`が偽になるまで辿る。
+ * スレッドごとに次のものを返す。
  * - 解決済みかどうか
  * - 差分上の位置(`path` / `line`)。`pr_workflow_support.ts`の
  *   `openFindingsForPrompt`が使う。
@@ -4076,12 +4137,13 @@ function isReviewThreadDatabaseIdNodePayload(
  *   普段は`firstCommentDatabaseId`を、スレッドの後ろのコメントへの返信には
  *   `allCommentIds`を使う。
  *
- * 形が合わないスレッド(GitHubでは起こらないはずの、コメントが1つも無い
- * スレッドを含む)は、例外を投げずに飛ばす。
+ * 全件を読めたときだけ一覧を返し、一部しか読めないときは例外を投げる。
+ * 一部だけの一覧を返すと、呼び出し側が、読めなかった分の未解決の`[MUST]`を
+ * 数えずに0件と判断してしまうため。例外にするのは次のときである。
+ * - ページ数が`REVIEW_THREADS_MAX_PAGES`を超えても続きがある
+ * - 続きがあるのに次のページを指す`endCursor`が無い
+ * - 形が合わないスレッド(コメントが1つも無いものを含む)がある
  */
-/** `listReviewThreads`が辿るページ数の上限(1ページ100件)。 */
-export const REVIEW_THREADS_MAX_PAGES = 10;
-
 export async function listReviewThreads(
   client: GhClient,
   owner: string,
@@ -4090,10 +4152,11 @@ export async function listReviewThreads(
 ): Promise<ReviewThread[]> {
   validateOwnerRepo(owner, repo);
   const query = `
-    query($owner: String!, $repo: String!, $number: Int!) {
+    query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
       repository(owner: $owner, name: $repo) {
         pullRequest(number: $number) {
-          reviewThreads(first: 100) {
+          reviewThreads(first: 100, after: $cursor) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id
               isResolved
@@ -4124,41 +4187,32 @@ export async function listReviewThreads(
     }
   `;
   const context = `GraphQL reviewThreads ${owner}/${repo}#${number}`;
-  const data = await callGhGraphql(
-    client,
-    query,
-    { owner, repo, number },
-    context,
-    true,
-  );
-  if (!isReviewThreadsGraphqlPayload(data)) {
-    throw new Error(`${context}: unexpected response shape`);
-  }
   const threads: ReviewThread[] = [];
-  for (const rawNode of data.repository.pullRequest.reviewThreads.nodes) {
-    if (!isReviewThreadNodePayload(rawNode)) continue;
-    const firstComment = rawNode.firstComments.nodes[0];
-    const lastComment = rawNode.lastComments.nodes[0];
-    if (!isReviewThreadCommentPayload(firstComment)) continue;
-    if (!isReviewThreadCommentPayload(lastComment)) continue;
-    const allCommentIds = rawNode.allComments.nodes
-      .filter(isReviewThreadDatabaseIdNodePayload)
-      .map((node) => node.databaseId)
-      .filter((id): id is number => id !== null);
-    threads.push({
-      id: rawNode.id,
-      isResolved: rawNode.isResolved,
-      path: rawNode.path,
-      line: rawNode.line,
-      firstCommentAuthorLogin: firstComment.author?.login ?? "",
-      firstCommentBody: firstComment.body,
-      lastCommentAuthorLogin: lastComment.author?.login ?? "",
-      lastCommentBody: lastComment.body,
-      firstCommentDatabaseId: firstComment.databaseId ?? null,
-      allCommentIds,
-    });
+  let cursor: string | null = null;
+  for (let page = 1; page <= REVIEW_THREADS_MAX_PAGES; page++) {
+    const variables: Record<string, unknown> =
+      cursor === null
+        ? { owner, repo, number }
+        : { owner, repo, number, cursor };
+    const data = await callGhGraphql(client, query, variables, context, true);
+    if (!isReviewThreadsGraphqlPayload(data)) {
+      throw new Error(`${context}: unexpected response shape`);
+    }
+    const connection = data.repository.pullRequest.reviewThreads;
+    for (const rawNode of connection.nodes) {
+      threads.push(parseReviewThreadNode(rawNode, context));
+    }
+    if (!connection.pageInfo.hasNextPage) return threads;
+    if (connection.pageInfo.endCursor === null) {
+      throw new Error(
+        `${context}: hasNextPage is true but endCursor is missing`,
+      );
+    }
+    cursor = connection.pageInfo.endCursor;
   }
-  return threads;
+  throw new Error(
+    `${context}: more than ${REVIEW_THREADS_MAX_PAGES} pages of review threads`,
+  );
 }
 
 /**
