@@ -4136,9 +4136,43 @@ export type NewPrCiCheck = {
   readonly run_created_at: Date | null;
 };
 
-export const PR_CI_CHECK_COLUMNS: readonly string[] = [];
+/**
+ * `factory.pr_ci_checks`の列の正本。行の変換(`toPrCiCheck`)の入力の型と、行を読む文のSELECT句の照合に使う。
+ * 並びは、行を読む文のSELECT句の並びと同じにする。
+ * SELECT句の列は、テンプレートに直接書く。テンプレートに埋め込んだ値は、識別子にならずパラメータとして束縛されるためである。
+ * 列の追加や改名で、定義、行の型、変換、SELECT句の1つでも食い違うと、型検査か単体テストが失敗する。
+ * 列が行の型に無いときは、`satisfies`が型検査で止める。行の型の列が変換の入力に無いときは、`toPrCiCheck`が型検査で止める。
+ * SELECT句との一致は、`tests/lib/db.test.ts`が行を読む関数のすべてで確かめる。
+ */
+export const PR_CI_CHECK_COLUMNS = [
+  "id",
+  "owner",
+  "repo",
+  "pr_number",
+  "head_sha",
+  "state",
+  "run_created_at",
+  "summary",
+  "notified_reason",
+  "work_item_id",
+  "fix_work_item_id",
+  "fix_attempts",
+  "fix_hold_reason",
+  "checked_at",
+  "first_seen_at",
+  "created_at",
+  "updated_at",
+] as const satisfies readonly (keyof PrCiCheck)[];
 
-export type PrCiCheckSqlRow = Record<string, unknown>;
+export type PrCiCheckColumn = (typeof PR_CI_CHECK_COLUMNS)[number];
+
+/**
+ * `toPrCiCheck`が読める行。定義の列だけを持つ。
+ * 列は、DBが返すとは限らないので、値は`unknown`で、読む側が解析する。
+ */
+export type PrCiCheckSqlRow = {
+  readonly [K in PrCiCheckColumn]?: unknown;
+};
 
 /** `fix_hold_reason`列の値。NULLは保留なし。空文字はDBの制約が拒むので、来たら不正な行として扱う。 */
 function parseFixHoldReason(value: unknown): string | null {
@@ -4149,7 +4183,7 @@ function parseFixHoldReason(value: unknown): string | null {
   return reason;
 }
 
-function toPrCiCheck(row: SqlRow): PrCiCheck {
+function toPrCiCheck(row: PrCiCheckSqlRow): PrCiCheck {
   return {
     id: parseId(row.id, "id"),
     owner: parseRequiredString(row.owner, "owner"),

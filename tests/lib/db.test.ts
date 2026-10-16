@@ -7342,11 +7342,14 @@ const PR_CI_WRITERS: readonly PrCiStatement[] = [
   ["releaseConfigMisfitHolds", (sql) => releaseConfigMisfitHolds(sql)],
 ];
 
+/** `includes`に文字列を渡せるよう、列の名前の型を広げる。 */
+const DEFINED_COLUMNS: readonly string[] = PR_CI_CHECK_COLUMNS;
+
 describe("pr_ci_checks column definition", () => {
   test("names exactly the fields of a parsed row", async () => {
     const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
     const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
-    expect([...PR_CI_CHECK_COLUMNS].sort()).toEqual(
+    expect([...DEFINED_COLUMNS].sort()).toEqual(
       Object.keys(rows[0] ?? {}).sort(),
     );
   });
@@ -7367,7 +7370,7 @@ describe("pr_ci_checks column definition", () => {
     await recordPrCiCheck(NEW_PR_CI, sql);
     expect(
       insertedColumns(calls[0]?.text ?? "").filter(
-        (column) => !PR_CI_CHECK_COLUMNS.includes(column),
+        (column) => !DEFINED_COLUMNS.includes(column),
       ),
     ).toEqual([]);
   });
@@ -7380,7 +7383,7 @@ describe("pr_ci_checks column definition", () => {
       const text = calls[0]?.text ?? "";
       expect(
         [...insertedColumns(text), ...assignedColumns(text)].filter(
-          (column) => !PR_CI_CHECK_COLUMNS.includes(column),
+          (column) => !DEFINED_COLUMNS.includes(column),
         ),
       ).toEqual([]);
     },
