@@ -10,12 +10,27 @@ import {
 import { evaluateCiRoundPrepareGuard } from "../lib/ci_fix_round.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
+  CONFLICT_ROUND_DETAILS,
+  conflictRoundReason,
+  evaluateConflictRoundPrepareGuard,
+  isConflictRound,
+  planConflictPrepare,
+  roundStopReason,
+} from "../lib/conflict_fix_round.ts";
+import {
   addNoticeUnlessUnresolved,
   getPrCiCheckById,
+  getPrConflictCheckById,
   getWorkItem,
 } from "../lib/db.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
-import { type GhClient, getPr } from "../lib/github.ts";
+import {
+  type GhClient,
+  getDefaultBranch,
+  getPr,
+  getViewer,
+  gitIdentityForViewer,
+} from "../lib/github.ts";
 import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { parseImplementBranchWorkItemId } from "../lib/implement_support.ts";
 import { logger } from "../lib/log.ts";
@@ -31,15 +46,20 @@ import {
 } from "../lib/repo_owner_gate.ts";
 import { assertGitHubName } from "../lib/types.ts";
 import {
+  CommitBlockedError,
+  type ConflictBlobs,
   createGtrWorktree,
   ensureRepo,
   type GtrWorktree,
+  listBothSidesChangedPaths,
+  mergeBaseIntoWorktree,
   readAndVerifyWorktreeGitPointer,
   removeIgnoredFiles,
   runCommand,
 } from "../lib/workspace.ts";
 import {
   ciRoundTimeoutMisfit,
+  conflictRoundTimeoutMisfit,
   earlyExitBase,
   evaluateBranchImplementingGuard,
   evaluateFixRoundGuard,
@@ -77,6 +97,36 @@ export type PrFixPrepareResult = {
   readonly fix_round: number;
   /** CIの失敗を直す回なら、直す`pr_ci_checks`の行のID。指摘を直す回はnull。 */
   readonly ci_check_id: number | null;
+  /** 競合を直す回なら、直す`pr_conflict_checks`の行のID。それ以外はnull。 */
+  readonly conflict_check_id: number | null;
+  /** 競合回の基準コミット(ローカルだけにある、baseをmergeしたコミット)のsha。検証と完了のステップが、HEADの照合とpushの親の照合に使う。 */
+  readonly baseline_sha: string | null;
+  /** 競合回で、mergeしたbaseの先頭のsha。mergeコミットの第2親になる。 */
+  readonly base_sha: string | null;
+  /** 基準コミットのツリーのsha。 */
+  readonly auto_tree_sha: string | null;
+  /** 競合ファイルのパス。空なら、競合の無いmergeである。 */
+  readonly conflicted_paths: string[] | null;
+  /** 競合ファイルごとの、3つの版のblobのsha。基準コミットの後は`ls-files -u`から取れないので、ここで運ぶ。 */
+  readonly conflict_blobs: ConflictBlobs[] | null;
+};
+
+/** 競合回の準備が記録する値。競合回でなければ、すべてnullである。 */
+type ConflictPrepared = Pick<
+  PrFixPrepareResult,
+  | "baseline_sha"
+  | "base_sha"
+  | "auto_tree_sha"
+  | "conflicted_paths"
+  | "conflict_blobs"
+>;
+
+const NO_CONFLICT: ConflictPrepared = {
+  baseline_sha: null,
+  base_sha: null,
+  auto_tree_sha: null,
+  conflicted_paths: null,
+  conflict_blobs: null,
 };
 
 /**
@@ -104,6 +154,16 @@ export type PrFixPrepareResult = {
  *   `skip`にすると、完了ステップが何もせず、作業項目が`fixing`のまま残るためである。
  * - 修正ステップの時間が、gitleaksの追加の実行を含めて収まることを確かめる。
  * - worktreeを用意した後、無視されたファイルを消す。Claudeが書いた無視されたファイルを、後の検査で見分けるためである。
+ *
+ * マージの競合を直す回(`conflict_check_id`が非NULL)は、次を変える。
+ * - 修正ラウンドの上限(`max_fix_rounds`)を確かめない。その回は`fix_round`を前の値のまま写すためである。
+ * - 修正ステップの時間が、gitleaksの追加の実行を含めて収まることを確かめる。
+ * - 競合の行が、いまのPRのheadについて、この作業項目で競合のままであることと、PRのbaseが既定のブランチであることを確かめる。
+ *   行の食い違いは`guard_blocked`、baseが既定のブランチでないときは`conflict_blocked`を返す。
+ * - worktreeを用意した後、baseをmergeして基準コミットを作る(`mergeBaseIntoWorktree`)。結果は次のとおり。
+ *   mergeできて検査に通れば、基準コミットなどを返して`proceed`にする。baseがすでにPRにあれば`conflict_up_to_date`、
+ *   直せない競合と、保護パスやworkflowの変更は`conflict_blocked`、HEADが動いていれば`guard_blocked`を返す。
+ *   後ろの4つは、Claudeを起動しない。
  */
 export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   const workItem = await getWorkItem(work_item_id);
@@ -164,10 +224,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   }
 
   const ciRound = workItem.ci_check_id !== null;
+  const conflictRound = isConflictRound(workItem);
   const roundGuard = evaluateFixRoundGuard(
     workItem.fix_round,
     config.max_fix_rounds,
-    ciRound,
+    ciRound || conflictRound,
   );
   if (!roundGuard.ok) {
     return {
@@ -181,7 +242,9 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   // Windmillがアプリ側のtimeoutより先にステップを打ち切るため、worktreeに触れる前に止める。
   const timeoutMisfit = ciRound
     ? ciRoundTimeoutMisfit(config)
-    : prFixTimeoutMisfit(config);
+    : conflictRound
+      ? conflictRoundTimeoutMisfit(config)
+      : prFixTimeoutMisfit(config);
   if (timeoutMisfit !== null) {
     return {
       outcome: "guard_blocked",
@@ -223,7 +286,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   if (!parentGuard.ok) {
     return {
       outcome: "guard_blocked",
-      reason: parentGuard.reason,
+      reason: roundStopReason(
+        conflictRound,
+        CONFLICT_ROUND_DETAILS.implementRunning,
+        parentGuard.reason,
+      ),
       ...earlyExitBase(workItem),
     };
   }
@@ -248,6 +315,27 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
       };
     }
   }
+  if (workItem.conflict_check_id !== null) {
+    const conflictGuard = evaluateConflictRoundPrepareGuard({
+      workItemId: work_item_id,
+      workItemEpisode: workItem.conflict_episode,
+      prHeadSha: pr.headSha,
+      baseRef: pr.baseRef,
+      defaultBranch: await getDefaultBranch(
+        client,
+        workItem.owner,
+        workItem.repo,
+      ),
+      row: await getPrConflictCheckById(workItem.conflict_check_id),
+    });
+    if (!conflictGuard.ok) {
+      return {
+        outcome: conflictGuard.outcome,
+        reason: conflictGuard.reason,
+        ...earlyExitBase(workItem),
+      };
+    }
+  }
   // 親の行が無くても(parent_work_item_idがnull)、ブランチ名から実装の作業項目を引き、実装フローの実行中ならworktreeに触れない。
   const branchItemId = parseImplementBranchWorkItemId(pr.headRef);
   const branchItem =
@@ -263,7 +351,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   if (!branchGuard.ok) {
     return {
       outcome: "guard_blocked",
-      reason: branchGuard.reason,
+      reason: roundStopReason(
+        conflictRound,
+        CONFLICT_ROUND_DETAILS.implementRunning,
+        branchGuard.reason,
+      ),
       ...earlyExitBase(workItem),
     };
   }
@@ -338,9 +430,20 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   } catch (err) {
     // pr_fixのprepareにはneeds_humanの出口が無い。blockedはretry_work_itemで再実行できる。
     if (err instanceof WorktreeBusyError) {
+      // 競合回の注記は固定文なので、保持者の情報はログに残す。
+      if (conflictRound) {
+        logger("pr_fix_prepare").warn("the worktree is in use", {
+          work_item_id,
+          holder: err.message,
+        });
+      }
       return {
         outcome: "guard_blocked",
-        reason: err.message,
+        reason: roundStopReason(
+          conflictRound,
+          CONFLICT_ROUND_DETAILS.worktreeBusy,
+          err.message,
+        ),
         ...earlyExitBase(workItem),
       };
     }
@@ -369,6 +472,72 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     await removeIgnoredFiles({ run: runCommand, worktreeDir: worktree.path });
   }
 
+  let conflict: ConflictPrepared = NO_CONFLICT;
+  if (conflictRound) {
+    // baseをmergeして基準コミットを作る。無視されたファイルの片付けは`mergeBaseIntoWorktree`が行う。
+    let merge: Awaited<ReturnType<typeof mergeBaseIntoWorktree>>;
+    try {
+      merge = await mergeBaseIntoWorktree({
+        run: runCommand,
+        repoDir,
+        dir: worktree.path,
+        branch: pr.headRef,
+        worktreeGitPointer,
+        ghToken,
+        prHeadSha: pr.headSha,
+        baseBranch: pr.baseRef,
+        author: gitIdentityForViewer(await getViewer(client)),
+      });
+    } catch (err) {
+      // worktreeの状態が前提と違う(ローカルの変更、HEADの食い違いなど)。mergeには進めない。
+      if (err instanceof CommitBlockedError) {
+        return {
+          outcome: "guard_blocked",
+          reason: err.message,
+          ...earlyExitBase(workItem),
+        };
+      }
+      throw err;
+    }
+    const plan = await planConflictPrepare(merge, (autoTreeSha, baseSha) =>
+      listBothSidesChangedPaths({
+        run: runCommand,
+        worktreeDir: worktree.path,
+        prHeadSha: pr.headSha,
+        baseSha,
+        treeSha: autoTreeSha,
+      }),
+    );
+    if (plan.kind === "up_to_date") {
+      return {
+        outcome: "conflict_up_to_date",
+        reason: null,
+        ...earlyExitBase(workItem),
+      };
+    }
+    if (plan.kind === "blocked") {
+      return {
+        outcome: "conflict_blocked",
+        reason: plan.reason,
+        ...earlyExitBase(workItem),
+      };
+    }
+    if (plan.kind === "head_changed") {
+      return {
+        outcome: "guard_blocked",
+        reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved),
+        ...earlyExitBase(workItem),
+      };
+    }
+    conflict = {
+      baseline_sha: plan.autoSha,
+      base_sha: plan.baseSha,
+      auto_tree_sha: plan.autoTreeSha,
+      conflicted_paths: plan.conflictedPaths,
+      conflict_blobs: plan.conflictBlobs,
+    };
+  }
+
   return {
     outcome: "proceed",
     reason: null,
@@ -385,5 +554,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,
     ci_check_id: workItem.ci_check_id,
+    conflict_check_id: workItem.conflict_check_id,
+    ...conflict,
   };
 }

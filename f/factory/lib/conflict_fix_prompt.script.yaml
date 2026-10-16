@@ -1,0 +1,10 @@
+summary: '[LIB] 競合回のプロンプト'
+description: 内部ライブラリです。直接実行するものではありません。競合ファイルのパスをnonce付きの囲みに入れた、競合回のpr_fixのプロンプトと出力のJSON
+  schemaを作ります。
+lock: '!inline f/factory/lib/conflict_fix_prompt.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

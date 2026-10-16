@@ -1075,6 +1075,25 @@ export class CheckRuntimeUnsafeError extends CheckEnvironmentError {
   }
 }
 
+/** 誰でも書き込めるパスの列挙に失敗したときの、問題の先頭。パスが見つかったのではなく、確かめられなかったことを示す。 */
+const UNLISTED_PATHS_PROBLEM_PREFIX =
+  "world-writable paths could not be listed: ";
+
+/**
+ * 稼働中のworkerの問題が、パスの列挙の失敗だけで、実在するパスが1件も無いかを返す。
+ * 列挙の失敗は一時的でありうるので、呼び出し側は人が解決する通知を残さず、次の確認に任せられる。
+ * イメージの問題や、見つかったパスがあれば`false`を返す。
+ */
+export function hasOnlyUnlistedPaths(error: CheckEnvironmentError): boolean {
+  return (
+    error instanceof CheckRuntimeUnsafeError &&
+    error.problems.length > 0 &&
+    error.problems.every((problem) =>
+      problem.startsWith(UNLISTED_PATHS_PROBLEM_PREFIX),
+    )
+  );
+}
+
 /**
  * 止める理由が`CheckEnvironmentError`のメッセージかを返す。
  * 理由の文字列だけを受け取る終端の処理が、ラウンドを記録せずに止めるかを決めるために使う。
@@ -1371,7 +1390,7 @@ export async function checkImageProblems(
     }
   } catch (error) {
     runtime.push(
-      `world-writable paths could not be listed: ${escapeReasonSeparator(errorMessage(error))}`,
+      `${UNLISTED_PATHS_PROBLEM_PREFIX}${escapeReasonSeparator(errorMessage(error))}`,
     );
   }
   return { image, runtime };
