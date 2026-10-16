@@ -590,7 +590,7 @@ describe("infra/docker-compose.yml windmill_worker slots recorded by sample_work
 });
 
 describe("infra/docker-compose.yml windmill_server session validity", () => {
-  test("the browser session lasts 30 days without activity", () => {
+  test("the login session validity is 30 days", () => {
     expect(
       envEntries(service("windmill_server"), "MAX_SESSION_VALIDITY_SECONDS="),
     ).toEqual(["MAX_SESSION_VALIDITY_SECONDS=2592000"]);

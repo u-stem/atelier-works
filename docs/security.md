@@ -781,6 +781,10 @@ Caddyは`WM_BIND`のアドレスにだけバインドする。既定値は`mise.
 
 `mise run doctor`は、既定のパスワードでログインできる状態をNGとして報告する。
 
+ブラウザのセッションは30日有効である。
+端末を紛失したときや、`WM_BIND`を外向きにしたときは、その間トークンが使える。
+外向きにするときは、`MAX_SESSION_VALIDITY_SECONDS`を短くする。
+
 ## Consoleの配信
 
 Consoleは、Windmillと同じオリジンの`/console/`で配信する。
