@@ -4136,6 +4136,10 @@ export type NewPrCiCheck = {
   readonly run_created_at: Date | null;
 };
 
+export const PR_CI_CHECK_COLUMNS: readonly string[] = [];
+
+export type PrCiCheckSqlRow = Record<string, unknown>;
+
 /** `fix_hold_reason`列の値。NULLは保留なし。空文字はDBの制約が拒むので、来たら不正な行として扱う。 */
 function parseFixHoldReason(value: unknown): string | null {
   const reason = parseNullableString(value, "fix_hold_reason");
