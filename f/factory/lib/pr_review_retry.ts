@@ -49,6 +49,13 @@ export const TRANSIENT_RETRY_DELAYS_SECONDS: readonly number[] = [
  */
 export const TRANSIENT_STALL_GRACE_SECONDS = 1800;
 
+/**
+ * 1回の巡回で読む一覧のページ数の上限。1ページは`pageSize`件である。
+ * 状態を読めない行が先頭を占めても、後ろの行を読めるようページを進めるが、
+ * 一覧を読み切れない場合でも1回の巡回を有限にするために、上限を置く。
+ */
+export const TRANSIENT_LIST_MAX_PAGES = 10;
+
 export { TRANSIENT_STALL_NOTE_PREFIX };
 
 /**
@@ -209,9 +216,37 @@ export function transientReviewStalledNotice(input: {
 
 export type { TransientReviewCandidate };
 
+/**
+ * 一覧をIDの昇順に1ページずつ返す。ページが`pageSize`件に満たなければ最後のページである。
+ * 上限(`TRANSIENT_LIST_MAX_PAGES`)で打ち切るときは、`onTruncated`を呼ぶ。
+ * 呼び出し側が読み終えて抜けても、残りのページは読まない。
+ */
+async function* candidatePages(
+  list: (afterId: number) => Promise<readonly TransientReviewCandidate[]>,
+  pageSize: number,
+  onTruncated: () => void,
+): AsyncGenerator<readonly TransientReviewCandidate[]> {
+  let afterId = 0;
+  for (let page = 0; page < TRANSIENT_LIST_MAX_PAGES; page += 1) {
+    const rows = await list(afterId);
+    yield rows;
+    const last = rows[rows.length - 1];
+    if (rows.length < pageSize || last === undefined) return;
+    afterId = last.id;
+  }
+  onTruncated();
+}
+
 export type TransientReviewDeps = {
-  /** 再開の候補を返す(`listTransientReviewCandidates`)。 */
-  readonly listCandidates: () => Promise<readonly TransientReviewCandidate[]>;
+  /** `listCandidates`が1回に返す件数の上限。ページが満たされたときだけ、次のページを読む。 */
+  readonly pageSize: number;
+  /**
+   * 再開の候補を、IDの昇順に`afterId`より大きいものから1ページ返す(`listTransientReviewCandidates`)。
+   * 状態を読めずに見送る行が先頭を占めても、次のページで後ろの行に届くようにする。
+   */
+  readonly listCandidates: (
+    afterId: number,
+  ) => Promise<readonly TransientReviewCandidate[]>;
   /** 記録済みのflowジョブが終わっているか。動いているか状態を読めなければ`false`を返す。 */
   readonly isFlowJobFinished: (flowJobId: string | null) => Promise<boolean>;
   /** 止まった理由と回数を条件にした比較交換(`restartTransientPrReview`)。移せたら`true`を返す。 */
@@ -298,22 +333,35 @@ async function retryOne(
  * 候補を取得できなければ例外を投げる。失敗の通知は、この巡回が再開することを前提に控えているので、
  * 握りつぶして0件で終えず、スケジュールの失敗として人に届ける。
  * 作業項目ごとの失敗は、1件で残りを飛ばさないよう、数えて続ける。
+ * 一覧はページごとに読む。記録済みのジョブの状態を読めない行は再開を見送るが一覧に残るので、
+ * 先頭のページを占めても、次のページを読んで後ろの行を再開する。
+ * 再開の数の上限に達したら、残りのページは読まない。
  */
 export async function retryTransientPrReviews(
   deps: TransientReviewDeps,
 ): Promise<AutoRetryResult> {
-  const candidates = await deps.listCandidates();
   const counts = { restarted: 0, skipped: 0, failed: 0 };
-  for (const candidate of candidates) {
-    if (counts.restarted + counts.failed >= AUTO_RETRY_LIMIT_PER_RUN) break;
-    try {
-      counts[await retryOne(deps, candidate)] += 1;
-    } catch (err) {
-      counts.failed += 1;
-      deps.log.warn("pr_review retry failed for a work item", {
-        work_item_id: candidate.id,
-        error: messageOf(err),
-      });
+  const pages = candidatePages(deps.listCandidates, deps.pageSize, () =>
+    deps.log.warn("pr_review retry candidates exceed the page limit", {
+      page_size: deps.pageSize,
+      max_pages: TRANSIENT_LIST_MAX_PAGES,
+    }),
+  );
+  for await (const candidates of pages) {
+    for (const candidate of candidates) {
+      try {
+        counts[await retryOne(deps, candidate)] += 1;
+      } catch (err) {
+        counts.failed += 1;
+        deps.log.warn("pr_review retry failed for a work item", {
+          work_item_id: candidate.id,
+          error: messageOf(err),
+        });
+      }
+      // 上限に届いたら、次の候補にも次のページにも進まない。
+      if (counts.restarted + counts.failed >= AUTO_RETRY_LIMIT_PER_RUN) {
+        return counts;
+      }
     }
   }
   return counts;
@@ -323,11 +371,16 @@ export async function retryTransientPrReviews(
 export type StallDelivery = "sent" | "no_webhook" | "not_sent";
 
 export type StalledTransientDeps = {
+  /** `listStalled`が1回に返す件数の上限。ページが満たされたときだけ、次のページを読む。 */
+  readonly pageSize: number;
   /**
-   * 待ちと猶予を過ぎても再開されず、まだ知らせていない候補を返す。
+   * 待ちと猶予を過ぎても再開されず、まだ知らせていない候補を、IDの昇順に`afterId`より大きいものから1ページ返す。
    * 自動の再開を使い切ったものも含める。
+   * 通知が届かない行は一覧に残るので、先頭のページを占めても、次のページで後ろの行に届くようにする。
    */
-  readonly listStalled: () => Promise<readonly TransientReviewCandidate[]>;
+  readonly listStalled: (
+    afterId: number,
+  ) => Promise<readonly TransientReviewCandidate[]>;
   /** 人に知らせる。 */
   readonly notify: (
     candidate: TransientReviewCandidate,
@@ -345,40 +398,48 @@ export type StalledTransientDeps = {
  * 送ってから記録する。日次サマリーと同じく、届いた(`sent`)ときだけ記録を残すので、
  * 配信に失敗した作業項目は、次の巡回でもう一度送る。通知が届くまで、巡回の間隔(5分)ごとに繰り返す。
  * 記録に失敗したときも送り直すので、重複することはあっても、黙ることは無い。
+ * 一覧はページごとに読み、届かない行が先頭のページを占めても、後ろの行に届く。
  * `no_webhook`は知らせる先が無い状態で、巡回のたびに警告を出さないよう情報のログにとどめる。
  * 候補を取得できなければ例外を投げる。
  */
 export async function notifyStalledTransientReviews(
   deps: StalledTransientDeps,
 ): Promise<number> {
-  const stalled = await deps.listStalled();
   let notified = 0;
-  for (const candidate of stalled) {
-    try {
-      const delivery = await deps.notify(candidate);
-      if (delivery === "no_webhook") {
-        deps.log.info("pr_review stall notice has no webhook to go to", {
+  const pages = candidatePages(deps.listStalled, deps.pageSize, () =>
+    deps.log.warn("pr_review stall candidates exceed the page limit", {
+      page_size: deps.pageSize,
+      max_pages: TRANSIENT_LIST_MAX_PAGES,
+    }),
+  );
+  for await (const stalled of pages) {
+    for (const candidate of stalled) {
+      try {
+        const delivery = await deps.notify(candidate);
+        if (delivery === "no_webhook") {
+          deps.log.info("pr_review stall notice has no webhook to go to", {
+            work_item_id: candidate.id,
+          });
+          continue;
+        }
+        if (delivery === "not_sent") {
+          deps.log.warn("pr_review stall notice was not delivered", {
+            work_item_id: candidate.id,
+          });
+          continue;
+        }
+        notified += 1;
+        if (!(await deps.recordStall(candidate))) {
+          deps.log.warn("pr_review stall was already recorded", {
+            work_item_id: candidate.id,
+          });
+        }
+      } catch (err) {
+        deps.log.warn("pr_review stall could not be reported", {
           work_item_id: candidate.id,
-        });
-        continue;
-      }
-      if (delivery === "not_sent") {
-        deps.log.warn("pr_review stall notice was not delivered", {
-          work_item_id: candidate.id,
-        });
-        continue;
-      }
-      notified += 1;
-      if (!(await deps.recordStall(candidate))) {
-        deps.log.warn("pr_review stall was already recorded", {
-          work_item_id: candidate.id,
+          error: messageOf(err),
         });
       }
-    } catch (err) {
-      deps.log.warn("pr_review stall could not be reported", {
-        work_item_id: candidate.id,
-        error: messageOf(err),
-      });
     }
   }
   return notified;

@@ -3,6 +3,8 @@ import type { CiFixChange } from "../../f/factory/lib/ci_fix_paths.ts";
 import {
   CONFLICT_FIX_SKILL_MARKER,
   CONFLICT_ROUND_DETAILS,
+  CONFLICT_TEMPORARY_STOP_NOTES,
+  CONFLICT_UNCOUNTED_STOP_NOTES,
   type ConflictFileInput,
   type ConflictResolutionVerdict,
   checkConflictResolution,
@@ -13,6 +15,7 @@ import {
   evaluateMergedTree,
   hasConflictFixSkillMarker,
   isConflictRound,
+  roundStopReason,
   stripConflictMarkerLabels,
 } from "../../f/factory/lib/conflict_fix_round.ts";
 
@@ -54,6 +57,61 @@ describe("conflictRoundReason", () => {
   });
 });
 
+describe("CONFLICT_UNCOUNTED_STOP_NOTES", () => {
+  test("lists the temporary stops that happen before Claude runs", () => {
+    expect([...CONFLICT_UNCOUNTED_STOP_NOTES]).toEqual(
+      [
+        CONFLICT_ROUND_DETAILS.rowMissing,
+        CONFLICT_ROUND_DETAILS.rowNotConflicted,
+        CONFLICT_ROUND_DETAILS.rowBoundToAnother,
+        CONFLICT_ROUND_DETAILS.episodeOver,
+        CONFLICT_ROUND_DETAILS.headMoved,
+        CONFLICT_ROUND_DETAILS.worktreeBusy,
+        CONFLICT_ROUND_DETAILS.implementRunning,
+      ].map(conflictRoundReason),
+    );
+  });
+
+  test("leaves out the stop of a head that moved before the push", () => {
+    expect(
+      CONFLICT_UNCOUNTED_STOP_NOTES.includes(
+        conflictRoundReason(CONFLICT_ROUND_DETAILS.headMovedAtPush),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("CONFLICT_TEMPORARY_STOP_NOTES", () => {
+  test("holds the uncounted notes and the stop of a head that moved before the push", () => {
+    expect([...CONFLICT_TEMPORARY_STOP_NOTES]).toEqual([
+      ...CONFLICT_UNCOUNTED_STOP_NOTES,
+      conflictRoundReason(CONFLICT_ROUND_DETAILS.headMovedAtPush),
+    ]);
+  });
+
+  test("leaves out the stop of a tree that the checks changed", () => {
+    expect(
+      CONFLICT_TEMPORARY_STOP_NOTES.includes(
+        conflictRoundReason(CONFLICT_ROUND_DETAILS.treeChangedDuringChecks),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("roundStopReason", () => {
+  test("gives a conflict round the fixed note of the detail", () => {
+    expect(
+      roundStopReason(true, CONFLICT_ROUND_DETAILS.headMoved, "PR head moved"),
+    ).toBe("conflict round: the PR head moved while the fix was in progress");
+  });
+
+  test("leaves the original reason to a round that is not a conflict round", () => {
+    expect(
+      roundStopReason(false, CONFLICT_ROUND_DETAILS.headMoved, "PR head moved"),
+    ).toBe("PR head moved");
+  });
+});
+
 describe("CONFLICT_ROUND_DETAILS", () => {
   test.each([
     ["baseNotDefault", "base is not the default branch"],
@@ -62,6 +120,15 @@ describe("CONFLICT_ROUND_DETAILS", () => {
     ["unresolvable", "unresolvable conflict"],
     ["checkFailed", "check failed"],
     ["upToDate", "up_to_date"],
+    ["rowMissing", "the conflict check row of the work item does not exist"],
+    ["rowNotConflicted", "the conflict check is not conflicted"],
+    ["rowBoundToAnother", "the conflict check is bound to another work item"],
+    ["episodeOver", "the conflict episode of the work item is over"],
+    ["headMoved", "the PR head moved while the fix was in progress"],
+    ["headMovedAtPush", "the PR head moved before the push"],
+    ["treeChangedDuringChecks", "the tree changed during the checks"],
+    ["worktreeBusy", "the worktree is in use by another process"],
+    ["implementRunning", "an implement flow is running on the branch"],
     [
       "markerMissing",
       "the factory-fix skill lacks the conflict-fix-skill:v1 marker",

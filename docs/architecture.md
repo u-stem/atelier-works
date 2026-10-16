@@ -455,7 +455,10 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_conflict_fix_claim` | script | [LIB] 競合の行を直してよいかの判断 |
 | `f/factory/lib/pr_conflict_fix_recovery` | script | [LIB] 競合を直した行の回復 |
 | `f/factory/lib/pr_conflict_fix_holds` | script | [LIB] 競合を直す作業の保留の理由 |
+| `f/factory/lib/conflict_fix_prompt` | script | [LIB] 競合回のプロンプト |
+| `f/factory/lib/conflict_fix_apply` | script | [LIB] 競合回の修正ステップ |
 | `f/factory/lib/conflict_fix_round` | script | [LIB] 競合回の共通部品 |
+| `f/factory/lib/conflict_fix_verify` | script | [LIB] 競合回の解消の検査 |
 | `f/factory/lib/schedule_failing` | script | [LIB] 続けて失敗するスケジュールの検知 |
 | `f/factory/lib/auto_retry_reasons` | script | [LIB] 自動で再開してよい止まった理由 |
 | `f/factory/lib/self_update_support` | script | [LIB] 自己更新の純粋ロジック |
@@ -734,6 +737,6 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- 競合を直す作業項目の起動。設定と判断の関数、mergeとpushのgit操作、解消の検査は`lib/`にあるが、これらを呼ぶ処理が無く、`pr_conflict_fix_enabled`を`true`にしても起動しない
+- 競合を直す作業項目の起動。設定と判断の関数、`pr_fix`の競合回の分岐は揃っているが、作業項目を起動する処理が無く、`pr_conflict_fix_enabled`を`true`にしても起動しない
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

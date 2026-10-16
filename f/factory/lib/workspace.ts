@@ -3697,8 +3697,39 @@ export async function runGitleaksOnWorktree(
 ): Promise<GitleaksScan> {
   assertSha(opts.baseSha);
   const treeSha = await stagedTreeSha(opts);
+  const result = await scanTreeDiff(
+    { ...opts, fromSha: opts.baseSha, toTreeSha: treeSha },
+    { diff: "git diff of the staged tree", capped: "the staged diff" },
+  );
+  return { ...result, treeSha };
+}
+
+/**
+ * `scanTreeDiff`の例外の文に使う呼び名。ステージした木の検査と、任意の2つの木の検査で、文を分ける。
+ */
+type TreeDiffLabels = {
+  readonly diff: string;
+  readonly capped: string;
+};
+
+/**
+ * `fromSha`と`toTreeSha`の差分(`git diff --text --no-ext-diff --no-textconv -U0`)から削除行を除き、
+ * `gitleaks stdin`に渡す。`paths`があれば、差分をそのパスだけに限る(リテラルのパス名として読む)。
+ * 検査の取り決めは`runGitleaksOnWorktree`と同じである。
+ */
+async function scanTreeDiff(
+  opts: WorktreeGitOptions & {
+    readonly fromSha: string;
+    readonly toTreeSha: string;
+    readonly paths?: readonly string[];
+    readonly timeoutMs: number;
+    readonly createConfigDir?: () => Promise<GitleaksConfigDir>;
+  },
+  labels: TreeDiffLabels,
+): Promise<GitleaksResult> {
   const diff = await opts.run(
     buildGitArgv([
+      "--literal-pathspecs",
       "diff",
       "--text",
       "--no-ext-diff",
@@ -3707,9 +3738,10 @@ export async function runGitleaksOnWorktree(
       "--src-prefix=a/",
       "--dst-prefix=b/",
       "-U0",
-      opts.baseSha,
-      treeSha,
+      opts.fromSha,
+      opts.toTreeSha,
       "--",
+      ...(opts.paths ?? []),
     ]),
     {
       cwd: opts.worktreeDir,
@@ -3720,24 +3752,44 @@ export async function runGitleaksOnWorktree(
   );
   if (diff.timedOut)
     throw new Error(
-      `git diff of the staged tree timed out after ${String(opts.timeoutMs)}ms`,
+      `${labels.diff} timed out after ${String(opts.timeoutMs)}ms`,
     );
-  assertOutputComplete(
-    `git diff of the staged tree in ${opts.worktreeDir}`,
-    diff,
-  );
+  assertOutputComplete(`${labels.diff} in ${opts.worktreeDir}`, diff);
   if (diff.exitCode !== 0)
-    throw gitError(
-      `git diff of the staged tree failed in ${opts.worktreeDir}`,
-      diff,
-    );
+    throw gitError(`${labels.diff} failed in ${opts.worktreeDir}`, diff);
   if (isCappedOutput(diff.stdout))
-    throw new Error("the staged diff exceeded the scan cap");
+    throw new Error(`${labels.capped} exceeded the scan cap`);
   const scanned = dropRemovedDiffLines(diff.stdout);
-  const result = await runGitleaksStdin(opts, scanned, (stdout) =>
+  return runGitleaksStdin(opts, scanned, (stdout) =>
     formatGitleaksReport(stdout, scanned),
   );
-  return { ...result, treeSha };
+}
+
+/**
+ * ツリー`fromSha`(コミットでもよい)からツリー`toTreeSha`への差分を、`runGitleaksOnWorktree`と同じ固定の設定で検査する。
+ * ステージはしない。索引を変えずに、すでにあるツリーを検査したいときに使う。
+ * `paths`を渡せば、差分をそのパスだけに限る。空の一覧は、何も検査せず、gitを実行せずに`ok: true`を返す。
+ * 渡さなければ、すべてのパスを検査する。
+ * 差分かレポートが上限で切れたとき、出力の読み取りを打ち切ったとき、タイムアウトのときは例外を投げ、「漏洩なし」とはみなさない。
+ */
+export async function runGitleaksOnTreeDiff(
+  opts: WorktreeGitOptions & {
+    readonly fromSha: string;
+    readonly toTreeSha: string;
+    readonly paths?: readonly string[];
+    readonly timeoutMs: number;
+    readonly createConfigDir?: () => Promise<GitleaksConfigDir>;
+  },
+): Promise<GitleaksResult> {
+  assertSha(opts.fromSha);
+  assertSha(opts.toTreeSha);
+  if (opts.paths !== undefined && opts.paths.length === 0) {
+    return { ok: true, output: "" };
+  }
+  return scanTreeDiff(opts, {
+    diff: "git diff of the tree",
+    capped: "the diff",
+  });
 }
 
 /** `runGitleaksStdin`が必要とする依存と設定。 */

@@ -123,7 +123,7 @@ export type NotifyEvent =
        * `result`は`reviewResultFor`の判定をそのまま入れる。
        */
       finding_count: number;
-      result: "changes_requested" | "reviewed";
+      result: "changes_requested" | "reviewed" | "unverified";
     }
   | {
       kind: "pr_fixed";
@@ -311,6 +311,16 @@ export function buildEmbed(event: NotifyEvent): DiscordEmbed {
   return capEmbedToDiscordLimits(buildRawEmbed(event));
 }
 
+/**
+ * PRレビュー完了の通知に出す状態。
+ * `unverified`は、未解決の指摘を読めず、人のApprove待ちと言い切れないため、別の文にする。
+ */
+const PR_REVIEWED_STATE_TEXT = {
+  changes_requested: "修正必須の指摘が未解決(要修正)",
+  reviewed: "修正必須の指摘なし(人のApprove待ち)",
+  unverified: "未解決の指摘を読み取れず未確認(人がPRで確かめる)",
+} as const;
+
 function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
   switch (event.kind) {
     case "issue_claimed":
@@ -382,10 +392,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         ],
       };
     case "pr_reviewed": {
-      const stateText =
-        event.result === "changes_requested"
-          ? "修正必須の指摘が未解決(要修正)"
-          : "修正必須の指摘なし(人のApprove待ち)";
+      const stateText = PR_REVIEWED_STATE_TEXT[event.result];
       return {
         title: `PRレビュー完了: #${event.pr_number}`,
         description: `今回の指摘${String(event.finding_count)}件。状態: ${stateText}`,
