@@ -1670,7 +1670,7 @@ Windmillのジョブには、`WHITELIST_ENVS`に挙げていない変数は、PA
 NULLを別の文字列に置き換えないのは、記録が無いことを利用者に見せるためである。
 
 `mise run up`で反映した後は、反映した時刻より後の実行で、`mise.toml`の`CLAUDE_VERSION`と同じ値が入ることを確かめる。
-`<反映した時刻>`には、反映した時刻を入れる。
+`<反映した時刻>`には、ISO 8601の時刻文字列(例: `2026-10-16T10:00:00+09:00`)を入れる。
 
 ```sql
 SELECT claude_version, count(*)
@@ -1679,7 +1679,7 @@ WHERE created_at > '<反映した時刻>'
 GROUP BY 1;
 ```
 
-NULLの行が残るときは、ジョブにまだ変数が届いていない。
+確認クエリの結果にNULLの行があるときは、ジョブにまだ変数が届いていない。
 workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確かめる。
 
 ### PR修正の連続した失敗
@@ -2829,6 +2829,9 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 | `gitleaks` | `GITLEAKS_VERSION` |
 | `gtr` | `GTR_REF` |
 | `wmill` | `WMILL_VERSION` |
+
+`CLAUDE_VERSION`には、`2.1.282`の形の版番号だけを書く。
+`stable`や`latest`などの名前は、ビルド時の検査で落ちる。インストールした`claude --version`の値と、記録する版を一致させるためである。
 
 `WM_VERSION`を上げるときは、新しいベースのイメージのPATHを`docker image inspect`で調べる。
 それを`infra/worker/Dockerfile`の`ENV PATH`と突き合わせる。

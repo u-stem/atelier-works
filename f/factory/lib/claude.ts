@@ -3,8 +3,8 @@
 //
 // 下のJSONの項目名(`is_error`、`usage.cache_read_input_tokens`、`modelUsage`など)は、
 // worker内で実際に`claude -p --json-schema ... --output-format json`を実行して確かめた。
-// `claude_version`はこのJSONには無く、worker imageの環境変数`CLAUDE_VERSION`
-// (`mise.toml`の`[env]`とDockerfileの`ARG`)から取る。
+// `claude_version`はこのJSONには無く、環境変数`CLAUDE_VERSION`から取る。値は`mise.toml`の
+// `[env]`にあり、Dockerfileの`ENV`とcomposeの`WHITELIST_ENVS`でジョブまで届く。
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -470,12 +470,13 @@ function attemptTimeoutMs<T>(opts: RunClaudeOptions<T>): number {
 }
 
 /**
- * 空文字と空白だけの値を無いものとして扱い、最初の実値を返す。無ければnullを返す。
+ * 空文字と空白だけの値を無いものとして扱い、最初の実値を前後の空白を除いて返す。無ければnullを返す。
  * 版を記録していない行は、空文字ではなくNULLにして、集計で見分けられるようにするため。
  */
 function firstNonBlank(...values: (string | undefined)[]): string | null {
   for (const value of values) {
-    if (value !== undefined && value.trim() !== "") return value;
+    const trimmed = value?.trim();
+    if (trimmed !== undefined && trimmed !== "") return trimmed;
   }
   return null;
 }

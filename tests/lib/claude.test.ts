@@ -767,6 +767,10 @@ describe("runClaude", () => {
       expect(await versionWith(undefined)).toBeNull();
     });
 
+    test("trims the surrounding whitespace of the recorded version", async () => {
+      expect(await versionWith(" 2.1.282 ")).toBe("2.1.282");
+    });
+
     test("falls back to CLAUDE_VERSION when the claudeVersion option is empty", async () => {
       process.env.CLAUDE_VERSION = "2.1.282";
       expect(await versionWith("")).toBe("2.1.282");

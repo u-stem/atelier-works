@@ -143,14 +143,16 @@ ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/loca
 # ビルド時の検証。道具が欠けている・壊れているとき、ジョブの実行時に
 # 気づくのではなく、その場でビルドを失敗させる。
 # `claude`はPATHの名前で解決して確かめる。`claude --version`の先頭の語(例: `2.1.282 (Claude Code)`の
-# `2.1.282`)が`CLAUDE_VERSION`と違えば、記録する版と実際の版がずれるので、ビルドを失敗させる。
+# `2.1.282`)が`CLAUDE_VERSION`と違うか、
+# `CLAUDE_VERSION`が空なら、記録する版と実際の版がずれるので、両方の値を標準エラーに出してビルドを失敗させる。
 # `setpriv`は、検査の実行と同じ引数で、すべての枠について、切り替えた先のuidと、
 # ケーパビリティの上限が空であること、`no_new_privs`が立つことを確かめる。
 # 検査の後始末が絶対パスで呼ぶ`kill`、`getfacl`、`setfacl`があることも確かめる。
 # 誰でも書き込めるもの(symlinkを除く、ファイルを含む)が、検査の後始末が片付ける共有の一時ディレクトリ
 # (`f/factory/lib/check_sandbox.ts`の`SHARED_TMP_DIRS`)そのものだけであることも確かめる。
 # `/tmp/windmill`は、検査の前に所有者だけが入れるように閉じるので除く。
-RUN [ "$(claude --version | cut -d' ' -f1)" = "${CLAUDE_VERSION}" ] \
+RUN { [ -n "${CLAUDE_VERSION}" ] && [ "$(claude --version | cut -d' ' -f1)" = "${CLAUDE_VERSION}" ] \
+        || { echo "claude --version reports '$(claude --version)', expected '${CLAUDE_VERSION}'" >&2; exit 1; }; } \
     && gh --version && gitleaks version && git gtr version && wmill --version && bun --version \
     && test -x /usr/bin/kill && test -x /usr/bin/getfacl && test -x /usr/bin/setfacl \
     && test -z "$(find / -xdev -path /tmp/windmill -prune -o ! -type l -perm -0002 -print | grep -vxE '/tmp|/var/tmp|/dev/shm|/dev/mqueue|/run/lock')" \

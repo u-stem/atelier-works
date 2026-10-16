@@ -86,11 +86,27 @@ describe("infra/worker/Dockerfile claude version", () => {
 });
 
 describe("infra/worker/Dockerfile claude version check", () => {
-  test("fails the build when the installed claude differs from CLAUDE_VERSION", () => {
-    const verification =
-      startingWith("RUN").find((line) => line.includes("claude --version")) ??
-      "";
-    expect(verification).toContain('= "${CLAUDE_VERSION}" ]');
+  const verification = (): string =>
+    startingWith("RUN").find((line) => line.includes("claude --version")) ?? "";
+
+  test("rejects an empty CLAUDE_VERSION", () => {
+    expect(verification()).toContain('[ -n "${CLAUDE_VERSION}" ]');
+  });
+
+  test("compares the installed claude version with CLAUDE_VERSION", () => {
+    expect(verification()).toContain(
+      `[ "$(claude --version | cut -d' ' -f1)" = "\${CLAUDE_VERSION}" ]`,
+    );
+  });
+
+  test("reports the expected and the actual version to stderr on a mismatch", () => {
+    expect(verification()).toMatch(
+      /\|\| \{ echo "[^"]*\$\(claude --version\)[^"]*\$\{CLAUDE_VERSION\}[^"]*" >&2; exit 1; \}/,
+    );
+  });
+
+  test("keeps the other checks chained after the version check", () => {
+    expect(verification()).toContain("} && gh --version && gitleaks version");
   });
 });
 
