@@ -2542,6 +2542,8 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
 この検査を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
 `git pull --ff-only`を実行してから`mise run up`を実行する。`wmill sync push`とmigrationも要るときは、その後に`mise run deploy`を実行する。
+`mise.toml`の`[env]`に必須のキーが増える版を取り込む最初の1回は、pullの後のcomposeが新しい必須変数を読めず、`mise run deploy`が途中で止まる。
+止まり方は安全側なので、`mise run up`か`mise run deploy`をもう一度実行すれば通る。
 
 `mise run push`と`mise run deploy`は、`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
