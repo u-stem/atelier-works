@@ -4,7 +4,9 @@
 
 import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
 import {
+  CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
   CONFLICT_ROUND_DETAILS,
+  CONFLICT_TEMPORARY_STOP_NOTES,
   conflictRoundReason,
 } from "./conflict_fix_round.ts";
 import {
@@ -41,6 +43,11 @@ const FIXED_NOTE_HOLDS: readonly (readonly [
   [CONFLICT_ROUND_DETAILS.checkFailed, "check_failed"],
   [CONFLICT_ROUND_DETAILS.markerMissing, "marker_missing"],
 ];
+
+/** 注記が一時の停止の固定文か。 */
+function isTemporaryStopNote(note: string | null): boolean {
+  return note !== null && CONFLICT_TEMPORARY_STOP_NOTES.includes(note);
+}
 
 /**
  * 止めた理由を、保留の理由に写す。写せなければ`null`を返す。
@@ -87,12 +94,21 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - 何も変えずに終えた作業項目(`reviewed`で注記が`up_to_date`)は、`up_to_date`にする。pushしていないので、`pushed`と区別する。
  *   注記が違う`reviewed`は、保留なしで結びを外す。
  * - `needs_human`と`blocked`は、理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留する。
- *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった`blocked`は、待たずに保留なしで結びを外す。
+ *   ただし、一時の停止の注記(`CONFLICT_TEMPORARY_STOP_NOTES`)で止まったものは、保留なしで結びを外す。
+ *   行の状態やPRのheadが動いただけで、次の巡回で判定し直せば足りるためである。
+ *   イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった`blocked`も、待たずに保留なしで結びを外す。
  *   待つと、その間は通知も起動もされない。競合回は進行中の作業が無く、人が競合を直すと急ぐ必要も無いので、
- *   CI回のような猶予は置かない。この回は回数に数えない(`countPrConflictFixRounds`)ので、起動し直しを止めるのは、
+ *   CI回のような猶予は置かない。
+ *   イメージが古い理由で止まった回は回数に数えない(`countPrConflictFixRounds`)ので、起動し直しを止めるのは、
  *   行の起動の回数(`fix_attempts`)の上限だけである。
+ *   一時の停止のうち、Claudeを動かす前の停止(`CONFLICT_UNCOUNTED_STOP_NOTES`)も、回数に数えない。
+ *   pushの直前にheadが動いた停止は、Claudeを動かした後なので回数に数え、`pr_conflict_fix_max_rounds`が止める。
  * - `failed`は、フローを起動する前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。
- *   起動し直す回数は、行の起動の回数の上限が止める。フローが起動した後の`failed`は、理由を写せれば写し、写せなければ`fix_stopped`で保留する。
+ *   フローが起動した後の`failed`は、注記がClaudeの実行の失敗の先頭(`CONFLICT_CLAUDE_FAILED_NOTE_PREFIX`)で始まるなら、
+ *   `fix_stopped`で保留する。Claudeの費用を使った失敗を、同じ入力で繰り返さないためである。
+ *   それ以外は、理由を写せれば写し、写せなければ保留なしで結びを外す。
+ *   例外で終わった回は、`getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを区別できないためである。
+ *   起動し直しは、回数に数える`failed`なので`pr_conflict_fix_max_rounds`が止める。失敗の通知はフローの失敗の処理が出す。
  * - ほかの終端(`cancelled`など)は、保留なしで結びを外す。
  */
 function decideRecoveryByState(
@@ -109,6 +125,7 @@ function decideRecoveryByState(
       : { kind: "release", hold: null };
   }
   if (item.status === "needs_human") {
+    if (isTemporaryStopNote(item.note)) return { kind: "release", hold: null };
     return {
       kind: "release",
       hold: holdReasonForConflictStoppedItem(item.note) ?? "fix_stopped",
@@ -122,15 +139,20 @@ function decideRecoveryByState(
     ) {
       return { kind: "release", hold: null };
     }
+    if (isTemporaryStopNote(note)) return { kind: "release", hold: null };
     return {
       kind: "release",
       hold: holdReasonForConflictStoppedItem(note) ?? "fix_stopped",
     };
   }
   if (item.status === "failed" && item.launched) {
+    const note = item.note;
+    if (note !== null && note.startsWith(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX)) {
+      return { kind: "release", hold: "fix_stopped" };
+    }
     return {
       kind: "release",
-      hold: holdReasonForConflictStoppedItem(item.note) ?? "fix_stopped",
+      hold: holdReasonForConflictStoppedItem(note),
     };
   }
   return { kind: "release", hold: null };
@@ -154,4 +176,48 @@ export function decideConflictFixRecovery(
     return { kind: "release", hold: null };
   }
   return recovery;
+}
+
+/** `readConflictFixItemState`が読む元。DBの読み取りを注入する。 */
+export type ConflictFixItemSources = {
+  readonly getWorkItem: (id: number) => Promise<{
+    status: WorkItemStatus;
+    flow_job_id: string | null;
+    conflict_episode: number | null;
+  } | null>;
+  /** 作業項目が`status`へ移った最新の遷移の注記。 */
+  readonly latestStatusNote: (
+    id: number,
+    status: WorkItemStatus,
+  ) => Promise<string | null>;
+  /** 作業項目の直近の回が、pushしたcommitの記録を持つか。 */
+  readonly hasPushedCommits: (id: number) => Promise<boolean>;
+};
+
+/**
+ * 競合を直す作業項目の状態を読む。作業項目が無ければ`null`を返す。
+ * `rowEpisode`は、作業項目が結ばれた行の今の競合の回である。
+ * 注記は、ラウンドを数える式(`countPrConflictFixRounds`)と同じく、今の状態へ移った最新の遷移のものを読む。
+ * 別の列を読むと、回復は保留なしで結びを外し、数える側は数える、という食い違いが起きる。
+ * 動いている作業項目は、注記とpushの記録を使わないので読まない。
+ */
+export async function readConflictFixItemState(
+  workItemId: number,
+  rowEpisode: number,
+  sources: ConflictFixItemSources,
+): Promise<ConflictFixItemState | null> {
+  const item = await sources.getWorkItem(workItemId);
+  if (item === null) return null;
+  const base = {
+    status: item.status,
+    launched: item.flow_job_id !== null,
+    conflictEpisode: item.conflict_episode,
+    rowEpisode,
+  };
+  if (!isTerminal(item.status)) return { ...base, note: null, pushed: false };
+  return {
+    ...base,
+    note: await sources.latestStatusNote(workItemId, item.status),
+    pushed: await sources.hasPushedCommits(workItemId),
+  };
 }

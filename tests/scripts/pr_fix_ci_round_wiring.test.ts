@@ -39,14 +39,15 @@ describe("the tools of Claude in a CI round", () => {
     ).toBe(true);
   });
 
-  test("is used by the fix step", async () => {
+  // 修正ステップは、CI回と競合回のそれぞれで、同じ読み取りと編集だけのツールを渡す。
+  test("is used by the fix step of a CI round and of a conflict round", async () => {
     const text = await source("pr_fix_apply.ts");
-    expect(count(text, "tools: CI_FIX_TOOLS,")).toBe(1);
+    expect(count(text, "tools: CI_FIX_TOOLS,")).toBe(2);
   });
 
-  test("allows only the shared tools in the fix step", async () => {
+  test("allows only the shared tools in the fix step of a CI round and of a conflict round", async () => {
     const text = await source("pr_fix_apply.ts");
-    expect(count(text, "allowedTools: CI_FIX_ALLOWED_TOOLS,")).toBe(1);
+    expect(count(text, "allowedTools: CI_FIX_ALLOWED_TOOLS,")).toBe(2);
   });
 
   test("is used by the retry in the verify step", async () => {
@@ -208,12 +209,12 @@ describe("the verify step of a recomputed lock", () => {
 });
 
 describe("the review generate step", () => {
-  test("looks up the CI round diff through the helper that falls back to false", async () => {
+  test("looks up the kind of the round through the helper that falls back to null", async () => {
     const text = await source("pr_review_generate.ts");
     expect(
       count(
         text,
-        "ciRoundDiffOrFalse(\n    () => hasCiRoundDiffToReview(owner, repo, pr_number, review_sha),",
+        "fixRoundOrNull(\n    () => findFixRoundKindToReview(owner, repo, pr_number, review_sha),",
       ),
     ).toBe(1);
   });

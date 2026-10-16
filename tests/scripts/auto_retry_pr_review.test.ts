@@ -3,7 +3,10 @@ import {
   type AutoRetryIo,
   runAutoRetryPrReview,
 } from "../../f/factory/auto_retry_pr_review.ts";
-import { AUTO_RETRY_MAX_RESTARTS } from "../../f/factory/lib/auto_retry.ts";
+import {
+  AUTO_RETRY_LIST_LIMIT,
+  AUTO_RETRY_MAX_RESTARTS,
+} from "../../f/factory/lib/auto_retry.ts";
 import { TRANSIENT_GITHUB_REASON_PREFIX } from "../../f/factory/lib/auto_retry_reasons.ts";
 import type { TransientReviewCandidate } from "../../f/factory/lib/db.ts";
 import type { NotifyEvent } from "../../f/factory/lib/discord.ts";
@@ -50,11 +53,20 @@ function fakeIo(world: World = {}) {
   const io: AutoRetryIo = {
     listTransientReviewCandidates: async (params) => {
       listCalls.push(params);
-      if (params.unnotifiedOnly === true) {
-        return [...(world.stalledCandidates ?? [])];
+      // 実際の一覧と同じく、IDの昇順で`afterId`より大きいものを`limit`件まで返す。
+      const source =
+        params.unnotifiedOnly === true
+          ? (world.stalledCandidates ?? [])
+          : (world.retryCandidates ?? []);
+      if (
+        params.unnotifiedOnly !== true &&
+        world.retryListError !== undefined
+      ) {
+        throw world.retryListError;
       }
-      if (world.retryListError !== undefined) throw world.retryListError;
-      return [...(world.retryCandidates ?? [])];
+      return source
+        .filter((c) => c.id > (params.afterId ?? 0))
+        .slice(0, params.limit);
     },
     restartTransientPrReview: async () => true,
     recordTransientStall: async (params) => {
@@ -69,7 +81,7 @@ function fakeIo(world: World = {}) {
       leaseCalls.push(args);
       return true;
     },
-    isFlowJobFinished: async () => true,
+    isFlowJobFinished: async (flowJobId) => flowJobId !== "unreadable-job",
     runFlowAsync: async () => {
       if (world.launchError !== undefined) throw world.launchError;
       return JOB_ID;
@@ -106,6 +118,18 @@ describe("runAutoRetryPrReview", () => {
     await runAutoRetryPrReview(fake.io, "test", SILENT);
     const restartCall = fake.listCalls.find((c) => c.unnotifiedOnly !== true);
     expect(restartCall?.includeExhausted).toBeUndefined();
+  });
+
+  // 状態を読めない行が一覧の最初の枠(AUTO_RETRY_LIST_LIMIT件)を占めても、枠の外の行を再開する。
+  test("restarts a review beyond the list limit when unreadable rows fill the first page", async () => {
+    const unreadable = Array.from({ length: AUTO_RETRY_LIST_LIMIT }, (_, i) =>
+      candidate(i + 1, { flow_job_id: "unreadable-job" }),
+    );
+    const fake = fakeIo({
+      retryCandidates: [...unreadable, candidate(AUTO_RETRY_LIST_LIMIT + 1)],
+    });
+    await runAutoRetryPrReview(fake.io, "test", SILENT);
+    expect(fake.unsetCalls).toEqual([[AUTO_RETRY_LIST_LIMIT + 1, JOB_ID]]);
   });
 
   test("records the started job id only when it is unset", async () => {

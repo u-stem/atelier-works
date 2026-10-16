@@ -30,6 +30,14 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
+import {
+  type CheckEnvironmentError,
+  type CheckEnvironmentProblems,
+  CheckImageStaleError,
+  checkEnvironmentError,
+  checkImageProblemsFromEnv,
+  hasOnlyUnlistedPaths,
+} from "./lib/check_sandbox.ts";
 import { hasCiFixSkillMarker } from "./lib/ci_fix_round.ts";
 import { dailyBudgetStatus } from "./lib/claude.ts";
 import { loadConfig } from "./lib/config.ts";
@@ -78,6 +86,7 @@ import {
   parseGitHubRepoUrl,
   searchOpenAuthoredPrs,
 } from "./lib/github.ts";
+import { recordCheckEnvironmentNotice } from "./lib/host_action.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import { filterVerifiedOwners } from "./lib/poll_support.ts";
 import { readFixItemState } from "./lib/pr_ci_fix_recovery.ts";
@@ -106,6 +115,21 @@ const DAY_MS = 24 * 60 * 60_000;
 const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
 
 /**
+ * 検査を動かすworkerの環境の問題を、パスを載せた通知に残す。準備のステップと同じ通知で、同じ本文なら重ねて記録しない。
+ * 記録に失敗しても例外を投げず、警告ログに残す。
+ */
+function reportCheckEnvironment(error: CheckEnvironmentError): Promise<void> {
+  return recordCheckEnvironmentNotice(
+    {
+      readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+      addNotice: addNoticeUnlessUnresolved,
+      log: logger("watch_pr_ci"),
+    },
+    error,
+  );
+}
+
+/**
  * 失敗した行から直す作業項目を起動する依存を組む。
  * 設定で起動が有効で、有効にした時刻があるときだけ組み、そうでなければ`undefined`を返す。
  * スキルのマーカーは、`pr_fix`が読むcloneと同じブランチ(`factory_branch`)のファイルで確かめる。
@@ -113,12 +137,41 @@ const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
 export function buildClaimDeps(
   config: FactoryConfig,
   client: GhClient,
+  problems: () => Promise<CheckEnvironmentProblems> = () =>
+    checkImageProblemsFromEnv(),
+  report: (
+    error: CheckEnvironmentError,
+  ) => Promise<void> = reportCheckEnvironment,
+  log: Logger = logger("watch_pr_ci"),
 ): PrCiClaimDeps | undefined {
   const since = config.pr_ci_fix_enabled_since;
   if (!config.pr_ci_fix_enabled || since === null) return undefined;
   return {
     maxRounds: config.pr_ci_fix_max_rounds,
     configMisfit: ciRoundTimeoutMisfit(config),
+    // 検査コマンドの無いリポジトリは、古いイメージでも止めない。準備のステップの関門と同じ条件である。
+    workerEnvProblem: async () => {
+      if (config.allowed_check_commands.length === 0) return null;
+      const error = checkEnvironmentError(await problems());
+      if (error === null) return null;
+      // 保留の通知は行ごとのPRのリンクを持つが、パスは載せない。パスは環境の通知に1件だけ残す。
+      // パスを列挙できなかっただけの回は、次の巡回で外れうる。人が解決するまで残る通知は出さず、警告ログに残す。
+      if (hasOnlyUnlistedPaths(error)) {
+        log.warn(
+          "world-writable paths could not be listed, so the hold leaves no notice",
+          { problems: error.problems.join(", ") },
+        );
+      } else {
+        await report(error);
+      }
+      return {
+        reason:
+          error instanceof CheckImageStaleError
+            ? "worker_image_stale"
+            : "worker_runtime_unsafe",
+        message: error.message,
+      };
+    },
     enabledSince: since,
     listCandidates: (from, limit) =>
       listClaimablePrCiChecks(from, PR_CI_FIX_TEMPORARY_HOLD_REASONS, limit),

@@ -371,6 +371,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.description).toBe("エージェント実行3件、$1.50消費。");
   });
@@ -387,6 +388,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
@@ -417,12 +419,125 @@ describe("buildEmbed", () => {
         doc_dirs_deleted: 0,
       },
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
       value:
         "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
     });
+  });
+
+  test("shows no gated review field when reviews are posted", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
+    });
+    expect(embed.fields.map((f) => f.name)).not.toContain("レビューの投稿");
+  });
+
+  test("shows the unposted review count when the mode is gated", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: {
+        kind: "on",
+        since: new Date("2026-09-22T03:00:00Z"),
+        unposted_count: 4,
+        elapsed_days: 3,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "レビューの投稿",
+      value: "gatedで有効。2026-09-22から3日、投稿しなかったレビューは4件",
+    });
+  });
+
+  test("dates the unposted period by the JST day, not the UTC day", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      // 2026-09-21T20:00Zは、JSTでは2026-09-22の05:00
+      gated_review: {
+        kind: "on",
+        since: new Date("2026-09-21T20:00:00Z"),
+        unposted_count: 4,
+        elapsed_days: 3,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "レビューの投稿",
+      value: "gatedで有効。2026-09-22から3日、投稿しなかったレビューは4件",
+    });
+  });
+
+  test("shows no date while nothing was left unposted", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: {
+        kind: "on",
+        since: null,
+        unposted_count: 0,
+        elapsed_days: null,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "レビューの投稿",
+      value: "gatedで有効。投稿しなかったレビューは0件",
+    });
+  });
+
+  test("shows how to look into a failure to read the unposted reviews", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: { kind: "read_failed" },
+    });
+    expect(
+      embed.fields.find((f) => f.name === "レビューの投稿")?.value,
+    ).toContain("読めませんでした");
   });
 
   test("shows a 'no record' worker load field when there is no record", () => {
@@ -437,6 +552,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
@@ -456,6 +572,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "read_failed" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
@@ -497,6 +614,7 @@ describe("buildEmbed", () => {
           max_wait_max_seconds: 0,
         },
       },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
@@ -676,6 +794,23 @@ describe("buildEmbed", () => {
     });
     expect(embed.description).toBe(
       "今回の指摘0件。状態: 修正必須の指摘なし(人のApprove待ち)",
+    );
+  });
+
+  test("states that unresolved findings could not be checked when the threads were unreadable", () => {
+    const embed = buildEmbed({
+      kind: "pr_reviewed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      verdict: "approve",
+      finding_count: 0,
+      result: "unverified",
+    });
+    expect(embed.description).toBe(
+      "今回の指摘0件。状態: 未解決の指摘を読み取れず未確認(人がPRで確かめる)",
     );
   });
 

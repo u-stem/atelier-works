@@ -89,6 +89,18 @@ export function allCommitsFromFactory(
  */
 export const LAUNCH_FAILURE_ALLOWANCE = 3;
 
+/** 検査を動かすworkerの環境が前提を満たさないことを表す保留の理由。 */
+export type WorkerEnvHoldReason = Extract<
+  PrCiFixHoldReason,
+  "worker_image_stale" | "worker_runtime_unsafe"
+>;
+
+/** 環境の問題。理由はイメージが古いか、稼働中のworkerが安全でないかの区別で、`message`は人が読むための文である。 */
+export type WorkerEnvProblem = {
+  readonly reason: WorkerEnvHoldReason;
+  readonly message: string;
+};
+
 /** 判定が読む事実。呼び出された順に読み、保留かskipが決まったら以後は読まない。 */
 export type FixClaimReaders = {
   /** そのPRに、終端でない直す作業項目があるか。 */
@@ -101,6 +113,11 @@ export type FixClaimReaders = {
   /** factory-fixスキルが、CI回の節のマーカーを持つか。 */
   readonly hasSkillMarker: () => Promise<boolean>;
   readonly classify: (pr: PullRequest) => Promise<HeadFailureClass>;
+  /**
+   * 検査を動かすworkerの環境が前提を満たさない保留の理由。満たすとき、検査コマンドが無いときは`null`。
+   * 読み取りに費用がかかるので、安い判定を通った後に、判定がここに届いたときだけ読む。
+   */
+  readonly workerEnv: () => Promise<WorkerEnvHoldReason | null>;
   /** 日次の予算を使い切ったか。 */
   readonly budgetExceeded: () => Promise<boolean>;
   /** mainのCIが赤いか。 */
@@ -168,7 +185,11 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
  *    日次の予算は、`metadata`だけが失敗しているときには確かめない。Claudeを起動せず、費用がかからないためである。
  *    Claudeが直すジョブも落ちているときは、予算を確かめる。使い切っていれば保留し、行は巡回のたびに読み直すだけで、ラウンドを消費しない。
- * 8. どれにも当たらなければ起動する。
+ * 8. 検査を動かすworkerの環境が前提を満たさなければ、イメージが古いとき`worker_image_stale`、
+ *    稼働中のworkerが安全でないとき`worker_runtime_unsafe`で保留する。
+ *    準備のステップが同じ理由で止めるので、起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない。
+ *    確認は全体の走査で費用がかかるので、7までの安い判定の後に置く。環境を直せば、次の巡回で外れる。
+ * 9. どれにも当たらなければ起動する。
  */
 export async function decideFixClaim(
   input: FixClaimInput,
@@ -211,5 +232,8 @@ export async function decideFixClaim(
   ) {
     return hold("rounds_exhausted");
   }
+  // 全体を走査するので、安い判定をすべて通った行だけが読む。
+  const workerEnv = await readers.workerEnv();
+  if (workerEnv !== null) return hold(workerEnv);
   return { kind: "claim", pr };
 }

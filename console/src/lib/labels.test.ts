@@ -119,6 +119,12 @@ describe("noticeKindLabel", () => {
     expect(noticeKindLabel("pr_conflict")).toBe("PRのマージの競合");
   });
 
+  test("names the prolonged gated review mode", () => {
+    expect(noticeKindLabel("review_gated_prolonged")).toBe(
+      "レビューを投稿しない状態の継続",
+    );
+  });
+
   test("names the worker load alert", () => {
     expect(noticeKindLabel("worker_load_high")).toBe("workerの負荷の超過");
   });

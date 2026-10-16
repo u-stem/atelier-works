@@ -51,6 +51,8 @@ import {
   classifyHeadFailure,
   decideFixClaim,
   type FixClaimReaders,
+  type WorkerEnvHoldReason,
+  type WorkerEnvProblem,
 } from "./pr_ci_fix_claim.ts";
 import {
   decideFixingRecovery,
@@ -348,6 +350,11 @@ export type PrCiClaimDeps = {
     runId: number,
     headSha: string,
   ) => Promise<readonly WorkflowRunJob[]>;
+  /**
+   * 検査を動かすworkerの環境が前提を満たさない問題。満たすとき、検査コマンドが無いときは`null`。
+   * 実行の中で1回だけ読む。
+   */
+  readonly workerEnvProblem: () => Promise<WorkerEnvProblem | null>;
   readonly budgetExceeded: () => Promise<boolean>;
   readonly mainCiFailed: (owner: string, repo: string) => Promise<boolean>;
   readonly countRounds: (
@@ -576,6 +583,12 @@ type WatchState = {
   skillMarkerFailure: SkillMarkerReadError | null;
   /** `skillMarkerFailure`を記録した後か。1回の実行で1回だけ記録する。 */
   skillMarkerFailureRecorded: boolean;
+  /** この回に読んだ、workerの環境の保留の理由。読み終えていなければ`undefined`で、前提を満たすときは`null`。 */
+  workerEnvRead: { readonly reason: WorkerEnvHoldReason | null } | undefined;
+  /** この回にworkerの環境を読めなかった失敗。以後の行は読み直さず、同じ失敗として扱う。 */
+  workerEnvFailure: WorkerEnvReadError | null;
+  /** `workerEnvFailure`を記録した後か。1回の実行で1回だけ記録する。 */
+  workerEnvFailureRecorded: boolean;
 };
 
 /** factory-fixスキルを読めなかった。対象のPRではなく、Factoryのリポジトリの読み取りの失敗である。 */
@@ -583,6 +596,16 @@ class SkillMarkerReadError extends Error {
   constructor(cause: unknown) {
     super(`skill marker could not be read: ${errorMessage(cause)}`, { cause });
     this.name = "SkillMarkerReadError";
+  }
+}
+
+/** workerの環境を読めなかった。対象のPRではなく、監視のworkerの状態の読み取りの失敗である。 */
+class WorkerEnvReadError extends Error {
+  constructor(cause: unknown) {
+    super(`worker environment could not be read: ${errorMessage(cause)}`, {
+      cause,
+    });
+    this.name = "WorkerEnvReadError";
   }
 }
 
@@ -707,6 +730,9 @@ function newContext(deps: PrCiWatchDeps): Context {
       claimFacts: new Map(),
       skillMarkerFailure: null,
       skillMarkerFailureRecorded: false,
+      workerEnvRead: undefined,
+      workerEnvFailure: null,
+      workerEnvFailureRecorded: false,
     },
   };
 }
@@ -2063,6 +2089,13 @@ async function absorbClaimError(
     }
     return;
   }
+  if (err instanceof WorkerEnvReadError) {
+    if (!state.workerEnvFailureRecorded) {
+      state.workerEnvFailureRecorded = true;
+      await recordFailureOf(context, "worker_env", err);
+    }
+    return;
+  }
   if ((await absorbReadError(context, ref, err)) === null) {
     await recordFailureOf(context, `claim_fix:${prKey(ref)}`, err);
   }
@@ -2080,6 +2113,34 @@ async function readSkillMarker(
   } catch (err) {
     state.skillMarkerFailure = new SkillMarkerReadError(err);
     throw state.skillMarkerFailure;
+  }
+}
+
+/**
+ * workerの環境が前提を満たさない保留の理由を、この回で1回だけ読む。満たすときは`null`。
+ * 読めなければ、以後の行も同じ失敗にする。パスの列挙に費用がかかるので、行ごとに読み直さない。
+ * 問題があれば、パスを含むメッセージを警告ログに1回だけ残す。
+ */
+async function readWorkerEnv(
+  context: Context,
+  claim: PrCiClaimDeps,
+): Promise<WorkerEnvHoldReason | null> {
+  const { state, deps } = context;
+  if (state.workerEnvFailure !== null) throw state.workerEnvFailure;
+  if (state.workerEnvRead !== undefined) return state.workerEnvRead.reason;
+  try {
+    const problem = await claim.workerEnvProblem();
+    state.workerEnvRead = { reason: problem?.reason ?? null };
+    if (problem !== null) {
+      deps.log.warn("pr ci claim held by the worker environment", {
+        reason: problem.reason,
+        problem: problem.message,
+      });
+    }
+    return state.workerEnvRead.reason;
+  } catch (err) {
+    state.workerEnvFailure = new WorkerEnvReadError(err);
+    throw state.workerEnvFailure;
   }
 }
 
@@ -2114,6 +2175,7 @@ function claimReaders(
         claim.listJobs(row.owner, row.repo, runId, row.head_sha),
       );
     },
+    workerEnv: () => readWorkerEnv(context, claim),
     budgetExceeded: () => readFactOnce(context, "budget", claim.budgetExceeded),
     mainCiFailed: () =>
       readFactOnce(context, `main_ci:${repo}`, () =>

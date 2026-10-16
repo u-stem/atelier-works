@@ -1,5 +1,7 @@
 // FactoryのPRのマージの競合の監視(`watch_pr_conflicts`)の流れを、外部の操作を注入して組み立てる。
-// 検知と通知だけを行い、PRにもリポジトリにも書き込まず、修正は起動しない。
+// 検知と通知を行う。PRにもリポジトリにも書き込まない。
+// 競合を直す設定が有効なときは、競合を直す作業項目(`pr_fix`の競合回)を起動する(`PrConflictFixDeps`)。
+// 起動の依存を渡さないときは、検知と通知だけを行う。
 //
 // 対象のPRは、作業項目の存在や更新時刻に頼らずに見つける。
 // 次の和集合のリポジトリごとに、開いているPRを列挙する。
@@ -19,6 +21,16 @@
 // 通知は競合の1回につき1回である。競合は、行が無い状態か、競合から離れた状態から競合に移った時点で始まる。
 // 競合のままheadが進んでも、通知は重ねない。通知の登録とDiscordの後に、通知した時刻を記録する。
 // 記録が先に成功して通知が失敗すると、通知が出なくなるためである。
+//
+// 競合を直す設定が有効なときの、1回の巡回の流れは次のとおりである。
+// 1. 回復: 直す作業項目が結ばれた行を、作業項目の状態に合わせて戻す。設定の有効と無効に依らず、通知の判断より先に行う。
+//    先に行うのは、終わった作業項目のある行が、通知の判断で1回余分に待たされないためである。
+// 2. 通知の判断: 通知していない競合の行を、通知する、待つ、起動の判断に回す、のどれかに決める(`decideConflictNotify`)。
+//    直す作業項目が結ばれた行は、設定が無効になっていても待つ。作業項目が動く間に通知すると、
+//    人とFactoryが同じブランチへpushしうるためである。回復が結びを外すと、次の判断で通知に進む。
+// 3. 起動の判断: 通知の判断が起動に回した行だけを、`decideConflictFixClaim`で判断する。
+//    判断が例外を投げても、起動の文が何も返さなくても、通知は猶予の経過で必ず出る。
+// 保留の理由は、直す作業項目を起動しなかった理由を行に書く。最終の保留は猶予を待たずに通知する。
 // 通知の解決は、競合が終わった(解けた、PRが閉じた、設定が対象から外した)ときだけ行う。
 // 始まったときには解決しない。並んだ2つの実行の一方が、他方の出したばかりの通知を解決してしまうのを避けるためである。
 //
@@ -30,11 +42,13 @@
 // 例外は、PRごと、リポジトリごとに捕まえて、他を止めない。rate limitは、以降の読み取りを止める。
 
 import type {
+  ClaimPrConflictInput,
   PrConflictCheck,
   PrConflictMarkResult,
   PrConflictObservation,
   PrConflictRecorded,
   PrConflictSettledState,
+  ReleasePrConflictFixOptions,
 } from "./db.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
@@ -42,24 +56,38 @@ import {
   GitHubPaginationLimitError,
   GitHubRateLimitError,
   type OpenPullRequest,
+  type PrCommitMessages,
   type PullRequest,
   parseGitHubRepoUrl,
   type Viewer,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
+import type { MainCiState } from "./main_ci_support.ts";
 import { pullRequestKey } from "./pr_ci_human_support.ts";
 import { type PullRequestRef, pullRequestPageUrl } from "./pr_ci_support.ts";
 import { isSameRepoHead, RUN_BUDGET_MS } from "./pr_ci_watch.ts";
 import {
+  type ConflictFixClaimDecision,
+  type ConflictFixClaimReaders,
+  decideConflictFixClaim,
+  decideConflictNotify,
+} from "./pr_conflict_fix_claim.ts";
+import type { ConflictFixItemState } from "./pr_conflict_fix_recovery.ts";
+import { decideConflictFixRecovery } from "./pr_conflict_fix_recovery.ts";
+import {
   decidePrConflict,
+  isFinalPrConflictFixHold,
+  isPrConflictFixHoldReason,
   PR_CONFLICT_KIND,
-  PR_CONFLICT_NEXT_ACTION,
   PR_CONFLICT_REASON,
   PR_CONFLICT_RESOLVED_BY,
+  type PrConflictFixHoldReason,
   type PrConflictSkipReason,
+  prConflictNextAction,
   prConflictNoticeMessage,
   prConflictNoticePrefix,
 } from "./pr_conflict_support.ts";
+import { PrFixFlowJobIdRecordError } from "./pr_fix_launch.ts";
 import {
   assertGitHubName,
   type FactoryConfig,
@@ -71,9 +99,124 @@ import {
 /** 1回の実行で読む、競合している行の最大の数。 */
 export const CONFLICT_ROW_LIMIT = 200;
 
+/** 1回の実行で回復する、直す作業項目が結ばれた行の最大の数。 */
+export const CONFLICT_FIXING_BATCH_LIMIT = 100;
+
+/** 1回の実行で、直す作業項目を起動する最大の数。起動に失敗した分も数える。 */
+export const CONFLICT_CLAIMS_PER_RUN_LIMIT = 2;
+
+/** 行が直す作業項目に結ばれたまま、これ以上たったら警告する(ミリ秒)。 */
+export const FIX_BOUND_WARN_AFTER_MS = 2 * 60 * 60_000;
+
 type RepoRef = { owner: string; repo: string };
 
-export type PrConflictWatchDeps = {
+/**
+ * 直す作業項目が結ばれた行を戻す依存。渡さなければ回復しない。
+ * 競合を直す設定の有効と無効に関わらず、渡す。
+ */
+export type PrConflictRecoveryDeps = {
+  /** 直す作業項目が結ばれた行を、読み直していない順に返す(`listPrConflictFixing`)。 */
+  readonly listFixing: (limit: number) => Promise<PrConflictCheck[]>;
+  /**
+   * 直す作業項目の状態を読む。作業項目が無ければ`null`。
+   * `rowEpisode`は、結ばれた行の今の競合の回である。
+   */
+  readonly readFixItem: (
+    workItemId: number,
+    rowEpisode: number,
+  ) => Promise<ConflictFixItemState | null>;
+  /** 行の結びを外す(`releasePrConflictFix`)。外したら`true`、行が別の作業項目に結ばれていたら`false`。 */
+  readonly release: (
+    id: number,
+    options: ReleasePrConflictFixOptions,
+  ) => Promise<boolean>;
+};
+
+/**
+ * 競合を直す作業項目を起動する依存。渡さなければ起動せず、通知は検知した時点で出す。
+ * リポジトリ名の綴りは、引く先で違う。作業項目を引く関数と起動には、PRが示すGitHubの正規の綴りを渡す。
+ * ほかの関数には、行と同じ小文字を渡す。
+ */
+export type PrConflictFixDeps = {
+  /** 行の結びを外す(`releasePrConflictFix`)。起動に失敗した作業項目の行を戻すのに使う。 */
+  readonly release: (
+    id: number,
+    options: ReleasePrConflictFixOptions,
+  ) => Promise<boolean>;
+  /** 競合の1回で起動できる数の上限(`pr_conflict_fix_max_rounds`)。 */
+  readonly maxRounds: number;
+  /** 1つのPRで起動できる数の上限(`pr_conflict_fix_max_rounds_per_pr`)。 */
+  readonly maxRoundsPerPr: number;
+  /** この時刻より前に始まった競合の回は、起動の対象にしない。 */
+  readonly enabledSince: Date;
+  /** 一時の保留のまま通知を待つ時間(分)。 */
+  readonly graceMin: number;
+  readonly hasActiveFix: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<boolean>;
+  readonly getDefaultBranch: (owner: string, repo: string) => Promise<string>;
+  readonly listCommits: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<PrCommitMessages>;
+  /** factory-fixスキルが、競合を直す節のマーカーを持つか。 */
+  readonly hasSkillMarker: () => Promise<boolean>;
+  readonly budgetExceeded: () => Promise<boolean>;
+  /** 既定のブランチの先頭のコミットのmainのCIの状態。記録が無ければ`null`。 */
+  readonly mainCiState: (
+    owner: string,
+    repo: string,
+    defaultBranch: string,
+  ) => Promise<MainCiState | null>;
+  readonly countEpisodeRounds: (
+    checkId: number,
+    episode: number,
+  ) => Promise<number>;
+  readonly countPrRounds: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<number>;
+  /** 競合を直す作業項目が、失敗せずに終わったか、pushした後に終わった時刻の最新。無ければ`null`。 */
+  readonly lastFixSettledAt: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<Date | null>;
+  /**
+   * 保留の理由を書く(`setPrConflictFixHold`)。`null`で外す。`expected`は書く前の理由で、いまの理由がこれと違う行は書き換えない。
+   * 書いたら`true`。
+   */
+  readonly setHold: (
+    id: number,
+    reason: PrConflictFixHoldReason | null,
+    expected: string | null,
+  ) => Promise<boolean>;
+  /** 行に作業項目を結んで挿入する(`claimPrConflictForFix`)。起動できなければ`null`。 */
+  readonly claim: (input: ClaimPrConflictInput) => Promise<number | null>;
+  /** 作業項目のpr_fixフローを起動する。 */
+  readonly launch: (workItemId: number) => Promise<void>;
+  /** 起動に失敗した作業項目を`failed`にする。 */
+  readonly failFixItem: (workItemId: number, note: string) => Promise<void>;
+  /** 起動したが記録できなかったフローのジョブを取り消す(`wmill.cancelJob`)。 */
+  readonly cancelFlow: (jobId: string, reason: string) => Promise<void>;
+};
+
+/**
+ * 回復と起動の依存の組。起動の依存は、回復の依存と一緒にだけ渡せる。
+ * 回復が無いと、起動した作業項目の結びが外れず、その行は通知も起動もされなくなるためである。
+ */
+export type PrConflictFixWiring =
+  | { readonly recovery?: PrConflictRecoveryDeps; readonly fix?: undefined }
+  | {
+      readonly recovery: PrConflictRecoveryDeps;
+      readonly fix: PrConflictFixDeps;
+    };
+
+export type PrConflictWatchDeps = PrConflictFixWiring & {
   readonly now: () => Date;
   readonly log: Logger;
   readonly instanceName: string;
@@ -148,6 +291,14 @@ export type PrConflictWatchResult = {
   readonly notified: number;
   /** 競合が解けて、通知を解決した数。 */
   readonly resolved: number;
+  /** 直す作業項目を起動した数。 */
+  readonly claimed: number;
+  /** 起動せず、保留の理由を書いた(変えた)数。 */
+  readonly held: number;
+  /** 回復で、直す作業項目との結びを外した行の数。 */
+  readonly released: number;
+  /** 直す作業項目が動いているので、通知も起動もせず待った行の数。 */
+  readonly waiting: number;
   /** 閉じた行の数。PRが閉じたときと、設定が対象から外したときを含む。 */
   readonly closed: number;
   /** 判定を見送ったPRの数。 */
@@ -171,6 +322,10 @@ export const PR_CONFLICT_WATCH_IDLE_RESULT: PrConflictWatchResult = {
   conflicted: 0,
   notified: 0,
   resolved: 0,
+  claimed: 0,
+  held: 0,
+  released: 0,
+  waiting: 0,
   closed: 0,
   skipped: 0,
   errors: 0,
@@ -184,6 +339,10 @@ type Counters = {
   conflicted: number;
   notified: number;
   resolved: number;
+  claimed: number;
+  held: number;
+  released: number;
+  waiting: number;
   closed: number;
   skipped: number;
   errors: number;
@@ -194,6 +353,20 @@ type Counters = {
 
 type Deferred = { repos: number; prs: number; rows: number };
 
+/** 起動の判断で読む、回の中で変わらない事実。最初の読み取りを共有し、行ごとに読み直さない。 */
+type Facts = {
+  /** スキルのマーカーと日次の予算。鍵は事実の名前。 */
+  readonly flags: Map<string, Promise<boolean>>;
+  /** リポジトリごとの既定のブランチ。 */
+  readonly defaultBranch: Map<string, Promise<string>>;
+  /** リポジトリごとの、既定のブランチの先頭のmainのCI。 */
+  readonly mainCi: Map<string, Promise<MainCiState | null>>;
+  /** この回で、直す作業項目を作った数。フローの起動に失敗した分も数える。 */
+  claimsStarted: number;
+  /** この回で記録した失敗。同じ失敗(共有した読み取りの失敗)を、行の数だけ記録しないために覚える。 */
+  readonly reported: Set<unknown>;
+};
+
 type Context = {
   readonly deps: PrConflictWatchDeps;
   readonly startedAt: Date;
@@ -201,7 +374,21 @@ type Context = {
   readonly deferred: Deferred;
   /** この回の最初に読んだ、競合している行。PRの鍵で引く。 */
   readonly rows: ReadonlyMap<string, PrConflictCheck>;
+  readonly facts: Facts;
 };
+
+/** `slot`に最初の読み取りを覚え、2回目からは同じ結果を返す。失敗も同じ失敗として返す。 */
+function readOnce<T>(
+  slot: Map<string, Promise<T>>,
+  key: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  const known = slot.get(key);
+  if (known !== undefined) return known;
+  const started = read();
+  slot.set(key, started);
+  return started;
+}
 
 function isStatus(err: unknown, ...statuses: number[]): boolean {
   return err instanceof GitHubHttpError && statuses.includes(err.status);
@@ -329,6 +516,22 @@ export async function runPrConflictWatch(
   const deferred: Deferred = { repos: 0, prs: 0, rows: 0 };
   const startedAt = deps.now();
   const rows = new Map<string, PrConflictCheck>();
+  const context: Context = {
+    deps,
+    startedAt,
+    counters,
+    deferred,
+    rows,
+    facts: {
+      flags: new Map(),
+      defaultBranch: new Map(),
+      mainCi: new Map(),
+      claimsStarted: 0,
+      reported: new Set(),
+    },
+  };
+  // 回復を先に行う。競合している行は、回復が結びを外した後に読む。
+  await recoverFixing(context);
   try {
     for (const row of await deps.listConflicted(CONFLICT_ROW_LIMIT)) {
       rows.set(pullRequestKey(rowRef(row)), row);
@@ -338,7 +541,6 @@ export async function runPrConflictWatch(
     await deps.recordFailure("list_conflicted", err);
     return counters;
   }
-  const context: Context = { deps, startedAt, counters, deferred, rows };
   const seen = await watchOpenPrs(context);
   await watchRemainingRows(context, seen);
   counters.deferred = deferred.repos + deferred.prs + deferred.rows;
@@ -564,7 +766,8 @@ async function applyDecision(
       if (started) {
         deps.log.info("pr conflict started", { pr: pullRequestKey(ref) });
       }
-      if (row.notified_at === null) await notifyConflict(context, ref, row.id);
+      if (row.notified_at === null)
+        await handleUnnotified(context, ref, row, pr);
       return;
     }
   }
@@ -602,6 +805,7 @@ async function notifyConflict(
   context: Context,
   ref: PullRequestRef,
   rowId: number,
+  hold: PrConflictFixHoldReason | undefined,
 ): Promise<void> {
   const { deps, counters } = context;
   const noticeId = await deps.addNotice({
@@ -610,6 +814,7 @@ async function notifyConflict(
       owner: ref.owner,
       repo: ref.repo,
       prNumber: ref.number,
+      ...(hold === undefined ? {} : { hold }),
     }),
   });
   if (noticeId !== null) {
@@ -619,9 +824,12 @@ async function notifyConflict(
       owner: ref.owner,
       repo: ref.repo,
       url: pullRequestPageUrl(ref.owner, ref.repo, ref.number),
-      reason: PR_CONFLICT_REASON,
+      reason:
+        hold === undefined
+          ? PR_CONFLICT_REASON
+          : `${PR_CONFLICT_REASON}(自動修正の保留: ${hold})`,
       target: { kind: "pr", number: ref.number },
-      next_action: PR_CONFLICT_NEXT_ACTION,
+      next_action: prConflictNextAction(hold ?? null),
     });
     // 通知(notice)は残るので、Discordに届かなかったことだけを記録する。
     if (sent.status === "not_sent") {
@@ -643,6 +851,363 @@ async function notifyConflict(
   if (marked === "not_conflicted" && noticeId !== null) {
     await deps.resolveNotice(noticeId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// 回復
+// ---------------------------------------------------------------------------
+
+/**
+ * 直す作業項目が結ばれた行を、作業項目の状態に合わせて戻す。
+ * 競合を直す設定の有効と無効に依らず、通知の判断より先に行う。
+ * 無効の間に止めると、結びが残り、有効にし直した後に起動できなくなる。
+ * 例外は行ごとに捕まえ、読み直した時刻を進めて、後ろの行が飢えないようにする。
+ */
+async function recoverFixing(context: Context): Promise<void> {
+  const { deps } = context;
+  const recovery = deps.recovery;
+  if (recovery === undefined) return;
+  let rows: PrConflictCheck[];
+  try {
+    rows = await recovery.listFixing(CONFLICT_FIXING_BATCH_LIMIT);
+  } catch (err) {
+    await recordFailureOf(context, "list_fixing", err);
+    return;
+  }
+  for (const [index, row] of rows.entries()) {
+    if (overBudget(context)) {
+      deps.log.warn("pr conflict recovery stopped by the time budget", {
+        left: rows.length - index,
+      });
+      break;
+    }
+    try {
+      await recoverRow(context, recovery, row);
+    } catch (err) {
+      await recordFailureOf(
+        context,
+        `recover_fixing:${pullRequestKey(rowRef(row))}`,
+        err,
+      );
+    }
+    await touchSafely(context, row);
+  }
+}
+
+/** 行の結びを外してよいかを、作業項目の状態から決め、外す。行が既に外れていたら、何もしない。 */
+async function recoverRow(
+  context: Context,
+  recovery: PrConflictRecoveryDeps,
+  row: PrConflictCheck,
+): Promise<void> {
+  const { deps, counters } = context;
+  const workItemId = row.fix_work_item_id;
+  if (workItemId === null) return;
+  const item = await recovery.readFixItem(workItemId, row.episode);
+  const decision = decideConflictFixRecovery(item);
+  if (decision.kind === "keep") {
+    // 状態を読めない作業項目や、止まったまま終わらない作業項目で、結びが残り続けても、通知は出ない。
+    // 人が気づけるよう、長く残った行は警告を残す。
+    const boundMs = deps.now().getTime() - row.updated_at.getTime();
+    if (boundMs >= FIX_BOUND_WARN_AFTER_MS) {
+      deps.log.warn("pr conflict fix has been running for a long time", {
+        pr: pullRequestKey(rowRef(row)),
+        work_item_id: workItemId,
+        status: item?.status ?? null,
+      });
+    }
+    return;
+  }
+  const hold = decision.kind === "release" ? decision.hold : null;
+  // 結びを外すのは、行がこの作業項目に結ばれているときだけである。
+  // 別の作業項目に起動し直された行や、既に外れた行は、`false`が返り、正常として扱う。
+  const released = await recovery.release(row.id, {
+    fixWorkItemId: workItemId,
+    ...(hold === null ? {} : { holdReason: hold }),
+  });
+  if (!released) return;
+  counters.released += 1;
+  deps.log.info("pr conflict fix row released", {
+    pr: pullRequestKey(rowRef(row)),
+    kind: decision.kind,
+    hold,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 通知していない競合の行
+// ---------------------------------------------------------------------------
+
+/**
+ * 通知していない競合の行を、通知する、待つ、起動の判断に回す、のどれかに決める。
+ * 直す作業項目が結ばれた行は、設定が無効でも、有効にした時刻より前に始まった競合でも待つ。
+ * 作業項目が動く間に通知して人が直し始めると、人とFactoryが同じブランチへpushしうるためである。
+ * 作業項目が終われば、回復が結びを外し、次の巡回で通常の判断に戻る。
+ */
+async function decideRowAction(
+  context: Context,
+  row: PrConflictCheck,
+): Promise<"notify" | "defer" | "claim"> {
+  if (row.fix_work_item_id !== null) return "defer";
+  const { fix, log } = context.deps;
+  const input = {
+    fixEnabled: fix !== undefined,
+    enabledSince: fix?.enabledSince ?? null,
+    graceMin: fix?.graceMin ?? 0,
+    now: context.deps.now(),
+    row,
+  };
+  const decision = decideConflictNotify(input);
+  // 最終の保留と、起動が無効な行は、直した直後でも通知する。猶予の後の通知だけを、直した直後の窓で待たせる。
+  if (
+    decision !== "notify" ||
+    fix === undefined ||
+    isFinalPrConflictFixHold(row.fix_hold_reason)
+  ) {
+    return decision;
+  }
+  let lastFixSettledAt: Date | null = null;
+  try {
+    lastFixSettledAt = await fix.lastFixSettledAt(
+      row.owner,
+      row.repo,
+      row.pr_number,
+    );
+  } catch (err) {
+    // 読めなくても、通知を止めない。
+    log.warn("pr conflict could not read the time of the last fix", {
+      pr: pullRequestKey(rowRef(row)),
+      error: errorMessage(err),
+    });
+  }
+  return decideConflictNotify({ ...input, lastFixSettledAt });
+}
+
+/** 通知に載せる保留の理由。起動の設定が無効なとき、語彙に無い理由のときは載せない。 */
+function noticeHold(
+  context: Context,
+  row: PrConflictCheck,
+): PrConflictFixHoldReason | undefined {
+  if (context.deps.fix === undefined) return undefined;
+  const reason = row.fix_hold_reason;
+  return isPrConflictFixHoldReason(reason) ? reason : undefined;
+}
+
+async function handleUnnotified(
+  context: Context,
+  ref: PullRequestRef,
+  row: PrConflictCheck,
+  pr: PullRequest,
+): Promise<void> {
+  const action = await decideRowAction(context, row);
+  if (action === "notify") {
+    await notifyConflict(context, ref, row.id, noticeHold(context, row));
+    return;
+  }
+  if (action === "defer") {
+    context.counters.waiting += 1;
+    return;
+  }
+  const { fix } = context.deps;
+  if (fix === undefined) return;
+  await claimRow(context, fix, ref, row, pr);
+}
+
+// ---------------------------------------------------------------------------
+// 起動
+// ---------------------------------------------------------------------------
+
+/** PRが示す`owner/repo`を、GitHubの正規の綴りの2つに分ける。形が違えば`null`。 */
+function canonicalRepoNames(
+  pr: PullRequest,
+): { owner: string; repo: string } | null {
+  const parts = pr.baseRepoFullName.split("/");
+  const [owner, repo] = parts;
+  if (parts.length !== 2 || !owner || !repo) return null;
+  return { owner, repo };
+}
+
+/** 起動の判断が読む事実を、この行について組む。回の中で変わらない事実は、回の間で共有する。 */
+function claimReaders(
+  context: Context,
+  fix: PrConflictFixDeps,
+  ref: PullRequestRef,
+  row: PrConflictCheck,
+  names: { owner: string; repo: string },
+): ConflictFixClaimReaders {
+  const { deps, facts } = context;
+  const repo = repoKey(names);
+  const defaultBranch = (): Promise<string> =>
+    readOnce(facts.defaultBranch, repo, () =>
+      fix.getDefaultBranch(names.owner, names.repo),
+    );
+  return {
+    hasActiveFix: () =>
+      fix.hasActiveFix(names.owner, names.repo, row.pr_number),
+    readPr: () => deps.getPr(ref.owner, ref.repo, ref.number),
+    readDefaultBranch: defaultBranch,
+    readCommits: () => fix.listCommits(names.owner, names.repo, row.pr_number),
+    hasSkillMarker: () =>
+      readOnce(facts.flags, "skill_marker", fix.hasSkillMarker),
+    budgetExceeded: () => readOnce(facts.flags, "budget", fix.budgetExceeded),
+    mainCiState: () =>
+      readOnce(facts.mainCi, repo, async () =>
+        fix.mainCiState(names.owner, names.repo, await defaultBranch()),
+      ),
+    countEpisodeRounds: () => fix.countEpisodeRounds(row.id, row.episode),
+    countPrRounds: () => fix.countPrRounds(row.owner, row.repo, row.pr_number),
+    lastFixSettledAt: () =>
+      fix.lastFixSettledAt(row.owner, row.repo, row.pr_number),
+  };
+}
+
+/**
+ * 競合の行について、直す作業項目を起動してよいかを判断し、保留の理由を書くか、起動する。
+ * 判断が例外を投げたときは、失敗を記録して続ける。行は変えないので、次の巡回で判断し直し、
+ * 猶予が過ぎれば`decideConflictNotify`が通知に倒す。
+ * 1回の実行で作業項目を作るのは`CONFLICT_CLAIMS_PER_RUN_LIMIT`件までで、読み取りを止めた後は新しく始めない。
+ * 上限は、起動する直前にだけ見る。上限に達した後の行にも、保留の判断は行う。
+ */
+async function claimRow(
+  context: Context,
+  fix: PrConflictFixDeps,
+  ref: PullRequestRef,
+  row: PrConflictCheck,
+  pr: PullRequest,
+): Promise<void> {
+  const { deps, counters, facts } = context;
+  const key = pullRequestKey(ref);
+  const names = canonicalRepoNames(pr);
+  if (names === null) {
+    deps.log.warn("pr conflict claim skipped a pull request without a name", {
+      pr: key,
+    });
+    return;
+  }
+  if (stopped(context)) return;
+  let decision: ConflictFixClaimDecision;
+  try {
+    decision = await decideConflictFixClaim({
+      row,
+      instanceName: deps.instanceName,
+      maxRounds: fix.maxRounds,
+      maxRoundsPerPr: fix.maxRoundsPerPr,
+      now: deps.now(),
+      readers: claimReaders(context, fix, ref, row, names),
+    });
+  } catch (err) {
+    // 共有した読み取りの失敗は、同じ失敗が行の数だけ届く。1回の実行で1回だけ記録する。
+    if (facts.reported.has(err)) return;
+    facts.reported.add(err);
+    await absorbReadError(context, `claim_conflict_fix:${key}`, key, err);
+    return;
+  }
+  if (decision.kind === "skip") return;
+  if (decision.kind === "hold") {
+    if (
+      row.fix_hold_reason !== decision.reason &&
+      (await fix.setHold(row.id, decision.reason, row.fix_hold_reason))
+    ) {
+      counters.held += 1;
+    }
+    return;
+  }
+  // 上限に達した行は、通知せず、次の巡回に回す。保留の判断は、上限の前に済んでいる。
+  // 古い一時の保留が付いたままだと、猶予の後の通知が、事実と違う理由を示す。解けた保留は外す。
+  // 外すのは、読んだ理由のままの行だけで、最終の保留には触れない。保留が無ければ書かない。
+  if (facts.claimsStarted >= CONFLICT_CLAIMS_PER_RUN_LIMIT) {
+    if (
+      row.fix_hold_reason !== null &&
+      !isFinalPrConflictFixHold(row.fix_hold_reason)
+    ) {
+      await fix.setHold(row.id, null, row.fix_hold_reason);
+    }
+    return;
+  }
+  // 一時の保留が解けた行は、起動の文が同じ文の中で保留を外す。
+  const workItemId = await fix.claim({
+    id: row.id,
+    owner: names.owner,
+    repo: names.repo,
+    headSha: decision.pr.headSha,
+    title: decision.pr.title,
+    claimedBy: null,
+  });
+  if (workItemId === null) return;
+  facts.claimsStarted += 1;
+  await launchClaimed(context, fix, ref, row, workItemId);
+}
+
+/**
+ * 起動したフローのジョブを取り消す。取り消せたら`true`。
+ * 取り消せなかったときは、人が気づけるように失敗を記録して`false`を返す。
+ */
+async function cancelStartedFlow(
+  context: Context,
+  fix: PrConflictFixDeps,
+  err: PrFixFlowJobIdRecordError,
+): Promise<boolean> {
+  try {
+    await fix.cancelFlow(
+      err.flowJobId,
+      "pr conflict fix: the job id of the flow was not recorded",
+    );
+    return true;
+  } catch (cancelErr) {
+    context.deps.log.warn("pr conflict fix flow started without a job id", {
+      flow_job_id: err.flowJobId,
+      error: errorMessage(cancelErr),
+    });
+    await recordFailureOf(context, "record_conflict_fix_job_id", err);
+    return false;
+  }
+}
+
+/**
+ * 作成した作業項目のフローを起動する。起動に失敗したら、作業項目を`failed`にして、行の結びを外す。
+ * 作業項目を失敗にできなくても、結びは外す。作業項目が動いている間は、次の判断が
+ * `last_fix_unsettled`で保留し、作業項目が終わった後に再び起動の候補になる。
+ * 結びを外しても`fix_attempts`は減らさないので、起動し直すたびに回数の上限へ近づく。
+ * フローが起動した後にジョブIDの記録だけが失敗したときは、動いているフローが次の起動と
+ * 二重になるのを防ぐために、起動したジョブを取り消す。取り消せたら起動の失敗と同じに片付ける。
+ * 取り消せなかったときは、動いているフローを残すために、作業項目を失敗にも結びを外しもしない。
+ */
+async function launchClaimed(
+  context: Context,
+  fix: PrConflictFixDeps,
+  ref: PullRequestRef,
+  row: PrConflictCheck,
+  workItemId: number,
+): Promise<void> {
+  const { deps, counters } = context;
+  const key = pullRequestKey(ref);
+  try {
+    await fix.launch(workItemId);
+  } catch (err) {
+    let note = "pr conflict fix: the flow could not start";
+    if (err instanceof PrFixFlowJobIdRecordError) {
+      if (!(await cancelStartedFlow(context, fix, err))) return;
+      note =
+        "pr conflict fix: the flow was cancelled because its job id was not recorded";
+    }
+    await recordFailureOf(context, `launch_conflict_fix:${key}`, err);
+    try {
+      await fix.failFixItem(workItemId, note);
+    } catch (failErr) {
+      await recordFailureOf(context, `fail_conflict_fix_item:${key}`, failErr);
+    }
+    try {
+      await fix.release(row.id, { fixWorkItemId: workItemId });
+    } catch (releaseErr) {
+      await recordFailureOf(context, `release_conflict_fix:${key}`, releaseErr);
+    }
+    return;
+  }
+  counters.claimed += 1;
+  deps.log.info("pr conflict fix launched", {
+    pr: key,
+    work_item_id: workItemId,
+  });
 }
 
 /**

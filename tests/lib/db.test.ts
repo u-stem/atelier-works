@@ -25,18 +25,19 @@ import {
   fetchDeploymentRows,
   findApprovalRequestBySubject,
   findApprovedWorkItemForIssue,
+  findFixRoundKindToReview,
   findOrphanFixingPrCiChecks,
   getApprovalRequest,
   getIssueProposal,
   getLatestDeployment,
   getLatestPrCiCheck,
   getLatestScheduleFailure,
+  getMainCiStateBySha,
   getNoticeById,
   getPrCiCheckById,
   getPreviousMainCiRun,
   getRequirementDraft,
   getWorkItem,
-  hasCiRoundDiffToReview,
   hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
@@ -63,6 +64,7 @@ import {
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
+  latestConflictFixSettledAt,
   latestDraft,
   latestFixRound,
   latestMainCiRunCreatedAt,
@@ -4726,6 +4728,36 @@ describe("listActivePrFixWorkItems", () => {
     await listActivePrFixWorkItems("o", "r", 7, sql);
     expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
   });
+
+  test("compares the owner in lowercase", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("Acme", "Widgets", 7, sql);
+    expect(calls[0]?.text).toContain("lower(owner) = ");
+  });
+
+  test("passes the lowercase owner and repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("Acme", "Widgets", 7, sql);
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+});
+
+describe("getMainCiStateBySha", () => {
+  const SHA = "a".repeat(40);
+
+  test("reads the newest row when a commit has more than one", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getMainCiStateBySha("acme", "widgets", SHA, sql);
+    expect(calls[0]?.text).toContain("ORDER BY updated_at DESC");
+  });
+});
+
+describe("latestConflictFixSettledAt", () => {
+  test("counts a work item that pushed a commit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestConflictFixSettledAt("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("commit_shas");
+  });
 });
 
 describe("listActiveIssueWorkItems", () => {
@@ -6279,66 +6311,87 @@ describe("getPrCiCheckById", () => {
   });
 });
 
-describe("hasCiRoundDiffToReview", () => {
-  test("is true when a CI round of the pull request pushed the reviewed commit", async () => {
-    const { sql } = createFakeSqlClient([[{ pushed_by_ci_round: true }]]);
+describe("findFixRoundKindToReview", () => {
+  test("is ci when a CI round of the pull request pushed the reviewed commit", async () => {
+    const { sql } = createFakeSqlClient([[{ round_kind: "ci" }]]);
     expect(
-      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
-    ).toBe(true);
+      await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe("ci");
   });
 
-  test("is false when the reviewed commit was pushed by a person", async () => {
-    const { sql } = createFakeSqlClient([[{ pushed_by_ci_round: false }]]);
+  test("is conflict when a conflict round of the pull request pushed the reviewed commit", async () => {
+    const { sql } = createFakeSqlClient([[{ round_kind: "conflict" }]]);
     expect(
-      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
-    ).toBe(false);
+      await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBe("conflict");
   });
 
-  test("is false when the query returns no row", async () => {
+  test("is null when the query returns no row", async () => {
     const { sql } = createFakeSqlClient([[]]);
     expect(
-      await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql),
-    ).toBe(false);
+      await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).toBeNull();
   });
 
-  test("looks only at pr_fix work items that carry a CI check", async () => {
+  test("rejects a kind that is neither ci nor conflict", async () => {
+    const { sql } = createFakeSqlClient([[{ round_kind: "other" }]]);
+    await expect(
+      findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql),
+    ).rejects.toThrow("round_kind");
+  });
+
+  test("names the kind from which of the two checks the work item carries", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).toContain(
+      "CASE WHEN w.ci_check_id IS NOT NULL THEN 'ci' ELSE 'conflict' END",
+    );
+  });
+
+  test("looks only at pr_fix work items that carry a CI check or a conflict check", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
     expect(calls[0]?.text).toMatch(
-      /w\.kind = 'pr_fix'\s+AND w\.ci_check_id IS NOT NULL/,
+      /w\.kind = 'pr_fix'\s+AND \(w\.ci_check_id IS NOT NULL OR w\.conflict_check_id IS NOT NULL\)/,
     );
   });
 
   test("looks for the reviewed commit among the commits that the rounds pushed", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
     expect(calls[0]?.text).toContain(
       "jsonb_array_elements_text(r.commit_shas)",
     );
   });
 
+  test("picks the round that pushed the commit last when several rounds pushed it", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).toMatch(/ORDER BY r\.id DESC\s+LIMIT 1/);
+  });
+
   test("does not depend on whether the pr_fix is the latest", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
-    expect(calls[0]?.text).not.toContain("LIMIT 1");
+    await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).not.toContain("ORDER BY w.");
   });
 
   test("does not depend on the status of the pr_fix", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
+    await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
     expect(calls[0]?.text).not.toContain("w.status");
   });
 
   test("matches the owner and the repository without regard to case", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
-    await hasCiRoundDiffToReview("Acme", "Widgets", 12, CI_SHA, sql);
+    await findFixRoundKindToReview("Acme", "Widgets", 12, CI_SHA, sql);
     expect(calls[0]?.values).toEqual(["acme", "widgets", 12, CI_SHA]);
   });
 
   test("rejects a review sha that is not a full commit sha", async () => {
     const { sql } = createFakeSqlClient([[]]);
     await expect(
-      hasCiRoundDiffToReview("acme", "widgets", 12, "abc", sql),
+      findFixRoundKindToReview("acme", "widgets", 12, "abc", sql),
     ).rejects.toThrow();
   });
 });
@@ -7313,6 +7366,21 @@ describe("transient pr_review restart", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
     expect(calls[0]?.values).toContainEqual([300, 900, 2700]);
+  });
+
+  test("lists only the reviews after the given id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates(
+      { ...query, limit: 50, afterId: 4242 },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(4242);
+  });
+
+  test("compares the id with the given id in the list query", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("w.id > ");
   });
 
   test("passes the delays to the compare-and-swap too", async () => {

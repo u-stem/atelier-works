@@ -11,13 +11,13 @@ import {
   ciAddedPathsStopReason,
   ciClaudeFailureText,
   ciRoundApplyTimeoutMisfit,
-  ciRoundDiffOrFalse,
   ciRoundPushGuardReason,
   ciRoundRetryRefusal,
   ciRoundVerifyTimeoutMisfit,
   classifyFailedRuns,
   evaluateCiRoundPrepareGuard,
   finalizeCiFixOutput,
+  fixRoundOrNull,
   gatherCiFailureInput,
   guardCiRoundReasons,
   hasCiFixSkillMarker,
@@ -920,30 +920,30 @@ describe("ciClaudeFailureText", () => {
   });
 });
 
-describe("ciRoundDiffOrFalse", () => {
+describe("fixRoundOrNull", () => {
   test("returns the answer of the lookup", async () => {
     expect(
-      await ciRoundDiffOrFalse(
-        async () => true,
+      await fixRoundOrNull(
+        async () => "conflict",
         () => {},
       ),
-    ).toBe(true);
+    ).toBe("conflict");
   });
 
-  test("returns false when the lookup throws", async () => {
+  test("returns null when the lookup throws", async () => {
     expect(
-      await ciRoundDiffOrFalse(
+      await fixRoundOrNull(
         async () => {
           throw new Error("db down");
         },
         () => {},
       ),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   test("reports the message of the error when the lookup throws", async () => {
     const reported: string[] = [];
-    await ciRoundDiffOrFalse(
+    await fixRoundOrNull(
       async () => {
         throw new Error("db down");
       },
@@ -954,7 +954,7 @@ describe("ciRoundDiffOrFalse", () => {
 
   test("reports a thrown value that is not an Error", async () => {
     const reported: string[] = [];
-    await ciRoundDiffOrFalse(
+    await fixRoundOrNull(
       async () => {
         throw "plain";
       },
@@ -965,8 +965,8 @@ describe("ciRoundDiffOrFalse", () => {
 
   test("does not report when the lookup succeeds", async () => {
     const reported: string[] = [];
-    await ciRoundDiffOrFalse(
-      async () => false,
+    await fixRoundOrNull(
+      async () => null,
       (message) => reported.push(message),
     );
     expect(reported).toEqual([]);

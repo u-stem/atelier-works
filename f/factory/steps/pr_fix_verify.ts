@@ -17,6 +17,7 @@ import { buildCiFixPrompt, CI_FIX_SCHEMA } from "../lib/ci_fix_prompt.ts";
 import {
   buildCiGatherDeps,
   CI_FIX_ALLOWED_TOOLS,
+  CI_FIX_GITLEAKS_TIMEOUT_MS,
   CI_FIX_TOOLS,
   CI_ROUND_REPLIES_REASON,
   type CiFixApplyResult,
@@ -30,6 +31,7 @@ import {
   requireCiRoundHeadSha,
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
+import type { CiTextScanner } from "../lib/ci_log_support.ts";
 import {
   confirmationVerdict,
   confirmRehash,
@@ -47,6 +49,16 @@ import {
   runClaude,
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
+import {
+  CONFLICT_MERGE_NOT_RECORDED_REASON,
+  CONFLICT_ROUND_DETAILS,
+  CONFLICT_ROUND_REPLIES_REASON,
+  conflictRoundReason,
+} from "../lib/conflict_fix_round.ts";
+import {
+  gitConflictInspectDeps,
+  inspectConflictResolution,
+} from "../lib/conflict_fix_verify.ts";
 import {
   addNoticeUnlessUnresolved,
   countPrFixFailures,
@@ -67,6 +79,7 @@ import type { FixOutcome, FixReply } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
   type CommandRunner,
+  type ConflictBlobs,
   removeIgnoredFiles,
   runCommand,
   worktreeGitPointerMatches,
@@ -97,6 +110,11 @@ export type PrFixVerifyResult = {
   readonly replies: FixReply[];
   readonly commit_subject: string | null;
   readonly commit_body: string | null;
+  /**
+   * 競合回で、検査コマンドの前後の検査が同じだったツリーのsha。競合回が`done`で返すときだけ持つ。
+   * 完了のステップは、pushの直前に検査したツリーがこの値と同じであることを確かめる。
+   */
+  readonly verified_tree_sha?: string | null;
 };
 
 /** 検査コマンドの失敗を添えたClaudeの再実行の結果。 */
@@ -428,6 +446,159 @@ export async function runPrFixVerify(
   };
 }
 
+/** `runConflictFixVerify`が使うI/O。テストでは偽物に差し替える。 */
+export type ConflictFixVerifyDeps = {
+  /** 検査コマンドをコンテナの分離なしで実行することをnoticeに記録する。 */
+  readonly announceChecks: () => Promise<void>;
+  /** worktreeの`.git`を`expected`と比べ、違えば`WorktreeGitPointerModifiedError`を投げる。 */
+  readonly assertGitPointer: (expected: string) => Promise<void>;
+  /** worktreeのHEADが`expectedSha`でブランチ`branch`にあるかを確かめ、違えば理由を返す(`localHeadStopReason`)。 */
+  readonly checkHead: (
+    expectedSha: string,
+    branch: string,
+  ) => Promise<string | null>;
+  /** コミットしていない変更を調べる(`inspectUncommittedChanges`)。基準コミットとの差を見る。 */
+  readonly inspectChanges: () => Promise<ForbiddenChangeResult>;
+  /** 競合ファイルの解消を調べ、止める理由と検査したツリーを返す(`inspectConflictResolution`)。理由が空なら通す。 */
+  readonly inspectResolution: () => Promise<{
+    readonly reasons: readonly string[];
+    readonly treeSha: string;
+  }>;
+  /** `allowed_check_commands`を実行する。 */
+  readonly runChecks: () => Promise<readonly CheckCommandResult[]>;
+  /** 止める理由の文字列の秘密値の検査。 */
+  readonly scanText: CiTextScanner;
+  readonly warn: (message: string, fields: Record<string, unknown>) => void;
+  /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
+  readonly reportCheckImageStale: (
+    error: CheckEnvironmentError,
+  ) => Promise<void>;
+};
+
+export type ConflictFixVerifyInput = {
+  /** 準備ステップが記録した`.git`の中身。準備ステップの結果に無ければnullか空文字列。 */
+  readonly worktreeGitPointer: string | null;
+  /** 準備ステップが作った基準コミット。HEADがこのコミットのままであることを確かめる。 */
+  readonly baselineSha: string | null;
+  /** PRのheadブランチ。 */
+  readonly branch: string | null;
+  readonly hasCheckCommands: boolean;
+  /** `pr_fix_apply.ts`が"done"で返した結果。 */
+  readonly apply: {
+    readonly summary: string;
+    readonly replies: FixReply[];
+    readonly commitSubject: string | null;
+    readonly commitBody: string | null;
+  };
+};
+
+/**
+ * 競合回で、`pr_fix_apply.ts`が"done"を返した解消を、pushしてよいかを検証して結果を返す。
+ * 変更を調べる前には毎回、`.git`が準備ステップの記録と一致することと、HEADが基準コミットでそのブランチにあることを確かめる。
+ * 続けて、禁止された変更(`inspectChanges`)、競合ファイルの解消(`inspectResolution`)の順に調べる。
+ * 記録が無いか一致しなければ、変更を調べずに"blocked"にする。
+ * 検査は、Claudeの実行の後と、検査コマンドが通った後の両方で行う。検査コマンドは対象リポジトリのコードで、worktreeを書き換えられるためである。
+ * 結果の`verified_tree_sha`は、検査コマンドの前後の検査が同じツリーを見たときのそのツリーである。
+ * 検査コマンドの後のツリーが前と違えば、検査コマンドがツリーを書き換えたとして、固定の理由で"blocked"にする。
+ * 完了のステップが、pushするツリーとの一致を確かめる。
+ * 禁止された変更の理由は、パスにClaudeや検査コマンドが選べる名前が入るので、秘密値の検査を通してから返す。
+ * 検査コマンドが失敗したら、固定の理由で"blocked"にする。Claudeは再実行しない。
+ * 検査コマンドの失敗は、署名の変更のような意味の競合を表し、競合ファイルだけを直せるClaudeには直せないためである。
+ * workerが検査の前提を満たさず検査を実行できなければ、`reportCheckImageStale`で知らせ、"guard_blocked"にする。
+ * 理由は例外の文のまま返す。接頭辞を付けると、イメージが古いことを示す理由の接頭辞が崩れ、自動の再開と回数の除外が働かなくなる。
+ */
+export async function runConflictFixVerify(
+  deps: ConflictFixVerifyDeps,
+  input: ConflictFixVerifyInput,
+): Promise<PrFixVerifyResult> {
+  const { summary } = input.apply;
+  const blocked = (reason: string): PrFixVerifyResult => ({
+    outcome: "blocked",
+    reason,
+    summary,
+    replies: [],
+    commit_subject: null,
+    commit_body: null,
+  });
+  const pointer = input.worktreeGitPointer;
+  if (pointer === null || pointer.length === 0) {
+    return blocked(WORKTREE_GIT_POINTER_NOT_RECORDED_REASON);
+  }
+  const baselineSha = input.baselineSha;
+  if (baselineSha === null || baselineSha.length === 0) {
+    return blocked(CONFLICT_MERGE_NOT_RECORDED_REASON);
+  }
+  const branch = input.branch;
+  if (branch === null || branch.length === 0) {
+    return blocked(PR_HEAD_NOT_RECORDED_REASON);
+  }
+  if (input.apply.replies.length > 0) {
+    return blocked(CONFLICT_ROUND_REPLIES_REASON);
+  }
+
+  let verifiedTreeSha: string | null = null;
+  /** `.git`とHEADを照合してから変更と解消を調べ、止める理由を返す。問題が無ければnullで、通したツリーを記録する。 */
+  const inspect = async (): Promise<string | null> => {
+    const pointerReason = await recordedGitPointerStopReason(
+      pointer,
+      deps.assertGitPointer,
+    );
+    if (pointerReason !== null) return pointerReason;
+    const headReason = await deps.checkHead(baselineSha, branch);
+    if (headReason !== null) return headReason;
+    const forbidden = await deps.inspectChanges();
+    // 理由のパスはClaudeや検査コマンドが選べるので、区切りで別の理由に見えないようにする。
+    if (forbidden.blocked) {
+      const safe = await guardCiRoundReasons(forbidden.reasons, deps.scanText);
+      return safe.map(escapeReasonSeparator).join("; ");
+    }
+    const resolution = await deps.inspectResolution();
+    if (resolution.reasons.length > 0) {
+      return resolution.reasons.map(escapeReasonSeparator).join("; ");
+    }
+    verifiedTreeSha = resolution.treeSha;
+    return null;
+  };
+  const done = (): PrFixVerifyResult => ({
+    outcome: "done",
+    reason: null,
+    summary,
+    replies: [],
+    commit_subject: input.apply.commitSubject,
+    commit_body: input.apply.commitBody,
+    verified_tree_sha: verifiedTreeSha,
+  });
+
+  const firstReason = await inspect();
+  if (firstReason !== null) return blocked(firstReason);
+  const treeBeforeChecks = verifiedTreeSha;
+  if (!input.hasCheckCommands) return done();
+  await deps.announceChecks();
+
+  let results: readonly CheckCommandResult[];
+  try {
+    results = await deps.runChecks();
+  } catch (error) {
+    if (!(error instanceof CheckEnvironmentError)) throw error;
+    await deps.reportCheckImageStale(error);
+    return { ...blocked(error.message), outcome: "guard_blocked" };
+  }
+  if (!results.every((result) => result.ok)) {
+    deps.warn("repository checks failed in a conflict round", {
+      commands: results.filter((result) => !result.ok).map((r) => r.command),
+    });
+    return blocked(conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed));
+  }
+  const afterChecksReason = await inspect();
+  if (afterChecksReason !== null) return blocked(afterChecksReason);
+  if (verifiedTreeSha !== treeBeforeChecks) {
+    return blocked(
+      conflictRoundReason(CONFLICT_ROUND_DETAILS.treeChangedDuringChecks),
+    );
+  }
+  return done();
+}
+
 /**
  * `pr_fix_apply.ts`が"done"を返したとき、修正をpushしてよいかを`runPrFixVerify`で検証して結果を返す。
  * 検査コマンドは最小限の環境変数で、秘密情報を渡さず、`mise trust`もせずに実行する。
@@ -459,6 +630,12 @@ export async function main(
   head_sha: string | null = null,
   branch: string | null = null,
   ci_check_id: number | null = null,
+  conflict_check_id: number | null = null,
+  baseline_sha: string | null = null,
+  base_sha: string | null = null,
+  auto_tree_sha: string | null = null,
+  conflicted_paths: string[] | null = null,
+  conflict_blobs: ConflictBlobs[] | null = null,
 ): Promise<PrFixVerifyResult> {
   const lockedRun = withWorktreeProcessLock(
     runCommand,
@@ -544,19 +721,129 @@ export async function main(
         })
       : null;
 
+  // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
+  // workerのコンテナの中で、コンテナの分離なしに実行する。
+  // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
+  // 本文は件数と対象のPRと作業項目で決まるので、作業項目ごとに記録する。
+  // 同じ本文の未解決のnoticeは重ねず、1日を過ぎていれば作成時刻を更新して、一覧に出し続ける。
+  const announceChecks = async (): Promise<void> => {
+    await addNoticeUnlessUnresolved({
+      kind: "unsandboxed_check_commands",
+      message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
+    });
+  };
+  const reportCheckImageStale = (error: CheckEnvironmentError): Promise<void> =>
+    recordCheckEnvironmentNotice(
+      {
+        readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
+        addNotice: addNoticeUnlessUnresolved,
+        log,
+      },
+      error,
+    );
+  /** 検査コマンドを実行し、その生成物(無視されたファイル)を捨てる。残すと、次の検査で、Claudeが書いた無視されたファイルと見分けられない。 */
+  const runChecksAndCleanIgnored = async (): Promise<
+    readonly CheckCommandResult[]
+  > => {
+    const results = await runAllowedCheckCommands(
+      lockedRun,
+      worktree_dir,
+      config.allowed_check_commands,
+      timeoutMs,
+      undefined,
+      undefined,
+      checkSandbox,
+    );
+    if (worktree_git_pointer !== null) {
+      const pointer = worktree_git_pointer;
+      await removeIgnoredFilesIfPointerIntact({
+        assertPointer: () => assertWorktreeGitPointer(worktree_dir, pointer),
+        remove: () =>
+          removeIgnoredFiles({ run: runCommand, worktreeDir: worktree_dir }),
+      });
+    }
+    return results;
+  };
+
+  if (conflict_check_id !== null) {
+    if (
+      base_sha === null ||
+      auto_tree_sha === null ||
+      conflicted_paths === null ||
+      conflict_blobs === null ||
+      head_sha === null ||
+      baseline_sha === null
+    ) {
+      return {
+        outcome: "blocked",
+        reason: CONFLICT_MERGE_NOT_RECORDED_REASON,
+        summary: apply_summary,
+        replies: [],
+        commit_subject: null,
+        commit_body: null,
+      };
+    }
+    const baselineSha = baseline_sha;
+    const inspectDeps = gitConflictInspectDeps({
+      run: runCommand,
+      worktreeDir: worktree_dir,
+      conflictedPaths: conflicted_paths,
+      baselineSha,
+      prHeadSha: head_sha,
+      baseSha: base_sha,
+      scanText: ciTextScanner(runCommand),
+      gitleaksTimeoutMs: CI_FIX_GITLEAKS_TIMEOUT_MS,
+    });
+    const conflictedPaths = conflicted_paths;
+    const conflictBlobs = conflict_blobs;
+    const autoTreeSha = auto_tree_sha;
+    return await runConflictFixVerify(
+      {
+        announceChecks,
+        assertGitPointer: (expected) =>
+          assertWorktreeGitPointer(worktree_dir, expected),
+        checkHead: (expectedSha, headBranch) =>
+          localHeadStopReason(
+            runCommand,
+            worktree_dir,
+            expectedSha,
+            headBranch,
+          ),
+        inspectChanges: () =>
+          inspectUncommittedChanges(runCommand, worktree_dir, {
+            maxChangedFiles: config.max_fix_changed_files,
+            maxDiffLines: config.max_fix_diff_lines,
+          }),
+        inspectResolution: () =>
+          inspectConflictResolution(inspectDeps, {
+            conflictedPaths,
+            conflictBlobs,
+            autoTreeSha,
+          }),
+        runChecks: runChecksAndCleanIgnored,
+        scanText: ciTextScanner(runCommand),
+        warn: (message, fields) =>
+          log.warn(message, { work_item_id, ...fields }),
+        reportCheckImageStale,
+      },
+      {
+        worktreeGitPointer: worktree_git_pointer,
+        baselineSha,
+        branch,
+        hasCheckCommands: config.allowed_check_commands.length > 0,
+        apply: {
+          summary: apply_summary,
+          replies: apply_replies,
+          commitSubject: apply_commit_subject,
+          commitBody: apply_commit_body,
+        },
+      },
+    );
+  }
+
   return await runPrFixVerify(
     {
-      // `allowed_check_commands`は、対象リポジトリの検証されていないコードを、
-      // workerのコンテナの中で、コンテナの分離なしに実行する。
-      // この常設リスクを記録に残らないままにせずNoticesの画面に見え続けるよう、
-      // 本文は件数と対象のPRと作業項目で決まるので、作業項目ごとに記録する。
-      // 同じ本文の未解決のnoticeは重ねず、1日を過ぎていれば作成時刻を更新して、一覧に出し続ける。
-      announceChecks: async () => {
-        await addNoticeUnlessUnresolved({
-          kind: "unsandboxed_check_commands",
-          message: `pr_fix_verifyはこれから${String(config.allowed_check_commands.length)}件のallowed_check_commandsを、コンテナの分離なしで非特権の検査用ユーザーにより${owner}/${repo}#${String(pr_number)}の未検証コードに対して実行します(work item ${String(work_item_id)})。${kernelWarningText(checkSandbox?.kernelWarnings() ?? [])}`,
-        });
-      },
+      announceChecks,
       assertGitPointer: (expected) =>
         assertWorktreeGitPointer(worktree_dir, expected),
       checkHead: (expectedSha, headBranch) =>
@@ -726,15 +1013,7 @@ export async function main(
         }
       },
       warn: (message, fields) => log.warn(message, { work_item_id, ...fields }),
-      reportCheckImageStale: (error) =>
-        recordCheckEnvironmentNotice(
-          {
-            readDeployedSha: () => wmill.getVariable("f/factory/deployed_sha"),
-            addNotice: addNoticeUnlessUnresolved,
-            log,
-          },
-          error,
-        ),
+      reportCheckImageStale,
     },
     {
       worktreeGitPointer: worktree_git_pointer,

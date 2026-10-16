@@ -12,6 +12,7 @@ import {
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
 import {
+  CI_FIX_GITLEAKS_TIMEOUT_MS,
   CI_ROUND_DETAILS,
   CI_ROUND_REASON_PREFIX,
   ciRoundApplyTimeoutMisfit,
@@ -19,6 +20,7 @@ import {
   ciRoundVerifyTimeoutMisfit,
   isCiFixOutputAllowed,
 } from "../lib/ci_fix_round.ts";
+import { conflictRoundReason } from "../lib/conflict_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
@@ -28,11 +30,11 @@ import {
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
 } from "../lib/dependabot_flow_support.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
-import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import {
   type GhClient,
   getBranchProtected,
   getBranchRuleCount,
+  getDefaultBranch,
   isOwnPost,
   type PrReview,
   type ReviewThread,
@@ -74,11 +76,11 @@ import {
   isRecord,
   isString,
   type LabelerAssociation,
-  type NewReviewRecord,
   type NoticeRecord,
   type ReviewFinding,
   type ReviewFindingKind,
-  type ReviewResult,
+  type ReviewOutcome,
+  type ReviewRecord,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
@@ -89,6 +91,7 @@ import {
   assertOutputComplete,
   buildGitArgv,
   type CommandRunner,
+  type ConflictBlobs,
   type GitleaksScan,
   localGitEnv,
   readGitShowFile,
@@ -116,6 +119,13 @@ export {
 // タグの文言は投稿形式の固定部分で、運用者が調整する設定ではないので、
 // `factory_config`ではなくここに置く。
 // ---------------------------------------------------------------------------
+
+/**
+ * バイナリのファイルの一覧に並べるパスの上限。残りは件数だけを書く。
+ * プロンプトの同名の定数(`prompts.ts`)と同じ値にする。
+ * importを足すと、メタデータの事前検査が辿る回数が予算に近づくため、値を複製し、テストで確かめる。
+ */
+export const BINARY_LIST_MAX_FILES = 20;
 
 export const ROLE_TAGS = {
   pr_review: "[pr_review 自動レビュー]",
@@ -196,15 +206,21 @@ export function normalizeJapaneseText(text: string): string {
  * (`countOpenMustThreads`の値)が0より大きければ`"changes_requested"`を返す。
  * 前のラウンドから残った未解決の`[MUST]`は、新しい指摘を投稿しないラウンド
  * (`ReviewBodyMode`の`"rereview_open"`)でも、変更が必要なPRとして扱うため。
- * それ以外(指摘が無く、未解決の`must`も無い場合を含む)は`"reviewed"`を返す。
+ * `openMustCount`が`null`のときは、スレッドの一覧を読めず残りの有無が分からない。
+ * 今回の指摘に`must`が無ければ`"unverified"`を返す。0件と同じ`"reviewed"`にすると、
+ * 未解決の`[MUST]`が残るPRを、人の承認を待てる状態と誤って示すため。
+ * それ以外(指摘が無く、未解決の`must`も無いと分かっている場合を含む)は`"reviewed"`を返す。
  * これは止める理由が無く、人の承認を待つ状態である。
  */
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
-  openMustCount: number,
-): ReviewResult {
-  const hasMustFinding = findings.some((finding) => finding.kind === "must");
-  return hasMustFinding || openMustCount > 0 ? "changes_requested" : "reviewed";
+  openMustCount: number | null,
+): ReviewOutcome {
+  if (findings.some((finding) => finding.kind === "must")) {
+    return "changes_requested";
+  }
+  if (openMustCount === null) return "unverified";
+  return openMustCount > 0 ? "changes_requested" : "reviewed";
 }
 
 /**
@@ -212,6 +228,8 @@ export function reviewResultFor(
  * `result`は、今回の指摘と`openMustCount`から`reviewResultFor`で決める。
  * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
  * `verdict`が`approve`で今回の指摘が0件でも、未解決の`[MUST]`が残れば`changes_requested`になる。
+ * 未解決の指摘を読めなかった(`unverified`)ときは、`result`を`null`にして記録する。
+ * Consoleのレビュー行は、`null`を「修正必須の有無の記録なし」と出す。
  */
 export function buildReviewRecord(input: {
   readonly workItemId: number;
@@ -219,14 +237,15 @@ export function buildReviewRecord(input: {
   readonly verdict: ReviewVerdict;
   readonly summary: string;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number;
+  readonly openMustCount: number | null;
   readonly postedReviewId: string | null;
-}): NewReviewRecord {
+}): ReviewRecord {
+  const outcome = reviewResultFor(input.findings, input.openMustCount);
   return {
     work_item_id: input.workItemId,
     head_sha: input.headSha,
     verdict: input.verdict,
-    result: reviewResultFor(input.findings, input.openMustCount),
+    result: outcome === "unverified" ? null : outcome,
     summary: input.summary,
     findings: [...input.findings],
     posted_review_id: input.postedReviewId,
@@ -542,9 +561,9 @@ export function renderInlineComment(finding: ReviewFinding): string {
 }
 
 /**
- * `renderReviewSummary`が描画する、レビュー本体のコメントの4つの固定形式。
+ * `renderReviewSummary`が描画する、レビュー本体のコメントの5つの固定形式。
  * レビューの本文には、Claudeが自由に書いた`summary`を使わず、
- * 必ずこの4つのどれかにする。
+ * 必ずこの5つのどれかにする。
  * `hasPriorReview`(`db.ts`の`hasPriorReview`)で、
  * このPRの再レビューか最初のレビューかを区別する。
  * `"rereview_open"`は`"rereview_clean"`の対になる形式で、このラウンドでは
@@ -552,19 +571,22 @@ export function renderInlineComment(finding: ReviewFinding): string {
  * `[MUST]`の指摘が1件以上残っているときに使う。
  * そのときにLGTMだけの本文にすると、必須の指摘が残っているのに
  * 「もう対応は要らない」と読めてしまうため。
+ * `"rereview_unverified"`も同じ理由の形式で、未解決のスレッドの一覧を読めず、
+ * 残りがあるか分からないときに使う。LGTMとは書かず、確認を求める。
  */
 export type ReviewBodyMode =
   | "findings"
   | "rereview_clean"
   | "first_clean"
-  | "rereview_open";
+  | "rereview_open"
+  | "rereview_unverified";
 
 /**
  * 本文の形式を、次の情報だけから選ぶ。このラウンドでインラインに投稿した指摘か
  * 除いた指摘があるか、このPRにFactoryのレビューがすでにあるか、
  * このラウンドの解決処理の後もFactory自身の`[MUST]`のスレッドがいくつ残るか
  * (`openMustCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
- * `countOpenMustThreads`で数える)。
+ * `countOpenMustThreads`で数える。スレッドの一覧を読めなかったときは`null`)。
  * 除いた指摘(`path`がdiffに無いなどでインラインに投稿できなかったもの)があれば、
  * `postedCommentCount`が0でも`"findings"`にする。
  * `renderReviewSummary`は固定の2行目の下に除いた指摘を必ず並べるので、
@@ -572,14 +594,17 @@ export type ReviewBodyMode =
  * それ以外で未解決の`must`が残っていれば(`openMustCount > 0`)、指摘の無い形式
  * (`"rereview_clean"`、理屈の上では`"first_clean"`も)の代わりに`"rereview_open"`にする。
  * ただし、PRの最初のレビューに前の未解決スレッドがあることはない。
+ * `openMustCount`が`null`で、投稿する指摘も無いときは、残りの有無が分からないので
+ * `"rereview_unverified"`にする。
  */
 export function decideReviewBodyMode(
   postedCommentCount: number,
   droppedCount: number,
   hasPriorReview: boolean,
-  openMustCount: number,
+  openMustCount: number | null,
 ): ReviewBodyMode {
   if (postedCommentCount + droppedCount > 0) return "findings";
+  if (openMustCount === null) return "rereview_unverified";
   if (openMustCount > 0) return "rereview_open";
   return hasPriorReview ? "rereview_clean" : "first_clean";
 }
@@ -587,7 +612,7 @@ export function decideReviewBodyMode(
 /**
  * factory-reviewスキルの投稿形式に沿って、レビュー本体のコメントの本文を組み立てる。
  * 1行目は`pr_review`の投稿と分かる役割タグと`@author`へのメンション、
- * 2行目は`mode`で選ぶ4つの固定の文、インラインに投稿できなかった指摘があれば
+ * 2行目は`mode`で選ぶ5つの固定の文、インラインに投稿できなかった指摘があれば
  * その箇条書きを続ける。
  * 箇条書きの`path`は改行を空白にまとめて1行にし、`path`と`message`の`<!--`は
  * `neutralizeHtmlComment`で無害にする。どちらもClaudeの出力で、
@@ -595,6 +620,12 @@ export function decideReviewBodyMode(
  * Claudeの`summary`はここに載せない(`factory.reviews`への記録とDiscordだけに使う)。
  * `verdict`も同じく載せない(DBとDiscordだけで、PRの本文には出さない)。
  * `<!-- factory:pr_review:<id> -->`とレビューしたshaの印は、呼び出し側が`withReviewMarkers`で足す。
+ *
+ * `binaryFiles`か`binaryUnlistedCount`が1件以上あるときは、モードによらず、固定の一文とパスの一覧を足す
+ * (`renderBinaryFilesLines`)。差分に内容が出ないファイルを、Claudeの出力に頼らず、
+ * 読まれていない可能性のあるものとして、投稿に必ず残すため。
+ * 指摘の無い2つの形式は、そのとき「LGTMです」を言わず、差分に指摘が無いことだけを書く。
+ * 読めていないファイルが残るのに、LGTMと読める行を出さないため。
  *
  * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
  * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
@@ -611,9 +642,12 @@ export function renderReviewSummary(
   postedCommentCount: number,
   mode: ReviewBodyMode,
   droppedFindings: readonly ReviewFinding[],
-  openMustCount: number,
+  openMustCount: number | null,
+  binaryFiles: readonly string[] = [],
+  binaryUnlistedCount = 0,
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
+  const hasBinary = binaryFiles.length + binaryUnlistedCount > 0;
   switch (mode) {
     case "findings":
       lines.push(
@@ -621,11 +655,15 @@ export function renderReviewSummary(
       );
       break;
     case "rereview_clean":
-      lines.push("修正を確認しました。LGTMです。");
+      lines.push(
+        hasBinary ? "修正を確認しました。" : "修正を確認しました。LGTMです。",
+      );
       lines.push("最終的なApprove判断は人が行ってください。");
       break;
     case "first_clean":
-      lines.push("指摘はありません。LGTMです。");
+      lines.push(
+        hasBinary ? "差分に指摘はありません。" : "指摘はありません。LGTMです。",
+      );
       lines.push("最終的なApprove判断は人が行ってください。");
       break;
     case "rereview_open":
@@ -633,25 +671,89 @@ export function renderReviewSummary(
         `新しい指摘はありません。未対応の指摘が${String(openMustCount)}件残っています。確認お願いします。`,
       );
       break;
+    case "rereview_unverified":
+      lines.push(
+        "新しい指摘はありません。未解決の指摘を読み取れなかったため、残りがあるかは確認できていません。確認お願いします。",
+      );
+      break;
   }
+  lines.push(...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount));
   lines.push(...renderUnanchoredFindingLines(droppedFindings));
   return lines.join("\n");
 }
 
-/** 総評に並べる`path`。改行は空白にまとめ、`<!--`は無害にする。 */
+/**
+ * 差分に内容が出ないバイナリのファイルの固定の一文と、パスの箇条書き。無ければ空。
+ * 先頭に空行を置き、直前の行(LGTMや免責の行)と続けて読まれないようにする。
+ * パスは、改行を空白にまとめ、200文字で切り、`<!--`を無害にしてから、コードスパンで囲む(`pathCodeSpan`)。
+ * 上限を超えた分は「ほかN件」と書く。
+ * `unlistedCount`は、パスを変更ファイルと照合できず並べなかった件数で、件数と注記にだけ加える。
+ */
+function renderBinaryFilesLines(
+  binaryFiles: readonly string[],
+  unlistedCount: number,
+): string[] {
+  const total = binaryFiles.length + unlistedCount;
+  if (total === 0) return [];
+  const shown = binaryFiles.slice(0, BINARY_LIST_MAX_FILES);
+  const rest = binaryFiles.length - shown.length;
+  return [
+    "",
+    `内容を差分で読めないバイナリのファイルが${String(total)}件あります。人が内容を確認してください。`,
+    ...shown.map((path) => `- ${pathCodeSpan(path)}`),
+    ...(rest > 0 ? [`(ほか${String(rest)}件)`] : []),
+    ...(unlistedCount > 0
+      ? [`(パスを確認できなかったものが${String(unlistedCount)}件あります)`]
+      : []),
+  ];
+}
+
+/** 総評に並べる`path`の最大の文字数(コードポイント)。超えた分は「…」にする。 */
+const PATH_MAX_CHARS = 200;
+
+/**
+ * 総評に並べる`path`の文字列。改行は空白にまとめ、200文字で切り(切ったら末尾に「…」)、
+ * `<!--`は無害にする。長いパスで総評が埋まらないようにし、目印の偽造も防ぐ。
+ */
 function oneLinePath(path: string): string {
-  return neutralizeHtmlComment(path.replace(/\s*[\r\n]+\s*/g, " "));
+  const oneLine = path.replace(/\s*[\r\n]+\s*/g, " ");
+  const chars = Array.from(oneLine);
+  const cut =
+    chars.length > PATH_MAX_CHARS
+      ? `${chars.slice(0, PATH_MAX_CHARS).join("")}…`
+      : oneLine;
+  return neutralizeHtmlComment(cut);
+}
+
+/**
+ * `text`をコードスパンで囲む。`@`のメンションやリンクとして描画させないため。
+ * 中のバッククォートの最長の連なりより長いフェンスで囲み、
+ * 先頭か末尾がバッククォートなら、フェンスと混ざらないよう空白を挟む。
+ */
+function codeSpan(text: string): string {
+  const longestRun = Math.max(
+    0,
+    ...Array.from(text.matchAll(/`+/g), (m) => m[0].length),
+  );
+  const fence = "`".repeat(longestRun + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+/** 総評に並べる`path`を、整えてコードスパンで囲んだ文字列。 */
+function pathCodeSpan(path: string): string {
+  return codeSpan(oneLinePath(path));
 }
 
 /** 指摘の位置。範囲の指摘は`path:line-end_line`、1行の指摘は`path:line`、行が無ければ`path`だけ。 */
 function findingLocation(finding: ReviewFinding): string {
   const path = oneLinePath(finding.path);
-  if (finding.line === null) return path;
+  if (finding.line === null) return codeSpan(path);
   const end =
     finding.end_line !== null && finding.end_line > finding.line
       ? `-${String(finding.end_line)}`
       : "";
-  return `${path}:${String(finding.line)}${end}`;
+  return codeSpan(`${path}:${String(finding.line)}${end}`);
 }
 
 /**
@@ -668,7 +770,7 @@ function renderUnanchoredFindingLines(
     const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
     const location = commented.includes(finding)
       ? findingLocation(finding)
-      : oneLinePath(finding.path);
+      : pathCodeSpan(finding.path);
     const message = neutralizeHtmlComment(
       normalizeJapaneseText(finding.message),
     );
@@ -682,16 +784,20 @@ function renderUnanchoredFindingLines(
  * 行コメントにするはずだった指摘(`commentedFindings`)は、位置を添えて、行に紐づけられなかった指摘(`droppedFindings`)と
  * 同じ一覧に並べる。後者の形は通常の総評と同じにする。
  * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
+ * `binaryFiles`があれば、`renderReviewSummary`と同じ固定の一文とパスの一覧を足す。
  */
 export function renderUnresolvedLineSummary(
   authorLogin: string,
   commentedFindings: readonly ReviewFinding[],
   droppedFindings: readonly ReviewFinding[],
+  binaryFiles: readonly string[] = [],
+  binaryUnlistedCount = 0,
 ): string {
   return [
     `${ROLE_TAGS.pr_review} @${authorLogin}`,
     "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
     "確認お願いします。",
+    ...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount),
     ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
   ].join("\n");
 }
@@ -934,14 +1040,17 @@ export function findPostedReviewId(
 /**
  * `pr_fix_prepare.ts`の結果の判別子。
  * `"proceed"`なら後続のステップ(collect、apply、verify)を実行する。
- * 残りの3つは終端で、`pr_fix_finish.ts`に直接進む。
- * この3つは`PrFixFinishOutcome`の値でもある(下の`decideFixFinishAction`を参照)。
+ * 残りは終端で、`pr_fix_finish.ts`に直接進む。
+ * これらは`PrFixFinishOutcome`の値でもある(下の`decideFixFinishAction`を参照)。
+ * `conflict_up_to_date`と`conflict_blocked`は競合回だけが返す。
  */
 export type PrFixGateOutcome =
   | "proceed"
   | "skip"
   | "guard_blocked"
-  | "round_exhausted";
+  | "round_exhausted"
+  | "conflict_up_to_date"
+  | "conflict_blocked";
 
 // ---------------------------------------------------------------------------
 // pr_fix_prepare: 安全のための関門(純粋関数)。
@@ -1102,15 +1211,16 @@ export function evaluatePrFixSafetyGuards(
 
 /**
  * 修正ラウンドの上限(`max_fix_rounds`)を確かめる。
- * CIの失敗を直す回(`ciRound`)は確かめない。その回は`fix_round`を前の値のまま写すので、
- * 指摘修正が上限に達したPRでも、CIの回が止まってしまうため。CIの回の上限は`pr_ci_fix_max_rounds`が決める。
+ * CIの失敗か、マージの競合を直す回(`skipsLimit`)は確かめない。その回は`fix_round`を前の値のまま写すので、
+ * 指摘修正が上限に達したPRでも、その回が止まってしまうため。
+ * CIの回の上限は`pr_ci_fix_max_rounds`が、競合の回の上限は`pr_conflict_fix_max_rounds`が決める。
  */
 export function evaluateFixRoundGuard(
   fixRound: number,
   maxFixRounds: number,
-  ciRound = false,
+  skipsLimit = false,
 ): PrFixGuardResult {
-  if (!ciRound && fixRound > maxFixRounds) {
+  if (!skipsLimit && fixRound > maxFixRounds) {
     return {
       ok: false,
       reason: `fix_round ${String(fixRound)} exceeds max_fix_rounds ${String(maxFixRounds)}`,
@@ -1269,6 +1379,35 @@ export function ciRoundTimeoutMisfit(
       CI_ROUND_OVERHEAD,
     )
   );
+}
+
+/**
+ * 競合回の修正ステップが、gitleaksを走らせる回数。Claudeの出力の要約と理由の検査1回である。
+ */
+const CONFLICT_ROUND_APPLY_SCANS = 1;
+
+/**
+ * 競合を直す回の時間設定が、flow.yamlの修正ステップのtimeoutに収まらなければ理由を返し、収まればnullを返す。
+ * 通常の回の見積もり(`prFixTimeoutMisfit`)に、競合回だけの追加の作業を足して確かめる。
+ * 準備のステップが止める条件であり、`watch_pr_conflicts`が起動の前に同じ条件で保留する。設定だけで決まる。
+ * 修正ステップは、Claudeの実行(不正な出力への再試行を含めて2回)に、gitleaksの検査1回を足す。
+ * 検証ステップは、検査コマンドを1回だけ実行し、Claudeを再実行しない。
+ * 通常の回の見積もりは検査コマンドを2回とClaude 2回で数えるので、その内側に収まる。
+ * gitによる読み取りが検証ステップに足す分は、その差に比べて小さく、別に見積もらない。
+ */
+export function conflictRoundTimeoutMisfit(
+  config: Pick<FactoryConfig, "claude_timeout_sec" | "allowed_check_commands">,
+): string | null {
+  const base = prFixTimeoutMisfit(config);
+  if (base !== null) return base;
+  const scanSec =
+    CI_FIX_GITLEAKS_TIMEOUT_MS / 1000 + PR_COMMAND_STOP_OVERHEAD_SEC;
+  const applyTotal =
+    2 * perRunSec(config.claude_timeout_sec) +
+    CONFLICT_ROUND_APPLY_SCANS * scanSec +
+    PR_STEP_OVERRUN_BASE_SEC;
+  if (applyTotal <= PR_FIX_APPLY_STEP_TIMEOUT_SEC) return null;
+  return `${conflictRoundReason("time settings do not fit the flow step timeout: ")}2 claude runs and ${String(CONFLICT_ROUND_APPLY_SCANS)} secret scan need ${String(applyTotal)}s but the step allows ${String(PR_FIX_APPLY_STEP_TIMEOUT_SEC)}s`;
 }
 
 /**
@@ -2757,6 +2896,8 @@ export type PrFixPushGateDeps = {
  * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
  * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
  * 残った所有権を、workerが検査の前提を満たさず取り戻せないとき(`CheckEnvironmentError`)も、そのmessageを返す。
+ * `busyReason`を渡すと、`WorktreeBusyError`のときだけ、そのmessageを渡して得た文を返す。
+ * 呼び出し側が、保持者を含む文を固定の注記に置き換えるために使う。`CheckEnvironmentError`には使わない。
  * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
  * 最後に、準備ステップの結果にPRのブランチ(`recordedBranch`)があることを確かめ、無ければ`PR_HEAD_NOT_RECORDED_REASON`を返す。
  * `commitAndPush`の`expectedBranch`に渡す値で、無いとpushする先を確かめられないため。
@@ -2766,15 +2907,15 @@ export async function prFixPushGateReason(
   deps: PrFixPushGateDeps,
   recordedPointer: string | null,
   recordedBranch: string | null,
+  busyReason?: (holder: string) => string,
 ): Promise<string | null> {
   try {
     await deps.ensureLockFree();
   } catch (err) {
-    if (
-      err instanceof WorktreeBusyError ||
-      err instanceof CheckEnvironmentError
-    )
-      return err.message;
+    if (err instanceof WorktreeBusyError) {
+      return busyReason === undefined ? err.message : busyReason(err.message);
+    }
+    if (err instanceof CheckEnvironmentError) return err.message;
     throw err;
   }
   const pointerReason = await recordedGitPointerStopReason(
@@ -2832,7 +2973,9 @@ export type PrFixFinishOutcome =
   | "no_feedback"
   | "done"
   | "requirements_gap"
-  | "blocked";
+  | "blocked"
+  | "conflict_up_to_date"
+  | "conflict_blocked";
 
 export type PrFixFinalAction =
   | { readonly kind: "noop" }
@@ -2840,7 +2983,9 @@ export type PrFixFinalAction =
   | { readonly kind: "requirements_gap_reroute" }
   | { readonly kind: "requirements_gap_needs_human" }
   | { readonly kind: "guard_blocked" }
-  | { readonly kind: "needs_human" };
+  | { readonly kind: "needs_human" }
+  | { readonly kind: "conflict_up_to_date" }
+  | { readonly kind: "conflict_blocked" };
 
 /**
  * まとめた結果(prepare、collect、apply、verifyのうち最後に動いたものの結果)を、
@@ -2853,6 +2998,10 @@ export type PrFixFinalAction =
  * 検査コマンドの失敗)は`"needs_human"`にする。
  * どちらも上流では`"blocked"`の形の結果だが、失敗の種類が違うので、
  * 意図して別の終端状態にしている。
+ *
+ * `conflict_up_to_date`(baseがすでにPRに取り込まれていて、直す競合が無い)と
+ * `conflict_blocked`(競合回で直せない競合)は、競合回の準備のステップだけが返す。
+ * どちらも、後続のステップを経ずに終端へ進む。
  */
 export function decideFixFinishAction(
   outcome: PrFixFinishOutcome,
@@ -2873,6 +3022,10 @@ export function decideFixFinishAction(
     case "no_feedback":
     case "blocked":
       return { kind: "needs_human" };
+    case "conflict_up_to_date":
+      return { kind: "conflict_up_to_date" };
+    case "conflict_blocked":
+      return { kind: "conflict_blocked" };
   }
 }
 
@@ -3918,6 +4071,12 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
   },
   {
+    pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.prepare, "([\\s\\S]+)$"),
+    describe: (m) =>
+      `dependabotの更新を、準備の処理(リポジトリの取得と作業ツリーの作成)で止めました(${dependabotDetailText(m[1])})`,
+    nextAction: (m) => dependabotNextActionForDetail(m[1]),
+  },
+  {
     pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.finish, "([\\s\\S]+)$"),
     describe: (m) =>
       `dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(${dependabotDetailText(m[1])})`,
@@ -4741,6 +4900,7 @@ export function earlyExitBase(
     | "attempt"
     | "fix_round"
     | "ci_check_id"
+    | "conflict_check_id"
   >,
 ): {
   readonly owner: string;
@@ -4756,6 +4916,12 @@ export function earlyExitBase(
   readonly attempt: number;
   readonly fix_round: number;
   readonly ci_check_id: number | null;
+  readonly conflict_check_id: number | null;
+  readonly baseline_sha: string | null;
+  readonly base_sha: string | null;
+  readonly auto_tree_sha: string | null;
+  readonly conflicted_paths: string[] | null;
+  readonly conflict_blobs: ConflictBlobs[] | null;
 } {
   return {
     owner: workItem.owner,
@@ -4771,6 +4937,12 @@ export function earlyExitBase(
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,
     ci_check_id: workItem.ci_check_id,
+    conflict_check_id: workItem.conflict_check_id,
+    baseline_sha: null,
+    base_sha: null,
+    auto_tree_sha: null,
+    conflicted_paths: null,
+    conflict_blobs: null,
   };
 }
 
@@ -4904,4 +5076,20 @@ export async function anyPackageJsonScriptsChanged(
     if (packageJsonScriptsChanged(before, after)) return true;
   }
   return false;
+}
+
+/**
+ * 差分の`Binary files ... differ`の行から集めたパスのうち、APIの変更ファイル(`changedFiles`)に
+ * 載っているものだけを残し、載っていないものは件数だけを返す。
+ * 差分の行はPRの作者が書けるので、パスの区切りの細工(ディレクトリ名に` and b/`を含めるなど)で
+ * 変更に無いパスが取り出されうる。その信頼できないパスを、Claudeが読む対象としてプロンプトに出さず、
+ * 総評にも並べない。落とした分は、件数として総評に残す(`renderReviewSummary`)。
+ */
+export function selectListedBinaryFiles(
+  binaryFiles: readonly string[],
+  changedFiles: readonly string[],
+): { readonly listed: string[]; readonly unlistedCount: number } {
+  const changed = new Set(changedFiles);
+  const listed = binaryFiles.filter((path) => changed.has(path));
+  return { listed, unlistedCount: binaryFiles.length - listed.length };
 }

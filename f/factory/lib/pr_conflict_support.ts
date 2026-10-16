@@ -5,6 +5,7 @@
 import type { PullRequest } from "./github.ts";
 import { isCommitSha } from "./main_ci_support.ts";
 import { pullRequestPageUrl } from "./pr_ci_support.ts";
+import type { PrConflictFixHoldReason } from "./pr_conflict_fix_holds.ts";
 import { assertGitHubName } from "./types.ts";
 
 /** マージの競合を知らせるnoticeの種類。 */
@@ -106,12 +107,58 @@ export type PrConflictNoticeInput = {
   readonly owner: string;
   readonly repo: string;
   readonly prNumber: number;
+  /** 自動で直さなかった理由。渡すと、通知の本文に載せる。 */
+  readonly hold?: PrConflictFixHoldReason;
 };
 
 /**
+ * 保留の理由ごとの、自動で直さない理由の短い説明。通知の本文に載せる。
+ * 理由の識別子は載せず、人が読んで状況が分かる言葉にする。
+ */
+export const PR_CONFLICT_FIX_HOLD_NOTE: Readonly<
+  Record<PrConflictFixHoldReason, string>
+> = {
+  last_fix_unsettled: "直す作業が終わらないため",
+  budget_exceeded: "日次の予算を使い切ったため",
+  recently_fixed: "直した後も競合が残っているため",
+  marker_missing: "factory-fixスキルが競合を直す手順を持たないため",
+  main_ci_failed: "mainのCIが失敗しているため",
+  pr_draft_or_auto_merge: "PRがドラフトか、auto-mergeが有効なため",
+  not_factory_head: "Factoryが作っていないコミットがPRにあるため",
+  rounds_exhausted: "直す回数の上限に達したため",
+  base_not_default: "PRのbaseが既定のブランチでないため",
+  base_changes_workflows:
+    "mainの更新が.github/workflowsを変え、Factoryはpushできないため",
+  protected_path: "競合したパスが保護パスのため",
+  unresolvable: "競合が自動で解ける形でないため",
+  check_failed: "解消した後の検査が失敗したため",
+  fix_stopped: "直す作業が自動では解けない理由で止まったため",
+};
+
+/** 保留の理由によって、人が取る操作が違うときの固定文。 */
+const PR_CONFLICT_FIX_HOLD_NEXT_ACTION: Partial<
+  Readonly<Record<PrConflictFixHoldReason, string>>
+> = {
+  base_changes_workflows:
+    "ローカルかwebでPRのブランチにベースブランチをmergeして競合を解消し、pushする。pushした後は、Factoryの自動修正の対象から外れる",
+};
+
+/**
+ * 人が次にすることの固定文。保留の理由によって違うときだけ、理由ごとの文を返す。
+ * 保留が無いときと、操作が共通の理由では、`PR_CONFLICT_NEXT_ACTION`を返す。
+ */
+export function prConflictNextAction(
+  hold: PrConflictFixHoldReason | null,
+): string {
+  if (hold === null) return PR_CONFLICT_NEXT_ACTION;
+  return PR_CONFLICT_FIX_HOLD_NEXT_ACTION[hold] ?? PR_CONFLICT_NEXT_ACTION;
+}
+
+/**
  * 競合を知らせるnoticeの本文。接頭辞、次の操作、PRのリンクだけを入れる。
+ * 自動で直さなかった理由(`hold`)を渡すと、固定の説明(`PR_CONFLICT_FIX_HOLD_NOTE`)も入れる。
  * コミットのshaも、PRの題名やブランチ名のような外部由来の文字列も入れない。
- * 同じPRの本文は常に同じになり、未解決の通知がある間は重ねて登録されない。
+ * 同じPRと同じ理由の本文は常に同じになり、未解決の通知がある間は重ねて登録されない。
  * `owner`と`repo`がGitHubの名前の形でないとき、PR番号が正の整数でないときは例外を投げる。
  */
 export function prConflictNoticeMessage(input: PrConflictNoticeInput): string {
@@ -126,5 +173,10 @@ export function prConflictNoticeMessage(input: PrConflictNoticeInput): string {
     input.repo,
     input.prNumber,
   );
-  return `${prefix}マージの競合があります。次の操作: ${PR_CONFLICT_NEXT_ACTION}。PR: ${link}`;
+  const why =
+    input.hold === undefined
+      ? ""
+      : `自動では直しません(${PR_CONFLICT_FIX_HOLD_NOTE[input.hold]})。`;
+  const action = prConflictNextAction(input.hold ?? null);
+  return `${prefix}マージの競合があります。${why}次の操作: ${action}。PR: ${link}`;
 }

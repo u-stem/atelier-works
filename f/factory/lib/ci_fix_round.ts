@@ -1149,19 +1149,19 @@ export async function collectCiFixChanges(
 }
 
 /**
- * レビューの入力にする「CI回の差分か」の問い合わせを、失敗しても通常のレビューを止めない形にする。
- * 問い合わせが例外を投げたときは偽を返し、`onError`に例外のメッセージを渡す。
- * この値は重点的に見る固定文を足すかどうかだけを決めるので、偽に倒しても通常のレビューは変わらない。
+ * レビューの入力にする「直近のコミットを書いた回の種類」の問い合わせを、失敗しても通常のレビューを止めない形にする。
+ * 問い合わせが例外を投げたときはnullを返し、`onError`に例外のメッセージを渡す。
+ * この値は重点的に見る固定文を足すかどうかだけを決めるので、nullに倒しても通常のレビューは変わらない。
  */
-export async function ciRoundDiffOrFalse(
-  lookup: () => Promise<boolean>,
+export async function fixRoundOrNull(
+  lookup: () => Promise<"ci" | "conflict" | null>,
   onError: (message: string) => void,
-): Promise<boolean> {
+): Promise<"ci" | "conflict" | null> {
   try {
     return await lookup();
   } catch (err) {
     onError(err instanceof Error ? err.message : String(err));
-    return false;
+    return null;
   }
 }
 

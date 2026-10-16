@@ -27,7 +27,10 @@ const SHA_D = "d".repeat(40);
 
 function clientFor(responses: Parameters<typeof createFakeCommandRunner>[0]) {
   const fake = createFakeCommandRunner(responses);
-  return { fake, client: { run: fake.run, ghToken: "tok" } };
+  return {
+    fake,
+    client: { run: fake.run, ghToken: "tok", sleep: async () => {} },
+  };
 }
 
 describe("listReleases", () => {
@@ -153,7 +156,7 @@ describe("getRepoFileText", () => {
       exitCode: 1,
       timedOut: false,
     };
-    const { client } = clientFor([rejected]);
+    const { client } = clientFor([rejected, rejected]);
     await expect(
       getRepoFileText(client, "acme", "widgets", "a.txt", "main"),
     ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
