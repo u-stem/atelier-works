@@ -2146,9 +2146,10 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 - 占有は、`running_jobs`と`slots`を並べて読む。
   記録のジョブ自身が1つの枠を使うので、`running_jobs`は最大でも`slots`から1を引いた値までしか出ない。
   この値は、記録のジョブが動けるだけ枠が空いていた瞬間の標本である。
+  実際に動くワーカーが1つなら、記録のジョブが動くとき、ほかに動くジョブは無いので、`running_jobs`は常に0になる([枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる))。
 - 塞がりの目安は、`lag_seconds`の大きさと、`sampled_at`の間隔の空白である。
   `running_jobs`の大きさでは判定しない。
-  Consoleの「枠が塞がっていた記録」はこの値から数える参考値で、`running_jobs`の正しさは未確認である。
+  Consoleの「枠が塞がっていた記録」は`running_jobs`から数えるので、実際に動くワーカーが1つの間は0件のままになる。
   空白だけでは停止と区別できないので、見分け方は[予定の欠け](#予定の欠け)と[日次のまとめでの見方](#日次のまとめでの見方)に従う。
 - 内訳は`running_by_script`に、件数の多い10件のscriptのパスと、残りをまとめた`other`で載る。
 - 数えるtagは、Windmillの既定でdefaultのworkerグループが受けるものである。
@@ -2164,6 +2165,39 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   まだ始まっていない親は、枠が空くのを待つので、待ちには数える。
 - どのworkerが受けるかを知らないtagのジョブは、数えない。
   ジョブログに、件数とtag名の先頭5件が、記録のたびに1回、警告として残る。
+
+#### 枠の使用数の数え方を確かめる
+
+`running_jobs`がずっと0のとき、数え落としか、本当に0かを次の順で確かめる。
+読み取りだけで、実行や設定の変更はしない。
+`db`のコンテナで、`windmill`のデータベース(Windmill本体)と`datatable_db`(`factory.worker_samples`)を読む。
+
+1. 記録のジョブの権限で、ジョブの一覧が絞られていないことを確かめる。
+   記録のジョブは、スケジュールを作ったユーザーの権限で動く。
+   `usr`表の`is_admin`が真なら、一覧は絞られない。
+2. 数える対象のtagに漏れが無いことを確かめる。
+   `v2_job`表の`tag`の一覧が、defaultのworkerが受けるtagとnativeやConsole用のworkerが受けるtagに収まっていればよい。
+   収まらないtagがあれば、記録のジョブのログに警告が出る。
+   `job_logs`表で、`sample_worker_load`のログに`unknown`が含まれないことも確かめる。
+3. 記録の時刻に動いていたジョブを突き合わせる。
+   `factory.worker_samples`の`sampled_at`と、`v2_job_completed`表の`started_at`から`completed_at`の間を比べ、`running_jobs`が数えるはずのジョブの数を求める。
+4. 同じワーカー名のジョブが、時間で重なるかを見る。
+   `v2_job_completed`表の`worker`が同じジョブ同士で、実行の時間が重なる組を数える。
+   `worker_ping`表の`worker`が、defaultのworkerのコンテナで何行あるかも見る。
+
+確かめた環境の結果は次のとおりである。
+
+- 記録のジョブは管理者の権限で動き、一覧は絞られない。
+- ジョブのtagは`bun`、`flow`、`dependency`、`console`、`postgresql`だけで、未知のtagは無い。
+  ジョブログに未知のtagの警告は無い。
+- 記録の時刻に、数える対象のジョブが動いていた記録は、約2600件のうち1件も無い。
+  `running_jobs`は、数え落としではなく、実際に0だった。
+- Claudeのジョブが動いている間の記録は、そのジョブのステップが終わった直後に始まる。
+  開始が遅れ、`lag_seconds`に出る。
+- defaultのworkerは、コンテナごとに`worker_ping`の行が1つで、同じワーカー名のジョブは時間が重ならない。
+  `NUM_WORKERS=3`でも、同時に動くジョブは1つだった。
+  Claudeのジョブが動く間、記録のジョブも、ほかの定期のジョブも待つ。
+  `NUM_WORKERS`が効いていない理由は、確かめていない。
 
 #### queueの待ち
 
