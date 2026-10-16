@@ -1652,8 +1652,17 @@ Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`�
 
 Claudeのバージョンとモデルごとの使用量は、viewの`v_agent_usage_daily`で見る。
 viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数、ターン数を合計し、実行時間の平均を出す。
-`day`は、既存の`v_agent_cost_daily`と同じく、データベースのセッションの時間帯(UTC)で日を切る。
-JSTで見るときは、`created_at`で絞る。
+`day`は、既存の`v_agent_cost_daily`と同じく、データベースの時間帯の設定で日を切る。設定が既定のままならUTCである。
+JSTで日を切りたいときは、viewではなく`factory.agent_runs`を、`created_at AT TIME ZONE 'Asia/Tokyo'`で日に切って集計する。
+
+```sql
+SELECT date_trunc('day', created_at AT TIME ZONE 'Asia/Tokyo') AS day_jst,
+       claude_version, model, count(*) AS runs, sum(cost_usd) AS cost_usd
+FROM factory.agent_runs
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+```
+
 バージョンを上げた前後を比べるには、期間で絞って、バージョンごとの費用を並べる。
 
 ```sql
