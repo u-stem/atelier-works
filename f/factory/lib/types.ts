@@ -504,8 +504,18 @@ export type ReviewVerdict = "approve" | "comment" | "request_changes";
 export type ReviewResult = "changes_requested" | "reviewed";
 
 /**
+ * 投稿した直後に判定した、レビューの結果。
+ * `unverified`は、前のラウンドから残った未解決の`[MUST]`を数えるためのスレッドの一覧を読めず、
+ * 指摘が残っているかを判定できなかった状態である。
+ * 残っていないと分からないので、`reviewed`(人の承認を待てる状態)にはしない。
+ * `factory.reviews`には記録せず、`result`をnullにする。
+ */
+export type ReviewOutcome = ReviewResult | "unverified";
+
+/**
  * `factory.reviews`の1行。
- * `result`は、結果を記録する前に作られた行を読むときだけ`null`になる。
+ * `result`は、結果を記録する前に作られた行か、
+ * 未解決の指摘を読めず結果を判定できなかった行(`ReviewOutcome`の`unverified`)で`null`になる。
  */
 export type ReviewRecord = {
   work_item_id: number;
@@ -515,11 +525,6 @@ export type ReviewRecord = {
   summary: string;
   findings: ReviewFinding[];
   posted_review_id: string | null;
-};
-
-/** `db.insertReview`に渡す行。書き込むときは、結果を必ず持つ。 */
-export type NewReviewRecord = Omit<ReviewRecord, "result"> & {
-  result: ReviewResult;
 };
 
 export type FixOutcome = "done" | "requirements_gap" | "blocked";
@@ -896,6 +901,28 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
  * 承認を経て投稿する仕組みはまだ無い。
  */
 export type ReviewPostMode = "comment_only" | "gated";
+
+/** 投稿しなかったレビューの集計。`since`は、その最初のレビューの記録時刻。 */
+export type GatedReviewStats = {
+  readonly since: Date | null;
+  readonly unposted_count: number;
+};
+
+/**
+ * 日次のまとめと通知の判定に使う、投稿しない状態の報告。
+ * `off`は投稿するモードで、何も載せない。`read_failed`は集計を読めなかったこと。
+ * 型だけをここに置くのは、日次のまとめの文面を作る側が、判定の関数に依存せずに済むため。
+ */
+export type GatedReviewReport =
+  | { readonly kind: "off" }
+  | {
+      readonly kind: "on";
+      readonly since: Date | null;
+      readonly unposted_count: number;
+      /** `since`からの経過の日数(切り捨て)。投稿しなかったレビューが無ければ`null`。 */
+      readonly elapsed_days: number | null;
+    }
+  | { readonly kind: "read_failed" };
 
 /**
  * 検証と既定値の補完を済ませた実行時の設定。

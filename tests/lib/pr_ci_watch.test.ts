@@ -28,6 +28,7 @@ import {
   type WorkflowRun,
 } from "../../f/factory/lib/main_ci_support.ts";
 import { labelerPolicyFor } from "../../f/factory/lib/poll_support.ts";
+import type { WorkerEnvProblem } from "../../f/factory/lib/pr_ci_fix_claim.ts";
 import type { FixItemState } from "../../f/factory/lib/pr_ci_fix_recovery.ts";
 import {
   HOLD_PROLONGED_AFTER_MS,
@@ -2867,6 +2868,14 @@ const SINCE = new Date("2026-10-12T00:00:00Z");
 const TRAILER = "Generated-By: Software Factory (local)";
 const FACTORY_COMMIT = `fix: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n${TRAILER}`;
 const NEW_ITEM_ID = 501;
+const STALE_IMAGE: WorkerEnvProblem = {
+  reason: "worker_image_stale",
+  message: "worker image is stale: /usr/bin/setfacl is missing",
+};
+const UNSAFE_RUNTIME: WorkerEnvProblem = {
+  reason: "worker_runtime_unsafe",
+  message: "worker runtime is unsafe for checks: /tmp/x is world-writable",
+};
 
 type ClaimSetup = {
   readonly candidates?: PrCiCheck[];
@@ -2880,6 +2889,10 @@ type ClaimSetup = {
   readonly rounds?: number;
   /** 時間設定が、修正・検証ステップのtimeoutに収まらない理由。収まるときは省く。 */
   readonly configMisfit?: string | null;
+  /** 検査を動かすworkerの環境の問題。前提を満たすときは省く。 */
+  readonly workerEnvProblem?: WorkerEnvProblem | null;
+  /** 環境の確認が例外を投げる。 */
+  readonly workerEnvError?: Error;
   readonly claimResults?: (number | null)[];
   readonly launchFails?: boolean;
   /** フローは起動したが、ジョブIDを作業項目に記録できなかった。 */
@@ -2958,6 +2971,11 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     enabledSince: SINCE,
     maxRounds: 2,
     configMisfit: setup.configMisfit ?? null,
+    workerEnvProblem: async () => {
+      count("worker_env");
+      if (setup.workerEnvError !== undefined) throw setup.workerEnvError;
+      return setup.workerEnvProblem ?? null;
+    },
     listCandidates: async (since, limit) => {
       listed.push({ since, limit });
       if (setup.listCandidatesFails === true) throw new Error("list failed");
@@ -3458,6 +3476,56 @@ describe("the claim limits", () => {
     expect(c.reads.budget).toBe(1);
   });
 
+  test("reads the worker environment once for several rows", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      workerEnvProblem: STALE_IMAGE,
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.worker_env).toBe(1);
+  });
+
+  test("logs the problem with its paths once for several rows", async () => {
+    const heldMessage = "pr ci claim held by the worker environment";
+    const c = claimHarness({
+      candidates: threeRows,
+      workerEnvProblem: UNSAFE_RUNTIME,
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(h.logs.filter((line) => line.message === heldMessage)).toEqual([
+      {
+        level: "warn",
+        message: heldMessage,
+        fields: {
+          reason: "worker_runtime_unsafe",
+          problem: UNSAFE_RUNTIME.message,
+        },
+      },
+    ]);
+  });
+
+  test("reads the worker environment once even when it cannot be read", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      workerEnvError: new Error("boom"),
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.worker_env).toBe(1);
+  });
+
+  test("records the failure to read the worker environment once for several rows", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      workerEnvError: new Error("boom"),
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["worker_env"]);
+  });
+
   test("reads the skill marker once for several rows", async () => {
     const c = claimHarness({
       candidates: threeRows,
@@ -3630,6 +3698,51 @@ describe("holding a row", () => {
     const h = harness(claimSetup(c));
     await runPrCiWatch(h.deps);
     expect(c.holds).toEqual([{ id: 5, reason: null }]);
+  });
+
+  test("holds a failure as worker_image_stale while the image is stale", async () => {
+    const c = claimHarness({ workerEnvProblem: STALE_IMAGE });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "worker_image_stale" }]);
+  });
+
+  test("holds a failure as worker_runtime_unsafe while the running worker is unsafe", async () => {
+    const c = claimHarness({ workerEnvProblem: UNSAFE_RUNTIME });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "worker_runtime_unsafe" }]);
+  });
+
+  test("does not claim while the worker environment does not fit", async () => {
+    const c = claimHarness({ workerEnvProblem: STALE_IMAGE });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("clears the worker environment hold once the environment fits, without a push", async () => {
+    const c = claimHarness({
+      workerEnvProblem: null,
+      candidates: [candidateRow({ fix_hold_reason: "worker_image_stale" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: null }]);
+  });
+
+  test("does not claim, hold, or rewrite the hold when the worker environment cannot be read", async () => {
+    const c = claimHarness({
+      workerEnvError: new Error("boom"),
+      candidates: [candidateRow({ fix_hold_reason: "worker_image_stale" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect({ claims: c.claims, holds: c.holds, launched: c.launched }).toEqual({
+      claims: [],
+      holds: [],
+      launched: [],
+    });
   });
 
   test("clears a temporary hold that no longer applies", async () => {

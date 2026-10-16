@@ -43,6 +43,21 @@ schema:
       type: number
       description: この処理の実行回数。
       default: null
+    auto_tree_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    base_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    baseline_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
     branch:
       type: string
       description: ''
@@ -60,6 +75,25 @@ schema:
         type: resource
         resourceType: collected_comment
       originalType: resource[]
+    conflict_blobs:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: conflict_blobs
+      originalType: resource[]
+    conflict_check_id:
+      type: number
+      description: ''
+      default: null
+    conflicted_paths:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: string
+      originalType: string[]
     factory_clone_dir:
       type: string
       description: Software Factory自身の複製を置いた作業ディレクトリのパス。

@@ -5,7 +5,7 @@
 // detachedのworktreeである。
 
 import * as wmill from "windmill-client@1.817.0";
-import { ciRoundDiffOrFalse } from "../lib/ci_fix_round.ts";
+import { fixRoundOrNull } from "../lib/ci_fix_round.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -14,7 +14,7 @@ import {
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  hasCiRoundDiffToReview,
+  findFixRoundKindToReview,
   latestDraft,
   recordAgentRun,
   updateStatusIfCurrent,
@@ -41,6 +41,7 @@ import {
   openFindingsForPrompt,
   prReviewTimeoutMisfit,
   reviewOutputProseIssues,
+  selectListedBinaryFiles,
 } from "./pr_workflow_support.ts";
 
 const MAX_FINDINGS = 20;
@@ -52,6 +53,10 @@ export type PrReviewGenerateResult = {
   readonly summary: string;
   readonly findings: ReviewFinding[];
   readonly pr_files: string[];
+  /** 差分に内容が出ないバイナリのファイル。投稿の本文に、決定的な固定の文で載せる。 */
+  readonly binary_files: readonly string[];
+  /** `binary_files`に載せなかった(パスを変更ファイルと照合できなかった)バイナリの件数。 */
+  readonly binary_unlisted_count: number;
 };
 
 const SKIPPED_RESULT: PrReviewGenerateResult = {
@@ -61,6 +66,8 @@ const SKIPPED_RESULT: PrReviewGenerateResult = {
   summary: "",
   findings: [],
   pr_files: [],
+  binary_files: [],
+  binary_unlisted_count: 0,
 };
 
 export async function main(
@@ -156,6 +163,10 @@ export async function main(
     listReviewThreads(client, owner, repo, pr_number),
   ]);
   const prFiles = prFileEntries.map((entry) => entry.filename);
+  // 差分の行から取り出したパスは、APIの変更ファイルに載るものだけをClaudeに読ませる。
+  // 載らないものは、件数だけを投稿に残す。
+  const { listed: binaryFiles, unlistedCount: binaryUnlistedCount } =
+    selectListedBinaryFiles(prDiff.binaryFiles, prFiles);
 
   const requirements =
     parent_work_item_id === null
@@ -166,13 +177,13 @@ export async function main(
   // 最初のレビューではスレッドがまだ無いので空になる。
   const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
 
-  // レビューするcommitが、CI回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
-  // 値はDBから決めた真偽値だけで、PRの内容からは決めない。
-  // 問い合わせに失敗しても通常のレビューは止めない。偽に倒して警告を残す。
-  const ciRoundDiff = await ciRoundDiffOrFalse(
-    () => hasCiRoundDiffToReview(owner, repo, pr_number, review_sha),
+  // レビューするcommitが、CI回か競合回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
+  // 値はDBから決めた回の種類だけで、PRの内容からは決めない。
+  // 問い合わせに失敗しても通常のレビューは止めない。nullに倒して警告を残す。
+  const fixRound = await fixRoundOrNull(
+    () => findFixRoundKindToReview(owner, repo, pr_number, review_sha),
     (message) =>
-      log.warn("could not look up the CI round diff, reviewing without it", {
+      log.warn("could not look up the fix round kind, reviewing without it", {
         work_item_id,
         error: message,
       }),
@@ -193,7 +204,8 @@ export async function main(
     changedFiles: prFiles,
     requirements,
     openFindings,
-    ciRoundDiff,
+    fixRound,
+    binaryFiles,
   });
 
   const systemPrompt = await buildSystemPrompt({
@@ -251,6 +263,8 @@ export async function main(
       summary,
       findings,
       pr_files: prFiles,
+      binary_files: binaryFiles,
+      binary_unlisted_count: binaryUnlistedCount,
     };
   } finally {
     await systemPrompt.cleanup();

@@ -200,12 +200,51 @@ export type ReviewPromptInput = {
    */
   openFindings: PromptOpenFinding[];
   /**
-   * 直近のコミットが、CIの失敗を直す回(CI回)の修正かどうか。DBから決めた値だけを渡す。
-   * 真のときは、テストの弱体化と抑制の追加を重点的に見るよう、固定の文で頼む。
-   * CI回のClaudeは、通るように直す立場なので、検査を弱めて通す誘惑があるため。
+   * 直近のコミットを書いた回の種類。DBから決めた値だけを渡す。
+   * "ci"はCIの失敗を直す回、"conflict"はマージの競合を解く回で、どちらでもなければnull。
+   * 種類ごとに、重点的に見る点を固定の文で頼む。
+   * どちらの回のClaudeも、通すか解くことを求められる立場なので、検査を弱めたり片側を捨てたりして済ませる誘惑があるため。
    */
-  ciRoundDiff: boolean;
+  fixRound: "ci" | "conflict" | null;
+  /**
+   * gitが内容を出さず`Binary files ... differ`とだけ書いたファイルのパス。
+   * 内容が差分に無いので、読んだ判断なのか、読んでいないのかを、指示の文で分ける。
+   * 指示は囲みの外の固定の文で、パスの一覧だけを囲みに入れる。
+   */
+  binaryFiles: readonly string[];
 };
+
+/**
+ * バイナリのファイルの一覧に並べるパスの上限。残りは件数だけを書く。
+ * PRの総評の一覧(`pr_workflow_support.ts`の同名の定数)と同じ値にする。
+ * 同じ値であることは、テストで確かめる。
+ */
+export const BINARY_LIST_MAX_FILES = 20;
+
+/**
+ * バイナリのファイルについての指示と、パスの一覧の囲みを返す。
+ * 指示は信頼できる固定の文なので、囲みの外に置く。囲みの内側の文は、指示として読まれないため。
+ * `.gitattributes`の`-diff`などで、読めるコードがバイナリ扱いになることがあるので、
+ * 読めるものは読んで判断させ、読めないものだけを未レビューとして報告させる。
+ */
+function binaryFilesSection(
+  nonce: string,
+  binaryFiles: readonly string[],
+): string[] {
+  const shown = binaryFiles.slice(0, BINARY_LIST_MAX_FILES);
+  const rest = binaryFiles.length - shown.length;
+  const list = rest > 0 ? [...shown, `... and ${String(rest)} more`] : shown;
+  return [
+    "",
+    "The pull request also changes binary files that git does not show in the",
+    "diff, so their contents are not in the diff above. Their paths are in the",
+    "block below. If a file is text that Read can open, read it and judge it.",
+    "If you cannot read a file, do not judge it, and report that it was not reviewed.",
+    "Put every such file in one finding with kind nits, severity nit, and line null.",
+    "Use the first such path as `path`, and list all of them in `message`.",
+    dataFence(nonce, "binary files", list.join("\n")),
+  ];
+}
 
 export function reviewPrompt(
   input: ReviewPromptInput,
@@ -250,6 +289,10 @@ export function reviewPrompt(
     ),
   ];
 
+  if (input.binaryFiles.length > 0) {
+    sections.push(...binaryFilesSection(nonce, input.binaryFiles));
+  }
+
   if (input.requirements !== null) {
     sections.push(
       "",
@@ -259,7 +302,7 @@ export function reviewPrompt(
     );
   }
 
-  if (input.ciRoundDiff) {
+  if (input.fixRound === "ci") {
     sections.push(
       "",
       "The latest commit was written by the factory's CI-fix round, which edited",
@@ -273,6 +316,24 @@ export function reviewPrompt(
       "  (for example, network access or reading environment variables).",
       "- Check that no ignore file or tool setting was added or changed",
       "  (for example, .gitignore, conftest.py, or a test runner setting).",
+    );
+  }
+
+  if (input.fixRound === "conflict") {
+    sections.push(
+      "",
+      "The latest commit is a merge commit written by the factory's merge-conflict round,",
+      "which merged the base branch into the pull request branch and resolved the",
+      "conflicts. Review that merge with extra care:",
+      "- Check that every hunk the round resolved lies where the pull request's change",
+      "  and the base branch's change overlap, and that no file outside those hunks was",
+      "  edited.",
+      "- Check that the intent of both sides remains in the resolved code.",
+      "- Check that one side was not dropped as a whole.",
+      "- Check that no test was weakened, skipped, or deleted, and no suppression",
+      "  comment (biome-ignore, @ts-ignore, @ts-expect-error, eslint-disable) was added.",
+      "- Check that the round added nothing unrelated to resolving the conflict",
+      "  (for example, new behavior, network access, or reading environment variables).",
     );
   }
 

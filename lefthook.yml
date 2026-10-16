@@ -49,10 +49,11 @@ commit-msg:
     check-message:
       run: scripts/check-commit-msg.sh {1}
 
+# 全体の検査(`mise run check`)はpre-pushで実行しない。
+# 同じ検査をCIの`check`ジョブが行い、管理者の迂回を使わない限り、
+# `main`の必須チェックとしてマージの前に止めるため、pushのたびに長く待たない。
 pre-push:
   commands:
-    check:
-      run: mise run check
     # pre-commitのwmill-metadataの取りこぼしを止める。pushするコミットが
     # Windmillの資産、ワークスペースの依存、`wmill.yaml`、ハッシュのファイルに触れるときだけ動くので、
     # 文書だけのpushにローカルのWindmillは要らない。緊急時は

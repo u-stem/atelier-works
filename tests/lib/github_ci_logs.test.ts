@@ -3,9 +3,9 @@ import {
   CI_JOB_LOG_MAX_BYTES,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
   GitHubCiLogError,
-  GitHubCiLogIncompleteError,
   GitHubPaginationLimitError,
   GitHubRateLimitError,
+  GitHubRawBodyIncompleteError,
   getWorkflowJobLog,
   listWorkflowRunJobs,
   WORKFLOW_RUN_JOBS_MAX_PAGES,
@@ -275,16 +275,20 @@ describe("getWorkflowJobLog", () => {
     `head${omittedMarker(9_000_000)}${"x".repeat(CI_JOB_LOG_MAX_BYTES)}`,
   );
 
-  test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a 2xx status with an empty body", async () => {
+  test("throws a GitHubRawBodyIncompleteError when gh exits non-zero after a 2xx status with an empty body", async () => {
     const fake = createFakeCommandRunner(exitedTwice(1, ghApiStdout(200, "")));
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
+    await expect(get(fake)).rejects.toBeInstanceOf(
+      GitHubRawBodyIncompleteError,
+    );
   });
 
-  test("throws a GitHubCiLogIncompleteError when gh exits non-zero after a partial body", async () => {
+  test("throws a GitHubRawBodyIncompleteError when gh exits non-zero after a partial body", async () => {
     const fake = createFakeCommandRunner(
       exitedTwice(1, ghApiStdout(200, "line 1\nline 2")),
     );
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
+    await expect(get(fake)).rejects.toBeInstanceOf(
+      GitHubRawBodyIncompleteError,
+    );
   });
 
   test("returns the log when gh exits zero after a 2xx status", async () => {
@@ -292,9 +296,11 @@ describe("getWorkflowJobLog", () => {
     expect(await get(fake)).toMatchObject({ kind: "ok", truncated: false });
   });
 
-  test("throws a GitHubCiLogIncompleteError when the output hit the cap and gh exits non-zero", async () => {
+  test("throws a GitHubRawBodyIncompleteError when the output hit the cap and gh exits non-zero", async () => {
     const fake = createFakeCommandRunner(exitedTwice(143, cappedStdout));
-    await expect(get(fake)).rejects.toBeInstanceOf(GitHubCiLogIncompleteError);
+    await expect(get(fake)).rejects.toBeInstanceOf(
+      GitHubRawBodyIncompleteError,
+    );
   });
 
   test("returns a truncated log when the output hit the cap and gh exits zero", async () => {

@@ -4,6 +4,7 @@ import {
   buildApprovalConsoleUrl,
   buildAuditConsoleUrl,
   buildConsoleUrl,
+  buildItemsConsoleUrl,
   buildRecordedReason,
   buildSystemConsoleUrl,
   classifyExistingDecision,
@@ -141,6 +142,14 @@ describe("buildAuditConsoleUrl", () => {
   test("links the audit report page", () => {
     expect(buildAuditConsoleUrl("http://127.0.0.1:8080", 12)).toBe(
       "http://127.0.0.1:8080/console/reports/audit/12",
+    );
+  });
+});
+
+describe("buildItemsConsoleUrl", () => {
+  test("links the work items screen", () => {
+    expect(buildItemsConsoleUrl("http://127.0.0.1:8080")).toBe(
+      "http://127.0.0.1:8080/console/items",
     );
   });
 });

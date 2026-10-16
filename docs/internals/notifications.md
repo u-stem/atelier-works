@@ -35,7 +35,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
-| `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 集計の対象の日の、実行回数、コスト、失敗、要件定義の承認・却下の件数、DBの掃除の件数、workerの負荷 |
+| `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 集計の対象の日の、実行回数、コスト、失敗、要件定義の承認・却下の件数、DBの掃除の件数、workerの負荷、`gated`のときの投稿しなかったレビューの期間と件数 |
 | `audit_completed` | 監査レポートができました | `audit_generate` | 改善提案が1件以上ある監査レポートを保存した |
 | `pr_opened` | PR作成 / PR更新 | `implement_finish` | 実装フローがPRを作成か更新した |
 
@@ -91,7 +91,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
 | `main_ci_failed` | 失敗した実行 | 説明にコミットの先頭7文字、「次の操作」、リポジトリ |
-| `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除、workerの負荷 |
+| `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除、workerの負荷、`gated`のときだけ「レビューの投稿」 |
 | `audit_completed` | Consoleの監査のページ | 「次の操作」、`work_item_id` |
 | `pr_opened` | PR | 「次の操作」、Issue、「確認して欲しい点」、ラウンドと費用、差分 |
 
@@ -127,11 +127,14 @@ PRレビュー完了の状態は、次の規則で決まる(`reviewResultFor`)�
 | 状態 | 条件 |
 | --- | --- |
 | 修正必須の指摘が未解決(`changes_requested`) | 今回の指摘に`[MUST]`があるか、未解決の`[MUST]`のスレッドが残っている |
+| 未解決の指摘を読み取れず未確認(`unverified`) | 今回の指摘に`[MUST]`が無く、再レビューで未解決のスレッドの一覧を読めなかった。残りの有無が分からず、人がPRで確かめる |
 | 修正必須の指摘なし(`reviewed`) | 上記以外。`[IMO]`、`[NITS]`、`[Q]`が残っていてもこの状態になり、人のApproveを待つ |
+
+一覧を読めなかったときに0件として数えると、未解決の`[MUST]`が残るPRを、人のApproveを待てる状態と示してしまう。そのため、`reviewed`とは別の状態にする。
 
 ConsoleのPR詳細のレビュー行も、同じ状態を出す。
 投稿の時点の値を`factory.reviews`の`result`に記録しておくので、今回の指摘が0件でも、未解決の`[MUST]`が残る再レビューは「修正必須の指摘が未解決」と出る。
-結果を記録する前に作られた行は「修正必須の有無の記録なし」と出る。
+結果を記録する前に作られた行と、一覧を読めず結果を判定できなかった行は、「修正必須の有無の記録なし」と出る。
 
 PR作成・更新の「確認して欲しい点」には、変更された保護パスを並べる。実装フローは保護パスが変わっても止まらないので、人が先に確かめるためである。検査コマンドを動かさなかったラウンドでは、説明に「検査未実施」と理由が出る。
 
@@ -211,6 +214,7 @@ DiscordがHTTP 429を返したら、待ってから1回だけ再送する。待�
 - 実装フローが取得したIssueの題名か本文が取り込み時点と違っても、通知はしない。PR本文の「確認して欲しい点」に1行書くだけである。
 - 監査のスキップと、提案が0件の監査は通知しない。
 - レビューを投稿しなかったとき(`review_post_mode`が`gated`)は、PRレビュー完了の通知を送らない。投稿を承認する画面はまだ無く、人が進める操作も無いためである。作業項目の状態は`reviewed`に進み、状態遷移の記録(`work_item_events`)の補足に、投稿しなかった旨を残す。結果はConsoleの作業項目の詳細で確かめられる。判定は設定値ではなく、実際に投稿したかで行う。
+- `gated`が続いても、通知は日次のまとめと、一定の日数を超えたConsoleの要対応のnoticeだけである([レビューを投稿しない状態の継続](#レビューを投稿しない状態の継続))。
 
 ## Consoleのnotice
 
@@ -226,7 +230,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |
 | `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
 | `check_slot_record_unreadable` | `implement_verify`、`pr_fix_verify` | 枠のユーザーとuid、読めない記録を退避した先のパス |
-| `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
+| `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces`、`watch_pr_ci` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
@@ -241,7 +245,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
-| `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
+| `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify`、`watch_pr_ci` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -250,8 +254,9 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 | `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、自動修正の保留の理由(あれば)、リンク、次の操作 |
 | `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
-| `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、次の操作、PRのリンク |
+| `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、自動で直さなかった理由(あるときだけ)、次の操作、PRのリンク |
 | `worker_load_high` | `sample_worker_load` | 原因(メモリの割合、OOMの増加)、閾値、システムの画面のリンク、次の操作 |
+| `review_gated_prolonged` | `notify_daily_summary` | 投稿しない状態が続く日数、作業項目の画面のリンク、次の操作 |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
 `check_slot_skipped`は、枠を飛ばすときに残す。Discordには通知しない。
@@ -283,7 +288,16 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 `pr_conflict`は、PRの競合1回につき、通常は1件残す。競合のままheadが進んでも、重ねない。
 Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。
 本文は固定文で、PRの題名やブランチ名は載せない。
+競合を直す設定が有効なときは、競合の回の開始から猶予(`pr_conflict_fix_notify_grace_min`)が過ぎるまで通知を待ち、その間に直す作業項目を起動する。
+最終の保留(人が直す理由)になった行は、猶予を待たずに通知する。
+直す作業項目が動いている間は、通知しない。
+保留の理由を持つ行を通知するときは、本文に自動で直さなかった理由の固定の説明を足し、Discordの理由を`merge_conflict(自動修正の保留: <理由>)`にする。
+「次の操作」は、通常は競合を解消してpushする固定文である。mainの更新が`.github/workflows/`を変えるときだけ、ローカルかwebで解消する案内にする。
+競合を直す設定が無効なときは、理由を載せず、設定を足す前と同じ本文で通知する。
 競合が解けたとき、PRが閉じたとき、設定が対象から外したときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
+直す作業項目が成功したときは、通知も、Discordへの成功の通知も出さない。結果は、Consoleの作業項目の状態で読む。
+直す作業項目が失敗したときの通知は、`watch_pr_conflicts`だけが出す。競合を直す回のフローは、通知を登録せず、Discordにも送らない。
+起動の直後に落ちた作業項目を、`poll_issues`の照合が`failed`にしたときは、照合の`job_failed`も届く。
 詳細は[PRのCI監視の仕様](pr-ci.md#競合の検知)にある。
 
 `worker_load_high`は、原因(メモリの割合、OOMの増加)ごとに本文が決まっている。
@@ -291,6 +305,36 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 Discordには通知せず、Consoleの要対応に出す。
 閾値を下回っても自動では解決せず、人が確かめて解決する。
 判定と既定値の根拠は、[閾値の通知](../operations.md#閾値の通知)にある。
+
+### レビューを投稿しない状態の継続
+
+`gated`のときは、レビューをPRに投稿せず、PRレビュー完了の通知も送らない。
+そのまま放置されると、人はレビューが止まっていることに気づけない。
+そこで`notify_daily_summary`が、毎日09:00(JST)に次の2つを行う。
+
+- 日次サマリーに、「レビューの投稿」欄を足す。`gated`のときだけ出し、投稿するモードのときは出さない。欄には、投稿しなかった期間と件数が載る。
+- 投稿しなかった期間が3日以上になったら、`review_gated_prolonged`のnoticeを残す。Discordには届かず、Consoleの要対応に出る。
+
+期間は、最後に投稿したレビューより後の、投稿しなかった最初のレビューの記録時刻から数える。
+欄に出す起点の日付は、JSTの日付である。
+設定を変えた時刻は残らないので、`gated`にしてからレビューが1件も無い間は、期間が無く、noticeも出ない。
+件数は、同じ起点から数えた、投稿しなかったレビュー(`reviews.posted_review_id`が空の行)の数である。
+日次サマリーの各日の欄は、その日の終わりまでの記録で数える。
+noticeの本文には日数と件数を載せない。数字は日次サマリーで見る。
+種類の未解決のnoticeが1件でもあれば、新しくは足さない。本文のリンクの先が変わっても、重ならないようにするためである。
+`review_post_mode`が投稿するモードに戻ったら、次の実行で、種類と本文の固定の先頭が合う未解決のnoticeを自動で解決する。
+本文のリンクの先が変わった後でも、古いnoticeを解決できる。
+`gated`を意図して続けるときは、人が解決する。解決しても、続く間は翌日の実行で出直す。
+集計を読めなかった実行は、noticeを足さず、解決もしない。日次サマリーの欄に、読めなかったことだけを出す。
+
+#### 受け入れた挙動
+
+次の挙動は、人の手間や記録の複雑さに見合わないので、受け入れる。
+
+- 投稿するモードに戻したあと、1件も投稿しないまま`gated`へ戻したときは、前の期間から続けて数える。間に投稿したレビューが1件以上あるときだけ、前の期間が切れる。
+- レビューの記録は、終端の作業項目と一緒に`retention_work_items_days`の保持期間で消える。消えると、起点と件数が変わりうる。
+- 設定を切り替えた瞬間は、日次サマリーの数字とモードがずれる。サマリーは、実行時点の設定のモードで、その日の終わりまでの記録を読むためである。
+- `gated`を意図して続けると、人がnoticeを解決しても、翌日の実行で出直す。
 
 ### 重複の抑止
 
@@ -414,6 +458,8 @@ Discordには、noticeを新しく残したときだけ送る。noticeの記録�
 本文には、自己更新が反映した版(`f/factory/deployed_sha`)と、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのディレクトリ)が載る。
 稼働中のworkerの問題も一緒に見つかれば、その問題はこの本文に載せず、下の`check_runtime_unsafe`に残す。
 この通知は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+CIの失敗を直す回は、監視(`watch_pr_ci`)が起動の前に同じ確認をして、同じ通知を残す。
+その回は止まった作業項目を作らず、行を保留する。環境を直すと、保留は次の巡回で自動的に外れる。
 同じ本文の未解決のnoticeがあるあいだは追加しない。
 版を40桁で読めたときは、下の判定で自己更新が自動で解決する。読めないときは本文に版を含めず、人が解決する。
 通知が自動で解決されると、止まった実装とPR修正を自動で再開する([実装フロー](implement.md#イメージが古くて止まったとき))。
@@ -482,6 +528,10 @@ self cloneにあるかは、実行ごとに1回だけ`git cat-file -e`で確か�
 `mise run up`では直らないので、自己更新は解決せず、人が解決する。
 同じ本文の未解決のnoticeがあるあいだは追加しない。
 Discordには送らない。止まった作業項目の通知が、別に届くためである。
+CIの失敗を直す回の監視(`watch_pr_ci`)も、この通知を残す。
+ただし、問題が稼働中のworkerのパスの列挙の失敗だけで、実在するパスが1件も無い回は残さず、警告のログだけにする。
+一時的な失敗で、人が解決するまで残る通知を出さないためである。
+イメージが古い回は、列挙に失敗していても、イメージの通知とこの通知の両方を残す。
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。

@@ -18,6 +18,7 @@ import {
   retryTransientPrReviews,
   type StalledTransientDeps,
   TRANSIENT_LAUNCH_FAILED_NOTE_PREFIX,
+  TRANSIENT_LIST_MAX_PAGES,
   TRANSIENT_RETRY_DELAYS_SECONDS,
   type TransientReviewCandidate,
   type TransientReviewDeps,
@@ -236,6 +237,7 @@ function fakeDeps(
   const launched: string[] = [];
   const restarted: number[] = [];
   const deps: TransientReviewDeps = {
+    pageSize: 50,
     listCandidates: async () => candidates,
     isFlowJobFinished: async () => true,
     restart: async (c) => {
@@ -342,6 +344,109 @@ describe("retryTransientPrReviews", () => {
   });
 });
 
+// 一覧の1ページを、IDの昇順で`afterId`より大きいものから`pageSize`件だけ返す偽物。
+function pagedList(
+  all: readonly TransientReviewCandidate[],
+  pageSize: number,
+  afterIds: number[],
+) {
+  return async (afterId: number) => {
+    afterIds.push(afterId);
+    return all.filter((c) => c.id > afterId).slice(0, pageSize);
+  };
+}
+
+function numbered(count: number): TransientReviewCandidate[] {
+  return Array.from({ length: count }, (_, i) => candidate(i + 1));
+}
+
+describe("retryTransientPrReviews paging", () => {
+  // 状態を読めないジョブを持つ行が最初のページを占めても、後ろの行を取りこぼさない。
+  test("restarts a review on a later page when the first page is all unreadable", async () => {
+    const all = [
+      candidate(1, { flow_job_id: "unreadable" }),
+      candidate(2, { flow_job_id: "unreadable" }),
+      candidate(3),
+    ];
+    const fake = fakeDeps([], {
+      pageSize: 2,
+      listCandidates: pagedList(all, 2, []),
+      isFlowJobFinished: async (jobId) => jobId !== "unreadable",
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(fake.restarted).toEqual([3]);
+  });
+
+  test("asks for the next page after the last id of a full page", async () => {
+    const afterIds: number[] = [];
+    const fake = fakeDeps([], {
+      pageSize: 2,
+      listCandidates: pagedList(numbered(3), 2, afterIds),
+      isFlowJobFinished: async () => false,
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(afterIds).toEqual([0, 2]);
+  });
+
+  test("does not ask for another page when the page is not full", async () => {
+    const afterIds: number[] = [];
+    const fake = fakeDeps([], {
+      pageSize: 3,
+      listCandidates: pagedList(numbered(2), 3, afterIds),
+      isFlowJobFinished: async () => false,
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(afterIds).toEqual([0]);
+  });
+
+  test("does not ask for another page once the per-run limit is reached", async () => {
+    const afterIds: number[] = [];
+    const fake = fakeDeps([], {
+      pageSize: AUTO_RETRY_LIMIT_PER_RUN,
+      listCandidates: pagedList(
+        numbered(AUTO_RETRY_LIMIT_PER_RUN),
+        AUTO_RETRY_LIMIT_PER_RUN,
+        afterIds,
+      ),
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(afterIds).toEqual([0]);
+  });
+
+  test("stops at the page limit", async () => {
+    const afterIds: number[] = [];
+    const fake = fakeDeps([], {
+      pageSize: 2,
+      listCandidates: pagedList(
+        numbered(TRANSIENT_LIST_MAX_PAGES * 2 + 2),
+        2,
+        afterIds,
+      ),
+      isFlowJobFinished: async () => false,
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(afterIds).toHaveLength(TRANSIENT_LIST_MAX_PAGES);
+  });
+
+  test("warns when the page limit cut the list", async () => {
+    const warnings: string[] = [];
+    const fake = fakeDeps([], {
+      pageSize: 2,
+      listCandidates: pagedList(
+        numbered(TRANSIENT_LIST_MAX_PAGES * 2 + 2),
+        2,
+        [],
+      ),
+      isFlowJobFinished: async () => false,
+      log: { ...SILENT, warn: (message) => warnings.push(message) },
+    });
+    await retryTransientPrReviews(fake.deps);
+    expect(warnings).toEqual([
+      "pr_review retry candidates exceed the page limit",
+    ]);
+  });
+});
+
 describe("notifyStalledTransientReviews", () => {
   function stalledDeps(
     stalled: readonly TransientReviewCandidate[],
@@ -350,6 +455,7 @@ describe("notifyStalledTransientReviews", () => {
     const notified: number[] = [];
     const recorded: number[] = [];
     const deps: StalledTransientDeps = {
+      pageSize: 50,
       listStalled: async () => stalled,
       notify: async (c) => {
         notified.push(c.id);
@@ -429,6 +535,29 @@ describe("notifyStalledTransientReviews", () => {
     });
     await notifyStalledTransientReviews(fake.deps);
     expect(warnings).toEqual(["pr_review stall was already recorded"]);
+  });
+
+  test("tells about a stalled review on a later page", async () => {
+    const fake = stalledDeps([], {
+      pageSize: 2,
+      listStalled: pagedList(numbered(3), 2, []),
+      notify: async (c) => (c.id === 3 ? "sent" : "not_sent"),
+    });
+    expect(await notifyStalledTransientReviews(fake.deps)).toBe(1);
+  });
+
+  test("warns when the page limit cut the stalled list", async () => {
+    const warnings: string[] = [];
+    const fake = stalledDeps([], {
+      pageSize: 2,
+      listStalled: pagedList(numbered(TRANSIENT_LIST_MAX_PAGES * 2 + 2), 2, []),
+      notify: async () => "not_sent",
+      log: { ...SILENT, warn: (message) => warnings.push(message) },
+    });
+    await notifyStalledTransientReviews(fake.deps);
+    expect(warnings).toContain(
+      "pr_review stall candidates exceed the page limit",
+    );
   });
 
   test("rejects when the stalled candidates cannot be listed", async () => {

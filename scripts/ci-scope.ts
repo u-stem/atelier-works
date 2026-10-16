@@ -93,6 +93,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/db.ts",
   "f/factory/lib/drawio.ts",
   "f/factory/lib/drawio_viewer_observations.ts",
+  "f/factory/lib/gated_review_support.ts",
   "f/factory/lib/job_ids.ts",
   "f/factory/lib/job_tmp.ts",
   "f/factory/lib/log.ts",

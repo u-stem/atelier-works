@@ -154,7 +154,12 @@ mise run instance:tags
 | pre-commit | `f/`の下をステージしたときは、先に`scripts/generate-metadata-staged.sh`を実行する。メタデータを作り直し、変わったlockとスキーマのファイルをステージする。続けて、biome、`as`の検出、`§`の検出、短い名前のリモートrefの検出、gitleaks、`wmill lint f`、文書の検査を並列に実行する |
 | post-checkout | リンクされたgit worktreeでは、`scripts/link-worktree-wmill.sh`が`.wmill`をメイン作業ツリーの`.wmill`へのシンボリックリンクにする。メイン作業ツリーでは何もしない |
 | commit-msg | `scripts/check-commit-msg.sh`でコミットメッセージの規約を検査する。Claude Codeのセッション(`CLAUDECODE=1`)では、最後の段落にClaudeのトレーラーの行があるかも検査する |
-| pre-push | `mise run check`を実行する。pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があれば、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
+| pre-push | pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があるときだけ、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
+
+pre-pushは、全体の`mise run check`を実行しない。
+同じ検査をCIの`check`ジョブが行い、管理者の迂回を使わない限り、`main`の必須チェックとしてマージの前に止めるためである。
+必須チェックと迂回は[セキュリティ](security.md#mainの保護とリポジトリの公開)に書く。
+クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)に従い、pushの前に`mise run check`を実行する。
 
 メタデータの作り直しと検査は、ローカルのWindmillに接続する。`mise run up`でスタックを起動しておく。手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
 

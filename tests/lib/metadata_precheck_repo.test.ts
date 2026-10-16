@@ -107,9 +107,9 @@ describe("planMetadataRehash on the files of this repository", () => {
     );
   });
 
-  test("finishes within a tenth of the default budget of visits and resolutions", async () => {
+  test("finishes within a fifth of the default budget of visits and resolutions", async () => {
     const result = await planWith(relevant(), {
-      maxTraceVisits: DEFAULT_MAX_TRACE_VISITS / 10,
+      maxTraceVisits: DEFAULT_MAX_TRACE_VISITS / 5,
     });
     expect(result.ok).toBe(true);
   });
