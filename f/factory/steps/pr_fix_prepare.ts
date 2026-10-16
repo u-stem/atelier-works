@@ -10,9 +10,12 @@ import {
 import { evaluateCiRoundPrepareGuard } from "../lib/ci_fix_round.ts";
 import { isRepoAllowed, loadConfig } from "../lib/config.ts";
 import {
+  CONFLICT_ROUND_DETAILS,
+  conflictRoundReason,
   evaluateConflictRoundPrepareGuard,
   isConflictRound,
   planConflictPrepare,
+  roundStopReason,
 } from "../lib/conflict_fix_round.ts";
 import {
   addNoticeUnlessUnresolved,
@@ -283,7 +286,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   if (!parentGuard.ok) {
     return {
       outcome: "guard_blocked",
-      reason: parentGuard.reason,
+      reason: roundStopReason(
+        conflictRound,
+        CONFLICT_ROUND_DETAILS.implementRunning,
+        parentGuard.reason,
+      ),
       ...earlyExitBase(workItem),
     };
   }
@@ -344,7 +351,11 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   if (!branchGuard.ok) {
     return {
       outcome: "guard_blocked",
-      reason: branchGuard.reason,
+      reason: roundStopReason(
+        conflictRound,
+        CONFLICT_ROUND_DETAILS.implementRunning,
+        branchGuard.reason,
+      ),
       ...earlyExitBase(workItem),
     };
   }
@@ -419,9 +430,20 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
   } catch (err) {
     // pr_fixのprepareにはneeds_humanの出口が無い。blockedはretry_work_itemで再実行できる。
     if (err instanceof WorktreeBusyError) {
+      // 競合回の注記は固定文なので、保持者の情報はログに残す。
+      if (conflictRound) {
+        logger("pr_fix_prepare").warn("the worktree is in use", {
+          work_item_id,
+          holder: err.message,
+        });
+      }
       return {
         outcome: "guard_blocked",
-        reason: err.message,
+        reason: roundStopReason(
+          conflictRound,
+          CONFLICT_ROUND_DETAILS.worktreeBusy,
+          err.message,
+        ),
         ...earlyExitBase(workItem),
       };
     }
@@ -503,7 +525,7 @@ export async function main(work_item_id: number): Promise<PrFixPrepareResult> {
     if (plan.kind === "head_changed") {
       return {
         outcome: "guard_blocked",
-        reason: `PR head moved to ${plan.currentSha} while the fix was in progress`,
+        reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved),
         ...earlyExitBase(workItem),
       };
     }

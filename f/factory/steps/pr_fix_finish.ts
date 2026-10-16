@@ -36,8 +36,10 @@ import {
   CONFLICT_ROUND_REPLIES_REASON,
   conflictRoundReason,
   isConflictRound,
+  roundStopReason,
 } from "../lib/conflict_fix_round.ts";
 import {
+  CONFLICT_VERIFIED_TREE_CHANGED_REASON,
   type ConflictInspection,
   gitConflictInspectDeps,
   inspectConflictResolution,
@@ -275,7 +277,9 @@ export type ConflictPushOutcome =
 /**
  * 競合回のmergeコミットをpushする。pushの前に、次を順に確かめる。
  * 1. worktreeに触れてよいこと(ロックを持つプロセスが残っておらず、`.git`が記録のままであること)。
- * 2. 解消後のツリーが、検証のステップと同じ検査に通ること。検証と完了の間にworktreeが変わっても、pushする内容そのもので判定するためである。
+ * 2. 解消後のツリーが、検証のステップと同じ検査に通り、検証が通したツリーと同じであること。
+ *    検証と完了の間にworktreeが変わっても、pushする内容そのもので判定するためである。
+ *    検査コマンドが通ったツリーと、pushするツリーを結びつけるため、ツリーのshaが一致しなければ止める。
  * 3. そのツリーが、秘密値の検査に通ること。
  * 4. PRが、開いていて、draftでなく、auto-mergeが無効で、headが作業を始めたときのままであること。
  *    競合回は人の指摘に答える回ではなく、レビューを経ずにマージされうる状態では押せない。
@@ -285,7 +289,11 @@ export type ConflictPushOutcome =
  */
 export async function runConflictPush(
   deps: ConflictPushDeps,
-  input: { readonly prHeadSha: string },
+  input: {
+    readonly prHeadSha: string;
+    /** 検証のステップが最後に通したツリー。無ければnull。 */
+    readonly verifiedTreeSha: string | null;
+  },
 ): Promise<ConflictPushOutcome> {
   const stop = (reason: string): ConflictPushOutcome => ({
     kind: "stop",
@@ -296,6 +304,9 @@ export async function runConflictPush(
 
   const inspection = await deps.inspect();
   if (inspection.reasons.length > 0) return stop(inspection.reasons.join("; "));
+  if (inspection.treeSha !== input.verifiedTreeSha) {
+    return stop(CONFLICT_VERIFIED_TREE_CHANGED_REASON);
+  }
 
   const scanned = await deps.scan(inspection.treeSha);
   if (scanned.kind === "stop") return stop(scanned.reason);
@@ -404,6 +415,7 @@ export async function main(
   auto_tree_sha: string | null = null,
   conflicted_paths: string[] | null = null,
   conflict_blobs: ConflictBlobs[] | null = null,
+  verified_tree_sha: string | null = null,
 ): Promise<PrFixFinishResult> {
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
@@ -1025,11 +1037,11 @@ export async function main(
       commit_shas: [],
     });
     const movedReason = `PR head moved to ${currentSha} while the fix was in progress`;
-    // 競合回は、止めた理由を注記に残す。回復が注記で行き先を決めるためである。
+    // 競合回は、止めた理由を固定文で注記に残す。回復が注記の完全一致で行き先を決めるためである。
     await finalizeTerminal(
       "blocked",
       movedReason,
-      conflictRound ? movedReason : reason,
+      roundStopReason(conflictRound, CONFLICT_ROUND_DETAILS.headMoved, reason),
     );
     return { ok: true, final_status: "blocked", notice: "head_changed" };
   }
@@ -1159,7 +1171,7 @@ export async function main(
           });
         },
       },
-      { prHeadSha: head_sha },
+      { prHeadSha: head_sha, verifiedTreeSha: verified_tree_sha },
     );
 
     const recordRound = async (

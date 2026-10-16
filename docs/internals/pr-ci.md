@@ -884,10 +884,16 @@ Factoryのレビューの記録は要求しない。
 - 動いている(終端でない): そのままにする。
 - pushした(`rereview_requested`か、直す回がpushしたcommitを記録している): 結びを外す。
 - 何も変えずに終えた(`reviewed`で注記が`conflict round: up_to_date`): 結びを外す。pushしていないので、pushした回と区別する。注記がそれ以外の`reviewed`は、保留なしで結びを外す。
-- `needs_human`と`blocked`(次の行を除く): 止めた理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
-- イメージが古い理由で止まった`blocked`: 待たずに、保留なしで結びを外す。待つと、その間は通知されず、起動もされないためである。この回は回数に数えないので、起動し直しを止めるのは、行の起動の回数の上限だけである。
-- `failed`: フローの起動より前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。起動した後なら、止めた理由を写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
+- `needs_human`と`blocked`(次の2行を除く): 止めた理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
+- 一時の停止の注記で止まった`needs_human`と`blocked`: 保留なしで結びを外す。待てば解ける事情で止めた回に最終の保留を書くと、人が直すまで起動し直さなくなるためである。一時の停止の注記は、下の表に挙げる。
+- イメージが古い理由で止まった`blocked`: 待たずに、保留なしで結びを外す。待つと、その間は通知されず、起動もされないためである。
+- `failed`: フローの起動より前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。起動した後なら、止めた理由を保留の理由に写せればその理由で、写せなければ保留なしで結びを外す。例外で終わった回は、`getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを区別できないためである。
 - `cancelled`などのほかの終端: 保留なしで結びを外す。
+
+保留なしで結びを外した回は、次の巡回で判定し直す。起動し直しを止めるのは、回数の上限である。
+
+- イメージが古い理由で止まった回と、フローの起動より前に失敗した回は、競合を直した回数に数えない。行の起動の回数(`fix_attempts`)の上限だけが止める。
+- 一時の停止の注記で止まった回と、起動した後に`failed`で終わった回は、回数の対象である。これらの繰り返しは`pr_conflict_fix_max_rounds`が止める。
 
 保留を書く場合でも、作業項目が直していた競合の回が行の今の回と違うときは、保留を書かずに結びだけを外す。古い回の作業項目の終わり方を、新しい回の行に最終の保留として書かないためである。
 
@@ -905,6 +911,24 @@ Factoryのレビューの記録は要求しない。
 
 Claudeの出力には、固定文の前に接頭辞が付く。接頭辞は「conflict round: claude blocked: 」である。
 そのため、Claudeの出力の中の文字列が、保留の理由を決めることは無い。
+
+一時の停止の注記は、固定文への完全一致で見分ける。
+どれも保留の理由に写さない。
+
+| 注記 | 止めた事情 |
+| --- | --- |
+| `conflict round: the conflict check row of the work item does not exist` | 準備の時点で競合の行が無い |
+| `conflict round: the conflict check is not conflicted` | 競合の行が競合でなくなった |
+| `conflict round: the conflict check is bound to another work item` | 競合の行が別の作業項目に結ばれた |
+| `conflict round: the conflict episode of the work item is over` | 競合の回が終わった |
+| `conflict round: the PR head moved while the fix was in progress` | 準備、baseのmerge、pushの直前のいずれかで、PRのheadが動いた |
+| `conflict round: the worktree is in use by another process` | worktreeを別の処理が使っている。保持者はログに残す |
+| `conflict round: an implement flow is running on the branch` | 同じブランチで実装のフローが動いている |
+
+検証が通したツリーと、pushの直前に検査したツリーが違うときの注記は、一時の停止に数えない。
+注記は`conflict round: the tree changed after the verification`である。
+検証から完了までの間にworktreeが変わったことを表し、待っても解けないためである。
+保留の理由には写らず、`fix_stopped`になる。
 
 ### 競合を直す作業項目と行の結び
 

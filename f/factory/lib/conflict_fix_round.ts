@@ -31,9 +31,12 @@ export const CONFLICT_FIX_SKILL_MARKER = "conflict-fix-skill:v1";
 
 /**
  * 停止の注記のうち、保留の理由(`fix_hold_reason`)に写すものの固定文。
- * 接頭辞の`conflict round: `は含まない。`upToDate`と`baseChanged`は止めた理由ではなく、
- * pushせずに終えた回(`reviewed`)の注記である。`upToDate`はpushが要らなかった回、
- * `baseChanged`はpushの直前にbaseが動いた回で、どちらも行に最終の保留を書かない。
+ * 接頭辞の`conflict round: `は含まない。
+ * - 保留の理由に写るもの: `baseNotDefault`、`baseChangesWorkflows`、`protectedPath`、`unresolvable`、`checkFailed`、`markerMissing`。
+ * - `upToDate`と`baseChanged`は止めた理由ではなく、pushせずに終えた回(`reviewed`)の注記である。
+ *   `upToDate`はpushが要らなかった回、`baseChanged`はpushの直前にbaseが動いた回で、どちらも行に最終の保留を書かない。
+ * - 残りは一時の停止の注記である。待てば解ける事情で止めた回で、回復が行に保留を書かずに結びだけを外す。
+ *   行の状態が変わったか、PRのheadが動いたか、worktreeを別の処理が使っているか、実装のフローが動いているかのいずれかである。
  */
 export const CONFLICT_ROUND_DETAILS = {
   baseNotDefault: "base is not the default branch",
@@ -43,12 +46,31 @@ export const CONFLICT_ROUND_DETAILS = {
   checkFailed: "check failed",
   upToDate: "up_to_date",
   baseChanged: "the base branch moved",
+  rowMissing: "the conflict check row of the work item does not exist",
+  rowNotConflicted: "the conflict check is not conflicted",
+  rowBoundToAnother: "the conflict check is bound to another work item",
+  episodeOver: "the conflict episode of the work item is over",
+  headMoved: "the PR head moved while the fix was in progress",
+  worktreeBusy: "the worktree is in use by another process",
+  implementRunning: "an implement flow is running on the branch",
   markerMissing: `the factory-fix skill lacks the ${CONFLICT_FIX_SKILL_MARKER} marker`,
 } as const;
 
 /** 固定文`detail`に接頭辞を付けた、競合回の注記。 */
 export function conflictRoundReason(detail: string): string {
   return `${CONFLICT_ROUND_REASON_PREFIX}: ${detail}`;
+}
+
+/**
+ * 一時の停止の理由を返す。競合回は固定文`detail`の注記、それ以外の回は元の理由`original`のままにする。
+ * 競合回の注記は、回復が完全一致で行き先を決めるので、動的な値(shaや保持者)を含めない。
+ */
+export function roundStopReason<T extends string | null>(
+  conflictRound: boolean,
+  detail: string,
+  original: T,
+): string | T {
+  return conflictRound ? conflictRoundReason(detail) : original;
 }
 
 /**
@@ -134,20 +156,18 @@ export function evaluateConflictRoundPrepareGuard(
     reason: conflictRoundReason(detail),
   });
   const { row } = input;
-  if (row === null) {
-    return blocked("the conflict check row of the work item does not exist");
-  }
+  if (row === null) return blocked(CONFLICT_ROUND_DETAILS.rowMissing);
   if (row.state !== "conflicted") {
-    return blocked("the conflict check is not conflicted");
+    return blocked(CONFLICT_ROUND_DETAILS.rowNotConflicted);
   }
   if (row.fix_work_item_id !== input.workItemId) {
-    return blocked("the conflict check is bound to another work item");
+    return blocked(CONFLICT_ROUND_DETAILS.rowBoundToAnother);
   }
   if (input.workItemEpisode === null || row.episode !== input.workItemEpisode) {
-    return blocked("the conflict episode of the work item is over");
+    return blocked(CONFLICT_ROUND_DETAILS.episodeOver);
   }
   if (row.head_sha !== input.prHeadSha) {
-    return blocked("the PR head moved from the head of the conflict check");
+    return blocked(CONFLICT_ROUND_DETAILS.headMoved);
   }
   if (input.baseRef !== input.defaultBranch) {
     return {

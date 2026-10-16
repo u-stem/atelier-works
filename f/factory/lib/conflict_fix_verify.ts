@@ -43,6 +43,14 @@ export const CONFLICT_BOTH_SIDES_SECRET_REASON = conflictRoundReason(
   "a path changed on both sides matched the secret scan",
 );
 
+/**
+ * pushの直前に検査したツリーが、検証のステップが通したツリーと違うときの理由。
+ * 検証から完了までの間にworktreeが変わったことを表し、待っても解けないので一時の停止には数えない。
+ */
+export const CONFLICT_VERIFIED_TREE_CHANGED_REASON = conflictRoundReason(
+  "the tree changed after the verification",
+);
+
 export type ConflictInspectDeps = {
   /** 競合ファイルだけを`add`した索引のツリーを作り、索引を戻す(`stageConflictPathsTree`)。 */
   readonly stageTree: () => Promise<string>;

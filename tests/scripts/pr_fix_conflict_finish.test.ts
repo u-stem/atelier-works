@@ -88,7 +88,7 @@ function harness(options: Options = {}): {
 describe("runConflictPush order", () => {
   test("checks the gate, the resolution, the secrets, the pull request and the owner before it pushes", async () => {
     const { deps, calls } = harness();
-    await runConflictPush(deps, { prHeadSha: HEAD });
+    await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE });
     expect(calls).toEqual([
       "gate",
       "inspect",
@@ -101,13 +101,13 @@ describe("runConflictPush order", () => {
 
   test("scans the tree that the inspection returned", async () => {
     const { deps, scannedTrees } = harness();
-    await runConflictPush(deps, { prHeadSha: HEAD });
+    await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE });
     expect(scannedTrees).toEqual([TREE]);
   });
 
   test("pushes the scanned tree to the base branch of the pull request that it read", async () => {
     const { deps, pushed } = harness({ pr: { ...OPEN_PR, baseRef: "trunk" } });
-    await runConflictPush(deps, { prHeadSha: HEAD });
+    await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE });
     expect(pushed).toEqual([{ expectedTreeSha: TREE, baseBranch: "trunk" }]);
   });
 });
@@ -117,7 +117,10 @@ describe("runConflictPush stops before the push", () => {
     const { deps, calls } = harness({
       gate: "worktree git pointer was modified",
     });
-    const result = await runConflictPush(deps, { prHeadSha: HEAD });
+    const result = await runConflictPush(deps, {
+      prHeadSha: HEAD,
+      verifiedTreeSha: TREE,
+    });
     expect([result, calls]).toEqual([
       { kind: "stop", reason: "worktree git pointer was modified" },
       ["gate"],
@@ -126,7 +129,9 @@ describe("runConflictPush stops before the push", () => {
 
   test("stops at the reasons of the resolution, joined", async () => {
     const { deps } = harness({ reasons: ["a", "b"] });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "stop",
       reason: "a; b",
     });
@@ -136,7 +141,9 @@ describe("runConflictPush stops before the push", () => {
     const { deps } = harness({
       reasons: ["conflict round: a conflicted path is protected"],
     });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "stop",
       reason: "conflict round: a conflicted path is protected",
     });
@@ -144,13 +151,57 @@ describe("runConflictPush stops before the push", () => {
 
   test("does not scan for secrets after a stop of the resolution", async () => {
     const { deps, calls } = harness({ reasons: ["a"] });
-    await runConflictPush(deps, { prHeadSha: HEAD });
+    await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE });
     expect(calls).toEqual(["gate", "inspect"]);
+  });
+
+  test("stops with the fixed reason when the inspected tree differs from the verified tree", async () => {
+    const { deps } = harness();
+    expect(
+      await runConflictPush(deps, {
+        prHeadSha: HEAD,
+        verifiedTreeSha: "f".repeat(40),
+      }),
+    ).toEqual({
+      kind: "stop",
+      reason: "conflict round: the tree changed after the verification",
+    });
+  });
+
+  test("does not scan for secrets when the inspected tree differs from the verified tree", async () => {
+    const { deps, calls } = harness();
+    await runConflictPush(deps, {
+      prHeadSha: HEAD,
+      verifiedTreeSha: "f".repeat(40),
+    });
+    expect(calls).toEqual(["gate", "inspect"]);
+  });
+
+  test("stops with the fixed reason when the verification recorded no tree", async () => {
+    const { deps } = harness();
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: null }),
+    ).toEqual({
+      kind: "stop",
+      reason: "conflict round: the tree changed after the verification",
+    });
+  });
+
+  test("reports the reasons of the resolution before the difference of the trees", async () => {
+    const { deps } = harness({ reasons: ["a"] });
+    expect(
+      await runConflictPush(deps, {
+        prHeadSha: HEAD,
+        verifiedTreeSha: "f".repeat(40),
+      }),
+    ).toEqual({ kind: "stop", reason: "a" });
   });
 
   test("stops at a secret", async () => {
     const { deps } = harness({ scan: { kind: "stop", reason: "secrets" } });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "stop",
       reason: "secrets",
     });
@@ -160,7 +211,10 @@ describe("runConflictPush stops before the push", () => {
     const { deps, calls } = harness({
       pr: { ...OPEN_PR, headSha: "b".repeat(40) },
     });
-    const result = await runConflictPush(deps, { prHeadSha: HEAD });
+    const result = await runConflictPush(deps, {
+      prHeadSha: HEAD,
+      verifiedTreeSha: TREE,
+    });
     expect([result, calls.includes("push")]).toEqual([
       { kind: "head_changed", currentSha: "b".repeat(40) },
       false,
@@ -169,7 +223,9 @@ describe("runConflictPush stops before the push", () => {
 
   test("stops at a pull request that is no longer open", async () => {
     const { deps } = harness({ pr: { ...OPEN_PR, state: "closed" } });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "stop",
       reason: "pull request is not open",
     });
@@ -177,7 +233,9 @@ describe("runConflictPush stops before the push", () => {
 
   test("stops at a draft", async () => {
     const { deps } = harness({ pr: { ...OPEN_PR, draft: true } });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "stop",
       reason: "pull request is a draft",
     });
@@ -185,7 +243,9 @@ describe("runConflictPush stops before the push", () => {
 
   test("stops at auto-merge", async () => {
     const { deps } = harness({ pr: { ...OPEN_PR, autoMergeEnabled: true } });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "stop",
       reason: "pull request has auto-merge enabled",
     });
@@ -193,7 +253,10 @@ describe("runConflictPush stops before the push", () => {
 
   test("stops at an owner whose id no longer matches", async () => {
     const { deps, calls } = harness({ ownerStop: "owner id differs" });
-    const result = await runConflictPush(deps, { prHeadSha: HEAD });
+    const result = await runConflictPush(deps, {
+      prHeadSha: HEAD,
+      verifiedTreeSha: TREE,
+    });
     expect([result, calls.includes("push")]).toEqual([
       { kind: "stop", reason: "owner id differs" },
       false,
@@ -206,7 +269,9 @@ describe("runConflictPush stops before the push", () => {
         "staged tree differs from the verified tree",
       ),
     });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "stop",
       reason: "staged tree differs from the verified tree",
     });
@@ -214,16 +279,18 @@ describe("runConflictPush stops before the push", () => {
 
   test("lets another error of the push through", async () => {
     const { deps } = harness({ push: new Error("network down") });
-    await expect(runConflictPush(deps, { prHeadSha: HEAD })).rejects.toThrow(
-      "network down",
-    );
+    await expect(
+      runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).rejects.toThrow("network down");
   });
 });
 
 describe("runConflictPush results of the push", () => {
   test("reports the new sha of a push", async () => {
     const { deps } = harness();
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "pushed",
       newSha: NEW_SHA,
     });
@@ -233,7 +300,9 @@ describe("runConflictPush results of the push", () => {
     const { deps } = harness({
       push: { outcome: "head_changed", currentSha: "b".repeat(40) },
     });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "head_changed",
       currentSha: "b".repeat(40),
     });
@@ -241,14 +310,18 @@ describe("runConflictPush results of the push", () => {
 
   test("reports a base that moved", async () => {
     const { deps } = harness({ push: { outcome: "base_changed" } });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "base_changed",
     });
   });
 
   test("reports a push that was rejected for the workflow scope", async () => {
     const { deps } = harness({ push: { outcome: "rejected_workflows" } });
-    expect(await runConflictPush(deps, { prHeadSha: HEAD })).toEqual({
+    expect(
+      await runConflictPush(deps, { prHeadSha: HEAD, verifiedTreeSha: TREE }),
+    ).toEqual({
       kind: "rejected_workflows",
     });
   });

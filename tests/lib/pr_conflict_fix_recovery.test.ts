@@ -101,6 +101,67 @@ describe("holdReasonForConflictStoppedItem", () => {
   });
 });
 
+const TRANSIENT_DETAIL_KEYS = [
+  "rowMissing",
+  "rowNotConflicted",
+  "rowBoundToAnother",
+  "episodeOver",
+  "headMoved",
+  "worktreeBusy",
+  "implementRunning",
+] as const;
+
+describe("decideConflictFixRecovery for a temporary stop", () => {
+  const CASES = TRANSIENT_DETAIL_KEYS.flatMap((key) =>
+    (["blocked", "needs_human", "failed"] as const).map(
+      (status) => [key, status] as const,
+    ),
+  );
+
+  test.each(CASES)(
+    "releases a %s note of a %s work item without a hold",
+    (key, status) => {
+      expect(
+        decideConflictFixRecovery(
+          item(status, {
+            note: conflictRoundReason(CONFLICT_ROUND_DETAILS[key]),
+          }),
+        ),
+      ).toEqual({ kind: "release", hold: null });
+    },
+  );
+
+  test("holds fix_stopped when a temporary note continues after the fixed text", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("blocked", {
+          note: `${conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved)} x`,
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test("holds fix_stopped when a temporary note is quoted inside a Claude block reason", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("needs_human", {
+          note: `conflict round: claude blocked: ${conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved)}`,
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test("maps no temporary note to a hold reason", () => {
+    expect(
+      TRANSIENT_DETAIL_KEYS.map((key) =>
+        holdReasonForConflictStoppedItem(
+          conflictRoundReason(CONFLICT_ROUND_DETAILS[key]),
+        ),
+      ),
+    ).toEqual(TRANSIENT_DETAIL_KEYS.map(() => null));
+  });
+});
+
 describe("decideConflictFixRecovery", () => {
   test("releases a row whose work item does not exist, without a hold", () => {
     expect(decideConflictFixRecovery(null)).toEqual({
@@ -229,11 +290,27 @@ describe("decideConflictFixRecovery", () => {
     ).toEqual({ kind: "release", hold: null });
   });
 
-  test("holds fix_stopped for a failed work item that started a flow", () => {
+  test("releases a failed work item that started a flow without a mapped note, without a hold", () => {
+    expect(
+      decideConflictFixRecovery(item("failed", { note: "git fetch failed" })),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("releases a failed work item that started a flow without a note, without a hold", () => {
     expect(decideConflictFixRecovery(item("failed"))).toEqual({
       kind: "release",
-      hold: "fix_stopped",
+      hold: null,
     });
+  });
+
+  test("holds a failed work item that started a flow by its mapped note", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", {
+          note: conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed),
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: "check_failed" });
   });
 
   test("releases a cancelled work item without a hold", () => {

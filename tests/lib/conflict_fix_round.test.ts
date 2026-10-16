@@ -13,6 +13,7 @@ import {
   evaluateMergedTree,
   hasConflictFixSkillMarker,
   isConflictRound,
+  roundStopReason,
   stripConflictMarkerLabels,
 } from "../../f/factory/lib/conflict_fix_round.ts";
 
@@ -54,6 +55,20 @@ describe("conflictRoundReason", () => {
   });
 });
 
+describe("roundStopReason", () => {
+  test("gives a conflict round the fixed note of the detail", () => {
+    expect(
+      roundStopReason(true, CONFLICT_ROUND_DETAILS.headMoved, "PR head moved"),
+    ).toBe("conflict round: the PR head moved while the fix was in progress");
+  });
+
+  test("leaves the original reason to a round that is not a conflict round", () => {
+    expect(
+      roundStopReason(false, CONFLICT_ROUND_DETAILS.headMoved, "PR head moved"),
+    ).toBe("PR head moved");
+  });
+});
+
 describe("CONFLICT_ROUND_DETAILS", () => {
   test.each([
     ["baseNotDefault", "base is not the default branch"],
@@ -62,6 +77,13 @@ describe("CONFLICT_ROUND_DETAILS", () => {
     ["unresolvable", "unresolvable conflict"],
     ["checkFailed", "check failed"],
     ["upToDate", "up_to_date"],
+    ["rowMissing", "the conflict check row of the work item does not exist"],
+    ["rowNotConflicted", "the conflict check is not conflicted"],
+    ["rowBoundToAnother", "the conflict check is bound to another work item"],
+    ["episodeOver", "the conflict episode of the work item is over"],
+    ["headMoved", "the PR head moved while the fix was in progress"],
+    ["worktreeBusy", "the worktree is in use by another process"],
+    ["implementRunning", "an implement flow is running on the branch"],
     [
       "markerMissing",
       "the factory-fix skill lacks the conflict-fix-skill:v1 marker",

@@ -12,6 +12,7 @@ import {
   conflictRoundReason,
 } from "../../f/factory/lib/conflict_fix_round.ts";
 import { holdReasonForConflictStoppedItem } from "../../f/factory/lib/pr_conflict_fix_recovery.ts";
+import type { PrConflictFixHoldReason } from "../../f/factory/lib/pr_conflict_support.ts";
 import { MERGE_COMMIT_MESSAGE } from "../../f/factory/lib/workspace.ts";
 import { conflictApplyResult } from "../../f/factory/steps/pr_fix_apply.ts";
 import { fixedFeedbackCollectResult } from "../../f/factory/steps/pr_fix_collect.ts";
@@ -202,6 +203,31 @@ describe("the prepare step of a conflict round", () => {
     ).toBe(1);
   });
 
+  test("gives the stop of a worktree that another process holds the fixed note in a conflict round", async () => {
+    const text = await source("pr_fix_prepare.ts");
+    expect(
+      count(
+        text,
+        "roundStopReason(\n          conflictRound,\n          CONFLICT_ROUND_DETAILS.worktreeBusy,\n          err.message,",
+      ),
+    ).toBe(1);
+  });
+
+  test("gives the stop for a running implement flow the fixed note in a conflict round", async () => {
+    const text = await source("pr_fix_prepare.ts");
+    expect(count(text, "CONFLICT_ROUND_DETAILS.implementRunning,")).toBe(2);
+  });
+
+  test("gives a head that moved while the base was merged the fixed note", async () => {
+    const text = await source("pr_fix_prepare.ts");
+    expect(
+      count(
+        text,
+        '      return {\n        outcome: "guard_blocked",\n        reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved),',
+      ),
+    ).toBe(1);
+  });
+
   test("returns a worktree that is not as expected as a guard stop", async () => {
     const text = await source("pr_fix_prepare.ts");
     expect(
@@ -291,9 +317,7 @@ describe("the fix step of a conflict round", () => {
 describe("the verify step of a conflict round", () => {
   test("inspects the resolution through one dependency", async () => {
     const text = await source("pr_fix_verify.ts");
-    expect(count(text, "await inspectConflictResolution(inspectDeps, {")).toBe(
-      1,
-    );
+    expect(count(text, "inspectConflictResolution(inspectDeps, {")).toBe(1);
   });
 
   test("builds the git reads of the inspection in one place", async () => {
@@ -303,7 +327,7 @@ describe("the verify step of a conflict round", () => {
 
   test("hands the inspection the tree of the baseline commit", async () => {
     const text = await source("pr_fix_verify.ts");
-    expect(count(text, "              autoTreeSha,\n")).toBe(1);
+    expect(count(text, "            autoTreeSha,\n")).toBe(1);
   });
 
   test("expects the baseline commit at HEAD", async () => {
@@ -347,6 +371,26 @@ describe("the finish step of a conflict round", () => {
       count(
         text,
         'await finalizeTerminal("blocked", reason ?? "safety guard failed");',
+      ),
+    ).toBe(1);
+  });
+
+  test("gives a head that moved before the push the fixed note in a conflict round", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      count(
+        text,
+        "roundStopReason(conflictRound, CONFLICT_ROUND_DETAILS.headMoved, reason)",
+      ),
+    ).toBe(1);
+  });
+
+  test("hands the verified tree to the push", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      count(
+        text,
+        "{ prHeadSha: head_sha, verifiedTreeSha: verified_tree_sha }",
       ),
     ).toBe(1);
   });
@@ -440,28 +484,55 @@ describe("the finish step of a conflict round", () => {
   });
 });
 
+/**
+ * 競合回の注記の固定文ごとに、保留の理由に写る先。写らないものは`null`にする。
+ * 写らない理由は、行に最終の保留を書かない回(pushせずに終えた回と一時の停止)だからである。
+ * `CONFLICT_ROUND_DETAILS`に固定文を足すと、この表に行を足すまで下の網羅の検査が落ちる。
+ */
+const DETAIL_HOLDS: readonly (readonly [
+  keyof typeof CONFLICT_ROUND_DETAILS,
+  PrConflictFixHoldReason | null,
+])[] = [
+  ["baseNotDefault", "base_not_default"],
+  ["baseChangesWorkflows", "base_changes_workflows"],
+  ["protectedPath", "protected_path"],
+  ["unresolvable", "unresolvable"],
+  ["checkFailed", "check_failed"],
+  ["markerMissing", "marker_missing"],
+  ["upToDate", null],
+  ["baseChanged", null],
+  ["rowMissing", null],
+  ["rowNotConflicted", null],
+  ["rowBoundToAnother", null],
+  ["episodeOver", null],
+  ["headMoved", null],
+  ["worktreeBusy", null],
+  ["implementRunning", null],
+];
+
 describe("the notes of a stopped conflict round", () => {
-  test("starts a stale image note with the prefix that the count of rounds skips", () => {
-    expect(
-      `${CHECK_IMAGE_STALE_REASON}: x`.startsWith(
-        "worker image is stale: run mise run up: ",
-      ),
-    ).toBe(true);
+  test("lists every fixed text of a conflict round in the table of holds", () => {
+    const listed: string[] = DETAIL_HOLDS.map(([key]) => key);
+    expect(listed.sort()).toEqual(Object.keys(CONFLICT_ROUND_DETAILS).sort());
   });
 
-  test.each([...CONFLICT_BLOCKED_NOTES])(
-    "gives the recovery the same text for %s",
-    (note) => {
-      expect(holdReasonForConflictStoppedItem(note)).not.toBeNull();
-    },
-  );
-
-  test("has no prefix of a conflict round on a reason of the check environment", () => {
+  test.each(DETAIL_HOLDS)("maps the note of %s to the hold %p", (key, hold) => {
     expect(
-      conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed).startsWith(
-        CHECK_IMAGE_STALE_REASON,
+      holdReasonForConflictStoppedItem(
+        conflictRoundReason(CONFLICT_ROUND_DETAILS[key]),
       ),
-    ).toBe(false);
+    ).toBe(hold);
+  });
+
+  test("lets the conflict_blocked outcome carry only the notes that map to a hold", () => {
+    expect([...CONFLICT_BLOCKED_NOTES]).toEqual(
+      [
+        CONFLICT_ROUND_DETAILS.baseNotDefault,
+        CONFLICT_ROUND_DETAILS.baseChangesWorkflows,
+        CONFLICT_ROUND_DETAILS.protectedPath,
+        CONFLICT_ROUND_DETAILS.unresolvable,
+      ].map(conflictRoundReason),
+    );
   });
 });
 
@@ -603,6 +674,12 @@ describe("the flow of a conflict round", () => {
         ),
       ),
     ).toEqual([true, true, true]);
+  });
+
+  test("passes the verified tree of the verify step to the finish step, with null as the default", () => {
+    expect(moduleBlock("pr_fix_finish")).toContain(
+      "          verified_tree_sha:\n            type: javascript\n            expr: results.pr_fix_verify?.verified_tree_sha ?? null\n",
+    );
   });
 
   test("hands the outcome of the prepare step to the finish step when nothing else ran", () => {

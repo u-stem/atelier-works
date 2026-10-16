@@ -487,8 +487,8 @@ git操作と検査の部品は[CIの失敗を直す部品の仕様](ci-fix.md#�
 | 準備 | 修正ラウンドの上限を確かめない。競合の行が、いまのheadについて、この作業項目で競合のままであることと、PRのbaseが既定のブランチであることを確かめる。worktreeを用意した後、baseをmergeして、ローカルだけの基準コミットを作る |
 | 収集 | GitHubを読まず、固定の結果を返す。処理済みの位置は進めない |
 | 修正 | 競合ファイルだけをClaudeに解かせる。`Bash`は渡さない。競合ファイルが無いときは、Claudeを起動せず、日次予算も見ない。コミットメッセージは固定文で、返信は空である |
-| 検証 | HEADが基準コミットであることを確かめ、変更と解消を検査する。検査コマンドは1回だけ実行し、失敗してもClaudeを再実行しない |
-| 完了 | pushの直前に、検証と同じ検査をもう一度行い、PRを読み直す。mergeコミットをpushし、通知を出さない |
+| 検証 | HEADが基準コミットであることを確かめ、変更と解消を検査する。検査コマンドは1回だけ実行し、失敗してもClaudeを再実行しない。最後に通したツリーのshaを`verified_tree_sha`として返す |
+| 完了 | pushの直前に、検証と同じ検査をもう一度行い、ツリーが`verified_tree_sha`と同じであることを確かめ、PRを読み直す。mergeコミットをpushし、通知を出さない |
 
 修正ラウンドの上限を確かめないのは、競合回が`fix_round`を前の値のまま写すためである。
 競合回の回数の上限は、`pr_conflict_fix_max_rounds`が決める。
@@ -506,7 +506,15 @@ git操作と検査の部品は[CIの失敗を直す部品の仕様](ci-fix.md#�
 | 保護パスが競合しているか、両側が変えた | `conflict_blocked` | `needs_human`。注記は`conflict round: a conflicted path is protected` |
 | baseが`.github/workflows/`を変えている | `conflict_blocked` | `needs_human`。注記は`conflict round: base changes workflows` |
 | PRのbaseが既定のブランチでない | `conflict_blocked` | `needs_human`。注記は`conflict round: base is not the default branch` |
-| 競合の行と作業項目が合わない、PRのheadが動いた、worktreeの状態が前提と違う | `guard_blocked` | `blocked`。注記は理由そのまま |
+| 競合の行が無い、競合でない、別の作業項目に結ばれた、競合の回が終わった | `guard_blocked` | `blocked`。注記は固定文で、一時の停止 |
+| PRのheadが動いた(準備の時点、baseのmerge中) | `guard_blocked` | `blocked`。注記は固定文で、一時の停止 |
+| worktreeを別の処理が使っている、同じブランチで実装のフローが動いている | `guard_blocked` | `blocked`。注記は固定文で、一時の停止 |
+| worktreeの状態が前提と違う | `guard_blocked` | `blocked`。注記は理由そのまま |
+
+一時の停止は、待てば解ける事情で止めた回である。
+回復は、一時の停止の注記を保留の理由に写さず、行に最終の保留を書かない。
+次の巡回で判定し直し、起動し直しは、競合を直した回数の上限(`pr_conflict_fix_max_rounds`)が止める。
+一時の停止の注記の一覧は、[PRのCI監視の仕様](pr-ci.md#競合を直す判断)にある。
 
 競合ファイルが無いのに`proceed`になる場合がある。
 GitHubが競合と判定したのに、ローカルではきれいにmergeできたときである。
@@ -527,10 +535,16 @@ GitHubが競合と判定したのに、ローカルではきれいにmergeでき
 | --- | --- |
 | mergeコミットをpushできた | `rereview_requested`。ラウンドを記録する |
 | pushの前の確認に通らない | `needs_human`。注記は止めた理由。workerが検査の前提を満たさないときは、ラウンドを記録せず`blocked` |
-| PRのheadが動いた | `blocked`。ラウンドを記録する |
+| 検査したツリーが、検証のステップが通したツリーと違う | `needs_human`。注記は`conflict round: the tree changed after the verification`。ラウンドを記録する |
+| PRのheadが動いた | `blocked`。ラウンドを記録する。注記は固定文で、一時の停止 |
 | baseがpushの直前に動いた | `reviewed`。注記は`conflict round: the base branch moved`。ラウンドを記録する |
 | GitHubがworkflowの権限不足でpushを拒否した | `needs_human`。注記は`conflict round: base changes workflows`。ラウンドを記録する |
 | Claudeや検査が止めた | `needs_human`。検査コマンドの失敗の注記は`conflict round: check failed` |
+
+検証のステップの検査コマンドは、対象リポジトリのコードで、worktreeを書き換えられる。
+そのため、検証は検査コマンドの後にもう一度解消を検査し、通したツリーのshaを完了のステップへ渡す。
+完了のステップは、pushの直前の検査で得たツリーが、そのshaと同じであることを確かめる。
+検査コマンドが通ったツリーとpushするツリーを結びつけるためである。
 
 baseがpushの直前に動いたときは、`reviewed`にして、注記で`up_to_date`と区別する。
 baseは動き続けるので、次の判定で読み直す。
@@ -542,7 +556,9 @@ baseは動き続けるので、次の判定で読み直す。
 ### 注記の固定文
 
 注記は、固定文の完全一致で、競合の行の保留の理由へ写せる形にしている(`holdReasonForConflictStoppedItem`)。
-一致しない注記は、保留の理由が`fix_stopped`になる。
+一時の停止の注記は、保留の理由に写さず、行に最終の保留を書かない。
+どちらにも当たらない注記は、保留の理由が`fix_stopped`になる。
+注記にshaや保持者のような変わる値を含めると、完全一致が外れて`fix_stopped`になるので、固定文だけにして、変わる値はログに残す。
 Claudeの理由の先頭には固定の接頭辞`conflict round: claude blocked:`が付くので、Claudeの出力の文字列が保留の理由を決めることは無い。
 
 止めた理由の注記には、イメージが古い理由(`worker image is stale: run mise run up:`で始まる文)の接頭辞を壊す語句を付けない。

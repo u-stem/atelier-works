@@ -109,6 +109,11 @@ export type PrFixVerifyResult = {
   readonly replies: FixReply[];
   readonly commit_subject: string | null;
   readonly commit_body: string | null;
+  /**
+   * 競合回で、検証が最後に通したツリーのsha。競合回が`done`で返すときだけ持つ。
+   * 完了のステップは、pushの直前に検査したツリーがこの値と同じであることを確かめる。
+   */
+  readonly verified_tree_sha?: string | null;
 };
 
 /** 検査コマンドの失敗を添えたClaudeの再実行の結果。 */
@@ -453,8 +458,11 @@ export type ConflictFixVerifyDeps = {
   ) => Promise<string | null>;
   /** コミットしていない変更を調べる(`inspectUncommittedChanges`)。基準コミットとの差を見る。 */
   readonly inspectChanges: () => Promise<ForbiddenChangeResult>;
-  /** 競合ファイルの解消を調べ、止める理由を返す(`inspectConflictResolution`)。理由が空なら通す。 */
-  readonly inspectResolution: () => Promise<readonly string[]>;
+  /** 競合ファイルの解消を調べ、止める理由と検査したツリーを返す(`inspectConflictResolution`)。理由が空なら通す。 */
+  readonly inspectResolution: () => Promise<{
+    readonly reasons: readonly string[];
+    readonly treeSha: string;
+  }>;
   /** `allowed_check_commands`を実行する。 */
   readonly runChecks: () => Promise<readonly CheckCommandResult[]>;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
@@ -487,6 +495,7 @@ export type ConflictFixVerifyInput = {
  * 続けて、禁止された変更(`inspectChanges`)、競合ファイルの解消(`inspectResolution`)の順に調べる。
  * 記録が無いか一致しなければ、変更を調べずに"blocked"にする。
  * 検査は、Claudeの実行の後と、検査コマンドが通った後の両方で行う。検査コマンドは対象リポジトリのコードで、worktreeを書き換えられるためである。
+ * 結果の`verified_tree_sha`は、最後に通した検査のツリーである。完了のステップが、pushするツリーとの一致を確かめる。
  * 検査コマンドが失敗したら、固定の理由で"blocked"にする。Claudeは再実行しない。
  * 検査コマンドの失敗は、署名の変更のような意味の競合を表し、競合ファイルだけを直せるClaudeには直せないためである。
  * workerが検査の前提を満たさず検査を実行できなければ、`reportCheckImageStale`で知らせ、"guard_blocked"にする。
@@ -521,7 +530,8 @@ export async function runConflictFixVerify(
     return blocked(CONFLICT_ROUND_REPLIES_REASON);
   }
 
-  /** `.git`とHEADを照合してから変更と解消を調べ、止める理由を返す。問題が無ければnull。 */
+  let verifiedTreeSha: string | null = null;
+  /** `.git`とHEADを照合してから変更と解消を調べ、止める理由を返す。問題が無ければnullで、通したツリーを記録する。 */
   const inspect = async (): Promise<string | null> => {
     const pointerReason = await recordedGitPointerStopReason(
       pointer,
@@ -536,22 +546,25 @@ export async function runConflictFixVerify(
       return forbidden.reasons.map(escapeReasonSeparator).join("; ");
     }
     const resolution = await deps.inspectResolution();
-    return resolution.length > 0
-      ? resolution.map(escapeReasonSeparator).join("; ")
-      : null;
+    if (resolution.reasons.length > 0) {
+      return resolution.reasons.map(escapeReasonSeparator).join("; ");
+    }
+    verifiedTreeSha = resolution.treeSha;
+    return null;
   };
-  const done: PrFixVerifyResult = {
+  const done = (): PrFixVerifyResult => ({
     outcome: "done",
     reason: null,
     summary,
     replies: [],
     commit_subject: input.apply.commitSubject,
     commit_body: input.apply.commitBody,
-  };
+    verified_tree_sha: verifiedTreeSha,
+  });
 
   const firstReason = await inspect();
   if (firstReason !== null) return blocked(firstReason);
-  if (!input.hasCheckCommands) return done;
+  if (!input.hasCheckCommands) return done();
   await deps.announceChecks();
 
   let results: readonly CheckCommandResult[];
@@ -569,7 +582,7 @@ export async function runConflictFixVerify(
     return blocked(conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed));
   }
   const afterChecksReason = await inspect();
-  return afterChecksReason === null ? done : blocked(afterChecksReason);
+  return afterChecksReason === null ? done() : blocked(afterChecksReason);
 }
 
 /**
@@ -787,14 +800,12 @@ export async function main(
             maxChangedFiles: config.max_fix_changed_files,
             maxDiffLines: config.max_fix_diff_lines,
           }),
-        inspectResolution: async () =>
-          (
-            await inspectConflictResolution(inspectDeps, {
-              conflictedPaths,
-              conflictBlobs,
-              autoTreeSha,
-            })
-          ).reasons,
+        inspectResolution: () =>
+          inspectConflictResolution(inspectDeps, {
+            conflictedPaths,
+            conflictBlobs,
+            autoTreeSha,
+          }),
         runChecks: runChecksAndCleanIgnored,
         warn: (message, fields) =>
           log.warn(message, { work_item_id, ...fields }),

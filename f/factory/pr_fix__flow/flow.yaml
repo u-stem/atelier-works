@@ -281,6 +281,9 @@ value:
           trigger_review_ids:
             type: javascript
             expr: results.pr_fix_collect?.trigger_review_ids ?? []
+          verified_tree_sha:
+            type: javascript
+            expr: results.pr_fix_verify?.verified_tree_sha ?? null
           work_item_id:
             type: javascript
             expr: flow_input.work_item_id

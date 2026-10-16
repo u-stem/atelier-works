@@ -79,8 +79,7 @@ describe("evaluateConflictRoundPrepareGuard", () => {
     ).toEqual({
       ok: false,
       outcome: "guard_blocked",
-      reason:
-        "conflict round: the conflict check row of the work item does not exist",
+      reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.rowMissing),
     });
   });
 
@@ -92,7 +91,7 @@ describe("evaluateConflictRoundPrepareGuard", () => {
     expect(verdict).toEqual({
       ok: false,
       outcome: "guard_blocked",
-      reason: "conflict round: the conflict check is not conflicted",
+      reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.rowNotConflicted),
     });
   });
 
@@ -104,8 +103,7 @@ describe("evaluateConflictRoundPrepareGuard", () => {
     expect(verdict).toEqual({
       ok: false,
       outcome: "guard_blocked",
-      reason:
-        "conflict round: the conflict check is bound to another work item",
+      reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.rowBoundToAnother),
     });
   });
 
@@ -117,7 +115,7 @@ describe("evaluateConflictRoundPrepareGuard", () => {
     expect(verdict).toEqual({
       ok: false,
       outcome: "guard_blocked",
-      reason: "conflict round: the conflict episode of the work item is over",
+      reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.episodeOver),
     });
   });
 
@@ -137,8 +135,7 @@ describe("evaluateConflictRoundPrepareGuard", () => {
     expect(verdict).toEqual({
       ok: false,
       outcome: "guard_blocked",
-      reason:
-        "conflict round: the PR head moved from the head of the conflict check",
+      reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved),
     });
   });
 

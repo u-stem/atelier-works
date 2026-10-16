@@ -43,6 +43,26 @@ const FIXED_NOTE_HOLDS: readonly (readonly [
 ];
 
 /**
+ * 一時の停止の注記の固定文。待てば解ける事情で止めた回の注記で、保留の理由には写さない。
+ * 行に最終の保留を書くと、人が直すまで起動し直さなくなるためである。
+ * 照合は完全一致だけで行う。
+ */
+const TEMPORARY_STOP_NOTES: readonly string[] = [
+  CONFLICT_ROUND_DETAILS.rowMissing,
+  CONFLICT_ROUND_DETAILS.rowNotConflicted,
+  CONFLICT_ROUND_DETAILS.rowBoundToAnother,
+  CONFLICT_ROUND_DETAILS.episodeOver,
+  CONFLICT_ROUND_DETAILS.headMoved,
+  CONFLICT_ROUND_DETAILS.worktreeBusy,
+  CONFLICT_ROUND_DETAILS.implementRunning,
+].map(conflictRoundReason);
+
+/** 注記が一時の停止の固定文か。 */
+function isTemporaryStopNote(note: string | null): boolean {
+  return note !== null && TEMPORARY_STOP_NOTES.includes(note);
+}
+
+/**
  * 止めた理由を、保留の理由に写す。写せなければ`null`を返す。
  * 照合は、固定文への完全一致だけで行う。部分一致や先頭一致は使わない。
  * Claudeの出力の文字列は、固定文の前に`conflict round: claude blocked: `などの接頭辞が付くので、
@@ -87,12 +107,18 @@ function isTerminal(status: WorkItemStatus): boolean {
  * - 何も変えずに終えた作業項目(`reviewed`で注記が`up_to_date`)は、`up_to_date`にする。pushしていないので、`pushed`と区別する。
  *   注記が違う`reviewed`は、保留なしで結びを外す。
  * - `needs_human`と`blocked`は、理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留する。
- *   ただし、イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった`blocked`は、待たずに保留なしで結びを外す。
+ *   ただし、一時の停止の注記(`TEMPORARY_STOP_NOTES`)で止まったものは、保留なしで結びを外す。
+ *   行の状態やPRのheadが動いただけで、次の巡回で判定し直せば足りるためである。
+ *   イメージが古い理由(`AUTO_RETRY_REASON_PREFIXES`)で止まった`blocked`も、待たずに保留なしで結びを外す。
  *   待つと、その間は通知も起動もされない。競合回は進行中の作業が無く、人が競合を直すと急ぐ必要も無いので、
- *   CI回のような猶予は置かない。この回は回数に数えない(`countPrConflictFixRounds`)ので、起動し直しを止めるのは、
- *   行の起動の回数(`fix_attempts`)の上限だけである。
+ *   CI回のような猶予は置かない。
+ *   イメージが古い理由で止まった回は回数に数えない(`countPrConflictFixRounds`)ので、起動し直しを止めるのは、
+ *   行の起動の回数(`fix_attempts`)の上限だけである。一時の停止の注記で止まった回は回数に数えるので、
+ *   `pr_conflict_fix_max_rounds`が止める。
  * - `failed`は、フローを起動する前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。
- *   起動し直す回数は、行の起動の回数の上限が止める。フローが起動した後の`failed`は、理由を写せれば写し、写せなければ`fix_stopped`で保留する。
+ *   フローが起動した後の`failed`は、理由を写せれば写し、写せなければ保留なしで結びを外す。
+ *   例外で終わった回は、`getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを区別できないためである。
+ *   起動し直しは、回数に数える`failed`なので`pr_conflict_fix_max_rounds`が止める。失敗の通知はフローの失敗の処理が出す。
  * - ほかの終端(`cancelled`など)は、保留なしで結びを外す。
  */
 function decideRecoveryByState(
@@ -109,6 +135,7 @@ function decideRecoveryByState(
       : { kind: "release", hold: null };
   }
   if (item.status === "needs_human") {
+    if (isTemporaryStopNote(item.note)) return { kind: "release", hold: null };
     return {
       kind: "release",
       hold: holdReasonForConflictStoppedItem(item.note) ?? "fix_stopped",
@@ -122,6 +149,7 @@ function decideRecoveryByState(
     ) {
       return { kind: "release", hold: null };
     }
+    if (isTemporaryStopNote(note)) return { kind: "release", hold: null };
     return {
       kind: "release",
       hold: holdReasonForConflictStoppedItem(note) ?? "fix_stopped",
@@ -130,7 +158,7 @@ function decideRecoveryByState(
   if (item.status === "failed" && item.launched) {
     return {
       kind: "release",
-      hold: holdReasonForConflictStoppedItem(item.note) ?? "fix_stopped",
+      hold: holdReasonForConflictStoppedItem(item.note),
     };
   }
   return { kind: "release", hold: null };

@@ -15,6 +15,8 @@ import type { ForbiddenChangeResult } from "../../f/factory/steps/pr_workflow_su
 const POINTER = "gitdir: /workspaces/o/r/main/.git/worktrees/fix-1\n";
 const BASELINE = "c".repeat(40);
 const CLEAN: ForbiddenChangeResult = { blocked: false, reasons: [] };
+const TREE_1 = "1".repeat(40);
+const TREE_2 = "2".repeat(40);
 
 function check(ok: boolean): CheckCommandResult {
   return {
@@ -45,6 +47,7 @@ type Options = {
   readonly headReasons?: readonly (string | null)[];
   readonly inspections?: readonly ForbiddenChangeResult[];
   readonly resolutions?: readonly (readonly string[])[];
+  readonly treeShas?: readonly string[];
   readonly checks?: readonly boolean[];
   readonly checksError?: Error;
 };
@@ -87,9 +90,10 @@ function harness(options: Options = {}): {
     },
     inspectResolution: async () => {
       calls.push("inspectResolution");
-      const result = options.resolutions?.[resolutionIndex] ?? [];
+      const reasons = options.resolutions?.[resolutionIndex] ?? [];
+      const treeSha = options.treeShas?.[resolutionIndex] ?? TREE_1;
       resolutionIndex += 1;
-      return result;
+      return { reasons, treeSha };
     },
     runChecks: async () => {
       calls.push("runChecks");
@@ -269,7 +273,29 @@ describe("runConflictFixVerify: the check commands", () => {
       replies: [],
       commit_subject: "fix: resolve merge conflicts with the base branch",
       commit_body: null,
+      verified_tree_sha: TREE_1,
     });
+  });
+
+  test("records the tree of the inspection after the checks as the verified tree", async () => {
+    const { deps } = harness({ treeShas: [TREE_1, TREE_2] });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect(result.verified_tree_sha).toBe(TREE_2);
+  });
+
+  test("records the tree of the only inspection when there are no check commands", async () => {
+    const { deps } = harness({ treeShas: [TREE_1, TREE_2] });
+    const result = await runConflictFixVerify(deps, {
+      ...INPUT,
+      hasCheckCommands: false,
+    });
+    expect(result.verified_tree_sha).toBe(TREE_1);
+  });
+
+  test("records no verified tree in a result that stops", async () => {
+    const { deps } = harness({ checks: [false] });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect(result.verified_tree_sha ?? null).toBeNull();
   });
 
   test("blocks a change that the checks made", async () => {
