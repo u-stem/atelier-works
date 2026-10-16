@@ -5,8 +5,11 @@
 import type { ListQueueData } from "windmill-client@1.817.0";
 import { isRecord, type NoticeRecord } from "./types.ts";
 
-/** defaultのworkerの枠の数。`infra/docker-compose.yml`の`windmill_worker`の`NUM_WORKERS`と同じにする。 */
-export const DEFAULT_WORKER_SLOTS = 3;
+/**
+ * defaultのworkerの枠の数。nativeでないworkerは、Windmillの制限でジョブを1つずつ動かすので1である。
+ * 記録のジョブ自身がその1つを使うため、他のジョブが使える枠は無く、`running_jobs`は常に0になる。
+ */
+export const DEFAULT_WORKER_SLOTS = 1;
 
 /** queueの取得で1回に読む件数。Windmillの上限でもある。 */
 export const WORKER_SAMPLE_QUEUE_PER_PAGE = 100;
@@ -645,7 +648,7 @@ function causeText(
 }
 
 const ACTION_TEXT =
-  "実行中のジョブのscriptの内訳を見て、メモリを使うジョブが並列で動いていないかを確かめる。続くなら、並列数を下げるかメモリの上限を上げるかを判断する";
+  "実行中のジョブのscriptの内訳を見て、メモリを使うジョブを確かめる。続くなら、そのジョブのメモリを減らすか、メモリの上限を上げるかを判断する";
 
 /**
  * 通知の本文を作る。値は閾値だけを載せ、そのときの測定値は載せない。

@@ -998,7 +998,7 @@ Podmanは対象外である。
   `console`をカスタムtagに許可しているので、superadminでない者が付けたscriptも、このworkerで動く。
   tag`console`を付けたscriptは、`requirements`の下を読める。書けるのはdefaultのworkerだけである。
 - 許可した主体は、Console用workerの依存キャッシュ(`worker_console_dependency_cache`)に書ける。defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
-- Console用workerの枠は2つである。長く動くjobで枠を埋めると、Consoleの問い合わせと承認が止まる。可用性の問題で、秘密の漏れではない。
+- Console用workerの枠は1つである。長く動くjobで枠を埋めると、Consoleの問い合わせと承認が止まる。可用性の問題で、秘密の漏れではない。
 - 許可はすべてのワークスペースに及ぶ。ワークスペースに絞る書式(`console(factory)`)は、実機で確かめていないので採用していない。
 - `doctor`と`bootstrap`の宛先の照合が防ぐのは、ポートの取り違えだけである。
   Windmillを装うローカルのプロセスには、資格情報が渡る。
@@ -1623,7 +1623,8 @@ rootのホームと`/tmp`の下は入れない。そこに置かれた実行フ�
 
 検査用のユーザーは、並行して動く検査どうしが同じuidを共有しないよう、複数ある(枠)。
 実行ごとに、空いている枠を1つ取り、終わったら手放す。
-枠の数は`FACTORY_CHECK_POOL_SIZE`で、既定は8である。workerの同時実行数(`NUM_WORKERS`、3)以上にする。
+枠の数は`FACTORY_CHECK_POOL_SIZE`で、既定は8である。
+workerの同時実行数(nativeでないworkerは1)に、片付けられず飛ばす枠の分を足した数以上にする。
 先頭のuidは`FACTORY_CHECK_UID`で、既定は10001である。
 どちらもイメージのビルド引数で、`mise.toml`の`[env]`が値を持つ。
 ジョブにはworkerの環境変数がほとんど渡らないので、scriptは`/etc/passwd`の`factory-check-N`から枠のuidを読む。
@@ -2046,17 +2047,18 @@ workerには`CAP_SYS_PTRACE`が無いので、別のuidのプロセスの環境�
 `tests/infra/docker_compose.test.ts`がこの関係を確かめる。
 
 ```text
-NUM_WORKERS × CHECK_NPROC_LIMIT + 検査の外に残す数 ≦ pids
-3 × 256 + 256 = 1024
+同時に動く検査の数 × CHECK_NPROC_LIMIT + 検査の外に残す数 ≦ pids
+1 × 256 + 256 ≦ 1024
 ```
 
-workerは`NUM_WORKERS`の数だけジョブを同時に動かすので、検査も同じ数まで重なる。
-カーネルは枠のuidごとに数えるので、検査がそろって上限まで使うと、その合計がコンテナのpidsを使う。
+nativeでないworkerはジョブを1つずつ動かす(Windmillの制限)ので、同時に動く検査も1つである。
+カーネルは枠のuidごとに数えるので、検査が上限まで使うと、その分がコンテナのpidsを使う。
 
 検査の外に残す数は256である。
 動いているworkerのpidsは、待機中が53、起動からの最大が112だった。
 Windmill本体、ジョブのbun、Claude、gitが使う分で、その2倍強を残す。
-片付けられなかった枠を飛ばしても、止まらないプロセスが残っていれば、その枠の分(最大256)も、この残りから使う。
+片付けられなかった枠を飛ばしても、止まらないプロセスが残っていれば、その枠の分(最大256)も、検査1つの分の外で使う。
+pidsの上限に余りがあるのは、この分を見込むためである。
 そのため、枠を飛ばしたときの通知`check_slot_skipped`は、workerの再起動を求める。
 
 pidsの上限はコンテナごとで、同じDockerのVMの別のコンテナは数えない。

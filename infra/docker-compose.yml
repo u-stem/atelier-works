@@ -93,7 +93,8 @@ services:
           # ("can't set distinct values on 'pids_limit' and
           # 'deploy.resources.limits.pids'")。
           # 検査コマンドは枠ごとに`CHECK_NPROC_LIMIT`(256)までプロセスを持てる。
-          # NUM_WORKERSの数の検査がそろって上限まで使っても、検査の外に256が残る値にする。
+          # nativeでないworkerはジョブを1つずつ動かすので、検査は1つだけが上限まで使う。
+          # そのときも、検査の外に256が残る値にする。
           # `tests/infra/docker_compose.test.ts`がこの関係を確かめる。
           pids: 1024
     # 孤立した子プロセスを回収するため、docker-init(tini)をPID 1で動かす。
@@ -124,8 +125,10 @@ services:
       - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
       - MODE=worker
       - WORKER_GROUP=default
-      # Claudeの実行中もスケジュールが止まらないよう、並列に動かす。
-      - NUM_WORKERS=3
+      # nativeでないworkerは、Windmillの制限で`NUM_WORKERS`が2以上でも1つで動く。
+      # 効かない設定を残さないため、`NUM_WORKERS`は置かない。
+      # defaultのworkerが同時に動かすジョブは1つで、
+      # Claudeのジョブが動く間、定期のジョブは待つ。
       # workerは子プロセスの環境を絞る。イメージの`ENV CLAUDE_VERSION`を、
       # `agent_runs.claude_version`を記録するジョブまで届かせる。
       - WHITELIST_ENVS=CLAUDE_VERSION
@@ -232,8 +235,9 @@ services:
   ## その権限があればボリューム全体を直接読めるので、実害は増えない。
   ## `factory_console`を読み取り専用で付けるのは、取り込みの失敗を見張るscriptが
   ## `status.json`を読むため。`factory_workspaces`は付けない。
-  ## 2つのworkerプロセスは、1件のjobが止まっても全体を止めないためで、
-  ## メモリはbunのプロセス2つが収まる量にする。
+  ## nativeでないworkerは1つで動くので、1件のjobが止まっている間は、
+  ## ほかのjobが待つ。jobには`timeout`を付けて、止まりきらないようにする。
+  ## メモリはbunのプロセス1つが収まる量にする。
   windmill_worker_console:
     image: ghcr.io/windmill-labs/windmill:${WM_VERSION:?run via mise}
     pull_policy: always
@@ -253,7 +257,6 @@ services:
       - MODE=worker
       - WORKER_GROUP=console
       - WORKER_TAGS=console
-      - NUM_WORKERS=2
     depends_on:
       db:
         condition: service_healthy

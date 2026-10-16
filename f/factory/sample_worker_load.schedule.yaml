@@ -1,5 +1,5 @@
 summary: '[SYS-10] workerの負荷を記録'
-description: 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。workerの並列数やポーリングの間隔を見直す根拠にします。
+description: 2分ごとに実行し、defaultのworkerの枠の占有、queueの待ち、コンテナのメモリを記録します。ポーリングの間隔やジョブのメモリを見直す根拠にします。
 args: {}
 cron_version: v2
 enabled: true

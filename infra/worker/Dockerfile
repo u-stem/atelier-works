@@ -14,7 +14,7 @@ ARG CLAUDE_VERSION
 # 検査コマンドを動かす非特権ユーザーの先頭のuidと、その数。`mise.toml`の`[env]`と
 # 同じ値を`docker-compose.yml`が渡す。既定値は、`--build-arg`無しの`docker build`でも
 # 検査用のuidが決まるようにするためだけにある。
-# 数は、workerの同時実行数(`NUM_WORKERS`)以上にする。
+# 数は、workerの同時実行数(1)に、片付けられず飛ばす枠の分を足した数以上にする。
 ARG FACTORY_CHECK_UID=10001
 ARG FACTORY_CHECK_POOL_SIZE=8
 ARG GH_VERSION
