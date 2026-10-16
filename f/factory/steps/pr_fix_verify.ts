@@ -111,7 +111,7 @@ export type PrFixVerifyResult = {
   readonly commit_subject: string | null;
   readonly commit_body: string | null;
   /**
-   * 競合回で、検証が最後に通したツリーのsha。競合回が`done`で返すときだけ持つ。
+   * 競合回で、検査コマンドの前後の検査が同じだったツリーのsha。競合回が`done`で返すときだけ持つ。
    * 完了のステップは、pushの直前に検査したツリーがこの値と同じであることを確かめる。
    */
   readonly verified_tree_sha?: string | null;

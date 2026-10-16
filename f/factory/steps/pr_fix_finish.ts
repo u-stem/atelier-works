@@ -291,7 +291,7 @@ export async function runConflictPush(
   deps: ConflictPushDeps,
   input: {
     readonly prHeadSha: string;
-    /** 検証のステップが最後に通したツリー。無ければnull。 */
+    /** 検証のステップで、検査コマンドの前後の検査が同じだったツリー。無ければnull。 */
     readonly verifiedTreeSha: string | null;
   },
 ): Promise<ConflictPushOutcome> {

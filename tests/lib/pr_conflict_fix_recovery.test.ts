@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
+import { conflictClaudeFailedMessage } from "../../f/factory/lib/conflict_fix_apply.ts";
 import {
   CONFLICT_ROUND_DETAILS,
-  conflictClaudeFailedMessage,
   conflictRoundReason,
 } from "../../f/factory/lib/conflict_fix_round.ts";
 import {

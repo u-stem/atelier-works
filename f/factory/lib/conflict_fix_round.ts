@@ -98,11 +98,6 @@ export const CONFLICT_TEMPORARY_STOP_NOTES: readonly string[] = [
  */
 export const CONFLICT_CLAUDE_FAILED_NOTE_PREFIX = `pr_fix_apply: ${conflictRoundReason("claude run failed (")}`;
 
-/** Claudeの実行の失敗を表す例外の文を作る。先頭は`CONFLICT_CLAUDE_FAILED_NOTE_PREFIX`である。 */
-export function conflictClaudeFailedMessage(reason: string): string {
-  return `${CONFLICT_CLAUDE_FAILED_NOTE_PREFIX}${reason})`;
-}
-
 /**
  * 一時の停止の理由を返す。競合回は固定文`detail`の注記、それ以外の回は元の理由`original`のままにする。
  * 競合回の注記は、回復が完全一致で行き先を決めるので、動的な値(shaや保持者)を含めない。

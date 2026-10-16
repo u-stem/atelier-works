@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CiFixChange } from "../../f/factory/lib/ci_fix_paths.ts";
 import {
-  CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
   CONFLICT_FIX_SKILL_MARKER,
   CONFLICT_ROUND_DETAILS,
   CONFLICT_TEMPORARY_STOP_NOTES,
@@ -9,7 +8,6 @@ import {
   type ConflictFileInput,
   type ConflictResolutionVerdict,
   checkConflictResolution,
-  conflictClaudeFailedMessage,
   conflictMarkerLabels,
   conflictResolutionReasons,
   conflictRoundReason,
@@ -97,28 +95,6 @@ describe("CONFLICT_TEMPORARY_STOP_NOTES", () => {
         conflictRoundReason(CONFLICT_ROUND_DETAILS.treeChangedDuringChecks),
       ),
     ).toBe(false);
-  });
-});
-
-describe("conflictClaudeFailedMessage", () => {
-  test("starts with the prefix that the recovery matches", () => {
-    expect(
-      conflictClaudeFailedMessage("timeout").startsWith(
-        CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
-      ),
-    ).toBe(true);
-  });
-
-  test("states the reason of the failure in the fixed form", () => {
-    expect(conflictClaudeFailedMessage("timeout")).toBe(
-      "pr_fix_apply: conflict round: claude run failed (timeout)",
-    );
-  });
-
-  test("ends the prefix at the open parenthesis of the reason", () => {
-    expect(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX).toBe(
-      "pr_fix_apply: conflict round: claude run failed (",
-    );
   });
 });
 

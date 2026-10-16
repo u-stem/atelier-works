@@ -11,11 +11,23 @@ import {
   type ConflictFixPromptPr,
 } from "./conflict_fix_prompt.ts";
 import {
+  CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
   CONFLICT_ROUND_DETAILS,
   conflictRoundReason,
   hasConflictFixSkillMarker,
 } from "./conflict_fix_round.ts";
 import { escapeReasonSeparator } from "./log.ts";
+
+/**
+ * Claudeの実行の失敗を表す例外の文を作る。先頭は`CONFLICT_CLAUDE_FAILED_NOTE_PREFIX`である。
+ * 型を`RunClaudeFailureReason`にするので、列挙値以外の文字列は入らない。
+ * 型を使う`claude.ts`への依存は、`conflict_fix_round.ts`に持たせない。持たせると、CIのテストの依存の範囲が広がる。
+ */
+export function conflictClaudeFailedMessage(
+  reason: RunClaudeFailureReason,
+): string {
+  return `${CONFLICT_CLAUDE_FAILED_NOTE_PREFIX}${reason})`;
+}
 
 /** 競合ファイルが無いときの、修正ステップの要約。Claudeを起動しなかったことを示す。 */
 export const CONFLICT_CLEAN_MERGE_SUMMARY =

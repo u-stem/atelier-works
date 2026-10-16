@@ -33,16 +33,14 @@ import {
   CONFLICT_CLEAN_MERGE_RESULT,
   type ConflictFixApplyInput,
   type ConflictFixApplyResult,
+  conflictClaudeFailedMessage,
   runConflictFixApply,
 } from "../lib/conflict_fix_apply.ts";
 import {
   CONFLICT_FIX_SCHEMA,
   isConflictFixClaudeOutput,
 } from "../lib/conflict_fix_prompt.ts";
-import {
-  CONFLICT_MERGE_NOT_RECORDED_REASON,
-  conflictClaudeFailedMessage,
-} from "../lib/conflict_fix_round.ts";
+import { CONFLICT_MERGE_NOT_RECORDED_REASON } from "../lib/conflict_fix_round.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
