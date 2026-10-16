@@ -61,6 +61,10 @@ import { recordCheckEnvironmentNotice } from "../lib/host_action.ts";
 import { logger, maskSecrets } from "../lib/log.ts";
 import { isCommitSha } from "../lib/main_ci_support.ts";
 import {
+  repoOwnerGateDeps,
+  repoOwnerStopReason,
+} from "../lib/repo_owner_gate.ts";
+import {
   assertGitHubName,
   type FactoryConfig,
   type WorkItem,
@@ -209,6 +213,14 @@ export type InstalledPackage = {
 export type DependabotPrepareDeps = {
   /** PRの事実を集め直す(`collectGateInput`)。 */
   readonly collect: () => Promise<CollectOutcome>;
+  /**
+   * リポジトリを取得する前に、リポジトリのオーナーの数値IDを照合する(`repoOwnerStopReason`)。
+   * 通るときは`null`、止めるときはその理由を返す。取得の失敗(404以外)は例外を投げる。
+   */
+  readonly ensureRepoOwner: (
+    owner: string,
+    repo: string,
+  ) => Promise<string | null>;
   /** headのshaのdetachedの作業ツリーを作り直す(`recreateDependabotWorktree`)。 */
   readonly createWorktree: (headSha: string) => Promise<PreparedWorktree>;
   readonly removeWorktree: (worktree: PreparedWorktree) => Promise<void>;
@@ -553,11 +565,12 @@ function isUsableTarget(name: string, from: string, to: string): boolean {
  *    人に回す結果と、GitHubの403は人に回す。そのほかの例外はそのまま投げる。
  * 4. 集めたheadが作業項目のheadと違えば、取り消す(`head_moved`)。
  * 5. ゲートを評価する。待ちは取り消し(`gate_waiting`)、止める結果は人に回す。
- * 6. headのshaの作業ツリーを作り直し、隔離した環境でインストールする。失敗は人に回す。
- * 7. `.git`を確かめてから`git status`を実行し、終了コードと出力を確かめる。きれいでなければ人に回す。
- * 8. インストールした対象のpackage.jsonのname、version、スクリプト、binding.gypを、registryの値と突き合わせる。食い違えば人に回す。
- * 9. repositoryのURLの前後を比べる。同じと確かめられなければ、機械の懸念に残して進む。
- * 10. 変更履歴、要約、PRのタイトルと本文を無害化して、影響調査の入力を組み立てる。
+ * 6. cloneの前に、リポジトリのオーナーの数値IDを照合する。通らなければ、取得せずに人に回す。取得の失敗(404以外)は例外を投げる。
+ * 7. headのshaの作業ツリーを作り直し、隔離した環境でインストールする。失敗は人に回す。
+ * 8. `.git`を確かめてから`git status`を実行し、終了コードと出力を確かめる。きれいでなければ人に回す。
+ * 9. インストールした対象のpackage.jsonのname、version、スクリプト、binding.gypを、registryの値と突き合わせる。食い違えば人に回す。
+ * 10. repositoryのURLの前後を比べる。同じと確かめられなければ、機械の懸念に残して進む。
+ * 11. 変更履歴、要約、PRのタイトルと本文を無害化して、影響調査の入力を組み立てる。
  * 取り消すときと人に回すときは、作業ツリーがあれば先に消してから状態を変える。
  * 人に回したときだけ通知し、通知には理由の訳を無害化して載せ、次の操作に再実行を案内しない。
  * 状態がほかの処理で動いていたときは、通知しない。
@@ -681,6 +694,12 @@ export async function runDependabotPrepare(
         "the target name or version has an unexpected form",
       ),
     );
+  }
+
+  // 取得の入口の照合から収集を挟むので、名前でcloneする直前にもう一度照合する。
+  const ownerStop = await deps.ensureRepoOwner(workItem.owner, workItem.repo);
+  if (ownerStop !== null) {
+    return finish("needs_human", dependabotReason("prepare", ownerStop));
   }
 
   worktree = await deps.createWorktree(result.headSha);
@@ -984,6 +1003,13 @@ export async function main(
         });
         return { result, pr: capture.lastPr() };
       },
+      ensureRepoOwner: (ownerName, repoName) =>
+        repoOwnerStopReason(
+          config,
+          ownerName,
+          repoName,
+          repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+        ),
       createWorktree: async (headSha) => {
         if (prNumber === null) throw new Error("work item has no pr_number");
         const { dir: repoDir } = await ensureRepo({
