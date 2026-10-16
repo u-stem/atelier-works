@@ -814,6 +814,7 @@ export const DEPENDABOT_REASON_PREFIX = {
   localCheck: "dependabot local check: ",
   impact: "dependabot impact: ",
   assess: "dependabot assess: ",
+  prepare: "dependabot prepare: ",
   finish: "dependabot finish: ",
   poll: "dependabot poll: ",
 } as const;

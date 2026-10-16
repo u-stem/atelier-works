@@ -1,5 +1,5 @@
 summary: '[SF-4-3] PRの競合を検知して通知'
-description: 5分ごとに実行し、FactoryのPRにマージの競合があるかを調べます。競合したPRは要対応の通知とDiscordで知らせ、競合が解けたら通知を自動で解決します。設定で有効にしたときだけ動きます。PRには書き込まず、競合を解く作業は起動しません。
+description: 5分ごとに実行し、FactoryのPRにマージの競合があるかを調べます。競合したPRは要対応の通知とDiscordで知らせ、競合が解けたら通知を自動で解決します。設定で有効にしたときだけ動きます。このscript自身はPRに書き込みません。競合を直す設定が有効なときは、競合を直す作業項目(pr_fixの競合回)を起動します。競合を直す作業項目が結ばれた行を戻す回復は、競合を直す設定に依らず、毎回行います。
 lock: '!inline f/factory/watch_pr_conflicts.script.lock'
 kind: script
 schema:

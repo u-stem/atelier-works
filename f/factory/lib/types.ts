@@ -504,8 +504,18 @@ export type ReviewVerdict = "approve" | "comment" | "request_changes";
 export type ReviewResult = "changes_requested" | "reviewed";
 
 /**
+ * 投稿した直後に判定した、レビューの結果。
+ * `unverified`は、前のラウンドから残った未解決の`[MUST]`を数えるためのスレッドの一覧を読めず、
+ * 指摘が残っているかを判定できなかった状態である。
+ * 残っていないと分からないので、`reviewed`(人の承認を待てる状態)にはしない。
+ * `factory.reviews`には記録せず、`result`をnullにする。
+ */
+export type ReviewOutcome = ReviewResult | "unverified";
+
+/**
  * `factory.reviews`の1行。
- * `result`は、結果を記録する前に作られた行を読むときだけ`null`になる。
+ * `result`は、結果を記録する前に作られた行か、
+ * 未解決の指摘を読めず結果を判定できなかった行(`ReviewOutcome`の`unverified`)で`null`になる。
  */
 export type ReviewRecord = {
   work_item_id: number;
@@ -515,11 +525,6 @@ export type ReviewRecord = {
   summary: string;
   findings: ReviewFinding[];
   posted_review_id: string | null;
-};
-
-/** `db.insertReview`に渡す行。書き込むときは、結果を必ず持つ。 */
-export type NewReviewRecord = Omit<ReviewRecord, "result"> & {
-  result: ReviewResult;
 };
 
 export type FixOutcome = "done" | "requirements_gap" | "blocked";

@@ -815,6 +815,24 @@ function isViewerPayload(value: unknown): value is ViewerPayload {
   return typeof record.login === "string" && typeof record.id === "number";
 }
 
+/** リポジトリの既定のブランチの名前を返す。 */
+export async function getDefaultBranch(
+  client: GhClient,
+  owner: string,
+  repo: string,
+): Promise<string> {
+  validateOwnerRepo(owner, repo);
+  const context = `GET repo ${owner}/${repo}`;
+  const response = await callGhApi(client, `repos/${owner}/${repo}`);
+  ensureSuccess(response, context);
+  const parsed = parseJsonBody(response, context);
+  if (!isRecord(parsed) || typeof parsed.default_branch !== "string") {
+    throw new Error(`${context}: unexpected response shape`);
+  }
+  assertBranchName(parsed.default_branch);
+  return parsed.default_branch;
+}
+
 export async function getViewer(client: GhClient): Promise<Viewer> {
   const response = await callGhApi(client, "user");
   ensureSuccess(response, "GET /user");
