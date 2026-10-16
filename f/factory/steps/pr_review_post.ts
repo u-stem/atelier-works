@@ -165,7 +165,7 @@ export async function main(
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
  *
- * 投稿するレビュー本文は4種類の定型(`renderReviewSummary` / `ReviewBodyMode`)の
+ * 投稿するレビュー本文は5種類の定型(`renderReviewSummary` / `ReviewBodyMode`)の
  * いずれかで、Claudeの自由記述の`summary`は使わない。
  * `summary`は出力スキーマと`factory.reviews`に記録として残すだけ。
  * 再レビュー(このPRに以前のFactoryのレビューがある)のときは、
@@ -347,8 +347,11 @@ export type PublishReviewResult = {
   readonly postedReviewId: number | null;
   /** 投稿済みのレビューを再利用したか。 */
   readonly reused: boolean;
-  /** 解決の後に残る、Factory自身の未解決の`[MUST]`のスレッドの数。 */
-  readonly openMustCount: number;
+  /**
+   * 解決の後に残る、Factory自身の未解決の`[MUST]`のスレッドの数。
+   * スレッドの一覧を読めなかったときは、0と区別して`null`にする。
+   */
+  readonly openMustCount: number | null;
   /** オーナーの照合に落ちて、投稿もスレッドの解決もしなかったときの理由。それ以外は`null`。 */
   readonly ownerStopReason: string | null;
 };
@@ -358,6 +361,7 @@ export type PublishReviewResult = {
  * この作業項目が同じshaに対して投稿済みのレビューがあれば、投稿もスレッドの解決もせずにそのidを返す。
  * そのときの`openMustCount`は、未解決の`[MUST]`のスレッドをすべて数えたもの。
  * 再利用するときにスレッドの一覧を取得できなければ、例外を投げる。
+ * 新しく投稿するときに取得できなければ、投稿は続け、`openMustCount`を`null`にして返す。
  * レビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  * DBとWindmillには触れない(呼び出し側の`postReview`が記録と通知を行う)。
  */
@@ -384,18 +388,22 @@ export async function publishReview(
   // `priorReview`か、投稿済みのレビューを再利用するときだけ取得する。
   // 再利用するレビューが初回のものでも、その指摘のスレッドは既にある。
   // 新しく投稿するときは、ここで失敗してもレビューの投稿は止めない。
-  // `threads`は空のままになり、`threadIdsToResolve`と`openMustCount`は0になって、
-  // `mode`は"findings" / "rereview_clean" / "first_clean"のいずれかに落ちる。
+  // `threads`は空のままになり、`threadIdsToResolve`も空になる。
+  // `openMustCount`は0ではなく`null`にして、残りの有無が分からないことを伝える。
+  // 0にすると、未解決の`[MUST]`が残るPRをLGTMの本文と`reviewed`の通知で示してしまう。
+  // 指摘を投稿するときの`mode`は"findings"のままで、投稿しないときは"rereview_unverified"になる。
   // 再利用するときは、失敗したら記録する前に例外を投げて再実行に回す。
   // 投稿済みのレビューの`[MUST]`を数えられないまま、通知を`reviewed`にしないため。
   // 再利用するので、この失敗で投稿が起きることは無い。
   let threads: ReviewThread[] = [];
+  let threadsReadable = true;
   if (reused) {
     threads = await listReviewThreads(client, owner, repo, pr_number);
   } else if (priorReview) {
     try {
       threads = await listReviewThreads(client, owner, repo, pr_number);
     } catch (err) {
+      threadsReadable = false;
       log.warn("failed to list review threads for resolving", {
         owner,
         repo,
@@ -419,11 +427,9 @@ export async function publishReview(
   const threadIdsToResolve = reused
     ? []
     : selectThreadsToResolve(threads, viewerLogin, resolveMode);
-  const openMustCount = countOpenMustThreads(
-    threads,
-    viewerLogin,
-    threadIdsToResolve,
-  );
+  const openMustCount = threadsReadable
+    ? countOpenMustThreads(threads, viewerLogin, threadIdsToResolve)
+    : null;
 
   if (!input.post) {
     return {
@@ -516,7 +522,7 @@ export type ReviewedNotifyInput = {
   readonly pr_number: number;
   readonly verdict: string;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number;
+  readonly openMustCount: number | null;
 };
 
 /**
@@ -687,7 +693,9 @@ async function postReview(
     });
   }
   const notice = post
-    ? null
+    ? openMustCount === null
+      ? "open review threads could not be read: recorded without a result"
+      : null
     : "review_post_mode is gated: recorded without posting";
 
   // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、

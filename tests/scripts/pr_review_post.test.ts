@@ -266,6 +266,15 @@ describe("decideReviewBodyMode", () => {
   test('returns "findings" (not "rereview_open") when comments were posted even with openMustCount greater than zero', () => {
     expect(decideReviewBodyMode(3, 0, true, 2)).toBe("findings");
   });
+
+  // スレッドを読めなかったときは、残りの有無が分からないので、LGTMの形にしない。
+  test('returns "rereview_unverified" when nothing was posted and the open threads could not be read', () => {
+    expect(decideReviewBodyMode(0, 0, true, null)).toBe("rereview_unverified");
+  });
+
+  test('returns "findings" when comments were posted even if the open threads could not be read', () => {
+    expect(decideReviewBodyMode(3, 0, true, null)).toBe("findings");
+  });
 });
 
 describe("renderReviewSummary", () => {
@@ -311,6 +320,31 @@ describe("renderReviewSummary", () => {
     const body = renderReviewSummary("alice", 0, "rereview_clean", [], 0);
     const lines = body.split("\n");
     expect(lines[2]).toBe("最終的なApprove判断は人が行ってください。");
+  });
+
+  test('mode "rereview_unverified" says the open threads could not be read on the second line', () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "rereview_unverified",
+      [],
+      null,
+    );
+    const lines = body.split("\n");
+    expect(lines[1]).toBe(
+      "新しい指摘はありません。未解決の指摘を読み取れなかったため、残りがあるかは確認できていません。確認お願いします。",
+    );
+  });
+
+  test('mode "rereview_unverified" never says LGTM', () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "rereview_unverified",
+      [],
+      null,
+    );
+    expect(body).not.toContain("LGTM");
   });
 
   test("never includes a verdict line", () => {
@@ -645,6 +679,35 @@ describe("reviewResultFor", () => {
     expect(reviewResultFor([finding({ kind: "nits" })], 2)).toBe(
       "changes_requested",
     );
+  });
+});
+
+describe("reviewResultFor with unreadable threads", () => {
+  test("returns unverified when there is no must finding and the open threads could not be read", () => {
+    expect(reviewResultFor([finding({ kind: "nits" })], null)).toBe(
+      "unverified",
+    );
+  });
+
+  test("returns changes_requested when a must finding exists even if the open threads could not be read", () => {
+    expect(reviewResultFor([finding({ kind: "must" })], null)).toBe(
+      "changes_requested",
+    );
+  });
+});
+
+describe("buildReviewRecord with unreadable threads", () => {
+  test("records no result when the open threads could not be read", () => {
+    const record = buildReviewRecord({
+      workItemId: 7,
+      headSha: "abc1234",
+      summary: "no new findings",
+      postedReviewId: "99",
+      verdict: "approve",
+      findings: [],
+      openMustCount: null,
+    });
+    expect(record.result).toBeNull();
   });
 });
 
@@ -1379,6 +1442,70 @@ describe("posting a review once per sha", () => {
       ).rejects.toThrow("HTTP 500");
     });
 
+    // 新しく投稿するときは、スレッドを読めなくても投稿は止めない。
+    // ただし0件として数えず、読めなかったことを返す。
+    test("reports unreadable open threads as null when listing the threads fails before a new post", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        serverError(),
+        serverError(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        rerunInput(),
+        SILENT,
+      );
+      expect(result.openMustCount).toBeNull();
+    });
+
+    test("still posts the review when listing the threads fails before a new post", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        serverError(),
+        serverError(),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        rerunInput(),
+        SILENT,
+      );
+      expect(result.postedReviewId).toBe(99);
+    });
+
+    test("does not post an LGTM body when listing the threads fails before a new post", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        serverError(),
+        serverError(),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok", sleep: async () => {} },
+        rerunInput(),
+        SILENT,
+      );
+      const call = fake.calls.find(isCreateReviewCall);
+      expect(JSON.parse(call?.options?.stdin ?? "{}")).not.toMatchObject({
+        body: expect.stringContaining("LGTM"),
+      });
+    });
+
+    // 初回のレビューにはスレッドが無いので、取得しなくても0件は確かな値である。
+    test("reports zero open threads for a first review that does not list the threads", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      const result = await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false }),
+        SILENT,
+      );
+      expect(result.openMustCount).toBe(0);
+    });
+
     // 投稿済みのレビューが無い再レビューでは、これまでどおりスレッドを解決する。
     test("resolves a thread selected for resolving when no review for the sha exists", async () => {
       const fake = createFakeCommandRunner([
@@ -1596,6 +1723,16 @@ describe("reviewedNotifyEvent", () => {
       openMustCount: 2,
     });
     expect(event).toMatchObject({ result: "changes_requested" });
+  });
+
+  test("reports unverified for a posted review whose open threads could not be read", () => {
+    const event = reviewedNotifyEvent({
+      ...base,
+      posted: true,
+      findings: [],
+      openMustCount: null,
+    });
+    expect(event).toMatchObject({ result: "unverified" });
   });
 
   test.each([

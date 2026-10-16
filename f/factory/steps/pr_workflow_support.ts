@@ -78,7 +78,7 @@ import {
   type NoticeRecord,
   type ReviewFinding,
   type ReviewFindingKind,
-  type ReviewResult,
+  type ReviewOutcome,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
@@ -196,15 +196,21 @@ export function normalizeJapaneseText(text: string): string {
  * (`countOpenMustThreads`の値)が0より大きければ`"changes_requested"`を返す。
  * 前のラウンドから残った未解決の`[MUST]`は、新しい指摘を投稿しないラウンド
  * (`ReviewBodyMode`の`"rereview_open"`)でも、変更が必要なPRとして扱うため。
- * それ以外(指摘が無く、未解決の`must`も無い場合を含む)は`"reviewed"`を返す。
+ * `openMustCount`が`null`のときは、スレッドの一覧を読めず残りの有無が分からない。
+ * 今回の指摘に`must`が無ければ`"unverified"`を返す。0件と同じ`"reviewed"`にすると、
+ * 未解決の`[MUST]`が残るPRを、人の承認を待てる状態と誤って示すため。
+ * それ以外(指摘が無く、未解決の`must`も無いと分かっている場合を含む)は`"reviewed"`を返す。
  * これは止める理由が無く、人の承認を待つ状態である。
  */
 export function reviewResultFor(
   findings: readonly ReviewFinding[],
-  openMustCount: number,
-): ReviewResult {
-  const hasMustFinding = findings.some((finding) => finding.kind === "must");
-  return hasMustFinding || openMustCount > 0 ? "changes_requested" : "reviewed";
+  openMustCount: number | null,
+): ReviewOutcome {
+  if (findings.some((finding) => finding.kind === "must")) {
+    return "changes_requested";
+  }
+  if (openMustCount === null) return "unverified";
+  return openMustCount > 0 ? "changes_requested" : "reviewed";
 }
 
 /**
@@ -212,6 +218,8 @@ export function reviewResultFor(
  * `result`は、今回の指摘と`openMustCount`から`reviewResultFor`で決める。
  * Discordの通知もConsoleのレビュー行も、この値で状態を出す。
  * `verdict`が`approve`で今回の指摘が0件でも、未解決の`[MUST]`が残れば`changes_requested`になる。
+ * 未解決の指摘を読めなかった(`unverified`)ときは、`result`を`null`にして記録する。
+ * Consoleのレビュー行は、`null`を「修正必須の有無の記録なし」と出す。
  */
 export function buildReviewRecord(input: {
   readonly workItemId: number;
@@ -219,14 +227,15 @@ export function buildReviewRecord(input: {
   readonly verdict: ReviewVerdict;
   readonly summary: string;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number;
+  readonly openMustCount: number | null;
   readonly postedReviewId: string | null;
 }): NewReviewRecord {
+  const outcome = reviewResultFor(input.findings, input.openMustCount);
   return {
     work_item_id: input.workItemId,
     head_sha: input.headSha,
     verdict: input.verdict,
-    result: reviewResultFor(input.findings, input.openMustCount),
+    result: outcome === "unverified" ? null : outcome,
     summary: input.summary,
     findings: [...input.findings],
     posted_review_id: input.postedReviewId,
@@ -542,9 +551,9 @@ export function renderInlineComment(finding: ReviewFinding): string {
 }
 
 /**
- * `renderReviewSummary`が描画する、レビュー本体のコメントの4つの固定形式。
+ * `renderReviewSummary`が描画する、レビュー本体のコメントの5つの固定形式。
  * レビューの本文には、Claudeが自由に書いた`summary`を使わず、
- * 必ずこの4つのどれかにする。
+ * 必ずこの5つのどれかにする。
  * `hasPriorReview`(`db.ts`の`hasPriorReview`)で、
  * このPRの再レビューか最初のレビューかを区別する。
  * `"rereview_open"`は`"rereview_clean"`の対になる形式で、このラウンドでは
@@ -552,19 +561,22 @@ export function renderInlineComment(finding: ReviewFinding): string {
  * `[MUST]`の指摘が1件以上残っているときに使う。
  * そのときにLGTMだけの本文にすると、必須の指摘が残っているのに
  * 「もう対応は要らない」と読めてしまうため。
+ * `"rereview_unverified"`も同じ理由の形式で、未解決のスレッドの一覧を読めず、
+ * 残りがあるか分からないときに使う。LGTMとは書かず、確認を求める。
  */
 export type ReviewBodyMode =
   | "findings"
   | "rereview_clean"
   | "first_clean"
-  | "rereview_open";
+  | "rereview_open"
+  | "rereview_unverified";
 
 /**
  * 本文の形式を、次の情報だけから選ぶ。このラウンドでインラインに投稿した指摘か
  * 除いた指摘があるか、このPRにFactoryのレビューがすでにあるか、
  * このラウンドの解決処理の後もFactory自身の`[MUST]`のスレッドがいくつ残るか
  * (`openMustCount`。呼び出し側が、解決前のスレッド一覧から解決予定のidを除いて
- * `countOpenMustThreads`で数える)。
+ * `countOpenMustThreads`で数える。スレッドの一覧を読めなかったときは`null`)。
  * 除いた指摘(`path`がdiffに無いなどでインラインに投稿できなかったもの)があれば、
  * `postedCommentCount`が0でも`"findings"`にする。
  * `renderReviewSummary`は固定の2行目の下に除いた指摘を必ず並べるので、
@@ -572,14 +584,17 @@ export type ReviewBodyMode =
  * それ以外で未解決の`must`が残っていれば(`openMustCount > 0`)、指摘の無い形式
  * (`"rereview_clean"`、理屈の上では`"first_clean"`も)の代わりに`"rereview_open"`にする。
  * ただし、PRの最初のレビューに前の未解決スレッドがあることはない。
+ * `openMustCount`が`null`で、投稿する指摘も無いときは、残りの有無が分からないので
+ * `"rereview_unverified"`にする。
  */
 export function decideReviewBodyMode(
   postedCommentCount: number,
   droppedCount: number,
   hasPriorReview: boolean,
-  openMustCount: number,
+  openMustCount: number | null,
 ): ReviewBodyMode {
   if (postedCommentCount + droppedCount > 0) return "findings";
+  if (openMustCount === null) return "rereview_unverified";
   if (openMustCount > 0) return "rereview_open";
   return hasPriorReview ? "rereview_clean" : "first_clean";
 }
@@ -587,7 +602,7 @@ export function decideReviewBodyMode(
 /**
  * factory-reviewスキルの投稿形式に沿って、レビュー本体のコメントの本文を組み立てる。
  * 1行目は`pr_review`の投稿と分かる役割タグと`@author`へのメンション、
- * 2行目は`mode`で選ぶ4つの固定の文、インラインに投稿できなかった指摘があれば
+ * 2行目は`mode`で選ぶ5つの固定の文、インラインに投稿できなかった指摘があれば
  * その箇条書きを続ける。
  * 箇条書きの`path`は改行を空白にまとめて1行にし、`path`と`message`の`<!--`は
  * `neutralizeHtmlComment`で無害にする。どちらもClaudeの出力で、
@@ -611,7 +626,7 @@ export function renderReviewSummary(
   postedCommentCount: number,
   mode: ReviewBodyMode,
   droppedFindings: readonly ReviewFinding[],
-  openMustCount: number,
+  openMustCount: number | null,
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
   switch (mode) {
@@ -631,6 +646,11 @@ export function renderReviewSummary(
     case "rereview_open":
       lines.push(
         `新しい指摘はありません。未対応の指摘が${String(openMustCount)}件残っています。確認お願いします。`,
+      );
+      break;
+    case "rereview_unverified":
+      lines.push(
+        "新しい指摘はありません。未解決の指摘を読み取れなかったため、残りがあるかは確認できていません。確認お願いします。",
       );
       break;
   }
