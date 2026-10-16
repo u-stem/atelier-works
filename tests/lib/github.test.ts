@@ -20,7 +20,6 @@ import {
   findIssueByMarker,
   findOpenPullRequestByHead,
   GH_EXIT_AUTH_REQUIRED,
-  type GhApiResponse,
   type GhClient,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
@@ -4047,6 +4046,7 @@ describe("getPrDiff", () => {
       diff: "line1\nline2\nline3",
       truncated: false,
       totalLines: 3,
+      binaryFiles: [],
     });
   });
 
@@ -4061,7 +4061,12 @@ describe("getPrDiff", () => {
       12,
       2,
     );
-    expect(diff).toEqual({ diff: "l1\nl2", truncated: true, totalLines: 5 });
+    expect(diff).toEqual({
+      diff: "l1\nl2",
+      truncated: true,
+      totalLines: 5,
+      binaryFiles: [],
+    });
   });
 
   const ESC = String.fromCharCode(0x1b);
@@ -4094,6 +4099,7 @@ describe("getPrDiff", () => {
       diff: "l1<U+001B>\nl2<U+001B>",
       truncated: true,
       totalLines: 4,
+      binaryFiles: [],
     });
   });
 
@@ -4114,6 +4120,7 @@ describe("getPrDiff", () => {
       diff: `${revealedLine}\n${revealedLine}`,
       truncated: true,
       totalLines: 4,
+      binaryFiles: [],
     });
   });
 
@@ -4126,6 +4133,7 @@ describe("getPrDiff", () => {
       diff: "x".repeat(10),
       truncated: true,
       totalLines: 1,
+      binaryFiles: [],
     });
   });
 
@@ -4223,6 +4231,87 @@ describe("getPrDiff", () => {
     ]);
     const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
     expect(diff.diff).toBe("+line");
+  });
+
+  test("normalizes CRLF line ends of the diff to LF", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, "+a\r\n+b\r\n c")),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+a\n+b\n c");
+  });
+
+  test("gives the same diff for LF and CRLF line ends", async () => {
+    const lf = createFakeCommandRunner([ok(ghApiStdout(200, "+a\n+b\n"))]);
+    const crlf = createFakeCommandRunner([
+      ok(ghApiStdout(200, "+a\r\n+b\r\n")),
+    ]);
+    const fromLf = await getPrDiff(client(lf), "acme", "widgets", 12, 100);
+    const fromCrlf = await getPrDiff(client(crlf), "acme", "widgets", 12, 100);
+    expect(fromCrlf).toEqual(fromLf);
+  });
+
+  test("counts the lines of a CRLF diff as LF lines", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a\r\nb\r\nc"))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    expect(diff).toMatchObject({ diff: "a\nb", totalLines: 3 });
+  });
+
+  test("still reveals a carriage return that is not part of a CRLF", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "+a\rb\r\n"))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+a<U+000D>b\n");
+  });
+
+  test("lists the file of a binary diff", async () => {
+    const body = [
+      "diff --git a/img/logo.png b/img/logo.png",
+      "index 1111111..2222222 100644",
+      "Binary files a/img/logo.png and b/img/logo.png differ",
+    ].join("\n");
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["img/logo.png"]);
+  });
+
+  test("lists an added binary file by its new path", async () => {
+    const body = "Binary files /dev/null and b/new.bin differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["new.bin"]);
+  });
+
+  test("lists a deleted binary file by its old path", async () => {
+    const body = "Binary files a/old.bin and /dev/null differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["old.bin"]);
+  });
+
+  test("lists a binary file even when the diff was cut before it", async () => {
+    const body = [
+      "+a",
+      "+b",
+      "+c",
+      "Binary files a/x.bin and b/x.bin differ",
+    ].join("\n");
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    expect(diff.binaryFiles).toEqual(["x.bin"]);
+  });
+
+  test("does not take an added line that looks like a binary notice", async () => {
+    const body = "+Binary files a/x and b/x differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual([]);
+  });
+
+  test("reveals control characters in the listed binary path", async () => {
+    const body = `Binary files a/x${ESC}.bin and b/x${ESC}.bin differ`;
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x<U+001B>.bin"]);
   });
 
   test("returns an empty diff when gh exits zero with an empty body", async () => {

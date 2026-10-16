@@ -57,6 +57,7 @@ describe("buildReviewDiffText", () => {
       diff: "diff --git a b",
       truncated: false,
       totalLines: 10,
+      binaryFiles: [],
     });
     expect(text).toBe("diff --git a b");
   });
@@ -66,6 +67,7 @@ describe("buildReviewDiffText", () => {
       diff: "partial",
       truncated: true,
       totalLines: 5000,
+      binaryFiles: [],
     });
     expect(text).toContain("truncated");
   });
@@ -75,6 +77,7 @@ describe("buildReviewDiffText", () => {
       diff: "partial",
       truncated: true,
       totalLines: 5000,
+      binaryFiles: [],
     });
     expect(text).toContain("5000");
   });
@@ -84,6 +87,7 @@ describe("buildReviewDiffText", () => {
       diff: "partial",
       truncated: true,
       totalLines: 5000,
+      binaryFiles: [],
     });
     expect(text).toContain(
       "Files read with Read are not escaped, so look for invisible and control characters in them and report them.",
@@ -95,8 +99,54 @@ describe("buildReviewDiffText", () => {
       diff: "partial",
       truncated: false,
       totalLines: 10,
+      binaryFiles: [],
     });
     expect(text).not.toContain("not escaped");
+  });
+});
+
+describe("buildReviewDiffText with binary files", () => {
+  const withBinary = (binaryFiles: readonly string[]) =>
+    buildReviewDiffText({
+      diff: "diff --git a b",
+      truncated: false,
+      totalLines: 10,
+      binaryFiles,
+    });
+
+  test("marks binary files as outside the review", () => {
+    expect(withBinary(["img/logo.png"])).toContain(
+      "[binary files not reviewed: img/logo.png.",
+    );
+  });
+
+  test("keeps the diff in front of the binary note", () => {
+    expect(withBinary(["a.bin"]).startsWith("diff --git a b\n\n")).toBe(true);
+  });
+
+  test("adds no note when there are no binary files", () => {
+    expect(withBinary([])).toBe("diff --git a b");
+  });
+
+  test("names every path while the list is short", () => {
+    expect(withBinary(["a.bin", "b.bin"])).toContain("a.bin, b.bin");
+  });
+
+  test("cuts a long list and states how many were left out", () => {
+    const files = Array.from({ length: 25 }, (_, i) => `f${String(i)}.bin`);
+    expect(withBinary(files)).toContain("and 5 more");
+  });
+
+  test("puts the binary note after the truncation note", () => {
+    const text = buildReviewDiffText({
+      diff: "partial",
+      truncated: true,
+      totalLines: 5000,
+      binaryFiles: ["a.bin"],
+    });
+    expect(text.indexOf("[binary files not reviewed")).toBeGreaterThan(
+      text.indexOf("[diff truncated"),
+    );
   });
 });
 

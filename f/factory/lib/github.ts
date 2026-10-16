@@ -2611,7 +2611,31 @@ export type PrDiff = {
   readonly diff: string;
   readonly truncated: boolean;
   readonly totalLines: number;
+  /**
+   * gitが内容を出さずに`Binary files ... differ`とだけ書いたファイルのパス。
+   * 切り詰めの前の差分全体から集める。内容を読めないので、判断の対象外として呼び出し側が明示する。
+   */
+  readonly binaryFiles: readonly string[];
 };
+
+/** gitがバイナリの差分に出す1行。差分の内容の行は先頭が`+`、`-`、空白なので、行頭のこの語とは混ざらない。 */
+const BINARY_FILES_LINE = /^Binary files (.+) and (.+) differ$/;
+
+/**
+ * 差分から、バイナリのファイルのパスを集める。
+ * 追加は新しい側、削除は古い側のパスを使う(`/dev/null`の側は使わない)。
+ */
+function collectBinaryFiles(lines: readonly string[]): string[] {
+  const paths: string[] = [];
+  for (const line of lines) {
+    const match = BINARY_FILES_LINE.exec(line);
+    if (match === null) continue;
+    const [, oldSide = "", newSide = ""] = match;
+    const side = newSide === "/dev/null" ? oldSide : newSide;
+    paths.push(side.replace(/^[ab]\//, ""));
+  }
+  return paths;
+}
 
 /**
  * `getPrDiff`が返す差分の文字数の上限(UTF-16の符号単位)。置き換えの後の長さで数える。
@@ -2649,8 +2673,11 @@ function cutToChars(text: string, maxChars: number): string {
  * 終了コード1で終わるので、`--allow-escape-sequences`を渡して受け取り、
  * プロンプトに渡す前に、制御文字と見えない文字を`<U+001B>`の形の見える表記に置き換える。
  * 取り除くと、制御列の中に書いたコードを読み手から隠せるため、何も取り除かない。
+ * 置き換えの後に、改行の`\r\n`を`\n`に正規化する。改行の種類で、行数、切り詰め、
+ * 判断の結果が変わらないようにするためである。復帰だけの`\r`は置き換えで見える表記になっている。
  * 置き換えは行数を変えない。切り詰めは置き換えの後に、行数、文字数の順で行い、
  * どちらで切っても`truncated`を真にする。`totalLines`は切る前の行数。
+ * `Binary files ... differ`の行は、切り詰める前の全体から`binaryFiles`に集める。
  * 2xxなのに`gh`の終了コードが0以外のときは、1回だけ取り直し、
  * 取り直しても欠けたときは、差分が空のまま読まれないよう
  * `GitHubRawBodyIncompleteError`を投げる(`callGhApiRawBody`)。
@@ -2675,7 +2702,10 @@ export async function getPrDiff(
     context,
   );
   ensureSuccess(response, context);
-  const bodyText = revealControlChars(response.bodyText);
+  const bodyText = revealControlChars(response.bodyText).replaceAll(
+    "\r\n",
+    "\n",
+  );
   const lines = bodyText.split("\n");
   const byLines =
     lines.length <= maxLines ? bodyText : lines.slice(0, maxLines).join("\n");
@@ -2684,6 +2714,7 @@ export async function getPrDiff(
     diff,
     truncated: diff.length < bodyText.length,
     totalLines: lines.length,
+    binaryFiles: collectBinaryFiles(lines),
   };
 }
 
