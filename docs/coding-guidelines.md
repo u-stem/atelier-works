@@ -127,7 +127,7 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
 
 `mise run check`は、`lint`、`lint:docs`、`typecheck`、`test`、`console:check`を順に実行する。
 PRを出す前に必ず通す。
-gitのpre-pushは全体の`check`を実行しない。同じ検査をCIの`check`ジョブが行い、マージの前に止める。
+gitのpre-pushは全体の`check`を実行しない。理由は[セットアップ](setup.md#gitのフック)にある。
 
 - `lint`はbiome、`wmill lint f`、型アサーションと`§`の検出を含む。
 - `test`は`bun test`で、`console/`を除く。

@@ -157,8 +157,9 @@ mise run instance:tags
 | pre-push | pushに`f/`、`dependencies/`、`wmill.yaml`、`wmill-lock.yaml`の変更があるときだけ、`mise run metadata:check`で古いメタデータを見つけてpushを止める |
 
 pre-pushは、全体の`mise run check`を実行しない。
-同じ検査をCIの`check`ジョブが行い、`main`の必須チェックとしてマージの前に止めるためである。
-クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、pushの前に`mise run check`を実行する。
+同じ検査をCIの`check`ジョブが行い、管理者の迂回を使わない限り、`main`の必須チェックとしてマージの前に止めるためである。
+必須チェックと迂回は[セキュリティ](security.md#mainの保護とリポジトリの公開)に書く。
+クラウドやheadlessの実行は、CIを待たずに壊れた変更を見つけるため、[review-loopスキル](../.claude/skills/review-loop/SKILL.md)に従い、pushの前に`mise run check`を実行する。
 
 メタデータの作り直しと検査は、ローカルのWindmillに接続する。`mise run up`でスタックを起動しておく。手で実行するときは`mise run metadata`と`mise run metadata:check`を使う。
 
