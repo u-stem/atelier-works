@@ -119,7 +119,11 @@ RUN npm install -g --force "windmill-cli@${WMILL_VERSION}"
 
 # Claude Code CLI。インストーラーは`/root/.local/bin`に置くので、名前で起動
 # できるよう`/usr/local/bin`にsymlinkを張る。
-ENV DISABLE_AUTOUPDATER=1 \
+# `CLAUDE_VERSION`はbuild argのままだと実行時に消える。`agent_runs.claude_version`の
+# 記録元として、workerの環境変数にも残す。値はインストールした版と同じになる。
+# Windmillのジョブには、`docker-compose.yml`の`WHITELIST_ENVS`に挙げた変数だけが届く。
+ENV CLAUDE_VERSION=${CLAUDE_VERSION} \
+    DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/var/lib/factory/claude \
     GH_CONFIG_DIR=/var/lib/factory/gh \
     GIT_TERMINAL_PROMPT=0

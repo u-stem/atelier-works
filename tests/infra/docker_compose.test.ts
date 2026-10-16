@@ -589,6 +589,14 @@ describe("infra/docker-compose.yml windmill_worker slots recorded by sample_work
   });
 });
 
+describe("infra/docker-compose.yml windmill_worker job environment", () => {
+  test("passes CLAUDE_VERSION through to the jobs", () => {
+    expect(envEntries(service("windmill_worker"), "WHITELIST_ENVS=")).toEqual([
+      "WHITELIST_ENVS=CLAUDE_VERSION",
+    ]);
+  });
+});
+
 describe("infra/docker-compose.yml windmill_server session validity", () => {
   test("the server takes the session validity from the mise variable", () => {
     expect(

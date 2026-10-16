@@ -1648,6 +1648,27 @@ Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`�
 
 このリポジトリでClaudeを使うときのモデルの方針は、[コーディング規約](coding-guidelines.md)の「Claudeのモデルの使い分け」にある。
 
+### バージョンごとの使用量
+
+Claudeのバージョンとモデルごとの使用量は、viewの`v_agent_usage_daily`で見る。
+viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数を合計する。
+バージョンを上げた前後を比べるには、期間で絞って、バージョンごとの費用を並べる。
+
+```sql
+SELECT claude_version, model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd
+FROM factory.v_agent_usage_daily
+WHERE day >= now() - interval '14 days'
+GROUP BY claude_version, model
+ORDER BY claude_version, model;
+```
+
+記録するバージョンは、workerのイメージに入れたClaudeの版(`CLAUDE_VERSION`)である。
+Windmillのジョブには、workerの環境変数のうち`WHITELIST_ENVS`に挙げたものしか届かない。
+そのため、`infra/docker-compose.yml`が`CLAUDE_VERSION`を挙げている。
+バージョンの記録は、workerのイメージを作り直した後の実行から入る。
+それより前の行は`claude_version`がNULLのまま残り、viewではNULLの行として別に集計される。
+NULLを別の文字列に置き換えないのは、記録が無いことを利用者に見せるためである。
+
 ### PR修正の連続した失敗
 
 同じPRの修正のうち、`blocked`でないラウンド(`done`か要件の不足)で最後に終えた時刻より後の、次の3つを足す。

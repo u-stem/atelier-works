@@ -76,6 +76,15 @@ describe("infra/worker/Dockerfile PATH", () => {
   });
 });
 
+describe("infra/worker/Dockerfile claude version", () => {
+  test("exposes the installed claude version as a runtime environment variable", () => {
+    const exposed = startingWith("ENV").some((line) =>
+      line.includes("CLAUDE_VERSION=${CLAUDE_VERSION}"),
+    );
+    expect(exposed).toBe(true);
+  });
+});
+
 describe("infra/worker/Dockerfile check user", () => {
   const userCreation = (): string =>
     startingWith("RUN").find((line) => line.includes("useradd")) ?? "";
