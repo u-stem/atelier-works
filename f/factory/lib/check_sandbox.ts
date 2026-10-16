@@ -37,7 +37,7 @@ import { type CommandRunner, isCappedOutput, runCommand } from "./workspace.ts";
 /** 枠の先頭のuid。`FACTORY_CHECK_UID`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。 */
 export const DEFAULT_CHECK_UID = 10001;
 
-/** 枠の数。`FACTORY_CHECK_POOL_SIZE`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。workerの`NUM_WORKERS`以上にする。 */
+/** 枠の数。`FACTORY_CHECK_POOL_SIZE`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。workerの同時実行数(1)に、片付けられず飛ばす枠の分を足した数以上にする。 */
 export const DEFAULT_POOL_SIZE = 8;
 const MAX_POOL_SIZE = 64;
 
@@ -100,7 +100,8 @@ export const REQUIRED_TOOL_PATHS = [
  * 検査コマンドの枠のuidが同時に持てるプロセスの数(スレッドを含む)の上限。
  * 子を作り続ける検査が、workerのコンテナのpidsの上限(1024)を使い切り、ほかのジョブとWindmill本体を止めないようにする。
  * カーネルは実uidごとに数えるので、枠ごとの上限になる。
- * workerの同時実行数(`NUM_WORKERS`、3)の検査がそろって上限まで使っても、検査の外に256が残る。
+ * nativeでないworkerは検査を1つずつ動かすので、検査1つが上限まで使っても、検査の外に768が残る。
+ * 残りは、片付けられず飛ばした枠のプロセスの分に回る。
  * 冷えたキャッシュの`go build`は12コアで約110まで増え、コア数とともに増えるので、それが収まる値にする。根拠は`docs/security.md`にある。
  */
 export const CHECK_NPROC_LIMIT = 256;

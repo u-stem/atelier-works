@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Glob } from "bun";
 
 // Console用workerは`tag: console`のjobだけを受ける。Consoleが呼ぶscriptにだけ付け、
-// 1件が止まっても枠が埋まらないよう`timeout`(秒)を付ける。
+// 1件が止まってもConsole用workerの1枠を塞ぎ続けないよう`timeout`(秒)を付ける。
 // 他のscriptに付けると、defaultのworkerが受けない仕事がqueueに溜まる。
 
 const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {

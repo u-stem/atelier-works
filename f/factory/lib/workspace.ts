@@ -1502,9 +1502,9 @@ export function factoryCloneLockPath(dir: string): string {
  * 既存のcloneは、fetchの前にoriginのURLを`opts.repoUrl`に付け替える。照合したURLと取得するURLを、cloneした時点のURLに左右させず1つにするため。
  *
  * `factoryCloneLockPath(dir)`のロックの下で直列に実行する。
- * `NUM_WORKERS`が2以上だと、各フローの最初のステップと`poll_issues`が同じ`dir`に対して
- * 同時に呼ぶ。ロックが無いと、同じ作業ツリーで競合した`git fetch`・`git checkout`・
- * `git clone`が`.git/index.lock`で失敗する。
+ * 同じ`dir`への呼び出しが重なると、同じ作業ツリーで競合した`git fetch`・`git checkout`・
+ * `git clone`が`.git/index.lock`で失敗する。nativeでないworkerは1つで動くので通常は重ならないが、
+ * 呼び出しの数に頼らず、ロックで守る。
  */
 export async function ensureFactoryClone(
   opts: EnsureFactoryCloneOptions,

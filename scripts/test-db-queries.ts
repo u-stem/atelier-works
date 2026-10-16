@@ -6761,6 +6761,8 @@ for (const sample of [
     mem_limit_bytes: 1000 * MIB,
   }),
   loadSample("2027-02-28T09:58:00.000Z"),
+  // 記録の枠だけの行(slots 1)は、他のジョブの枠が無いので、忙しさの分母にも分子にも入れない。
+  loadSample("2027-02-28T10:01:00.000Z", { slots: 1, running_jobs: 0 }),
   loadSample("2027-02-28T10:00:00.000Z", {
     running_jobs: 2,
     lag_seconds: 45,
@@ -6800,7 +6802,7 @@ const loadView = (await runSystemStatus(50, loadViewDeps(loadViewNow)))
   .worker_load;
 check(
   "system_status worker_load: only the rows in the window are counted",
-  loadView?.sample_count === 3 && loadView.busy_samples === 1,
+  loadView?.sample_count === 4 && loadView.busy_samples === 1,
   loadView,
 );
 check(

@@ -781,7 +781,7 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
   `python3 -m venv`の`.venv/bin/python3`のような正当な置き物も消えるが、検査は失敗しない。
   「check sandbox: symlink scan」という失敗した検査が足されるのは、検出が不完全だったときと、追跡されているsymlinkが書き換えられたときだけである。
   足されたら、出力に書かれたパスのコマンドを直す。
-- 同時に動く検査が枠の数(8)を超えると、検査は空くのを最大5分待つ。待っても取れなければ「no check slot became free」で失敗し、作業項目は失敗になる。`retry_work_item`で再実行する。
+- 枠がすべて使われていると、検査は空くのを最大5分待つ。同時に動く検査は1つなので、通常は枠が埋まらない。待っても取れなければ「no check slot became free」で失敗し、作業項目は失敗になる。`retry_work_item`で再実行する。
 - 検査コマンドに常駐のデーモンを残させない。ロックのファイル記述子を持ったまま残ると、以降のラウンドがロックを取れずに失敗する。記述子を閉じて残ったものも、次の準備やPRの修正を止める。
 
 > [!WARNING]
@@ -931,7 +931,8 @@ Windmillで取り消した実行のClaudeや検査コマンドは、止まらず
 ### 実装フローの実行中に避けること
 
 - mainへのマージとデプロイを避ける。自己更新は実行中の実装フローを待たずに新しいステップを反映するので、1回の実行の中で別の版のステップが動きうる。実装中(`implementing`)の作業項目があれば、実行中である。
-- 実装フローは1回の実行で、workerのプロセス(`NUM_WORKERS`の数だけある)の1つを数時間使う。その間、ほかのフローが使えるworkerはその分減る。
+- defaultのworkerは同時に1つのジョブしか動かさないので、実装フローは1回の実行で、数時間worker全体を使う。その間、ほかのジョブは待つ。
+- `mise run up`を避ける。workerのコンテナが作り直され、実行中のジョブが止まるためである。実装中(`implementing`)の作業項目が無いときに行う。
 - インスタンスの`job_default_timeout`を設定するなら、21600秒以上にする。実装と検証のステップ、PRの修正の検証のステップより先に打ち切らないためである。
 
 ## PRでレビューと修正を使う
@@ -2001,10 +2002,10 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `workspace_disk_usage` | 作業領域の掃除(毎日03:00)が記録したディスク使用量。未解決は1件だけで、掃除のたびに本文と作成時刻が最新の測定に更新される。解決した後の掃除で、新しく1件作られる | 増え続けていないか見る |
 | `console_fetch_failed` | Consoleの取り込みが失敗した | 通知の「次の操作」に従う |
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
-| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
+| `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
 | `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
-| `worker_load_high` | defaultのworkerのメモリが、上限の割合以上になった、またはOOMで止められたプロセスが増えた。本文に原因、閾値、システムの画面のリンクが載る。Discordには届かない | システムの画面の「workerの負荷」で最新の値と最大値を確かめ、実行中のジョブを見る。続くなら並列数かメモリの上限の見直しを判断する。割合は設定`worker_alert_memory_ratio`で変えられる([閾値の通知](#閾値の通知))。自動では解決されないので、確かめたあとに人が解決する |
+| `worker_load_high` | defaultのworkerのメモリが、上限の割合以上になった、またはOOMで止められたプロセスが増えた。本文に原因、閾値、システムの画面のリンクが載る。Discordには届かない | システムの画面の「workerの負荷」で最新の値と最大値を確かめ、実行中のジョブを見る。続くなら、メモリを使うジョブの見直しか、メモリの上限の見直しを判断する。割合は設定`worker_alert_memory_ratio`で変えられる([閾値の通知](#閾値の通知))。自動では解決されないので、確かめたあとに人が解決する |
 | `review_gated_prolonged` | `review_post_mode`が`gated`のまま、レビューをPRに投稿しない状態が3日以上続いた。本文に作業項目の画面のリンクが載る。日数と件数は日次のまとめの「レビューの投稿」欄に出る。Discordには届かない | 投稿を続けるなら、`factory_config`の`review_post_mode`を`comment_only`に戻す。戻すと、次の日次のまとめの実行で自動で解決される。意図して続けるなら、作業項目で結果を確かめ、人が解決する。続く間は翌日に出直す |
 | `schedule_failing` | 同じスケジュールの直近3回の実行が続けて失敗した。数えるのはスケジュールの実行そのものの失敗で、成功した実行の中で記録する部分的な失敗は含まない。ジョブの上限(`timeout`)で打ち切られた回も失敗に数える想定だが、実機では未確認である。GitHubのPATの失効などが原因になる | ジョブのログで失敗の内容を確かめて原因を直す。PATは[秘密をローテーションする](#秘密をローテーションする)で再発行する |
 | `schedule_failing_check_failed` | スケジュールが続けて失敗しているかを、ジョブ履歴から判定できなかった。失敗が続いても気づけない状態である | `on_error_schedule`のジョブのログで`failed to read the schedule history`のエラーを確かめ、ジョブ履歴を読む権限があるかを確かめる |
@@ -2038,7 +2039,7 @@ workerがジョブを受けなければそのジョブが待ち続けるので�
 反映の`wmill`は2回で最大10分かかり、約20分の余裕の3分を超えうる。
 
 通知`console_worker_missing`が立つのは、workerが居ないときだけではない。
-workerが居ても、2枠とも塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
+workerが居ても、枠が塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
 通知の次の操作に従い、コンテナの状態、再起動、Windmillの画面での実行中のジョブとワーカーグループのtagの順に確かめる。
 
 次の点に注意する。
@@ -2113,7 +2114,7 @@ bunやmiseの失敗は、`WARN`として理由を添えて表示する。
 ### workerの負荷の記録を確かめる
 
 `sample_worker_load`が2分ごとに、defaultのworkerの負荷を1行ずつ`factory.worker_samples`に記録する。
-workerの並列数やポーリングの間隔を見直すとき、枠の占有とメモリのどちらが先に効くかを、この記録で判断する。
+ポーリングの間隔やジョブのメモリを見直すとき、待ちとメモリのどちらが先に効くかを、この記録で判断する。
 直近24時間の最大値と最新の値は、Consoleのシステムの画面の「workerの負荷」で見られる。
 閾値を超えたときの通知は[閾値の通知](#閾値の通知)にある。
 記録の行を読むコマンドは次のとおりである。
@@ -2132,13 +2133,9 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 3. `wmill job list --script-path f/factory/sample_worker_load`で直近のジョブを選ぶ。
    `wmill job result <id>`の`outcome`が`complete`であることを見る。
    `partial`や`failed`なら、`wmill job logs <id>`の警告から原因を探す。
-4. 実際に動くワーカーが複数のときだけ、Claudeのジョブが走っているときの行で、`running_jobs`が増え、`running_by_script`にそのscriptが載ることを見る。
-5. 手順4と同じときに、同じ時刻の管理者の`wmill job list`で実行中のジョブを数え、`running_jobs`と合うことを見る。
-   記録するジョブ自身と、数えない対象は、実行中の件数から除いて比べる。
-   数えない対象は、tag `console`、nativeのworkerのtag、フローの親ジョブである。
-
-実際に動くワーカーが1つの間は、`running_jobs`が0のままなので、手順4と5は確かめられない。
-この間の数え方の確認は、[枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる)に従う。
+4. 記録のジョブは、defaultのworkerが1つなので、ほかのジョブが動いていない間にしか動かない。
+   そのため、`running_jobs`は常に0で、`running_by_script`は空になる。
+   0が数え落としでないことは、[枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる)に従って確かめる。
 
 #### 枠の占有
 
@@ -2146,13 +2143,14 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   記録するジョブ自身は数えない。
 - 記録のジョブは、枠が1つ空いたときにしか動かない。
   そのため、`slots`の枠がすべて埋まった状態は、行として残らない。
-- 占有は、`running_jobs`と`slots`を並べて読む。
-  記録のジョブ自身が1つの枠を使うので、`running_jobs`は最大でも`slots`から1を引いた値までしか出ない。
-  この値は、記録のジョブが動けるだけ枠が空いていた瞬間の標本である。
-  実際に動くワーカーが1つなら、記録のジョブが動くとき、ほかに動くジョブは無いので、`running_jobs`は常に0になる([枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる))。
+- defaultのworkerは同時に1つのジョブしか動かさず、記録のジョブ自身がその1つを使う。
+  そのため、`running_jobs`は常に0である。
+  0は数え落としではない。
+  記録のジョブが動けるのは、ほかに動くジョブが無い間だけだからである([枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる))。
 - 塞がりの目安は、`lag_seconds`の大きさと、`sampled_at`の間隔の空白である。
   `running_jobs`の大きさでは判定しない。
-  Consoleの「枠が塞がっていた記録」は`running_jobs`から数えるので、実際に動くワーカーが1つの間は0件のままになる。
+  Consoleの「枠が塞がっていた記録」は、他のジョブが使える枠のある記録(`slots`が2以上)だけを数える。
+  枠が1つの記録は数えないので、「不明」と表示される。
   空白だけでは停止と区別できないので、見分け方は[予定の欠け](#予定の欠け)と[日次のまとめでの見方](#日次のまとめでの見方)に従う。
 - 内訳は`running_by_script`に、件数の多い10件のscriptのパスと、残りをまとめた`other`で載る。
 - 数えるtagは、Windmillの既定でdefaultのworkerグループが受けるものである。
@@ -2288,9 +2286,35 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   開始が遅れ、`lag_seconds`に出る。
 - defaultのworkerは、コンテナごとに`worker_ping`の行が1つで、同じワーカー名のジョブは実質的に重ならない。
   重なるのは、境界の数ミリ秒の丸めと、フローの親ジョブだけである。
-  `NUM_WORKERS=3`でも、同時に動くジョブは1つだった。
+  同時に動くジョブは1つである。
   Claudeのジョブが動く間、記録のジョブも、ほかの定期のジョブも待つ。
-  `NUM_WORKERS`が効いていない理由は、確かめていない。
+- 1つのコンテナで複数のworkerが動くと、`worker_ping`の行も複数になる。
+  nativeのworkerは1つのコンテナに8行あり、名前の末尾が行ごとに違う。
+  defaultのworkerの1行は、複数のworkerが1行にまとまった表示ではない。
+- Windmill 1.817.0は、nativeでないworkerの`NUM_WORKERS`が2以上だと、1に落とす。
+  そのため、defaultのworkerとConsole用のworkerは、`NUM_WORKERS`を置かず、コンテナにつき1つで動く。
+  nativeのworkerは、`NATIVE_MODE`で8つに固定される。
+- `NUM_WORKERS`を2にして起動すると、起動の初めに次の警告が出る。
+  `NUM_WORKERS=2 > 1 is only safe for native workers. Falling back to NUM_WORKERS=1.`
+  起動ログの設定の行には`NUM_WORKERS: 2`と出るので、環境変数は届いている。
+
+workerが1つであることは、`worker_ping`の行の数で確かめる。
+`worker_group`が`default`、`native_mode`が偽で、`ping_at`が直近の行が1つであればよい。
+
+#### 並列に動かす別の手段
+
+環境変数`I_ACK_NUM_WORKERS_IS_UNSAFE`を足すと、`NUM_WORKERS`の制限が外れ、警告が次の文に変わる。
+`Running with NUM_WORKERS=3 without native mode. This is not recommended.`
+
+この手段は採らない。
+信頼できない入力を扱うジョブが同じコンテナで並列に動くので、ジョブ同士の分離が弱まる。
+Windmillも推奨していない。
+並列に動かすなら、コンテナを増やす(`deploy.replicas`)形になる。
+その場合は、共有のボリュームと検査の枠の設計を見直す必要がある。
+
+再現した範囲は、使い捨てのコンテナで、警告が上の文に変わることまでである。
+コンテナは、ネットワークと実機のデータベースに届かない。
+実機のworkerで、行が3つになることは確かめていない。
 
 #### queueの待ち
 
@@ -2307,8 +2331,8 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 
 `slots`は、コードの定数`DEFAULT_WORKER_SLOTS`で、行の値は記録時点のコードの値である。
 workerから読んだ値ではない。
-`NUM_WORKERS`を変えた直後は、`mise run up`でworkerを作り直すまで、実際の枠の数と食い違う。
-`DEFAULT_WORKER_SLOTS`と`infra/docker-compose.yml`の`NUM_WORKERS`が食い違うと、テストが落ちる。
+nativeでないworkerは1つで動くので、値は1である。
+`DEFAULT_WORKER_SLOTS`が1でなくなると、テストが落ちる。
 
 #### メモリ
 
@@ -2358,7 +2382,7 @@ workerから読んだ値ではない。
 | 記録 | 対象の日の行の数と、期待する720行に対する欠けの割合 | 欠けは、枠が塞がって記録のジョブが動けなかった印か、停止の印である。記録を始めた日や、記録の失敗でも欠ける。欠けが1件以上あるのに整数のパーセントでは0%に丸まるときは、小数1桁で出す |
 | 遅れ | `lag_seconds`の最大と、30秒以上の行の数とその遅れの合計(秒) | 枠の塞がりか停止のどちらかを表す。合計が大きく、短い空白も多ければ塞がりである。停止や長い塞がりの直後に、1件だけ大きな遅れが出ることもある |
 | 空白 | 行の間隔が4分を超えた回数と、最長の間隔(分、切り上げ)と、その開始と終了のJSTの時刻 | 長い空白は、停止(ホストのスリープ、`mise run up`、Windmillの再起動)でも、長いジョブが枠をすべて塞いだ場合でも出る。空白の時刻に`wmill job list`かConsoleの作業項目で動いていたジョブを確かめ、あれば塞がり、無ければ停止と見分ける。短い空白が何度も出て、遅れも多ければ塞がりである |
-| 他のジョブの枠の使用 | `running_jobs`の最大(件)と、上限`slots`-1 | 記録のジョブ自身の枠を除く。上限に近い値は、記録のジョブが動けた瞬間に、他のジョブがほぼ枠を使っていたことを表す。平均は、位相の偏りで占有率にならないので出さない |
+| 他のジョブの枠の使用 | `running_jobs`の最大(件)と、上限`slots`-1 | 記録のジョブ自身の枠を除く。`slots`が1の日は、他のジョブの枠が無いので出さない。上限に近い値は、記録のジョブが動けた瞬間に、他のジョブがほぼ枠を使っていたことを表す。平均は、位相の偏りで占有率にならないので出さない |
 | メモリ | `mem_anon_bytes`の最大(MiB)と、上限に対する比。`mem_working_set_bytes`の最大。OOMの有無 | 逼迫の判断には`anon`の最大と比を使う。上限が無いか読めない日は、比が出ない。OOMは`mem_oom`と`mem_oom_kill`の増分の合計である。再起動で累積が戻ったときは、現在値を増分に数える |
 | 待ちの最長 | `max_wait_seconds`の最大 | 記録のジョブ自身の遅れで打ち切られるので、下限である |
 
@@ -2449,9 +2473,9 @@ defaultのworkerは上限が4096MiBで、`memory.high`が無い。
 #### 限界
 
 - 割合の通知は、記録が止まる間は判定が動かない。
-  Claudeのジョブが3並列で枠がすべて塞がると、記録のジョブが動けず、最もメモリが膨らむ間は判定されない。
-  早めの警告として効くのは、2並列で8割を超える場合だけである。
-  3並列では、OOMの通知が出るまで来ないことが多い。
+  Claudeのジョブが動く間は、枠が塞がって記録のジョブが動けず、最もメモリが膨らむ間は判定されない。
+  早めの警告として効くのは、Claudeのジョブの前後に、8割を超える場合だけである。
+  Claudeのジョブの最中の膨らみは、OOMの通知が出るまで来ないことが多い。
 - メモリの通知は、取りこぼす経路がある。
   割合は`mem_anon_bytes`で判定するので、共有メモリ(shmem、`/dev/shm`)やカーネルのメモリは数えない。
   2分の間に起きた急な山は、記録の瞬間に無ければ見えない。
@@ -2877,7 +2901,7 @@ clone、fetch、push、`git gtr new`が1回ずつ成功することを見る。
 `mise install`は、すでに入っているツールには何もしない。
 miseの自動インストールが`mise run`の前に不足分を入れるかは、確かめていない。そのため、通知の手順に`mise install`を含める。
 
-workerの並列数(`NUM_WORKERS`)のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
+workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
 `mise run up`と`mise run deploy`は、`up -d`の前に、一時コンテナで`caddy validate`を実行し、Caddyfileを確かめる。
@@ -2938,6 +2962,15 @@ pullは済んでいて、次の起動でmiseが新しい`[env]`を読むので�
 `mise run push`と`mise run deploy`は、`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
 理由は[セキュリティ](security.md)の「サブプロセスのnpmのinstall script」にある。
+
+#### workerの同時実行数の設定を変えたときの反映
+
+workerのコンテナが作り直されるので、実装中(`implementing`)の作業項目が無いときに`mise run up`を行う。
+反映の前後に、`worker_ping`の行が1つであることを確かめる([枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる))。
+行が2つ以上なら、`NUM_WORKERS`か`I_ACK_NUM_WORKERS_IS_UNSAFE`が残っている。
+作り直しの直後は、停止したコンテナの行が`ping_at`の絞りに5分残るので、5分待ってから数える。
+反映の後に、古い本文で残った`console_worker_missing`と`worker_load_high`の未解決の通知を解決する。
+本文が変わると、同じ原因の通知が2件目として記録されうるためである。
 
 ### f/とworkerのイメージを両方変えたとき
 

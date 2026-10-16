@@ -152,7 +152,7 @@ nullになりうる非textの列には、明示のキャストを必ず付ける
   ほかのscriptには付けない。
   付けると、defaultのworkerは受けないので、仕事がqueueに溜まる。
 - `tag: console`を付けたscriptには、`timeout`(秒)も付ける。
-  Console用workerの枠は2つしかなく、DBのロック待ちなどで1件止まると足りなくなるためである。
+  Console用workerの枠は1つしかなく、DBのロック待ちなどで1件止まると、ほかのジョブが待つためである。
   6つの値は`tests/scripts/console_script_tags.test.ts`が固定する。
   `wmill generate-metadata`は`tag`と`timeout`を消さない。
 - 多重実行の防止にadvisory lockは使わない。各`*.schedule.yaml`に`no_flow_overlap: true`を設定し、前回の実行中はスキップさせる。

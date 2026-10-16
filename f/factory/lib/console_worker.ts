@@ -45,7 +45,7 @@ export const CONSOLE_WORKER_UNKNOWN_SINCE_KEY =
 /** stateに残る回数のキー。時刻だけを持つ形にそろえるため、読まず、stateを書くときに消す。 */
 const LEGACY_UNKNOWN_COUNT_KEY = "console_worker_unknown_count";
 
-const MISSING_CAUSE = `Consoleのジョブが${CONSOLE_JOB_WAIT_SECONDS / 60}分以上待たされています。Console用のworkerが居ない、2枠とも塞がっている、またはtagの設定がずれていて、ジョブを受けていません。Consoleのジョブがqueueに溜まり、Consoleが止まります`;
+const MISSING_CAUSE = `Consoleのジョブが${CONSOLE_JOB_WAIT_SECONDS / 60}分以上待たされています。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、ジョブを受けていません。Consoleのジョブがqueueに溜まり、Consoleが止まります`;
 const MISSING_ACTION =
   "docker compose ps windmill_worker_consoleでコンテナの状態を確かめ、無ければmise run upで起動する。動いていれば、mise run upを実行し、続けてmise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_consoleで作り直す。作り直しても直らなければ、Windmillの画面でtag consoleの実行中のジョブと、ワーカーグループconsoleのtagを確かめる";
 
