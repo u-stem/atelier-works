@@ -69,7 +69,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run console:rollback` | Consoleを直前の版に戻して固定する(自動の更新を止める) |
 | `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
 | `mise run bootstrap` | ワークスペースの作成、secret変数の投入、インスタンスのカスタムtagの設定、sync push、migrationを行う。何度実行してもよい |
-| `mise run instance:tags` | インスタンスのカスタムtagに`console`を足す。`bootstrap`済みのインスタンス向けで、何度実行してもよい |
+| `mise run instance:tags` | インスタンスのカスタムtagに`console`と`periodic`を足す。`bootstrap`済みのインスタンス向けで、何度実行してもよい |
 | `mise run deploy` | `git pull --ff-only`、ビルド、起動、push、migrationを続けて実行する。手で一括して反映したいときに使う |
 | `mise run push` | `wmill sync push --yes --keep-deleted`で、ローカルの変更をWindmillに反映する |
 | `mise run push:dry` | `wmill sync push --dry-run`で、反映する内容だけを確かめる |

@@ -915,7 +915,7 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 
 | 項目 | 設定 |
 | --- | --- |
-| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`worker_logs`は、`windmill_server`、defaultのworker、nativeのworkerとも共有する書き込みのマウントである |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`worker_logs`は、`windmill_server`とすべてのworkerと共有する書き込みのマウントである |
 | `factory_state` | ボリューム全体はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeとghの設定は、ボリューム全体の直下にあるので届かない |
 | `factory_console` | 読み取り専用でマウントする |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
@@ -932,6 +932,7 @@ tag`console`を使える主体は、インスタンスのカスタムtagで決�
 superadminは、許可の有無にかかわらず使える。
 superadminでない主体は、許可されたtagしか使えない。
 Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bootstrap`と`mise run instance:tags`がカスタムtagに`console`を足す。
+定期ジョブ用workerのtag`periodic`も、同じ2つが足す。
 許可しても、このworkerのマウントとDBへの到達は変わらない。
 変わるのは、このworkerでscriptを動かせる主体である。
 
@@ -1014,6 +1015,74 @@ Podmanは対象外である。
   `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
   [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
   突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
+
+## 定期ジョブ用workerの境界
+
+定期ジョブ用のworker(`windmill_worker_periodic`)は、tag`periodic`を付けた定期ジョブを処理する。
+信頼できない入力を扱うジョブは、このworkerでは動かさない。
+リポジトリのコードや検査コマンドを動かすジョブと、Issueの本文やPRの差分を読むClaudeがそれにあたる。
+このworkerの境界が守るのは、ファイルシステムである。
+Console用workerと同じ型で、絞り方は次のとおりである。
+
+| 項目 | 設定 |
+| --- | --- |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_periodic_dependency_cache`だけである。`worker_logs`は、`windmill_server`とすべてのworkerと共有する書き込みのマウントである |
+| `factory_state` | マウントしない。Claude Codeとghの設定、監査レポート、要件定義書に届かない |
+| `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
+| `factory_console` | マウントしない。配信中のJSに届かない |
+| `worker_dependency_cache` | 共有しない。専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
+| `docker.sock` | マウントしない |
+| 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、defaultのworkerと同じ`NET_RAW`、`MKNOD`、`SETFCAP`、`AUDIT_WRITE`を落とす。プロセス数は256、メモリは1024Mに絞る。権限はdefaultのworkerの部分集合である |
+| 環境変数 | `NUM_WORKERS`と`I_ACK_NUM_WORKERS_IS_UNSAFE`は置かない。nativeでないworkerは1つで動くためである |
+
+信頼できない入力を扱うジョブを動かさない理由は、このworkerが読める秘密にある。
+DBには、defaultのworkerと同じ管理者の接続で届く。
+Windmillのsecret変数は、管理者の`DATABASE_URL`か`wmill.getVariable()`で読める。
+定期ジョブが使う`github_token`も読める。
+Console用workerと同じ前提で、マウントの制限が守るのはファイルであり、トークンそのものは守らない。
+信頼できない入力を扱うジョブが、このworkerで任意のコードを動かせると、これらの秘密に届く。
+そのため、tag`periodic`を付けるのは、コードを実行せず、Claudeに文章を渡さない定期ジョブだけである。
+このworkerの権限はdefaultのworkerの部分集合なので、誤ってtagを付けても権限は広がらない。
+分ける目的は、定期ジョブの枠の確保である。
+
+tag`periodic`を使える主体は、Console用workerのtag`console`と同じく、インスタンスのカスタムtagで決まる。
+superadminは、許可の有無にかかわらず使える。
+superadminでない主体は、許可されたtagしか使えない。
+次のことは、この境界では守れない。
+
+- DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- `f/factory/claude_oauth_token`と`f/factory/github_token`を、secret変数として読める。
+  どのscriptが読むかを制限する仕組みは無い。
+- このworkerで動かすのは、上の基準で選んだ定期ジョブの想定だが、これを強制する仕組みは無い。
+  ワークスペースでscriptを編集できる者は、任意のscriptにtag`periodic`を付けられる。
+- 許可はすべてのワークスペースに及ぶ。ワークスペースで絞らない。
+- scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
+- 許可した主体は、このworkerの依存キャッシュ(`worker_periodic_dependency_cache`)に書ける。
+  defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
+- このworkerの枠は1つである。長く動くjobで枠を埋めると、ほかの定期ジョブが待つ。
+  可用性の問題で、秘密の漏れではない。
+- composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
+
+### tagを付けるscriptの選び方
+
+このworkerは上流のWindmillイメージで動く。
+独自イメージの道具も、defaultのworkerがマウントするファイルも、cgroupの計測の対象も無い。
+そのため、tag`periodic`を付けるのは、次のどれにも依存しない定期ジョブだけである。
+依存するジョブは、defaultのworkerに残す。
+
+- ファイル。`factory_state`、`factory_workspaces`、self cloneの下を読み書きするジョブがあたる。
+  このworkerには同じパスのボリュームが無い。
+  ジョブは失敗するか、コンテナの中の別のディレクトリを触って成功したように見える。
+  後者は気づきにくい。
+- 独自イメージの道具。`claude`、`gh`、`git`、`gtr`を使うジョブと、道具や検査の枠を確かめるジョブがあたる。
+  道具や検査の枠を確かめるジョブは、上流のイメージでは、必ず確認に失敗して保留される。
+- cgroup。cgroupのファイルを読んで、負荷や使用量を測るジョブがあたる。
+- 子プロセス。`child_process`で外部のコマンドを起動するジョブがあたる。
+
+選ぶときは、scriptと、importでたどれるソースをすべて読み、上の4つに依存しないことを確かめる。
+見る箇所は、ファイルのパスと`fs`の使用、`child_process`のimport、道具や検査の枠を確かめる呼び出し、cgroupのパスである。
+同じ手順で、コードを実行しないことと、Claudeに文章を渡さないことも確かめる。
+1つでも依存するなら、tagを付けない。
 
 ## サブプロセスのnpmのinstall script
 

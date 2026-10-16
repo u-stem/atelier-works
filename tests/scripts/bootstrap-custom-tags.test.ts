@@ -151,7 +151,9 @@ describe("ensure_instance_custom_tag", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  async function run(): Promise<{ code: number; output: string }> {
+  async function run(
+    invocation = "ensure_instance_custom_tag console",
+  ): Promise<{ code: number; output: string }> {
     const script = [
       "set -euo pipefail",
       'log() { printf "%s\\n" "$*"; }',
@@ -160,7 +162,6 @@ describe("ensure_instance_custom_tag", () => {
       `API="http://127.0.0.1:${server.port}/api"`,
       `RESP_FILE=${JSON.stringify(join(tmp, "resp.txt"))}`,
       `AUTH_HEADER_FILE=${JSON.stringify(join(tmp, "none"))}`,
-      'CONSOLE_TAG="console"',
       "CUSTOM_TAGS_READBACK_ATTEMPTS=5",
       "CUSTOM_TAGS_READBACK_INTERVAL=0.01",
       'bun() { "$BUN_BIN" "$@"; }',
@@ -171,7 +172,8 @@ describe("ensure_instance_custom_tag", () => {
       extractFunction("api_post"),
       extractFunction("custom_tags_set_body"),
       extractFunction("ensure_instance_custom_tag"),
-      "ensure_instance_custom_tag",
+      extractFunction("ensure_instance_custom_tags"),
+      invocation,
     ].join("\n");
     const proc = Bun.spawn(["bash", "-c", script], {
       env: { ...process.env, BUN_BIN: process.execPath },
@@ -317,6 +319,40 @@ describe("ensure_instance_custom_tag", () => {
     ).toHaveLength(3);
   });
 
+  test("adds periodic when it is asked for periodic", async () => {
+    instance.stored = ["chromium"];
+
+    await run("ensure_instance_custom_tag periodic");
+
+    expect(instance.stored).toEqual(["chromium", "periodic"]);
+  });
+
+  test("adds console and periodic together with the plural entry point", async () => {
+    instance.stored = ["chromium"];
+
+    await run("ensure_instance_custom_tags");
+
+    expect(instance.stored).toEqual(["chromium", "console", "periodic"]);
+  });
+
+  test("does not write when console and periodic are already stored", async () => {
+    instance.stored = ["chromium", "console", "periodic"];
+
+    await run("ensure_instance_custom_tags");
+
+    expect(instance.posts).toEqual([]);
+  });
+
+  test("writes only periodic when console is already stored", async () => {
+    instance.stored = ["chromium", "console"];
+
+    await run("ensure_instance_custom_tags");
+
+    expect(instance.posts).toEqual([
+      { value: ["chromium", "console", "periodic"] },
+    ]);
+  });
+
   test("fails without writing when the stored value is malformed", async () => {
     instance.storedRaw = "chromium";
 
@@ -378,7 +414,7 @@ describe("bootstrap.sh custom-tags argument", () => {
     return collect(proc);
   }
 
-  test("only sets the custom tag and logs out", async () => {
+  test("only sets the custom tags and logs out", async () => {
     await runBootstrap("custom-tags");
 
     expect(instance.calls).toEqual([
@@ -386,6 +422,9 @@ describe("bootstrap.sh custom-tags argument", () => {
       "POST /api/auth/login",
       "GET /api/settings/global/custom_tags",
       "GET /api/workers/custom_tags",
+      "POST /api/settings/global/custom_tags",
+      "GET /api/workers/custom_tags",
+      "GET /api/settings/global/custom_tags",
       "POST /api/settings/global/custom_tags",
       "GET /api/workers/custom_tags",
       "POST /api/auth/logout",

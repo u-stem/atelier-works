@@ -59,9 +59,9 @@
 #      datatableを初めて使うとき`wmill datatable migrate up`が
 #      "permission denied for schema public"で失敗する。
 #      続けて、インスタンスのカスタムtag(global setting `custom_tags`)に
-#      `console`を足す(既存のtagは保ち、無いときだけ書く)。これも
-#      superadminだけの操作。Consoleのscriptは`console`のtagを持ち、superadminで
-#      ない主体はインスタンスが許可したtagのscriptしか実行できないため。
+#      `console`と`periodic`を足す(既存のtagは保ち、無いときだけ書く)。これも
+#      superadminだけの操作。Consoleのscriptは`console`、定期ジョブは`periodic`のtagを持ち、
+#      superadminでない主体はインスタンスが許可したtagのscriptしか実行できないため。
 #   4. ワークスペースに絞ったAPIトークン(ラベル`factory-bootstrap`、
 #      `workspace_id`は`factory`、期限180日)を発行する。-> `PERSISTENT_TOKEN`
 #   5. セッションのトークンでもう一度`wmill workspace add`を実行する
@@ -375,10 +375,6 @@ change_workspace_name_body() {
   bun_eval 'process.stdout.write(JSON.stringify({ new_name: "Factory" }));'
 }
 
-# Consoleのscriptが持つtag。インスタンスのカスタムtagに含まれていなければ、
-# superadminでない主体が呼ぶと拒否される。
-CONSOLE_TAG="console"
-
 custom_tags_set_body() {
   # $1 = カスタムtagのJSON配列
   WM_TMP_TAGS="$1" bun_eval '
@@ -392,13 +388,14 @@ custom_tags_set_body() {
 CUSTOM_TAGS_READBACK_ATTEMPTS=5
 CUSTOM_TAGS_READBACK_INTERVAL=1
 
-# インスタンスのカスタムtag(global setting `custom_tags`)に`console`を足す。
+# インスタンスのカスタムtag(global setting `custom_tags`)に、引数のtagを足す。
 # superadminのセッションのトークンで呼ぶこと。保存済みの値があればそれを保ち、
 # 無いとき(未設定)はインスタンスが実際に許可している値を起点にする。
 # 何を書くかの判定は`scripts/custom-tags.ts`の`plan`が行う。
 # 読み取りと書き込みの間に排他は無い。同じ設定を同時に編集すると、
 # 後の書き込みが先の変更を上書きしうるので、同時に実行しない。
 ensure_instance_custom_tag() {
+  local tag="$1"
   local status stored effective plan kind tags attempt
   status="$(api_get /settings/global/custom_tags)"
   case "${status}" in
@@ -416,11 +413,11 @@ ensure_instance_custom_tag() {
     effective="$(cat "${RESP_FILE}")"
   fi
   plan="$(WM_TMP_STORED="${stored}" WM_TMP_EFFECTIVE="${effective}" \
-    run_in_repo bun run scripts/custom-tags.ts plan "${CONSOLE_TAG}")"
+    run_in_repo bun run scripts/custom-tags.ts plan "${tag}")"
   kind="$(printf '%s' "${plan}" | jq -r '.kind')"
   case "${kind}" in
     present)
-      log "instance custom tag '${CONSOLE_TAG}' already allowed"
+      log "instance custom tag '${tag}' already allowed"
       return 0
       ;;
     add)
@@ -429,7 +426,7 @@ ensure_instance_custom_tag() {
       [ "${status}" = "200" ] || die "failed to set the instance custom_tags (status ${status})"
       for attempt in $(seq 1 "${CUSTOM_TAGS_READBACK_ATTEMPTS}"); do
         status="$(api_get /workers/custom_tags)"
-        if [ "${status}" = "200" ] && jq -e --arg tag "${CONSOLE_TAG}" 'index($tag) != null' "${RESP_FILE}" >/dev/null; then
+        if [ "${status}" = "200" ] && jq -e --arg tag "${tag}" 'index($tag) != null' "${RESP_FILE}" >/dev/null; then
           log "instance custom tags set to ${tags}"
           return 0
         fi
@@ -437,12 +434,22 @@ ensure_instance_custom_tag() {
           sleep "${CUSTOM_TAGS_READBACK_INTERVAL}"
         fi
       done
-      die "set the instance custom_tags to ${tags}, but '${CONSOLE_TAG}' is not listed when read back (status ${status})"
+      die "set the instance custom_tags to ${tags}, but '${tag}' is not listed when read back (status ${status})"
       ;;
     *)
       die "the instance custom_tags setting has an unexpected shape; fix it in the Windmill UI (Instance settings > Workers) and run again"
       ;;
   esac
+}
+
+# Consoleのscript(tag `console`)と定期ジョブ(tag `periodic`)が持つtag。
+# インスタンスのカスタムtagに含まれていなければ、superadminでない主体が呼ぶと拒否される。
+# 1つずつ足すので、片方だけが既にあっても、無い方だけを書く。
+ensure_instance_custom_tags() {
+  local tag
+  for tag in console periodic; do
+    ensure_instance_custom_tag "${tag}"
+  done
 }
 
 # --- 手順1: ログインし、初回は管理者の初期パスワードを変える ----------------
@@ -466,7 +473,7 @@ fi
 set_auth_token "${SESSION_TOKEN}"
 
 if [ "${MODE}" = "custom-tags" ]; then
-  ensure_instance_custom_tag
+  ensure_instance_custom_tags
   logout_status="$(api_post_no_body /auth/logout)"
   log "session token logged out (status ${logout_status})"
   exit 0
@@ -578,7 +585,7 @@ else
   fi
 fi
 
-ensure_instance_custom_tag
+ensure_instance_custom_tags
 
 # --- 手順4: ワークスペースに絞った期限付きのトークンを発行する --------------
 status="$(persistent_token_body | api_post /users/tokens/create)"

@@ -37,8 +37,9 @@ const SAMPLE_INTERVAL_MINUTES = 2;
  * `infra/docker-compose.yml`の`windmill_worker`は`WORKER_TAGS`を設定しないので、これが使われる。
  * 実機では、tag `bun`のジョブがdefaultのworkerで動き、tag `postgresql`のプレビュー
  * (`wmill.datatable()`のクエリ)がnativeのworkerで動くことを確かめている。
- * tag `console`はConsole用のworker、`nativets`、`bunnative`、`postgresql`、`mysql`、`mssql`、
- * `graphql`、`snowflake`、`bigquery`、`oracledb`はnativeのworkerが受けるので、このリストに入れない。
+ * tag `console`はConsole用のworker、tag `periodic`は定期ジョブ用のworkerが受ける。
+ * `nativets`、`bunnative`、`postgresql`、`mysql`、`mssql`、`graphql`、`snowflake`、`bigquery`、
+ * `oracledb`はnativeのworkerが受ける。これらはこのリストに入れない。
  * 誰も受けないtagのジョブは動かないので、実行中にも待ちにも数えない。
  * 次の`OTHER_WORKER_TAGS`にも無いtagは、警告に出す。
  */
@@ -65,11 +66,13 @@ const DEFAULT_WORKER_TAGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * defaultのworkerの枠を使わないと分かっているtag。Console用のworkerとnativeのworkerが受ける。
+ * defaultのworkerの枠を使わないと分かっているtag。
+ * Console用のworker、定期ジョブ用のworker、nativeのworkerが受ける。
  * これらは数えない。ここにも`DEFAULT_WORKER_TAGS`にも無いtagは、受けるworkerが分からないので警告に出す。
  */
 const OTHER_WORKER_TAGS: ReadonlySet<string> = new Set([
   "console",
+  "periodic",
   "nativets",
   "bunnative",
   "postgresql",

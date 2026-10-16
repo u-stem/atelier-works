@@ -2080,11 +2080,11 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_co
 
 Consoleが止まっていてもDiscordには届くので、通知の確認先はConsoleに限らない。
 
-### Consoleのtagの許可を確かめる
+### カスタムtagの許可を確かめる
 
-Consoleのscriptは、tag`console`を持つ。
+Consoleのscriptはtag`console`を、定期ジョブ用workerで動かすscriptはtag`periodic`を持つ。
 superadminでない主体は、インスタンスのカスタムtagに許可されたtagしか使えない。
-許可が無いと、Consoleのscriptの呼び出しが`Tag console is not included in the allowed CUSTOM_TAGS`で拒まれる。
+許可が無いと、scriptの呼び出しが`Tag console is not included in the allowed CUSTOM_TAGS`のように拒まれる。
 運用者のアカウントはsuperadminなので、許可が無くても動き、漏れに気づきにくい。
 
 許可は`mise run doctor`の「カスタムtag」で確かめる。
@@ -2096,16 +2096,16 @@ Windmillを装うローカルのプロセスは防がない。残るリスクは
 
 | 表示 | 意味 | 対処 |
 | --- | --- | --- |
-| `OK` | tag`console`が許可されている | 要らない |
-| `NG` | tag`console`が許可されていない | `mise run instance:tags`を実行する |
+| `OK` | tag`console`と`periodic`のそれぞれが許可されている | 要らない |
+| `NG` | tag`console`か`periodic`が許可されていない。tagごとに1行出る | `mise run instance:tags`を実行する |
 | `WARN` | 確かめられていない。失敗には数えない。終了コードと、標準エラーの先頭行が添えられる | 添えられた理由を見る。ログインが拒まれたなら、`WM_ADMIN_PASSWORD`が実際のパスワードと合っているかを確かめる |
 
 `NG`になるのは、確認のコマンドが「許可されていない」という専用の終了コードを返したときだけである。
 bunやmiseの失敗は、`WARN`として理由を添えて表示する。
 環境の不具合を、許可の漏れと取り違えないためである。
 
-`mise run instance:tags`は、既存のtagを保ち、`console`が無いときだけ足す。
-書き込みの後は、実効の値に`console`が現れるまで、数秒の間に数回読み直す。
+`mise run instance:tags`は、既存のtagを保ち、`console`と`periodic`のうち無いものだけ足す。
+書き込みの後は、実効の値にtagが現れるまで、数秒の間に数回読み直す。
 何度実行しても結果は同じである。
 読み取りと書き込みの間に排他は無い。
 同じ設定を、Windmillの画面や別の`instance:tags`で同時に編集すると、後の書き込みが先の変更を上書きしうる。
@@ -2155,7 +2155,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 - 内訳は`running_by_script`に、件数の多い10件のscriptのパスと、残りをまとめた`other`で載る。
 - 数えるtagは、Windmillの既定でdefaultのworkerグループが受けるものである。
   `infra/docker-compose.yml`の`windmill_worker`は`WORKER_TAGS`を設定しないので、既定が使われる。
-- tag `console`のジョブはConsole用のworkerが動かす。
+- tag `console`のジョブはConsole用のworkerが、tag `periodic`のジョブは定期ジョブ用のworkerが動かす。
   tag `postgresql`などnativeのworkerが受けるtagのジョブは、nativeのworkerが動かす。
   どちらも数えない。
 - `wmill.datatable()`のクエリは、tag `postgresql`のプレビューとして投げられ、nativeのworkerが動かす。
@@ -2194,6 +2194,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 2. 数える対象のtagに漏れが無いことを確かめる。
    `v2_job`表の`tag`の一覧が、defaultのworkerが受けるtagと、nativeやConsole用のworkerが受けるtagに収まっていればよい。
    前者は`f/factory/lib/worker_load_support.ts`の`DEFAULT_WORKER_TAGS`、後者は`OTHER_WORKER_TAGS`である。
+   後者には、Console用と定期ジョブ用のworkerのtagも入る。
    収まらないtagがあれば、記録のジョブのログに警告が出る。
    `job_logs`表で、その警告が無いことも確かめる。
 
@@ -2214,7 +2215,8 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 
 3. 記録の時刻に動いていたジョブを突き合わせる。
    記録のジョブの`started_at`を記録の時刻とみなし、その時刻に動いていた、数える対象のジョブがある記録の数を求める。
-   数えない対象として、記録のジョブ自身、フローの親ジョブ(`FLOW_PARENT_KINDS`)、tag `console`とnativeのworkerのtag(`OTHER_WORKER_TAGS`)を除く。
+   数えない対象として、記録のジョブ自身とフローの親ジョブ(`FLOW_PARENT_KINDS`)を除く。
+   tag `console`、tag `periodic`、nativeのworkerのtag(`OTHER_WORKER_TAGS`)のジョブも除く。
    境界の丸めで数ミリ秒だけ重なるジョブは、100ミリ秒より長く重なるものだけを数えて除く。
    `with_counted_jobs`が0なら、`running_jobs`が0なのは数え落としではない。
 
@@ -2227,8 +2229,8 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
             WHERE oj.workspace_id = 'factory'
               AND oj.runnable_path IS DISTINCT FROM 'f/factory/sample_worker_load'
               AND oj.kind NOT IN ('flow', 'flowpreview', 'unassigned_flow')
-              AND oj.tag NOT IN ('console', 'nativets', 'bunnative', 'postgresql', 'mysql',
-                                 'mssql', 'graphql', 'snowflake', 'bigquery', 'oracledb')
+              AND oj.tag NOT IN ('console', 'periodic', 'nativets', 'bunnative', 'postgresql',
+                                 'mysql', 'mssql', 'graphql', 'snowflake', 'bigquery', 'oracledb')
               AND o.started_at <= s.started_at
               AND s.started_at + interval '100 milliseconds' < o.completed_at
               AND o.completed_at > now() - interval '2 days'
@@ -2904,6 +2906,21 @@ miseの自動インストールが`mise run`の前に不足分を入れるかは
 workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
+tagを付けたscriptを反映する前に、そのtagを受けるworkerを起動し、カスタムtagを許可する。
+受けるworkerが無いと、そのscriptのジョブは動かないためである。
+tagごとのworkerは、`console`が`windmill_worker_console`、`periodic`が`windmill_worker_periodic`である。
+workerを足すcomposeの変更は、次の順に反映する。
+
+1. workerを足すcomposeの変更を、mainにマージする。
+2. ホスト側のcheckoutで`git pull`し、`mise run up`でworkerを起動する。
+   続けて`mise run instance:tags`を実行し、カスタムtagを許可する。
+3. 次のコマンドで、コンテナが動いていることを確かめる。
+   `mise exec -- docker compose -f infra/docker-compose.yml ps <サービス名>`
+   Windmillの画面の「Workers」で、worker groupのworkerのtagが、そのtagだけであることも確かめる。
+4. 確かめてから、scriptにtagを付ける変更をマージする。
+
+tag`periodic`を付けるscriptの選び方は、[セキュリティ](security.md#tagを付けるscriptの選び方)にある。
+
 `mise run up`と`mise run deploy`は、`up -d`の前に、一時コンテナで`caddy validate`を実行し、Caddyfileを確かめる。
 不正なら、そこで止まり、何も起動し直さない。
 不正なCaddyfileのまま、Caddyの作り直しや再起動をすると、Caddyが落ちて再起動を繰り返し、公開の入口が止まるためである。
@@ -3488,7 +3505,7 @@ Factoryの資産は、すべて`factory`ワークスペースの`f/factory/**`�
 workerのコンテナは、`init: true`でdocker-initをPID 1にし、終了した子プロセスを回収する。ジョブが起こすgit、gh、esbuildの子プロセスは、親より長く残ることがある。initが無いと、回収されないプロセスが上限を使い切り、すべてのジョブが`errno=11`(EAGAIN)で失敗する。
 上限は、defaultのworker(`windmill_worker`)が`pids: 1024`、nativeのworker(`windmill_worker_native`)が`pids: 512`である。
 defaultのworkerは検査コマンドを動かすので、その分を足している([プロセス数の上限の決め方](security.md#プロセス数の上限の決め方))。
-Console用のworker(`windmill_worker_console`)は`pids: 256`である。
+Console用のworker(`windmill_worker_console`)と定期ジョブ用のworker(`windmill_worker_periodic`)は、どちらも`pids: 256`である。
 
 同じ症状が出たら、使用量を確かめてからworkerを再起動する。
 
