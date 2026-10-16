@@ -24,7 +24,7 @@ locks:
   f/factory/lib/auto_retry: ab7a2a0a4c0457df86c34a2e08d8d3380bfc00b25c7e2e3d77db64d29120a76b
   f/factory/lib/auto_retry_reasons: 5ba0bdab43636d62288c716b5f955919d8958e9540aae1dcae0e8da1b01506eb
   f/factory/lib/check_runner: ce61aec711844891f2b087988b9087696c2b73e366f173f64ac7689bb436135b
-  f/factory/lib/check_sandbox: 0ab889133a3415b8c73a1d61a879719df114d71c91120e94b41ca6db6d6e3a2c
+  f/factory/lib/check_sandbox: c37e288e11c19aefdc87f32abd60d9dbfefc1f51f202cb9609f0e1646c397b49
   f/factory/lib/ci_fix_classify: eb35e7112fa3b72e97c4b37137f7bcc4d6942b52a60736d4b5a959a436b11092
   f/factory/lib/ci_fix_paths: a998224ec24d7b4dfca04a40f5b2c5d11ecdb1150756958f25a2c318caaa6d2f
   f/factory/lib/ci_fix_prompt: c96988f34a27420e9493ab7ad0f904b49a39c17b11036f5a44f9de42a2885a47

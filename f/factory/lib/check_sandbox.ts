@@ -847,11 +847,12 @@ export function aclLeftoverArgv(dir: string): string[] {
  * 取り戻しの確かめの速い経路。`dir`の下に拡張のACLを持つものがあれば、その一覧を出す。
  * `getfacl -R`は1回の起動でたどるので、ディレクトリごとに起動する`aclLeftoverArgv`より桁違いに速い。
  * パスの長さがPATH_MAXを超えるものがあると失敗するので、失敗や出力があれば`aclLeftoverArgv`で確かめ直す。
- * symlinkは、`-R`が既定でたどらない。`-s`で基本のエントリだけのものを飛ばす。
+ * `-P`で、引数のsymlinkも途中のsymlinkも辿らない。`aclLeftoverArgv`の`find -P`と同じ挙動になる。
+ * `-s`で基本のエントリだけのものを飛ばす。
  */
 export function aclBulkArgv(dir: string): string[] {
   assertChownableDir(dir);
-  return [GETFACL_PATH, "-R", "-s", "-p", "--", dir];
+  return [GETFACL_PATH, "-R", "-P", "-s", "-p", "--", dir];
 }
 
 /**
@@ -1668,8 +1669,10 @@ async function assertNoLeftover(
 
 /**
  * `dir`の下で拡張のACLを持つものの一覧を返す。無ければ空の文字列を返す。
- * 先に`getfacl -R`の1回で確かめ、成功して何も出さなければ無いとする。
+ * 先に`getfacl -R`の1回で確かめ、終了コードが0で、stdoutもstderrも空なら無いとする。
  * 失敗、タイムアウト、出力があるときは、ディレクトリごとの確かめを正とする。パスが長すぎる木でも確かめられるためである。
+ * 読めないディレクトリで、0で終わりstderrだけにエラーを出す版があっても、見逃さないためにstderrも見る。
+ * 一括が見つけてもディレクトリごとが空なら、無いものとして通す。一括の出力は、ディレクトリごとの確かめを呼ぶ合図にすぎない。
  */
 async function aclLeftover(
   deps: CheckSandboxDeps,
@@ -1681,7 +1684,12 @@ async function aclLeftover(
     timeoutMs: CHOWN_TIMEOUT_MS,
     maxOutputBytes: CHOWN_MAX_OUTPUT_BYTES,
   });
-  if (!bulk.timedOut && bulk.exitCode === 0 && bulk.stdout.trim() === "") {
+  if (
+    !bulk.timedOut &&
+    bulk.exitCode === 0 &&
+    bulk.stdout.trim() === "" &&
+    bulk.stderr.trim() === ""
+  ) {
     return "";
   }
   return (
