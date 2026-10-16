@@ -595,4 +595,19 @@ describe("infra/docker-compose.yml windmill_server session validity", () => {
       envEntries(service("windmill_server"), "MAX_SESSION_VALIDITY_SECONDS="),
     ).toEqual(["MAX_SESSION_VALIDITY_SECONDS=2592000"]);
   });
+
+  test("the default worker does not set the session validity", () => {
+    expect(
+      envEntries(service("windmill_worker"), "MAX_SESSION_VALIDITY_SECONDS="),
+    ).toEqual([]);
+  });
+
+  test("the console worker does not set the session validity", () => {
+    expect(
+      envEntries(
+        service("windmill_worker_console"),
+        "MAX_SESSION_VALIDITY_SECONDS=",
+      ),
+    ).toEqual([]);
+  });
 });
