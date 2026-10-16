@@ -2290,7 +2290,26 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   重なるのは、境界の数ミリ秒の丸めと、フローの親ジョブだけである。
   `NUM_WORKERS=3`でも、同時に動くジョブは1つだった。
   Claudeのジョブが動く間、記録のジョブも、ほかの定期のジョブも待つ。
-  `NUM_WORKERS`が効いていない理由は、確かめていない。
+- 1つのコンテナで複数のworkerが動くと、`worker_ping`の行も複数になる。
+  nativeのworkerは1つのコンテナに8行あり、名前の末尾が行ごとに違う。
+  defaultのworkerの1行は、複数のworkerが1行にまとまった表示ではない。
+- `NUM_WORKERS`が効かない原因は、設定が届いていないことではない。
+  Windmill 1.817.0は、nativeでないworkerの`NUM_WORKERS`が2以上だと、1に落とす。
+  起動ログの設定の行には`NUM_WORKERS: 2`と出て、環境変数は届いている。
+  同じ起動の初めに、`NUM_WORKERS=2 > 1 is only safe for native workers. Falling back to NUM_WORKERS=1.`の警告が出る。
+  nativeのworkerは、`NATIVE_MODE`で8つに固定される。
+- 環境変数`I_ACK_NUM_WORKERS_IS_UNSAFE`を足すと、この制限は外れる。
+  警告は、`Running with NUM_WORKERS=3 without native mode. This is not recommended.`に変わる。
+  ネットワークと実機のデータベースに届かない使い捨てのコンテナで、警告の変わり方だけを確かめた。
+  実機のworkerで、行が3つになることは確かめていない。
+
+起動ログの警告は、次のコマンドで探す。
+ログは古いものから消えるので、起動から時間が経つと見つからない。
+そのときは、`worker_ping`の行の数で判断する。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml logs windmill_worker_console | grep "Falling back to NUM_WORKERS"
+```
 
 #### queueの待ち
 
