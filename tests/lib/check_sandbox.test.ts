@@ -782,6 +782,7 @@ describe("aclBulkArgv", () => {
     expect(aclBulkArgv(DIRS.worktreeDir)).toEqual([
       "/usr/bin/getfacl",
       "-R",
+      "-P",
       "-s",
       "-p",
       "--",
@@ -4153,6 +4154,34 @@ describe("createCheckSandbox", () => {
     await sandbox.release(DIRS);
     expect(argvOf(fake.calls)).toContainEqual(
       aclLeftoverArgv(DIRS.worktreeDir),
+    );
+  });
+
+  test("release lists ACLs per directory when the single walk exits 0 but reports an error", async () => {
+    const fake = fakeSandboxDeps({
+      respond: (argv) =>
+        matches(aclBulkArgv(DIRS.worktreeDir))(argv)
+          ? ok("", "getfacl: /workspaces/acme/x: Permission denied\n")
+          : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(
+      aclLeftoverArgv(DIRS.worktreeDir),
+    );
+  });
+
+  test("release removes no ACL when the single walk finds one but the per-directory check finds none", async () => {
+    const fake = fakeSandboxDeps({
+      respond: (argv) =>
+        matches(aclBulkArgv(DIRS.worktreeDir))(argv)
+          ? ok(`# file: ${DIRS.worktreeDir}/gone\n`)
+          : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls)).not.toContainEqual(
+      removeAclArgv(DIRS.worktreeDir),
     );
   });
 
