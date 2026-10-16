@@ -5329,6 +5329,25 @@ describe("listReviewThreads", () => {
     ).rejects.toThrow(/unexpected response shape/);
   });
 
+  test("throws when hasNextPage is not a boolean", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode("PRRT_1")], {
+          hasNextPage: "yes",
+          endCursor: null,
+        }),
+      ),
+    ]);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
   test("requests pageInfo with hasNextPage and endCursor", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk(reviewThreadsGraphqlPayload([])),
