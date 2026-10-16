@@ -524,6 +524,7 @@ describe("runPrConflictWatch: recovery", () => {
       ],
       items: { 56: pushed },
       failReadItem: 55,
+      prNumbers: [12, 13],
     });
     await runPrConflictWatch(h.deps);
     expect(h.failures).toEqual(["recover_fixing:acme/widgets#12"]);
@@ -537,6 +538,7 @@ describe("runPrConflictWatch: recovery", () => {
       ],
       items: { 56: pushed },
       failReadItem: 55,
+      prNumbers: [12, 13],
     });
     await runPrConflictWatch(h.deps);
     expect(h.releases.map((release) => release.id)).toEqual([8]);

@@ -6198,8 +6198,8 @@ export async function countPrConflictFixRounds(
  * そのPRで、競合を直す作業項目が失敗せずに終わった時刻のうち、最新のものを返す。無ければ`null`。
  * 失敗せずに終わったのは、状態が`reviewed`か`rereview_requested`の作業項目である。
  * `blocked`と`failed`と`needs_human`は、直せずに止まった回なので含めない。
- * 時刻は、その状態へ移った最新の遷移の時刻とし、遷移が無ければ作業項目の`updated_at`にする。
- * ownerとrepoは小文字で照合し、競合の回をまたいで数える。
+ * 時刻は作業項目の`updated_at`である。ownerとrepoは小文字で照合し、競合の回をまたいで数える。
+ * GitHubが競合の有無を更新するまで遅れても、直した直後に起動し直さないために使う。
  */
 export async function latestConflictFixSettledAt(
   owner: string,
@@ -6208,13 +6208,23 @@ export async function latestConflictFixSettledAt(
   sql: SqlClient = defaultSqlClient,
 ): Promise<Date | null> {
   assertPrCiTarget(owner, repo, prNumber);
-  void sql;
-  return null;
+  const rows = await sql`
+    SELECT max(updated_at) AS settled_at
+    FROM factory.work_items
+    WHERE kind = 'pr_fix' AND conflict_check_id IS NOT NULL
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND pr_number = ${prNumber}::integer
+      AND status IN ('reviewed', 'rereview_requested')
+  `.fetch();
+  const settledAt = rows[0]?.settled_at;
+  return settledAt === null || settledAt === undefined
+    ? null
+    : parseDate(settledAt, "settled_at");
 }
 
 /**
  * コミットのmainのCIの状態を返す。そのコミットの記録が無ければ`null`。
- * ownerとrepoは小文字で照合する。
+ * ownerとrepoは小文字で照合する。PRの記録(小文字)と、記録した綴りが違っても当たるためである。
  */
 export async function getMainCiStateBySha(
   owner: string,
@@ -6225,6 +6235,14 @@ export async function getMainCiStateBySha(
   assertGitHubName(owner);
   assertGitHubName(repo);
   assertCommitSha(headSha);
-  void sql;
-  return null;
+  const rows = await sql`
+    SELECT state FROM factory.main_ci_runs
+    WHERE lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND head_sha = ${headSha}
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : parseEnum(row.state, MAIN_CI_STATES, "state");
 }

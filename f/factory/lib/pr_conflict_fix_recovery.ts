@@ -197,11 +197,27 @@ export type ConflictFixItemSources = {
 /**
  * 競合を直す作業項目の状態を読む。作業項目が無ければ`null`を返す。
  * `rowEpisode`は、作業項目が結ばれた行の今の競合の回である。
+ * 注記は、ラウンドを数える式(`countPrConflictFixRounds`)と同じく、今の状態へ移った最新の遷移のものを読む。
+ * 別の列を読むと、回復は保留なしで結びを外し、数える側は数える、という食い違いが起きる。
+ * 動いている作業項目は、注記とpushの記録を使わないので読まない。
  */
 export async function readConflictFixItemState(
-  _workItemId: number,
-  _rowEpisode: number,
-  _sources: ConflictFixItemSources,
+  workItemId: number,
+  rowEpisode: number,
+  sources: ConflictFixItemSources,
 ): Promise<ConflictFixItemState | null> {
-  return null;
+  const item = await sources.getWorkItem(workItemId);
+  if (item === null) return null;
+  const base = {
+    status: item.status,
+    launched: item.flow_job_id !== null,
+    conflictEpisode: item.conflict_episode,
+    rowEpisode,
+  };
+  if (!isTerminal(item.status)) return { ...base, note: null, pushed: false };
+  return {
+    ...base,
+    note: await sources.latestStatusNote(workItemId, item.status),
+    pushed: await sources.hasPushedCommits(workItemId),
+  };
 }
