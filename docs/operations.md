@@ -776,8 +776,11 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 - 所有権の受け渡しは、ハードリンクのあるファイルがworktreeに無ければ一括で行い、あればディレクトリごとに行う。
   取り戻しは常に一括で行う。
   ディレクトリごとの受け渡しは、1個あたり約0.6ミリ秒かかる。50万個を超えると300秒の上限で打ち切られて検査が失敗する。
+  50万個は余裕を含まない切れる点で、負荷のあるworkerでは手前で切れうる。
   目安は、9,000個のディレクトリで約5秒、9万個で約1分である。
-  取り戻しは、ディレクトリが9万個でも合わせて約5秒で済む。
+  取り戻しは、条件に当たるエントリが少なく、ACLも無いときだけ、ディレクトリが9万個でも合わせて約8秒で済む。
+  当たるエントリを含むディレクトリが多いと、ディレクトリごとの起動で1個あたり約0.5ミリ秒かかる。
+  ACLの確認は1回の最悪で約600秒かかる。一括の確認が300秒で打ち切られた後に、ディレクトリごとの確認にも300秒が与えられるためである。
   測り方と各段の時間は[検査枠の走査時間を測る](#検査枠の走査時間を測る)にある。
 - 検査がworktreeの外を指すsymlinkを置くと、取り戻しの後に消される。
   `python3 -m venv`の`.venv/bin/python3`のような正当な置き物も消えるが、検査は失敗しない。
@@ -801,51 +804,114 @@ PRには`factory:review`ラベルが付くので、自動レビューが起動�
 所有権の受け渡しと取り戻しの上限(300秒)は、コマンド1回ごとにかかる。
 規模の目安を見直すときは、使い捨てのコンテナを使い、実機のボリュームには触れない。
 `node_modules`に近い木をrootの所有で作り、受け渡しから順に、段ごとに`time`で測る。
+環境変数`P`がディレクトリの数を、`L`がsymlinkの数を決める。
 
 ```sh
-docker run --rm --pull never --network none --entrypoint /bin/bash infra-windmill_worker:latest -c '
+docker run --rm --pull never --network none -e P=300 -e L=2000 --entrypoint /bin/bash infra-windmill_worker:latest -c '
 python3 - <<PY
 import os
-for p in range(300):
+n = int(os.environ["P"])
+for p in range(n):
     for s in range(30):
         d = f"/data/node_modules/p{p}/d{s}"
         os.makedirs(d)
         for f in range(6):
             open(f"{d}/f{f}.js", "w").write("x")
-    os.symlink(f"../p{(p + 1) % 300}", f"/data/node_modules/p{p}/link")
+    os.symlink(f"../p{(p + 1) % n}", f"/data/node_modules/p{p}/link")
+os.makedirs("/data/links")
+for i in range(int(os.environ["L"])):
+    os.symlink(f"../node_modules/p{i % n}", f"/data/links/l{i}")
 PY
+time find -P /data -xdev "(" -type d -o -links 1 ")" -printf . > /dev/null
 time find -P /data -xdev "(" -type d -o -links 1 ")" -execdir /usr/bin/chown -h --from=0:0 10001:10001 "{}" +
 time chown -R -P -h --from=10001 0:0 -- /data
 time find -P /data ! -type l -execdir /usr/bin/getfacl -s -p -- "{}" +
 time getfacl -R -s -p -- /data
-time find -P /data -type l -fprint0 /tmp/links -printf .
+time find -P /data -xdev ! -type l -execdir /usr/bin/setfacl -b -k "{}" +
+time find -P /data/links -type l -fprint0 /tmp/links -printf . > /dev/null
+time python3 -c "import os; [os.readlink(l) for l in open(\"/tmp/links\", \"rb\").read().split(b\"\0\")[:-1]]"
 '
 ```
 
-この木は9,302個のディレクトリ、5万4千個のファイルを持つ。
-ディレクトリの数は、`p`と`s`の範囲を広げて変える。
+`P`が300のとき、木は9,301個のディレクトリと5万4千個のファイルを持つ。
+`P`が3000のときは、9万3千個のディレクトリと54万個のファイルになる。
 ハードリンクがある場合は、`os.link`で1つ足してから測る。
 
 測った結果は次のとおりである(`mise run up`で作るworkerのイメージ、Linuxのコンテナ、ファイルシステムはoverlay)。
+左の列は`P=300 L=2000`、右の列は`P=3000 L=20000`で測った。
 
-| 段 | 9,302個 | 9万3千個 |
+| 段 | 約9,300個 | 約9万3千個 |
 | --- | --- | --- |
-| `find`の1回の走査(列挙と条件だけ) | 約0.08秒 | 約0.55秒 |
-| ディレクトリごとの`chown`(受け渡し、ハードリンクあり) | 約5.0秒 | 約56秒 |
-| 一括の`chown -R` | 約0.12秒 | 約0.7秒 |
-| ディレクトリごとの`getfacl`(取り戻しの確かめ) | 約4.3秒 | 約51秒 |
-| 一括の`getfacl -R` | 約0.13秒 | 約0.9秒 |
-| symlinkの走査(2千個と2万個) | 約0.2秒 | 約2.5秒 |
+| `find`の1回の走査(列挙と条件だけ) | 約0.07秒 | 約0.8秒 |
+| ディレクトリごとの`chown`(受け渡し、ハードリンクあり) | 約5.3秒 | 約56秒 |
+| 一括の`chown -R` | 約0.11秒 | 約2.1秒 |
+| ディレクトリごとの`getfacl`(取り戻しの確かめ) | 約4.7秒 | 約49秒 |
+| 一括の`getfacl -R` | 約0.11秒 | 約1.8秒 |
+| ディレクトリごとの`setfacl -b -k`(ACLの削除、ACLの無い木で) | 約4.6秒 | 約48秒 |
+| symlinkの列挙と中身の読み込み(2千個と2万個) | 約0.01秒 | 約0.1秒 |
 
 - ディレクトリごとに起動する段は、どれも1個あたり0.5〜0.6ミリ秒で、ディレクトリの数にほぼ比例する。
   起動が支配的で、ファイルの数にはほとんど依存しない。
-- 取り戻しの`find`は5回あり、起動を伴わない走査は1回約0.08秒である。
-  ディレクトリごとの`getfacl`が取り戻しの約9割を占めていたので、確かめは先に一括の`getfacl -R`で行い、失敗か出力があるときだけディレクトリごとに戻る。
+- 取り戻しは、`find`を5回、`chown -R`と`getfacl -R`を1回ずつ行う。
+  合わせると、9,300個で約0.6秒、9万3千個で約8秒である。
+  この時間で済むのは、条件に当たるエントリが少なく、ACLも無いときだけである。
+  当たるエントリを含むディレクトリが多いと、その数だけ`chown`の起動が増え、1個あたり約0.5ミリ秒かかる。
+- ACLの確かめは、先に一括の`getfacl -R`で行う。
+  失敗、タイムアウト、出力があるときは、ディレクトリごとの`getfacl`に戻る。
+  ACLが残っていれば、さらにディレクトリごとの`setfacl`で消すので、9,300個で約9秒、9万3千個で約100秒かかる。
+  消した後の確かめは一括で済む。
+- ACLの確かめ1回の最悪は、一括が300秒で打ち切られた後に、ディレクトリごとの確かめにも300秒が与えられるので、最大約600秒である。
 - 受け渡しがディレクトリごとになるのは、ハードリンクが1つでもあるときである。
-  上限は同じ300秒で、約50万個で切れる。
+  上限は同じ300秒で、1個あたり約0.6ミリ秒なので約50万個で切れる。
+  この数は余裕を含まない、切れる点である。
+  負荷のあるworkerでは、手前で切れうる。
 - symlinkの走査は、`find`の列挙の後に、1個ずつ中身を読んで指す先を解く。
-  1個あたり約0.1ミリ秒で、走査の上限(60秒)に達するのは約60万個である。
+  表の行はこのうちOSの側の時間だけで、走査のスクリプト全体の時間は測っていない。
+  1個あたり約0.1ミリ秒で、走査の上限(60秒)に達するのは約60万個というのは、推定である。
   達すると検出が不完全として扱われ、検査が失敗する。
+
+### 取り戻しのACLの一括確認が頼る挙動を確かめる
+
+取り戻しのACLの確かめは、先に`getfacl -R -P -s -p`の1回で行う。
+終了コードが0で、出力が空のときだけ、ACLが無いとみなす。
+この前提は、workerのイメージの`getfacl`(2.3.2)で、使い捨てのコンテナを使って次のように確かめた。
+
+```sh
+docker run --rm --pull never --network none --entrypoint /bin/bash infra-windmill_worker:latest -c '
+mkdir -p /data/a/sub
+echo x > /data/a/sub/file.txt
+setfacl -m u:10001:r /data/a/sub/file.txt
+setfacl -d -m u:10001:rwx /data/a/sub
+getfacl -R -P -s -p -- /data/a; echo "exit=$?"
+
+mkdir /data/b && cd /data/b
+for i in $(seq 25); do mkdir "$(printf "d%.0s" $(seq 200))" && cd "$(printf "d%.0s" $(seq 200))"; done
+echo x > leaf.txt
+setfacl -m u:10001:r leaf.txt
+setfacl -d -m u:10001:rwx .
+cd /
+getfacl -R -P -s -p -- /data/b > /tmp/b.out 2> /tmp/b.err; echo "exit=$? stdout_bytes=$(wc -c < /tmp/b.out)"; cut -c1-60 /tmp/b.err
+
+mkdir -p /data/c/locked
+echo x > /data/c/locked/f
+setfacl -m u:10001:r /data/c/locked/f
+chmod 000 /data/c/locked
+setpriv --reuid=20000 --regid=20000 --clear-groups getfacl -R -P -s -p -- /data/c; echo "exit=$?"
+getfacl -R -P -s -p -- /data/c | wc -l
+'
+```
+
+- ファイルのユーザーのACLと、ディレクトリのデフォルトのACLを付けた木では、終了コードは0で、両方を出力する。
+  どちらも拡張のACLの名前付きのエントリなので、`-s`で飛ばされない。
+- パスの長さがPATH_MAXを超える木(深さ25、1階層200文字で約5千文字)では、ACLを付けていても、終了コードは1で、標準出力は空である。
+  標準エラーにパスの付いた`getfacl:`のエラーが出る。
+  終了コードが0で何も出さない場合は無かったので、この木は一括では「無い」とみなされず、ディレクトリごとの確かめに戻る。
+- 読めないディレクトリがあると、別のuidで実行したとき、終了コードは1で、標準エラーに`Permission denied`が出る。
+  rootは読めるので、終了コードは0で、その下のエントリまで出力する。
+  取り戻しはrootで実行するので、読めないディレクトリで一括が止まることは、通常は無い。
+  それでも、終了コードが0で標準エラーに出力があるときは、ディレクトリごとの確かめに戻す。
+- 引数がsymlinkのとき、`-R`は`-P`なしでもたどらず、何も出さずに終了コード0で終わる。
+  `-L`を付けるとたどる。`-P`は、`find -P`と同じ挙動を明示するために付ける。
 
 ### 検査の枠の記録を片付ける
 
