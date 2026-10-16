@@ -504,13 +504,15 @@ export const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
  *   ローカルだけの操作(rev-parse、status、add、commit、worktree、diff)は
  *   トークンを持たない`localGitEnv`を使う。
  * - 利用者に由来する位置引数(URL、ディレクトリ、sha、ブランチ)の前には`--`を置き、
- *   `-`で始まる値をオプションと誤読させない。例外は次の6つで、代わりに
+ *   `-`で始まる値をオプションと誤読させない。例外は次の7つで、代わりに
  *   `assertSha`や`assertBranchName`の入力検証で、先頭が`-`の値を防ぐ。
+ *   - `git commit-tree`: `pushMergeCommit`のツリーは位置引数で、`--`の後に置くと
+ *     「must give exactly one tree」で失敗する(実際に確かめた)。ツリーとshaは`assertSha`で検証する。
  *   - `git rev-parse`: `-- <rev>`は他のサブコマンドと同じには動かない。
  *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
  *     オプションの解釈を止めずに、出力の前に`--`の行をそのまま出す(実際に確かめた)。
  *   - `git gtr new`: core gitではない外部のサブコマンドで、`--`を扱える保証が無い。
- *   - `pushNewBranch`の`git ls-remote`: リモート名の後の`--`を区切りではなくパターンとして扱う
+ *   - `pushNewBranch`と競合回の`git ls-remote`: リモート名の後の`--`を区切りではなくパターンとして扱う
  *     (実際に確かめた)。パターンは`HEAD`と、`assertBranchName`で検証したブランチから作った`refs/heads/`で始まるrefである。
  *   - `readGitShowFile`の`git show <ref>:<path>`: `--`を付けてもエラーにならず、
  *     気づかないうちにgitが返す内容が変わる。`ref`を検証すれば、`path`も守られる
@@ -4339,4 +4341,323 @@ export async function mergeBaseIntoWorktree(
       };
     },
   });
+}
+
+/** 競合回のmergeコミットの固定のメッセージ。 */
+export const MERGE_COMMIT_MESSAGE =
+  "fix: resolve merge conflicts with the base branch";
+
+/** `pushMergeCommit`が、ステージした木が検証した木と違うために止めるときの理由。 */
+export const STAGED_TREE_CHANGED_REASON =
+  "staged tree differs from the verified tree";
+
+export type PushMergeCommitOptions = MergeWorktreeOptions & {
+  /** 作業を始めたときのPRのheadで、mergeコミットの第1親になる。 */
+  readonly prHeadSha: string;
+  /** `mergeBaseIntoWorktree`が記録したbaseのsha。mergeコミットの第2親になる。 */
+  readonly baseSha: string;
+  /** PRの`baseRef`。 */
+  readonly baseBranch: string;
+  /** `mergeBaseIntoWorktree`が作った基準コミット。ローカルのHEADがこれであるべき。 */
+  readonly autoSha: string;
+  /** 検査したツリー。pushするmergeコミットのツリーはこれになる。 */
+  readonly expectedTreeSha: string;
+  /** 競合ファイル。解消の内容をステージするのは、このパスだけである。 */
+  readonly conflictedPaths: readonly string[];
+  /** mergeコミットの`Generated-By`トレーラーに入れる、Factoryのインスタンス名。 */
+  readonly instanceName: string;
+  /** mergeコミットのauthorとcommitter。 */
+  readonly author: GitIdentity;
+  /**
+   * `add`の後、`write-tree`の前に、ステージした内容を調べて止める理由を返す。
+   * 理由があれば`reset -q`でステージを戻し、`CommitBlockedError`を投げる。例外を投げたときも戻す。
+   */
+  readonly inspectStaged?: () => Promise<readonly string[]>;
+};
+
+/**
+ * `pushMergeCommit`の結果。
+ * - `pushed`: mergeコミット`newSha`をpushした。
+ * - `head_changed`: PRのブランチが、作業を始めたときから進んでいる。何もpushしていない。
+ * - `base_changed`: 記録したbaseが、リモートの既定のブランチの先頭でも祖先でもなくなった。何もpushしていない。
+ * - `rejected_workflows`: GitHubが、`.github/workflows/`を含むpushを権限不足として拒否した。
+ */
+export type PushMergeCommitResult =
+  | { readonly outcome: "pushed"; readonly newSha: string }
+  | { readonly outcome: "head_changed"; readonly currentSha: string }
+  | { readonly outcome: "base_changed" }
+  | { readonly outcome: "rejected_workflows" };
+
+/**
+ * `refs/remotes/origin/<branch>`が今指すshaを、完全な名前の一致で読む。無ければ例外を投げる。
+ * `show-ref --verify`は、`rev-parse`と違い、refが無いときに別のrefへ解決し直さない(`readExactRef`)。
+ */
+async function readTrackingSha(
+  ctx: MergeGitContext,
+  branch: string,
+): Promise<string> {
+  const ref = remoteTrackingRef(branch);
+  const result = await mergeGit(
+    ctx,
+    `git show-ref --verify ${ref}`,
+    ["show-ref", "--verify", "--hash", "--", ref],
+    { env: { LC_ALL: "C" } },
+  );
+  const sha = result.stdout.trim();
+  assertSha(sha);
+  return sha;
+}
+
+/**
+ * 検査したツリーを親が[PRのhead, base]のmergeコミットにして、PRのブランチへfast-forwardでpushする。
+ * `mergeBaseIntoWorktree`が作った基準コミットは送らない。基準コミットには衝突マーカーが残り、
+ * 送るのは解消したツリーだけである。rebaseとforce pushはしない。
+ *
+ * 手順は次のとおり。
+ * 1. 前段の守りを通す(`mergeBaseIntoWorktree`と同じ)。
+ * 2. PRのブランチをfetchし、リモートの先頭が`prHeadSha`でなければ`head_changed`を返す。
+ *    ローカルのHEADが`autoSha`で、その第1親と第2親が`prHeadSha`と`baseSha`であることを確かめる。
+ *    違えば`CommitBlockedError`を投げる。検査コマンドがローカルでcommitすると、検査を経ない履歴が親になるため。
+ * 3. 競合ファイルだけを`add`し、`inspectStaged`で調べ、`write-tree`が`expectedTreeSha`と一致することを確かめる。
+ *    commitを作る前に確かめるので、違えば何も作らずにステージを戻す。
+ * 4. `ls-remote`で、`baseSha`がリモートの既定のブランチの先頭か、その祖先であることを確かめる。違えば`base_changed`を返す。
+ * 5. `commit-tree`でmergeコミットを作り、そのshaを`refs/heads/<branch>`へpushする。
+ *
+ * 第2親(base)の履歴はすでにリモートにあるので、pushが新しく送るのはmergeコミットと解消したファイルだけである。
+ * pushがfast-forwardでないとして拒否されたときは、fetchし直して`head_changed`を返す。
+ * `[remote rejected]`のうち`.github/workflows/`によるものは、PATに`workflow`スコープが無いための拒否なので
+ * `rejected_workflows`として返す。それ以外の拒否と失敗は例外にする。
+ * `commit-tree`にはリビジョンの前の`--`を付けない(`--`の後はツリーとして読まれず、
+ * 「must give exactly one tree」で失敗することを確かめた)。ツリーは`assertSha`で検証する。
+ */
+export async function pushMergeCommit(
+  opts: PushMergeCommitOptions,
+): Promise<PushMergeCommitResult> {
+  for (const sha of [
+    opts.prHeadSha,
+    opts.baseSha,
+    opts.autoSha,
+    opts.expectedTreeSha,
+  ]) {
+    assertSha(sha);
+  }
+  assertBranchName(opts.branch);
+  assertBranchName(opts.baseBranch);
+  if (!opts.conflictedPaths.every((path) => isSafeRepoPath(path))) {
+    throw new Error("unsafe conflicted path");
+  }
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async (): Promise<PushMergeCommitResult> => {
+      const ctx = mergeGitContext(opts);
+      await enterConflictWorktree(opts, ctx);
+
+      const fetchBranch = (label: string): Promise<CommandResult> =>
+        mergeGit(
+          ctx,
+          label,
+          ["fetch", "--no-recurse-submodules", "origin", "--", opts.branch],
+          { network: true },
+        );
+      await fetchBranch(`git fetch origin ${opts.branch}`);
+      const remoteSha = await readTrackingSha(ctx, opts.branch);
+      if (remoteSha !== opts.prHeadSha) {
+        return { outcome: "head_changed", currentSha: remoteSha };
+      }
+
+      const localHead = (
+        await mergeGit(ctx, "git rev-parse --verify HEAD", [
+          "rev-parse",
+          "--verify",
+          "HEAD",
+        ])
+      ).stdout.trim();
+      if (localHead !== opts.autoSha) {
+        throw new CommitBlockedError(
+          `local HEAD ${localHead} is not the baseline commit ${opts.autoSha}`,
+        );
+      }
+      const parents = (
+        await mergeGit(ctx, "git rev-parse (parents of the baseline commit)", [
+          "rev-parse",
+          `${opts.autoSha}^1`,
+          `${opts.autoSha}^2`,
+        ])
+      ).stdout
+        .trim()
+        .split("\n");
+      if (parents[0] !== opts.prHeadSha || parents[1] !== opts.baseSha) {
+        throw new CommitBlockedError(
+          "the baseline commit does not have the recorded parents",
+        );
+      }
+
+      const unstage = async (): Promise<void> => {
+        await mergeGit(ctx, "git reset -q", ["reset", "-q"]);
+      };
+      if (opts.conflictedPaths.length > 0) {
+        await mergeGit(ctx, "git add", ["add", "--", ...opts.conflictedPaths]);
+      }
+      if (opts.inspectStaged !== undefined) {
+        let reasons: readonly string[];
+        try {
+          reasons = await opts.inspectStaged();
+        } catch (err) {
+          await unstage();
+          throw err;
+        }
+        if (reasons.length > 0) {
+          await unstage();
+          throw new CommitBlockedError(
+            reasons.map(escapeReasonSeparator).join("; "),
+          );
+        }
+      }
+      const stagedTree = await mergeGit(ctx, "git write-tree", ["write-tree"]);
+      if (stagedTree.stdout.trim() !== opts.expectedTreeSha) {
+        await unstage();
+        throw new CommitBlockedError(STAGED_TREE_CHANGED_REASON);
+      }
+
+      const remoteBase = await readRemoteBase(ctx, opts.baseBranch);
+      if (!remoteBase.isDefault) return { outcome: "base_changed" };
+      if (remoteBase.sha !== opts.baseSha) {
+        await mergeGit(
+          ctx,
+          `git fetch origin ${remoteBase.sha}`,
+          ["fetch", "--no-recurse-submodules", "origin", "--", remoteBase.sha],
+          { network: true },
+        );
+        const ancestor = await mergeGit(
+          ctx,
+          "git merge-base --is-ancestor",
+          ["merge-base", "--is-ancestor", "--", opts.baseSha, remoteBase.sha],
+          { okExitCodes: [0, 1] },
+        );
+        if (ancestor.exitCode !== 0) return { outcome: "base_changed" };
+      }
+
+      const created = await mergeGit(
+        ctx,
+        "git commit-tree",
+        [
+          "commit-tree",
+          opts.expectedTreeSha,
+          "-p",
+          opts.prHeadSha,
+          "-p",
+          opts.baseSha,
+          "-m",
+          withCommitTrailers(MERGE_COMMIT_MESSAGE, opts.instanceName),
+        ],
+        { env: commitIdentityEnv(opts.author) },
+      );
+      const newSha = created.stdout.trim();
+      assertSha(newSha);
+
+      const pushResult = await mergeGit(
+        ctx,
+        "git push",
+        ["push", "origin", "--", `${newSha}:refs/heads/${opts.branch}`],
+        { network: true, okExitCodes: [0, 1, 128] },
+      );
+      if (pushResult.exitCode === 0) return { outcome: "pushed", newSha };
+      const stderr = pushResult.stderr.toLowerCase();
+      if (
+        stderr.includes(REMOTE_REJECTED_SUBSTRING) &&
+        stderr.includes(".github/workflows/")
+      ) {
+        return { outcome: "rejected_workflows" };
+      }
+      if (isNonFastForwardRejection(pushResult.stderr)) {
+        await fetchBranch(
+          `git fetch origin ${opts.branch} (after push rejection)`,
+        );
+        return {
+          outcome: "head_changed",
+          currentSha: await readTrackingSha(ctx, opts.branch),
+        };
+      }
+      throw gitError("git push failed", pushResult);
+    },
+  });
+}
+
+/** `listBothSidesChangedPaths`の結果。パスはすべてリポジトリのルートからの相対パスである。 */
+export type BothSidesChangedPaths = {
+  /** PRのheadから結果へ、baseから結果へ、のどちらの差にも現れるパス。結果がどちらの親とも違うパスである。 */
+  readonly bothSides: readonly string[];
+  /** どちらの差でも追加として現れるパス。どちらの親にも無いパスが結果にあることを表す。 */
+  readonly addedInBoth: readonly string[];
+  /** PRのheadから結果への差のすべてのパス。baseだけが変えたパスも含む。 */
+  readonly headToResult: readonly string[];
+};
+
+/** `git diff-tree --name-status -z`の出力を、パスから状態の文字への対応にする。 */
+function parseNameStatusZ(stdout: string): Map<string, string> {
+  const fields = stdout.split("\u0000");
+  const statuses = new Map<string, string>();
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const status = fields[index] ?? "";
+    const path = fields[index + 1] ?? "";
+    if (status !== "" && path !== "") statuses.set(path, status);
+  }
+  return statuses;
+}
+
+/**
+ * 結果のツリー`treeSha`が、PRのheadとbaseの両方と違うパスを返す。
+ * `diff-tree -r --name-status -z --no-renames`を、PRのhead→結果とbase→結果の2回実行して求める。
+ * 片方の親の変更をそのまま取り込んだだけのパス(mainが自動でmergeされた箇所)は、結果がその親と同じなので含まれない。
+ * 保護パスの判定とgitleaksの対象には、この集合を使う。名前の変更は削除と追加の2件になるので、新しい名前でも漏れない。
+ * ツリーの比較だけで、索引と作業ツリーは読まない。トークンは持たない。
+ */
+export async function listBothSidesChangedPaths(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly prHeadSha: string;
+  readonly baseSha: string;
+  readonly treeSha: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<BothSidesChangedPaths> {
+  for (const sha of [opts.prHeadSha, opts.baseSha, opts.treeSha]) {
+    assertSha(sha);
+  }
+  const local = localGitEnv(opts.home, opts.path);
+  const ctx: MergeGitContext = {
+    run: opts.run,
+    cwd: opts.worktreeDir,
+    local,
+    network: local,
+  };
+  const diffFrom = async (from: string): Promise<Map<string, string>> =>
+    parseNameStatusZ(
+      (
+        await mergeGit(ctx, "git diff-tree", [
+          "diff-tree",
+          "-r",
+          "--name-status",
+          "-z",
+          "--no-renames",
+          from,
+          opts.treeSha,
+          "--",
+        ])
+      ).stdout,
+    );
+  const fromHead = await diffFrom(opts.prHeadSha);
+  const fromBase = await diffFrom(opts.baseSha);
+  const bothSides = [...fromHead.keys()].filter((path) => fromBase.has(path));
+  return {
+    bothSides,
+    addedInBoth: bothSides.filter(
+      (path) => fromHead.get(path) === "A" && fromBase.get(path) === "A",
+    ),
+    headToResult: [...fromHead.keys()],
+  };
 }

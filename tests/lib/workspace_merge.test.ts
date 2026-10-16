@@ -14,11 +14,15 @@ import {
   type CommandRunner,
   CommitBlockedError,
   type LockFs,
+  listBothSidesChangedPaths,
+  MERGE_COMMIT_MESSAGE,
   type MergeBaseResult,
   mergeBaseIntoWorktree,
+  pushMergeCommit,
   readWorktreeGitPointer,
   runCommand,
   WorktreeGitPointerModifiedError,
+  withCommitTrailers,
 } from "../../f/factory/lib/workspace.ts";
 import { type FakeCall, fail, ok } from "./testSupport.ts";
 
@@ -629,6 +633,371 @@ describe("mergeBaseIntoWorktree guards", () => {
 });
 
 // ---------------------------------------------------------------------------
+// pushMergeCommit(偽のrunner)
+// ---------------------------------------------------------------------------
+
+const NEW_SHA = "7".repeat(40);
+const RESOLVED_TREE = "8".repeat(40);
+const NEWER_BASE = "9".repeat(40);
+
+/** `pushMergeCommit`の通常の流れ(pushが通る)を、gitの副コマンドごとの応答で表す。 */
+function pushScenario(over: Record<string, Responder> = {}): {
+  readonly run: CommandRunner;
+  readonly calls: FakeCall[];
+} {
+  const calls: FakeCall[] = [];
+  const defaults: Record<string, Responder> = {
+    "symbolic-ref": () => ok("refs/heads/fix/branch\n"),
+    fetch: () => ok(),
+    "show-ref": () => ok(`${PR_HEAD}\n`),
+    "rev-parse": (argv) =>
+      argv.includes("--verify") ? ok(`${AUTO}\n`) : ok(`${PR_HEAD}\n${BASE}\n`),
+    add: () => ok(),
+    reset: () => ok(),
+    "write-tree": () => ok(`${RESOLVED_TREE}\n`),
+    "ls-remote": () =>
+      ok(
+        `ref: refs/heads/main\tHEAD\n${BASE}\tHEAD\n${BASE}\trefs/heads/main\n`,
+      ),
+    "merge-base": () => ok(),
+    "commit-tree": () => ok(`${NEW_SHA}\n`),
+    push: () => ok(),
+  };
+  const run: CommandRunner = async (argv, options) => {
+    calls.push({ argv, options });
+    const handler = over[subcommandOf(argv)] ?? defaults[subcommandOf(argv)];
+    if (handler === undefined) {
+      throw new Error(`pushScenario: unexpected git call ${argv.join(" ")}`);
+    }
+    return handler(argv);
+  };
+  return { run, calls };
+}
+
+function pushOptions(
+  run: CommandRunner,
+  extra: Partial<Parameters<typeof pushMergeCommit>[0]> = {},
+): Parameters<typeof pushMergeCommit>[0] {
+  return {
+    run,
+    repoDir: "/repo",
+    dir: "/repo/wt",
+    branch: "fix/branch",
+    worktreeGitPointer: POINTER,
+    prHeadSha: PR_HEAD,
+    baseSha: BASE,
+    baseBranch: "main",
+    autoSha: AUTO,
+    expectedTreeSha: RESOLVED_TREE,
+    conflictedPaths: ["src/a.ts"],
+    instanceName: "acme-factory",
+    author: AUTHOR,
+    ghToken: "gh-secret",
+    verifyWorktree: noopVerify,
+    pointerFs: {
+      lstat: async () => ({ isFile: () => true, isSymbolicLink: () => false }),
+      readFile: async () => POINTER,
+    },
+    lockFs: createInMemoryLockFs(),
+    ...extra,
+  };
+}
+
+describe("pushMergeCommit", () => {
+  test("pushes the new merge commit and returns its sha", async () => {
+    const fake = pushScenario();
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result).toEqual({ outcome: "pushed", newSha: NEW_SHA });
+  });
+
+  test("creates the commit from the verified tree with the PR head and the recorded base as parents", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const argv = callsOf(fake.calls, "commit-tree")[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("commit-tree"), -1)).toEqual([
+      "commit-tree",
+      RESOLVED_TREE,
+      "-p",
+      PR_HEAD,
+      "-p",
+      BASE,
+      "-m",
+    ]);
+  });
+
+  test("the commit message carries the Claude and Generated-By trailers, the latter last", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const argv = callsOf(fake.calls, "commit-tree")[0]?.argv ?? [];
+    expect(argv.at(-1)).toBe(
+      withCommitTrailers(MERGE_COMMIT_MESSAGE, "acme-factory"),
+    );
+  });
+
+  test("the commit message ends with the Generated-By trailer", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const argv = callsOf(fake.calls, "commit-tree")[0]?.argv ?? [];
+    expect(argv.at(-1)?.split("\n").at(-1)).toBe(
+      "Generated-By: Software Factory (acme-factory)",
+    );
+  });
+
+  test("the commit uses the given identity as author and committer", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const env = callsOf(fake.calls, "commit-tree")[0]?.options?.env;
+    expect([env?.GIT_AUTHOR_EMAIL, env?.GIT_COMMITTER_EMAIL]).toEqual([
+      AUTHOR.email,
+      AUTHOR.email,
+    ]);
+  });
+
+  test("pushes the new sha, not HEAD, to the branch", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const argv = callsOf(fake.calls, "push")[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("push"))).toEqual([
+      "push",
+      "origin",
+      "--",
+      `${NEW_SHA}:refs/heads/fix/branch`,
+    ]);
+  });
+
+  test("every git call carries --literal-pathspecs", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const without = fake.calls.filter(
+      (call) => !call.argv.includes("--literal-pathspecs"),
+    );
+    expect(without).toEqual([]);
+  });
+
+  test("passes the token only to fetch, ls-remote and push", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const withToken = new Set(
+      fake.calls
+        .filter((call) => call.options?.env?.GH_TOKEN === "gh-secret")
+        .map((call) => subcommandOf(call.argv)),
+    );
+    expect([...withToken].sort()).toEqual(["fetch", "ls-remote", "push"]);
+  });
+
+  test("stages only the conflicted paths", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const argv = callsOf(fake.calls, "add")[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("add"))).toEqual(["add", "--", "src/a.ts"]);
+  });
+
+  test("returns head_changed when the remote branch moved", async () => {
+    const fake = pushScenario({ "show-ref": () => ok(`${NEWER_BASE}\n`) });
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result).toEqual({ outcome: "head_changed", currentSha: NEWER_BASE });
+  });
+
+  test("does not stage anything when the remote branch moved", async () => {
+    const fake = pushScenario({ "show-ref": () => ok(`${NEWER_BASE}\n`) });
+    await pushMergeCommit(pushOptions(fake.run));
+    expect(callsOf(fake.calls, "add")).toEqual([]);
+  });
+
+  test("rejects when the local HEAD is not the recorded baseline commit", async () => {
+    const fake = pushScenario({
+      "rev-parse": () => ok(`${NEWER_BASE}\n`),
+    });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toBeInstanceOf(
+      CommitBlockedError,
+    );
+  });
+
+  test("rejects when the first parent of the baseline commit is not the PR head", async () => {
+    const fake = pushScenario({
+      "rev-parse": (argv) =>
+        argv.includes("--verify")
+          ? ok(`${AUTO}\n`)
+          : ok(`${NEWER_BASE}\n${BASE}\n`),
+    });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toBeInstanceOf(
+      CommitBlockedError,
+    );
+  });
+
+  test("rejects when the second parent of the baseline commit is not the recorded base", async () => {
+    const fake = pushScenario({
+      "rev-parse": (argv) =>
+        argv.includes("--verify")
+          ? ok(`${AUTO}\n`)
+          : ok(`${PR_HEAD}\n${NEWER_BASE}\n`),
+    });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toBeInstanceOf(
+      CommitBlockedError,
+    );
+  });
+
+  test("rejects when the staged tree differs from the verified tree", async () => {
+    const fake = pushScenario({ "write-tree": () => ok(`${NEWER_BASE}\n`) });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toBeInstanceOf(
+      CommitBlockedError,
+    );
+  });
+
+  test("does not create a commit when the staged tree differs", async () => {
+    const fake = pushScenario({ "write-tree": () => ok(`${NEWER_BASE}\n`) });
+    await pushMergeCommit(pushOptions(fake.run)).catch(() => undefined);
+    expect(callsOf(fake.calls, "commit-tree")).toEqual([]);
+  });
+
+  test("unstages and rejects with the reasons when inspectStaged finds problems", async () => {
+    const fake = pushScenario();
+    const pending = pushMergeCommit(
+      pushOptions(fake.run, {
+        inspectStaged: async () => ["a staged path matched the secret scan"],
+      }),
+    );
+    await expect(pending).rejects.toThrow(/matched the secret scan/);
+  });
+
+  test("resets the index when inspectStaged finds problems", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(
+      pushOptions(fake.run, { inspectStaged: async () => ["stop"] }),
+    ).catch(() => undefined);
+    expect(callsOf(fake.calls, "reset")).toHaveLength(1);
+  });
+
+  test("resets the index when inspectStaged throws", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(
+      pushOptions(fake.run, {
+        inspectStaged: async () => {
+          throw new Error("scan unavailable");
+        },
+      }),
+    ).catch(() => undefined);
+    expect(callsOf(fake.calls, "reset")).toHaveLength(1);
+  });
+
+  test("returns base_changed when the remote HEAD is another branch", async () => {
+    const fake = pushScenario({
+      "ls-remote": () =>
+        ok(`ref: refs/heads/trunk\tHEAD\n${BASE}\trefs/heads/main\n`),
+    });
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result).toEqual({ outcome: "base_changed" });
+  });
+
+  test("returns base_changed when the recorded base is not an ancestor of the default branch", async () => {
+    const fake = pushScenario({
+      "ls-remote": () =>
+        ok(
+          `ref: refs/heads/main\tHEAD\n${NEWER_BASE}\trefs/heads/main\n${NEWER_BASE}\tHEAD\n`,
+        ),
+      "merge-base": () => fail("", 1),
+    });
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result).toEqual({ outcome: "base_changed" });
+  });
+
+  test("pushes when the default branch moved on but still contains the recorded base", async () => {
+    const fake = pushScenario({
+      "ls-remote": () =>
+        ok(
+          `ref: refs/heads/main\tHEAD\n${NEWER_BASE}\trefs/heads/main\n${NEWER_BASE}\tHEAD\n`,
+        ),
+    });
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result.outcome).toBe("pushed");
+  });
+
+  test("does not create a commit when the base is no longer on the default branch", async () => {
+    const fake = pushScenario({
+      "ls-remote": () =>
+        ok(`ref: refs/heads/trunk\tHEAD\n${BASE}\trefs/heads/main\n`),
+    });
+    await pushMergeCommit(pushOptions(fake.run));
+    expect(callsOf(fake.calls, "commit-tree")).toEqual([]);
+  });
+
+  test("returns head_changed with the refetched sha when the push is not a fast-forward", async () => {
+    let shows = 0;
+    const fake = pushScenario({
+      "show-ref": () => {
+        shows += 1;
+        return ok(`${shows === 1 ? PR_HEAD : NEWER_BASE}\n`);
+      },
+      push: () => fail("! [rejected] a -> a (non-fast-forward)"),
+    });
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result).toEqual({ outcome: "head_changed", currentSha: NEWER_BASE });
+  });
+
+  test("maps a workflow-scope rejection to rejected_workflows", async () => {
+    const fake = pushScenario({
+      push: () =>
+        fail(
+          "! [remote rejected] fix/branch -> fix/branch (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+        ),
+    });
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result).toEqual({ outcome: "rejected_workflows" });
+  });
+
+  test("throws on a remote rejection that is not about workflows", async () => {
+    const fake = pushScenario({
+      push: () =>
+        fail("! [remote rejected] fix/branch -> fix/branch (protected branch)"),
+    });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toThrow(
+      /git push failed/,
+    );
+  });
+
+  test("throws on a permission failure", async () => {
+    const fake = pushScenario({
+      push: () => fail("remote: Permission to acme/widgets.git denied", 128),
+    });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toThrow(
+      /git push failed/,
+    );
+  });
+
+  test("stops before any git call when the .git pointer was replaced", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(
+      pushOptions(fake.run, {
+        pointerFs: {
+          lstat: async () => ({
+            isFile: () => true,
+            isSymbolicLink: () => false,
+          }),
+          readFile: async () => "gitdir: /elsewhere/.git/worktrees/x\n",
+        },
+      }),
+    ).catch(() => undefined);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("rejects a conflicted path that is not a safe repository path", async () => {
+    const fake = pushScenario();
+    await expect(
+      pushMergeCommit(
+        pushOptions(fake.run, { conflictedPaths: [".git/config"] }),
+      ),
+    ).rejects.toThrow(/unsafe conflicted path/);
+  });
+
+  test("rejects when HEAD is on another branch", async () => {
+    const fake = pushScenario({ "symbolic-ref": () => ok("refs/heads/x\n") });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toBeInstanceOf(
+      CommitBlockedError,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 実際のgit
 // ---------------------------------------------------------------------------
 
@@ -646,7 +1015,7 @@ type Fixture = {
   readonly git: (cwd: string, args: readonly string[]) => Promise<string>;
 };
 
-describe("mergeBaseIntoWorktree (real git)", () => {
+describe("merge and push (real git)", () => {
   const roots: string[] = [];
   afterAll(() => {
     for (const root of roots) rmSync(root, { recursive: true, force: true });
@@ -975,6 +1344,364 @@ describe("mergeBaseIntoWorktree (real git)", () => {
     });
     await expect(pending).rejects.toBeInstanceOf(
       WorktreeGitPointerModifiedError,
+    );
+  });
+
+  /** 競合を解いた内容を書き、その索引の木を返す。pushの`add`が同じ内容をステージする。 */
+  async function resolveConflict(
+    fixture: Fixture,
+    path: string,
+    text: string,
+  ): Promise<string> {
+    writeFileSync(join(fixture.worktree, path), text);
+    await fixture.git(fixture.worktree, ["add", "--", path]);
+    const tree = await fixture.git(fixture.worktree, ["write-tree"]);
+    await fixture.git(fixture.worktree, ["reset", "-q"]);
+    return tree;
+  }
+
+  type Merged = Extract<MergeBaseResult, { outcome: "merged" }>;
+
+  async function mergedOf(fixture: Fixture): Promise<Merged> {
+    const result = await mergeOf(fixture);
+    if (result.outcome !== "merged") {
+      throw new Error(`expected a merged result: ${result.outcome}`);
+    }
+    return result;
+  }
+
+  async function pushOf(
+    fixture: Fixture,
+    merged: Merged,
+    expectedTreeSha: string,
+  ) {
+    const pointer = (await readWorktreeGitPointer(fixture.worktree)).content;
+    return pushMergeCommit({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      dir: fixture.worktree,
+      branch: "fix/branch",
+      worktreeGitPointer: pointer,
+      prHeadSha: fixture.prHead,
+      baseSha: merged.baseSha,
+      baseBranch: "main",
+      autoSha: merged.autoSha,
+      expectedTreeSha,
+      conflictedPaths: merged.conflictedPaths,
+      instanceName: "acme-factory",
+      author: AUTHOR,
+      ghToken: "gh-token",
+      home: fixture.home,
+      lockFs: createInMemoryLockFs(),
+    });
+  }
+
+  /** originを別のcloneで進める。 */
+  async function advanceOrigin(
+    fixture: Fixture,
+    branch: string,
+    file: string,
+  ): Promise<void> {
+    const other = join(fixture.root, `other-${file}`);
+    await fixture.git(fixture.root, [
+      "clone",
+      "-q",
+      join(fixture.root, "origin.git"),
+      other,
+    ]);
+    await fixture.git(other, ["checkout", "-q", branch]);
+    writeFileSync(join(other, file), "later\n");
+    await fixture.git(other, ["add", "-A"]);
+    await fixture.git(other, ["commit", "-q", "-m", "later"]);
+    await fixture.git(other, ["push", "-q", "origin", branch]);
+  }
+
+  const RESOLVED = "one\nPR and MAIN\nthree\n";
+
+  async function pushedConflict(): Promise<{
+    readonly fixture: Fixture;
+    readonly tree: string;
+    readonly merged: Merged;
+    readonly newSha: string;
+  }> {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const result = await pushOf(fixture, merged, tree);
+    if (result.outcome !== "pushed") {
+      throw new Error(`expected pushed: ${result.outcome}`);
+    }
+    return { fixture, tree, merged, newSha: result.newSha };
+  }
+
+  test("the remote branch ends at the pushed merge commit", async () => {
+    const { fixture, newSha } = await pushedConflict();
+    const remote = await fixture.git(fixture.repo, [
+      "ls-remote",
+      "origin",
+      "refs/heads/fix/branch",
+    ]);
+    expect(remote.split("\t")[0]).toBe(newSha);
+  });
+
+  test("the pushed commit has the PR head and the base as parents, in that order", async () => {
+    const { fixture, newSha } = await pushedConflict();
+    const parents = await fixture.git(fixture.worktree, [
+      "log",
+      "-1",
+      "--format=%P",
+      newSha,
+    ]);
+    expect(parents).toBe(`${fixture.prHead} ${fixture.baseSha}`);
+  });
+
+  test("the pushed commit has exactly the verified tree", async () => {
+    const { fixture, tree, newSha } = await pushedConflict();
+    const pushedTree = await fixture.git(fixture.worktree, [
+      "rev-parse",
+      `${newSha}^{tree}`,
+    ]);
+    expect(pushedTree).toBe(tree);
+  });
+
+  test("the pushed commit message ends with the factory trailers", async () => {
+    const { fixture, newSha } = await pushedConflict();
+    const message = await fixture.git(fixture.worktree, [
+      "log",
+      "-1",
+      "--format=%B",
+      newSha,
+    ]);
+    expect(message).toBe(
+      withCommitTrailers(MERGE_COMMIT_MESSAGE, "acme-factory"),
+    );
+  });
+
+  test("the baseline commit with the conflict markers does not reach the remote", async () => {
+    const { fixture, merged } = await pushedConflict();
+    const origin = join(fixture.root, "origin.git");
+    const result = await fixture.run(
+      ["git", "cat-file", "-e", merged.autoSha],
+      { cwd: origin },
+    );
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  test("the base branch on the remote is left as it was", async () => {
+    const { fixture } = await pushedConflict();
+    const main = await fixture.git(fixture.repo, [
+      "ls-remote",
+      "origin",
+      "refs/heads/main",
+    ]);
+    expect(main.split("\t")[0]).toBe(fixture.baseSha);
+  });
+
+  test("returns head_changed when someone pushed to the PR branch after the merge", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    await advanceOrigin(fixture, "fix/branch", "late.txt");
+    const result = await pushOf(fixture, merged, tree);
+    expect(result.outcome).toBe("head_changed");
+  });
+
+  test("returns base_changed when the default branch was rewritten away from the recorded base", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const other = join(fixture.root, "other-rewrite");
+    await fixture.git(fixture.root, [
+      "clone",
+      "-q",
+      join(fixture.root, "origin.git"),
+      other,
+    ]);
+    await fixture.git(other, ["reset", "-q", "--hard", "HEAD~1"]);
+    writeFileSync(join(other, "x.txt"), "x\n");
+    await fixture.git(other, ["add", "-A"]);
+    await fixture.git(other, ["commit", "-q", "-m", "rewritten"]);
+    await fixture.git(other, ["push", "-q", "--force", "origin", "main"]);
+    const result = await pushOf(fixture, merged, tree);
+    expect(result.outcome).toBe("base_changed");
+  });
+
+  test("pushes when the default branch moved on after the merge", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    await advanceOrigin(fixture, "main", "later.txt");
+    const result = await pushOf(fixture, merged, tree);
+    expect(result.outcome).toBe("pushed");
+  });
+
+  test("rejects a staged tree that differs from the verified one", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    writeFileSync(join(fixture.worktree, "a.txt"), "tampered\n");
+    await expect(
+      pushOf(fixture, merged, merged.autoTreeSha),
+    ).rejects.toBeInstanceOf(CommitBlockedError);
+  });
+
+  test("an automatic merge pushes the unchanged baseline tree", async () => {
+    const fixture = await setUp({
+      initial: { "a.txt": "a\n", "b.txt": "b\n" },
+      pr: { "a.txt": "a-pr\n" },
+      main: { "b.txt": "b-main\n" },
+    });
+    const merged = await mergedOf(fixture);
+    const result = await pushOf(fixture, merged, merged.autoTreeSha);
+    expect(result.outcome).toBe("pushed");
+  });
+});
+
+describe("listBothSidesChangedPaths (real git)", () => {
+  const roots: string[] = [];
+  afterAll(() => {
+    for (const root of roots) rmSync(root, { recursive: true, force: true });
+  });
+
+  type Step = {
+    readonly branch: string;
+    readonly files: Readonly<Record<string, string | null>>;
+  };
+
+  type Listed = Awaited<ReturnType<typeof listBothSidesChangedPaths>>;
+
+  /**
+   * `steps`の順にmainから分かれたブランチを作る。最後の2つ(PRとbase)をmergeした木で、
+   * 両側が変えたパスを調べる。`extra`があれば、mergeの後に足したファイルも木に入れる。
+   */
+  async function listedFor(
+    steps: readonly Step[],
+    extra: Readonly<Record<string, string>> = {},
+  ): Promise<Listed> {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "both-sides-")));
+    roots.push(dir);
+    const run: CommandRunner = (argv, options) =>
+      runCommand(argv, {
+        ...options,
+        env: { ...options?.env, PATH: process.env.PATH ?? "", HOME: dir },
+      });
+    const git = async (args: readonly string[]): Promise<string> => {
+      const result = await run(
+        [
+          "git",
+          "-c",
+          "user.name=test",
+          "-c",
+          "user.email=test@example.invalid",
+          ...args,
+        ],
+        { cwd: dir },
+      );
+      if (result.exitCode !== 0) {
+        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+    await git(["init", "-q", "-b", "main"]);
+    for (const step of steps) {
+      if (step.branch !== "main") {
+        await git(["checkout", "-q", "-B", step.branch, "main"]);
+      }
+      for (const [path, content] of Object.entries(step.files)) {
+        const full = join(dir, path);
+        if (content === null) {
+          rmSync(full);
+          continue;
+        }
+        mkdirSync(join(full, ".."), { recursive: true });
+        writeFileSync(full, content);
+      }
+      await git(["add", "-A"]);
+      await git(["commit", "-q", "-m", step.branch]);
+    }
+    const prHeadSha = await git(["rev-parse", "pr"]);
+    const baseSha = await git(["rev-parse", "side"]);
+    await git(["checkout", "-q", "pr"]);
+    await git(["merge", "-q", "--no-edit", "side"]);
+    for (const [path, content] of Object.entries(extra)) {
+      writeFileSync(join(dir, path), content);
+    }
+    await git(["add", "-A"]);
+    const treeSha = await git(["write-tree"]);
+    return listBothSidesChangedPaths({
+      run,
+      worktreeDir: dir,
+      prHeadSha,
+      baseSha,
+      treeSha,
+    });
+  }
+
+  const NINE = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+
+  test("a file changed only by the base is not on both sides", async () => {
+    const listed = await listedFor([
+      { branch: "main", files: { "a.txt": "a\n", "b.txt": "b\n" } },
+      { branch: "pr", files: { "a.txt": "a-pr\n" } },
+      { branch: "side", files: { ".github/workflows/ci.yml": "on: push\n" } },
+    ]);
+    expect(listed.bothSides).toEqual([]);
+  });
+
+  test("a file added by the base appears in the head-to-result diff", async () => {
+    const listed = await listedFor([
+      { branch: "main", files: { "a.txt": "a\n" } },
+      { branch: "pr", files: { "a.txt": "a-pr\n" } },
+      { branch: "side", files: { ".github/workflows/ci.yml": "on: push\n" } },
+    ]);
+    expect(listed.headToResult).toContain(".github/workflows/ci.yml");
+  });
+
+  test("a file changed on both sides is on both sides", async () => {
+    const listed = await listedFor([
+      { branch: "main", files: { "a.txt": NINE } },
+      { branch: "pr", files: { "a.txt": NINE.replace("1\n", "1-pr\n") } },
+      { branch: "side", files: { "a.txt": NINE.replace("9\n", "9-main\n") } },
+    ]);
+    expect(listed.bothSides).toEqual(["a.txt"]);
+  });
+
+  test("a file moved by the PR and edited by the base is reported under its new name", async () => {
+    const body = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n";
+    const listed = await listedFor([
+      { branch: "main", files: { "old.ts": body } },
+      { branch: "pr", files: { "old.ts": null, "new.ts": body } },
+      { branch: "side", files: { "old.ts": `${body}l9\n` } },
+    ]);
+    expect(listed.bothSides).toEqual(["new.ts"]);
+  });
+
+  test("a path that exists in neither parent is reported as added on both sides", async () => {
+    const listed = await listedFor(
+      [
+        { branch: "main", files: { "a.txt": "a\n" } },
+        { branch: "pr", files: { "a.txt": "a-pr\n" } },
+        { branch: "side", files: { "b.txt": "b\n" } },
+      ],
+      { "planted.txt": "x\n" },
+    );
+    expect(listed.addedInBoth).toEqual(["planted.txt"]);
+  });
+
+  test("passes --literal-pathspecs to every git call", async () => {
+    const calls: (readonly string[])[] = [];
+    const run: CommandRunner = async (argv) => {
+      calls.push(argv);
+      return ok("");
+    };
+    await listBothSidesChangedPaths({
+      run,
+      worktreeDir: "/repo/wt",
+      prHeadSha: PR_HEAD,
+      baseSha: BASE,
+      treeSha: TREE,
+    });
+    expect(calls.every((argv) => argv.includes("--literal-pathspecs"))).toBe(
+      true,
     );
   });
 });
