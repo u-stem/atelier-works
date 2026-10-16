@@ -1244,6 +1244,40 @@ worktreeの差分から秘密情報を取り除いてから、人が修正する
 
 PR本文に`Closes #123`と書くと、そのIssueの承認済みの要件と照合する。`Fixes`と`Resolves`も使える。照合できれば、レビューと修正のClaudeに要件を渡す。
 
+### 保護パスで止まった回数を数える
+
+保護パスの一覧を見直すときは、一覧の項目が実際に何回当たったかを、次のコマンドで数える。
+一覧の項目を外す根拠は、この集計の結果とする。
+推測では外さない。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec -T -e PGOPTIONS="-c default_transaction_read_only=on" db psql -U postgres -d datatable_db -c "WITH stops AS (SELECT 'pr_fix' AS source, e.work_item_id, e.occurred_at, m[1] AS path FROM factory.work_item_events e CROSS JOIN LATERAL regexp_matches(e.note, 'forbidden path changed: ([^;]+)', 'g') AS m UNION ALL SELECT 'pr_fix_ci', e.work_item_id, e.occurred_at, m[1] FROM factory.work_item_events e CROSS JOIN LATERAL regexp_matches(e.note, 'ci round change not allowed \(protected_path\): ([^;]+)', 'g') AS m UNION ALL SELECT 'implement', r.work_item_id, r.created_at, substr(p.value, length('保護パスを変更: ') + 1) FROM factory.implement_rounds r CROSS JOIN LATERAL jsonb_array_elements_text(r.protected_changes) AS p(value) WHERE p.value LIKE '保護パスを変更: %') SELECT source, path, count(*) AS rounds, count(DISTINCT work_item_id) AS items, max(occurred_at)::date AS last_seen FROM stops GROUP BY source, path ORDER BY items DESC, rounds DESC, source, path"
+```
+
+読み取り専用のセッションで実行するので、書き込みは起きない。
+列の意味は次のとおりである。
+
+| `source` | 数えるもの | 記録の場所 |
+| --- | --- | --- |
+| `pr_fix` | PRの修正が、保護パスの変更のためにpushを止めた回 | `factory.work_item_events`の`note` |
+| `pr_fix_ci` | CIの修正の変更が、保護パスのために拒否された回 | 同上 |
+| `implement` | 実装が、保護パスを変えて検査を省いた回 | `factory.implement_rounds`の`protected_changes` |
+
+`implement`は、止めずに記録する。
+PRはそのまま開くので、数えるのは「確認して欲しい点」に載った回である。
+
+結果の読み方は次のとおりである。
+
+- 行が無い保護パスは、集計の期間に1度も当たっていない。
+  ただし、期間の短さと件数の少なさは、書き換えられても害が無いことの根拠にならない。
+  外すかどうかは、書き換えられたときに何が起きるかで決める。
+- 保持期間(`retention_work_items_days`)を過ぎた作業項目は消える。
+  数えられるのは、残っている期間だけである。
+- 競合の修正が保護パスで止まった回は、パスを記録しないので、このコマンドに現れない。
+  回数だけを見るには、`factory.pr_conflict_checks`の`fix_hold_reason`が`protected_path`の行を数える。
+- 結果の`path`を、`f/factory/lib/protected_paths.ts`と`f/factory/lib/ci_fix_paths.ts`の一覧と照らし、一覧のどの項目に当たったかを決める。
+  1つの項目に複数のパスが当たるので、項目ごとの合計は、人が足す。
+
 ## mainのCIを監視する
 
 `watch_main_ci`が5分ごとに、対象リポジトリの既定のブランチ(main)のGitHub Actionsの結果を、コミット単位で確かめる。
