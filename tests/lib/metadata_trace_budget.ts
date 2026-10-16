@@ -6,8 +6,21 @@
  * `upper`でも偽なら、`upper + 1`を返す。
  */
 export async function minimalPassingLimit(
-  _fits: (limit: number) => Promise<boolean>,
-  _upper: number,
+  fits: (limit: number) => Promise<boolean>,
+  upper: number,
 ): Promise<number> {
-  return 0;
+  if (!(await fits(upper))) {
+    return upper + 1;
+  }
+  let low = 1;
+  let high = upper;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (await fits(middle)) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return low;
 }
