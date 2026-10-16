@@ -4277,6 +4277,8 @@ export type FixRoundKind = "ci" | "conflict";
  * pushしたcommit(`fix_rounds.commit_shas`)に`reviewSha`を含むときに、その回の種類を返す。最新かどうかと状態は問わない。
  * 再レビューの依頼の前に別のレビューが走っても、依頼の後に作業項目が終端へ進んでも、pushしたcommitは変わらないためである。
  * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないのでnullになる。
+ * 同じcommitを複数の回がpushした記録があるときは、新しい回(`fix_rounds.id`が大きいもの)の種類を返す。
+ * 同じcommitを別の種類の回がpushすることは通常は無く、どちらかを優先する理由も無いので、順序だけを決定的にしている。
  * ownerとrepoは小文字で照合する。
  */
 export async function findFixRoundKindToReview(
@@ -4298,6 +4300,7 @@ export async function findFixRoundKindToReview(
         AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
         AND w.pr_number = ${prNumber}::integer
         AND pushed.sha = ${reviewSha}
+      ORDER BY r.id DESC
       LIMIT 1
   `.fetch();
   const row = rows[0];

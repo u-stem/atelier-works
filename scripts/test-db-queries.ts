@@ -6035,6 +6035,46 @@ check(
   (await findFixRoundKindToReview("QCFix", "App", 718, cfReviewed, sql)) ===
     "conflict",
 );
+// 同じcommitを複数の回がpushした記録があっても、結果は新しい回の種類に決まる。
+const cfCiPushedItemId = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    ...CF,
+    issue_number: null,
+    issue_url: null,
+    pr_number: 718,
+    title: null,
+    body: null,
+    status: "rereview_requested",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: "job-7",
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+    ci_check_id: 424299,
+  },
+  sql,
+);
+await insertFixRound(
+  {
+    work_item_id: cfCiPushedItemId,
+    round: 1,
+    trigger_review_ids: [],
+    outcome: "done",
+    replies: [],
+    commit_shas: [cfReviewed],
+  },
+  sql,
+);
+check(
+  "conflict review: a commit that two rounds pushed gets the kind of the later round",
+  (await findFixRoundKindToReview("QCFix", "App", 718, cfReviewed, sql)) ===
+    "ci",
+);
 check(
   "conflict review: a commit that no round pushed is not",
   (await findFixRoundKindToReview("qcfix", "app", 718, "9".repeat(40), sql)) ===

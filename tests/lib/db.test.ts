@@ -6331,10 +6331,16 @@ describe("findFixRoundKindToReview", () => {
     );
   });
 
+  test("picks the round that pushed the commit last when several rounds pushed it", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
+    expect(calls[0]?.text).toMatch(/ORDER BY r\.id DESC\s+LIMIT 1/);
+  });
+
   test("does not depend on whether the pr_fix is the latest", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await findFixRoundKindToReview("acme", "widgets", 12, CI_SHA, sql);
-    expect(calls[0]?.text).not.toContain("ORDER BY");
+    expect(calls[0]?.text).not.toContain("ORDER BY w.");
   });
 
   test("does not depend on the status of the pr_fix", async () => {
