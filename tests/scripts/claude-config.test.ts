@@ -507,6 +507,22 @@ describe("review-loop scaling rules", () => {
     expect(body("implementer")).toContain("## 前提の検証");
   });
 
+  test("has the parent pass the previous round's HEAD", () => {
+    expect(skillText()).toContain("前のラウンドのHEAD");
+  });
+
+  test("makes code-reviewer check the fix commits since the previous round", () => {
+    expect(body("code-reviewer")).toContain(
+      "`git log --reverse --stat <前のラウンドのHEAD>..HEAD`",
+    );
+  });
+
+  test("makes implementer put each fix's test before the fix", () => {
+    expect(body("implementer")).toContain(
+      "修正のラウンドでも、テストを足すコミットを、修正のコミットより前に作る。",
+    );
+  });
+
   test("makes code-reviewer check the commit order of the tests", () => {
     expect(body("code-reviewer")).toContain(
       "git log --reverse --stat origin/main..HEAD",

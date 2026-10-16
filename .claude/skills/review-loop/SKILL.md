@@ -383,6 +383,9 @@ pushは親のセッションが、運用者の確認を経て行う。
   - 変更の種類と、判定の根拠(触るファイル、閾値の数え方と実測の結果)。
     種類を低く見積もっているとレビュアーが判断したときは、根拠を示してblockerとして返す。
     code-reviewerとdesign-reviewerは`[MUST]`、devil-advocateは致命的な反証、security-auditorはHighにする。
+  - 前のラウンドのHEAD。
+    2ラウンド目以降の、code-reviewerに渡す。
+    前のラウンドのレビューの後に足したコミットで、テスト先行を確かめるためである。
   - レビューの範囲(`origin/main...HEAD`)。
     手順7のcode-reviewerだけは、控えたHEADからの範囲を使う。
     レビュアーは、この範囲の`git diff`と`git status --short`で差分と追跡されていないファイルを見る。
