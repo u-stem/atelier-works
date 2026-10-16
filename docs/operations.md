@@ -826,7 +826,7 @@ time find -P /data -xdev "(" -type d -o -links 1 ")" -printf . > /dev/null
 time find -P /data -xdev "(" -type d -o -links 1 ")" -execdir /usr/bin/chown -h --from=0:0 10001:10001 "{}" +
 time chown -R -P -h --from=10001 0:0 -- /data
 time find -P /data ! -type l -execdir /usr/bin/getfacl -s -p -- "{}" +
-time getfacl -R -s -p -- /data
+time getfacl -R -P -s -p -- /data
 time find -P /data -xdev ! -type l -execdir /usr/bin/setfacl -b -k "{}" +
 time find -P /data/links -type l -fprint0 /tmp/links -printf . > /dev/null
 time python3 -c "import os; [os.readlink(l) for l in open(\"/tmp/links\", \"rb\").read().split(b\"\0\")[:-1]]"
@@ -873,7 +873,7 @@ time python3 -c "import os; [os.readlink(l) for l in open(\"/tmp/links\", \"rb\"
 ### 取り戻しのACLの一括確認が頼る挙動を確かめる
 
 取り戻しのACLの確かめは、先に`getfacl -R -P -s -p`の1回で行う。
-終了コードが0で、出力が空のときだけ、ACLが無いとみなす。
+終了コードが0で、標準出力と標準エラーが空のときだけ、ACLが無いとみなす。
 この前提は、workerのイメージの`getfacl`(2.3.2)で、使い捨てのコンテナを使って次のように確かめた。
 
 ```sh
