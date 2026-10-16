@@ -611,6 +611,16 @@ describe("git config isolation", () => {
     expect(local?.options?.env?.GIT_ATTR_NOSYSTEM).toBe("1");
   });
 
+  test("local git does not read info/grafts", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_GRAFT_FILE).toBe("/dev/null");
+  });
+
+  test("network git does not read info/grafts", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_GRAFT_FILE).toBe("/dev/null");
+  });
+
   test("network git does not read the global config", async () => {
     const { network } = await fetchAndConfigCalls();
     expect(network?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");

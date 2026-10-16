@@ -2451,6 +2451,9 @@ Claudeの解消の検査は、衝突ブロックを3つの版から作り直し�
 `.git`ファイルが差し替えられていれば、worktreeでgitを1回も実行せずに止まる。
 
 すべてのgitに`--literal-pathspecs`を付け、ファイル名をpathspecの記法として読ませない。
+環境変数`GIT_GRAFT_FILE`を`/dev/null`にして、`.git/info/grafts`で親を書き換えさせない。
+`GIT_NO_REPLACE_OBJECTS`ではgraftsを止められず、親の照合を偽られるためである。
+gitの2.54で、graftsが効くことと、この指定で無効になることを確かめた。
 `GH_TOKEN`を渡すのは`ls-remote`、fetch、pushだけで、merge、add、commitは持たない環境で動く。
 基準コミットには、競合ファイルだけを`add`する。`add -A`は使わない。
 
@@ -2461,6 +2464,9 @@ Claudeの解消の検査は、衝突ブロックを3つの版から作り直し�
 - ローカルのブランチは、基準コミットを作ってから、pushが済んだ後も、衝突マーカー入りのコミットを指す。
   通常の回の`commitAndPush`は、`requireLocalHeadAtExpected`でローカルのHEADを確かめて止める。
   呼び出し側は、次にworktreeを使うときの`reset --hard`に任せる。
+- mergeが始まった後に例外が出ると、`merge --abort`をベストエフォートで行う。
+  取り消しが失敗したworktreeは、mergeの途中のまま残りうる。
+  呼び出し側は、次にworktreeを使うときの`reset --hard`と`clean -fd`で戻す。
 - 署名の変更や、自動でmergeされた箇所に足した呼び出しの食い違いは、検査では見つからない。
   検査コマンドの失敗として現れる。
 - 新しく足した行の検査は、JavaScriptとTypeScriptの記法だけを見る。

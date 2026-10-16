@@ -452,6 +452,30 @@ describe("checkConflictResolution search budget", () => {
   });
 });
 
+describe("checkConflictResolution segment limit", () => {
+  /** 衝突ブロックが多すぎて、重ねる再帰が深くなる入力。 */
+  function manyBlocksFile(blockCount: number): ConflictFileInput {
+    const blocks = Array.from({ length: blockCount }, () =>
+      block("o", "b", "t"),
+    );
+    return fileOf({
+      ...STANDARD,
+      reconstructed: `${blocks.join("\nc\n")}\nend\n`,
+      result: "end\n",
+    });
+  }
+
+  test("stops with too_large when the reconstruction has too many segments", () => {
+    expect(codesOf(check([manyBlocksFile(1200)]))).toEqual(["too_large"]);
+  });
+
+  test("a file just under the limit still reaches the alignment", () => {
+    expect(codesOf(check([manyBlocksFile(100)]))).toEqual([
+      "not_in_conflict_block",
+    ]);
+  });
+});
+
 describe("stripConflictMarkerLabels", () => {
   test("drops the label of each marker line", () => {
     const text =

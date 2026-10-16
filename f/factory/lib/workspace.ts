@@ -31,7 +31,12 @@ import {
   stripConflictMarkerLabels,
 } from "./conflict_fix_round.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
-import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import {
+  escapeReasonSeparator,
+  type Logger,
+  logger,
+  maskSecrets,
+} from "./log.ts";
 import type { ChangedPathStatus } from "./protected_paths.ts";
 import {
   assertBranchName,
@@ -589,6 +594,10 @@ export function localGitEnv(
     // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
     // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
     GIT_NO_REPLACE_OBJECTS: "1",
+    // `.git/info/grafts`で、コミットの親を書き換えさせない。`GIT_NO_REPLACE_OBJECTS`では止まらない。
+    // 親の照合(`rev-parse <sha>^1`、`merge-base --is-ancestor`)が、検査コマンドが書いたgraftsに偽られるため。
+    // gitの2.54で、graftsが効くことと、この指定で無効になることを確かめた。
+    GIT_GRAFT_FILE: "/dev/null",
     // システムとグローバル(`$HOME/.gitconfig`、XDGの`git/config`)の設定と、システムのgitattributesを読まない。
     // 実行する環境ごとに値が違い、リポジトリの設定と検証の前提が食い違うため。
     // コミットのauthorは`GIT_AUTHOR_*`、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
@@ -3832,6 +3841,12 @@ export const MAX_CONFLICTED_PATHS = 10;
 /** 競合ファイルを読むときの、1つの内容の大きさの上限(バイト)。超えたら人に渡す。 */
 const CONFLICT_BLOB_MAX_BYTES = 2 * 1024 * 1024;
 
+/**
+ * 衝突マーカー入りの本文を読むときの上限(バイト)。3つの版が混ざるので、1つの版の上限より大きくする。
+ * gitが書いて`add`した本文と、`merge-file`で作り直した本文の両方に、同じ上限を使う。
+ */
+const CONFLICT_TEXT_MAX_BYTES = 2 * CONFLICT_BLOB_MAX_BYTES;
+
 /** 通常のファイルのモード。実行権限の有無だけが違う。 */
 const REGULAR_FILE_MODES = ["100644", "100755"];
 
@@ -4034,6 +4049,7 @@ export type UnresolvableReason =
   | "too_large"
   | "attributes"
   | "marker_like_line"
+  | "no_conflict_block"
   | "reconstruction_mismatch";
 
 /**
@@ -4045,6 +4061,10 @@ export type UnresolvableReason =
  *   誰かがpushした場合に起きる。`currentSha`はworktreeのHEADである。何も変えていない。
  * - `unresolvable`: 競合回で直せない。mergeは取り消し、worktreeは元に戻してある。
  *   `reconstruction_mismatch`は、3つの版から作り直した衝突ブロックが、gitがworktreeに書いたブロックと食い違ったときである。
+ *   `no_conflict_block`は、3つの版がそろっているのに、作り直した本文に衝突ブロックが無いときである。
+ *
+ * `merged`の`conflictedPaths`が空のことがある。GitHubが競合と判定したのに、ローカルのmergeがきれいに終わった場合である。
+ * この関数は基準コミットを作ってそのまま`merged`で返し、扱いは呼び出し側が決める。
  */
 export type MergeBaseResult =
   | {
@@ -4067,11 +4087,22 @@ export type MergeBaseIntoWorktreeOptions = MergeWorktreeOptions & {
   readonly baseBranch: string;
   /** 基準コミットのauthorとcommitter。ローカルだけに残る。 */
   readonly author: GitIdentity;
+  /** `merge --abort`の失敗など、続行できる失敗の記録先。既定は`workspace`の構造化ロガー。 */
+  readonly log?: Logger;
 };
 
 /** 競合ファイルの`numstat -z`に、バイナリ(`-\t-`)があるか。 */
 function numstatHasBinary(stdout: string): boolean {
   return stdout.split("\u0000").some((record) => record.startsWith("-\t-\t"));
+}
+
+/** gitがバイナリと判定するときに調べる先頭のバイト数(`buffer_is_binary`と同じ)。 */
+const BINARY_PROBE_BYTES = 8000;
+
+/** 先頭の8000バイトにNULバイトがあるか。gitがファイルをバイナリと判定する規則と同じである。 */
+function looksBinary(text: string): boolean {
+  const head = new TextEncoder().encode(text.slice(0, BINARY_PROBE_BYTES));
+  return head.subarray(0, BINARY_PROBE_BYTES).includes(0);
 }
 
 /** `git check-attr -a -z`の出力に、`BLOCKED_ATTRIBUTES`の属性があるか。 */
@@ -4085,8 +4116,8 @@ function hasBlockedAttribute(stdout: string): boolean {
 
 /**
  * 競合を、競合回で直せるかを調べる。直せないときは理由を返し、直せるときは`null`を返す。
- * 理由の優先順位は、数、パスの形、3つの版の有無とモード、バイナリ、属性、
- * 版ごとの大きさとマーカー風の行(共通の祖先、PRのhead、baseの順)である。
+ * 理由の優先順位は、数、パスの形、3つの版の有無とモード、PRのheadとbaseの差のバイナリ判定、属性、
+ * 版ごとの大きさ、NULバイト(バイナリ)、マーカー風の行(共通の祖先、PRのhead、baseの順)である。
  * 作り直した本文との照合(`reconstruction_mismatch`)は、`add`の後に別に行う。
  */
 async function unresolvableReasonOf(
@@ -4146,6 +4177,7 @@ async function unresolvableReasonOf(
         { maxOutputBytes: CONFLICT_BLOB_MAX_BYTES },
       );
       if (isCappedOutput(blob.stdout)) return "too_large";
+      if (looksBinary(blob.stdout)) return "binary";
       if (hasConflictMarkerLikeLine(blob.stdout)) return "marker_like_line";
     }
   }
@@ -4178,21 +4210,26 @@ const EARLY_CHECK_NONCE = "check000";
  * gitが書いたブロックと食い違うと、Claudeが見た境目と検査の境目がずれる。
  * ずれは、Claudeを起動する前に見つけて止める。
  * 比べる相手は、作業ファイルではなく`add`した後の索引のblobである。基準コミットに入る内容そのものになる。
+ *
+ * 結果は、すべて同じなら`match`、本文が上限を超えれば`too_large`、
+ * 作り直した本文に衝突ブロックが無ければ`no_conflict_block`、違えば`reconstruction_mismatch`である。
  */
-async function reconstructionsMatch(
+async function checkReconstructions(
   ctx: MergeGitContext,
   opts: MergeBaseIntoWorktreeOptions,
   blobs: readonly ConflictBlobs[],
-): Promise<boolean> {
+): Promise<
+  "match" | "too_large" | "no_conflict_block" | "reconstruction_mismatch"
+> {
   for (const entry of blobs) {
     const staged = await mergeGit(
       ctx,
       "git cat-file blob (staged)",
       ["cat-file", "blob", "--", `:0:${entry.path}`],
-      { maxOutputBytes: CONFLICT_BLOB_MAX_BYTES },
+      { maxOutputBytes: CONFLICT_TEXT_MAX_BYTES },
     );
-    if (isCappedOutput(staged.stdout)) return false;
-    const rebuilt = await reconstructConflictText({
+    if (isCappedOutput(staged.stdout)) return "too_large";
+    const rebuilt = await runMergeFile({
       run: opts.run,
       worktreeDir: opts.dir,
       blobs: entry,
@@ -4200,14 +4237,35 @@ async function reconstructionsMatch(
       ...(opts.home !== undefined ? { home: opts.home } : {}),
       ...(opts.path !== undefined ? { path: opts.path } : {}),
     });
+    if (rebuilt.capped) return "too_large";
+    if (!/^<{7} /m.test(rebuilt.text)) return "no_conflict_block";
     if (
-      stripConflictMarkerLabels(rebuilt) !==
+      stripConflictMarkerLabels(rebuilt.text) !==
       stripConflictMarkerLabels(staged.stdout)
     ) {
-      return false;
+      return "reconstruction_mismatch";
     }
   }
-  return true;
+  return "match";
+}
+
+/**
+ * mergeが始まった後の例外の経路で、`merge --abort`をベストエフォートで実行する。
+ * 失敗しても例外は投げず、警告として記録する。呼び出し側が、元の例外を優先して投げ直すためである。
+ * 取り消せなかったworktreeは、次に使うときの`reset --hard`と`clean -fd`で戻る前提である。
+ */
+async function abortMergeBestEffort(
+  ctx: MergeGitContext,
+  log: Logger,
+): Promise<void> {
+  try {
+    await mergeGit(ctx, "git merge --abort", ["merge", "--abort"]);
+  } catch (abortError) {
+    log.warn("git merge --abort failed after an error", {
+      error:
+        abortError instanceof Error ? abortError.message : String(abortError),
+    });
+  }
 }
 
 /**
@@ -4229,6 +4287,12 @@ async function reconstructionsMatch(
  *
  * HEADがPRのheadと違うときは、何も変えずに`head_changed`を返す。
  *
+ * mergeが始まった後に例外が出たときは、`merge --abort`をベストエフォートで実行してから、元の例外を投げ直す。
+ * 取り消しが失敗したときは警告を記録し、元の例外を優先する。取り消せなかったworktreeは、
+ * mergeの途中のまま(MERGE_HEADと`add`した索引が残る)になりうる。呼び出し側は、
+ * 次にworktreeを使うときの`reset --hard`と`clean -fd`が状態を戻す前提で、この例外を扱う。
+ * 基準コミットを作った後の例外では、mergeは終わっているので取り消さない。基準コミットとローカルのブランチの移動が残る。
+ *
  * mergeは`--`の後にshaを置く(gitの2.54で、`--`を付けても付けなくても同じに動くことを確かめた)。
  * mergeとaddとcommitは`GH_TOKEN`を持たない環境で動き、`ls-remote`とfetchだけが持つ。
  * 競合ファイルが`merge`などの属性を持つときは、変換や外部のドライバが働くので直さない。
@@ -4248,6 +4312,7 @@ export async function mergeBaseIntoWorktree(
     ...(opts.now !== undefined ? { now: opts.now } : {}),
     fn: async (): Promise<MergeBaseResult> => {
       const ctx = mergeGitContext(opts);
+      const log = opts.log ?? logger("workspace");
       await enterConflictWorktree(opts, ctx);
 
       // `removeIgnoredFiles`と同じ操作だが、この関数のgitはすべて`--literal-pathspecs`を付けるので、`mergeGit`で実行する。
@@ -4321,88 +4386,102 @@ export async function mergeBaseIntoWorktree(
         ],
         { okExitCodes: [0, 1], env: { GIT_MERGE_AUTOEDIT: "no" } },
       );
-      const unmerged = parseUnmerged(
-        (await mergeGit(ctx, "git ls-files -u", ["ls-files", "-u", "-z"]))
-          .stdout,
-      );
-      if (merge.exitCode !== 0 && unmerged.size === 0) {
-        throw new Error(
-          "git merge reported a conflict but no unmerged paths remain",
-        );
-      }
-
-      const reason = await unresolvableReasonOf(
-        ctx,
-        opts.prHeadSha,
-        baseSha,
-        unmerged,
-      );
-      if (reason !== null) {
+      // ここからmergeが始まっている。例外で抜けるときは、MERGE_HEADと`add`した索引を残さないよう、
+      // 取り消してから投げ直す。
+      let mergeInProgress = true;
+      const abortMerge = async (): Promise<void> => {
         await mergeGit(ctx, "git merge --abort", ["merge", "--abort"]);
-        return { outcome: "unresolvable", reason };
-      }
-
-      const conflictedPaths = [...unmerged.keys()];
-      const conflictBlobs = conflictedPaths.map((path) =>
-        blobsOf(path, unmerged.get(path) ?? []),
-      );
-      if (conflictedPaths.length > 0) {
-        await mergeGit(ctx, "git add", ["add", "--", ...conflictedPaths]);
-      }
-      if (!(await reconstructionsMatch(ctx, opts, conflictBlobs))) {
-        await mergeGit(ctx, "git merge --abort", ["merge", "--abort"]);
-        return { outcome: "unresolvable", reason: "reconstruction_mismatch" };
-      }
-      await mergeGit(
-        ctx,
-        "git commit",
-        ["commit", "-m", BASELINE_COMMIT_MESSAGE],
-        { env: commitIdentityEnv(opts.author) },
-      );
-      const revisions = (
-        await mergeGit(ctx, "git rev-parse (baseline commit)", [
-          "rev-parse",
-          "HEAD",
-          "HEAD^1",
-          "HEAD^2",
-          "HEAD^{tree}",
-        ])
-      ).stdout
-        .trim()
-        .split("\n");
-      const [
-        autoSha = "",
-        firstParent = "",
-        secondParent = "",
-        autoTreeSha = "",
-      ] = revisions;
-      if (firstParent !== opts.prHeadSha || secondParent !== baseSha) {
-        throw new CommitBlockedError(
-          "the baseline commit does not have the PR head and the base as its parents",
-        );
-      }
-      assertSha(autoSha);
-      assertSha(autoTreeSha);
-      const untracked = await mergeGit(ctx, "git ls-files -o", [
-        "ls-files",
-        "-o",
-        "--exclude-standard",
-        "-z",
-      ]);
-      if (untracked.stdout !== "") {
-        throw new CommitBlockedError(
-          "untracked files remain after the baseline commit",
-        );
-      }
-
-      return {
-        outcome: "merged",
-        baseSha,
-        autoSha,
-        autoTreeSha,
-        conflictedPaths,
-        conflictBlobs,
+        mergeInProgress = false;
       };
+      try {
+        const unmerged = parseUnmerged(
+          (await mergeGit(ctx, "git ls-files -u", ["ls-files", "-u", "-z"]))
+            .stdout,
+        );
+        if (merge.exitCode !== 0 && unmerged.size === 0) {
+          throw new Error(
+            "git merge reported a conflict but no unmerged paths remain",
+          );
+        }
+
+        const reason = await unresolvableReasonOf(
+          ctx,
+          opts.prHeadSha,
+          baseSha,
+          unmerged,
+        );
+        if (reason !== null) {
+          await abortMerge();
+          return { outcome: "unresolvable", reason };
+        }
+
+        const conflictedPaths = [...unmerged.keys()];
+        const conflictBlobs = conflictedPaths.map((path) =>
+          blobsOf(path, unmerged.get(path) ?? []),
+        );
+        if (conflictedPaths.length > 0) {
+          await mergeGit(ctx, "git add", ["add", "--", ...conflictedPaths]);
+        }
+        const check = await checkReconstructions(ctx, opts, conflictBlobs);
+        if (check !== "match") {
+          await abortMerge();
+          return { outcome: "unresolvable", reason: check };
+        }
+        await mergeGit(
+          ctx,
+          "git commit",
+          ["commit", "-m", BASELINE_COMMIT_MESSAGE],
+          { env: commitIdentityEnv(opts.author) },
+        );
+        mergeInProgress = false;
+        const revisions = (
+          await mergeGit(ctx, "git rev-parse (baseline commit)", [
+            "rev-parse",
+            "HEAD",
+            "HEAD^1",
+            "HEAD^2",
+            "HEAD^{tree}",
+          ])
+        ).stdout
+          .trim()
+          .split("\n");
+        const [
+          autoSha = "",
+          firstParent = "",
+          secondParent = "",
+          autoTreeSha = "",
+        ] = revisions;
+        if (firstParent !== opts.prHeadSha || secondParent !== baseSha) {
+          throw new CommitBlockedError(
+            "the baseline commit does not have the PR head and the base as its parents",
+          );
+        }
+        assertSha(autoSha);
+        assertSha(autoTreeSha);
+        const untracked = await mergeGit(ctx, "git ls-files -o", [
+          "ls-files",
+          "-o",
+          "--exclude-standard",
+          "-z",
+        ]);
+        if (untracked.stdout !== "") {
+          throw new CommitBlockedError(
+            "untracked files remain after the baseline commit",
+          );
+        }
+
+        return {
+          outcome: "merged",
+          baseSha,
+          autoSha,
+          autoTreeSha,
+          conflictedPaths,
+          conflictBlobs,
+        };
+      } catch (err) {
+        if (mergeInProgress) await abortMergeBestEffort(ctx, log);
+        throw err;
+      }
     },
   });
 }
@@ -4836,24 +4915,16 @@ export async function readTreeFileText(opts: {
 }
 
 /**
- * 競合ファイルの3つの版から、nonce入りのラベルの衝突マーカー付きの本文を作り直して返す。
- * `git merge-file --object-id -p --diff3 --diff-algorithm=histogram`をblobのshaで実行し、
- * 作業ファイルとファイルシステムは読まない。
- * `--diff-algorithm=histogram`は必須である。`git merge`(merge-ort)は内容のmergeを常にhistogramで行うが、
- * `merge-file`の既定はMyersで、`}`や空行が繰り返す入力では衝突ブロックの境目が食い違う。
- * `--diff-algorithm`は`merge-file`のgit 2.44以降の指定で、`--object-id`はgit 2.43以降の指定である。
- * 食い違いは、`mergeBaseIntoWorktree`が`add`した本文との照合で検出する。
- * `merge-file`は競合の数を終了コードで返すので、0から127までを成功として扱い、それ以上は例外にする。
- * `checkConflictResolution`の`reconstructed`に渡す。
+ * `merge-file`の実行の結果。`capped`は、出力が`CONFLICT_TEXT_MAX_BYTES`を超えて切れたことを表す。
  */
-export async function reconstructConflictText(opts: {
+async function runMergeFile(opts: {
   readonly run: CommandRunner;
   readonly worktreeDir: string;
   readonly blobs: ConflictBlobs;
   readonly nonce: string;
   readonly home?: string;
   readonly path?: string;
-}): Promise<string> {
+}): Promise<{ readonly text: string; readonly capped: boolean }> {
   const labels = conflictMarkerLabels(opts.nonce);
   const { oursBlob, baseBlob, theirsBlob } = opts.blobs;
   for (const sha of [oursBlob, baseBlob, theirsBlob]) assertSha(sha);
@@ -4879,13 +4950,36 @@ export async function reconstructConflictText(opts: {
     ],
     {
       okExitCodes: Array.from({ length: 128 }, (_, code) => code),
-      maxOutputBytes: 2 * CONFLICT_BLOB_MAX_BYTES,
+      maxOutputBytes: CONFLICT_TEXT_MAX_BYTES,
     },
   );
-  if (isCappedOutput(result.stdout)) {
+  return { text: result.stdout, capped: isCappedOutput(result.stdout) };
+}
+
+/**
+ * 競合ファイルの3つの版から、nonce入りのラベルの衝突マーカー付きの本文を作り直して返す。
+ * `git merge-file --object-id -p --diff3 --diff-algorithm=histogram`をblobのshaで実行し、
+ * 作業ファイルとファイルシステムは読まない。
+ * `--diff-algorithm=histogram`は必須である。`git merge`(merge-ort)は内容のmergeを常にhistogramで行うが、
+ * `merge-file`の既定はMyersで、`}`や空行が繰り返す入力では衝突ブロックの境目が食い違う。
+ * `--diff-algorithm`は`merge-file`のgit 2.44以降の指定で、`--object-id`はgit 2.43以降の指定である。
+ * 食い違いは、`mergeBaseIntoWorktree`が`add`した本文との照合で検出する。
+ * `merge-file`は競合の数を終了コードで返すので、0から127までを成功として扱い、それ以上は例外にする。
+ * `checkConflictResolution`の`reconstructed`に渡す。
+ */
+export async function reconstructConflictText(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly blobs: ConflictBlobs;
+  readonly nonce: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  const result = await runMergeFile(opts);
+  if (result.capped) {
     throw new Error(`${opts.blobs.path} is too large to reconstruct`);
   }
-  return result.stdout;
+  return result.text;
 }
 
 /** `listBothSidesChangedPaths`の結果。パスはすべてリポジトリのルートからの相対パスである。 */

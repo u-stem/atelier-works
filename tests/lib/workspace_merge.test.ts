@@ -79,6 +79,12 @@ function subcommandOf(argv: readonly string[]): string {
 
 type Responder = (argv: readonly string[]) => CommandResult;
 
+/** gitがworktreeに書いた衝突ブロック(ラベルはgit自身のもの)。 */
+const GIT_WRITTEN_TEXT = `a\n<<<<<<< HEAD\nB1\n||||||| abc1234\nb\n=======\nB2\n>>>>>>> ${BASE}\nc\n`;
+/** `merge-file`で作り直した衝突ブロック(ラベルは`-L`のもの)。 */
+const REBUILT_TEXT =
+  "a\n<<<<<<< ours-check000\nB1\n||||||| base-check000\nb\n=======\nB2\n>>>>>>> theirs-check000\nc\n";
+
 function unmerged(paths: readonly string[]): string {
   return paths
     .map(
@@ -121,8 +127,11 @@ function scenario(over: Record<string, Responder> = {}): {
       argv.includes("-u") ? ok(unmerged(["src/a.ts"])) : ok(""),
     diff: () => ok("1\t1\tsrc/a.ts\0"),
     "check-attr": () => ok(""),
-    "cat-file": () => ok("const a = 1;\n"),
-    "merge-file": () => ok("const a = 1;\n"),
+    "cat-file": (argv) =>
+      argv.some((word) => word.startsWith(":0:"))
+        ? ok(GIT_WRITTEN_TEXT)
+        : ok("const a = 1;\n"),
+    "merge-file": () => ({ ...ok(REBUILT_TEXT), exitCode: 1 }),
     add: () => ok(),
     commit: () => {
       committed = true;
@@ -531,6 +540,13 @@ describe("mergeBaseIntoWorktree unresolvable", () => {
   });
 });
 
+const DIFFERENT_REBUILT: CommandResult = {
+  ...ok(
+    "a\n<<<<<<< ours-check000\nZZ\n||||||| base-check000\nb\n=======\nB2\n>>>>>>> theirs-check000\nc\n",
+  ),
+  exitCode: 1,
+};
+
 describe("mergeBaseIntoWorktree reconstruction check", () => {
   test("reconstructs each conflicted file with the histogram diff algorithm", async () => {
     const fake = scenario();
@@ -549,9 +565,7 @@ describe("mergeBaseIntoWorktree reconstruction check", () => {
   });
 
   test("stops when the reconstruction differs from the text git wrote", async () => {
-    const fake = scenario({
-      "merge-file": () => ok("a different reconstruction\n"),
-    });
+    const fake = scenario({ "merge-file": () => DIFFERENT_REBUILT });
     const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
     expect(result).toEqual({
       outcome: "unresolvable",
@@ -559,15 +573,19 @@ describe("mergeBaseIntoWorktree reconstruction check", () => {
     });
   });
 
-  test("aborts the merge and creates no commit when the reconstruction differs", async () => {
-    const fake = scenario({
-      "merge-file": () => ok("a different reconstruction\n"),
-    });
+  test("aborts the merge when the reconstruction differs", async () => {
+    const fake = scenario({ "merge-file": () => DIFFERENT_REBUILT });
     await mergeBaseIntoWorktree(mergeOptions(fake.run));
     const aborted = callsOf(fake.calls, "merge").some((call) =>
       call.argv.includes("--abort"),
     );
-    expect([aborted, callsOf(fake.calls, "commit")]).toEqual([true, []]);
+    expect(aborted).toBe(true);
+  });
+
+  test("creates no commit when the reconstruction differs", async () => {
+    const fake = scenario({ "merge-file": () => DIFFERENT_REBUILT });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(callsOf(fake.calls, "commit")).toEqual([]);
   });
 
   test("ignores the labels of the marker lines when comparing", async () => {
@@ -605,6 +623,206 @@ describe("mergeBaseIntoWorktree reconstruction check", () => {
     const fake = scenario({ merge: () => ok(), "ls-files": () => ok("") });
     await mergeBaseIntoWorktree(mergeOptions(fake.run));
     expect(callsOf(fake.calls, "merge-file")).toEqual([]);
+  });
+});
+
+describe("mergeBaseIntoWorktree after the merge started", () => {
+  function abortsOf(calls: readonly FakeCall[]): readonly FakeCall[] {
+    return callsOf(calls, "merge").filter((call) =>
+      call.argv.includes("--abort"),
+    );
+  }
+
+  test("aborts the merge when the reconstruction throws", async () => {
+    const fake = scenario({
+      "merge-file": () => fail("error: Cannot merge binary files", 255),
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run)).catch(() => undefined);
+    expect(abortsOf(fake.calls)).toHaveLength(1);
+  });
+
+  test("throws the original error when the reconstruction throws", async () => {
+    const fake = scenario({
+      "merge-file": () => fail("error: Cannot merge binary files", 255),
+    });
+    await expect(mergeBaseIntoWorktree(mergeOptions(fake.run))).rejects.toThrow(
+      /Cannot merge binary files/,
+    );
+  });
+
+  test.each(["check-attr", "add", "commit", "diff"])(
+    "aborts the merge when git %s fails",
+    async (subcommand) => {
+      const fake = scenario({ [subcommand]: () => fail("fatal: broken", 128) });
+      await mergeBaseIntoWorktree(mergeOptions(fake.run)).catch(
+        () => undefined,
+      );
+      expect(abortsOf(fake.calls)).toHaveLength(1);
+    },
+  );
+
+  test("aborts the merge when reading the staged blob fails", async () => {
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(":0:src/a.ts")
+          ? fail("fatal: unreadable", 128)
+          : ok("const a = 1;\n"),
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run)).catch(() => undefined);
+    expect(abortsOf(fake.calls)).toHaveLength(1);
+  });
+
+  test("throws the original error even when the abort fails", async () => {
+    const fake = scenario({
+      "merge-file": () => fail("error: Cannot merge binary files", 255),
+      merge: (argv) =>
+        argv.includes("--abort")
+          ? fail("fatal: There is no merge to abort", 128)
+          : fail("CONFLICT (content)", 1),
+    });
+    await expect(mergeBaseIntoWorktree(mergeOptions(fake.run))).rejects.toThrow(
+      /Cannot merge binary files/,
+    );
+  });
+
+  test("records the failure of the abort in the log", async () => {
+    const warnings: string[] = [];
+    const fake = scenario({
+      "merge-file": () => fail("error: Cannot merge binary files", 255),
+      merge: (argv) =>
+        argv.includes("--abort")
+          ? fail("fatal: There is no merge to abort", 128)
+          : fail("CONFLICT (content)", 1),
+    });
+    await mergeBaseIntoWorktree(
+      mergeOptions(fake.run, {
+        log: {
+          info: () => undefined,
+          warn: (message, fields) =>
+            warnings.push(`${message} ${JSON.stringify(fields)}`),
+          error: () => undefined,
+        },
+      }),
+    ).catch(() => undefined);
+    expect(warnings.join("\n")).toContain("no merge to abort");
+  });
+
+  test("does not abort after the baseline commit exists", async () => {
+    const fake = scenario({
+      "rev-parse": (argv) => {
+        if (argv.includes("--verify")) {
+          return argv.includes("HEAD") ? ok(`${PR_HEAD}\n`) : ok(`${BASE}\n`);
+        }
+        return ok(`${AUTO}\n${BASE}\n${PR_HEAD}\n${TREE}\n`);
+      },
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run)).catch(() => undefined);
+    expect(abortsOf(fake.calls)).toEqual([]);
+  });
+
+  test("does not abort when git merge itself fails before starting", async () => {
+    const fake = scenario({
+      merge: () => fail("fatal: refusing to merge unrelated histories", 128),
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run)).catch(() => undefined);
+    expect(abortsOf(fake.calls)).toEqual([]);
+  });
+});
+
+describe("mergeBaseIntoWorktree binary and size checks", () => {
+  const NUL_TEXT = "a\u0000b\n";
+
+  test.each([
+    ["the common ancestor", BLOB_BASE],
+    ["the PR head side", BLOB_OURS],
+    ["the base side", BLOB_THEIRS],
+  ])("a NUL byte in %s is binary", async (_name, blob) => {
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(blob) ? ok(NUL_TEXT) : ok("const a = 1;\n"),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result).toEqual({ outcome: "unresolvable", reason: "binary" });
+  });
+
+  test("a NUL byte after the first 8000 bytes is not binary", async () => {
+    const late = `${"x".repeat(8000)}\u0000\n`;
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(":0:src/a.ts") ? ok(GIT_WRITTEN_TEXT) : ok(late),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result.outcome).toBe("merged");
+  });
+
+  test("aborts the merge for a binary common ancestor", async () => {
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(BLOB_BASE) ? ok(NUL_TEXT) : ok("x\n"),
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const aborted = callsOf(fake.calls, "merge").some((call) =>
+      call.argv.includes("--abort"),
+    );
+    expect(aborted).toBe(true);
+  });
+
+  test("a staged text larger than the cap is too_large, not a mismatch", async () => {
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(":0:src/a.ts") ? ok(omittedMarker(10)) : ok("x\n"),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result).toEqual({ outcome: "unresolvable", reason: "too_large" });
+  });
+
+  test("a reconstruction larger than the cap is too_large, not a mismatch", async () => {
+    const fake = scenario({
+      "merge-file": () => ({ ...ok(omittedMarker(10)), exitCode: 1 }),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result).toEqual({ outcome: "unresolvable", reason: "too_large" });
+  });
+
+  test("aborts the merge when the staged text is too large", async () => {
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(":0:src/a.ts") ? ok(omittedMarker(10)) : ok("x\n"),
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const aborted = callsOf(fake.calls, "merge").some((call) =>
+      call.argv.includes("--abort"),
+    );
+    expect(aborted).toBe(true);
+  });
+
+  test("reads the staged text and the reconstruction with the same cap", async () => {
+    const fake = scenario();
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const stagedCap = callsOf(fake.calls, "cat-file").find((call) =>
+      call.argv.includes(":0:src/a.ts"),
+    )?.options?.maxOutputBytes;
+    const rebuiltCap = callsOf(fake.calls, "merge-file")[0]?.options
+      ?.maxOutputBytes;
+    expect(stagedCap).toBe(rebuiltCap);
+  });
+
+  test("a path git calls conflicted but whose reconstruction has no block is unresolvable", async () => {
+    const fake = scenario({ "merge-file": () => ok("a\nb\nc\n") });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result).toEqual({
+      outcome: "unresolvable",
+      reason: "no_conflict_block",
+    });
+  });
+
+  test("aborts the merge when the reconstruction has no block", async () => {
+    const fake = scenario({ "merge-file": () => ok("a\nb\nc\n") });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const aborted = callsOf(fake.calls, "merge").some((call) =>
+      call.argv.includes("--abort"),
+    );
+    expect(aborted).toBe(true);
   });
 });
 
@@ -695,16 +913,22 @@ describe("mergeBaseIntoWorktree guards", () => {
     expect(result).toEqual({ outcome: "head_changed", currentSha: other });
   });
 
-  test("does not fetch or merge when the local HEAD is not the PR head", async () => {
+  test("does not fetch when the local HEAD is not the PR head", async () => {
     const fake = scenario({
       "rev-parse": (argv) =>
         argv.includes("HEAD") ? ok(`${"9".repeat(40)}\n`) : ok(`${BASE}\n`),
     });
     await mergeBaseIntoWorktree(mergeOptions(fake.run));
-    expect([
-      ...callsOf(fake.calls, "fetch"),
-      ...callsOf(fake.calls, "merge"),
-    ]).toEqual([]);
+    expect(callsOf(fake.calls, "fetch")).toEqual([]);
+  });
+
+  test("does not merge when the local HEAD is not the PR head", async () => {
+    const fake = scenario({
+      "rev-parse": (argv) =>
+        argv.includes("HEAD") ? ok(`${"9".repeat(40)}\n`) : ok(`${BASE}\n`),
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(callsOf(fake.calls, "merge")).toEqual([]);
   });
 
   test("rejects when the baseline commit does not have the recorded parents", async () => {
@@ -866,14 +1090,18 @@ describe("pushMergeCommit", () => {
     );
   });
 
-  test("the commit uses the given identity as author and committer", async () => {
+  test("the commit uses the given identity as author", async () => {
     const fake = pushScenario();
     await pushMergeCommit(pushOptions(fake.run));
     const env = callsOf(fake.calls, "commit-tree")[0]?.options?.env;
-    expect([env?.GIT_AUTHOR_EMAIL, env?.GIT_COMMITTER_EMAIL]).toEqual([
-      AUTHOR.email,
-      AUTHOR.email,
-    ]);
+    expect(env?.GIT_AUTHOR_EMAIL).toBe(AUTHOR.email);
+  });
+
+  test("the commit uses the given identity as committer", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const env = callsOf(fake.calls, "commit-tree")[0]?.options?.env;
+    expect(env?.GIT_COMMITTER_EMAIL).toBe(AUTHOR.email);
   });
 
   test("pushes the new sha, not HEAD, to the branch", async () => {
@@ -1882,6 +2110,7 @@ describe("merge and push (real git)", () => {
     fixture: Fixture,
     merged: Merged,
     expectedTreeSha: string,
+    extra: Partial<Parameters<typeof pushMergeCommit>[0]> = {},
   ) {
     const pointer = (await readWorktreeGitPointer(fixture.worktree)).content;
     return pushMergeCommit({
@@ -1901,6 +2130,7 @@ describe("merge and push (real git)", () => {
       ghToken: "gh-token",
       home: fixture.home,
       lockFs: createInMemoryLockFs(),
+      ...extra,
     });
   }
 
@@ -2060,6 +2290,91 @@ describe("merge and push (real git)", () => {
     });
     const merged = await mergedOf(fixture);
     const result = await pushOf(fixture, merged, merged.autoTreeSha);
+    expect(result.outcome).toBe("pushed");
+  });
+
+  test("rejects with CommitBlockedError when inspectStaged returns a reason", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const pending = pushOf(fixture, merged, tree, {
+      inspectStaged: async () => ["a staged path matched the secret scan"],
+    });
+    await expect(pending).rejects.toBeInstanceOf(CommitBlockedError);
+  });
+
+  test("leaves nothing staged after inspectStaged returns a reason", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    await pushOf(fixture, merged, tree, {
+      inspectStaged: async () => ["a staged path matched the secret scan"],
+    }).catch(() => undefined);
+    const staged = await fixture.git(fixture.worktree, [
+      "diff",
+      "--cached",
+      "--name-only",
+    ]);
+    expect(staged).toBe("");
+  });
+
+  /**
+   * 第2親がbaseでないコミットを作ってローカルのブランチをそこへ進め、
+   * graftsでその親を[PRのhead, base]に見せかける。
+   */
+  async function forgeParentsWithGraft(
+    fixture: Fixture,
+    merged: Merged,
+  ): Promise<string> {
+    const initial = await fixture.git(fixture.worktree, [
+      "rev-parse",
+      `${merged.baseSha}~1`,
+    ]);
+    const forged = await fixture.git(fixture.worktree, [
+      "commit-tree",
+      `${merged.autoSha}^{tree}`,
+      "-p",
+      fixture.prHead,
+      "-p",
+      initial,
+      "-m",
+      "forged",
+    ]);
+    await fixture.git(fixture.worktree, [
+      "update-ref",
+      "refs/heads/fix/branch",
+      forged,
+    ]);
+    const info = join(fixture.repo, ".git", "info");
+    mkdirSync(info, { recursive: true });
+    writeFileSync(
+      join(info, "grafts"),
+      `${forged} ${fixture.prHead} ${merged.baseSha}\n`,
+    );
+    return forged;
+  }
+
+  test("a graft file cannot forge the parents of the baseline commit", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const forged = await forgeParentsWithGraft(fixture, merged);
+    const pending = pushOf(fixture, { ...merged, autoSha: forged }, tree);
+    await expect(pending).rejects.toBeInstanceOf(CommitBlockedError);
+  });
+
+  test("the same graft file does forge the parents when GIT_GRAFT_FILE is not set", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const forged = await forgeParentsWithGraft(fixture, merged);
+    const withoutGuard: CommandRunner = (argv, options) => {
+      const { GIT_GRAFT_FILE: _graft, ...env } = options?.env ?? {};
+      return fixture.run(argv, { ...options, env });
+    };
+    const result = await pushOf(fixture, { ...merged, autoSha: forged }, tree, {
+      run: withoutGuard,
+    });
     expect(result.outcome).toBe("pushed");
   });
 
@@ -2600,6 +2915,122 @@ describe("conflict block reconstruction (real git)", () => {
       ],
     });
     expect(verdict).toEqual({ ok: true });
+  });
+});
+
+describe("conflicts that git cannot show as text (real git)", () => {
+  const BINARY_ANCESTOR = {
+    initial: "bin\u0000data\n",
+    pr: "text from the pull request\n",
+    main: "text from the base\n",
+  } as const;
+
+  async function mergeOnly(
+    fixture: Awaited<ReturnType<typeof realFixture>>,
+    run: CommandRunner = fixture.run,
+  ) {
+    const pointer = (await readWorktreeGitPointer(fixture.worktree)).content;
+    return mergeBaseIntoWorktree({
+      run,
+      repoDir: fixture.repo,
+      dir: fixture.worktree,
+      branch: "fix/branch",
+      worktreeGitPointer: pointer,
+      prHeadSha: fixture.prHead,
+      baseBranch: "main",
+      author: AUTHOR,
+      ghToken: "gh-token",
+      home: fixture.home,
+      lockFs: createInMemoryLockFs(),
+    });
+  }
+
+  async function ancestorOnlyBinary() {
+    return realFixture({
+      initial: { "a.dat": BINARY_ANCESTOR.initial },
+      pr: { "a.dat": BINARY_ANCESTOR.pr },
+      main: { "a.dat": BINARY_ANCESTOR.main },
+    });
+  }
+
+  test("a conflict whose common ancestor alone is binary is unresolvable as binary", async () => {
+    const fixture = await ancestorOnlyBinary();
+    const result = await mergeOnly(fixture);
+    expect(result).toEqual({ outcome: "unresolvable", reason: "binary" });
+  });
+
+  test("the worktree is clean after a binary common ancestor", async () => {
+    const fixture = await ancestorOnlyBinary();
+    await mergeOnly(fixture);
+    const status = await fixture.git(fixture.worktree, [
+      "status",
+      "--porcelain",
+    ]);
+    expect(status).toBe("");
+  });
+
+  test("no merge is left in progress after a binary common ancestor", async () => {
+    const fixture = await ancestorOnlyBinary();
+    await mergeOnly(fixture);
+    const unmerged = await fixture.git(fixture.worktree, ["ls-files", "-u"]);
+    expect(unmerged).toBe("");
+  });
+
+  /** `merge-file`だけが失敗する実行関数。merge開始後の例外を作る。 */
+  function failingMergeFile(
+    fixture: Awaited<ReturnType<typeof realFixture>>,
+  ): CommandRunner {
+    return async (argv, options) => {
+      if (argv.includes("merge-file")) {
+        return {
+          stdout: "",
+          stderr: "error: Cannot merge binary files",
+          exitCode: 255,
+          timedOut: false,
+        };
+      }
+      return fixture.run(argv, options);
+    };
+  }
+
+  const TEXT_CONFLICT = {
+    initial: { "a.txt": "one\ntwo\nthree\n" },
+    pr: { "a.txt": "one\nPR\nthree\n" },
+    main: { "a.txt": "one\nMAIN\nthree\n" },
+  } as const;
+
+  test("rejects when the reconstruction fails after the merge started", async () => {
+    const fixture = await realFixture(TEXT_CONFLICT);
+    await expect(mergeOnly(fixture, failingMergeFile(fixture))).rejects.toThrow(
+      /Cannot merge binary files/,
+    );
+  });
+
+  test("the worktree is clean after the reconstruction failed", async () => {
+    const fixture = await realFixture(TEXT_CONFLICT);
+    await mergeOnly(fixture, failingMergeFile(fixture)).catch(() => undefined);
+    const status = await fixture.git(fixture.worktree, [
+      "status",
+      "--porcelain",
+    ]);
+    expect(status).toBe("");
+  });
+
+  test("no merge is left in progress after the reconstruction failed", async () => {
+    const fixture = await realFixture(TEXT_CONFLICT);
+    await mergeOnly(fixture, failingMergeFile(fixture)).catch(() => undefined);
+    const mergeHead = await fixture.run(
+      ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+      { cwd: fixture.worktree },
+    );
+    expect(mergeHead.exitCode).not.toBe(0);
+  });
+
+  test("the local branch is still at the PR head after the reconstruction failed", async () => {
+    const fixture = await realFixture(TEXT_CONFLICT);
+    await mergeOnly(fixture, failingMergeFile(fixture)).catch(() => undefined);
+    const head = await fixture.git(fixture.worktree, ["rev-parse", "HEAD"]);
+    expect(head).toBe(fixture.prHead);
   });
 });
 

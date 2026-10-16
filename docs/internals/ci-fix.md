@@ -628,6 +628,16 @@ git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts
 `head_changed`は、準備のステップがPRを読んでからfetchするまでの間に、誰かがpushしたときに起きる。
 例外にはせず、呼び出し側が値で受ける。
 
+競合ファイルが無いまま`merged`で終わることがある。
+GitHubが競合と判定したのに、ローカルのmergeがきれいに終わった場合である。
+この関数は基準コミットを作って`merged`を返し、扱いは呼び出し側が決める。
+
+mergeが始まった後に例外が出たときは、`merge --abort`をベストエフォートで実行してから、元の例外を投げ直す。
+取り消しが失敗したときは、警告を記録し、元の例外を優先する。
+取り消せなかったworktreeは、mergeの途中のまま(MERGE_HEADと`add`した索引が残る)になりうる。
+呼び出し側は、次にworktreeを使うときの`reset --hard`と`clean -fd`が状態を戻す前提で、この例外を扱う。
+基準コミットを作った後の例外では、mergeは終わっているので取り消さない。
+
 結果の`merged`は、baseのsha、基準コミットのsha、そのツリーのsha、競合ファイルの一覧、競合ファイルごとの3つの版のblobを持つ。
 競合が無いmergeも`merged`で、競合ファイルの一覧は空になる。
 
@@ -651,9 +661,12 @@ workerのgitは2.47なので、すべて使える。
 食い違いが起きる入力は、テスト(`workspace_merge.test.ts`)が実際のgitで確かめている。
 
 照合は、`add`した後の索引のblobと、作り直した本文を、マーカー行のラベルを除いて比べる。
+どちらも、3つの版が混ざる分を見込んだ同じ上限(4MiB)で読む。
 gitが書くラベル(`HEAD`など)と、`-L`で付けるラベルは別の文字列だからである。
 比べる相手は作業ファイルではなく索引のblobで、基準コミットに入る内容そのものである。
 違えば`unresolvable`(`reconstruction_mismatch`)で終わり、mergeを取り消す。
+上限を超えたときは`too_large`で終わる。
+3つの版がそろっているのに、作り直した本文に衝突ブロックが無いときは`no_conflict_block`で終わる。
 
 CRLFのファイルでは、gitはマーカー行も`\r\n`で書く。
 `merge-file`も同じなので照合は通り、`checkConflictResolution`は、マーカー行の判定で行末の`\r`を見ない。
@@ -669,15 +682,16 @@ CRLFのファイルでは、gitはマーカー行も`\r\n`で書く。
 | `unsafe_path` | 競合ファイルのパスが、リポジトリの相対パスとして安全でない(`isSafeRepoPath`) |
 | `missing_stage` | 共通の祖先、PRのhead、baseの3つの版のどれかが無い(片側の削除、両側の追加) |
 | `not_regular_file` | 通常のファイル(モード`100644`と`100755`)でない。symlinkとサブモジュールを含む |
-| `binary` | PRのheadとbaseの差で、バイナリと判定される |
+| `binary` | PRのheadとbaseの差でバイナリと判定される。または、共通の祖先、PRのhead、baseのどれかの版が、先頭の8000バイトにNULバイトを持つ(gitの判定と同じ) |
 | `attributes` | PRのheadかbaseのツリーで、`merge`、`filter`、`working-tree-encoding`、`ident`、`diff`、`conflict-marker-size`のどれかの属性が付いている |
-| `too_large` | 共通の祖先、PRのhead、baseのどれかの版が、2MiBを超える |
+| `too_large` | 共通の祖先、PRのhead、baseのどれかの版が2MiBを超える。または、gitが書いた本文か作り直した本文が4MiBを超える |
 | `marker_like_line` | 共通の祖先、PRのhead、baseのどれかの版に、衝突マーカーに見える行がある |
+| `no_conflict_block` | 3つの版がそろっているのに、作り直した本文に衝突ブロックが無い |
 | `reconstruction_mismatch` | 作り直した本文が、gitが書いた本文と、ラベルを除いて違う |
 
 属性は、競合ファイルだけを、PRのheadとbaseのツリーに対して`check-attr --source=<sha> -a`で調べる。
 これらの属性は、mergeの仕方や内容の変換を変え、作業ファイルと3つの版の内容を食い違わせる。
-`too_large`と`marker_like_line`は、版ごとに、共通の祖先、PRのhead、baseの順に調べる。
+`too_large`、`binary`(NULバイト)、`marker_like_line`は、版ごとに、共通の祖先、PRのhead、baseの順に調べる。
 
 衝突マーカーに見える行は、行頭が`<<<<<<<`、`|||||||`、`>>>>>>>`、`=======`のちょうど7文字で、空白か行末が続く行である。
 元のファイルにあると、gitが書いたマーカーと本文を見分けられない。
@@ -782,7 +796,7 @@ gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`read
 | `unsupported_change` | 通常のファイル以外のモード、または種別を判定できない |
 | `marker_like_input` | 3つの版のどれかに、衝突マーカーに見える行がある |
 | `marker_left` | 結果に、衝突マーカーの行が残っている(下の段落を参照) |
-| `too_large` | 行数が2万を超える |
+| `too_large` | 行数が2万を超える。または、作り直した形の区分(衝突ブロックとその外の行)が1000を超える |
 | `reconstruction_failed` | 作り直した本文のブロックが読めない |
 | `not_in_conflict_block` | ブロックの外の行を変えた |
 | `alignment_budget_exceeded` | 解消後の行を作り直した形に重ねる探索が、100万回の上限に達した |
@@ -800,6 +814,7 @@ gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`read
 ブロックの直後の行と同じ行を解消が足しても、検査の結果は変わらない。
 ブロックが隣り合う長いファイルでは、探索の回数が行数の2乗に比例して増える。
 上限に達したら、重ねられなかったものとして止める。検査の時間を有界にするためである。
+重ねる再帰の深さは区分の数に比例するので、区分が1000を超える入力は、探索せずに`too_large`で止める。
 
 `marker_left`の対象は、行頭が`<<<<<<<`、`|||||||`、`>>>>>>>`のどれかで、その後に空白が続く行である。
 `=======`は本文にありうるので見ない。

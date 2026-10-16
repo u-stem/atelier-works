@@ -204,7 +204,7 @@ export type ConflictResolutionInput = {
  * - `file_deleted`: 競合ファイルを削除した。
  * - `marker_like_input`: 3つの版のどれかが、衝突マーカーに見える行を持つ。
  * - `marker_left`: 解消後に衝突マーカーが残った。
- * - `too_large`: 行数が多すぎて照合できない。
+ * - `too_large`: 行数か衝突ブロックの数が多すぎて照合できない。
  * - `reconstruction_failed`: 作り直した本文のブロックが読めない。
  * - `not_in_conflict_block`: 衝突ブロックの外の行を変えた。
  * - `alignment_budget_exceeded`: 解消後の行を作り直した形に重ねる探索が、回数の上限に達した。安全側の失敗である。
@@ -249,6 +249,13 @@ const MAX_RESOLUTION_LINES = 20_000;
  * 上限に達したら重ねられなかったものとして止め、検査の時間を有界にする。
  */
 const ALIGNMENT_STEP_BUDGET = 1_000_000;
+
+/**
+ * 作り直した形の区分(衝突ブロックとその外の行)の数の上限。
+ * 重ねる探索の再帰の深さは区分の数に比例するので、上限を超える入力は探索せずに止める。
+ * スタックを使い切って`RangeError`になるのを避けるためである。
+ */
+const MAX_ALIGNMENT_SEGMENTS = 1_000;
 
 const SYMLINK_MODE = "120000";
 const REGULAR_FILE_MODES: readonly string[] = ["100644", "100755"];
@@ -393,7 +400,10 @@ function alignResolution(
   try {
     return solve(0, 0);
   } catch (err) {
-    if (err instanceof AlignmentBudgetExceeded) return "budget_exceeded";
+    // 区分の数の上限で防いでいるが、実行環境のスタックが浅いときの備えとして、`RangeError`も同じに扱う。
+    if (err instanceof AlignmentBudgetExceeded || err instanceof RangeError) {
+      return "budget_exceeded";
+    }
     throw err;
   }
 }
@@ -453,6 +463,7 @@ function contentViolationsOf(
   }
   const segments = parseReconstruction(file.reconstructed, labels);
   if (segments === null) return ["reconstruction_failed"];
+  if (segments.length > MAX_ALIGNMENT_SEGMENTS) return ["too_large"];
   const resolutions = alignResolution(segments, resultLines);
   if (resolutions === "budget_exceeded") return ["alignment_budget_exceeded"];
   if (resolutions === null) return ["not_in_conflict_block"];
