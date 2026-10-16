@@ -1303,10 +1303,14 @@ export type TransientReviewQuery = {
  * `extraGraceSeconds`は待ちに足す秒数で、再開の見送りを探すときに0より大きくする。
  * `unnotifiedOnly`が真なら、見送りをまだ知らせていないものだけを返す。
  * `includeExhausted`が真なら、自動の再開を使い切ったものも、待ちを問わず返す(再開の対象にはならない)。
+ * `afterId`は、`id`がこれより大きいものだけを返す。既定は0である。
+ * 状態を読めないために再開を見送る行が先頭の`limit`件を占めても、
+ * 呼び出し側が最後の`id`を渡して次の1ページを読めるようにするためである。
  */
 export async function listTransientReviewCandidates(
   params: TransientReviewQuery & {
     readonly limit: number;
+    readonly afterId?: number;
     readonly extraGraceSeconds?: number;
     readonly unnotifiedOnly?: boolean;
     readonly includeExhausted?: boolean;
@@ -1331,6 +1335,7 @@ export async function listTransientReviewCandidates(
       WHERE c.work_item_id = w.id AND starts_with(c.note, ${params.notePrefix})
     ) restarts ON true
     WHERE w.kind = 'pr_review' AND w.status = 'failed' AND w.pr_number IS NOT NULL
+      AND w.id > ${params.afterId ?? 0}::bigint
       AND starts_with(last.note, ${params.reasonPrefix})
       AND (
         (restarts.n < ${params.maxRestarts}::integer

@@ -226,7 +226,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `unsandboxed_check_commands` | `implement_verify`、`pr_fix_verify` | 実行する検査コマンドの件数、対象 |
 | `check_slot_skipped` | `implement_verify`、`pr_fix_verify` | 飛ばした枠のユーザーとuid、片付けられなかった理由 |
 | `check_slot_record_unreadable` | `implement_verify`、`pr_fix_verify` | 枠のユーザーとuid、読めない記録を退避した先のパス |
-| `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
+| `check_runtime_unsafe` | `implement_prepare`、`implement_verify`、`pr_fix_prepare`、`pr_fix_verify`、`cleanup_workspaces`、`watch_pr_ci` | 稼働中のworkerにできた誰でも書き込めるパスか、確かめられなかった理由、パスを閉じるかworkerを作り直す手順 |
 | `fix_reply_post_failed` | `pr_fix_finish` | 失敗した件数、`review_comment_id`、最初のエラー |
 | `pr_fix_reviewer_request_failed` | `pr_fix_finish` | 対象、依頼できなかった理由 |
 | `issue_proposal_record_failed` | `pr_fix_finish` | 対象、記録の失敗の理由 |
@@ -241,7 +241,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `pr_trigger_label_left_removed` | `poll_prs` | 対象のPRと、外れたままのトリガーラベル |
 | `supersede_failed` | `insertIssueWorkItemUnlessActive`(`poll_issues`が呼ぶ) | 対象、新しい作業項目のID、操作が要らないこと |
 | `deployed_sha_mismatch` | `poll_issues` | `f/factory/deployed_sha`、原因の候補 |
-| `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
+| `host_action_required` | `self_update`、`implement_verify`、`pr_fix_verify`、`watch_pr_ci` | 反映した版(40桁)、変わった`infra/`や`mise.toml`のパスかイメージに足りないもの、`mise run up`を実行する手順 |
 | `cleanup_db_failed` | `cleanup_db` | 削除に失敗した対象とエラー |
 | `cleanup_worktrees_skipped` | `cleanup_workspaces` | 掃除を見送ったリポジトリ |
 | `cleanup_worktree_busy` | `cleanup_workspaces` | 作業項目のID、worktreeのパス、worktreeを使っているプロセス |
@@ -423,6 +423,8 @@ Discordには、noticeを新しく残したときだけ送る。noticeの記録�
 本文には、自己更新が反映した版(`f/factory/deployed_sha`)と、イメージの満たさない前提(足りない道具、枠のユーザー、ベースのイメージが開いたままのディレクトリ)が載る。
 稼働中のworkerの問題も一緒に見つかれば、その問題はこの本文に載せず、下の`check_runtime_unsafe`に残す。
 この通知は`mise run up`の後に自動で解決されるが、ボリュームのマウントポイントは作り直しでは閉じないためである。
+CIの失敗を直す回は、監視(`watch_pr_ci`)が起動の前に同じ確認をして、同じ通知を残す。
+その回は止まった作業項目を作らず、行を保留する。環境を直すと、保留は次の巡回で自動的に外れる。
 同じ本文の未解決のnoticeがあるあいだは追加しない。
 版を40桁で読めたときは、下の判定で自己更新が自動で解決する。読めないときは本文に版を含めず、人が解決する。
 通知が自動で解決されると、止まった実装とPR修正を自動で再開する([実装フロー](implement.md#イメージが古くて止まったとき))。
@@ -491,6 +493,10 @@ self cloneにあるかは、実行ごとに1回だけ`git cat-file -e`で確か�
 `mise run up`では直らないので、自己更新は解決せず、人が解決する。
 同じ本文の未解決のnoticeがあるあいだは追加しない。
 Discordには送らない。止まった作業項目の通知が、別に届くためである。
+CIの失敗を直す回の監視(`watch_pr_ci`)も、この通知を残す。
+ただし、問題が稼働中のworkerのパスの列挙の失敗だけで、実在するパスが1件も無い回は残さず、警告のログだけにする。
+一時的な失敗で、人が解決するまで残る通知を出さないためである。
+イメージが古い回は、列挙に失敗していても、イメージの通知とこの通知の両方を残す。
 
 Issueの取得に成功すると、`poll_issues`は未解決の`labeler_denied`を解決済みにする。
 対象は、本文が`<owner>/<repo>#<番号>:`と空白1つで始まるすべてのnoticeで、`resolved_by`は`poll_issues`になる。
