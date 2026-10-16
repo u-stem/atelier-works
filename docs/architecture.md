@@ -324,7 +324,7 @@ Consoleの一覧と集計は次のviewを読む。
 | self_update | `0 */2 * * * *` | `f/factory/self_update` | 2分ごとに実行します。Software Factory自身の最新のコミットを取り込み、変更があればWindmillへの反映とデータベースの更新を自動的に行います。ホスト側の変更(workerイメージの再ビルドなど)はホストで起動し直すまで反映されないため、要対応の通知とDiscordで知らせ、反映が済んだら通知を解決します。更新の最後に、Console用のworkerが止まっていないかを確かめ、止まっていれば通知を残してDiscordにも知らせます。 |
 | watch_main_ci | `0 */5 * * * *` | `f/factory/watch_main_ci` | 5分ごとに実行します。対象リポジトリの既定のブランチ(main)へのpushで動いたGitHub Actionsの結果をコミット単位で判定します。失敗したコミットは要対応の通知とDiscordで知らせ、同じリポジトリの新しいコミットが通ったら失敗の通知を自動で解決します。実行を読む権限が無いリポジトリは、権限の不足を通知します。 |
 | watch_pr_ci | `0 */5 * * * *` | `f/factory/watch_pr_ci` | 5分ごとに実行します。Factoryが作ったPRのGitHub Actionsの結果をheadのコミット単位で判定します。失敗したheadは要対応の通知とDiscordで知らせ、同じPRのheadが通ったら失敗の通知を自動で解決します。閉じたPRの記録は整理します。実行を読む権限が無いリポジトリは、権限の不足を通知します。設定で有効にしたときは、失敗を直す作業項目も起動し、自動で直す対象の失敗は直せるかが決まってから通知します。設定で有効にしたときは、許可された人が作ったPRの失敗も通知します。PRには書き込まず、ログも読みません。 |
-| watch_pr_conflicts | `30 */5 * * * *` | `f/factory/watch_pr_conflicts` | 5分ごとに実行します。Factoryが作ったPRにマージの競合があるかを調べ、競合したPRは要対応の通知とDiscordで知らせます。競合が解けたら通知を自動で解決し、閉じたPRの記録は整理します。設定で有効にしたときだけ動き、無効のときはGitHubもDBも読みません。PRには書き込まず、競合を解く作業は起動しません。 |
+| watch_pr_conflicts | `30 */5 * * * *` | `f/factory/watch_pr_conflicts` | 5分ごとに実行します。Factoryが作ったPRにマージの競合があるかを調べ、競合したPRは要対応の通知とDiscordで知らせます。競合が解けたら通知を自動で解決し、閉じたPRの記録は整理します。設定で有効にしたときだけ動き、無効のときはGitHubもDBも読みません。PRには書き込みません。競合を直す設定が有効なときは、通知の前に、競合を直す作業項目を起動し、終わった作業項目の行を戻します。 |
 <!-- /generated:schedules -->
 
 cronはWindmillの6フィールドの形式で、タイムゾーンは`Asia/Tokyo`である。各スケジュールは`no_flow_overlap: true`を持ち、前回の実行が終わっていなければその回を飛ばす。スケジュールの失敗は`on_error_schedule`が記録して通知する。
@@ -722,10 +722,14 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 計算前のPRは、次の回に判定し直す。
 競合したPRは、要対応の通知とDiscordで知らせる。通知は競合の1回につき1回で、headが進んでも重ねない。
 競合が解けたときと、PRが閉じたときに、通知を自動で解決する。PATがPRを読めなくなっただけでは、解決しない。
-記録は`pr_conflict_checks`に残す。PRとリポジトリへは書き込まず、競合を解く作業も起動しない。
+記録は`pr_conflict_checks`に残す。`watch_pr_conflicts`自身は、PRとリポジトリへ書き込まない。
 有効にするのは設定`pr_conflict_watch_enabled`で、CIの監視とは別に切り替える。
 既定は`false`で、偽の間はGitHubとDBを読まない。
-判定、通知、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
+設定`pr_conflict_fix_enabled`(既定は`false`)が真のときは、競合した行に、`pr_fix`の競合回の作業項目を起動する。
+起動の判断を通知の判断の後ろに置き、競合を始めてから猶予の間は通知を待つ。
+起動しない理由(保留)は行に書き、最終の保留になった行は待たずに通知する。
+直す作業項目が結ばれた行は、設定の有効と無効に依らず、通知の判断の前に回復する。
+判定、起動、回復、通知、既知の限界は[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
 
 ## 工程5の監査
 
@@ -737,6 +741,5 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- 競合を直す作業項目の起動。設定と判断の関数、`pr_fix`の競合回の分岐は揃っているが、作業項目を起動する処理が無く、`pr_conflict_fix_enabled`を`true`にしても起動しない
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。

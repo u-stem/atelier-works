@@ -250,7 +250,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 | `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、自動修正の保留の理由(あれば)、リンク、次の操作 |
 | `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
-| `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、次の操作、PRのリンク |
+| `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、自動で直さなかった理由(あるときだけ)、次の操作、PRのリンク |
 | `worker_load_high` | `sample_worker_load` | 原因(メモリの割合、OOMの増加)、閾値、システムの画面のリンク、次の操作 |
 
 `fix_reply_post_failed`は、返信の投稿に1件以上失敗したとき1件だけ残す。Discordには通知しない。`unsandboxed_check_commands`は、検査コマンドを実行するときに、作業項目ごとに残す。
@@ -283,7 +283,15 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 `pr_conflict`は、PRの競合1回につき、通常は1件残す。競合のままheadが進んでも、重ねない。
 Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。
 本文は固定文で、PRの題名やブランチ名は載せない。
+競合を直す設定が有効なときは、競合の回の開始から猶予(`pr_conflict_fix_notify_grace_min`)が過ぎるまで通知を待ち、その間に直す作業項目を起動する。
+最終の保留(人が直す理由)になった行は、猶予を待たずに通知する。
+直す作業項目が動いている間は、通知しない。
+保留の理由を持つ行を通知するときは、本文に自動で直さなかった理由の固定の説明を足し、Discordの理由を`merge_conflict(自動修正の保留: <理由>)`にする。
+「次の操作」は、通常は競合を解消してpushする固定文である。mainの更新が`.github/workflows/`を変えるときだけ、ローカルかwebで解消する案内にする。
+競合を直す設定が無効なときは、理由を載せず、設定を足す前と同じ本文で通知する。
 競合が解けたとき、PRが閉じたとき、設定が対象から外したときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
+直す作業項目が成功したときは、通知も、Discordへの成功の通知も出さない。結果は、Consoleの作業項目の状態で読む。
+直す作業項目が失敗したときの通知は、`watch_pr_conflicts`だけが出す。競合を直す回のフローは、通知を登録せず、Discordにも送らない。
 詳細は[PRのCI監視の仕様](pr-ci.md#競合の検知)にある。
 
 `worker_load_high`は、原因(メモリの割合、OOMの増加)ごとに本文が決まっている。

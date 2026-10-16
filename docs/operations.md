@@ -1395,8 +1395,8 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 
 `watch_pr_conflicts`が5分ごとに、Factoryが作ったPRにマージの競合があるかを確かめる。
 競合したPRは、通知`pr_conflict`を残し、Discordにも`needs_human`として届ける。
-`watch_pr_conflicts`自身は、PRとリポジトリへ書き込まず、競合を解く作業も起動しない。
-競合は人が解消する。
+`watch_pr_conflicts`自身は、PRとリポジトリへ書き込まない。
+競合を直す作業項目の起動は、既定で無効である。無効の間は、競合を人が解消する。
 既定は無効で、設定`pr_conflict_watch_enabled`を`true`にしたときだけ動く。
 `false`の間は、GitHubとDBを読まない。CIの監視(`pr_ci_watch_enabled`)とは別に切り替える。
 
@@ -1501,6 +1501,111 @@ Factoryのほかの処理も止まるので、関連する項目は同じ編集�
 PATが拒まれた(401)ときは、以降の読み取りを止め、失敗を1件だけ記録する。
 PATがリポジトリを読めなくなったときの専用の通知は無い。この監視だけを有効にしているときは、ログの警告だけが残る。
 読めなかったPRと、GitHubのrate limitの扱いは、[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
+
+### 競合の自動修正を有効にする
+
+設定`pr_conflict_fix_enabled`を`true`にすると、`watch_pr_conflicts`が、競合したFactoryのPRを直す作業項目を起動する。
+既定は`false`で、偽の間は何も起動せず、検知と通知は無効にする前と同じに動く。
+起動した作業項目は、競合したファイルだけをClaudeに解かせ、解消したmergeコミットをPRのブランチにpushする([PRワークフロー](internals/pr-workflow.md#マージの競合を解く回))。
+
+次の条件をすべて満たす競合だけを直す。満たさない競合は、人が直す。
+
+- 競合の回が、`pr_conflict_fix_enabled_since`以後に始まった。
+- 通知していない。最終の保留が付いていない。
+- PRが開いていて、headが記録と同じである。
+- baseが既定のブランチで、PRがドラフトでなく、auto-mergeも無効である。
+- PRのすべてのcommitが、Factoryのトレーラーを持つ。人のcommitを含むPRは、自動で直さない。
+- Factoryのリポジトリの`factory_branch`にあるfactory-fixスキルが、競合を直す節(マーカー`conflict-fix-skill:v1`)を持つ。
+- 日次の予算が残っていて、既定のブランチの先頭のmainのCIが失敗していない。
+- 競合の1回で起動した数が`pr_conflict_fix_max_rounds`未満で、PR全体の数が`pr_conflict_fix_max_rounds_per_pr`未満である。
+- 直近の直す作業項目が失敗せずに終わってから、5分以上たった。GitHubが競合の有無を更新するまで待つためである。
+- 同じPRで動いている`pr_fix`が無い。
+
+条件を満たさない行は、理由が`pr_conflict_checks.fix_hold_reason`に残る。理由と意味は[保留の理由の語彙](internals/pr-ci.md#保留の理由の語彙)にある。
+一時の理由は、条件が解ければ自動で外れて起動する。最終の理由は、人が直すまで外れない。
+競合を直せなかったときは、人に知らせる通知が出る。通知が出るのは、次のどれかのときである。
+
+- 最終の保留になった。猶予を待たず、次の巡回で通知する。
+- 一時の保留が続き、競合の回の開始から猶予(`pr_conflict_fix_notify_grace_min`)が過ぎた。
+- 起動の判断が失敗し続けた、または起動の文が何も返さないまま、猶予が過ぎた。
+
+通知の本文とDiscordには、自動で直さなかった理由が載る。
+直せたときは、通知もDiscordへの成功の通知も出ない。pushした後に競合が解けると、検知の通常の流れで、行が解決に移る。
+結果は、Consoleの作業項目の状態(`pr_fix`の競合回)で読む。pushした回は`rereview_requested`、baseがすでにPRの履歴にあった回は`reviewed`で終わる。
+競合回のフローは、通知もDiscordへの送信もしない。失敗の通知は、`watch_pr_conflicts`だけが出す。
+フローが例外で終わったときは、`on_error_flow`のDiscordの通知(`job_failed`)も届く。
+`pr_conflict_watch_enabled`を`false`にして検知を止めると、動いている作業項目の結果は、Consoleの作業項目の状態でしか読めなくなる。
+
+猶予は、1回目の修正が終わるまでの時間より長くする。1回目が猶予より長くかかると、2回目は起動せずに通知する。
+作業項目が動いている間は、猶予が過ぎても通知せず、終わるまで待つ。
+結びが2時間以上残った行は、警告`pr conflict fix has been running for a long time`が出る。Consoleで作業項目の状態を確かめる。
+
+設定の5項目は、上の表にある。
+設定は`wmill`で直す。リソースの値を取得し、直して、定義ファイルから反映する。
+
+```bash
+wmill resource get f/factory/factory_config --json
+wmill resource push <定義ファイル> f/factory/factory_config
+```
+
+取得した出力の`value`の項目だけを直し、`resource_type`と`description`は変えずに残して、定義ファイルに書く。
+`pr_conflict_fix_enabled`、`pr_conflict_fix_enabled_since`、猶予は、同じ編集で書く。
+書き損じると、設定の読み込み全体が止まり、Factoryのほかの処理も動かなくなる。
+
+有効にする手順は次のとおりである。
+最初の1件を実機で確かめるため、範囲を絞って始める。
+
+1. `pr_conflict_watch_enabled`が`true`で、検知が動いていることを確かめる。
+2. Factoryのリポジトリの`factory_branch`のfactory-fixスキルが、マーカー`conflict-fix-skill:v1`を持つことを確かめる。
+   `<owner>/<repo>`は、`factory_config`の`factory_repo`である。出力に行が出れば持っている。
+
+   ```bash
+   gh api -H "Accept: application/vnd.github.raw" "repos/<owner>/<repo>/contents/.claude/skills/factory-fix/SKILL.md?ref=<factory_branch>" | grep conflict-fix-skill:v1
+   ```
+
+   マーカーは、保護パスのスキルへの人のPRで入れる。PRがマージされるまで、有効にしない。
+   持たないと、すべての競合が`marker_missing`で保留され、猶予が過ぎると通知される。
+3. workerのイメージを作り直して(`mise run up`)、最新にする。
+   イメージが古いと、起動した作業項目は、Claudeを動かす前に止まる。起動の判断はイメージの古さを見ないので、約25分で、その競合の回が`rounds_exhausted`で通知される。
+4. 範囲を絞る。
+   `pr_conflict_fix_max_rounds`を`1`、PR全体の上限を`2`、猶予を`60`にする。
+   `daily_budget_usd`は、当日の使用額に数ラウンド分を足した値にする。見積もりは、[失敗の自動修正を有効にする](#失敗の自動修正を有効にする)の手順3と同じである。
+5. `pr_conflict_fix_enabled_since`に、有効にする時刻を書き、同じ編集で`pr_conflict_fix_enabled`を`true`にする。
+   この時刻より前の競合は、直さず、通常どおり通知する。
+6. 実際のFactoryのPRで確かめる。
+   `wmill-lock.yaml`などの保護パスを持たないリポジトリで、Factoryが作ったPRを1件選ぶ。
+   既定のブランチに、同じファイルの同じ行を変えるcommitを入れて、競合を起こす。
+   自リポジトリは、`wmill-lock.yaml`が競合しやすく、その競合は保護パスとして通知されるので、確かめには向かない。
+7. 最初の巡回の後、次を確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT id, owner, repo, pr_number, state, episode, fix_work_item_id, fix_attempts, fix_hold_reason, notified_at FROM factory.pr_conflict_checks WHERE state = 'conflicted' ORDER BY updated_at DESC LIMIT 20"
+   ```
+
+   - `watch_pr_conflicts`のログに`pr conflict fix launched`が出て、行の`fix_work_item_id`が作業項目のIDになる。
+   - 作業項目が終わると、ログ`pr conflict fix row released`が出て、結びが外れる。
+   - pushした回は、PRのブランチに、親が2つでトレーラー`Generated-By`を持つmergeコミットが増える。
+   - 次の巡回で、競合が解けて、行が`resolved`になる。通知は出ない。
+   - 起動されないときは、`fix_hold_reason`を読む。
+8. 結果に問題が無ければ、`pr_conflict_fix_max_rounds`、`pr_conflict_fix_max_rounds_per_pr`、`daily_budget_usd`を戻す。
+
+実機で確かめていないものは、次のとおりである。
+
+- workerのバージョン管理コマンド(2.47.3)での、`merge --no-ff --no-commit`と`merge-base --is-ancestor`の`--`の扱い。
+- PATでmergeコミットをpushできること。
+- `.github/workflows/`を変えるmainの更新で、pushが拒まれたときの動作。
+手順6で最初に確かめる。
+
+止め方は次のとおりである。
+
+- 起動を止めるには、`pr_conflict_fix_enabled`を`false`に戻す。動いている作業項目は止まらない。
+  回復は動き続け、作業項目が終わると行の結びを外す。結びが残る間は、通知せず待つ。終わった後も競合が続く行は、次の巡回で通知される。
+- 検知も止めるときは、結びが外れた後に`pr_conflict_watch_enabled`を`false`にする。検知が止まっている間は、回復も動かない。
+- `pr_conflict_fix_enabled_since`を後ろへ動かすと、動かした時刻より前に始まった競合は、直さずに通知する。動いている作業項目の行は、終わるまで待つ。
+- 有効に戻すときは、`pr_conflict_fix_enabled_since`を戻す時刻に書き直す。書き直さないと、止めている間に始まった競合まで直しにいく。
+- 1つのPRだけを止めるには、PRをドラフトにする。
+  ドラフトのPRは検知の対象から外れ、起動と通知をしない。動いている作業項目は、準備かpushの直前でドラフトを見て止まる。
+- auto-mergeを有効にしたPRは、起動を見送り、保留`pr_draft_or_auto_merge`で通知する。
 
 ## 監査を使う
 
