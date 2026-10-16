@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { NotifyBestEffortResult } from "../../f/factory/lib/discord.ts";
-import type { GatedReviewStats } from "../../f/factory/lib/gated_review_support.ts";
+import {
+  GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
+  type GatedReviewStats,
+} from "../../f/factory/lib/gated_review_support.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import {
   type DayRange,
@@ -166,9 +169,9 @@ describe("readGatedReview", () => {
 describe("syncGatedNotice", () => {
   const NOTICE: NoticeRecord = { kind: "review_gated_prolonged", message: "m" };
 
-  function deps() {
+  function deps(options: { hasOpenNotice?: boolean } = {}) {
     const added: NoticeRecord[] = [];
-    const resolved: NoticeRecord[] = [];
+    const resolved: (readonly [string, string])[] = [];
     const { log, lines } = captureLog();
     return {
       added,
@@ -176,12 +179,13 @@ describe("syncGatedNotice", () => {
       lines,
       value: {
         notice: NOTICE,
+        hasOpenNotice: () => Promise.resolve(options.hasOpenNotice ?? false),
         addNotice: (record: NoticeRecord) => {
           added.push(record);
           return Promise.resolve(1);
         },
-        resolveNotice: (record: NoticeRecord) => {
-          resolved.push(record);
+        resolveNotice: (kind: string, messagePrefix: string) => {
+          resolved.push([kind, messagePrefix]);
           return Promise.resolve(1);
         },
         log,
@@ -207,10 +211,21 @@ describe("syncGatedNotice", () => {
     expect(d.added).toEqual([]);
   });
 
-  test("resolves the open notice once reviews are posted again", async () => {
+  test("adds no second notice while one of the kind is still open", async () => {
+    const d = deps({ hasOpenNotice: true });
+    await syncGatedNotice(
+      { kind: "on", since: new Date(), unposted_count: 5, elapsed_days: 9 },
+      d.value,
+    );
+    expect(d.added).toEqual([]);
+  });
+
+  test("resolves the open notice by its kind and fixed prefix once reviews are posted again", async () => {
     const d = deps();
     await syncGatedNotice({ kind: "off" }, d.value);
-    expect(d.resolved).toEqual([NOTICE]);
+    expect(d.resolved).toEqual([
+      [NOTICE.kind, GATED_REVIEW_NOTICE_MESSAGE_PREFIX],
+    ]);
   });
 
   test("keeps the open notice when the stats could not be read", async () => {

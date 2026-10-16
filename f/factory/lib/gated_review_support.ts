@@ -11,6 +11,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** `gated`で投稿しない状態が、この日数以上続いたら、Consoleの要対応に出す。 */
 export const GATED_REVIEW_NOTICE_DAYS = 3;
 
+/** noticeの本文の固定の先頭。 */
+export const GATED_REVIEW_NOTICE_MESSAGE_PREFIX = "stub";
+
 /** 投稿しない状態が続くことを知らせるnoticeの種類。 */
 export const GATED_REVIEW_NOTICE_KIND = "review_gated_prolonged";
 

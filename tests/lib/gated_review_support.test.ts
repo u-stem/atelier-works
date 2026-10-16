@@ -4,6 +4,7 @@ import {
   describeGatedReview,
   GATED_REVIEW_NOTICE_DAYS,
   GATED_REVIEW_NOTICE_KIND,
+  GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
   gatedProlongedNotice,
   isGatedProlonged,
 } from "../../f/factory/lib/gated_review_support.ts";
@@ -140,6 +141,12 @@ describe("gatedProlongedNotice", () => {
 
   test("tells the next action", () => {
     expect(notice.message).toContain("次の操作:");
+  });
+
+  test("starts with the fixed prefix whatever the linked screen is", () => {
+    expect(
+      gatedProlongedNotice("https://other.example/console/items").message,
+    ).toStartWith(GATED_REVIEW_NOTICE_MESSAGE_PREFIX);
   });
 
   test("keeps the text fixed so an open notice is not duplicated", () => {

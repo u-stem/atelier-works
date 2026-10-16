@@ -470,6 +470,76 @@ describe("buildEmbed", () => {
     });
   });
 
+  test("dates the unposted period by the JST day, not the UTC day", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      // 2026-09-21T20:00Zは、JSTでは2026-09-22の05:00
+      gated_review: {
+        kind: "on",
+        since: new Date("2026-09-21T20:00:00Z"),
+        unposted_count: 4,
+        elapsed_days: 3,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "レビューの投稿",
+      value: "gatedで有効。2026-09-22から3日、投稿しなかったレビューは4件",
+    });
+  });
+
+  test("shows no date while nothing was left unposted", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: {
+        kind: "on",
+        since: null,
+        unposted_count: 0,
+        elapsed_days: null,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "レビューの投稿",
+      value: "gatedで有効。投稿しなかったレビューは0件",
+    });
+  });
+
+  test("shows how to look into a failure to read the unposted reviews", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: { kind: "read_failed" },
+    });
+    expect(
+      embed.fields.find((f) => f.name === "レビューの投稿")?.value,
+    ).toContain("読めませんでした");
+  });
+
   test("shows a 'no record' worker load field when there is no record", () => {
     const embed = buildEmbed({
       kind: "daily_summary",
