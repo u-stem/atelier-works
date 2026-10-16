@@ -7,8 +7,12 @@
 
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
-import type { GatedReviewStats } from "./gated_review_support.ts";
-import { isNumber, isRecord, isString } from "./types.ts";
+import {
+  type GatedReviewStats,
+  isNumber,
+  isRecord,
+  isString,
+} from "./types.ts";
 import {
   DAILY_GAP_THRESHOLD_SECONDS,
   DAILY_LAG_THRESHOLD_SECONDS,
@@ -541,8 +545,9 @@ export async function getCleanupSummary(
 
 /**
  * `asOf`までに記録した、投稿しなかったレビュー(`posted_review_id`がNULL)を集計する。
- * 数えるのは、`asOf`より前に最後に投稿したレビューより後の行だけで、投稿が途切れてからの連続である。
- * 一度投稿に戻した後に`gated`へ戻したときに、前の期間を数えないため。
+ * 数えるのは、`asOf`より前に最後に投稿したレビューより後の行だけである。
+ * 投稿に戻した後に`gated`へ戻したとき、間に投稿したレビューが1件以上あれば、前の期間は切れる。
+ * 1件も投稿しないまま戻したときは、前の期間から続けて数える。
  * `since`は、数えた行のうち最も古い記録の時刻で、数えた行が無ければ`null`。
  */
 export async function getGatedReviewStats(

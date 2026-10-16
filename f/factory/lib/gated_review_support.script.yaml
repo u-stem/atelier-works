@@ -1,5 +1,5 @@
-summary: '[LIB] gatedでレビューを投稿しない状態の判定と文面'
-description: 内部ライブラリです。直接実行するものではありません。review_post_modeがgatedのまま投稿しなかったレビューの期間と件数から、日次のまとめの欄と、要対応に出すnoticeの判定と本文を作ります。
+summary: '[LIB] gatedでレビューを投稿しない状態の判定とnoticeの文面'
+description: 内部ライブラリです。直接実行するものではありません。review_post_modeがgatedのまま投稿しなかったレビューの期間と件数から、要対応に出すnoticeを出すかの判定と、その本文を作ります。
 lock: '!inline f/factory/lib/gated_review_support.script.lock'
 kind: script
 schema:

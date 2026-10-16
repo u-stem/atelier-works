@@ -316,7 +316,7 @@ Consoleの一覧と集計は次のviewを読む。
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
-| notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。 |
+| notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。`review_post_mode`が`gated`のときは、レビューの投稿欄を足し、投稿しない状態が3日以上続けばConsoleの要対応にnoticeを追加し、投稿するモードに戻れば解決します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。 |
 | poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
 | poll_issues | `0 */5 * * * *` | `f/factory/poll_issues` | 5分ごとに実行します。稼働確認とデプロイ状況の通知を行い、担当リポジトリのIssueを検索して担当を確定します。あわせて、進行中のすべての作業項目をGitHub側の状態と突き合わせ、後始末が必要なものを処理します。失敗、人の対応待ち、期限切れの作業項目は、対象のIssueやPRが閉じられていれば取り消して、要対応の一覧から外します。 |
 | poll_prs | `0 */5 * * * *` | `f/factory/poll_prs` | 5分ごとに実行します。PRにレビュー依頼のラベルが付いている、レビューをリクエストされている、または担当者(assignee)に指定されている場合はレビュー処理を開始します。修正依頼のラベルが付いている場合は修正処理を開始します。作業項目の後始末はIssueの巡回処理側で行います。 |
@@ -396,7 +396,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
 | `f/factory/lib/factory_clone` | script | [LIB] Factory自身のcloneの用意 |
 | `f/factory/lib/factory_repo_gate` | script | [LIB] Factory自身のリポジトリの照合 |
-| `f/factory/lib/gated_review_support` | script | [LIB] gatedでレビューを投稿しない状態の判定と文面 |
+| `f/factory/lib/gated_review_support` | script | [LIB] gatedでレビューを投稿しない状態の判定とnoticeの文面 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/pr_review_retry` | script | [LIB] GitHubの一時的な失敗で止まったPRレビューの再開 |

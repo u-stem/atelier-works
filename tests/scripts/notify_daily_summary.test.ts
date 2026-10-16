@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { NotifyBestEffortResult } from "../../f/factory/lib/discord.ts";
-import {
-  GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
-  type GatedReviewStats,
-} from "../../f/factory/lib/gated_review_support.ts";
+import { GATED_REVIEW_NOTICE_MESSAGE_PREFIX } from "../../f/factory/lib/gated_review_support.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import {
   type DayRange,
   planSummaryDays,
 } from "../../f/factory/lib/summary_support.ts";
-import type { NoticeRecord } from "../../f/factory/lib/types.ts";
+import type {
+  GatedReviewStats,
+  NoticeRecord,
+} from "../../f/factory/lib/types.ts";
 import type { WorkerLoadSummary } from "../../f/factory/lib/worker_load_support.ts";
 import {
   assertAllDelivered,

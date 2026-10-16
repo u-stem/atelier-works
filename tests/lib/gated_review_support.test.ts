@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildGatedReviewReport,
-  describeGatedReview,
   GATED_REVIEW_NOTICE_DAYS,
   GATED_REVIEW_NOTICE_KIND,
   GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
@@ -58,39 +57,6 @@ describe("buildGatedReviewReport", () => {
     expect(buildGatedReviewReport("gated", null, AS_OF)).toEqual({
       kind: "read_failed",
     });
-  });
-});
-
-describe("describeGatedReview", () => {
-  test("says nothing when the mode posts reviews", () => {
-    expect(describeGatedReview({ kind: "off" })).toBeNull();
-  });
-
-  test("tells the period and the count of unposted reviews", () => {
-    const text = describeGatedReview({
-      kind: "on",
-      since: new Date("2026-10-12T03:00:00.000Z"),
-      unposted_count: 4,
-      elapsed_days: 3,
-    });
-    expect(text).toContain("2026-10-12");
-    expect(text).toContain("3日");
-    expect(text).toContain("4件");
-  });
-
-  test("tells that nothing was left unposted yet", () => {
-    const text = describeGatedReview({
-      kind: "on",
-      since: null,
-      unposted_count: 0,
-      elapsed_days: null,
-    });
-    expect(text).toContain("0件");
-  });
-
-  test("tells how to look into a read failure", () => {
-    const text = describeGatedReview({ kind: "read_failed" });
-    expect(text).toContain("読めませんでした");
   });
 });
 

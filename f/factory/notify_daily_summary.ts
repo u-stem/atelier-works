@@ -11,7 +11,8 @@ import type { CleanupCounts } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
 import {
   addNoticeUnlessUnresolved,
-  resolveUnresolvedNoticesByMessage,
+  listUnresolvedNoticesByKind,
+  resolveUnresolvedNoticesByPrefix,
 } from "./lib/db.ts";
 import {
   type NotifyBestEffortResult,
@@ -19,8 +20,7 @@ import {
 } from "./lib/discord.ts";
 import {
   buildGatedReviewReport,
-  type GatedReviewReport,
-  type GatedReviewStats,
+  GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
   gatedProlongedNotice,
   isGatedProlonged,
 } from "./lib/gated_review_support.ts";
@@ -37,7 +37,12 @@ import {
   previousDayLabel,
   type SummaryPlan,
 } from "./lib/summary_support.ts";
-import type { NoticeRecord, ReviewPostMode } from "./lib/types.ts";
+import type {
+  GatedReviewReport,
+  GatedReviewStats,
+  NoticeRecord,
+  ReviewPostMode,
+} from "./lib/types.ts";
 import type {
   WorkerLoadReport,
   WorkerLoadSummary,
@@ -110,16 +115,23 @@ export async function readGatedReview(
 /** `syncGatedNotice`が使う外部の操作。テストでは差し替える。 */
 export type GatedNoticeDeps = {
   readonly notice: NoticeRecord;
+  /** noticeの種類の未解決のものが、本文に関わらず1件でもあるか。 */
+  readonly hasOpenNotice: (kind: string) => Promise<boolean>;
   /** 同じ本文の未解決のnoticeが無ければ記録する。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
-  /** 本文が一致する未解決のnoticeを解決する。 */
-  readonly resolveNotice: (record: NoticeRecord) => Promise<number>;
+  /** 種類が一致し、本文が先頭で始まる未解決のnoticeを解決する。 */
+  readonly resolveNotice: (
+    kind: string,
+    messagePrefix: string,
+  ) => Promise<number>;
   readonly log: Logger;
 };
 
 /**
  * 投稿しない状態が閾値の日数を超えたら、Consoleの要対応にnoticeを足す。
+ * 種類の未解決のnoticeが既にあれば、本文のURLが変わっていても、重ねて足さない。
  * 投稿するモードに戻っていたら、人の操作が済んでいるので、未解決のnoticeを解決する。
+ * 解決は種類と本文の固定の先頭で選ぶので、設定のURLが変わった後の本文でも解決できる。
  * 閾値の手前と、集計を読めなかったときは何もしない(読めない間に、解決も新規も誤らないため)。
  * 日次のまとめの補足なので、失敗しても例外は投げず、警告に残す。
  */
@@ -129,9 +141,14 @@ export async function syncGatedNotice(
 ): Promise<void> {
   try {
     if (isGatedProlonged(report)) {
-      await deps.addNotice(deps.notice);
+      if (!(await deps.hasOpenNotice(deps.notice.kind))) {
+        await deps.addNotice(deps.notice);
+      }
     } else if (report.kind === "off") {
-      await deps.resolveNotice(deps.notice);
+      await deps.resolveNotice(
+        deps.notice.kind,
+        GATED_REVIEW_NOTICE_MESSAGE_PREFIX,
+      );
     }
   } catch (error) {
     deps.log.warn("could not sync the gated review notice", {
@@ -331,11 +348,13 @@ export async function main(): Promise<CatchupResult> {
       notice: gatedProlongedNotice(
         buildItemsConsoleUrl(config.windmill_public_url),
       ),
+      hasOpenNotice: async (kind) =>
+        (await listUnresolvedNoticesByKind(kind)).length > 0,
       addNotice: (record) => addNoticeUnlessUnresolved(record),
-      resolveNotice: (record) =>
-        resolveUnresolvedNoticesByMessage(
-          record.kind,
-          record.message,
+      resolveNotice: (kind, messagePrefix) =>
+        resolveUnresolvedNoticesByPrefix(
+          kind,
+          messagePrefix,
           GATED_NOTICE_RESOLVER,
         ),
       log,
