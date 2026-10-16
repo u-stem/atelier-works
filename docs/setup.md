@@ -106,10 +106,11 @@ mise run doctor
 8. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2つはgitで管理せず、`bootstrap`は空のまま作る。
 
 ログインのセッションの有効期間は30日である(Windmillの既定は3日)。
-期間を変えるには、`infra/docker-compose.yml`の`windmill_server`にある`MAX_SESSION_VALIDITY_SECONDS`を秒数で書き換える。
-その後、`mise run up`をやり直す。
-値を変えたあとは、一度ログインし直す。
-この値はサーバーだけが読むので、workerには指定しない。
+期間は`WM_SESSION_VALIDITY_SECONDS`で決める。値は秒数で、`mise.toml`の`[env]`にある。
+変えるときは、`mise.local.toml`などmiseの設定で`WM_SESSION_VALIDITY_SECONDS`を上書きし、`mise run up`をやり直す。
+その後、各ブラウザでログアウトしてからログインし直す。
+すでにあるセッションに新しい値が効くかは、確かめていない。
+この値は`windmill_server`にだけ渡す。
 
 `GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`が空でも、`bootstrap`は完了する。対応するWindmillの変数が空で作られる。`doctor`はこれらが空だとNGを報告するので、運用を始める前に値を投入する。
 

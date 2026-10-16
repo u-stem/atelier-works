@@ -590,24 +590,41 @@ describe("infra/docker-compose.yml windmill_worker slots recorded by sample_work
 });
 
 describe("infra/docker-compose.yml windmill_server session validity", () => {
-  test("the login session validity is 30 days", () => {
+  test("the server takes the session validity from the mise variable", () => {
     expect(
       envEntries(service("windmill_server"), "MAX_SESSION_VALIDITY_SECONDS="),
-    ).toEqual(["MAX_SESSION_VALIDITY_SECONDS=2592000"]);
+    ).toEqual([
+      "MAX_SESSION_VALIDITY_SECONDS=${WM_SESSION_VALIDITY_SECONDS:?run via mise}",
+    ]);
   });
 
-  test("the default worker does not set the session validity", () => {
-    expect(
-      envEntries(service("windmill_worker"), "MAX_SESSION_VALIDITY_SECONDS="),
-    ).toEqual([]);
+  test("mise.toml sets the session validity to 30 days", () => {
+    const parsed: unknown = Bun.TOML.parse(
+      readFileSync(join(REPO_ROOT, "mise.toml"), "utf8"),
+    );
+    const env = isRecord(parsed) && isRecord(parsed.env) ? parsed.env : {};
+
+    expect(env.WM_SESSION_VALIDITY_SECONDS).toBe("2592000");
   });
 
-  test("the console worker does not set the session validity", () => {
-    expect(
-      envEntries(
-        service("windmill_worker_console"),
-        "MAX_SESSION_VALIDITY_SECONDS=",
-      ),
-    ).toEqual([]);
+  test("no service other than windmill_server sets the session validity", () => {
+    const parsed = compose();
+    const names = isRecord(parsed.services) ? Object.keys(parsed.services) : [];
+    // environmentは配列形式とmap形式の両方があるので、変数名だけを取り出して比べる。
+    const setsValidity = (name: string): boolean => {
+      const environment = service(name).environment;
+      if (isRecord(environment)) {
+        return "MAX_SESSION_VALIDITY_SECONDS" in environment;
+      }
+      return (
+        isStringArray(environment) &&
+        environment.some((e) => e.startsWith("MAX_SESSION_VALIDITY_SECONDS"))
+      );
+    };
+    const setting = names
+      .filter((name) => name !== "windmill_server")
+      .filter(setsValidity);
+
+    expect(setting).toEqual([]);
   });
 });
