@@ -23,6 +23,8 @@ import {
   CONFLICT_CLAIMS_PER_RUN_LIMIT,
   FIX_BOUND_WARN_AFTER_MS,
   type PrConflictFixDeps,
+  type PrConflictFixWiring,
+  type PrConflictRecoveryDeps,
   type PrConflictWatchDeps,
   runPrConflictWatch,
 } from "../../f/factory/lib/pr_conflict_watch.ts";
@@ -144,6 +146,7 @@ type Setup = {
 
 type Harness = {
   readonly deps: PrConflictWatchDeps;
+  readonly fix: PrConflictFixDeps;
   readonly rows: PrConflictCheck[];
   readonly calls: string[];
   readonly notices: NoticeRecord[];
@@ -207,7 +210,24 @@ function setup(options: Setup = {}): Harness {
     if (found !== undefined) rows[index] = { ...found, ...changes };
   };
 
+  const release = async (
+    id: number,
+    releaseOptions: ReleasePrConflictFixOptions,
+  ): Promise<boolean> => {
+    releases.push({ id, options: releaseOptions });
+    calls.push(`release:${String(id)}`);
+    if (options.releaseResult === false) return false;
+    replace(id, {
+      fix_work_item_id: null,
+      ...(releaseOptions.holdReason === undefined
+        ? {}
+        : { fix_hold_reason: releaseOptions.holdReason }),
+    });
+    return true;
+  };
+
   const fix: PrConflictFixDeps = {
+    release,
     maxRounds: 2,
     maxRoundsPerPr: 5,
     enabledSince: SINCE,
@@ -272,38 +292,30 @@ function setup(options: Setup = {}): Harness {
     ...options.fix,
   };
 
-  const deps: PrConflictWatchDeps = {
-    ...(options.withoutRecovery
+  const recovery: PrConflictRecoveryDeps = {
+    listFixing: async () => {
+      calls.push("list_fixing");
+      if (options.failListFixing) throw new Error("db down");
+      return rows.filter((row) => row.fix_work_item_id !== null);
+    },
+    readFixItem: async (workItemId) => {
+      if (options.failReadItem === workItemId) {
+        throw new Error("db down");
+      }
+      const found = options.items?.[workItemId];
+      return found === undefined ? null : found;
+    },
+    release,
+  };
+  // 起動の依存は、回復の依存と一緒にだけ渡せる。
+  const wiring: PrConflictFixWiring = options.withoutFix
+    ? options.withoutRecovery
       ? {}
-      : {
-          recovery: {
-            listFixing: async () => {
-              calls.push("list_fixing");
-              if (options.failListFixing) throw new Error("db down");
-              return rows.filter((row) => row.fix_work_item_id !== null);
-            },
-            readFixItem: async (workItemId) => {
-              if (options.failReadItem === workItemId) {
-                throw new Error("db down");
-              }
-              const found = options.items?.[workItemId];
-              return found === undefined ? null : found;
-            },
-            release: async (id, releaseOptions) => {
-              releases.push({ id, options: releaseOptions });
-              calls.push(`release:${String(id)}`);
-              if (options.releaseResult === false) return false;
-              replace(id, {
-                fix_work_item_id: null,
-                ...(releaseOptions.holdReason === undefined
-                  ? {}
-                  : { fix_hold_reason: releaseOptions.holdReason }),
-              });
-              return true;
-            },
-          },
-        }),
-    ...(options.withoutFix ? {} : { fix }),
+      : { recovery }
+    : { fix, recovery };
+
+  const deps: PrConflictWatchDeps = {
+    ...wiring,
     now: () => options.now ?? NOW,
     log,
     instanceName: "local",
@@ -374,6 +386,7 @@ function setup(options: Setup = {}): Harness {
   };
   return {
     deps,
+    fix,
     rows,
     calls,
     notices,
@@ -1093,5 +1106,102 @@ describe("runPrConflictWatch: with the fix disabled", () => {
     expect(h.notices[0]?.message).toBe(
       "acme/widgets#12: マージの競合があります。次の操作: PRのブランチにベースブランチをmergeして競合を解消し、pushする。PR: https://github.com/acme/widgets/pull/12",
     );
+  });
+});
+
+describe("runPrConflictWatch: a fix that just settled", () => {
+  const PAST_GRACE = {
+    episode_started_at: new Date(NOW.getTime() - 120 * MINUTE),
+  };
+
+  test("does not notify after the grace while the last fix settled a minute ago", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: { lastFixSettledAt: async () => new Date(NOW.getTime() - MINUTE) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("notifies after the grace once the window has passed", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: {
+        lastFixSettledAt: async () => new Date(NOW.getTime() - 10 * MINUTE),
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.events).toHaveLength(1);
+  });
+
+  test("notifies a final hold even when the last fix settled a minute ago", async () => {
+    const h = setup({
+      rows: [check({ ...PAST_GRACE, fix_hold_reason: "protected_path" })],
+      fix: { lastFixSettledAt: async () => new Date(NOW.getTime() - MINUTE) },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.events).toHaveLength(1);
+  });
+
+  test("notifies after the grace when the time of the last fix cannot be read", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: {
+        lastFixSettledAt: async () => {
+          throw new Error("db down");
+        },
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.events).toHaveLength(1);
+  });
+});
+
+describe("runPrConflictWatch: the limit of fixes in a run", () => {
+  test("still writes a hold for a row after the limit was reached", async () => {
+    const h = setup({
+      prNumbers: [12, 13, 14],
+      fix: { hasActiveFix: async (_owner, _repo, number) => number === 14 },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.holds).toEqual([
+      { id: 114, reason: "last_fix_unsettled", expected: null },
+    ]);
+  });
+
+  test("does not claim a row after the limit was reached", async () => {
+    const h = setup({ prNumbers: [12, 13, 14] });
+    await runPrConflictWatch(h.deps);
+    expect(h.claims.map((claim) => claim.id)).toEqual([112, 113]);
+  });
+
+  test("does not notify a row that waits for the next run", async () => {
+    const h = setup({ prNumbers: [12, 13, 14] });
+    await runPrConflictWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+});
+
+describe("runPrConflictWatch: failures that repeat in a run", () => {
+  test("records a failure of the skill marker once for two pull requests", async () => {
+    const h = setup({
+      prNumbers: [12, 13],
+      fix: {
+        hasSkillMarker: async () => {
+          throw new Error("fs down");
+        },
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.failures).toHaveLength(1);
+  });
+});
+
+describe("PrConflictWatchDeps", () => {
+  test("does not accept a fix without the recovery", () => {
+    const h = setup({ withoutFix: true, withoutRecovery: true });
+    // @ts-expect-error 起動の依存は、回復の依存と一緒にだけ渡せる。
+    const bad: PrConflictWatchDeps = { ...h.deps, fix: h.fix };
+    expect(bad.recovery).toBeUndefined();
   });
 });

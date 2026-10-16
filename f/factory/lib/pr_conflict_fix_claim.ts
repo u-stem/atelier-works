@@ -140,6 +140,8 @@ export type ConflictNotifyInput = {
   /** 一時の保留のまま通知を待つ時間(分)。 */
   readonly graceMin: number;
   readonly now: Date;
+  /** 競合を直す作業項目が、失敗せずに終わった時刻の最新。無ければ`null`か省略。 */
+  readonly lastFixSettledAt?: Date | null;
   readonly row: {
     readonly fix_hold_reason: string | null;
     readonly fix_work_item_id: number | null;

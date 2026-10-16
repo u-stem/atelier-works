@@ -83,8 +83,33 @@ import {
   runPrConflictWatchIfEnabled,
 } from "./lib/pr_conflict_watch.ts";
 import { launchPrFixFlow } from "./lib/pr_fix_launch.ts";
-import type { FactoryConfig } from "./lib/types.ts";
+import type { FactoryConfig, WorkItemStatus } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
+
+/** 起動の依存が呼ぶ読み取り。テストで差し替える。 */
+export type ConflictFixLookups = {
+  readonly getBranchSha: typeof getBranchSha;
+  readonly getMainCiStateBySha: typeof getMainCiStateBySha;
+  readonly getFileAtRef: typeof getFileAtRef;
+};
+
+/** 回復の依存が呼ぶ読み取りと書き込み。テストで差し替える。 */
+export type ConflictRecoveryLookups = {
+  readonly getWorkItem: (id: number) => Promise<{
+    status: WorkItemStatus;
+    flow_job_id: string | null;
+    conflict_episode: number | null;
+  } | null>;
+  readonly latestStatusEvent: (
+    id: number,
+    status: WorkItemStatus,
+  ) => Promise<{ note: string | null } | null>;
+  readonly latestFixRound: (
+    id: number,
+  ) => Promise<{ commit_shas: readonly string[] } | null>;
+  readonly listPrConflictFixing: typeof listPrConflictFixing;
+  readonly releasePrConflictFix: typeof releasePrConflictFix;
+};
 
 /** factory-fixスキルの、Factoryのcloneの中での位置。`pr_fix_apply`が読むファイルと同じである。 */
 const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
@@ -97,6 +122,7 @@ const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
 export function buildConflictFixDeps(
   config: FactoryConfig,
   client: GhClient,
+  _lookups: Partial<ConflictFixLookups> = {},
 ): PrConflictFixDeps | undefined {
   const since = config.pr_conflict_fix_enabled_since;
   if (!config.pr_conflict_fix_enabled || since === null) return undefined;
@@ -156,6 +182,7 @@ export function buildConflictFixDeps(
     cancelFlow: async (jobId, reason) => {
       await wmill.cancelJob(jobId, reason);
     },
+    release: (id, options) => releasePrConflictFix(id, options),
   };
 }
 
@@ -164,7 +191,9 @@ export function buildConflictFixDeps(
  * 作業項目の注記は、ラウンドを数える式(`countPrConflictFixRounds`)と同じく、
  * 今の状態へ移った最新の遷移のものを読む(`latestStatusEvent`)。
  */
-export function buildConflictRecoveryDeps(): PrConflictRecoveryDeps {
+export function buildConflictRecoveryDeps(
+  _lookups: Partial<ConflictRecoveryLookups> = {},
+): PrConflictRecoveryDeps {
   return {
     listFixing: (limit) => listPrConflictFixing(limit),
     readFixItem: (workItemId, rowEpisode) =>

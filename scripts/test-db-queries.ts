@@ -6124,6 +6124,58 @@ check(
   "conflict settled: another pull request is not mixed in",
   (await latestConflictFixSettledAt("qcfix", "app", 734, sql)) === null,
 );
+// push済みの作業項目は、blockedやfailedで終わっていても、直した回として数える。
+const cfPushed = await conflictFixRow(735, CF_HEAD_1);
+const cfPushedItem = await conflictRoundItem(
+  735,
+  cfPushed.id,
+  1,
+  "blocked",
+  "job-p",
+);
+await insertFixRound(
+  {
+    work_item_id: cfPushedItem,
+    round: 1,
+    trigger_review_ids: [],
+    outcome: "done",
+    replies: [],
+    commit_shas: ["3".repeat(40)],
+  },
+  sql,
+);
+check(
+  "conflict settled: a blocked work item that pushed a commit is a settled fix",
+  (await latestConflictFixSettledAt("qcfix", "app", 735, sql)) !== null,
+);
+const cfNotPushed = await conflictFixRow(736, CF_HEAD_1);
+const cfNotPushedItem = await conflictRoundItem(
+  736,
+  cfNotPushed.id,
+  1,
+  "blocked",
+  "job-np",
+);
+await insertFixRound(
+  {
+    work_item_id: cfNotPushedItem,
+    round: 1,
+    trigger_review_ids: [],
+    outcome: "done",
+    replies: [],
+    commit_shas: [],
+  },
+  sql,
+);
+check(
+  "conflict settled: a blocked work item whose round pushed nothing is not a settled fix",
+  (await latestConflictFixSettledAt("qcfix", "app", 736, sql)) === null,
+);
+check(
+  "active pr_fix: the owner and repo are compared in lowercase",
+  (await listActivePrFixWorkItems(OWNER.toUpperCase(), "R", 9201, sql))
+    .length === 1,
+);
 // 既定のブランチの先頭のmainのCIの状態: コミットごとに引き、記録が無ければnull。
 const cfMainSha = "5".repeat(40);
 const cfMainOther = "4".repeat(40);

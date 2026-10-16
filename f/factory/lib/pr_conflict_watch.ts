@@ -137,6 +137,11 @@ export type PrConflictRecoveryDeps = {
  * ほかの関数には、行と同じ小文字を渡す。
  */
 export type PrConflictFixDeps = {
+  /** 行の結びを外す(`releasePrConflictFix`)。起動に失敗した作業項目の行を戻すのに使う。 */
+  readonly release: (
+    id: number,
+    options: ReleasePrConflictFixOptions,
+  ) => Promise<boolean>;
   /** 競合の1回で起動できる数の上限(`pr_conflict_fix_max_rounds`)。 */
   readonly maxRounds: number;
   /** 1つのPRで起動できる数の上限(`pr_conflict_fix_max_rounds_per_pr`)。 */
@@ -199,11 +204,13 @@ export type PrConflictFixDeps = {
   readonly cancelFlow: (jobId: string, reason: string) => Promise<void>;
 };
 
-export type PrConflictWatchDeps = {
-  /** 渡したときだけ、通知の判断の前に、直す作業項目が結ばれた行を戻す。 */
+/** 回復と起動の依存の組。 */
+export type PrConflictFixWiring = {
   readonly recovery?: PrConflictRecoveryDeps;
-  /** 渡したときだけ、競合の行について直す作業項目を起動する。 */
   readonly fix?: PrConflictFixDeps;
+};
+
+export type PrConflictWatchDeps = PrConflictFixWiring & {
   readonly now: () => Date;
   readonly log: Logger;
   readonly instanceName: string;
