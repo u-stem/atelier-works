@@ -7302,6 +7302,21 @@ describe("transient pr_review restart", () => {
     expect(calls[0]?.values).toContainEqual([300, 900, 2700]);
   });
 
+  test("lists only the reviews after the given id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates(
+      { ...query, limit: 50, afterId: 4242 },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(4242);
+  });
+
+  test("compares the id with the given id in the list query", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listTransientReviewCandidates({ ...query, limit: 50 }, sql);
+    expect(calls[0]?.text).toContain("w.id > ");
+  });
+
   test("passes the delays to the compare-and-swap too", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await restartTransientPrReview(
