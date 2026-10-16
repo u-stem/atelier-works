@@ -48,6 +48,7 @@ import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
+import { BINARY_LIST_MAX_FILES } from "../lib/prompts.ts";
 import {
   ASCII_BOUNDARY_CLASS,
   COMMIT_MESSAGE_RULES,
@@ -652,13 +653,10 @@ export function renderReviewSummary(
   return lines.join("\n");
 }
 
-/** 総評に並べるバイナリのファイルのパスの上限。残りは件数だけを書く。 */
-const BINARY_LIST_MAX_FILES = 20;
-
 /**
  * 差分に内容が出ないバイナリのファイルの固定の一文と、パスの箇条書き。無ければ空。
  * 先頭に空行を置き、直前の行(LGTMや免責の行)と続けて読まれないようにする。
- * パスは、改行を空白にまとめ、`<!--`を無害にする(`oneLinePath`)。
+ * パスは、改行を空白にまとめ、200文字で切り、`<!--`を無害にしてから、コードスパンで囲む(`pathCodeSpan`)。
  * 上限を超えた分は「ほかN件」と書く。
  * `unlistedCount`は、パスを変更ファイルと照合できず並べなかった件数で、件数と注記にだけ加える。
  */
@@ -673,7 +671,7 @@ function renderBinaryFilesLines(
   return [
     "",
     `内容を差分で読めないバイナリのファイルが${String(total)}件あります。人が内容を確認してください。`,
-    ...shown.map((path) => `- ${oneLinePath(path)}`),
+    ...shown.map((path) => `- ${pathCodeSpan(path)}`),
     ...(rest > 0 ? [`(ほか${String(rest)}件)`] : []),
     ...(unlistedCount > 0
       ? [`(パスを確認できなかったものが${String(unlistedCount)}件あります)`]
@@ -681,20 +679,52 @@ function renderBinaryFilesLines(
   ];
 }
 
-/** 総評に並べる`path`。改行は空白にまとめ、`<!--`は無害にする。 */
+/** 総評に並べる`path`の最大の文字数(コードポイント)。超えた分は「…」にする。 */
+const PATH_MAX_CHARS = 200;
+
+/**
+ * 総評に並べる`path`の文字列。改行は空白にまとめ、200文字で切り(切ったら末尾に「…」)、
+ * `<!--`は無害にする。長いパスで総評が埋まらないようにし、目印の偽造も防ぐ。
+ */
 function oneLinePath(path: string): string {
-  return neutralizeHtmlComment(path.replace(/\s*[\r\n]+\s*/g, " "));
+  const oneLine = path.replace(/\s*[\r\n]+\s*/g, " ");
+  const chars = Array.from(oneLine);
+  const cut =
+    chars.length > PATH_MAX_CHARS
+      ? `${chars.slice(0, PATH_MAX_CHARS).join("")}…`
+      : oneLine;
+  return neutralizeHtmlComment(cut);
+}
+
+/**
+ * `text`をコードスパンで囲む。`@`のメンションやリンクとして描画させないため。
+ * 中のバッククォートの最長の連なりより長いフェンスで囲み、
+ * 先頭か末尾がバッククォートなら、フェンスと混ざらないよう空白を挟む。
+ */
+function codeSpan(text: string): string {
+  const longestRun = Math.max(
+    0,
+    ...Array.from(text.matchAll(/`+/g), (m) => m[0].length),
+  );
+  const fence = "`".repeat(longestRun + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+/** 総評に並べる`path`を、整えてコードスパンで囲んだ文字列。 */
+function pathCodeSpan(path: string): string {
+  return codeSpan(oneLinePath(path));
 }
 
 /** 指摘の位置。範囲の指摘は`path:line-end_line`、1行の指摘は`path:line`、行が無ければ`path`だけ。 */
 function findingLocation(finding: ReviewFinding): string {
   const path = oneLinePath(finding.path);
-  if (finding.line === null) return path;
+  if (finding.line === null) return codeSpan(path);
   const end =
     finding.end_line !== null && finding.end_line > finding.line
       ? `-${String(finding.end_line)}`
       : "";
-  return `${path}:${String(finding.line)}${end}`;
+  return codeSpan(`${path}:${String(finding.line)}${end}`);
 }
 
 /**
@@ -711,7 +741,7 @@ function renderUnanchoredFindingLines(
     const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
     const location = commented.includes(finding)
       ? findingLocation(finding)
-      : oneLinePath(finding.path);
+      : pathCodeSpan(finding.path);
     const message = neutralizeHtmlComment(
       normalizeJapaneseText(finding.message),
     );

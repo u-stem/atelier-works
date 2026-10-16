@@ -213,8 +213,11 @@ export type ReviewPromptInput = {
   binaryFiles: readonly string[];
 };
 
-/** 指示の文に添えるバイナリのファイルの一覧の上限。残りは件数だけを書く。 */
-const BINARY_LIST_MAX_FILES = 20;
+/**
+ * バイナリのファイルの一覧に並べるパスの上限。残りは件数だけを書く。
+ * プロンプトと、PRの総評の一覧が、同じ上限を使う。
+ */
+export const BINARY_LIST_MAX_FILES = 20;
 
 /**
  * バイナリのファイルについての指示と、パスの一覧の囲みを返す。

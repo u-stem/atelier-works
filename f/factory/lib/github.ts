@@ -2639,8 +2639,11 @@ function stripSidePrefix(side: string): string {
 /**
  * `Binary files <古い側> and <新しい側> differ`の行から、パスを取り出す。
  * 追加は新しい側、削除は古い側のパスを使う(`/dev/null`の側は使わない)。
- * パスが` and `を含んでも切れるよう、`/dev/null`の側は端で見分け、
- * 両側があるときは、新しい側の接頭辞(` and b/`か` and "b/`)の最後の出現で区切る。
+ * パスが` and `を含んでも切れるよう、`/dev/null`の側は端で見分ける。
+ * 両側があるときは、新しい側の接頭辞(` and b/`か` and "b/`)の位置の候補のうち、
+ * 左の`a/`を外したパスと右の`b/`を外したパスが一致する位置で区切る。
+ * 変更の前後でパスが同じなら、パスが` and b/`を含んでも、偽の区切りを選ばないためである。
+ * 一致する位置が無いとき(renameなど)は、最後の候補で区切る。
  */
 function binaryPathOf(sides: string): string {
   const added = "/dev/null and ";
@@ -2651,13 +2654,16 @@ function binaryPathOf(sides: string): string {
   if (sides.endsWith(deleted)) {
     return stripSidePrefix(sides.slice(0, sides.length - deleted.length));
   }
-  const split = Math.max(
-    sides.lastIndexOf(" and b/"),
-    sides.lastIndexOf(' and "b/'),
+  const starts = [...sides.matchAll(/ and "?b\//g)].map((m) => m.index);
+  const matching = starts.find(
+    (start) =>
+      stripSidePrefix(sides.slice(0, start)) ===
+      stripSidePrefix(sides.slice(start + " and ".length)),
   );
+  const split = matching ?? starts.at(-1);
   // 接頭辞が無い形(`--no-prefix`など)でも、読み落とさないよう最初の` and `で区切る。
   const fallback = sides.indexOf(" and ");
-  const start = split === -1 ? fallback : split;
+  const start = split ?? fallback;
   if (start === -1) return sides;
   return stripSidePrefix(sides.slice(start + " and ".length));
 }

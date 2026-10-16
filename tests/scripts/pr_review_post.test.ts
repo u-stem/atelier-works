@@ -684,7 +684,8 @@ describe("binary input wiring in the post step", () => {
   ).text();
 
   test("normalizes the binary input once before publishing", async () => {
-    const needle = "normalizeBinaryInput(binary_files, binary_unlisted_count)";
+    const needle =
+      "normalizeBinaryInput(\n    input.binary_files,\n    input.binary_unlisted_count,\n  )";
     expect((await SOURCE).split(needle).length - 1).toBe(1);
   });
 });

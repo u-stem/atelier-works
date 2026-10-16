@@ -65,13 +65,17 @@ export type PrReviewPostResult = {
 };
 
 /**
- * 古いflow定義が新しいscriptを呼ぶと、`binary_files`と`binary_unlisted_count`が届かない。
+ * 古いflow定義が新しいscriptを呼ぶと、`binary_files`と`binary_unlisted_count`が
+ * undefinedかnullで届く。そのときは、バイナリが無いものとして旧来の総評にする。
  */
 export function normalizeBinaryInput(
   binaryFiles: readonly string[] | null | undefined,
   binaryUnlistedCount: number | null | undefined,
 ): { binaryFiles: string[]; binaryUnlistedCount: number } {
-  return { binaryFiles: ["stub"], binaryUnlistedCount: 1 };
+  return {
+    binaryFiles: [...(binaryFiles ?? [])],
+    binaryUnlistedCount: binaryUnlistedCount ?? 0,
+  };
 }
 
 /** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
@@ -86,8 +90,8 @@ export type PrReviewPostInput = {
   readonly verdict: string | null;
   readonly findings: ReviewFinding[];
   readonly pr_files: string[];
-  readonly binary_files: string[];
-  readonly binary_unlisted_count: number;
+  readonly binary_files: string[] | null | undefined;
+  readonly binary_unlisted_count: number | null | undefined;
   readonly worktree_dir: string;
   readonly repo_dir: string;
 };
@@ -607,9 +611,11 @@ async function postReview(
     verdict,
     findings,
     pr_files,
-    binary_files,
-    binary_unlisted_count,
   } = input;
+  const { binaryFiles, binaryUnlistedCount } = normalizeBinaryInput(
+    input.binary_files,
+    input.binary_unlisted_count,
+  );
 
   if (skip || verdict === null) {
     return SKIPPED_POST;
@@ -666,8 +672,8 @@ async function postReview(
       comments,
       commentedFindings: commentedFindingsOf(findings, droppedFindings),
       droppedFindings,
-      binaryFiles: binary_files,
-      binaryUnlistedCount: binary_unlisted_count,
+      binaryFiles,
+      binaryUnlistedCount,
       priorReview,
       post,
       ensureRepoOwner: () =>
