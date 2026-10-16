@@ -609,17 +609,24 @@ git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts
 ### mergeして基準コミットを作る
 
 `mergeBaseIntoWorktree`は、競合を解かせる前に、PRのworktreeでbaseをmergeして、ローカルだけの基準コミットを作る。
-次の順に進み、結果は`merged`、`up_to_date`、`base_not_default`、`unresolvable`のどれかである。
+結果は`merged`、`up_to_date`、`base_not_default`、`head_changed`、`unresolvable`のどれかである。
+次の順に進む。
 
 1. 前段の守りを通す(ロック、worktreeの検証、`.git`ファイルの照合、HEADのブランチの確認)。
-2. 無視されたファイルを消し、作業ツリーが空で、HEADがPRのheadであることを確かめる。
-3. `ls-remote`で、リモートの`HEAD`が`refs/heads/<PRのbase>`を指すかを確かめ、先頭のshaを読む。指さなければ`base_not_default`で終わる。
-4. そのshaを明示してfetchし、取り込めたことを確かめる。
-5. baseがPRのheadの祖先なら`up_to_date`で終わる。何も変えない。
-6. `merge --no-ff --no-commit`を実行する。設定は`merge.conflictStyle=diff3`、`rerere.enabled=false`、`merge.renormalize=false`にする。
-7. 競合ファイルを`ls-files -u`で読み、直せるかを調べる。直せなければmergeを取り消して`unresolvable`で終わる。
-8. 競合ファイルだけを`add`してcommitする。親は[PRのhead, base]である。
-9. 基準コミットの親が記録と一致することと、未追跡のファイルが無いことを確かめる。
+2. 無視されたファイルを消し、作業ツリーが空であることを確かめる。
+3. HEADがPRのheadと違えば、何も変えずに`head_changed`で終わる。値はworktreeのHEADである。
+4. `ls-remote`で、リモートの`HEAD`が`refs/heads/<PRのbase>`を指すかを確かめ、先頭のshaを読む。指さなければ`base_not_default`で終わる。
+5. そのshaを明示してfetchし、取り込めたことを確かめる。
+6. baseがPRのheadの祖先なら`up_to_date`で終わる。何も変えない。
+7. `merge --no-ff --no-commit`を実行する。設定は`merge.conflictStyle=diff3`、`rerere.enabled=false`、`merge.renormalize=false`にする。
+8. 競合ファイルを`ls-files -u`で読み、直せるかを調べる。直せなければmergeを取り消して`unresolvable`で終わる。
+9. 競合ファイルだけを`add`する。
+10. `add`した本文が、3つの版から作り直した本文と同じかを確かめる。違えばmergeを取り消して`unresolvable`(`reconstruction_mismatch`)で終わる。
+11. commitする。親は[PRのhead, base]である。
+12. 基準コミットの親が記録と一致することと、未追跡のファイルが無いことを確かめる。
+
+`head_changed`は、準備のステップがPRを読んでからfetchするまでの間に、誰かがpushしたときに起きる。
+例外にはせず、呼び出し側が値で受ける。
 
 結果の`merged`は、baseのsha、基準コミットのsha、そのツリーのsha、競合ファイルの一覧、競合ファイルごとの3つの版のblobを持つ。
 競合が無いmergeも`merged`で、競合ファイルの一覧は空になる。
@@ -627,7 +634,29 @@ git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts
 `merge`の引数は`--`の後にshaを置く。
 gitの2.54では、`--`の有無で動作が変わらないことを確かめた。
 `commit-tree`だけは、`--`の後に置くとツリーとして読まれないので、`--`を付けない。
-`check-attr --source`は2.40以降、`merge-file --object-id`は2.43以降のgitが要る。workerのgitは2.47である。
+
+必要なgitの版は、使うオプションで決まる。
+`check-attr --source`は2.40以降、`merge-file --object-id`は2.43以降、`merge-file --diff-algorithm`は2.44以降である。
+workerのgitは2.47なので、すべて使える。
+
+### 衝突ブロックの照合
+
+検査は、衝突ブロックを3つの版から作り直した形で決める(「Claudeの解消の検査」)。
+作り直した形が、gitがworktreeに書いたブロックと食い違うと、Claudeが見た境目と検査の境目がずれる。
+そのため、`mergeBaseIntoWorktree`は、Claudeを起動する前に、両者を照合する。
+
+`git merge`(merge-ort)は、内容のmergeを常にhistogramの差分で行う。
+`git merge-file`の既定はMyersで、`}`や空行が繰り返す入力では、衝突ブロックの境目が食い違う。
+そこで、`reconstructConflictText`は`--diff-algorithm=histogram`を付ける。
+食い違いが起きる入力は、テスト(`workspace_merge.test.ts`)が実際のgitで確かめている。
+
+照合は、`add`した後の索引のblobと、作り直した本文を、マーカー行のラベルを除いて比べる。
+gitが書くラベル(`HEAD`など)と、`-L`で付けるラベルは別の文字列だからである。
+比べる相手は作業ファイルではなく索引のblobで、基準コミットに入る内容そのものである。
+違えば`unresolvable`(`reconstruction_mismatch`)で終わり、mergeを取り消す。
+
+CRLFのファイルでは、gitはマーカー行も`\r\n`で書く。
+`merge-file`も同じなので照合は通り、`checkConflictResolution`は、マーカー行の判定で行末の`\r`を見ない。
 
 ### 競合を直せない条件
 
@@ -641,12 +670,14 @@ gitの2.54では、`--`の有無で動作が変わらないことを確かめた
 | `missing_stage` | 共通の祖先、PRのhead、baseの3つの版のどれかが無い(片側の削除、両側の追加) |
 | `not_regular_file` | 通常のファイル(モード`100644`と`100755`)でない。symlinkとサブモジュールを含む |
 | `binary` | PRのheadとbaseの差で、バイナリと判定される |
-| `too_large` | PRのheadかbaseの版が、2MiBを超える |
 | `attributes` | PRのheadかbaseのツリーで、`merge`、`filter`、`working-tree-encoding`、`ident`、`diff`、`conflict-marker-size`のどれかの属性が付いている |
-| `marker_like_line` | PRのheadかbaseの版に、衝突マーカーに見える行がある |
+| `too_large` | 共通の祖先、PRのhead、baseのどれかの版が、2MiBを超える |
+| `marker_like_line` | 共通の祖先、PRのhead、baseのどれかの版に、衝突マーカーに見える行がある |
+| `reconstruction_mismatch` | 作り直した本文が、gitが書いた本文と、ラベルを除いて違う |
 
-属性は、PRのheadとbaseのツリーに対して`check-attr --source=<sha> -a`で調べる。
+属性は、競合ファイルだけを、PRのheadとbaseのツリーに対して`check-attr --source=<sha> -a`で調べる。
 これらの属性は、mergeの仕方や内容の変換を変え、作業ファイルと3つの版の内容を食い違わせる。
+`too_large`と`marker_like_line`は、版ごとに、共通の祖先、PRのhead、baseの順に調べる。
 
 衝突マーカーに見える行は、行頭が`<<<<<<<`、`|||||||`、`>>>>>>>`、`=======`のちょうど7文字で、空白か行末が続く行である。
 元のファイルにあると、gitが書いたマーカーと本文を見分けられない。
@@ -677,7 +708,18 @@ baseだけが変えたパスは、結果がbaseと同じなので「両側の差
 そのため、baseが保護パスを変えても止めない。
 `.github/workflows/`だけは、baseだけが変えても止める。PATに`workflow`スコープが無く、pushが拒否されるためである。
 
-gitleaksにかけるパスと、`merge`属性を調べるパスにも、同じ「両側の差」を使う。
+### 解消したツリーを作る
+
+`stageConflictPathsTree`は、競合ファイルだけを`add`し、`write-tree`して、索引を戻す。
+検証のステップが検査するツリーと、`pushMergeCommit`が押すツリーを、同じ規則で作るために共有する。
+作業ツリーのほかのファイルは、ツリーに入らない。
+
+`inspectStaged`を渡すと、`add`の後、`write-tree`の前に、ステージした内容を調べる。
+理由があれば索引を戻して`CommitBlockedError`を投げる。`write-tree`が失敗したときも索引を戻す。
+
+`listTreeChanges`は、基準コミットとそのツリーの差を、`checkConflictResolution`の変更の一覧の形で返す。
+pushされる内容そのものの差になる。
+作業ツリーにあって、ツリーに入らないファイルは含まない。
 
 ### mergeコミットをpushする
 
@@ -685,11 +727,19 @@ gitleaksにかけるパスと、`merge`属性を調べるパスにも、同じ�
 結果は`pushed`、`head_changed`、`base_changed`、`rejected_workflows`のどれかである。
 
 1. 前段の守りを通す。
-2. PRのブランチをfetchし、リモートの先頭がPRのheadでなければ`head_changed`で終わる。
+2. PRのブランチを、`+refs/heads/<ブランチ>:refs/remotes/origin/<ブランチ>`のrefspecでfetchする。リモートの先頭がPRのheadでなければ`head_changed`で終わる。
 3. ローカルのHEADが基準コミットで、その第1親と第2親がPRのheadと記録したbaseであることを確かめる。違えば`CommitBlockedError`を投げる。
-4. 競合ファイルだけを`add`し、呼び出し側が渡した検査(`inspectStaged`)を通し、`write-tree`が検査したツリーと一致することを確かめる。違えばステージを戻して`CommitBlockedError`を投げる。
+4. `stageConflictPathsTree`でツリーを作り、検査したツリーと一致することを確かめる。違えば`CommitBlockedError`を投げる。
 5. `ls-remote`で、記録したbaseが既定のブランチの先頭か、その祖先であることを確かめる。違えば`base_changed`で終わる。
 6. `commit-tree`でmergeコミットを作り、そのshaを`refs/heads/<ブランチ>`へpushする。
+
+短いブランチ名のfetchは、同名のタグが先に解決される。
+タグが解決されると追跡refが作られないので、ブランチと追跡refを明示したrefspecにする。
+
+4の時点で索引は戻っているので、5以降で返るときも、索引は基準コミットのままである。
+`pushed`を返した後も、ローカルのブランチと索引は、衝突マーカー入りの基準コミットのままである。
+作ったmergeコミットは、refとHEADのどちらにも置かない。
+呼び出し側は、次にworktreeを使うときの`reset --hard`に任せる。
 
 コミットのメッセージは固定文で、`withCommitTrailers`を通す。
 `Generated-By`が最後の段落になり、Factoryのコミットとして識別できる。
@@ -698,25 +748,29 @@ pushの失敗は、stderrで次のように分ける。
 
 | stderr | 結果 |
 | --- | --- |
-| `[remote rejected]`と`.github/workflows/`を含む | `rejected_workflows` |
+| `[remote rejected]`の行の括弧の中の理由に`.github/workflows/`を含む | `rejected_workflows` |
 | `[rejected]`、`non-fast-forward`、`fetch first`を含み、`[remote rejected]`を含まない | fetchし直して`head_changed` |
 | それ以外 | 例外 |
+
+括弧の外のブランチ名に`.github/workflows/`が含まれていても、`rejected_workflows`にはしない。
+権限不足の拒否と取り違えないためである。
 
 ### Claudeの解消の検査
 
 `checkConflictResolution`は、Claudeが競合ファイルに加えた変更を検査する。
 入力は、競合ファイルごとの3つの版の本文、作り直した衝突マーカー入りの本文、解消後の本文と、変更の一覧である。
-gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`readTreeFileText`で作る。
+gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`readTreeFileText`、`listTreeChanges`で作る。
 
 衝突ブロックは、作業ファイルのテキストではなく、3つの版から作り直した形で決める。
-`reconstructConflictText`が、`git merge-file --object-id -p --diff3`をblobのshaで実行する。
+`reconstructConflictText`は、`git merge-file`をblobのshaで実行する。
+指定するオプションは`--object-id -p --diff3 --diff-algorithm=histogram`である。
 ラベルに`nonce`を入れるので、ファイルの内容が同じ文字列を書いても、ブロックの境目に見せかけられない。
 
 検査は2段階である。
 まず変更の一覧を見て、競合ファイル以外の変更を、新規ファイルを含めてすべて違反にする。
 次に競合ファイルの本文を見る。変更の一覧で違反になったファイルは、本文を見ない。
 
-本文では、`marker_like_input`から`not_in_conflict_block`までは、表の順で最初に当たる1件で止める。
+本文では、`marker_like_input`から`alignment_budget_exceeded`までは、表の順で最初に当たる1件で止める。
 `reordered`以降の4つは、重ねて報告する。
 
 | 違反 | 条件 |
@@ -731,6 +785,7 @@ gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`read
 | `too_large` | 行数が2万を超える |
 | `reconstruction_failed` | 作り直した本文のブロックが読めない |
 | `not_in_conflict_block` | ブロックの外の行を変えた |
+| `alignment_budget_exceeded` | 解消後の行を作り直した形に重ねる探索が、100万回の上限に達した |
 | `reordered` | ブロックの中で、片側だけにある行の順序を入れ替えた |
 | `weakens_checks` | 新しく足した行が、検査を弱める記述に当たる(`weakensChecks`) |
 | `unknown_import` | 新しく足した行が読み込む指定子が、PRのheadとbaseのどちらの版にも無い |
@@ -743,6 +798,8 @@ gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`read
 
 解消後の行は、ブロックの中の解消が最も短くなるように、作り直した形に重ねる。
 ブロックの直後の行と同じ行を解消が足しても、検査の結果は変わらない。
+ブロックが隣り合う長いファイルでは、探索の回数が行数の2乗に比例して増える。
+上限に達したら、重ねられなかったものとして止める。検査の時間を有界にするためである。
 
 `marker_left`の対象は、行頭が`<<<<<<<`、`|||||||`、`>>>>>>>`のどれかで、その後に空白が続く行である。
 `=======`は本文にありうるので見ない。
@@ -1273,6 +1330,8 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - hashの算法は、`ASSUMED_WMILL_CLI_VERSION`の版だけで確かめた。
   `dependencies/`、`__mod`のフォルダ、JSONのflowのように、このリポジトリに無い形は、写さずに人の手に回す。
   算法を固定するテストが見つけられるのは、版の変更と、リポジトリの現物との食い違いだけである。
+- 競合回の`unknown_import`と`weakensChecks`は、JavaScriptとTypeScriptの記法だけを見る。
+  Pythonの`import evil`のような、ほかの言語の読み込みや抑制の記述は、検査を通る。
 - 競合回の検査は、意味の競合を検出できない。
   片側を丸ごと採る解消や、署名の変更と呼び出しの食い違いは、構文の上では正しい。
   検査コマンドの失敗か、後続のレビューで見つかる。
