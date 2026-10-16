@@ -507,6 +507,22 @@ describe("review-loop scaling rules", () => {
     expect(body("implementer")).toContain("## 前提の検証");
   });
 
+  test("separates the first review range from the fix round range", () => {
+    expect(body("code-reviewer")).toContain(
+      "- 最初のレビューでは、`git log --reverse --stat origin/main..HEAD`(二点)を見る。",
+    );
+  });
+
+  test("names the fix round range as a separate case", () => {
+    expect(body("code-reviewer")).toContain(
+      "- 修正のラウンドでは、`git log --reverse --stat <前のラウンドのHEAD>..HEAD`を見る。",
+    );
+  });
+
+  test("keeps no sentence about a raised limit that cannot happen", () => {
+    expect(skillText()).not.toContain("新しい上限を超えている");
+  });
+
   test("has the parent pass the previous round's HEAD", () => {
     expect(skillText()).toContain("前のラウンドのHEAD");
   });
