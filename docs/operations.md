@@ -1501,6 +1501,7 @@ Factoryのほかの処理も止まるので、関連する項目は同じ編集�
 PATが拒まれた(401)ときは、以降の読み取りを止め、失敗を1件だけ記録する。
 PATがリポジトリを読めなくなったときの専用の通知は無い。この監視だけを有効にしているときは、ログの警告だけが残る。
 読めなかったPRと、GitHubのrate limitの扱いは、[PRのCI監視の仕様](internals/pr-ci.md#競合の検知)に書く。
+通知の本文は、競合を直す設定が有効なとき、保留の理由ごとに違う。実行が重なると、同じ競合の通知が2件残りうる。競合が解けると、どちらも自動で解決される。
 
 ### 競合の自動修正を有効にする
 
@@ -1538,7 +1539,10 @@ PATがリポジトリを読めなくなったときの専用の通知は無い�
 
 猶予は、1回目の修正が終わるまでの時間より長くする。1回目が猶予より長くかかると、2回目は起動せずに通知する。
 作業項目が動いている間は、猶予が過ぎても通知せず、終わるまで待つ。
-結びが2時間以上残った行は、警告`pr conflict fix has been running for a long time`が出る。Consoleで作業項目の状態を確かめる。
+猶予が過ぎた後でも、直近の作業項目が終わってから5分に満たない間は、通知を待つ。GitHubの競合の判定が古いままのことがあるためである。
+起動した直後にwatcherが落ちたときなど、作業項目が状態を進められずに残ったときは、`poll_issues`の照合が失敗にし、回復が行を戻す。
+照合の猶予は、10分と`claude_timeout_sec`の2倍の大きい方である。既定の設定では1時間である。
+フローが動き続けている間は、失敗にしない。結びが2時間以上残った行は、警告`pr conflict fix has been running for a long time`が出る。Consoleで作業項目の状態を確かめる。
 
 設定の5項目は、上の表にある。
 設定は`wmill`で直す。リソースの値を取得し、直して、定義ファイルから反映する。
@@ -1549,6 +1553,8 @@ wmill resource push <定義ファイル> f/factory/factory_config
 ```
 
 取得した出力の`value`の項目だけを直し、`resource_type`と`description`は変えずに残して、定義ファイルに書く。
+定義ファイルは、リポジトリの外の一時ディレクトリに置く。リポジトリの中に置くと、誤ってコミットしうるためである。
+反映した後に、もう一度`wmill resource get f/factory/factory_config --json`を実行し、直した項目以外が変わっていないことを、反映前の出力と比べて確かめる。
 `pr_conflict_fix_enabled`、`pr_conflict_fix_enabled_since`、猶予は、同じ編集で書く。
 書き損じると、設定の読み込み全体が止まり、Factoryのほかの処理も動かなくなる。
 
@@ -1587,6 +1593,8 @@ wmill resource push <定義ファイル> f/factory/factory_config
    - pushした回は、PRのブランチに、親が2つでトレーラー`Generated-By`を持つmergeコミットが増える。
    - 次の巡回で、競合が解けて、行が`resolved`になる。通知は出ない。
    - 起動されないときは、`fix_hold_reason`を読む。
+   - 起動の失敗(`job_failures`の手順名`launch_conflict_fix:`)が続くと、約25分後に保留`rounds_exhausted`で通知される。
+     通知文は上限への到達と書くだけで、原因を示さない。原因は`job_failures`の記録を読む。
 8. 結果に問題が無ければ、`pr_conflict_fix_max_rounds`、`pr_conflict_fix_max_rounds_per_pr`、`daily_budget_usd`を戻す。
 
 実機で確かめていないものは、次のとおりである。
