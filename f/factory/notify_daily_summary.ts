@@ -6,24 +6,38 @@
 // ホストのスリープなどで予定が飛んだ日も、次の実行で古い順に出す。
 
 import * as wmill from "windmill-client@1.817.0";
+import { buildItemsConsoleUrl } from "./lib/approval_support.ts";
 import type { CleanupCounts } from "./lib/cleanup_db_support.ts";
 import { loadConfig } from "./lib/config.ts";
+import {
+  addNoticeUnlessUnresolved,
+  resolveUnresolvedNoticesByMessage,
+} from "./lib/db.ts";
 import {
   type NotifyBestEffortResult,
   notifyBestEffort,
 } from "./lib/discord.ts";
-import { type Logger, logger } from "./lib/log.ts";
+import {
+  buildGatedReviewReport,
+  type GatedReviewReport,
+  type GatedReviewStats,
+  gatedProlongedNotice,
+  isGatedProlonged,
+} from "./lib/gated_review_support.ts";
+import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   type DayRange,
   getAgentRunSummary,
   getApprovalSummary,
   getCleanupSummary,
+  getGatedReviewStats,
   getWorkerLoadSummary,
   parseSummaryState,
   planSummaryDays,
   previousDayLabel,
   type SummaryPlan,
 } from "./lib/summary_support.ts";
+import type { NoticeRecord, ReviewPostMode } from "./lib/types.ts";
 import type {
   WorkerLoadReport,
   WorkerLoadSummary,
@@ -38,6 +52,7 @@ export type DailySummaryResult = {
   readonly rejected_count: number;
   readonly cleanup: CleanupCounts | null;
   readonly worker_load: WorkerLoadReport;
+  readonly gated_review: GatedReviewReport;
 };
 
 /**
@@ -64,6 +79,71 @@ export async function readWorkerLoad(
     return { kind: "read_failed" };
   }
 }
+
+/**
+ * `asOf`までの、`gated`で投稿しなかったレビューの期間と件数を読む。
+ * 投稿するモードのときは、DBを読まずに`off`を返す。
+ * 読めなかったときは、警告を残して`read_failed`を返す。
+ * 日次のまとめの補足なので、読めなくても、ほかの項目の通知を止めない。
+ */
+export async function readGatedReview(
+  mode: ReviewPostMode,
+  asOf: Date,
+  fetchStats: (asOf: Date) => Promise<GatedReviewStats>,
+  log: Logger,
+): Promise<GatedReviewReport> {
+  if (mode !== "gated") {
+    return { kind: "off" };
+  }
+  try {
+    return buildGatedReviewReport(mode, await fetchStats(asOf), asOf);
+  } catch (error) {
+    log.warn("gated review stats could not be read", {
+      error: maskSecrets(
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+    return { kind: "read_failed" };
+  }
+}
+
+/** `syncGatedNotice`が使う外部の操作。テストでは差し替える。 */
+export type GatedNoticeDeps = {
+  readonly notice: NoticeRecord;
+  /** 同じ本文の未解決のnoticeが無ければ記録する。 */
+  readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
+  /** 本文が一致する未解決のnoticeを解決する。 */
+  readonly resolveNotice: (record: NoticeRecord) => Promise<number>;
+  readonly log: Logger;
+};
+
+/**
+ * 投稿しない状態が閾値の日数を超えたら、Consoleの要対応にnoticeを足す。
+ * 投稿するモードに戻っていたら、人の操作が済んでいるので、未解決のnoticeを解決する。
+ * 閾値の手前と、集計を読めなかったときは何もしない(読めない間に、解決も新規も誤らないため)。
+ * 日次のまとめの補足なので、失敗しても例外は投げず、警告に残す。
+ */
+export async function syncGatedNotice(
+  report: GatedReviewReport,
+  deps: GatedNoticeDeps,
+): Promise<void> {
+  try {
+    if (isGatedProlonged(report)) {
+      await deps.addNotice(deps.notice);
+    } else if (report.kind === "off") {
+      await deps.resolveNotice(deps.notice);
+    }
+  } catch (error) {
+    deps.log.warn("could not sync the gated review notice", {
+      error: maskSecrets(
+        error instanceof Error ? error.message : String(error),
+      ),
+    });
+  }
+}
+
+/** 日次のまとめが、投稿しない状態のnoticeを自動で解決するときの、解決者の名前。 */
+const GATED_NOTICE_RESOLVER = "notify_daily_summary";
 
 /** 1日分を集計して通知した結果。通知が届いたかどうかも含む。 */
 export type SummarizedDay = {
@@ -239,16 +319,46 @@ export async function main(): Promise<CatchupResult> {
   );
   const webhookUrl = await wmill.getVariable("f/factory/discord_webhook_url");
 
+  // 日次のまとめが届かない日があっても、投稿しない状態の確認は行うので、先に済ませる。
+  await syncGatedNotice(
+    await readGatedReview(
+      config.review_post_mode,
+      new Date(),
+      (asOf) => getGatedReviewStats(asOf),
+      log,
+    ),
+    {
+      notice: gatedProlongedNotice(
+        buildItemsConsoleUrl(config.windmill_public_url),
+      ),
+      addNotice: (record) => addNoticeUnlessUnresolved(record),
+      resolveNotice: (record) =>
+        resolveUnresolvedNoticesByMessage(
+          record.kind,
+          record.message,
+          GATED_NOTICE_RESOLVER,
+        ),
+      log,
+    },
+  );
+
   return runDailySummary({
     getState: () => wmill.getState(),
     setState: (state) => wmill.setState(state),
     summarizeDay: async (range) => {
-      const [agentRuns, approvals, cleanup, workerLoad] = await Promise.all([
-        getAgentRunSummary(range),
-        getApprovalSummary(range),
-        getCleanupSummary(range),
-        readWorkerLoad(range, (r) => getWorkerLoadSummary(r), log),
-      ]);
+      const [agentRuns, approvals, cleanup, workerLoad, gatedReview] =
+        await Promise.all([
+          getAgentRunSummary(range),
+          getApprovalSummary(range),
+          getCleanupSummary(range),
+          readWorkerLoad(range, (r) => getWorkerLoadSummary(r), log),
+          readGatedReview(
+            config.review_post_mode,
+            range.end,
+            (asOf) => getGatedReviewStats(asOf),
+            log,
+          ),
+        ]);
       const delivery = await notifyBestEffort(
         webhookUrl,
         {
@@ -262,6 +372,7 @@ export async function main(): Promise<CatchupResult> {
           rejected_count: approvals.rejected_count,
           cleanup,
           worker_load: workerLoad,
+          gated_review: gatedReview,
         },
         log,
       );
@@ -275,6 +386,7 @@ export async function main(): Promise<CatchupResult> {
           rejected_count: approvals.rejected_count,
           cleanup,
           worker_load: workerLoad,
+          gated_review: gatedReview,
         },
         delivery,
       };

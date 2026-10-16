@@ -7,6 +7,7 @@
 
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import { defaultSqlClient, type SqlClient, type SqlRow } from "./db.ts";
+import type { GatedReviewStats } from "./gated_review_support.ts";
 import { isNumber, isRecord, isString } from "./types.ts";
 import {
   DAILY_GAP_THRESHOLD_SECONDS,
@@ -535,5 +536,40 @@ export async function getCleanupSummary(
       row.doc_dirs_deleted,
       "doc_dirs_deleted",
     ),
+  };
+}
+
+/**
+ * `asOf`までに記録した、投稿しなかったレビュー(`posted_review_id`がNULL)を集計する。
+ * 数えるのは、`asOf`より前に最後に投稿したレビューより後の行だけで、投稿が途切れてからの連続である。
+ * 一度投稿に戻した後に`gated`へ戻したときに、前の期間を数えないため。
+ * `since`は、数えた行のうち最も古い記録の時刻で、数えた行が無ければ`null`。
+ */
+export async function getGatedReviewStats(
+  asOf: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<GatedReviewStats> {
+  const rows = await sql`
+    SELECT count(*) AS unposted_count, min(r.created_at) AS since
+    FROM factory.reviews r
+    WHERE r.posted_review_id IS NULL
+      AND r.created_at < ${asOf.toISOString()}::timestamptz
+      AND r.created_at > coalesce(
+        (
+          SELECT max(p.created_at)
+          FROM factory.reviews p
+          WHERE p.posted_review_id IS NOT NULL
+            AND p.created_at < ${asOf.toISOString()}::timestamptz
+        ),
+        '-infinity'::timestamptz
+      )
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    return { since: null, unposted_count: 0 };
+  }
+  return {
+    since: parseNullableDate(row.since, "since"),
+    unposted_count: parseNumericLike(row.unposted_count, "unposted_count"),
   };
 }

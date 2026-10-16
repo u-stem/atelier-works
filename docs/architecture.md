@@ -396,6 +396,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/drawio` | script | [LIB] draw.io図の生成 |
 | `f/factory/lib/factory_clone` | script | [LIB] Factory自身のcloneの用意 |
 | `f/factory/lib/factory_repo_gate` | script | [LIB] Factory自身のリポジトリの照合 |
+| `f/factory/lib/gated_review_support` | script | [LIB] gatedでレビューを投稿しない状態の判定と文面 |
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/pr_review_retry` | script | [LIB] GitHubの一時的な失敗で止まったPRレビューの再開 |

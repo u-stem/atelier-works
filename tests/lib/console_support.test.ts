@@ -59,6 +59,10 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("pr_conflict")).toBe("action");
   });
 
+  test("treats a prolonged gated review mode as action", () => {
+    expect(noticeSeverity("review_gated_prolonged")).toBe("action");
+  });
+
   test("treats a denied pull request CI check as action", () => {
     expect(noticeSeverity("pr_ci_check_denied")).toBe("action");
   });

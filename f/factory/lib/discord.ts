@@ -2,6 +2,10 @@
 // テストで実際のHTTP通信や待機をしないよう、`fetch`と`sleep`は注入できる。
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
+import {
+  describeGatedReview,
+  type GatedReviewReport,
+} from "./gated_review_support.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
 import type { ImplementDiffStat } from "./types.ts";
 import {
@@ -207,6 +211,11 @@ export type NotifyEvent =
        * 集計を読めなかったことのどれかを表す。
        */
       worker_load: WorkerLoadReport;
+      /**
+       * `review_post_mode`が`gated`のときの、投稿しなかったレビューの期間と件数。
+       * 投稿するモードのときは`off`で、欄を出さない。
+       */
+      gated_review: GatedReviewReport;
     }
   | {
       kind: "audit_completed";
@@ -249,6 +258,12 @@ function repoField(owner: string, repo: string): DiscordEmbedField {
 
 function instanceField(instanceName: string): DiscordEmbedField {
   return { name: "インスタンス", value: instanceName };
+}
+
+/** 投稿するモードのときは空で、日次のまとめに欄を足さない。 */
+function gatedReviewFields(report: GatedReviewReport): DiscordEmbedField[] {
+  const text = describeGatedReview(report);
+  return text === null ? [] : [{ name: "レビューの投稿", value: text }];
 }
 
 const TITLE_MAX = 256;
@@ -496,6 +511,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
             name: "workerの負荷",
             value: describeWorkerLoad(event.worker_load),
           },
+          ...gatedReviewFields(event.gated_review),
         ],
       };
     case "audit_completed":

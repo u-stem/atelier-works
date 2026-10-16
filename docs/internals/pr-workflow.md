@@ -116,7 +116,7 @@ Factoryが扱ったPRには、トリガーのラベルのほかにラベルを�
 
 `poll_prs`は、そのPRが`owners`(`id`の照合を通ったオーナー)と`repo_allowlist`に合い、まだopenであることを`getPr`で確かめてから候補にする。人が新しいcommitをpushすると、この経路でPRレビューが自動で起動する。1回のpushにつき、Claudeの実行は1回である。
 
-`review_post_mode`が`gated`のときは、レビューを投稿しない。`gated`は検証用に予約した値で、承認を経て投稿する画面はまだ無い。このモードでは、PRはレビューの依頼かassigneeの経路でだけ見つけ直す。PRレビュー完了の通知は送らない([通知](notifications.md#通知を送らない場合))。
+`review_post_mode`が`gated`のときは、レビューを投稿しない。`gated`は検証用に予約した値で、承認を経て投稿する画面はまだ無い。このモードでは、PRはレビューの依頼かassigneeの経路でだけ見つけ直す。PRレビュー完了の通知は送らない([通知](notifications.md#通知を送らない場合))。投稿しない状態が続くことは、日次のまとめと要対応のnoticeで知らせる([継続の通知](notifications.md#レビューを投稿しない状態の継続))。
 
 ## 自己再発火の防止
 

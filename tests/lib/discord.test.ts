@@ -371,6 +371,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.description).toBe("エージェント実行3件、$1.50消費。");
   });
@@ -387,6 +388,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
@@ -417,11 +419,54 @@ describe("buildEmbed", () => {
         doc_dirs_deleted: 0,
       },
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "DB掃除",
       value:
         "work item 3件、失敗記録12件、デプロイ記録5件、通知2件を削除しました",
+    });
+  });
+
+  test("shows no gated review field when reviews are posted", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
+    });
+    expect(embed.fields.map((f) => f.name)).not.toContain("レビューの投稿");
+  });
+
+  test("shows the unposted review count when the mode is gated", () => {
+    const embed = buildEmbed({
+      kind: "daily_summary",
+      instance_name: "local",
+      day: "2026-09-25",
+      run_count: 3,
+      total_cost_usd: 1.5,
+      failure_count: 0,
+      approved_count: 2,
+      rejected_count: 1,
+      cleanup: null,
+      worker_load: { kind: "no_record" },
+      gated_review: {
+        kind: "on",
+        since: new Date("2026-09-22T03:00:00Z"),
+        unposted_count: 4,
+        elapsed_days: 3,
+      },
+    });
+    expect(embed.fields).toContainEqual({
+      name: "レビューの投稿",
+      value: "gatedで有効。2026-09-22から3日、投稿しなかったレビューは4件",
     });
   });
 
@@ -437,6 +482,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
@@ -456,6 +502,7 @@ describe("buildEmbed", () => {
       rejected_count: 1,
       cleanup: null,
       worker_load: { kind: "read_failed" },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",
@@ -497,6 +544,7 @@ describe("buildEmbed", () => {
           max_wait_max_seconds: 0,
         },
       },
+      gated_review: { kind: "off" },
     });
     expect(embed.fields).toContainEqual({
       name: "workerの負荷",

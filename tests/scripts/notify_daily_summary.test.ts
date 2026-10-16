@@ -1,19 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import type { NotifyBestEffortResult } from "../../f/factory/lib/discord.ts";
+import type { GatedReviewStats } from "../../f/factory/lib/gated_review_support.ts";
 import { logger } from "../../f/factory/lib/log.ts";
 import {
   type DayRange,
   planSummaryDays,
 } from "../../f/factory/lib/summary_support.ts";
+import type { NoticeRecord } from "../../f/factory/lib/types.ts";
 import type { WorkerLoadSummary } from "../../f/factory/lib/worker_load_support.ts";
 import {
   assertAllDelivered,
   CATCHUP_INTERVAL_MS,
   type DailySummaryResult,
+  readGatedReview,
   readWorkerLoad,
   runDailySummary,
   type SummarizedDay,
   summarizePendingDays,
+  syncGatedNotice,
 } from "../../f/factory/notify_daily_summary.ts";
 
 const [RANGE_OR_UNDEFINED] = planSummaryDays(
@@ -103,6 +107,131 @@ describe("readWorkerLoad", () => {
   });
 });
 
+describe("readGatedReview", () => {
+  const AS_OF = new Date("2026-10-16T00:00:00Z");
+  const STATS: GatedReviewStats = {
+    since: new Date("2026-10-12T00:00:00Z"),
+    unposted_count: 2,
+  };
+
+  test("does not query when the mode posts reviews", async () => {
+    const { log } = captureLog();
+    let queried = false;
+    await readGatedReview(
+      "comment_only",
+      AS_OF,
+      () => {
+        queried = true;
+        return Promise.resolve(STATS);
+      },
+      log,
+    );
+    expect(queried).toBe(false);
+  });
+
+  test("returns the elapsed days when the mode is gated", async () => {
+    const { log } = captureLog();
+    const report = await readGatedReview(
+      "gated",
+      AS_OF,
+      () => Promise.resolve(STATS),
+      log,
+    );
+    expect(report).toMatchObject({ kind: "on", elapsed_days: 4 });
+  });
+
+  test("returns read_failed instead of throwing when the query fails", async () => {
+    const { log } = captureLog();
+    const report = await readGatedReview(
+      "gated",
+      AS_OF,
+      () => Promise.reject(new Error("connection refused")),
+      log,
+    );
+    expect(report).toEqual({ kind: "read_failed" });
+  });
+
+  test("warns with the cause when the query fails", async () => {
+    const { log, lines } = captureLog();
+    await readGatedReview(
+      "gated",
+      AS_OF,
+      () => Promise.reject(new Error("connection refused")),
+      log,
+    );
+    expect(lines.join("\n")).toContain("connection refused");
+  });
+});
+
+describe("syncGatedNotice", () => {
+  const NOTICE: NoticeRecord = { kind: "review_gated_prolonged", message: "m" };
+
+  function deps() {
+    const added: NoticeRecord[] = [];
+    const resolved: NoticeRecord[] = [];
+    const { log, lines } = captureLog();
+    return {
+      added,
+      resolved,
+      lines,
+      value: {
+        notice: NOTICE,
+        addNotice: (record: NoticeRecord) => {
+          added.push(record);
+          return Promise.resolve(1);
+        },
+        resolveNotice: (record: NoticeRecord) => {
+          resolved.push(record);
+          return Promise.resolve(1);
+        },
+        log,
+      },
+    };
+  }
+
+  test("adds the notice when the gated state has lasted past the threshold", async () => {
+    const d = deps();
+    await syncGatedNotice(
+      { kind: "on", since: new Date(), unposted_count: 5, elapsed_days: 3 },
+      d.value,
+    );
+    expect(d.added).toEqual([NOTICE]);
+  });
+
+  test("adds nothing before the threshold", async () => {
+    const d = deps();
+    await syncGatedNotice(
+      { kind: "on", since: new Date(), unposted_count: 1, elapsed_days: 2 },
+      d.value,
+    );
+    expect(d.added).toEqual([]);
+  });
+
+  test("resolves the open notice once reviews are posted again", async () => {
+    const d = deps();
+    await syncGatedNotice({ kind: "off" }, d.value);
+    expect(d.resolved).toEqual([NOTICE]);
+  });
+
+  test("keeps the open notice when the stats could not be read", async () => {
+    const d = deps();
+    await syncGatedNotice({ kind: "read_failed" }, d.value);
+    expect(d.resolved).toEqual([]);
+  });
+
+  test("warns instead of throwing when the notice cannot be written", async () => {
+    const d = deps();
+    await syncGatedNotice(
+      { kind: "on", since: new Date(), unposted_count: 5, elapsed_days: 9 },
+      {
+        ...d.value,
+        addNotice: () => Promise.reject(new Error("db down")),
+      },
+    );
+    expect(d.lines.join("\n")).toContain("db down");
+  });
+});
+
 describe("summarizePendingDays", () => {
   // 2026-10-14T00:05:00ZはJSTで2026-10-14 09:05。昨日は2026-10-13。
   const NOW = new Date("2026-10-14T00:05:00Z");
@@ -119,6 +248,7 @@ describe("summarizePendingDays", () => {
       rejected_count: 0,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     };
   }
 
@@ -431,6 +561,7 @@ describe("runDailySummary", () => {
       rejected_count: 0,
       cleanup: null,
       worker_load: { kind: "no_record" },
+      gated_review: { kind: "off" },
     };
   }
 
