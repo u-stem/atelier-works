@@ -502,6 +502,75 @@ describe("infra/docker-compose.yml windmill_worker_periodic", () => {
 
     expect(writable).toEqual([]);
   });
+
+  test("drops the same capabilities as the default worker", () => {
+    const svc = service(name);
+
+    expect(stringList(svc, "cap_drop")).toEqual(
+      stringList(service("windmill_worker"), "cap_drop"),
+    );
+  });
+
+  test("does not drop every capability", () => {
+    const svc = service(name);
+
+    expect(stringList(svc, "cap_drop")).not.toContain("ALL");
+  });
+});
+
+describe("worker tag lists", () => {
+  // composeでdefaultでもnativeでもないワーカーグループのtagを、
+  // カスタムtagの許可(bootstrap)、確認(doctor)、負荷の集計の分類と一致させる。
+  const composeTags = (): string[] => {
+    const services = compose().services;
+    if (!isRecord(services)) return [];
+    const tags: string[] = [];
+    for (const svc of Object.values(services)) {
+      if (!isRecord(svc) || !isStringArray(svc.environment)) continue;
+      const group = envEntries(svc, "WORKER_GROUP=");
+      if (group.length === 0) continue;
+      if (group.some((g) => g === "WORKER_GROUP=default")) continue;
+      if (group.some((g) => g === "WORKER_GROUP=native")) continue;
+      for (const entry of envEntries(svc, "WORKER_TAGS=")) {
+        tags.push(...entry.slice("WORKER_TAGS=".length).split(","));
+      }
+    }
+    return tags.sort();
+  };
+
+  const scriptTags = (file: string, variable: string): string[] => {
+    const text = readFileSync(join(REPO_ROOT, file), "utf8");
+    const match = new RegExp(`for ${variable} in ([a-z_ ]+); do`).exec(text);
+    return (match?.[1] ?? "")
+      .split(/\s+/)
+      .filter((t) => t !== "")
+      .sort();
+  };
+
+  test("the compose services have custom tags", () => {
+    expect(composeTags()).not.toEqual([]);
+  });
+
+  test("bootstrap allows the tags the compose workers accept", () => {
+    expect(scriptTags("scripts/bootstrap.sh", "tag")).toEqual(composeTags());
+  });
+
+  test("doctor checks the tags the compose workers accept", () => {
+    expect(scriptTags("scripts/doctor.sh", "check_tag")).toEqual(composeTags());
+  });
+
+  test("the load sampler does not count the tags the compose workers accept", () => {
+    const text = readFileSync(
+      join(REPO_ROOT, "f/factory/lib/worker_load_support.ts"),
+      "utf8",
+    );
+    const block =
+      /const OTHER_WORKER_TAGS[^=]*= new Set\(\[([^\]]*)\]\)/.exec(text)?.[1] ??
+      "";
+    const listed = [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1] ?? "");
+
+    expect(composeTags().filter((t) => !listed.includes(t))).toEqual([]);
+  });
 });
 
 describe("infra/docker-compose.yml factory_state_init", () => {
