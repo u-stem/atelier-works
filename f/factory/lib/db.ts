@@ -4932,6 +4932,25 @@ export async function setPrCiFixHold(
 }
 
 /**
+ * 保留の理由が`config_misfit`の`failed`の行すべての保留を外し、通知した理由も空に戻す。外した行数を返す。
+ * 時間設定が収まった回に呼ぶ。巡回の枠から外れたPRの行は、起動の判断で保留を外されないので、
+ * ここで外さないと、保留と通知済みの印が残り、どの通知にも載らず起動もされない。
+ * 通知した理由を空に戻すので、外した行は、起動されなければ`updated_at`から一定時間後に、
+ * 保留の理由なしの通知の対象になる。
+ */
+export async function releaseConfigMisfitHolds(
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE factory.pr_ci_checks
+    SET fix_hold_reason = NULL, notified_reason = NULL, updated_at = now()
+    WHERE state = 'failed' AND fix_hold_reason = 'config_misfit'
+    RETURNING id
+  `.fetch();
+  return rows.length;
+}
+
+/**
  * そのリポジトリのmainのCIが、いま赤いかを返す。
  * `main_ci_runs`の最新の1行の状態が`failed`なら`true`。行が無ければ`false`。
  * 最新かどうかは`(COALESCE(run_created_at, first_seen_at), id)`の大きさで決める。

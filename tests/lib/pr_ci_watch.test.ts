@@ -36,6 +36,8 @@ import {
   UNHELD_FAILURE_NOTICE_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_notify.ts";
 import {
+  CONFIG_MISFIT_KIND,
+  configMisfitNoticeMessage,
   type FactoryWorkItemRef,
   PR_CI_FAILED_KIND,
   type PrCiFixHoldReason,
@@ -206,6 +208,8 @@ type Setup = {
   configured?: (owner: string, repo: string) => boolean;
   /** 解決に失敗させるnoticeの種類。 */
   resolveFailsFor?: string[];
+  /** 設定の不整合の保留を外す更新を失敗させる。 */
+  releaseMisfitHoldsFails?: boolean;
   duplicateKinds?: string[];
   recordFails?: boolean;
   noticeFails?: boolean;
@@ -288,6 +292,8 @@ type Harness = {
     };
   }[];
   readonly fixItemReads: number[];
+  /** 設定の不整合の保留を外す更新と、そのnoticeの解決の呼び出しを、呼んだ順に並べたもの。 */
+  readonly misfitSteps: string[];
   /** 人のPRの検索の呼び出し。 */
   readonly searches: { scope: OpenAuthoredPrsScope; author: string }[];
 };
@@ -306,6 +312,7 @@ function harness(setup: Setup = {}): Harness {
   const marked: { id: number; reason: string }[] = [];
   const notices: NoticeRecord[] = [];
   const resolved: { kind: string; prefix: string; by: string }[] = [];
+  const misfitSteps: string[] = [];
   const discord: NotifyEvent[] = [];
   const failures: string[] = [];
   const logs: LogLine[] = [];
@@ -431,10 +438,18 @@ function harness(setup: Setup = {}): Harness {
         ? null
         : notices.length;
     },
+    releaseConfigMisfitHolds: async () => {
+      misfitSteps.push("release");
+      if (setup.releaseMisfitHoldsFails === true) {
+        throw new Error("release misfit holds failed");
+      }
+      return 1;
+    },
     resolveNotices: async (kind, prefix, by) => {
       if (setup.resolveFailsFor?.includes(kind) === true) {
         throw new Error("resolve failed");
       }
+      if (kind === CONFIG_MISFIT_KIND) misfitSteps.push("resolve");
       events.push(kind === PR_CI_FAILED_KIND ? "resolve_failure" : "resolve");
       resolved.push({ kind, prefix, by });
       return 1;
@@ -495,6 +510,7 @@ function harness(setup: Setup = {}): Harness {
     noCiQueries,
     released,
     fixItemReads,
+    misfitSteps,
     searches,
   };
 }
@@ -508,6 +524,11 @@ const PR_KEY = "acme/widgets#12";
 /** 失敗のnoticeを解決した呼び出し。権限の不足のnoticeの解決は含めない。 */
 function failureNoticeResolutions(h: Harness) {
   return h.resolved.filter((entry) => entry.kind === PR_CI_FAILED_KIND);
+}
+
+/** 設定全体の不整合のnoticeの解決を除いた、noticeの解決の呼び出し。この解決は毎回の実行で行う。 */
+function resolvedBesidesConfigMisfit(h: Harness) {
+  return h.resolved.filter((entry) => entry.kind !== CONFIG_MISFIT_KIND);
 }
 
 /** 追跡中の1件のPRで、今のheadがSHA_Aの設定。 */
@@ -866,7 +887,7 @@ describe("closed pull requests", () => {
       }),
     );
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([
       { kind: PR_CI_FAILED_KIND, prefix: PR_PREFIX, by: PR_CI_RESOLVED_BY },
     ]);
   });
@@ -887,7 +908,7 @@ describe("closed pull requests", () => {
   test("does nothing for a closed pull request without rows", async () => {
     const h = harness(trackedSetup({ prs: { [PR_KEY]: closed } }));
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([]);
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([]);
   });
 
   test("supersedes a failed row of a pull request that is no longer tracked", async () => {
@@ -909,7 +930,9 @@ describe("closed pull requests", () => {
       rowsForPr: { 12: [row({ id: 2, state: "failed" })] },
     });
     await runPrCiWatch(h.deps);
-    expect(h.resolved.map((entry) => entry.prefix)).toEqual([PR_PREFIX]);
+    expect(resolvedBesidesConfigMisfit(h).map((entry) => entry.prefix)).toEqual(
+      [PR_PREFIX],
+    );
   });
 
   test("handles a closed pull request once even when two of its rows are listed", async () => {
@@ -1439,7 +1462,7 @@ describe("re-judging a failed row", () => {
       failed: [row({ state: "failed" })],
     });
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([]);
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([]);
   });
 });
 
@@ -1914,7 +1937,7 @@ describe("permission errors", () => {
   test("does not resolve the denied notice when the runs were not readable", async () => {
     const h = harness(deniedSetup(403));
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([]);
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([]);
   });
 });
 
@@ -5629,5 +5652,175 @@ describe("the resolution of the older notices when it fails", () => {
     });
     await runPrCiWatch(h.deps);
     expect(failureNoticeResolutions(h)).toEqual([]);
+  });
+});
+
+describe("notifying the time setting misfit once for the whole config", () => {
+  const MISFIT = "pr_fix time settings do not fit the flow step timeout";
+  const misfitRow = (id: number, prNumber: number): PrCiCheck =>
+    row({
+      id,
+      pr_number: prNumber,
+      state: "failed",
+      first_seen_at: minutesBefore(300),
+      updated_at: minutesBefore(31),
+      fix_hold_reason: "config_misfit",
+    });
+  /** 種類と本文が同じ未解決のnoticeを重ねない、DBと同じ挙動の`addNotice`。 */
+  const uniqueNotices = () => {
+    const seen = new Set<string>();
+    return async (record: NoticeRecord): Promise<number | null> => {
+      const key = `${record.kind}\n${record.message}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return seen.size;
+    };
+  };
+  const misfitSetup = (
+    rows: PrCiCheck[],
+    configMisfit: string | null = MISFIT,
+    overrides: Setup = {},
+  ): Setup => {
+    const c = claimHarness({ candidates: [], configMisfit });
+    return {
+      unnotified: rows,
+      policy: FIX_POLICY,
+      ...overrides,
+      override: { claim: c.deps, ...overrides.override },
+    };
+  };
+
+  test("adds the same notice for the rows of different pull requests", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12), misfitRow(10, 13)]));
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      { kind: CONFIG_MISFIT_KIND, message: configMisfitNoticeMessage() },
+      { kind: CONFIG_MISFIT_KIND, message: configMisfitNoticeMessage() },
+    ]);
+  });
+
+  test("adds no per pull request notice", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12), misfitRow(10, 13)]));
+    await runPrCiWatch(h.deps);
+    expect(
+      h.notices.filter((notice) => notice.kind === PR_CI_FAILED_KIND),
+    ).toEqual([]);
+  });
+
+  test("sends one Discord message for the rows of different pull requests", async () => {
+    const h = harness(
+      misfitSetup([misfitRow(9, 12), misfitRow(10, 13)], MISFIT, {
+        override: { addNotice: uniqueNotices() },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toHaveLength(1);
+  });
+
+  test("marks the reason of every row as notified", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12), misfitRow(10, 13)]));
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([
+      { id: 9, reason: "ci_failure" },
+      { id: 10, reason: "ci_failure" },
+    ]);
+  });
+
+  test("leaves a row alone when the time settings fit again", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12)], null));
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("resolves the notice once the time settings fit", async () => {
+    const h = harness(misfitSetup([], null));
+    await runPrCiWatch(h.deps);
+    expect(h.resolved).toContainEqual({
+      kind: CONFIG_MISFIT_KIND,
+      prefix: "",
+      by: PR_CI_RESOLVED_BY,
+    });
+  });
+
+  test("keeps the notice while the time settings still do not fit", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12)]));
+    await runPrCiWatch(h.deps);
+    expect(
+      h.resolved.filter((entry) => entry.kind === CONFIG_MISFIT_KIND),
+    ).toEqual([]);
+  });
+
+  test("resolves the notice when the automatic fix is not running", async () => {
+    const h = harness({ policy: FIX_POLICY });
+    await runPrCiRecovery(h.deps);
+    expect(h.resolved).toContainEqual({
+      kind: CONFIG_MISFIT_KIND,
+      prefix: "",
+      by: PR_CI_RESOLVED_BY,
+    });
+  });
+
+  test("releases the config_misfit holds once the time settings fit", async () => {
+    const h = harness(misfitSetup([], null));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toContain("release");
+  });
+
+  test("releases the holds before it resolves the notice", async () => {
+    const h = harness(misfitSetup([], null));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toEqual(["release", "resolve"]);
+  });
+
+  test("releases the holds when the automatic fix is not running", async () => {
+    const h = harness({ policy: FIX_POLICY });
+    await runPrCiRecovery(h.deps);
+    expect(h.misfitSteps).toEqual(["release", "resolve"]);
+  });
+
+  test("keeps the holds while the time settings still do not fit", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12)]));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toEqual([]);
+  });
+
+  test("keeps the notice when the holds could not be released", async () => {
+    const h = harness(misfitSetup([], null, { releaseMisfitHoldsFails: true }));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toEqual(["release"]);
+  });
+
+  test("records the failure to release the holds", async () => {
+    const h = harness(misfitSetup([], null, { releaseMisfitHoldsFails: true }));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["release_config_misfit_holds"]);
+  });
+
+  test("does not notify a row that still has the hold when it could not be released", async () => {
+    const h = harness(
+      misfitSetup([misfitRow(9, 12)], null, { releaseMisfitHoldsFails: true }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("still notifies the other rows when the resolution fails", async () => {
+    const h = harness(
+      misfitSetup(
+        [
+          row({
+            id: 9,
+            state: "failed",
+            first_seen_at: minutesBefore(300),
+            updated_at: minutesBefore(1),
+            fix_hold_reason: "rounds_exhausted",
+          }),
+        ],
+        null,
+        { resolveFailsFor: [CONFIG_MISFIT_KIND] },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: 9, reason: "ci_failure" }]);
   });
 });

@@ -254,6 +254,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `main_ci_check_denied` | `watch_main_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
 | `pr_ci_failed` | `watch_pr_ci` | `<owner>/<repo>#<PR番号>:`で始まる固定文、コミットの先頭7文字、理由コード、自動修正の保留の理由(あれば)、リンク、次の操作 |
 | `pr_ci_check_denied` | `watch_pr_ci` | `<owner>/<repo>:`で始まる固定文、権限を足す操作 |
+| `config_misfit` | `watch_pr_ci` | PRにも設定の値にも依らない固定文、見直す設定の項目(`claude_timeout_sec`と`allowed_check_commands`) |
 | `pr_conflict` | `watch_pr_conflicts` | `<owner>/<repo>#<PR番号>:`で始まる固定文、自動で直さなかった理由(あるときだけ)、次の操作、PRのリンク |
 | `worker_load_high` | `sample_worker_load` | 原因(メモリの割合、OOMの増加)、閾値、システムの画面のリンク、次の操作 |
 | `review_gated_prolonged` | `notify_daily_summary` | 投稿しない状態が続く日数、作業項目の画面のリンク、次の操作 |
@@ -284,6 +285,12 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 同じheadの再実行が通ったとき、新しいheadが通ったとき、PRが閉じたときに、`watch_pr_ci`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
 `pr_ci_check_denied`は、PRか実行を読めないリポジトリごとに1件残し、Discordには通知しない。読めるようになると、同じ方法で解決する。
 詳細は[PRのCI監視の仕様](pr-ci.md)にある。
+
+`config_misfit`は、時間設定が修正・検証ステップのtimeoutに収まらないとき、設定全体で1件だけ残す。失敗中のPRの数には依らない。
+本文は固定文で、設定の値は載せない。値が変わるたびに別の通知になり、古い1件が残るためである。
+Discordには、noticeを新しく残したときに、その回の行のPRを宛先にして、種類`needs_human`で1回だけ通知する。
+設定が収まったとき、`watch_pr_ci`が、保留の理由が`config_misfit`の行の保留を外してから、種類で選んで解決する。
+詳細は[PRのCI監視の仕様](pr-ci.md#保留した失敗の通知)にある。
 
 `pr_conflict`は、PRの競合1回につき、通常は1件残す。競合のままheadが進んでも、重ねない。
 Discordには、noticeを新しく残したときに、種類`needs_human`で通知する。

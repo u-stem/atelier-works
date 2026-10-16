@@ -6,8 +6,10 @@ import {
   type WorkflowRun,
 } from "../../f/factory/lib/main_ci_support.ts";
 import {
+  CONFIG_MISFIT_KIND,
   canTransitionPrCi,
   classifyPrCiReason,
+  configMisfitNoticeMessage,
   decidePrCiFailed,
   decidePrCiPending,
   isFactoryPrBranch,
@@ -1484,5 +1486,23 @@ describe("prCiFixHoldInfo", () => {
 
   test("sends the discord message when the rounds are exhausted", () => {
     expect(prCiFixHoldInfo("rounds_exhausted").discord).toBe(true);
+  });
+});
+
+describe("configMisfitNoticeMessage", () => {
+  test("uses its own kind, not the kind of a pull request failure", () => {
+    expect(CONFIG_MISFIT_KIND).toBe("config_misfit");
+  });
+
+  test("lists the claude timeout as an item to review", () => {
+    expect(configMisfitNoticeMessage()).toContain("claude_timeout_sec");
+  });
+
+  test("lists the check commands as an item to review", () => {
+    expect(configMisfitNoticeMessage()).toContain("allowed_check_commands");
+  });
+
+  test("names no pull request, so that one body serves every row", () => {
+    expect(configMisfitNoticeMessage()).not.toMatch(/#\d/);
   });
 });

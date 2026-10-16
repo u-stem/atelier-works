@@ -178,7 +178,7 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  *    マーカーの確認の後に、直せない種類は`unfixable_job`、失敗でない結論は`other_conclusion`で保留し、
  *    失敗したジョブが無ければskipする。
  * 6. 時間設定が修正・検証ステップのtimeoutに収まらなければ`config_misfit`で保留する。準備のステップが同じ理由で止めるので、
- *    起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない(保留が30分続くと、行ごとに保留の通知が出る)。
+ *    起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない(保留が30分続くと、設定全体で1件の通知(`config_misfit`)が出る)。
  *    設定を直せば、次の巡回で外れる。
  * 7. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に

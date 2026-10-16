@@ -111,6 +111,10 @@ describe("noticeKindLabel", () => {
     expect(noticeKindLabel("pr_ci_failed")).toBe("PRのCIの失敗");
   });
 
+  test("names the time setting misfit", () => {
+    expect(noticeKindLabel("config_misfit")).toBe("時間設定の不整合");
+  });
+
   test("names the merge conflict of a pull request", () => {
     expect(noticeKindLabel("pr_conflict")).toBe("PRのマージの競合");
   });

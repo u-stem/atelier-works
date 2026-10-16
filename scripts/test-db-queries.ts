@@ -79,6 +79,7 @@ import {
   recordPrConflict,
   recordTransientStall,
   recordWorkspaceDiskUsageNotice,
+  releaseConfigMisfitHolds,
   releaseFixingPrCiCheck,
   releasePrConflictFix,
   resolveNoticeIfUnresolved,
@@ -3805,6 +3806,26 @@ check(
       )
     ).some((row) => row.id === misfitHeld.id),
   await fixRowOf(misfitHeld.id),
+);
+
+// 設定が収まった回に、config_misfitの保留をすべて外し、通知した理由も空に戻す。ほかの保留は残す。
+await markPrCiNotified(misfitHeld.id, "ci_failure", sql);
+const misfitReleased = await releaseConfigMisfitHolds(sql);
+check(
+  "misfit release: the hold and the notified reason of a config_misfit row are cleared",
+  (await fixRowOf(misfitHeld.id))?.fix_hold_reason === null &&
+    (await fixRowOf(misfitHeld.id))?.notified_reason === null &&
+    misfitReleased >= 1,
+  await fixRowOf(misfitHeld.id),
+);
+check(
+  "misfit release: a row with another hold keeps it",
+  (await fixRowOf(resetHold.id))?.fix_hold_reason === "rounds_exhausted",
+  await fixRowOf(resetHold.id),
+);
+check(
+  "misfit release: a second call releases nothing",
+  (await releaseConfigMisfitHolds(sql)) === 0,
 );
 
 execPsql(target, "DELETE FROM factory.pr_ci_checks WHERE owner = 'qfix'");

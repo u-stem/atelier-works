@@ -71,7 +71,9 @@ import {
   type PrCiNotifyPolicy,
 } from "./pr_ci_notify.ts";
 import {
+  CONFIG_MISFIT_KIND,
   classifyPrCiReason,
+  configMisfitNoticeMessage,
   decidePrCiFailed,
   decidePrCiPending,
   type FactoryWorkItemRef,
@@ -489,6 +491,8 @@ export type PrCiWatchDeps = {
   /** 状態を変えずに読み直した時刻を進める。 */
   readonly touch: (id: number) => Promise<boolean>;
   readonly markNotified: (id: number, reason: string) => Promise<boolean>;
+  /** 保留の理由が`config_misfit`の失敗の行すべての保留と通知した理由を外す。外した行数を返す。 */
+  readonly releaseConfigMisfitHolds: () => Promise<number>;
   /** 新しく挿入したら通知のID、同じ未解決の通知があれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   readonly resolveNotices: (
@@ -1839,6 +1843,7 @@ async function settleFailed(
  */
 async function notifyDeferred(context: Context): Promise<void> {
   const { deps } = context;
+  await resolveConfigMisfitNotice(context);
   let rows: PrCiCheck[];
   try {
     rows = await deps.listUnnotifiedFailed(DEFERRED_NOTICE_BATCH_LIMIT);
@@ -1867,6 +1872,13 @@ async function notifyDeferred(context: Context): Promise<void> {
       now: context.now,
     });
     if (decision.kind === "wait") continue;
+    // 設定が収まった後に残った保留は、通知しない。保留を外す更新が失敗した回に残りうる。次の回に外れる。
+    if (
+      decision.hold === "config_misfit" &&
+      (deps.claim === undefined || deps.claim.configMisfit === null)
+    ) {
+      continue;
+    }
     if (started > 0 && overBudget(context)) {
       deps.log.warn("pr ci deferred notices stopped by the time budget", {
         left: rows.length - index,
@@ -1883,6 +1895,33 @@ async function notifyDeferred(context: Context): Promise<void> {
         err,
       );
     }
+  }
+}
+
+/**
+ * 時間設定が収まったか、起動する設定でなくなったときに、設定全体の不整合を解消する。
+ * 起動の依存(`claim`)は、監視と自動修正が有効なときだけ渡るので、無いときは起動しない設定である。
+ * 設定の不整合は起動の前に確かめるので、設定を直せば解消してよい。
+ * 先に、保留の理由が`config_misfit`の行の保留と通知した理由を外し、その後にnoticeを解決する。
+ * 巡回の枠から外れたPRの行は、起動の判断で保留を外されない。ここで外さないと、noticeだけが消えて、
+ * 保留と通知済みの印が残る。外した行は、巡回の枠に入れば次の起動の判断で決め直され、
+ * 枠の外なら、保留の理由なしの通知(`UNHELD_FAILURE_NOTICE_AFTER_MS`)で知らせ直される。
+ * 保留を外せなかった回は、noticeを残す。残るだけで、次の回に同じ手順をやり直す。
+ * 解決は冪等で、失敗しても通知は止めない。
+ */
+async function resolveConfigMisfitNotice(context: Context): Promise<void> {
+  const { deps } = context;
+  if (deps.claim !== undefined && deps.claim.configMisfit !== null) return;
+  try {
+    await deps.releaseConfigMisfitHolds();
+  } catch (err) {
+    await recordFailureOf(context, "release_config_misfit_holds", err);
+    return;
+  }
+  try {
+    await deps.resolveNotices(CONFIG_MISFIT_KIND, "", PR_CI_RESOLVED_BY);
+  } catch (err) {
+    await recordFailureOf(context, "resolve_config_misfit", err);
   }
 }
 
@@ -1909,8 +1948,15 @@ async function sendDeferredNotice(
     reason,
     ...(hold === null ? {} : { hold }),
   });
-  await resolveOlderHeadNotices(context, row);
-  const noticeId = await deps.addNotice({ kind: PR_CI_FAILED_KIND, message });
+  // 時間設定の不整合は設定全体の誤りなので、PRごとのnoticeにせず、設定全体で1件のnoticeにまとめる。
+  // Discordは、そのnoticeを新しく残した回の行のPRを宛先にして、1回だけ送る。
+  const wholeConfig = hold === "config_misfit";
+  if (!wholeConfig) await resolveOlderHeadNotices(context, row);
+  const noticeId = await deps.addNotice(
+    wholeConfig
+      ? { kind: CONFIG_MISFIT_KIND, message: configMisfitNoticeMessage() }
+      : { kind: PR_CI_FAILED_KIND, message },
+  );
   if (noticeId !== null && discord) {
     const sent = await deps.notify({
       kind: "needs_human",

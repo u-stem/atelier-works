@@ -104,6 +104,7 @@ import {
   recordPrCiCheck,
   recordTransientStall,
   recordWorkspaceDiskUsageNotice,
+  releaseConfigMisfitHolds,
   releaseFixingPrCiCheck,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
@@ -7179,6 +7180,39 @@ describe("setPrCiFixHold", () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
     await setPrCiFixHold(9, "x".repeat(65), {}, sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("releaseConfigMisfitHolds", () => {
+  test("changes only the failed rows held as config_misfit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await releaseConfigMisfitHolds(sql);
+    expect(calls[0]?.text).toContain(
+      "state = 'failed' AND fix_hold_reason = 'config_misfit'",
+    );
+  });
+
+  test("clears the hold", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await releaseConfigMisfitHolds(sql);
+    expect(calls[0]?.text).toContain("SET fix_hold_reason = NULL");
+  });
+
+  test("clears the notified reason", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await releaseConfigMisfitHolds(sql);
+    expect(calls[0]?.text).toContain("notified_reason = NULL");
+  });
+
+  test("moves the update time so the unheld insurance wait starts over", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await releaseConfigMisfitHolds(sql);
+    expect(calls[0]?.text).toContain("updated_at = now()");
+  });
+
+  test("returns the number of rows that were released", async () => {
+    const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
+    expect(await releaseConfigMisfitHolds(sql)).toBe(2);
   });
 });
 
