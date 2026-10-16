@@ -2132,10 +2132,13 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 3. `wmill job list --script-path f/factory/sample_worker_load`で直近のジョブを選ぶ。
    `wmill job result <id>`の`outcome`が`complete`であることを見る。
    `partial`や`failed`なら、`wmill job logs <id>`の警告から原因を探す。
-4. Claudeのジョブが走っているときの行で、`running_jobs`が増え、`running_by_script`にそのscriptが載ることを見る。
-5. 同じ時刻に、管理者の`wmill job list`で実行中のジョブを数え、`running_jobs`と合うことを見る。
+4. 実際に動くワーカーが複数のときだけ、Claudeのジョブが走っているときの行で、`running_jobs`が増え、`running_by_script`にそのscriptが載ることを見る。
+5. 手順4と同じときに、同じ時刻の管理者の`wmill job list`で実行中のジョブを数え、`running_jobs`と合うことを見る。
    記録するジョブ自身と、数えない対象は、実行中の件数から除いて比べる。
    数えない対象は、tag `console`、nativeのworkerのtag、フローの親ジョブである。
+
+実際に動くワーカーが1つの間は、`running_jobs`が0のままなので、手順4と5は確かめられない。
+この間の数え方の確認は、[枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる)に従う。
 
 #### 枠の占有
 
@@ -2170,31 +2173,121 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
 
 `running_jobs`がずっと0のとき、数え落としか、本当に0かを次の順で確かめる。
 読み取りだけで、実行や設定の変更はしない。
-`db`のコンテナで、`windmill`のデータベース(Windmill本体)と`datatable_db`(`factory.worker_samples`)を読む。
+Windmill本体のデータベースは`windmill`、`factory.worker_samples`は`datatable_db`にあり、どちらも`db`のコンテナで読む。
+次の例は、`windmill`を読む形である。
+`datatable_db`を読むときは、`-d`の値を変える。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d windmill -c "SELECT 1"
+```
 
 1. 記録のジョブの権限で、ジョブの一覧が絞られていないことを確かめる。
    記録のジョブは、スケジュールを作ったユーザーの権限で動く。
    `usr`表の`is_admin`が真なら、一覧は絞られない。
+
+   ```sql
+   SELECT DISTINCT j.permissioned_as_email, u.is_admin
+   FROM v2_job j
+   JOIN usr u ON u.workspace_id = j.workspace_id AND u.email = j.permissioned_as_email
+   WHERE j.runnable_path = 'f/factory/sample_worker_load'
+     AND j.created_at > now() - interval '1 day'
+   ```
+
 2. 数える対象のtagに漏れが無いことを確かめる。
-   `v2_job`表の`tag`の一覧が、defaultのworkerが受けるtagとnativeやConsole用のworkerが受けるtagに収まっていればよい。
+   `v2_job`表の`tag`の一覧が、defaultのworkerが受けるtagと、nativeやConsole用のworkerが受けるtagに収まっていればよい。
+   前者は`f/factory/lib/worker_load_support.ts`の`DEFAULT_WORKER_TAGS`、後者は`OTHER_WORKER_TAGS`である。
    収まらないtagがあれば、記録のジョブのログに警告が出る。
-   `job_logs`表で、`sample_worker_load`のログに`unknown`が含まれないことも確かめる。
+   `job_logs`表で、その警告が無いことも確かめる。
+
+   ```sql
+   SELECT tag, count(*) FROM v2_job
+   WHERE created_at > now() - interval '7 days'
+   GROUP BY tag ORDER BY tag
+   ```
+
+   ```sql
+   SELECT count(*) AS runs,
+          count(*) FILTER (WHERE l.logs LIKE '%no worker is known to listen to%') AS warned
+   FROM v2_job j
+   JOIN job_logs l ON l.job_id = j.id
+   WHERE j.runnable_path = 'f/factory/sample_worker_load'
+     AND j.created_at > now() - interval '1 day'
+   ```
+
 3. 記録の時刻に動いていたジョブを突き合わせる。
-   `factory.worker_samples`の`sampled_at`と、`v2_job_completed`表の`started_at`から`completed_at`の間を比べ、`running_jobs`が数えるはずのジョブの数を求める。
+   記録のジョブの`started_at`を記録の時刻とみなし、その時刻に動いていた、数える対象のジョブがある記録の数を求める。
+   数えない対象として、記録のジョブ自身、フローの親ジョブ(`FLOW_PARENT_KINDS`)、tag `console`とnativeのworkerのtag(`OTHER_WORKER_TAGS`)を除く。
+   境界の丸めで数ミリ秒だけ重なるジョブは、100ミリ秒より長く重なるものだけを数えて除く。
+   `with_counted_jobs`が0なら、`running_jobs`が0なのは数え落としではない。
+
+   ```sql
+   SELECT count(*) AS samples,
+          count(*) FILTER (WHERE EXISTS (
+            SELECT 1
+            FROM v2_job_completed o
+            JOIN v2_job oj ON oj.id = o.id
+            WHERE oj.workspace_id = 'factory'
+              AND oj.runnable_path IS DISTINCT FROM 'f/factory/sample_worker_load'
+              AND oj.kind NOT IN ('flow', 'flowpreview', 'unassigned_flow')
+              AND oj.tag NOT IN ('console', 'nativets', 'bunnative', 'postgresql', 'mysql',
+                                 'mssql', 'graphql', 'snowflake', 'bigquery', 'oracledb')
+              AND o.started_at <= s.started_at
+              AND s.started_at + interval '100 milliseconds' < o.completed_at
+              AND o.completed_at > now() - interval '2 days'
+          )) AS with_counted_jobs
+   FROM v2_job_completed s
+   JOIN v2_job sj ON sj.id = s.id
+   WHERE sj.runnable_path = 'f/factory/sample_worker_load'
+     AND s.completed_at > now() - interval '1 day'
+   ```
+
+   `running_jobs`が1以上の行の数は、`datatable_db`で数える。
+
+   ```sql
+   SELECT count(*) AS samples, count(*) FILTER (WHERE running_jobs > 0) AS with_running
+   FROM factory.worker_samples
+   WHERE sampled_at > now() - interval '1 day'
+   ```
+
 4. 同じワーカー名のジョブが、時間で重なるかを見る。
-   `v2_job_completed`表の`worker`が同じジョブ同士で、実行の時間が重なる組を数える。
-   `worker_ping`表の`worker`が、defaultのworkerのコンテナで何行あるかも見る。
+   `v2_job_completed`表の`worker`が同じジョブ同士で、実行の時間が100ミリ秒より長く重なる組を数える。
+   フローの親ジョブは、同じworkerの子のscriptと重なるので除く。
+   `worker_ping`表では、defaultのworkerの行を、`worker_group`が`default`、`native_mode`が偽で、`ping_at`が直近のものとして選ぶ。
+   停止したコンテナの行も残るので、`ping_at`で絞る。
+
+   ```sql
+   SELECT count(*) AS overlaps
+   FROM v2_job_completed a
+   JOIN v2_job ja ON ja.id = a.id
+   JOIN v2_job_completed b
+     ON b.worker = a.worker AND a.id < b.id
+    AND a.started_at + interval '100 milliseconds' < b.completed_at
+    AND b.started_at + interval '100 milliseconds' < a.completed_at
+   JOIN v2_job jb ON jb.id = b.id
+   WHERE a.worker LIKE 'wk-default-%'
+     AND a.completed_at > now() - interval '1 day'
+     AND b.completed_at > now() - interval '1 day'
+     AND ja.kind NOT IN ('flow', 'flowpreview', 'unassigned_flow')
+     AND jb.kind NOT IN ('flow', 'flowpreview', 'unassigned_flow')
+   ```
+
+   ```sql
+   SELECT worker FROM worker_ping
+   WHERE worker_group = 'default' AND NOT native_mode
+     AND ping_at > now() - interval '5 minutes'
+   ```
 
 確かめた環境の結果は次のとおりである。
 
 - 記録のジョブは管理者の権限で動き、一覧は絞られない。
 - ジョブのtagは`bun`、`flow`、`dependency`、`console`、`postgresql`だけで、未知のtagは無い。
   ジョブログに未知のtagの警告は無い。
-- 記録の時刻に、数える対象のジョブが動いていた記録は、約2600件のうち1件も無い。
+- 記録の時刻に、数える対象のジョブが動いていた記録は無い。
   `running_jobs`は、数え落としではなく、実際に0だった。
 - Claudeのジョブが動いている間の記録は、そのジョブのステップが終わった直後に始まる。
   開始が遅れ、`lag_seconds`に出る。
-- defaultのworkerは、コンテナごとに`worker_ping`の行が1つで、同じワーカー名のジョブは時間が重ならない。
+- defaultのworkerは、コンテナごとに`worker_ping`の行が1つで、同じワーカー名のジョブは実質的に重ならない。
+  重なるのは、境界の数ミリ秒の丸めと、フローの親ジョブだけである。
   `NUM_WORKERS=3`でも、同時に動くジョブは1つだった。
   Claudeのジョブが動く間、記録のジョブも、ほかの定期のジョブも待つ。
   `NUM_WORKERS`が効いていない理由は、確かめていない。
@@ -2331,8 +2424,7 @@ defaultのworkerは上限が4096MiBで、`memory.high`が無い。
 暫定値を決める実測も無い。
 この2つは、Consoleのシステムの画面と日次のまとめで見る。
 塞がりの割合は、`running_jobs`が読めた記録だけを分母にして数える。
-`running_jobs`の値が実機の実行中のジョブの数と合うかは、未確認である。
-画面の「枠の使用」と「枠が塞がっていた記録」は、確認が済むまで参考値として読む。
+数え方を確かめた結果と、画面の「枠の使用」と「枠が塞がっていた記録」を塞がりの判断に使える条件は、[枠の占有](#枠の占有)にある。
 
 閾値の判定が失敗しても、記録の成否には影響しない。
 設定が読めない、直近の記録が読めない、通知を残せない場合は、ジョブログに警告を残す。
