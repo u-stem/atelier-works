@@ -237,6 +237,12 @@ describe("summarizeRunning", () => {
     );
   });
 
+  test("does not count a job with tag periodic", () => {
+    expect(summarizeRunning([running({ tag: "periodic" })], null)?.count).toBe(
+      0,
+    );
+  });
+
   for (const tag of NATIVE_WORKER_TAGS) {
     test(`does not count a job with the native tag ${tag}`, () => {
       expect(summarizeRunning([running({ tag })], null)?.count).toBe(0);
@@ -275,6 +281,12 @@ describe("summarizeRunning", () => {
   test("does not report the console tag as unknown", () => {
     expect(
       summarizeRunning([running({ tag: "console" })], null)?.unknownTags.jobs,
+    ).toBe(0);
+  });
+
+  test("does not report the periodic tag as unknown", () => {
+    expect(
+      summarizeRunning([running({ tag: "periodic" })], null)?.unknownTags.jobs,
     ).toBe(0);
   });
 

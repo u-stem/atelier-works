@@ -265,7 +265,7 @@ describe("doctor.sh custom tag check", () => {
     }
   }
 
-  async function tagLine(env: Record<string, string>): Promise<string> {
+  async function tagLines(env: Record<string, string>): Promise<string[]> {
     const proc = Bun.spawn([BASH, SCRIPT], {
       env: {
         PATH: `${dir}:/usr/bin:/bin`,
@@ -282,7 +282,15 @@ describe("doctor.sh custom tag check", () => {
       new Response(proc.stderr).text(),
     ]);
     await proc.exited;
-    return stdout.split("\n").find((l) => l.includes("カスタムtag")) ?? "";
+    return stdout.split("\n").filter((l) => l.includes("カスタムtag"));
+  }
+
+  async function tagLine(env: Record<string, string>): Promise<string> {
+    return (await tagLines(env))[0] ?? "";
+  }
+
+  function lineFor(lines: string[], tag: string): string {
+    return lines.find((l) => l.includes(tag)) ?? "";
   }
 
   test("reports OK when the instance allows console", async () => {
@@ -303,6 +311,34 @@ describe("doctor.sh custom tag check", () => {
 
     windmill.server.stop(true);
     expect(line).toMatch(/^\s+NG\s.*consoleが許可されていません/);
+  });
+
+  test("reports OK when the instance allows periodic", async () => {
+    installFakeMise();
+    const windmill = startWindmill(["chromium", "console", "periodic"]);
+
+    const lines = await tagLines({
+      WM_HTTP_PORT: String(windmill.server.port),
+    });
+
+    windmill.server.stop(true);
+    expect(lineFor(lines, "periodic")).toMatch(
+      /^\s+OK\s.*periodicが許可されています/,
+    );
+  });
+
+  test("reports NG when the instance allows console but not periodic", async () => {
+    installFakeMise();
+    const windmill = startWindmill(["chromium", "console"]);
+
+    const lines = await tagLines({
+      WM_HTTP_PORT: String(windmill.server.port),
+    });
+
+    windmill.server.stop(true);
+    expect(lineFor(lines, "periodic")).toMatch(
+      /^\s+NG\s.*periodicが許可されていません/,
+    );
   });
 
   test("sends the credentials to the port it probed, not to WM_BASE_URL", async () => {
