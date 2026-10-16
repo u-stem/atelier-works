@@ -78,12 +78,12 @@ locks:
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: ea5981391d7d989101f28cbbc9b17905691a9b15c398e829997712e56cd85f96
-  f/factory/lib/pr_ci_fix_claim: 767da566bbed211bed1a687814bb5d9064795b259725402268c751663e9c058c
+  f/factory/lib/pr_ci_fix_claim: 503a671de90b9959be9aeba91b13c6f5c170f21a4c0418d5176201fe88a10c8c
   f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
   f/factory/lib/pr_ci_human_support: 54c81204509fce685adcce54cdc93893f7485897bf10a5af5faf30ee421a2f83
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
-  f/factory/lib/pr_ci_support: 07601a0554100bf1243dff360195791a6109625e82b5a69f8baa2b5b7fe03f03
-  f/factory/lib/pr_ci_watch: 705b9e3d12afbc9cf58970478f8cab2703197899cd41dd9a89708983f9c6a155
+  f/factory/lib/pr_ci_support: fe0abea3e595dec3ec121513c038460f44e5c56711c70fe6bbdae23f3b5c82d2
+  f/factory/lib/pr_ci_watch: a680897958168fdaac220561b449e359b1c405a6a35f683a3cd93f48310e7df0
   f/factory/lib/pr_conflict_fix_claim: 0964d5b8d8ffd6aabc3ea83f4c4d9ce4f23e1cc6e4a3259710d9e897bbacc019
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: 3780214fb7cf2360669eafb216272bcbaf44761d0a5d3cf50ceb547ed2622cc9
@@ -147,5 +147,5 @@ locks:
   f/factory/steps/pr_workflow_support: bf7fc5140eea659b45e935b2d1e67b79f7ae983b73c8c49e7a4d2a674fd3ebba
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: 6b197f8bf7a2689c8f1906fcae64b328c9815890b6344796ab0e6cff6585e958
-  f/factory/watch_pr_ci: c5dbbae4ff3cb5ea520c5fe5a75993ac31f275ecf50c4dfc9b573776b5eade92
+  f/factory/watch_pr_ci: deab983b4451bc35a596832ff6cb031669a3b2af4ff7b90c66b3a302c6e2e940
   f/factory/watch_pr_conflicts: a272c0a99fcdd47b218c2e017d4473936d058a1f6d2bb447391405c45cca99c8

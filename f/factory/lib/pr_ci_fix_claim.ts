@@ -101,6 +101,11 @@ export type FixClaimReaders = {
   /** factory-fixスキルが、CI回の節のマーカーを持つか。 */
   readonly hasSkillMarker: () => Promise<boolean>;
   readonly classify: (pr: PullRequest) => Promise<HeadFailureClass>;
+  /**
+   * 検査を動かすworkerの環境が前提を満たさないか。検査コマンドが無いときは満たすものとして扱う。
+   * 読み取りに費用がかかるので、判定がここに届いたときだけ読む。
+   */
+  readonly workerEnvUnfit: () => Promise<boolean>;
   /** 日次の予算を使い切ったか。 */
   readonly budgetExceeded: () => Promise<boolean>;
   /** mainのCIが赤いか。 */
@@ -163,6 +168,9 @@ function hold(reason: PrCiFixHoldReason): FixClaimDecision {
  * 6. 時間設定が修正・検証ステップのtimeoutに収まらなければ`config_misfit`で保留する。準備のステップが同じ理由で止めるので、
  *    起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない(保留が30分続くと、行ごとに保留の通知が出る)。
  *    設定を直せば、次の巡回で外れる。
+ *    続けて、検査を動かすworkerの環境(イメージの古さ、稼働中の安全)が前提を満たさなければ`worker_env_unfit`で保留する。
+ *    準備のステップが同じ理由で止めるので、起動の前に確かめ、ラウンドと、起動ごとの停止通知を使わない。
+ *    環境を直せば、次の巡回で外れる。
  * 7. 予算を使い切っていれば`budget_exceeded`、mainが赤ければ`main_ci_failed`、
  *    ラウンドの数が上限に達しているか、行の起動の回数が上限に`LAUNCH_FAILURE_ALLOWANCE`を足した数に
  *    達していれば`rounds_exhausted`で保留する。後者は、フローが起動しないまま起動し直し続けるのを止める。
@@ -201,6 +209,9 @@ export async function decideFixClaim(
   if (failure === "unreadable") return { kind: "skip", why: "unreadable" };
 
   if (input.configMisfit !== null) return hold("config_misfit");
+  if (await readers.workerEnvUnfit()) {
+    return hold("worker_env_unfit");
+  }
   if (failure !== "metadata_only" && (await readers.budgetExceeded())) {
     return hold("budget_exceeded");
   }

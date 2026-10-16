@@ -503,6 +503,8 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `pr_draft_or_auto_merge`: PRがドラフトか、auto-mergeが有効である。
  * - `config_misfit`: 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。
  *   設定だけで決まるので、起動の前に確かめて保留する。ラウンドを使わない。設定を直せば、次の巡回でpushなしに外れる。
+ * - `worker_env_unfit`: 検査を動かすworkerの環境が前提を満たさない。イメージが古いか、稼働中のworkerに誰でも書き込めるパスがある。
+ *   準備のステップが同じ理由で止めるので、起動の前に確かめて保留する。ラウンドを使わない。環境を直せば、次の巡回でpushなしに外れる。
  */
 export const PR_CI_FIX_HOLD_REASONS = [
   "unfixable_job",
@@ -519,6 +521,7 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
   "config_misfit",
+  "worker_env_unfit",
 ] as const;
 
 export type PrCiFixHoldReason = (typeof PR_CI_FIX_HOLD_REASONS)[number];
@@ -655,6 +658,14 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "時間設定が、修正・検証ステップのtimeoutに収まらない。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らす。直すと、次の巡回で自動で起動し直す",
     stopAction:
       "時間設定が、修正・検証ステップのtimeoutに収まりません。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
+  },
+  worker_env_unfit: {
+    temporary: true,
+    discord: true,
+    nextAction:
+      "検査を動かすworkerの環境が前提を満たさない。イメージが古いか、稼働中のworkerに誰でも書き込めるパスがある。「mise run up」でイメージとworkerを作り直す。直ると、次の巡回で自動で起動し直す",
+    stopAction:
+      "検査を動かすworkerの環境が前提を満たしません。イメージが古いか、稼働中のworkerに誰でも書き込めるパスがあります。「mise run up」でイメージとworkerを作り直してください。直ると、Factoryが次の巡回で自動で起動し直します",
   },
 };
 

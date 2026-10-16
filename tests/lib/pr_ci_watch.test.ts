@@ -2880,6 +2880,8 @@ type ClaimSetup = {
   readonly rounds?: number;
   /** 時間設定が、修正・検証ステップのtimeoutに収まらない理由。収まるときは省く。 */
   readonly configMisfit?: string | null;
+  /** 検査を動かすworkerの環境の問題。前提を満たすときは省く。 */
+  readonly workerEnvProblem?: string | null;
   readonly claimResults?: (number | null)[];
   readonly launchFails?: boolean;
   /** フローは起動したが、ジョブIDを作業項目に記録できなかった。 */
@@ -2958,6 +2960,10 @@ function claimHarness(setup: ClaimSetup = {}): ClaimHarness {
     enabledSince: SINCE,
     maxRounds: 2,
     configMisfit: setup.configMisfit ?? null,
+    workerEnvProblem: async () => {
+      count("worker_env");
+      return setup.workerEnvProblem ?? null;
+    },
     listCandidates: async (since, limit) => {
       listed.push({ since, limit });
       if (setup.listCandidatesFails === true) throw new Error("list failed");
@@ -3458,6 +3464,16 @@ describe("the claim limits", () => {
     expect(c.reads.budget).toBe(1);
   });
 
+  test("reads the worker environment once for several rows", async () => {
+    const c = claimHarness({
+      candidates: threeRows,
+      workerEnvProblem: "worker image is stale",
+    });
+    const h = harness({ ...threePrs(), override: { claim: c.deps } });
+    await runPrCiWatch(h.deps);
+    expect(c.reads.worker_env).toBe(1);
+  });
+
   test("reads the skill marker once for several rows", async () => {
     const c = claimHarness({
       candidates: threeRows,
@@ -3626,6 +3642,30 @@ describe("holding a row", () => {
     const c = claimHarness({
       configMisfit: null,
       candidates: [candidateRow({ fix_hold_reason: "config_misfit" })],
+    });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: null }]);
+  });
+
+  test("holds a failure as worker_env_unfit without claiming while the worker environment does not fit", async () => {
+    const c = claimHarness({ workerEnvProblem: "worker image is stale" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.holds).toEqual([{ id: 5, reason: "worker_env_unfit" }]);
+  });
+
+  test("does not claim while the worker environment does not fit", async () => {
+    const c = claimHarness({ workerEnvProblem: "worker image is stale" });
+    const h = harness(claimSetup(c));
+    await runPrCiWatch(h.deps);
+    expect(c.claims).toEqual([]);
+  });
+
+  test("clears worker_env_unfit once the worker environment fits, without a push", async () => {
+    const c = claimHarness({
+      workerEnvProblem: null,
+      candidates: [candidateRow({ fix_hold_reason: "worker_env_unfit" })],
     });
     const h = harness(claimSetup(c));
     await runPrCiWatch(h.deps);

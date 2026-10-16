@@ -1,6 +1,7 @@
 // `watch_pr_ci`が組む起動の依存に、時間設定の不整合が設定から渡ることを確かめる。
 
 import { describe, expect, test } from "bun:test";
+import type { CheckEnvironmentProblems } from "../../f/factory/lib/check_sandbox.ts";
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import type { GhClient } from "../../f/factory/lib/github.ts";
 import { ciRoundTimeoutMisfit } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -61,5 +62,55 @@ describe("buildClaimDeps", () => {
     expect(buildClaimDeps(config, CLIENT)?.configMisfit).toMatch(
       /^ci round: time settings do not fit .*the verify step needs/,
     );
+  });
+});
+
+const FIT: CheckEnvironmentProblems = { image: [], runtime: [] };
+const STALE: CheckEnvironmentProblems = {
+  image: ["/usr/bin/setfacl is missing"],
+  runtime: [],
+};
+const UNSAFE: CheckEnvironmentProblems = {
+  image: [],
+  runtime: ["world-writable paths created at runtime: /tmp/x"],
+};
+
+describe("buildClaimDeps workerEnvProblem", () => {
+  const withChecks = parseFactoryConfig({
+    ...RAW_CONFIG,
+    allowed_check_commands: ["mise run check"],
+  });
+
+  test("returns null when the worker environment fits", async () => {
+    const deps = buildClaimDeps(withChecks, CLIENT, async () => FIT);
+    expect(await deps?.workerEnvProblem()).toBeNull();
+  });
+
+  test("returns the stale image message", async () => {
+    const deps = buildClaimDeps(withChecks, CLIENT, async () => STALE);
+    expect(await deps?.workerEnvProblem()).toMatch(
+      /^worker image is stale: run mise run up: .*setfacl/,
+    );
+  });
+
+  test("returns the unsafe runtime message", async () => {
+    const deps = buildClaimDeps(withChecks, CLIENT, async () => UNSAFE);
+    expect(await deps?.workerEnvProblem()).toMatch(
+      /^worker runtime is unsafe for checks: /,
+    );
+  });
+
+  test("does not look at the environment when no check commands are configured", async () => {
+    let called = false;
+    const config = parseFactoryConfig({
+      ...RAW_CONFIG,
+      allowed_check_commands: [],
+    });
+    const deps = buildClaimDeps(config, CLIENT, async () => {
+      called = true;
+      return STALE;
+    });
+    await deps?.workerEnvProblem();
+    expect(called).toBe(false);
   });
 });

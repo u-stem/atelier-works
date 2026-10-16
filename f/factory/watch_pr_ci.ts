@@ -30,6 +30,11 @@
 
 // デプロイ先のサーバーの版に合わせて1.817.0に固定する。
 import * as wmill from "windmill-client@1.817.0";
+import {
+  type CheckEnvironmentProblems,
+  checkEnvironmentError,
+  checkImageProblemsFromEnv,
+} from "./lib/check_sandbox.ts";
 import { hasCiFixSkillMarker } from "./lib/ci_fix_round.ts";
 import { dailyBudgetStatus } from "./lib/claude.ts";
 import { loadConfig } from "./lib/config.ts";
@@ -112,12 +117,19 @@ const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
 export function buildClaimDeps(
   config: FactoryConfig,
   client: GhClient,
+  problems: () => Promise<CheckEnvironmentProblems> = () =>
+    checkImageProblemsFromEnv(),
 ): PrCiClaimDeps | undefined {
   const since = config.pr_ci_fix_enabled_since;
   if (!config.pr_ci_fix_enabled || since === null) return undefined;
   return {
     maxRounds: config.pr_ci_fix_max_rounds,
     configMisfit: ciRoundTimeoutMisfit(config),
+    // 検査コマンドの無いリポジトリは、古いイメージでも止めない。準備のステップの関門と同じ条件である。
+    workerEnvProblem: async () => {
+      if (config.allowed_check_commands.length === 0) return null;
+      return checkEnvironmentError(await problems())?.message ?? null;
+    },
     enabledSince: since,
     listCandidates: (from, limit) =>
       listClaimablePrCiChecks(from, PR_CI_FIX_TEMPORARY_HOLD_REASONS, limit),

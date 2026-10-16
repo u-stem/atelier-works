@@ -1189,6 +1189,7 @@ const TEMPORARY_HOLDS = [
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
   "config_misfit",
+  "worker_env_unfit",
 ] as const;
 
 describe("PR_CI_FIX_HOLD_REASONS", () => {
@@ -1422,6 +1423,10 @@ describe("prCiFixHoldInfo", () => {
 
   test("sends the discord message when the time settings do not fit", () => {
     expect(prCiFixHoldInfo("config_misfit").discord).toBe(true);
+  });
+
+  test("sends the discord message when the worker environment does not fit", () => {
+    expect(prCiFixHoldInfo("worker_env_unfit").discord).toBe(true);
   });
 
   test("sends the discord message when the rounds are exhausted", () => {

@@ -346,6 +346,11 @@ export type PrCiClaimDeps = {
     runId: number,
     headSha: string,
   ) => Promise<readonly WorkflowRunJob[]>;
+  /**
+   * 検査を動かすworkerの環境が前提を満たさない理由。満たすときは`null`。
+   * 実行の中で1回だけ読む。
+   */
+  readonly workerEnvProblem: () => Promise<string | null>;
   readonly budgetExceeded: () => Promise<boolean>;
   readonly mainCiFailed: (owner: string, repo: string) => Promise<boolean>;
   readonly countRounds: (
@@ -2068,6 +2073,12 @@ function claimReaders(
         claim.listJobs(row.owner, row.repo, runId, row.head_sha),
       );
     },
+    workerEnvUnfit: () =>
+      readFactOnce(
+        context,
+        "worker_env",
+        async () => (await claim.workerEnvProblem()) !== null,
+      ),
     budgetExceeded: () => readFactOnce(context, "budget", claim.budgetExceeded),
     mainCiFailed: () =>
       readFactOnce(context, `main_ci:${repo}`, () =>

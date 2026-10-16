@@ -55,6 +55,8 @@ type Setup = {
   readonly budgetExceeded?: boolean;
   readonly mainCiFailed?: boolean;
   readonly rounds?: number;
+  /** 検査を動かすworkerの環境が前提を満たさないか。 */
+  readonly workerEnvUnfit?: boolean;
 };
 
 function readers(setup: Setup = {}): {
@@ -86,6 +88,7 @@ function readers(setup: Setup = {}): {
       budgetExceeded: track("budget", setup.budgetExceeded ?? false),
       mainCiFailed: track("main_ci", setup.mainCiFailed ?? false),
       countRounds: track("rounds", setup.rounds ?? 0),
+      workerEnvUnfit: track("worker_env", setup.workerEnvUnfit ?? false),
     },
   };
 }
@@ -331,6 +334,58 @@ describe("decideFixClaim", () => {
       "time settings do not fit",
     );
     expect(await decision).toEqual({ kind: "hold", reason: "config_misfit" });
+  });
+
+  test("holds worker_env_unfit when the worker environment does not fit the checks", async () => {
+    const { decision } = decide({ workerEnvUnfit: true });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "worker_env_unfit",
+    });
+  });
+
+  test("holds worker_env_unfit even for a metadata-only failure", async () => {
+    const { decision } = decide({
+      classification: "metadata_only",
+      workerEnvUnfit: true,
+    });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "worker_env_unfit",
+    });
+  });
+
+  test("holds config_misfit before it reads the worker environment", async () => {
+    const { decision, events } = decide(
+      { workerEnvUnfit: true },
+      {},
+      2,
+      "time settings do not fit",
+    );
+    await decision;
+    expect(events).not.toContain("worker_env");
+  });
+
+  test("does not read the worker environment when nothing failed", async () => {
+    const { decision, events } = decide({
+      classification: "no_failure",
+      workerEnvUnfit: true,
+    });
+    await decision;
+    expect(events).not.toContain("worker_env");
+  });
+
+  test("does not read the budget when the worker environment does not fit", async () => {
+    const { decision, events } = decide({
+      workerEnvUnfit: true,
+    });
+    await decision;
+    expect(events).not.toContain("budget");
+  });
+
+  test("does not hold worker_env_unfit when the worker environment fits", async () => {
+    const { decision } = decide({ workerEnvUnfit: false });
+    expect((await decision).kind).toBe("claim");
   });
 
   test("does not hold config_misfit when nothing failed", async () => {
