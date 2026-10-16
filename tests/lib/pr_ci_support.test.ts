@@ -1189,7 +1189,8 @@ const TEMPORARY_HOLDS = [
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
   "config_misfit",
-  "worker_env_unfit",
+  "worker_image_stale",
+  "worker_runtime_unsafe",
 ] as const;
 
 describe("PR_CI_FIX_HOLD_REASONS", () => {
@@ -1425,8 +1426,30 @@ describe("prCiFixHoldInfo", () => {
     expect(prCiFixHoldInfo("config_misfit").discord).toBe(true);
   });
 
-  test("sends the discord message when the worker environment does not fit", () => {
-    expect(prCiFixHoldInfo("worker_env_unfit").discord).toBe(true);
+  test("sends the discord message when the worker image is stale", () => {
+    expect(prCiFixHoldInfo("worker_image_stale").discord).toBe(true);
+  });
+
+  test("sends the discord message when the running worker is unsafe", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").discord).toBe(true);
+  });
+
+  test("asks to rebuild the image when the worker image is stale", () => {
+    expect(prCiFixHoldInfo("worker_image_stale").nextAction).toContain(
+      "mise run up",
+    );
+  });
+
+  test("asks to close the paths or recreate the worker when the running worker is unsafe", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "chmod o-w",
+    );
+  });
+
+  test("does not ask to rebuild the image when the running worker is unsafe", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).not.toContain(
+      "mise run up",
+    );
   });
 
   test("sends the discord message when the rounds are exhausted", () => {

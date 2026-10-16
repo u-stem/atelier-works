@@ -11,6 +11,7 @@ import {
   type FixClaimReaders,
   hasFactoryTrailer,
   LAUNCH_FAILURE_ALLOWANCE,
+  type WorkerEnvHoldReason,
 } from "../../f/factory/lib/pr_ci_fix_claim.ts";
 
 const SHA_A = "a".repeat(40);
@@ -55,8 +56,8 @@ type Setup = {
   readonly budgetExceeded?: boolean;
   readonly mainCiFailed?: boolean;
   readonly rounds?: number;
-  /** 検査を動かすworkerの環境が前提を満たさないか。 */
-  readonly workerEnvUnfit?: boolean;
+  /** 検査を動かすworkerの環境が前提を満たさない保留の理由。満たすときは省く。 */
+  readonly workerEnv?: WorkerEnvHoldReason | null;
 };
 
 function readers(setup: Setup = {}): {
@@ -88,7 +89,7 @@ function readers(setup: Setup = {}): {
       budgetExceeded: track("budget", setup.budgetExceeded ?? false),
       mainCiFailed: track("main_ci", setup.mainCiFailed ?? false),
       countRounds: track("rounds", setup.rounds ?? 0),
-      workerEnvUnfit: track("worker_env", setup.workerEnvUnfit ?? false),
+      workerEnv: track("worker_env", setup.workerEnv ?? null),
     },
   };
 }
@@ -336,28 +337,36 @@ describe("decideFixClaim", () => {
     expect(await decision).toEqual({ kind: "hold", reason: "config_misfit" });
   });
 
-  test("holds worker_env_unfit when the worker environment does not fit the checks", async () => {
-    const { decision } = decide({ workerEnvUnfit: true });
+  test("holds worker_image_stale when the worker image is stale", async () => {
+    const { decision } = decide({ workerEnv: "worker_image_stale" });
     expect(await decision).toEqual({
       kind: "hold",
-      reason: "worker_env_unfit",
+      reason: "worker_image_stale",
     });
   });
 
-  test("holds worker_env_unfit even for a metadata-only failure", async () => {
+  test("holds worker_runtime_unsafe when the running worker is unsafe", async () => {
+    const { decision } = decide({ workerEnv: "worker_runtime_unsafe" });
+    expect(await decision).toEqual({
+      kind: "hold",
+      reason: "worker_runtime_unsafe",
+    });
+  });
+
+  test("holds the worker environment reason even for a metadata-only failure", async () => {
     const { decision } = decide({
       classification: "metadata_only",
-      workerEnvUnfit: true,
+      workerEnv: "worker_image_stale",
     });
     expect(await decision).toEqual({
       kind: "hold",
-      reason: "worker_env_unfit",
+      reason: "worker_image_stale",
     });
   });
 
   test("holds config_misfit before it reads the worker environment", async () => {
     const { decision, events } = decide(
-      { workerEnvUnfit: true },
+      { workerEnv: "worker_image_stale" },
       {},
       2,
       "time settings do not fit",
@@ -369,22 +378,42 @@ describe("decideFixClaim", () => {
   test("does not read the worker environment when nothing failed", async () => {
     const { decision, events } = decide({
       classification: "no_failure",
-      workerEnvUnfit: true,
+      workerEnv: "worker_image_stale",
     });
     await decision;
     expect(events).not.toContain("worker_env");
   });
 
-  test("does not read the budget when the worker environment does not fit", async () => {
+  test("holds budget_exceeded before it reads the worker environment", async () => {
     const { decision, events } = decide({
-      workerEnvUnfit: true,
+      budgetExceeded: true,
+      workerEnv: "worker_image_stale",
     });
     await decision;
-    expect(events).not.toContain("budget");
+    expect(events).not.toContain("worker_env");
   });
 
-  test("does not hold worker_env_unfit when the worker environment fits", async () => {
-    const { decision } = decide({ workerEnvUnfit: false });
+  test("holds main_ci_failed before it reads the worker environment", async () => {
+    const { decision, events } = decide({
+      mainCiFailed: true,
+      workerEnv: "worker_image_stale",
+    });
+    await decision;
+    expect(events).not.toContain("worker_env");
+  });
+
+  test("holds rounds_exhausted before it reads the worker environment", async () => {
+    const { decision, events } = decide(
+      { rounds: 2, workerEnv: "worker_image_stale" },
+      {},
+      2,
+    );
+    await decision;
+    expect(events).not.toContain("worker_env");
+  });
+
+  test("claims when the worker environment fits", async () => {
+    const { decision } = decide({ workerEnv: null });
     expect((await decision).kind).toBe("claim");
   });
 

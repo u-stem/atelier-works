@@ -86,18 +86,52 @@ describe("buildClaimDeps workerEnvProblem", () => {
     expect(await deps?.workerEnvProblem()).toBeNull();
   });
 
-  test("returns the stale image message", async () => {
+  test("returns the stale image reason with its message", async () => {
     const deps = buildClaimDeps(withChecks, CLIENT, async () => STALE);
-    expect(await deps?.workerEnvProblem()).toMatch(
-      /^worker image is stale: run mise run up: .*setfacl/,
-    );
+    expect(await deps?.workerEnvProblem()).toEqual({
+      reason: "worker_image_stale",
+      message:
+        "worker image is stale: run mise run up: /usr/bin/setfacl is missing",
+    });
   });
 
-  test("returns the unsafe runtime message", async () => {
+  test("returns the unsafe runtime reason with its message", async () => {
     const deps = buildClaimDeps(withChecks, CLIENT, async () => UNSAFE);
-    expect(await deps?.workerEnvProblem()).toMatch(
-      /^worker runtime is unsafe for checks: /,
+    expect(await deps?.workerEnvProblem()).toEqual({
+      reason: "worker_runtime_unsafe",
+      message:
+        "worker runtime is unsafe for checks: chmod o-w the paths or recreate windmill_worker: world-writable paths created at runtime: /tmp/x",
+    });
+  });
+
+  test("reports the error to leave the notice with the paths", async () => {
+    const reported: Error[] = [];
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => UNSAFE,
+      async (error) => {
+        reported.push(error);
+      },
     );
+    await deps?.workerEnvProblem();
+    expect(reported.map((error) => error.name)).toEqual([
+      "CheckRuntimeUnsafeError",
+    ]);
+  });
+
+  test("does not report when the worker environment fits", async () => {
+    const reported: Error[] = [];
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => FIT,
+      async (error) => {
+        reported.push(error);
+      },
+    );
+    await deps?.workerEnvProblem();
+    expect(reported).toEqual([]);
   });
 
   test("does not look at the environment when no check commands are configured", async () => {
