@@ -156,7 +156,7 @@ type Harness = {
   readonly releases: { id: number; options: ReleasePrConflictFixOptions }[];
   readonly holds: {
     id: number;
-    reason: string;
+    reason: string | null;
     expected: string | null;
   }[];
   readonly claims: ClaimPrConflictInput[];
@@ -176,7 +176,11 @@ function setup(options: Setup = {}): Harness {
   const failures: string[] = [];
   const warnings: string[] = [];
   const releases: { id: number; options: ReleasePrConflictFixOptions }[] = [];
-  const holds: { id: number; reason: string; expected: string | null }[] = [];
+  const holds: {
+    id: number;
+    reason: string | null;
+    expected: string | null;
+  }[] = [];
   const claims: ClaimPrConflictInput[] = [];
   const launched: number[] = [];
   const failedItems: { id: number; note: string }[] = [];
@@ -270,7 +274,7 @@ function setup(options: Setup = {}): Harness {
     },
     setHold: async (id, reason, expected) => {
       holds.push({ id, reason, expected });
-      calls.push(`hold:${reason}`);
+      calls.push(`hold:${String(reason)}`);
       replace(id, { fix_hold_reason: reason });
       return true;
     },
@@ -1167,6 +1171,40 @@ describe("runPrConflictWatch: the limit of fixes in a run", () => {
     expect(h.holds).toEqual([
       { id: 114, reason: "last_fix_unsettled", expected: null },
     ]);
+  });
+
+  test("still writes a final hold for a row after the limit was reached", async () => {
+    const h = setup({
+      prNumbers: [12, 13, 14],
+      prReads: { 14: [pr(14, { autoMergeEnabled: true })] },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.holds).toEqual([
+      { id: 114, reason: "pr_draft_or_auto_merge", expected: null },
+    ]);
+  });
+
+  test("removes the temporary hold of a row that the limit left behind", async () => {
+    const h = setup({
+      prNumbers: [12, 13, 14],
+      rows: [
+        check({
+          id: 114,
+          pr_number: 14,
+          fix_hold_reason: "budget_exceeded",
+        }),
+      ],
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.holds).toEqual([
+      { id: 114, reason: null, expected: "budget_exceeded" },
+    ]);
+  });
+
+  test("does not write when the row that the limit left behind has no hold", async () => {
+    const h = setup({ prNumbers: [12, 13, 14] });
+    await runPrConflictWatch(h.deps);
+    expect(h.holds).toEqual([]);
   });
 
   test("does not claim a row after the limit was reached", async () => {

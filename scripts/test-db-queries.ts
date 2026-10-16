@@ -101,6 +101,7 @@ import {
   updateIntakeIfRegenerating,
   updateStatus,
   updateStatusIfCurrent,
+  updateStatusIfLeaseHolder,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
@@ -6041,7 +6042,7 @@ check(
     sql,
   )) === 0,
 );
-// 競合を直した作業項目が、失敗せずに終わった時刻の最新。blockedとfailedとneeds_humanは含めない。
+// 競合を直した作業項目が終わった時刻の最新。pushしていないblockedとfailedとneeds_humanは含めない。
 const cfSettled = await conflictFixRow(731, CF_HEAD_1);
 const cfSettledAges: [WorkItemStatus, number, number][] = [
   ["rereview_requested", 1, 30],
@@ -6208,6 +6209,64 @@ await transitionMainCiRun(
 check(
   "main ci state: a failed commit returns failed",
   (await getMainCiStateBySha("qcfix", "app", cfMainSha, sql)) === "failed",
+);
+// 綴りの違う2行は、更新の新しい方の状態を返す。
+const cfMainSpelled = "2".repeat(40);
+await recordMainCiRun(
+  {
+    owner: "QCFix",
+    repo: "App",
+    head_sha: cfMainSpelled,
+    state: "pending",
+    run_created_at: new Date("2026-10-16T00:00:00Z"),
+  },
+  sql,
+);
+await recordMainCiRun(
+  {
+    owner: "qcfix",
+    repo: "app",
+    head_sha: cfMainSpelled,
+    state: "pending",
+    run_created_at: new Date("2026-10-16T00:00:00Z"),
+  },
+  sql,
+);
+const cfMainLower = (
+  await listMainCiRunsBySha("qcfix", "app", [cfMainSpelled], sql)
+)[0];
+await transitionMainCiRun(
+  cfMainLower?.id ?? 0,
+  { state: "failed", summary: "build failed", prevFailed: false },
+  sql,
+);
+check(
+  "main ci state: of two rows that differ in spelling, the newer one is returned",
+  (await getMainCiStateBySha("qcfix", "app", cfMainSpelled, sql)) === "failed",
+);
+// フローを持たない作業項目は、照合が`flow_job_id`のNULLを条件に、状態を進められる。
+const cfOrphan = await conflictFixRow(737, CF_HEAD_1);
+const cfOrphanItem = await conflictRoundItem(
+  737,
+  cfOrphan.id,
+  1,
+  "fixing",
+  null,
+);
+check(
+  "reconcile: a work item without a flow job id is moved by a lease check on NULL",
+  (await updateStatusIfLeaseHolder(
+    cfOrphanItem,
+    "fixing",
+    "failed",
+    null,
+    "reconcile: flow job finished or absent without a terminal status update",
+    sql,
+  )) === true,
+);
+check(
+  "reconcile: the work item without a flow job id is failed",
+  (await getWorkItem(cfOrphanItem, sql))?.status === "failed",
 );
 // 後続のレビューが修正回の差分を重点的に見る問い合わせは、競合の回がpushしたcommitも対象にする。
 const cfReviewed = "8".repeat(40);

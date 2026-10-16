@@ -187,12 +187,12 @@ export type PrConflictFixDeps = {
     prNumber: number,
   ) => Promise<Date | null>;
   /**
-   * 保留の理由を書く(`setPrConflictFixHold`)。`expected`は書く前の理由で、いまの理由がこれと違う行は書き換えない。
+   * 保留の理由を書く(`setPrConflictFixHold`)。`null`で外す。`expected`は書く前の理由で、いまの理由がこれと違う行は書き換えない。
    * 書いたら`true`。
    */
   readonly setHold: (
     id: number,
-    reason: PrConflictFixHoldReason,
+    reason: PrConflictFixHoldReason | null,
     expected: string | null,
   ) => Promise<boolean>;
   /** 行に作業項目を結んで挿入する(`claimPrConflictForFix`)。起動できなければ`null`。 */
