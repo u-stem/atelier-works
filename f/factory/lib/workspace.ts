@@ -22,8 +22,22 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { type CiFixChange, isSafeRepoPath } from "./ci_fix_paths.ts";
+// `conflict_fix_round.ts`は、`BothSidesChangedPaths`を型としてだけ読み込む。
+// 型は実行時に消えるので、2つのファイルの間に実行時の循環は無い。
+import {
+  conflictMarkerLabels,
+  hasConflictMarkerLikeLine,
+  stripConflictMarkerLabels,
+} from "./conflict_fix_round.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
-import { escapeReasonSeparator, maskSecrets } from "./log.ts";
+import {
+  escapeReasonSeparator,
+  type Logger,
+  logger,
+  maskSecrets,
+} from "./log.ts";
+import type { ChangedPathStatus } from "./protected_paths.ts";
 import {
   assertBranchName,
   assertGitHubName,
@@ -470,6 +484,10 @@ export type GitCommandOptions = {
  *   設定ファイルに書かれたプログラムを、gitに実行させない。
  *   `core.askPass`は空にすると、環境変数`SSH_ASKPASS`も読まれなくなる。
  * - `commit.gpgsign`、`push.gpgSign`: commitとpushの署名で、`gpg.program`に書かれたプログラムを実行させない。
+ * - `gpg.program`: 空にして、署名の作成と検証のどちらでも、設定ファイルに書かれたプログラムを実行させない。
+ *   署名の検証は、`merge`の`--no-verify-signatures`でも止める。
+ * - `core.commitGraph`: `false`にして、commit-graphファイルのコミットの親を読ませない。
+ *   親の照合(`rev-parse <sha>^1`、`merge-base --is-ancestor`)が、細工したcommit-graphに偽られないため。
  * - `core.symlinks`: worktreeの検証が前提にする値。
  *   `.git/config`や`config.worktree`で`true`に戻させない。
  * - `core.excludesFile`、`core.attributesFile`: `/dev/null`にして、
@@ -486,6 +504,8 @@ export const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
   ["core.attributesFile", "/dev/null"],
   ["commit.gpgsign", "false"],
   ["push.gpgSign", "false"],
+  ["gpg.program", ""],
+  ["core.commitGraph", "false"],
   ["credential.helper", ""],
 ];
 
@@ -502,13 +522,15 @@ export const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
  *   ローカルだけの操作(rev-parse、status、add、commit、worktree、diff)は
  *   トークンを持たない`localGitEnv`を使う。
  * - 利用者に由来する位置引数(URL、ディレクトリ、sha、ブランチ)の前には`--`を置き、
- *   `-`で始まる値をオプションと誤読させない。例外は次の6つで、代わりに
+ *   `-`で始まる値をオプションと誤読させない。例外は次の7つで、代わりに
  *   `assertSha`や`assertBranchName`の入力検証で、先頭が`-`の値を防ぐ。
+ *   - `git commit-tree`: `pushMergeCommit`のツリーは位置引数で、`--`の後に置くと
+ *     「must give exactly one tree」で失敗する(実際に確かめた)。ツリーとshaは`assertSha`で検証する。
  *   - `git rev-parse`: `-- <rev>`は他のサブコマンドと同じには動かない。
  *     `--verify`では「リビジョンが無い」扱いになり、`--verify`なしでは
  *     オプションの解釈を止めずに、出力の前に`--`の行をそのまま出す(実際に確かめた)。
  *   - `git gtr new`: core gitではない外部のサブコマンドで、`--`を扱える保証が無い。
- *   - `pushNewBranch`の`git ls-remote`: リモート名の後の`--`を区切りではなくパターンとして扱う
+ *   - `pushNewBranch`と競合回の`git ls-remote`: リモート名の後の`--`を区切りではなくパターンとして扱う
  *     (実際に確かめた)。パターンは`HEAD`と、`assertBranchName`で検証したブランチから作った`refs/heads/`で始まるrefである。
  *   - `readGitShowFile`の`git show <ref>:<path>`: `--`を付けてもエラーにならず、
  *     気づかないうちにgitが返す内容が変わる。`ref`を検証すれば、`path`も守られる
@@ -578,6 +600,12 @@ export function localGitEnv(
     // `refs/replace/`で別のオブジェクトに差し替えられた内容を読まない。
     // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
     GIT_NO_REPLACE_OBJECTS: "1",
+    // `.git/info/grafts`で、コミットの親を書き換えさせない。`GIT_NO_REPLACE_OBJECTS`では止まらない。
+    // 親の照合(`rev-parse <sha>^1`、`merge-base --is-ancestor`)が、graftsに偽られるため。
+    // main cloneの`.git`に書き込めない前提だが、書き込める経路が増えたときの備えとして塞ぐ。
+    // commit-graphによる親の読み替えは、`FIXED_GIT_CONFIG`の`core.commitGraph`で塞ぐ。
+    // gitの2.54で、graftsが効くことと、この指定で無効になることを確かめた。
+    GIT_GRAFT_FILE: "/dev/null",
     // システムとグローバル(`$HOME/.gitconfig`、XDGの`git/config`)の設定と、システムのgitattributesを読まない。
     // 実行する環境ごとに値が違い、リポジトリの設定と検証の前提が食い違うため。
     // コミットのauthorは`GIT_AUTHOR_*`、認証は`GH_TOKEN`で渡すので、これらの設定は要らない。
@@ -3809,4 +3837,1240 @@ export async function runGitleaksOnText(
   return runGitleaksStdin(opts, text, (stdout) =>
     formatGitleaksFindings(stdout, (finding) => `- ${finding.RuleID}`),
   );
+}
+
+// ---------------------------------------------------------------------------
+// mergeBaseIntoWorktree / pushMergeCommit(競合回)
+// ---------------------------------------------------------------------------
+
+/** 競合回が直す競合ファイルの数の上限。超えたら人に渡す。 */
+export const MAX_CONFLICTED_PATHS = 10;
+
+/** 競合ファイルを読むときの、1つの内容の大きさの上限(バイト)。超えたら人に渡す。 */
+const CONFLICT_BLOB_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * 衝突マーカー入りの本文を読むときの上限(バイト)。3つの版が混ざるので、1つの版の上限より大きくする。
+ * gitが書いて`add`した本文と、`merge-file`で作り直した本文の両方に、同じ上限を使う。
+ */
+const CONFLICT_TEXT_MAX_BYTES = 2 * CONFLICT_BLOB_MAX_BYTES;
+
+/** 通常のファイルのモード。実行権限の有無だけが違う。 */
+const REGULAR_FILE_MODES = ["100644", "100755"];
+
+/**
+ * 競合ファイルに付いていたら、競合回で扱わない属性。
+ * マージの仕方(`merge`、`diff`)、内容の変換(`filter`、`working-tree-encoding`、`ident`)、
+ * マーカーの長さ(`conflict-marker-size`)を変え、作業ファイルと3つの版の内容を食い違わせる。
+ */
+const BLOCKED_ATTRIBUTES: ReadonlySet<string> = new Set([
+  "merge",
+  "filter",
+  "working-tree-encoding",
+  "ident",
+  "diff",
+  "conflict-marker-size",
+]);
+
+/** 競合回の基準コミットの固定のメッセージ。ローカルだけに残り、pushしない。 */
+const BASELINE_COMMIT_MESSAGE =
+  "factory: baseline of the merge for the conflict round";
+
+/** 競合1ファイルの、mergeの3つの版のblob。 */
+export type ConflictBlobs = {
+  readonly path: string;
+  /** 共通の祖先(ステージ1)。 */
+  readonly baseBlob: string;
+  /** PRのhead側(ステージ2)。 */
+  readonly oursBlob: string;
+  /** baseの側(ステージ3)。 */
+  readonly theirsBlob: string;
+};
+
+/**
+ * 競合回のgit操作が、worktreeに入る前に確かめる前提。
+ * `commitAndPush`と同じ前段(ロック、gitdirの検証、`.git`の照合、ブランチの確認)を共有する。
+ */
+export type MergeWorktreeOptions = {
+  readonly run: CommandRunner;
+  readonly repoDir: string;
+  readonly dir: string;
+  /** worktreeのHEADが指すべきローカルのブランチ(PRのブランチ)。 */
+  readonly branch: string;
+  /** 準備のステップが記録した、worktreeの`.git`ファイルの中身。 */
+  readonly worktreeGitPointer: string;
+  readonly ghToken: string;
+  readonly home?: string;
+  readonly path?: string;
+  readonly verifyWorktree?: (
+    opts: VerifyWorktreeGitdirOptions,
+  ) => Promise<void>;
+  readonly pointerFs?: WorktreeGitPointerFs;
+  readonly lockFs?: LockFs;
+  readonly sleep?: (ms: number) => Promise<void>;
+  readonly now?: () => Date;
+};
+
+type MergeGitContext = {
+  readonly run: CommandRunner;
+  readonly cwd: string;
+  readonly local: Record<string, string>;
+  readonly network: Record<string, string>;
+};
+
+/**
+ * 競合回のgitの環境を組み立てる。ローカルの環境には、authorとcommitterを環境変数で入れる。
+ * `merge`などは、コミットを作らない呼び出しでも、利用者名が決まらないとcommitter identityのエラーで失敗する。
+ * 実行する環境の利用者設定やパスワードファイルの氏名には頼れないので、全呼び出しに同じ値を渡す。
+ */
+function mergeGitContext(
+  opts: MergeWorktreeOptions & { readonly author: GitIdentity },
+): MergeGitContext {
+  return {
+    run: opts.run,
+    cwd: opts.dir,
+    local: {
+      ...localGitEnv(opts.home, opts.path),
+      ...commitIdentityEnv(opts.author),
+    },
+    network: networkGitEnv(opts.ghToken, opts.home, opts.path),
+  };
+}
+
+/**
+ * 競合回のgitを1回実行する。`--literal-pathspecs`を必ず付け、パスをワイルドカードや`:(...)`として読ませない。
+ * `okExitCodes`に無い終了コードと、出力の読み取りの打ち切りは、stderrを秘密を伏せて例外にする。
+ * 終了コードそのものを判断に使う操作(`merge`、`merge-base --is-ancestor`)は、`okExitCodes`で受ける。
+ */
+async function mergeGit(
+  ctx: MergeGitContext,
+  label: string,
+  args: readonly string[],
+  options: {
+    readonly network?: boolean;
+    readonly env?: Readonly<Record<string, string>>;
+    readonly okExitCodes?: readonly number[];
+    readonly maxOutputBytes?: number;
+  } = {},
+): Promise<CommandResult> {
+  const network = options.network === true;
+  const result = await ctx.run(
+    buildGitArgv(["--literal-pathspecs", ...args], { network }),
+    {
+      cwd: ctx.cwd,
+      env: { ...(network ? ctx.network : ctx.local), ...options.env },
+      ...(options.maxOutputBytes === undefined
+        ? {}
+        : { maxOutputBytes: options.maxOutputBytes }),
+    },
+  );
+  assertOutputComplete(label, result);
+  const accepted = options.okExitCodes ?? [0];
+  if (result.timedOut || !accepted.includes(result.exitCode)) {
+    throw gitError(`${label} failed`, result);
+  }
+  return result;
+}
+
+/**
+ * 競合回のgitをworktreeで実行する前の、共通の守り。ロックの中で呼ぶ。
+ * worktreeが`repoDir`の本物であること、`.git`ファイルが準備のステップの記録のままであること、
+ * HEADがローカルの`branch`にあることを、最初のgitの前に確かめる。
+ * HEADが別のブランチかdetachedなら`CommitBlockedError`を投げる。検査コマンドがブランチを切り替えると、
+ * pushする先が準備のステップの見たブランチでなくなるため。
+ */
+async function enterConflictWorktree(
+  opts: MergeWorktreeOptions,
+  ctx: MergeGitContext,
+): Promise<void> {
+  const verify = opts.verifyWorktree ?? verifyWorktreeGitdir;
+  await verify({ run: opts.run, repoDir: opts.repoDir, dir: opts.dir });
+  await assertWorktreeGitPointer(
+    opts.dir,
+    opts.worktreeGitPointer,
+    opts.pointerFs,
+  );
+  // ブランチは完全なref名で読む。`rev-parse --abbrev-ref`は同名のタグがあると別の名前を返す。
+  const headRef = await mergeGit(
+    ctx,
+    "git symbolic-ref -q HEAD",
+    ["symbolic-ref", "-q", "HEAD"],
+    { okExitCodes: [0, 1] },
+  );
+  if (
+    headRef.exitCode !== 0 ||
+    headRef.stdout.trim() !== `${LOCAL_BRANCH_REF_PREFIX}${opts.branch}`
+  ) {
+    throw new CommitBlockedError(`local HEAD is not on branch ${opts.branch}`);
+  }
+}
+
+/** リモートの既定のブランチを、PRのbaseと照合した結果。 */
+type RemoteBase =
+  | { readonly isDefault: false }
+  | { readonly isDefault: true; readonly sha: string };
+
+/**
+ * リモートの`HEAD`が`refs/heads/<baseBranch>`を指すかを、完全なref名の照合で確かめ、その先頭のshaを返す。
+ * 追跡ref(`refs/remotes/origin/*`)は読まない。検査コマンドが書き換えうるため。
+ */
+async function readRemoteBase(
+  ctx: MergeGitContext,
+  baseBranch: string,
+): Promise<RemoteBase> {
+  const baseRef = `refs/heads/${baseBranch}`;
+  const remote = await mergeGit(
+    ctx,
+    "git ls-remote origin",
+    ["ls-remote", "--symref", "origin", "HEAD", baseRef],
+    { network: true },
+  );
+  const refs = parseLsRemoteSymref(remote.stdout);
+  if (refs.symrefs.get("HEAD") !== baseRef) return { isDefault: false };
+  const sha = refs.shas.get(baseRef);
+  if (sha === undefined) throw new Error(`origin has no ${baseRef}`);
+  assertSha(sha);
+  return { isDefault: true, sha };
+}
+
+/** `git ls-files -u -z`の1件。 */
+type UnmergedEntry = {
+  readonly mode: string;
+  readonly sha: string;
+  readonly stage: number;
+};
+
+/** `git ls-files -u -z`の出力を、パスごとのステージの一覧にする。形の合わない項目は無視する。 */
+function parseUnmerged(stdout: string): Map<string, UnmergedEntry[]> {
+  const byPath = new Map<string, UnmergedEntry[]>();
+  for (const record of stdout.split("\u0000")) {
+    const tab = record.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode = "", sha = "", stageText = ""] = record
+      .slice(0, tab)
+      .split(" ");
+    const stage = Number(stageText);
+    if (!Number.isInteger(stage) || mode === "" || sha === "") continue;
+    const path = record.slice(tab + 1);
+    byPath.set(path, [...(byPath.get(path) ?? []), { mode, sha, stage }]);
+  }
+  return byPath;
+}
+
+/** 競合回で直せない競合の理由。 */
+export type UnresolvableReason =
+  | "too_many_conflicts"
+  | "unsafe_path"
+  | "missing_stage"
+  | "not_regular_file"
+  | "binary"
+  | "too_large"
+  | "attributes"
+  | "marker_like_line"
+  | "no_conflict_block"
+  | "reconstruction_mismatch";
+
+/**
+ * `mergeBaseIntoWorktree`の結果。
+ * - `merged`: 基準コミット(`autoSha`)を作った。親は[PRのhead, base]で、競合ファイルはマーカー入りである。
+ * - `up_to_date`: baseがすでにPRの履歴にある。何も変えていない。
+ * - `base_not_default`: PRのbaseがリモートの既定のブランチでない。
+ * - `head_changed`: worktreeのHEADが、渡されたPRのheadと違う。準備のステップがPRを読んでからfetchするまでの間に、
+ *   誰かがpushした場合に起きる。`currentSha`はworktreeのHEADである。何も変えていない。
+ * - `unresolvable`: 競合回で直せない。mergeは取り消し、worktreeは元に戻してある。
+ *   `reconstruction_mismatch`は、3つの版から作り直した衝突ブロックが、gitがworktreeに書いたブロックと食い違ったときである。
+ *   `no_conflict_block`は、3つの版がそろっているのに、作り直した本文に衝突ブロックが無いときである。
+ *
+ * `merged`の`conflictedPaths`が空のことがある。GitHubが競合と判定したのに、ローカルのmergeがきれいに終わった場合である。
+ * この関数は基準コミットを作ってそのまま`merged`で返し、扱いは呼び出し側が決める。
+ */
+export type MergeBaseResult =
+  | {
+      readonly outcome: "merged";
+      readonly baseSha: string;
+      readonly autoSha: string;
+      readonly autoTreeSha: string;
+      readonly conflictedPaths: readonly string[];
+      readonly conflictBlobs: readonly ConflictBlobs[];
+    }
+  | { readonly outcome: "up_to_date"; readonly baseSha: string }
+  | { readonly outcome: "base_not_default" }
+  | { readonly outcome: "head_changed"; readonly currentSha: string }
+  | { readonly outcome: "unresolvable"; readonly reason: UnresolvableReason };
+
+export type MergeBaseIntoWorktreeOptions = MergeWorktreeOptions & {
+  /** worktreeのHEADがあるべきPRのhead。 */
+  readonly prHeadSha: string;
+  /** PRの`baseRef`。リモートの既定のブランチと一致しなければ`base_not_default`にする。 */
+  readonly baseBranch: string;
+  /** 基準コミットのauthorとcommitter。ローカルだけに残る。 */
+  readonly author: GitIdentity;
+  /** `merge --abort`の失敗など、続行できる失敗の記録先。既定は`workspace`の構造化ロガー。 */
+  readonly log?: Logger;
+};
+
+/** 競合ファイルの`numstat -z`に、バイナリ(`-\t-`)があるか。 */
+function numstatHasBinary(stdout: string): boolean {
+  return stdout.split("\u0000").some((record) => record.startsWith("-\t-\t"));
+}
+
+/** gitがバイナリと判定するときに調べる先頭のバイト数(`buffer_is_binary`と同じ)。 */
+const BINARY_PROBE_BYTES = 8000;
+
+/** 先頭の8000バイトにNULバイトがあるか。gitがファイルをバイナリと判定する規則と同じである。 */
+function looksBinary(text: string): boolean {
+  const head = new TextEncoder().encode(text.slice(0, BINARY_PROBE_BYTES));
+  return head.subarray(0, BINARY_PROBE_BYTES).includes(0);
+}
+
+/** `git check-attr -a -z`の出力に、`BLOCKED_ATTRIBUTES`の属性があるか。 */
+function hasBlockedAttribute(stdout: string): boolean {
+  const fields = stdout.split("\u0000");
+  for (let index = 1; index < fields.length; index += 3) {
+    if (BLOCKED_ATTRIBUTES.has(fields[index] ?? "")) return true;
+  }
+  return false;
+}
+
+/**
+ * 競合を、競合回で直せるかを調べる。直せないときは理由を返し、直せるときは`null`を返す。
+ * 理由の優先順位は、数、パスの形、3つの版の有無とモード、PRのheadとbaseの差のバイナリ判定、属性、
+ * 版ごとの大きさ、NULバイト(バイナリ)、マーカー風の行(共通の祖先、PRのhead、baseの順)である。
+ * 作り直した本文との照合(`reconstruction_mismatch`)は、`add`の後に別に行う。
+ */
+async function unresolvableReasonOf(
+  ctx: MergeGitContext,
+  prHeadSha: string,
+  baseSha: string,
+  unmerged: ReadonlyMap<string, readonly UnmergedEntry[]>,
+): Promise<UnresolvableReason | null> {
+  if (unmerged.size > MAX_CONFLICTED_PATHS) return "too_many_conflicts";
+  const paths = [...unmerged.keys()];
+  if (paths.length === 0) return null;
+  if (!paths.every((path) => isSafeRepoPath(path))) return "unsafe_path";
+  const stageSets = paths.map((path) => unmerged.get(path) ?? []);
+  const hasAllStages = (entries: readonly UnmergedEntry[]): boolean =>
+    [1, 2, 3].every((stage) => entries.some((entry) => entry.stage === stage));
+  if (!stageSets.every(hasAllStages)) return "missing_stage";
+  const regular = stageSets.every((entries) =>
+    entries.every((entry) => REGULAR_FILE_MODES.includes(entry.mode)),
+  );
+  if (!regular) return "not_regular_file";
+
+  const numstat = await mergeGit(ctx, "git diff --numstat", [
+    "diff",
+    "--numstat",
+    "-z",
+    "--no-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+    prHeadSha,
+    baseSha,
+    "--",
+    ...paths,
+  ]);
+  if (numstatHasBinary(numstat.stdout)) return "binary";
+
+  for (const source of [prHeadSha, baseSha]) {
+    const attrs = await mergeGit(ctx, "git check-attr", [
+      "check-attr",
+      `--source=${source}`,
+      "-a",
+      "-z",
+      "--",
+      ...paths,
+    ]);
+    if (hasBlockedAttribute(attrs.stdout)) return "attributes";
+  }
+
+  for (const entries of stageSets) {
+    for (const stage of [1, 2, 3]) {
+      const entry = entries.find((candidate) => candidate.stage === stage);
+      if (entry === undefined) continue;
+      assertSha(entry.sha);
+      const blob = await mergeGit(
+        ctx,
+        "git cat-file blob",
+        ["cat-file", "blob", "--", entry.sha],
+        { maxOutputBytes: CONFLICT_BLOB_MAX_BYTES },
+      );
+      if (isCappedOutput(blob.stdout)) return "too_large";
+      if (looksBinary(blob.stdout)) return "binary";
+      if (hasConflictMarkerLikeLine(blob.stdout)) return "marker_like_line";
+    }
+  }
+  return null;
+}
+
+function blobsOf(
+  path: string,
+  entries: readonly UnmergedEntry[],
+): ConflictBlobs {
+  const shaAt = (stage: number): string => {
+    const sha = entries.find((entry) => entry.stage === stage)?.sha;
+    if (sha === undefined) throw new Error(`stage ${String(stage)} is missing`);
+    return sha;
+  };
+  return {
+    path,
+    baseBlob: shaAt(1),
+    oursBlob: shaAt(2),
+    theirsBlob: shaAt(3),
+  };
+}
+
+/** 早期の照合で作り直すときの`nonce`。ラベルは比べる前に取り除くので、固定でよい。 */
+const EARLY_CHECK_NONCE = "check000";
+
+/**
+ * 競合ファイルごとに、3つの版から作り直した本文が、gitが書いて`add`した本文と、ラベルの行を除いて同じかを調べる。
+ * 解消の検査(`checkConflictResolution`)は作り直した形でブロックの境目を決めるので、
+ * gitが書いたブロックと食い違うと、Claudeが見た境目と検査の境目がずれる。
+ * ずれは、Claudeを起動する前に見つけて止める。
+ * 比べる相手は、作業ファイルではなく`add`した後の索引のblobである。基準コミットに入る内容そのものになる。
+ *
+ * 結果は、すべて同じなら`match`、本文が上限を超えれば`too_large`、
+ * 作り直した本文に衝突ブロックが無ければ`no_conflict_block`、違えば`reconstruction_mismatch`である。
+ */
+async function checkReconstructions(
+  ctx: MergeGitContext,
+  opts: MergeBaseIntoWorktreeOptions,
+  blobs: readonly ConflictBlobs[],
+): Promise<
+  "match" | "too_large" | "no_conflict_block" | "reconstruction_mismatch"
+> {
+  for (const entry of blobs) {
+    const staged = await mergeGit(
+      ctx,
+      "git cat-file blob (staged)",
+      ["cat-file", "blob", "--", `:0:${entry.path}`],
+      { maxOutputBytes: CONFLICT_TEXT_MAX_BYTES },
+    );
+    if (isCappedOutput(staged.stdout)) return "too_large";
+    const rebuilt = await runMergeFile({
+      run: opts.run,
+      worktreeDir: opts.dir,
+      blobs: entry,
+      nonce: EARLY_CHECK_NONCE,
+      ...(opts.home !== undefined ? { home: opts.home } : {}),
+      ...(opts.path !== undefined ? { path: opts.path } : {}),
+    });
+    if (rebuilt.capped) return "too_large";
+    if (!/^<{7} /m.test(rebuilt.text)) return "no_conflict_block";
+    if (
+      stripConflictMarkerLabels(rebuilt.text) !==
+      stripConflictMarkerLabels(staged.stdout)
+    ) {
+      return "reconstruction_mismatch";
+    }
+  }
+  return "match";
+}
+
+/**
+ * mergeが始まった後の例外の経路で、`merge --abort`をベストエフォートで実行する。
+ * 失敗しても例外は投げず、警告として記録する。呼び出し側が、元の例外を優先して投げ直すためである。
+ * 取り消せなかったworktreeは、次に使うときの`reset --hard`と`clean -fd`で戻る前提である。
+ */
+async function abortMergeBestEffort(
+  ctx: MergeGitContext,
+  log: Logger,
+): Promise<void> {
+  try {
+    await mergeGit(ctx, "git merge --abort", ["merge", "--abort"]);
+  } catch (abortError) {
+    log.warn("git merge --abort failed after an error", {
+      error:
+        abortError instanceof Error ? abortError.message : String(abortError),
+    });
+  }
+}
+
+/**
+ * PRのworktreeに、リモートの既定のブランチの先頭を、コミットせずにmergeして、ローカルだけの基準コミットを作る。
+ * 競合回の準備のステップが、Claudeに競合を解かせる前に呼ぶ。pushはしない。
+ *
+ * 手順は次のとおり。
+ * 1. 前段の守りを通し、無視されたファイルを消し、作業ツリーが空で、HEADがPRのheadであることを確かめる。
+ * 2. `ls-remote`で、リモートの`HEAD`が`refs/heads/<baseBranch>`を指すことと、その先頭のshaを読む。
+ *    追跡refは読まない。指していなければ`base_not_default`を返す。
+ * 3. そのshaを明示してfetchする(サブモジュールには降りない)。
+ * 4. baseがPRのheadの祖先なら`up_to_date`を返す。
+ * 5. `merge --no-ff --no-commit`を、diff3形式、rerere無効、renormalize無効で実行する。
+ * 6. 競合ファイルが直せるかを調べる。直せなければmergeを取り消して`unresolvable`を返す。
+ * 7. 競合ファイルだけを`add`する(`add -A`は使わない)。`add`した本文が、3つの版から作り直した本文と
+ *    ラベルの行を除いて同じことを確かめ、違えばmergeを取り消して`unresolvable`(`reconstruction_mismatch`)を返す。
+ * 8. commitする。親は[PRのhead, base]である。
+ *    作った後に、親が記録と一致することと、未追跡のファイルが無いことを確かめる。
+ *
+ * HEADがPRのheadと違うときは、何も変えずに`head_changed`を返す。
+ *
+ * mergeが始まった後に例外が出たときは、`merge --abort`をベストエフォートで実行してから、元の例外を投げ直す。
+ * 取り消しが失敗したときは警告を記録し、元の例外を優先する。取り消せなかったworktreeは、
+ * mergeの途中のまま(MERGE_HEADと`add`した索引が残る)になりうる。呼び出し側は、
+ * 次にworktreeを使うときの`reset --hard`と`clean -fd`が状態を戻す前提で、この例外を扱う。
+ * 基準コミットを作った後の例外では、mergeは終わっているので取り消さない。基準コミットとローカルのブランチの移動が残る。
+ *
+ * mergeは`--`の後にshaを置く(gitの2.54で、`--`を付けても付けなくても同じに動くことを確かめた)。
+ * mergeとaddとcommitは`GH_TOKEN`を持たない環境で動き、`ls-remote`とfetchだけが持つ。
+ * 競合ファイルが`merge`などの属性を持つときは、変換や外部のドライバが働くので直さない。
+ * 基準コミットはローカルのブランチを進めるので、通常の回の`commitAndPush`は`requireLocalHeadAtExpected`で止まる。
+ */
+export async function mergeBaseIntoWorktree(
+  opts: MergeBaseIntoWorktreeOptions,
+): Promise<MergeBaseResult> {
+  assertSha(opts.prHeadSha);
+  assertBranchName(opts.branch);
+  assertBranchName(opts.baseBranch);
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async (): Promise<MergeBaseResult> => {
+      const ctx = mergeGitContext(opts);
+      const log = opts.log ?? logger("workspace");
+      await enterConflictWorktree(opts, ctx);
+
+      // `removeIgnoredFiles`と同じ操作だが、この関数のgitはすべて`--literal-pathspecs`を付けるので、`mergeGit`で実行する。
+      await mergeGit(ctx, "git clean -fdX", ["clean", "-fdX"]);
+      const status = await mergeGit(ctx, "git status", [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+      ]);
+      if (status.stdout !== "") {
+        throw new CommitBlockedError(
+          "worktree has local changes before the merge",
+        );
+      }
+      const head = (
+        await mergeGit(ctx, "git rev-parse --verify HEAD", [
+          "rev-parse",
+          "--verify",
+          "HEAD",
+        ])
+      ).stdout.trim();
+      if (head !== opts.prHeadSha) {
+        assertSha(head);
+        return { outcome: "head_changed", currentSha: head };
+      }
+
+      const remoteBase = await readRemoteBase(ctx, opts.baseBranch);
+      if (!remoteBase.isDefault) return { outcome: "base_not_default" };
+      const baseSha = remoteBase.sha;
+      await mergeGit(
+        ctx,
+        `git fetch origin ${baseSha}`,
+        ["fetch", "--no-recurse-submodules", "origin", "--", baseSha],
+        { network: true },
+      );
+      const fetched = (
+        await mergeGit(ctx, "git rev-parse --verify <base>^{commit}", [
+          "rev-parse",
+          "--verify",
+          `${baseSha}^{commit}`,
+        ])
+      ).stdout.trim();
+      if (fetched !== baseSha) {
+        throw new Error(`fetched base ${fetched} is not ${baseSha}`);
+      }
+
+      const ancestor = await mergeGit(
+        ctx,
+        "git merge-base --is-ancestor",
+        ["merge-base", "--is-ancestor", "--", baseSha, opts.prHeadSha],
+        { okExitCodes: [0, 1] },
+      );
+      if (ancestor.exitCode === 0) return { outcome: "up_to_date", baseSha };
+
+      const merge = await mergeGit(
+        ctx,
+        "git merge",
+        [
+          "-c",
+          "merge.conflictStyle=diff3",
+          "-c",
+          "rerere.enabled=false",
+          "-c",
+          "merge.renormalize=false",
+          "merge",
+          "--no-ff",
+          "--no-commit",
+          "--no-verify-signatures",
+          "--",
+          baseSha,
+        ],
+        { okExitCodes: [0, 1], env: { GIT_MERGE_AUTOEDIT: "no" } },
+      );
+      // ここからmergeが始まっている。例外で抜けるときは、MERGE_HEADと`add`した索引を残さないよう、
+      // 取り消してから投げ直す。
+      let mergeInProgress = true;
+      const abortMerge = async (): Promise<void> => {
+        await mergeGit(ctx, "git merge --abort", ["merge", "--abort"]);
+        mergeInProgress = false;
+      };
+      try {
+        const unmerged = parseUnmerged(
+          (await mergeGit(ctx, "git ls-files -u", ["ls-files", "-u", "-z"]))
+            .stdout,
+        );
+        if (merge.exitCode !== 0 && unmerged.size === 0) {
+          throw new Error(
+            "git merge reported a conflict but no unmerged paths remain",
+          );
+        }
+
+        const reason = await unresolvableReasonOf(
+          ctx,
+          opts.prHeadSha,
+          baseSha,
+          unmerged,
+        );
+        if (reason !== null) {
+          await abortMerge();
+          return { outcome: "unresolvable", reason };
+        }
+
+        const conflictedPaths = [...unmerged.keys()];
+        const conflictBlobs = conflictedPaths.map((path) =>
+          blobsOf(path, unmerged.get(path) ?? []),
+        );
+        if (conflictedPaths.length > 0) {
+          await mergeGit(ctx, "git add", ["add", "--", ...conflictedPaths]);
+        }
+        const check = await checkReconstructions(ctx, opts, conflictBlobs);
+        if (check !== "match") {
+          await abortMerge();
+          return { outcome: "unresolvable", reason: check };
+        }
+        await mergeGit(ctx, "git commit", [
+          "commit",
+          "-m",
+          BASELINE_COMMIT_MESSAGE,
+        ]);
+        mergeInProgress = false;
+        const revisions = (
+          await mergeGit(ctx, "git rev-parse (baseline commit)", [
+            "rev-parse",
+            "HEAD",
+            "HEAD^1",
+            "HEAD^2",
+            "HEAD^{tree}",
+          ])
+        ).stdout
+          .trim()
+          .split("\n");
+        const [
+          autoSha = "",
+          firstParent = "",
+          secondParent = "",
+          autoTreeSha = "",
+        ] = revisions;
+        if (firstParent !== opts.prHeadSha || secondParent !== baseSha) {
+          throw new CommitBlockedError(
+            "the baseline commit does not have the PR head and the base as its parents",
+          );
+        }
+        assertSha(autoSha);
+        assertSha(autoTreeSha);
+        const untracked = await mergeGit(ctx, "git ls-files -o", [
+          "ls-files",
+          "-o",
+          "--exclude-standard",
+          "-z",
+        ]);
+        if (untracked.stdout !== "") {
+          throw new CommitBlockedError(
+            "untracked files remain after the baseline commit",
+          );
+        }
+
+        return {
+          outcome: "merged",
+          baseSha,
+          autoSha,
+          autoTreeSha,
+          conflictedPaths,
+          conflictBlobs,
+        };
+      } catch (err) {
+        if (mergeInProgress) await abortMergeBestEffort(ctx, log);
+        throw err;
+      }
+    },
+  });
+}
+
+/** 競合回のmergeコミットの固定のメッセージ。 */
+export const MERGE_COMMIT_MESSAGE =
+  "fix: resolve merge conflicts with the base branch";
+
+/** `pushMergeCommit`が、ステージした木が検証した木と違うために止めるときの理由。 */
+export const STAGED_TREE_CHANGED_REASON =
+  "staged tree differs from the verified tree";
+
+export type PushMergeCommitOptions = MergeWorktreeOptions & {
+  /** 作業を始めたときのPRのheadで、mergeコミットの第1親になる。 */
+  readonly prHeadSha: string;
+  /** `mergeBaseIntoWorktree`が記録したbaseのsha。mergeコミットの第2親になる。 */
+  readonly baseSha: string;
+  /** PRの`baseRef`。 */
+  readonly baseBranch: string;
+  /** `mergeBaseIntoWorktree`が作った基準コミット。ローカルのHEADがこれであるべき。 */
+  readonly autoSha: string;
+  /** 検査したツリー。pushするmergeコミットのツリーはこれになる。 */
+  readonly expectedTreeSha: string;
+  /** 競合ファイル。解消の内容をステージするのは、このパスだけである。 */
+  readonly conflictedPaths: readonly string[];
+  /** mergeコミットの`Generated-By`トレーラーに入れる、Factoryのインスタンス名。 */
+  readonly instanceName: string;
+  /** mergeコミットのauthorとcommitter。 */
+  readonly author: GitIdentity;
+  /**
+   * `add`の後、`write-tree`の前に、ステージした内容を調べて止める理由を返す。
+   * 理由があれば`reset -q`でステージを戻し、`CommitBlockedError`を投げる。例外を投げたときも戻す。
+   */
+  readonly inspectStaged?: () => Promise<readonly string[]>;
+};
+
+/**
+ * `pushMergeCommit`の結果。
+ * - `pushed`: mergeコミット`newSha`をpushした。
+ * - `head_changed`: PRのブランチが、作業を始めたときから進んでいる。何もpushしていない。
+ * - `base_changed`: 記録したbaseが、リモートの既定のブランチの先頭でも祖先でもなくなった。何もpushしていない。
+ * - `rejected_workflows`: GitHubが、`.github/workflows/`を含むpushを権限不足として拒否した。
+ */
+export type PushMergeCommitResult =
+  | { readonly outcome: "pushed"; readonly newSha: string }
+  | { readonly outcome: "head_changed"; readonly currentSha: string }
+  | { readonly outcome: "base_changed" }
+  | { readonly outcome: "rejected_workflows" };
+
+/**
+ * `refs/remotes/origin/<branch>`が今指すshaを、完全な名前の一致で読む。無ければ例外を投げる。
+ * `show-ref --verify`は、`rev-parse`と違い、refが無いときに別のrefへ解決し直さない(`readExactRef`)。
+ * `readExactRef`と同じ操作だが、この関数のgitはすべて`--literal-pathspecs`を付けるので、`mergeGit`で実行する。
+ */
+async function readTrackingSha(
+  ctx: MergeGitContext,
+  branch: string,
+): Promise<string> {
+  const ref = remoteTrackingRef(branch);
+  const result = await mergeGit(
+    ctx,
+    `git show-ref --verify ${ref}`,
+    ["show-ref", "--verify", "--hash", "--", ref],
+    { env: { LC_ALL: "C" } },
+  );
+  const sha = result.stdout.trim();
+  assertSha(sha);
+  return sha;
+}
+
+/**
+ * pushのstderrに、`.github/workflows/`を理由とする`[remote rejected]`の行があるか。
+ * 行は`! [remote rejected] <送った名前> -> <受けた名前> (<理由>)`の形で、見るのは括弧の中の理由だけである。
+ * ブランチ名に`.github/workflows/`を含む別の拒否を、権限不足の拒否と取り違えないため。
+ * ブランチ名に空白は入らないので、矢印の後の最初の` (`が理由の始まりになる。
+ */
+function isWorkflowScopeRejection(stderr: string): boolean {
+  return stderr.split("\n").some((line) => {
+    const lower = line.toLowerCase();
+    const at = lower.indexOf(REMOTE_REJECTED_SUBSTRING);
+    if (at < 0) return false;
+    const rest = lower.slice(at + REMOTE_REJECTED_SUBSTRING.length);
+    const arrow = rest.indexOf(" -> ");
+    if (arrow < 0) return false;
+    const open = rest.indexOf(" (", arrow);
+    return open >= 0 && rest.slice(open).includes(".github/workflows/");
+  });
+}
+
+/**
+ * 検査したツリーを親が[PRのhead, base]のmergeコミットにして、PRのブランチへfast-forwardでpushする。
+ * `mergeBaseIntoWorktree`が作った基準コミットは送らない。基準コミットには衝突マーカーが残り、
+ * 送るのは解消したツリーだけである。rebaseとforce pushはしない。
+ *
+ * 手順は次のとおり。
+ * 1. 前段の守りを通す(`mergeBaseIntoWorktree`と同じ)。
+ * 2. PRのブランチをfetchし、リモートの先頭が`prHeadSha`でなければ`head_changed`を返す。
+ *    ローカルのHEADが`autoSha`で、その第1親と第2親が`prHeadSha`と`baseSha`であることを確かめる。
+ *    違えば`CommitBlockedError`を投げる。検査コマンドがローカルでcommitすると、検査を経ない履歴が親になるため。
+ * 3. `stageConflictPathsTree`で、競合ファイルだけを`add`し、`inspectStaged`で調べ、`write-tree`し、索引を戻す。
+ *    そのツリーが`expectedTreeSha`と一致することを確かめる。commitを作る前に確かめるので、違えば何も作らない。
+ *    索引はこの時点で戻るので、この後の`base_changed`などで返るときも、索引は基準コミットのままである。
+ * 4. `ls-remote`で、`baseSha`がリモートの既定のブランチの先頭か、その祖先であることを確かめる。違えば`base_changed`を返す。
+ * 5. `commit-tree`でmergeコミットを作り、そのshaを`refs/heads/<branch>`へpushする。
+ *
+ * `pushed`を返した後も、ローカルのブランチと索引は、衝突マーカー入りの基準コミットのままである。
+ * 作ったmergeコミットは、refにもHEADにも置かない。呼び出し側は、次にworktreeを使うときの`reset --hard`に任せる。
+ *
+ * 第2親(base)の履歴はすでにリモートにあるので、pushが新しく送るのはmergeコミットと解消したファイルだけである。
+ * pushがfast-forwardでないとして拒否されたときは、fetchし直して`head_changed`を返す。
+ * `[remote rejected]`のうち`.github/workflows/`によるものは、PATに`workflow`スコープが無いための拒否なので
+ * `rejected_workflows`として返す。それ以外の拒否と失敗は例外にする。
+ * `commit-tree`にはリビジョンの前の`--`を付けない(`--`の後はツリーとして読まれず、
+ * 「must give exactly one tree」で失敗することを確かめた)。ツリーは`assertSha`で検証する。
+ */
+export async function pushMergeCommit(
+  opts: PushMergeCommitOptions,
+): Promise<PushMergeCommitResult> {
+  for (const sha of [
+    opts.prHeadSha,
+    opts.baseSha,
+    opts.autoSha,
+    opts.expectedTreeSha,
+  ]) {
+    assertSha(sha);
+  }
+  assertBranchName(opts.branch);
+  assertBranchName(opts.baseBranch);
+  if (!opts.conflictedPaths.every((path) => isSafeRepoPath(path))) {
+    throw new Error("unsafe conflicted path");
+  }
+
+  return withRepoLock({
+    lockPath: repoLockPath(opts.repoDir),
+    ...(opts.lockFs !== undefined ? { lockFs: opts.lockFs } : {}),
+    ...(opts.sleep !== undefined ? { sleep: opts.sleep } : {}),
+    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    fn: async (): Promise<PushMergeCommitResult> => {
+      const ctx = mergeGitContext(opts);
+      await enterConflictWorktree(opts, ctx);
+
+      // 短いブランチ名のfetchは、同名のタグが先に解決されうる。ブランチと追跡refを明示したrefspecにする。
+      const fetchBranch = (label: string): Promise<CommandResult> =>
+        mergeGit(
+          ctx,
+          label,
+          [
+            "fetch",
+            "--no-recurse-submodules",
+            "origin",
+            "--",
+            `+refs/heads/${opts.branch}:${remoteTrackingRef(opts.branch)}`,
+          ],
+          { network: true },
+        );
+      await fetchBranch(`git fetch origin ${opts.branch}`);
+      const remoteSha = await readTrackingSha(ctx, opts.branch);
+      if (remoteSha !== opts.prHeadSha) {
+        return { outcome: "head_changed", currentSha: remoteSha };
+      }
+
+      const localHead = (
+        await mergeGit(ctx, "git rev-parse --verify HEAD", [
+          "rev-parse",
+          "--verify",
+          "HEAD",
+        ])
+      ).stdout.trim();
+      if (localHead !== opts.autoSha) {
+        throw new CommitBlockedError(
+          `local HEAD ${localHead} is not the baseline commit ${opts.autoSha}`,
+        );
+      }
+      const parents = (
+        await mergeGit(ctx, "git rev-parse (parents of the baseline commit)", [
+          "rev-parse",
+          `${opts.autoSha}^1`,
+          `${opts.autoSha}^2`,
+        ])
+      ).stdout
+        .trim()
+        .split("\n");
+      if (parents[0] !== opts.prHeadSha || parents[1] !== opts.baseSha) {
+        throw new CommitBlockedError(
+          "the baseline commit does not have the recorded parents",
+        );
+      }
+
+      const stagedTree = await stageConflictPathsTree({
+        run: opts.run,
+        worktreeDir: opts.dir,
+        conflictedPaths: opts.conflictedPaths,
+        ...(opts.inspectStaged !== undefined
+          ? { inspectStaged: opts.inspectStaged }
+          : {}),
+        ...(opts.home !== undefined ? { home: opts.home } : {}),
+        ...(opts.path !== undefined ? { path: opts.path } : {}),
+      });
+      if (stagedTree !== opts.expectedTreeSha) {
+        throw new CommitBlockedError(STAGED_TREE_CHANGED_REASON);
+      }
+
+      const remoteBase = await readRemoteBase(ctx, opts.baseBranch);
+      if (!remoteBase.isDefault) return { outcome: "base_changed" };
+      if (remoteBase.sha !== opts.baseSha) {
+        await mergeGit(
+          ctx,
+          `git fetch origin ${remoteBase.sha}`,
+          ["fetch", "--no-recurse-submodules", "origin", "--", remoteBase.sha],
+          { network: true },
+        );
+        const ancestor = await mergeGit(
+          ctx,
+          "git merge-base --is-ancestor",
+          ["merge-base", "--is-ancestor", "--", opts.baseSha, remoteBase.sha],
+          { okExitCodes: [0, 1] },
+        );
+        if (ancestor.exitCode !== 0) return { outcome: "base_changed" };
+      }
+
+      const created = await mergeGit(ctx, "git commit-tree", [
+        "commit-tree",
+        opts.expectedTreeSha,
+        "-p",
+        opts.prHeadSha,
+        "-p",
+        opts.baseSha,
+        "-m",
+        withCommitTrailers(MERGE_COMMIT_MESSAGE, opts.instanceName),
+      ]);
+      const newSha = created.stdout.trim();
+      assertSha(newSha);
+
+      const pushResult = await mergeGit(
+        ctx,
+        "git push",
+        ["push", "origin", "--", `${newSha}:refs/heads/${opts.branch}`],
+        { network: true, okExitCodes: [0, 1, 128] },
+      );
+      if (pushResult.exitCode === 0) return { outcome: "pushed", newSha };
+      if (isWorkflowScopeRejection(pushResult.stderr)) {
+        return { outcome: "rejected_workflows" };
+      }
+      if (isNonFastForwardRejection(pushResult.stderr)) {
+        await fetchBranch(
+          `git fetch origin ${opts.branch} (after push rejection)`,
+        );
+        return {
+          outcome: "head_changed",
+          currentSha: await readTrackingSha(ctx, opts.branch),
+        };
+      }
+      throw gitError("git push failed", pushResult);
+    },
+  });
+}
+
+/**
+ * 競合ファイルだけを`add`し、その索引の`write-tree`を返し、索引を戻す(`reset -q`)。
+ * `pushMergeCommit`が押すツリーと、検証のステップが検査するツリーを、同じ規則で作るために共有する。
+ * 作業ツリーのほかのファイルは、ツリーに入らない。
+ * ツリーを作るだけで、コミットもrefの更新もしない。返した後も、索引は基準コミットのままである。
+ *
+ * `inspectStaged`があれば、`add`の後、`write-tree`の前に、ステージした内容を調べさせる。
+ * 理由を返したときは、索引を戻して`CommitBlockedError`を投げる。例外を投げたときも索引を戻す。
+ * `write-tree`が失敗したときも、索引を戻してから例外を投げる。
+ * 呼び出し側は、前段の守り(`.git`ファイルの照合など)を通した後で呼ぶ。`pushMergeCommit`はロックの中で呼ぶ。
+ * 検査の入力にする変更の一覧は、基準コミットとこのツリーの差(`listTreeChanges`)で作れる。
+ */
+export async function stageConflictPathsTree(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly conflictedPaths: readonly string[];
+  readonly inspectStaged?: () => Promise<readonly string[]>;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  if (!opts.conflictedPaths.every((path) => isSafeRepoPath(path))) {
+    throw new Error("unsafe conflicted path");
+  }
+  const ctx = capturedContext(opts);
+  try {
+    if (opts.conflictedPaths.length > 0) {
+      await mergeGit(ctx, "git add", ["add", "--", ...opts.conflictedPaths]);
+    }
+    if (opts.inspectStaged !== undefined) {
+      const reasons = await opts.inspectStaged();
+      if (reasons.length > 0) {
+        // 理由に埋め込まれたファイル名などが、区切りで別の理由に見えないようにする。
+        throw new CommitBlockedError(
+          reasons.map(escapeReasonSeparator).join("; "),
+        );
+      }
+    }
+    const tree = (
+      await mergeGit(ctx, "git write-tree", ["write-tree"])
+    ).stdout.trim();
+    assertSha(tree);
+    return tree;
+  } finally {
+    await mergeGit(ctx, "git reset -q", ["reset", "-q"]);
+  }
+}
+
+/** `git diff-tree --raw -z`の出力を、検査の入力の変更にする。追加行は持たない。 */
+function parseTreeChanges(stdout: string): CiFixChange[] {
+  const fields = stdout.split("\u0000");
+  const changes: CiFixChange[] = [];
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const meta = fields[index] ?? "";
+    const path = fields[index + 1] ?? "";
+    if (!meta.startsWith(":") || path === "") continue;
+    const [oldMode = "", newMode = "", , , code = ""] = meta
+      .slice(1)
+      .split(" ");
+    const status: ChangedPathStatus = code.startsWith("A")
+      ? "added"
+      : code.startsWith("M")
+        ? "modified"
+        : code.startsWith("D")
+          ? "deleted"
+          : code.startsWith("T")
+            ? "typechange"
+            : "unknown";
+    changes.push({
+      path,
+      status,
+      mode: status === "deleted" ? oldMode : newMode,
+      addedLines: [],
+      removedLineCount: 0,
+    });
+  }
+  return changes;
+}
+
+/**
+ * `fromSha`(コミットかツリー)から`toTreeSha`への変更の一覧を、`checkConflictResolution`の`changes`の形で返す。
+ * 検証のステップは、基準コミットと`stageConflictPathsTree`のツリーを渡す。pushされる内容そのものの差になる。
+ * 名前の変更は検出せず、削除と追加の2件にする。追加した行と削除した行の数は読まない(`checkConflictResolution`は使わない)。
+ * 作業ツリーにあって、ツリーに入らないファイルは含まない。それを検査したいときは、作業ツリー全体の差を別に読む。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
+ */
+export async function listTreeChanges(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly fromSha: string;
+  readonly toTreeSha: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<CiFixChange[]> {
+  assertSha(opts.fromSha);
+  assertSha(opts.toTreeSha);
+  const result = await mergeGit(capturedContext(opts), "git diff-tree", [
+    "diff-tree",
+    "-r",
+    "-z",
+    "--no-renames",
+    "--raw",
+    opts.fromSha,
+    opts.toTreeSha,
+    "--",
+  ]);
+  return parseTreeChanges(result.stdout);
+}
+
+/** 前段の守りを通さない、読み取りだけの関数のためのgitの文脈。トークンは持たない。 */
+function capturedContext(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly home?: string;
+  readonly path?: string;
+}): MergeGitContext {
+  const local = localGitEnv(opts.home, opts.path);
+  return { run: opts.run, cwd: opts.worktreeDir, local, network: local };
+}
+
+/**
+ * blobの本文を返す。`maxBytes`(既定は2MiB)を超えるときは例外を投げる。
+ * 途中で切れた本文を、競合の検査の入力にしないため。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
+ */
+export async function readBlobText(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly sha: string;
+  readonly maxBytes?: number;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  assertSha(opts.sha);
+  const result = await mergeGit(
+    capturedContext(opts),
+    "git cat-file blob",
+    ["cat-file", "blob", "--", opts.sha],
+    { maxOutputBytes: opts.maxBytes ?? CONFLICT_BLOB_MAX_BYTES },
+  );
+  if (isCappedOutput(result.stdout)) {
+    throw new Error(`blob ${opts.sha} is too large to read`);
+  }
+  return result.stdout;
+}
+
+/**
+ * ツリー`treeSha`の中の`filePath`の本文を返す。大きすぎるとき、ファイルが無いときは例外を投げる。
+ * 作業ファイルではなくツリーから読むので、commitされる内容そのものを検査できる。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
+ */
+export async function readTreeFileText(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly treeSha: string;
+  readonly filePath: string;
+  readonly maxBytes?: number;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  assertSha(opts.treeSha);
+  if (!isSafeRepoPath(opts.filePath)) throw new Error("unsafe file path");
+  const result = await mergeGit(
+    capturedContext(opts),
+    "git cat-file blob <tree>:<path>",
+    ["cat-file", "blob", "--", `${opts.treeSha}:${opts.filePath}`],
+    { maxOutputBytes: opts.maxBytes ?? CONFLICT_BLOB_MAX_BYTES },
+  );
+  if (isCappedOutput(result.stdout)) {
+    throw new Error(`${opts.filePath} is too large to read`);
+  }
+  return result.stdout;
+}
+
+/**
+ * `merge-file`の実行の結果。`capped`は、出力が`CONFLICT_TEXT_MAX_BYTES`を超えて切れたことを表す。
+ */
+async function runMergeFile(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly blobs: ConflictBlobs;
+  readonly nonce: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<{ readonly text: string; readonly capped: boolean }> {
+  const labels = conflictMarkerLabels(opts.nonce);
+  const { oursBlob, baseBlob, theirsBlob } = opts.blobs;
+  for (const sha of [oursBlob, baseBlob, theirsBlob]) assertSha(sha);
+  const result = await mergeGit(
+    capturedContext(opts),
+    "git merge-file",
+    [
+      "merge-file",
+      "--object-id",
+      "-p",
+      "--diff3",
+      "--diff-algorithm=histogram",
+      "-L",
+      labels.ours,
+      "-L",
+      labels.base,
+      "-L",
+      labels.theirs,
+      "--",
+      oursBlob,
+      baseBlob,
+      theirsBlob,
+    ],
+    {
+      okExitCodes: Array.from({ length: 128 }, (_, code) => code),
+      maxOutputBytes: CONFLICT_TEXT_MAX_BYTES,
+    },
+  );
+  return { text: result.stdout, capped: isCappedOutput(result.stdout) };
+}
+
+/**
+ * 競合ファイルの3つの版から、nonce入りのラベルの衝突マーカー付きの本文を作り直して返す。
+ * `git merge-file --object-id -p --diff3 --diff-algorithm=histogram`をblobのshaで実行し、
+ * 作業ファイルとファイルシステムは読まない。
+ * `--diff-algorithm=histogram`は必須である。`git merge`(merge-ort)は内容のmergeを常にhistogramで行うが、
+ * `merge-file`の既定はMyersで、`}`や空行が繰り返す入力では衝突ブロックの境目が食い違う。
+ * `--diff-algorithm`は`merge-file`のgit 2.44以降の指定で、`--object-id`はgit 2.43以降の指定である。
+ * 食い違いは、`mergeBaseIntoWorktree`が`add`した本文との照合で検出する。
+ * `merge-file`は競合の数を終了コードで返すので、0から127までを成功として扱い、それ以上は例外にする。
+ * `checkConflictResolution`の`reconstructed`に渡す。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
+ */
+export async function reconstructConflictText(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly blobs: ConflictBlobs;
+  readonly nonce: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  const result = await runMergeFile(opts);
+  if (result.capped) {
+    throw new Error(`${opts.blobs.path} is too large to reconstruct`);
+  }
+  return result.text;
+}
+
+/** `listBothSidesChangedPaths`の結果。パスはすべてリポジトリのルートからの相対パスである。 */
+export type BothSidesChangedPaths = {
+  /** PRのheadから結果へ、baseから結果へ、のどちらの差にも現れるパス。結果がどちらの親とも違うパスである。 */
+  readonly bothSides: readonly string[];
+  /** どちらの差でも追加として現れるパス。どちらの親にも無いパスが結果にあることを表す。 */
+  readonly addedInBoth: readonly string[];
+  /** PRのheadから結果への差のすべてのパス。baseだけが変えたパスも含む。 */
+  readonly headToResult: readonly string[];
+};
+
+/** `git diff-tree --name-status -z`の出力を、パスから状態の文字への対応にする。 */
+function parseNameStatusZ(stdout: string): Map<string, string> {
+  const fields = stdout.split("\u0000");
+  const statuses = new Map<string, string>();
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const status = fields[index] ?? "";
+    const path = fields[index + 1] ?? "";
+    if (status !== "" && path !== "") statuses.set(path, status);
+  }
+  return statuses;
+}
+
+/**
+ * 結果のツリー`treeSha`が、PRのheadとbaseの両方と違うパスを返す。
+ * `diff-tree -r --name-status -z --no-renames`を、PRのhead→結果とbase→結果の2回実行して求める。
+ * 片方の親の変更をそのまま取り込んだだけのパス(mainが自動でmergeされた箇所)は、結果がその親と同じなので含まれない。
+ * 保護パスの判定とgitleaksの対象には、この集合を使う。名前の変更は削除と追加の2件になるので、新しい名前でも漏れない。
+ * ツリーの比較だけで、索引と作業ツリーは読まない。トークンは持たない。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
+ */
+export async function listBothSidesChangedPaths(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly prHeadSha: string;
+  readonly baseSha: string;
+  readonly treeSha: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<BothSidesChangedPaths> {
+  for (const sha of [opts.prHeadSha, opts.baseSha, opts.treeSha]) {
+    assertSha(sha);
+  }
+  const local = localGitEnv(opts.home, opts.path);
+  const ctx: MergeGitContext = {
+    run: opts.run,
+    cwd: opts.worktreeDir,
+    local,
+    network: local,
+  };
+  const diffFrom = async (from: string): Promise<Map<string, string>> =>
+    parseNameStatusZ(
+      (
+        await mergeGit(ctx, "git diff-tree", [
+          "diff-tree",
+          "-r",
+          "--name-status",
+          "-z",
+          "--no-renames",
+          from,
+          opts.treeSha,
+          "--",
+        ])
+      ).stdout,
+    );
+  const fromHead = await diffFrom(opts.prHeadSha);
+  const fromBase = await diffFrom(opts.baseSha);
+  const bothSides = [...fromHead.keys()].filter((path) => fromBase.has(path));
+  return {
+    bothSides,
+    addedInBoth: bothSides.filter(
+      (path) => fromHead.get(path) === "A" && fromBase.get(path) === "A",
+    ),
+    headToResult: [...fromHead.keys()],
+  };
 }

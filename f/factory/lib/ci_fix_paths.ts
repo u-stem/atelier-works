@@ -108,7 +108,7 @@ export function isSafeRepoPath(path: string): boolean {
 }
 
 /** 違反の報告に載せるパス。外部由来なので、不可視文字を除き、空白を詰めて切る。 */
-function displayPath(path: string): string {
+export function displayPath(path: string): string {
   const flat = cleanLogText(path).replace(/\s+/g, " ").trim();
   return Array.from(flat).slice(0, DISPLAY_PATH_MAX_CHARS).join("");
 }
@@ -257,7 +257,7 @@ export function isDeniedPath(path: string): boolean {
 // ---------------------------------------------------------------------------
 
 /** テストのディレクトリ、またはテストのファイル名(`*.test.ts`、`*.spec.tsx`など)か。 */
-function isTestPath(path: string): boolean {
+export function isTestPath(path: string): boolean {
   const lower = path.toLowerCase();
   const segments = lower.split("/");
   if (
@@ -314,7 +314,11 @@ const WEAKENING_PATTERNS: readonly RegExp[] = [
   /\.\s*mock(?:Implementation|ReturnValue|ResolvedValue|RejectedValue)/i,
 ];
 
-function weakensChecks(lines: readonly string[]): boolean {
+/**
+ * `lines`のどれかが、検査を弱める記述(`WEAKENING_PATTERNS`)に当たるか。
+ * CI回の追加行と、競合回の解消で新しく足した行の検査が使う。
+ */
+export function weakensChecks(lines: readonly string[]): boolean {
   return lines.some((line) =>
     WEAKENING_PATTERNS.some((pattern) => pattern.test(line)),
   );

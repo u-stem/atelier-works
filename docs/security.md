@@ -2248,6 +2248,8 @@ main cloneの`.git/config`は、gitがremoteやブランチの設定を読むの
 | `core.askPass` | 空 | 設定のaskpassのプログラムの実行 |
 | `commit.gpgsign` | `false` | commitの署名で`gpg.program`を実行させること |
 | `push.gpgSign` | `false` | pushの署名で`gpg.program`を実行させること |
+| `gpg.program` | 空 | 署名の作成と検証で、設定のプログラムを実行させること |
+| `core.commitGraph` | `false` | commit-graphによる、コミットの親の読み替え |
 | `core.symlinks` | `false` | symlinkの検出が前提にする値の巻き戻し |
 | `core.excludesFile` | `/dev/null` | `$HOME/.config/git/ignore`の読み込み |
 | `core.attributesFile` | `/dev/null` | `$HOME/.config/git/attributes`の読み込み |
@@ -2260,7 +2262,7 @@ main cloneの`.git/config`は、gitがremoteやブランチの設定を読むの
 Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のファイルになる。
 
 固定していない設定は、そのまま読まれる。
-`url.*.insteadOf`、`remote.*.pushurl`、`http.*`、`filter.*`、`diff.*`などは、キーが対象ごとに変わり、名前で固定できない。
+`url.*.insteadOf`、`remote.*.pushurl`、`http.*`、`filter.*`、`diff.*`、`merge.*.driver`などは、キーが対象ごとに変わり、名前で固定できない。
 名前が決まっていて、プログラムを実行できたり作業ツリーを変えたりする設定にも、固定していないものがある。
 `core.alternateRefsCommand`は、`objects/info/alternates`があるcloneのfetchで、シェルから実行される。
 `core.worktree`は、`config.worktree`に書くと、`status`、`clean`、`add -A`が見る作業ツリーを別のディレクトリに変える。
@@ -2388,6 +2390,112 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
   影響は、マージの後か、人の対話セッションで読まれたときに現れる。
 - `github.ts`は、CI回のClaudeが変更できない。
   Factory自身の修正PRのCIが`github.ts`の不具合で落ちても、CI回は直せずに人へ渡す。
+
+### マージの競合を解く回
+
+マージの競合を解く回(競合回)の部品は、リポジトリの既定のブランチ(base)の先頭をPRのブランチにmergeし、競合をClaudeに解かせ、mergeコミットをpushする。
+git操作は`lib/workspace.ts`の`mergeBaseIntoWorktree`と`pushMergeCommit`に、検査は`lib/conflict_fix_round.ts`にある。
+手順と検査の規則は[CIの失敗を直す部品の仕様](internals/ci-fix.md#競合回のgit操作と検査)にある。
+
+#### baseの決め方
+
+mergeするのは、PRのbaseがリモートの既定のブランチのときだけである。
+`git ls-remote --symref`でリモートの`HEAD`が指すブランチを、完全なref名で照合し、そのブランチの先頭のshaを読む。
+ローカルの追跡ref(`refs/remotes/origin/*`)は読まない。検査コマンドが書き換えられるためである。
+
+読んだshaを明示してfetchし、mergeもそのshaで行う。
+fetchはサブモジュールに降りない。
+fetchからmergeまでの間にbaseが進んでも、検査する内容と記録がずれない。
+
+#### workflowスコープを付けない
+
+PATにWorkflowsの権限は付けない([GitHubのPAT](#githubのpat))。
+`.github/workflows/`を含むpushをGitHubに拒否させるためである。
+
+baseの側が`.github/workflows/`を変えていると、mergeコミットのpushは拒否される。
+そのため、mergeした結果のツリーで、PRのheadからの差に`.github/workflows/`が含まれれば、Claudeを起動せずに止める。
+それでもpushが`.github/workflows/`を理由に拒否されたときは、他の拒否と区別して返す。
+区別は、拒否の行の括弧の中の理由だけで行う。ブランチ名に`.github/workflows/`を含む別の拒否を、取り違えないためである。
+
+#### mergeコミットのpush
+
+pushするのは、検査したツリーを持ち、親が[PRのhead, base]のmergeコミット1つだけである。
+rebaseとforce pushはしない。
+
+基準コミットは送らない。基準コミットは衝突マーカーを残したままローカルにだけ作り、pushするコミットは`commit-tree`で新しく作る。
+競合ファイルだけをステージして作ったツリーが、検査したツリーと一致することは、コミットを作る前に確かめる。
+
+第2親(base)の履歴は、すでにリモートにある。
+pushが新しく送るのは、mergeコミットと解消したファイルの内容だけである。
+pushの直前に、記録したbaseが既定のブランチの先頭か、その祖先であることを`ls-remote`で確かめる。
+違えば、何も送らずに止める。
+
+PRのブランチは、ブランチと追跡refを明示したrefspecでfetchする。
+短いブランチ名のfetchは、リモートの同名のタグが先に解決され、追跡refが作られないためである。
+
+fast-forwardでない拒否は、PRのheadが動いたものとして扱う。
+人がpushした変更を上書きしないためである。
+
+#### baseの側の変更
+
+baseの側の変更は、すでにレビューとマージを経ている。
+そのため、保護パスの検査の対象は、競合ファイルと、結果がPRのheadともbaseとも違うパスに限る。
+baseだけが変えたパスは、結果がbaseと同じなので、保護パスでも止めない。
+止めると、既定のブランチが保護パスを変えるたびに、競合を解けなくなる。
+
+名前の変更は削除と追加の2件として比べるので、新しい名前でも漏れない。
+
+#### 衝突ブロックの照合
+
+Claudeの解消の検査は、衝突ブロックを3つの版から作り直した形で決める。
+作り直した形が、gitがworktreeに書いたブロックと食い違うと、Claudeが見た境目と検査の境目がずれる。
+ずれた検査は、ブロックの外の変更を見逃すことがある。
+
+そのため、Claudeを起動する前に、作り直した本文と`add`した本文を、マーカー行のラベルを除いて比べる。
+違えば、mergeを取り消して人に渡す。
+
+#### git操作の守り
+
+`commitAndPush`と同じ前段を通ってから、最初のgitを実行する。
+リポジトリのロックを取り、worktreeの`.git`ファイルが準備のときの記録と一致することを確かめ、HEADが想定のブランチにあることを確かめる。
+`.git`ファイルが差し替えられていれば、worktreeでgitを1回も実行せずに止まる。
+
+すべてのgitに`--literal-pathspecs`を付け、ファイル名をpathspecの記法として読ませない。
+親の照合を偽らせないため、親を読み替える2つの仕組みを塞ぐ。
+環境変数`GIT_GRAFT_FILE`を`/dev/null`にして、`.git/info/grafts`で親を書き換えさせない。
+`GIT_NO_REPLACE_OBJECTS`ではgraftsを止められないためである。
+gitの2.54で、graftsが効くことと、この指定で無効になることを確かめた。
+`core.commitGraph=false`で、commit-graphファイルの親を読ませない。
+どちらも、main cloneの`.git`に書き込めない前提の上で、書き込める経路が増えたときの備えである。
+`merge`には`--no-verify-signatures`を付け、署名の検証でプログラムを動かさない。
+`GH_TOKEN`を渡すのは`ls-remote`、fetch、pushだけで、merge、add、commitは持たない環境で動く。
+ローカルのgitには、authorとcommitterを環境変数で渡す。
+`merge`はコミットを作らない呼び出しでも、利用者名が決まらないと失敗するためである。
+実行する環境の利用者設定には頼らず、設定ファイルには書き込まない。
+基準コミットには、競合ファイルだけを`add`する。`add -A`は使わない。
+
+#### 残るリスク
+
+- 意味的に誤った解消(片側を丸ごと採るなど)は、検査では検出しきれない。
+  後続の自動レビューと人のレビューが止める。
+- ローカルのブランチは、基準コミットを作ってから、pushが済んだ後も、衝突マーカー入りのコミットを指す。
+  通常の回の`commitAndPush`は、`requireLocalHeadAtExpected`でローカルのHEADを確かめて止める。
+  呼び出し側は、次にworktreeを使うときの`reset --hard`に任せる。
+- mergeが始まった後に例外が出ると、`merge --abort`をベストエフォートで行う。
+  取り消しが失敗したworktreeは、mergeの途中のまま残りうる。
+  呼び出し側は、次にworktreeを使うときの`reset --hard`と`clean -fd`で戻す。
+- 署名の変更や、自動でmergeされた箇所に足した呼び出しの食い違いは、検査では見つからない。
+  検査コマンドの失敗として現れる。
+- 新しく足した行の検査は、JavaScriptとTypeScriptの記法だけを見る。
+  ほかの言語の読み込みや抑制の記述は、検査を通る。
+- この回は、`git merge`を呼ぶ経路を新しく足す。
+  `merge.<名前>.driver`は、`.gitattributes`が名前を指名し、`.git/config`の定義がプログラムを動かす。
+  名前が対象ごとに変わるので、名前で固定して潰せない。
+  定義を置けるのはmain cloneの`.git/config`で、検査コマンドは書き込めない([検査コマンドの権限](#検査コマンドの権限))。
+  この前提で抑え、書き込める経路が増えたときは残るリスクになる。
+- mergeコミットのpushの直前の照合とpushの間に、人がブランチを祖先へ巻き戻す窓が残る。
+  巻き戻されたブランチへも、pushは通る。
+  `commitAndPush`と同じ窓として受け入れる。
 
 ## 実装の安全策
 

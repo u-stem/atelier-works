@@ -611,6 +611,16 @@ describe("git config isolation", () => {
     expect(local?.options?.env?.GIT_ATTR_NOSYSTEM).toBe("1");
   });
 
+  test("local git does not read info/grafts", async () => {
+    const { local } = await fetchAndConfigCalls();
+    expect(local?.options?.env?.GIT_GRAFT_FILE).toBe("/dev/null");
+  });
+
+  test("network git does not read info/grafts", async () => {
+    const { network } = await fetchAndConfigCalls();
+    expect(network?.options?.env?.GIT_GRAFT_FILE).toBe("/dev/null");
+  });
+
   test("network git does not read the global config", async () => {
     const { network } = await fetchAndConfigCalls();
     expect(network?.options?.env?.GIT_CONFIG_GLOBAL).toBe("/dev/null");
@@ -626,13 +636,23 @@ describe("git config isolation", () => {
       "commit.gpgsign",
       "core.askPass",
       "core.attributesFile",
+      "core.commitGraph",
       "core.excludesFile",
       "core.fsmonitor",
       "core.hooksPath",
       "core.symlinks",
       "credential.helper",
+      "gpg.program",
       "push.gpgSign",
     ]);
+  });
+
+  test("fixes core.commitGraph to false", () => {
+    expect(FIXED_GIT_CONFIG).toContainEqual(["core.commitGraph", "false"]);
+  });
+
+  test("fixes gpg.program to an empty value", () => {
+    expect(FIXED_GIT_CONFIG).toContainEqual(["gpg.program", ""]);
   });
 
   test.each([...FIXED_GIT_CONFIG])(
