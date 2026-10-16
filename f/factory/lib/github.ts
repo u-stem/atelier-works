@@ -536,10 +536,11 @@ export function ensureSuccess(response: GhApiResponse, context: string): void {
 }
 
 /**
- * JSONでない本文(差分、ファイルの生の内容)が欠けたまま`gh`が終わったときの例外。
+ * JSONでない本文(差分、ファイルの生の内容、Actionsのログ)が欠けたまま`gh`が終わったときの例外。
  * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、端末の制御列を含む本文の拒否、
  * 本文の途中の切断、timeoutで止めた取得で起きる。
  * 拒否のときの本文は空になるので、欠けた本文を空の内容として使わないために投げる。
+ * 取り直しても欠けたときに、`callGhApiRawBody`が投げる。
  * メッセージは呼び出し側の`context`だけで組み立て、本文、stderr、終了コードを載せない。
  * HTTPの失敗ではないので、ステータスを持たない。
  */
@@ -554,18 +555,36 @@ export class GitHubRawBodyIncompleteError extends Error {
   }
 }
 
+/** 2xxなのに`gh`の終了コードが0以外(終了コードが無い場合を含む)で、本文が欠けているか。 */
+function isIncompleteRawBody(response: GhApiResponse): boolean {
+  return (
+    response.status >= 200 && response.status < 300 && response.exitCode !== 0
+  );
+}
+
 /**
- * `ensureSuccess`を通った後の、JSONでない本文の応答を確かめる。
- * `gh`の終了コードが0でない(終了コードが無い場合を含む)ときは、本文が欠けているので
- * `GitHubRawBodyIncompleteError`を投げる。JSONの応答はESCがエスケープされ、
- * 構文の検査が欠けを見つけるので、この確認は要らない。
+ * JSONでない本文を読む`gh api`の呼び出し。本文の欠けを、取り直しも含めてここだけで扱う。
+ * 2xxなのに`gh`の終了コードが0以外のときは、GETが冪等であることを使い、
+ * 短く待ってから1回だけ取り直す。取り直しても欠けたときは、
+ * `GitHubRawBodyIncompleteError`を投げる。
+ * JSONの応答はESCがエスケープされ、構文の検査が欠けを見つけるので、この関数は要らない。
+ * 2xx以外の応答は、終了コードを見ずにそのまま返す。呼び出し側がステータスで扱いを決める。
+ * 取り直しの待ちは`GhClient`の`transientRetryDelayMs`で決まる。
  */
-export function ensureRawBodyComplete(
-  response: GhApiResponse,
+export async function callGhApiRawBody(
+  client: GhClient,
+  endpoint: string,
+  options: GhApiCallOptions,
   context: string,
-): void {
-  if (response.exitCode === 0) return;
-  throw new GitHubRawBodyIncompleteError(context);
+): Promise<GhApiResponse> {
+  const first = await callGhApi(client, endpoint, options);
+  if (!isIncompleteRawBody(first)) return first;
+  const sleep = client.sleep ?? defaultSleep;
+  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
+  const second = await callGhApi(client, endpoint, options);
+  if (isIncompleteRawBody(second))
+    throw new GitHubRawBodyIncompleteError(context);
+  return second;
 }
 
 export function parseJsonBody(
@@ -2632,8 +2651,9 @@ function cutToChars(text: string, maxChars: number): string {
  * 取り除くと、制御列の中に書いたコードを読み手から隠せるため、何も取り除かない。
  * 置き換えは行数を変えない。切り詰めは置き換えの後に、行数、文字数の順で行い、
  * どちらで切っても`truncated`を真にする。`totalLines`は切る前の行数。
- * 2xxなのに`gh`の終了コードが0以外のときは、差分が空のまま読まれないよう、
- * `GitHubRawBodyIncompleteError`を投げる。
+ * 2xxなのに`gh`の終了コードが0以外のときは、1回だけ取り直し、
+ * 取り直しても欠けたときは、差分が空のまま読まれないよう
+ * `GitHubRawBodyIncompleteError`を投げる(`callGhApiRawBody`)。
  */
 export async function getPrDiff(
   client: GhClient,
@@ -2644,17 +2664,17 @@ export async function getPrDiff(
   maxChars: number = PR_DIFF_MAX_CHARS,
 ): Promise<PrDiff> {
   validateOwnerRepo(owner, repo);
-  const response = await callGhApi(
+  const context = `GET pr diff ${owner}/${repo}#${number}`;
+  const response = await callGhApiRawBody(
     client,
     `repos/${owner}/${repo}/pulls/${number}`,
     {
       acceptHeader: "application/vnd.github.v3.diff",
       allowEscapeSequences: true,
     },
+    context,
   );
-  const context = `GET pr diff ${owner}/${repo}#${number}`;
   ensureSuccess(response, context);
-  ensureRawBodyComplete(response, context);
   const bodyText = revealControlChars(response.bodyText);
   const lines = bodyText.split("\n");
   const byLines =
@@ -4859,22 +4879,6 @@ export class GitHubCiLogError extends Error {
 }
 
 /**
- * ログの本文が欠けたまま`gh`が終わったときの例外。
- * ステータスが2xxなのに`gh`の終了コードが0以外のとき、つまり、拒否、
- * 本文の途中の切断、timeoutで止めた取得で起きる。
- * 本文の欠けたログを使わないために投げる。本文、stderr、終了コードを載せない。
- * HTTPの失敗ではないので、ステータスを持たない。
- */
-export class GitHubCiLogIncompleteError extends Error {
-  constructor() {
-    super(
-      "GET workflow job log ended incomplete: gh exited non-zero after a 2xx status",
-    );
-    this.name = "GitHubCiLogIncompleteError";
-  }
-}
-
-/**
  * ジョブ(`jobId`)のログを読む。ログはJSONではないので、本文をそのまま文字列で返す。
  * 取得先は署名付きURLへの302で、`gh`が内部でたどる。URLは受け取らず、エラーにも戻り値にも出さない。
  * `jobId`は正の安全な整数でなければ、API呼び出しの前に例外を投げる。
@@ -4885,8 +4889,8 @@ export class GitHubCiLogIncompleteError extends Error {
  * 上限に達したかによらず、本文の欠けたログとして扱う。
  * runnerは上限に達してもプロセスを止めず、先頭と末尾を残して最後まで読むので、
  * 上限に達した正常なログは終了コード0で`truncated`のログとして返る。
- * 一時的な切断をCIの回に持ち込まないため、欠けたときは、GETが冪等であることを使って1回だけ取り直す。
- * 取り直しても欠けたときは、`GitHubCiLogIncompleteError`を投げる。
+ * 一時的な切断をCIの回に持ち込まないため、欠けたときは1回だけ取り直す。
+ * 取り直しても欠けたときは、`GitHubRawBodyIncompleteError`を投げる(`callGhApiRawBody`)。
  * 2xxは`ok`、403は`forbidden`、404と410は`log_unavailable`で返す。
  * それ以外の失敗は`GitHubCiLogError`を投げ、`ensureSuccess`は使わない
  * (本文をエラーの文に写さないため)。rate limitは`GitHubRateLimitError`で伝える。
@@ -4899,30 +4903,13 @@ export async function getWorkflowJobLog(
 ): Promise<WorkflowJobLogResult> {
   validateOwnerRepo(owner, repo);
   assertJobId(jobId);
-  try {
-    return await fetchWorkflowJobLog(client, owner, repo, jobId);
-  } catch (error) {
-    if (!(error instanceof GitHubCiLogIncompleteError)) throw error;
-  }
-  const sleep = client.sleep ?? defaultSleep;
-  await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
-  return fetchWorkflowJobLog(client, owner, repo, jobId);
-}
-
-/** `getWorkflowJobLog`の1回分。2xxで終了コードが0でなければ`GitHubCiLogIncompleteError`を投げる。 */
-async function fetchWorkflowJobLog(
-  client: GhClient,
-  owner: string,
-  repo: string,
-  jobId: number,
-): Promise<WorkflowJobLogResult> {
-  const response = await callGhApi(
+  const response = await callGhApiRawBody(
     client,
     `repos/${owner}/${repo}/actions/jobs/${String(jobId)}/logs`,
     { maxOutputBytes: CI_JOB_LOG_MAX_BYTES, allowEscapeSequences: true },
+    "GET workflow job log",
   );
   if (response.status >= 200 && response.status < 300) {
-    if (response.exitCode !== 0) throw new GitHubCiLogIncompleteError();
     return {
       kind: "ok",
       log: VolatileCiLog.of(response.bodyText),

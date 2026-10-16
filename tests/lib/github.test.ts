@@ -5,6 +5,7 @@ import {
   type ClaimIssueResult,
   ClaimOwnershipUnknownError,
   callGhApi,
+  callGhApiRawBody,
   claimIssue,
   commentIssue,
   compareCommits,
@@ -12,7 +13,6 @@ import {
   createPrReview,
   createPullRequest,
   ensureLabel,
-  ensureRawBodyComplete,
   ensureSuccess,
   type FetchLike,
   fetchIssueContent,
@@ -4068,6 +4068,7 @@ describe("getPrDiff", () => {
   const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
     run: fake.run,
     ghToken: "tok",
+    sleep: async () => {},
   });
 
   test("asks gh to output a body that carries terminal escape sequences", async () => {
@@ -4203,10 +4204,25 @@ describe("getPrDiff", () => {
       exitCode: 1,
       timedOut: false,
     };
-    const fake = createFakeCommandRunner([rejected]);
+    const fake = createFakeCommandRunner([rejected, rejected]);
     await expect(
       getPrDiff(client(fake), "acme", "widgets", 12, 100),
     ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+
+  test("fetches the diff again once when the first fetch is incomplete", async () => {
+    const rejected: CommandResult = {
+      stdout: ghApiStdout(200, ""),
+      stderr: "",
+      exitCode: 1,
+      timedOut: false,
+    };
+    const fake = createFakeCommandRunner([
+      rejected,
+      ok(ghApiStdout(200, "+line")),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+line");
   });
 
   test("returns an empty diff when gh exits zero with an empty body", async () => {
@@ -4216,34 +4232,119 @@ describe("getPrDiff", () => {
   });
 });
 
-describe("ensureRawBodyComplete", () => {
-  const withExit = (exitCode: number | undefined): GhApiResponse => ({
-    status: 200,
-    headers: new Map(),
-    bodyText: "partial body",
-    ...(exitCode !== undefined ? { exitCode } : {}),
+describe("callGhApiRawBody", () => {
+  const exited = (exitCode: number, body: string): CommandResult => ({
+    stdout: ghApiStdout(200, body),
+    stderr: "the response contains terminal escape sequences",
+    exitCode,
+    timedOut: false,
   });
 
-  test("passes when gh exited zero", () => {
-    expect(() => ensureRawBodyComplete(withExit(0), "GET x")).not.toThrow();
+  /** 実行とsleepを記録し、取り直しの回数と待ちを確かめられるようにする。 */
+  const recording = (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    transientRetryDelayMs?: number,
+  ) => {
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      client: {
+        run: fake.run,
+        ghToken: "tok",
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+        ...(transientRetryDelayMs !== undefined
+          ? { transientRetryDelayMs }
+          : {}),
+      },
+    };
+  };
+
+  const call = (client: Parameters<typeof callGhApiRawBody>[0]) =>
+    callGhApiRawBody(client, "repos/acme/widgets/x", {}, "GET x");
+
+  test("returns the response when gh exited zero", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
+    const response = await call(recording(fake).client);
+    expect(response.bodyText).toBe("body");
   });
 
-  test("throws when gh exited non-zero", () => {
-    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+  test("does not wait or fetch again when gh exited zero", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
+    const { client, sleeps } = recording(fake);
+    await call(client);
+    expect([fake.calls.length, sleeps]).toEqual([1, []]);
+  });
+
+  test("returns the second response when the first one was incomplete", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, "part"),
+      ok(ghApiStdout(200, "whole body")),
+    ]);
+    const response = await call(recording(fake).client);
+    expect(response.bodyText).toBe("whole body");
+  });
+
+  test("waits for the transient retry delay of the client before the second fetch", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    const { client, sleeps } = recording(fake, 1234);
+    await call(client);
+    expect(sleeps).toEqual([1234]);
+  });
+
+  test("waits for the default delay when the client has no transient retry delay", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    const { client, sleeps } = recording(fake);
+    await call(client);
+    expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
+  });
+
+  test("throws a GitHubRawBodyIncompleteError when the second response is also incomplete", async () => {
+    const fake = createFakeCommandRunner([exited(1, ""), exited(1, "")]);
+    await expect(call(recording(fake).client)).rejects.toBeInstanceOf(
       GitHubRawBodyIncompleteError,
     );
   });
 
-  test("throws when the exit code is unknown", () => {
-    expect(() => ensureRawBodyComplete(withExit(undefined), "GET x")).toThrow(
-      GitHubRawBodyIncompleteError,
-    );
+  test("fetches only twice even when every response is incomplete", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    await call(recording(fake).client).catch(() => undefined);
+    expect(fake.calls).toHaveLength(2);
   });
 
-  test("names the request without the body in the message", () => {
-    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+  test("names the request without the body or stderr in the message", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, "PARTIAL-BODY"),
+      exited(1, "PARTIAL-BODY"),
+    ]);
+    const error = await call(recording(fake).client).catch((e: unknown) => e);
+    expect(error instanceof Error ? error.message : "").toBe(
       "GET x ended incomplete: gh exited non-zero after a 2xx status",
     );
+  });
+
+  test("returns a non-2xx response without fetching again", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: ghApiStdout(404, { message: "Not Found" }),
+        stderr: "",
+        exitCode: 1,
+        timedOut: false,
+      },
+    ]);
+    const response = await call(recording(fake).client);
+    expect([response.status, fake.calls.length]).toEqual([404, 1]);
   });
 });
 

@@ -312,11 +312,11 @@ Claudeの回では、`deny`にして、保護パスの違反として拒否す�
 | 例外 | 条件 |
 | --- | --- |
 | `GitHubCiLogError` | 上の3つ以外のステータスと、応答が返らない通信断 |
-| `GitHubCiLogIncompleteError` | 2xxなのに、取り直しても`gh`の終了コードが0以外 |
+| `GitHubRawBodyIncompleteError` | 2xxなのに、取り直しても`gh`の終了コードが0以外 |
 | `GitHubRateLimitError` | rate limit。ほかの読み取りと同じ |
 
 `GitHubCiLogError`が持つのはHTTPのステータスだけである。
-`GitHubCiLogIncompleteError`は、固定の文だけを持つ。
+`GitHubRawBodyIncompleteError`は、取得の名前だけを含む固定の文を持つ。
 どちらも、本文、ヘッダー、`gh`のstderrは載せない。
 
 ログは端末の制御列を含むので、`getWorkflowJobLog`は`gh api`に`--allow-escape-sequences`を渡す。
@@ -335,7 +335,9 @@ PRの差分は、除去ではなく見える表記への置き換えで受ける
 
 本文は見ず、終了コードで判定する。
 一時的な切断をCIの回に持ち込まないため、GETが冪等であることを使い、1回だけ取り直す。
-取り直しても終了コードが0以外なら、`GitHubCiLogIncompleteError`を投げる。
+取り直しは、JSONでない本文を読む取得で共通の`callGhApiRawBody`が行う。
+PRの差分とファイルの内容の取得も、回数と例外が同じである。
+取り直しても終了コードが0以外なら、`GitHubRawBodyIncompleteError`を投げる。
 例外は呼び出し側のstepを止める。
 Claudeは起動しない。
 フローの再試行(`pr_fix_apply`は2回、60秒間隔)で、取得をやり直す。
