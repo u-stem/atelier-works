@@ -224,7 +224,7 @@ describe("nextActionFor for dependabot", () => {
 });
 
 describe("nextActionFor for a reason of the repository owner check", () => {
-  for (const kind of ["finish", "poll"] as const) {
+  for (const kind of ["prepare", "finish", "poll"] as const) {
     test.each(OWNER_STOP_REASONS)(
       `points to the owners review for the ${kind} reason: %s`,
       (_label, gate) => {
@@ -259,6 +259,28 @@ describe("nextActionFor for a reason of the repository owner check", () => {
     expect(describeReason(dependabotReason("finish", gate))).toBe(
       `dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(${described})`,
     );
+  });
+
+  test("describes a gate detail in Japanese for the prepare reason", () => {
+    expect(
+      describeReason(
+        dependabotReason(
+          "prepare",
+          repoOwnerNotConfiguredReason("acme/widgets"),
+        ),
+      ),
+    ).toBe(
+      "dependabotの更新を、準備の処理(リポジトリの取得と作業ツリーの作成)で止めました(リポジトリacme/widgetsのオーナーが、factory_configのownersにありません)",
+    );
+  });
+
+  test("keeps the manual action for a prepare reason that is not a gate reason", () => {
+    expect(
+      nextActionFor(
+        dependabotReason("prepare", "the worktree could not be created"),
+        "dependabot",
+      ),
+    ).toBe(MANUAL_ACTION);
   });
 
   test("describes a gate detail in Japanese for the poll reason", () => {

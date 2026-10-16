@@ -234,6 +234,30 @@ describe("the owner id check before the writes of the finish steps", () => {
     expect(text.split("await repoOwnerStopReason(").length - 1).toBe(1);
   });
 
+  test("dependabot_prepare hands the check to the prepare run", async () => {
+    const text = await source("dependabot_prepare.ts");
+    expect(
+      statementsAfter(text, "ensureRepoOwner: (ownerName, repoName) =>", 6),
+    ).toContain("repoOwnerGateDeps(client, addNoticeUnlessUnresolved),");
+  });
+
+  test("dependabot_prepare builds the check from one call to the gate", async () => {
+    const text = await source("dependabot_prepare.ts");
+    expect(text.split("repoOwnerStopReason(").length - 1).toBe(1);
+  });
+
+  test("dependabot_prepare calls the check once", async () => {
+    const text = await source("dependabot_prepare.ts");
+    expect(text.split("await deps.ensureRepoOwner(").length - 1).toBe(1);
+  });
+
+  test("dependabot_prepare checks before it creates the worktree", async () => {
+    const text = await source("dependabot_prepare.ts");
+    expect(positionOf(text, "await deps.ensureRepoOwner(")).toBeLessThan(
+      positionOf(text, "await deps.createWorktree("),
+    );
+  });
+
   test("dependabot_finish hands the check to the finish run", async () => {
     const text = await source("dependabot_finish.ts");
     expect(

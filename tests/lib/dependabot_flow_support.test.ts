@@ -1579,6 +1579,7 @@ describe("dependabot reasons", () => {
     ["localCheck", "dependabot local check: "],
     ["impact", "dependabot impact: "],
     ["assess", "dependabot assess: "],
+    ["prepare", "dependabot prepare: "],
     ["finish", "dependabot finish: "],
     ["poll", "dependabot poll: "],
   ] as const)("fixes the %s prefix", (kind, prefix) => {

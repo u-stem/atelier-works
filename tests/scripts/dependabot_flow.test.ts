@@ -544,6 +544,7 @@ function prepareDeps(collected: CollectResult): DependabotPrepareDeps {
         authorType: "Bot",
       },
     }),
+    ensureRepoOwner: async () => null,
     createWorktree: async () => ({
       repoDir: REPO_DIR,
       worktreeDir: "/workspaces/acme/widgets/dependabot-12-aaaaaaa",
