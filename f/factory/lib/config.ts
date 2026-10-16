@@ -96,12 +96,12 @@ type DefaultableField =
   | "pr_ci_fix_max_rounds"
   | "pr_ci_fix_enabled_since"
   | "pr_conflict_watch_enabled"
-  | "worker_alert_memory_ratio"
   | "pr_conflict_fix_enabled"
   | "pr_conflict_fix_max_rounds"
   | "pr_conflict_fix_max_rounds_per_pr"
   | "pr_conflict_fix_enabled_since"
   | "pr_conflict_fix_notify_grace_min"
+  | "worker_alert_memory_ratio"
   | "check_commands_by_repo";
 
 /**
@@ -170,14 +170,14 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   pr_ci_fix_enabled_since: null,
   // 競合の検知はPRにもリポジトリにも書き込まないが、通知の出方を確かめてから、リモートのリソースで有効にする。
   pr_conflict_watch_enabled: false,
-  // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
-  worker_alert_memory_ratio: 0.8,
   // 競合を直す作業項目はPRにpushするので、既定で無効にし、リモートのリソースで有効にする。
   pr_conflict_fix_enabled: false,
   pr_conflict_fix_max_rounds: 2,
   pr_conflict_fix_max_rounds_per_pr: 5,
   pr_conflict_fix_enabled_since: null,
   pr_conflict_fix_notify_grace_min: 60,
+  // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
+  worker_alert_memory_ratio: 0.8,
   check_commands_by_repo: {},
 };
 
@@ -967,17 +967,17 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       PR_CI_FIX_MAX_ROUNDS_LIMIT,
     ),
     pr_ci_fix_enabled_since: prCiFixEnabledSince,
-    worker_alert_memory_ratio: ratioField(
-      raw,
-      "worker_alert_memory_ratio",
-      DEFAULTS.worker_alert_memory_ratio,
-    ),
     pr_conflict_watch_enabled: prConflictWatchEnabled,
     pr_conflict_fix_enabled: prConflictFixEnabled,
     pr_conflict_fix_max_rounds: prConflictFixMaxRounds,
     pr_conflict_fix_max_rounds_per_pr: prConflictFixMaxRoundsPerPr,
     pr_conflict_fix_enabled_since: prConflictFixEnabledSince,
     pr_conflict_fix_notify_grace_min: prConflictFixNotifyGraceMin,
+    worker_alert_memory_ratio: ratioField(
+      raw,
+      "worker_alert_memory_ratio",
+      DEFAULTS.worker_alert_memory_ratio,
+    ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
       DEFAULTS.check_commands_by_repo,

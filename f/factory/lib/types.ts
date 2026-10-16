@@ -1066,11 +1066,6 @@ export type FactoryConfig = {
    */
   pr_conflict_watch_enabled: boolean;
   /**
-   * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
-   * 0を超え1以下。既定は0.8。
-   */
-  worker_alert_memory_ratio: number;
-  /**
    * 競合を直す作業項目を、`watch_pr_conflicts`が起動してよいか。既定は`false`で、偽の間は何も起動せず、通知の挙動は変わらない。
    * 真にするには`pr_conflict_watch_enabled`も真で、`pr_conflict_fix_enabled_since`が要る。
    */
@@ -1096,6 +1091,11 @@ export type FactoryConfig = {
    * 過ぎれば、保留のままでも、保留が無くても通知する。最終の保留は待たずに通知する。
    */
   pr_conflict_fix_notify_grace_min: number;
+  /**
+   * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
+   * 0を超え1以下。既定は0.8。
+   */
+  worker_alert_memory_ratio: number;
   /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の

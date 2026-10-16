@@ -56,12 +56,12 @@ schema:
     - pr_ci_fix_max_rounds
     - pr_ci_fix_enabled_since
     - pr_conflict_watch_enabled
-    - worker_alert_memory_ratio
     - pr_conflict_fix_enabled
     - pr_conflict_fix_max_rounds
     - pr_conflict_fix_max_rounds_per_pr
     - pr_conflict_fix_enabled_since
     - pr_conflict_fix_notify_grace_min
+    - worker_alert_memory_ratio
     - check_commands_by_repo
   properties:
     allowed_check_commands:
@@ -302,13 +302,6 @@ schema:
       description: >-
         FactoryのPRのマージの競合を検知して、通知するかどうかです。検知と通知だけで、PRにもリポジトリにも書き込みません。falseの間は、`watch_pr_conflicts`はGitHubもDBも読まず、何も書きません。pr_ci_watch_enabledには依りません。
       default: false
-    worker_alert_memory_ratio:
-      type: number
-      exclusiveMinimum: 0
-      maximum: 1
-      description: >-
-        defaultのworkerのメモリの通知を出す割合です。最新の記録でanonのメモリが上限のこの割合以上になると、通知します。0を超え1以下の数にします。
-      default: 0.8
     pr_conflict_fix_enabled:
       type: boolean
       description: >-
@@ -340,6 +333,13 @@ schema:
       description: >-
         競合を直す起動が有効なとき、競合を通知するまで待つ時間(分)です。競合の回が始まってからこの時間が過ぎたら、保留のままでも、保留が無くても通知します。解けない理由の保留は、待たずに通知します。0以上1440以下の整数にします。pr_conflict_fix_enabledがtrueのときは、10以上にします。巡回の間隔は5分で、0だと最初の巡回から通知が先に出て、起動の判断が一度も回らないためです。
       default: 60
+    worker_alert_memory_ratio:
+      type: number
+      exclusiveMinimum: 0
+      maximum: 1
+      description: >-
+        defaultのworkerのメモリの通知を出す割合です。最新の記録でanonのメモリが上限のこの割合以上になると、通知します。0を超え1以下の数にします。
+      default: 0.8
     pr_ci_watch_enabled:
       type: boolean
       description: >-
