@@ -932,6 +932,7 @@ tag`console`を使える主体は、インスタンスのカスタムtagで決�
 superadminは、許可の有無にかかわらず使える。
 superadminでない主体は、許可されたtagしか使えない。
 Consoleのscriptをsuperadminでない主体から呼べるよう、`mise run bootstrap`と`mise run instance:tags`がカスタムtagに`console`を足す。
+定期ジョブ用workerのtag`periodic`も、同じ2つが足す。
 許可しても、このworkerのマウントとDBへの到達は変わらない。
 変わるのは、このworkerでscriptを動かせる主体である。
 
@@ -1014,6 +1015,50 @@ Podmanは対象外である。
   `mise run up`が`factory_state_init`の失敗で止まったときは、その時点のworkerのマウントを疑う。
   [Console用workerを確かめる](operations.md#console用workerを確かめる)の手順でsymlinkを消し、workerを作り直す。
   突くにはdefaultのworkerでのコード実行が要る。その権限があれば`factory_state`のボリューム全体を直接読めるので、実害は増えない。
+
+## 定期ジョブ用workerの境界
+
+定期ジョブ用のworker(`windmill_worker_periodic`)は、GitHubのAPI、DB、Discordだけを使う定期ジョブを処理する。
+信頼できない入力を扱うジョブは、このworkerでは動かさない。
+リポジトリのコードや検査コマンドを動かすジョブと、Issueの本文やPRの差分を読むClaudeがそれにあたる。
+このworkerの境界が守るのは、ファイルシステムである。
+Console用workerと同じ型で、絞り方は次のとおりである。
+
+| 項目 | 設定 |
+| --- | --- |
+| 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_periodic_dependency_cache`だけである。`worker_logs`は、ほかのworkerとも共有する書き込みのマウントである |
+| `factory_state` | マウントしない。Claude Codeとghの設定、監査レポート、要件定義書に届かない |
+| `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
+| `factory_console` | マウントしない。配信中のJSに届かない |
+| `worker_dependency_cache` | 共有しない。専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
+| `docker.sock` | マウントしない |
+| 権限 | `privileged`にしない。`no-new-privileges:true`と`init`を設定し、プロセス数は256、メモリは1024Mに絞る |
+| 環境変数 | `NUM_WORKERS`と`I_ACK_NUM_WORKERS_IS_UNSAFE`は置かない。nativeでないworkerは1つで動くためである |
+
+信頼できない入力を扱うジョブを動かさない理由は、このworkerが読める秘密にある。
+DBには、defaultのworkerと同じ管理者の接続で届く。
+Windmillのsecret変数は、管理者の`DATABASE_URL`か`wmill.getVariable()`で読める。
+定期ジョブが使う`github_token`も読める。
+Console用workerと同じ前提で、マウントの制限が守るのはファイルであり、トークンそのものは守らない。
+信頼できない入力を扱うジョブが、このworkerで任意のコードを動かせると、これらの秘密に届く。
+そのため、tag`periodic`を付けるのは、入力が自分たちの管理下にある定期ジョブだけである。
+
+tag`periodic`を使える主体は、Console用workerのtag`console`と同じく、インスタンスのカスタムtagで決まる。
+superadminは、許可の有無にかかわらず使える。
+superadminでない主体は、許可されたtagしか使えない。
+次のことは、この境界では守れない。
+
+- DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
+- `f/factory/claude_oauth_token`と`f/factory/github_token`を、secret変数として読める。
+  どのscriptが読むかを制限する仕組みは無い。
+- このworkerで動かすのは、tag`periodic`を付けた定期ジョブの想定だが、これを強制する仕組みは無い。
+  ワークスペースでscriptを編集できる者は、任意のscriptにtag`periodic`を付けられる。
+- scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
+- 許可した主体は、このworkerの依存キャッシュ(`worker_periodic_dependency_cache`)に書ける。
+  defaultのworkerでscriptを実行できる者には、元から同等のことができるので、実害は増えない。
+- このworkerの枠は1つである。長く動くjobで枠を埋めると、ほかの定期ジョブが待つ。
+  可用性の問題で、秘密の漏れではない。
+- composeの環境変数`WORKER_TAGS`は既定値である。DBにワーカーグループの設定があると、そちらが実効になる。変化はWindmillの画面の「Workers」で確かめる。
 
 ## サブプロセスのnpmのinstall script
 

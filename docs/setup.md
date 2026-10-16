@@ -130,10 +130,10 @@ mise run doctor
 
 ## カスタムtagを許可する
 
-Consoleのscriptは、tag`console`を持つ。
+Consoleのscriptはtag`console`を、定期ジョブ用workerで動かすscriptはtag`periodic`を持つ。
 superadminでない主体は、インスタンスが許可したカスタムtag以外のtagを持つscriptを実行できない。
-そのため`bootstrap`は、superadminのセッションで、インスタンスのカスタムtagに`console`を足す。
-既存のtagは保ち、`console`が無いときだけ書く。
+そのため`bootstrap`は、superadminのセッションで、インスタンスのカスタムtagに`console`と`periodic`を足す。
+既存のtagは保ち、無いものだけ書く。
 
 `bootstrap`を実行済みのインスタンスには、この設定だけを当てる。
 手順6の`bootstrap`をやり直す必要はない。

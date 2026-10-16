@@ -81,10 +81,10 @@ function serveFake(
         return new Response("logged out");
       }
       if (url.pathname === "/api/settings/global/custom_tags") {
-        return Response.json(["chromium", "console"]);
+        return Response.json(["chromium", "console", "periodic"]);
       }
       if (url.pathname === "/api/workers/custom_tags") {
-        return Response.json(["chromium", "console"]);
+        return Response.json(["chromium", "console", "periodic"]);
       }
       return new Response("not found", { status: 404 });
     },
