@@ -37,6 +37,7 @@ import {
   buildReviewDiffText,
   describeReason,
   isReviewClaudeOutput,
+  listReviewThreadsBestEffort,
   nextActionFor,
   openFindingsForPrompt,
   prReviewTimeoutMisfit,
@@ -155,12 +156,23 @@ export async function main(
     return { ...SKIPPED_RESULT, budget_exceeded: true };
   }
 
+  // スレッドの一覧は、再レビューで重複を避けるプロンプトの材料にすぎない。
+  // 読めないとき(1000件超、形の不一致など)に生成を止めると、再試行しても直らずレビューが投稿されない。
+  // 空で続けても、未解決の`[MUST]`の誤判定は投稿ステップが一覧を読み直して防ぐ。
   const [pr, prDiff, prFileEntries, viewer, reviewThreads] = await Promise.all([
     getPr(client, owner, repo, pr_number),
     getPrDiff(client, owner, repo, pr_number, config.diff_max_lines),
     getPrFiles(client, owner, repo, pr_number),
     getViewer(client),
-    listReviewThreads(client, owner, repo, pr_number),
+    listReviewThreadsBestEffort(
+      () => listReviewThreads(client, owner, repo, pr_number),
+      (message) => {
+        log.warn("failed to list review threads, continuing without", {
+          work_item_id,
+          error: message,
+        });
+      },
+    ),
   ]);
   const prFiles = prFileEntries.map((entry) => entry.filename);
   // 差分の行から取り出したパスは、APIの変更ファイルに載るものだけをClaudeに読ませる。
