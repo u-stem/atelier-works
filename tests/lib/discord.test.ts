@@ -679,6 +679,23 @@ describe("buildEmbed", () => {
     );
   });
 
+  test("states that unresolved findings could not be checked when the threads were unreadable", () => {
+    const embed = buildEmbed({
+      kind: "pr_reviewed",
+      instance_name: "local",
+      owner: "octo-owner",
+      repo: "atelier-works",
+      pr_number: 7,
+      pr_url: "https://github.com/octo-owner/atelier-works/pull/7",
+      verdict: "approve",
+      finding_count: 0,
+      result: "unverified",
+    });
+    expect(embed.description).toBe(
+      "今回の指摘0件。状態: 未解決の指摘を読み取れず未確認(人がPRで確かめる)",
+    );
+  });
+
   test("does not call the state no-findings when non-blocking findings exist", () => {
     const embed = buildEmbed({
       kind: "pr_reviewed",
