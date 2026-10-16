@@ -82,7 +82,7 @@ locks:
   f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
   f/factory/lib/pr_ci_human_support: 54c81204509fce685adcce54cdc93893f7485897bf10a5af5faf30ee421a2f83
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
-  f/factory/lib/pr_ci_support: ed604c492318cd7ce9d36e9fa70cd59271f54000c123b8579798a50434c0e04d
+  f/factory/lib/pr_ci_support: b3cbc9809d5e86bd332c29c1598e6ddfb6fedac071b0470b380d72aedb0f9d1c
   f/factory/lib/pr_ci_watch: cb542617229d1d9269582b239465d9b968e03f0986819de2e80433059653e26b
   f/factory/lib/pr_conflict_fix_claim: 0964d5b8d8ffd6aabc3ea83f4c4d9ce4f23e1cc6e4a3259710d9e897bbacc019
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981

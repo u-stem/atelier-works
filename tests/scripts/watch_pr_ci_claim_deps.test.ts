@@ -150,6 +150,41 @@ describe("buildClaimDeps workerEnvProblem", () => {
   });
 });
 
+describe("buildClaimDeps workerEnvProblem when the image is stale and the paths cannot be listed", () => {
+  const withChecks = parseFactoryConfig({
+    ...RAW_CONFIG,
+    allowed_check_commands: ["mise run check"],
+  });
+  const STALE_AND_UNLISTED: CheckEnvironmentProblems = {
+    image: ["/usr/bin/setfacl is missing"],
+    runtime: ["world-writable paths could not be listed: listing timed out"],
+  };
+
+  test("reports the error once", async () => {
+    const reported: Error[] = [];
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => STALE_AND_UNLISTED,
+      async (error) => {
+        reported.push(error);
+      },
+    );
+    await deps?.workerEnvProblem();
+    expect(reported).toHaveLength(1);
+  });
+
+  test("holds the row as worker_image_stale", async () => {
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => STALE_AND_UNLISTED,
+      async () => {},
+    );
+    expect((await deps?.workerEnvProblem())?.reason).toBe("worker_image_stale");
+  });
+});
+
 describe("buildClaimDeps workerEnvProblem when the paths cannot be listed", () => {
   const withChecks = parseFactoryConfig({
     ...RAW_CONFIG,

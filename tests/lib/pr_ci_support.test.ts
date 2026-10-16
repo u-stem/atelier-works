@@ -1452,9 +1452,27 @@ describe("prCiFixHoldInfo", () => {
     );
   });
 
-  test("points to the notice in the Console and the log when the running worker is unsafe", () => {
+  test("points to the notice in the Console only when there is one", () => {
     expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
-      "Consoleの要対応にある通知とログにある理由",
+      "Consoleの要対応に通知があれば確かめる",
+    );
+  });
+
+  test("points to the log of the watch job when there is no notice", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "無ければ、監視のジョブのログにある、列挙できなかった理由を確かめる",
+    );
+  });
+
+  test("tells that a hold caused only by a failed listing clears by itself", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "パスを列挙できなかっただけなら、次の巡回で自動で外れる",
+    );
+  });
+
+  test("points to the log of the watch job in the polite form", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").stopAction).toContain(
+      "Consoleの要対応に通知があれば確かめてください。無ければ、監視のジョブのログにある、列挙できなかった理由を確かめてください",
     );
   });
 
