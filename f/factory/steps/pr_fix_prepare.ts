@@ -20,10 +20,10 @@ import {
   getPrConflictCheckById,
   getWorkItem,
 } from "../lib/db.ts";
-import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import { openFactoryClone } from "../lib/factory_clone.ts";
 import {
   type GhClient,
+  getDefaultBranch,
   getPr,
   getViewer,
   gitIdentityForViewer,

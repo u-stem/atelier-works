@@ -149,6 +149,11 @@ schema:
       items:
         type: number
       originalType: number[]
+    verified_tree_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
     work_item_id:
       type: number
       description: 対象の作業項目のID。

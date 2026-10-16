@@ -30,11 +30,11 @@ import {
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
 } from "../lib/dependabot_flow_support.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
-import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import {
   type GhClient,
   getBranchProtected,
   getBranchRuleCount,
+  getDefaultBranch,
   isOwnPost,
   type PrReview,
   type ReviewThread,

@@ -27,8 +27,12 @@ import {
   transitionMainCiRun,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
-import { getDefaultBranch } from "./lib/drawio_viewer_bump_github.ts";
-import { type GhClient, getAccountId, listWorkflowRuns } from "./lib/github.ts";
+import {
+  type GhClient,
+  getAccountId,
+  getDefaultBranch,
+  listWorkflowRuns,
+} from "./lib/github.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
 import {
   listMainCiTargets,
