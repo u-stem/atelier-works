@@ -7272,14 +7272,38 @@ function insertedColumns(text: string): string[] {
     .filter((column) => column !== "");
 }
 
-/** `UPDATE factory.pr_ci_checks SET`の代入先の列を、書いた順に返す。 */
+/** 括弧と引用符の外にあるカンマで分ける。式の中のカンマでは分けない。 */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quoted = false;
+  for (const char of text) {
+    if (char === "'") quoted = !quoted;
+    if (!quoted && char === "(") depth += 1;
+    if (!quoted && char === ")") depth -= 1;
+    if (!quoted && depth === 0 && char === ",") {
+      parts.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+  return parts;
+}
+
+/**
+ * `UPDATE factory.pr_ci_checks [AS 別名] SET`の代入先の列を、書いた順に返す。
+ * 式の中身は読まない。代入先の名前だけを見る。
+ */
 function assignedColumns(text: string): string[] {
-  const match = /UPDATE factory\.pr_ci_checks\s+SET([\s\S]*?)\n\s*WHERE/.exec(
-    text,
-  );
-  return (match?.[1] ?? "")
-    .split("\n")
-    .map((line) => /^\s*(\w+)\s*=/.exec(line)?.[1])
+  const match =
+    /UPDATE factory\.pr_ci_checks(?:\s+AS\s+\w+)?\s+SET([\s\S]*?)\n\s*WHERE/.exec(
+      text,
+    );
+  return splitTopLevel(match?.[1] ?? "")
+    .map((assignment) => /^\s*(\w+)\s*=/.exec(assignment)?.[1])
     .filter((column): column is string => column !== undefined);
 }
 
