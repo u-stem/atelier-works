@@ -2381,6 +2381,80 @@ CIの失敗を直す回の部品は、Actionsのログを取り込んでClaude�
 - `github.ts`は、CI回のClaudeが変更できない。
   Factory自身の修正PRのCIが`github.ts`の不具合で落ちても、CI回は直せずに人へ渡す。
 
+### マージの競合を解く回
+
+マージの競合を解く回(競合回)の部品は、リポジトリの既定のブランチ(base)の先頭をPRのブランチにmergeし、競合をClaudeに解かせ、mergeコミットをpushする。
+git操作は`lib/workspace.ts`の`mergeBaseIntoWorktree`と`pushMergeCommit`に、検査は`lib/conflict_fix_round.ts`にある。
+手順と検査の規則は[CIの失敗を直す部品の仕様](internals/ci-fix.md#競合回のgit操作と検査)にある。
+
+#### baseの決め方
+
+mergeするのは、PRのbaseがリモートの既定のブランチのときだけである。
+`git ls-remote --symref`でリモートの`HEAD`が指すブランチを、完全なref名で照合し、そのブランチの先頭のshaを読む。
+ローカルの追跡ref(`refs/remotes/origin/*`)は読まない。検査コマンドが書き換えられるためである。
+
+読んだshaを明示してfetchし、mergeもそのshaで行う。
+fetchはサブモジュールに降りない。
+fetchからmergeまでの間にbaseが進んでも、検査する内容と記録がずれない。
+
+#### workflowスコープを付けない
+
+PATにWorkflowsの権限は付けない([GitHubのPAT](#githubのpat))。
+`.github/workflows/`を含むpushをGitHubに拒否させるためである。
+
+baseの側が`.github/workflows/`を変えていると、mergeコミットのpushは拒否される。
+そのため、mergeした結果のツリーで、PRのheadからの差に`.github/workflows/`が含まれれば、Claudeを起動せずに止める。
+それでもpushが`.github/workflows/`を理由に拒否されたときは、他の拒否と区別して返す。
+
+#### mergeコミットのpush
+
+pushするのは、検査したツリーを持ち、親が[PRのhead, base]のmergeコミット1つだけである。
+rebaseとforce pushはしない。
+
+基準コミットは送らない。基準コミットは衝突マーカーを残したままローカルにだけ作り、pushするコミットは`commit-tree`で新しく作る。
+ステージしたツリーが検査したツリーと一致することは、コミットを作る前に確かめる。
+
+第2親(base)の履歴は、すでにリモートにある。
+pushが新しく送るのは、mergeコミットと解消したファイルの内容だけである。
+pushの直前に、記録したbaseが既定のブランチの先頭か、その祖先であることを`ls-remote`で確かめる。
+違えば、何も送らずに止める。
+
+fast-forwardでない拒否は、PRのheadが動いたものとして扱う。
+人がpushした変更を上書きしないためである。
+
+#### baseの側の変更
+
+baseの側の変更は、すでにレビューとマージを経ている。
+そのため、保護パスの検査の対象は、競合ファイルと、結果がPRのheadともbaseとも違うパスに限る。
+baseだけが変えたパスは、結果がbaseと同じなので、保護パスでも止めない。
+止めると、既定のブランチが保護パスを変えるたびに、競合を解けなくなる。
+
+名前の変更は削除と追加の2件として比べるので、新しい名前でも漏れない。
+
+#### 差分の大きさの上限
+
+差分の大きさの上限は、基準コミットから解消後までの差に掛ける。
+PRのheadから測ると、baseの側の変更がすべて入り、競合と無関係に上限を超えるためである。
+
+#### git操作の守り
+
+`commitAndPush`と同じ前段を通ってから、最初のgitを実行する。
+リポジトリのロックを取り、worktreeの`.git`ファイルが準備のときの記録と一致することを確かめ、HEADが想定のブランチにあることを確かめる。
+`.git`ファイルが差し替えられていれば、worktreeでgitを1回も実行せずに止まる。
+
+すべてのgitに`--literal-pathspecs`を付け、ファイル名をpathspecの記法として読ませない。
+`GH_TOKEN`を渡すのは`ls-remote`、fetch、pushだけで、merge、add、commitは持たない環境で動く。
+基準コミットには、競合ファイルだけを`add`する。`add -A`は使わない。
+
+#### 残るリスク
+
+- 意味的に誤った解消(片側を丸ごと採るなど)は、検査では検出しきれない。
+  後続の自動レビューと人のレビューが止める。
+- 基準コミットの間、ローカルのブランチは衝突マーカー入りのコミットを指す。
+  通常の回の`commitAndPush`は、`requireLocalHeadAtExpected`でローカルのHEADを確かめて止める。
+- 署名の変更や、自動でmergeされた箇所に足した呼び出しの食い違いは、検査では見つからない。
+  検査コマンドの失敗として現れる。
+
 ## 実装の安全策
 
 実装のフロー(`implement`)も、Claudeに書き込みのツールを与える。PRを作るところで止まり、マージは常に人が行う。実装のフローはmerge APIを呼ばない。仕組みの詳細は[実装フローの仕様](internals/implement.md)にある。

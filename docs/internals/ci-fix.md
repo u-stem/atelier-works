@@ -10,7 +10,9 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
 - `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、`lib/metadata_git_ports.ts`
 - `lib/ci_metadata_rehash.ts`
+- `lib/conflict_fix_round.ts`と、`lib/workspace.ts`のmergeとpushの関数
 
+PRのマージの競合を直す回(競合回)の部品も、同じ考え方で作るので、この文書の「競合回のgit操作と検査」に書く。
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
 ## 方針
@@ -32,7 +34,8 @@ CIのログはリポジトリへ書ける人が決める外部入力である。
 | `lib/ci_fix_round.ts` | 上の部品をつなぐ流れ。PRの状態の確認と分類(`readCiFailure`)、ログから抜粋まで(`gatherCiLogs`)、変更の入力の組み立て、通常の回との違いの判断。`wmill-lock.yaml`だけの変更の形の判定(`isLockOnlyChange`) |
 | `lib/ci_metadata_rehash.ts` | `metadata`だけが落ちた回の再計算の流れ。書き込み、独立した照合(`confirmRehash`)、pushの直前の再確認、固定の理由 |
 | `lib/metadata_git_ports.ts` | 事前検査が読むポートのgitの実装。baseの先端のcommitの取り込み |
-| `lib/workspace.ts` | 文字列をgitleaksで検査する実行(`runGitleaksOnText`) |
+| `lib/workspace.ts` | 文字列をgitleaksで検査する実行(`runGitleaksOnText`)。競合回のgit操作(`mergeBaseIntoWorktree`、`pushMergeCommit`、`listBothSidesChangedPaths`と、検査の入力を読む関数) |
+| `lib/conflict_fix_round.ts` | 競合回の判定と固定の理由。mergeした結果のツリーの検査(`evaluateMergedTree`)と、Claudeの解消の検査(`checkConflictResolution`) |
 
 ## CI回のflowが守る前提
 
@@ -595,6 +598,161 @@ CI回のClaudeがこれらを書き換えると、自分を止める検査を弱
 違反の報告に載せるパスは、不可視文字を除き、120字に切る。
 パスは外部由来の文字列だからである。
 
+照合の関数`weakensChecks`は公開していて、競合回が、解消で新しく足した行の検査に使う。
+
+## 競合回のgit操作と検査
+
+PRのブランチが既定のブランチ(base)と競合するときに、baseをmergeして、競合をClaudeに解かせる部品である。
+git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts`にある。
+安全策の理由は[セキュリティ](../security.md#マージの競合を解く回)にある。
+
+### mergeして基準コミットを作る
+
+`mergeBaseIntoWorktree`は、競合を解かせる前に、PRのworktreeでbaseをmergeして、ローカルだけの基準コミットを作る。
+次の順に進み、結果は`merged`、`up_to_date`、`base_not_default`、`unresolvable`のどれかである。
+
+1. 前段の守りを通す(ロック、worktreeの検証、`.git`ファイルの照合、HEADのブランチの確認)。
+2. 無視されたファイルを消し、作業ツリーが空で、HEADがPRのheadであることを確かめる。
+3. `ls-remote`で、リモートの`HEAD`が`refs/heads/<PRのbase>`を指すかを確かめ、先頭のshaを読む。指さなければ`base_not_default`で終わる。
+4. そのshaを明示してfetchし、取り込めたことを確かめる。
+5. baseがPRのheadの祖先なら`up_to_date`で終わる。何も変えない。
+6. `merge --no-ff --no-commit`を実行する。設定は`merge.conflictStyle=diff3`、`rerere.enabled=false`、`merge.renormalize=false`にする。
+7. 競合ファイルを`ls-files -u`で読み、直せるかを調べる。直せなければmergeを取り消して`unresolvable`で終わる。
+8. 競合ファイルだけを`add`してcommitする。親は[PRのhead, base]である。
+9. 基準コミットの親が記録と一致することと、未追跡のファイルが無いことを確かめる。
+
+結果の`merged`は、baseのsha、基準コミットのsha、そのツリーのsha、競合ファイルの一覧、競合ファイルごとの3つの版のblobを持つ。
+競合が無いmergeも`merged`で、競合ファイルの一覧は空になる。
+
+`merge`の引数は`--`の後にshaを置く。
+gitの2.54では、`--`の有無で動作が変わらないことを確かめた。
+`commit-tree`だけは、`--`の後に置くとツリーとして読まれないので、`--`を付けない。
+`check-attr --source`は2.40以降、`merge-file --object-id`は2.43以降のgitが要る。workerのgitは2.47である。
+
+### 競合を直せない条件
+
+次のどれかに当たる競合は、`unresolvable`で終わる。
+上の項目から先に判定し、最初に当たる理由を返す。
+
+| 理由 | 条件 |
+| --- | --- |
+| `too_many_conflicts` | 競合ファイルが10を超える |
+| `unsafe_path` | 競合ファイルのパスが、リポジトリの相対パスとして安全でない(`isSafeRepoPath`) |
+| `missing_stage` | 共通の祖先、PRのhead、baseの3つの版のどれかが無い(片側の削除、両側の追加) |
+| `not_regular_file` | 通常のファイル(モード`100644`と`100755`)でない。symlinkとサブモジュールを含む |
+| `binary` | PRのheadとbaseの差で、バイナリと判定される |
+| `too_large` | PRのheadかbaseの版が、2MiBを超える |
+| `attributes` | PRのheadかbaseのツリーで、`merge`、`filter`、`working-tree-encoding`、`ident`、`diff`、`conflict-marker-size`のどれかの属性が付いている |
+| `marker_like_line` | PRのheadかbaseの版に、衝突マーカーに見える行がある |
+
+属性は、PRのheadとbaseのツリーに対して`check-attr --source=<sha> -a`で調べる。
+これらの属性は、mergeの仕方や内容の変換を変え、作業ファイルと3つの版の内容を食い違わせる。
+
+衝突マーカーに見える行は、行頭が`<<<<<<<`、`|||||||`、`>>>>>>>`、`=======`のちょうど7文字で、空白か行末が続く行である。
+元のファイルにあると、gitが書いたマーカーと本文を見分けられない。
+`=======`のみの行は、Markdownの見出しの下線にもあるが、同じ理由で含める。
+
+### mergeした結果のツリーの検査
+
+`listBothSidesChangedPaths`は、結果のツリーをPRのheadとbaseのそれぞれと比べる。
+比べるコマンドは`diff-tree -r --name-status -z --no-renames`で、次の3つの集合を返す。
+
+| 集合 | 内容 |
+| --- | --- |
+| 両側の差 | PRのheadからの差と、baseからの差のどちらにも現れるパス。結果がどちらの親とも違う |
+| 両側で追加 | どちらの差でも追加として現れるパス。どちらの親にも無いパスが結果にある |
+| PRのheadからの差 | PRのheadから結果への差のすべてのパス |
+
+`evaluateMergedTree`は、この集合と競合ファイルから、Claudeを起動してよいかを決める。
+次の順で最初に当たる理由を返す。
+
+| 理由 | 条件 |
+| --- | --- |
+| `unexpected_path` | 「両側で追加」が空でない。mergeからは生まれないので、改ざんを疑う |
+| `base_changes_workflows` | 「PRのheadからの差」に`.github/workflows/`の配下がある。大文字小文字は区別しない |
+| `unsafe_path` | 競合ファイルか「両側の差」に、安全でないパスがある |
+| `protected_path` | 競合ファイルか「両側の差」に、保護パス(`isDeniedPath`)がある |
+
+baseだけが変えたパスは、結果がbaseと同じなので「両側の差」に入らない。
+そのため、baseが保護パスを変えても止めない。
+`.github/workflows/`だけは、baseだけが変えても止める。PATに`workflow`スコープが無く、pushが拒否されるためである。
+
+gitleaksにかけるパスと、`merge`属性を調べるパスにも、同じ「両側の差」を使う。
+
+### mergeコミットをpushする
+
+`pushMergeCommit`は、検査したツリーを、親が[PRのhead, base]のmergeコミットにして、PRのブランチへpushする。
+結果は`pushed`、`head_changed`、`base_changed`、`rejected_workflows`のどれかである。
+
+1. 前段の守りを通す。
+2. PRのブランチをfetchし、リモートの先頭がPRのheadでなければ`head_changed`で終わる。
+3. ローカルのHEADが基準コミットで、その第1親と第2親がPRのheadと記録したbaseであることを確かめる。違えば`CommitBlockedError`を投げる。
+4. 競合ファイルだけを`add`し、呼び出し側が渡した検査(`inspectStaged`)を通し、`write-tree`が検査したツリーと一致することを確かめる。違えばステージを戻して`CommitBlockedError`を投げる。
+5. `ls-remote`で、記録したbaseが既定のブランチの先頭か、その祖先であることを確かめる。違えば`base_changed`で終わる。
+6. `commit-tree`でmergeコミットを作り、そのshaを`refs/heads/<ブランチ>`へpushする。
+
+コミットのメッセージは固定文で、`withCommitTrailers`を通す。
+`Generated-By`が最後の段落になり、Factoryのコミットとして識別できる。
+
+pushの失敗は、stderrで次のように分ける。
+
+| stderr | 結果 |
+| --- | --- |
+| `[remote rejected]`と`.github/workflows/`を含む | `rejected_workflows` |
+| `[rejected]`、`non-fast-forward`、`fetch first`を含み、`[remote rejected]`を含まない | fetchし直して`head_changed` |
+| それ以外 | 例外 |
+
+### Claudeの解消の検査
+
+`checkConflictResolution`は、Claudeが競合ファイルに加えた変更を検査する。
+入力は、競合ファイルごとの3つの版の本文、作り直した衝突マーカー入りの本文、解消後の本文と、変更の一覧である。
+gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`readTreeFileText`で作る。
+
+衝突ブロックは、作業ファイルのテキストではなく、3つの版から作り直した形で決める。
+`reconstructConflictText`が、`git merge-file --object-id -p --diff3`をblobのshaで実行する。
+ラベルに`nonce`を入れるので、ファイルの内容が同じ文字列を書いても、ブロックの境目に見せかけられない。
+
+検査は2段階である。
+まず変更の一覧を見て、競合ファイル以外の変更を、新規ファイルを含めてすべて違反にする。
+次に競合ファイルの本文を見る。変更の一覧で違反になったファイルは、本文を見ない。
+
+本文では、`marker_like_input`から`not_in_conflict_block`までは、表の順で最初に当たる1件で止める。
+`reordered`以降の4つは、重ねて報告する。
+
+| 違反 | 条件 |
+| --- | --- |
+| `unsafe_path` | 安全でないパス |
+| `outside_conflict` | 競合ファイル以外を変えた |
+| `file_deleted` | 競合ファイルを削除した |
+| `symlink` | 競合ファイルがsymlinkになった |
+| `unsupported_change` | 通常のファイル以外のモード、または種別を判定できない |
+| `marker_like_input` | 3つの版のどれかに、衝突マーカーに見える行がある |
+| `marker_left` | 結果に、衝突マーカーの行が残っている(下の段落を参照) |
+| `too_large` | 行数が2万を超える |
+| `reconstruction_failed` | 作り直した本文のブロックが読めない |
+| `not_in_conflict_block` | ブロックの外の行を変えた |
+| `reordered` | ブロックの中で、片側だけにある行の順序を入れ替えた |
+| `weakens_checks` | 新しく足した行が、検査を弱める記述に当たる(`weakensChecks`) |
+| `unknown_import` | 新しく足した行が読み込む指定子が、PRのheadとbaseのどちらの版にも無い |
+| `test_count_decreased` | テストファイルの`test(`、`it(`、`expect(`の数が、PRのheadとbaseの大きい方を下回った |
+
+ブロックの外の行は、作り直した形と1行ずつ同じで、順序も保つ。
+ブロックの中の解消は、PRのheadの側とbaseの側の行を、それぞれ順序を保って選んだものと、新しく足した行だけである。
+新しく足した行は、どちらの側にも無い行で、baseの版に戻した行を含む。
+同じ行を両側が変えた競合を1行にまとめる解消は、テストの数が減らないので許す。
+
+解消後の行は、ブロックの中の解消が最も短くなるように、作り直した形に重ねる。
+ブロックの直後の行と同じ行を解消が足しても、検査の結果は変わらない。
+
+`marker_left`の対象は、行頭が`<<<<<<<`、`|||||||`、`>>>>>>>`のどれかで、その後に空白が続く行である。
+`=======`は本文にありうるので見ない。
+
+理由は`conflictResolutionReasons`が`conflict round: change not allowed (<違反>): <パス>`の形にする。
+パスは外部由来なので、理由の区切り(セミコロンと空白)を含めない。
+
+読み取りの関数は、2MiBを超える内容を例外にする。
+途中で切れた内容を、検査の入力にしないためである。
+
 ## メタデータのパッチの受け取り
 
 CIの`metadata`ジョブが出すパッチ(artifact)を、取得し、検査し、書き込む内容の一覧にする部品である。
@@ -1115,3 +1273,10 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
 - hashの算法は、`ASSUMED_WMILL_CLI_VERSION`の版だけで確かめた。
   `dependencies/`、`__mod`のフォルダ、JSONのflowのように、このリポジトリに無い形は、写さずに人の手に回す。
   算法を固定するテストが見つけられるのは、版の変更と、リポジトリの現物との食い違いだけである。
+- 競合回の検査は、意味の競合を検出できない。
+  片側を丸ごと採る解消や、署名の変更と呼び出しの食い違いは、構文の上では正しい。
+  検査コマンドの失敗か、後続のレビューで見つかる。
+- 競合回の「片側の行の順序」は、両側にある行を区別しない。
+  両側にある空行や同じ行は、どちらから選んだとして扱う。
+- 競合回は、片側の削除と両側の追加の競合を、直さずに人へ渡す。
+  3つの版が揃わないと、ブロックを作り直せないためである。
