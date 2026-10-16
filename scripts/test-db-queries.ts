@@ -24,13 +24,13 @@ import {
   deleteResolvedNoticesBefore,
   deleteWorkerSamplesBefore,
   dependabotGateWaitingCancels,
+  findFixRoundKindToReview,
   findOrphanFixingPrCiChecks,
   getLatestPrCiCheck,
   getNoticeById,
   getPrConflictCheckById,
   getPreviousMainCiRun,
   getWorkItem,
-  hasCiRoundDiffToReview,
   hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
@@ -5954,12 +5954,13 @@ await insertFixRound(
 );
 check(
   "conflict review: a commit pushed by a conflict round is a diff to review",
-  (await hasCiRoundDiffToReview("QCFix", "App", 718, cfReviewed, sql)) === true,
+  (await findFixRoundKindToReview("QCFix", "App", 718, cfReviewed, sql)) ===
+    "conflict",
 );
 check(
   "conflict review: a commit that no round pushed is not",
-  (await hasCiRoundDiffToReview("qcfix", "app", 718, "9".repeat(40), sql)) ===
-    false,
+  (await findFixRoundKindToReview("qcfix", "app", 718, "9".repeat(40), sql)) ===
+    null,
 );
 // 新しい競合の回は、回の開始時刻、起動の回数、保留を戻し、結んだ作業項目は残す。競合のままでは何も戻さない。
 const cfEpisode = await conflictFixRow(720, CF_HEAD_1);

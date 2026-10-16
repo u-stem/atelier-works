@@ -209,12 +209,12 @@ describe("the verify step of a recomputed lock", () => {
 });
 
 describe("the review generate step", () => {
-  test("looks up the CI round diff through the helper that falls back to false", async () => {
+  test("looks up the kind of the round through the helper that falls back to null", async () => {
     const text = await source("pr_review_generate.ts");
     expect(
       count(
         text,
-        "ciRoundDiffOrFalse(\n    () => hasCiRoundDiffToReview(owner, repo, pr_number, review_sha),",
+        "fixRoundOrNull(\n    () => findFixRoundKindToReview(owner, repo, pr_number, review_sha),",
       ),
     ).toBe(1);
   });

@@ -4267,26 +4267,28 @@ export async function getPrCiCheckById(
   return row === undefined ? null : toPrCiCheck(row);
 }
 
+/** 再レビューで重点的に見る、`pr_fix`の回の種類。 */
+export type FixRoundKind = "ci" | "conflict";
+
 /**
- * `reviewSha`のレビューが、CIの失敗か、マージの競合を直したラウンドの差分を含むかを返す。
+ * `reviewSha`を書いた`pr_fix`の回の種類を返す。どちらの回でもなければnull。
  * そのPRの`pr_fix`のうち、CIの回(`ci_check_id`を持つ)か競合の回(`conflict_check_id`を持つ)のどれかが、
- * pushしたcommit(`fix_rounds.commit_shas`)に`reviewSha`を含むときに真になる。最新かどうかと状態は問わない。
+ * pushしたcommit(`fix_rounds.commit_shas`)に`reviewSha`を含むときに、その回の種類を返す。最新かどうかと状態は問わない。
  * 再レビューの依頼の前に別のレビューが走っても、依頼の後に作業項目が終端へ進んでも、pushしたcommitは変わらないためである。
- * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないので偽になる。
+ * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないのでnullになる。
  * ownerとrepoは小文字で照合する。
  */
-export async function hasCiRoundDiffToReview(
+export async function findFixRoundKindToReview(
   owner: string,
   repo: string,
   prNumber: number,
   reviewSha: string,
   sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
+): Promise<FixRoundKind | null> {
   assertPrCiTarget(owner, repo, prNumber);
   assertCommitSha(reviewSha);
   const rows = await sql`
-    SELECT EXISTS (
-      SELECT 1
+    SELECT CASE WHEN w.ci_check_id IS NOT NULL THEN 'ci' ELSE 'conflict' END AS round_kind
       FROM factory.work_items w
       JOIN factory.fix_rounds r ON r.work_item_id = w.id,
         jsonb_array_elements_text(r.commit_shas) AS pushed(sha)
@@ -4295,11 +4297,13 @@ export async function hasCiRoundDiffToReview(
         AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
         AND w.pr_number = ${prNumber}::integer
         AND pushed.sha = ${reviewSha}
-    ) AS pushed_by_ci_round
+      LIMIT 1
   `.fetch();
   const row = rows[0];
-  if (row === undefined) return false;
-  return parseBoolean(row.pushed_by_ci_round, "pushed_by_ci_round");
+  if (row === undefined) return null;
+  const kind = row.round_kind;
+  if (kind === "ci" || kind === "conflict") return kind;
+  throw new Error("round_kind must be ci or conflict");
 }
 
 /**
