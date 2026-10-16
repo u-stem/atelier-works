@@ -57,3 +57,12 @@ export function conflictRoundRetryRefusal(item: {
   if (item.kind !== "pr_fix" || item.conflict_check_id === null) return null;
   return `retry_work_item: work item ${String(item.id)} is a conflict round; it was not restarted because the conflict check row stays bound to it. Resolve the conflict by pushing to the pull request instead`;
 }
+
+/**
+ * 衝突マーカーに見える行(`<<<<<<<`、`|||||||`、`>>>>>>>`、`=======`のちょうど7文字で、空白か行末が続く行)を含むか。
+ * 元のファイルにこの行があると、gitが書いたマーカーと本文を見分けられない。
+ * 8文字以上の行は、gitがマーカーとして扱わないので含めない。
+ */
+export function hasConflictMarkerLikeLine(text: string): boolean {
+  return /^(?:<{7}|>{7}|\|{7}|={7})(?:[ \t]|\r?$)/m.test(text);
+}
