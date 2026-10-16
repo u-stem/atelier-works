@@ -170,10 +170,16 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
     expect(envEntries(svc, "WORKER_TAGS=")).toEqual(["WORKER_TAGS=console"]);
   });
 
-  test("runs two worker processes", () => {
+  test("sets no NUM_WORKERS because a non-native worker runs one process", () => {
     const svc = service("windmill_worker_console");
 
-    expect(envEntries(svc, "NUM_WORKERS=")).toEqual(["NUM_WORKERS=2"]);
+    expect(envEntries(svc, "NUM_WORKERS=")).toEqual([]);
+  });
+
+  test("does not acknowledge the unsafe NUM_WORKERS override", () => {
+    const svc = service("windmill_worker_console");
+
+    expect(envEntries(svc, "I_ACK_NUM_WORKERS_IS_UNSAFE")).toEqual([]);
   });
 
   test("connects to the database like the other workers", () => {
@@ -558,34 +564,51 @@ describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
   });
 
   /**
+   * nativeでないworkerは、`NUM_WORKERS`にかかわらずジョブを1つずつ動かすので、
+   * 同時に動く検査の数も1である。
+   */
+  const NON_NATIVE_WORKER_PROCESSES = 1;
+
+  /**
    * workerのコンテナで、検査の外のプロセス(Windmill本体、ジョブのbun、Claude、git)に残す数。
    * 動いているworkerで、待機中が53、起動からの最大が112だったので、その2倍強にする。
    */
   const WORKER_PIDS_RESERVE = 256;
 
-  test("every worker process running a check at the cap leaves the reserve within the pids limit", () => {
-    const workers = envEntries(service("windmill_worker"), "NUM_WORKERS=")[0];
-    const concurrentChecks = Number(workers?.slice("NUM_WORKERS=".length));
-
+  test("a check at the cap leaves the reserve within the pids limit", () => {
     expect(
-      concurrentChecks * CHECK_NPROC_LIMIT + WORKER_PIDS_RESERVE,
+      NON_NATIVE_WORKER_PROCESSES * CHECK_NPROC_LIMIT + WORKER_PIDS_RESERVE,
     ).toBeLessThanOrEqual(Number(limits(service("windmill_worker")).pids));
   });
 
   test("there are at least as many slots as worker processes", () => {
-    const workers = envEntries(service("windmill_worker"), "NUM_WORKERS=")[0];
-
     expect(Number(miseEnv().FACTORY_CHECK_POOL_SIZE)).toBeGreaterThanOrEqual(
-      Number(workers?.slice("NUM_WORKERS=".length)),
+      NON_NATIVE_WORKER_PROCESSES,
     );
   });
 });
 
+describe("infra/docker-compose.yml windmill_worker concurrency", () => {
+  test("sets no NUM_WORKERS because a non-native worker runs one process", () => {
+    expect(envEntries(service("windmill_worker"), "NUM_WORKERS=")).toEqual([]);
+  });
+
+  test("does not acknowledge the unsafe NUM_WORKERS override", () => {
+    expect(
+      envEntries(service("windmill_worker"), "I_ACK_NUM_WORKERS_IS_UNSAFE"),
+    ).toEqual([]);
+  });
+
+  test("keeps the native worker in native mode", () => {
+    expect(
+      envEntries(service("windmill_worker_native"), "NATIVE_MODE="),
+    ).toEqual(["NATIVE_MODE=true"]);
+  });
+});
+
 describe("infra/docker-compose.yml windmill_worker slots recorded by sample_worker_load", () => {
-  test("DEFAULT_WORKER_SLOTS equals the NUM_WORKERS of the default worker", () => {
-    expect(envEntries(service("windmill_worker"), "NUM_WORKERS=")).toEqual([
-      `NUM_WORKERS=${String(DEFAULT_WORKER_SLOTS)}`,
-    ]);
+  test("DEFAULT_WORKER_SLOTS is one because the default worker runs one job at a time", () => {
+    expect(DEFAULT_WORKER_SLOTS).toBe(1);
   });
 });
 

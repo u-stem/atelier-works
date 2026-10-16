@@ -180,6 +180,22 @@ describe("runSystemStatus worker load result", () => {
     expect(d.calls[WORKER_LOAD_INDEX]?.text).toContain("count(running_jobs)");
   });
 
+  test("counts a busy sample only when the sample had a slot for other jobs", async () => {
+    const d = deps([ROW]);
+    await runSystemStatus(200, d.deps);
+    expect(d.calls[WORKER_LOAD_INDEX]?.text).toContain(
+      "WHERE slots > 1 AND running_jobs >= slots - 1",
+    );
+  });
+
+  test("leaves the samples without a slot for other jobs out of the readable count", async () => {
+    const d = deps([ROW]);
+    await runSystemStatus(200, d.deps);
+    expect(d.calls[WORKER_LOAD_INDEX]?.text).toContain(
+      "count(running_jobs) FROM recent WHERE slots > 1",
+    );
+  });
+
   test("keeps a value that could not be read as null", async () => {
     const d = deps([
       { ...ROW, latest_mem_anon_bytes: null, max_mem_anon_ratio: null },
