@@ -249,3 +249,33 @@ describe("reviewPrompt requirements wiring", () => {
     expect(prompt).not.toContain("approved requirements");
   });
 });
+
+// `main()`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
+// 文字列の一致は、その行が1か所にあることだけを保証する。整形や変数名の変更で落ちたら、配線が変わっていないかを確かめて文字列を直す。
+describe("binary files wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
+  function count(text: string, needle: string): number {
+    return text.split(needle).length - 1;
+  }
+
+  test("passes the binary files of the diff to the prompt", async () => {
+    expect(count(await SOURCE, "    binaryFiles: prDiff.binaryFiles,\n")).toBe(
+      1,
+    );
+  });
+
+  test("returns the binary files of the diff in the result", async () => {
+    expect(
+      count(await SOURCE, "      binary_files: prDiff.binaryFiles,\n"),
+    ).toBe(1);
+  });
+
+  test("returns no binary files when the step is skipped", async () => {
+    expect(count(await SOURCE, "  pr_files: [],\n  binary_files: [],\n")).toBe(
+      1,
+    );
+  });
+});
