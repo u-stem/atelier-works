@@ -874,6 +874,12 @@ describe("summarizeWorkerLoad", () => {
     );
   });
 
+  test("omits the other jobs line when the only slot is the recording one", () => {
+    expect(summarizeWorkerLoad(loadSummary({ slots_max: 1 }))).not.toContain(
+      "他のジョブの枠の使用",
+    );
+  });
+
   test("says the running count is unknown when no sample has it", () => {
     expect(
       summarizeWorkerLoad(loadSummary({ running_jobs_max: null })),

@@ -570,20 +570,28 @@ describe("infra/docker-compose.yml windmill_worker check sandbox", () => {
   const NON_NATIVE_WORKER_PROCESSES = 1;
 
   /**
+   * 片付けられず飛ばす枠が同時に残りうる数。
+   * 飛ばした枠の止まらないプロセスは、検査1つの分の外でpidsを使う。
+   */
+  const TOLERATED_SKIPPED_SLOTS = 2;
+
+  /**
    * workerのコンテナで、検査の外のプロセス(Windmill本体、ジョブのbun、Claude、git)に残す数。
    * 動いているworkerで、待機中が53、起動からの最大が112だったので、その2倍強にする。
    */
   const WORKER_PIDS_RESERVE = 256;
 
-  test("a check at the cap leaves the reserve within the pids limit", () => {
+  test("a check at the cap and the skipped slots leave the reserve within the pids limit", () => {
     expect(
-      NON_NATIVE_WORKER_PROCESSES * CHECK_NPROC_LIMIT + WORKER_PIDS_RESERVE,
+      (NON_NATIVE_WORKER_PROCESSES + TOLERATED_SKIPPED_SLOTS) *
+        CHECK_NPROC_LIMIT +
+        WORKER_PIDS_RESERVE,
     ).toBeLessThanOrEqual(Number(limits(service("windmill_worker")).pids));
   });
 
-  test("there are at least as many slots as worker processes", () => {
+  test("there are slots for the running check and the skipped ones", () => {
     expect(Number(miseEnv().FACTORY_CHECK_POOL_SIZE)).toBeGreaterThanOrEqual(
-      NON_NATIVE_WORKER_PROCESSES,
+      NON_NATIVE_WORKER_PROCESSES + TOLERATED_SKIPPED_SLOTS,
     );
   });
 });
