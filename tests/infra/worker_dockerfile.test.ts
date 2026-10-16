@@ -85,6 +85,15 @@ describe("infra/worker/Dockerfile claude version", () => {
   });
 });
 
+describe("infra/worker/Dockerfile claude version check", () => {
+  test("fails the build when the installed claude differs from CLAUDE_VERSION", () => {
+    const verification =
+      startingWith("RUN").find((line) => line.includes("claude --version")) ??
+      "";
+    expect(verification).toContain('= "${CLAUDE_VERSION}" ]');
+  });
+});
+
 describe("infra/worker/Dockerfile check user", () => {
   const userCreation = (): string =>
     startingWith("RUN").find((line) => line.includes("useradd")) ?? "";

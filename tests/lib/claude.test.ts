@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { access } from "node:fs/promises";
 import {
   buildSystemPrompt,
@@ -719,6 +719,58 @@ describe("runClaude", () => {
       claudeVersion: "2.1.282",
     });
     expect(result.agentRun.claude_version).toBe("2.1.282");
+  });
+
+  describe("claude_version from an empty value", () => {
+    const original = process.env.CLAUDE_VERSION;
+    beforeEach(() => {
+      delete process.env.CLAUDE_VERSION;
+    });
+    afterEach(() => {
+      if (original === undefined) delete process.env.CLAUDE_VERSION;
+      else process.env.CLAUDE_VERSION = original;
+    });
+
+    const versionWith = async (
+      claudeVersion: string | undefined,
+    ): Promise<string | null> => {
+      const fake = createFakeCommandRunner([
+        {
+          stdout: claudeJsonStdout(),
+          stderr: "",
+          exitCode: 0,
+          timedOut: false,
+        },
+      ]);
+      const result = await runClaude({
+        ...baseOptions(fake.run),
+        ...(claudeVersion === undefined ? {} : { claudeVersion }),
+      });
+      return result.agentRun.claude_version;
+    };
+
+    test("records null for an empty claudeVersion option", async () => {
+      expect(await versionWith("")).toBeNull();
+    });
+
+    test("records null for a whitespace-only claudeVersion option", async () => {
+      expect(await versionWith("  ")).toBeNull();
+    });
+
+    test("records null for an empty CLAUDE_VERSION environment variable", async () => {
+      process.env.CLAUDE_VERSION = "";
+      expect(await versionWith(undefined)).toBeNull();
+    });
+
+    test("records null for a whitespace-only CLAUDE_VERSION environment variable", async () => {
+      process.env.CLAUDE_VERSION = " \t";
+      expect(await versionWith(undefined)).toBeNull();
+    });
+
+    test("falls back to CLAUDE_VERSION when the claudeVersion option is empty", async () => {
+      process.env.CLAUDE_VERSION = "2.1.282";
+      expect(await versionWith("")).toBe("2.1.282");
+    });
   });
 
   test("passes --restricted (confines file tools to the working directories)", async () => {

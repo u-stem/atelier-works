@@ -1651,7 +1651,7 @@ Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`�
 ### バージョンごとの使用量
 
 Claudeのバージョンとモデルごとの使用量は、viewの`v_agent_usage_daily`で見る。
-viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数を合計する。
+viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数、ターン数を合計し、実行時間の平均を出す。
 バージョンを上げた前後を比べるには、期間で絞って、バージョンごとの費用を並べる。
 
 ```sql
@@ -1663,11 +1663,24 @@ ORDER BY claude_version, model;
 ```
 
 記録するバージョンは、workerのイメージに入れたClaudeの版(`CLAUDE_VERSION`)である。
-Windmillのジョブには、workerの環境変数のうち`WHITELIST_ENVS`に挙げたものしか届かない。
+Windmillのジョブには、`WHITELIST_ENVS`に挙げていない変数は、PATHなどの既定のものを除いて届かない。
 そのため、`infra/docker-compose.yml`が`CLAUDE_VERSION`を挙げている。
 バージョンの記録は、workerのイメージを作り直した後の実行から入る。
 それより前の行は`claude_version`がNULLのまま残り、viewではNULLの行として別に集計される。
 NULLを別の文字列に置き換えないのは、記録が無いことを利用者に見せるためである。
+
+`mise run up`で反映した後は、反映した時刻より後の実行で、`mise.toml`の`CLAUDE_VERSION`と同じ値が入ることを確かめる。
+`<反映した時刻>`には、反映した時刻を入れる。
+
+```sql
+SELECT claude_version, count(*)
+FROM factory.agent_runs
+WHERE created_at > '<反映した時刻>'
+GROUP BY 1;
+```
+
+NULLの行が残るときは、ジョブにまだ変数が届いていない。
+workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確かめる。
 
 ### PR修正の連続した失敗
 

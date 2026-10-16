@@ -613,15 +613,15 @@ log "all ${#views[@]} views selected successfully"
 
 # バージョン別の使用量のビューが、版の違う実行を別の行にし、版の記録が無い実行をNULLのまま1つにまとめることを確かめる。
 usage_rows="$(printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'usageprobe', 'r', 1, 'https://github.com/usageprobe/r/issues/1', 't', 'failed');
-INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, claude_version, input_tokens, output_tokens, cache_read_tokens, cost_usd)
-SELECT id, 'implement', a.attempt, 'probe-model', a.version, 10, 20, 30, 0.5
+INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, claude_version, input_tokens, output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms)
+SELECT id, 'implement', a.attempt, 'probe-model', a.version, 10, 20, 30, 0.5, 4, 100
 FROM factory.work_items, (VALUES (1, NULL), (2, NULL), (3, '9.9.9')) AS a (attempt, version)
 WHERE owner = 'usageprobe';
-SELECT COALESCE(claude_version, '-') || '=' || run_count || ':' || total_cost_usd || ':' || total_input_tokens || ':' || total_output_tokens || ':' || total_cache_read_tokens
+SELECT COALESCE(claude_version, '-') || '=' || run_count || ':' || total_cost_usd || ':' || total_input_tokens || ':' || total_output_tokens || ':' || total_cache_read_tokens || ':' || total_turns || ':' || round(avg_duration_ms)
 FROM factory.v_agent_usage_daily WHERE model = 'probe-model' ORDER BY claude_version NULLS LAST;\n" \
   | psql_exec "${SCRATCH_DB}" -q -t -A | grep -v '^INSERT' | paste -sd ',' -)" \
   || die "could not read v_agent_usage_daily"
-[ "${usage_rows}" = "9.9.9=1:0.5000:10:20:30,-=2:1.0000:20:40:60" ] \
+[ "${usage_rows}" = "9.9.9=1:0.5000:10:20:30:4:100,-=2:1.0000:20:40:60:8:100" ] \
   || die "unexpected v_agent_usage_daily rows: '${usage_rows}'"
 printf "DELETE FROM factory.work_items WHERE owner = 'usageprobe';\n" | psql_exec "${SCRATCH_DB}" -q >/dev/null
 log "v_agent_usage_daily groups runs by claude_version and keeps a missing version as NULL"

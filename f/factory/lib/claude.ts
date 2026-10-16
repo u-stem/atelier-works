@@ -469,6 +469,17 @@ function attemptTimeoutMs<T>(opts: RunClaudeOptions<T>): number {
   );
 }
 
+/**
+ * 空文字と空白だけの値を無いものとして扱い、最初の実値を返す。無ければnullを返す。
+ * 版を記録していない行は、空文字ではなくNULLにして、集計で見分けられるようにするため。
+ */
+function firstNonBlank(...values: (string | undefined)[]): string | null {
+  for (const value of values) {
+    if (value !== undefined && value.trim() !== "") return value;
+  }
+  return null;
+}
+
 /** 1回の試行のエージェント実行記録の土台を返す(トークン・コストは未設定)。 */
 function baseAgentRunFor<T>(
   opts: RunClaudeOptions<T>,
@@ -479,7 +490,10 @@ function baseAgentRunFor<T>(
     stage: opts.stage,
     attempt: opts.attempt,
     model: opts.model,
-    claude_version: opts.claudeVersion ?? process.env.CLAUDE_VERSION ?? null,
+    claude_version: firstNonBlank(
+      opts.claudeVersion,
+      process.env.CLAUDE_VERSION,
+    ),
     input_tokens: null,
     output_tokens: null,
     cache_read_tokens: null,
