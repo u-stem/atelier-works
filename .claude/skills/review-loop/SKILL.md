@@ -431,7 +431,8 @@ design-reviewer、requirements-reviewer、security-auditor、devil-advocate、tr
 守られているかは、コミットの順序を主に、失敗の出力を補助に使って確かめる。
 
 - テストを足すコミットが、実装のコミットより前にある。
-  code-reviewerが、`git log --reverse --stat origin/main..HEAD`で順序を見る。
+  code-reviewerが、最初のレビューでは`git log --reverse --stat origin/main..HEAD`で順序を見る。
+  修正のラウンドでは、`git log --reverse --stat <前のラウンドのHEAD>..HEAD ^origin/main`で順序を見る。
   二点にするのは、`git log`の三点が、まだ取り込んでいない`origin/main`側のコミットも出すためである。
   二点なら、取り込んだ後も、自分のコミットだけが対象になる。
   `git diff`の三点は、分岐した点からの差分を出すので、混ざらない。

@@ -523,6 +523,15 @@ describe("review-loop scaling rules", () => {
     expect(skillText()).not.toContain("新しい上限を超えている");
   });
 
+  test("states both test-first ranges in the review-loop skill", () => {
+    expect(skillText()).toContain(
+      [
+        "  code-reviewerが、最初のレビューでは`git log --reverse --stat origin/main..HEAD`で順序を見る。",
+        "  修正のラウンドでは、`git log --reverse --stat <前のラウンドのHEAD>..HEAD ^origin/main`で順序を見る。",
+      ].join("\n"),
+    );
+  });
+
   test("has the parent pass the previous round's HEAD", () => {
     expect(skillText()).toContain("前のラウンドのHEAD");
   });
