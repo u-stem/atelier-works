@@ -4079,6 +4079,9 @@ function isReviewThreadDatabaseIdNodePayload(
  * 形が合わないスレッド(GitHubでは起こらないはずの、コメントが1つも無い
  * スレッドを含む)は、例外を投げずに飛ばす。
  */
+/** `listReviewThreads`が辿るページ数の上限(1ページ100件)。 */
+export const REVIEW_THREADS_MAX_PAGES = 10;
+
 export async function listReviewThreads(
   client: GhClient,
   owner: string,
