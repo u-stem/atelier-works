@@ -93,10 +93,10 @@ function deps(
 const EMPTY: SqlRow[][] = [[], [], [], []];
 
 describe("runSystemStatus queries", () => {
-  test("runs four queries", async () => {
+  test("runs five queries", async () => {
     const d = deps(EMPTY);
     await runSystemStatus(200, d.deps);
-    expect(d.calls.length).toBe(4);
+    expect(d.calls.length).toBe(5);
   });
 
   test("reads the latest deployment", async () => {

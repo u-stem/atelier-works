@@ -64,6 +64,10 @@ import {
   type ReviewSeverity,
   sanitizePullRequestTitle,
 } from "../lib/types.ts";
+import {
+  DAILY_LAG_THRESHOLD_SECONDS,
+  WORKER_SAMPLES_PER_DAY,
+} from "../lib/worker_load_support.ts";
 import { type ReadTextFile, readTextFile } from "../lib/workspace.ts";
 
 const CONSOLE_ROW_VIEWS = [
@@ -1889,6 +1893,54 @@ function toResolvedNoticeRow(row: SqlRow): ResolvedNoticeRow {
   };
 }
 
+/** workerの負荷を集計する窓(時間)。 */
+export const WORKER_LOAD_WINDOW_HOURS = 24;
+
+/**
+ * 直近の窓での、defaultのworkerの負荷。値は数と時刻だけで、外部の文字列を含めない。
+ * 読めなかった値は`null`。メモリの値は、コンテナのcgroupの値(バイト)である。
+ */
+export type WorkerLoadView = {
+  readonly window_hours: number;
+  /** 窓の中の記録の数。 */
+  readonly sample_count: number;
+  /** 窓で期待する記録の数。 */
+  readonly expected_count: number;
+  /** 窓の中で最も新しい記録。 */
+  readonly latest: {
+    readonly sampled_at: string;
+    readonly slots: number;
+    readonly running_jobs: number | null;
+    readonly waiting_jobs: number | null;
+    readonly max_wait_seconds: number | null;
+    readonly lag_seconds: number | null;
+    readonly mem_current_bytes: number | null;
+    readonly mem_anon_bytes: number | null;
+    readonly mem_working_set_bytes: number | null;
+    readonly mem_peak_bytes: number | null;
+    readonly mem_limit_bytes: number | null;
+  };
+  /** 窓の中の列ごとの最大。 */
+  readonly max: {
+    readonly running_jobs: number | null;
+    readonly waiting_jobs: number | null;
+    readonly max_wait_seconds: number | null;
+    readonly lag_seconds: number | null;
+    readonly mem_current_bytes: number | null;
+    readonly mem_anon_bytes: number | null;
+    /** 行ごとの`mem_anon_bytes / mem_limit_bytes`の最大。上限が読めた行だけで求める。 */
+    readonly mem_anon_ratio: number | null;
+    readonly mem_working_set_bytes: number | null;
+    readonly mem_peak_bytes: number | null;
+  };
+  /** `running_jobs`が読めた記録の数。枠が塞がっていた記録の割合の分母で、読めなかった記録は数えない。 */
+  readonly running_readable_samples: number;
+  /** 他のジョブが枠をすべて使っていた記録(`running_jobs >= slots - 1`)の数。 */
+  readonly busy_samples: number;
+  /** `lag_seconds`が30秒以上の記録の数。 */
+  readonly lag_over_samples: number;
+};
+
 /** "system_status"ビューの結果。 */
 export type SystemStatus = {
   readonly deployed_sha: string | null;
@@ -1897,7 +1949,158 @@ export type SystemStatus = {
   readonly orphan_failures: OrphanFailureRow[];
   readonly info_notices: NoticeRow[];
   readonly resolved_notices: ResolvedNoticeRow[];
+  /** 窓に記録が無いか、読めなかったときは`null`。 */
+  readonly worker_load: WorkerLoadView | null;
 };
+
+function toWorkerLoadView(row: SqlRow | undefined): WorkerLoadView | null {
+  if (row === undefined) {
+    return null;
+  }
+  const sampleCount = asNumeric(row.sample_count, "sample_count");
+  if (sampleCount === 0) {
+    return null;
+  }
+  return {
+    window_hours: WORKER_LOAD_WINDOW_HOURS,
+    sample_count: sampleCount,
+    expected_count: WORKER_SAMPLES_PER_DAY,
+    latest: {
+      sampled_at: asIsoDate(row.latest_sampled_at, "latest_sampled_at"),
+      slots: asNumeric(row.latest_slots, "latest_slots"),
+      running_jobs: asNullableNumeric(
+        row.latest_running_jobs,
+        "latest_running_jobs",
+      ),
+      waiting_jobs: asNullableNumeric(
+        row.latest_waiting_jobs,
+        "latest_waiting_jobs",
+      ),
+      max_wait_seconds: asNullableNumeric(
+        row.latest_max_wait_seconds,
+        "latest_max_wait_seconds",
+      ),
+      lag_seconds: asNullableNumeric(
+        row.latest_lag_seconds,
+        "latest_lag_seconds",
+      ),
+      mem_current_bytes: asNullableNumeric(
+        row.latest_mem_current_bytes,
+        "latest_mem_current_bytes",
+      ),
+      mem_anon_bytes: asNullableNumeric(
+        row.latest_mem_anon_bytes,
+        "latest_mem_anon_bytes",
+      ),
+      mem_working_set_bytes: asNullableNumeric(
+        row.latest_mem_working_set_bytes,
+        "latest_mem_working_set_bytes",
+      ),
+      mem_peak_bytes: asNullableNumeric(
+        row.latest_mem_peak_bytes,
+        "latest_mem_peak_bytes",
+      ),
+      mem_limit_bytes: asNullableNumeric(
+        row.latest_mem_limit_bytes,
+        "latest_mem_limit_bytes",
+      ),
+    },
+    max: {
+      running_jobs: asNullableNumeric(row.max_running_jobs, "max_running_jobs"),
+      waiting_jobs: asNullableNumeric(row.max_waiting_jobs, "max_waiting_jobs"),
+      max_wait_seconds: asNullableNumeric(
+        row.max_wait_seconds,
+        "max_wait_seconds",
+      ),
+      lag_seconds: asNullableNumeric(row.max_lag_seconds, "max_lag_seconds"),
+      mem_current_bytes: asNullableNumeric(
+        row.max_mem_current_bytes,
+        "max_mem_current_bytes",
+      ),
+      mem_anon_bytes: asNullableNumeric(
+        row.max_mem_anon_bytes,
+        "max_mem_anon_bytes",
+      ),
+      mem_anon_ratio: asNullableNumeric(
+        row.max_mem_anon_ratio,
+        "max_mem_anon_ratio",
+      ),
+      mem_working_set_bytes: asNullableNumeric(
+        row.max_mem_working_set_bytes,
+        "max_mem_working_set_bytes",
+      ),
+      mem_peak_bytes: asNullableNumeric(
+        row.max_mem_peak_bytes,
+        "max_mem_peak_bytes",
+      ),
+    },
+    running_readable_samples: asNumeric(
+      row.running_readable_samples,
+      "running_readable_samples",
+    ),
+    busy_samples: asNumeric(row.busy_samples, "busy_samples"),
+    lag_over_samples: asNumeric(row.lag_over_samples, "lag_over_samples"),
+  };
+}
+
+/**
+ * 直近の窓のworkerの負荷を1回のクエリで集計する。
+ * 読めなければ`null`を返し、システムの画面のほかの部分を止めない。
+ */
+async function readWorkerLoad(
+  sql: SqlClient,
+  now: Date,
+): Promise<WorkerLoadView | null> {
+  const since = new Date(
+    now.getTime() - WORKER_LOAD_WINDOW_HOURS * 60 * 60 * 1000,
+  ).toISOString();
+  try {
+    const rows = await sql`
+      WITH recent AS (
+        SELECT * FROM factory.worker_samples
+        WHERE sampled_at >= ${since}::timestamptz
+      ),
+      latest AS (
+        SELECT * FROM recent ORDER BY sampled_at DESC, id DESC LIMIT 1
+      )
+      SELECT
+        (SELECT count(*) FROM recent) AS sample_count,
+        (SELECT max(running_jobs) FROM recent) AS max_running_jobs,
+        (SELECT max(waiting_jobs) FROM recent) AS max_waiting_jobs,
+        (SELECT max(max_wait_seconds) FROM recent) AS max_wait_seconds,
+        (SELECT max(lag_seconds) FROM recent) AS max_lag_seconds,
+        (SELECT max(mem_current_bytes) FROM recent) AS max_mem_current_bytes,
+        (SELECT max(mem_anon_bytes) FROM recent) AS max_mem_anon_bytes,
+        (SELECT max(mem_anon_bytes::float8 / mem_limit_bytes) FROM recent
+          WHERE mem_limit_bytes > 0) AS max_mem_anon_ratio,
+        (SELECT max(mem_working_set_bytes) FROM recent) AS max_mem_working_set_bytes,
+        (SELECT max(mem_peak_bytes) FROM recent) AS max_mem_peak_bytes,
+        (SELECT count(running_jobs) FROM recent) AS running_readable_samples,
+        (SELECT count(*) FROM recent WHERE running_jobs >= slots - 1) AS busy_samples,
+        (SELECT count(*) FROM recent
+          WHERE lag_seconds >= ${DAILY_LAG_THRESHOLD_SECONDS}::integer) AS lag_over_samples,
+        latest.sampled_at AS latest_sampled_at,
+        latest.slots AS latest_slots,
+        latest.running_jobs AS latest_running_jobs,
+        latest.waiting_jobs AS latest_waiting_jobs,
+        latest.max_wait_seconds AS latest_max_wait_seconds,
+        latest.lag_seconds AS latest_lag_seconds,
+        latest.mem_current_bytes AS latest_mem_current_bytes,
+        latest.mem_anon_bytes AS latest_mem_anon_bytes,
+        latest.mem_working_set_bytes AS latest_mem_working_set_bytes,
+        latest.mem_peak_bytes AS latest_mem_peak_bytes,
+        latest.mem_limit_bytes AS latest_mem_limit_bytes
+      FROM (SELECT 1) AS one
+      LEFT JOIN latest ON true
+    `.fetch();
+    return toWorkerLoadView(rows[0]);
+  } catch (err) {
+    logger("console_query").warn("could not read the worker load", {
+      error: maskSecrets(String(err)),
+    });
+    return null;
+  }
+}
 
 /** `runSystemStatus`が使う外部の操作。テストでは差し替える。 */
 export type SystemStatusDeps = {
@@ -2011,6 +2214,7 @@ export async function runSystemStatus(
     orphan_failures: orphanRows.map(toOrphanFailureRow),
     info_notices: infoRows.map(toNoticeRow),
     resolved_notices: resolvedRows.map(toResolvedNoticeRow),
+    worker_load: await readWorkerLoad(sql, now),
   };
 }
 

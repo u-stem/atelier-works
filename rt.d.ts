@@ -56,6 +56,7 @@ declare namespace RT {
     pr_conflict_fix_max_rounds: number,
     pr_conflict_fix_max_rounds_per_pr: number,
     pr_conflict_fix_notify_grace_min: number,
+    worker_alert_memory_ratio: number,
     check_commands_by_repo: object
   }
 }

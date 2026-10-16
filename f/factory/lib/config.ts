@@ -101,6 +101,7 @@ type DefaultableField =
   | "pr_conflict_fix_max_rounds_per_pr"
   | "pr_conflict_fix_enabled_since"
   | "pr_conflict_fix_notify_grace_min"
+  | "worker_alert_memory_ratio"
   | "check_commands_by_repo";
 
 /**
@@ -175,6 +176,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   pr_conflict_fix_max_rounds_per_pr: 5,
   pr_conflict_fix_enabled_since: null,
   pr_conflict_fix_notify_grace_min: 60,
+  // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
+  worker_alert_memory_ratio: 0.8,
   check_commands_by_repo: {},
 };
 
@@ -292,6 +295,24 @@ function numberField(
   }
   if (!isNumber(value)) {
     throw new ConfigValidationError(`"${field}" must be a number`);
+  }
+  return value;
+}
+
+/**
+ * `raw[field]`を返す。値が無ければ`fallback`を返し、0を超え1以下の数でなければ例外を投げる。
+ * 割合の閾値に使う。0は常に通知し、1を超えると通知しなくなるので、どちらも拒否する。
+ */
+function ratioField(
+  raw: Record<string, unknown>,
+  field: string,
+  fallback: number,
+): number {
+  const value = numberField(raw, field, fallback);
+  if (!(value > 0 && value <= 1)) {
+    throw new ConfigValidationError(
+      `"${field}" must be greater than 0 and at most 1`,
+    );
   }
   return value;
 }
@@ -952,6 +973,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     pr_conflict_fix_max_rounds_per_pr: prConflictFixMaxRoundsPerPr,
     pr_conflict_fix_enabled_since: prConflictFixEnabledSince,
     pr_conflict_fix_notify_grace_min: prConflictFixNotifyGraceMin,
+    worker_alert_memory_ratio: ratioField(
+      raw,
+      "worker_alert_memory_ratio",
+      DEFAULTS.worker_alert_memory_ratio,
+    ),
     check_commands_by_repo: checkCommandsByRepoField(
       raw,
       DEFAULTS.check_commands_by_repo,

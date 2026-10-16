@@ -11,6 +11,9 @@ WMILL_CONFIG_DIR = "{{config_root}}/.wmill"
 WM_VERSION = "1.817.0"
 WM_HTTP_PORT = "8080"
 WM_BIND = "127.0.0.1"
+# ログインのセッションの有効期間(秒)。30日にする。Windmillの既定は3日。
+# windmill_serverにだけ渡す。変えたら`mise run up`をやり直す。
+WM_SESSION_VALIDITY_SECONDS = "2592000"
 WM_BASE_URL = "http://127.0.0.1:8080"
 # console_fetcherが成果物を取りに行くリポジトリ。フォークで動かすときは書き換える。
 CONSOLE_GITHUB_REPO = "https://github.com/u-stem/atelier-works"
