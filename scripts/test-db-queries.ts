@@ -5910,6 +5910,84 @@ check(
     sql,
   )) === 9,
 );
+// Claudeを動かす前の一時の停止で止まった回は、数えない。
+const cfUncountedNotes = [
+  "conflict round: an implement flow is running on the branch",
+  "conflict round: the worktree is in use by another process",
+  "conflict round: the PR head moved while the fix was in progress",
+  "conflict round: the conflict check row of the work item does not exist",
+  "conflict round: the conflict check is not conflicted",
+  "conflict round: the conflict check is bound to another work item",
+  "conflict round: the conflict episode of the work item is over",
+];
+for (const [index, note] of cfUncountedNotes.entries()) {
+  const itemId = await conflictRoundItem(
+    716,
+    cfCount.id,
+    1,
+    "blocked",
+    `job-u${String(index)}`,
+  );
+  conflictNote(itemId, "blocked", note);
+}
+check(
+  "conflict rounds: a blocked round stopped by a temporary stop before Claude ran is not counted, per episode",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 9,
+);
+check(
+  "conflict rounds: a blocked round stopped by a temporary stop before Claude ran is not counted, per pull request",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 10,
+);
+// pushの直前にheadが動いた回は、Claudeを使った後なので数える。
+const cfMovedAtPush = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-14",
+);
+conflictNote(
+  cfMovedAtPush,
+  "blocked",
+  "conflict round: the PR head moved before the push",
+);
+check(
+  "conflict rounds: a blocked round whose head moved before the push is counted, per episode",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 10,
+);
+// 一時の停止の注記に当たるのは完全一致だけで、後ろに文が続くものは数える。
+const cfUncountedLonger = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-15",
+);
+conflictNote(
+  cfUncountedLonger,
+  "blocked",
+  "conflict round: the worktree is in use by another process x",
+);
+check(
+  "conflict rounds: a note that continues after the fixed text of a temporary stop is counted",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 11,
+);
 execPsql(
   target,
   `DELETE FROM factory.pr_conflict_checks WHERE id = ${String(cfCount.id)}`,
@@ -5920,7 +5998,7 @@ check(
     { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
     STALE_IMAGE_NOTE_PREFIXES,
     sql,
-  )) === 10,
+  )) === 12,
 );
 // 行をIDで読む。
 const cfById = await conflictFixRow(718, CF_HEAD_1);

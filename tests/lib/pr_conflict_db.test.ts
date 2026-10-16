@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
+import { CONFLICT_UNCOUNTED_STOP_NOTES } from "../../f/factory/lib/conflict_fix_round.ts";
 import {
   claimPrConflictForFix,
   countPrConflictFixRounds,
@@ -881,6 +882,32 @@ describe("countPrConflictFixRounds", () => {
       sql,
     );
     expect(calls[0]?.values).toContain("conflict round: up_to_date");
+  });
+
+  test("binds the notes of the temporary stops before Claude ran, per episode", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.values).toContainEqual([...CONFLICT_UNCOUNTED_STOP_NOTES]);
+  });
+
+  test("binds the notes of the temporary stops before Claude ran, per pull request", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(PR, [...AUTO_RETRY_REASON_PREFIXES], sql);
+    expect(calls[0]?.values).toContainEqual([...CONFLICT_UNCOUNTED_STOP_NOTES]);
+  });
+
+  test("compares the notes of the temporary stops as a whole, not as prefixes", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ rounds: 0 }]]);
+    await countPrConflictFixRounds(
+      EPISODE,
+      [...AUTO_RETRY_REASON_PREFIXES],
+      sql,
+    );
+    expect(calls[0]?.text).toMatch(/= ANY\(\s*\?\s*::text\[\]\)/);
   });
 
   test("tells an up to date round by the reviewed status and the note", async () => {

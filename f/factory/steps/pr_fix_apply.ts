@@ -41,7 +41,7 @@ import {
 } from "../lib/conflict_fix_prompt.ts";
 import {
   CONFLICT_MERGE_NOT_RECORDED_REASON,
-  conflictRoundReason,
+  conflictClaudeFailedMessage,
 } from "../lib/conflict_fix_round.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
@@ -447,9 +447,7 @@ async function applyConflictRound(
       return blockedResult(afterFailureReason);
     }
     // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
-    throw new Error(
-      `pr_fix_apply: ${conflictRoundReason(`claude run failed (${result.reason})`)}`,
-    );
+    throw new Error(conflictClaudeFailedMessage(result.reason));
   }
   return conflictApplyResult(result);
 }

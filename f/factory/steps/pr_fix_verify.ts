@@ -31,6 +31,7 @@ import {
   requireCiRoundHeadSha,
   runCiFixApply,
 } from "../lib/ci_fix_round.ts";
+import type { CiTextScanner } from "../lib/ci_log_support.ts";
 import {
   confirmationVerdict,
   confirmRehash,
@@ -465,6 +466,8 @@ export type ConflictFixVerifyDeps = {
   }>;
   /** `allowed_check_commands`を実行する。 */
   readonly runChecks: () => Promise<readonly CheckCommandResult[]>;
+  /** 止める理由の文字列の秘密値の検査。 */
+  readonly scanText: CiTextScanner;
   readonly warn: (message: string, fields: Record<string, unknown>) => void;
   /** `runChecks`が`CheckEnvironmentError`を投げたときに1回呼ぶ。運用者に直し方を示す通知を残す。 */
   readonly reportCheckImageStale: (
@@ -495,7 +498,10 @@ export type ConflictFixVerifyInput = {
  * 続けて、禁止された変更(`inspectChanges`)、競合ファイルの解消(`inspectResolution`)の順に調べる。
  * 記録が無いか一致しなければ、変更を調べずに"blocked"にする。
  * 検査は、Claudeの実行の後と、検査コマンドが通った後の両方で行う。検査コマンドは対象リポジトリのコードで、worktreeを書き換えられるためである。
- * 結果の`verified_tree_sha`は、最後に通した検査のツリーである。完了のステップが、pushするツリーとの一致を確かめる。
+ * 結果の`verified_tree_sha`は、検査コマンドの前後の検査が同じツリーを見たときのそのツリーである。
+ * 検査コマンドの後のツリーが前と違えば、検査コマンドがツリーを書き換えたとして、固定の理由で"blocked"にする。
+ * 完了のステップが、pushするツリーとの一致を確かめる。
+ * 禁止された変更の理由は、パスにClaudeや検査コマンドが選べる名前が入るので、秘密値の検査を通してから返す。
  * 検査コマンドが失敗したら、固定の理由で"blocked"にする。Claudeは再実行しない。
  * 検査コマンドの失敗は、署名の変更のような意味の競合を表し、競合ファイルだけを直せるClaudeには直せないためである。
  * workerが検査の前提を満たさず検査を実行できなければ、`reportCheckImageStale`で知らせ、"guard_blocked"にする。
@@ -543,7 +549,8 @@ export async function runConflictFixVerify(
     const forbidden = await deps.inspectChanges();
     // 理由のパスはClaudeや検査コマンドが選べるので、区切りで別の理由に見えないようにする。
     if (forbidden.blocked) {
-      return forbidden.reasons.map(escapeReasonSeparator).join("; ");
+      const safe = await guardCiRoundReasons(forbidden.reasons, deps.scanText);
+      return safe.map(escapeReasonSeparator).join("; ");
     }
     const resolution = await deps.inspectResolution();
     if (resolution.reasons.length > 0) {
@@ -564,6 +571,7 @@ export async function runConflictFixVerify(
 
   const firstReason = await inspect();
   if (firstReason !== null) return blocked(firstReason);
+  const treeBeforeChecks = verifiedTreeSha;
   if (!input.hasCheckCommands) return done();
   await deps.announceChecks();
 
@@ -582,7 +590,13 @@ export async function runConflictFixVerify(
     return blocked(conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed));
   }
   const afterChecksReason = await inspect();
-  return afterChecksReason === null ? done() : blocked(afterChecksReason);
+  if (afterChecksReason !== null) return blocked(afterChecksReason);
+  if (verifiedTreeSha !== treeBeforeChecks) {
+    return blocked(
+      conflictRoundReason(CONFLICT_ROUND_DETAILS.treeChangedDuringChecks),
+    );
+  }
+  return done();
 }
 
 /**
@@ -807,6 +821,7 @@ export async function main(
             autoTreeSha,
           }),
         runChecks: runChecksAndCleanIgnored,
+        scanText: ciTextScanner(runCommand),
         warn: (message, fields) =>
           log.warn(message, { work_item_id, ...fields }),
         reportCheckImageStale,

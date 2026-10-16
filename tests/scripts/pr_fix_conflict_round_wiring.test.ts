@@ -268,6 +268,11 @@ describe("the fix step of a conflict round", () => {
     );
   });
 
+  test("throws the failure of a Claude run with the message that the recovery matches", async () => {
+    const text = await source("pr_fix_apply.ts");
+    expect(count(text, "conflictClaudeFailedMessage(result.reason)")).toBe(1);
+  });
+
   test("blocks a round whose merge was not recorded", async () => {
     const text = await source("pr_fix_apply.ts");
     expect(
@@ -380,9 +385,17 @@ describe("the finish step of a conflict round", () => {
     expect(
       count(
         text,
-        "roundStopReason(conflictRound, CONFLICT_ROUND_DETAILS.headMoved, reason)",
+        "roundStopReason(\n        conflictRound,\n        CONFLICT_ROUND_DETAILS.headMovedAtPush,\n        reason,\n      )",
       ),
     ).toBe(1);
+  });
+
+  test("gives the stop of a busy worktree before the push the fixed note, and logs the holder", async () => {
+    const text = await source("pr_fix_finish.ts");
+    expect(
+      count(text, "(holder) => {\n              log.warn(") +
+        count(text, "CONFLICT_ROUND_DETAILS.worktreeBusy"),
+    ).toBe(2);
   });
 
   test("hands the verified tree to the push", async () => {
@@ -416,9 +429,7 @@ describe("the finish step of a conflict round", () => {
       const text = await source(file);
       for (const match of text.matchAll(/conflictRoundReason\(([^)]*)/g)) {
         const argument = (match[1] ?? "").trim();
-        const fixed =
-          argument.startsWith("CONFLICT_ROUND_DETAILS.") ||
-          argument.startsWith("`claude run failed");
+        const fixed = argument.startsWith("CONFLICT_ROUND_DETAILS.");
         if (!fixed) offenders.push(`${file}: ${argument}`);
       }
     }
@@ -506,6 +517,8 @@ const DETAIL_HOLDS: readonly (readonly [
   ["rowBoundToAnother", null],
   ["episodeOver", null],
   ["headMoved", null],
+  ["headMovedAtPush", null],
+  ["treeChangedDuringChecks", null],
   ["worktreeBusy", null],
   ["implementRunning", null],
 ];
@@ -522,6 +535,18 @@ describe("the notes of a stopped conflict round", () => {
         conflictRoundReason(CONFLICT_ROUND_DETAILS[key]),
       ),
     ).toBe(hold);
+  });
+
+  test("matches a note by its head in two places only, the stale image and the failure of Claude", async () => {
+    const text = await libSource("pr_conflict_fix_recovery.ts");
+    expect(count(text, ".startsWith(")).toBe(2);
+  });
+
+  test("matches the failure of Claude by the one prefix constant", async () => {
+    const text = await libSource("pr_conflict_fix_recovery.ts");
+    expect(count(text, "startsWith(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX)")).toBe(
+      1,
+    );
   });
 
   test("lets the conflict_blocked outcome carry only the notes that map to a hold", () => {

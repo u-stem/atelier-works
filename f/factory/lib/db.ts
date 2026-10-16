@@ -14,6 +14,7 @@ import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import {
   CONFLICT_ROUND_DETAILS,
+  CONFLICT_UNCOUNTED_STOP_NOTES,
   conflictRoundReason,
 } from "./conflict_fix_round.ts";
 import {
@@ -6080,8 +6081,12 @@ export type PrConflictFixRoundScope =
  *   そのため、1つ目の条件(`flow_job_id`が空の`failed`)では除けない。
  *   数えると、イメージが古い間に起動と停止を繰り返して回数を使い切り、人がイメージを直しても自動で直らなくなる。
  *   呼び出し側は`AUTO_RETRY_REASON_PREFIXES`を渡す。一覧を引数にするのは、`db.ts`が検査のサンドボックスの部品に依存しないようにするためである。
+ * - Claudeを動かす前の一時の停止で止まった作業項目(状態が`blocked`で、その状態へ移った最新の遷移の注記が、
+ *   `CONFLICT_UNCOUNTED_STOP_NOTES`のどれかに完全一致するもの)。Claudeの費用を使っていない回で、
+ *   待てば解ける事情で止まっただけなので、直す機会を使い切らないためである。
  *
  * 数えない回の繰り返しは、行の`fix_attempts`の上限(`pr_conflict_fix_max_rounds`に3を足した数)だけが止める。
+ * 一時の停止の注記の照合は完全一致だけで行い、先頭一致は使わない。
  * 巡回は5分ごとなので、イメージが古い状態が約20〜25分(既定の設定のとき)を超えると、その回(episode)は
  * `rounds_exhausted`(最終の保留)で通知に進む。通知の理由はイメージの古さを示さない。
  * その後に人がイメージを直しても、その回は自動では直らない。新しい回で再び起動する。
@@ -6101,6 +6106,7 @@ export async function countPrConflictFixRounds(
   }
   const upToDateNote = conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate);
   const staleImagePrefixes: string[] = [...staleImageNotePrefixes];
+  const uncountedStopNotes: string[] = [...CONFLICT_UNCOUNTED_STOP_NOTES];
   if (scope.kind === "episode") {
     assertPositiveId(scope.checkId, "pr conflict check id");
     assertPositiveId(scope.episode, "pr conflict episode");
@@ -6128,6 +6134,14 @@ export async function countPrConflictFixRounds(
               LIMIT 1
             ), ''), p.prefix)
           )
+        )
+        AND NOT (
+          wi.status = 'blocked' AND COALESCE((
+            SELECT e.note FROM factory.work_item_events AS e
+            WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1
+          ), '') = ANY(${uncountedStopNotes}::text[])
         )
     `.fetch();
     const row = rows[0];
@@ -6159,6 +6173,14 @@ export async function countPrConflictFixRounds(
             LIMIT 1
           ), ''), p.prefix)
         )
+      )
+      AND NOT (
+        wi.status = 'blocked' AND COALESCE((
+          SELECT e.note FROM factory.work_item_events AS e
+          WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ), '') = ANY(${uncountedStopNotes}::text[])
       )
   `.fetch();
   const row = rows[0];

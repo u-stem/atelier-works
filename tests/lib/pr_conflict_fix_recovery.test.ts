@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
 import {
   CONFLICT_ROUND_DETAILS,
+  conflictClaudeFailedMessage,
   conflictRoundReason,
 } from "../../f/factory/lib/conflict_fix_round.ts";
 import {
@@ -107,6 +108,7 @@ const TRANSIENT_DETAIL_KEYS = [
   "rowBoundToAnother",
   "episodeOver",
   "headMoved",
+  "headMovedAtPush",
   "worktreeBusy",
   "implementRunning",
 ] as const;
@@ -301,6 +303,55 @@ describe("decideConflictFixRecovery", () => {
       kind: "release",
       hold: null,
     });
+  });
+
+  test("holds fix_stopped for a failed work item whose Claude run failed", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", { note: conflictClaudeFailedMessage("timeout") }),
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test.each([
+    "non_zero_exit",
+    "timeout",
+    "invalid_json",
+    "invalid_structured_output",
+    "claude_error",
+  ])(
+    "holds fix_stopped for a failed work item whose Claude run failed with %s",
+    (reason) => {
+      expect(
+        decideConflictFixRecovery(
+          item("failed", { note: conflictClaudeFailedMessage(reason) }),
+        ),
+      ).toEqual({ kind: "release", hold: "fix_stopped" });
+    },
+  );
+
+  test("does not match the failure of Claude when the prefix is not at the head of the note", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", { note: `x ${conflictClaudeFailedMessage("timeout")}` }),
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("does not match the failure of Claude inside a reason that Claude wrote", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", {
+          note: `conflict round: claude blocked: ${conflictClaudeFailedMessage("timeout")}`,
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("keeps the failure of Claude out of the holds of a blocked work item", () => {
+    expect(
+      holdReasonForConflictStoppedItem(conflictClaudeFailedMessage("timeout")),
+    ).toBeNull();
   });
 
   test("holds a failed work item that started a flow by its mapped note", () => {

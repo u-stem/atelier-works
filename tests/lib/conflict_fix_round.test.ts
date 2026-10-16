@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { CiFixChange } from "../../f/factory/lib/ci_fix_paths.ts";
 import {
+  CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
   CONFLICT_FIX_SKILL_MARKER,
   CONFLICT_ROUND_DETAILS,
+  CONFLICT_TEMPORARY_STOP_NOTES,
+  CONFLICT_UNCOUNTED_STOP_NOTES,
   type ConflictFileInput,
   type ConflictResolutionVerdict,
   checkConflictResolution,
+  conflictClaudeFailedMessage,
   conflictMarkerLabels,
   conflictResolutionReasons,
   conflictRoundReason,
@@ -55,6 +59,69 @@ describe("conflictRoundReason", () => {
   });
 });
 
+describe("CONFLICT_UNCOUNTED_STOP_NOTES", () => {
+  test("lists the temporary stops that happen before Claude runs", () => {
+    expect([...CONFLICT_UNCOUNTED_STOP_NOTES]).toEqual(
+      [
+        CONFLICT_ROUND_DETAILS.rowMissing,
+        CONFLICT_ROUND_DETAILS.rowNotConflicted,
+        CONFLICT_ROUND_DETAILS.rowBoundToAnother,
+        CONFLICT_ROUND_DETAILS.episodeOver,
+        CONFLICT_ROUND_DETAILS.headMoved,
+        CONFLICT_ROUND_DETAILS.worktreeBusy,
+        CONFLICT_ROUND_DETAILS.implementRunning,
+      ].map(conflictRoundReason),
+    );
+  });
+
+  test("leaves out the stop of a head that moved before the push", () => {
+    expect(
+      CONFLICT_UNCOUNTED_STOP_NOTES.includes(
+        conflictRoundReason(CONFLICT_ROUND_DETAILS.headMovedAtPush),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("CONFLICT_TEMPORARY_STOP_NOTES", () => {
+  test("holds the uncounted notes and the stop of a head that moved before the push", () => {
+    expect([...CONFLICT_TEMPORARY_STOP_NOTES]).toEqual([
+      ...CONFLICT_UNCOUNTED_STOP_NOTES,
+      conflictRoundReason(CONFLICT_ROUND_DETAILS.headMovedAtPush),
+    ]);
+  });
+
+  test("leaves out the stop of a tree that the checks changed", () => {
+    expect(
+      CONFLICT_TEMPORARY_STOP_NOTES.includes(
+        conflictRoundReason(CONFLICT_ROUND_DETAILS.treeChangedDuringChecks),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("conflictClaudeFailedMessage", () => {
+  test("starts with the prefix that the recovery matches", () => {
+    expect(
+      conflictClaudeFailedMessage("timeout").startsWith(
+        CONFLICT_CLAUDE_FAILED_NOTE_PREFIX,
+      ),
+    ).toBe(true);
+  });
+
+  test("states the reason of the failure in the fixed form", () => {
+    expect(conflictClaudeFailedMessage("timeout")).toBe(
+      "pr_fix_apply: conflict round: claude run failed (timeout)",
+    );
+  });
+
+  test("ends the prefix at the open parenthesis of the reason", () => {
+    expect(CONFLICT_CLAUDE_FAILED_NOTE_PREFIX).toBe(
+      "pr_fix_apply: conflict round: claude run failed (",
+    );
+  });
+});
+
 describe("roundStopReason", () => {
   test("gives a conflict round the fixed note of the detail", () => {
     expect(
@@ -82,6 +149,8 @@ describe("CONFLICT_ROUND_DETAILS", () => {
     ["rowBoundToAnother", "the conflict check is bound to another work item"],
     ["episodeOver", "the conflict episode of the work item is over"],
     ["headMoved", "the PR head moved while the fix was in progress"],
+    ["headMovedAtPush", "the PR head moved before the push"],
+    ["treeChangedDuringChecks", "the tree changed during the checks"],
     ["worktreeBusy", "the worktree is in use by another process"],
     ["implementRunning", "an implement flow is running on the branch"],
     [

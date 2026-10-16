@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CheckCommandResult } from "../../f/factory/lib/check_runner.ts";
 import { CheckImageStaleError } from "../../f/factory/lib/check_sandbox.ts";
+import { CI_ROUND_REASONS_WITHHELD } from "../../f/factory/lib/ci_fix_round.ts";
 import { WorktreeGitPointerModifiedError } from "../../f/factory/lib/workspace.ts";
 import {
   type ConflictFixVerifyDeps,
@@ -50,6 +51,7 @@ type Options = {
   readonly treeShas?: readonly string[];
   readonly checks?: readonly boolean[];
   readonly checksError?: Error;
+  readonly scan?: ConflictFixVerifyDeps["scanText"];
 };
 
 function harness(options: Options = {}): {
@@ -102,6 +104,12 @@ function harness(options: Options = {}): {
       checkIndex += 1;
       return [check(ok)];
     },
+    scanText:
+      options.scan ??
+      (async (text: string) => {
+        calls.push("scanText");
+        return { ok: true, output: text };
+      }),
     warn: (_message, fields) => {
       warnings.push(fields);
     },
@@ -203,6 +211,44 @@ describe("runConflictFixVerify: the inspection", () => {
     expect(result.reason).toBe("a; b, c");
   });
 
+  test("withholds the reasons of a forbidden change when they match the secret scan", async () => {
+    const { deps } = harness({
+      inspections: [
+        { blocked: true, reasons: ["not a regular file: key.txt"] },
+      ],
+      scan: async () => ({ ok: false, output: "finding" }),
+    });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect(result.reason).toBe(CI_ROUND_REASONS_WITHHELD);
+  });
+
+  test("withholds the reasons of a forbidden change when the secret scan fails", async () => {
+    const { deps } = harness({
+      inspections: [
+        { blocked: true, reasons: ["not a regular file: key.txt"] },
+      ],
+      scan: async () => {
+        throw new Error("gitleaks crashed");
+      },
+    });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect(result.reason).toBe(CI_ROUND_REASONS_WITHHELD);
+  });
+
+  test("scans the reasons of a forbidden change once", async () => {
+    const { deps, calls } = harness({
+      inspections: [{ blocked: true, reasons: ["a", "b"] }],
+    });
+    await runConflictFixVerify(deps, INPUT);
+    expect(calls.filter((call) => call === "scanText")).toHaveLength(1);
+  });
+
+  test("does not scan when no change is forbidden", async () => {
+    const { deps, calls } = harness();
+    await runConflictFixVerify(deps, { ...INPUT, hasCheckCommands: false });
+    expect(calls.includes("scanText")).toBe(false);
+  });
+
   test("stops at a resolution that is not allowed", async () => {
     const { deps } = harness({
       resolutions: [
@@ -277,10 +323,34 @@ describe("runConflictFixVerify: the check commands", () => {
     });
   });
 
-  test("records the tree of the inspection after the checks as the verified tree", async () => {
+  test("records the tree that both inspections saw as the verified tree", async () => {
+    const { deps } = harness({ treeShas: [TREE_1, TREE_1] });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect(result.verified_tree_sha).toBe(TREE_1);
+  });
+
+  test("blocks with the fixed reason when the checks changed the tree", async () => {
     const { deps } = harness({ treeShas: [TREE_1, TREE_2] });
     const result = await runConflictFixVerify(deps, INPUT);
-    expect(result.verified_tree_sha).toBe(TREE_2);
+    expect([result.outcome, result.reason]).toEqual([
+      "blocked",
+      "conflict round: the tree changed during the checks",
+    ]);
+  });
+
+  test("records no verified tree when the checks changed the tree", async () => {
+    const { deps } = harness({ treeShas: [TREE_1, TREE_2] });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect(result.verified_tree_sha ?? null).toBeNull();
+  });
+
+  test("reports the reasons of the second inspection before the difference of the trees", async () => {
+    const { deps } = harness({
+      treeShas: [TREE_1, TREE_2],
+      resolutions: [[], ["conflict round: change not allowed (x): a"]],
+    });
+    const result = await runConflictFixVerify(deps, INPUT);
+    expect(result.reason).toBe("conflict round: change not allowed (x): a");
   });
 
   test("records the tree of the only inspection when there are no check commands", async () => {

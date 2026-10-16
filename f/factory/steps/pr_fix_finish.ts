@@ -1041,7 +1041,11 @@ export async function main(
     await finalizeTerminal(
       "blocked",
       movedReason,
-      roundStopReason(conflictRound, CONFLICT_ROUND_DETAILS.headMoved, reason),
+      roundStopReason(
+        conflictRound,
+        CONFLICT_ROUND_DETAILS.headMovedAtPush,
+        reason,
+      ),
     );
     return { ok: true, final_status: "blocked", notice: "head_changed" };
   }
@@ -1101,6 +1105,14 @@ export async function main(
             },
             worktree_git_pointer,
             branch,
+            // 注記は固定文にして、回復が準備の停止と同じ一時の停止として扱えるようにする。保持者はログに残す。
+            (holder) => {
+              log.warn("the worktree is in use", {
+                work_item_id,
+                holder,
+              });
+              return conflictRoundReason(CONFLICT_ROUND_DETAILS.worktreeBusy);
+            },
           ),
         inspect: () =>
           inspectConflictResolution(inspectDeps, {

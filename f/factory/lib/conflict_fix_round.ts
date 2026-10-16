@@ -35,8 +35,11 @@ export const CONFLICT_FIX_SKILL_MARKER = "conflict-fix-skill:v1";
  * - 保留の理由に写るもの: `baseNotDefault`、`baseChangesWorkflows`、`protectedPath`、`unresolvable`、`checkFailed`、`markerMissing`。
  * - `upToDate`と`baseChanged`は止めた理由ではなく、pushせずに終えた回(`reviewed`)の注記である。
  *   `upToDate`はpushが要らなかった回、`baseChanged`はpushの直前にbaseが動いた回で、どちらも行に最終の保留を書かない。
+ * - `treeChangedDuringChecks`は検査コマンドがツリーを書き換えたときの注記で、保留の理由に写さない。
+ *   待っても解けないので、回復は`fix_stopped`で最終の保留にする。
  * - 残りは一時の停止の注記である。待てば解ける事情で止めた回で、回復が行に保留を書かずに結びだけを外す。
  *   行の状態が変わったか、PRのheadが動いたか、worktreeを別の処理が使っているか、実装のフローが動いているかのいずれかである。
+ *   `headMovedAtPush`だけはpushの直前に見つけるので、Claudeを動かした後の停止である。
  */
 export const CONFLICT_ROUND_DETAILS = {
   baseNotDefault: "base is not the default branch",
@@ -51,6 +54,8 @@ export const CONFLICT_ROUND_DETAILS = {
   rowBoundToAnother: "the conflict check is bound to another work item",
   episodeOver: "the conflict episode of the work item is over",
   headMoved: "the PR head moved while the fix was in progress",
+  headMovedAtPush: "the PR head moved before the push",
+  treeChangedDuringChecks: "the tree changed during the checks",
   worktreeBusy: "the worktree is in use by another process",
   implementRunning: "an implement flow is running on the branch",
   markerMissing: `the factory-fix skill lacks the ${CONFLICT_FIX_SKILL_MARKER} marker`,
@@ -59,6 +64,43 @@ export const CONFLICT_ROUND_DETAILS = {
 /** 固定文`detail`に接頭辞を付けた、競合回の注記。 */
 export function conflictRoundReason(detail: string): string {
   return `${CONFLICT_ROUND_REASON_PREFIX}: ${detail}`;
+}
+
+/**
+ * 競合回で、回数に数えない一時の停止の注記(接頭辞付き)。完全一致で照合する。
+ * Claudeを動かす前の準備が止めた回で、Claudeの費用を使っていない。
+ * 数えないので、繰り返しを止めるのは行の起動の回数(`fix_attempts`)の上限だけである。
+ * `headMovedAtPush`は、Claudeを動かした後のpushの直前に見つけるので含めない。
+ */
+export const CONFLICT_UNCOUNTED_STOP_NOTES: readonly string[] = [
+  CONFLICT_ROUND_DETAILS.rowMissing,
+  CONFLICT_ROUND_DETAILS.rowNotConflicted,
+  CONFLICT_ROUND_DETAILS.rowBoundToAnother,
+  CONFLICT_ROUND_DETAILS.episodeOver,
+  CONFLICT_ROUND_DETAILS.headMoved,
+  CONFLICT_ROUND_DETAILS.worktreeBusy,
+  CONFLICT_ROUND_DETAILS.implementRunning,
+].map(conflictRoundReason);
+
+/**
+ * 一時の停止の注記(接頭辞付き)。待てば解ける事情で止めた回の注記で、回復が保留の理由に写さない。
+ * 回数に数えない注記(`CONFLICT_UNCOUNTED_STOP_NOTES`)と、pushの直前のheadの不一致を合わせたものである。
+ */
+export const CONFLICT_TEMPORARY_STOP_NOTES: readonly string[] = [
+  ...CONFLICT_UNCOUNTED_STOP_NOTES,
+  conflictRoundReason(CONFLICT_ROUND_DETAILS.headMovedAtPush),
+];
+
+/**
+ * Claudeの実行が失敗したときに、修正ステップが投げる例外の文の先頭。
+ * 例外の文がそのまま作業項目の注記になるので、回復はこの先頭への一致で、Claudeの費用を使った失敗を見分ける。
+ * 先頭の後ろには、失敗の理由の列挙値(`RunClaudeFailureReason`)だけを付ける。Claudeの出力は含めない。
+ */
+export const CONFLICT_CLAUDE_FAILED_NOTE_PREFIX = `pr_fix_apply: ${conflictRoundReason("claude run failed (")}`;
+
+/** Claudeの実行の失敗を表す例外の文を作る。先頭は`CONFLICT_CLAUDE_FAILED_NOTE_PREFIX`である。 */
+export function conflictClaudeFailedMessage(reason: string): string {
+  return `${CONFLICT_CLAUDE_FAILED_NOTE_PREFIX}${reason})`;
 }
 
 /**

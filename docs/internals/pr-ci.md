@@ -887,13 +887,20 @@ Factoryのレビューの記録は要求しない。
 - `needs_human`と`blocked`(次の2行を除く): 止めた理由を保留の理由に写せればその理由で、写せなければ`fix_stopped`で保留して、結びを外す。
 - 一時の停止の注記で止まった`needs_human`と`blocked`: 保留なしで結びを外す。待てば解ける事情で止めた回に最終の保留を書くと、人が直すまで起動し直さなくなるためである。一時の停止の注記は、下の表に挙げる。
 - イメージが古い理由で止まった`blocked`: 待たずに、保留なしで結びを外す。待つと、その間は通知されず、起動もされないためである。
-- `failed`: フローの起動より前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。起動した後なら、止めた理由を保留の理由に写せればその理由で、写せなければ保留なしで結びを外す。例外で終わった回は、`getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを区別できないためである。
+- `failed`: フローの起動より前に失敗した(ジョブIDが無い)なら、保留なしで結びを外す。起動した後は、次のとおりに分ける。
+  - 注記がClaudeの実行の失敗(`pr_fix_apply: conflict round: claude run failed (`で始まる文)なら、`fix_stopped`で保留して、結びを外す。Claudeの費用を使った失敗を同じ入力で繰り返さず、人の行動が要らない通知も増やさないためである。
+  - それ以外は、止めた理由を保留の理由に写せればその理由で、写せなければ保留なしで結びを外す。`getDefaultBranch`や`git fetch`の通信の失敗のように、待てば解けるものを例外から区別できないためである。
 - `cancelled`などのほかの終端: 保留なしで結びを外す。
 
 保留なしで結びを外した回は、次の巡回で判定し直す。起動し直しを止めるのは、回数の上限である。
 
-- イメージが古い理由で止まった回と、フローの起動より前に失敗した回は、競合を直した回数に数えない。行の起動の回数(`fix_attempts`)の上限だけが止める。
-- 一時の停止の注記で止まった回と、起動した後に`failed`で終わった回は、回数の対象である。これらの繰り返しは`pr_conflict_fix_max_rounds`が止める。
+- 競合を直した回数に数えない回は、行の起動の回数(`fix_attempts`)の上限だけが止める。数えない回は、イメージが古い理由で止まった回、フローの起動より前に失敗した回、Claudeを動かす前の一時の停止で止まった回である。
+- 数える回は、`pr_conflict_fix_max_rounds`が止める。数える回は、pushの直前の一時の停止(PRのheadが動いた、worktreeを別の処理が使っている)と、起動した後に`failed`で終わった回である。
+  完了のステップの一時の停止は、状態が`needs_human`か`blocked`で、Claudeを動かした後だからである。
+
+Claudeの実行の失敗の注記は、修正ステップが投げる例外の文である。
+先頭の固定文の後ろには、失敗の理由の列挙値だけが付き、Claudeの出力は入らない。
+そのため、先頭への一致は1か所だけで、Claudeの出力が注記の先頭に入る経路は無い。
 
 保留を書く場合でも、作業項目が直していた競合の回が行の今の回と違うときは、保留を書かずに結びだけを外す。古い回の作業項目の終わり方を、新しい回の行に最終の保留として書かないためである。
 
@@ -921,14 +928,18 @@ Claudeの出力には、固定文の前に接頭辞が付く。接頭辞は「co
 | `conflict round: the conflict check is not conflicted` | 競合の行が競合でなくなった |
 | `conflict round: the conflict check is bound to another work item` | 競合の行が別の作業項目に結ばれた |
 | `conflict round: the conflict episode of the work item is over` | 競合の回が終わった |
-| `conflict round: the PR head moved while the fix was in progress` | 準備、baseのmerge、pushの直前のいずれかで、PRのheadが動いた |
+| `conflict round: the PR head moved while the fix was in progress` | 準備の時点かbaseのmerge中に、PRのheadが動いた。回数に数えない |
+| `conflict round: the PR head moved before the push` | pushの直前に、PRのheadが動いた。Claudeを動かした後なので回数に数える |
 | `conflict round: the worktree is in use by another process` | worktreeを別の処理が使っている。保持者はログに残す |
 | `conflict round: an implement flow is running on the branch` | 同じブランチで実装のフローが動いている |
 
-検証が通したツリーと、pushの直前に検査したツリーが違うときの注記は、一時の停止に数えない。
-注記は`conflict round: the tree changed after the verification`である。
-検証から完了までの間にworktreeが変わったことを表し、待っても解けないためである。
-保留の理由には写らず、`fix_stopped`になる。
+次の2つの注記は、一時の停止に数えない。
+どちらも保留の理由には写らず、`fix_stopped`になる。
+
+- `conflict round: the tree changed during the checks`: 検査コマンドの前後で、検査したツリーが違う。
+- `conflict round: the tree changed after the verification`: 検証が通したツリーと、pushの直前に検査したツリーが違う。
+
+どちらも、worktreeが書き換えられたことを表し、待っても解けないためである。
 
 ### 競合を直す作業項目と行の結び
 
@@ -962,8 +973,18 @@ Claudeの出力には、固定文の前に接頭辞が付く。接頭辞は「co
 - 状態が`failed`で、フローのジョブIDが無い作業項目。Claudeを走らせていない回で、直す機会を使い切らないためである。
 - 何も変えずに終えた作業項目。状態が`reviewed`で、その状態へ移った最新の注記が`conflict round: up_to_date`である。
 - イメージが古い理由で止まった作業項目。状態が`blocked`で、その状態へ移った最新の注記が、イメージが古い理由のどれかで始まる。Claudeを動かす前に準備が止めた回で、数えると、人がイメージを直しても回数を使い切ったままになるためである。
+- Claudeを動かす前の一時の停止で止まった作業項目。状態が`blocked`で、その状態へ移った最新の注記が、次の7つのどれかに完全一致する。待てば解ける事情で止まっただけで、Claudeの費用を使っていないためである。
+  - 競合の行が無い。
+  - 競合の行が競合でない。
+  - 競合の行が別の作業項目に結ばれた。
+  - 競合の回が終わった。
+  - 準備の時点かbaseのmerge中に、PRのheadが動いた。
+  - worktreeを別の処理が使っている。
+  - 同じブランチで実装のフローが動いている。
 
-イメージが古い理由で止まった回を数えないので、その起動の繰り返しを止めるのは、行の起動の回数の上限(`pr_conflict_fix_max_rounds`に3を足した数)だけである。
+ここに挙げた回は数えない。
+そのため、起動の繰り返しを止めるのは、行の起動の回数の上限だけである。
+上限は、`pr_conflict_fix_max_rounds`に3を足した数である。
 巡回は5分ごとなので、既定の設定でイメージの古い状態が約20〜25分を超えると、その競合の回は`rounds_exhausted`(最終の保留)として通知される。
 通知の理由は、イメージの古さを示さない。
 その後に人がイメージを直しても、その回は自動では直らない。新しい競合の回で、再び起動する。

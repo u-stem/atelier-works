@@ -2793,6 +2793,8 @@ export type PrFixPushGateDeps = {
  * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
  * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
  * 残った所有権を、workerが検査の前提を満たさず取り戻せないとき(`CheckEnvironmentError`)も、そのmessageを返す。
+ * `busyReason`を渡すと、`WorktreeBusyError`のときだけ、そのmessageを渡して得た文を返す。
+ * 呼び出し側が、保持者を含む文を固定の注記に置き換えるために使う。`CheckEnvironmentError`には使わない。
  * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
  * 最後に、準備ステップの結果にPRのブランチ(`recordedBranch`)があることを確かめ、無ければ`PR_HEAD_NOT_RECORDED_REASON`を返す。
  * `commitAndPush`の`expectedBranch`に渡す値で、無いとpushする先を確かめられないため。
@@ -2802,15 +2804,15 @@ export async function prFixPushGateReason(
   deps: PrFixPushGateDeps,
   recordedPointer: string | null,
   recordedBranch: string | null,
+  busyReason?: (holder: string) => string,
 ): Promise<string | null> {
   try {
     await deps.ensureLockFree();
   } catch (err) {
-    if (
-      err instanceof WorktreeBusyError ||
-      err instanceof CheckEnvironmentError
-    )
-      return err.message;
+    if (err instanceof WorktreeBusyError) {
+      return busyReason === undefined ? err.message : busyReason(err.message);
+    }
+    if (err instanceof CheckEnvironmentError) return err.message;
     throw err;
   }
   const pointerReason = await recordedGitPointerStopReason(
