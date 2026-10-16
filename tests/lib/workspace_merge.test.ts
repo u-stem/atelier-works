@@ -14,13 +14,16 @@ import {
   type ConflictResolutionInput,
   checkConflictResolution,
   evaluateMergedTree,
+  stripConflictMarkerLabels,
 } from "../../f/factory/lib/conflict_fix_round.ts";
 import {
   type CommandResult,
   type CommandRunner,
   CommitBlockedError,
+  type ConflictBlobs,
   type LockFs,
   listBothSidesChangedPaths,
+  listTreeChanges,
   MERGE_COMMIT_MESSAGE,
   type MergeBaseResult,
   mergeBaseIntoWorktree,
@@ -31,6 +34,7 @@ import {
   readWorktreeGitPointer,
   reconstructConflictText,
   runCommand,
+  stageConflictPathsTree,
   WorktreeGitPointerModifiedError,
   withCommitTrailers,
 } from "../../f/factory/lib/workspace.ts";
@@ -118,6 +122,7 @@ function scenario(over: Record<string, Responder> = {}): {
     diff: () => ok("1\t1\tsrc/a.ts\0"),
     "check-attr": () => ok(""),
     "cat-file": () => ok("const a = 1;\n"),
+    "merge-file": () => ok("const a = 1;\n"),
     add: () => ok(),
     commit: () => {
       committed = true;
@@ -491,6 +496,25 @@ describe("mergeBaseIntoWorktree unresolvable", () => {
     });
   });
 
+  test("a common ancestor that is larger than the cap", async () => {
+    const result = await reasonOf({
+      "cat-file": (argv) =>
+        argv.includes(BLOB_BASE) ? ok(omittedMarker(10)) : ok("x\n"),
+    });
+    expect(result).toEqual({ outcome: "unresolvable", reason: "too_large" });
+  });
+
+  test("a marker-like line in the common ancestor", async () => {
+    const result = await reasonOf({
+      "cat-file": (argv) =>
+        argv.includes(BLOB_BASE) ? ok("a\n>>>>>>> old\n") : ok("x\n"),
+    });
+    expect(result).toEqual({
+      outcome: "unresolvable",
+      reason: "marker_like_line",
+    });
+  });
+
   test("aborts the merge so the worktree is left clean", async () => {
     const fake = scenario({ diff: () => ok("-\t-\tsrc/a.ts\0") });
     await mergeBaseIntoWorktree(mergeOptions(fake.run));
@@ -504,6 +528,83 @@ describe("mergeBaseIntoWorktree unresolvable", () => {
     const fake = scenario({ diff: () => ok("-\t-\tsrc/a.ts\0") });
     await mergeBaseIntoWorktree(mergeOptions(fake.run));
     expect(callsOf(fake.calls, "commit")).toEqual([]);
+  });
+});
+
+describe("mergeBaseIntoWorktree reconstruction check", () => {
+  test("reconstructs each conflicted file with the histogram diff algorithm", async () => {
+    const fake = scenario();
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const argv = callsOf(fake.calls, "merge-file")[0]?.argv ?? [];
+    expect(argv).toContain("--diff-algorithm=histogram");
+  });
+
+  test("reads the staged blob of the conflicted path to compare", async () => {
+    const fake = scenario();
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const staged = callsOf(fake.calls, "cat-file").some((call) =>
+      call.argv.includes(":0:src/a.ts"),
+    );
+    expect(staged).toBe(true);
+  });
+
+  test("stops when the reconstruction differs from the text git wrote", async () => {
+    const fake = scenario({
+      "merge-file": () => ok("a different reconstruction\n"),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result).toEqual({
+      outcome: "unresolvable",
+      reason: "reconstruction_mismatch",
+    });
+  });
+
+  test("aborts the merge and creates no commit when the reconstruction differs", async () => {
+    const fake = scenario({
+      "merge-file": () => ok("a different reconstruction\n"),
+    });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const aborted = callsOf(fake.calls, "merge").some((call) =>
+      call.argv.includes("--abort"),
+    );
+    expect([aborted, callsOf(fake.calls, "commit")]).toEqual([true, []]);
+  });
+
+  test("ignores the labels of the marker lines when comparing", async () => {
+    const written = `a\n<<<<<<< HEAD\nB1\n||||||| abc1234\nb\n=======\nB2\n>>>>>>> ${BASE}\nc\n`;
+    const rebuilt =
+      "a\n<<<<<<< ours-check000\nB1\n||||||| base-check000\nb\n=======\nB2\n>>>>>>> theirs-check000\nc\n";
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(":0:src/a.ts") ? ok(written) : ok("const a = 1;\n"),
+      "merge-file": () => ({ ...ok(rebuilt), exitCode: 1 }),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result.outcome).toBe("merged");
+  });
+
+  test("stops when a marker line differs in more than its label", async () => {
+    const fake = scenario({
+      "cat-file": (argv) =>
+        argv.includes(":0:src/a.ts")
+          ? ok("a\n<<<<<<< HEAD\nB1\n=======\nB2\n>>>>>>> x\n")
+          : ok("const a = 1;\n"),
+      "merge-file": () =>
+        ok(
+          "a\n<<<<<<< ours-check000\nB1\n||||||| base-check000\nb\n=======\nB2\n>>>>>>> theirs-check000\n",
+        ),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result).toEqual({
+      outcome: "unresolvable",
+      reason: "reconstruction_mismatch",
+    });
+  });
+
+  test("does not reconstruct when nothing conflicts", async () => {
+    const fake = scenario({ merge: () => ok(), "ls-files": () => ok("") });
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(callsOf(fake.calls, "merge-file")).toEqual([]);
   });
 });
 
@@ -584,14 +685,26 @@ describe("mergeBaseIntoWorktree guards", () => {
     expect(callsOf(fake.calls, "merge")).toEqual([]);
   });
 
-  test("rejects when the local HEAD is not the PR head", async () => {
+  test("returns head_changed with the local sha when the local HEAD is not the PR head", async () => {
+    const other = "9".repeat(40);
+    const fake = scenario({
+      "rev-parse": (argv) =>
+        argv.includes("HEAD") ? ok(`${other}\n`) : ok(`${BASE}\n`),
+    });
+    const result = await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect(result).toEqual({ outcome: "head_changed", currentSha: other });
+  });
+
+  test("does not fetch or merge when the local HEAD is not the PR head", async () => {
     const fake = scenario({
       "rev-parse": (argv) =>
         argv.includes("HEAD") ? ok(`${"9".repeat(40)}\n`) : ok(`${BASE}\n`),
     });
-    await expect(
-      mergeBaseIntoWorktree(mergeOptions(fake.run)),
-    ).rejects.toBeInstanceOf(CommitBlockedError);
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    expect([
+      ...callsOf(fake.calls, "fetch"),
+      ...callsOf(fake.calls, "merge"),
+    ]).toEqual([]);
   });
 
   test("rejects when the baseline commit does not have the recorded parents", async () => {
@@ -775,6 +888,39 @@ describe("pushMergeCommit", () => {
     ]);
   });
 
+  test("fetches the branch with an explicit refspec that cannot resolve to a tag", async () => {
+    const fake = pushScenario();
+    await pushMergeCommit(pushOptions(fake.run));
+    const argv = callsOf(fake.calls, "fetch")[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("fetch"))).toEqual([
+      "fetch",
+      "--no-recurse-submodules",
+      "origin",
+      "--",
+      "+refs/heads/fix/branch:refs/remotes/origin/fix/branch",
+    ]);
+  });
+
+  test("leaves the index unstaged before the base is checked", async () => {
+    const fake = pushScenario({
+      "ls-remote": () =>
+        ok(`ref: refs/heads/trunk\tHEAD\n${BASE}\trefs/heads/main\n`),
+    });
+    await pushMergeCommit(pushOptions(fake.run));
+    const order = fake.calls.map((call) => subcommandOf(call.argv));
+    const reset = order.indexOf("reset");
+    expect(reset >= 0 && reset < order.indexOf("ls-remote")).toBe(true);
+  });
+
+  test("unstages exactly once after a push that was not made", async () => {
+    const fake = pushScenario({
+      "ls-remote": () =>
+        ok(`ref: refs/heads/trunk\tHEAD\n${BASE}\trefs/heads/main\n`),
+    });
+    await pushMergeCommit(pushOptions(fake.run));
+    expect(callsOf(fake.calls, "reset")).toHaveLength(1);
+  });
+
   test("every git call carries --literal-pathspecs", async () => {
     const fake = pushScenario();
     await pushMergeCommit(pushOptions(fake.run));
@@ -860,7 +1006,7 @@ describe("pushMergeCommit", () => {
     expect(callsOf(fake.calls, "commit-tree")).toEqual([]);
   });
 
-  test("unstages and rejects with the reasons when inspectStaged finds problems", async () => {
+  test("rejects with the reasons when inspectStaged finds problems", async () => {
     const fake = pushScenario();
     const pending = pushMergeCommit(
       pushOptions(fake.run, {
@@ -949,6 +1095,29 @@ describe("pushMergeCommit", () => {
       push: () =>
         fail(
           "! [remote rejected] fix/branch -> fix/branch (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
+        ),
+    });
+    const result = await pushMergeCommit(pushOptions(fake.run));
+    expect(result).toEqual({ outcome: "rejected_workflows" });
+  });
+
+  test("does not map a rejection to rejected_workflows because the branch name contains the workflows path", async () => {
+    const fake = pushScenario({
+      push: () =>
+        fail(
+          "! [remote rejected] fix/.github/workflows/x -> fix/.github/workflows/x (protected branch hook declined)",
+        ),
+    });
+    await expect(pushMergeCommit(pushOptions(fake.run))).rejects.toThrow(
+      /git push failed/,
+    );
+  });
+
+  test("maps the workflows rejection among several rejected refs", async () => {
+    const fake = pushScenario({
+      push: () =>
+        fail(
+          "! [remote rejected] a -> a (hook declined)\n! [remote rejected] fix/branch -> fix/branch (refusing to allow a Personal Access Token to create or update workflow `.github/workflows/ci.yml` without `workflow` scope)",
         ),
     });
     const result = await pushMergeCommit(pushOptions(fake.run));
@@ -1046,6 +1215,7 @@ describe("reconstructConflictText", () => {
       "--object-id",
       "-p",
       "--diff3",
+      "--diff-algorithm=histogram",
       "-L",
       "ours-abc12345",
       "-L",
@@ -1147,6 +1317,199 @@ describe("readBlobText", () => {
   });
 });
 
+describe("stageConflictPathsTree", () => {
+  function stageOptions(
+    run: CommandRunner,
+    extra: Partial<Parameters<typeof stageConflictPathsTree>[0]> = {},
+  ): Parameters<typeof stageConflictPathsTree>[0] {
+    return {
+      run,
+      worktreeDir: "/repo/wt",
+      conflictedPaths: ["src/a.ts"],
+      ...extra,
+    };
+  }
+
+  function stageFake(over: Record<string, Responder> = {}) {
+    return pushScenario(over);
+  }
+
+  test("returns the tree of the staged conflicted paths", async () => {
+    const fake = stageFake();
+    const tree = await stageConflictPathsTree(stageOptions(fake.run));
+    expect(tree).toBe(RESOLVED_TREE);
+  });
+
+  test("stages only the conflicted paths, writes the tree, then unstages", async () => {
+    const fake = stageFake();
+    await stageConflictPathsTree(stageOptions(fake.run));
+    expect(fake.calls.map((call) => subcommandOf(call.argv))).toEqual([
+      "add",
+      "write-tree",
+      "reset",
+    ]);
+  });
+
+  test("passes the paths after a double dash", async () => {
+    const fake = stageFake();
+    await stageConflictPathsTree(
+      stageOptions(fake.run, { conflictedPaths: ["src/a.ts", "src/b.ts"] }),
+    );
+    const argv = callsOf(fake.calls, "add")[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("add"))).toEqual([
+      "add",
+      "--",
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+  });
+
+  test("does not run add when there is no conflicted path", async () => {
+    const fake = stageFake();
+    await stageConflictPathsTree(
+      stageOptions(fake.run, { conflictedPaths: [] }),
+    );
+    expect(callsOf(fake.calls, "add")).toEqual([]);
+  });
+
+  test("unstages and rejects with the reasons when inspectStaged finds problems", async () => {
+    const fake = stageFake();
+    const pending = stageConflictPathsTree(
+      stageOptions(fake.run, { inspectStaged: async () => ["stop here"] }),
+    );
+    await expect(pending).rejects.toBeInstanceOf(CommitBlockedError);
+  });
+
+  test("resets the index after inspectStaged finds problems", async () => {
+    const fake = stageFake();
+    await stageConflictPathsTree(
+      stageOptions(fake.run, { inspectStaged: async () => ["stop here"] }),
+    ).catch(() => undefined);
+    expect(callsOf(fake.calls, "reset")).toHaveLength(1);
+  });
+
+  test("does not write the tree after inspectStaged finds problems", async () => {
+    const fake = stageFake();
+    await stageConflictPathsTree(
+      stageOptions(fake.run, { inspectStaged: async () => ["stop here"] }),
+    ).catch(() => undefined);
+    expect(callsOf(fake.calls, "write-tree")).toEqual([]);
+  });
+
+  test("resets the index when write-tree fails", async () => {
+    const fake = stageFake({ "write-tree": () => fail("fatal: broken", 128) });
+    await stageConflictPathsTree(stageOptions(fake.run)).catch(() => undefined);
+    expect(callsOf(fake.calls, "reset")).toHaveLength(1);
+  });
+
+  test("rejects a path that is not a safe repository path before running git", async () => {
+    const fake = stageFake();
+    await stageConflictPathsTree(
+      stageOptions(fake.run, { conflictedPaths: [".git/config"] }),
+    ).catch(() => undefined);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("passes --literal-pathspecs and no token to every git call", async () => {
+    const fake = stageFake();
+    await stageConflictPathsTree(stageOptions(fake.run));
+    const bad = fake.calls.filter(
+      (call) =>
+        !call.argv.includes("--literal-pathspecs") ||
+        call.options?.env?.GH_TOKEN !== undefined,
+    );
+    expect(bad).toEqual([]);
+  });
+});
+
+describe("listTreeChanges", () => {
+  const RAW =
+    ":100644 100644 aaaaaaa bbbbbbb M\u0000src/a.ts\u0000" +
+    ":000000 100644 0000000 ccccccc A\u0000src/new.ts\u0000" +
+    ":100755 000000 ddddddd 0000000 D\u0000bin/run\u0000" +
+    ":100644 120000 eeeeeee fffffff T\u0000link\u0000";
+
+  async function changesOf(stdout: string) {
+    const fake = readerCalls(ok(stdout));
+    return {
+      fake,
+      changes: await listTreeChanges({
+        run: fake.run,
+        worktreeDir: "/repo/wt",
+        fromSha: AUTO,
+        toTreeSha: RESOLVED_TREE,
+      }),
+    };
+  }
+
+  test("reads the path, status and mode of each changed file", async () => {
+    const { changes } = await changesOf(RAW);
+    expect(changes).toEqual([
+      {
+        path: "src/a.ts",
+        status: "modified",
+        mode: "100644",
+        addedLines: [],
+        removedLineCount: 0,
+      },
+      {
+        path: "src/new.ts",
+        status: "added",
+        mode: "100644",
+        addedLines: [],
+        removedLineCount: 0,
+      },
+      {
+        path: "bin/run",
+        status: "deleted",
+        mode: "100755",
+        addedLines: [],
+        removedLineCount: 0,
+      },
+      {
+        path: "link",
+        status: "typechange",
+        mode: "120000",
+        addedLines: [],
+        removedLineCount: 0,
+      },
+    ]);
+  });
+
+  test("returns nothing when the trees are the same", async () => {
+    const { changes } = await changesOf("");
+    expect(changes).toEqual([]);
+  });
+
+  test("compares the two trees without renames and without a pathspec", async () => {
+    const { fake } = await changesOf("");
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("--literal-pathspecs"))).toEqual([
+      "--literal-pathspecs",
+      "diff-tree",
+      "-r",
+      "-z",
+      "--no-renames",
+      "--raw",
+      AUTO,
+      RESOLVED_TREE,
+      "--",
+    ]);
+  });
+
+  test("rejects a value that is not a sha", async () => {
+    const fake = readerCalls(ok(""));
+    await expect(
+      listTreeChanges({
+        run: fake.run,
+        worktreeDir: "/repo/wt",
+        fromSha: "--stat",
+        toTreeSha: RESOLVED_TREE,
+      }),
+    ).rejects.toThrow(/invalid git SHA/);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 実際のgit
 // ---------------------------------------------------------------------------
@@ -1165,115 +1528,110 @@ type Fixture = {
   readonly git: (cwd: string, args: readonly string[]) => Promise<string>;
 };
 
-describe("merge and push (real git)", () => {
-  const roots: string[] = [];
-  afterAll(() => {
-    for (const root of roots) rmSync(root, { recursive: true, force: true });
-  });
+const fixtureRoots: string[] = [];
+afterAll(() => {
+  for (const root of fixtureRoots)
+    rmSync(root, { recursive: true, force: true });
+});
 
-  function writeFiles(dir: string, files: RepoFiles): void {
-    for (const [path, content] of Object.entries(files)) {
-      const full = join(dir, path);
-      if (content === null) {
-        rmSync(full);
-        continue;
-      }
-      mkdirSync(join(full, ".."), { recursive: true });
-      writeFileSync(full, content);
+function writeFiles(dir: string, files: RepoFiles): void {
+  for (const [path, content] of Object.entries(files)) {
+    const full = join(dir, path);
+    if (content === null) {
+      rmSync(full);
+      continue;
     }
+    mkdirSync(join(full, ".."), { recursive: true });
+    writeFileSync(full, content);
   }
+}
 
-  /**
-   * 初期のコミットから、PRのブランチとmainがそれぞれ別のファイルの変更を足した状態を作る。
-   * originはローカルのbareリポジトリで、worktreeはPRのブランチの先頭にある。
-   */
-  async function setUp(files: {
-    readonly initial: RepoFiles;
-    readonly pr: RepoFiles;
-    readonly main: RepoFiles;
-    /** trueなら、mainの変更をPRのブランチを分ける前に入れる。baseがPRの履歴に含まれる。 */
-    readonly mainBeforePr?: boolean;
-  }): Promise<Fixture> {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "merge-base-")));
-    roots.push(root);
-    const origin = join(root, "origin.git");
-    const seed = join(root, "seed");
-    const repo = join(root, "repo");
-    const worktree = join(root, "wt");
-    const home = join(root, "home");
-    mkdirSync(seed);
-    mkdirSync(home);
-    const run: CommandRunner = (argv, options) =>
-      runCommand(argv, {
-        ...options,
-        env: {
-          ...options?.env,
-          PATH: process.env.PATH ?? "",
-          HOME: home,
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_ALLOW_PROTOCOL: "https:file",
-        },
-      });
-    const git = async (
-      cwd: string,
-      args: readonly string[],
-    ): Promise<string> => {
-      const result = await run(
-        [
-          "git",
-          "-c",
-          "user.name=test",
-          "-c",
-          "user.email=test@example.invalid",
-          ...args,
-        ],
-        { cwd },
-      );
-      if (result.exitCode !== 0) {
-        throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-      }
-      return result.stdout.trim();
-    };
-    await git(root, ["init", "-q", "--bare", "-b", "main", origin]);
-    await git(seed, ["init", "-q", "-b", "main"]);
-    writeFiles(seed, files.initial);
+/**
+ * 初期のコミットから、PRのブランチとmainがそれぞれ別のファイルの変更を足した状態を作る。
+ * originはローカルのbareリポジトリで、worktreeはPRのブランチの先頭にある。
+ */
+async function realFixture(files: {
+  readonly initial: RepoFiles;
+  readonly pr: RepoFiles;
+  readonly main: RepoFiles;
+  /** trueなら、mainの変更をPRのブランチを分ける前に入れる。baseがPRの履歴に含まれる。 */
+  readonly mainBeforePr?: boolean;
+}): Promise<Fixture> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "merge-base-")));
+  fixtureRoots.push(root);
+  const origin = join(root, "origin.git");
+  const seed = join(root, "seed");
+  const repo = join(root, "repo");
+  const worktree = join(root, "wt");
+  const home = join(root, "home");
+  mkdirSync(seed);
+  mkdirSync(home);
+  const run: CommandRunner = (argv, options) =>
+    runCommand(argv, {
+      ...options,
+      env: {
+        ...options?.env,
+        PATH: process.env.PATH ?? "",
+        HOME: home,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_ALLOW_PROTOCOL: "https:file",
+      },
+    });
+  const git = async (cwd: string, args: readonly string[]): Promise<string> => {
+    const result = await run(
+      [
+        "git",
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        ...args,
+      ],
+      { cwd },
+    );
+    if (result.exitCode !== 0) {
+      throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+    }
+    return result.stdout.trim();
+  };
+  await git(root, ["init", "-q", "--bare", "-b", "main", origin]);
+  await git(seed, ["init", "-q", "-b", "main"]);
+  writeFiles(seed, files.initial);
+  await git(seed, ["add", "-A"]);
+  await git(seed, ["commit", "-q", "-m", "init"]);
+  await git(seed, ["remote", "add", "origin", origin]);
+  await git(seed, ["push", "-q", "origin", "main"]);
+  const commitMain = async (): Promise<void> => {
+    writeFiles(seed, files.main);
     await git(seed, ["add", "-A"]);
-    await git(seed, ["commit", "-q", "-m", "init"]);
-    await git(seed, ["remote", "add", "origin", origin]);
+    await git(seed, ["commit", "-q", "-m", "main"]);
     await git(seed, ["push", "-q", "origin", "main"]);
-    const commitMain = async (): Promise<void> => {
-      writeFiles(seed, files.main);
-      await git(seed, ["add", "-A"]);
-      await git(seed, ["commit", "-q", "-m", "main"]);
-      await git(seed, ["push", "-q", "origin", "main"]);
-    };
-    if (files.mainBeforePr === true) await commitMain();
-    await git(seed, ["checkout", "-q", "-b", "fix/branch"]);
-    writeFiles(seed, files.pr);
-    await git(seed, ["add", "-A"]);
-    await git(seed, ["commit", "-q", "-m", "pr"]);
-    await git(seed, ["push", "-q", "origin", "fix/branch"]);
-    await git(seed, ["checkout", "-q", "main"]);
-    if (files.mainBeforePr !== true) await commitMain();
-    await git(root, ["clone", "-q", "--no-checkout", origin, repo]);
-    await git(repo, [
-      "branch",
-      "--no-track",
-      "fix/branch",
-      "origin/fix/branch",
-    ]);
-    await git(repo, ["worktree", "add", "-q", worktree, "fix/branch"]);
-    return {
-      root,
-      repo,
-      worktree,
-      home,
-      prHead: await git(repo, ["rev-parse", "origin/fix/branch"]),
-      baseSha: await git(repo, ["rev-parse", "origin/main"]),
-      run,
-      git,
-    };
-  }
+  };
+  if (files.mainBeforePr === true) await commitMain();
+  await git(seed, ["checkout", "-q", "-b", "fix/branch"]);
+  writeFiles(seed, files.pr);
+  await git(seed, ["add", "-A"]);
+  await git(seed, ["commit", "-q", "-m", "pr"]);
+  await git(seed, ["push", "-q", "origin", "fix/branch"]);
+  await git(seed, ["checkout", "-q", "main"]);
+  if (files.mainBeforePr !== true) await commitMain();
+  await git(root, ["clone", "-q", "--no-checkout", origin, repo]);
+  await git(repo, ["branch", "--no-track", "fix/branch", "origin/fix/branch"]);
+  await git(repo, ["worktree", "add", "-q", worktree, "fix/branch"]);
+  return {
+    root,
+    repo,
+    worktree,
+    home,
+    prHead: await git(repo, ["rev-parse", "origin/fix/branch"]),
+    baseSha: await git(repo, ["rev-parse", "origin/main"]),
+    run,
+    git,
+  };
+}
+
+describe("merge and push (real git)", () => {
+  const setUp = realFixture;
 
   async function mergeOf(fixture: Fixture): Promise<MergeBaseResult> {
     const pointer = (await readWorktreeGitPointer(fixture.worktree)).content;
@@ -1349,7 +1707,7 @@ describe("merge and push (real git)", () => {
     expect(blobs[0]?.oursBlob).toBe(ours);
   });
 
-  test("the local branch points at the baseline commit and the worktree is clean", async () => {
+  test("the worktree is clean after the baseline commit", async () => {
     const fixture = await setUp(CONFLICT);
     await mergeOf(fixture);
     const status = await fixture.git(fixture.worktree, [
@@ -1411,7 +1769,7 @@ describe("merge and push (real git)", () => {
     expect(result).toEqual({ outcome: "up_to_date", baseSha: fixture.baseSha });
   });
 
-  test("a binary conflict is unresolvable and leaves the worktree clean", async () => {
+  test("a binary conflict is unresolvable", async () => {
     const fixture = await setUp({
       initial: { "img.bin": "a\0b\n" },
       pr: { "img.bin": "a\0pr\n" },
@@ -1705,6 +2063,125 @@ describe("merge and push (real git)", () => {
     expect(result.outcome).toBe("pushed");
   });
 
+  test("pushes when the remote has a tag with the same name as the branch", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    // 短い名前のfetchなら、リモートのタグが先に解決され、追跡refが作られない。
+    const origin = join(fixture.root, "origin.git");
+    await fixture.git(origin, ["tag", "fix/branch", fixture.baseSha]);
+    await fixture.git(fixture.repo, [
+      "update-ref",
+      "-d",
+      "refs/remotes/origin/fix/branch",
+    ]);
+    const result = await pushOf(fixture, merged, tree);
+    expect(result.outcome).toBe("pushed");
+  });
+
+  test("stageConflictPathsTree returns the tree that holds the resolved file", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    writeFileSync(join(fixture.worktree, "a.txt"), RESOLVED);
+    const tree = await stageConflictPathsTree({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      conflictedPaths: merged.conflictedPaths,
+      home: fixture.home,
+    });
+    const text = await readTreeFileText({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      treeSha: tree,
+      filePath: "a.txt",
+      home: fixture.home,
+    });
+    expect(text).toBe(RESOLVED);
+  });
+
+  test("stageConflictPathsTree leaves nothing staged", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    writeFileSync(join(fixture.worktree, "a.txt"), RESOLVED);
+    await stageConflictPathsTree({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      conflictedPaths: merged.conflictedPaths,
+      home: fixture.home,
+    });
+    const staged = await fixture.git(fixture.worktree, [
+      "diff",
+      "--cached",
+      "--name-only",
+    ]);
+    expect(staged).toBe("");
+  });
+
+  test("stageConflictPathsTree ignores a stray file the resolution left behind", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    writeFileSync(join(fixture.worktree, "a.txt"), RESOLVED);
+    writeFileSync(join(fixture.worktree, "stray.txt"), "stray\n");
+    const tree = await stageConflictPathsTree({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      conflictedPaths: merged.conflictedPaths,
+      home: fixture.home,
+    });
+    const names = await fixture.git(fixture.worktree, [
+      "ls-tree",
+      "-r",
+      "--name-only",
+      tree,
+    ]);
+    expect(names.split("\n")).toEqual(["a.txt", "keep.txt"]);
+  });
+
+  test("listTreeChanges lists only the resolved file between the baseline and the pushed tree", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    writeFileSync(join(fixture.worktree, "a.txt"), RESOLVED);
+    const tree = await stageConflictPathsTree({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      conflictedPaths: merged.conflictedPaths,
+      home: fixture.home,
+    });
+    const changes = await listTreeChanges({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      fromSha: merged.autoSha,
+      toTreeSha: tree,
+      home: fixture.home,
+    });
+    expect(changes.map((change) => [change.path, change.status])).toEqual([
+      ["a.txt", "modified"],
+    ]);
+  });
+
+  test("the changes of the pushed tree feed the checker", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    writeFileSync(join(fixture.worktree, "a.txt"), RESOLVED);
+    const tree = await stageConflictPathsTree({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      conflictedPaths: merged.conflictedPaths,
+      home: fixture.home,
+    });
+    const changes = await listTreeChanges({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      fromSha: merged.autoSha,
+      toTreeSha: tree,
+      home: fixture.home,
+    });
+    const input = await inputFor(fixture, merged, RESOLVED);
+    expect(checkConflictResolution({ ...input, changes })).toEqual({
+      ok: true,
+    });
+  });
+
   const NONCE = "r3al0nce9";
 
   /** 実際のmergeの結果から、解消の検査の入力を作る。 */
@@ -1869,6 +2346,260 @@ describe("merge and push (real git)", () => {
         bothSides: listed,
       }),
     ).toEqual({ ok: true });
+  });
+});
+
+/**
+ * `}`や空行が繰り返す本文に、両側が別々の行を足したり消したりした入力を作る。
+ * 乱数は固定の種から決まる線形合同法で、実行のたびに同じ3つのファイルになる。
+ * この入力では、gitがmergeで使うhistogramの差分と、`merge-file`の既定のMyersの差分が、
+ * 衝突ブロックの境目の位置で食い違う。
+ */
+function repeatedBraceFiles(): {
+  readonly initial: string;
+  readonly pr: string;
+  readonly main: string;
+} {
+  const pool = [
+    "}",
+    "",
+    "  return;",
+    "if (x) {",
+    "  y();",
+    "  z();",
+    "} else {",
+    "end;",
+  ];
+  let seed = 7;
+  const next = (): number => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed >> 8;
+  };
+  const pick = (): string => pool[next() % pool.length] ?? "";
+  const baseLines = Array.from({ length: 60 }, pick);
+  const variant = (tag: string): string => {
+    const lines = [...baseLines];
+    const edits = 6 + (next() % 6);
+    for (let e = 0; e < edits; e += 1) {
+      const at = next() % lines.length;
+      const kind = next() % 3;
+      if (kind === 0) lines[at] = `${tag}${next() % 5}`;
+      else if (kind === 1) lines.splice(at, 0, pick(), `${tag}n${next() % 5}`);
+      else lines.splice(at, 1);
+    }
+    return `${lines.join("\n")}\n`;
+  };
+  return {
+    initial: `${baseLines.join("\n")}\n`,
+    pr: variant("p"),
+    main: variant("m"),
+  };
+}
+
+describe("conflict block reconstruction (real git)", () => {
+  async function fixtureFor(files: {
+    readonly initial: string;
+    readonly pr: string;
+    readonly main: string;
+    readonly path?: string;
+  }) {
+    const path = files.path ?? "f.ts";
+    return realFixture({
+      initial: { [path]: files.initial },
+      pr: { [path]: files.pr },
+      main: { [path]: files.main },
+    });
+  }
+
+  type Setup = Awaited<ReturnType<typeof realFixture>>;
+
+  async function mergedBlobs(fixture: Setup) {
+    const pointer = (await readWorktreeGitPointer(fixture.worktree)).content;
+    const result = await mergeBaseIntoWorktree({
+      run: fixture.run,
+      repoDir: fixture.repo,
+      dir: fixture.worktree,
+      branch: "fix/branch",
+      worktreeGitPointer: pointer,
+      prHeadSha: fixture.prHead,
+      baseBranch: "main",
+      author: AUTHOR,
+      ghToken: "gh-token",
+      home: fixture.home,
+      lockFs: createInMemoryLockFs(),
+    });
+    return result;
+  }
+
+  /** `merge-file`を、差分のアルゴリズムの指定を足して(または外して)blobに直接実行する。 */
+  async function mergeFileText(
+    fixture: Setup,
+    blobs: ConflictBlobs,
+    algorithm: string | null,
+  ): Promise<string> {
+    const result = await fixture.run(
+      [
+        "git",
+        "merge-file",
+        "--object-id",
+        "-p",
+        "--diff3",
+        ...(algorithm === null ? [] : [`--diff-algorithm=${algorithm}`]),
+        "-L",
+        "o",
+        "-L",
+        "b",
+        "-L",
+        "t",
+        "--",
+        blobs.oursBlob,
+        blobs.baseBlob,
+        blobs.theirsBlob,
+      ],
+      { cwd: fixture.worktree },
+    );
+    return result.stdout;
+  }
+
+  test("the blocks git wrote differ from the Myers reconstruction", async () => {
+    const fixture = await fixtureFor(repeatedBraceFiles());
+    const merged = await mergedBlobs(fixture);
+    const blobs =
+      merged.outcome === "merged" ? merged.conflictBlobs[0] : undefined;
+    if (blobs === undefined) throw new Error(`not merged: ${merged.outcome}`);
+    const written = readFileSync(join(fixture.worktree, "f.ts"), "utf8");
+    const myers = await mergeFileText(fixture, blobs, null);
+    expect(stripConflictMarkerLabels(myers)).not.toBe(
+      stripConflictMarkerLabels(written),
+    );
+  });
+
+  test("the blocks git wrote equal the histogram reconstruction", async () => {
+    const fixture = await fixtureFor(repeatedBraceFiles());
+    const merged = await mergedBlobs(fixture);
+    const blobs =
+      merged.outcome === "merged" ? merged.conflictBlobs[0] : undefined;
+    if (blobs === undefined) throw new Error(`not merged: ${merged.outcome}`);
+    const written = readFileSync(join(fixture.worktree, "f.ts"), "utf8");
+    const rebuilt = await reconstructConflictText({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      blobs,
+      nonce: "h1stogram9",
+    });
+    expect(stripConflictMarkerLabels(rebuilt)).toBe(
+      stripConflictMarkerLabels(written),
+    );
+  });
+
+  test("the early check lets the histogram reconstruction through", async () => {
+    const fixture = await fixtureFor(repeatedBraceFiles());
+    const merged = await mergedBlobs(fixture);
+    expect(merged.outcome).toBe("merged");
+  });
+
+  test("the early check stops the run when merge-file falls back to Myers", async () => {
+    const fixture = await fixtureFor(repeatedBraceFiles());
+    const withoutAlgorithm: CommandRunner = (argv, options) =>
+      fixture.run(
+        argv.filter((word) => !word.startsWith("--diff-algorithm=")),
+        options,
+      );
+    const pointer = (await readWorktreeGitPointer(fixture.worktree)).content;
+    const result = await mergeBaseIntoWorktree({
+      run: withoutAlgorithm,
+      repoDir: fixture.repo,
+      dir: fixture.worktree,
+      branch: "fix/branch",
+      worktreeGitPointer: pointer,
+      prHeadSha: fixture.prHead,
+      baseBranch: "main",
+      author: AUTHOR,
+      ghToken: "gh-token",
+      home: fixture.home,
+      lockFs: createInMemoryLockFs(),
+    });
+    expect(result).toEqual({
+      outcome: "unresolvable",
+      reason: "reconstruction_mismatch",
+    });
+  });
+
+  test("the worktree is clean after the early check stops the run", async () => {
+    const fixture = await fixtureFor(repeatedBraceFiles());
+    const withoutAlgorithm: CommandRunner = (argv, options) =>
+      fixture.run(
+        argv.filter((word) => !word.startsWith("--diff-algorithm=")),
+        options,
+      );
+    const pointer = (await readWorktreeGitPointer(fixture.worktree)).content;
+    await mergeBaseIntoWorktree({
+      run: withoutAlgorithm,
+      repoDir: fixture.repo,
+      dir: fixture.worktree,
+      branch: "fix/branch",
+      worktreeGitPointer: pointer,
+      prHeadSha: fixture.prHead,
+      baseBranch: "main",
+      author: AUTHOR,
+      ghToken: "gh-token",
+      home: fixture.home,
+      lockFs: createInMemoryLockFs(),
+    });
+    const status = await fixture.git(fixture.worktree, [
+      "status",
+      "--porcelain",
+    ]);
+    expect(status).toBe("");
+  });
+
+  const CRLF_CONFLICT = {
+    initial: "one\r\ntwo\r\nthree\r\n",
+    pr: "one\r\nPR\r\nthree\r\n",
+    main: "one\r\nMAIN\r\nthree\r\n",
+  } as const;
+
+  test("git writes the markers of a CRLF file with CRLF", async () => {
+    const fixture = await fixtureFor(CRLF_CONFLICT);
+    await mergedBlobs(fixture);
+    const written = readFileSync(join(fixture.worktree, "f.ts"), "utf8");
+    expect(written).toContain("<<<<<<< HEAD\r\n");
+  });
+
+  test("a CRLF conflict passes the early check", async () => {
+    const fixture = await fixtureFor(CRLF_CONFLICT);
+    const merged = await mergedBlobs(fixture);
+    expect(merged.outcome).toBe("merged");
+  });
+
+  test("a CRLF conflict can be checked and its resolution is accepted", async () => {
+    const fixture = await fixtureFor(CRLF_CONFLICT);
+    const merged = await mergedBlobs(fixture);
+    const blobs =
+      merged.outcome === "merged" ? merged.conflictBlobs[0] : undefined;
+    if (blobs === undefined) throw new Error(`not merged: ${merged.outcome}`);
+    const read = (sha: string) =>
+      readBlobText({ run: fixture.run, worktreeDir: fixture.worktree, sha });
+    const verdict = checkConflictResolution({
+      nonce: "crlf00000",
+      changes: [],
+      files: [
+        {
+          path: blobs.path,
+          base: await read(blobs.baseBlob),
+          ours: await read(blobs.oursBlob),
+          theirs: await read(blobs.theirsBlob),
+          reconstructed: await reconstructConflictText({
+            run: fixture.run,
+            worktreeDir: fixture.worktree,
+            blobs,
+            nonce: "crlf00000",
+          }),
+          result: "one\r\nPR and MAIN\r\nthree\r\n",
+        },
+      ],
+    });
+    expect(verdict).toEqual({ ok: true });
   });
 });
 

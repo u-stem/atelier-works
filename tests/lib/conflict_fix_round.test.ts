@@ -3,7 +3,6 @@ import type { CiFixChange } from "../../f/factory/lib/ci_fix_paths.ts";
 import {
   CONFLICT_FIX_SKILL_MARKER,
   CONFLICT_ROUND_DETAILS,
-  CONFLICT_ROUND_REASON_PREFIX,
   type ConflictFileInput,
   type ConflictResolutionVerdict,
   checkConflictResolution,
@@ -14,6 +13,7 @@ import {
   evaluateMergedTree,
   hasConflictFixSkillMarker,
   isConflictRound,
+  stripConflictMarkerLabels,
 } from "../../f/factory/lib/conflict_fix_round.ts";
 
 describe("isConflictRound", () => {
@@ -51,12 +51,6 @@ describe("conflictRoundReason", () => {
     expect(conflictRoundReason(CONFLICT_ROUND_DETAILS.protectedPath)).toBe(
       "conflict round: a conflicted path is protected",
     );
-  });
-
-  test("starts every reason with the exported prefix", () => {
-    expect(
-      conflictRoundReason("x").startsWith(CONFLICT_ROUND_REASON_PREFIX),
-    ).toBe(true);
   });
 });
 
@@ -396,6 +390,93 @@ describe("checkConflictResolution markers", () => {
       result: "a\n<<<<<<< ours-other\nB1\n>>>>>>> theirs-other\nc\n",
     });
     expect(codesOf(check([file]))).toContain("marker_left");
+  });
+});
+
+describe("checkConflictResolution with CRLF lines", () => {
+  /** gitは、CRLFのファイルのマーカー行も`\r\n`で書く。 */
+  const crlf = (text: string): string => text.replaceAll("\n", "\r\n");
+
+  const CRLF_FILE: FileSpec = {
+    base: crlf("a\nb\nc\n"),
+    ours: crlf("a\nB1\nc\n"),
+    theirs: crlf("a\nB2\nc\n"),
+    reconstructed: crlf(`a\n${block("B1", "b", "B2")}\nc\n`),
+    result: crlf("a\nB1\nc\n"),
+  };
+
+  test("accepts a resolution of a file whose markers end in CRLF", () => {
+    expect(check([fileOf(CRLF_FILE)])).toEqual({ ok: true });
+  });
+
+  test("accepts keeping both sides in a CRLF file", () => {
+    const file = fileOf({ ...CRLF_FILE, result: crlf("a\nB1\nB2\nc\n") });
+    expect(check([file])).toEqual({ ok: true });
+  });
+
+  test("rejects a CRLF file where the ours marker remains", () => {
+    const file = fileOf({
+      ...CRLF_FILE,
+      result: crlf(`a\n<<<<<<< ours-${NONCE}\nB1\nc\n`),
+    });
+    expect(codesOf(check([file]))).toContain("marker_left");
+  });
+
+  test("rejects a changed line outside the block of a CRLF file", () => {
+    const file = fileOf({ ...CRLF_FILE, result: crlf("A\nB1\nc\n") });
+    expect(codesOf(check([file]))).toEqual(["not_in_conflict_block"]);
+  });
+});
+
+describe("checkConflictResolution search budget", () => {
+  /** ブロックが隣り合い、結果が最後の行に届かない入力。重ねる探索が尽きるまで試し続ける。 */
+  function heavyFile(): ConflictFileInput {
+    const blocks = Array.from({ length: 150 }, () => block("o", "b", "t"));
+    return fileOf({
+      ...STANDARD,
+      reconstructed: `${blocks.join("\n")}\nend\n`,
+      result: "x\n".repeat(2500),
+    });
+  }
+
+  test("stops with a fixed violation instead of searching without end", () => {
+    expect(codesOf(check([heavyFile()]))).toEqual([
+      "alignment_budget_exceeded",
+    ]);
+  });
+
+  test("finishes the heavy input quickly", () => {
+    const startedAt = Date.now();
+    check([heavyFile()]);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+});
+
+describe("stripConflictMarkerLabels", () => {
+  test("drops the label of each marker line", () => {
+    const text =
+      "a\n<<<<<<< HEAD\nx\n||||||| 1234abc\ny\n=======\nz\n>>>>>>> deadbeef\nb\n";
+    expect(stripConflictMarkerLabels(text)).toBe(
+      "a\n<<<<<<<\nx\n|||||||\ny\n=======\nz\n>>>>>>>\nb\n",
+    );
+  });
+
+  test("keeps the carriage return of a CRLF marker line", () => {
+    expect(stripConflictMarkerLabels("<<<<<<< HEAD\r\nx\r\n")).toBe(
+      "<<<<<<<\r\nx\r\n",
+    );
+  });
+
+  test("keeps a line that only looks like a marker with more characters", () => {
+    expect(stripConflictMarkerLabels("<<<<<<<< x\n")).toBe("<<<<<<<< x\n");
+  });
+
+  test("makes the labels of git and of the reconstruction equal", () => {
+    const git = `a\n<<<<<<< HEAD\nB1\n||||||| abc123\nb\n=======\nB2\n>>>>>>> ${"f".repeat(40)}\nc\n`;
+    const rebuilt = `a\n${block("B1", "b", "B2")}\nc\n`;
+    expect(stripConflictMarkerLabels(git)).toBe(
+      stripConflictMarkerLabels(rebuilt),
+    );
   });
 });
 

@@ -80,6 +80,15 @@ export function hasConflictMarkerLikeLine(text: string): boolean {
   return /^(?:<{7}|>{7}|\|{7}|={7})(?:[ \t]|\r?$)/m.test(text);
 }
 
+/**
+ * 衝突マーカー行のラベル(`<<<<<<< HEAD`の`HEAD`など)を取り除く。行末の改行は残す。
+ * gitがmergeで書いたラベルと、`merge-file`の`-L`で付けたラベルは別の文字列なので、
+ * 本文の食い違いを調べる前に、ラベルの違いだけを消すために使う。
+ */
+export function stripConflictMarkerLabels(text: string): string {
+  return text.replace(/^(<{7}|>{7}|\|{7})(?: [^\r\n]*)?(?=\r?$)/gm, "$1");
+}
+
 // ---------------------------------------------------------------------------
 // マージ結果のツリーの検査
 // ---------------------------------------------------------------------------
@@ -198,6 +207,7 @@ export type ConflictResolutionInput = {
  * - `too_large`: 行数が多すぎて照合できない。
  * - `reconstruction_failed`: 作り直した本文のブロックが読めない。
  * - `not_in_conflict_block`: 衝突ブロックの外の行を変えた。
+ * - `alignment_budget_exceeded`: 解消後の行を作り直した形に重ねる探索が、回数の上限に達した。安全側の失敗である。
  * - `reordered`: ブロックの中で、片側の行の順序を入れ替えた。
  * - `weakens_checks`: 新しく足した行が検査を弱める。
  * - `unknown_import`: 新しく足した行が、どちらの版も読み込まないモジュールを読み込む。
@@ -214,6 +224,7 @@ export type ConflictViolationCode =
   | "too_large"
   | "reconstruction_failed"
   | "not_in_conflict_block"
+  | "alignment_budget_exceeded"
   | "reordered"
   | "weakens_checks"
   | "unknown_import"
@@ -231,6 +242,13 @@ export type ConflictResolutionVerdict =
 
 /** 1ファイルの行数の上限。超えたら照合せずに止める。 */
 const MAX_RESOLUTION_LINES = 20_000;
+
+/**
+ * 解消後の行を作り直した形に重ねる探索の、回数の上限。
+ * ブロックが隣り合い、行数が多い入力では、探索の回数が行数の2乗に比例して増える。
+ * 上限に達したら重ねられなかったものとして止め、検査の時間を有界にする。
+ */
+const ALIGNMENT_STEP_BUDGET = 1_000_000;
 
 const SYMLINK_MODE = "120000";
 const REGULAR_FILE_MODES: readonly string[] = ["100644", "100755"];
@@ -267,7 +285,10 @@ function parseReconstruction(
   const oursMarker = `<<<<<<< ${labels.ours}`;
   const baseMarker = `||||||| ${labels.base}`;
   const theirsMarker = `>>>>>>> ${labels.theirs}`;
-  for (const line of text.split("\n")) {
+  for (const raw of text.split("\n")) {
+    // CRLFのファイルでは、gitはマーカー行も`\r\n`で書く。境目の判定では行末の`\r`を見ない。
+    // ブロックの中の行は、`\r`を含めたまま持ち、解消後の行と1行ずつ比べる。
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
     if (section === "context") {
       if (line === oursMarker) {
         segments.push({ kind: "context", lines: context });
@@ -275,19 +296,19 @@ function parseReconstruction(
         section = "ours";
       } else if (line === baseMarker || line === theirsMarker) {
         return null;
-      } else if (hasConflictMarkerLikeLine(line)) {
+      } else if (hasConflictMarkerLikeLine(raw)) {
         return null;
       } else {
-        context.push(line);
+        context.push(raw);
       }
     } else if (section === "ours") {
       if (line === baseMarker) section = "base";
       else if (line === oursMarker || line === theirsMarker) return null;
-      else ours.push(line);
+      else ours.push(raw);
     } else if (section === "base") {
       if (line === "=======") section = "theirs";
       else if (line === oursMarker || line === baseMarker) return null;
-      else base.push(line);
+      else base.push(raw);
     } else if (line === theirsMarker) {
       segments.push({ kind: "block", ours, base, theirs });
       ours = [];
@@ -297,7 +318,7 @@ function parseReconstruction(
     } else if (line === oursMarker || line === baseMarker) {
       return null;
     } else {
-      theirs.push(line);
+      theirs.push(raw);
     }
   }
   if (section !== "context") return null;
@@ -319,17 +340,26 @@ function matchesAt(
   return expected.every((line, index) => lines[position + index] === line);
 }
 
+/** 探索の回数が上限に達したことを、再帰の外へ伝える内部の例外。 */
+class AlignmentBudgetExceeded extends Error {}
+
 /**
  * 解消後の行を、作り直した形の区分に重ねる。ブロックの外の行は、1行ずつ同じでなければならない。
  * ブロックの中の解消は、次の区分の行が始まる最も手前で終わるものとする。
- * 重ねられなければ`null`を返す。
+ * 重ねられなければ`null`を、探索の回数が`ALIGNMENT_STEP_BUDGET`に達したら`"budget_exceeded"`を返す。
  */
 function alignResolution(
   segments: readonly ConflictSegment[],
   lines: readonly string[],
-): BlockResolution[] | null {
+): BlockResolution[] | null | "budget_exceeded" {
   const failed = new Set<number>();
+  let steps = 0;
+  const spend = (): void => {
+    steps += 1;
+    if (steps > ALIGNMENT_STEP_BUDGET) throw new AlignmentBudgetExceeded();
+  };
   const solve = (index: number, position: number): BlockResolution[] | null => {
+    spend();
     if (index === segments.length) {
       return position === lines.length ? [] : null;
     }
@@ -347,6 +377,7 @@ function alignResolution(
         end <= lines.length && found === null;
         end += 1
       ) {
+        spend();
         const rest = solve(index + 1, end);
         if (rest !== null) {
           found = [
@@ -359,7 +390,12 @@ function alignResolution(
     if (found === null) failed.add(key);
     return found;
   };
-  return solve(0, 0);
+  try {
+    return solve(0, 0);
+  } catch (err) {
+    if (err instanceof AlignmentBudgetExceeded) return "budget_exceeded";
+    throw err;
+  }
 }
 
 /** `lines`が、`source`の部分列(順序を保って、同じ行を重ねて使わない)か。 */
@@ -418,6 +454,7 @@ function contentViolationsOf(
   const segments = parseReconstruction(file.reconstructed, labels);
   if (segments === null) return ["reconstruction_failed"];
   const resolutions = alignResolution(segments, resultLines);
+  if (resolutions === "budget_exceeded") return ["alignment_budget_exceeded"];
   if (resolutions === null) return ["not_in_conflict_block"];
 
   const codes = new Set<ConflictViolationCode>();
