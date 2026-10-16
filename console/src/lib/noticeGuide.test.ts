@@ -66,6 +66,14 @@ describe("noticeGuide", () => {
     expect(noticeGuide("pr_ci_failed").note).toContain("直せた失敗");
   });
 
+  test("tells which settings to review for the time setting misfit", () => {
+    expect(noticeGuide("config_misfit").action).toContain("claude_timeout_sec");
+  });
+
+  test("tells that the time setting misfit is resolved once the settings fit", () => {
+    expect(noticeGuide("config_misfit").note).toContain("自動で解決");
+  });
+
   test("tells which permission the denied pull request CI check needs", () => {
     expect(noticeGuide("pr_ci_check_denied").action).toContain("Actions: Read");
   });

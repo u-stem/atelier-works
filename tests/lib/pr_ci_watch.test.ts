@@ -35,6 +35,8 @@ import {
   UNHELD_FAILURE_NOTICE_AFTER_MS,
 } from "../../f/factory/lib/pr_ci_notify.ts";
 import {
+  CONFIG_MISFIT_KIND,
+  configMisfitNoticeMessage,
   type FactoryWorkItemRef,
   PR_CI_FAILED_KIND,
   type PrCiFixHoldReason,
@@ -5516,5 +5518,131 @@ describe("the resolution of the older notices when it fails", () => {
     });
     await runPrCiWatch(h.deps);
     expect(failureNoticeResolutions(h)).toEqual([]);
+  });
+});
+
+describe("notifying the time setting misfit once for the whole config", () => {
+  const MISFIT = "pr_fix time settings do not fit the flow step timeout";
+  const misfitRow = (id: number, prNumber: number): PrCiCheck =>
+    row({
+      id,
+      pr_number: prNumber,
+      state: "failed",
+      first_seen_at: minutesBefore(300),
+      updated_at: minutesBefore(31),
+      fix_hold_reason: "config_misfit",
+    });
+  /** 種類と本文が同じ未解決のnoticeを重ねない、DBと同じ挙動の`addNotice`。 */
+  const uniqueNotices = () => {
+    const seen = new Set<string>();
+    return async (record: NoticeRecord): Promise<number | null> => {
+      const key = `${record.kind}\n${record.message}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return seen.size;
+    };
+  };
+  const misfitSetup = (
+    rows: PrCiCheck[],
+    configMisfit: string | null = MISFIT,
+    overrides: Setup = {},
+  ): Setup => {
+    const c = claimHarness({ candidates: [], configMisfit });
+    return {
+      unnotified: rows,
+      policy: FIX_POLICY,
+      ...overrides,
+      override: { claim: c.deps, ...overrides.override },
+    };
+  };
+
+  test("adds the same notice for the rows of different pull requests", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12), misfitRow(10, 13)]));
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([
+      { kind: CONFIG_MISFIT_KIND, message: configMisfitNoticeMessage() },
+      { kind: CONFIG_MISFIT_KIND, message: configMisfitNoticeMessage() },
+    ]);
+  });
+
+  test("adds no per pull request notice", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12), misfitRow(10, 13)]));
+    await runPrCiWatch(h.deps);
+    expect(
+      h.notices.filter((notice) => notice.kind === PR_CI_FAILED_KIND),
+    ).toEqual([]);
+  });
+
+  test("sends one Discord message for the rows of different pull requests", async () => {
+    const h = harness(
+      misfitSetup([misfitRow(9, 12), misfitRow(10, 13)], MISFIT, {
+        override: { addNotice: uniqueNotices() },
+      }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.discord).toHaveLength(1);
+  });
+
+  test("marks the reason of every row as notified", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12), misfitRow(10, 13)]));
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([
+      { id: 9, reason: "ci_failure" },
+      { id: 10, reason: "ci_failure" },
+    ]);
+  });
+
+  test("leaves a row alone when the time settings fit again", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12)], null));
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("resolves the notice once the time settings fit", async () => {
+    const h = harness(misfitSetup([], null));
+    await runPrCiWatch(h.deps);
+    expect(h.resolved).toContainEqual({
+      kind: CONFIG_MISFIT_KIND,
+      prefix: "",
+      by: PR_CI_RESOLVED_BY,
+    });
+  });
+
+  test("keeps the notice while the time settings still do not fit", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12)]));
+    await runPrCiWatch(h.deps);
+    expect(
+      h.resolved.filter((entry) => entry.kind === CONFIG_MISFIT_KIND),
+    ).toEqual([]);
+  });
+
+  test("resolves the notice when the automatic fix is not running", async () => {
+    const h = harness({ policy: FIX_POLICY });
+    await runPrCiRecovery(h.deps);
+    expect(h.resolved).toContainEqual({
+      kind: CONFIG_MISFIT_KIND,
+      prefix: "",
+      by: PR_CI_RESOLVED_BY,
+    });
+  });
+
+  test("still notifies the other rows when the resolution fails", async () => {
+    const h = harness(
+      misfitSetup(
+        [
+          row({
+            id: 9,
+            state: "failed",
+            first_seen_at: minutesBefore(300),
+            updated_at: minutesBefore(1),
+            fix_hold_reason: "rounds_exhausted",
+          }),
+        ],
+        null,
+        { resolveFailsFor: [CONFIG_MISFIT_KIND] },
+      ),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.marked).toEqual([{ id: 9, reason: "ci_failure" }]);
   });
 });

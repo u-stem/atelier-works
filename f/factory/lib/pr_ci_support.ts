@@ -467,6 +467,14 @@ export function prCiFailedNoticeMessage(input: PrCiFailedNoticeInput): string {
   return `${head}。自動修正の保留: ${input.hold}。次の操作: ${prCiFixHoldInfo(input.hold).nextAction}。実行: ${input.link}`;
 }
 
+/** 時間設定の不整合を、設定全体で1件にまとめて知らせるnoticeの種類。 */
+export const CONFIG_MISFIT_KIND = "";
+
+/** 時間設定の不整合のnoticeの本文。 */
+export function configMisfitNoticeMessage(): string {
+  return "";
+}
+
 // ---------------------------------------------------------------------------
 // 失敗を直す作業の保留の理由
 // ---------------------------------------------------------------------------
