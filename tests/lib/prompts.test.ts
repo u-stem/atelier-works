@@ -234,6 +234,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -250,6 +251,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -267,6 +269,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -282,6 +285,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -297,6 +301,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -312,6 +317,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -327,6 +333,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -344,6 +351,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -363,6 +371,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -380,6 +389,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -395,6 +405,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -411,6 +422,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -428,6 +440,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [{ path: "a.ts", line: 10, body: "null check missing" }],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -446,6 +459,7 @@ describe("reviewPrompt", () => {
         requirements: null,
         openFindings: [],
         ciRoundDiff: false,
+        binaryFiles: [],
       },
       FIXED_UUID,
     );
@@ -462,6 +476,7 @@ describe("reviewPrompt", () => {
           requirements: null,
           openFindings: [],
           ciRoundDiff,
+          binaryFiles: [],
         },
         FIXED_UUID,
       );
@@ -506,6 +521,75 @@ describe("reviewPrompt", () => {
       const lastOpen = prompt.lastIndexOf("<<<DATA-test-nonce", index);
       const lastClose = prompt.lastIndexOf(">>>DATA-test-nonce", index);
       expect(lastClose).toBeGreaterThan(lastOpen);
+    });
+  });
+
+  describe("binaryFiles", () => {
+    const BINARY_FENCE = "<<<DATA-test-nonce (binary files)";
+    const withBinary = (binaryFiles: readonly string[]) =>
+      reviewPrompt(
+        {
+          pr: PR,
+          diff: "+const x = 1;",
+          changedFiles: ["a.ts"],
+          requirements: null,
+          openFindings: [],
+          ciRoundDiff: false,
+          binaryFiles,
+        },
+        FIXED_UUID,
+      );
+
+    test("lists the binary file paths in their own fence", () => {
+      expect(withBinary(["img/logo.png"])).toContain(
+        `${BINARY_FENCE}\nimg/logo.png\n>>>DATA-test-nonce`,
+      );
+    });
+
+    test("states the instruction before the binary files fence", () => {
+      const prompt = withBinary(["img/logo.png"]);
+      expect(
+        prompt.indexOf("binary files that git does not show"),
+      ).toBeLessThan(prompt.indexOf(BINARY_FENCE));
+    });
+
+    test("puts the instruction outside every data fence", () => {
+      const prompt = withBinary(["img/logo.png"]);
+      const index = prompt.indexOf("binary files that git does not show");
+      const lastOpen = prompt.lastIndexOf("<<<DATA-test-nonce", index);
+      const lastClose = prompt.lastIndexOf(">>>DATA-test-nonce", index);
+      expect(lastClose).toBeGreaterThan(lastOpen);
+    });
+
+    test("lets the reviewer read a text file that git treats as binary", () => {
+      expect(withBinary(["a.bin"])).toContain(
+        "If a file is text that Read can open, read it and judge it.",
+      );
+    });
+
+    test("tells the reviewer to say that an unreadable file was not reviewed", () => {
+      expect(withBinary(["a.bin"])).toContain(
+        "If you cannot read a file, do not judge it, and report that it was not reviewed",
+      );
+    });
+
+    test("asks for the unreadable files in one file-level finding", () => {
+      expect(withBinary(["a.bin"])).toContain(
+        "one finding with kind nits, severity nit, and line null",
+      );
+    });
+
+    test("names every path while the list is short", () => {
+      expect(withBinary(["a.bin", "b.bin"])).toContain("a.bin\nb.bin\n>>>");
+    });
+
+    test("cuts a long list and states how many were left out", () => {
+      const files = Array.from({ length: 25 }, (_, i) => `f${String(i)}.bin`);
+      expect(withBinary(files)).toContain("f19.bin\n... and 5 more\n>>>");
+    });
+
+    test("adds nothing when there are no binary files", () => {
+      expect(withBinary([])).not.toContain("binary files");
     });
   });
 });

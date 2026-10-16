@@ -4300,6 +4300,49 @@ describe("getPrDiff", () => {
     expect(diff.binaryFiles).toEqual(["x.bin"]);
   });
 
+  test("drops the side prefix inside the quotes of a quoted path", async () => {
+    const body = 'Binary files /dev/null and "b/\\346\\227\\245.png" differ';
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
+  });
+
+  test("drops the side prefix of a quoted path on both sides", async () => {
+    const body =
+      'Binary files "a/\\346\\227\\245.png" and "b/\\346\\227\\245.png" differ';
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
+  });
+
+  test("drops the side prefix of a quoted deleted path", async () => {
+    const body = 'Binary files "a/\\346\\227\\245.png" and /dev/null differ';
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
+  });
+
+  test("splits a modified path containing and at the last and b/", async () => {
+    const body = "Binary files a/x and y.bin and b/x and y.bin differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x and y.bin"]);
+  });
+
+  test("keeps the whole added path when it contains and", async () => {
+    const body = "Binary files /dev/null and b/x and y.bin differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x and y.bin"]);
+  });
+
+  test("keeps the whole deleted path when it contains and", async () => {
+    const body = "Binary files a/old and x.bin and /dev/null differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["old and x.bin"]);
+  });
+
   test("does not take an added line that looks like a binary notice", async () => {
     const body = "+Binary files a/x and b/x differ";
     const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
