@@ -76,6 +76,8 @@ export type PrReviewPostInput = {
   readonly verdict: string | null;
   readonly findings: ReviewFinding[];
   readonly pr_files: string[];
+  readonly binary_files: string[];
+  readonly binary_unlisted_count: number;
   readonly worktree_dir: string;
   readonly repo_dir: string;
 };
@@ -118,6 +120,8 @@ export async function main(
   verdict: string | null,
   findings: ReviewFinding[],
   pr_files: string[],
+  binary_files: string[],
+  binary_unlisted_count: number,
   worktree_dir: string,
   repo_dir: string,
 ): Promise<PrReviewPostResult> {
@@ -133,6 +137,8 @@ export async function main(
       verdict,
       findings,
       pr_files,
+      binary_files,
+      binary_unlisted_count,
       worktree_dir,
       repo_dir,
     },
@@ -331,6 +337,10 @@ export type PublishReviewInput = {
   readonly commentedFindings: readonly ReviewFinding[];
   /** 行に紐づけられず、総評に並べる指摘。 */
   readonly droppedFindings: readonly ReviewFinding[];
+  /** 差分に内容が出ないバイナリのファイル。モードによらず、総評に固定の文で並べる。 */
+  readonly binaryFiles: readonly string[];
+  /** `binaryFiles`に並べられなかった(パスを変更ファイルと照合できなかった)件数。 */
+  readonly binaryUnlistedCount: number;
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
   readonly priorReview: boolean;
   /** 偽なら("gated")投稿もスレッドの解決もしない。 */
@@ -467,12 +477,16 @@ export async function publishReview(
     mode,
     droppedFindings,
     openMustCount,
+    input.binaryFiles,
+    input.binaryUnlistedCount,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
   const fallbackBody = renderUnresolvedLineSummary(
     input.prAuthorLogin,
     input.commentedFindings,
     droppedFindings,
+    input.binaryFiles,
+    input.binaryUnlistedCount,
   );
   const postedReviewId = await postMarkedReview(
     client,
@@ -583,6 +597,8 @@ async function postReview(
     verdict,
     findings,
     pr_files,
+    binary_files,
+    binary_unlisted_count,
   } = input;
 
   if (skip || verdict === null) {
@@ -640,6 +656,8 @@ async function postReview(
       comments,
       commentedFindings: commentedFindingsOf(findings, droppedFindings),
       droppedFindings,
+      binaryFiles: binary_files,
+      binaryUnlistedCount: binary_unlisted_count,
       priorReview,
       post,
       ensureRepoOwner: () =>

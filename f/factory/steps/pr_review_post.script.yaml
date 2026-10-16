@@ -11,6 +11,17 @@ schema:
       description: 処理内容の要約。
       default: null
       originalType: string
+    binary_files:
+      type: array
+      description: 差分に内容が出ないバイナリのファイルの一覧。
+      default: null
+      items:
+        type: string
+      originalType: string[]
+    binary_unlisted_count:
+      type: number
+      description: パスを変更ファイルと照合できず、一覧に載せなかったバイナリのファイルの件数。
+      default: null
     findings:
       type: array
       description: レビューで見つかった指摘の一覧。
@@ -78,5 +89,7 @@ schema:
     - summary
     - findings
     - pr_files
+    - binary_files
+    - binary_unlisted_count
     - worktree_dir
     - repo_dir

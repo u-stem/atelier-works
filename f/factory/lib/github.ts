@@ -564,9 +564,9 @@ function isIncompleteRawBody(response: GhApiResponse): boolean {
 
 /**
  * JSONでない本文を読む`gh api`の呼び出し。本文の欠けを、取り直しも含めてここだけで扱う。
- * 2xxなのに`gh`の終了コードが0以外のときは、GETが冪等であることを使い、
- * 短く待ってから1回だけ取り直す。取り直しても欠けたときは、
- * `GitHubRawBodyIncompleteError`を投げる。
+ * 2xxなのに`gh`の終了コードが0以外のときは、冪等な要求(GETか`idempotent`の指定)だけ、
+ * 短く待ってから1回だけ取り直す。冪等でない要求は取り直さず、
+ * 取り直しても欠けたときと同じく、`GitHubRawBodyIncompleteError`を投げる。
  * JSONの応答はESCがエスケープされ、構文の検査が欠けを見つけるので、この関数は要らない。
  * 2xx以外の応答は、終了コードを見ずにそのまま返す。呼び出し側がステータスで扱いを決める。
  * 取り直しの待ちは`GhClient`の`transientRetryDelayMs`で決まる。
@@ -579,6 +579,10 @@ export async function callGhApiRawBody(
 ): Promise<GhApiResponse> {
   const first = await callGhApi(client, endpoint, options);
   if (!isIncompleteRawBody(first)) return first;
+  // 冪等でない要求は、取り直すと副作用が重なるので、欠けたまま失敗にする。
+  if (!isIdempotentRequest(options)) {
+    throw new GitHubRawBodyIncompleteError(context);
+  }
   const sleep = client.sleep ?? defaultSleep;
   await sleep(client.transientRetryDelayMs ?? GITHUB_TRANSIENT_RETRY_DELAY_MS);
   const second = await callGhApi(client, endpoint, options);

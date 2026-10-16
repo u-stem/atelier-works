@@ -596,6 +596,12 @@ export function decideReviewBodyMode(
  * `verdict`も同じく載せない(DBとDiscordだけで、PRの本文には出さない)。
  * `<!-- factory:pr_review:<id> -->`とレビューしたshaの印は、呼び出し側が`withReviewMarkers`で足す。
  *
+ * `binaryFiles`か`binaryUnlistedCount`が1件以上あるときは、モードによらず、固定の一文とパスの一覧を足す
+ * (`renderBinaryFilesLines`)。差分に内容が出ないファイルを、Claudeの出力に頼らず、
+ * 読まれていない可能性のあるものとして、投稿に必ず残すため。
+ * 指摘の無い2つの形式は、そのとき「LGTMです」を言わず、差分に指摘が無いことだけを書く。
+ * 読めていないファイルが残るのに、LGTMと読める行を出さないため。
+ *
  * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
  * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
  * 免責は重複になる。
@@ -612,8 +618,11 @@ export function renderReviewSummary(
   mode: ReviewBodyMode,
   droppedFindings: readonly ReviewFinding[],
   openMustCount: number,
+  binaryFiles: readonly string[] = [],
+  binaryUnlistedCount = 0,
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
+  const hasBinary = binaryFiles.length + binaryUnlistedCount > 0;
   switch (mode) {
     case "findings":
       lines.push(
@@ -621,11 +630,15 @@ export function renderReviewSummary(
       );
       break;
     case "rereview_clean":
-      lines.push("修正を確認しました。LGTMです。");
+      lines.push(
+        hasBinary ? "修正を確認しました。" : "修正を確認しました。LGTMです。",
+      );
       lines.push("最終的なApprove判断は人が行ってください。");
       break;
     case "first_clean":
-      lines.push("指摘はありません。LGTMです。");
+      lines.push(
+        hasBinary ? "差分に指摘はありません。" : "指摘はありません。LGTMです。",
+      );
       lines.push("最終的なApprove判断は人が行ってください。");
       break;
     case "rereview_open":
@@ -634,8 +647,38 @@ export function renderReviewSummary(
       );
       break;
   }
+  lines.push(...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount));
   lines.push(...renderUnanchoredFindingLines(droppedFindings));
   return lines.join("\n");
+}
+
+/** 総評に並べるバイナリのファイルのパスの上限。残りは件数だけを書く。 */
+const BINARY_LIST_MAX_FILES = 20;
+
+/**
+ * 差分に内容が出ないバイナリのファイルの固定の一文と、パスの箇条書き。無ければ空。
+ * 先頭に空行を置き、直前の行(LGTMや免責の行)と続けて読まれないようにする。
+ * パスは、改行を空白にまとめ、`<!--`を無害にする(`oneLinePath`)。
+ * 上限を超えた分は「ほかN件」と書く。
+ * `unlistedCount`は、パスを変更ファイルと照合できず並べなかった件数で、件数と注記にだけ加える。
+ */
+function renderBinaryFilesLines(
+  binaryFiles: readonly string[],
+  unlistedCount: number,
+): string[] {
+  const total = binaryFiles.length + unlistedCount;
+  if (total === 0) return [];
+  const shown = binaryFiles.slice(0, BINARY_LIST_MAX_FILES);
+  const rest = binaryFiles.length - shown.length;
+  return [
+    "",
+    `内容を差分で読めないバイナリのファイルが${String(total)}件あります。人が内容を確認してください。`,
+    ...shown.map((path) => `- ${oneLinePath(path)}`),
+    ...(rest > 0 ? [`(ほか${String(rest)}件)`] : []),
+    ...(unlistedCount > 0
+      ? [`(パスを確認できなかったものが${String(unlistedCount)}件あります)`]
+      : []),
+  ];
 }
 
 /** 総評に並べる`path`。改行は空白にまとめ、`<!--`は無害にする。 */
@@ -682,16 +725,20 @@ function renderUnanchoredFindingLines(
  * 行コメントにするはずだった指摘(`commentedFindings`)は、位置を添えて、行に紐づけられなかった指摘(`droppedFindings`)と
  * 同じ一覧に並べる。後者の形は通常の総評と同じにする。
  * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
+ * `binaryFiles`があれば、`renderReviewSummary`と同じ固定の一文とパスの一覧を足す。
  */
 export function renderUnresolvedLineSummary(
   authorLogin: string,
   commentedFindings: readonly ReviewFinding[],
   droppedFindings: readonly ReviewFinding[],
+  binaryFiles: readonly string[] = [],
+  binaryUnlistedCount = 0,
 ): string {
   return [
     `${ROLE_TAGS.pr_review} @${authorLogin}`,
     "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
     "確認お願いします。",
+    ...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount),
     ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
   ].join("\n");
 }
@@ -4906,10 +4953,18 @@ export async function anyPackageJsonScriptsChanged(
   return false;
 }
 
-/** 差分から集めたバイナリのパスのうち、APIの変更ファイルに含まれるものと、落とした件数。 */
+/**
+ * 差分の`Binary files ... differ`の行から集めたパスのうち、APIの変更ファイル(`changedFiles`)に
+ * 載っているものだけを残し、載っていないものは件数だけを返す。
+ * 差分の行はPRの作者が書けるので、パスの区切りの細工(ディレクトリ名に` and b/`を含めるなど)で
+ * 変更に無いパスが取り出されうる。その信頼できないパスを、Claudeが読む対象としてプロンプトに出さず、
+ * 総評にも並べない。落とした分は、件数として総評に残す(`renderReviewSummary`)。
+ */
 export function selectListedBinaryFiles(
-  _binaryFiles: readonly string[],
-  _changedFiles: readonly string[],
+  binaryFiles: readonly string[],
+  changedFiles: readonly string[],
 ): { readonly listed: string[]; readonly unlistedCount: number } {
-  return { listed: [], unlistedCount: 0 };
+  const changed = new Set(changedFiles);
+  const listed = binaryFiles.filter((path) => changed.has(path));
+  return { listed, unlistedCount: binaryFiles.length - listed.length };
 }

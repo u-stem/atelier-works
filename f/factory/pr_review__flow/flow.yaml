@@ -68,6 +68,12 @@ value:
           summary:
             type: javascript
             expr: results.pr_review_generate?.summary ?? ""
+          binary_files:
+            type: javascript
+            expr: results.pr_review_generate?.binary_files ?? []
+          binary_unlisted_count:
+            type: javascript
+            expr: results.pr_review_generate?.binary_unlisted_count ?? 0
           findings:
             type: javascript
             expr: results.pr_review_generate?.findings ?? []
