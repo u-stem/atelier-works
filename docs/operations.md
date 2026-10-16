@@ -158,6 +158,7 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
 
 - 要件定義(`pipeline_prepare`)、実装(`implement_prepare`)、PR修正(`pr_fix_prepare`)、PRレビュー(`pr_review_prepare`)の準備。
 - dependabotのPRの取得(`poll_dependabot`)。作業項目を作る前に照合する。
+- dependabotの準備(`dependabot_prepare`)。事実の再収集の後、cloneの前に1回照合する。
 - フォームで投入する`manual_intake_create_issue`。Issueを作る前に照合する。
 - Issue化の提案を処理する`issue_proposal_apply`。承認は判断の記録の前に、却下は返信の前に、1回だけ照合する。
 - 長い実行を挟んだ後の書き込みのうち、次の5つの処理。Claudeの実行と検査の間に名前が別の人に渡りうるので、準備の入口に加えて、書き込みの直前にも1回照合する。
@@ -168,7 +169,8 @@ GitHubでそのアカウントが意図した持ち主かを確かめ、`factory
   draw.ioのビューアを上げる`drawio_viewer_bump`は、`factory_repo_id`をブランチの作成の前に照合する。
 
 書き込みの直前の照合に落ちた処理は、書かずに止める。
-dependabotの終了処理では、作業項目を人に回し、関門のnoticeを残す。
+dependabotの準備と終了処理では、作業項目を人に回し、関門のnoticeを残す。
+準備では、cloneも作業ツリーの作成もしない。
 noticeは、`owner_id_mismatch`である。
 `factory_repo`で`factory_repo_id`が設定されているときは、リポジトリIDの食い違いが`factory_repo_id_mismatch`になる。
 残る余地は、[セキュリティ](security.md#オーナーの数値idの照合)の残るリスクにある。

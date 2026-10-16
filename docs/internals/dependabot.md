@@ -172,6 +172,7 @@ dependabotの作業項目は、`picked`で始まり、次の終端のどれか�
 | --- | --- |
 | `dependabot poll:` | スケジュール(待ちの上限、保持期間、フローの待ちの回数、リポジトリの照合、起動の失敗) |
 | `dependabot collect:` | 事実の収集 |
+| `dependabot prepare:` | リポジトリの取得と作業ツリーの作成(オーナーの照合) |
 | `dependabot gate:` | ゲート |
 | `dependabot install failed:` | 隔離したインストール |
 | `dependabot local check:` | インストールの後の確認 |
