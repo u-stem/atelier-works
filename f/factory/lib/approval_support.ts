@@ -126,6 +126,11 @@ export function buildAuditConsoleUrl(
   return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}reports/audit/${String(workItemId)}`;
 }
 
+/** Consoleのシステムの画面のURL(`/console/system`)を返す。 */
+export function buildSystemConsoleUrl(windmillPublicUrl: string): string {
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}system`;
+}
+
 /**
  * 判断が記録された承認依頼を処理するstepスクリプトのパスを、種類ごとに返す。
  * `approval_decide.ts`は判断を記録した後、

@@ -75,6 +75,13 @@ export type SystemStatus = {
   readonly orphan_failures: SystemOrphanFailure[];
   readonly info_notices: NoticeRow[];
   readonly resolved_notices: SystemResolvedNotice[];
+  /**
+   * workerの負荷。窓に記録が無いか、読めなかったときは`null`。
+   * 負荷を返す前のbackendの応答では欠ける。
+   * 形は型ガードで確かめず、カードが`isWorkerLoad`で確かめる。
+   * 形が違う値で、システムの画面の全体を消さず、カードだけを「読めない」にするためである。
+   */
+  readonly worker_load?: unknown;
 };
 
 const isStringList: Guard<string[]> = isArrayOf(isString);
