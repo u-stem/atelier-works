@@ -164,6 +164,8 @@ export async function main(
  * 前回までの`[MUST]`の指摘が今回の解決処理の後も残っていれば
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
+ * 未解決のスレッドの一覧を読めず、今回の指摘にも`[MUST]`が無いときは、
+ * 結果を`"unverified"`にして`factory.reviews`の`result`を記録しない。
  *
  * 投稿するレビュー本文は5種類の定型(`renderReviewSummary` / `ReviewBodyMode`)の
  * いずれかで、Claudeの自由記述の`summary`は使わない。
@@ -512,17 +514,28 @@ export async function publishReview(
   };
 }
 
-/** 状態遷移の補足を決める入力。 */
+/** `reviewTransitionNotice`の入力。 */
 export type ReviewTransitionNoticeInput = {
   readonly post: boolean;
   readonly findings: readonly ReviewFinding[];
   readonly openMustCount: number | null;
 };
 
+/**
+ * 作業項目を`reviewed`へ進めるときに残す補足を返す。補足が要らなければnullを返す。
+ * 投稿しないときは、投稿せずに記録したことを残す。
+ * 一覧を読めなかった旨は、結果が`unverified`のときだけ残す。
+ * 今回の指摘に`[MUST]`があれば結果は`changes_requested`で、結果を記録できているため。
+ */
 export function reviewTransitionNotice(
-  _input: ReviewTransitionNoticeInput,
+  input: ReviewTransitionNoticeInput,
 ): string | null {
-  return "stub";
+  if (!input.post) {
+    return "review_post_mode is gated: recorded without posting";
+  }
+  return reviewResultFor(input.findings, input.openMustCount) === "unverified"
+    ? "open review threads could not be read: recorded without a result"
+    : null;
 }
 
 /** `reviewedNotifyEvent`の入力。 */
@@ -705,11 +718,7 @@ async function postReview(
       posted_review_id: postedReviewId,
     });
   }
-  const notice = post
-    ? openMustCount === null
-      ? "open review threads could not be read: recorded without a result"
-      : null
-    : "review_post_mode is gated: recorded without posting";
+  const notice = reviewTransitionNotice({ post, findings, openMustCount });
 
   // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、
   // 未解決の[MUST]を数えた結果を、レビューと一緒に記録する。

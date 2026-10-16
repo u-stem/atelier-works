@@ -527,9 +527,6 @@ export type ReviewRecord = {
   posted_review_id: string | null;
 };
 
-/** `db.insertReview`に渡す行。 */
-export type NewReviewRecord = ReviewRecord;
-
 export type FixOutcome = "done" | "requirements_gap" | "blocked";
 
 /**

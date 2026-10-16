@@ -74,11 +74,11 @@ import {
   isRecord,
   isString,
   type LabelerAssociation,
-  type NewReviewRecord,
   type NoticeRecord,
   type ReviewFinding,
   type ReviewFindingKind,
   type ReviewOutcome,
+  type ReviewRecord,
   type ReviewSeverity,
   type ReviewVerdict,
   type WorkItem,
@@ -229,7 +229,7 @@ export function buildReviewRecord(input: {
   readonly findings: readonly ReviewFinding[];
   readonly openMustCount: number | null;
   readonly postedReviewId: string | null;
-}): NewReviewRecord {
+}): ReviewRecord {
   const outcome = reviewResultFor(input.findings, input.openMustCount);
   return {
     work_item_id: input.workItemId,

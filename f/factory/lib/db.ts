@@ -76,7 +76,6 @@ import {
   isRecord,
   isString,
   type LatestDeployment,
-  type NewReviewRecord,
   type Notice,
   type NoticeRecord,
   type RequirementDraft,
@@ -2246,7 +2245,7 @@ const REVIEW_FINDING_KINDS: readonly ReviewFindingKind[] = [
 
 /** `factory.reviews`に行を挿入し、そのIDを返す。 */
 export async function insertReview(
-  record: NewReviewRecord,
+  record: ReviewRecord,
   sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
   const statement = sql`
