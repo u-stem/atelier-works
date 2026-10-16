@@ -32,6 +32,16 @@ describe("noticeGuide", () => {
     expect(noticeGuide("pr_conflict").note).toContain("自動で解決");
   });
 
+  test("tells how to get back to posting reviews", () => {
+    expect(noticeGuide("review_gated_prolonged").action).toContain(
+      "comment_only",
+    );
+  });
+
+  test("tells that the notice comes back while gated continues", () => {
+    expect(noticeGuide("review_gated_prolonged").note).toContain("解決");
+  });
+
   test("tells where to see the load behind the worker load alert", () => {
     expect(noticeGuide("worker_load_high").action).toContain("システム");
   });

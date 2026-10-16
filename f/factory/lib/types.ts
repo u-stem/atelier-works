@@ -902,6 +902,28 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
  */
 export type ReviewPostMode = "comment_only" | "gated";
 
+/** 投稿しなかったレビューの集計。`since`は、その最初のレビューの記録時刻。 */
+export type GatedReviewStats = {
+  readonly since: Date | null;
+  readonly unposted_count: number;
+};
+
+/**
+ * 日次のまとめと通知の判定に使う、投稿しない状態の報告。
+ * `off`は投稿するモードで、何も載せない。`read_failed`は集計を読めなかったこと。
+ * 型だけをここに置くのは、日次のまとめの文面を作る側が、判定の関数に依存せずに済むため。
+ */
+export type GatedReviewReport =
+  | { readonly kind: "off" }
+  | {
+      readonly kind: "on";
+      readonly since: Date | null;
+      readonly unposted_count: number;
+      /** `since`からの経過の日数(切り捨て)。投稿しなかったレビューが無ければ`null`。 */
+      readonly elapsed_days: number | null;
+    }
+  | { readonly kind: "read_failed" };
+
 /**
  * 検証と既定値の補完を済ませた実行時の設定。
  * `lib/config.ts`の`loadConfig`が、`c_factory_config`リソースの生の値

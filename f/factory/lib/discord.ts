@@ -3,7 +3,7 @@
 
 import { type CleanupCounts, summarizeCleanup } from "./cleanup_db_support.ts";
 import { type Logger, logger, maskSecrets } from "./log.ts";
-import type { ImplementDiffStat } from "./types.ts";
+import type { GatedReviewReport, ImplementDiffStat } from "./types.ts";
 import {
   describeWorkerLoad,
   type WorkerLoadReport,
@@ -207,6 +207,11 @@ export type NotifyEvent =
        * 集計を読めなかったことのどれかを表す。
        */
       worker_load: WorkerLoadReport;
+      /**
+       * `review_post_mode`が`gated`のときの、投稿しなかったレビューの期間と件数。
+       * 投稿するモードのときは`off`で、欄を出さない。
+       */
+      gated_review: GatedReviewReport;
     }
   | {
       kind: "audit_completed";
@@ -249,6 +254,37 @@ function repoField(owner: string, repo: string): DiscordEmbedField {
 
 function instanceField(instanceName: string): DiscordEmbedField {
   return { name: "インスタンス", value: instanceName };
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** `date`が属するJSTの日付を`YYYY-MM-DD`で返す(UTC+9固定)。 */
+function jstDate(date: Date): string {
+  const shifted = new Date(date.getTime() + JST_OFFSET_MS);
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${String(shifted.getUTCFullYear())}-${month}-${day}`;
+}
+
+/** 日次のまとめの欄の文。投稿するモードのときは`null`で、欄を出さない。 */
+function describeGatedReview(report: GatedReviewReport): string | null {
+  switch (report.kind) {
+    case "off":
+      return null;
+    case "read_failed":
+      return "集計を読めませんでした(`wmill job list --script-path f/factory/notify_daily_summary`で直近のジョブを探し、ログの警告を確認)";
+    case "on":
+      if (report.since === null || report.elapsed_days === null) {
+        return "gatedで有効。投稿しなかったレビューは0件";
+      }
+      return `gatedで有効。${jstDate(report.since)}から${String(report.elapsed_days)}日、投稿しなかったレビューは${String(report.unposted_count)}件`;
+  }
+}
+
+/** 投稿するモードのときは空で、日次のまとめに欄を足さない。 */
+function gatedReviewFields(report: GatedReviewReport): DiscordEmbedField[] {
+  const text = describeGatedReview(report);
+  return text === null ? [] : [{ name: "レビューの投稿", value: text }];
 }
 
 const TITLE_MAX = 256;
@@ -503,6 +539,7 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
             name: "workerの負荷",
             value: describeWorkerLoad(event.worker_load),
           },
+          ...gatedReviewFields(event.gated_review),
         ],
       };
     case "audit_completed":

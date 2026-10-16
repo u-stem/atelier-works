@@ -107,6 +107,7 @@ import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observat
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
 import {
   getCleanupSummary,
+  getGatedReviewStats,
   getWorkerLoadSummary,
 } from "../f/factory/lib/summary_support.ts";
 import type { WorkItemStatus } from "../f/factory/lib/types.ts";
@@ -6817,6 +6818,52 @@ check(
       loadViewDeps(new Date("2028-01-01T00:00:00.000Z")),
     )
   ).worker_load === null,
+);
+
+// ---------------------------------------------------------------------------
+// gatedで投稿しなかったレビューの集計(最後に投稿したレビューより後の連続だけを数える)
+// ---------------------------------------------------------------------------
+
+for (const [createdAt, postedId] of [
+  ["2020-01-01T00:00:00Z", "'901'"],
+  ["2020-01-02T00:00:00Z", "NULL"],
+  ["2020-01-04T00:00:00Z", "NULL"],
+  ["2020-01-06T00:00:00Z", "'902'"],
+  ["2020-01-08T00:00:00Z", "NULL"],
+]) {
+  execPsql(
+    target,
+    `INSERT INTO factory.reviews (work_item_id, head_sha, verdict, result, summary, posted_review_id, created_at) VALUES (${String(prItem)}, 'gated01', 'comment', 'changes_requested', 's', ${postedId}, '${createdAt}')`,
+  );
+}
+const gatedStreak = await getGatedReviewStats(
+  new Date("2020-01-05T00:00:00.000Z"),
+  sql,
+);
+check(
+  "gated_review_stats: counts the unposted reviews after the last posted one",
+  gatedStreak.unposted_count === 2 &&
+    gatedStreak.since?.toISOString() === "2020-01-02T00:00:00.000Z",
+  gatedStreak,
+);
+const gatedAfterPost = await getGatedReviewStats(
+  new Date("2020-01-07T00:00:00.000Z"),
+  sql,
+);
+check(
+  "gated_review_stats: a posted review ends the earlier streak",
+  gatedAfterPost.unposted_count === 0 && gatedAfterPost.since === null,
+  gatedAfterPost,
+);
+const gatedRestart = await getGatedReviewStats(
+  new Date("2020-01-09T00:00:00.000Z"),
+  sql,
+);
+check(
+  "gated_review_stats: a new streak starts after the posted review",
+  gatedRestart.unposted_count === 1 &&
+    gatedRestart.since?.toISOString() === "2020-01-08T00:00:00.000Z",
+  gatedRestart,
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
