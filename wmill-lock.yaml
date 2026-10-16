@@ -57,7 +57,7 @@ locks:
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
   f/factory/lib/gated_review_support: c858998fefbebb102f55e896471e4dc8195de412a39c8d60d2d36d22763bc1bb
-  f/factory/lib/github: 94246759c23fb1c7ad795d9857b5d6fd398136d6bc772665be9b86f9d6f33af4
+  f/factory/lib/github: 7892dd4c9beefcf66a1a14411023545859ec16cd659f51bfc0c898cd58765619
   f/factory/lib/host_action: dc0d09838934a55630d453e9c3af9aaaaaaef637325f1133eab9a809327e7123
   f/factory/lib/implement_finish_support: 7b4dc33163d938f5726fbedb99103c8414a77d742671955e4cb7417cabd7c9b6
   f/factory/lib/implement_launch_support: ba2f3db0e4dcd3635bded5d79cabbce1b108b5fcb274ec853b8a24dcd0038c77
@@ -145,10 +145,10 @@ locks:
   f/factory/steps/pr_fix_finish: 19baf861e21340535a0ea8a4662b5b115363beb7e0ad0bfaa8b74e9790f7b612
   f/factory/steps/pr_fix_prepare: 36d3a1151bb6a61d160c90b3b685bbd7522caf865f6a22671da9602b68737542
   f/factory/steps/pr_fix_verify: c8a32f7f2509df41ecf4efba34842aaf7b7de0e9a36bdda7d922eabe6e844296
-  f/factory/steps/pr_review_generate: 7fb1f266c0933c80a4f7c8958d6e23fc7ec579fece770601893a70bbfa10c546
+  f/factory/steps/pr_review_generate: eb116cae89512a05ce41de2818489ae2ea8ffee2036807d3cceb0e90bed0caaf
   f/factory/steps/pr_review_post: b2ea0351363d6a1e95fc4f021f4f35fd3970db46fc5f8cd0aed86c2c3830ee98
   f/factory/steps/pr_review_prepare: 08e09697d6989fcfcb82502f39ca37847d1891f94153ad23a08db3ae07e30b8f
-  f/factory/steps/pr_workflow_support: 092730f2b1f2e85521045e0d2ac45dfbc7374d2973b359260f83b59e6bc2ec9a
+  f/factory/steps/pr_workflow_support: 2fc6fed23a02de89dfc274e73a8b667438ebc6c05c6349c1fb6f177c21ef4aab
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: 889e654206f2ec4e153cece13f7c0074e3441eccdb08666ccd41ecfbef266135
