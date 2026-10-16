@@ -1,8 +1,8 @@
 // Windmillインスタンスのカスタムtag(global settingの`custom_tags`)を扱う。
 //
 // superadminでない主体は、インスタンスが許可したカスタムtag以外のtagを持つ
-// scriptを実行できない。Consoleが呼ぶscriptは`console`のtagを持つので、
-// このtagをインスタンスに許可しておく必要がある。
+// scriptを実行できない。Consoleが呼ぶscriptは`console`、定期ジョブは`periodic`などの
+// tagを持つので、これらのtagをインスタンスに許可しておく必要がある。
 //
 // 次の2つの入口がある。どちらも秘密を引数に載せない。
 //   - `plan`: bootstrap.shが使う。保存済みの値と実効の値を環境変数から読み、

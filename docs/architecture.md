@@ -36,10 +36,13 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 `factory_state`は要件定義書のサブパス`requirements`だけを、`factory_console`は全体を読み取り専用でマウントし、`factory_workspaces`はマウントしない。
 
 定期ジョブ専用のworkerが、別のコンテナ(`windmill_worker_periodic`)で動く。
-GitHubのAPI、DB、Discordだけを使う定期ジョブを、Claudeの長いジョブの待ちから切り離すためである。
+定期ジョブを、Claudeの長いジョブの待ちから切り離すためである。
 このworkerはワーカーグループ`periodic`に属し、tag`periodic`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
+tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブだけである。
+依存するジョブは、defaultのworkerで動かす。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
+1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。
 信頼できない入力を扱うジョブは動かさないので、`factory_workspaces`と`factory_state`はマウントしない。
 

@@ -2906,16 +2906,20 @@ miseの自動インストールが`mise run`の前に不足分を入れるかは
 workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
 
-定期ジョブ用のworker(`windmill_worker_periodic`)を新しく足す版は、次の順に反映する。
-tagを付けたscriptを先に反映すると、受けるworkerが無く、定期ジョブが動かないためである。
+tagを付けたscriptを反映する前に、そのtagを受けるworkerを起動し、カスタムtagを許可する。
+受けるworkerが無いと、そのscriptのジョブは動かないためである。
+tagごとのworkerは、`console`が`windmill_worker_console`、`periodic`が`windmill_worker_periodic`である。
+workerを足すcomposeの変更は、次の順に反映する。
 
 1. workerを足すcomposeの変更を、mainにマージする。
 2. ホスト側のcheckoutで`git pull`し、`mise run up`でworkerを起動する。
-   続けて`mise run instance:tags`を実行し、カスタムtagに`periodic`を足す。
+   続けて`mise run instance:tags`を実行し、カスタムtagを許可する。
 3. 次のコマンドで、コンテナが動いていることを確かめる。
-   `mise exec -- docker compose -f infra/docker-compose.yml ps windmill_worker_periodic`
-   Windmillの画面の「Workers」で、グループ`periodic`のworkerのtagが`periodic`だけであることも確かめる。
-4. 確かめてから、scriptにtag`periodic`を付ける変更をマージする。
+   `mise exec -- docker compose -f infra/docker-compose.yml ps <サービス名>`
+   Windmillの画面の「Workers」で、worker groupのworkerのtagが、そのtagだけであることも確かめる。
+4. 確かめてから、scriptにtagを付ける変更をマージする。
+
+tag`periodic`を付けるscriptの選び方は、[セキュリティ](security.md#tagを付けるscriptの選び方)にある。
 
 `mise run up`と`mise run deploy`は、`up -d`の前に、一時コンテナで`caddy validate`を実行し、Caddyfileを確かめる。
 不正なら、そこで止まり、何も起動し直さない。

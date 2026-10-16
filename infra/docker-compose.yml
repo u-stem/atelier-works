@@ -274,15 +274,20 @@ services:
           subpath: requirements
     logging: *default-logging
 
-  ## 定期ジョブ(GitHubのAPI、DB、Discordだけを使うジョブ)専用のworker。
+  ## 定期ジョブ専用のworker。
   ## Claudeの長いジョブがdefaultの枠を埋めても、定期ジョブを待たせないために、
   ## tagで分けた別のworkerグループに置く。
-  ## 信頼できない入力を扱うジョブ(リポジトリのコードや検査を動かすもの)はここで動かさない。
+  ## tag `periodic`を付けるのは、ファイル(`factory_state`、`factory_workspaces`、self clone)にも、
+  ## 独自イメージの道具(`claude`、`gh`、`git`、`gtr`、検査の枠)にも、cgroupにも
+  ## 依存しない定期ジョブだけにする。依存するジョブはdefaultのworkerに残す。
+  ## このworkerは上流のイメージで動き、それらを持たないので、依存するジョブを置くと動かない。
+  ## 信頼できない入力を扱うジョブ(リポジトリのコードや検査を動かすもの)も、ここで動かさない。
   ## そのため`factory_workspaces`と`factory_state`は付けない。
   ## 書き込めるマウントは`worker_logs`と専用の依存キャッシュだけにする。
   ## 依存のキャッシュはdefaultの`worker_dependency_cache`とは共有しない。
   ## DBの接続は、ほかのworkerと同じ管理者の接続を使う。
-  ## `github_token`は、ジョブがWindmillの変数から読む。
+  ## `github_token`などのsecret変数は、ジョブがWindmillの変数から読む。
+  ## ケーパビリティは、defaultのworkerと同じものを落とす。権限はdefaultの部分集合に保つ。
   ## nativeでないworkerは1つで動くので、1件のjobが止まっている間は、
   ## ほかのjobが待つ。jobには`timeout`を付けて、止まりきらないようにする。
   ## メモリはbunのプロセス1つが収まる量にする。
@@ -300,6 +305,11 @@ services:
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
+    cap_drop:
+      - NET_RAW
+      - MKNOD
+      - SETFCAP
+      - AUDIT_WRITE
     environment:
       - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
       - MODE=worker
