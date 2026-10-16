@@ -116,7 +116,7 @@ describe("describeWorkerLoad queue", () => {
 });
 
 describe("describeWorkerLoad memory", () => {
-  test("shows the latest anon memory with its share of the limit", () => {
+  test("shows the latest anon memory with the limit and the time", () => {
     expect(rowValue(LOAD, "メモリ(最新)")).toBe(
       "anon 76MiB、working set 261MiB、上限4096MiB(20:58時点)",
     );

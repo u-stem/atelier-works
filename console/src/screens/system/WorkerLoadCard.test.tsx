@@ -51,7 +51,7 @@ describe("WorkerLoadCard", () => {
     );
   });
 
-  test("tells how to start recording when there is no sample", () => {
+  test("tells which schedule to check when there is no sample", () => {
     expect(renderToStaticMarkup(<WorkerLoadCard load={null} />)).toContain(
       "sample_worker_load",
     );
