@@ -4466,6 +4466,49 @@ describe("callGhApiRawBody", () => {
     );
   });
 
+  test("does not fetch again when the request is not idempotent", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    await callGhApiRawBody(
+      recording(fake).client,
+      "repos/acme/widgets/x",
+      { method: "POST" },
+      "POST x",
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("throws a GitHubRawBodyIncompleteError when a non-idempotent request is incomplete", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    await expect(
+      callGhApiRawBody(
+        recording(fake).client,
+        "repos/acme/widgets/x",
+        { method: "POST" },
+        "POST x",
+      ),
+    ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+
+  test("fetches again when a POST is marked idempotent", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    const response = await callGhApiRawBody(
+      recording(fake).client,
+      "repos/acme/widgets/x",
+      { method: "POST", idempotent: true },
+      "POST x",
+    );
+    expect(response.bodyText).toBe("x");
+  });
+
   test("returns a non-2xx response without fetching again", async () => {
     const fake = createFakeCommandRunner([
       {

@@ -4905,3 +4905,11 @@ export async function anyPackageJsonScriptsChanged(
   }
   return false;
 }
+
+/** 差分から集めたバイナリのパスのうち、APIの変更ファイルに含まれるものと、落とした件数。 */
+export function selectListedBinaryFiles(
+  _binaryFiles: readonly string[],
+  _changedFiles: readonly string[],
+): { readonly listed: string[]; readonly unlistedCount: number } {
+  return { listed: [], unlistedCount: 0 };
+}

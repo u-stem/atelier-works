@@ -470,14 +470,20 @@ describe("renderReviewSummary with binary files", () => {
     );
   });
 
-  test("puts the notice after a blank line below the disclaimer", () => {
+  test("puts a blank line between the disclaimer and the notice", () => {
     const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
       "a.png",
     ]);
-    expect(body.split("\n").slice(3, 5)).toEqual([
-      "",
-      "内容を差分で読めないバイナリのファイルが1件あります。",
+    expect(body.split("\n")[3]).toBe("");
+  });
+
+  test("puts the notice on the line after the blank line", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
     ]);
+    expect(body.split("\n")[4]).toStartWith(
+      "内容を差分で読めないバイナリのファイルが1件あります。",
+    );
   });
 
   test("states the text diff has no findings instead of LGTM", () => {
@@ -555,6 +561,57 @@ describe("renderReviewSummary with binary files", () => {
     expect(body.slice(0, body.indexOf("行に紐づけられなかった指摘"))).toContain(
       "バイナリ",
     );
+  });
+});
+
+describe("renderReviewSummary with binary files whose path was not confirmed", () => {
+  test("counts the unconfirmed files in the notice", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      ["a.png"],
+      2,
+    );
+    expect(body).toContain("バイナリのファイルが3件あります。");
+  });
+
+  test("says how many paths could not be confirmed", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      ["a.png"],
+      2,
+    );
+    expect(body).toContain("(パスを確認できなかったものが2件あります)");
+  });
+
+  test("adds the notice when only unconfirmed files exist", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [], 2);
+    expect(body).toContain("バイナリのファイルが2件あります。");
+  });
+
+  test("never says LGTM when only unconfirmed files exist", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [], 2);
+    expect(body).not.toContain("LGTM");
+  });
+
+  test("does not mention unconfirmed paths when there are none", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      ["a.png"],
+      0,
+    );
+    expect(body).not.toContain("パスを確認できなかった");
   });
 });
 
@@ -888,6 +945,7 @@ describe("runPrReviewPost worktree cleanup", () => {
       findings: [],
       pr_files: [],
       binary_files: [],
+      binary_unlisted_count: 0,
       worktree_dir: WORKTREE_DIR,
       repo_dir: REPO_DIR,
       ...overrides,
@@ -974,6 +1032,7 @@ describe("runPrReviewPost failure marking", () => {
     findings: [],
     pr_files: [],
     binary_files: [],
+    binary_unlisted_count: 0,
     worktree_dir: "",
     repo_dir: "",
   };
@@ -1193,6 +1252,7 @@ describe("posting a review once per sha", () => {
       commentedFindings: [],
       droppedFindings: [],
       binaryFiles: [],
+      binaryUnlistedCount: 0,
       priorReview: true,
       post: true,
       ensureRepoOwner: async () => null,
@@ -1447,6 +1507,23 @@ describe("posting a review once per sha", () => {
       expect(JSON.parse(fake.calls[1]?.options?.stdin ?? "{}")).toMatchObject({
         body: expect.stringContaining(
           "内容を差分で読めないバイナリのファイルが1件あります。",
+        ),
+      });
+    });
+
+    test("posts the count of unconfirmed binary files in the summary", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false, binaryUnlistedCount: 3 }),
+        SILENT,
+      );
+      expect(JSON.parse(fake.calls[1]?.options?.stdin ?? "{}")).toMatchObject({
+        body: expect.stringContaining(
+          "(パスを確認できなかったものが3件あります)",
         ),
       });
     });

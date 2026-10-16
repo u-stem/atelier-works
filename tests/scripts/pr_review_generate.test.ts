@@ -13,6 +13,7 @@ import {
   isReviewClaudeOutput,
   nextActionFor,
   prReviewTimeoutMisfit,
+  selectListedBinaryFiles,
 } from "../../f/factory/steps/pr_workflow_support.ts";
 
 describe("prReviewTimeoutMisfit", () => {
@@ -250,6 +251,52 @@ describe("reviewPrompt requirements wiring", () => {
   });
 });
 
+describe("selectListedBinaryFiles", () => {
+  test("keeps a binary path the API lists as a changed file", () => {
+    const result = selectListedBinaryFiles(
+      ["img/a.png"],
+      ["img/a.png", "b.ts"],
+    );
+    expect(result.listed).toEqual(["img/a.png"]);
+  });
+
+  test("drops a binary path the API does not list as a changed file", () => {
+    const result = selectListedBinaryFiles(["../../etc/passwd"], ["b.ts"]);
+    expect(result.listed).toEqual([]);
+  });
+
+  test("counts the dropped paths", () => {
+    const result = selectListedBinaryFiles(
+      ["img/a.png", "../../etc/passwd", "x.bin"],
+      ["img/a.png"],
+    );
+    expect(result.unlistedCount).toBe(2);
+  });
+
+  test("does not promote a path forged with a directory name that contains ' and b/'", () => {
+    const result = selectListedBinaryFiles(
+      ["a and b/secret.png"],
+      ["a and b/real.png"],
+    );
+    expect(result.listed).toEqual([]);
+  });
+
+  test("counts a path forged with a directory name that contains ' and b/'", () => {
+    const result = selectListedBinaryFiles(
+      ["a and b/secret.png"],
+      ["a and b/real.png"],
+    );
+    expect(result.unlistedCount).toBe(1);
+  });
+
+  test("returns nothing for no binary paths", () => {
+    expect(selectListedBinaryFiles([], ["b.ts"])).toEqual({
+      listed: [],
+      unlistedCount: 0,
+    });
+  });
+});
+
 // `main()`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
 // 文字列の一致は、その行が1か所にあることだけを保証する。整形や変数名の変更で落ちたら、配線が変わっていないかを確かめて文字列を直す。
 describe("binary files wiring in the generate step", () => {
@@ -261,21 +308,39 @@ describe("binary files wiring in the generate step", () => {
     return text.split(needle).length - 1;
   }
 
-  test("passes the binary files of the diff to the prompt", async () => {
-    expect(count(await SOURCE, "    binaryFiles: prDiff.binaryFiles,\n")).toBe(
-      1,
-    );
+  test("reads the binary files of the diff once, into the selector", async () => {
+    expect(count(await SOURCE, "prDiff.binaryFiles")).toBe(1);
   });
 
-  test("returns the binary files of the diff in the result", async () => {
+  test("narrows the binary files to the changed files of the API", async () => {
     expect(
-      count(await SOURCE, "      binary_files: prDiff.binaryFiles,\n"),
+      count(
+        await SOURCE,
+        "selectListedBinaryFiles(prDiff.binaryFiles, prFiles)",
+      ),
+    ).toBe(1);
+  });
+
+  test("passes the narrowed binary files to the prompt", async () => {
+    expect(count(await SOURCE, "    binaryFiles,\n")).toBe(1);
+  });
+
+  test("returns the narrowed binary files in the result", async () => {
+    expect(count(await SOURCE, "      binary_files: binaryFiles,\n")).toBe(1);
+  });
+
+  test("returns the count of the dropped binary paths in the result", async () => {
+    expect(
+      count(
+        await SOURCE,
+        "      binary_unlisted_count: binaryUnlistedCount,\n",
+      ),
     ).toBe(1);
   });
 
   test("returns no binary files when the step is skipped", async () => {
-    expect(count(await SOURCE, "  pr_files: [],\n  binary_files: [],\n")).toBe(
-      1,
-    );
+    expect(
+      count(await SOURCE, "  binary_files: [],\n  binary_unlisted_count: 0,\n"),
+    ).toBe(1);
   });
 });
