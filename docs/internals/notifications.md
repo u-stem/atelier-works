@@ -292,6 +292,7 @@ Discordには、noticeを新しく残したときに、種類`needs_human`で通
 競合が解けたとき、PRが閉じたとき、設定が対象から外したときに、`watch_pr_conflicts`が種類と`<owner>/<repo>#<PR番号>:`の接頭辞で選んで解決する。
 直す作業項目が成功したときは、通知も、Discordへの成功の通知も出さない。結果は、Consoleの作業項目の状態で読む。
 直す作業項目が失敗したときの通知は、`watch_pr_conflicts`だけが出す。競合を直す回のフローは、通知を登録せず、Discordにも送らない。
+起動の直後に落ちた作業項目を、`poll_issues`の照合が`failed`にしたときは、照合の`job_failed`も届く。
 詳細は[PRのCI監視の仕様](pr-ci.md#競合の検知)にある。
 
 `worker_load_high`は、原因(メモリの割合、OOMの増加)ごとに本文が決まっている。

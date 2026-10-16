@@ -1443,7 +1443,7 @@ PATがリポジトリを読めなくなったときは、通知を解決せず�
 | --- | --- | --- |
 | `pr_conflict_watch_enabled` | `false` | 競合を検知して通知するか |
 | `pr_conflict_fix_enabled` | `false` | 競合を直す作業項目を起動してよいか。`true`にするには、`pr_conflict_watch_enabled`も`true`にし、`pr_conflict_fix_enabled_since`を書く |
-| `pr_conflict_fix_enabled_since` | 無し | この時刻より前に始まった競合の回は直さない |
+| `pr_conflict_fix_enabled_since` | 無し | この監視が競合の回を初めて検知した時刻が、この時刻より前なら直さない |
 | `pr_conflict_fix_max_rounds` | `2` | 競合の1回で起動できる数。1以上5以下 |
 | `pr_conflict_fix_max_rounds_per_pr` | `5` | 1つのPRで起動できる数。2以上10以下。`pr_conflict_fix_enabled`が`true`なら、`pr_conflict_fix_max_rounds`より大きい |
 | `pr_conflict_fix_notify_grace_min` | `60` | 競合の回の開始から、通知を待つ分数。最終の保留は待たずに通知する。0以上1440以下。`pr_conflict_fix_enabled`が`true`なら、10以上 |
@@ -1511,7 +1511,7 @@ PATがリポジトリを読めなくなったときの専用の通知は無い�
 
 次の条件をすべて満たす競合だけを直す。満たさない競合は、人が直す。
 
-- 競合の回が、`pr_conflict_fix_enabled_since`以後に始まった。
+- 競合の回を、この監視が`pr_conflict_fix_enabled_since`以後に初めて検知した。
 - 通知していない。最終の保留が付いていない。
 - PRが開いていて、headが記録と同じである。
 - baseが既定のブランチで、PRがドラフトでなく、auto-mergeも無効である。
@@ -1535,6 +1535,7 @@ PATがリポジトリを読めなくなったときの専用の通知は無い�
 結果は、Consoleの作業項目の状態(`pr_fix`の競合回)で読む。pushした回は`rereview_requested`、baseがすでにPRの履歴にあった回は`reviewed`で終わる。
 競合回のフローは、通知もDiscordへの送信もしない。失敗の通知は、`watch_pr_conflicts`だけが出す。
 フローが例外で終わったときは、`on_error_flow`のDiscordの通知(`job_failed`)も届く。
+起動の直後に落ちた作業項目を、`poll_issues`の照合が`failed`にしたときも、`job_failed`が届く。
 `pr_conflict_watch_enabled`を`false`にして検知を止めると、動いている作業項目の結果は、Consoleの作業項目の状態でしか読めなくなる。
 
 猶予は、1回目の修正が終わるまでの時間より長くする。1回目が猶予より長くかかると、2回目は起動せずに通知する。
