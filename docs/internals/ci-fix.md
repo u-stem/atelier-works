@@ -618,7 +618,7 @@ git操作は`lib/workspace.ts`に、判定と検査は`lib/conflict_fix_round.ts
 4. `ls-remote`で、リモートの`HEAD`が`refs/heads/<PRのbase>`を指すかを確かめ、先頭のshaを読む。指さなければ`base_not_default`で終わる。
 5. そのshaを明示してfetchし、取り込めたことを確かめる。
 6. baseがPRのheadの祖先なら`up_to_date`で終わる。何も変えない。
-7. `merge --no-ff --no-commit`を実行する。設定は`merge.conflictStyle=diff3`、`rerere.enabled=false`、`merge.renormalize=false`にする。
+7. `merge --no-ff --no-commit --no-verify-signatures`を実行する。設定は`merge.conflictStyle=diff3`、`rerere.enabled=false`、`merge.renormalize=false`にする。
 8. 競合ファイルを`ls-files -u`で読み、直せるかを調べる。直せなければmergeを取り消して`unresolvable`で終わる。
 9. 競合ファイルだけを`add`する。
 10. `add`した本文が、3つの版から作り直した本文と同じかを確かめる。違えばmergeを取り消して`unresolvable`(`reconstruction_mismatch`)で終わる。
@@ -645,6 +645,10 @@ mergeが始まった後に例外が出たときは、`merge --abort`をベスト
 `merge`の引数は`--`の後にshaを置く。
 gitの2.54では、`--`の有無で動作が変わらないことを確かめた。
 `commit-tree`だけは、`--`の後に置くとツリーとして読まれないので、`--`を付けない。
+
+親の照合を偽らせないため、すべてのgitで`core.commitGraph=false`と`GIT_GRAFT_FILE=/dev/null`を固定する。
+署名の検証でプログラムを動かさないよう、`gpg.program`も空に固定し、`merge`には`--no-verify-signatures`を付ける。
+理由は[セキュリティ](../security.md#マージの競合を解く回)にある。
 
 必要なgitの版は、使うオプションで決まる。
 `check-attr --source`は2.40以降、`merge-file --object-id`は2.43以降、`merge-file --diff-algorithm`は2.44以降である。

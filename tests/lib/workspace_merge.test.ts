@@ -192,7 +192,7 @@ describe("mergeBaseIntoWorktree argv", () => {
     expect(without).toEqual([]);
   });
 
-  test("merges the base sha with diff3 style, rerere off and renormalize off", async () => {
+  test("merges the base sha with diff3 style, rerere off, renormalize off and no signature check", async () => {
     const fake = scenario();
     await mergeBaseIntoWorktree(mergeOptions(fake.run));
     const argv = callsOf(fake.calls, "merge").find(
@@ -210,6 +210,7 @@ describe("mergeBaseIntoWorktree argv", () => {
       "merge",
       "--no-ff",
       "--no-commit",
+      "--no-verify-signatures",
       "--",
       BASE,
     ]);

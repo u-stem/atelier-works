@@ -2240,6 +2240,8 @@ main cloneの`.git/config`は、gitがremoteやブランチの設定を読むの
 | `core.askPass` | 空 | 設定のaskpassのプログラムの実行 |
 | `commit.gpgsign` | `false` | commitの署名で`gpg.program`を実行させること |
 | `push.gpgSign` | `false` | pushの署名で`gpg.program`を実行させること |
+| `gpg.program` | 空 | 署名の作成と検証で、設定のプログラムを実行させること |
+| `core.commitGraph` | `false` | commit-graphによる、コミットの親の読み替え |
 | `core.symlinks` | `false` | symlinkの検出が前提にする値の巻き戻し |
 | `core.excludesFile` | `/dev/null` | `$HOME/.config/git/ignore`の読み込み |
 | `core.attributesFile` | `/dev/null` | `$HOME/.config/git/attributes`の読み込み |
@@ -2252,7 +2254,7 @@ main cloneの`.git/config`は、gitがremoteやブランチの設定を読むの
 Factoryのリポジトリにsymlinkを足すと、self cloneでは普通のファイルになる。
 
 固定していない設定は、そのまま読まれる。
-`url.*.insteadOf`、`remote.*.pushurl`、`http.*`、`filter.*`、`diff.*`などは、キーが対象ごとに変わり、名前で固定できない。
+`url.*.insteadOf`、`remote.*.pushurl`、`http.*`、`filter.*`、`diff.*`、`merge.*.driver`などは、キーが対象ごとに変わり、名前で固定できない。
 名前が決まっていて、プログラムを実行できたり作業ツリーを変えたりする設定にも、固定していないものがある。
 `core.alternateRefsCommand`は、`objects/info/alternates`があるcloneのfetchで、シェルから実行される。
 `core.worktree`は、`config.worktree`に書くと、`status`、`clean`、`add -A`が見る作業ツリーを別のディレクトリに変える。
@@ -2451,9 +2453,13 @@ Claudeの解消の検査は、衝突ブロックを3つの版から作り直し�
 `.git`ファイルが差し替えられていれば、worktreeでgitを1回も実行せずに止まる。
 
 すべてのgitに`--literal-pathspecs`を付け、ファイル名をpathspecの記法として読ませない。
+親の照合を偽らせないため、親を読み替える2つの仕組みを塞ぐ。
 環境変数`GIT_GRAFT_FILE`を`/dev/null`にして、`.git/info/grafts`で親を書き換えさせない。
-`GIT_NO_REPLACE_OBJECTS`ではgraftsを止められず、親の照合を偽られるためである。
+`GIT_NO_REPLACE_OBJECTS`ではgraftsを止められないためである。
 gitの2.54で、graftsが効くことと、この指定で無効になることを確かめた。
+`core.commitGraph=false`で、commit-graphファイルの親を読ませない。
+どちらも、main cloneの`.git`に書き込めない前提の上で、書き込める経路が増えたときの備えである。
+`merge`には`--no-verify-signatures`を付け、署名の検証でプログラムを動かさない。
 `GH_TOKEN`を渡すのは`ls-remote`、fetch、pushだけで、merge、add、commitは持たない環境で動く。
 基準コミットには、競合ファイルだけを`add`する。`add -A`は使わない。
 
@@ -2471,6 +2477,14 @@ gitの2.54で、graftsが効くことと、この指定で無効になること�
   検査コマンドの失敗として現れる。
 - 新しく足した行の検査は、JavaScriptとTypeScriptの記法だけを見る。
   ほかの言語の読み込みや抑制の記述は、検査を通る。
+- この回は、`git merge`を呼ぶ経路を新しく足す。
+  `merge.<名前>.driver`は、`.gitattributes`が名前を指名し、`.git/config`の定義がプログラムを動かす。
+  名前が対象ごとに変わるので、名前で固定して潰せない。
+  定義を置けるのはmain cloneの`.git/config`で、検査コマンドは書き込めない([検査コマンドの権限](#検査コマンドの権限))。
+  この前提で抑え、書き込める経路が増えたときは残るリスクになる。
+- mergeコミットのpushの直前の照合とpushの間に、人がブランチを祖先へ巻き戻す窓が残る。
+  巻き戻されたブランチへも、pushは通る。
+  `commitAndPush`と同じ窓として受け入れる。
 
 ## 実装の安全策
 

@@ -484,6 +484,10 @@ export type GitCommandOptions = {
  *   設定ファイルに書かれたプログラムを、gitに実行させない。
  *   `core.askPass`は空にすると、環境変数`SSH_ASKPASS`も読まれなくなる。
  * - `commit.gpgsign`、`push.gpgSign`: commitとpushの署名で、`gpg.program`に書かれたプログラムを実行させない。
+ * - `gpg.program`: 空にして、署名の作成と検証のどちらでも、設定ファイルに書かれたプログラムを実行させない。
+ *   署名の検証は、`merge`の`--no-verify-signatures`でも止める。
+ * - `core.commitGraph`: `false`にして、commit-graphファイルのコミットの親を読ませない。
+ *   親の照合(`rev-parse <sha>^1`、`merge-base --is-ancestor`)が、細工したcommit-graphに偽られないため。
  * - `core.symlinks`: worktreeの検証が前提にする値。
  *   `.git/config`や`config.worktree`で`true`に戻させない。
  * - `core.excludesFile`、`core.attributesFile`: `/dev/null`にして、
@@ -500,6 +504,8 @@ export const FIXED_GIT_CONFIG: readonly (readonly [string, string])[] = [
   ["core.attributesFile", "/dev/null"],
   ["commit.gpgsign", "false"],
   ["push.gpgSign", "false"],
+  ["gpg.program", ""],
+  ["core.commitGraph", "false"],
   ["credential.helper", ""],
 ];
 
@@ -595,7 +601,9 @@ export function localGitEnv(
     // 差し替えのrefは対象リポジトリの検査コマンドが作れ、gitが読む内容を検査の前提と食い違わせうるため。
     GIT_NO_REPLACE_OBJECTS: "1",
     // `.git/info/grafts`で、コミットの親を書き換えさせない。`GIT_NO_REPLACE_OBJECTS`では止まらない。
-    // 親の照合(`rev-parse <sha>^1`、`merge-base --is-ancestor`)が、検査コマンドが書いたgraftsに偽られるため。
+    // 親の照合(`rev-parse <sha>^1`、`merge-base --is-ancestor`)が、graftsに偽られるため。
+    // main cloneの`.git`に書き込めない前提だが、書き込める経路が増えたときの備えとして塞ぐ。
+    // commit-graphによる親の読み替えは、`FIXED_GIT_CONFIG`の`core.commitGraph`で塞ぐ。
     // gitの2.54で、graftsが効くことと、この指定で無効になることを確かめた。
     GIT_GRAFT_FILE: "/dev/null",
     // システムとグローバル(`$HOME/.gitconfig`、XDGの`git/config`)の設定と、システムのgitattributesを読まない。
@@ -4381,6 +4389,7 @@ export async function mergeBaseIntoWorktree(
           "merge",
           "--no-ff",
           "--no-commit",
+          "--no-verify-signatures",
           "--",
           baseSha,
         ],
@@ -4827,6 +4836,7 @@ function parseTreeChanges(stdout: string): CiFixChange[] {
  * 検証のステップは、基準コミットと`stageConflictPathsTree`のツリーを渡す。pushされる内容そのものの差になる。
  * 名前の変更は検出せず、削除と追加の2件にする。追加した行と削除した行の数は読まない(`checkConflictResolution`は使わない)。
  * 作業ツリーにあって、ツリーに入らないファイルは含まない。それを検査したいときは、作業ツリー全体の差を別に読む。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
  */
 export async function listTreeChanges(opts: {
   readonly run: CommandRunner;
@@ -4865,6 +4875,7 @@ function capturedContext(opts: {
 /**
  * blobの本文を返す。`maxBytes`(既定は2MiB)を超えるときは例外を投げる。
  * 途中で切れた本文を、競合の検査の入力にしないため。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
  */
 export async function readBlobText(opts: {
   readonly run: CommandRunner;
@@ -4890,6 +4901,7 @@ export async function readBlobText(opts: {
 /**
  * ツリー`treeSha`の中の`filePath`の本文を返す。大きすぎるとき、ファイルが無いときは例外を投げる。
  * 作業ファイルではなくツリーから読むので、commitされる内容そのものを検査できる。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
  */
 export async function readTreeFileText(opts: {
   readonly run: CommandRunner;
@@ -4966,6 +4978,7 @@ async function runMergeFile(opts: {
  * 食い違いは、`mergeBaseIntoWorktree`が`add`した本文との照合で検出する。
  * `merge-file`は競合の数を終了コードで返すので、0から127までを成功として扱い、それ以上は例外にする。
  * `checkConflictResolution`の`reconstructed`に渡す。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
  */
 export async function reconstructConflictText(opts: {
   readonly run: CommandRunner;
@@ -5010,6 +5023,7 @@ function parseNameStatusZ(stdout: string): Map<string, string> {
  * 片方の親の変更をそのまま取り込んだだけのパス(mainが自動でmergeされた箇所)は、結果がその親と同じなので含まれない。
  * 保護パスの判定とgitleaksの対象には、この集合を使う。名前の変更は削除と追加の2件になるので、新しい名前でも漏れない。
  * ツリーの比較だけで、索引と作業ツリーは読まない。トークンは持たない。
+ * 呼び出し側は、`assertWorktreeGitPointer`を通した後で呼ぶ。
  */
 export async function listBothSidesChangedPaths(opts: {
   readonly run: CommandRunner;
