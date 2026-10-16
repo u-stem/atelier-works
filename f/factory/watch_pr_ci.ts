@@ -36,6 +36,7 @@ import {
   CheckImageStaleError,
   checkEnvironmentError,
   checkImageProblemsFromEnv,
+  hasOnlyUnlistedPaths,
 } from "./lib/check_sandbox.ts";
 import { hasCiFixSkillMarker } from "./lib/ci_fix_round.ts";
 import { dailyBudgetStatus } from "./lib/claude.ts";
@@ -140,6 +141,7 @@ export function buildClaimDeps(
   report: (
     error: CheckEnvironmentError,
   ) => Promise<void> = reportCheckEnvironment,
+  log: Logger = logger("watch_pr_ci"),
 ): PrCiClaimDeps | undefined {
   const since = config.pr_ci_fix_enabled_since;
   if (!config.pr_ci_fix_enabled || since === null) return undefined;
@@ -152,7 +154,15 @@ export function buildClaimDeps(
       const error = checkEnvironmentError(await problems());
       if (error === null) return null;
       // 保留の通知は行ごとのPRのリンクを持つが、パスは載せない。パスは環境の通知に1件だけ残す。
-      await report(error);
+      // パスを列挙できなかっただけの回は、次の巡回で外れうる。人が解決するまで残る通知は出さず、警告ログに残す。
+      if (hasOnlyUnlistedPaths(error)) {
+        log.warn(
+          "world-writable paths could not be listed, so the hold leaves no notice",
+          { problems: error.problems.join(", ") },
+        );
+      } else {
+        await report(error);
+      }
       return {
         reason:
           error instanceof CheckImageStaleError

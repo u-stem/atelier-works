@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import type { CheckEnvironmentProblems } from "../../f/factory/lib/check_sandbox.ts";
 import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
 import type { GhClient } from "../../f/factory/lib/github.ts";
+import type { Logger } from "../../f/factory/lib/log.ts";
 import { ciRoundTimeoutMisfit } from "../../f/factory/steps/pr_workflow_support.ts";
 import { buildClaimDeps } from "../../f/factory/watch_pr_ci.ts";
 
@@ -146,5 +147,94 @@ describe("buildClaimDeps workerEnvProblem", () => {
     });
     await deps?.workerEnvProblem();
     expect(called).toBe(false);
+  });
+});
+
+describe("buildClaimDeps workerEnvProblem when the paths cannot be listed", () => {
+  const withChecks = parseFactoryConfig({
+    ...RAW_CONFIG,
+    allowed_check_commands: ["mise run check"],
+  });
+  const UNLISTED: CheckEnvironmentProblems = {
+    image: [],
+    runtime: ["world-writable paths could not be listed: listing timed out"],
+  };
+
+  function recordingLog(): { log: Logger; warns: string[] } {
+    const warns: string[] = [];
+    const log: Logger = {
+      info: () => {},
+      warn: (message) => {
+        warns.push(message);
+      },
+      error: () => {},
+    };
+    return { log, warns };
+  }
+
+  test("still holds the row as worker_runtime_unsafe", async () => {
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => UNLISTED,
+      async () => {},
+      recordingLog().log,
+    );
+    expect((await deps?.workerEnvProblem())?.reason).toBe(
+      "worker_runtime_unsafe",
+    );
+  });
+
+  test("does not leave a notice that a person would have to resolve", async () => {
+    const reported: Error[] = [];
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => UNLISTED,
+      async (error) => {
+        reported.push(error);
+      },
+      recordingLog().log,
+    );
+    await deps?.workerEnvProblem();
+    expect(reported).toEqual([]);
+  });
+
+  test("leaves a warning log instead", async () => {
+    const { log, warns } = recordingLog();
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => UNLISTED,
+      async () => {},
+      log,
+    );
+    await deps?.workerEnvProblem();
+    expect(warns).toEqual([
+      "world-writable paths could not be listed, so the hold leaves no notice",
+    ]);
+  });
+
+  test("still reports a path that was found next to the failure to list", async () => {
+    const reported: Error[] = [];
+    const deps = buildClaimDeps(
+      withChecks,
+      CLIENT,
+      async () => ({
+        image: [],
+        runtime: [
+          ...UNLISTED.runtime,
+          "world-writable paths created at runtime: /workspaces",
+        ],
+      }),
+      async (error) => {
+        reported.push(error);
+      },
+      recordingLog().log,
+    );
+    await deps?.workerEnvProblem();
+    expect(reported.map((error) => error.name)).toEqual([
+      "CheckRuntimeUnsafeError",
+    ]);
   });
 });

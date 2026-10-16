@@ -1452,6 +1452,18 @@ describe("prCiFixHoldInfo", () => {
     );
   });
 
+  test("points to the notice in the Console and the log when the running worker is unsafe", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "Consoleの要対応にある通知とログにある理由",
+    );
+  });
+
+  test("does not claim that the notice comes out at the same time", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").stopAction).not.toContain(
+      "同時に出る通知",
+    );
+  });
+
   test("sends the discord message when the rounds are exhausted", () => {
     expect(prCiFixHoldInfo("rounds_exhausted").discord).toBe(true);
   });
