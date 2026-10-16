@@ -843,6 +843,10 @@ export function aclLeftoverArgv(dir: string): string[] {
   ];
 }
 
+export function aclBulkArgv(_dir: string): string[] {
+  return [];
+}
+
 /**
  * `dir`の下の、symlinkでないものすべてから拡張のACLを消すargv。rootで実行する。
  * 権限のビットは変わらない(グループのビットはマスクの値のまま残る)。

@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
+  aclBulkArgv,
   aclLeftoverArgv,
   acquireSlot,
   CHECK_ENV_KEYS,
@@ -773,6 +774,23 @@ describe("aclLeftoverArgv", () => {
 
   test("refuses a top-level directory", () => {
     expect(() => aclLeftoverArgv("/workspaces")).toThrow();
+  });
+});
+
+describe("aclBulkArgv", () => {
+  test("lists the entries with extended ACLs with a single getfacl walk", () => {
+    expect(aclBulkArgv(DIRS.worktreeDir)).toEqual([
+      "/usr/bin/getfacl",
+      "-R",
+      "-s",
+      "-p",
+      "--",
+      DIRS.worktreeDir,
+    ]);
+  });
+
+  test("refuses a top-level directory", () => {
+    expect(() => aclBulkArgv("/workspaces")).toThrow();
   });
 });
 
@@ -2167,20 +2185,28 @@ function takeBackSequence(identity: CheckIdentity, dir: string): string[][] {
     reclaimBulkArgv(identity, dir),
     reclaimArgv(dir),
     leftoverArgv(dir),
-    aclLeftoverArgv(dir),
+    aclBulkArgv(dir),
   ];
 }
 
 const TAKE_BACK_LENGTH = takeBackSequence(IDENTITY, DIRS.worktreeDir).length;
 
-/** `dir`のACLを探す1回目だけ見つかったと答え、2回目からは無いと答える`respond`。 */
+/** `dir`のACLを探す1回目だけ見つかったと答え、2回目からは無いと答える`respond`。一括と、ディレクトリごとの両方に同じ答えを返す。 */
 function aclFoundOnce(dir: string) {
   let looks = 0;
   return (argv: readonly string[]): CommandResult | undefined => {
-    if (!matches(aclLeftoverArgv(dir))(argv)) return undefined;
-    looks += 1;
+    if (matches(aclBulkArgv(dir))(argv)) looks += 1;
+    else if (!matches(aclLeftoverArgv(dir))(argv)) return undefined;
     return looks === 1 ? ok(`# file: ${dir}/shared\n`) : ok("");
   };
+}
+
+/** `dir`のACLを、一括でもディレクトリごとでも、いつも見つかったと答える`respond`。 */
+function aclAlwaysFound(dir: string) {
+  return (argv: readonly string[]): CommandResult | undefined =>
+    matches(aclBulkArgv(dir))(argv) || matches(aclLeftoverArgv(dir))(argv)
+      ? ok(`# file: ${dir}/shared\n`)
+      : undefined;
 }
 
 function sandboxOf(
@@ -4095,6 +4121,41 @@ describe("createCheckSandbox", () => {
     expect(fake.records.has(0)).toBe(false);
   });
 
+  test("release does not list ACLs per directory when the single walk finds none", async () => {
+    const fake = fakeSandboxDeps();
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls)).not.toContainEqual(
+      aclLeftoverArgv(DIRS.worktreeDir),
+    );
+  });
+
+  test("release lists ACLs per directory when the single walk fails", async () => {
+    const fake = fakeSandboxDeps({
+      respond: (argv) =>
+        matches(aclBulkArgv(DIRS.worktreeDir))(argv)
+          ? fail("getfacl: path too long", 1)
+          : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(
+      aclLeftoverArgv(DIRS.worktreeDir),
+    );
+  });
+
+  test("release lists ACLs per directory when the single walk times out", async () => {
+    const fake = fakeSandboxDeps({
+      respond: (argv) =>
+        matches(aclBulkArgv(DIRS.worktreeDir))(argv) ? timeout() : undefined,
+    });
+    const { sandbox } = await prepared(fake);
+    await sandbox.release(DIRS);
+    expect(argvOf(fake.calls)).toContainEqual(
+      aclLeftoverArgv(DIRS.worktreeDir),
+    );
+  });
+
   test("release removes no ACL when none is found", async () => {
     const fake = fakeSandboxDeps();
     const { sandbox } = await prepared(fake);
@@ -4109,12 +4170,13 @@ describe("createCheckSandbox", () => {
     const { sandbox, before } = await prepared(fake);
     await sandbox.release(DIRS);
     expect(
-      argvOf(fake.calls.slice(before)).slice(0, TAKE_BACK_LENGTH + 4),
+      argvOf(fake.calls.slice(before)).slice(0, TAKE_BACK_LENGTH + 5),
     ).toEqual([
       ...takeBackSequence(SLOT0, DIRS.worktreeDir),
+      aclLeftoverArgv(DIRS.worktreeDir),
       removeAclArgv(DIRS.worktreeDir),
       leftoverArgv(DIRS.worktreeDir),
-      aclLeftoverArgv(DIRS.worktreeDir),
+      aclBulkArgv(DIRS.worktreeDir),
       removeTreeArgv(DIRS.homeDir),
     ]);
   });
@@ -4129,10 +4191,7 @@ describe("createCheckSandbox", () => {
 
   test("release fails when ACLs remain after removing them", async () => {
     const fake = fakeSandboxDeps({
-      respond: (argv) =>
-        matches(aclLeftoverArgv(DIRS.worktreeDir))(argv)
-          ? ok(`# file: ${DIRS.worktreeDir}/shared\n`)
-          : undefined,
+      respond: aclAlwaysFound(DIRS.worktreeDir),
     });
     const { sandbox } = await prepared(fake);
     await expect(sandbox.release(DIRS)).rejects.toThrow("ACL");
@@ -4140,10 +4199,7 @@ describe("createCheckSandbox", () => {
 
   test("release keeps the record when ACLs remain", async () => {
     const fake = fakeSandboxDeps({
-      respond: (argv) =>
-        matches(aclLeftoverArgv(DIRS.worktreeDir))(argv)
-          ? ok(`# file: ${DIRS.worktreeDir}/shared\n`)
-          : undefined,
+      respond: aclAlwaysFound(DIRS.worktreeDir),
     });
     const { sandbox } = await prepared(fake);
     await sandbox.release(DIRS).catch(() => {});
