@@ -48,7 +48,6 @@ import { escapeReasonSeparator, maskSecrets } from "../lib/log.ts";
 import { holdReasonForStoppedItem } from "../lib/pr_ci_fix_recovery.ts";
 import { prCiFixHoldInfo } from "../lib/pr_ci_support.ts";
 import { type LockOwner, WorktreeBusyError } from "../lib/process_lock.ts";
-import { BINARY_LIST_MAX_FILES } from "../lib/prompts.ts";
 import {
   ASCII_BOUNDARY_CLASS,
   COMMIT_MESSAGE_RULES,
@@ -117,6 +116,13 @@ export {
 // タグの文言は投稿形式の固定部分で、運用者が調整する設定ではないので、
 // `factory_config`ではなくここに置く。
 // ---------------------------------------------------------------------------
+
+/**
+ * バイナリのファイルの一覧に並べるパスの上限。残りは件数だけを書く。
+ * プロンプトの同名の定数(`prompts.ts`)と同じ値にする。
+ * importを足すと、メタデータの事前検査が辿る回数が予算に近づくため、値を複製し、テストで確かめる。
+ */
+export const BINARY_LIST_MAX_FILES = 20;
 
 export const ROLE_TAGS = {
   pr_review: "[pr_review 自動レビュー]",

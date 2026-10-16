@@ -215,7 +215,8 @@ export type ReviewPromptInput = {
 
 /**
  * バイナリのファイルの一覧に並べるパスの上限。残りは件数だけを書く。
- * プロンプトと、PRの総評の一覧が、同じ上限を使う。
+ * PRの総評の一覧(`pr_workflow_support.ts`の同名の定数)と同じ値にする。
+ * 同じ値であることは、テストで確かめる。
  */
 export const BINARY_LIST_MAX_FILES = 20;
 

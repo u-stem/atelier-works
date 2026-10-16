@@ -1162,3 +1162,13 @@ describe("factory-implementation SKILL.md ⇔ IMPLEMENT_SCHEMA", () => {
     expect(await Bun.file(SKILL_PATH).exists()).toBe(true);
   });
 });
+
+describe("BINARY_LIST_MAX_FILES", () => {
+  test("is the same limit as the one of the review summary", async () => {
+    const summary = await import(
+      "../../f/factory/steps/pr_workflow_support.ts"
+    );
+    const prompts = await import("../../f/factory/lib/prompts.ts");
+    expect(prompts.BINARY_LIST_MAX_FILES).toBe(summary.BINARY_LIST_MAX_FILES);
+  });
+});
