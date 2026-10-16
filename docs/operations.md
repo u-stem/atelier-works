@@ -1983,7 +1983,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   この値は、記録のジョブが動けるだけ枠が空いていた瞬間の標本である。
 - 塞がりの目安は、`lag_seconds`の大きさと、`sampled_at`の間隔の空白である。
   `running_jobs`の大きさでは判定しない。
-  Consoleの「枠が塞がっていた記録」はこの値から数える参考値で、`running_jobs`の正しさは確認が済むまで未確認である。
+  Consoleの「枠が塞がっていた記録」はこの値から数える参考値で、`running_jobs`の正しさは未確認である。
   空白だけでは停止と区別できないので、見分け方は[予定の欠け](#予定の欠け)と[日次のまとめでの見方](#日次のまとめでの見方)に従う。
 - 内訳は`running_by_script`に、件数の多い10件のscriptのパスと、残りをまとめた`other`で載る。
 - 数えるtagは、Windmillの既定でdefaultのworkerグループが受けるものである。
