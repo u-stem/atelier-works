@@ -7461,6 +7461,22 @@ describe("pr_ci_checks column definition", () => {
     expect(assignedColumns(text)).toEqual(["summary", "checked_at"]);
   });
 
+  test("reads all nine targets of the SET with quoted literals in transitionPrCiCheck", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(assignedColumns(calls[0]?.text ?? "")).toEqual([
+      "state",
+      "summary",
+      "run_created_at",
+      "first_seen_at",
+      "notified_reason",
+      "fix_hold_reason",
+      "fix_work_item_id",
+      "checked_at",
+      "updated_at",
+    ]);
+  });
+
   test("reads the targets of an UPDATE with a table alias", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
     await claimPrCiCheckForFix(CLAIM_PR_CI, sql);

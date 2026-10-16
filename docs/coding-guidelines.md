@@ -140,7 +140,7 @@ Windmillの資産の配置、secretとconfigの取得、`//native`を使わな�
   - `RETURNING`の列と、CTEの中で別のテーブルへ書く列(`claimPrCiCheckForFix`の`work_items`への挿入)。
   - DELETE。
 - 列を足すときは、定義、行の型、変換、SELECT句をそろえる。食い違いは、`test:db`を待たず、型検査か単体テストで見つかる。
-- 別のテーブルへ広げるときは、`as`を使わない同じ形で書く。
+- 別のテーブルへ広げるときは、型の主張(`as`)を使わない同じ形で書く。
 
 ## 検証コマンド
 
