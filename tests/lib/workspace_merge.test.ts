@@ -10,6 +10,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  type ConflictFileInput,
+  type ConflictResolutionInput,
+  checkConflictResolution,
+  evaluateMergedTree,
+} from "../../f/factory/lib/conflict_fix_round.ts";
+import {
   type CommandResult,
   type CommandRunner,
   CommitBlockedError,
@@ -18,8 +24,12 @@ import {
   MERGE_COMMIT_MESSAGE,
   type MergeBaseResult,
   mergeBaseIntoWorktree,
+  omittedMarker,
   pushMergeCommit,
+  readBlobText,
+  readTreeFileText,
   readWorktreeGitPointer,
+  reconstructConflictText,
   runCommand,
   WorktreeGitPointerModifiedError,
   withCommitTrailers,
@@ -998,6 +1008,146 @@ describe("pushMergeCommit", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 競合の検査の入力を読む関数(偽のrunner)
+// ---------------------------------------------------------------------------
+
+const BLOBS = {
+  path: "src/a.ts",
+  baseBlob: BLOB_BASE,
+  oursBlob: BLOB_OURS,
+  theirsBlob: BLOB_THEIRS,
+} as const;
+
+function readerCalls(response: CommandResult): {
+  readonly run: CommandRunner;
+  readonly calls: FakeCall[];
+} {
+  const calls: FakeCall[] = [];
+  const run: CommandRunner = async (argv, options) => {
+    calls.push({ argv, options });
+    return response;
+  };
+  return { run, calls };
+}
+
+describe("reconstructConflictText", () => {
+  test("runs merge-file on the three recorded blobs with the labeled markers", async () => {
+    const fake = readerCalls(ok("merged\n"));
+    await reconstructConflictText({
+      run: fake.run,
+      worktreeDir: "/repo/wt",
+      blobs: BLOBS,
+      nonce: "abc12345",
+    });
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("--literal-pathspecs"))).toEqual([
+      "--literal-pathspecs",
+      "merge-file",
+      "--object-id",
+      "-p",
+      "--diff3",
+      "-L",
+      "ours-abc12345",
+      "-L",
+      "base-abc12345",
+      "-L",
+      "theirs-abc12345",
+      "--",
+      BLOB_OURS,
+      BLOB_BASE,
+      BLOB_THEIRS,
+    ]);
+  });
+
+  test("returns the output when merge-file reports conflicts through its exit code", async () => {
+    const fake = readerCalls({ ...ok("with markers\n"), exitCode: 3 });
+    const text = await reconstructConflictText({
+      run: fake.run,
+      worktreeDir: "/repo/wt",
+      blobs: BLOBS,
+      nonce: "abc12345",
+    });
+    expect(text).toBe("with markers\n");
+  });
+
+  test("throws when merge-file fails", async () => {
+    const fake = readerCalls(fail("error: Cannot merge binary files", 255));
+    await expect(
+      reconstructConflictText({
+        run: fake.run,
+        worktreeDir: "/repo/wt",
+        blobs: BLOBS,
+        nonce: "abc12345",
+      }),
+    ).rejects.toThrow(/git merge-file failed/);
+  });
+
+  test("rejects a nonce that could break a label before running git", async () => {
+    const fake = readerCalls(ok(""));
+    await reconstructConflictText({
+      run: fake.run,
+      worktreeDir: "/repo/wt",
+      blobs: BLOBS,
+      nonce: "bad nonce",
+    }).catch(() => undefined);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("uses an environment without the token", async () => {
+    const fake = readerCalls(ok(""));
+    await reconstructConflictText({
+      run: fake.run,
+      worktreeDir: "/repo/wt",
+      blobs: BLOBS,
+      nonce: "abc12345",
+    });
+    expect(fake.calls[0]?.options?.env?.GH_TOKEN).toBeUndefined();
+  });
+});
+
+describe("readBlobText", () => {
+  test("reads the blob by its sha after a double dash", async () => {
+    const fake = readerCalls(ok("text\n"));
+    await readBlobText({
+      run: fake.run,
+      worktreeDir: "/repo/wt",
+      sha: BLOB_OURS,
+    });
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("--literal-pathspecs"))).toEqual([
+      "--literal-pathspecs",
+      "cat-file",
+      "blob",
+      "--",
+      BLOB_OURS,
+    ]);
+  });
+
+  test("rejects a value that is not a sha", async () => {
+    const fake = readerCalls(ok(""));
+    await expect(
+      readBlobText({
+        run: fake.run,
+        worktreeDir: "/repo/wt",
+        sha: "--batch",
+      }),
+    ).rejects.toThrow(/invalid git SHA/);
+  });
+
+  test("throws when the blob is larger than the cap", async () => {
+    const fake = readerCalls(ok(`${omittedMarker(10)}`));
+    await expect(
+      readBlobText({
+        run: fake.run,
+        worktreeDir: "/repo/wt",
+        sha: BLOB_OURS,
+        maxBytes: 10,
+      }),
+    ).rejects.toThrow(/too large/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 実際のgit
 // ---------------------------------------------------------------------------
 
@@ -1553,6 +1703,172 @@ describe("merge and push (real git)", () => {
     const merged = await mergedOf(fixture);
     const result = await pushOf(fixture, merged, merged.autoTreeSha);
     expect(result.outcome).toBe("pushed");
+  });
+
+  const NONCE = "r3al0nce9";
+
+  /** 実際のmergeの結果から、解消の検査の入力を作る。 */
+  async function inputFor(
+    fixture: Fixture,
+    merged: Merged,
+    result: string,
+  ): Promise<ConflictResolutionInput> {
+    const files: ConflictFileInput[] = [];
+    for (const blobs of merged.conflictBlobs) {
+      const read = (sha: string) =>
+        readBlobText({ run: fixture.run, worktreeDir: fixture.worktree, sha });
+      files.push({
+        path: blobs.path,
+        base: await read(blobs.baseBlob),
+        ours: await read(blobs.oursBlob),
+        theirs: await read(blobs.theirsBlob),
+        reconstructed: await reconstructConflictText({
+          run: fixture.run,
+          worktreeDir: fixture.worktree,
+          blobs,
+          nonce: NONCE,
+        }),
+        result,
+      });
+    }
+    return { nonce: NONCE, files, changes: [] };
+  }
+
+  test("a real conflict is rebuilt with the labeled markers", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const blobs = merged.conflictBlobs[0];
+    if (blobs === undefined) throw new Error("no conflicted blobs");
+    const text = await reconstructConflictText({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      blobs,
+      nonce: NONCE,
+    });
+    expect(text).toBe(
+      `one\n<<<<<<< ours-${NONCE}\nPR\n||||||| base-${NONCE}\ntwo\n=======\nMAIN\n>>>>>>> theirs-${NONCE}\nthree\n`,
+    );
+  });
+
+  test("a file in the baseline tree can be read by tree and path", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const text = await readTreeFileText({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      treeSha: merged.autoTreeSha,
+      filePath: "keep.txt",
+    });
+    expect(text).toBe("keep\n");
+  });
+
+  test("the checker accepts a real resolution of a real conflict", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const input = await inputFor(fixture, merged, RESOLVED);
+    expect(checkConflictResolution(input)).toEqual({ ok: true });
+  });
+
+  test("the checker rejects a real resolution that edits outside the block", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const input = await inputFor(fixture, merged, "ONE\nPR and MAIN\nthree\n");
+    expect(checkConflictResolution(input)).toMatchObject({
+      ok: false,
+      violations: [{ code: "not_in_conflict_block" }],
+    });
+  });
+
+  test("the checker rejects the markers that git itself wrote", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const written = readFileSync(join(fixture.worktree, "a.txt"), "utf8");
+    const input = await inputFor(fixture, merged, written);
+    expect(checkConflictResolution(input)).toMatchObject({
+      ok: false,
+      violations: [{ code: "marker_left" }],
+    });
+  });
+
+  test("the baseline tree of an automatic merge needs no file from the checker", async () => {
+    const fixture = await setUp({
+      initial: { "a.txt": "a\n", "b.txt": "b\n" },
+      pr: { "a.txt": "a-pr\n" },
+      main: { "b.txt": "b-main\n" },
+    });
+    const merged = await mergedOf(fixture);
+    expect(merged.conflictBlobs).toEqual([]);
+  });
+
+  test("the tree of a real merge passes the tree evaluation when it touches no protected path", async () => {
+    const fixture = await setUp(CONFLICT);
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const listed = await listBothSidesChangedPaths({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      prHeadSha: fixture.prHead,
+      baseSha: merged.baseSha,
+      treeSha: tree,
+    });
+    expect(
+      evaluateMergedTree({
+        conflictedPaths: merged.conflictedPaths,
+        bothSides: listed,
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  test("the tree evaluation stops a merge where the base changed a workflow", async () => {
+    const fixture = await setUp({
+      initial: { "a.txt": "one\ntwo\nthree\n" },
+      pr: { "a.txt": "one\nPR\nthree\n" },
+      main: {
+        "a.txt": "one\nMAIN\nthree\n",
+        ".github/workflows/ci.yml": "on: push\n",
+      },
+    });
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const listed = await listBothSidesChangedPaths({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      prHeadSha: fixture.prHead,
+      baseSha: merged.baseSha,
+      treeSha: tree,
+    });
+    expect(
+      evaluateMergedTree({
+        conflictedPaths: merged.conflictedPaths,
+        bothSides: listed,
+      }),
+    ).toEqual({ ok: false, reason: "base_changes_workflows" });
+  });
+
+  test("the tree evaluation lets a protected path changed only by the base through", async () => {
+    const fixture = await setUp({
+      initial: { "a.txt": "one\ntwo\nthree\n", "wmill-lock.yaml": "v: 1\n" },
+      pr: { "a.txt": "one\nPR\nthree\n" },
+      main: {
+        "a.txt": "one\nMAIN\nthree\n",
+        "wmill-lock.yaml": "v: 2\n",
+      },
+    });
+    const merged = await mergedOf(fixture);
+    const tree = await resolveConflict(fixture, "a.txt", RESOLVED);
+    const listed = await listBothSidesChangedPaths({
+      run: fixture.run,
+      worktreeDir: fixture.worktree,
+      prHeadSha: fixture.prHead,
+      baseSha: merged.baseSha,
+      treeSha: tree,
+    });
+    expect(
+      evaluateMergedTree({
+        conflictedPaths: merged.conflictedPaths,
+        bothSides: listed,
+      }),
+    ).toEqual({ ok: true });
   });
 });
 

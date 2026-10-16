@@ -23,7 +23,10 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { isSafeRepoPath } from "./ci_fix_paths.ts";
-import { hasConflictMarkerLikeLine } from "./conflict_fix_round.ts";
+import {
+  conflictMarkerLabels,
+  hasConflictMarkerLikeLine,
+} from "./conflict_fix_round.ts";
 import { jobTmpBase, jobTmpEnv } from "./job_tmp.ts";
 import { escapeReasonSeparator, maskSecrets } from "./log.ts";
 import {
@@ -4585,6 +4588,116 @@ export async function pushMergeCommit(
       throw gitError("git push failed", pushResult);
     },
   });
+}
+
+/** 前段の守りを通さない、読み取りだけの関数のためのgitの文脈。トークンは持たない。 */
+function capturedContext(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly home?: string;
+  readonly path?: string;
+}): MergeGitContext {
+  const local = localGitEnv(opts.home, opts.path);
+  return { run: opts.run, cwd: opts.worktreeDir, local, network: local };
+}
+
+/**
+ * blobの本文を返す。`maxBytes`(既定は2MiB)を超えるときは例外を投げる。
+ * 途中で切れた本文を、競合の検査の入力にしないため。
+ */
+export async function readBlobText(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly sha: string;
+  readonly maxBytes?: number;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  assertSha(opts.sha);
+  const result = await mergeGit(
+    capturedContext(opts),
+    "git cat-file blob",
+    ["cat-file", "blob", "--", opts.sha],
+    { maxOutputBytes: opts.maxBytes ?? CONFLICT_BLOB_MAX_BYTES },
+  );
+  if (isCappedOutput(result.stdout)) {
+    throw new Error(`blob ${opts.sha} is too large to read`);
+  }
+  return result.stdout;
+}
+
+/**
+ * ツリー`treeSha`の中の`filePath`の本文を返す。大きすぎるとき、ファイルが無いときは例外を投げる。
+ * 作業ファイルではなくツリーから読むので、commitされる内容そのものを検査できる。
+ */
+export async function readTreeFileText(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly treeSha: string;
+  readonly filePath: string;
+  readonly maxBytes?: number;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  assertSha(opts.treeSha);
+  if (!isSafeRepoPath(opts.filePath)) throw new Error("unsafe file path");
+  const result = await mergeGit(
+    capturedContext(opts),
+    "git cat-file blob <tree>:<path>",
+    ["cat-file", "blob", "--", `${opts.treeSha}:${opts.filePath}`],
+    { maxOutputBytes: opts.maxBytes ?? CONFLICT_BLOB_MAX_BYTES },
+  );
+  if (isCappedOutput(result.stdout)) {
+    throw new Error(`${opts.filePath} is too large to read`);
+  }
+  return result.stdout;
+}
+
+/**
+ * 競合ファイルの3つの版から、nonce入りのラベルの衝突マーカー付きの本文を作り直して返す。
+ * `git merge-file --object-id -p --diff3`をblobのshaで実行し、作業ファイルとファイルシステムは読まない。
+ * `merge-file`は競合の数を終了コードで返すので、0から127までを成功として扱い、それ以上は例外にする。
+ * `checkConflictResolution`の`reconstructed`に渡す。
+ */
+export async function reconstructConflictText(opts: {
+  readonly run: CommandRunner;
+  readonly worktreeDir: string;
+  readonly blobs: ConflictBlobs;
+  readonly nonce: string;
+  readonly home?: string;
+  readonly path?: string;
+}): Promise<string> {
+  const labels = conflictMarkerLabels(opts.nonce);
+  const { oursBlob, baseBlob, theirsBlob } = opts.blobs;
+  for (const sha of [oursBlob, baseBlob, theirsBlob]) assertSha(sha);
+  const result = await mergeGit(
+    capturedContext(opts),
+    "git merge-file",
+    [
+      "merge-file",
+      "--object-id",
+      "-p",
+      "--diff3",
+      "-L",
+      labels.ours,
+      "-L",
+      labels.base,
+      "-L",
+      labels.theirs,
+      "--",
+      oursBlob,
+      baseBlob,
+      theirsBlob,
+    ],
+    {
+      okExitCodes: Array.from({ length: 128 }, (_, code) => code),
+      maxOutputBytes: 2 * CONFLICT_BLOB_MAX_BYTES,
+    },
+  );
+  if (isCappedOutput(result.stdout)) {
+    throw new Error(`${opts.blobs.path} is too large to reconstruct`);
+  }
+  return result.stdout;
 }
 
 /** `listBothSidesChangedPaths`の結果。パスはすべてリポジトリのルートからの相対パスである。 */

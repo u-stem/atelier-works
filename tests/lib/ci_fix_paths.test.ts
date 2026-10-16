@@ -5,6 +5,8 @@ import {
   type CiFixViolationCode,
   checkCiFixChanges,
   isDeniedPath,
+  isTestPath,
+  weakensChecks,
 } from "../../f/factory/lib/ci_fix_paths.ts";
 
 const change = (
@@ -654,5 +656,39 @@ describe("dependencies of the denied safety files", () => {
     const found: string[] = [];
     for await (const path of glob.scan({ cwd: REPO_ROOT })) found.push(path);
     expect(found.filter(isDeniedPath)).toEqual(["f/factory/lib/claude.ts"]);
+  });
+});
+
+describe("weakensChecks", () => {
+  test("is true when any line suppresses a check", () => {
+    expect(weakensChecks(["const a = 1;", "// @ts-ignore"])).toBe(true);
+  });
+
+  test("is false when no line weakens a check", () => {
+    expect(weakensChecks(["const a = 1;", "return a;"])).toBe(false);
+  });
+
+  test("is false for an empty list", () => {
+    expect(weakensChecks([])).toBe(false);
+  });
+});
+
+describe("isTestPath", () => {
+  test("recognizes a test file name", () => {
+    expect(isTestPath("src/a.test.ts")).toBe(true);
+  });
+
+  test("does not recognize an ordinary source file", () => {
+    expect(isTestPath("src/a.ts")).toBe(false);
+  });
+});
+
+describe("files of the conflict round", () => {
+  test.each([
+    "f/factory/lib/conflict_fix_round.ts",
+    "f/factory/lib/workspace.ts",
+    "f/factory/lib/ci_fix_paths.ts",
+  ])("denies %s", (path) => {
+    expect(isDeniedPath(path)).toBe(true);
   });
 });

@@ -83,6 +83,8 @@ export type ScopeDeps = {
 // 一覧の網羅は、テストがimportの連鎖から確かめる。
 export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/audit_support.ts",
+  "f/factory/lib/ci_fix_paths.ts",
+  "f/factory/lib/ci_log_support.ts",
   "f/factory/lib/claude.ts",
   "f/factory/lib/cleanup_db_support.ts",
   "f/factory/lib/conflict_fix_round.ts",
@@ -97,6 +99,7 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
   "f/factory/lib/main_ci_support.ts",
   "f/factory/lib/pr_ci_support.ts",
   "f/factory/lib/pr_conflict_fix_holds.ts",
+  "f/factory/lib/protected_paths.ts",
   "f/factory/lib/requirements_template.ts",
   "f/factory/lib/summary_support.ts",
   "f/factory/lib/types.ts",
@@ -108,9 +111,14 @@ export const DB_DEPENDENCY_FILES: readonly string[] = [
 // workerイメージの中で動かすプロセスロックのテストの、テストとlib側の依存。
 // 一覧の網羅は、テストがimportの連鎖から確かめる。
 export const WORKER_DEPENDENCY_FILES: readonly string[] = [
+  "f/factory/lib/ci_fix_paths.ts",
+  "f/factory/lib/ci_log_support.ts",
+  "f/factory/lib/conflict_fix_round.ts",
   "f/factory/lib/job_ids.ts",
   "f/factory/lib/job_tmp.ts",
   "f/factory/lib/log.ts",
+  "f/factory/lib/main_ci_support.ts",
+  "f/factory/lib/protected_paths.ts",
   "f/factory/lib/types.ts",
   "f/factory/lib/workspace.ts",
   "tests/lib/testSupport.ts",
