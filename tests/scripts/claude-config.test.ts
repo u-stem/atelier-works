@@ -515,7 +515,7 @@ describe("review-loop scaling rules", () => {
 
   test("names the fix round range as a separate case", () => {
     expect(body("code-reviewer")).toContain(
-      "- 修正のラウンドでは、`git log --reverse --stat <前のラウンドのHEAD>..HEAD`を見る。",
+      "- 修正のラウンドでは、`git log --reverse --stat <前のラウンドのHEAD>..HEAD ^origin/main`を見る。",
     );
   });
 
@@ -529,7 +529,7 @@ describe("review-loop scaling rules", () => {
 
   test("makes code-reviewer check the fix commits since the previous round", () => {
     expect(body("code-reviewer")).toContain(
-      "`git log --reverse --stat <前のラウンドのHEAD>..HEAD`",
+      "`git log --reverse --stat <前のラウンドのHEAD>..HEAD ^origin/main`",
     );
   });
 
