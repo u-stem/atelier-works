@@ -76,6 +76,40 @@ describe("infra/worker/Dockerfile PATH", () => {
   });
 });
 
+describe("infra/worker/Dockerfile claude version", () => {
+  test("exposes the installed claude version as a runtime environment variable", () => {
+    const exposed = startingWith("ENV").some((line) =>
+      line.includes("CLAUDE_VERSION=${CLAUDE_VERSION}"),
+    );
+    expect(exposed).toBe(true);
+  });
+});
+
+describe("infra/worker/Dockerfile claude version check", () => {
+  const verification = (): string =>
+    startingWith("RUN").find((line) => line.includes("claude --version")) ?? "";
+
+  test("rejects an empty CLAUDE_VERSION", () => {
+    expect(verification()).toContain('[ -n "${CLAUDE_VERSION}" ]');
+  });
+
+  test("compares the installed claude version with CLAUDE_VERSION", () => {
+    expect(verification()).toContain(
+      `[ "$(claude --version | cut -d' ' -f1)" = "\${CLAUDE_VERSION}" ]`,
+    );
+  });
+
+  test("reports the expected and the actual version to stderr on a mismatch", () => {
+    expect(verification()).toMatch(
+      /\|\| \{ echo "[^"]*\$\(claude --version\)[^"]*\$\{CLAUDE_VERSION\}[^"]*" >&2; exit 1; \}/,
+    );
+  });
+
+  test("keeps the other checks chained after the version check", () => {
+    expect(verification()).toContain("} && gh --version && gitleaks version");
+  });
+});
+
 describe("infra/worker/Dockerfile check user", () => {
   const userCreation = (): string =>
     startingWith("RUN").find((line) => line.includes("useradd")) ?? "";
