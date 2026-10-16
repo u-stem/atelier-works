@@ -589,6 +589,16 @@ describe("infra/docker-compose.yml windmill_worker slots recorded by sample_work
   });
 });
 
+describe("infra/docker-compose.yml windmill_worker job environment", () => {
+  test("passes CLAUDE_VERSION through to the jobs", () => {
+    const names = envEntries(service("windmill_worker"), "WHITELIST_ENVS=")
+      .flatMap((entry) => entry.slice("WHITELIST_ENVS=".length).split(","))
+      .map((name) => name.trim());
+
+    expect(names).toContain("CLAUDE_VERSION");
+  });
+});
+
 describe("infra/docker-compose.yml windmill_server session validity", () => {
   test("the server takes the session validity from the mise variable", () => {
     expect(

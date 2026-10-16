@@ -126,6 +126,9 @@ services:
       - WORKER_GROUP=default
       # Claudeの実行中もスケジュールが止まらないよう、並列に動かす。
       - NUM_WORKERS=3
+      # workerは子プロセスの環境を絞る。イメージの`ENV CLAUDE_VERSION`を、
+      # `agent_runs.claude_version`を記録するジョブまで届かせる。
+      - WHITELIST_ENVS=CLAUDE_VERSION
     depends_on:
       db:
         condition: service_healthy

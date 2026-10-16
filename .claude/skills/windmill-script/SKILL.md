@@ -194,7 +194,7 @@ worker内で実測した、外部コマンドとAPIの挙動を示す。型ガ�
 - `usage`は`{ input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, ... }`である。
 - `modelUsage`は、モデル名をキーにしたオブジェクトである。各値は`{ costUSD, inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, ... }`である。
 - `structured_output`は、`--json-schema`で指定したスキーマに一致するparse済みのJSONである。型ガードでさらに検証してから使う。
-- `claude_version`はレスポンスに含まれない。`agent_runs.claude_version`は、環境変数`CLAUDE_VERSION`から取得する。
+- `claude_version`はレスポンスに含まれない。`agent_runs.claude_version`は、環境変数`CLAUDE_VERSION`から取得する。workerのイメージの`ENV`に置き、`WHITELIST_ENVS`に挙げて、ジョブまで届かせる。
 - 参考のコストは、最小限の呼び出し(短いプロンプト、少ない構造化出力)で約0.002 USDである。
 
 ### worktreeの作成
