@@ -12,6 +12,7 @@ import {
   isCheckEnvironmentReason,
 } from "../lib/check_sandbox.ts";
 import {
+  CI_FIX_GITLEAKS_TIMEOUT_MS,
   CI_ROUND_DETAILS,
   CI_ROUND_REASON_PREFIX,
   ciRoundApplyTimeoutMisfit,
@@ -19,6 +20,7 @@ import {
   ciRoundVerifyTimeoutMisfit,
   isCiFixOutputAllowed,
 } from "../lib/ci_fix_round.ts";
+import { conflictRoundReason } from "../lib/conflict_fix_round.ts";
 import {
   DEPENDABOT_DRY_RUN_REASON,
   DEPENDABOT_MERGE_FORBIDDEN_REASON,
@@ -28,11 +30,11 @@ import {
   DEPENDABOT_TIMEOUT_MISFIT_REASON,
 } from "../lib/dependabot_flow_support.ts";
 import { isViewerBumpBranch } from "../lib/drawio_viewer_bump.ts";
-import { getDefaultBranch } from "../lib/drawio_viewer_bump_github.ts";
 import {
   type GhClient,
   getBranchProtected,
   getBranchRuleCount,
+  getDefaultBranch,
   isOwnPost,
   type PrReview,
   type ReviewThread,
@@ -89,6 +91,7 @@ import {
   assertOutputComplete,
   buildGitArgv,
   type CommandRunner,
+  type ConflictBlobs,
   type GitleaksScan,
   localGitEnv,
   readGitShowFile,
@@ -934,14 +937,17 @@ export function findPostedReviewId(
 /**
  * `pr_fix_prepare.ts`の結果の判別子。
  * `"proceed"`なら後続のステップ(collect、apply、verify)を実行する。
- * 残りの3つは終端で、`pr_fix_finish.ts`に直接進む。
- * この3つは`PrFixFinishOutcome`の値でもある(下の`decideFixFinishAction`を参照)。
+ * 残りは終端で、`pr_fix_finish.ts`に直接進む。
+ * これらは`PrFixFinishOutcome`の値でもある(下の`decideFixFinishAction`を参照)。
+ * `conflict_up_to_date`と`conflict_blocked`は競合回だけが返す。
  */
 export type PrFixGateOutcome =
   | "proceed"
   | "skip"
   | "guard_blocked"
-  | "round_exhausted";
+  | "round_exhausted"
+  | "conflict_up_to_date"
+  | "conflict_blocked";
 
 // ---------------------------------------------------------------------------
 // pr_fix_prepare: 安全のための関門(純粋関数)。
@@ -1102,15 +1108,16 @@ export function evaluatePrFixSafetyGuards(
 
 /**
  * 修正ラウンドの上限(`max_fix_rounds`)を確かめる。
- * CIの失敗を直す回(`ciRound`)は確かめない。その回は`fix_round`を前の値のまま写すので、
- * 指摘修正が上限に達したPRでも、CIの回が止まってしまうため。CIの回の上限は`pr_ci_fix_max_rounds`が決める。
+ * CIの失敗か、マージの競合を直す回(`skipsLimit`)は確かめない。その回は`fix_round`を前の値のまま写すので、
+ * 指摘修正が上限に達したPRでも、その回が止まってしまうため。
+ * CIの回の上限は`pr_ci_fix_max_rounds`が、競合の回の上限は`pr_conflict_fix_max_rounds`が決める。
  */
 export function evaluateFixRoundGuard(
   fixRound: number,
   maxFixRounds: number,
-  ciRound = false,
+  skipsLimit = false,
 ): PrFixGuardResult {
-  if (!ciRound && fixRound > maxFixRounds) {
+  if (!skipsLimit && fixRound > maxFixRounds) {
     return {
       ok: false,
       reason: `fix_round ${String(fixRound)} exceeds max_fix_rounds ${String(maxFixRounds)}`,
@@ -1269,6 +1276,35 @@ export function ciRoundTimeoutMisfit(
       CI_ROUND_OVERHEAD,
     )
   );
+}
+
+/**
+ * 競合回の修正ステップが、gitleaksを走らせる回数。Claudeの出力の要約と理由の検査1回である。
+ */
+const CONFLICT_ROUND_APPLY_SCANS = 1;
+
+/**
+ * 競合を直す回の時間設定が、flow.yamlの修正ステップのtimeoutに収まらなければ理由を返し、収まればnullを返す。
+ * 通常の回の見積もり(`prFixTimeoutMisfit`)に、競合回だけの追加の作業を足して確かめる。
+ * 準備のステップが止める条件であり、`watch_pr_conflicts`が起動の前に同じ条件で保留する。設定だけで決まる。
+ * 修正ステップは、Claudeの実行(不正な出力への再試行を含めて2回)に、gitleaksの検査1回を足す。
+ * 検証ステップは、検査コマンドを1回だけ実行し、Claudeを再実行しない。
+ * 通常の回の見積もりは検査コマンドを2回とClaude 2回で数えるので、その内側に収まる。
+ * gitによる読み取りが検証ステップに足す分は、その差に比べて小さく、別に見積もらない。
+ */
+export function conflictRoundTimeoutMisfit(
+  config: Pick<FactoryConfig, "claude_timeout_sec" | "allowed_check_commands">,
+): string | null {
+  const base = prFixTimeoutMisfit(config);
+  if (base !== null) return base;
+  const scanSec =
+    CI_FIX_GITLEAKS_TIMEOUT_MS / 1000 + PR_COMMAND_STOP_OVERHEAD_SEC;
+  const applyTotal =
+    2 * perRunSec(config.claude_timeout_sec) +
+    CONFLICT_ROUND_APPLY_SCANS * scanSec +
+    PR_STEP_OVERRUN_BASE_SEC;
+  if (applyTotal <= PR_FIX_APPLY_STEP_TIMEOUT_SEC) return null;
+  return `${conflictRoundReason("time settings do not fit the flow step timeout: ")}2 claude runs and ${String(CONFLICT_ROUND_APPLY_SCANS)} secret scan need ${String(applyTotal)}s but the step allows ${String(PR_FIX_APPLY_STEP_TIMEOUT_SEC)}s`;
 }
 
 /**
@@ -2757,6 +2793,8 @@ export type PrFixPushGateDeps = {
  * 先にworktreeのロックを確かめ、前のステップのClaudeや検査コマンドが残っていれば`WorktreeBusyError`のmessageを返す。
  * 検証ステップの最後の検査の後に、残ったプロセスがworktreeを書き換えうるため。
  * 残った所有権を、workerが検査の前提を満たさず取り戻せないとき(`CheckEnvironmentError`)も、そのmessageを返す。
+ * `busyReason`を渡すと、`WorktreeBusyError`のときだけ、そのmessageを渡して得た文を返す。
+ * 呼び出し側が、保持者を含む文を固定の注記に置き換えるために使う。`CheckEnvironmentError`には使わない。
  * 次に`.git`を準備ステップの記録と比べる(`recordedGitPointerStopReason`)。
  * 最後に、準備ステップの結果にPRのブランチ(`recordedBranch`)があることを確かめ、無ければ`PR_HEAD_NOT_RECORDED_REASON`を返す。
  * `commitAndPush`の`expectedBranch`に渡す値で、無いとpushする先を確かめられないため。
@@ -2766,15 +2804,15 @@ export async function prFixPushGateReason(
   deps: PrFixPushGateDeps,
   recordedPointer: string | null,
   recordedBranch: string | null,
+  busyReason?: (holder: string) => string,
 ): Promise<string | null> {
   try {
     await deps.ensureLockFree();
   } catch (err) {
-    if (
-      err instanceof WorktreeBusyError ||
-      err instanceof CheckEnvironmentError
-    )
-      return err.message;
+    if (err instanceof WorktreeBusyError) {
+      return busyReason === undefined ? err.message : busyReason(err.message);
+    }
+    if (err instanceof CheckEnvironmentError) return err.message;
     throw err;
   }
   const pointerReason = await recordedGitPointerStopReason(
@@ -2832,7 +2870,9 @@ export type PrFixFinishOutcome =
   | "no_feedback"
   | "done"
   | "requirements_gap"
-  | "blocked";
+  | "blocked"
+  | "conflict_up_to_date"
+  | "conflict_blocked";
 
 export type PrFixFinalAction =
   | { readonly kind: "noop" }
@@ -2840,7 +2880,9 @@ export type PrFixFinalAction =
   | { readonly kind: "requirements_gap_reroute" }
   | { readonly kind: "requirements_gap_needs_human" }
   | { readonly kind: "guard_blocked" }
-  | { readonly kind: "needs_human" };
+  | { readonly kind: "needs_human" }
+  | { readonly kind: "conflict_up_to_date" }
+  | { readonly kind: "conflict_blocked" };
 
 /**
  * まとめた結果(prepare、collect、apply、verifyのうち最後に動いたものの結果)を、
@@ -2853,6 +2895,10 @@ export type PrFixFinalAction =
  * 検査コマンドの失敗)は`"needs_human"`にする。
  * どちらも上流では`"blocked"`の形の結果だが、失敗の種類が違うので、
  * 意図して別の終端状態にしている。
+ *
+ * `conflict_up_to_date`(baseがすでにPRに取り込まれていて、直す競合が無い)と
+ * `conflict_blocked`(競合回で直せない競合)は、競合回の準備のステップだけが返す。
+ * どちらも、後続のステップを経ずに終端へ進む。
  */
 export function decideFixFinishAction(
   outcome: PrFixFinishOutcome,
@@ -2873,6 +2919,10 @@ export function decideFixFinishAction(
     case "no_feedback":
     case "blocked":
       return { kind: "needs_human" };
+    case "conflict_up_to_date":
+      return { kind: "conflict_up_to_date" };
+    case "conflict_blocked":
+      return { kind: "conflict_blocked" };
   }
 }
 
@@ -4741,6 +4791,7 @@ export function earlyExitBase(
     | "attempt"
     | "fix_round"
     | "ci_check_id"
+    | "conflict_check_id"
   >,
 ): {
   readonly owner: string;
@@ -4756,6 +4807,12 @@ export function earlyExitBase(
   readonly attempt: number;
   readonly fix_round: number;
   readonly ci_check_id: number | null;
+  readonly conflict_check_id: number | null;
+  readonly baseline_sha: string | null;
+  readonly base_sha: string | null;
+  readonly auto_tree_sha: string | null;
+  readonly conflicted_paths: string[] | null;
+  readonly conflict_blobs: ConflictBlobs[] | null;
 } {
   return {
     owner: workItem.owner,
@@ -4771,6 +4828,12 @@ export function earlyExitBase(
     attempt: workItem.attempt,
     fix_round: workItem.fix_round,
     ci_check_id: workItem.ci_check_id,
+    conflict_check_id: workItem.conflict_check_id,
+    baseline_sha: null,
+    base_sha: null,
+    auto_tree_sha: null,
+    conflicted_paths: null,
+    conflict_blobs: null,
   };
 }
 

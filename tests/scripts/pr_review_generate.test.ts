@@ -230,7 +230,7 @@ describe("reviewPrompt requirements wiring", () => {
       changedFiles: ["a.ts"],
       requirements: FAKE_REQUIREMENTS,
       openFindings: [],
-      ciRoundDiff: false,
+      fixRound: null,
     });
     expect(prompt).toContain("the button must be blue");
   });
@@ -242,7 +242,7 @@ describe("reviewPrompt requirements wiring", () => {
       changedFiles: ["a.ts"],
       requirements: null,
       openFindings: [],
-      ciRoundDiff: false,
+      fixRound: null,
     });
     expect(prompt).not.toContain("approved requirements");
   });
