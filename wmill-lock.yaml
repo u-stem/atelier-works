@@ -40,7 +40,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d053533eabd6d8856d92b4b7110bd7216e9940d081b43bdf57a0fe80dbf7bec1
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
-  f/factory/lib/db: e89db567c59afa7994a4ade306513f7979b410d685efa06743747f34091219a7
+  f/factory/lib/db: e811147288d3052e3b8c553580ae6471495f8c23135af4c4423edda976a73825
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -83,7 +83,7 @@ locks:
   f/factory/lib/pr_ci_human_support: 54c81204509fce685adcce54cdc93893f7485897bf10a5af5faf30ee421a2f83
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: dae504708c730f78468a287432375da34c0c72f2edda48e30831be9bea641541
-  f/factory/lib/pr_ci_watch: b53007b9b980acf63b11f3c4b7ccba3f974b88d72dd03a29aa89fd1febacd38c
+  f/factory/lib/pr_ci_watch: cc4e84a235b3d6e5b54480565f580a4c476d67a624a05b8f5a0cd72f7e3676dc
   f/factory/lib/pr_conflict_fix_claim: 0964d5b8d8ffd6aabc3ea83f4c4d9ce4f23e1cc6e4a3259710d9e897bbacc019
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: 3780214fb7cf2360669eafb216272bcbaf44761d0a5d3cf50ceb547ed2622cc9
@@ -147,5 +147,5 @@ locks:
   f/factory/steps/pr_workflow_support: bf7fc5140eea659b45e935b2d1e67b79f7ae983b73c8c49e7a4d2a674fd3ebba
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: 6b197f8bf7a2689c8f1906fcae64b328c9815890b6344796ab0e6cff6585e958
-  f/factory/watch_pr_ci: c5dbbae4ff3cb5ea520c5fe5a75993ac31f275ecf50c4dfc9b573776b5eade92
+  f/factory/watch_pr_ci: 1cc41276dc598e27b90d4571ffe54f0a9a3d9b20dae0d7681c4b1166637e8ba0
   f/factory/watch_pr_conflicts: a272c0a99fcdd47b218c2e017d4473936d058a1f6d2bb447391405c45cca99c8

@@ -55,6 +55,7 @@ import {
   markPrCiNotified,
   recordFailure,
   recordPrCiCheck,
+  releaseConfigMisfitHolds,
   releaseFixingPrCiCheck,
   resolveUnresolvedNoticesByPrefix,
   setFlowJobId,
@@ -290,6 +291,7 @@ export async function main(): Promise<PrCiWatchResult> {
     release: (id, options) => releaseFixingPrCiCheck(id, options),
     touch: (id) => touchPrCiCheck(id),
     markNotified: (id, reason) => markPrCiNotified(id, reason),
+    releaseConfigMisfitHolds: () => releaseConfigMisfitHolds(),
     addNotice: (record) => addNoticeUnlessUnresolved(record),
     resolveNotices: (kind, messagePrefix, resolvedBy) =>
       resolveUnresolvedNoticesByPrefix(kind, messagePrefix, resolvedBy),

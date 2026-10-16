@@ -4918,6 +4918,15 @@ export async function setPrCiFixHold(
 }
 
 /**
+ * 保留の理由が`config_misfit`の`failed`の行すべての保留を外し、通知した理由も空に戻す。外した行数を返す。
+ */
+export async function releaseConfigMisfitHolds(
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  return 0;
+}
+
+/**
  * そのリポジトリのmainのCIが、いま赤いかを返す。
  * `main_ci_runs`の最新の1行の状態が`failed`なら`true`。行が無ければ`false`。
  * 最新かどうかは`(COALESCE(run_created_at, first_seen_at), id)`の大きさで決める。

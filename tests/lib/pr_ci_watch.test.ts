@@ -207,6 +207,8 @@ type Setup = {
   configured?: (owner: string, repo: string) => boolean;
   /** 解決に失敗させるnoticeの種類。 */
   resolveFailsFor?: string[];
+  /** 設定の不整合の保留を外す更新を失敗させる。 */
+  releaseMisfitHoldsFails?: boolean;
   duplicateKinds?: string[];
   recordFails?: boolean;
   noticeFails?: boolean;
@@ -289,6 +291,8 @@ type Harness = {
     };
   }[];
   readonly fixItemReads: number[];
+  /** 設定の不整合の保留を外す更新と、そのnoticeの解決の呼び出しを、呼んだ順に並べたもの。 */
+  readonly misfitSteps: string[];
   /** 人のPRの検索の呼び出し。 */
   readonly searches: { scope: OpenAuthoredPrsScope; author: string }[];
 };
@@ -307,6 +311,7 @@ function harness(setup: Setup = {}): Harness {
   const marked: { id: number; reason: string }[] = [];
   const notices: NoticeRecord[] = [];
   const resolved: { kind: string; prefix: string; by: string }[] = [];
+  const misfitSteps: string[] = [];
   const discord: NotifyEvent[] = [];
   const failures: string[] = [];
   const logs: LogLine[] = [];
@@ -432,10 +437,18 @@ function harness(setup: Setup = {}): Harness {
         ? null
         : notices.length;
     },
+    releaseConfigMisfitHolds: async () => {
+      misfitSteps.push("release");
+      if (setup.releaseMisfitHoldsFails === true) {
+        throw new Error("release misfit holds failed");
+      }
+      return 1;
+    },
     resolveNotices: async (kind, prefix, by) => {
       if (setup.resolveFailsFor?.includes(kind) === true) {
         throw new Error("resolve failed");
       }
+      if (kind === CONFIG_MISFIT_KIND) misfitSteps.push("resolve");
       events.push(kind === PR_CI_FAILED_KIND ? "resolve_failure" : "resolve");
       resolved.push({ kind, prefix, by });
       return 1;
@@ -496,6 +509,7 @@ function harness(setup: Setup = {}): Harness {
     noCiQueries,
     released,
     fixItemReads,
+    misfitSteps,
     searches,
   };
 }
@@ -5631,6 +5645,50 @@ describe("notifying the time setting misfit once for the whole config", () => {
       prefix: "",
       by: PR_CI_RESOLVED_BY,
     });
+  });
+
+  test("releases the config_misfit holds once the time settings fit", async () => {
+    const h = harness(misfitSetup([], null));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toContain("release");
+  });
+
+  test("releases the holds before it resolves the notice", async () => {
+    const h = harness(misfitSetup([], null));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toEqual(["release", "resolve"]);
+  });
+
+  test("releases the holds when the automatic fix is not running", async () => {
+    const h = harness({ policy: FIX_POLICY });
+    await runPrCiRecovery(h.deps);
+    expect(h.misfitSteps).toEqual(["release", "resolve"]);
+  });
+
+  test("keeps the holds while the time settings still do not fit", async () => {
+    const h = harness(misfitSetup([misfitRow(9, 12)]));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toEqual([]);
+  });
+
+  test("keeps the notice when the holds could not be released", async () => {
+    const h = harness(misfitSetup([], null, { releaseMisfitHoldsFails: true }));
+    await runPrCiWatch(h.deps);
+    expect(h.misfitSteps).toEqual(["release"]);
+  });
+
+  test("records the failure to release the holds", async () => {
+    const h = harness(misfitSetup([], null, { releaseMisfitHoldsFails: true }));
+    await runPrCiWatch(h.deps);
+    expect(h.failures).toEqual(["release_config_misfit_holds"]);
+  });
+
+  test("does not notify a row that still has the hold when it could not be released", async () => {
+    const h = harness(
+      misfitSetup([misfitRow(9, 12)], null, { releaseMisfitHoldsFails: true }),
+    );
+    await runPrCiWatch(h.deps);
+    expect(h.notices).toEqual([]);
   });
 
   test("still notifies the other rows when the resolution fails", async () => {

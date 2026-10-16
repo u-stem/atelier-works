@@ -484,6 +484,8 @@ export type PrCiWatchDeps = {
   /** 状態を変えずに読み直した時刻を進める。 */
   readonly touch: (id: number) => Promise<boolean>;
   readonly markNotified: (id: number, reason: string) => Promise<boolean>;
+  /** 保留の理由が`config_misfit`の失敗の行すべての保留と通知した理由を外す。外した行数を返す。 */
+  readonly releaseConfigMisfitHolds: () => Promise<number>;
   /** 新しく挿入したら通知のID、同じ未解決の通知があれば`null`を返す。 */
   readonly addNotice: (record: NoticeRecord) => Promise<number | null>;
   readonly resolveNotices: (
