@@ -808,7 +808,11 @@ function readingHint(summary: WorkerLoadSummary): string | null {
     : null;
 }
 
-function runningLine(summary: WorkerLoadSummary): string {
+function runningLine(summary: WorkerLoadSummary): string | null {
+  if (summary.slots_max !== null && summary.slots_max <= 1) {
+    // 枠が記録の1つだけで、他のジョブが使える枠が無いので、使用の件数に意味がない。
+    return null;
+  }
   return summary.running_jobs_max === null || summary.slots_max === null
     ? "他のジョブの枠の使用: 不明"
     : `他のジョブの枠の使用: 最大${String(summary.running_jobs_max)}件(記録の枠を除く、上限${String(summary.slots_max - 1)})`;
