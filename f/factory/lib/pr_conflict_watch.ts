@@ -1112,8 +1112,18 @@ async function claimRow(
     }
     return;
   }
-  // 上限に達した行は、保留も通知もせず、次の巡回に回す。保留の判断は、上限の前に済んでいる。
-  if (facts.claimsStarted >= CONFLICT_CLAIMS_PER_RUN_LIMIT) return;
+  // 上限に達した行は、通知せず、次の巡回に回す。保留の判断は、上限の前に済んでいる。
+  // 古い一時の保留が付いたままだと、猶予の後の通知が、事実と違う理由を示す。解けた保留は外す。
+  // 外すのは、読んだ理由のままの行だけで、最終の保留には触れない。保留が無ければ書かない。
+  if (facts.claimsStarted >= CONFLICT_CLAIMS_PER_RUN_LIMIT) {
+    if (
+      row.fix_hold_reason !== null &&
+      !isFinalPrConflictFixHold(row.fix_hold_reason)
+    ) {
+      await fix.setHold(row.id, null, row.fix_hold_reason);
+    }
+    return;
+  }
   // 一時の保留が解けた行は、起動の文が同じ文の中で保留を外す。
   const workItemId = await fix.claim({
     id: row.id,
