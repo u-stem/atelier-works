@@ -46,12 +46,21 @@ value:
           attempt:
             type: javascript
             expr: results.pr_fix_prepare.attempt
+          base_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.base_sha ?? null
           ci_check_id:
             type: javascript
             expr: results.pr_fix_prepare.ci_check_id ?? null
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []
+          conflict_check_id:
+            type: javascript
+            expr: results.pr_fix_prepare.conflict_check_id ?? null
+          conflicted_paths:
+            type: javascript
+            expr: results.pr_fix_prepare.conflicted_paths ?? null
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
@@ -119,6 +128,15 @@ value:
           attempt:
             type: javascript
             expr: results.pr_fix_prepare.attempt
+          auto_tree_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.auto_tree_sha ?? null
+          base_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.base_sha ?? null
+          baseline_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.baseline_sha ?? null
           branch:
             type: javascript
             expr: results.pr_fix_prepare.branch ?? null
@@ -128,6 +146,15 @@ value:
           comments:
             type: javascript
             expr: results.pr_fix_collect?.comments ?? []
+          conflict_blobs:
+            type: javascript
+            expr: results.pr_fix_prepare.conflict_blobs ?? null
+          conflict_check_id:
+            type: javascript
+            expr: results.pr_fix_prepare.conflict_check_id ?? null
+          conflicted_paths:
+            type: javascript
+            expr: results.pr_fix_prepare.conflicted_paths ?? null
           factory_clone_dir:
             type: javascript
             expr: results.pr_fix_prepare.factory_clone_dir
@@ -173,6 +200,15 @@ value:
           summary:
             type: javascript
             expr: results.pr_fix_verify?.summary ?? ""
+          auto_tree_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.auto_tree_sha ?? null
+          base_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.base_sha ?? null
+          baseline_sha:
+            type: javascript
+            expr: results.pr_fix_prepare.baseline_sha ?? null
           branch:
             type: javascript
             expr: results.pr_fix_prepare.branch ?? null
@@ -188,6 +224,15 @@ value:
           commit_subject:
             type: javascript
             expr: results.pr_fix_verify?.commit_subject ?? null
+          conflict_blobs:
+            type: javascript
+            expr: results.pr_fix_prepare.conflict_blobs ?? null
+          conflict_check_id:
+            type: javascript
+            expr: results.pr_fix_prepare.conflict_check_id ?? null
+          conflicted_paths:
+            type: javascript
+            expr: results.pr_fix_prepare.conflicted_paths ?? null
           fix_round:
             type: javascript
             expr: results.pr_fix_prepare.fix_round

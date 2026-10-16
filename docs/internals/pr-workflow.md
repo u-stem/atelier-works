@@ -448,7 +448,7 @@ CI回が記録すると、pushしたheadが「処理済み」になり、再レ�
 ### 再レビューへの入力
 
 CI回がpushしたheadのレビューには、CI回の差分であることを、プロンプトの固定文で伝える。
-そのPRの`pr_fix`のうちCI回のどれかが、pushしたcommitにレビューするshaを含むときに限る。
+そのPRの`pr_fix`のうちCI回か競合回のどれかが、pushしたcommitにレビューするshaを含むときに限る。
 最新かどうかと状態は問わない。
 pushしたcommitは、依頼の前後で変わらないためである。
 人が後からpushしたheadのレビューには伝えない。
@@ -469,6 +469,88 @@ PRにpushしてheadが変わると、新しい失敗として判定される。
 
 競合を直す回(`conflict_check_id`が非NULL)の`pr_fix`も、手動の再開でも、イメージが古いときの自動の再開でも再開しない。
 競合の行が、直している作業項目を結んだままになり、行と作業項目が食い違うためである。
+
+## マージの競合を解く回
+
+マージの競合を解く回(競合回)は、PRのブランチが既定のブランチ(base)と競合したとき、baseをmergeして競合を解き、mergeコミットをpushするための回である。
+`pr_fix`のフローを、作業項目の`conflict_check_id`が非NULLのときだけ、次のように変えて動かす。
+`conflict_check_id`は、直す競合の行(`pr_conflict_checks`)のIDである。
+作業項目は、競合の回(`conflict_episode`)も持つ。
+git操作と検査の部品は[CIの失敗を直す部品の仕様](ci-fix.md#競合回のgit操作と検査)に、安全策の理由は[セキュリティ](../security.md#マージの競合を解く回)に書く。
+
+### 通常の回との違い
+
+| ステップ | 競合回 |
+| --- | --- |
+| 準備 | 修正ラウンドの上限を確かめない。競合の行が、いまのheadについて、この作業項目で競合のままであることと、PRのbaseが既定のブランチであることを確かめる。worktreeを用意した後、baseをmergeして、ローカルだけの基準コミットを作る |
+| 収集 | GitHubを読まず、固定の結果を返す。処理済みの位置は進めない |
+| 修正 | 競合ファイルだけをClaudeに解かせる。`Bash`は渡さない。競合ファイルが無いときは、Claudeを起動せず、日次予算も見ない。コミットメッセージは固定文で、返信は空である |
+| 検証 | HEADが基準コミットであることを確かめ、変更と解消を検査する。検査コマンドは1回だけ実行し、失敗してもClaudeを再実行しない |
+| 完了 | pushの直前に、検証と同じ検査をもう一度行い、PRを読み直す。mergeコミットをpushし、通知を出さない |
+
+修正ラウンドの上限を確かめないのは、競合回が`fix_round`を前の値のまま写すためである。
+競合回の回数の上限は、`pr_conflict_fix_max_rounds`が決める。
+
+### 準備の結果
+
+準備のステップの結果(`outcome`)は、次のとおり振り分ける。
+競合回で直せない場合とbaseがすでにPRにある場合は、後続のステップを実行せず、完了のステップへ進む。
+
+| 事象 | 結果 | 作業項目の遷移 |
+| --- | --- | --- |
+| mergeできて、検査に通った | `proceed` | 修正中のまま |
+| baseがすでにPRの履歴にある | `conflict_up_to_date` | `reviewed`。注記は`conflict round: up_to_date` |
+| 競合ファイルが10を超える、通常のファイルでない、バイナリ、衝突ブロックが無い、属性がある | `conflict_blocked` | `needs_human`。注記は`conflict round: unresolvable conflict` |
+| 保護パスが競合しているか、両側が変えた | `conflict_blocked` | `needs_human`。注記は`conflict round: a conflicted path is protected` |
+| baseが`.github/workflows/`を変えている | `conflict_blocked` | `needs_human`。注記は`conflict round: base changes workflows` |
+| PRのbaseが既定のブランチでない | `conflict_blocked` | `needs_human`。注記は`conflict round: base is not the default branch` |
+| 競合の行と作業項目が合わない、PRのheadが動いた、worktreeの状態が前提と違う | `guard_blocked` | `blocked`。注記は理由そのまま |
+
+競合ファイルが無いのに`proceed`になる場合がある。
+GitHubが競合と判定したのに、ローカルではきれいにmergeできたときである。
+この場合は、Claudeを起動せず、検査コマンドを実行して、そのままpushへ進む。
+きれいにmergeできたときも、両側が変えた保護パスは止める。
+
+### 完了の結果
+
+完了のステップの遷移は、次のとおりである。
+どれも、再レビューの依頼、返信、`pr_fixed`の通知を出さない。
+失敗のDiscordの通知とnoticeも出さない。
+ただし、次の2つは運用者の対応が要るので、通常の回と同じnoticeを残す。
+
+- リポジトリのオーナーの数値IDの照合に落ちたとき
+- workerのイメージが古いとき
+
+| 事象 | 作業項目の遷移 |
+| --- | --- |
+| mergeコミットをpushできた | `rereview_requested`。ラウンドを記録する |
+| pushの前の確認に通らない | `needs_human`。注記は止めた理由。workerが検査の前提を満たさないときは、ラウンドを記録せず`blocked` |
+| PRのheadが動いた | `blocked`。ラウンドを記録する |
+| baseがpushの直前に動いた | `reviewed`。注記は`conflict round: the base branch moved`。ラウンドを記録する |
+| GitHubがworkflowの権限不足でpushを拒否した | `needs_human`。注記は`conflict round: base changes workflows`。ラウンドを記録する |
+| Claudeや検査が止めた | `needs_human`。検査コマンドの失敗の注記は`conflict round: check failed` |
+
+baseがpushの直前に動いたときは、`reviewed`にして、注記で`up_to_date`と区別する。
+baseは動き続けるので、次の判定で読み直す。
+行には最終の保留が付かない。
+
+作業項目のheadは、CI回と同じく更新しない。
+その差が、`poll_prs`の自動のレビューを起動するためである。
+
+### 注記の固定文
+
+注記は、固定文の完全一致で、競合の行の保留の理由へ写せる形にしている(`holdReasonForConflictStoppedItem`)。
+一致しない注記は、保留の理由が`fix_stopped`になる。
+Claudeの理由の先頭には固定の接頭辞`conflict round: claude blocked:`が付くので、Claudeの出力の文字列が保留の理由を決めることは無い。
+
+止めた理由の注記には、イメージが古い理由(`worker image is stale: run mise run up:`で始まる文)の接頭辞を壊す語句を付けない。
+回復は`startsWith`でこの理由を見分け、自動の再開と回数の除外に使う。
+検証と完了のステップが検査の前提を満たさないときの注記は、例外の文のまま残す。
+
+### 再レビューへの入力
+
+競合回がpushしたheadのレビューにも、CI回と同じ固定文を足す([再レビューへの入力](#再レビューへの入力))。
+固定文はCI回の修正を述べる文なので、競合回のレビューでも、その文のまま渡る。
 
 ## 返信の形式
 

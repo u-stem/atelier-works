@@ -29,6 +29,20 @@ import {
   runClaude,
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
+import {
+  CONFLICT_CLEAN_MERGE_RESULT,
+  type ConflictFixApplyInput,
+  type ConflictFixApplyResult,
+  runConflictFixApply,
+} from "../lib/conflict_fix_apply.ts";
+import {
+  CONFLICT_FIX_SCHEMA,
+  isConflictFixClaudeOutput,
+} from "../lib/conflict_fix_prompt.ts";
+import {
+  CONFLICT_MERGE_NOT_RECORDED_REASON,
+  conflictRoundReason,
+} from "../lib/conflict_fix_round.ts";
 import { countPrFixFailures, latestDraft, recordAgentRun } from "../lib/db.ts";
 import { type GhClient, getPr } from "../lib/github.ts";
 import { logger } from "../lib/log.ts";
@@ -42,6 +56,7 @@ import { FIX_SCHEMA, fixPrompt } from "../lib/prompts.ts";
 import type { FixOutcome, FixReply } from "../lib/types.ts";
 import {
   assertWorktreeGitPointer,
+  MERGE_COMMIT_MESSAGE,
   runCommand,
   worktreeGitPointerMatches,
 } from "../lib/workspace.ts";
@@ -76,6 +91,9 @@ export type PrFixApplyResult = {
  * 不正な出力への再試行の前にも`.git`を確かめ、一致しなければ再試行しない。
  * Claudeの実行が失敗したときは例外を投げる。
  * CIの失敗を直す回(`ci_check_id`が非NULL)は、指摘ではなく失敗したジョブのログから直す(`applyCiRound`)。
+ * マージの競合を直す回(`conflict_check_id`が非NULL)は、準備のステップがmergeした競合ファイルだけを直す(`applyConflictRound`)。
+ * 競合ファイルが無い回(GitHubは競合と判定したが、ローカルではきれいにmergeできた)は、Claudeを起動せず、日次予算も見ずに"done"を返す。
+ * 競合回のコミットメッセージは固定文で、返信は空である。準備のステップがmergeの結果を記録していなければ、"blocked"を返す。
  */
 export async function main(
   work_item_id: number,
@@ -91,6 +109,9 @@ export async function main(
   comments: CollectedComment[],
   worktree_git_pointer: string | null = null,
   ci_check_id: number | null = null,
+  conflict_check_id: number | null = null,
+  base_sha: string | null = null,
+  conflicted_paths: string[] | null = null,
 ): Promise<PrFixApplyResult> {
   const log = logger("pr_fix_apply");
 
@@ -116,6 +137,29 @@ export async function main(
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );
+
+  // 競合を直す回の入力。mergeの記録が無ければ、何を解くかが分からないので止める。
+  const conflictRound = conflict_check_id !== null;
+  const conflictInput: ConflictFixApplyInput | null =
+    conflictRound && base_sha !== null && conflicted_paths !== null
+      ? {
+          pr: {
+            owner,
+            repo,
+            number: pr_number,
+            headSha: head_sha,
+            baseSha: base_sha,
+          },
+          conflictedPaths: conflicted_paths,
+        }
+      : null;
+  if (conflictRound && conflictInput === null) {
+    return blockedResult(CONFLICT_MERGE_NOT_RECORDED_REASON);
+  }
+  // 競合ファイルが無い回は、Claudeを起動せずpushへ進む。費用がかからないので、日次予算の検査より前に行う。
+  if (conflictInput !== null && conflictInput.conflictedPaths.length === 0) {
+    return conflictApplyResult(CONFLICT_CLEAN_MERGE_RESULT);
+  }
 
   // `metadata`ジョブが落ちたCI回は、Claudeを起動せず、hashの再計算で直す。
   // 費用がかからないので、日次予算の検査より前に行う。
@@ -155,6 +199,19 @@ export async function main(
   const ghToken = await wmill.getVariable("f/factory/github_token");
   const oauthToken = await wmill.getVariable("f/factory/claude_oauth_token");
   const client: GhClient = { run: runCommand, ghToken };
+
+  if (conflictInput !== null) {
+    return await applyConflictRound({
+      workItemId: work_item_id,
+      worktreeDir: worktree_dir,
+      factoryCloneDir: factory_clone_dir,
+      attempt,
+      recordedPointer,
+      oauthToken,
+      config,
+      input: conflictInput,
+    });
+  }
 
   if (ci_check_id !== null) {
     return await applyCiRound({
@@ -276,6 +333,125 @@ export async function main(
   } finally {
     await systemPrompt.cleanup();
   }
+}
+
+/**
+ * 競合回の修正の結果(`runConflictFixApply`)を、ステップの結果にする。
+ * コミットメッセージは固定文で、Claudeの提案は使わない。`done`のときだけ返す。
+ * 返信は持たない。競合回に答える指摘は無い。
+ */
+export function conflictApplyResult(
+  result: Extract<ConflictFixApplyResult, { kind: "finished" | "blocked" }>,
+): PrFixApplyResult {
+  if (result.kind === "blocked") return blockedResult(result.reason);
+  return {
+    outcome: result.outcome,
+    reason: result.reason,
+    summary: result.summary,
+    replies: [],
+    commit_subject: result.outcome === "done" ? MERGE_COMMIT_MESSAGE : null,
+    commit_body: null,
+  };
+}
+
+type ConflictRoundApplyInput = {
+  readonly workItemId: number;
+  readonly worktreeDir: string;
+  readonly factoryCloneDir: string;
+  readonly attempt: number;
+  readonly recordedPointer: string;
+  readonly oauthToken: string;
+  readonly config: Awaited<ReturnType<typeof loadConfig>>;
+  readonly input: ConflictFixApplyInput;
+};
+
+/**
+ * 競合を直す回の修正。worktreeにある競合ファイルだけを、Claudeに解かせる。
+ * ファイルの内容はClaudeがReadで読む。プロンプトに載せるのは、検証済みのパスの一覧だけである。
+ * Claudeには`Bash`を渡さず、読み取りと編集のツールだけを渡す。ファイルに書かれた指示でコマンドを実行させないためである。
+ * スキルに競合回の節が無いときは、Claudeを起動せずに`blocked`を返す。
+ * 要約と理由は、長さを切り、秘密値の検査を通してから返す。
+ */
+async function applyConflictRound(
+  round: ConflictRoundApplyInput,
+): Promise<PrFixApplyResult> {
+  const { config } = round;
+  const result = await runConflictFixApply(
+    {
+      readSkillText: () =>
+        readFile(
+          `${round.factoryCloneDir}/.claude/skills/factory-fix/SKILL.md`,
+          "utf8",
+        ),
+      startClaude: async (prompt) => {
+        const systemPrompt = await buildSystemPrompt({
+          skillNames: ["factory-fix"],
+          factoryCloneDir: round.factoryCloneDir,
+        });
+        try {
+          const sonnetFailures = await countPrFixFailures(round.workItemId);
+          const run = await runClaude({
+            run: withWorktreeProcessLock(
+              runCommand,
+              worktreeLockFor(round.worktreeDir),
+              {
+                kind: "pr_fix",
+                workItemId: round.workItemId,
+                jobId: lockJobIdFromEnv(process.env),
+              },
+            ),
+            workItemId: round.workItemId,
+            stage: "pr_fix",
+            attempt: round.attempt,
+            model: modelFor(config, "pr_fix", sonnetFailures),
+            prompt,
+            appendSystemPromptFile: systemPrompt.path,
+            jsonSchema: CONFLICT_FIX_SCHEMA,
+            isStructuredOutput: isConflictFixClaudeOutput,
+            tools: CI_FIX_TOOLS,
+            // 通常の回と同じ許可の組み合わせ。Bashは渡さない。
+            permissionMode: "dontAsk",
+            allowedTools: CI_FIX_ALLOWED_TOOLS,
+            settingSources: ["user"],
+            maxTurns: config.max_turns,
+            maxBudgetUsd: config.max_budget_usd_per_run,
+            cwd: round.worktreeDir,
+            oauthToken: round.oauthToken,
+            timeoutMs: config.claude_timeout_sec * 1000,
+            beforeRetry: () =>
+              worktreeGitPointerMatches(
+                round.worktreeDir,
+                round.recordedPointer,
+              ),
+          });
+          await recordClaudeRuns(run, recordAgentRun);
+          return run.outcome === "success"
+            ? { kind: "success", output: run.structuredOutput }
+            : { kind: "failure", reason: run.reason };
+        } finally {
+          await systemPrompt.cleanup();
+        }
+      },
+      scan: ciTextScanner(runCommand),
+    },
+    round.input,
+  );
+
+  if (result.kind === "claude_failure") {
+    // 失敗した実行が`.git`を書き換えていれば、例外にせずポインタの書き換えを理由に"blocked"を返す。
+    const afterFailureReason = await recordedGitPointerStopReason(
+      round.recordedPointer,
+      (expected) => assertWorktreeGitPointer(round.worktreeDir, expected),
+    );
+    if (afterFailureReason !== null) {
+      return blockedResult(afterFailureReason);
+    }
+    // 実行の詳細は、秘密値の検査を通っていないので、例外の文に入れない。
+    throw new Error(
+      `pr_fix_apply: ${conflictRoundReason(`claude run failed (${result.reason})`)}`,
+    );
+  }
+  return conflictApplyResult(result);
 }
 
 function blockedResult(reason: string): PrFixApplyResult {
