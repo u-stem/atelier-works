@@ -6201,7 +6201,10 @@ export async function countPrConflictFixRounds(
  * 終わったのは、次のどちらかの作業項目である。
  * - 状態が`reviewed`か`rereview_requested`で、失敗せずに終えた。
  * - 終端の状態で、commitをpushした記録(`fix_rounds.commit_shas`が空でない)を持つ。`blocked`と`failed`と`needs_human`で
- *   終わった回も含む。pushした後は、GitHubの競合の判定が古いままのことがあるためである。回復がpushしたとみなす条件と同じである。
+ *   終わった回も含む。pushした後は、GitHubの競合の判定が古いままのことがあるためである。
+ * 競合回の作業項目は、フローを1回だけ動かし、`fix_rounds`の行を高々1つ持つ。再開は`retry_work_item`が拒み、自動の再開と
+ * `restartStoppedWorkItem`も競合回を除く。この前提では、回復がpushしたとみなす条件(直近の1回の`commit_shas`)と、
+ * ここでの「どれかの回」は同じ結果になる。複数の行を持つ作業項目があれば、こちらは、より多くの回を「直した」とみなす。
  * pushせずに`blocked`と`failed`と`needs_human`で止まった回は含めない。
  * 時刻は作業項目の`updated_at`である。ownerとrepoは小文字で照合し、競合の回をまたいで数える。
  * GitHubが競合の有無を更新するまで遅れても、直した直後に起動し直さないために使う。

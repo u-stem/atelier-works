@@ -1074,7 +1074,9 @@ Claudeの実行の後に止まった回も含むので、Claudeの実行は、�
 | 直近に終わった時刻 | 状態が`reviewed`か`rereview_requested`の作業項目と、終端でcommitをpushした記録(`fix_rounds.commit_shas`)を持つ作業項目の、最新の更新時刻。PR全体で、競合の回をまたいで見る。pushせずに`blocked`と`failed`と`needs_human`で止まった回は含めない |
 
 pushせずに`blocked`で止まった回を除くのは、イメージが古い理由で止まった回に`recently_fixed`の待ちを生まないためである。
-pushした回は、`blocked`や`failed`で終わっていても含める。pushした後は、GitHubの競合の判定が古いままのことがあるためで、回復が「pushした」とみなす条件と同じである。
+pushした回は、`blocked`や`failed`で終わっていても含める。pushした後は、GitHubの競合の判定が古いままのことがあるためである。
+競合回の作業項目は、フローを1回だけ動かし、`fix_rounds`の行を高々1つ持つ。再開は`retry_work_item`が拒み、自動の再開の候補と`restartStoppedWorkItem`も競合回を除く。
+この前提では、回復の「直近の1回がpushした」と、ここでの「どれかの回がpushした」は同じ結果になる。
 そのような回の繰り返しは、行の起動の回数の上限が止める。
 
 判断が例外を投げたときは、失敗を記録して続ける。行は変えない。

@@ -40,7 +40,7 @@ export type ConflictFixClaimReaders = {
   readonly countEpisodeRounds: () => Promise<number>;
   /** そのPRで、競合の回をまたいで起動した数。 */
   readonly countPrRounds: () => Promise<number>;
-  /** 直近の競合を直す作業項目が、何も失敗せずに終わった時刻。無ければ`null`。 */
+  /** 直近の競合を直す作業項目が、失敗せずに終わったか、pushした後に終わった時刻。無ければ`null`。 */
   readonly lastFixSettledAt: () => Promise<Date | null>;
 };
 
@@ -140,7 +140,7 @@ export type ConflictNotifyInput = {
   /** 一時の保留のまま通知を待つ時間(分)。 */
   readonly graceMin: number;
   readonly now: Date;
-  /** 競合を直す作業項目が、失敗せずに終わった時刻の最新。無ければ`null`か省略。 */
+  /** 競合を直す作業項目が、失敗せずに終わったか、pushした後に終わった時刻の最新。無ければ`null`か省略。 */
   readonly lastFixSettledAt?: Date | null;
   readonly row: {
     readonly fix_hold_reason: string | null;

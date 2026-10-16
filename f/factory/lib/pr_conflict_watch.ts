@@ -180,7 +180,7 @@ export type PrConflictFixDeps = {
     repo: string,
     prNumber: number,
   ) => Promise<number>;
-  /** 競合を直す作業項目が、失敗せずに終わった時刻の最新。無ければ`null`。 */
+  /** 競合を直す作業項目が、失敗せずに終わったか、pushした後に終わった時刻の最新。無ければ`null`。 */
   readonly lastFixSettledAt: (
     owner: string,
     repo: string,
