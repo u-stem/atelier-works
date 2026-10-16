@@ -70,6 +70,10 @@ describe("noticeGuide", () => {
     expect(noticeGuide("config_misfit").action).toContain("claude_timeout_sec");
   });
 
+  test("tells that disabling only the automatic fix still resolves the time setting misfit", () => {
+    expect(noticeGuide("config_misfit").note).toContain("自動修正だけを無効");
+  });
+
   test("tells that the time setting misfit is resolved once the settings fit", () => {
     expect(noticeGuide("config_misfit").note).toContain("自動で解決");
   });

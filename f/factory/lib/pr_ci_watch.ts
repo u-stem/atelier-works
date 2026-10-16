@@ -1846,7 +1846,7 @@ async function notifyDeferred(context: Context): Promise<void> {
       now: context.now,
     });
     if (decision.kind === "wait") continue;
-    // 設定が収まった後に残った保留は、通知しない。次の起動の判断で外れる。
+    // 設定が収まった後に残った保留は、通知しない。保留を外す更新が失敗した回に残りうる。次の回に外れる。
     if (
       decision.hold === "config_misfit" &&
       (deps.claim === undefined || deps.claim.configMisfit === null)
@@ -1873,14 +1873,25 @@ async function notifyDeferred(context: Context): Promise<void> {
 }
 
 /**
- * 時間設定が収まったか、起動する設定でなくなったときに、設定全体の不整合のnoticeを解決する。
+ * 時間設定が収まったか、起動する設定でなくなったときに、設定全体の不整合を解消する。
  * 起動の依存(`claim`)は、監視と自動修正が有効なときだけ渡るので、無いときは起動しない設定である。
- * 設定の不整合は起動の前に確かめるので、設定を直せば解決してよい。
- * 解決は冪等で、失敗しても通知は止めない。残るだけで、次の回に解決をやり直す。
+ * 設定の不整合は起動の前に確かめるので、設定を直せば解消してよい。
+ * 先に、保留の理由が`config_misfit`の行の保留と通知した理由を外し、その後にnoticeを解決する。
+ * 巡回の枠から外れたPRの行は、起動の判断で保留を外されない。ここで外さないと、noticeだけが消えて、
+ * 保留と通知済みの印が残る。外した行は、巡回の枠に入れば次の起動の判断で決め直され、
+ * 枠の外なら、保留の理由なしの通知(`UNHELD_FAILURE_NOTICE_AFTER_MS`)で知らせ直される。
+ * 保留を外せなかった回は、noticeを残す。残るだけで、次の回に同じ手順をやり直す。
+ * 解決は冪等で、失敗しても通知は止めない。
  */
 async function resolveConfigMisfitNotice(context: Context): Promise<void> {
   const { deps } = context;
   if (deps.claim !== undefined && deps.claim.configMisfit !== null) return;
+  try {
+    await deps.releaseConfigMisfitHolds();
+  } catch (err) {
+    await recordFailureOf(context, "release_config_misfit_holds", err);
+    return;
+  }
   try {
     await deps.resolveNotices(CONFIG_MISFIT_KIND, "", PR_CI_RESOLVED_BY);
   } catch (err) {

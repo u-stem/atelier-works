@@ -40,7 +40,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: d053533eabd6d8856d92b4b7110bd7216e9940d081b43bdf57a0fe80dbf7bec1
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
-  f/factory/lib/db: e811147288d3052e3b8c553580ae6471495f8c23135af4c4423edda976a73825
+  f/factory/lib/db: a1df6dbd66a8447b7f2abbbf7cb1bf94f3bb4890132ca9fe81b55ab3bbac0a53
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -78,12 +78,12 @@ locks:
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: ea5981391d7d989101f28cbbc9b17905691a9b15c398e829997712e56cd85f96
-  f/factory/lib/pr_ci_fix_claim: 767da566bbed211bed1a687814bb5d9064795b259725402268c751663e9c058c
+  f/factory/lib/pr_ci_fix_claim: 9c6f2bdf35aff0f3fe91daa41016591a7d566b851b05580564188daf1f316aae
   f/factory/lib/pr_ci_fix_recovery: 9220aa3a25465409e574f3945cfa37b6b4a6c542e2ad410d03bc6b8ec2c28ca4
   f/factory/lib/pr_ci_human_support: 54c81204509fce685adcce54cdc93893f7485897bf10a5af5faf30ee421a2f83
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: dae504708c730f78468a287432375da34c0c72f2edda48e30831be9bea641541
-  f/factory/lib/pr_ci_watch: cc4e84a235b3d6e5b54480565f580a4c476d67a624a05b8f5a0cd72f7e3676dc
+  f/factory/lib/pr_ci_watch: 02b85e933110ff462a2630df429dfc178b453aa997c0359e1138f551d7066139
   f/factory/lib/pr_conflict_fix_claim: 0964d5b8d8ffd6aabc3ea83f4c4d9ce4f23e1cc6e4a3259710d9e897bbacc019
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: 3780214fb7cf2360669eafb216272bcbaf44761d0a5d3cf50ceb547ed2622cc9
