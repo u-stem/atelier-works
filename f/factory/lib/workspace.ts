@@ -3918,11 +3918,21 @@ type MergeGitContext = {
   readonly network: Record<string, string>;
 };
 
-function mergeGitContext(opts: MergeWorktreeOptions): MergeGitContext {
+/**
+ * 競合回のgitの環境を組み立てる。ローカルの環境には、authorとcommitterを環境変数で入れる。
+ * `merge`などは、コミットを作らない呼び出しでも、利用者名が決まらないとcommitter identityのエラーで失敗する。
+ * 実行する環境の利用者設定やパスワードファイルの氏名には頼れないので、全呼び出しに同じ値を渡す。
+ */
+function mergeGitContext(
+  opts: MergeWorktreeOptions & { readonly author: GitIdentity },
+): MergeGitContext {
   return {
     run: opts.run,
     cwd: opts.dir,
-    local: localGitEnv(opts.home, opts.path),
+    local: {
+      ...localGitEnv(opts.home, opts.path),
+      ...commitIdentityEnv(opts.author),
+    },
     network: networkGitEnv(opts.ghToken, opts.home, opts.path),
   };
 }
@@ -4436,12 +4446,11 @@ export async function mergeBaseIntoWorktree(
           await abortMerge();
           return { outcome: "unresolvable", reason: check };
         }
-        await mergeGit(
-          ctx,
-          "git commit",
-          ["commit", "-m", BASELINE_COMMIT_MESSAGE],
-          { env: commitIdentityEnv(opts.author) },
-        );
+        await mergeGit(ctx, "git commit", [
+          "commit",
+          "-m",
+          BASELINE_COMMIT_MESSAGE,
+        ]);
         mergeInProgress = false;
         const revisions = (
           await mergeGit(ctx, "git rev-parse (baseline commit)", [
@@ -4711,21 +4720,16 @@ export async function pushMergeCommit(
         if (ancestor.exitCode !== 0) return { outcome: "base_changed" };
       }
 
-      const created = await mergeGit(
-        ctx,
-        "git commit-tree",
-        [
-          "commit-tree",
-          opts.expectedTreeSha,
-          "-p",
-          opts.prHeadSha,
-          "-p",
-          opts.baseSha,
-          "-m",
-          withCommitTrailers(MERGE_COMMIT_MESSAGE, opts.instanceName),
-        ],
-        { env: commitIdentityEnv(opts.author) },
-      );
+      const created = await mergeGit(ctx, "git commit-tree", [
+        "commit-tree",
+        opts.expectedTreeSha,
+        "-p",
+        opts.prHeadSha,
+        "-p",
+        opts.baseSha,
+        "-m",
+        withCommitTrailers(MERGE_COMMIT_MESSAGE, opts.instanceName),
+      ]);
       const newSha = created.stdout.trim();
       assertSha(newSha);
 

@@ -646,6 +646,9 @@ mergeが始まった後に例外が出たときは、`merge --abort`をベスト
 gitの2.54では、`--`の有無で動作が変わらないことを確かめた。
 `commit-tree`だけは、`--`の後に置くとツリーとして読まれないので、`--`を付けない。
 
+ローカルのgitには、すべての呼び出しでauthorとcommitterを環境変数で渡す。
+利用者設定が無い環境でも、`merge`が利用者名のエラーで失敗しないためである。
+
 親の照合を偽らせないため、すべてのgitで`core.commitGraph=false`と`GIT_GRAFT_FILE=/dev/null`を固定する。
 署名の検証でプログラムを動かさないよう、`gpg.program`も空に固定し、`merge`には`--no-verify-signatures`を付ける。
 理由は[セキュリティ](../security.md#マージの競合を解く回)にある。

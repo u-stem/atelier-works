@@ -216,6 +216,24 @@ describe("mergeBaseIntoWorktree argv", () => {
     ]);
   });
 
+  test("the merge carries the given identity as committer", async () => {
+    const fake = scenario();
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const env = callsOf(fake.calls, "merge").find(
+      (call) => !call.argv.includes("--abort"),
+    )?.options?.env;
+    expect(env?.GIT_COMMITTER_EMAIL).toBe(AUTHOR.email);
+  });
+
+  test("the merge carries the given identity as author", async () => {
+    const fake = scenario();
+    await mergeBaseIntoWorktree(mergeOptions(fake.run));
+    const env = callsOf(fake.calls, "merge").find(
+      (call) => !call.argv.includes("--abort"),
+    )?.options?.env;
+    expect(env?.GIT_AUTHOR_NAME).toBe(AUTHOR.name);
+  });
+
   test("fetches the base by its sha without recursing into submodules", async () => {
     const fake = scenario();
     await mergeBaseIntoWorktree(mergeOptions(fake.run));
