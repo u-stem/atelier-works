@@ -511,6 +511,11 @@ function failureNoticeResolutions(h: Harness) {
   return h.resolved.filter((entry) => entry.kind === PR_CI_FAILED_KIND);
 }
 
+/** 設定全体の不整合のnoticeの解決を除いた、noticeの解決の呼び出し。この解決は毎回の実行で行う。 */
+function resolvedBesidesConfigMisfit(h: Harness) {
+  return h.resolved.filter((entry) => entry.kind !== CONFIG_MISFIT_KIND);
+}
+
 /** 追跡中の1件のPRで、今のheadがSHA_Aの設定。 */
 function trackedSetup(overrides: Setup = {}): Setup {
   return {
@@ -867,7 +872,7 @@ describe("closed pull requests", () => {
       }),
     );
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([
       { kind: PR_CI_FAILED_KIND, prefix: PR_PREFIX, by: PR_CI_RESOLVED_BY },
     ]);
   });
@@ -888,7 +893,7 @@ describe("closed pull requests", () => {
   test("does nothing for a closed pull request without rows", async () => {
     const h = harness(trackedSetup({ prs: { [PR_KEY]: closed } }));
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([]);
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([]);
   });
 
   test("supersedes a failed row of a pull request that is no longer tracked", async () => {
@@ -910,7 +915,9 @@ describe("closed pull requests", () => {
       rowsForPr: { 12: [row({ id: 2, state: "failed" })] },
     });
     await runPrCiWatch(h.deps);
-    expect(h.resolved.map((entry) => entry.prefix)).toEqual([PR_PREFIX]);
+    expect(resolvedBesidesConfigMisfit(h).map((entry) => entry.prefix)).toEqual(
+      [PR_PREFIX],
+    );
   });
 
   test("handles a closed pull request once even when two of its rows are listed", async () => {
@@ -1440,7 +1447,7 @@ describe("re-judging a failed row", () => {
       failed: [row({ state: "failed" })],
     });
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([]);
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([]);
   });
 });
 
@@ -1915,7 +1922,7 @@ describe("permission errors", () => {
   test("does not resolve the denied notice when the runs were not readable", async () => {
     const h = harness(deniedSetup(403));
     await runPrCiWatch(h.deps);
-    expect(h.resolved).toEqual([]);
+    expect(resolvedBesidesConfigMisfit(h)).toEqual([]);
   });
 });
 

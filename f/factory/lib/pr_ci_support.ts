@@ -468,11 +468,17 @@ export function prCiFailedNoticeMessage(input: PrCiFailedNoticeInput): string {
 }
 
 /** 時間設定の不整合を、設定全体で1件にまとめて知らせるnoticeの種類。 */
-export const CONFIG_MISFIT_KIND = "";
+export const CONFIG_MISFIT_KIND = "config_misfit";
 
-/** 時間設定の不整合のnoticeの本文。 */
+/**
+ * 時間設定の不整合のnoticeの本文。
+ * 不整合は設定全体の誤りなので、PRやheadを本文に入れず、常に同じ固定文にする。
+ * 種類と本文が同じ未解決のnoticeを重ねない仕組み(`addNoticeUnlessUnresolved`)により、失敗中のPRがいくつあっても1件になる。
+ * 設定の値も入れない。値が変わるたびに別のnoticeになり、古い1件が残るためである。
+ * 見直す項目は、不整合の判定(`ciRoundTimeoutMisfit`)が見る設定の項目をすべて挙げる。
+ */
 export function configMisfitNoticeMessage(): string {
-  return "";
+  return "時間設定が、修正・検証ステップのtimeoutに収まらないので、CIの失敗の自動修正を保留している。見直す項目: claude_timeout_sec(Claudeの1回の実行の上限)、allowed_check_commands(検査コマンドの数)。直すと、Factoryが次の巡回で自動で起動し直し、この通知も自動で解決する";
 }
 
 // ---------------------------------------------------------------------------

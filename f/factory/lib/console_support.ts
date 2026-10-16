@@ -55,6 +55,7 @@ export const NOTICE_SEVERITY: Readonly<Record<string, NoticeSeverity>> = {
   main_ci_check_denied: "action",
   pr_ci_failed: "action",
   pr_ci_check_denied: "action",
+  config_misfit: "action",
   pr_conflict: "action",
   worker_load_high: "action",
 };

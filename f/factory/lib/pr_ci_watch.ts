@@ -69,7 +69,9 @@ import {
   type PrCiNotifyPolicy,
 } from "./pr_ci_notify.ts";
 import {
+  CONFIG_MISFIT_KIND,
   classifyPrCiReason,
+  configMisfitNoticeMessage,
   decidePrCiFailed,
   decidePrCiPending,
   type FactoryWorkItemRef,
@@ -1813,6 +1815,7 @@ async function settleFailed(
  */
 async function notifyDeferred(context: Context): Promise<void> {
   const { deps } = context;
+  await resolveConfigMisfitNotice(context);
   let rows: PrCiCheck[];
   try {
     rows = await deps.listUnnotifiedFailed(DEFERRED_NOTICE_BATCH_LIMIT);
@@ -1841,6 +1844,13 @@ async function notifyDeferred(context: Context): Promise<void> {
       now: context.now,
     });
     if (decision.kind === "wait") continue;
+    // 設定が収まった後に残った保留は、通知しない。次の起動の判断で外れる。
+    if (
+      decision.hold === "config_misfit" &&
+      (deps.claim === undefined || deps.claim.configMisfit === null)
+    ) {
+      continue;
+    }
     if (started > 0 && overBudget(context)) {
       deps.log.warn("pr ci deferred notices stopped by the time budget", {
         left: rows.length - index,
@@ -1857,6 +1867,22 @@ async function notifyDeferred(context: Context): Promise<void> {
         err,
       );
     }
+  }
+}
+
+/**
+ * 時間設定が収まったか、起動する設定でなくなったときに、設定全体の不整合のnoticeを解決する。
+ * 起動の依存(`claim`)は、監視と自動修正が有効なときだけ渡るので、無いときは起動しない設定である。
+ * 設定の不整合は起動の前に確かめるので、設定を直せば解決してよい。
+ * 解決は冪等で、失敗しても通知は止めない。残るだけで、次の回に解決をやり直す。
+ */
+async function resolveConfigMisfitNotice(context: Context): Promise<void> {
+  const { deps } = context;
+  if (deps.claim !== undefined && deps.claim.configMisfit !== null) return;
+  try {
+    await deps.resolveNotices(CONFIG_MISFIT_KIND, "", PR_CI_RESOLVED_BY);
+  } catch (err) {
+    await recordFailureOf(context, "resolve_config_misfit", err);
   }
 }
 
@@ -1883,8 +1909,15 @@ async function sendDeferredNotice(
     reason,
     ...(hold === null ? {} : { hold }),
   });
-  await resolveOlderHeadNotices(context, row);
-  const noticeId = await deps.addNotice({ kind: PR_CI_FAILED_KIND, message });
+  // 時間設定の不整合は設定全体の誤りなので、PRごとのnoticeにせず、設定全体で1件のnoticeにまとめる。
+  // Discordは、そのnoticeを新しく残した回の行のPRを宛先にして、1回だけ送る。
+  const wholeConfig = hold === "config_misfit";
+  if (!wholeConfig) await resolveOlderHeadNotices(context, row);
+  const noticeId = await deps.addNotice(
+    wholeConfig
+      ? { kind: CONFIG_MISFIT_KIND, message: configMisfitNoticeMessage() }
+      : { kind: PR_CI_FAILED_KIND, message },
+  );
   if (noticeId !== null && discord) {
     const sent = await deps.notify({
       kind: "needs_human",
