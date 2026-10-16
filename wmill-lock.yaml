@@ -8,7 +8,7 @@ locks:
   f/factory/approval_decide: a4ffb604f89ba1fd748cd934ece1c3a10fdfc8feac3747c9b3e54561f32a5a0c
   f/factory/audit__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/audit_kickoff: 71c7133b44557fd85a106161794abc5964175f23695993577b209827b95d5757
-  f/factory/auto_retry_pr_review: 4d3b9175fb28af96186d14fa410e92e760c02583aa2c0e819084356ba612121c
+  f/factory/auto_retry_pr_review: dfb13bea2dafc491f14d664a580acac81268c17e09ed538f83558e3bd177f85e
   f/factory/auto_retry_stale_image: ecd33f885e1731f2cd91349764550c30c93d7753fa1051f38aa2881fc2ba3671
   f/factory/cleanup_db: 70f8143aab8da72eeabe90cac5d9295d2af8b27afb70dbc90db9ec9a0887ce72
   f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
@@ -40,7 +40,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: fd2922e107a417c7ac9f819bf55d1daba47f2402abe19af7a388e00c276d0aef
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
-  f/factory/lib/db: e89db567c59afa7994a4ade306513f7979b410d685efa06743747f34091219a7
+  f/factory/lib/db: f59814f93f2bf483ef9a0c3e19b569b2181e1b4592d4e783369698188dac2d07
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -90,7 +90,7 @@ locks:
   f/factory/lib/pr_conflict_support: 7fe9d6f9903c4f53b335e16f6bb0f4a70ff31d2b9e694848ccfb1971358b86f2
   f/factory/lib/pr_conflict_watch: 72ef072e1508eb2fa067b0f2f3b67141e32ce5902a0c110875d21e09ec47bee8
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
-  f/factory/lib/pr_review_retry: 4ea1d6f0e62b7c3a9594d38d073b6c2650ffe65d2cfd5c11ef9a2a91a2507630
+  f/factory/lib/pr_review_retry: 209a93a242793ac09167e02489b53e156997b641653e59ef7e6db3f02819ae00
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
   f/factory/lib/prompts: 086261d064257d802b2227790e2fefe030be29b6fe9f4d09580b9e905e1a56ff
   f/factory/lib/prose_check: 99b737a644deedc8f9f321494e959ad09f343e938ee5af5b958111a74b37172e
