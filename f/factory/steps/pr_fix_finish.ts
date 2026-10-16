@@ -30,6 +30,21 @@ import {
 } from "../lib/ci_metadata_rehash.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
+  CONFLICT_BLOCKED_NOTES,
+  CONFLICT_MERGE_NOT_RECORDED_REASON,
+  CONFLICT_ROUND_DETAILS,
+  CONFLICT_ROUND_REPLIES_REASON,
+  conflictRoundReason,
+  isConflictRound,
+  roundStopReason,
+} from "../lib/conflict_fix_round.ts";
+import {
+  CONFLICT_VERIFIED_TREE_CHANGED_REASON,
+  type ConflictInspection,
+  gitConflictInspectDeps,
+  inspectConflictResolution,
+} from "../lib/conflict_fix_verify.ts";
+import {
   addNoticeUnlessUnresolved,
   bumpWatermarks,
   getWorkItem,
@@ -73,8 +88,12 @@ import {
   assertWorktreeGitPointer,
   type CommitAndPushResult,
   CommitBlockedError,
+  type ConflictBlobs,
   commitAndPush,
+  type PushMergeCommitResult,
+  pushMergeCommit,
   runCommand,
+  runGitleaksOnTreeDiff,
   runGitleaksOnWorktree,
   scannedTreeStopReasons,
 } from "../lib/workspace.ts";
@@ -97,6 +116,7 @@ import {
   nextActionForPrFix,
   PR_HEAD_NOT_RECORDED_REASON,
   type PrFixFinishOutcome,
+  type PrFixSecretScanResult,
   prFixPushGateReason,
   type ReplyPostFailure,
   renderFixReply,
@@ -116,6 +136,8 @@ const ALL_OUTCOMES: readonly PrFixFinishOutcome[] = [
   "done",
   "requirements_gap",
   "blocked",
+  "conflict_up_to_date",
+  "conflict_blocked",
 ];
 
 export type PrFixFinishResult = {
@@ -212,6 +234,116 @@ export async function requestRereview(
   }
 }
 
+/** 競合回のpushの直前に読み直すPRの事実。 */
+export type ConflictPushPr = {
+  readonly state: string;
+  readonly draft: boolean;
+  readonly autoMergeEnabled: boolean;
+  readonly headSha: string;
+  /** PRのbase。`pushMergeCommit`が、リモートの既定のブランチと照合する。 */
+  readonly baseRef: string;
+};
+
+/** `runConflictPush`が使うI/O。テストでは偽物に差し替える。 */
+export type ConflictPushDeps = {
+  /** worktreeに触れてよいかを確かめ、止める理由を返す(`prFixPushGateReason`)。 */
+  readonly gate: () => Promise<string | null>;
+  /** 解消後のツリーを検査する(`inspectConflictResolution`)。 */
+  readonly inspect: () => Promise<ConflictInspection>;
+  /** 検査したツリーを、秘密値の検査にかける(`scanPrFixBeforeCommit`)。 */
+  readonly scan: (treeSha: string) => Promise<PrFixSecretScanResult>;
+  readonly readPr: () => Promise<ConflictPushPr>;
+  /** リポジトリのオーナーの数値IDを照合し、止める理由を返す(`repoOwnerStopReason`)。 */
+  readonly ownerStop: () => Promise<string | null>;
+  readonly push: (request: {
+    readonly expectedTreeSha: string;
+    readonly inspectStaged: () => Promise<string[]>;
+    readonly baseBranch: string;
+  }) => Promise<PushMergeCommitResult>;
+};
+
+/** `runConflictPush`の結果。 */
+export type ConflictPushOutcome =
+  /** pushせずに止めた。`reason`が、作業項目の注記になる。 */
+  | { readonly kind: "stop"; readonly reason: string }
+  /** PRのheadが、作業を始めたときから動いている。 */
+  | { readonly kind: "head_changed"; readonly currentSha: string }
+  /** 記録したbaseが、既定のブランチの先頭でも祖先でもなくなった。 */
+  | { readonly kind: "base_changed" }
+  /** PATにworkflowの権限が無いために、GitHubがpushを拒否した。 */
+  | { readonly kind: "rejected_workflows" }
+  | { readonly kind: "pushed"; readonly newSha: string };
+
+/**
+ * 競合回のmergeコミットをpushする。pushの前に、次を順に確かめる。
+ * 1. worktreeに触れてよいこと(ロックを持つプロセスが残っておらず、`.git`が記録のままであること)。
+ * 2. 解消後のツリーが、検証のステップと同じ検査に通り、検証が通したツリーと同じであること。
+ *    検証と完了の間にworktreeが変わっても、pushする内容そのもので判定するためである。
+ *    検査コマンドが通ったツリーと、pushするツリーを結びつけるため、ツリーのshaが一致しなければ止める。
+ * 3. そのツリーが、秘密値の検査に通ること。
+ * 4. PRが、開いていて、draftでなく、auto-mergeが無効で、headが作業を始めたときのままであること。
+ *    競合回は人の指摘に答える回ではなく、レビューを経ずにマージされうる状態では押せない。
+ * 5. リポジトリのオーナーの数値IDが、設定のままであること。
+ * pushは`pushMergeCommit`が行い、ステージした内容の検査と、親とbaseの照合は、その中で行う。
+ * ステージした内容が検査したツリーと違うなどで`CommitBlockedError`が出たときは、止める理由にする。
+ */
+export async function runConflictPush(
+  deps: ConflictPushDeps,
+  input: {
+    readonly prHeadSha: string;
+    /** 検証のステップで、検査コマンドの前後の検査が同じだったツリー。無ければnull。 */
+    readonly verifiedTreeSha: string | null;
+  },
+): Promise<ConflictPushOutcome> {
+  const stop = (reason: string): ConflictPushOutcome => ({
+    kind: "stop",
+    reason,
+  });
+  const gateReason = await deps.gate();
+  if (gateReason !== null) return stop(gateReason);
+
+  const inspection = await deps.inspect();
+  if (inspection.reasons.length > 0) return stop(inspection.reasons.join("; "));
+  if (inspection.treeSha !== input.verifiedTreeSha) {
+    return stop(CONFLICT_VERIFIED_TREE_CHANGED_REASON);
+  }
+
+  const scanned = await deps.scan(inspection.treeSha);
+  if (scanned.kind === "stop") return stop(scanned.reason);
+
+  const latest = await deps.readPr();
+  if (latest.headSha !== input.prHeadSha) {
+    return { kind: "head_changed", currentSha: latest.headSha };
+  }
+  const pushStop = ciRoundPushGuardReason(latest, input.prHeadSha);
+  if (pushStop !== null) return stop(pushStop);
+
+  const ownerStop = await deps.ownerStop();
+  if (ownerStop !== null) return stop(ownerStop);
+
+  let result: PushMergeCommitResult;
+  try {
+    result = await deps.push({
+      expectedTreeSha: scanned.treeSha,
+      inspectStaged: scanned.inspectStaged,
+      baseBranch: latest.baseRef,
+    });
+  } catch (err) {
+    if (err instanceof CommitBlockedError) return stop(err.message);
+    throw err;
+  }
+  switch (result.outcome) {
+    case "pushed":
+      return { kind: "pushed", newSha: result.newSha };
+    case "head_changed":
+      return { kind: "head_changed", currentSha: result.currentSha };
+    case "base_changed":
+      return { kind: "base_changed" };
+    case "rejected_workflows":
+      return { kind: "rejected_workflows" };
+  }
+}
+
 /**
  * `outcome`に応じて作業項目を遷移させ、遷移先と通知文を返す。
  * 修正があればcommitしてpushし、レビューコメントへ返信して再レビューを依頼する。
@@ -234,6 +366,16 @@ export async function requestRereview(
  * - pushの直前に、リポジトリのオーナーの数値IDを照合する。通らなければpushも返信もせず、`blocked`にする。
  * - 返信を持つ結果は受け付けない。
  * 失敗の行(`pr_ci_checks`)には触れない。行の整理は`watch_pr_ci`の役目である。
+ *
+ * マージの競合を直す回(`conflict_check_id`が非NULL)は、通常の回と次の点が違う。
+ * - 失敗をDiscordにもnoticeにも出さない。競合の行の保留の理由を付けて、競合の監視(`watch_pr_conflicts`)が通知する。
+ * - 修正を`commitAndPush`ではなく`runConflictPush`でpushする。競合ファイルだけをステージしたツリーを、
+ *   親が[PRのhead, base]のmergeコミットにする(`pushMergeCommit`)。基準コミットは送らない。
+ * - pushできたら`rereview_requested`にする。作業項目のheadは進めず、再レビューの依頼も`pr_fixed`の通知もしない。
+ * - baseがすでにPRにあれば(`conflict_up_to_date`)、何もpushせず`reviewed`にして、注記`conflict round: up_to_date`を残す。
+ * - 直せない競合(`conflict_blocked`)は`needs_human`にする。注記は固定文(`CONFLICT_BLOCKED_NOTES`)だけで、回復が完全一致で保留の理由に写す。
+ * - pushの直前にbaseが動いていれば、`reviewed`にして次の巡回で判定し直させる。
+ * - 止めた理由の注記に、競合回の接頭辞を足さない。イメージが古い理由の接頭辞を崩すと、自動の再開と回数の除外が働かなくなる。
  *
  * `fix_round`はここでは増やさない。
  * `poll_prs.ts`が作業項目を作る時点で、その行が表すラウンド番号を
@@ -267,12 +409,20 @@ export async function main(
   worktree_git_pointer: string | null = null,
   branch: string | null = null,
   ci_check_id: number | null = null,
+  conflict_check_id: number | null = null,
+  baseline_sha: string | null = null,
+  base_sha: string | null = null,
+  auto_tree_sha: string | null = null,
+  conflicted_paths: string[] | null = null,
+  conflict_blobs: ConflictBlobs[] | null = null,
+  verified_tree_sha: string | null = null,
 ): Promise<PrFixFinishResult> {
   if (!isOneOf(outcome, ALL_OUTCOMES)) {
     throw new Error(`pr_fix_finish: unexpected outcome "${outcome}"`);
   }
   const action = decideFixFinishAction(outcome, parent_work_item_id !== null);
   const ciRound = isCiRound({ ci_check_id });
+  const conflictRound = isConflictRound({ conflict_check_id });
 
   if (action.kind === "noop") {
     return {
@@ -312,6 +462,9 @@ export async function main(
       statusNote,
     );
     if (!moved) return;
+    // 競合回の失敗は、競合の監視(`watch_pr_conflicts`)が行の保留の理由を付けて通知する。
+    // ここでも通知すると、同じ競合について人に2回届く。
+    if (conflictRound) return;
     // トリガーの`fix_label`は`poll_prs.ts`が着手時に消費済みなので、外すラベルは無い。
     // 運用上の知らせ(失敗、needs_human、blocked、requirements_gap)はPRに投稿しない。
     // PRに載せるのは一次レビューとレビューコメントへの返信だけにするため。
@@ -336,6 +489,25 @@ export async function main(
   if (action.kind === "guard_blocked") {
     await finalizeTerminal("blocked", reason ?? "safety guard failed");
     return { ok: true, final_status: "blocked", notice: reason };
+  }
+
+  // baseがすでにPRの履歴にある競合回。pushするものが無いので、何も変えずに終える。
+  // 注記は、回復が「pushしていない」と見分けるために使う(回数にも数えない)。
+  if (action.kind === "conflict_up_to_date") {
+    const note = conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate);
+    await updateStatusIfCurrent(work_item_id, "fixing", "reviewed", note);
+    return { ok: true, final_status: "reviewed", notice: note };
+  }
+
+  // 競合回で直せない競合。注記は固定文だけにする。回復が完全一致で保留の理由に写すためである。
+  if (action.kind === "conflict_blocked") {
+    if (reason === null || !CONFLICT_BLOCKED_NOTES.includes(reason)) {
+      throw new Error(
+        "pr_fix_finish: conflict_blocked without a fixed reason of a conflict round",
+      );
+    }
+    await finalizeTerminal("needs_human", reason, reason);
+    return { ok: true, final_status: "needs_human", notice: reason };
   }
 
   if (action.kind === "needs_human") {
@@ -499,6 +671,14 @@ export async function main(
   }
   if (ciRound && replies.length > 0) {
     return stopBeforeCommit(CI_ROUND_REPLIES_REASON);
+  }
+  // 競合回のコミットは、固定文のmergeコミットを`pushMergeCommit`が作る。
+  // 返信も、作業項目のheadと処理済みの位置の更新も、再レビューの依頼も、`pr_fixed`の通知もしない。
+  if (conflictRound) {
+    if (replies.length > 0) {
+      return stopBeforeCommit(CONFLICT_ROUND_REPLIES_REASON);
+    }
+    return finishConflictPush();
   }
   // Claudeが提案した件名と本文は、`pr_fix_apply.ts`から`pr_fix_verify.ts`まで別々に運ばれ、
   // コミットメッセージの文字列につなぐのはここだけ。
@@ -856,11 +1036,203 @@ export async function main(
       replies,
       commit_shas: [],
     });
+    const movedReason = `PR head moved to ${currentSha} while the fix was in progress`;
+    // 競合回は、止めた理由を固定文で注記に残す。回復が注記の完全一致で行き先を決めるためである。
     await finalizeTerminal(
       "blocked",
-      `PR head moved to ${currentSha} while the fix was in progress`,
+      movedReason,
+      roundStopReason(
+        conflictRound,
+        CONFLICT_ROUND_DETAILS.headMovedAtPush,
+        reason,
+      ),
     );
     return { ok: true, final_status: "blocked", notice: "head_changed" };
+  }
+
+  /**
+   * 競合回の解消をpushして、作業項目を終える。
+   * 検査はpushの直前に、検証のステップと同じものをもう一度行う(`runConflictPush`)。
+   * - pushできた: ラウンドを記録して`rereview_requested`にする。作業項目のheadは進めない。その差が`poll_prs`の自動のレビューを起動する。
+   *   再レビューの依頼も、返信も、`pr_fixed`の通知もしない。
+   * - PRのheadが動いた: ラウンドを記録して`blocked`にする。
+   * - baseが動いた: ラウンドを記録して`reviewed`にし、注記を残す。行の保留は付かず、次の巡回で判定し直す。
+   * - workflowの権限で拒否された: ラウンドを記録して、固定の注記で`needs_human`にする。
+   * - 検査や確認に通らない: pushせずに止める(`stopBeforeCommit`)。
+   */
+  async function finishConflictPush(): Promise<PrFixFinishResult> {
+    if (
+      baseline_sha === null ||
+      base_sha === null ||
+      auto_tree_sha === null ||
+      conflicted_paths === null ||
+      conflict_blobs === null
+    ) {
+      return stopBeforeCommit(CONFLICT_MERGE_NOT_RECORDED_REASON);
+    }
+    const baselineSha = baseline_sha;
+    const baseSha = base_sha;
+    const autoTreeSha = auto_tree_sha;
+    const conflictedPaths = conflicted_paths;
+    const conflictBlobs = conflict_blobs;
+    const inspectDeps = gitConflictInspectDeps({
+      run: runCommand,
+      worktreeDir: worktree_dir,
+      conflictedPaths,
+      baselineSha,
+      prHeadSha: head_sha,
+      baseSha,
+      scanText: ciTextScanner(runCommand),
+      gitleaksTimeoutMs: GITLEAKS_TIMEOUT_MS,
+    });
+    const outcome = await runConflictPush(
+      {
+        // 検証ステップの最後の検査とこのpushは別のジョブなので、その間にworktreeが変わっていないことを確かめる。
+        // 前のステップのプロセスが残っていないこと、`.git`と記録したブランチが準備ステップの記録のままであることを見る。
+        gate: () =>
+          prFixPushGateReason(
+            {
+              ensureLockFree: async () => {
+                await ensureWorktreeLockFree({
+                  run: runCommand,
+                  lock: worktreeLockFor(worktree_dir),
+                  policy: null,
+                  deps: defaultLockReleaseDeps(),
+                });
+              },
+              assertGitPointer: (expected) =>
+                assertWorktreeGitPointer(worktree_dir, expected),
+            },
+            worktree_git_pointer,
+            branch,
+            // 注記は固定文にして、回復が準備の停止と同じ一時の停止として扱えるようにする。保持者はログに残す。
+            (holder) => {
+              log.warn("the worktree is in use", {
+                work_item_id,
+                holder,
+              });
+              return conflictRoundReason(CONFLICT_ROUND_DETAILS.worktreeBusy);
+            },
+          ),
+        inspect: () =>
+          inspectConflictResolution(inspectDeps, {
+            conflictedPaths,
+            conflictBlobs,
+            autoTreeSha,
+          }),
+        scan: (treeSha) =>
+          scanPrFixBeforeCommit({
+            // 検査するのは、競合ファイルだけをステージしたツリーと基準コミットの差である。`add -A`はしない。
+            scanForSecrets: async () => {
+              const scan = await runGitleaksOnTreeDiff({
+                run: runCommand,
+                worktreeDir: worktree_dir,
+                fromSha: baselineSha,
+                toTreeSha: treeSha,
+                timeoutMs: GITLEAKS_TIMEOUT_MS,
+              });
+              if (!scan.ok) {
+                // 検出はルール名とファイル名だけで、一致した文字列は含まない。
+                log.warn("gitleaks found secrets in the resolution", {
+                  work_item_id,
+                  findings: scan.output,
+                });
+              }
+              return { ...scan, treeSha };
+            },
+            inspectChanges: () =>
+              inspectStagedChanges(runCommand, worktree_dir, baselineSha),
+            inspectTree: (scannedTreeSha) =>
+              scannedTreeStopReasons({
+                run: runCommand,
+                worktreeDir: worktree_dir,
+                scannedTreeSha,
+              }),
+          }),
+        readPr: () => getPr(client, owner, repo, pr_number),
+        ownerStop: () =>
+          repoOwnerStopReason(
+            config,
+            owner,
+            repo,
+            repoOwnerGateDeps(client, addNoticeUnlessUnresolved),
+          ),
+        push: (request) => {
+          // 先の`gate`が、どちらの記録も確かめている。
+          if (branch === null || worktree_git_pointer === null) {
+            throw new Error(
+              "pr_fix_finish: the branch or the git pointer was not recorded",
+            );
+          }
+          return pushMergeCommit({
+            run: runCommand,
+            repoDir: repo_dir,
+            dir: worktree_dir,
+            branch,
+            worktreeGitPointer: worktree_git_pointer,
+            ghToken,
+            prHeadSha: head_sha,
+            baseSha,
+            baseBranch: request.baseBranch,
+            autoSha: baselineSha,
+            expectedTreeSha: request.expectedTreeSha,
+            conflictedPaths,
+            instanceName: config.instance_name,
+            author: gitIdentityForViewer(viewer),
+            inspectStaged: request.inspectStaged,
+          });
+        },
+      },
+      { prHeadSha: head_sha, verifiedTreeSha: verified_tree_sha },
+    );
+
+    const recordRound = async (
+      roundOutcome: "done" | "blocked",
+      commitShas: string[],
+    ): Promise<void> => {
+      await insertFixRound({
+        work_item_id,
+        round: fix_round,
+        trigger_review_ids,
+        outcome: roundOutcome,
+        replies: [],
+        commit_shas: commitShas,
+      });
+    };
+    switch (outcome.kind) {
+      case "stop":
+        return stopBeforeCommit(outcome.reason);
+      case "head_changed":
+        return finishHeadChanged(outcome.currentSha);
+      case "base_changed": {
+        const note = conflictRoundReason(CONFLICT_ROUND_DETAILS.baseChanged);
+        await recordRound("blocked", []);
+        await updateStatusIfCurrent(work_item_id, "fixing", "reviewed", note);
+        return { ok: true, final_status: "reviewed", notice: note };
+      }
+      case "rejected_workflows": {
+        const note = conflictRoundReason(
+          CONFLICT_ROUND_DETAILS.baseChangesWorkflows,
+        );
+        await recordRound("blocked", []);
+        await finalizeTerminal("needs_human", note, note);
+        return { ok: true, final_status: "needs_human", notice: note };
+      }
+      case "pushed": {
+        await recordRound("done", [outcome.newSha]);
+        await updateStatusIfCurrent(
+          work_item_id,
+          "fixing",
+          "rereview_requested",
+          null,
+        );
+        return {
+          ok: true,
+          final_status: "rereview_requested",
+          notice: null,
+        };
+      }
+    }
   }
 
   if (ciRound) {

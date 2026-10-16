@@ -5,7 +5,7 @@
 // detachedのworktreeである。
 
 import * as wmill from "windmill-client@1.817.0";
-import { ciRoundDiffOrFalse } from "../lib/ci_fix_round.ts";
+import { fixRoundOrNull } from "../lib/ci_fix_round.ts";
 import {
   buildSystemPrompt,
   dailyBudgetStatus,
@@ -14,7 +14,7 @@ import {
 } from "../lib/claude.ts";
 import { loadConfig } from "../lib/config.ts";
 import {
-  hasCiRoundDiffToReview,
+  findFixRoundKindToReview,
   latestDraft,
   recordAgentRun,
   updateStatusIfCurrent,
@@ -177,13 +177,13 @@ export async function main(
   // 最初のレビューではスレッドがまだ無いので空になる。
   const openFindings = openFindingsForPrompt(reviewThreads, viewer.login);
 
-  // レビューするcommitが、CI回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
-  // 値はDBから決めた真偽値だけで、PRの内容からは決めない。
-  // 問い合わせに失敗しても通常のレビューは止めない。偽に倒して警告を残す。
-  const ciRoundDiff = await ciRoundDiffOrFalse(
-    () => hasCiRoundDiffToReview(owner, repo, pr_number, review_sha),
+  // レビューするcommitが、CI回か競合回のpushしたcommitなら、その差分を重点的に見るようプロンプトに加える。
+  // 値はDBから決めた回の種類だけで、PRの内容からは決めない。
+  // 問い合わせに失敗しても通常のレビューは止めない。nullに倒して警告を残す。
+  const fixRound = await fixRoundOrNull(
+    () => findFixRoundKindToReview(owner, repo, pr_number, review_sha),
     (message) =>
-      log.warn("could not look up the CI round diff, reviewing without it", {
+      log.warn("could not look up the fix round kind, reviewing without it", {
         work_item_id,
         error: message,
       }),
@@ -204,7 +204,7 @@ export async function main(
     changedFiles: prFiles,
     requirements,
     openFindings,
-    ciRoundDiff,
+    fixRound,
     binaryFiles,
   });
 

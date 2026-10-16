@@ -1189,6 +1189,8 @@ const TEMPORARY_HOLDS = [
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
   "config_misfit",
+  "worker_image_stale",
+  "worker_runtime_unsafe",
 ] as const;
 
 describe("PR_CI_FIX_HOLD_REASONS", () => {
@@ -1422,6 +1424,62 @@ describe("prCiFixHoldInfo", () => {
 
   test("sends the discord message when the time settings do not fit", () => {
     expect(prCiFixHoldInfo("config_misfit").discord).toBe(true);
+  });
+
+  test("sends the discord message when the worker image is stale", () => {
+    expect(prCiFixHoldInfo("worker_image_stale").discord).toBe(true);
+  });
+
+  test("sends the discord message when the running worker is unsafe", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").discord).toBe(true);
+  });
+
+  test("asks to rebuild the image when the worker image is stale", () => {
+    expect(prCiFixHoldInfo("worker_image_stale").nextAction).toContain(
+      "mise run up",
+    );
+  });
+
+  test("asks to close the paths or recreate the worker when the running worker is unsafe", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "chmod o-w",
+    );
+  });
+
+  test("does not ask to rebuild the image when the running worker is unsafe", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).not.toContain(
+      "mise run up",
+    );
+  });
+
+  test("points to the notice in the Console only when there is one", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "Consoleの要対応に通知があれば確かめる",
+    );
+  });
+
+  test("points to the log of the watch job when there is no notice", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "無ければ、監視のジョブのログにある、列挙できなかった理由を確かめる",
+    );
+  });
+
+  test("tells that a hold caused only by a failed listing clears by itself", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").nextAction).toContain(
+      "パスを列挙できなかっただけなら、次の巡回で自動で外れる",
+    );
+  });
+
+  test("points to the log of the watch job in the polite form", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").stopAction).toContain(
+      "Consoleの要対応に通知があれば確かめてください。無ければ、監視のジョブのログにある、列挙できなかった理由を確かめてください",
+    );
+  });
+
+  test("does not claim that the notice comes out at the same time", () => {
+    expect(prCiFixHoldInfo("worker_runtime_unsafe").stopAction).not.toContain(
+      "同時に出る通知",
+    );
   });
 
   test("sends the discord message when the rounds are exhausted", () => {

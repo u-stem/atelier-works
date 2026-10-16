@@ -674,3 +674,84 @@ describe("decideConflictNotify", () => {
     ).toBe("defer");
   });
 });
+
+describe("decideConflictNotify: a fix that just settled", () => {
+  const PAST_GRACE = {
+    episode_started_at: new Date(NOW.getTime() - 120 * 60_000),
+  };
+  const minutesAgo = (minutes: number): Date =>
+    new Date(NOW.getTime() - minutes * 60_000);
+
+  test("defers after the grace while the last fix settled within the window", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput({ lastFixSettledAt: minutesAgo(1) }, PAST_GRACE),
+      ),
+    ).toBe("defer");
+  });
+
+  test("notifies after the grace once the window has passed", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          {
+            lastFixSettledAt: new Date(
+              NOW.getTime() - RECENTLY_FIXED_WINDOW_MS,
+            ),
+          },
+          PAST_GRACE,
+        ),
+      ),
+    ).toBe("notify");
+  });
+
+  test("notifies after the grace when no fix has settled", () => {
+    expect(
+      decideConflictNotify(notifyInput({ lastFixSettledAt: null }, PAST_GRACE)),
+    ).toBe("notify");
+  });
+
+  test("notifies a final hold without waiting for the window", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          { lastFixSettledAt: minutesAgo(1) },
+          { ...PAST_GRACE, fix_hold_reason: "protected_path" },
+        ),
+      ),
+    ).toBe("notify");
+  });
+
+  test("notifies a disabled fix without waiting for the window", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          { fixEnabled: false, lastFixSettledAt: minutesAgo(1) },
+          PAST_GRACE,
+        ),
+      ),
+    ).toBe("notify");
+  });
+
+  test("notifies an episode before the fix was enabled without waiting for the window", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          { lastFixSettledAt: minutesAgo(1) },
+          { episode_started_at: new Date(ENABLED_SINCE.getTime() - 1) },
+        ),
+      ),
+    ).toBe("notify");
+  });
+
+  test("still claims inside the grace", () => {
+    expect(
+      decideConflictNotify(
+        notifyInput(
+          { lastFixSettledAt: minutesAgo(1) },
+          { episode_started_at: NOW },
+        ),
+      ),
+    ).toBe("claim");
+  });
+});

@@ -32,6 +32,7 @@ import {
   getBranchProtected,
   getBranchRuleCount,
   getBranchSha,
+  getDefaultBranch,
   getFileAtRef,
   getIssue,
   getLabelerActor,
@@ -193,6 +194,37 @@ describe("allowEscapeSequences", () => {
     const fake = createFakeCommandRunner([ghApiOk({ login: "bot", id: 1 })]);
     await getViewer(client(fake));
     expect(fake.calls[0]?.argv).not.toContain("--allow-escape-sequences");
+  });
+});
+
+describe("getDefaultBranch", () => {
+  test("returns the default branch of the repository", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({ default_branch: "trunk" }),
+    ]);
+    expect(
+      await getDefaultBranch({ run: fake.run, ghToken: "tok" }, "acme", "app"),
+    ).toBe("trunk");
+  });
+
+  test("reads the repository endpoint", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ default_branch: "main" })]);
+    await getDefaultBranch({ run: fake.run, ghToken: "tok" }, "acme", "app");
+    expect(fake.calls[0]?.argv).toContain("repos/acme/app");
+  });
+
+  test("rejects a response without a default branch", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ name: "app" })]);
+    await expect(
+      getDefaultBranch({ run: fake.run, ghToken: "tok" }, "acme", "app"),
+    ).rejects.toThrow("unexpected response shape");
+  });
+
+  test("rejects a default branch name that is not a valid branch name", async () => {
+    const fake = createFakeCommandRunner([ghApiOk({ default_branch: "a..b" })]);
+    await expect(
+      getDefaultBranch({ run: fake.run, ghToken: "tok" }, "acme", "app"),
+    ).rejects.toThrow();
   });
 });
 

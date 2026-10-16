@@ -126,6 +126,11 @@ export function buildAuditConsoleUrl(
   return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}reports/audit/${String(workItemId)}`;
 }
 
+/** Consoleの作業項目の画面のURL(`/console/items`)を返す。 */
+export function buildItemsConsoleUrl(windmillPublicUrl: string): string {
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}items`;
+}
+
 /** Consoleのシステムの画面のURL(`/console/system`)を返す。 */
 export function buildSystemConsoleUrl(windmillPublicUrl: string): string {
   return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}system`;

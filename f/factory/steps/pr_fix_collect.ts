@@ -14,6 +14,7 @@
 import * as wmill from "windmill-client@1.817.0";
 import { isCiRound } from "../lib/ci_fix_round.ts";
 import { loadConfig } from "../lib/config.ts";
+import { isConflictRound } from "../lib/conflict_fix_round.ts";
 import { addNoticeUnlessUnresolved, getWorkItem } from "../lib/db.ts";
 import {
   type GhClient,
@@ -63,8 +64,30 @@ export function ciRoundCollectResult(): PrFixCollectResult {
 }
 
 /**
+ * 競合を直す回の収集結果。CI回と同じく、指摘もコメントも集めず、処理済みの位置も進めない。
+ * その回の入力は、レビューやコメントではなく、worktreeでmergeした競合ファイルだけである。
+ */
+export function conflictRoundCollectResult(): PrFixCollectResult {
+  return ciRoundCollectResult();
+}
+
+/**
+ * 指摘に答えない回(CIの失敗を直す回と、マージの競合を直す回)の固定の収集結果を返す。
+ * 指摘に答える回ならnullを返す。GitHubを読まずに決まる。
+ */
+export function fixedFeedbackCollectResult(workItem: {
+  readonly ci_check_id: number | null;
+  readonly conflict_check_id: number | null;
+}): PrFixCollectResult | null {
+  if (isCiRound(workItem)) return ciRoundCollectResult();
+  if (isConflictRound(workItem)) return conflictRoundCollectResult();
+  return null;
+}
+
+/**
  * 作業項目の処理済みの位置より新しい指摘とコメントを集める。
- * CIの失敗を直す回(`ci_check_id`が非NULL)は、GitHubを読まずに`ciRoundCollectResult`を返す。
+ * CIの失敗を直す回(`ci_check_id`が非NULL)と、マージの競合を直す回(`conflict_check_id`が非NULL)は、
+ * GitHubを読まずに固定の結果を返す(`fixedFeedbackCollectResult`)。`no_feedback`で終わらせない。
  */
 export async function main(
   work_item_id: number,
@@ -77,7 +100,8 @@ export async function main(
   if (workItem === null) {
     throw new Error(`pr_fix_collect: no work item with id ${work_item_id}`);
   }
-  if (isCiRound(workItem)) return ciRoundCollectResult();
+  const fixed = fixedFeedbackCollectResult(workItem);
+  if (fixed !== null) return fixed;
   const config = await loadConfig(() =>
     wmill.getResource("f/factory/factory_config"),
   );

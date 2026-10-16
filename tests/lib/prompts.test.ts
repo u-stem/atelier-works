@@ -233,7 +233,7 @@ describe("reviewPrompt", () => {
         changedFiles: ["a.ts"],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -250,7 +250,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -268,7 +268,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -284,7 +284,7 @@ describe("reviewPrompt", () => {
         changedFiles: ["a.ts", "b.ts"],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -300,7 +300,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -316,7 +316,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -332,7 +332,7 @@ describe("reviewPrompt", () => {
         changedFiles: ["UNIQUE_PATH_MARKER.ts"],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -350,7 +350,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -370,7 +370,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -388,7 +388,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -404,7 +404,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -421,7 +421,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -439,7 +439,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [{ path: "a.ts", line: 10, body: "null check missing" }],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -458,7 +458,7 @@ describe("reviewPrompt", () => {
         changedFiles: [],
         requirements: null,
         openFindings: [],
-        ciRoundDiff: false,
+        fixRound: null,
         binaryFiles: [],
       },
       FIXED_UUID,
@@ -466,8 +466,8 @@ describe("reviewPrompt", () => {
     expect(prompt).not.toContain("open findings from a prior review");
   });
 
-  describe("ciRoundDiff", () => {
-    const withCiRound = (ciRoundDiff: boolean) =>
+  describe("fixRound", () => {
+    const withRound = (fixRound: "ci" | "conflict" | null) =>
       reviewPrompt(
         {
           pr: PR,
@@ -475,49 +475,105 @@ describe("reviewPrompt", () => {
           changedFiles: ["a.ts"],
           requirements: null,
           openFindings: [],
-          ciRoundDiff,
+          fixRound,
           binaryFiles: [],
         },
         FIXED_UUID,
       );
 
-    test("asks the reviewer to check the CI round edit when ciRoundDiff is true", () => {
-      expect(withCiRound(true)).toContain(
+    test("asks the reviewer to check the CI round edit when the round is ci", () => {
+      expect(withRound("ci")).toContain(
         "The latest commit was written by the factory's CI-fix round",
       );
     });
 
     test("asks to check that no test was weakened", () => {
-      expect(withCiRound(true)).toContain(
+      expect(withRound("ci")).toContain(
         "weakened, skipped, deleted, or loosened",
       );
     });
 
     test("asks to check for behavior unrelated to the failure", () => {
-      expect(withCiRound(true)).toContain(
+      expect(withRound("ci")).toContain(
         "Check that the edit adds no behavior unrelated to the cause of the failure",
       );
     });
 
     test("names outside communication and environment variable reads as examples", () => {
-      expect(withCiRound(true)).toContain(
+      expect(withRound("ci")).toContain(
         "(for example, network access or reading environment variables)",
       );
     });
 
     test("asks to check for ignore file and tool setting changes", () => {
-      expect(withCiRound(true)).toContain(
+      expect(withRound("ci")).toContain(
         "Check that no ignore file or tool setting was added or changed",
       );
     });
 
-    test("omits the CI round section when ciRoundDiff is false", () => {
-      expect(withCiRound(false)).not.toContain("CI-fix round");
+    test("omits the CI round section when there is no round", () => {
+      expect(withRound(null)).not.toContain("CI-fix round");
+    });
+
+    test("omits the CI round section when the round is conflict", () => {
+      expect(withRound("conflict")).not.toContain("CI-fix round");
     });
 
     test("puts the CI round section outside every data fence", () => {
-      const prompt = withCiRound(true);
+      const prompt = withRound("ci");
       const index = prompt.indexOf("CI-fix round");
+      const lastOpen = prompt.lastIndexOf("<<<DATA-test-nonce", index);
+      const lastClose = prompt.lastIndexOf(">>>DATA-test-nonce", index);
+      expect(lastClose).toBeGreaterThan(lastOpen);
+    });
+
+    test("states that the latest commit is a merge commit written by the conflict round", () => {
+      expect(withRound("conflict")).toContain(
+        "The latest commit is a merge commit written by the factory's merge-conflict round",
+      );
+    });
+
+    test("asks to check that the resolved hunks lie where the two sides overlap", () => {
+      expect(withRound("conflict")).toContain(
+        "Check that every hunk the round resolved lies where the pull request's change",
+      );
+    });
+
+    test("asks to check that the intent of both sides remains", () => {
+      expect(withRound("conflict")).toContain(
+        "Check that the intent of both sides remains in the resolved code",
+      );
+    });
+
+    test("asks to check that one side was not dropped as a whole", () => {
+      expect(withRound("conflict")).toContain(
+        "Check that one side was not dropped as a whole",
+      );
+    });
+
+    test("asks to check that no test was weakened in the conflict round", () => {
+      expect(withRound("conflict")).toContain(
+        "no test was weakened, skipped, or deleted, and no suppression",
+      );
+    });
+
+    test("asks to check that nothing unrelated to the resolution was added", () => {
+      expect(withRound("conflict")).toContain(
+        "Check that the round added nothing unrelated to resolving the conflict",
+      );
+    });
+
+    test("omits the conflict round section when the round is ci", () => {
+      expect(withRound("ci")).not.toContain("merge-conflict round");
+    });
+
+    test("omits the conflict round section when there is no round", () => {
+      expect(withRound(null)).not.toContain("merge-conflict round");
+    });
+
+    test("puts the conflict round section outside every data fence", () => {
+      const prompt = withRound("conflict");
+      const index = prompt.indexOf("merge-conflict round");
       const lastOpen = prompt.lastIndexOf("<<<DATA-test-nonce", index);
       const lastClose = prompt.lastIndexOf(">>>DATA-test-nonce", index);
       expect(lastClose).toBeGreaterThan(lastOpen);
@@ -534,7 +590,7 @@ describe("reviewPrompt", () => {
           changedFiles: ["a.ts"],
           requirements: null,
           openFindings: [],
-          ciRoundDiff: false,
+          fixRound: null,
           binaryFiles,
         },
         FIXED_UUID,

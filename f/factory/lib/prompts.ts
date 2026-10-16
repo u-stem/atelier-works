@@ -200,11 +200,12 @@ export type ReviewPromptInput = {
    */
   openFindings: PromptOpenFinding[];
   /**
-   * 直近のコミットが、CIの失敗を直す回(CI回)の修正かどうか。DBから決めた値だけを渡す。
-   * 真のときは、テストの弱体化と抑制の追加を重点的に見るよう、固定の文で頼む。
-   * CI回のClaudeは、通るように直す立場なので、検査を弱めて通す誘惑があるため。
+   * 直近のコミットを書いた回の種類。DBから決めた値だけを渡す。
+   * "ci"はCIの失敗を直す回、"conflict"はマージの競合を解く回で、どちらでもなければnull。
+   * 種類ごとに、重点的に見る点を固定の文で頼む。
+   * どちらの回のClaudeも、通すか解くことを求められる立場なので、検査を弱めたり片側を捨てたりして済ませる誘惑があるため。
    */
-  ciRoundDiff: boolean;
+  fixRound: "ci" | "conflict" | null;
   /**
    * gitが内容を出さず`Binary files ... differ`とだけ書いたファイルのパス。
    * 内容が差分に無いので、読んだ判断なのか、読んでいないのかを、指示の文で分ける。
@@ -301,7 +302,7 @@ export function reviewPrompt(
     );
   }
 
-  if (input.ciRoundDiff) {
+  if (input.fixRound === "ci") {
     sections.push(
       "",
       "The latest commit was written by the factory's CI-fix round, which edited",
@@ -315,6 +316,24 @@ export function reviewPrompt(
       "  (for example, network access or reading environment variables).",
       "- Check that no ignore file or tool setting was added or changed",
       "  (for example, .gitignore, conftest.py, or a test runner setting).",
+    );
+  }
+
+  if (input.fixRound === "conflict") {
+    sections.push(
+      "",
+      "The latest commit is a merge commit written by the factory's merge-conflict round,",
+      "which merged the base branch into the pull request branch and resolved the",
+      "conflicts. Review that merge with extra care:",
+      "- Check that every hunk the round resolved lies where the pull request's change",
+      "  and the base branch's change overlap, and that no file outside those hunks was",
+      "  edited.",
+      "- Check that the intent of both sides remains in the resolved code.",
+      "- Check that one side was not dropped as a whole.",
+      "- Check that no test was weakened, skipped, or deleted, and no suppression",
+      "  comment (biome-ignore, @ts-ignore, @ts-expect-error, eslint-disable) was added.",
+      "- Check that the round added nothing unrelated to resolving the conflict",
+      "  (for example, new behavior, network access, or reading environment variables).",
     );
   }
 

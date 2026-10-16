@@ -68,10 +68,12 @@ export function buildRetryDeps(
   const query = transientReviewQuery();
   return {
     retry: {
-      listCandidates: () =>
+      pageSize: AUTO_RETRY_LIST_LIMIT,
+      listCandidates: (afterId) =>
         io.listTransientReviewCandidates({
           ...query,
           limit: AUTO_RETRY_LIST_LIMIT,
+          afterId,
         }),
       isFlowJobFinished: io.isFlowJobFinished,
       restart: (candidate) =>
@@ -95,10 +97,12 @@ export function buildRetryDeps(
       log,
     },
     stalled: {
-      listStalled: () =>
+      pageSize: AUTO_RETRY_LIST_LIMIT,
+      listStalled: (afterId) =>
         io.listTransientReviewCandidates({
           ...query,
           limit: AUTO_RETRY_LIST_LIMIT,
+          afterId,
           extraGraceSeconds: TRANSIENT_STALL_GRACE_SECONDS,
           unnotifiedOnly: true,
           includeExhausted: true,
