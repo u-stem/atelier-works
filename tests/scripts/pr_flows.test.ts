@@ -204,6 +204,36 @@ describe("pr_review flow.yaml", () => {
     expect(moduleTimeoutSec(PR_REVIEW_FLOW, "pr_review_post")).toBe(5400);
   });
 
+  test("passes the binary files of the generate step to the post step", () => {
+    expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
+      "          binary_files:\n            type: javascript\n            expr: results.pr_review_generate?.binary_files ?? []\n",
+    );
+  });
+
+  test("passes the unlisted binary count of the generate step to the post step", () => {
+    expect(moduleBlock(PR_REVIEW_FLOW, "pr_review_post")).toContain(
+      "          binary_unlisted_count:\n            type: javascript\n            expr: results.pr_review_generate?.binary_unlisted_count ?? 0\n",
+    );
+  });
+
+  test("declares binary_unlisted_count in the schema of the post step", () => {
+    const schema = readFileSync(
+      join(import.meta.dir, "../../f/factory/steps/pr_review_post.script.yaml"),
+      "utf8",
+    );
+    expect(schema).toContain(
+      "    binary_unlisted_count:\n      type: number\n",
+    );
+  });
+
+  test("declares binary_files in the schema of the post step", () => {
+    const schema = readFileSync(
+      join(import.meta.dir, "../../f/factory/steps/pr_review_post.script.yaml"),
+      "utf8",
+    );
+    expect(schema).toContain("    binary_files:\n      type: array\n");
+  });
+
   test("puts no timeout on the failure module", () => {
     expect(
       PR_REVIEW_FLOW.slice(PR_REVIEW_FLOW.indexOf("failure_module:")),

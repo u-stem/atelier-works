@@ -41,6 +41,7 @@ import {
   openFindingsForPrompt,
   prReviewTimeoutMisfit,
   reviewOutputProseIssues,
+  selectListedBinaryFiles,
 } from "./pr_workflow_support.ts";
 
 const MAX_FINDINGS = 20;
@@ -52,6 +53,10 @@ export type PrReviewGenerateResult = {
   readonly summary: string;
   readonly findings: ReviewFinding[];
   readonly pr_files: string[];
+  /** 差分に内容が出ないバイナリのファイル。投稿の本文に、決定的な固定の文で載せる。 */
+  readonly binary_files: readonly string[];
+  /** `binary_files`に載せなかった(パスを変更ファイルと照合できなかった)バイナリの件数。 */
+  readonly binary_unlisted_count: number;
 };
 
 const SKIPPED_RESULT: PrReviewGenerateResult = {
@@ -61,6 +66,8 @@ const SKIPPED_RESULT: PrReviewGenerateResult = {
   summary: "",
   findings: [],
   pr_files: [],
+  binary_files: [],
+  binary_unlisted_count: 0,
 };
 
 export async function main(
@@ -156,6 +163,10 @@ export async function main(
     listReviewThreads(client, owner, repo, pr_number),
   ]);
   const prFiles = prFileEntries.map((entry) => entry.filename);
+  // 差分の行から取り出したパスは、APIの変更ファイルに載るものだけをClaudeに読ませる。
+  // 載らないものは、件数だけを投稿に残す。
+  const { listed: binaryFiles, unlistedCount: binaryUnlistedCount } =
+    selectListedBinaryFiles(prDiff.binaryFiles, prFiles);
 
   const requirements =
     parent_work_item_id === null
@@ -194,6 +205,7 @@ export async function main(
     requirements,
     openFindings,
     fixRound,
+    binaryFiles,
   });
 
   const systemPrompt = await buildSystemPrompt({
@@ -251,6 +263,8 @@ export async function main(
       summary,
       findings,
       pr_files: prFiles,
+      binary_files: binaryFiles,
+      binary_unlisted_count: binaryUnlistedCount,
     };
   } finally {
     await systemPrompt.cleanup();

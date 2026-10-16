@@ -17,6 +17,7 @@ import type { ReviewFinding } from "../../f/factory/lib/types.ts";
 import type { CommandResult } from "../../f/factory/lib/workspace.ts";
 import {
   findPostedReview,
+  normalizeBinaryInput,
   type PostReviewTarget,
   type PrReviewPostInput,
   type PublishReviewInput,
@@ -430,12 +431,357 @@ describe("renderReviewSummary", () => {
       [finding({ path: "dir/\nb.ts", message: "out of diff" })],
       0,
     );
-    expect(body.split("\n").at(-1)).toBe("- [MUST] dir/ b.ts: out of diff");
+    expect(body.split("\n").at(-1)).toBe("- [MUST] `dir/ b.ts`: out of diff");
   });
 
   test('mode "rereview_open" never includes the final-Approve-is-human disclaimer line', () => {
     const body = renderReviewSummary("alice", 0, "rereview_open", [], 2);
     expect(body).not.toContain("Approve");
+  });
+});
+
+describe("renderReviewSummary with binary files", () => {
+  const NOTICE = "内容を差分で読めないバイナリのファイルが2件あります。";
+
+  test("adds the binary notice even when the mode is first_clean", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
+      "b.bin",
+    ]);
+    expect(body).toContain(NOTICE);
+  });
+
+  test("adds the binary notice when the mode is rereview_clean", () => {
+    const body = renderReviewSummary("alice", 0, "rereview_clean", [], 0, [
+      "a.png",
+      "b.bin",
+    ]);
+    expect(body).toContain(NOTICE);
+  });
+
+  test("adds the binary notice when the mode is rereview_open", () => {
+    const body = renderReviewSummary("alice", 0, "rereview_open", [], 2, [
+      "a.png",
+      "b.bin",
+    ]);
+    expect(body).toContain(NOTICE);
+  });
+
+  test("adds the binary notice when the mode is findings", () => {
+    const body = renderReviewSummary("alice", 3, "findings", [], 0, [
+      "a.png",
+      "b.bin",
+    ]);
+    expect(body).toContain(NOTICE);
+  });
+
+  test("lists each binary path as a bullet", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
+      "b.bin",
+    ]);
+    expect(body).toContain("- `a.png`\n- `b.bin`");
+  });
+
+  test("never says LGTM when a first review has binary files", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
+    ]);
+    expect(body).not.toContain("LGTM");
+  });
+
+  test("never says LGTM when a re-review has binary files", () => {
+    const body = renderReviewSummary("alice", 0, "rereview_clean", [], 0, [
+      "a.png",
+    ]);
+    expect(body).not.toContain("LGTM");
+  });
+
+  test("keeps the final-Approve-is-human disclaimer on the third line", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
+    ]);
+    expect(body.split("\n")[2]).toBe(
+      "最終的なApprove判断は人が行ってください。",
+    );
+  });
+
+  test("puts a blank line between the disclaimer and the notice", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
+    ]);
+    expect(body.split("\n")[3]).toBe("");
+  });
+
+  test("puts the notice on the line after the blank line", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
+    ]);
+    expect(body.split("\n")[4]).toStartWith(
+      "内容を差分で読めないバイナリのファイルが1件あります。",
+    );
+  });
+
+  test("states the text diff has no findings instead of LGTM", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a.png",
+    ]);
+    expect(body.split("\n")[1]).toBe("差分に指摘はありません。");
+  });
+
+  test("states the fix was confirmed without LGTM in a re-review", () => {
+    const body = renderReviewSummary("alice", 0, "rereview_clean", [], 0, [
+      "a.png",
+    ]);
+    expect(body.split("\n")[1]).toBe("修正を確認しました。");
+  });
+
+  test("adds nothing when there are no binary files", () => {
+    const withEmpty = renderReviewSummary("alice", 0, "first_clean", [], 0, []);
+    expect(withEmpty).toBe(
+      renderReviewSummary("alice", 0, "first_clean", [], 0),
+    );
+  });
+
+  test("does not mention binary files when the list is empty", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, []);
+    expect(body).not.toContain("バイナリ");
+  });
+
+  test("keeps LGTM when the list is empty", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, []);
+    expect(body.split("\n")[1]).toBe("指摘はありません。LGTMです。");
+  });
+
+  test("lists at most 20 paths and counts the rest", () => {
+    const paths = Array.from({ length: 23 }, (_, i) => `f${String(i)}.bin`);
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, paths);
+    expect(body.split("\n").filter((l) => l.startsWith("- ")).length).toBe(20);
+  });
+
+  test("states how many paths were left out of the list", () => {
+    const paths = Array.from({ length: 23 }, (_, i) => `f${String(i)}.bin`);
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, paths);
+    expect(body).toContain("ほか3件");
+  });
+
+  test("counts all binary files in the notice, not only the listed ones", () => {
+    const paths = Array.from({ length: 23 }, (_, i) => `f${String(i)}.bin`);
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, paths);
+    expect(body).toContain("バイナリのファイルが23件あります。");
+  });
+
+  test("neutralizes an HTML comment opener in a binary path", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "a<!--.bin",
+    ]);
+    expect(body).toContain("- `a&lt;!--.bin`");
+  });
+
+  test("keeps a multi-line binary path on its bullet line", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [
+      "dir/\nb.bin",
+    ]);
+    expect(body.split("\n").at(-1)).toBe("- `dir/ b.bin`");
+  });
+
+  test("puts the binary notice before the dropped findings", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "b.ts", message: "out of diff" })],
+      0,
+      ["a.png"],
+    );
+    expect(body.slice(0, body.indexOf("行に紐づけられなかった指摘"))).toContain(
+      "バイナリ",
+    );
+  });
+});
+
+describe("renderReviewSummary with binary paths as code spans", () => {
+  const lastLine = (paths: string[]) =>
+    renderReviewSummary("alice", 0, "first_clean", [], 0, paths)
+      .split("\n")
+      .at(-1);
+
+  test("wraps a path that looks like a mention so it is not rendered as one", () => {
+    expect(lastLine(["@alice/x.png"])).toBe("- `@alice/x.png`");
+  });
+
+  test("wraps a path containing a backtick in a longer fence", () => {
+    expect(lastLine(["a`b.png"])).toBe("- ``a`b.png``");
+  });
+
+  test("wraps a path containing a run of backticks in a fence longer than the run", () => {
+    expect(lastLine(["a``b.png"])).toBe("- ```a``b.png```");
+  });
+
+  test("pads a path that starts with a backtick so the fence is not merged", () => {
+    expect(lastLine(["`a.png"])).toBe("- `` `a.png ``");
+  });
+
+  test("pads a path that ends with a backtick so the fence is not merged", () => {
+    expect(lastLine(["a.png`"])).toBe("- `` a.png` ``");
+  });
+
+  test("keeps a path of exactly 200 characters whole", () => {
+    const path = "a".repeat(200);
+    expect(lastLine([path])).toBe(`- \`${path}\``);
+  });
+
+  test("cuts a path longer than 200 characters and marks the cut", () => {
+    expect(lastLine(["a".repeat(250)])).toBe(`- \`${"a".repeat(200)}…\``);
+  });
+
+  test("cuts a path by characters, not by UTF-16 code units", () => {
+    expect(lastLine(["😀".repeat(201)])).toBe(`- \`${"😀".repeat(200)}…\``);
+  });
+
+  test("wraps the path of an unanchored finding in a code span", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "@alice/b.ts", message: "out of diff" })],
+      0,
+    );
+    expect(body.split("\n").at(-1)).toBe("- [MUST] `@alice/b.ts`: out of diff");
+  });
+
+  test("wraps the path of an unanchored finding that has a backtick in a longer fence", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "b`.ts", message: "out of diff" })],
+      0,
+    );
+    expect(body.split("\n").at(-1)).toBe("- [MUST] ``b`.ts``: out of diff");
+  });
+
+  test("cuts the path of an unanchored finding longer than 200 characters", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "findings",
+      [finding({ path: "b".repeat(250), message: "out of diff" })],
+      0,
+    );
+    expect(body.split("\n").at(-1)).toBe(
+      `- [MUST] \`${"b".repeat(200)}…\`: out of diff`,
+    );
+  });
+});
+
+describe("normalizeBinaryInput", () => {
+  const plain = renderReviewSummary("alice", 0, "first_clean", [], 0);
+  const render = (input: ReturnType<typeof normalizeBinaryInput>) =>
+    renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      input.binaryFiles,
+      input.binaryUnlistedCount,
+    );
+
+  test("gives the old summary when both values are undefined", () => {
+    expect(render(normalizeBinaryInput(undefined, undefined))).toBe(plain);
+  });
+
+  test("gives the old summary when both values are null", () => {
+    expect(render(normalizeBinaryInput(null, null))).toBe(plain);
+  });
+
+  test("gives the old summary when only the files are null", () => {
+    expect(render(normalizeBinaryInput(null, 0))).toBe(plain);
+  });
+
+  test("gives the old summary when only the count is undefined", () => {
+    expect(render(normalizeBinaryInput([], undefined))).toBe(plain);
+  });
+
+  test("keeps the files and the count when they are given", () => {
+    expect(normalizeBinaryInput(["a.png"], 2)).toEqual({
+      binaryFiles: ["a.png"],
+      binaryUnlistedCount: 2,
+    });
+  });
+});
+
+// `postReview`はWindmillとDBを直接使うので、配線はソースの並びで確かめる。
+describe("binary input wiring in the post step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_post.ts", import.meta.url),
+  ).text();
+
+  test("normalizes the binary input once before publishing", async () => {
+    const needle =
+      "normalizeBinaryInput(\n    input.binary_files,\n    input.binary_unlisted_count,\n  )";
+    expect((await SOURCE).split(needle).length - 1).toBe(1);
+  });
+});
+
+describe("renderReviewSummary with binary files whose path was not confirmed", () => {
+  test("counts the unconfirmed files in the notice", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      ["a.png"],
+      2,
+    );
+    expect(body).toContain("バイナリのファイルが3件あります。");
+  });
+
+  test("says how many paths could not be confirmed", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      ["a.png"],
+      2,
+    );
+    expect(body).toContain("(パスを確認できなかったものが2件あります)");
+  });
+
+  test("adds the notice when only unconfirmed files exist", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [], 2);
+    expect(body).toContain("バイナリのファイルが2件あります。");
+  });
+
+  test("never says LGTM when only unconfirmed files exist", () => {
+    const body = renderReviewSummary("alice", 0, "first_clean", [], 0, [], 2);
+    expect(body).not.toContain("LGTM");
+  });
+
+  test("does not mention unconfirmed paths when there are none", () => {
+    const body = renderReviewSummary(
+      "alice",
+      0,
+      "first_clean",
+      [],
+      0,
+      ["a.png"],
+      0,
+    );
+    expect(body).not.toContain("パスを確認できなかった");
+  });
+});
+
+describe("renderUnresolvedLineSummary with binary files", () => {
+  test("adds the binary notice to the fallback summary", () => {
+    const body = renderUnresolvedLineSummary("alice", [], [], ["a.png"]);
+    expect(body).toContain(
+      "内容を差分で読めないバイナリのファイルが1件あります。",
+    );
   });
 });
 
@@ -788,6 +1134,8 @@ describe("runPrReviewPost worktree cleanup", () => {
       verdict: null,
       findings: [],
       pr_files: [],
+      binary_files: [],
+      binary_unlisted_count: 0,
       worktree_dir: WORKTREE_DIR,
       repo_dir: REPO_DIR,
       ...overrides,
@@ -873,6 +1221,8 @@ describe("runPrReviewPost failure marking", () => {
     verdict: "comment",
     findings: [],
     pr_files: [],
+    binary_files: [],
+    binary_unlisted_count: 0,
     worktree_dir: "",
     repo_dir: "",
   };
@@ -982,15 +1332,15 @@ describe("renderUnresolvedLineSummary", () => {
   });
 
   test("shows the line of a finding that would have been an inline comment", () => {
-    expect(body).toContain("- [MUST] a.ts:10: first problem");
+    expect(body).toContain("- [MUST] `a.ts:10`: first problem");
   });
 
   test("shows the range of a multi-line finding", () => {
-    expect(body).toContain("- [MUST] c.ts:4-8: second problem");
+    expect(body).toContain("- [MUST] `c.ts:4-8`: second problem");
   });
 
   test("keeps the form of a finding that had no line", () => {
-    expect(body).toContain("- [MUST] b.ts: third problem");
+    expect(body).toContain("- [MUST] `b.ts`: third problem");
   });
 });
 
@@ -1091,6 +1441,8 @@ describe("posting a review once per sha", () => {
       comments: [],
       commentedFindings: [],
       droppedFindings: [],
+      binaryFiles: [],
+      binaryUnlistedCount: 0,
       priorReview: true,
       post: true,
       ensureRepoOwner: async () => null,
@@ -1330,6 +1682,40 @@ describe("posting a review once per sha", () => {
         SILENT,
       );
       expect(result.postedReviewId).toBe(55);
+    });
+
+    test("posts the binary notice in the summary of a clean review", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false, binaryFiles: ["a.png"] }),
+        SILENT,
+      );
+      expect(JSON.parse(fake.calls[1]?.options?.stdin ?? "{}")).toMatchObject({
+        body: expect.stringContaining(
+          "内容を差分で読めないバイナリのファイルが1件あります。",
+        ),
+      });
+    });
+
+    test("posts the count of unconfirmed binary files in the summary", async () => {
+      const fake = createFakeCommandRunner([
+        ghApiOk([humanReview(1)]),
+        ghApiOk({ id: 99 }),
+      ]);
+      await publishReview(
+        { run: fake.run, ghToken: "tok" },
+        rerunInput({ priorReview: false, binaryUnlistedCount: 3 }),
+        SILENT,
+      );
+      expect(JSON.parse(fake.calls[1]?.options?.stdin ?? "{}")).toMatchObject({
+        body: expect.stringContaining(
+          "(パスを確認できなかったものが3件あります)",
+        ),
+      });
     });
 
     test("does not post again when a review for the same sha exists", async () => {

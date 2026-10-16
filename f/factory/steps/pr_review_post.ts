@@ -64,6 +64,20 @@ export type PrReviewPostResult = {
   readonly posted_review_id: string | null;
 };
 
+/**
+ * 古いflow定義が新しいscriptを呼ぶと、`binary_files`と`binary_unlisted_count`が
+ * undefinedかnullで届く。そのときは、バイナリが無いものとして旧来の総評にする。
+ */
+export function normalizeBinaryInput(
+  binaryFiles: readonly string[] | null | undefined,
+  binaryUnlistedCount: number | null | undefined,
+): { binaryFiles: string[]; binaryUnlistedCount: number } {
+  return {
+    binaryFiles: [...(binaryFiles ?? [])],
+    binaryUnlistedCount: binaryUnlistedCount ?? 0,
+  };
+}
+
 /** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
 export type PrReviewPostInput = {
   readonly work_item_id: number;
@@ -76,6 +90,8 @@ export type PrReviewPostInput = {
   readonly verdict: string | null;
   readonly findings: ReviewFinding[];
   readonly pr_files: string[];
+  readonly binary_files: string[] | null | undefined;
+  readonly binary_unlisted_count: number | null | undefined;
   readonly worktree_dir: string;
   readonly repo_dir: string;
 };
@@ -118,6 +134,8 @@ export async function main(
   verdict: string | null,
   findings: ReviewFinding[],
   pr_files: string[],
+  binary_files: string[],
+  binary_unlisted_count: number,
   worktree_dir: string,
   repo_dir: string,
 ): Promise<PrReviewPostResult> {
@@ -133,6 +151,8 @@ export async function main(
       verdict,
       findings,
       pr_files,
+      binary_files,
+      binary_unlisted_count,
       worktree_dir,
       repo_dir,
     },
@@ -333,6 +353,10 @@ export type PublishReviewInput = {
   readonly commentedFindings: readonly ReviewFinding[];
   /** 行に紐づけられず、総評に並べる指摘。 */
   readonly droppedFindings: readonly ReviewFinding[];
+  /** 差分に内容が出ないバイナリのファイル。モードによらず、総評に固定の文で並べる。 */
+  readonly binaryFiles: readonly string[];
+  /** `binaryFiles`に並べられなかった(パスを変更ファイルと照合できなかった)件数。 */
+  readonly binaryUnlistedCount: number;
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
   readonly priorReview: boolean;
   /** 偽なら("gated")投稿もスレッドの解決もしない。 */
@@ -475,12 +499,16 @@ export async function publishReview(
     mode,
     droppedFindings,
     openMustCount,
+    input.binaryFiles,
+    input.binaryUnlistedCount,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
   const fallbackBody = renderUnresolvedLineSummary(
     input.prAuthorLogin,
     input.commentedFindings,
     droppedFindings,
+    input.binaryFiles,
+    input.binaryUnlistedCount,
   );
   const postedReviewId = await postMarkedReview(
     client,
@@ -616,6 +644,10 @@ async function postReview(
     findings,
     pr_files,
   } = input;
+  const { binaryFiles, binaryUnlistedCount } = normalizeBinaryInput(
+    input.binary_files,
+    input.binary_unlisted_count,
+  );
 
   if (skip || verdict === null) {
     return SKIPPED_POST;
@@ -672,6 +704,8 @@ async function postReview(
       comments,
       commentedFindings: commentedFindingsOf(findings, droppedFindings),
       droppedFindings,
+      binaryFiles,
+      binaryUnlistedCount,
       priorReview,
       post,
       ensureRepoOwner: () =>

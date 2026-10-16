@@ -5,6 +5,7 @@ import {
   type ClaimIssueResult,
   ClaimOwnershipUnknownError,
   callGhApi,
+  callGhApiRawBody,
   claimIssue,
   commentIssue,
   compareCommits,
@@ -12,7 +13,6 @@ import {
   createPrReview,
   createPullRequest,
   ensureLabel,
-  ensureRawBodyComplete,
   ensureSuccess,
   type FetchLike,
   fetchIssueContent,
@@ -20,7 +20,6 @@ import {
   findIssueByMarker,
   findOpenPullRequestByHead,
   GH_EXIT_AUTH_REQUIRED,
-  type GhApiResponse,
   type GhClient,
   GITHUB_RATE_LIMIT_MAX_WAIT_MS,
   GITHUB_TRANSIENT_RETRY_DELAY_MS,
@@ -4079,6 +4078,7 @@ describe("getPrDiff", () => {
       diff: "line1\nline2\nline3",
       truncated: false,
       totalLines: 3,
+      binaryFiles: [],
     });
   });
 
@@ -4093,13 +4093,19 @@ describe("getPrDiff", () => {
       12,
       2,
     );
-    expect(diff).toEqual({ diff: "l1\nl2", truncated: true, totalLines: 5 });
+    expect(diff).toEqual({
+      diff: "l1\nl2",
+      truncated: true,
+      totalLines: 5,
+      binaryFiles: [],
+    });
   });
 
   const ESC = String.fromCharCode(0x1b);
   const client = (fake: ReturnType<typeof createFakeCommandRunner>) => ({
     run: fake.run,
     ghToken: "tok",
+    sleep: async () => {},
   });
 
   test("asks gh to output a body that carries terminal escape sequences", async () => {
@@ -4125,6 +4131,7 @@ describe("getPrDiff", () => {
       diff: "l1<U+001B>\nl2<U+001B>",
       truncated: true,
       totalLines: 4,
+      binaryFiles: [],
     });
   });
 
@@ -4145,6 +4152,7 @@ describe("getPrDiff", () => {
       diff: `${revealedLine}\n${revealedLine}`,
       truncated: true,
       totalLines: 4,
+      binaryFiles: [],
     });
   });
 
@@ -4157,6 +4165,7 @@ describe("getPrDiff", () => {
       diff: "x".repeat(10),
       truncated: true,
       totalLines: 1,
+      binaryFiles: [],
     });
   });
 
@@ -4235,10 +4244,164 @@ describe("getPrDiff", () => {
       exitCode: 1,
       timedOut: false,
     };
-    const fake = createFakeCommandRunner([rejected]);
+    const fake = createFakeCommandRunner([rejected, rejected]);
     await expect(
       getPrDiff(client(fake), "acme", "widgets", 12, 100),
     ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+
+  test("fetches the diff again once when the first fetch is incomplete", async () => {
+    const rejected: CommandResult = {
+      stdout: ghApiStdout(200, ""),
+      stderr: "",
+      exitCode: 1,
+      timedOut: false,
+    };
+    const fake = createFakeCommandRunner([
+      rejected,
+      ok(ghApiStdout(200, "+line")),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+line");
+  });
+
+  test("normalizes CRLF line ends of the diff to LF", async () => {
+    const fake = createFakeCommandRunner([
+      ok(ghApiStdout(200, "+a\r\n+b\r\n c")),
+    ]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+a\n+b\n c");
+  });
+
+  test("gives the same diff for LF and CRLF line ends", async () => {
+    const lf = createFakeCommandRunner([ok(ghApiStdout(200, "+a\n+b\n"))]);
+    const crlf = createFakeCommandRunner([
+      ok(ghApiStdout(200, "+a\r\n+b\r\n")),
+    ]);
+    const fromLf = await getPrDiff(client(lf), "acme", "widgets", 12, 100);
+    const fromCrlf = await getPrDiff(client(crlf), "acme", "widgets", 12, 100);
+    expect(fromCrlf).toEqual(fromLf);
+  });
+
+  test("counts the lines of a CRLF diff as LF lines", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "a\r\nb\r\nc"))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    expect(diff).toMatchObject({ diff: "a\nb", totalLines: 3 });
+  });
+
+  test("still reveals a carriage return that is not part of a CRLF", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "+a\rb\r\n"))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.diff).toBe("+a<U+000D>b\n");
+  });
+
+  test("lists the file of a binary diff", async () => {
+    const body = [
+      "diff --git a/img/logo.png b/img/logo.png",
+      "index 1111111..2222222 100644",
+      "Binary files a/img/logo.png and b/img/logo.png differ",
+    ].join("\n");
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["img/logo.png"]);
+  });
+
+  test("lists an added binary file by its new path", async () => {
+    const body = "Binary files /dev/null and b/new.bin differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["new.bin"]);
+  });
+
+  test("lists a deleted binary file by its old path", async () => {
+    const body = "Binary files a/old.bin and /dev/null differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["old.bin"]);
+  });
+
+  test("lists a binary file even when the diff was cut before it", async () => {
+    const body = [
+      "+a",
+      "+b",
+      "+c",
+      "Binary files a/x.bin and b/x.bin differ",
+    ].join("\n");
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 2);
+    expect(diff.binaryFiles).toEqual(["x.bin"]);
+  });
+
+  test("drops the side prefix inside the quotes of a quoted path", async () => {
+    const body = 'Binary files /dev/null and "b/\\346\\227\\245.png" differ';
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
+  });
+
+  test("drops the side prefix of a quoted path on both sides", async () => {
+    const body =
+      'Binary files "a/\\346\\227\\245.png" and "b/\\346\\227\\245.png" differ';
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
+  });
+
+  test("drops the side prefix of a quoted deleted path", async () => {
+    const body = 'Binary files "a/\\346\\227\\245.png" and /dev/null differ';
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(['"\\346\\227\\245.png"']);
+  });
+
+  test("splits a modified path containing and at the last and b/", async () => {
+    const body = "Binary files a/x and y.bin and b/x and y.bin differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x and y.bin"]);
+  });
+
+  test("prefers the split where both sides name the same path", async () => {
+    const body =
+      "Binary files a/x and b/evil.png and b/x and b/evil.png differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x and b/evil.png"]);
+  });
+
+  test("falls back to the last and b/ when a rename has different sides", async () => {
+    const body = "Binary files a/old.png and b/new and b/x.png differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x.png"]);
+  });
+
+  test("keeps the whole added path when it contains and", async () => {
+    const body = "Binary files /dev/null and b/x and y.bin differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x and y.bin"]);
+  });
+
+  test("keeps the whole deleted path when it contains and", async () => {
+    const body = "Binary files a/old and x.bin and /dev/null differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["old and x.bin"]);
+  });
+
+  test("does not take an added line that looks like a binary notice", async () => {
+    const body = "+Binary files a/x and b/x differ";
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual([]);
+  });
+
+  test("reveals control characters in the listed binary path", async () => {
+    const body = `Binary files a/x${ESC}.bin and b/x${ESC}.bin differ`;
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, body))]);
+    const diff = await getPrDiff(client(fake), "acme", "widgets", 12, 100);
+    expect(diff.binaryFiles).toEqual(["x<U+001B>.bin"]);
   });
 
   test("returns an empty diff when gh exits zero with an empty body", async () => {
@@ -4248,34 +4411,162 @@ describe("getPrDiff", () => {
   });
 });
 
-describe("ensureRawBodyComplete", () => {
-  const withExit = (exitCode: number | undefined): GhApiResponse => ({
-    status: 200,
-    headers: new Map(),
-    bodyText: "partial body",
-    ...(exitCode !== undefined ? { exitCode } : {}),
+describe("callGhApiRawBody", () => {
+  const exited = (exitCode: number, body: string): CommandResult => ({
+    stdout: ghApiStdout(200, body),
+    stderr: "the response contains terminal escape sequences",
+    exitCode,
+    timedOut: false,
   });
 
-  test("passes when gh exited zero", () => {
-    expect(() => ensureRawBodyComplete(withExit(0), "GET x")).not.toThrow();
+  /** 実行とsleepを記録し、取り直しの回数と待ちを確かめられるようにする。 */
+  const recording = (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    transientRetryDelayMs?: number,
+  ) => {
+    const sleeps: number[] = [];
+    return {
+      sleeps,
+      client: {
+        run: fake.run,
+        ghToken: "tok",
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+        ...(transientRetryDelayMs !== undefined
+          ? { transientRetryDelayMs }
+          : {}),
+      },
+    };
+  };
+
+  const call = (client: Parameters<typeof callGhApiRawBody>[0]) =>
+    callGhApiRawBody(client, "repos/acme/widgets/x", {}, "GET x");
+
+  test("returns the response when gh exited zero", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
+    const response = await call(recording(fake).client);
+    expect(response.bodyText).toBe("body");
   });
 
-  test("throws when gh exited non-zero", () => {
-    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+  test("does not wait or fetch again when gh exited zero", async () => {
+    const fake = createFakeCommandRunner([ok(ghApiStdout(200, "body"))]);
+    const { client, sleeps } = recording(fake);
+    await call(client);
+    expect([fake.calls.length, sleeps]).toEqual([1, []]);
+  });
+
+  test("returns the second response when the first one was incomplete", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, "part"),
+      ok(ghApiStdout(200, "whole body")),
+    ]);
+    const response = await call(recording(fake).client);
+    expect(response.bodyText).toBe("whole body");
+  });
+
+  test("waits for the transient retry delay of the client before the second fetch", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    const { client, sleeps } = recording(fake, 1234);
+    await call(client);
+    expect(sleeps).toEqual([1234]);
+  });
+
+  test("waits for the default delay when the client has no transient retry delay", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    const { client, sleeps } = recording(fake);
+    await call(client);
+    expect(sleeps).toEqual([GITHUB_TRANSIENT_RETRY_DELAY_MS]);
+  });
+
+  test("throws a GitHubRawBodyIncompleteError when the second response is also incomplete", async () => {
+    const fake = createFakeCommandRunner([exited(1, ""), exited(1, "")]);
+    await expect(call(recording(fake).client)).rejects.toBeInstanceOf(
       GitHubRawBodyIncompleteError,
     );
   });
 
-  test("throws when the exit code is unknown", () => {
-    expect(() => ensureRawBodyComplete(withExit(undefined), "GET x")).toThrow(
-      GitHubRawBodyIncompleteError,
-    );
+  test("fetches only twice even when every response is incomplete", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    await call(recording(fake).client).catch(() => undefined);
+    expect(fake.calls).toHaveLength(2);
   });
 
-  test("names the request without the body in the message", () => {
-    expect(() => ensureRawBodyComplete(withExit(1), "GET x")).toThrow(
+  test("names the request without the body or stderr in the message", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, "PARTIAL-BODY"),
+      exited(1, "PARTIAL-BODY"),
+    ]);
+    const error = await call(recording(fake).client).catch((e: unknown) => e);
+    expect(error instanceof Error ? error.message : "").toBe(
       "GET x ended incomplete: gh exited non-zero after a 2xx status",
     );
+  });
+
+  test("does not fetch again when the request is not idempotent", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    await callGhApiRawBody(
+      recording(fake).client,
+      "repos/acme/widgets/x",
+      { method: "POST" },
+      "POST x",
+    ).catch(() => undefined);
+    expect(fake.calls).toHaveLength(1);
+  });
+
+  test("throws a GitHubRawBodyIncompleteError when a non-idempotent request is incomplete", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    await expect(
+      callGhApiRawBody(
+        recording(fake).client,
+        "repos/acme/widgets/x",
+        { method: "POST" },
+        "POST x",
+      ),
+    ).rejects.toBeInstanceOf(GitHubRawBodyIncompleteError);
+  });
+
+  test("fetches again when a POST is marked idempotent", async () => {
+    const fake = createFakeCommandRunner([
+      exited(1, ""),
+      ok(ghApiStdout(200, "x")),
+    ]);
+    const response = await callGhApiRawBody(
+      recording(fake).client,
+      "repos/acme/widgets/x",
+      { method: "POST", idempotent: true },
+      "POST x",
+    );
+    expect(response.bodyText).toBe("x");
+  });
+
+  test("returns a non-2xx response without fetching again", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: ghApiStdout(404, { message: "Not Found" }),
+        stderr: "",
+        exitCode: 1,
+        timedOut: false,
+      },
+    ]);
+    const response = await call(recording(fake).client);
+    expect([response.status, fake.calls.length]).toEqual([404, 1]);
   });
 });
 

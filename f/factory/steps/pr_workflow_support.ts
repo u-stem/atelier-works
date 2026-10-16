@@ -120,6 +120,13 @@ export {
 // `factory_config`ではなくここに置く。
 // ---------------------------------------------------------------------------
 
+/**
+ * バイナリのファイルの一覧に並べるパスの上限。残りは件数だけを書く。
+ * プロンプトの同名の定数(`prompts.ts`)と同じ値にする。
+ * importを足すと、メタデータの事前検査が辿る回数が予算に近づくため、値を複製し、テストで確かめる。
+ */
+export const BINARY_LIST_MAX_FILES = 20;
+
 export const ROLE_TAGS = {
   pr_review: "[pr_review 自動レビュー]",
   pr_fix: "[pr_fix 自動返信]",
@@ -614,6 +621,12 @@ export function decideReviewBodyMode(
  * `verdict`も同じく載せない(DBとDiscordだけで、PRの本文には出さない)。
  * `<!-- factory:pr_review:<id> -->`とレビューしたshaの印は、呼び出し側が`withReviewMarkers`で足す。
  *
+ * `binaryFiles`か`binaryUnlistedCount`が1件以上あるときは、モードによらず、固定の一文とパスの一覧を足す
+ * (`renderBinaryFilesLines`)。差分に内容が出ないファイルを、Claudeの出力に頼らず、
+ * 読まれていない可能性のあるものとして、投稿に必ず残すため。
+ * 指摘の無い2つの形式は、そのとき「LGTMです」を言わず、差分に指摘が無いことだけを書く。
+ * 読めていないファイルが残るのに、LGTMと読める行を出さないため。
+ *
  * `"findings"`には「最終的なApproveは人が判断する」という免責の行を付けない。
  * 指摘のある投稿はすでに作成者に確認を求めている(「確認お願いします。」)ので、
  * 免責は重複になる。
@@ -630,8 +643,11 @@ export function renderReviewSummary(
   mode: ReviewBodyMode,
   droppedFindings: readonly ReviewFinding[],
   openMustCount: number | null,
+  binaryFiles: readonly string[] = [],
+  binaryUnlistedCount = 0,
 ): string {
   const lines = [`${ROLE_TAGS.pr_review} @${authorLogin}`];
+  const hasBinary = binaryFiles.length + binaryUnlistedCount > 0;
   switch (mode) {
     case "findings":
       lines.push(
@@ -639,11 +655,15 @@ export function renderReviewSummary(
       );
       break;
     case "rereview_clean":
-      lines.push("修正を確認しました。LGTMです。");
+      lines.push(
+        hasBinary ? "修正を確認しました。" : "修正を確認しました。LGTMです。",
+      );
       lines.push("最終的なApprove判断は人が行ってください。");
       break;
     case "first_clean":
-      lines.push("指摘はありません。LGTMです。");
+      lines.push(
+        hasBinary ? "差分に指摘はありません。" : "指摘はありません。LGTMです。",
+      );
       lines.push("最終的なApprove判断は人が行ってください。");
       break;
     case "rereview_open":
@@ -657,24 +677,83 @@ export function renderReviewSummary(
       );
       break;
   }
+  lines.push(...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount));
   lines.push(...renderUnanchoredFindingLines(droppedFindings));
   return lines.join("\n");
 }
 
-/** 総評に並べる`path`。改行は空白にまとめ、`<!--`は無害にする。 */
+/**
+ * 差分に内容が出ないバイナリのファイルの固定の一文と、パスの箇条書き。無ければ空。
+ * 先頭に空行を置き、直前の行(LGTMや免責の行)と続けて読まれないようにする。
+ * パスは、改行を空白にまとめ、200文字で切り、`<!--`を無害にしてから、コードスパンで囲む(`pathCodeSpan`)。
+ * 上限を超えた分は「ほかN件」と書く。
+ * `unlistedCount`は、パスを変更ファイルと照合できず並べなかった件数で、件数と注記にだけ加える。
+ */
+function renderBinaryFilesLines(
+  binaryFiles: readonly string[],
+  unlistedCount: number,
+): string[] {
+  const total = binaryFiles.length + unlistedCount;
+  if (total === 0) return [];
+  const shown = binaryFiles.slice(0, BINARY_LIST_MAX_FILES);
+  const rest = binaryFiles.length - shown.length;
+  return [
+    "",
+    `内容を差分で読めないバイナリのファイルが${String(total)}件あります。人が内容を確認してください。`,
+    ...shown.map((path) => `- ${pathCodeSpan(path)}`),
+    ...(rest > 0 ? [`(ほか${String(rest)}件)`] : []),
+    ...(unlistedCount > 0
+      ? [`(パスを確認できなかったものが${String(unlistedCount)}件あります)`]
+      : []),
+  ];
+}
+
+/** 総評に並べる`path`の最大の文字数(コードポイント)。超えた分は「…」にする。 */
+const PATH_MAX_CHARS = 200;
+
+/**
+ * 総評に並べる`path`の文字列。改行は空白にまとめ、200文字で切り(切ったら末尾に「…」)、
+ * `<!--`は無害にする。長いパスで総評が埋まらないようにし、目印の偽造も防ぐ。
+ */
 function oneLinePath(path: string): string {
-  return neutralizeHtmlComment(path.replace(/\s*[\r\n]+\s*/g, " "));
+  const oneLine = path.replace(/\s*[\r\n]+\s*/g, " ");
+  const chars = Array.from(oneLine);
+  const cut =
+    chars.length > PATH_MAX_CHARS
+      ? `${chars.slice(0, PATH_MAX_CHARS).join("")}…`
+      : oneLine;
+  return neutralizeHtmlComment(cut);
+}
+
+/**
+ * `text`をコードスパンで囲む。`@`のメンションやリンクとして描画させないため。
+ * 中のバッククォートの最長の連なりより長いフェンスで囲み、
+ * 先頭か末尾がバッククォートなら、フェンスと混ざらないよう空白を挟む。
+ */
+function codeSpan(text: string): string {
+  const longestRun = Math.max(
+    0,
+    ...Array.from(text.matchAll(/`+/g), (m) => m[0].length),
+  );
+  const fence = "`".repeat(longestRun + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+/** 総評に並べる`path`を、整えてコードスパンで囲んだ文字列。 */
+function pathCodeSpan(path: string): string {
+  return codeSpan(oneLinePath(path));
 }
 
 /** 指摘の位置。範囲の指摘は`path:line-end_line`、1行の指摘は`path:line`、行が無ければ`path`だけ。 */
 function findingLocation(finding: ReviewFinding): string {
   const path = oneLinePath(finding.path);
-  if (finding.line === null) return path;
+  if (finding.line === null) return codeSpan(path);
   const end =
     finding.end_line !== null && finding.end_line > finding.line
       ? `-${String(finding.end_line)}`
       : "";
-  return `${path}:${String(finding.line)}${end}`;
+  return codeSpan(`${path}:${String(finding.line)}${end}`);
 }
 
 /**
@@ -691,7 +770,7 @@ function renderUnanchoredFindingLines(
     const prefix = REVIEW_FINDING_KIND_PREFIXES[finding.kind];
     const location = commented.includes(finding)
       ? findingLocation(finding)
-      : oneLinePath(finding.path);
+      : pathCodeSpan(finding.path);
     const message = neutralizeHtmlComment(
       normalizeJapaneseText(finding.message),
     );
@@ -705,16 +784,20 @@ function renderUnanchoredFindingLines(
  * 行コメントにするはずだった指摘(`commentedFindings`)は、位置を添えて、行に紐づけられなかった指摘(`droppedFindings`)と
  * 同じ一覧に並べる。後者の形は通常の総評と同じにする。
  * 「N件コメントしました」は、行コメントを1件も付けていないので書かない。
+ * `binaryFiles`があれば、`renderReviewSummary`と同じ固定の一文とパスの一覧を足す。
  */
 export function renderUnresolvedLineSummary(
   authorLogin: string,
   commentedFindings: readonly ReviewFinding[],
   droppedFindings: readonly ReviewFinding[],
+  binaryFiles: readonly string[] = [],
+  binaryUnlistedCount = 0,
 ): string {
   return [
     `${ROLE_TAGS.pr_review} @${authorLogin}`,
     "GitHubが行を解決できなかったため、行コメントにする指摘を総評に移しました。",
     "確認お願いします。",
+    ...renderBinaryFilesLines(binaryFiles, binaryUnlistedCount),
     ...renderUnanchoredFindingLines(droppedFindings, commentedFindings),
   ].join("\n");
 }
@@ -4993,4 +5076,20 @@ export async function anyPackageJsonScriptsChanged(
     if (packageJsonScriptsChanged(before, after)) return true;
   }
   return false;
+}
+
+/**
+ * 差分の`Binary files ... differ`の行から集めたパスのうち、APIの変更ファイル(`changedFiles`)に
+ * 載っているものだけを残し、載っていないものは件数だけを返す。
+ * 差分の行はPRの作者が書けるので、パスの区切りの細工(ディレクトリ名に` and b/`を含めるなど)で
+ * 変更に無いパスが取り出されうる。その信頼できないパスを、Claudeが読む対象としてプロンプトに出さず、
+ * 総評にも並べない。落とした分は、件数として総評に残す(`renderReviewSummary`)。
+ */
+export function selectListedBinaryFiles(
+  binaryFiles: readonly string[],
+  changedFiles: readonly string[],
+): { readonly listed: string[]; readonly unlistedCount: number } {
+  const changed = new Set(changedFiles);
+  const listed = binaryFiles.filter((path) => changed.has(path));
+  return { listed, unlistedCount: binaryFiles.length - listed.length };
 }
