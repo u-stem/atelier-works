@@ -43,7 +43,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: fd2922e107a417c7ac9f819bf55d1daba47f2402abe19af7a388e00c276d0aef
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
-  f/factory/lib/db: 8741461f53fd48d18d57a7cdf73e9cf804a831d5de2bd0376d69403d9347bce8
+  f/factory/lib/db: 41b914ae19610c93eeb5ece8713033419b7112abbb541d5b69a8111f55b2e5df
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 1ffa7ee5720dd9074fc309cdd722c6d4d67f63d4c6396215870b83b57f9987b3
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -87,11 +87,11 @@ locks:
   f/factory/lib/pr_ci_notify: cefec78736e6e3716fe8791282c72898c4153015171f333b1f0eb6a2aaa6ae0b
   f/factory/lib/pr_ci_support: b3cbc9809d5e86bd332c29c1598e6ddfb6fedac071b0470b380d72aedb0f9d1c
   f/factory/lib/pr_ci_watch: cb542617229d1d9269582b239465d9b968e03f0986819de2e80433059653e26b
-  f/factory/lib/pr_conflict_fix_claim: 0964d5b8d8ffd6aabc3ea83f4c4d9ce4f23e1cc6e4a3259710d9e897bbacc019
+  f/factory/lib/pr_conflict_fix_claim: 83a8e845d21336ef6e7b20662d3b192297bd458ecd46d8aeb047fc47478b514f
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
-  f/factory/lib/pr_conflict_fix_recovery: beeefe497e5849767b5da0336917c10eb03a6301030785825fe548e2c8f451d9
-  f/factory/lib/pr_conflict_support: 7fe9d6f9903c4f53b335e16f6bb0f4a70ff31d2b9e694848ccfb1971358b86f2
-  f/factory/lib/pr_conflict_watch: 72ef072e1508eb2fa067b0f2f3b67141e32ce5902a0c110875d21e09ec47bee8
+  f/factory/lib/pr_conflict_fix_recovery: adaa381f1013323d9fcd27019329d849d7ba525da75bf7a1a0ca3bd5acca74d9
+  f/factory/lib/pr_conflict_support: 27e903ebb24975d9a95f1eaf674a0406a650f2f2d420e1dc463deeff2dfc4c21
+  f/factory/lib/pr_conflict_watch: 9478015f93559d39ad62e41631d5dd193d03c0baba4073c2191b4ab4fbf7d0af
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
   f/factory/lib/pr_review_retry: 209a93a242793ac09167e02489b53e156997b641653e59ef7e6db3f02819ae00
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
@@ -151,4 +151,4 @@ locks:
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: e892413df18b2e8ea8643d5105880c0f297df760b7fbdac706b15931bd2cdc23
-  f/factory/watch_pr_conflicts: a272c0a99fcdd47b218c2e017d4473936d058a1f6d2bb447391405c45cca99c8
+  f/factory/watch_pr_conflicts: ad0ec0d40cb8d9d73f940131b69bfd457171b5b99ea2b41e13d296353ca8019e

@@ -32,6 +32,7 @@ import {
   getLatestDeployment,
   getLatestPrCiCheck,
   getLatestScheduleFailure,
+  getMainCiStateBySha,
   getNoticeById,
   getPrCiCheckById,
   getPreviousMainCiRun,
@@ -63,6 +64,7 @@ import {
   isActivePrFixUniqueViolation,
   isLatestMainCiRunFailed,
   isMissingDeploymentErrorColumnError,
+  latestConflictFixSettledAt,
   latestDraft,
   latestFixRound,
   latestMainCiRunCreatedAt,
@@ -4724,6 +4726,36 @@ describe("listActivePrFixWorkItems", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listActivePrFixWorkItems("o", "r", 7, sql);
     expect(calls[0]?.values).toContainEqual([...TERMINAL_WORK_ITEM_STATUSES]);
+  });
+
+  test("compares the owner in lowercase", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("Acme", "Widgets", 7, sql);
+    expect(calls[0]?.text).toContain("lower(owner) = ");
+  });
+
+  test("passes the lowercase owner and repo", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listActivePrFixWorkItems("Acme", "Widgets", 7, sql);
+    expect(calls[0]?.values.slice(0, 2)).toEqual(["acme", "widgets"]);
+  });
+});
+
+describe("getMainCiStateBySha", () => {
+  const SHA = "a".repeat(40);
+
+  test("reads the newest row when a commit has more than one", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getMainCiStateBySha("acme", "widgets", SHA, sql);
+    expect(calls[0]?.text).toContain("ORDER BY updated_at DESC");
+  });
+});
+
+describe("latestConflictFixSettledAt", () => {
+  test("counts a work item that pushed a commit", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await latestConflictFixSettledAt("acme", "widgets", 12, sql);
+    expect(calls[0]?.text).toContain("commit_shas");
   });
 });
 
