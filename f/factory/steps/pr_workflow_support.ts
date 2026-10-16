@@ -272,23 +272,7 @@ export type PrDiffLike = {
   readonly diff: string;
   readonly truncated: boolean;
   readonly totalLines: number;
-  readonly binaryFiles: readonly string[];
 };
-
-/** 判断の対象外として注記に挙げるバイナリのファイル数の上限。残りは件数だけを書く。 */
-const BINARY_NOTE_MAX_FILES = 20;
-
-/**
- * gitが内容を出さないバイナリのファイルを、レビューの対象外として明示する注記を返す。
- * 差分に`Binary files ... differ`の1行しか無いと、内容を読まずに通したように見えるため、
- * 読んでいないことと、中身について判断しないことを、固定の文で伝える。
- */
-function binaryFilesNote(binaryFiles: readonly string[]): string {
-  const shown = binaryFiles.slice(0, BINARY_NOTE_MAX_FILES).join(", ");
-  const rest = binaryFiles.length - BINARY_NOTE_MAX_FILES;
-  const list = rest > 0 ? `${shown} and ${String(rest)} more` : shown;
-  return `[binary files not reviewed: ${list}. Their contents are not in this diff, so this review does not cover them. Do not judge their contents, and say that they were not reviewed.]`;
-}
 
 /**
  * `github.ts`の`getPrDiff`が`config.diff_max_lines`でdiffを切り詰めたとき、
@@ -297,21 +281,12 @@ function binaryFilesNote(binaryFiles: readonly string[]): string {
  * 注記は、切り詰めたことを本文の中で明示するためのもの。
  * `Read`で読むファイルは、差分と違って制御文字の置き換えを通らないので、
  * 見えない文字と制御文字を自分で探して指摘するよう、固定の文で促す。
- * バイナリのファイルがあるときは、切り詰めの注記の後に、対象外であることの注記を足す。
  */
 export function buildReviewDiffText(prDiff: PrDiffLike): string {
-  const notes: string[] = [];
-  if (prDiff.truncated) {
-    notes.push(
-      `[diff truncated: showing a prefix of ${prDiff.totalLines} total diff lines. See the changed files list below and use Read to inspect the rest. Files read with Read are not escaped, so look for invisible and control characters in them and report them.]`,
-    );
+  if (!prDiff.truncated) {
+    return prDiff.diff;
   }
-  if (prDiff.binaryFiles.length > 0) {
-    notes.push(binaryFilesNote(prDiff.binaryFiles));
-  }
-  return notes.length === 0
-    ? prDiff.diff
-    : `${prDiff.diff}\n\n${notes.join("\n\n")}`;
+  return `${prDiff.diff}\n\n[diff truncated: showing a prefix of ${prDiff.totalLines} total diff lines. See the changed files list below and use Read to inspect the rest. Files read with Read are not escaped, so look for invisible and control characters in them and report them.]`;
 }
 
 // ---------------------------------------------------------------------------

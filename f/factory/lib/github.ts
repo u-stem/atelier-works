@@ -2619,20 +2619,52 @@ export type PrDiff = {
 };
 
 /** gitがバイナリの差分に出す1行。差分の内容の行は先頭が`+`、`-`、空白なので、行頭のこの語とは混ざらない。 */
-const BINARY_FILES_LINE = /^Binary files (.+) and (.+) differ$/;
+const BINARY_FILES_LINE = /^Binary files (.+) differ$/;
 
 /**
- * 差分から、バイナリのファイルのパスを集める。
- * 追加は新しい側、削除は古い側のパスを使う(`/dev/null`の側は使わない)。
+ * 側の表記から、`a/`または`b/`の接頭辞を外す。
+ * gitは、ASCII以外などを含むパスを引用符で囲んで出すので、
+ * 引用符の中の接頭辞を外し、引用符は残す(エスケープの表記だと分かるように)。
  */
+function stripSidePrefix(side: string): string {
+  const quoted = /^"[ab]\/(.*)"$/.exec(side);
+  if (quoted !== null) return `"${quoted[1] ?? ""}"`;
+  return side.replace(/^[ab]\//, "");
+}
+
+/**
+ * `Binary files <古い側> and <新しい側> differ`の行から、パスを取り出す。
+ * 追加は新しい側、削除は古い側のパスを使う(`/dev/null`の側は使わない)。
+ * パスが` and `を含んでも切れるよう、`/dev/null`の側は端で見分け、
+ * 両側があるときは、新しい側の接頭辞(` and b/`か` and "b/`)の最後の出現で区切る。
+ */
+function binaryPathOf(sides: string): string {
+  const added = "/dev/null and ";
+  if (sides.startsWith(added)) {
+    return stripSidePrefix(sides.slice(added.length));
+  }
+  const deleted = " and /dev/null";
+  if (sides.endsWith(deleted)) {
+    return stripSidePrefix(sides.slice(0, sides.length - deleted.length));
+  }
+  const split = Math.max(
+    sides.lastIndexOf(" and b/"),
+    sides.lastIndexOf(' and "b/'),
+  );
+  // 接頭辞が無い形(`--no-prefix`など)でも、読み落とさないよう最初の` and `で区切る。
+  const fallback = sides.indexOf(" and ");
+  const start = split === -1 ? fallback : split;
+  if (start === -1) return sides;
+  return stripSidePrefix(sides.slice(start + " and ".length));
+}
+
+/** 差分から、バイナリのファイルのパスを集める。 */
 function collectBinaryFiles(lines: readonly string[]): string[] {
   const paths: string[] = [];
   for (const line of lines) {
     const match = BINARY_FILES_LINE.exec(line);
     if (match === null) continue;
-    const [, oldSide = "", newSide = ""] = match;
-    const side = newSide === "/dev/null" ? oldSide : newSide;
-    paths.push(side.replace(/^[ab]\//, ""));
+    paths.push(binaryPathOf(match[1] ?? ""));
   }
   return paths;
 }

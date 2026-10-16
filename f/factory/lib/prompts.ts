@@ -205,7 +205,41 @@ export type ReviewPromptInput = {
    * CI回のClaudeは、通るように直す立場なので、検査を弱めて通す誘惑があるため。
    */
   ciRoundDiff: boolean;
+  /**
+   * gitが内容を出さず`Binary files ... differ`とだけ書いたファイルのパス。
+   * 内容が差分に無いので、読んだ判断なのか、読んでいないのかを、指示の文で分ける。
+   * 指示は囲みの外の固定の文で、パスの一覧だけを囲みに入れる。
+   */
+  binaryFiles: readonly string[];
 };
+
+/** 指示の文に添えるバイナリのファイルの一覧の上限。残りは件数だけを書く。 */
+const BINARY_LIST_MAX_FILES = 20;
+
+/**
+ * バイナリのファイルについての指示と、パスの一覧の囲みを返す。
+ * 指示は信頼できる固定の文なので、囲みの外に置く。囲みの内側の文は、指示として読まれないため。
+ * `.gitattributes`の`-diff`などで、読めるコードがバイナリ扱いになることがあるので、
+ * 読めるものは読んで判断させ、読めないものだけを未レビューとして報告させる。
+ */
+function binaryFilesSection(
+  nonce: string,
+  binaryFiles: readonly string[],
+): string[] {
+  const shown = binaryFiles.slice(0, BINARY_LIST_MAX_FILES);
+  const rest = binaryFiles.length - shown.length;
+  const list = rest > 0 ? [...shown, `... and ${String(rest)} more`] : shown;
+  return [
+    "",
+    "The pull request also changes binary files that git does not show in the",
+    "diff, so their contents are not in the diff above. Their paths are in the",
+    "block below. If a file is text that Read can open, read it and judge it.",
+    "If you cannot read a file, do not judge it, and report that it was not reviewed.",
+    "Put every such file in one finding with kind nits, severity nit, and line null.",
+    "Use the first such path as `path`, and list all of them in `message`.",
+    dataFence(nonce, "binary files", list.join("\n")),
+  ];
+}
 
 export function reviewPrompt(
   input: ReviewPromptInput,
@@ -249,6 +283,10 @@ export function reviewPrompt(
       input.changedFiles.join("\n") || "(none)",
     ),
   ];
+
+  if (input.binaryFiles.length > 0) {
+    sections.push(...binaryFilesSection(nonce, input.binaryFiles));
+  }
 
   if (input.requirements !== null) {
     sections.push(

@@ -194,6 +194,7 @@ export async function main(
     requirements,
     openFindings,
     ciRoundDiff,
+    binaryFiles: prDiff.binaryFiles,
   });
 
   const systemPrompt = await buildSystemPrompt({
