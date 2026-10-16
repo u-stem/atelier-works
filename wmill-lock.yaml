@@ -43,7 +43,7 @@ locks:
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
   f/factory/lib/console_support: fd2922e107a417c7ac9f819bf55d1daba47f2402abe19af7a388e00c276d0aef
   f/factory/lib/console_worker: 02f915e1e82c3ca53a73b795d521306d3dda9159afa6e79fc626374df9244b7c
-  f/factory/lib/db: bfb0df754b9889f30428f0372d9152980758ae9b0f29843f5388c0cac1cadf54
+  f/factory/lib/db: b231be86829f36640e19349276c56a80f7b8cfc9f3cb5f29bf020f45461bc438
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 6d9beb248341b65b67e4ca845712a46e20d1e09e96367023b9c77b728a5ca922
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
@@ -89,9 +89,9 @@ locks:
   f/factory/lib/pr_ci_watch: 705b9e3d12afbc9cf58970478f8cab2703197899cd41dd9a89708983f9c6a155
   f/factory/lib/pr_conflict_fix_claim: 0964d5b8d8ffd6aabc3ea83f4c4d9ce4f23e1cc6e4a3259710d9e897bbacc019
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
-  f/factory/lib/pr_conflict_fix_recovery: beeefe497e5849767b5da0336917c10eb03a6301030785825fe548e2c8f451d9
-  f/factory/lib/pr_conflict_support: 7fe9d6f9903c4f53b335e16f6bb0f4a70ff31d2b9e694848ccfb1971358b86f2
-  f/factory/lib/pr_conflict_watch: 72ef072e1508eb2fa067b0f2f3b67141e32ce5902a0c110875d21e09ec47bee8
+  f/factory/lib/pr_conflict_fix_recovery: e3785c8b1c40585c600602765773f0d7ac06fe4d64b388b70af0a3ed07f6d39b
+  f/factory/lib/pr_conflict_support: 5a5a9287a34d336f8e4de9f51ac86ad6cb85afb18457aae44444d0af908821ab
+  f/factory/lib/pr_conflict_watch: ee0293f5eca5721946803b7e157a1c298b6774466119db815d3fa984548fc331
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
   f/factory/lib/pr_review_retry: 4ea1d6f0e62b7c3a9594d38d073b6c2650ffe65d2cfd5c11ef9a2a91a2507630
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
@@ -151,4 +151,4 @@ locks:
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1
   f/factory/watch_main_ci: f456c37b1e0e950e6fd0dbf62a2921d677846504ed31f4da8198d4d8bf76fc54
   f/factory/watch_pr_ci: c5dbbae4ff3cb5ea520c5fe5a75993ac31f275ecf50c4dfc9b573776b5eade92
-  f/factory/watch_pr_conflicts: a272c0a99fcdd47b218c2e017d4473936d058a1f6d2bb447391405c45cca99c8
+  f/factory/watch_pr_conflicts: bad205b28119fc0ae297cf22d675cb729384a6268e553208aecd7de3369de95f

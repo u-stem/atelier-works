@@ -4,11 +4,13 @@ import {
   isFinalPrConflictFixHold,
   isPrConflictFixHoldReason,
   PR_CONFLICT_FIX_HOLD_INFO,
+  PR_CONFLICT_FIX_HOLD_NOTE,
   PR_CONFLICT_FIX_HOLD_REASON_MAX_LENGTH,
   PR_CONFLICT_FIX_HOLD_REASONS,
   PR_CONFLICT_KIND,
   PR_CONFLICT_NEXT_ACTION,
   type PrConflictFacts,
+  prConflictNextAction,
   prConflictNoticeMessage,
   prConflictNoticePrefix,
 } from "../../f/factory/lib/pr_conflict_support.ts";
@@ -285,5 +287,70 @@ describe("isFinalPrConflictFixHold", () => {
 
   test("is true for a reason that is not in the vocabulary", () => {
     expect(isFinalPrConflictFixHold("unknown_reason")).toBe(true);
+  });
+});
+
+describe("PR_CONFLICT_FIX_HOLD_NOTE", () => {
+  test.each([...PR_CONFLICT_FIX_HOLD_REASONS])("explains %s", (reason) => {
+    expect(PR_CONFLICT_FIX_HOLD_NOTE[reason]).not.toBe("");
+  });
+
+  test.each([...PR_CONFLICT_FIX_HOLD_REASONS])(
+    "names no identifier of the vocabulary for %s",
+    (reason) => {
+      expect(PR_CONFLICT_FIX_HOLD_NOTE[reason]).not.toContain(reason);
+    },
+  );
+});
+
+describe("prConflictNoticeMessage with a hold", () => {
+  const input = { owner: "acme", repo: "app", prNumber: 12 };
+
+  test("says why the conflict is not fixed automatically", () => {
+    expect(
+      prConflictNoticeMessage({ ...input, hold: "protected_path" }),
+    ).toContain(PR_CONFLICT_FIX_HOLD_NOTE.protected_path);
+  });
+
+  test("still starts with the prefix that resolves it", () => {
+    expect(
+      prConflictNoticeMessage({ ...input, hold: "protected_path" }),
+    ).toStartWith(prConflictNoticePrefix("acme", "app", 12));
+  });
+
+  test("still ends with the link to the pull request", () => {
+    expect(
+      prConflictNoticeMessage({ ...input, hold: "protected_path" }),
+    ).toEndWith("https://github.com/acme/app/pull/12");
+  });
+
+  test("carries the next action of the hold", () => {
+    expect(
+      prConflictNoticeMessage({ ...input, hold: "base_changes_workflows" }),
+    ).toContain(`次の操作: ${prConflictNextAction("base_changes_workflows")}`);
+  });
+});
+
+describe("prConflictNextAction", () => {
+  test("is the shared action without a hold", () => {
+    expect(prConflictNextAction(null)).toBe(PR_CONFLICT_NEXT_ACTION);
+  });
+
+  test("is the shared action for a hold that a person resolves in the same way", () => {
+    expect(prConflictNextAction("protected_path")).toBe(
+      PR_CONFLICT_NEXT_ACTION,
+    );
+  });
+
+  test("tells a person to resolve it locally or on the web when the base changes workflows", () => {
+    expect(prConflictNextAction("base_changes_workflows")).toContain(
+      "ローカルかweb",
+    );
+  });
+
+  test("tells a person that the pull request leaves the automatic fix after the push", () => {
+    expect(prConflictNextAction("base_changes_workflows")).toContain(
+      "対象から外れる",
+    );
   });
 });

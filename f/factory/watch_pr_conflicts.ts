@@ -47,11 +47,31 @@ import {
 } from "./lib/pr_conflict_support.ts";
 import {
   configuredRepos,
+  type PrConflictFixDeps,
+  type PrConflictRecoveryDeps,
   type PrConflictWatchResult,
   runPrConflictWatch,
   runPrConflictWatchIfEnabled,
 } from "./lib/pr_conflict_watch.ts";
+import type { FactoryConfig } from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
+
+/** 競合を直す作業項目を起動する依存を組む。設定で無効なら`undefined`を返す。 */
+export function buildConflictFixDeps(
+  _config: FactoryConfig,
+  _client: GhClient,
+): PrConflictFixDeps | undefined {
+  return undefined;
+}
+
+/** 直す作業項目が結ばれた行を戻す依存を組む。 */
+export function buildConflictRecoveryDeps(): PrConflictRecoveryDeps {
+  return {
+    listFixing: async () => [],
+    readFixItem: async () => null,
+    release: async () => false,
+  };
+}
 
 async function recordFailureSafe(
   step: string,

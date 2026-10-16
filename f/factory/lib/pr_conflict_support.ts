@@ -5,6 +5,7 @@
 import type { PullRequest } from "./github.ts";
 import { isCommitSha } from "./main_ci_support.ts";
 import { pullRequestPageUrl } from "./pr_ci_support.ts";
+import type { PrConflictFixHoldReason } from "./pr_conflict_fix_holds.ts";
 import { assertGitHubName } from "./types.ts";
 
 /** マージの競合を知らせるnoticeの種類。 */
@@ -106,7 +107,36 @@ export type PrConflictNoticeInput = {
   readonly owner: string;
   readonly repo: string;
   readonly prNumber: number;
+  /** 自動で直さなかった理由。渡すと、通知の本文に載せる。 */
+  readonly hold?: PrConflictFixHoldReason;
 };
+
+/** 保留の理由ごとの、自動で直さない理由の短い説明。通知の本文に載せる。 */
+export const PR_CONFLICT_FIX_HOLD_NOTE: Readonly<
+  Record<PrConflictFixHoldReason, string>
+> = {
+  last_fix_unsettled: "",
+  budget_exceeded: "",
+  recently_fixed: "",
+  marker_missing: "",
+  main_ci_failed: "",
+  pr_draft_or_auto_merge: "",
+  not_factory_head: "",
+  rounds_exhausted: "",
+  base_not_default: "",
+  base_changes_workflows: "",
+  protected_path: "",
+  unresolvable: "",
+  check_failed: "",
+  fix_stopped: "",
+};
+
+/** 人が次にすることの固定文。保留の理由によって違うときだけ、理由ごとの文を返す。 */
+export function prConflictNextAction(
+  _hold: PrConflictFixHoldReason | null,
+): string {
+  return "";
+}
 
 /**
  * 競合を知らせるnoticeの本文。接頭辞、次の操作、PRのリンクだけを入れる。

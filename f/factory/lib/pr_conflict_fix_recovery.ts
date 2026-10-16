@@ -177,3 +177,31 @@ export function decideConflictFixRecovery(
   }
   return recovery;
 }
+
+/** `readConflictFixItemState`が読む元。DBの読み取りを注入する。 */
+export type ConflictFixItemSources = {
+  readonly getWorkItem: (id: number) => Promise<{
+    status: WorkItemStatus;
+    flow_job_id: string | null;
+    conflict_episode: number | null;
+  } | null>;
+  /** 作業項目が`status`へ移った最新の遷移の注記。 */
+  readonly latestStatusNote: (
+    id: number,
+    status: WorkItemStatus,
+  ) => Promise<string | null>;
+  /** 作業項目の直近の回が、pushしたcommitの記録を持つか。 */
+  readonly hasPushedCommits: (id: number) => Promise<boolean>;
+};
+
+/**
+ * 競合を直す作業項目の状態を読む。作業項目が無ければ`null`を返す。
+ * `rowEpisode`は、作業項目が結ばれた行の今の競合の回である。
+ */
+export async function readConflictFixItemState(
+  _workItemId: number,
+  _rowEpisode: number,
+  _sources: ConflictFixItemSources,
+): Promise<ConflictFixItemState | null> {
+  return null;
+}

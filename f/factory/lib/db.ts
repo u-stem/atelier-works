@@ -6193,3 +6193,38 @@ export async function countPrConflictFixRounds(
   const row = rows[0];
   return row === undefined ? 0 : parseNumericLike(row.rounds, "rounds");
 }
+
+/**
+ * そのPRで、競合を直す作業項目が失敗せずに終わった時刻のうち、最新のものを返す。無ければ`null`。
+ * 失敗せずに終わったのは、状態が`reviewed`か`rereview_requested`の作業項目である。
+ * `blocked`と`failed`と`needs_human`は、直せずに止まった回なので含めない。
+ * 時刻は、その状態へ移った最新の遷移の時刻とし、遷移が無ければ作業項目の`updated_at`にする。
+ * ownerとrepoは小文字で照合し、競合の回をまたいで数える。
+ */
+export async function latestConflictFixSettledAt(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<Date | null> {
+  assertPrCiTarget(owner, repo, prNumber);
+  void sql;
+  return null;
+}
+
+/**
+ * コミットのmainのCIの状態を返す。そのコミットの記録が無ければ`null`。
+ * ownerとrepoは小文字で照合する。
+ */
+export async function getMainCiStateBySha(
+  owner: string,
+  repo: string,
+  headSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<MainCiState | null> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  assertCommitSha(headSha);
+  void sql;
+  return null;
+}

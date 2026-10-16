@@ -30,11 +30,13 @@
 // 例外は、PRごと、リポジトリごとに捕まえて、他を止めない。rate limitは、以降の読み取りを止める。
 
 import type {
+  ClaimPrConflictInput,
   PrConflictCheck,
   PrConflictMarkResult,
   PrConflictObservation,
   PrConflictRecorded,
   PrConflictSettledState,
+  ReleasePrConflictFixOptions,
 } from "./db.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
@@ -42,14 +44,18 @@ import {
   GitHubPaginationLimitError,
   GitHubRateLimitError,
   type OpenPullRequest,
+  type PrCommitMessages,
   type PullRequest,
   parseGitHubRepoUrl,
   type Viewer,
 } from "./github.ts";
 import type { Logger } from "./log.ts";
+import type { MainCiState } from "./main_ci_support.ts";
 import { pullRequestKey } from "./pr_ci_human_support.ts";
 import { type PullRequestRef, pullRequestPageUrl } from "./pr_ci_support.ts";
 import { isSameRepoHead, RUN_BUDGET_MS } from "./pr_ci_watch.ts";
+import type { ConflictFixItemState } from "./pr_conflict_fix_recovery.ts";
+import type { PrConflictFixHoldReason } from "./pr_conflict_support.ts";
 import {
   decidePrConflict,
   PR_CONFLICT_KIND,
@@ -71,9 +77,112 @@ import {
 /** 1回の実行で読む、競合している行の最大の数。 */
 export const CONFLICT_ROW_LIMIT = 200;
 
+/** 1回の実行で回復する、直す作業項目が結ばれた行の最大の数。 */
+export const CONFLICT_FIXING_BATCH_LIMIT = 100;
+
+/** 1回の実行で、直す作業項目を起動する最大の数。起動に失敗した分も数える。 */
+export const CONFLICT_CLAIMS_PER_RUN_LIMIT = 2;
+
+/** 行が直す作業項目に結ばれたまま、これ以上たったら警告する(ミリ秒)。 */
+export const FIX_BOUND_WARN_AFTER_MS = 2 * 60 * 60_000;
+
 type RepoRef = { owner: string; repo: string };
 
+/**
+ * 直す作業項目が結ばれた行を戻す依存。渡さなければ回復しない。
+ * 競合を直す設定の有効と無効に関わらず、渡す。
+ */
+export type PrConflictRecoveryDeps = {
+  /** 直す作業項目が結ばれた行を、読み直していない順に返す(`listPrConflictFixing`)。 */
+  readonly listFixing: (limit: number) => Promise<PrConflictCheck[]>;
+  /**
+   * 直す作業項目の状態を読む。作業項目が無ければ`null`。
+   * `rowEpisode`は、結ばれた行の今の競合の回である。
+   */
+  readonly readFixItem: (
+    workItemId: number,
+    rowEpisode: number,
+  ) => Promise<ConflictFixItemState | null>;
+  /** 行の結びを外す(`releasePrConflictFix`)。外したら`true`、行が別の作業項目に結ばれていたら`false`。 */
+  readonly release: (
+    id: number,
+    options: ReleasePrConflictFixOptions,
+  ) => Promise<boolean>;
+};
+
+/**
+ * 競合を直す作業項目を起動する依存。渡さなければ起動せず、通知は検知した時点で出す。
+ * リポジトリ名の綴りは、引く先で違う。作業項目を引く関数と起動には、PRが示すGitHubの正規の綴りを渡す。
+ * ほかの関数には、行と同じ小文字を渡す。
+ */
+export type PrConflictFixDeps = {
+  /** 競合の1回で起動できる数の上限(`pr_conflict_fix_max_rounds`)。 */
+  readonly maxRounds: number;
+  /** 1つのPRで起動できる数の上限(`pr_conflict_fix_max_rounds_per_pr`)。 */
+  readonly maxRoundsPerPr: number;
+  /** この時刻より前に始まった競合の回は、起動の対象にしない。 */
+  readonly enabledSince: Date;
+  /** 一時の保留のまま通知を待つ時間(分)。 */
+  readonly graceMin: number;
+  readonly hasActiveFix: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<boolean>;
+  readonly getDefaultBranch: (owner: string, repo: string) => Promise<string>;
+  readonly listCommits: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<PrCommitMessages>;
+  /** factory-fixスキルが、競合を直す節のマーカーを持つか。 */
+  readonly hasSkillMarker: () => Promise<boolean>;
+  readonly budgetExceeded: () => Promise<boolean>;
+  /** 既定のブランチの先頭のコミットのmainのCIの状態。記録が無ければ`null`。 */
+  readonly mainCiState: (
+    owner: string,
+    repo: string,
+    defaultBranch: string,
+  ) => Promise<MainCiState | null>;
+  readonly countEpisodeRounds: (
+    checkId: number,
+    episode: number,
+  ) => Promise<number>;
+  readonly countPrRounds: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<number>;
+  /** 競合を直す作業項目が、失敗せずに終わった時刻の最新。無ければ`null`。 */
+  readonly lastFixSettledAt: (
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ) => Promise<Date | null>;
+  /**
+   * 保留の理由を書く(`setPrConflictFixHold`)。`expected`は書く前の理由で、いまの理由がこれと違う行は書き換えない。
+   * 書いたら`true`。
+   */
+  readonly setHold: (
+    id: number,
+    reason: PrConflictFixHoldReason,
+    expected: string | null,
+  ) => Promise<boolean>;
+  /** 行に作業項目を結んで挿入する(`claimPrConflictForFix`)。起動できなければ`null`。 */
+  readonly claim: (input: ClaimPrConflictInput) => Promise<number | null>;
+  /** 作業項目のpr_fixフローを起動する。 */
+  readonly launch: (workItemId: number) => Promise<void>;
+  /** 起動に失敗した作業項目を`failed`にする。 */
+  readonly failFixItem: (workItemId: number, note: string) => Promise<void>;
+  /** 起動したが記録できなかったフローのジョブを取り消す(`wmill.cancelJob`)。 */
+  readonly cancelFlow: (jobId: string, reason: string) => Promise<void>;
+};
+
 export type PrConflictWatchDeps = {
+  /** 渡したときだけ、通知の判断の前に、直す作業項目が結ばれた行を戻す。 */
+  readonly recovery?: PrConflictRecoveryDeps;
+  /** 渡したときだけ、競合の行について直す作業項目を起動する。 */
+  readonly fix?: PrConflictFixDeps;
   readonly now: () => Date;
   readonly log: Logger;
   readonly instanceName: string;
@@ -148,6 +257,14 @@ export type PrConflictWatchResult = {
   readonly notified: number;
   /** 競合が解けて、通知を解決した数。 */
   readonly resolved: number;
+  /** 直す作業項目を起動した数。 */
+  readonly claimed: number;
+  /** 起動せず、保留の理由を書いた(変えた)数。 */
+  readonly held: number;
+  /** 回復で、直す作業項目との結びを外した行の数。 */
+  readonly released: number;
+  /** 直す作業項目が動いているので、通知も起動もせず待った行の数。 */
+  readonly waiting: number;
   /** 閉じた行の数。PRが閉じたときと、設定が対象から外したときを含む。 */
   readonly closed: number;
   /** 判定を見送ったPRの数。 */
@@ -171,6 +288,10 @@ export const PR_CONFLICT_WATCH_IDLE_RESULT: PrConflictWatchResult = {
   conflicted: 0,
   notified: 0,
   resolved: 0,
+  claimed: 0,
+  held: 0,
+  released: 0,
+  waiting: 0,
   closed: 0,
   skipped: 0,
   errors: 0,
@@ -184,6 +305,10 @@ type Counters = {
   conflicted: number;
   notified: number;
   resolved: number;
+  claimed: number;
+  held: number;
+  released: number;
+  waiting: number;
   closed: number;
   skipped: number;
   errors: number;
