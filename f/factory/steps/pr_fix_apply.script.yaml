@@ -10,6 +10,11 @@ schema:
       type: number
       description: この処理の実行回数。
       default: null
+    base_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
     ci_check_id:
       type: number
       description: ''
@@ -22,6 +27,17 @@ schema:
         type: resource
         resourceType: collected_comment
       originalType: resource[]
+    conflict_check_id:
+      type: number
+      description: ''
+      default: null
+    conflicted_paths:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: string
+      originalType: string[]
     factory_clone_dir:
       type: string
       description: Software Factory自身の複製を置いた作業ディレクトリのパス。

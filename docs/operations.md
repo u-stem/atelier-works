@@ -1648,6 +1648,51 @@ Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`�
 
 このリポジトリでClaudeを使うときのモデルの方針は、[コーディング規約](coding-guidelines.md)の「Claudeのモデルの使い分け」にある。
 
+### バージョンごとの使用量
+
+Claudeのバージョンとモデルごとの使用量は、viewの`v_agent_usage_daily`で見る。
+viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数、ターン数を合計し、実行時間の平均を出す。
+`day`は、既存の`v_agent_cost_daily`と同じく、データベースの時間帯の設定で日を切る。設定が既定のままならUTCである。
+JSTで日を切りたいときは、viewではなく`factory.agent_runs`を、`created_at AT TIME ZONE 'Asia/Tokyo'`で日に切って集計する。
+
+```sql
+SELECT date_trunc('day', created_at AT TIME ZONE 'Asia/Tokyo') AS day_jst,
+       claude_version, model, count(*) AS runs, sum(cost_usd) AS cost_usd
+FROM factory.agent_runs
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3;
+```
+
+バージョンを上げた前後を比べるには、期間で絞って、バージョンごとの費用を並べる。
+
+```sql
+SELECT claude_version, model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd
+FROM factory.v_agent_usage_daily
+WHERE day >= now() - interval '14 days'
+GROUP BY claude_version, model
+ORDER BY claude_version, model;
+```
+
+記録するバージョンは、workerのイメージに入れたClaudeの版(`CLAUDE_VERSION`)である。
+Windmillのジョブには、`WHITELIST_ENVS`に挙げていない変数は、PATHなどの既定のものを除いて届かない。
+そのため、`infra/docker-compose.yml`が`CLAUDE_VERSION`を挙げている。
+バージョンの記録は、workerのイメージを作り直した後の実行から入る。
+それより前の行は`claude_version`がNULLのまま残り、viewではNULLの行として別に集計される。
+NULLを別の文字列に置き換えないのは、記録が無いことを利用者に見せるためである。
+
+`mise run up`で反映した後は、反映した時刻より後の実行で、`mise.toml`の`CLAUDE_VERSION`と同じ値が入ることを確かめる。
+`<反映した時刻>`には、ISO 8601の時刻文字列(例: `2026-10-16T10:00:00+09:00`)を入れる。
+
+```sql
+SELECT claude_version, count(*)
+FROM factory.agent_runs
+WHERE created_at > '<反映した時刻>'
+GROUP BY 1;
+```
+
+確認クエリの結果にNULLの行があるときは、ジョブにまだ変数が届いていない。
+workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確かめる。
+
 ### PR修正の連続した失敗
 
 同じPRの修正のうち、`blocked`でないラウンド(`done`か要件の不足)で最後に終えた時刻より後の、次の3つを足す。
@@ -2800,6 +2845,10 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 | `gitleaks` | `GITLEAKS_VERSION` |
 | `gtr` | `GTR_REF` |
 | `wmill` | `WMILL_VERSION` |
+
+`CLAUDE_VERSION`には、`2.1.282`の形の版番号だけを書く。
+記録する版を、インストールした`claude --version`の値と一致させるため、ビルド時の検査は版番号だけを通す。
+`stable`や`latest`などの名前は、検査で落ちる。
 
 `WM_VERSION`を上げるときは、新しいベースのイメージのPATHを`docker image inspect`で調べる。
 それを`infra/worker/Dockerfile`の`ENV PATH`と突き合わせる。

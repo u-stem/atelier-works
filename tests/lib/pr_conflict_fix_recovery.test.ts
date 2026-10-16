@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AUTO_RETRY_REASON_PREFIXES } from "../../f/factory/lib/auto_retry_reasons.ts";
+import { conflictClaudeFailedMessage } from "../../f/factory/lib/conflict_fix_apply.ts";
 import {
   CONFLICT_ROUND_DETAILS,
   conflictRoundReason,
@@ -98,6 +99,68 @@ describe("holdReasonForConflictStoppedItem", () => {
         "ci round: the factory-fix skill lacks the ci-fix-skill:v1 marker",
       ),
     ).toBeNull();
+  });
+});
+
+const TRANSIENT_DETAIL_KEYS = [
+  "rowMissing",
+  "rowNotConflicted",
+  "rowBoundToAnother",
+  "episodeOver",
+  "headMoved",
+  "headMovedAtPush",
+  "worktreeBusy",
+  "implementRunning",
+] as const;
+
+describe("decideConflictFixRecovery for a temporary stop", () => {
+  const CASES = TRANSIENT_DETAIL_KEYS.flatMap((key) =>
+    (["blocked", "needs_human", "failed"] as const).map(
+      (status) => [key, status] as const,
+    ),
+  );
+
+  test.each(CASES)(
+    "releases a %s note of a %s work item without a hold",
+    (key, status) => {
+      expect(
+        decideConflictFixRecovery(
+          item(status, {
+            note: conflictRoundReason(CONFLICT_ROUND_DETAILS[key]),
+          }),
+        ),
+      ).toEqual({ kind: "release", hold: null });
+    },
+  );
+
+  test("holds fix_stopped when a temporary note continues after the fixed text", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("blocked", {
+          note: `${conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved)} x`,
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test("holds fix_stopped when a temporary note is quoted inside a Claude block reason", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("needs_human", {
+          note: `conflict round: claude blocked: ${conflictRoundReason(CONFLICT_ROUND_DETAILS.headMoved)}`,
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test("maps no temporary note to a hold reason", () => {
+    expect(
+      TRANSIENT_DETAIL_KEYS.map((key) =>
+        holdReasonForConflictStoppedItem(
+          conflictRoundReason(CONFLICT_ROUND_DETAILS[key]),
+        ),
+      ),
+    ).toEqual(TRANSIENT_DETAIL_KEYS.map(() => null));
   });
 });
 
@@ -229,11 +292,76 @@ describe("decideConflictFixRecovery", () => {
     ).toEqual({ kind: "release", hold: null });
   });
 
-  test("holds fix_stopped for a failed work item that started a flow", () => {
+  test("releases a failed work item that started a flow without a mapped note, without a hold", () => {
+    expect(
+      decideConflictFixRecovery(item("failed", { note: "git fetch failed" })),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("releases a failed work item that started a flow without a note, without a hold", () => {
     expect(decideConflictFixRecovery(item("failed"))).toEqual({
       kind: "release",
-      hold: "fix_stopped",
+      hold: null,
     });
+  });
+
+  test("holds fix_stopped for a failed work item whose Claude run failed", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", { note: conflictClaudeFailedMessage("timeout") }),
+      ),
+    ).toEqual({ kind: "release", hold: "fix_stopped" });
+  });
+
+  test.each([
+    "non_zero_exit",
+    "timeout",
+    "invalid_json",
+    "invalid_structured_output",
+    "claude_error",
+  ])(
+    "holds fix_stopped for a failed work item whose Claude run failed with %s",
+    (reason) => {
+      expect(
+        decideConflictFixRecovery(
+          item("failed", { note: conflictClaudeFailedMessage(reason) }),
+        ),
+      ).toEqual({ kind: "release", hold: "fix_stopped" });
+    },
+  );
+
+  test("does not match the failure of Claude when the prefix is not at the head of the note", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", { note: `x ${conflictClaudeFailedMessage("timeout")}` }),
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("does not match the failure of Claude inside a reason that Claude wrote", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", {
+          note: `conflict round: claude blocked: ${conflictClaudeFailedMessage("timeout")}`,
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: null });
+  });
+
+  test("keeps the failure of Claude out of the holds of a blocked work item", () => {
+    expect(
+      holdReasonForConflictStoppedItem(conflictClaudeFailedMessage("timeout")),
+    ).toBeNull();
+  });
+
+  test("holds a failed work item that started a flow by its mapped note", () => {
+    expect(
+      decideConflictFixRecovery(
+        item("failed", {
+          note: conflictRoundReason(CONFLICT_ROUND_DETAILS.checkFailed),
+        }),
+      ),
+    ).toEqual({ kind: "release", hold: "check_failed" });
   });
 
   test("releases a cancelled work item without a hold", () => {

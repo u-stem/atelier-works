@@ -24,9 +24,11 @@ import {
   deleteResolvedNoticesBefore,
   deleteWorkerSamplesBefore,
   dependabotGateWaitingCancels,
+  findFixRoundKindToReview,
   findOrphanFixingPrCiChecks,
   getLatestPrCiCheck,
   getNoticeById,
+  getPrConflictCheckById,
   getPreviousMainCiRun,
   getWorkItem,
   hasDependabotItemForHead,
@@ -39,6 +41,7 @@ import {
   hasSupersedingPrReview,
   insertCleanupRun,
   insertDependabotWorkItemUnlessActive,
+  insertFixRound,
   insertWorkerSample,
   insertWorkItem,
   isActivePrFixUniqueViolation,
@@ -5907,6 +5910,84 @@ check(
     sql,
   )) === 9,
 );
+// Claudeを動かす前の一時の停止で止まった回は、数えない。
+const cfUncountedNotes = [
+  "conflict round: an implement flow is running on the branch",
+  "conflict round: the worktree is in use by another process",
+  "conflict round: the PR head moved while the fix was in progress",
+  "conflict round: the conflict check row of the work item does not exist",
+  "conflict round: the conflict check is not conflicted",
+  "conflict round: the conflict check is bound to another work item",
+  "conflict round: the conflict episode of the work item is over",
+];
+for (const [index, note] of cfUncountedNotes.entries()) {
+  const itemId = await conflictRoundItem(
+    716,
+    cfCount.id,
+    1,
+    "blocked",
+    `job-u${String(index)}`,
+  );
+  conflictNote(itemId, "blocked", note);
+}
+check(
+  "conflict rounds: a blocked round stopped by a temporary stop before Claude ran is not counted, per episode",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 9,
+);
+check(
+  "conflict rounds: a blocked round stopped by a temporary stop before Claude ran is not counted, per pull request",
+  (await countPrConflictFixRounds(
+    { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 10,
+);
+// pushの直前にheadが動いた回は、Claudeを使った後なので数える。
+const cfMovedAtPush = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-14",
+);
+conflictNote(
+  cfMovedAtPush,
+  "blocked",
+  "conflict round: the PR head moved before the push",
+);
+check(
+  "conflict rounds: a blocked round whose head moved before the push is counted, per episode",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 10,
+);
+// 一時の停止の注記に当たるのは完全一致だけで、後ろに文が続くものは数える。
+const cfUncountedLonger = await conflictRoundItem(
+  716,
+  cfCount.id,
+  1,
+  "blocked",
+  "job-15",
+);
+conflictNote(
+  cfUncountedLonger,
+  "blocked",
+  "conflict round: the worktree is in use by another process x",
+);
+check(
+  "conflict rounds: a note that continues after the fixed text of a temporary stop is counted",
+  (await countPrConflictFixRounds(
+    { kind: "episode", checkId: cfCount.id, episode: 1 },
+    STALE_IMAGE_NOTE_PREFIXES,
+    sql,
+  )) === 11,
+);
 execPsql(
   target,
   `DELETE FROM factory.pr_conflict_checks WHERE id = ${String(cfCount.id)}`,
@@ -5917,7 +5998,87 @@ check(
     { kind: "pr", owner: "qcfix", repo: "app", prNumber: 716 },
     STALE_IMAGE_NOTE_PREFIXES,
     sql,
-  )) === 10,
+  )) === 12,
+);
+// 行をIDで読む。
+const cfById = await conflictFixRow(718, CF_HEAD_1);
+check(
+  "conflict row: it is read by its id",
+  (await getPrConflictCheckById(cfById.id, sql))?.head_sha === CF_HEAD_1,
+);
+check(
+  "conflict row: a missing id returns null",
+  (await getPrConflictCheckById(2_000_000_000, sql)) === null,
+);
+// 後続のレビューが修正回の差分を重点的に見る問い合わせは、競合の回がpushしたcommitも対象にする。
+const cfReviewed = "8".repeat(40);
+const cfPushedItemId = await conflictRoundItem(
+  718,
+  cfById.id,
+  1,
+  "rereview_requested",
+  "job-6",
+);
+await insertFixRound(
+  {
+    work_item_id: cfPushedItemId,
+    round: 1,
+    trigger_review_ids: [],
+    outcome: "done",
+    replies: [],
+    commit_shas: [cfReviewed],
+  },
+  sql,
+);
+check(
+  "conflict review: a commit pushed by a conflict round is a diff to review",
+  (await findFixRoundKindToReview("QCFix", "App", 718, cfReviewed, sql)) ===
+    "conflict",
+);
+// 同じcommitを複数の回がpushした記録があっても、結果は新しい回の種類に決まる。
+const cfCiPushedItemId = await insertWorkItem(
+  {
+    cycle: 1,
+    source: "issue",
+    kind: "pr_fix",
+    ...CF,
+    issue_number: null,
+    issue_url: null,
+    pr_number: 718,
+    title: null,
+    body: null,
+    status: "rereview_requested",
+    attempt: 1,
+    claimed_by: null,
+    flow_job_id: "job-7",
+    resume_url: null,
+    cancel_url: null,
+    head_sha: null,
+    parent_work_item_id: null,
+    ci_check_id: 424299,
+  },
+  sql,
+);
+await insertFixRound(
+  {
+    work_item_id: cfCiPushedItemId,
+    round: 1,
+    trigger_review_ids: [],
+    outcome: "done",
+    replies: [],
+    commit_shas: [cfReviewed],
+  },
+  sql,
+);
+check(
+  "conflict review: a commit that two rounds pushed gets the kind of the later round",
+  (await findFixRoundKindToReview("QCFix", "App", 718, cfReviewed, sql)) ===
+    "ci",
+);
+check(
+  "conflict review: a commit that no round pushed is not",
+  (await findFixRoundKindToReview("qcfix", "app", 718, "9".repeat(40), sql)) ===
+    null,
 );
 // 新しい競合の回は、回の開始時刻、起動の回数、保留を戻し、結んだ作業項目は残す。競合のままでは何も戻さない。
 const cfEpisode = await conflictFixRow(720, CF_HEAD_1);
