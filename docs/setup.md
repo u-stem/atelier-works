@@ -105,6 +105,11 @@ mise run doctor
 7. ブラウザで`http://127.0.0.1:8080`を開き、`WM_ADMIN_EMAIL`と`WM_ADMIN_PASSWORD`でログインする。
 8. Windmillの画面で`f/factory/factory_config`を開き、`owners`(対象リポジトリの所有者)と`instance_name`を設定する。この2つはgitで管理せず、`bootstrap`は空のまま作る。
 
+ブラウザのログインは、操作なしの30日で切れる。
+期間を変えるには、`infra/docker-compose.yml`の`windmill_server`にある`MAX_SESSION_VALIDITY_SECONDS`を秒数で書き換える。
+その後、`mise run up`をやり直す。
+この値はサーバーだけが読むので、workerには指定しない。
+
 `GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL`が空でも、`bootstrap`は完了する。対応するWindmillの変数が空で作られる。`doctor`はこれらが空だとNGを報告するので、運用を始める前に値を投入する。
 
 `bootstrap`は、ワークスペースのIDを小文字の`factory`のままにし、表示名だけを`Factory`にする。表示名はダッシュボード(Factory Console)などの表記にそろえる。

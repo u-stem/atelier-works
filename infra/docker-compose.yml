@@ -56,6 +56,9 @@ services:
     environment:
       - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
       - MODE=server
+      # ブラウザのログインは、操作なしの30日で切れる(既定は3日)。
+      # 運用者が毎日ログインし直さずに済むよう、サーバーだけに指定する。
+      - MAX_SESSION_VALIDITY_SECONDS=2592000
     depends_on:
       db:
         condition: service_healthy
