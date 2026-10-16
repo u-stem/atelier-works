@@ -803,10 +803,15 @@ describe("earlyExitBase", () => {
     attempt: 1,
     fix_round: 4,
     ci_check_id: 9,
+    conflict_check_id: null,
   };
 
   test("keeps the CI check id so that pr_fix_finish knows it is a CI round", () => {
     expect(earlyExitBase(workItem).ci_check_id).toBe(9);
+  });
+
+  test("keeps the absence of a conflict check id for a CI round", () => {
+    expect(earlyExitBase(workItem).conflict_check_id).toBeNull();
   });
 
   test("keeps the PR coordinates so pr_fix_finish can relabel the PR", () => {

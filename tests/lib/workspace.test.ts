@@ -64,6 +64,7 @@ import {
   resolveDefaultBranchHeadSha,
   resolveDefaultBranchName,
   runCommand,
+  runGitleaksOnTreeDiff,
   runGitleaksOnWorktree,
   SpawnError,
   scannedTreeStopReasons,
@@ -6708,6 +6709,117 @@ describe("runGitleaksOnWorktree", () => {
       dir,
     );
     expect(dir.state.cleaned).toBe(1);
+  });
+});
+
+describe("runGitleaksOnTreeDiff", () => {
+  const DIFF = [
+    "diff --git a/a.txt b/a.txt",
+    "--- a/a.txt",
+    "+++ b/a.txt",
+    "@@ -1,2 +1,2 @@",
+    "-removed",
+    "+token",
+  ].join("\n");
+  const LEAK = JSON.stringify([
+    { RuleID: "github-pat", File: "", StartLine: 5, Secret: "REDACTED" },
+  ]);
+  const scan = (
+    fake: ReturnType<typeof createFakeCommandRunner>,
+    paths?: readonly string[],
+  ) =>
+    runGitleaksOnTreeDiff({
+      run: fake.run,
+      worktreeDir: "/wt",
+      fromSha: BASE_SHA,
+      toTreeSha: TREE_SHA,
+      timeoutMs: 1000,
+      ...(paths === undefined ? {} : { paths }),
+      createConfigDir: async () => ({
+        path: "/tmp/fake-gitleaks",
+        cleanup: async () => {},
+      }),
+    });
+
+  test("diffs the two shas as text, without drivers or context, as the first command", async () => {
+    const fake = createFakeCommandRunner([ok(DIFF), ok("[]")]);
+    await scan(fake);
+    const argv = fake.calls[0]?.argv ?? [];
+    expect(argv.slice(argv.indexOf("diff"))).toEqual([
+      "diff",
+      "--text",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-color",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "-U0",
+      BASE_SHA,
+      TREE_SHA,
+      "--",
+    ]);
+  });
+
+  test("limits the diff to the given paths after the separator", async () => {
+    const fake = createFakeCommandRunner([ok(DIFF), ok("[]")]);
+    await scan(fake, ["src/a.ts", "src/b.ts"]);
+    expect(fake.calls[0]?.argv.slice(-3)).toEqual([
+      "--",
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+  });
+
+  test("reads the paths as literal names", async () => {
+    const fake = createFakeCommandRunner([ok(DIFF), ok("[]")]);
+    await scan(fake, ["src/*.ts"]);
+    expect(fake.calls[0]?.argv).toContain("--literal-pathspecs");
+  });
+
+  test("scans nothing and runs no command when the list of paths is empty", async () => {
+    const fake = createFakeCommandRunner([]);
+    await scan(fake, []);
+    expect(fake.calls).toEqual([]);
+  });
+
+  test("reports ok on exit 0", async () => {
+    const fake = createFakeCommandRunner([ok(DIFF), ok("[]")]);
+    expect((await scan(fake)).ok).toBe(true);
+  });
+
+  test("feeds the diff without its removed lines on stdin", async () => {
+    const fake = createFakeCommandRunner([ok(DIFF), ok("[]")]);
+    await scan(fake);
+    expect(fake.calls[1]?.options?.stdin).not.toContain("-removed");
+  });
+
+  test("returns the findings mapped to files on exit 1", async () => {
+    const fake = createFakeCommandRunner([
+      ok(DIFF),
+      { stdout: LEAK, stderr: "", exitCode: 1, timedOut: false },
+    ]);
+    expect(await scan(fake)).toEqual({
+      ok: false,
+      output: "- github-pat: a.txt",
+    });
+  });
+
+  test("throws when the diff fails", async () => {
+    const fake = createFakeCommandRunner([fail("fatal: bad object")]);
+    await expect(scan(fake)).rejects.toThrow(/git diff of the tree failed/);
+  });
+
+  test("rejects a sha that is not a full sha", async () => {
+    const fake = createFakeCommandRunner([]);
+    await expect(
+      runGitleaksOnTreeDiff({
+        run: fake.run,
+        worktreeDir: "/wt",
+        fromSha: "abc",
+        toTreeSha: TREE_SHA,
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow();
   });
 });
 

@@ -1,0 +1,9 @@
+summary: '[LIB] 競合回の解消の検査'
+description: 内部ライブラリです。直接実行するものではありません。競合回の検証と完了のステップが共有する、解消後のツリーの検査の流れと、その入力をgitから読む実装を持ちます。
+lock: '!inline f/factory/lib/conflict_fix_verify.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

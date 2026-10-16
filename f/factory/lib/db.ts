@@ -14,6 +14,7 @@ import * as wmill from "windmill-client@1.817.0";
 import type { CleanupCounts } from "./cleanup_db_support.ts";
 import {
   CONFLICT_ROUND_DETAILS,
+  CONFLICT_UNCOUNTED_STOP_NOTES,
   conflictRoundReason,
 } from "./conflict_fix_round.ts";
 import {
@@ -4272,39 +4273,46 @@ export async function getPrCiCheckById(
   return row === undefined ? null : toPrCiCheck(row);
 }
 
+/** 再レビューで重点的に見る、`pr_fix`の回の種類。 */
+export type FixRoundKind = "ci" | "conflict";
+
 /**
- * `reviewSha`のレビューが、CIの失敗を直したラウンドの差分を含むかを返す。
- * そのPRの`pr_fix`のうち、CIの回(`ci_check_id`を持つ)のどれかが、pushしたcommit(`fix_rounds.commit_shas`)に
- * `reviewSha`を含むときに真になる。最新かどうかと状態は問わない。
+ * `reviewSha`を書いた`pr_fix`の回の種類を返す。どちらの回でもなければnull。
+ * そのPRの`pr_fix`のうち、CIの回(`ci_check_id`を持つ)か競合の回(`conflict_check_id`を持つ)のどれかが、
+ * pushしたcommit(`fix_rounds.commit_shas`)に`reviewSha`を含むときに、その回の種類を返す。最新かどうかと状態は問わない。
  * 再レビューの依頼の前に別のレビューが走っても、依頼の後に作業項目が終端へ進んでも、pushしたcommitは変わらないためである。
- * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないので偽になる。
+ * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないのでnullになる。
+ * 同じcommitを複数の回がpushした記録があるときは、新しい回(`fix_rounds.id`が大きいもの)の種類を返す。
+ * 同じcommitを別の種類の回がpushすることは通常は無く、どちらかを優先する理由も無いので、順序だけを決定的にしている。
  * ownerとrepoは小文字で照合する。
  */
-export async function hasCiRoundDiffToReview(
+export async function findFixRoundKindToReview(
   owner: string,
   repo: string,
   prNumber: number,
   reviewSha: string,
   sql: SqlClient = defaultSqlClient,
-): Promise<boolean> {
+): Promise<FixRoundKind | null> {
   assertPrCiTarget(owner, repo, prNumber);
   assertCommitSha(reviewSha);
   const rows = await sql`
-    SELECT EXISTS (
-      SELECT 1
+    SELECT CASE WHEN w.ci_check_id IS NOT NULL THEN 'ci' ELSE 'conflict' END AS round_kind
       FROM factory.work_items w
       JOIN factory.fix_rounds r ON r.work_item_id = w.id,
         jsonb_array_elements_text(r.commit_shas) AS pushed(sha)
       WHERE w.kind = 'pr_fix'
-        AND w.ci_check_id IS NOT NULL
+        AND (w.ci_check_id IS NOT NULL OR w.conflict_check_id IS NOT NULL)
         AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
         AND w.pr_number = ${prNumber}::integer
         AND pushed.sha = ${reviewSha}
-    ) AS pushed_by_ci_round
+      ORDER BY r.id DESC
+      LIMIT 1
   `.fetch();
   const row = rows[0];
-  if (row === undefined) return false;
-  return parseBoolean(row.pushed_by_ci_round, "pushed_by_ci_round");
+  if (row === undefined) return null;
+  const kind = row.round_kind;
+  if (kind === "ci" || kind === "conflict") return kind;
+  throw new Error("round_kind must be ci or conflict");
 }
 
 /**
@@ -5745,6 +5753,23 @@ export async function touchPrConflictCheck(
   return rows.length > 0;
 }
 
+/** IDで`factory.pr_conflict_checks`の行を読む。無ければnull。 */
+export async function getPrConflictCheckById(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrConflictCheck | null> {
+  assertPositiveId(id, "pr conflict check id");
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, episode, notified_at,
+           fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at,
+           checked_at, created_at, updated_at
+    FROM factory.pr_conflict_checks
+    WHERE id = ${id}::bigint
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toPrConflictCheck(row);
+}
+
 /** 競合している行を、読み直していない順に、最大`limit`件返す。 */
 export async function listConflictedPrConflictChecks(
   limit: number,
@@ -6060,15 +6085,23 @@ export type PrConflictFixRoundScope =
  * - 何も変えずに終えた作業項目(状態が`reviewed`で、その状態へ移った最新の遷移の注記が`up_to_date`のもの)。
  *   ベースの更新がすでに取り込まれていて、直す作業が無かった回である。
  * - イメージが古い理由で止まった作業項目(状態が`blocked`で、その状態へ移った最新の遷移の注記が、
- *   `staleImageNotePrefixes`のどれかで始まるもの)。準備がClaudeを動かす前に止めた回で、フローのジョブIDを持つ。
- *   そのため、1つ目の条件(`flow_job_id`が空の`failed`)では除けない。
+ *   `staleImageNotePrefixes`のどれかで始まるもの)。準備、検証、完了のどのステップで止まった回も含む。
+ *   Claudeの実行の後に止まった回も含むので、Claudeの実行は、起動の回数の上限まで繰り返しうる。
+ *   繰り返しは、日次予算と1回あたりの上限の枠内に収まる。
+ *   フローのジョブIDを持つので、1つ目の条件(`flow_job_id`が空の`failed`)では除けない。
  *   数えると、イメージが古い間に起動と停止を繰り返して回数を使い切り、人がイメージを直しても自動で直らなくなる。
  *   呼び出し側は`AUTO_RETRY_REASON_PREFIXES`を渡す。一覧を引数にするのは、`db.ts`が検査のサンドボックスの部品に依存しないようにするためである。
+ * - Claudeを動かす前の一時の停止で止まった作業項目(状態が`blocked`で、その状態へ移った最新の遷移の注記が、
+ *   `CONFLICT_UNCOUNTED_STOP_NOTES`のどれかに完全一致するもの)。Claudeの費用を使っていない回で、
+ *   待てば解ける事情で止まっただけなので、直す機会を使い切らないためである。
  *
  * 数えない回の繰り返しは、行の`fix_attempts`の上限(`pr_conflict_fix_max_rounds`に3を足した数)だけが止める。
- * 巡回は5分ごとなので、イメージが古い状態が約20〜25分(既定の設定のとき)を超えると、その回(episode)は
- * `rounds_exhausted`(最終の保留)で通知に進む。通知の理由はイメージの古さを示さない。
- * その後に人がイメージを直しても、その回は自動では直らない。新しい回で再び起動する。
+ * 一時の停止の注記の照合は完全一致だけで行い、先頭一致は使わない。
+ * 数えない回が続くと、巡回ごとに1回ずつ起動し、起動の回数が上限に達した時点で、その回(episode)は
+ * `rounds_exhausted`(最終の保留)で通知に進む。巡回は5分ごとなので、上限に達するまでの時間は、
+ * 上限の回数に5分を掛けた程度である。一時の停止(実装のフローの実行中、worktreeを別の処理が使っている)が
+ * 続くときも同じになる。通知の理由は、止まった原因を示さない。
+ * その後に原因が解けても、その回は自動では直らない。新しい回で再び起動する。
  * 準備の段階で止まる回はClaudeを使わないので、予算は使わない。
  *
  * 範囲ごとの2つの問い合わせは、数えない条件を同じ文で書き写している。条件を変えるときは両方を直す。
@@ -6085,6 +6118,7 @@ export async function countPrConflictFixRounds(
   }
   const upToDateNote = conflictRoundReason(CONFLICT_ROUND_DETAILS.upToDate);
   const staleImagePrefixes: string[] = [...staleImageNotePrefixes];
+  const uncountedStopNotes: string[] = [...CONFLICT_UNCOUNTED_STOP_NOTES];
   if (scope.kind === "episode") {
     assertPositiveId(scope.checkId, "pr conflict check id");
     assertPositiveId(scope.episode, "pr conflict episode");
@@ -6112,6 +6146,14 @@ export async function countPrConflictFixRounds(
               LIMIT 1
             ), ''), p.prefix)
           )
+        )
+        AND NOT (
+          wi.status = 'blocked' AND COALESCE((
+            SELECT e.note FROM factory.work_item_events AS e
+            WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+            ORDER BY e.occurred_at DESC, e.id DESC
+            LIMIT 1
+          ), '') = ANY(${uncountedStopNotes}::text[])
         )
     `.fetch();
     const row = rows[0];
@@ -6143,6 +6185,14 @@ export async function countPrConflictFixRounds(
             LIMIT 1
           ), ''), p.prefix)
         )
+      )
+      AND NOT (
+        wi.status = 'blocked' AND COALESCE((
+          SELECT e.note FROM factory.work_item_events AS e
+          WHERE e.work_item_id = wi.id AND e.to_status = wi.status
+          ORDER BY e.occurred_at DESC, e.id DESC
+          LIMIT 1
+        ), '') = ANY(${uncountedStopNotes}::text[])
       )
   `.fetch();
   const row = rows[0];
