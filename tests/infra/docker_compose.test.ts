@@ -336,6 +336,174 @@ describe("infra/docker-compose.yml windmill_worker_console", () => {
   });
 });
 
+describe("infra/docker-compose.yml windmill_worker_periodic", () => {
+  const name = "windmill_worker_periodic";
+
+  test("is defined as a service", () => {
+    const svc = service(name);
+
+    expect(Object.keys(svc).length).toBeGreaterThan(0);
+  });
+
+  test("uses the same image as the native worker", () => {
+    const svc = service(name);
+    const native = service("windmill_worker_native");
+
+    expect(svc.image).toBe(native.image);
+  });
+
+  test("runs in worker mode", () => {
+    const svc = service(name);
+
+    expect(stringList(svc, "environment")).toContain("MODE=worker");
+  });
+
+  test("belongs to the periodic worker group", () => {
+    const svc = service(name);
+
+    expect(envEntries(svc, "WORKER_GROUP=")).toEqual(["WORKER_GROUP=periodic"]);
+  });
+
+  test("accepts only the periodic tag", () => {
+    const svc = service(name);
+
+    expect(envEntries(svc, "WORKER_TAGS=")).toEqual(["WORKER_TAGS=periodic"]);
+  });
+
+  test("sets no NUM_WORKERS because a non-native worker runs one process", () => {
+    const svc = service(name);
+
+    expect(envEntries(svc, "NUM_WORKERS=")).toEqual([]);
+  });
+
+  test("does not acknowledge the unsafe NUM_WORKERS override", () => {
+    const svc = service(name);
+
+    expect(envEntries(svc, "I_ACK_NUM_WORKERS_IS_UNSAFE")).toEqual([]);
+  });
+
+  test("connects to the database like the other workers", () => {
+    const svc = service(name);
+    const native = service("windmill_worker_native");
+    const dbUrl = (s: Json) =>
+      stringList(s, "environment").filter((e) => e.startsWith("DATABASE_URL="));
+
+    expect(dbUrl(svc)).toEqual(dbUrl(native));
+  });
+
+  test("limits memory to 1024M", () => {
+    const svc = service(name);
+
+    expect(limits(svc).memory).toBe("1024M");
+  });
+
+  test("limits processes to 256", () => {
+    const svc = service(name);
+
+    expect(limits(svc).pids).toBe(256);
+  });
+
+  test("runs an init process", () => {
+    const svc = service(name);
+
+    expect(svc.init).toBe(true);
+  });
+
+  test("forbids gaining privileges", () => {
+    const svc = service(name);
+
+    expect(stringList(svc, "security_opt")).toContain("no-new-privileges:true");
+  });
+
+  test("is not privileged", () => {
+    const svc = service(name);
+
+    expect(svc.privileged).toBeUndefined();
+  });
+
+  test("restarts unless stopped", () => {
+    const svc = service(name);
+
+    expect(svc.restart).toBe("unless-stopped");
+  });
+
+  test("waits for a healthy database", () => {
+    const svc = service(name);
+    const dependsOn = isRecord(svc.depends_on) ? svc.depends_on : {};
+
+    expect(dependsOn.db).toEqual({ condition: "service_healthy" });
+  });
+
+  test("does not mount factory_workspaces", () => {
+    const svc = service(name);
+
+    expect(mountsOf(svc, "factory_workspaces")).toEqual([]);
+  });
+
+  test("does not mount factory_state", () => {
+    const svc = service(name);
+
+    expect(mountsOf(svc, "factory_state")).toEqual([]);
+  });
+
+  test("does not mount factory_console", () => {
+    const svc = service(name);
+
+    expect(mountsOf(svc, "factory_console")).toEqual([]);
+  });
+
+  test("does not share worker_dependency_cache", () => {
+    const svc = service(name);
+
+    expect(mountsOf(svc, "worker_dependency_cache")).toEqual([]);
+  });
+
+  test("does not mount the docker socket", () => {
+    const svc = service(name);
+
+    expect(mounts(svc).filter((m) => m.source.includes("docker.sock"))).toEqual(
+      [],
+    );
+  });
+
+  test("mounts worker_logs like the native worker", () => {
+    const svc = service(name);
+
+    expect(mountsOf(svc, "worker_logs").map((m) => m.target)).toEqual([
+      "/tmp/windmill/logs",
+    ]);
+  });
+
+  test("mounts its own dependency cache", () => {
+    const svc = service(name);
+
+    expect(
+      mountsOf(svc, "worker_periodic_dependency_cache").map((m) => m.target),
+    ).toEqual(["/tmp/windmill/cache"]);
+  });
+
+  test("declares its dependency cache as a top-level volume", () => {
+    const volumes = compose().volumes;
+
+    expect(
+      isRecord(volumes) && "worker_periodic_dependency_cache" in volumes,
+    ).toBe(true);
+  });
+
+  test("mounts nothing writable other than worker_logs and its own cache", () => {
+    const svc = service(name);
+
+    const writable = mounts(svc).filter(
+      (m) =>
+        !m.readOnly &&
+        m.source !== "worker_logs" &&
+        m.source !== "worker_periodic_dependency_cache",
+    );
+
+    expect(writable).toEqual([]);
+  });
+});
+
 describe("infra/docker-compose.yml factory_state_init", () => {
   test("uses the same image as the console worker", () => {
     const svc = service("factory_state_init");
