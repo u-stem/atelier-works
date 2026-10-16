@@ -3988,6 +3988,12 @@ const DEPENDABOT_REASON_RULES: readonly ReasonRule[] = [
     nextAction: () => DEPENDABOT_MANUAL_NEXT_ACTION,
   },
   {
+    pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.prepare, "([\\s\\S]+)$"),
+    describe: (m) =>
+      `dependabotの更新を、準備の処理(リポジトリの取得と作業ツリーの作成)で止めました(${dependabotDetailText(m[1])})`,
+    nextAction: (m) => dependabotNextActionForDetail(m[1]),
+  },
+  {
     pattern: reasonPattern(DEPENDABOT_REASON_PREFIX.finish, "([\\s\\S]+)$"),
     describe: (m) =>
       `dependabotの更新を、終了の処理(マージや所見の投稿)で止めました(${dependabotDetailText(m[1])})`,

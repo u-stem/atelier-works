@@ -21,6 +21,7 @@ import {
 import {
   DEPENDABOT_INSTALL_TIMEOUT_MS,
   DEPENDABOT_REASON_PREFIX,
+  dependabotReason,
   POST_INSTALL_STATUS_ARGV,
 } from "../../f/factory/lib/dependabot_flow_support.ts";
 import {
@@ -275,6 +276,7 @@ type Harness = {
   readonly packageDirs: string[];
   readonly changelogDirs: string[];
   readonly createdShas: string[];
+  readonly ownerChecks: (readonly [string, string])[];
 };
 
 type HarnessOptions = {
@@ -291,6 +293,10 @@ type HarnessOptions = {
   readonly pointerError?: Error;
   /** `removeWorktree`を失敗させる。 */
   readonly removeFails?: boolean;
+  /** `ensureRepoOwner`が返す止める理由。無ければ通す。 */
+  readonly ownerStop?: string;
+  /** `ensureRepoOwner`が投げる例外(取得の失敗)。 */
+  readonly ownerCheckError?: Error;
 };
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -301,6 +307,7 @@ function harness(options: HarnessOptions = {}): Harness {
   const packageDirs: string[] = [];
   const changelogDirs: string[] = [];
   const createdShas: string[] = [];
+  const ownerChecks: (readonly [string, string])[] = [];
   const worktree: PreparedWorktree = {
     repoDir: REPO_DIR,
     worktreeDir: WORKTREE_DIR,
@@ -323,6 +330,12 @@ function harness(options: HarnessOptions = {}): Harness {
         result,
         pr: options.pr === undefined ? pullRequest() : options.pr,
       };
+    },
+    ensureRepoOwner: async (owner, repo) => {
+      calls.push("ensureRepoOwner");
+      ownerChecks.push([owner, repo]);
+      if (options.ownerCheckError !== undefined) throw options.ownerCheckError;
+      return options.ownerStop ?? null;
     },
     createWorktree: async (headSha) => {
       calls.push("createWorktree");
@@ -384,6 +397,7 @@ function harness(options: HarnessOptions = {}): Harness {
     packageDirs,
     changelogDirs,
     createdShas,
+    ownerChecks,
   };
 }
 
@@ -434,6 +448,107 @@ describe("runDependabotPrepare: work item", () => {
   test("does not notify when the feature is off", async () => {
     const { h } = await prepare({}, { ...INPUT, dependabotEnabled: false });
     expect(h.notifications).toEqual([]);
+  });
+});
+
+// ---- オーナーの数値IDの照合 ----
+
+const OWNER_STOP =
+  "repository owner id differs from factory_config owners: acme/widgets (expected 1, actual 2)";
+const OWNER_STOP_NOTE = dependabotReason("prepare", OWNER_STOP);
+
+describe("runDependabotPrepare: repository owner check", () => {
+  test("checks the repository of the work item", async () => {
+    const { h } = await prepare();
+    expect(h.ownerChecks).toEqual([["acme", "widgets"]]);
+  });
+
+  test("checks once", async () => {
+    const { h } = await prepare();
+    expect(h.calls.filter((name) => name === "ensureRepoOwner")).toHaveLength(
+      1,
+    );
+  });
+
+  test("checks after the facts are collected and before the repository is cloned", async () => {
+    const { h } = await prepare();
+    expect(
+      h.calls.filter((name) =>
+        ["collect", "ensureRepoOwner", "createWorktree"].includes(name),
+      ),
+    ).toEqual(["collect", "ensureRepoOwner", "createWorktree"]);
+  });
+
+  test("does not create a worktree when the check stops", async () => {
+    const { h } = await prepare({ ownerStop: OWNER_STOP });
+    expect(h.calls).not.toContain("createWorktree");
+  });
+
+  test("does not install when the check stops", async () => {
+    const { h } = await prepare({ ownerStop: OWNER_STOP });
+    expect(h.calls).not.toContain("install");
+  });
+
+  test("moves to needs_human with the reason of the check", async () => {
+    const { h } = await prepare({ ownerStop: OWNER_STOP });
+    expect(h.statusUpdates).toEqual([
+      { to: "needs_human", note: OWNER_STOP_NOTE },
+    ]);
+  });
+
+  test("returns the stop with the reason of the check", async () => {
+    const { result } = await prepare({ ownerStop: OWNER_STOP });
+    expect(result).toEqual({
+      proceed: false,
+      terminalStatus: "needs_human",
+      reason: OWNER_STOP_NOTE,
+      workItemId: INPUT.workItem.id,
+      assess: null,
+    });
+  });
+
+  test("notifies the owners review as the next action", async () => {
+    const { h } = await prepare({ ownerStop: OWNER_STOP });
+    expect(
+      h.notifications[0]?.kind === "needs_human" &&
+        h.notifications[0].next_action,
+    ).toBe(nextActionFor(OWNER_STOP_NOTE, "dependabot"));
+  });
+
+  test("throws the error of the check when it cannot read the owner", async () => {
+    const h = harness({
+      ownerCheckError: new GitHubHttpError(
+        "GET repo failed with HTTP 502",
+        502,
+      ),
+    });
+    await expect(runDependabotPrepare(h.deps, INPUT)).rejects.toThrow(
+      "HTTP 502",
+    );
+  });
+
+  test("does not create a worktree when the check cannot read the owner", async () => {
+    const h = harness({
+      ownerCheckError: new GitHubHttpError(
+        "GET repo failed with HTTP 502",
+        502,
+      ),
+    });
+    await runDependabotPrepare(h.deps, INPUT).catch(() => undefined);
+    expect(h.calls).not.toContain("createWorktree");
+  });
+
+  test("does not check when the gate stops before the clone", async () => {
+    const { h } = await prepare({
+      collect: async () =>
+        ready({ input: gateInput({ authorLogin: "mallory" }) }),
+    });
+    expect(h.calls).not.toContain("ensureRepoOwner");
+  });
+
+  test("does not check when the feature is off", async () => {
+    const { h } = await prepare({}, { ...INPUT, dependabotEnabled: false });
+    expect(h.calls).not.toContain("ensureRepoOwner");
   });
 });
 

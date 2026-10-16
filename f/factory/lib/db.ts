@@ -883,6 +883,7 @@ export function isActivePrFixUniqueViolation(err: unknown): boolean {
 
 /**
  * (owner, repo, prNumber)の、終端でない`pr_fix`の作業項目を返す。
+ * ownerとrepoは小文字で照合する。`claimPrConflictForFix`と同じく、綴りの違いで引き漏らさないためである。
  * 一意インデックス`work_items_active_pr_fix_key`により、通常は多くても1件である。
  */
 export async function listActivePrFixWorkItems(
@@ -894,7 +895,8 @@ export async function listActivePrFixWorkItems(
   const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const rows = await sql`
     SELECT * FROM factory.work_items
-    WHERE kind = 'pr_fix' AND owner = ${owner} AND repo = ${repo}
+    WHERE kind = 'pr_fix'
+      AND lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
       AND pr_number = ${prNumber}::integer AND status != ALL(${terminal})
     ORDER BY updated_at DESC
   `.fetch();
@@ -6196,4 +6198,74 @@ export async function countPrConflictFixRounds(
   `.fetch();
   const row = rows[0];
   return row === undefined ? 0 : parseNumericLike(row.rounds, "rounds");
+}
+
+/**
+ * そのPRで、競合を直す作業項目が終わった時刻のうち、最新のものを返す。無ければ`null`。
+ * 終わったのは、次のどちらかの作業項目である。
+ * - 状態が`reviewed`か`rereview_requested`で、失敗せずに終えた。
+ * - 終端の状態で、commitをpushした記録(`fix_rounds.commit_shas`が空でない)を持つ。`blocked`と`failed`と`needs_human`で
+ *   終わった回も含む。pushした後は、GitHubの競合の判定が古いままのことがあるためである。
+ * 競合回の作業項目は、フローを1回だけ動かし、`fix_rounds`の行を高々1つ持つ。再開は`retry_work_item`が拒み、自動の再開と
+ * `restartStoppedWorkItem`も競合回を除く。この前提では、回復がpushしたとみなす条件(直近の1回の`commit_shas`)と、
+ * ここでの「どれかの回」は同じ結果になる。複数の行を持つ作業項目があれば、こちらは、より多くの回を「直した」とみなす。
+ * pushせずに`blocked`と`failed`と`needs_human`で止まった回は含めない。
+ * 時刻は作業項目の`updated_at`である。ownerとrepoは小文字で照合し、競合の回をまたいで数える。
+ * GitHubが競合の有無を更新するまで遅れても、直した直後に起動し直さないために使う。
+ */
+export async function latestConflictFixSettledAt(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<Date | null> {
+  assertPrCiTarget(owner, repo, prNumber);
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
+  const rows = await sql`
+    SELECT max(w.updated_at) AS settled_at
+    FROM factory.work_items AS w
+    WHERE w.kind = 'pr_fix' AND w.conflict_check_id IS NOT NULL
+      AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
+      AND w.pr_number = ${prNumber}::integer
+      AND (
+        w.status IN ('reviewed', 'rereview_requested')
+        OR (
+          w.status = ANY(${terminal}::text[])
+          AND EXISTS (
+            SELECT 1 FROM factory.fix_rounds AS fr
+            WHERE fr.work_item_id = w.id AND jsonb_array_length(fr.commit_shas) > 0
+          )
+        )
+      )
+  `.fetch();
+  const settledAt = rows[0]?.settled_at;
+  return settledAt === null || settledAt === undefined
+    ? null
+    : parseDate(settledAt, "settled_at");
+}
+
+/**
+ * コミットのmainのCIの状態を返す。そのコミットの記録が無ければ`null`。
+ * ownerとrepoは小文字で照合する。PRの記録(小文字)と、記録した綴りが違っても当たるためである。
+ */
+export async function getMainCiStateBySha(
+  owner: string,
+  repo: string,
+  headSha: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<MainCiState | null> {
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  assertCommitSha(headSha);
+  const rows = await sql`
+    SELECT state FROM factory.main_ci_runs
+    WHERE lower(owner) = ${owner.toLowerCase()} AND lower(repo) = ${repo.toLowerCase()}
+      AND head_sha = ${headSha}
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `.fetch();
+  const row = rows[0];
+  return row === undefined
+    ? null
+    : parseEnum(row.state, MAIN_CI_STATES, "state");
 }
