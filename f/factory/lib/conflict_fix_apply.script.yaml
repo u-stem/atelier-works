@@ -1,0 +1,9 @@
+summary: '[LIB] 競合回の修正ステップ'
+description: 内部ライブラリです。直接実行するものではありません。競合回の修正ステップの流れとして、Claudeを起動する前の確認、プロンプトの組み立て、出力の検査を行います。
+lock: '!inline f/factory/lib/conflict_fix_apply.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

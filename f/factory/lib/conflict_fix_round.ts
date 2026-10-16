@@ -14,7 +14,11 @@ import {
   weakensChecks,
 } from "./ci_fix_paths.ts";
 import { escapeReasonSeparator } from "./log.ts";
-import type { BothSidesChangedPaths } from "./workspace.ts";
+import type {
+  BothSidesChangedPaths,
+  ConflictBlobs,
+  MergeBaseResult,
+} from "./workspace.ts";
 
 /**
  * 競合回の理由の接頭辞。競合回が作る理由はすべてこの文字列で始まる。
@@ -27,8 +31,9 @@ export const CONFLICT_FIX_SKILL_MARKER = "conflict-fix-skill:v1";
 
 /**
  * 停止の注記のうち、保留の理由(`fix_hold_reason`)に写すものの固定文。
- * 接頭辞の`conflict round: `は含まない。`upToDate`は止めた理由ではなく、
- * 何も変えずに終えた回(`reviewed`)の注記で、pushした回と区別するために使う。
+ * 接頭辞の`conflict round: `は含まない。`upToDate`と`baseChanged`は止めた理由ではなく、
+ * pushせずに終えた回(`reviewed`)の注記である。`upToDate`はpushが要らなかった回、
+ * `baseChanged`はpushの直前にbaseが動いた回で、どちらも行に最終の保留を書かない。
  */
 export const CONFLICT_ROUND_DETAILS = {
   baseNotDefault: "base is not the default branch",
@@ -37,12 +42,121 @@ export const CONFLICT_ROUND_DETAILS = {
   unresolvable: "unresolvable conflict",
   checkFailed: "check failed",
   upToDate: "up_to_date",
+  baseChanged: "the base branch moved",
   markerMissing: `the factory-fix skill lacks the ${CONFLICT_FIX_SKILL_MARKER} marker`,
 } as const;
 
 /** 固定文`detail`に接頭辞を付けた、競合回の注記。 */
 export function conflictRoundReason(detail: string): string {
   return `${CONFLICT_ROUND_REASON_PREFIX}: ${detail}`;
+}
+
+/**
+ * 準備のステップが`conflict_blocked`で返す理由の、注記の固定文(接頭辞付き)。
+ * 完了のステップは、この一覧にある理由だけを作業項目の注記にする。回復が注記を保留の理由に写すとき、完全一致で照合するためである。
+ */
+export const CONFLICT_BLOCKED_NOTES: readonly string[] = [
+  conflictRoundReason(CONFLICT_ROUND_DETAILS.baseNotDefault),
+  conflictRoundReason(CONFLICT_ROUND_DETAILS.baseChangesWorkflows),
+  conflictRoundReason(CONFLICT_ROUND_DETAILS.protectedPath),
+  conflictRoundReason(CONFLICT_ROUND_DETAILS.unresolvable),
+];
+
+/** 準備のステップが、baseのmergeの結果を記録していないときの理由。何を解くかが分からないまま進めない。 */
+export const CONFLICT_MERGE_NOT_RECORDED_REASON = conflictRoundReason(
+  "the merge of the base was not recorded",
+);
+
+/** 競合回のClaudeの出力が返信を持つときの理由。返信を持つ出力は受け付けない。 */
+export const CONFLICT_ROUND_REPLIES_REASON = conflictRoundReason(
+  "the output of Claude carries replies",
+);
+
+/**
+ * `evaluateMergedTree`が止めた理由を、注記の固定文に写す。
+ * 結果のツリーにどちらの親にも無いパスがあるときと、安全でないパスがあるときは、直せない競合として扱う。
+ */
+export function mergedTreeStopDetail(reason: MergedTreeStopReason): string {
+  switch (reason) {
+    case "base_changes_workflows":
+      return CONFLICT_ROUND_DETAILS.baseChangesWorkflows;
+    case "protected_path":
+      return CONFLICT_ROUND_DETAILS.protectedPath;
+    case "unexpected_path":
+    case "unsafe_path":
+      return CONFLICT_ROUND_DETAILS.unresolvable;
+  }
+}
+
+/** 競合の行のうち、準備のステップが照合する列。 */
+export type ConflictRoundRowFacts = {
+  readonly state: string;
+  readonly episode: number;
+  readonly head_sha: string;
+  readonly fix_work_item_id: number | null;
+};
+
+export type ConflictRoundPrepareGuardInput = {
+  readonly workItemId: number;
+  /** 作業項目が直している競合の回(`work_items.conflict_episode`)。 */
+  readonly workItemEpisode: number | null;
+  /** いまのPRのhead。 */
+  readonly prHeadSha: string;
+  /** PRの`baseRef`。 */
+  readonly baseRef: string;
+  /** リポジトリの既定のブランチ。 */
+  readonly defaultBranch: string;
+  /** 作業項目の`conflict_check_id`が指す行。無ければnull。 */
+  readonly row: ConflictRoundRowFacts | null;
+};
+
+export type ConflictRoundGuardResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      /** 準備のステップが返す結果。行の食い違いは`guard_blocked`、baseが既定のブランチでなければ`conflict_blocked`。 */
+      readonly outcome: "guard_blocked" | "conflict_blocked";
+      readonly reason: string;
+    };
+
+/**
+ * 競合回を始めてよいかを、行と作業項目の対応で確かめる。
+ * 行が競合のままで、この作業項目に結ばれ、作業項目と同じ競合の回で、PRのheadが行のheadと同じでなければ始めない。
+ * 古い作業項目や、起動し直された作業項目が、別の競合を直すのを防ぐため。
+ * PRのbaseが既定のブランチでなければ、直せない競合として`conflict_blocked`にする。
+ */
+export function evaluateConflictRoundPrepareGuard(
+  input: ConflictRoundPrepareGuardInput,
+): ConflictRoundGuardResult {
+  const blocked = (detail: string): ConflictRoundGuardResult => ({
+    ok: false,
+    outcome: "guard_blocked",
+    reason: conflictRoundReason(detail),
+  });
+  const { row } = input;
+  if (row === null) {
+    return blocked("the conflict check row of the work item does not exist");
+  }
+  if (row.state !== "conflicted") {
+    return blocked("the conflict check is not conflicted");
+  }
+  if (row.fix_work_item_id !== input.workItemId) {
+    return blocked("the conflict check is bound to another work item");
+  }
+  if (input.workItemEpisode === null || row.episode !== input.workItemEpisode) {
+    return blocked("the conflict episode of the work item is over");
+  }
+  if (row.head_sha !== input.prHeadSha) {
+    return blocked("the PR head moved from the head of the conflict check");
+  }
+  if (input.baseRef !== input.defaultBranch) {
+    return {
+      ok: false,
+      outcome: "conflict_blocked",
+      reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.baseNotDefault),
+    };
+  }
+  return { ok: true };
 }
 
 /** 競合回の作業項目か。`conflict_check_id`が非NULLなら、マージの競合を直す回である。 */
@@ -140,6 +254,77 @@ export function evaluateMergedTree(input: {
     return { ok: false, reason: "protected_path" };
   }
   return { ok: true };
+}
+
+/** 準備のステップが、mergeの結果から決める次の動き。 */
+export type ConflictPreparePlan =
+  /** Claudeに解かせる(競合ファイルが空なら、Claudeを起動せずにpushへ進む)。 */
+  | {
+      readonly kind: "proceed";
+      readonly baseSha: string;
+      readonly autoSha: string;
+      readonly autoTreeSha: string;
+      readonly conflictedPaths: string[];
+      readonly conflictBlobs: ConflictBlobs[];
+    }
+  /** baseがすでにPRの履歴にある。何もpushしない。 */
+  | { readonly kind: "up_to_date" }
+  /** 競合回で直せない。`reason`は注記の固定文(接頭辞付き)である。 */
+  | { readonly kind: "blocked"; readonly reason: string }
+  /** worktreeのHEADがPRのheadと違う。誰かが先にpushした。 */
+  | { readonly kind: "head_changed"; readonly currentSha: string };
+
+/**
+ * `mergeBaseIntoWorktree`の結果から、準備のステップの次の動きを決める。
+ * `merged`は、結果のツリーがどちらの親とも違うパスを`listBothSides`で求め、保護パスとworkflowを調べる(`evaluateMergedTree`)。
+ * 競合ファイルが空の`merged`(GitHubが競合と判定したが、ローカルではきれいにmergeできた)も同じ検査を通し、
+ * 通れば`proceed`にする。Claudeを起動するかは、競合ファイルが空かどうかで呼び出し側が決める。
+ * `unresolvable`は、理由の種類によらず、固定の注記(`unresolvable`)にまとめる。
+ */
+export async function planConflictPrepare(
+  merge: MergeBaseResult,
+  listBothSides: (
+    autoTreeSha: string,
+    baseSha: string,
+  ) => Promise<BothSidesChangedPaths>,
+): Promise<ConflictPreparePlan> {
+  switch (merge.outcome) {
+    case "up_to_date":
+      return { kind: "up_to_date" };
+    case "base_not_default":
+      return {
+        kind: "blocked",
+        reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.baseNotDefault),
+      };
+    case "head_changed":
+      return { kind: "head_changed", currentSha: merge.currentSha };
+    case "unresolvable":
+      return {
+        kind: "blocked",
+        reason: conflictRoundReason(CONFLICT_ROUND_DETAILS.unresolvable),
+      };
+    case "merged": {
+      const conflictedPaths = [...merge.conflictedPaths];
+      const verdict = evaluateMergedTree({
+        conflictedPaths,
+        bothSides: await listBothSides(merge.autoTreeSha, merge.baseSha),
+      });
+      if (!verdict.ok) {
+        return {
+          kind: "blocked",
+          reason: conflictRoundReason(mergedTreeStopDetail(verdict.reason)),
+        };
+      }
+      return {
+        kind: "proceed",
+        baseSha: merge.baseSha,
+        autoSha: merge.autoSha,
+        autoTreeSha: merge.autoTreeSha,
+        conflictedPaths,
+        conflictBlobs: [...merge.conflictBlobs],
+      };
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
