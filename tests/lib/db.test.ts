@@ -6300,11 +6300,11 @@ describe("hasCiRoundDiffToReview", () => {
     ).toBe(false);
   });
 
-  test("looks only at pr_fix work items that carry a CI check", async () => {
+  test("looks only at pr_fix work items that carry a CI check or a conflict check", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await hasCiRoundDiffToReview("acme", "widgets", 12, CI_SHA, sql);
     expect(calls[0]?.text).toMatch(
-      /w\.kind = 'pr_fix'\s+AND w\.ci_check_id IS NOT NULL/,
+      /w\.kind = 'pr_fix'\s+AND \(w\.ci_check_id IS NOT NULL OR w\.conflict_check_id IS NOT NULL\)/,
     );
   });
 

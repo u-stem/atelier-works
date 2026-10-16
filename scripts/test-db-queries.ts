@@ -27,8 +27,10 @@ import {
   findOrphanFixingPrCiChecks,
   getLatestPrCiCheck,
   getNoticeById,
+  getPrConflictCheckById,
   getPreviousMainCiRun,
   getWorkItem,
+  hasCiRoundDiffToReview,
   hasDependabotItemForHead,
   hasIntakeRefreshEvent,
   hasMainCiRuns,
@@ -39,6 +41,7 @@ import {
   hasSupersedingPrReview,
   insertCleanupRun,
   insertDependabotWorkItemUnlessActive,
+  insertFixRound,
   insertWorkerSample,
   insertWorkItem,
   isActivePrFixUniqueViolation,
@@ -5918,6 +5921,45 @@ check(
     STALE_IMAGE_NOTE_PREFIXES,
     sql,
   )) === 10,
+);
+// 行をIDで読む。
+const cfById = await conflictFixRow(718, CF_HEAD_1);
+check(
+  "conflict row: it is read by its id",
+  (await getPrConflictCheckById(cfById.id, sql))?.head_sha === CF_HEAD_1,
+);
+check(
+  "conflict row: a missing id returns null",
+  (await getPrConflictCheckById(2_000_000_000, sql)) === null,
+);
+// 後続のレビューが修正回の差分を重点的に見る問い合わせは、競合の回がpushしたcommitも対象にする。
+const cfReviewed = "8".repeat(40);
+const cfPushedItemId = await conflictRoundItem(
+  718,
+  cfById.id,
+  1,
+  "rereview_requested",
+  "job-6",
+);
+await insertFixRound(
+  {
+    work_item_id: cfPushedItemId,
+    round: 1,
+    trigger_review_ids: [],
+    outcome: "done",
+    replies: [],
+    commit_shas: [cfReviewed],
+  },
+  sql,
+);
+check(
+  "conflict review: a commit pushed by a conflict round is a diff to review",
+  (await hasCiRoundDiffToReview("QCFix", "App", 718, cfReviewed, sql)) === true,
+);
+check(
+  "conflict review: a commit that no round pushed is not",
+  (await hasCiRoundDiffToReview("qcfix", "app", 718, "9".repeat(40), sql)) ===
+    false,
 );
 // 新しい競合の回は、回の開始時刻、起動の回数、保留を戻し、結んだ作業項目は残す。競合のままでは何も戻さない。
 const cfEpisode = await conflictFixRow(720, CF_HEAD_1);

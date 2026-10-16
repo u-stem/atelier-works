@@ -11,6 +11,21 @@ schema:
       description: 処理内容の要約。
       default: null
       originalType: string
+    auto_tree_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    base_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    baseline_sha:
+      type: string
+      description: ''
+      default: null
+      originalType: string
     branch:
       type: string
       description: ''
@@ -38,6 +53,25 @@ schema:
       description: 適用した変更に付けるコミットメッセージの件名。
       default: null
       originalType: string
+    conflict_blobs:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: resource
+        resourceType: conflict_blobs
+      originalType: resource[]
+    conflict_check_id:
+      type: number
+      description: ''
+      default: null
+    conflicted_paths:
+      type: array
+      description: ''
+      default: null
+      items:
+        type: string
+      originalType: string[]
     fix_round:
       type: number
       description: このPRに対する修正の試行回数。

@@ -4268,9 +4268,9 @@ export async function getPrCiCheckById(
 }
 
 /**
- * `reviewSha`のレビューが、CIの失敗を直したラウンドの差分を含むかを返す。
- * そのPRの`pr_fix`のうち、CIの回(`ci_check_id`を持つ)のどれかが、pushしたcommit(`fix_rounds.commit_shas`)に
- * `reviewSha`を含むときに真になる。最新かどうかと状態は問わない。
+ * `reviewSha`のレビューが、CIの失敗か、マージの競合を直したラウンドの差分を含むかを返す。
+ * そのPRの`pr_fix`のうち、CIの回(`ci_check_id`を持つ)か競合の回(`conflict_check_id`を持つ)のどれかが、
+ * pushしたcommit(`fix_rounds.commit_shas`)に`reviewSha`を含むときに真になる。最新かどうかと状態は問わない。
  * 再レビューの依頼の前に別のレビューが走っても、依頼の後に作業項目が終端へ進んでも、pushしたcommitは変わらないためである。
  * 人が後からpushしたheadのレビューでは、pushしたcommitと一致しないので偽になる。
  * ownerとrepoは小文字で照合する。
@@ -4291,7 +4291,7 @@ export async function hasCiRoundDiffToReview(
       JOIN factory.fix_rounds r ON r.work_item_id = w.id,
         jsonb_array_elements_text(r.commit_shas) AS pushed(sha)
       WHERE w.kind = 'pr_fix'
-        AND w.ci_check_id IS NOT NULL
+        AND (w.ci_check_id IS NOT NULL OR w.conflict_check_id IS NOT NULL)
         AND lower(w.owner) = ${owner.toLowerCase()} AND lower(w.repo) = ${repo.toLowerCase()}
         AND w.pr_number = ${prNumber}::integer
         AND pushed.sha = ${reviewSha}
@@ -5738,6 +5738,23 @@ export async function touchPrConflictCheck(
     RETURNING id
   `.fetch();
   return rows.length > 0;
+}
+
+/** IDで`factory.pr_conflict_checks`の行を読む。無ければnull。 */
+export async function getPrConflictCheckById(
+  id: number,
+  sql: SqlClient = defaultSqlClient,
+): Promise<PrConflictCheck | null> {
+  assertPositiveId(id, "pr conflict check id");
+  const rows = await sql`
+    SELECT id, owner, repo, pr_number, head_sha, state, episode, notified_at,
+           fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at,
+           checked_at, created_at, updated_at
+    FROM factory.pr_conflict_checks
+    WHERE id = ${id}::bigint
+  `.fetch();
+  const row = rows[0];
+  return row === undefined ? null : toPrConflictCheck(row);
 }
 
 /** 競合している行を、読み直していない順に、最大`limit`件返す。 */

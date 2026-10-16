@@ -4,6 +4,7 @@ import {
   claimPrConflictForFix,
   countPrConflictFixRounds,
   deletePrConflictChecksBefore,
+  getPrConflictCheckById,
   listConflictedPrConflictChecks,
   listPrConflictFixing,
   listPrConflictRepos,
@@ -759,6 +760,39 @@ describe("listPrConflictFixing", () => {
   test("parses the rows", async () => {
     const { sql } = createFakeSqlClient([[{ ...ROW, fix_work_item_id: "31" }]]);
     expect((await listPrConflictFixing(10, sql))[0]?.fix_work_item_id).toBe(31);
+  });
+});
+
+describe("getPrConflictCheckById", () => {
+  test("returns the parsed row", async () => {
+    const { sql } = createFakeSqlClient([[ROW]]);
+    expect((await getPrConflictCheckById(7, sql))?.head_sha).toBe(HEAD);
+  });
+
+  test("returns null when the row does not exist", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    expect(await getPrConflictCheckById(7, sql)).toBeNull();
+  });
+
+  test("looks the row up by its id", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPrConflictCheckById(7, sql);
+    expect(calls[0]?.text).toContain("WHERE id = ");
+  });
+
+  test("selects the columns that track the fix", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await getPrConflictCheckById(7, sql);
+    expect(calls[0]?.text).toContain(
+      "fix_work_item_id, fix_attempts, fix_hold_reason, episode_started_at",
+    );
+  });
+
+  test("rejects an id that is not a positive integer", async () => {
+    const { sql } = createFakeSqlClient([[]]);
+    await expect(getPrConflictCheckById(0, sql)).rejects.toThrow(
+      "pr conflict check id",
+    );
   });
 });
 
