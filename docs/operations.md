@@ -1652,6 +1652,8 @@ Sonnetを既定にするには、Windmillの画面で`f/factory/factory_config`�
 
 Claudeのバージョンとモデルごとの使用量は、viewの`v_agent_usage_daily`で見る。
 viewは、日、モデル、Claudeのバージョン(`claude_version`)、工程ごとに、実行の数、費用、入力と出力とキャッシュ読み出しのトークン数、ターン数を合計し、実行時間の平均を出す。
+`day`は、既存の`v_agent_cost_daily`と同じく、データベースのセッションの時間帯(UTC)で日を切る。
+JSTで見るときは、`created_at`で絞る。
 バージョンを上げた前後を比べるには、期間で絞って、バージョンごとの費用を並べる。
 
 ```sql
@@ -2831,7 +2833,8 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 | `wmill` | `WMILL_VERSION` |
 
 `CLAUDE_VERSION`には、`2.1.282`の形の版番号だけを書く。
-`stable`や`latest`などの名前は、ビルド時の検査で落ちる。インストールした`claude --version`の値と、記録する版を一致させるためである。
+記録する版を、インストールした`claude --version`の値と一致させるため、ビルド時の検査は版番号だけを通す。
+`stable`や`latest`などの名前は、検査で落ちる。
 
 `WM_VERSION`を上げるときは、新しいベースのイメージのPATHを`docker image inspect`で調べる。
 それを`infra/worker/Dockerfile`の`ENV PATH`と突き合わせる。
