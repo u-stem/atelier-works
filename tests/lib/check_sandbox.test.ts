@@ -47,6 +47,7 @@ import {
   gatherArgv,
   handOverArgv,
   hardLinkedArgv,
+  hasOnlyUnlistedPaths,
   type IpcEntry,
   ipcrmArgv,
   isCheckEnvironmentReason,
@@ -1448,6 +1449,59 @@ describe("checkEnvironmentError", () => {
         runtime: ["world-writable paths created at runtime: /tmp/open"],
       }),
     ).toBeInstanceOf(CheckRuntimeUnsafeError);
+  });
+});
+
+describe("hasOnlyUnlistedPaths", () => {
+  const LISTING_FAILED =
+    "world-writable paths could not be listed: listing timed out";
+
+  test("is true when the only problem is the failure to list the paths", () => {
+    expect(
+      hasOnlyUnlistedPaths(new CheckRuntimeUnsafeError([LISTING_FAILED])),
+    ).toBe(true);
+  });
+
+  test("is false when a path was found", () => {
+    expect(
+      hasOnlyUnlistedPaths(
+        new CheckRuntimeUnsafeError([
+          "world-writable paths created at runtime: /workspaces",
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  test("is false when a path was found next to the failure to list", () => {
+    expect(
+      hasOnlyUnlistedPaths(
+        new CheckRuntimeUnsafeError([
+          LISTING_FAILED,
+          "world-writable paths created at runtime: /workspaces",
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  test("is false for a stale image", () => {
+    expect(
+      hasOnlyUnlistedPaths(
+        new CheckImageStaleError(["/usr/bin/getfacl is missing"]),
+      ),
+    ).toBe(false);
+  });
+
+  test("is true for what checkImageProblems reports when the listing fails", async () => {
+    const problems = await checkImageProblems([], {
+      listWorldWritablePaths: async () => {
+        throw new Error("listing timed out");
+      },
+      isExecutable: async () => true,
+      readPasswd: async () => "",
+    });
+    expect(
+      hasOnlyUnlistedPaths(new CheckRuntimeUnsafeError(problems.runtime)),
+    ).toBe(true);
   });
 });
 

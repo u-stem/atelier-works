@@ -130,6 +130,46 @@ describe("prFixPushGateReason", () => {
     );
   });
 
+  test("gives the message of the busy error to the caller who replaces the reason", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new WorktreeBusyError([]);
+      },
+    });
+    const holders: string[] = [];
+    await prFixPushGateReason(deps, POINTER, "fix/x", (holder) => {
+      holders.push(holder);
+      return "fixed";
+    });
+    expect(holders).toEqual([
+      "worktree is still used by processes from an earlier run",
+    ]);
+  });
+
+  test("returns the reason that the caller gives for a busy worktree", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new WorktreeBusyError([]);
+      },
+    });
+    expect(
+      await prFixPushGateReason(deps, POINTER, "fix/x", () => "fixed"),
+    ).toBe("fixed");
+  });
+
+  test("keeps the reason of a stale image even when the caller replaces a busy worktree", async () => {
+    const { deps } = gateDeps({
+      ensureLockFree: async () => {
+        throw new CheckImageStaleError(["/usr/bin/getfacl is missing"]);
+      },
+    });
+    expect(
+      await prFixPushGateReason(deps, POINTER, "fix/x", () => "fixed"),
+    ).toBe(
+      "worker image is stale: run mise run up: /usr/bin/getfacl is missing",
+    );
+  });
+
   test("does not read .git while the lock is held", async () => {
     const { deps, calls } = gateDeps({
       ensureLockFree: async () => {

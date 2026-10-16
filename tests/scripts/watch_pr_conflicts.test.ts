@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { parseFactoryConfig } from "../../f/factory/lib/config.ts";
+import type { GhClient } from "../../f/factory/lib/github.ts";
+import {
+  buildConflictFixDeps,
+  buildConflictRecoveryDeps,
+} from "../../f/factory/watch_pr_conflicts.ts";
 
 // watch_pr_conflictsの配線を静的に確かめる。判断と流れは`tests/lib/pr_conflict_watch.test.ts`が確かめる。
 // 無効のときに何も読まず何も書かないことは、設定の確認が外部の読み取りより前にあることで確かめる。
@@ -100,8 +106,248 @@ describe("watch_pr_conflicts script", () => {
     expect(source).toContain("searchOwners: verifiedOwners");
   });
 
-  test("does not start any fix", async () => {
+  test("starts a fix through the shared pr_fix launch", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).not.toContain("launchPrFixFlow");
+    expect(source).toContain("launchPrFixFlow");
+  });
+
+  test("passes the recovery whatever the fix setting is", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toMatch(/\{ recovery, fix \}|\{ recovery \}/);
+  });
+
+  test("passes the fix only together with the recovery", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toMatch(
+      /fix === undefined \? \{ recovery \} : \{ recovery, fix \}/,
+    );
+  });
+
+  test("counts the rounds with the prefixes of the stale image notes", async () => {
+    const source = await read("f/factory/watch_pr_conflicts.ts");
+    expect(source).toContain("AUTO_RETRY_REASON_PREFIXES");
+  });
+});
+
+const RAW_CONFIG = {
+  owners: [{ name: "octo-owner", kind: "user" }],
+  trigger_label: "factory",
+  allowed_labeler_associations: ["OWNER", "MEMBER", "COLLABORATOR"],
+  model: "claude-opus-5-5",
+  max_attempts: 3,
+  max_turns: 40,
+  max_budget_usd_per_run: 5,
+  daily_budget_usd: 50,
+  worktree_ttl_days: 7,
+  factory_repo: "https://github.com/octo-owner/atelier-works",
+  instance_name: "local",
+  windmill_public_url: "http://127.0.0.1:8080",
+};
+
+const ENABLED = {
+  ...RAW_CONFIG,
+  pr_conflict_watch_enabled: true,
+  pr_conflict_fix_enabled: true,
+  pr_conflict_fix_enabled_since: "2026-10-16T03:00:00Z",
+  pr_conflict_fix_max_rounds: 3,
+  pr_conflict_fix_max_rounds_per_pr: 7,
+  pr_conflict_fix_notify_grace_min: 30,
+};
+
+const CLIENT: GhClient = {
+  run: async () => ({
+    exitCode: 0,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+  }),
+  ghToken: "token",
+};
+
+describe("buildConflictFixDeps", () => {
+  test("builds nothing while the fix is disabled", () => {
+    const config = parseFactoryConfig({
+      ...RAW_CONFIG,
+      pr_conflict_watch_enabled: true,
+    });
+    expect(buildConflictFixDeps(config, CLIENT)).toBeUndefined();
+  });
+
+  test("passes the rounds of an episode", () => {
+    const config = parseFactoryConfig(ENABLED);
+    expect(buildConflictFixDeps(config, CLIENT)?.maxRounds).toBe(3);
+  });
+
+  test("passes the rounds of a pull request", () => {
+    const config = parseFactoryConfig(ENABLED);
+    expect(buildConflictFixDeps(config, CLIENT)?.maxRoundsPerPr).toBe(7);
+  });
+
+  test("passes the time since which the fix is enabled", () => {
+    const config = parseFactoryConfig(ENABLED);
+    expect(buildConflictFixDeps(config, CLIENT)?.enabledSince).toEqual(
+      new Date("2026-10-16T03:00:00Z"),
+    );
+  });
+
+  test("passes the grace in minutes", () => {
+    const config = parseFactoryConfig(ENABLED);
+    expect(buildConflictFixDeps(config, CLIENT)?.graceMin).toBe(30);
+  });
+});
+
+describe("buildConflictFixDeps: the reads of the decision", () => {
+  const SHA = "c".repeat(40);
+
+  type Calls = { name: string; args: unknown[] }[];
+
+  function lookups(calls: Calls, options: { file?: string | null } = {}) {
+    return {
+      getBranchSha: async (...args: unknown[]) => {
+        calls.push({ name: "getBranchSha", args: args.slice(1) });
+        return SHA;
+      },
+      getMainCiStateBySha: async (...args: unknown[]) => {
+        calls.push({ name: "getMainCiStateBySha", args });
+        return "failed" as const;
+      },
+      getFileAtRef: async (...args: unknown[]) => {
+        calls.push({ name: "getFileAtRef", args: args.slice(1) });
+        return options.file === undefined ? null : options.file;
+      },
+    };
+  }
+
+  const config = parseFactoryConfig(ENABLED);
+
+  test("reads the main CI of the head of the default branch", async () => {
+    const calls: Calls = [];
+    const deps = buildConflictFixDeps(config, CLIENT, lookups(calls));
+    expect(await deps?.mainCiState("Acme", "Widgets", "main")).toBe("failed");
+  });
+
+  test("asks for the head of the default branch that it was given", async () => {
+    const calls: Calls = [];
+    await buildConflictFixDeps(config, CLIENT, lookups(calls))?.mainCiState(
+      "Acme",
+      "Widgets",
+      "main",
+    );
+    expect(calls[0]).toEqual({
+      name: "getBranchSha",
+      args: ["Acme", "Widgets", "main"],
+    });
+  });
+
+  test("looks up the main CI by the sha of that head", async () => {
+    const calls: Calls = [];
+    await buildConflictFixDeps(config, CLIENT, lookups(calls))?.mainCiState(
+      "Acme",
+      "Widgets",
+      "main",
+    );
+    expect(calls[1]).toEqual({
+      name: "getMainCiStateBySha",
+      args: ["Acme", "Widgets", SHA],
+    });
+  });
+
+  test("finds the marker in the skill of the factory branch", async () => {
+    const calls: Calls = [];
+    const deps = buildConflictFixDeps(
+      config,
+      CLIENT,
+      lookups(calls, { file: "text conflict-fix-skill:v1 text" }),
+    );
+    expect(await deps?.hasSkillMarker()).toBe(true);
+  });
+
+  test("does not find the marker in a skill without it", async () => {
+    const calls: Calls = [];
+    const deps = buildConflictFixDeps(
+      config,
+      CLIENT,
+      lookups(calls, { file: "ci-fix-skill:v1 only" }),
+    );
+    expect(await deps?.hasSkillMarker()).toBe(false);
+  });
+
+  test("does not find the marker when the skill file is missing", async () => {
+    const calls: Calls = [];
+    const deps = buildConflictFixDeps(config, CLIENT, lookups(calls));
+    expect(await deps?.hasSkillMarker()).toBe(false);
+  });
+
+  test("reads the skill file of the factory repository at the factory branch", async () => {
+    const calls: Calls = [];
+    await buildConflictFixDeps(
+      config,
+      CLIENT,
+      lookups(calls),
+    )?.hasSkillMarker();
+    expect(calls[0]).toEqual({
+      name: "getFileAtRef",
+      args: [
+        "octo-owner",
+        "atelier-works",
+        ".claude/skills/factory-fix/SKILL.md",
+        config.factory_branch,
+      ],
+    });
+  });
+});
+
+describe("buildConflictRecoveryDeps: the reads of the recovery", () => {
+  const stored = {
+    status: "blocked" as const,
+    flow_job_id: "job-1",
+    conflict_episode: 2,
+  };
+
+  test("reads the note of the latest entry into the status of the work item", async () => {
+    const asked: [number, string][] = [];
+    const deps = buildConflictRecoveryDeps({
+      getWorkItem: async () => stored,
+      latestStatusEvent: async (id, status) => {
+        asked.push([id, status]);
+        return { note: "conflict round: check failed" };
+      },
+      latestFixRound: async () => null,
+    });
+    const state = await deps.readFixItem(55, 2);
+    expect([state?.note, asked]).toEqual([
+      "conflict round: check failed",
+      [[55, "blocked"]],
+    ]);
+  });
+
+  test("reads that the latest round pushed a commit", async () => {
+    const deps = buildConflictRecoveryDeps({
+      getWorkItem: async () => stored,
+      latestStatusEvent: async () => null,
+      latestFixRound: async () => ({ commit_shas: ["d".repeat(40)] }),
+    });
+    expect((await deps.readFixItem(55, 2))?.pushed).toBe(true);
+  });
+
+  test("reads that the latest round pushed nothing", async () => {
+    const deps = buildConflictRecoveryDeps({
+      getWorkItem: async () => stored,
+      latestStatusEvent: async () => null,
+      latestFixRound: async () => ({ commit_shas: [] }),
+    });
+    expect((await deps.readFixItem(55, 2))?.pushed).toBe(false);
+  });
+
+  test("passes the id of the work item to the release", async () => {
+    const released: unknown[] = [];
+    const deps = buildConflictRecoveryDeps({
+      releasePrConflictFix: async (id, options) => {
+        released.push([id, options]);
+        return true;
+      },
+    });
+    await deps.release(7, { fixWorkItemId: 55 });
+    expect(released).toEqual([[7, { fixWorkItemId: 55 }]]);
   });
 });

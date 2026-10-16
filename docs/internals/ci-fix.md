@@ -10,9 +10,12 @@ PRのCIの失敗をClaudeに直させる回(CI回)が使う部品の責務、入
 - `lib/github.ts`のartifact取得と、`lib/metadata_patch_*.ts`
 - `lib/metadata_hash.ts`、`lib/metadata_precheck.ts`、`lib/metadata_signature.ts`、`lib/metadata_git_ports.ts`
 - `lib/ci_metadata_rehash.ts`
-- `lib/conflict_fix_round.ts`と、`lib/workspace.ts`のmergeとpushの関数
+- `lib/conflict_fix_round.ts`
+- `lib/conflict_fix_prompt.ts`、`lib/conflict_fix_apply.ts`、`lib/conflict_fix_verify.ts`
+- `lib/workspace.ts`のmergeとpushの関数
 
 PRのマージの競合を直す回(競合回)の部品も、同じ考え方で作るので、この文書の「競合回のgit操作と検査」に書く。
+競合回が`pr_fix`の各ステップでどう動くかは[PRワークフローの仕様](pr-workflow.md#マージの競合を解く回)に書く。
 残る危険は[セキュリティ](../security.md)に、失敗の判定と状態は[PRのCI監視の仕様](pr-ci.md)に書く。
 
 ## 方針
@@ -34,8 +37,11 @@ CIのログはリポジトリへ書ける人が決める外部入力である。
 | `lib/ci_fix_round.ts` | 上の部品をつなぐ流れ。PRの状態の確認と分類(`readCiFailure`)、ログから抜粋まで(`gatherCiLogs`)、変更の入力の組み立て、通常の回との違いの判断。`wmill-lock.yaml`だけの変更の形の判定(`isLockOnlyChange`) |
 | `lib/ci_metadata_rehash.ts` | `metadata`だけが落ちた回の再計算の流れ。書き込み、独立した照合(`confirmRehash`)、pushの直前の再確認、固定の理由 |
 | `lib/metadata_git_ports.ts` | 事前検査が読むポートのgitの実装。baseの先端のcommitの取り込み |
-| `lib/workspace.ts` | 文字列をgitleaksで検査する実行(`runGitleaksOnText`)。競合回のgit操作(`mergeBaseIntoWorktree`、`pushMergeCommit`、`listBothSidesChangedPaths`と、検査の入力を読む関数) |
-| `lib/conflict_fix_round.ts` | 競合回の判定と固定の理由。mergeした結果のツリーの検査(`evaluateMergedTree`)と、Claudeの解消の検査(`checkConflictResolution`) |
+| `lib/workspace.ts` | 文字列をgitleaksで検査する実行(`runGitleaksOnText`)と、2つのツリーの差分の検査(`runGitleaksOnTreeDiff`)。競合回のgit操作(`mergeBaseIntoWorktree`、`pushMergeCommit`、`listBothSidesChangedPaths`と、検査の入力を読む関数) |
+| `lib/conflict_fix_round.ts` | 競合回の判定と固定の理由。準備の確認(`evaluateConflictRoundPrepareGuard`)とmergeの結果の振り分け(`planConflictPrepare`)。mergeした結果のツリーの検査(`evaluateMergedTree`)と、Claudeの解消の検査(`checkConflictResolution`) |
+| `lib/conflict_fix_prompt.ts` | 競合回のプロンプトと出力のJSON schema |
+| `lib/conflict_fix_apply.ts` | 競合回の修正ステップの流れ。Claudeを起動する前の確認と、出力の検査 |
+| `lib/conflict_fix_verify.ts` | 解消後のツリーの検査の流れ(`inspectConflictResolution`)と、その入力をgitから読む実装(`gitConflictInspectDeps`)。検証と完了のステップが共有する |
 
 ## CI回のflowが守る前提
 
@@ -312,11 +318,11 @@ Claudeの回では、`deny`にして、保護パスの違反として拒否す�
 | 例外 | 条件 |
 | --- | --- |
 | `GitHubCiLogError` | 上の3つ以外のステータスと、応答が返らない通信断 |
-| `GitHubCiLogIncompleteError` | 2xxなのに、取り直しても`gh`の終了コードが0以外 |
+| `GitHubRawBodyIncompleteError` | 2xxなのに、取り直しても`gh`の終了コードが0以外 |
 | `GitHubRateLimitError` | rate limit。ほかの読み取りと同じ |
 
 `GitHubCiLogError`が持つのはHTTPのステータスだけである。
-`GitHubCiLogIncompleteError`は、固定の文だけを持つ。
+`GitHubRawBodyIncompleteError`は、取得の名前だけを含む固定の文を持つ。
 どちらも、本文、ヘッダー、`gh`のstderrは載せない。
 
 ログは端末の制御列を含むので、`getWorkflowJobLog`は`gh api`に`--allow-escape-sequences`を渡す。
@@ -335,7 +341,10 @@ PRの差分は、除去ではなく見える表記への置き換えで受ける
 
 本文は見ず、終了コードで判定する。
 一時的な切断をCIの回に持ち込まないため、GETが冪等であることを使い、1回だけ取り直す。
-取り直しても終了コードが0以外なら、`GitHubCiLogIncompleteError`を投げる。
+取り直しは、JSONでない本文を読む取得で共通の`callGhApiRawBody`が行う。
+PRの差分とファイルの内容の取得も、回数と例外が同じである。
+冪等でない要求(GET以外で、`idempotent`の指定が無いもの)は、取り直さずに同じ例外を投げる。
+取り直しても終了コードが0以外なら、`GitHubRawBodyIncompleteError`を投げる。
 例外は呼び出し側のstepを止める。
 Claudeは起動しない。
 フローの再試行(`pr_fix_apply`は2回、60秒間隔)で、取得をやり直す。
@@ -833,6 +842,114 @@ gitは呼ばない。入力は`readBlobText`、`reconstructConflictText`、`read
 読み取りの関数は、2MiBを超える内容を例外にする。
 途中で切れた内容を、検査の入力にしないためである。
 
+### 準備の結果の振り分け
+
+`planConflictPrepare`は、`mergeBaseIntoWorktree`の結果から、準備のステップの次の動きを決める。
+
+| mergeの結果 | 動き |
+| --- | --- |
+| `merged` | 結果のツリーを`evaluateMergedTree`で検査する。通れば、基準コミットなどを記録して進む。通らなければ、固定の注記で止める |
+| `up_to_date` | pushするものが無い |
+| `base_not_default` | `base is not the default branch`で止める |
+| `unresolvable` | 理由の種類によらず、`unresolvable conflict`で止める |
+| `head_changed` | worktreeのHEADがPRのheadと違う |
+
+競合ファイルが無い`merged`も、同じ検査を通る。
+きれいにmergeできた場合でも、保護パスを両側が変えていれば止める。
+
+`evaluateConflictRoundPrepareGuard`は、worktreeを用意する前に、競合の行と作業項目の対応を確かめる。
+行が競合のままで、この作業項目に結ばれていることを確かめる。
+作業項目と同じ競合の回であることと、PRのheadが行のheadと同じことも確かめる。
+どれかが違えば、`guard_blocked`にする。
+PRのbaseが既定のブランチでなければ、`conflict_blocked`にする。
+
+### 修正ステップの流れ
+
+`runConflictFixApply`は、競合ファイルをClaudeに解かせる。
+競合ファイルが無ければ、スキルも読まず、Claudeも起動せずに`done`を返す。
+そうでなければ、Claudeを起動する前に次を確かめ、満たさなければ起動せずに止める。
+
+1. factory-fixスキルが、競合回のマーカー(`conflict-fix-skill:v1`)を持つ。
+2. 競合ファイルのパスが、すべて安全なパスである。
+
+プロンプトは`buildConflictFixPrompt`が作る。
+競合ファイルのパスだけを、nonce付きの囲みに入れる。
+ファイルの内容は載せず、Claudeが`Read`で読む。
+ツールは`CI_FIX_TOOLS`で、`Bash`は無い。
+出力は`CONFLICT_FIX_SCHEMA`の形(`outcome`、`summary`、`blocked_reason`)で、返信とコミットメッセージは含まない。
+
+要約は1000字、止める理由は300字に切り、gitleaksで1回検査する。
+検出があったときと、検査できなかったときは、文字列を返さずに止める。
+Claudeの理由の先頭には、固定の接頭辞`conflict round: claude blocked:`と空白1つを付ける。
+コミットメッセージは、Claudeの出力によらず固定文(`MERGE_COMMIT_MESSAGE`)である。
+
+### 解消後のツリーの検査
+
+`inspectConflictResolution`は、検証と完了のステップが共有する。
+完了のステップは、検証から時間が経ち、worktreeが変わりうるので、pushの直前にもう一度行う。
+次の順に進み、理由が出た時点で止める。
+
+1. 競合ファイルだけをステージしたツリーを作る(`stageConflictPathsTree`)。競合ファイルが無いmergeは、このツリーが基準コミットのツリーと同じでなければならない。
+2. 結果のツリーがどちらの親とも違うパスを求め、保護パス、workflow、安全でないパスを調べる(`evaluateMergedTree`)。
+3. 基準コミットからの変更を集める。ツリーの差(`listTreeChanges`)に、作業ツリーにだけある変更(競合ファイル以外の編集と新規ファイル、無視されたファイル)を足す。作業ツリーの変更を読み切れなかったときは止める。
+4. 競合ファイルごとに、3つの版のblob、作り直した本文、解消後の本文を読み、`checkConflictResolution`で調べる。
+5. 両側が変えたパスについて、PRのheadから結果のツリーまでの差を、gitleaksで検査する。
+
+3つの版のblobは、準備のステップが記録する。
+基準コミットを作った後は、索引から取れないためである。
+解消後の本文は、検査したツリーから読む。作業ファイルのテキストは使わない。
+作り直しと検査は、1回の検査の中で作った同じnonceを使う。nonceは英数字32字で、別の値にすると衝突ブロックの境目が食い違う。
+
+検出や違反の理由に入るパスは外部由来なので、返す前にまとめて1回、gitleaksで検査する。
+検出と検査の失敗のときは、固定の文1件に置き換える。
+
+`gitConflictInspectDeps`は、この入力を`workspace.ts`の関数で読む実装である。
+呼び出し側は、worktreeの`.git`ファイルを記録と照合した後で呼ぶ。
+
+### 検証の流れ
+
+検証のステップ(`runConflictFixVerify`)は、次の順に進む。
+
+1. `.git`ファイルが記録と同じであること、HEADが基準コミットでPRのブランチにあることを確かめる。
+2. 禁止された変更(`inspectUncommittedChanges`)を調べる。基準コミットとの差を見る。
+3. 解消後のツリーを検査する(`inspectConflictResolution`)。
+4. 検査コマンドを1回だけ実行する。実行の前に、未検証コードを実行することをnoticeに記録する。
+5. 検査コマンドの後に、1から3をもう一度行う。検査コマンドはworktreeを書き換えられるためである。
+
+検査コマンドの前後の検査のツリーが違えば、検査コマンドがツリーを書き換えたとして、固定の注記(`the tree changed during the checks`)で止める。
+同じなら、そのツリーのshaを、結果の`verified_tree_sha`として完了のステップへ渡す。
+検査コマンドが通ったツリーとpushするツリーを結びつけるためである。
+検査コマンドを設定していないときは、1回目の検査のツリーを渡す。
+
+検査コマンドが失敗したときは、Claudeを再実行せず、固定の注記(`check failed`)で止める。
+署名の変更のような意味の競合は検査コマンドの失敗として現れ、競合ファイルだけを直せるClaudeには直せないためである。
+失敗したコマンド名だけをログに残し、出力は残さない。
+workerが検査の前提を満たさずに検査コマンドを実行できなかったときは、理由を例外の文のまま返す。
+接頭辞を付けると、イメージが古いことを示す理由の接頭辞が崩れ、自動の再開と回数の除外が働かなくなる。
+
+### pushの流れ
+
+完了のステップ(`runConflictPush`)は、次の順に確かめてから、`pushMergeCommit`でpushする。
+
+1. worktreeのロックを持つプロセスが残っておらず、`.git`ファイルとブランチの記録が正しいこと。
+2. 解消後のツリーの検査(上の節)に通り、そのツリーが検証の`verified_tree_sha`と同じであること。違えば、固定の注記(`the tree changed after the verification`)で止める。
+   このステップの`WorktreeBusyError`は、準備のステップと同じ固定の注記にし、保持者はログに残す。
+3. そのツリーが、秘密値の検査(`scanPrFixBeforeCommit`)に通ること。検査するのは、基準コミットと、競合ファイルだけをステージしたツリーの差である。`add -A`はしない。
+4. PRが開いていて、draftでなく、auto-mergeが無効で、headも作業を始めたときのままであること。
+5. リポジトリのオーナーの数値IDが設定のままであること。
+
+`pushMergeCommit`の結果は、次のように受ける。
+
+| 結果 | 作業項目 |
+| --- | --- |
+| `pushed` | ラウンドを記録して、`rereview_requested`にする |
+| `head_changed` | ラウンドを記録して、`blocked`にする |
+| `base_changed` | ラウンドを記録して、`reviewed`にし、注記`the base branch moved`を残す |
+| `rejected_workflows` | ラウンドを記録して、`needs_human`にし、注記`base changes workflows`を残す |
+
+`CommitBlockedError`が出たときと確認に失敗したときは、pushを止めて`needs_human`へ移す。
+workerが検査の前提を満たさないとき(イメージが古いなど)だけは、ラウンドを記録せず`blocked`にする。
+
 ## メタデータのパッチの受け取り
 
 CIの`metadata`ジョブが出すパッチ(artifact)を、取得し、検査し、書き込む内容の一覧にする部品である。
@@ -1283,10 +1400,10 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   間にある`##[error]`の行は落ちる。
 - 新規ファイルのパスの秘密値の検査は、秘密値と似た文字列を含む正当なファイル名を、誤検知として止める。
   止まった修正は、行が`fix_stopped`で保留される。人が直してPRにpushするまで、同じheadでは起動し直さない。
-- 再レビューでCI回の差分を重点的に見る固定文は、CI回のpushの後、レビューの前に人がpushすると外れる。
-  レビューするshaが変わり、CI回のpushしたcommitを含まなくなるためである。
+- 再レビューでCI回の差分を重点的に見る固定文(競合回用の固定文も同じ)は、回のpushの後、レビューの前に人がpushすると外れる。
+  レビューするshaが変わり、回のpushしたcommitを含まなくなるためである。
   この抜けは受け入れる。通常のレビューは変わらず行われるためである。
-- 再レビューでCI回の差分を重点的に見る固定文は、DBの問い合わせが失敗すると外れる。
+- 再レビューでCI回の差分を重点的に見る固定文(競合回用の固定文も同じ)は、DBの問い合わせが失敗すると外れる。
   列が無い、行の形が合わないといった続く失敗でも同じである。
   失敗すると、重点確認は黙って外れる。残るのは`log.warn`だけで、noticeと通知は出さない。
   外れても通常のレビューは変わらないためである。
@@ -1362,3 +1479,11 @@ workerで動くwasmのパーサーに、依存を増やさないためである�
   両側にある空行や同じ行は、どちらから選んだとして扱う。
 - 競合回は、片側の削除と両側の追加の競合を、直さずに人へ渡す。
   3つの版が揃わないと、ブロックを作り直せないためである。
+- 競合回は、競合ファイルの属性(`merge`、`filter`など)だけを調べる。
+  両側が変えたが競合しなかったパスの属性は、調べない。
+  gitの自動のmergeで、属性の指名したドライバが動きうる。
+  ドライバの定義を置けるのは、main cloneの`.git/config`だけである。
+  検査コマンドが書き込めない前提で抑えている。
+- 競合回の差分の大きさの上限(`max_fix_changed_files`と`max_fix_diff_lines`)は、基準コミットから解消後の作業ツリーまでの編集にかかる。
+  baseがPRに持ち込む差(PRのheadから基準コミットまで)には、かけない。
+  baseの側の変更は、すでにレビューとマージを経ているためである。

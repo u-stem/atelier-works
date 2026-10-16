@@ -6,7 +6,7 @@
 
 import {
   callGhApi,
-  ensureRawBodyComplete,
+  callGhApiRawBody,
   ensureSuccess,
   type GhClient,
   paginateGhApi,
@@ -167,7 +167,8 @@ export async function getRepoFileMeta(
 /**
  * `ref`の時点のファイルを、文字列として読む。1MB以下のファイルに使う。
  * 内容を書き換えてコミットするので、制御列を除いて受け取ることはしない。
- * 制御列を含んで`gh`が本文を出さなかったときは、空のファイルとして読まず例外にする。
+ * 制御列を含んで`gh`が本文を出さなかったときは、1回だけ取り直し、
+ * 取り直しても欠けたときは、空のファイルとして読まず例外にする。
  */
 export async function getRepoFileText(
   client: GhClient,
@@ -178,32 +179,14 @@ export async function getRepoFileText(
 ): Promise<string> {
   validateOwnerRepo(owner, repo);
   const context = `GET contents ${owner}/${repo}:${path}@${ref}`;
-  const response = await callGhApi(
+  const response = await callGhApiRawBody(
     client,
     `repos/${owner}/${repo}/contents/${encodeRepoPath(path)}?ref=${encodeURIComponent(ref)}`,
     { acceptHeader: "application/vnd.github.raw+json" },
+    context,
   );
   ensureSuccess(response, context);
-  ensureRawBodyComplete(response, context);
   return response.bodyText;
-}
-
-/** リポジトリの既定のブランチの名前を返す。 */
-export async function getDefaultBranch(
-  client: GhClient,
-  owner: string,
-  repo: string,
-): Promise<string> {
-  validateOwnerRepo(owner, repo);
-  const context = `GET repo ${owner}/${repo}`;
-  const response = await callGhApi(client, `repos/${owner}/${repo}`);
-  ensureSuccess(response, context);
-  const parsed = parseJsonBody(response, context);
-  if (!isRecord(parsed) || typeof parsed.default_branch !== "string") {
-    throw new Error(`${context}: unexpected response shape`);
-  }
-  assertBranchName(parsed.default_branch);
-  return parsed.default_branch;
 }
 
 /** ブランチの先頭のcommitのIDを返す。ブランチが無ければ`null`を返す。 */

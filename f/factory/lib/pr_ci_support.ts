@@ -503,6 +503,10 @@ export const PR_CI_FIX_HOLD_REASON_MAX_LENGTH = 64;
  * - `pr_draft_or_auto_merge`: PRがドラフトか、auto-mergeが有効である。
  * - `config_misfit`: 時間設定(`claude_timeout_sec`と検査コマンドの数)が、修正・検証ステップのtimeoutに収まらない。
  *   設定だけで決まるので、起動の前に確かめて保留する。ラウンドを使わない。設定を直せば、次の巡回でpushなしに外れる。
+ * - `worker_image_stale`: 検査を動かすworkerのイメージが古い。イメージを作り直せば直る。
+ *   準備のステップが同じ理由で止めるので、起動の前に確かめて保留する。ラウンドを使わない。直せば、次の巡回でpushなしに外れる。
+ * - `worker_runtime_unsafe`: 稼働中のworkerに誰でも書き込めるパスがあるか、確かめられない。パスを閉じるか、コンテナを作り直せば直る。
+ *   イメージを作り直す必要は無い。保留の扱いは`worker_image_stale`と同じである。
  */
 export const PR_CI_FIX_HOLD_REASONS = [
   "unfixable_job",
@@ -519,6 +523,8 @@ export const PR_CI_FIX_HOLD_REASONS = [
   "last_fix_unsettled",
   "pr_draft_or_auto_merge",
   "config_misfit",
+  "worker_image_stale",
+  "worker_runtime_unsafe",
 ] as const;
 
 export type PrCiFixHoldReason = (typeof PR_CI_FIX_HOLD_REASONS)[number];
@@ -655,6 +661,22 @@ const PR_CI_FIX_HOLD_INFO: Readonly<
       "時間設定が、修正・検証ステップのtimeoutに収まらない。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らす。直すと、次の巡回で自動で起動し直す",
     stopAction:
       "時間設定が、修正・検証ステップのtimeoutに収まりません。claude_timeout_secか検査コマンド(allowed_check_commands)の数を減らしてください。直すと、Factoryが次の巡回で自動で起動し直します",
+  },
+  worker_image_stale: {
+    temporary: true,
+    discord: true,
+    nextAction:
+      "検査を動かすworkerのイメージが古い。「mise run up」でイメージとworkerを作り直す。直ると、次の巡回で自動で起動し直す",
+    stopAction:
+      "検査を動かすworkerのイメージが古い状態です。「mise run up」でイメージとworkerを作り直してください。直ると、Factoryが次の巡回で自動で起動し直します",
+  },
+  worker_runtime_unsafe: {
+    temporary: true,
+    discord: true,
+    nextAction:
+      "稼働中のworkerに、誰でも書き込めるパスがあるか、確かめられない。Consoleの要対応に通知があれば確かめる。無ければ、監視のジョブのログにある、列挙できなかった理由を確かめる。パスがあればchmod o-wで閉じるか、workerのコンテナを作り直す。パスを列挙できなかっただけなら、次の巡回で自動で外れる。イメージの作り直しは要らない。直ると、次の巡回で自動で起動し直す",
+    stopAction:
+      "稼働中のworkerに、誰でも書き込めるパスがあるか、確かめられない状態です。Consoleの要対応に通知があれば確かめてください。無ければ、監視のジョブのログにある、列挙できなかった理由を確かめてください。パスがあればchmod o-wで閉じるか、workerのコンテナを作り直してください。パスを列挙できなかっただけなら、次の巡回で自動で外れます。イメージの作り直しは要りません。直ると、Factoryが次の巡回で自動で起動し直します",
   },
 };
 

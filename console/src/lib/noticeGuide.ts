@@ -378,6 +378,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "review_gated_prolonged",
+    guide(
+      "review_post_modeがgatedのまま、レビューがPRに投稿されない状態が続いています。PRには指摘が見えず、レビューの結果はConsoleの作業項目にだけ残ります。",
+      "投稿を続けるなら、factory_configのreview_post_modeをcomment_onlyに戻してください。戻すと、次の日次のまとめの実行でこの通知は自動で解決されます。意図してgatedを続けるなら、作業項目で結果を確かめてから、この通知を解決してください。",
+      {
+        note: "日数と投稿しなかったレビューの件数は、日次のまとめの「レビューの投稿」欄に出ます。gatedを続ける間は、解決しても翌日の日次のまとめで出直します。",
+      },
+    ),
+  ],
+  [
     "pr_ci_check_denied",
     guide(
       "対象リポジトリのPRとCIの実行を、GitHubから読めませんでした(403か404)。GITHUB_TOKENの権限が足りないか、リポジトリにアクセスできません。読めない間は、そのリポジトリのPRのCIの失敗に気づけません。",

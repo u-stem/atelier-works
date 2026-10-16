@@ -64,6 +64,20 @@ export type PrReviewPostResult = {
   readonly posted_review_id: string | null;
 };
 
+/**
+ * 古いflow定義が新しいscriptを呼ぶと、`binary_files`と`binary_unlisted_count`が
+ * undefinedかnullで届く。そのときは、バイナリが無いものとして旧来の総評にする。
+ */
+export function normalizeBinaryInput(
+  binaryFiles: readonly string[] | null | undefined,
+  binaryUnlistedCount: number | null | undefined,
+): { binaryFiles: string[]; binaryUnlistedCount: number } {
+  return {
+    binaryFiles: [...(binaryFiles ?? [])],
+    binaryUnlistedCount: binaryUnlistedCount ?? 0,
+  };
+}
+
 /** `main`の引数をまとめたもの。名前は`main`の引数と同じにする。 */
 export type PrReviewPostInput = {
   readonly work_item_id: number;
@@ -76,6 +90,8 @@ export type PrReviewPostInput = {
   readonly verdict: string | null;
   readonly findings: ReviewFinding[];
   readonly pr_files: string[];
+  readonly binary_files: string[] | null | undefined;
+  readonly binary_unlisted_count: number | null | undefined;
   readonly worktree_dir: string;
   readonly repo_dir: string;
 };
@@ -118,6 +134,8 @@ export async function main(
   verdict: string | null,
   findings: ReviewFinding[],
   pr_files: string[],
+  binary_files: string[],
+  binary_unlisted_count: number,
   worktree_dir: string,
   repo_dir: string,
 ): Promise<PrReviewPostResult> {
@@ -133,6 +151,8 @@ export async function main(
       verdict,
       findings,
       pr_files,
+      binary_files,
+      binary_unlisted_count,
       worktree_dir,
       repo_dir,
     },
@@ -164,8 +184,10 @@ export async function main(
  * 前回までの`[MUST]`の指摘が今回の解決処理の後も残っていれば
  * `"changes_requested"`、それ以外は`"reviewed"`にする。
  * これはDiscordの通知で、変更が要るのか承認だけでよいのかを一目で示すためのもの。
+ * 未解決のスレッドの一覧を読めず、今回の指摘にも`[MUST]`が無いときは、
+ * 結果を`"unverified"`にして`factory.reviews`の`result`を記録しない。
  *
- * 投稿するレビュー本文は4種類の定型(`renderReviewSummary` / `ReviewBodyMode`)の
+ * 投稿するレビュー本文は5種類の定型(`renderReviewSummary` / `ReviewBodyMode`)の
  * いずれかで、Claudeの自由記述の`summary`は使わない。
  * `summary`は出力スキーマと`factory.reviews`に記録として残すだけ。
  * 再レビュー(このPRに以前のFactoryのレビューがある)のときは、
@@ -331,6 +353,10 @@ export type PublishReviewInput = {
   readonly commentedFindings: readonly ReviewFinding[];
   /** 行に紐づけられず、総評に並べる指摘。 */
   readonly droppedFindings: readonly ReviewFinding[];
+  /** 差分に内容が出ないバイナリのファイル。モードによらず、総評に固定の文で並べる。 */
+  readonly binaryFiles: readonly string[];
+  /** `binaryFiles`に並べられなかった(パスを変更ファイルと照合できなかった)件数。 */
+  readonly binaryUnlistedCount: number;
   /** このPRに、この作業項目より前のFactoryのレビューの記録があるか。 */
   readonly priorReview: boolean;
   /** 偽なら("gated")投稿もスレッドの解決もしない。 */
@@ -347,8 +373,11 @@ export type PublishReviewResult = {
   readonly postedReviewId: number | null;
   /** 投稿済みのレビューを再利用したか。 */
   readonly reused: boolean;
-  /** 解決の後に残る、Factory自身の未解決の`[MUST]`のスレッドの数。 */
-  readonly openMustCount: number;
+  /**
+   * 解決の後に残る、Factory自身の未解決の`[MUST]`のスレッドの数。
+   * スレッドの一覧を読めなかったときは、0と区別して`null`にする。
+   */
+  readonly openMustCount: number | null;
   /** オーナーの照合に落ちて、投稿もスレッドの解決もしなかったときの理由。それ以外は`null`。 */
   readonly ownerStopReason: string | null;
 };
@@ -358,6 +387,7 @@ export type PublishReviewResult = {
  * この作業項目が同じshaに対して投稿済みのレビューがあれば、投稿もスレッドの解決もせずにそのidを返す。
  * そのときの`openMustCount`は、未解決の`[MUST]`のスレッドをすべて数えたもの。
  * 再利用するときにスレッドの一覧を取得できなければ、例外を投げる。
+ * 新しく投稿するときに取得できなければ、投稿は続け、`openMustCount`を`null`にして返す。
  * レビューの一覧の取得に失敗したら、投稿せずに例外を投げる。
  * DBとWindmillには触れない(呼び出し側の`postReview`が記録と通知を行う)。
  */
@@ -384,18 +414,22 @@ export async function publishReview(
   // `priorReview`か、投稿済みのレビューを再利用するときだけ取得する。
   // 再利用するレビューが初回のものでも、その指摘のスレッドは既にある。
   // 新しく投稿するときは、ここで失敗してもレビューの投稿は止めない。
-  // `threads`は空のままになり、`threadIdsToResolve`と`openMustCount`は0になって、
-  // `mode`は"findings" / "rereview_clean" / "first_clean"のいずれかに落ちる。
+  // `threads`は空のままになり、`threadIdsToResolve`も空になる。
+  // `openMustCount`は0ではなく`null`にして、残りの有無が分からないことを伝える。
+  // 0にすると、未解決の`[MUST]`が残るPRをLGTMの本文と`reviewed`の通知で示してしまう。
+  // 指摘を投稿するときの`mode`は"findings"のままで、投稿しないときは"rereview_unverified"になる。
   // 再利用するときは、失敗したら記録する前に例外を投げて再実行に回す。
   // 投稿済みのレビューの`[MUST]`を数えられないまま、通知を`reviewed`にしないため。
   // 再利用するので、この失敗で投稿が起きることは無い。
   let threads: ReviewThread[] = [];
+  let threadsReadable = true;
   if (reused) {
     threads = await listReviewThreads(client, owner, repo, pr_number);
   } else if (priorReview) {
     try {
       threads = await listReviewThreads(client, owner, repo, pr_number);
     } catch (err) {
+      threadsReadable = false;
       log.warn("failed to list review threads for resolving", {
         owner,
         repo,
@@ -419,11 +453,9 @@ export async function publishReview(
   const threadIdsToResolve = reused
     ? []
     : selectThreadsToResolve(threads, viewerLogin, resolveMode);
-  const openMustCount = countOpenMustThreads(
-    threads,
-    viewerLogin,
-    threadIdsToResolve,
-  );
+  const openMustCount = threadsReadable
+    ? countOpenMustThreads(threads, viewerLogin, threadIdsToResolve)
+    : null;
 
   if (!input.post) {
     return {
@@ -467,12 +499,16 @@ export async function publishReview(
     mode,
     droppedFindings,
     openMustCount,
+    input.binaryFiles,
+    input.binaryUnlistedCount,
   );
   // GitHubが行を解決できずに拒否したときは、行コメントの指摘もすべて総評に並べて投稿し直す。
   const fallbackBody = renderUnresolvedLineSummary(
     input.prAuthorLogin,
     input.commentedFindings,
     droppedFindings,
+    input.binaryFiles,
+    input.binaryUnlistedCount,
   );
   const postedReviewId = await postMarkedReview(
     client,
@@ -506,6 +542,30 @@ export async function publishReview(
   };
 }
 
+/** `reviewTransitionNotice`の入力。 */
+export type ReviewTransitionNoticeInput = {
+  readonly post: boolean;
+  readonly findings: readonly ReviewFinding[];
+  readonly openMustCount: number | null;
+};
+
+/**
+ * 作業項目を`reviewed`へ進めるときに残す補足を返す。補足が要らなければnullを返す。
+ * 投稿しないときは、投稿せずに記録したことを残す。
+ * 一覧を読めなかった旨は、結果が`unverified`のときだけ残す。
+ * 今回の指摘に`[MUST]`があれば結果は`changes_requested`で、結果を記録できているため。
+ */
+export function reviewTransitionNotice(
+  input: ReviewTransitionNoticeInput,
+): string | null {
+  if (!input.post) {
+    return "review_post_mode is gated: recorded without posting";
+  }
+  return reviewResultFor(input.findings, input.openMustCount) === "unverified"
+    ? "open review threads could not be read: recorded without a result"
+    : null;
+}
+
 /** `reviewedNotifyEvent`の入力。 */
 export type ReviewedNotifyInput = {
   /** レビューを実際にGitHubに投稿したか(再利用した投稿済みのレビューを含む)。 */
@@ -516,7 +576,7 @@ export type ReviewedNotifyInput = {
   readonly pr_number: number;
   readonly verdict: string;
   readonly findings: readonly ReviewFinding[];
-  readonly openMustCount: number;
+  readonly openMustCount: number | null;
 };
 
 /**
@@ -584,6 +644,10 @@ async function postReview(
     findings,
     pr_files,
   } = input;
+  const { binaryFiles, binaryUnlistedCount } = normalizeBinaryInput(
+    input.binary_files,
+    input.binary_unlisted_count,
+  );
 
   if (skip || verdict === null) {
     return SKIPPED_POST;
@@ -640,6 +704,8 @@ async function postReview(
       comments,
       commentedFindings: commentedFindingsOf(findings, droppedFindings),
       droppedFindings,
+      binaryFiles,
+      binaryUnlistedCount,
       priorReview,
       post,
       ensureRepoOwner: () =>
@@ -686,9 +752,7 @@ async function postReview(
       posted_review_id: postedReviewId,
     });
   }
-  const notice = post
-    ? null
-    : "review_post_mode is gated: recorded without posting";
+  const notice = reviewTransitionNotice({ post, findings, openMustCount });
 
   // Discordの通知とConsoleのレビュー行が同じ基準で状態を出すため、
   // 未解決の[MUST]を数えた結果を、レビューと一緒に記録する。
