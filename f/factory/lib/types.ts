@@ -1092,6 +1092,11 @@ export type FactoryConfig = {
    */
   pr_conflict_fix_notify_grace_min: number;
   /**
+   * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
+   * 0を超え1以下。既定は0.8。
+   */
+  worker_alert_memory_ratio: number;
+  /**
    * リポジトリごとの検査コマンド(`"<owner>/<repo>": string[]`)。
    * implementフローはこれだけを実行する(`config.ts`の
    * `implementCheckCommandsFor`)。エントリの無いリポジトリでは

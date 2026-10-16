@@ -32,6 +32,16 @@ describe("noticeGuide", () => {
     expect(noticeGuide("pr_conflict").note).toContain("自動で解決");
   });
 
+  test("tells where to see the load behind the worker load alert", () => {
+    expect(noticeGuide("worker_load_high").action).toContain("システム");
+  });
+
+  test("tells how to tune the worker load alert", () => {
+    expect(noticeGuide("worker_load_high").note).toContain(
+      "worker_alert_memory_ratio",
+    );
+  });
+
   test("tells how to read the failed run of the pull request CI", () => {
     expect(noticeGuide("pr_ci_failed").action).toContain("実行のログ");
   });

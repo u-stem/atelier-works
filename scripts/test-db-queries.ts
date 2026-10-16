@@ -6310,6 +6310,96 @@ check(
   (await transientListed()).includes(transientStuck),
 );
 
+// system_status: workerの負荷は、直近24時間の行だけを集計し、最新の行を別に返す。
+// 窓の外の行(窓の始まりより前)は、最大にも数にも入らない。
+const loadViewNow = new Date("2027-03-01T00:00:00.000Z");
+for (const sample of [
+  loadSample("2027-02-27T10:00:00.000Z", {
+    running_jobs: 2,
+    mem_anon_bytes: 900 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+  }),
+  loadSample("2027-02-28T09:58:00.000Z"),
+  loadSample("2027-02-28T10:00:00.000Z", {
+    running_jobs: 2,
+    lag_seconds: 45,
+    max_wait_seconds: 90,
+    waiting_jobs: 1,
+    mem_current_bytes: 400 * MIB,
+    mem_anon_bytes: 100 * MIB,
+    mem_working_set_bytes: 200 * MIB,
+    mem_peak_bytes: 500 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+  }),
+  loadSample("2027-02-28T10:02:00.000Z", {
+    running_jobs: 0,
+    lag_seconds: 1,
+    max_wait_seconds: 0,
+    waiting_jobs: 0,
+    mem_current_bytes: 300 * MIB,
+    mem_anon_bytes: 50 * MIB,
+    mem_working_set_bytes: 150 * MIB,
+    mem_peak_bytes: 600 * MIB,
+    mem_limit_bytes: 1000 * MIB,
+  }),
+]) {
+  await insertWorkerSample(sample, sql);
+}
+function loadViewDeps(now: Date) {
+  return {
+    sql,
+    readFile: async (): Promise<string> => {
+      throw new Error("ENOENT");
+    },
+    getVariable: async () => "",
+    now: () => now,
+  };
+}
+const loadView = (await runSystemStatus(50, loadViewDeps(loadViewNow)))
+  .worker_load;
+check(
+  "system_status worker_load: only the rows in the window are counted",
+  loadView?.sample_count === 3 && loadView.busy_samples === 1,
+  loadView,
+);
+check(
+  "system_status worker_load: rows with unreadable running jobs are not in the busy denominator",
+  loadView?.running_readable_samples === 2,
+  loadView,
+);
+check(
+  "system_status worker_load: the latest row is the newest one in the window",
+  loadView?.latest.sampled_at === "2027-02-28T10:02:00.000Z" &&
+    loadView.latest.mem_peak_bytes === 600 * MIB &&
+    loadView.latest.mem_current_bytes === 300 * MIB,
+  loadView?.latest,
+);
+check(
+  "system_status worker_load: the maximum is taken over the window",
+  loadView?.max.running_jobs === 2 &&
+    loadView.max.mem_anon_bytes === 100 * MIB &&
+    loadView.max.mem_peak_bytes === 600 * MIB &&
+    loadView.max.max_wait_seconds === 90 &&
+    loadView.lag_over_samples === 1,
+  loadView?.max,
+);
+check(
+  "system_status worker_load: the memory share uses the limit of the same row",
+  loadView?.max.mem_anon_ratio !== null &&
+    loadView?.max.mem_anon_ratio !== undefined &&
+    Math.abs(loadView.max.mem_anon_ratio - 0.1) < 1e-9,
+  loadView?.max.mem_anon_ratio,
+);
+check(
+  "system_status worker_load: a window without rows returns null",
+  (
+    await runSystemStatus(
+      50,
+      loadViewDeps(new Date("2028-01-01T00:00:00.000Z")),
+    )
+  ).worker_load === null,
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);

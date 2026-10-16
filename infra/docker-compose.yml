@@ -56,6 +56,9 @@ services:
     environment:
       - DATABASE_URL=postgres://postgres:${DB_PASSWORD:?run via mise}@db/windmill?sslmode=disable
       - MODE=server
+      # ログインのセッションの有効期間(秒)。値はmiseの`WM_SESSION_VALIDITY_SECONDS`で決める。
+      # workerには渡さず、windmill_serverだけに指定する。
+      - MAX_SESSION_VALIDITY_SECONDS=${WM_SESSION_VALIDITY_SECONDS:?run via mise}
     depends_on:
       db:
         condition: service_healthy

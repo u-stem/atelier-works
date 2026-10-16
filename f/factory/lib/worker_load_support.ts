@@ -529,6 +529,141 @@ export function nextFailureCount(previous: number, complete: boolean): number {
 }
 
 // ---------------------------------------------------------------------------
+// 閾値の通知
+// ---------------------------------------------------------------------------
+
+/** 負荷の閾値を超えたことを知らせるnoticeの種類。原因ごとに本文を変える。 */
+export const WORKER_LOAD_HIGH_KIND = "worker_load_high";
+
+/**
+ * 判定に読む記録の件数。最新の1件と、OOMの増分を求めるために比べる相手を読めるだけ取る。
+ * 比べる相手は、値の読めた直近の行である。
+ * 読む行は時刻ではなく件数で区切るので、記録が途切れると30件は1時間より長い期間にまたがる。
+ * 途切れが無ければ1時間である。
+ * 30件の中に値が読めた行が無ければ、比べる相手が無いので増分を判定しない。
+ * 件数を増やすほど読めない期間をまたいで比べられるが、読む行が増えるので、30件で区切る。
+ */
+export const WORKER_ALERT_SAMPLE_LIMIT = 30;
+
+/** 通知の閾値。設定(`factory_config`)の`worker_alert_memory_ratio`から作る。 */
+export type WorkerAlertThresholds = {
+  /** `mem_anon_bytes / mem_limit_bytes`がこの値以上なら、メモリの通知を出す。 */
+  readonly memoryRatio: number;
+};
+
+/** 判定に使う記録の列。`WorkerSample`の一部で、読めなかった値は`null`。 */
+export type WorkerAlertSample = {
+  readonly sampled_at: Date;
+  readonly mem_anon_bytes: number | null;
+  readonly mem_limit_bytes: number | null;
+  readonly mem_oom_kill: number | null;
+};
+
+/**
+ * 通知の原因。
+ * - `memory`: anonのメモリが上限の閾値以上
+ * - `oom_kill`: OOMで止められたプロセスが増えた
+ *
+ * 上限に達した回数(`mem_events_max`)の増分は、条件に使わない。
+ * この回数は、確保が上限を超えそうになって回収に入るたびに、回収が成功しても増える。
+ * ページキャッシュが上限まで溜まった後は、平常時の入出力でも増え続けるので、行動不要の通知になる。
+ */
+export type WorkerAlertCause = "memory" | "oom_kill";
+
+function memoryExceeded(
+  newest: WorkerAlertSample,
+  thresholds: WorkerAlertThresholds,
+): boolean {
+  const { mem_anon_bytes: anon, mem_limit_bytes: limit } = newest;
+  return (
+    anon !== null &&
+    limit !== null &&
+    limit > 0 &&
+    anon / limit >= thresholds.memoryRatio
+  );
+}
+
+/**
+ * 累積の回数が、最新の行で増えたかを返す。
+ * 比べる相手は、最新より前で、値の読めた最も新しい行である。
+ * 最新の値が読めないとき、比べる相手が無いときは、増えたと言えないので偽を返す。
+ * 累積が戻った(コンテナの再起動)ときは、新しいコンテナで現在値の回数が起きたので、現在値が1以上なら増えたとする。
+ */
+function counterIncreased(
+  samples: readonly WorkerAlertSample[],
+  read: (sample: WorkerAlertSample) => number | null,
+): boolean {
+  const [newest, ...earlier] = samples;
+  const current = newest === undefined ? null : read(newest);
+  if (current === null) {
+    return false;
+  }
+  for (const sample of earlier) {
+    const previous = read(sample);
+    if (previous !== null) {
+      return current < previous ? current > 0 : current > previous;
+    }
+  }
+  return false;
+}
+
+/**
+ * 新しい順の記録から、通知を出す原因を返す。副作用は無い。
+ * メモリの割合は最新の1件で判定し、OOMは最新の行での増分で判定する。
+ * 割合は回収できないメモリを表すanonで判定する。ページキャッシュを含む値で判定すると、
+ * 上限に近くても逼迫と限らず、行動不要の通知が出るためである。
+ * 解決は人が行うので、閾値を下回っても通知を取り消さない。
+ */
+export function evaluateWorkerAlerts(
+  samples: readonly WorkerAlertSample[],
+  thresholds: WorkerAlertThresholds,
+): WorkerAlertCause[] {
+  const newest = samples[0];
+  if (newest === undefined) {
+    return [];
+  }
+  const causes: WorkerAlertCause[] = [];
+  if (memoryExceeded(newest, thresholds)) {
+    causes.push("memory");
+  }
+  if (counterIncreased(samples, (sample) => sample.mem_oom_kill)) {
+    causes.push("oom_kill");
+  }
+  return causes;
+}
+
+function causeText(
+  cause: WorkerAlertCause,
+  thresholds: WorkerAlertThresholds,
+): string {
+  switch (cause) {
+    case "memory":
+      return `defaultのworkerのメモリ(anon)が、上限の${percentOrDecimal(thresholds.memoryRatio)}以上になりました`;
+    case "oom_kill":
+      return "defaultのworkerで、メモリ不足(OOM)により止められたプロセスが増えました";
+  }
+}
+
+const ACTION_TEXT =
+  "実行中のジョブのscriptの内訳を見て、メモリを使うジョブが並列で動いていないかを確かめる。続くなら、並列数を下げるかメモリの上限を上げるかを判断する";
+
+/**
+ * 通知の本文を作る。値は閾値だけを載せ、そのときの測定値は載せない。
+ * 本文が同じ未解決のnoticeは重ねて記録されないので、続く間は1件に保たれる。
+ * 測定値は`consoleUrl`の画面で見る。
+ */
+export function workerAlertNotice(
+  cause: WorkerAlertCause,
+  thresholds: WorkerAlertThresholds,
+  consoleUrl: string,
+): NoticeRecord {
+  return {
+    kind: WORKER_LOAD_HIGH_KIND,
+    message: `${causeText(cause, thresholds)}。対象: ${consoleUrl}(workerの負荷)。次の操作: ${ACTION_TEXT}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 日次のまとめ
 // ---------------------------------------------------------------------------
 
@@ -610,8 +745,8 @@ function percent(ratio: number): string {
   return `${String(Math.round(ratio * 100))}%`;
 }
 
-/** 欠けた記録があるのに、整数のパーセントでは0%に丸まるときだけ、小数1桁で出す。 */
-function missingPercent(ratio: number): string {
+/** 割合を百分率で返す。正の割合が整数のパーセントで0%に丸まるときだけ、小数1桁で出す。 */
+function percentOrDecimal(ratio: number): string {
   return ratio > 0 && Math.round(ratio * 100) === 0
     ? `${(ratio * 100).toFixed(1)}%`
     : percent(ratio);
@@ -636,7 +771,7 @@ function missingLine(summary: WorkerLoadSummary): string {
     0,
     1 - summary.sample_count / summary.expected_count,
   );
-  return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${missingPercent(missing)})`;
+  return `記録${String(summary.sample_count)}/${String(summary.expected_count)}件(欠け${percentOrDecimal(missing)})`;
 }
 
 function lagLine(summary: WorkerLoadSummary): string {

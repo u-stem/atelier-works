@@ -115,6 +115,10 @@ describe("noticeKindLabel", () => {
     expect(noticeKindLabel("pr_conflict")).toBe("PRのマージの競合");
   });
 
+  test("names the worker load alert", () => {
+    expect(noticeKindLabel("worker_load_high")).toBe("workerの負荷の超過");
+  });
+
   test("names the denied pull request CI check", () => {
     expect(noticeKindLabel("pr_ci_check_denied")).toBe(
       "PRのCIを読む権限の不足",

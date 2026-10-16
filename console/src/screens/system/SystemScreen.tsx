@@ -16,6 +16,7 @@ import { InfoNoticeList, ResolvedNoticeList } from "./NoticeLists.tsx";
 import { ReleaseStatus } from "./ReleaseStatus.tsx";
 import { SystemSection } from "./SystemSection.tsx";
 import { UpdateHistory } from "./UpdateHistory.tsx";
+import { WorkerLoadCard } from "./WorkerLoadCard.tsx";
 
 function Note({ text }: { text: string | null }) {
   return text === null ? null : (
@@ -39,6 +40,20 @@ function ReleaseSection({ status }: { status: StatusQuery }) {
       loginHint="上のバナーからログインすると、反映の状態を表示します。"
     >
       {(data, now) => <ReleaseStatus status={data} now={now} />}
+    </SystemSection>
+  );
+}
+
+function WorkerLoadSection({ status }: { status: StatusQuery }) {
+  return (
+    <SystemSection
+      id="worker-load-heading"
+      title="workerの負荷"
+      description="defaultのworkerの枠の使用、queueの待ち、メモリの直近24時間です。2分ごとの記録の最大と、最新の値を出します。"
+      query={status}
+      loginHint="上のバナーからログインすると、workerの負荷を表示します。"
+    >
+      {(data) => <WorkerLoadCard load={data.worker_load} />}
     </SystemSection>
   );
 }
@@ -171,6 +186,7 @@ export function SystemScreen() {
       <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-4 py-6 md:px-8">
         <ReleaseSection status={status} />
         <UpdateHistorySection deployments={deployments} />
+        <WorkerLoadSection status={status} />
         <InfoNoticeSection status={status} />
         <ResolvedNoticeSection status={status} />
         <AuditFailureSection summary={summary} />
