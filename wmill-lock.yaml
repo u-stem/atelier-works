@@ -142,7 +142,7 @@ locks:
   f/factory/steps/pr_fix_prepare: 51c92263aae71b03e0b52bd0e6a77416ebda14a5f27935f6ed4ec26ade7d2dc5
   f/factory/steps/pr_fix_verify: 7c2f61ebeba627d86212e1db7c34ff097038a9e80c9ba5b137284db8adaba48b
   f/factory/steps/pr_review_generate: c5d85f54d21ebe8557aaebbac89d9b10575aa79ce19d81dc35c662a761d6d910
-  f/factory/steps/pr_review_post: fad6dae1d7ec0c9bf877c6ff32ab851a35b48363c1d86cebab48020ca1953f85
+  f/factory/steps/pr_review_post: a95d7f4d182530a2c8c5bf173f43595cebb7cfb3ddd0c8757e123d74c210dfb8
   f/factory/steps/pr_review_prepare: 08e09697d6989fcfcb82502f39ca37847d1891f94153ad23a08db3ae07e30b8f
   f/factory/steps/pr_workflow_support: 39d308f45127d05e0755316be2926ac4821c5c230d5b3663aca4f50b6ae906f1
   f/factory/steps/requirements_apply: bd9519644b7ca5bbc1a2624beb33a5bb83429f727a53cf7aaf47ba5cf929c3e1

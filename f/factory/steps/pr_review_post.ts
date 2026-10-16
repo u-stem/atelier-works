@@ -512,6 +512,19 @@ export async function publishReview(
   };
 }
 
+/** 状態遷移の補足を決める入力。 */
+export type ReviewTransitionNoticeInput = {
+  readonly post: boolean;
+  readonly findings: readonly ReviewFinding[];
+  readonly openMustCount: number | null;
+};
+
+export function reviewTransitionNotice(
+  _input: ReviewTransitionNoticeInput,
+): string | null {
+  return "stub";
+}
+
 /** `reviewedNotifyEvent`の入力。 */
 export type ReviewedNotifyInput = {
   /** レビューを実際にGitHubに投稿したか(再利用した投稿済みのレビューを含む)。 */

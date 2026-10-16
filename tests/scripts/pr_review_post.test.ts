@@ -23,6 +23,7 @@ import {
   postMarkedReview,
   publishReview,
   reviewedNotifyEvent,
+  reviewTransitionNotice,
   runPrReviewPost,
   sendReviewedNotification,
   shouldPostReview,
@@ -1474,7 +1475,7 @@ describe("posting a review once per sha", () => {
       expect(result.postedReviewId).toBe(99);
     });
 
-    test("does not post an LGTM body when listing the threads fails before a new post", async () => {
+    test("posts a body saying the open threads are unconfirmed when listing the threads fails before a new post", async () => {
       const fake = createFakeCommandRunner([
         ghApiOk([humanReview(1)]),
         serverError(),
@@ -1487,8 +1488,8 @@ describe("posting a review once per sha", () => {
         SILENT,
       );
       const call = fake.calls.find(isCreateReviewCall);
-      expect(JSON.parse(call?.options?.stdin ?? "{}")).not.toMatchObject({
-        body: expect.stringContaining("LGTM"),
+      expect(JSON.parse(call?.options?.stdin ?? "{}")).toMatchObject({
+        body: expect.stringContaining("確認できていません"),
       });
     });
 
@@ -1683,6 +1684,48 @@ describe("posting a review once per sha", () => {
       });
       expect(event).toBeNull();
     });
+  });
+});
+
+describe("reviewTransitionNotice", () => {
+  test("says the threads could not be read when the result is unverified", () => {
+    expect(
+      reviewTransitionNotice({
+        post: true,
+        findings: [finding({ kind: "nits" })],
+        openMustCount: null,
+      }),
+    ).toBe("open review threads could not be read: recorded without a result");
+  });
+
+  test("adds no note when a must finding makes the result changes_requested despite unreadable threads", () => {
+    expect(
+      reviewTransitionNotice({
+        post: true,
+        findings: [finding({ kind: "must" })],
+        openMustCount: null,
+      }),
+    ).toBeNull();
+  });
+
+  test("adds no note when the open threads were read", () => {
+    expect(
+      reviewTransitionNotice({
+        post: true,
+        findings: [],
+        openMustCount: 0,
+      }),
+    ).toBeNull();
+  });
+
+  test("says posting is gated when the review was not posted", () => {
+    expect(
+      reviewTransitionNotice({
+        post: false,
+        findings: [],
+        openMustCount: 0,
+      }),
+    ).toBe("review_post_mode is gated: recorded without posting");
   });
 });
 
