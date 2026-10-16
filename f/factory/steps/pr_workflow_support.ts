@@ -3428,6 +3428,7 @@ export function selectProposeIssueReplies(
  * pushしたのに返信・記録・状態の遷移が無いまま残り、再実行で同じ修正をやり直しうる。
  * スレッドは`propose_issue`の行に付けるidを求めるためのベストエフォートの情報なので、
  * 取れなければidを付けずに続ける。
+ * 形の合わないスレッドが1つあるだけでも一覧全体が例外になり、空になる。
  */
 export async function listReviewThreadsBestEffort(
   load: () => Promise<ReviewThread[]>,

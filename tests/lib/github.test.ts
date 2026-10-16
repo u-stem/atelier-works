@@ -64,6 +64,7 @@ import {
   PR_DIFF_MAX_CHARS,
   parseGitHubRepoUrl,
   postIssueComment,
+  REVIEW_THREADS_MAX_PAGES,
   removeLabel,
   replyReviewComment,
   requestReviewers,
@@ -5064,16 +5065,39 @@ function reviewThreadNode(overrides: {
   };
 }
 
-function reviewThreadsGraphqlPayload(nodes: unknown[]): unknown {
+function reviewThreadsGraphqlPayload(
+  nodes: unknown[],
+  pageInfo: unknown = { hasNextPage: false, endCursor: null },
+): unknown {
   return {
     data: {
       repository: {
         pullRequest: {
-          reviewThreads: { nodes },
+          reviewThreads: { nodes, pageInfo },
         },
       },
     },
   };
+}
+
+function plainReviewThreadNode(id: string): unknown {
+  return reviewThreadNode({
+    id,
+    isResolved: false,
+    firstComment: { author: { login: VIEWER }, body: "hi" },
+  });
+}
+
+function requestBodyOf(
+  call:
+    | { readonly options?: { readonly stdin?: string } | undefined }
+    | undefined,
+) {
+  const parsed: unknown = JSON.parse(call?.options?.stdin ?? "");
+  if (!isRecord(parsed)) {
+    throw new Error("expected a JSON request body");
+  }
+  return parsed;
 }
 
 describe("listReviewThreads", () => {
@@ -5245,7 +5269,7 @@ describe("listReviewThreads", () => {
     });
   });
 
-  test("skips a thread with no comments rather than throwing", async () => {
+  test("throws instead of dropping a thread with no comments", async () => {
     const fake = createFakeCommandRunner([
       ghApiOk(
         reviewThreadsGraphqlPayload([
@@ -5261,13 +5285,201 @@ describe("listReviewThreads", () => {
         ]),
       ),
     ]);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/malformed review thread/);
+  });
+
+  test("throws instead of dropping a node with an unexpected shape", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(reviewThreadsGraphqlPayload([{ id: 1 }])),
+    ]);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/malformed review thread/);
+  });
+
+  test("throws when the response has no pageInfo", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk({
+        data: {
+          repository: {
+            pullRequest: { reviewThreads: { nodes: [] } },
+          },
+        },
+      }),
+    ]);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("throws when hasNextPage is not a boolean", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode("PRRT_1")], {
+          hasNextPage: "yes",
+          endCursor: null,
+        }),
+      ),
+    ]);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/unexpected response shape/);
+  });
+
+  test("requests pageInfo with hasNextPage and endCursor", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(reviewThreadsGraphqlPayload([])),
+    ]);
+    await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    const query = requestBodyOf(fake.calls[0]).query;
+    expect(query).toMatch(/pageInfo\s*\{\s*hasNextPage\s+endCursor\s*\}/);
+  });
+
+  test("returns the threads of every page in order", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode("PRRT_1")], {
+          hasNextPage: true,
+          endCursor: "CUR_1",
+        }),
+      ),
+      ghApiOk(reviewThreadsGraphqlPayload([plainReviewThreadNode("PRRT_2")])),
+    ]);
     const threads = await listReviewThreads(
       { run: fake.run, ghToken: "tok" },
       "acme",
       "widgets",
       12,
     );
-    expect(threads).toEqual([]);
+    expect(threads.map((thread) => thread.id)).toEqual(["PRRT_1", "PRRT_2"]);
+  });
+
+  test("passes the previous endCursor as the cursor of the next page", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode("PRRT_1")], {
+          hasNextPage: true,
+          endCursor: "CUR_1",
+        }),
+      ),
+      ghApiOk(reviewThreadsGraphqlPayload([])),
+    ]);
+    await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(requestBodyOf(fake.calls[1]).variables).toEqual({
+      owner: "acme",
+      repo: "widgets",
+      number: 12,
+      cursor: "CUR_1",
+    });
+  });
+
+  test("reads exactly the maximum number of pages when the last one ends the list", async () => {
+    const pages = Array.from({ length: REVIEW_THREADS_MAX_PAGES }, (_, i) =>
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode(`PRRT_${i}`)], {
+          hasNextPage: i < REVIEW_THREADS_MAX_PAGES - 1,
+          endCursor: `CUR_${i}`,
+        }),
+      ),
+    );
+    const fake = createFakeCommandRunner(pages);
+    const threads = await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    );
+    expect(threads.length).toBe(REVIEW_THREADS_MAX_PAGES);
+  });
+
+  test("throws instead of returning a partial list when pages remain after the maximum", async () => {
+    const pages = Array.from({ length: REVIEW_THREADS_MAX_PAGES + 1 }, (_, i) =>
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode(`PRRT_${i}`)], {
+          hasNextPage: true,
+          endCursor: `CUR_${i}`,
+        }),
+      ),
+    );
+    const fake = createFakeCommandRunner(pages);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/more than \d+ pages/);
+  });
+
+  test("does not request a page beyond the maximum", async () => {
+    const pages = Array.from({ length: REVIEW_THREADS_MAX_PAGES + 1 }, (_, i) =>
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode(`PRRT_${i}`)], {
+          hasNextPage: true,
+          endCursor: `CUR_${i}`,
+        }),
+      ),
+    );
+    const fake = createFakeCommandRunner(pages);
+    await listReviewThreads(
+      { run: fake.run, ghToken: "tok" },
+      "acme",
+      "widgets",
+      12,
+    ).catch(() => undefined);
+    expect(fake.calls.length).toBe(REVIEW_THREADS_MAX_PAGES);
+  });
+
+  test("throws when hasNextPage is true but endCursor is null", async () => {
+    const fake = createFakeCommandRunner([
+      ghApiOk(
+        reviewThreadsGraphqlPayload([plainReviewThreadNode("PRRT_1")], {
+          hasNextPage: true,
+          endCursor: null,
+        }),
+      ),
+    ]);
+    await expect(
+      listReviewThreads(
+        { run: fake.run, ghToken: "tok" },
+        "acme",
+        "widgets",
+        12,
+      ),
+    ).rejects.toThrow(/endCursor/);
   });
 
   test("returns an empty firstCommentAuthorLogin when the first comment's author is null", async () => {

@@ -1407,6 +1407,7 @@ describe("posting a review once per sha", () => {
                   allComments: { nodes: [{ databaseId: 501 }] },
                 },
               ],
+              pageInfo: { hasNextPage: false, endCursor: null },
             },
           },
         },

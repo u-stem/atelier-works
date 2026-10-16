@@ -344,3 +344,37 @@ describe("binary files wiring in the generate step", () => {
     ).toBe(1);
   });
 });
+
+// 生成ステップは、スレッドの一覧を読めなくても空で続け、レビューの生成を止めない。
+// 未解決の`[MUST]`の見落としは、投稿ステップが一覧を読み直して防ぐ。
+describe("review threads wiring in the generate step", () => {
+  const SOURCE = Bun.file(
+    new URL("../../f/factory/steps/pr_review_generate.ts", import.meta.url),
+  ).text();
+
+  function count(text: string, needle: string): number {
+    return text.split(needle).length - 1;
+  }
+
+  test("wraps the thread listing in the best-effort helper", async () => {
+    expect(
+      count(
+        await SOURCE,
+        "listReviewThreadsBestEffort(\n      () => listReviewThreads(client, owner, repo, pr_number),",
+      ),
+    ).toBe(1);
+  });
+
+  test("calls the thread listing nowhere else", async () => {
+    expect(count(await SOURCE, "listReviewThreads(")).toBe(1);
+  });
+
+  test("leaves a warning when the thread listing fails", async () => {
+    expect(
+      count(
+        await SOURCE,
+        '"failed to list review threads, continuing without"',
+      ),
+    ).toBe(1);
+  });
+});
