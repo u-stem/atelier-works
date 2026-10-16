@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { INFO_NOTICE_KINDS } from "../../f/factory/lib/console_support.ts";
 import {
   acquireImplementLease,
@@ -76,6 +77,7 @@ import {
   listActiveIssueWorkItems,
   listActivePrFixWorkItems,
   listAutoRetryCandidates,
+  listClaimablePrCiChecks,
   listExpiredPendingApprovalRequests,
   listFailedPrCiChecks,
   listFixingPrCiChecks,
@@ -97,6 +99,8 @@ import {
   newestNewerIssueCycle,
   newestNewerPrWorkItem,
   nextCycleForIssue,
+  PR_CI_CHECK_COLUMNS,
+  type PrCiCheckSqlRow,
   recordAgentRun,
   recordDeployment,
   recordFailure,
@@ -7250,6 +7254,246 @@ describe("isLatestMainCiRunFailed", () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await isLatestMainCiRunFailed("acme", "..", sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
+  });
+});
+
+/** 行を読む文のSELECT句の列(`FROM`の前)を、書いた順に返す。 */
+function selectedColumns(text: string): string[] {
+  const match = /SELECT\s+([\s\S]*?)\s+FROM factory\.pr_ci_checks/.exec(text);
+  return (match?.[1] ?? "").split(",").map((column) => column.trim());
+}
+
+/** `INSERT INTO factory.pr_ci_checks (...)`の列を、書いた順に返す。 */
+function insertedColumns(text: string): string[] {
+  const match = /INSERT INTO factory\.pr_ci_checks\s*\(([^)]*)\)/.exec(text);
+  return (match?.[1] ?? "")
+    .split(",")
+    .map((column) => column.trim())
+    .filter((column) => column !== "");
+}
+
+/** 括弧と引用符の外にあるカンマで分ける。式の中のカンマでは分けない。 */
+function splitTopLevel(text: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let depth = 0;
+  let quoted = false;
+  for (const char of text) {
+    if (char === "'") quoted = !quoted;
+    if (!quoted && char === "(") depth += 1;
+    if (!quoted && char === ")") depth -= 1;
+    if (!quoted && depth === 0 && char === ",") {
+      parts.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  parts.push(current);
+  return parts;
+}
+
+/**
+ * `UPDATE factory.pr_ci_checks [AS 別名] SET`の代入先の列を、書いた順に返す。
+ * 式の中身は読まない。代入先の名前だけを見る。
+ */
+function assignedColumns(text: string): string[] {
+  const match =
+    /UPDATE factory\.pr_ci_checks(?:\s+AS\s+\w+)?\s+SET([\s\S]*?)\n\s*WHERE/.exec(
+      text,
+    );
+  return splitTopLevel(match?.[1] ?? "")
+    .map((assignment) => /^\s*(\w+)\s*=/.exec(assignment)?.[1])
+    .filter((column): column is string => column !== undefined);
+}
+
+type PrCiStatement = readonly [
+  name: string,
+  run: (sql: SqlClient) => Promise<unknown>,
+];
+
+/** 3つ目は、SELECT句の列に付くテーブルの別名。 */
+const PR_CI_ROW_READERS: readonly (readonly [
+  name: string,
+  run: (sql: SqlClient) => Promise<unknown>,
+  prefix: string,
+])[] = [
+  [
+    "listPrCiChecksForPr",
+    (sql) => listPrCiChecksForPr("acme", "widgets", 12, sql),
+    "",
+  ],
+  [
+    "getLatestPrCiCheck",
+    (sql) => getLatestPrCiCheck("acme", "widgets", 12, sql),
+    "",
+  ],
+  ["getPrCiCheckById", (sql) => getPrCiCheckById(9, sql), ""],
+  ["listPendingPrCiChecks", (sql) => listPendingPrCiChecks(10, sql), ""],
+  ["listFailedPrCiChecks", (sql) => listFailedPrCiChecks(10, sql), ""],
+  [
+    "listClaimablePrCiChecks",
+    (sql) => listClaimablePrCiChecks(NOW, [], 10, sql),
+    "",
+  ],
+  [
+    "listUnnotifiedFailedPrCiChecks",
+    (sql) => listUnnotifiedFailedPrCiChecks(10, sql),
+    "",
+  ],
+  [
+    "listNoCiPrCiChecksToRecheck",
+    (sql) => listNoCiPrCiChecksToRecheck(NOW, 10, sql),
+    "r.",
+  ],
+  ["listFixingPrCiChecks", (sql) => listFixingPrCiChecks(10, sql), ""],
+  [
+    "findOrphanFixingPrCiChecks",
+    (sql) => findOrphanFixingPrCiChecks(10, sql),
+    "r.",
+  ],
+];
+
+const PR_CI_WRITERS: readonly PrCiStatement[] = [
+  ["recordPrCiCheck", (sql) => recordPrCiCheck(NEW_PR_CI, sql)],
+  [
+    "transitionPrCiCheck",
+    (sql) => transitionPrCiCheck(9, "pending", { state: "passed" }, sql),
+  ],
+  ["touchPrCiCheck", (sql) => touchPrCiCheck(9, sql)],
+  ["markPrCiNotified", (sql) => markPrCiNotified(9, "ci_failure", sql)],
+  ["releaseFixingPrCiCheck", (sql) => releaseFixingPrCiCheck(9, {}, sql)],
+  ["setPrCiFixHold", (sql) => setPrCiFixHold(9, "config_misfit", {}, sql)],
+  ["releaseConfigMisfitHolds", (sql) => releaseConfigMisfitHolds(sql)],
+  ["claimPrCiCheckForFix", (sql) => claimPrCiCheckForFix(CLAIM_PR_CI, sql)],
+];
+
+/** `includes`に文字列を渡せるよう、列の名前の型を広げる。 */
+const DEFINED_COLUMNS: readonly string[] = PR_CI_CHECK_COLUMNS;
+
+describe("pr_ci_checks column definition", () => {
+  test("names exactly the fields of a parsed row", async () => {
+    const { sql } = createFakeSqlClient([[PR_CI_ROW]]);
+    const rows = await listPrCiChecksForPr("acme", "widgets", 12, sql);
+    expect([...DEFINED_COLUMNS].sort()).toEqual(
+      Object.keys(rows[0] ?? {}).sort(),
+    );
+  });
+
+  test.each(PR_CI_ROW_READERS)(
+    "%s selects the defined columns",
+    async (_name, run, prefix) => {
+      const { sql, calls } = createFakeSqlClient([[]]);
+      await run(sql);
+      expect(selectedColumns(calls[0]?.text ?? "")).toEqual(
+        PR_CI_CHECK_COLUMNS.map((column) => `${prefix}${column}`),
+      );
+    },
+  );
+
+  test("covers every function that converts a row with toPrCiCheck", () => {
+    const source = readFileSync(
+      new URL("../../f/factory/lib/db.ts", import.meta.url),
+      "utf8",
+    );
+    const callSites = source
+      .split("\n")
+      .filter((line) => /\btoPrCiCheck\b/.test(line))
+      .filter((line) => !line.includes("function toPrCiCheck"))
+      .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line));
+    expect(PR_CI_ROW_READERS).toHaveLength(callSites.length);
+  });
+
+  test("recordPrCiCheck inserts only defined columns", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await recordPrCiCheck(NEW_PR_CI, sql);
+    expect(
+      insertedColumns(calls[0]?.text ?? "").filter(
+        (column) => !DEFINED_COLUMNS.includes(column),
+      ),
+    ).toEqual([]);
+  });
+
+  test.each(PR_CI_WRITERS)(
+    "%s writes only defined columns",
+    async (_name, run) => {
+      const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+      await run(sql);
+      const text = calls[0]?.text ?? "";
+      expect(
+        [...insertedColumns(text), ...assignedColumns(text)].filter(
+          (column) => !DEFINED_COLUMNS.includes(column),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  test("the writer statements are recognized as writes", async () => {
+    const written = await Promise.all(
+      PR_CI_WRITERS.map(async ([, run]) => {
+        const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+        await run(sql);
+        const text = calls[0]?.text ?? "";
+        return insertedColumns(text).length + assignedColumns(text).length;
+      }),
+    );
+    expect(written.every((count) => count > 0)).toBe(true);
+  });
+
+  test("reads every target of a SET that assigns several columns on one line", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await markPrCiNotified(9, "ci_failure", sql);
+    expect(assignedColumns(calls[0]?.text ?? "")).toEqual([
+      "notified_reason",
+      "updated_at",
+    ]);
+  });
+
+  test("reads a misspelled second target of a SET", () => {
+    const text =
+      "UPDATE factory.pr_ci_checks\n    SET notified_reason =  ? , updatd_at = now()\n    WHERE id =  ? ";
+    expect(assignedColumns(text)).toEqual(["notified_reason", "updatd_at"]);
+  });
+
+  test("ignores commas inside parentheses of an assigned expression", () => {
+    const text =
+      "UPDATE factory.pr_ci_checks\n    SET summary = COALESCE( ? ::text, summary), checked_at = now()\n    WHERE id =  ? ";
+    expect(assignedColumns(text)).toEqual(["summary", "checked_at"]);
+  });
+
+  test("reads all nine targets of the SET with quoted literals in transitionPrCiCheck", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await transitionPrCiCheck(9, "pending", { state: "passed" }, sql);
+    expect(assignedColumns(calls[0]?.text ?? "")).toEqual([
+      "state",
+      "summary",
+      "run_created_at",
+      "first_seen_at",
+      "notified_reason",
+      "fix_hold_reason",
+      "fix_work_item_id",
+      "checked_at",
+      "updated_at",
+    ]);
+  });
+
+  test("reads the targets of an UPDATE with a table alias", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await claimPrCiCheckForFix(CLAIM_PR_CI, sql);
+    expect(assignedColumns(calls[0]?.text ?? "")).toEqual([
+      "state",
+      "fix_work_item_id",
+      "fix_attempts",
+      "notified_reason",
+      "updated_at",
+    ]);
+  });
+
+  // 型検査(`mise run typecheck`)で確かめる。実行時には何も検査しない。
+  test("does not let the row converter read a column outside the definition (checked by typecheck)", () => {
+    // @ts-expect-error 定義に無い列は、変換の入力から読めない
+    const readMisspelled = (row: PrCiCheckSqlRow) => row.fix_hold_reasn;
+    expect(typeof readMisspelled).toBe("function");
   });
 });
 
