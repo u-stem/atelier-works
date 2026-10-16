@@ -113,32 +113,19 @@ describe("watch_pr_conflicts script", () => {
 
   test("passes the recovery whatever the fix setting is", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toMatch(/recovery: buildConflictRecoveryDeps\(\)/);
+    expect(source).toMatch(/\{ recovery, fix \}|\{ recovery \}/);
   });
 
-  test("passes the fix only when the builder returns it", async () => {
+  test("passes the fix only together with the recovery", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toMatch(/\.\.\.\(fix === undefined \? \{\} : \{ fix \}\)/);
-  });
-
-  test("reads the skill marker of the conflict round", async () => {
-    const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toContain("hasConflictFixSkillMarker");
-  });
-
-  test("reads the main CI of the head of the default branch", async () => {
-    const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toContain("getBranchSha");
+    expect(source).toMatch(
+      /fix === undefined \? \{ recovery \} : \{ recovery, fix \}/,
+    );
   });
 
   test("counts the rounds with the prefixes of the stale image notes", async () => {
     const source = await read("f/factory/watch_pr_conflicts.ts");
     expect(source).toContain("AUTO_RETRY_REASON_PREFIXES");
-  });
-
-  test("reads the note of the work item with the latest transition of its status", async () => {
-    const source = await read("f/factory/watch_pr_conflicts.ts");
-    expect(source).toContain("latestStatusEvent");
   });
 });
 

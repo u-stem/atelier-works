@@ -153,7 +153,8 @@ export type ConflictNotifyInput = {
 /**
  * 通知していない競合の行を、通知するか、待つか、起動の判断に回すか。
  * - `notify`: 通知する。
- * - `defer`: 通知も起動もせず待つ。直す作業項目が動いている間である。
+ * - `defer`: 通知も起動もせず待つ。直す作業項目が動いている間と、猶予の後でも、直す作業項目が終わってから
+ *   `RECENTLY_FIXED_WINDOW_MS`に満たない間である。後者は、直した直後の古い競合の判定を通知しないためである。
  * - `claim`: 通知せず、起動の判断(`decideConflictFixClaim`)に回す。一時の保留は、解ければ外れるので、
  *   猶予の間も毎回判断し直す。
  *
@@ -164,6 +165,7 @@ export type ConflictNotifyInput = {
  * 3. 最終の保留は、猶予を待たずに`notify`する。語彙に無い保留も最終として扱う。
  * 4. 直す作業項目が動いていれば`defer`する。
  * 5. 一時の保留がある行と、保留も作業項目も無い行は、競合の回の開始から猶予が過ぎたら`notify`し、それまでは`claim`する。
+ *    猶予の後でも、直近の直す作業項目が終わってから`RECENTLY_FIXED_WINDOW_MS`に満たなければ`defer`する。
  *    猶予は保留を書いた時刻でなく、競合の回の開始から数える。保留が付け外しされても、通知が遅れ続けないためである。
  *    保留が無い行にも猶予を掛けるのは、起動の判断が例外を投げ続けたり、起動の文が`null`を返し続けたりしても、通知を必ず出すためである。
  */
@@ -183,5 +185,14 @@ export function decideConflictNotify(
   // 保留があってもなくても、競合の回の開始から猶予が過ぎたら通知する。
   // 保留なしのまま起動できない行(判断の例外が続く、起動の文が毎回`null`を返す)で、通知が永久に出なくなるのを防ぐ。
   const graceEnd = row.episode_started_at.getTime() + input.graceMin * 60_000;
-  return input.now.getTime() >= graceEnd ? "notify" : "claim";
+  if (input.now.getTime() < graceEnd) return "claim";
+  // 直した直後は、GitHubの競合の判定が古いままのことがある。窓の間は、通知せずに待つ。
+  const settledAt = input.lastFixSettledAt ?? null;
+  if (
+    settledAt !== null &&
+    input.now.getTime() - settledAt.getTime() < RECENTLY_FIXED_WINDOW_MS
+  ) {
+    return "defer";
+  }
+  return "notify";
 }

@@ -76,6 +76,7 @@ import type { ConflictFixItemState } from "./pr_conflict_fix_recovery.ts";
 import { decideConflictFixRecovery } from "./pr_conflict_fix_recovery.ts";
 import {
   decidePrConflict,
+  isFinalPrConflictFixHold,
   isPrConflictFixHoldReason,
   PR_CONFLICT_KIND,
   PR_CONFLICT_REASON,
@@ -204,11 +205,16 @@ export type PrConflictFixDeps = {
   readonly cancelFlow: (jobId: string, reason: string) => Promise<void>;
 };
 
-/** 回復と起動の依存の組。 */
-export type PrConflictFixWiring = {
-  readonly recovery?: PrConflictRecoveryDeps;
-  readonly fix?: PrConflictFixDeps;
-};
+/**
+ * 回復と起動の依存の組。起動の依存は、回復の依存と一緒にだけ渡せる。
+ * 回復が無いと、起動した作業項目の結びが外れず、その行は通知も起動もされなくなるためである。
+ */
+export type PrConflictFixWiring =
+  | { readonly recovery?: PrConflictRecoveryDeps; readonly fix?: undefined }
+  | {
+      readonly recovery: PrConflictRecoveryDeps;
+      readonly fix: PrConflictFixDeps;
+    };
 
 export type PrConflictWatchDeps = PrConflictFixWiring & {
   readonly now: () => Date;
@@ -357,6 +363,8 @@ type Facts = {
   readonly mainCi: Map<string, Promise<MainCiState | null>>;
   /** この回で、直す作業項目を作った数。フローの起動に失敗した分も数える。 */
   claimsStarted: number;
+  /** この回で記録した失敗。同じ失敗(共有した読み取りの失敗)を、行の数だけ記録しないために覚える。 */
+  readonly reported: Set<unknown>;
 };
 
 type Context = {
@@ -519,6 +527,7 @@ export async function runPrConflictWatch(
       defaultBranch: new Map(),
       mainCi: new Map(),
       claimsStarted: 0,
+      reported: new Set(),
     },
   };
   // 回復を先に行う。競合している行は、回復が結びを外した後に読む。
@@ -935,19 +944,43 @@ async function recoverRow(
  * 作業項目が動く間に通知して人が直し始めると、人とFactoryが同じブランチへpushしうるためである。
  * 作業項目が終われば、回復が結びを外し、次の巡回で通常の判断に戻る。
  */
-function decideRowAction(
+async function decideRowAction(
   context: Context,
   row: PrConflictCheck,
-): "notify" | "defer" | "claim" {
+): Promise<"notify" | "defer" | "claim"> {
   if (row.fix_work_item_id !== null) return "defer";
-  const { fix } = context.deps;
-  return decideConflictNotify({
+  const { fix, log } = context.deps;
+  const input = {
     fixEnabled: fix !== undefined,
     enabledSince: fix?.enabledSince ?? null,
     graceMin: fix?.graceMin ?? 0,
     now: context.deps.now(),
     row,
-  });
+  };
+  const decision = decideConflictNotify(input);
+  // 最終の保留と、起動が無効な行は、直した直後でも通知する。猶予の後の通知だけを、直した直後の窓で待たせる。
+  if (
+    decision !== "notify" ||
+    fix === undefined ||
+    isFinalPrConflictFixHold(row.fix_hold_reason)
+  ) {
+    return decision;
+  }
+  let lastFixSettledAt: Date | null = null;
+  try {
+    lastFixSettledAt = await fix.lastFixSettledAt(
+      row.owner,
+      row.repo,
+      row.pr_number,
+    );
+  } catch (err) {
+    // 読めなくても、通知を止めない。
+    log.warn("pr conflict could not read the time of the last fix", {
+      pr: pullRequestKey(rowRef(row)),
+      error: errorMessage(err),
+    });
+  }
+  return decideConflictNotify({ ...input, lastFixSettledAt });
 }
 
 /** 通知に載せる保留の理由。起動の設定が無効なとき、語彙に無い理由のときは載せない。 */
@@ -966,7 +999,7 @@ async function handleUnnotified(
   row: PrConflictCheck,
   pr: PullRequest,
 ): Promise<void> {
-  const action = decideRowAction(context, row);
+  const action = await decideRowAction(context, row);
   if (action === "notify") {
     await notifyConflict(context, ref, row.id, noticeHold(context, row));
     return;
@@ -1033,6 +1066,7 @@ function claimReaders(
  * 判断が例外を投げたときは、失敗を記録して続ける。行は変えないので、次の巡回で判断し直し、
  * 猶予が過ぎれば`decideConflictNotify`が通知に倒す。
  * 1回の実行で作業項目を作るのは`CONFLICT_CLAIMS_PER_RUN_LIMIT`件までで、読み取りを止めた後は新しく始めない。
+ * 上限は、起動する直前にだけ見る。上限に達した後の行にも、保留の判断は行う。
  */
 async function claimRow(
   context: Context,
@@ -1050,12 +1084,7 @@ async function claimRow(
     });
     return;
   }
-  if (
-    stopped(context) ||
-    facts.claimsStarted >= CONFLICT_CLAIMS_PER_RUN_LIMIT
-  ) {
-    return;
-  }
+  if (stopped(context)) return;
   let decision: ConflictFixClaimDecision;
   try {
     decision = await decideConflictFixClaim({
@@ -1067,6 +1096,9 @@ async function claimRow(
       readers: claimReaders(context, fix, ref, row, names),
     });
   } catch (err) {
+    // 共有した読み取りの失敗は、同じ失敗が行の数だけ届く。1回の実行で1回だけ記録する。
+    if (facts.reported.has(err)) return;
+    facts.reported.add(err);
     await absorbReadError(context, `claim_conflict_fix:${key}`, key, err);
     return;
   }
@@ -1080,6 +1112,8 @@ async function claimRow(
     }
     return;
   }
+  // 上限に達した行は、保留も通知もせず、次の巡回に回す。保留の判断は、上限の前に済んでいる。
+  if (facts.claimsStarted >= CONFLICT_CLAIMS_PER_RUN_LIMIT) return;
   // 一時の保留が解けた行は、起動の文が同じ文の中で保留を外す。
   const workItemId = await fix.claim({
     id: row.id,
@@ -1153,7 +1187,7 @@ async function launchClaimed(
       await recordFailureOf(context, `fail_conflict_fix_item:${key}`, failErr);
     }
     try {
-      await deps.recovery?.release(row.id, { fixWorkItemId: workItemId });
+      await fix.release(row.id, { fixWorkItemId: workItemId });
     } catch (releaseErr) {
       await recordFailureOf(context, `release_conflict_fix:${key}`, releaseErr);
     }

@@ -122,8 +122,14 @@ const FACTORY_FIX_SKILL_PATH = ".claude/skills/factory-fix/SKILL.md";
 export function buildConflictFixDeps(
   config: FactoryConfig,
   client: GhClient,
-  _lookups: Partial<ConflictFixLookups> = {},
+  lookups: Partial<ConflictFixLookups> = {},
 ): PrConflictFixDeps | undefined {
+  const read: ConflictFixLookups = {
+    getBranchSha,
+    getMainCiStateBySha,
+    getFileAtRef,
+    ...lookups,
+  };
   const since = config.pr_conflict_fix_enabled_since;
   if (!config.pr_conflict_fix_enabled || since === null) return undefined;
   return {
@@ -139,7 +145,7 @@ export function buildConflictFixDeps(
     // `factory_repo`の解釈もここで行う。解釈に失敗しても、ほかの処理を止めず、行単位の失敗として記録される。
     hasSkillMarker: async () => {
       const factoryRepo = parseGitHubRepoUrl(config.factory_repo);
-      const text = await getFileAtRef(
+      const text = await read.getFileAtRef(
         client,
         factoryRepo.owner,
         factoryRepo.repo,
@@ -150,10 +156,10 @@ export function buildConflictFixDeps(
     },
     budgetExceeded: async () => (await dailyBudgetStatus(config)).exceeded,
     mainCiState: async (owner, repo, defaultBranch) =>
-      getMainCiStateBySha(
+      read.getMainCiStateBySha(
         owner,
         repo,
-        await getBranchSha(client, owner, repo, defaultBranch),
+        await read.getBranchSha(client, owner, repo, defaultBranch),
       ),
     countEpisodeRounds: (checkId, episode) =>
       countPrConflictFixRounds(
@@ -192,19 +198,27 @@ export function buildConflictFixDeps(
  * 今の状態へ移った最新の遷移のものを読む(`latestStatusEvent`)。
  */
 export function buildConflictRecoveryDeps(
-  _lookups: Partial<ConflictRecoveryLookups> = {},
+  lookups: Partial<ConflictRecoveryLookups> = {},
 ): PrConflictRecoveryDeps {
+  const read: ConflictRecoveryLookups = {
+    getWorkItem,
+    latestStatusEvent,
+    latestFixRound,
+    listPrConflictFixing,
+    releasePrConflictFix,
+    ...lookups,
+  };
   return {
-    listFixing: (limit) => listPrConflictFixing(limit),
+    listFixing: (limit) => read.listPrConflictFixing(limit),
     readFixItem: (workItemId, rowEpisode) =>
       readConflictFixItemState(workItemId, rowEpisode, {
-        getWorkItem: (id) => getWorkItem(id),
+        getWorkItem: (id) => read.getWorkItem(id),
         latestStatusNote: async (id, status) =>
-          (await latestStatusEvent(id, status))?.note ?? null,
+          (await read.latestStatusEvent(id, status))?.note ?? null,
         hasPushedCommits: async (id) =>
-          ((await latestFixRound(id))?.commit_shas.length ?? 0) > 0,
+          ((await read.latestFixRound(id))?.commit_shas.length ?? 0) > 0,
       }),
-    release: (id, options) => releasePrConflictFix(id, options),
+    release: (id, options) => read.releasePrConflictFix(id, options),
   };
 }
 
@@ -257,9 +271,9 @@ export async function main(): Promise<PrConflictWatchResult> {
       const gates = buildRepoGates(config, verifiedOwners);
 
       const fix = buildConflictFixDeps(config, client);
+      const recovery = buildConflictRecoveryDeps();
       const result = await runPrConflictWatch({
-        recovery: buildConflictRecoveryDeps(),
-        ...(fix === undefined ? {} : { fix }),
+        ...(fix === undefined ? { recovery } : { recovery, fix }),
         now: () => new Date(),
         log,
         instanceName: config.instance_name,
