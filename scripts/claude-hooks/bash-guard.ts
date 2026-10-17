@@ -121,10 +121,119 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
 const DANGEROUS_CONFIG_KEY =
   /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
 
-/** `mise set`が、書き込む`KEY=VALUE`を持たずに値を一覧するなら真。 */
+/** サブコマンドの前に置ける、値を取るグローバルオプション。`--help`に出ない隠しオプションを含む。 */
+const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-C",
+  "--cd",
+  "-E",
+  "--env",
+  "-j",
+  "--jobs",
+  "-P",
+  "--profile",
+  "--log-level",
+  "--output",
+  "-s",
+  "--shell",
+  "-t",
+  "--tool",
+]);
+
+/** `mise set`の書き込む形が持ってよい、値を取るオプション。 */
+const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  "-C",
+  "--cd",
+  "-E",
+  "--env",
+  "-j",
+  "--jobs",
+  "--file",
+  "--age-key-file",
+  "--age-recipient",
+  "--age-ssh-recipient",
+]);
+
+/** `mise set`の書き込む形が持ってよい、値を取らないオプション。ここに無いオプションは、値を取るおそれがある。 */
+const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
+  "--stdin",
+  "-g",
+  "--global",
+  "--age-encrypt",
+]);
+
+/** `mise set`と、その別名。 */
+const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
+
+/**
+ * グローバルオプションの語が、次の語を値として取るなら真。
+ * `-qE x`のように束ねた短いオプションは、値を取る文字が最初に現れる位置が末尾のときだけ、次の語を取る。
+ */
+function miseOptionTakesNext(text: string): boolean {
+  if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) return true;
+  if (!/^-[A-Za-z]{2,}$/.test(text)) return false;
+  const letters = text.slice(1);
+  const at = letters.search(/[CEjPst]/);
+  return at !== -1 && at === letters.length - 1;
+}
+
+/** 実行時に語が増えるか変わる語なら真。引用符の外の展開、glob、ブレースである。 */
+function isUnstable(word: Word): boolean {
+  return word.dynamic || word.glob || word.text.includes("{");
+}
+
+/**
+ * `mise set`が、書き込む形を持たずに値を一覧するなら真。
+ * サブコマンドの前のグローバルオプション(`mise -E local set`)は、値の語まで読み飛ばして探す。
+ * 書き込む形は2つある。オペランドがすべて`KEY=VALUE`である形と、
+ * `--stdin`を持ち、オペランドが展開を含まない鍵の名前1つだけの形である。
+ * `set`の後ろのオプションは、許可リストにあるものだけにする。未知のオプションは、
+ * 値を取ってオペランドの数を変えるおそれがあるので、一覧を出す形として扱う。
+ * 展開、glob、ブレースを含むオプションとその値、`--`を持つ形、サブコマンド名を持つオペランドも同じである。
+ */
 function listsMiseValues(words: readonly Word[]): boolean {
-  if (words[1]?.text !== "set") return false;
-  return !words.slice(2).some((word) => ASSIGNMENT.test(word.text));
+  const args = words.slice(1);
+  let subAt = 0;
+  while (subAt < args.length) {
+    const text = args[subAt]?.text ?? "";
+    if (!text.startsWith("-")) break;
+    subAt += miseOptionTakesNext(text) ? 2 : 1;
+  }
+  const sub = args[subAt];
+  if (sub === undefined || !MISE_SET_NAMES.has(sub.text)) return false;
+  const rest = args.slice(subAt + 1);
+  if (rest.some((word) => word.text === "--")) return true;
+  const operands: Word[] = [];
+  let readsStdin = false;
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) continue;
+    if (!word.text.startsWith("-")) {
+      if (MISE_SET_NAMES.has(word.text)) return true;
+      operands.push(word);
+      continue;
+    }
+    if (isUnstable(word)) return true;
+    const [name = ""] = word.text.split("=", 1);
+    if (word.text === "--stdin") {
+      readsStdin = true;
+    } else if (MISE_SET_FLAGS.has(word.text)) {
+    } else if (MISE_SET_VALUE_OPTIONS.has(word.text)) {
+      const value = rest[index + 1];
+      if (value !== undefined && isUnstable(value)) return true;
+      index += 1;
+    } else if (!(word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(name))) {
+      return true;
+    }
+  }
+  if (operands.length === 0) return true;
+  if (operands.every((word) => ASSIGNMENT.test(word.text))) return false;
+  const [key] = operands;
+  return !(
+    readsStdin &&
+    operands.length === 1 &&
+    key !== undefined &&
+    !isUnstable(key)
+  );
 }
 
 /** `.git/hooks`と`.git/config`のパス。lefthookのフックと設定の置き場所である。 */
@@ -260,7 +369,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor.",
+    "mise set without a literal KEY=VALUE, or one literal key with --stdin, lists the values of mise.local.toml, including secrets. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it.",
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:
