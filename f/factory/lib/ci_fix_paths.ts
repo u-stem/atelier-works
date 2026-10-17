@@ -139,7 +139,7 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * Claudeの実行、保護パスの判定、ログの機密保持、作業ディレクトリ、検査の隔離、pr_fixのstep、
  * CI回のログの整形・検査・分類・プロンプト・パスの検査、PRとmainのCIの判定と起動、
  * 競合の検知と競合を直す回の判断・プロンプト(`pr_conflict_`と`conflict_fix_`で始まる部品)、pr_fixフローの起動(`pr_fix_launch`)、
- * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)、
+ * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)とそのエラー型(`gh_errors`)、
  * メタデータのパッチの検査と`wmill-lock.yaml`のhashの再計算(`metadata_`で始まる部品)、
  * 自動で再開してよい止まった理由の一覧(`auto_retry_reasons`)である。
  * 一覧は、CI回と競合回の回復が「待たずに保留なしで外す回」を決め、競合回の数え方が「数えない回」を決める。
@@ -156,6 +156,8 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/github.",
   "f/factory/lib/types.",
   "f/factory/lib/job_tmp.",
+  "f/factory/lib/job_tmp_limits.",
+  "f/factory/lib/gh_errors.",
   "f/factory/lib/repo_owner_gate.",
   "f/factory/lib/model_policy.",
   "f/factory/lib/config.",
