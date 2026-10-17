@@ -1113,6 +1113,16 @@ symlink(mode 120000)かsubmodule(160000)が1つでもあれば、目標を拒否
 たとえば、秘密値のファイルを読ませたり、Caddyfile経由でホストのファイルに書かせたりできるためである。
 今のtreeには、どちらも1つも無い。
 
+次のパスも拒否する。1つのパスが2つのファイルを指しうるためである。
+
+- ASCIIの印字できる文字以外を含むパス。
+  `ſcripts/doctor.sh`や、ケルビン記号を使った`docKer-compose.yml`は、大文字小文字の畳み込みやUnicode正規化で、ASCIIのファイルと同じ名前になりうる。
+- ディレクトリを含めて、ASCIIの小文字にそろえると衝突するパス。大文字小文字を区別しないファイルシステムでは、同じファイルになる。
+- composeが自動で読むoverrideファイル(`docker-compose.override.yml`、`compose.override.yaml`など)。定義を後から上書きできる。
+
+前提は、1つのパスが1つのファイルを指すことである。
+この検査は、承認の判定と、ファイルの読み取りより前に行う。
+
 静的な検査で読むファイルは、通常のファイルで、256KiB以下のものだけを読む。
 無いファイルと、読むのに失敗したファイルは区別する。
 無ければ拒否し、gitの失敗は拒否ではなく実行の失敗にする。
@@ -1129,19 +1139,21 @@ symlink(mode 120000)かsubmodule(160000)が1つでもあれば、目標を拒否
 | 実行役が動かす道具 | `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/check-docker-version.sh`、`scripts/custom-tags.ts`、`scripts/record-host-applied.sh` |
 | 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、`scripts/host-install.sh` |
 | mise設定 | `mise.toml`、`mise.*.toml`、`.mise.toml`、`mise/`、`.mise/`、`.config/mise/`、`.tool-versions` |
-| 実行環境の設定 | `bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.node-version`、`.bun-version` |
+| 実行環境の設定 | `package.json`、`bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.nvmrc`、`.node-version`などの`.*-version` |
 | 必須チェックの定義 | `.github/workflows/ci.yml` |
 
-`bunfig.toml`と`.npmrc`は、リポジトリのルートのものだけを対象にする。
-mise設定の名前、`.env`系、`.node-version`、`.bun-version`は、ディレクトリを問わず対象にする。
+`package.json`、`bunfig.toml`、`.npmrc`は、リポジトリのルートのものだけを対象にする。
+mise設定の名前、`.env`系、`.nvmrc`、`.*-version`は、ディレクトリを問わず対象にする。
 判定は大文字小文字を区別しない。APFSでは`Bunfig.toml`も`bunfig.toml`と同じファイルを指すためである。
 
-`bunfig.toml`は`preload`でコードを実行でき、`.npmrc`はmiseのツールのinstallが読む。そのため対象に残す。
-`package.json`と`bun.lock`は対象にしない。
-実行役が動かすbunのコードは、`scripts/host-apply.ts`、`scripts/custom-tags.ts`、`scripts/bootstrap.sh`の`bun -e`である。
-どれもパッケージをimportしないので、`node_modules`の解決も自動のinstallも通らないためである。
-依存の更新(dependabotの自動マージ)のたびに、承認を求めずに済む。
-パッケージをimportするコードを足すときは、対象に戻す。
+`bunfig.toml`は`preload`でコードを実行でき、`.npmrc`はmiseのツールのinstallが読む。
+`package.json`は、`scripts`、`bin`、`workspaces`、`trustedDependencies`など、コードを動かす欄を持つ。
+`bun run scripts/custom-tags.ts`のように、`./`で始まらないパスを`run`に渡すと、同名の`scripts`の項目がファイルより先に実行される。
+そのため、`scripts/doctor.sh`と`scripts/bootstrap.sh`は、`bun ./scripts/custom-tags.ts`で起動する。
+`./`で始め、`run`を付けない形は、必ずファイルを実行する。
+miseは、`devEngines`、`packageManager`、`.nvmrc`、`.*-version`を、設定で有効にしたツールについてだけ、バージョンの指定として読む。
+既定では、どのツールについても読まない。読む設定になっても、これらの変更は承認を通る。
+`bun.lock`はコードを動かす欄を持たないので、対象にしない。
 
 `ci.yml`は、必須チェックを出すworkflowである。
 書き換えて、ジョブを`if: false`で`skipped`にすると、必須チェックを通せる。
@@ -1154,6 +1166,15 @@ mise設定の名前、`.env`系、`.node-version`、`.bun-version`は、ディ�
 
 通常のcomposeの変更(サービスの設定、Dockerfile、Caddyfile)は、承認を求めない。
 これらは実行役が実行するのではなく、dockerが作るコンテナの中身であり、後述の静的な検査が境界を守るためである。
+
+#### package.jsonの値だけの変更
+
+`package.json`の差が、`dependencies`、`devDependencies`、`overrides`の版の文字列だけなら、承認を求めない。
+dependabotの更新のたびに、人の承認を求めないためである。
+版の文字列は、`1.2.3`、`^1.2.3`、`~1.2`、`>=1.2.3`、`1.2.3-rc.1`の形に限る。
+URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、取得元や中身を変えうるので、承認が要る。
+ほかのキーの変更と、新規作成、読めない内容も、承認が要る。
+免除は、小文字の`package.json`だけに効く。
 
 #### miseの値だけの変更
 
@@ -1201,7 +1222,10 @@ mise設定の名前、`.env`系、`.node-version`、`.bun-version`は、ディ�
   絶対パスは、チェックアウトの中を指していても拒否する。ステージングのパスは実行のたびに変わるためである。
   書き込めるのは`infra/Caddyfile`だけである。
 - `deploy.resources.reservations`の`cpus`と`memory`以外。`devices`はホストのデバイスを割り当てるので拒否する。
-- `local`以外のdriverと、`driver_opts`、`external`を持つボリュームとネットワーク。
+- `local`以外のdriverのボリューム、`bridge`以外のdriverのネットワーク、`driver_opts`と`external`を持つもの。
+- `pid`、`ipc`、`uts`、`network_mode`、`security_opt`の値に含まれる変数。展開すると拒否リストを回避できるため、展開せずに拒否する。
+- 短い形のvolumeの、`ro`の無いもの、`rw`と一緒に書いたもの、知らないオプション、4つ以上の項目。読み取り専用とみなすのは、`ro`があり、`rw`が無いときだけである。
+- サービスの`networks`のうち、名前の一覧と、`aliases`と`ipv4_address`だけを持つ対応表以外。`driver_opts`などを経由した設定を防ぐ。
 - `docker.sock`の文字列。パースの前に、生のテキストで探す。コメントも対象にする。
 
 テキストは256KiBまでしか読まない。
@@ -1270,6 +1294,7 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 一覧は`f/factory/lib/protected_paths.ts`にあり、[禁止パスによる停止](internals/pr-workflow.md#禁止パスによる停止)に説明がある。
 実行役のテストはファイル名で列挙し、足した実行役のテストを列挙し忘れると、`tests/lib/protected_paths.test.ts`が失敗する。
 保護パスの照合は、大文字小文字を区別する。承認の対象の判定とは違うので、別の綴りのファイル名は保護パスをすり抜けうる。
+この件は別のIssueで扱う。実行役は、別名になるパスが目標のtreeに入ることを、tree検査で拒否する。
 
 保護パスだけでは、実行役の変更を人が確かめる関門にならない。
 
@@ -1286,6 +1311,10 @@ PR修正の自動修正がこれらを書き換えるのを止め、実装のPR�
 
 - composeの検査は、YAMLを静的に読む。`docker compose config`の解釈とは突き合わせていない。
   解釈が食い違うと、許可した形が別の意味になりうる。食い違いうる書き方は、マージキーのリスト(`<<: [*a, *b]`)と、`!reset`、`!override`である。
+- 反映する側は、`docker compose`を、必ず`-f infra/docker-compose.yml`と`--project-directory`を明示して呼ぶ。
+  省くと、overrideファイルを自動で読む場所が変わる。
+- 反映に使うチェックアウトのgitには、`GIT_CONFIG_GLOBAL=/dev/null`と`GIT_CONFIG_NOSYSTEM=1`を付ける。
+  利用者とシステムのgit設定を読ませないためである。`plan`のgitは`GIT_CONFIG_NOSYSTEM=1`を付けるが、`HOME`を渡すので、利用者の設定を読みうる。
 - パスの検査は、文字列で行い、symlinkを辿らない。目標のtreeにsymlinkがあれば拒否するが、実行役が使うチェックアウトに後から置かれたsymlinkは見ない。
 - miseの値の免除は、形式だけを見る。`GTR_COMMIT`の指す内容は確かめない。
 - `plan`はCIを確認しない。`would_converge`は、CIの通過を含まない判定である。
