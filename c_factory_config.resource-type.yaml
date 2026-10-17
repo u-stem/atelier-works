@@ -63,6 +63,7 @@ schema:
     - pr_conflict_fix_notify_grace_min
     - gh_collect_enabled
     - gh_collect_detail_enabled
+    - gh_source_dependabot
     - worker_alert_memory_ratio
     - check_commands_by_repo
   properties:
@@ -345,6 +346,14 @@ schema:
       description: >-
         collect_githubが、リポジトリの一覧に続けて、開いているPRとトリガーラベル付きのIssueの詳細を集めてDBに書くかどうかです。falseの間は、詳細の要求を送りません。gh_collect_enabledがfalseのときは、この値によらず何もしません。
       default: false
+    gh_source_dependabot:
+      type: string
+      enum:
+        - search
+        - db
+      description: >-
+        poll_dependabotが、候補のPRを列挙する元です。searchは検索APIで、dbは収集が書いた表です。dbにしても、gh_collect_enabledとgh_collect_detail_enabledのどちらかがfalseの間は、収集の記録が進まないので、周回全体が検索になります。収集の詳細を有効にして、表と検索の結果が合うことを確かめてから、dbにします。
+      default: search
     worker_alert_memory_ratio:
       type: number
       exclusiveMinimum: 0

@@ -1444,6 +1444,12 @@ export type LabelerAssociation = "OWNER" | "MEMBER" | "COLLABORATOR";
  */
 export type ReviewPostMode = "comment_only" | "gated";
 
+/**
+ * `gh_source_dependabot`の値。`poll_dependabot`が候補のPRを列挙する元で、
+ * `search`は検索API、`db`は収集が書いた表を指す。
+ */
+export type GhSource = "search" | "db";
+
 /** 投稿しなかったレビューの集計。`since`は、その最初のレビューの記録時刻。 */
 export type GatedReviewStats = {
   readonly since: Date | null;
@@ -1670,6 +1676,11 @@ export type FactoryConfig = {
    * `false`の間は、詳細の要求を送らず、一覧の下限も変えない。`gh_collect_enabled`が`false`なら、この値によらず何もしない。
    */
   gh_collect_detail_enabled: boolean;
+  /**
+   * `poll_dependabot`が候補のPRを列挙する元。既定は`search`。
+   * `db`にしても、`gh_collect_enabled`と`gh_collect_detail_enabled`のどちらかが偽なら、収集の記録が進まないので周回全体が検索になる。
+   */
+  gh_source_dependabot: GhSource;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。
