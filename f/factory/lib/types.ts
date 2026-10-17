@@ -971,6 +971,20 @@ export type GhRepoGone = {
   readonly reason: "not_listed" | "not_visible";
 };
 
+/** 所有者ごとの、収集の最新の実行と最後の成功。 */
+export type GhCollectOwnerState = {
+  readonly owner: string;
+  /** `finished_at`のある最新の行の結果。行が無ければ`null`。 */
+  readonly latest: {
+    readonly finished_at: Date;
+    readonly ok: boolean;
+    readonly error_code: GhCollectErrorCode | null;
+    readonly next_allowed_at: Date | null;
+  } | null;
+  /** `ok`が真の最新の`finished_at`。無ければ`null`。 */
+  readonly last_success_at: Date | null;
+};
+
 /** 収集の実行1行(所有者ごと)の終わりに書く内容。 */
 export type GhCollectRunOutcome = {
   readonly ok: boolean;

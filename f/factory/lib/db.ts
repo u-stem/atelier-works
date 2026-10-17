@@ -62,6 +62,7 @@ import {
   GH_COLLECT_ERROR_CODES,
   GH_GONE_REASONS,
   type GhCollectErrorCode,
+  type GhCollectOwnerState,
   type GhCollectRunOutcome,
   type GhRepo,
   type GhRepoGone,
@@ -6390,20 +6391,6 @@ export const GH_COLLECT_RUNS_COLUMNS = [
   "error_code",
   "next_allowed_at",
 ] as const satisfies readonly (keyof GhCollectRun)[];
-
-/** 所有者ごとの、収集の最新の実行と最後の成功。 */
-export type GhCollectOwnerState = {
-  readonly owner: string;
-  /** `finished_at`のある最新の行の結果。行が無ければ`null`。 */
-  readonly latest: {
-    readonly finished_at: Date;
-    readonly ok: boolean;
-    readonly error_code: GhCollectErrorCode | null;
-    readonly next_allowed_at: Date | null;
-  } | null;
-  /** `ok`が真の最新の`finished_at`。無ければ`null`。 */
-  readonly last_success_at: Date | null;
-};
 
 /**
  * 保存する名前の検査。例外の文に値を入れない。
