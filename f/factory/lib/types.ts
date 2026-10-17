@@ -456,6 +456,19 @@ export type ApprovalRequest = {
 // `id`と`created_at`は挿入時に決まるため含まない。
 // ---------------------------------------------------------------------------
 
+/**
+ * 1回のClaudeの実行で、実際に使われた1つのモデルの使用量。
+ * `claude -p`の結果の`modelUsage`の1要素にあたり、`agent_runs.model_usage`の要素として保存する。
+ */
+export type ModelUsageEntry = {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  cost_usd: number;
+};
+
 /** `db.recordAgentRun`に渡す、`factory.agent_runs`の1行。 */
 export type AgentRunRecord = {
   work_item_id: number;
@@ -472,6 +485,11 @@ export type AgentRunRecord = {
   session_id: string | null;
   exit_code: number | null;
   error: string | null;
+  /**
+   * 実際に使われたモデルごとの内訳。`model`は`--model`に渡した値で、別のモデルが使われても変わらない。
+   * Claudeが結果を返さなかった実行と、`modelUsage`を持たない結果では空になる。
+   */
+  model_usage: readonly ModelUsageEntry[];
 };
 
 export type ReviewSeverity = "blocker" | "major" | "minor" | "nit";

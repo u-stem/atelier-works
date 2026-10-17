@@ -163,6 +163,7 @@ function agentRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
     session_id: "s",
     exit_code: 0,
     error: null,
+    model_usage: [],
     ...overrides,
   };
 }
@@ -189,6 +190,7 @@ function success(
         cacheReadInputTokens: 0,
         cacheCreationInputTokens: 0,
       },
+      modelUsage: [],
       structuredOutput: output,
     },
     agentRun: agentRun(),

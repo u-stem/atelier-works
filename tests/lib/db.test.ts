@@ -1650,6 +1650,7 @@ describe("recordAgentRun", () => {
         session_id: "sess-1",
         exit_code: 0,
         error: null,
+        model_usage: [],
       },
       sql,
     );
@@ -1707,12 +1708,73 @@ describe("recordAgentRun", () => {
         session_id: null,
         exit_code: null,
         error: "timed out",
+        model_usage: [],
       },
       sql,
     );
     const text = calls[0]?.text ?? "";
     expect(text).toContain("::integer");
     expect(text).toContain("::numeric");
+  });
+});
+
+describe("recordAgentRun before the model_usage migration", () => {
+  const RUN = {
+    work_item_id: 1,
+    stage: "implement",
+    attempt: 1,
+    model: "claude-sonnet-5-5",
+    claude_version: null,
+    input_tokens: 1,
+    output_tokens: 2,
+    cache_read_tokens: 3,
+    cost_usd: 0.5,
+    num_turns: 1,
+    duration_ms: 10,
+    session_id: "s",
+    exit_code: 0,
+    error: null,
+    model_usage: [],
+  };
+
+  /** 1回目の文は列が無いエラーで失敗し、2回目以降は成功する。文の本文を控える。 */
+  function missingColumnThenOk(failure: Error): {
+    sql: SqlClient;
+    texts: string[];
+  } {
+    const texts: string[] = [];
+    const sql: SqlClient = (strings) => {
+      texts.push(strings.join(" ? "));
+      const first = texts.length === 1;
+      return {
+        fetch: () =>
+          first ? Promise.reject(failure) : Promise.resolve([{ id: 21 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, texts };
+  }
+
+  test("records the run without model_usage when the column is missing", async () => {
+    const { sql, texts } = missingColumnThenOk(
+      new Error('column "model_usage" of relation "agent_runs" does not exist'),
+    );
+    await recordAgentRun(RUN, sql, SILENT_LOG);
+    expect(texts[1]).not.toContain("model_usage");
+  });
+
+  test("returns the id of the run recorded without model_usage", async () => {
+    const { sql } = missingColumnThenOk(
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+    );
+    expect(await recordAgentRun(RUN, sql, SILENT_LOG)).toBe(21);
+  });
+
+  test("rethrows a failure other than a missing model_usage column", async () => {
+    const { sql } = missingColumnThenOk(new Error("db down"));
+    await expect(recordAgentRun(RUN, sql, SILENT_LOG)).rejects.toThrow(
+      "db down",
+    );
   });
 });
 

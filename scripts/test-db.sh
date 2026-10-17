@@ -604,7 +604,7 @@ done
 
 verify_issue_intake
 
-views=(v_inbox v_pipeline v_agent_cost_daily v_agent_usage_daily v_approval_stats v_lead_time v_failures v_notices v_reviews v_fix_rounds v_issue_proposals v_approval_requests)
+views=(v_inbox v_pipeline v_agent_cost_daily v_agent_usage_daily v_agent_model_usage_daily v_approval_stats v_lead_time v_failures v_notices v_reviews v_fix_rounds v_issue_proposals v_approval_requests)
 for view in "${views[@]}"; do
   log "SELECT * FROM factory.${view} LIMIT 1;"
   printf 'SELECT * FROM factory.%s LIMIT 1;\n' "${view}" | psql_exec "${SCRATCH_DB}" >/dev/null
@@ -625,6 +625,26 @@ FROM factory.v_agent_usage_daily WHERE model = 'probe-model' ORDER BY claude_ver
   || die "unexpected v_agent_usage_daily rows: '${usage_rows}'"
 printf "DELETE FROM factory.work_items WHERE owner = 'usageprobe';\n" | psql_exec "${SCRATCH_DB}" -q >/dev/null
 log "v_agent_usage_daily groups runs by claude_version and keeps a missing version as NULL"
+
+# モデル別の使用量のビューが、渡したモデルではなく実際に使われたモデルで数え、
+# 内訳を持たない実行を渡したモデルで数えることを確かめる。
+# 1回目の実行は渡したモデルと別のモデルを使い、2回目は内訳を持たない。
+model_rows="$(printf "INSERT INTO factory.work_items (cycle, source, kind, owner, repo, issue_number, issue_url, title, status) VALUES (1, 'issue', 'issue', 'modelprobe', 'r', 1, 'https://github.com/modelprobe/r/issues/1', 't', 'failed');
+INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, claude_version, input_tokens, output_tokens, cache_read_tokens, cost_usd, model_usage)
+SELECT id, 'implement', 1, 'probe-requested', NULL, 10, 20, 30, 0.5,
+  '[{\"model\":\"probe-actual\",\"input_tokens\":7,\"output_tokens\":8,\"cache_read_tokens\":9,\"cache_creation_tokens\":1,\"cost_usd\":0.3},{\"model\":\"probe-helper\",\"input_tokens\":3,\"output_tokens\":12,\"cache_read_tokens\":21,\"cache_creation_tokens\":2,\"cost_usd\":0.2}]'::jsonb
+FROM factory.work_items WHERE owner = 'modelprobe';
+INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, claude_version, input_tokens, output_tokens, cache_read_tokens, cost_usd)
+SELECT id, 'implement', 2, 'probe-requested', NULL, 10, 20, 30, 0.5
+FROM factory.work_items WHERE owner = 'modelprobe';
+SELECT model || '=' || run_count || ':' || total_cost_usd || ':' || total_input_tokens || ':' || total_output_tokens || ':' || total_cache_read_tokens || ':' || COALESCE(total_cache_creation_tokens::text, '-')
+FROM factory.v_agent_model_usage_daily WHERE left(model, 6) = 'probe-' ORDER BY model;\n" \
+  | psql_exec "${SCRATCH_DB}" -q -t -A | grep -v '^INSERT' | paste -sd ',' -)" \
+  || die "could not read v_agent_model_usage_daily"
+[ "${model_rows}" = "probe-actual=1:0.3:7:8:9:1,probe-helper=1:0.2:3:12:21:2,probe-requested=1:0.5000:10:20:30:-" ] \
+  || die "unexpected v_agent_model_usage_daily rows: '${model_rows}'"
+printf "DELETE FROM factory.work_items WHERE owner = 'modelprobe';\n" | psql_exec "${SCRATCH_DB}" -q >/dev/null
+log "v_agent_model_usage_daily counts the models actually used and falls back to the requested model"
 
 # 通知の解決の記録(resolved_by / resolved_at)の列に値を書け、未解決の通知を返すビューが変わらないことを確かめる。
 notice_row="$(printf "INSERT INTO factory.notices (kind, message) VALUES ('probe', 'm'); UPDATE factory.notices SET resolved = true, resolved_by = 'op', resolved_at = now() WHERE kind = 'probe'; SELECT resolved_by FROM factory.notices WHERE kind = 'probe';\n" \

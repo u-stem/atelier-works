@@ -1316,6 +1316,7 @@ function runRecord(costUsd: number | null): AgentRunRecord {
     duration_ms: null,
     session_id: null,
     exit_code: 0,
+    model_usage: [],
     error: null,
   };
 }

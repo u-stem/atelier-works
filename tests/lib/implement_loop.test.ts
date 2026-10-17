@@ -126,6 +126,7 @@ const AGENT_RUN: AgentRunRecord = {
   session_id: "s",
   exit_code: 0,
   error: null,
+  model_usage: [],
 };
 const RAW: ClaudeRunResult = {
   type: "result",
@@ -142,6 +143,7 @@ const RAW: ClaudeRunResult = {
     cacheReadInputTokens: 0,
     cacheCreationInputTokens: 0,
   },
+  modelUsage: [],
   structuredOutput: DONE,
 };
 function success(

@@ -595,6 +595,7 @@ function claudeSays(
         cacheReadInputTokens: 0,
         cacheCreationInputTokens: 0,
       },
+      modelUsage: [],
       structuredOutput: output,
     },
     agentRun: {
@@ -612,6 +613,7 @@ function claudeSays(
       session_id: "s",
       exit_code: 0,
       error: null,
+      model_usage: [],
     },
     retried: false,
   };
