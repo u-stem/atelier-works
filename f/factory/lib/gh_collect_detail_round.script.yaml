@@ -1,0 +1,9 @@
+summary: '[LIB] GitHubの収集の詳細の周回'
+description: 内部ライブラリです。直接実行するものではありません。1人の所有者の1周回の詳細の取得について、待ち行列、束の組み立てと分割、ページ送り、リポジトリごとの結果の確定を、通信もDBも持たない状態機械として定めます。
+lock: '!inline f/factory/lib/gh_collect_detail_round.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
