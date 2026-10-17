@@ -153,6 +153,10 @@ describe("graphqlRequest passes values as variables", () => {
     );
   });
 
+  test("does not ask for the default branch ref, which a read-only token cannot read", () => {
+    expect(OWNER_REPOS_QUERY).not.toContain("defaultBranchRef");
+  });
+
   test("asks for the cost of the request", () => {
     expect(OWNER_REPOS_QUERY).toContain("rateLimit { cost remaining resetAt }");
   });

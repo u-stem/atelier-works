@@ -45,7 +45,6 @@ function node(name: string, overrides: Record<string, unknown> = {}) {
     databaseId: 100 + name.length,
     name,
     isArchived: false,
-    defaultBranchRef: { name: "main" },
     pullRequests: { totalCount: 2 },
     issues: { totalCount: 1 },
     ...overrides,
@@ -1198,6 +1197,27 @@ describe("runGhCollect repository snapshot", () => {
     ]);
   });
 
+  test("a response without defaultBranchRef still completes the owner", async () => {
+    const h = harness({ config: ALICE_ONLY });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("alice")?.ok).toBe(true);
+  });
+
+  test("writes a null default branch even when the response carries one", async () => {
+    const h = harness({
+      config: ALICE_ONLY,
+      pages: {
+        alice: [
+          okPage(1001, [node("a", { defaultBranchRef: { name: "main" } })]),
+        ],
+      },
+    });
+    await runGhCollect(h.deps);
+    expect(h.snapshots[0]?.listed.map((repo) => repo.default_branch)).toEqual([
+      null,
+    ]);
+  });
+
   test("writes the id GitHub reported with the snapshot", async () => {
     const h = harness({ config: ALICE_ONLY });
     await runGhCollect(h.deps);
@@ -1312,15 +1332,13 @@ describe("runGhCollect repository snapshot", () => {
     const h = harness({
       config: ALICE_ONLY,
       pages: {
-        alice: [
-          okPage(1001, [node("a", { defaultBranchRef: { name: "--x" } })]),
-        ],
+        alice: [okPage(1001, [node("a", { isArchived: "yes" })])],
       },
     });
     await runGhCollect(h.deps);
     expect(
       h.logs.find((entry) => entry.message.includes("discarded"))?.fields,
-    ).toEqual({ owner: "alice", repo: "a", column: "default_branch" });
+    ).toEqual({ owner: "alice", repo: "a", column: "archived" });
   });
 
   test("stage 1 request count scales by 1/100", async () => {
