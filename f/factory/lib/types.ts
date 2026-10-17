@@ -91,8 +91,13 @@ export function hasLabel(labels: readonly string[], label: string): boolean {
 }
 
 /** `value`がGitHubのログイン名かリポジトリ名の形か。例外を投げず、値を文に含めない。 */
-export function isGitHubName(_value: unknown): _value is string {
-  return false;
+export function isGitHubName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "." &&
+    value !== ".." &&
+    GITHUB_NAME_PATTERN.test(value)
+  );
 }
 
 export function assertGitHubName(name: string): void {
@@ -157,8 +162,11 @@ const BRANCH_NAME_RULES: readonly {
 ];
 
 /** `value`がブランチ名の検査規則に合うか。例外を投げず、値を文に含めない。 */
-export function isBranchName(_value: unknown): _value is string {
-  return false;
+export function isBranchName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    !BRANCH_NAME_RULES.some((rule) => rule.test(value))
+  );
 }
 
 export function assertBranchName(name: string): void {

@@ -59,6 +59,8 @@ import {
   type FixOutcome,
   type FixReply,
   type FixRoundRecord,
+  GH_COLLECT_ERROR_CODES,
+  GH_GONE_REASONS,
   type GhCollectErrorCode,
   type GhCollectRunOutcome,
   type GhRepo,
@@ -76,6 +78,8 @@ import {
   type IssueProposalOrigin,
   type IssueProposalStatus,
   isBoolean,
+  isBranchName,
+  isGitHubName,
   isImplementDiffStat,
   isNumber,
   isOneOf,
@@ -6401,56 +6405,397 @@ export type GhCollectOwnerState = {
   readonly last_success_at: Date | null;
 };
 
+/**
+ * 保存する名前の検査。例外の文に値を入れない。
+ * 値は信頼できないGitHub由来の文字列で、ログやnoticeに載るためである。
+ */
+function requireGitHubName(value: unknown, field: string): string {
+  if (!isGitHubName(value)) {
+    throw new Error(`db: ${field} is not a GitHub name`);
+  }
+  return value;
+}
+
+function requirePositiveInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`db: ${field} is not a positive integer`);
+  }
+  return value;
+}
+
+function requireCount(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`db: ${field} is not a non-negative integer`);
+  }
+  return value;
+}
+
+function requireNullableCount(value: unknown, field: string): number | null {
+  return value === null ? null : requireCount(value, field);
+}
+
+/** 行から読んだ名前。値を文に入れず、読めない行を止める。 */
+function parseStoredGitHubName(value: unknown, field: string): string {
+  if (!isGitHubName(value)) {
+    throw new Error(`db: row field "${field}" is not a GitHub name`);
+  }
+  return value;
+}
+
+function parseStoredBranch(value: unknown, field: string): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isBranchName(value)) {
+    throw new Error(`db: row field "${field}" is not a branch name`);
+  }
+  return value;
+}
+
+/** `toGhRepo`が読める行。定義の列だけを持つ。 */
+export type GhRepoSqlRow = {
+  readonly [K in (typeof GH_REPOS_COLUMNS)[number]]?: unknown;
+};
+
+function toGhRepo(row: GhRepoSqlRow): GhRepo {
+  const goneReason =
+    row.gone_reason === null || row.gone_reason === undefined
+      ? null
+      : parseEnum(row.gone_reason, GH_GONE_REASONS, "gone_reason");
+  return {
+    id: parseId(row.id, "id"),
+    owner: parseStoredGitHubName(row.owner, "owner"),
+    owner_id: parseId(row.owner_id, "owner_id"),
+    repo: parseStoredGitHubName(row.repo, "repo"),
+    repo_id: parseNullableId(row.repo_id, "repo_id"),
+    allowed: parseBoolean(row.allowed, "allowed"),
+    default_branch: parseStoredBranch(row.default_branch, "default_branch"),
+    archived: parseBoolean(row.archived, "archived"),
+    open_pr_count: parseNullableNumber(row.open_pr_count, "open_pr_count"),
+    labeled_issue_count: parseNullableNumber(
+      row.labeled_issue_count,
+      "labeled_issue_count",
+    ),
+    gone: parseBoolean(row.gone, "gone"),
+    gone_reason: goneReason,
+    listed_at: parseNullableDate(row.listed_at, "listed_at"),
+  };
+}
+
+function parseNullableErrorCode(value: unknown): GhCollectErrorCode | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return parseEnum(value, GH_COLLECT_ERROR_CODES, "error_code");
+}
+
+/** `toGhCollectRun`が読める行。定義の列だけを持つ。 */
+export type GhCollectRunSqlRow = {
+  readonly [K in (typeof GH_COLLECT_RUNS_COLUMNS)[number]]?: unknown;
+};
+
+function toGhCollectRun(row: GhCollectRunSqlRow): GhCollectRun {
+  return {
+    id: parseId(row.id, "id"),
+    started_at: parseDate(row.started_at, "started_at"),
+    finished_at: parseNullableDate(row.finished_at, "finished_at"),
+    ok: parseBoolean(row.ok, "ok"),
+    owner: parseStoredGitHubName(row.owner, "owner"),
+    owner_id: parseNullableId(row.owner_id, "owner_id"),
+    verified: parseBoolean(row.verified, "verified"),
+    id_checked: parseNullableBoolean(row.id_checked, "id_checked"),
+    cost: parseNullableNumber(row.cost, "cost"),
+    requests: parseNumericLike(row.requests, "requests"),
+    remaining: parseNullableNumber(row.remaining, "remaining"),
+    error_code: parseNullableErrorCode(row.error_code),
+    next_allowed_at: parseNullableDate(row.next_allowed_at, "next_allowed_at"),
+  };
+}
+
+/** 所有者のリポジトリの記録を、リポジトリ名の順に返す。`owner`は小文字にして照会する。 */
 export async function listGhRepos(
-  _owner: string,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<GhRepo[]> {
-  return [];
+  const name = requireGitHubName(owner, "owner").toLowerCase();
+  const rows = await sql`
+    SELECT id, owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at
+    FROM factory.gh_repos
+    WHERE owner = ${name}
+    ORDER BY repo
+  `.fetch();
+  return rows.map(toGhRepo);
 }
 
+/** 所有者の収集の実行を、新しい順に`limit`件返す。 */
 export async function listRecentGhCollectRuns(
-  _owner: string,
-  _limit: number,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  limit: number,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<GhCollectRun[]> {
-  return [];
+  const name = requireGitHubName(owner, "owner").toLowerCase();
+  const count = requirePositiveInteger(limit, "limit");
+  const rows = await sql`
+    SELECT id, started_at, finished_at, ok, owner, owner_id, verified, id_checked, cost, requests, remaining, error_code, next_allowed_at
+    FROM factory.gh_collect_runs
+    WHERE owner = ${name}
+    ORDER BY started_at DESC, id DESC
+    LIMIT ${count}::integer
+  `.fetch();
+  return rows.map(toGhCollectRun);
 }
 
+/**
+ * 実行の行を、`owners`の全員分、1つの文で書く。終わりの更新までは`finished_at`が空のままになる。
+ * 大文字と小文字が違うだけの重なりは、1人として数える。
+ * 返す行が所有者の数と合わないときは例外を投げる。
+ */
 export async function insertGhCollectRuns(
-  _owners: readonly string[],
-  _sql: SqlClient = defaultSqlClient,
+  owners: readonly string[],
+  sql: SqlClient = defaultSqlClient,
 ): Promise<{ owner: string; id: number }[]> {
-  return [];
+  const names = [
+    ...new Set(
+      owners.map((owner) => requireGitHubName(owner, "owner").toLowerCase()),
+    ),
+  ];
+  if (names.length === 0) {
+    return [];
+  }
+  const rows = await sql`
+    INSERT INTO factory.gh_collect_runs (owner)
+    SELECT unnest(${names}::text[])
+    RETURNING id, owner
+  `.fetch();
+  const inserted = rows.map((row) => ({
+    owner: parseStoredGitHubName(row.owner, "owner"),
+    id: parseId(row.id, "id"),
+  }));
+  if (inserted.length !== names.length) {
+    throw new Error("db: the collection run rows were not all inserted");
+  }
+  return inserted;
 }
 
+/**
+ * 実行の行の終わりを書く。`finished_at`が空の行だけを更新し、更新したら`true`を返す。
+ * 成功の行に`error_code`は付けられない。
+ * 範囲外の値は、DBに触れる前に、値を文に入れずに例外にする。
+ */
 export async function finishGhCollectRun(
-  _id: number,
-  _outcome: GhCollectRunOutcome,
-  _sql: SqlClient = defaultSqlClient,
+  id: number,
+  outcome: GhCollectRunOutcome,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<boolean> {
-  return false;
+  requirePositiveInteger(id, "id");
+  const ownerId =
+    outcome.owner_id === null
+      ? null
+      : requirePositiveInteger(outcome.owner_id, "owner_id");
+  const cost = requireNullableCount(outcome.cost, "cost");
+  const requests = requireCount(outcome.requests, "requests");
+  const remaining = requireNullableCount(outcome.remaining, "remaining");
+  if (
+    outcome.error_code !== null &&
+    !isOneOf(outcome.error_code, GH_COLLECT_ERROR_CODES)
+  ) {
+    throw new Error("db: error_code is not a collection error code");
+  }
+  if (outcome.ok && outcome.error_code !== null) {
+    throw new Error("db: a successful collection run has an error_code");
+  }
+  const rows = await sql`
+    UPDATE factory.gh_collect_runs
+    SET finished_at = now(),
+        ok = ${outcome.ok},
+        owner_id = ${ownerId}::bigint,
+        verified = ${outcome.verified},
+        id_checked = ${outcome.id_checked}::boolean,
+        cost = ${cost}::integer,
+        requests = ${requests}::integer,
+        remaining = ${remaining}::integer,
+        error_code = ${outcome.error_code},
+        next_allowed_at = ${outcome.next_allowed_at === null ? null : outcome.next_allowed_at.toISOString()}::timestamptz
+    WHERE id = ${id}::bigint AND finished_at IS NULL
+    RETURNING id
+  `.fetch();
+  return rows.length > 0;
 }
 
+/**
+ * 所有者ごとの、`finished_at`のある最新の実行の結果と、`ok`が真の最新の`finished_at`を返す。
+ * 実行中の行(`finished_at`が空)は数えない。実行の無い所有者は、`latest`と`last_success_at`が`null`の行になる。
+ */
 export async function listGhCollectOwnerStates(
-  _owners: readonly string[],
-  _sql: SqlClient = defaultSqlClient,
+  owners: readonly string[],
+  sql: SqlClient = defaultSqlClient,
 ): Promise<GhCollectOwnerState[]> {
-  return [];
+  const names = [
+    ...new Set(
+      owners.map((owner) => requireGitHubName(owner, "owner").toLowerCase()),
+    ),
+  ];
+  if (names.length === 0) {
+    return [];
+  }
+  const rows = await sql`
+    SELECT o.owner, l.finished_at, l.ok, l.error_code, l.next_allowed_at,
+      (
+        SELECT max(s.finished_at) FROM factory.gh_collect_runs s
+        WHERE s.owner = o.owner AND s.ok AND s.finished_at IS NOT NULL
+      ) AS last_success_at
+    FROM unnest(${names}::text[]) AS o(owner)
+    LEFT JOIN LATERAL (
+      SELECT f.finished_at, f.ok, f.error_code, f.next_allowed_at
+      FROM factory.gh_collect_runs f
+      WHERE f.owner = o.owner AND f.finished_at IS NOT NULL
+      ORDER BY f.finished_at DESC, f.id DESC
+      LIMIT 1
+    ) l ON true
+  `.fetch();
+  return rows.map((row) => ({
+    owner: parseStoredGitHubName(row.owner, "owner"),
+    latest:
+      row.finished_at === null || row.finished_at === undefined
+        ? null
+        : {
+            finished_at: parseDate(row.finished_at, "finished_at"),
+            ok: parseBoolean(row.ok, "ok"),
+            error_code: parseNullableErrorCode(row.error_code),
+            next_allowed_at: parseNullableDate(
+              row.next_allowed_at,
+              "next_allowed_at",
+            ),
+          },
+    last_success_at: parseNullableDate(row.last_success_at, "last_success_at"),
+  }));
 }
 
+/**
+ * 所有者のリポジトリの記録を、1つの文(1つのトランザクション)で書き換える。
+ * `listed`は一覧に載ったリポジトリで、upsertして`listed_at`を進める。
+ * archive済みなら`gone_reason`を`archived`にし、そうでなければ`gone`を戻す。
+ * `gone`は一覧に載らなかったリポジトリで、`gone`の印と理由だけを書く。行が無ければ`repo_id`が空の行を作る。
+ * 書く前に、名前・ブランチ名・件数・重なりを検査し、誤りがあればDBに触れずに、値を文に入れずに例外にする。
+ * 件数は`allowed`が偽のリポジトリでは書けない。
+ */
 export async function replaceGhRepoSnapshot(
-  _snapshot: {
+  snapshot: {
     readonly owner: string;
     readonly owner_id: number;
     readonly listed: readonly GhRepoUpsert[];
     readonly gone: readonly GhRepoGone[];
   },
-  _sql: SqlClient = defaultSqlClient,
-): Promise<void> {}
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  const owner = requireGitHubName(snapshot.owner, "owner").toLowerCase();
+  const ownerId = requirePositiveInteger(snapshot.owner_id, "owner_id");
+  const seen = new Set<string>();
+  const listed = snapshot.listed.map((entry) => {
+    const repo = requireGitHubName(entry.repo, "repo").toLowerCase();
+    if (seen.has(repo)) {
+      throw new Error("db: a repository appears twice in the snapshot");
+    }
+    seen.add(repo);
+    const openPrCount = requireNullableCount(
+      entry.open_pr_count,
+      "open_pr_count",
+    );
+    const labeledIssueCount = requireNullableCount(
+      entry.labeled_issue_count,
+      "labeled_issue_count",
+    );
+    if (
+      !entry.allowed &&
+      (openPrCount !== null || labeledIssueCount !== null)
+    ) {
+      throw new Error("db: a disallowed repository has counts");
+    }
+    if (entry.default_branch !== null && !isBranchName(entry.default_branch)) {
+      throw new Error("db: default_branch is not a branch name");
+    }
+    return {
+      repo,
+      repo_id: requirePositiveInteger(entry.repo_id, "repo_id"),
+      allowed: entry.allowed,
+      default_branch: entry.default_branch,
+      archived: entry.archived,
+      open_pr_count: openPrCount,
+      labeled_issue_count: labeledIssueCount,
+    };
+  });
+  const gone = snapshot.gone.map((entry) => {
+    const repo = requireGitHubName(entry.repo, "repo").toLowerCase();
+    if (seen.has(repo)) {
+      throw new Error("db: a repository appears twice in the snapshot");
+    }
+    seen.add(repo);
+    if (entry.reason !== "not_listed" && entry.reason !== "not_visible") {
+      throw new Error("db: the gone reason is not allowed here");
+    }
+    return { repo, reason: entry.reason };
+  });
+  if (listed.length === 0 && gone.length === 0) {
+    return;
+  }
+  await sql`
+    WITH listed AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(listed)}::jsonb)
+        AS t(repo text, repo_id bigint, allowed boolean, default_branch text, archived boolean, open_pr_count integer, labeled_issue_count integer)
+    ), upserted AS (
+      INSERT INTO factory.gh_repos (owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at)
+      SELECT ${owner}::text, ${ownerId}::bigint, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count,
+        archived, CASE WHEN archived THEN 'archived' END, now()
+      FROM listed
+      ON CONFLICT (owner, repo) DO UPDATE SET
+        owner_id = EXCLUDED.owner_id,
+        repo_id = EXCLUDED.repo_id,
+        allowed = EXCLUDED.allowed,
+        default_branch = EXCLUDED.default_branch,
+        archived = EXCLUDED.archived,
+        open_pr_count = EXCLUDED.open_pr_count,
+        labeled_issue_count = EXCLUDED.labeled_issue_count,
+        gone = EXCLUDED.gone,
+        gone_reason = EXCLUDED.gone_reason,
+        listed_at = EXCLUDED.listed_at
+      RETURNING id
+    )
+    INSERT INTO factory.gh_repos (owner, owner_id, repo, allowed, gone, gone_reason)
+    SELECT ${owner}::text, ${ownerId}::bigint, repo, true, true, reason
+    FROM jsonb_to_recordset(${JSON.stringify(gone)}::jsonb) AS g(repo text, reason text)
+    ON CONFLICT (owner, repo) DO UPDATE SET
+      gone = EXCLUDED.gone,
+      gone_reason = EXCLUDED.gone_reason
+  `.execute();
+}
 
+/**
+ * 収集の実行の記録のうち、`started_at`が`olderThan`以前のものを削除し、行数を返す。
+ * 所有者ごとに、`ok`が真で`finished_at`のある最新の行(直近の成功)と、
+ * `finished_at`のある最新の行(直近の実行)は、古くても削除する対象から外す。
+ * `finished_at`が空の行は、新しくても直近の実行を押しのけない。
+ * `gh_repos`は消さない。
+ */
 export async function deleteGhCollectRunsBefore(
-  _olderThan: Date,
-  _sql: SqlClient = defaultSqlClient,
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<number> {
-  return 0;
+  const rows = await sql`
+    DELETE FROM factory.gh_collect_runs r
+    WHERE r.started_at <= ${olderThan.toISOString()}::timestamptz
+      AND r.id IS DISTINCT FROM (
+        SELECT s.id FROM factory.gh_collect_runs s
+        WHERE s.owner = r.owner AND s.ok AND s.finished_at IS NOT NULL
+        ORDER BY s.finished_at DESC, s.id DESC
+        LIMIT 1
+      )
+      AND r.id IS DISTINCT FROM (
+        SELECT f.id FROM factory.gh_collect_runs f
+        WHERE f.owner = r.owner AND f.finished_at IS NOT NULL
+        ORDER BY f.finished_at DESC, f.id DESC
+        LIMIT 1
+      )
+    RETURNING r.id
+  `.fetch();
+  return rows.length;
 }

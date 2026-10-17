@@ -6,6 +6,7 @@
 // 判定を待つ`main_ci_runs`の行、判定を待つか修正中の`pr_ci_checks`の行、各リポジトリの最新の`main_ci_runs`の行は、古くても削除しない。
 // 各PRの最新の`pr_ci_checks`の行は、保持期間の4倍まで残す。
 // 競合から離れた`pr_conflict_checks`の行も、保持期間で削除する(競合したままの行は残す)。件数はログだけに残す。
+// 収集の実行の`gh_collect_runs`も保持期間で削除する(所有者ごとの直近の成功と、`finished_at`のある直近の実行は残す)。件数はログだけに残す。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
@@ -34,6 +35,7 @@ import {
   addNoticeUnlessUnresolved,
   type DeletedWorkItemRef,
   deleteDeploymentsBefore,
+  deleteGhCollectRunsBefore,
   deleteJobFailuresBefore,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
@@ -205,6 +207,30 @@ async function cleanupPrConflictChecks(
   }
 }
 
+/**
+ * 収集の実行の記録を、始めた時刻から保持期間を過ぎたものだけ削除する。
+ * 所有者ごとの直近の成功と、`finished_at`のある直近の実行は消さない。
+ * 件数は`cleanup_runs`に記録せず、ログに残す。`gh_repos`は消さない。
+ */
+async function cleanupGhCollectRuns(
+  cutoff: Date,
+  log: Logger,
+): Promise<number> {
+  try {
+    return await deleteGhCollectRunsBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete gh_collect_runs", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `収集の実行の記録の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
 /** workerの負荷の記録を、測った時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupWorkerSamples(
   cutoff: Date,
@@ -308,6 +334,10 @@ export async function main(): Promise<CleanupCounts> {
     cutoffs.logsBefore,
     log,
   );
+  const ghCollectRunsDeleted = await cleanupGhCollectRuns(
+    cutoffs.logsBefore,
+    log,
+  );
   const workerSamplesDeleted = await cleanupWorkerSamples(
     cutoffs.logsBefore,
     log,
@@ -330,6 +360,7 @@ export async function main(): Promise<CleanupCounts> {
   log.info(summarizeCleanup(counts), {
     ...counts,
     pr_conflict_checks_deleted: prConflictChecksDeleted,
+    gh_collect_runs_deleted: ghCollectRunsDeleted,
   });
   return counts;
 }

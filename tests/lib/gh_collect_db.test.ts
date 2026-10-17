@@ -258,13 +258,18 @@ describe("insertGhCollectRuns", () => {
   });
 
   test("binds the lowercased owners as an array", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([
+      [
+        { id: "1", owner: "acme" },
+        { id: "2", owner: "octo" },
+      ],
+    ]);
     await insertGhCollectRuns(["Acme", "octo"], sql);
     expect(calls[0]?.values).toEqual([["acme", "octo"]]);
   });
 
   test("leaves the other columns to their defaults", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[{ id: "1", owner: "acme" }]]);
     await insertGhCollectRuns(["acme"], sql);
     expect(insertedColumns(calls[0]?.text ?? "", "gh_collect_runs")).toEqual([
       "owner",
