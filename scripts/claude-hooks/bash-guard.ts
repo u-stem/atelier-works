@@ -209,7 +209,9 @@ function listsMiseValues(words: readonly Word[]): boolean {
   if (sub === undefined) return false;
   if (subAt > 0 && (sub.text === "exec" || sub.text === "x")) {
     // オプションを前に置いた`mise x -- mise set`は、外す前置きとして扱われないので、内側のmiseを調べる。
-    const dashDash = args.findIndex((word) => word.text === "--");
+    const dashDash = args.findIndex(
+      (word, at) => at > subAt && word.text === "--",
+    );
     const inner = dashDash === -1 ? [] : args.slice(dashDash + 1);
     const stripped = stripWrappers(inner).words;
     return (
