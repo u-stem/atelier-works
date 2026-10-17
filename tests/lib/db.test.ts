@@ -1656,6 +1656,39 @@ describe("recordAgentRun", () => {
     expect(calls[0]?.text).toContain("INSERT INTO factory.agent_runs");
   });
 
+  test("passes model_usage as a jsonb array of the per-model breakdown", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    const entry = {
+      model: "claude-haiku-5",
+      input_tokens: 3,
+      output_tokens: 4,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      cost_usd: 0.002,
+    };
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "implement",
+        attempt: 1,
+        model: "claude-sonnet-5-5",
+        claude_version: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cost_usd: null,
+        num_turns: null,
+        duration_ms: null,
+        session_id: null,
+        exit_code: 0,
+        error: null,
+        model_usage: [entry],
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(JSON.stringify([entry]));
+  });
+
   test("casts nullable numeric columns (tokens/cost/turns/duration/exit_code) to their real type when null — a Claude timeout/error leaves most of these null", async () => {
     const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
     await recordAgentRun(

@@ -203,6 +203,83 @@ describe("parseClaudeJson", () => {
     });
   });
 
+  test("maps modelUsage to one entry per model", () => {
+    const result = parseClaudeJson(
+      claudeJsonStdout({
+        modelUsage: {
+          "claude-sonnet-5-5": {
+            inputTokens: 10,
+            outputTokens: 20,
+            cacheReadInputTokens: 5,
+            cacheCreationInputTokens: 1,
+            webSearchRequests: 0,
+            costUSD: 0.01,
+            contextWindow: 200000,
+            maxOutputTokens: 32000,
+          },
+          "claude-haiku-5": {
+            inputTokens: 3,
+            outputTokens: 4,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            costUSD: 0.0023,
+          },
+        },
+      }),
+    );
+    expect(result.modelUsage).toEqual([
+      {
+        model: "claude-sonnet-5-5",
+        input_tokens: 10,
+        output_tokens: 20,
+        cache_read_tokens: 5,
+        cache_creation_tokens: 1,
+        cost_usd: 0.01,
+      },
+      {
+        model: "claude-haiku-5",
+        input_tokens: 3,
+        output_tokens: 4,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        cost_usd: 0.0023,
+      },
+    ]);
+  });
+
+  test("returns no modelUsage entries when the field is absent", () => {
+    expect(parseClaudeJson(claudeJsonStdout()).modelUsage).toEqual([]);
+  });
+
+  test("returns no modelUsage entries when the field is not an object", () => {
+    const result = parseClaudeJson(claudeJsonStdout({ modelUsage: [1, 2] }));
+    expect(result.modelUsage).toEqual([]);
+  });
+
+  test("skips a modelUsage entry with a malformed number", () => {
+    const result = parseClaudeJson(
+      claudeJsonStdout({
+        modelUsage: {
+          good: {
+            inputTokens: 1,
+            outputTokens: 2,
+            cacheReadInputTokens: 3,
+            cacheCreationInputTokens: 4,
+            costUSD: 0.5,
+          },
+          bad: {
+            inputTokens: "1",
+            outputTokens: 2,
+            cacheReadInputTokens: 3,
+            cacheCreationInputTokens: 4,
+            costUSD: 0.5,
+          },
+        },
+      }),
+    );
+    expect(result.modelUsage.map((entry) => entry.model)).toEqual(["good"]);
+  });
+
   test("throws on non-JSON stdout", () => {
     expect(() => parseClaudeJson("not json")).toThrow();
   });
@@ -719,6 +796,39 @@ describe("runClaude", () => {
       claudeVersion: "2.1.282",
     });
     expect(result.agentRun.claude_version).toBe("2.1.282");
+  });
+
+  test("records the modelUsage entries on the agent run", async () => {
+    const fake = createFakeCommandRunner([
+      {
+        stdout: claudeJsonStdout({
+          modelUsage: {
+            "claude-haiku-5": {
+              inputTokens: 3,
+              outputTokens: 4,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              costUSD: 0.002,
+            },
+          },
+        }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+      },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.agentRun.model_usage.map((entry) => entry.model)).toEqual([
+      "claude-haiku-5",
+    ]);
+  });
+
+  test("records an empty model_usage when claude did not run", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: "", stderr: "boom", exitCode: 1, timedOut: false },
+    ]);
+    const result = await runClaude(baseOptions(fake.run));
+    expect(result.agentRun.model_usage).toEqual([]);
   });
 
   describe("claude_version from an empty value", () => {
