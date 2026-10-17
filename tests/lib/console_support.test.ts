@@ -55,6 +55,10 @@ describe("noticeSeverity", () => {
     expect(noticeSeverity("pr_ci_failed")).toBe("action");
   });
 
+  test("lists a stale GitHub collection as a known action kind", () => {
+    expect(NOTICE_SEVERITY.github_collect_stale).toBe("action");
+  });
+
   test("treats a merge conflict of a pull request as action", () => {
     expect(noticeSeverity("pr_conflict")).toBe("action");
   });

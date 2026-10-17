@@ -189,6 +189,18 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "github_collect_stale";
+      instance_name: string;
+      /** 収集が成功していない所有者(小文字)。 */
+      owner: string;
+      /** 閾値、最後の成功、最新の実行の原因を読める文にしたもの。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文(`gh_collect_freshness.ts`の`nextActionFor`)。 */
+      next_action: string;
+      /** Consoleでこのnoticeを選んだ要対応のURL(`buildNoticeConsoleUrl`)。 */
+      url: string;
+    }
+  | {
       kind: "default_worker_missing";
       instance_name: string;
       /** defaultのworkerがジョブを受けていないこと。 */
@@ -532,6 +544,17 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
         fields: [
           { name: "次の操作", value: event.next_action },
           instanceField(event.instance_name),
+        ],
+      };
+    case "github_collect_stale":
+      return {
+        title: `GitHubの収集が止まっています: ${event.owner}`,
+        description: event.cause,
+        url: event.url,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+          { name: "所有者", value: event.owner },
         ],
       };
     case "default_worker_missing":

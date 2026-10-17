@@ -16,6 +16,30 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("explains the threshold of a stale GitHub collection", () => {
+    expect(noticeGuide("github_collect_stale").meaning).toContain("30分");
+  });
+
+  test("points a stale GitHub collection to the run record", () => {
+    expect(noticeGuide("github_collect_stale").action).toContain(
+      "実行の記録の読み方",
+    );
+  });
+
+  test("reads the run record of the owner only", () => {
+    expect(noticeGuide("github_collect_stale").commands[0]).toContain(
+      "WHERE owner = '<所有者>' AND finished_at IS NOT NULL",
+    );
+  });
+
+  test("does not promise a future halt of the Factory", () => {
+    expect(noticeGuide("github_collect_stale").meaning).not.toContain("まだ");
+  });
+
+  test("tells how the stale GitHub collection notice resolves", () => {
+    expect(noticeGuide("github_collect_stale").note).toContain("自動で解決");
+  });
+
   // 通知本文の待ちの分数は`f/factory/lib/default_worker.ts`の`DEFAULT_WORKER_WAIT_SECONDS`(600秒)から作る。
   test("states the same wait minutes as the default worker notice", () => {
     expect(noticeGuide("default_worker_missing").meaning).toContain(

@@ -985,6 +985,23 @@ export type GhCollectOwnerState = {
   readonly last_led_at: Date | null;
 };
 
+/** 所有者ごとの、収集の鮮度の判定に使う記録。実行の無い所有者は、時刻と`latest`が`null`の行になる。 */
+export type GhCollectFreshnessRow = {
+  readonly owner: string;
+  /** `ok`かつ`verified`で`finished_at`のある行の、最大の`finished_at`。 */
+  readonly last_success_at: Date | null;
+  /** `finished_at`のある最新の行。 */
+  readonly latest: {
+    readonly finished_at: Date;
+    readonly error_code: GhCollectErrorCode | null;
+    readonly next_allowed_at: Date | null;
+  } | null;
+  /** 最新の`started_at`の行が実行中(`finished_at`が空)なら、その`started_at`。 */
+  readonly running_since: Date | null;
+  /** 所有者の行の最古の`started_at`。 */
+  readonly first_started_at: Date | null;
+};
+
 /** 収集の実行1行(所有者ごと)の終わりに書く内容。 */
 export type GhCollectRunOutcome = {
   readonly ok: boolean;
