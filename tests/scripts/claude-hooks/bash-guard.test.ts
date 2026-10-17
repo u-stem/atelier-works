@@ -1103,6 +1103,15 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise set -E loc* A=b",
     "mise set -E {local,-P} A=b",
     "mise x -- mise -E local set",
+    "mise -q x -- mise set",
+    "mise -E local x -- mise set",
+    "mise -q exec -- mise ev",
+    "mise {set,}",
+    "mise -E {local,set}",
+    "mise -E $X",
+    "mise -s bash set",
+    "mise -t x set",
+    "mise --output json set",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
@@ -1120,6 +1129,9 @@ describe("bash-guard denies mise set without a value to write", () => {
     'read -rs -p "KEY: " v && mise set -E local KEY="$v"',
     "IFS= read -rs 'v?KEY: ' && printf '%s' \"$v\" | mise set -E local --stdin KEY; unset v",
     "IFS= read -rs -p 'KEY: ' v && printf '%s' \"$v\" | mise set -E local --stdin KEY; unset v",
+    "mise set -g --stdin KEY",
+    "mise set --global KEY=value",
+    "mise set --age-encrypt --age-recipient age1x KEY=value",
     "mise run check",
     "mise -q run check",
     "mise -E local x -- bun test",
