@@ -7,6 +7,7 @@ import {
   judgePeriodicQueue,
   PERIODIC_JOB_WAIT_SECONDS,
   PERIODIC_WORKER_MISSING_NOTICE,
+  PERIODIC_WORKER_NOTICE_PREFIX,
   periodicQueueQuery,
 } from "../../f/factory/lib/periodic_worker.ts";
 import type { NoticeRecord } from "../../f/factory/lib/types.ts";
@@ -126,7 +127,25 @@ describe("periodicQueueQuery", () => {
   });
 });
 
+describe("the wait threshold", () => {
+  test("is 20 minutes, which covers the other scripts' timeouts and the margin", () => {
+    expect(PERIODIC_JOB_WAIT_SECONDS).toBe(1200);
+  });
+});
+
 describe("the missing notice", () => {
+  test("starts with the prefix that resolves it", () => {
+    expect(
+      PERIODIC_WORKER_MISSING_NOTICE.message.startsWith(
+        PERIODIC_WORKER_NOTICE_PREFIX,
+      ),
+    ).toBe(true);
+  });
+
+  test("keeps the prefix free of the threshold", () => {
+    expect(PERIODIC_WORKER_NOTICE_PREFIX).not.toMatch(/\d/);
+  });
+
   test("is an action notice", () => {
     expect(noticeSeverity(PERIODIC_WORKER_MISSING_NOTICE.kind)).toBe("action");
   });
@@ -273,9 +292,17 @@ describe("checkPeriodicWorker", () => {
     expect(h.resolved).toEqual([
       {
         kind: "periodic_worker_missing",
-        prefix: PERIODIC_WORKER_MISSING_NOTICE.message,
+        prefix: PERIODIC_WORKER_NOTICE_PREFIX,
       },
     ]);
+  });
+
+  test("resolves a notice written with an older threshold", async () => {
+    const h = harness({ response: IDLE });
+    await checkPeriodicWorker(h.deps);
+    const olderBody =
+      "tag periodicのジョブが15分以上待たされています。定期ジョブ用のworkerが居ない";
+    expect(olderBody.startsWith(h.resolved[0]?.prefix ?? "\0")).toBe(true);
   });
 
   test("does not resolve the notice when the queue could not be read", async () => {

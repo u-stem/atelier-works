@@ -27,6 +27,9 @@ export const PERIODIC_WORKER_TAG = "periodic";
  */
 export const PERIODIC_JOB_WAIT_SECONDS = 900;
 
+/** 待ちの通知の本文の、しきい値より前の固定の部分。 */
+export const PERIODIC_WORKER_NOTICE_PREFIX = "unset";
+
 /** 確認が終わるまで待つ上限。確認が止まっても自己更新の反映を遅らせないための値。 */
 export const PERIODIC_WORKER_CHECK_TIMEOUT_MS = 10_000;
 
