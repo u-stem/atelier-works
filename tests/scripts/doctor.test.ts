@@ -489,6 +489,14 @@ describe("doctor.sh read-only token check", () => {
     ).toEqual([]);
   });
 
+  test("still reports when every name is invalid", () => {
+    expect(
+      tokenLines({ GITHUB_READ_TOKEN_A__B: PAT_ONE }).filter((line) =>
+        line.includes("WARN"),
+      ),
+    ).toHaveLength(1);
+  });
+
   test("does not count an empty variable as a collision", () => {
     expect(
       tokenLines({

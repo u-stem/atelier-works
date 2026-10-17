@@ -292,6 +292,63 @@ else
   report "カスタムtag" ok "Windmill未起動のためスキップしました"
 fi
 
+# 14. 読み取り専用のトークンの環境変数(任意)
+# 収集(`collect_github`)が所有者ごとに使うトークンは、環境変数`GITHUB_READ_TOKEN_<OWNER>`で入れる。
+# 1つも無くても`mise run bootstrap`は完了するので、必須にせず警告にとどめる。
+# 値は表示せず、環境変数の名前と件数だけを出す。名前の直し方と検査は、
+# `scripts/bootstrap.sh`の`read_token_map_json`と同じにする(小文字にして`_`を`-`に直し、loginの形に合わせる)。
+read_token_keys=()
+while IFS= read -r key; do
+  if [[ -n "${key}" && -n "${!key:-}" ]]; then
+    read_token_keys+=("${key}")
+  fi
+done < <(compgen -A variable GITHUB_READ_TOKEN_)
+if [[ ${#read_token_keys[@]} -eq 0 ]]; then
+  warn "読み取りトークン" "GITHUB_READ_TOKEN_<OWNER>が1つも設定されていません(収集は全員分が対象外になります。手順はdocs/setup.mdにあります)"
+else
+  invalid_token_names=()
+  token_pairs=""
+  for key in "${read_token_keys[@]}"; do
+    login="$(printf '%s' "${key#GITHUB_READ_TOKEN_}" | tr 'A-Z_' 'a-z-')"
+    if [[ ${#login} -gt 39 ]] || ! printf '%s' "${login}" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'; then
+      invalid_token_names+=("${key}")
+    else
+      token_pairs+="${login} ${key}"$'\n'
+    fi
+  done
+  colliding_token_names=""
+  colliding_count=0
+  for dup_login in $(printf '%s' "${token_pairs}" | awk '{print $1}' | sort | uniq -d); do
+    dup_names="$(printf '%s' "${token_pairs}" | awk -v wanted="${dup_login}" '$1 == wanted {printf "%s ", $2}')"
+    colliding_token_names+="${dup_names}"
+    colliding_count=$((colliding_count + $(printf '%s' "${dup_names}" | wc -w)))
+  done
+  valid_count=$(($(printf "%s" "${token_pairs}" | grep -c . || true) - colliding_count))
+  if [[ ${valid_count} -gt 0 ]]; then
+    report "読み取りトークン" ok "${valid_count}件の所有者のトークンが設定されています"
+  fi
+  if [[ ${#invalid_token_names[@]} -gt 0 ]]; then
+    warn "読み取りトークン" "loginの形に合わない名前は扱われません: ${invalid_token_names[*]}"
+  fi
+  if [[ -n "${colliding_token_names}" ]]; then
+    warn "読み取りトークン" "小文字にして_を-に直すと同じ名前になるため、扱われません: ${colliding_token_names}"
+  fi
+fi
+
+# 15. 収集が扱えない所有者(Windmillが応答している場合だけ)
+# loginに`_`を含む所有者(EMUのアカウントなど)は、環境変数の名前の`_`が`-`に直るので、
+# 読み取り用のトークンの対応表のキーに合わず、収集の対象外になる。`factory_config`の`owners`を管理者のログインで読み、
+# 該当する所有者の名前だけを出す。読めないときはこの検査を飛ばす。
+# 宛先は、手順9で死活を確かめた`127.0.0.1:${wm_http_port}`と同じにする。パスワードは引数に載せず、環境変数から読ませる。
+if [[ "${windmill_is_up}" -eq 1 ]] && command -v mise >/dev/null 2>&1; then
+  owners_status=0
+  underscore_owners="$(cd "${REPO_ROOT}" && WM_CHECK_BASE_URL="http://127.0.0.1:${wm_http_port}" \
+    mise exec -- bun run scripts/factory-owners.ts underscore 2>/dev/null)" || owners_status=$?
+  if [[ "${owners_status}" -eq 0 && -n "${underscore_owners}" ]]; then
+    warn "収集の対象外" "loginに_を含む所有者は収集しません: $(printf '%s' "${underscore_owners}" | tr '\n' ' ')"
+  fi
+fi
+
 echo
 if [[ "${NG_COUNT}" -eq 0 ]]; then
   echo "=== 全項目OK ==="
