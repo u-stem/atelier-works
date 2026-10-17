@@ -8,16 +8,16 @@ describe("noticeGuide", () => {
     );
   });
 
-  // 通知本文の待ちの分数は`f/factory/lib/periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`(1320秒)から作る。
+  // 通知本文の待ちの分数は`f/factory/lib/periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`(660秒)から作る。
   // f/はConsoleからimportできないので、分数を直書きして一致を固定する。
   test("states the same wait minutes as the periodic worker notice", () => {
     expect(noticeGuide("periodic_worker_missing").meaning).toContain(
-      "予定時刻から22分以上",
+      "予定時刻から11分以上",
     );
   });
 
   test("explains the threshold of a stale GitHub collection", () => {
-    expect(noticeGuide("github_collect_stale").meaning).toContain("30分");
+    expect(noticeGuide("github_collect_stale").meaning).toContain("25分");
   });
 
   test("points a stale GitHub collection to the run record", () => {

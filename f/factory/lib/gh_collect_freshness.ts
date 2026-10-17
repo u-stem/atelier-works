@@ -25,11 +25,11 @@ export const GH_COLLECT_WATCH_STATE_KEY = "gh_collect_watch_since_ms";
 
 /**
  * 最新の実行の終わりがこの時間より前なら、収集が動いていないと見なす。
- * 定期ジョブ用workerの待ちは、予定時刻から最大1320秒(`periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`)で、
+ * 定期ジョブ用workerの待ちは、予定時刻から最大660秒(`periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`)で、
  * その間は収集が動いていても記録が新しくならない。その待ちに、収集の1周回(5分)を足した値である。
  * 値は複製で、`periodic_worker.ts`をimportしない。両者の関係はテストが固定する。
  */
-export const GH_COLLECT_NOT_RUNNING_AFTER_MS = (1320 + 300) * 1000;
+export const GH_COLLECT_NOT_RUNNING_AFTER_MS = (660 + 300) * 1000;
 
 /**
  * 確認全体の上限(ミリ秒)。`self_update`の最悪の長さに1回だけ数える。
@@ -53,7 +53,7 @@ const NEXT_ALLOWED_MARGIN_MS = 10 * MINUTE_MS;
 const COLLECT_CYCLE_MS = 5 * MINUTE_MS;
 
 /** 通知の閾値の下限。平常の揺れ(一時的な失敗、定期ジョブ用workerの待ち)を、所有者の数によらず黙らせる。 */
-const MIN_STALE_THRESHOLD_MS = 30 * MINUTE_MS;
+const MIN_STALE_THRESHOLD_MS = 25 * MINUTE_MS;
 
 const JST_OFFSET_MS = 9 * 60 * MINUTE_MS;
 
@@ -78,7 +78,7 @@ export type FreshnessJudgement = {
 };
 
 /**
- * 通知の閾値(ミリ秒)。`max(30分, (2n + 1) × 5分)`で、nは設定の所有者の数。
+ * 通知の閾値(ミリ秒)。`max(25分, (2n + 1) × 5分)`で、nは設定の所有者の数。
  * 所有者を順番に回す収集では、自分の番の周回で1回失敗したときの成功の間隔が最悪`2n × 5分`になる。
  * その間隔に1周回の余裕を足す。順番制を変えるときは、この式を見直す。
  */
