@@ -34,6 +34,8 @@ import {
 //   許可のキーは、この一覧のscriptと一致させる。
 // - 各scriptについて、他のscriptのtimeoutの合計に余裕を足した秒数が、待ちの検知のしきい値を超えない。
 //   このworkerの枠は1つなので、長く動くjobの後ろで待つ定期ジョブを、workerの不在と誤って知らせないためである。
+// - defaultのworkerの停止を検知するscript(default_worker_watch)も、この一覧に入る。
+//   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
 //
@@ -53,6 +55,7 @@ const PERIODIC_SCRIPTS: readonly string[] = [
   "f/factory/notify_daily_summary",
   "f/factory/auto_retry_pr_review",
   "f/factory/collect_github",
+  "f/factory/default_worker_watch",
 ];
 
 /**
@@ -68,6 +71,7 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   "f/factory/notify_daily_summary": [DISCORD_WEBHOOK_URL],
   "f/factory/auto_retry_pr_review": [DISCORD_WEBHOOK_URL],
   "f/factory/collect_github": [GITHUB_READ_TOKENS],
+  "f/factory/default_worker_watch": [DISCORD_WEBHOOK_URL],
 };
 
 /**

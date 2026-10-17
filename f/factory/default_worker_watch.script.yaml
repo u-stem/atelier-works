@@ -1,0 +1,12 @@
+summary: '[SYS-10] defaultのworkerの停止を検知'
+description: 5分ごとに実行し、defaultのworkerが止まっていないかを確かめます。defaultのqueueに予定時刻から10分以上待つジョブがあり、defaultで動いているジョブが1つも無いときだけ、通知を残してDiscordにも知らせます。長いジョブが枠を塞いでいるだけのときは知らせません。待ちが解けると通知を自動で解決します。tag
+  periodicのworkerで動かします。
+lock: '!inline f/factory/default_worker_watch.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+tag: periodic
+timeout: 120

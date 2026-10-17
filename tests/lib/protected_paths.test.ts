@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   FORBIDDEN_EXACT_PATHS,
   FORBIDDEN_PATH_PREFIXES,
+  IMPLEMENT_PROTECTED_BASENAME_PATTERNS,
   IMPLEMENT_PROTECTED_EXACT_PATHS,
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
   isNewShellScript,
@@ -26,6 +27,9 @@ describe("IMPLEMENT_PROTECTED_PATH_PREFIXES", () => {
       "console/public/",
       "infra/console_fetcher/",
       "f/factory/dependabot__flow/",
+      "scripts/host_apply/",
+      "infra/worker/",
+      "mise/",
       "infra/",
       ".husky/",
       ".githooks/",
@@ -68,8 +72,10 @@ describe("matchesForbiddenPath", () => {
     expect(matchesImplementProtectedPath("infra/Caddyfile")).toBe(true);
   });
 
-  test("does not match infra/** with the default (pr_fix) prefixes", () => {
-    expect(matchesForbiddenPath("infra/worker/Dockerfile")).toBe(false);
+  test("does not match infra/** in general with the default (pr_fix) prefixes", () => {
+    expect(matchesForbiddenPath("infra/docker-compose.override.yml")).toBe(
+      false,
+    );
   });
 
   test("matches infra/** with the implement prefixes", () => {
@@ -766,5 +772,193 @@ describe("dependabot files on disk", () => {
       (path) => !CLIENT_LOCK.test(path) && !matchesImplementProtectedPath(path),
     );
     expect(unprotected).toEqual([]);
+  });
+});
+
+// ホストの実行役が実行する道具は、pr_fixの自動修正が書き換えられず、implementのPRに記録される。
+// 変更を人に通す仕組みは実行役の承認で、保護パスはその補助である。
+describe("files that the host executor runs", () => {
+  const EXACT = [
+    "scripts/host-apply.ts",
+    "scripts/host-apply.sh",
+    "scripts/host-install.sh",
+    "scripts/check-docker-version.sh",
+    "scripts/doctor.sh",
+    "scripts/bootstrap.sh",
+    "scripts/custom-tags.ts",
+    "scripts/record-host-applied.sh",
+    "infra/docker-compose.yml",
+    "tests/infra/docker_compose.test.ts",
+    "tests/fixtures/host_apply_repo.ts",
+  ];
+  const UNDER_PREFIX = [
+    "scripts/host_apply/ci.ts",
+    "scripts/host_apply/deep/nested.ts",
+    "infra/worker/Dockerfile",
+    "infra/worker/scripts/entry.sh",
+    "mise/config.toml",
+    "mise/conf.d/extra.toml",
+  ];
+  const BASENAMES = [
+    ".tool-versions",
+    "sub/dir/.tool-versions",
+    ".env",
+    ".env.local",
+    ".env.production",
+    "sub/.env",
+    ".node-version",
+    ".bun-version",
+    "sub/.bun-version",
+  ];
+  const HOST_TESTS = [
+    "target",
+    "imports",
+    "ci",
+    "approval",
+    "mise_policy",
+    "env",
+    "compose_policy",
+    "dryrun",
+    "git",
+    "state",
+    "notify_text",
+    "mask",
+    "timeouts",
+    "plan",
+    "package_policy",
+    "staging",
+    "drain",
+    "converge",
+    "restore",
+    "marker",
+    "lock",
+    "heartbeat",
+    "manifest",
+    "notify",
+  ].map((name) => `tests/scripts/host_apply_${name}.test.ts`);
+
+  test.each([...EXACT, ...UNDER_PREFIX, ...BASENAMES, ...HOST_TESTS])(
+    "matchesForbiddenPath matches %s",
+    (path) => {
+      expect(matchesForbiddenPath(path)).toBe(true);
+    },
+  );
+
+  test.each([...EXACT, ...UNDER_PREFIX, ...BASENAMES, ...HOST_TESTS])(
+    "matchesImplementProtectedPath matches %s",
+    (path) => {
+      expect(matchesImplementProtectedPath(path)).toBe(true);
+    },
+  );
+
+  test("the pr_fix and implement lists agree on every one of them", () => {
+    const paths = [...EXACT, ...UNDER_PREFIX, ...BASENAMES, ...HOST_TESTS];
+    expect(
+      paths.filter(
+        (path) =>
+          matchesForbiddenPath(path) !== matchesImplementProtectedPath(path),
+      ),
+    ).toEqual([]);
+  });
+
+  test.each([
+    "docs/env.md",
+    "scripts/environment.ts",
+    ".environment",
+    "infra/workers/x.yml",
+    "infra/worker.md",
+    "mises/config.toml",
+    "scripts/host_apply.md",
+    "scripts/doctor.sh.bak",
+    "tests/scripts/host_apply_unlisted.test.ts",
+    "tests/scripts/other_apply_plan.test.ts",
+  ])("matchesForbiddenPath does not match %s", (path) => {
+    expect(matchesForbiddenPath(path)).toBe(false);
+  });
+
+  test("keeps package.json out of the pr_fix list, as the implement list holds it", () => {
+    expect([
+      matchesForbiddenPath("package.json"),
+      matchesImplementProtectedPath("package.json"),
+    ]).toEqual([false, true]);
+  });
+
+  test("the implement basename list does not repeat a pattern", () => {
+    const sources = IMPLEMENT_PROTECTED_BASENAME_PATTERNS.map((p) => p.source);
+    expect(sources.length - new Set(sources).size).toBe(0);
+  });
+
+  test("the implement exact list does not repeat a path", () => {
+    expect(
+      IMPLEMENT_PROTECTED_EXACT_PATHS.length -
+        new Set(IMPLEMENT_PROTECTED_EXACT_PATHS).size,
+    ).toBe(0);
+  });
+
+  test("the pr_fix exact list does not repeat a path", () => {
+    expect(
+      FORBIDDEN_EXACT_PATHS.length - new Set(FORBIDDEN_EXACT_PATHS).size,
+    ).toBe(0);
+  });
+});
+
+// 実行役のファイルが増えても、保護から漏れないよう、実際のファイルを調べる。
+describe("host executor files on disk", () => {
+  async function paths(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    for await (const path of new Bun.Glob(pattern).scan({
+      cwd: ".",
+      onlyFiles: true,
+    })) {
+      found.push(path);
+    }
+    return found;
+  }
+
+  test("finds the executor files, so that the checks below are not empty", async () => {
+    expect(await paths("scripts/host_apply/*.ts")).toContain(
+      "scripts/host_apply/plan.ts",
+    );
+  });
+
+  test("matchesForbiddenPath matches every file under scripts/host_apply/", async () => {
+    const unprotected = (await paths("scripts/host_apply/**/*")).filter(
+      (path) => !matchesForbiddenPath(path),
+    );
+    expect(unprotected).toEqual([]);
+  });
+
+  test("matchesImplementProtectedPath matches every file under scripts/host_apply/", async () => {
+    const unprotected = (await paths("scripts/host_apply/**/*")).filter(
+      (path) => !matchesImplementProtectedPath(path),
+    );
+    expect(unprotected).toEqual([]);
+  });
+
+  test("matchesForbiddenPath matches every tests/scripts/host_apply_*.test.ts", async () => {
+    const unprotected = (
+      await paths("tests/scripts/host_apply_*.test.ts")
+    ).filter((path) => !matchesForbiddenPath(path));
+    expect(unprotected).toEqual([]);
+  });
+
+  test("matchesImplementProtectedPath matches every tests/scripts/host_apply_*.test.ts", async () => {
+    const unprotected = (
+      await paths("tests/scripts/host_apply_*.test.ts")
+    ).filter((path) => !matchesImplementProtectedPath(path));
+    expect(unprotected).toEqual([]);
+  });
+
+  test("matchesForbiddenPath matches every scripts/host-apply.* entry point", async () => {
+    const unprotected = (await paths("scripts/host-apply.*")).filter(
+      (path) => !matchesForbiddenPath(path),
+    );
+    expect(unprotected).toEqual([]);
+  });
+
+  test("finds the entry point, so that the check above is not empty", async () => {
+    expect(await paths("scripts/host-apply.*")).toContain(
+      "scripts/host-apply.ts",
+    );
   });
 });

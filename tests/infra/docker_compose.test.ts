@@ -906,3 +906,21 @@ describe("infra/docker-compose.yml windmill_server session validity", () => {
     expect(setting).toEqual([]);
   });
 });
+
+// ホストの実行役は、composeの定義にdockerのソケットが無いことを前提に、
+// 静的な検査でソケットを含む定義を拒否する。今の定義がその前提を満たすことを確かめる。
+describe("infra/docker-compose.yml docker socket", () => {
+  test("no service mounts the docker socket", () => {
+    const parsed = compose();
+    const names = isRecord(parsed.services) ? Object.keys(parsed.services) : [];
+    const mounting = names.filter((name) =>
+      mounts(service(name)).some((m) => m.source.includes("docker.sock")),
+    );
+
+    expect(mounting).toEqual([]);
+  });
+
+  test("the parsed definition never names the docker socket", () => {
+    expect(JSON.stringify(compose())).not.toContain("docker.sock");
+  });
+});

@@ -128,8 +128,8 @@ describe("periodicQueueQuery", () => {
 });
 
 describe("the wait threshold", () => {
-  test("is 20 minutes, which covers the other scripts' timeouts and the margin", () => {
-    expect(PERIODIC_JOB_WAIT_SECONDS).toBe(1200);
+  test("is 22 minutes, which covers the other scripts' timeouts and the margin", () => {
+    expect(PERIODIC_JOB_WAIT_SECONDS).toBe(1320);
   });
 });
 

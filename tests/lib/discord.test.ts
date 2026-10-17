@@ -296,6 +296,39 @@ describe("buildEmbed periodic_worker_missing", () => {
   });
 });
 
+describe("buildEmbed default_worker_missing", () => {
+  const event: NotifyEvent = {
+    kind: "default_worker_missing",
+    instance_name: "local",
+    cause: "defaultのworkerが居ません",
+    next_action: "mise run upで起動し直す",
+  };
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe("defaultのworkerが居ません");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "mise run upで起動し直す",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+
+  test("says the default worker does not take jobs in the title", () => {
+    expect(buildEmbed(event).title).toBe(
+      "defaultのworkerがジョブを受けていません",
+    );
+  });
+});
+
 describe("buildEmbed console_worker_check_failed", () => {
   const event: NotifyEvent = {
     kind: "console_worker_check_failed",

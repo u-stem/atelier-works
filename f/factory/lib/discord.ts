@@ -189,6 +189,14 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "default_worker_missing";
+      instance_name: string;
+      /** defaultのworkerがジョブを受けていないこと。 */
+      cause: string;
+      /** 運用者がまず行う操作の1文。 */
+      next_action: string;
+    }
+  | {
       kind: "console_worker_check_failed";
       instance_name: string;
       /** Console用のworkerがジョブを受けているかを、続けて確かめられていないこと。 */
@@ -519,6 +527,16 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
     case "periodic_worker_missing":
       return {
         title: "定期ジョブ用のworkerがジョブを受けていません",
+        description: event.cause,
+        url: null,
+        fields: [
+          { name: "次の操作", value: event.next_action },
+          instanceField(event.instance_name),
+        ],
+      };
+    case "default_worker_missing":
+      return {
+        title: "defaultのworkerがジョブを受けていません",
         description: event.cause,
         url: null,
         fields: [

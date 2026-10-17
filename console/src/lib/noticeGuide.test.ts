@@ -8,11 +8,24 @@ describe("noticeGuide", () => {
     );
   });
 
-  // 通知本文の待ちの分数は`f/factory/lib/periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`(1200秒)から作る。
+  // 通知本文の待ちの分数は`f/factory/lib/periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`(1320秒)から作る。
   // f/はConsoleからimportできないので、分数を直書きして一致を固定する。
   test("states the same wait minutes as the periodic worker notice", () => {
     expect(noticeGuide("periodic_worker_missing").meaning).toContain(
-      "予定時刻から20分以上",
+      "予定時刻から22分以上",
+    );
+  });
+
+  // 通知本文の待ちの分数は`f/factory/lib/default_worker.ts`の`DEFAULT_WORKER_WAIT_SECONDS`(600秒)から作る。
+  test("states the same wait minutes as the default worker notice", () => {
+    expect(noticeGuide("default_worker_missing").meaning).toContain(
+      "予定時刻から10分以上",
+    );
+  });
+
+  test("tells the operator to run mise run up for a missing default worker", () => {
+    expect(noticeGuide("default_worker_missing").action).toContain(
+      "mise run up",
     );
   });
 

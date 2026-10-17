@@ -2256,7 +2256,8 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
-| `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から20分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
+| `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から22分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
+| `default_worker_missing` | defaultのworkerのqueueに、予定時刻から10分以上実行されずに待つジョブがあり、defaultで動いているジョブが1つも無い。defaultのworkerが居ないか、ジョブを受けられない状態で、flowとscriptが動かない。長いジョブが枠を埋めて後ろのジョブが待つだけのときは出ない。Discordにも届く | `docker compose ps windmill_worker`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、Windmillの画面のWorkers画面で、ワーカーグループdefaultのworkerが生きているかを確かめる。生きていなければ、`docker compose logs windmill_worker`でエラーを確かめる。受けるようになると、定期ジョブ用のworkerで動く確認(5分ごと)が自動で解決する |
 | `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
 | `worker_load_high` | defaultのworkerのメモリが、上限の割合以上になった、またはOOMで止められたプロセスが増えた。本文に原因、閾値、システムの画面のリンクが載る。Discordには届かない | システムの画面の「workerの負荷」で最新の値と最大値を確かめ、実行中のジョブを見る。続くなら、メモリを使うジョブの見直しか、メモリの上限の見直しを判断する。割合は設定`worker_alert_memory_ratio`で変えられる([閾値の通知](#閾値の通知))。自動では解決されないので、確かめたあとに人が解決する |
 | `review_gated_prolonged` | `review_post_mode`が`gated`のまま、レビューをPRに投稿しない状態が3日以上続いた。本文に作業項目の画面のリンクが載る。日数と件数は日次のまとめの「レビューの投稿」欄に出る。Discordには届かない | 投稿を続けるなら、`factory_config`の`review_post_mode`を`comment_only`に戻す。戻すと、次の日次のまとめの実行で自動で解決される。意図して続けるなら、作業項目で結果を確かめ、人が解決する。続く間は翌日に出直す |
@@ -2337,17 +2338,17 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 定期ジョブ用のworkerがジョブを受けているかどうかは、自己更新(`self_update`)が毎回の最後に、Console用のworkerの確認に続けて確かめる。
 判定は、tag `periodic`のジョブのうち、予定時刻を過ぎても実行が始まっていないものを、古い順に100件まで読んで決める。
-予定時刻から20分以上待っているものが1件でもあれば、workerがジョブを受けていないと判定し、通知`periodic_worker_missing`を残してDiscordにも送る。
-20分未満の待ちと、待つジョブが無いことは、問題なしと判定する。
+予定時刻から22分以上待っているものが1件でもあれば、workerがジョブを受けていないと判定し、通知`periodic_worker_missing`を残してDiscordにも送る。
+22分未満の待ちと、待つジョブが無いことは、問題なしと判定する。
 しきい値は、tag `periodic`を付けた各scriptについて、他のscriptの`timeout`の合計に余裕を足した値以上にしている。
 枠が1つなので、長く動くジョブの後ろで待つ間を、workerの不在と誤って知らせないためである。
-今の3本では、`collect_github`が最も待たされ、`notify_daily_summary`の600秒と`auto_retry_pr_review`の300秒の後ろで、最大900秒待つ。
+今の4本では、`collect_github`と`default_worker_watch`が最も待たされ、他の3本の`timeout`の合計である1020秒まで待つ。
 通知の解決は、本文のしきい値より前の固定の部分で選ぶので、しきい値を変える前に残した通知も、自動で解決される。
 
 Console用のworkerの確認と違い、動作の証拠は求めない。
 tag `periodic`を付けたscriptが無い間や、スケジュールが無効な間は、待つジョブがそもそも作られない。
 証拠を求めると、その間も判定できない回が続き、確認の失敗が通知されるためである。
-待つジョブが無くなるか、20分未満になると、残した通知を自動で解決する。
+待つジョブが無くなるか、22分未満になると、残した通知を自動で解決する。
 
 通知が立つのは、workerが居ないときだけではない。
 workerが居ても、枠が塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
@@ -2356,15 +2357,17 @@ workerが居ても、枠が塞がっているときや、tagの設定がずれ�
 次の点に注意する。
 
 - この検知は、tag `periodic`のジョブが1件以上作られて初めて働く。tagを付けたscriptが無い間は、workerが止まっていても気づけない。
-- workerの枠は1つなので、長く動くジョブがあると、ほかのジョブが20分以上待ちうる。通知が出たら、実行中のジョブと、そのscriptの`timeout`を確かめる。
+- workerの枠は1つなので、長く動くジョブがあると、ほかのジョブが22分以上待ちうる。通知が出たら、実行中のジョブと、そのscriptの`timeout`を確かめる。
 - workerは居るがジョブが毎回すぐ失敗するときは、この検知では拾わない。スケジュールの失敗の検知(`schedule_failing`)が拾う。
 - `mise run up`で定期ジョブ用のworkerを作り直している間は、通知が出うる。作り直しが終われば、自動で解決する。
 - スケジュールの`permissioned_as`がsuperadminなら、カスタムtag`periodic`の許可が無くても動く。
   superadminでなければ、許可が要る。
-  現在の3本のスケジュールの`permissioned_as`は`u/admin`である。値は`wmill schedule get <scriptのパス> --json`で読める。
+  `notify_daily_summary`、`auto_retry_pr_review`、`collect_github`、`default_worker_watch`のスケジュールの`permissioned_as`は`u/admin`である。値は`wmill schedule get <scriptのパス> --json`で読める。
   許可を欠くと、ジョブは積まれないことがある。実機では確かめていないので、起きうる事象として扱う。
   ジョブが積まれなければ、この検知も、スケジュールの失敗の検知(`schedule_failing`)も働かず、どちらでも拾えない。
   `mise run doctor`の「カスタムtag」の項目で、`periodic`が`OK`であることを確かめて防ぐ。`NG`なら`mise run instance:tags`を実行する。
+- defaultのworkerが止まったときの検知(`default_worker_watch`)も、このworkerで動く。
+  このworkerが止まると、その検知も止まる。片方だけが止まるときは、もう一方が拾う。
 - 一覧を読めなかった回と、応答が一覧の形でない回は、判定できないものとして扱う。通知は出さず、残した通知も解決しない。自己更新のジョブログに警告を残す。
 
 警告は次の3種類である。
@@ -2382,8 +2385,8 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_pe
 ```
 
 1. `stop`で定期ジョブ用のworkerを止める。
-2. tag `periodic`のscriptの次の予定から約25分以内に、通知`periodic_worker_missing`ができ、Discordにも届くことを見る。
-   内訳は、待ちの20分と、自己更新の間隔2分に、自己更新の実行時間を足した値である。
+2. tag `periodic`のscriptの次の予定から約27分以内に、通知`periodic_worker_missing`ができ、Discordにも届くことを見る。
+   内訳は、待ちの22分と、自己更新の間隔2分に、自己更新の実行時間を足した値である。
 3. `start`で戻す。待ちのジョブが動き出して数分以内に、通知が自動で解決されることを見る。
 
 tag `periodic`を付けたscriptが、定期ジョブ用のworkerで動くことは、反映の後に次のコマンドで確かめる。
@@ -2408,6 +2411,105 @@ workerが動いていないときは、queueに残ったtag `periodic`のジョ�
 `mise run up`でworkerを起動して処理させるか、Windmillの画面か`wmill job cancel <ジョブのID>`で取り消す。
 tagを外して反映した後は、次の回のスケジュールが積まれることを`wmill job list --script-path <scriptのパス>`で確かめる。
 Windmillが次の回を積む時点の挙動は、実機で確かめていない。
+
+### defaultのworkerの検知を確かめる
+
+defaultのworkerが止まっていないかは、tag `periodic`のscript `default_worker_watch`が5分ごとに確かめる。
+defaultのworkerの中で動くscriptは、そのworkerが止まると動かず、止まったことを知らせられない。
+そこで、定期ジョブ用のworkerで動かす。
+定期ジョブ用のworkerが止まったことは、逆に、defaultのworkerで動く`self_update`が確かめる([定期ジョブ用のworkerの検知を確かめる](#定期ジョブ用のworkerの検知を確かめる))。
+
+通知するのは、defaultのworkerが止まっているときだけである。
+枠がすべて塞がっていた割合や、queueの待ちの長さでは通知しない。
+Claudeの長いジョブ(実装は最長6時間)がdefaultの枠を埋め、後ろのジョブが長く待つのは、設計どおりの状態だからである。
+通知しても運用者の行動につながらない。
+枠の占有の記録は、日次のまとめとConsoleのシステムの画面で見える([枠の占有](#枠の占有))。
+待ちが長いことと、defaultで動いているジョブが無いことの両方が成り立つときだけ、通知する。
+
+判定は、次の順に決める。
+実行中のジョブと、予定時刻を過ぎても実行が始まっていないジョブを、それぞれ100件まで読む。
+待ちは古い順に読む。
+
+1. 待ちの応答が一覧の形でなければ、判定できないものとして扱う。
+2. defaultのworkerが受けるtagのジョブの最長の待ちが10分未満なら、問題なしと判定する。
+   ただし、待ちの一覧に形の読めない要素がある場合と、一覧が1ページを埋めている場合は、判定できないものとして扱う。
+   10分以上の待ちを読み落としている可能性を、除けないためである。
+   defaultのworkerが受けるtagは、[枠の使用数の数え方を確かめる](#枠の使用数の数え方を確かめる)の数え方と同じである。
+   tag `console`、tag `periodic`、nativeのworkerのtagのジョブは、defaultの枠を使わないので数えない。
+3. defaultで動いているジョブが1つでもあれば、問題なしと判定する。
+   フローの親ジョブは、動き出した後は枠を使い続けないので、動いているジョブに数えない。
+4. 実行中の一覧に、次のどれかがあるときは、判定できないものとして扱う。
+   形が読めない要素、受けるworkerが分からないtagの要素、1ページを埋める件数である。
+   それらがdefaultで動いている可能性を、除けないためである。
+5. それ以外は、止まりの候補とする。
+
+1回の観測では止まりと決めない。
+ジョブの切り替わりの隙間や、workerを作り直す瞬間には、長い待ちがあるのに動くジョブが無い観測も起こりうるためである。
+候補になったときは、同じ実行の中で60秒おいて、2つの一覧を読み直す。
+最も古い待ちのジョブIDが同じままで、defaultで動くジョブが無いときだけ、止まりと判定する。
+止まりと判定すると、通知`default_worker_missing`を残してDiscordにも送る。
+最も古い待ちが別のジョブに替わっていたり、defaultで動くジョブが現れたりしていれば、queueは動いているので問題なしと判定する。
+読み直しの失敗や、想定外の形は、判定できないものとして扱う。
+1回目が問題なしか判定できないときは、読み直さない。
+
+しきい値の10分は、workerの再起動(`mise run up`)で受けない間と、ジョブを拾うまでの遅れを見込んだ値である。
+動いているジョブが無いので、先に動くジョブの後ろで待っているのではない。
+止まってから通知までの遅れは、最大で約20分である。
+内訳は、待つジョブが次に予定される時刻までの約90秒、しきい値の600秒、確認の周期の300秒、読み直しの60秒である。
+読み直しを含めた確認の上限は100秒(観測ごとの上限20秒を2回と、おく60秒)で、scriptの`timeout`の120秒に収まる。
+
+待ちが10分未満になるか、defaultで動くジョブが現れると、残した通知を自動で解決する。
+一覧を読めなかった回、応答の形が想定外の回、時間切れの回は、判定できないものとして扱う。
+通知は出さず、残した通知も解決しない。
+確認できない状態が続いても、運用者の行動につながらないので、通知にはしない。
+scriptのジョブログに警告を残す。
+
+警告は次の6種類である。
+
+- `could not list the waiting default jobs`: 待っているジョブの一覧を読むAPIが失敗した。権限が足りないときもこうなる。
+- `could not list the running default jobs`: 実行中のジョブの一覧を読むAPIが失敗した。
+- `could not confirm the default worker from the job lists`: 応答が想定外の形で、判定できない。
+- `could not read the id of the oldest waiting default job`: 最も古い待ちのジョブIDが読めず、読み直しで同じジョブかを比べられない。
+- `could not wait before reading the default jobs again`: 読み直す前のおく時間が失敗した。
+- `default worker check timed out`: 確認全体の上限(100秒)以内に終わらなかった。
+
+通知が立つのは、workerが居ないときだけではない。
+workerが居ても、ジョブを受けられない状態のときにも立つ。
+通知の次の操作に従い、コンテナの状態、`mise run up`での起動、Windmillの画面のWorkers画面の順に確かめる。
+通知を記録してからDiscordに送るまでの間にscriptが終わると、通知はConsoleに残るがDiscordには届かない。
+次の回は同じ通知を重ねて記録しないので、Discordへは送り直されない。
+これは、同種の検知と同じ挙動である。
+
+#### 拾わない状態
+
+この検知が拾うのは、defaultのworkerだけが止まり、定期ジョブ用のworkerが動いている状態である。
+次の状態は拾わない。
+
+- defaultのworkerは居るが、ジョブが毎回すぐ失敗する。待ちが短く、止まりと判定されない。
+  失敗の検知(`schedule_failing`)は、`on_error_schedule`が行うが、このscriptもdefaultのworkerで動くので、一斉に失敗すると鳴らないことがある。
+- 確認できない状態が続く。`unknown`は警告ログだけで、通知にしない。ジョブログの警告を見ないと気づけない。
+- 定期ジョブ用のworkerとdefaultのworkerが両方止まる。Windmillのserver、DB、docker、ホストの共通の障害も同じである。互いの監視は、片方だけが止まるときに働く。
+- 長いジョブ(最長6時間)がdefaultの枠を埋めている間は、`self_update`が待たされ、定期ジョブ用のworkerの確認が走らない。その間に定期ジョブ用のworkerが止まっても、気づけない。
+
+次の点に注意する。
+
+- この検知は、定期ジョブ用のworkerが動いていることを前提にする。定期ジョブ用のworkerが止まっているときは、`periodic_worker_missing`が拾う。
+- `mise run up`でdefaultのworkerを作り直している間は、通知が出うる。作り直しが終われば、自動で解決する。
+- 待ちの一覧は、古い順に100件までしか読まない。defaultのworker以外のtagの古い待ちが100件を超えて並ぶと、defaultの待ちを読み落とす。1ページを埋める一覧は判定できないものとして扱うので、誤って問題なしとは判定しない。
+- スケジュールの`permissioned_as`は、反映の後に`wmill schedule get f/factory/default_worker_watch --json`で確かめる。
+
+反映の後に、次の手順で検知が動いていることを実機で確かめる。
+defaultのworkerを止めて戻すコマンドは次のとおりである。
+止めている間は、自己更新も止まる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml stop windmill_worker
+mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker
+```
+
+1. `stop`でdefaultのworkerを止める。
+2. 約20分以内に、通知`default_worker_missing`ができ、Discordにも届くことを見る。
+3. `start`で戻す。待ちのジョブが動き出して数分以内に、通知が自動で解決されることを見る。
 
 ### カスタムtagの許可を確かめる
 
@@ -2620,6 +2722,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   同時に動くジョブは1つである。
   Claudeのジョブが動く間、記録のジョブも、ほかの定期のジョブも待つ。
   tag`periodic`を付けた定期ジョブは、定期ジョブ用のworkerが動かすので待たない。
+  該当するのは、`notify_daily_summary`、`auto_retry_pr_review`、`collect_github`、`default_worker_watch`である。
 - 1つのコンテナで複数のworkerが動くと、`worker_ping`の行も複数になる。
   nativeのworkerは1つのコンテナに8行あり、名前の末尾が行ごとに違う。
   defaultのworkerの1行は、複数のworkerが1行にまとまった表示ではない。
@@ -3318,6 +3421,31 @@ workerのコンテナが作り直されるので、実装中(`implementing`)の�
 作り直しの直後は、停止したコンテナの行が`ping_at`の絞りに5分残るので、5分待ってから数える。
 反映の後に、古い本文で残った`console_worker_missing`と`worker_load_high`の未解決の通知を解決する。
 本文が変わると、同じ原因の通知が2件目として記録されうるためである。
+
+### 反映の計画を確かめる
+
+ホストの実行役の`plan`で、あるコミットを反映したときの判定を、何も変えずに確かめる。
+`mise run up`の前に、承認が要る変更の有無を知りたいときは、これを使う。
+gitのオブジェクトを読むだけで、作業ツリー、ネットワーク、dockerには触れない。
+
+```bash
+bun scripts/host-apply.ts plan --repo <リポジトリのパス> --applied <適用済みのsha> --target <目標のsha>
+```
+
+shaは40桁の小文字の16進で指定する。ブランチ名やタグ名は受け付けない。
+承認済みのコミットがあるときは、`--approved <sha>`を足す。
+
+標準出力にJSONを1行で出力する。`decision`の値は次の4つである。
+
+| `decision` | 意味 | 次の操作 |
+| --- | --- | --- |
+| `noop` | 目標が適用済みと同じか、その祖先 | なし |
+| `would_converge` | 承認が要る変更も静的検査の違反も無い。CIの結果は確認していない | mainのCIの結果を確かめてから反映する |
+| `pending_approval` | 承認が要るファイルに触れる。`files`に一覧が載る | 一覧のファイルの差分を人が読み、問題が無ければ反映する |
+| `rejected` | 静的検査に通らない。`kind`が理由で、`detail`に内容が載る | 変更を直す。実行役の許可リストが古いときは、許可リストを更新する |
+
+終了コードは、判定が出れば0、コミットが無いなどの実行の失敗なら1、引数の誤りなら2である。
+承認が要る変更の範囲と、静的検査の内容は、[ホストの実行役の境界](security.md#ホストの実行役の境界)にある。
 
 ### f/とworkerのイメージを両方変えたとき
 
