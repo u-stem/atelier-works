@@ -41,6 +41,7 @@ import {
   recordDeployment,
   recordFailure,
   resolveNoticeIfUnresolved,
+  resolveUnresolvedNoticesByPrefix,
 } from "./lib/db.ts";
 import {
   DISCORD_RETRY_MAX_WAIT_MS,
@@ -64,6 +65,11 @@ import {
 import { isRequirementsApprovedForAttempt } from "./lib/implement_support.ts";
 import { jobTmpEnv } from "./lib/job_tmp.ts";
 import { type Logger, logger, maskSecrets } from "./lib/log.ts";
+import {
+  checkPeriodicWorker,
+  PERIODIC_WORKER_CHECK_TIMEOUT_MS,
+  periodicQueueQuery,
+} from "./lib/periodic_worker.ts";
 import {
   MERGED_PULL_REQUESTS_LOG_FORMAT,
   parseMergedPullRequests,
@@ -540,7 +546,11 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  *   `setVariable`、`setVariable`が時間切れのときの読み直し、
  *   `recordDeployment`の成功、`recordDeployment`の失敗: 8
  *   (成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので両方を数える)
- * - finally: stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
+ * - finally(Console用workerの確認): stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
+ * - finally(定期ジョブ用workerの確認): noticeの挿入、noticeの解決、通知先の取得: 3
+ *   (この3つは確認全体の上限(`PERIODIC_WORKER_CHECK_TIMEOUT_MS`)の中に収まるので、
+ *   最悪の合計では二重に数えている。テストが呼び出しの箇所を数えるため、
+ *   Console用workerの確認の4つと同じ数え方にそろえ、余裕として残す)
  * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
  *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
  * - 止まった作業項目の再開の候補の確認(候補の一覧と要件の承認の読み)と起動: 2
@@ -548,7 +558,7 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  *   (`gh api`の子プロセスは`DEFAULT_TIMEOUT_MS`が上限だが、ここで先に区切る)
  */
 export const SELF_UPDATE_BOUNDED_CALL_COUNT =
-  13 + 4 + HOST_ACTION_RECONCILE_LIMIT + 2 + 3;
+  13 + 4 + 3 + HOST_ACTION_RECONCILE_LIMIT + 2 + 3;
 
 /**
  * finallyの通知1回の上限(ミリ秒)。
@@ -575,6 +585,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - 区切った呼び出し: 上限の回数分
  * - 通知: ホスト側の作業の通知とfinallyの通知の2回
  * - Console用workerの確認
+ * - 定期ジョブ用workerの確認
  * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
 export const SELF_UPDATE_WORST_CASE_MS =
@@ -588,7 +599,8 @@ export const SELF_UPDATE_WORST_CASE_MS =
     (WMILL_CLI_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
   SELF_UPDATE_BOUNDED_CALL_COUNT * SELF_UPDATE_CALL_TIMEOUT_MS +
   2 * SELF_UPDATE_NOTIFY_TIMEOUT_MS +
-  CONSOLE_WORKER_CHECK_TIMEOUT_MS;
+  CONSOLE_WORKER_CHECK_TIMEOUT_MS +
+  PERIODIC_WORKER_CHECK_TIMEOUT_MS;
 
 // ---------------------------------------------------------------------------
 // main
@@ -606,9 +618,13 @@ export type SelfUpdateResult =
 
 type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 
+/** 定期ジョブ用workerの不在の通知を、待ちが解けて自動で解決するときの、解決者の名前。 */
+const PERIODIC_WORKER_NOTICE_RESOLVER = "self_update";
+
 /**
- * 自己更新を行い、そのあとでConsole用workerが受けているかを確かめる。
+ * 自己更新を行い、そのあとでConsole用workerと定期ジョブ用workerが受けているかを確かめる。
  * 確認は更新の成否によらず毎回行う。Console用workerがジョブを受けないとConsoleのジョブが溜まり続けるため。
+ * 定期ジョブ用workerがジョブを受けないと、tag periodicを付けた定期ジョブが溜まり続けるため。
  * 確認は時間を区切り、失敗しても例外を投げないので、更新の結果は変わらない。
  */
 export async function main(): Promise<SelfUpdateResult> {
@@ -648,6 +664,37 @@ export async function main(): Promise<SelfUpdateResult> {
       getState: () => withCallTimeout("getState", () => wmill.getState()),
       setState: (state) =>
         withCallTimeout("setState", () => wmill.setState(state)),
+      instanceName: config.instance_name,
+      log,
+    });
+    // 定期ジョブ用workerの確認も、更新の成否によらず走らせる。時間を区切り、例外は投げない。
+    await checkPeriodicWorker({
+      listWaitingJobs: () =>
+        wmill.JobService.listQueue(
+          periodicQueueQuery(wmillDefault.getWorkspace()),
+        ),
+      now: () => Date.now(),
+      addNotice: (record) =>
+        withCallTimeout("addNotice", () => addNoticeUnlessUnresolved(record)),
+      resolveNotices: (kind, messagePrefix) =>
+        withCallTimeout("resolveNotices", () =>
+          resolveUnresolvedNoticesByPrefix(
+            kind,
+            messagePrefix,
+            PERIODIC_WORKER_NOTICE_RESOLVER,
+          ),
+        ),
+      notify: async (event) => {
+        const webhookUrl = await withCallTimeout("getVariable webhook", () =>
+          wmill.getVariable("f/factory/discord_webhook_url"),
+        );
+        await withCallTimeout(
+          "notify",
+          () =>
+            notifyBestEffort(webhookUrl, event, log, { fetch: boundedFetch }),
+          SELF_UPDATE_NOTIFY_TIMEOUT_MS,
+        );
+      },
       instanceName: config.instance_name,
       log,
     });

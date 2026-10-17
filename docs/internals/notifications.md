@@ -33,6 +33,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、最初に確かめられなかった時刻から1時間続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
+| `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 集計の対象の日の、実行回数、コスト、失敗、要件定義の承認・却下の件数、DBの掃除の件数、workerの負荷、`gated`のときの投稿しなかったレビューの期間と件数 |
@@ -89,6 +90,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_fetch_problem` | なし | 説明に原因、「次の操作」 |
 | `console_worker_check_failed` | なし | 説明に原因、「次の操作」 |
 | `console_worker_missing` | なし | 説明に原因、「次の操作」 |
+| `periodic_worker_missing` | なし | 説明に原因、「次の操作」 |
 | `host_action_required` | なし | 説明に反映した版と変わったパス、「次の操作」 |
 | `main_ci_failed` | 失敗した実行 | 説明にコミットの先頭7文字、「次の操作」、リポジトリ |
 | `daily_summary` | なし | 説明に実行件数と費用、失敗、承認、却下、DB掃除、workerの負荷、`gated`のときだけ「レビューの投稿」 |
@@ -405,7 +407,7 @@ mergeから反映までの通常の見込みは17分である。
 `poll_issues`の5分は、食い違いを最初に見た時刻から数えるための見積もりとする。
 猶予の30分は、この17分に余裕を持たせて決めている。
 17分は実測の上限ではない。
-自己更新の1回の実行は、最悪で約47分(ジョブの上限は2800秒)かかる。
+自己更新の1回の実行は、最悪で約52分(ジョブの上限は3100秒)かかる。
 ロックの待ち(最大5分)と、ネットワークを使うgitが加わるためである。
 このため、正常な反映でも30分を超えうる。
 このほかに、defaultの枠が埋まっていると、実行の開始前に待たされる。

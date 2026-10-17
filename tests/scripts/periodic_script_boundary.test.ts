@@ -1,0 +1,476 @@
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import {
+  codeOf,
+  filesWithNonLiteralReads,
+  filesWithTag,
+  filesWithToolDependencies,
+  filesWithUnfollowableImports,
+  GITHUB_TOKEN,
+  hasInputReference,
+  mentionsTag,
+  nonLiteralVariableReads,
+  parseYamlFile,
+  scan,
+  scriptTimeoutSeconds,
+  secretsOutside,
+  secretVariablePaths,
+  toolDependencies,
+  yamlOf,
+} from "./worker_boundary_scan.ts";
+
+// 定期ジョブ用workerは、上流のWindmillイメージで動く。
+// 独自イメージの道具(claude、gh、git、gtr、検査の枠)も、defaultのworkerがマウントするファイルも、
+// cgroupの計測の対象も無い。DBと`wmill.getVariable()`でsecret変数には、defaultのworkerと同じように届く。
+// 境界を保つため、tag: periodicのscriptについて、次を固定する。
+// - tag periodicへ振り分けるものは、下の一覧のscriptの定義だけである。
+//   scriptの定義、スケジュール、フローのモジュールの`tag`と`tag_override`を、`f/`の下のYAMLすべてで調べる。
+// - どれも、スケジュールが呼ぶscriptである。
+// - 読んでよいsecret変数は、github_tokenだけである。claudeのトークンやwmillのトークンには届かせない。
+// - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
+// - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
+//
+// 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
+// tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
+// 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
+// 第三者パッケージ(execa、fs-extra、zxなど)の中身。
+// コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
+// resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
+// これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。
+
+/**
+ * tag: periodicを付けたscript。
+ * 依存の無い定期ジョブが見つかるまでは、空である。
+ */
+const PERIODIC_SCRIPTS: readonly string[] = [];
+
+/** 読んでよいsecret変数。 */
+const MAY_READ_SECRET = [GITHUB_TOKEN];
+
+/**
+ * 引数が文字列リテラルでないgetVariable()の呼び出しのうち、許すもの。
+ * 呼び出し側が定数だけを渡すことを確かめた箇所に限り、理由を書く。
+ */
+const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
+  "f/factory/lib/config.ts":
+    "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
+};
+
+async function scheduledScripts(): Promise<string[]> {
+  const paths: string[] = [];
+  for (const file of await scan("f/factory/*.schedule.yaml")) {
+    const path = (await yamlOf(file)).script_path;
+    if (typeof path === "string") paths.push(path);
+  }
+  return paths;
+}
+
+describe("the tool dependency scan", () => {
+  test("flags an import of node:child_process", () => {
+    expect(
+      toolDependencies('import { spawn } from "node:child_process";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of child_process without the node: prefix", () => {
+    expect(
+      toolDependencies('import { spawn } from "child_process";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of node:fs", () => {
+    expect(
+      toolDependencies('import { readFileSync } from "node:fs";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of node:fs/promises", () => {
+    expect(
+      toolDependencies('import { readFile } from "node:fs/promises";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of fs/promises without the node: prefix", () => {
+    expect(
+      toolDependencies('import { readFile } from "fs/promises";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a relative import of claude.ts", () => {
+    expect(
+      toolDependencies('import { runClaude } from "./lib/claude.ts";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a sibling import of claude.ts", () => {
+    expect(
+      toolDependencies('import { runClaude } from "./claude.ts";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a call of Bun.spawn", () => {
+    expect(toolDependencies('Bun.spawn(["gh", "api"]);')).not.toEqual([]);
+  });
+
+  test("flags a call of Bun.file", () => {
+    expect(toolDependencies('await Bun.file("/x").text();')).not.toEqual([]);
+  });
+
+  test("flags a call of Bun.write", () => {
+    expect(toolDependencies('await Bun.write("/x", "y");')).not.toEqual([]);
+  });
+
+  test("flags the Bun.$ shell", () => {
+    expect(toolDependencies("await Bun.$`ls`;")).not.toEqual([]);
+  });
+
+  test("flags a named import from bun", () => {
+    expect(
+      toolDependencies('import { spawn, file, $ } from "bun";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a default import from bun", () => {
+    expect(toolDependencies('import Bun from "bun";')).not.toEqual([]);
+  });
+
+  test("flags a destructuring of Bun", () => {
+    expect(toolDependencies("const { spawn } = Bun;")).not.toEqual([]);
+  });
+
+  test("flags a bracket access on Bun", () => {
+    expect(toolDependencies('Bun["spawn"](["gh"]);')).not.toEqual([]);
+  });
+
+  test("flags an alias of Bun", () => {
+    expect(toolDependencies("const b = Bun; b.spawn(['gh']);")).not.toEqual([]);
+  });
+
+  test("flags a lookup through globalThis", () => {
+    expect(toolDependencies('globalThis["Bun"].spawn(["gh"]);')).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags process.getBuiltinModule", () => {
+    expect(
+      toolDependencies('process.getBuiltinModule("child_process");'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of node:module", () => {
+    expect(
+      toolDependencies('import { createRequire } from "node:module";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of node:worker_threads", () => {
+    expect(
+      toolDependencies('import { Worker } from "node:worker_threads";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of node:vm", () => {
+    expect(toolDependencies('import vm from "node:vm";')).not.toEqual([]);
+  });
+
+  test("flags an import of vm without the node: prefix", () => {
+    expect(toolDependencies('import vm from "vm";')).not.toEqual([]);
+  });
+
+  test("does not flag node:path", () => {
+    expect(toolDependencies('import { join } from "node:path";')).toEqual([]);
+  });
+
+  test("does not flag the windmill client", () => {
+    expect(
+      toolDependencies('import * as wmill from "windmill-client@1.817.0";'),
+    ).toEqual([]);
+  });
+
+  test("does not flag a module whose name only starts with claude", () => {
+    expect(
+      toolDependencies('import { x } from "./lib/claude_usage.ts";'),
+    ).toEqual([]);
+  });
+
+  test("does not flag Bun.sleep", () => {
+    expect(toolDependencies("await Bun.sleep(10);")).toEqual([]);
+  });
+
+  test("does not flag a mention in a comment", () => {
+    expect(
+      toolDependencies('// import { readFile } from "node:fs/promises";\n'),
+    ).toEqual([]);
+  });
+});
+
+describe("the tag scan", () => {
+  test("finds a tag key in a schedule", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse("script_path: f/factory/poll_issues\ntag: periodic\n"),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds a tag key next to the keys of a schedule", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse(
+          "script_path: f/factory/poll_issues\nschedule: 0 */5 * * * *\ntimezone: Asia/Tokyo\nenabled: true\ntag: periodic\n",
+        ),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds a tag key in a flow module", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse(
+          "value:\n  modules:\n    - id: a\n      value:\n        type: rawscript\n        tag: periodic\n",
+        ),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds a tag_override key in a flow module", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse(
+          "value:\n  modules:\n    - id: a\n      value:\n        type: script\n        path: f/x\n        tag_override: periodic\n",
+        ),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds a tag key inside a branch of a flow", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse(
+          "value:\n  modules:\n    - id: a\n      value:\n        type: branchone\n        branches:\n          - modules:\n              - id: b\n                value:\n                  type: script\n                  tag_override: periodic\n",
+        ),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("ignores another tag", () => {
+    expect(mentionsTag(Bun.YAML.parse("tag: console\n"), "periodic")).toBe(
+      false,
+    );
+  });
+
+  test("ignores the word periodic in a value that is not a tag", () => {
+    expect(mentionsTag(Bun.YAML.parse("summary: periodic\n"), "periodic")).toBe(
+      false,
+    );
+  });
+
+  test("the YAML glob includes a real schedule", async () => {
+    expect(await scan("f/**/*.yaml")).toContain(
+      "f/factory/poll_issues.schedule.yaml",
+    );
+  });
+
+  test("the YAML glob includes a real flow", async () => {
+    expect(await scan("f/**/*.yaml")).toContain(
+      "f/factory/pr_review__flow/flow.yaml",
+    );
+  });
+
+  test("a YAML that cannot be parsed fails with its file name", () => {
+    expect(() =>
+      parseYamlFile("f/factory/x.schedule.yaml", "a: b", () => {
+        throw new Error("bad");
+      }),
+    ).toThrow("f/factory/x.schedule.yaml");
+  });
+
+  test("a YAML that can be parsed is returned", () => {
+    expect(parseYamlFile("f/factory/x.yaml", "tag: periodic\n")).toEqual({
+      tag: "periodic",
+    });
+  });
+
+  test("sees the tag console of a real script definition", async () => {
+    expect(await filesWithTag("console")).toContain(
+      "f/factory/console_fetch_watch.script.yaml",
+    );
+  });
+});
+
+describe("the input reference scan", () => {
+  test("flags a variable reference in an input default", () => {
+    expect(hasInputReference("default: $var:f/factory/github_token\n")).toBe(
+      true,
+    );
+  });
+
+  test("flags a resource reference in an input default", () => {
+    expect(hasInputReference("default: $res:f/factory/x\n")).toBe(true);
+  });
+
+  test("does not flag a definition without a reference", () => {
+    expect(hasInputReference("summary: x\n")).toBe(false);
+  });
+});
+
+describe("periodic scripts", () => {
+  test("the files that route to tag periodic are the designed ones", async () => {
+    expect((await filesWithTag("periodic")).sort()).toEqual(
+      PERIODIC_SCRIPTS.map((path) => `${path}.script.yaml`).sort(),
+    );
+  });
+
+  test("the schedule list includes a real scheduled script", async () => {
+    expect(await scheduledScripts()).toContain("f/factory/poll_issues");
+  });
+
+  test("the timeout of a real script can be read", async () => {
+    expect(await scriptTimeoutSeconds("f/factory/self_update")).toBeGreaterThan(
+      0,
+    );
+  });
+
+  test("a script definition without a timeout reads as null", async () => {
+    expect(await scriptTimeoutSeconds("f/factory/poll_issues")).toBeNull();
+  });
+
+  test("every periodic script is called by a schedule", async () => {
+    const scheduled = await scheduledScripts();
+    expect(
+      PERIODIC_SCRIPTS.filter((path) => !scheduled.includes(path)),
+    ).toEqual([]);
+  });
+
+  test("every periodic script has a timeout", async () => {
+    const missing: string[] = [];
+    for (const path of PERIODIC_SCRIPTS) {
+      const timeout = await scriptTimeoutSeconds(path);
+      if (timeout === null || timeout <= 0) missing.push(path);
+    }
+    expect(missing).toEqual([]);
+  });
+
+  test("no file a periodic script reaches has an import the scan cannot follow", () => {
+    expect(filesWithUnfollowableImports(PERIODIC_SCRIPTS)).toEqual([]);
+  });
+
+  test("every variable read in a reached file has a literal argument, except the listed ones", () => {
+    expect(
+      filesWithNonLiteralReads(PERIODIC_SCRIPTS, NON_LITERAL_VARIABLE_READS),
+    ).toEqual([]);
+  });
+
+  test("the listed non-literal reads still exist", () => {
+    const stale = Object.keys(NON_LITERAL_VARIABLE_READS).filter(
+      (file) =>
+        nonLiteralVariableReads(readFileSync(file, "utf8")).length === 0,
+    );
+    expect(stale).toEqual([]);
+  });
+
+  test("no periodic script declares a variable or resource reference in its inputs", async () => {
+    const referencing: string[] = [];
+    for (const path of PERIODIC_SCRIPTS) {
+      if (hasInputReference(await Bun.file(`${path}.script.yaml`).text())) {
+        referencing.push(path);
+      }
+    }
+    expect(referencing).toEqual([]);
+  });
+
+  test("no file a periodic script reaches depends on files, subprocesses, or claude", () => {
+    expect(filesWithToolDependencies(PERIODIC_SCRIPTS)).toEqual([]);
+  });
+
+  test("the scan sees the secret variables the boundary is about", async () => {
+    expect(await secretVariablePaths()).toEqual(
+      expect.arrayContaining([
+        GITHUB_TOKEN,
+        "f/factory/claude_oauth_token",
+        "f/factory/wmill_token",
+      ]),
+    );
+  });
+
+  test("a periodic script reads no secret variable but the allowed ones", async () => {
+    expect(await secretsOutside(PERIODIC_SCRIPTS, MAY_READ_SECRET)).toEqual([]);
+  });
+});
+
+// 設計の一覧が空のままでも検査が空回りしないよう、defaultのworkerに残すscriptを渡して、違反が返ることを確かめる。
+describe("the checks on scripts that stay on the default worker", () => {
+  test("flags the file dependency behind watch_pr_ci", () => {
+    expect(filesWithToolDependencies(["f/factory/watch_pr_ci"])).toContain(
+      "f/factory/lib/check_sandbox.ts",
+    );
+  });
+
+  test("flags the claude dependency behind poll_issues", () => {
+    expect(filesWithToolDependencies(["f/factory/poll_issues"])).toContain(
+      "f/factory/lib/claude.ts",
+    );
+  });
+
+  test("flags the file dependency behind cleanup_workspaces", () => {
+    expect(
+      filesWithToolDependencies(["f/factory/cleanup_workspaces"]),
+    ).toContain("f/factory/cleanup_workspaces.ts");
+  });
+
+  test("flags the secrets self_update reads", async () => {
+    expect(
+      await secretsOutside(["f/factory/self_update"], MAY_READ_SECRET),
+    ).toContain("f/factory/wmill_token");
+  });
+
+  test("flags the discord webhook that notify_daily_summary reads", async () => {
+    expect(
+      await secretsOutside(["f/factory/notify_daily_summary"], MAY_READ_SECRET),
+    ).toEqual(["f/factory/discord_webhook_url"]);
+  });
+
+  test("does not flag github_token when it is allowed", async () => {
+    expect(
+      await secretsOutside(["f/factory/poll_issues"], MAY_READ_SECRET),
+    ).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("flags a non-literal read that is not listed", () => {
+    expect(
+      filesWithNonLiteralReads(["f/factory/steps/console_query"], {}),
+    ).toContain("f/factory/steps/console_query.ts");
+  });
+
+  test("does not flag a non-literal read that is listed", () => {
+    expect(
+      filesWithNonLiteralReads(["f/factory/steps/console_query"], {
+        ...NON_LITERAL_VARIABLE_READS,
+        "f/factory/steps/console_query.ts": "テストの許可",
+      }),
+    ).toEqual([]);
+  });
+});
+
+describe("the tag passed by code", () => {
+  test("no TypeScript under f/ runs a job through JobService or sets a literal tag", async () => {
+    const offenders: string[] = [];
+    for (const file of await scan("f/**/*.ts")) {
+      const code = codeOf(readFileSync(file, "utf8"));
+      if (
+        /\bJobService\s*\.\s*run\w*|\btag_override\b|\btag\s*:\s*["'`]/.test(
+          code,
+        )
+      ) {
+        offenders.push(file);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});

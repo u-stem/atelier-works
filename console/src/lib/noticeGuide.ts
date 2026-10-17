@@ -297,6 +297,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "periodic_worker_missing",
+    guide(
+      "tag periodicのジョブが、予定時刻から5分以上実行されずに待っています。定期ジョブ用のworkerが居ないか、塞がっているか、tagの設定がずれています。",
+      "本文の「次の操作」に従い、コンテナの状態、カスタムtagの許可、Windmillの画面での実行中のジョブとワーカーグループのtagの順に確かめてください。",
+      {
+        note: "待ちが解けると、自己更新が自動で解決します。",
+      },
+    ),
+  ],
+  [
     "worker_sample_failed",
     guide(
       "defaultのworkerの負荷を、10分以上続けて完全には記録できませんでした。枠の占有かメモリのどちらかが欠けた行ができています。",
