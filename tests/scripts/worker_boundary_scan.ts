@@ -219,19 +219,33 @@ export function mentionsTag(value: unknown, tag: string): boolean {
   );
 }
 
+/**
+ * YAMLの本文を解析する。解析できなければ、ファイル名を添えて例外にする。
+ * 解析の関数は、失敗の分岐を確かめるために差し替えられる。
+ */
+export function parseYamlFile(
+  _file: string,
+  _text: string,
+  _parse: (text: string) => unknown = (text) => Bun.YAML.parse(text),
+): unknown {
+  return undefined;
+}
+
 /** `f/`の下のYAMLのうち、`mentionsTag`が真になるファイルのパス。読めないYAMLがあれば、ファイル名を添えて例外にする。 */
 export async function filesWithTag(tag: string): Promise<string[]> {
   const found: string[] = [];
   for (const file of await scan("f/**/*.yaml")) {
-    let parsed: unknown;
-    try {
-      parsed = Bun.YAML.parse(await Bun.file(file).text());
-    } catch (error) {
-      throw new Error(`${file}: cannot parse the YAML (${String(error)})`);
-    }
+    const parsed = parseYamlFile(file, await Bun.file(file).text());
     if (mentionsTag(parsed, tag)) found.push(file);
   }
   return found;
+}
+
+/** scriptの定義の`timeout`(秒)。数でなければ`null`。 */
+export async function scriptTimeoutSeconds(
+  _path: string,
+): Promise<number | null> {
+  return null;
 }
 
 const FILE_OR_PROCESS_MODULE =

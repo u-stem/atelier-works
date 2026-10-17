@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
+  codeOf,
   filesWithNonLiteralReads,
   filesWithTag,
   filesWithToolDependencies,
@@ -9,7 +10,9 @@ import {
   hasInputReference,
   mentionsTag,
   nonLiteralVariableReads,
+  parseYamlFile,
   scan,
+  scriptTimeoutSeconds,
   secretsOutside,
   secretVariablePaths,
   toolDependencies,
@@ -152,6 +155,26 @@ describe("the tool dependency scan", () => {
     ).not.toEqual([]);
   });
 
+  test("flags an import of node:module", () => {
+    expect(
+      toolDependencies('import { createRequire } from "node:module";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of node:worker_threads", () => {
+    expect(
+      toolDependencies('import { Worker } from "node:worker_threads";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags an import of node:vm", () => {
+    expect(toolDependencies('import vm from "node:vm";')).not.toEqual([]);
+  });
+
+  test("flags an import of vm without the node: prefix", () => {
+    expect(toolDependencies('import vm from "vm";')).not.toEqual([]);
+  });
+
   test("does not flag node:path", () => {
     expect(toolDependencies('import { join } from "node:path";')).toEqual([]);
   });
@@ -189,10 +212,14 @@ describe("the tag scan", () => {
     ).toBe(true);
   });
 
-  test("finds a tag key added to a real schedule file", () => {
-    const text = readFileSync("f/factory/poll_issues.schedule.yaml", "utf8");
+  test("finds a tag key next to the keys of a schedule", () => {
     expect(
-      mentionsTag(Bun.YAML.parse(`${text}\ntag: periodic\n`), "periodic"),
+      mentionsTag(
+        Bun.YAML.parse(
+          "script_path: f/factory/poll_issues\nschedule: 0 */5 * * * *\ntimezone: Asia/Tokyo\nenabled: true\ntag: periodic\n",
+        ),
+        "periodic",
+      ),
     ).toBe(true);
   });
 
@@ -241,6 +268,32 @@ describe("the tag scan", () => {
     );
   });
 
+  test("the YAML glob includes a real schedule", async () => {
+    expect(await scan("f/**/*.yaml")).toContain(
+      "f/factory/poll_issues.schedule.yaml",
+    );
+  });
+
+  test("the YAML glob includes a real flow", async () => {
+    expect(await scan("f/**/*.yaml")).toContain(
+      "f/factory/pr_review__flow/flow.yaml",
+    );
+  });
+
+  test("a YAML that cannot be parsed fails with its file name", () => {
+    expect(() =>
+      parseYamlFile("f/factory/x.schedule.yaml", "a: b", () => {
+        throw new Error("bad");
+      }),
+    ).toThrow("f/factory/x.schedule.yaml");
+  });
+
+  test("a YAML that can be parsed is returned", () => {
+    expect(parseYamlFile("f/factory/x.yaml", "tag: periodic\n")).toEqual({
+      tag: "periodic",
+    });
+  });
+
   test("sees the tag console of a real script definition", async () => {
     expect(await filesWithTag("console")).toContain(
       "f/factory/console_fetch_watch.script.yaml",
@@ -271,6 +324,20 @@ describe("periodic scripts", () => {
     );
   });
 
+  test("the schedule list includes a real scheduled script", async () => {
+    expect(await scheduledScripts()).toContain("f/factory/poll_issues");
+  });
+
+  test("the timeout of a real script can be read", async () => {
+    expect(await scriptTimeoutSeconds("f/factory/self_update")).toBeGreaterThan(
+      0,
+    );
+  });
+
+  test("a script definition without a timeout reads as null", async () => {
+    expect(await scriptTimeoutSeconds("f/factory/poll_issues")).toBeNull();
+  });
+
   test("every periodic script is called by a schedule", async () => {
     const scheduled = await scheduledScripts();
     expect(
@@ -281,8 +348,8 @@ describe("periodic scripts", () => {
   test("every periodic script has a timeout", async () => {
     const missing: string[] = [];
     for (const path of PERIODIC_SCRIPTS) {
-      const timeout = (await yamlOf(`${path}.script.yaml`)).timeout;
-      if (typeof timeout !== "number" || timeout <= 0) missing.push(path);
+      const timeout = await scriptTimeoutSeconds(path);
+      if (timeout === null || timeout <= 0) missing.push(path);
     }
     expect(missing).toEqual([]);
   });
@@ -385,5 +452,22 @@ describe("the checks on scripts that stay on the default worker", () => {
         "f/factory/steps/console_query.ts": "テストの許可",
       }),
     ).toEqual([]);
+  });
+});
+
+describe("the tag passed by code", () => {
+  test("no TypeScript under f/ runs a job through JobService or sets a literal tag", async () => {
+    const offenders: string[] = [];
+    for (const file of await scan("f/**/*.ts")) {
+      const code = codeOf(readFileSync(file, "utf8"));
+      if (
+        /\bJobService\s*\.\s*run\w*|\btag_override\b|\btag\s*:\s*["'`]/.test(
+          code,
+        )
+      ) {
+        offenders.push(file);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
