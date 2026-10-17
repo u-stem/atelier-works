@@ -668,3 +668,10 @@ function main(): number {
 if (import.meta.main) {
   process.exitCode = main();
 }
+
+// スタブ。実装は次のコミットで書く。
+export function classifySpawnError(
+  _error: unknown,
+): "unreachable" | "unverifiable" {
+  return "unreachable";
+}

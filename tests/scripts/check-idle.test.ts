@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -14,6 +15,7 @@ import {
   type CheckIdleOptions,
   checkIdle,
   classifyReadFailure,
+  classifySpawnError,
   judge,
   parseRunningJobs,
   parseRunningWorkItems,
@@ -87,6 +89,31 @@ const unverifiableItems: Reading<RunningWorkItem> = {
   kind: "unverifiable",
   reason: "syntax error",
 };
+
+function spawnError(code: string): Error {
+  return Object.assign(new Error(`spawn failed: ${code}`), { code });
+}
+
+describe("classifySpawnError", () => {
+  test("treats a missing docker executable (ENOENT) as unreachable", () => {
+    expect(classifySpawnError(spawnError("ENOENT"))).toBe("unreachable");
+  });
+
+  test.each(["EAGAIN", "EMFILE", "ENOMEM", "EACCES"])(
+    "treats a spawn failure with %s as unverifiable",
+    (code) => {
+      expect(classifySpawnError(spawnError(code))).toBe("unverifiable");
+    },
+  );
+
+  test("treats an error without a code as unverifiable", () => {
+    expect(classifySpawnError(new Error("boom"))).toBe("unverifiable");
+  });
+
+  test("treats a value that is not an error as unverifiable", () => {
+    expect(classifySpawnError("boom")).toBe("unverifiable");
+  });
+});
 
 describe("classifyReadFailure", () => {
   test.each([
@@ -398,13 +425,14 @@ describe("judge", () => {
     expect(judge(jobs, okItems()).exitCode).toBe(1);
   });
 
-  test("exits 0 with a warning when the jobs are unreachable", () => {
-    const verdict = judge(unreachableJobs, okItems());
+  test("exits 0 when the jobs are unreachable", () => {
+    expect(judge(unreachableJobs, okItems()).exitCode).toBe(0);
+  });
 
-    expect([verdict.exitCode, verdict.lines.join("\n")]).toEqual([
-      0,
-      expect.stringContaining("warning:"),
-    ]);
+  test("warns when the jobs are unreachable", () => {
+    const text = judge(unreachableJobs, okItems()).lines.join("\n");
+
+    expect(text).toContain("warning:");
   });
 
   test("exits 1 when the jobs are unreachable but a work item is running", () => {
@@ -500,6 +528,7 @@ describe("command", () => {
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "check-idle-"));
+    mkdirSync(join(dir, "empty"));
     const body = [
       "#!/bin/sh",
       'echo "$*" >> "$FAKE_DIR/calls"',
@@ -584,7 +613,7 @@ describe("command", () => {
     expect(run().exitCode).toBe(1);
   });
 
-  test("exits 0 with a warning when the database is unreachable", () => {
+  test("prints a warning when the database is unreachable", () => {
     setup({
       "windmill.out": "",
       "windmill.code": "2",
@@ -616,6 +645,12 @@ describe("command", () => {
     });
 
     expect(run().exitCode).toBe(1);
+  });
+
+  test("exits 0 when docker is not installed", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n` });
+
+    expect(run([], { PATH: join(dir, "empty") }).exitCode).toBe(0);
   });
 
   test("exits 0 when the db service is not running", () => {
@@ -956,10 +991,18 @@ describe("checkIdle", () => {
     expect(h.run().lines.join("\n")).not.toContain("Still running");
   });
 
-  test("passes with a warning when the first read is unreachable", () => {
+  test("passes when the first read is unreachable", () => {
     const h = harness(() => unreadableSnapshot);
 
-    expect([h.run().exitCode, h.readAt.length]).toEqual([0, 1]);
+    expect(h.run().exitCode).toBe(0);
+  });
+
+  test("reads only once when the first read is unreachable", () => {
+    const h = harness(() => unreadableSnapshot);
+
+    h.run();
+
+    expect(h.readAt.length).toBe(1);
   });
 
   test("reports that it is waiting", () => {
