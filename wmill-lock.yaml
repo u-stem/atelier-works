@@ -41,7 +41,7 @@ locks:
   f/factory/lib/conflict_fix_round: 768797a74aa4136b43ffd91fdc8bb6c46a6240778269f6ecdbcabe7ba7057ce7
   f/factory/lib/conflict_fix_verify: 4a244c4da1dacfe86bed6878d2b41e1a6586268091c6c2b1aaf6616cff48f83a
   f/factory/lib/console_status: ee1e2ab9df9b3fc2b5fd492d3576a137dc418f3d616373a555e043d373b411c9
-  f/factory/lib/console_support: 3350f2664b99c7af659533ec495ef37cf7edcf81753a763dba199e8c8adb0b02
+  f/factory/lib/console_support: 7cd35aef98bbb3fd29a97abfc97b3ca29ab46c6fff029409f3ead39165b3a096
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/db: 1cabfe9cb55589702869dac02edab65347ee240a7b049c937a7880b6eda0f8dc
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
@@ -49,7 +49,7 @@ locks:
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
   f/factory/lib/dependabot_registry: 3bd1e2db9f439df63be90c0d5457a0eee2368b2bc3a69515370c52353f26f975
   f/factory/lib/dependabot_support: 640096ee34a0b15a42083d134bab368abad327b78ce2b22a6c1bc6a8974e6725
-  f/factory/lib/discord: 6395187ad291196a6d46dfbe52e6474c655fed2fc782d00a540279b81e4c32d6
+  f/factory/lib/discord: 9987ac471d96f03cf56e3ff833cf522adb3da542e1e3774fa38fd9921c9a9189
   f/factory/lib/drawio: d6c208d61c640f7019c865f28fb77f2a50dcf539ced468e33d2e731709a7be32
   f/factory/lib/drawio_viewer_bump: 9970434f61c82d9f1e5ea228c2e5a1649b7e9eae5a6f7c332a1e31f17d9434aa
   f/factory/lib/drawio_viewer_bump_github: f7b0dc429c460b479e61efaaf2a3a85532aea8fb455cc592f78b344f7a2978ae
@@ -80,7 +80,7 @@ locks:
   f/factory/lib/metadata_precheck: 2af277b61b41147128ea4f2e0bf7a14b3d43eb36ebb831b39edd96795ce9c89f
   f/factory/lib/metadata_signature: e82f134efb6fd01718b670cef10f4e90ec209d68c9e31865a8581fa5b9f50ecf
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
-  f/factory/lib/periodic_worker: fc1a941ba5c7a755e3799e2eb8b0a7d8ae0f87f800dec57cfc8ab1123a2fc470
+  f/factory/lib/periodic_worker: c414dd881db0bd6e1e5dde0341272fb73b3948b5767cd3f415b19200e33bb3e5
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: ea5981391d7d989101f28cbbc9b17905691a9b15c398e829997712e56cd85f96
   f/factory/lib/pr_ci_fix_claim: 3f34d3752aa2d1dcf8fa0b54f43c095bf6577e709895aeca0d57555351326420
@@ -124,7 +124,7 @@ locks:
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 8d3914cde850b0d224eb94adf5f632f56caf599c16ba99beb0c6f0b353e56750
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
-  f/factory/self_update: 9098ff48de7436b3648b07b8bda06f380ba755efa04eb90ff6d0b1e80658f5c2
+  f/factory/self_update: 6bef2e848c8714529df0c17a5e4946379117e9a91b94de65fe63273069a9850a
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: dc2f6c7f5d0736b0b4a4dad4f7d48a7cfe847e7f4438b2181ffddd8660370124

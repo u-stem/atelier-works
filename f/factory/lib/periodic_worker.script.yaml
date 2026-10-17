@@ -1,5 +1,6 @@
-summary: ''
-description: ''
+summary: '[LIB] 定期ジョブ用workerの停止の検知'
+description: 内部ライブラリです。直接実行するものではありません。tag
+  periodicのジョブが待たされていないかを確かめ、待たされていれば通知を残してDiscordにも知らせます。
 lock: '!inline f/factory/lib/periodic_worker.script.lock'
 kind: script
 schema:
