@@ -1061,7 +1061,7 @@ describe("bash-guard denies replacing the git config files", () => {
   });
 });
 
-describe("bash-guard denies mise set without a value to write", () => {
+describe("bash-guard denies mise subcommands that list the secrets or run the task with another shell", () => {
   test.each([
     "mise set",
     "mise set -E local",
@@ -1129,6 +1129,21 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise hook-env -s bash",
     "mise -q hook-env",
     "mise en",
+    "mise x node -c printenv",
+    "mise exec bun --command=printenv",
+    "mise x node -cprintenv",
+    "MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS='sh -c printenv' mise run check",
+    "export MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS='sh -c printenv'",
+    "MISE_SHELL=sh mise run check",
+    "mise settings unix_default_inline_shell_args=sh",
+    "mise settings",
+    "mise generate bootstrap",
+    "mise g bootstrap",
+    "mise activate bash",
+    "mise plugins ls",
+    "mise watch check",
+    "mise shell node@22",
+    "mise run -qs x check",
     "mise -- lint",
     "mise run -s 'sh -c env' check",
     "mise r -s x check",
@@ -1179,6 +1194,8 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise run check",
     "mise -E local x -- bun test",
     "mise run test tests/{a,b}.ts",
+    "mise -s 'sh -c printenv' run check",
+    "MISE_ENV=local mise run check",
     "mise run check -- -s x",
     "mise run check --skip-deps",
     "mise -qq run check",
@@ -1227,6 +1244,31 @@ describe("bash-guard denies mise set without a value to write", () => {
 
   test("the reason names the stdin form for writing a value", async () => {
     expect(await denyReason("mise set")).toContain("--stdin");
+  });
+});
+
+describe("bash-guard allows the mise commands this repository uses", () => {
+  test.each([
+    "mise run host:approve abc1234",
+    "mise trust --show",
+    "mise --yes trust",
+    "mise trust",
+    "mise install",
+    "mise doctor",
+    "mise run doctor",
+    "mise set -E local --stdin KEY",
+    "mise set -E local WM_HTTP_PORT=8000",
+    'mise set -E local CLAUDE_CONFIG_DIR="$HOME/.claude-atelier"',
+    "mise exec -- docker compose -f infra/docker-compose.yml logs --tail 50",
+    "mise run worktree:new -- feat/foo",
+    "mise run worktree:prune -- --apply",
+    "mise run console:unpin -- --force",
+    "mise run up",
+    "mise run push",
+    "mise run lint:docs",
+    "mise x -- gitleaks detect",
+  ])("allows %s", async (command) => {
+    expect(await decide(command)).toBe("allow");
   });
 });
 
