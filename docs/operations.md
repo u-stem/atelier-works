@@ -2241,6 +2241,19 @@ GROUP BY model
 ORDER BY cost_usd DESC;
 ```
 
+`model_usage`の`model`は、`modelUsage`のキーをそのまま保存する。
+`--model`に渡した値との表記の違い(日付付きのID、`[1m]`の有無など)は、実機の出力で確かめていない。
+テストのキーは仮の値である。
+表記が違うと、`v_agent_usage_daily`と`v_agent_model_usage_daily`で同じモデルが別の行になる。
+反映後に、次のクエリで`model_usage`のキーを確かめる。
+
+```sql
+SELECT DISTINCT m.model
+FROM factory.agent_runs AS r
+CROSS JOIN LATERAL jsonb_to_recordset(r.model_usage) AS m (model text)
+ORDER BY m.model;
+```
+
 列を足すmigrationより先に、新しいコードが反映された間は、`model_usage`を除いた文で記録する。
 このときの実行の内訳は残らない。
 
