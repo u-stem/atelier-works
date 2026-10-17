@@ -32,8 +32,11 @@ import {
 //
 // 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
 // tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
-// 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身。
-// これらはコードのレビューで見る。
+// 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身、
+// 第三者パッケージ(execa、fs-extra、zxなど)の中身。
+// コードがAPIで渡すtag(`JobService.run*`の`tag`)は、下の「コードが渡すtag」のテストが、現在の0件を保つ。
+// resourceの中身で解決されるsecret(`getResource`が返す値の`$var:`)は、走査が見ない。
+// これらはコードのレビューで見る。tag periodicを最初に付けるPRでは、そのscriptが読むresourceの中身も確かめる。
 
 /**
  * tag: periodicを付けたscript。

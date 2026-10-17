@@ -224,11 +224,15 @@ export function mentionsTag(value: unknown, tag: string): boolean {
  * 解析の関数は、失敗の分岐を確かめるために差し替えられる。
  */
 export function parseYamlFile(
-  _file: string,
-  _text: string,
-  _parse: (text: string) => unknown = (text) => Bun.YAML.parse(text),
+  file: string,
+  text: string,
+  parse: (text: string) => unknown = (source) => Bun.YAML.parse(source),
 ): unknown {
-  return undefined;
+  try {
+    return parse(text);
+  } catch (error) {
+    throw new Error(`${file}: cannot parse the YAML (${String(error)})`);
+  }
 }
 
 /** `f/`の下のYAMLのうち、`mentionsTag`が真になるファイルのパス。読めないYAMLがあれば、ファイル名を添えて例外にする。 */
@@ -243,13 +247,14 @@ export async function filesWithTag(tag: string): Promise<string[]> {
 
 /** scriptの定義の`timeout`(秒)。数でなければ`null`。 */
 export async function scriptTimeoutSeconds(
-  _path: string,
+  path: string,
 ): Promise<number | null> {
-  return null;
+  const timeout = (await yamlOf(`${path}.script.yaml`)).timeout;
+  return typeof timeout === "number" ? timeout : null;
 }
 
 const FILE_OR_PROCESS_MODULE =
-  /^(?:node:)?(?:child_process|fs|fs\/promises)$|^bun(?::|$)/;
+  /^(?:node:)?(?:child_process|fs|fs\/promises|module|worker_threads|vm)$|^bun(?::|$)/;
 const BUN_NAME = /\bBun\b/g;
 const BUN_MEMBER = /^\s*\.\s*([\w$]+)/;
 const GLOBAL_LOOKUP =
@@ -276,11 +281,13 @@ const HARMLESS_BUN_MEMBERS: ReadonlySet<string> = new Set([
  * 上流のイメージのworkerに無いものへ届く、import・呼び出し。
  * 次を数え、見つけたものを理由の文字列で返す。
  * - ファイル(`node:fs`)、サブプロセス(`node:child_process`)、`bun`モジュールのimport(名前付き、既定とも)。
+ * - 迂回に使えるモジュール(`node:module`、`node:worker_threads`、`node:vm`)のimport。
  * - Claude(`claude.ts`)のimport。
  * - `Bun`の使い方。無害なメンバー(`Bun.sleep`など)の呼び出し以外は、すべて数える。
  *   `Bun.spawn`と`Bun.file`だけでなく、分割代入、別名への代入、添字アクセスも当たる。
  * - `globalThis`、`process.getBuiltinModule`、`process.binding`。これらを経由すると、名前を伏せて同じものに届くため。
- * 見ないもの: 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
+ * 見ないもの: 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身、
+ * 第三者パッケージ(`execa`、`fs-extra`、`zx`など)の中身。
  * 文字列の中の言及は数えない。
  */
 export function toolDependencies(source: string): string[] {
