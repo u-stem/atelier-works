@@ -14,10 +14,12 @@ import {
   claimIssueCreation,
   claimPrCiCheckForFix,
   claimPrConflictForFix,
+  closeGhZeroCountRepos,
   countImplementFailedRounds,
   countPrCiFixRounds,
   countPrConflictFixRounds,
   countPrFixFailures,
+  deleteClosedGhDetailRowsBefore,
   deleteGhCollectRunsBefore,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
@@ -61,6 +63,7 @@ import {
   listFixingPrCiChecks,
   listGhCollectFreshness,
   listGhCollectOwnerStates,
+  listGhDetailRows,
   listGhRepos,
   listMainCiRunsBySha,
   listNoCiPrCiChecksToRecheck,
@@ -76,6 +79,8 @@ import {
   listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
   listUnresolvedNoticesByKind,
+  markGhOwnerRowsUnusable,
+  markGhRepoDetailIncomplete,
   markPrCiNotified,
   markPrConflictNotified,
   type NewWorkerSample,
@@ -111,6 +116,7 @@ import {
   updateStatus,
   updateStatusIfCurrent,
   updateStatusIfLeaseHolder,
+  writeGhRepoDetail,
 } from "../f/factory/lib/db.ts";
 import { recordViewerObservation } from "../f/factory/lib/drawio_viewer_observations.ts";
 import { PR_CI_FIX_TEMPORARY_HOLD_REASONS } from "../f/factory/lib/pr_ci_support.ts";
@@ -119,7 +125,11 @@ import {
   getGatedReviewStats,
   getWorkerLoadSummary,
 } from "../f/factory/lib/summary_support.ts";
-import type { WorkItemStatus } from "../f/factory/lib/types.ts";
+import type {
+  GhIssueWrite,
+  GhPullRequestWrite,
+  WorkItemStatus,
+} from "../f/factory/lib/types.ts";
 import {
   runConsoleQuery,
   runConsoleSummary,
@@ -7601,6 +7611,557 @@ check(
     `INSERT INTO factory.gh_collect_runs (owner, detail_done) VALUES ('${GH_DETAIL_OWNER}', -1)`,
     "gh_collect_runs_detail_counts_check",
   ),
+);
+
+// ---------------------------------------------------------------------------
+// 収集の詳細の書き込み(writeGhRepoDetailなど)
+// ---------------------------------------------------------------------------
+
+const GH_W_OWNER = "qdbghw";
+const GH_W_OBSERVED = new Date("2026-10-17T11:59:30.000Z");
+
+function ghWPr(
+  number: number,
+  overrides: Partial<GhPullRequestWrite> = {},
+): GhPullRequestWrite {
+  return {
+    number,
+    head_sha: GH_DETAIL_SHA,
+    head_ref: "feature/a",
+    base_ref: "main",
+    is_draft: false,
+    is_cross_repository: false,
+    auto_merge_enabled: false,
+    author_login: "dependabot",
+    author_type: "Bot",
+    author_id: 49699333,
+    mergeable: "MERGEABLE",
+    has_review_label: false,
+    has_fix_label: null,
+    review_requested_user_ids: [12, 13],
+    assignee_ids: [],
+    team_review_requested: false,
+    created_at: new Date("2026-10-17T01:00:00.000Z"),
+    updated_at: new Date("2026-10-17T02:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function ghWIssue(
+  number: number,
+  overrides: Partial<GhIssueWrite> = {},
+): GhIssueWrite {
+  return {
+    number,
+    author_login: "alice",
+    author_type: "User",
+    author_id: 1001,
+    created_at: new Date("2026-10-17T01:00:00.000Z"),
+    updated_at: new Date("2026-10-17T02:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+function ghWWrite(
+  repo: string,
+  repoId: number,
+  options: {
+    prs?: readonly GhPullRequestWrite[];
+    prKeep?: readonly number[];
+    issues?: readonly GhIssueWrite[];
+    issueKeep?: readonly number[];
+    observed?: Date;
+  } = {},
+) {
+  const prs = options.prs ?? [];
+  const issues = options.issues ?? [];
+  return writeGhRepoDetail(
+    {
+      owner: GH_W_OWNER,
+      repo,
+      repo_id: repoId,
+      observed_at: options.observed ?? GH_W_OBSERVED,
+      pr_rows: prs,
+      pr_keep: options.prKeep ?? prs.map((row) => row.number),
+      issue_rows: issues,
+      issue_keep: options.issueKeep ?? issues.map((row) => row.number),
+    },
+    sql,
+  );
+}
+
+async function ghWReadPrs(repo: string) {
+  return await sql`
+    SELECT number, state, usable, repo_id, written_at, head_sha, author_login,
+      review_requested_user_ids, assignee_ids, mergeable
+    FROM factory.gh_pull_requests
+    WHERE owner = ${GH_W_OWNER} AND repo = ${repo}
+    ORDER BY number
+  `.fetch();
+}
+
+async function ghWReadIssues(repo: string) {
+  return await sql`
+    SELECT number, state, usable, written_at FROM factory.gh_issues
+    WHERE owner = ${GH_W_OWNER} AND repo = ${repo}
+    ORDER BY number
+  `.fetch();
+}
+
+async function ghWRepo(repo: string) {
+  const [row] = await sql`
+    SELECT last_collected_at, last_attempted_at, truncated, detail_failed, repo_id
+    FROM factory.gh_repos WHERE owner = ${GH_W_OWNER} AND repo = ${repo}
+  `.fetch();
+  return row;
+}
+
+const ghWSnapshot = (
+  listed: GhSnapshotInput["listed"],
+  gone: GhSnapshotInput["gone"],
+) =>
+  replaceGhRepoSnapshot(
+    { owner: GH_W_OWNER, owner_id: 4343, listed, gone },
+    sql,
+  );
+const ghWListed = (
+  repo: string,
+  repoId: number,
+  overrides: Partial<GhSnapshotInput["listed"][number]> = {},
+): GhSnapshotInput["listed"][number] => ({
+  repo,
+  repo_id: repoId,
+  allowed: true,
+  default_branch: null,
+  archived: false,
+  open_pr_count: 2,
+  labeled_issue_count: 1,
+  ...overrides,
+});
+
+await ghWSnapshot(
+  [
+    ghWListed("alpha", 21),
+    ghWListed("beta", 22),
+    ghWListed("gamma", 23),
+    ghWListed("delta", 24),
+    ghWListed("epsilon", 25),
+  ],
+  [],
+);
+
+const ghWFirst = await ghWWrite("alpha", 21, {
+  prs: [ghWPr(1), ghWPr(2)],
+  issues: [ghWIssue(7)],
+});
+const ghWPrs1 = await ghWReadPrs("alpha");
+const ghWIssues1 = await ghWReadIssues("alpha");
+const ghWRepo1 = await ghWRepo("alpha");
+check(
+  "writeGhRepoDetail: a complete repository is written by one statement",
+  ghWFirst.kind === "written" &&
+    ghWPrs1.length === 2 &&
+    ghWPrs1.every((row) => row.state === "open" && row.usable === true) &&
+    ghWIssues1.length === 1,
+  { ghWFirst, ghWPrs1, ghWIssues1 },
+);
+check(
+  "writeGhRepoDetail: the id arrays and the optional columns round-trip",
+  JSON.stringify(ghWPrs1[0]?.review_requested_user_ids) === "[12,13]" ||
+    String(ghWPrs1[0]?.review_requested_user_ids).replaceAll(" ", "") ===
+      "{12,13}",
+  ghWPrs1[0],
+);
+check(
+  "writeGhRepoDetail: last_collected_at is the observation time and the attempt time is set",
+  new Date(String(ghWRepo1?.last_collected_at)).toISOString() ===
+    GH_W_OBSERVED.toISOString() && ghWRepo1?.last_attempted_at !== null,
+  ghWRepo1,
+);
+const ghWGuard = await sql`
+  SELECT count(*)::integer AS n FROM factory.gh_repos
+  WHERE owner = ${GH_W_OWNER} AND repo <> 'alpha' AND (last_collected_at IS NOT NULL OR last_attempted_at IS NOT NULL)
+`.fetch();
+check(
+  "writeGhRepoDetail: the other repositories of the owner are untouched",
+  Number(ghWGuard[0]?.n) === 0,
+  ghWGuard,
+);
+
+// 差分: 番号1は変え、番号2は行に載せず(keepにだけ載せる)、番号3を足す。
+const ghWBeforeSecond = ghWPrs1;
+const ghWSecond = await ghWWrite("alpha", 21, {
+  prs: [ghWPr(1, { head_sha: "f".repeat(40) }), ghWPr(3)],
+  prKeep: [1, 2, 3],
+  issues: [],
+  issueKeep: [7],
+});
+const ghWPrs2 = await ghWReadPrs("alpha");
+const ghWWritten = (rows: typeof ghWPrs1, number: number) =>
+  new Date(
+    String(rows.find((row) => row.number === number)?.written_at),
+  ).getTime();
+check(
+  "writeGhRepoDetail: only the changed rows are rewritten and the kept rows stay open",
+  ghWSecond.kind === "written" &&
+    ghWPrs2.length === 3 &&
+    ghWPrs2.every((row) => row.state === "open") &&
+    ghWPrs2.find((row) => row.number === 1)?.head_sha === "f".repeat(40) &&
+    ghWWritten(ghWPrs2, 1) > ghWWritten(ghWBeforeSecond, 1) &&
+    ghWWritten(ghWPrs2, 2) === ghWWritten(ghWBeforeSecond, 2),
+  { ghWPrs2 },
+);
+
+// 閉じる・外す: keepに載らない開いている行を閉じ、keepが空の側はすべて閉じる。
+await ghWWrite("alpha", 21, {
+  prs: [],
+  prKeep: [1],
+  issues: [],
+  issueKeep: [],
+});
+const ghWPrs3 = await ghWReadPrs("alpha");
+const ghWIssues3 = await ghWReadIssues("alpha");
+check(
+  "writeGhRepoDetail: open rows missing from the kept numbers are closed",
+  ghWPrs3.find((row) => row.number === 1)?.state === "open" &&
+    ghWPrs3.find((row) => row.number === 2)?.state === "closed" &&
+    ghWPrs3.find((row) => row.number === 3)?.state === "closed",
+  ghWPrs3,
+);
+check(
+  "writeGhRepoDetail: an empty keep list unlists every open issue",
+  ghWIssues3.length === 1 && ghWIssues3[0]?.state === "unlisted",
+  ghWIssues3,
+);
+
+// 戻す: 閉じた行が再び一覧に載ったら、開いて書き直す。
+await ghWWrite("alpha", 21, {
+  prs: [ghWPr(2)],
+  prKeep: [1, 2],
+  issues: [ghWIssue(7)],
+});
+const ghWPrs4 = await ghWReadPrs("alpha");
+const ghWIssues4 = await ghWReadIssues("alpha");
+check(
+  "writeGhRepoDetail: a closed pull request that appears again is open",
+  ghWPrs4.find((row) => row.number === 2)?.state === "open" &&
+    ghWPrs4.find((row) => row.number === 2)?.usable === true,
+  ghWPrs4,
+);
+check(
+  "writeGhRepoDetail: an unlisted issue that appears again is open",
+  ghWIssues4[0]?.state === "open",
+  ghWIssues4,
+);
+
+// 別の数値ID、許可の外、goneのリポジトリには書かない。
+const ghWRepoBefore = await ghWRepo("alpha");
+const ghWWrongId = await ghWWrite("alpha", 999, { prs: [ghWPr(9)] });
+const ghWPrsAfterWrongId = await ghWReadPrs("alpha");
+const ghWRepoAfter = await ghWRepo("alpha");
+check(
+  "writeGhRepoDetail: a different repository id writes nothing and reports no_repo_row",
+  ghWWrongId.kind === "no_repo_row" &&
+    ghWPrsAfterWrongId.length === 3 &&
+    JSON.stringify(ghWRepoAfter) === JSON.stringify(ghWRepoBefore),
+  { ghWWrongId, ghWPrsAfterWrongId },
+);
+await ghWSnapshot(
+  [
+    ghWListed("delta", 24, {
+      allowed: false,
+      open_pr_count: null,
+      labeled_issue_count: null,
+    }),
+  ],
+  [],
+);
+const ghWDisallowed = await ghWWrite("delta", 24, { prs: [ghWPr(1)] });
+check(
+  "writeGhRepoDetail: a repository that is not allowed gets no rows",
+  ghWDisallowed.kind === "no_repo_row" &&
+    (await ghWReadPrs("delta")).length === 0,
+  ghWDisallowed,
+);
+await ghWSnapshot([ghWListed("gamma", 23, { archived: true })], []);
+const ghWGone = await ghWWrite("gamma", 23, { prs: [ghWPr(1)] });
+check(
+  "writeGhRepoDetail: a gone repository gets no rows",
+  ghWGone.kind === "no_repo_row" && (await ghWReadPrs("gamma")).length === 0,
+  ghWGone,
+);
+const ghWRejected = await writeGhRepoDetail(
+  {
+    owner: GH_W_OWNER,
+    repo: "alpha",
+    repo_id: 21,
+    observed_at: GH_W_OBSERVED,
+    pr_rows: [ghWPr(1, { head_ref: "a‮b" })],
+    pr_keep: [1],
+    issue_rows: [],
+    issue_keep: [],
+  },
+  sql,
+);
+check(
+  "writeGhRepoDetail: a value that fails the checks is rejected without touching the database",
+  ghWRejected.kind === "rejected" &&
+    (await ghWReadPrs("alpha")).find((row) => row.number === 1)?.head_sha ===
+      "f".repeat(40),
+  ghWRejected,
+);
+
+// markGhRepoDetailIncomplete: last_attempted_atだけを進め、last_collected_atは進めない。
+await markGhRepoDetailIncomplete(GH_W_OWNER, "alpha", 21, "truncated", sql);
+const ghWTruncated = await ghWRepo("alpha");
+check(
+  "markGhRepoDetailIncomplete: a truncated mark keeps the collection time and sets only truncated",
+  ghWTruncated?.truncated === true &&
+    ghWTruncated.detail_failed === false &&
+    new Date(String(ghWTruncated.last_collected_at)).toISOString() ===
+      GH_W_OBSERVED.toISOString() &&
+    new Date(String(ghWTruncated.last_attempted_at)).getTime() >=
+      new Date(String(ghWRepoAfter?.last_attempted_at)).getTime(),
+  ghWTruncated,
+);
+await markGhRepoDetailIncomplete(GH_W_OWNER, "alpha", 21, "failed", sql);
+const ghWFailed = await ghWRepo("alpha");
+check(
+  "markGhRepoDetailIncomplete: a failed mark sets only detail_failed",
+  ghWFailed?.truncated === false && ghWFailed.detail_failed === true,
+  ghWFailed,
+);
+await markGhRepoDetailIncomplete(GH_W_OWNER, "alpha", 999, "failed", sql);
+const ghWNotMarked = await ghWRepo("alpha");
+check(
+  "markGhRepoDetailIncomplete: a different repository id marks nothing",
+  JSON.stringify(ghWNotMarked) === JSON.stringify(ghWFailed),
+  ghWNotMarked,
+);
+// 取り終えると、印は両方戻る。
+await ghWWrite("alpha", 21, { prs: [ghWPr(1)], prKeep: [1, 2], issues: [] });
+const ghWCleared = await ghWRepo("alpha");
+check(
+  "writeGhRepoDetail: a completed write clears both marks",
+  ghWCleared?.truncated === false && ghWCleared.detail_failed === false,
+  ghWCleared,
+);
+
+// closeGhZeroCountRepos: 件数0のリポジトリの開いている行を閉じ、印を戻す。
+await ghWWrite("beta", 22, {
+  prs: [ghWPr(5)],
+  issues: [ghWIssue(8)],
+});
+await markGhRepoDetailIncomplete(GH_W_OWNER, "beta", 22, "failed", sql);
+const ghWZeroObserved = new Date("2026-10-17T12:01:30.000Z");
+await closeGhZeroCountRepos(
+  GH_W_OWNER,
+  [{ repo: "beta", repo_id: 22 }],
+  ghWZeroObserved,
+  sql,
+);
+const ghWBetaPrs = await ghWReadPrs("beta");
+const ghWBetaIssues = await ghWReadIssues("beta");
+const ghWBeta = await ghWRepo("beta");
+check(
+  "closeGhZeroCountRepos: the open rows are closed and the marks and times are reset",
+  ghWBetaPrs[0]?.state === "closed" &&
+    ghWBetaIssues[0]?.state === "unlisted" &&
+    ghWBeta?.detail_failed === false &&
+    new Date(String(ghWBeta?.last_collected_at)).toISOString() ===
+      ghWZeroObserved.toISOString(),
+  { ghWBetaPrs, ghWBetaIssues, ghWBeta },
+);
+check(
+  "closeGhZeroCountRepos: the rows of another repository stay open",
+  (await ghWReadPrs("alpha")).some((row) => row.state === "open"),
+);
+
+// listGhDetailRows: 所有者の開いている行だけを読む。
+const ghWDetail = await listGhDetailRows(GH_W_OWNER, sql);
+check(
+  "listGhDetailRows: reads only open rows of both tables and parses them",
+  ghWDetail.prs.length > 0 &&
+    ghWDetail.prs.every((row) => row.state === "open") &&
+    ghWDetail.prs.some(
+      (row) =>
+        row.repo === "alpha" &&
+        row.author_login === "dependabot" &&
+        JSON.stringify(row.review_requested_user_ids) === "[12,13]",
+    ) &&
+    ghWDetail.issues.every((row) => row.state === "open"),
+  ghWDetail,
+);
+
+// markGhOwnerRowsUnusable: 開いている行だけを使用不可にする。
+await ghWWrite("epsilon", 25, {
+  prs: [ghWPr(1), ghWPr(2)],
+  issues: [ghWIssue(1)],
+});
+const ghWUnusableCount = await markGhOwnerRowsUnusable(GH_W_OWNER, sql);
+const ghWAfterUnusable = await listGhDetailRows(GH_W_OWNER, sql);
+check(
+  "markGhOwnerRowsUnusable: every open row becomes unusable and the count is returned",
+  ghWUnusableCount >= 3 &&
+    ghWAfterUnusable.prs.every((row) => row.usable === false) &&
+    ghWAfterUnusable.issues.every((row) => row.usable === false),
+  { ghWUnusableCount, ghWAfterUnusable },
+);
+check(
+  "markGhOwnerRowsUnusable: the rows of another owner are untouched",
+  (await ghWReadPrs("beta")).length === 1 &&
+    (
+      await sql`
+        SELECT count(*)::integer AS n FROM factory.gh_pull_requests
+        WHERE owner <> ${GH_W_OWNER} AND usable = false
+      `.fetch()
+    )[0]?.n === 0,
+);
+
+// 書き直すと、使用不可の行は使用可に戻る。
+await ghWWrite("epsilon", 25, {
+  prs: [ghWPr(1), ghWPr(2)],
+  issues: [ghWIssue(1)],
+});
+check(
+  "writeGhRepoDetail: an unusable row is rewritten as usable",
+  (await ghWReadPrs("epsilon")).every((row) => row.usable === true),
+);
+
+// replaceGhRepoSnapshot: 使えない行の無効化と、数値IDの入れ替わり。
+const ghWReplaceUsable = async (repo: string) =>
+  (await ghWReadPrs(repo)).every((row) => row.usable === true);
+await ghWWrite("alpha", 21, {
+  prs: [ghWPr(1), ghWPr(2)],
+  issues: [ghWIssue(7)],
+});
+await markGhRepoDetailIncomplete(GH_W_OWNER, "alpha", 21, "failed", sql);
+const ghWSwap = await ghWSnapshot(
+  [
+    ghWListed("alpha", 31),
+    ghWListed("beta", 22),
+    ghWListed("epsilon", 25),
+    ghWListed("delta", 24, {
+      allowed: false,
+      open_pr_count: null,
+      labeled_issue_count: null,
+    }),
+    ghWListed("gamma", 23, { archived: true }),
+  ],
+  [],
+);
+const ghWAlphaAfterSwap = await ghWRepo("alpha");
+check(
+  "replaceGhRepoSnapshot: a changed repository id is reported and resets the detail columns",
+  ghWSwap.replaced.join() === "alpha" &&
+    ghWAlphaAfterSwap?.last_collected_at === null &&
+    ghWAlphaAfterSwap.last_attempted_at === null &&
+    ghWAlphaAfterSwap.truncated === false &&
+    ghWAlphaAfterSwap.detail_failed === false,
+  { ghWSwap, ghWAlphaAfterSwap },
+);
+check(
+  "replaceGhRepoSnapshot: the open rows of the replaced repository become unusable",
+  (await ghWReadPrs("alpha"))
+    .filter((row) => row.state === "open")
+    .every((row) => row.usable === false) &&
+    (await ghWReadIssues("alpha"))
+      .filter((row) => row.state === "open")
+      .every((row) => row.usable === false) &&
+    ghWSwap.unusable >= 3,
+  ghWSwap,
+);
+check(
+  "replaceGhRepoSnapshot: the rows of a usable repository are unchanged",
+  await ghWReplaceUsable("epsilon"),
+);
+await ghWWrite("alpha", 31, { prs: [ghWPr(1)], prKeep: [1, 2], issues: [] });
+check(
+  "replaceGhRepoSnapshot: a rewritten row of the replaced repository is usable again",
+  (await ghWReadPrs("alpha")).find((row) => row.number === 1)?.usable === true,
+);
+// 許可の外、archived、前回からgoneのリポジトリの行は、一覧に載った周回で使用不可になる。
+await ghWSnapshot(
+  [ghWListed("alpha", 31), ghWListed("beta", 22), ghWListed("epsilon", 25)],
+  [
+    { repo: "delta", reason: "not_listed" },
+    { repo: "gamma", reason: "not_listed" },
+  ],
+);
+// goneのリポジトリに行を足してから、次の周回でも使用不可になることを確かめる。
+execPsql(
+  target,
+  `INSERT INTO factory.gh_pull_requests (owner, repo, repo_id, number, state, head_sha, is_draft, is_cross_repository, created_at, updated_at) VALUES ('${GH_W_OWNER}', 'gamma', 23, 50, 'open', '${GH_DETAIL_SHA}', false, false, now(), now()), ('${GH_W_OWNER}', 'delta', 24, 51, 'open', '${GH_DETAIL_SHA}', false, false, now(), now()), ('${GH_W_OWNER}', 'nowhere', 99, 52, 'open', '${GH_DETAIL_SHA}', false, false, now(), now())`,
+);
+const ghWSecondPass = await ghWSnapshot(
+  [ghWListed("alpha", 31), ghWListed("beta", 22), ghWListed("epsilon", 25)],
+  [],
+);
+const ghWGoneRows = await sql`
+  SELECT repo, usable FROM factory.gh_pull_requests
+  WHERE owner = ${GH_W_OWNER} AND repo IN ('gamma', 'delta', 'nowhere')
+  ORDER BY repo
+`.fetch();
+check(
+  "replaceGhRepoSnapshot: rows of a repository that is gone since an earlier round, or has no repository row, become unusable",
+  ghWGoneRows.length === 3 &&
+    ghWGoneRows.every((row) => row.usable === false) &&
+    ghWSecondPass.unusable >= 3,
+  { ghWGoneRows, ghWSecondPass },
+);
+check(
+  "replaceGhRepoSnapshot: the repository that is still listed keeps its usable rows",
+  await ghWReplaceUsable("epsilon"),
+);
+// 数値IDが空の行が初めて見えても、入れ替わりとしない。
+await ghWSnapshot([], [{ repo: "ghost", reason: "not_visible" }]);
+const ghWFirstSight = await ghWSnapshot(
+  [ghWListed("ghost", 77), ghWListed("alpha", 31), ghWListed("epsilon", 25)],
+  [],
+);
+check(
+  "replaceGhRepoSnapshot: a repository seen for the first time with a null repository id is not a replacement",
+  ghWFirstSight.replaced.length === 0,
+  ghWFirstSight,
+);
+// 空の一覧は、所有者の開いている行を残さない。
+await ghWWrite("epsilon", 25, { prs: [ghWPr(1)], issues: [] });
+const ghWEmpty = await ghWSnapshot([], []);
+check(
+  "replaceGhRepoSnapshot: an empty list makes every open row of the owner unusable",
+  (await listGhDetailRows(GH_W_OWNER, sql)).prs.every(
+    (row) => row.usable === false,
+  ) && ghWEmpty.unusable >= 1,
+  ghWEmpty,
+);
+
+// deleteClosedGhDetailRowsBefore: 閉じた行と外れた行だけを、保持期間で消す。
+execPsql(
+  target,
+  `UPDATE factory.gh_pull_requests SET written_at = now() - interval '100 days' WHERE owner = '${GH_W_OWNER}' AND repo IN ('beta', 'epsilon', 'alpha')`,
+);
+execPsql(
+  target,
+  `UPDATE factory.gh_issues SET written_at = now() - interval '100 days' WHERE owner = '${GH_W_OWNER}'`,
+);
+const ghWOpenBefore = (await listGhDetailRows(GH_W_OWNER, sql)).prs.length;
+const ghWDeleted = await deleteClosedGhDetailRowsBefore(
+  new Date(Date.now() - 30 * DAY_MS),
+  sql,
+);
+const ghWRemaining = await sql`
+  SELECT
+    (SELECT count(*)::integer FROM factory.gh_pull_requests WHERE owner = ${GH_W_OWNER} AND state = 'closed') AS closed_prs,
+    (SELECT count(*)::integer FROM factory.gh_issues WHERE owner = ${GH_W_OWNER} AND state = 'unlisted') AS unlisted_issues,
+    (SELECT count(*)::integer FROM factory.gh_pull_requests WHERE owner = ${GH_W_OWNER} AND state = 'open') AS open_prs
+`.fetch();
+check(
+  "deleteClosedGhDetailRowsBefore: old closed and unlisted rows are deleted and open rows stay however old",
+  ghWDeleted >= 2 &&
+    Number(ghWRemaining[0]?.closed_prs) === 0 &&
+    Number(ghWRemaining[0]?.unlisted_issues) === 0 &&
+    Number(ghWRemaining[0]?.open_prs) === ghWOpenBefore,
+  { ghWDeleted, ghWRemaining, ghWOpenBefore },
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

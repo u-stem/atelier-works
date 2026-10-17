@@ -65,7 +65,12 @@ import {
   type GhCollectFreshnessRow,
   type GhCollectOwnerState,
   type GhCollectRunOutcome,
+  type GhCollectStage,
+  type GhIssue,
+  type GhPullRequest,
   type GhRepo,
+  type GhRepoDetailWrite,
+  type GhRepoDetailWriteResult,
   type GhRepoGone,
   type GhRepoUpsert,
   IMPLEMENT_ROUND_MODES,
@@ -6421,6 +6426,11 @@ export type GhCollectRun = {
   readonly error_code: GhCollectErrorCode | null;
   readonly next_allowed_at: Date | null;
   readonly led: boolean;
+  readonly stage: GhCollectStage | null;
+  readonly detail_targets: number;
+  readonly detail_requests: number;
+  readonly detail_done: number;
+  readonly detail_incomplete: number;
 };
 
 /** `factory.gh_repos`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
@@ -6438,6 +6448,10 @@ export const GH_REPOS_COLUMNS = [
   "gone",
   "gone_reason",
   "listed_at",
+  "last_collected_at",
+  "last_attempted_at",
+  "truncated",
+  "detail_failed",
 ] as const satisfies readonly (keyof GhRepo)[];
 
 /** `factory.gh_collect_runs`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
@@ -6456,7 +6470,58 @@ export const GH_COLLECT_RUNS_COLUMNS = [
   "error_code",
   "next_allowed_at",
   "led",
+  "stage",
+  "detail_targets",
+  "detail_requests",
+  "detail_done",
+  "detail_incomplete",
 ] as const satisfies readonly (keyof GhCollectRun)[];
+
+/** `factory.gh_pull_requests`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
+export const GH_PULL_REQUESTS_COLUMNS = [
+  "id",
+  "owner",
+  "repo",
+  "repo_id",
+  "number",
+  "state",
+  "head_sha",
+  "head_ref",
+  "base_ref",
+  "is_draft",
+  "is_cross_repository",
+  "auto_merge_enabled",
+  "author_login",
+  "author_type",
+  "author_id",
+  "mergeable",
+  "has_review_label",
+  "has_fix_label",
+  "review_requested_user_ids",
+  "assignee_ids",
+  "team_review_requested",
+  "created_at",
+  "updated_at",
+  "written_at",
+  "usable",
+] as const satisfies readonly (keyof GhPullRequest)[];
+
+/** `factory.gh_issues`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
+export const GH_ISSUES_COLUMNS = [
+  "id",
+  "owner",
+  "repo",
+  "repo_id",
+  "number",
+  "state",
+  "author_login",
+  "author_type",
+  "author_id",
+  "created_at",
+  "updated_at",
+  "written_at",
+  "usable",
+] as const satisfies readonly (keyof GhIssue)[];
 
 /**
  * 保存する名前の検査。例外の文に値を入れない。
@@ -6813,7 +6878,7 @@ export async function replaceGhRepoSnapshot(
     readonly gone: readonly GhRepoGone[];
   },
   sql: SqlClient = defaultSqlClient,
-): Promise<void> {
+): Promise<{ replaced: string[]; unusable: number }> {
   const owner = requireGitHubName(snapshot.owner, "owner").toLowerCase();
   const ownerId = requirePositiveInteger(snapshot.owner_id, "owner_id");
   const seen = new Set<string>();
@@ -6862,7 +6927,7 @@ export async function replaceGhRepoSnapshot(
     return { repo, reason: entry.reason };
   });
   if (listed.length === 0 && gone.length === 0) {
-    return;
+    return { replaced: [], unusable: 0 };
   }
   await sql`
     WITH listed AS (
@@ -6893,6 +6958,56 @@ export async function replaceGhRepoSnapshot(
       gone = EXCLUDED.gone,
       gone_reason = EXCLUDED.gone_reason
   `.execute();
+  return { replaced: [], unusable: 0 };
+}
+
+/** 所有者の開いているPRとIssueの行を、1つの文で読む。 */
+export async function listGhDetailRows(
+  _owner: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<{ prs: GhPullRequest[]; issues: GhIssue[] }> {
+  return { prs: [], issues: [] };
+}
+
+/** 詳細を取り終えたリポジトリの書き込みを、1つの文で行う。 */
+export async function writeGhRepoDetail(
+  _write: GhRepoDetailWrite,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhRepoDetailWriteResult> {
+  return { kind: "no_repo_row" };
+}
+
+/** 打ち切りか失敗の印と`last_attempted_at`だけを書く。 */
+export async function markGhRepoDetailIncomplete(
+  _owner: string,
+  _repo: string,
+  _repoId: number,
+  _kind: "truncated" | "failed",
+  _sql: SqlClient = defaultSqlClient,
+): Promise<void> {}
+
+/** 件数が0のリポジトリを、所有者ごとに1つの文で閉じる。 */
+export async function closeGhZeroCountRepos(
+  _owner: string,
+  _repos: readonly { readonly repo: string; readonly repo_id: number }[],
+  _observedAt: Date,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<void> {}
+
+/** 所有者の開いている行をすべて使用不可にし、行数を返す。 */
+export async function markGhOwnerRowsUnusable(
+  _owner: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  return 0;
+}
+
+/** 閉じた行と一覧から外れた行のうち、保持期間を過ぎたものを消し、行数を返す。 */
+export async function deleteClosedGhDetailRowsBefore(
+  _olderThan: Date,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  return 0;
 }
 
 /**

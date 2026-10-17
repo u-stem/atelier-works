@@ -3,21 +3,30 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  closeGhZeroCountRepos,
+  deleteClosedGhDetailRowsBefore,
   deleteGhCollectRunsBefore,
   finishGhCollectRun,
   GH_COLLECT_RUNS_COLUMNS,
+  GH_ISSUES_COLUMNS,
+  GH_PULL_REQUESTS_COLUMNS,
   GH_REPOS_COLUMNS,
   insertGhCollectRuns,
   listGhCollectFreshness,
   listGhCollectOwnerStates,
+  listGhDetailRows,
   listGhRepos,
   listRecentGhCollectRuns,
+  markGhOwnerRowsUnusable,
+  markGhRepoDetailIncomplete,
   replaceGhRepoSnapshot,
   type SqlClient,
   type SqlRow,
+  writeGhRepoDetail,
 } from "../../f/factory/lib/db.ts";
 import type {
   GhCollectRunOutcome,
+  GhRepoDetailWrite,
   GhRepoUpsert,
 } from "../../f/factory/lib/types.ts";
 
@@ -57,6 +66,10 @@ const REPO_ROW: SqlRow = {
   gone: false,
   gone_reason: null,
   listed_at: LISTED_AT.toISOString(),
+  last_collected_at: null,
+  last_attempted_at: null,
+  truncated: false,
+  detail_failed: false,
 };
 
 const RUN_ROW: SqlRow = {
@@ -74,6 +87,11 @@ const RUN_ROW: SqlRow = {
   error_code: null,
   next_allowed_at: null,
   led: true,
+  stage: null,
+  detail_targets: 0,
+  detail_requests: 0,
+  detail_done: 0,
+  detail_incomplete: 0,
 };
 
 const OUTCOME: GhCollectRunOutcome = {
@@ -87,6 +105,11 @@ const OUTCOME: GhCollectRunOutcome = {
   error_code: "no_token",
   next_allowed_at: null,
   led: false,
+  stage: "list",
+  detail_targets: 0,
+  detail_requests: 0,
+  detail_done: 0,
+  detail_incomplete: 0,
 };
 
 const UPSERT: GhRepoUpsert = {
@@ -156,6 +179,10 @@ describe("listGhRepos", () => {
         gone: false,
         gone_reason: null,
         listed_at: LISTED_AT,
+        last_collected_at: null,
+        last_attempted_at: null,
+        truncated: false,
+        detail_failed: false,
       },
     ]);
   });
@@ -581,6 +608,8 @@ describe("listGhCollectFreshness", () => {
   });
 });
 
+const SNAPSHOT_RESULT_ROW: SqlRow = { replaced: [], unusable: 0 };
+
 describe("replaceGhRepoSnapshot", () => {
   const SNAPSHOT = {
     owner: "Acme",
@@ -590,13 +619,13 @@ describe("replaceGhRepoSnapshot", () => {
   };
 
   test("writes the whole owner in one statement", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls).toHaveLength(1);
   });
 
   test("inserts only defined columns", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     const defined: readonly string[] = GH_REPOS_COLUMNS;
     expect(
@@ -607,52 +636,52 @@ describe("replaceGhRepoSnapshot", () => {
   });
 
   test("binds the repositories as JSON, not as text in the statement", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls[0]?.text).not.toContain("widgets");
   });
 
   test("lowercases the owner", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls[0]?.values).toContain("acme");
   });
 
   test("clears gone when a repository is listed again", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls[0]?.text).toContain("gone = EXCLUDED.gone");
   });
 
   test("advances listed_at for listed repositories", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls[0]?.text).toContain("listed_at = EXCLUDED.listed_at");
   });
 
   test("marks an archived repository gone with the reason archived", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls[0]?.text).toContain("CASE WHEN archived THEN 'archived'");
   });
 
   test("changes only the gone columns of a repository that is not listed", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(SNAPSHOT, sql);
     expect(calls[0]?.text).toContain("gone_reason = EXCLUDED.gone_reason");
   });
 
-  test("writes nothing when there is nothing to write", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+  test("still sends the statement when the list and the gone list are empty", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(
       { owner: "acme", owner_id: 1001, listed: [], gone: [] },
       sql,
     );
-    expect(calls).toHaveLength(0);
+    expect(calls).toHaveLength(1);
   });
 
   test("rejects an invalid repository name, without querying", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(
       { ...SNAPSHOT, listed: [{ ...UPSERT, repo: "a b" }] },
       sql,
@@ -661,7 +690,7 @@ describe("replaceGhRepoSnapshot", () => {
   });
 
   test("rejects an invalid default branch, without querying", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(
       { ...SNAPSHOT, listed: [{ ...UPSERT, default_branch: "--force" }] },
       sql,
@@ -670,7 +699,7 @@ describe("replaceGhRepoSnapshot", () => {
   });
 
   test("does not echo a rejected value in the error", async () => {
-    const { sql } = createFakeSqlClient([[]]);
+    const { sql } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     const error = await replaceGhRepoSnapshot(
       { ...SNAPSHOT, listed: [{ ...UPSERT, repo: "github_pat_SECRET x" }] },
       sql,
@@ -679,7 +708,7 @@ describe("replaceGhRepoSnapshot", () => {
   });
 
   test("rejects a count of a disallowed repository, without querying", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(
       { ...SNAPSHOT, listed: [{ ...UPSERT, allowed: false }] },
       sql,
@@ -688,7 +717,7 @@ describe("replaceGhRepoSnapshot", () => {
   });
 
   test("rejects a repository listed twice, without querying", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(
       { ...SNAPSHOT, listed: [UPSERT, { ...UPSERT, repo: "Widgets" }] },
       sql,
@@ -697,7 +726,7 @@ describe("replaceGhRepoSnapshot", () => {
   });
 
   test("rejects a repository that is both listed and gone, without querying", async () => {
-    const { sql, calls } = createFakeSqlClient([[]]);
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
     await replaceGhRepoSnapshot(
       {
         ...SNAPSHOT,
@@ -743,5 +772,901 @@ describe("deleteGhCollectRunsBefore", () => {
   test("returns the number of deleted rows", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }, { id: 2 }]]);
     expect(await deleteGhCollectRunsBefore(cutoff, sql)).toBe(2);
+  });
+});
+
+describe("finishGhCollectRun detail columns", () => {
+  test("writes the stage and the detail counts", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(
+      1,
+      {
+        ...OUTCOME,
+        stage: "detail",
+        detail_targets: 5,
+        detail_requests: 2,
+        detail_done: 3,
+        detail_incomplete: 1,
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["detail", 5, 2, 3, 1]),
+    );
+  });
+
+  test("casts the detail counts as integers", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(1, OUTCOME, sql);
+    const text = calls[0]?.text ?? "";
+    expect(
+      [
+        /stage = {2}\?/,
+        /detail_targets = {2}\? ::integer/,
+        /detail_requests = {2}\? ::integer/,
+        /detail_done = {2}\? ::integer/,
+        /detail_incomplete = {2}\? ::integer/,
+      ].filter((pattern) => !pattern.test(text)),
+    ).toEqual([]);
+  });
+
+  test("writes a null stage for a successful run", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(
+      1,
+      { ...OUTCOME, ok: true, error_code: null, stage: null },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(null);
+  });
+
+  test("rejects a stage that is not list or detail, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(
+      1,
+      // @ts-expect-error 型の外から来た値でも、DBに触れる前に止める
+      { ...OUTCOME, stage: "write" },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a successful run that carries a stage, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(
+      1,
+      { ...OUTCOME, ok: true, error_code: null, stage: "detail" },
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a negative detail count, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(1, { ...OUTCOME, detail_done: -1 }, sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("gh_collect_runs detail columns", () => {
+  test("reads the stage and the detail counts", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...RUN_ROW,
+          ok: false,
+          error_code: "graphql_error",
+          stage: "detail",
+          detail_targets: "4",
+          detail_requests: 2,
+          detail_done: 1,
+          detail_incomplete: 3,
+        },
+      ],
+    ]);
+    const rows = await listRecentGhCollectRuns("acme", 5, sql);
+    expect([
+      rows[0]?.stage,
+      rows[0]?.detail_targets,
+      rows[0]?.detail_requests,
+      rows[0]?.detail_done,
+      rows[0]?.detail_incomplete,
+    ]).toEqual(["detail", 4, 2, 1, 3]);
+  });
+
+  test("rejects an unknown stage", async () => {
+    const { sql } = createFakeSqlClient([[{ ...RUN_ROW, stage: "write" }]]);
+    await expect(listRecentGhCollectRuns("acme", 5, sql)).rejects.toThrow();
+  });
+});
+
+describe("gh_repos detail columns", () => {
+  test("reads the collection time and the marks", async () => {
+    const collected = new Date("2026-10-17T02:00:00.000Z");
+    const attempted = new Date("2026-10-17T02:00:05.000Z");
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          ...REPO_ROW,
+          last_collected_at: collected.toISOString(),
+          last_attempted_at: attempted.toISOString(),
+          truncated: true,
+          detail_failed: true,
+        },
+      ],
+    ]);
+    const rows = await listGhRepos("acme", sql);
+    expect([
+      rows[0]?.last_collected_at,
+      rows[0]?.last_attempted_at,
+      rows[0]?.truncated,
+      rows[0]?.detail_failed,
+    ]).toEqual([collected, attempted, true, true]);
+  });
+
+  test("rejects a mark that is not a boolean", async () => {
+    const { sql } = createFakeSqlClient([[{ ...REPO_ROW, truncated: "no" }]]);
+    await expect(listGhRepos("acme", sql)).rejects.toThrow();
+  });
+
+  test("the column definition has no base_oid or merge_state_status", () => {
+    const columns: readonly string[] = [
+      ...GH_PULL_REQUESTS_COLUMNS,
+      ...GH_ISSUES_COLUMNS,
+    ];
+    expect(
+      columns.filter(
+        (column) => column === "base_oid" || column === "merge_state_status",
+      ),
+    ).toEqual([]);
+  });
+});
+
+const PR_ROW: SqlRow = {
+  id: "5",
+  owner: "acme",
+  repo: "widgets",
+  repo_id: "2002",
+  number: 7,
+  state: "open",
+  head_sha: "0123456789abcdef0123456789abcdef01234567",
+  head_ref: "feature/a",
+  base_ref: "main",
+  is_draft: false,
+  is_cross_repository: false,
+  auto_merge_enabled: null,
+  author_login: "dependabot",
+  author_type: "Bot",
+  author_id: "49699333",
+  mergeable: "MERGEABLE",
+  has_review_label: true,
+  has_fix_label: null,
+  review_requested_user_ids: [12, "13"],
+  assignee_ids: [],
+  team_review_requested: false,
+  created_at: "2026-10-17T01:00:00+00:00",
+  updated_at: "2026-10-17T02:00:00+00:00",
+  written_at: "2026-10-17T03:00:00+00:00",
+  usable: true,
+};
+
+const ISSUE_ROW: SqlRow = {
+  id: "6",
+  owner: "acme",
+  repo: "widgets",
+  repo_id: "2002",
+  number: 3,
+  state: "open",
+  author_login: "alice",
+  author_type: "User",
+  author_id: 1001,
+  created_at: "2026-10-17T01:00:00+00:00",
+  updated_at: "2026-10-17T02:00:00+00:00",
+  written_at: "2026-10-17T03:00:00+00:00",
+  usable: true,
+};
+
+/** `<name> AS (SELECT ... FROM factory.<table>`のSELECT句の列を、書いた順に返す。 */
+function cteColumns(text: string, name: string, table: string): string[] {
+  const match = new RegExp(
+    `${name} AS \\(\\s*SELECT\\s+([\\s\\S]*?)\\s+FROM factory\\.${table}`,
+  ).exec(text);
+  return (match?.[1] ?? "").split(",").map((column) => column.trim());
+}
+
+describe("listGhDetailRows", () => {
+  const read = (rows: SqlRow[] = [{ prs: [], issues: [] }]) =>
+    createFakeSqlClient([rows]);
+
+  test("reads both tables in one statement", async () => {
+    const { sql, calls } = read();
+    await listGhDetailRows("acme", sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("selects the defined columns of the pull request table", async () => {
+    const { sql, calls } = read();
+    await listGhDetailRows("acme", sql);
+    expect(cteColumns(calls[0]?.text ?? "", "pr", "gh_pull_requests")).toEqual([
+      ...GH_PULL_REQUESTS_COLUMNS,
+    ]);
+  });
+
+  test("selects the defined columns of the issue table", async () => {
+    const { sql, calls } = read();
+    await listGhDetailRows("acme", sql);
+    expect(cteColumns(calls[0]?.text ?? "", "issue", "gh_issues")).toEqual([
+      ...GH_ISSUES_COLUMNS,
+    ]);
+  });
+
+  test("reads only open rows of the owner", async () => {
+    const { sql, calls } = read();
+    await listGhDetailRows("Acme", sql);
+    expect([
+      (calls[0]?.text.match(/state = 'open'/g) ?? []).length,
+      calls[0]?.values,
+    ]).toEqual([2, ["acme", "acme"]]);
+  });
+
+  test("parses a pull request row, accepting ids as digit strings", async () => {
+    const { sql } = read([{ prs: [PR_ROW], issues: [] }]);
+    const { prs } = await listGhDetailRows("acme", sql);
+    expect(prs[0]).toEqual({
+      id: 5,
+      owner: "acme",
+      repo: "widgets",
+      repo_id: 2002,
+      number: 7,
+      state: "open",
+      head_sha: "0123456789abcdef0123456789abcdef01234567",
+      head_ref: "feature/a",
+      base_ref: "main",
+      is_draft: false,
+      is_cross_repository: false,
+      auto_merge_enabled: null,
+      author_login: "dependabot",
+      author_type: "Bot",
+      author_id: 49699333,
+      mergeable: "MERGEABLE",
+      has_review_label: true,
+      has_fix_label: null,
+      review_requested_user_ids: [12, 13],
+      assignee_ids: [],
+      team_review_requested: false,
+      created_at: new Date("2026-10-17T01:00:00.000Z"),
+      updated_at: new Date("2026-10-17T02:00:00.000Z"),
+      written_at: new Date("2026-10-17T03:00:00.000Z"),
+      usable: true,
+    });
+  });
+
+  test("names exactly the fields of a parsed pull request row in the column definition", async () => {
+    const { sql } = read([{ prs: [PR_ROW], issues: [] }]);
+    const { prs } = await listGhDetailRows("acme", sql);
+    expect(Object.keys(prs[0] ?? {}).sort()).toEqual(
+      [...GH_PULL_REQUESTS_COLUMNS].sort(),
+    );
+  });
+
+  test("names exactly the fields of a parsed issue row in the column definition", async () => {
+    const { sql } = read([{ prs: [], issues: [ISSUE_ROW] }]);
+    const { issues } = await listGhDetailRows("acme", sql);
+    expect(Object.keys(issues[0] ?? {}).sort()).toEqual(
+      [...GH_ISSUES_COLUMNS].sort(),
+    );
+  });
+
+  test("accepts the rows as a JSON string", async () => {
+    const { sql } = read([
+      { prs: JSON.stringify([PR_ROW]), issues: JSON.stringify([ISSUE_ROW]) },
+    ]);
+    const rows = await listGhDetailRows("acme", sql);
+    expect([rows.prs.length, rows.issues.length]).toEqual([1, 1]);
+  });
+
+  test("accepts an id array as a Postgres array literal", async () => {
+    const { sql } = read([
+      {
+        prs: [{ ...PR_ROW, review_requested_user_ids: "{12,13}" }],
+        issues: [],
+      },
+    ]);
+    const { prs } = await listGhDetailRows("acme", sql);
+    expect(prs[0]?.review_requested_user_ids).toEqual([12, 13]);
+  });
+
+  test("keeps a null id array as null", async () => {
+    const { sql } = read([
+      { prs: [{ ...PR_ROW, assignee_ids: null }], issues: [] },
+    ]);
+    const { prs } = await listGhDetailRows("acme", sql);
+    expect(prs[0]?.assignee_ids).toBeNull();
+  });
+
+  test("rejects a stored branch name that is not valid, without echoing it", async () => {
+    const { sql } = read([
+      {
+        prs: [{ ...PR_ROW, head_ref: "github_pat_SECRET‮" }],
+        issues: [],
+      },
+    ]);
+    const error = await listGhDetailRows("acme", sql).catch((e: unknown) => e);
+    expect(String(error)).not.toContain("github_pat_SECRET");
+  });
+
+  test("rejects a stored branch name with a format character", async () => {
+    const { sql } = read([
+      { prs: [{ ...PR_ROW, base_ref: "main‮" }], issues: [] },
+    ]);
+    await expect(listGhDetailRows("acme", sql)).rejects.toThrow();
+  });
+
+  test("rejects a stored author login that is too long", async () => {
+    const { sql } = read([
+      {
+        prs: [{ ...PR_ROW, author_login: "a".repeat(40) }],
+        issues: [],
+      },
+    ]);
+    await expect(listGhDetailRows("acme", sql)).rejects.toThrow();
+  });
+
+  test("rejects a stored head sha that is not forty hex digits", async () => {
+    const { sql } = read([
+      { prs: [{ ...PR_ROW, head_sha: "abc" }], issues: [] },
+    ]);
+    await expect(listGhDetailRows("acme", sql)).rejects.toThrow();
+  });
+
+  test("rejects an unknown mergeable value", async () => {
+    const { sql } = read([
+      { prs: [{ ...PR_ROW, mergeable: "UNKNOWN" }], issues: [] },
+    ]);
+    await expect(listGhDetailRows("acme", sql)).rejects.toThrow();
+  });
+
+  test("rejects an unknown pull request state", async () => {
+    const { sql } = read([
+      { prs: [{ ...PR_ROW, state: "merged" }], issues: [] },
+    ]);
+    await expect(listGhDetailRows("acme", sql)).rejects.toThrow();
+  });
+
+  test("rejects an invalid owner, without querying", async () => {
+    const { sql, calls } = read();
+    await listGhDetailRows("a b", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+const DETAIL_PR = {
+  number: 7,
+  head_sha: "0123456789abcdef0123456789abcdef01234567",
+  head_ref: "feature/a",
+  base_ref: "main",
+  is_draft: false,
+  is_cross_repository: false,
+  auto_merge_enabled: null,
+  author_login: "alice",
+  author_type: "User" as const,
+  author_id: 1001,
+  mergeable: null,
+  has_review_label: null,
+  has_fix_label: null,
+  review_requested_user_ids: [12],
+  assignee_ids: null,
+  team_review_requested: null,
+  created_at: new Date("2026-10-17T01:00:00.000Z"),
+  updated_at: new Date("2026-10-17T02:00:00.000Z"),
+};
+
+const DETAIL_ISSUE = {
+  number: 3,
+  author_login: "alice",
+  author_type: "User" as const,
+  author_id: 1001,
+  created_at: new Date("2026-10-17T01:00:00.000Z"),
+  updated_at: new Date("2026-10-17T02:00:00.000Z"),
+};
+
+const OBSERVED = new Date("2026-10-17T11:59:30.000Z");
+
+const DETAIL_WRITE: GhRepoDetailWrite = {
+  owner: "Acme",
+  repo: "Widgets",
+  repo_id: 2002,
+  observed_at: OBSERVED,
+  pr_rows: [DETAIL_PR],
+  pr_keep: [7, 8],
+  issue_rows: [DETAIL_ISSUE],
+  issue_keep: [3],
+};
+
+describe("writeGhRepoDetail", () => {
+  test("writes the repository in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("returns written when the repository row was updated", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: 1 }]]);
+    expect(await writeGhRepoDetail(DETAIL_WRITE, sql)).toEqual({
+      kind: "written",
+    });
+  });
+
+  test("returns written when the count comes back as a digit string", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: "1" }]]);
+    expect(await writeGhRepoDetail(DETAIL_WRITE, sql)).toEqual({
+      kind: "written",
+    });
+  });
+
+  test("returns no_repo_row when no repository row was updated", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: 0 }]]);
+    expect(await writeGhRepoDetail(DETAIL_WRITE, sql)).toEqual({
+      kind: "no_repo_row",
+    });
+  });
+
+  test("updates the repository row only for the same repository id that is allowed and not gone", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(calls[0]?.text).toMatch(
+      /WHERE owner = {2}\? AND repo = {2}\? AND repo_id = {2}\? ::bigint AND allowed AND NOT gone/,
+    );
+  });
+
+  test("conditions every other change on the repository update", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(
+      (calls[0]?.text.match(/EXISTS \(SELECT 1 FROM repo_updated\)/g) ?? [])
+        .length,
+    ).toBe(4);
+  });
+
+  test("sets the collection time to the observation time, not now", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect([
+      /last_collected_at = {2}\? ::timestamptz/.test(calls[0]?.text ?? ""),
+      calls[0]?.values.includes(OBSERVED.toISOString()),
+    ]).toEqual([true, true]);
+  });
+
+  test("sets the attempt time to now and clears both marks", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(calls[0]?.text).toMatch(
+      /last_attempted_at = now\(\), truncated = false, detail_failed = false/,
+    );
+  });
+
+  test("closes pull requests and unlists issues that are not kept", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect([
+      /SET state = 'closed'/.test(calls[0]?.text ?? ""),
+      /SET state = 'unlisted'/.test(calls[0]?.text ?? ""),
+    ]).toEqual([true, true]);
+  });
+
+  test("binds the kept numbers as integer arrays", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect([
+      calls[0]?.values.some(
+        (value) => Array.isArray(value) && value.join() === "7,8",
+      ),
+      calls[0]?.values.some(
+        (value) => Array.isArray(value) && value.join() === "3",
+      ),
+    ]).toEqual([true, true]);
+  });
+
+  test("rewrites the whole row of a reappearing pull request and marks it usable", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(calls[0]?.text).toMatch(
+      /ON CONFLICT \(owner, repo, number\) DO UPDATE SET[\s\S]*state = 'open'[\s\S]*usable = true/,
+    );
+  });
+
+  test("lowercases the owner and the repository", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining(["acme", "widgets"]),
+    );
+  });
+
+  test("keeps every value out of the statement text", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(calls[0]?.text).not.toContain("feature/a");
+  });
+
+  test("binds the rows as JSON with ISO timestamps", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(DETAIL_WRITE, sql);
+    expect(
+      calls[0]?.values.some(
+        (value) =>
+          typeof value === "string" &&
+          value.includes('"created_at":"2026-10-17T01:00:00.000Z"'),
+      ),
+    ).toBe(true);
+  });
+
+  test("returns rejected with the field name, without querying, for a value that fails the checks", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    const result = await writeGhRepoDetail(
+      { ...DETAIL_WRITE, pr_rows: [{ ...DETAIL_PR, head_ref: "a‮b" }] },
+      sql,
+    );
+    expect([result, calls.length]).toEqual([
+      { kind: "rejected", field: "pr_rows.head_ref" },
+      0,
+    ]);
+  });
+
+  test("returns rejected, without querying, when a row is not in the keep list", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    const result = await writeGhRepoDetail(
+      { ...DETAIL_WRITE, pr_keep: [8] },
+      sql,
+    );
+    expect([result.kind, calls.length]).toEqual(["rejected", 0]);
+  });
+
+  test("rejection does not carry the rejected value", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: 1 }]]);
+    const result = await writeGhRepoDetail(
+      {
+        ...DETAIL_WRITE,
+        pr_rows: [{ ...DETAIL_PR, head_ref: "github_pat_SECRET‮" }],
+      },
+      sql,
+    );
+    expect(JSON.stringify(result)).not.toContain("SECRET");
+  });
+
+  test("a database failure is an exception", async () => {
+    const failing: SqlClient = () => ({
+      fetch: () => Promise.reject(new Error("db down")),
+      execute: () => Promise.reject(new Error("db down")),
+    });
+    await expect(writeGhRepoDetail(DETAIL_WRITE, failing)).rejects.toThrow();
+  });
+
+  test("writes a repository with empty lists, which closes everything", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
+    await writeGhRepoDetail(
+      {
+        ...DETAIL_WRITE,
+        pr_rows: [],
+        pr_keep: [],
+        issue_rows: [],
+        issue_keep: [],
+      },
+      sql,
+    );
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("markGhRepoDetailIncomplete", () => {
+  test("a truncated mark sets truncated and clears detail_failed", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await markGhRepoDetailIncomplete("Acme", "Widgets", 2002, "truncated", sql);
+    expect(calls[0]?.values).toEqual(["acme", "widgets", 2002, true, false]);
+  });
+
+  test("a failed mark sets detail_failed and clears truncated", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await markGhRepoDetailIncomplete("acme", "widgets", 2002, "failed", sql);
+    expect(calls[0]?.values).toEqual(["acme", "widgets", 2002, false, true]);
+  });
+
+  test("advances the attempt time and never the collection time", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await markGhRepoDetailIncomplete("acme", "widgets", 2002, "failed", sql);
+    expect([
+      calls[0]?.text.includes("last_attempted_at = now()"),
+      calls[0]?.text.includes("last_collected_at"),
+    ]).toEqual([true, false]);
+  });
+
+  test("updates only the same repository id that is allowed and not gone", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await markGhRepoDetailIncomplete("acme", "widgets", 2002, "failed", sql);
+    expect(calls[0]?.text).toMatch(
+      /repo_id = {2}\? ::bigint AND allowed AND NOT gone/,
+    );
+  });
+
+  test("rejects an invalid repository, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await markGhRepoDetailIncomplete("acme", "a b", 2002, "failed", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid repository id, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await markGhRepoDetailIncomplete("acme", "widgets", 0, "failed", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a kind that is neither truncated nor failed, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await markGhRepoDetailIncomplete(
+      "acme",
+      "widgets",
+      2002,
+      // @ts-expect-error 型の外から来た値でも、DBに触れる前に止める
+      "done",
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("closeGhZeroCountRepos", () => {
+  const REPOS = [
+    { repo: "Widgets", repo_id: 2002 },
+    { repo: "gadgets", repo_id: 2003 },
+  ];
+
+  test("closes the repositories of an owner in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos("Acme", REPOS, OBSERVED, sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("does not query for no repositories", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos("acme", [], OBSERVED, sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("sets the collection time to the observation time and clears the marks", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos("acme", REPOS, OBSERVED, sql);
+    expect([
+      /last_collected_at = {2}\? ::timestamptz/.test(calls[0]?.text ?? ""),
+      /last_attempted_at = now\(\), truncated = false, detail_failed = false/.test(
+        calls[0]?.text ?? "",
+      ),
+      calls[0]?.values.includes(OBSERVED.toISOString()),
+    ]).toEqual([true, true, true]);
+  });
+
+  test("closes pull requests and unlists issues of the repositories", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos("acme", REPOS, OBSERVED, sql);
+    expect([
+      /SET state = 'closed'/.test(calls[0]?.text ?? ""),
+      /SET state = 'unlisted'/.test(calls[0]?.text ?? ""),
+    ]).toEqual([true, true]);
+  });
+
+  test("lowercases the owner and the repository names in the bound JSON", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos("Acme", REPOS, OBSERVED, sql);
+    expect(calls[0]?.values).toEqual(
+      expect.arrayContaining([
+        "acme",
+        JSON.stringify([
+          { repo: "widgets", repo_id: 2002 },
+          { repo: "gadgets", repo_id: 2003 },
+        ]),
+      ]),
+    );
+  });
+
+  test("rejects an invalid repository, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos(
+      "acme",
+      [{ repo: "a b", repo_id: 1 }],
+      OBSERVED,
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid observation time, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos("acme", REPOS, new Date("x"), sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a repository listed twice, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await closeGhZeroCountRepos(
+      "acme",
+      [
+        { repo: "widgets", repo_id: 1 },
+        { repo: "Widgets", repo_id: 1 },
+      ],
+      OBSERVED,
+      sql,
+    ).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("markGhOwnerRowsUnusable", () => {
+  test("marks the open rows of both tables in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 3 }]]);
+    await markGhOwnerRowsUnusable("Acme", sql);
+    expect([
+      calls.length,
+      (calls[0]?.text.match(/SET usable = false/g) ?? []).length,
+      calls[0]?.values,
+    ]).toEqual([1, 2, ["acme", "acme"]]);
+  });
+
+  test("touches only open rows that are still usable", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 0 }]]);
+    await markGhOwnerRowsUnusable("acme", sql);
+    expect(
+      (calls[0]?.text.match(/state = 'open' AND usable/g) ?? []).length,
+    ).toBe(2);
+  });
+
+  test("returns the number of rows marked", async () => {
+    const { sql } = createFakeSqlClient([[{ updated: "3" }]]);
+    expect(await markGhOwnerRowsUnusable("acme", sql)).toBe(3);
+  });
+
+  test("rejects an invalid owner, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ updated: 0 }]]);
+    await markGhOwnerRowsUnusable("a b", sql).catch(() => undefined);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("deleteClosedGhDetailRowsBefore", () => {
+  const cutoff = new Date("2026-09-17T00:00:00.000Z");
+
+  test("deletes closed pull requests and unlisted issues in one statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ deleted: 2 }]]);
+    await deleteClosedGhDetailRowsBefore(cutoff, sql);
+    expect([
+      calls.length,
+      /DELETE FROM factory\.gh_pull_requests[\s\S]*state = 'closed'/.test(
+        calls[0]?.text ?? "",
+      ),
+      /DELETE FROM factory\.gh_issues[\s\S]*state = 'unlisted'/.test(
+        calls[0]?.text ?? "",
+      ),
+    ]).toEqual([1, true, true]);
+  });
+
+  test("never deletes an open row", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ deleted: 0 }]]);
+    await deleteClosedGhDetailRowsBefore(cutoff, sql);
+    expect(calls[0]?.text).not.toContain("state = 'open'");
+  });
+
+  test("ages a row by written_at", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ deleted: 0 }]]);
+    await deleteClosedGhDetailRowsBefore(cutoff, sql);
+    expect((calls[0]?.text.match(/written_at <=/g) ?? []).length).toBe(2);
+  });
+
+  test("binds the cutoff as a timestamp", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ deleted: 0 }]]);
+    await deleteClosedGhDetailRowsBefore(cutoff, sql);
+    expect(calls[0]?.values).toEqual([
+      cutoff.toISOString(),
+      cutoff.toISOString(),
+    ]);
+  });
+
+  test("returns the number of deleted rows", async () => {
+    const { sql } = createFakeSqlClient([[{ deleted: "2" }]]);
+    expect(await deleteClosedGhDetailRowsBefore(cutoff, sql)).toBe(2);
+  });
+});
+
+describe("replaceGhRepoSnapshot invalidation", () => {
+  const SNAPSHOT = {
+    owner: "acme",
+    owner_id: 1001,
+    listed: [UPSERT],
+    gone: [],
+  };
+
+  test("returns the replaced repositories and the unusable count", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ replaced: ["widgets"], unusable: "4" }],
+    ]);
+    expect(await replaceGhRepoSnapshot(SNAPSHOT, sql)).toEqual({
+      replaced: ["widgets"],
+      unusable: 4,
+    });
+  });
+
+  test("accepts the replaced names as a JSON string", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ replaced: JSON.stringify(["a", "b"]), unusable: 0 }],
+    ]);
+    const result = await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(result.replaced).toEqual(["a", "b"]);
+  });
+
+  test("marks the open rows of both tables unusable in the same statement", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect([
+      calls.length,
+      /UPDATE factory\.gh_pull_requests p SET usable = false/.test(
+        calls[0]?.text ?? "",
+      ),
+      /UPDATE factory\.gh_issues i SET usable = false/.test(
+        calls[0]?.text ?? "",
+      ),
+    ]).toEqual([1, true, true]);
+  });
+
+  test("uses a row only when its repository is listed, allowed, not archived and has the same id", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(calls[0]?.text).toMatch(
+      /usable_repos AS \(\s*SELECT repo, repo_id FROM listed WHERE allowed AND NOT archived/,
+    );
+  });
+
+  test("resets the detail columns only when the repository id changed", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    const text = calls[0]?.text ?? "";
+    expect(
+      [
+        "last_collected_at",
+        "last_attempted_at",
+        "truncated",
+        "detail_failed",
+      ].filter(
+        (column) =>
+          !new RegExp(
+            `${column} = CASE WHEN factory\\.gh_repos\\.repo_id IS NOT NULL AND factory\\.gh_repos\\.repo_id <> EXCLUDED\\.repo_id`,
+          ).test(text),
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not treat a first sighting of a null repository id as a replacement", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(calls[0]?.text).toMatch(
+      /replaced AS \([\s\S]*WHERE r\.repo_id IS NOT NULL AND r\.repo_id <> l\.repo_id/,
+    );
+  });
+
+  test("writes the gone repositories in the same statement as a common table expression", async () => {
+    const { sql, calls } = createFakeSqlClient([[SNAPSHOT_RESULT_ROW]]);
+    await replaceGhRepoSnapshot(SNAPSHOT, sql);
+    expect(calls[0]?.text).toMatch(
+      /gone_upserted AS \(\s*INSERT INTO factory\.gh_repos/,
+    );
+  });
+
+  test("rejects a result row that is not usable, without hiding the failure", async () => {
+    const { sql } = createFakeSqlClient([[{ replaced: [], unusable: "x" }]]);
+    await expect(replaceGhRepoSnapshot(SNAPSHOT, sql)).rejects.toThrow();
   });
 });

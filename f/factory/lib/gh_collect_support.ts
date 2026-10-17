@@ -197,7 +197,7 @@ export type FailureClass = {
  * 通信を控える時刻を決める。`candidateMs`が無いか過ぎていれば既定の長さ、上限を超えれば上限に切り詰める。
  * 長い制限で何時間も止まり、復旧に気づけなくなることを避けるため。
  */
-function backoffUntil(nowMs: number, candidateMs: number | null): Date {
+export function backoffUntil(nowMs: number, candidateMs: number | null): Date {
   const wanted =
     candidateMs === null || candidateMs <= nowMs
       ? nowMs + GH_COLLECT_DEFAULT_BACKOFF_MS
