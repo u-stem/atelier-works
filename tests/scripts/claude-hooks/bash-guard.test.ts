@@ -1067,6 +1067,57 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise set -E local",
     "mise set KEY",
     "mise set --env local",
+    "mise ev",
+    "mise env-vars",
+    "mise -E local set",
+    "mise --env local set",
+    "mise -C . set",
+    "mise --cd . set",
+    "mise -j 2 set",
+    "mise -P x set",
+    "mise --profile x set",
+    "mise --log-level info set",
+    "mise -qE x set",
+    "mise -q set",
+    "mise -q ev",
+    "mise -E local ev",
+    "mise set --stdin",
+    "mise set -E local --stdin",
+    "mise -E local set --stdin",
+    "mise set --stdin A B",
+    "mise set KEY -- --stdin",
+    "mise set -- --stdin KEY",
+    "mise set --stdin $K",
+    'mise set --stdin "$K"',
+    "mise set --stdin K*",
+    "mise set -E --stdin KEY",
+    "mise set -E A=b",
+    "mise set --file A=b",
+    "mise set -P A=b",
+    "mise set --profile A=b",
+    "mise set --stdin -P local",
+    "mise set --stdin --log-level info",
+    "mise -E set set --stdin",
+    "mise -C set set --stdin",
+    'X="local -P"; mise set -E $X A=b',
+    "mise set -E loc* A=b",
+    "mise set -E {local,-P} A=b",
+    "mise x -- mise -E local set",
+    "mise -q x -- mise set",
+    "mise -E local x -- mise set",
+    "mise -q exec -- mise ev",
+    "mise -E -- x -- mise set",
+    "mise -q x -- nice mise set",
+    "mise -q x -- timeout 5 mise set",
+    "mise -q x -- env mise set",
+    "mise -q x -- command mise set",
+    "mise -q x -- mise x -- mise set",
+    "mise {set,}",
+    "mise -E {local,set}",
+    "mise -E $X",
+    "mise -s bash set",
+    "mise -t x set",
+    "mise --output json set",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
@@ -1074,14 +1125,38 @@ describe("bash-guard denies mise set without a value to write", () => {
   test.each([
     "mise set -E local KEY=value",
     'mise set KEY="$v"',
+    "mise -E local set KEY=value",
+    "mise -q set KEY=value",
+    "mise set A=$X",
+    "mise set -E local --stdin KEY",
+    "mise -E local set --stdin KEY",
+    "mise set --env=local --stdin KEY",
+    "mise set --stdin KEY -E local",
     'read -rs -p "KEY: " v && mise set -E local KEY="$v"',
+    "IFS= read -rs 'v?KEY: ' && printf '%s' \"$v\" | mise set -E local --stdin KEY; unset v",
+    "IFS= read -rs -p 'KEY: ' v && printf '%s' \"$v\" | mise set -E local --stdin KEY; unset v",
+    "mise -q x -- mise set KEY=v",
+    "mise -q x -- env FOO=1 mise set A=b",
+    "mise set -g --stdin KEY",
+    "mise set --global KEY=value",
+    "mise set --age-encrypt --age-recipient age1x KEY=value",
     "mise run check",
+    "mise -q run check",
+    "mise -E local x -- bun test",
   ])("allows %s", async (command) => {
     expect(await decide(command)).toBe("allow");
   });
 
   test("the reason says it lists the values", async () => {
     expect(await denyReason("mise set")).toContain("lists");
+  });
+
+  test("the reason names the stdin form for writing a value", async () => {
+    expect(await denyReason("mise set")).toContain("--stdin");
+  });
+
+  test("the reason says a person injects secrets", async () => {
+    expect(await denyReason("mise set")).toContain("person");
   });
 });
 
