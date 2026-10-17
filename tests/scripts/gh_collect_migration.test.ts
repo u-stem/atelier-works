@@ -78,6 +78,18 @@ describe("20261017100000_gh_collect.up.sql", () => {
     expect(await Bun.file(UP).text()).toContain("id_checked boolean,");
   });
 
+  test("records whether a run led, false by default", async () => {
+    expect(await Bun.file(UP).text()).toContain(
+      "led boolean NOT NULL DEFAULT false,",
+    );
+  });
+
+  test("allows a run to lead only when it sent a request", async () => {
+    expect(await Bun.file(UP).text()).toContain(
+      "CONSTRAINT gh_collect_runs_led_check CHECK (NOT led OR requests >= 1)",
+    );
+  });
+
   test("indexes the finished runs of an owner", async () => {
     expect(await Bun.file(UP).text()).toContain(
       "CREATE INDEX gh_collect_runs_owner_finished_idx ON factory.gh_collect_runs (owner, finished_at DESC) WHERE finished_at IS NOT NULL;",

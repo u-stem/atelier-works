@@ -179,20 +179,18 @@ describe("parseTokenVariable rejects malformed token map without echoing value",
   });
 });
 
-describe("orderOwners visits owners by oldest turn first", () => {
+describe("orderOwners visits owners by oldest lead first", () => {
   const state = (
     owner: string,
-    lastSuccess: string | null,
-    lastDeadline: string | null = null,
+    lastLed: string | null,
   ): GhCollectOwnerState => ({
     owner,
     latest: null,
-    last_success_at: lastSuccess === null ? null : new Date(lastSuccess),
-    last_deadline_at: lastDeadline === null ? null : new Date(lastDeadline),
+    last_led_at: lastLed === null ? null : new Date(lastLed),
   });
   const owners = [{ name: "a" }, { name: "b" }, { name: "c" }];
 
-  test("puts the owner with the oldest success first", () => {
+  test("puts the owner that led longest ago first", () => {
     expect(
       orderOwners(owners, [
         state("a", "2026-10-17T11:00:00.000Z"),
@@ -202,7 +200,7 @@ describe("orderOwners visits owners by oldest turn first", () => {
     ).toEqual(["b", "c", "a"]);
   });
 
-  test("puts an owner with no success before every other", () => {
+  test("puts an owner that never led before every other", () => {
     expect(
       orderOwners(owners, [
         state("a", "2026-10-17T11:00:00.000Z"),
@@ -228,30 +226,20 @@ describe("orderOwners visits owners by oldest turn first", () => {
     ]);
   });
 
-  test("puts an owner that hit the deadline after its success behind the others", () => {
+  test("keeps the configured order of owners that never led", () => {
     expect(
       orderOwners(owners, [
-        state("a", "2026-10-17T09:00:00.000Z", "2026-10-17T11:00:00.000Z"),
-        state("b", "2026-10-17T10:00:00.000Z"),
-        state("c", "2026-10-17T10:30:00.000Z"),
-      ]).map((owner) => owner.name),
-    ).toEqual(["b", "c", "a"]);
-  });
-
-  test("puts an owner that never succeeded but hit the deadline behind the others", () => {
-    expect(
-      orderOwners(owners, [
-        state("a", null, "2026-10-17T11:00:00.000Z"),
-        state("b", "2026-10-17T10:00:00.000Z"),
+        state("a", null),
+        state("b", null),
         state("c", null),
       ]).map((owner) => owner.name),
-    ).toEqual(["c", "b", "a"]);
+    ).toEqual(["a", "b", "c"]);
   });
 
-  test("ignores a deadline that is older than the success", () => {
+  test("puts the owner that led last behind the others", () => {
     expect(
       orderOwners(owners, [
-        state("a", "2026-10-17T11:00:00.000Z", "2026-10-17T08:00:00.000Z"),
+        state("a", "2026-10-17T11:00:00.000Z"),
         state("b", "2026-10-17T10:00:00.000Z"),
         state("c", "2026-10-17T10:30:00.000Z"),
       ]).map((owner) => owner.name),
@@ -281,8 +269,7 @@ describe("carriedFailure carries next_allowed_at forward", () => {
       error_code: error,
       next_allowed_at: next,
     },
-    last_success_at: null,
-    last_deadline_at: null,
+    last_led_at: null,
   });
 
   test("carries the error code and the time while the time is in the future", () => {
@@ -314,15 +301,7 @@ describe("carriedFailure carries next_allowed_at forward", () => {
 
   test("does not carry for an owner without a finished run", () => {
     expect(
-      carriedFailure(
-        {
-          owner: "acme",
-          latest: null,
-          last_success_at: null,
-          last_deadline_at: null,
-        },
-        NOW,
-      ),
+      carriedFailure({ owner: "acme", latest: null, last_led_at: null }, NOW),
     ).toBeNull();
   });
 

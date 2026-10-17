@@ -6929,6 +6929,7 @@ const ghSuccess = await finishGhCollectRun(
     remaining: 4990,
     error_code: null,
     next_allowed_at: null,
+    led: true,
   },
   sql,
 );
@@ -6944,6 +6945,7 @@ const ghSecondFinish = await finishGhCollectRun(
     remaining: null,
     error_code: "deadline",
     next_allowed_at: null,
+    led: false,
   },
   sql,
 );
@@ -6957,7 +6959,8 @@ check(
     ghFinished.id_checked === true &&
     ghFinished.cost === 2 &&
     ghFinished.remaining === 4990 &&
-    ghFinished.error_code === null,
+    ghFinished.error_code === null &&
+    ghFinished.led === true,
   ghFinished,
 );
 const ghUntil = new Date(Date.now() + 3_600_000);
@@ -6974,6 +6977,7 @@ await finishGhCollectRun(
     remaining: 0,
     error_code: "rate_limited",
     next_allowed_at: ghUntil,
+    led: false,
   },
   sql,
 );
@@ -6981,26 +6985,27 @@ const ghStates = await listGhCollectOwnerStates([GH_OWNER, GH_OWNER_B], sql);
 const ghStateA = ghStates.find((row) => row.owner === GH_OWNER);
 const ghStateB = ghStates.find((row) => row.owner === GH_OWNER_B);
 check(
-  "gh_collect_runs: the latest result and the last success are read per owner",
+  "gh_collect_runs: the latest result and the last lead are read per owner",
   ghStateA?.latest?.ok === true &&
-    ghStateA.last_success_at !== null &&
+    ghStateA.last_led_at !== null &&
     ghStateB?.latest?.error_code === "rate_limited" &&
-    ghStateB.last_success_at === null,
+    ghStateB.last_led_at === null,
   ghStates,
 );
 check(
   "gh_collect_runs: the next allowed time round-trips",
   ghStateB?.latest?.next_allowed_at?.getTime() === ghUntil.getTime(),
 );
-// 順番の印は、要求を1回以上送って`deadline`で終えた実行の`started_at`だけから取る。
+// 順番の印は、`led`が真で`finished_at`のある実行の`started_at`だけから取る。
 const GH_OWNER_C = "qdbghc";
 const GH_OWNER_D = "qdbghd";
 execPsql(
   target,
-  `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code, requests) VALUES
-    ('${GH_OWNER_C}', now() - interval '3 hours', now() - interval '3 hours' + interval '100 seconds', false, 'deadline', 2),
-    ('${GH_OWNER_C}', now() - interval '2 hours', now() - interval '2 hours' + interval '100 seconds', false, 'deadline', 0),
-    ('${GH_OWNER_D}', now() - interval '2 hours', now() - interval '2 hours' + interval '100 seconds', false, 'deadline', 0)`,
+  `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code, requests, led) VALUES
+    ('${GH_OWNER_C}', now() - interval '3 hours', now() - interval '3 hours' + interval '100 seconds', false, 'deadline', 2, true),
+    ('${GH_OWNER_C}', now() - interval '2 hours', now() - interval '2 hours' + interval '100 seconds', false, 'deadline', 2, false),
+    ('${GH_OWNER_C}', now() - interval '1 hour', NULL, false, NULL, 1, true),
+    ('${GH_OWNER_D}', now() - interval '2 hours', now() - interval '2 hours' + interval '100 seconds', true, NULL, 3, false)`,
 );
 const ghTurnStates = await listGhCollectOwnerStates(
   [GH_OWNER_C, GH_OWNER_D],
@@ -7009,18 +7014,29 @@ const ghTurnStates = await listGhCollectOwnerStates(
 const ghTurnC = ghTurnStates.find((row) => row.owner === GH_OWNER_C);
 const ghTurnD = ghTurnStates.find((row) => row.owner === GH_OWNER_D);
 check(
-  "gh_collect_runs: a deadline that sent a request marks the turn by its start",
-  ghTurnC?.last_deadline_at !== null &&
-    ghTurnC !== undefined &&
-    Math.abs(
-      (ghTurnC.last_deadline_at?.getTime() ?? 0) - (Date.now() - 3 * 3_600_000),
-    ) < 120_000,
+  "gh_collect_runs: a finished run that led marks the turn by its start",
+  ghTurnC?.last_led_at != null &&
+    Math.abs(ghTurnC.last_led_at.getTime() - (Date.now() - 3 * 3_600_000)) <
+      120_000,
   ghTurnC,
 );
 check(
-  "gh_collect_runs: a deadline that sent no request does not mark the turn",
-  ghTurnD?.last_deadline_at === null && ghTurnD.last_success_at === null,
+  "gh_collect_runs: a run that did not lead, or is unfinished, does not mark the turn",
+  ghTurnD?.last_led_at === null,
   ghTurnD,
+);
+let ghLedWithoutRequestRejected = false;
+try {
+  execPsql(
+    target,
+    `INSERT INTO factory.gh_collect_runs (owner, requests, led) VALUES ('${GH_OWNER_D}', 0, true)`,
+  );
+} catch {
+  ghLedWithoutRequestRejected = true;
+}
+check(
+  "gh_collect_runs: the table rejects a lead without a request",
+  ghLedWithoutRequestRejected,
 );
 execPsql(
   target,

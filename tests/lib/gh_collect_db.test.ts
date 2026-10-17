@@ -72,6 +72,7 @@ const RUN_ROW: SqlRow = {
   remaining: 4990,
   error_code: null,
   next_allowed_at: null,
+  led: true,
 };
 
 const OUTCOME: GhCollectRunOutcome = {
@@ -84,6 +85,7 @@ const OUTCOME: GhCollectRunOutcome = {
   remaining: null,
   error_code: "no_token",
   next_allowed_at: null,
+  led: false,
 };
 
 const UPSERT: GhRepoUpsert = {
@@ -231,6 +233,12 @@ describe("listRecentGhCollectRuns", () => {
     ]);
   });
 
+  test("parses whether the run led", async () => {
+    const { sql } = createFakeSqlClient([[RUN_ROW]]);
+    const rows = await listRecentGhCollectRuns("acme", 5, sql);
+    expect(rows[0]?.led).toBe(true);
+  });
+
   test("lists the newest first", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listRecentGhCollectRuns("acme", 5, sql);
@@ -346,6 +354,18 @@ describe("finishGhCollectRun", () => {
     expect(calls[0]?.values).toContain(until.toISOString());
   });
 
+  test("casts led as a boolean", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(1, OUTCOME, sql);
+    expect(calls[0]?.text).toMatch(/led = {2}\? ::boolean/);
+  });
+
+  test("binds led", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 1 }]]);
+    await finishGhCollectRun(1, { ...OUTCOME, requests: 1, led: true }, sql);
+    expect(calls[0]?.values).toContain(true);
+  });
+
   test("returns true when the row was finished", async () => {
     const { sql } = createFakeSqlClient([[{ id: 1 }]]);
     expect(await finishGhCollectRun(1, OUTCOME, sql)).toBe(true);
@@ -389,8 +409,7 @@ describe("listGhCollectOwnerStates", () => {
     ok: false,
     error_code: "rate_limited",
     next_allowed_at: "2026-10-17T02:00:00.000Z",
-    last_success_at: "2026-10-16T01:00:05.000Z",
-    last_deadline_at: "2026-10-16T02:00:00.000Z",
+    last_led_at: "2026-10-16T02:00:00.000Z",
   };
 
   test("reads only finished runs for the latest result", async () => {
@@ -405,7 +424,7 @@ describe("listGhCollectOwnerStates", () => {
     expect(calls[0]?.values).toEqual([["acme"]]);
   });
 
-  test("returns the latest run and the last success", async () => {
+  test("returns the latest run and the last lead", async () => {
     const { sql } = createFakeSqlClient([[STATE_ROW]]);
     expect(await listGhCollectOwnerStates(["acme"], sql)).toEqual([
       {
@@ -416,24 +435,23 @@ describe("listGhCollectOwnerStates", () => {
           error_code: "rate_limited",
           next_allowed_at: new Date("2026-10-17T02:00:00.000Z"),
         },
-        last_success_at: new Date("2026-10-16T01:00:05.000Z"),
-        last_deadline_at: new Date("2026-10-16T02:00:00.000Z"),
+        last_led_at: new Date("2026-10-16T02:00:00.000Z"),
       },
     ]);
   });
 
-  test("counts only a deadline that sent a request", async () => {
+  test("reads the lead by the start of a run that led", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listGhCollectOwnerStates(["acme"], sql);
     expect(calls[0]?.text).toMatch(
-      /error_code = 'deadline'\s+AND\s+\w+\.requests >= 1/,
+      /max\(\w+\.started_at\)[\s\S]*?WHERE[\s\S]*?\w+\.led\b/,
     );
   });
 
-  test("reads the deadline by the start of the run", async () => {
+  test("no longer selects the success or the deadline time", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listGhCollectOwnerStates(["acme"], sql);
-    expect(calls[0]?.text).toContain("max(d.started_at)");
+    expect(calls[0]?.text).not.toMatch(/last_success_at|last_deadline_at/);
   });
 
   test("returns a null latest for an owner without a finished run", async () => {
@@ -445,8 +463,7 @@ describe("listGhCollectOwnerStates", () => {
           ok: null,
           error_code: null,
           next_allowed_at: null,
-          last_success_at: null,
-          last_deadline_at: null,
+          last_led_at: null,
         },
       ],
     ]);

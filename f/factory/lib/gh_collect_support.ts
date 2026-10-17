@@ -116,27 +116,9 @@ export function lookupToken(
  */
 export function orderOwners<T extends { readonly name: string }>(
   owners: readonly T[],
-  states: readonly GhCollectOwnerState[],
+  _states: readonly GhCollectOwnerState[],
 ): T[] {
-  const lastTurn = new Map<string, number>();
-  for (const state of states) {
-    const times = [state.last_success_at, state.last_deadline_at].flatMap(
-      (time) => (time === null ? [] : [time.getTime()]),
-    );
-    if (times.length > 0) {
-      lastTurn.set(state.owner.toLowerCase(), Math.max(...times));
-    }
-  }
-  const key = (owner: T): number =>
-    lastTurn.get(owner.name.toLowerCase()) ?? Number.NEGATIVE_INFINITY;
-  return [...owners].sort((a, b) => {
-    const left = key(a);
-    const right = key(b);
-    if (left === right) {
-      return 0;
-    }
-    return left < right ? -1 : 1;
-  });
+  return [...owners];
 }
 
 /** 前回の失敗から引き継ぐ内容。 */

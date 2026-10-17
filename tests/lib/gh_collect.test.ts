@@ -414,18 +414,14 @@ describe("runGhCollect request variables", () => {
   });
 });
 
-describe("runGhCollect visits owners by oldest success first", () => {
-  const state = (
-    owner: string,
-    success: string | null,
-  ): GhCollectOwnerState => ({
+describe("runGhCollect visits owners by oldest lead first", () => {
+  const state = (owner: string, led: string | null): GhCollectOwnerState => ({
     owner,
     latest: null,
-    last_success_at: success === null ? null : new Date(success),
-    last_deadline_at: null,
+    last_led_at: led === null ? null : new Date(led),
   });
 
-  test("visits the owner with the oldest success first", async () => {
+  test("visits the owner that led longest ago first", async () => {
     const h = harness({
       states: [
         state("alice", "2026-10-17T11:00:00.000Z"),
@@ -439,38 +435,103 @@ describe("runGhCollect visits owners by oldest success first", () => {
     ]);
   });
 
-  test("visits an owner that never succeeded first", async () => {
+  test("visits an owner that never led first", async () => {
     const h = harness({
-      states: [state("alice", null), state("bob", "2026-10-17T09:00:00.000Z")],
+      states: [state("alice", "2026-10-17T11:00:00.000Z"), state("bob", null)],
     });
     await runGhCollect(h.deps);
-    expect(h.requests[0]?.variables.owner).toBe("alice");
+    expect(h.requests[0]?.variables.owner).toBe("bob");
   });
 });
 
-describe("runGhCollect puts an owner that hit the deadline behind", () => {
-  test("visits an owner that hit the deadline after the others", async () => {
+describe("runGhCollect marks the owner that led", () => {
+  test("marks the first owner that sent a request", async () => {
+    const h = harness();
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("alice")?.led).toBe(true);
+  });
+
+  test("does not mark the second owner that sent a request", async () => {
+    const h = harness();
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("bob")?.led).toBe(false);
+  });
+
+  test("marks the leader even when its request fails", async () => {
+    const h = harness({ pages: { alice: [failure({ status: 502 })] } });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("alice")).toMatchObject({
+      led: true,
+      error_code: "http_5xx",
+    });
+  });
+
+  test("marks the leader even when it hits the deadline", async () => {
+    const h = harness({
+      config: ALICE_ONLY,
+      requestMs: 95_000,
+      pages: { alice: [okPage(1001, [], { next: "C" })] },
+    });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("alice")).toMatchObject({
+      led: true,
+      error_code: "deadline",
+    });
+  });
+
+  test("does not mark an owner that has no token", async () => {
+    const h = harness({ token: JSON.stringify({ bob: BOB_TOKEN }) });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("alice")?.led).toBe(false);
+  });
+
+  test("marks the next owner when the first sent no request", async () => {
+    const h = harness({ token: JSON.stringify({ bob: BOB_TOKEN }) });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("bob")?.led).toBe(true);
+  });
+
+  test("does not mark an owner that was skipped until next_allowed_at", async () => {
     const h = harness({
       states: [
         {
           owner: "alice",
-          latest: null,
-          last_success_at: new Date("2026-10-17T09:00:00.000Z"),
-          last_deadline_at: new Date("2026-10-17T11:00:00.000Z"),
-        },
-        {
-          owner: "bob",
-          latest: null,
-          last_success_at: new Date("2026-10-17T10:00:00.000Z"),
-          last_deadline_at: null,
+          latest: {
+            finished_at: new Date(NOW - 60_000),
+            ok: false,
+            error_code: "rate_limited",
+            next_allowed_at: new Date(NOW + 600_000),
+          },
+          last_led_at: null,
         },
       ],
     });
     await runGhCollect(h.deps);
-    expect(h.requests.map((request) => request.variables.owner)).toEqual([
-      "bob",
-      "alice",
-    ]);
+    expect(h.outcomeOf("alice")?.led).toBe(false);
+  });
+
+  test("does not mark an owner that sent no request before the deadline", async () => {
+    const h = harness({
+      requestMsByOwner: { alice: 95_000 },
+      pages: { alice: [okPage(1001, [], { next: "C" })] },
+    });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("bob")).toMatchObject({ requests: 0, led: false });
+  });
+
+  test("marks at most one owner in a run", async () => {
+    const h = harness({
+      config: {
+        owners: [
+          { name: "alice", kind: "user", id: 1001 },
+          { name: "bob", kind: "org" },
+          { name: "carol", kind: "user" },
+        ],
+      },
+      token: JSON.stringify({ alice: "ta", bob: "tb", carol: "tc" }),
+    });
+    await runGhCollect(h.deps);
+    expect(h.finished.filter((row) => row.outcome.led)).toHaveLength(1);
   });
 });
 
@@ -484,9 +545,15 @@ describe("runGhCollect over many rounds", () => {
   };
   const TOKENS3 = JSON.stringify({ alice: "ta", bob: "tb", carol: "tc" });
   const ROUND_MS = 3_600_000;
+  const IDS = { alice: 1001, bob: 2002, carol: 3003 };
   /** 続きのあるページ。一覧が取り終わらない所有者に使う。 */
   const endless = (id: number, count: number): GraphqlResponse[] =>
     Array.from({ length: count }, () => okPage(id, [], { next: "C" }));
+  /** `count`ページで取り終える一覧。 */
+  const pagesOf = (id: number, count: number): GraphqlResponse[] => [
+    ...endless(id, count - 1),
+    okPage(id, []),
+  ];
 
   /** 保存された実行の行から、次の周回が読む所有者の状態を作る(DBの代わり)。 */
   function nextStates(
@@ -498,23 +565,17 @@ describe("runGhCollect over many rounds", () => {
     const states = new Map(previous.map((state) => [state.owner, state]));
     finished.forEach((row, index) => {
       const before = states.get(row.owner);
-      const finishedAt = new Date(startedAt.getTime() + (index + 1) * 1000);
-      const sentRequest = row.outcome.requests >= 1;
-      const deadline = row.outcome.error_code === "deadline" && sentRequest;
       states.set(row.owner, {
         owner: row.owner,
         latest: {
-          finished_at: finishedAt,
+          finished_at: new Date(startedAt.getTime() + (index + 1) * 1000),
           ok: row.outcome.ok,
           error_code: row.outcome.error_code,
           next_allowed_at: null,
         },
-        last_success_at: row.outcome.ok
-          ? finishedAt
-          : (before?.last_success_at ?? null),
-        last_deadline_at: deadline
+        last_led_at: row.outcome.led
           ? startedAt
-          : (before?.last_deadline_at ?? null),
+          : (before?.last_led_at ?? null),
       });
     });
     return [...states.values()];
@@ -523,13 +584,13 @@ describe("runGhCollect over many rounds", () => {
   async function rounds(
     count: number,
     options: Options,
-    pagesOf: (round: number) => NonNullable<Options["pages"]>,
+    pagesFor: (round: number) => NonNullable<Options["pages"]>,
   ) {
     let states: GhCollectOwnerState[] = [];
     const outcomes: Record<string, GhCollectRunOutcome | undefined>[] = [];
     const firstOwners: unknown[] = [];
     for (let round = 0; round < count; round += 1) {
-      const h = harness({ ...options, states, pages: pagesOf(round) });
+      const h = harness({ ...options, states, pages: pagesFor(round) });
       await runGhCollect(h.deps);
       firstOwners.push(h.requests[0]?.variables.owner);
       outcomes.push({
@@ -562,18 +623,57 @@ describe("runGhCollect over many rounds", () => {
     expect(outcomes[1]?.carol?.ok).toBe(true);
   });
 
-  test("the owner that cannot finish goes to the back of the next round", async () => {
+  test("the owner that led goes to the back of the next round", async () => {
     const { firstOwners } = await rounds(2, hog, () => ({
       alice: endless(1001, 5),
     }));
     expect(firstOwners[1]).toBe("bob");
   });
 
-  test("an owner that sent no request before the deadline does not move back", async () => {
-    const { outcomes, firstOwners } = await rounds(3, hog, () => ({
+  test("an owner that cannot finish does not starve the fast owners over three rounds", async () => {
+    const { outcomes } = await rounds(3, hog, () => ({
       alice: endless(1001, 5),
     }));
-    expect([outcomes[0]?.bob?.requests, firstOwners[2]]).toEqual([0, "alice"]);
+    expect(
+      ["bob", "carol"].map((name) =>
+        outcomes.some((round) => round[name]?.ok === true),
+      ),
+    ).toEqual([true, true]);
+  });
+
+  test("three owners that each need over half the budget all succeed within three rounds", async () => {
+    const { outcomes } = await rounds(
+      3,
+      { config: THREE, token: TOKENS3, requestMs: 9_000 },
+      () => ({
+        alice: pagesOf(IDS.alice, 7),
+        bob: pagesOf(IDS.bob, 7),
+        carol: pagesOf(IDS.carol, 7),
+      }),
+    );
+    expect(
+      ["alice", "bob", "carol"].filter((name) =>
+        outcomes.some((round) => round[name]?.ok === true),
+      ),
+    ).toEqual(["alice", "bob", "carol"]);
+  });
+
+  test("three owners that each need over half the budget keep succeeding over nine rounds", async () => {
+    const { outcomes } = await rounds(
+      9,
+      { config: THREE, token: TOKENS3, requestMs: 9_000 },
+      () => ({
+        alice: pagesOf(IDS.alice, 7),
+        bob: pagesOf(IDS.bob, 7),
+        carol: pagesOf(IDS.carol, 7),
+      }),
+    );
+    expect(
+      ["alice", "bob", "carol"].map(
+        (name) =>
+          outcomes.filter((round) => round[name]?.ok === true).length >= 3,
+      ),
+    ).toEqual([true, true, true]);
   });
 
   test("two owners that each need over half the budget take turns", async () => {
@@ -598,6 +698,19 @@ describe("runGhCollect over many rounds", () => {
       [false, true],
     ]);
   });
+
+  test("owners that fail after spending time do not stop the other two", async () => {
+    const { outcomes } = await rounds(
+      3,
+      { config: THREE, token: TOKENS3, requestMsByOwner: { alice: 60_000 } },
+      () => ({ alice: [failure({ status: 502 })] }),
+    );
+    expect(outcomes.map((round) => [round.bob?.ok, round.carol?.ok])).toEqual([
+      [true, true],
+      [true, true],
+      [true, true],
+    ]);
+  });
 });
 
 describe("runGhCollect next_allowed_at", () => {
@@ -610,8 +723,7 @@ describe("runGhCollect next_allowed_at", () => {
       error_code: "rate_limited",
       next_allowed_at: next,
     },
-    last_success_at: null,
-    last_deadline_at: null,
+    last_led_at: null,
   });
 
   test("skips owner until next_allowed_at", async () => {
