@@ -77,6 +77,7 @@ import {
   type GhRepoDetailWrite,
   type GhRepoDetailWriteResult,
   type GhRepoGone,
+  type GhRepoOpenPrSnapshot,
   type GhRepoUpsert,
   IMPLEMENT_ROUND_MODES,
   IMPLEMENT_ROUND_OUTCOMES,
@@ -7253,6 +7254,14 @@ export async function listGhDetailRows(
       toGhIssue(toRow(item, "issues")),
     ),
   };
+}
+
+export async function readGhRepoOpenPullRequests(
+  _owner: string,
+  _repo: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhRepoOpenPrSnapshot> {
+  return { db_now: new Date(0), repo: null, prs: [] };
 }
 
 /**

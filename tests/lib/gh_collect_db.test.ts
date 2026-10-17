@@ -19,6 +19,7 @@ import {
   listRecentGhCollectRuns,
   markGhOwnerRowsUnusable,
   markGhRepoDetailIncomplete,
+  readGhRepoOpenPullRequests,
   replaceGhRepoSnapshot,
   type SqlClient,
   type SqlRow,
@@ -1139,6 +1140,191 @@ describe("listGhDetailRows", () => {
     const { sql, calls } = read();
     await listGhDetailRows("a b", sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
+  });
+});
+
+const FRESHNESS_REPO_ROW: SqlRow = {
+  repo_id: 2002,
+  allowed: true,
+  archived: false,
+  gone: false,
+  last_collected_at: "2026-10-17T03:00:00+00:00",
+  truncated: false,
+  detail_failed: false,
+};
+
+describe("readGhRepoOpenPullRequests", () => {
+  const read = (
+    rows: SqlRow[] = [
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repo: FRESHNESS_REPO_ROW,
+        prs: [],
+      },
+    ],
+  ) => createFakeSqlClient([rows]);
+
+  test("reads the repository row, the open rows and the database time in one statement", async () => {
+    const { sql, calls } = read();
+    await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(calls).toHaveLength(1);
+  });
+
+  test("asks the database for the time in the same statement", async () => {
+    const { sql, calls } = read();
+    await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain("now() AS db_now");
+  });
+
+  test("reads only open rows", async () => {
+    const { sql, calls } = read();
+    await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(calls[0]?.text).toContain("state = 'open'");
+  });
+
+  test("selects the defined columns of the pull request table", async () => {
+    const { sql, calls } = read();
+    await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(cteColumns(calls[0]?.text ?? "", "pr", "gh_pull_requests")).toEqual([
+      ...GH_PULL_REQUESTS_COLUMNS,
+    ]);
+  });
+
+  test("returns a null repository when gh_repos has no row", async () => {
+    const { sql } = read([
+      { db_now: "2026-10-17T03:05:00+00:00", repo: null, prs: [] },
+    ]);
+    const snapshot = await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(snapshot.repo).toBeNull();
+  });
+
+  test("parses the database time", async () => {
+    const { sql } = read();
+    const snapshot = await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(snapshot.db_now).toEqual(new Date("2026-10-17T03:05:00.000Z"));
+  });
+
+  test("parses the repository row", async () => {
+    const { sql } = read();
+    const snapshot = await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(snapshot.repo).toEqual({
+      repo_id: 2002,
+      allowed: true,
+      archived: false,
+      gone: false,
+      last_collected_at: new Date("2026-10-17T03:00:00.000Z"),
+      truncated: false,
+      detail_failed: false,
+    });
+  });
+
+  test("keeps a null last_collected_at", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repo: { ...FRESHNESS_REPO_ROW, last_collected_at: null },
+        prs: [],
+      },
+    ]);
+    const snapshot = await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(snapshot.repo?.last_collected_at).toBeNull();
+  });
+
+  test("keeps a null repo_id", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repo: { ...FRESHNESS_REPO_ROW, repo_id: null },
+        prs: [],
+      },
+    ]);
+    const snapshot = await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(snapshot.repo?.repo_id).toBeNull();
+  });
+
+  test("parses a pull request row", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repo: FRESHNESS_REPO_ROW,
+        prs: [PR_ROW],
+      },
+    ]);
+    const snapshot = await readGhRepoOpenPullRequests("acme", "widgets", sql);
+    expect(snapshot.prs.map((row) => row.number)).toEqual([7]);
+  });
+
+  test("lowercases the names before querying", async () => {
+    const { sql, calls } = read();
+    await readGhRepoOpenPullRequests("Acme", "Widgets", sql);
+    expect([...new Set(calls[0]?.values)]).toEqual(["acme", "widgets"]);
+  });
+
+  test("rejects an invalid owner, without querying", async () => {
+    const { sql, calls } = read();
+    await readGhRepoOpenPullRequests("a b", "widgets", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an invalid repository name, without querying", async () => {
+    const { sql, calls } = read();
+    await readGhRepoOpenPullRequests("acme", "wid gets", sql).catch(
+      () => undefined,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects a repo_id that is not positive", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repo: { ...FRESHNESS_REPO_ROW, repo_id: 0 },
+        prs: [],
+      },
+    ]);
+    await expect(
+      readGhRepoOpenPullRequests("acme", "widgets", sql),
+    ).rejects.toThrow();
+  });
+
+  test("rejects a flag that is not a boolean", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repo: { ...FRESHNESS_REPO_ROW, gone: "false" },
+        prs: [],
+      },
+    ]);
+    await expect(
+      readGhRepoOpenPullRequests("acme", "widgets", sql),
+    ).rejects.toThrow();
+  });
+
+  test("rejects a pull request row that fails the stored value checks, without echoing it", async () => {
+    const { sql } = read([
+      {
+        db_now: "2026-10-17T03:05:00+00:00",
+        repo: FRESHNESS_REPO_ROW,
+        prs: [{ ...PR_ROW, head_ref: "github_pat_SECRET‮" }],
+      },
+    ]);
+    const error = await readGhRepoOpenPullRequests(
+      "acme",
+      "widgets",
+      sql,
+    ).catch((e: unknown) => e);
+    expect(String(error)).not.toContain("github_pat_SECRET");
+  });
+
+  test("rejects a database time that is not a timestamp", async () => {
+    const { sql } = read([
+      { db_now: "yesterday", repo: FRESHNESS_REPO_ROW, prs: [] },
+    ]);
+    await expect(
+      readGhRepoOpenPullRequests("acme", "widgets", sql),
+    ).rejects.toThrow();
   });
 });
 
