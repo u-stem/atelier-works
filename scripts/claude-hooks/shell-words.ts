@@ -9,7 +9,7 @@
 
 /**
  * 引用符を外した後の語。
- * `dynamic`は展開や置換を含み値が実行時に決まること、`glob`は引用符の外に`*`、`?`、`[`があることを表す。
+ * `dynamic`は展開や置換を含み値が実行時に決まること、`glob`は引用符の外に`*`、`?`、`[`、`{`があることを表す。
  */
 export type Word = {
   readonly text: string;
@@ -115,7 +115,7 @@ const TRANSPARENT_OPTIONS: ReadonlyMap<
   ["exec", { flags: new Set(["-c", "-l"]), values: new Set(["-a"]) }],
 ]);
 
-/** `mise exec`の値を取るオプション。 */
+/** `mise exec`と`mise set`が共有する、値を取るオプション。 */
 export const MISE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-C",
   "--cd",
@@ -182,9 +182,9 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
     } else if (WRAPPER_VALUE_OPTIONS.has(name)) {
       wrappers.push(name);
       index = skipWrapperOptions(words, index + 1, name);
-    } else if (name === "mise" && isMiseExec(words[index + 1])) {
+    } else if (name === "mise" && miseExecAt(words, index + 1) !== -1) {
       wrappers.push(text);
-      const read = readMiseExec(words, index + 2);
+      const read = readMiseExec(words, miseExecAt(words, index + 1) + 1);
       mise ??= read.mise;
       index = read.next;
     } else {
@@ -194,8 +194,22 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
   return { assignments, words: words.slice(index), wrappers, mise };
 }
 
-function isMiseExec(word: Word | undefined): boolean {
-  return word?.text === "exec" || word?.text === "x";
+/**
+ * `mise`の後ろから、サブコマンドの`exec`か`x`の位置を返す。なければ-1を返す。
+ * サブコマンドの前に置いた値を取るグローバルオプション(`-E local`)は、値の語まで読み飛ばす。
+ * 最初のオプションでない語がサブコマンドで、`--`に当たれば探すのをやめる。
+ */
+function miseExecAt(words: readonly Word[], start: number): number {
+  for (let index = start; index < words.length; index += 1) {
+    const text = words[index]?.text ?? "";
+    if (text === "--") return -1;
+    if (text.startsWith("-")) {
+      if (MISE_VALUE_OPTIONS.has(text)) index += 1;
+      continue;
+    }
+    return text === "exec" || text === "x" ? index : -1;
+  }
+  return -1;
 }
 
 /**
@@ -481,6 +495,7 @@ class Parser {
       case "*":
       case "?":
       case "[":
+      case "{":
         this.glob = true;
         break;
     }

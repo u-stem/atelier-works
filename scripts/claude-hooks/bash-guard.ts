@@ -145,12 +145,29 @@ const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
 /** `mise set`の別名。`ev`と`env-vars`も値を一覧する。 */
 const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
 
+/** 設定値を一覧するだけで、書き込む形を持たないサブコマンドと、その別名。 */
+const MISE_READ_NAMES: ReadonlySet<string> = new Set([
+  "env",
+  "e",
+  "config",
+  "cfg",
+  "toml",
+]);
+
+/** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */
+function hasBrace(word: Word): boolean {
+  return word.glob && word.text.includes("{");
+}
+
 /**
- * `mise set`が、書き込む形を持たずに値を一覧するなら真。
+ * `mise set`などが、書き込む形を持たずに値を一覧するなら真。
  * サブコマンドの前に置けるグローバルオプションは、値を取る隠しものがあるため列挙しない。
- * `--`より前の語に`set`(か別名)があれば、`mise set`の呼び出しとして判定する。
- * 書き込む形は2つある。オペランドがすべて`KEY=VALUE`である形と、
+ * `--`より前の語に`set`、`env`、`config`など(か別名)があれば、そのサブコマンドの呼び出しとして判定する。
+ * `env`と`config`の系統には書き込む形が無いので、あれば拒否する。
+ * サブコマンドの位置にあたる語が、引用符の外にブレースを持つときも拒否する。語が増えて、サブコマンドが変わるためである。
+ * `mise set`の書き込む形は2つある。オペランドがすべて`KEY=VALUE`である形と、
  * `--stdin`を持ち、オペランドが展開を含まない鍵の名前1つだけの形である。
+ * `KEY=VALUE`のオペランドは、展開やブレースを含んでも、先頭の`KEY=`が残るので書き込みのままである。
  * 書き込む形のオプションは、許可リストにあるものだけにする。未知のオプションは、
  * 値を取ってオペランドの数を変えるおそれがあるので、一覧を出す形として扱う。
  * 展開やglobを含むオプションとその値は、実行時に語が増えて隠しオプションが現れうるので、
@@ -162,37 +179,39 @@ function listsMiseValues(words: readonly Word[]): boolean {
   const args = words.slice(1);
   const dashDash = args.findIndex((word) => word.text === "--");
   const beforeDashDash = dashDash === -1 ? args : args.slice(0, dashDash);
-  const setAt = beforeDashDash.findIndex((word) =>
-    MISE_SET_NAMES.has(word.text),
+  const nameAt = beforeDashDash.findIndex(
+    (word) => MISE_SET_NAMES.has(word.text) || MISE_READ_NAMES.has(word.text),
   );
-  if (setAt === -1) return false;
+  const head = nameAt === -1 ? beforeDashDash : beforeDashDash.slice(0, nameAt);
+  if (head.some(hasBrace)) return true;
+  const name = beforeDashDash[nameAt];
+  if (name === undefined) return false;
+  if (MISE_READ_NAMES.has(name.text)) return true;
   if (dashDash !== -1) return true;
   const operands: Word[] = [];
   let readsStdin = false;
-  const rest = beforeDashDash.slice(setAt + 1);
+  const rest = beforeDashDash.slice(nameAt + 1);
   for (let index = 0; index < rest.length; index += 1) {
     const word = rest[index];
     if (word === undefined) continue;
-    // ブレース展開は語を増やすが、パーサは印を付けないので、字面で拒否する。
-    if (word.text.includes("{")) return true;
     if (!word.text.startsWith("-")) {
       if (MISE_SET_NAMES.has(word.text)) return true;
       operands.push(word);
       continue;
     }
     if (word.dynamic || word.glob) return true;
-    const [name = ""] = word.text.split("=", 1);
-    if (name === "--stdin" && word.text === name) {
+    const [optionName = ""] = word.text.split("=", 1);
+    const isValueOption = MISE_SET_VALUE_OPTIONS.has(word.text);
+    if (word.text === "--stdin") {
       readsStdin = true;
-    } else if (MISE_SET_FLAGS.has(word.text)) {
-    } else if (MISE_SET_VALUE_OPTIONS.has(word.text)) {
+    } else if (isValueOption) {
       const value = rest[index + 1];
-      if (value?.dynamic || value?.glob || value?.text.includes("{")) {
-        return true;
-      }
+      if (value?.dynamic || value?.glob) return true;
       index += 1;
-    } else if (word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(name)) {
-    } else {
+    } else if (
+      !MISE_SET_FLAGS.has(word.text) &&
+      !(word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(optionName))
+    ) {
       return true;
     }
   }
@@ -341,7 +360,9 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor. A write needs KEY=VALUE, or one literal key with --stdin when the value is piped in.",
+    "mise set without a literal KEY=VALUE, or one literal key with --stdin, lists the values of mise.local.toml, including secrets. So do mise env, mise config, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put options such as -E local before set, not after it.",
+  miseXargs:
+    "mise with arguments from xargs cannot be checked: mise set, mise env, and mise config list the secrets of mise.local.toml. Run mise directly with literal arguments.",
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:
@@ -552,6 +573,9 @@ function checkSimpleCommand(
   if (shellArgs !== null) {
     const shell = checkShellInput(command, shellArgs, directory, scope);
     if (shell.kind === "deny") return shell;
+  }
+  if (program === "mise" && wrappers.includes("xargs")) {
+    return deny(REASONS.miseXargs);
   }
   if (program === "mise" && listsMiseValues(words)) {
     return deny(REASONS.miseSetList);

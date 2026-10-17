@@ -63,6 +63,9 @@ bashでは次のように実行する。
 IFS= read -rs -p 'KEY: ' v && printf '%s' "$v" | mise set -E local --stdin KEY; unset v
 ```
 
+入力を空のまま確定すると、既にある値が空文字で上書きされる。
+入れ直すときは、値を貼り付けてから確定する。
+
 値は`mise.local.toml`の`[env]`に書き込まれる。`-E local`を付けなくても、以降の`mise run`と`mise exec`に反映される。
 
 読み取りトークンは、所有者ごとに、`KEY`を`GITHUB_READ_TOKEN_<OWNER>`にして実行する。
@@ -78,9 +81,6 @@ mise run doctor
 ```
 
 環境変数の項目が、未設定のキーの名前を示す。値は表示しない。
-
-入力を空のまま確定すると、既にある値が空文字で上書きされる。
-入れ直すときは、値を貼り付けてから確定する。
 
 > [!WARNING]
 > `mise set -E local KEY=value`のように値を引数に書かない。
