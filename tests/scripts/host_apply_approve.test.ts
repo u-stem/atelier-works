@@ -299,7 +299,8 @@ describe("showPaged", () => {
         },
         readLine: async () => {
           reads += 1;
-          return answers.shift() ?? "";
+          if (answers.length === 0) return "";
+          return answers.shift() ?? null;
         },
       },
     };

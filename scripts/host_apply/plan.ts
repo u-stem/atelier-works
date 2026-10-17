@@ -95,7 +95,7 @@ export function forbiddenTreePaths(entries: readonly TreeEntry[]): string[] {
 
 /**
  * treeのパスのうち、1つのパスが2つのファイルを指しうるものを返す。
- * - ASCIIの印字できる文字以外(ASCII以外の文字と制御文字)を含むパス。`ſcripts/doctor.sh`や、ケルビン記号の`K`を使った`docKer-compose.yml`は、
+ * - ASCIIの印字できる文字以外(ASCII以外の文字と制御文字)を含むパス。先頭をU+017Fの文字にした`doctor.sh`のパスや、U+212A(ケルビン記号)を使った`docker-compose.yml`のパスは、
  *   大文字小文字を畳む照合やUnicode正規化で、ASCIIのファイルと同じ名前になりうる。
  * - ASCIIの小文字にそろえると、ディレクトリを含めて衝突するパス。大文字小文字を区別しないファイルシステムで同じファイルになる。
  * - composeが自動で読むoverrideファイル。定義を後から上書きできる。

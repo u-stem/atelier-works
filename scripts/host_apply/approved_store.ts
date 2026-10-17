@@ -43,7 +43,8 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]) {
   );
 }
 
-function isApprovedStatus(value: unknown): value is ApprovedStatus {
+/** 値が、承認の記録に書ける変更の状態(追加、変更、削除)か。 */
+export function isApprovedStatus(value: unknown): value is ApprovedStatus {
   return value === "A" || value === "M" || value === "D";
 }
 
