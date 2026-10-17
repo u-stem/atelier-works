@@ -364,14 +364,22 @@ function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
     // 書き換えられた`.git`の参照先のconfig(core.fsmonitor等)を読みうるため。どのフローもgitの文脈を使わない。
     CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS: "1",
   };
-  const claudeConfigDir = opts.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR;
+  const tmpDir = opts.tmpDir ?? jobTmpEnv().TMPDIR;
+  // 設定の置き場はジョブごとの0700のディレクトリの下にする。
+  // workerの`ENV CLAUDE_CONFIG_DIR`はジョブに届かず、届かせると人が手で使う永続の設定と共有になり、
+  // `--setting-sources user`で読む設定層に人の変更が混ざるため。
+  // ジョブの外では、環境変数があればそれを使い、無ければ渡さない。
+  const claudeConfigDir =
+    opts.claudeConfigDir ??
+    (tmpDir !== undefined
+      ? join(tmpDir, "claude")
+      : process.env.CLAUDE_CONFIG_DIR);
   if (claudeConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   const home = opts.home ?? process.env.HOME;
   if (home !== undefined) env.HOME = home;
   const path = opts.path ?? process.env.PATH;
   if (path !== undefined) env.PATH = path;
   // Claude Codeが`TMPDIR`に従うかは確かめていないので、専用の変数にも同じ場所を渡す。
-  const tmpDir = opts.tmpDir ?? jobTmpEnv().TMPDIR;
   if (tmpDir !== undefined) {
     env.TMPDIR = tmpDir;
     env.CLAUDE_CODE_TMPDIR = tmpDir;

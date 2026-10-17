@@ -2215,27 +2215,26 @@ workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確�
 
 #### Claudeの状態の置き場所
 
-`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)も`WHITELIST_ENVS`に挙げている。
-そのため、ジョブの`process.env`に届き、`claude`はセッションなどの状態をこのディレクトリに置く。
-認証は`CLAUDE_CODE_OAUTH_TOKEN`で渡すので、置き場所は認証に関わらない。
-置き場所は永続のボリューム(`factory_state`)なので、workerを作り直しても状態は残る。
-`claude`が壊れた`.claude.json`で失敗し続けるときは、`/var/lib/factory/claude/.claude.json`を消す(次の実行で作り直される)。
-会話記録は`projects/`に溜まり続けるので、容量が増えたときは古いものを消す。
-コンテナの中で人が`claude`を手で動かすと、同じディレクトリを使う。
+workerのイメージは、`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)と`GH_CONFIG_DIR`を`ENV`に持つ。
+どちらも`WHITELIST_ENVS`に挙げないので、ジョブの`process.env`には届かない。
+この2つは、コンテナの中で人が`claude`や`gh`を手で使うときの置き場である。
 
-`GH_CONFIG_DIR`は挙げていない。
-ghとgitの子プロセスは、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
+ジョブのClaudeの設定の置き場は、`runClaude`が、ジョブごとの0700の一時ディレクトリの下(`<TMPDIR>/claude`)に指定する。
+ジョブの終了で消えるので、状態と会話記録は溜まらず、検査用のユーザーからも読めない。
+`--setting-sources user`が読むユーザー層も、毎回空から始まり、人が手で動かした設定が混ざらない。
+認証は`CLAUDE_CODE_OAUTH_TOKEN`で渡すので、置き場所は認証に関わらない。
+
+`GH_CONFIG_DIR`を届かせないのは、ghとgitの子プロセスが、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
 届かせても、読む処理が無い。
 
-`CLAUDE_CONFIG_DIR`が届いているかは、`wmill script preview`で次の内容のscriptを実行して確かめる。
-`/var/lib/factory/claude`になっていれば届いている。`null`なら、workerが新しいイメージと設定で動いているかを確かめる。
-値の全体は出さず、この変数と`CLAUDE_VERSION`の有無だけを返す。
+ジョブに2つの変数が届いていないことは、`wmill script preview`で次の内容のscriptを実行して確かめる。
+値は出さず、有無だけを返す。
 
 ```ts
 export async function main() {
   return {
-    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null,
-    CLAUDE_VERSION_set: process.env.CLAUDE_VERSION !== undefined,
+    CLAUDE_CONFIG_DIR_set: process.env.CLAUDE_CONFIG_DIR !== undefined,
+    GH_CONFIG_DIR_set: process.env.GH_CONFIG_DIR !== undefined,
   };
 }
 ```

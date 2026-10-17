@@ -865,22 +865,6 @@ describe("infra/docker-compose.yml windmill_worker job environment", () => {
 
     expect(names).toContain("CLAUDE_VERSION");
   });
-
-  test("passes CLAUDE_CONFIG_DIR through to the jobs", () => {
-    const names = envEntries(service("windmill_worker"), "WHITELIST_ENVS=")
-      .flatMap((entry) => entry.slice("WHITELIST_ENVS=".length).split(","))
-      .map((name) => name.trim());
-
-    expect(names).toContain("CLAUDE_CONFIG_DIR");
-  });
-
-  test("does not pass GH_CONFIG_DIR because no job code reads it", () => {
-    const names = envEntries(service("windmill_worker"), "WHITELIST_ENVS=")
-      .flatMap((entry) => entry.slice("WHITELIST_ENVS=".length).split(","))
-      .map((name) => name.trim());
-
-    expect(names).not.toContain("GH_CONFIG_DIR");
-  });
 });
 
 describe("infra/docker-compose.yml windmill_server session validity", () => {

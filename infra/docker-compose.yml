@@ -129,12 +129,9 @@ services:
       # 効かない設定を残さないため、`NUM_WORKERS`は置かない。
       # defaultのworkerが同時に動かすジョブは1つで、
       # Claudeのジョブが動く間、定期のジョブは待つ。
-      # workerは子プロセスの環境を絞る。イメージの`ENV`のうち、次の2つをジョブまで届かせる。
-      # - `CLAUDE_VERSION`は、`agent_runs.claude_version`を記録するため。
-      # - `CLAUDE_CONFIG_DIR`は、`claude`の状態を永続のボリュームに置くため。
-      # `GH_CONFIG_DIR`は届かせない。ghとgitの子プロセスは環境を明示して作り、
-      # 認証は`GH_TOKEN`で渡すので、ジョブのコードが読まないためである。
-      - WHITELIST_ENVS=CLAUDE_VERSION,CLAUDE_CONFIG_DIR
+      # workerは子プロセスの環境を絞る。イメージの`ENV CLAUDE_VERSION`を、
+      # `agent_runs.claude_version`を記録するジョブまで届かせる。
+      - WHITELIST_ENVS=CLAUDE_VERSION
     depends_on:
       db:
         condition: service_healthy
