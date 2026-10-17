@@ -198,14 +198,14 @@ describe("mutateFreezeState", () => {
 
   test("passes the clock to the operation", async () => {
     const { ports } = fake(null);
-    let seen: Date | null = null;
+    const seen: Date[] = [];
 
     await mutateFreezeState(ports, (state, now) => {
-      seen = now;
+      seen.push(now);
       return { ok: true, value: state };
     });
 
-    expect(seen).toEqual(NOW);
+    expect(seen).toEqual([NOW]);
   });
 });
 
