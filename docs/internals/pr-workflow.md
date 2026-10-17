@@ -1212,7 +1212,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
   - 版の確認と記録: `scripts/check-docker-version.sh`、`scripts/record-host-applied.sh`
   - 診断と初期化: `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`
   - composeの定義: `infra/docker-compose.yml`、`tests/infra/docker_compose.test.ts`
-  - 実行役のテスト: `tests/scripts/host_apply_*.test.ts`をファイル名で列挙する
+  - 実行役のテストと補助: `tests/scripts/host_apply_*.test.ts`と`tests/fixtures/host_apply_repo.ts`をファイル名で列挙する
 
 実行役が実行するファイルは、ホストのユーザーの権限で、秘密値を渡して動く。
 `infra/docker-compose.yml`は、実行役が静的に検査して反映する定義である。
