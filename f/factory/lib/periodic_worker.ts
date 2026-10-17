@@ -17,8 +17,13 @@ import { isRecord, type NoticeRecord } from "./types.ts";
 /** 定期ジョブ用workerが受けるtag。 */
 export const PERIODIC_WORKER_TAG = "periodic";
 
-/** 予定時刻からこの秒数以上、実行されずに待っているジョブがあれば、workerが受けていないと見なす。 */
-export const PERIODIC_JOB_WAIT_SECONDS = 300;
+/**
+ * 予定時刻からこの秒数以上、実行されずに待っているジョブがあれば、workerが受けていないと見なす。
+ * このworkerは1件ずつしか動かさないので、先に動くジョブの後ろで待つ間は、workerが受けていても待たされる。
+ * その待ちを誤って知らせないよう、tag `periodic`を付けたscriptのtimeoutの最大値に余裕を足した秒数以上にする。
+ * 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、この関係を固定する。
+ */
+export const PERIODIC_JOB_WAIT_SECONDS = 900;
 
 /** 確認が終わるまで待つ上限。確認が止まっても自己更新の反映を遅らせないための値。 */
 export const PERIODIC_WORKER_CHECK_TIMEOUT_MS = 10_000;

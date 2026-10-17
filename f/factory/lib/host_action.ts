@@ -20,6 +20,11 @@
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import {
+  HOST_ACTION_NOTICE_KIND,
+  HOST_ACTION_RESOLVER,
+  STALE_IMAGE_NOTICE_MARKER,
+} from "./auto_retry_reasons.ts";
+import {
   type CheckEnvironmentError,
   CheckImageStaleError,
   CheckRuntimeUnsafeError,
@@ -29,14 +34,15 @@ import { type Logger, maskSecrets } from "./log.ts";
 import { classifyChangedPaths } from "./self_update_support.ts";
 import type { NoticeRecord } from "./types.ts";
 
-/** ホスト側の作業が要ることを示すnoticeの種類。 */
-export const HOST_ACTION_NOTICE_KIND = "host_action_required";
+// 定数は`auto_retry_reasons.ts`にある。呼び出し側が`host_action.ts`から読めるよう再エクスポートする。
+export {
+  HOST_ACTION_NOTICE_KIND,
+  HOST_ACTION_RESOLVER,
+  STALE_IMAGE_NOTICE_MARKER,
+};
 
 /** `mise run up`が、反映したホストのcheckoutのHEADを書くファイル。 */
 export const HOST_APPLIED_SHA_PATH = "/var/lib/factory/host_applied_sha";
-
-/** 自動で解決したnoticeの`resolved_by`。 */
-export const HOST_ACTION_RESOLVER = "self_update";
 
 /**
  * 1回の実行で調べる未解決の通知の数の上限。古いものから調べる。
@@ -116,12 +122,6 @@ export function buildHostActionNotice(
     next_action: NEXT_ACTION,
   };
 }
-
-/**
- * イメージが古いことを知らせるnoticeの本文に含める句。
- * 自動の再開(`auto_retry.ts`)が、解決されたnoticeのうち、反映の通知と見分けるために読む。
- */
-export const STALE_IMAGE_NOTICE_MARKER = "workerのイメージが古く";
 
 const STALE_IMAGE_NEXT_ACTION_UNRESOLVABLE =
   "ホストのcheckoutでgit pullし、mise installとmise run upを実行する。実行が済んだら、この通知を解決する";

@@ -25,7 +25,7 @@ import { TRANSIENT_GITHUB_REASON_PREFIX } from "./auto_retry_reasons.ts";
 import { TRANSIENT_STALL_NOTE_PREFIX } from "./console_support.ts";
 import type { TransientReviewCandidate } from "./db.ts";
 import type { NotifyEvent } from "./discord.ts";
-import { GH_EXIT_AUTH_REQUIRED, GitHubHttpError } from "./github.ts";
+import { GH_EXIT_AUTH_REQUIRED, GitHubHttpError } from "./github_errors.ts";
 import { parseFlowJobId } from "./implement_launch_support.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import { assertGitHubName } from "./types.ts";

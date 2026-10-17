@@ -1,0 +1,9 @@
+summary: '[LIB] GitHubの呼び出しの失敗の型'
+description: 内部ライブラリです。直接実行するものではありません。2xx以外の応答による失敗の型と、ghが認証を求めて終わったときの終了コードを定義します。
+lock: '!inline f/factory/lib/github_errors.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

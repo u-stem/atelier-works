@@ -22,9 +22,10 @@ Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く�
 nativeでないworkerは、コンテナにつき1つしか動かない(Windmillの制限)。
 `NUM_WORKERS`を2以上にしても、Windmillが1に戻す。
 そのため、Claudeのジョブが動く間、defaultのworkerで動く定期のジョブは待つ。
-定期ジョブ用のworker(下記)で動かすscriptを選ぶ基準と、現在の選定の結果は[セキュリティ](security.md#tagを付けるscriptの選び方)にある。
-現在は、tag`periodic`を付けた定期ジョブが無い。
-tag`console`を付けた`audit_kickoff`と`console_fetch_watch`以外の定期ジョブは、すべてdefaultのworkerで動き、Claudeのジョブの間は待つ。
+定期ジョブ用のworker(下記)で動かすscriptを選ぶ基準と、選定の結果は[セキュリティ](security.md#tagを付けるscriptの選び方)にある。
+現在、tag`periodic`で動くのは、`notify_daily_summary`と`auto_retry_pr_review`である。
+ほかの定期ジョブは、defaultのworkerで動き、Claudeのジョブの間は待つ。
+ただし、tag`console`を付けた`audit_kickoff`と`console_fetch_watch`は、Console用のworkerで動く。
 メモリの上限はコンテナ全体で4096Mである。
 
 Consoleの問い合わせと操作の受付専用のworkerが、別のコンテナ(`windmill_worker_console`)で動く。
@@ -42,9 +43,10 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 定期ジョブを、Claudeの長いジョブの待ちから切り離すためである。
 このworkerはワーカーグループ`periodic`に属し、tag`periodic`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
-tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存せず、secret変数を`github_token`だけに限る定期ジョブである。
+tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブである。
+読むsecret変数は、`github_token`と`discord_webhook_url`だけに限る。
 依存するジョブは、defaultのworkerで動かす。
-tag`periodic`のジョブが5分以上待つと、`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
+tag`periodic`のジョブが15分以上待つと、`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。
@@ -420,6 +422,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/pr_review_retry` | script | [LIB] GitHubの一時的な失敗で止まったPRレビューの再開 |
+| `f/factory/lib/github_errors` | script | [LIB] GitHubの呼び出しの失敗の型 |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
@@ -432,6 +435,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_conflict_watch` | script | [LIB] PRの競合の監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
+| `f/factory/lib/job_state` | script | [LIB] Windmillのジョブの状態の読み替え |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
@@ -471,6 +475,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/summary_support` | script | [LIB] 日次サマリの集計 |
 | `f/factory/lib/check_runner` | script | [LIB] 検査コマンドの実行 |
 | `f/factory/lib/check_sandbox` | script | [LIB] 検査コマンドの実行ユーザーの切り替え |
+| `f/factory/lib/check_sandbox_reasons` | script | [LIB] 検査の前提が古いときの理由 |
 | `f/factory/lib/audit_support` | script | [LIB] 監査の期間計算と起動判定 |
 | `f/factory/lib/audit_evidence` | script | [LIB] 監査の証跡収集 |
 | `f/factory/lib/audit_doc` | script | [LIB] 監査レポートの検査 |

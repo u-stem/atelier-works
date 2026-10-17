@@ -18,15 +18,17 @@
 // - 同じ作業項目の自動の再開は、`AUTO_RETRY_MAX_RESTARTS`回までである。
 // - 要件が承認済みでないIssueと、`implement_enabled`が無効のIssueは、要件定義を作り直さないよう再開しない。
 
-import { AUTO_RETRY_REASON_PREFIXES } from "./auto_retry_reasons.ts";
-import type { AutoRetryCandidate } from "./db.ts";
 import {
+  AUTO_RETRY_REASON_PREFIXES,
   HOST_ACTION_NOTICE_KIND,
   HOST_ACTION_RESOLVER,
   STALE_IMAGE_NOTICE_MARKER,
-} from "./host_action.ts";
-import { parseFlowJobId } from "./implement_launch_support.ts";
-import { IMPLEMENT_FLOW_PATH } from "./implement_loop.ts";
+} from "./auto_retry_reasons.ts";
+import type { AutoRetryCandidate } from "./db.ts";
+import {
+  IMPLEMENT_FLOW_PATH,
+  parseFlowJobId,
+} from "./implement_launch_support.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type { WorkItemStatus } from "./types.ts";
 

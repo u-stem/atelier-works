@@ -7,4 +7,5 @@ schema:
   type: object
   properties: {}
   required: []
+tag: periodic
 timeout: 600
