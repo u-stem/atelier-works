@@ -639,6 +639,10 @@ else
 fi
 
 # --- 手順7: 秘密の変数 ---------------------------------------------------------
+read_token_map_json() {
+  :
+}
+
 upsert_variable() {
   local path="$1" value="$2" description="$3" status
   status="$(variable_create_body "${path}" "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/create")"
