@@ -202,3 +202,24 @@ export async function secretVariablePaths(): Promise<string[]> {
 }
 
 export const relative = (file: string) => file.replace(`${process.cwd()}/`, "");
+
+/** `f/`の下で、`script.yaml`の`tag`が`tag`であるscriptのパス(拡張子なし)。 */
+export async function scriptsWithTag(tag: string): Promise<string[]> {
+  const paths: string[] = [];
+  for (const file of await scan("f/**/*.script.yaml")) {
+    if ((await yamlOf(file)).tag === tag) {
+      paths.push(file.replace(/\.script\.yaml$/, ""));
+    }
+  }
+  return paths;
+}
+
+/**
+ * 上流のイメージのworkerに無いものへ届く、import・呼び出し。
+ * ファイル(`node:fs`)、サブプロセス(`node:child_process`、`Bun.spawn`)、Claude(`claude.ts`)を数える。
+ * Bunのファイル関数(`Bun.file`、`Bun.write`)も、ファイルへの依存として数える。
+ * 見つけたものを、理由の文字列で返す。
+ */
+export function toolDependencies(_source: string): string[] {
+  return [];
+}
