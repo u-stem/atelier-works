@@ -892,6 +892,13 @@ describe("command", () => {
     expect(run().exitCode).toBe(0);
   });
 
+  test("exits 0 when the only running work item has no flow job id and is old", () => {
+    const line = ITEM_LINE.replace(`"${ITEM_FLOW_JOB_ID}"`, "null");
+    setup({ "windmill.out": "", "datatable_db.out": `${line}\n` });
+
+    expect(run().exitCode).toBe(0);
+  });
+
   test("warns about a work item whose flow job is not queued", () => {
     setup({ "windmill.out": "", "datatable_db.out": `${ITEM_LINE}\n` });
 

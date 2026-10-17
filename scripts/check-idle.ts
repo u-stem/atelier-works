@@ -649,7 +649,11 @@ function readSnapshot(budgetMs: number): Snapshot {
     : [];
   const sql = liveJobIdsSql(ids);
   if (sql === null) {
-    return { jobs, items, leftovers: [] };
+    // 引く値が無い。`flow_job_id`が無い作業項目の判定にqueueは要らないので、空の読み取りで分ける。
+    return {
+      jobs,
+      ...splitLeftoverWorkItems(items, { ok: true, rows: [], malformed: 0 }),
+    };
   }
   const live = readDatabase(
     WINDMILL_DB,
