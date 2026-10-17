@@ -9,9 +9,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { TERMINAL_WORK_ITEM_STATUSES } from "../../f/factory/lib/types.ts";
 import {
   type CheckIdleOptions,
   checkIdle,
+  classifyReadFailure,
   judge,
   parseRunningJobs,
   parseRunningWorkItems,
@@ -24,6 +26,8 @@ import {
   type Snapshot,
   workerWillBeRecreated,
 } from "../../scripts/check-idle.ts";
+
+const TERMINAL_STATUSES: readonly string[] = TERMINAL_WORK_ITEM_STATUSES;
 
 const SCRIPT = resolve(import.meta.dir, "../../scripts/check-idle.ts");
 const MIGRATIONS_DIR = resolve(
@@ -61,6 +65,63 @@ const ITEM: RunningWorkItem = {
   issueNumber: 7,
   flowJobId: "0190a1b2-0000-7000-8000-000000000002",
 };
+
+const unreachableJobs: Reading<RunningJob> = {
+  ok: false,
+  kind: "unreachable",
+  reason: "db is down",
+};
+const unreachableItems: Reading<RunningWorkItem> = {
+  ok: false,
+  kind: "unreachable",
+  reason: "db is down",
+};
+const unverifiableJobs: Reading<RunningJob> = {
+  ok: false,
+  kind: "unverifiable",
+  reason: "syntax error",
+};
+const unverifiableItems: Reading<RunningWorkItem> = {
+  ok: false,
+  kind: "unverifiable",
+  reason: "syntax error",
+};
+
+describe("classifyReadFailure", () => {
+  test("treats a failed connection (psql exit 2) as unreachable", () => {
+    expect(classifyReadFailure(2, "connection failed")).toBe("unreachable");
+  });
+
+  test("treats a service that is not running as unreachable", () => {
+    expect(classifyReadFailure(1, 'service "db" is not running')).toBe(
+      "unreachable",
+    );
+  });
+
+  test("treats a stopped Docker daemon as unreachable", () => {
+    expect(
+      classifyReadFailure(1, "Cannot connect to the Docker daemon at unix://"),
+    ).toBe("unreachable");
+  });
+
+  test("treats an SQL error (psql exit 1) as unverifiable", () => {
+    expect(classifyReadFailure(1, 'ERROR:  relation "x" does not exist')).toBe(
+      "unverifiable",
+    );
+  });
+
+  test("treats psql exit 3 as unverifiable", () => {
+    expect(classifyReadFailure(3, "")).toBe("unverifiable");
+  });
+
+  test("treats a timeout (no exit code) as unverifiable", () => {
+    expect(classifyReadFailure(null, "")).toBe("unverifiable");
+  });
+
+  test("treats a failure with no message as unverifiable", () => {
+    expect(classifyReadFailure(1, "")).toBe("unverifiable");
+  });
+});
 
 describe("parseRunningJobs", () => {
   test("reads a job row", () => {
@@ -165,6 +226,24 @@ describe("workerWillBeRecreated", () => {
     expect(workerWillBeRecreated(output)).toBe(false);
   });
 
+  test("is null when a container line has too few columns", () => {
+    const output = [
+      " Container infra-db-1 Running ",
+      " Container infra-windmill_worker-1",
+    ].join("\n");
+
+    expect(workerWillBeRecreated(output)).toBeNull();
+  });
+
+  test("is null when a container line has too many columns", () => {
+    const output = [
+      " Container infra-db-1 Running ",
+      " Container infra-windmill_worker-1 Recreate now ",
+    ].join("\n");
+
+    expect(workerWillBeRecreated(output)).toBeNull();
+  });
+
   test("is null when the output has no container lines", () => {
     expect(workerWillBeRecreated("error: something\n")).toBeNull();
   });
@@ -207,10 +286,8 @@ describe("judge", () => {
     expect(judge(jobs, okItems()).exitCode).toBe(1);
   });
 
-  test("exits 0 with a warning when the jobs could not be read", () => {
-    const jobs: Reading<RunningJob> = { ok: false, reason: "db is down" };
-
-    const verdict = judge(jobs, okItems());
+  test("exits 0 with a warning when the jobs are unreachable", () => {
+    const verdict = judge(unreachableJobs, okItems());
 
     expect([verdict.exitCode, verdict.lines.join("\n")]).toEqual([
       0,
@@ -218,17 +295,42 @@ describe("judge", () => {
     ]);
   });
 
-  test("exits 1 when the jobs could not be read but a work item is running", () => {
-    const jobs: Reading<RunningJob> = { ok: false, reason: "db is down" };
-
-    expect(judge(jobs, okItems(ITEM)).exitCode).toBe(1);
+  test("exits 1 when the jobs are unreachable but a work item is running", () => {
+    expect(judge(unreachableJobs, okItems(ITEM)).exitCode).toBe(1);
   });
 
-  test("exits 0 when neither source could be read", () => {
-    const jobs: Reading<RunningJob> = { ok: false, reason: "db is down" };
-    const items: Reading<RunningWorkItem> = { ok: false, reason: "db is down" };
+  test("exits 0 when neither source is reachable", () => {
+    expect(judge(unreachableJobs, unreachableItems).exitCode).toBe(0);
+  });
 
-    expect(judge(jobs, items).exitCode).toBe(0);
+  test("exits 1 when the jobs could not be verified", () => {
+    expect(judge(unverifiableJobs, okItems()).exitCode).toBe(1);
+  });
+
+  test("exits 1 when only the work items could not be verified", () => {
+    expect(judge(okJobs(), unverifiableItems).exitCode).toBe(1);
+  });
+
+  test("exits 1 when one source is unreachable and the other could not be verified", () => {
+    expect(judge(unreachableJobs, unverifiableItems).exitCode).toBe(1);
+  });
+
+  test("tells how to skip the check when something could not be verified", () => {
+    const text = judge(unverifiableJobs, okItems()).lines.join("\n");
+
+    expect(text).toContain("CHECK_IDLE_FORCE=1");
+  });
+
+  test("names the reason when something could not be verified", () => {
+    const text = judge(unverifiableJobs, okItems()).lines.join("\n");
+
+    expect(text).toContain("syntax error");
+  });
+
+  test("tells how to skip the check when work is running", () => {
+    const text = judge(okJobs(JOB), okItems()).lines.join("\n");
+
+    expect(text).toContain("CHECK_IDLE_FORCE=1");
   });
 });
 
@@ -259,6 +361,14 @@ describe("SQL", () => {
       expect(migrations).toContain(`'${status}'`);
     });
   }
+
+  test("no guarded status is a terminal status", () => {
+    expect(
+      RUNNING_WORK_ITEM_STATUSES.filter((status) =>
+        TERMINAL_STATUSES.some((terminal) => terminal === status),
+      ),
+    ).toEqual([]);
+  });
 
   test("every guarded status is listed in the query", () => {
     const sql = runningWorkItemsSql();
@@ -295,6 +405,7 @@ describe("command", () => {
       'f="$FAKE_DIR/$db.out.$n"',
       '[ -f "$f" ] || f="$FAKE_DIR/$db.out"',
       'cat "$f" 2>/dev/null',
+      'cat "$FAKE_DIR/$db.err" >&2 2>/dev/null',
       'exit "$(cat "$FAKE_DIR/$db.code" 2>/dev/null || echo 0)"',
       "",
     ].join("\n");
@@ -361,44 +472,85 @@ describe("command", () => {
   test("exits 0 with a warning when the database is unreachable", () => {
     setup({
       "windmill.out": "",
-      "windmill.code": "1",
+      "windmill.code": "2",
       "datatable_db.out": "",
-      "datatable_db.code": "1",
+      "datatable_db.code": "2",
     });
 
     expect(run().stderr).toContain("warning:");
   });
 
   test("exits 0 when the database is unreachable", () => {
-    setup({ "windmill.code": "1", "datatable_db.code": "1" });
+    setup({ "windmill.code": "2", "datatable_db.code": "2" });
 
     expect(run().exitCode).toBe(0);
   });
 
-  test("skips the check and says so when FORCE=1", () => {
-    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+  test("exits 0 when the db service is not running", () => {
+    setup({
+      "windmill.code": "1",
+      "windmill.err": 'service "db" is not running\n',
+      "datatable_db.code": "1",
+      "datatable_db.err": 'service "db" is not running\n',
+    });
 
-    expect(run([], { FORCE: "1" }).stderr).toContain("FORCE=1");
+    expect(run().exitCode).toBe(0);
   });
 
-  test("exits 0 when FORCE=1 and a job is running", () => {
-    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+  test("exits 1 when the query fails with an SQL error", () => {
+    setup({
+      "windmill.out": "",
+      "datatable_db.code": "1",
+      "datatable_db.err":
+        'ERROR:  relation "factory.work_items" does not exist\n',
+    });
 
-    expect(run([], { FORCE: "1" }).exitCode).toBe(0);
+    expect(run().exitCode).toBe(1);
   });
 
-  test("does not call docker when FORCE=1", async () => {
+  test("tells how to skip the check when the query fails with an SQL error", () => {
+    setup({
+      "windmill.out": "",
+      "datatable_db.code": "1",
+      "datatable_db.err":
+        'ERROR:  relation "factory.work_items" does not exist\n',
+    });
+
+    expect(run().stderr).toContain("CHECK_IDLE_FORCE=1");
+  });
+
+  test("skips the check and says so when CHECK_IDLE_FORCE=1", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+
+    expect(run([], { CHECK_IDLE_FORCE: "1" }).stderr).toContain(
+      "CHECK_IDLE_FORCE=1",
+    );
+  });
+
+  test("exits 0 when CHECK_IDLE_FORCE=1 and a job is running", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+
+    expect(run([], { CHECK_IDLE_FORCE: "1" }).exitCode).toBe(0);
+  });
+
+  test("does not call docker when CHECK_IDLE_FORCE=1", async () => {
     setup({ "windmill.out": `${JOB_LINE}\n` });
 
-    run([], { FORCE: "1" });
+    run([], { CHECK_IDLE_FORCE: "1" });
 
     expect(await Bun.file(join(dir, "calls")).exists()).toBe(false);
   });
 
-  test("still checks when FORCE is any other value", () => {
+  test("still checks when CHECK_IDLE_FORCE is any other value", () => {
     setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
 
-    expect(run([], { FORCE: "yes" }).exitCode).toBe(1);
+    expect(run([], { CHECK_IDLE_FORCE: "yes" }).exitCode).toBe(1);
+  });
+
+  test("still checks when only the old FORCE=1 is set", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+
+    expect(run([], { FORCE: "1" }).exitCode).toBe(1);
   });
 
   test("passes when the worker is not recreated, even with a running job", () => {
@@ -458,7 +610,7 @@ describe("command", () => {
     setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
 
     expect(
-      run(["--recheck-timeout-ms=30", "--recheck-interval-ms=10"]).exitCode,
+      run(["--recheck-timeout-ms=600", "--recheck-interval-ms=100"]).exitCode,
     ).toBe(1);
   });
 
@@ -466,7 +618,7 @@ describe("command", () => {
     setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
 
     expect(
-      run(["--recheck-timeout-ms=30", "--recheck-interval-ms=10"]).stderr,
+      run(["--recheck-timeout-ms=600", "--recheck-interval-ms=100"]).stderr,
     ).toContain("waiting");
   });
 });
@@ -474,17 +626,23 @@ describe("command", () => {
 const idleSnapshot: Snapshot = { jobs: okJobs(), items: okItems() };
 const busySnapshot: Snapshot = { jobs: okJobs(JOB), items: okItems() };
 const unreadableSnapshot: Snapshot = {
-  jobs: { ok: false, reason: "db is down" },
-  items: { ok: false, reason: "db is down" },
+  jobs: unreachableJobs,
+  items: unreachableItems,
+};
+const unverifiableSnapshot: Snapshot = {
+  jobs: unverifiableJobs,
+  items: unverifiableItems,
 };
 
 // 時計とsleepを差し替え、待たずに再確認の流れを試す。sleepは時計を進める。
 function harness(
   next: (readCount: number) => Snapshot,
   overrides: Partial<CheckIdleOptions> = {},
+  readCostMs = 0,
 ) {
   let clock = 0;
   const readAt: number[] = [];
+  const budgets: number[] = [];
   const messages: string[] = [];
   const options: CheckIdleOptions = {
     timeoutMs: 60_000,
@@ -493,8 +651,10 @@ function harness(
     sleep: (ms) => {
       clock += ms;
     },
-    read: () => {
+    read: (budgetMs) => {
       readAt.push(clock);
+      budgets.push(budgetMs);
+      clock += Math.min(readCostMs, budgetMs);
       return next(readAt.length);
     },
     progress: (message) => {
@@ -505,6 +665,7 @@ function harness(
   return {
     run: () => checkIdle(options),
     readAt,
+    budgets,
     messages,
     clock: () => clock,
   };
@@ -539,12 +700,12 @@ describe("checkIdle", () => {
     expect(h.run().exitCode).toBe(1);
   });
 
-  test("reads once per interval until the timeout", () => {
+  test("reads once per interval while the timeout allows it", () => {
     const h = harness(() => busySnapshot);
 
     h.run();
 
-    expect(h.readAt.length).toBe(13);
+    expect(h.readAt.length).toBe(12);
   });
 
   test("does not wait past the timeout", () => {
@@ -555,7 +716,39 @@ describe("checkIdle", () => {
 
     h.run();
 
-    expect(h.clock()).toBe(12_000);
+    expect(h.clock()).toBeLessThanOrEqual(12_000);
+  });
+
+  test("stays within the timeout when every read is slow", () => {
+    const h = harness(() => busySnapshot, {}, 30_000);
+
+    h.run();
+
+    expect(h.clock()).toBeLessThanOrEqual(60_000);
+  });
+
+  test("stays within the timeout when reads take a few seconds", () => {
+    const h = harness(() => busySnapshot, {}, 4_000);
+
+    h.run();
+
+    expect(h.clock()).toBeLessThanOrEqual(60_000);
+  });
+
+  test("limits each re-read to the time left before the deadline", () => {
+    const h = harness(() => busySnapshot, {}, 30_000);
+
+    h.run();
+
+    expect(Math.max(...h.budgets.slice(1))).toBeLessThanOrEqual(55_000);
+  });
+
+  test("gives the first read no deadline of its own", () => {
+    const h = harness(() => idleSnapshot);
+
+    h.run();
+
+    expect(h.budgets[0]).toBe(Number.POSITIVE_INFINITY);
   });
 
   test("lists the work found by the last read when it stops", () => {
@@ -564,7 +757,7 @@ describe("checkIdle", () => {
       items: okItems(),
     }));
 
-    expect(h.run().lines.join("\n")).toContain("job-13");
+    expect(h.run().lines.join("\n")).toContain("job-12");
   });
 
   test("does not wait when the timeout is 0", () => {
@@ -601,14 +794,32 @@ describe("checkIdle", () => {
     expect(h.run().exitCode).toBe(0);
   });
 
-  test("passes with a warning when the first read is unreadable", () => {
+  test("stops when the first read could not be verified and nothing later is idle", () => {
+    const h = harness(() => unverifiableSnapshot);
+
+    expect(h.run().exitCode).toBe(1);
+  });
+
+  test("passes when a read that could not be verified is followed by an idle read", () => {
+    const h = harness((n) => (n === 1 ? unverifiableSnapshot : idleSnapshot));
+
+    expect(h.run().exitCode).toBe(0);
+  });
+
+  test("does not claim work is still running when nothing could be verified", () => {
+    const h = harness(() => unverifiableSnapshot);
+
+    expect(h.run().lines.join("\n")).not.toContain("Still running");
+  });
+
+  test("passes with a warning when the first read is unreachable", () => {
     const h = harness(() => unreadableSnapshot);
 
     expect([h.run().exitCode, h.readAt.length]).toEqual([0, 1]);
   });
 
   test("reports that it is waiting", () => {
-    const h = harness(() => busySnapshot, { timeoutMs: 10_000 });
+    const h = harness(() => busySnapshot, { timeoutMs: 15_000 });
 
     h.run();
 
@@ -616,7 +827,7 @@ describe("checkIdle", () => {
   });
 
   test("reports the seconds waited so far", () => {
-    const h = harness(() => busySnapshot, { timeoutMs: 10_000 });
+    const h = harness(() => busySnapshot, { timeoutMs: 15_000 });
 
     h.run();
 

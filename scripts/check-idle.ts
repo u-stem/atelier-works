@@ -57,7 +57,11 @@ export type Reading<T> =
       readonly rows: readonly T[];
       readonly malformed: number;
     }
-  | { readonly ok: false; readonly reason: string };
+  | {
+      readonly ok: false;
+      readonly kind: "unreachable" | "unverifiable";
+      readonly reason: string;
+    };
 
 export type Verdict = {
   readonly exitCode: 0 | 1;
@@ -365,6 +369,7 @@ function readDatabase<T>(
       const detail = shorten(result.stderr.toString());
       return {
         ok: false,
+        kind: "unreachable",
         reason: `psql on ${db} exited with ${String(result.exitCode)}${detail === "" ? "" : `: ${detail}`}`,
       };
     }
@@ -372,6 +377,7 @@ function readDatabase<T>(
   } catch (error) {
     return {
       ok: false,
+      kind: "unreachable",
       reason: error instanceof Error ? shorten(error.message) : "unknown error",
     };
   }
@@ -419,7 +425,7 @@ export type CheckIdleOptions = {
   readonly intervalMs: number;
   readonly now: () => number;
   readonly sleep: (ms: number) => void;
-  readonly read: () => Snapshot;
+  readonly read: (budgetMs: number) => Snapshot;
   /** 待っている間の進捗の出力先。 */
   readonly progress: (message: string) => void;
 };
@@ -436,7 +442,7 @@ function fullyRead(snapshot: Snapshot): boolean {
  * 読み直しで読めない側があったときは、何も動いていないと確かめられていないので、通さずに読み直しを続ける。
  */
 export function checkIdle(options: CheckIdleOptions): Verdict {
-  const first = judge(...pair(options.read()));
+  const first = judge(...pair(options.read(Number.POSITIVE_INFINITY)));
   if (first.exitCode === 0) {
     return first;
   }
@@ -449,7 +455,7 @@ export function checkIdle(options: CheckIdleOptions): Verdict {
       `Running work found; waiting for it to finish (${String(waited)}s)`,
     );
     options.sleep(Math.min(options.intervalMs, deadline - options.now()));
-    const snapshot = options.read();
+    const snapshot = options.read(options.timeoutMs);
     const verdict = judge(...pair(snapshot));
     if (verdict.exitCode === 1) {
       lastBusy = verdict;
@@ -520,4 +526,12 @@ function main(): number {
 
 if (import.meta.main) {
   process.exitCode = main();
+}
+
+// スタブ。実装は次のコミットで書く。
+export function classifyReadFailure(
+  _exitCode: number | null,
+  _stderr: string,
+): "unreachable" | "unverifiable" {
+  return "unreachable";
 }

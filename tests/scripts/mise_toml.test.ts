@@ -97,26 +97,40 @@ describe("mise.toml stack tasks", () => {
   const PREVALIDATE_CADDY =
     "docker compose -f infra/docker-compose.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile";
 
-  // workerを作り直すと、実行中のジョブが止まる。作り直す`up -d`の前に、実行中の仕事が無いことを確かめる。
-  // dry-runが新しいイメージを見るよう、確認はworkerのイメージを作った後に置く。
-  const IDLE = "bun scripts/check-idle.ts --when-worker-recreated";
-  const BUILD_WORKER: Record<string, string> = {
-    up: "docker compose -f infra/docker-compose.yml build windmill_worker",
-    deploy:
-      "docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher",
-  };
+  // workerを作り直すと、実行中のジョブが止まる。作り直す`up -d`の直前に、実行中の仕事が無いことを確かめる。
+  // 確認と作り直しの隙間を短くするため、取得とビルドは確認の前に済ませ、作り直しでは取得もビルドもしない。
+  // dry-runが新しいイメージを見るよう、確認は取得とビルドの後に置く。
+  const IDLE = "bun ./scripts/check-idle.ts --when-worker-recreated";
+  const PULL = "docker compose -f infra/docker-compose.yml pull";
+  const BUILD = "docker compose -f infra/docker-compose.yml build";
 
   for (const task of ["up", "deploy"]) {
-    test(`${task} checks for running work before compose up`, () => {
+    test(`${task} checks for running work right before compose up`, () => {
       const lines = taskRuns().get(task) ?? [];
-      const idle = lines.indexOf(IDLE);
-      expect(idle > -1 && idle < lines.findIndex(isComposeUp)).toBe(true);
+      const up = lines.findIndex(isComposeUp);
+      expect(lines.indexOf(IDLE)).toBe(up - 1);
     });
 
-    test(`${task} checks for running work after building the worker image`, () => {
+    test(`${task} pulls the images before checking for running work`, () => {
       const lines = taskRuns().get(task) ?? [];
-      const build = lines.indexOf(BUILD_WORKER[task] ?? "");
+      const pull = lines.indexOf(PULL);
+      expect(pull > -1 && pull < lines.indexOf(IDLE)).toBe(true);
+    });
+
+    test(`${task} builds every image before checking for running work`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      const build = lines.indexOf(BUILD);
       expect(build > -1 && build < lines.indexOf(IDLE)).toBe(true);
+    });
+
+    test(`${task} does not pull when it recreates the containers`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.find(isComposeUp)).toContain("--pull never");
+    });
+
+    test(`${task} does not build when it recreates the containers`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.find(isComposeUp)).toContain("--no-build");
     });
 
     test(`${task} checks for running work after the Docker version check`, () => {

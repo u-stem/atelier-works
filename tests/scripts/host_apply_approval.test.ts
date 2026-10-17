@@ -27,6 +27,7 @@ describe("isApprovalTarget", () => {
     "scripts/check-docker-version.sh",
     "scripts/custom-tags.ts",
     "scripts/record-host-applied.sh",
+    "scripts/check-idle.ts",
     "scripts/host-install.sh",
     "scripts/host-apply.ts",
     "scripts/host-apply.sh",
