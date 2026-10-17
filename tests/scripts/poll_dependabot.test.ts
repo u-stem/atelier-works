@@ -1436,6 +1436,9 @@ type RoundLog = {
   collected: number;
   failures: string[];
   state: PollState | null;
+  /** 表を読んだリポジトリ(`owner/repo`)。 */
+  read: string[];
+  warnings: { message: string; fields: Record<string, unknown> }[];
 };
 
 type RoundOptions = {
@@ -1443,7 +1446,13 @@ type RoundOptions = {
   readonly state?: unknown;
   readonly found?: DependabotPrSearchItem[];
   readonly getPr?: (number: number) => Promise<PullRequestWithCreatedAt>;
-  readonly search?: () => Promise<DependabotPrSearchItem[]>;
+  readonly search?: (
+    scope: DependabotPrSearchScope,
+  ) => Promise<DependabotPrSearchItem[]>;
+  readonly readRepoPrs?: (
+    owner: string,
+    repo: string,
+  ) => Promise<GhRepoOpenPrSnapshot>;
   readonly active?: Awaited<ReturnType<PollSession["listActive"]>>;
   readonly collect?: () => Promise<CollectResult>;
 };
@@ -1456,6 +1465,8 @@ function emptyLog(): RoundLog {
     collected: 0,
     failures: [],
     state: null,
+    read: [],
+    warnings: [],
   };
 }
 
@@ -1479,10 +1490,18 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
           log.searched.push(scope);
           return options.search === undefined
             ? (options.found ?? [FOUND])
-            : options.search();
+            : options.search(scope);
+        },
+        readRepoPrs: async (owner, repo) => {
+          log.read.push(`${owner}/${repo}`);
+          return options.readRepoPrs === undefined
+            ? snapshot([ghRow()])
+            : options.readRepoPrs(owner, repo);
         },
         listActive: async () => options.active ?? [],
-        warn: () => {},
+        warn: (message, fields) => {
+          log.warnings.push({ message, fields });
+        },
         deps: {
           ...h.deps,
           getPr: async (_owner, _repo, number) => {
@@ -1846,5 +1865,435 @@ describe("pollDependabot", () => {
     );
 
     expect(log.state?.heads).toEqual({ [KEY]: wait });
+  });
+});
+
+// ---- 読み取り元が表の周回 ----
+
+/** 収集の2つの設定が真で、表から候補を読む設定。 */
+const DB_CONFIG: FactoryConfig = {
+  ...CONFIG,
+  gh_source_dependabot: "db",
+  gh_collect_enabled: true,
+  gh_collect_detail_enabled: true,
+};
+
+const GADGETS_ALLOWLIST = ["https://github.com/acme/gadgets"];
+
+/** 一度も取り終えていないリポジトリの読み取りの結果。鮮度が足りない。 */
+function staleSnapshot(): GhRepoOpenPrSnapshot {
+  return snapshot([ghRow()], { last_collected_at: null });
+}
+
+describe("pollDependabot read source", () => {
+  test("reads the table when the source is db and both collection settings are true", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { config: DB_CONFIG }));
+
+    expect(log.read).toEqual(["acme/widgets"]);
+  });
+
+  test("searches when gh_collect_enabled is false even if the source is db", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...DB_CONFIG, gh_collect_enabled: false } }),
+    );
+
+    expect(log.searched).toHaveLength(1);
+  });
+
+  test("does not read the table when gh_collect_enabled is false", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...DB_CONFIG, gh_collect_enabled: false } }),
+    );
+
+    expect(log.read).toEqual([]);
+  });
+
+  test("searches when gh_collect_detail_enabled is false even if the source is db", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, gh_collect_detail_enabled: false },
+      }),
+    );
+
+    expect(log.searched).toHaveLength(1);
+  });
+
+  test("warns with the names of the false settings when the source db is ignored", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, gh_collect_detail_enabled: false },
+      }),
+    );
+
+    expect(log.warnings).toEqual([
+      {
+        message:
+          "gh_source_dependabot is db but the collection is not fully enabled, so the round searches",
+        fields: {
+          gh_collect_enabled: true,
+          gh_collect_detail_enabled: false,
+        },
+      },
+    ]);
+  });
+
+  test("does not read the table when the source is search", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, { config: { ...DB_CONFIG, gh_source_dependabot: "search" } }),
+    );
+
+    expect(log.read).toEqual([]);
+  });
+
+  test("reports db as the source of a round that read the table", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), { config: DB_CONFIG }),
+    );
+
+    expect(result.source).toBe("db");
+  });
+
+  test("reports search as the source of a round that searched", async () => {
+    const result = await pollDependabot(round(emptyLog()));
+
+    expect(result.source).toBe("search");
+  });
+
+  test("reports no fallback for a round that searched", async () => {
+    const result = await pollDependabot(round(emptyLog()));
+
+    expect([result.fallback_searches, result.fallback_reasons]).toEqual([
+      0,
+      {},
+    ]);
+  });
+
+  test("reports a disabled round as a search round without fallbacks", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: { ...DB_CONFIG, dependabot_enabled: false },
+      }),
+    );
+
+    expect(result).toEqual({
+      enabled: false,
+      paused: false,
+      started: 0,
+      escalated: 0,
+      waiting: 0,
+      skipped: 0,
+      failed: 0,
+      source: "search",
+      fallback_searches: 0,
+      fallback_reasons: {},
+    });
+  });
+
+  test("reports a round skipped before the resume time as a search round without fallbacks", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        state: { resumeAtMs: NOW_MS + 1, heads: {} },
+      }),
+    );
+
+    expect([
+      result.paused,
+      result.source,
+      result.fallback_searches,
+      result.fallback_reasons,
+    ]).toEqual([true, "search", 0, {}]);
+  });
+});
+
+describe("pollDependabot with the table as the source", () => {
+  test("does not search when every repository is fresh", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(round(log, { config: DB_CONFIG }));
+
+    expect(log.searched).toEqual([]);
+  });
+
+  test("searches only the repository whose records are not fresh", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, repo_allowlist: GADGETS_ALLOWLIST },
+        readRepoPrs: async (_owner, repo) =>
+          repo === "gadgets" ? staleSnapshot() : snapshot([ghRow()]),
+      }),
+    );
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "gadgets" },
+    ]);
+  });
+
+  test("processes the candidates of a repository it searched instead", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => [{ ...FOUND, number: 13 }],
+      }),
+    );
+
+    expect(log.processed).toEqual([13]);
+  });
+
+  test("counts the repositories it searched instead", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(result.fallback_searches).toBe(1);
+  });
+
+  test("counts the searches instead by reason", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(result.fallback_reasons).toEqual({ not_collected: 1 });
+  });
+
+  test("warns about a repository it searched instead with the reason", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(log.warnings).toEqual([
+      {
+        message: "dependabot candidates fall back to search",
+        fields: { owner: "acme", repo: "widgets", reason: "not_collected" },
+      },
+    ]);
+  });
+
+  test("does not record a stale repository as a failure", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+      }),
+    );
+
+    expect(log.failures).toEqual([]);
+  });
+
+  test("records a failure to read the table", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+      }),
+    );
+
+    expect(log.failures).toEqual(["read_gh_pull_requests:acme/widgets"]);
+  });
+
+  test("searches the repository whose table could not be read", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+      }),
+    );
+
+    expect(log.searched).toEqual([
+      { kind: "repo", owner: "acme", repo: "widgets" },
+    ]);
+  });
+
+  test("reports read_failed as the reason of a table that could not be read", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+      }),
+    );
+
+    expect(result.fallback_reasons).toEqual({ read_failed: 1 });
+  });
+
+  test("counts two failures when both the read and the search it fell back to fail", async () => {
+    const result = await pollDependabot(
+      round(emptyLog(), {
+        config: DB_CONFIG,
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
+
+    expect(result.failed).toBe(2);
+  });
+
+  test("lowercases the repository in the names of the failure records", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...DB_CONFIG,
+          factory_repo: "https://github.com/Acme/Widgets.git",
+        },
+        readRepoPrs: async () => {
+          throw new Error("db is down");
+        },
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
+
+    expect(log.failures).toEqual([
+      "read_gh_pull_requests:acme/widgets",
+      "search_dependabot_prs:acme/widgets",
+    ]);
+  });
+
+  test("keeps the wait records of a repository whose search it fell back to failed", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => {
+          throw new Error("search failed");
+        },
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({ [KEY]: wait });
+  });
+
+  test("stops reading the remaining repositories when the search it fell back to hits the rate limit", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, repo_allowlist: GADGETS_ALLOWLIST },
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => {
+          throw new GitHubRateLimitError("search", 60_000, true);
+        },
+      }),
+    );
+
+    expect(log.read).toEqual(["acme/widgets"]);
+  });
+
+  test("saves the resume time when the search it fell back to hits the rate limit", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        readRepoPrs: async () => staleSnapshot(),
+        search: async () => {
+          throw new GitHubRateLimitError("search", 60_000, true);
+        },
+      }),
+    );
+
+    expect(log.state?.resumeAtMs).toBe(NOW_MS + 60_000);
+  });
+
+  test("drops the wait record of a pull request that has no row in a fresh repository", async () => {
+    const log = emptyLog();
+    const wait = { firstWaitAtMs: 1, waitCount: 1, nextCheckAtMs: NOW_MS };
+
+    await pollDependabot(
+      round(log, {
+        config: DB_CONFIG,
+        state: { resumeAtMs: null, heads: { [KEY]: wait } },
+        readRepoPrs: async () => snapshot([]),
+      }),
+    );
+
+    expect(log.state?.heads).toEqual({});
+  });
+
+  test("uses the number of owners for the threshold", async () => {
+    const log = emptyLog();
+    const owners = [
+      { name: "acme", kind: "user" as const },
+      { name: "beta", kind: "user" as const },
+      { name: "gamma", kind: "user" as const },
+    ];
+
+    await pollDependabot(
+      round(log, {
+        config: { ...DB_CONFIG, owners },
+        readRepoPrs: async () =>
+          snapshot([ghRow()], {
+            last_collected_at: new Date(NOW_MS - 18 * MINUTE_MS),
+          }),
+      }),
+    );
+
+    expect(log.searched).toEqual([]);
+  });
+
+  test("makes a pull request of a capitalized factory_repo a candidate from the table", async () => {
+    const log = emptyLog();
+
+    await pollDependabot(
+      round(log, {
+        config: {
+          ...DB_CONFIG,
+          factory_repo: "https://github.com/Acme/Widgets.git",
+        },
+        search: async () => [],
+      }),
+    );
+
+    expect(log.processed).toEqual([12]);
   });
 });
