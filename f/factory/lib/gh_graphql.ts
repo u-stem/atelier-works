@@ -15,6 +15,7 @@ export const GRAPHQL_REQUEST_TIMEOUT_MS = 10_000;
  * 所有者・ラベル・カーソルはGraphQLの変数で渡し、文字列に埋め込まない。
  * 数値IDは所有者の照合に、件数はPRとトリガーラベル付きのIssueの数に使う。
  * 並びは名前の昇順で固定し、ページをまたいでも取りこぼさない。
+ * 既定ブランチの参照(`defaultBranchRef`)は問い合わせない。読むにはContentsの権限が要り、読み取り専用のトークンでは項目ごとに拒否されるため。
  */
 export const OWNER_REPOS_QUERY = `query($owner: String!, $label: String!, $cursor: String) {
   rateLimit { cost remaining resetAt }
@@ -28,7 +29,6 @@ export const OWNER_REPOS_QUERY = `query($owner: String!, $label: String!, $curso
         databaseId
         name
         isArchived
-        defaultBranchRef { name }
         pullRequests(states: OPEN) { totalCount }
         issues(states: OPEN, labels: [$label]) { totalCount }
       }

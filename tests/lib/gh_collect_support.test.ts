@@ -534,7 +534,6 @@ describe("parseOwnerReposPage", () => {
         repo_id: 11,
         name: "widgets",
         archived: false,
-        default_branch: null,
         open_pr_count: 3,
         labeled_issue_count: 1,
       },
@@ -558,8 +557,8 @@ describe("parseOwnerReposPage", () => {
       page([{ ...NODE, defaultBranchRef: { name: "main" } }]),
     );
     expect(
-      result.kind === "ok" ? result.repos[0]?.default_branch : "x",
-    ).toBeNull();
+      result.kind === "ok" ? Object.keys(result.repos[0] ?? {}) : null,
+    ).not.toContain("default_branch");
   });
 
   test("reads a missing owner as null", () => {
@@ -690,7 +689,6 @@ describe("selectTargets selects only allowed targets", () => {
     repo_id: 1,
     name,
     archived: false,
-    default_branch: "main",
     open_pr_count: 2,
     labeled_issue_count: 1,
     ...overrides,
