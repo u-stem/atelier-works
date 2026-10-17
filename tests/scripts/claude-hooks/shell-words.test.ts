@@ -144,6 +144,13 @@ describe("stripWrappers", () => {
     ]);
   });
 
+  test("collects leading append assignments", () => {
+    const stripped = stripWrappers(words("LEFTHOOK+=0", "git", "commit"));
+    expect(stripped.assignments.map((word) => word.text)).toEqual([
+      "LEFTHOOK+=0",
+    ]);
+  });
+
   test("skips mise exec up to --", () => {
     const stripped = stripWrappers(
       words("mise", "exec", "--", "bun", "add", "x"),
