@@ -2297,3 +2297,276 @@ describe("pollDependabot with the table as the source", () => {
     expect(log.processed).toEqual([12]);
   });
 });
+
+// ---- 検索と表の候補の一致 ----
+
+type WorldPr = {
+  readonly repo: string;
+  readonly number: number;
+  readonly createdAtMs: number;
+  readonly state?: "open" | "closed";
+  readonly draft?: boolean;
+  readonly baseRef?: string;
+  readonly author?: "dependabot" | "mallory";
+  readonly fork?: boolean;
+  /** 表ではbaseと作者が不明(`NULL`)だが、GitHubの実際の値は上のとおり。 */
+  readonly unknownInTable?: boolean;
+};
+
+type World = {
+  readonly prs: readonly WorldPr[];
+  readonly allowlist?: readonly string[];
+  readonly archivedRepos?: readonly string[];
+};
+
+function worldRestPr(pr: WorldPr): PullRequestWithCreatedAt {
+  const mallory = pr.author === "mallory";
+  return pullRequest({
+    number: pr.number,
+    createdAtMs: pr.createdAtMs,
+    state: pr.state ?? "open",
+    draft: pr.draft ?? false,
+    baseRef: pr.baseRef ?? "main",
+    authorLogin: mallory ? "mallory" : "dependabot[bot]",
+    authorType: mallory ? "User" : "Bot",
+    headRepoFullName: pr.fork ? "mallory/widgets" : `acme/${pr.repo}`,
+    baseRepoFullName: `acme/${pr.repo}`,
+  });
+}
+
+/** GitHubの検索が返す候補。開いていて、draftでなく、baseが`main`で、dependabotのアプリが開いたPR。 */
+function worldSearch(
+  world: World,
+  scope: DependabotPrSearchScope,
+): DependabotPrSearchItem[] {
+  return world.prs
+    .filter(
+      (pr) =>
+        pr.repo === scope.repo &&
+        (pr.state ?? "open") === "open" &&
+        !(pr.draft ?? false) &&
+        (pr.baseRef ?? "main") === "main" &&
+        (pr.author ?? "dependabot") === "dependabot",
+    )
+    .map((pr) => ({
+      owner: "acme",
+      repo: pr.repo,
+      number: pr.number,
+      createdAtMs: pr.createdAtMs,
+    }));
+}
+
+/** 収集の表が持つ、リポジトリの開いているPRの行。 */
+function worldSnapshot(world: World, repo: string): GhRepoOpenPrSnapshot {
+  const rows = world.prs
+    .filter((pr) => pr.repo === repo && (pr.state ?? "open") === "open")
+    .map((pr) =>
+      ghRow({
+        repo,
+        number: pr.number,
+        created_at: new Date(pr.createdAtMs),
+        is_draft: pr.draft ?? false,
+        is_cross_repository: pr.fork ?? false,
+        base_ref: pr.unknownInTable ? null : (pr.baseRef ?? "main"),
+        ...((pr.author ?? "dependabot") === "mallory"
+          ? { author_login: "mallory", author_type: "User" as const }
+          : pr.unknownInTable
+            ? { author_login: null, author_type: null, author_id: null }
+            : {}),
+      }),
+    );
+  return snapshot(rows, {
+    archived: world.archivedRepos?.includes(repo) ?? false,
+  });
+}
+
+type WorldRun = {
+  readonly processed: number[];
+  readonly read: number;
+  readonly result: Awaited<ReturnType<typeof pollDependabot>>;
+};
+
+async function runWorld(
+  world: World,
+  source: "search" | "db",
+): Promise<WorldRun> {
+  const log = emptyLog();
+  const config: FactoryConfig = {
+    ...(source === "db" ? DB_CONFIG : CONFIG),
+    repo_allowlist: [...(world.allowlist ?? [])],
+  };
+  const result = await pollDependabot(
+    round(log, {
+      config,
+      search: async (scope) => worldSearch(world, scope),
+      readRepoPrs: async (_owner, repo) => worldSnapshot(world, repo),
+      getPr: async (number) => {
+        const pr = world.prs.find((candidate) => candidate.number === number);
+        if (pr === undefined) throw new Error("unknown pull request");
+        return worldRestPr(pr);
+      },
+    }),
+  );
+  return { processed: log.processed, read: log.read.length, result };
+}
+
+/** 表の経路で走らせる。表を1回も読まなかったときは、経路を比べたことにならないので失敗させる。 */
+async function runWorldViaTable(world: World): Promise<WorldRun> {
+  const run = await runWorld(world, "db");
+  if (run.read === 0) throw new Error("the table was not read");
+  return run;
+}
+
+describe("pollDependabot candidates match between the search and the table", () => {
+  async function candidates(world: World) {
+    const viaSearch = await runWorld(world, "search");
+    const viaTable = await runWorldViaTable(world);
+    return { search: viaSearch.processed, table: viaTable.processed };
+  }
+
+  test("match for pull requests that are all targets", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        { repo: "widgets", number: 13, createdAtMs: NOW_MS - 2 * DAY_MS },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a pull request from a fork", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 14,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          fork: true,
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a closed pull request", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 15,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          state: "closed",
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a draft pull request and a pull request on another base", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 16,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          draft: true,
+        },
+        {
+          repo: "widgets",
+          number: 17,
+          createdAtMs: NOW_MS - 1 * DAY_MS,
+          baseRef: "release",
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for a pull request by another author", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 18,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          author: "mallory",
+        },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match for an archived repository, which the table sends back to the search", async () => {
+    const { search, table } = await candidates({
+      prs: [{ repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS }],
+      archivedRepos: ["widgets"],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("match in order across several repositories", async () => {
+    const { search, table } = await candidates({
+      allowlist: GADGETS_ALLOWLIST,
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 5 * DAY_MS },
+        { repo: "gadgets", number: 13, createdAtMs: NOW_MS - 4 * DAY_MS },
+        { repo: "widgets", number: 14, createdAtMs: NOW_MS - 3 * DAY_MS },
+        { repo: "gadgets", number: 15, createdAtMs: NOW_MS - 2 * DAY_MS },
+      ],
+    });
+
+    expect(table).toEqual(search);
+  });
+
+  test("let the table include every candidate of the search when base and author are unknown", async () => {
+    const { search, table } = await candidates({
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 21,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          author: "mallory",
+          unknownInTable: true,
+        },
+      ],
+    });
+
+    expect(search.every((number) => table.includes(number))).toBe(true);
+  });
+
+  test("decide the same outcomes when base and author are unknown in the table", async () => {
+    const world: World = {
+      prs: [
+        { repo: "widgets", number: 12, createdAtMs: NOW_MS - 3 * DAY_MS },
+        {
+          repo: "widgets",
+          number: 22,
+          createdAtMs: NOW_MS - 2 * DAY_MS,
+          unknownInTable: true,
+        },
+      ],
+    };
+
+    const viaSearch = await runWorld(world, "search");
+    const viaTable = await runWorldViaTable(world);
+    const outcomes = (run: WorldRun) => ({
+      started: run.result.started,
+      escalated: run.result.escalated,
+      waiting: run.result.waiting,
+      skipped: run.result.skipped,
+    });
+
+    expect(outcomes(viaTable)).toEqual(outcomes(viaSearch));
+  });
+});
