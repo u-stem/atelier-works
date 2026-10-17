@@ -36,7 +36,11 @@ import {
   isPublishedLongEnough,
 } from "./lib/dependabot_support.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
-import type { GhRepoStaleReason } from "./lib/gh_collect_read.ts";
+import {
+  type GhRepoStaleReason,
+  judgeGhRepoFreshness,
+  usableGhPullRequests,
+} from "./lib/gh_collect_read.ts";
 import {
   type DependabotPrSearchItem,
   type DependabotPrSearchScope,
@@ -64,6 +68,7 @@ import {
 import {
   type FactoryConfig,
   type FactoryOwner,
+  type GhPullRequest,
   type GhRepoOpenPrSnapshot,
   isGitHubName,
   type WorkItem,
@@ -575,12 +580,64 @@ export type DependabotCandidateSelection =
   | { readonly kind: "fresh"; readonly items: DependabotPrSearchItem[] }
   | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
 
+/**
+ * 表の行の作者を、`poll_dependabot`が比べる形にそろえる。
+ * 収集はGraphQLの値をそのまま保存するので、アプリ(`Bot`)の`login`には`[bot]`が付かない。
+ */
+function normalizedAuthorLogin(row: GhPullRequest): string | null {
+  if (row.author_login === null) return null;
+  return row.author_type === "Bot"
+    ? `${row.author_login}[bot]`
+    : row.author_login;
+}
+
+/**
+ * 1つのリポジトリの読み取りの結果から、候補のPRを選ぶ。
+ * 鮮度が足りなければ、行を選ばずに理由を返す。呼び出し側がそのリポジトリを検索に戻す。
+ * 使ってよい開いた行のうち、draftでなく、baseが`main`で、作者が`dependabot[bot]`の行を残す。
+ * 不明(`NULL`)のbaseと作者は、候補を広げる側に扱う。起動の前にRESTで確かめるので、広げても誤った操作には進まない。
+ * forkの行は絞らない。検索も絞らず、ゲートがforkを人に回すためである。
+ * 候補の名前は表の小文字のまま返し、`createdAtMs`は並びにだけ使う。
+ */
 export function selectDependabotCandidates(
-  _snapshot: GhRepoOpenPrSnapshot,
-  _target: { readonly owner: string; readonly repo: string },
-  _staleAfterMs: number,
+  snapshot: GhRepoOpenPrSnapshot,
+  target: { readonly owner: string; readonly repo: string },
+  staleAfterMs: number,
 ): DependabotCandidateSelection {
-  return { kind: "stale", reason: "no_record" };
+  const freshness = judgeGhRepoFreshness(
+    snapshot.repo,
+    snapshot.prs,
+    snapshot.db_now,
+    staleAfterMs,
+  );
+  if (freshness.kind === "stale") {
+    return { kind: "stale", reason: freshness.reason };
+  }
+  const repoId = snapshot.repo?.repo_id ?? null;
+  if (repoId === null) {
+    return { kind: "stale", reason: "unusable" };
+  }
+  const items = usableGhPullRequests(
+    target.owner,
+    target.repo,
+    repoId,
+    snapshot.prs,
+  )
+    .filter((row) => {
+      if (row.is_draft) return false;
+      if (row.base_ref !== null && row.base_ref !== DEPENDABOT_BASE_REF) {
+        return false;
+      }
+      const author = normalizedAuthorLogin(row);
+      return author === null || author === DEPENDABOT_AUTHOR_LOGIN;
+    })
+    .map((row) => ({
+      owner: row.owner,
+      repo: row.repo,
+      number: row.number,
+      createdAtMs: row.created_at.getTime(),
+    }));
+  return { kind: "fresh", items };
 }
 
 // ---- 周回の状態 ----
