@@ -15,7 +15,10 @@ function taskBody(name: string): string {
   const start = MISE.indexOf(header);
   if (start < 0) return "";
   const next = MISE.indexOf("\n[", start + header.length);
-  return MISE.slice(start, next < 0 ? undefined : next);
+  return MISE.slice(start, next < 0 ? undefined : next)
+    .split("\n")
+    .filter((line) => !line.startsWith("description"))
+    .join("\n");
 }
 
 describe("mise.toml push tasks", () => {
