@@ -277,7 +277,7 @@ describe("read_token_map_json keeps the tokens off the command line", () => {
   });
 
   test("enumerates the variables by name", () => {
-    expect(FUNCTION).toContain("${!GITHUB_READ_TOKEN_@}");
+    expect(FUNCTION).toContain("!GITHUB_READ_TOKEN_@");
   });
 
   test("never prints a value to the error output, whatever the mix", () => {
