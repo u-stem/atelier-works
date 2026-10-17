@@ -11,10 +11,15 @@
 // - defaultのworkerの枠で実行中のジョブ(Windmillのqueue)。
 //   定義は`f/factory/lib/worker_load_support.ts`の`summarizeRunning`と同じ考え方で、
 //   フローの親ジョブは数えない。tagは、defaultのworkerが受けるものを列挙せず、
-//   他のworkerが受けるものを除く。未知のtagのジョブを数え漏らして止めそこねるより、
-//   余分に止めるほうが安全なため。
+//   他のworkerが受けるものを除く。受けるworkerが分からないtagのジョブを数え漏らして
+//   止めそこねるより、余分に止めるほうが安全なため。
 // - 実行中の状態の作業項目(`factory.work_items`)。ジョブの一覧に載らない合間も拾う。
 // DBに届かないとき(スタックが止まっている、初回の起動)は、警告を出して0で終わる。止めない。
+//
+// 動いている仕事が見つかっても、すぐには止めない。5秒ごとに読み直し、60秒のうちに一度でも何も
+// 動いていなければ通す。2分ごとの短い定期ジョブに当たっただけで止めないためである。
+// 読み直しで読めなかったときは、何も動いていないと確かめられないので、通さずに読み直しを続ける。
+// 待つ上限と間隔は`--recheck-timeout-ms=<ms>`と`--recheck-interval-ms=<ms>`で変えられる(テスト用)。
 //
 // 使い方: bun scripts/check-idle.ts [--when-worker-recreated]
 // `--when-worker-recreated`を付けると、`docker compose up --dry-run`で、defaultのworkerかDBが
@@ -99,6 +104,14 @@ const COMPOSE_FILE = resolve(import.meta.dir, "../infra/docker-compose.yml");
 /** 1回のdockerの呼び出しを待つ上限(ミリ秒)。起動のタスクを止めたままにしない。 */
 const PSQL_TIMEOUT_MS = 30_000;
 const DRY_RUN_TIMEOUT_MS = 60_000;
+
+/**
+ * 動いている仕事が見つかってから読み直す上限と間隔(ミリ秒)。
+ * 2分ごとの定期ジョブは数秒から数十秒で終わるので、60秒のうちに一度は何も動かない瞬間がある。
+ * 実装のように長く動くジョブは、60秒のあいだ動き続けるので、止まる。
+ */
+const RECHECK_TIMEOUT_MS = 60_000;
+const RECHECK_INTERVAL_MS = 5_000;
 
 /** 警告に載せる理由の長さの上限。 */
 const REASON_MAX_LENGTH = 200;
@@ -393,6 +406,83 @@ function dryRunRecreatesWorker(): boolean | null {
   }
 }
 
+/** 読み取り1回分の結果。 */
+export type Snapshot = {
+  readonly jobs: Reading<RunningJob>;
+  readonly items: Reading<RunningWorkItem>;
+};
+
+export type CheckIdleOptions = {
+  /** 動いている仕事が見つかってから、読み直して待つ上限(ミリ秒)。0なら待たない。 */
+  readonly timeoutMs: number;
+  /** 読み直す間隔(ミリ秒)。 */
+  readonly intervalMs: number;
+  readonly now: () => number;
+  readonly sleep: (ms: number) => void;
+  readonly read: () => Snapshot;
+  /** 待っている間の進捗の出力先。 */
+  readonly progress: (message: string) => void;
+};
+
+function fullyRead(snapshot: Snapshot): boolean {
+  return snapshot.jobs.ok && snapshot.items.ok;
+}
+
+/**
+ * 実行中の仕事が無いことを確かめる。動いている仕事が見つかったら、短い間隔で読み直し、
+ * 1回でも何も動いていなければ通す。上限まで動き続けたときだけ止め、一覧は最後に動いていた読み取りのものにする。
+ * 2分ごとの短い定期ジョブが確認の瞬間に当たっただけで止めないためである。
+ * 最初の読み取りで何も見つからないとき(DBに届かないときを含む)は、待たずに`judge`の結果を返す。
+ * 読み直しで読めない側があったときは、何も動いていないと確かめられていないので、通さずに読み直しを続ける。
+ */
+export function checkIdle(options: CheckIdleOptions): Verdict {
+  const first = judge(...pair(options.read()));
+  if (first.exitCode === 0) {
+    return first;
+  }
+  const startedAt = options.now();
+  const deadline = startedAt + options.timeoutMs;
+  let lastBusy = first;
+  while (options.now() < deadline) {
+    const waited = Math.round((options.now() - startedAt) / 1000);
+    options.progress(
+      `Running work found; waiting for it to finish (${String(waited)}s)`,
+    );
+    options.sleep(Math.min(options.intervalMs, deadline - options.now()));
+    const snapshot = options.read();
+    const verdict = judge(...pair(snapshot));
+    if (verdict.exitCode === 1) {
+      lastBusy = verdict;
+    } else if (fullyRead(snapshot)) {
+      return verdict;
+    }
+  }
+  if (options.timeoutMs > 0) {
+    return {
+      exitCode: 1,
+      lines: [
+        ...lastBusy.lines,
+        `Still running after rechecking for ${String(Math.round(options.timeoutMs / 1000))}s.`,
+      ],
+    };
+  }
+  return lastBusy;
+}
+
+function pair(
+  snapshot: Snapshot,
+): [Reading<RunningJob>, Reading<RunningWorkItem>] {
+  return [snapshot.jobs, snapshot.items];
+}
+
+/** `--name=<0以上の整数>`の値を読む。無い、または整数でないときは`fallback`。 */
+function flagNumber(name: string, fallback: number): number {
+  const prefix = `${name}=`;
+  const arg = process.argv.find((a) => a.startsWith(prefix));
+  const text = arg?.slice(prefix.length) ?? "";
+  return /^\d+$/.test(text) ? Number(text) : fallback;
+}
+
 function main(): number {
   if (process.env.FORCE === "1") {
     console.error("FORCE=1: skipping the running-work check");
@@ -407,10 +497,21 @@ function main(): number {
     );
     return 0;
   }
-  const verdict = judge(
-    readDatabase(WINDMILL_DB, runningJobsSql(), parseRunningJobs),
-    readDatabase(DATATABLE_DB, runningWorkItemsSql(), parseRunningWorkItems),
-  );
+  const verdict = checkIdle({
+    timeoutMs: flagNumber("--recheck-timeout-ms", RECHECK_TIMEOUT_MS),
+    intervalMs: flagNumber("--recheck-interval-ms", RECHECK_INTERVAL_MS),
+    now: () => Date.now(),
+    sleep: (ms) => Bun.sleepSync(ms),
+    read: () => ({
+      jobs: readDatabase(WINDMILL_DB, runningJobsSql(), parseRunningJobs),
+      items: readDatabase(
+        DATATABLE_DB,
+        runningWorkItemsSql(),
+        parseRunningWorkItems,
+      ),
+    }),
+    progress: (message) => console.error(message),
+  });
   for (const line of verdict.lines) {
     console.error(line);
   }
@@ -419,23 +520,4 @@ function main(): number {
 
 if (import.meta.main) {
   process.exitCode = main();
-}
-
-export type Snapshot = {
-  readonly jobs: Reading<RunningJob>;
-  readonly items: Reading<RunningWorkItem>;
-};
-
-export type CheckIdleOptions = {
-  readonly timeoutMs: number;
-  readonly intervalMs: number;
-  readonly now: () => number;
-  readonly sleep: (ms: number) => void;
-  readonly read: () => Snapshot;
-  readonly progress: (message: string) => void;
-};
-
-// スタブ。実装は次のコミットで書く。
-export function checkIdle(_options: CheckIdleOptions): Verdict {
-  return { exitCode: 0, lines: [] };
 }
