@@ -10,6 +10,7 @@ import { cleanLogText } from "./ci_log_support.ts";
 import {
   type ChangedPathStatus,
   FORBIDDEN_EXACT_PATHS,
+  foldPath,
   IMPLEMENT_PROTECTED_BASENAME_PATTERNS,
   IMPLEMENT_PROTECTED_EXACT_PATHS,
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
@@ -231,13 +232,8 @@ function inDirectory(lowerPath: string, directory: string): boolean {
   );
 }
 
-/**
- * パスが、CI回で常に拒否するものか。大文字小文字を区別せずに判定する。
- * 実装フローの保護パス(`IMPLEMENT_PROTECTED_*`)に、CI回だけの拒否を足したもの。
- * 大文字小文字を畳むのは、大文字小文字を区別しないファイルシステムで同じファイルを指す綴りを拒否するため。
- */
-export function isDeniedPath(path: string): boolean {
-  const lower = path.toLowerCase();
+/** 小文字にそろえた(または畳み込んだ)パスが、拒否の一覧に当たるか。 */
+function deniedByLowerPath(lower: string, extraBasename: string): boolean {
   if (PROTECTED_EXACT_LOWERCASE.has(lower)) return true;
   const directories = [
     ...IMPLEMENT_PROTECTED_PATH_PREFIXES.map((prefix) => prefix.toLowerCase()),
@@ -252,10 +248,27 @@ export function isDeniedPath(path: string): boolean {
   if (CI_DENIED_PATH_PATTERNS.some((pattern) => pattern.test(lower))) {
     return true;
   }
-  const basename = lower.split("/").pop() ?? lower;
+  const basenames = [lower.split("/").pop() ?? lower, extraBasename];
+  return basenames.some(
+    (basename) =>
+      CI_DENIED_BASENAME_PATTERNS.some((pattern) => pattern.test(basename)) ||
+      IMPLEMENT_BASENAME_PATTERNS_CI.some((pattern) => pattern.test(basename)),
+  );
+}
+
+/**
+ * パスが、CI回で常に拒否するものか。大文字小文字とUnicodeの別名を区別せずに判定する。
+ * 実装フローの保護パス(`IMPLEMENT_PROTECTED_*`)に、CI回だけの拒否を足したもの。
+ * 保護パスの照合と同じ`foldPath`で畳むのは、大文字小文字を区別しないファイルシステムで
+ * 同じファイルを指す綴りを拒否するため。畳み込みで`/`や文字が変わっても、
+ * 小文字にそろえただけの綴りで当たっていたものが外れないよう、両方の形で照合する。
+ */
+export function isDeniedPath(path: string): boolean {
+  const rawBasename = path.split("/").pop() ?? path;
+  const foldedBasename = foldPath(rawBasename);
   return (
-    CI_DENIED_BASENAME_PATTERNS.some((pattern) => pattern.test(basename)) ||
-    IMPLEMENT_BASENAME_PATTERNS_CI.some((pattern) => pattern.test(basename))
+    deniedByLowerPath(foldPath(path), foldedBasename) ||
+    deniedByLowerPath(path.toLowerCase(), rawBasename.toLowerCase())
   );
 }
 
