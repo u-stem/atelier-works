@@ -7348,6 +7348,261 @@ check(
   })(),
 );
 
+// ---------------------------------------------------------------------------
+// gh_pull_requests / gh_issues / 収集の詳細の列(migrationの制約と既定値)
+// ---------------------------------------------------------------------------
+
+const GH_DETAIL_SHA = "0123456789abcdef0123456789abcdef01234567";
+const GH_DETAIL_OWNER = "qdbghd";
+
+/** 文がDBに受理されたら真を返す。 */
+function ghStatementAccepted(statement: string): boolean {
+  try {
+    execPsql(target, statement);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 文が指定した制約に拒否されたら真を返す。
+ * 別の理由(型の不一致、別の制約)で拒否されたときは偽にする。
+ */
+function ghStatementRejectedBy(statement: string, constraint: string): boolean {
+  try {
+    execPsql(target, statement);
+    return false;
+  } catch (error) {
+    return (
+      error instanceof Error &&
+      error.message.includes(`constraint "${constraint}"`)
+    );
+  }
+}
+
+function ghPrInsert(
+  number: number,
+  extra: { columns?: string; values?: string; sha?: string } = {},
+): string {
+  const columns = extra.columns === undefined ? "" : `, ${extra.columns}`;
+  const values = extra.values === undefined ? "" : `, ${extra.values}`;
+  return `INSERT INTO factory.gh_pull_requests (owner, repo, repo_id, number, state, head_sha, is_draft, is_cross_repository, created_at, updated_at${columns}) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, ${String(number)}, 'open', '${extra.sha ?? GH_DETAIL_SHA}', false, false, now(), now()${values})`;
+}
+
+execPsql(target, ghPrInsert(1));
+const [ghPrMinimal] = await sql`
+  SELECT usable, written_at IS NOT NULL AS stamped,
+    mergeable IS NULL AND assignee_ids IS NULL AND has_fix_label IS NULL AND head_ref IS NULL AS unknown_null
+  FROM factory.gh_pull_requests WHERE owner = ${GH_DETAIL_OWNER}
+`.fetch();
+check(
+  "gh_pull_requests: a minimal row is usable, unknown columns stay null, and the written time is stamped",
+  ghPrMinimal?.usable === true &&
+    ghPrMinimal.stamped === true &&
+    ghPrMinimal.unknown_null === true,
+  ghPrMinimal,
+);
+check(
+  "gh_pull_requests: a repeated (owner, repo, number) is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(1),
+    "gh_pull_requests_owner_repo_number_key",
+  ),
+);
+check(
+  "gh_pull_requests: a head_sha that is not 40 lowercase hex digits is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(2, { sha: GH_DETAIL_SHA.toUpperCase() }),
+    "gh_pull_requests_head_sha_check",
+  ),
+);
+check(
+  "gh_pull_requests: an author_login without an author_type is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(3, { columns: "author_login", values: "'someone'" }),
+    "gh_pull_requests_author_pair_check",
+  ),
+);
+check(
+  "gh_pull_requests: a non-positive id in an id array is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(4, { columns: "assignee_ids", values: "ARRAY[5, 0]::bigint[]" }),
+    "gh_pull_requests_assignee_ids_check",
+  ),
+);
+check(
+  "gh_pull_requests: a mergeable value other than the settled two is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(5, { columns: "mergeable", values: "'UNKNOWN'" }),
+    "gh_pull_requests_mergeable_check",
+  ),
+);
+check(
+  "gh_pull_requests: a head_ref longer than 255 bytes is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(6, {
+      columns: "head_ref",
+      values: `'${"a".repeat(256)}'`,
+    }),
+    "gh_pull_requests_head_ref_check",
+  ),
+);
+check(
+  "gh_pull_requests: a null element in assignee_ids is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(7, {
+      columns: "assignee_ids",
+      values: "ARRAY[5, NULL]::bigint[]",
+    }),
+    "gh_pull_requests_assignee_ids_check",
+  ),
+);
+check(
+  "gh_pull_requests: a null element in review_requested_user_ids is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(8, {
+      columns: "review_requested_user_ids",
+      values: "ARRAY[5, NULL]::bigint[]",
+    }),
+    "gh_pull_requests_review_requested_user_ids_check",
+  ),
+);
+check(
+  "gh_pull_requests: positive id arrays are accepted",
+  ghStatementAccepted(
+    ghPrInsert(9, {
+      columns: "assignee_ids, review_requested_user_ids",
+      values: "ARRAY[5, 6]::bigint[], ARRAY[7]::bigint[]",
+    }),
+  ),
+);
+// 255バイトの境界は、文字数ではなくバイト数で決まる(「あ」は3バイト)。
+check(
+  "gh_pull_requests: a head_ref of exactly 255 bytes is accepted",
+  ghStatementAccepted(
+    ghPrInsert(10, {
+      columns: "head_ref",
+      values: "repeat('あ', 85)",
+    }),
+  ),
+);
+check(
+  "gh_pull_requests: a head_ref of 258 bytes is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(11, {
+      columns: "head_ref",
+      values: "repeat('あ', 86)",
+    }),
+    "gh_pull_requests_head_ref_check",
+  ),
+);
+check(
+  "gh_pull_requests: a base_ref of exactly 255 bytes is accepted",
+  ghStatementAccepted(
+    ghPrInsert(12, {
+      columns: "base_ref",
+      values: "repeat('あ', 85)",
+    }),
+  ),
+);
+check(
+  "gh_pull_requests: a base_ref of 258 bytes is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(13, {
+      columns: "base_ref",
+      values: "repeat('あ', 86)",
+    }),
+    "gh_pull_requests_base_ref_check",
+  ),
+);
+check(
+  "gh_pull_requests: an author_login of 39 characters is accepted",
+  ghStatementAccepted(
+    ghPrInsert(14, {
+      columns: "author_login, author_type",
+      values: `'${"a".repeat(39)}', 'User'`,
+    }),
+  ),
+);
+check(
+  "gh_pull_requests: an author_login of 40 characters is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(15, {
+      columns: "author_login, author_type",
+      values: `'${"a".repeat(40)}', 'User'`,
+    }),
+    "gh_pull_requests_author_login_check",
+  ),
+);
+execPsql(
+  target,
+  `INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, 1, 'open', now(), now())`,
+);
+const [ghIssueMinimal] = await sql`
+  SELECT usable, written_at IS NOT NULL AS stamped
+  FROM factory.gh_issues WHERE owner = ${GH_DETAIL_OWNER}
+`.fetch();
+check(
+  "gh_issues: a minimal row is usable and the written time is stamped",
+  ghIssueMinimal?.usable === true && ghIssueMinimal.stamped === true,
+  ghIssueMinimal,
+);
+check(
+  "gh_issues: the state closed is refused because a vanished issue is unlisted",
+  ghStatementRejectedBy(
+    `INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, 2, 'closed', now(), now())`,
+    "gh_issues_state_check",
+  ),
+);
+const [ghReposMarked] = await sql`
+  SELECT count(*)::integer AS n FROM factory.gh_repos
+  WHERE owner = ${GH_OWNER}
+    AND (last_collected_at IS NOT NULL OR last_attempted_at IS NOT NULL OR truncated OR detail_failed)
+`.fetch();
+check(
+  "gh_repos: a row written without the new columns has no collection time and no marks",
+  ghReposMarked?.n === 0,
+  ghReposMarked,
+);
+const [ghRunsMarked] = await sql`
+  SELECT count(*)::integer AS n FROM factory.gh_collect_runs
+  WHERE owner IN (${GH_OWNER}, ${GH_OWNER_B})
+    AND (stage IS NOT NULL OR detail_targets <> 0 OR detail_requests <> 0 OR detail_done <> 0 OR detail_incomplete <> 0)
+`.fetch();
+check(
+  "gh_collect_runs: a row written without the new columns has no stage and zero counts",
+  ghRunsMarked?.n === 0,
+  ghRunsMarked,
+);
+check(
+  "gh_collect_runs: a failed run may carry the stage detail",
+  ghStatementAccepted(
+    `INSERT INTO factory.gh_collect_runs (owner, ok, error_code, stage) VALUES ('${GH_DETAIL_OWNER}', false, 'graphql_error', 'detail')`,
+  ),
+);
+check(
+  "gh_collect_runs: a successful run with a stage is refused",
+  ghStatementRejectedBy(
+    `INSERT INTO factory.gh_collect_runs (owner, ok, stage) VALUES ('${GH_DETAIL_OWNER}', true, 'detail')`,
+    "gh_collect_runs_ok_stage_check",
+  ),
+);
+check(
+  "gh_collect_runs: a stage other than list and detail is refused",
+  ghStatementRejectedBy(
+    `INSERT INTO factory.gh_collect_runs (owner, ok, error_code, stage) VALUES ('${GH_DETAIL_OWNER}', false, 'graphql_error', 'other')`,
+    "gh_collect_runs_stage_check",
+  ),
+);
+check(
+  "gh_collect_runs: a negative detail count is refused",
+  ghStatementRejectedBy(
+    `INSERT INTO factory.gh_collect_runs (owner, detail_done) VALUES ('${GH_DETAIL_OWNER}', -1)`,
+    "gh_collect_runs_detail_counts_check",
+  ),
+);
+
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。
 // 子の表の行は`ON DELETE CASCADE`で一緒に消える。
 execPsql(target, `DELETE FROM factory.work_items WHERE owner = '${OWNER}'`);

@@ -65,6 +65,7 @@ DISK_USAGE_NOTICE_MIGRATION="20261013100300_disk_usage_notice_single.up.sql"
 PR_CI_FIX_SCHEMA_MIGRATION="20261013100400_pr_ci_fix_schema.up.sql"
 ACTIVE_PR_FIX_MIGRATION="20261013100500_active_pr_fix_key.up.sql"
 PR_CONFLICT_FIX_MIGRATION="20261015120000_pr_conflict_fix.up.sql"
+GH_COLLECT_DETAIL_MIGRATION="20261018100000_gh_collect_detail.up.sql"
 
 # ディスク使用量の未解決の通知を1件までにする索引を足す前に、本文の異なる未解決の通知を3件入れておく。
 # migrationが最も新しい1件だけを残して解決済みにし、索引を作れることを確かめるため。
@@ -569,6 +570,39 @@ verify_pr_conflict_fix() {
   log "pr_conflict_fix applies over existing rows, rejects invalid values, and round-trips"
 }
 
+# 収集の詳細の列を足す前に、旧い形のリポジトリの行と、成功と失敗の実行の行を入れておく。
+# 旧いコードが書く行(stageを持たない失敗の行を含む)があっても、新しい制約に反さずにmigrationが当たることを確かめるため。
+seed_gh_collect_rows() {
+  psql_exec "${SCRATCH_DB}" <<'SQL' >/dev/null
+INSERT INTO factory.gh_repos (owner, owner_id, repo, repo_id, allowed) VALUES ('seedprobe', 1, 'r', 2, true);
+INSERT INTO factory.gh_collect_runs (owner, ok, finished_at) VALUES ('seedprobe', true, now());
+INSERT INTO factory.gh_collect_runs (owner, ok, error_code, finished_at) VALUES ('seedprobe', false, 'timeout', now());
+SQL
+}
+
+# 収集の詳細のmigrationが、既存の行を変えず、足した列を既定値かNULLにすることを確かめる。
+# このmigrationの適用直後に呼ぶ。
+verify_gh_collect_detail() {
+  # 値を1つ返すSELECTを実行し、空白を除いて返す。
+  gh_detail_scalar() {
+    printf '%s;\n' "$1" | psql_exec "${SCRATCH_DB}" -q -t -A | tr -d '[:space:]'
+  }
+  local repos runs unmarked_repos unmarked_runs failed_runs
+  repos="$(gh_detail_scalar "SELECT count(*) FROM factory.gh_repos WHERE owner = 'seedprobe'")"
+  [ "${repos}" = "1" ] || die "expected the seeded gh_repos row to remain, found ${repos}"
+  runs="$(gh_detail_scalar "SELECT count(*) FROM factory.gh_collect_runs WHERE owner = 'seedprobe'")"
+  [ "${runs}" = "2" ] || die "expected the seeded gh_collect_runs rows to remain, found ${runs}"
+  unmarked_repos="$(gh_detail_scalar "SELECT count(*) FROM factory.gh_repos WHERE owner = 'seedprobe' AND (last_collected_at IS NOT NULL OR last_attempted_at IS NOT NULL OR truncated OR detail_failed)")"
+  [ "${unmarked_repos}" = "0" ] || die "expected the seeded gh_repos row to have no collection time and no marks, ${unmarked_repos} differ"
+  unmarked_runs="$(gh_detail_scalar "SELECT count(*) FROM factory.gh_collect_runs WHERE owner = 'seedprobe' AND (stage IS NOT NULL OR detail_targets <> 0 OR detail_requests <> 0 OR detail_done <> 0 OR detail_incomplete <> 0)")"
+  [ "${unmarked_runs}" = "0" ] || die "expected the seeded gh_collect_runs rows to have no stage and zero counts, ${unmarked_runs} differ"
+  failed_runs="$(gh_detail_scalar "SELECT count(*) FROM factory.gh_collect_runs WHERE owner = 'seedprobe' AND NOT ok AND error_code = 'timeout' AND stage IS NULL")"
+  [ "${failed_runs}" = "1" ] || die "expected the seeded failed run to keep its error_code and no stage, found ${failed_runs}"
+  printf "DELETE FROM factory.gh_collect_runs WHERE owner = 'seedprobe'; DELETE FROM factory.gh_repos WHERE owner = 'seedprobe';\n" \
+    | psql_exec "${SCRATCH_DB}" >/dev/null
+  log "gh_collect_detail applies over existing rows and leaves the new columns at their defaults"
+}
+
 for up_file in "${up_files[@]}"; do
   up_name="$(basename "${up_file}")"
   if [ "${up_name}" = "${ACTIVE_ISSUE_MIGRATION}" ]; then
@@ -576,6 +610,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${NOTICES_DEDUP_MIGRATION}" ]; then
     seed_notice_duplicates
+  fi
+  if [ "${up_name}" = "${GH_COLLECT_DETAIL_MIGRATION}" ]; then
+    seed_gh_collect_rows
   fi
   if [ "${up_name}" = "${DISK_USAGE_NOTICE_MIGRATION}" ]; then
     seed_disk_usage_notices
@@ -599,6 +636,9 @@ for up_file in "${up_files[@]}"; do
   fi
   if [ "${up_name}" = "${PR_CONFLICT_FIX_MIGRATION}" ]; then
     verify_pr_conflict_fix
+  fi
+  if [ "${up_name}" = "${GH_COLLECT_DETAIL_MIGRATION}" ]; then
+    verify_gh_collect_detail
   fi
 done
 
