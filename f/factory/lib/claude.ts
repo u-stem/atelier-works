@@ -368,11 +368,13 @@ function buildClaudeEnv(opts: ClaudeEnvInputs): Record<string, string> {
   // 設定の置き場はジョブごとの0700のディレクトリの下にする。
   // workerの`ENV CLAUDE_CONFIG_DIR`はジョブに届かず、届かせると人が手で使う永続の設定と共有になり、
   // `--setting-sources user`で読む設定層に人の変更が混ざるため。
-  // ジョブの外では、環境変数があればそれを使い、無ければ渡さない。
+  // 名前は、Claude Codeが一時ファイルに使う`claude-<uid>`などと紛れないようにする。
+  // ジョブのディレクトリを得られないとき(ジョブの外と、`WM_JOB_ID`を読めないとき)は、
+  // 環境変数があればそれを使い、無ければ渡さず、claudeの既定の置き場になる。
   const claudeConfigDir =
     opts.claudeConfigDir ??
     (tmpDir !== undefined
-      ? join(tmpDir, "claude")
+      ? join(tmpDir, "claude-config")
       : process.env.CLAUDE_CONFIG_DIR);
   if (claudeConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = claudeConfigDir;
   const home = opts.home ?? process.env.HOME;

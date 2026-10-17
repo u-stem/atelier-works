@@ -555,7 +555,7 @@ describe("runClaude", () => {
       tmpDir: "/run/factory-tmp/fj-x",
     });
     expect(fake.calls[0]?.options?.env?.CLAUDE_CONFIG_DIR).toBe(
-      "/run/factory-tmp/fj-x/claude",
+      "/run/factory-tmp/fj-x/claude-config",
     );
   });
 

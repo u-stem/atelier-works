@@ -2682,7 +2682,7 @@ main cloneの`.git`はrootが所有する。
   親は、Windmillが管理する`/tmp/windmill`ではなく、rootが所有して他のユーザーが書けない`/run`の下に置く。
   `/tmp/windmill`の権限はWindmillがジョブの途中で戻しうるので、それに頼らない。
   - ここを使うのは、git、gh、`wmill`の子プロセスの`TMPDIR`、Claudeの`TMPDIR`と`CLAUDE_CODE_TMPDIR`、gitleaksの設定のディレクトリである。
-  - Claudeの設定の置き場(`CLAUDE_CONFIG_DIR`)も、ここの下の`claude`にする。
+  - Claudeの設定の置き場(`CLAUDE_CONFIG_DIR`)も、ここの下の`claude-config`にする。
   - Claudeの設定の置き場をジョブごとにするのは、`--setting-sources user`が読むユーザー層に、永続のボリュームの設定や、人が手で動かしたClaudeの変更を混ぜないためである。
   - Claude Codeが`TMPDIR`に従うかは確かめていないので、`CLAUDE_CODE_TMPDIR`にも同じ場所を渡す。
   - `/run/factory-tmp`はジョブが作る。rootの所有なら、0700でなくても0700に直して使う。他のユーザーの所有かsymlinkなら、ジョブを失敗させる。
