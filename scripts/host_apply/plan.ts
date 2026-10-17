@@ -6,7 +6,7 @@ import {
   type ChangedFile,
   pickApprovalBase,
 } from "./approval.ts";
-import { checkCompose } from "./compose_policy.ts";
+import { checkComposeText } from "./compose_policy.ts";
 import { isSha40 } from "./git.ts";
 import { checkMiseStatic, classifyMiseTomlChange } from "./mise_policy.ts";
 import type { RejectionKind } from "./target.ts";
@@ -73,18 +73,30 @@ export type PlanResult =
 const MISE_PATH = "mise.toml";
 const COMPOSE_PATH = "infra/docker-compose.yml";
 
-function parseYaml(text: string): unknown {
-  try {
-    return Bun.YAML.parse(text);
-  } catch {
-    return undefined;
-  }
+/** symlink(120000)とsubmodule(160000)のmode。treeの中にあると、実行役が読むファイルの中身を差し替えられる。 */
+const FORBIDDEN_TREE_MODES: readonly string[] = ["120000", "160000"];
+
+/** treeのエントリのうち、symlinkとsubmoduleのパスを返す。 */
+export function forbiddenTreePaths(entries: readonly TreeEntry[]): string[] {
+  return entries
+    .filter((entry) => FORBIDDEN_TREE_MODES.includes(entry.mode))
+    .map((entry) => entry.path);
+}
+
+const DETAIL_PATH_LIMIT = 5;
+
+/** `BlobRead`が読めなかった理由を、ログに書ける短い文にする。ファイルの中身は含めない。 */
+function unreadableReason(read: BlobRead, name: string): string {
+  if (read.kind === "too_large") return `${name} is over the size limit`;
+  if (read.kind === "not_regular") return `${name} is not a regular file`;
+  return `${name} is missing`;
 }
 
 /**
  * 反映が進むかを、gitのオブジェクトの読み取りだけで判定する。CIの確認はしない(ネットワークに触れない)。
  * 手順は実行役と同じ順にする。
- * 先端が適用済みと同じか祖先ならnoop、子孫でなければ`not_ff`、承認が要る変更があれば承認待ち、
+ * 先端が適用済みと同じか祖先ならnoop、子孫でなければ`not_ff`、treeにsymlinkかsubmoduleがあれば`tree_forbidden`、
+ * 承認が要る変更があれば承認待ち、
  * 静的な検査(mise設定、composeの許可リスト)に通らなければ拒否、すべて通れば`would_converge`にする。
  * 承認の基準は、適用済みと承認済みのうち新しい方。
  * shaが40桁の16進でない、またはコミットが無いときは例外にする。
@@ -117,6 +129,14 @@ export async function buildPlan(
     return reject("not_ff", "the target does not descend from the applied sha");
   }
 
+  const forbiddenPaths = forbiddenTreePaths(await git.listTree(target));
+  if (forbiddenPaths.length > 0) {
+    return reject(
+      "tree_forbidden",
+      forbiddenPaths.slice(0, DETAIL_PATH_LIMIT).join(", "),
+    );
+  }
+
   let approved = input.approved;
   if (approved !== null && !(await git.commitExists(approved))) approved = null;
   const base = pickApprovalBase({
@@ -144,17 +164,20 @@ export async function buildPlan(
     return { decision: "pending_approval", base, files, applied, target };
   }
 
-  if (targetMise === null)
-    return reject("mise_forbidden", "mise.toml is missing");
+  if (targetMise === null) {
+    return reject("mise_forbidden", unreadableReason(targetRead, MISE_PATH));
+  }
   const mise = checkMiseStatic(targetMise);
   if (!mise.ok) return reject("mise_forbidden", mise.reason);
 
   const composeRead = await git.readBlob(target, COMPOSE_PATH);
-  const composeText = composeRead.kind === "found" ? composeRead.text : null;
-  if (composeText === null) {
-    return reject("compose_forbidden", "the compose file is missing");
+  if (composeRead.kind !== "found") {
+    return reject(
+      "compose_forbidden",
+      unreadableReason(composeRead, COMPOSE_PATH),
+    );
   }
-  const compose = checkCompose(parseYaml(composeText), {
+  const compose = checkComposeText(composeRead.text, {
     root: input.root,
     composeDir: join(input.root, "infra"),
     env: mise.env,

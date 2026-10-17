@@ -1,6 +1,6 @@
 /** mise設定の静的な読み取りと、承認が要る変更かどうかの判定。`mise`コマンドは使わない。 */
 
-import { MISE_ENV_KEYS } from "./constants.ts";
+import { MISE_APPROVAL_KEYS, MISE_ENV_KEYS } from "./constants.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -45,9 +45,10 @@ export function validateMiseValue(key: string, value: unknown): boolean {
  * mise設定の候補のパスか。
  * `mise.toml`、`mise.*.toml`、`.mise.toml`、`.mise.*.toml`は、ディレクトリを問わない。
  * `mise/`、`.mise/`、`.config/mise/`の下と、`.tool-versions`も含む。
+ * 大文字小文字は区別しない。APFSでは`Mise.toml`も`mise.toml`と同じファイルを指すため。
  */
 export function isMiseConfigPath(path: string): boolean {
-  const normalized = path.replace(/^\.\//, "");
+  const normalized = path.replace(/^\.\//, "").toLowerCase();
   if (
     normalized.startsWith("mise/") ||
     normalized.startsWith(".mise/") ||
@@ -135,6 +136,7 @@ function withoutEnumeratedKeys(parsed: Record<string, unknown>): string {
 /**
  * `mise.toml`の変更が承認を要するかを返す。
  * 列挙したキーの`[env]`の値だけが、形式に合う値へ変わるときは、承認を要しない。
+ * ただし`MISE_APPROVAL_KEYS`のキー(`CONSOLE_GITHUB_REPO`)は、値が変わるなら承認が要る。
  * それ以外の差(ほかのキー、`[tools]`、`[tasks]`、キーの追加と削除、新規作成、読めない内容)は承認が要る。
  * コメントや空白だけの変更は、解釈が同じなので承認を要しない。
  */
@@ -153,6 +155,9 @@ export function classifyMiseTomlChange(
   for (const key of MISE_ENV_KEYS) {
     if (!(key in beforeEnv) || !(key in afterEnv)) return "approval";
     if (!validateMiseValue(key, afterEnv[key])) return "approval";
+  }
+  for (const key of MISE_APPROVAL_KEYS) {
+    if (beforeEnv[key] !== afterEnv[key]) return "approval";
   }
   return withoutEnumeratedKeys(before) === withoutEnumeratedKeys(after)
     ? "auto"

@@ -522,17 +522,25 @@ describe("checkComposeText", () => {
     ).toBe("ok");
   });
 
-  test("does not expand aliases while checking a small alias bomb", () => {
-    // 360バイトの入力が、JSON.stringifyでは22MBに、9段では約1.8GBに膨らむ。
+  function bombOf(levels: number): string {
     let bomb = "x-a0: &a0 [x, x, x, x, x, x, x, x, x]\n";
-    for (let i = 1; i < 9; i++) {
+    for (let i = 1; i < levels; i++) {
       bomb += `x-a${i}: &a${i} [${Array(9)
         .fill(`*a${i - 1}`)
         .join(", ")}]\n`;
     }
+    return bomb;
+  }
+
+  test("does not expand aliases while checking a small alias bomb", () => {
+    // 360バイトの入力が、パースでは参照を共有して軽いまま、JSON.stringifyでは22MBに膨らむ。
     const started = performance.now();
-    const result = textVerdict(`${bomb}${head}`);
+    const result = textVerdict(`${bombOf(7)}${head}`);
     expect([result, performance.now() - started < 1000]).toEqual(["ok", true]);
+  });
+
+  test("rejects a deeper alias bomb that the parser itself refuses", () => {
+    expect(textVerdict(`${bombOf(9)}${head}`)).toBe("compose_forbidden");
   });
 });
 

@@ -100,10 +100,10 @@ describe("approvalFiles", () => {
   test("lists the files that touch an approval target", () => {
     expect(
       approvalFiles(
-        changed("docs/a.md", "scripts/doctor.sh", "package.json"),
+        changed("docs/a.md", "scripts/doctor.sh", "bunfig.toml"),
         new Set(),
       ),
-    ).toEqual(["scripts/doctor.sh", "package.json"]);
+    ).toEqual(["scripts/doctor.sh", "bunfig.toml"]);
   });
 
   test("counts a deletion as touching the file", () => {

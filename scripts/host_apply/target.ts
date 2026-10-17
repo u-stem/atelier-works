@@ -3,6 +3,7 @@
 import {
   ATTEMPT_THROTTLE_AFTER,
   ATTEMPT_THROTTLE_INTERVAL_MS,
+  FAILED_NOTIFY_AFTER,
 } from "./constants.ts";
 
 export type RejectionKind =
@@ -24,13 +25,14 @@ export type RejectionRecord = {
 /**
  * 目標の内容だけで決まる拒否。同じ目標では結果が変わらないので、控えて飛ばす。
  * `ci_failed`と`docker_version`は、CIの再実行やdockerの更新で変わるので含めない。
+ * `not_ff`は適用済みのコミットで決まるので、適用済みが進めば結果が変わる。控えずに毎回確かめる。
  */
 export const CONTENT_REJECTION_KINDS: readonly RejectionKind[] = [
   "compose_forbidden",
   "mise_forbidden",
   "unknown_service",
   "caddy_invalid",
-  "not_ff",
+  "tree_forbidden",
 ];
 
 export function isContentRejection(kind: RejectionKind): boolean {
@@ -74,13 +76,20 @@ export function decideTarget(input: DecideTargetInput): TargetDecision {
     return { kind: "noop" };
   }
   const record = input.rejected[input.tip];
-  if (record !== undefined && isContentRejection(record.kind)) {
+  if (
+    record !== undefined &&
+    record.executor_version === input.executorVersion &&
+    isContentRejection(record.kind)
+  ) {
     return { kind: "skip_rejected", rejection: record.kind };
   }
   return { kind: "proceed", target: input.tip };
 }
 
-/** 内容で決まる拒否だけを控えに足した写しを返す。環境で変わる拒否は足さない。 */
+/**
+ * 内容で決まる拒否だけを控えに足した写しを返す。環境や適用済みのコミットで変わる拒否は足さない。
+ * 控えには実行役の版を持たせる。判定の規則が変わった版では、古い控えを使わない。
+ */
 export function recordRejection(
   rejected: Readonly<Record<string, RejectionRecord>>,
   sha: string,
@@ -106,7 +115,7 @@ export type RunOutcome =
 
 /**
  * 連続した失敗の回数の次の値を返す。
- * 目標が変わったとき、または収束に成功したときは0へ戻す。
+ * 収束に成功したときは0へ戻す。目標が変わったときは、その回の失敗を1と数え、失敗でなければ0にする。
  * 失敗だけを数え、オフライン、保留、拒否などは数えない。
  */
 export function nextAttempts(input: {
@@ -115,8 +124,10 @@ export function nextAttempts(input: {
   readonly target: string;
   readonly outcome: RunOutcome;
 }): number {
-  if (input.lastTarget !== input.target) return 0;
   if (input.outcome === "converged") return 0;
+  if (input.lastTarget !== input.target) {
+    return input.outcome === "failed" ? 1 : 0;
+  }
   if (input.outcome === "failed") return input.attempts + 1;
   return input.attempts;
 }
@@ -138,6 +149,7 @@ export function shouldThrottleRetry(input: {
   return input.now.getTime() - last < ATTEMPT_THROTTLE_INTERVAL_MS;
 }
 
-export function shouldNotifyRepeatedFailure(_attempts: number): boolean {
-  return false;
+/** 連続した失敗の回数が、通知する回数に達したか。 */
+export function shouldNotifyRepeatedFailure(attempts: number): boolean {
+  return attempts >= FAILED_NOTIFY_AFTER;
 }

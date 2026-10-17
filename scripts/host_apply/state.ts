@@ -21,7 +21,14 @@ export type HostApplyState = {
   readonly attempts: number;
   readonly first_seen_at: string | null;
   readonly rejected: Readonly<
-    Record<string, { readonly kind: RejectionKind; readonly at: string }>
+    Record<
+      string,
+      {
+        readonly kind: RejectionKind;
+        readonly at: string;
+        readonly executor_version: string;
+      }
+    >
   >;
   readonly drain: Readonly<
     Record<
@@ -67,6 +74,7 @@ const REJECTION_KINDS: readonly string[] = [
   "unknown_service",
   "caddy_invalid",
   "not_ff",
+  "tree_forbidden",
   "ci_failed",
   "docker_version",
 ];
@@ -111,7 +119,8 @@ function isRejection(value: unknown): boolean {
     isRecord(value) &&
     isString(value.kind) &&
     REJECTION_KINDS.includes(value.kind) &&
-    isString(value.at)
+    isString(value.at) &&
+    isString(value.executor_version)
   );
 }
 

@@ -9,6 +9,7 @@ export const NOTIFY_REASONS = [
   "rejected_mise_forbidden",
   "rejected_unknown_service",
   "rejected_caddy_invalid",
+  "rejected_tree_forbidden",
   "rejected_not_ff",
   "rejected_ci_failed",
   "rejected_docker_version",
@@ -40,6 +41,8 @@ const TEMPLATES: Readonly<Record<NotifyReason, string>> = {
     "反映を見送りました。許可していないサービス名がcomposeにあります。実行役の更新(mise run host:install)が必要な可能性があります(コミット {sha})。",
   rejected_caddy_invalid:
     "反映を見送りました。Caddyfileの検証に失敗しました(コミット {sha})。",
+  rejected_tree_forbidden:
+    "反映を見送りました。symlinkかsubmoduleがtreeに含まれています(コミット {sha})。",
   rejected_not_ff:
     "反映を見送りました。適用済みのコミットの子孫ではありません(コミット {sha})。",
   rejected_ci_failed:

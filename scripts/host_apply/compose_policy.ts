@@ -1,6 +1,7 @@
 /** composeの定義を静的に検査する。許可する形を列挙し、未知のキーは拒否する。 */
 
 import { isAbsolute, relative, resolve } from "node:path";
+import { MAX_BLOB_BYTES } from "./constants.ts";
 
 export const COMPOSE_SERVICE_ALLOWLIST: readonly string[] = [
   "db",
@@ -143,6 +144,17 @@ function isExtensionKey(key: string): boolean {
 function requireRecord(value: unknown, what: string): Record<string, unknown> {
   if (!isRecord(value)) return forbid(`${what} must be a mapping`);
   return value;
+}
+
+function requireExactKeys(
+  record: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  what: string,
+): void {
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key))
+      forbid(`${what} has a key that is not allowed: ${key}`);
+  }
 }
 
 function requireKeys(
@@ -336,6 +348,11 @@ function checkBind(
   readOnly: boolean,
   context: ComposeContext,
 ): void {
+  const expanded = expand(source, context.env);
+  if (expanded.includes("docker.sock")) forbid("the docker socket is mounted");
+  // 絶対パスは、ステージングの中を指していても拒否する。
+  // ステージングのパスは実行のたびに変わるので、定義が絶対パスで書かれていると、評価した内容と実際のマウントがずれる。
+  if (isAbsolute(expanded)) forbid("a bind mount source is an absolute path");
   const path = requireInside(source, context, "a bind mount source");
   const rel = relative(context.root, path);
   if (!readOnly && !BIND_ALLOWLIST.includes(rel)) {
@@ -407,12 +424,29 @@ const REFERENCE_KEYS: ReadonlySet<string> = new Set([
   "mode",
 ]);
 
+const LIMIT_KEYS: ReadonlySet<string> = new Set(["cpus", "memory", "pids"]);
+const RESERVATION_KEYS: ReadonlySet<string> = new Set(["cpus", "memory"]);
+
+/** `reservations.devices`はGPUなどのホストのデバイスを割り当てるので、`cpus`と`memory`以外は拒否する。 */
 function checkDeploy(value: unknown): void {
   const deploy = requireRecord(value, "deploy");
   requireKeys(deploy, DEPLOY_KEYS, "deploy");
-  if (deploy.resources !== undefined) {
-    const resources = requireRecord(deploy.resources, "deploy.resources");
-    requireKeys(resources, new Set(["limits", "reservations"]), "resources");
+  if (deploy.resources === undefined) return;
+  const resources = requireRecord(deploy.resources, "deploy.resources");
+  requireExactKeys(resources, new Set(["limits", "reservations"]), "resources");
+  if (resources.limits !== undefined) {
+    requireExactKeys(
+      requireRecord(resources.limits, "resources.limits"),
+      LIMIT_KEYS,
+      "resources.limits",
+    );
+  }
+  if (resources.reservations !== undefined) {
+    requireExactKeys(
+      requireRecord(resources.reservations, "resources.reservations"),
+      RESERVATION_KEYS,
+      "resources.reservations",
+    );
   }
 }
 
@@ -492,9 +526,6 @@ function validate(parsed: unknown, context: ComposeContext): void {
       throw new Violation("unknown_service", `service is not allowed: ${name}`);
     }
   }
-  if (JSON.stringify(parsed).includes("docker.sock")) {
-    forbid("the docker socket is referenced");
-  }
   for (const service of Object.values(services)) {
     checkService(requireRecord(service, "a service"), context);
   }
@@ -523,11 +554,13 @@ function validate(parsed: unknown, context: ComposeContext): void {
 }
 
 /**
- * composeの定義が方針を満たすかを返す。
+ * パース済みのcomposeの定義が方針を満たすかを返す。
  * サービス名は許可リストにあること。キーは許可する形だけにする。
- * 特権、名前空間の共有、`127.0.0.1`以外のポート、チェックアウトの外のパスと書き込み可能なbind、
- * リモートのbuild context、外部やdriver_optsを持つボリュームと`docker.sock`を拒否する。
+ * 特権、名前空間の共有、`127.0.0.1`以外のポート、チェックアウトの外のパスと絶対パスのbind、書き込み可能なbind、
+ * リモートのbuild context、外部やdriver_optsを持つボリューム、デバイスの割り当てを拒否する。
  * 静的な検査なので、パスの途中のsymlinkは見ない。変数は`context.env`で展開する。
+ * `docker.sock`の文字列の検査は含まない。パース結果はaliasで参照を共有していて、全体を文字列にすると膨らむため、
+ * 生のテキストを検査する`checkComposeText`を使う。
  */
 export function checkCompose(
   parsed: unknown,
@@ -544,9 +577,39 @@ export function checkCompose(
   }
 }
 
+/**
+ * composeのテキストを検査する。実行役が使う入口。
+ * 大きさの上限を超えるテキストは、パースせずに拒否する。
+ * `docker.sock`の文字列は、パースの前に生のテキストで探す。コメントや拡張キーに書かれていても拒否する。
+ * その後、YAMLとして読み、`checkCompose`の方針を適用する。
+ */
 export function checkComposeText(
-  _text: string,
-  _context: ComposeContext,
+  text: string,
+  context: ComposeContext,
 ): ComposeVerdict {
-  return { ok: true };
+  if (Buffer.byteLength(text, "utf8") > MAX_BLOB_BYTES) {
+    return {
+      ok: false,
+      kind: "compose_forbidden",
+      detail: "the compose file is over the size limit",
+    };
+  }
+  if (text.includes("docker.sock")) {
+    return {
+      ok: false,
+      kind: "compose_forbidden",
+      detail: "the docker socket is referenced",
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = Bun.YAML.parse(text);
+  } catch {
+    return {
+      ok: false,
+      kind: "compose_forbidden",
+      detail: "the compose file is not valid YAML",
+    };
+  }
+  return checkCompose(parsed, context);
 }

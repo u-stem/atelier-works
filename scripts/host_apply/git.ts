@@ -65,6 +65,7 @@ export const PLAN_GIT_SUBCOMMANDS: readonly string[] = [
   "diff",
   "merge-base",
   "cat-file",
+  "ls-tree",
 ];
 
 /**
@@ -136,17 +137,47 @@ export type LsTreeEntry = {
   readonly mode: string;
   readonly type: string;
   readonly path: string;
+  /** `--long`のときの大きさ。blob以外と、大きさを求めなかったときは`null`。 */
   readonly size: number | null;
 };
 
-export function lsTreeRecursiveArgs(_sha: string): string[] {
-  return [];
+/** コミットのtreeの全エントリを、NUL区切りで列挙する。 */
+export function lsTreeRecursiveArgs(sha: string): string[] {
+  return readOnlyGitArgs(["ls-tree", "-r", "-z", requireSha(sha)]);
 }
 
-export function lsTreePathArgs(_sha: string, _path: string): string[] {
-  return [];
+/** コミットの1つのパスのエントリを、大きさつきで列挙する。パスが無ければ出力は空になる。 */
+export function lsTreePathArgs(sha: string, path: string): string[] {
+  return readOnlyGitArgs([
+    "ls-tree",
+    "-z",
+    "-l",
+    requireSha(sha),
+    "--",
+    requirePath(path),
+  ]);
 }
 
-export function parseLsTreeZ(_output: string): LsTreeEntry[] {
-  return [];
+const LS_TREE_ENTRY =
+  /^(\d{6}) (\w+) [0-9a-f]{40,64}(?: +(\d+|-))?\t([\s\S]*)$/;
+
+/** `ls-tree -z`の出力を読む。読めないエントリがあれば、判定を誤らせないよう例外にする。 */
+export function parseLsTreeZ(output: string): LsTreeEntry[] {
+  const entries: LsTreeEntry[] = [];
+  for (const raw of output.split("\0")) {
+    if (raw === "") continue;
+    const match = LS_TREE_ENTRY.exec(raw);
+    if (match === null) throw new Error("unexpected ls-tree output");
+    const [, mode, type, size, path] = match;
+    if (mode === undefined || type === undefined || path === undefined) {
+      throw new Error("unexpected ls-tree output");
+    }
+    entries.push({
+      mode,
+      type,
+      path,
+      size: size === undefined || size === "-" ? null : Number(size),
+    });
+  }
+  return entries;
 }

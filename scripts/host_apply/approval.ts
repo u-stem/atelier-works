@@ -23,8 +23,11 @@ export function parseNameStatusZ(output: string): ChangedFile[] {
 }
 
 /**
- * 承認の対象のうち、リポジトリのルートにあるファイル。
+ * 承認の対象のうち、リポジトリのルートにあるファイル(小文字で書く)。
  * 実行役が、ホストのユーザーの権限で、秘密値を渡して動かす道具と、その判断の前提を決めるもの。
+ * `.github/workflows/ci.yml`は、必須チェックを出すworkflowで、書き換えるとチェックを`skipped`にして通せる。
+ * `package.json`、`bun.lock`は含めない。実行役が動かすbunのコードは、パッケージをimportせず、
+ * `node_modules`の解決も自動のinstallも通らないため。
  */
 const APPROVAL_EXACT_PATHS: readonly string[] = [
   "scripts/doctor.sh",
@@ -33,17 +36,15 @@ const APPROVAL_EXACT_PATHS: readonly string[] = [
   "scripts/custom-tags.ts",
   "scripts/record-host-applied.sh",
   "scripts/host-install.sh",
-  "package.json",
-  "bun.lock",
-  "bun.lockb",
   "bunfig.toml",
   ".npmrc",
+  ".github/workflows/ci.yml",
 ];
 
-/** 承認の対象のディレクトリ。実行役の実装そのもの。 */
+/** 承認の対象のディレクトリ(小文字で書く)。実行役の実装。 */
 const APPROVAL_PREFIXES: readonly string[] = ["scripts/host_apply/"];
 
-/** 承認の対象のファイル名。ディレクトリを問わない。 */
+/** 承認の対象のファイル名(小文字で書く)。ディレクトリを問わない。 */
 const APPROVAL_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.env(\..*)?$/,
   /^\.(node|bun)-version$/,
@@ -52,9 +53,10 @@ const APPROVAL_BASENAME_PATTERNS: readonly RegExp[] = [
 /**
  * `path`が、承認の対象(ホストで実行されるファイル)か。
  * mise設定の全候補を含む。ただし`mise.toml`の値だけの変更は、呼び出し側が`approvalFiles`の免除で外す。
+ * APFSは大文字小文字を区別しないので、小文字にそろえて照合する。`Bunfig.toml`も`bunfig.toml`と同じファイルを指す。
  */
 export function isApprovalTarget(path: string): boolean {
-  const normalized = path.replace(/^\.\//, "");
+  const normalized = path.replace(/^\.\//, "").toLowerCase();
   if (APPROVAL_EXACT_PATHS.includes(normalized)) return true;
   if (/^scripts\/host-apply\.[^/]+$/.test(normalized)) return true;
   if (APPROVAL_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {

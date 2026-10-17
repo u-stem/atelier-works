@@ -112,7 +112,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 導入と診断と初期化のスクリプト(`host-install.sh`、`check-docker-version.sh`、`doctor.sh`、`bootstrap.sh`、
  * `custom-tags.ts`、`record-host-applied.sh`)は、ホストのユーザーの権限で、秘密値を渡して動く。
  * `infra/docker-compose.yml`は実行役が静的に検査して反映する定義で、`tests/infra/docker_compose.test.ts`は
- * その定義の境界を固定する。実行役のテスト(`tests/scripts/host_apply_*.test.ts`)も、実行役の判定を固定するので守る。
+ * その定義の境界を固定する。実行役のテスト(`tests/scripts/host_apply_*.test.ts`)と、それが使う
+ * 一時リポジトリの補助(`tests/fixtures/host_apply_repo.ts`)も、実行役の判定を固定するので守る。
  * 実行役のテストは、グロブではなくファイル名で列挙する。名前を先に押さえ、足したテストを列挙し忘れると、
  * 保護パスの契約テスト(`tests/lib/protected_paths.test.ts`)が失敗する。
  * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
@@ -212,6 +213,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "scripts/record-host-applied.sh",
   "infra/docker-compose.yml",
   "tests/infra/docker_compose.test.ts",
+  "tests/fixtures/host_apply_repo.ts",
   "tests/scripts/host_apply_target.test.ts",
   "tests/scripts/host_apply_imports.test.ts",
   "tests/scripts/host_apply_ci.test.ts",

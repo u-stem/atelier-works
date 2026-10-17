@@ -95,13 +95,16 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<CommandKind, number>> = {
 };
 
 /** コミットから読むファイルの大きさの上限(バイト)。 */
-export const MAX_BLOB_BYTES = 0;
+export const MAX_BLOB_BYTES = 256 * 1024;
 
-/** 実行役の版。拒否の控えは、この版と同じものだけを使う。 */
-export const EXECUTOR_VERSION = "";
+/** 実行役の版。拒否の控えは、この版と同じものだけを使う。実行役のコードを固定する版の識別に置き換える。 */
+export const EXECUTOR_VERSION = "stage1";
 
-/** 値が変わると、形式に合っていても承認が要るキー。 */
-export const MISE_APPROVAL_KEYS: readonly string[] = [];
+/**
+ * 値が変わると、形式に合っていても承認が要るキー。
+ * `CONSOLE_GITHUB_REPO`は、Consoleの配信物の取得元を決める。形式だけでは、取得元が正しいかを確かめられない。
+ */
+export const MISE_APPROVAL_KEYS: readonly string[] = ["CONSOLE_GITHUB_REPO"];
 
 /** 1回の実行全体の上限。 */
 export const RUN_TIMEOUT_MS = 90 * MINUTE;
