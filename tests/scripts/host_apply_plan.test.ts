@@ -1,7 +1,20 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChangedFile } from "../../scripts/host_apply/approval.ts";
+import {
+  approvedFilePath,
+  writeApproved,
+} from "../../scripts/host_apply/approved_io.ts";
 import { MAX_BLOB_BYTES } from "../../scripts/host_apply/constants.ts";
 import { parseLsTreeZ } from "../../scripts/host_apply/git.ts";
 import {
@@ -126,12 +139,20 @@ function chainOf(...overrides: Record<string, string>[]) {
 
 async function planOf(
   commits: Record<string, FakeCommit>,
-  input: { applied: string; target: string; approved?: string | null },
+  input: {
+    applied: string;
+    target: string;
+    approved?: string | null;
+    approvedFrom?: string | null;
+  },
 ): Promise<PlanResult> {
   return buildPlan(fakeGit(commits).git, {
     applied: input.applied,
     target: input.target,
     approved: input.approved ?? null,
+    ...(input.approvedFrom !== undefined
+      ? { approvedFrom: input.approvedFrom }
+      : {}),
     root: "/staging",
   });
 }
@@ -724,6 +745,99 @@ describe("createPlanGit", () => {
   });
 });
 
+describe("buildPlan: the applied sha that an approval was made for", () => {
+  const DOCTOR = { "scripts/doctor.sh": "#!/bin/sh\necho changed\n" };
+
+  test("uses the approval when approvedFrom equals the applied sha", async () => {
+    const plan = await planOf(chainOf(DOCTOR), {
+      applied: A,
+      target: B,
+      approved: B,
+      approvedFrom: A,
+    });
+    expect(plan.decision).toBe("would_converge");
+  });
+
+  test("uses --approved as before when approvedFrom is not given", async () => {
+    const plan = await planOf(chainOf(DOCTOR), {
+      applied: A,
+      target: B,
+      approved: B,
+    });
+    expect(plan.decision).toBe("would_converge");
+  });
+
+  test.each([
+    ["a descendant of the applied sha", B],
+    ["a commit that does not exist", "e".repeat(40)],
+  ])("ignores an approval made for %s", async (_name, approvedFrom) => {
+    const plan = await planOf(chainOf(DOCTOR, {}), {
+      applied: A,
+      target: C,
+      approved: C,
+      approvedFrom,
+    });
+    expect(plan.decision).toBe("pending_approval");
+  });
+
+  test("ignores an approval made for an ancestor of the applied sha", async () => {
+    const plan = await planOf(
+      chainOf(DOCTOR, { "scripts/bootstrap.sh": "#!/bin/sh\n" }),
+      { applied: B, target: C, approved: C, approvedFrom: A },
+    );
+    expect(plan.decision).toBe("pending_approval");
+  });
+
+  test("ignores an approval without an approvedFrom value", async () => {
+    const plan = await planOf(chainOf(DOCTOR), {
+      applied: A,
+      target: B,
+      approved: B,
+      approvedFrom: null,
+    });
+    expect(plan.decision).toBe("pending_approval");
+  });
+
+  test("does not use an approval that was made before a change was reverted", async () => {
+    // Aから見て差が無いSの承認は、AからRへ変えてSで戻した変更を見ていない。
+    const commits = chainOf(DOCTOR, { "scripts/doctor.sh": "#!/bin/sh\n" });
+    const plan = await planOf(commits, {
+      applied: B,
+      target: C,
+      approved: C,
+      approvedFrom: A,
+    });
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      base: B,
+      files: ["scripts/doctor.sh"],
+    });
+  });
+
+  test("starts the next difference at the approved sha", async () => {
+    const plan = await planOf(
+      chainOf(DOCTOR, { "scripts/bootstrap.sh": "#!/bin/sh\n" }),
+      { applied: A, target: C, approved: B, approvedFrom: A },
+    );
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      base: B,
+      files: ["scripts/bootstrap.sh"],
+    });
+  });
+
+  test("throws for an approvedFrom value that is not a sha", async () => {
+    await expect(
+      planOf(chainOf(DOCTOR), {
+        applied: A,
+        target: B,
+        approved: B,
+        approvedFrom: "main",
+      }),
+    ).rejects.toThrow("sha");
+  });
+});
+
 describe("buildPlan only reads", () => {
   test("uses nothing but the four read operations", async () => {
     const fake = fakeGit(chainOf({ "docs/a.md": "x\n" }));
@@ -751,13 +865,40 @@ describe("parsePlanArgs", () => {
   test("reads the required flags", () => {
     expect(parsePlanArgs(ok)).toEqual({
       ok: true,
-      args: { repo: "/r", applied: A, target: B, approved: null },
+      args: {
+        repo: "/r",
+        applied: A,
+        target: B,
+        approved: null,
+        stateDir: null,
+      },
     });
   });
 
   test("reads the optional approved flag", () => {
     const parsed = parsePlanArgs([...ok, "--approved", C]);
     expect(parsed.ok && parsed.args.approved).toBe(C);
+  });
+
+  test("reads the optional state directory", () => {
+    const parsed = parsePlanArgs([...ok, "--state-dir", "/var/state"]);
+    expect(parsed.ok && parsed.args.stateDir).toBe("/var/state");
+  });
+
+  test("fails for a relative state directory", () => {
+    expect(parsePlanArgs([...ok, "--state-dir", "state"]).ok).toBe(false);
+  });
+
+  test("fails for a state directory with a control character", () => {
+    expect(parsePlanArgs([...ok, "--state-dir", "/var/st\nate"]).ok).toBe(
+      false,
+    );
+  });
+
+  test("fails when --approved and --state-dir are both given", () => {
+    expect(
+      parsePlanArgs([...ok, "--approved", C, "--state-dir", "/var/state"]).ok,
+    ).toBe(false);
   });
 
   test("fails without --target", () => {
@@ -922,6 +1063,107 @@ describe("plan against a real repository", () => {
     const before = snapshot();
     run(repo, ["--repo", repo.dir, "--applied", applied, "--target", doctor]);
     expect(snapshot()).toEqual(before);
+  });
+});
+
+describe("plan --state-dir against a real repository", () => {
+  const repos: FixtureRepo[] = [];
+  const dirs: string[] = [];
+  afterAll(() => {
+    for (const repo of repos) repo.cleanup();
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function run(repo: FixtureRepo, args: string[]) {
+    const result = Bun.spawnSync(
+      ["bun", join(REPO_ROOT, "scripts/host-apply.ts"), "plan", ...args],
+      { env: fixtureGitEnv(dirname(repo.dir)) },
+    );
+    return {
+      code: result.exitCode,
+      out: result.stdout.toString(),
+      err: result.stderr.toString(),
+    };
+  }
+
+  function setup() {
+    const repo = createFixtureRepo();
+    repos.push(repo);
+    const applied = repo.commit(BASE_FILES, "base");
+    const docs = repo.commit({ "docs/a.md": "changed\n" }, "docs");
+    const doctor = repo.commit({ "scripts/doctor.sh": "changed\n" }, "doctor");
+    const stateDir = mkdtempSync(join(tmpdir(), "host-apply-state-"));
+    dirs.push(stateDir);
+    chmodSync(stateDir, 0o700);
+    return { repo, applied, docs, doctor, stateDir };
+  }
+
+  function record(sha: string, applied: string) {
+    return {
+      schema: 1 as const,
+      sha,
+      applied,
+      approved_at: "2026-10-18T01:02:03.000Z",
+      files: [{ path: "scripts/doctor.sh", status: "M" as const }],
+    };
+  }
+
+  function plan(
+    s: ReturnType<typeof setup>,
+    extra: string[] = ["--state-dir", s.stateDir],
+  ) {
+    return run(s.repo, [
+      "--repo",
+      s.repo.dir,
+      "--applied",
+      s.applied,
+      "--target",
+      s.doctor,
+      ...extra,
+    ]);
+  }
+
+  test("uses a record that was made for the applied sha", () => {
+    const s = setup();
+    writeApproved(s.stateDir, record(s.doctor, s.applied));
+    expect(JSON.parse(plan(s).out).decision).toBe("would_converge");
+  });
+
+  test("ignores a record that was made for another applied sha", () => {
+    const s = setup();
+    writeApproved(s.stateDir, record(s.doctor, s.docs));
+    expect(JSON.parse(plan(s).out).decision).toBe("pending_approval");
+  });
+
+  test("waits for approval when there is no record", () => {
+    const s = setup();
+    expect(JSON.parse(plan(s).out).decision).toBe("pending_approval");
+  });
+
+  test("waits for approval when the record is broken", () => {
+    const s = setup();
+    writeFileSync(approvedFilePath(s.stateDir), "{", { mode: 0o600 });
+    expect(JSON.parse(plan(s).out).decision).toBe("pending_approval");
+  });
+
+  test("warns on the standard error when the record is broken", () => {
+    const s = setup();
+    writeFileSync(approvedFilePath(s.stateDir), "{", { mode: 0o600 });
+    expect(plan(s).err).toContain("approved.json");
+  });
+
+  test("ignores a record that others can read", () => {
+    const s = setup();
+    writeApproved(s.stateDir, record(s.doctor, s.applied));
+    chmodSync(approvedFilePath(s.stateDir), 0o644);
+    expect(JSON.parse(plan(s).out).decision).toBe("pending_approval");
+  });
+
+  test("exits 2 when --approved and --state-dir are both given", () => {
+    const s = setup();
+    expect(
+      plan(s, ["--approved", s.doctor, "--state-dir", s.stateDir]).code,
+    ).toBe(2);
   });
 });
 

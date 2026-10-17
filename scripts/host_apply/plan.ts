@@ -41,6 +41,7 @@ export type PlanInput = {
   readonly applied: string;
   readonly target: string;
   readonly approved: string | null;
+  readonly approvedFrom?: string | null;
   /** パスの内外の判定に使う、ステージングのルートの論理的な絶対パス。実在しなくてよい。 */
   readonly root: string;
 };
@@ -236,6 +237,7 @@ export type PlanArgs = {
   readonly applied: string;
   readonly target: string;
   readonly approved: string | null;
+  readonly stateDir: string | null;
 };
 
 export type ParsedPlanArgs =
@@ -284,5 +286,8 @@ export function parsePlanArgs(argv: readonly string[]): ParsedPlanArgs {
   if (approved !== null && !isSha40(approved)) {
     return { ok: false, error: "--approved must be a 40-digit sha" };
   }
-  return { ok: true, args: { repo, applied, target, approved } };
+  return {
+    ok: true,
+    args: { repo, applied, target, approved, stateDir: null },
+  };
 }
