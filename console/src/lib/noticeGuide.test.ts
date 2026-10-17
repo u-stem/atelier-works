@@ -26,6 +26,16 @@ describe("noticeGuide", () => {
     );
   });
 
+  test("reads the run record of the owner only", () => {
+    expect(noticeGuide("github_collect_stale").commands[0]).toContain(
+      "WHERE owner = '<所有者>' AND finished_at IS NOT NULL",
+    );
+  });
+
+  test("does not promise a future halt of the Factory", () => {
+    expect(noticeGuide("github_collect_stale").meaning).not.toContain("まだ");
+  });
+
   test("tells how the stale GitHub collection notice resolves", () => {
     expect(noticeGuide("github_collect_stale").note).toContain("自動で解決");
   });
