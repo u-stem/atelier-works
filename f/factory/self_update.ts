@@ -20,6 +20,7 @@
 // `scripts/bootstrap.sh`が空の値で一度だけ作り、以降は下の
 // `wmill.setVariable`だけが値を変える。無関係な`wmill sync push`で戻らない。
 import wmillDefault, * as wmill from "windmill-client@1.817.0";
+import { buildNoticeConsoleUrl } from "./lib/approval_support.ts";
 import {
   AUTO_RETRY_LIST_LIMIT,
   autoRetryCandidateQuery,
@@ -37,6 +38,7 @@ import {
   addNoticeUnlessUnresolved,
   latestRequirementsApproval,
   listAutoRetryCandidates,
+  listGhCollectFreshness,
   listUnresolvedNoticesByKind,
   recordDeployment,
   recordFailure,
@@ -52,6 +54,11 @@ import {
   ensureVerifiedFactoryClone,
   FactoryRepoIdMismatchError,
 } from "./lib/factory_repo_gate.ts";
+import {
+  checkGhCollectFreshness,
+  GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS,
+  GH_COLLECT_STALE_KIND,
+} from "./lib/gh_collect_freshness.ts";
 import { getRepositoryId } from "./lib/github.ts";
 import {
   HOST_ACTION_NOTICE_KIND,
@@ -539,7 +546,20 @@ export const SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT =
 /** 1回の実行で走る`wmill sync push`と`wmill datatable migrate up`の回数。 */
 export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
 
-export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 0;
+/**
+ * 収集の鮮度の確認の中で、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの箇所の数。
+ * stateの読み、stateの書き、収集の記録の読み、未解決のnoticeの一覧、noticeの挿入、noticeの解決、通知先の取得の7か所である。
+ * この7か所は確認全体の上限(`GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS`)に包まれるので、
+ * 最悪の長さには箇所の数としては数えず、上限を1回だけ数える。
+ * この数え方は、次の3つがすべて成り立つときだけ成り立つ。
+ * - 確認の呼び出しが、finallyの最後の文である。呼び出し元が上限で戻った後に、背景の処理の後ろで待たされる区切りの呼び出しも、
+ *   背景の処理と競合する後続の処理も無い。
+ * - 確認が子プロセスを起動しない。ジョブの`timeout`は子プロセスが残るのを防ぐ最後の打ち切りで、
+ *   背景の処理が子プロセスを持たなければ、打ち切られても残るものが無い。
+ * - 区切りの時間切れの後に中断されずに残る背景の処理は数えない(`SELF_UPDATE_WORST_CASE_MS`の前提)。
+ * 条件は`tests/scripts/self_update_gh_collect_freshness.test.ts`が固定する。
+ */
+export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 7;
 
 /**
  * 1回の実行で通りうる、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの最大回数。通知は含めない。
@@ -558,9 +578,17 @@ export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 0;
  * - 止まった作業項目の再開の候補の確認(候補の一覧と要件の承認の読み)と起動: 2
  * - `factory_repo_id`の照合: リポジトリIDの取得、失敗の記録、noticeの挿入: 3
  *   (`gh api`の子プロセスは`DEFAULT_TIMEOUT_MS`が上限だが、ここで先に区切る)
+ * - finally(収集の鮮度の確認): `GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT`
+ *   (最悪の長さでは、この箇所を除いて確認全体の上限を数える)
  */
 export const SELF_UPDATE_BOUNDED_CALL_COUNT =
-  13 + 4 + 3 + HOST_ACTION_RECONCILE_LIMIT + 2 + 3;
+  13 +
+  4 +
+  3 +
+  HOST_ACTION_RECONCILE_LIMIT +
+  2 +
+  3 +
+  GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT;
 
 /**
  * finallyの通知1回の上限(ミリ秒)。
@@ -588,6 +616,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - 通知: ホスト側の作業の通知とfinallyの通知の2回
  * - Console用workerの確認
  * - 定期ジョブ用workerの確認
+ * - 収集の鮮度の確認(全体の上限を1回。中の区切った呼び出しは、区切った呼び出しの回数から除く)
  * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
 export const SELF_UPDATE_WORST_CASE_MS =
@@ -599,10 +628,12 @@ export const SELF_UPDATE_WORST_CASE_MS =
     (SELF_UPDATE_LOCAL_GIT_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
   SELF_UPDATE_CLI_COMMAND_COUNT *
     (WMILL_CLI_TIMEOUT_MS + RUNNER_MAX_STOP_OVERHEAD_MS) +
-  SELF_UPDATE_BOUNDED_CALL_COUNT * SELF_UPDATE_CALL_TIMEOUT_MS +
+  (SELF_UPDATE_BOUNDED_CALL_COUNT - GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT) *
+    SELF_UPDATE_CALL_TIMEOUT_MS +
   2 * SELF_UPDATE_NOTIFY_TIMEOUT_MS +
   CONSOLE_WORKER_CHECK_TIMEOUT_MS +
-  PERIODIC_WORKER_CHECK_TIMEOUT_MS;
+  PERIODIC_WORKER_CHECK_TIMEOUT_MS +
+  GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS;
 
 // ---------------------------------------------------------------------------
 // main
@@ -623,10 +654,14 @@ type FactoryConfig = Awaited<ReturnType<typeof loadConfig>>;
 /** 定期ジョブ用workerの不在の通知を、待ちが解けて自動で解決するときの、解決者の名前。 */
 const PERIODIC_WORKER_NOTICE_RESOLVER = "self_update";
 
+/** 収集の鮮度のnoticeを、回復や設定の変更で自動で解決するときの、解決者の名前。 */
+const GH_COLLECT_NOTICE_RESOLVER = "self_update";
+
 /**
- * 自己更新を行い、そのあとでConsole用workerと定期ジョブ用workerが受けているかを確かめる。
+ * 自己更新を行い、そのあとでConsole用workerと定期ジョブ用workerが受けているかと、GitHubの収集が成功しているかを確かめる。
  * 確認は更新の成否によらず毎回行う。Console用workerがジョブを受けないとConsoleのジョブが溜まり続けるため。
  * 定期ジョブ用workerがジョブを受けないと、tag periodicを付けた定期ジョブが溜まり続けるため。
+ * 収集が止まると、下流がいつまでも古い記録を読むため。
  * 確認は時間を区切り、失敗しても例外を投げないので、更新の結果は変わらない。
  */
 export async function main(): Promise<SelfUpdateResult> {
@@ -670,7 +705,7 @@ export async function main(): Promise<SelfUpdateResult> {
       log,
     });
     // 定期ジョブ用workerの確認も、更新の成否によらず走らせる。時間を区切り、例外は投げない。
-    await checkPeriodicWorker({
+    const periodicWorker = await checkPeriodicWorker({
       listWaitingJobs: () =>
         wmill.JobService.listQueue(
           periodicQueueQuery(wmillDefault.getWorkspace()),
@@ -700,6 +735,54 @@ export async function main(): Promise<SelfUpdateResult> {
       instanceName: config.instance_name,
       log,
     });
+    // 収集の鮮度の確認は、finallyの最後の文にする。最悪の長さの数え方がこの位置に頼る
+    // (`GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT`を参照)。確認は例外を投げないが、念のため包む。
+    try {
+      await checkGhCollectFreshness({
+        enabled: config.gh_collect_enabled,
+        owners: config.owners.map((owner) => owner.name),
+        periodicStalled: periodicWorker === "stalled",
+        now: () => Date.now(),
+        listFreshness: (owners) =>
+          withCallTimeout("listGhCollectFreshness", () =>
+            listGhCollectFreshness(owners),
+          ),
+        getState: () => withCallTimeout("getState", () => wmill.getState()),
+        setState: (state) =>
+          withCallTimeout("setState", () => wmill.setState(state)),
+        listStaleNotices: () =>
+          withCallTimeout("listStaleNotices", () =>
+            listUnresolvedNoticesByKind(GH_COLLECT_STALE_KIND),
+          ),
+        addNotice: (record) =>
+          withCallTimeout("addNotice", () => addNoticeUnlessUnresolved(record)),
+        resolveNotices: (messagePrefix) =>
+          withCallTimeout("resolveNotices", () =>
+            resolveUnresolvedNoticesByPrefix(
+              GH_COLLECT_STALE_KIND,
+              messagePrefix,
+              GH_COLLECT_NOTICE_RESOLVER,
+            ),
+          ),
+        noticeUrl: (noticeId) =>
+          buildNoticeConsoleUrl(config.windmill_public_url, noticeId),
+        notify: async (event) => {
+          const webhookUrl = await withCallTimeout("getVariable webhook", () =>
+            wmill.getVariable("f/factory/discord_webhook_url"),
+          );
+          await withCallTimeout(
+            "notify",
+            () =>
+              notifyBestEffort(webhookUrl, event, log, { fetch: boundedFetch }),
+            SELF_UPDATE_NOTIFY_TIMEOUT_MS,
+          );
+        },
+        instanceName: config.instance_name,
+        log,
+      });
+    } catch {
+      log.warn("gh collect freshness check failed");
+    }
   }
 }
 

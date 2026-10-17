@@ -6664,12 +6664,74 @@ export async function listGhCollectOwnerStates(
   }));
 }
 
-/** 所有者ごとの、収集の鮮度の判定に使う記録を返す。 */
+/**
+ * 所有者ごとに、収集の鮮度の判定に使う記録を返す。
+ * - `last_success_at`: `ok`かつ`verified`で`finished_at`のある行の、最大の`finished_at`。
+ *   照合を通らない成功を数えないよう、両方を条件にする。
+ * - `latest`: `finished_at`のある最新の行。実行中の行は数えない。
+ * - `running_since`: `started_at`が最新の行が実行中(`finished_at`が空)なら、その`started_at`。
+ * - `first_started_at`: 所有者の行の最古の`started_at`。
+ * 行の無い所有者は、`latest`と3つの時刻が`null`の行になる。
+ * 保持期間の掃除で行が消えても、直近の成功と直近の実行は残る(`deleteGhCollectRunsBefore`)。
+ */
 export async function listGhCollectFreshness(
-  _owners: readonly string[],
-  _sql: SqlClient = defaultSqlClient,
+  owners: readonly string[],
+  sql: SqlClient = defaultSqlClient,
 ): Promise<GhCollectFreshnessRow[]> {
-  return [];
+  const names = [
+    ...new Set(
+      owners.map((owner) => requireGitHubName(owner, "owner").toLowerCase()),
+    ),
+  ];
+  if (names.length === 0) {
+    return [];
+  }
+  const rows = await sql`
+    SELECT o.owner, l.finished_at, l.error_code, l.next_allowed_at,
+      (
+        SELECT max(s.finished_at) FROM factory.gh_collect_runs s
+        WHERE s.owner = o.owner AND s.ok AND s.verified AND s.finished_at IS NOT NULL
+      ) AS last_success_at,
+      (
+        SELECT CASE WHEN n.finished_at IS NULL THEN n.started_at END
+        FROM factory.gh_collect_runs n
+        WHERE n.owner = o.owner
+        ORDER BY n.started_at DESC, n.id DESC
+        LIMIT 1
+      ) AS running_since,
+      (
+        SELECT min(a.started_at) FROM factory.gh_collect_runs a
+        WHERE a.owner = o.owner
+      ) AS first_started_at
+    FROM unnest(${names}::text[]) AS o(owner)
+    LEFT JOIN LATERAL (
+      SELECT f.finished_at, f.error_code, f.next_allowed_at
+      FROM factory.gh_collect_runs f
+      WHERE f.owner = o.owner AND f.finished_at IS NOT NULL
+      ORDER BY f.finished_at DESC, f.id DESC
+      LIMIT 1
+    ) l ON true
+  `.fetch();
+  return rows.map((row) => ({
+    owner: parseStoredGitHubName(row.owner, "owner"),
+    last_success_at: parseNullableDate(row.last_success_at, "last_success_at"),
+    latest:
+      row.finished_at === null || row.finished_at === undefined
+        ? null
+        : {
+            finished_at: parseDate(row.finished_at, "finished_at"),
+            error_code: parseNullableErrorCode(row.error_code),
+            next_allowed_at: parseNullableDate(
+              row.next_allowed_at,
+              "next_allowed_at",
+            ),
+          },
+    running_since: parseNullableDate(row.running_since, "running_since"),
+    first_started_at: parseNullableDate(
+      row.first_started_at,
+      "first_started_at",
+    ),
+  }));
 }
 
 /**

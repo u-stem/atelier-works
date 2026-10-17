@@ -118,12 +118,12 @@ export function buildApprovalConsoleUrl(
   return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}?approval=${String(approvalRequestId)}`;
 }
 
-/** noticeを選んだ状態のConsoleの要対応のURLを返す。 */
+/** noticeを1件選んだ状態のConsoleの要対応のURL(`/console/?notice=<id>`)を返す。 */
 export function buildNoticeConsoleUrl(
-  _windmillPublicUrl: string,
-  _noticeId: number,
+  windmillPublicUrl: string,
+  noticeId: number,
 ): string {
-  return "";
+  return `${windmillPublicUrl}${CONSOLE_ENTRANCE_PATH}?notice=${String(noticeId)}`;
 }
 
 /** 監査レポート1件を開くConsoleのURL(`/console/reports/audit/<work_item_id>`)を返す。 */
