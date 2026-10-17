@@ -97,6 +97,34 @@ describe("mise.toml stack tasks", () => {
   const PREVALIDATE_CADDY =
     "docker compose -f infra/docker-compose.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile";
 
+  // workerを作り直すと、実行中のジョブが止まる。作り直す`up -d`の前に、実行中の仕事が無いことを確かめる。
+  // dry-runが新しいイメージを見るよう、確認はworkerのイメージを作った後に置く。
+  const IDLE = "bun scripts/check-idle.ts --when-worker-recreated";
+  const BUILD_WORKER: Record<string, string> = {
+    up: "docker compose -f infra/docker-compose.yml build windmill_worker",
+    deploy:
+      "docker compose -f infra/docker-compose.yml build windmill_worker console_fetcher",
+  };
+
+  for (const task of ["up", "deploy"]) {
+    test(`${task} checks for running work before compose up`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      const idle = lines.indexOf(IDLE);
+      expect(idle > -1 && idle < lines.findIndex(isComposeUp)).toBe(true);
+    });
+
+    test(`${task} checks for running work after building the worker image`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      const build = lines.indexOf(BUILD_WORKER[task] ?? "");
+      expect(build > -1 && build < lines.indexOf(IDLE)).toBe(true);
+    });
+
+    test(`${task} checks for running work after the Docker version check`, () => {
+      const lines = taskRuns().get(task) ?? [];
+      expect(lines.indexOf(IDLE)).toBeGreaterThan(lines.indexOf(CHECK));
+    });
+  }
+
   for (const task of ["up", "deploy"]) {
     test(`${task} validates the Caddyfile before compose up`, () => {
       const lines = taskRuns().get(task) ?? [];
