@@ -661,7 +661,7 @@ const GH_COLLECT_NOTICE_RESOLVER = "self_update";
  * 自己更新を行い、そのあとでConsole用workerと定期ジョブ用workerが受けているかと、GitHubの収集が成功しているかを確かめる。
  * 確認は更新の成否によらず毎回行う。Console用workerがジョブを受けないとConsoleのジョブが溜まり続けるため。
  * 定期ジョブ用workerがジョブを受けないと、tag periodicを付けた定期ジョブが溜まり続けるため。
- * 収集が止まると、下流がいつまでも古い記録を読むため。
+ * 収集が止まると、記録が更新されないまま誰にも知らされないため。
  * 確認は時間を区切り、失敗しても例外を投げないので、更新の結果は変わらない。
  */
 export async function main(): Promise<SelfUpdateResult> {

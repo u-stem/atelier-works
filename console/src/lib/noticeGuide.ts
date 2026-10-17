@@ -309,11 +309,11 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "github_collect_stale",
     guide(
-      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは30分)を超えて成功していません。今の収集は記録を書くだけなので、Factoryの判断はまだ止まりません。",
+      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは30分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。",
       "本文の所有者の最新の実行の記録を、次のコマンドで読み、運用の文書の「実行の記録の読み方」の表のerror_codeの対処に従ってください。記録が古いときは、スケジュールとジョブの履歴を確かめます。",
       {
         commands: [
-          'mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, ok, error_code, verified, id_checked, requests, cost, remaining, finished_at FROM factory.gh_collect_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10"',
+          "mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c \"SELECT owner, ok, error_code, verified, id_checked, requests, cost, remaining, finished_at FROM factory.gh_collect_runs WHERE owner = '<所有者>' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10\"",
           "wmill schedule get f/factory/collect_github --json",
           "wmill job list --script-path f/factory/collect_github --limit 5",
         ],
