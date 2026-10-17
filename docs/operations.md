@@ -3638,7 +3638,11 @@ clone、fetch、push、`git gtr new`が1回ずつ成功することを見る。
 3. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成、Caddyの再起動まで行う。実行中の仕事があると、作り直す前に止まる([workerを作り直す前の確認](#workerを作り直す前の確認))。
 
 `mise install`は、すでに入っているツールには何もしない。
-miseの自動インストールが`mise run`の前に不足分を入れるかは、確かめていない。そのため、通知の手順に`mise install`を含める。
+miseの自動インストールが`mise run`の前に不足分を入れるかは、確かめていない。
+そのため、通知の手順に`mise install`を含める。
+
+`mise.toml`の`windmill-cli`の版を上げる変更では、反映の前に`mise run push:dry`を実行し、`deployed_sha`と凍結中のスケジュールが変更に出ないことを確かめる。
+凍結の除外は、CLIの`--excludes`の挙動に依存するためである([セキュリティ](security.md)の「スケジュールの凍結」)。
 
 workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
@@ -3694,16 +3698,17 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
-1. ホスト側のcheckoutで`git pull --ff-only`
-2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
-3. イメージの取得と、ビルドの対象のイメージ(`windmill_worker`と`console_fetcher`)のビルド
-4. 一時コンテナでの`caddy validate`。不正なら止まる
-5. 実行中の仕事の確認。workerが作り直されるときに、実行中の仕事があれば止まる
-6. 取得とビルドを省いた`docker compose up -d`
-7. Caddyの再起動と、動いているCaddyでの`caddy validate`
-8. `wmill sync push`(凍結中のスケジュールを除く)
-9. migrationの実行
-10. 反映したHEADの記録
+1. 凍結の状態の確認。壊れていれば失敗し、読めなければ警告だけで進む([スケジュールの凍結の仕様](internals/freezes.md)の「失敗の回復」)
+2. ホスト側のcheckoutで`git pull --ff-only`
+3. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
+4. イメージの取得と、ビルドの対象のイメージ(`windmill_worker`と`console_fetcher`)のビルド
+5. 一時コンテナでの`caddy validate`。不正なら止まる
+6. 実行中の仕事の確認。workerが作り直されるときに、実行中の仕事があれば止まる
+7. 取得とビルドを省いた`docker compose up -d`
+8. Caddyの再起動と、動いているCaddyでの`caddy validate`
+9. `wmill sync push`(凍結中のスケジュールを除く)
+10. migrationの実行
+11. 反映したHEADの記録
 
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
 この検査と、実行中の仕事の確認を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
@@ -3928,7 +3933,8 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 
 リポジトリから消したscriptやappは、`mise run push`ではWindmillに残る。
 `mise run push`と自己更新は`--keep-deleted`を付けるので、削除を反映しない。
-消すのは、人が`mise run push:prune`で行う。端末で`yes`を入力して確かめる。
+消すのは、人が`mise run push:prune`で行う。
+端末で`yes`を入力して確かめる。
 先に`mise run push:dry`で、消える対象を確かめる。
 消したものは、Windmillのゴミ箱に3日残る。
 

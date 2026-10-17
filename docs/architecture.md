@@ -617,7 +617,9 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 設定と限界は[運用](operations.md)の「Factory自身のリポジトリの数値IDを固定する」に書く。
 
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
-2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。凍結中のスケジュールはpushから除く。凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す([スケジュールの凍結の仕様](internals/freezes.md))。
+2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
+   凍結中のスケジュールはpushから除く。
+   凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す([スケジュールの凍結の仕様](internals/freezes.md))。
 3. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
 4. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
@@ -685,7 +687,8 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 
 gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
-凍結の2段は、凍結の変数の読み取りと、終わった行を消す書き込みである。各段は1つの上限10秒で包み、区切った呼び出しの回数には数えない。
+凍結の2段は、凍結の変数とファイルの読み取りと、終わった行を消す書き込みである。
+各段は1つの上限10秒で包み、区切った呼び出しの回数には数えない。
 ローカルのgitの9回は、ホストの印の確認である。
 コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
 どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
