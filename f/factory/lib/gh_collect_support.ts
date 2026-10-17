@@ -22,6 +22,29 @@ export const GH_COLLECT_DEADLINE_MS = 100_000;
 /** 残りがこれ未満なら、新しい要求を始めない。1要求の打ち切りと同じ長さ。 */
 export const GH_COLLECT_MIN_REQUEST_MS = 10_000;
 
+/** 詳細の取得のために、一覧が残す時間(ミリ秒)。 */
+export const GH_COLLECT_DETAIL_RESERVE_MS = 30_000;
+
+/**
+ * 一覧が新しい要求を始められる、残り時間の下限(ミリ秒)。
+ * 詳細が有効なら、詳細の取り分を残すために、要求の打ち切りに取り分を足した長さにする。
+ */
+export function stage1Floor(_detailEnabled: boolean): number {
+  return 0;
+}
+
+/**
+ * 詳細の書き込みに付ける、観測を始めた時刻(エポックミリ秒)。
+ * 一覧が1ページなら、その応答を受けた時刻。複数ページなら、最初のページを送った時刻。
+ */
+export function observationStartMs(_args: {
+  readonly pages: number;
+  readonly first_sent_ms: number;
+  readonly first_received_ms: number;
+}): number {
+  return 0;
+}
+
 /** レート制限で通信を控える時間の上限(ミリ秒)。 */
 export const GH_COLLECT_BACKOFF_CAP_MS = 3_600_000;
 
@@ -259,6 +282,8 @@ export type OwnerReposPage =
       readonly owner: { readonly database_id: number } | null;
       readonly cost: number | null;
       readonly remaining: number | null;
+      /** レート制限が解ける時刻。読めなければ`null`。 */
+      readonly reset_at: Date | null;
       readonly repos: readonly RepoNode[];
       readonly discarded: readonly DiscardedNode[];
       readonly has_next: boolean;
@@ -340,6 +365,7 @@ export function parseOwnerReposPage(
       owner: null,
       cost,
       remaining,
+      reset_at: null,
       repos: [],
       discarded: [],
       has_next: false,
@@ -383,6 +409,7 @@ export function parseOwnerReposPage(
     owner: { database_id: owner.databaseId },
     cost,
     remaining,
+    reset_at: null,
     repos,
     discarded,
     has_next: pageInfo.hasNextPage,
