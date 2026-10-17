@@ -29,7 +29,8 @@ const REASONS = [
 
 describe("the notification enum", () => {
   test("lists every reason", () => {
-    expect([...NOTIFY_REASONS].sort()).toEqual([...REASONS].sort());
+    const listed: string[] = [...NOTIFY_REASONS].sort();
+    expect(listed).toEqual([...REASONS].sort());
   });
 });
 
