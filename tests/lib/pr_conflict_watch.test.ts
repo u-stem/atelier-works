@@ -1129,6 +1129,18 @@ describe("runPrConflictWatch: a conflict that was resolved while it was being no
     expect(h.resolvedNotices).toEqual([]);
   });
 
+  test("resolves the notice that this run registered when the row is bound to a fix work item", async () => {
+    const h = setup({ markResult: "fix_bound" });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolvedNotices).toEqual([100]);
+  });
+
+  test("does not count a notification of a row that is bound to a fix work item", async () => {
+    const h = setup({ markResult: "fix_bound" });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.notified).toBe(0);
+  });
+
   test("does not count a notification that another run recorded", async () => {
     const h = setup({ markResult: "already_notified" });
     const result = await runPrConflictWatch(h.deps);

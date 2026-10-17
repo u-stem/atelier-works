@@ -5756,6 +5756,7 @@ export async function recordPrConflict(
 export type PrConflictMarkResult =
   | "marked"
   | "already_notified"
+  | "fix_bound"
   | "not_conflicted";
 
 /**
