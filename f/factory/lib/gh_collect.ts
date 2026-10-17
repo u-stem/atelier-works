@@ -2,6 +2,7 @@
 // 所有者ごとに読み取り専用のトークンを使い、一覧を取り終えて照合が通ったときだけ、その所有者の記録を置き換える。
 // GitHubの失敗は例外にせず、実行の行に失敗の種類だけを残す。ジョブ結果とログには、件数と失敗の種類しか載せない。
 
+import type { OptionalFieldError, ZeroCountRepo } from "./gh_collect_detail.ts";
 import {
   allowlistedRepos,
   carriedFailure,
@@ -34,7 +35,12 @@ import type {
   GhCollectErrorCode,
   GhCollectOwnerState,
   GhCollectRunOutcome,
+  GhCollectStage,
+  GhIssue,
+  GhPullRequest,
   GhRepo,
+  GhRepoDetailWrite,
+  GhRepoDetailWriteResult,
   GhRepoGone,
   GhRepoUpsert,
   NoticeRecord,
@@ -47,7 +53,15 @@ export type GhCollectConfig = Pick<
   | "factory_repo"
   | "trigger_label"
   | "gh_collect_enabled"
+  | "gh_collect_detail_enabled"
+  | "review_label"
+  | "fix_label"
 >;
+
+/** `request`が送る問い合わせの種類。通信の層が文に対応させる。任意の文を送る道は作らない。 */
+export type GhRequestKind =
+  | { readonly kind: "owner_repos" }
+  | { readonly kind: "repo_details"; readonly aliases: number };
 
 /** `runGhCollect`が使う外部の操作。テストでは差し替える。 */
 export type GhCollectDeps = {
@@ -72,14 +86,42 @@ export type GhCollectDeps = {
     readonly owner_id: number;
     readonly listed: readonly GhRepoUpsert[];
     readonly gone: readonly GhRepoGone[];
-  }) => Promise<void>;
+  }) => Promise<{
+    readonly replaced: readonly string[];
+    readonly unusable: number;
+  }>;
   readonly addNotice: (record: NoticeRecord) => Promise<unknown>;
   /** GraphQLを1回送る。失敗は例外にせず、`GraphqlFailure`で返す。 */
   readonly request: (args: {
     readonly token: string;
     readonly variables: Readonly<Record<string, unknown>>;
     readonly timeoutMs: number;
+    readonly kind: GhRequestKind;
   }) => Promise<GraphqlResponse>;
+  /** 所有者の開いているPRとIssueの行を読む。 */
+  readonly listDetailRows: (owner: string) => Promise<{
+    readonly prs: readonly GhPullRequest[];
+    readonly issues: readonly GhIssue[];
+  }>;
+  /** 詳細を取り終えた1つのリポジトリを書く。検査の失敗は戻り値、DBの失敗は例外。 */
+  readonly writeRepoDetail: (
+    write: GhRepoDetailWrite,
+  ) => Promise<GhRepoDetailWriteResult>;
+  /** 打ち切りか失敗の印を書く。 */
+  readonly markRepoIncomplete: (mark: {
+    readonly owner: string;
+    readonly repo: string;
+    readonly repo_id: number;
+    readonly kind: "truncated" | "failed";
+  }) => Promise<void>;
+  /** 件数が0のリポジトリの開いている行を閉じる。 */
+  readonly closeZeroCountRepos: (close: {
+    readonly owner: string;
+    readonly repos: readonly ZeroCountRepo[];
+    readonly observed_at: Date;
+  }) => Promise<void>;
+  /** 所有者の開いている行をすべて使用不可にし、行数を返す。 */
+  readonly markOwnerRowsUnusable: (owner: string) => Promise<number>;
   readonly log: Logger;
 };
 
@@ -90,6 +132,17 @@ export type GhCollectOwnerResult = {
   readonly error_code: GhCollectErrorCode | null;
   readonly repos: number;
   readonly requests: number;
+  readonly stage: GhCollectStage | null;
+  readonly detail_targets: number;
+  readonly detail_requests: number;
+  readonly detail_done: number;
+  readonly detail_incomplete: number;
+  /** 任意の項目のエラーの件数。固定の項目名と丸めた種類の組ごとに数える。 */
+  readonly optional_field_errors: readonly OptionalFieldError[];
+  /** `nodes`の`null`の要素の数。 */
+  readonly null_nodes: number;
+  /** 一覧の置き換えで使用不可にした行の数。 */
+  readonly unusable: number;
 };
 
 export type GhCollectResult = {
@@ -115,6 +168,11 @@ function failedOutcome(
     remaining: null,
     error_code: errorCode,
     next_allowed_at: null,
+    stage: null,
+    detail_targets: 0,
+    detail_requests: 0,
+    detail_done: 0,
+    detail_incomplete: 0,
     ...detail,
   };
 }
@@ -173,6 +231,14 @@ export async function runGhCollect(
       error_code: outcome.error_code,
       repos: collected.repos,
       requests: outcome.requests,
+      stage: outcome.stage,
+      detail_targets: outcome.detail_targets,
+      detail_requests: outcome.detail_requests,
+      detail_done: outcome.detail_done,
+      detail_incomplete: outcome.detail_incomplete,
+      optional_field_errors: [],
+      null_nodes: 0,
+      unusable: 0,
     });
     log.info("owner collected", {
       owner: owner.name,
@@ -272,6 +338,7 @@ export async function runGhCollect(
           token,
           variables: { owner: owner.name, label: config.trigger_label, cursor },
           timeoutMs: Math.min(GRAPHQL_REQUEST_TIMEOUT_MS, left),
+          kind: { kind: "owner_repos" },
         });
       } catch {
         log.error("a GitHub request failed unexpectedly", {
@@ -361,6 +428,11 @@ export async function runGhCollect(
         remaining,
         error_code: null,
         next_allowed_at: null,
+        stage: null,
+        detail_targets: 0,
+        detail_requests: 0,
+        detail_done: 0,
+        detail_incomplete: 0,
       },
       repos: listed.length,
     };
