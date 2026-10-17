@@ -9,12 +9,13 @@
 
 /**
  * 引用符を外した後の語。
- * `dynamic`は展開や置換を含み値が実行時に決まること、`glob`は引用符の外に`*`、`?`、`[`、`{`があることを表す。
+ * `dynamic`は展開や置換を含み値が実行時に決まること、`glob`は引用符の外に`*`、`?`、`[`があること、`brace`は引用符の外に`{`があることを表す。
  */
 export type Word = {
   readonly text: string;
   readonly dynamic: boolean;
   readonly glob: boolean;
+  readonly brace?: boolean;
 };
 
 /**
@@ -49,6 +50,8 @@ export type StrippedCommand = {
   readonly wrappers: readonly string[];
   /** 最初に見つけた`mise exec`。無ければnull。 */
   readonly mise: MiseExec | null;
+  /** `mise exec`の`mise`の語から、起動するコマンドの前の`--`までの語。サブコマンドの取り違えを検査するために返す。無ければnull。 */
+  readonly miseWords: readonly Word[] | null;
 };
 
 /** 実行時に今のブランチ名になる置換。push先に書いても、ブランチが決まらない語として扱わない。 */
@@ -164,6 +167,7 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
   const assignments: Word[] = [];
   const wrappers: string[] = [];
   let mise: MiseExec | null = null;
+  let miseWords: readonly Word[] | null = null;
   let index = 0;
   while (index < words.length) {
     const word = words[index];
@@ -184,14 +188,30 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
       index = skipWrapperOptions(words, index + 1, name);
     } else if (name === "mise" && miseExecAt(words, index + 1) !== -1) {
       wrappers.push(text);
-      const read = readMiseExec(words, miseExecAt(words, index + 1) + 1);
+      const execAt = miseExecAt(words, index + 1);
+      const read = readMiseExec(words, execAt + 1);
+      if (mise === null) {
+        const dashDash = words.findIndex(
+          (candidate, at) => at > execAt && candidate.text === "--",
+        );
+        miseWords = words.slice(
+          index,
+          dashDash === -1 ? words.length : dashDash,
+        );
+      }
       mise ??= read.mise;
       index = read.next;
     } else {
       break;
     }
   }
-  return { assignments, words: words.slice(index), wrappers, mise };
+  return {
+    assignments,
+    words: words.slice(index),
+    wrappers,
+    mise,
+    miseWords,
+  };
 }
 
 /**
@@ -360,6 +380,7 @@ class Parser {
   private inWord = false;
   private dynamic = false;
   private glob = false;
+  private brace = false;
   private inputs: Word[] = [];
   private redirectNextWord = false;
   private hereStringNextWord = false;
@@ -495,8 +516,10 @@ class Parser {
       case "*":
       case "?":
       case "[":
-      case "{":
         this.glob = true;
+        break;
+      case "{":
+        this.brace = true;
         break;
     }
     this.append(char);
@@ -518,6 +541,7 @@ class Parser {
     this.inWord = false;
     this.dynamic = false;
     this.glob = false;
+    this.brace = false;
   }
 
   private endWord(): void {
@@ -528,6 +552,7 @@ class Parser {
       dynamic:
         this.dynamic && !CURRENT_BRANCH_SUBSTITUTIONS.includes(this.text),
       glob: this.glob,
+      brace: this.brace,
     };
     if (this.hereStringNextWord) {
       this.hereStringNextWord = false;

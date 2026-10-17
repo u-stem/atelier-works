@@ -145,18 +145,20 @@ const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
 /** `mise set`の別名。`ev`と`env-vars`も値を一覧する。 */
 const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
 
-/** 設定値を一覧するだけで、書き込む形を持たないサブコマンドと、その別名。 */
+/** 設定値を一覧するか、設定値を持つシェルを起動するだけで、書き込む形を持たないサブコマンドと、その別名。 */
 const MISE_READ_NAMES: ReadonlySet<string> = new Set([
   "env",
   "e",
   "config",
   "cfg",
   "toml",
+  "hook-env",
+  "en",
 ]);
 
 /** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */
 function hasBrace(word: Word): boolean {
-  return word.glob && word.text.includes("{");
+  return word.brace === true;
 }
 
 /**
@@ -199,14 +201,19 @@ function listsMiseValues(words: readonly Word[]): boolean {
       operands.push(word);
       continue;
     }
-    if (word.dynamic || word.glob) return true;
+    if (word.dynamic || word.glob || hasBrace(word)) return true;
     const [optionName = ""] = word.text.split("=", 1);
     const isValueOption = MISE_SET_VALUE_OPTIONS.has(word.text);
     if (word.text === "--stdin") {
       readsStdin = true;
     } else if (isValueOption) {
       const value = rest[index + 1];
-      if (value?.dynamic || value?.glob) return true;
+      if (
+        value !== undefined &&
+        (value.dynamic || value.glob || hasBrace(value))
+      ) {
+        return true;
+      }
       index += 1;
     } else if (
       !MISE_SET_FLAGS.has(word.text) &&
@@ -360,7 +367,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set without a literal KEY=VALUE, or one literal key with --stdin, lists the values of mise.local.toml, including secrets. So do mise env, mise config, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put options such as -E local before set, not after it.",
+    "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Words like set or env in mise run arguments are denied too: pass the task name and arguments in another form.",
   miseXargs:
     "mise with arguments from xargs cannot be checked: mise set, mise env, and mise config list the secrets of mise.local.toml. Run mise directly with literal arguments.",
   gitConfigEnv:
@@ -547,7 +554,9 @@ function checkSimpleCommand(
   };
   const secret = findSecretReference(command, context);
   if (secret !== null) return deny(secret);
-  const { assignments, words, wrappers, mise } = stripWrappers(command.words);
+  const { assignments, words, wrappers, mise, miseWords } = stripWrappers(
+    command.words,
+  );
   const program = baseName(words[0]?.text ?? "");
   const declared = ENVIRONMENT_BUILTINS.has(program)
     ? words.slice(1).filter((word) => ASSIGNMENT.test(word.text))
@@ -574,8 +583,11 @@ function checkSimpleCommand(
     const shell = checkShellInput(command, shellArgs, directory, scope);
     if (shell.kind === "deny") return shell;
   }
-  if (program === "mise" && wrappers.includes("xargs")) {
+  if ((program === "mise" || mise !== null) && wrappers.includes("xargs")) {
     return deny(REASONS.miseXargs);
+  }
+  if (miseWords !== null && listsMiseValues(miseWords)) {
+    return deny(REASONS.miseSetList);
   }
   if (program === "mise" && listsMiseValues(words)) {
     return deny(REASONS.miseSetList);

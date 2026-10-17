@@ -1783,40 +1783,55 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 `mise set`、`mise env`、`mise config`と、その別名は、`mise.local.toml`の秘密値を一覧する。
 フックは、書き込む形を持たない呼び出しを拒否する。
 
-**どの呼び出しを調べるか。**
-`--`より前の語に、`set`と別名の`ev`、`env-vars`、または`env`と`e`、`config`、`cfg`、`toml`があれば調べる。
-サブコマンドの前に値を取る隠しオプションを置けるので、オプションの種類を数えず、サブコマンドの語を探す。
-そのため、`mise settings set`や`mise run set`のように、その語を持つ別の呼び出しも拒否する。
-`env`と`config`の系統には書き込む形が無いので、あれば拒否する。
-サブコマンドより前の語が引用符の外にブレースを持つときも、語が増えてサブコマンドが変わるので拒否する。
-`mise exec`と`mise x`は、前に`-E local`のようなグローバルオプションがあっても、内側のコマンドを同じ判定にかける。
+#### どの呼び出しを調べるか
 
-**`mise set`の書き込む形。**
+`--`より前の語に、次の語があれば調べる。
+`set`と別名の`ev`、`env-vars`がある。
+`env`と別名の`e`、`config`と別名の`cfg`、`toml`、`hook-env`、`en`もある。
+サブコマンドの前に値を取る隠しオプションを置けるので、オプションの種類を数えず、サブコマンドの語を探す。
+そのため、`mise settings set`、`mise run set`、`mise run env`のように、その語を持つ別の呼び出しも拒否する。
+`mise config ls`のように、設定値を出さない呼び出しも拒否する。
+`set`以外のサブコマンドには書き込む形が無いので、あれば拒否する。
+サブコマンドより前の語が引用符の外にブレースを持つときも、語が増えてサブコマンドが変わるので拒否する。
+`mise exec`と`mise x`は、前にグローバルオプションがあっても、内側のコマンドを同じ判定にかける。
+`mise`から`--`までの語にも、同じ判定をかける。値を取る隠しオプションの値を、`x`と取り違えても見落とさないためである。
+
+#### mise setの書き込む形
+
 オペランドがすべて`KEY=VALUE`の形か、`--stdin`と、展開を含まない鍵の名前1つの形である。
 `KEY=VALUE`のオペランドは、展開やブレースを含んでも、先頭の`KEY=`が残るので書き込みのままである。
 そのため、拒否しない。
+語が分かれて`KEY=`の無い語が混ざると、miseが失敗する(後述の実機の確認)。
 秘密値を投入する手順([セットアップ](setup.md))は、値を標準入力から渡す`mise set -E local --stdin KEY`を使う。
 この形は一覧を出さないので、フックは拒否しない。
 投入は人が行う。
 
-**書き込む形のオプション。**
+#### 書き込む形のオプション
+
 認めるのは、値を取らない`--stdin`、`-g`、`--global`、`--age-encrypt`である。
 それと、値を取る`-E`、`--env`、`-C`、`--cd`、`-j`、`--jobs`、`--file`である。
 値を取る`--age-key-file`、`--age-recipient`、`--age-ssh-recipient`も認める。
 未知のオプションは、値を取ってオペランドを変えるおそれがあるので拒否する。
 展開、glob、ブレースを含むオプションとその値、`--`を持つ形、サブコマンド名を持つオペランドも拒否する。
-オプションは`set`の前に置く。後ろに置いた`-q`などは、未知のオプションとして拒否する。
+許可リストに無い`-q`などのオプションは、`set`の前に置く。
 
-**xargs。**
+#### xargs
+
 `xargs`から`mise`を起動する形は、引数を判定できないので拒否する。
 
-**実機で確かめたこと(mise 2026.9.13、ダミー値)。**
+#### 実機で確かめたこと
 
-- `mise ev`、`mise env-vars`、`mise e`は、`mise set`と`mise env`の別名で、どれも`mise.local.toml`の値を出力する。
+mise 2026.9.13で、ダミー値を使って確かめた。
+
+- `mise ev`、`mise env-vars`は`mise set`の別名で、`mise e`は`mise env`の別名である。どれも`mise.local.toml`の値を出力する。
+- `mise hook-env -s bash`は、環境変数を`export`の形で出力し、`mise.local.toml`の値を含む。
+- `mise en`は、`mise.local.toml`の値を持つシェルを起動する。標準入力のコードを実行できる。
 - `mise -- set`は、ヘルプを出力するだけで、値を出力しない。
 - `mise se`、`mise sett`、`mise s`は、`unknown command`の失敗になり、`set`に解決されない。
 - `--trace`、`-vv`、`-v`、`--debug`を付けた`mise set A=b`の出力に、`mise.local.toml`の値は載らない。
+- `mise set A=b KEY`は、`KEY has no value`で失敗し、値を出力しない。
 - `mise set --stdin KEY`に空の標準入力を渡すと、既存の値が空文字で上書きされる。
+- `mise doctor`、`mise settings`、`mise tasks`、`mise direnv envrc`は、`mise.local.toml`の値を出力しない。
 
 ### 拒否された操作を人が実行する
 
@@ -1834,6 +1849,7 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - 値が実行時に決まるオプション名(`git push ${X:---force}`など)
 - シェルのエイリアスと関数
 - `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
+- ブレース展開で作るファイル名(`cat mise.local.{toml,}`、`cat .en{v,}`)。秘密値のファイルの名前の照合は、ブレースを展開しない
 - 外すことにしていない前置きのコマンド(`watch`、`flock`、`stdbuf`、`script`、`parallel`、`setsid`、`doas`、`caffeinate`など)。`mise set`の前に置かれると判定できない
 - スクリプトのファイルの中身
 - コマンドを起動するインタープリター(`bun -e`、`python -c`が`git push`を実行する場合など)
