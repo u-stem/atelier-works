@@ -90,6 +90,11 @@ export function hasLabel(labels: readonly string[], label: string): boolean {
   return labels.some((name) => name.toLowerCase() === wanted);
 }
 
+/** `value`がGitHubのログイン名かリポジトリ名の形か。例外を投げず、値を文に含めない。 */
+export function isGitHubName(_value: unknown): _value is string {
+  return false;
+}
+
 export function assertGitHubName(name: string): void {
   if (name === "." || name === "..") {
     throw new Error(`invalid GitHub name: ${JSON.stringify(name)}`);
@@ -150,6 +155,11 @@ const BRANCH_NAME_RULES: readonly {
     reason: "must not end with .lock",
   },
 ];
+
+/** `value`がブランチ名の検査規則に合うか。例外を投げず、値を文に含めない。 */
+export function isBranchName(_value: unknown): _value is string {
+  return false;
+}
 
 export function assertBranchName(name: string): void {
   for (const rule of BRANCH_NAME_RULES) {
@@ -881,6 +891,89 @@ export type Notice = {
   resolved_by: string | null;
   resolved_at: Date | null;
   created_at: Date;
+};
+
+// ---------------------------------------------------------------------------
+// GitHubの収集(`gh_repos`、`gh_collect_runs`)
+// ---------------------------------------------------------------------------
+
+/**
+ * リポジトリが「消えた」(`gone`)理由。
+ * `archived`は一覧にあるがarchiveされている。`not_listed`は前回あったのに一覧に無い。
+ * `not_visible`は`repo_allowlist`にあるのに一覧に無い。
+ */
+export const GH_GONE_REASONS = [
+  "archived",
+  "not_listed",
+  "not_visible",
+] as const;
+export type GhGoneReason = (typeof GH_GONE_REASONS)[number];
+
+/** 収集の実行の失敗の種類。成功の行には付けない。 */
+export const GH_COLLECT_ERROR_CODES = [
+  "no_token",
+  "token_config_invalid",
+  "db_error",
+  "owner_mismatch",
+  "deadline",
+  "unauthorized",
+  "forbidden",
+  "rate_limited",
+  "secondary_limit",
+  "http_5xx",
+  "timeout",
+  "graphql_error",
+  "parse_error",
+] as const;
+export type GhCollectErrorCode = (typeof GH_COLLECT_ERROR_CODES)[number];
+
+/** `factory.gh_repos`の1行。`owner`と`repo`は小文字。 */
+export type GhRepo = {
+  readonly id: number;
+  readonly owner: string;
+  readonly owner_id: number;
+  readonly repo: string;
+  /** 一度も見えていない`not_visible`の行だけ`null`。 */
+  readonly repo_id: number | null;
+  readonly allowed: boolean;
+  readonly default_branch: string | null;
+  readonly archived: boolean;
+  /** `allowed`が偽の行は`null`。 */
+  readonly open_pr_count: number | null;
+  readonly labeled_issue_count: number | null;
+  readonly gone: boolean;
+  readonly gone_reason: GhGoneReason | null;
+  readonly listed_at: Date | null;
+};
+
+/** 一覧に載ったリポジトリの書き込み。`owner`は呼び出し側が別に渡す。 */
+export type GhRepoUpsert = {
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly allowed: boolean;
+  readonly default_branch: string | null;
+  readonly archived: boolean;
+  readonly open_pr_count: number | null;
+  readonly labeled_issue_count: number | null;
+};
+
+/** 一覧に載らなかったリポジトリの書き込み。 */
+export type GhRepoGone = {
+  readonly repo: string;
+  readonly reason: "not_listed" | "not_visible";
+};
+
+/** 収集の実行1行(所有者ごと)の終わりに書く内容。 */
+export type GhCollectRunOutcome = {
+  readonly ok: boolean;
+  readonly owner_id: number | null;
+  readonly verified: boolean;
+  readonly id_checked: boolean | null;
+  readonly cost: number | null;
+  readonly requests: number;
+  readonly remaining: number | null;
+  readonly error_code: GhCollectErrorCode | null;
+  readonly next_allowed_at: Date | null;
 };
 
 // ---------------------------------------------------------------------------

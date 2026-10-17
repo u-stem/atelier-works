@@ -18,6 +18,7 @@ import {
   countPrCiFixRounds,
   countPrConflictFixRounds,
   countPrFixFailures,
+  deleteGhCollectRunsBefore,
   deleteMainCiRunsBefore,
   deletePrCiChecksBefore,
   deletePrConflictChecksBefore,
@@ -26,6 +27,7 @@ import {
   dependabotGateWaitingCancels,
   findFixRoundKindToReview,
   findOrphanFixingPrCiChecks,
+  finishGhCollectRun,
   getLatestPrCiCheck,
   getMainCiStateBySha,
   getNoticeById,
@@ -43,6 +45,7 @@ import {
   insertCleanupRun,
   insertDependabotWorkItemUnlessActive,
   insertFixRound,
+  insertGhCollectRuns,
   insertWorkerSample,
   insertWorkItem,
   isActivePrFixUniqueViolation,
@@ -56,6 +59,8 @@ import {
   listConflictedPrConflictChecks,
   listFailedPrCiChecks,
   listFixingPrCiChecks,
+  listGhCollectOwnerStates,
+  listGhRepos,
   listMainCiRunsBySha,
   listNoCiPrCiChecksToRecheck,
   listPendingMainCiRuns,
@@ -65,6 +70,7 @@ import {
   listPrConflictRepos,
   listPrOpenIssueWorkItems,
   listPrOpenRepos,
+  listRecentGhCollectRuns,
   listRecentWorkerSamples,
   listTransientReviewCandidates,
   listUnnotifiedFailedPrCiChecks,
@@ -82,6 +88,7 @@ import {
   releaseConfigMisfitHolds,
   releaseFixingPrCiCheck,
   releasePrConflictFix,
+  replaceGhRepoSnapshot,
   resolveNoticeIfUnresolved,
   resolveNoticesBeforeSuccessfulDeployment,
   resolveStaleInfoNoticesBefore,
@@ -6887,6 +6894,295 @@ check(
   gatedRestart.unposted_count === 1 &&
     gatedRestart.since?.toISOString() === "2020-01-08T00:00:00.000Z",
   gatedRestart,
+);
+
+// ---------------------------------------------------------------------------
+// gh_collect_runs / gh_repos
+// ---------------------------------------------------------------------------
+
+const GH_OWNER = "qdbgh";
+const GH_OWNER_B = "qdbghb";
+const DAY_MS = 86_400_000;
+const ghRuns = await insertGhCollectRuns([GH_OWNER, GH_OWNER_B], sql);
+check(
+  "gh_collect_runs: one statement inserts a row for every owner, unfinished",
+  ghRuns.length === 2 &&
+    (await listRecentGhCollectRuns(GH_OWNER, 5, sql)).every(
+      (row) => row.finished_at === null && !row.ok && row.requests === 0,
+    ),
+  ghRuns,
+);
+const ghRunA = ghRuns.find((row) => row.owner === GH_OWNER)?.id ?? 0;
+check(
+  "gh_collect_runs: an unfinished row is not a latest result",
+  (await listGhCollectOwnerStates([GH_OWNER], sql))[0]?.latest === null,
+);
+const ghSuccess = await finishGhCollectRun(
+  ghRunA,
+  {
+    ok: true,
+    owner_id: 4242,
+    verified: true,
+    id_checked: true,
+    cost: 2,
+    requests: 2,
+    remaining: 4990,
+    error_code: null,
+    next_allowed_at: null,
+  },
+  sql,
+);
+const ghSecondFinish = await finishGhCollectRun(
+  ghRunA,
+  {
+    ok: false,
+    owner_id: null,
+    verified: false,
+    id_checked: null,
+    cost: null,
+    requests: 0,
+    remaining: null,
+    error_code: "deadline",
+    next_allowed_at: null,
+  },
+  sql,
+);
+check("gh_collect_runs: a run is finished once", ghSuccess && !ghSecondFinish);
+const [ghFinished] = await listRecentGhCollectRuns(GH_OWNER, 1, sql);
+check(
+  "gh_collect_runs: the finished row keeps the written values",
+  ghFinished?.ok === true &&
+    ghFinished.finished_at !== null &&
+    ghFinished.owner_id === 4242 &&
+    ghFinished.id_checked === true &&
+    ghFinished.cost === 2 &&
+    ghFinished.remaining === 4990 &&
+    ghFinished.error_code === null,
+  ghFinished,
+);
+const ghUntil = new Date(Date.now() + 3_600_000);
+const ghRunB = ghRuns.find((row) => row.owner === GH_OWNER_B)?.id ?? 0;
+await finishGhCollectRun(
+  ghRunB,
+  {
+    ok: false,
+    owner_id: null,
+    verified: false,
+    id_checked: null,
+    cost: null,
+    requests: 1,
+    remaining: 0,
+    error_code: "rate_limited",
+    next_allowed_at: ghUntil,
+  },
+  sql,
+);
+const ghStates = await listGhCollectOwnerStates([GH_OWNER, GH_OWNER_B], sql);
+const ghStateA = ghStates.find((row) => row.owner === GH_OWNER);
+const ghStateB = ghStates.find((row) => row.owner === GH_OWNER_B);
+check(
+  "gh_collect_runs: the latest result and the last success are read per owner",
+  ghStateA?.latest?.ok === true &&
+    ghStateA.last_success_at !== null &&
+    ghStateB?.latest?.error_code === "rate_limited" &&
+    ghStateB.last_success_at === null,
+  ghStates,
+);
+check(
+  "gh_collect_runs: the next allowed time round-trips",
+  ghStateB?.latest?.next_allowed_at?.getTime() === ghUntil.getTime(),
+);
+execPsql(
+  target,
+  `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code) VALUES
+    ('${GH_OWNER}', now() - interval '60 days', now() - interval '60 days', true, NULL),
+    ('${GH_OWNER}', now() - interval '50 days', now() - interval '50 days', false, 'deadline'),
+    ('${GH_OWNER}', now() - interval '40 days', NULL, false, NULL),
+    ('${GH_OWNER_B}', now() - interval '45 days', now() - interval '45 days', false, 'no_token')`,
+);
+// 新しい未完了の行ができても、`finished_at`のある直近の行は残る。
+await insertGhCollectRuns([GH_OWNER], sql);
+const ghBeforeDelete = await listRecentGhCollectRuns(GH_OWNER, 20, sql);
+const ghDeleted = await deleteGhCollectRunsBefore(
+  new Date(Date.now() - 30 * DAY_MS),
+  sql,
+);
+const ghAfterDelete = await listRecentGhCollectRuns(GH_OWNER, 20, sql);
+check(
+  "gh_collect_runs: the sweep keeps the latest finished run even when a newer unfinished row exists",
+  ghAfterDelete.some((row) => row.id === ghRunA) &&
+    ghAfterDelete.length < ghBeforeDelete.length &&
+    ghDeleted >= 1,
+  {
+    before: ghBeforeDelete.length,
+    after: ghAfterDelete.length,
+    deleted: ghDeleted,
+  },
+);
+check(
+  "gh_collect_runs: the sweep deletes an old unfinished row",
+  !ghAfterDelete.some(
+    (row) =>
+      row.finished_at === null &&
+      Date.now() - row.started_at.getTime() > 30 * DAY_MS,
+  ),
+);
+check(
+  "gh_collect_runs: the sweep keeps the latest finished run of another owner",
+  (await listRecentGhCollectRuns(GH_OWNER_B, 20, sql)).some(
+    (row) => row.id === ghRunB,
+  ),
+);
+execPsql(
+  target,
+  `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code) VALUES
+    ('${GH_OWNER_B}', now() - interval '60 days', now() - interval '60 days', true, NULL),
+    ('${GH_OWNER_B}', now() - interval '55 days', now() - interval '55 days', false, 'deadline')`,
+);
+await deleteGhCollectRunsBefore(new Date(Date.now() - 30 * DAY_MS), sql);
+check(
+  "gh_collect_runs: the sweep keeps the latest success of an owner whose latest run failed",
+  (await listRecentGhCollectRuns(GH_OWNER_B, 20, sql)).some(
+    (row) => row.ok && Date.now() - row.started_at.getTime() > 30 * DAY_MS,
+  ),
+);
+
+type GhSnapshotInput = Parameters<typeof replaceGhRepoSnapshot>[0];
+const ghSnapshot = (
+  listed: GhSnapshotInput["listed"],
+  gone: GhSnapshotInput["gone"],
+) =>
+  replaceGhRepoSnapshot({ owner: "QdbGh", owner_id: 4242, listed, gone }, sql);
+await ghSnapshot(
+  [
+    {
+      repo: "Alpha",
+      repo_id: 11,
+      allowed: true,
+      default_branch: "main",
+      archived: false,
+      open_pr_count: 2,
+      labeled_issue_count: 1,
+    },
+    {
+      repo: "beta",
+      repo_id: 12,
+      allowed: false,
+      default_branch: "main",
+      archived: false,
+      open_pr_count: null,
+      labeled_issue_count: null,
+    },
+    {
+      repo: "gamma",
+      repo_id: 13,
+      allowed: true,
+      default_branch: null,
+      archived: true,
+      open_pr_count: 0,
+      labeled_issue_count: 0,
+    },
+  ],
+  [{ repo: "hidden", reason: "not_visible" }],
+);
+const ghRepos1 = await listGhRepos(GH_OWNER, sql);
+const ghByName = (rows: typeof ghRepos1, repo: string) =>
+  rows.find((row) => row.repo === repo);
+check(
+  "gh_repos: a snapshot writes the listed repositories in lowercase with their counts",
+  ghByName(ghRepos1, "alpha")?.open_pr_count === 2 &&
+    ghByName(ghRepos1, "alpha")?.gone === false &&
+    ghByName(ghRepos1, "alpha")?.owner_id === 4242 &&
+    ghByName(ghRepos1, "alpha")?.listed_at !== null,
+  ghRepos1,
+);
+check(
+  "gh_repos: a disallowed repository has no counts",
+  ghByName(ghRepos1, "beta")?.allowed === false &&
+    ghByName(ghRepos1, "beta")?.open_pr_count === null,
+);
+check(
+  "gh_repos: an archived repository is gone with the reason archived",
+  ghByName(ghRepos1, "gamma")?.gone === true &&
+    ghByName(ghRepos1, "gamma")?.gone_reason === "archived",
+);
+check(
+  "gh_repos: an allowlisted repository that was never seen is created with a null repo_id",
+  ghByName(ghRepos1, "hidden")?.repo_id === null &&
+    ghByName(ghRepos1, "hidden")?.gone_reason === "not_visible" &&
+    ghByName(ghRepos1, "hidden")?.listed_at === null,
+  ghRepos1,
+);
+await ghSnapshot(
+  [
+    {
+      repo: "alpha",
+      repo_id: 11,
+      allowed: true,
+      default_branch: "trunk",
+      archived: false,
+      open_pr_count: 5,
+      labeled_issue_count: 0,
+    },
+  ],
+  [
+    { repo: "beta", reason: "not_listed" },
+    { repo: "gamma", reason: "not_listed" },
+  ],
+);
+const ghRepos2 = await listGhRepos(GH_OWNER, sql);
+check(
+  "gh_repos: a repository that left the list is gone with the reason not_listed and keeps its repo_id",
+  ghByName(ghRepos2, "beta")?.gone_reason === "not_listed" &&
+    ghByName(ghRepos2, "gamma")?.gone_reason === "not_listed" &&
+    ghByName(ghRepos2, "gamma")?.repo_id === 13,
+  ghRepos2,
+);
+check(
+  "gh_repos: a listed repository is updated in place",
+  ghByName(ghRepos2, "alpha")?.default_branch === "trunk" &&
+    ghByName(ghRepos2, "alpha")?.open_pr_count === 5 &&
+    ghRepos2.filter((row) => row.repo === "alpha").length === 1,
+);
+await ghSnapshot(
+  [
+    {
+      repo: "beta",
+      repo_id: 12,
+      allowed: true,
+      default_branch: "main",
+      archived: false,
+      open_pr_count: 1,
+      labeled_issue_count: 0,
+    },
+  ],
+  [],
+);
+const ghRepos3 = await listGhRepos(GH_OWNER, sql);
+check(
+  "gh_repos: a repository listed again is restored",
+  ghByName(ghRepos3, "beta")?.gone === false &&
+    ghByName(ghRepos3, "beta")?.gone_reason === null &&
+    ghByName(ghRepos3, "beta")?.allowed === true,
+  ghRepos3,
+);
+check(
+  "gh_repos: a repository that is not in the snapshot keeps its row",
+  ghByName(ghRepos3, "alpha")?.open_pr_count === 5,
+);
+check(
+  "gh_repos: the table refuses gone without a reason",
+  (() => {
+    try {
+      execPsql(
+        target,
+        `UPDATE factory.gh_repos SET gone = true WHERE owner = '${GH_OWNER}' AND repo = 'alpha'`,
+      );
+      return false;
+    } catch {
+      return true;
+    }
+  })(),
 );
 
 // 後で適用するdown migrationが、PRの種類や新しい状態の行に引っかからないよう、用意した作業項目を消す。

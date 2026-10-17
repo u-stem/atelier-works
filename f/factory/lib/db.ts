@@ -59,6 +59,11 @@ import {
   type FixOutcome,
   type FixReply,
   type FixRoundRecord,
+  type GhCollectErrorCode,
+  type GhCollectRunOutcome,
+  type GhRepo,
+  type GhRepoGone,
+  type GhRepoUpsert,
   IMPLEMENT_ROUND_MODES,
   IMPLEMENT_ROUND_OUTCOMES,
   type ImplementDiffStat,
@@ -6325,4 +6330,127 @@ export async function getMainCiStateBySha(
   return row === undefined
     ? null
     : parseEnum(row.state, MAIN_CI_STATES, "state");
+}
+
+// ---------------------------------------------------------------------------
+// gh_repos / gh_collect_runs: GitHubの収集
+// ---------------------------------------------------------------------------
+
+/** `factory.gh_collect_runs`の1行。 */
+export type GhCollectRun = {
+  readonly id: number;
+  readonly started_at: Date;
+  readonly finished_at: Date | null;
+  readonly ok: boolean;
+  readonly owner: string;
+  readonly owner_id: number | null;
+  readonly verified: boolean;
+  readonly id_checked: boolean | null;
+  readonly cost: number | null;
+  readonly requests: number;
+  readonly remaining: number | null;
+  readonly error_code: GhCollectErrorCode | null;
+  readonly next_allowed_at: Date | null;
+};
+
+/** `factory.gh_repos`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
+export const GH_REPOS_COLUMNS = [
+  "id",
+  "owner",
+  "owner_id",
+  "repo",
+  "repo_id",
+  "allowed",
+  "default_branch",
+  "archived",
+  "open_pr_count",
+  "labeled_issue_count",
+  "gone",
+  "gone_reason",
+  "listed_at",
+] as const satisfies readonly (keyof GhRepo)[];
+
+/** `factory.gh_collect_runs`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
+export const GH_COLLECT_RUNS_COLUMNS = [
+  "id",
+  "started_at",
+  "finished_at",
+  "ok",
+  "owner",
+  "owner_id",
+  "verified",
+  "id_checked",
+  "cost",
+  "requests",
+  "remaining",
+  "error_code",
+  "next_allowed_at",
+] as const satisfies readonly (keyof GhCollectRun)[];
+
+/** 所有者ごとの、収集の最新の実行と最後の成功。 */
+export type GhCollectOwnerState = {
+  readonly owner: string;
+  /** `finished_at`のある最新の行の結果。行が無ければ`null`。 */
+  readonly latest: {
+    readonly finished_at: Date;
+    readonly ok: boolean;
+    readonly error_code: GhCollectErrorCode | null;
+    readonly next_allowed_at: Date | null;
+  } | null;
+  /** `ok`が真の最新の`finished_at`。無ければ`null`。 */
+  readonly last_success_at: Date | null;
+};
+
+export async function listGhRepos(
+  _owner: string,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhRepo[]> {
+  return [];
+}
+
+export async function listRecentGhCollectRuns(
+  _owner: string,
+  _limit: number,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhCollectRun[]> {
+  return [];
+}
+
+export async function insertGhCollectRuns(
+  _owners: readonly string[],
+  _sql: SqlClient = defaultSqlClient,
+): Promise<{ owner: string; id: number }[]> {
+  return [];
+}
+
+export async function finishGhCollectRun(
+  _id: number,
+  _outcome: GhCollectRunOutcome,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<boolean> {
+  return false;
+}
+
+export async function listGhCollectOwnerStates(
+  _owners: readonly string[],
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhCollectOwnerState[]> {
+  return [];
+}
+
+export async function replaceGhRepoSnapshot(
+  _snapshot: {
+    readonly owner: string;
+    readonly owner_id: number;
+    readonly listed: readonly GhRepoUpsert[];
+    readonly gone: readonly GhRepoGone[];
+  },
+  _sql: SqlClient = defaultSqlClient,
+): Promise<void> {}
+
+export async function deleteGhCollectRunsBefore(
+  _olderThan: Date,
+  _sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  return 0;
 }
