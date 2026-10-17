@@ -155,7 +155,6 @@ const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
 
 /** `mise set`の書き込む形が持ってよい、値を取らないオプション。ここに無いオプションは、値を取るおそれがある。 */
 const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
-  "--stdin",
   "-g",
   "--global",
   "--age-encrypt",
@@ -194,12 +193,27 @@ function listsMiseValues(words: readonly Word[]): boolean {
   const args = words.slice(1);
   let subAt = 0;
   while (subAt < args.length) {
-    const text = args[subAt]?.text ?? "";
-    if (!text.startsWith("-")) break;
-    subAt += miseOptionTakesNext(text) ? 2 : 1;
+    const word = args[subAt];
+    if (word === undefined) break;
+    if (isUnstable(word)) return true;
+    if (!word.text.startsWith("-")) break;
+    if (miseOptionTakesNext(word.text)) {
+      const value = args[subAt + 1];
+      if (value !== undefined && isUnstable(value)) return true;
+      subAt += 2;
+    } else {
+      subAt += 1;
+    }
   }
   const sub = args[subAt];
-  if (sub === undefined || !MISE_SET_NAMES.has(sub.text)) return false;
+  if (sub === undefined) return false;
+  if (subAt > 0 && (sub.text === "exec" || sub.text === "x")) {
+    // オプションを前に置いた`mise x -- mise set`は、外す前置きとして扱われないので、内側のmiseを調べる。
+    const dashDash = args.findIndex((word) => word.text === "--");
+    const inner = dashDash === -1 ? [] : args.slice(dashDash + 1);
+    return baseName(inner[0]?.text ?? "") === "mise" && listsMiseValues(inner);
+  }
+  if (!MISE_SET_NAMES.has(sub.text)) return false;
   const rest = args.slice(subAt + 1);
   if (rest.some((word) => word.text === "--")) return true;
   const operands: Word[] = [];
@@ -216,24 +230,22 @@ function listsMiseValues(words: readonly Word[]): boolean {
     const [name = ""] = word.text.split("=", 1);
     if (word.text === "--stdin") {
       readsStdin = true;
-    } else if (MISE_SET_FLAGS.has(word.text)) {
     } else if (MISE_SET_VALUE_OPTIONS.has(word.text)) {
       const value = rest[index + 1];
       if (value !== undefined && isUnstable(value)) return true;
       index += 1;
-    } else if (!(word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(name))) {
+    } else if (
+      !MISE_SET_FLAGS.has(word.text) &&
+      !(word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(name))
+    ) {
       return true;
     }
   }
   if (operands.length === 0) return true;
   if (operands.every((word) => ASSIGNMENT.test(word.text))) return false;
   const [key] = operands;
-  return !(
-    readsStdin &&
-    operands.length === 1 &&
-    key !== undefined &&
-    !isUnstable(key)
-  );
+  if (!readsStdin || operands.length !== 1) return true;
+  return key === undefined || isUnstable(key);
 }
 
 /** `.git/hooks`と`.git/config`のパス。lefthookのフックと設定の置き場所である。 */
