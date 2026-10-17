@@ -1639,13 +1639,13 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
-| `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること(`+=`の追記を含む) | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
-| `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くこと | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
+| `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること。追記(`+=`)は、追記後の値を判定できないので、値によらず拒否する | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
+| `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くことと、追記(`+=`) | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
 | `CHECK_IDLE_FORCE`の代入(`=`と`+=`、前置き、`env`、`export`、`declare`、引用符とエスケープを外した後の形、値が動的な場合を含む) | `mise run up`と`mise run deploy`の、実行中の仕事の確認を飛ばせる。付けるのは人が自分の端末で、確かめた後だけである |
 | `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
 | `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
 | `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`・`GIT_CONFIG_GLOBAL`・`GIT_CONFIG_SYSTEM`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
-| フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`など)に前置きした`HOME=`と`XDG_CONFIG_HOME=` | gitに別の設定ファイルを読ませて、フックを外せる |
+| フックを実行するgitのサブコマンド(`commit`、`push`、`merge`、`rebase`など)に前置きした`HOME=`と`XDG_CONFIG_HOME=`(`+=`の追記を含む) | gitに別の設定ファイルを読ませて、フックを外せる |
 | `echo`や`printf`が変数から組み立てた文字列を、標準入力で読むシェル | 中身を判定できない |
 | `mise exec`の`-c`と`--command`、コードを渡したシェル、`env`、`printenv`、`set`、`export -p`などの環境変数の一覧 | `mise exec`は`mise.local.toml`の秘密値を環境変数として渡すので、値を表示できる |
 | `docker exec`と`docker compose exec`で実行する環境変数の一覧とコードを渡したシェル(`mise exec --`の前置きがあっても) | コンテナは秘密値を環境変数として持つ |
@@ -1667,8 +1667,10 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 - フックが外さない前置き(`stdbuf`、`caffeinate`、`bunx`、`npx cross-env`など)。
 - 標準入力から渡る値(`xargs`)。
 - miseの設定ファイルへの書き込みと、`docker compose up`の直接実行。
+- 添字付きの代入(`CHECK_IDLE_FORCE[1]=1`)。
+- `mise set CHECK_IDLE_FORCE=1`による`mise.toml`の`[env]`への書き込み。`mise.toml`は保護パスなので、差分はレビューされる。
 
-`env -S`は`LEFTHOOK`の拒否にも当たる、既存の穴である。
+`env -S`と添字付きの代入(`LEFTHOOK[1]=0`)は、`LEFTHOOK`の拒否にも当たる、既存の穴である。
 
 `--force-with-lease`と`--force-if-includes`は、subagentではないセッションが`main`と`master`以外のブランチへpushするときに限って許す。
 リモートが想定と違えば失敗するので、他の人の変更を上書きせずに、自分のブランチの履歴を直せる。
