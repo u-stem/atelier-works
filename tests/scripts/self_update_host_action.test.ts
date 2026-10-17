@@ -45,7 +45,7 @@ describe("self_update host action wiring", () => {
   test("resolves notices once on each path", async () => {
     const source = await selfUpdateSource();
 
-    expect(source.match(/await resolveHostActionNotices\(\)/g)?.length).toBe(2);
+    expect(source.match(/await resolveHostActionNotices\(\)/g)?.length).toBe(3);
   });
 
   test("records the deployment before raising the notice", async () => {

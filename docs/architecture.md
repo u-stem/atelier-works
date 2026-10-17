@@ -458,6 +458,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
 | `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
+| `f/factory/lib/freezes` | script | [LIB] スケジュールの凍結の純粋ロジック |
+| `f/factory/lib/freeze_apply` | script | [LIB] スケジュールの凍結の読み込みと追従 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/metadata_hash` | script | [LIB] メタデータのhashの再計算 |
@@ -616,6 +618,8 @@ IDの食い違い、リポジトリが無い(404)、URLを読めない場合は�
 
 1. worker内のself clone(`/workspaces/factory/atelier-works`)をpullする。HEADのSHAがWindmill変数`f/factory/deployed_sha`と同じなら何もしない。
 2. workerの中から`wmill sync push --yes --keep-deleted`を実行し、script、flow、スケジュールを最新にする。依存のinstall scriptは動かさない。
+   凍結中のスケジュールはpushから除く。
+   凍結が終わった回は、shaが変わらなくても、このpushだけをやり直す([スケジュールの凍結の仕様](internals/freezes.md))。
 3. `wmill datatable migrate up`を実行し、Data Tableの定義を最新にする。
 4. 結果を`deployments`に記録し、`f/factory/deployed_sha`を更新する。
 
@@ -664,7 +668,7 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
 `job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3100秒は切り詰められない。
 
-3100秒は、全部が最悪のときの長さ3066.2秒に余裕を足した値である。
+3100秒は、全部が最悪のときの長さ3086.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -678,10 +682,13 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 | 定期ジョブ用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
+| 凍結の読む段と書く段 | 2 | 10秒 | なし | 20秒 |
 | 収集の鮮度の確認 | 1 | 30秒 | なし | 30秒 |
 
 gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
+凍結の2段は、凍結の変数とファイルの読み取りと、終わった行を消す書き込みである。
+各段は1つの上限10秒で包み、区切った呼び出しの回数には数えない。
 ローカルのgitの9回は、ホストの印の確認である。
 コミットの有無で1回、祖先の確認と内容の比較でそれぞれ最大4回である。
 どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。

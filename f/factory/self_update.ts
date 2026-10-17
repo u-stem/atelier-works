@@ -55,6 +55,15 @@ import {
   FactoryRepoIdMismatchError,
 } from "./lib/factory_repo_gate.ts";
 import {
+  chooseFreezeAction,
+  type FrozenPushPlan,
+  finishFrozenPush,
+  loadFreezeInputs,
+  prepareFrozenPush,
+  sdkFreezePorts,
+} from "./lib/freeze_apply.ts";
+import type { Outcome } from "./lib/freezes.ts";
+import {
   checkGhCollectFreshness,
   GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS,
   GH_COLLECT_STALE_KIND,
@@ -522,6 +531,73 @@ async function runWmillCli(
 }
 
 // ---------------------------------------------------------------------------
+// スケジュールの凍結
+// ---------------------------------------------------------------------------
+
+/**
+ * 凍結の読む段と書く段それぞれの上限(ミリ秒)。段の中の呼び出し(変数の読み、有無の確認、書き込み)は
+ * この1つの上限で包み、`SELF_UPDATE_BOUNDED_CALL_COUNT`には数えない。
+ * 段の数を`SELF_UPDATE_FREEZE_PHASE_COUNT`として最悪の長さに足す。
+ * 段の中は変数のAPIだけで、子プロセスを起動しない。
+ */
+export const FREEZE_PHASE_TIMEOUT_MS = 10_000;
+
+/** 1回の実行で通る、凍結の段の数(読む段と書く段)。 */
+export const SELF_UPDATE_FREEZE_PHASE_COUNT = 2;
+
+/**
+ * 凍結の変数を読み、`wmill sync push`へ渡す除外と追従の対象を作る。
+ * 読めない、壊れている、時間切れのときは失敗として返す。呼び出し側は、反映が要る回では反映せず、
+ * 反映が不要な回では警告だけで終える。
+ */
+async function prepareFreezePlan(
+  cloneDir: string,
+): Promise<Outcome<FrozenPushPlan>> {
+  try {
+    return await withCallTimeout(
+      "freeze prepare",
+      async () => {
+        const inputs = await loadFreezeInputs(cloneDir);
+        if (!inputs.ok) return inputs;
+        return await prepareFrozenPush(
+          sdkFreezePorts(wmill, wmillDefault.getWorkspace(), () => new Date()),
+          inputs.value,
+        );
+      },
+      FREEZE_PHASE_TIMEOUT_MS,
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/** 追従のpushが済んだ行を消す。失敗しても反映は済んでいるので、警告だけ残して次の回に任せる。 */
+async function finishFreezePlan(
+  plan: FrozenPushPlan,
+  log: Logger,
+): Promise<void> {
+  try {
+    await withCallTimeout(
+      "freeze finish",
+      () =>
+        finishFrozenPush(
+          sdkFreezePorts(wmill, wmillDefault.getWorkspace(), () => new Date()),
+          plan.readyIds,
+        ),
+      FREEZE_PHASE_TIMEOUT_MS,
+    );
+  } catch (err) {
+    // 行が残ると、次の回も同じpushを繰り返す(通知は出ない)。
+    log.warn("could not clear the ended schedule freezes, will push again", {
+      error: maskSecrets(err instanceof Error ? err.message : String(err)),
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ジョブ全体の上限の見積もり
 // ---------------------------------------------------------------------------
 
@@ -616,6 +692,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - 通知: ホスト側の作業の通知とfinallyの通知の2回
  * - Console用workerの確認
  * - 定期ジョブ用workerの確認
+ * - 凍結の段(読む段と書く段。各段を`FREEZE_PHASE_TIMEOUT_MS`の1つの上限で包み、区切った呼び出しの回数には数えない)
  * - 収集の鮮度の確認(全体の上限を1回。中の区切った呼び出しは、区切った呼び出しの回数から除く)
  * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
@@ -631,6 +708,7 @@ export const SELF_UPDATE_WORST_CASE_MS =
   (SELF_UPDATE_BOUNDED_CALL_COUNT - GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT) *
     SELF_UPDATE_CALL_TIMEOUT_MS +
   2 * SELF_UPDATE_NOTIFY_TIMEOUT_MS +
+  SELF_UPDATE_FREEZE_PHASE_COUNT * FREEZE_PHASE_TIMEOUT_MS +
   CONSOLE_WORKER_CHECK_TIMEOUT_MS +
   PERIODIC_WORKER_CHECK_TIMEOUT_MS +
   GH_COLLECT_FRESHNESS_CHECK_TIMEOUT_MS;
@@ -950,16 +1028,31 @@ async function updateSelf(
   );
 
   const decision = decideUpdate(currentSha, deployedSha);
-  if (decision.outcome === "unchanged") {
+  // 凍結中のスケジュールを除いて反映した回の後、凍結が終わったら、shaが変わらなくても
+  // pushだけをやり直して設定を戻す(migrationと`deployed_sha`の更新はしない)。
+  const freeze = await prepareFreezePlan(factoryClone.dir);
+  const action = chooseFreezeAction(decision.outcome === "unchanged", freeze);
+  const reconcileOnly = action === "reconcile";
+  if (action === "skip") {
+    if (!freeze.ok) {
+      log.warn("could not read the schedule freezes, nothing to deploy", {
+        error: maskSecrets(freeze.reason),
+      });
+    }
     log.info("self clone unchanged, nothing to deploy", { sha: currentSha });
     await resolveHostActionNotices();
     return { outcome: "unchanged" };
   }
 
-  log.info("self clone changed, deploying", {
-    sha_from: deployedSha,
-    sha_to: currentSha,
-  });
+  log.info(
+    reconcileOnly
+      ? "schedule freezes ended, pushing again"
+      : "self clone changed, deploying",
+    {
+      sha_from: deployedSha,
+      sha_to: currentSha,
+    },
+  );
 
   // 下でトークンを取得した時点で埋め、外側のcatchの`maskSecrets`でも使う。
   // 両方から参照できるよう、ここで宣言する。
@@ -983,9 +1076,16 @@ async function updateSelf(
 
     await assertWmillYamlExists(factoryClone.dir);
 
+    // 凍結を読めない回は反映しない(安全側)。投げた理由は失敗の記録に載る。
+    if (!freeze.ok) {
+      throw new Error(`schedule freezes: ${freeze.reason}`);
+    }
+    const plan = freeze.value;
+    for (const warning of plan.warnings) log.warn(warning);
+
     await runWmillCli(
       buildWmillArgv(
-        ["wmill", "sync", "push", "--yes", "--keep-deleted"],
+        ["wmill", "sync", "push", "--yes", "--keep-deleted", plan.excludesArg],
         context,
         wmillToken,
       ),
@@ -995,6 +1095,11 @@ async function updateSelf(
       "wmill sync push",
       secrets,
     );
+    await finishFreezePlan(plan, log);
+    if (reconcileOnly) {
+      await resolveHostActionNotices();
+      return { outcome: "unchanged" };
+    }
     await runWmillCli(
       buildWmillArgv(
         ["wmill", "datatable", "migrate", "up"],
@@ -1124,20 +1229,23 @@ async function updateSelf(
       error: deploymentFailureMessage(err, secrets),
     });
     // 理由はログと同じ伏せ字処理を通して記録する。記録に失敗しても元の例外を投げる。
-    await recordFailedDeployment(
-      {
-        record: (record) => recordDeployment(record),
-        onRecordError: (message) => {
-          log.error("failed to record deployment", { error: message });
+    // 凍結の追従だけの回は、反映の対象のコミットが無いので、失敗の行を足さない(次の回が再試行する)。
+    if (!reconcileOnly) {
+      await recordFailedDeployment(
+        {
+          record: (record) => recordDeployment(record),
+          onRecordError: (message) => {
+            log.error("failed to record deployment", { error: message });
+          },
         },
-      },
-      {
-        shaFrom: deployedSha.length > 0 ? deployedSha : null,
-        shaTo: currentSha,
-        error: err,
-        secrets,
-      },
-    );
+        {
+          shaFrom: deployedSha.length > 0 ? deployedSha : null,
+          shaTo: currentSha,
+          error: err,
+          secrets,
+        },
+      );
+    }
     throw err;
   }
 }

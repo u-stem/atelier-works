@@ -2084,6 +2084,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   無効の間は、収集の通知を出さず、残った通知を自己更新が解決する。
 - スケジュールを止めるには、`collect_github.schedule.yaml`の`enabled`を`false`にする修正のPRを出す。
   `self_update`が`sync push`するので、Windmillの画面で止めても上書きされうる。
+  確認のために画面で止めるときは、先に凍結を置く([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
   スケジュールだけを止めると、収集が成功しなくなるので、閾値の後に通知が出る。
   止めるつもりなら、`gh_collect_enabled`も`false`にする。
 - migrationのdownは自動では走らない。
@@ -2175,7 +2176,8 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 動いているフローは、準備と終了のステップで作業項目を取り消し(`dependabot_disabled`)、GitHubに書かない。
 影響調査のステップも、無効ならClaudeを起動しない。
 スケジュールは、Windmillの画面で無効にして止めない。
-`mise run push`がリポジトリの定義で有効に戻すためである。
+`mise run push`と自己更新がリポジトリの定義で有効に戻すためである。
+確認のために止めるときは、先に凍結を置く([スケジュールの凍結の仕様](internals/freezes.md)の「運用手順」)。
 
 ### 人に回ったとき
 
@@ -3502,6 +3504,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec windmill_worker ps 
 3. ホスト側のcheckoutで`git pull --ff-only`を実行する。
    続けて`mise run push`と`mise run migrate`を実行し、自己更新が済ませるはずだった反映を手で行う。
    `mise run push`は`--keep-deleted`付きなので、削除は反映しない。
+   凍結中のスケジュールは、pushから除かれる([スケジュールの凍結の仕様](internals/freezes.md))。
 4. 次の回で自己更新が成功することを見る。
    次の「打ち切られた回の記録を確かめる」の見比べで、`deployed_sha`がself cloneのHEADと同じになっていることを確かめる。
 
@@ -3635,7 +3638,11 @@ clone、fetch、push、`git gtr new`が1回ずつ成功することを見る。
 3. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成、Caddyの再起動まで行う。実行中の仕事があると、作り直す前に止まる([workerを作り直す前の確認](#workerを作り直す前の確認))。
 
 `mise install`は、すでに入っているツールには何もしない。
-miseの自動インストールが`mise run`の前に不足分を入れるかは、確かめていない。そのため、通知の手順に`mise install`を含める。
+miseの自動インストールが`mise run`の前に不足分を入れるかは、確かめていない。
+そのため、通知の手順に`mise install`を含める。
+
+`mise.toml`の`windmill-cli`の版を上げる変更では、反映の前に`mise run push:dry`を実行し、`deployed_sha`と凍結中のスケジュールが変更に出ないことを確かめる。
+凍結の除外は、CLIの`--excludes`の挙動に依存するためである([セキュリティ](security.md)の「スケジュールの凍結」)。
 
 workerのメモリの上限のような`infra/docker-compose.yml`の変更も、`git pull`だけでは反映されず、`mise run up`で反映される。
 マウントの変更では、該当するコンテナが作り直される。Console用のworkerが作り直される間は、Consoleの問い合わせが待たされる。
@@ -3691,16 +3698,17 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 
 まとめて反映したいときは、`mise run deploy`を手で実行する。必須の手順ではない。`mise run deploy`は次を順に行う。
 
-1. ホスト側のcheckoutで`git pull --ff-only`
-2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
-3. イメージの取得と、ビルドの対象のイメージ(`windmill_worker`と`console_fetcher`)のビルド
-4. 一時コンテナでの`caddy validate`。不正なら止まる
-5. 実行中の仕事の確認。workerが作り直されるときに、実行中の仕事があれば止まる
-6. 取得とビルドを省いた`docker compose up -d`
-7. Caddyの再起動と、動いているCaddyでの`caddy validate`
-8. `wmill sync push`
-9. migrationの実行
-10. 反映したHEADの記録
+1. 凍結の状態の確認。壊れていれば失敗し、読めなければ警告だけで進む([スケジュールの凍結の仕様](internals/freezes.md)の「失敗の回復」)
+2. ホスト側のcheckoutで`git pull --ff-only`
+3. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
+4. イメージの取得と、ビルドの対象のイメージ(`windmill_worker`と`console_fetcher`)のビルド
+5. 一時コンテナでの`caddy validate`。不正なら止まる
+6. 実行中の仕事の確認。workerが作り直されるときに、実行中の仕事があれば止まる
+7. 取得とビルドを省いた`docker compose up -d`
+8. Caddyの再起動と、動いているCaddyでの`caddy validate`
+9. `wmill sync push`(凍結中のスケジュールを除く)
+10. migrationの実行
+11. 反映したHEADの記録
 
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
 この検査と、実行中の仕事の確認を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
@@ -3711,7 +3719,8 @@ composeはファイル全体を補間するので、未設定の必須変数が1
 コンテナを変える前に止まり、反映は何も進まない。
 pullは済んでいて、次の起動でmiseが新しい`[env]`を読むので、`mise run up`か`mise run deploy`をもう一度実行すれば通る。
 
-`mise run push`と`mise run deploy`は、`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
+`mise run push`と`mise run deploy`は、凍結中のスケジュールを除くラッパー(`scripts/freeze.ts`)を通る。
+ラッパーは`wmill sync push`を`NPM_CONFIG_IGNORE_SCRIPTS=true`で動かす。
 `wmill`がnpmを走らせることがあっても、依存のinstall scriptを動かさないためである。
 理由は[セキュリティ](security.md)の「サブプロセスのnpmのinstall script」にある。
 
@@ -3925,6 +3934,7 @@ workerのイメージに入れるツールのバージョンは、`mise.toml`の
 リポジトリから消したscriptやappは、`mise run push`ではWindmillに残る。
 `mise run push`と自己更新は`--keep-deleted`を付けるので、削除を反映しない。
 消すのは、人が`mise run push:prune`で行う。
+端末で`yes`を入力して確かめる。
 先に`mise run push:dry`で、消える対象を確かめる。
 消したものは、Windmillのゴミ箱に3日残る。
 

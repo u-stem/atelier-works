@@ -78,6 +78,7 @@ lefthook install
 description = "Update checkout, rebuild, restart, push, and migrate"
 run = """
 set -e
+bun ./scripts/freeze.ts check
 git pull --ff-only
 scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml pull
@@ -87,24 +88,43 @@ bun ./scripts/check-idle.ts --when-worker-recreated --after-pull
 docker compose -f infra/docker-compose.yml up -d --pull never --no-build
 docker compose -f infra/docker-compose.yml restart caddy
 docker compose -f infra/docker-compose.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile
-NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes --keep-deleted
+bun ./scripts/freeze.ts push
 wmill datatable migrate up
 scripts/record-host-applied.sh
 """
 
 [tasks.push]
 description = "Push local sync state to the Windmill workspace (keeps remote-only items)"
-run = """
-NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes --keep-deleted
-"""
+run = "bun ./scripts/freeze.ts push"
 
 [tasks."push:prune"]
 description = "Push and delete remote items that no longer exist locally (manual only)"
-run = "NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --yes"
+run = "bun ./scripts/freeze.ts push --prune"
+# 端末での確認(yesの入力)を通すため、stdinとstdoutをそのままつなぐ
+raw = true
 
 [tasks."push:dry"]
 description = "Dry-run of wmill sync push"
-run = "NPM_CONFIG_IGNORE_SCRIPTS=true wmill sync push --dry-run"
+run = "bun ./scripts/freeze.ts push --dry-run"
+
+[tasks."freeze:place"]
+description = "Freeze a schedule so wmill sync push leaves it alone (usage: -- --target f/factory/<name> --minutes <n> --reason <text>)"
+run = "bun ./scripts/freeze.ts place"
+raw = true
+
+[tasks."freeze:list"]
+description = "List the schedule freezes"
+run = "bun ./scripts/freeze.ts list"
+
+[tasks."freeze:release"]
+description = "Release a schedule freeze (usage: -- <id>)"
+run = "bun ./scripts/freeze.ts release"
+raw = true
+
+[tasks."freeze:reset"]
+description = "Clear every schedule freeze, including a corrupt state (human only)"
+run = "bun ./scripts/freeze.ts reset"
+raw = true
 
 [tasks.pull]
 description = "Pull remote Windmill state into the sync root"

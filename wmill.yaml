@@ -29,6 +29,12 @@ excludes:
   # そちらにある)。このファイルは、上の`factory_config.resource.yaml`と同じく、
   # 初期値の説明の出どころとしてだけリポジトリに残す。
   - "f/factory/deployed_sha.variable.yaml"
+  # スケジュールの凍結の状態。`mise run freeze:place`などと`self_update`が実行時に
+  # この秘密でない変数へ書く。syncすると、無関係なpushで凍結が消える。
+  # `scripts/freeze.ts`と`self_update`は、このファイルの`excludes`に上の3つが
+  # あることを確かめてから、凍結中のスケジュールを足した和を`--excludes`で渡す。
+  # 3つが欠けると、反映しない。
+  - "f/factory/freezes.variable.yaml"
 
 # --- syncする対象 -----------------------------------------------------
 # "skip"の項目の既定はfalse(syncする)、"include"の項目の既定はfalse(syncしない)

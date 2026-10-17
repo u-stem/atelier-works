@@ -70,10 +70,14 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 | `mise run console:unpin` | Consoleの固定を外し、自動の更新に戻す |
 | `mise run bootstrap` | ワークスペースの作成、secret変数の投入、インスタンスのカスタムtagの設定、sync push、migrationを行う。何度実行してもよい |
 | `mise run instance:tags` | インスタンスのカスタムtagに`console`と`periodic`を足す。`bootstrap`済みのインスタンス向けで、何度実行してもよい |
-| `mise run deploy` | `git pull --ff-only`、ビルド、起動、push、migrationを続けて実行する。手で一括して反映したいときに使う |
-| `mise run push` | `wmill sync push --yes --keep-deleted`で、ローカルの変更をWindmillに反映する |
-| `mise run push:dry` | `wmill sync push --dry-run`で、反映する内容だけを確かめる |
-| `mise run push:prune` | ローカルに無いものをWindmillから消すpush。人が明示的に実行する |
+| `mise run deploy` | `git pull --ff-only`、ビルド、起動、push(凍結中のスケジュールを除く)、migrationを続けて実行する。手で一括して反映したいときに使う |
+| `mise run push` | 凍結中のスケジュールを除いて`wmill sync push --yes --keep-deleted`を実行し、ローカルの変更をWindmillに反映する |
+| `mise run push:dry` | 凍結中のスケジュールを除いて`wmill sync push --dry-run`を実行し、反映する内容だけを確かめる |
+| `mise run push:prune` | 凍結中のスケジュールを除き、ローカルに無いものをWindmillから消すpush。人が端末で実行する |
+| `mise run freeze:place` | スケジュールを凍結し、`wmill sync push`から期限つきで外す。`-- --target f/factory/<name> --minutes <n> --reason <text>`を渡す |
+| `mise run freeze:list` | スケジュールの凍結の一覧を表示する |
+| `mise run freeze:release` | 凍結を解除する。`-- <id>`を渡す |
+| `mise run freeze:reset` | 壊れた凍結の状態を空に戻す。人が端末で実行する |
 | `mise run pull` | `wmill sync pull`で、Windmillの状態をローカルに取り込む |
 | `mise run migrate` | `wmill datatable migrate up`で、Data Tableのmigrationを適用する |
 | `mise run metadata` | 古くなったWindmillのメタデータ(lockとスキーマ)を作り直す |
@@ -135,6 +139,7 @@ atelier-works/
 | [dependabotの更新の仕様](docs/internals/dependabot.md) | dependabotのPRの選び方、自動マージの流れ、作業項目の状態 |
 | [mainのCI監視の仕様](docs/internals/main-ci.md) | mainのCIの判定、通知、権限エラーの扱い |
 | [GitHubの収集の内部仕様](docs/internals/github-collect.md) | 所有者ごとのリポジトリの状態の収集、照合、記録の意味 |
+| [スケジュールの凍結の仕様](docs/internals/freezes.md) | 反映からスケジュールを外す凍結のデータ、除外、追従、運用手順、失敗時の回復 |
 | [CIの失敗を直す部品の仕様](docs/internals/ci-fix.md) | CIのログの取得、整形、検査、変更するファイルの検査と、CI回の流れ |
 | [PRのCI監視の仕様](docs/internals/pr-ci.md) | PRのCIの判定、通知、失敗を直す作業項目の起動 |
 | [Consoleの仕様](docs/internals/console.md) | Consoleのアプリの構成と、成果物を配信する仕組み |

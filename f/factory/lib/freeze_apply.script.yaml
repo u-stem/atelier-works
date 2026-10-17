@@ -1,0 +1,9 @@
+summary: '[LIB] スケジュールの凍結の読み込みと追従'
+description: 内部ライブラリです。直接実行するものではありません。凍結の変数を読み、sync pushの除外を作り、追従が済んだ行を消す手順です。
+lock: '!inline f/factory/lib/freeze_apply.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

@@ -1,0 +1,9 @@
+summary: '[LIB] スケジュールの凍結の純粋ロジック'
+description: 内部ライブラリです。直接実行するものではありません。凍結の解析、有効の判定、除外の和、状態の遷移を行う関数です。
+lock: '!inline f/factory/lib/freezes.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

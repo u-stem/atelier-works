@@ -4,6 +4,7 @@ import { FACTORY_CLONE_UPDATE_GIT_COMMAND_COUNT } from "../../f/factory/lib/work
 import {
   SELF_UPDATE_BOUNDED_CALL_COUNT,
   SELF_UPDATE_CLI_COMMAND_COUNT,
+  SELF_UPDATE_FREEZE_PHASE_COUNT,
   SELF_UPDATE_GIT_COMMAND_COUNT,
   SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT,
   SELF_UPDATE_WORST_CASE_MS,
@@ -96,9 +97,12 @@ describe("self_update timeout", () => {
       source,
       /withCallTimeout\(\s*"resolve host action notice"/g,
     );
+    // 凍結の段は、段ごとの1つの上限で包み、区切った呼び出しの数に数えない(最悪の長さに段の数を足す)。
+    const freezePhases = count(source, /withCallTimeout\(\s*"freeze /g);
     const sites =
       count(source, /withCallTimeout\(/g) -
-      notify +
+      notify -
+      freezePhases +
       (HOST_ACTION_RECONCILE_LIMIT - 1) * resolveSites +
       2 * count(source, /readDeployedSha\(/g) +
       2 * count(source, /setDeployedSha\(/g) +
@@ -155,5 +159,13 @@ describe("self_update timeout", () => {
     const source = await selfUpdateSource();
 
     expect(count(source, /\brunCommand\(/g)).toBe(1);
+  });
+
+  test("the freeze phase count matches the call sites", async () => {
+    const source = await selfUpdateSource();
+
+    expect(count(source, /withCallTimeout\(\s*"freeze /g)).toBe(
+      SELF_UPDATE_FREEZE_PHASE_COUNT,
+    );
   });
 });
