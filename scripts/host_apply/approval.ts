@@ -25,7 +25,9 @@ export function parseNameStatusZ(output: string): ChangedFile[] {
 /**
  * 承認の対象のうち、リポジトリのルートにあるファイル(小文字で書く)。
  * 実行役が、ホストのユーザーの権限で、秘密値を渡して動かす道具と、その判断の前提を決めるもの。
- * `.github/workflows/ci.yml`は、必須チェックを出すworkflowで、書き換えるとチェックを`skipped`にして通せる。
+ * `.github/workflows/`の全体は、必須チェックを出すworkflowの置き場である。
+ * `ci.yml`を書き換えると、チェックを`skipped`にして通せる。
+ * ほかのworkflowの書き換えや新しいworkflowは、必須チェックと同名のcheck-runを作れる。
  * `scripts/ci-scope.ts`は、`scope`ジョブとして、どのジョブを動かすかを決める。出力を変えると、同じく必須チェックを`skipped`にできる。
  * `package.json`は含めるが、依存の版だけの変更は`approvalFiles`の免除で外す。
  * `bun run scripts/x.ts`は、同名の`package.json`のscriptがあるとそちらを実行するため。
@@ -41,12 +43,14 @@ const APPROVAL_EXACT_PATHS: readonly string[] = [
   "package.json",
   "bunfig.toml",
   ".npmrc",
-  ".github/workflows/ci.yml",
   "scripts/ci-scope.ts",
 ];
 
-/** 承認の対象のディレクトリ(小文字で書く)。実行役の実装。 */
-const APPROVAL_PREFIXES: readonly string[] = ["scripts/host_apply/"];
+/** 承認の対象のディレクトリ(小文字で書く)。実行役の実装と、workflowの置き場。 */
+const APPROVAL_PREFIXES: readonly string[] = [
+  "scripts/host_apply/",
+  ".github/workflows/",
+];
 
 /** 承認の対象のファイル名(小文字で書く)。ディレクトリを問わない。 */
 const APPROVAL_BASENAME_PATTERNS: readonly RegExp[] = [

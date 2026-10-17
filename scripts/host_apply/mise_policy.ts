@@ -35,7 +35,7 @@ const VALUE_FORMATS: Readonly<Record<string, (value: string) => boolean>> = {
 export function validateMiseValue(key: string, value: unknown): boolean {
   if (typeof value !== "string" || value.includes("{{")) return false;
   const format = VALUE_FORMATS[key];
-  return format !== undefined && format(value);
+  return format?.(value) === true;
 }
 
 /**

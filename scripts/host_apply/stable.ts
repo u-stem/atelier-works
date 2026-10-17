@@ -15,3 +15,14 @@ export function stableStringify(value: unknown): string {
   }
   return JSON.stringify(value) ?? "null";
 }
+
+/**
+ * ログと通知に書ける形にする。ASCIIの印字できる文字以外(ASCII以外の文字と制御文字)は、`\uXXXX`で書く。
+ * 目標が書いた値を、そのまま出力すると、端末の制御や紛らわしい文字を出力に混ぜられるため。
+ */
+export function escapeDetail(text: string): string {
+  return text.replace(
+    /[^\x20-\x7e]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}

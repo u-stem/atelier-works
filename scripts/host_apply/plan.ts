@@ -10,6 +10,7 @@ import { checkComposeText } from "./compose_policy.ts";
 import { isSha40 } from "./git.ts";
 import { checkMiseStatic, classifyMiseTomlChange } from "./mise_policy.ts";
 import { classifyPackageJsonChange } from "./package_policy.ts";
+import { escapeDetail } from "./stable.ts";
 import type { RejectionKind } from "./target.ts";
 
 export type TreeEntry = {
@@ -117,14 +118,6 @@ export function suspiciousTreePaths(entries: readonly TreeEntry[]): string[] {
   return [...bad];
 }
 
-/** ログに書ける形にする。ASCII以外の文字は`\uXXXX`で書く。 */
-function escapePath(path: string): string {
-  return path.replace(
-    /[^\x20-\x7e]/g,
-    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
-}
-
 const DETAIL_PATH_LIMIT = 5;
 
 /** `BlobRead`が読めなかった理由を、ログに書ける短い文にする。ファイルの中身は含めない。 */
@@ -178,7 +171,7 @@ export async function buildPlan(
   if (forbiddenPaths.length > 0) {
     return reject(
       "tree_forbidden",
-      forbiddenPaths.slice(0, DETAIL_PATH_LIMIT).map(escapePath).join(", "),
+      forbiddenPaths.slice(0, DETAIL_PATH_LIMIT).map(escapeDetail).join(", "),
     );
   }
 

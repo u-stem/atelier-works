@@ -2,6 +2,7 @@
 
 import { isAbsolute, relative, resolve } from "node:path";
 import { MAX_BLOB_BYTES } from "./constants.ts";
+import { escapeDetail } from "./stable.ts";
 
 export const COMPOSE_SERVICE_ALLOWLIST: readonly string[] = [
   "db",
@@ -123,8 +124,9 @@ const LOGGING_DRIVERS: readonly string[] = ["json-file", "local"];
 class Violation extends Error {
   readonly kind: "unknown_service" | "compose_forbidden";
 
+  /** 詳細には目標の値が入るので、ログに書ける形にエスケープする。 */
   constructor(kind: "unknown_service" | "compose_forbidden", detail: string) {
-    super(detail);
+    super(escapeDetail(detail));
     this.kind = kind;
   }
 }
@@ -400,7 +402,9 @@ const SHORT_VOLUME_OPTIONS: ReadonlySet<string> = new Set([
  * 知らないオプションと、4つ以上の項目は拒否する。
  */
 function checkShortVolume(entry: string, context: ComposeContext): void {
-  const parts = entry.split(":");
+  // composeと同じ順序で、全体を先に展開してから項目に分ける。
+  // 要素が1つの形でも、知らない名前の参照を拒否するため。
+  const parts = expand(entry, context.env).split(":");
   if (parts.length === 1) return;
   if (parts.length > 3) forbid("a short volume has too many fields");
   const options = parts[2] === undefined ? [] : parts[2].split(",");
@@ -410,7 +414,7 @@ function checkShortVolume(entry: string, context: ComposeContext): void {
     }
   }
   const readOnly = options.includes("ro") && !options.includes("rw");
-  const source = expand(parts[0] ?? "", context.env);
+  const source = parts[0] ?? "";
   if (/^[./~]/.test(source)) {
     checkBind(source, readOnly, context);
   } else if (!VOLUME_NAME.test(source)) {
@@ -469,9 +473,9 @@ const REFERENCE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 const LIMIT_KEYS: ReadonlySet<string> = new Set(["cpus", "memory", "pids"]);
+/** `reservations.devices`はGPUなどのホストのデバイスを割り当てるので、`cpus`と`memory`以外は拒否する。 */
 const RESERVATION_KEYS: ReadonlySet<string> = new Set(["cpus", "memory"]);
 
-/** `reservations.devices`はGPUなどのホストのデバイスを割り当てるので、`cpus`と`memory`以外は拒否する。 */
 const SERVICE_NETWORK_KEYS: ReadonlySet<string> = new Set([
   "aliases",
   "ipv4_address",
