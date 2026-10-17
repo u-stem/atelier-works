@@ -9,6 +9,7 @@ import {
 import { checkComposeText } from "./compose_policy.ts";
 import { isSha40 } from "./git.ts";
 import { checkMiseStatic, classifyMiseTomlChange } from "./mise_policy.ts";
+import { classifyPackageJsonChange } from "./package_policy.ts";
 import type { RejectionKind } from "./target.ts";
 
 export type TreeEntry = {
@@ -71,6 +72,7 @@ export type PlanResult =
     };
 
 const MISE_PATH = "mise.toml";
+const PACKAGE_PATH = "package.json";
 const COMPOSE_PATH = "infra/docker-compose.yml";
 
 /** symlink(120000)とsubmodule(160000)のmode。treeの中にあると、実行役が読むファイルの中身を差し替えられる。 */
@@ -81,6 +83,46 @@ export function forbiddenTreePaths(entries: readonly TreeEntry[]): string[] {
   return entries
     .filter((entry) => FORBIDDEN_TREE_MODES.includes(entry.mode))
     .map((entry) => entry.path);
+}
+
+/**
+ * treeのパスのうち、1つのパスが2つのファイルを指しうるものを返す。
+ * - ASCIIの印字できる文字以外(ASCII以外の文字と制御文字)を含むパス。`ſcripts/doctor.sh`や、ケルビン記号の`K`を使った`docKer-compose.yml`は、
+ *   大文字小文字を畳む照合やUnicode正規化で、ASCIIのファイルと同じ名前になりうる。
+ * - ASCIIの小文字にそろえると、ディレクトリを含めて衝突するパス。大文字小文字を区別しないファイルシステムで同じファイルになる。
+ * - composeが自動で読むoverrideファイル。定義を後から上書きできる。
+ * 前提は、1つのパスが1つのファイルを指すこと。
+ */
+export function suspiciousTreePaths(entries: readonly TreeEntry[]): string[] {
+  const bad = new Set<string>();
+  const forms = new Map<string, Set<string>>();
+  for (const { path } of entries) {
+    if (/[^\x20-\x7e]/.test(path)) bad.add(path);
+    const basename = path.split("/").pop() ?? path;
+    if (/^(?:docker-)?compose\.override\.ya?ml$/i.test(basename)) {
+      bad.add(path);
+    }
+    const parts = path.split("/");
+    for (let i = 1; i <= parts.length; i++) {
+      const prefix = parts.slice(0, i).join("/");
+      const key = prefix.toLowerCase();
+      const seen = forms.get(key) ?? new Set<string>();
+      seen.add(prefix);
+      forms.set(key, seen);
+    }
+  }
+  for (const seen of forms.values()) {
+    if (seen.size > 1) for (const form of seen) bad.add(form);
+  }
+  return [...bad];
+}
+
+/** ログに書ける形にする。ASCII以外の文字は`\uXXXX`で書く。 */
+function escapePath(path: string): string {
+  return path.replace(
+    /[^\x20-\x7e]/g,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }
 
 const DETAIL_PATH_LIMIT = 5;
@@ -129,11 +171,14 @@ export async function buildPlan(
     return reject("not_ff", "the target does not descend from the applied sha");
   }
 
-  const forbiddenPaths = forbiddenTreePaths(await git.listTree(target));
+  const tree = await git.listTree(target);
+  const forbiddenPaths = [
+    ...new Set([...forbiddenTreePaths(tree), ...suspiciousTreePaths(tree)]),
+  ];
   if (forbiddenPaths.length > 0) {
     return reject(
       "tree_forbidden",
-      forbiddenPaths.slice(0, DETAIL_PATH_LIMIT).join(", "),
+      forbiddenPaths.slice(0, DETAIL_PATH_LIMIT).map(escapePath).join(", "),
     );
   }
 
@@ -152,13 +197,19 @@ export async function buildPlan(
   const targetRead = await git.readBlob(target, MISE_PATH);
   const targetMise = targetRead.kind === "found" ? targetRead.text : null;
   const exempt = new Set<string>();
-  if (changed.some((file) => file.path === MISE_PATH) && targetMise !== null) {
-    const baseRead = await git.readBlob(base, MISE_PATH);
-    const baseMise = baseRead.kind === "found" ? baseRead.text : null;
-    if (classifyMiseTomlChange(baseMise, targetMise) !== "approval") {
-      exempt.add(MISE_PATH);
-    }
-  }
+  const exemptIfNotApproval = async (
+    path: string,
+    classify: (base: string | null, target: string) => string,
+  ) => {
+    if (!changed.some((file) => file.path === path)) return;
+    const targetFile = await git.readBlob(target, path);
+    if (targetFile.kind !== "found") return;
+    const baseFile = await git.readBlob(base, path);
+    const baseText = baseFile.kind === "found" ? baseFile.text : null;
+    if (classify(baseText, targetFile.text) !== "approval") exempt.add(path);
+  };
+  await exemptIfNotApproval(MISE_PATH, classifyMiseTomlChange);
+  await exemptIfNotApproval(PACKAGE_PATH, classifyPackageJsonChange);
   const files = approvalFiles(changed, exempt);
   if (files.length > 0) {
     return { decision: "pending_approval", base, files, applied, target };
@@ -241,8 +292,4 @@ export function parsePlanArgs(argv: readonly string[]): ParsedPlanArgs {
     return { ok: false, error: "--approved must be a 40-digit sha" };
   }
   return { ok: true, args: { repo, applied, target, approved } };
-}
-
-export function suspiciousTreePaths(_entries: readonly TreeEntry[]): string[] {
-  return [];
 }

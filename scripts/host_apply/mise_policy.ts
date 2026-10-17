@@ -1,10 +1,7 @@
 /** mise設定の静的な読み取りと、承認が要る変更かどうかの判定。`mise`コマンドは使わない。 */
 
 import { MISE_APPROVAL_KEYS, MISE_ENV_KEYS } from "./constants.ts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+import { isRecord, stableStringify } from "./stable.ts";
 
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/;
 
@@ -113,17 +110,6 @@ export function checkMiseStatic(text: string): MiseStaticCheck {
 
 /** `none`は内容が同じ、`auto`は承認なしで反映できる変更、`approval`は承認が要る変更。 */
 export type MiseChange = "none" | "auto" | "approval";
-
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  if (isRecord(value)) {
-    const keys = Object.keys(value).sort();
-    return `{${keys
-      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
 
 function withoutEnumeratedKeys(parsed: Record<string, unknown>): string {
   const copy = JSON.parse(JSON.stringify(parsed));

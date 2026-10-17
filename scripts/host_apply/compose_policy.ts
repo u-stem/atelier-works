@@ -226,8 +226,14 @@ function isRemote(value: string): boolean {
   return REMOTE_PATTERN.test(value);
 }
 
+/** 変数を展開すると拒否リストを回避できる項目は、変数を含む値を拒否する。 */
+function forbidVariable(value: string, what: string): void {
+  if (value.includes("$")) forbid(`${what} must not contain a variable`);
+}
+
 function checkNamespace(key: string, value: unknown): void {
   if (typeof value !== "string") forbid(`${key} must be a string`);
+  forbidVariable(value, key);
   if (
     value === "host" ||
     value.startsWith("container:") ||
@@ -241,6 +247,7 @@ function checkSecurityOpt(value: unknown): void {
   if (!Array.isArray(value)) forbid("security_opt must be a list");
   for (const option of value) {
     if (typeof option !== "string") forbid("security_opt must be strings");
+    forbidVariable(option, "security_opt");
     if (option.includes("unconfined") || /label[=:]disable/.test(option)) {
       forbid(`security_opt weakens isolation: ${option}`);
     }
@@ -362,11 +369,38 @@ function checkBind(
 
 const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 
+/** 短い形のvolumeの第3項に書けるオプション。 */
+const SHORT_VOLUME_OPTIONS: ReadonlySet<string> = new Set([
+  "ro",
+  "rw",
+  "z",
+  "Z",
+  "shared",
+  "rshared",
+  "slave",
+  "rslave",
+  "private",
+  "rprivate",
+  "nocopy",
+]);
+
+/**
+ * 短い形のvolume(`元:先[:オプション]`)を検査する。
+ * 読み取り専用になるのは、オプションに`ro`があり`rw`が無いときだけ。
+ * 知らないオプションと、4つ以上の項目は拒否する。
+ */
 function checkShortVolume(entry: string, context: ComposeContext): void {
   const parts = entry.split(":");
   if (parts.length === 1) return;
+  if (parts.length > 3) forbid("a short volume has too many fields");
+  const options = parts[2] === undefined ? [] : parts[2].split(",");
+  for (const option of options) {
+    if (!SHORT_VOLUME_OPTIONS.has(option)) {
+      forbid("a short volume has an option that is not allowed");
+    }
+  }
+  const readOnly = options.includes("ro") && !options.includes("rw");
   const source = expand(parts[0] ?? "", context.env);
-  const readOnly = (parts[2] ?? "").split(",").includes("ro");
   if (/^[./~]/.test(source)) {
     checkBind(source, readOnly, context);
   } else if (!VOLUME_NAME.test(source)) {
@@ -428,6 +462,42 @@ const LIMIT_KEYS: ReadonlySet<string> = new Set(["cpus", "memory", "pids"]);
 const RESERVATION_KEYS: ReadonlySet<string> = new Set(["cpus", "memory"]);
 
 /** `reservations.devices`はGPUなどのホストのデバイスを割り当てるので、`cpus`と`memory`以外は拒否する。 */
+const SERVICE_NETWORK_KEYS: ReadonlySet<string> = new Set([
+  "aliases",
+  "ipv4_address",
+]);
+
+/** サービスの`networks`は、名前の一覧か、`aliases`と`ipv4_address`だけを持つ対応表に限る。 */
+function checkServiceNetworks(value: unknown): void {
+  if (Array.isArray(value)) {
+    if (!value.every((entry) => typeof entry === "string")) {
+      forbid("service networks must be names");
+    }
+    return;
+  }
+  const networks = requireRecord(value, "networks");
+  for (const entry of Object.values(networks)) {
+    if (entry === null) continue;
+    const options = requireRecord(entry, "a service network");
+    requireExactKeys(options, SERVICE_NETWORK_KEYS, "a service network");
+    if (
+      options.aliases !== undefined &&
+      !(
+        Array.isArray(options.aliases) &&
+        options.aliases.every((alias) => typeof alias === "string")
+      )
+    ) {
+      forbid("aliases must be strings");
+    }
+    if (
+      options.ipv4_address !== undefined &&
+      typeof options.ipv4_address !== "string"
+    ) {
+      forbid("ipv4_address must be a string");
+    }
+  }
+}
+
 function checkDeploy(value: unknown): void {
   const deploy = requireRecord(value, "deploy");
   requireKeys(deploy, DEPLOY_KEYS, "deploy");
@@ -482,6 +552,7 @@ function checkService(
   if (service.configs !== undefined) {
     checkReferences(service.configs, REFERENCE_KEYS, "configs");
   }
+  if (service.networks !== undefined) checkServiceNetworks(service.networks);
   if (service.deploy !== undefined) checkDeploy(service.deploy);
   if (service.logging !== undefined) checkLogging(service.logging);
 }

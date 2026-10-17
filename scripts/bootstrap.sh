@@ -413,7 +413,7 @@ ensure_instance_custom_tag() {
     effective="$(cat "${RESP_FILE}")"
   fi
   plan="$(WM_TMP_STORED="${stored}" WM_TMP_EFFECTIVE="${effective}" \
-    run_in_repo bun run scripts/custom-tags.ts plan "${tag}")"
+    run_in_repo bun ./scripts/custom-tags.ts plan "${tag}")"
   kind="$(printf '%s' "${plan}" | jq -r '.kind')"
   case "${kind}" in
     present)

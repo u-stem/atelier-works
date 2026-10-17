@@ -442,7 +442,7 @@ describe("buildPlan: more approval cases", () => {
     });
   });
 
-  test("does not exempt a mise file whose name differs only in case", async () => {
+  test("rejects a mise file whose name differs only in case with tree_forbidden", async () => {
     const plan = await planOf(
       chainOf({
         "Mise.toml": MISE.replace(
@@ -453,8 +453,8 @@ describe("buildPlan: more approval cases", () => {
       { applied: A, target: B },
     );
     expect(plan).toMatchObject({
-      decision: "pending_approval",
-      files: ["Mise.toml"],
+      decision: "rejected",
+      kind: "tree_forbidden",
     });
   });
 
@@ -484,14 +484,14 @@ describe("buildPlan: more approval cases", () => {
     });
   });
 
-  test("does not exempt a package.json whose name differs only in case", async () => {
+  test("rejects a package.json whose name differs only in case with tree_forbidden", async () => {
     const plan = await planOf(
       chainOf({ "Package.json": PACKAGE_JSON.replace("^7.0.2", "^7.0.3") }),
       { applied: A, target: B },
     );
     expect(plan).toMatchObject({
-      decision: "pending_approval",
-      files: ["Package.json"],
+      decision: "rejected",
+      kind: "tree_forbidden",
     });
   });
 

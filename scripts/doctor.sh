@@ -271,7 +271,7 @@ if [[ "${windmill_is_up}" -eq 1 ]]; then
       tag_status=0
       # 標準出力は捨て、標準エラーだけを受け取る。
       tag_stderr="$(cd "${REPO_ROOT}" && WM_CHECK_BASE_URL="http://127.0.0.1:${wm_http_port}" \
-        mise exec -- bun run scripts/custom-tags.ts check "${check_tag}" 2>&1 >/dev/null)" || tag_status=$?
+        mise exec -- bun ./scripts/custom-tags.ts check "${check_tag}" 2>&1 >/dev/null)" || tag_status=$?
       case "${tag_status}" in
         0) report "カスタムtag" ok "${check_tag}が許可されています" ;;
         10) report "カスタムtag" ng "${check_tag}が許可されていません('mise run instance:tags' を実行してください)" ;;

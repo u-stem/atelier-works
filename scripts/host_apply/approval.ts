@@ -26,8 +26,9 @@ export function parseNameStatusZ(output: string): ChangedFile[] {
  * 承認の対象のうち、リポジトリのルートにあるファイル(小文字で書く)。
  * 実行役が、ホストのユーザーの権限で、秘密値を渡して動かす道具と、その判断の前提を決めるもの。
  * `.github/workflows/ci.yml`は、必須チェックを出すworkflowで、書き換えるとチェックを`skipped`にして通せる。
- * `package.json`、`bun.lock`は含めない。実行役が動かすbunのコードは、パッケージをimportせず、
- * `node_modules`の解決も自動のinstallも通らないため。
+ * `package.json`は含めるが、依存の版だけの変更は`approvalFiles`の免除で外す。
+ * `bun run scripts/x.ts`は、同名の`package.json`のscriptがあるとそちらを実行するため。
+ * `bun.lock`は含めない。コードを実行する欄を持たないため。
  */
 const APPROVAL_EXACT_PATHS: readonly string[] = [
   "scripts/doctor.sh",
@@ -36,6 +37,7 @@ const APPROVAL_EXACT_PATHS: readonly string[] = [
   "scripts/custom-tags.ts",
   "scripts/record-host-applied.sh",
   "scripts/host-install.sh",
+  "package.json",
   "bunfig.toml",
   ".npmrc",
   ".github/workflows/ci.yml",
@@ -47,7 +49,9 @@ const APPROVAL_PREFIXES: readonly string[] = ["scripts/host_apply/"];
 /** 承認の対象のファイル名(小文字で書く)。ディレクトリを問わない。 */
 const APPROVAL_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.env(\..*)?$/,
-  /^\.(node|bun)-version$/,
+  // miseは、設定で有効にしたツールについて、これらをバージョンの指定として読む。
+  /^\.[a-z0-9]+-version$/,
+  /^\.nvmrc$/,
 ];
 
 /**
