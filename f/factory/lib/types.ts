@@ -1096,6 +1096,31 @@ export type GhPullRequest = GhPullRequestWrite & {
   readonly usable: boolean;
 };
 
+/**
+ * 下流が鮮度と使ってよいかの判定に読む、`gh_repos`の列。
+ * `repo_id`が`null`の行は、一度も見えていない`not_visible`の行である。
+ */
+export type GhRepoFreshnessRow = Pick<
+  GhRepo,
+  | "repo_id"
+  | "allowed"
+  | "archived"
+  | "gone"
+  | "last_collected_at"
+  | "truncated"
+  | "detail_failed"
+>;
+
+/**
+ * 1つのリポジトリの`gh_repos`の行、開いているPRの行、DBの`now()`を、1つの文で読んだ結果。
+ * `repo`が`null`なら、`gh_repos`に行が無い。
+ */
+export type GhRepoOpenPrSnapshot = {
+  readonly db_now: Date;
+  readonly repo: GhRepoFreshnessRow | null;
+  readonly prs: readonly GhPullRequest[];
+};
+
 /** Issueの詳細として書く値。 */
 export type GhIssueWrite = {
   readonly number: number;
