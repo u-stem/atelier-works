@@ -8,4 +8,4 @@ schema:
   properties: {}
   required: []
 tag: periodic
-timeout: 300
+timeout: 120

@@ -1179,8 +1179,8 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
   このworkerの枠は1つなので、長く動くジョブの後ろで待つジョブを、workerの不在と誤って知らせないためである。
   待たされる最悪は、他のscriptのtimeoutの合計である。
   今の4本では、`collect_github`と`default_worker_watch`が最も待たされる。
-  `notify_daily_summary`の600秒、`auto_retry_pr_review`の300秒、もう1本の120秒の後ろで、最大1020秒待つ。
-  しきい値は、それに余裕を足した1320秒である。
+  他の3本は、どれも120秒のtimeoutで、その後ろで最大360秒待つ。
+  しきい値は、それに余裕を足した660秒である。
 - importでたどれるソースが読むsecret変数は、scriptごとの許可に限る。
   許可のキーが、tag`periodic`のscriptの一覧と一致することと、許可したsecretを実際に読むことも固定する。
   ある許可を別のscriptに当てると、違反が返ることも確かめる。

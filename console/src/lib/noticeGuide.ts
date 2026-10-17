@@ -299,7 +299,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "periodic_worker_missing",
     guide(
-      "tag periodicのジョブが、予定時刻から22分以上実行されずに待っています。定期ジョブ用のworkerが居ないか、塞がっているか、tagの設定がずれています。",
+      "tag periodicのジョブが、予定時刻から11分以上実行されずに待っています。定期ジョブ用のworkerが居ないか、塞がっているか、tagの設定がずれています。",
       "本文の「次の操作」に従い、コンテナの状態、カスタムtagの許可、Windmillの画面での実行中のジョブとワーカーグループのtagの順に確かめてください。",
       {
         note: "待ちが解けると、自己更新が自動で解決します。",
@@ -309,7 +309,7 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
   [
     "github_collect_stale",
     guide(
-      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは30分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。",
+      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは25分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。",
       "本文の所有者の最新の実行の記録を、次のコマンドで読み、運用の文書の「実行の記録の読み方」の表のerror_codeの対処に従ってください。記録が古いときは、スケジュールとジョブの履歴を確かめます。",
       {
         commands: [

@@ -429,6 +429,27 @@ describe("periodic scripts", () => {
     expect(await scriptTimeoutSeconds("f/factory/collect_github")).toBe(120);
   });
 
+  test("notify_daily_summary times out in 120 seconds", async () => {
+    expect(await scriptTimeoutSeconds("f/factory/notify_daily_summary")).toBe(
+      120,
+    );
+  });
+
+  test("auto_retry_pr_review times out in 120 seconds", async () => {
+    expect(await scriptTimeoutSeconds("f/factory/auto_retry_pr_review")).toBe(
+      120,
+    );
+  });
+
+  test("the worst wait of a periodic script is 360 seconds", async () => {
+    const timeouts: number[] = [];
+    for (const path of PERIODIC_SCRIPTS) {
+      timeouts.push((await scriptTimeoutSeconds(path)) ?? 0);
+    }
+    const total = timeouts.reduce((sum, t) => sum + t, 0);
+    expect(Math.max(...timeouts.map((own) => total - own))).toBe(360);
+  });
+
   test("no periodic script declares a variable or resource reference in its inputs", async () => {
     const referencing: string[] = [];
     for (const path of PERIODIC_SCRIPTS) {
