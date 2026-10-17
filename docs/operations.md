@@ -2233,6 +2233,35 @@ GROUP BY 1;
 確認クエリの結果にNULLの行があるときは、ジョブにまだ変数が届いていない。
 workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確かめる。
 
+#### Claudeの状態の置き場所
+
+workerのイメージは、`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)と`GH_CONFIG_DIR`を`ENV`に持つ。
+どちらも`WHITELIST_ENVS`に挙げないので、ジョブの`process.env`には届かない。
+この2つは、コンテナの中で人が`claude`や`gh`を手で使うときの置き場である。
+
+ジョブのClaudeの設定の置き場は、`runClaude`が、ジョブごとの0700の一時ディレクトリの下(`<TMPDIR>/claude-config`)に指定する。
+ジョブの終了で消え、取り消しやタイムアウトで消えずに残ったものは、掃除のジョブが期限を過ぎてから消す。
+そのため状態と会話記録は溜まらず、検査用のユーザーからも読めない。
+ジョブのディレクトリを得られないときは、`claude`の既定の置き場(`$HOME/.claude`)に戻る。
+反映より前のジョブが`$HOME/.claude`に残した状態は、そのまま残る。
+`--setting-sources user`が読むユーザー層も、毎回空から始まり、人が手で動かした設定が混ざらない。
+認証は`CLAUDE_CODE_OAUTH_TOKEN`で渡すので、置き場所は認証に関わらない。
+
+`GH_CONFIG_DIR`を届かせないのは、ghとgitの子プロセスが、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
+届かせても、読む処理が無い。
+
+ジョブに2つの変数が届いていないことは、`wmill script preview`で次の内容のscriptを実行して確かめる。
+値は出さず、有無だけを返す。
+
+```ts
+export async function main() {
+  return {
+    CLAUDE_CONFIG_DIR_set: process.env.CLAUDE_CONFIG_DIR !== undefined,
+    GH_CONFIG_DIR_set: process.env.GH_CONFIG_DIR !== undefined,
+  };
+}
+```
+
 ### PR修正の連続した失敗
 
 同じPRの修正のうち、`blocked`でないラウンド(`done`か要件の不足)で最後に終えた時刻より後の、次の3つを足す。
