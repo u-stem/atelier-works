@@ -325,7 +325,7 @@ async function runPlace(
     deps.print(`refused: ${inputs.reason}`);
     return 1;
   }
-  const summary = `freeze ${command.target} for ${command.minutes} minutes, reason "${sanitizeForDisplay(command.reason)}"`;
+  const summary = `freeze ${sanitizeForDisplay(command.target)} for ${command.minutes} minutes, reason "${sanitizeForDisplay(command.reason)}"`;
   if (!(await authorize(actor, summary, deps))) return 1;
   for (let attempt = 0; attempt < PLACE_ID_ATTEMPTS; attempt++) {
     const id = deps.newId();
@@ -397,7 +397,8 @@ async function runRelease(
   actor: FreezeActor,
   deps: CliDeps,
 ): Promise<number> {
-  if (!(await authorize(actor, `release freeze ${id}`, deps))) return 1;
+  const shown = sanitizeForDisplay(id);
+  if (!(await authorize(actor, `release freeze ${shown}`, deps))) return 1;
   let result: Outcome<unknown>;
   try {
     result = await mutateFreezeState(deps.ports, (state, now) =>
