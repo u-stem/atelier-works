@@ -469,10 +469,10 @@ describe("the checks on scripts that stay on the default worker", () => {
     ).toEqual([]);
   });
 
-  test("does not flag github_token when it is allowed", async () => {
+  test("flags github_token, which poll_issues reads, because it is not allowed", async () => {
     expect(
       await secretsOutside(["f/factory/poll_issues"], MAY_READ_SECRET),
-    ).not.toContain(GITHUB_TOKEN);
+    ).toContain(GITHUB_TOKEN);
   });
 
   test("flags a non-literal read that is not listed", () => {
