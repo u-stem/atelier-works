@@ -1,0 +1,4 @@
+value: ""
+is_secret: true
+description: >-
+  GitHubの所有者ごとの読み取り専用のトークンです。所有者のlogin(小文字)をキーにしたJSONの対応表で、mise run bootstrapが環境変数GITHUB_READ_TOKEN_<OWNER>から組んで入れます。手で書き換えないでください。
