@@ -130,11 +130,11 @@ esac
 # --- 必須の設定(秘密でないもの、インスタンスの秘密) -------------------------
 : "${WM_HTTP_PORT:?run via 'mise run bootstrap' (mise.toml [env] sets this)}"
 : "${WM_ADMIN_EMAIL:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_EMAIL=...}"
-: "${WM_ADMIN_PASSWORD:?run via 'mise run bootstrap'; set it as described in docs/setup.md ("秘密値を投入する" section)}"
+: "${WM_ADMIN_PASSWORD:?run via 'mise run bootstrap'; set it as described in docs/setup.md (the section on injecting secrets)}"
 
 # --- 手順0: 弱い・既定の管理者パスワードでは実行を拒む ----------------------
 if [ "${WM_ADMIN_PASSWORD}" = "changeme" ] || [ "${#WM_ADMIN_PASSWORD}" -lt 12 ]; then
-  die "WM_ADMIN_PASSWORD is the 'changeme' default or shorter than 12 characters; set a strong password as described in docs/setup.md ("秘密値を投入する" section)"
+  die "WM_ADMIN_PASSWORD is the 'changeme' default or shorter than 12 characters; set a strong password as described in docs/setup.md (the section on injecting secrets)"
 fi
 
 # --- 任意の秘密。空でもbootstrapは動き、対応する変数を空で作成・更新する。
