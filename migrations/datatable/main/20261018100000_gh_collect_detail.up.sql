@@ -27,7 +27,15 @@
 --   stageは、error_codeが生じた段(list/detail)。成功の行はNULL。
 --
 -- 既存の行と列の値は変えない。足す列の既定値は定数なので、表の書き直しは起きない。
--- ロックの待ちは最大30秒で、止まった書き込みがあればmigrationは失敗する(self_updateが再試行する)。
+--
+-- stageとerror_codeの整合は、CHECKにしない。
+-- 旧いコードは、stageを書かずに失敗の行を書き、書き始めの行(ok=false、error_codeなし)も書く。
+-- NOT ok → stage IS NOT NULLにすると、このmigrationだけを反映した時点で、旧いコードの書き込みが失敗する。
+--
+-- lock_timeoutは、1つのロックごとの待ちの上限で、migration全体の上限ではない。
+-- gh_reposのロックを持ったままgh_collect_runsのロックを待つので、最大で約60秒かかる。
+-- その間、gh_reposとgh_collect_runsへの文も待たされる。
+-- 止まった書き込みがあればmigrationは失敗する(self_updateが再試行する)。
 BEGIN;
 
 SET LOCAL lock_timeout = '30s';
