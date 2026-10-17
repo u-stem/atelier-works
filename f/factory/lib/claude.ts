@@ -15,6 +15,7 @@ import {
   type AgentRunRecord,
   capToDeadline,
   type FactoryConfig,
+  type ModelUsageEntry,
 } from "./types.ts";
 import type { CommandRunner } from "./workspace.ts";
 
@@ -117,6 +118,8 @@ export type ClaudeRunResult = {
   readonly numTurns: number;
   readonly durationMs: number;
   readonly usage: ClaudeUsage;
+  /** 実際に使われたモデルごとの内訳。結果に`modelUsage`が無いか、読めない要素があるときは空になる。 */
+  readonly modelUsage: readonly ModelUsageEntry[];
   /**
    * `is_error`が`false`で、モデルが正しい構造化出力を返したときだけ値が入り、
    * スキーマに適合する。
@@ -145,6 +148,49 @@ function isRawClaudeUsage(value: unknown): value is RawClaudeUsage {
     typeof record.cache_read_input_tokens === "number" &&
     typeof record.cache_creation_input_tokens === "number"
   );
+}
+
+type RawModelUsage = {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadInputTokens: number;
+  readonly cacheCreationInputTokens: number;
+  readonly costUSD: number;
+};
+
+function isRawModelUsage(value: unknown): value is RawModelUsage {
+  if (typeof value !== "object" || value === null) return false;
+  return (
+    Number.isInteger(Reflect.get(value, "inputTokens")) &&
+    Number.isInteger(Reflect.get(value, "outputTokens")) &&
+    Number.isInteger(Reflect.get(value, "cacheReadInputTokens")) &&
+    Number.isInteger(Reflect.get(value, "cacheCreationInputTokens")) &&
+    typeof Reflect.get(value, "costUSD") === "number"
+  );
+}
+
+/**
+ * 結果の`modelUsage`(モデル名をキーにしたオブジェクト)を、モデルごとの配列にする。
+ * 内訳は補助の記録なので、無いときと読めないときは、実行を失敗にせず、内訳を空にする。
+ * 一部の要素だけを残すと、実行全体の値と内訳の合計が食い違うため、1つでも読めなければ全体を捨てる。
+ */
+function parseModelUsage(value: unknown): ModelUsageEntry[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return [];
+  }
+  const entries: ModelUsageEntry[] = [];
+  for (const [model, usage] of Object.entries(value)) {
+    if (!isRawModelUsage(usage)) return [];
+    entries.push({
+      model,
+      input_tokens: usage.inputTokens,
+      output_tokens: usage.outputTokens,
+      cache_read_tokens: usage.cacheReadInputTokens,
+      cache_creation_tokens: usage.cacheCreationInputTokens,
+      cost_usd: usage.costUSD,
+    });
+  }
+  return entries;
 }
 
 type RawClaudeJson = {
@@ -214,6 +260,7 @@ export function parseClaudeJson(stdout: string): ClaudeRunResult {
       cacheReadInputTokens: parsed.usage.cache_read_input_tokens,
       cacheCreationInputTokens: parsed.usage.cache_creation_input_tokens,
     },
+    modelUsage: parseModelUsage(Reflect.get(parsed, "modelUsage")),
     structuredOutput: parsed.structured_output,
   };
 }
@@ -514,6 +561,7 @@ function baseAgentRunFor<T>(
     session_id: null,
     exit_code: exitCode,
     error: null,
+    model_usage: [],
   };
 }
 
@@ -587,6 +635,7 @@ async function attemptClaude<T>(
     num_turns: parsed.numTurns,
     duration_ms: parsed.durationMs,
     session_id: parsed.sessionId,
+    model_usage: parsed.modelUsage,
   };
 
   if (parsed.isError) {

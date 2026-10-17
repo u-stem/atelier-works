@@ -1757,25 +1757,70 @@ export function toRequirementDraft(row: SqlRow): RequirementDraft {
 // agent_runs
 // ---------------------------------------------------------------------------
 
-/** `factory.agent_runs`に行を挿入し、そのIDを返す。 */
+const MODEL_USAGE_COLUMN_PATTERN =
+  /column "model_usage" of relation "agent_runs" does not exist/;
+
+/**
+ * 例外が、`agent_runs.model_usage`の列が無いことによるもの(PostgreSQLのundefined_column)かを返す。
+ * 判定は`isMissingJobLinkColumnError`と同じく、エラーコード42703か、列と表の名前を含む文のどちらかで行う。
+ */
+export function isMissingModelUsageColumnError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (Reflect.get(err, "code") === "42703") return true;
+  if (MODEL_USAGE_COLUMN_PATTERN.test(err.message)) return true;
+  const body: unknown = Reflect.get(err, "body");
+  return typeof body === "string" && MODEL_USAGE_COLUMN_PATTERN.test(body);
+}
+
+/**
+ * `factory.agent_runs`に行を挿入し、そのIDを返す。
+ * モデル別の内訳の列を足すmigrationより先に、この関数を含むコードが反映されると、列が無いエラーになる。
+ * そのときだけ、内訳を含まない文で記録し直す。費用の記録が消えると、日次の予算の集計が狂うためである。
+ * ほかのエラーは投げる。
+ */
 export async function recordAgentRun(
   record: AgentRunRecord,
   sql: SqlClient = defaultSqlClient,
+  log: Logger = logger("db"),
 ): Promise<number> {
   const statement = sql`
     INSERT INTO factory.agent_runs (
       work_item_id, stage, attempt, model, claude_version, input_tokens,
       output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
-      session_id, exit_code, error
+      session_id, exit_code, error, model_usage
     ) VALUES (
       ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
       ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
       ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
-      ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error}
+      ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error},
+      ${JSON.stringify(record.model_usage)}::jsonb
     )
     RETURNING id
   `;
-  const row = await fetchOneRow(statement, "recordAgentRun");
+  let row: SqlRow;
+  try {
+    row = await fetchOneRow(statement, "recordAgentRun");
+  } catch (err) {
+    if (!isMissingModelUsageColumnError(err)) throw err;
+    log.warn(
+      "agent_runs.model_usage is missing; recorded the run without the per-model usage (the datatable migration has not run yet)",
+      { stage: record.stage },
+    );
+    const legacy = sql`
+      INSERT INTO factory.agent_runs (
+        work_item_id, stage, attempt, model, claude_version, input_tokens,
+        output_tokens, cache_read_tokens, cost_usd, num_turns, duration_ms,
+        session_id, exit_code, error
+      ) VALUES (
+        ${record.work_item_id}::bigint, ${record.stage}, ${record.attempt}::integer, ${record.model},
+        ${record.claude_version}, ${record.input_tokens}::integer, ${record.output_tokens}::integer,
+        ${record.cache_read_tokens}::integer, ${record.cost_usd}::numeric, ${record.num_turns}::integer,
+        ${record.duration_ms}::integer, ${record.session_id}, ${record.exit_code}::integer, ${record.error}
+      )
+      RETURNING id
+    `;
+    row = await fetchOneRow(legacy, "recordAgentRun");
+  }
   return parseId(row.id, "id");
 }
 

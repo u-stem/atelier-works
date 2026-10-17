@@ -1650,10 +1650,44 @@ describe("recordAgentRun", () => {
         session_id: "sess-1",
         exit_code: 0,
         error: null,
+        model_usage: [],
       },
       sql,
     );
     expect(calls[0]?.text).toContain("INSERT INTO factory.agent_runs");
+  });
+
+  test("passes model_usage as a jsonb array of the per-model breakdown", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 9 }]]);
+    const entry = {
+      model: "claude-haiku-5",
+      input_tokens: 3,
+      output_tokens: 4,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+      cost_usd: 0.002,
+    };
+    await recordAgentRun(
+      {
+        work_item_id: 1,
+        stage: "implement",
+        attempt: 1,
+        model: "claude-sonnet-5-5",
+        claude_version: null,
+        input_tokens: null,
+        output_tokens: null,
+        cache_read_tokens: null,
+        cost_usd: null,
+        num_turns: null,
+        duration_ms: null,
+        session_id: null,
+        exit_code: 0,
+        error: null,
+        model_usage: [entry],
+      },
+      sql,
+    );
+    expect(calls[0]?.values).toContain(JSON.stringify([entry]));
   });
 
   test("casts nullable numeric columns (tokens/cost/turns/duration/exit_code) to their real type when null — a Claude timeout/error leaves most of these null", async () => {
@@ -1674,12 +1708,73 @@ describe("recordAgentRun", () => {
         session_id: null,
         exit_code: null,
         error: "timed out",
+        model_usage: [],
       },
       sql,
     );
     const text = calls[0]?.text ?? "";
     expect(text).toContain("::integer");
     expect(text).toContain("::numeric");
+  });
+});
+
+describe("recordAgentRun before the model_usage migration", () => {
+  const RUN = {
+    work_item_id: 1,
+    stage: "implement",
+    attempt: 1,
+    model: "claude-sonnet-5-5",
+    claude_version: null,
+    input_tokens: 1,
+    output_tokens: 2,
+    cache_read_tokens: 3,
+    cost_usd: 0.5,
+    num_turns: 1,
+    duration_ms: 10,
+    session_id: "s",
+    exit_code: 0,
+    error: null,
+    model_usage: [],
+  };
+
+  /** 1回目の文は列が無いエラーで失敗し、2回目以降は成功する。文の本文を控える。 */
+  function missingColumnThenOk(failure: Error): {
+    sql: SqlClient;
+    texts: string[];
+  } {
+    const texts: string[] = [];
+    const sql: SqlClient = (strings) => {
+      texts.push(strings.join(" ? "));
+      const first = texts.length === 1;
+      return {
+        fetch: () =>
+          first ? Promise.reject(failure) : Promise.resolve([{ id: 21 }]),
+        execute: () => Promise.resolve(),
+      };
+    };
+    return { sql, texts };
+  }
+
+  test("records the run without model_usage when the column is missing", async () => {
+    const { sql, texts } = missingColumnThenOk(
+      new Error('column "model_usage" of relation "agent_runs" does not exist'),
+    );
+    await recordAgentRun(RUN, sql, SILENT_LOG);
+    expect(texts[1]).not.toContain("model_usage");
+  });
+
+  test("returns the id of the run recorded without model_usage", async () => {
+    const { sql } = missingColumnThenOk(
+      Object.assign(new Error("undefined column"), { code: "42703" }),
+    );
+    expect(await recordAgentRun(RUN, sql, SILENT_LOG)).toBe(21);
+  });
+
+  test("rethrows a failure other than a missing model_usage column", async () => {
+    const { sql } = missingColumnThenOk(new Error("db down"));
+    await expect(recordAgentRun(RUN, sql, SILENT_LOG)).rejects.toThrow(
+      "db down",
+    );
   });
 });
 

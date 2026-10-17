@@ -2174,8 +2174,9 @@ Sonnetで試して届かなかった課題を、上位のモデルでやり直�
 試行が増えると、実装の失敗の数は0から数え直す。
 要件定義の生成、PRのレビュー、監査は、失敗の数にかかわらず`heavy_model`を使う。
 
-実際に使ったモデルは、Claudeの実行の記録(`agent_runs`)の`model`列に残る。
+`--model`に渡したモデルは、Claudeの実行の記録(`agent_runs`)の`model`列に残る。
 `heavy_model`に上がったかどうかは、この列で確かめる。
+1回の実行の中で別のモデルが使われたときの実際のモデルは、[実際に使われたモデルごとの使用量](#実際に使われたモデルごとの使用量)の`model_usage`で見る。
 
 `heavy_model`が無い既存のリソースでも、既定値の`claude-opus-5-5`で動く。
 一方、既存のリソースに`model: claude-opus-5-5`が書かれていると、既定が変わっても書き換わらない。
@@ -2261,6 +2262,55 @@ export async function main() {
   };
 }
 ```
+
+### 実際に使われたモデルごとの使用量
+
+`agent_runs.model`と`v_agent_usage_daily`の`model`は、`claude --model`に渡した値である。
+1回の実行の中で別のモデルが使われても、費用とトークンは渡した値に数えられる。
+実際に使われたモデルで数えるには、viewの`v_agent_model_usage_daily`を使う。
+
+`agent_runs.model_usage`(jsonbの配列)には、`claude -p`の結果の`modelUsage`を、モデルごとに1要素で保存する。
+要素は、`model`、`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_creation_tokens`、`cost_usd`である。
+Claudeが結果を返さなかった実行と、この列を足す前の実行は、空の配列である。
+結果の`modelUsage`が無いときと、読めない要素が1つでもあるときは、実行を失敗にせず、内訳を空にする。
+一部の要素だけを残すと、実行全体の費用と内訳の合計が食い違うためである。
+
+viewは、日、実際に使われたモデル、Claudeのバージョン、工程ごとに、実行の数、費用、トークン数(入力、出力、キャッシュ読み出し、キャッシュ作成)を合計する。
+1回の実行が複数のモデルを使ったときは、それぞれのモデルに1回ずつ数える。
+`model_usage`が空の実行は、渡した値と実行全体の値で1行として数え、`total_cache_creation_tokens`には入らない。
+内訳を持つ実行と持たない実行が同じ行に混ざると、`total_cache_creation_tokens`は内訳を持つ実行だけの合計で、実際より小さい。
+ターン数と実行時間は、モデルごとに分けられないので、このviewには出さない。
+それらは`v_agent_usage_daily`で見る。
+
+```sql
+SELECT model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd
+FROM factory.v_agent_model_usage_daily
+WHERE day >= now() - interval '14 days'
+GROUP BY model
+ORDER BY cost_usd DESC;
+```
+
+`model_usage`の`model`は、`modelUsage`のキーをそのまま保存する。
+claude 2.1.302の`claude -p --output-format json`で、`--model haiku`(エイリアス)を渡した実行を確かめた。
+`modelUsage`のキーは、エイリアスではなく、解決後の完全なモデルID(`claude-haiku-5-5`)だった。
+値の項目名は、`inputTokens`、`outputTokens`、`cacheReadInputTokens`、`cacheCreationInputTokens`、`costUSD`である。
+この5つを保存する。
+保存しない項目は、`webSearchRequests`、`contextWindow`、`maxOutputTokens`、`thinkingTokens`、`canonicalModel`ほかである。
+既定の設定は完全なモデルIDなので、`--model`に渡す値とキーは一致する。
+設定にエイリアスや`[1m]`などの接尾辞付きの値を書くと、同じモデルが別の行になりうる。
+内訳のない実行は渡した値で数え、内訳のある実行はキーで数えるためである。
+接尾辞付きの値のキーは確かめていない。
+`model_usage`のキーは、次のクエリで確かめる。
+
+```sql
+SELECT DISTINCT m.model
+FROM factory.agent_runs AS r
+CROSS JOIN LATERAL jsonb_to_recordset(r.model_usage) AS m (model text)
+ORDER BY m.model;
+```
+
+列を足すmigrationより先に、新しいコードが反映された間は、`model_usage`を除いた文で記録する。
+このときの実行の内訳は残らない。
 
 ### PR修正の連続した失敗
 
