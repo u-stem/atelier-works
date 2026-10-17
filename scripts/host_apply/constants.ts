@@ -94,6 +94,15 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<CommandKind, number>> = {
   http_fetch: 30_000,
 };
 
+/** コミットから読むファイルの大きさの上限(バイト)。 */
+export const MAX_BLOB_BYTES = 0;
+
+/** 実行役の版。拒否の控えは、この版と同じものだけを使う。 */
+export const EXECUTOR_VERSION = "";
+
+/** 値が変わると、形式に合っていても承認が要るキー。 */
+export const MISE_APPROVAL_KEYS: readonly string[] = [];
+
 /** 1回の実行全体の上限。 */
 export const RUN_TIMEOUT_MS = 90 * MINUTE;
 

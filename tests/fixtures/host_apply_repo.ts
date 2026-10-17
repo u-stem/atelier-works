@@ -1,6 +1,12 @@
 /** 実行役のテスト用に、一時ディレクトリへ実際のgitリポジトリを作る。 */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -8,6 +14,8 @@ export type FixtureRepo = {
   readonly dir: string;
   /** ファイルを書き(`null`は削除)、コミットして、そのshaを返す。 */
   commit(files: Record<string, string | null>, message: string): string;
+  /** symlinkを作ってコミットし、そのshaを返す。 */
+  symlink(path: string, target: string): string;
   cleanup(): void;
 };
 
@@ -54,6 +62,14 @@ export function createFixtureRepo(): FixtureRepo {
       }
       git(["add", "-A"]);
       git(["commit", "-q", "--allow-empty", "-m", message]);
+      return git(["rev-parse", "HEAD"]);
+    },
+    symlink(path, target) {
+      const full = join(dir, path);
+      mkdirSync(dirname(full), { recursive: true });
+      symlinkSync(target, full);
+      git(["add", "-A"]);
+      git(["commit", "-q", "--allow-empty", "-m", `symlink ${path}`]);
       return git(["rev-parse", "HEAD"]);
     },
     cleanup() {

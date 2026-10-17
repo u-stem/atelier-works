@@ -214,6 +214,21 @@ describe("classifyMiseTomlChange", () => {
     expect(classifyMiseTomlChange(REAL_MISE, target)).toBe("approval");
   });
 
+  test("needs approval when CONSOLE_GITHUB_REPO changes to another valid repository", () => {
+    expect(
+      classifyMiseTomlChange(
+        REAL_MISE,
+        withValue("CONSOLE_GITHUB_REPO", "https://github.com/someone/fork"),
+      ),
+    ).toBe("approval");
+  });
+
+  test("stays auto when CONSOLE_GITHUB_REPO is unchanged and a version changed", () => {
+    expect(
+      classifyMiseTomlChange(REAL_MISE, withValue("WM_VERSION", "1.818.0")),
+    ).toBe("auto");
+  });
+
   test("needs approval for a new file", () => {
     expect(classifyMiseTomlChange(null, REAL_MISE)).toBe("approval");
   });
@@ -264,6 +279,13 @@ describe("isMiseConfigPath", () => {
     ".config/mise.toml",
     ".tool-versions",
     "sub/dir/mise.toml",
+    "Mise.toml",
+    "MISE.LOCAL.TOML",
+    ".Mise.toml",
+    "Mise/config.toml",
+    ".MISE/config.toml",
+    ".Config/Mise/config.toml",
+    ".Tool-Versions",
   ])("recognizes %s", (path) => {
     expect(isMiseConfigPath(path)).toBe(true);
   });

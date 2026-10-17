@@ -35,12 +35,18 @@ describe("parseState", () => {
     const result = parseState(
       validJson({
         attempts: 2,
-        rejected: { [SHA]: { kind: "not_ff", at: "2026-10-17T00:00:00Z" } },
+        rejected: {
+          [SHA]: {
+            kind: "tree_forbidden",
+            at: "2026-10-17T00:00:00Z",
+            executor_version: "v1",
+          },
+        },
         converging: { sha: SHA, started_at: "t", drained: ["windmill_worker"] },
       }),
     );
     expect(result.kind === "ok" ? result.state.rejected[SHA]?.kind : null).toBe(
-      "not_ff",
+      "tree_forbidden",
     );
   });
 
@@ -85,8 +91,23 @@ describe("parseState", () => {
 
   test("is state_unreadable for an unknown rejection kind", () => {
     expect(
-      parseState(validJson({ rejected: { [SHA]: { kind: "weird", at: "t" } } }))
-        .kind,
+      parseState(
+        validJson({
+          rejected: {
+            [SHA]: { kind: "weird", at: "t", executor_version: "v1" },
+          },
+        }),
+      ).kind,
+    ).toBe("state_unreadable");
+  });
+
+  test("is state_unreadable when a rejection has no executor version", () => {
+    expect(
+      parseState(
+        validJson({
+          rejected: { [SHA]: { kind: "compose_forbidden", at: "t" } },
+        }),
+      ).kind,
     ).toBe("state_unreadable");
   });
 

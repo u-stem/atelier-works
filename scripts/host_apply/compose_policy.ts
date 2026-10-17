@@ -543,3 +543,10 @@ export function checkCompose(
     throw error;
   }
 }
+
+export function checkComposeText(
+  _text: string,
+  _context: ComposeContext,
+): ComposeVerdict {
+  return { ok: true };
+}

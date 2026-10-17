@@ -26,8 +26,6 @@ describe("isApprovalTarget", () => {
     "scripts/host-apply.sh",
     "scripts/host_apply/ci.ts",
     "scripts/host_apply/sub/deep.ts",
-    "package.json",
-    "bun.lock",
     "bunfig.toml",
     ".npmrc",
     ".env",
@@ -41,6 +39,7 @@ describe("isApprovalTarget", () => {
     ".mise/config.toml",
     ".config/mise/config.toml",
     ".tool-versions",
+    ".github/workflows/ci.yml",
   ])("requires approval for %s", (path) => {
     expect(isApprovalTarget(path)).toBe(true);
   });
@@ -53,10 +52,48 @@ describe("isApprovalTarget", () => {
     "f/factory/self_update.ts",
     "console/package.json",
     "scripts/lint-docs.ts",
+    "package.json",
+    "bun.lock",
+    "bun.lockb",
+    ".github/workflows/other.yml",
     "tests/scripts/host_apply_ci.test.ts",
   ])("does not require approval for %s", (path) => {
     expect(isApprovalTarget(path)).toBe(false);
   });
+});
+
+describe("isApprovalTarget: letter case", () => {
+  // APFSは大文字小文字を区別しないので、別の綴りでも同じファイルを指す。
+  test.each([
+    "Bunfig.toml",
+    "BUNFIG.TOML",
+    ".NPMRC",
+    ".ENV",
+    ".Env.local",
+    ".Node-version",
+    ".BUN-VERSION",
+    ".Tool-versions",
+    "Mise.toml",
+    "Mise.local.toml",
+    "MISE/config.toml",
+    ".MISE/config.toml",
+    ".Config/Mise/config.toml",
+    "scripts/Host-install.sh",
+    "Scripts/Doctor.sh",
+    "scripts/DOCTOR.SH",
+    "scripts/Host_apply/x.ts",
+    "scripts/HOST-APPLY.ts",
+    ".GitHub/Workflows/CI.yml",
+  ])("requires approval for %s", (path) => {
+    expect(isApprovalTarget(path)).toBe(true);
+  });
+
+  test.each(["Package.json", "BUN.LOCK", "Docs/Security.md"])(
+    "does not require approval for %s",
+    (path) => {
+      expect(isApprovalTarget(path)).toBe(false);
+    },
+  );
 });
 
 describe("approvalFiles", () => {

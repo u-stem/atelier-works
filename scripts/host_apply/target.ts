@@ -11,12 +11,14 @@ export type RejectionKind =
   | "unknown_service"
   | "caddy_invalid"
   | "not_ff"
+  | "tree_forbidden"
   | "ci_failed"
   | "docker_version";
 
 export type RejectionRecord = {
   readonly kind: RejectionKind;
   readonly at: string;
+  readonly executor_version: string;
 };
 
 /**
@@ -56,6 +58,7 @@ export type DecideTargetInput = {
   readonly tipIsAncestorOfApplied: boolean;
   readonly rejected: Readonly<Record<string, RejectionRecord>>;
   readonly converging: { readonly sha: string } | null;
+  readonly executorVersion: string;
 };
 
 /**
@@ -83,9 +86,13 @@ export function recordRejection(
   sha: string,
   kind: RejectionKind,
   at: string,
+  executorVersion: string,
 ): Record<string, RejectionRecord> {
   if (!isContentRejection(kind)) return { ...rejected };
-  return { ...rejected, [sha]: { kind, at } };
+  return {
+    ...rejected,
+    [sha]: { kind, at, executor_version: executorVersion },
+  };
 }
 
 export type RunOutcome =
@@ -129,4 +136,8 @@ export function shouldThrottleRetry(input: {
   const last = Date.parse(input.lastFailureAt);
   if (Number.isNaN(last)) return false;
   return input.now.getTime() - last < ATTEMPT_THROTTLE_INTERVAL_MS;
+}
+
+export function shouldNotifyRepeatedFailure(_attempts: number): boolean {
+  return false;
 }

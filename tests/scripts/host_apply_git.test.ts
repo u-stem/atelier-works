@@ -6,7 +6,10 @@ import {
   fetchEnv,
   isAncestorArgs,
   isSha40,
+  lsTreePathArgs,
+  lsTreeRecursiveArgs,
   PLAN_GIT_SUBCOMMANDS,
+  parseLsTreeZ,
   readOnlyGitArgs,
   remoteUrlMatches,
   showBlobArgs,
@@ -132,6 +135,7 @@ describe("the git commands that plan uses", () => {
     expect([...PLAN_GIT_SUBCOMMANDS].sort()).toEqual([
       "cat-file",
       "diff",
+      "ls-tree",
       "merge-base",
       "show",
     ]);
@@ -170,6 +174,30 @@ describe("the git commands that plan uses", () => {
       "-e",
       `${SHA}^{commit}`,
     ]);
+  });
+
+  test("lsTreeRecursiveArgs lists every entry of a tree with NUL separators", () => {
+    expect(lsTreeRecursiveArgs(SHA).slice(-4)).toEqual([
+      "ls-tree",
+      "-r",
+      "-z",
+      SHA,
+    ]);
+  });
+
+  test("lsTreePathArgs asks for one path with its size", () => {
+    expect(lsTreePathArgs(SHA, "mise.toml").slice(-6)).toEqual([
+      "ls-tree",
+      "-z",
+      "-l",
+      SHA,
+      "--",
+      "mise.toml",
+    ]);
+  });
+
+  test("lsTreePathArgs refuses an option-like path", () => {
+    expect(() => lsTreePathArgs(SHA, "--full-tree")).toThrow("path");
   });
 
   test("every command starts with the hardening settings", () => {
@@ -211,5 +239,39 @@ describe("the git commands that plan uses", () => {
         ["fetch", "pull", "push", "checkout", "worktree", "clone"].includes(a),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("parseLsTreeZ", () => {
+  const blob = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+
+  test("parses entries without sizes", () => {
+    const out = `100644 blob ${blob}\tdocs/a.md\u0000120000 blob ${blob}\tlink\u0000160000 commit ${blob}\tsub\u0000`;
+    expect(parseLsTreeZ(out)).toEqual([
+      { mode: "100644", type: "blob", path: "docs/a.md", size: null },
+      { mode: "120000", type: "blob", path: "link", size: null },
+      { mode: "160000", type: "commit", path: "sub", size: null },
+    ]);
+  });
+
+  test("parses the size column of --long", () => {
+    const out = `100644 blob ${blob}    1234\tmise.toml\u0000160000 commit ${blob}       -\tsub\u0000`;
+    expect(parseLsTreeZ(out)).toEqual([
+      { mode: "100644", type: "blob", path: "mise.toml", size: 1234 },
+      { mode: "160000", type: "commit", path: "sub", size: null },
+    ]);
+  });
+
+  test("keeps a path with a space and a newline", () => {
+    const out = `100644 blob ${blob}\tweird name\nx\u0000`;
+    expect(parseLsTreeZ(out)[0]?.path).toBe("weird name\nx");
+  });
+
+  test("returns nothing for empty output", () => {
+    expect(parseLsTreeZ("")).toEqual([]);
+  });
+
+  test("throws for a line it cannot read", () => {
+    expect(() => parseLsTreeZ("garbage\u0000")).toThrow("ls-tree");
   });
 });

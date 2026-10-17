@@ -789,6 +789,7 @@ describe("files that the host executor runs", () => {
     "scripts/record-host-applied.sh",
     "infra/docker-compose.yml",
     "tests/infra/docker_compose.test.ts",
+    "tests/fixtures/host_apply_repo.ts",
   ];
   const UNDER_PREFIX = [
     "scripts/host_apply/ci.ts",

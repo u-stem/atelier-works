@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EXECUTOR_VERSION } from "../../scripts/host_apply/constants.ts";
 import {
   CONTENT_REJECTION_KINDS,
   type DecideTargetInput,
@@ -8,6 +9,7 @@ import {
   type RejectionKind,
   recordRejection,
   selectTarget,
+  shouldNotifyRepeatedFailure,
   shouldThrottleRetry,
 } from "../../scripts/host_apply/target.ts";
 
@@ -23,8 +25,13 @@ function input(overrides: Partial<DecideTargetInput>): DecideTargetInput {
     tipIsAncestorOfApplied: false,
     rejected: {},
     converging: null,
+    executorVersion: EXECUTOR_VERSION,
     ...overrides,
   };
+}
+
+function rec(kind: RejectionKind, executorVersion: string = EXECUTOR_VERSION) {
+  return { kind, at: "t", executor_version: executorVersion };
 }
 
 describe("selectTarget", () => {
@@ -53,7 +60,7 @@ describe("decideTarget: noop", () => {
       decideTarget(
         input({
           tipIsAncestorOfApplied: true,
-          rejected: { [B]: { kind: "compose_forbidden", at: "t" } },
+          rejected: { [B]: rec("compose_forbidden") },
         }),
       ),
     ).toEqual({ kind: "noop" });
@@ -73,31 +80,38 @@ describe("decideTarget: rejection memory", () => {
     "mise_forbidden",
     "unknown_service",
     "caddy_invalid",
-    "not_ff",
+    "tree_forbidden",
   ];
 
   test.each(contentKinds)("skips a target rejected for %s", (kind) => {
-    expect(
-      decideTarget(input({ rejected: { [B]: { kind, at: "t" } } })),
-    ).toEqual({ kind: "skip_rejected", rejection: kind });
+    expect(decideTarget(input({ rejected: { [B]: rec(kind) } }))).toEqual({
+      kind: "skip_rejected",
+      rejection: kind,
+    });
   });
 
-  test.each(["ci_failed", "docker_version"] as const)(
+  test.each(["ci_failed", "docker_version", "not_ff"] as const)(
     "verifies a target rejected for %s again",
     (kind) => {
-      expect(
-        decideTarget(input({ rejected: { [B]: { kind, at: "t" } } })),
-      ).toEqual({ kind: "proceed", target: B });
+      expect(decideTarget(input({ rejected: { [B]: rec(kind) } }))).toEqual({
+        kind: "proceed",
+        target: B,
+      });
     },
   );
+
+  test("ignores a record made by another executor version", () => {
+    expect(
+      decideTarget(
+        input({ rejected: { [B]: rec("compose_forbidden", "older") } }),
+      ),
+    ).toEqual({ kind: "proceed", target: B });
+  });
 
   test("does not skip a different target", () => {
     expect(
       decideTarget(
-        input({
-          tip: C,
-          rejected: { [B]: { kind: "compose_forbidden", at: "t" } },
-        }),
+        input({ tip: C, rejected: { [B]: rec("compose_forbidden") } }),
       ),
     ).toEqual({ kind: "proceed", target: C });
   });
@@ -112,20 +126,40 @@ describe("decideTarget: rejection memory", () => {
     expect(isContentRejection("ci_failed")).toBe(false);
   });
 
-  test("remembers a content rejection", () => {
-    expect(recordRejection({}, B, "compose_forbidden", "t1")).toEqual({
-      [B]: { kind: "compose_forbidden", at: "t1" },
+  test("classifies not_ff as dependent on the applied sha", () => {
+    expect(isContentRejection("not_ff")).toBe(false);
+  });
+
+  test("remembers a content rejection with the executor version", () => {
+    expect(
+      recordRejection({}, B, "compose_forbidden", "t1", EXECUTOR_VERSION),
+    ).toEqual({
+      [B]: {
+        kind: "compose_forbidden",
+        at: "t1",
+        executor_version: EXECUTOR_VERSION,
+      },
     });
   });
 
   test("does not remember an environment-dependent rejection", () => {
-    expect(recordRejection({}, B, "ci_failed", "t1")).toEqual({});
+    expect(recordRejection({}, B, "ci_failed", "t1", EXECUTOR_VERSION)).toEqual(
+      {},
+    );
+  });
+
+  test("does not remember not_ff, which depends on the applied sha", () => {
+    expect(recordRejection({}, B, "not_ff", "t1", EXECUTOR_VERSION)).toEqual(
+      {},
+    );
   });
 
   test("keeps earlier records when remembering a new one", () => {
-    const before = { [B]: { kind: "not_ff", at: "t0" } } as const;
+    const before = { [B]: rec("mise_forbidden") };
     expect(
-      Object.keys(recordRejection(before, C, "caddy_invalid", "t1")).sort(),
+      Object.keys(
+        recordRejection(before, C, "caddy_invalid", "t1", EXECUTOR_VERSION),
+      ).sort(),
     ).toEqual([B, C].sort());
   });
 });
@@ -143,14 +177,20 @@ describe("decideTarget: the executor code is not taken from the target", () => {
   test("a rejected target stays skipped on the next run without being evaluated", () => {
     // 拒否した版は、控えがあれば評価せずに飛ばす。評価しないので、その版のコードは動かない。
     const first = decideTarget(input({}));
-    const remembered = recordRejection({}, B, "compose_forbidden", "t1");
+    const remembered = recordRejection(
+      {},
+      B,
+      "compose_forbidden",
+      "t1",
+      EXECUTOR_VERSION,
+    );
     const second = decideTarget(input({ rejected: remembered }));
     expect([first.kind, second.kind]).toEqual(["proceed", "skip_rejected"]);
   });
 });
 
 describe("nextAttempts", () => {
-  test("resets when the target changed", () => {
+  test("starts again at one when the target changed and the run failed", () => {
     expect(
       nextAttempts({
         attempts: 2,
@@ -158,7 +198,52 @@ describe("nextAttempts", () => {
         target: C,
         outcome: "failed",
       }),
+    ).toBe(1);
+  });
+
+  test("resets to zero when the target changed and the run did not fail", () => {
+    expect(
+      nextAttempts({
+        attempts: 2,
+        lastTarget: B,
+        target: C,
+        outcome: "pending",
+      }),
     ).toBe(0);
+  });
+
+  test("counts the first failure of the first target as one", () => {
+    expect(
+      nextAttempts({
+        attempts: 0,
+        lastTarget: null,
+        target: B,
+        outcome: "failed",
+      }),
+    ).toBe(1);
+  });
+
+  test("reaches three on the third consecutive failure", () => {
+    const first = nextAttempts({
+      attempts: 0,
+      lastTarget: null,
+      target: B,
+      outcome: "failed",
+    });
+    const second = nextAttempts({
+      attempts: first,
+      lastTarget: B,
+      target: B,
+      outcome: "failed",
+    });
+    expect(
+      nextAttempts({
+        attempts: second,
+        lastTarget: B,
+        target: B,
+        outcome: "failed",
+      }),
+    ).toBe(3);
   });
 
   test("resets after a successful convergence", () => {
@@ -203,6 +288,16 @@ describe("nextAttempts", () => {
         outcome: "pending",
       }),
     ).toBe(1);
+  });
+});
+
+describe("shouldNotifyRepeatedFailure", () => {
+  test("does not notify after two consecutive failures", () => {
+    expect(shouldNotifyRepeatedFailure(2)).toBe(false);
+  });
+
+  test("notifies at the third consecutive failure", () => {
+    expect(shouldNotifyRepeatedFailure(3)).toBe(true);
   });
 });
 

@@ -6,16 +6,10 @@
  * 状態ディレクトリの`bin/`へコピーして、リポジトリの外で単独で動かすため。
  */
 
-import { parseNameStatusZ } from "./host_apply/approval.ts";
 import { COMMAND_TIMEOUT_MS } from "./host_apply/constants.ts";
 import { buildChildEnv } from "./host_apply/env.ts";
-import {
-  commitExistsArgs,
-  diffNameStatusArgs,
-  isAncestorArgs,
-  showBlobArgs,
-} from "./host_apply/git.ts";
-import { buildPlan, type PlanGit, parsePlanArgs } from "./host_apply/plan.ts";
+import { buildPlan, parsePlanArgs } from "./host_apply/plan.ts";
+import { createPlanGit } from "./host_apply/plan_git.ts";
 
 const USAGE =
   "usage: host-apply plan --repo <path> --applied <sha> --target <sha> [--approved <sha>]";
@@ -51,32 +45,6 @@ async function runGit(repo: string, args: string[]): Promise<GitResult> {
   return { code, stdout };
 }
 
-function createPlanGit(repo: string): PlanGit {
-  return {
-    async commitExists(sha) {
-      return (await runGit(repo, commitExistsArgs(sha))).code === 0;
-    },
-    async isAncestor(ancestor, descendant) {
-      const { code } = await runGit(repo, isAncestorArgs(ancestor, descendant));
-      if (code === 0) return true;
-      if (code === 1) return false;
-      throw new Error("git merge-base failed");
-    },
-    async changedFiles(base, target) {
-      const { code, stdout } = await runGit(
-        repo,
-        diffNameStatusArgs(base, target),
-      );
-      if (code !== 0) throw new Error("git diff failed");
-      return parseNameStatusZ(stdout);
-    },
-    async readBlob(sha, path) {
-      const { code, stdout } = await runGit(repo, showBlobArgs(sha, path));
-      return code === 0 ? stdout : null;
-    },
-  };
-}
-
 /**
  * 実行役の入口。終了コードを返す。
  * 判定が出れば0、実行の失敗(コミットが無い、gitの失敗など)は1、使い方の誤りは2。
@@ -94,12 +62,15 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
   try {
-    const result = await buildPlan(createPlanGit(parsed.args.repo), {
-      applied: parsed.args.applied,
-      target: parsed.args.target,
-      approved: parsed.args.approved,
-      root: LOGICAL_ROOT,
-    });
+    const result = await buildPlan(
+      createPlanGit((args) => runGit(parsed.args.repo, args)),
+      {
+        applied: parsed.args.applied,
+        target: parsed.args.target,
+        approved: parsed.args.approved,
+        root: LOGICAL_ROOT,
+      },
+    );
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return 0;
   } catch (error) {

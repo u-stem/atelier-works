@@ -12,6 +12,7 @@ const REASONS = [
   "rejected_mise_forbidden",
   "rejected_unknown_service",
   "rejected_caddy_invalid",
+  "rejected_tree_forbidden",
   "rejected_not_ff",
   "rejected_ci_failed",
   "rejected_docker_version",

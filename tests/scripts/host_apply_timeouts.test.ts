@@ -5,9 +5,11 @@ import {
   COMMAND_KINDS,
   COMMAND_TIMEOUT_MS,
   DRAIN_LIMIT_MS,
+  EXECUTOR_VERSION,
   FAILED_NOTIFY_AFTER,
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_STALE_MS,
+  MAX_BLOB_BYTES,
   NOTIFY_INTERVAL_MS,
   RUN_TIMEOUT_MS,
   STALE_CI_MS,
@@ -114,5 +116,15 @@ describe("thresholds", () => {
       3,
       30 * MINUTE,
     ]);
+  });
+});
+
+describe("limits on what the executor reads", () => {
+  test("caps a file read from a commit at 256 KiB", () => {
+    expect(MAX_BLOB_BYTES).toBe(256 * 1024);
+  });
+
+  test("names the executor version, so that older rejection records can be ignored", () => {
+    expect(EXECUTOR_VERSION).not.toBe("");
   });
 });

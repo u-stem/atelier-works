@@ -11,13 +11,28 @@ import { isSha40 } from "./git.ts";
 import { checkMiseStatic, classifyMiseTomlChange } from "./mise_policy.ts";
 import type { RejectionKind } from "./target.ts";
 
+export type TreeEntry = {
+  readonly mode: string;
+  readonly type: string;
+  readonly path: string;
+};
+
+/** ファイルの読み取りの結果。`absent`は無い、他は読まなかった理由。 */
+export type BlobRead =
+  | { readonly kind: "found"; readonly text: string }
+  | { readonly kind: "absent" }
+  | { readonly kind: "too_large" }
+  | { readonly kind: "not_regular" };
+
 /** `plan`が使うgitの読み取り。 */
 export type PlanGit = {
   commitExists(sha: string): Promise<boolean>;
   isAncestor(ancestor: string, descendant: string): Promise<boolean>;
   changedFiles(base: string, target: string): Promise<ChangedFile[]>;
-  /** コミットのファイルの内容。無い、または読めないときは`null`。 */
-  readBlob(sha: string, path: string): Promise<string | null>;
+  /** コミットのtreeの全エントリ。 */
+  listTree(sha: string): Promise<TreeEntry[]>;
+  /** コミットのファイルの内容。読めない失敗は例外にする。 */
+  readBlob(sha: string, path: string): Promise<BlobRead>;
 };
 
 export type PlanInput = {
@@ -114,10 +129,12 @@ export async function buildPlan(
   });
   const changed = await git.changedFiles(base, target);
 
-  const targetMise = await git.readBlob(target, MISE_PATH);
+  const targetRead = await git.readBlob(target, MISE_PATH);
+  const targetMise = targetRead.kind === "found" ? targetRead.text : null;
   const exempt = new Set<string>();
   if (changed.some((file) => file.path === MISE_PATH) && targetMise !== null) {
-    const baseMise = await git.readBlob(base, MISE_PATH);
+    const baseRead = await git.readBlob(base, MISE_PATH);
+    const baseMise = baseRead.kind === "found" ? baseRead.text : null;
     if (classifyMiseTomlChange(baseMise, targetMise) !== "approval") {
       exempt.add(MISE_PATH);
     }
@@ -132,7 +149,8 @@ export async function buildPlan(
   const mise = checkMiseStatic(targetMise);
   if (!mise.ok) return reject("mise_forbidden", mise.reason);
 
-  const composeText = await git.readBlob(target, COMPOSE_PATH);
+  const composeRead = await git.readBlob(target, COMPOSE_PATH);
+  const composeText = composeRead.kind === "found" ? composeRead.text : null;
   if (composeText === null) {
     return reject("compose_forbidden", "the compose file is missing");
   }

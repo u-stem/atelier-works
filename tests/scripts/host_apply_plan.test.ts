@@ -2,12 +2,14 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ChangedFile } from "../../scripts/host_apply/approval.ts";
+import { MAX_BLOB_BYTES } from "../../scripts/host_apply/constants.ts";
 import {
   buildPlan,
   type PlanGit,
   type PlanResult,
   parsePlanArgs,
 } from "../../scripts/host_apply/plan.ts";
+import { createPlanGit } from "../../scripts/host_apply/plan_git.ts";
 import {
   createFixtureRepo,
   type FixtureRepo,
@@ -26,7 +28,12 @@ const B = "b".repeat(40);
 const C = "c".repeat(40);
 const D = "d".repeat(40);
 
-type FakeCommit = { parent: string | null; files: Record<string, string> };
+type FakeCommit = {
+  parent: string | null;
+  files: Record<string, string>;
+  /** 通常のファイル(100644)以外のmode。 */
+  modes?: Record<string, string>;
+};
 
 /** コミットの鎖を持つ、読み取り専用の偽のgit。呼ばれた操作を記録する。 */
 function fakeGit(commits: Record<string, FakeCommit>) {
@@ -64,9 +71,21 @@ function fakeGit(commits: Record<string, FakeCommit>) {
       }
       return out;
     },
+    async listTree(sha) {
+      calls.push("listTree");
+      const commit = commits[sha];
+      return Object.keys(commit?.files ?? {}).map((path) => ({
+        mode: commit?.modes?.[path] ?? "100644",
+        type: commit?.modes?.[path] === "160000" ? "commit" : "blob",
+        path,
+      }));
+    },
     async readBlob(sha, path) {
       calls.push("readBlob");
-      return commits[sha]?.files[path] ?? null;
+      const text = commits[sha]?.files[path];
+      if (text === undefined) return { kind: "absent" };
+      if (text.length > MAX_BLOB_BYTES) return { kind: "too_large" };
+      return { kind: "found", text };
     },
   };
   return { git, calls };
@@ -325,6 +344,252 @@ describe("buildPlan: static checks", () => {
   });
 });
 
+describe("buildPlan: symlinks and submodules in the target tree", () => {
+  test("rejects a target tree that contains a symlink", async () => {
+    const commits = chainOf({ "docs/link.md": "target" });
+    const commit = commits[B];
+    if (commit) commit.modes = { "docs/link.md": "120000" };
+    const plan = await planOf(commits, { applied: A, target: B });
+    expect(plan).toMatchObject({
+      decision: "rejected",
+      kind: "tree_forbidden",
+    });
+  });
+
+  test("rejects a target tree that contains a submodule", async () => {
+    const commits = chainOf({ vendor: "sha" });
+    const commit = commits[B];
+    if (commit) commit.modes = { vendor: "160000" };
+    const plan = await planOf(commits, { applied: A, target: B });
+    expect(plan).toMatchObject({
+      decision: "rejected",
+      kind: "tree_forbidden",
+    });
+  });
+
+  test("rejects before asking for approval", async () => {
+    const commits = chainOf({
+      "docs/link.md": "target",
+      "scripts/doctor.sh": "changed\n",
+    });
+    const commit = commits[B];
+    if (commit) commit.modes = { "docs/link.md": "120000" };
+    const plan = await planOf(commits, { applied: A, target: B });
+    expect(plan.decision).toBe("rejected");
+  });
+
+  test("a symlink that already existed in an applied tree still rejects the target", async () => {
+    const commits = chainOf({}, {});
+    const commit = commits[C];
+    if (commit) commit.modes = { "docs/a.md": "120000" };
+    const plan = await planOf(commits, { applied: A, target: C });
+    expect(plan).toMatchObject({ kind: "tree_forbidden" });
+  });
+
+  test("lists forbidden entries in the detail without file contents", async () => {
+    const commits = chainOf({ "docs/link.md": "secret-looking-target" });
+    const commit = commits[B];
+    if (commit) commit.modes = { "docs/link.md": "120000" };
+    const plan = await planOf(commits, { applied: A, target: B });
+    expect(plan.decision === "rejected" ? plan.detail : "").toBe(
+      "docs/link.md",
+    );
+  });
+});
+
+describe("buildPlan: more approval cases", () => {
+  test("waits for approval when ci.yml changes", async () => {
+    const plan = await planOf(
+      chainOf({ ".github/workflows/ci.yml": "jobs: {}\n" }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      files: [".github/workflows/ci.yml"],
+    });
+  });
+
+  test("does not wait for approval when another workflow changes", async () => {
+    const plan = await planOf(
+      chainOf({ ".github/workflows/other.yml": "jobs: {}\n" }),
+      { applied: A, target: B },
+    );
+    expect(plan.decision).toBe("would_converge");
+  });
+
+  test("waits for approval when CONSOLE_GITHUB_REPO changes", async () => {
+    const plan = await planOf(
+      chainOf({
+        "mise.toml": MISE.replace(
+          "https://github.com/u-stem/atelier-works",
+          "https://github.com/someone/fork",
+        ),
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      files: ["mise.toml"],
+    });
+  });
+
+  test("does not exempt a mise file whose name differs only in case", async () => {
+    const plan = await planOf(
+      chainOf({
+        "Mise.toml": MISE.replace(
+          'WM_VERSION = "1.817.0"',
+          'WM_VERSION = "1.818.0"',
+        ),
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      files: ["Mise.toml"],
+    });
+  });
+
+  test("does not wait for approval when only package.json changes", async () => {
+    const plan = await planOf(chainOf({ "package.json": "{}\n" }), {
+      applied: A,
+      target: B,
+    });
+    expect(plan.decision).toBe("would_converge");
+  });
+});
+
+describe("buildPlan: unreadable files", () => {
+  test("rejects a compose file over the size limit", async () => {
+    const plan = await planOf(
+      chainOf({
+        "infra/docker-compose.yml": `${COMPOSE}\nx-pad: ${"a".repeat(MAX_BLOB_BYTES)}\n`,
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({
+      decision: "rejected",
+      kind: "compose_forbidden",
+    });
+  });
+
+  test("rejects a mise.toml over the size limit", async () => {
+    const plan = await planOf(
+      chainOf({ "mise.toml": `${MISE}\n# ${"a".repeat(MAX_BLOB_BYTES)}\n` }),
+      { applied: A, target: B, approved: B },
+    );
+    expect(plan).toMatchObject({
+      decision: "rejected",
+      kind: "mise_forbidden",
+    });
+  });
+});
+
+describe("createPlanGit", () => {
+  const BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+  type Reply = { code: number; stdout: string };
+
+  function planGitWith(reply: (args: string[]) => Reply) {
+    const seen: string[][] = [];
+    const git = createPlanGit(async (args) => {
+      seen.push(args);
+      return reply(args);
+    });
+    return { git, seen };
+  }
+
+  function subcommand(args: string[]): string {
+    return args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? "";
+  }
+
+  test("reads a regular file", async () => {
+    const { git } = planGitWith((args) =>
+      subcommand(args) === "ls-tree"
+        ? { code: 0, stdout: `100644 blob ${BLOB}      12\tmise.toml\u0000` }
+        : { code: 0, stdout: "[env]\n" },
+    );
+    expect(await git.readBlob(A, "mise.toml")).toEqual({
+      kind: "found",
+      text: "[env]\n",
+    });
+  });
+
+  test("tells that a path is absent", async () => {
+    const { git } = planGitWith(() => ({ code: 0, stdout: "" }));
+    expect(await git.readBlob(A, "mise.toml")).toEqual({ kind: "absent" });
+  });
+
+  test("does not call show for a path that is absent", async () => {
+    const { git, seen } = planGitWith(() => ({ code: 0, stdout: "" }));
+    await git.readBlob(A, "mise.toml");
+    expect(seen.map(subcommand)).toEqual(["ls-tree"]);
+  });
+
+  test("throws when the listing of the path fails", async () => {
+    const { git } = planGitWith(() => ({ code: 128, stdout: "" }));
+    await expect(git.readBlob(A, "mise.toml")).rejects.toThrow("ls-tree");
+  });
+
+  test("throws, instead of reporting absent, when show fails", async () => {
+    const { git } = planGitWith((args) =>
+      subcommand(args) === "ls-tree"
+        ? { code: 0, stdout: `100644 blob ${BLOB}      12\tmise.toml\u0000` }
+        : { code: 128, stdout: "" },
+    );
+    await expect(git.readBlob(A, "mise.toml")).rejects.toThrow("show");
+  });
+
+  test("reports a file over the size limit without reading it", async () => {
+    const { git, seen } = planGitWith(() => ({
+      code: 0,
+      stdout: `100644 blob ${BLOB}  ${MAX_BLOB_BYTES + 1}\tmise.toml\u0000`,
+    }));
+    const result = await git.readBlob(A, "mise.toml");
+    expect([result.kind, seen.map(subcommand)]).toEqual([
+      "too_large",
+      ["ls-tree"],
+    ]);
+  });
+
+  test("reports a symlink as not regular without reading it", async () => {
+    const { git } = planGitWith(() => ({
+      code: 0,
+      stdout: `120000 blob ${BLOB}      9\tmise.toml\u0000`,
+    }));
+    expect(await git.readBlob(A, "mise.toml")).toEqual({ kind: "not_regular" });
+  });
+
+  test("lists the whole tree", async () => {
+    const { git } = planGitWith(() => ({
+      code: 0,
+      stdout: `100644 blob ${BLOB}\ta\u0000120000 blob ${BLOB}\tb\u0000`,
+    }));
+    expect((await git.listTree(A)).map((entry) => entry.mode)).toEqual([
+      "100644",
+      "120000",
+    ]);
+  });
+
+  test("answers false when merge-base says not an ancestor", async () => {
+    const { git } = planGitWith(() => ({ code: 1, stdout: "" }));
+    expect(await git.isAncestor(A, B)).toBe(false);
+  });
+
+  test("throws when merge-base fails for another reason", async () => {
+    const { git } = planGitWith(() => ({ code: 128, stdout: "" }));
+    await expect(git.isAncestor(A, B)).rejects.toThrow("merge-base");
+  });
+
+  test("throws when diff fails", async () => {
+    const { git } = planGitWith(() => ({ code: 128, stdout: "" }));
+    await expect(git.changedFiles(A, B)).rejects.toThrow("diff");
+  });
+
+  test("answers false when the commit does not exist", async () => {
+    const { git } = planGitWith(() => ({ code: 128, stdout: "" }));
+    expect(await git.commitExists(A)).toBe(false);
+  });
+});
+
 describe("buildPlan only reads", () => {
   test("uses nothing but the four read operations", async () => {
     const fake = fakeGit(chainOf({ "docs/a.md": "x\n" }));
@@ -335,7 +600,13 @@ describe("buildPlan only reads", () => {
       root: "/staging",
     });
     expect([...new Set(fake.calls)].sort()).toEqual(
-      ["changedFiles", "commitExists", "isAncestor", "readBlob"].sort(),
+      [
+        "changedFiles",
+        "commitExists",
+        "isAncestor",
+        "listTree",
+        "readBlob",
+      ].sort(),
     );
   });
 });
@@ -446,6 +717,23 @@ describe("plan against a real repository", () => {
     expect(JSON.parse(out).decision).toBe("noop");
   });
 
+  test("rejects a target that contains a symlink", () => {
+    const { repo, applied } = setup();
+    const target = repo.symlink("docs/link.md", "../secret");
+    const { out } = run(repo, [
+      "--repo",
+      repo.dir,
+      "--applied",
+      applied,
+      "--target",
+      target,
+    ]);
+    expect(JSON.parse(out)).toMatchObject({
+      decision: "rejected",
+      kind: "tree_forbidden",
+    });
+  });
+
   test("exits 0 for a decision", () => {
     const { repo, applied, doctor } = setup();
     expect(
@@ -528,6 +816,14 @@ describe("plan stays off the network, docker and the work tree", () => {
     expect(entry).not.toMatch(
       /"(fetch|pull|push|checkout|worktree|clone|reset|merge|rebase|commit|add)"/,
     );
+  });
+
+  test("the read adapter spawns no process, since the runner is injected", () => {
+    const adapter = readFileSync(
+      join(REPO_ROOT, "scripts/host_apply/plan_git.ts"),
+      "utf8",
+    );
+    expect(adapter).not.toMatch(/Bun\.spawn|child_process|Bun\.\$/);
   });
 
   test("the plan logic spawns no process", () => {

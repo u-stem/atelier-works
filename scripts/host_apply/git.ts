@@ -131,3 +131,22 @@ export function isAncestorArgs(ancestor: string, descendant: string): string[] {
 export function commitExistsArgs(sha: string): string[] {
   return readOnlyGitArgs(["cat-file", "-e", `${requireSha(sha)}^{commit}`]);
 }
+
+export type LsTreeEntry = {
+  readonly mode: string;
+  readonly type: string;
+  readonly path: string;
+  readonly size: number | null;
+};
+
+export function lsTreeRecursiveArgs(_sha: string): string[] {
+  return [];
+}
+
+export function lsTreePathArgs(_sha: string, _path: string): string[] {
+  return [];
+}
+
+export function parseLsTreeZ(_output: string): LsTreeEntry[] {
+  return [];
+}

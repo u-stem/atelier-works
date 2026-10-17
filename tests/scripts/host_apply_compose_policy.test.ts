@@ -5,7 +5,9 @@ import {
   COMPOSE_SERVICE_ALLOWLIST,
   type ComposeContext,
   checkCompose,
+  checkComposeText,
 } from "../../scripts/host_apply/compose_policy.ts";
+import { MAX_BLOB_BYTES } from "../../scripts/host_apply/constants.ts";
 import { readMiseEnv } from "../../scripts/host_apply/mise_policy.ts";
 
 const REPO_ROOT = join(import.meta.dir, "../..");
@@ -21,6 +23,11 @@ function one(
   top: Record<string, unknown> = {},
 ) {
   return { services: { db: { image: "postgres:18", ...service } }, ...top };
+}
+
+function textVerdict(text: string, context: ComposeContext = ctx) {
+  const result = checkComposeText(text, context);
+  return result.ok ? "ok" : `${result.kind}`;
 }
 
 function verdict(parsed: unknown, context: ComposeContext = ctx) {
@@ -458,18 +465,152 @@ describe("bind mounts", () => {
 });
 
 describe("docker.sock anywhere", () => {
+  const head = "services:\n  db:\n    image: postgres:18\n";
+
   test("rejects the string in an environment value", () => {
     expect(
-      verdict(
-        one({ environment: ["DOCKER_HOST=unix:///var/run/docker.sock"] }),
+      textVerdict(
+        `${head}    environment:\n      - DOCKER_HOST=unix:///var/run/docker.sock\n`,
       ),
     ).toBe("compose_forbidden");
   });
 
   test("rejects the string in a command", () => {
-    expect(verdict(one({ command: ["ls", "/var/run/docker.sock"] }))).toBe(
+    expect(
+      textVerdict(`${head}    command: ["ls", "/var/run/docker.sock"]\n`),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects the string in an extension key", () => {
+    expect(textVerdict(`x-note: /var/run/docker.sock\n${head}`)).toBe(
       "compose_forbidden",
     );
+  });
+
+  test("rejects the string in a comment, since the raw text is searched", () => {
+    expect(textVerdict(`# docker.sock\n${head}`)).toBe("compose_forbidden");
+  });
+});
+
+describe("checkComposeText", () => {
+  const head = "services:\n  db:\n    image: postgres:18\n";
+
+  test("accepts a small valid definition", () => {
+    expect(textVerdict(head)).toBe("ok");
+  });
+
+  test("rejects text that is not valid YAML", () => {
+    expect(textVerdict("services: [\n")).toBe("compose_forbidden");
+  });
+
+  test("rejects text over the size limit before parsing it", () => {
+    const padding = `x-pad: ${"a".repeat(MAX_BLOB_BYTES)}\n`;
+    expect(textVerdict(`${padding}${head}`)).toBe("compose_forbidden");
+  });
+
+  test("passes the real definition", () => {
+    const env = readMiseEnv(readFileSync(join(REPO_ROOT, "mise.toml"), "utf8"));
+    expect(
+      textVerdict(
+        readFileSync(join(REPO_ROOT, "infra/docker-compose.yml"), "utf8"),
+        {
+          root: REPO_ROOT,
+          composeDir: join(REPO_ROOT, "infra"),
+          env: env ?? {},
+        },
+      ),
+    ).toBe("ok");
+  });
+
+  test("does not expand aliases while checking a small alias bomb", () => {
+    // 360バイトの入力が、JSON.stringifyでは22MBに、9段では約1.8GBに膨らむ。
+    let bomb = "x-a0: &a0 [x, x, x, x, x, x, x, x, x]\n";
+    for (let i = 1; i < 9; i++) {
+      bomb += `x-a${i}: &a${i} [${Array(9)
+        .fill(`*a${i - 1}`)
+        .join(", ")}]\n`;
+    }
+    const started = performance.now();
+    const result = textVerdict(`${bomb}${head}`);
+    expect([result, performance.now() - started < 1000]).toEqual(["ok", true]);
+  });
+});
+
+describe("reservations and absolute binds", () => {
+  test("accepts cpus and memory in reservations", () => {
+    expect(
+      verdict(
+        one({
+          deploy: {
+            resources: { reservations: { cpus: "0.5", memory: "128M" } },
+          },
+        }),
+      ),
+    ).toBe("ok");
+  });
+
+  test("rejects devices in reservations", () => {
+    expect(
+      verdict(
+        one({
+          deploy: {
+            resources: {
+              reservations: {
+                devices: [
+                  { driver: "nvidia", count: 1, capabilities: ["gpu"] },
+                ],
+              },
+            },
+          },
+        }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a limit key that is not on the list", () => {
+    expect(
+      verdict(one({ deploy: { resources: { limits: { devices: [] } } } })),
+    ).toBe("compose_forbidden");
+  });
+
+  test("accepts the limits the real definition uses", () => {
+    expect(
+      verdict(
+        one({ deploy: { resources: { limits: { memory: "1G", pids: 64 } } } }),
+      ),
+    ).toBe("ok");
+  });
+
+  test("rejects an absolute bind source even inside the logical root", () => {
+    expect(verdict(one({ volumes: ["/stage/infra/conf:/etc/conf:ro"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects an absolute long-form bind source inside the logical root", () => {
+    expect(
+      verdict(
+        one({
+          volumes: [
+            {
+              type: "bind",
+              source: "/stage/infra/Caddyfile",
+              target: "/c",
+              read_only: true,
+            },
+          ],
+        }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a variable that expands to an absolute path", () => {
+    expect(
+      verdict(one({ volumes: ["${ROOT_DIR}/conf:/c:ro"] }), {
+        ...ctx,
+        env: { ROOT_DIR: "/stage/infra" },
+      }),
+    ).toBe("compose_forbidden");
   });
 });
 
