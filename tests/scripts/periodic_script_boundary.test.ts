@@ -49,6 +49,7 @@ import {
 const PERIODIC_SCRIPTS: readonly string[] = [
   "f/factory/notify_daily_summary",
   "f/factory/auto_retry_pr_review",
+  "f/factory/default_worker_watch",
 ];
 
 /**

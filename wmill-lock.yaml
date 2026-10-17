@@ -13,6 +13,7 @@ locks:
   f/factory/cleanup_db: 70f8143aab8da72eeabe90cac5d9295d2af8b27afb70dbc90db9ec9a0887ce72
   f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
+  f/factory/default_worker_watch: f103236376712349f42fdce55d8096af5f1543e8672a8a74a771550e38d042a5
   f/factory/dependabot__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/drawio_viewer_bump: 2f3ddde70a8b9e866ab902bd2bc0e1c17e69c6dfc05c367d36e90d456d648f8b
   f/factory/implement__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
@@ -45,6 +46,7 @@ locks:
   f/factory/lib/console_support: 7cd35aef98bbb3fd29a97abfc97b3ca29ab46c6fff029409f3ead39165b3a096
   f/factory/lib/console_worker: fcc2e8c161760765be440937956ffdf236f00ea630a8473e76a9a48961af1fd8
   f/factory/lib/db: 1cabfe9cb55589702869dac02edab65347ee240a7b049c937a7880b6eda0f8dc
+  f/factory/lib/default_worker: 9f9a95f2a41820deb259b71cc47f9d7b727ab9f9dd2f39a6e5500598e7ee85e7
   f/factory/lib/dependabot_collect: 1bb1c3f7647f2e3c929c6baac1f50060b4cd7aee9c017dc7ee2b399e024f28f5
   f/factory/lib/dependabot_flow_support: 1ffa7ee5720dd9074fc309cdd722c6d4d67f63d4c6396215870b83b57f9987b3
   f/factory/lib/dependabot_prompt: 290c1ef19ffa98155e48afc43e417ef50749a279dba9891f926654ffafb77d8b
