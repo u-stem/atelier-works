@@ -259,6 +259,30 @@ function miseExecAt(words: readonly Word[], start: number): number {
 }
 
 /**
+ * `mise exec`のオプションの範囲(`--`の前まで)から、シェルの文字列を渡す`-c`を探す。
+ * ツールの指定の後ろにあっても探す。`-c`、`--command`、`--command=`、`-cenv`、`-c=env`、`-qc`を見る。
+ * 見つかれば、その語(`-c`は次の語)を返す。
+ */
+function findMiseExecCode(
+  words: readonly Word[],
+  start: number,
+  end: number,
+): Word | null {
+  for (let index = start; index < end; index += 1) {
+    const word = words[index];
+    if (word === undefined) break;
+    const text = word.text;
+    if (text === "-c" || text === "--command") return words[index + 1] ?? word;
+    if (text.startsWith("--command=")) {
+      return { ...word, text: text.slice("--command=".length) };
+    }
+    if (/^-[A-Za-z]*c/.test(text)) return word;
+    if (MISE_VALUE_OPTIONS.has(text)) index += 1;
+  }
+  return null;
+}
+
+/**
  * `mise exec`のオプションと、ツールの指定(`node@22`)を読み飛ばし、起動するコマンドの位置を返す。
  * `--`があれば、その後ろが起動するコマンドである。`-c`と`--command`の値はシェルの文字列で、起動するコマンドは無い。
  */
@@ -266,6 +290,20 @@ function readMiseExec(
   words: readonly Word[],
   start: number,
 ): { readonly mise: MiseExec; readonly next: number } {
+  const dashDash = words.findIndex(
+    (candidate, at) => at >= start && candidate.text === "--",
+  );
+  const codeAt = findMiseExecCode(
+    words,
+    start,
+    dashDash === -1 ? words.length : dashDash,
+  );
+  if (codeAt !== null) {
+    return {
+      mise: { commandString: codeAt, inner: [] },
+      next: words.length,
+    };
+  }
   for (let index = start; index < words.length; index += 1) {
     const word = words[index];
     if (word === undefined) break;

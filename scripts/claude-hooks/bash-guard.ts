@@ -158,78 +158,43 @@ const MISE_READ_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 秘密値を出さないと確かめたサブコマンドと、その別名。
+ * このリポジトリで使うサブコマンドと、秘密値も書き込みも出さないと実機で確かめたサブコマンド。別名を含む。
  * `mise <タスク名>`の省略形は含まない。`mise run <タスク名>`と書く。
  * ここに無いサブコマンドは、miseの更新で値を出すものが増えても塞げるよう、拒否する。
  */
 const MISE_PLAIN_NAMES: ReadonlySet<string> = new Set([
   "run",
   "r",
-  "tasks",
-  "task",
-  "t",
   "exec",
   "x",
-  "ls",
-  "list",
   "install",
   "i",
-  "use",
-  "unuse",
-  "uninstall",
-  "rm",
-  "remove",
   "trust",
-  "untrust",
+  "ls",
+  "list",
   "doctor",
   "dr",
   "which",
   "where",
   "version",
-  "upgrade",
-  "up",
-  "outdated",
-  "prune",
-  "plugins",
-  "registry",
   "current",
-  "search",
-  "cache",
-  "completion",
-  "usage",
-  "help",
-  "bin-paths",
-  "reshim",
-  "settings",
-  "activate",
-  "shell",
-  "sh",
-  "sync",
-  "fmt",
-  "lock",
-  "link",
-  "ln",
-  "generate",
-  "g",
-  "self-update",
-  "latest",
-  "watch",
-  "w",
+  "tasks",
 ]);
 
 /** タスクを実行するサブコマンド。`-s`と`--shell`で、呼び出し側が実行するシェルを決められる。 */
-const MISE_RUNNER_NAMES: ReadonlySet<string> = new Set([
-  "run",
-  "r",
-  "tasks",
-  "task",
-  "t",
-  "watch",
-  "w",
-]);
+const MISE_RUNNER_NAMES: ReadonlySet<string> = new Set(["run", "r", "tasks"]);
 
 /** `--shell`、`-s`、`-s`を含む束ねた短いオプション。 */
 const MISE_SHELL_OPTION = /^(--shell(=.*)?|-[A-Za-z]*s.*)$/;
+
+/** miseの設定として取り込まれず、シェルやタスクの実行を変えない環境変数。これ以外の`MISE_*`の代入は拒否する。 */
+const MISE_ALLOWED_ENV: ReadonlySet<string> = new Set([
+  "MISE_ENV",
+  "MISE_JOBS",
+  "MISE_QUIET",
+  "MISE_VERBOSE",
+  "MISE_YES",
+]);
 
 /** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */
 function hasBrace(word: Word): boolean {
@@ -483,7 +448,9 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, mise en, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Only known mise subcommands are allowed, so write mise run <task> instead of mise <task>; words like set or env in mise run arguments are denied too.",
+    "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, mise en, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Only the subcommands this repository uses are allowed, so write mise run <task> instead of mise <task>, and do not pass -s or --shell to mise run or mise tasks, because it picks the shell that runs the task; words like set or env in mise run arguments are denied too.",
+  miseEnv:
+    "MISE_* environment variables can replace the shell mise runs tasks with (for example MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS), which prints the secrets. Only MISE_ENV, MISE_JOBS, MISE_QUIET, MISE_VERBOSE, and MISE_YES may be set.",
   miseXargs:
     "mise with arguments from xargs cannot be checked: mise set, mise env, and mise config list the secrets of mise.local.toml. Run mise directly with literal arguments.",
   gitConfigEnv:
@@ -773,6 +740,9 @@ function checkEnvironment(assignments: readonly Word[]): Decision {
     if (GIT_CONFIG_ENV.test(name)) return deny(REASONS.gitConfigEnv);
     if (LEFTHOOK_REPLACING_ENV.has(name)) return deny(REASONS.lefthookReplace);
     if (name === CHECK_IDLE_FORCE_ENV) return deny(REASONS.checkIdleForce);
+    if (name.startsWith("MISE_") && !MISE_ALLOWED_ENV.has(name)) {
+      return deny(REASONS.miseEnv);
+    }
     if (
       name === "LEFTHOOK" &&
       (word.dynamic ||

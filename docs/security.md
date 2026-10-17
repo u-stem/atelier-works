@@ -1788,12 +1788,20 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 #### サブコマンドの許可リスト
 
 miseの更新で、値を出すサブコマンドが増えても塞げるよう、拒否するサブコマンドを数えず、許可するものを数える。
-最初のオプションでない語がサブコマンドで、`run`、`exec`、`ls`、`install`、`trust`、`doctor`など、値を出さないと確かめたものだけを許可する。
+最初のオプションでない語がサブコマンドである。
+許可するものは2種類である。
+1つは、このリポジトリが使う`run`、`exec`、`x`、`install`、`trust`と、`set`の書き込む形である。
+もう1つは、実機で秘密値の出力と書き込みが無いと確かめた`ls`、`doctor`、`which`、`where`、`version`、`current`、`tasks`である。
+別名も同じ扱いにする。
+`generate`、`activate`、`plugins`、`watch`、`shell`、`settings`、`token`などは許可しない。
+`generate`は`.git/hooks`と`.github/workflows`に書き込み、`settings`はタスクを実行するシェルを差し替えられる。
 `mise lint`のように、タスク名を直接書く省略形は許可しない。
 タスクは`mise run lint`と書く。
 サブコマンドの前に、値を取る隠しオプション(`-P`、`--log-level`など)があっても、値の語まで読み飛ばして探す。
 `-qE x`のように束ねた短いオプションは、値を取る文字が末尾にあるときだけ、次の語を値として読み飛ばす。
-タスクを実行する`run`、`tasks`、`watch`は、`-s`と`--shell`(束ねた形を含む)を拒否する。
+タスクを実行する`run`と`tasks`は、`-s`と`--shell`(束ねた形を含む)を拒否する。
+`MISE_ENV`などを除く`MISE_*`の環境変数の代入も拒否する。`MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS`で、タスクを実行するシェルを差し替えられるためである。
+`mise exec`の`-c`は、ツールの指定の後ろにあっても、`--`の前の全ての語から探す。
 
 #### 名前を持つ呼び出し
 
@@ -1849,7 +1857,10 @@ mise 2026.9.13で、ダミー値を使って確かめた。
 - `mise mcp`は、標準入力のJSONで`mise://env`を読むと、`mise.local.toml`の値を平文で出力する。
 - `mise run`、`mise r`、`mise tasks run`に`-s`か`--shell`を付けると、指定したシェルでタスクを実行する。
 - `--shell 'sh -c env'`を渡すと、`mise.local.toml`の値が出る。
-- `mise exec`の`-c`は、値を付けた形(`-cenv`、`-c=env`)と束ねた形(`-qc env`)でも、シェルの文字列を受け取る。
+- `mise exec`の`-c`は、値を付けた形(`-cenv`、`-c=env`)と束ねた形(`-qc env`)でも、ツールの指定の後ろ(`mise x bun -c printenv`)でも、シェルの文字列を受け取る。
+- `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS='sh -c printenv'`を付けた`mise run`は、`mise.local.toml`の値を出力する。
+- サブコマンドの前に置いたグローバルの`-s`と`--shell`は、タスクを実行するシェルを差し替えず、値を出力しない。
+- コマンドを付けない`mise exec`と`mise x`は、シェルを起動せず、引数が足りないエラーで終わる。
 - `mise doctor`、`mise settings`、`mise tasks`、`mise direnv envrc`は、`mise.local.toml`の値を出力しない。
 - 許可リストの確認は、オプションを付けない形で行った。オプションの組み合わせまでは保証しない。
 
@@ -1871,7 +1882,8 @@ mise 2026.9.13で、ダミー値を使って確かめた。
 - `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
 - ブレース展開で作るファイル名(`cat mise.local.{toml,}`、`cat .en{v,}`)
 - ブレース展開で作るプログラム名とgitのオプション(`{mise,} set`、`mise exec -- {env,}`、`--no-ver{ify,ify}`)
-- `mise run`が実行するタスクの中身(`mise tasks add t -- env`の後の`mise run t`など)と、`mise token`が表示するトークン
+- `mise run`が実行するタスクの中身(`mise tasks add t -- env`の後の`mise run t`など)
+- `mise`を別の経路で起動する形(`bunx @jdxcode/mise env`など)
 - 値を取る長い形のオプションを持つ前置き(`xargs --max-args 1 mise set`、`sudo --user root mise set`)
 - 外すことにしていない前置きのコマンド(`watch`、`flock`、`stdbuf`、`script`、`parallel`、`setsid`、`doas`、`caffeinate`など)。`mise set`の前に置かれると判定できない
 - スクリプトのファイルの中身
