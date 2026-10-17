@@ -171,12 +171,17 @@ function requireKeys(
 
 /**
  * composeの`${VAR}`形式の変数を展開する。
- * 値が無く、既定値も無い変数は、評価できないので拒否する。展開後に`$`が残る値も拒否する。
+ * `env`に無い名前は、既定値があっても拒否する。値が空で、既定値も無い変数も拒否する。展開後に`$`が残る値も拒否する。
  */
 function expand(value: string, env: Readonly<Record<string, string>>): string {
   const expanded = value.replace(
     /\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?])([^}]*))?\}/g,
     (_match, name: string, op: string | undefined, arg: string | undefined) => {
+      // 検査が知っている名前は、`env`にあるものだけ。本番の子プロセスには`HOME`なども入るので、
+      // 既定値があっても、知らない名前の参照は拒否する。
+      if (!Object.hasOwn(env, name)) {
+        return forbid(`variable ${name} is not known to the executor`);
+      }
       const current = env[name];
       const unset =
         op?.startsWith(":") === true
@@ -206,6 +211,8 @@ function resolveLocal(
 ): string {
   const expanded = expand(value, context.env);
   if (expanded.startsWith("~")) forbid("a path starts with ~");
+  // 絶対パスは、ステージングの中を指していても拒否する。ステージングのパスは実行のたびに変わるため。
+  if (isAbsolute(expanded)) forbid("a path is absolute");
   return resolve(base, expanded);
 }
 
@@ -243,13 +250,16 @@ function checkNamespace(key: string, value: unknown): void {
   }
 }
 
+/** `security_opt`に書いてよい値。権限の追加を防ぐものだけを許す。 */
+const ALLOWED_SECURITY_OPT = /^no-new-privileges[:=]true$/;
+
 function checkSecurityOpt(value: unknown): void {
   if (!Array.isArray(value)) forbid("security_opt must be a list");
   for (const option of value) {
     if (typeof option !== "string") forbid("security_opt must be strings");
     forbidVariable(option, "security_opt");
-    if (option.includes("unconfined") || /label[=:]disable/.test(option)) {
-      forbid(`security_opt weakens isolation: ${option}`);
+    if (!ALLOWED_SECURITY_OPT.test(option)) {
+      forbid(`security_opt is not on the allowlist: ${option}`);
     }
   }
 }

@@ -36,7 +36,10 @@ function withoutVersionMaps(parsed: Record<string, unknown>): string {
   return stableStringify(rest);
 }
 
-/** 版の指定のキーの変更が、版の文字列への変更だけか。 */
+/**
+ * 版の指定のキーの変更が、既存の名前の版の文字列への変更だけか。
+ * 変更前に無い名前が増えたら、新しい依存を足す変更なので、認めない。名前を消す変更は認める。
+ */
 function onlyVersionChanges(
   before: Record<string, unknown>,
   after: Record<string, unknown>,
@@ -47,6 +50,7 @@ function onlyVersionChanges(
     if (!isRecord(next)) return false;
     const previous = isRecord(before[key]) ? before[key] : {};
     for (const [name, spec] of Object.entries(next)) {
+      if (!Object.hasOwn(previous, name)) return false;
       if (stableStringify(previous[name]) === stableStringify(spec)) continue;
       if (typeof spec !== "string" || !VERSION_SPEC.test(spec)) return false;
     }
