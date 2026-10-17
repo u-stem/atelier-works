@@ -214,12 +214,26 @@ export async function scriptsWithTag(tag: string): Promise<string[]> {
   return paths;
 }
 
+const FILE_OR_PROCESS_MODULE = /^(?:node:)?(?:child_process|fs|fs\/promises)$/;
+const BUN_TOOL_CALL = /\bBun\s*\.\s*(?:spawn|spawnSync|file|write|\$)/g;
+
 /**
  * 上流のイメージのworkerに無いものへ届く、import・呼び出し。
  * ファイル(`node:fs`)、サブプロセス(`node:child_process`、`Bun.spawn`)、Claude(`claude.ts`)を数える。
  * Bunのファイル関数(`Bun.file`、`Bun.write`)も、ファイルへの依存として数える。
  * 見つけたものを、理由の文字列で返す。
  */
-export function toolDependencies(_source: string): string[] {
-  return [];
+export function toolDependencies(source: string): string[] {
+  const found: string[] = [];
+  for (const entry of transpiler.scanImports(source)) {
+    if (FILE_OR_PROCESS_MODULE.test(entry.path)) {
+      found.push(`import of ${entry.path}`);
+    } else if (/(?:^|\/)claude\.ts$/.test(entry.path)) {
+      found.push(`import of ${entry.path}`);
+    }
+  }
+  for (const match of codeOf(source).matchAll(BUN_TOOL_CALL)) {
+    found.push(`use of ${match[0]}`);
+  }
+  return found;
 }
