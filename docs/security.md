@@ -1084,6 +1084,173 @@ superadminでない主体は、許可されたtagしか使えない。
 同じ手順で、コードを実行しないことと、Claudeに文章を渡さないことも確かめる。
 1つでも依存するなら、tagを付けない。
 
+## ホストの実行役の境界
+
+ホストの実行役は、`origin/main`の先端を、ホストのユーザーの権限で反映する道具である。
+入口は`scripts/host-apply.ts`で、判定の部品は`scripts/host_apply/`に置く。
+入口が受け付けるのは、判定だけを出力する`plan`である。
+`plan`は、適用済みと目標の2つのコミットを受け取る。
+出力するのは、反映できるか、拒否するか、承認を待つかの判定である。
+gitのオブジェクトを読むだけで、作業ツリー、ネットワーク、dockerには触れない。
+CIの確認はネットワークを使うので、`plan`は行わない。
+
+実行役は、ホストのdockerと、`mise.local.toml`の秘密値を使える。
+mainに入った変更は、その権限で動く道具を書き換えうる。
+次の境界で、それを防ぐ。
+
+### 実行役のコード
+
+入口と部品は、`f/**`をimportしない。
+importするのは、NodeとBunの組み込みと、`scripts/host_apply/`の中だけである。
+リポジトリの外へコピーしても、単独で動くようにするためである。
+`tests/scripts/host_apply_imports.test.ts`が、ソースのimportと、コピーしたコードの実行で確かめる。
+
+### 人の承認が要る変更
+
+実行役は、適用済みのコミットから目標までの差が、次のファイルに触れたら、自動では反映せず承認を待つ。
+追加、変更、削除のどれも、触れたとみなす。
+これらは、実行役が秘密値を渡して動かす道具と、その判断の前提を決めるファイルである。
+
+| 種類 | ファイル |
+| --- | --- |
+| 実行役が動かす道具 | `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/check-docker-version.sh`、`scripts/custom-tags.ts`、`scripts/record-host-applied.sh` |
+| 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、`scripts/host-install.sh` |
+| mise設定 | `mise.toml`、`mise.*.toml`、`.mise.toml`、`mise/`、`.mise/`、`.config/mise/`、`.tool-versions` |
+| 実行環境の設定 | `package.json`、`bun.lock`、`bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.node-version`、`.bun-version` |
+
+`package.json`、`bun.lock`、`bunfig.toml`、`.npmrc`は、リポジトリのルートのものだけを対象にする。
+`console/package.json`のような下位のファイルは、実行役が使わないためである。
+mise設定の名前、`.env`系、`.node-version`、`.bun-version`は、ディレクトリを問わず対象にする。
+
+差を取る基準は、適用済みのコミットと承認済みのコミットのうち新しい方である。
+承認済みのコミットが、適用済みの子孫で、目標の祖先であるときだけ使う。
+承認の後で対象のファイルが変われば、また承認が要る。
+基準より後の差だけを評価するので、承認済みの変更に重ねた変更も、素通りしない。
+
+通常のcomposeの変更(サービスの設定、Dockerfile、Caddyfile)は、承認を求めない。
+これらは実行役が実行するのではなく、dockerが作るコンテナの中身であり、後述の静的な検査が境界を守るためである。
+
+#### miseの値だけの変更
+
+`mise.toml`の差が、composeが参照する15個のキーの`[env]`の値だけなら、承認を求めない。
+版の更新のたびに、人の承認を求めないためである。
+値が文字列で、`{{`を含まず、次の形式に合うときだけ、この免除を使う。
+
+| キー | 形式 |
+| --- | --- |
+| `WM_VERSION`、`CLAUDE_VERSION`、`GH_VERSION`、`GITLEAKS_VERSION`、`WMILL_VERSION` | 版番号(`1.2.3`、`1.2.3-rc.1`) |
+| `WM_HTTP_PORT` | 5桁までの数字で、65535以下 |
+| `WM_BIND` | `127.0.0.1`だけ |
+| `WM_SESSION_VALIDITY_SECONDS`、`FACTORY_CHECK_UID`、`FACTORY_CHECK_POOL_SIZE`、`LOG_MAX_FILE` | 桁数の決まった数字 |
+| `CONSOLE_GITHUB_REPO` | GitHubのHTTPSのリポジトリのURL |
+| `GTR_REF` | `v`を付けた版番号 |
+| `GTR_COMMIT` | 40桁の16進 |
+| `LOG_MAX_SIZE` | 数字に`k`、`m`、`g`のどれかを付けた形 |
+
+次の差は、免除の対象外で、承認が要る。
+
+- 15個以外のキーの変更。
+- `[tools]`、`[tasks]`の変更。`gh`などの版の更新も含む。
+- キーの追加と削除、`mise.toml`の新規作成、読めない内容への変更。
+
+実行役は、目標の`mise.toml`を、`mise`コマンドではなくTOMLとして静的に読む。
+`mise`を呼ぶと、テンプレートや`_.source`が評価され、目標の内容がコマンドとして実行されるためである。
+読み取りは`Bun.TOML.parse`で行い、15個のキーの値だけを取り出す。
+キーがそろわない、または形式に合わない目標は、拒否する。
+
+### composeの方針
+
+実行役は、`infra/docker-compose.yml`を`Bun.YAML.parse`で静的に読み、許可する形だけを通す。
+未知のキーは拒否する。新しい書き方を足す変更は、許可リストの更新を伴う。
+
+- 許可リストにないサービス名とキー。
+- 特権とケーパビリティの拡張: `privileged`、`cap_add`、`devices`、`userns_mode`、`cgroup`、`sysctls`、`volumes_from`、`include`、`extends`。
+- ホストやほかのコンテナとの名前空間の共有。`pid`、`ipc`、`uts`、`network_mode`が`host`、`container:`、`service:`で始まる値である。`network_mode: none`は許す。
+- `security_opt`の`unconfined`と`label=disable`。
+- `127.0.0.1`以外に公開するポート。変数は、取り出した値で展開して評価する。
+- チェックアウトの外を指す`env_file`、`secrets`、`configs`、`build.context`、`build.additional_contexts`、`dockerfile`。リモートのbuild contextも含む。
+- チェックアウトの外のbind mountと、書き込める状態のbind mount。書き込めるのは`infra/Caddyfile`だけである。
+- `local`以外のdriverと、`driver_opts`、`external`を持つボリュームとネットワーク。
+- `docker.sock`の文字列。
+
+今の`infra/docker-compose.yml`が方針を通ることは、`tests/scripts/host_apply_compose_policy.test.ts`が確かめる。
+`docker.sock`をマウントするサービスが無いことは、`tests/infra/docker_compose.test.ts`が確かめる。
+
+### 子プロセスの環境とログ
+
+子プロセスの環境は、許可リストで作る。
+親のプロセスの環境は引き継がない。`PATH`と`HOME`のほかは、種類ごとに決めた名前の値だけを渡す。
+
+| 種類 | 渡す値 |
+| --- | --- |
+| compose | 15個のキーと、`DB_PASSWORD`、`CONSOLE_GITHUB_TOKEN` |
+| `doctor.sh`と`bootstrap.sh custom-tags` | composeの値に加えて、管理者の資格(`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`)、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL` |
+| git | 秘密値は渡さない。`GIT_NO_REPLACE_OBJECTS`で、replace refによる内容の差し替えを無効にする |
+
+管理者の資格を渡すのは、`doctor.sh`と`bootstrap.sh custom-tags`だけである。
+管理者の資格を使う処理を、最小にするためである。
+
+実行役が出す通知の本文は、固定の文と7桁のshaだけで作る。
+`doctor.sh`や`bootstrap.sh`の出力、エラーメッセージは載せない。秘密値や任意の文字列が入りうるためである。
+Discordのwebhookには`allowed_mentions`を空にして送り、本文からのメンションを無効にする。
+ログに書く外部コマンドの出力は、`mise.local.toml`の`[env]`の全キーの値(8文字以上)を伏せてから書く。
+
+外部コマンドには、種類ごとの時間の上限があり、1回の実行全体にも上限がある。
+値は`scripts/host_apply/constants.ts`にある。
+
+### CIの確認
+
+目標のコミットは、必須チェックが通っていなければ反映しない。
+判定は、GitHubのAPIの応答から行う。
+必須チェックは、[mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開)の7つと同じである。
+必須チェックの一覧は`scripts/host_apply/constants.ts`にある。
+`tests/scripts/host_apply_ci.test.ts`が、一覧とこの記述、`ci.yml`のジョブ名の一致を確かめる。
+
+数えるのは、`ci.yml`のpushの実行と同じcheck suiteにある、`github-actions`のcheck-runだけである。
+別のworkflowやappが、同じ名前のcheck-runを作っても数えない。
+mainは承認0件でマージでき、管理者は失敗したチェックを無視してマージできる。
+実行役が自分で確かめれば、その経路で入った変更は、ホストへ届く前に止まる。
+
+| 結果 | 判定 |
+| --- | --- |
+| 7つがすべて成功かスキップ | 通過 |
+| 1つでも失敗、キャンセル、時間切れ | 拒否。ほかが走行中でも拒否する |
+| 実行が未着、走行中、チェックが欠ける、応答が読めない | 保留 |
+
+名前が変わるとチェックが欠けた扱いになり、保留のまま進まない。安全側に倒れる。
+
+### 保護パスとその限界
+
+実行役が実行するファイルは、PR修正と実装の両方の保護パスに入れる。
+対象は次のとおりである。
+
+- 承認が要る道具と、実行役の実装。
+- `infra/docker-compose.yml`と`tests/infra/docker_compose.test.ts`。
+- `infra/worker/`と`mise/`の下のファイル。
+- 実行役のテスト。
+- `.tool-versions`、`.env`系、`.node-version`、`.bun-version`。
+
+一覧は`f/factory/lib/protected_paths.ts`にあり、[禁止パスによる停止](internals/pr-workflow.md#禁止パスによる停止)に説明がある。
+実行役のテストはファイル名で列挙し、足した実行役のテストを列挙し忘れると、`tests/lib/protected_paths.test.ts`が失敗する。
+
+保護パスだけでは、実行役の変更を人が確かめる関門にならない。
+
+- mainは承認0件でマージできる。管理者は、失敗したチェックを無視してPR経由でマージできる。人のレビューをGitHubは強制しない。
+- PR修正は保護パスの変更で止まるが、実装フローは止めない。保護パスに触れても、記録してPR本文に明記するだけである。
+
+人に通す関門は、保護パスではなく、実行役の承認である。
+保護パスの役割は補助である。
+PR修正の自動修正がこれらを書き換えるのを止め、実装のPR本文へ明記させる。
+
+副作用として、`infra/docker-compose.yml`、`scripts/doctor.sh`、`scripts/bootstrap.sh`を変えるPR修正は、保護パスで止まって人の対応待ちになる。
+
+### 残るリスク
+
+- composeの検査は、YAMLを静的に読む。`docker compose config`の解釈とは突き合わせていないので、解釈が食い違うと、許可した形が別の意味になりうる。
+- パスの検査は、文字列で行う。チェックアウトの中のsymlinkが外を指していても通る。
+- miseの値の免除は、形式だけを見る。`CONSOLE_GITHUB_REPO`の所有者と`GTR_COMMIT`の指す内容は、確かめない。
+- `plan`はCIを確認しない。`would_converge`は、CIの通過を含まない判定である。
+
 ## サブプロセスのnpmのinstall script
 
 `self_update`と、ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)は、`wmill sync push`のサブプロセスに次の環境変数を渡す。

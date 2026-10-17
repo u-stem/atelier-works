@@ -1169,8 +1169,10 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 
 - `.claude/`、`.agents/`、`.github/workflows/`、`.github/actions/`、`.mise/`、`.config/mise/`、`.lefthook/`の下のファイル
 - `console/public/`、`infra/console_fetcher/`の下のファイル
+- `scripts/host_apply/`、`infra/worker/`、`mise/`の下のファイル
 - 個別のファイル(一覧は下の説明を参照)
 - `mise.toml`、`mise.*.toml`、`.mise.toml`
+- `.tool-versions`、`.env`、`.env.*`、`.node-version`、`.bun-version`
 - `lefthook.yml`、`lefthook-local.yml`、`lefthook.toml`、`lefthook.json`
 - `bunfig.toml`、`.npmrc`、`.gitattributes`、`.gitmodules`
 - markdownlintとmarkdownlint-cli2の設定(`.markdownlint.*`と`.markdownlint-cli2.*`。拡張子は`jsonc?`、`ya?ml`、`[cm]?js`)
@@ -1192,7 +1194,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 `console/public/`と`console/index.html`は、Consoleでバンドルを通らずにそのまま配信され、ページの中で動く。
 `console/index.html`はファイル名だけではほかの`index.html`と区別できないので、パスで判定する。
 個別のファイルの一覧は、`FORBIDDEN_EXACT_PATHS`にある。
-一覧には、次の9種類が入る。
+一覧には、次の10種類が入る。
 
 - Consoleのページの入口: `console/index.html`
 - draw.ioのビューアの固定: `console/drawio-viewer.json`
@@ -1205,6 +1207,18 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - hashの再計算の側
   - 部品: `lib/metadata_{hash,precheck,signature,git_ports}`の`.ts`、`.script.yaml`、`.script.lock`
   - 配線: `lib/ci_metadata_rehash`の`.ts`、`.script.yaml`、`.script.lock`
+- ホストの実行役が実行するファイル
+  - 入口と導入: `scripts/host-apply.*`、`scripts/host-install.sh`
+  - 版の確認と記録: `scripts/check-docker-version.sh`、`scripts/record-host-applied.sh`
+  - 診断と初期化: `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`
+  - composeの定義: `infra/docker-compose.yml`、`tests/infra/docker_compose.test.ts`
+  - 実行役のテスト: `tests/scripts/host_apply_*.test.ts`をファイル名で列挙する
+
+実行役が実行するファイルは、ホストのユーザーの権限で、秘密値を渡して動く。
+`infra/docker-compose.yml`は、実行役が静的に検査して反映する定義である。
+実行役のテストは、実行役の判定を固定する。
+テストをグロブでなくファイル名で列挙する理由は、足したテストの列挙し忘れを、保護パスの契約テスト(`tests/lib/protected_paths.test.ts`)が見つけるためである。
+詳しい理由と限界は、[ホストの実行役の境界](../security.md#ホストの実行役の境界)にある。
 
 `console/drawio-viewer.json`は、CIが取得して配信するビューアの取得元とsha256を固定する。
 書き換えられると、別のスクリプトが固定の値として配信される。
