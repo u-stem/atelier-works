@@ -1090,7 +1090,9 @@ superadminでない主体は、許可されたtagしか使えない。
 `claude_oauth_token`と`wmill_token`は、このworkerに届かせない。
 `discord_webhook_url`を許可するのは、通知を送る定期ジョブを、このworkerで動かすためである。
 このworkerは、固定のレビュー済みのscriptだけを動かす。
-漏れても、影響は通知の偽装に限られる。
+漏れたときの影響は、通知の偽装と、webhookの削除や改名による通知の停止である。
+webhookのURLを持つ者は、トークンだけで改名と削除ができる。
+どのworkerのジョブも`getVariable`で読める状態はもとからで、読める範囲は広がっていない。
 これを超えて広げるときは、契約テストの許可と、この節の選定の結果を同じ変更で直す。
 
 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
@@ -1123,14 +1125,16 @@ superadminでない主体は、許可されたtagしか使えない。
 
 tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中身を確かめる。
 `getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。
-参照があれば、参照先のsecret変数が`github_token`だけであることまで確かめる。
+参照があれば、参照先のsecret変数が`github_token`と`discord_webhook_url`のいずれかだけであることまで確かめる。
 テストが固定するのはsecret変数の名前の読み取りだけなので、この確認は人かレビューが行う。
 
 ### 選定の結果
 
 `f/factory/**`の定期実行のscriptを1つずつ読んだ結果は、次のとおりである。
 tag`periodic`を付けたのは、`notify_daily_summary`と`auto_retry_pr_review`である。
-どちらもresource`f/factory/factory_config`だけを読み、その値に`$var:`と`$res:`の参照は無い。
+どちらもresource`f/factory/factory_config`だけを読む。
+ローカルのインスタンスでは、その値に`$var:`と`$res:`の参照が無いことを確かめた。
+本番相当のインスタンスのresourceは、リポジトリから確かめられない。人がWindmillの画面で見て確かめる。
 
 | script | 依存と読むsecret | 結論 |
 | --- | --- | --- |
