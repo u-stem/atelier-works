@@ -217,6 +217,20 @@ const MISE_PLAIN_NAMES: ReadonlySet<string> = new Set([
   "w",
 ]);
 
+/** タスクを実行するサブコマンド。`-s`と`--shell`で、呼び出し側が実行するシェルを決められる。 */
+const MISE_RUNNER_NAMES: ReadonlySet<string> = new Set([
+  "run",
+  "r",
+  "tasks",
+  "task",
+  "t",
+  "watch",
+  "w",
+]);
+
+/** `--shell`、`-s`、`-s`を含む束ねた短いオプション。 */
+const MISE_SHELL_OPTION = /^(--shell(=.*)?|-[A-Za-z]*s.*)$/;
+
 /** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */
 function hasBrace(word: Word): boolean {
   return word.brace === true;
@@ -270,6 +284,15 @@ function listsMiseValues(words: readonly Word[]): boolean {
     return true;
   }
   const sub = beforeDashDash[operandAt];
+  if (
+    sub !== undefined &&
+    MISE_RUNNER_NAMES.has(sub.text) &&
+    beforeDashDash
+      .slice(operandAt + 1)
+      .some((word) => MISE_SHELL_OPTION.test(word.text))
+  ) {
+    return true;
+  }
   if (
     sub !== undefined &&
     !MISE_SET_NAMES.has(sub.text) &&

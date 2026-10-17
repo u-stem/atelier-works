@@ -290,6 +290,13 @@ function readMiseExec(
         next: words.length,
       };
     }
+    if (/^-[A-Za-z]*c/.test(text)) {
+      // `-cenv`、`-c=env`、`-qc env`のように、値を付けた形と束ねた形も、シェルの文字列として扱う。
+      return {
+        mise: { commandString: word, inner: [] },
+        next: words.length,
+      };
+    }
     if (MISE_VALUE_OPTIONS.has(text)) {
       index += 1;
     } else if (!text.startsWith("-") && !text.includes("@")) {
