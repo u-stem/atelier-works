@@ -45,6 +45,17 @@ function afterCall(source: string): string {
   return end < 0 ? "" : block.slice(from, end);
 }
 
+async function freshnessSource(): Promise<string> {
+  return Bun.file("f/factory/lib/gh_collect_freshness.ts").text();
+}
+
+/** `import`文が読み込む相手の一覧。`import type`も含む。 */
+function importedModules(source: string): string[] {
+  return [...source.matchAll(/^import\b[^;"]*?"([^"]+)"/gm)].map(
+    (match) => match[1] ?? "",
+  );
+}
+
 describe("self_update gh collect freshness check", () => {
   test("runs the check in the finally block", async () => {
     expect(finallyBlock(await selfUpdateSource())).toContain(
@@ -120,6 +131,30 @@ describe("self_update gh collect freshness check", () => {
   test("the check starts no child process", async () => {
     expect(callSection(await selfUpdateSource())).not.toMatch(
       /runCommand\(|spawn/,
+    );
+  });
+
+  test("the check passes no timeoutMs", async () => {
+    expect(callSection(await selfUpdateSource())).not.toContain("timeoutMs");
+  });
+
+  test("the freshness module imports only types, log and discord", async () => {
+    expect(importedModules(await freshnessSource()).sort()).toEqual([
+      "./discord.ts",
+      "./log.ts",
+      "./types.ts",
+    ]);
+  });
+
+  test("the freshness module imports discord as a type only", async () => {
+    expect(await freshnessSource()).toMatch(
+      /^import type \{[^}]*\} from "\.\/discord\.ts";/m,
+    );
+  });
+
+  test("the freshness module loads nothing dynamically", async () => {
+    expect(await freshnessSource()).not.toMatch(
+      /\bimport\(|\brequire\(|^export [^;=]*\bfrom\b/m,
     );
   });
 
