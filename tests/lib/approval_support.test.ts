@@ -5,6 +5,7 @@ import {
   buildAuditConsoleUrl,
   buildConsoleUrl,
   buildItemsConsoleUrl,
+  buildNoticeConsoleUrl,
   buildRecordedReason,
   buildSystemConsoleUrl,
   classifyExistingDecision,
@@ -134,6 +135,14 @@ describe("buildApprovalConsoleUrl", () => {
   test("selects the approval in the inbox of the Console", () => {
     expect(buildApprovalConsoleUrl("http://127.0.0.1:8080", 9)).toBe(
       "http://127.0.0.1:8080/console/?approval=9",
+    );
+  });
+});
+
+describe("buildNoticeConsoleUrl", () => {
+  test("selects the notice in the inbox of the Console", () => {
+    expect(buildNoticeConsoleUrl("http://127.0.0.1:8080", 7)).toBe(
+      "http://127.0.0.1:8080/console/?notice=7",
     );
   });
 });

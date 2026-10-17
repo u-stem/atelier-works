@@ -59,6 +59,7 @@ import {
   listConflictedPrConflictChecks,
   listFailedPrCiChecks,
   listFixingPrCiChecks,
+  listGhCollectFreshness,
   listGhCollectOwnerStates,
   listGhRepos,
   listMainCiRunsBySha,
@@ -7024,6 +7025,80 @@ check(
   "gh_collect_runs: a run that did not lead, or is unfinished, does not mark the turn",
   ghTurnD?.last_led_at === null,
   ghTurnD,
+);
+// 収集の鮮度: 成功は`ok`かつ`verified`で終わった行だけ。最新は終わった行、実行中は最新の開始の行だけ。
+const GH_OWNER_E = "qdbghe";
+const GH_OWNER_F = "qdbghf";
+const GH_OWNER_G = "qdbghg";
+execPsql(
+  target,
+  `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, verified, error_code, next_allowed_at) VALUES
+    ('${GH_OWNER_E}', now() - interval '5 hours', now() - interval '5 hours' + interval '10 seconds', true, true, NULL, NULL),
+    ('${GH_OWNER_E}', now() - interval '4 hours', now() - interval '4 hours' + interval '10 seconds', true, false, NULL, NULL),
+    ('${GH_OWNER_E}', now() - interval '3 hours', now() - interval '3 hours' + interval '10 seconds', false, false, 'rate_limited', now() + interval '10 minutes'),
+    ('${GH_OWNER_E}', now() - interval '1 minute', NULL, false, false, NULL, NULL),
+    ('${GH_OWNER_F}', now() - interval '2 hours', now() - interval '2 hours' + interval '10 seconds', false, false, 'no_token', NULL),
+    ('${GH_OWNER_G}', now() - interval '3 hours', NULL, false, false, NULL, NULL),
+    ('${GH_OWNER_G}', now() - interval '1 hour', now() - interval '1 hour' + interval '10 seconds', true, true, NULL, NULL)`,
+);
+const nearAgo = (date: Date | null | undefined, agoMs: number): boolean =>
+  date != null && Math.abs(date.getTime() - (Date.now() - agoMs)) < 120_000;
+const ghFresh = await listGhCollectFreshness(
+  ["QdbGhE", GH_OWNER_F, GH_OWNER_G, "qdbghz"],
+  sql,
+);
+const ghFreshE = ghFresh.find((row) => row.owner === GH_OWNER_E);
+const ghFreshF = ghFresh.find((row) => row.owner === GH_OWNER_F);
+const ghFreshG = ghFresh.find((row) => row.owner === GH_OWNER_G);
+const ghFreshZ = ghFresh.find((row) => row.owner === "qdbghz");
+check(
+  "gh_collect_freshness: an owner is read by its lowercased name",
+  ghFreshE !== undefined && ghFresh.length === 4,
+  ghFresh,
+);
+check(
+  "gh_collect_freshness: a success that failed verification is not counted",
+  nearAgo(ghFreshE?.last_success_at, 5 * 3_600_000 - 10_000),
+  ghFreshE,
+);
+check(
+  "gh_collect_freshness: an unfinished row is not the latest result",
+  nearAgo(ghFreshE?.latest?.finished_at, 3 * 3_600_000 - 10_000) &&
+    ghFreshE?.latest?.error_code === "rate_limited" &&
+    ghFreshE.latest.next_allowed_at !== null,
+  ghFreshE,
+);
+check(
+  "gh_collect_freshness: the newest row is running when it is unfinished",
+  nearAgo(ghFreshE?.running_since, 60_000),
+  ghFreshE,
+);
+check(
+  "gh_collect_freshness: the first start is the oldest start of the owner",
+  nearAgo(ghFreshE?.first_started_at, 5 * 3_600_000),
+  ghFreshE,
+);
+check(
+  "gh_collect_freshness: an owner without a success has no success time",
+  ghFreshF?.last_success_at === null &&
+    ghFreshF.latest?.error_code === "no_token" &&
+    ghFreshF.running_since === null,
+  ghFreshF,
+);
+check(
+  "gh_collect_freshness: an older unfinished row is not running when a newer row finished",
+  ghFreshG?.running_since === null &&
+    nearAgo(ghFreshG.first_started_at, 3 * 3_600_000),
+  ghFreshG,
+);
+check(
+  "gh_collect_freshness: an owner without runs has only null times",
+  ghFreshZ !== undefined &&
+    ghFreshZ.last_success_at === null &&
+    ghFreshZ.latest === null &&
+    ghFreshZ.running_since === null &&
+    ghFreshZ.first_started_at === null,
+  ghFreshZ,
 );
 let ghLedWithoutRequestRejected = false;
 try {

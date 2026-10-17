@@ -296,6 +296,52 @@ describe("buildEmbed periodic_worker_missing", () => {
   });
 });
 
+describe("buildEmbed github_collect_stale", () => {
+  const event: NotifyEvent = {
+    kind: "github_collect_stale",
+    instance_name: "local",
+    owner: "acme",
+    cause: "acmeのGitHubの収集が30分以上成功していません",
+    next_action: "トークンを作り直す",
+    url: "https://wm.example/console/?notice=7",
+  };
+
+  test("names the owner in the title", () => {
+    expect(buildEmbed(event).title).toBe("GitHubの収集が止まっています: acme");
+  });
+
+  test("puts the cause in the description", () => {
+    expect(buildEmbed(event).description).toBe(
+      "acmeのGitHubの収集が30分以上成功していません",
+    );
+  });
+
+  test("links the notice in the Console", () => {
+    expect(buildEmbed(event).url).toBe("https://wm.example/console/?notice=7");
+  });
+
+  test("shows the next action as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "次の操作",
+      value: "トークンを作り直す",
+    });
+  });
+
+  test("shows the owner as a field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "所有者",
+      value: "acme",
+    });
+  });
+
+  test("includes the instance field", () => {
+    expect(buildEmbed(event).fields).toContainEqual({
+      name: "インスタンス",
+      value: "local",
+    });
+  });
+});
+
 describe("buildEmbed default_worker_missing", () => {
   const event: NotifyEvent = {
     kind: "default_worker_missing",

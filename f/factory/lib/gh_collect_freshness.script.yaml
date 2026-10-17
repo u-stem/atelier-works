@@ -1,0 +1,9 @@
+summary: '[LIB] GitHubの収集の鮮度の監視'
+description: 内部ライブラリです。直接実行するものではありません。所有者ごとに収集の最後の成功を見て、止まっていればnoticeとDiscordで知らせます。依存を注入して使います。
+lock: '!inline f/factory/lib/gh_collect_freshness.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

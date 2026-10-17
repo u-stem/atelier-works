@@ -307,6 +307,21 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "github_collect_stale",
+    guide(
+      "設定の所有者について、GitHubの収集が閾値(所有者が2人までは30分)を超えて成功していません。今の収集は記録を書くだけで、Factoryの判断は止まりません。",
+      "本文の所有者の最新の実行の記録を、次のコマンドで読み、運用の文書の「実行の記録の読み方」の表のerror_codeの対処に従ってください。記録が古いときは、スケジュールとジョブの履歴を確かめます。",
+      {
+        commands: [
+          "mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c \"SELECT owner, ok, error_code, verified, id_checked, requests, cost, remaining, finished_at FROM factory.gh_collect_runs WHERE owner = '<所有者>' AND finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10\"",
+          "wmill schedule get f/factory/collect_github --json",
+          "wmill job list --script-path f/factory/collect_github --limit 5",
+        ],
+        note: "収集が成功すると、自己更新(2分ごと)が自動で解決します。gh_collect_enabledをfalseにしたときと、ownersから外したときも解決します。止まったまま人が解決すると、次の自己更新で出直します。同じ停止について、定期ジョブの失敗や所有者の不一致の通知と重なって届くことがあります。",
+      },
+    ),
+  ],
+  [
     "default_worker_missing",
     guide(
       "defaultのworkerのqueueに、予定時刻から10分以上実行されずに待つジョブがあり、defaultで動いているジョブがありません。defaultのworkerが居ないか、ジョブを受けられない状態です。",
