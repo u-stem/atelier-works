@@ -2,7 +2,7 @@
 // 読み取り専用のトークンを`Authorization`ヘッダだけに載せて、宛先を固定した`fetch`で送る。
 // 失敗は例外にせず、分類に要る事実だけを持つ結果にする。応答の本文とエラーの文は、分類にだけ使って残さない。
 
-import { isRecord } from "./types.ts";
+import { type GhDetailOptionalField, isRecord } from "./types.ts";
 
 /** 送り先。トークンを送るので固定し、呼び出し側から変えられない。 */
 export const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
@@ -70,9 +70,42 @@ export type GraphqlFailure = {
   readonly reset_at_sec: number | null;
 };
 
+/** 別名の水準のエラーの`type`。固定の語に丸める。 */
+export type AliasErrorType = "FORBIDDEN" | "NOT_FOUND" | "OTHER";
+
+/** 別名の水準のエラーの位置。固定の項目名と添字だけを持つ。 */
+export type AliasErrorTarget =
+  | {
+      readonly kind: "pr_field";
+      readonly index: number;
+      readonly field: GhDetailOptionalField;
+    }
+  | { readonly kind: "issue_field"; readonly index: number }
+  | { readonly kind: "alias" };
+
+/** 別名ごとのエラー。`message`と`path`の残りは持たない。 */
+export type AliasError = {
+  readonly alias: string;
+  readonly type: AliasErrorType;
+  readonly target: AliasErrorTarget;
+};
+
+/** `alias_errors`は、`aliasErrors`を渡した要求の成功にだけ付く。 */
 export type GraphqlResponse =
-  | { readonly ok: true; readonly data: Record<string, unknown> }
+  | {
+      readonly ok: true;
+      readonly data: Record<string, unknown>;
+      readonly alias_errors?: readonly AliasError[];
+    }
   | GraphqlFailure;
+
+/** 詳細の問い合わせの別名の数の上限。 */
+export const DETAIL_QUERY_MAX_ALIASES = 20;
+
+/** 詳細の問い合わせを組み立てる。 */
+export function buildRepoDetailQuery(_aliases: number): string {
+  return "";
+}
 
 function failure(
   kind: GraphqlFailure["kind"],
@@ -162,6 +195,8 @@ export async function graphqlRequest(
     readonly fetch: GraphqlFetch;
     readonly token: string;
     readonly timeoutMs?: number;
+    /** 送った別名の数。渡すと、別名の水準のエラーだけの応答を成功として返す。 */
+    readonly aliasErrors?: { readonly count: number };
   },
   query: string,
   variables: Readonly<Record<string, unknown>>,

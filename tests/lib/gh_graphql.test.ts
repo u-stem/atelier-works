@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  buildRepoDetailQuery,
   GITHUB_GRAPHQL_URL,
   type GraphqlFetch,
   type GraphqlResponseLike,
@@ -384,5 +385,320 @@ describe("graphqlRequest malformed json has no echo", () => {
         VARIABLES,
       ),
     ).resolves.toBeDefined();
+  });
+});
+
+describe("buildRepoDetailQuery", () => {
+  test("detail query has one alias per repository", () => {
+    const query = buildRepoDetailQuery(3);
+    expect([
+      query.includes("r0: repository("),
+      query.includes("r2: repository("),
+      query.includes("r3: repository("),
+    ]).toEqual([true, true, false]);
+  });
+
+  test("detail query rejects alias counts outside 1 to 20", () => {
+    const rejected = [0, 21].filter((count) => {
+      try {
+        buildRepoDetailQuery(count);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(rejected).toEqual([0, 21]);
+  });
+
+  test("detail query rejection does not echo the count", () => {
+    let message = "";
+    try {
+      buildRepoDetailQuery(987654);
+    } catch (err) {
+      message = String(err);
+    }
+    expect(message).not.toContain("987654");
+  });
+
+  test("detail query passes owner, name, label and cursors as variables", () => {
+    const query = buildRepoDetailQuery(2);
+    expect(
+      ["$o0", "$n0", "$label", "$pc0", "$ic0", "$o1", "$ic1"].filter(
+        (name) => !query.includes(name),
+      ),
+    ).toEqual([]);
+  });
+
+  test("detail query orders by creation time descending", () => {
+    const query = buildRepoDetailQuery(1);
+    expect([
+      query.includes("CREATED_AT"),
+      query.includes("DESC"),
+      query.includes("UPDATED_AT"),
+    ]).toEqual([true, true, false]);
+  });
+
+  test("detail query does not traverse refs", () => {
+    const query = buildRepoDetailQuery(1);
+    expect(
+      ["headRef {", "baseRef {", "defaultBranchRef"].filter((text) =>
+        query.includes(text),
+      ),
+    ).toEqual([]);
+  });
+
+  test("detail query does not ask for baseRefOid or mergeStateStatus", () => {
+    const query = buildRepoDetailQuery(1);
+    expect(
+      ["baseRefOid", "mergeStateStatus"].filter((text) => query.includes(text)),
+    ).toEqual([]);
+  });
+
+  test("detail query reads the branch names and head sha as scalar fields", () => {
+    const query = buildRepoDetailQuery(1);
+    expect(
+      ["headRefName", "headRefOid", "baseRefName"].filter(
+        (text) => !query.includes(text),
+      ),
+    ).toEqual([]);
+  });
+
+  test("detail query skips each part with include", () => {
+    const query = buildRepoDetailQuery(1);
+    expect([
+      query.includes("@include(if: $p0)"),
+      query.includes("@include(if: $i0)"),
+    ]).toEqual([true, true]);
+  });
+});
+
+describe("graphqlRequest alias errors", () => {
+  const ALIAS_DATA = {
+    rateLimit: { cost: 1, remaining: 4990, resetAt: "2026-10-17T13:00:00Z" },
+    r0: { databaseId: 1 },
+    r1: null,
+  };
+
+  async function detailRequest(
+    errors: readonly unknown[],
+    options: { count?: number } = {},
+  ) {
+    const h = harness(async () =>
+      respond({
+        json: () => Promise.resolve({ data: ALIAS_DATA, errors }),
+      }),
+    );
+    return await graphqlRequest(
+      {
+        fetch: h.fetchFn,
+        token: TOKEN,
+        aliasErrors: { count: options.count ?? 2 },
+      },
+      buildRepoDetailQuery(options.count ?? 2),
+      VARIABLES,
+    );
+  }
+
+  test("alias errors are returned with data when every path starts with a sent alias", async () => {
+    const result = await detailRequest([
+      { type: "FORBIDDEN", path: ["r1", "pullRequests"], message: "denied" },
+    ]);
+    expect(result).toEqual({
+      ok: true,
+      data: ALIAS_DATA,
+      alias_errors: [
+        { alias: "r1", type: "FORBIDDEN", target: { kind: "alias" } },
+      ],
+    });
+  });
+
+  test("alias errors keep only the alias, a fixed type and a fixed field name", async () => {
+    const result = await detailRequest([
+      {
+        type: "SOMETHING_ELSE",
+        path: ["r0", "pullRequests", "nodes", 1, "author", "login"],
+        message: "token github_pat_LEAK123",
+        locations: [{ line: 3, column: 9 }],
+      },
+    ]);
+    expect(JSON.stringify(result.ok ? result.alias_errors : result)).toBe(
+      JSON.stringify([
+        {
+          alias: "r0",
+          type: "OTHER",
+          target: { kind: "pr_field", index: 1, field: "author" },
+        },
+      ]),
+    );
+  });
+
+  test("alias errors never carry the message", async () => {
+    const result = await detailRequest([
+      {
+        type: "FORBIDDEN",
+        path: ["r0", "pullRequests"],
+        message: "token github_pat_LEAK123",
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("LEAK123");
+  });
+
+  test("an error under an optional pull request field is reported with its node index and field", async () => {
+    const result = await detailRequest([
+      {
+        type: "FORBIDDEN",
+        path: [
+          "r0",
+          "pullRequests",
+          "nodes",
+          3,
+          "reviewRequests",
+          "nodes",
+          0,
+          "requestedReviewer",
+        ],
+      },
+    ]);
+    expect(result.ok ? result.alias_errors : null).toEqual([
+      {
+        alias: "r0",
+        type: "FORBIDDEN",
+        target: { kind: "pr_field", index: 3, field: "reviewRequests" },
+      },
+    ]);
+  });
+
+  test("an error under an issue author is reported with its node index", async () => {
+    const result = await detailRequest([
+      { type: "NOT_FOUND", path: ["r0", "issues", "nodes", 2, "author"] },
+    ]);
+    expect(result.ok ? result.alias_errors : null).toEqual([
+      {
+        alias: "r0",
+        type: "NOT_FOUND",
+        target: { kind: "issue_field", index: 2 },
+      },
+    ]);
+  });
+
+  test("an error under assignees is reported as an alias error", async () => {
+    const result = await detailRequest([
+      {
+        type: "FORBIDDEN",
+        path: ["r0", "pullRequests", "nodes", 2, "assignees"],
+      },
+    ]);
+    expect(result.ok ? result.alias_errors : null).toEqual([
+      { alias: "r0", type: "FORBIDDEN", target: { kind: "alias" } },
+    ]);
+  });
+
+  test("an error under a field outside the optional four is reported as an alias error", async () => {
+    const result = await detailRequest([
+      {
+        type: "FORBIDDEN",
+        path: ["r0", "pullRequests", "nodes", 2, "headRefOid"],
+      },
+    ]);
+    expect(result.ok ? result.alias_errors : null).toEqual([
+      { alias: "r0", type: "FORBIDDEN", target: { kind: "alias" } },
+    ]);
+  });
+
+  test("an error with a non integer node index is reported as an alias error", async () => {
+    const result = await detailRequest([
+      {
+        type: "FORBIDDEN",
+        path: ["r0", "pullRequests", "nodes", "x", "author"],
+      },
+    ]);
+    expect(result.ok ? result.alias_errors : null).toEqual([
+      { alias: "r0", type: "FORBIDDEN", target: { kind: "alias" } },
+    ]);
+  });
+
+  test("an error without a path fails the whole request", async () => {
+    const result = await detailRequest([{ type: "FORBIDDEN" }]);
+    expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
+  });
+
+  test("an error whose path starts with rateLimit fails the whole request", async () => {
+    const result = await detailRequest([
+      { type: "FORBIDDEN", path: ["rateLimit", "cost"] },
+    ]);
+    expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
+  });
+
+  test("one pathless error among alias errors fails the whole request", async () => {
+    const result = await detailRequest([
+      { type: "FORBIDDEN", path: ["r0", "pullRequests"] },
+      { type: "FORBIDDEN" },
+    ]);
+    expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
+  });
+
+  test("an error on an alias that was not sent fails the whole request", async () => {
+    const result = await detailRequest(
+      [{ type: "FORBIDDEN", path: ["r5", "pullRequests"] }],
+      { count: 2 },
+    );
+    expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
+  });
+
+  test("an error on a name that only looks like an alias fails the whole request", async () => {
+    const result = await detailRequest([
+      { type: "FORBIDDEN", path: ["r01", "pullRequests"] },
+    ]);
+    expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
+  });
+
+  test("a rate limited error fails the whole request even with alias paths", async () => {
+    const result = await detailRequest([
+      { type: "RATE_LIMITED", path: ["r0", "pullRequests"] },
+    ]);
+    expect(result.ok ? null : result.rate_limited).toBe(true);
+  });
+
+  test("errors without data fail the whole request", async () => {
+    const h = harness(async () =>
+      respond({
+        json: () =>
+          Promise.resolve({
+            data: null,
+            errors: [{ type: "FORBIDDEN", path: ["r0", "pullRequests"] }],
+          }),
+      }),
+    );
+    const result = await graphqlRequest(
+      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 2 } },
+      buildRepoDetailQuery(2),
+      VARIABLES,
+    );
+    expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
+  });
+
+  test("a response without errors has an empty alias error list", async () => {
+    const h = harness(async () =>
+      respond({ json: () => Promise.resolve({ data: ALIAS_DATA }) }),
+    );
+    const result = await graphqlRequest(
+      { fetch: h.fetchFn, token: TOKEN, aliasErrors: { count: 2 } },
+      buildRepoDetailQuery(2),
+      VARIABLES,
+    );
+    expect(result.ok ? result.alias_errors : null).toEqual([]);
+  });
+
+  test("stage 1 still fails on any error", async () => {
+    const { result } = await request(async () =>
+      respond({
+        json: () =>
+          Promise.resolve({
+            data: ALIAS_DATA,
+            errors: [{ type: "FORBIDDEN", path: ["r0", "pullRequests"] }],
+          }),
+      }),
+    );
+    expect(result.ok ? "ok" : result.kind).toBe("graphql_errors");
   });
 });
