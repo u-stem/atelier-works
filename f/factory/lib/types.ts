@@ -1153,12 +1153,15 @@ export function isGitSha(value: unknown): value is string {
 /** 保存するブランチ名の長さの上限(UTF-8のバイト数)。 */
 const STORED_REF_NAME_MAX_BYTES = 255;
 
-/** 制御文字、書式文字、行と段落の区切り。表示を偽る文字を保存しない。 */
-const STORED_REF_FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+/**
+ * 制御文字、書式文字、行と段落の区切り、対になっていないサロゲート。
+ * 表示を偽る文字と、UTF-8に直すと別の文字になる文字を保存しない。
+ */
+const STORED_REF_FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
 
 /**
  * 保存してよいブランチ名か。`isBranchName`を通り、UTF-8で255バイト以下で、
- * 制御文字、書式文字、行と段落の区切りを含まない。
+ * 制御文字、書式文字、行と段落の区切り、対になっていないサロゲートを含まない。
  * 通知やプロンプトに載りうる信頼できない入力なので、表示を偽る文字を保存しない。
  */
 export function isStoredRefName(value: unknown): value is string {
