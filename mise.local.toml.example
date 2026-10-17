@@ -44,3 +44,29 @@ DISCORD_WEBHOOK_URL = ""
 #   - Account permissions: すべて No access
 #   read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && mise set -E local CONSOLE_GITHUB_TOKEN="$v"; unset v
 CONSOLE_GITHUB_TOKEN = ""
+
+# 収集(collect_github)が所有者ごとに使う、読み取り専用のトークン。
+# 所有者(個人と所属する組織)ごとに1つ作り、環境変数 GITHUB_READ_TOKEN_<OWNER> に入れる。
+# <OWNER> は所有者の login を大文字にして、- を _ に直した名前にする(例: acme-corp は ACME_CORP)。
+# キーはここに固定せず、所有者を足すたびに環境変数を1つ足して mise run bootstrap を実行する。
+# bootstrap が対応表の JSON に組んで、Windmill の変数 f/factory/github_read_tokens に入れる。
+# 1つも入れなくても動く。入れていない所有者の収集は、通知なしで飛ばされる。
+# GITHUB_TOKEN や CONSOLE_GITHUB_TOKEN と同じ値は入れない(bootstrap が飛ばす)。
+# loginに _ を含む所有者(EMU のアカウント)は扱えない。
+# 手順: GitHub 右上のアイコン → Settings → Developer settings →
+# Personal access tokens → Fine-grained tokens → Generate new token。
+#   - Token name: atelier-works-factory-reader-<所有者>
+#   - Description: Software Factory collector (read-only: PR / Issue state)
+#   - Resource owner: その所有者(個人または組織)
+#   - Expiration: Custom で 1 年後(組織が最長期限を 1 年より短くすることがある)
+#   - Repository access: All repositories(集める範囲は factory_config の
+#     owners と repo_allowlist で絞る)
+#   - Repository permissions:
+#       Metadata = Read-only(自動で付与される)
+#       Pull requests = Read-only
+#       Issues = Read-only
+#       ほかはすべて No access
+#   - Account permissions: すべて No access
+#   組織の所有者は、組織側で fine-grained PAT を許可し、トークンの承認が要ることがある。
+#   所有者ごとに、次の1行を実行する(<OWNER> は上の名前に置き換える)。
+#   read -rs 'v?GITHUB_READ_TOKEN_<OWNER>: ' && mise set -E local GITHUB_READ_TOKEN_<OWNER>="$v"; unset v

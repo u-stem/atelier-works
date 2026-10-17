@@ -141,6 +141,7 @@ const CI_DENIED_DIRECTORIES: readonly string[] = [
  * 競合の検知と競合を直す回の判断・プロンプト(`pr_conflict_`と`conflict_fix_`で始まる部品)、pr_fixフローの起動(`pr_fix_launch`)、
  * プロンプトの組み立て(`prompts`)、検査コマンドの実行(`check_runner`)、GitHubの読み書き(`github`)、
  * メタデータのパッチの検査と`wmill-lock.yaml`のhashの再計算(`metadata_`で始まる部品)、
+ * GitHubの収集(宛先を固定したGraphQLの通信の`gh_graphql`、照合と`gone`の判定の`gh_collect`で始まる部品、それを呼ぶ`collect_github`)、
  * 自動で再開してよい止まった理由の一覧(`auto_retry_reasons`)、
  * 検査の前提が古いときの理由(`check_sandbox_reasons`)、GitHubの呼び出しの失敗の型(`github_errors`)である。
  * 一覧は、CI回と競合回の回復が「待たずに保留なしで外す回」を決め、競合回の数え方が「数えない回」を決める。
@@ -159,6 +160,8 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/lib/job_tmp.",
   "f/factory/lib/check_sandbox_reasons.",
   "f/factory/lib/github_errors.",
+  "f/factory/lib/gh_graphql.",
+  "f/factory/lib/gh_collect",
   "f/factory/lib/repo_owner_gate.",
   "f/factory/lib/model_policy.",
   "f/factory/lib/config.",
@@ -176,6 +179,7 @@ const CI_DENIED_NAME_PREFIXES: readonly string[] = [
   "f/factory/watch_pr_ci.",
   "f/factory/watch_pr_conflicts.",
   "f/factory/watch_main_ci.",
+  "f/factory/collect_github.",
   "f/factory/steps/pr_fix_",
   "f/factory/steps/pr_workflow_support.",
 ];

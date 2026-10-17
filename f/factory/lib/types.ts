@@ -90,6 +90,16 @@ export function hasLabel(labels: readonly string[], label: string): boolean {
   return labels.some((name) => name.toLowerCase() === wanted);
 }
 
+/** `value`がGitHubのログイン名かリポジトリ名の形か。例外を投げず、値を文に含めない。 */
+export function isGitHubName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "." &&
+    value !== ".." &&
+    GITHUB_NAME_PATTERN.test(value)
+  );
+}
+
 export function assertGitHubName(name: string): void {
   if (name === "." || name === "..") {
     throw new Error(`invalid GitHub name: ${JSON.stringify(name)}`);
@@ -150,6 +160,14 @@ const BRANCH_NAME_RULES: readonly {
     reason: "must not end with .lock",
   },
 ];
+
+/** `value`がブランチ名の検査規則に合うか。例外を投げず、値を文に含めない。 */
+export function isBranchName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    !BRANCH_NAME_RULES.some((rule) => rule.test(value))
+  );
+}
 
 export function assertBranchName(name: string): void {
   for (const rule of BRANCH_NAME_RULES) {
@@ -884,6 +902,105 @@ export type Notice = {
 };
 
 // ---------------------------------------------------------------------------
+// GitHubの収集(`gh_repos`、`gh_collect_runs`)
+// ---------------------------------------------------------------------------
+
+/**
+ * リポジトリが「消えた」(`gone`)理由。
+ * `archived`は一覧にあるがarchiveされている。`not_listed`は前回あったのに一覧に無い。
+ * `not_visible`は`repo_allowlist`にあるのに一覧に無い。
+ */
+export const GH_GONE_REASONS = [
+  "archived",
+  "not_listed",
+  "not_visible",
+] as const;
+export type GhGoneReason = (typeof GH_GONE_REASONS)[number];
+
+/** 収集の実行の失敗の種類。成功の行には付けない。 */
+export const GH_COLLECT_ERROR_CODES = [
+  "no_token",
+  "token_config_invalid",
+  "db_error",
+  "owner_mismatch",
+  "deadline",
+  "unauthorized",
+  "forbidden",
+  "rate_limited",
+  "secondary_limit",
+  "http_5xx",
+  "timeout",
+  "graphql_error",
+  "parse_error",
+] as const;
+export type GhCollectErrorCode = (typeof GH_COLLECT_ERROR_CODES)[number];
+
+/** `factory.gh_repos`の1行。`owner`と`repo`は小文字。 */
+export type GhRepo = {
+  readonly id: number;
+  readonly owner: string;
+  readonly owner_id: number;
+  readonly repo: string;
+  /** 一度も見えていない`not_visible`の行だけ`null`。 */
+  readonly repo_id: number | null;
+  readonly allowed: boolean;
+  readonly default_branch: string | null;
+  readonly archived: boolean;
+  /** `allowed`が偽の行は`null`。 */
+  readonly open_pr_count: number | null;
+  readonly labeled_issue_count: number | null;
+  readonly gone: boolean;
+  readonly gone_reason: GhGoneReason | null;
+  readonly listed_at: Date | null;
+};
+
+/** 一覧に載ったリポジトリの書き込み。`owner`は呼び出し側が別に渡す。 */
+export type GhRepoUpsert = {
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly allowed: boolean;
+  readonly default_branch: string | null;
+  readonly archived: boolean;
+  readonly open_pr_count: number | null;
+  readonly labeled_issue_count: number | null;
+};
+
+/** 一覧に載らなかったリポジトリの書き込み。 */
+export type GhRepoGone = {
+  readonly repo: string;
+  readonly reason: "not_listed" | "not_visible";
+};
+
+/** 所有者ごとの、収集の最新の実行と、最後に先頭を担当した実行。 */
+export type GhCollectOwnerState = {
+  readonly owner: string;
+  /** `finished_at`のある最新の行の結果。行が無ければ`null`。 */
+  readonly latest: {
+    readonly finished_at: Date;
+    readonly ok: boolean;
+    readonly error_code: GhCollectErrorCode | null;
+    readonly next_allowed_at: Date | null;
+  } | null;
+  /** `led`が真で`finished_at`のある最新の実行の`started_at`。無ければ`null`。 */
+  readonly last_led_at: Date | null;
+};
+
+/** 収集の実行1行(所有者ごと)の終わりに書く内容。 */
+export type GhCollectRunOutcome = {
+  readonly ok: boolean;
+  readonly owner_id: number | null;
+  readonly verified: boolean;
+  readonly id_checked: boolean | null;
+  readonly cost: number | null;
+  readonly requests: number;
+  readonly remaining: number | null;
+  readonly error_code: GhCollectErrorCode | null;
+  readonly next_allowed_at: Date | null;
+  /** その周回で最初に要求を送った所有者の行だけ真。結果は問わない。要求が1回も無い行は偽。 */
+  readonly led: boolean;
+};
+
+// ---------------------------------------------------------------------------
 // factory_config(リソース`f/factory/factory_config`、型`c_factory_config`)
 // ---------------------------------------------------------------------------
 
@@ -1127,6 +1244,11 @@ export type FactoryConfig = {
    * 過ぎれば、保留のままでも、保留が無くても通知する。最終の保留は待たずに通知する。
    */
   pr_conflict_fix_notify_grace_min: number;
+  /**
+   * `collect_github`が、`owners`の所有者のリポジトリの状態をGitHubから集めてDBに書くか。既定は`false`。
+   * `false`の間は、トークンを読まず、行も書かずに終わる。読み取り専用のトークンを入れてから、リモートのリソースで有効にする。
+   */
+  gh_collect_enabled: boolean;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。

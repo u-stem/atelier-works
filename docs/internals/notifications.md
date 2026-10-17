@@ -33,7 +33,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_fetch_problem` | Consoleの取り込みに問題があります | `console_fetch_watch`(10分ごと) | Consoleの取り込みの失敗、更新の停止、状態が読めないことを検知し、通知を新しく残した |
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、最初に確かめられなかった時刻から1時間続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
-| `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から15分以上待たされていることを検知し、通知を新しく残した |
+| `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から22分以上待たされていることを検知し、通知を新しく残した |
 | `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを、60秒おいた読み直しでも確かめ、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
@@ -242,7 +242,7 @@ noticeは`factory.notices`の1行で、種類(`kind`)と本文(`message`)を持�
 | `labeler_denied` | `poll_issues`、`poll_prs` | 対象、許可されていないトリガーラベル |
 | `fork_head_denied` | `poll_prs` | 対象のPR |
 | `labeler_check_limit` | `poll_issues`、`poll_prs` | 対象、付与者を判定できないトリガーラベル、付け直す操作 |
-| `owner_id_mismatch` | `poll_issues`、`poll_prs`、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`、`manual_intake_create_issue`、`issue_proposal_apply`、`implement_finish`、`pr_fix_finish`、`pr_review_post` | オーナー名かリポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`owners`を見直す操作 |
+| `owner_id_mismatch` | `poll_issues`、`poll_prs`、`collect_github`、`pipeline_prepare`、`implement_prepare`、`pr_fix_prepare`、`pr_review_prepare`、`manual_intake_create_issue`、`issue_proposal_apply`、`implement_finish`、`pr_fix_finish`、`pr_review_post` | オーナー名かリポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`owners`を見直す操作 |
 | `factory_repo_id_mismatch` | `self_update`、`poll_issues`、各フローのprepare、`pipeline_generate`、`manual_intake_create_issue`、`issue_proposal_apply`、`drawio_viewer_bump` | リポジトリ名、設定のID、食い違いのときはGitHubの現在のID、`factory_repo`と`factory_repo_id`を見直す操作 |
 | `claim_race_lost` | `poll_issues`、`poll_prs`、`manual_intake_register` | 対象、取得できなかった理由 |
 | `claim_assignee_missing` | `poll_issues` | 対象、assigneeにできなかったユーザー、確かめる点 |

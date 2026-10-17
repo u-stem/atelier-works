@@ -7,6 +7,8 @@ import {
   capToDeadline,
   IMPLEMENT_ROUND_MODES,
   IMPLEMENT_ROUND_OUTCOMES,
+  isBranchName,
+  isGitHubName,
   isImplementDiffStat,
   isImplementRoundMode,
   isImplementRoundOutcome,
@@ -272,5 +274,61 @@ describe("parseImplementBranchWorkItemId", () => {
     expect(
       parseImplementBranchWorkItemId("factory/issue-7-wi-3-old"),
     ).toBeNull();
+  });
+});
+
+describe("isGitHubName", () => {
+  test("accepts a login", () => {
+    expect(isGitHubName("octo-owner")).toBe(true);
+  });
+
+  test("accepts a repository name with dots and underscores", () => {
+    expect(isGitHubName("my_repo.v2")).toBe(true);
+  });
+
+  test("rejects a dot", () => {
+    expect(isGitHubName(".")).toBe(false);
+  });
+
+  test("rejects two dots", () => {
+    expect(isGitHubName("..")).toBe(false);
+  });
+
+  test("rejects a leading dash", () => {
+    expect(isGitHubName("-x")).toBe(false);
+  });
+
+  test("rejects an empty string", () => {
+    expect(isGitHubName("")).toBe(false);
+  });
+
+  test("rejects a value that is not a string", () => {
+    expect(isGitHubName(12)).toBe(false);
+  });
+
+  test("does not throw for a name with a space", () => {
+    expect(isGitHubName("a b")).toBe(false);
+  });
+});
+
+describe("isBranchName", () => {
+  test("accepts a plain branch name", () => {
+    expect(isBranchName("feature/add-thing")).toBe(true);
+  });
+
+  test("rejects an empty string", () => {
+    expect(isBranchName("")).toBe(false);
+  });
+
+  test("rejects a leading dash", () => {
+    expect(isBranchName("--force")).toBe(false);
+  });
+
+  test("rejects whitespace", () => {
+    expect(isBranchName("feature branch")).toBe(false);
+  });
+
+  test("rejects a value that is not a string", () => {
+    expect(isBranchName(null)).toBe(false);
   });
 });

@@ -8,8 +8,10 @@ import {
   filesWithTag,
   filesWithToolDependencies,
   filesWithUnfollowableImports,
+  GITHUB_READ_TOKENS,
   GITHUB_TOKEN,
   hasInputReference,
+  mentions,
   mentionsTag,
   nonLiteralVariableReads,
   parseYamlFile,
@@ -28,8 +30,9 @@ import {
 // - tag periodicへ振り分けるものは、下の一覧のscriptの定義だけである。
 //   scriptの定義、スケジュール、フローのモジュールの`tag`と`tag_override`を、`f/`の下のYAMLすべてで調べる。
 // - どれも、スケジュールが呼ぶscriptである。
-// - 読んでよいsecret変数は、discord_webhook_urlだけである。claudeのトークンやwmillのトークンには届かせない。
-// - timeoutの最大値に余裕を足した秒数が、待ちの検知のしきい値を超えない。
+// - 読んでよいsecret変数は、scriptごとの許可(下の`ALLOWED`)に限る。claudeのトークンやwmillのトークンには届かせない。
+//   許可のキーは、この一覧のscriptと一致させる。
+// - 各scriptについて、他のscriptのtimeoutの合計に余裕を足した秒数が、待ちの検知のしきい値を超えない。
 //   このworkerの枠は1つなので、長く動くjobの後ろで待つ定期ジョブを、workerの不在と誤って知らせないためである。
 // - defaultのworkerの停止を検知するscript(default_worker_watch)も、この一覧に入る。
 //   defaultのworkerの中では、そのworkerが止まると動かないためである。
@@ -51,27 +54,32 @@ import {
 const PERIODIC_SCRIPTS: readonly string[] = [
   "f/factory/notify_daily_summary",
   "f/factory/auto_retry_pr_review",
+  "f/factory/collect_github",
   "f/factory/default_worker_watch",
 ];
 
 /**
- * 読んでよいsecret変数。
+ * scriptごとに、読んでよいsecret変数。
  * discord_webhook_urlは通知の送り先として要る。漏れたときの影響は、通知の偽装と停止に限られる。
+ * github_read_tokensは、collect_githubだけが読む。所有者ごとの読み取り専用のトークンの対応表で、
+ * 通信先は`https://api.github.com/graphql`に固定したクライアントだけである。
  * このworkerは、固定のレビュー済みscriptだけを動かす。
  * github_tokenは、対象のscriptが読まないので許可しない。使わない許可は残さない。
+ * 別のscriptの許可を借りて読めるようにしないため、scriptごとに分ける。
  */
-const MAY_READ_SECRET = [DISCORD_WEBHOOK_URL];
+const ALLOWED: Readonly<Record<string, readonly string[]>> = {
+  "f/factory/notify_daily_summary": [DISCORD_WEBHOOK_URL],
+  "f/factory/auto_retry_pr_review": [DISCORD_WEBHOOK_URL],
+  "f/factory/collect_github": [GITHUB_READ_TOKENS],
+  "f/factory/default_worker_watch": [DISCORD_WEBHOOK_URL],
+};
 
 /**
- * 待ちの検知のしきい値と、最長のtimeoutの間に残す秒数。
+ * 待ちの検知のしきい値と、他のscriptのtimeoutの合計の間に残す秒数。
  * scriptの起動と、queueから拾うまでの遅れを見込む。
  *
- * このworkerの枠は1つなので、あるscriptが待たされる上限は、前に並ぶ他のscriptのtimeoutの合計である。
- * 下のテストは、最長のtimeoutに余裕を足した値を使う。
- * 合計がしきい値を超えるのは、前に並ぶscriptがそろってtimeoutまで動き続けたときだけである。
- * そのときは枠が塞がっているのも事実で、通知の本文もその可能性を挙げている。
- * 合計を基準にすると、3本では余裕を足してしきい値(15分)を超えるので、最大値を基準にしたままにする。
- * そのため、scriptを足すときは、そのtimeoutを既存の最大値以下に保つ。
+ * このworkerの枠は1つなので、あるscriptが待たされる最悪は、他のscriptのtimeoutの合計である。
+ * 下のテストは、各scriptについて「他のscriptのtimeoutの合計 + 余裕」を調べる。
  */
 const WAIT_MARGIN_SECONDS = 300;
 
@@ -403,14 +411,22 @@ describe("periodic scripts", () => {
     expect(stale).toEqual([]);
   });
 
-  test("the longest timeout plus the margin does not exceed the wait threshold", async () => {
-    let longest = 0;
+  test("the timeouts of the other scripts plus the margin do not exceed the wait threshold of any script", async () => {
+    const timeouts = new Map<string, number>();
     for (const path of PERIODIC_SCRIPTS) {
-      longest = Math.max(longest, (await scriptTimeoutSeconds(path)) ?? 0);
+      timeouts.set(path, (await scriptTimeoutSeconds(path)) ?? 0);
     }
-    expect(longest + WAIT_MARGIN_SECONDS).toBeLessThanOrEqual(
+    const total = [...timeouts.values()].reduce((sum, t) => sum + t, 0);
+    const worstWait = Math.max(
+      ...[...timeouts.values()].map((own) => total - own),
+    );
+    expect(worstWait + WAIT_MARGIN_SECONDS).toBeLessThanOrEqual(
       PERIODIC_JOB_WAIT_SECONDS,
     );
+  });
+
+  test("collect_github times out in 120 seconds", async () => {
+    expect(await scriptTimeoutSeconds("f/factory/collect_github")).toBe(120);
   });
 
   test("no periodic script declares a variable or resource reference in its inputs", async () => {
@@ -431,14 +447,57 @@ describe("periodic scripts", () => {
     expect(await secretVariablePaths()).toEqual(
       expect.arrayContaining([
         GITHUB_TOKEN,
+        GITHUB_READ_TOKENS,
         "f/factory/claude_oauth_token",
         "f/factory/wmill_token",
       ]),
     );
   });
 
-  test("a periodic script reads no secret variable but the allowed ones", async () => {
-    expect(await secretsOutside(PERIODIC_SCRIPTS, MAY_READ_SECRET)).toEqual([]);
+  test("the scripts with a permission are exactly the periodic scripts", () => {
+    expect(Object.keys(ALLOWED).sort()).toEqual([...PERIODIC_SCRIPTS].sort());
+  });
+
+  test.each([...PERIODIC_SCRIPTS])(
+    "%s reads no secret variable but its allowed ones",
+    async (path) => {
+      expect(await secretsOutside([path], ALLOWED[path] ?? [])).toEqual([]);
+    },
+  );
+
+  test.each([...PERIODIC_SCRIPTS])(
+    "%s reads every secret variable it is allowed to",
+    (path) => {
+      expect(
+        (ALLOWED[path] ?? []).filter((secret) => !mentions(path, secret)),
+      ).toEqual([]);
+    },
+  );
+
+  test("collect_github reads the read-only token variable", () => {
+    expect(mentions("f/factory/collect_github", GITHUB_READ_TOKENS)).toBe(true);
+  });
+
+  test("collect_github does not read the github_token that can write", () => {
+    expect(mentions("f/factory/collect_github", GITHUB_TOKEN)).toBe(false);
+  });
+
+  test("the daily summary may not read the read-only tokens", async () => {
+    expect(
+      await secretsOutside(
+        ["f/factory/collect_github"],
+        ALLOWED["f/factory/notify_daily_summary"] ?? [],
+      ),
+    ).toEqual([GITHUB_READ_TOKENS]);
+  });
+
+  test("collect_github may not read the discord webhook", async () => {
+    expect(
+      await secretsOutside(
+        ["f/factory/notify_daily_summary"],
+        ALLOWED["f/factory/collect_github"] ?? [],
+      ),
+    ).toEqual([DISCORD_WEBHOOK_URL]);
   });
 });
 
@@ -462,9 +521,12 @@ describe("the checks on scripts that stay on the default worker", () => {
     ).toContain("f/factory/cleanup_workspaces.ts");
   });
 
-  test("flags the secrets self_update reads", async () => {
+  test("flags the secrets self_update reads, even with the permission of collect_github", async () => {
     expect(
-      await secretsOutside(["f/factory/self_update"], MAY_READ_SECRET),
+      await secretsOutside(
+        ["f/factory/self_update"],
+        ALLOWED["f/factory/collect_github"] ?? [],
+      ),
     ).toContain("f/factory/wmill_token");
   });
 
@@ -476,13 +538,19 @@ describe("the checks on scripts that stay on the default worker", () => {
 
   test("does not flag the discord webhook when it is allowed", async () => {
     expect(
-      await secretsOutside(["f/factory/notify_daily_summary"], MAY_READ_SECRET),
+      await secretsOutside(
+        ["f/factory/notify_daily_summary"],
+        ALLOWED["f/factory/notify_daily_summary"] ?? [],
+      ),
     ).toEqual([]);
   });
 
   test("flags github_token, which poll_issues reads, because it is not allowed", async () => {
     expect(
-      await secretsOutside(["f/factory/poll_issues"], MAY_READ_SECRET),
+      await secretsOutside(
+        ["f/factory/poll_issues"],
+        ALLOWED["f/factory/collect_github"] ?? [],
+      ),
     ).toContain(GITHUB_TOKEN);
   });
 
