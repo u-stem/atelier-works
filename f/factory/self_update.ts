@@ -55,6 +55,7 @@ import {
   FactoryRepoIdMismatchError,
 } from "./lib/factory_repo_gate.ts";
 import {
+  chooseFreezeAction,
   type FrozenPushPlan,
   finishFrozenPush,
   loadFreezeInputs,
@@ -589,7 +590,8 @@ async function finishFreezePlan(
       FREEZE_PHASE_TIMEOUT_MS,
     );
   } catch (err) {
-    log.warn("could not clear the ended schedule freezes", {
+    // 行が残ると、次の回も同じpushを繰り返す(通知は出ない)。
+    log.warn("could not clear the ended schedule freezes, will push again", {
       error: maskSecrets(err instanceof Error ? err.message : String(err)),
     });
   }
@@ -690,6 +692,7 @@ const boundedFetch: FetchLike = (url, init) =>
  * - 通知: ホスト側の作業の通知とfinallyの通知の2回
  * - Console用workerの確認
  * - 定期ジョブ用workerの確認
+ * - 凍結の段(読む段と書く段。各段を`FREEZE_PHASE_TIMEOUT_MS`の1つの上限で包み、区切った呼び出しの回数には数えない)
  * - 収集の鮮度の確認(全体の上限を1回。中の区切った呼び出しは、区切った呼び出しの回数から除く)
  * 区切りの時間切れの後に、中断されずに残る背景の処理は数えない。
  */
@@ -1028,8 +1031,9 @@ async function updateSelf(
   // 凍結中のスケジュールを除いて反映した回の後、凍結が終わったら、shaが変わらなくても
   // pushだけをやり直して設定を戻す(migrationと`deployed_sha`の更新はしない)。
   const freeze = await prepareFreezePlan(factoryClone.dir);
-  const reconcileOnly = decision.outcome === "unchanged";
-  if (reconcileOnly && !(freeze.ok && freeze.value.readyIds.length > 0)) {
+  const action = chooseFreezeAction(decision.outcome === "unchanged", freeze);
+  const reconcileOnly = action === "reconcile";
+  if (action === "skip") {
     if (!freeze.ok) {
       log.warn("could not read the schedule freezes, nothing to deploy", {
         error: maskSecrets(freeze.reason),

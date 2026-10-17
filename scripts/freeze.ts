@@ -29,6 +29,7 @@ import {
 import {
   activeFreezes,
   emptyFreezeState,
+  FREEZE_ID_IN_USE,
   FREEZE_VARIABLE_PATH,
   type FreezeActor,
   type FreezeEntry,
@@ -164,6 +165,9 @@ export type CaptureResult = {
 const VARIABLE_DESCRIPTION =
   "スケジュールの凍結の状態です。mise run freeze:placeなどが書くため、通常は人が編集する必要はありません。";
 
+/** `wmill variable list`が1回で返す件数の上限(サーバーの既定のページ件数)。これ以上なら一覧が切れている可能性がある。 */
+const LIST_PAGE_LIMIT = 100;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -178,18 +182,6 @@ export function wmillCliPorts(
 ): FreezePorts {
   return {
     readVariable: async () => {
-      const list = await capture(["wmill", "variable", "list", "--json"]);
-      if (list.exitCode !== 0) {
-        throw new Error("wmill variable list failed");
-      }
-      const items: unknown = JSON.parse(list.stdout);
-      if (!Array.isArray(items)) {
-        throw new Error("wmill variable list returned an unexpected shape");
-      }
-      const found = items.some(
-        (item) => isRecord(item) && item.path === FREEZE_VARIABLE_PATH,
-      );
-      if (!found) return null;
       const got = await capture([
         "wmill",
         "variable",
@@ -197,12 +189,30 @@ export function wmillCliPorts(
         FREEZE_VARIABLE_PATH,
         "--json",
       ]);
-      if (got.exitCode !== 0) throw new Error("wmill variable get failed");
-      const detail: unknown = JSON.parse(got.stdout);
-      if (!isRecord(detail) || typeof detail.value !== "string") {
-        throw new Error("wmill variable get returned no string value");
+      if (got.exitCode === 0) {
+        const detail: unknown = JSON.parse(got.stdout);
+        if (!isRecord(detail) || typeof detail.value !== "string") {
+          throw new Error("wmill variable get returned no string value");
+        }
+        return detail.value;
       }
-      return detail.value;
+      // 読めなかった。変数が無いと一覧で確かめられたときだけ「無い」とし、ほかは読み取りの失敗にする。
+      const list = await capture(["wmill", "variable", "list", "--json"]);
+      if (list.exitCode !== 0) {
+        throw new Error("wmill variable get and list failed");
+      }
+      const items: unknown = JSON.parse(list.stdout);
+      if (!Array.isArray(items)) {
+        throw new Error("wmill variable list returned an unexpected shape");
+      }
+      if (items.length >= LIST_PAGE_LIMIT) {
+        throw new Error("wmill variable list may be cut at the page size");
+      }
+      const found = items.some(
+        (item) => isRecord(item) && item.path === FREEZE_VARIABLE_PATH,
+      );
+      if (found) throw new Error("wmill variable get failed");
+      return null;
     },
     writeVariable: async (text) => {
       const added = await capture([
@@ -233,8 +243,12 @@ export type CliDeps = {
   readonly newId: () => string;
 };
 
-/** 実行中の`self_update`のpushは最大300秒で終わる。余裕を足した待ちの目安(分)。 */
-const IN_FLIGHT_PUSH_WAIT_MINUTES = 5;
+/**
+ * 凍結を置く前に始まった`self_update`のpushが終わるまでの目安(分)。
+ * 凍結の読み(10秒)、トークンの取得(30秒)、push(300秒)、時間切れ後の停止の猶予(約11秒)で約351秒。
+ * 余裕を足して7分にする。
+ */
+const IN_FLIGHT_PUSH_WAIT_MINUTES = 7;
 const PLACE_ID_ATTEMPTS = 5;
 
 function formatJst(date: Date): string {
@@ -295,7 +309,7 @@ export async function runCommand(
     case "check":
       return await runCheck(deps);
     case "push":
-      return await runPush(command, deps);
+      return await runPush(command, actor, deps);
     case "reset":
       return await runReset(actor, deps);
   }
@@ -337,7 +351,7 @@ async function runPlace(
       return 1;
     }
     if (!result.ok) {
-      if (result.reason.includes("already in use")) continue;
+      if (result.reason === FREEZE_ID_IN_USE) continue;
       deps.print(`refused: ${result.reason}`);
       return 1;
     }
@@ -450,8 +464,19 @@ async function runCheck(deps: CliDeps): Promise<number> {
 
 async function runPush(
   command: Extract<Command, { kind: "push" }>,
+  actor: FreezeActor,
   deps: CliDeps,
 ): Promise<number> {
+  // 削除を確定するpushは、人が端末で確かめる(AGENTS.mdの決まり)。確認の無いセッションからは実行させない。
+  if (command.prune && !command.dryRun) {
+    if (actor.kind !== "human") {
+      deps.print("refused: only a human can push with --prune");
+      return 1;
+    }
+    if (!(await authorize(actor, "push and delete remote-only items", deps))) {
+      return 1;
+    }
+  }
   const inputs = await deps.loadInputs();
   if (!inputs.ok) {
     deps.print(`refused to push: ${inputs.reason}`);
@@ -507,8 +532,13 @@ async function capture(argv: readonly string[]): Promise<CaptureResult> {
   return { exitCode, stdout, stderr };
 }
 
-async function runInherited(argv: readonly string[]): Promise<number> {
+/** 除外を作った作業ツリーでpushする(別のディレクトリから起動されても、読んだ内容とpushする内容をそろえる)。 */
+async function runInherited(
+  argv: readonly string[],
+  cwd: string,
+): Promise<number> {
   const child = Bun.spawn([...argv], {
+    cwd,
     stdio: ["inherit", "inherit", "inherit"],
     env: { ...process.env, NPM_CONFIG_IGNORE_SCRIPTS: "true" },
   });
@@ -540,7 +570,7 @@ async function main(): Promise<number> {
   const deps: CliDeps = {
     ports: wmillCliPorts(capture, () => new Date()),
     loadInputs: () => loadFreezeInputs(root),
-    runPush: runInherited,
+    runPush: (argv) => runInherited(argv, root),
     branch: currentBranch,
     env: process.env,
     confirm: confirmOnTerminal,

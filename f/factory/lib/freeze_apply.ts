@@ -11,6 +11,7 @@ import {
   buildExcludes,
   endedFreezes,
   excludesArg,
+  FREEZE_FORBIDDEN_TARGET,
   FREEZE_VARIABLE_PATH,
   type FreezeState,
   type Outcome,
@@ -76,12 +77,19 @@ export async function prepareFrozenPush(
   const state = await readState(ports);
   if (!state.ok) return state;
   const now = ports.now();
-  const targets = activeFreezes(state.value, now).map((e) => e.target);
+  const active = activeFreezes(state.value, now).map((e) => e.target);
+  // 自己更新のスケジュールは凍結できない。変数に直接書かれていても除外せず、警告する。
+  const targets = active.filter((target) => target !== FREEZE_FORBIDDEN_TARGET);
   const excludes = buildExcludes(inputs.baseExcludes, targets);
   if (!excludes.ok) return excludes;
-  const warnings = targets
-    .filter((target) => !inputs.known.has(target))
-    .map((target) => `the frozen schedule ${target} has no schedule file`);
+  const warnings = active.flatMap((target) => {
+    if (target === FREEZE_FORBIDDEN_TARGET) {
+      return ["the self_update schedule cannot be frozen, ignoring the freeze"];
+    }
+    return inputs.known.has(target)
+      ? []
+      : [`the frozen schedule ${target} has no schedule file`];
+  });
   return {
     ok: true,
     value: {
@@ -95,11 +103,17 @@ export async function prepareFrozenPush(
 
 export type FreezeAction = "skip" | "reconcile" | "deploy";
 
+/**
+ * `self_update`の回の進め方を決める。
+ * - 反映が要る回(`deploy`)は、凍結を読めなくても進み、読めなければ`try`の中で失敗する(反映しない)。
+ * - 反映が不要な回は、終わった凍結があるときだけpushをやり直す(`reconcile`)。読めなければ見送る。
+ */
 export function chooseFreezeAction(
-  _unchanged: boolean,
-  _plan: Outcome<FrozenPushPlan>,
+  unchanged: boolean,
+  plan: Outcome<FrozenPushPlan>,
 ): FreezeAction {
-  return "skip";
+  if (!unchanged) return "deploy";
+  return plan.ok && plan.value.readyIds.length > 0 ? "reconcile" : "skip";
 }
 
 /**

@@ -28,8 +28,12 @@ export const FREEZE_REQUIRED_EXCLUDES: readonly string[] = [
 
 const ID_PATTERN = /^[0-9a-f]{8}$/;
 const TARGET_PATTERN = /^f\/[a-z0-9_]+(\/[a-z0-9_]+)*$/;
-const CONTROL_CHARS = /\p{Cc}/u;
-const CONTROL_CHARS_GLOBAL = /\p{Cc}/gu;
+/** 制御文字に加え、表示の並びを偽装できる書式文字(双方向制御など)と行・段落の区切りを含める。 */
+const CONTROL_CHARS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+const CONTROL_CHARS_GLOBAL = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+
+/** `placeFreeze`がidの衝突で返す理由。呼び出し側がidを作り直す判定に使う。 */
+export const FREEZE_ID_IN_USE = "the freeze id is already in use";
 const REASON_MAX = 200;
 const HOLDER_MAX = 100;
 
@@ -348,7 +352,7 @@ export function placeFreeze(
   });
   if (!entry.ok) return fail(entry.reason);
   if (state.freezes.some((e) => e.id === input.id)) {
-    return fail("the freeze id is already in use");
+    return fail(FREEZE_ID_IN_USE);
   }
   if (activeFreezes(state, now).some((e) => e.target === input.target)) {
     return fail("the target already has an active freeze");

@@ -60,8 +60,8 @@ locks:
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
-  f/factory/lib/freeze_apply: 3774f74c9c4c05a04081209b46694bf5b34675f0051e776412742ea73ba4ec2a
-  f/factory/lib/freezes: c698e580c977aa2410778a4d2d6288b14b4c8149d721c1621b74b7429790bbe0
+  f/factory/lib/freeze_apply: 5795d7e86d8efb45bbbd7e76d3508df8ca0de3f63ae9346ad91609fae99b79d0
+  f/factory/lib/freezes: 334b8d91a5c0e4f898ca27d40707f205cb2f47fec68544fabd972d21464b2fbb
   f/factory/lib/gated_review_support: c858998fefbebb102f55e896471e4dc8195de412a39c8d60d2d36d22763bc1bb
   f/factory/lib/gh_collect: 93402172ffd1f41d33bae301d9bca832d4592a15e8889b9653c481cc1496345f
   f/factory/lib/gh_collect_detail: 4819e8d6e84ac6065c3d4de40820e75065482aaec00b890e85065e5ac957bc59
@@ -139,7 +139,7 @@ locks:
   f/factory/pr_review__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/retry_work_item: 8d3914cde850b0d224eb94adf5f632f56caf599c16ba99beb0c6f0b353e56750
   f/factory/sample_worker_load: c9f49cba2f86ab2406e37baf04fc2aae3077aa4e432bd154164e534b80227cd1
-  f/factory/self_update: b94f18b5f4f3830ef89c890858f11e9de6b178c64d5c47be455227754a6f7d60
+  f/factory/self_update: 5c4fcdabf53f5a9e6af0aaa4ac0b1f71434d57c28ff1201133ecd37108b70d57
   f/factory/steps/audit_generate: affb5fb07d980b6114845770eae2604ec0c912ab5a2775d966a30da1b5ee4a12
   f/factory/steps/audit_prepare: 61fc1f70dac94d87d68292ba8d5aaa6df99e608826fdb63909a8c20718700898
   f/factory/steps/console_query: dc2f6c7f5d0736b0b4a4dad4f7d48a7cfe847e7f4438b2181ffddd8660370124

@@ -75,6 +75,28 @@ describe("wmill.yaml excludes", () => {
   });
 });
 
+describe("self_update reconcile-only run", () => {
+  async function source(): Promise<string> {
+    return await Bun.file("f/factory/self_update.ts").text();
+  }
+
+  test("returns before the migration and the deployed sha update", async () => {
+    const text = await source();
+
+    expect(text.indexOf("if (reconcileOnly) {")).toBeLessThan(
+      text.indexOf('"datatable"'),
+    );
+  });
+
+  test("does not record a failed deployment", async () => {
+    const text = await source();
+
+    expect(text).toMatch(
+      /if \(!reconcileOnly\) \{\s*await recordFailedDeployment\(/,
+    );
+  });
+});
+
 describe("self_update", () => {
   test("builds the push arguments from the freeze plan", async () => {
     const source = await Bun.file("f/factory/self_update.ts").text();
