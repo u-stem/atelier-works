@@ -349,10 +349,10 @@ describe("runPrConflictWatch: a new conflict", () => {
     ]);
   });
 
-  test("marks the conflict as notified after the notice and Discord", async () => {
+  test("sends Discord after the notice and the mark", async () => {
     const h = setup();
     await runPrConflictWatch(h.deps);
-    expect(h.order).toEqual(["record", "notice", "notify", "mark"]);
+    expect(h.order).toEqual(["record", "notice", "mark", "notify"]);
   });
 
   test("marks the row that was notified", async () => {
@@ -379,10 +379,10 @@ describe("runPrConflictWatch: a new conflict", () => {
     expect(result.conflicted).toBe(1);
   });
 
-  test("does not send to Discord when the same notice is still unresolved", async () => {
+  test("sends to Discord once the row is marked even when the same notice is still unresolved", async () => {
     const h = setup({ noticeId: null });
     await runPrConflictWatch(h.deps);
-    expect(h.events).toEqual([]);
+    expect(h.events).toHaveLength(1);
   });
 
   test("marks the conflict as notified even when the same notice is still unresolved", async () => {
@@ -1127,6 +1127,36 @@ describe("runPrConflictWatch: a conflict that was resolved while it was being no
     const h = setup({ markResult: "already_notified" });
     await runPrConflictWatch(h.deps);
     expect(h.resolvedNotices).toEqual([]);
+  });
+
+  test("resolves the notice that this run registered when the row is bound to a fix work item", async () => {
+    const h = setup({ markResult: "fix_bound" });
+    await runPrConflictWatch(h.deps);
+    expect(h.resolvedNotices).toEqual([100]);
+  });
+
+  test("does not send Discord for a row that is bound to a fix work item", async () => {
+    const h = setup({ markResult: "fix_bound" });
+    await runPrConflictWatch(h.deps);
+    expect(h.order).not.toContain("notify");
+  });
+
+  test("does not send Discord for a row that is no longer conflicted", async () => {
+    const h = setup({ markResult: "not_conflicted" });
+    await runPrConflictWatch(h.deps);
+    expect(h.order).not.toContain("notify");
+  });
+
+  test("does not count a notification of a row that is bound to a fix work item", async () => {
+    const h = setup({ markResult: "fix_bound" });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.notified).toBe(0);
+  });
+
+  test("does not send Discord when another run recorded the notification", async () => {
+    const h = setup({ markResult: "already_notified" });
+    await runPrConflictWatch(h.deps);
+    expect(h.order).not.toContain("notify");
   });
 
   test("does not count a notification that another run recorded", async () => {

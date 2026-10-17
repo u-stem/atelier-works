@@ -5294,6 +5294,48 @@ check(
   "conflict claim: a notified row gets no work item",
   (await cfWorkItemCount(703)) === 0,
 );
+// 行に結ばれていない動作中のpr_fixがあると、通知した時刻を書かない。
+async function cfUnboundFixItem(prNumber: number, status: "fixing" | "failed") {
+  return insertWorkItem(
+    {
+      cycle: 1,
+      source: "issue",
+      kind: "pr_fix",
+      owner: CF.owner,
+      repo: CF.repo,
+      issue_number: null,
+      issue_url: null,
+      pr_number: prNumber,
+      title: "qcfix unbound fix",
+      body: null,
+      status,
+      attempt: 1,
+      claimed_by: null,
+      flow_job_id: null,
+      resume_url: null,
+      cancel_url: null,
+      head_sha: "abc1234",
+      parent_work_item_id: null,
+    },
+    sql,
+  );
+}
+const cfActiveUnbound = await conflictFixRow(780, CF_HEAD_1);
+await cfUnboundFixItem(780, "fixing");
+check(
+  "conflict mark: a row with an active pr_fix that is not bound to it is left unmarked",
+  (await markPrConflictNotified(cfActiveUnbound.id, sql)) === "fix_bound",
+);
+check(
+  "conflict mark: a row left unmarked keeps an empty notified time",
+  (await cfRowOf(cfActiveUnbound.id))?.notified_at === null,
+);
+const cfSettledUnbound = await conflictFixRow(781, CF_HEAD_1);
+await cfUnboundFixItem(781, "failed");
+check(
+  "conflict mark: a row whose pr_fix has ended is marked",
+  (await markPrConflictNotified(cfSettledUnbound.id, sql)) === "marked",
+);
 const cfResolved = await conflictFixRow(704, CF_HEAD_1);
 await settlePrConflictCheck(cfResolved.id, "resolved", sql);
 check(

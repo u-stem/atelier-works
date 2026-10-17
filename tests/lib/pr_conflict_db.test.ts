@@ -205,6 +205,12 @@ describe("markPrConflictNotified", () => {
     );
   });
 
+  test("does not write for a row that is bound to a fix work item", async () => {
+    const { sql, calls } = createFakeSqlClient([[{ id: 7 }]]);
+    await markPrConflictNotified(7, sql);
+    expect(calls[0]?.text).toContain("AND fix_work_item_id IS NULL");
+  });
+
   test("reports that the time was newly written", async () => {
     const { sql } = createFakeSqlClient([[{ id: 7 }]]);
     expect(await markPrConflictNotified(7, sql)).toBe("marked");
@@ -217,22 +223,39 @@ describe("markPrConflictNotified", () => {
   });
 
   test("reads the state in a separate statement when nothing was written", async () => {
-    const { sql, calls } = createFakeSqlClient([[], [{ state: "conflicted" }]]);
+    const { sql, calls } = createFakeSqlClient([
+      [],
+      [{ state: "conflicted", notified: true }],
+    ]);
     await markPrConflictNotified(7, sql);
     expect(calls).toHaveLength(2);
   });
 
   test("reads the state of the same row", async () => {
-    const { sql, calls } = createFakeSqlClient([[], [{ state: "conflicted" }]]);
+    const { sql, calls } = createFakeSqlClient([
+      [],
+      [{ state: "conflicted", notified: true }],
+    ]);
     await markPrConflictNotified(7, sql);
     expect(calls[1]?.text).toMatch(
-      /SELECT state FROM factory\.pr_conflict_checks\s+WHERE id =/,
+      /SELECT state, notified_at IS NOT NULL AS notified FROM factory\.pr_conflict_checks\s+WHERE id =/,
     );
   });
 
   test("reports that another run had already recorded the notification", async () => {
-    const { sql } = createFakeSqlClient([[], [{ state: "conflicted" }]]);
+    const { sql } = createFakeSqlClient([
+      [],
+      [{ state: "conflicted", notified: true }],
+    ]);
     expect(await markPrConflictNotified(7, sql)).toBe("already_notified");
+  });
+
+  test("reports that the row was left unmarked while it is bound to a fix work item", async () => {
+    const { sql } = createFakeSqlClient([
+      [],
+      [{ state: "conflicted", notified: false }],
+    ]);
+    expect(await markPrConflictNotified(7, sql)).toBe("fix_bound");
   });
 
   test("reports that the row is no longer conflicted when it was resolved", async () => {

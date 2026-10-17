@@ -5751,16 +5751,20 @@ export async function recordPrConflict(
  * `markPrConflictNotified`の結果。
  * - `marked`: この呼び出しで書いた。
  * - `already_notified`: 競合のままで、他の実行がすでに記録していた。
+ * - `fix_bound`: 競合のままで未通知だが、直す作業項目が結ばれているか、同じPRで`pr_fix`が動いているため書かなかった。
+ *   結びが外れた直後に読んだときも、この結果になる。どちらも行は未通知のままで、次の巡回で判断し直す。
  * - `not_conflicted`: 行が競合でなくなっていた(解けた、閉じた、消えた)。
  */
 export type PrConflictMarkResult =
   | "marked"
   | "already_notified"
+  | "fix_bound"
   | "not_conflicted";
 
 /**
  * 今の競合で通知した時刻を記録し、結果を区別して返す。
- * 競合のままで、まだ記録していない行にだけ書く。
+ * 競合のままで、まだ記録しておらず、直す作業項目が結ばれておらず、同じPRで終端でない`pr_fix`も無い行にだけ書く。
+ * 作業項目が結ばれた行に書くと、動いている作業項目の最中に通知済みになり、人とFactoryが同じブランチへ同時にpushしうる。
  * 並んだ2つの実行の一方だけが書けるので、書けなかった側は通知を出し直さない。
  * 書けなかったときだけ、別の文で行の状態を読み、理由を区別する。
  * 書く文と同じ文の中で読むと、読み取りが文の開始時点の状態を見るため、
@@ -5772,20 +5776,34 @@ export async function markPrConflictNotified(
   sql: SqlClient = defaultSqlClient,
 ): Promise<PrConflictMarkResult> {
   assertPositiveId(id, "pr conflict check id");
+  const terminal: string[] = [...TERMINAL_WORK_ITEM_STATUSES];
   const written = await sql`
     UPDATE factory.pr_conflict_checks
     SET notified_at = now(), updated_at = now()
     WHERE id = ${id}::bigint AND state = 'conflicted' AND notified_at IS NULL
+      AND fix_work_item_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM factory.work_items AS active
+        WHERE active.kind = 'pr_fix'
+          AND lower(active.owner) = factory.pr_conflict_checks.owner
+          AND lower(active.repo) = factory.pr_conflict_checks.repo
+          AND active.pr_number = factory.pr_conflict_checks.pr_number
+          AND active.status != ALL(${terminal})
+      )
     RETURNING id
   `.fetch();
   if (written.length > 0) return "marked";
   const rows = await sql`
-    SELECT state FROM factory.pr_conflict_checks
+    SELECT state, notified_at IS NOT NULL AS notified FROM factory.pr_conflict_checks
     WHERE id = ${id}::bigint
   `.fetch();
-  return parseNullableString(rows[0]?.state, "state") === "conflicted"
+  const found = rows[0];
+  if (parseNullableString(found?.state, "state") !== "conflicted") {
+    return "not_conflicted";
+  }
+  return parseBoolean(found?.notified, "notified")
     ? "already_notified"
-    : "not_conflicted";
+    : "fix_bound";
 }
 
 /**
