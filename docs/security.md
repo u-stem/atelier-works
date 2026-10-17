@@ -1155,6 +1155,278 @@ tag`periodic`を付けたのは、`notify_daily_summary`と`auto_retry_pr_review
 この2つのscriptは、ファイル、サブプロセス、`claude`、`gh`のモジュールをimportでたどらないよう、使う定数と型を小さなモジュールに分けている。
 たどるようになれば、契約テストが落ちる。
 
+## ホストの実行役の境界
+
+ホストの実行役は、`origin/main`の先端を、ホストのユーザーの権限で反映する道具である。
+入口は`scripts/host-apply.ts`で、判定の部品は`scripts/host_apply/`に置く。
+入口が受け付けるのは、判定だけを出力する`plan`である。
+`plan`は、適用済みと目標の2つのコミットを受け取る。
+出力するのは、反映できるか、拒否するか、承認を待つかの判定である。
+gitのオブジェクトを読むだけで、作業ツリー、ネットワーク、dockerには触れない。
+CIの確認はネットワークを使うので、`plan`は行わない。
+
+実行役は、ホストのdockerと、`mise.local.toml`の秘密値を使える。
+mainに入った変更は、その権限で動く道具を書き換えうる。
+次の境界で、それを防ぐ。
+
+### 実行役のコード
+
+入口と部品は、`f/**`をimportしない。
+importするのは、NodeとBunの組み込みと、`scripts/host_apply/`の中だけである。
+リポジトリの外へコピーしても、単独で動くようにするためである。
+`tests/scripts/host_apply_imports.test.ts`が、ソースのimportと、コピーしたコードの実行で確かめる。
+
+### treeの検査
+
+実行役は、目標のtreeの全エントリを列挙する。
+symlink(mode 120000)かsubmodule(160000)が1つでもあれば、目標を拒否する。
+設定ファイルがsymlinkだと、リポジトリの外のファイルを読ませたり書かせたりできる。
+たとえば、秘密値のファイルを読ませたり、Caddyfile経由でホストのファイルに書かせたりできるためである。
+今のtreeには、どちらも1つも無い。
+
+次のパスも拒否する。1つのパスが2つのファイルを指しうるためである。
+
+- ASCIIの印字できる文字以外を含むパス。
+  `ſcripts/doctor.sh`や、ケルビン記号を使った`docKer-compose.yml`は、大文字小文字の畳み込みやUnicode正規化で、ASCIIのファイルと同じ名前になりうる。
+- ディレクトリを含めて、ASCIIの小文字にそろえると衝突するパス。大文字小文字を区別しないファイルシステムでは、同じファイルになる。
+- composeが自動で読むoverrideファイル(`docker-compose.override.yml`、`compose.override.yaml`など)。定義を後から上書きできる。
+
+前提は、1つのパスが1つのファイルを指すことである。
+この検査は、承認の判定と、ファイルの読み取りより前に行う。
+
+静的な検査で読むファイルは、通常のファイルで、256KiB以下のものだけを読む。
+無いファイルと、読むのに失敗したファイルは区別する。
+無ければ拒否し、gitの失敗は拒否ではなく実行の失敗にする。
+失敗を拒否にすると、一時的な失敗が、同じ目標の拒否として控えに残るためである。
+
+### 人の承認が要る変更
+
+実行役は、適用済みのコミットから目標までの差が、次のファイルに触れたら、自動では反映せず承認を待つ。
+追加、変更、削除のどれも、触れたとみなす。
+これらは、実行役が秘密値を渡して動かす道具と、その判断の前提を決めるファイルである。
+
+| 種類 | ファイル |
+| --- | --- |
+| 実行役が動かす道具 | `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/check-docker-version.sh`、`scripts/custom-tags.ts`、`scripts/record-host-applied.sh` |
+| 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、`scripts/host-install.sh` |
+| mise設定 | `mise.toml`、`mise.*.toml`、`.mise.toml`、`mise/`、`.mise/`、`.config/mise/`、`.tool-versions` |
+| 実行環境の設定 | `package.json`、`bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.nvmrc`、`.node-version`などの`.*-version` |
+| 必須チェックの定義 | `.github/workflows/`の全体、`scripts/ci-scope.ts` |
+
+`package.json`、`bunfig.toml`、`.npmrc`は、リポジトリのルートのものだけを対象にする。
+mise設定の名前、`.env`系、`.nvmrc`、`.*-version`は、ディレクトリを問わず対象にする。
+判定は大文字小文字を区別しない。APFSでは`Bunfig.toml`も`bunfig.toml`と同じファイルを指すためである。
+
+`bunfig.toml`は`preload`でコードを実行でき、`.npmrc`はmiseのツールのinstallが読む。
+`package.json`は、`scripts`、`bin`、`workspaces`、`trustedDependencies`など、コードを動かす欄を持つ。
+`bun run scripts/custom-tags.ts`のように、`./`で始まらないパスを`run`に渡すと、同名の`scripts`の項目がファイルより先に実行される。
+そのため、`scripts/doctor.sh`と`scripts/bootstrap.sh`は、`bun ./scripts/custom-tags.ts`で起動する。
+`./`で始め、`run`を付けない形は、必ずファイルを実行する。
+miseは、`devEngines`、`packageManager`、`.nvmrc`、`.*-version`を、設定で有効にしたツールについてだけ、バージョンの指定として読む。
+既定では、どのツールについても読まない。読む設定になっても、これらの変更は承認を通る。
+`bun.lock`は対象にしない。
+実行役は`bun install`を実行せず、ホストで実行するファイルは依存をimportしないためである。
+
+`.github/workflows/`は、必須チェックを出すworkflowの置き場である。
+`ci.yml`を書き換えて、ジョブを`if: false`で`skipped`にすると、必須チェックを通せる。
+ほかのworkflowの書き換えや新しいworkflowは、必須チェックと同名のcheck-runを作れる。
+`scripts/ci-scope.ts`は、`scope`ジョブの出力で、どのジョブを動かすかを決める。
+出力を変えても、同じように必須チェックを`skipped`にできる。
+チェックの結果からはその迂回を見分けられないので、これらの変更を人に見せる。
+
+差を取る基準は、適用済みのコミットと承認済みのコミットのうち新しい方である。
+承認済みのコミットが、適用済みの子孫で、目標の祖先であるときだけ使う。
+承認の後で対象のファイルが変われば、また承認が要る。
+基準より後の差だけを評価するので、承認済みの変更に重ねた変更も、素通りしない。
+
+通常のcomposeの変更(サービスの設定、Dockerfile、Caddyfile)は、承認を求めない。
+これらは実行役が実行するのではなく、dockerが作るコンテナの中身であり、後述の静的な検査が境界を守るためである。
+
+#### package.jsonの値だけの変更
+
+`package.json`の差が、`dependencies`、`devDependencies`、`overrides`の版の文字列だけなら、承認を求めない。
+dependabotの更新のたびに、人の承認を求めないためである。
+版の文字列は、`1.2.3`、`^1.2.3`、`~1.2`、`>=1.2.3`、`1.2.3-rc.1`の形に限る。
+URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、取得元や中身を変えうるので、承認が要る。
+ほかのキーの変更と、新規作成、読めない内容も、承認が要る。
+免除は、`dependencies`、`devDependencies`、`overrides`の既存の名前の、版の文字列だけに効く。
+新しい名前を足す変更は、承認が要る。名前を消す変更は、承認を求めない。
+`peerDependencies`、`optionalDependencies`、`resolutions`の変更は、承認が要る。
+免除は、小文字の`package.json`だけに効く。
+
+#### miseの値だけの変更
+
+`mise.toml`の差が、composeが参照する15個のキーのうち`CONSOLE_GITHUB_REPO`を除く14個について、
+`[env]`の値だけなら、承認を求めない。
+版の更新のたびに、人の承認を求めないためである。
+値が文字列で、`{{`を含まず、次の形式に合うときだけ、この免除を使う。
+免除は、小文字の`mise.toml`だけに効く。
+
+| キー | 形式 |
+| --- | --- |
+| `WM_VERSION`、`CLAUDE_VERSION`、`GH_VERSION`、`GITLEAKS_VERSION`、`WMILL_VERSION` | 版番号(`1.2.3`、`1.2.3-rc.1`) |
+| `WM_HTTP_PORT` | 5桁までの数字で、65535以下 |
+| `WM_BIND` | `127.0.0.1`だけ |
+| `WM_SESSION_VALIDITY_SECONDS`、`FACTORY_CHECK_UID`、`FACTORY_CHECK_POOL_SIZE`、`LOG_MAX_FILE` | 桁数の決まった数字 |
+| `CONSOLE_GITHUB_REPO` | GitHubのHTTPSのリポジトリのURL。値の変更は免除しない |
+| `GTR_REF` | `v`を付けた版番号 |
+| `GTR_COMMIT` | 40桁の16進 |
+| `LOG_MAX_SIZE` | 数字に`k`、`m`、`g`のどれかを付けた形 |
+
+次の差は、免除の対象外で、承認が要る。
+
+- `CONSOLE_GITHUB_REPO`の値の変更。Consoleの配信物の取得元を決めるが、形式だけでは正しい取得元か確かめられないため。
+- 15個以外のキーの変更。
+- `[tools]`、`[tasks]`の変更。`gh`などの版の更新も含む。
+- キーの追加と削除、`mise.toml`の新規作成、読めない内容への変更。
+
+実行役は、目標の`mise.toml`を、`mise`コマンドではなくTOMLとして静的に読む。
+`mise`を呼ぶと、テンプレートや`_.source`が評価され、目標の内容がコマンドとして実行されるためである。
+読み取りは`Bun.TOML.parse`で行い、15個のキーの値だけを取り出す。
+キーがそろわない、または形式に合わない目標は、拒否する。
+
+### composeの方針
+
+実行役は、`infra/docker-compose.yml`を`Bun.YAML.parse`で静的に読み、許可する形だけを通す。
+未知のキーは拒否する。新しい書き方を足す変更は、許可リストの更新を伴う。
+
+- 許可リストにないサービス名とキー。
+- 特権とケーパビリティの拡張: `privileged`、`cap_add`、`devices`、`userns_mode`、`cgroup`、`sysctls`、`volumes_from`、`include`、`extends`。
+- ホストやほかのコンテナとの名前空間の共有。`pid`、`ipc`、`uts`、`network_mode`が`host`、`container:`、`service:`で始まる値である。`network_mode: none`は許す。
+- `security_opt`の、`no-new-privileges:true`(`=true`でもよい)以外。
+  `seccomp=`、`apparmor=`、`label=`、`systempaths=`は、権限を変えうるので、許可リストに無い値はすべて拒否する。
+- `127.0.0.1`以外に公開するポート。変数は、取り出した値で展開して評価する。
+  展開するのは、検査が知っている名前の参照だけである。知っている名前は、`mise.toml`の15個のキーである。
+  本番の子プロセスには`HOME`なども入るので、ほかの名前の参照は、`${HOME-.}`のように既定値があっても拒否する。
+- 展開した後の絶対パス。`env_file`、`secrets`と`configs`のファイル、`build.context`、`dockerfile`も、bind mountと同じく拒否する。
+- チェックアウトの外を指す`env_file`、`secrets`、`configs`、`build.context`、`build.additional_contexts`、`dockerfile`。リモートのbuild contextも含む。
+- チェックアウトの外のbind mount、絶対パスのbind mountの元、書き込める状態のbind mount。
+  絶対パスは、チェックアウトの中を指していても拒否する。ステージングのパスは実行のたびに変わるためである。
+  書き込めるのは`infra/Caddyfile`だけである。
+- `deploy.resources.reservations`の`cpus`と`memory`以外。`devices`はホストのデバイスを割り当てるので拒否する。
+- `local`以外のdriverのボリューム、`bridge`以外のdriverのネットワーク、`driver_opts`と`external`を持つもの。
+- `pid`、`ipc`、`uts`、`network_mode`、`security_opt`の値に含まれる変数。展開すると拒否リストを回避できるため、展開せずに拒否する。
+- 短い形のvolumeの、知らないオプションと4つ以上の項目。
+- 短い形のbindのうち、`ro`の無いもの(`infra/Caddyfile`を除く)と、`rw`と一緒に書いたもの。読み取り専用とみなすのは、`ro`があり、`rw`が無いときだけである。
+- サービスの`networks`のうち、名前の一覧と、`aliases`と`ipv4_address`だけを持つ対応表以外。`driver_opts`などを経由した設定を防ぐ。
+- `docker.sock`の文字列。パースの前に、生のテキストで探す。コメントも対象にする。
+
+テキストは256KiBまでしか読まない。
+`Bun.YAML.parse`はaliasの参照を共有するので、パース結果を文字列にすると、小さな入力が数百MBに膨らむ。
+そのため、パース結果の全体は文字列にしない。深すぎるaliasは、パーサーが自分で拒否する。
+
+今の`infra/docker-compose.yml`が方針を通ることは、`tests/scripts/host_apply_compose_policy.test.ts`が確かめる。
+`docker.sock`をマウントするサービスが無いことは、`tests/infra/docker_compose.test.ts`が確かめる。
+
+### 子プロセスの環境とログ
+
+子プロセスの環境は、許可リストで作る。
+親のプロセスの環境は引き継がない。`PATH`と`HOME`のほかは、種類ごとに決めた名前の値だけを渡す。
+
+| 種類 | 渡す値 |
+| --- | --- |
+| compose | 15個のキーと、`DB_PASSWORD`、`CONSOLE_GITHUB_TOKEN` |
+| `doctor.sh`と`bootstrap.sh custom-tags` | composeの値に加えて、管理者の資格(`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`)、`GITHUB_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、`DISCORD_WEBHOOK_URL` |
+| git | 秘密値は渡さない。`GIT_NO_REPLACE_OBJECTS`で、replace refによる内容の差し替えを無効にする |
+
+管理者の資格を渡すのは、`doctor.sh`と`bootstrap.sh custom-tags`だけである。
+管理者の資格を使う処理を、最小にするためである。
+
+実行役が出す通知の本文は、固定の文と7桁のshaだけで作る。
+`doctor.sh`や`bootstrap.sh`の出力、エラーメッセージは載せない。秘密値や任意の文字列が入りうるためである。
+Discordのwebhookには`allowed_mentions`を空にして送り、本文からのメンションを無効にする。
+ログに書く外部コマンドの出力は、`mise.local.toml`の`[env]`の全キーの値(8文字以上)を伏せてから書く。
+
+外部コマンドには、種類ごとの時間の上限があり、1回の実行全体にも上限がある。
+値は`scripts/host_apply/constants.ts`にある。
+
+### CIの確認
+
+目標のコミットは、必須チェックが通っていなければ反映しない。
+判定は、GitHubのAPIの応答から行う。
+必須チェックは、[mainの保護とリポジトリの公開](#mainの保護とリポジトリの公開)の7つと同じである。
+必須チェックの一覧は`scripts/host_apply/constants.ts`にある。
+`tests/scripts/host_apply_ci.test.ts`が、一覧とこの記述、`ci.yml`のジョブ名の一致を確かめる。
+
+数えるのは、`ci.yml`のpushの実行と同じcheck suiteにある、`github-actions`のcheck-runだけである。
+別のworkflowやappが、同じ名前のcheck-runを作っても数えない。
+mainは承認0件でマージでき、管理者は失敗したチェックを無視してマージできる。
+実行役が自分で確かめれば、失敗したチェックを無視して入った変更は、ホストへ届く前に止まる。
+`.github/workflows/`の全体か`scripts/ci-scope.ts`を書き換えて必須チェックを`skipped`にする変更は、結果からは見分けられない。
+これらの変更は、前述のとおり承認の対象にして、人に見せる。
+
+| 結果 | 判定 |
+| --- | --- |
+| 7つがすべて成功かスキップ | 通過 |
+| 1つでも失敗、キャンセル、時間切れ | 拒否。ほかが走行中でも拒否する |
+| 実行が未着、走行中、チェックが欠ける、応答が読めない | 保留 |
+
+名前が変わるとチェックが欠けた扱いになり、保留のまま進まない。安全側に倒れる。
+
+### 保護パスとその限界
+
+実行役が実行するファイルは、PR修正と実装の両方の保護パスに入れる。
+対象は次のとおりである。
+
+- 承認が要る道具と、実行役の実装。
+- `infra/docker-compose.yml`と`tests/infra/docker_compose.test.ts`。
+- `infra/worker/`と`mise/`の下のファイル。
+- 実行役のテストと、それが使う一時リポジトリの補助(`tests/fixtures/host_apply_repo.ts`)。
+- `.tool-versions`、`.env`系、`.node-version`、`.bun-version`。
+
+一覧は`f/factory/lib/protected_paths.ts`にあり、[禁止パスによる停止](internals/pr-workflow.md#禁止パスによる停止)に説明がある。
+実行役のテストはファイル名で列挙し、足した実行役のテストを列挙し忘れると、`tests/lib/protected_paths.test.ts`が失敗する。
+保護パスの照合は、大文字小文字を区別する。承認の対象の判定とは違うので、別の綴りのファイル名は保護パスをすり抜けうる。
+この件はIssue #378で扱う。実行役は、別名になるパスが目標のtreeに入ることを、tree検査で拒否する。
+
+保護パスだけでは、実行役の変更を人が確かめる関門にならない。
+
+- mainは承認0件でマージできる。管理者は、失敗したチェックを無視してPR経由でマージできる。人のレビューをGitHubは強制しない。
+- PR修正は保護パスの変更で止まるが、実装フローは止めない。保護パスに触れても、記録してPR本文に明記するだけである。
+
+人に通す関門は、保護パスではなく、実行役の承認である。
+保護パスの役割は補助である。
+PR修正の自動修正がこれらを書き換えるのを止め、実装のPR本文へ明記させる。
+
+副作用として、`infra/docker-compose.yml`、`scripts/doctor.sh`、`scripts/bootstrap.sh`を変えるPR修正は、保護パスで止まって人の対応待ちになる。
+実装フローは、保護パスに触れたラウンドで検査コマンドを実行しない([保護パスの記録](internals/implement.md#保護パスの記録))。
+そのため、次のファイルを変えるIssueの実装ループは、検査を省いてPRに進む。
+対象は、`scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`、実行役のテストである。
+その変更は、PR本文の「確認して欲しい点」に載る。
+
+### 残るリスク
+
+- composeの検査は、YAMLを静的に読む。`docker compose config`の解釈とは突き合わせていない。
+  解釈が食い違うと、許可した形が別の意味になりうる。
+  食い違いうる書き方は、マージキーのリスト(`<<: [*a, *b]`)、`!reset`、`!override`、重複したキーである。
+  複数の文書を書いたYAMLは、1つ目だけを検査して2つ目以降を見逃さないよう、拒否する。
+- composeの`environment`、`image`、`command`は検査しない。
+  そのため、PRの変更で、`DB_PASSWORD`と`CONSOLE_GITHUB_TOKEN`を任意のサービスやイメージへ渡せる。
+  防ぎは保護パス(`infra/docker-compose.yml`)と人のマージだけで、mainは承認0件でマージできるため、補助にとどまる。
+  受け入れる理由は、段階1が計画だけで、反映しないためである。
+  反映する段階の設計で、どのサービスにどの秘密値を渡してよいかの許可表を検討する。
+- 反映する側は、`docker compose`を、必ず`-f infra/docker-compose.yml`と`--project-directory`を明示して呼ぶ。
+  省くと、overrideファイルを自動で読む場所が変わる。
+- 反映に使うチェックアウトのgitには、`GIT_CONFIG_GLOBAL=/dev/null`と`GIT_CONFIG_NOSYSTEM=1`を付ける。
+  利用者とシステムのgit設定を読ませないためである。`plan`のgitは`GIT_CONFIG_NOSYSTEM=1`を付けるが、`HOME`を渡すので、利用者の設定を読みうる。
+- `bun.lock`は承認の対象ではないので、取得元の欄を承認なしで書き換えられる。
+  実行役が`bun install`を呼ぶ段階を足すときは、`bun install --frozen-lockfile`の前に、`bun.lock`の取得元を検査するか、承認の対象にする。
+- 設計は`mise`コマンドを使わないと定めるが、`scripts/doctor.sh`は`mise exec`を使う。反映する段階の設計で見直す。
+- composeとYAMLの重複キーの解釈の差と、`package.json`の重複キーの解釈の差（compose-goとbun）は、`docker compose config`との突き合わせで確かめる。
+- `.github/workflows/`で作られたcheck-runが付くcheck suiteは、使い捨てのリポジトリで確かめる。
+- 反映に使うチェックアウトの`git worktree add`と`git checkout`にも、同じ設定を付ける。
+  付けるのは、`-c core.hooksPath=/dev/null`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`である。
+  lefthookのpost-checkoutが動かないようにするためである。
+- `tree_forbidden`の通知は、原因のパスと次の操作を載せる。日本語のファイル名を足すと止まるためである。
+- 設定ファイルの読み取りの違い。
+  - `Bun.TOML.parse`は、重複したキーとテーブルをエラーにする。`__proto__`は通常のキーとして残り、`Object.prototype`は汚れない。
+  - `Bun.YAML.parse`は、重複したキーを最後の値で上書きし、エラーにしない。`__proto__`は通常のキーとして残る。
+  - composeの解釈とYAMLの重複キーの扱いが違うかは、`docker compose config`と突き合わせて確かめる。
+- パスの検査は、文字列で行い、symlinkを辿らない。目標のtreeにsymlinkがあれば拒否するが、実行役が使うチェックアウトに後から置かれたsymlinkは見ない。
+- miseの値の免除は、形式だけを見る。`GTR_COMMIT`の指す内容は確かめない。
+- `plan`はCIを確認しない。`would_converge`は、CIの通過を含まない判定である。
+- `docker compose up --dry-run`の出力のうち、`Creating`などの行の形は実測した。`Running`と`Recreate`の行の形は、同じ3列と見なした推定で、実機の出力では確かめていない。
+
 ## サブプロセスのnpmのinstall script
 
 `self_update`と、ホストで動かすmiseのタスク(`mise run push`、`mise run deploy`など)は、`wmill sync push`のサブプロセスに次の環境変数を渡す。

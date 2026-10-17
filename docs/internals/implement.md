@@ -662,8 +662,8 @@ CIは、人のレビューより前に、Claudeが書いたコードをそのリ
 | 種類 | 加えるもの |
 | --- | --- |
 | ディレクトリ | `.github/`全体(PR修正の`.github/workflows/`と`.github/actions/`を広げる)、`infra/`、`.husky/`、`.githooks/`、`.yarn/`、`.devcontainer/` |
-| 環境とgitleaks | `.env`と`.env.*`、`.gitleaksignore`、`.gitleaks.toml` |
-| ランタイムのバージョン | `.tool-versions`、`.node-version`などの`.*-version`、`.nvmrc`、`rust-toolchain` |
+| gitleaks | `.gitleaksignore`、`.gitleaks.toml` |
+| ランタイムのバージョン | `.python-version`、`.nvmrc`、`rust-toolchain` |
 | パッケージマネージャー | `.yarnrc`、`.pnpmfile.cjs`、JavaScriptのlockfile、すべての`package.json` |
 | ツールの設定 | `*.config.[cm][jt]s`、`.eslintrc`、`.babelrc`、`.prettierrc` |
 | タスクランナーなど | `Makefile`、`Justfile`、`Taskfile.yml`、`turbo.json`、`nx.json`、`deno.json`、`CODEOWNERS`、`.pre-commit-config.yaml` |
@@ -676,6 +676,10 @@ PR修正の一覧そのものの中身は、[PRワークフロー](pr-workflow.m
 保護パスの一覧は、Factory自身に限らず、実装フローが扱うすべてのリポジトリに効く。
 ほかのリポジトリに`infra/`、`console/public/`、`console/index.html`などがあれば、それに触れたラウンドは検査コマンドを実行しない。
 そのときは、GitHub側のCIの結果を見る。
+Factory自身のリポジトリでは、ホストの実行役が実行するファイルも保護パスである。
+対象は、`scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`、実行役のテストである。
+これらに触れたラウンドも、検査コマンドを実行せず、PR本文の「確認して欲しい点」に載せる。
+理由と限界は、[ホストの実行役の境界](../security.md#ホストの実行役の境界)にある。
 
 判定は、比較の基準からの差分で行う。前のラウンドや前回の実行でコミット済みの変更も、毎回判定する。renameは元のパスの削除と新しいパスの追加として扱うので、保護パスから外への移動も捕まえる。
 
