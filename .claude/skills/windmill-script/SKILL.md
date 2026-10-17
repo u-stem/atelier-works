@@ -36,9 +36,9 @@ scriptからは相対importで読み込む(例: `import { runClaude } from "./li
 - 値はコミットせず、リポジトリ内では空のままにする。
 - scriptからは、`wmill.getVariable("f/factory/github_token")`のように取得する。
 - 取得した値は、子プロセスの環境変数(例: `GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`)としてだけ渡す。
-- 例外は`collect_github`(`lib/gh_graphql.ts`)だけである。
-  `github_read_tokens`の値を、宛先を`https://api.github.com/graphql`に固定した`fetch`の`Authorization`ヘッダで渡す。
-  この例外を、ほかのscriptや宛先に広げない。
+- 例外は、[セキュリティ](../../../docs/security.md)の「親プロセスが`fetch`で使う秘密値」に挙げた箇所だけである。
+  `github_read_tokens`を使うのは`collect_github`(`lib/gh_graphql.ts`)だけで、宛先を`https://api.github.com/graphql`に固定した`fetch`の`Authorization`ヘッダで渡す。
+  例外を足すときは、同じ変更で`docs/security.md`と本スキルの両方を直す。
 - シークレットは、コマンドラインの引数、URL、ログ出力、DBのカラムのどれにも絶対に書かない。
 - エラーメッセージに含まれうる箇所は、`f/factory/lib/log.ts`のマスク関数(`maskSecrets`)を通して事前にマスクする。
 
