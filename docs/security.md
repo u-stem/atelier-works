@@ -1086,13 +1086,15 @@ superadminでない主体は、許可されたtagしか使えない。
 同じ手順で、コードを実行しないことと、Claudeに文章を渡さないことも確かめる。
 1つでも依存するなら、tagを付けない。
 
-読んでよいsecret変数は、`github_token`と`discord_webhook_url`だけである。
-`claude_oauth_token`と`wmill_token`は、このworkerに届かせない。
-`discord_webhook_url`を許可するのは、通知を送る定期ジョブを、このworkerで動かすためである。
+読んでよいsecret変数は、`discord_webhook_url`だけである。
+`claude_oauth_token`、`github_token`、`wmill_token`は、このworkerに届かせない。
+対象のscriptが読まない許可は、残さない。
+`discord_webhook_url`を許可するのは、通知を送る定期ジョブを、このworkerで動かすために、通知の送り先が要るためである。
 このworkerは、固定のレビュー済みのscriptだけを動かす。
-漏れたときの影響は、通知の偽装と、webhookの削除や改名による通知の停止である。
+漏れたときの影響は、通知の偽装と、webhookの削除や改名による通知の停止に限られる。
 webhookのURLを持つ者は、トークンだけで改名と削除ができる。
-どのworkerのジョブも`getVariable`で読める状態はもとからで、読める範囲は広がっていない。
+補足として、どのworkerのジョブも`getVariable`で読める状態はもとからで、このworkerで読める範囲は広がらない。
+別のsecret変数を許すかは、この理由とは別に、読む必要と漏れたときの影響で決める。
 これを超えて広げるときは、契約テストの許可と、この節の選定の結果を同じ変更で直す。
 
 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
@@ -1105,7 +1107,9 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - どのscriptも、スケジュールが呼ぶscriptで、`timeout`を持つ。
 - `timeout`の最大値に300秒の余裕を足した値が、待ちの検知のしきい値(`PERIODIC_JOB_WAIT_SECONDS`)を超えない。
   このworkerの枠は1つなので、長く動くジョブの後ろで待つジョブを、workerの不在と誤って知らせないためである。
-- importでたどれるソースが読むsecret変数は、`github_token`と`discord_webhook_url`だけである。
+  待たされる最悪は、他のscriptのtimeoutの合計である。今の2本では、最大値と一致する。
+  3本目以降を足すときは、式を「他のscriptのtimeoutの合計 + 余裕」に変える。
+- importでたどれるソースが読むsecret変数は、`discord_webhook_url`だけである。
 - importでたどれるソースに、ファイル、サブプロセス、`claude.ts`への依存が無い。
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
@@ -1125,7 +1129,7 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 
 tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中身を確かめる。
 `getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。
-参照があれば、参照先のsecret変数が`github_token`と`discord_webhook_url`のいずれかだけであることまで確かめる。
+参照があれば、参照先のsecret変数が`discord_webhook_url`だけであることまで確かめる。
 テストが固定するのはsecret変数の名前の読み取りだけなので、この確認は人かレビューが行う。
 
 ### 選定の結果

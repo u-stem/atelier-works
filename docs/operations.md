@@ -2260,9 +2260,10 @@ workerが居ても、枠が塞がっているときや、tagの設定がずれ�
 - `mise run up`で定期ジョブ用のworkerを作り直している間は、通知が出うる。作り直しが終われば、自動で解決する。
 - スケジュールの`permissioned_as`がsuperadminなら、カスタムtag`periodic`の許可が無くても動く。
   superadminでなければ、許可が要る。
-  許可が無いと、ジョブが積まれない。その間、この検知は働かない。実機では確かめていないので、起きうる事象として扱う。
-  ジョブがqueueに現れないときは、この検知では拾えない。スケジュールの失敗の検知(`schedule_failing`)で拾う。
-  `mise run doctor`の「カスタムtag」の項目で、`periodic`が`OK`であることを確かめる。`NG`なら`mise run instance:tags`を実行する。
+  現在の2本のスケジュールの`permissioned_as`は`u/admin`である。値は`wmill schedule get <scriptのパス> --json`で読める。
+  許可を欠くと、ジョブは積まれないことがある。実機では確かめていないので、起きうる事象として扱う。
+  ジョブが積まれなければ、この検知も、スケジュールの失敗の検知(`schedule_failing`)も働かず、どちらでも拾えない。
+  `mise run doctor`の「カスタムtag」の項目で、`periodic`が`OK`であることを確かめて防ぐ。`NG`なら`mise run instance:tags`を実行する。
 - 一覧を読めなかった回と、応答が一覧の形でない回は、判定できないものとして扱う。通知は出さず、残した通知も解決しない。自己更新のジョブログに警告を残す。
 
 警告は次の3種類である。
@@ -2294,6 +2295,10 @@ wmill job get <完了したジョブのID> --json
 
 `job list`の各ジョブの`tag`が`periodic`になっていること、`job get`の`worker`の名前に`periodic`が含まれ、`default`でないことを見る。
 反映の前に作られたジョブは、`tag`が`bun`のまま残る。
+
+続けて、`auto_retry_pr_review`の`job list`の`created_at`と`started_at`が、5分刻みで1件ずつ並ぶことを見る。
+スケジュールは、今のジョブの開始時に次の回を1件だけ積み、queueは予定時刻の順に拾う、という前提を確かめるためである。
+同じ予定時刻のジョブが複数並ぶときや、`started_at`が予定時刻から大きく遅れるときは、前提が崩れている。
 
 付与を戻すときは、`*.script.yaml`から`tag: periodic`の行を消して反映する。
 反映の後に作られるジョブは、defaultのworkerで動く。

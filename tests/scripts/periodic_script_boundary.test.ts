@@ -28,7 +28,7 @@ import {
 // - tag periodicへ振り分けるものは、下の一覧のscriptの定義だけである。
 //   scriptの定義、スケジュール、フローのモジュールの`tag`と`tag_override`を、`f/`の下のYAMLすべてで調べる。
 // - どれも、スケジュールが呼ぶscriptである。
-// - 読んでよいsecret変数は、github_tokenとdiscord_webhook_urlだけである。claudeのトークンやwmillのトークンには届かせない。
+// - 読んでよいsecret変数は、discord_webhook_urlだけである。claudeのトークンやwmillのトークンには届かせない。
 // - timeoutの最大値に余裕を足した秒数が、待ちの検知のしきい値を超えない。
 //   このworkerの枠は1つなので、長く動くjobの後ろで待つ定期ジョブを、workerの不在と誤って知らせないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
@@ -53,14 +53,20 @@ const PERIODIC_SCRIPTS: readonly string[] = [
 
 /**
  * 読んでよいsecret変数。
- * discord_webhook_urlは通知の送り先で、漏れても影響は通知の偽装に限られる。
+ * discord_webhook_urlは通知の送り先として要る。漏れたときの影響は、通知の偽装と停止に限られる。
  * このworkerは、固定のレビュー済みscriptだけを動かす。
+ * github_tokenは、対象のscriptが読まないので許可しない。使わない許可は残さない。
  */
-const MAY_READ_SECRET = [GITHUB_TOKEN, DISCORD_WEBHOOK_URL];
+const MAY_READ_SECRET = [DISCORD_WEBHOOK_URL];
 
 /**
  * 待ちの検知のしきい値と、最長のtimeoutの間に残す秒数。
  * scriptの起動と、queueから拾うまでの遅れを見込む。
+ *
+ * このworkerの枠は1つなので、あるscriptが待たされる最悪は、他のscriptのtimeoutの合計である。
+ * 下のテストは、最長のtimeoutに余裕を足した値を使う。
+ * 今の2本は、片方の最悪がもう一方のtimeoutだけなので、最長の値と一致する。
+ * 3本目以降を足すときは、式を「他のscriptのtimeoutの合計 + 余裕」に変える。
  */
 const WAIT_MARGIN_SECONDS = 300;
 
@@ -459,7 +465,7 @@ describe("the checks on scripts that stay on the default worker", () => {
 
   test("flags the discord webhook when it is not allowed", async () => {
     expect(
-      await secretsOutside(["f/factory/notify_daily_summary"], [GITHUB_TOKEN]),
+      await secretsOutside(["f/factory/notify_daily_summary"], []),
     ).toEqual([DISCORD_WEBHOOK_URL]);
   });
 
