@@ -3,7 +3,7 @@
 // 項目を後から足しても、
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
-import { JOB_TMP_MAX_AGE_SEC } from "./job_tmp.ts";
+import { JOB_TMP_MAX_AGE_SEC } from "./job_tmp_limits.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,

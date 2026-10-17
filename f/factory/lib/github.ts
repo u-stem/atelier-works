@@ -20,6 +20,7 @@
 // 区別する。
 
 import { revealControlChars, VolatileCiLog } from "./ci_log_support.ts";
+import { GitHubHttpError } from "./gh_errors.ts";
 import { jobTmpEnv } from "./job_tmp.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import {
@@ -46,6 +47,9 @@ import {
   type CommandRunner,
   SpawnError,
 } from "./workspace.ts";
+
+// 例外の定義はfsに触れない`gh_errors.ts`にある。既存のimport元を壊さないよう再エクスポートする。
+export { GitHubHttpError };
 
 /** エンドポイントやURLを組み立てる前に、`owner/repo`の両方を検証する。 */
 export function validateOwnerRepo(owner: string, repo: string): void {
@@ -480,32 +484,6 @@ export async function callGhApi(
     rateLimitWaitMs(second.headers, now),
     true,
   );
-}
-
-/**
- * 2xx以外の応答による失敗。`status`が0のときは応答が返らなかった(通信断やtimeout)。
- * 呼び出し側が、要求が効いたかを状態から判断するために使う(`claimIssue`を参照)。
- */
-export class GitHubHttpError extends Error {
-  readonly status: number;
-  /**
-   * 応答が返らなかった(`status`が0)ときの、`gh`の終了コード。
-   * 認証失敗(`GH_EXIT_AUTH_REQUIRED`)のように待っても直らない失敗を、通信断と見分けるために使う。
-   */
-  readonly exitCode: number | undefined;
-  /** `gh`がtimeoutで打ち切られたか。 */
-  readonly timedOut: boolean;
-  constructor(
-    message: string,
-    status: number,
-    detail: { readonly exitCode?: number; readonly timedOut?: boolean } = {},
-  ) {
-    super(message);
-    this.name = "GitHubHttpError";
-    this.status = status;
-    this.exitCode = detail.exitCode;
-    this.timedOut = detail.timedOut ?? false;
-  }
 }
 
 /**
