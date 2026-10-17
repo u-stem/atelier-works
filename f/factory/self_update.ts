@@ -548,6 +548,9 @@ export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
  *   (成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので両方を数える)
  * - finally(Console用workerの確認): stateの読み、stateの書き、noticeの挿入、通知先の取得: 4
  * - finally(定期ジョブ用workerの確認): noticeの挿入、noticeの解決、通知先の取得: 3
+ *   (この3つは確認全体の上限(`PERIODIC_WORKER_CHECK_TIMEOUT_MS`)の中に収まるので、
+ *   最悪の合計では二重に数えている。テストが呼び出しの箇所を数えるため、
+ *   Console用workerの確認の4つと同じ数え方にそろえ、余裕として残す)
  * - ホスト側の作業の通知: 印の読み取り、未解決の通知の一覧、通知の解決(上限の数まで)、
  *   noticeの挿入、通知先の取得: 4 + `HOST_ACTION_RECONCILE_LIMIT`
  * - 止まった作業項目の再開の候補の確認(候補の一覧と要件の承認の読み)と起動: 2

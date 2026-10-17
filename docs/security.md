@@ -1054,8 +1054,8 @@ superadminでない主体は、許可されたtagしか使えない。
 - `f/factory/claude_oauth_token`と`f/factory/github_token`を、secret変数として読める。
   どのscriptが読むかを制限する仕組みは無い。
 - このworkerで動かすのは、上の基準で選んだ定期ジョブの想定である。
-  リポジトリに入る変更は、契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が止める。
-  Windmillの画面でscriptにtag`periodic`を付ける操作は止められない。
+  リポジトリに入る変更のうち、テストが走査できる形は、契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が止める。
+  走査できない形と、Windmillの画面でtag`periodic`を付ける操作は止められない。
   ワークスペースでscriptを編集できる者は、任意のscriptにtag`periodic`を付けられる。
 - 許可はすべてのワークスペースに及ぶ。ワークスペースで絞らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
@@ -1088,16 +1088,29 @@ superadminでない主体は、許可されたtagしか使えない。
 
 読んでよいsecret変数は、`github_token`だけである。
 `claude_oauth_token`と`wmill_token`は、このworkerに届かせない。
-`discord_webhook_url`も読ませない。通知を送る定期ジョブは、defaultのworkerに残す。
+現時点の選定では、`discord_webhook_url`も読ませない。通知を送る定期ジョブは、defaultのworkerに残している。
 Console用workerが読むsecret変数に上限を置くのと同じく、定期ジョブ用workerの境界を広げないためである。
+この許可を広げるかは、対象のscriptにtagを付ける段で決める。
+広げるときは、契約テストの許可と、この節の選定の結果を同じ変更で直す。
 
 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
 走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
 
-- tag`periodic`を持つscriptが、テストの一覧と一致する。足すときは、一覧とこの節の選定の結果を同じ変更で直す。
+- `f/`の下のYAMLのうち、tag`periodic`へ振り分けるものが、テストの一覧のscriptの定義と一致する。
+  scriptの定義の`tag`だけでなく、スケジュールの`tag`と、フローのモジュールの`tag`と`tag_override`も、入れ子の中まで調べる。
+  足すときは、一覧とこの節の選定の結果を同じ変更で直す。
 - どのscriptも、スケジュールが呼ぶscriptで、`timeout`を持つ。
 - importでたどれるソースが読むsecret変数は、`github_token`だけである。
-- importでたどれるソースに、`node:fs`、`node:child_process`、`Bun.spawn`、`Bun.file`、`claude.ts`への依存が無い。
+- importでたどれるソースに、ファイル、サブプロセス、`claude.ts`への依存が無い。
+  `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
+  `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
+  `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
+
+テストが見ないものは、コードのレビューで見る。
+
+- 式で組み立てたtag、フローの入力で渡すtag。
+- 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
+- Windmillの画面で付けたtag。
 
 ### 選定の結果
 
