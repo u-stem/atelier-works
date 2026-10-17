@@ -117,6 +117,13 @@ describe(".claude/settings.json", () => {
     },
   );
 
+  test.each(["Bash(CHECK_IDLE_FORCE=*)", "Bash(*CHECK_IDLE_FORCE=*)"])(
+    "denies skipping the running-work check: %s",
+    (rule) => {
+      expect(denyRules()).toContain(rule);
+    },
+  );
+
   test("leaves docker exec and inspect to the hook", () => {
     const docker = denyRules().filter((rule) =>
       /^Bash\(docker.*:\*\)$/.test(rule),
