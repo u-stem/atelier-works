@@ -79,7 +79,7 @@ const GIT_CONFIG_ENV =
   /^GIT_CONFIG_(COUNT|PARAMETERS|GLOBAL|SYSTEM|KEY_\d+|VALUE_\d+)$/;
 
 /** gitの設定ファイルの置き場所を変える変数。フックを実行するgitのコマンドに付けて、別の設定を読ませるのに使える。 */
-const GIT_HOME_ENV = /^(HOME|XDG_CONFIG_HOME)=/;
+const GIT_HOME_ENV = /^(HOME|XDG_CONFIG_HOME)$/;
 
 /** 引数の`NAME=value`を環境変数として設定する組み込みコマンド。 */
 const ENVIRONMENT_BUILTINS: ReadonlySet<string> = new Set([
@@ -101,6 +101,12 @@ const HOOK_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "revert",
   "pull",
 ]);
+
+/**
+ * `mise run up`と`mise run deploy`の、実行中の仕事の確認を飛ばす環境変数。
+ * 人が自分の端末で付けるものなので、値によらず、名前の代入をすべて拒否する。
+ */
+const CHECK_IDLE_FORCE_ENV = "CHECK_IDLE_FORCE";
 
 /** lefthookのバイナリと設定を差し替える環境変数。インストール済みのフックはこれらを読む。 */
 const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
@@ -261,6 +267,8 @@ export const REASONS = {
     "Disabling lefthook with LEFTHOOK=0 (or false, off, no) is not allowed. Fix the failing check instead.",
   lefthookExclude:
     "LEFTHOOK_EXCLUDE may only list wmill-metadata and wmill-metadata-check, and only when the local Windmill cannot start.",
+  checkIdleForce:
+    "CHECK_IDLE_FORCE skips the running-work check before mise run up and mise run deploy recreate the worker. A person sets it in their own terminal, only after confirming that nothing needs to be kept. Wait for the running work to finish and run the command again.",
   lefthookUninstall:
     "lefthook uninstall removes the git hooks. Fix the failing check instead.",
   gitInternals:
@@ -471,7 +479,7 @@ function checkSimpleCommand(
   if (git === null) return ALLOW;
   if (
     HOOK_SUBCOMMANDS.has(git.subcommand) &&
-    assignments.some((word) => GIT_HOME_ENV.test(word.text))
+    assignments.some((word) => GIT_HOME_ENV.test(assignmentName(word).name))
   ) {
     return deny(REASONS.gitHomeEnv);
   }
@@ -513,16 +521,30 @@ function checkGit(
   return ALLOW;
 }
 
+/**
+ * 代入の語の名前と、追記(`NAME+=value`)かどうかを返す。
+ * 追記は、追記後の値が分からないので、値の判定では追記部分だけを見ず、追記かどうかで判定する。
+ */
+function assignmentName(word: Word): { name: string; appended: boolean } {
+  const equals = word.text.indexOf("=");
+  const raw = word.text.slice(0, equals);
+  const appended = raw.endsWith("+");
+  return { name: appended ? raw.slice(0, -1) : raw, appended };
+}
+
 function checkEnvironment(assignments: readonly Word[]): Decision {
   for (const word of assignments) {
     const equals = word.text.indexOf("=");
-    const name = word.text.slice(0, equals);
+    const { name, appended } = assignmentName(word);
     const value = word.text.slice(equals + 1);
     if (GIT_CONFIG_ENV.test(name)) return deny(REASONS.gitConfigEnv);
     if (LEFTHOOK_REPLACING_ENV.has(name)) return deny(REASONS.lefthookReplace);
+    if (name === CHECK_IDLE_FORCE_ENV) return deny(REASONS.checkIdleForce);
     if (
       name === "LEFTHOOK" &&
-      (word.dynamic || FALSY_LEFTHOOK_VALUES.has(value.toLowerCase()))
+      (word.dynamic ||
+        appended ||
+        FALSY_LEFTHOOK_VALUES.has(value.toLowerCase()))
     ) {
       return deny(REASONS.lefthookOff);
     }
@@ -533,6 +555,7 @@ function checkEnvironment(assignments: readonly Word[]): Decision {
         .filter((job) => job !== "");
       if (
         word.dynamic ||
+        appended ||
         jobs.some((job) => !EXCLUDABLE_LEFTHOOK_JOBS.has(job))
       ) {
         return deny(REASONS.lefthookExclude);

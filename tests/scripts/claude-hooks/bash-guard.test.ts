@@ -228,6 +228,13 @@ describe("bash-guard denies other ways to disable the git hooks", () => {
     "typeset -x LEFTHOOK=false",
     "export LEFTHOOK=off",
     "env LEFTHOOK=0 git commit -m x",
+    "LEFTHOOK+=0 mise run check",
+    "export LEFTHOOK+=0",
+    "LEFTHOOK=n LEFTHOOK+=o git commit -m x",
+    "LEFTHOOK=fa; LEFTHOOK+=lse; export LEFTHOOK; git commit -m x",
+    "LEFTHOOK_EXCLUDE+=wmill-metadata git commit -m x",
+    "HOME+=/x git commit -m x",
+    "XDG_CONFIG_HOME+=/x git push origin feature",
     "echo x >> .git/config",
     "echo x > .git/hooks/pre-commit",
     "rm .git/hooks/pre-commit",
@@ -1195,6 +1202,53 @@ describe("bash-guard parses common shell syntax", () => {
     "diff <(git show a:f) <(git show b:f)",
     "echo $(( (1+2) * 3 ))",
     "f() { git status; }; f",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("allow");
+  });
+});
+
+describe("bash-guard denies setting CHECK_IDLE_FORCE", () => {
+  test.each([
+    "CHECK_IDLE_FORCE=1 true",
+    "CHECK_IDLE_FORCE=1 mise run up",
+    "CHECK_IDLE_FORCE=0 mise run up",
+    "CHECK_IDLE_FORCE+=1 mise run up",
+    "export CHECK_IDLE_FORCE+=1",
+    "env CHECK_IDLE_FORCE+=1 true",
+    "env CHECK_IDLE_FORCE=1 true",
+    "env 'CHECK_IDLE_FORCE'=1 true",
+    'env "CHECK_IDLE_FORCE"=1 true',
+    "env CHECK_\\IDLE_FORCE=1 true",
+    "export CHECK_IDLE_FORCE=1; true",
+    "export 'CHECK_IDLE_FORCE=1'",
+    "declare -x CHECK_IDLE_FORCE=1",
+    "typeset -x CHECK_IDLE_FORCE=1",
+    "readonly CHECK_IDLE_FORCE=1",
+    "local CHECK_IDLE_FORCE=1",
+    'CHECK_IDLE_FORCE="$VALUE" true',
+    "CHECK_IDLE_FORCE=$(echo 1) mise run up",
+    "sh -c 'CHECK_IDLE_FORCE=1 true'",
+    'bash -c "export CHECK_IDLE_FORCE=1; mise run up"',
+    "mise exec -- env CHECK_IDLE_FORCE=1 true",
+    "timeout 30 env CHECK_IDLE_FORCE=1 true",
+  ])("%s", async (command) => {
+    expect(await decide(command)).toBe("deny");
+  });
+
+  test("the reason says a person sets it in their own terminal", async () => {
+    expect(await denyReason("CHECK_IDLE_FORCE=1 true")).toContain(
+      "own terminal",
+    );
+  });
+});
+
+describe("bash-guard allows mentioning CHECK_IDLE_FORCE without setting it", () => {
+  test.each([
+    "git grep CHECK_IDLE_FORCE",
+    "grep -rn CHECK_IDLE_FORCE docs",
+    "echo CHECK_IDLE_FORCE",
+    'git commit -m "docs: CHECK_IDLE_FORCE=1 is for people"',
+    "mise run up",
   ])("%s", async (command) => {
     expect(await decide(command)).toBe("allow");
   });
