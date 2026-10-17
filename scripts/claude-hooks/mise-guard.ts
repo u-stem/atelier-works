@@ -73,7 +73,7 @@ const MISE_RUNNER_NAMES: ReadonlySet<string> = new Set(["run", "r", "tasks"]);
 /** `--shell`、`-s`、`-s`を含む束ねた短いオプション。 */
 const MISE_SHELL_OPTION = /^(--shell(=.*)?|-[A-Za-z]*s.*)$/;
 
-/** miseの設定として取り込まれず、シェルやタスクの実行を変えない環境変数。これ以外の`MISE_*`の代入は拒否する。 */
+/** シェルやタスクの実行を差し替えない`MISE_*`の環境変数。これ以外の代入は、前置きでも`mise set`でも拒否する。 */
 export const MISE_ALLOWED_ENV: ReadonlySet<string> = new Set([
   "MISE_ENV",
   "MISE_JOBS",
@@ -81,6 +81,15 @@ export const MISE_ALLOWED_ENV: ReadonlySet<string> = new Set([
   "MISE_VERBOSE",
   "MISE_YES",
 ]);
+
+/**
+ * `mise set`のオペランドが、許可リストに無い`MISE_*`を環境へ書くなら真。
+ * `mise.local.toml`の`[env]`に書いた値は、入れ子の`mise run`が設定として読むので、シェルを差し替えられる。
+ */
+function setsMiseSetting(word: Word): boolean {
+  const [name = ""] = word.text.split("=", 1);
+  return name.startsWith("MISE_") && !MISE_ALLOWED_ENV.has(name);
+}
 
 /** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */
 function hasBrace(word: Word): boolean {
@@ -189,6 +198,7 @@ export function listsMiseValues(words: readonly Word[]): boolean {
     }
   }
   if (operands.length === 0) return true;
+  if (operands.some(setsMiseSetting)) return true;
   if (operands.every((word) => ASSIGNMENT.test(word.text))) return false;
   const [key] = operands;
   return !(

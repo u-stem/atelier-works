@@ -1800,7 +1800,11 @@ miseの更新で、値を出すサブコマンドが増えても塞げるよう�
 サブコマンドの前に、値を取る隠しオプション(`-P`、`--log-level`など)があっても、値の語まで読み飛ばして探す。
 `-qE x`のように束ねた短いオプションは、値を取る文字が末尾にあるときだけ、次の語を値として読み飛ばす。
 タスクを実行する`run`と`tasks`は、`-s`と`--shell`(束ねた形を含む)を拒否する。
-`MISE_ENV`などを除く`MISE_*`の環境変数の代入も拒否する。`MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS`で、タスクを実行するシェルを差し替えられるためである。
+`MISE_ENV`などを除く`MISE_*`の環境変数の代入も拒否する。
+前置きと`export`の代入に加えて、`mise set`で`mise.local.toml`の`[env]`に書く鍵も対象にする。
+`MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS`で、タスクを実行するシェルを差し替えられるためである。
+許可する`MISE_ENV`、`MISE_JOBS`、`MISE_QUIET`、`MISE_VERBOSE`、`MISE_YES`は、設定の名前から、シェルとタスクの実行を変えないと判断した。
+この5つは、実機では確かめていない。
 `mise exec`の`-c`は、ツールの指定の後ろにあっても、`--`の前の全ての語から探す。
 
 #### 名前を持つ呼び出し
@@ -1859,6 +1863,7 @@ mise 2026.9.13で、ダミー値を使って確かめた。
 - `--shell 'sh -c env'`を渡すと、`mise.local.toml`の値が出る。
 - `mise exec`の`-c`は、値を付けた形(`-cenv`、`-c=env`)と束ねた形(`-qc env`)でも、ツールの指定の後ろ(`mise x bun -c printenv`)でも、シェルの文字列を受け取る。
 - `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS='sh -c printenv'`を付けた`mise run`は、`mise.local.toml`の値を出力する。
+- `mise.local.toml`の`[env]`に同じ名前を書くと、その`mise run`は影響を受けない。入れ子の`mise run`を呼ぶタスクでは、値が出力される。
 - サブコマンドの前に置いたグローバルの`-s`と`--shell`は、タスクを実行するシェルを差し替えず、値を出力しない。
 - コマンドを付けない`mise exec`と`mise x`は、シェルを起動せず、引数が足りないエラーで終わる。
 - `mise doctor`、`mise settings`、`mise tasks`、`mise direnv envrc`は、`mise.local.toml`の値を出力しない。
