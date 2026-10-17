@@ -29,6 +29,11 @@ export type ChangedPath = {
  * 検証をすり抜けた内容が運用者のブラウザに配信される。
  * `f/factory/dependabot__flow/`も含める。dependabotの更新を自動でマージするフローで、
  * `flow.yaml`に加えて、フローに埋め込むモジュールも書き換えられると、許可していない更新をマージできる。
+ * ホストの実行役が実行する道具のディレクトリも含める。
+ * `scripts/host_apply/`は実行役の実装、`infra/worker/`は実行役がビルドするworkerのイメージ、
+ * `mise/`はmiseの設定ディレクトリで、どれもホストのユーザーの権限で動くか、動く道具の入力になる。
+ * これらの変更をホストへ通す関門は、保護パスではなく実行役の承認である(`docs/security.md`のホストの実行役の節)。
+ * 保護パスは、pr_fixの自動修正がこれらを書き換えるのを止め、implementのPRに明記させる補助である。
  */
 export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   ".claude/",
@@ -41,6 +46,9 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
   "console/public/",
   "infra/console_fetcher/",
   "f/factory/dependabot__flow/",
+  "scripts/host_apply/",
+  "infra/worker/",
+  "mise/",
 ];
 
 /**
@@ -100,6 +108,13 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 再計算が読むgitの動き方を決める、`lib/workspace.ts`のgitの固定設定(`FIXED_GIT_CONFIG`、`GIT_NO_REPLACE_OBJECTS`、`GIT_ALLOW_PROTOCOL`)も入れない。
  * ほかのCI回の部品と同じく、日常的に直すファイルで、守るとその正当な変更をすべて止めるためである。
  * これらを書き換えて例外の条件を緩める変更は、マージ前の人のレビューで差分を確かめて止める。
+ * ホストの実行役が実行するファイルも守る。実行役の入口(`scripts/host-apply.ts`、まだ存在しない`scripts/host-apply.sh`)、
+ * 導入と診断と初期化のスクリプト(`host-install.sh`、`check-docker-version.sh`、`doctor.sh`、`bootstrap.sh`、
+ * `custom-tags.ts`、`record-host-applied.sh`)は、ホストのユーザーの権限で、秘密値を渡して動く。
+ * `infra/docker-compose.yml`は実行役が静的に検査して反映する定義で、`tests/infra/docker_compose.test.ts`は
+ * その定義の境界を固定する。実行役のテスト(`tests/scripts/host_apply_*.test.ts`)も、実行役の判定を固定するので守る。
+ * 実行役のテストは、グロブではなくファイル名で列挙する。名前を先に押さえ、足したテストを列挙し忘れると、
+ * 保護パスの契約テスト(`tests/lib/protected_paths.test.ts`)が失敗する。
  * CI回のClaudeには、`ci_`と`pr_fix_`で始まるファイルを、CI回の拒否(`ci_fix_paths.ts`)が別に止める。
  * 共有の`lib/github.ts`は、ほかのフローも使うので守らない。
  * dependabotのフローが使うほかの共有モジュール(`lib/`の`dependabot_*`以外と`steps/pr_workflow_support.ts`)も守らない。
@@ -187,12 +202,48 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "f/factory/lib/ci_metadata_rehash.ts",
   "f/factory/lib/ci_metadata_rehash.script.yaml",
   "f/factory/lib/ci_metadata_rehash.script.lock",
+  "scripts/host-apply.ts",
+  "scripts/host-apply.sh",
+  "scripts/host-install.sh",
+  "scripts/check-docker-version.sh",
+  "scripts/doctor.sh",
+  "scripts/bootstrap.sh",
+  "scripts/custom-tags.ts",
+  "scripts/record-host-applied.sh",
+  "infra/docker-compose.yml",
+  "tests/infra/docker_compose.test.ts",
+  "tests/scripts/host_apply_target.test.ts",
+  "tests/scripts/host_apply_imports.test.ts",
+  "tests/scripts/host_apply_ci.test.ts",
+  "tests/scripts/host_apply_approval.test.ts",
+  "tests/scripts/host_apply_mise_policy.test.ts",
+  "tests/scripts/host_apply_env.test.ts",
+  "tests/scripts/host_apply_compose_policy.test.ts",
+  "tests/scripts/host_apply_dryrun.test.ts",
+  "tests/scripts/host_apply_git.test.ts",
+  "tests/scripts/host_apply_state.test.ts",
+  "tests/scripts/host_apply_notify_text.test.ts",
+  "tests/scripts/host_apply_mask.test.ts",
+  "tests/scripts/host_apply_timeouts.test.ts",
+  "tests/scripts/host_apply_plan.test.ts",
+  "tests/scripts/host_apply_staging.test.ts",
+  "tests/scripts/host_apply_drain.test.ts",
+  "tests/scripts/host_apply_converge.test.ts",
+  "tests/scripts/host_apply_restore.test.ts",
+  "tests/scripts/host_apply_marker.test.ts",
+  "tests/scripts/host_apply_lock.test.ts",
+  "tests/scripts/host_apply_heartbeat.test.ts",
+  "tests/scripts/host_apply_manifest.test.ts",
+  "tests/scripts/host_apply_notify.test.ts",
 ];
 
 /**
  * pr_fixが保護するファイル名(ディレクトリを問わない)。
  * markdownlint-cli2とtextlintの設定も含める。どちらも設定から任意のモジュールを読み込めて、
  * pre-commitと`mise run check`が読むので、書き換えられるとコードを実行されるため。
+ * ホストの実行役が動かすmise、bun、nodeの設定も含める(`.tool-versions`、`.node-version`、`.bun-version`、
+ * `.env`系)。ツールの版と環境変数を変えると、実行役が動かす道具の中身が変わる。
+ * implementの一覧は、この一覧を引き継ぐ。
  */
 export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^mise\.toml$/,
@@ -208,6 +259,9 @@ export const FORBIDDEN_BASENAME_PATTERNS: readonly RegExp[] = [
   /^\.gitmodules$/,
   /^\.markdownlint(-cli2)?\.(jsonc?|ya?ml|[cm]?js)$/,
   /^\.textlintrc(\..*)?$/,
+  /^\.tool-versions$/,
+  /^\.env(\..*)?$/,
+  /^\.(node|bun)-version$/,
 ];
 
 /**
@@ -240,17 +294,16 @@ export const IMPLEMENT_PROTECTED_EXACT_PATHS: readonly string[] = [
 
 /**
  * implementフローが保護するファイル名。
- * pr_fixのリストに、検査コマンドが何を実行し何を信頼するかを決めるファイルをすべて加える
- * (envファイル、gitleaksの設定、ランタイム・ツールチェーンのバージョン指定、
+ * pr_fixのリスト(envファイルと`.tool-versions`などのバージョン指定を含む)に、
+ * 検査コマンドが何を実行し何を信頼するかを決めるファイルをすべて加える
+ * (gitleaksの設定、ほかのランタイム・ツールチェーンのバージョン指定、
  * パッケージマネージャーの設定とロックファイル、ツールの設定モジュールとrcファイル、
  * タスクランナー、`scripts`に限らず`package.json`全体)。
  */
 export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   ...FORBIDDEN_BASENAME_PATTERNS,
-  /^\.env(\..*)?$/,
   /^\.gitleaks(ignore|\.toml)$/,
-  /^\.tool-versions$/,
-  /^\.(node|bun|python)-version$/,
+  /^\.python-version$/,
   /^\.nvmrc$/,
   /^rust-toolchain(\.toml)?$/,
   /^\.yarnrc(\.yml)?$/,

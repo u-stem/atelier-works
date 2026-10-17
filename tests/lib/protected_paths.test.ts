@@ -72,8 +72,10 @@ describe("matchesForbiddenPath", () => {
     expect(matchesImplementProtectedPath("infra/Caddyfile")).toBe(true);
   });
 
-  test("does not match infra/** with the default (pr_fix) prefixes", () => {
-    expect(matchesForbiddenPath("infra/worker/Dockerfile")).toBe(false);
+  test("does not match infra/** in general with the default (pr_fix) prefixes", () => {
+    expect(matchesForbiddenPath("infra/docker-compose.override.yml")).toBe(
+      false,
+    );
   });
 
   test("matches infra/** with the implement prefixes", () => {
