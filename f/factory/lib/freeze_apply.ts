@@ -93,6 +93,15 @@ export async function prepareFrozenPush(
   };
 }
 
+export type FreezeAction = "skip" | "reconcile" | "deploy";
+
+export function chooseFreezeAction(
+  _unchanged: boolean,
+  _plan: Outcome<FrozenPushPlan>,
+): FreezeAction {
+  return "skip";
+}
+
 /**
  * 追従のpushが済んだ行を消す。書く直前に読み直し、指定した行だけを消すので、
  * 準備の後に置かれた行は残る。読めないときは例外を投げる。

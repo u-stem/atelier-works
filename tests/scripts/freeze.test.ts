@@ -218,6 +218,54 @@ describe("wmillCliPorts", () => {
     expect(await ports.readVariable()).toBeNull();
   });
 
+  test("does not list when the variable can be read directly", async () => {
+    const log: string[] = [];
+    const ports = wmillCliPorts(
+      capture(
+        {
+          "wmill variable get": {
+            exitCode: 0,
+            stdout: JSON.stringify({ value: "v" }),
+            stderr: "",
+          },
+        },
+        log,
+      ),
+      () => NOW,
+    );
+
+    await ports.readVariable();
+
+    expect(log.some((line) => line.startsWith("wmill variable list"))).toBe(
+      false,
+    );
+  });
+
+  test("throws when the read fails but the listing has the variable", async () => {
+    const ports = wmillCliPorts(
+      capture({
+        "wmill variable list": { exitCode: 0, stdout: LIST_WITH, stderr: "" },
+      }),
+      () => NOW,
+    );
+
+    await expect(ports.readVariable()).rejects.toThrow();
+  });
+
+  test("throws when the listing may be cut at the page size", async () => {
+    const full = JSON.stringify(
+      Array.from({ length: 100 }, (_, i) => ({ path: `f/factory/v${i}` })),
+    );
+    const ports = wmillCliPorts(
+      capture({
+        "wmill variable list": { exitCode: 0, stdout: full, stderr: "" },
+      }),
+      () => NOW,
+    );
+
+    await expect(ports.readVariable()).rejects.toThrow();
+  });
+
   test("returns the value when the listing has the variable", async () => {
     const ports = wmillCliPorts(
       capture({
@@ -334,7 +382,7 @@ describe("runCommand place", () => {
 
     await runCommand(PLACE, h.deps);
 
-    expect(h.lines.join("\n")).toContain("09:05");
+    expect(h.lines.join("\n")).toContain("09:07");
   });
 
   test("returns 1 when the variable cannot be read", async () => {
@@ -404,6 +452,50 @@ describe("runCommand release", () => {
     await runCommand({ kind: "release", id: "0a1b2c3d" }, h.deps);
 
     expect(h.stored()).toContain('"released_at":"2026-10-18T00:00:00.000Z"');
+  });
+});
+
+describe("runCommand push --prune", () => {
+  const PRUNE: Command = { kind: "push", prune: true, dryRun: false };
+
+  test("a session cannot prune", async () => {
+    const h = harness({ env: { CLAUDECODE: "1" }, confirm: true });
+
+    await runCommand(PRUNE, h.deps);
+
+    expect(h.pushes).toEqual([]);
+  });
+
+  test("a human without a confirmation cannot prune", async () => {
+    const h = harness({ confirm: false });
+
+    await runCommand(PRUNE, h.deps);
+
+    expect(h.pushes).toEqual([]);
+  });
+
+  test("a confirmed human can prune", async () => {
+    const h = harness({ confirm: true });
+
+    await runCommand(PRUNE, h.deps);
+
+    expect(h.pushes.length).toBe(1);
+  });
+
+  test("a session can preview a prune with --dry-run", async () => {
+    const h = harness({ env: { CLAUDECODE: "1" } });
+
+    await runCommand({ kind: "push", prune: true, dryRun: true }, h.deps);
+
+    expect(h.pushes.length).toBe(1);
+  });
+
+  test("a session can push without pruning", async () => {
+    const h = harness({ env: { CLAUDECODE: "1" } });
+
+    await runCommand({ kind: "push", prune: false, dryRun: false }, h.deps);
+
+    expect(h.pushes.length).toBe(1);
   });
 });
 

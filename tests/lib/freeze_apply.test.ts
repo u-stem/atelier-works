@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  chooseFreezeAction,
   type FreezeInputs,
   type FreezePorts,
   finishFrozenPush,
@@ -337,5 +338,54 @@ describe("sdkFreezePorts", () => {
     await ports.writeVariable("v");
 
     expect(calls).toEqual(["f/factory/freezes=v"]);
+  });
+});
+
+describe("prepareFrozenPush with the self_update target", () => {
+  const SELF = entry({ target: "f/factory/self_update" });
+
+  test("does not exclude the self_update schedule", async () => {
+    const result = await prepareFrozenPush(fake(text(SELF)).ports, INPUTS);
+
+    expect(result.ok && result.value.excludesArg).not.toContain("self_update");
+  });
+
+  test("warns about the self_update freeze", async () => {
+    const result = await prepareFrozenPush(fake(text(SELF)).ports, INPUTS);
+
+    expect(result.ok && result.value.warnings.length).toBe(1);
+  });
+});
+
+describe("chooseFreezeAction", () => {
+  const ready = (ids: string[]) => ({
+    ok: true as const,
+    value: {
+      excludesArg: "--excludes=a",
+      excludedTargets: [],
+      readyIds: ids,
+      warnings: [],
+    },
+  });
+  const broken = { ok: false as const, reason: "x" };
+
+  test("skips an unchanged clone with nothing to reconcile", () => {
+    expect(chooseFreezeAction(true, ready([]))).toBe("skip");
+  });
+
+  test("skips an unchanged clone when the freezes cannot be read", () => {
+    expect(chooseFreezeAction(true, broken)).toBe("skip");
+  });
+
+  test("reconciles an unchanged clone with ended freezes", () => {
+    expect(chooseFreezeAction(true, ready(["bbbb2222"]))).toBe("reconcile");
+  });
+
+  test("deploys a changed clone", () => {
+    expect(chooseFreezeAction(false, ready([]))).toBe("deploy");
+  });
+
+  test("tries to deploy a changed clone even when the freezes cannot be read", () => {
+    expect(chooseFreezeAction(false, broken)).toBe("deploy");
   });
 });

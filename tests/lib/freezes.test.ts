@@ -117,6 +117,12 @@ describe("parseFreezeState", () => {
     expect(parseFreezeState(JSON.stringify(bad)).ok).toBe(false);
   });
 
+  test("rejects an entry with a bidirectional control character in the reason", () => {
+    const bad = state(entry({ reason: "a‮b" }));
+
+    expect(parseFreezeState(JSON.stringify(bad)).ok).toBe(false);
+  });
+
   test("rejects an entry with a control character in the reason", () => {
     const bad = state(entry({ reason: "a\u001b[31mb" }));
 
@@ -424,6 +430,10 @@ describe("removeFreezes", () => {
 describe("sanitizeForDisplay", () => {
   test("replaces control characters", () => {
     expect(sanitizeForDisplay("a\u001b[31m\nb")).toBe("a [31m b");
+  });
+
+  test("replaces bidirectional and line separator characters", () => {
+    expect(sanitizeForDisplay("a‮b c")).toBe("a b c");
   });
 });
 
