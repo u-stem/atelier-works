@@ -794,7 +794,7 @@ describe("runPrConflictWatch: starting a fix", () => {
       ],
     });
     await runPrConflictWatch(h.deps);
-    expect(h.reads.hasActiveFix ?? []).toEqual([]);
+    expect(h.reads.getDefaultBranch ?? []).toEqual([]);
   });
 
   test("notifies when the grace has passed", async () => {
@@ -1081,8 +1081,8 @@ describe("runPrConflictWatch: with the fix disabled", () => {
       "list_conflicted",
       "record",
       "notice",
-      "notify",
       "mark",
+      "notify",
     ]);
   });
 
