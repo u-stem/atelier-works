@@ -36,6 +36,7 @@ import {
   isPublishedLongEnough,
 } from "./lib/dependabot_support.ts";
 import { type NotifyEvent, notifyBestEffort } from "./lib/discord.ts";
+import type { GhRepoStaleReason } from "./lib/gh_collect_read.ts";
 import {
   type DependabotPrSearchItem,
   type DependabotPrSearchScope,
@@ -63,6 +64,7 @@ import {
 import {
   type FactoryConfig,
   type FactoryOwner,
+  type GhRepoOpenPrSnapshot,
   isGitHubName,
   type WorkItem,
 } from "./lib/types.ts";
@@ -565,6 +567,20 @@ export async function processDependabotPr(
   }
   await deps.setFlowJobId(id, jobId);
   return { kind: "started", workItemId: id };
+}
+
+// ---- 表からの候補の選別 ----
+
+export type DependabotCandidateSelection =
+  | { readonly kind: "fresh"; readonly items: DependabotPrSearchItem[] }
+  | { readonly kind: "stale"; readonly reason: GhRepoStaleReason };
+
+export function selectDependabotCandidates(
+  _snapshot: GhRepoOpenPrSnapshot,
+  _target: { readonly owner: string; readonly repo: string },
+  _staleAfterMs: number,
+): DependabotCandidateSelection {
+  return { kind: "stale", reason: "no_record" };
 }
 
 // ---- 周回の状態 ----

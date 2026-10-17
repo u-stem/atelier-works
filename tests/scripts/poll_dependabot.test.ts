@@ -23,7 +23,11 @@ import {
   type PullRequestWithCreatedAt,
 } from "../../f/factory/lib/github.ts";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
-import type { FactoryConfig } from "../../f/factory/lib/types.ts";
+import type {
+  FactoryConfig,
+  GhPullRequest,
+  GhRepoOpenPrSnapshot,
+} from "../../f/factory/lib/types.ts";
 import {
   DEPENDABOT_SKIP_REASON,
   type DependabotPollOutcome,
@@ -41,6 +45,7 @@ import {
   pollDependabot,
   processDependabotPr,
   RATE_LIMIT_DEFAULT_PAUSE_MS,
+  selectDependabotCandidates,
   WAIT_BACKOFF_MS,
 } from "../../f/factory/poll_dependabot.ts";
 import { nextActionFor } from "../../f/factory/steps/pr_workflow_support.ts";
@@ -1160,6 +1165,160 @@ describe("processDependabotPr flow start failure", () => {
     const { h } = await run(FAILING);
 
     expect(h.flowJobIds).toHaveLength(0);
+  });
+});
+
+// ---- 表からの候補の選別 ----
+
+const GH_REPO_ID = 4242;
+const MINUTE_MS = 60_000;
+const STALE_AFTER_MS = 15 * MINUTE_MS;
+
+/** 収集の表の、開いているdependabotのPRの行。 */
+function ghRow(overrides: Partial<GhPullRequest> = {}): GhPullRequest {
+  return {
+    id: 1,
+    owner: "acme",
+    repo: "widgets",
+    repo_id: GH_REPO_ID,
+    number: 12,
+    state: "open",
+    head_sha: HEAD,
+    head_ref: "dependabot/npm_and_yarn/left-pad-1.3.1",
+    base_ref: "main",
+    is_draft: false,
+    is_cross_repository: false,
+    auto_merge_enabled: false,
+    author_login: "dependabot",
+    author_type: "Bot",
+    author_id: 49699333,
+    mergeable: "MERGEABLE",
+    has_review_label: false,
+    has_fix_label: false,
+    review_requested_user_ids: [],
+    assignee_ids: [],
+    team_review_requested: false,
+    created_at: new Date(FOUND.createdAtMs),
+    updated_at: new Date(NOW_MS - DAY_MS),
+    written_at: new Date(NOW_MS - DAY_MS),
+    usable: true,
+    ...overrides,
+  };
+}
+
+/** 鮮度が足りるリポジトリの読み取りの結果。 */
+function snapshot(
+  prs: readonly GhPullRequest[],
+  repo: Partial<NonNullable<GhRepoOpenPrSnapshot["repo"]>> | null = {},
+): GhRepoOpenPrSnapshot {
+  return {
+    db_now: new Date(NOW_MS),
+    repo:
+      repo === null
+        ? null
+        : {
+            repo_id: GH_REPO_ID,
+            allowed: true,
+            archived: false,
+            gone: false,
+            last_collected_at: new Date(NOW_MS - 5 * MINUTE_MS),
+            truncated: false,
+            detail_failed: false,
+            ...repo,
+          },
+    prs,
+  };
+}
+
+const WIDGETS = { owner: "acme", repo: "widgets" } as const;
+
+function select(
+  prs: readonly GhPullRequest[],
+  repo: Partial<NonNullable<GhRepoOpenPrSnapshot["repo"]>> | null = {},
+) {
+  return selectDependabotCandidates(
+    snapshot(prs, repo),
+    WIDGETS,
+    STALE_AFTER_MS,
+  );
+}
+
+function selectedNumbers(
+  prs: readonly GhPullRequest[],
+): readonly number[] | string {
+  const selection = select(prs);
+  return selection.kind === "fresh"
+    ? selection.items.map((item) => item.number)
+    : selection.reason;
+}
+
+describe("selectDependabotCandidates", () => {
+  test("selects an open, non-draft row on main opened by the dependabot bot", () => {
+    expect(selectedNumbers([ghRow()])).toEqual([12]);
+  });
+
+  test("does not select a row whose author is a user named dependabot", () => {
+    expect(selectedNumbers([ghRow({ author_type: "User" })])).toEqual([]);
+  });
+
+  test("does not select a draft row", () => {
+    expect(selectedNumbers([ghRow({ is_draft: true })])).toEqual([]);
+  });
+
+  test("does not select a row based on another branch", () => {
+    expect(selectedNumbers([ghRow({ base_ref: "release" })])).toEqual([]);
+  });
+
+  test("selects a row whose base branch is unknown", () => {
+    expect(selectedNumbers([ghRow({ base_ref: null })])).toEqual([12]);
+  });
+
+  test("selects a row whose author is unknown", () => {
+    const row = ghRow({
+      author_login: null,
+      author_type: null,
+      author_id: null,
+    });
+
+    expect(selectedNumbers([row])).toEqual([12]);
+  });
+
+  test("does not select a row by another author", () => {
+    const row = ghRow({ author_login: "mallory", author_type: "User" });
+
+    expect(selectedNumbers([row])).toEqual([]);
+  });
+
+  test("selects a pull request from a fork and leaves it to the gate", () => {
+    expect(selectedNumbers([ghRow({ is_cross_repository: true })])).toEqual([
+      12,
+    ]);
+  });
+
+  test("turns the creation time into createdAtMs", () => {
+    const selection = select([ghRow()]);
+
+    expect(selection.kind === "fresh" ? selection.items : []).toEqual([
+      {
+        owner: "acme",
+        repo: "widgets",
+        number: 12,
+        createdAtMs: FOUND.createdAtMs,
+      },
+    ]);
+  });
+
+  test("returns the reason and no rows for a repository whose records are not fresh", () => {
+    expect(select([ghRow()], { last_collected_at: null })).toEqual({
+      kind: "stale",
+      reason: "not_collected",
+    });
+  });
+
+  test("does not select an unusable row", () => {
+    const rows = [ghRow({ usable: false }), ghRow({ number: 13 })];
+
+    expect(selectedNumbers(rows)).toEqual([13]);
   });
 });
 
