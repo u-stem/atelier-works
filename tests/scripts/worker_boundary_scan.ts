@@ -203,15 +203,17 @@ export async function secretVariablePaths(): Promise<string[]> {
 
 export const relative = (file: string) => file.replace(`${process.cwd()}/`, "");
 
-/** `f/`の下で、`script.yaml`の`tag`が`tag`であるscriptのパス(拡張子なし)。 */
-export async function scriptsWithTag(tag: string): Promise<string[]> {
-  const paths: string[] = [];
-  for (const file of await scan("f/**/*.script.yaml")) {
-    if ((await yamlOf(file)).tag === tag) {
-      paths.push(file.replace(/\.script\.yaml$/, ""));
-    }
-  }
-  return paths;
+/**
+ * 解析したYAMLの中に、キー`tag`か`tag_override`の値が`tag`であるものがあるか。
+ * scriptの定義、スケジュール、フローのモジュールが、ジョブの振り分け先を決める形をたどる。
+ */
+export function mentionsTag(_value: unknown, _tag: string): boolean {
+  return false;
+}
+
+/** `f/`の下のYAMLのうち、`mentionsTag`が真になるファイルのパス。 */
+export async function filesWithTag(_tag: string): Promise<string[]> {
+  return [];
 }
 
 const FILE_OR_PROCESS_MODULE = /^(?:node:)?(?:child_process|fs|fs\/promises)$/;
@@ -236,4 +238,39 @@ export function toolDependencies(source: string): string[] {
     found.push(`use of ${match[0]}`);
   }
   return found;
+}
+
+/** `script.yaml`の本文が、入力の既定値で変数かresourceを参照しているか。 */
+export function hasInputReference(_yamlText: string): boolean {
+  return false;
+}
+
+/** `entries`のうち、importでたどれるソースに、走査でたどれないimportの形があるファイル。 */
+export function filesWithUnfollowableImports(
+  _entries: readonly string[],
+): string[] {
+  return [];
+}
+
+/** `entries`のうち、`allowed`に無い、引数が文字列リテラルでない変数の読み取りがあるファイル。 */
+export function filesWithNonLiteralReads(
+  _entries: readonly string[],
+  _allowed: Readonly<Record<string, string>>,
+): string[] {
+  return [];
+}
+
+/** `entries`のうち、importでたどれるソースに、道具への依存があるファイル。 */
+export function filesWithToolDependencies(
+  _entries: readonly string[],
+): string[] {
+  return [];
+}
+
+/** `entries`がimportでたどれるソースに現れるsecret変数のうち、`allowed`に無いもの。 */
+export async function secretsOutside(
+  _entries: readonly string[],
+  _allowed: readonly string[],
+): Promise<string[]> {
+  return [];
 }

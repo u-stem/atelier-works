@@ -1,16 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
-  codeOf,
+  filesWithNonLiteralReads,
+  filesWithTag,
+  filesWithToolDependencies,
+  filesWithUnfollowableImports,
   GITHUB_TOKEN,
+  hasInputReference,
+  mentionsTag,
   nonLiteralVariableReads,
-  relative,
   scan,
-  scriptsWithTag,
+  secretsOutside,
   secretVariablePaths,
-  sourcesReachableFrom,
   toolDependencies,
-  unfollowableImports,
   yamlOf,
 } from "./worker_boundary_scan.ts";
 
@@ -18,15 +20,17 @@ import {
 // 独自イメージの道具(claude、gh、git、gtr、検査の枠)も、defaultのworkerがマウントするファイルも、
 // cgroupの計測の対象も無い。DBと`wmill.getVariable()`でsecret変数には、defaultのworkerと同じように届く。
 // 境界を保つため、tag: periodicのscriptについて、次を固定する。
-// - tag: periodicを持つscriptは、下の一覧と一致する。足すときは、一覧と選んだ理由(docs/security.md)を同じ変更で直す。
+// - tag periodicへ振り分けるものは、下の一覧のscriptの定義だけである。
+//   scriptの定義、スケジュール、フローのモジュールの`tag`と`tag_override`を、`f/`の下のYAMLすべてで調べる。
 // - どれも、スケジュールが呼ぶscriptである。
 // - 読んでよいsecret変数は、github_tokenだけである。claudeのトークンやwmillのトークンには届かせない。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
 //
 // 走査の方法と限界は、`console_worker_boundary.test.ts`の先頭にある。
-// ファイルとサブプロセスの走査は、importと`Bun.`の呼び出しの形を見る。
-// 文字列で組み立てた呼び出しや、注入された関数の中身は、コードのレビューで見る。
+// tagの走査が見ないもの: 式で組み立てたtag、フローの入力で渡すtag、Windmillの画面で付けたtag。
+// 依存の走査が見ないもの: 文字列で組み立てた呼び出し、`eval`と`Function`、注入された関数の中身。
+// これらはコードのレビューで見る。
 
 /**
  * tag: periodicを付けたscript。
@@ -45,21 +49,6 @@ const NON_LITERAL_VARIABLE_READS: Readonly<Record<string, string>> = {
   "f/factory/lib/config.ts":
     "loadConfigの引数getResource(注入された関数)。呼び出し側は、リテラルのwmill.getResource(...)を包んで渡す",
 };
-
-/** `entry`がimportでたどれるソースに現れる、secret変数のパス。 */
-async function reachedSecrets(entry: string): Promise<string[]> {
-  const codes = [...sourcesReachableFrom(entry).values()].map(codeOf);
-  return (await secretVariablePaths()).filter((secret) =>
-    codes.some((code) => code.includes(secret)),
-  );
-}
-
-/** `entry`がimportでたどれるソースのうち、道具への依存があるファイル。 */
-function filesWithToolDependencies(entry: string): string[] {
-  return [...sourcesReachableFrom(entry)]
-    .filter(([, source]) => toolDependencies(source).length > 0)
-    .map(([file]) => relative(file));
-}
 
 async function scheduledScripts(): Promise<string[]> {
   const paths: string[] = [];
@@ -129,6 +118,40 @@ describe("the tool dependency scan", () => {
     expect(toolDependencies("await Bun.$`ls`;")).not.toEqual([]);
   });
 
+  test("flags a named import from bun", () => {
+    expect(
+      toolDependencies('import { spawn, file, $ } from "bun";'),
+    ).not.toEqual([]);
+  });
+
+  test("flags a default import from bun", () => {
+    expect(toolDependencies('import Bun from "bun";')).not.toEqual([]);
+  });
+
+  test("flags a destructuring of Bun", () => {
+    expect(toolDependencies("const { spawn } = Bun;")).not.toEqual([]);
+  });
+
+  test("flags a bracket access on Bun", () => {
+    expect(toolDependencies('Bun["spawn"](["gh"]);')).not.toEqual([]);
+  });
+
+  test("flags an alias of Bun", () => {
+    expect(toolDependencies("const b = Bun; b.spawn(['gh']);")).not.toEqual([]);
+  });
+
+  test("flags a lookup through globalThis", () => {
+    expect(toolDependencies('globalThis["Bun"].spawn(["gh"]);')).not.toEqual(
+      [],
+    );
+  });
+
+  test("flags process.getBuiltinModule", () => {
+    expect(
+      toolDependencies('process.getBuiltinModule("child_process");'),
+    ).not.toEqual([]);
+  });
+
   test("does not flag node:path", () => {
     expect(toolDependencies('import { join } from "node:path";')).toEqual([]);
   });
@@ -145,6 +168,10 @@ describe("the tool dependency scan", () => {
     ).toEqual([]);
   });
 
+  test("does not flag Bun.sleep", () => {
+    expect(toolDependencies("await Bun.sleep(10);")).toEqual([]);
+  });
+
   test("does not flag a mention in a comment", () => {
     expect(
       toolDependencies('// import { readFile } from "node:fs/promises";\n'),
@@ -152,10 +179,95 @@ describe("the tool dependency scan", () => {
   });
 });
 
+describe("the tag scan", () => {
+  test("finds a tag key in a schedule", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse("script_path: f/factory/poll_issues\ntag: periodic\n"),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds a tag key added to a real schedule file", () => {
+    const text = readFileSync("f/factory/poll_issues.schedule.yaml", "utf8");
+    expect(
+      mentionsTag(Bun.YAML.parse(`${text}\ntag: periodic\n`), "periodic"),
+    ).toBe(true);
+  });
+
+  test("finds a tag key in a flow module", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse(
+          "value:\n  modules:\n    - id: a\n      value:\n        type: rawscript\n        tag: periodic\n",
+        ),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds a tag_override key in a flow module", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse(
+          "value:\n  modules:\n    - id: a\n      value:\n        type: script\n        path: f/x\n        tag_override: periodic\n",
+        ),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("finds a tag key inside a branch of a flow", () => {
+    expect(
+      mentionsTag(
+        Bun.YAML.parse(
+          "value:\n  modules:\n    - id: a\n      value:\n        type: branchone\n        branches:\n          - modules:\n              - id: b\n                value:\n                  type: script\n                  tag_override: periodic\n",
+        ),
+        "periodic",
+      ),
+    ).toBe(true);
+  });
+
+  test("ignores another tag", () => {
+    expect(mentionsTag(Bun.YAML.parse("tag: console\n"), "periodic")).toBe(
+      false,
+    );
+  });
+
+  test("ignores the word periodic in a value that is not a tag", () => {
+    expect(mentionsTag(Bun.YAML.parse("summary: periodic\n"), "periodic")).toBe(
+      false,
+    );
+  });
+
+  test("sees the tag console of a real script definition", async () => {
+    expect(await filesWithTag("console")).toContain(
+      "f/factory/console_fetch_watch.script.yaml",
+    );
+  });
+});
+
+describe("the input reference scan", () => {
+  test("flags a variable reference in an input default", () => {
+    expect(hasInputReference("default: $var:f/factory/github_token\n")).toBe(
+      true,
+    );
+  });
+
+  test("flags a resource reference in an input default", () => {
+    expect(hasInputReference("default: $res:f/factory/x\n")).toBe(true);
+  });
+
+  test("does not flag a definition without a reference", () => {
+    expect(hasInputReference("summary: x\n")).toBe(false);
+  });
+});
+
 describe("periodic scripts", () => {
-  test("the scripts with tag periodic are the designed ones", async () => {
-    expect((await scriptsWithTag("periodic")).sort()).toEqual(
-      [...PERIODIC_SCRIPTS].sort(),
+  test("the files that route to tag periodic are the designed ones", async () => {
+    expect((await filesWithTag("periodic")).sort()).toEqual(
+      PERIODIC_SCRIPTS.map((path) => `${path}.script.yaml`).sort(),
     );
   });
 
@@ -176,30 +288,13 @@ describe("periodic scripts", () => {
   });
 
   test("no file a periodic script reaches has an import the scan cannot follow", () => {
-    const offenders = new Set<string>();
-    for (const path of PERIODIC_SCRIPTS) {
-      for (const [file, source] of sourcesReachableFrom(path)) {
-        if (unfollowableImports(source).length > 0) {
-          offenders.add(relative(file));
-        }
-      }
-    }
-    expect([...offenders]).toEqual([]);
+    expect(filesWithUnfollowableImports(PERIODIC_SCRIPTS)).toEqual([]);
   });
 
   test("every variable read in a reached file has a literal argument, except the listed ones", () => {
-    const offenders = new Set<string>();
-    for (const path of PERIODIC_SCRIPTS) {
-      for (const [file, source] of sourcesReachableFrom(path)) {
-        if (
-          nonLiteralVariableReads(source).length > 0 &&
-          !(relative(file) in NON_LITERAL_VARIABLE_READS)
-        ) {
-          offenders.add(relative(file));
-        }
-      }
-    }
-    expect([...offenders]).toEqual([]);
+    expect(
+      filesWithNonLiteralReads(PERIODIC_SCRIPTS, NON_LITERAL_VARIABLE_READS),
+    ).toEqual([]);
   });
 
   test("the listed non-literal reads still exist", () => {
@@ -213,18 +308,15 @@ describe("periodic scripts", () => {
   test("no periodic script declares a variable or resource reference in its inputs", async () => {
     const referencing: string[] = [];
     for (const path of PERIODIC_SCRIPTS) {
-      const yaml = await Bun.file(`${path}.script.yaml`).text();
-      if (/\$(?:var|res):/.test(yaml)) referencing.push(path);
+      if (hasInputReference(await Bun.file(`${path}.script.yaml`).text())) {
+        referencing.push(path);
+      }
     }
     expect(referencing).toEqual([]);
   });
 
   test("no file a periodic script reaches depends on files, subprocesses, or claude", () => {
-    const offenders = new Set<string>();
-    for (const path of PERIODIC_SCRIPTS) {
-      for (const file of filesWithToolDependencies(path)) offenders.add(file);
-    }
-    expect([...offenders]).toEqual([]);
+    expect(filesWithToolDependencies(PERIODIC_SCRIPTS)).toEqual([]);
   });
 
   test("the scan sees the secret variables the boundary is about", async () => {
@@ -238,34 +330,60 @@ describe("periodic scripts", () => {
   });
 
   test("a periodic script reads no secret variable but the allowed ones", async () => {
-    const offenders: string[] = [];
-    for (const path of PERIODIC_SCRIPTS) {
-      for (const secret of await reachedSecrets(path)) {
-        if (!MAY_READ_SECRET.includes(secret)) {
-          offenders.push(`${path}: ${secret}`);
-        }
-      }
-    }
-    expect(offenders).toEqual([]);
+    expect(await secretsOutside(PERIODIC_SCRIPTS, MAY_READ_SECRET)).toEqual([]);
   });
 });
 
-describe("the scan on scripts that stay on the default worker", () => {
-  test("sees the file dependency behind watch_pr_ci", () => {
-    expect(filesWithToolDependencies("f/factory/watch_pr_ci")).toContain(
+// 設計の一覧が空のままでも検査が空回りしないよう、defaultのworkerに残すscriptを渡して、違反が返ることを確かめる。
+describe("the checks on scripts that stay on the default worker", () => {
+  test("flags the file dependency behind watch_pr_ci", () => {
+    expect(filesWithToolDependencies(["f/factory/watch_pr_ci"])).toContain(
       "f/factory/lib/check_sandbox.ts",
     );
   });
 
-  test("sees the claude dependency behind poll_issues", () => {
-    expect(filesWithToolDependencies("f/factory/poll_issues")).toContain(
+  test("flags the claude dependency behind poll_issues", () => {
+    expect(filesWithToolDependencies(["f/factory/poll_issues"])).toContain(
       "f/factory/lib/claude.ts",
     );
   });
 
-  test("sees self_update read wmill_token", async () => {
-    expect(await reachedSecrets("f/factory/self_update")).toContain(
-      "f/factory/wmill_token",
-    );
+  test("flags the file dependency behind cleanup_workspaces", () => {
+    expect(
+      filesWithToolDependencies(["f/factory/cleanup_workspaces"]),
+    ).toContain("f/factory/cleanup_workspaces.ts");
+  });
+
+  test("flags the secrets self_update reads", async () => {
+    expect(
+      await secretsOutside(["f/factory/self_update"], MAY_READ_SECRET),
+    ).toContain("f/factory/wmill_token");
+  });
+
+  test("flags the discord webhook that notify_daily_summary reads", async () => {
+    expect(
+      await secretsOutside(["f/factory/notify_daily_summary"], MAY_READ_SECRET),
+    ).toEqual(["f/factory/discord_webhook_url"]);
+  });
+
+  test("does not flag github_token when it is allowed", async () => {
+    expect(
+      await secretsOutside(["f/factory/poll_issues"], MAY_READ_SECRET),
+    ).not.toContain(GITHUB_TOKEN);
+  });
+
+  test("flags a non-literal read that is not listed", () => {
+    expect(
+      filesWithNonLiteralReads(["f/factory/steps/console_query"], {}),
+    ).toContain("f/factory/steps/console_query.ts");
+  });
+
+  test("does not flag a non-literal read that is listed", () => {
+    expect(
+      filesWithNonLiteralReads(["f/factory/steps/console_query"], {
+        ...NON_LITERAL_VARIABLE_READS,
+        "f/factory/steps/console_query.ts": "テストの許可",
+      }),
+    ).toEqual([]);
   });
 });
