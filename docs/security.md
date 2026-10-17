@@ -1098,6 +1098,7 @@ Console用workerが読むsecret変数に上限を置くのと同じく、定期�
 
 - `f/`の下のYAMLのうち、tag`periodic`へ振り分けるものが、テストの一覧のscriptの定義と一致する。
   scriptの定義の`tag`だけでなく、スケジュールの`tag`と、フローのモジュールの`tag`と`tag_override`も、入れ子の中まで調べる。
+  読めないYAMLがあれば、ファイル名を添えてテストが落ちる。
   足すときは、一覧とこの節の選定の結果を同じ変更で直す。
 - どのscriptも、スケジュールが呼ぶscriptで、`timeout`を持つ。
 - importでたどれるソースが読むsecret変数は、`github_token`だけである。
@@ -1106,11 +1107,22 @@ Console用workerが読むsecret変数に上限を置くのと同じく、定期�
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
   `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
 
+`node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
+`f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。
+現在、該当する呼び出しは0件である。
+
 テストが見ないものは、コードのレビューで見る。
 
 - 式で組み立てたtag、フローの入力で渡すtag。
-- 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
 - Windmillの画面で付けたtag。
+- 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
+- 第三者パッケージ(`execa`、`fs-extra`、`zx`など)の中身。
+- resourceの中身で解決されるsecret。`getResource`が返す値の中の`$var:`は、走査が見ない。
+
+tag`periodic`を最初に付けるPRでは、そのscriptが読むresourceの中身を確かめる。
+`getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。
+参照があれば、参照先のsecret変数が`github_token`だけであることまで確かめる。
+テストが固定するのはsecret変数の名前の読み取りだけなので、この確認は人かレビューが行う。
 
 ### 選定の結果
 
