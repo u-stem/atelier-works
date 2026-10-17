@@ -4,7 +4,7 @@
 #
 # `infra/.env`も`infra/secrets.env`も無く、設定は`mise.toml`の`[env]`
 # (秘密でないものをコミット)と`mise.local.toml`(gitignore済みの秘密。
-# `mise set -E local KEY=value`で入れる)にある。このスクリプトはmiseの
+# `mise set -E local --stdin KEY`で標準入力から入れる)にある。このスクリプトはmiseの
 # タスク(`mise run bootstrap`)として動かす前提なので、値は既に環境変数にある。
 # 秘密のファイルは読まず、秘密の値も表示しない(任意の秘密は設定の有無だけを出す)。
 # APIを直接呼ぶときの`Authorization`ヘッダーは、curlの引数ではなく0700の
@@ -130,11 +130,11 @@ esac
 # --- 必須の設定(秘密でないもの、インスタンスの秘密) -------------------------
 : "${WM_HTTP_PORT:?run via 'mise run bootstrap' (mise.toml [env] sets this)}"
 : "${WM_ADMIN_EMAIL:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_EMAIL=...}"
-: "${WM_ADMIN_PASSWORD:?run via 'mise run bootstrap'; set with: mise set -E local WM_ADMIN_PASSWORD=...}"
+: "${WM_ADMIN_PASSWORD:?run via 'mise run bootstrap'; set it as described in docs/setup.md (the section on injecting secrets)}"
 
 # --- 手順0: 弱い・既定の管理者パスワードでは実行を拒む ----------------------
 if [ "${WM_ADMIN_PASSWORD}" = "changeme" ] || [ "${#WM_ADMIN_PASSWORD}" -lt 12 ]; then
-  die "WM_ADMIN_PASSWORD is the 'changeme' default or shorter than 12 characters; set a strong password: mise set -E local WM_ADMIN_PASSWORD=..."
+  die "WM_ADMIN_PASSWORD is the 'changeme' default or shorter than 12 characters; set a strong password as described in docs/setup.md (the section on injecting secrets)"
 fi
 
 # --- 任意の秘密。空でもbootstrapは動き、対応する変数を空で作成・更新する。
