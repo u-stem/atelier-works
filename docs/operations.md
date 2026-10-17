@@ -1774,6 +1774,105 @@ wmill resource push <定義ファイル> f/factory/factory_config
   ドラフトのPRは検知の対象から外れ、起動と通知をしない。動いている作業項目は、準備かpushの直前でドラフトを見て止まる。
 - auto-mergeを有効にしたPRは、起動を見送り、保留`pr_draft_or_auto_merge`で通知する。
 
+## 収集の運用
+
+`collect_github`が5分ごとに、`factory_config`の`owners`の所有者を順に読み、DBに集める。
+集めるのは、リポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数である。
+tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトークンだけを使う。
+仕組みと記録の意味は[GitHubの収集](internals/github-collect.md)にある。
+設定`gh_collect_enabled`が`false`の間は、トークンを読まず、何も書かずに終わる。
+既定は`false`である。
+今の収集は記録を書くだけで、ほかの処理は記録を読まない。
+
+### 収集を有効にする
+
+反映の順は次のとおりである。
+マージの後、`self_update`がscriptとスケジュールとmigrationを反映する。
+このときは`gh_collect_enabled`が`false`なので、収集は何もしない。
+反映を確かめてから、トークンを入れて有効にする。
+
+1. 反映の後に、`gh_collect_enabled`が`false`のまま、収集が何も書かずに終わることを実ジョブで確かめる。
+
+   ```bash
+   wmill job list --script-path f/factory/collect_github --limit 3
+   ```
+
+   定期ジョブ用のworkerで動いたことを見る。
+   `job get`の`worker`の名前に`periodic`が含まれていれば、動いている。
+   `auto_retry_pr_review`と`notify_daily_summary`が続けて成功することも見る。
+   未解決の通知`periodic_worker_missing`が残っていれば、次の`self_update`で解決される。
+2. 所有者ごとの読み取りトークンを作り、環境変数`GITHUB_READ_TOKEN_<OWNER>`として投入する。
+   手順は[セキュリティ](security.md#収集用の読み取りトークン)と[セットアップ](setup.md#資格情報を用意する)にある。
+3. `mise run bootstrap`を実行し、Windmillの変数`github_read_tokens`に反映する。
+4. 設定`gh_collect_enabled`を`true`に直す。
+   リソースの値を取得し、直して、定義ファイルから反映する。
+
+   ```bash
+   wmill resource get f/factory/factory_config --json
+   wmill resource push <定義ファイル> f/factory/factory_config
+   ```
+
+   取得した出力の`value`の項目だけを直し、`resource_type`と`description`は変えずに残して、定義ファイルに書く。
+   定義ファイルは、リポジトリの外の一時ディレクトリに置く。
+   反映した後に、もう一度取得し、直した項目以外が変わっていないことを確かめる。
+5. 次の周回(5分以内)の後に、所有者ごとの実行の記録を読む。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, ok, error_code, verified, id_checked, requests, cost, remaining, finished_at FROM factory.gh_collect_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10"
+   ```
+
+   トークンを入れた所有者の`ok`が`true`で、`requests`と`cost`が残っていることを見る。
+   トークンの無い所有者は`error_code`が`no_token`で、通知は出ない。
+6. 所有者ごとの`requests`が、リポジトリの数を100で割って切り上げた値に合うことを見る。
+7. 設定の`repo_allowlist`が空の所有者は、[件数の確かめ方](#許可リストが空のときの件数の確かめ方)の手順で、一覧の漏れを確かめる。
+
+### 実行の記録の読み方
+
+実行の記録は`factory.gh_collect_runs`に、所有者ごとに1行ずつ残る。
+`finished_at`が空の行は実行中か、終わりの更新に失敗した行である。
+最新の実行は、`finished_at`のある最新の行である。
+
+| `error_code` | 意味 | 対処 |
+| --- | --- | --- |
+| 空(`ok`が`true`) | 一覧を取り終え、照合が通り、記録を置き換えた | 要らない |
+| `no_token` | 変数が空か読めない。または、対応表にその所有者が無い。通知は出ない | トークンを入れ、`mise run bootstrap`を実行する |
+| `token_config_invalid` | 変数の形が誤り | `mise run bootstrap`を実行し直す。変数を手で書き換えない |
+| `unauthorized` | 401。トークンが失効したか、取り消された | トークンを作り直して入れる |
+| `forbidden` | レート制限でない403 | トークンの権限と、組織の承認を確かめる |
+| `rate_limited`、`secondary_limit` | レート制限。`next_allowed_at`まで通信しない。待つのは1時間以内に切り詰める | 待つ。続くときは所有者とリポジトリの数を見直す |
+| `http_5xx` | GitHubの5xx、通信断、GraphQLの宛先の404 | 続くときはGitHubの状態を確かめる |
+| `timeout` | 1要求の10秒の打ち切り | 続くときはGitHubの状態を確かめる |
+| `graphql_error` | 応答に`errors`がある(レート制限でない) | 続くときは調べる。権限名と項目の対応が合っていない可能性がある |
+| `parse_error` | 応答の形が誤り | 続くときは調べる |
+| `deadline` | 100秒の締め切りで、未着手か、一覧の途中で打ち切った。記録は前回のまま | 続くときは、所有者かリポジトリが多すぎる |
+| `db_error` | DBの書き込みに失敗した。記録は前回のまま | DBの状態を確かめる |
+| `owner_mismatch` | 設定のIDと一致しない、または所有者が見つからない。要対応の通知`owner_id_mismatch`が出る(設定にIDが無く、所有者が見つからないときは出ない) | `owners`の名前とIDを見直す |
+
+失敗した行は、リポジトリの記録(`factory.gh_repos`)を前回のまま残す。
+一覧を取り終え、照合が通った周回だけが、その所有者の記録を置き換える。
+
+### 許可リストが空のときの件数の確かめ方
+
+`repo_allowlist`が空の所有者は、見えないリポジトリを判別できない。
+`repo_allowlist`にあるリポジトリが一覧に無いときは`not_visible`として記録するが、空のときはその手がかりが無いためである。
+`gone`でないリポジトリの件数を、GitHubの所有者のリポジトリ一覧(forkとarchivedを除く)の件数と、目で比べる。
+
+```bash
+mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, count(*) AS repos FROM factory.gh_repos WHERE NOT gone GROUP BY owner ORDER BY owner"
+```
+
+合わないときは、トークンのRepository accessと、組織の承認を確かめる。
+
+### 収集を止める
+
+- 収集だけを止めるには、`gh_collect_enabled`を`false`に戻す。
+  設定は上と同じ手順で直す。
+  `factory_config`はsyncの対象外なので、反映で上書きされない。
+- スケジュールを止めるには、`collect_github.schedule.yaml`の`enabled`を`false`にする修正のPRを出す。
+  `self_update`が`sync push`するので、Windmillの画面で止めても上書きされうる。
+- migrationのdownは自動では走らない。
+  表は残るが、害は無い。
+
 ## 監査を使う
 
 Factory自身の運用記録の監査は、毎週月曜09:30に自動で走る(`audit_kickoff`)。Consoleの**レポート**の**今すぐ監査**で前倒しできる。
@@ -2157,7 +2256,7 @@ noticeには、Discordに送らない事項と、Discordに届かなくても残
 | `console_fetch_stale` | Consoleの取り込みの結果が30分以上更新されていない | 取り込みのコンテナ(`console_fetcher`)が動いているか確かめる |
 | `console_worker_missing` | tag `console`のジョブが、予定時刻から5分以上実行されずに待っている。Console用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、Consoleのジョブがqueueに溜まり、Consoleが止まる | `docker compose ps windmill_worker_console`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run up`を実行し、続けて`mise exec -- docker compose -f infra/docker-compose.yml up -d --force-recreate windmill_worker_console`で作り直す(`restart`は`factory_state_init`を経ずにマウントを解決し直す)。コンテナが作られていなければ、`factory_state_init`が失敗していないかを[Console用workerを確かめる](#console用workerを確かめる)の手順で確かめる。直らなければ、Windmillの画面でtag `console`の実行中のジョブとワーカーグループのtagを確かめる。自己更新(2分ごと)が検知し、Discordにも届く |
 | `console_worker_check_failed` | Console用のworkerがジョブを受けているかを、自己更新が、最初に確かめられなかった時刻から1時間続けて確かめられなかった。workerが止まっていても気づけない状態である | 自己更新のジョブログで、下の4種類の警告のどれが出ているかを確かめて原因を直す。`could not confirm the console worker from the job lists`が続くなら、`console_fetch_watch`のスケジュールが有効か、直近の実行がtag `console`で動いているかを確かめる。Discordにも届く |
-| `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から15分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
+| `periodic_worker_missing` | tag `periodic`のジョブが、予定時刻から20分以上実行されずに待っている。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、tag `periodic`を付けた定期ジョブが動かない。Discordにも届く | `docker compose ps windmill_worker_periodic`でコンテナの状態を確かめ、無ければ`mise run up`で起動する。動いていれば、`mise run doctor`のカスタムtagが許可されているかを確かめ、`NG`なら`mise run instance:tags`を実行する。許可されていれば、Windmillの画面でtag `periodic`の実行中のジョブとワーカーグループのtagを確かめる。待ちが解けると、自己更新(2分ごと)が自動で解決する |
 | `worker_sample_failed` | defaultのworkerの負荷を、10分(5回)続けて完全には記録できなかった。queueの取得、cgroupの読み取り、自分のジョブの情報の取得、DBへの記録のどれかが失敗している。記録の行は残るが、読めなかった列が空になる | [workerの負荷の記録を確かめる](#workerの負荷の記録を確かめる)の手順で、ジョブログの警告から原因を確かめて直す。完全な回に戻ると自動で解決される。Discordには届かない |
 | `worker_load_high` | defaultのworkerのメモリが、上限の割合以上になった、またはOOMで止められたプロセスが増えた。本文に原因、閾値、システムの画面のリンクが載る。Discordには届かない | システムの画面の「workerの負荷」で最新の値と最大値を確かめ、実行中のジョブを見る。続くなら、メモリを使うジョブの見直しか、メモリの上限の見直しを判断する。割合は設定`worker_alert_memory_ratio`で変えられる([閾値の通知](#閾値の通知))。自動では解決されないので、確かめたあとに人が解決する |
 | `review_gated_prolonged` | `review_post_mode`が`gated`のまま、レビューをPRに投稿しない状態が3日以上続いた。本文に作業項目の画面のリンクが載る。日数と件数は日次のまとめの「レビューの投稿」欄に出る。Discordには届かない | 投稿を続けるなら、`factory_config`の`review_post_mode`を`comment_only`に戻す。戻すと、次の日次のまとめの実行で自動で解決される。意図して続けるなら、作業項目で結果を確かめ、人が解決する。続く間は翌日に出直す |
@@ -2238,15 +2337,17 @@ Consoleが止まっていてもDiscordには届くので、通知の確認先は
 
 定期ジョブ用のworkerがジョブを受けているかどうかは、自己更新(`self_update`)が毎回の最後に、Console用のworkerの確認に続けて確かめる。
 判定は、tag `periodic`のジョブのうち、予定時刻を過ぎても実行が始まっていないものを、古い順に100件まで読んで決める。
-予定時刻から15分以上待っているものが1件でもあれば、workerがジョブを受けていないと判定し、通知`periodic_worker_missing`を残してDiscordにも送る。
-15分未満の待ちと、待つジョブが無いことは、問題なしと判定する。
-しきい値は、tag `periodic`を付けたscriptの`timeout`の最大値に余裕を足した値以上にしている。
+予定時刻から20分以上待っているものが1件でもあれば、workerがジョブを受けていないと判定し、通知`periodic_worker_missing`を残してDiscordにも送る。
+20分未満の待ちと、待つジョブが無いことは、問題なしと判定する。
+しきい値は、tag `periodic`を付けた各scriptについて、他のscriptの`timeout`の合計に余裕を足した値以上にしている。
 枠が1つなので、長く動くジョブの後ろで待つ間を、workerの不在と誤って知らせないためである。
+今の3本では、`collect_github`が最も待たされ、`notify_daily_summary`の600秒と`auto_retry_pr_review`の300秒の後ろで、最大900秒待つ。
+通知の解決は、本文のしきい値より前の固定の部分で選ぶので、しきい値を変える前に残した通知も、自動で解決される。
 
 Console用のworkerの確認と違い、動作の証拠は求めない。
 tag `periodic`を付けたscriptが無い間や、スケジュールが無効な間は、待つジョブがそもそも作られない。
 証拠を求めると、その間も判定できない回が続き、確認の失敗が通知されるためである。
-待つジョブが無くなるか、15分未満になると、残した通知を自動で解決する。
+待つジョブが無くなるか、20分未満になると、残した通知を自動で解決する。
 
 通知が立つのは、workerが居ないときだけではない。
 workerが居ても、枠が塞がっているときや、tagの設定がずれてジョブを受けないときにも立つ。
@@ -2255,12 +2356,12 @@ workerが居ても、枠が塞がっているときや、tagの設定がずれ�
 次の点に注意する。
 
 - この検知は、tag `periodic`のジョブが1件以上作られて初めて働く。tagを付けたscriptが無い間は、workerが止まっていても気づけない。
-- workerの枠は1つなので、長く動くジョブがあると、ほかのジョブが15分以上待ちうる。通知が出たら、実行中のジョブと、そのscriptの`timeout`を確かめる。
+- workerの枠は1つなので、長く動くジョブがあると、ほかのジョブが20分以上待ちうる。通知が出たら、実行中のジョブと、そのscriptの`timeout`を確かめる。
 - workerは居るがジョブが毎回すぐ失敗するときは、この検知では拾わない。スケジュールの失敗の検知(`schedule_failing`)が拾う。
 - `mise run up`で定期ジョブ用のworkerを作り直している間は、通知が出うる。作り直しが終われば、自動で解決する。
 - スケジュールの`permissioned_as`がsuperadminなら、カスタムtag`periodic`の許可が無くても動く。
   superadminでなければ、許可が要る。
-  現在の2本のスケジュールの`permissioned_as`は`u/admin`である。値は`wmill schedule get <scriptのパス> --json`で読める。
+  現在の3本のスケジュールの`permissioned_as`は`u/admin`である。値は`wmill schedule get <scriptのパス> --json`で読める。
   許可を欠くと、ジョブは積まれないことがある。実機では確かめていないので、起きうる事象として扱う。
   ジョブが積まれなければ、この検知も、スケジュールの失敗の検知(`schedule_failing`)も働かず、どちらでも拾えない。
   `mise run doctor`の「カスタムtag」の項目で、`periodic`が`OK`であることを確かめて防ぐ。`NG`なら`mise run instance:tags`を実行する。
@@ -2281,8 +2382,8 @@ mise exec -- docker compose -f infra/docker-compose.yml start windmill_worker_pe
 ```
 
 1. `stop`で定期ジョブ用のworkerを止める。
-2. tag `periodic`のscriptの次の予定から約20分以内に、通知`periodic_worker_missing`ができ、Discordにも届くことを見る。
-   内訳は、待ちの15分と、自己更新の間隔2分に、自己更新の実行時間を足した値である。
+2. tag `periodic`のscriptの次の予定から約25分以内に、通知`periodic_worker_missing`ができ、Discordにも届くことを見る。
+   内訳は、待ちの20分と、自己更新の間隔2分に、自己更新の実行時間を足した値である。
 3. `start`で戻す。待ちのジョブが動き出して数分以内に、通知が自動で解決されることを見る。
 
 tag `periodic`を付けたscriptが、定期ジョブ用のworkerで動くことは、反映の後に次のコマンドで確かめる。
@@ -2518,7 +2619,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   重なるのは、境界の数ミリ秒の丸めと、フローの親ジョブだけである。
   同時に動くジョブは1つである。
   Claudeのジョブが動く間、記録のジョブも、ほかの定期のジョブも待つ。
-  tag`periodic`を付けた定期ジョブは、定期ジョブ用のworkerが動かすので待たないが、現在は該当するscriptが無い。
+  tag`periodic`を付けた定期ジョブは、定期ジョブ用のworkerが動かすので待たない。
 - 1つのコンテナで複数のworkerが動くと、`worker_ping`の行も複数になる。
   nativeのworkerは1つのコンテナに8行あり、名前の末尾が行ごとに違う。
   defaultのworkerの1行は、複数のworkerが1行にまとまった表示ではない。

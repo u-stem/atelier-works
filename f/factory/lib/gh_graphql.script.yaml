@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] 宛先を固定したGitHubのGraphQLクライアント'
+description: 内部ライブラリです。直接実行するものではありません。読み取り専用のトークンをAuthorizationヘッダだけに載せ、api.github.comのGraphQLに送ります。失敗は例外にせず、分類に要る事実だけを返します。
 lock: '!inline f/factory/lib/gh_graphql.script.lock'
 kind: script
 schema:

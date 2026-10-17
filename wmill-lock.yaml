@@ -59,9 +59,9 @@ locks:
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
   f/factory/lib/gated_review_support: c858998fefbebb102f55e896471e4dc8195de412a39c8d60d2d36d22763bc1bb
-  f/factory/lib/gh_collect: 8b65c1866077e69c3cd7316be3133ff7f969a9019592c536cc11df2decf89256
-  f/factory/lib/gh_collect_support: b304489e4eaa2fa9a63de06e241089680468ed7491b605147f338dffd0397def
-  f/factory/lib/gh_graphql: 726c15331df119945b98ba340798508b266a965bdcbb515af7b726cb6e965499
+  f/factory/lib/gh_collect: 3f0fa4af4882df72b02540c8cb5ac5c979a3c31a00de566ee9ec4c8acdeb19a2
+  f/factory/lib/gh_collect_support: 74d35d90cce437806ff424a769604b8e088ec0281be83b3c29d2083312a83d85
+  f/factory/lib/gh_graphql: c9c9c050791bf6cde32352ddb20c350971414a58bc01f6f623068411a6ce8881
   f/factory/lib/github: a5e25a61aee3616043d4bfce008f1fa8ccc4669cd82200a4ed3d8ed3ef8d6e82
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
@@ -87,7 +87,7 @@ locks:
   f/factory/lib/metadata_precheck: 2af277b61b41147128ea4f2e0bf7a14b3d43eb36ebb831b39edd96795ce9c89f
   f/factory/lib/metadata_signature: e82f134efb6fd01718b670cef10f4e90ec209d68c9e31865a8581fa5b9f50ecf
   f/factory/lib/model_policy: 03459306ffe370760162811a5fcf7560311c253b7ea220ce59c2ae05564d495f
-  f/factory/lib/owner_id_notice: 1f6f10102aac77e0ca63cfc139a6c93bad5458c554877b0e003f3e2dec88c391
+  f/factory/lib/owner_id_notice: c5735593c26e7aa85064e0cf59ddb60a9ee0baa7ab6978038641c25d0339085d
   f/factory/lib/periodic_worker: 8d0933e74d434317f40860ba6989f7b6b8bd729fce94e383ea89bcf4f762c4ae
   f/factory/lib/pipeline_lease: 44c3d7736bbcbb10945f2524b7fbf9af55924127cf31de7e7ed21e6cabe01a26
   f/factory/lib/poll_support: 76afdaffb8bb1ee30f54d08cbb7eed25d1bd5fa915399f2f1f23f5b428f3e634

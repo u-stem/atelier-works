@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] GitHubの収集の本体'
+description: 内部ライブラリです。直接実行するものではありません。所有者ごとにリポジトリの一覧を読み、照合が通ったときだけ記録を置き換えます。依存を注入して使います。
 lock: '!inline f/factory/lib/gh_collect.script.lock'
 kind: script
 schema:
