@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { GitHubHttpError } from "../../f/factory/lib/github.ts";
+import * as ownerIdGateModule from "../../f/factory/lib/owner_id_gate.ts";
 import {
   filterByRepoAllowlist,
   filterVerifiedOwners,
@@ -251,5 +252,20 @@ describe("filterVerifiedOwners followed by filterByRepoAllowlist", () => {
         factory_repo: FACTORY_REPO,
       }),
     ).toEqual([{ owner: "octo-org", repo: "app" }]);
+  });
+});
+
+describe("gateOwnerId from owner_id_gate.ts", () => {
+  test("records the not-found notice for a GitHubHttpError thrown by github.ts", async () => {
+    const { deps, recorded } = setup(() =>
+      Promise.reject(new GitHubHttpError("not found", 404)),
+    );
+    await ownerIdGateModule.gateOwnerId(WITH_ID, deps);
+    expect(recorded.notices).toEqual([
+      {
+        kind: ownerIdGateModule.OWNER_ID_MISMATCH_KIND,
+        message: ownerIdGateModule.ownerNotFoundMessage("octo-owner", 4242),
+      },
+    ]);
   });
 });
