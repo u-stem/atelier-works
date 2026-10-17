@@ -2604,6 +2604,20 @@ export async function getPr(
   };
 }
 
+/** `getPr`の結果に、PRを作った時刻(epochミリ秒)を添えたもの。読めなければ`createdAtMs`は`null`。 */
+export type PullRequestWithCreatedAt = PullRequest & {
+  readonly createdAtMs: number | null;
+};
+
+export async function getPrWithCreatedAt(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PullRequestWithCreatedAt> {
+  return { ...(await getPr(client, owner, repo, number)), createdAtMs: 0 };
+}
+
 export type PrDiff = {
   readonly diff: string;
   readonly truncated: boolean;
