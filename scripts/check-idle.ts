@@ -284,6 +284,24 @@ export function workerWillBeRecreated(composeOutput: string): boolean | null {
   return seen ? recreated : null;
 }
 
+export function liveJobIdsSql(_ids: readonly string[]): string | null {
+  return null;
+}
+
+export function parseLiveJobIds(_output: string): Reading<string> {
+  return { ok: true, rows: [], malformed: 0 };
+}
+
+export function splitLeftoverWorkItems(
+  items: Reading<RunningWorkItem>,
+  _live: Reading<string>,
+): {
+  readonly items: Reading<RunningWorkItem>;
+  readonly leftovers: readonly RunningWorkItem[];
+} {
+  return { items, leftovers: [] };
+}
+
 function unreadableLine(
   what: string,
   reading: {
@@ -354,6 +372,7 @@ function isUnverifiable<T>(reading: Reading<T>): boolean {
 export function judge(
   jobs: Reading<RunningJob>,
   items: Reading<RunningWorkItem>,
+  _leftovers: readonly RunningWorkItem[] = [],
 ): Verdict {
   const busy = hasWork(jobs) || hasWork(items);
   const unverifiable = isUnverifiable(jobs) || isUnverifiable(items);
@@ -516,7 +535,7 @@ function readSnapshot(budgetMs: number): Snapshot {
     parseRunningWorkItems,
     Math.min(PSQL_TIMEOUT_MS, budgetMs - (Date.now() - startedAt)),
   );
-  return { jobs, items };
+  return { jobs, items, leftovers: [] };
 }
 
 /** dry-runの結果から、workerが作り直されるかを返す。実行できない、または読めないときは`null`。 */
@@ -552,6 +571,7 @@ function dryRunRecreatesWorker(): boolean | null {
 export type Snapshot = {
   readonly jobs: Reading<RunningJob>;
   readonly items: Reading<RunningWorkItem>;
+  readonly leftovers: readonly RunningWorkItem[];
 };
 
 export type CheckIdleOptions = {
@@ -635,8 +655,8 @@ export function withPullNotice(verdict: Verdict): Verdict {
 
 function pair(
   snapshot: Snapshot,
-): [Reading<RunningJob>, Reading<RunningWorkItem>] {
-  return [snapshot.jobs, snapshot.items];
+): [Reading<RunningJob>, Reading<RunningWorkItem>, readonly RunningWorkItem[]] {
+  return [snapshot.jobs, snapshot.items, snapshot.leftovers];
 }
 
 /** `--name=<0以上の整数>`の値を読む。無い、または整数でないときは`fallback`。 */

@@ -17,6 +17,8 @@ import {
   classifyReadFailure,
   classifySpawnError,
   judge,
+  liveJobIdsSql,
+  parseLiveJobIds,
   parseRunningJobs,
   parseRunningWorkItems,
   type Reading,
@@ -26,6 +28,7 @@ import {
   runningJobsSql,
   runningWorkItemsSql,
   type Snapshot,
+  splitLeftoverWorkItems,
   withPullNotice,
   workerWillBeRecreated,
 } from "../../scripts/check-idle.ts";
@@ -40,8 +43,8 @@ const MIGRATIONS_DIR = resolve(
 
 const JOB_LINE =
   '{"id":"0190a1b2-0000-7000-8000-000000000001","script":"f/factory/implement","kind":"script","tag":"bun","started_at":"2026-10-17T01:02:03+00:00"}';
-const ITEM_LINE =
-  '{"id":42,"kind":"issue","status":"implementing","owner":"u-stem","repo":"atelier-works","issue_number":7,"flow_job_id":"0190a1b2-0000-7000-8000-000000000002"}';
+const ITEM_FLOW_JOB_ID = "0190a1b2-0000-7000-8000-000000000002";
+const ITEM_LINE = `{"id":42,"kind":"issue","status":"implementing","owner":"u-stem","repo":"atelier-works","issue_number":7,"flow_job_id":"${ITEM_FLOW_JOB_ID}"}`;
 
 function okJobs(...rows: RunningJob[]): Reading<RunningJob> {
   return { ok: true, rows, malformed: 0 };
@@ -474,6 +477,199 @@ describe("judge", () => {
   });
 });
 
+function okIds(...rows: string[]): Reading<string> {
+  return { ok: true, rows, malformed: 0 };
+}
+
+const UNKNOWN_JOB_ID = "0190a1b2-0000-7000-8000-0000000000ff";
+
+describe("splitLeftoverWorkItems", () => {
+  test("treats an item whose flow job is not in the queue as a leftover", () => {
+    const split = splitLeftoverWorkItems(okItems(ITEM), okIds());
+
+    expect(split.leftovers).toEqual([ITEM]);
+  });
+
+  test("removes a leftover from the running items", () => {
+    const split = splitLeftoverWorkItems(okItems(ITEM), okIds());
+
+    expect(split.items).toEqual(okItems());
+  });
+
+  test("keeps an item whose flow job is in the queue", () => {
+    const split = splitLeftoverWorkItems(
+      okItems(ITEM),
+      okIds(ITEM.flowJobId ?? ""),
+    );
+
+    expect(split.items).toEqual(okItems(ITEM));
+  });
+
+  test("has no leftover when the flow job is in the queue", () => {
+    const split = splitLeftoverWorkItems(
+      okItems(ITEM),
+      okIds(ITEM.flowJobId ?? ""),
+    );
+
+    expect(split.leftovers).toEqual([]);
+  });
+
+  test("keeps an item without a flow job id", () => {
+    const item = { ...ITEM, flowJobId: null };
+
+    expect(splitLeftoverWorkItems(okItems(item), okIds()).items).toEqual(
+      okItems(item),
+    );
+  });
+
+  test("keeps an item whose flow job id is not a uuid", () => {
+    const item = { ...ITEM, flowJobId: "{}" };
+
+    expect(splitLeftoverWorkItems(okItems(item), okIds()).items).toEqual(
+      okItems(item),
+    );
+  });
+
+  test("keeps every item when the queue could not be reached", () => {
+    const live: Reading<string> = {
+      ok: false,
+      kind: "unreachable",
+      reason: "db is down",
+    };
+
+    expect(splitLeftoverWorkItems(okItems(ITEM), live).items).toEqual(
+      okItems(ITEM),
+    );
+  });
+
+  test("keeps every item when the queue could not be verified", () => {
+    const live: Reading<string> = {
+      ok: false,
+      kind: "unverifiable",
+      reason: "syntax error",
+    };
+
+    expect(splitLeftoverWorkItems(okItems(ITEM), live).items).toEqual(
+      okItems(ITEM),
+    );
+  });
+
+  test("keeps every item when a queue row could not be read", () => {
+    const live: Reading<string> = { ok: true, rows: [], malformed: 1 };
+
+    expect(splitLeftoverWorkItems(okItems(ITEM), live).items).toEqual(
+      okItems(ITEM),
+    );
+  });
+
+  test("keeps the unreadable work item count", () => {
+    const items: Reading<RunningWorkItem> = {
+      ok: true,
+      rows: [ITEM],
+      malformed: 2,
+    };
+
+    const split = splitLeftoverWorkItems(items, okIds());
+
+    expect(split.items).toEqual({ ok: true, rows: [], malformed: 2 });
+  });
+
+  test("leaves an unreadable work item reading as it is", () => {
+    const split = splitLeftoverWorkItems(unverifiableItems, okIds());
+
+    expect(split.items).toEqual(unverifiableItems);
+  });
+
+  test("splits a mix into the running one and the leftover one", () => {
+    const running = { ...ITEM, id: 43, flowJobId: UNKNOWN_JOB_ID };
+    const split = splitLeftoverWorkItems(
+      okItems(ITEM, running),
+      okIds(UNKNOWN_JOB_ID),
+    );
+
+    expect(split.items).toEqual(okItems(running));
+  });
+});
+
+describe("liveJobIdsSql", () => {
+  test("names the flow job id", () => {
+    expect(liveJobIdsSql([ITEM.flowJobId ?? ""])).toContain(
+      "0190a1b2-0000-7000-8000-000000000002",
+    );
+  });
+
+  test("reads the queue without filtering on running", () => {
+    expect(liveJobIdsSql([ITEM.flowJobId ?? ""])).not.toContain("running");
+  });
+
+  test("leaves out a value that is not a uuid", () => {
+    expect(liveJobIdsSql(["x'; DROP TABLE v2_job_queue; --"])).toBeNull();
+  });
+
+  test("returns null when there is no id to look up", () => {
+    expect(liveJobIdsSql([])).toBeNull();
+  });
+});
+
+describe("parseLiveJobIds", () => {
+  test("reads one id per line", () => {
+    expect(parseLiveJobIds(`${UNKNOWN_JOB_ID}\n`)).toEqual(
+      okIds(UNKNOWN_JOB_ID),
+    );
+  });
+
+  test("counts a line that is not an id as unreadable", () => {
+    expect(parseLiveJobIds("garbage\n")).toEqual({
+      ok: true,
+      rows: [],
+      malformed: 1,
+    });
+  });
+});
+
+describe("judge with leftover work items", () => {
+  test("exits 0 when only a leftover remains", () => {
+    expect(judge(okJobs(), okItems(), [ITEM]).exitCode).toBe(0);
+  });
+
+  test("warns about the leftover", () => {
+    const text = judge(okJobs(), okItems(), [ITEM]).lines.join("\n");
+
+    expect(text).toContain("warning:");
+  });
+
+  test("names the leftover work item and its flow job", () => {
+    const text = judge(okJobs(), okItems(), [ITEM]).lines.join("\n");
+
+    expect(text).toContain("work item 42 implementing");
+  });
+
+  test("is idle when only a leftover remains", () => {
+    expect(judge(okJobs(), okItems(), [ITEM]).state).toBe("idle");
+  });
+
+  test("still exits 1 when a job is running next to a leftover", () => {
+    expect(judge(okJobs(JOB), okItems(), [ITEM]).exitCode).toBe(1);
+  });
+
+  test("still exits 1 when another work item is running next to a leftover", () => {
+    const running = { ...ITEM, id: 43 };
+
+    expect(judge(okJobs(), okItems(running), [ITEM]).exitCode).toBe(1);
+  });
+
+  test("does not list the leftover as running work", () => {
+    const running = { ...ITEM, id: 43 };
+    const text = judge(okJobs(), okItems(running), [ITEM]).lines.join("\n");
+
+    expect(text).not.toContain("  work item 42");
+  });
+
+  test("still exits 1 when the jobs could not be verified next to a leftover", () => {
+    expect(judge(unverifiableJobs, okItems(), [ITEM]).exitCode).toBe(1);
+  });
+});
+
 describe("SQL", () => {
   test("the jobs query reads only running rows", () => {
     expect(runningJobsSql()).toContain("q.running");
@@ -550,7 +746,9 @@ describe("command", () => {
       '[ -f "$f" ] || f="$FAKE_DIR/$db.out"',
       'cat "$f" 2>/dev/null',
       'cat "$FAKE_DIR/$db.err" >&2 2>/dev/null',
-      'exit "$(cat "$FAKE_DIR/$db.code" 2>/dev/null || echo 0)"',
+      'c="$FAKE_DIR/$db.code.$n"',
+      '[ -f "$c" ] || c="$FAKE_DIR/$db.code"',
+      'exit "$(cat "$c" 2>/dev/null || echo 0)"',
       "",
     ].join("\n");
     const path = join(dir, "docker");
@@ -607,10 +805,49 @@ describe("command", () => {
     expect(run().stderr).toContain("f/factory/implement");
   });
 
-  test("exits 1 when a work item is implementing", () => {
-    setup({ "windmill.out": "", "datatable_db.out": `${ITEM_LINE}\n` });
+  test("exits 1 when a work item is implementing and its flow job is queued", () => {
+    setup({
+      "windmill.out.1": "",
+      "windmill.out.2": `${ITEM_FLOW_JOB_ID}\n`,
+      "datatable_db.out": `${ITEM_LINE}\n`,
+    });
 
     expect(run().exitCode).toBe(1);
+  });
+
+  test("exits 0 when a work item is implementing but its flow job is not queued", () => {
+    setup({ "windmill.out": "", "datatable_db.out": `${ITEM_LINE}\n` });
+
+    expect(run().exitCode).toBe(0);
+  });
+
+  test("warns about a work item whose flow job is not queued", () => {
+    setup({ "windmill.out": "", "datatable_db.out": `${ITEM_LINE}\n` });
+
+    expect(run().stderr).toContain("work item 42 implementing");
+  });
+
+  test("exits 1 when the queue lookup fails with an SQL error", () => {
+    setup({
+      "windmill.out.1": "",
+      "windmill.out.2": "",
+      "windmill.code.2": "1",
+      "datatable_db.out": `${ITEM_LINE}\n`,
+    });
+
+    expect(run().exitCode).toBe(1);
+  });
+
+  test("reads the Windmill database only once when no work item is running", () => {
+    setup({ "windmill.out": "", "datatable_db.out": "" });
+
+    run();
+
+    expect(
+      readFileSync(join(dir, "calls"), "utf8")
+        .split("\n")
+        .filter((line) => line.includes("-d windmill")),
+    ).toHaveLength(1);
   });
 
   test("prints a warning when the database is unreachable", () => {
@@ -802,15 +1039,30 @@ describe("command", () => {
   });
 });
 
-const idleSnapshot: Snapshot = { jobs: okJobs(), items: okItems() };
-const busySnapshot: Snapshot = { jobs: okJobs(JOB), items: okItems() };
+const idleSnapshot: Snapshot = {
+  jobs: okJobs(),
+  items: okItems(),
+  leftovers: [],
+};
+const busySnapshot: Snapshot = {
+  jobs: okJobs(JOB),
+  items: okItems(),
+  leftovers: [],
+};
+const leftoverSnapshot: Snapshot = {
+  jobs: okJobs(),
+  items: okItems(),
+  leftovers: [ITEM],
+};
 const unreadableSnapshot: Snapshot = {
   jobs: unreachableJobs,
   items: unreachableItems,
+  leftovers: [],
 };
 const unverifiableSnapshot: Snapshot = {
   jobs: unverifiableJobs,
   items: unverifiableItems,
+  leftovers: [],
 };
 
 // 時計とsleepを差し替え、待たずに再確認の流れを試す。sleepは時計を進める。
@@ -857,6 +1109,20 @@ describe("checkIdle", () => {
     h.run();
 
     expect(h.readAt).toEqual([0]);
+  });
+
+  test("passes without waiting when only leftover work items remain", () => {
+    const h = harness(() => leftoverSnapshot);
+
+    h.run();
+
+    expect(h.readAt).toEqual([0]);
+  });
+
+  test("exits 0 when only leftover work items remain", () => {
+    const h = harness(() => leftoverSnapshot);
+
+    expect(h.run().exitCode).toBe(0);
   });
 
   test("passes when the second read is idle", () => {
