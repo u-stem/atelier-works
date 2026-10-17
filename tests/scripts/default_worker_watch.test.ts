@@ -82,6 +82,11 @@ describe("buildWatchDeps", () => {
     ]);
   });
 
+  test("provides a sleep that waits and then resolves", async () => {
+    const { io } = setup();
+    expect(await buildWatchDeps(io, "local", log).sleep(1)).toBeUndefined();
+  });
+
   test("passes the instance name", () => {
     const { io } = setup();
     expect(buildWatchDeps(io, "local", log).instanceName).toBe("local");

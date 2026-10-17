@@ -63,6 +63,7 @@ export function buildWatchDeps(
     notify: async (event) => {
       await io.notifyBestEffort(await io.getWebhookUrl(), event, log);
     },
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     instanceName,
     log,
   };

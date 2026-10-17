@@ -11,11 +11,16 @@
 // tag `periodic`のworkerで動かし、`periodic_worker.ts`の確認(defaultのworkerで動く`self_update`が呼ぶ)と
 // 互いに監視する。待ちが解けたら、残した通知を自動で解決する。
 // 確認できない状態は、行動につながらないので通知にしない。
+// 1回の観測では止まりと決めない。ジョブの切り替わりの隙間や、workerを作り直す瞬間に、
+// 待ちが長いのに動くジョブが無い観測が起こりうるためである。
+// 止まりの候補になったら、同じ実行の中で少しおいて読み直し、最も古い待ちが同じジョブのまま、
+// defaultで動くジョブが無いときだけ止まりとする。
 
 import type { NotifyEvent } from "./discord.ts";
 import { type Logger, maskSecrets } from "./log.ts";
 import type { NoticeRecord } from "./types.ts";
 import {
+  oldestWaitingJobId,
   summarizeRunning,
   summarizeWaiting,
   WORKER_SAMPLE_QUEUE_PER_PAGE,
@@ -26,12 +31,19 @@ import {
  * defaultのworkerが受けていないと見なす。
  * 動いているジョブが無いので、先に動くジョブの後ろで待っているのではない。
  * workerの再起動(`mise run up`)で受けない間と、ジョブを拾うまでの遅れを見込んだ秒数にする。
- * 確認は5分ごとなので、止まってから通知まで最大でこの秒数に5分を足した時間がかかる。
+ * 止まってから通知までの最大の遅れは、待つジョブが次に予定される時刻までの約90秒、この秒数、
+ * 確認の周期300秒、読み直しの`DEFAULT_WORKER_RECHECK_DELAY_MS`を合わせた約1050秒で、約20分以内に収まる。
  */
 export const DEFAULT_WORKER_WAIT_SECONDS = 600;
 
-/** 確認が終わるまで待つ上限。確認が止まってもscriptを長引かせないための値。 */
+/** 1回の観測(2つの一覧の取得と判定)が終わるまで待つ上限。確認が止まってもscriptを長引かせないための値。 */
 export const DEFAULT_WORKER_CHECK_TIMEOUT_MS = 20_000;
+
+/**
+ * 止まりの候補になってから、読み直すまでおく時間。
+ * 確認全体の上限は、観測2回分の上限にこの時間を足した値で、scriptの`timeout`(120秒)に収まる。
+ */
+export const DEFAULT_WORKER_RECHECK_DELAY_MS = 60_000;
 
 const MISSING_CAUSE = `defaultのworkerのqueueに、予定時刻から${DEFAULT_WORKER_WAIT_SECONDS / 60}分以上実行されずに待つジョブがあり、defaultで動いているジョブがありません。defaultのworkerが居ないか、ジョブを受けられない状態です。flowとscriptのジョブが動かず、queueに溜まります`;
 const MISSING_ACTION =
@@ -54,11 +66,13 @@ export type DefaultWorkerCheck = "ok" | "stalled" | "unknown";
  * 次の順に決める。
  * 1. 待ちの応答が一覧でない、または読める要素が無ければ`unknown`。
  * 2. defaultのworkerが受けるtagのジョブの最長の待ちが`DEFAULT_WORKER_WAIT_SECONDS`秒未満なら`ok`。
+ *    ただし、待ちの一覧に読めない要素があるとき、または一覧が1ページを埋めているときは`unknown`。
+ *    しきい値以上の待ちを、読み落としている可能性を除けないためである。
  * 3. 実行中の応答が読めなければ`unknown`。
  * 4. defaultで動いているジョブが1つでもあれば`ok`。長いジョブが枠を使っているだけである。
  * 5. 実行中の一覧に読めない要素や、受けるworkerが分からないtagの要素があるとき、
  *    または一覧が1ページを埋めているときは`unknown`。それらがdefaultで動いている可能性を除けないため。
- * 6. それ以外は`stalled`。
+ * 6. それ以外は`stalled`。1回の観測の結果なので、止まりの確定は`checkDefaultWorker`が読み直して決める。
  * 応答は信頼できない入力として読む。集計は`worker_load_support.ts`と同じ規則で、
  * defaultのworkerが受けるtagだけを数え、フローの親ジョブは実行中に数えない。
  */
@@ -72,7 +86,10 @@ export function judgeDefaultQueue(
     return "unknown";
   }
   if (waitingSummary.maxWaitSeconds < DEFAULT_WORKER_WAIT_SECONDS) {
-    return "ok";
+    const waitingTruncated =
+      Array.isArray(waitingJobs) &&
+      waitingJobs.length >= WORKER_SAMPLE_QUEUE_PER_PAGE;
+    return waitingSummary.malformed > 0 || waitingTruncated ? "unknown" : "ok";
   }
   const runningSummary = summarizeRunning(runningJobs, null);
   if (runningSummary === null) {
@@ -114,7 +131,11 @@ export type DefaultWorkerCheckDeps = {
   readonly notify: (event: NotifyEvent) => Promise<unknown>;
   readonly instanceName: string;
   readonly log: Logger;
-  /** 省略時は`DEFAULT_WORKER_CHECK_TIMEOUT_MS`。 */
+  /** 読み直す前に待つ。テストでは待たない関数に差し替える。 */
+  readonly sleep: (ms: number) => Promise<void>;
+  /** 省略時は`DEFAULT_WORKER_RECHECK_DELAY_MS`。 */
+  readonly recheckDelayMs?: number;
+  /** 1回の観測の上限。省略時は`DEFAULT_WORKER_CHECK_TIMEOUT_MS`。 */
   readonly timeoutMs?: number;
 };
 
@@ -151,9 +172,16 @@ async function resolveRecovered(deps: DefaultWorkerCheckDeps): Promise<void> {
   }
 }
 
-async function checkOnce(
-  deps: DefaultWorkerCheckDeps,
-): Promise<DefaultWorkerCheck> {
+/** 1回の観測の結果。`oldestId`は、`stalled`のときの最も古い待ちのジョブのID。 */
+type Observation = {
+  readonly result: DefaultWorkerCheck;
+  readonly oldestId: string | null;
+};
+
+const UNKNOWN_OBSERVATION: Observation = { result: "unknown", oldestId: null };
+
+/** 待ちと実行中の一覧を読み、1回分の判定を返す。例外は投げない。 */
+async function observe(deps: DefaultWorkerCheckDeps): Promise<Observation> {
   let waitingJobs: unknown;
   try {
     waitingJobs = await deps.listWaitingJobs();
@@ -161,7 +189,7 @@ async function checkOnce(
     deps.log.warn("could not list the waiting default jobs", {
       error: maskSecrets(String(err)),
     });
-    return "unknown";
+    return UNKNOWN_OBSERVATION;
   }
   let runningJobs: unknown;
   try {
@@ -172,12 +200,62 @@ async function checkOnce(
       error: maskSecrets(String(err)),
     });
   }
-  const result = judgeDefaultQueue(runningJobs, waitingJobs, deps.now());
+  const nowMs = deps.now();
+  const result = judgeDefaultQueue(runningJobs, waitingJobs, nowMs);
   if (result === "unknown") {
     deps.log.warn("could not confirm the default worker from the job lists");
-  } else if (result === "stalled") {
+  }
+  return {
+    result,
+    oldestId:
+      result === "stalled" ? oldestWaitingJobId(waitingJobs, nowMs) : null,
+  };
+}
+
+/**
+ * 止まりの候補になった観測を、少しおいて読み直して確かめる。
+ * 最も古い待ちが同じジョブのままで、defaultで動くジョブが無いときだけ`stalled`にする。
+ * 最も古い待ちが別のジョブに替わっていれば、queueは動いているので`ok`にする。
+ * 最も古い待ちのIDが読めないとき、待つ前後の観測が判定できないときは`unknown`にする。
+ */
+async function confirmStalled(
+  deps: DefaultWorkerCheckDeps,
+  first: Observation,
+): Promise<DefaultWorkerCheck> {
+  if (first.oldestId === null) {
+    deps.log.warn("could not read the id of the oldest waiting default job");
+    return "unknown";
+  }
+  try {
+    await deps.sleep(deps.recheckDelayMs ?? DEFAULT_WORKER_RECHECK_DELAY_MS);
+  } catch (err) {
+    deps.log.warn("could not wait before reading the default jobs again", {
+      error: maskSecrets(String(err)),
+    });
+    return "unknown";
+  }
+  const second = await observe(deps);
+  if (second.result !== "stalled") {
+    return second.result;
+  }
+  if (second.oldestId === null) {
+    deps.log.warn("could not read the id of the oldest waiting default job");
+    return "unknown";
+  }
+  return second.oldestId === first.oldestId ? "stalled" : "ok";
+}
+
+async function checkOnce(
+  deps: DefaultWorkerCheckDeps,
+): Promise<DefaultWorkerCheck> {
+  const first = await observe(deps);
+  const result =
+    first.result === "stalled"
+      ? await confirmStalled(deps, first)
+      : first.result;
+  if (result === "stalled") {
     await recordAndNotify(deps);
-  } else {
+  } else if (result === "ok") {
     await resolveRecovered(deps);
   }
   return result;
@@ -212,19 +290,24 @@ async function withTimeout<T>(
  * 受けていなければnoticeを残してDiscordに送り、受けていると分かればその通知を解決する。
  * 一覧を読めないとき、応答の形が想定外のとき、`timeoutMs`以内に終わらないときは
  * `unknown`を返し、noticeは残さず、解決もしない。workerが受けていないと決めつけないためである。
+ * 止まりの候補になったときは、`recheckDelayMs`おいて読み直し、同じ待ちが残るときだけ`stalled`にする。
+ * 全体の上限は、観測2回分の`timeoutMs`に`recheckDelayMs`を足した値である。
  * 例外は投げない。
  */
 export async function checkDefaultWorker(
   deps: DefaultWorkerCheckDeps,
 ): Promise<DefaultWorkerCheck> {
   const timeoutMs = deps.timeoutMs ?? DEFAULT_WORKER_CHECK_TIMEOUT_MS;
+  const recheckDelayMs = deps.recheckDelayMs ?? DEFAULT_WORKER_RECHECK_DELAY_MS;
+  // 観測は2回まで。通知の記録と送信は、2回目の観測の上限の中に収める。
+  const totalMs = 2 * timeoutMs + recheckDelayMs;
   return await withTimeout<DefaultWorkerCheck>(
     checkOnce(deps),
-    timeoutMs,
+    totalMs,
     "unknown",
     () => {
       deps.log.warn("default worker check timed out", {
-        timeout_ms: timeoutMs,
+        timeout_ms: totalMs,
       });
     },
   );

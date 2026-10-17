@@ -48,7 +48,7 @@ tag`periodic`を付けるのは、ファイル、独自イメージの道具、c
 依存するジョブは、defaultのworkerで動かす。
 tag`periodic`のジョブが15分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
 逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([運用](operations.md#defaultのworkerの検知を確かめる))。
-止まったworkerの中のscriptは動かないので、2つのworkerが互いに相手を監視する。
+止まったworkerの中のscriptは動かないので、片方だけが止まるときは、もう一方のworkerで動くscriptが拾う。両方が止まる障害は拾えない。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。

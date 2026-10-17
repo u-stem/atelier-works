@@ -469,13 +469,45 @@ export function summarizeWaiting(
 }
 
 /**
- * 待っているジョブのうち、defaultのworkerが受けるtagで予定時刻が最も古いジョブのIDを返す(仮の実装)。
+ * 待っているジョブのうち、defaultのworkerが受けるtagで予定時刻が最も古いジョブのIDを返す。
+ * 数える対象は`summarizeWaiting`と同じで、実行中でなく、中断されておらず、予定時刻が`nowMs`以前のジョブである。
+ * 応答が配列でないとき、対象が無いとき、最も古いジョブのIDが文字列で読めないときは`null`を返す。
+ * IDの読めない要素を飛ばすと、最も古いジョブを取り違えるので、飛ばさない。
  */
 export function oldestWaitingJobId(
-  _response: unknown,
-  _nowMs: number,
+  response: unknown,
+  nowMs: number,
 ): string | null {
-  return null;
+  if (!Array.isArray(response)) {
+    return null;
+  }
+  let oldestMs: number | null = null;
+  let oldestId: string | null = null;
+  for (const job of response) {
+    if (
+      !isRecord(job) ||
+      typeof job.running !== "boolean" ||
+      job.running ||
+      (typeof job.suspend === "number" && job.suspend > 0)
+    ) {
+      continue;
+    }
+    const kinded = kindedJob(job);
+    const scheduledMs = parseTimeMs(job.scheduled_for);
+    if (
+      kinded === null ||
+      scheduledMs === null ||
+      !onDefaultWorker(kinded) ||
+      scheduledMs > nowMs
+    ) {
+      continue;
+    }
+    if (oldestMs === null || scheduledMs < oldestMs) {
+      oldestMs = scheduledMs;
+      oldestId = typeof job.id === "string" ? job.id : null;
+    }
+  }
+  return oldestId;
 }
 
 function parseTimeMs(value: unknown): number | null {

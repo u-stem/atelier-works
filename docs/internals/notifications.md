@@ -34,7 +34,7 @@ GitHubには成果物だけを書く。Issueに自動で投稿するのは、要
 | `console_worker_check_failed` | Console用のworkerの動きを確かめられません | `self_update`(2分ごと) | Console用のworkerがジョブを受けているかを、最初に確かめられなかった時刻から1時間続けて確かめられなかった |
 | `console_worker_missing` | Console用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `console`のジョブが予定時刻から5分以上待たされていることを検知し、通知を新しく残した |
 | `periodic_worker_missing` | 定期ジョブ用のworkerがジョブを受けていません | `self_update`(2分ごと) | tag `periodic`のジョブが予定時刻から15分以上待たされていることを検知し、通知を新しく残した |
-| `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを検知し、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
+| `default_worker_missing` | defaultのworkerがジョブを受けていません | `default_worker_watch`(5分ごと) | defaultのworkerが受けるtagのジョブが予定時刻から10分以上待たされていて、defaultで動いているジョブが1つも無いことを、60秒おいた読み直しでも確かめ、通知を新しく残した。長いジョブが枠を埋めて待たせているだけでは残さない |
 | `host_action_required` | ホスト側の作業が必要です | `self_update`(2分ごと) | 反映した版に、worker自身では反映できない変更(`infra/`、`mise.toml`の`[tools]`・`[env]`)があり、ホストがまだ反映しておらず、通知を新しく残した |
 | `main_ci_failed` | mainのCIが失敗しました | `watch_main_ci`(5分ごと) | 対象リポジトリのmainのコミットでCIが失敗し、通知を新しく残した |
 | `daily_summary` | 日次サマリー | `notify_daily_summary`(毎日09:00) | 集計の対象の日の、実行回数、コスト、失敗、要件定義の承認・却下の件数、DBの掃除の件数、workerの負荷、`gated`のときの投稿しなかったレビューの期間と件数 |
