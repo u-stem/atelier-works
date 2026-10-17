@@ -801,6 +801,7 @@ function skip(
  * 競合を通知する。通知(notice)を登録し、通知した時刻を記録し、記録できたときだけDiscordに送る。
  * 通知を先に登録する。通知した時刻の記録が先に成功して登録が失敗すると、通知が永久に出ないため。
  * Discordは記録の後に送る。記録は直す作業項目の起動と排他なので、起動した行や解けた行にDiscordが届かない。
+ * 同じ本文の未解決の通知があって登録しなかった回でも、記録できればDiscordに送る。前の回が記録の前に止まっても、Discordを失わないためである。
  */
 async function notifyConflict(
   context: Context,
@@ -822,28 +823,26 @@ async function notifyConflict(
   if (marked === "marked") {
     counters.notified += 1;
     deps.log.warn("pr conflict notified", { pr: pullRequestKey(ref) });
-    if (noticeId !== null) {
-      const sent = await deps.notify({
-        kind: "needs_human",
-        instance_name: deps.instanceName,
-        owner: ref.owner,
-        repo: ref.repo,
-        url: pullRequestPageUrl(ref.owner, ref.repo, ref.number),
-        reason:
-          hold === undefined
-            ? PR_CONFLICT_REASON
-            : `${PR_CONFLICT_REASON}(自動修正の保留: ${hold})`,
-        target: { kind: "pr", number: ref.number },
-        next_action: prConflictNextAction(hold ?? null),
+    const sent = await deps.notify({
+      kind: "needs_human",
+      instance_name: deps.instanceName,
+      owner: ref.owner,
+      repo: ref.repo,
+      url: pullRequestPageUrl(ref.owner, ref.repo, ref.number),
+      reason:
+        hold === undefined
+          ? PR_CONFLICT_REASON
+          : `${PR_CONFLICT_REASON}(自動修正の保留: ${hold})`,
+      target: { kind: "pr", number: ref.number },
+      next_action: prConflictNextAction(hold ?? null),
+    });
+    // 通知(notice)は残るので、Discordに届かなかったことだけを記録する。
+    if (sent.status === "not_sent") {
+      deps.log.warn("pr conflict notice was not delivered", {
+        pr: pullRequestKey(ref),
+        notice_id: noticeId,
+        reason: sent.reason,
       });
-      // 通知(notice)は残るので、Discordに届かなかったことだけを記録する。
-      if (sent.status === "not_sent") {
-        deps.log.warn("pr conflict notice was not delivered", {
-          pr: pullRequestKey(ref),
-          notice_id: noticeId,
-          reason: sent.reason,
-        });
-      }
     }
     return;
   }

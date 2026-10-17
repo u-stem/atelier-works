@@ -379,10 +379,10 @@ describe("runPrConflictWatch: a new conflict", () => {
     expect(result.conflicted).toBe(1);
   });
 
-  test("does not send to Discord when the same notice is still unresolved", async () => {
+  test("sends to Discord once the row is marked even when the same notice is still unresolved", async () => {
     const h = setup({ noticeId: null });
     await runPrConflictWatch(h.deps);
-    expect(h.events).toEqual([]);
+    expect(h.events).toHaveLength(1);
   });
 
   test("marks the conflict as notified even when the same notice is still unresolved", async () => {
@@ -1151,6 +1151,12 @@ describe("runPrConflictWatch: a conflict that was resolved while it was being no
     const h = setup({ markResult: "fix_bound" });
     const result = await runPrConflictWatch(h.deps);
     expect(result.notified).toBe(0);
+  });
+
+  test("does not send Discord when another run recorded the notification", async () => {
+    const h = setup({ markResult: "already_notified" });
+    await runPrConflictWatch(h.deps);
+    expect(h.order).not.toContain("notify");
   });
 
   test("does not count a notification that another run recorded", async () => {
