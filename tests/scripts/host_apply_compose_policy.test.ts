@@ -909,6 +909,87 @@ describe("absolute paths in file references", () => {
   });
 });
 
+describe("short volumes of one field", () => {
+  test.each(["${PATH}", "${DB_PASSWORD}", "${HOME-/x}", "${NOPE:-/x}"])(
+    "rejects the unknown variable in %s",
+    (entry) => {
+      expect(verdict(one({ volumes: [entry] }))).toBe("compose_forbidden");
+    },
+  );
+
+  test("accepts an anonymous volume", () => {
+    expect(verdict(one({ volumes: ["/var/lib/data"] }))).toBe("ok");
+  });
+
+  test("accepts a known variable in an anonymous volume", () => {
+    expect(
+      verdict(one({ volumes: ["${WM_HTTP_PORT}"] }), {
+        ...ctx,
+        env: { WM_HTTP_PORT: "/var/lib/data" },
+      }),
+    ).toBe("ok");
+  });
+
+  test("rejects an unknown variable in the first field of a longer form", () => {
+    expect(verdict(one({ volumes: ["${PATH}:/c:ro"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+});
+
+describe("a document stream", () => {
+  test("rejects a text that holds more than one YAML document", () => {
+    expect(
+      textVerdict(
+        "services: {}\n---\nservices:\n  windmill_worker:\n    privileged: true\n",
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects two documents even when both are harmless", () => {
+    expect(textVerdict("services: {}\n---\nservices: {}\n")).toBe(
+      "compose_forbidden",
+    );
+  });
+});
+
+describe("the detail of a rejection", () => {
+  function detailOf(parsed: unknown): string {
+    const result = checkCompose(parsed, ctx);
+    return result.ok ? "" : result.detail;
+  }
+
+  test("escapes non-ASCII characters from a security_opt value", () => {
+    expect(
+      /^[\x20-\x7e]+$/.test(detailOf(one({ security_opt: ["seccomp=ſ"] }))),
+    ).toBe(true);
+  });
+
+  test("escapes control characters from a security_opt value", () => {
+    expect(
+      /^[\x20-\x7e]+$/.test(
+        detailOf(one({ security_opt: ["seccomp=a\nb\u001b[31m"] })),
+      ),
+    ).toBe(true);
+  });
+
+  test("escapes a service name", () => {
+    expect(
+      /^[\x20-\x7e]+$/.test(detailOf({ services: { évil: { image: "x" } } })),
+    ).toBe(true);
+  });
+
+  test("escapes a key that is not allowed", () => {
+    expect(/^[\x20-\x7e]+$/.test(detailOf(one({ ké: 1 })))).toBe(true);
+  });
+
+  test("keeps the readable part of the detail", () => {
+    expect(detailOf(one({ security_opt: ["seccomp=ſ"] }))).toContain(
+      "allowlist",
+    );
+  });
+});
+
 describe("top-level volumes and networks", () => {
   test("accepts a named volume with the local driver", () => {
     expect(verdict(one({}, { volumes: { v: { driver: "local" } } }))).toBe(

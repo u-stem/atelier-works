@@ -418,9 +418,23 @@ describe("buildPlan: more approval cases", () => {
     });
   });
 
-  test("does not wait for approval when another workflow changes", async () => {
+  test.each([
+    ".github/workflows/console-dist.yml",
+    ".github/workflows/brand-new.yml",
+  ])("waits for approval when %s changes", async (path) => {
+    const plan = await planOf(chainOf({ [path]: "jobs: {}\n" }), {
+      applied: A,
+      target: B,
+    });
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      files: [path],
+    });
+  });
+
+  test("does not wait for approval when a file next to the workflows changes", async () => {
     const plan = await planOf(
-      chainOf({ ".github/workflows/other.yml": "jobs: {}\n" }),
+      chainOf({ ".github/dependabot.yml": "version: 2\n" }),
       { applied: A, target: B },
     );
     expect(plan.decision).toBe("would_converge");

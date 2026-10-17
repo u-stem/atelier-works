@@ -50,6 +50,9 @@ describe("isApprovalTarget", () => {
     ".config/mise/config.toml",
     ".tool-versions",
     ".github/workflows/ci.yml",
+    ".github/workflows/console-dist.yml",
+    ".github/workflows/brand-new.yml",
+    ".github/workflows/sub/nested.yml",
     "scripts/ci-scope.ts",
   ])("requires approval for %s", (path) => {
     expect(isApprovalTarget(path)).toBe(true);
@@ -65,7 +68,6 @@ describe("isApprovalTarget", () => {
     "scripts/lint-docs.ts",
     "bun.lock",
     "bun.lockb",
-    ".github/workflows/other.yml",
     "tests/scripts/host_apply_ci.test.ts",
   ])("does not require approval for %s", (path) => {
     expect(isApprovalTarget(path)).toBe(false);
@@ -94,6 +96,7 @@ describe("isApprovalTarget: letter case", () => {
     "scripts/Host_apply/x.ts",
     "scripts/HOST-APPLY.ts",
     ".GitHub/Workflows/CI.yml",
+    ".GITHUB/WORKFLOWS/Console-Dist.yml",
     "Scripts/CI-Scope.ts",
   ])("requires approval for %s", (path) => {
     expect(isApprovalTarget(path)).toBe(true);
