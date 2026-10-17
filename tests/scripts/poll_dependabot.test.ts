@@ -20,7 +20,7 @@ import {
   type DependabotPrSearchItem,
   type DependabotPrSearchScope,
   GitHubRateLimitError,
-  type PullRequest,
+  type PullRequestWithCreatedAt,
 } from "../../f/factory/lib/github.ts";
 import type { RepoOwnerGateResult } from "../../f/factory/lib/repo_owner_gate.ts";
 import type { FactoryConfig } from "../../f/factory/lib/types.ts";
@@ -153,8 +153,11 @@ function ready(
   };
 }
 
-function pullRequest(overrides: Partial<PullRequest> = {}): PullRequest {
+function pullRequest(
+  overrides: Partial<PullRequestWithCreatedAt> = {},
+): PullRequestWithCreatedAt {
   return {
+    createdAtMs: NOW_MS - 3 * DAY_MS,
     number: 12,
     title: "Bump left-pad from 1.3.0 to 1.3.1",
     body: "",
@@ -200,10 +203,12 @@ type Harness = {
   readonly flowJobIds: { id: number; jobId: string }[];
   readonly failures: { step: string; workItemId: number | null }[];
   readonly calls: { getPr: number; collect: number; ownerChecks: number };
+  /** `hasItemForHead`に渡った`owner/repo#番号`。 */
+  readonly handledChecks: string[];
 };
 
 type HarnessOptions = {
-  readonly pr?: PullRequest;
+  readonly pr?: PullRequestWithCreatedAt;
   readonly handled?: boolean;
   readonly waits?: { count: number; lastAt: Date | null };
   readonly collect?: CollectResult;
@@ -221,12 +226,16 @@ function harness(options: HarnessOptions = {}): Harness {
   const flowJobIds: Harness["flowJobIds"] = [];
   const failures: Harness["failures"] = [];
   const calls = { getPr: 0, collect: 0, ownerChecks: 0 };
+  const handledChecks: string[] = [];
   const deps: PollDependabotDeps = {
     getPr: async () => {
       calls.getPr += 1;
       return options.pr ?? pullRequest();
     },
-    hasItemForHead: async () => options.handled ?? false,
+    hasItemForHead: async (owner, repo, prNumber) => {
+      handledChecks.push(`${owner}/${repo}#${String(prNumber)}`);
+      return options.handled ?? false;
+    },
     gateWaitingCancels: async () => options.waits ?? { count: 0, lastAt: null },
     collect: async () => {
       calls.collect += 1;
@@ -269,6 +278,7 @@ function harness(options: HarnessOptions = {}): Harness {
     flowJobIds,
     failures,
     calls,
+    handledChecks,
   };
 }
 
@@ -292,7 +302,11 @@ async function run(
   ctx: Partial<PollDependabotContext> = {},
   found: DependabotPrSearchItem = FOUND,
 ): Promise<{ h: Harness; outcome: DependabotPollOutcome }> {
-  const h = harness(options);
+  // 作成の時刻はRESTの値で判定するので、候補の時刻を偽物のPRの側に移す。
+  const h = harness({
+    ...options,
+    pr: options.pr ?? pullRequest({ createdAtMs: found.createdAtMs }),
+  });
   const outcome = await processDependabotPr(h.deps, context(ctx), found);
   return { h, outcome };
 }
@@ -429,6 +443,108 @@ describe("processDependabotPr selection", () => {
     const { h } = await run({ handled: true });
 
     expect(h.calls.collect).toBe(0);
+  });
+});
+
+// ---- リポジトリの名前とRESTの作成の時刻 ----
+
+describe("processDependabotPr repository name", () => {
+  /** 候補は表の小文字の名前で、GitHubは正しい大小文字で返す。 */
+  const MIXED_CASE_PR = pullRequest({ baseRepoFullName: "Acme/Widgets" });
+
+  test("creates the work item with the repository name GitHub returned", async () => {
+    const { h } = await run({ pr: MIXED_CASE_PR });
+
+    expect([h.inserted[0]?.owner, h.inserted[0]?.repo]).toEqual([
+      "Acme",
+      "Widgets",
+    ]);
+  });
+
+  test("checks whether the head was handled with the repository name GitHub returned", async () => {
+    const { h } = await run({ pr: MIXED_CASE_PR });
+
+    expect(h.handledChecks).toEqual(["Acme/Widgets#12"]);
+  });
+
+  test("skips a pull request without a base repository", async () => {
+    const { outcome } = await run({
+      pr: pullRequest({ baseRepoFullName: "" }),
+    });
+
+    expect(outcome).toEqual({
+      kind: "skipped",
+      reason: DEPENDABOT_SKIP_REASON.repoMismatch,
+    });
+  });
+
+  test("skips a pull request that belongs to a repository with another name", async () => {
+    const { outcome } = await run({
+      pr: pullRequest({ baseRepoFullName: "mallory/widgets" }),
+    });
+
+    expect(outcome).toEqual({
+      kind: "skipped",
+      reason: DEPENDABOT_SKIP_REASON.repoMismatch,
+    });
+  });
+
+  test("does not collect for a pull request of another repository name", async () => {
+    const { h } = await run({
+      pr: pullRequest({ baseRepoFullName: "mallory/widgets" }),
+    });
+
+    expect(h.calls.collect).toBe(0);
+  });
+});
+
+describe("processDependabotPr creation time", () => {
+  test("judges the retention by the creation time GitHub returned, not the candidate", async () => {
+    const { outcome } = await run(
+      { pr: pullRequest({ createdAtMs: NOW_MS - 3 * DAY_MS }) },
+      {},
+      { ...FOUND, createdAtMs: NOW_MS - 89 * DAY_MS },
+    );
+
+    expect(outcome.kind).toBe("started");
+  });
+
+  test("hands a pull request that GitHub says is as old as the retention to a person even when the candidate looks new", async () => {
+    const { outcome } = await run({
+      pr: pullRequest({ createdAtMs: NOW_MS - 89 * DAY_MS }),
+    });
+
+    expect(noteOf(outcome).startsWith(DEPENDABOT_REASON_PREFIX.poll)).toBe(
+      true,
+    );
+  });
+
+  test("starts the wait limit from the creation time GitHub returned", async () => {
+    const { outcome } = await run(
+      {
+        pr: pullRequest({ createdAtMs: NOW_MS - 30 * DAY_MS }),
+        collect: { kind: "wait", reason: "GitHub rate limit was hit" },
+      },
+      { waits: waited({ firstWaitAtMs: NOW_MS - LIMIT_MS - 1 }) },
+    );
+
+    expect(outcome.kind).toBe("escalated");
+  });
+
+  test("fails when GitHub returned no readable creation time", async () => {
+    const h = harness({ pr: pullRequest({ createdAtMs: null }) });
+
+    await expect(
+      processDependabotPr(h.deps, context(), FOUND),
+    ).rejects.toThrow();
+  });
+
+  test("creates no work item when the creation time is unreadable", async () => {
+    const h = harness({ pr: pullRequest({ createdAtMs: null }) });
+
+    await processDependabotPr(h.deps, context(), FOUND).catch(() => undefined);
+
+    expect(h.inserted).toHaveLength(0);
   });
 });
 
@@ -1167,7 +1283,7 @@ type RoundOptions = {
   readonly config?: FactoryConfig;
   readonly state?: unknown;
   readonly found?: DependabotPrSearchItem[];
-  readonly getPr?: (number: number) => Promise<PullRequest>;
+  readonly getPr?: (number: number) => Promise<PullRequestWithCreatedAt>;
   readonly search?: () => Promise<DependabotPrSearchItem[]>;
   readonly active?: Awaited<ReturnType<PollSession["listActive"]>>;
   readonly collect?: () => Promise<CollectResult>;
@@ -1213,7 +1329,13 @@ function round(log: RoundLog, options: RoundOptions = {}): PollDependabotIo {
           getPr: async (_owner, _repo, number) => {
             log.processed.push(number);
             return options.getPr === undefined
-              ? pullRequest({ number })
+              ? pullRequest({
+                  number,
+                  createdAtMs:
+                    (options.found ?? [FOUND]).find(
+                      (item) => item.number === number,
+                    )?.createdAtMs ?? FOUND.createdAtMs,
+                })
               : options.getPr(number);
           },
           collect: async () => {
