@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] ジョブごとの一時ディレクトリの保持期間'
+description: 内部ライブラリです。直接実行するものではありません。掃除が消すまでの経過秒を定義します。
 lock: '!inline f/factory/lib/job_tmp_limits.script.lock'
 kind: script
 schema:

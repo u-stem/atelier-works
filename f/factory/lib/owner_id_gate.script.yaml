@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] オーナーの数値IDの照合'
+description: 内部ライブラリです。直接実行するものではありません。設定のownersのidをGitHubの現在のIDと照合し、食い違うときはnoticeを残して検索を飛ばします。
 lock: '!inline f/factory/lib/owner_id_gate.script.lock'
 kind: script
 schema:

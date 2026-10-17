@@ -420,6 +420,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/pr_review_retry` | script | [LIB] GitHubの一時的な失敗で止まったPRレビューの再開 |
+| `f/factory/lib/gh_errors` | script | [LIB] GitHub呼び出しの失敗を表す例外 |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
@@ -435,7 +436,9 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
+| `f/factory/lib/owner_id_gate` | script | [LIB] オーナーの数値IDの照合 |
 | `f/factory/lib/job_tmp` | script | [LIB] ジョブごとの一時ディレクトリ |
+| `f/factory/lib/job_tmp_limits` | script | [LIB] ジョブごとの一時ディレクトリの保持期間 |
 | `f/factory/lib/prompts` | script | [LIB] プロンプト定義 |
 | `f/factory/lib/host_action` | script | [LIB] ホスト側の作業が要る反映の通知 |
 | `f/factory/lib/metadata_hash` | script | [LIB] メタデータのhashの再計算 |

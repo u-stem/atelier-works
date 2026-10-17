@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] GitHub呼び出しの失敗を表す例外'
+description: 内部ライブラリです。直接実行するものではありません。2xx以外の応答や通信断を表すGitHubHttpErrorを定義します。
 lock: '!inline f/factory/lib/gh_errors.script.lock'
 kind: script
 schema:
