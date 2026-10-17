@@ -1143,55 +1143,248 @@ export type GhRepoDetailWriteResult =
 // 収集の詳細として保存する値の述語。例外を投げず、値を戻り値にも文にも含めない。
 // ---------------------------------------------------------------------------
 
-export function isGitSha(_value: unknown): _value is string {
-  return false;
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+/** 40桁の小文字16進のコミットSHAか。 */
+export function isGitSha(value: unknown): value is string {
+  return typeof value === "string" && GIT_SHA_PATTERN.test(value);
 }
 
-export function isStoredRefName(_value: unknown): _value is string {
-  return false;
+/** 保存するブランチ名の長さの上限(UTF-8のバイト数)。 */
+const STORED_REF_NAME_MAX_BYTES = 255;
+
+/** 制御文字、書式文字、行と段落の区切り。表示を偽る文字を保存しない。 */
+const STORED_REF_FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+
+/**
+ * 保存してよいブランチ名か。`isBranchName`を通り、UTF-8で255バイト以下で、
+ * 制御文字、書式文字、行と段落の区切りを含まない。
+ * 通知やプロンプトに載りうる信頼できない入力なので、表示を偽る文字を保存しない。
+ */
+export function isStoredRefName(value: unknown): value is string {
+  return (
+    isBranchName(value) &&
+    new TextEncoder().encode(value).length <= STORED_REF_NAME_MAX_BYTES &&
+    !STORED_REF_FORBIDDEN_CHARACTERS.test(value)
+  );
 }
 
-export function isGitHubLogin(_value: unknown): _value is string {
-  return false;
+/** GitHubのloginの長さの上限。 */
+const GITHUB_LOGIN_MAX_LENGTH = 39;
+
+/** `isGitHubName`を通り、39文字以下のloginか。 */
+export function isGitHubLogin(value: unknown): value is string {
+  return isGitHubName(value) && value.length <= GITHUB_LOGIN_MAX_LENGTH;
 }
 
-export function isGitHubDatabaseId(_value: unknown): _value is number {
-  return false;
+/** GitHubの数値IDとして保存できる、正の安全な整数か。 */
+export function isGitHubDatabaseId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-export function isGhAuthorType(_value: unknown): _value is GhAuthorType {
-  return false;
+function isOneOfValues<T extends string>(
+  values: readonly T[],
+  value: unknown,
+): value is T {
+  return typeof value === "string" && values.some((entry) => entry === value);
 }
 
-export function isGhMergeable(_value: unknown): _value is GhMergeable {
-  return false;
+export function isGhAuthorType(value: unknown): value is GhAuthorType {
+  return isOneOfValues(GH_AUTHOR_TYPES, value);
 }
 
-export function isGhPrState(_value: unknown): _value is GhPrState {
-  return false;
+export function isGhMergeable(value: unknown): value is GhMergeable {
+  return isOneOfValues(GH_MERGEABLE_VALUES, value);
 }
 
-export function isGhIssueState(_value: unknown): _value is GhIssueState {
-  return false;
+export function isGhPrState(value: unknown): value is GhPrState {
+  return isOneOfValues(GH_PR_STATES, value);
 }
 
-export function isGhCollectStage(_value: unknown): _value is GhCollectStage {
-  return false;
+export function isGhIssueState(value: unknown): value is GhIssueState {
+  return isOneOfValues(GH_ISSUE_STATES, value);
 }
 
+export function isGhCollectStage(value: unknown): value is GhCollectStage {
+  return isOneOfValues(GH_COLLECT_STAGES, value);
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime());
+}
+
+function isIdArray(value: readonly number[] | null): boolean {
+  return value === null || value.every(isGitHubDatabaseId);
+}
+
+function isNullableBoolean(value: unknown): boolean {
+  return value === null || typeof value === "boolean";
+}
+
+/** 作者の3列の検査。loginと種別は、どちらもあるか、どちらも無いかのどちらか。通らない列の名前を返す。 */
+function checkAuthorColumns(row: {
+  readonly author_login: string | null;
+  readonly author_type: GhAuthorType | null;
+  readonly author_id: number | null;
+}): string | null {
+  const hasLogin = row.author_login !== null;
+  if (hasLogin && !isGitHubLogin(row.author_login)) {
+    return "author_login";
+  }
+  if (row.author_type !== null && !isGhAuthorType(row.author_type)) {
+    return "author_type";
+  }
+  if (hasLogin && row.author_type === null) {
+    return "author_type";
+  }
+  if (!hasLogin && row.author_type !== null) {
+    return "author_login";
+  }
+  if (row.author_id !== null && !isGitHubDatabaseId(row.author_id)) {
+    return "author_id";
+  }
+  return null;
+}
+
+/**
+ * PRの行のすべての列を検査し、通らない最初の列の名前を返す。通れば`null`。
+ * 例外を投げず、値を戻り値に含めない。
+ */
 export function checkGhPullRequestWrite(
-  _row: GhPullRequestWrite,
+  row: GhPullRequestWrite,
 ): string | null {
+  if (!isGitHubDatabaseId(row.number)) {
+    return "number";
+  }
+  if (!isGitSha(row.head_sha)) {
+    return "head_sha";
+  }
+  if (row.head_ref !== null && !isStoredRefName(row.head_ref)) {
+    return "head_ref";
+  }
+  if (row.base_ref !== null && !isStoredRefName(row.base_ref)) {
+    return "base_ref";
+  }
+  if (typeof row.is_draft !== "boolean") {
+    return "is_draft";
+  }
+  if (typeof row.is_cross_repository !== "boolean") {
+    return "is_cross_repository";
+  }
+  if (!isNullableBoolean(row.auto_merge_enabled)) {
+    return "auto_merge_enabled";
+  }
+  const author = checkAuthorColumns(row);
+  if (author !== null) {
+    return author;
+  }
+  if (row.mergeable !== null && !isGhMergeable(row.mergeable)) {
+    return "mergeable";
+  }
+  if (!isNullableBoolean(row.has_review_label)) {
+    return "has_review_label";
+  }
+  if (!isNullableBoolean(row.has_fix_label)) {
+    return "has_fix_label";
+  }
+  if (!isIdArray(row.review_requested_user_ids)) {
+    return "review_requested_user_ids";
+  }
+  if (!isIdArray(row.assignee_ids)) {
+    return "assignee_ids";
+  }
+  if (!isNullableBoolean(row.team_review_requested)) {
+    return "team_review_requested";
+  }
+  if (!isValidDate(row.created_at)) {
+    return "created_at";
+  }
+  if (!isValidDate(row.updated_at)) {
+    return "updated_at";
+  }
   return null;
 }
 
-export function checkGhIssueWrite(_row: GhIssueWrite): string | null {
+/** Issueの行のすべての列を検査し、通らない最初の列の名前を返す。通れば`null`。 */
+export function checkGhIssueWrite(row: GhIssueWrite): string | null {
+  if (!isGitHubDatabaseId(row.number)) {
+    return "number";
+  }
+  const author = checkAuthorColumns(row);
+  if (author !== null) {
+    return author;
+  }
+  if (!isValidDate(row.created_at)) {
+    return "created_at";
+  }
+  if (!isValidDate(row.updated_at)) {
+    return "updated_at";
+  }
   return null;
 }
 
+/** 番号の並びが、正の整数で重ならないか。 */
+function hasUniqueIds(numbers: readonly number[]): boolean {
+  return (
+    numbers.every(isGitHubDatabaseId) &&
+    new Set(numbers).size === numbers.length
+  );
+}
+
+/**
+ * 1つのリポジトリの書き込みの全体を検査し、通らない最初の項目の名前を返す。通れば`null`。
+ * 各行の検査に加えて、行の番号が重ならないこと、行の番号が`keep`に含まれること(同じ行を2つの文で変えないため)、
+ * `keep`の番号が正の整数で重ならないことを確かめる。
+ */
 export function checkGhRepoDetailWrite(
-  _write: GhRepoDetailWrite,
+  write: GhRepoDetailWrite,
 ): string | null {
+  if (!isGitHubName(write.owner)) {
+    return "owner";
+  }
+  if (!isGitHubName(write.repo)) {
+    return "repo";
+  }
+  if (!isGitHubDatabaseId(write.repo_id)) {
+    return "repo_id";
+  }
+  if (!isValidDate(write.observed_at)) {
+    return "observed_at";
+  }
+  for (const row of write.pr_rows) {
+    const column = checkGhPullRequestWrite(row);
+    if (column !== null) {
+      return `pr_rows.${column}`;
+    }
+  }
+  for (const row of write.issue_rows) {
+    const column = checkGhIssueWrite(row);
+    if (column !== null) {
+      return `issue_rows.${column}`;
+    }
+  }
+  if (!hasUniqueIds(write.pr_keep)) {
+    return "pr_keep";
+  }
+  if (!hasUniqueIds(write.issue_keep)) {
+    return "issue_keep";
+  }
+  const prNumbers = write.pr_rows.map((row) => row.number);
+  if (new Set(prNumbers).size !== prNumbers.length) {
+    return "pr_rows.number";
+  }
+  const issueNumbers = write.issue_rows.map((row) => row.number);
+  if (new Set(issueNumbers).size !== issueNumbers.length) {
+    return "issue_rows.number";
+  }
+  const prKept = new Set(write.pr_keep);
+  if (!prNumbers.every((number) => prKept.has(number))) {
+    return "pr_rows.not_kept";
+  }
+  const issueKept = new Set(write.issue_keep);
+  if (!issueNumbers.every((number) => issueKept.has(number))) {
+    return "issue_rows.not_kept";
+  }
   return null;
 }
 
