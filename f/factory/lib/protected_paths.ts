@@ -332,20 +332,23 @@ export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^composer\.(lock|json)$/,
 ];
 
-// 無視される文字(ゼロ幅文字、異体字セレクタなど)。ファイルシステムや表示で消える文字を挟んだ別名を潰す。
+// 無視される文字(ゼロ幅文字、異体字セレクタなど)。見た目では区別できない別名を、安全側に倒して潰す。
 const IGNORABLE_CHARACTERS = /\p{Default_Ignorable_Code_Point}/gu;
 
 /**
  * パスを、大文字小文字とUnicodeの別名を区別しない形にそろえる。
  * ホストのファイルシステム(macOSのAPFSの既定)は、大文字小文字を区別せず、
- * 互換等価な文字(長いs、ケルビン記号、全角文字)や分解形も同じ名前に潰しうる。
- * NFKCで正規化し、大文字にしてから小文字に戻して(ßのような1文字が複数文字に変わる畳み込みも含めて)から、
- * 正規化を掛け直す。
+ * 長いsやケルビン記号のような、大文字小文字の畳み込みで同じになる文字も同じ名前に潰す。
+ * 全角文字や無視される文字の除去は、APFSが潰すとは限らないが、紛らわしい別名を安全側で止めるために行う。
+ * 小文字、大文字、小文字の順に変換するのは、大文字のエスツェット(ẞ)のような、
+ * 1回の往復では`ss`に畳まれない文字も畳み込んで、結果を冪等にするためである。
+ * 最後にNFKCを掛け直して、変換で生じた分解形をそろえる。
  */
-function foldPath(path: string): string {
+export function foldPath(path: string): string {
   return path
     .replace(IGNORABLE_CHARACTERS, "")
     .normalize("NFKC")
+    .toLowerCase()
     .toUpperCase()
     .toLowerCase()
     .normalize("NFKC");
@@ -388,10 +391,19 @@ function matchesPathLists(
       return true;
     }
   }
-  const basename = normalized.split("/").pop() ?? normalized;
-  return basenamePatterns.some((pattern) =>
-    insensitivePattern(pattern).test(basename),
-  );
+  // 正規化は`/`を作ったり文字を合成したりして、ファイル名の切り出しを変えうる。
+  // 畳み込み後のパスから切ったもの、元のパスから切ったもの、それを畳み込んだものの
+  // どれかが当たれば一致とし、畳み込む前の判定より狭くならないようにする。
+  const rawBasename = path.split("/").pop() ?? path;
+  const candidates = [
+    normalized.split("/").pop() ?? normalized,
+    foldPath(rawBasename),
+    rawBasename,
+  ];
+  return basenamePatterns.some((pattern) => {
+    const insensitive = insensitivePattern(pattern);
+    return candidates.some((candidate) => insensitive.test(candidate));
+  });
 }
 
 /**

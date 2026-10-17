@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   FORBIDDEN_EXACT_PATHS,
   FORBIDDEN_PATH_PREFIXES,
+  foldPath,
   IMPLEMENT_PROTECTED_BASENAME_PATTERNS,
   IMPLEMENT_PROTECTED_EXACT_PATHS,
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
@@ -1015,6 +1016,30 @@ describe("aliases that fold to a protected path", () => {
 
   test("matchesImplementProtectedPath matches a long s alias", () => {
     expect(matchesImplementProtectedPath("ſcripts/doctor.sh")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a capital sharp s that folds to ss", () => {
+    expect(matchesForbiddenPath("f/factory/steps/dependabot_aẞeẞ.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matchesForbiddenPath matches a name whose slash only appears after normalization", () => {
+    expect(matchesForbiddenPath("sub/.env.℀")).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches a name that composes into another character", () => {
+    expect(matchesImplementProtectedPath("sub/requirementś.txt")).toBe(true);
+  });
+
+  test("foldPath is idempotent for every code point", () => {
+    const unstable: number[] = [];
+    for (let cp = 0; cp <= 0x10ffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const once = foldPath(`a${String.fromCodePoint(cp)}b`);
+      if (foldPath(once) !== once) unstable.push(cp);
+    }
+    expect(unstable).toEqual([]);
   });
 
   test("matchesForbiddenPath still rejects an unrelated path", () => {
