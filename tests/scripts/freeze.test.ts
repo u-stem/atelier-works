@@ -58,7 +58,10 @@ function harness(options: {
     },
     branch: async () => options.branch ?? "feat/x",
     env: options.env ?? {},
-    confirm: async () => options.confirm ?? false,
+    confirm: async (message) => {
+      lines.push(`confirm: ${message}`);
+      return options.confirm ?? false;
+    },
     print: (line) => {
       lines.push(line);
     },
@@ -392,6 +395,24 @@ describe("runCommand place", () => {
     });
 
     expect(await runCommand(PLACE, h.deps)).toBe(1);
+  });
+});
+
+describe("confirmation prompts", () => {
+  test("place shows the target without control characters", async () => {
+    const h = harness({ confirm: true });
+
+    await runCommand({ ...PLACE, target: "f/x\u001b[2J" }, h.deps);
+
+    expect(h.lines.join("\n")).not.toContain("\u001b");
+  });
+
+  test("release shows the id without control characters", async () => {
+    const h = harness({ confirm: true });
+
+    await runCommand({ kind: "release", id: "ab\u001b[2J" }, h.deps);
+
+    expect(h.lines.join("\n")).not.toContain("\u001b");
   });
 });
 
