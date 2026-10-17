@@ -969,7 +969,7 @@ Console用のworker(`windmill_worker_console`)は、Consoleの問い合わせと
 | 項目 | 設定 |
 | --- | --- |
 | 書き込めるマウント | `worker_logs`と専用の依存キャッシュ`worker_console_dependency_cache`だけである。`worker_logs`は、`windmill_server`とすべてのworkerと共有する書き込みのマウントである |
-| `factory_state` | ボリューム全体はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeとghの設定は、ボリューム全体の直下にあるので届かない |
+| `factory_state` | ボリューム全体はマウントしない。サブパス`requirements`だけを、同じパス(`/var/lib/factory/requirements`)に読み取り専用でマウントする。Claude Codeの設定の置き場(`CLAUDE_CONFIG_DIR`の`claude`)とghの設定の置き場(`gh`)は、ボリューム全体の直下にあるので届かない |
 | `factory_console` | 読み取り専用でマウントする |
 | `factory_workspaces` | マウントしない。対象リポジトリのチェックアウトに届かない |
 | `worker_dependency_cache` | 共有しない。Console用のworkerは専用のボリュームを使うので、defaultのworkerと依存のキャッシュを通して影響し合わない |
@@ -2673,7 +2673,9 @@ main cloneの`.git`はrootが所有する。
   実装フローは、次の検査の前の`git clean -fdX`で、無視されるパスのsymlinkを消す。
 - 共有の一時ディレクトリとSystem VのIPCは、並行して動く別の枠の検査と共有する。権限で開いたものは、別の枠から読み書きできる。同じuidを次に使う実行には、枠を取るときに消してから渡す。
 - `/proc/<pid>/cmdline`は誰でも読める。workerのプロセスの引数に秘密を載せない。
-- `/var/lib/factory`の`requirements`と`audits`は0755で、検査用のユーザーが読める。`claude`は一覧を読めるが、中のファイルは0600である。
+- `/var/lib/factory`の`requirements`と`audits`は0755で、検査用のユーザーが読める。`claude`は一覧を読めるが、中のファイルは0600で、`projects`と`sessions`は0700である。
+  `claude`は、ジョブの`CLAUDE_CONFIG_DIR`の置き場で、ジョブのClaudeが状態と会話記録を書く。
+  確認は、反映後に1回Claudeのフローを動かしてから、`find /var/lib/factory/claude ! -type l -perm -o+r ! -type d`で他のユーザーに開いたファイルが無いことを見る。
 - Windmillが`/tmp/windmill`の権限を戻す契機は確かめていない。戻ると、その間だけ上の保護が外れる。検査の前には、毎回0700へ直す。
 - 共有の一時ディレクトリの下にある、rootが所有する誰でも書き込めるファイルは数えない。検査用のユーザーは、その中身を書き換えられる。
 - workerのジョブは`HOME`が`/root`で、`TMPDIR`が無い。

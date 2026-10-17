@@ -2218,6 +2218,10 @@ workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確�
 `CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)も`WHITELIST_ENVS`に挙げている。
 そのため、ジョブの`process.env`に届き、`claude`はセッションなどの状態をこのディレクトリに置く。
 認証は`CLAUDE_CODE_OAUTH_TOKEN`で渡すので、置き場所は認証に関わらない。
+置き場所は永続のボリューム(`factory_state`)なので、workerを作り直しても状態は残る。
+`claude`が壊れた`.claude.json`で失敗し続けるときは、`/var/lib/factory/claude/.claude.json`を消す(次の実行で作り直される)。
+会話記録は`projects/`に溜まり続けるので、容量が増えたときは古いものを消す。
+コンテナの中で人が`claude`を手で動かすと、同じディレクトリを使う。
 
 `GH_CONFIG_DIR`は挙げていない。
 ghとgitの子プロセスは、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
