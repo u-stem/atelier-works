@@ -57,8 +57,8 @@ export const CURRENT_BRANCH_SUBSTITUTIONS: readonly string[] = [
   "$(git rev-parse --abbrev-ref HEAD)",
 ];
 
-/** 変数代入の語(`NAME=value`)。 */
-export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** 変数代入の語(`NAME=value`と、追記の`NAME+=value`)。 */
+export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
 export const SHELLS: ReadonlySet<string> = new Set([
   "sh",

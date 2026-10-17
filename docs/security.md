@@ -1639,9 +1639,9 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `main`と`master`へのpush(`--all`と`--mirror`を含む) | mainへの変更は、PRとCIを通してだけ入れる |
 | subagentからのpush | subagentには、pushの前に確認する相手がいない |
 | `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
-| `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
+| `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること(`+=`の追記を含む) | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
 | `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くこと | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
-| `CHECK_IDLE_FORCE`の代入(前置き、`env`、`export`、`declare`、引用符とエスケープを外した後の形、値が動的な場合を含む) | `mise run up`と`mise run deploy`の、実行中の仕事の確認を飛ばせる。付けるのは人が自分の端末で、確かめた後だけである |
+| `CHECK_IDLE_FORCE`の代入(`=`と`+=`、前置き、`env`、`export`、`declare`、引用符とエスケープを外した後の形、値が動的な場合を含む) | `mise run up`と`mise run deploy`の、実行中の仕事の確認を飛ばせる。付けるのは人が自分の端末で、確かめた後だけである |
 | `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
 | `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
 | `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`・`GIT_CONFIG_GLOBAL`・`GIT_CONFIG_SYSTEM`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
@@ -1655,6 +1655,20 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | 書き込む`KEY=VALUE`を持たない`mise set` | `mise.local.toml`の値を一覧する |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
+
+`CHECK_IDLE_FORCE`の拒否は、誤って付けるのを防ぐもので、あらゆる回避を機械的に塞ぐものではない。
+予備として、`.claude/settings.json`の`permissions.deny`にも、行頭の代入を置く。
+残るリスクとして、次の回避は塞がない。
+
+- 変数名の組み立てと、スクリプトファイルを経由した代入。
+- 代入以外で変数を設定する組み込み(`read`、`printf -v`、`declare -n`)と、`set -a`に続く`source`。
+- `env -S`と`--split-string`。
+- ブレース展開(`CHECK_IDLE_FORCE{,}=1`)。
+- フックが外さない前置き(`stdbuf`、`caffeinate`、`bunx`、`npx cross-env`など)。
+- 標準入力から渡る値(`xargs`)。
+- miseの設定ファイルへの書き込みと、`docker compose up`の直接実行。
+
+`env -S`は`LEFTHOOK`の拒否にも当たる、既存の穴である。
 
 `--force-with-lease`と`--force-if-includes`は、subagentではないセッションが`main`と`master`以外のブランチへpushするときに限って許す。
 リモートが想定と違えば失敗するので、他の人の変更を上書きせずに、自分のブランチの履歴を直せる。
@@ -1675,10 +1689,6 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 `bash -`は標準入力から読む形として扱う。
 `time`、`command`、`exec`、`env`、`xargs`、`timeout`などの前置きは外してから判定する。
 `bash`のほかに、`fish`、`ash`、`mksh`、`tcsh`、`csh`、`busybox sh`も同じように扱う。
-
-`CHECK_IDLE_FORCE`の拒否は、誤って付けるのを防ぐもので、すべての回避を塞ぐものではない。
-残るリスクは、変数名の組み立て、スクリプトファイルを経由した代入、miseの設定ファイルへの書き込み、`docker compose up`の直接実行である。
-予備として、`.claude/settings.json`の`permissions.deny`にも、行頭の代入を置く。
 
 秘密値のファイルの判定は、ファイルを読む引数とリダイレクトの先にだけ働く。
 検索パターン(`rg mise.local.toml docs`の`mise.local.toml`)と、`sed`や`awk`の式の中の名前は拒否しない。

@@ -524,7 +524,8 @@ function checkGit(
 function checkEnvironment(assignments: readonly Word[]): Decision {
   for (const word of assignments) {
     const equals = word.text.indexOf("=");
-    const name = word.text.slice(0, equals);
+    // 追記の`NAME+=value`も、`NAME=value`と同じ名前の代入として判定する。
+    const name = word.text.slice(0, equals).replace(/\+$/, "");
     const value = word.text.slice(equals + 1);
     if (GIT_CONFIG_ENV.test(name)) return deny(REASONS.gitConfigEnv);
     if (LEFTHOOK_REPLACING_ENV.has(name)) return deny(REASONS.lefthookReplace);
