@@ -41,7 +41,7 @@ export function issueNode(number = 3, overrides: Record<string, unknown> = {}) {
 /** `nodes`を持つ接続。`totalCount`は`nodes`の数が既定。 */
 export function connection(
   nodes: readonly unknown[],
-  options: { total?: number; next?: string } = {},
+  options: { total?: number | undefined; next?: string | undefined } = {},
 ) {
   return {
     totalCount: options.total ?? nodes.length,
@@ -57,12 +57,12 @@ export function connection(
 export function aliasData(
   repoId: number,
   options: {
-    prs?: readonly unknown[];
-    prTotal?: number;
-    prNext?: string;
-    issues?: readonly unknown[];
-    issueTotal?: number;
-    issueNext?: string;
+    prs?: readonly unknown[] | undefined;
+    prTotal?: number | undefined;
+    prNext?: string | undefined;
+    issues?: readonly unknown[] | undefined;
+    issueTotal?: number | undefined;
+    issueNext?: string | undefined;
   } = {},
 ): Record<string, unknown> {
   return {
@@ -90,10 +90,10 @@ export function aliasData(
 export function detailResponse(
   aliases: readonly unknown[],
   options: {
-    aliasErrors?: readonly AliasError[];
-    cost?: number;
-    remaining?: number;
-    resetAt?: string;
+    aliasErrors?: readonly AliasError[] | undefined;
+    cost?: number | undefined;
+    remaining?: number | undefined;
+    resetAt?: string | undefined;
   } = {},
 ): GraphqlResponse {
   const data: Record<string, unknown> = {
@@ -114,6 +114,23 @@ export function httpFailure(detail: Partial<GraphqlFailure>): GraphqlResponse {
     ok: false,
     kind: "http",
     status: 500,
+    rate_limited: false,
+    secondary_limit: false,
+    retry_after_sec: null,
+    reset_at_sec: null,
+    ...detail,
+  };
+}
+
+/** 種類を指定した通信の失敗。 */
+export function failureOfKind(
+  kind: GraphqlFailure["kind"],
+  detail: Partial<GraphqlFailure> = {},
+): GraphqlFailure {
+  return {
+    ok: false,
+    kind,
+    status: null,
     rate_limited: false,
     secondary_limit: false,
     retry_after_sec: null,

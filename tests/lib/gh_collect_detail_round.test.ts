@@ -12,6 +12,7 @@ import type { GraphqlResponse } from "../../f/factory/lib/gh_graphql.ts";
 import {
   aliasData,
   detailResponse,
+  failureOfKind,
   httpFailure,
   issueNode,
   prNode,
@@ -565,11 +566,7 @@ describe("startDetailRound failures", () => {
   test("splits a timed out batch and retries the halves", () => {
     const round = start(targets(5));
     const batch = next(round);
-    const result = round.onResponse(
-      batch,
-      { ...httpFailure({}), kind: "timeout", status: null },
-      NOW,
-    );
+    const result = round.onResponse(batch, failureOfKind("timeout"), NOW);
     expect([result.split, sizes(drain(round))]).toEqual([true, [3, 2]]);
   });
 
@@ -663,11 +660,7 @@ describe("startDetailRound failures", () => {
   test("a single repository that times out again is failed as timeout", () => {
     const round = start(targets(1));
     const batch = next(round);
-    const result = round.onResponse(
-      batch,
-      { ...httpFailure({}), kind: "timeout", status: null },
-      NOW,
-    );
+    const result = round.onResponse(batch, failureOfKind("timeout"), NOW);
     expect(failedCodes(result.settlements)).toEqual(["timeout"]);
   });
 
@@ -724,11 +717,7 @@ describe("startDetailRound failures", () => {
   test("a repository left in a split batch at the end of the round is failed", () => {
     const round = start(targets(3));
     const batch = next(round);
-    round.onResponse(
-      batch,
-      { ...httpFailure({}), kind: "timeout", status: null },
-      NOW,
-    );
+    round.onResponse(batch, failureOfKind("timeout"), NOW);
     expect(failedCodes(round.close())).toEqual([
       "timeout",
       "timeout",
