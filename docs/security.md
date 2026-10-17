@@ -1140,7 +1140,7 @@ symlink(mode 120000)かsubmodule(160000)が1つでもあれば、目標を拒否
 | 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、`scripts/host-install.sh` |
 | mise設定 | `mise.toml`、`mise.*.toml`、`.mise.toml`、`mise/`、`.mise/`、`.config/mise/`、`.tool-versions` |
 | 実行環境の設定 | `package.json`、`bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.nvmrc`、`.node-version`などの`.*-version` |
-| 必須チェックの定義 | `.github/workflows/ci.yml`、`scripts/ci-scope.ts` |
+| 必須チェックの定義 | `.github/workflows/`の全体、`scripts/ci-scope.ts` |
 
 `package.json`、`bunfig.toml`、`.npmrc`は、リポジトリのルートのものだけを対象にする。
 mise設定の名前、`.env`系、`.nvmrc`、`.*-version`は、ディレクトリを問わず対象にする。
@@ -1156,11 +1156,12 @@ miseは、`devEngines`、`packageManager`、`.nvmrc`、`.*-version`を、設定�
 `bun.lock`は対象にしない。
 実行役は`bun install`を実行せず、ホストで実行するファイルは依存をimportしないためである。
 
-`ci.yml`は、必須チェックを出すworkflowである。
-書き換えて、ジョブを`if: false`で`skipped`にすると、必須チェックを通せる。
+`.github/workflows/`は、必須チェックを出すworkflowの置き場である。
+`ci.yml`を書き換えて、ジョブを`if: false`で`skipped`にすると、必須チェックを通せる。
+ほかのworkflowの書き換えや新しいworkflowは、必須チェックと同名のcheck-runを作れる。
 `scripts/ci-scope.ts`は、`scope`ジョブの出力で、どのジョブを動かすかを決める。
 出力を変えても、同じように必須チェックを`skipped`にできる。
-チェックの結果からはその迂回を見分けられないので、この2つの変更を人に見せる。
+チェックの結果からはその迂回を見分けられないので、これらの変更を人に見せる。
 
 差を取る基準は、適用済みのコミットと承認済みのコミットのうち新しい方である。
 承認済みのコミットが、適用済みの子孫で、目標の祖先であるときだけ使う。
@@ -1280,8 +1281,8 @@ Discordのwebhookには`allowed_mentions`を空にして送り、本文からの
 別のworkflowやappが、同じ名前のcheck-runを作っても数えない。
 mainは承認0件でマージでき、管理者は失敗したチェックを無視してマージできる。
 実行役が自分で確かめれば、失敗したチェックを無視して入った変更は、ホストへ届く前に止まる。
-`ci.yml`か`scripts/ci-scope.ts`を書き換えて必須チェックを`skipped`にする変更は、結果からは見分けられない。
-この2つの変更は、前述のとおり承認の対象にして、人に見せる。
+`.github/workflows/`の全体か`scripts/ci-scope.ts`を書き換えて必須チェックを`skipped`にする変更は、結果からは見分けられない。
+これらの変更は、前述のとおり承認の対象にして、人に見せる。
 
 | 結果 | 判定 |
 | --- | --- |
@@ -1305,7 +1306,7 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 一覧は`f/factory/lib/protected_paths.ts`にあり、[禁止パスによる停止](internals/pr-workflow.md#禁止パスによる停止)に説明がある。
 実行役のテストはファイル名で列挙し、足した実行役のテストを列挙し忘れると、`tests/lib/protected_paths.test.ts`が失敗する。
 保護パスの照合は、大文字小文字を区別する。承認の対象の判定とは違うので、別の綴りのファイル名は保護パスをすり抜けうる。
-この件は別のIssueで扱う。実行役は、別名になるパスが目標のtreeに入ることを、tree検査で拒否する。
+この件はIssue #378で扱う。実行役は、別名になるパスが目標のtreeに入ることを、tree検査で拒否する。
 
 保護パスだけでは、実行役の変更を人が確かめる関門にならない。
 
@@ -1317,17 +1318,31 @@ mainは承認0件でマージでき、管理者は失敗したチェックを無
 PR修正の自動修正がこれらを書き換えるのを止め、実装のPR本文へ明記させる。
 
 副作用として、`infra/docker-compose.yml`、`scripts/doctor.sh`、`scripts/bootstrap.sh`を変えるPR修正は、保護パスで止まって人の対応待ちになる。
+実装フローは、保護パスに触れたラウンドで検査コマンドを実行しない([保護パスの記録](internals/implement.md#保護パスの記録))。
+そのため、次のファイルを変えるIssueの実装ループは、検査を省いてPRに進む。
+対象は、`scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`、実行役のテストである。
+その変更は、PR本文の「確認して欲しい点」に載る。
 
 ### 残るリスク
 
 - composeの検査は、YAMLを静的に読む。`docker compose config`の解釈とは突き合わせていない。
-  解釈が食い違うと、許可した形が別の意味になりうる。食い違いうる書き方は、マージキーのリスト(`<<: [*a, *b]`)と、`!reset`、`!override`である。
+  解釈が食い違うと、許可した形が別の意味になりうる。
+  食い違いうる書き方は、マージキーのリスト(`<<: [*a, *b]`)、`!reset`、`!override`、重複したキーである。
+  複数の文書を書いたYAMLは、1つ目だけを検査して2つ目以降を見逃さないよう、拒否する。
+- composeの`environment`、`image`、`command`は検査しない。
+  そのため、PRの変更で、`DB_PASSWORD`と`CONSOLE_GITHUB_TOKEN`を任意のサービスやイメージへ渡せる。
+  防ぎは保護パス(`infra/docker-compose.yml`)と人のマージだけで、mainは承認0件でマージできるため、補助にとどまる。
+  受け入れる理由は、段階1が計画だけで、反映しないためである。
+  反映する段階の設計で、どのサービスにどの秘密値を渡してよいかの許可表を検討する。
 - 反映する側は、`docker compose`を、必ず`-f infra/docker-compose.yml`と`--project-directory`を明示して呼ぶ。
   省くと、overrideファイルを自動で読む場所が変わる。
 - 反映に使うチェックアウトのgitには、`GIT_CONFIG_GLOBAL=/dev/null`と`GIT_CONFIG_NOSYSTEM=1`を付ける。
   利用者とシステムのgit設定を読ませないためである。`plan`のgitは`GIT_CONFIG_NOSYSTEM=1`を付けるが、`HOME`を渡すので、利用者の設定を読みうる。
 - `bun.lock`は承認の対象ではないので、取得元の欄を承認なしで書き換えられる。
-  `bun install --frozen-lockfile`を呼ぶ前に、`bun.lock`の取得元を検査するか、承認の対象にする。
+  実行役が`bun install`を呼ぶ段階を足すときは、`bun install --frozen-lockfile`の前に、`bun.lock`の取得元を検査するか、承認の対象にする。
+- 設計は`mise`コマンドを使わないと定めるが、`scripts/doctor.sh`は`mise exec`を使う。反映する段階の設計で見直す。
+- composeとYAMLの重複キーの解釈の差と、`package.json`の重複キーの解釈の差（compose-goとbun）は、`docker compose config`との突き合わせで確かめる。
+- `.github/workflows/`で作られたcheck-runが付くcheck suiteは、使い捨てのリポジトリで確かめる。
 - 反映に使うチェックアウトの`git worktree add`と`git checkout`にも、同じ設定を付ける。
   付けるのは、`-c core.hooksPath=/dev/null`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`である。
   lefthookのpost-checkoutが動かないようにするためである。
