@@ -706,6 +706,44 @@ describe("isTestPath", () => {
   });
 });
 
+describe("isDeniedPath with Unicode aliases", () => {
+  test("denies a capital sharp s that folds to ss", () => {
+    expect(isDeniedPath("f/factory/steps/dependabot_aẞeẞ.ts")).toBe(true);
+  });
+
+  test("denies a long s alias of an exact protected path", () => {
+    expect(isDeniedPath("ſcripts/doctor.sh")).toBe(true);
+  });
+
+  test("denies a fullwidth alias of a protected directory", () => {
+    expect(isDeniedPath("．claude/settings.json")).toBe(true);
+  });
+
+  test("denies a path with a zero-width character inserted", () => {
+    expect(isDeniedPath(".cla​ude/settings.json")).toBe(true);
+  });
+
+  test("denies a name whose slash only appears after normalization", () => {
+    expect(isDeniedPath("sub/.env.℀")).toBe(true);
+  });
+
+  test("denies a name that composes into another character", () => {
+    expect(isDeniedPath("sub/requirementś.txt")).toBe(true);
+  });
+
+  test.each([
+    ".cla͏ude/settings.json",
+    "scrıpts/doctor.sh",
+    "f/factory/lib/ci️_fix_paths.ts",
+  ])("reports protected_path, not unsafe_path, for %s", (path) => {
+    expect(codeOf([change(path)], [path])).toBe("protected_path");
+  });
+
+  test("does not deny an unrelated path", () => {
+    expect(isDeniedPath("docs/Readme.md")).toBe(false);
+  });
+});
+
 describe("files of the conflict round", () => {
   test.each([
     "f/factory/lib/conflict_fix_round.ts",

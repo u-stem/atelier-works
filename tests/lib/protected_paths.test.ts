@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   FORBIDDEN_EXACT_PATHS,
   FORBIDDEN_PATH_PREFIXES,
+  foldPath,
   IMPLEMENT_PROTECTED_BASENAME_PATTERNS,
   IMPLEMENT_PROTECTED_EXACT_PATHS,
   IMPLEMENT_PROTECTED_PATH_PREFIXES,
@@ -962,5 +963,86 @@ describe("host executor files on disk", () => {
     expect(await paths("scripts/host-apply.*")).toContain(
       "scripts/host-apply.ts",
     );
+  });
+});
+
+// 大文字小文字とUnicodeの別名は、ホストのファイルシステムで同じファイルに潰れうる。
+describe("aliases that fold to a protected path", () => {
+  test("matchesForbiddenPath matches an exact path that differs only in case", () => {
+    expect(matchesForbiddenPath("Scripts/Doctor.sh")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a directory prefix that differs only in case", () => {
+    expect(matchesForbiddenPath(".Claude/settings.json")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches the directory name itself in another case", () => {
+    expect(matchesForbiddenPath(".GITHUB/Workflows")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a basename pattern in another case", () => {
+    expect(matchesForbiddenPath("sub/Bunfig.toml")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a long s that folds to s", () => {
+    expect(matchesForbiddenPath("ſcripts/doctor.sh")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a Kelvin sign that folds to k", () => {
+    expect(matchesForbiddenPath("infra/docKer-compose.yml")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a fullwidth alias of a protected directory", () => {
+    expect(matchesForbiddenPath("．claude/settings.json")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a path with a zero-width character inserted", () => {
+    expect(matchesForbiddenPath("scripts/doc​tor.sh")).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches an exact path that differs only in case", () => {
+    expect(matchesImplementProtectedPath("Scripts/Doctor.sh")).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches an implement-only prefix in another case", () => {
+    expect(
+      matchesImplementProtectedPath("Infra/docker-compose.override.yml"),
+    ).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches a basename pattern with uppercase letters in another case", () => {
+    expect(matchesImplementProtectedPath("sub/MAKEFILE")).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches a long s alias", () => {
+    expect(matchesImplementProtectedPath("ſcripts/doctor.sh")).toBe(true);
+  });
+
+  test("matchesForbiddenPath matches a capital sharp s that folds to ss", () => {
+    expect(matchesForbiddenPath("f/factory/steps/dependabot_aẞeẞ.ts")).toBe(
+      true,
+    );
+  });
+
+  test("matchesForbiddenPath matches a name whose slash only appears after normalization", () => {
+    expect(matchesForbiddenPath("sub/.env.℀")).toBe(true);
+  });
+
+  test("matchesImplementProtectedPath matches a name that composes into another character", () => {
+    expect(matchesImplementProtectedPath("sub/requirementś.txt")).toBe(true);
+  });
+
+  test("foldPath is idempotent for every code point", () => {
+    const unstable: number[] = [];
+    for (let cp = 0; cp <= 0x10ffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const once = foldPath(`a${String.fromCodePoint(cp)}b`);
+      if (foldPath(once) !== once) unstable.push(cp);
+    }
+    expect(unstable).toEqual([]);
+  });
+
+  test("matchesForbiddenPath still rejects an unrelated path", () => {
+    expect(matchesForbiddenPath("docs/Readme.md")).toBe(false);
   });
 });
