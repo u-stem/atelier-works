@@ -176,4 +176,12 @@ describe("buildChildEnv: git", () => {
   test("never prompts for credentials", () => {
     expect(buildChildEnv("git", input).GIT_TERMINAL_PROMPT).toBe("0");
   });
+
+  test("ignores replace refs, which could swap the content read by sha", () => {
+    expect(buildChildEnv("git", input).GIT_NO_REPLACE_OBJECTS).toBe("1");
+  });
+
+  test("does not take optional locks while reading", () => {
+    expect(buildChildEnv("git", input).GIT_OPTIONAL_LOCKS).toBe("0");
+  });
 });
