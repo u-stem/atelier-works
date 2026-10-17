@@ -16,6 +16,19 @@ describe("noticeGuide", () => {
     );
   });
 
+  // 通知本文の待ちの分数は`f/factory/lib/default_worker.ts`の`DEFAULT_WORKER_WAIT_SECONDS`(600秒)から作る。
+  test("states the same wait minutes as the default worker notice", () => {
+    expect(noticeGuide("default_worker_missing").meaning).toContain(
+      "予定時刻から10分以上",
+    );
+  });
+
+  test("tells the operator to run mise run up for a missing default worker", () => {
+    expect(noticeGuide("default_worker_missing").action).toContain(
+      "mise run up",
+    );
+  });
+
   test("tells how to approve a held draw.io viewer bump", () => {
     expect(noticeGuide("drawio_viewer_bump_held").action).toContain(
       "approved_version",

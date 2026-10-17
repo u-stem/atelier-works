@@ -23,7 +23,7 @@ nativeでないworkerは、コンテナにつき1つしか動かない(Windmill�
 `NUM_WORKERS`を2以上にしても、Windmillが1に戻す。
 そのため、Claudeのジョブが動く間、defaultのworkerで動く定期のジョブは待つ。
 定期ジョブ用のworker(下記)で動かすscriptを選ぶ基準と、選定の結果は[セキュリティ](security.md#tagを付けるscriptの選び方)にある。
-現在、tag`periodic`で動くのは、`notify_daily_summary`と`auto_retry_pr_review`である。
+現在、tag`periodic`で動くのは、`notify_daily_summary`、`auto_retry_pr_review`、`default_worker_watch`である。
 ほかの定期ジョブは、defaultのworkerで動き、Claudeのジョブの間は待つ。
 ただし、tag`console`を付けた`audit_kickoff`と`console_fetch_watch`は、Console用のworkerで動く。
 メモリの上限はコンテナ全体で4096Mである。
@@ -46,7 +46,9 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブである。
 読むsecret変数は、`github_token`と`discord_webhook_url`だけに限る。
 依存するジョブは、defaultのworkerで動かす。
-tag`periodic`のジョブが15分以上待つと、`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
+tag`periodic`のジョブが15分以上待つと、defaultのworkerで動く`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
+逆に、defaultのworkerが止まったことは、このworkerで動く`default_worker_watch`が5分ごとに検知して通知する([運用](operations.md#defaultのworkerの検知を確かめる))。
+止まったworkerの中のscriptは動かないので、片方だけが止まるときは、もう一方のworkerで動くscriptが拾う。両方が止まる障害は拾えない。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。
@@ -337,6 +339,7 @@ Consoleの一覧と集計は次のviewを読む。
 | cleanup_db | `0 30 3 * * *` | `f/factory/cleanup_db` | 毎日3:30に実行します。終端状態(承認済み・却下・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル・PR作成済み・監査完了)になった作業項目を既定90日(`factory_config`の`retention_work_items_days`で変更可)で削除し、あわせて要件定義ドラフトや承認依頼などの関連データも削除します。失敗記録・デプロイ記録・解決済みのお知らせは既定30日(`retention_logs_days`)で個別に削除します。古い「情報」の未解決のお知らせは、削除せず同じ期間で解決済みにします。判定済みのmainのCIの記録も同じ期間(`retention_logs_days`)で削除し、判定を待つ記録と、各リポジトリの最新の記録は削除しません。PRのCIの記録も同じ期間で削除します。判定を待つ記録と失敗を直している記録は削除せず、各PRの最新の記録は保持期間の4倍まで残します。workerの負荷の記録も同じ期間で削除します。 |
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
+| default_worker_watch | `45 4-59/5 * * * *` | `f/factory/default_worker_watch` | 5分ごとに実行します。defaultのqueueに予定時刻から10分以上待つジョブがあり、defaultで動いているジョブが1つも無いときだけ、defaultのworkerが止まっているとして通知を残し、Discordにも知らせます。長いClaudeのジョブが枠を塞いでいるだけのときは知らせません。待ちが解けると通知を自動で解決します。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
 | notify_daily_summary | `0 0 9 * * *` | `f/factory/notify_daily_summary` | 毎日9:00(Asia/Tokyo)に実行します。前日分の実行回数・コスト・失敗回数と承認/却下の件数、workerの負荷を集計し、Discordへ日次サマリを投稿します。`review_post_mode`が`gated`のときは、レビューの投稿欄を足し、投稿しない状態が3日以上続けばConsoleの要対応にnoticeを追加し、投稿するモードに戻れば解決します。予定が飛んだ日があれば、最後に出した日の翌日から古い順に、最大7日分まで出します。 |
 | poll_dependabot | `0 */10 * * * *` | `f/factory/poll_dependabot` | 10分ごとに実行します。設定のdependabot_enabledが無効なら何もしません。有効なら、dependabotが開いた、mainをbaseにする、draftでないPRを探し、自動でマージする条件をフローと同じ検査で確かめます。条件を満たしたPRだけ、依存の更新PRの検査と自動マージのフローを起動します。待つ間は何も作らず、待ちが長引いたPRや条件を満たさないPRは、人の対応待ちにして1回だけ通知します。同じPRにレビューか修正の処理が動いている間と、同じheadを処理した後は、選びません。 |
@@ -406,6 +409,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/console_worker` | script | [LIB] Console用workerの停止の検知 |
 | `f/factory/lib/db` | script | [LIB] Data Tableアクセス |
 | `f/factory/lib/cleanup_db_support` | script | [LIB] DB掃除の純粋ロジック |
+| `f/factory/lib/default_worker` | script | [LIB] defaultのworkerの停止の検知 |
 | `f/factory/lib/dependabot_registry` | script | [LIB] dependabot更新のnpm registry取得 |
 | `f/factory/lib/dependabot_collect` | script | [LIB] dependabot更新のゲート入力の収集 |
 | `f/factory/lib/dependabot_support` | script | [LIB] dependabot更新のゲート判定 |
@@ -538,6 +542,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/steps/audit_prepare` | script | [SF-5-2/1] 証跡の収集と作業領域の準備 |
 | `f/factory/steps/audit_generate` | script | [SF-5-2/2] 監査レポートと提案の生成(Claude) |
 | `f/factory/self_update` | script | [SYS-1] Software Factory自身を最新化 |
+| `f/factory/default_worker_watch` | script | [SYS-10] defaultのworkerの停止を検知 |
 | `f/factory/auto_retry_pr_review` | script | [SYS-10] GitHubの一時的な失敗で止まったPRレビューを再開 |
 | `f/factory/sample_worker_load` | script | [SYS-10] workerの負荷を記録 |
 | `f/factory/cleanup_workspaces` | script | [SYS-2] 作業領域を掃除 |

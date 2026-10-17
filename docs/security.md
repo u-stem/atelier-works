@@ -1107,8 +1107,10 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 - どのscriptも、スケジュールが呼ぶscriptで、`timeout`を持つ。
 - `timeout`の最大値に300秒の余裕を足した値が、待ちの検知のしきい値(`PERIODIC_JOB_WAIT_SECONDS`)を超えない。
   このworkerの枠は1つなので、長く動くジョブの後ろで待つジョブを、workerの不在と誤って知らせないためである。
-  待たされる最悪は、他のscriptのtimeoutの合計である。今の2本では、最大値と一致する。
-  3本目以降を足すときは、式を「他のscriptのtimeoutの合計 + 余裕」に変える。
+  待たされる上限は、前に並ぶ他のscriptのtimeoutの合計である。
+  3本ではその合計が、余裕を足すとしきい値(15分)を超える。
+  超えるのは前に並ぶscriptがそろってtimeoutまで動き続けたときだけで、そのときは枠が塞がっているのも事実なので、最大値を基準にしている。
+  足すときは、そのscriptのtimeoutを既存の最大値以下に保つ。
 - importでたどれるソースが読むsecret変数は、`discord_webhook_url`だけである。
 - importでたどれるソースに、ファイル、サブプロセス、`claude.ts`への依存が無い。
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
@@ -1135,8 +1137,8 @@ tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中
 ### 選定の結果
 
 `f/factory/**`の定期実行のscriptを1つずつ読んだ結果は、次のとおりである。
-tag`periodic`を付けたのは、`notify_daily_summary`と`auto_retry_pr_review`である。
-どちらもresource`f/factory/factory_config`だけを読む。
+tag`periodic`を付けたのは、`notify_daily_summary`、`auto_retry_pr_review`、`default_worker_watch`である。
+どれもresource`f/factory/factory_config`だけを読む。
 ローカルのインスタンスでは、その値に`$var:`と`$res:`の参照が無いことを確かめた。
 本番相当のインスタンスのresourceは、リポジトリから確かめられない。人がWindmillの画面で見て確かめる。
 
@@ -1150,9 +1152,13 @@ tag`periodic`を付けたのは、`notify_daily_summary`と`auto_retry_pr_review
 | `sample_worker_load` | cgroupのファイルを読む | defaultに残す |
 | `notify_daily_summary` | DB、Windmillの状態、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
 | `auto_retry_pr_review` | DB、WindmillのAPI、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
+| `default_worker_watch` | DB、Windmillのqueue、Discordだけを使う。読むsecretは`discord_webhook_url`だけである。defaultのworkerが止まると動かないので、defaultには置けない | `periodic`を付ける |
 
 `github_token`を読む定期ジョブは、`gh`の道具に依存するため、tag`periodic`を付けられるものが無い。
-この2つのscriptは、ファイル、サブプロセス、`claude`、`gh`のモジュールをimportでたどらないよう、使う定数と型を小さなモジュールに分けている。
+`notify_daily_summary`と`auto_retry_pr_review`は、ファイル、サブプロセス、`claude`、`gh`のモジュールをimportでたどらない。
+そのために、使う定数と型を小さなモジュールに分けている。
+`default_worker_watch`は、queueの応答を集計する副作用の無いモジュール(`worker_load_support`)を使う。
+cgroupの文字列を解析するだけで、ファイルは読まない。
 たどるようになれば、契約テストが落ちる。
 
 ## ホストの実行役の境界
