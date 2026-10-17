@@ -6,6 +6,7 @@ import {
   describeWorkerLoad,
   findJobById,
   nextFailureCount,
+  oldestWaitingJobId,
   parseCgroupMemory,
   parseFailureCount,
   RUNNING_BY_SCRIPT_LIMIT,
@@ -485,6 +486,56 @@ describe("combineUnknownTags", () => {
         { jobs: 1, tags: ["a", "b"] },
       ).tags,
     ).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("oldestWaitingJobId", () => {
+  test("returns the id of the job with the earliest scheduled time", () => {
+    expect(
+      oldestWaitingJobId(
+        [waiting(60, { id: "b" }), waiting(200, { id: "a" })],
+        NOW,
+      ),
+    ).toBe("a");
+  });
+
+  test("ignores a job on another worker", () => {
+    expect(
+      oldestWaitingJobId(
+        [waiting(900, { id: "p", tag: "periodic" }), waiting(60, { id: "b" })],
+        NOW,
+      ),
+    ).toBe("b");
+  });
+
+  test("ignores a running job", () => {
+    expect(
+      oldestWaitingJobId(
+        [waiting(900, { id: "r", running: true }), waiting(60, { id: "b" })],
+        NOW,
+      ),
+    ).toBe("b");
+  });
+
+  test("ignores a job scheduled in the future", () => {
+    expect(oldestWaitingJobId([waiting(-30, { id: "f" })], NOW)).toBeNull();
+  });
+
+  test("returns null when the oldest job has no readable id", () => {
+    expect(
+      oldestWaitingJobId(
+        [waiting(200, { id: undefined }), waiting(60, { id: "b" })],
+        NOW,
+      ),
+    ).toBeNull();
+  });
+
+  test("returns null for an empty list", () => {
+    expect(oldestWaitingJobId([], NOW)).toBeNull();
+  });
+
+  test("returns null for a response that is not an array", () => {
+    expect(oldestWaitingJobId({ jobs: [] }, NOW)).toBeNull();
   });
 });
 

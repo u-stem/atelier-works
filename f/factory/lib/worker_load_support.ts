@@ -468,6 +468,16 @@ export function summarizeWaiting(
   };
 }
 
+/**
+ * 待っているジョブのうち、defaultのworkerが受けるtagで予定時刻が最も古いジョブのIDを返す(仮の実装)。
+ */
+export function oldestWaitingJobId(
+  _response: unknown,
+  _nowMs: number,
+): string | null {
+  return null;
+}
+
 function parseTimeMs(value: unknown): number | null {
   if (typeof value !== "string") {
     return null;

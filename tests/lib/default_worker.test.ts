@@ -136,6 +136,27 @@ describe("judgeDefaultQueue", () => {
     expect(judgeDefaultQueue([], [null, 5, "x"], NOW)).toBe("unknown");
   });
 
+  test("is unknown when a waiting element cannot be read and no job has waited long", () => {
+    expect(judgeDefaultQueue([], [null, waiting(10)], NOW)).toBe("unknown");
+  });
+
+  test("is unknown when the waiting list is full and no job has waited long", () => {
+    const full = Array.from({ length: 100 }, () => waiting(10));
+    expect(judgeDefaultQueue([], full, NOW)).toBe("unknown");
+  });
+
+  test("is stalled when the waiting list is full and one job has waited long", () => {
+    const full = [
+      ...Array.from({ length: 99 }, () => waiting(10)),
+      waiting(LONG),
+    ];
+    expect(judgeDefaultQueue([], full, NOW)).toBe("stalled");
+  });
+
+  test("is stalled when a waiting element cannot be read but a job has waited long", () => {
+    expect(judgeDefaultQueue([], [null, waiting(LONG)], NOW)).toBe("stalled");
+  });
+
   test("is ok when the running response is unreadable but no job has waited long", () => {
     expect(judgeDefaultQueue({ jobs: [] }, [waiting(10)], NOW)).toBe("ok");
   });
@@ -212,6 +233,7 @@ type Harness = {
   readonly events: NotifyEvent[];
   readonly resolved: { kind: string; prefix: string }[];
   readonly logLines: string[];
+  readonly sleeps: number[];
 };
 
 const IDLE = async () => [];
@@ -228,13 +250,17 @@ function harness(options: {
   readonly notifyThrows?: boolean;
   readonly resolveThrows?: boolean;
   readonly timeoutMs?: number;
+  readonly recheckDelayMs?: number;
+  readonly onSleep?: () => void;
 }): Harness {
   const notices: NoticeRecord[] = [];
   const events: NotifyEvent[] = [];
   const resolved: { kind: string; prefix: string }[] = [];
   const logLines: string[] = [];
+  const sleeps: number[] = [];
   return {
     logLines,
+    sleeps,
     notices,
     events,
     resolved,
@@ -259,7 +285,23 @@ function harness(options: {
       instanceName: "local",
       log: logger("test", { sink: (line) => logLines.push(line) }),
       timeoutMs: options.timeoutMs ?? 1000,
+      recheckDelayMs: options.recheckDelayMs ?? 0,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        options.onSleep?.();
+      },
     },
+  };
+}
+
+/** 呼び出しごとに次の応答を返す。最後の応答は繰り返す。`Error`は投げる。 */
+function sequence(...responses: (unknown | Error)[]): () => Promise<unknown> {
+  let index = 0;
+  return async () => {
+    const response = responses[Math.min(index, responses.length - 1)];
+    index += 1;
+    if (response instanceof Error) throw response;
+    return response;
   };
 }
 
@@ -432,5 +474,143 @@ describe("checkDefaultWorker", () => {
     });
     await checkDefaultWorker(h.deps);
     expect(h.logLines.join("\n")).toContain("default worker check timed out");
+  });
+});
+
+describe("checkDefaultWorker reads the queue again before it decides", () => {
+  const LONG_WAIT = [waiting(LONG, { id: "first" })];
+
+  test("pauses for the recheck delay before it reads again", async () => {
+    const h = harness({ waitingResponse: STALLED, recheckDelayMs: 7 });
+    await checkDefaultWorker(h.deps);
+    expect(h.sleeps).toEqual([7]);
+  });
+
+  test("does not pause when the first read is ok", async () => {
+    const h = harness({ waitingResponse: IDLE });
+    await checkDefaultWorker(h.deps);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  test("does not pause when the first read is unknown", async () => {
+    const h = harness({ waitingResponse: FAILS });
+    await checkDefaultWorker(h.deps);
+    expect(h.sleeps).toEqual([]);
+  });
+
+  test("returns ok when a default job runs at the second read", async () => {
+    const h = harness({
+      waitingResponse: async () => LONG_WAIT,
+      runningResponse: sequence([], [running()]),
+    });
+    expect(await checkDefaultWorker(h.deps)).toBe("ok");
+  });
+
+  test("adds no notice when a default job runs at the second read", async () => {
+    const h = harness({
+      waitingResponse: async () => LONG_WAIT,
+      runningResponse: sequence([], [running()]),
+    });
+    await checkDefaultWorker(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("returns ok when the oldest waiting job was replaced at the second read", async () => {
+    const h = harness({
+      waitingResponse: sequence(LONG_WAIT, [waiting(LONG, { id: "second" })]),
+    });
+    expect(await checkDefaultWorker(h.deps)).toBe("ok");
+  });
+
+  test("adds no notice when the oldest waiting job was replaced", async () => {
+    const h = harness({
+      waitingResponse: sequence(LONG_WAIT, [waiting(LONG, { id: "second" })]),
+    });
+    await checkDefaultWorker(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("returns ok when the waiting job is gone at the second read", async () => {
+    const h = harness({ waitingResponse: sequence(LONG_WAIT, []) });
+    expect(await checkDefaultWorker(h.deps)).toBe("ok");
+  });
+
+  test("returns stalled when the same oldest job still waits and nothing runs", async () => {
+    const h = harness({ waitingResponse: async () => LONG_WAIT });
+    expect(await checkDefaultWorker(h.deps)).toBe("stalled");
+  });
+
+  test("reads the waiting jobs twice before it decides", async () => {
+    let reads = 0;
+    const h = harness({
+      waitingResponse: async () => {
+        reads += 1;
+        return LONG_WAIT;
+      },
+    });
+    await checkDefaultWorker(h.deps);
+    expect(reads).toBe(2);
+  });
+
+  test("returns unknown when the second read of the waiting jobs fails", async () => {
+    const h = harness({
+      waitingResponse: sequence(LONG_WAIT, new Error("forbidden")),
+    });
+    expect(await checkDefaultWorker(h.deps)).toBe("unknown");
+  });
+
+  test("returns unknown when the second read of the running jobs fails", async () => {
+    const h = harness({
+      waitingResponse: async () => LONG_WAIT,
+      runningResponse: sequence([], new Error("forbidden")),
+    });
+    expect(await checkDefaultWorker(h.deps)).toBe("unknown");
+  });
+
+  test("returns unknown when the second waiting response is not an array", async () => {
+    const h = harness({
+      waitingResponse: sequence(LONG_WAIT, { jobs: [] }),
+    });
+    expect(await checkDefaultWorker(h.deps)).toBe("unknown");
+  });
+
+  test("adds no notice when the second read fails", async () => {
+    const h = harness({
+      waitingResponse: sequence(LONG_WAIT, new Error("forbidden")),
+    });
+    await checkDefaultWorker(h.deps);
+    expect(h.notices).toEqual([]);
+  });
+
+  test("does not resolve the notice when the second read fails", async () => {
+    const h = harness({
+      waitingResponse: sequence(LONG_WAIT, new Error("forbidden")),
+    });
+    await checkDefaultWorker(h.deps);
+    expect(h.resolved).toEqual([]);
+  });
+
+  test("returns unknown when the oldest waiting job has no readable id", async () => {
+    const h = harness({
+      waitingResponse: async () => [waiting(LONG, { id: undefined })],
+    });
+    expect(await checkDefaultWorker(h.deps)).toBe("unknown");
+  });
+
+  test("resolves the notice when a default job runs at the second read", async () => {
+    const h = harness({
+      waitingResponse: async () => LONG_WAIT,
+      runningResponse: sequence([], [running()]),
+    });
+    await checkDefaultWorker(h.deps);
+    expect(h.resolved).toHaveLength(1);
+  });
+
+  test("returns unknown when the whole check outlasts its budget", async () => {
+    const h = harness({
+      waitingResponse: sequence(LONG_WAIT, new Promise(() => undefined)),
+      timeoutMs: 20,
+    });
+    expect(await checkDefaultWorker(h.deps)).toBe("unknown");
   });
 });
