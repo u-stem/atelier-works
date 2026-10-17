@@ -1203,10 +1203,10 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - 配信の設定: `infra/Caddyfile`
 - 図を隔離して描くiframeの検査: `tests/lib/drawio_frame_isolation.test.ts`
 - CIの実行の範囲を決める側: `scripts/ci-scope.ts`
-- CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`、`.script.lock`
+- CIが出すメタデータのパッチを取得して検査する側: `f/factory/lib/metadata_patch_*.ts`の6つと、それぞれの`.script.yaml`。lockは`metadata_patch_manifest.script.lock`だけ(空のlockの参照)
 - hashの再計算の側
-  - 部品: `lib/metadata_{hash,precheck,signature,git_ports}`の`.ts`、`.script.yaml`、`.script.lock`
-  - 配線: `lib/ci_metadata_rehash`の`.ts`、`.script.yaml`、`.script.lock`
+  - 部品: `lib/metadata_{hash,precheck,signature,git_ports}`の`.ts`と`.script.yaml`
+  - 配線: `lib/ci_metadata_rehash`の`.ts`と`.script.yaml`
 - ホストの実行役が実行するファイル
   - 入口と導入: `scripts/host-apply.*`、`scripts/host-install.sh`
   - 版の確認と記録: `scripts/check-docker-version.sh`、`scripts/record-host-applied.sh`

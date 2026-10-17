@@ -2133,7 +2133,7 @@ Windmillは、実装とPR修正が使う`f/factory/github_token`で足りる。�
 - 最初に動かした週は、すべての版の観測が始まったばかりなので、14日間は何も上げない。記録が消えたときも、同じように待ちを数え直す。
 - 上げる版に選んだ最新の版を保留している間は、それより古い版も上げない。保留の理由はnoticeに出る。
 - 保護するのは更新に専用の部品である。汎用の層(`github.ts`、`db.ts`、`types.ts`、`workspace.ts`)は保護していない。更新はこれらの関数を呼ぶので、挙動を変える変更は通常のレビューで確かめる。
-- script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。他の部品のscript定義とlockは保護する。
+- script定義とlockのうち、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は保護しない。`windmill-client`の版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。部品のscript定義を保護し、部品の依存の無いlockを保護しない(理由は[保護パスの変更を止める](#保護パスの変更を止める)の「libのlockを保護しない理由」)。
 - ブランチ名が`factory/drawio-viewer-`で始まる未完了のPRが残ると、更新は止まる。そのPRを閉じるかマージすると、次の週に再開する。
 
 ## 要件定義書のリンク
@@ -2835,8 +2835,8 @@ Consoleでバンドルを通らずに配信される`console/public/`と`console
 - `drawio_viewer_bump_github.ts`
 - `drawio_viewer_observations.ts`
 
-この3つのscript定義(`.script.yaml`)と、観測の記録を除く2つのlock(`.script.lock`)も対象である。
-lockの保護を限る理由は、残るリスクに書いた。
+この3つのscript定義(`.script.yaml`)も対象である。
+lockは保護しない。理由は、残るリスクと「libのlockを保護しない理由」に書いた。
 
 dependabotのセキュリティ更新PRを自動で処理するフローも止める。
 対象は、次のscriptと定義である。
@@ -2848,7 +2848,6 @@ dependabotのセキュリティ更新PRを自動で処理するフローも止�
 
 書き換えられると、許可していない更新を人の確認なしにマージできるためである。
 まだ存在しないファイルも、名前を先に止める。後から置かれたファイルが、保護から漏れないようにするためである。
-依存の無い`f/factory/lib/`の5つのscriptのlock(`.script.lock`)も止める。中身は空の依存で、`windmill-client`の版を上げる変更では書き換わらないためである。
 PRの取得とステップのlockは止めない。`windmill-client`を含み、その版を上げる変更で全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
 共有のGitHub取得(`f/factory/lib/github.ts`)は、ほかのフローも使うので止めない。
 
@@ -2857,15 +2856,29 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。
-それぞれの`.script.yaml`と`.script.lock`も止める。
+それぞれの`.script.yaml`も止める。
+lockは、`metadata_patch_manifest.script.lock`だけを止める。新しいscriptのlockを照合するときの空のlockの参照(`EMPTY_LOCK_REFERENCE`)で、壊されると新しいscriptの自動適用が断られ続けるためである。
 書き換えられると、パッチの受け取り側の検査が緩むためである。
 
 `wmill-lock.yaml`のhashを再計算する`f/factory/lib/`の`metadata_hash`、`metadata_precheck`、`metadata_signature`も止める。
-それぞれの`.script.yaml`と`.script.lock`も止める。
+それぞれの`.script.yaml`も止める。
 書き換えられると、依存が変わるPRや、入力のスキーマが変わるPRのlockを、人の確認なしに書き換えさせられるためである。
 
 配信のCSPを持つ`infra/Caddyfile`と、配信物を検証する`infra/console_fetcher/`も止める。
 一覧は`f/factory/lib/protected_paths.ts`にある。
+
+#### libのlockを保護しない理由
+
+上のlibのうち、依存の無い17個の`.script.lock`は保護しない。
+中身は`"dependencies": {}`と`<empty>`だけである。
+`metadata_patch_manifest.script.lock`は、空のlockの参照なので保護する。
+
+- libは`main`を持たず、単独のjobとして動かない。importする側のscriptは、自分の`.ts`と`.script.lock`で動くので、libのlockは実行の入力にならない。
+- libの`.ts`と、`lock`の参照先をlib自身のlockに固定する`.script.yaml`は、保護する。`.script.yaml`の`lock: '!inline <パス>'`は、反映のときに`wmill sync push`が読む。書き換えられると、任意のファイルがlockとして保存されうる。
+- CI回と競合回は、`*.script.lock`を全scriptについて拒否する(`ci_fix_paths.ts`)。この拒否は変わらない。
+- メタデータのパッチを適用する経路は、対応する`.ts`が保護されたscriptのlockを`protected_source`で拒否する。拒否の理由は`protected_path`から変わりうるが、拒否は続く。
+- 保護しない前提は「libが入口を持たない」ことである。`tests/lib/protected_paths.test.ts`が、保護するlibの`.ts`に`main`、`preprocessor`、既定のexport、再exportが無いことを固定する。崩れたら、lockを保護に戻す。
+- 実機のWindmillで、libのlockが使われないことは確かめていない。根拠はリポジトリの実物(importする側のlockが依存を含む)とWindmillの文書である。前提が外れていても、importする側のlock(`steps/*.script.lock`など)がすでに保護の外にあるので、新しい種類の穴は増えない。
 
 #### 修正と実装で範囲が違う理由
 
