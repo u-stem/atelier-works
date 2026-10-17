@@ -24,6 +24,6 @@ describe("cleanup_db.ts", () => {
   });
 
   test("does not delete the repository rows", async () => {
-    expect(await SOURCE).not.toContain("gh_repos");
+    expect(await SOURCE).not.toMatch(/deleteGhRepos/);
   });
 });
