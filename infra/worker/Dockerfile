@@ -122,6 +122,8 @@ RUN npm install -g --force "windmill-cli@${WMILL_VERSION}"
 # `CLAUDE_VERSION`はbuild argのままだと実行時に消える。`agent_runs.claude_version`の
 # 記録元として、workerの環境変数にも残す。値はインストールした版と同じになる。
 # Windmillのジョブには、`docker-compose.yml`の`WHITELIST_ENVS`に挙げた変数だけが届く。
+# `CLAUDE_VERSION`と`CLAUDE_CONFIG_DIR`は挙げている。`GH_CONFIG_DIR`は挙げておらず、
+# コンテナの中で人が`gh`を手で使うときだけ効く。
 ENV CLAUDE_VERSION=${CLAUDE_VERSION} \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CONFIG_DIR=/var/lib/factory/claude \

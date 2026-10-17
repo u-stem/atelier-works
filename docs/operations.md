@@ -2213,6 +2213,29 @@ GROUP BY 1;
 確認クエリの結果にNULLの行があるときは、ジョブにまだ変数が届いていない。
 workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確かめる。
 
+`CLAUDE_CONFIG_DIR`(`/var/lib/factory/claude`)も同じ理由で`WHITELIST_ENVS`に挙げている。
+挙げていなかった間は、ジョブの`process.env`に届かず、`claude`は既定の`$HOME/.claude`(`/root/.claude`)を使っていた。
+認証は`CLAUDE_CODE_OAUTH_TOKEN`で渡すので、置き場所が変わっても認証は変わらない。
+変わるのは、セッションなどの状態を置く場所だけである。
+
+`GH_CONFIG_DIR`は挙げていない。
+ghとgitの子プロセスは、`GH_TOKEN`、`HOME`、`PATH`などを明示して作る環境で動き、ジョブの環境を引き継がないためである。
+届かせても、読む処理が無い。
+
+`mise run up`で反映した後に、`CLAUDE_CONFIG_DIR`が届いていることを確かめる。
+反映前のworkerでは、`CLAUDE_VERSION`だけが届き、`CLAUDE_CONFIG_DIR`は届かない。
+`wmill script preview`で、次の内容のscriptを実行し、`CLAUDE_CONFIG_DIR`が`/var/lib/factory/claude`になっていることを見る。
+値の全体は出さず、この変数と`CLAUDE_VERSION`の有無だけを返す。
+
+```ts
+export async function main() {
+  return {
+    CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR ?? null,
+    CLAUDE_VERSION_set: process.env.CLAUDE_VERSION !== undefined,
+  };
+}
+```
+
 ### PR修正の連続した失敗
 
 同じPRの修正のうち、`blocked`でないラウンド(`done`か要件の不足)で最後に終えた時刻より後の、次の3つを足す。
