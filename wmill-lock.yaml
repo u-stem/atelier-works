@@ -60,7 +60,7 @@ locks:
   f/factory/lib/drawio_viewer_observations: 33e09dc40e72b47e2be3da91c06b88429b73e9f6d89e3291947aaaca23841886
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
-  f/factory/lib/freeze_apply: f88c500cf3a54b9805d8705db26447c135ee2ff28c2fc4bff39ddcba04f0a36e
+  f/factory/lib/freeze_apply: 2e67a35e3d80b32e6f01ce7b8d55112c8046534ccde7498f5a95ecdbf10acf43
   f/factory/lib/freezes: c698e580c977aa2410778a4d2d6288b14b4c8149d721c1621b74b7429790bbe0
   f/factory/lib/gated_review_support: c858998fefbebb102f55e896471e4dc8195de412a39c8d60d2d36d22763bc1bb
   f/factory/lib/gh_collect: 93402172ffd1f41d33bae301d9bca832d4592a15e8889b9653c481cc1496345f
