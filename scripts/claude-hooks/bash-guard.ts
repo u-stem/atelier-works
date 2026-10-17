@@ -41,9 +41,9 @@ import {
   ASSIGNMENT,
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
-  MISE_GLOBAL_VALUE_OPTIONS,
   MISE_VALUE_OPTIONS,
   type MiseExec,
+  miseOptionTakesNext,
   parseCommandLine,
   type SimpleCommand,
   shellArguments,
@@ -230,7 +230,7 @@ function firstMiseOperandAt(args: readonly Word[]): number {
   for (let index = 0; index < args.length; index += 1) {
     const text = args[index]?.text ?? "";
     if (!text.startsWith("-")) return index;
-    if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) index += 1;
+    if (miseOptionTakesNext(text)) index += 1;
   }
   return args.length;
 }
@@ -262,6 +262,13 @@ function listsMiseValues(words: readonly Word[]): boolean {
   const headEnd =
     nameAt === -1 ? operandAt + 1 : Math.min(nameAt, operandAt + 1);
   if (beforeDashDash.slice(0, headEnd).some(hasBrace)) return true;
+  if (
+    dashDash !== -1 &&
+    operandAt >= beforeDashDash.length &&
+    args.length > dashDash + 1
+  ) {
+    return true;
+  }
   const sub = beforeDashDash[operandAt];
   if (
     sub !== undefined &&

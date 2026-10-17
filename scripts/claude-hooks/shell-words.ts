@@ -144,6 +144,19 @@ export const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "--tool",
 ]);
 
+/**
+ * `mise`のグローバルオプションの語が、次の語を値として取るなら真。
+ * 長い形と単独の短い形は一覧で見る。`-qE x`のように束ねた短い形は、
+ * 値を取る文字が最初に現れる位置が末尾のときだけ、次の語を取る(`-Ex`は値が語の中にある)。
+ */
+export function miseOptionTakesNext(text: string): boolean {
+  if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) return true;
+  if (!/^-[A-Za-z]{2,}$/.test(text)) return false;
+  const letters = text.slice(1);
+  const at = letters.search(/[CEjPst]/);
+  return at !== -1 && at === letters.length - 1;
+}
+
 /** 前置きのコマンドと、その値を取るオプション。値の語も一緒に外す。 */
 const WRAPPER_VALUE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   [
@@ -237,7 +250,7 @@ function miseExecAt(words: readonly Word[], start: number): number {
     const text = words[index]?.text ?? "";
     if (text === "--") return -1;
     if (text.startsWith("-")) {
-      if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) index += 1;
+      if (miseOptionTakesNext(text)) index += 1;
       continue;
     }
     return text === "exec" || text === "x" ? index : -1;
