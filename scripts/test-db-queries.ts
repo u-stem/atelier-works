@@ -7333,12 +7333,17 @@ function ghPrInsert(
 }
 
 execPsql(target, ghPrInsert(1));
+const [ghPrMinimal] = await sql`
+  SELECT usable, written_at IS NOT NULL AS stamped,
+    mergeable IS NULL AND assignee_ids IS NULL AND has_fix_label IS NULL AND head_ref IS NULL AS unknown_null
+  FROM factory.gh_pull_requests WHERE owner = ${GH_DETAIL_OWNER}
+`.fetch();
 check(
   "gh_pull_requests: a minimal row is usable, unknown columns stay null, and the written time is stamped",
-  execPsql(
-    target,
-    `SELECT usable, written_at IS NOT NULL, mergeable IS NULL AND assignee_ids IS NULL AND has_fix_label IS NULL AND head_ref IS NULL FROM factory.gh_pull_requests WHERE owner = '${GH_DETAIL_OWNER}'`,
-  ) === "t|t|t",
+  ghPrMinimal?.usable === true &&
+    ghPrMinimal.stamped === true &&
+    ghPrMinimal.unknown_null === true,
+  ghPrMinimal,
 );
 check(
   "gh_pull_requests: a repeated (owner, repo, number) is refused",
@@ -7379,12 +7384,14 @@ execPsql(
   target,
   `INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, 1, 'open', now(), now())`,
 );
+const [ghIssueMinimal] = await sql`
+  SELECT usable, written_at IS NOT NULL AS stamped
+  FROM factory.gh_issues WHERE owner = ${GH_DETAIL_OWNER}
+`.fetch();
 check(
   "gh_issues: a minimal row is usable and the written time is stamped",
-  execPsql(
-    target,
-    `SELECT usable, written_at IS NOT NULL FROM factory.gh_issues WHERE owner = '${GH_DETAIL_OWNER}'`,
-  ) === "t|t",
+  ghIssueMinimal?.usable === true && ghIssueMinimal.stamped === true,
+  ghIssueMinimal,
 );
 check(
   "gh_issues: the state closed is refused because a vanished issue is unlisted",
@@ -7392,19 +7399,25 @@ check(
     `INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, 2, 'closed', now(), now())`,
   ),
 );
+const [ghReposMarked] = await sql`
+  SELECT count(*)::integer AS n FROM factory.gh_repos
+  WHERE owner = ${GH_OWNER}
+    AND (last_collected_at IS NOT NULL OR last_attempted_at IS NOT NULL OR truncated OR detail_failed)
+`.fetch();
 check(
-  "gh_repos: a row written before the migration has no collection time and no marks",
-  execPsql(
-    target,
-    `SELECT count(*) FROM factory.gh_repos WHERE owner = '${GH_OWNER}' AND (last_collected_at IS NOT NULL OR last_attempted_at IS NOT NULL OR truncated OR detail_failed)`,
-  ) === "0",
+  "gh_repos: a row written without the new columns has no collection time and no marks",
+  ghReposMarked?.n === 0,
+  ghReposMarked,
 );
+const [ghRunsMarked] = await sql`
+  SELECT count(*)::integer AS n FROM factory.gh_collect_runs
+  WHERE owner IN (${GH_OWNER}, ${GH_OWNER_B})
+    AND (stage IS NOT NULL OR detail_targets <> 0 OR detail_requests <> 0 OR detail_done <> 0 OR detail_incomplete <> 0)
+`.fetch();
 check(
   "gh_collect_runs: a row written without the new columns has no stage and zero counts",
-  execPsql(
-    target,
-    `SELECT count(*) FROM factory.gh_collect_runs WHERE owner IN ('${GH_OWNER}', '${GH_OWNER_B}') AND (stage IS NOT NULL OR detail_targets <> 0 OR detail_requests <> 0 OR detail_done <> 0 OR detail_incomplete <> 0)`,
-  ) === "0",
+  ghRunsMarked?.n === 0,
+  ghRunsMarked,
 );
 check(
   "gh_collect_runs: a failed run may carry the stage detail",

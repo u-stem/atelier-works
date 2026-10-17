@@ -8,7 +8,8 @@
 今の収集は記録を書くだけで、Factoryの判断は記録を読まない。
 `self_update`だけが記録を読み、収集の鮮度を監視する([鮮度の監視](#鮮度の監視))。
 作業項目の状態には触れない。
-記録は`gh_repos`と`gh_collect_runs`の2つの表に残す。
+収集が書く記録は、`gh_repos`と`gh_collect_runs`の2つの表である。
+`gh_pull_requests`と`gh_issues`の表も用意してあるが、収集はまだ書かない([詳細の表](#詳細の表))。
 
 `collect_github`は、tag `periodic`のworkerで5分ごとに動く。
 読むsecret変数は`github_read_tokens`だけで、書き込みのできる`github_token`は読まない。
@@ -213,6 +214,50 @@ IDが一致したことを確かめたい処理は、`id_checked`を見る。
 外したリポジトリは、一覧に載らなかったものとして扱うので、閉じる側に倒れる。
 捨てた行の記録は、所有者、リポジトリの名前(検査を通ったものだけ)、列の名前に限る。
 
+### 詳細の表
+
+`gh_pull_requests`は開いているPRの行、`gh_issues`はトリガーラベル付きの開いているIssueの行を持つ。
+収集はまだ書かないので、2つの表は空である。
+`gh_repos`と`gh_collect_runs`に足した列は、既定値のままになる。
+
+2つの表の行は、`(owner, repo, number)`で一意である。
+外部キーは持たない。作業項目とは独立した記録である。
+
+| 列 | 意味 |
+| --- | --- |
+| `repo_id` | 行を書いたときのリポジトリの数値ID。`gh_repos.repo_id`と違う行は、別のリポジトリに置き換わった後の行なので使わない |
+| `state` | PRは`open`か`closed`、Issueは`open`か`unlisted`。Issueの一覧はトリガーラベルで絞るので、閉じたのかラベルが外れたのかを区別できず、1つの値にまとめる |
+| `usable` | 偽の行は使わない。許可の外、archive済み、一覧から消えた、所有者の不一致、`repo_id`の入れ替わりのどれかを表す |
+| `written_at` | 値を書いた時刻。鮮度ではない。鮮度は`gh_repos.last_collected_at`で表す |
+
+読み手は、次を守る。
+
+- 行が無いことは、閉じたことを意味しない。
+- `NULL`の列は不明で、偽や空を意味しない。
+- 題と本文は保存しない。ラベルは名前でなく、`has_review_label`と`has_fix_label`の真偽だけを持つ。
+- `head_ref`、`base_ref`、`author_login`は信頼できない入力である。
+  制約が守るのは長さだけなので、通知やプロンプトへ載せる前に切り詰める。
+
+`gh_repos`に足した列は、詳細の取得の状態を表す。
+
+| 列 | 意味 |
+| --- | --- |
+| `last_collected_at` | 詳細を最後に取り終えた周回の、観測を始めた時刻。書いた時刻ではない。`NULL`は一度も取り終えていない |
+| `last_attempted_at` | 詳細の結果を最後に書いた時刻。取る順の並びのキー。`NULL`は一度も着手していない |
+| `truncated` | 前回の着手が、ページの上限か件数の照合の不一致で打ち切られた |
+| `detail_failed` | 前回の着手が失敗した |
+
+`gh_collect_runs`に足した列は、失敗した段と、詳細を取った件数を表す。
+`stage`は、`error_code`が生じた段(`list`か`detail`)で、成功の行は`NULL`である。
+次の4つの列は、件数を表し、既定は0である。
+
+| 列 | 数えるもの |
+| --- | --- |
+| `detail_targets` | 詳細の対象のリポジトリ |
+| `detail_requests` | 詳細の要求 |
+| `detail_done` | 取り終えたリポジトリ |
+| `detail_incomplete` | 打ち切りか失敗のリポジトリ |
+
 ## 掃除
 
 `cleanup_db`が、`gh_collect_runs`のうち、`started_at`が保持期間(`retention_logs_days`)以前の行を消す。
@@ -220,6 +265,7 @@ IDが一致したことを確かめたい処理は、`id_checked`を見る。
 `finished_at`が空の新しい行があっても、`finished_at`のある最新の行を残す。
 件数はログだけに載せる。
 `gh_repos`は消さない。`gone`の行も残る。
+`gh_pull_requests`と`gh_issues`は、収集が書かないので、掃除の対象にしていない。
 
 ## 鮮度の監視
 
