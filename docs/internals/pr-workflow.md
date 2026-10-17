@@ -1210,6 +1210,7 @@ CIの失敗を直す回は除く([CIの失敗を直す回](#ciの失敗を直す
 - ホストの実行役が実行するファイル
   - 入口と導入: `scripts/host-apply.*`、`scripts/host-install.sh`
   - 版の確認と記録: `scripts/check-docker-version.sh`、`scripts/record-host-applied.sh`
+  - 実行中の仕事の確認: `scripts/check-idle.ts`と`tests/scripts/check-idle.test.ts`
   - 診断と初期化: `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`
   - composeの定義: `infra/docker-compose.yml`、`tests/infra/docker_compose.test.ts`
   - 実行役のテストと補助: `tests/scripts/host_apply_*.test.ts`と`tests/fixtures/host_apply_repo.ts`をファイル名で列挙する

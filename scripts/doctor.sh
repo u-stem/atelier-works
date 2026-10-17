@@ -4,7 +4,7 @@
 #
 # `infra/.env`も`infra/secrets.env`も無く、設定は`mise.toml`の`[env]`
 # (秘密でないものをコミット)と`mise.local.toml`(gitignore済みの秘密。
-# `mise set -E local KEY=value`で入れる)にある。このスクリプトはmiseの
+# `mise set -E local --stdin KEY`で標準入力から入れる)にある。このスクリプトはmiseの
 # タスク(`mise run doctor`)として動かす前提なので、値は既に環境変数にある。
 # ファイルから値を読んだり表示したりせず、秘密は値を出さず設定の有無だけを出す。
 set -euo pipefail
@@ -141,7 +141,7 @@ for key in "${required_vars[@]}"; do
     missing_vars+=("${key}")
   fi
 done
-env_guidance="'mise run doctor' 経由で実行しているか、'mise set -E local KEY=value' で投入したか確認してください"
+env_guidance="'mise run doctor' 経由で実行しているか、docs/setup.md の「秘密値を投入する」の手順で投入したか確認してください"
 if [[ ${#missing_vars[@]} -gt 0 ]]; then
   report "環境変数" ng "未設定: ${missing_vars[*]} (${env_guidance})"
 elif [[ "${WM_ADMIN_PASSWORD}" == "changeme" ]]; then

@@ -546,6 +546,33 @@ describe("runClaude", () => {
     );
   });
 
+  test("puts CLAUDE_CONFIG_DIR under the given job directory", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      tmpDir: "/run/factory-tmp/fj-x",
+    });
+    expect(fake.calls[0]?.options?.env?.CLAUDE_CONFIG_DIR).toBe(
+      "/run/factory-tmp/fj-x/claude-config",
+    );
+  });
+
+  test("prefers an explicit claudeConfigDir over the job directory", async () => {
+    const fake = createFakeCommandRunner([
+      { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },
+    ]);
+    await runClaude({
+      ...baseOptions(fake.run),
+      tmpDir: "/run/factory-tmp/fj-x",
+      claudeConfigDir: "/custom/claude",
+    });
+    expect(fake.calls[0]?.options?.env?.CLAUDE_CONFIG_DIR).toBe(
+      "/custom/claude",
+    );
+  });
+
   test("leaves CLAUDE_CODE_TMPDIR unset outside a job", async () => {
     const fake = createFakeCommandRunner([
       { stdout: claudeJsonStdout(), stderr: "", exitCode: 0, timedOut: false },

@@ -39,6 +39,7 @@ const APPROVAL_EXACT_PATHS: readonly string[] = [
   "scripts/check-docker-version.sh",
   "scripts/custom-tags.ts",
   "scripts/record-host-applied.sh",
+  "scripts/check-idle.ts",
   "scripts/host-install.sh",
   "package.json",
   "bunfig.toml",
