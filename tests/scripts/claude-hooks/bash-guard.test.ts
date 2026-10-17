@@ -1075,6 +1075,19 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise set --stdin",
     "mise set -E local --stdin",
     "mise -E local set --stdin",
+    "mise --log-level info set",
+    "mise --profile x set",
+    "mise -P x set",
+    "mise --log-level debug -E local set",
+    "mise set KEY -- --stdin",
+    "mise set -- --stdin KEY",
+    "mise set --stdin A B",
+    "mise set -E --stdin KEY",
+    "mise set --stdin $K",
+    'mise set --stdin "$K"',
+    "mise set --stdin K*",
+    "mise set -E A=b",
+    "mise set --file A=b",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
