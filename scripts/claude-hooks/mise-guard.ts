@@ -83,13 +83,24 @@ export const MISE_ALLOWED_ENV: ReadonlySet<string> = new Set([
   "MISE_YES",
 ]);
 
+/** 起動したシェルにコードを実行させるか、起動するシェルや設定を差し替える環境変数。`mise`が読むと、秘密値を出力できる。 */
+export const SHELL_HOOK_ENV =
+  /^(BASH_ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|BASH_FUNC_.*|LD_PRELOAD|DYLD_INSERT_LIBRARIES)$/;
+
+/** `mise`を起動するコマンドへの前置きと、`mise set`の鍵でだけ拒否する環境変数。ほかのコマンドでは通常の作業で使う。 */
+export const SHELL_HOOK_ENV_FOR_MISE = /^(ENV|PATH)$/;
+
 /**
- * `mise set`のオペランドが、許可リストに無い`MISE_*`を環境へ書くなら真。
+ * `mise set`のオペランドが、許可リストに無い`MISE_*`か、シェルを動かす環境変数を環境へ書くなら真。
  * `mise.local.toml`の`[env]`に書いた値は、入れ子の`mise run`が設定として読むので、シェルを差し替えられる。
  */
 function setsMiseSetting(word: Word): boolean {
   const [name = ""] = word.text.split("=", 1);
-  return name.startsWith("MISE_") && !MISE_ALLOWED_ENV.has(name);
+  return (
+    (name.startsWith("MISE_") && !MISE_ALLOWED_ENV.has(name)) ||
+    SHELL_HOOK_ENV.test(name) ||
+    SHELL_HOOK_ENV_FOR_MISE.test(name)
+  );
 }
 
 /** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */

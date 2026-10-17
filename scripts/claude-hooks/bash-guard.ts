@@ -38,7 +38,12 @@ import {
   isEntryPoint,
   runHookMain,
 } from "./hook-io.ts";
-import { listsMiseValues, MISE_ALLOWED_ENV } from "./mise-guard.ts";
+import {
+  listsMiseValues,
+  MISE_ALLOWED_ENV,
+  SHELL_HOOK_ENV,
+  SHELL_HOOK_ENV_FOR_MISE,
+} from "./mise-guard.ts";
 import {
   ASSIGNMENT,
   baseName,
@@ -92,6 +97,9 @@ const ENVIRONMENT_BUILTINS: ReadonlySet<string> = new Set([
   "local",
 ]);
 
+/** 関数を子プロセスへ渡す`export -f`と`declare -fx`。渡した関数が、子のシェルで組み込みコマンドを差し替える。 */
+const EXPORT_FUNCTION_OPTION = /^-[A-Za-z]*f[A-Za-z]*$/;
+
 /** 環境変数の名前を引数に取って、値を設定するか、読み込む組み込みコマンド。 */
 const ENVIRONMENT_NAME_BUILTINS: ReadonlySet<string> = new Set([
   ...ENVIRONMENT_BUILTINS,
@@ -99,11 +107,8 @@ const ENVIRONMENT_NAME_BUILTINS: ReadonlySet<string> = new Set([
   "printf",
   "mapfile",
   "readarray",
+  "print",
 ]);
-
-/** 起動したシェルにコードを実行させるか、起動するシェルや設定を差し替える環境変数。`mise`が読むと、秘密値を出力できる。 */
-const SHELL_HOOK_ENV =
-  /^(BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|BASH_FUNC_.*|LD_PRELOAD|DYLD_INSERT_LIBRARIES|PATH)$/;
 
 /** gitのフックを実行するサブコマンド。`--no-verify`はこれらでだけ意味を持つ。 */
 const HOOK_SUBCOMMANDS: ReadonlySet<string> = new Set([
@@ -269,7 +274,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, mise en, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Only the subcommands this repository uses are allowed, so write mise run <task> instead of mise <task>, and do not pass -s or --shell to mise run or mise tasks, because it picks the shell that runs the task; words like set or env in mise run arguments are denied too.",
+    "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, mise en, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Only the subcommands this repository uses are allowed, so write mise run <task> instead of mise <task>, and do not pass -s or --shell to mise run, because it picks the shell that runs the task; words like set or env in mise run arguments are denied too.",
   miseEnv:
     "MISE_* environment variables can replace the shell mise runs tasks with (for example MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS), which prints the secrets. BASH_ENV, SHELLOPTS, PS4 and similar variables make a started shell run code, which prints the secrets too. Only MISE_ENV, MISE_JOBS, MISE_QUIET, MISE_VERBOSE, and MISE_YES may be set, and the shell variables must not be set for mise.",
   miseXargs:
@@ -469,13 +474,21 @@ function checkSimpleCommand(
   if (envDecision.kind === "deny") return envDecision;
   if (
     (program === "mise" || mise !== null) &&
-    assignments.some((word) => SHELL_HOOK_ENV.test(assignmentName(word).name))
+    assignments.some((word) =>
+      SHELL_HOOK_ENV_FOR_MISE.test(assignmentName(word).name),
+    )
   ) {
     return deny(REASONS.miseEnv);
   }
   if (
     ENVIRONMENT_NAME_BUILTINS.has(program) &&
     words.slice(1).some(isDisallowedMiseName)
+  ) {
+    return deny(REASONS.miseEnv);
+  }
+  if (
+    ENVIRONMENT_BUILTINS.has(program) &&
+    words.slice(1).some((word) => EXPORT_FUNCTION_OPTION.test(word.text))
   ) {
     return deny(REASONS.miseEnv);
   }
@@ -579,6 +592,7 @@ function checkEnvironment(assignments: readonly Word[]): Decision {
     if (GIT_CONFIG_ENV.test(name)) return deny(REASONS.gitConfigEnv);
     if (LEFTHOOK_REPLACING_ENV.has(name)) return deny(REASONS.lefthookReplace);
     if (name === CHECK_IDLE_FORCE_ENV) return deny(REASONS.checkIdleForce);
+    if (SHELL_HOOK_ENV.test(name)) return deny(REASONS.miseEnv);
     if (name.startsWith("MISE_") && !MISE_ALLOWED_ENV.has(name)) {
       return deny(REASONS.miseEnv);
     }

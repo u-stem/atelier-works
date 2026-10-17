@@ -48,7 +48,7 @@ export type StrippedCommand = {
   readonly words: readonly Word[];
   /** 外した前置きのコマンドの名前(`env`、`xargs`など)。 */
   readonly wrappers: readonly string[];
-  /** 最初に見つけた`mise exec`。無ければnull。 */
+  /** 最初に見つけた`mise exec`。後ろの`mise exec`が`-c`を持てば、そちらを返す。無ければnull。 */
   readonly mise: MiseExec | null;
   /** 見つけた`mise exec`ごとの、`mise`の語から起動するコマンドの前の`--`までの語。サブコマンドの取り違えを検査するために返す。 */
   readonly miseWords: readonly (readonly Word[])[];
@@ -266,14 +266,15 @@ function miseExecAt(words: readonly Word[], start: number): number {
 /**
  * `-c`を含む短いオプションの語なら真。`-cenv`、`-c=env`、`-qc`を見る。
  * 値を取る文字(`C`、`E`、`j`、`P`、`s`、`t`)が先にあれば、`c`は値の一部なので除く(`-Elocal`)。
+ * `c`の後ろは値なので、英字でなくても真とする(`-c'env | cat'`)。
  */
 function isMiseCodeOption(text: string): boolean {
-  const letters =
-    (text.startsWith("-") ? text.slice(1) : "").split("=", 1)[0] ?? "";
-  if (!/^[A-Za-z]+$/.test(letters)) return false;
-  const code = letters.indexOf("c");
-  const value = letters.search(/[CEjPst]/);
-  return code !== -1 && (value === -1 || code < value);
+  if (!text.startsWith("-") || text.startsWith("--")) return false;
+  for (const letter of text.slice(1)) {
+    if (letter === "c") return true;
+    if (!/[A-Za-z]/.test(letter) || /[CEjPst]/.test(letter)) return false;
+  }
+  return false;
 }
 
 /**

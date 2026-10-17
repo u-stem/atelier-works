@@ -1810,13 +1810,21 @@ miseの更新で、値を出すサブコマンドが増えても塞げるよう�
 この5つは、実機では確かめていない。
 `mise exec`の`-c`は、ツールの指定の後ろにあっても、`--`の前の全ての語から探す。
 入れ子の`mise exec`は、外側が`-c`を持たなくても、内側の`-c`を優先して拒否する。
-`mise`を起動するコマンドへの前置きでは、次の環境変数も拒否する。
-`BASH_ENV`、`ENV`、`SHELLOPTS`、`BASHOPTS`、`PS4`、`PROMPT_COMMAND`、`BASH_FUNC_*`である。
-`LD_PRELOAD`、`DYLD_INSERT_LIBRARIES`、`PATH`も拒否する。
-起動したシェルが、これらを読んでコードを実行するか、`PATH`の偽の`sh`が起動するためである。
+起動したシェルにコードを実行させる環境変数は、どのコマンドでも拒否する。
+`BASH_ENV`、`SHELLOPTS`、`BASHOPTS`、`PS4`、`PROMPT_COMMAND`、`BASH_FUNC_*`、`LD_PRELOAD`、`DYLD_INSERT_LIBRARIES`である。
+前置きの代入、単独の代入、`export`と`declare`の代入が対象で、`bash -c`の前置きも含む。
+`ENV`と`PATH`は、通常の作業でも使うので、`mise`を起動するコマンドへの前置きだけで拒否する。
+`PATH`は、偽の`sh`を起動させる経路になる。
 `HOME`と`XDG_CONFIG_HOME`は、別の設定を読ませられるが、拒否しない。
-gitの判定が、通常の作業で使うためである。
+拒否すると、gitの判定を使う通常の作業が止まるためである。
 `export`、`declare`、`readonly`、`read`、`printf`、`mapfile`が、許可リストに無い`MISE_*`の名前を取る形も拒否する。
+`export -f`と`declare -fx`も拒否する。渡した関数が、子のシェルで組み込みコマンドを差し替えるためである。
+`mise set`の鍵も、許可リストに無い`MISE_*`と、`BASH_ENV`や`PATH`などのこれらの環境変数を拒否する。
+値が設定ファイルに残り、以降の`mise run`で効き続けるためである。
+`-E local`を付けない`mise set`は、コミット対象の`mise.toml`に書き込む。
+拒否する環境変数は列挙であり、網羅ではない。
+`NODE_OPTIONS`や`BUN_OPTIONS`は拒否しない。
+`PATH`の単独の代入や`export`は、`ENV`と同じく`mise`への前置きでないと拒否しない。
 
 #### 名前を持つ呼び出し
 
