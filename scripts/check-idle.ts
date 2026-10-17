@@ -420,3 +420,22 @@ function main(): number {
 if (import.meta.main) {
   process.exitCode = main();
 }
+
+export type Snapshot = {
+  readonly jobs: Reading<RunningJob>;
+  readonly items: Reading<RunningWorkItem>;
+};
+
+export type CheckIdleOptions = {
+  readonly timeoutMs: number;
+  readonly intervalMs: number;
+  readonly now: () => number;
+  readonly sleep: (ms: number) => void;
+  readonly read: () => Snapshot;
+  readonly progress: (message: string) => void;
+};
+
+// スタブ。実装は次のコミットで書く。
+export function checkIdle(_options: CheckIdleOptions): Verdict {
+  return { exitCode: 0, lines: [] };
+}

@@ -10,6 +10,8 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  type CheckIdleOptions,
+  checkIdle,
   judge,
   parseRunningJobs,
   parseRunningWorkItems,
@@ -19,6 +21,7 @@ import {
   type RunningWorkItem,
   runningJobsSql,
   runningWorkItemsSql,
+  type Snapshot,
   workerWillBeRecreated,
 } from "../../scripts/check-idle.ts";
 
@@ -287,7 +290,11 @@ describe("command", () => {
       '  if [ "$prev" = "-d" ]; then db="$arg"; fi',
       '  prev="$arg"',
       "done",
-      'cat "$FAKE_DIR/$db.out" 2>/dev/null',
+      'n=$(( $(cat "$FAKE_DIR/$db.n" 2>/dev/null || echo 0) + 1 ))',
+      'echo "$n" > "$FAKE_DIR/$db.n"',
+      'f="$FAKE_DIR/$db.out.$n"',
+      '[ -f "$f" ] || f="$FAKE_DIR/$db.out"',
+      'cat "$f" 2>/dev/null',
       'exit "$(cat "$FAKE_DIR/$db.code" 2>/dev/null || echo 0)"',
       "",
     ].join("\n");
@@ -310,9 +317,16 @@ describe("command", () => {
     args: readonly string[] = [],
     env: Record<string, string> = {},
   ): { exitCode: number; stdout: string; stderr: string } {
-    const result = Bun.spawnSync([process.execPath, SCRIPT, ...args], {
-      env: { PATH: `${dir}:/usr/bin:/bin`, FAKE_DIR: dir, ...env },
-    });
+    // 待たずに結果を見るため、再確認の上限を0にする。再確認を試すテストは自分で指定する。
+    const recheck = args.some((arg) => arg.startsWith("--recheck"))
+      ? []
+      : ["--recheck-timeout-ms=0"];
+    const result = Bun.spawnSync(
+      [process.execPath, SCRIPT, ...recheck, ...args],
+      {
+        env: { PATH: `${dir}:/usr/bin:/bin`, FAKE_DIR: dir, ...env },
+      },
+    );
     return {
       exitCode: result.exitCode,
       stdout: result.stdout.toString(),
@@ -426,5 +440,194 @@ describe("command", () => {
     expect(readFileSync(join(dir, "calls"), "utf8")).toContain(
       "PGOPTIONS=-c default_transaction_read_only=on",
     );
+  });
+
+  test("passes when the second read shows nothing running", () => {
+    setup({
+      "windmill.out.1": `${JOB_LINE}\n`,
+      "windmill.out": "",
+      "datatable_db.out": "",
+    });
+
+    expect(
+      run(["--recheck-timeout-ms=1000", "--recheck-interval-ms=1"]).exitCode,
+    ).toBe(0);
+  });
+
+  test("stops when the job keeps running for the whole recheck", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+
+    expect(
+      run(["--recheck-timeout-ms=30", "--recheck-interval-ms=10"]).exitCode,
+    ).toBe(1);
+  });
+
+  test("prints a waiting message while it rechecks", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+
+    expect(
+      run(["--recheck-timeout-ms=30", "--recheck-interval-ms=10"]).stderr,
+    ).toContain("waiting");
+  });
+});
+
+const idleSnapshot: Snapshot = { jobs: okJobs(), items: okItems() };
+const busySnapshot: Snapshot = { jobs: okJobs(JOB), items: okItems() };
+const unreadableSnapshot: Snapshot = {
+  jobs: { ok: false, reason: "db is down" },
+  items: { ok: false, reason: "db is down" },
+};
+
+// 時計とsleepを差し替え、待たずに再確認の流れを試す。sleepは時計を進める。
+function harness(
+  next: (readCount: number) => Snapshot,
+  overrides: Partial<CheckIdleOptions> = {},
+) {
+  let clock = 0;
+  const readAt: number[] = [];
+  const messages: string[] = [];
+  const options: CheckIdleOptions = {
+    timeoutMs: 60_000,
+    intervalMs: 5_000,
+    now: () => clock,
+    sleep: (ms) => {
+      clock += ms;
+    },
+    read: () => {
+      readAt.push(clock);
+      return next(readAt.length);
+    },
+    progress: (message) => {
+      messages.push(message);
+    },
+    ...overrides,
+  };
+  return {
+    run: () => checkIdle(options),
+    readAt,
+    messages,
+    clock: () => clock,
+  };
+}
+
+describe("checkIdle", () => {
+  test("passes without waiting when the first read is idle", () => {
+    const h = harness(() => idleSnapshot);
+
+    h.run();
+
+    expect(h.readAt).toEqual([0]);
+  });
+
+  test("passes when the second read is idle", () => {
+    const h = harness((n) => (n === 1 ? busySnapshot : idleSnapshot));
+
+    expect(h.run().exitCode).toBe(0);
+  });
+
+  test("reads the second time after the interval", () => {
+    const h = harness((n) => (n === 1 ? busySnapshot : idleSnapshot));
+
+    h.run();
+
+    expect(h.readAt).toEqual([0, 5_000]);
+  });
+
+  test("stops when work runs for the whole timeout", () => {
+    const h = harness(() => busySnapshot);
+
+    expect(h.run().exitCode).toBe(1);
+  });
+
+  test("reads once per interval until the timeout", () => {
+    const h = harness(() => busySnapshot);
+
+    h.run();
+
+    expect(h.readAt.length).toBe(13);
+  });
+
+  test("does not wait past the timeout", () => {
+    const h = harness(() => busySnapshot, {
+      timeoutMs: 12_000,
+      intervalMs: 5_000,
+    });
+
+    h.run();
+
+    expect(h.clock()).toBe(12_000);
+  });
+
+  test("lists the work found by the last read when it stops", () => {
+    const h = harness((n) => ({
+      jobs: okJobs({ ...JOB, id: `job-${String(n)}` }),
+      items: okItems(),
+    }));
+
+    expect(h.run().lines.join("\n")).toContain("job-13");
+  });
+
+  test("does not wait when the timeout is 0", () => {
+    const h = harness(() => busySnapshot, { timeoutMs: 0 });
+
+    h.run();
+
+    expect(h.readAt).toEqual([0]);
+  });
+
+  test("stops at once when the timeout is 0 and work is running", () => {
+    const h = harness(() => busySnapshot, { timeoutMs: 0 });
+
+    expect(h.run().exitCode).toBe(1);
+  });
+
+  test("does not count an unreadable re-read as idle", () => {
+    const h = harness((n) => (n === 1 ? busySnapshot : unreadableSnapshot));
+
+    expect(h.run().exitCode).toBe(1);
+  });
+
+  test("still lists the work when the last reads were unreadable", () => {
+    const h = harness((n) => (n === 1 ? busySnapshot : unreadableSnapshot));
+
+    expect(h.run().lines.join("\n")).toContain(JOB.id);
+  });
+
+  test("passes when an unreadable re-read is followed by an idle read", () => {
+    const h = harness((n) =>
+      n === 1 ? busySnapshot : n === 2 ? unreadableSnapshot : idleSnapshot,
+    );
+
+    expect(h.run().exitCode).toBe(0);
+  });
+
+  test("passes with a warning when the first read is unreadable", () => {
+    const h = harness(() => unreadableSnapshot);
+
+    expect([h.run().exitCode, h.readAt.length]).toEqual([0, 1]);
+  });
+
+  test("reports that it is waiting", () => {
+    const h = harness(() => busySnapshot, { timeoutMs: 10_000 });
+
+    h.run();
+
+    expect(h.messages[0]).toContain("waiting");
+  });
+
+  test("reports the seconds waited so far", () => {
+    const h = harness(() => busySnapshot, { timeoutMs: 10_000 });
+
+    h.run();
+
+    expect(h.messages[1]).toContain("5s");
+  });
+
+  test("does not report anything when the first read is idle", () => {
+    const h = harness(() => idleSnapshot);
+
+    h.run();
+
+    expect(h.messages).toEqual([]);
   });
 });

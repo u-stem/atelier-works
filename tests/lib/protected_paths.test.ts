@@ -787,6 +787,8 @@ describe("files that the host executor runs", () => {
     "scripts/bootstrap.sh",
     "scripts/custom-tags.ts",
     "scripts/record-host-applied.sh",
+    "scripts/check-idle.ts",
+    "tests/scripts/check-idle.test.ts",
     "infra/docker-compose.yml",
     "tests/infra/docker_compose.test.ts",
     "tests/fixtures/host_apply_repo.ts",
