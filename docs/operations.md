@@ -1051,8 +1051,45 @@ Windmillで取り消した実行のClaudeや検査コマンドは、止まらず
 
 - mainへのマージとデプロイを避ける。自己更新は実行中の実装フローを待たずに新しいステップを反映するので、1回の実行の中で別の版のステップが動きうる。実装中(`implementing`)の作業項目があれば、実行中である。
 - defaultのworkerは同時に1つのジョブしか動かさないので、実装フローは1回の実行で、数時間worker全体を使う。その間、ほかのジョブは待つ。
-- `mise run up`を避ける。workerのコンテナが作り直され、実行中のジョブが止まるためである。実装中(`implementing`)の作業項目が無いときに行う。
+- `mise run up`と`mise run deploy`は、実行中の仕事があると止まる([workerを作り直す前の確認](#workerを作り直す前の確認))。
 - インスタンスの`job_default_timeout`を設定するなら、21600秒以上にする。実装と検証のステップ、PRの修正の検証のステップより先に打ち切らないためである。
+
+### workerを作り直す前の確認
+
+`mise run up`と`mise run deploy`は、defaultのworkerのコンテナを作り直す前に、実行中の仕事が無いことを確かめる。
+workerを作り直すと、実行中のジョブは10秒の猶予で止められ、別のworkerが同じジョブを最初から再実行するためである。
+実装は最長6時間かかるので、途中で止まると、その時間が無駄になる。
+
+確認は読み取りだけで、次のどちらかがあると終了コード1で止まり、一覧を出す。
+
+- defaultのworkerの枠で実行中のジョブ。フローの親ジョブと、Console用、定期ジョブ用、nativeのworkerが受けるtagのジョブは数えない。
+- 実行中の状態の作業項目。要件定義の生成中(`requirements_generating`)、実装中(`implementing`)、レビュー中(`reviewing`)、修正中(`fixing`)、監査中(`auditing`)である。ジョブの一覧に載らない合間も拾うために、両方を見る。
+
+確認が走るのは、`docker compose up --dry-run`が、defaultのworkerかDBの作り直しを示したときだけである。
+Caddyだけが変わる起動は止めない。
+dry-runの出力を読めないときは、作り直されるものとして確認する。
+DBに届かないとき(スタックが止まっている、初回の起動)は、警告を出して続ける。
+
+止められたときは、一覧の仕事が終わるのを待ち、同じコマンドをやり直す。
+`mise run deploy`は、止まる前にpullとイメージの取得とビルドを済ませているが、やり直しても同じ結果になる。
+ジョブの様子は、Windmillの画面か`wmill job list`で見る。作業項目はConsoleで見る。
+数秒で終わる定期のジョブだけが載ったときは、開始時刻を見て、終わってからやり直す。
+
+確認だけを手で実行するには、次を使う。
+
+```bash
+mise exec -- bun scripts/check-idle.ts
+```
+
+`FORCE=1`を付けると、確認を飛ばす。
+付けるのは、次のどちらかのときだけである。
+
+- 一覧のジョブが無いことを、Windmillの画面を見て自分で確かめた。作業項目が実装中などのまま残っていても、対応するジョブが無ければ、動いていない。
+- 止められてもよい緊急の作業で、実行中の仕事が止まることを受け入れる。
+
+```bash
+FORCE=1 mise run up
+```
 
 ## PRでレビューと修正を使う
 
@@ -3231,7 +3268,7 @@ clone、fetch、push、`git gtr new`が1回ずつ成功することを見る。
 
 1. ホスト側のcheckoutで`git pull`する。
 2. `mise install`で、`mise.toml`の`[tools]`のツールを入れる。
-3. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成、Caddyの再起動まで行う。
+3. `mise run up`で起動し直す。workerのイメージの再ビルドとコンテナの再作成、Caddyの再起動まで行う。実行中の仕事があると、作り直す前に止まる([workerを作り直す前の確認](#workerを作り直す前の確認))。
 
 `mise install`は、すでに入っているツールには何もしない。
 miseの自動インストールが`mise run`の前に不足分を入れるかは、確かめていない。そのため、通知の手順に`mise install`を含める。
@@ -3293,15 +3330,16 @@ PRのブランチで先に`mise run up`した場合、マージの版はPRのブ
 1. ホスト側のcheckoutで`git pull --ff-only`
 2. Dockerの版の検査。Engineが26.0以上、Composeが2.26.0以上でなければ止まる
 3. イメージの取得と、`windmill_worker`と`console_fetcher`のイメージのビルド
-4. 一時コンテナでの`caddy validate`。不正なら止まる
-5. `docker compose up -d`
-6. Caddyの再起動と、動いているCaddyでの`caddy validate`
-7. `wmill sync push`
-8. migrationの実行
-9. 反映したHEADの記録
+4. 実行中の仕事の確認。workerが作り直されるときに、実行中の仕事があれば止まる
+5. 一時コンテナでの`caddy validate`。不正なら止まる
+6. `docker compose up -d`
+7. Caddyの再起動と、動いているCaddyでの`caddy validate`
+8. `wmill sync push`
+9. migrationの実行
+10. 反映したHEADの記録
 
 版の検査は`git pull --ff-only`の後に行う。取り込んだ新しい版の検査を使うためである。
-この検査を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
+この検査と、実行中の仕事の確認を持たない版から取り込む最初の1回は、`mise run deploy`を使わない。miseは起動の時点のタスク定義で動くので、取り込んだ検査が走らないためである。
 `git pull --ff-only`を実行してから`mise run up`を実行する。`wmill sync push`とmigrationも要るときは、その後に`mise run deploy`を実行する。
 `mise.toml`の`[env]`に必須のキーが増える版を取り込む最初の1回は、`mise run deploy`が途中で止まる。
 deployタスクの`git pull`の後の最初の`docker compose`が、新しい必須変数を読めないためである。
