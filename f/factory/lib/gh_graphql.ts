@@ -188,7 +188,10 @@ export async function graphqlRequest(
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
+  } catch (err) {
+    if (isTimeout(err)) {
+      return failure("timeout");
+    }
     return failure("malformed", { status: response.status });
   }
   if (!isRecord(body)) {

@@ -6611,7 +6611,8 @@ export async function finishGhCollectRun(
 
 /**
  * 所有者ごとの、`finished_at`のある最新の実行の結果と、`ok`が真の最新の`finished_at`を返す。
- * 実行中の行(`finished_at`が空)は数えない。実行の無い所有者は、`latest`と`last_success_at`が`null`の行になる。
+ * 要求を1回以上送って`deadline`で終えた最新の実行の`started_at`も返す。所有者の並びに使う。
+ * 実行中の行(`finished_at`が空)は数えない。実行の無い所有者は、`latest`と`last_success_at`と`last_deadline_at`が`null`の行になる。
  */
 export async function listGhCollectOwnerStates(
   owners: readonly string[],
@@ -6630,7 +6631,12 @@ export async function listGhCollectOwnerStates(
       (
         SELECT max(s.finished_at) FROM factory.gh_collect_runs s
         WHERE s.owner = o.owner AND s.ok AND s.finished_at IS NOT NULL
-      ) AS last_success_at
+      ) AS last_success_at,
+      (
+        SELECT max(d.started_at) FROM factory.gh_collect_runs d
+        WHERE d.owner = o.owner AND d.error_code = 'deadline'
+          AND d.requests >= 1 AND d.finished_at IS NOT NULL
+      ) AS last_deadline_at
     FROM unnest(${names}::text[]) AS o(owner)
     LEFT JOIN LATERAL (
       SELECT f.finished_at, f.ok, f.error_code, f.next_allowed_at
@@ -6655,7 +6661,10 @@ export async function listGhCollectOwnerStates(
             ),
           },
     last_success_at: parseNullableDate(row.last_success_at, "last_success_at"),
-    last_deadline_at: null,
+    last_deadline_at: parseNullableDate(
+      row.last_deadline_at,
+      "last_deadline_at",
+    ),
   }));
 }
 

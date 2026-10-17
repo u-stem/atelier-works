@@ -126,7 +126,7 @@ type OwnerCollected = {
  * `gh_collect_enabled`が偽なら、トークンを読まず、行も書かずに終わる。
  * 実行の行は、トークンを読む前に全員分を1つの文で書く。書けなければ例外を投げて、`on_failure`に任せる。
  * そのほかの失敗は例外にせず、所有者ごとの行の`error_code`に残す。
- * 所有者は最後の成功が古い順に回す。実行全体の締め切りを過ぎそうなら、新しい要求を始めない。
+ * 所有者は順番を使った時刻が古い順に回す。実行全体の締め切りを過ぎそうなら、新しい要求を始めない。
  */
 export async function runGhCollect(
   deps: GhCollectDeps,
@@ -197,8 +197,12 @@ export async function runGhCollect(
     states = await deps.listOwnerStates(names);
   } catch {
     log.error("could not read the collection states");
+    // 状態を読めなくても、トークンの失敗は先に採る。引けた所有者だけ`db_error`にする。
     for (const owner of owners) {
-      await finish(owner, { outcome: failedOutcome("db_error"), repos: 0 });
+      const lookup = lookupToken(variable, owner.name);
+      const errorCode =
+        lookup.kind === "error" ? lookup.error_code : "db_error";
+      await finish(owner, { outcome: failedOutcome(errorCode), repos: 0 });
     }
     return { enabled: true, owners: results };
   }
@@ -289,6 +293,10 @@ export async function runGhCollect(
           return fail("owner_mismatch");
         }
         idChecked = check.kind === "matched";
+      }
+      if (!first && page.owner?.database_id !== ownerId) {
+        // 先頭でないページで所有者が消えるか別のIDになると、一覧が混ざる。置き換えない。
+        return fail("parse_error");
       }
       for (const discarded of page.discarded) {
         log.warn("discarded a repository row", {

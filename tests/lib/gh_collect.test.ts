@@ -523,7 +523,7 @@ describe("runGhCollect over many rounds", () => {
   async function rounds(
     count: number,
     options: Options,
-    pagesOf: (round: number) => Options["pages"],
+    pagesOf: (round: number) => NonNullable<Options["pages"]>,
   ) {
     let states: GhCollectOwnerState[] = [];
     const outcomes: Record<string, GhCollectRunOutcome | undefined>[] = [];
@@ -986,13 +986,13 @@ describe("runGhCollect owner check outcomes", () => {
     expect(h.outcomeOf("alice")?.error_code).toBe("owner_mismatch");
   });
 
-  test("checks the id on the first page only", async () => {
+  test("accepts a later page of the same owner id", async () => {
     const h = harness({
       config: ALICE_ONLY,
       pages: {
         alice: [
           okPage(1001, [node("a")], { next: "C1" }),
-          okPage(7777, [node("b")]),
+          okPage(1001, [node("b")]),
         ],
       },
     });

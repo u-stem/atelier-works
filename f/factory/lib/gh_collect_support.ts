@@ -107,24 +107,28 @@ export function lookupToken(
 }
 
 /**
- * 最後の成功が古い所有者から並べる。成功が無い所有者(状態の無い所有者を含む)を先にする。
- * 同じ古さの所有者は、設定の順を保つ。毎回後ろの所有者が取り残されないようにするため。
+ * 順番を使った時刻が古い所有者から並べる。使った時刻は、最後の成功の時刻と、
+ * 要求を送ったのに`deadline`で終えた実行の開始時刻の遅いほうである。
+ * どちらも無い所有者(状態の無い所有者を含む)は先にする。
+ * 締め切りに収まらない所有者は、`deadline`の後に後ろへ回り、後ろの所有者が取り残されない。
+ * 要求を送れずに`deadline`で終えた所有者は印が付かないので、後ろへ回らない。
+ * 同じ古さの所有者は、設定の順を保つ。
  */
 export function orderOwners<T extends { readonly name: string }>(
   owners: readonly T[],
   states: readonly GhCollectOwnerState[],
 ): T[] {
-  const lastSuccess = new Map<string, number>();
+  const lastTurn = new Map<string, number>();
   for (const state of states) {
-    if (state.last_success_at !== null) {
-      lastSuccess.set(
-        state.owner.toLowerCase(),
-        state.last_success_at.getTime(),
-      );
+    const times = [state.last_success_at, state.last_deadline_at].flatMap(
+      (time) => (time === null ? [] : [time.getTime()]),
+    );
+    if (times.length > 0) {
+      lastTurn.set(state.owner.toLowerCase(), Math.max(...times));
     }
   }
   const key = (owner: T): number =>
-    lastSuccess.get(owner.name.toLowerCase()) ?? Number.NEGATIVE_INFINITY;
+    lastTurn.get(owner.name.toLowerCase()) ?? Number.NEGATIVE_INFINITY;
   return [...owners].sort((a, b) => {
     const left = key(a);
     const right = key(b);
