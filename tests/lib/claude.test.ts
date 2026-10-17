@@ -256,7 +256,24 @@ describe("parseClaudeJson", () => {
     expect(result.modelUsage).toEqual([]);
   });
 
-  test("skips a modelUsage entry with a malformed number", () => {
+  test("returns no modelUsage entries when a token count is not an integer", () => {
+    const result = parseClaudeJson(
+      claudeJsonStdout({
+        modelUsage: {
+          fractional: {
+            inputTokens: 1.5,
+            outputTokens: 2,
+            cacheReadInputTokens: 3,
+            cacheCreationInputTokens: 4,
+            costUSD: 0.5,
+          },
+        },
+      }),
+    );
+    expect(result.modelUsage).toEqual([]);
+  });
+
+  test("returns no modelUsage entries when any entry is malformed", () => {
     const result = parseClaudeJson(
       claudeJsonStdout({
         modelUsage: {
@@ -277,7 +294,7 @@ describe("parseClaudeJson", () => {
         },
       }),
     );
-    expect(result.modelUsage.map((entry) => entry.model)).toEqual(["good"]);
+    expect(result.modelUsage).toEqual([]);
   });
 
   test("throws on non-JSON stdout", () => {

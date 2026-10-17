@@ -2198,33 +2198,6 @@ Windmillのジョブには、`WHITELIST_ENVS`に挙げていない変数は、PA
 そのため、`infra/docker-compose.yml`が`CLAUDE_VERSION`を挙げている。
 バージョンの記録は、workerのイメージを作り直した後の実行から入る。
 それより前の行は`claude_version`がNULLのまま残り、viewではNULLの行として別に集計される。
-
-### 実際に使われたモデルごとの使用量
-
-`agent_runs.model`と`v_agent_usage_daily`の`model`は、`claude --model`に渡した値である。
-1回の実行の中で別のモデルが使われても、費用とトークンは渡した値に数えられる。
-実際に使われたモデルで数えるには、viewの`v_agent_model_usage_daily`を使う。
-
-`agent_runs.model_usage`(jsonbの配列)には、`claude -p`の結果の`modelUsage`を、モデルごとに1要素で保存する。
-要素は、`model`、`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_creation_tokens`、`cost_usd`である。
-Claudeが結果を返さなかった実行と、この列を足す前の実行は、空の配列である。
-結果の`modelUsage`が無いときや、読めない要素は、実行を失敗にせず、その分を保存しない。
-
-viewは、日、実際に使われたモデル、Claudeのバージョン、工程ごとに、実行の数、費用、トークン数(入力、出力、キャッシュ読み出し、キャッシュ作成)を合計する。
-1回の実行が複数のモデルを使ったときは、それぞれのモデルに1回ずつ数える。
-`model_usage`が空の実行は、渡した値と実行全体の値で1行として数え、`total_cache_creation_tokens`には入らない。
-ターン数と実行時間は、モデルごとに分けられないので、このviewには出さない。それらは`v_agent_usage_daily`で見る。
-
-```sql
-SELECT model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd
-FROM factory.v_agent_model_usage_daily
-WHERE day >= now() - interval '14 days'
-GROUP BY model
-ORDER BY cost_usd DESC;
-```
-
-列を足すmigrationより先に、新しいコードが反映された間は、`model_usage`を除いた文で記録する。
-このときの実行の内訳は残らない。
 NULLを別の文字列に置き換えないのは、記録が無いことを利用者に見せるためである。
 
 `mise run up`で反映した後は、反映した時刻より後の実行で、`mise.toml`の`CLAUDE_VERSION`と同じ値が入ることを確かめる。
@@ -2239,6 +2212,35 @@ GROUP BY 1;
 
 確認クエリの結果にNULLの行があるときは、ジョブにまだ変数が届いていない。
 workerが新しいイメージで動いているかと、`WHITELIST_ENVS`を確かめる。
+
+### 実際に使われたモデルごとの使用量
+
+`agent_runs.model`と`v_agent_usage_daily`の`model`は、`claude --model`に渡した値である。
+1回の実行の中で別のモデルが使われても、費用とトークンは渡した値に数えられる。
+実際に使われたモデルで数えるには、viewの`v_agent_model_usage_daily`を使う。
+
+`agent_runs.model_usage`(jsonbの配列)には、`claude -p`の結果の`modelUsage`を、モデルごとに1要素で保存する。
+要素は、`model`、`input_tokens`、`output_tokens`、`cache_read_tokens`、`cache_creation_tokens`、`cost_usd`である。
+Claudeが結果を返さなかった実行と、この列を足す前の実行は、空の配列である。
+結果の`modelUsage`が無いときと、読めない要素が1つでもあるときは、実行を失敗にせず、内訳を空にする。
+一部の要素だけを残すと、実行全体の費用と内訳の合計が食い違うためである。
+
+viewは、日、実際に使われたモデル、Claudeのバージョン、工程ごとに、実行の数、費用、トークン数(入力、出力、キャッシュ読み出し、キャッシュ作成)を合計する。
+1回の実行が複数のモデルを使ったときは、それぞれのモデルに1回ずつ数える。
+`model_usage`が空の実行は、渡した値と実行全体の値で1行として数え、`total_cache_creation_tokens`には入らない。
+内訳を持つ実行と持たない実行が同じ行に混ざると、`total_cache_creation_tokens`は内訳を持つ実行だけの合計で、実際より小さい。
+ターン数と実行時間は、モデルごとに分けられないので、このviewには出さない。それらは`v_agent_usage_daily`で見る。
+
+```sql
+SELECT model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd
+FROM factory.v_agent_model_usage_daily
+WHERE day >= now() - interval '14 days'
+GROUP BY model
+ORDER BY cost_usd DESC;
+```
+
+列を足すmigrationより先に、新しいコードが反映された間は、`model_usage`を除いた文で記録する。
+このときの実行の内訳は残らない。
 
 ### PR修正の連続した失敗
 

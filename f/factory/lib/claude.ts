@@ -118,7 +118,7 @@ export type ClaudeRunResult = {
   readonly numTurns: number;
   readonly durationMs: number;
   readonly usage: ClaudeUsage;
-  /** 実際に使われたモデルごとの内訳。結果に`modelUsage`が無いか、読めない要素は含めない。 */
+  /** 実際に使われたモデルごとの内訳。結果に`modelUsage`が無いか、読めない要素があるときは空になる。 */
   readonly modelUsage: readonly ModelUsageEntry[];
   /**
    * `is_error`が`false`で、モデルが正しい構造化出力を返したときだけ値が入り、
@@ -161,17 +161,18 @@ type RawModelUsage = {
 function isRawModelUsage(value: unknown): value is RawModelUsage {
   if (typeof value !== "object" || value === null) return false;
   return (
-    typeof Reflect.get(value, "inputTokens") === "number" &&
-    typeof Reflect.get(value, "outputTokens") === "number" &&
-    typeof Reflect.get(value, "cacheReadInputTokens") === "number" &&
-    typeof Reflect.get(value, "cacheCreationInputTokens") === "number" &&
+    Number.isInteger(Reflect.get(value, "inputTokens")) &&
+    Number.isInteger(Reflect.get(value, "outputTokens")) &&
+    Number.isInteger(Reflect.get(value, "cacheReadInputTokens")) &&
+    Number.isInteger(Reflect.get(value, "cacheCreationInputTokens")) &&
     typeof Reflect.get(value, "costUSD") === "number"
   );
 }
 
 /**
  * 結果の`modelUsage`(モデル名をキーにしたオブジェクト)を、モデルごとの配列にする。
- * 内訳は補助の記録なので、無いときと読めないときは、実行を失敗にせず、その要素を捨てる。
+ * 内訳は補助の記録なので、無いときと読めないときは、実行を失敗にせず、内訳を空にする。
+ * 一部の要素だけを残すと、実行全体の値と内訳の合計が食い違うため、1つでも読めなければ全体を捨てる。
  */
 function parseModelUsage(value: unknown): ModelUsageEntry[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -179,7 +180,7 @@ function parseModelUsage(value: unknown): ModelUsageEntry[] {
   }
   const entries: ModelUsageEntry[] = [];
   for (const [model, usage] of Object.entries(value)) {
-    if (!isRawModelUsage(usage)) continue;
+    if (!isRawModelUsage(usage)) return [];
     entries.push({
       model,
       input_tokens: usage.inputTokens,
