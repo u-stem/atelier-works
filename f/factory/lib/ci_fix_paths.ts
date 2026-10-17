@@ -232,8 +232,8 @@ function inDirectory(lowerPath: string, directory: string): boolean {
   );
 }
 
-/** 小文字にそろえた(または畳み込んだ)パスが、拒否の一覧に当たるか。 */
-function deniedByLowerPath(lower: string, extraBasename: string): boolean {
+/** 小文字にそろえた、または畳み込んだパスが、拒否の一覧に当たるか。`extraBasename`はパスから切ったものに足す、もう1つのファイル名。 */
+function deniedByNormalizedPath(lower: string, extraBasename: string): boolean {
   if (PROTECTED_EXACT_LOWERCASE.has(lower)) return true;
   const directories = [
     ...IMPLEMENT_PROTECTED_PATH_PREFIXES.map((prefix) => prefix.toLowerCase()),
@@ -262,13 +262,14 @@ function deniedByLowerPath(lower: string, extraBasename: string): boolean {
  * 保護パスの照合と同じ`foldPath`で畳むのは、大文字小文字を区別しないファイルシステムで
  * 同じファイルを指す綴りを拒否するため。畳み込みで`/`や文字が変わっても、
  * 小文字にそろえただけの綴りで当たっていたものが外れないよう、両方の形で照合する。
+ * 小文字だけの照合は、畳み込みの変更に備えた冗長な防御である。
  */
 export function isDeniedPath(path: string): boolean {
   const rawBasename = path.split("/").pop() ?? path;
   const foldedBasename = foldPath(rawBasename);
   return (
-    deniedByLowerPath(foldPath(path), foldedBasename) ||
-    deniedByLowerPath(path.toLowerCase(), rawBasename.toLowerCase())
+    deniedByNormalizedPath(foldPath(path), foldedBasename) ||
+    deniedByNormalizedPath(path.toLowerCase(), foldedBasename)
   );
 }
 

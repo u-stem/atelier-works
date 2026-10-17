@@ -731,6 +731,14 @@ describe("isDeniedPath with Unicode aliases", () => {
     expect(isDeniedPath("sub/requirementś.txt")).toBe(true);
   });
 
+  test.each([
+    ".cla͏ude/settings.json",
+    "scrıpts/doctor.sh",
+    "f/factory/lib/ci️_fix_paths.ts",
+  ])("reports protected_path, not unsafe_path, for %s", (path) => {
+    expect(codeOf([change(path)], [path])).toBe("protected_path");
+  });
+
   test("does not deny an unrelated path", () => {
     expect(isDeniedPath("docs/Readme.md")).toBe(false);
   });
