@@ -24,7 +24,9 @@
 // 読み直しは、最初の読み取りの開始から数えた上限を超えない。最後の待ちと読み取りも、上限から逆算して打ち切る。
 // 待つ上限と間隔は`--recheck-timeout-ms=<ms>`と`--recheck-interval-ms=<ms>`で変えられる(テスト用)。
 //
-// 使い方: bun ./scripts/check-idle.ts [--when-worker-recreated]
+// 使い方: bun ./scripts/check-idle.ts [--when-worker-recreated] [--after-pull]
+// `--after-pull`は、`git pull`の後に呼ぶ`mise run deploy`が付ける。止めるときに、checkoutが更新済みで
+// コンテナが古い版のままであることと、同じコマンドでやり直すことを知らせる。
 // `--when-worker-recreated`を付けると、`docker compose up --dry-run`で、defaultのworkerかDBが
 // 作り直される場合だけ確認する。dry-runの出力を読めないときは、作り直されるものとして確認する。
 // 環境変数`CHECK_IDLE_FORCE=1`で確認を飛ばす。人が、ジョブが無いことを確かめたときと、緊急のときに使う。
@@ -257,7 +259,9 @@ const WORKER_CONTAINER = /-(?:windmill_worker|db)-\d+$/;
 
 /**
  * `docker compose up --dry-run`の出力から、defaultのworkerかDBのコンテナが作り直されるかを返す。
- * コンテナの行(`Container <名前> <動作>`)が1つも無いとき、または`Container`で始まるのに3列に合わない行が
+ * 対象のコンテナ(defaultのworkerとDB)の状態が`Running`以外なら、作り直しか起動のどちらかなので`true`を返す。
+ * 状態の名前を列挙しないのは、composeの版で動作の名前が変わっても、見逃さないためである。
+ * コンテナの行(`Container <名前> <状態>`)が1つも無いとき、または`Container`で始まるのに3列に合わない行が
  * 1つでもあるときは、読めなかったとして`null`を返す。
  */
 export function workerWillBeRecreated(composeOutput: string): boolean | null {
@@ -273,7 +277,7 @@ export function workerWillBeRecreated(composeOutput: string): boolean | null {
       return null;
     }
     seen = true;
-    if (match[2] === "Recreate" && WORKER_CONTAINER.test(match[1] ?? "")) {
+    if (match[2] !== "Running" && WORKER_CONTAINER.test(match[1] ?? "")) {
       recreated = true;
     }
   }
@@ -384,23 +388,42 @@ function shorten(text: string): string {
 }
 
 /**
+ * psqlが接続できなかった(終了コード2)ときに、サーバが居ないと分かる文言。
+ * 初回の起動で、まだ存在しないデータベースを指したときの文言も含む。
+ * 接続数の上限、起動中、停止中、復旧中、認証の失敗は、サーバが居るのに読めないので含めない。
+ */
+const SERVER_ABSENT = new RegExp(
+  [
+    "Connection refused",
+    "No such file or directory",
+    "could not translate host name",
+    "Is the server running",
+    "could not connect",
+    'database "[^"]*" does not exist',
+  ].join("|"),
+  "i",
+);
+
+/** composeがコンテナの不在かDockerの停止を示した文言(終了コード1)。 */
+const DOCKER_ABSENT =
+  /is not running|Cannot connect to the Docker daemon|no such service/i;
+
+/**
  * 読み取りの失敗を、DBに届かなかったものか、届いたが確かめられなかったものかに分ける。
- * 届かなかったのは、psqlが接続できなかった(終了コード2)ときと、composeがコンテナの不在かDockerの停止を示したときである。
- * SQLの失敗(終了コード1と3)、時間切れ(終了コードが無い)、それ以外の失敗は、確かめられなかったものとして扱う。
+ * 届かなかったのは、サーバが居ないと分かる文言のときである。
+ * psqlが接続できなかった(終了コード2)ときは、`SERVER_ABSENT`の文言があれば届かなかったものとする。
+ * composeがコンテナの不在かDockerの停止を示した(終了コード1)ときも、届かなかったものとする。
+ * それ以外は、確かめられなかったものとして扱う。
+ * 対象は、SQLの失敗(終了コード1と3)、時間切れ(終了コードが無い)、接続数の上限、起動中、停止中、復旧中、認証の失敗である。
  */
 export function classifyReadFailure(
   exitCode: number | null,
   stderr: string,
 ): "unreachable" | "unverifiable" {
-  if (exitCode === 2) {
+  if (exitCode === 2 && SERVER_ABSENT.test(stderr)) {
     return "unreachable";
   }
-  if (
-    exitCode === 1 &&
-    /is not running|Cannot connect to the Docker daemon|no such service/i.test(
-      stderr,
-    )
-  ) {
+  if (exitCode === 1 && DOCKER_ABSENT.test(stderr)) {
     return "unreachable";
   }
   return "unverifiable";
@@ -580,6 +603,23 @@ export function checkIdle(options: CheckIdleOptions): Verdict {
   return lastBusy;
 }
 
+/**
+ * `mise run deploy`が止まったときに、`git pull`が進んでいることを知らせる行を足す。
+ * checkoutは新しい版、コンテナは古い版のままなので、同じコマンドでやり直す。通ったときは何も足さない。
+ */
+export function withPullNotice(verdict: Verdict): Verdict {
+  if (verdict.exitCode === 0) {
+    return verdict;
+  }
+  return {
+    ...verdict,
+    lines: [
+      ...verdict.lines,
+      "git pull has already updated the checkout, but the containers are still the old version. Run the same command again after this is resolved.",
+    ],
+  };
+}
+
 function pair(
   snapshot: Snapshot,
 ): [Reading<RunningJob>, Reading<RunningWorkItem>] {
@@ -616,17 +656,15 @@ function main(): number {
     read: readSnapshot,
     progress: (message) => console.error(message),
   });
-  for (const line of verdict.lines) {
+  const reported = process.argv.includes("--after-pull")
+    ? withPullNotice(verdict)
+    : verdict;
+  for (const line of reported.lines) {
     console.error(line);
   }
-  return verdict.exitCode;
+  return reported.exitCode;
 }
 
 if (import.meta.main) {
   process.exitCode = main();
-}
-
-// スタブ。実装は次のコミットで書く。
-export function withPullNotice(verdict: Verdict): Verdict {
-  return verdict;
 }

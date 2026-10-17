@@ -492,6 +492,9 @@ describe("SQL", () => {
 });
 
 // 本物のdockerの代わりに、出力と終了コードを固定して返す偽のdockerをPATHに置く。
+const SERVER_ABSENT_ERR =
+  'connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory\n';
+
 describe("command", () => {
   let dir: string;
 
@@ -585,17 +588,34 @@ describe("command", () => {
     setup({
       "windmill.out": "",
       "windmill.code": "2",
+      "windmill.err": SERVER_ABSENT_ERR,
       "datatable_db.out": "",
       "datatable_db.code": "2",
+      "datatable_db.err": SERVER_ABSENT_ERR,
     });
 
     expect(run().stderr).toContain("warning:");
   });
 
   test("exits 0 when the database is unreachable", () => {
-    setup({ "windmill.code": "2", "datatable_db.code": "2" });
+    setup({
+      "windmill.code": "2",
+      "windmill.err": SERVER_ABSENT_ERR,
+      "datatable_db.code": "2",
+      "datatable_db.err": SERVER_ABSENT_ERR,
+    });
 
     expect(run().exitCode).toBe(0);
+  });
+
+  test("exits 1 when the server refuses the connection with too many clients", () => {
+    setup({
+      "windmill.out": "",
+      "datatable_db.code": "2",
+      "datatable_db.err": "FATAL:  sorry, too many clients already\n",
+    });
+
+    expect(run().exitCode).toBe(1);
   });
 
   test("exits 0 when the db service is not running", () => {

@@ -1398,6 +1398,7 @@ PR修正の自動修正がこれらを書き換えるのを止め、実装のPR�
 実装フローは、保護パスに触れたラウンドで検査コマンドを実行しない([保護パスの記録](internals/implement.md#保護パスの記録))。
 そのため、次のファイルを変えるIssueの実装ループは、検査を省いてPRに進む。
 対象は、`scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`、実行役のテストである。
+`scripts/check-idle.ts`と`tests/scripts/check-idle.test.ts`も対象に含む。
 その変更は、PR本文の「確認して欲しい点」に載る。
 
 ### 残るリスク

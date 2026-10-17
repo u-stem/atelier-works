@@ -35,7 +35,7 @@ description = "Start the local Windmill stack"
 run = """
 set -e
 scripts/check-docker-version.sh
-docker compose -f infra/docker-compose.yml pull
+docker compose -f infra/docker-compose.yml pull --ignore-pull-failures
 docker compose -f infra/docker-compose.yml build
 docker compose -f infra/docker-compose.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile
 bun ./scripts/check-idle.ts --when-worker-recreated
@@ -83,7 +83,7 @@ scripts/check-docker-version.sh
 docker compose -f infra/docker-compose.yml pull
 docker compose -f infra/docker-compose.yml build
 docker compose -f infra/docker-compose.yml run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile
-bun ./scripts/check-idle.ts --when-worker-recreated
+bun ./scripts/check-idle.ts --when-worker-recreated --after-pull
 docker compose -f infra/docker-compose.yml up -d --pull never --no-build
 docker compose -f infra/docker-compose.yml restart caddy
 docker compose -f infra/docker-compose.yml exec -T caddy caddy validate --config /etc/caddy/Caddyfile

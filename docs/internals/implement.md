@@ -678,6 +678,7 @@ PR修正の一覧そのものの中身は、[PRワークフロー](pr-workflow.m
 そのときは、GitHub側のCIの結果を見る。
 Factory自身のリポジトリでは、ホストの実行役が実行するファイルも保護パスである。
 対象は、`scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`、実行役のテストである。
+`scripts/check-idle.ts`と`tests/scripts/check-idle.test.ts`も対象に含む。
 これらに触れたラウンドも、検査コマンドを実行せず、PR本文の「確認して欲しい点」に載せる。
 理由と限界は、[ホストの実行役の境界](../security.md#ホストの実行役の境界)にある。
 
