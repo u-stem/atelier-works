@@ -2507,6 +2507,7 @@ type PrPayload = {
   readonly mergeable_state: unknown;
   readonly user: unknown;
   readonly auto_merge?: unknown;
+  readonly created_at?: unknown;
 };
 
 function isPrPayload(value: unknown): value is PrPayload {
@@ -2537,12 +2538,21 @@ function isPrPayload(value: unknown): value is PrPayload {
   return true;
 }
 
-export async function getPr(
+/** `getPr`の結果に、PRを作った時刻(epochミリ秒)を添えたもの。読めなければ`createdAtMs`は`null`。 */
+export type PullRequestWithCreatedAt = PullRequest & {
+  readonly createdAtMs: number | null;
+};
+
+/**
+ * 1回の要求の応答から、PRと作成の時刻を読む。
+ * 作成の時刻は、文字列でないときと、日時として読めないときに`null`にする。
+ */
+async function fetchPr(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
-): Promise<PullRequest> {
+): Promise<{ pr: PullRequest; createdAtMs: number | null }> {
   validateOwnerRepo(owner, repo);
   const response = await callGhApi(
     client,
@@ -2568,7 +2578,11 @@ export async function getPr(
     baseRepoIdRaw > 0
       ? baseRepoIdRaw
       : null;
-  return {
+  const createdAtParsed =
+    typeof parsed.created_at === "string"
+      ? Date.parse(parsed.created_at)
+      : Number.NaN;
+  const pr: PullRequest = {
     number: parsed.number,
     title: parsed.title,
     body: parsed.body ?? "",
@@ -2602,20 +2616,33 @@ export async function getPr(
     // キーが無いときや想定外の形のときは、通さないよう有効として扱う。
     autoMergeEnabled: parsed.auto_merge !== null,
   };
+  return {
+    pr,
+    createdAtMs: Number.isFinite(createdAtParsed) ? createdAtParsed : null,
+  };
 }
 
-/** `getPr`の結果に、PRを作った時刻(epochミリ秒)を添えたもの。読めなければ`createdAtMs`は`null`。 */
-export type PullRequestWithCreatedAt = PullRequest & {
-  readonly createdAtMs: number | null;
-};
+export async function getPr(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PullRequest> {
+  return (await fetchPr(client, owner, repo, number)).pr;
+}
 
+/**
+ * `getPr`と同じ1回の要求で、PRを作った時刻(epochミリ秒)も読む。
+ * 時刻の判断をRESTの値で行う呼び出し側が使う。要求は増やさない。
+ */
 export async function getPrWithCreatedAt(
   client: GhClient,
   owner: string,
   repo: string,
   number: number,
 ): Promise<PullRequestWithCreatedAt> {
-  return { ...(await getPr(client, owner, repo, number)), createdAtMs: 0 };
+  const { pr, createdAtMs } = await fetchPr(client, owner, repo, number);
+  return { ...pr, createdAtMs };
 }
 
 export type PrDiff = {
