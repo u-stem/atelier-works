@@ -518,8 +518,12 @@ function errorMessage(err: unknown): string {
 // 実行
 // ---------------------------------------------------------------------------
 
-async function capture(argv: readonly string[]): Promise<CaptureResult> {
+async function capture(
+  argv: readonly string[],
+  cwd?: string,
+): Promise<CaptureResult> {
   const child = Bun.spawn([...argv], {
+    ...(cwd === undefined ? {} : { cwd }),
     stdout: "pipe",
     stderr: "pipe",
     stdin: "ignore",
@@ -568,7 +572,10 @@ async function main(): Promise<number> {
   }
   const root = resolve(import.meta.dir, "..");
   const deps: CliDeps = {
-    ports: wmillCliPorts(capture, () => new Date()),
+    ports: wmillCliPorts(
+      (argv) => capture(argv, root),
+      () => new Date(),
+    ),
     loadInputs: () => loadFreezeInputs(root),
     runPush: (argv) => runInherited(argv, root),
     branch: currentBranch,

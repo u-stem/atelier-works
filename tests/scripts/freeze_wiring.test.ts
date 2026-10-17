@@ -64,6 +64,20 @@ describe("mise.toml push tasks", () => {
   }
 });
 
+describe("tasks that ask a human to confirm", () => {
+  // 端末での確認はstdinとstdoutがTTYのときだけ通る。`raw = true`が無いと、miseが出力をつなぎ替える。
+  for (const name of [
+    "push:prune",
+    "freeze:place",
+    "freeze:release",
+    "freeze:reset",
+  ]) {
+    test(`${name} runs in raw mode`, () => {
+      expect(taskBody(name)).toContain("raw = true");
+    });
+  }
+});
+
 describe("wmill.yaml excludes", () => {
   test("keep every required pattern", async () => {
     const parsed = parseWmillExcludes(await Bun.file("wmill.yaml").text());

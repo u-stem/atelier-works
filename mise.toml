@@ -100,6 +100,8 @@ run = "bun ./scripts/freeze.ts push"
 [tasks."push:prune"]
 description = "Push and delete remote items that no longer exist locally (manual only)"
 run = "bun ./scripts/freeze.ts push --prune"
+# 端末での確認(yesの入力)を通すため、stdinとstdoutをそのままつなぐ
+raw = true
 
 [tasks."push:dry"]
 description = "Dry-run of wmill sync push"
@@ -108,6 +110,7 @@ run = "bun ./scripts/freeze.ts push --dry-run"
 [tasks."freeze:place"]
 description = "Freeze a schedule so wmill sync push leaves it alone (usage: -- --target f/factory/<name> --minutes <n> --reason <text>)"
 run = "bun ./scripts/freeze.ts place"
+raw = true
 
 [tasks."freeze:list"]
 description = "List the schedule freezes"
@@ -116,10 +119,12 @@ run = "bun ./scripts/freeze.ts list"
 [tasks."freeze:release"]
 description = "Release a schedule freeze (usage: -- <id>)"
 run = "bun ./scripts/freeze.ts release"
+raw = true
 
 [tasks."freeze:reset"]
 description = "Clear every schedule freeze, including a corrupt state (human only)"
 run = "bun ./scripts/freeze.ts reset"
+raw = true
 
 [tasks.pull]
 description = "Pull remote Windmill state into the sync root"
