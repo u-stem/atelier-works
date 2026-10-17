@@ -101,6 +101,7 @@ type DefaultableField =
   | "pr_conflict_fix_max_rounds_per_pr"
   | "pr_conflict_fix_enabled_since"
   | "pr_conflict_fix_notify_grace_min"
+  | "gh_collect_enabled"
   | "worker_alert_memory_ratio"
   | "check_commands_by_repo";
 
@@ -176,6 +177,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   pr_conflict_fix_max_rounds_per_pr: 5,
   pr_conflict_fix_enabled_since: null,
   pr_conflict_fix_notify_grace_min: 60,
+  // 収集は読み取り専用のトークンを入れてから、リモートのリソースで有効にする。
+  gh_collect_enabled: false,
   // メモリは上限の8割を既定にする。根拠と見直し方は`docs/operations.md`の「閾値の通知」にある。
   worker_alert_memory_ratio: 0.8,
   check_commands_by_repo: {},
@@ -973,6 +976,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
     pr_conflict_fix_max_rounds_per_pr: prConflictFixMaxRoundsPerPr,
     pr_conflict_fix_enabled_since: prConflictFixEnabledSince,
     pr_conflict_fix_notify_grace_min: prConflictFixNotifyGraceMin,
+    gh_collect_enabled: booleanField(
+      raw,
+      "gh_collect_enabled",
+      DEFAULTS.gh_collect_enabled,
+    ),
     worker_alert_memory_ratio: ratioField(
       raw,
       "worker_alert_memory_ratio",

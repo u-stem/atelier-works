@@ -1128,6 +1128,11 @@ export type FactoryConfig = {
    */
   pr_conflict_fix_notify_grace_min: number;
   /**
+   * `collect_github`が、`owners`の所有者のリポジトリの状態をGitHubから集めてDBに書くか。既定は`false`。
+   * `false`の間は、トークンを読まず、行も書かずに終わる。読み取り専用のトークンを入れてから、リモートのリソースで有効にする。
+   */
+  gh_collect_enabled: boolean;
+  /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。
    */
