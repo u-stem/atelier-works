@@ -42,9 +42,9 @@ import {
   type GhClient,
   GitHubRateLimitError,
   getAccountId,
-  getPr,
+  getPrWithCreatedAt,
   getViewer,
-  type PullRequest,
+  type PullRequestWithCreatedAt,
   searchDependabotPrs,
 } from "./lib/github.ts";
 import { parseFlowJobId } from "./lib/implement_launch_support.ts";
@@ -60,7 +60,12 @@ import {
   repoOwnerGateDeps,
   verifyRepoOwnerId,
 } from "./lib/repo_owner_gate.ts";
-import type { FactoryConfig, FactoryOwner, WorkItem } from "./lib/types.ts";
+import {
+  type FactoryConfig,
+  type FactoryOwner,
+  isGitHubName,
+  type WorkItem,
+} from "./lib/types.ts";
 import { runCommand } from "./lib/workspace.ts";
 import { describeReason, nextActionFor } from "./steps/pr_workflow_support.ts";
 
@@ -122,6 +127,8 @@ export const DEPENDABOT_SKIP_REASON = {
   dependabotActive: "a dependabot work item of the pull request is active",
   /** 閉じた、draft、base、作者のどれかで対象でない。 */
   notTarget: "the pull request is not a target",
+  /** 候補の名前と、GitHubが返したbaseのリポジトリの名前が合わない。改名か移管の疑いがある。 */
+  repoMismatch: "the pull request belongs to another repository name",
   /** 閉じているかマージされている。 */
   notOpen: "the pull request is not open",
   /** headが完全なshaでない。 */
@@ -176,11 +183,12 @@ export type HeadWaitState = {
 
 /** `processDependabotPr`が使うI/O。テストでは偽物に差し替える。 */
 export type PollDependabotDeps = {
+  /** PRを読む。作成の時刻(`createdAtMs`)はRESTの値で、保持期間と待ちの上限の判定に使う。 */
   readonly getPr: (
     owner: string,
     repo: string,
     number: number,
-  ) => Promise<PullRequest>;
+  ) => Promise<PullRequestWithCreatedAt>;
   readonly hasItemForHead: (
     owner: string,
     repo: string,
@@ -279,6 +287,31 @@ function prUrl(owner: string, repo: string, number: number): string {
   return `https://github.com/${owner}/${repo}/pull/${String(number)}`;
 }
 
+/** 失敗の記録の段の名前。リポジトリの大小文字が経路によって違っても、同じ名前にそろえる。 */
+function stepName(
+  stage: string,
+  owner: string,
+  repo: string,
+  suffix = "",
+): string {
+  return `${stage}:${owner}/${repo}${suffix}`.toLowerCase();
+}
+
+/**
+ * `owner/repo`の形のリポジトリ名を分ける。
+ * 2つの部分のどちらかがGitHubの名前の形でないとき、または形が違うときは`null`。
+ */
+function splitRepoFullName(
+  fullName: string,
+): { owner: string; repo: string } | null {
+  const parts = fullName.split("/");
+  const [owner, repo] = parts;
+  if (parts.length !== 2 || !isGitHubName(owner) || !isGitHubName(repo)) {
+    return null;
+  }
+  return { owner, repo };
+}
+
 function errorMessage(err: unknown): string {
   return maskSecrets(err instanceof Error ? err.message : String(err));
 }
@@ -288,7 +321,8 @@ function errorMessage(err: unknown): string {
  * 手順は次のとおり。
  * 1. 同じPRに終端でないpr_reviewかpr_fixがあれば、何もしない。人が頼んだ作業を先にする。
  *    終端でないdependabotの作業項目があれば、フローが動いているので何もしない。
- * 2. PRを読み、開いた、draftでない、baseが`main`、作者が`dependabot[bot]`、headが完全なshaのものだけを続ける。
+ * 2. PRを読み、baseのリポジトリの名前が候補と大小文字を除いて同じで、開いた、draftでない、baseが`main`、作者が`dependabot[bot]`、headが完全なshaのものだけを続ける。
+ *    以後の処理には、GitHubが返したリポジトリの名前とPRの作成の時刻を使う。候補の値は並びにだけ使う。
  * 3. そのheadを処理済み(`hasDependabotItemForHead`)なら、何もしない。
  * 4. 待っているheadは、次に確かめる時刻まで評価しない。
  * 5. PRを作ってから保持期間に近いほど時間がたっていれば、処理済みの記録が消えたかもしれないので、人に回す。
@@ -309,7 +343,7 @@ export async function processDependabotPr(
   ctx: PollDependabotContext,
   found: DependabotPrSearchItem,
 ): Promise<DependabotPollOutcome> {
-  const { owner, repo, number } = found;
+  const { number } = found;
   const skipped = (reason: string): DependabotPollOutcome => ({
     kind: "skipped",
     reason,
@@ -326,7 +360,18 @@ export async function processDependabotPr(
     return skipped(DEPENDABOT_SKIP_REASON.dependabotActive);
   }
 
-  const pr = await deps.getPr(owner, repo, number);
+  const pr = await deps.getPr(found.owner, found.repo, number);
+  // 候補の名前は表の小文字か検索の値なので、以後の処理にはGitHubが返した大小文字を使う。
+  // 作業項目の照合は大小文字を区別するので、小文字のままだと処理済みの判定が外れる。
+  const baseRepo = splitRepoFullName(pr.baseRepoFullName);
+  if (
+    baseRepo === null ||
+    baseRepo.owner.toLowerCase() !== found.owner.toLowerCase() ||
+    baseRepo.repo.toLowerCase() !== found.repo.toLowerCase()
+  ) {
+    return skipped(DEPENDABOT_SKIP_REASON.repoMismatch);
+  }
+  const { owner, repo } = baseRepo;
   if (pr.state !== "open" || pr.merged) {
     return skipped(DEPENDABOT_SKIP_REASON.notOpen);
   }
@@ -339,6 +384,10 @@ export async function processDependabotPr(
   }
   if (!isCommitSha(pr.headSha)) {
     return skipped(DEPENDABOT_SKIP_REASON.headNotSha);
+  }
+  const createdAtMs = pr.createdAtMs;
+  if (createdAtMs === null) {
+    throw new Error("the pull request has no readable creation time");
   }
   const headSha = pr.headSha;
   if (await deps.hasItemForHead(owner, repo, number, headSha)) {
@@ -408,7 +457,7 @@ export async function processDependabotPr(
     publishCheckAtMs: number | null,
   ): Promise<DependabotPollOutcome> | DependabotPollOutcome => {
     const firstWaitAtMs = previousWait?.firstWaitAtMs ?? ctx.nowMs;
-    const startMs = Math.max(found.createdAtMs, firstWaitAtMs);
+    const startMs = Math.max(createdAtMs, firstWaitAtMs);
     const limitDays = ctx.minPublishedDays + WAIT_LIMIT_EXTRA_DAYS;
     if (ctx.nowMs - startMs > limitDays * DAY_MS) {
       return escalate(
@@ -433,7 +482,7 @@ export async function processDependabotPr(
     };
   };
 
-  if (olderThanRetention(found.createdAtMs, ctx.nowMs, ctx.retentionDays)) {
+  if (olderThanRetention(createdAtMs, ctx.nowMs, ctx.retentionDays)) {
     return escalate(
       dependabotReason(
         "poll",
@@ -505,7 +554,7 @@ export async function processDependabotPr(
       `the flow could not be started: ${errorMessage(err)}`,
     );
     await deps.recordFailure(
-      `start_flow:${owner}/${repo}#${String(number)}`,
+      stepName("start_flow", owner, repo, `#${String(number)}`),
       err,
       id,
     );
@@ -716,7 +765,7 @@ export async function pollDependabot(
     } catch (err) {
       counts.failed += 1;
       await deps.recordFailure(
-        `search_dependabot_prs:${target.owner}/${target.repo}`,
+        stepName("search_dependabot_prs", target.owner, target.repo),
         err,
         null,
       );
@@ -771,7 +820,12 @@ export async function pollDependabot(
     } catch (err) {
       counts.failed += 1;
       await deps.recordFailure(
-        `dependabot_pr:${candidate.owner}/${candidate.repo}#${String(candidate.number)}`,
+        stepName(
+          "dependabot_pr",
+          candidate.owner,
+          candidate.repo,
+          `#${String(candidate.number)}`,
+        ),
         err,
         null,
       );
@@ -856,7 +910,8 @@ export async function main(): Promise<PollDependabotResult> {
         listActive: () => listActive(),
         warn: (message, fields) => log.warn(message, fields),
         deps: {
-          getPr: (owner, repo, number) => getPr(client, owner, repo, number),
+          getPr: (owner, repo, number) =>
+            getPrWithCreatedAt(client, owner, repo, number),
           hasItemForHead: (owner, repo, prNumber, headSha) =>
             hasDependabotItemForHead(owner, repo, prNumber, headSha),
           gateWaitingCancels: (owner, repo, prNumber, headSha) =>
