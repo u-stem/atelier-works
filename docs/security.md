@@ -1137,7 +1137,7 @@ tag`periodic`を付けたscriptは、現在無い。
 | `cleanup_workspaces`、`self_update` | `factory_workspaces`、self clone、`git`、`gh`を使う。`self_update`は`wmill_token`も読む | defaultに残す |
 | `cleanup_db` | `factory_state`の`requirements`ディレクトリを消す | defaultに残す |
 | `sample_worker_load` | cgroupのファイルを読む | defaultに残す |
-| `notify_daily_summary` | DBとDiscordだけを使う。`discord_webhook_url`を読み、`config.ts`が`job_tmp.ts`の定数を読むので`node:fs`がたどれる | defaultに残す。`discord_webhook_url`の扱いを決めれば、候補になる |
+| `notify_daily_summary` | DBとDiscordだけを使う。importをたどった範囲に、ファイルと子プロセスを使うモジュールは無い。`discord_webhook_url`を読む | defaultに残す。`discord_webhook_url`の扱いを決めれば、候補になる |
 | `auto_retry_pr_review` | 実行時はDBとWindmillのAPIとDiscordだけを使う。`discord_webhook_url`を読み、`implement_loop.ts`などを経て、ファイル、`git`、`claude`のモジュールがたどれる | defaultに残す。`discord_webhook_url`の扱いを決め、importを分ければ、候補になる |
 
 `github_token`だけを読む定期ジョブは、`gh`の道具に依存するため、tag`periodic`を付けられるものが無い。
