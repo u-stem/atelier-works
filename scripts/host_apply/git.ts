@@ -181,3 +181,64 @@ export function parseLsTreeZ(output: string): LsTreeEntry[] {
   }
   return entries;
 }
+
+/** 空のtreeのオブジェクト名。属性の取得元に指定して、作業ツリーの`.gitattributes`を読ませない。 */
+export const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/** 承認の道具が追跡する先のref。短い名前ではなく完全な名前で読む。 */
+export const ORIGIN_MAIN_REF = "refs/remotes/origin/main";
+
+/** `approve`が使うgitのサブコマンド。`plan`のものに、refの解決と読み取りを足す。 */
+export const APPROVE_GIT_SUBCOMMANDS: readonly string[] = [];
+
+export function approveGitArgs(_args: readonly string[]): string[] {
+  return [];
+}
+
+export function approveGitEnv(): Record<string, string> {
+  return {};
+}
+
+export function diffPatchArgs(
+  _base: string,
+  _target: string,
+  _files: readonly string[],
+): string[] {
+  return [];
+}
+
+export function resolveCommitArgs(_input: string): string[] {
+  return [];
+}
+
+export function resolveHeadArgs(): string[] {
+  return [];
+}
+
+export function showRefArgs(_ref: string): string[] {
+  return [];
+}
+
+export type RevParseQuery = "git-dir" | "git-common-dir" | "show-toplevel";
+
+export function revParseQueryArgs(_query: RevParseQuery): string[] {
+  return [];
+}
+
+export type LsTreeShaEntry = {
+  readonly mode: string;
+  readonly type: string;
+  readonly sha: string;
+  readonly path: string;
+};
+
+export function lsTreeShaArgs(
+  _commit: string,
+  _paths: readonly string[],
+): string[] {
+  return [];
+}
+
+export function parseLsTreeShaZ(_output: string): LsTreeShaEntry[] {
+  return [];
+}

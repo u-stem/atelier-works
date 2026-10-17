@@ -16,6 +16,12 @@ export type FixtureRepo = {
   commit(files: Record<string, string | null>, message: string): string;
   /** symlinkを作ってコミットし、そのshaを返す。 */
   symlink(path: string, target: string): string;
+  /** `refs/remotes/origin/main`を、指定したコミットに向ける。 */
+  setOriginMain(sha: string): void;
+  /** リンクされたworktreeを、リポジトリと同じ階層に作り、そのパスを返す。 */
+  addWorktree(name: string): string;
+  /** 任意のgitコマンドを実行し、標準出力を返す。 */
+  git(args: string[]): string;
   cleanup(): void;
 };
 
@@ -72,6 +78,15 @@ export function createFixtureRepo(): FixtureRepo {
       git(["commit", "-q", "--allow-empty", "-m", `symlink ${path}`]);
       return git(["rev-parse", "HEAD"]);
     },
+    setOriginMain(sha) {
+      git(["update-ref", "refs/remotes/origin/main", sha]);
+    },
+    addWorktree(name) {
+      const path = join(root, name);
+      git(["worktree", "add", "-q", "-b", `wt-${name}`, path]);
+      return path;
+    },
+    git,
     cleanup() {
       rmSync(root, { recursive: true, force: true });
     },
