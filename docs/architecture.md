@@ -21,7 +21,10 @@ Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く�
 このworkerはdefaultワーカーグループの1コンテナで、同時に動かすジョブは1つである。
 nativeでないworkerは、コンテナにつき1つしか動かない(Windmillの制限)。
 `NUM_WORKERS`を2以上にしても、Windmillが1に戻す。
-そのため、Claudeのジョブが動く間、定期のジョブは待つ。
+そのため、Claudeのジョブが動く間、defaultのworkerで動く定期のジョブは待つ。
+定期ジョブ用のworker(下記)で動かすscriptを選ぶ基準と、現在の選定の結果は[セキュリティ](security.md#tagを付けるscriptの選び方)にある。
+現在は、tag`periodic`を付けた定期ジョブが無い。
+tag`console`を付けた`audit_kickoff`と`console_fetch_watch`以外の定期ジョブは、すべてdefaultのworkerで動き、Claudeのジョブの間は待つ。
 メモリの上限はコンテナ全体で4096Mである。
 
 Consoleの問い合わせと操作の受付専用のworkerが、別のコンテナ(`windmill_worker_console`)で動く。
@@ -39,8 +42,9 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 定期ジョブを、Claudeの長いジョブの待ちから切り離すためである。
 このworkerはワーカーグループ`periodic`に属し、tag`periodic`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
-tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブだけである。
+tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存せず、secret変数を`github_token`だけに限る定期ジョブである。
 依存するジョブは、defaultのworkerで動かす。
+tag`periodic`のジョブが5分以上待つと、`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。

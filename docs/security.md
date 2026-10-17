@@ -1053,7 +1053,9 @@ superadminでない主体は、許可されたtagしか使えない。
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
 - `f/factory/claude_oauth_token`と`f/factory/github_token`を、secret変数として読める。
   どのscriptが読むかを制限する仕組みは無い。
-- このworkerで動かすのは、上の基準で選んだ定期ジョブの想定だが、これを強制する仕組みは無い。
+- このworkerで動かすのは、上の基準で選んだ定期ジョブの想定である。
+  リポジトリに入る変更は、契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が止める。
+  Windmillの画面でscriptにtag`periodic`を付ける操作は止められない。
   ワークスペースでscriptを編集できる者は、任意のscriptにtag`periodic`を付けられる。
 - 許可はすべてのワークスペースに及ぶ。ワークスペースで絞らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
@@ -1083,6 +1085,37 @@ superadminでない主体は、許可されたtagしか使えない。
 見る箇所は、ファイルのパスと`fs`の使用、`child_process`のimport、道具や検査の枠を確かめる呼び出し、cgroupのパスである。
 同じ手順で、コードを実行しないことと、Claudeに文章を渡さないことも確かめる。
 1つでも依存するなら、tagを付けない。
+
+読んでよいsecret変数は、`github_token`だけである。
+`claude_oauth_token`と`wmill_token`は、このworkerに届かせない。
+`discord_webhook_url`も読ませない。通知を送る定期ジョブは、defaultのworkerに残す。
+Console用workerが読むsecret変数に上限を置くのと同じく、定期ジョブ用workerの境界を広げないためである。
+
+契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
+走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
+
+- tag`periodic`を持つscriptが、テストの一覧と一致する。足すときは、一覧とこの節の選定の結果を同じ変更で直す。
+- どのscriptも、スケジュールが呼ぶscriptで、`timeout`を持つ。
+- importでたどれるソースが読むsecret変数は、`github_token`だけである。
+- importでたどれるソースに、`node:fs`、`node:child_process`、`Bun.spawn`、`Bun.file`、`claude.ts`への依存が無い。
+
+### 選定の結果
+
+`f/factory/**`の定期実行のscriptを1つずつ読んだ結果は、次のとおりである。
+tag`periodic`を付けたscriptは、現在無い。
+
+| script | 依存と読むsecret | 結論 |
+| --- | --- | --- |
+| `audit_kickoff`、`console_fetch_watch` | tag`console`でConsole用workerが動かす | 対象外 |
+| `poll_dependabot`、`drawio_viewer_bump` | 保護パスで、`gh`と`github_token`を使う | 対象外 |
+| `poll_issues`、`poll_prs`、`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci` | `gh`、`git`、`github_token`を使う。`watch_pr_ci`は検査用イメージの確認も行う | defaultに残す |
+| `cleanup_workspaces`、`self_update` | `factory_workspaces`、self clone、`git`、`gh`を使う。`self_update`は`wmill_token`も読む | defaultに残す |
+| `cleanup_db` | `factory_state`の`requirements`ディレクトリを消す | defaultに残す |
+| `sample_worker_load` | cgroupのファイルを読む | defaultに残す |
+| `notify_daily_summary` | DBとDiscordだけを使う。`discord_webhook_url`を読み、`config.ts`が`job_tmp.ts`の定数を読むので`node:fs`がたどれる | defaultに残す。`discord_webhook_url`の扱いを決めれば、候補になる |
+| `auto_retry_pr_review` | 実行時はDBとWindmillのAPIとDiscordだけを使う。`discord_webhook_url`を読み、`implement_loop.ts`などを経て、ファイル、`git`、`claude`のモジュールがたどれる | defaultに残す。`discord_webhook_url`の扱いを決め、importを分ければ、候補になる |
+
+`github_token`だけを読む定期ジョブは、`gh`の道具に依存するため、tag`periodic`を付けられるものが無い。
 
 ## サブプロセスのnpmのinstall script
 

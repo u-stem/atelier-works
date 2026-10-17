@@ -2487,6 +2487,7 @@ mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres
   重なるのは、境界の数ミリ秒の丸めと、フローの親ジョブだけである。
   同時に動くジョブは1つである。
   Claudeのジョブが動く間、記録のジョブも、ほかの定期のジョブも待つ。
+  tag`periodic`を付けた定期ジョブは、定期ジョブ用のworkerが動かすので待たないが、現在は該当するscriptが無い。
 - 1つのコンテナで複数のworkerが動くと、`worker_ping`の行も複数になる。
   nativeのworkerは1つのコンテナに8行あり、名前の末尾が行ごとに違う。
   defaultのworkerの1行は、複数のworkerが1行にまとまった表示ではない。
