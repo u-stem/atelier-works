@@ -26,4 +26,28 @@ describe("cleanup_db.ts", () => {
   test("does not delete the repository rows", async () => {
     expect(await SOURCE).not.toMatch(/deleteGhRepos/);
   });
+
+  test("deletes closed detail rows with the logs cutoff", async () => {
+    expect(await SOURCE).toMatch(
+      /cleanupGhDetailRows\(\s*cutoffs\.logsBefore,\s*log,?\s*\)/,
+    );
+  });
+
+  test("reports a failed detail sweep as cleanup_db_failed", async () => {
+    expect(await SOURCE).toContain("収集の詳細の行の削除に失敗しました");
+  });
+
+  test("does not let a failed detail sweep stop the others", async () => {
+    expect(await SOURCE).toContain(
+      "cleanup_db: failed to delete gh detail rows",
+    );
+  });
+
+  test("logs the number of deleted detail rows", async () => {
+    expect(await SOURCE).toContain("gh_detail_rows_deleted");
+  });
+
+  test("deletes only closed and unlisted detail rows", async () => {
+    expect(await SOURCE).toContain("deleteClosedGhDetailRowsBefore");
+  });
 });
