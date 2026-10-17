@@ -44,7 +44,7 @@ const MIGRATIONS_DIR = resolve(
 const JOB_LINE =
   '{"id":"0190a1b2-0000-7000-8000-000000000001","script":"f/factory/implement","kind":"script","tag":"bun","started_at":"2026-10-17T01:02:03+00:00"}';
 const ITEM_FLOW_JOB_ID = "0190a1b2-0000-7000-8000-000000000002";
-const ITEM_LINE = `{"id":42,"kind":"issue","status":"implementing","owner":"u-stem","repo":"atelier-works","issue_number":7,"flow_job_id":"${ITEM_FLOW_JOB_ID}"}`;
+const ITEM_LINE = `{"id":42,"kind":"issue","status":"implementing","owner":"u-stem","repo":"atelier-works","issue_number":7,"pr_number":null,"flow_job_id":"${ITEM_FLOW_JOB_ID}","age_sec":3600}`;
 
 function okJobs(...rows: RunningJob[]): Reading<RunningJob> {
   return { ok: true, rows, malformed: 0 };
@@ -69,7 +69,9 @@ const ITEM: RunningWorkItem = {
   owner: "u-stem",
   repo: "atelier-works",
   issueNumber: 7,
+  prNumber: null,
   flowJobId: "0190a1b2-0000-7000-8000-000000000002",
+  ageSec: 3600,
 };
 
 const unreachableJobs: Reading<RunningJob> = {
@@ -514,8 +516,32 @@ describe("splitLeftoverWorkItems", () => {
     expect(split.leftovers).toEqual([]);
   });
 
-  test("keeps an item without a flow job id", () => {
+  test("keeps an item whose upper-case flow job id is in the queue", () => {
+    const item = { ...ITEM, flowJobId: UNKNOWN_JOB_ID.toUpperCase() };
+
+    expect(
+      splitLeftoverWorkItems(okItems(item), okIds(UNKNOWN_JOB_ID)).items,
+    ).toEqual(okItems(item));
+  });
+
+  test("keeps a recently updated item whose flow job is not in the queue", () => {
+    const item = { ...ITEM, ageSec: 599 };
+
+    expect(splitLeftoverWorkItems(okItems(item), okIds()).items).toEqual(
+      okItems(item),
+    );
+  });
+
+  test("treats an old item without a flow job id as a leftover", () => {
     const item = { ...ITEM, flowJobId: null };
+
+    expect(splitLeftoverWorkItems(okItems(item), okIds()).leftovers).toEqual([
+      item,
+    ]);
+  });
+
+  test("keeps a recently updated item without a flow job id", () => {
+    const item = { ...ITEM, flowJobId: null, ageSec: 5 };
 
     expect(splitLeftoverWorkItems(okItems(item), okIds()).items).toEqual(
       okItems(item),
@@ -591,6 +617,37 @@ describe("splitLeftoverWorkItems", () => {
   });
 });
 
+describe("parseRunningWorkItems for a pull request", () => {
+  const PR_LINE =
+    '{"id":9,"kind":"pr_fix","status":"fixing","owner":"o","repo":"r","issue_number":null,"pr_number":12,"flow_job_id":null,"age_sec":30}';
+
+  test("reads a row without an issue number", () => {
+    expect(parseRunningWorkItems(`${PR_LINE}\n`)).toEqual(
+      okItems({
+        id: 9,
+        kind: "pr_fix",
+        status: "fixing",
+        owner: "o",
+        repo: "r",
+        issueNumber: null,
+        prNumber: 12,
+        flowJobId: null,
+        ageSec: 30,
+      }),
+    );
+  });
+
+  test("counts a row without an age as unreadable", () => {
+    const line = PR_LINE.replace('"age_sec":30', '"age_sec":null');
+
+    expect(parseRunningWorkItems(`${line}\n`)).toEqual({
+      ok: true,
+      rows: [],
+      malformed: 1,
+    });
+  });
+});
+
 describe("liveJobIdsSql", () => {
   test("names the flow job id", () => {
     expect(liveJobIdsSql([ITEM.flowJobId ?? ""])).toContain(
@@ -600,6 +657,20 @@ describe("liveJobIdsSql", () => {
 
   test("reads the queue without filtering on running", () => {
     expect(liveJobIdsSql([ITEM.flowJobId ?? ""])).not.toContain("running");
+  });
+
+  test("leaves out a uuid followed by a newline and a statement", () => {
+    expect(liveJobIdsSql([`${UNKNOWN_JOB_ID}\n'); COMMIT; --`])).toBeNull();
+  });
+
+  test("leaves out a uuid with a trailing newline", () => {
+    expect(liveJobIdsSql([`${UNKNOWN_JOB_ID}\n`])).toBeNull();
+  });
+
+  test("lowercases the id it looks up", () => {
+    expect(liveJobIdsSql([UNKNOWN_JOB_ID.toUpperCase()])).toContain(
+      UNKNOWN_JOB_ID,
+    );
   });
 
   test("leaves out a value that is not a uuid", () => {
@@ -1200,6 +1271,7 @@ describe("checkIdle", () => {
     const h = harness((n) => ({
       jobs: okJobs({ ...JOB, id: `job-${String(n)}` }),
       items: okItems(),
+      leftovers: [],
     }));
 
     expect(h.run().lines.join("\n")).toContain("job-12");

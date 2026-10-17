@@ -14,6 +14,10 @@
 //   他のworkerが受けるものを除く。受けるworkerが分からないtagのジョブを数え漏らして
 //   止めそこねるより、余分に止めるほうが安全なため。
 // - 実行中の状態の作業項目(`factory.work_items`)。ジョブの一覧に載らない合間も拾う。
+//   ただし、`flow_job_id`のジョブがWindmillのqueueに無い作業項目は、ジョブが死んで状態だけが残ったものなので、
+//   警告にとどめて通す(`splitLeftoverWorkItems`)。残りは`poll_issues.ts`の照合が猶予の後に失敗へ移す。
+//   残りと判定するのは、`flow_job_id`がUUIDで、queueを問題なく読め、同じIDの行が無いときだけである。
+//   `flow_job_id`が無い、queueを読めない、のときは動いているものとして止める。
 // 読み取りに失敗したときは、理由で扱いを分ける。
 // - DBに届かない(コンテナが動いていない、接続できない、初回の起動)ときは、警告を出して通す。止めない。
 // - 届いたがSQLが失敗した、時間内に終わらなかった、などのときは、何も動いていないと確かめられないので止める。
@@ -34,6 +38,7 @@
 // composeの変数はmiseから渡るので、`mise run`か`mise exec --`を通して実行する。
 
 import { resolve } from "node:path";
+import { isJobId } from "../f/factory/lib/job_ids.ts";
 
 export type RunningJob = {
   readonly id: string;
@@ -49,8 +54,12 @@ export type RunningWorkItem = {
   readonly status: string;
   readonly owner: string;
   readonly repo: string;
-  readonly issueNumber: number;
+  /** PRの作業項目(レビューと修正)は、Issueを持たず`null`になる。 */
+  readonly issueNumber: number | null;
+  readonly prNumber: number | null;
   readonly flowJobId: string | null;
+  /** 最後に更新されてからの秒数。 */
+  readonly ageSec: number;
 };
 
 /**
@@ -133,6 +142,12 @@ const DRY_RUN_TIMEOUT_MS = 60_000;
 const RECHECK_TIMEOUT_MS = 60_000;
 const RECHECK_INTERVAL_MS = 5_000;
 
+/**
+ * 作業項目を残りとみなす、最後の更新からの最短の秒数。
+ * `poll_issues.ts`の照合が孤立と判定する猶予(10分と`claude_timeout_sec`の2倍の大きい方)の下限に合わせる。
+ */
+const LEFTOVER_MIN_AGE_SEC = 600;
+
 /** 警告に載せる理由の長さの上限。 */
 const REASON_MAX_LENGTH = 200;
 
@@ -159,7 +174,8 @@ export function runningJobsSql(): string {
 export function runningWorkItemsSql(): string {
   return [
     "SELECT row_to_json(t) FROM (",
-    "SELECT id, kind, status, owner, repo, issue_number, flow_job_id",
+    "SELECT id, kind, status, owner, repo, issue_number, pr_number, flow_job_id,",
+    "extract(epoch FROM now() - updated_at)::bigint AS age_sec",
     "FROM factory.work_items",
     `WHERE status IN (${quoteList(RUNNING_WORK_ITEM_STATUSES)})`,
     "ORDER BY id",
@@ -173,6 +189,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function isNumberOrNull(value: unknown): value is number | null {
+  return value === null || typeof value === "number";
 }
 
 function parseJob(value: unknown): RunningJob | null {
@@ -201,7 +221,9 @@ function parseWorkItem(value: unknown): RunningWorkItem | null {
     typeof value.status !== "string" ||
     typeof value.owner !== "string" ||
     typeof value.repo !== "string" ||
-    typeof value.issue_number !== "number"
+    typeof value.age_sec !== "number" ||
+    !isNumberOrNull(value.issue_number) ||
+    !isNumberOrNull(value.pr_number)
   ) {
     return null;
   }
@@ -212,7 +234,9 @@ function parseWorkItem(value: unknown): RunningWorkItem | null {
     owner: value.owner,
     repo: value.repo,
     issueNumber: value.issue_number,
+    prNumber: value.pr_number,
     flowJobId: stringOrNull(value.flow_job_id),
+    ageSec: value.age_sec,
   };
 }
 
@@ -284,22 +308,88 @@ export function workerWillBeRecreated(composeOutput: string): boolean | null {
   return seen ? recreated : null;
 }
 
-export function liveJobIdsSql(_ids: readonly string[]): string | null {
-  return null;
+/**
+ * 作業項目の`flow_job_id`が、Windmillのqueueに残っているかを引く問い合わせ。
+ * runningかどうかとtagは問わない。待機中やsuspend中のフローの親ジョブも、生きているものとして返すためである。
+ * SQLに組み込むのはUUIDの形に合う値だけで、合わない値は捨てる。引く値が無いときは`null`を返す。
+ */
+export function liveJobIdsSql(ids: readonly string[]): string | null {
+  const valid = [...new Set(ids.filter(isJobId).map((id) => id.toLowerCase()))];
+  if (valid.length === 0) {
+    return null;
+  }
+  return `SELECT q.id::text FROM v2_job_queue q WHERE q.id::text IN (${quoteList(valid)}) ORDER BY q.id`;
 }
 
-export function parseLiveJobIds(_output: string): Reading<string> {
-  return { ok: true, rows: [], malformed: 0 };
+/** 1行1件のジョブIDを読む。UUIDの形でない行は`malformed`に数える。 */
+export function parseLiveJobIds(output: string): Reading<string> {
+  const rows: string[] = [];
+  let malformed = 0;
+  for (const line of output.split("\n")) {
+    const text = line.trim();
+    if (text === "") {
+      continue;
+    }
+    if (isJobId(text)) {
+      rows.push(text.toLowerCase());
+    } else {
+      malformed += 1;
+    }
+  }
+  return { ok: true, rows, malformed };
 }
 
+/**
+ * 実行中の状態の作業項目から、動いているジョブが付いていないもの(残り)を分ける。副作用は無い。
+ * 残りと言えるのは、次のすべてを満たすときだけである。
+ * - 作業項目を読めている。
+ * - 最後の更新から`LEFTOVER_MIN_AGE_SEC`以上たっている。状態を移してからジョブIDを記録するまでの合間と、
+ *   フローの引き継ぎの合間を、残りと取り違えないためである。
+ * - 次のどちらかである。
+ *   - `flow_job_id`が無い。
+ *   - `flow_job_id`がUUIDで、queueを問題なく読め(読めなかった行が無く)、同じIDの行が無い。
+ *     形の違う値は、何を指すか分からないので動いているものとする。
+ * 1つでも欠ければ、動いているものとして残す。残りを取り違えて通すと、動いているジョブを止めるため、
+ * 迷うときは止める側に倒す。
+ */
 export function splitLeftoverWorkItems(
   items: Reading<RunningWorkItem>,
-  _live: Reading<string>,
+  live: Reading<string>,
 ): {
   readonly items: Reading<RunningWorkItem>;
   readonly leftovers: readonly RunningWorkItem[];
 } {
-  return { items, leftovers: [] };
+  if (!items.ok) {
+    return { items, leftovers: [] };
+  }
+  const queued =
+    live.ok && live.malformed === 0
+      ? new Set(live.rows.map((id) => id.toLowerCase()))
+      : null;
+  const running: RunningWorkItem[] = [];
+  const leftovers: RunningWorkItem[] = [];
+  for (const item of items.rows) {
+    if (item.ageSec >= LEFTOVER_MIN_AGE_SEC && isOrphaned(item, queued)) {
+      leftovers.push(item);
+    } else {
+      running.push(item);
+    }
+  }
+  return {
+    items: { ok: true, rows: running, malformed: items.malformed },
+    leftovers,
+  };
+}
+
+function isOrphaned(
+  item: RunningWorkItem,
+  queued: ReadonlySet<string> | null,
+): boolean {
+  const id = item.flowJobId;
+  if (id === null) {
+    return true;
+  }
+  return queued !== null && isJobId(id) && !queued.has(id.toLowerCase());
 }
 
 function unreadableLine(
@@ -335,6 +425,12 @@ function jobLines(jobs: Reading<RunningJob>): string[] {
   return lines;
 }
 
+/** 作業項目の対象を、IssueならIssue番号、PRならPR番号で表す。 */
+function targetOf(item: RunningWorkItem): string {
+  const number = item.issueNumber ?? item.prNumber;
+  return `${item.kind} ${item.owner}/${item.repo}#${number === null ? "?" : String(number)}`;
+}
+
 function itemLines(items: Reading<RunningWorkItem>): string[] {
   if (!items.ok) {
     return [unreadableLine("work items", items)];
@@ -345,7 +441,7 @@ function itemLines(items: Reading<RunningWorkItem>): string[] {
   }
   for (const item of items.rows) {
     lines.push(
-      `  work item ${String(item.id)} ${item.status} (${item.kind} ${item.owner}/${item.repo}#${String(item.issueNumber)}, flow job ${item.flowJobId ?? "none"})`,
+      `  work item ${String(item.id)} ${item.status} (${targetOf(item)}, flow job ${item.flowJobId ?? "none"})`,
     );
   }
   if (items.malformed > 0) {
@@ -354,6 +450,13 @@ function itemLines(items: Reading<RunningWorkItem>): string[] {
     );
   }
   return lines;
+}
+
+function leftoverLines(leftovers: readonly RunningWorkItem[]): string[] {
+  return leftovers.map(
+    (item) =>
+      `warning: work item ${String(item.id)} ${item.status} (${targetOf(item)}) has no job behind it (flow job ${item.flowJobId ?? "none"}); treating it as left over, not as running work`,
+  );
 }
 
 function hasWork<T>(reading: Reading<T>): boolean {
@@ -372,11 +475,15 @@ function isUnverifiable<T>(reading: Reading<T>): boolean {
 export function judge(
   jobs: Reading<RunningJob>,
   items: Reading<RunningWorkItem>,
-  _leftovers: readonly RunningWorkItem[] = [],
+  leftovers: readonly RunningWorkItem[] = [],
 ): Verdict {
   const busy = hasWork(jobs) || hasWork(items);
   const unverifiable = isUnverifiable(jobs) || isUnverifiable(items);
-  const lines = [...jobLines(jobs), ...itemLines(items)];
+  const lines = [
+    ...jobLines(jobs),
+    ...itemLines(items),
+    ...leftoverLines(leftovers),
+  ];
   if (busy) {
     lines.push(
       "Running work would be stopped by recreating the worker. Wait for it to finish and run this again.",
@@ -535,7 +642,22 @@ function readSnapshot(budgetMs: number): Snapshot {
     parseRunningWorkItems,
     Math.min(PSQL_TIMEOUT_MS, budgetMs - (Date.now() - startedAt)),
   );
-  return { jobs, items, leftovers: [] };
+  const ids = items.ok
+    ? items.rows.flatMap((item) =>
+        item.flowJobId === null ? [] : [item.flowJobId],
+      )
+    : [];
+  const sql = liveJobIdsSql(ids);
+  if (sql === null) {
+    return { jobs, items, leftovers: [] };
+  }
+  const live = readDatabase(
+    WINDMILL_DB,
+    sql,
+    parseLiveJobIds,
+    Math.min(PSQL_TIMEOUT_MS, budgetMs - (Date.now() - startedAt)),
+  );
+  return { jobs, ...splitLeftoverWorkItems(items, live) };
 }
 
 /** dry-runの結果から、workerが作り直されるかを返す。実行できない、または読めないときは`null`。 */
