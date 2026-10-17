@@ -73,6 +73,49 @@ describe("classifyPackageJsonChange: version bumps", () => {
   });
 });
 
+describe("classifyPackageJsonChange: only existing names are exempt", () => {
+  test.each(["dependencies", "devDependencies", "overrides"])(
+    "adding a new name to %s needs approval",
+    (key) => {
+      const before = JSON.parse(pkg());
+      const after = {
+        ...before,
+        [key]: { ...before[key], brand_new: "1.0.0" },
+      };
+      expect(classifyPackageJsonChange(pkg(), JSON.stringify(after))).toBe(
+        "approval",
+      );
+    },
+  );
+
+  test("adding a name to a map that did not exist needs approval", () => {
+    expect(
+      classifyPackageJsonChange(
+        JSON.stringify({ name: "x" }),
+        JSON.stringify({ name: "x", dependencies: { left: "1.0.0" } }),
+      ),
+    ).toBe("approval");
+  });
+
+  test("removing a name stays auto", () => {
+    expect(classifyPackageJsonChange(pkg(), pkg({ devDependencies: {} }))).toBe(
+      "auto",
+    );
+  });
+
+  test.each(["peerDependencies", "optionalDependencies", "resolutions"])(
+    "a version change in %s needs approval",
+    (key) => {
+      expect(
+        classifyPackageJsonChange(
+          pkg({ [key]: { left: "1.0.0" } }),
+          pkg({ [key]: { left: "1.0.1" } }),
+        ),
+      ).toBe("approval");
+    },
+  );
+});
+
 describe("classifyPackageJsonChange: changes that need approval", () => {
   test.each([
     ["adds a scripts field", { scripts: { postinstall: "echo x" } }],

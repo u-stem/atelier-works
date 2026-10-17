@@ -187,3 +187,22 @@ describe("the executor runs on its own once copied", () => {
     );
   });
 });
+
+describe("the bun code that the host scripts start", () => {
+  // package.jsonの依存を解決したり、自動でinstallしたりする経路を持たないことを固定する。
+  const sources = ["scripts/custom-tags.ts", "scripts/bootstrap.sh"];
+
+  test.each(sources)("%s imports only built-ins", (path) => {
+    const found = specifiers(readFileSync(join(REPO_ROOT, path), "utf8"));
+    expect(
+      found.filter(
+        (specifier) =>
+          !(
+            specifier.startsWith("node:") ||
+            specifier === "bun" ||
+            specifier.startsWith("bun:")
+          ),
+      ),
+    ).toEqual([]);
+  });
+});

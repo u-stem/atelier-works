@@ -749,6 +749,166 @@ describe("service networks", () => {
   });
 });
 
+describe("variables the executor does not know", () => {
+  // 検査は列挙した15個のキーだけで変数を展開する。本番の子プロセスには`HOME`なども入るので、
+  // 既定値があっても、知らない名前の参照は拒否する。
+  test.each([
+    ["a short bind", { volumes: ["${HOME-.}:/h:ro"] }],
+    [
+      "a long bind",
+      {
+        volumes: [
+          { type: "bind", source: "${HOME:-.}", target: "/h", read_only: true },
+        ],
+      },
+    ],
+    [
+      "a long bind with the - form",
+      {
+        volumes: [
+          { type: "bind", source: "${HOME-.}", target: "/h", read_only: true },
+        ],
+      },
+    ],
+    ["an env_file", { env_file: ["${HOME-.}/x.env"] }],
+    ["a build context", { build: { context: "${HOME:-.}" } }],
+    [
+      "a dockerfile",
+      { build: { context: "./worker", dockerfile: "${HOME-.}/Dockerfile" } },
+    ],
+    [
+      "an additional context",
+      {
+        build: {
+          context: "./worker",
+          additional_contexts: { x: "${HOME:-.}" },
+        },
+      },
+    ],
+    ["a port address", { ports: ["${HOME-127.0.0.1}:8080:80"] }],
+  ])("rejects %s", (_name, service) => {
+    expect(verdict(one(service))).toBe("compose_forbidden");
+  });
+
+  test("rejects a top-level secret file", () => {
+    expect(
+      verdict(
+        one({ secrets: ["s"] }, { secrets: { s: { file: "${HOME-.}/s" } } }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a top-level config file", () => {
+    expect(
+      verdict(
+        one({ configs: ["c"] }, { configs: { c: { file: "${HOME:-.}/c" } } }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("still expands a known name that has a default", () => {
+    expect(
+      verdict(
+        one({ ports: ["${WM_BIND-127.0.0.1}:${WM_HTTP_PORT:-8080}:80"] }),
+      ),
+    ).toBe("ok");
+  });
+
+  test("still rejects a known name whose value is not loopback", () => {
+    expect(
+      verdict(one({ ports: ["${WM_BIND-127.0.0.1}:8080:80"] }), {
+        ...ctx,
+        env: { WM_BIND: "0.0.0.0" },
+      }),
+    ).toBe("compose_forbidden");
+  });
+});
+
+describe("security_opt allowlist", () => {
+  test.each(["no-new-privileges:true", "no-new-privileges=true"])(
+    "accepts %s",
+    (option) => {
+      expect(verdict(one({ security_opt: [option] }))).toBe("ok");
+    },
+  );
+
+  test.each([
+    "no-new-privileges:false",
+    "no-new-privileges",
+    "seccomp=default",
+    "seccomp=/etc/profile.json",
+    "apparmor=docker-default",
+    "apparmor=my-profile",
+    "label=type:spc_t",
+    "label=user:u",
+    "systempaths=unconfined",
+    "something-new=1",
+  ])("rejects %s", (option) => {
+    expect(verdict(one({ security_opt: [option] }))).toBe("compose_forbidden");
+  });
+
+  test("rejects a list that mixes an allowed and a rejected option", () => {
+    expect(
+      verdict(
+        one({ security_opt: ["no-new-privileges:true", "seccomp=default"] }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+});
+
+describe("absolute paths in file references", () => {
+  test.each([
+    ["an env_file", { env_file: ["/stage/infra/app.env"] }],
+    ["a build context", { build: { context: "/stage/infra/worker" } }],
+    [
+      "a dockerfile",
+      {
+        build: {
+          context: "./worker",
+          dockerfile: "/stage/infra/worker/Dockerfile",
+        },
+      },
+    ],
+    [
+      "an additional context",
+      {
+        build: {
+          context: "./worker",
+          additional_contexts: { x: "/stage/infra/x" },
+        },
+      },
+    ],
+  ])("rejects %s inside the logical root", (_name, service) => {
+    expect(verdict(one(service))).toBe("compose_forbidden");
+  });
+
+  test("rejects a top-level secret file inside the logical root", () => {
+    expect(
+      verdict(
+        one({ secrets: ["s"] }, { secrets: { s: { file: "/stage/infra/s" } } }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a top-level config file inside the logical root", () => {
+    expect(
+      verdict(
+        one({ configs: ["c"] }, { configs: { c: { file: "/stage/infra/c" } } }),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects an env_file object with an absolute path", () => {
+    expect(verdict(one({ env_file: [{ path: "/stage/infra/app.env" }] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("still accepts a relative env_file", () => {
+    expect(verdict(one({ env_file: ["./app.env"] }))).toBe("ok");
+  });
+});
+
 describe("top-level volumes and networks", () => {
   test("accepts a named volume with the local driver", () => {
     expect(verdict(one({}, { volumes: { v: { driver: "local" } } }))).toBe(

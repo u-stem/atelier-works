@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  matchesForbiddenPath,
+  matchesImplementProtectedPath,
+} from "../../f/factory/lib/protected_paths.ts";
+import {
   approvalFiles,
   type ChangedFile,
   isApprovalTarget,
@@ -46,6 +50,7 @@ describe("isApprovalTarget", () => {
     ".config/mise/config.toml",
     ".tool-versions",
     ".github/workflows/ci.yml",
+    "scripts/ci-scope.ts",
   ])("requires approval for %s", (path) => {
     expect(isApprovalTarget(path)).toBe(true);
   });
@@ -89,6 +94,7 @@ describe("isApprovalTarget: letter case", () => {
     "scripts/Host_apply/x.ts",
     "scripts/HOST-APPLY.ts",
     ".GitHub/Workflows/CI.yml",
+    "Scripts/CI-Scope.ts",
   ])("requires approval for %s", (path) => {
     expect(isApprovalTarget(path)).toBe(true);
   });
@@ -246,4 +252,14 @@ describe("how the host scripts start the custom-tags script", () => {
       expect(readScript(path)).toMatch(/bun \.\/scripts\/custom-tags\.ts /);
     },
   );
+});
+
+describe("scripts/ci-scope.ts", () => {
+  test("is an approval target and also a protected path of both flows, as separate lists", () => {
+    expect([
+      isApprovalTarget("scripts/ci-scope.ts"),
+      matchesForbiddenPath("scripts/ci-scope.ts"),
+      matchesImplementProtectedPath("scripts/ci-scope.ts"),
+    ]).toEqual([true, true, true]);
+  });
 });
