@@ -37,9 +37,6 @@ describe("20261017110000_agent_model_usage.up.sql", () => {
 
   test.each([
     "AS day",
-    "model",
-    "claude_version",
-    "stage",
     "AS run_count",
     "AS total_cost_usd",
     "AS total_input_tokens",
@@ -48,6 +45,22 @@ describe("20261017110000_agent_model_usage.up.sql", () => {
     "AS total_cache_creation_tokens",
   ])("exposes %s", async (column) => {
     expect(await Bun.file(UP).text()).toContain(column);
+  });
+
+  test("takes the model from the expanded model_usage element", async () => {
+    expect(await Bun.file(UP).text()).toContain("m.model,");
+  });
+
+  test("groups by the model, claude_version and stage", async () => {
+    expect(await Bun.file(UP).text()).toMatch(
+      /GROUP BY date_trunc\('day', created_at\), model, claude_version, stage;/,
+    );
+  });
+
+  test("requires model_usage to be a jsonb array", async () => {
+    expect(await Bun.file(UP).text()).toContain(
+      "CHECK (jsonb_typeof(model_usage) = 'array')",
+    );
   });
 
   test("expands model_usage into one row per model", async () => {

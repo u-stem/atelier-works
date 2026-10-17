@@ -2154,8 +2154,9 @@ Sonnetで試して届かなかった課題を、上位のモデルでやり直�
 試行が増えると、実装の失敗の数は0から数え直す。
 要件定義の生成、PRのレビュー、監査は、失敗の数にかかわらず`heavy_model`を使う。
 
-実際に使ったモデルは、Claudeの実行の記録(`agent_runs`)の`model`列に残る。
+`--model`に渡したモデルは、Claudeの実行の記録(`agent_runs`)の`model`列に残る。
 `heavy_model`に上がったかどうかは、この列で確かめる。
+1回の実行の中で別のモデルが使われたときの実際のモデルは、[実際に使われたモデルごとの使用量](#実際に使われたモデルごとの使用量)の`model_usage`で見る。
 
 `heavy_model`が無い既存のリソースでも、既定値の`claude-opus-5-5`で動く。
 一方、既存のリソースに`model: claude-opus-5-5`が書かれていると、既定が変わっても書き換わらない。
@@ -2229,7 +2230,8 @@ viewは、日、実際に使われたモデル、Claudeのバージョン、工�
 1回の実行が複数のモデルを使ったときは、それぞれのモデルに1回ずつ数える。
 `model_usage`が空の実行は、渡した値と実行全体の値で1行として数え、`total_cache_creation_tokens`には入らない。
 内訳を持つ実行と持たない実行が同じ行に混ざると、`total_cache_creation_tokens`は内訳を持つ実行だけの合計で、実際より小さい。
-ターン数と実行時間は、モデルごとに分けられないので、このviewには出さない。それらは`v_agent_usage_daily`で見る。
+ターン数と実行時間は、モデルごとに分けられないので、このviewには出さない。
+それらは`v_agent_usage_daily`で見る。
 
 ```sql
 SELECT model, sum(run_count) AS runs, sum(total_cost_usd) AS cost_usd

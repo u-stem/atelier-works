@@ -11,7 +11,8 @@ BEGIN;
 SET LOCAL lock_timeout = '30s';
 
 ALTER TABLE factory.agent_runs
-    ADD COLUMN model_usage jsonb NOT NULL DEFAULT '[]'::jsonb;
+    ADD COLUMN model_usage jsonb NOT NULL DEFAULT '[]'::jsonb
+        CHECK (jsonb_typeof(model_usage) = 'array');
 
 COMMENT ON COLUMN factory.agent_runs.model_usage IS
     '実際に使われたモデルごとの使用量の配列。要素は{model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd}。内訳を持たない実行は空の配列である。';

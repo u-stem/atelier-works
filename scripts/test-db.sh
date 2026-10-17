@@ -643,6 +643,11 @@ FROM factory.v_agent_model_usage_daily WHERE left(model, 6) = 'probe-' ORDER BY 
   || die "could not read v_agent_model_usage_daily"
 [ "${model_rows}" = "probe-actual=1:0.3:7:8:9:1,probe-helper=1:0.2:3:12:21:2,probe-requested=1:0.5000:10:20:30:-" ] \
   || die "unexpected v_agent_model_usage_daily rows: '${model_rows}'"
+# 配列でないmodel_usageは、列の検査が拒む。
+if printf "INSERT INTO factory.agent_runs (work_item_id, stage, attempt, model, model_usage) SELECT id, 'implement', 3, 'probe-requested', '{}'::jsonb FROM factory.work_items WHERE owner = 'modelprobe';\n" \
+  | psql_exec "${SCRATCH_DB}" -q >/dev/null 2>&1; then
+  die "expected agent_runs to reject a model_usage that is not an array"
+fi
 printf "DELETE FROM factory.work_items WHERE owner = 'modelprobe';\n" | psql_exec "${SCRATCH_DB}" -q >/dev/null
 log "v_agent_model_usage_daily counts the models actually used and falls back to the requested model"
 
