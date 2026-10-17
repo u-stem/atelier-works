@@ -40,7 +40,7 @@ Discordには通知だけを送る。Discordからの操作は受け付けない
 2. 秘密値を投入する。キーと取得の手順は[セットアップ](docs/setup.md)の「資格情報を用意する」にある。zshでは次のようにキーごとに実行する。bashのコマンドは[セットアップ](docs/setup.md)の「秘密値を投入する」にある。
 
    ```bash
-   read -rs 'v?DB_PASSWORD: ' && printf '%s' "$v" | mise set -E local --stdin DB_PASSWORD; unset v
+   IFS= read -rs 'v?DB_PASSWORD: ' && printf '%s' "$v" | mise set -E local --stdin DB_PASSWORD; unset v
    ```
 
 3. 診断して起動する。

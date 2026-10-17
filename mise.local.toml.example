@@ -42,7 +42,7 @@ DISCORD_WEBHOOK_URL = ""
 #       Metadata = Read-only(自動で付与される)
 #       ほかはすべて No access
 #   - Account permissions: すべて No access
-#   read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && printf '%s' "$v" | mise set -E local --stdin CONSOLE_GITHUB_TOKEN; unset v
+#   IFS= read -rs 'v?CONSOLE_GITHUB_TOKEN: ' && printf '%s' "$v" | mise set -E local --stdin CONSOLE_GITHUB_TOKEN; unset v
 CONSOLE_GITHUB_TOKEN = ""
 
 # 収集(collect_github)が所有者ごとに使う、読み取り専用のトークン。
@@ -69,4 +69,4 @@ CONSOLE_GITHUB_TOKEN = ""
 #   - Account permissions: すべて No access
 #   組織の所有者は、組織側で fine-grained PAT を許可し、トークンの承認が要ることがある。
 #   所有者ごとに、次の1行を実行する(<OWNER> は上の名前に置き換える)。
-#   read -rs 'v?GITHUB_READ_TOKEN_<OWNER>: ' && printf '%s' "$v" | mise set -E local --stdin GITHUB_READ_TOKEN_<OWNER>; unset v
+#   IFS= read -rs 'v?GITHUB_READ_TOKEN_<OWNER>: ' && printf '%s' "$v" | mise set -E local --stdin GITHUB_READ_TOKEN_<OWNER>; unset v

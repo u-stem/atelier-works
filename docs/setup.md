@@ -45,20 +45,22 @@ loginに`_`を含む所有者(EMUのアカウント)は、収集が扱わない�
 
 ## 秘密値を投入する
 
-秘密値は人が投入する。次のコマンドを使うと、値は画面に表示されず、シェルの履歴にも、`ps`が出すプロセスの引数にも残らない。`KEY`をキーの名前に置き換え、キーごとに実行する。
-値は、シェルの組み込みコマンドの`printf`がパイプで`mise set --stdin`に渡す。
-`mise set`の引数にはキーの名前だけが載る。
+秘密値は人が投入する。
+次のコマンドを使うと、値は画面に表示されず、シェルの履歴にも、`ps`が出すプロセスの引数にも残らない。
+`KEY`をキーの名前に置き換え、キーごとに実行する。
+`printf`はシェルの組み込みなので、値がプロセスの引数に載らない。
+値はパイプで`mise set --stdin`に渡り、`mise set`の引数にはキーの名前だけが載る。
 
 zshでは次のように実行する。
 
 ```bash
-read -rs 'v?KEY: ' && printf '%s' "$v" | mise set -E local --stdin KEY; unset v
+IFS= read -rs 'v?KEY: ' && printf '%s' "$v" | mise set -E local --stdin KEY; unset v
 ```
 
 bashでは次のように実行する。
 
 ```bash
-read -rs -p 'KEY: ' v && printf '%s' "$v" | mise set -E local --stdin KEY; unset v
+IFS= read -rs -p 'KEY: ' v && printf '%s' "$v" | mise set -E local --stdin KEY; unset v
 ```
 
 値は`mise.local.toml`の`[env]`に書き込まれる。`-E local`を付けなくても、以降の`mise run`と`mise exec`に反映される。
