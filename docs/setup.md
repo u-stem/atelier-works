@@ -45,18 +45,22 @@ loginに`_`を含む所有者(EMUのアカウント)は、収集が扱わない�
 
 ## 秘密値を投入する
 
-秘密値は人が投入する。次のコマンドを使うと、値は画面に表示されず、シェルの履歴にも残らない。`KEY`をキーの名前に置き換え、キーごとに実行する。
+秘密値は人が投入する。
+次のコマンドを使うと、値は画面に表示されず、シェルの履歴にも、`ps`が出すプロセスの引数にも残らない。
+`KEY`をキーの名前に置き換え、キーごとに実行する。
+`printf`はシェルの組み込みなので、値がプロセスの引数に載らない。
+値はパイプで`mise set --stdin`に渡り、`mise set`の引数にはキーの名前だけが載る。
 
 zshでは次のように実行する。
 
 ```bash
-read -rs 'v?KEY: ' && mise set -E local KEY="$v"; unset v
+IFS= read -rs 'v?KEY: ' && printf '%s' "$v" | mise set -E local --stdin KEY; unset v
 ```
 
 bashでは次のように実行する。
 
 ```bash
-read -rs -p 'KEY: ' v && mise set -E local KEY="$v"; unset v
+IFS= read -rs -p 'KEY: ' v && printf '%s' "$v" | mise set -E local --stdin KEY; unset v
 ```
 
 値は`mise.local.toml`の`[env]`に書き込まれる。`-E local`を付けなくても、以降の`mise run`と`mise exec`に反映される。
@@ -75,11 +79,10 @@ mise run doctor
 
 環境変数の項目が、未設定のキーの名前を示す。値は表示しない。
 
-`mise set -E local KEY=value`と値を直接書く方法は、補足の手段にとどめる。
-
 > [!WARNING]
-> 値を直接書くと、値がシェルの履歴にそのまま残る。
-> 値に`!`などの記号があると、zshの履歴展開で壊れるので、記号を含まない値にだけ使う。
+> `mise set -E local KEY=value`のように値を引数に書かない。
+> 値がシェルの履歴に残り、実行中は`ps`の出力にも現れる。
+> `mise set --prompt`も使わない。入力した値が画面にそのまま表示される。
 
 ## 起動する
 

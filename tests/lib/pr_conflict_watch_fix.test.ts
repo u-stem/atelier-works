@@ -794,7 +794,7 @@ describe("runPrConflictWatch: starting a fix", () => {
       ],
     });
     await runPrConflictWatch(h.deps);
-    expect(h.reads.hasActiveFix ?? []).toEqual([]);
+    expect(h.reads.getDefaultBranch ?? []).toEqual([]);
   });
 
   test("notifies when the grace has passed", async () => {
@@ -1081,8 +1081,8 @@ describe("runPrConflictWatch: with the fix disabled", () => {
       "list_conflicted",
       "record",
       "notice",
-      "notify",
       "mark",
+      "notify",
     ]);
   });
 
@@ -1155,6 +1155,84 @@ describe("runPrConflictWatch: a fix that just settled", () => {
           throw new Error("db down");
         },
       },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.events).toHaveLength(1);
+  });
+});
+
+describe("runPrConflictWatch: a work item that runs without being bound to the row", () => {
+  const PAST_GRACE = {
+    episode_started_at: new Date(NOW.getTime() - 120 * MINUTE),
+  };
+
+  test("does not notify after the grace while a fix work item is active", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: { hasActiveFix: async () => true },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.events).toEqual([]);
+  });
+
+  test("warns when a row has waited long for a fix work item that is not bound to it", async () => {
+    const h = setup({
+      rows: [
+        check({
+          episode_started_at: new Date(NOW.getTime() - (60 + 120) * MINUTE - 1),
+        }),
+      ],
+      fix: { hasActiveFix: async () => true },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).toContain(
+      "pr conflict has been waiting for a fix work item that is not bound to the row",
+    );
+  });
+
+  test("does not warn while the wait is short", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: { hasActiveFix: async () => true },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).toEqual([]);
+  });
+
+  test("counts the row as waiting while a fix work item is active", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: { hasActiveFix: async () => true },
+    });
+    const result = await runPrConflictWatch(h.deps);
+    expect(result.waiting).toBe(1);
+  });
+
+  test("notifies after the grace when no fix work item is active", async () => {
+    const h = setup({ rows: [check(PAST_GRACE)] });
+    await runPrConflictWatch(h.deps);
+    expect(h.events).toHaveLength(1);
+  });
+
+  test("notifies after the grace when the active work item cannot be read", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: {
+        hasActiveFix: async () => {
+          throw new Error("db down");
+        },
+      },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.events).toHaveLength(1);
+  });
+
+  test("notifies a row with a final hold even while a fix work item is active", async () => {
+    const h = setup({
+      rows: [
+        check({ ...PAST_GRACE, fix_hold_reason: "pr_draft_or_auto_merge" }),
+      ],
+      fix: { hasActiveFix: async () => true },
     });
     await runPrConflictWatch(h.deps);
     expect(h.events).toHaveLength(1);

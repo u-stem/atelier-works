@@ -798,8 +798,10 @@ function skip(
 }
 
 /**
- * 競合を通知する。通知(notice)を登録し、新しく登録したときだけDiscordに送り、通知した時刻を記録する。
+ * 競合を通知する。通知(notice)を登録し、通知した時刻を記録し、記録できたときだけDiscordに送る。
  * 通知を先に登録する。通知した時刻の記録が先に成功して登録が失敗すると、通知が永久に出ないため。
+ * Discordは記録の後に送る。記録は直す作業項目の起動と排他なので、起動した行や解けた行にDiscordが届かない。
+ * 同じ本文の未解決の通知があって登録しなかった回でも、記録できればDiscordに送る。前の回が記録の前に止まっても、Discordを失わないためである。
  */
 async function notifyConflict(
   context: Context,
@@ -817,7 +819,10 @@ async function notifyConflict(
       ...(hold === undefined ? {} : { hold }),
     }),
   });
-  if (noticeId !== null) {
+  const marked = await deps.markNotified(rowId);
+  if (marked === "marked") {
+    counters.notified += 1;
+    deps.log.warn("pr conflict notified", { pr: pullRequestKey(ref) });
     const sent = await deps.notify({
       kind: "needs_human",
       instance_name: deps.instanceName,
@@ -839,16 +844,15 @@ async function notifyConflict(
         reason: sent.reason,
       });
     }
-  }
-  const marked = await deps.markNotified(rowId);
-  if (marked === "marked") {
-    counters.notified += 1;
-    deps.log.warn("pr conflict notified", { pr: pullRequestKey(ref) });
     return;
   }
-  // 通知の登録とDiscordの間に、競合が解けたか閉じた。解決する側は、まだ登録されていない通知を見逃したので、
-  // この実行が登録した通知を、ここで解決する。他の実行が記録済みのときは、競合が続くので解決しない。
-  if (marked === "not_conflicted" && noticeId !== null) {
+  // 記録できなかった。解けたか閉じた行は、解決する側が登録前の通知を見逃したので、この実行が登録した通知を解決する。
+  // 直す作業項目が結ばれた行と、同じPRで`pr_fix`が動いている行も、動く間は人に頼まないので解決する。行は未通知のまま残り、次の巡回で判断し直す。
+  // 他の実行が記録済みのときは、競合が続くので解決しない。どの場合もDiscordは送らない。
+  if (
+    (marked === "not_conflicted" || marked === "fix_bound") &&
+    noticeId !== null
+  ) {
     await deps.resolveNotice(noticeId);
   }
 }
@@ -943,6 +947,7 @@ async function recoverRow(
  * 直す作業項目が結ばれた行は、設定が無効でも、有効にした時刻より前に始まった競合でも待つ。
  * 作業項目が動く間に通知して人が直し始めると、人とFactoryが同じブランチへpushしうるためである。
  * 作業項目が終われば、回復が結びを外し、次の巡回で通常の判断に戻る。
+ * 結びの無い行でも、競合を直す作業項目が動いていれば、猶予の後の通知を待つ。
  */
 async function decideRowAction(
   context: Context,
@@ -965,6 +970,26 @@ async function decideRowAction(
     isFinalPrConflictFixHold(row.fix_hold_reason)
   ) {
     return decision;
+  }
+  // 行に結ばれていなくても、競合を直す作業項目が動いていることがある(古いイメージで止まった作業項目の自動の再開など)。
+  // そのまま通知すると人とFactoryが同じブランチへpushしうるので、動く間は待つ。読めなくても、通知を止めない。
+  try {
+    if (await fix.hasActiveFix(row.owner, row.repo, row.pr_number)) {
+      // 結ばれた行は回復が警告を残すが、結ばれていない行はそこを通らない。人が作業項目を確かめられるよう、ここで残す。
+      const waitedMs = input.now.getTime() - row.episode_started_at.getTime();
+      if (waitedMs >= input.graceMin * 60_000 + FIX_BOUND_WARN_AFTER_MS) {
+        log.warn(
+          "pr conflict has been waiting for a fix work item that is not bound to the row",
+          { pr: pullRequestKey(rowRef(row)) },
+        );
+      }
+      return "defer";
+    }
+  } catch (err) {
+    log.warn("pr conflict could not read the active fix work item", {
+      pr: pullRequestKey(rowRef(row)),
+      error: errorMessage(err),
+    });
   }
   let lastFixSettledAt: Date | null = null;
   try {
