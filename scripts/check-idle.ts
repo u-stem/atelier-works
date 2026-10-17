@@ -14,17 +14,21 @@
 //   他のworkerが受けるものを除く。受けるworkerが分からないtagのジョブを数え漏らして
 //   止めそこねるより、余分に止めるほうが安全なため。
 // - 実行中の状態の作業項目(`factory.work_items`)。ジョブの一覧に載らない合間も拾う。
-// DBに届かないとき(スタックが止まっている、初回の起動)は、警告を出して0で終わる。止めない。
+// 読み取りに失敗したときは、理由で扱いを分ける。
+// - DBに届かない(コンテナが動いていない、接続できない、初回の起動)ときは、警告を出して通す。止めない。
+// - 届いたがSQLが失敗した、時間内に終わらなかった、などのときは、何も動いていないと確かめられないので止める。
 //
 // 動いている仕事が見つかっても、すぐには止めない。5秒ごとに読み直し、60秒のうちに一度でも何も
 // 動いていなければ通す。2分ごとの短い定期ジョブに当たっただけで止めないためである。
 // 読み直しで読めなかったときは、何も動いていないと確かめられないので、通さずに読み直しを続ける。
+// 読み直しは、最初の読み取りの開始から数えた上限を超えない。最後の待ちと読み取りも、上限から逆算して打ち切る。
 // 待つ上限と間隔は`--recheck-timeout-ms=<ms>`と`--recheck-interval-ms=<ms>`で変えられる(テスト用)。
 //
-// 使い方: bun scripts/check-idle.ts [--when-worker-recreated]
+// 使い方: bun ./scripts/check-idle.ts [--when-worker-recreated]
 // `--when-worker-recreated`を付けると、`docker compose up --dry-run`で、defaultのworkerかDBが
 // 作り直される場合だけ確認する。dry-runの出力を読めないときは、作り直されるものとして確認する。
-// 環境変数`FORCE=1`で確認を飛ばす。ジョブが無いことを自分で確かめたときと、緊急のときに使う。
+// 環境変数`CHECK_IDLE_FORCE=1`で確認を飛ばす。人が、ジョブが無いことを確かめたときと、緊急のときに使う。
+// 他の用途の`FORCE`と取り違えないよう、この名前にしている。
 // composeの変数はmiseから渡るので、`mise run`か`mise exec --`を通して実行する。
 
 import { resolve } from "node:path";
@@ -48,7 +52,10 @@ export type RunningWorkItem = {
 };
 
 /**
- * 1つの読み取りの結果。`ok: false`はDBに届かなかったことを表す。
+ * 1つの読み取りの結果。
+ * `ok: false`は読めなかったことを表し、`kind`が扱いを分ける。
+ * `unreachable`はDBに届かなかった(コンテナが動いていない、接続できない)ことで、警告にして通す。
+ * `unverifiable`は届いたが確かめられなかった(SQLの失敗、時間切れ)ことで、止める側に倒す。
  * `malformed`は、形を読めなかった行の数で、何かが動いている可能性があるので止める側に倒す。
  */
 export type Reading<T> =
@@ -66,9 +73,16 @@ export type Reading<T> =
 export type Verdict = {
   readonly exitCode: 0 | 1;
   readonly lines: readonly string[];
+  /** `busy`は動いている仕事がある。`unverifiable`は何も動いていないと確かめられない。 */
+  readonly state: "idle" | "busy" | "unverifiable";
 };
 
-/** 作業項目の状態のうち、ジョブが動いている間のもの。 */
+/**
+ * 作業項目の状態のうち、ジョブが動いている間のもの。
+ * `picked`は、claimした直後で、次のステップはqueueに積まれていて、止まっても新しいworkerが続けるので入れない。
+ * 監査とdependabotでは作業項目を作った直後の状態でもあり、途中で止まった行が残りうる。
+ * `approved`は終端の状態で、実装を無効にしている間はそのまま残るので、入れると確認が永久に止まる。
+ */
 export const RUNNING_WORK_ITEM_STATUSES: readonly string[] = [
   "requirements_generating",
   "implementing",
@@ -243,15 +257,20 @@ const WORKER_CONTAINER = /-(?:windmill_worker|db)-\d+$/;
 
 /**
  * `docker compose up --dry-run`の出力から、defaultのworkerかDBのコンテナが作り直されるかを返す。
- * コンテナの行(`Container <名前> <動作>`)が1つも無いときは、読めなかったとして`null`を返す。
+ * コンテナの行(`Container <名前> <動作>`)が1つも無いとき、または`Container`で始まるのに3列に合わない行が
+ * 1つでもあるときは、読めなかったとして`null`を返す。
  */
 export function workerWillBeRecreated(composeOutput: string): boolean | null {
   let seen = false;
   let recreated = false;
   for (const line of composeOutput.split("\n")) {
+    if (!line.trim().startsWith("Container")) {
+      continue;
+    }
     const match = /^\s*Container\s+(\S+)\s+(\S+)\s*$/.exec(line);
     if (match === null) {
-      continue;
+      // 形が違うコンテナの行は、読み違えているおそれがあるので、確認する側に倒す。
+      return null;
     }
     seen = true;
     if (match[2] === "Recreate" && WORKER_CONTAINER.test(match[1] ?? "")) {
@@ -261,9 +280,21 @@ export function workerWillBeRecreated(composeOutput: string): boolean | null {
   return seen ? recreated : null;
 }
 
+function unreadableLine(
+  what: string,
+  reading: {
+    readonly kind: "unreachable" | "unverifiable";
+    readonly reason: string;
+  },
+): string {
+  return reading.kind === "unreachable"
+    ? `warning: could not reach the database for the ${what}: ${reading.reason}`
+    : `error: could not verify the ${what}: ${reading.reason}`;
+}
+
 function jobLines(jobs: Reading<RunningJob>): string[] {
   if (!jobs.ok) {
-    return [`warning: could not read the running jobs: ${jobs.reason}`];
+    return [unreadableLine("running jobs", jobs)];
   }
   const lines: string[] = [];
   if (jobs.rows.length > 0) {
@@ -284,7 +315,7 @@ function jobLines(jobs: Reading<RunningJob>): string[] {
 
 function itemLines(items: Reading<RunningWorkItem>): string[] {
   if (!items.ok) {
-    return [`warning: could not read the work items: ${items.reason}`];
+    return [unreadableLine("work items", items)];
   }
   const lines: string[] = [];
   if (items.rows.length > 0) {
@@ -307,23 +338,42 @@ function hasWork<T>(reading: Reading<T>): boolean {
   return reading.ok && (reading.rows.length > 0 || reading.malformed > 0);
 }
 
+function isUnverifiable<T>(reading: Reading<T>): boolean {
+  return !reading.ok && reading.kind === "unverifiable";
+}
+
 /**
  * 2つの読み取りから、止めるかを決める。副作用は無い。
- * どちらかに実行中の仕事があれば1。読めなかった側は警告にして、読めた側だけで決める。
+ * どちらかに実行中の仕事があれば1。DBに届かなかった側は警告にして、読めた側だけで決める。
+ * 届いたが確かめられなかった側があれば、何も動いていないと言えないので、仕事が無くても1にする。
  */
 export function judge(
   jobs: Reading<RunningJob>,
   items: Reading<RunningWorkItem>,
 ): Verdict {
   const busy = hasWork(jobs) || hasWork(items);
+  const unverifiable = isUnverifiable(jobs) || isUnverifiable(items);
   const lines = [...jobLines(jobs), ...itemLines(items)];
   if (busy) {
     lines.push(
       "Running work would be stopped by recreating the worker. Wait for it to finish and run this again.",
-      "If you have confirmed that nothing needs to be kept, or in an emergency, run with FORCE=1 to skip this check.",
     );
   }
-  return { exitCode: busy ? 1 : 0, lines };
+  if (unverifiable) {
+    lines.push(
+      "Could not confirm that nothing is running, so this check stops here. Fix the cause and run this again.",
+    );
+  }
+  if (busy || unverifiable) {
+    lines.push(
+      "To skip this check, run with CHECK_IDLE_FORCE=1, only after a person has confirmed that nothing needs to be kept, or in an emergency.",
+    );
+  }
+  return {
+    exitCode: busy || unverifiable ? 1 : 0,
+    lines,
+    state: busy ? "busy" : unverifiable ? "unverifiable" : "idle",
+  };
 }
 
 function shorten(text: string): string {
@@ -333,11 +383,42 @@ function shorten(text: string): string {
     : firstLine;
 }
 
+/**
+ * 読み取りの失敗を、DBに届かなかったものか、届いたが確かめられなかったものかに分ける。
+ * 届かなかったのは、psqlが接続できなかった(終了コード2)ときと、composeがコンテナの不在かDockerの停止を示したときである。
+ * SQLの失敗(終了コード1と3)、時間切れ(終了コードが無い)、それ以外の失敗は、確かめられなかったものとして扱う。
+ */
+export function classifyReadFailure(
+  exitCode: number | null,
+  stderr: string,
+): "unreachable" | "unverifiable" {
+  if (exitCode === 2) {
+    return "unreachable";
+  }
+  if (
+    exitCode === 1 &&
+    /is not running|Cannot connect to the Docker daemon|no such service/i.test(
+      stderr,
+    )
+  ) {
+    return "unreachable";
+  }
+  return "unverifiable";
+}
+
 function readDatabase<T>(
   db: string,
   sql: string,
   parse: (output: string) => Reading<T>,
+  timeoutMs: number,
 ): Reading<T> {
+  if (timeoutMs <= 0) {
+    return {
+      ok: false,
+      kind: "unverifiable",
+      reason: `no time left to read ${db}`,
+    };
+  }
   try {
     const result = Bun.spawnSync(
       [
@@ -363,14 +444,15 @@ function readDatabase<T>(
         "-c",
         sql,
       ],
-      { timeout: PSQL_TIMEOUT_MS },
+      { timeout: timeoutMs },
     );
     if (result.exitCode !== 0) {
+      const code = result.signalCode ? null : result.exitCode;
       const detail = shorten(result.stderr.toString());
       return {
         ok: false,
-        kind: "unreachable",
-        reason: `psql on ${db} exited with ${String(result.exitCode)}${detail === "" ? "" : `: ${detail}`}`,
+        kind: classifyReadFailure(code, result.stderr.toString()),
+        reason: `psql on ${db} ${code === null ? "did not finish in time" : `exited with ${String(code)}`}${detail === "" ? "" : `: ${detail}`}`,
       };
     }
     return parse(result.stdout.toString());
@@ -381,6 +463,24 @@ function readDatabase<T>(
       reason: error instanceof Error ? shorten(error.message) : "unknown error",
     };
   }
+}
+
+/** 2つのDBを読む。全体で`budgetMs`を超えず、1回の呼び出しは`PSQL_TIMEOUT_MS`までにする。 */
+function readSnapshot(budgetMs: number): Snapshot {
+  const startedAt = Date.now();
+  const jobs = readDatabase(
+    WINDMILL_DB,
+    runningJobsSql(),
+    parseRunningJobs,
+    Math.min(PSQL_TIMEOUT_MS, budgetMs),
+  );
+  const items = readDatabase(
+    DATATABLE_DB,
+    runningWorkItemsSql(),
+    parseRunningWorkItems,
+    Math.min(PSQL_TIMEOUT_MS, budgetMs - (Date.now() - startedAt)),
+  );
+  return { jobs, items };
 }
 
 /** dry-runの結果から、workerが作り直されるかを返す。実行できない、または読めないときは`null`。 */
@@ -440,32 +540,37 @@ function fullyRead(snapshot: Snapshot): boolean {
  * 2分ごとの短い定期ジョブが確認の瞬間に当たっただけで止めないためである。
  * 最初の読み取りで何も見つからないとき(DBに届かないときを含む)は、待たずに`judge`の結果を返す。
  * 読み直しで読めない側があったときは、何も動いていないと確かめられていないので、通さずに読み直しを続ける。
+ * 上限は最初の読み取りの開始から数える。待ちは、次の読み取りが上限に収まるときだけ行い、
+ * 読み取りには上限までの残りを渡す。最悪でも、最初の読み取りが上限を超えた分を除き、上限を超えない。
  */
 export function checkIdle(options: CheckIdleOptions): Verdict {
+  const startedAt = options.now();
+  const deadline = startedAt + options.timeoutMs;
   const first = judge(...pair(options.read(Number.POSITIVE_INFINITY)));
   if (first.exitCode === 0) {
     return first;
   }
-  const startedAt = options.now();
-  const deadline = startedAt + options.timeoutMs;
   let lastBusy = first;
-  while (options.now() < deadline) {
+  while (deadline - options.now() > options.intervalMs) {
     const waited = Math.round((options.now() - startedAt) / 1000);
     options.progress(
       `Running work found; waiting for it to finish (${String(waited)}s)`,
     );
-    options.sleep(Math.min(options.intervalMs, deadline - options.now()));
-    const snapshot = options.read(options.timeoutMs);
+    options.sleep(options.intervalMs);
+    const snapshot = options.read(deadline - options.now());
     const verdict = judge(...pair(snapshot));
     if (verdict.exitCode === 1) {
-      lastBusy = verdict;
+      // 一覧のある結果を、一覧の無い「確かめられなかった」で置き換えない。
+      if (verdict.state === "busy" || lastBusy.state !== "busy") {
+        lastBusy = verdict;
+      }
     } else if (fullyRead(snapshot)) {
       return verdict;
     }
   }
-  if (options.timeoutMs > 0) {
+  if (lastBusy.state === "busy" && options.timeoutMs > 0) {
     return {
-      exitCode: 1,
+      ...lastBusy,
       lines: [
         ...lastBusy.lines,
         `Still running after rechecking for ${String(Math.round(options.timeoutMs / 1000))}s.`,
@@ -490,8 +595,8 @@ function flagNumber(name: string, fallback: number): number {
 }
 
 function main(): number {
-  if (process.env.FORCE === "1") {
-    console.error("FORCE=1: skipping the running-work check");
+  if (process.env.CHECK_IDLE_FORCE === "1") {
+    console.error("CHECK_IDLE_FORCE=1: skipping the running-work check");
     return 0;
   }
   if (
@@ -508,14 +613,7 @@ function main(): number {
     intervalMs: flagNumber("--recheck-interval-ms", RECHECK_INTERVAL_MS),
     now: () => Date.now(),
     sleep: (ms) => Bun.sleepSync(ms),
-    read: () => ({
-      jobs: readDatabase(WINDMILL_DB, runningJobsSql(), parseRunningJobs),
-      items: readDatabase(
-        DATATABLE_DB,
-        runningWorkItemsSql(),
-        parseRunningWorkItems,
-      ),
-    }),
+    read: readSnapshot,
     progress: (message) => console.error(message),
   });
   for (const line of verdict.lines) {
@@ -526,12 +624,4 @@ function main(): number {
 
 if (import.meta.main) {
   process.exitCode = main();
-}
-
-// スタブ。実装は次のコミットで書く。
-export function classifyReadFailure(
-  _exitCode: number | null,
-  _stderr: string,
-): "unreachable" | "unverifiable" {
-  return "unreachable";
 }
