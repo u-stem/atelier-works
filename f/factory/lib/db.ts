@@ -76,6 +76,7 @@ import {
   type GhRepo,
   type GhRepoDetailWrite,
   type GhRepoDetailWriteResult,
+  type GhRepoFreshnessRow,
   type GhRepoGone,
   type GhRepoOpenPrSnapshot,
   type GhRepoUpsert,
@@ -7256,12 +7257,78 @@ export async function listGhDetailRows(
   };
 }
 
+/**
+ * `gh_repos`の行の鮮度の判定に使う列を読む。
+ * 数値IDは`null`か正の安全な整数、フラグは真偽、時刻は`null`か日時でなければならない。
+ */
+function toGhRepoFreshnessRow(
+  row: Record<string, unknown>,
+): GhRepoFreshnessRow {
+  const repoId = parseNullableId(row.repo_id, "repo_id");
+  if (repoId !== null && !isGitHubDatabaseId(repoId)) {
+    throw new Error('db: row field "repo_id" is not a database id');
+  }
+  return {
+    repo_id: repoId,
+    allowed: parseBoolean(row.allowed, "allowed"),
+    archived: parseBoolean(row.archived, "archived"),
+    gone: parseBoolean(row.gone, "gone"),
+    last_collected_at: parseNullableDate(
+      row.last_collected_at,
+      "last_collected_at",
+    ),
+    truncated: parseBoolean(row.truncated, "truncated"),
+    detail_failed: parseBoolean(row.detail_failed, "detail_failed"),
+  };
+}
+
+/**
+ * 1つのリポジトリの`gh_repos`の行、開いているPRの行、DBの`now()`を、1つの文で読む。
+ * 収集はリポジトリの行と`last_collected_at`を1つの文で書くので、別々の文で読むと、
+ * 新しい`last_collected_at`と古い行の組を読み、古い行を新しいと誤りうる。
+ * 名前は小文字にして照会する。表の名前は小文字だけである。
+ * `usable`、数値IDの一致、鮮度はここでは絞らず、呼び出し側が判定する。
+ * 読んだ行は保存する値の述語で検査し直し、通らない値があれば、値を含めずに例外にする。
+ */
 export async function readGhRepoOpenPullRequests(
-  _owner: string,
-  _repo: string,
-  _sql: SqlClient = defaultSqlClient,
+  owner: string,
+  repo: string,
+  sql: SqlClient = defaultSqlClient,
 ): Promise<GhRepoOpenPrSnapshot> {
-  return { db_now: new Date(0), repo: null, prs: [] };
+  const ownerName = requireGitHubName(owner, "owner").toLowerCase();
+  const repoName = requireGitHubName(repo, "repo").toLowerCase();
+  const rows = await sql`
+    WITH r AS (
+      SELECT repo_id, allowed, archived, gone, last_collected_at, truncated, detail_failed
+      FROM factory.gh_repos
+      WHERE owner = ${ownerName} AND repo = ${repoName}
+    ), pr AS (
+      SELECT id, owner, repo, repo_id, number, state, head_sha, head_ref, base_ref, is_draft, is_cross_repository, auto_merge_enabled, author_login, author_type, author_id, mergeable, has_review_label, has_fix_label, review_requested_user_ids, assignee_ids, team_review_requested, created_at, updated_at, written_at, usable
+      FROM factory.gh_pull_requests
+      WHERE owner = ${ownerName} AND repo = ${repoName} AND state = 'open'
+    )
+    SELECT
+      now() AS db_now,
+      (SELECT to_jsonb(r) FROM r) AS repo,
+      coalesce((SELECT jsonb_agg(to_jsonb(pr) ORDER BY pr.number) FROM pr), '[]'::jsonb) AS prs
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("db: the open pull request statement returned no row");
+  }
+  return {
+    db_now: parseDate(row.db_now, "db_now"),
+    repo:
+      row.repo === null || row.repo === undefined
+        ? null
+        : toGhRepoFreshnessRow(parseJsonObject(row.repo, "repo")),
+    prs: parseJsonArray(row.prs, "prs").map((item) => {
+      if (!isRecord(item)) {
+        throw new Error('db: row field "prs" has a non-object element');
+      }
+      return toGhPullRequest(item);
+    }),
+  };
 }
 
 /**
