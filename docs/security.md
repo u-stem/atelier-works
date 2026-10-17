@@ -1781,9 +1781,18 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 ### miseの一覧の判定
 
 `mise set`、`mise env`、`mise config`と、その別名は、`mise.local.toml`の秘密値を一覧する。
-フックは、書き込む形を持たない呼び出しを拒否する。
+`mise hook-env`と`mise en`も、秘密値を出力するか、秘密値を持つシェルを起動する。
+隠しサブコマンドの`mise direnv exec`と`mise mcp`も、秘密値を出力する。
+フックは、書き込む形を持たない呼び出しと、確かめていないサブコマンドを拒否する。
 
-#### どの呼び出しを調べるか
+#### サブコマンドの許可リスト
+
+miseの更新で、値を出すサブコマンドが増えても塞げるよう、拒否するサブコマンドを数えず、許可するものを数える。
+最初のオプションでない語がサブコマンドで、`run`、`exec`、`ls`、`install`、`trust`、`doctor`など、値を出さないと確かめたものだけを許可する。
+`mise lint`のように、タスク名を直接書く省略形は許可しない。`mise run lint`と書く。
+サブコマンドの前に、値を取る隠しオプション(`-P`、`--log-level`など)があっても、値の語まで読み飛ばして探す。
+
+#### 名前を持つ呼び出し
 
 `--`より前の語に、次の語があれば調べる。
 `set`と別名の`ev`、`env-vars`がある。
@@ -1792,9 +1801,11 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 そのため、`mise settings set`、`mise run set`、`mise run env`のように、その語を持つ別の呼び出しも拒否する。
 `mise config ls`のように、設定値を出さない呼び出しも拒否する。
 `set`以外のサブコマンドには書き込む形が無いので、あれば拒否する。
-サブコマンドより前の語が引用符の外にブレースを持つときも、語が増えてサブコマンドが変わるので拒否する。
+サブコマンドの語が引用符の外にブレースを持つときも、語が増えてサブコマンドが変わるので拒否する。
+サブコマンドの語が見つからないときは、最初のオプションでない語までを対象にする。
 `mise exec`と`mise x`は、前にグローバルオプションがあっても、内側のコマンドを同じ判定にかける。
-`mise`から`--`までの語にも、同じ判定をかける。値を取る隠しオプションの値を、`x`と取り違えても見落とさないためである。
+外した`mise exec`ごとに、`mise`から`--`までの語にも同じ判定をかける。
+値を取る隠しオプションの値を、`x`と取り違えても見落とさないためである。
 
 #### mise setの書き込む形
 
@@ -1831,6 +1842,8 @@ mise 2026.9.13で、ダミー値を使って確かめた。
 - `--trace`、`-vv`、`-v`、`--debug`を付けた`mise set A=b`の出力に、`mise.local.toml`の値は載らない。
 - `mise set A=b KEY`は、`KEY has no value`で失敗し、値を出力しない。
 - `mise set --stdin KEY`に空の標準入力を渡すと、既存の値が空文字で上書きされる。
+- `mise direnv exec`は、環境の差分を圧縮して符号化した形で出力する。復号すると`mise.local.toml`の値が出る。
+- `mise mcp`は、標準入力のJSONで`mise://env`を読むと、`mise.local.toml`の値を平文で出力する。
 - `mise doctor`、`mise settings`、`mise tasks`、`mise direnv envrc`は、`mise.local.toml`の値を出力しない。
 
 ### 拒否された操作を人が実行する
@@ -1849,7 +1862,10 @@ mise 2026.9.13で、ダミー値を使って確かめた。
 - 値が実行時に決まるオプション名(`git push ${X:---force}`など)
 - シェルのエイリアスと関数
 - `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
-- ブレース展開で作るファイル名(`cat mise.local.{toml,}`、`cat .en{v,}`)。秘密値のファイルの名前の照合は、ブレースを展開しない
+- ブレース展開で作るファイル名(`cat mise.local.{toml,}`、`cat .en{v,}`)
+- ブレース展開で作るプログラム名とgitのオプション(`{mise,} set`、`mise exec -- {env,}`、`--no-ver{ify,ify}`)
+- `mise run`が実行するタスクの中身(`mise tasks add t -- env`の後の`mise run t`など)と、`mise token`が表示するトークン
+- 値を取る長い形のオプションを持つ前置き(`xargs --max-args 1 mise set`、`sudo --user root mise set`)
 - 外すことにしていない前置きのコマンド(`watch`、`flock`、`stdbuf`、`script`、`parallel`、`setsid`、`doas`、`caffeinate`など)。`mise set`の前に置かれると判定できない
 - スクリプトのファイルの中身
 - コマンドを起動するインタープリター(`bun -e`、`python -c`が`git push`を実行する場合など)

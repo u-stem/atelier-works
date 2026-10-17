@@ -50,8 +50,8 @@ export type StrippedCommand = {
   readonly wrappers: readonly string[];
   /** 最初に見つけた`mise exec`。無ければnull。 */
   readonly mise: MiseExec | null;
-  /** `mise exec`の`mise`の語から、起動するコマンドの前の`--`までの語。サブコマンドの取り違えを検査するために返す。無ければnull。 */
-  readonly miseWords: readonly Word[] | null;
+  /** 見つけた`mise exec`ごとの、`mise`の語から起動するコマンドの前の`--`までの語。サブコマンドの取り違えを検査するために返す。 */
+  readonly miseWords: readonly (readonly Word[])[];
 };
 
 /** 実行時に今のブランチ名になる置換。push先に書いても、ブランチが決まらない語として扱わない。 */
@@ -128,6 +128,22 @@ export const MISE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "--env",
 ]);
 
+/**
+ * `mise`のサブコマンドの前に置ける、値を取るグローバルオプション。
+ * `--help`に出ない隠しオプション(`-P`、`--log-level`など)も含む。
+ */
+export const MISE_GLOBAL_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  ...MISE_VALUE_OPTIONS,
+  "-P",
+  "--profile",
+  "--log-level",
+  "--output",
+  "-s",
+  "--shell",
+  "-t",
+  "--tool",
+]);
+
 /** 前置きのコマンドと、その値を取るオプション。値の語も一緒に外す。 */
 const WRAPPER_VALUE_OPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   [
@@ -167,7 +183,7 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
   const assignments: Word[] = [];
   const wrappers: string[] = [];
   let mise: MiseExec | null = null;
-  let miseWords: readonly Word[] | null = null;
+  const miseWords: (readonly Word[])[] = [];
   let index = 0;
   while (index < words.length) {
     const word = words[index];
@@ -190,15 +206,12 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
       wrappers.push(text);
       const execAt = miseExecAt(words, index + 1);
       const read = readMiseExec(words, execAt + 1);
-      if (mise === null) {
-        const dashDash = words.findIndex(
-          (candidate, at) => at > execAt && candidate.text === "--",
-        );
-        miseWords = words.slice(
-          index,
-          dashDash === -1 ? words.length : dashDash,
-        );
-      }
+      const dashDash = words.findIndex(
+        (candidate, at) => at > execAt && candidate.text === "--",
+      );
+      miseWords.push(
+        words.slice(index, dashDash === -1 ? words.length : dashDash),
+      );
       mise ??= read.mise;
       index = read.next;
     } else {
@@ -224,7 +237,7 @@ function miseExecAt(words: readonly Word[], start: number): number {
     const text = words[index]?.text ?? "";
     if (text === "--") return -1;
     if (text.startsWith("-")) {
-      if (MISE_VALUE_OPTIONS.has(text)) index += 1;
+      if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) index += 1;
       continue;
     }
     return text === "exec" || text === "x" ? index : -1;

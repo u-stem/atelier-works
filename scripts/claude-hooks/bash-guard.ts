@@ -41,6 +41,7 @@ import {
   ASSIGNMENT,
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
+  MISE_GLOBAL_VALUE_OPTIONS,
   MISE_VALUE_OPTIONS,
   type MiseExec,
   parseCommandLine,
@@ -156,9 +157,82 @@ const MISE_READ_NAMES: ReadonlySet<string> = new Set([
   "en",
 ]);
 
+/**
+ * 秘密値を出さないと確かめたサブコマンドと、その別名。
+ * `mise <タスク名>`の省略形は含まない。`mise run <タスク名>`と書く。
+ * ここに無いサブコマンドは、miseの更新で値を出すものが増えても塞げるよう、拒否する。
+ */
+const MISE_PLAIN_NAMES: ReadonlySet<string> = new Set([
+  "run",
+  "r",
+  "tasks",
+  "task",
+  "t",
+  "exec",
+  "x",
+  "ls",
+  "list",
+  "install",
+  "i",
+  "use",
+  "unuse",
+  "uninstall",
+  "rm",
+  "remove",
+  "trust",
+  "untrust",
+  "doctor",
+  "dr",
+  "which",
+  "where",
+  "version",
+  "upgrade",
+  "up",
+  "outdated",
+  "prune",
+  "plugins",
+  "registry",
+  "current",
+  "search",
+  "cache",
+  "completion",
+  "usage",
+  "help",
+  "bin-paths",
+  "reshim",
+  "settings",
+  "activate",
+  "shell",
+  "sh",
+  "sync",
+  "fmt",
+  "lock",
+  "link",
+  "ln",
+  "generate",
+  "g",
+  "self-update",
+  "latest",
+  "watch",
+  "w",
+]);
+
 /** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */
 function hasBrace(word: Word): boolean {
   return word.brace === true;
+}
+
+/**
+ * `mise`の後ろで、最初のオプションでない語の位置を返す。なければ語の数を返す。
+ * 値を取る既知のグローバルオプションは、値の語まで読み飛ばす。
+ */
+function firstMiseOperandAt(args: readonly Word[]): number {
+  for (let index = 0; index < args.length; index += 1) {
+    const text = args[index]?.text ?? "";
+    if (!text.startsWith("-")) return index;
+    if (MISE_GLOBAL_VALUE_OPTIONS.has(text)) index += 1;
+  }
+  return args.length;
 }
 
 /**
@@ -184,8 +258,19 @@ function listsMiseValues(words: readonly Word[]): boolean {
   const nameAt = beforeDashDash.findIndex(
     (word) => MISE_SET_NAMES.has(word.text) || MISE_READ_NAMES.has(word.text),
   );
-  const head = nameAt === -1 ? beforeDashDash : beforeDashDash.slice(0, nameAt);
-  if (head.some(hasBrace)) return true;
+  const operandAt = firstMiseOperandAt(beforeDashDash);
+  const headEnd =
+    nameAt === -1 ? operandAt + 1 : Math.min(nameAt, operandAt + 1);
+  if (beforeDashDash.slice(0, headEnd).some(hasBrace)) return true;
+  const sub = beforeDashDash[operandAt];
+  if (
+    sub !== undefined &&
+    !MISE_SET_NAMES.has(sub.text) &&
+    !MISE_READ_NAMES.has(sub.text) &&
+    !MISE_PLAIN_NAMES.has(sub.text)
+  ) {
+    return true;
+  }
   const name = beforeDashDash[nameAt];
   if (name === undefined) return false;
   if (MISE_READ_NAMES.has(name.text)) return true;
@@ -230,7 +315,8 @@ function listsMiseValues(words: readonly Word[]): boolean {
     operands.length === 1 &&
     key !== undefined &&
     !key.dynamic &&
-    !key.glob
+    !key.glob &&
+    !hasBrace(key)
   );
 }
 
@@ -367,7 +453,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Words like set or env in mise run arguments are denied too: pass the task name and arguments in another form.",
+    "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, mise en, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Only known mise subcommands are allowed, so write mise run <task> instead of mise <task>; words like set or env in mise run arguments are denied too.",
   miseXargs:
     "mise with arguments from xargs cannot be checked: mise set, mise env, and mise config list the secrets of mise.local.toml. Run mise directly with literal arguments.",
   gitConfigEnv:
@@ -586,7 +672,7 @@ function checkSimpleCommand(
   if ((program === "mise" || mise !== null) && wrappers.includes("xargs")) {
     return deny(REASONS.miseXargs);
   }
-  if (miseWords !== null && listsMiseValues(miseWords)) {
+  if (miseWords.some(listsMiseValues)) {
     return deny(REASONS.miseSetList);
   }
   if (program === "mise" && listsMiseValues(words)) {
