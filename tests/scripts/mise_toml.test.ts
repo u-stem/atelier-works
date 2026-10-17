@@ -100,27 +100,46 @@ describe("mise.toml stack tasks", () => {
   // workerを作り直すと、実行中のジョブが止まる。作り直す`up -d`の直前に、実行中の仕事が無いことを確かめる。
   // 確認と作り直しの隙間を短くするため、取得とビルドは確認の前に済ませ、作り直しでは取得もビルドもしない。
   // dry-runが新しいイメージを見るよう、確認は取得とビルドの後に置く。
-  const IDLE = "bun ./scripts/check-idle.ts --when-worker-recreated";
-  const PULL = "docker compose -f infra/docker-compose.yml pull";
+  // deployは、pullの後の確認で止まったことを知らせる印を付ける。
+  const IDLE: Record<string, string> = {
+    up: "bun ./scripts/check-idle.ts --when-worker-recreated",
+    deploy: "bun ./scripts/check-idle.ts --when-worker-recreated --after-pull",
+  };
+  // upは、取得に失敗しても起動できるよう、失敗を無視する。緊急の復旧を、レジストリの障害で止めないため。
+  // deployは、取得に失敗したら止まる。
+  const PULL: Record<string, string> = {
+    up: "docker compose -f infra/docker-compose.yml pull --ignore-pull-failures",
+    deploy: "docker compose -f infra/docker-compose.yml pull",
+  };
   const BUILD = "docker compose -f infra/docker-compose.yml build";
 
   for (const task of ["up", "deploy"]) {
+    const idleLine = IDLE[task] ?? "";
+
     test(`${task} checks for running work right before compose up`, () => {
       const lines = taskRuns().get(task) ?? [];
       const up = lines.findIndex(isComposeUp);
-      expect(lines.indexOf(IDLE)).toBe(up - 1);
+      expect(lines.indexOf(idleLine)).toBe(up - 1);
+    });
+
+    test(`${task} has a pull line`, () => {
+      expect(taskRuns().get(task)).toContain(PULL[task]);
     });
 
     test(`${task} pulls the images before checking for running work`, () => {
       const lines = taskRuns().get(task) ?? [];
-      const pull = lines.indexOf(PULL);
-      expect(pull > -1 && pull < lines.indexOf(IDLE)).toBe(true);
+      expect(lines.indexOf(PULL[task] ?? "")).toBeLessThan(
+        lines.indexOf(idleLine),
+      );
+    });
+
+    test(`${task} has a build line`, () => {
+      expect(taskRuns().get(task)).toContain(BUILD);
     });
 
     test(`${task} builds every image before checking for running work`, () => {
       const lines = taskRuns().get(task) ?? [];
-      const build = lines.indexOf(BUILD);
-      expect(build > -1 && build < lines.indexOf(IDLE)).toBe(true);
+      expect(lines.indexOf(BUILD)).toBeLessThan(lines.indexOf(idleLine));
     });
 
     test(`${task} does not pull when it recreates the containers`, () => {
@@ -135,7 +154,7 @@ describe("mise.toml stack tasks", () => {
 
     test(`${task} checks for running work after the Docker version check`, () => {
       const lines = taskRuns().get(task) ?? [];
-      expect(lines.indexOf(IDLE)).toBeGreaterThan(lines.indexOf(CHECK));
+      expect(lines.indexOf(idleLine)).toBeGreaterThan(lines.indexOf(CHECK));
     });
   }
 

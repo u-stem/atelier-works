@@ -625,3 +625,8 @@ function main(): number {
 if (import.meta.main) {
   process.exitCode = main();
 }
+
+// スタブ。実装は次のコミットで書く。
+export function withPullNotice(verdict: Verdict): Verdict {
+  return verdict;
+}

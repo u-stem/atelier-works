@@ -24,6 +24,7 @@ import {
   runningJobsSql,
   runningWorkItemsSql,
   type Snapshot,
+  withPullNotice,
   workerWillBeRecreated,
 } from "../../scripts/check-idle.ts";
 
@@ -88,9 +89,33 @@ const unverifiableItems: Reading<RunningWorkItem> = {
 };
 
 describe("classifyReadFailure", () => {
-  test("treats a failed connection (psql exit 2) as unreachable", () => {
-    expect(classifyReadFailure(2, "connection failed")).toBe("unreachable");
-  });
+  test.each([
+    'connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: No such file or directory',
+    'connection to server at "db" (172.18.0.2), port 5432 failed: Connection refused',
+    'could not translate host name "db" to address: Name or service not known',
+    "Is the server running locally and accepting connections on that socket?",
+    "could not connect to server",
+    'connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  database "datatable_db" does not exist',
+  ])(
+    "treats psql exit 2 with a server-absent message as unreachable: %s",
+    (message) => {
+      expect(classifyReadFailure(2, message)).toBe("unreachable");
+    },
+  );
+
+  test.each([
+    "FATAL:  sorry, too many clients already",
+    "FATAL:  the database system is starting up",
+    "FATAL:  the database system is shutting down",
+    "FATAL:  the database system is in recovery mode",
+    'FATAL:  password authentication failed for user "postgres"',
+    "",
+  ])(
+    "treats psql exit 2 with another message as unverifiable: %s",
+    (message) => {
+      expect(classifyReadFailure(2, message)).toBe("unverifiable");
+    },
+  );
 
   test("treats a service that is not running as unreachable", () => {
     expect(classifyReadFailure(1, 'service "db" is not running')).toBe(
@@ -120,6 +145,20 @@ describe("classifyReadFailure", () => {
 
   test("treats a failure with no message as unverifiable", () => {
     expect(classifyReadFailure(1, "")).toBe("unverifiable");
+  });
+});
+
+describe("withPullNotice", () => {
+  test("adds a line saying the checkout is already updated when stopping", () => {
+    const verdict = withPullNotice(judge(okJobs(JOB), okItems()));
+
+    expect(verdict.lines.join("\n")).toContain("git pull");
+  });
+
+  test("leaves a passing verdict alone", () => {
+    const verdict = judge(okJobs(), okItems());
+
+    expect(withPullNotice(verdict)).toEqual(verdict);
   });
 });
 
@@ -191,7 +230,80 @@ describe("parseRunningWorkItems", () => {
   });
 });
 
+// 実機の`docker compose up --dry-run --pull never --no-build --no-deps`の出力(終了コード0)。
+// 接頭辞は無く、行頭に空白があり、3列で、行末にも空白がある。caddyだけが作り直される。
+const REAL_DRY_RUN = [
+  " Container infra-windmill_worker_periodic-1 Running ",
+  " Container infra-db-1 Running ",
+  " Container infra-windmill_extra-1 Running ",
+  " Container infra-console_fetcher-1 Running ",
+  " Container infra-windmill_worker-1 Running ",
+  " Container infra-windmill_worker_console-1 Running ",
+  " Container infra-windmill_worker_native-1 Running ",
+  " Container infra-windmill_server-1 Running ",
+  " Container infra-caddy-1 Recreate ",
+  " Container infra-caddy-1 Recreated ",
+  "end of 'compose up' output, interactive run is not supported in dry-run mode",
+  "",
+].join("\n");
+
 describe("workerWillBeRecreated", () => {
+  test("is false for the real dry-run output where only caddy changes", () => {
+    expect(workerWillBeRecreated(REAL_DRY_RUN)).toBe(false);
+  });
+
+  test("is true when the real output recreates the default worker", () => {
+    const output = REAL_DRY_RUN.replace(
+      " Container infra-windmill_worker-1 Running ",
+      " Container infra-windmill_worker-1 Recreate \n Container infra-windmill_worker-1 Recreated ",
+    );
+
+    expect(workerWillBeRecreated(output)).toBe(true);
+  });
+
+  test("is true when the real output recreates the database", () => {
+    const output = REAL_DRY_RUN.replace(
+      " Container infra-db-1 Running ",
+      " Container infra-db-1 Recreate \n Container infra-db-1 Recreated ",
+    );
+
+    expect(workerWillBeRecreated(output)).toBe(true);
+  });
+
+  test.each([
+    "Recreated",
+    "Stopped",
+    "Start",
+    "Started",
+    "Create",
+    "Restarting",
+  ])("is true when the default worker is in the state %s", (state) => {
+    const output = REAL_DRY_RUN.replace(
+      " Container infra-windmill_worker-1 Running ",
+      ` Container infra-windmill_worker-1 ${state} `,
+    );
+
+    expect(workerWillBeRecreated(output)).toBe(true);
+  });
+
+  test("is true when the database is in a state other than Running", () => {
+    const output = REAL_DRY_RUN.replace(
+      " Container infra-db-1 Running ",
+      " Container infra-db-1 Stopped ",
+    );
+
+    expect(workerWillBeRecreated(output)).toBe(true);
+  });
+
+  test("ignores the state of the other services", () => {
+    const output = REAL_DRY_RUN.replace(
+      " Container infra-windmill_server-1 Running ",
+      " Container infra-windmill_server-1 Recreate ",
+    );
+
+    expect(workerWillBeRecreated(output)).toBe(false);
+  });
+
   test("is true when the default worker is recreated", () => {
     const output = [
       " Container infra-db-1 Running ",
@@ -592,6 +704,18 @@ describe("command", () => {
     expect(readFileSync(join(dir, "calls"), "utf8")).toContain(
       "PGOPTIONS=-c default_transaction_read_only=on",
     );
+  });
+
+  test("mentions that the checkout is already updated with --after-pull", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+
+    expect(run(["--after-pull"]).stderr).toContain("git pull");
+  });
+
+  test("does not mention the checkout without --after-pull", () => {
+    setup({ "windmill.out": `${JOB_LINE}\n`, "datatable_db.out": "" });
+
+    expect(run().stderr).not.toContain("git pull");
   });
 
   test("passes when the second read shows nothing running", () => {
