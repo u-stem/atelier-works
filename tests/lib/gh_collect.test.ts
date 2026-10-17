@@ -583,14 +583,17 @@ describe("runGhCollect over many rounds", () => {
 
   async function rounds(
     count: number,
-    options: Options,
+    options: Options | ((round: number) => Options),
     pagesFor: (round: number) => NonNullable<Options["pages"]>,
+    initial: readonly GhCollectOwnerState[] = [],
   ) {
-    let states: GhCollectOwnerState[] = [];
+    let states: GhCollectOwnerState[] = [...initial];
     const outcomes: Record<string, GhCollectRunOutcome | undefined>[] = [];
     const firstOwners: unknown[] = [];
     for (let round = 0; round < count; round += 1) {
-      const h = harness({ ...options, states, pages: pagesFor(round) });
+      const roundOptions =
+        typeof options === "function" ? options(round) : options;
+      const h = harness({ ...roundOptions, states, pages: pagesFor(round) });
       await runGhCollect(h.deps);
       firstOwners.push(h.requests[0]?.variables.owner);
       outcomes.push({
@@ -697,6 +700,66 @@ describe("runGhCollect over many rounds", () => {
       [true, false],
       [false, true],
     ]);
+  });
+
+  const TWO = {
+    owners: [
+      { name: "alice", kind: "user" as const, id: 1001 },
+      { name: "bob", kind: "org" as const },
+    ],
+  };
+
+  describe("when the first candidate is held back by next_allowed_at", () => {
+    const heldBack: GhCollectOwnerState = {
+      owner: "alice",
+      latest: {
+        finished_at: new Date(NOW - 60_000),
+        ok: false,
+        error_code: "rate_limited",
+        next_allowed_at: new Date(NOW + 600_000),
+      },
+      last_led_at: null,
+    };
+
+    test("the skipped owner is not marked as leading", async () => {
+      const { outcomes } = await rounds(2, { config: TWO }, () => ({}), [
+        heldBack,
+      ]);
+      expect(outcomes[0]?.alice?.led).toBe(false);
+    });
+
+    test("the owner that led in its place is marked", async () => {
+      const { outcomes } = await rounds(2, { config: TWO }, () => ({}), [
+        heldBack,
+      ]);
+      expect(outcomes[0]?.bob?.led).toBe(true);
+    });
+
+    test("the owner leads the round after the limit lifts", async () => {
+      const { firstOwners } = await rounds(2, { config: TWO }, () => ({}), [
+        heldBack,
+      ]);
+      expect(firstOwners[1]).toBe("alice");
+    });
+  });
+
+  describe("when the row of the leader cannot be finished", () => {
+    const failFirstRound = (round: number): Options => ({
+      config: TWO,
+      finishFails: round === 0 ? ["alice"] : [],
+    });
+
+    test("no owner is marked as leading in that round", async () => {
+      const { outcomes } = await rounds(2, failFirstRound, () => ({}));
+      expect(
+        Object.values(outcomes[0] ?? {}).filter((outcome) => outcome?.led),
+      ).toEqual([]);
+    });
+
+    test("the same owner leads the next round", async () => {
+      const { firstOwners } = await rounds(2, failFirstRound, () => ({}));
+      expect(firstOwners).toEqual(["alice", "alice"]);
+    });
   });
 
   test("owners that fail after spending time do not stop the other two", async () => {
