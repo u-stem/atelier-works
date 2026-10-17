@@ -9,14 +9,17 @@ import {
   GH_COLLECT_BACKOFF_CAP_MS,
   GH_COLLECT_DEADLINE_MS,
   GH_COLLECT_DEFAULT_BACKOFF_MS,
+  GH_COLLECT_DETAIL_RESERVE_MS,
   GH_COLLECT_MIN_REQUEST_MS,
   lookupToken,
+  observationStartMs,
   orderOwners,
   parseOwnerReposPage,
   parseTokenVariable,
   planGone,
   type RepoNode,
   selectTargets,
+  stage1Floor,
 } from "../../f/factory/lib/gh_collect_support.ts";
 import type { GraphqlFailure } from "../../f/factory/lib/gh_graphql.ts";
 import type { GhCollectOwnerState, GhRepo } from "../../f/factory/lib/types.ts";
@@ -810,6 +813,10 @@ describe("planGone", () => {
     gone: false,
     gone_reason: null,
     listed_at: new Date(NOW),
+    last_collected_at: null,
+    last_attempted_at: null,
+    truncated: false,
+    detail_failed: false,
     ...overrides,
   });
 
@@ -881,5 +888,73 @@ describe("planGone", () => {
         allowlisted: ["a", "A"],
       }),
     ).toHaveLength(1);
+  });
+});
+
+describe("parseOwnerReposPage resetAt", () => {
+  test("parses resetAt from the owner page", () => {
+    const result = parseOwnerReposPage(page([NODE]));
+    expect(result.kind === "ok" ? result.reset_at : null).toEqual(
+      new Date("2026-10-17T13:00:00Z"),
+    );
+  });
+
+  test("reads an unparsable resetAt as null", () => {
+    const result = parseOwnerReposPage(
+      page([NODE], {
+        rateLimit: { cost: 2, remaining: 4990, resetAt: "tomorrow" },
+      }),
+    );
+    expect(result.kind === "ok" ? result.reset_at : "malformed").toBeNull();
+  });
+
+  test("reads a resetAt that is not a string as null", () => {
+    const result = parseOwnerReposPage(
+      page([NODE], {
+        rateLimit: { cost: 2, remaining: 4990, resetAt: 1790000000 },
+      }),
+    );
+    expect(result.kind === "ok" ? result.reset_at : "malformed").toBeNull();
+  });
+
+  test("reads a missing rateLimit as a null resetAt", () => {
+    const result = parseOwnerReposPage(page([NODE], { rateLimit: undefined }));
+    expect(result.kind === "ok" ? result.reset_at : "malformed").toBeNull();
+  });
+});
+
+describe("stage 1 floor", () => {
+  test("keeps 30 seconds for stage 2", () => {
+    expect(GH_COLLECT_DETAIL_RESERVE_MS).toBe(30_000);
+  });
+
+  test("stage 1 floor includes the stage 2 reserve when detail is enabled", () => {
+    expect(stage1Floor(true)).toBe(40_000);
+  });
+
+  test("stage 1 floor stays at the request timeout when detail is disabled", () => {
+    expect(stage1Floor(false)).toBe(10_000);
+  });
+});
+
+describe("observationStartMs", () => {
+  test("observation start is the response time of a single page", () => {
+    expect(
+      observationStartMs({
+        pages: 1,
+        first_sent_ms: 1_000,
+        first_received_ms: 1_500,
+      }),
+    ).toBe(1_500);
+  });
+
+  test("observation start is the send time of the first page when there are several", () => {
+    expect(
+      observationStartMs({
+        pages: 3,
+        first_sent_ms: 1_000,
+        first_received_ms: 1_500,
+      }),
+    ).toBe(1_000);
   });
 });

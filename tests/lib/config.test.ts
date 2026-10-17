@@ -704,6 +704,26 @@ describe("gh_collect_enabled", () => {
   });
 });
 
+describe("gh_collect_detail_enabled", () => {
+  test("defaults gh_collect_detail_enabled to false when absent", () => {
+    const config = parseFactoryConfig(LEGACY_RAW_CONFIG);
+    expect(config.gh_collect_detail_enabled).toBe(false);
+  });
+
+  test("passes through an explicit gh_collect_detail_enabled true", () => {
+    const config = parseFactoryConfig({
+      ...LEGACY_RAW_CONFIG,
+      gh_collect_detail_enabled: true,
+    });
+    expect(config.gh_collect_detail_enabled).toBe(true);
+  });
+
+  test("throws when gh_collect_detail_enabled is present but not a boolean", () => {
+    const raw = { ...LEGACY_RAW_CONFIG, gh_collect_detail_enabled: "yes" };
+    expect(() => parseFactoryConfig(raw)).toThrow(ConfigValidationError);
+  });
+});
+
 describe("pr_ci_watch_human_prs", () => {
   test("defaults pr_ci_watch_human_prs to false when absent", () => {
     const config = parseFactoryConfig(LEGACY_RAW_CONFIG);

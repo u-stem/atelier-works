@@ -1887,7 +1887,7 @@ wmill resource push <定義ファイル> f/factory/factory_config
 ## 収集の運用
 
 `collect_github`が5分ごとに、`factory_config`の`owners`の所有者を順に読み、DBに集める。
-集めるのは、リポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数である。
+集めるのは、リポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数(段1)と、設定`gh_collect_detail_enabled`が`true`のときのそれらの詳細(段2)である。
 tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトークンだけを使う。
 仕組みと記録の意味は[GitHubの収集](internals/github-collect.md)にある。
 設定`gh_collect_enabled`が`false`の間は、トークンを読まず、何も書かずに終わる。
@@ -1936,10 +1936,39 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
    トークンを入れた所有者の`ok`が`true`で、`requests`と`cost`が残っていることを見る。
    トークンの無い所有者は`error_code`が`no_token`になる。
    成功が一度も無い所有者は、収集が動いている間は通知しない。
-   収集が止まると、最後の実行から27分の後に知らせる。
+   収集が止まると、最後の実行から16分の後に知らせる。
    一度成功した所有者が`no_token`になったときは、閾値を超えると`github_collect_stale`で知らせる。
 6. 所有者ごとの`requests`が、リポジトリの数を100で割って切り上げた値に合うことを見る。
 7. 設定の`repo_allowlist`が空の所有者は、[件数の確かめ方](#許可リストが空のときの件数の確かめ方)の手順で、一覧の漏れを確かめる。
+
+### 詳細の収集を有効にする
+
+設定`gh_collect_detail_enabled`は、既定が`false`である。
+`false`の間、段2の要求を送らず、`gh_pull_requests`と`gh_issues`に書かない。
+段1の失敗の扱いと、段1が使えない行を無効にする処理は、このキーによらず動く。
+
+1. 収集を有効にし、段1が数周回で成功することを確かめる。
+2. migrationが反映済みであることを確かめる。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT to_regclass('factory.gh_pull_requests'), to_regclass('factory.gh_issues')"
+   ```
+
+3. `gh_collect_detail_enabled`を`true`に直す。直し方は[収集を有効にする](#収集を有効にする)の手順4と同じである。
+4. 次の周回(5分以内)の後に、所有者ごとの実行の記録と、リポジトリごとの印を読む。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, ok, error_code, stage, detail_targets, detail_requests, detail_done, detail_incomplete, finished_at FROM factory.gh_collect_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 10"
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -c "SELECT owner, repo, truncated, detail_failed, last_collected_at, last_attempted_at FROM factory.gh_repos WHERE NOT gone AND (truncated OR detail_failed OR last_collected_at IS NULL) ORDER BY owner, repo LIMIT 30"
+   ```
+
+   `detail_done`が`detail_targets`に近づき、`detail_failed`が真のリポジトリが続かないことを見る。
+5. 止めるときは、`gh_collect_detail_enabled`を`false`に戻す。
+   書いた行は残る。使えない行の無効化は続き、閉じた行はDBの掃除が保持期間で消す。
+
+段1は、段2が有効なとき、残りが40秒を切ると新しい要求を始めない。
+約600リポジトリ以上の所有者は、`stage`が`list`の`deadline`が続く。
+そのときは、リポジトリを減らすか、段2を止める。
 
 ### 実行の記録の読み方
 
@@ -1966,6 +1995,24 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 失敗した行は、リポジトリの記録(`factory.gh_repos`)を前回のまま残す。
 一覧を取り終え、照合が通った周回だけが、その所有者の記録を置き換える。
 
+列`stage`は、`error_code`が生じた段を表す。
+`list`は段1、`detail`は段2で、成功の行は空である。
+段2の`error_code`は、段1と同じ語で、次のように読む。
+
+| `stage`が`detail`の`error_code` | 意味 | 対処 |
+| --- | --- | --- |
+| `unauthorized`、`forbidden` | 段2の要求が401か、レート制限でない403 | 段1と同じ。トークンの権限と、組織の承認を確かめる |
+| `rate_limited`、`secondary_limit` | 段2の要求が制限を受けたか、`remaining`が500を切った。`next_allowed_at`まで通信しない | 待つ。続くときはリポジトリと所有者の数を見直す |
+| `graphql_error`、`parse_error`、`timeout`、`http_5xx` | 対象を1件以上取ろうとして、1件も取り終えられず、失敗が1件以上あった | リポジトリごとの`detail_failed`を見る。続くときは調べる |
+| `deadline` | 対象が1件以上あるのに、時間が足りず1件も着手できなかった | 続くときは、所有者かリポジトリが多すぎる |
+| `db_error` | DBの書き込みか読み取りに失敗した | DBの状態を確かめる |
+
+リポジトリ単位の失敗と打ち切りは、所有者の`ok`を変えず、通知もしない。
+特定のリポジトリが続けて失敗するか打ち切られると、`gh_repos`の`detail_failed`か`truncated`が真のまま残る。
+開いたPRが90件を超えるリポジトリは、打ち切りが続く。
+この間、`last_collected_at`が進まず、古い行は`usable`が真のまま残る。
+最初に詳細の行を読む処理は、閾値で判断を止める判定を備えなければならない([下流が守る不変条件](internals/github-collect.md#下流が守る不変条件))。
+
 ### 収集が止まったときの通知
 
 `self_update`が2分ごとに、所有者ごとの最後の成功を確かめる。
@@ -1973,7 +2020,7 @@ tag `periodic`のworkerで動き、所有者ごとの読み取り専用のトー
 最後の成功からの経過が閾値を超えると、要対応の通知`github_collect_stale`を所有者ごとに1件残し、Discordに1回送る。
 Discordの通知には、閾値、最後の成功の時刻(JST)、最新の実行の原因、次の操作、Consoleの通知へのリンクが載る。
 
-閾値は、`owners`が2人までなら30分である。
+閾値は、`owners`が2人までなら25分である。
 3人以上なら、所有者の数をnとして`(2n + 1) × 5分`である。
 所有者は順に予算を使うので、自分の番の周回で1回失敗すると、成功の間隔が`2n × 5分`まで延びる。
 その間隔に、収集の1周回の余裕を足した値である。
@@ -1989,14 +2036,14 @@ stateを読めない回は、所有者の最古の実行の開始時刻で代え
 
 | 状況 | 扱い |
 | --- | --- |
-| 成功が一度も無く、トークンの無い所有者。収集が動いている間 | 通知しない。最新の実行の終わりが27分以内なら、収集が動いていると見なす |
+| 成功が一度も無く、トークンの無い所有者。収集が動いている間 | 通知しない。最新の実行の終わりが16分以内なら、収集が動いていると見なす |
 | レート制限で待っている間 | 待ちが終わってから10分まで通知しない。基準の時刻から60分を超えたら通知する |
 | GitHubの5xxと時間切れ | 基準の時刻から60分まで通知しない |
 | 最新の実行が150秒以内に始まって実行中 | 通知しない |
 | 定期ジョブ用のworkerが止まっている | 新しい通知を足さない。`periodic_worker_missing`が知らせる |
 
-最新の実行の終わりが27分より前なら、収集が動いていないと見なす。
-定期ジョブ用のworkerの待ち(最大22分)に、収集の1周回を足した時間である。
+最新の実行の終わりが16分より前なら、収集が動いていないと見なす。
+定期ジョブ用のworkerの待ち(最大11分)に、収集の1周回を足した時間である。
 このとき通知の原因は、スケジュールが止まったか、定期ジョブ用のworkerが受けていないことである。
 
 通知は、収集が成功に戻ると、自己更新が自動で解決する。

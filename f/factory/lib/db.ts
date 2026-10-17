@@ -53,19 +53,29 @@ import {
   assertBranchName,
   assertGitHubName,
   assertPullRequestUrl,
+  checkGhRepoDetailWrite,
   type DeploymentRecord,
   type Diagram,
   type FailureRecord,
   type FixOutcome,
   type FixReply,
   type FixRoundRecord,
+  GH_AUTHOR_TYPES,
   GH_COLLECT_ERROR_CODES,
   GH_GONE_REASONS,
+  GH_ISSUE_STATES,
+  GH_MERGEABLE_VALUES,
+  GH_PR_STATES,
   type GhCollectErrorCode,
   type GhCollectFreshnessRow,
   type GhCollectOwnerState,
   type GhCollectRunOutcome,
+  type GhCollectStage,
+  type GhIssue,
+  type GhPullRequest,
   type GhRepo,
+  type GhRepoDetailWrite,
+  type GhRepoDetailWriteResult,
   type GhRepoGone,
   type GhRepoUpsert,
   IMPLEMENT_ROUND_MODES,
@@ -81,11 +91,16 @@ import {
   type IssueProposalStatus,
   isBoolean,
   isBranchName,
+  isGhCollectStage,
+  isGitHubDatabaseId,
+  isGitHubLogin,
   isGitHubName,
+  isGitSha,
   isImplementDiffStat,
   isNumber,
   isOneOf,
   isRecord,
+  isStoredRefName,
   isString,
   type LatestDeployment,
   type Notice,
@@ -6421,6 +6436,11 @@ export type GhCollectRun = {
   readonly error_code: GhCollectErrorCode | null;
   readonly next_allowed_at: Date | null;
   readonly led: boolean;
+  readonly stage: GhCollectStage | null;
+  readonly detail_targets: number;
+  readonly detail_requests: number;
+  readonly detail_done: number;
+  readonly detail_incomplete: number;
 };
 
 /** `factory.gh_repos`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
@@ -6438,6 +6458,10 @@ export const GH_REPOS_COLUMNS = [
   "gone",
   "gone_reason",
   "listed_at",
+  "last_collected_at",
+  "last_attempted_at",
+  "truncated",
+  "detail_failed",
 ] as const satisfies readonly (keyof GhRepo)[];
 
 /** `factory.gh_collect_runs`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
@@ -6456,7 +6480,58 @@ export const GH_COLLECT_RUNS_COLUMNS = [
   "error_code",
   "next_allowed_at",
   "led",
+  "stage",
+  "detail_targets",
+  "detail_requests",
+  "detail_done",
+  "detail_incomplete",
 ] as const satisfies readonly (keyof GhCollectRun)[];
+
+/** `factory.gh_pull_requests`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
+export const GH_PULL_REQUESTS_COLUMNS = [
+  "id",
+  "owner",
+  "repo",
+  "repo_id",
+  "number",
+  "state",
+  "head_sha",
+  "head_ref",
+  "base_ref",
+  "is_draft",
+  "is_cross_repository",
+  "auto_merge_enabled",
+  "author_login",
+  "author_type",
+  "author_id",
+  "mergeable",
+  "has_review_label",
+  "has_fix_label",
+  "review_requested_user_ids",
+  "assignee_ids",
+  "team_review_requested",
+  "created_at",
+  "updated_at",
+  "written_at",
+  "usable",
+] as const satisfies readonly (keyof GhPullRequest)[];
+
+/** `factory.gh_issues`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
+export const GH_ISSUES_COLUMNS = [
+  "id",
+  "owner",
+  "repo",
+  "repo_id",
+  "number",
+  "state",
+  "author_login",
+  "author_type",
+  "author_id",
+  "created_at",
+  "updated_at",
+  "written_at",
+  "usable",
+] as const satisfies readonly (keyof GhIssue)[];
 
 /**
  * 保存する名前の検査。例外の文に値を入れない。
@@ -6532,6 +6607,16 @@ function toGhRepo(row: GhRepoSqlRow): GhRepo {
     gone: parseBoolean(row.gone, "gone"),
     gone_reason: goneReason,
     listed_at: parseNullableDate(row.listed_at, "listed_at"),
+    last_collected_at: parseNullableDate(
+      row.last_collected_at,
+      "last_collected_at",
+    ),
+    last_attempted_at: parseNullableDate(
+      row.last_attempted_at,
+      "last_attempted_at",
+    ),
+    truncated: parseBoolean(row.truncated, "truncated"),
+    detail_failed: parseBoolean(row.detail_failed, "detail_failed"),
   };
 }
 
@@ -6540,6 +6625,16 @@ function parseNullableErrorCode(value: unknown): GhCollectErrorCode | null {
     return null;
   }
   return parseEnum(value, GH_COLLECT_ERROR_CODES, "error_code");
+}
+
+function parseNullableStage(value: unknown): GhCollectStage | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isGhCollectStage(value)) {
+    throw new Error('db: row field "stage" has an unexpected value');
+  }
+  return value;
 }
 
 /** `toGhCollectRun`が読める行。定義の列だけを持つ。 */
@@ -6563,6 +6658,14 @@ function toGhCollectRun(row: GhCollectRunSqlRow): GhCollectRun {
     error_code: parseNullableErrorCode(row.error_code),
     next_allowed_at: parseNullableDate(row.next_allowed_at, "next_allowed_at"),
     led: parseBoolean(row.led, "led"),
+    stage: parseNullableStage(row.stage),
+    detail_targets: parseNumericLike(row.detail_targets, "detail_targets"),
+    detail_requests: parseNumericLike(row.detail_requests, "detail_requests"),
+    detail_done: parseNumericLike(row.detail_done, "detail_done"),
+    detail_incomplete: parseNumericLike(
+      row.detail_incomplete,
+      "detail_incomplete",
+    ),
   };
 }
 
@@ -6573,7 +6676,7 @@ export async function listGhRepos(
 ): Promise<GhRepo[]> {
   const name = requireGitHubName(owner, "owner").toLowerCase();
   const rows = await sql`
-    SELECT id, owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at
+    SELECT id, owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at, last_collected_at, last_attempted_at, truncated, detail_failed
     FROM factory.gh_repos
     WHERE owner = ${name}
     ORDER BY repo
@@ -6590,7 +6693,7 @@ export async function listRecentGhCollectRuns(
   const name = requireGitHubName(owner, "owner").toLowerCase();
   const count = requirePositiveInteger(limit, "limit");
   const rows = await sql`
-    SELECT id, started_at, finished_at, ok, owner, owner_id, verified, id_checked, cost, requests, remaining, error_code, next_allowed_at, led
+    SELECT id, started_at, finished_at, ok, owner, owner_id, verified, id_checked, cost, requests, remaining, error_code, next_allowed_at, led, stage, detail_targets, detail_requests, detail_done, detail_incomplete
     FROM factory.gh_collect_runs
     WHERE owner = ${name}
     ORDER BY started_at DESC, id DESC
@@ -6658,6 +6761,22 @@ export async function finishGhCollectRun(
   if (outcome.ok && outcome.error_code !== null) {
     throw new Error("db: a successful collection run has an error_code");
   }
+  if (outcome.stage !== null && !isGhCollectStage(outcome.stage)) {
+    throw new Error("db: stage is not a collection stage");
+  }
+  if (outcome.ok && outcome.stage !== null) {
+    throw new Error("db: a successful collection run has a stage");
+  }
+  const detailTargets = requireCount(outcome.detail_targets, "detail_targets");
+  const detailRequests = requireCount(
+    outcome.detail_requests,
+    "detail_requests",
+  );
+  const detailDone = requireCount(outcome.detail_done, "detail_done");
+  const detailIncomplete = requireCount(
+    outcome.detail_incomplete,
+    "detail_incomplete",
+  );
   const rows = await sql`
     UPDATE factory.gh_collect_runs
     SET finished_at = now(),
@@ -6670,7 +6789,12 @@ export async function finishGhCollectRun(
         remaining = ${remaining}::integer,
         error_code = ${outcome.error_code},
         next_allowed_at = ${outcome.next_allowed_at === null ? null : outcome.next_allowed_at.toISOString()}::timestamptz,
-        led = ${outcome.led}::boolean
+        led = ${outcome.led}::boolean,
+        stage = ${outcome.stage},
+        detail_targets = ${detailTargets}::integer,
+        detail_requests = ${detailRequests}::integer,
+        detail_done = ${detailDone}::integer,
+        detail_incomplete = ${detailIncomplete}::integer
     WHERE id = ${id}::bigint AND finished_at IS NULL
     RETURNING id
   `.fetch();
@@ -6804,6 +6928,12 @@ export async function listGhCollectFreshness(
  * `gone`は一覧に載らなかったリポジトリで、`gone`の印と理由だけを書く。行が無ければ`repo_id`が空の行を作る。
  * 書く前に、名前・ブランチ名・件数・重なりを検査し、誤りがあればDBに触れずに、値を文に入れずに例外にする。
  * 件数は`allowed`が偽のリポジトリでは書けない。
+ *
+ * 同じ文の中で、詳細の行(PRとIssue)の無効化も行う。
+ * 今回の一覧に載り、許可され、archiveされておらず、行の`repo_id`が今回と等しいリポジトリの行だけが使える。
+ * それ以外の開いている行は、許可の外、archive済み、一覧から消えた(前回からのものを含む)、数値IDの入れ替わりのどれかなので、`usable=false`にする。
+ * 一覧が空の所有者でも文を送り、開いている行を残さない。
+ * 数値IDが変わった(空でない数値IDが別の値になった)リポジトリは、詳細の4列を初めに戻し、その名前を返す。
  */
 export async function replaceGhRepoSnapshot(
   snapshot: {
@@ -6813,7 +6943,7 @@ export async function replaceGhRepoSnapshot(
     readonly gone: readonly GhRepoGone[];
   },
   sql: SqlClient = defaultSqlClient,
-): Promise<void> {
+): Promise<{ replaced: string[]; unusable: number }> {
   const owner = requireGitHubName(snapshot.owner, "owner").toLowerCase();
   const ownerId = requirePositiveInteger(snapshot.owner_id, "owner_id");
   const seen = new Set<string>();
@@ -6861,13 +6991,19 @@ export async function replaceGhRepoSnapshot(
     }
     return { repo, reason: entry.reason };
   });
-  if (listed.length === 0 && gone.length === 0) {
-    return;
-  }
-  await sql`
+  const rows = await sql`
     WITH listed AS (
       SELECT * FROM jsonb_to_recordset(${JSON.stringify(listed)}::jsonb)
         AS t(repo text, repo_id bigint, allowed boolean, default_branch text, archived boolean, open_pr_count integer, labeled_issue_count integer)
+    ), gone_input AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(gone)}::jsonb) AS g(repo text, reason text)
+    ), replaced AS (
+      SELECT l.repo
+      FROM listed l
+      JOIN factory.gh_repos r ON r.owner = ${owner}::text AND r.repo = l.repo
+      WHERE r.repo_id IS NOT NULL AND r.repo_id <> l.repo_id
+    ), usable_repos AS (
+      SELECT repo, repo_id FROM listed WHERE allowed AND NOT archived
     ), upserted AS (
       INSERT INTO factory.gh_repos (owner, owner_id, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count, gone, gone_reason, listed_at)
       SELECT ${owner}::text, ${ownerId}::bigint, repo, repo_id, allowed, default_branch, archived, open_pr_count, labeled_issue_count,
@@ -6875,7 +7011,6 @@ export async function replaceGhRepoSnapshot(
       FROM listed
       ON CONFLICT (owner, repo) DO UPDATE SET
         owner_id = EXCLUDED.owner_id,
-        repo_id = EXCLUDED.repo_id,
         allowed = EXCLUDED.allowed,
         default_branch = EXCLUDED.default_branch,
         archived = EXCLUDED.archived,
@@ -6883,16 +7018,456 @@ export async function replaceGhRepoSnapshot(
         labeled_issue_count = EXCLUDED.labeled_issue_count,
         gone = EXCLUDED.gone,
         gone_reason = EXCLUDED.gone_reason,
-        listed_at = EXCLUDED.listed_at
+        listed_at = EXCLUDED.listed_at,
+        last_collected_at = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN NULL ELSE factory.gh_repos.last_collected_at END,
+        last_attempted_at = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN NULL ELSE factory.gh_repos.last_attempted_at END,
+        truncated = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN false ELSE factory.gh_repos.truncated END,
+        detail_failed = CASE WHEN factory.gh_repos.repo_id IS NOT NULL AND factory.gh_repos.repo_id <> EXCLUDED.repo_id THEN false ELSE factory.gh_repos.detail_failed END,
+        repo_id = EXCLUDED.repo_id
+      RETURNING id
+    ), gone_upserted AS (
+      INSERT INTO factory.gh_repos (owner, owner_id, repo, allowed, gone, gone_reason)
+      SELECT ${owner}::text, ${ownerId}::bigint, repo, true, true, reason
+      FROM gone_input
+      ON CONFLICT (owner, repo) DO UPDATE SET
+        gone = EXCLUDED.gone,
+        gone_reason = EXCLUDED.gone_reason
+      RETURNING id
+    ), stale_prs AS (
+      UPDATE factory.gh_pull_requests p SET usable = false, written_at = now()
+      WHERE p.owner = ${owner}::text AND p.state = 'open' AND p.usable
+        AND NOT EXISTS (SELECT 1 FROM usable_repos u WHERE u.repo = p.repo AND u.repo_id = p.repo_id)
+      RETURNING p.id
+    ), stale_issues AS (
+      UPDATE factory.gh_issues i SET usable = false, written_at = now()
+      WHERE i.owner = ${owner}::text AND i.state = 'open' AND i.usable
+        AND NOT EXISTS (SELECT 1 FROM usable_repos u WHERE u.repo = i.repo AND u.repo_id = i.repo_id)
+      RETURNING i.id
+    )
+    SELECT
+      coalesce((SELECT jsonb_agg(repo ORDER BY repo) FROM replaced), '[]'::jsonb) AS replaced,
+      (SELECT count(*) FROM stale_prs)::integer + (SELECT count(*) FROM stale_issues)::integer AS unusable
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("db: the snapshot statement returned no row");
+  }
+  return {
+    replaced: parseJsonArray(row.replaced, "replaced").map((repo) =>
+      parseStoredGitHubName(repo, "replaced"),
+    ),
+    unusable: parseNumericLike(row.unusable, "unusable"),
+  };
+}
+
+/** 保存した数値IDの配列を読む。配列、JSONの文字列、PostgreSQLの配列の文字列のどれでも受け付け、`null`は`null`にする。 */
+function parseNullableIdArray(value: unknown, field: string): number[] | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  let items: unknown[];
+  if (Array.isArray(value)) {
+    items = value;
+  } else if (isString(value) && /^\{[0-9,\s]*\}$/.test(value)) {
+    const inner = value.slice(1, -1).trim();
+    items = inner === "" ? [] : inner.split(",");
+  } else {
+    items = parseJsonArray(value, field);
+  }
+  return items.map((item) => {
+    const id = parseId(item, field);
+    if (!isGitHubDatabaseId(id)) {
+      throw new Error(`db: row field "${field}" has an invalid id`);
+    }
+    return id;
+  });
+}
+
+/** 保存したブランチ名を読む。通らない値は、値を例外の文に入れずに止める。 */
+function parseStoredRefName(value: unknown, field: string): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isStoredRefName(value)) {
+    throw new Error(`db: row field "${field}" is not a stored ref name`);
+  }
+  return value;
+}
+
+function parseStoredLogin(value: unknown, field: string): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!isGitHubLogin(value)) {
+    throw new Error(`db: row field "${field}" is not a GitHub login`);
+  }
+  return value;
+}
+
+function parseNullableEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+  field: string,
+): T | null {
+  return value === null || value === undefined
+    ? null
+    : parseEnum(value, allowed, field);
+}
+
+/** 作者の3列。ログインと種別は、どちらもあるか、どちらも無いかのどちらか。 */
+function parseStoredAuthor(row: {
+  readonly author_login?: unknown;
+  readonly author_type?: unknown;
+  readonly author_id?: unknown;
+}) {
+  const login = parseStoredLogin(row.author_login, "author_login");
+  const type = parseNullableEnum(
+    row.author_type,
+    GH_AUTHOR_TYPES,
+    "author_type",
+  );
+  if ((login === null) !== (type === null)) {
+    throw new Error('db: row fields "author_login" and "author_type" disagree');
+  }
+  const id = parseNullableId(row.author_id, "author_id");
+  if (id !== null && !isGitHubDatabaseId(id)) {
+    throw new Error('db: row field "author_id" is not a database id');
+  }
+  return { author_login: login, author_type: type, author_id: id };
+}
+
+/** `toGhPullRequest`が読める行。定義の列だけを持つ。 */
+export type GhPullRequestSqlRow = {
+  readonly [K in (typeof GH_PULL_REQUESTS_COLUMNS)[number]]?: unknown;
+};
+
+function toGhPullRequest(row: GhPullRequestSqlRow): GhPullRequest {
+  if (!isGitSha(row.head_sha)) {
+    throw new Error('db: row field "head_sha" is not a git sha');
+  }
+  return {
+    id: parseId(row.id, "id"),
+    owner: parseStoredGitHubName(row.owner, "owner"),
+    repo: parseStoredGitHubName(row.repo, "repo"),
+    repo_id: parseId(row.repo_id, "repo_id"),
+    number: parseId(row.number, "number"),
+    state: parseEnum(row.state, GH_PR_STATES, "state"),
+    head_sha: row.head_sha,
+    head_ref: parseStoredRefName(row.head_ref, "head_ref"),
+    base_ref: parseStoredRefName(row.base_ref, "base_ref"),
+    is_draft: parseBoolean(row.is_draft, "is_draft"),
+    is_cross_repository: parseBoolean(
+      row.is_cross_repository,
+      "is_cross_repository",
+    ),
+    auto_merge_enabled: parseNullableBoolean(
+      row.auto_merge_enabled,
+      "auto_merge_enabled",
+    ),
+    ...parseStoredAuthor(row),
+    mergeable: parseNullableEnum(
+      row.mergeable,
+      GH_MERGEABLE_VALUES,
+      "mergeable",
+    ),
+    has_review_label: parseNullableBoolean(
+      row.has_review_label,
+      "has_review_label",
+    ),
+    has_fix_label: parseNullableBoolean(row.has_fix_label, "has_fix_label"),
+    review_requested_user_ids: parseNullableIdArray(
+      row.review_requested_user_ids,
+      "review_requested_user_ids",
+    ),
+    assignee_ids: parseNullableIdArray(row.assignee_ids, "assignee_ids"),
+    team_review_requested: parseNullableBoolean(
+      row.team_review_requested,
+      "team_review_requested",
+    ),
+    created_at: parseDate(row.created_at, "created_at"),
+    updated_at: parseDate(row.updated_at, "updated_at"),
+    written_at: parseDate(row.written_at, "written_at"),
+    usable: parseBoolean(row.usable, "usable"),
+  };
+}
+
+/** `toGhIssue`が読める行。定義の列だけを持つ。 */
+export type GhIssueSqlRow = {
+  readonly [K in (typeof GH_ISSUES_COLUMNS)[number]]?: unknown;
+};
+
+function toGhIssue(row: GhIssueSqlRow): GhIssue {
+  return {
+    id: parseId(row.id, "id"),
+    owner: parseStoredGitHubName(row.owner, "owner"),
+    repo: parseStoredGitHubName(row.repo, "repo"),
+    repo_id: parseId(row.repo_id, "repo_id"),
+    number: parseId(row.number, "number"),
+    state: parseEnum(row.state, GH_ISSUE_STATES, "state"),
+    ...parseStoredAuthor(row),
+    created_at: parseDate(row.created_at, "created_at"),
+    updated_at: parseDate(row.updated_at, "updated_at"),
+    written_at: parseDate(row.written_at, "written_at"),
+    usable: parseBoolean(row.usable, "usable"),
+  };
+}
+
+/**
+ * 所有者の開いているPRとIssueの行を、1つの文で読む。
+ * 読んだ行は、保存する値の述語で検査し直す。通らない行があれば、値を含めずに例外にする。
+ */
+export async function listGhDetailRows(
+  owner: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<{ prs: GhPullRequest[]; issues: GhIssue[] }> {
+  const name = requireGitHubName(owner, "owner").toLowerCase();
+  const rows = await sql`
+    WITH pr AS (
+      SELECT id, owner, repo, repo_id, number, state, head_sha, head_ref, base_ref, is_draft, is_cross_repository, auto_merge_enabled, author_login, author_type, author_id, mergeable, has_review_label, has_fix_label, review_requested_user_ids, assignee_ids, team_review_requested, created_at, updated_at, written_at, usable
+      FROM factory.gh_pull_requests
+      WHERE owner = ${name} AND state = 'open'
+    ), issue AS (
+      SELECT id, owner, repo, repo_id, number, state, author_login, author_type, author_id, created_at, updated_at, written_at, usable
+      FROM factory.gh_issues
+      WHERE owner = ${name} AND state = 'open'
+    )
+    SELECT
+      coalesce((SELECT jsonb_agg(to_jsonb(pr) ORDER BY pr.number) FROM pr), '[]'::jsonb) AS prs,
+      coalesce((SELECT jsonb_agg(to_jsonb(issue) ORDER BY issue.number) FROM issue), '[]'::jsonb) AS issues
+  `.fetch();
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error("db: the detail rows statement returned no row");
+  }
+  const toRow = (item: unknown, field: string) => {
+    if (!isRecord(item)) {
+      throw new Error(`db: row field "${field}" has a non-object element`);
+    }
+    return item;
+  };
+  return {
+    prs: parseJsonArray(row.prs, "prs").map((item) =>
+      toGhPullRequest(toRow(item, "prs")),
+    ),
+    issues: parseJsonArray(row.issues, "issues").map((item) =>
+      toGhIssue(toRow(item, "issues")),
+    ),
+  };
+}
+
+/**
+ * 詳細を取り終えた1つのリポジトリの書き込みを、1つの文で行う。
+ * `gh_repos`の行の更新(`last_collected_at`は観測を始めた時刻、`last_attempted_at`は`now()`、2つの印を偽に戻す)を先頭の共通表式にし、
+ * PRとIssueの書き込みと閉じる処理は、その更新が行を変えたときだけ行う。
+ * 行の条件に`repo_id`、`allowed`、`NOT gone`を含めるので、一覧の後に行が変わっていれば、何も書かない。
+ * 書く前に`checkGhRepoDetailWrite`で検査し、通らなければDBに触れず、値を含めずに`rejected`を返す。DBの失敗だけが例外になる。
+ */
+export async function writeGhRepoDetail(
+  write: GhRepoDetailWrite,
+  sql: SqlClient = defaultSqlClient,
+): Promise<GhRepoDetailWriteResult> {
+  const field = checkGhRepoDetailWrite(write);
+  if (field !== null) {
+    return { kind: "rejected", field };
+  }
+  const owner = write.owner.toLowerCase();
+  const repo = write.repo.toLowerCase();
+  const rows = await sql`
+    WITH repo_updated AS (
+      UPDATE factory.gh_repos
+      SET last_collected_at = ${write.observed_at.toISOString()}::timestamptz, last_attempted_at = now(), truncated = false, detail_failed = false
+      WHERE owner = ${owner} AND repo = ${repo} AND repo_id = ${write.repo_id}::bigint AND allowed AND NOT gone
+      RETURNING id
+    ), pr_rows AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(write.pr_rows)}::jsonb)
+        AS t(number integer, head_sha text, head_ref text, base_ref text, is_draft boolean, is_cross_repository boolean, auto_merge_enabled boolean, author_login text, author_type text, author_id bigint, mergeable text, has_review_label boolean, has_fix_label boolean, review_requested_user_ids bigint[], assignee_ids bigint[], team_review_requested boolean, created_at timestamptz, updated_at timestamptz)
+    ), pr_upserted AS (
+      INSERT INTO factory.gh_pull_requests (owner, repo, repo_id, number, state, head_sha, head_ref, base_ref, is_draft, is_cross_repository, auto_merge_enabled, author_login, author_type, author_id, mergeable, has_review_label, has_fix_label, review_requested_user_ids, assignee_ids, team_review_requested, created_at, updated_at, written_at, usable)
+      SELECT ${owner}::text, ${repo}::text, ${write.repo_id}::bigint, number, 'open', head_sha, head_ref, base_ref, is_draft, is_cross_repository, auto_merge_enabled, author_login, author_type, author_id, mergeable, has_review_label, has_fix_label, review_requested_user_ids, assignee_ids, team_review_requested, created_at, updated_at, now(), true
+      FROM pr_rows WHERE EXISTS (SELECT 1 FROM repo_updated)
+      ON CONFLICT (owner, repo, number) DO UPDATE SET
+        repo_id = EXCLUDED.repo_id,
+        state = 'open',
+        head_sha = EXCLUDED.head_sha,
+        head_ref = EXCLUDED.head_ref,
+        base_ref = EXCLUDED.base_ref,
+        is_draft = EXCLUDED.is_draft,
+        is_cross_repository = EXCLUDED.is_cross_repository,
+        auto_merge_enabled = EXCLUDED.auto_merge_enabled,
+        author_login = EXCLUDED.author_login,
+        author_type = EXCLUDED.author_type,
+        author_id = EXCLUDED.author_id,
+        mergeable = EXCLUDED.mergeable,
+        has_review_label = EXCLUDED.has_review_label,
+        has_fix_label = EXCLUDED.has_fix_label,
+        review_requested_user_ids = EXCLUDED.review_requested_user_ids,
+        assignee_ids = EXCLUDED.assignee_ids,
+        team_review_requested = EXCLUDED.team_review_requested,
+        created_at = EXCLUDED.created_at,
+        updated_at = EXCLUDED.updated_at,
+        written_at = now(),
+        usable = true
+      RETURNING id
+    ), pr_closed AS (
+      UPDATE factory.gh_pull_requests SET state = 'closed', written_at = now()
+      WHERE owner = ${owner} AND repo = ${repo} AND state = 'open'
+        AND NOT (number = ANY(${[...write.pr_keep]}::integer[]))
+        AND EXISTS (SELECT 1 FROM repo_updated)
+      RETURNING id
+    ), issue_rows AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(write.issue_rows)}::jsonb)
+        AS t(number integer, author_login text, author_type text, author_id bigint, created_at timestamptz, updated_at timestamptz)
+    ), issue_upserted AS (
+      INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, author_login, author_type, author_id, created_at, updated_at, written_at, usable)
+      SELECT ${owner}::text, ${repo}::text, ${write.repo_id}::bigint, number, 'open', author_login, author_type, author_id, created_at, updated_at, now(), true
+      FROM issue_rows WHERE EXISTS (SELECT 1 FROM repo_updated)
+      ON CONFLICT (owner, repo, number) DO UPDATE SET
+        repo_id = EXCLUDED.repo_id,
+        state = 'open',
+        author_login = EXCLUDED.author_login,
+        author_type = EXCLUDED.author_type,
+        author_id = EXCLUDED.author_id,
+        created_at = EXCLUDED.created_at,
+        updated_at = EXCLUDED.updated_at,
+        written_at = now(),
+        usable = true
+      RETURNING id
+    ), issue_unlisted AS (
+      UPDATE factory.gh_issues SET state = 'unlisted', written_at = now()
+      WHERE owner = ${owner} AND repo = ${repo} AND state = 'open'
+        AND NOT (number = ANY(${[...write.issue_keep]}::integer[]))
+        AND EXISTS (SELECT 1 FROM repo_updated)
       RETURNING id
     )
-    INSERT INTO factory.gh_repos (owner, owner_id, repo, allowed, gone, gone_reason)
-    SELECT ${owner}::text, ${ownerId}::bigint, repo, true, true, reason
-    FROM jsonb_to_recordset(${JSON.stringify(gone)}::jsonb) AS g(repo text, reason text)
-    ON CONFLICT (owner, repo) DO UPDATE SET
-      gone = EXCLUDED.gone,
-      gone_reason = EXCLUDED.gone_reason
+    SELECT count(*)::integer AS updated FROM repo_updated
+  `.fetch();
+  const updated = parseNumericLike(rows[0]?.updated, "updated");
+  return updated > 0 ? { kind: "written" } : { kind: "no_repo_row" };
+}
+
+/**
+ * 詳細が打ち切りか失敗になったリポジトリの印と`last_attempted_at`だけを書く。
+ * 打ち切りなら`truncated`を真にして`detail_failed`を偽に、失敗ならその逆にする。`last_collected_at`と詳細の行は変えない。
+ * 数値IDが違う行や、許可の外とgoneの行には書かない。
+ */
+export async function markGhRepoDetailIncomplete(
+  owner: string,
+  repo: string,
+  repoId: number,
+  kind: "truncated" | "failed",
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  const ownerName = requireGitHubName(owner, "owner").toLowerCase();
+  const repoName = requireGitHubName(repo, "repo").toLowerCase();
+  const id = requirePositiveInteger(repoId, "repo_id");
+  if (kind !== "truncated" && kind !== "failed") {
+    throw new Error("db: the incomplete kind is not allowed here");
+  }
+  await sql`
+    UPDATE factory.gh_repos
+    SET last_attempted_at = now(), truncated = ${kind === "truncated"}, detail_failed = ${kind === "failed"}
+    WHERE owner = ${ownerName} AND repo = ${repoName} AND repo_id = ${id}::bigint AND allowed AND NOT gone
   `.execute();
+}
+
+/**
+ * 件数が0のリポジトリを、所有者ごとに1つの文で閉じる。
+ * `last_collected_at`を観測を始めた時刻に、`last_attempted_at`を`now()`にし、2つの印を偽に戻して、
+ * 配下の開いているPRを閉じ、開いているIssueを外す。
+ */
+export async function closeGhZeroCountRepos(
+  owner: string,
+  repos: readonly { readonly repo: string; readonly repo_id: number }[],
+  observedAt: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<void> {
+  const ownerName = requireGitHubName(owner, "owner").toLowerCase();
+  const seen = new Set<string>();
+  const zero = repos.map((entry) => {
+    const repo = requireGitHubName(entry.repo, "repo").toLowerCase();
+    if (seen.has(repo)) {
+      throw new Error("db: a repository appears twice");
+    }
+    seen.add(repo);
+    return {
+      repo,
+      repo_id: requirePositiveInteger(entry.repo_id, "repo_id"),
+    };
+  });
+  if (Number.isNaN(observedAt.getTime())) {
+    throw new Error("db: observedAt is not a valid time");
+  }
+  if (zero.length === 0) {
+    return;
+  }
+  await sql`
+    WITH zero AS (
+      SELECT * FROM jsonb_to_recordset(${JSON.stringify(zero)}::jsonb) AS t(repo text, repo_id bigint)
+    ), repos_updated AS (
+      UPDATE factory.gh_repos r
+      SET last_collected_at = ${observedAt.toISOString()}::timestamptz, last_attempted_at = now(), truncated = false, detail_failed = false
+      FROM zero z
+      WHERE r.owner = ${ownerName} AND r.repo = z.repo
+      RETURNING r.id
+    ), prs_closed AS (
+      UPDATE factory.gh_pull_requests p SET state = 'closed', written_at = now()
+      WHERE p.owner = ${ownerName} AND p.state = 'open' AND p.repo IN (SELECT repo FROM zero)
+      RETURNING p.id
+    ), issues_unlisted AS (
+      UPDATE factory.gh_issues i SET state = 'unlisted', written_at = now()
+      WHERE i.owner = ${ownerName} AND i.state = 'open' AND i.repo IN (SELECT repo FROM zero)
+      RETURNING i.id
+    )
+    SELECT count(*)::integer AS updated FROM repos_updated
+  `.execute();
+}
+
+/**
+ * 所有者の開いている行(PRとIssue)をすべて使用不可にし、変えた行数を返す。
+ * 所有者の名前が別のアカウントに付け替わった疑いがあるとき、閉じる側に倒すために使う。
+ */
+export async function markGhOwnerRowsUnusable(
+  owner: string,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const name = requireGitHubName(owner, "owner").toLowerCase();
+  const rows = await sql`
+    WITH prs AS (
+      UPDATE factory.gh_pull_requests SET usable = false, written_at = now()
+      WHERE owner = ${name} AND state = 'open' AND usable
+      RETURNING id
+    ), issues AS (
+      UPDATE factory.gh_issues SET usable = false, written_at = now()
+      WHERE owner = ${name} AND state = 'open' AND usable
+      RETURNING id
+    )
+    SELECT (SELECT count(*) FROM prs)::integer + (SELECT count(*) FROM issues)::integer AS updated
+  `.fetch();
+  return parseNumericLike(rows[0]?.updated, "updated");
+}
+
+/**
+ * 閉じたPRと一覧から外れたIssueのうち、`written_at`が`olderThan`以前の行を削除し、行数を返す。
+ * 開いている行は、古くても削除しない(使用不可の行を含む)。
+ */
+export async function deleteClosedGhDetailRowsBefore(
+  olderThan: Date,
+  sql: SqlClient = defaultSqlClient,
+): Promise<number> {
+  const cutoff = olderThan.toISOString();
+  const rows = await sql`
+    WITH prs AS (
+      DELETE FROM factory.gh_pull_requests
+      WHERE state = 'closed' AND written_at <= ${cutoff}::timestamptz
+      RETURNING id
+    ), issues AS (
+      DELETE FROM factory.gh_issues
+      WHERE state = 'unlisted' AND written_at <= ${cutoff}::timestamptz
+      RETURNING id
+    )
+    SELECT (SELECT count(*) FROM prs)::integer + (SELECT count(*) FROM issues)::integer AS deleted
+  `.fetch();
+  return parseNumericLike(rows[0]?.deleted, "deleted");
 }
 
 /**

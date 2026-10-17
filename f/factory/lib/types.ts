@@ -953,6 +953,41 @@ export const GH_COLLECT_ERROR_CODES = [
 ] as const;
 export type GhCollectErrorCode = (typeof GH_COLLECT_ERROR_CODES)[number];
 
+/** 収集の実行の失敗が生じた段。一覧が`list`、詳細が`detail`。 */
+export const GH_COLLECT_STAGES = ["list", "detail"] as const;
+export type GhCollectStage = (typeof GH_COLLECT_STAGES)[number];
+
+/** PRの記録の状態。開いている、または観測の時点で一覧に無かった。 */
+export const GH_PR_STATES = ["open", "closed"] as const;
+export type GhPrState = (typeof GH_PR_STATES)[number];
+
+/** Issueの記録の状態。閉じたのかラベルが外れたのかは区別しない。 */
+export const GH_ISSUE_STATES = ["open", "unlisted"] as const;
+export type GhIssueState = (typeof GH_ISSUE_STATES)[number];
+
+/** 作者のGraphQLの種別。 */
+export const GH_AUTHOR_TYPES = [
+  "User",
+  "Bot",
+  "Mannequin",
+  "Organization",
+  "EnterpriseUserAccount",
+] as const;
+export type GhAuthorType = (typeof GH_AUTHOR_TYPES)[number];
+
+/** 保存する`mergeable`の値。`UNKNOWN`は保存しない。 */
+export const GH_MERGEABLE_VALUES = ["MERGEABLE", "CONFLICTING"] as const;
+export type GhMergeable = (typeof GH_MERGEABLE_VALUES)[number];
+
+/** エラーが出ても別名を失敗にしない、PRの任意の項目。スキーマで`null`を許す項目だけを挙げる。 */
+export const GH_DETAIL_OPTIONAL_FIELDS = [
+  "labels",
+  "reviewRequests",
+  "author",
+  "autoMergeRequest",
+] as const;
+export type GhDetailOptionalField = (typeof GH_DETAIL_OPTIONAL_FIELDS)[number];
+
 /** `factory.gh_repos`の1行。`owner`と`repo`は小文字。 */
 export type GhRepo = {
   readonly id: number;
@@ -970,6 +1005,14 @@ export type GhRepo = {
   readonly gone: boolean;
   readonly gone_reason: GhGoneReason | null;
   readonly listed_at: Date | null;
+  /** 詳細を最後に取り終えた周回の、観測を始めた時刻。一度も無ければ`null`。 */
+  readonly last_collected_at: Date | null;
+  /** 詳細の結果を最後に書いた時刻。取る順の並びのキー。一度も着手していなければ`null`。 */
+  readonly last_attempted_at: Date | null;
+  /** 前回の着手が、ページの上限か件数の照合の不一致で打ち切られた。 */
+  readonly truncated: boolean;
+  /** 前回の着手が失敗した。 */
+  readonly detail_failed: boolean;
 };
 
 /** 一覧に載ったリポジトリの書き込み。`owner`は呼び出し側が別に渡す。 */
@@ -1020,6 +1063,334 @@ export type GhCollectFreshnessRow = {
   readonly first_started_at: Date | null;
 };
 
+/** PRの詳細として書く値。`null`の列は不明で、偽や空を意味しない。 */
+export type GhPullRequestWrite = {
+  readonly number: number;
+  readonly head_sha: string;
+  readonly head_ref: string | null;
+  readonly base_ref: string | null;
+  readonly is_draft: boolean;
+  readonly is_cross_repository: boolean;
+  readonly auto_merge_enabled: boolean | null;
+  readonly author_login: string | null;
+  readonly author_type: GhAuthorType | null;
+  readonly author_id: number | null;
+  readonly mergeable: GhMergeable | null;
+  readonly has_review_label: boolean | null;
+  readonly has_fix_label: boolean | null;
+  readonly review_requested_user_ids: readonly number[] | null;
+  readonly assignee_ids: readonly number[] | null;
+  readonly team_review_requested: boolean | null;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+};
+
+/** `factory.gh_pull_requests`の1行。 */
+export type GhPullRequest = GhPullRequestWrite & {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly state: GhPrState;
+  readonly written_at: Date;
+  readonly usable: boolean;
+};
+
+/** Issueの詳細として書く値。 */
+export type GhIssueWrite = {
+  readonly number: number;
+  readonly author_login: string | null;
+  readonly author_type: GhAuthorType | null;
+  readonly author_id: number | null;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+};
+
+/** `factory.gh_issues`の1行。 */
+export type GhIssue = GhIssueWrite & {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly state: GhIssueState;
+  readonly written_at: Date;
+  readonly usable: boolean;
+};
+
+/**
+ * 詳細を取り終えた1つのリポジトリの書き込み。
+ * `pr_rows`と`issue_rows`は書く行(差分)、`pr_keep`と`issue_keep`は今回の一覧の番号の全体で、載らない開いている行を閉じる判定に使う。
+ * `observed_at`は、その周回の観測を始めた時刻で、`last_collected_at`に書く。
+ */
+export type GhRepoDetailWrite = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly observed_at: Date;
+  readonly pr_rows: readonly GhPullRequestWrite[];
+  readonly pr_keep: readonly number[];
+  readonly issue_rows: readonly GhIssueWrite[];
+  readonly issue_keep: readonly number[];
+};
+
+/** `writeGhRepoDetail`の結果。検査に通らない書き込みはDBに触れず、通らなかった項目の名前を返す。 */
+export type GhRepoDetailWriteResult =
+  | { readonly kind: "written" }
+  | { readonly kind: "no_repo_row" }
+  | { readonly kind: "rejected"; readonly field: string };
+
+// ---------------------------------------------------------------------------
+// 収集の詳細として保存する値の述語。例外を投げず、値を戻り値にも文にも含めない。
+// ---------------------------------------------------------------------------
+
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
+
+/** 40桁の小文字16進のコミットSHAか。 */
+export function isGitSha(value: unknown): value is string {
+  return typeof value === "string" && GIT_SHA_PATTERN.test(value);
+}
+
+/** 保存するブランチ名の長さの上限(UTF-8のバイト数)。 */
+const STORED_REF_NAME_MAX_BYTES = 255;
+
+/**
+ * 制御文字、書式文字、行と段落の区切り、対になっていないサロゲート。
+ * 表示を偽る文字と、UTF-8に直すと別の文字になる文字を保存しない。
+ */
+const STORED_REF_FORBIDDEN_CHARACTERS = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u;
+
+/**
+ * 保存してよいブランチ名か。`isBranchName`を通り、UTF-8で255バイト以下で、
+ * 制御文字、書式文字、行と段落の区切り、対になっていないサロゲートを含まない。
+ * 通知やプロンプトに載りうる信頼できない入力なので、表示を偽る文字を保存しない。
+ */
+export function isStoredRefName(value: unknown): value is string {
+  return (
+    isBranchName(value) &&
+    new TextEncoder().encode(value).length <= STORED_REF_NAME_MAX_BYTES &&
+    !STORED_REF_FORBIDDEN_CHARACTERS.test(value)
+  );
+}
+
+/** GitHubのloginの長さの上限。 */
+const GITHUB_LOGIN_MAX_LENGTH = 39;
+
+/** `isGitHubName`を通り、39文字以下のloginか。 */
+export function isGitHubLogin(value: unknown): value is string {
+  return isGitHubName(value) && value.length <= GITHUB_LOGIN_MAX_LENGTH;
+}
+
+/** GitHubの数値IDとして保存できる、正の安全な整数か。 */
+export function isGitHubDatabaseId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isOneOfValues<T extends string>(
+  values: readonly T[],
+  value: unknown,
+): value is T {
+  return typeof value === "string" && values.some((entry) => entry === value);
+}
+
+export function isGhAuthorType(value: unknown): value is GhAuthorType {
+  return isOneOfValues(GH_AUTHOR_TYPES, value);
+}
+
+export function isGhMergeable(value: unknown): value is GhMergeable {
+  return isOneOfValues(GH_MERGEABLE_VALUES, value);
+}
+
+export function isGhPrState(value: unknown): value is GhPrState {
+  return isOneOfValues(GH_PR_STATES, value);
+}
+
+export function isGhIssueState(value: unknown): value is GhIssueState {
+  return isOneOfValues(GH_ISSUE_STATES, value);
+}
+
+export function isGhCollectStage(value: unknown): value is GhCollectStage {
+  return isOneOfValues(GH_COLLECT_STAGES, value);
+}
+
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime());
+}
+
+function isIdArray(value: readonly number[] | null): boolean {
+  return value === null || value.every(isGitHubDatabaseId);
+}
+
+function isNullableBoolean(value: unknown): boolean {
+  return value === null || typeof value === "boolean";
+}
+
+/** 作者の3列の検査。loginと種別は、どちらもあるか、どちらも無いかのどちらか。通らない列の名前を返す。 */
+function checkAuthorColumns(row: {
+  readonly author_login: string | null;
+  readonly author_type: GhAuthorType | null;
+  readonly author_id: number | null;
+}): string | null {
+  const hasLogin = row.author_login !== null;
+  if (hasLogin && !isGitHubLogin(row.author_login)) {
+    return "author_login";
+  }
+  if (row.author_type !== null && !isGhAuthorType(row.author_type)) {
+    return "author_type";
+  }
+  if (hasLogin && row.author_type === null) {
+    return "author_type";
+  }
+  if (!hasLogin && row.author_type !== null) {
+    return "author_login";
+  }
+  if (row.author_id !== null && !isGitHubDatabaseId(row.author_id)) {
+    return "author_id";
+  }
+  return null;
+}
+
+/**
+ * PRの行のすべての列を検査し、通らない最初の列の名前を返す。通れば`null`。
+ * 例外を投げず、値を戻り値に含めない。
+ */
+export function checkGhPullRequestWrite(
+  row: GhPullRequestWrite,
+): string | null {
+  if (!isGitHubDatabaseId(row.number)) {
+    return "number";
+  }
+  if (!isGitSha(row.head_sha)) {
+    return "head_sha";
+  }
+  if (row.head_ref !== null && !isStoredRefName(row.head_ref)) {
+    return "head_ref";
+  }
+  if (row.base_ref !== null && !isStoredRefName(row.base_ref)) {
+    return "base_ref";
+  }
+  if (typeof row.is_draft !== "boolean") {
+    return "is_draft";
+  }
+  if (typeof row.is_cross_repository !== "boolean") {
+    return "is_cross_repository";
+  }
+  if (!isNullableBoolean(row.auto_merge_enabled)) {
+    return "auto_merge_enabled";
+  }
+  const author = checkAuthorColumns(row);
+  if (author !== null) {
+    return author;
+  }
+  if (row.mergeable !== null && !isGhMergeable(row.mergeable)) {
+    return "mergeable";
+  }
+  if (!isNullableBoolean(row.has_review_label)) {
+    return "has_review_label";
+  }
+  if (!isNullableBoolean(row.has_fix_label)) {
+    return "has_fix_label";
+  }
+  if (!isIdArray(row.review_requested_user_ids)) {
+    return "review_requested_user_ids";
+  }
+  if (!isIdArray(row.assignee_ids)) {
+    return "assignee_ids";
+  }
+  if (!isNullableBoolean(row.team_review_requested)) {
+    return "team_review_requested";
+  }
+  if (!isValidDate(row.created_at)) {
+    return "created_at";
+  }
+  if (!isValidDate(row.updated_at)) {
+    return "updated_at";
+  }
+  return null;
+}
+
+/** Issueの行のすべての列を検査し、通らない最初の列の名前を返す。通れば`null`。 */
+export function checkGhIssueWrite(row: GhIssueWrite): string | null {
+  if (!isGitHubDatabaseId(row.number)) {
+    return "number";
+  }
+  const author = checkAuthorColumns(row);
+  if (author !== null) {
+    return author;
+  }
+  if (!isValidDate(row.created_at)) {
+    return "created_at";
+  }
+  if (!isValidDate(row.updated_at)) {
+    return "updated_at";
+  }
+  return null;
+}
+
+/** 番号の並びが、正の整数で重ならないか。 */
+function hasUniqueIds(numbers: readonly number[]): boolean {
+  return (
+    numbers.every(isGitHubDatabaseId) &&
+    new Set(numbers).size === numbers.length
+  );
+}
+
+/**
+ * 1つのリポジトリの書き込みの全体を検査し、通らない最初の項目の名前を返す。通れば`null`。
+ * 各行の検査に加えて、行の番号が重ならないこと、行の番号が`keep`に含まれること(同じ行を2つの文で変えないため)、
+ * `keep`の番号が正の整数で重ならないことを確かめる。
+ */
+export function checkGhRepoDetailWrite(
+  write: GhRepoDetailWrite,
+): string | null {
+  if (!isGitHubName(write.owner)) {
+    return "owner";
+  }
+  if (!isGitHubName(write.repo)) {
+    return "repo";
+  }
+  if (!isGitHubDatabaseId(write.repo_id)) {
+    return "repo_id";
+  }
+  if (!isValidDate(write.observed_at)) {
+    return "observed_at";
+  }
+  for (const row of write.pr_rows) {
+    const column = checkGhPullRequestWrite(row);
+    if (column !== null) {
+      return `pr_rows.${column}`;
+    }
+  }
+  for (const row of write.issue_rows) {
+    const column = checkGhIssueWrite(row);
+    if (column !== null) {
+      return `issue_rows.${column}`;
+    }
+  }
+  if (!hasUniqueIds(write.pr_keep)) {
+    return "pr_keep";
+  }
+  if (!hasUniqueIds(write.issue_keep)) {
+    return "issue_keep";
+  }
+  const prNumbers = write.pr_rows.map((row) => row.number);
+  if (new Set(prNumbers).size !== prNumbers.length) {
+    return "pr_rows.number";
+  }
+  const issueNumbers = write.issue_rows.map((row) => row.number);
+  if (new Set(issueNumbers).size !== issueNumbers.length) {
+    return "issue_rows.number";
+  }
+  const prKept = new Set(write.pr_keep);
+  if (!prNumbers.every((number) => prKept.has(number))) {
+    return "pr_rows.not_kept";
+  }
+  const issueKept = new Set(write.issue_keep);
+  if (!issueNumbers.every((number) => issueKept.has(number))) {
+    return "issue_rows.not_kept";
+  }
+  return null;
+}
+
 /** 収集の実行1行(所有者ごと)の終わりに書く内容。 */
 export type GhCollectRunOutcome = {
   readonly ok: boolean;
@@ -1033,6 +1404,16 @@ export type GhCollectRunOutcome = {
   readonly next_allowed_at: Date | null;
   /** その周回で最初に要求を送った所有者の行だけ真。結果は問わない。要求が1回も無い行は偽。 */
   readonly led: boolean;
+  /** `error_code`が生じた段。成功の行は`null`。 */
+  readonly stage: GhCollectStage | null;
+  /** 詳細を取る対象のリポジトリの数。 */
+  readonly detail_targets: number;
+  /** 詳細の要求の数。ページ送りと分割を含む。 */
+  readonly detail_requests: number;
+  /** 詳細を取り終えて書いたリポジトリの数。 */
+  readonly detail_done: number;
+  /** 詳細が打ち切りか失敗になったリポジトリの数。 */
+  readonly detail_incomplete: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -1284,6 +1665,11 @@ export type FactoryConfig = {
    * `false`の間は、トークンを読まず、行も書かずに終わる。読み取り専用のトークンを入れてから、リモートのリソースで有効にする。
    */
   gh_collect_enabled: boolean;
+  /**
+   * `collect_github`が、リポジトリの一覧に続けて、開いているPRとトリガーラベル付きのIssueの詳細を集めてDBに書くか。既定は`false`。
+   * `false`の間は、詳細の要求を送らず、一覧の下限も変えない。`gh_collect_enabled`が`false`なら、この値によらず何もしない。
+   */
+  gh_collect_detail_enabled: boolean;
   /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。

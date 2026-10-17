@@ -1,0 +1,9 @@
+summary: '[LIB] GitHubの収集の詳細の判定'
+description: 内部ライブラリです。直接実行するものではありません。開いているPRとトリガーラベル付きIssueの詳細について、対象の選別、応答の解析、保存する値の検査、差分と書き込みの計画、実行の結果の分類を、通信もDBも持たない純粋関数として定めます。
+lock: '!inline f/factory/lib/gh_collect_detail.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

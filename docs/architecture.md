@@ -345,7 +345,7 @@ Consoleの一覧と集計は次のviewを読む。
 | auto_retry_pr_review | `30 2-59/5 * * * *` | `f/factory/auto_retry_pr_review` | 5分ごとに実行します。GitHubの5xxや通信断で失敗したPRレビューを、失敗から再開の回数に応じた待ち(5分、15分、45分)が過ぎていれば同じ作業項目のまま再開します。ラベルは付け直さず、再開は同じ作業項目につき3回までです。 |
 | cleanup_db | `0 30 3 * * *` | `f/factory/cleanup_db` | 毎日3:30に実行します。終端状態(承認済み・却下・要対応・タイムアウト・失敗・レビュー済み・再レビュー依頼・ブロック・キャンセル・PR作成済み・監査完了)になった作業項目を既定90日(`factory_config`の`retention_work_items_days`で変更可)で削除し、あわせて要件定義ドラフトや承認依頼などの関連データも削除します。失敗記録・デプロイ記録・解決済みのお知らせは既定30日(`retention_logs_days`)で個別に削除します。古い「情報」の未解決のお知らせは、削除せず同じ期間で解決済みにします。判定済みのmainのCIの記録も同じ期間(`retention_logs_days`)で削除し、判定を待つ記録と、各リポジトリの最新の記録は削除しません。PRのCIの記録も同じ期間で削除します。判定を待つ記録と失敗を直している記録は削除せず、各PRの最新の記録は保持期間の4倍まで残します。workerの負荷の記録も同じ期間で削除します。 |
 | cleanup_workspaces | `0 0 3 * * *` | `f/factory/cleanup_workspaces` | 毎日3:00に実行します。処理が終わった作業用ディレクトリや、動かなくなった処理の後始末を行い、保存領域の使用量を記録します。 |
-| collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
+| collect_github | `0 1-59/5 * * * *` | `f/factory/collect_github` | 5分ごとに実行します。設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_detail_enabledがtrueのときは、続けてPRとIssueの詳細も集めて書きます。設定のgh_collect_enabledがfalseの間は、トークンを読まず、何も書きません。毎日9時0分の日次サマリ通知と重ならないよう、毎時1分から5分おきに実行します。 |
 | console_fetch_watch | `0 */10 * * * *` | `f/factory/console_fetch_watch` | 10分ごとに実行します。Consoleの取り込み(console_fetcher)が書く状態を読み、失敗、更新の停止、状態が読めないことを、通知に残し、新しく残したときだけDiscordに知らせます。rate limitなどの一時的な失敗は、60分以上続いたときだけ知らせます。正常に戻っても通知は自動では解決しません。 |
 | default_worker_watch | `45 4-59/5 * * * *` | `f/factory/default_worker_watch` | 5分ごとに実行します。defaultのqueueに予定時刻から10分以上待つジョブがあり、defaultで動いているジョブが1つも無いときだけ、defaultのworkerが止まっているとして通知を残し、Discordにも知らせます。長いClaudeのジョブが枠を塞いでいるだけのときは知らせません。待ちが解けると通知を自動で解決します。 |
 | drawio_viewer_bump | `0 0 10 * * 1` | `f/factory/drawio_viewer_bump` | 毎週月曜の10:00に実行します。draw.ioの公式のリリースを確かめ、公開から14日以上たった最新の版に固定(`console/drawio-viewer.json`)を上げるPRを作ります。メジャー版が変わるPRは、題名に[major]を付け、本文の先頭で人の確認を求めます。PRには自動レビューのラベルを付けます。未完了の更新のPRがあるあいだと、同じ版のPRを作った後は、何もしません。ビューアの大きさが2割を超えて変わる版と、取得物がGitHubの記録と一致しない版は上げず、お知らせに残します。 |
@@ -436,6 +436,8 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_review_retry` | script | [LIB] GitHubの一時的な失敗で止まったPRレビューの再開 |
 | `f/factory/lib/gh_collect_support` | script | [LIB] GitHubの収集の判定 |
 | `f/factory/lib/gh_collect` | script | [LIB] GitHubの収集の本体 |
+| `f/factory/lib/gh_collect_detail` | script | [LIB] GitHubの収集の詳細の判定 |
+| `f/factory/lib/gh_collect_detail_round` | script | [LIB] GitHubの収集の詳細の周回 |
 | `f/factory/lib/gh_collect_freshness` | script | [LIB] GitHubの収集の鮮度の監視 |
 | `f/factory/lib/github_errors` | script | [LIB] GitHubの呼び出しの失敗の型 |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
@@ -807,8 +809,11 @@ GITHUB_TOKENには`Actions: Read-only`が要る([セキュリティ](security.md
 ## GitHubの収集
 
 `collect_github`が5分ごとに、`factory_config`の`owners`の所有者を順に読む。
-読むのは、リポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数で、GitHubのGraphQLを使う。
-書き先は`gh_repos`である。
+読むのは、段1のリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数、段2のそれらの詳細で、GitHubのGraphQLを使う。
+書き先は、段1が`gh_repos`、段2が`gh_pull_requests`と`gh_issues`である。
+段2は、設定`gh_collect_detail_enabled`(既定は`false`)が真のときだけ動く。
+詳細はリポジトリごとに1つの文で書き、取り終えたリポジトリだけを書く。
+閉じたPRと一覧から外れたIssueの行は、DBの掃除が保持期間で消す。
 tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトークンだけを使う。
 書き込みのできる`github_token`は読まない。
 設定`gh_collect_enabled`(既定は`false`)が偽の間は、トークンを読まず、何も書かない。
@@ -829,6 +834,5 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 - Discordのボタンによる承認(Interactions Endpointに公開URLが要る)
 - ホストの実行役による反映。判定を出力する`plan`だけがあり、排水、収束、定期実行、承認のコマンド、通知は無い([ホストの実行役の境界](security.md#ホストの実行役の境界))
 - CIが出したメタデータのパッチ(`metadata-patch`)の適用。`metadata`ジョブがartifactのIDとdigestを出す処理も含む
-- GitHubの収集による、開いているPRとトリガーラベル付きのIssueの詳細の記録。表`gh_pull_requests`と`gh_issues`を書くコードと消すコードが無い([詳細の表](internals/github-collect.md#詳細の表))
 
 工程3の実装フローの内部は[実装フローの内部仕様](internals/implement.md)に書く。
