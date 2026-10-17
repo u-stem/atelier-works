@@ -838,6 +838,11 @@ describe("files that the host executor runs", () => {
     "heartbeat",
     "manifest",
     "notify",
+    "approved_store",
+    "approve",
+    "approved_io",
+    "code_origin",
+    "approve_cli",
   ].map((name) => `tests/scripts/host_apply_${name}.test.ts`);
 
   test.each([...EXACT, ...UNDER_PREFIX, ...BASENAMES, ...HOST_TESTS])(
