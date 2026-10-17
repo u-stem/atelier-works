@@ -29,20 +29,22 @@ export const GH_COLLECT_DETAIL_RESERVE_MS = 30_000;
  * 一覧が新しい要求を始められる、残り時間の下限(ミリ秒)。
  * 詳細が有効なら、詳細の取り分を残すために、要求の打ち切りに取り分を足した長さにする。
  */
-export function stage1Floor(_detailEnabled: boolean): number {
-  return 0;
+export function stage1Floor(detailEnabled: boolean): number {
+  return detailEnabled
+    ? GH_COLLECT_MIN_REQUEST_MS + GH_COLLECT_DETAIL_RESERVE_MS
+    : GH_COLLECT_MIN_REQUEST_MS;
 }
 
 /**
  * 詳細の書き込みに付ける、観測を始めた時刻(エポックミリ秒)。
  * 一覧が1ページなら、その応答を受けた時刻。複数ページなら、最初のページを送った時刻。
  */
-export function observationStartMs(_args: {
+export function observationStartMs(args: {
   readonly pages: number;
   readonly first_sent_ms: number;
   readonly first_received_ms: number;
 }): number {
-  return 0;
+  return args.pages <= 1 ? args.first_received_ms : args.first_sent_ms;
 }
 
 /** レート制限で通信を控える時間の上限(ミリ秒)。 */
@@ -259,6 +261,15 @@ export function classifyGraphqlFailure(
   return { error_code: "graphql_error", next_allowed_at: null };
 }
 
+/** `rateLimit.resetAt`(ISO 8601の文字列)を時刻にする。読めなければ`null`。 */
+export function parseResetAt(value: unknown): Date | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 /** 一覧から読んだリポジトリ1件。 */
 export type RepoNode = {
   readonly repo_id: number;
@@ -358,6 +369,7 @@ export function parseOwnerReposPage(
   const cost = isRecord(rate) && isCount(rate.cost) ? rate.cost : null;
   const remaining =
     isRecord(rate) && isCount(rate.remaining) ? rate.remaining : null;
+  const resetAt = isRecord(rate) ? parseResetAt(rate.resetAt) : null;
   const owner = data.repositoryOwner;
   if (owner === null) {
     return {
@@ -365,7 +377,7 @@ export function parseOwnerReposPage(
       owner: null,
       cost,
       remaining,
-      reset_at: null,
+      reset_at: resetAt,
       repos: [],
       discarded: [],
       has_next: false,
@@ -409,7 +421,7 @@ export function parseOwnerReposPage(
     owner: { database_id: owner.databaseId },
     cost,
     remaining,
-    reset_at: null,
+    reset_at: resetAt,
     repos,
     discarded,
     has_next: pageInfo.hasNextPage,

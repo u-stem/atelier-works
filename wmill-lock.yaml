@@ -63,7 +63,7 @@ locks:
   f/factory/lib/gated_review_support: c858998fefbebb102f55e896471e4dc8195de412a39c8d60d2d36d22763bc1bb
   f/factory/lib/gh_collect: d8cd4c7780f2dce0a0148acb4783331802c67b878f011b67b32c53728a1595db
   f/factory/lib/gh_collect_freshness: 9371da8505658e0a2d725f4619f64283b1cf6edde876615bc3087e876078a741
-  f/factory/lib/gh_collect_support: f5812fe59e935954e59d4efb205d4236dadaa365fa0a767d8f64e7d64408ec43
+  f/factory/lib/gh_collect_support: 7297050218190e87eec6ba71707583a0cb52047fe20beaafc3baa939f651a64d
   f/factory/lib/gh_graphql: 6d1a97e3aef6135cbadde8c3546d5768a9e591461642de65307f64083b6e39ab
   f/factory/lib/github: a5e25a61aee3616043d4bfce008f1fa8ccc4669cd82200a4ed3d8ed3ef8d6e82
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
