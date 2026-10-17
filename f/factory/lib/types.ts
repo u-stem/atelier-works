@@ -983,6 +983,11 @@ export type GhCollectOwnerState = {
   } | null;
   /** `ok`が真の最新の`finished_at`。無ければ`null`。 */
   readonly last_success_at: Date | null;
+  /**
+   * 段1の要求を1回以上送ったのに`deadline`で終えた最新の実行の`started_at`。無ければ`null`。
+   * 要求を1回も送れずに`deadline`で終えた実行は数えない。
+   */
+  readonly last_deadline_at: Date | null;
 };
 
 /** 収集の実行1行(所有者ごと)の終わりに書く内容。 */

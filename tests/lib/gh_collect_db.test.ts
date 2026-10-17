@@ -390,6 +390,7 @@ describe("listGhCollectOwnerStates", () => {
     error_code: "rate_limited",
     next_allowed_at: "2026-10-17T02:00:00.000Z",
     last_success_at: "2026-10-16T01:00:05.000Z",
+    last_deadline_at: "2026-10-16T02:00:00.000Z",
   };
 
   test("reads only finished runs for the latest result", async () => {
@@ -416,8 +417,23 @@ describe("listGhCollectOwnerStates", () => {
           next_allowed_at: new Date("2026-10-17T02:00:00.000Z"),
         },
         last_success_at: new Date("2026-10-16T01:00:05.000Z"),
+        last_deadline_at: new Date("2026-10-16T02:00:00.000Z"),
       },
     ]);
+  });
+
+  test("counts only a deadline that sent a request", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectOwnerStates(["acme"], sql);
+    expect(calls[0]?.text).toMatch(
+      /error_code = 'deadline'\s+AND\s+\w+\.requests >= 1/,
+    );
+  });
+
+  test("reads the deadline by the start of the run", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectOwnerStates(["acme"], sql);
+    expect(calls[0]?.text).toContain("max(d.started_at)");
   });
 
   test("returns a null latest for an owner without a finished run", async () => {
@@ -430,6 +446,7 @@ describe("listGhCollectOwnerStates", () => {
           error_code: null,
           next_allowed_at: null,
           last_success_at: null,
+          last_deadline_at: null,
         },
       ],
     ]);

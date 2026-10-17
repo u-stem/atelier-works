@@ -6655,6 +6655,7 @@ export async function listGhCollectOwnerStates(
             ),
           },
     last_success_at: parseNullableDate(row.last_success_at, "last_success_at"),
+    last_deadline_at: null,
   }));
 }
 

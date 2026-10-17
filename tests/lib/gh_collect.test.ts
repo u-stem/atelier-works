@@ -130,6 +130,8 @@ type Options = {
   noticeFails?: boolean;
   /** 1回の要求にかかる時間(ミリ秒)。 */
   requestMs?: number;
+  /** 所有者(小文字)ごとの、1回の要求にかかる時間。`requestMs`より優先する。 */
+  requestMsByOwner?: Readonly<Record<string, number>>;
 };
 
 function harness(options: Options = {}) {
@@ -207,7 +209,7 @@ function harness(options: Options = {}) {
       const owner = String(variables.owner).toLowerCase();
       requests.push({ token, variables: { ...variables }, timeoutMs });
       events.push(`request:${owner}`);
-      clock += options.requestMs ?? 100;
+      clock += options.requestMsByOwner?.[owner] ?? options.requestMs ?? 100;
       const next = queues.get(owner)?.shift();
       return next ?? okPage(owner === "alice" ? 1001 : 2002, []);
     },
@@ -420,6 +422,7 @@ describe("runGhCollect visits owners by oldest success first", () => {
     owner,
     latest: null,
     last_success_at: success === null ? null : new Date(success),
+    last_deadline_at: null,
   });
 
   test("visits the owner with the oldest success first", async () => {
@@ -445,6 +448,158 @@ describe("runGhCollect visits owners by oldest success first", () => {
   });
 });
 
+describe("runGhCollect puts an owner that hit the deadline behind", () => {
+  test("visits an owner that hit the deadline after the others", async () => {
+    const h = harness({
+      states: [
+        {
+          owner: "alice",
+          latest: null,
+          last_success_at: new Date("2026-10-17T09:00:00.000Z"),
+          last_deadline_at: new Date("2026-10-17T11:00:00.000Z"),
+        },
+        {
+          owner: "bob",
+          latest: null,
+          last_success_at: new Date("2026-10-17T10:00:00.000Z"),
+          last_deadline_at: null,
+        },
+      ],
+    });
+    await runGhCollect(h.deps);
+    expect(h.requests.map((request) => request.variables.owner)).toEqual([
+      "bob",
+      "alice",
+    ]);
+  });
+});
+
+describe("runGhCollect over many rounds", () => {
+  const THREE = {
+    owners: [
+      { name: "alice", kind: "user" as const, id: 1001 },
+      { name: "bob", kind: "org" as const },
+      { name: "carol", kind: "user" as const },
+    ],
+  };
+  const TOKENS3 = JSON.stringify({ alice: "ta", bob: "tb", carol: "tc" });
+  const ROUND_MS = 3_600_000;
+  /** 続きのあるページ。一覧が取り終わらない所有者に使う。 */
+  const endless = (id: number, count: number): GraphqlResponse[] =>
+    Array.from({ length: count }, () => okPage(id, [], { next: "C" }));
+
+  /** 保存された実行の行から、次の周回が読む所有者の状態を作る(DBの代わり)。 */
+  function nextStates(
+    previous: readonly GhCollectOwnerState[],
+    round: number,
+    finished: readonly { owner: string; outcome: GhCollectRunOutcome }[],
+  ): GhCollectOwnerState[] {
+    const startedAt = new Date(NOW + round * ROUND_MS);
+    const states = new Map(previous.map((state) => [state.owner, state]));
+    finished.forEach((row, index) => {
+      const before = states.get(row.owner);
+      const finishedAt = new Date(startedAt.getTime() + (index + 1) * 1000);
+      const sentRequest = row.outcome.requests >= 1;
+      const deadline = row.outcome.error_code === "deadline" && sentRequest;
+      states.set(row.owner, {
+        owner: row.owner,
+        latest: {
+          finished_at: finishedAt,
+          ok: row.outcome.ok,
+          error_code: row.outcome.error_code,
+          next_allowed_at: null,
+        },
+        last_success_at: row.outcome.ok
+          ? finishedAt
+          : (before?.last_success_at ?? null),
+        last_deadline_at: deadline
+          ? startedAt
+          : (before?.last_deadline_at ?? null),
+      });
+    });
+    return [...states.values()];
+  }
+
+  async function rounds(
+    count: number,
+    options: Options,
+    pagesOf: (round: number) => Options["pages"],
+  ) {
+    let states: GhCollectOwnerState[] = [];
+    const outcomes: Record<string, GhCollectRunOutcome | undefined>[] = [];
+    const firstOwners: unknown[] = [];
+    for (let round = 0; round < count; round += 1) {
+      const h = harness({ ...options, states, pages: pagesOf(round) });
+      await runGhCollect(h.deps);
+      firstOwners.push(h.requests[0]?.variables.owner);
+      outcomes.push({
+        alice: h.outcomeOf("alice"),
+        bob: h.outcomeOf("bob"),
+        carol: h.outcomeOf("carol"),
+      });
+      states = nextStates(states, round, h.finished);
+    }
+    return { outcomes, firstOwners };
+  }
+
+  const hog: Options = {
+    config: THREE,
+    token: TOKENS3,
+    requestMsByOwner: { alice: 60_000 },
+  };
+
+  test("an owner that cannot finish does not starve the next owner", async () => {
+    const { outcomes } = await rounds(2, hog, () => ({
+      alice: endless(1001, 5),
+    }));
+    expect(outcomes[1]?.bob?.ok).toBe(true);
+  });
+
+  test("an owner that cannot finish does not starve the owner after the next", async () => {
+    const { outcomes } = await rounds(2, hog, () => ({
+      alice: endless(1001, 5),
+    }));
+    expect(outcomes[1]?.carol?.ok).toBe(true);
+  });
+
+  test("the owner that cannot finish goes to the back of the next round", async () => {
+    const { firstOwners } = await rounds(2, hog, () => ({
+      alice: endless(1001, 5),
+    }));
+    expect(firstOwners[1]).toBe("bob");
+  });
+
+  test("an owner that sent no request before the deadline does not move back", async () => {
+    const { outcomes, firstOwners } = await rounds(3, hog, () => ({
+      alice: endless(1001, 5),
+    }));
+    expect([outcomes[0]?.bob?.requests, firstOwners[2]]).toEqual([0, "alice"]);
+  });
+
+  test("two owners that each need over half the budget take turns", async () => {
+    const two = {
+      owners: [
+        { name: "alice", kind: "user" as const, id: 1001 },
+        { name: "bob", kind: "org" as const },
+      ],
+    };
+    const { outcomes } = await rounds(
+      4,
+      { config: two, requestMs: 35_000 },
+      () => ({
+        alice: [okPage(1001, [], { next: "C" }), okPage(1001, [])],
+        bob: [okPage(2002, [], { next: "C" }), okPage(2002, [])],
+      }),
+    );
+    expect(outcomes.map((round) => [round.alice?.ok, round.bob?.ok])).toEqual([
+      [true, false],
+      [false, true],
+      [true, false],
+      [false, true],
+    ]);
+  });
+});
+
 describe("runGhCollect next_allowed_at", () => {
   const until = new Date(NOW + 600_000);
   const limited = (next: Date | null): GhCollectOwnerState => ({
@@ -456,6 +611,7 @@ describe("runGhCollect next_allowed_at", () => {
       next_allowed_at: next,
     },
     last_success_at: null,
+    last_deadline_at: null,
   });
 
   test("skips owner until next_allowed_at", async () => {
@@ -650,6 +806,40 @@ describe("runGhCollect ok per outcome", () => {
       error_code: "http_5xx",
       requests: 2,
     });
+  });
+
+  test("a second page without the owner records parse_error", async () => {
+    const h = harness({
+      config: ALICE_ONLY,
+      pages: {
+        alice: [okPage(1001, [node("a")], { next: "C1" }), okPage(null, [])],
+      },
+    });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("alice")?.error_code).toBe("parse_error");
+  });
+
+  test("a second page of another owner id records parse_error", async () => {
+    const h = harness({
+      config: ALICE_ONLY,
+      pages: {
+        alice: [okPage(1001, [node("a")], { next: "C1" }), okPage(9999, [])],
+      },
+    });
+    await runGhCollect(h.deps);
+    expect(h.outcomeOf("alice")?.error_code).toBe("parse_error");
+  });
+
+  test("a bad second page does not replace the snapshot", async () => {
+    const h = harness({
+      config: ALICE_ONLY,
+      pages: {
+        alice: [okPage(1001, [node("a")], { next: "C1" }), okPage(null, [])],
+      },
+      previous: { alice: [previousRepo("old")] },
+    });
+    await runGhCollect(h.deps);
+    expect(h.snapshots).toEqual([]);
   });
 
   test("returns normally on github failure", async () => {
@@ -1000,6 +1190,38 @@ describe("runGhCollect database failures", () => {
     expect(h.finished.map((row) => row.outcome.error_code)).toEqual([
       "db_error",
       "db_error",
+    ]);
+  });
+
+  test("a failed read of the owner states keeps the missing token of an owner", async () => {
+    const h = harness({
+      listStatesFails: true,
+      token: JSON.stringify({ alice: ALICE_TOKEN }),
+    });
+    await runGhCollect(h.deps);
+    expect(
+      h.finished.map((row) => [row.owner, row.outcome.error_code]),
+    ).toEqual([
+      ["alice", "db_error"],
+      ["bob", "no_token"],
+    ]);
+  });
+
+  test("a failed read of the owner states keeps a malformed token variable", async () => {
+    const h = harness({ listStatesFails: true, token: "not json" });
+    await runGhCollect(h.deps);
+    expect(h.finished.map((row) => row.outcome.error_code)).toEqual([
+      "token_config_invalid",
+      "token_config_invalid",
+    ]);
+  });
+
+  test("a failed read of the owner states keeps an unreadable token variable", async () => {
+    const h = harness({ listStatesFails: true, token: new Error("boom") });
+    await runGhCollect(h.deps);
+    expect(h.finished.map((row) => row.outcome.error_code)).toEqual([
+      "no_token",
+      "no_token",
     ]);
   });
 

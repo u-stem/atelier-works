@@ -290,6 +290,16 @@ describe("graphqlRequest results", () => {
     expect(result.ok ? null : result.kind).toBe("timeout");
   });
 
+  test("reads a timeout while reading the body as a timeout", async () => {
+    const { result } = await request(async () =>
+      respond({
+        json: () =>
+          Promise.reject(new DOMException("timed out", "TimeoutError")),
+      }),
+    );
+    expect(result.ok ? null : result.kind).toBe("timeout");
+  });
+
   test("reads another rejection as a network failure", async () => {
     const { result } = await request(() =>
       Promise.reject(new TypeError("connection refused")),

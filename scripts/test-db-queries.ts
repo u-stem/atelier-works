@@ -6992,6 +6992,36 @@ check(
   "gh_collect_runs: the next allowed time round-trips",
   ghStateB?.latest?.next_allowed_at?.getTime() === ghUntil.getTime(),
 );
+// 順番の印は、要求を1回以上送って`deadline`で終えた実行の`started_at`だけから取る。
+const GH_OWNER_C = "qdbghc";
+const GH_OWNER_D = "qdbghd";
+execPsql(
+  target,
+  `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code, requests) VALUES
+    ('${GH_OWNER_C}', now() - interval '3 hours', now() - interval '3 hours' + interval '100 seconds', false, 'deadline', 2),
+    ('${GH_OWNER_C}', now() - interval '2 hours', now() - interval '2 hours' + interval '100 seconds', false, 'deadline', 0),
+    ('${GH_OWNER_D}', now() - interval '2 hours', now() - interval '2 hours' + interval '100 seconds', false, 'deadline', 0)`,
+);
+const ghTurnStates = await listGhCollectOwnerStates(
+  [GH_OWNER_C, GH_OWNER_D],
+  sql,
+);
+const ghTurnC = ghTurnStates.find((row) => row.owner === GH_OWNER_C);
+const ghTurnD = ghTurnStates.find((row) => row.owner === GH_OWNER_D);
+check(
+  "gh_collect_runs: a deadline that sent a request marks the turn by its start",
+  ghTurnC?.last_deadline_at !== null &&
+    ghTurnC !== undefined &&
+    Math.abs(
+      (ghTurnC.last_deadline_at?.getTime() ?? 0) - (Date.now() - 3 * 3_600_000),
+    ) < 120_000,
+  ghTurnC,
+);
+check(
+  "gh_collect_runs: a deadline that sent no request does not mark the turn",
+  ghTurnD?.last_deadline_at === null && ghTurnD.last_success_at === null,
+  ghTurnD,
+);
 execPsql(
   target,
   `INSERT INTO factory.gh_collect_runs (owner, started_at, finished_at, ok, error_code) VALUES
