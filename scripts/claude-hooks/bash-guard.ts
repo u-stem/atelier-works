@@ -13,6 +13,7 @@
 // - `remote.*.push`、`push.default`、`alias.*`: pushの行き先や中身を、別の名前や設定に隠す。
 // - xargsや標準入力から渡すgit push、シェルのコード: 渡された引数やコードを判定できないまま実行する。
 // - 秘密値のファイルの参照(`guarded-files.ts`)、`mise exec`と`docker`の環境変数の表示(`env-exposure.ts`): 値が会話の記録に残る。
+// - `mise set`、`mise env`、`mise config`などの一覧、許可リストに無いmiseのサブコマンド、タスクのシェルを差し替える`-s`と`MISE_*`(`mise-guard.ts`): 値が会話の記録に残る。
 // コマンドは字句に分けてから判定するので、引用符の中やヒアドキュメントの本文には反応しない。
 // 字句に分けられないコマンドと、実行するまでpush先が決まらないコマンドは拒否する。
 // `cd`と`pushd`の文字どおりの移動先と、`git checkout`などで切り替えたブランチは、続くコマンドの前提にする。
@@ -37,13 +38,12 @@ import {
   isEntryPoint,
   runHookMain,
 } from "./hook-io.ts";
+import { listsMiseValues, MISE_ALLOWED_ENV } from "./mise-guard.ts";
 import {
   ASSIGNMENT,
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
-  MISE_VALUE_OPTIONS,
   type MiseExec,
-  miseOptionTakesNext,
   parseCommandLine,
   type SimpleCommand,
   shellArguments,
@@ -122,198 +122,6 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
  */
 const DANGEROUS_CONFIG_KEY =
   /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
-
-/** `mise set`の書き込む形が持ってよい、値を取るオプション。 */
-const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
-  ...MISE_VALUE_OPTIONS,
-  "--file",
-  "--age-key-file",
-  "--age-recipient",
-  "--age-ssh-recipient",
-]);
-
-/**
- * `mise set`の書き込む形が持ってよい、値を取らないオプション。
- * 値を取る隠しオプションは数え切れないので、ここに無いオプションは書き込む形とみなさない。
- */
-const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
-  "--stdin",
-  "-g",
-  "--global",
-  "--age-encrypt",
-]);
-
-/** `mise set`の別名。`ev`と`env-vars`も値を一覧する。 */
-const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
-
-/** 設定値を一覧するか、設定値を持つシェルを起動するだけで、書き込む形を持たないサブコマンドと、その別名。 */
-const MISE_READ_NAMES: ReadonlySet<string> = new Set([
-  "env",
-  "e",
-  "config",
-  "cfg",
-  "toml",
-  "hook-env",
-  "en",
-]);
-
-/**
- * このリポジトリで使うサブコマンドと、秘密値も書き込みも出さないと実機で確かめたサブコマンド。別名を含む。
- * `mise <タスク名>`の省略形は含まない。`mise run <タスク名>`と書く。
- * ここに無いサブコマンドは、miseの更新で値を出すものが増えても塞げるよう、拒否する。
- */
-const MISE_PLAIN_NAMES: ReadonlySet<string> = new Set([
-  "run",
-  "r",
-  "exec",
-  "x",
-  "install",
-  "i",
-  "trust",
-  "ls",
-  "list",
-  "doctor",
-  "dr",
-  "which",
-  "where",
-  "version",
-  "current",
-  "tasks",
-]);
-
-/** タスクを実行するサブコマンド。`-s`と`--shell`で、呼び出し側が実行するシェルを決められる。 */
-const MISE_RUNNER_NAMES: ReadonlySet<string> = new Set(["run", "r", "tasks"]);
-
-/** `--shell`、`-s`、`-s`を含む束ねた短いオプション。 */
-const MISE_SHELL_OPTION = /^(--shell(=.*)?|-[A-Za-z]*s.*)$/;
-
-/** miseの設定として取り込まれず、シェルやタスクの実行を変えない環境変数。これ以外の`MISE_*`の代入は拒否する。 */
-const MISE_ALLOWED_ENV: ReadonlySet<string> = new Set([
-  "MISE_ENV",
-  "MISE_JOBS",
-  "MISE_QUIET",
-  "MISE_VERBOSE",
-  "MISE_YES",
-]);
-
-/** 引用符の外に`{`を持つ語。実行時にブレース展開で語が増える。 */
-function hasBrace(word: Word): boolean {
-  return word.brace === true;
-}
-
-/**
- * `mise`の後ろで、最初のオプションでない語の位置を返す。なければ語の数を返す。
- * 値を取る既知のグローバルオプションは、値の語まで読み飛ばす。
- */
-function firstMiseOperandAt(args: readonly Word[]): number {
-  for (let index = 0; index < args.length; index += 1) {
-    const text = args[index]?.text ?? "";
-    if (!text.startsWith("-")) return index;
-    if (miseOptionTakesNext(text)) index += 1;
-  }
-  return args.length;
-}
-
-/**
- * `mise set`などが、書き込む形を持たずに値を一覧するなら真。
- * サブコマンドの前に置けるグローバルオプションは、値を取る隠しものがあるため列挙しない。
- * `--`より前の語に`set`、`env`、`config`など(か別名)があれば、そのサブコマンドの呼び出しとして判定する。
- * `env`と`config`の系統には書き込む形が無いので、あれば拒否する。
- * サブコマンドの位置にあたる語が、引用符の外にブレースを持つときも拒否する。語が増えて、サブコマンドが変わるためである。
- * `mise set`の書き込む形は2つある。オペランドがすべて`KEY=VALUE`である形と、
- * `--stdin`を持ち、オペランドが展開を含まない鍵の名前1つだけの形である。
- * `KEY=VALUE`のオペランドは、展開やブレースを含んでも、先頭の`KEY=`が残るので書き込みのままである。
- * 書き込む形のオプションは、許可リストにあるものだけにする。未知のオプションは、
- * 値を取ってオペランドの数を変えるおそれがあるので、一覧を出す形として扱う。
- * 展開やglobを含むオプションとその値は、実行時に語が増えて隠しオプションが現れうるので、
- * 書き込む形とみなさない。`--`を持つ形も、鍵の名前と区別できないので同じである。
- * オペランドにサブコマンド名(`set`、`ev`、`env-vars`)があるときは、
- * 前のオプションの値を取り違えたおそれがあるので、同じく書き込む形とみなさない。
- */
-function listsMiseValues(words: readonly Word[]): boolean {
-  const args = words.slice(1);
-  const dashDash = args.findIndex((word) => word.text === "--");
-  const beforeDashDash = dashDash === -1 ? args : args.slice(0, dashDash);
-  const nameAt = beforeDashDash.findIndex(
-    (word) => MISE_SET_NAMES.has(word.text) || MISE_READ_NAMES.has(word.text),
-  );
-  const operandAt = firstMiseOperandAt(beforeDashDash);
-  const headEnd =
-    nameAt === -1 ? operandAt + 1 : Math.min(nameAt, operandAt + 1);
-  if (beforeDashDash.slice(0, headEnd).some(hasBrace)) return true;
-  if (
-    dashDash !== -1 &&
-    operandAt >= beforeDashDash.length &&
-    args.length > dashDash + 1
-  ) {
-    return true;
-  }
-  const sub = beforeDashDash[operandAt];
-  if (
-    sub !== undefined &&
-    MISE_RUNNER_NAMES.has(sub.text) &&
-    beforeDashDash
-      .slice(operandAt + 1)
-      .some((word) => MISE_SHELL_OPTION.test(word.text))
-  ) {
-    return true;
-  }
-  if (
-    sub !== undefined &&
-    !MISE_SET_NAMES.has(sub.text) &&
-    !MISE_READ_NAMES.has(sub.text) &&
-    !MISE_PLAIN_NAMES.has(sub.text)
-  ) {
-    return true;
-  }
-  const name = beforeDashDash[nameAt];
-  if (name === undefined) return false;
-  if (MISE_READ_NAMES.has(name.text)) return true;
-  if (dashDash !== -1) return true;
-  const operands: Word[] = [];
-  let readsStdin = false;
-  const rest = beforeDashDash.slice(nameAt + 1);
-  for (let index = 0; index < rest.length; index += 1) {
-    const word = rest[index];
-    if (word === undefined) continue;
-    if (!word.text.startsWith("-")) {
-      if (MISE_SET_NAMES.has(word.text)) return true;
-      operands.push(word);
-      continue;
-    }
-    if (word.dynamic || word.glob || hasBrace(word)) return true;
-    const [optionName = ""] = word.text.split("=", 1);
-    const isValueOption = MISE_SET_VALUE_OPTIONS.has(word.text);
-    if (word.text === "--stdin") {
-      readsStdin = true;
-    } else if (isValueOption) {
-      const value = rest[index + 1];
-      if (
-        value !== undefined &&
-        (value.dynamic || value.glob || hasBrace(value))
-      ) {
-        return true;
-      }
-      index += 1;
-    } else if (
-      !MISE_SET_FLAGS.has(word.text) &&
-      !(word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(optionName))
-    ) {
-      return true;
-    }
-  }
-  if (operands.length === 0) return true;
-  if (operands.every((word) => ASSIGNMENT.test(word.text))) return false;
-  const [key] = operands;
-  return !(
-    readsStdin &&
-    operands.length === 1 &&
-    key !== undefined &&
-    !key.dynamic &&
-    !key.glob &&
-    !hasBrace(key)
-  );
-}
 
 /** `.git/hooks`と`.git/config`のパス。lefthookのフックと設定の置き場所である。 */
 const GIT_INTERNALS = /(^|\/)\.git\/(hooks(\/|$)|config$)/;
