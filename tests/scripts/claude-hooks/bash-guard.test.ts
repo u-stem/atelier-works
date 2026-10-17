@@ -1108,6 +1108,20 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise set -E {local,-P} A=b",
     "mise set {-P,A=b}",
     "mise set -E local{,\\ -P} A=b",
+    "mise -q env",
+    "mise -C . env",
+    "mise -E local env",
+    "mise --log-level info config",
+    "mise -q e",
+    "mise -q cfg",
+    "mise -q toml",
+    "mise -E local x -- env",
+    "mise -C . exec -- printenv",
+    "mise --log-level info x -- env",
+    "mise {-q,set}",
+    "mise -q {set,}",
+    "mise set A=$X",
+    "echo set | xargs mise",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
@@ -1122,8 +1136,19 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise set -g --stdin KEY",
     'IFS= read -rs -p "KEY: " v && printf \'%s\' "$v" | mise set -E local --stdin KEY',
     "mise run check",
+    "mise -E local x -- bun test",
+    "mise set 'JSON={\"a\":1}' --stdin",
+    `mise set KEY="${OPEN}v}"`,
   ])("allows %s", async (command) => {
     expect(await decide(command)).toBe("allow");
+  });
+
+  test("the reason says a person injects secrets", async () => {
+    expect(await denyReason("mise set")).toContain("person");
+  });
+
+  test("the reason says to put options before set", async () => {
+    expect(await denyReason("mise set -q KEY=value")).toContain("before set");
   });
 
   test("the reason says it lists the values", async () => {
