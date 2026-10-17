@@ -173,6 +173,8 @@ function listsMiseValues(words: readonly Word[]): boolean {
   for (let index = 0; index < rest.length; index += 1) {
     const word = rest[index];
     if (word === undefined) continue;
+    // ブレース展開は語を増やすが、パーサは印を付けないので、字面で拒否する。
+    if (word.text.includes("{")) return true;
     if (!word.text.startsWith("-")) {
       if (MISE_SET_NAMES.has(word.text)) return true;
       operands.push(word);
@@ -183,13 +185,13 @@ function listsMiseValues(words: readonly Word[]): boolean {
     if (name === "--stdin" && word.text === name) {
       readsStdin = true;
     } else if (MISE_SET_FLAGS.has(word.text)) {
-      continue;
     } else if (MISE_SET_VALUE_OPTIONS.has(word.text)) {
       const value = rest[index + 1];
-      if (value?.dynamic || value?.glob) return true;
+      if (value?.dynamic || value?.glob || value?.text.includes("{")) {
+        return true;
+      }
       index += 1;
     } else if (word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(name)) {
-      continue;
     } else {
       return true;
     }
