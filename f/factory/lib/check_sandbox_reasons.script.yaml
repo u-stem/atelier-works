@@ -1,0 +1,9 @@
+summary: '[LIB] 検査の前提が古いときの理由'
+description: 内部ライブラリです。直接実行するものではありません。イメージの前提を満たさないときの理由の先頭を定義します。
+lock: '!inline f/factory/lib/check_sandbox_reasons.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

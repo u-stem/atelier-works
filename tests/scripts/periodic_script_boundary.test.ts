@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { PERIODIC_JOB_WAIT_SECONDS } from "../../f/factory/lib/periodic_worker.ts";
 import {
   codeOf,
+  DISCORD_WEBHOOK_URL,
   filesWithNonLiteralReads,
   filesWithTag,
   filesWithToolDependencies,
@@ -26,7 +28,9 @@ import {
 // - tag periodicへ振り分けるものは、下の一覧のscriptの定義だけである。
 //   scriptの定義、スケジュール、フローのモジュールの`tag`と`tag_override`を、`f/`の下のYAMLすべてで調べる。
 // - どれも、スケジュールが呼ぶscriptである。
-// - 読んでよいsecret変数は、github_tokenだけである。claudeのトークンやwmillのトークンには届かせない。
+// - 読んでよいsecret変数は、discord_webhook_urlだけである。claudeのトークンやwmillのトークンには届かせない。
+// - timeoutの最大値に余裕を足した秒数が、待ちの検知のしきい値を超えない。
+//   このworkerの枠は1つなので、長く動くjobの後ろで待つ定期ジョブを、workerの不在と誤って知らせないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
 //
@@ -40,12 +44,31 @@ import {
 
 /**
  * tag: periodicを付けたscript。
- * 依存の無い定期ジョブが見つかるまでは、空である。
+ * 実行時にDB、WindmillのAPI、Discordだけを使うものに限る。
  */
-const PERIODIC_SCRIPTS: readonly string[] = [];
+const PERIODIC_SCRIPTS: readonly string[] = [
+  "f/factory/notify_daily_summary",
+  "f/factory/auto_retry_pr_review",
+];
 
-/** 読んでよいsecret変数。 */
-const MAY_READ_SECRET = [GITHUB_TOKEN];
+/**
+ * 読んでよいsecret変数。
+ * discord_webhook_urlは通知の送り先として要る。漏れたときの影響は、通知の偽装と停止に限られる。
+ * このworkerは、固定のレビュー済みscriptだけを動かす。
+ * github_tokenは、対象のscriptが読まないので許可しない。使わない許可は残さない。
+ */
+const MAY_READ_SECRET = [DISCORD_WEBHOOK_URL];
+
+/**
+ * 待ちの検知のしきい値と、最長のtimeoutの間に残す秒数。
+ * scriptの起動と、queueから拾うまでの遅れを見込む。
+ *
+ * このworkerの枠は1つなので、あるscriptが待たされる最悪は、他のscriptのtimeoutの合計である。
+ * 下のテストは、最長のtimeoutに余裕を足した値を使う。
+ * 今の2本は、片方の最悪がもう一方のtimeoutだけなので、最長の値と一致する。
+ * 3本目以降を足すときは、式を「他のscriptのtimeoutの合計 + 余裕」に変える。
+ */
+const WAIT_MARGIN_SECONDS = 300;
 
 /**
  * 引数が文字列リテラルでないgetVariable()の呼び出しのうち、許すもの。
@@ -375,6 +398,16 @@ describe("periodic scripts", () => {
     expect(stale).toEqual([]);
   });
 
+  test("the longest timeout plus the margin does not exceed the wait threshold", async () => {
+    let longest = 0;
+    for (const path of PERIODIC_SCRIPTS) {
+      longest = Math.max(longest, (await scriptTimeoutSeconds(path)) ?? 0);
+    }
+    expect(longest + WAIT_MARGIN_SECONDS).toBeLessThanOrEqual(
+      PERIODIC_JOB_WAIT_SECONDS,
+    );
+  });
+
   test("no periodic script declares a variable or resource reference in its inputs", async () => {
     const referencing: string[] = [];
     for (const path of PERIODIC_SCRIPTS) {
@@ -404,7 +437,7 @@ describe("periodic scripts", () => {
   });
 });
 
-// 設計の一覧が空のままでも検査が空回りしないよう、defaultのworkerに残すscriptを渡して、違反が返ることを確かめる。
+// 検査が空回りしないよう、defaultのworkerに残すscriptを渡して、違反が返ることを確かめる。
 describe("the checks on scripts that stay on the default worker", () => {
   test("flags the file dependency behind watch_pr_ci", () => {
     expect(filesWithToolDependencies(["f/factory/watch_pr_ci"])).toContain(
@@ -430,16 +463,22 @@ describe("the checks on scripts that stay on the default worker", () => {
     ).toContain("f/factory/wmill_token");
   });
 
-  test("flags the discord webhook that notify_daily_summary reads", async () => {
+  test("flags the discord webhook when it is not allowed", async () => {
     expect(
-      await secretsOutside(["f/factory/notify_daily_summary"], MAY_READ_SECRET),
-    ).toEqual(["f/factory/discord_webhook_url"]);
+      await secretsOutside(["f/factory/notify_daily_summary"], []),
+    ).toEqual([DISCORD_WEBHOOK_URL]);
   });
 
-  test("does not flag github_token when it is allowed", async () => {
+  test("does not flag the discord webhook when it is allowed", async () => {
+    expect(
+      await secretsOutside(["f/factory/notify_daily_summary"], MAY_READ_SECRET),
+    ).toEqual([]);
+  });
+
+  test("flags github_token, which poll_issues reads, because it is not allowed", async () => {
     expect(
       await secretsOutside(["f/factory/poll_issues"], MAY_READ_SECRET),
-    ).not.toContain(GITHUB_TOKEN);
+    ).toContain(GITHUB_TOKEN);
   });
 
   test("flags a non-literal read that is not listed", () => {

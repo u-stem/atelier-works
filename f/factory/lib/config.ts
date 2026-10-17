@@ -3,7 +3,6 @@
 // 項目を後から足しても、
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
-import { JOB_TMP_MAX_AGE_SEC } from "./job_tmp.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -14,6 +13,7 @@ import {
   isRecord,
   isString,
   isStringArray,
+  JOB_TMP_MAX_AGE_SEC,
   type LabelerAssociation,
   type ReviewPostMode,
 } from "./types.ts";

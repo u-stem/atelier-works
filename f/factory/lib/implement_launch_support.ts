@@ -7,6 +7,9 @@ import { isJobId } from "./job_ids.ts";
 import { maskSecrets } from "./log.ts";
 import type { WorkItem } from "./types.ts";
 
+/** 実装フローのパス。 */
+export const IMPLEMENT_FLOW_PATH = "f/factory/implement";
+
 /** `value`がWindmillのジョブID(UUID。大文字と小文字は区別しない)の形ならtrueを返す。 */
 export function isFlowJobId(value: string): boolean {
   return isJobId(value);

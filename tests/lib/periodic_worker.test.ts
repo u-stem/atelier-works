@@ -29,34 +29,52 @@ describe("judgePeriodicQueue", () => {
     expect(judgePeriodicQueue([], NOW)).toBe("ok");
   });
 
-  test("is ok when the only waiting job was scheduled under five minutes ago", () => {
-    expect(judgePeriodicQueue([waiting(299)], NOW)).toBe("ok");
+  test("is ok when the only waiting job was scheduled just under the threshold ago", () => {
+    expect(
+      judgePeriodicQueue([waiting(PERIODIC_JOB_WAIT_SECONDS - 1)], NOW),
+    ).toBe("ok");
   });
 
-  test("is stalled when a job has waited five minutes", () => {
-    expect(judgePeriodicQueue([waiting(300)], NOW)).toBe("stalled");
-  });
-
-  test("is stalled when one of several jobs has waited long enough", () => {
-    expect(judgePeriodicQueue([waiting(10), waiting(900)], NOW)).toBe(
+  test("is stalled when a job has waited the threshold", () => {
+    expect(judgePeriodicQueue([waiting(PERIODIC_JOB_WAIT_SECONDS)], NOW)).toBe(
       "stalled",
     );
   });
 
+  test("is stalled when one of several jobs has waited long enough", () => {
+    expect(
+      judgePeriodicQueue(
+        [waiting(10), waiting(PERIODIC_JOB_WAIT_SECONDS)],
+        NOW,
+      ),
+    ).toBe("stalled");
+  });
+
   test("ignores a running job", () => {
-    expect(judgePeriodicQueue([waiting(900, { running: true })], NOW)).toBe(
-      "ok",
-    );
+    expect(
+      judgePeriodicQueue(
+        [waiting(PERIODIC_JOB_WAIT_SECONDS, { running: true })],
+        NOW,
+      ),
+    ).toBe("ok");
   });
 
   test("ignores a job with another tag", () => {
-    expect(judgePeriodicQueue([waiting(900, { tag: "bun" })], NOW)).toBe("ok");
+    expect(
+      judgePeriodicQueue(
+        [waiting(PERIODIC_JOB_WAIT_SECONDS, { tag: "bun" })],
+        NOW,
+      ),
+    ).toBe("ok");
   });
 
   test("ignores a job with a console tag", () => {
-    expect(judgePeriodicQueue([waiting(900, { tag: "console" })], NOW)).toBe(
-      "ok",
-    );
+    expect(
+      judgePeriodicQueue(
+        [waiting(PERIODIC_JOB_WAIT_SECONDS, { tag: "console" })],
+        NOW,
+      ),
+    ).toBe("ok");
   });
 
   test("ignores a job scheduled in the future", () => {
@@ -65,20 +83,29 @@ describe("judgePeriodicQueue", () => {
 
   test("ignores a job whose scheduled time cannot be read", () => {
     expect(
-      judgePeriodicQueue([waiting(900, { scheduled_for: "soon" })], NOW),
+      judgePeriodicQueue(
+        [waiting(PERIODIC_JOB_WAIT_SECONDS, { scheduled_for: "soon" })],
+        NOW,
+      ),
     ).toBe("ok");
   });
 
   test("ignores a job without a scheduled time", () => {
     expect(
-      judgePeriodicQueue([waiting(900, { scheduled_for: undefined })], NOW),
+      judgePeriodicQueue(
+        [waiting(PERIODIC_JOB_WAIT_SECONDS, { scheduled_for: undefined })],
+        NOW,
+      ),
     ).toBe("ok");
   });
 
   test("skips malformed elements and still finds a long wait", () => {
-    expect(judgePeriodicQueue([null, 5, "x", waiting(900)], NOW)).toBe(
-      "stalled",
-    );
+    expect(
+      judgePeriodicQueue(
+        [null, 5, "x", waiting(PERIODIC_JOB_WAIT_SECONDS)],
+        NOW,
+      ),
+    ).toBe("stalled");
   });
 
   test("is unknown for a response that is not an array", () => {
@@ -185,7 +212,7 @@ function harness(options: {
 }
 
 const IDLE = async () => [];
-const STALLED = async () => [waiting(600)];
+const STALLED = async () => [waiting(PERIODIC_JOB_WAIT_SECONDS)];
 const FAILS = async () => {
   throw new Error("forbidden");
 };

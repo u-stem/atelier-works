@@ -8,6 +8,14 @@ describe("noticeGuide", () => {
     );
   });
 
+  // 通知本文の待ちの分数は`f/factory/lib/periodic_worker.ts`の`PERIODIC_JOB_WAIT_SECONDS`(900秒)から作る。
+  // f/はConsoleからimportできないので、分数を直書きして一致を固定する。
+  test("states the same wait minutes as the periodic worker notice", () => {
+    expect(noticeGuide("periodic_worker_missing").meaning).toContain(
+      "予定時刻から15分以上",
+    );
+  });
+
   test("tells how to approve a held draw.io viewer bump", () => {
     expect(noticeGuide("drawio_viewer_bump_held").action).toContain(
       "approved_version",
