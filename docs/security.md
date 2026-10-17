@@ -2877,8 +2877,10 @@ lockは、`metadata_patch_manifest.script.lock`だけを止める。新しいscr
 - libの`.ts`と、`lock`の参照先をlib自身のlockに固定する`.script.yaml`は、保護する。`.script.yaml`の`lock: '!inline <パス>'`は、反映のときに`wmill sync push`が読む。書き換えられると、任意のファイルがlockとして保存されうる。
 - CI回と競合回は、`*.script.lock`を全scriptについて拒否する(`ci_fix_paths.ts`)。この拒否は変わらない。
 - メタデータのパッチを適用する経路は、対応する`.ts`が保護されたscriptのlockを`protected_source`で拒否する。拒否の理由は`protected_path`から変わりうるが、拒否は続く。
-- 保護しない前提は「libが入口を持たない」ことである。`tests/lib/protected_paths.test.ts`が、保護するlibの`.ts`に`main`、`preprocessor`、既定のexport、再exportが無いことを固定する。崩れたら、lockを保護に戻す。
-- 実機のWindmillで、libのlockが使われないことは確かめていない。根拠はリポジトリの実物(importする側のlockが依存を含む)とWindmillの文書である。前提が外れていても、importする側のlock(`steps/*.script.lock`など)がすでに保護の外にあるので、新しい種類の穴は増えない。
+- 保護しない前提は「libが入口を持たない」ことである。`tests/lib/protected_paths.test.ts`が、保護するlibの`.ts`に次が無いことを固定する。
+  `main`、`preprocessor`、行頭の`export default`、再exportである。
+  崩れたら、lockを保護に戻す。
+- 実機のWindmillで、libのlockが使われないことは確かめていない。根拠は、Windmillの文書とリポジトリの実物である。前提が外れていても、importする側のlock(`steps/*.script.lock`など)がすでに保護の外にあるので、新しい種類の穴は増えない。
 
 #### 修正と実装で範囲が違う理由
 

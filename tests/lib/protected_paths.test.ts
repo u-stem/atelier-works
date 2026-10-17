@@ -630,10 +630,7 @@ describe("dependabot flow files", () => {
     "f/factory/steps/dependabot_assess",
     "f/factory/steps/dependabot_finish",
   ];
-  // 依存の無いlib。lockは`"dependencies": {}`で、保護しない(下の「dependency-free lib locks」)。
-  const LIB_LOCKS = SCRIPTS.filter((base) =>
-    base.startsWith("f/factory/lib/"),
-  ).map((base) => `${base}.script.lock`);
+  // libの依存の無いlockは保護しない(下の「dependency-free lib locks」)。
   // 窓口のscriptとステップのlockは`windmill-client`を含み、その版更新で書き換わる。
   const CLIENT_LOCKS = SCRIPTS.filter(
     (base) => !base.startsWith("f/factory/lib/"),
@@ -703,13 +700,6 @@ describe("dependabot flow files", () => {
     expect(FORBIDDEN_EXACT_PATHS).not.toContain(path);
   });
 
-  test.each(LIB_LOCKS)(
-    "the lock %s does not pin windmill-client, so it does not change with a bump",
-    async (path) => {
-      expect(await Bun.file(path).text()).not.toContain("windmill-client");
-    },
-  );
-
   test.each(NEAR_MISSES)(
     "matchesForbiddenPath does not match the near miss %s, so the protection is not a loose match",
     (path) => {
@@ -734,7 +724,7 @@ describe("dependabot flow files", () => {
 // 窓口のscriptとステップのlockは`windmill-client`を含み、その版更新で書き換わるので除く。
 // libの依存の無いlockも、保護しないので除く。
 describe("dependabot files on disk", () => {
-  const CLIENT_LOCK =
+  const UNPROTECTED_LOCK =
     /^f\/factory\/(poll_dependabot|steps\/dependabot_[a-z_]+|lib\/dependabot_[a-z_]+)\.script\.lock$/;
 
   async function dependabotPaths(): Promise<string[]> {
@@ -754,16 +744,17 @@ describe("dependabot files on disk", () => {
     );
   });
 
-  test("matchesForbiddenPath matches every one except the locks that pin windmill-client", async () => {
+  test("matchesForbiddenPath matches every one except the unprotected locks", async () => {
     const unprotected = (await dependabotPaths()).filter(
-      (path) => !CLIENT_LOCK.test(path) && !matchesForbiddenPath(path),
+      (path) => !UNPROTECTED_LOCK.test(path) && !matchesForbiddenPath(path),
     );
     expect(unprotected).toEqual([]);
   });
 
-  test("matchesImplementProtectedPath matches every one except the locks that pin windmill-client", async () => {
+  test("matchesImplementProtectedPath matches every one except the unprotected locks", async () => {
     const unprotected = (await dependabotPaths()).filter(
-      (path) => !CLIENT_LOCK.test(path) && !matchesImplementProtectedPath(path),
+      (path) =>
+        !UNPROTECTED_LOCK.test(path) && !matchesImplementProtectedPath(path),
     );
     expect(unprotected).toEqual([]);
   });
@@ -1084,8 +1075,10 @@ describe("dependency-free lib locks", () => {
     expect(isDeniedPath(path)).toBe(true);
   });
 
-  test.each(LOCKS)("%s has no dependencies", async (path) => {
-    expect(await Bun.file(path).text()).toContain('"dependencies": {}');
+  test.each(LOCKS)("%s is byte-identical to the empty lock", async (path) => {
+    expect(await Bun.file(path).text()).toBe(
+      await Bun.file(EMPTY_LOCK_REFERENCE).text(),
+    );
   });
 
   test.each(LIBS)("matchesForbiddenPath keeps matching %s.ts", (base) => {
@@ -1117,7 +1110,7 @@ describe("dependency-free lib locks", () => {
   });
 });
 
-// libが単独で動く入口(`main`、`preprocessor`、既定のexport、再export)を持たないことを確かめる。
+// libが単独で動く入口(`main`、`preprocessor`、行頭の`export default`、再export)を持たないことを確かめる。
 // lockを保護しない前提がこの形に依存するので、崩れたら失敗させる。
 function exposesEntryPoint(code: string): boolean {
   const result = readSourceShape(code);
@@ -1125,7 +1118,10 @@ function exposesEntryPoint(code: string): boolean {
   if (result.shape.main !== null || result.shape.preprocessor !== null) {
     return true;
   }
-  return /^\s*export\s+(default\b|\*|\{[^}]*\}\s*from\b)/m.test(code);
+  return (
+    /^\s*export\s+(default\b|\*|\{[^}]*\}\s*from\b)/m.test(code) ||
+    /\bexport\s*\{[^}]*\bas\s+(default|["']main["'])/.test(code)
+  );
 }
 
 describe("entry point detection of the libs", () => {
@@ -1137,6 +1133,8 @@ describe("entry point detection of the libs", () => {
     ["default export", "export default function () {}"],
     ["star re-export", 'export * from "./x.ts";'],
     ["named re-export", 'export { main } from "./x.ts";'],
+    ["aliased default export", "const run = 1;\nexport { run as default };"],
+    ["string export name", 'const run = 1;\nexport { run as "main" };'],
   ])("detects %s", (_label, code) => {
     expect(exposesEntryPoint(code)).toBe(true);
   });
@@ -1157,12 +1155,14 @@ describe("entry point detection of the libs", () => {
 });
 
 describe("libs whose lock is not protected", () => {
-  const libs = FORBIDDEN_EXACT_PATHS.filter((path) =>
-    /^f\/factory\/lib\/[a-z_]+\.ts$/.test(path),
+  const libs = FORBIDDEN_EXACT_PATHS.filter(
+    (path) =>
+      /^f\/factory\/lib\/[a-z0-9_]+\.ts$/.test(path) &&
+      !FORBIDDEN_EXACT_PATHS.includes(path.replace(/\.ts$/, ".script.lock")),
   );
 
   test("finds the libs, so that the checks below are not empty", () => {
-    expect(libs.length).toBeGreaterThan(15);
+    expect(libs.length).toBeGreaterThanOrEqual(18);
   });
 
   test.each(libs)("%s has no entry point", async (path) => {

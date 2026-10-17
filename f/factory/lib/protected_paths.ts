@@ -66,7 +66,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 任意のファイルがlockとして読まれうるので、libのものも守る。
  * 一方、`drawio_viewer_bump.script.lock`と`lib/drawio_viewer_observations.script.lock`は守らない。
  * `windmill-client`の版を上げる変更で、全scriptのlockと一緒に書き換わり、その変更を止めてしまうためである。
- * 依存の無い`lib/`のlockも守らない(次の段落の「libのlock」)。
+ * 依存の無い`lib/`のlockも守らない(後述の「libのlockは入れない」)。
  * 固定を強制する側も同じ理由で守る。ビューアの照合と取得、配信物の一覧(manifest.json)の作成、
  * lockfileの検査のスクリプトは、書き換えられると検査をすり抜けて配信物に混ざる。
  * `asset-name.ts`は照合したビューアの書き込み先の名前を決め、`vite.config.ts`は
@@ -104,7 +104,8 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * libのlockは入れない。上のlibは`main`を持たず、単独のjobとして動かない。importする側のscriptは
  * 自分の`.ts`と`.script.lock`で動くので、libのlockは実行の入力にならず、中身が変わっても動きは変わらない。
  * libの`.ts`と、`lock`の参照先を固定する`.script.yaml`は、守られている。
- * この前提(libが入口を持たない)は、`tests/lib/protected_paths.test.ts`が固定する。
+ * この前提(libが`main`、`preprocessor`、行頭の`export default`、再exportを持たない)は、
+ * `tests/lib/protected_paths.test.ts`が固定する。
  * 一方、次のものは、このリストに入れない。
  * 例外を開くコールバックの本体(`steps/pr_fix_verify.ts`と`steps/pr_fix_finish.ts`)と、
  * 変更の形を判定する`isLockOnlyChange`と、それを呼ぶ`isRehashCandidate`、`inspectCiFixChanges`の`rehashCheck`の分岐、
