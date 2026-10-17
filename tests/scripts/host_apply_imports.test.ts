@@ -45,11 +45,19 @@ function isAllowed(file: string, specifier: string): boolean {
   return target.startsWith(`${HOST_APPLY_DIR}/`);
 }
 
+/** ディレクトリの下の`.ts`を、サブディレクトリも含めて集める。 */
+function collectTs(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...collectTs(full));
+    else if (entry.name.endsWith(".ts")) found.push(full);
+  }
+  return found.sort();
+}
+
 function sourceFiles(): string[] {
-  const inDir = readdirSync(HOST_APPLY_DIR)
-    .filter((name) => name.endsWith(".ts"))
-    .map((name) => join(HOST_APPLY_DIR, name));
-  return [ENTRY, ...inDir];
+  return [ENTRY, ...collectTs(HOST_APPLY_DIR)];
 }
 
 function violations(files: string[]): string[] {
@@ -91,6 +99,24 @@ describe("the import checker", () => {
     expect(
       specifiers(source).filter((specifier) => !isAllowed(file, specifier)),
     ).toEqual([]);
+  });
+});
+
+describe("collectTs", () => {
+  test("includes files in subdirectories", () => {
+    const dir = mkdtempSync(join(tmpdir(), "collect-ts-"));
+    try {
+      mkdirSync(join(dir, "deep/er"), { recursive: true });
+      writeFileSync(join(dir, "a.ts"), "");
+      writeFileSync(join(dir, "deep/er/b.ts"), "");
+      writeFileSync(join(dir, "deep/c.md"), "");
+      expect(collectTs(dir).map((path) => path.slice(dir.length + 1))).toEqual([
+        "a.ts",
+        "deep/er/b.ts",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

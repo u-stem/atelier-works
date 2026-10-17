@@ -3,11 +3,13 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ChangedFile } from "../../scripts/host_apply/approval.ts";
 import { MAX_BLOB_BYTES } from "../../scripts/host_apply/constants.ts";
+import { parseLsTreeZ } from "../../scripts/host_apply/git.ts";
 import {
   buildPlan,
   type PlanGit,
   type PlanResult,
   parsePlanArgs,
+  suspiciousTreePaths,
 } from "../../scripts/host_apply/plan.ts";
 import { createPlanGit } from "../../scripts/host_apply/plan_git.ts";
 import {
@@ -91,7 +93,14 @@ function fakeGit(commits: Record<string, FakeCommit>) {
   return { git, calls };
 }
 
+const PACKAGE_JSON = JSON.stringify({
+  name: "x",
+  dependencies: {},
+  devDependencies: { typescript: "^7.0.2" },
+});
+
 const BASE_FILES = {
+  "package.json": PACKAGE_JSON,
   "mise.toml": MISE,
   "infra/docker-compose.yml": COMPOSE,
   "scripts/doctor.sh": "#!/bin/sh\n",
@@ -449,12 +458,123 @@ describe("buildPlan: more approval cases", () => {
     });
   });
 
-  test("does not wait for approval when only package.json changes", async () => {
-    const plan = await planOf(chainOf({ "package.json": "{}\n" }), {
+  test("does not wait for approval when only a dependency version changes", async () => {
+    const plan = await planOf(
+      chainOf({
+        "package.json": PACKAGE_JSON.replace("^7.0.2", "^7.0.3"),
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan.decision).toBe("would_converge");
+  });
+
+  test("waits for approval when package.json gets a scripts field", async () => {
+    const plan = await planOf(
+      chainOf({
+        "package.json": JSON.stringify({
+          ...JSON.parse(PACKAGE_JSON),
+          scripts: { postinstall: "echo x" },
+        }),
+      }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      files: ["package.json"],
+    });
+  });
+
+  test("does not exempt a package.json whose name differs only in case", async () => {
+    const plan = await planOf(
+      chainOf({ "Package.json": PACKAGE_JSON.replace("^7.0.2", "^7.0.3") }),
+      { applied: A, target: B },
+    );
+    expect(plan).toMatchObject({
+      decision: "pending_approval",
+      files: ["Package.json"],
+    });
+  });
+
+  test("does not wait for approval when only bun.lock changes", async () => {
+    const plan = await planOf(chainOf({ "bun.lock": "{}\n" }), {
       applied: A,
       target: B,
     });
     expect(plan.decision).toBe("would_converge");
+  });
+});
+
+describe("buildPlan: paths that can name one file in two ways", () => {
+  async function rejectedFor(paths: string[]): Promise<PlanResult> {
+    const files: Record<string, string> = {};
+    for (const path of paths) files[path] = "x";
+    return planOf(chainOf(files), { applied: A, target: B });
+  }
+
+  test.each([
+    "ſcripts/doctor.sh",
+    "bunﬁg.toml",
+    "infra/doc\u212A er-compose.yml".replace(" ", ""),
+    "docs/café.md",
+  ])("rejects the non-ASCII path %s", async (path) => {
+    expect(await rejectedFor([path])).toMatchObject({
+      decision: "rejected",
+      kind: "tree_forbidden",
+    });
+  });
+
+  test("rejects paths that differ only in Unicode normalization", async () => {
+    expect(
+      await rejectedFor(["docs/caf\u00e9.md", "docs/cafe\u0301.md"]),
+    ).toMatchObject({ kind: "tree_forbidden" });
+  });
+
+  test("rejects two paths that differ only in case", async () => {
+    expect(await rejectedFor(["docs/Foo", "docs/foo"])).toMatchObject({
+      kind: "tree_forbidden",
+    });
+  });
+
+  test("rejects files under directories that differ only in case", async () => {
+    expect(await rejectedFor(["Scripts/a.ts", "scripts/b.ts"])).toMatchObject({
+      kind: "tree_forbidden",
+    });
+  });
+
+  test.each([
+    "infra/docker-compose.override.yml",
+    "infra/docker-compose.override.yaml",
+    "infra/compose.override.yml",
+    "infra/Compose.Override.yaml",
+    "compose.override.yml",
+  ])("rejects the compose override file %s", async (path) => {
+    expect(await rejectedFor([path])).toMatchObject({
+      kind: "tree_forbidden",
+    });
+  });
+
+  test("accepts ASCII paths that differ in more than case", async () => {
+    expect((await rejectedFor(["docs/foo", "docs/bar"])).decision).toBe(
+      "would_converge",
+    );
+  });
+
+  test("escapes non-ASCII characters in the detail", async () => {
+    const plan = await rejectedFor(["docs/café.md"]);
+    expect(
+      plan.decision === "rejected" ? /^[\x20-\x7e]*$/.test(plan.detail) : false,
+    ).toBe(true);
+  });
+});
+
+describe("suspiciousTreePaths on the real tree", () => {
+  test("finds nothing in the current tree", () => {
+    const listing = Bun.spawnSync(["git", "ls-tree", "-r", "-z", "HEAD"], {
+      cwd: REPO_ROOT,
+    });
+    expect(
+      suspiciousTreePaths(parseLsTreeZ(listing.stdout.toString())),
+    ).toEqual([]);
   });
 });
 

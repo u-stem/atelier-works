@@ -825,6 +825,7 @@ describe("files that the host executor runs", () => {
     "mask",
     "timeouts",
     "plan",
+    "package_policy",
     "staging",
     "drain",
     "converge",

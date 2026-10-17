@@ -242,3 +242,7 @@ export function parsePlanArgs(argv: readonly string[]): ParsedPlanArgs {
   }
   return { ok: true, args: { repo, applied, target, approved } };
 }
+
+export function suspiciousTreePaths(_entries: readonly TreeEntry[]): string[] {
+  return [];
+}

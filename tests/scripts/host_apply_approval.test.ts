@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   approvalFiles,
   type ChangedFile,
@@ -26,12 +28,16 @@ describe("isApprovalTarget", () => {
     "scripts/host-apply.sh",
     "scripts/host_apply/ci.ts",
     "scripts/host_apply/sub/deep.ts",
+    "package.json",
     "bunfig.toml",
     ".npmrc",
     ".env",
     ".env.local",
     ".node-version",
     ".bun-version",
+    ".nvmrc",
+    ".python-version",
+    ".ruby-version",
     "mise.toml",
     "mise.production.toml",
     ".mise.toml",
@@ -52,7 +58,6 @@ describe("isApprovalTarget", () => {
     "f/factory/self_update.ts",
     "console/package.json",
     "scripts/lint-docs.ts",
-    "package.json",
     "bun.lock",
     "bun.lockb",
     ".github/workflows/other.yml",
@@ -88,7 +93,11 @@ describe("isApprovalTarget: letter case", () => {
     expect(isApprovalTarget(path)).toBe(true);
   });
 
-  test.each(["Package.json", "BUN.LOCK", "Docs/Security.md"])(
+  test("requires approval for Package.json", () => {
+    expect(isApprovalTarget("Package.json")).toBe(true);
+  });
+
+  test.each(["BUN.LOCK", "Docs/Security.md", "console/package.json"])(
     "does not require approval for %s",
     (path) => {
       expect(isApprovalTarget(path)).toBe(false);
@@ -216,4 +225,25 @@ describe("approval covers changes up to the approved sha only", () => {
   test("a later change to a target file needs approval again", () => {
     expect(approvalFiles(laterEdit, new Set())).toEqual(["scripts/doctor.sh"]);
   });
+});
+
+describe("how the host scripts start the custom-tags script", () => {
+  // `bun run scripts/x.ts`は、同名のpackage.jsonのscriptがあるとそちらを実行する。
+  // `./`で始め、`run`を付けない形なら、必ずファイルを実行する。
+  const readScript = (path: string) =>
+    readFileSync(join(import.meta.dir, "../..", path), "utf8");
+
+  test.each(["scripts/doctor.sh", "scripts/bootstrap.sh"])(
+    "%s never uses bun run for it",
+    (path) => {
+      expect(readScript(path)).not.toMatch(/bun run scripts\/custom-tags\.ts/);
+    },
+  );
+
+  test.each(["scripts/doctor.sh", "scripts/bootstrap.sh"])(
+    "%s starts it as bun ./scripts/custom-tags.ts",
+    (path) => {
+      expect(readScript(path)).toMatch(/bun \.\/scripts\/custom-tags\.ts /);
+    },
+  );
 });

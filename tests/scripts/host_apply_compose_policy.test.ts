@@ -622,6 +622,133 @@ describe("reservations and absolute binds", () => {
   });
 });
 
+describe("short volume options", () => {
+  test.each([
+    "ro,rw",
+    "rw,ro",
+    "ro,rw,z",
+    "rw",
+    "rw,z",
+    "",
+    "unknown",
+    "ro,unknown",
+    "ro,",
+  ])("a bind mounted with the option list %p is not read-only", (options) => {
+    expect(verdict(one({ volumes: [`./conf:/c:${options}`] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test.each(["ro", "ro,z", "ro,Z", "z,ro", "ro,rslave"])(
+    "accepts a read-only bind with the option list %s",
+    (options) => {
+      expect(verdict(one({ volumes: [`./conf:/c:${options}`] }))).toBe("ok");
+    },
+  );
+
+  test("rejects a short volume with more than three fields", () => {
+    expect(verdict(one({ volumes: ["./conf:/c:ro:extra"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects an unknown option on a named volume", () => {
+    expect(
+      verdict(one({ volumes: ["data:/d:weird"] }, { volumes: { data: null } })),
+    ).toBe("compose_forbidden");
+  });
+});
+
+describe("variables in fields checked by value", () => {
+  test.each([
+    ["network_mode", "${NOPE:-host}"],
+    ["pid", "${NOPE:-host}"],
+    ["ipc", "${NOPE:-host}"],
+    ["uts", "${NOPE:-host}"],
+    ["network_mode", "con${NOPE:-}tainer:other"],
+  ])("rejects %s: %s", (key, value) => {
+    expect(verdict(one({ [key]: value }))).toBe("compose_forbidden");
+  });
+
+  test("rejects a security_opt that a variable spells as unconfined", () => {
+    expect(
+      verdict(one({ security_opt: ["seccomp=unconf${NOPE:-}ined"] })),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a security_opt spelled by two variables", () => {
+    expect(
+      verdict(one({ security_opt: ["seccomp=${A:-uncon}${B:-fined}"] })),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a security_opt that a variable spells as label=disable", () => {
+    expect(verdict(one({ security_opt: ["label=${NOPE:-disable}"] }))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("still allows a variable in an environment value", () => {
+    expect(verdict(one({ environment: ["A=${DB_PASSWORD:-x}"] }))).toBe("ok");
+  });
+});
+
+describe("service networks", () => {
+  const top = { networks: { n: { driver: "bridge" } } };
+
+  test("accepts a list of names", () => {
+    expect(verdict(one({ networks: ["n"] }, top))).toBe("ok");
+  });
+
+  test("accepts aliases and ipv4_address", () => {
+    expect(
+      verdict(
+        one(
+          {
+            networks: {
+              n: { aliases: ["a"], ipv4_address: "172.20.0.5" },
+            },
+          },
+          top,
+        ),
+      ),
+    ).toBe("ok");
+  });
+
+  test("accepts a name mapped to nothing", () => {
+    expect(verdict(one({ networks: { n: null } }, top))).toBe("ok");
+  });
+
+  test("rejects driver_opts on a service network", () => {
+    expect(
+      verdict(
+        one(
+          { networks: { n: { driver_opts: { "com.docker.network.x": "1" } } } },
+          top,
+        ),
+      ),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects sysctls on a service network", () => {
+    expect(
+      verdict(one({ networks: { n: { sysctls: { "net.x": "1" } } } }, top)),
+    ).toBe("compose_forbidden");
+  });
+
+  test("rejects a network list entry that is not a string", () => {
+    expect(verdict(one({ networks: [{ n: 1 }] }, top))).toBe(
+      "compose_forbidden",
+    );
+  });
+
+  test("rejects aliases that are not strings", () => {
+    expect(verdict(one({ networks: { n: { aliases: [1] } } }, top))).toBe(
+      "compose_forbidden",
+    );
+  });
+});
+
 describe("top-level volumes and networks", () => {
   test("accepts a named volume with the local driver", () => {
     expect(verdict(one({}, { volumes: { v: { driver: "local" } } }))).toBe(
