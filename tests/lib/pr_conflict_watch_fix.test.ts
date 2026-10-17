@@ -1175,6 +1175,30 @@ describe("runPrConflictWatch: a work item that runs without being bound to the r
     expect(h.events).toEqual([]);
   });
 
+  test("warns when a row has waited long for a fix work item that is not bound to it", async () => {
+    const h = setup({
+      rows: [
+        check({
+          episode_started_at: new Date(NOW.getTime() - (60 + 120) * MINUTE - 1),
+        }),
+      ],
+      fix: { hasActiveFix: async () => true },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).toContain(
+      "pr conflict has been waiting for a fix work item that is not bound to the row",
+    );
+  });
+
+  test("does not warn while the wait is short", async () => {
+    const h = setup({
+      rows: [check(PAST_GRACE)],
+      fix: { hasActiveFix: async () => true },
+    });
+    await runPrConflictWatch(h.deps);
+    expect(h.warnings).toEqual([]);
+  });
+
   test("counts the row as waiting while a fix work item is active", async () => {
     const h = setup({
       rows: [check(PAST_GRACE)],

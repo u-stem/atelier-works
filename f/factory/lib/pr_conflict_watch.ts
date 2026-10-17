@@ -975,6 +975,14 @@ async function decideRowAction(
   // そのまま通知すると人とFactoryが同じブランチへpushしうるので、動く間は待つ。読めなくても、通知を止めない。
   try {
     if (await fix.hasActiveFix(row.owner, row.repo, row.pr_number)) {
+      // 結ばれた行は回復が警告を残すが、結ばれていない行はそこを通らない。人が作業項目を確かめられるよう、ここで残す。
+      const waitedMs = input.now.getTime() - row.episode_started_at.getTime();
+      if (waitedMs >= input.graceMin * 60_000 + FIX_BOUND_WARN_AFTER_MS) {
+        log.warn(
+          "pr conflict has been waiting for a fix work item that is not bound to the row",
+          { pr: pullRequestKey(rowRef(row)) },
+        );
+      }
       return "defer";
     }
   } catch (err) {
