@@ -122,7 +122,7 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
 const DANGEROUS_CONFIG_KEY =
   /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
 
-/** `mise set`の値を取るオプション。`--stdin`の鍵を探すとき、値の語を鍵と取り違えない。 */
+/** `mise set`の書き込む形が持ってよい、値を取るオプション。 */
 const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   ...MISE_VALUE_OPTIONS,
   "--file",
@@ -132,18 +132,36 @@ const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * `mise set`の書き込む形が持ってよい、値を取らないオプション。
+ * 値を取る隠しオプションは数え切れないので、ここに無いオプションは書き込む形とみなさない。
+ */
+const MISE_SET_FLAGS: ReadonlySet<string> = new Set([
+  "--stdin",
+  "-g",
+  "--global",
+  "--age-encrypt",
+]);
+
+/** `mise set`の別名。`ev`と`env-vars`も値を一覧する。 */
+const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
+
+/**
  * `mise set`が、書き込む形を持たずに値を一覧するなら真。
- * サブコマンドの前に置けるグローバルオプションは、値を取るものが隠れているため列挙しない。
- * `--`より前の語に`set`があれば、`mise set`の呼び出しとして判定する。
+ * サブコマンドの前に置けるグローバルオプションは、値を取る隠しものがあるため列挙しない。
+ * `--`より前の語に`set`(か別名)があれば、`mise set`の呼び出しとして判定する。
  * 書き込む形は2つある。オペランドがすべて`KEY=VALUE`である形と、
  * `--stdin`を持ち、オペランドが展開を含まない鍵の名前1つだけの形である。
+ * 書き込む形のオプションは、許可リストにあるものだけにする。未知のオプションは、
+ * 値を取ってオペランドの数を変えるおそれがあるので、一覧を出す形として扱う。
  * `--`を持つ形は、鍵の名前と区別できないので書き込む形とみなさない。
  */
 function listsMiseValues(words: readonly Word[]): boolean {
   const args = words.slice(1);
   const dashDash = args.findIndex((word) => word.text === "--");
   const beforeDashDash = dashDash === -1 ? args : args.slice(0, dashDash);
-  const setAt = beforeDashDash.findIndex((word) => word.text === "set");
+  const setAt = beforeDashDash.findIndex((word) =>
+    MISE_SET_NAMES.has(word.text),
+  );
   if (setAt === -1) return false;
   if (dashDash !== -1) return true;
   const operands: Word[] = [];
@@ -152,11 +170,21 @@ function listsMiseValues(words: readonly Word[]): boolean {
   for (let index = 0; index < rest.length; index += 1) {
     const word = rest[index];
     if (word === undefined) continue;
-    if (word.text.startsWith("-")) {
-      if (word.text === "--stdin") readsStdin = true;
-      else if (MISE_SET_VALUE_OPTIONS.has(word.text)) index += 1;
-    } else {
+    if (!word.text.startsWith("-")) {
       operands.push(word);
+      continue;
+    }
+    const [name = ""] = word.text.split("=", 1);
+    if (name === "--stdin" && word.text === name) {
+      readsStdin = true;
+    } else if (MISE_SET_FLAGS.has(word.text)) {
+      continue;
+    } else if (MISE_SET_VALUE_OPTIONS.has(word.text)) {
+      index += 1;
+    } else if (word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(name)) {
+      continue;
+    } else {
+      return true;
     }
   }
   if (operands.length === 0) return true;

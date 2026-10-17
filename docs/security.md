@@ -1613,9 +1613,9 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 | `mise.local.toml`と、その別名のファイル(`.mise.local.toml`、`mise.*.local.toml`)の`Read`と`Edit` | 秘密値そのものが書かれている |
 | `.env`、`infra/.env`、`infra/secrets.env`の`Read` | 秘密値が書かれうる |
 | `.wmill/`の`remotes.ndjson`の`Read`と`Edit` | wmill CLIのワークスペースのプロファイルで、APIトークンが書かれている |
-| `mise env`とその別名(`mise e`、`mise ev`、`mise env-vars`) | 展開した環境変数の一覧を出力する |
+| `mise env`とその別名(`mise e`) | 展開した環境変数の一覧を出力する |
 | `mise config`、`mise cfg`、`mise toml` | 設定値を出力する |
-| 引数なしの`mise set` | 設定値の一覧を出力する |
+| 引数なしの`mise set`と、別名の`mise ev`、`mise env-vars` | 設定値の一覧を出力する |
 | `mise exec -- env`、`mise exec -- printenv`、`mise x -- env`、`mise x -- printenv`、`printenv`、`env` | 環境変数を出力する |
 | `cat mise.local.toml` | 秘密値そのものを出力する |
 
@@ -1627,7 +1627,8 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 引数なしの`docker compose config`だけは、設定にも置く。
 `mise set -E`は、値を指定して書き込む形があるので、設定では拒否せず、フックが書き込む形の無い呼び出しだけを拒否する。
 書き込む形は、オペランドがすべて`KEY=VALUE`の形か、`--stdin`と、展開を含まない鍵の名前1つの形である。
-`mise -E local set`のように、サブコマンドの前にグローバルオプションを置いても、`--`より前に`set`があれば同じ判定をする。
+`mise -E local set`のように、サブコマンドの前にグローバルオプションを置いても、`--`より前に`set`か別名の`ev`、`env-vars`があれば同じ判定をする。
+書き込む形が持てるオプションは、`--stdin`、`-g`、`--global`、`--age-encrypt`と、値を取る`-E`、`-C`、`-j`、`--file`、`--age-*`だけである。未知のオプションは、値を取ってオペランドを変えるおそれがあるので、一覧を出す形として拒否する。
 値を取る隠しオプションを列挙しないためである。`mise run set`のように、`set`という語を持つ別の呼び出しも拒否することがある。
 秘密値を投入する手順([セットアップ](setup.md))は、値を標準入力から渡す`mise set -E local --stdin KEY`を使う。この形は一覧を出さないので、フックは拒否しない。
 投入は人が行う。
@@ -1809,8 +1810,9 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
 - `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
 - `mise exec`経由で秘密値を読む方法の一部(ベストエフォートの規則である)
-- サブコマンドの前にグローバルオプションを置いた`mise env`と`mise exec`(`mise -E local env`、`mise -C . exec -- printenv`)。`mise set`だけが、この置き方を判定する
-- プログラム名を実行時に決める形(`m=mise; $m set`)
+- サブコマンドの前にグローバルオプションを置いた`mise env`と`mise exec`、`mise config`系(`mise -E local env`など)。`mise set`だけが、この置き方を判定する
+- プログラム名とサブコマンドを実行時に決める形(`m=mise; $m set`、`mise $(echo set)`)
+- `mise set`の書き込む形は、既存の秘密値を上書きして消すことを防がない(`KEY=`や、空の標準入力の`--stdin`)
 - サブシェルの中の`cd`の範囲(外側にも効くものとして扱う)
 - 前置きではない`HOME`と`XDG_CONFIG_HOME`の設定(`export HOME=...`の後のgit、`sh -c`の中のgit)
 - 書き方を変えた`/proc/<pid>/environ`(`dd if=/proc/self/environ`、`/proc/self/./environ`、`//proc/...`、`/proc`の再帰的な検索)
