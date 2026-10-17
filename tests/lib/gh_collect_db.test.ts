@@ -321,12 +321,12 @@ describe("finishGhCollectRun", () => {
     const text = calls[0]?.text ?? "";
     expect(
       [
-        "owner_id = ? ::bigint",
-        "id_checked = ? ::boolean",
-        "cost = ? ::integer",
-        "remaining = ? ::integer",
-        "next_allowed_at = ? ::timestamptz",
-      ].filter((cast) => !text.includes(cast)),
+        /owner_id = {2}\? ::bigint/,
+        /id_checked = {2}\? ::boolean/,
+        /cost = {2}\? ::integer/,
+        /remaining = {2}\? ::integer/,
+        /next_allowed_at = {2}\? ::timestamptz/,
+      ].filter((cast) => !cast.test(text)),
     ).toEqual([]);
   });
 
