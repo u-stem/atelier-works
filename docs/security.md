@@ -1824,6 +1824,7 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - `find -exec`、`env -S`、標準入力から名前を読む`xargs`(`git push`と`git commit`を除く)
 - `mise`のほかのサブコマンドによる秘密値の出力(`mise env`、`mise config`、`mise hook-env`、`mise en`、`mise direnv exec`、`mise mcp`)
 - サブコマンドの前にグローバルオプションを置くと、設定の前方一致の拒否が外れる(`mise -E local env`、`mise -q x -- env`など)
+- オプションを前に置いた`mise exec`の内側のシェルの`-c`(`mise -q x -- bash -c 'mise set'`)
 - `mise run`の`-s`と`--shell`、`mise exec`の`-c`の位置と束ねた形、`xargs`から起動する`mise`
 - `MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS`などの`MISE_*`の環境変数、`BASH_ENV`や`PATH`の差し替え
 - `mise set`のサブコマンドの前に、値を取る隠しオプションを置く形(未知の版で増えたもの)

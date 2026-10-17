@@ -211,7 +211,10 @@ function listsMiseValues(words: readonly Word[]): boolean {
     // オプションを前に置いた`mise x -- mise set`は、外す前置きとして扱われないので、内側のmiseを調べる。
     const dashDash = args.findIndex((word) => word.text === "--");
     const inner = dashDash === -1 ? [] : args.slice(dashDash + 1);
-    return baseName(inner[0]?.text ?? "") === "mise" && listsMiseValues(inner);
+    const stripped = stripWrappers(inner).words;
+    return (
+      baseName(stripped[0]?.text ?? "") === "mise" && listsMiseValues(stripped)
+    );
   }
   if (!MISE_SET_NAMES.has(sub.text)) return false;
   const rest = args.slice(subAt + 1);
