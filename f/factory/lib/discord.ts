@@ -189,6 +189,14 @@ export type NotifyEvent =
       next_action: string;
     }
   | {
+      kind: "github_collect_stale";
+      instance_name: string;
+      owner: string;
+      cause: string;
+      next_action: string;
+      url: string;
+    }
+  | {
       kind: "default_worker_missing";
       instance_name: string;
       /** defaultのworkerがジョブを受けていないこと。 */
@@ -534,6 +542,8 @@ function buildRawEmbed(event: NotifyEvent): DiscordEmbed {
           instanceField(event.instance_name),
         ],
       };
+    case "github_collect_stale":
+      return { title: "", description: "", url: null, fields: [] };
     case "default_worker_missing":
       return {
         title: "defaultのworkerがジョブを受けていません",

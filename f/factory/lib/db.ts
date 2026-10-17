@@ -62,6 +62,7 @@ import {
   GH_COLLECT_ERROR_CODES,
   GH_GONE_REASONS,
   type GhCollectErrorCode,
+  type GhCollectFreshnessRow,
   type GhCollectOwnerState,
   type GhCollectRunOutcome,
   type GhRepo,
@@ -6661,6 +6662,14 @@ export async function listGhCollectOwnerStates(
           },
     last_led_at: parseNullableDate(row.last_led_at, "last_led_at"),
   }));
+}
+
+/** 所有者ごとの、収集の鮮度の判定に使う記録を返す。 */
+export async function listGhCollectFreshness(
+  _owners: readonly string[],
+  _sql: SqlClient = defaultSqlClient,
+): Promise<GhCollectFreshnessRow[]> {
+  return [];
 }
 
 /**

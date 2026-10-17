@@ -8,6 +8,7 @@ import {
   GH_COLLECT_RUNS_COLUMNS,
   GH_REPOS_COLUMNS,
   insertGhCollectRuns,
+  listGhCollectFreshness,
   listGhCollectOwnerStates,
   listGhRepos,
   listRecentGhCollectRuns,
@@ -475,6 +476,107 @@ describe("listGhCollectOwnerStates", () => {
   test("does not query for no owners", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await listGhCollectOwnerStates([], sql);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe("listGhCollectFreshness", () => {
+  const FRESHNESS_ROW: SqlRow = {
+    owner: "acme",
+    last_success_at: "2026-10-17T01:00:00.000Z",
+    finished_at: "2026-10-17T01:05:00.000Z",
+    error_code: "timeout",
+    next_allowed_at: null,
+    running_since: "2026-10-17T01:10:00.000Z",
+    first_started_at: "2026-10-01T00:00:00.000Z",
+  };
+
+  test("binds the lowercased owners without duplicates as an array", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectFreshness(["Acme", "acme", "Beta"], sql);
+    expect(calls[0]?.values).toEqual([["acme", "beta"]]);
+  });
+
+  test("counts only a verified success", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectFreshness(["acme"], sql);
+    expect(calls[0]?.text).toMatch(
+      /max\(\w+\.finished_at\)[\s\S]*?\.ok\b[\s\S]*?\.verified\b[\s\S]*?finished_at IS NOT NULL/,
+    );
+  });
+
+  test("reads only finished runs for the latest result", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectFreshness(["acme"], sql);
+    expect(calls[0]?.text).toMatch(
+      /LEFT JOIN LATERAL[\s\S]*?finished_at IS NOT NULL[\s\S]*?LIMIT 1/,
+    );
+  });
+
+  test("reads the oldest start of the owner", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectFreshness(["acme"], sql);
+    expect(calls[0]?.text).toMatch(/min\(\w+\.started_at\)/);
+  });
+
+  test("returns the success, the latest run, the running start and the first start", async () => {
+    const { sql } = createFakeSqlClient([[FRESHNESS_ROW]]);
+    expect(await listGhCollectFreshness(["acme"], sql)).toEqual([
+      {
+        owner: "acme",
+        last_success_at: new Date("2026-10-17T01:00:00.000Z"),
+        latest: {
+          finished_at: new Date("2026-10-17T01:05:00.000Z"),
+          error_code: "timeout",
+          next_allowed_at: null,
+        },
+        running_since: new Date("2026-10-17T01:10:00.000Z"),
+        first_started_at: new Date("2026-10-01T00:00:00.000Z"),
+      },
+    ]);
+  });
+
+  test("returns null times for an owner without runs", async () => {
+    const { sql } = createFakeSqlClient([
+      [
+        {
+          owner: "acme",
+          last_success_at: null,
+          finished_at: null,
+          error_code: null,
+          next_allowed_at: null,
+          running_since: null,
+          first_started_at: null,
+        },
+      ],
+    ]);
+    expect(await listGhCollectFreshness(["acme"], sql)).toEqual([
+      {
+        owner: "acme",
+        last_success_at: null,
+        latest: null,
+        running_since: null,
+        first_started_at: null,
+      },
+    ]);
+  });
+
+  test("rejects a stored error code outside the vocabulary", async () => {
+    const { sql } = createFakeSqlClient([
+      [{ ...FRESHNESS_ROW, error_code: "surprise" }],
+    ]);
+    await expect(listGhCollectFreshness(["acme"], sql)).rejects.toThrow();
+  });
+
+  test("does not query for no owners", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectFreshness([], sql);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("rejects an owner that is not a GitHub name, without querying", async () => {
+    const { sql, calls } = createFakeSqlClient([[]]);
+    await listGhCollectFreshness(["a b"], sql).catch(() => undefined);
     expect(calls).toHaveLength(0);
   });
 });

@@ -539,6 +539,8 @@ export const SELF_UPDATE_LOCAL_GIT_COMMAND_COUNT =
 /** 1回の実行で走る`wmill sync push`と`wmill datatable migrate up`の回数。 */
 export const SELF_UPDATE_CLI_COMMAND_COUNT = 2;
 
+export const GH_COLLECT_FRESHNESS_BOUNDED_CALL_COUNT = 0;
+
 /**
  * 1回の実行で通りうる、`SELF_UPDATE_CALL_TIMEOUT_MS`で区切った呼び出しの最大回数。通知は含めない。
  * - config(`getResource`): 1
