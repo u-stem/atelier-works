@@ -62,6 +62,7 @@ schema:
     - pr_conflict_fix_enabled_since
     - pr_conflict_fix_notify_grace_min
     - gh_collect_enabled
+    - gh_collect_detail_enabled
     - worker_alert_memory_ratio
     - check_commands_by_repo
   properties:
@@ -338,6 +339,11 @@ schema:
       type: boolean
       description: >-
         collect_githubが、ownersの所有者のリポジトリの状態をGitHubから集めてDBに書くかどうかです。falseの間は、読み取り専用のトークンを読まず、何も書きません。所有者ごとの読み取り専用のトークンを入れてから、trueにします。
+      default: false
+    gh_collect_detail_enabled:
+      type: boolean
+      description: >-
+        collect_githubが、リポジトリの一覧に続けて、開いているPRとトリガーラベル付きのIssueの詳細を集めてDBに書くかどうかです。falseの間は、詳細の要求を送りません。gh_collect_enabledがfalseのときは、この値によらず何もしません。
       default: false
     worker_alert_memory_ratio:
       type: number

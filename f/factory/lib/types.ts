@@ -1285,6 +1285,11 @@ export type FactoryConfig = {
    */
   gh_collect_enabled: boolean;
   /**
+   * `collect_github`が、リポジトリの一覧に続けて、開いているPRとトリガーラベル付きのIssueの詳細を集めてDBに書くか。既定は`false`。
+   * `false`の間は、詳細の要求を送らず、一覧の下限も変えない。`gh_collect_enabled`が`false`なら、この値によらず何もしない。
+   */
+  gh_collect_detail_enabled: boolean;
+  /**
    * `sample_worker_load`がメモリの通知を出す割合。`mem_anon_bytes / mem_limit_bytes`がこの値以上のとき通知する。
    * 0を超え1以下。既定は0.8。
    */
