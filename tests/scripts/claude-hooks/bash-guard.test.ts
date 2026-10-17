@@ -1067,6 +1067,14 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise set -E local",
     "mise set KEY",
     "mise set --env local",
+    "mise -E local set",
+    "mise --env local set",
+    "mise -C . set",
+    "mise --cd . set",
+    "mise -j 2 set",
+    "mise set --stdin",
+    "mise set -E local --stdin",
+    "mise -E local set --stdin",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
@@ -1074,7 +1082,10 @@ describe("bash-guard denies mise set without a value to write", () => {
   test.each([
     "mise set -E local KEY=value",
     'mise set KEY="$v"',
-    'read -rs -p "KEY: " v && mise set -E local KEY="$v"',
+    "mise -E local set KEY=value",
+    "mise set -E local --stdin KEY",
+    "mise -E local set --stdin KEY",
+    'IFS= read -rs -p "KEY: " v && printf \'%s\' "$v" | mise set -E local --stdin KEY',
     "mise run check",
   ])("allows %s", async (command) => {
     expect(await decide(command)).toBe("allow");
@@ -1082,6 +1093,10 @@ describe("bash-guard denies mise set without a value to write", () => {
 
   test("the reason says it lists the values", async () => {
     expect(await denyReason("mise set")).toContain("lists");
+  });
+
+  test("the reason names the stdin form for writing a value", async () => {
+    expect(await denyReason("mise set")).toContain("--stdin");
   });
 });
 
