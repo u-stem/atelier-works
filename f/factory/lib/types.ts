@@ -953,6 +953,41 @@ export const GH_COLLECT_ERROR_CODES = [
 ] as const;
 export type GhCollectErrorCode = (typeof GH_COLLECT_ERROR_CODES)[number];
 
+/** 収集の実行の失敗が生じた段。一覧が`list`、詳細が`detail`。 */
+export const GH_COLLECT_STAGES = ["list", "detail"] as const;
+export type GhCollectStage = (typeof GH_COLLECT_STAGES)[number];
+
+/** PRの記録の状態。開いている、または観測の時点で一覧に無かった。 */
+export const GH_PR_STATES = ["open", "closed"] as const;
+export type GhPrState = (typeof GH_PR_STATES)[number];
+
+/** Issueの記録の状態。閉じたのかラベルが外れたのかは区別しない。 */
+export const GH_ISSUE_STATES = ["open", "unlisted"] as const;
+export type GhIssueState = (typeof GH_ISSUE_STATES)[number];
+
+/** 作者のGraphQLの種別。 */
+export const GH_AUTHOR_TYPES = [
+  "User",
+  "Bot",
+  "Mannequin",
+  "Organization",
+  "EnterpriseUserAccount",
+] as const;
+export type GhAuthorType = (typeof GH_AUTHOR_TYPES)[number];
+
+/** 保存する`mergeable`の値。`UNKNOWN`は保存しない。 */
+export const GH_MERGEABLE_VALUES = ["MERGEABLE", "CONFLICTING"] as const;
+export type GhMergeable = (typeof GH_MERGEABLE_VALUES)[number];
+
+/** エラーが出ても別名を失敗にしない、PRの任意の項目。スキーマで`null`を許す項目だけを挙げる。 */
+export const GH_DETAIL_OPTIONAL_FIELDS = [
+  "labels",
+  "reviewRequests",
+  "author",
+  "autoMergeRequest",
+] as const;
+export type GhDetailOptionalField = (typeof GH_DETAIL_OPTIONAL_FIELDS)[number];
+
 /** `factory.gh_repos`の1行。`owner`と`repo`は小文字。 */
 export type GhRepo = {
   readonly id: number;
@@ -970,6 +1005,14 @@ export type GhRepo = {
   readonly gone: boolean;
   readonly gone_reason: GhGoneReason | null;
   readonly listed_at: Date | null;
+  /** 詳細を最後に取り終えた周回の、観測を始めた時刻。一度も無ければ`null`。 */
+  readonly last_collected_at: Date | null;
+  /** 詳細の結果を最後に書いた時刻。取る順の並びのキー。一度も着手していなければ`null`。 */
+  readonly last_attempted_at: Date | null;
+  /** 前回の着手が、ページの上限か件数の照合の不一致で打ち切られた。 */
+  readonly truncated: boolean;
+  /** 前回の着手が失敗した。 */
+  readonly detail_failed: boolean;
 };
 
 /** 一覧に載ったリポジトリの書き込み。`owner`は呼び出し側が別に渡す。 */
@@ -1020,6 +1063,138 @@ export type GhCollectFreshnessRow = {
   readonly first_started_at: Date | null;
 };
 
+/** PRの詳細として書く値。`null`の列は不明で、偽や空を意味しない。 */
+export type GhPullRequestWrite = {
+  readonly number: number;
+  readonly head_sha: string;
+  readonly head_ref: string | null;
+  readonly base_ref: string | null;
+  readonly is_draft: boolean;
+  readonly is_cross_repository: boolean;
+  readonly auto_merge_enabled: boolean | null;
+  readonly author_login: string | null;
+  readonly author_type: GhAuthorType | null;
+  readonly author_id: number | null;
+  readonly mergeable: GhMergeable | null;
+  readonly has_review_label: boolean | null;
+  readonly has_fix_label: boolean | null;
+  readonly review_requested_user_ids: readonly number[] | null;
+  readonly assignee_ids: readonly number[] | null;
+  readonly team_review_requested: boolean | null;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+};
+
+/** `factory.gh_pull_requests`の1行。 */
+export type GhPullRequest = GhPullRequestWrite & {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly state: GhPrState;
+  readonly written_at: Date;
+  readonly usable: boolean;
+};
+
+/** Issueの詳細として書く値。 */
+export type GhIssueWrite = {
+  readonly number: number;
+  readonly author_login: string | null;
+  readonly author_type: GhAuthorType | null;
+  readonly author_id: number | null;
+  readonly created_at: Date;
+  readonly updated_at: Date;
+};
+
+/** `factory.gh_issues`の1行。 */
+export type GhIssue = GhIssueWrite & {
+  readonly id: number;
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly state: GhIssueState;
+  readonly written_at: Date;
+  readonly usable: boolean;
+};
+
+/**
+ * 詳細を取り終えた1つのリポジトリの書き込み。
+ * `pr_rows`と`issue_rows`は書く行(差分)、`pr_keep`と`issue_keep`は今回の一覧の番号の全体で、載らない開いている行を閉じる判定に使う。
+ * `observed_at`は、その周回の観測を始めた時刻で、`last_collected_at`に書く。
+ */
+export type GhRepoDetailWrite = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly repo_id: number;
+  readonly observed_at: Date;
+  readonly pr_rows: readonly GhPullRequestWrite[];
+  readonly pr_keep: readonly number[];
+  readonly issue_rows: readonly GhIssueWrite[];
+  readonly issue_keep: readonly number[];
+};
+
+/** `writeGhRepoDetail`の結果。検査に通らない書き込みはDBに触れず、通らなかった項目の名前を返す。 */
+export type GhRepoDetailWriteResult =
+  | { readonly kind: "written" }
+  | { readonly kind: "no_repo_row" }
+  | { readonly kind: "rejected"; readonly field: string };
+
+// ---------------------------------------------------------------------------
+// 収集の詳細として保存する値の述語。例外を投げず、値を戻り値にも文にも含めない。
+// ---------------------------------------------------------------------------
+
+export function isGitSha(_value: unknown): _value is string {
+  return false;
+}
+
+export function isStoredRefName(_value: unknown): _value is string {
+  return false;
+}
+
+export function isGitHubLogin(_value: unknown): _value is string {
+  return false;
+}
+
+export function isGitHubDatabaseId(_value: unknown): _value is number {
+  return false;
+}
+
+export function isGhAuthorType(_value: unknown): _value is GhAuthorType {
+  return false;
+}
+
+export function isGhMergeable(_value: unknown): _value is GhMergeable {
+  return false;
+}
+
+export function isGhPrState(_value: unknown): _value is GhPrState {
+  return false;
+}
+
+export function isGhIssueState(_value: unknown): _value is GhIssueState {
+  return false;
+}
+
+export function isGhCollectStage(_value: unknown): _value is GhCollectStage {
+  return false;
+}
+
+export function checkGhPullRequestWrite(
+  _row: GhPullRequestWrite,
+): string | null {
+  return null;
+}
+
+export function checkGhIssueWrite(_row: GhIssueWrite): string | null {
+  return null;
+}
+
+export function checkGhRepoDetailWrite(
+  _write: GhRepoDetailWrite,
+): string | null {
+  return null;
+}
+
 /** 収集の実行1行(所有者ごと)の終わりに書く内容。 */
 export type GhCollectRunOutcome = {
   readonly ok: boolean;
@@ -1033,6 +1208,16 @@ export type GhCollectRunOutcome = {
   readonly next_allowed_at: Date | null;
   /** その周回で最初に要求を送った所有者の行だけ真。結果は問わない。要求が1回も無い行は偽。 */
   readonly led: boolean;
+  /** `error_code`が生じた段。成功の行は`null`。 */
+  readonly stage: GhCollectStage | null;
+  /** 詳細を取る対象のリポジトリの数。 */
+  readonly detail_targets: number;
+  /** 詳細の要求の数。ページ送りと分割を含む。 */
+  readonly detail_requests: number;
+  /** 詳細を取り終えて書いたリポジトリの数。 */
+  readonly detail_done: number;
+  /** 詳細が打ち切りか失敗になったリポジトリの数。 */
+  readonly detail_incomplete: number;
 };
 
 // ---------------------------------------------------------------------------
