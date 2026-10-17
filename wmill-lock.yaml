@@ -58,7 +58,7 @@ locks:
   f/factory/lib/factory_clone: 0ad0346260a03c348e813df02bca9a7f9b512daf33675156b2b1233e78c40963
   f/factory/lib/factory_repo_gate: 5916036950252dbf9a7e55de9acc7d392471fedaef11aee9cb6df2367304add9
   f/factory/lib/gated_review_support: c858998fefbebb102f55e896471e4dc8195de412a39c8d60d2d36d22763bc1bb
-  f/factory/lib/gh_graphql: 6bed7583762bb68a1a9c0455f2245b98f5d275ee140f0f2115a211cc2a59329f
+  f/factory/lib/gh_graphql: 726c15331df119945b98ba340798508b266a965bdcbb515af7b726cb6e965499
   f/factory/lib/github: a5e25a61aee3616043d4bfce008f1fa8ccc4669cd82200a4ed3d8ed3ef8d6e82
   f/factory/lib/github_errors: f1936b8fdfe81c5fcce3379c0757fe283140917a5568d6a33b8f4647dfce4356
   f/factory/lib/host_action: de582f78e1e78a33c0986a778f7d96335ed837dcdfafd19c846a5a96f73b083f
