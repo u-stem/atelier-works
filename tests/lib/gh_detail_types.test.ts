@@ -128,6 +128,18 @@ describe("isStoredRefName", () => {
     expect(isStoredRefName("feature/ evil")).toBe(false);
   });
 
+  test("rejects an unpaired high surrogate", () => {
+    expect(isStoredRefName("feature/\ud800evil")).toBe(false);
+  });
+
+  test("rejects an unpaired low surrogate", () => {
+    expect(isStoredRefName("feature/\udc00evil")).toBe(false);
+  });
+
+  test("accepts a paired surrogate such as an emoji", () => {
+    expect(isStoredRefName("feature/\ud83d\ude00")).toBe(true);
+  });
+
   test("rejects a name the branch rules reject", () => {
     expect(isStoredRefName("a..b")).toBe(false);
   });
