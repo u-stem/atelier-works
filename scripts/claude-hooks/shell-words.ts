@@ -225,7 +225,12 @@ export function stripWrappers(words: readonly Word[]): StrippedCommand {
       miseWords.push(
         words.slice(index, dashDash === -1 ? words.length : dashDash),
       );
-      mise ??= read.mise;
+      if (
+        mise === null ||
+        (mise.commandString === null && read.mise.commandString !== null)
+      ) {
+        mise = read.mise;
+      }
       index = read.next;
     } else {
       break;
@@ -259,6 +264,19 @@ function miseExecAt(words: readonly Word[], start: number): number {
 }
 
 /**
+ * `-c`を含む短いオプションの語なら真。`-cenv`、`-c=env`、`-qc`を見る。
+ * 値を取る文字(`C`、`E`、`j`、`P`、`s`、`t`)が先にあれば、`c`は値の一部なので除く(`-Elocal`)。
+ */
+function isMiseCodeOption(text: string): boolean {
+  const letters =
+    (text.startsWith("-") ? text.slice(1) : "").split("=", 1)[0] ?? "";
+  if (!/^[A-Za-z]+$/.test(letters)) return false;
+  const code = letters.indexOf("c");
+  const value = letters.search(/[CEjPst]/);
+  return code !== -1 && (value === -1 || code < value);
+}
+
+/**
  * `mise exec`のオプションの範囲(`--`の前まで)から、シェルの文字列を渡す`-c`を探す。
  * ツールの指定の後ろにあっても探す。`-c`、`--command`、`--command=`、`-cenv`、`-c=env`、`-qc`を見る。
  * 見つかれば、その語(`-c`は次の語)を返す。
@@ -276,7 +294,7 @@ function findMiseExecCode(
     if (text.startsWith("--command=")) {
       return { ...word, text: text.slice("--command=".length) };
     }
-    if (/^-[A-Za-z]*c/.test(text)) return word;
+    if (isMiseCodeOption(text)) return word;
     if (MISE_VALUE_OPTIONS.has(text)) index += 1;
   }
   return null;
@@ -328,7 +346,7 @@ function readMiseExec(
         next: words.length,
       };
     }
-    if (/^-[A-Za-z]*c/.test(text)) {
+    if (isMiseCodeOption(text)) {
       // `-cenv`、`-c=env`、`-qc env`のように、値を付けた形と束ねた形も、シェルの文字列として扱う。
       return {
         mise: { commandString: word, inner: [] },

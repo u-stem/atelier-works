@@ -92,6 +92,19 @@ const ENVIRONMENT_BUILTINS: ReadonlySet<string> = new Set([
   "local",
 ]);
 
+/** 環境変数の名前を引数に取って、値を設定するか、読み込む組み込みコマンド。 */
+const ENVIRONMENT_NAME_BUILTINS: ReadonlySet<string> = new Set([
+  ...ENVIRONMENT_BUILTINS,
+  "read",
+  "printf",
+  "mapfile",
+  "readarray",
+]);
+
+/** 起動したシェルにコードを実行させるか、起動するシェルや設定を差し替える環境変数。`mise`が読むと、秘密値を出力できる。 */
+const SHELL_HOOK_ENV =
+  /^(BASH_ENV|ENV|SHELLOPTS|BASHOPTS|PS4|PROMPT_COMMAND|BASH_FUNC_.*|LD_PRELOAD|DYLD_INSERT_LIBRARIES|PATH)$/;
+
 /** gitのフックを実行するサブコマンド。`--no-verify`はこれらでだけ意味を持つ。 */
 const HOOK_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "commit",
@@ -258,7 +271,7 @@ export const REASONS = {
   miseSetList:
     "mise set lists the values of mise.local.toml, including secrets, unless it has a literal KEY=VALUE or one literal key with --stdin. So do mise env, mise config, mise hook-env, mise en, and their aliases. A person puts secrets in; to see which keys are unset, run mise run doctor, which prints names only. Put other options such as -q before set, not after it. Only the subcommands this repository uses are allowed, so write mise run <task> instead of mise <task>, and do not pass -s or --shell to mise run or mise tasks, because it picks the shell that runs the task; words like set or env in mise run arguments are denied too.",
   miseEnv:
-    "MISE_* environment variables can replace the shell mise runs tasks with (for example MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS), which prints the secrets. Only MISE_ENV, MISE_JOBS, MISE_QUIET, MISE_VERBOSE, and MISE_YES may be set.",
+    "MISE_* environment variables can replace the shell mise runs tasks with (for example MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS), which prints the secrets. BASH_ENV, SHELLOPTS, PS4 and similar variables make a started shell run code, which prints the secrets too. Only MISE_ENV, MISE_JOBS, MISE_QUIET, MISE_VERBOSE, and MISE_YES may be set, and the shell variables must not be set for mise.",
   miseXargs:
     "mise with arguments from xargs cannot be checked: mise set, mise env, and mise config list the secrets of mise.local.toml. Run mise directly with literal arguments.",
   gitConfigEnv:
@@ -454,6 +467,18 @@ function checkSimpleCommand(
     : [];
   const envDecision = checkEnvironment([...assignments, ...declared]);
   if (envDecision.kind === "deny") return envDecision;
+  if (
+    (program === "mise" || mise !== null) &&
+    assignments.some((word) => SHELL_HOOK_ENV.test(assignmentName(word).name))
+  ) {
+    return deny(REASONS.miseEnv);
+  }
+  if (
+    ENVIRONMENT_NAME_BUILTINS.has(program) &&
+    words.slice(1).some(isDisallowedMiseName)
+  ) {
+    return deny(REASONS.miseEnv);
+  }
   if (mise !== null) {
     const miseDecision = checkMise(mise, directory, scope);
     if (miseDecision.kind === "deny") return miseDecision;
@@ -538,6 +563,12 @@ function assignmentName(word: Word): { name: string; appended: boolean } {
   const raw = word.text.slice(0, equals);
   const appended = raw.endsWith("+");
   return { name: appended ? raw.slice(0, -1) : raw, appended };
+}
+
+/** 許可リストに無い`MISE_*`の名前を指す語なら真。`NAME=value`の形でも、名前だけでも見る。 */
+function isDisallowedMiseName(word: Word): boolean {
+  const [name = ""] = word.text.split("=", 1);
+  return name.startsWith("MISE_") && !MISE_ALLOWED_ENV.has(name);
 }
 
 function checkEnvironment(assignments: readonly Word[]): Decision {

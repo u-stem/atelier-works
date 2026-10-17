@@ -58,17 +58,18 @@ const MISE_PLAIN_NAMES: ReadonlySet<string> = new Set([
   "trust",
   "ls",
   "list",
-  "doctor",
-  "dr",
   "which",
   "where",
   "version",
   "current",
-  "tasks",
 ]);
 
 /** タスクを実行するサブコマンド。`-s`と`--shell`で、呼び出し側が実行するシェルを決められる。 */
-const MISE_RUNNER_NAMES: ReadonlySet<string> = new Set(["run", "r", "tasks"]);
+const MISE_RUNNER_NAMES: ReadonlySet<string> = new Set(["run", "r"]);
+
+/** インストール先のディレクトリを決められるサブコマンドと、そのオプション。 */
+const MISE_INSTALL_NAMES: ReadonlySet<string> = new Set(["install", "i"]);
+const MISE_INSTALL_PATH_OPTION = /^--(shared|system)(=.*)?$/;
 
 /** `--shell`、`-s`、`-s`を含む束ねた短いオプション。 */
 const MISE_SHELL_OPTION = /^(--shell(=.*)?|-[A-Za-z]*s.*)$/;
@@ -144,6 +145,15 @@ export function listsMiseValues(words: readonly Word[]): boolean {
     return true;
   }
   const sub = beforeDashDash[operandAt];
+  if (
+    sub !== undefined &&
+    MISE_INSTALL_NAMES.has(sub.text) &&
+    beforeDashDash
+      .slice(operandAt + 1)
+      .some((word) => MISE_INSTALL_PATH_OPTION.test(word.text))
+  ) {
+    return true;
+  }
   if (
     sub !== undefined &&
     MISE_RUNNER_NAMES.has(sub.text) &&

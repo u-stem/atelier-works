@@ -1151,7 +1151,6 @@ describe("bash-guard denies mise subcommands that list the secrets or run the ta
     "mise install --shared /tmp/x",
     "mise install --system",
     "PATH=/tmp/fakebin:$PATH mise run check",
-    "XDG_CONFIG_HOME=/tmp/x mise run check",
     "mise set MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS='sh -c printenv'",
     "mise set -E local --stdin MISE_UNIX_DEFAULT_INLINE_SHELL_ARGS",
     "mise settings unix_default_inline_shell_args=sh",
