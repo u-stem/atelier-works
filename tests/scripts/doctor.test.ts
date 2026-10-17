@@ -420,3 +420,215 @@ describe("doctor.sh custom tag check", () => {
     expect(line).toMatch(/^\s+WARN\s.*login was refused \(status 401\)/);
   });
 });
+
+describe("doctor.sh read-only token check", () => {
+  const PAT_ONE = "github_pat_ONEVALUE0123456789abcdef";
+  const PAT_TWO = "github_pat_TWOVALUE0123456789abcdef";
+
+  function tokenLines(env: Record<string, string>): string[] {
+    const result = Bun.spawnSync([BASH, SCRIPT], {
+      env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir, ...env },
+    });
+    return result.stdout
+      .toString()
+      .split("\n")
+      .filter((l) => l.includes("読み取りトークン"));
+  }
+
+  function output(env: Record<string, string>): string {
+    const result = Bun.spawnSync([BASH, SCRIPT], {
+      env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir, ...env },
+    });
+    return result.stdout.toString() + result.stderr.toString();
+  }
+
+  test("warns, not fails, when no token variable is set", () => {
+    expect(tokenLines({})[0]).toMatch(/^\s+WARN\s.*GITHUB_READ_TOKEN_<OWNER>/);
+  });
+
+  test("warns when every token variable is empty", () => {
+    expect(tokenLines({ GITHUB_READ_TOKEN_ACME: "" })[0]).toMatch(/^\s+WARN\s/);
+  });
+
+  test("reports OK when a token variable has a value", () => {
+    expect(tokenLines({ GITHUB_READ_TOKEN_ACME: PAT_ONE })[0]).toMatch(
+      /^\s+OK\s.*1件/,
+    );
+  });
+
+  test("counts every owner that has a value", () => {
+    expect(
+      tokenLines({
+        GITHUB_READ_TOKEN_ACME: PAT_ONE,
+        GITHUB_READ_TOKEN_OCTO: PAT_TWO,
+        GITHUB_READ_TOKEN_EMPTY: "",
+      })[0],
+    ).toMatch(/^\s+OK\s.*2件/);
+  });
+
+  test("warns about a name that is not a login, with the name only", () => {
+    const lines = tokenLines({
+      GITHUB_READ_TOKEN_ACME: PAT_ONE,
+      GITHUB_READ_TOKEN_A__B: PAT_TWO,
+    });
+    expect(lines.find((line) => line.includes("WARN"))).toContain(
+      "GITHUB_READ_TOKEN_A__B",
+    );
+  });
+
+  test("warns about names that collide, with both names", () => {
+    const lines = tokenLines({
+      GITHUB_READ_TOKEN_Acme: PAT_ONE,
+      GITHUB_READ_TOKEN_ACME: PAT_TWO,
+    });
+    const warning = lines.find((line) => line.includes("WARN")) ?? "";
+    expect(
+      ["GITHUB_READ_TOKEN_Acme", "GITHUB_READ_TOKEN_ACME"].filter(
+        (name) => !warning.includes(name),
+      ),
+    ).toEqual([]);
+  });
+
+  test("does not count an empty variable as a collision", () => {
+    expect(
+      tokenLines({
+        GITHUB_READ_TOKEN_Acme: "",
+        GITHUB_READ_TOKEN_ACME: PAT_ONE,
+      }).filter((line) => line.includes("WARN")),
+    ).toEqual([]);
+  });
+
+  test("never prints a token value", () => {
+    expect(
+      output({
+        GITHUB_READ_TOKEN_ACME: PAT_ONE,
+        GITHUB_READ_TOKEN_Octo: PAT_TWO,
+        GITHUB_READ_TOKEN_OCTO: PAT_TWO,
+        GITHUB_READ_TOKEN_A__B: PAT_ONE,
+      }),
+    ).not.toMatch(/ONEVALUE|TWOVALUE/);
+  });
+
+  test("does not add a failure", () => {
+    expect(output({})).not.toMatch(/NG\s+読み取りトークン/);
+  });
+});
+
+describe("doctor.sh owners that the collection cannot handle", () => {
+  const ADMIN_EMAIL = "admin@example.com";
+  const ADMIN_PASSWORD = "correct-horse-battery";
+
+  function startWindmill(config: unknown, status = 200) {
+    return Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/api/version") {
+          return new Response("CE v1.817.0");
+        }
+        if (url.pathname === "/api/auth/login") {
+          return new Response("session-token");
+        }
+        if (url.pathname.startsWith("/api/w/factory/resources/get_value/")) {
+          return Response.json(config, { status });
+        }
+        if (url.pathname === "/api/workers/custom_tags") {
+          return Response.json(["console", "periodic"]);
+        }
+        return new Response("ok");
+      },
+    });
+  }
+
+  function installFakeMise(): void {
+    const mise = join(dir, "mise");
+    writeFileSync(
+      mise,
+      [
+        "#!/bin/sh",
+        'case "$1" in',
+        '  exec) shift; [ "$1" = -- ] && shift; exec "$@" ;;',
+        "  --version) echo 2026.1.0 ;;",
+        "  *) exit 1 ;;",
+        "esac",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(mise, 0o755);
+    symlinkSync(process.execPath, join(dir, "bun"));
+  }
+
+  async function ownerLines(port: number): Promise<string[]> {
+    const proc = Bun.spawn([BASH, SCRIPT], {
+      env: {
+        PATH: `${dir}:/usr/bin:/bin`,
+        HOME: dir,
+        WM_HTTP_PORT: String(port),
+        WM_ADMIN_EMAIL: ADMIN_EMAIL,
+        WM_ADMIN_PASSWORD: ADMIN_PASSWORD,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return stdout.split("\n").filter((l) => l.includes("収集の対象外"));
+  }
+
+  test("warns with the name of an owner whose login has an underscore", async () => {
+    installFakeMise();
+    const server = startWindmill({
+      owners: [{ name: "acme" }, { name: "emu_user" }],
+    });
+
+    const lines = await ownerLines(server.port ?? 0);
+
+    server.stop(true);
+    expect(lines[0]).toMatch(/^\s+WARN\s.*emu_user/);
+  });
+
+  test("does not mention an owner whose login has no underscore", async () => {
+    installFakeMise();
+    const server = startWindmill({
+      owners: [{ name: "acme" }, { name: "emu_user" }],
+    });
+
+    const lines = await ownerLines(server.port ?? 0);
+
+    server.stop(true);
+    expect(lines.join("\n")).not.toContain("acme");
+  });
+
+  test("says nothing when every login is plain", async () => {
+    installFakeMise();
+    const server = startWindmill({ owners: [{ name: "acme" }] });
+
+    const lines = await ownerLines(server.port ?? 0);
+
+    server.stop(true);
+    expect(lines).toEqual([]);
+  });
+
+  test("says nothing when the config cannot be read", async () => {
+    installFakeMise();
+    const server = startWindmill({ message: "not found" }, 404);
+
+    const lines = await ownerLines(server.port ?? 0);
+
+    server.stop(true);
+    expect(lines).toEqual([]);
+  });
+
+  test("does not print the admin password", async () => {
+    installFakeMise();
+    const server = startWindmill({ owners: [{ name: "emu_user" }] });
+
+    const lines = await ownerLines(server.port ?? 0);
+
+    server.stop(true);
+    expect(lines.join("\n")).not.toContain(ADMIN_PASSWORD);
+  });
+});
