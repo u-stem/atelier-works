@@ -7,6 +7,7 @@
 // 各PRの最新の`pr_ci_checks`の行は、保持期間の4倍まで残す。
 // 競合から離れた`pr_conflict_checks`の行も、保持期間で削除する(競合したままの行は残す)。件数はログだけに残す。
 // 収集の実行の`gh_collect_runs`も保持期間で削除する(所有者ごとの直近の成功と、`finished_at`のある直近の実行は残す)。件数はログだけに残す。
+// 収集の詳細のうち、閉じたPRと一覧から外れたIssueの行も、`written_at`から保持期間を過ぎたものを削除する。開いている行は、古くても削除しない。件数はログだけに残す。
 // 同じ期間を過ぎた未解決の`info`のnoticeは、削除せず解決済みにする。
 //
 // 期限の計算と要約の整形は`./lib/cleanup_db_support.ts`にあり、
@@ -34,6 +35,7 @@ import { INFO_NOTICE_KINDS } from "./lib/console_support.ts";
 import {
   addNoticeUnlessUnresolved,
   type DeletedWorkItemRef,
+  deleteClosedGhDetailRowsBefore,
   deleteDeploymentsBefore,
   deleteGhCollectRunsBefore,
   deleteJobFailuresBefore,
@@ -231,6 +233,26 @@ async function cleanupGhCollectRuns(
   }
 }
 
+/**
+ * 収集の詳細のうち、閉じたPRと一覧から外れたIssueの行を、書いた時刻から保持期間を過ぎたものだけ削除する。
+ * 開いている行(使用不可の行を含む)は消さない。件数は`cleanup_runs`に記録せず、ログに残す。
+ */
+async function cleanupGhDetailRows(cutoff: Date, log: Logger): Promise<number> {
+  try {
+    return await deleteClosedGhDetailRowsBefore(cutoff);
+  } catch (err) {
+    const message = errorMessage(err);
+    log.error("cleanup_db: failed to delete gh detail rows", {
+      error: message,
+    });
+    await addNoticeUnlessUnresolved({
+      kind: "cleanup_db_failed",
+      message: `収集の詳細の行の削除に失敗しました: ${message}`,
+    });
+    return 0;
+  }
+}
+
 /** workerの負荷の記録を、測った時刻から保持期間を過ぎたものだけ削除する。 */
 async function cleanupWorkerSamples(
   cutoff: Date,
@@ -338,6 +360,10 @@ export async function main(): Promise<CleanupCounts> {
     cutoffs.logsBefore,
     log,
   );
+  const ghDetailRowsDeleted = await cleanupGhDetailRows(
+    cutoffs.logsBefore,
+    log,
+  );
   const workerSamplesDeleted = await cleanupWorkerSamples(
     cutoffs.logsBefore,
     log,
@@ -361,6 +387,7 @@ export async function main(): Promise<CleanupCounts> {
     ...counts,
     pr_conflict_checks_deleted: prConflictChecksDeleted,
     gh_collect_runs_deleted: ghCollectRunsDeleted,
+    gh_detail_rows_deleted: ghDetailRowsDeleted,
   });
   return counts;
 }
