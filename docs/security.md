@@ -623,13 +623,18 @@ Windmillで実行する間、秘密値はWindmillのsecret変数に置く。
 - `f/factory/github_token`
 - `f/factory/wmill_token`
 - `f/factory/discord_webhook_url`
+- `f/factory/github_read_tokens`
 
 scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変数(`GH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`など)としてだけ渡す。URLのクエリとパス、ログ、Data Tableの列、Discordの通知本文には出さない。
-親プロセスが`fetch`で使う秘密値は、次の3か所である。
+親プロセスが`fetch`で使う秘密値は、次の4か所である。
 
 - Console用のworkerで動く`retry_work_item`は、`gh`を起動できないので、`github_token`を`fetch`の`Authorization`ヘッダに載せる。使うのは、取り消された作業項目を再開するときの対象の状態の確認と、Issueの要件定義を作り直す再実行のときの取り込み内容の更新(現在のIssueの題名と本文の取得)である。宛先は`https://api.github.com`に固定し、リダイレクトは辿らない。境界は[Console用workerの境界](#console用workerの境界)に書く。
 - Console用のworkerで動く`approval_decide`は、要件定義の承認の前に現在のIssueを読むため、同じ形で`github_token`を使う。10秒の締め切りを付け、エラーの文とログにトークンとIssueの内容を含めない。
 - Discordへの送信(`lib/discord.ts`の`notify`)は、`discord_webhook_url`を`fetch`の宛先のURLにする。URLそのものが秘密なので、エラーメッセージとログには含めない。
+- 収集の`collect_github`(`lib/gh_graphql.ts`)は、`github_read_tokens`の所有者ごとのトークンを`fetch`の`Authorization`ヘッダに載せる。
+  宛先は`https://api.github.com/graphql`に固定し、リダイレクトは辿らず、1要求に10秒の締め切りを付ける。
+  エラーの文とログに、トークンと応答の本文を含めない。
+  GraphQLのエラーの文は、分類にだけ使って残さない。
 
 エラーメッセージと失敗の記録(`job_failures`)には、マスク処理を通してから値を入れる。マスクの関数はテストで検証する。
 
@@ -644,6 +649,7 @@ scriptは`wmill.getVariable()`で値を取得し、子プロセスの環境変�
 - `CLAUDE_CODE_OAUTH_TOKEN`
 - `DISCORD_WEBHOOK_URL`
 - `CONSOLE_GITHUB_TOKEN`
+- `GITHUB_READ_TOKEN_<OWNER>`(所有者ごとに1つ。`<OWNER>`は所有者のloginを大文字にして、`-`を`_`にした名前)
 
 値は人が投入する。投入のコマンドは[セットアップ](setup.md)にある。Claudeが更新するのは、値の無いテンプレートである`mise.local.toml.example`までにする。投入が必要になったら、Claudeは実行するコマンドを示し、待たずにほかの作業を続ける。
 
@@ -659,7 +665,7 @@ workerが持つ`f/factory/wmill_token`は、ワークスペース`factory`に限
 
 ## 資格情報の取得
 
-`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決める。次の4つは外部のサービスから取得する。取得した値の投入は[セットアップ](setup.md)の手順で行う。
+`DB_PASSWORD`、`WM_ADMIN_EMAIL`、`WM_ADMIN_PASSWORD`は自分で決める。次の5つは外部のサービスから取得する。取得した値の投入は[セットアップ](setup.md)の手順で行う。
 
 ### GitHubのPAT
 
@@ -792,6 +798,52 @@ Issues、Contents、Pull requestsの書き込み権限が広すぎるためで�
 
 値は`console_fetcher`のコンテナの環境変数にだけ渡る。
 worker、Caddy、Windmillの変数には入らない。
+
+### 収集用の読み取りトークン
+
+`GITHUB_READ_TOKEN_<OWNER>`は、収集の`collect_github`が所有者ごとに使う、読み取り専用のfine-grained PATである。
+`GITHUB_TOKEN`は流用しない。
+書き込みのできるトークンを、定期ジョブ用workerに届かせないためである。
+fine-grained PATはResource ownerを1つしか選べないので、所有者(個人と所属する組織)ごとに1つ作る。
+
+1. GitHub右上のアイコンから、**Settings**、**Developer settings**、**Personal access tokens**、**Fine-grained tokens**の順に開く。
+2. **Generate new token**を押す。
+3. 下の表のとおりに各項目を設定する。
+4. **Generate token**を押し、表示された`github_pat_...`を、`GITHUB_READ_TOKEN_<OWNER>`として投入する。
+5. 組織の所有者は、組織側でfine-grained PATを許可し、トークンを承認する。
+   承認が保留や取り消しになると、非公開リポジトリが一覧から消えて`gone`になる。
+   収集は閉じる側に倒れる。
+
+| 項目 | 設定値 |
+| --- | --- |
+| Token name | `atelier-works-factory-reader-<所有者>` |
+| Description | `Software Factory collector (read-only: PR / Issue state)` |
+| Resource owner | その所有者(個人のアカウントかorg) |
+| Expiration | Customで1年後。組織が最長期限を1年より短くすることがある |
+| Repository access | All repositories。集める範囲は、設定の`owners`と`repo_allowlist`で絞る |
+| Repository permissions: Metadata | Read-only(自動で付く) |
+| Repository permissions: Pull requests | Read-only |
+| Repository permissions: Issues | Read-only |
+| それ以外のRepository permissions | No access。Contentsは付けない。Actions、Checks、Commit statusesは、CIの状態を集める変更で足す |
+| Account permissions | すべてNo access |
+
+できれば、すべての読み取りトークンを`GITHUB_TOKEN`と同じアカウントで作る。
+トークンの持ち主が違うと、後の変更でPRの作者や担当を比べるときに、意味がずれるためである。
+権限名とGraphQLの項目の対応は、反映後の実ジョブで確かめる。
+
+値は`mise run bootstrap`が、環境変数から所有者のlogin(小文字)をキーにしたJSONの対応表に組み、Windmillのsecret変数`github_read_tokens`に入れる。
+人がJSONを組むことは無い。
+`bootstrap.sh`は、次のものを、環境変数の名前だけを出して警告し、飛ばす。
+値は出さない。
+
+- loginの形に合わない名前
+- 名前を直した結果が同じloginになる複数の変数(両方を飛ばす)
+- `github_pat_`で始まらない値
+- `GITHUB_TOKEN`か`CONSOLE_GITHUB_TOKEN`と同じ値
+
+loginに`_`を含む所有者(EMUのアカウント)は、環境変数の名前の`_`が`-`に直るので、対応表のキーに合わない。
+収集は扱わない。
+`mise run doctor`が、`owners`にある該当の所有者の名前を警告する。
 
 ## Windmillの公開範囲と初期パスワード
 
@@ -1038,7 +1090,7 @@ Console用workerと同じ型で、絞り方は次のとおりである。
 信頼できない入力を扱うジョブを動かさない理由は、このworkerが読める秘密にある。
 DBには、defaultのworkerと同じ管理者の接続で届く。
 Windmillのsecret変数は、管理者の`DATABASE_URL`か`wmill.getVariable()`で読める。
-通知に使う`discord_webhook_url`も読める。
+通知に使う`discord_webhook_url`と、収集に使う`github_read_tokens`も読める。
 Console用workerと同じ前提で、マウントの制限が守るのはファイルであり、トークンそのものは守らない。
 信頼できない入力を扱うジョブが、このworkerで任意のコードを動かせると、これらの秘密に届く。
 そのため、tag`periodic`を付けるのは、コードを実行せず、Claudeに文章を渡さない定期ジョブだけである。
@@ -1051,8 +1103,8 @@ superadminでない主体は、許可されたtagしか使えない。
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
-- `f/factory/claude_oauth_token`、`f/factory/github_token`、`f/factory/discord_webhook_url`を、secret変数として読める。
-  どのscriptが読むかを制限する仕組みは無い。
+- secret変数の`claude_oauth_token`、`github_token`、`discord_webhook_url`、`github_read_tokens`を読める。
+  どのscriptが読むかを制限する仕組みは、契約テストの許可だけである。
 - このworkerで動かすのは、上の基準で選んだ定期ジョブの想定である。
   リポジトリに入る変更のうち、テストが走査できる形は、契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が止める。
   走査できない形と、Windmillの画面でtag`periodic`を付ける操作は止められない。
@@ -1086,9 +1138,12 @@ superadminでない主体は、許可されたtagしか使えない。
 同じ手順で、コードを実行しないことと、Claudeに文章を渡さないことも確かめる。
 1つでも依存するなら、tagを付けない。
 
-読んでよいsecret変数は、`discord_webhook_url`だけである。
+読んでよいsecret変数は、scriptごとに決める。
+`notify_daily_summary`と`auto_retry_pr_review`が読めるのは、`discord_webhook_url`だけである。
+`collect_github`が読めるのは、`github_read_tokens`だけである。
 `claude_oauth_token`、`github_token`、`wmill_token`は、このworkerに届かせない。
 対象のscriptが読まない許可は、残さない。
+別のscriptの許可を借りて読めるようにしないため、許可はscriptごとに分ける。
 `discord_webhook_url`を許可するのは、通知を送る定期ジョブを、このworkerで動かすために、通知の送り先が要るためである。
 このworkerは、固定のレビュー済みのscriptだけを動かす。
 漏れたときの影響は、通知の偽装と、webhookの削除や改名による通知の停止に限られる。
@@ -1096,6 +1151,20 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 補足として、どのworkerのジョブも`getVariable`で読める状態はもとからで、このworkerで読める範囲は広がらない。
 別のsecret変数を許すかは、この理由とは別に、読む必要と漏れたときの影響で決める。
 これを超えて広げるときは、契約テストの許可と、この節の選定の結果を同じ変更で直す。
+
+`github_read_tokens`を許可するのは、収集を、書き込みのできる`github_token`を使わずに、このworkerで動かすためである。
+トークンのRepository accessは「All repositories」なので、読める内容は所有者の全リポジトリに及ぶ。
+
+- Pull requestsの読み取りで、非公開リポジトリのPRの題・本文・コメント・レビューコメント・コミットと本文・変更ファイルとpatch。
+- Issuesの読み取りで、Issueの本文とコメント。
+- Metadataの読み取りで、collaboratorの一覧。
+
+書き込みはできないので、漏れたときの影響は、これらの読み取りと、レート制限の消費に限られる。
+全部の所有者のトークンが、1つの変数に集まる。
+変数は所有者ごとに分けない。
+分けると、`getVariable`の引数がリテラルでなくなり、契約テストの`filesWithNonLiteralReads`に反する。
+所有者ごとにテストの許可も要る。
+1つのジョブが乗っ取られれば、分けても全部に届くので、分ける利点が無い。
 
 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
 走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
@@ -1105,13 +1174,15 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
   読めないYAMLがあれば、ファイル名を添えてテストが落ちる。
   足すときは、一覧とこの節の選定の結果を同じ変更で直す。
 - どのscriptも、スケジュールが呼ぶscriptで、`timeout`を持つ。
-- `timeout`の最大値に300秒の余裕を足した値が、待ちの検知のしきい値(`PERIODIC_JOB_WAIT_SECONDS`)を超えない。
+- 各scriptについて、他のscriptの`timeout`の合計に300秒の余裕を足した値が、待ちの検知のしきい値(`PERIODIC_JOB_WAIT_SECONDS`)を超えない。
   このworkerの枠は1つなので、長く動くジョブの後ろで待つジョブを、workerの不在と誤って知らせないためである。
-  待たされる上限は、前に並ぶ他のscriptのtimeoutの合計である。
-  3本ではその合計が、余裕を足すとしきい値(15分)を超える。
-  超えるのは前に並ぶscriptがそろってtimeoutまで動き続けたときだけで、そのときは枠が塞がっているのも事実なので、最大値を基準にしている。
-  足すときは、そのscriptのtimeoutを既存の最大値以下に保つ。
-- importでたどれるソースが読むsecret変数は、`discord_webhook_url`だけである。
+  待たされる最悪は、他のscriptのtimeoutの合計である。
+  今の4本では、`collect_github`と`default_worker_watch`が最も待たされる。
+  `notify_daily_summary`の600秒、`auto_retry_pr_review`の300秒、もう1本の120秒の後ろで、最大1020秒待つ。
+  しきい値は、それに余裕を足した1320秒である。
+- importでたどれるソースが読むsecret変数は、scriptごとの許可に限る。
+  許可のキーが、tag`periodic`のscriptの一覧と一致することと、許可したsecretを実際に読むことも固定する。
+  ある許可を別のscriptに当てると、違反が返ることも確かめる。
 - importでたどれるソースに、ファイル、サブプロセス、`claude.ts`への依存が無い。
   `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
   `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
@@ -1131,14 +1202,14 @@ webhookのURLを持つ者は、トークンだけで改名と削除ができる�
 
 tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中身を確かめる。
 `getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。
-参照があれば、参照先のsecret変数が`discord_webhook_url`だけであることまで確かめる。
+参照があれば、参照先のsecret変数が、そのscriptに許したものだけであることまで確かめる。
 テストが固定するのはsecret変数の名前の読み取りだけなので、この確認は人かレビューが行う。
 
 ### 選定の結果
 
 `f/factory/**`の定期実行のscriptを1つずつ読んだ結果は、次のとおりである。
-tag`periodic`を付けたのは、`notify_daily_summary`、`auto_retry_pr_review`、`default_worker_watch`である。
-どれもresource`f/factory/factory_config`だけを読む。
+tag`periodic`を付けたのは、`notify_daily_summary`、`auto_retry_pr_review`、`collect_github`、`default_worker_watch`である。
+いずれもresource`f/factory/factory_config`だけを読む。
 ローカルのインスタンスでは、その値に`$var:`と`$res:`の参照が無いことを確かめた。
 本番相当のインスタンスのresourceは、リポジトリから確かめられない。人がWindmillの画面で見て確かめる。
 
@@ -1152,14 +1223,33 @@ tag`periodic`を付けたのは、`notify_daily_summary`、`auto_retry_pr_review
 | `sample_worker_load` | cgroupのファイルを読む | defaultに残す |
 | `notify_daily_summary` | DB、Windmillの状態、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
 | `auto_retry_pr_review` | DB、WindmillのAPI、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
+| `collect_github` | DB、Windmillのresource、宛先を固定したGitHubのGraphQLだけを使う。読むsecretは`github_read_tokens`だけである | `periodic`を付ける |
 | `default_worker_watch` | DB、Windmillのqueue、Discordだけを使う。読むsecretは`discord_webhook_url`だけである。defaultのworkerが止まると動かないので、defaultには置けない | `periodic`を付ける |
 
 `github_token`を読む定期ジョブは、`gh`の道具に依存するため、tag`periodic`を付けられるものが無い。
 `notify_daily_summary`と`auto_retry_pr_review`は、ファイル、サブプロセス、`claude`、`gh`のモジュールをimportでたどらない。
 そのために、使う定数と型を小さなモジュールに分けている。
+`collect_github`は、通信を`lib/gh_graphql.ts`に置き、`github.ts`を使わない。
 `default_worker_watch`は、queueの応答を集計する副作用の無いモジュール(`worker_load_support`)を使う。
 cgroupの文字列を解析するだけで、ファイルは読まない。
 たどるようになれば、契約テストが落ちる。
+
+### 収集のトークンの残るリスク
+
+収集のトークンについて、次を受け入れている。
+
+- 書き込み権限を持つfine-grained PATを、読み取り用として入れても、`bootstrap.sh`は見分けられない。
+  見るのは、`github_pat_`の接頭辞と、`GITHUB_TOKEN`と`CONSOLE_GITHUB_TOKEN`との一致だけである。
+- 「All repositories」のトークンは、所有者の全リポジトリの内容を読める。
+  集める範囲は設定で絞るが、トークンの読める範囲は絞られない。
+- 全部の所有者のトークンが、1つの変数に集まる。
+- `repo_allowlist`が空のとき、見えないリポジトリを`not_visible`として検出できない。
+  反映後に、人が件数を確かめる([収集の運用](operations.md#収集の運用))。
+- loginに`_`を含む所有者(EMUのアカウント)は集めない。
+- 先頭が`.`のリポジトリ名(`.github`など)は集めない。
+  GitHubの名前の述語は、シェルとパスに渡す名前の守りと共通なので、収集のために緩めると、その守りも緩む。
+- 締め切りやGitHubの失敗が続くと、リポジトリの状態が前回のまま凍る。
+  `gone`の行は消えない。
 
 ## ホストの実行役の境界
 

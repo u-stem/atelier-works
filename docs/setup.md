@@ -34,6 +34,15 @@ Podmanは対象外である。
 Consoleを取りに行くリポジトリは、`mise.toml`の`[env]`の`CONSOLE_GITHUB_REPO`にある。
 フォークで動かすときだけ書き換える。
 
+収集(`collect_github`)を使うときは、これに加えて、所有者ごとの読み取りトークンを環境変数`GITHUB_READ_TOKEN_<OWNER>`として投入する。
+`<OWNER>`には、所有者のloginを大文字にして、`-`を`_`に置き換えた名前を使う。
+例えば、`acme-corp`は`GITHUB_READ_TOKEN_ACME_CORP`になる。
+取得の手順は[セキュリティ](security.md)の「収集用の読み取りトークン」にある。
+1つも入れなくても、`bootstrap`は完了する。
+トークンを入れていない所有者は、収集が通知なしで飛ばす。
+loginに`_`を含む所有者(EMUのアカウント)は、収集が扱わない。
+`mise run doctor`が、該当する所有者の名前を警告する。
+
 ## 秘密値を投入する
 
 秘密値は人が投入する。次のコマンドを使うと、値は画面に表示されず、シェルの履歴にも残らない。`KEY`をキーの名前に置き換え、キーごとに実行する。
@@ -51,6 +60,12 @@ read -rs -p 'KEY: ' v && mise set -E local KEY="$v"; unset v
 ```
 
 値は`mise.local.toml`の`[env]`に書き込まれる。`-E local`を付けなくても、以降の`mise run`と`mise exec`に反映される。
+
+読み取りトークンは、所有者ごとに、`KEY`を`GITHUB_READ_TOKEN_<OWNER>`にして実行する。
+入れた後に`mise run bootstrap`を実行する。
+環境変数から、所有者のlogin(小文字)をキーにしたJSONの対応表が組まれ、Windmillの変数`github_read_tokens`に入る。
+所有者を足すときは、環境変数を1つ足して`mise run bootstrap`を実行するだけで、JSONを手で組むことは無い。
+全員分を外すときは、環境変数を消して`mise run bootstrap`を実行し直す。
 
 値を表示せずに、投入できたかを確かめるには次のように実行する。
 

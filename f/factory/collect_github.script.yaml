@@ -1,0 +1,12 @@
+summary: '[SYS-11] GitHubのリポジトリの状態を集める'
+description: 5分ごとに実行し、設定のownersの所有者ごとに、読み取り専用のトークンでリポジトリの一覧と、開いているPRとトリガーラベル付きのIssueの件数を集めて、DBに書きます。設定のgh_collect_enabledが偽の間は、トークンを読まず、何も書きません。tag
+  periodicのworkerで動き、書き込みのできるgithub_tokenは読みません。
+lock: '!inline f/factory/collect_github.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []
+tag: periodic
+timeout: 120

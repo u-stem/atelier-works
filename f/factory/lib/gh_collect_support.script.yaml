@@ -1,0 +1,9 @@
+summary: '[LIB] GitHubの収集の判定'
+description: 内部ライブラリです。直接実行するものではありません。トークンの対応表の読み取り、失敗の分類、応答の解析、対象の選別、goneの計画を、通信もDBも持たない純粋関数として定めます。
+lock: '!inline f/factory/lib/gh_collect_support.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

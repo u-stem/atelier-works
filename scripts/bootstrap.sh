@@ -72,11 +72,15 @@
 #      `PERSISTENT_TOKEN`に書き換え、以降の`wmill`の呼び出しが
 #      絞ったトークンを使うようにする。
 #   6. `wmill datatable create`を実行する(`main`のdatatableが既にあれば飛ばす)。
-#   7. 4つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
-#      `discord_webhook_url`)を変数のAPIで作成・更新する。`wmill_token`には
-#      `PERSISTENT_TOKEN`を入れる。残りの3つは`CLAUDE_CODE_OAUTH_TOKEN`・
+#   7. 5つの秘密の変数(`claude_oauth_token`・`github_token`・`wmill_token`・
+#      `discord_webhook_url`・`github_read_tokens`)を変数のAPIで作成・更新する。
+#      `wmill_token`には`PERSISTENT_TOKEN`を入れる。`claude_oauth_token`・
+#      `github_token`・`discord_webhook_url`は`CLAUDE_CODE_OAUTH_TOKEN`・
 #      `GITHUB_TOKEN`・`DISCORD_WEBHOOK_URL`から取り、空でもよい
 #      (後で人が`mise set -E local`かWindmill UIで入れる)。
+#      `github_read_tokens`には、所有者ごとの読み取り専用のトークンの環境変数
+#      `GITHUB_READ_TOKEN_<OWNER>`から`read_token_map_json`が組んだJSONの対応表を入れる。
+#      1つも無ければ空の値で入れる。全員分を外すときは、環境変数を消して実行し直す。
 #   8. 古いトークンを入れ替える。`/users/tokens/list`と`/users/tokens/delete`は
 #      アカウント全体の操作なので、セッションのトークンで行う
 #      (`PERSISTENT_TOKEN`ではtoken/listが401になることを確認済み)。
@@ -639,6 +643,78 @@ else
 fi
 
 # --- 手順7: 秘密の変数 ---------------------------------------------------------
+# 環境変数GITHUB_READ_TOKEN_<OWNER>(所有者ごとの読み取り専用のトークン)から、
+# 所有者のlogin(小文字)をキーにしたJSONの対応表を標準出力に出す。
+# トークンが1つも残らなければ、何も出さない。
+#
+# 環境変数は名前で列挙する(`${!GITHUB_READ_TOKEN_@}`)。値を走査して選ばない。
+# <OWNER>は、小文字にして`_`を`-`に直した名前をloginとして扱う。
+# 次のものは、環境変数の名前だけを出して警告し、飛ばす。値は出さない。
+#   - loginの形(英数字をハイフンでつないだ39文字以下)に合わない名前。
+#   - 直した後に同じloginになる複数の環境変数(例: 大文字と小文字だけが違う2つ)。両方を飛ばす。
+#   - `github_pat_`で始まらない値。
+#   - `GITHUB_TOKEN`か`CONSOLE_GITHUB_TOKEN`と同じ値。書き込みのできるトークンを、読み取り用として入れないため。
+# 値が空のものは、黙って除く。
+# 値は環境変数のまま`jq`に渡す(`env[...]`)。`--arg`で渡すと`ps`に出る。
+# 名前に`_`を含むloginを持つ所有者(EMUのアカウント)は、`-`に直るので対応表のキーに合わず、収集の対象外になる。
+read_token_map_json() {
+  local var owner login value pairs="" line kind rest
+  local -a args=()
+  for var in ${!GITHUB_READ_TOKEN_@}; do
+    value="${!var}"
+    [ -n "${value}" ] || continue
+    owner="${var#GITHUB_READ_TOKEN_}"
+    login="$(printf '%s' "${owner}" | tr 'A-Z_' 'a-z-')"
+    if [ "${#login}" -gt 39 ] || ! printf '%s' "${login}" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'; then
+      log "warning: skipping ${var}: the name after GITHUB_READ_TOKEN_ is not a GitHub login"
+      continue
+    fi
+    pairs+="${login} ${var}"$'\n'
+  done
+  [ -n "${pairs}" ] || return 0
+
+  # loginごとに集め、重なったものは両方の名前を警告して飛ばす。出力は`login 名前`の行を並べ替えたものにする。
+  while IFS= read -r line; do
+    kind="${line%% *}"
+    rest="${line#* }"
+    if [ "${kind}" = "DUP" ]; then
+      log "warning: skipping ${rest}: the names map to the same GitHub login"
+      continue
+    fi
+    login="${rest%% *}"
+    var="${rest#* }"
+    value="${!var}"
+    if [[ "${value}" != github_pat_* ]]; then
+      log "warning: skipping ${var}: the value does not start with github_pat_"
+      continue
+    fi
+    if [ -n "${GITHUB_TOKEN:-}" ] && [ "${value}" = "${GITHUB_TOKEN}" ]; then
+      log "warning: skipping ${var}: the value is the same as GITHUB_TOKEN"
+      continue
+    fi
+    if [ -n "${CONSOLE_GITHUB_TOKEN:-}" ] && [ "${value}" = "${CONSOLE_GITHUB_TOKEN}" ]; then
+      log "warning: skipping ${var}: the value is the same as CONSOLE_GITHUB_TOKEN"
+      continue
+    fi
+    export "${var}"
+    args+=("${login}" "${var}")
+  done < <(printf '%s' "${pairs}" | sort | awk '
+    { keys[NR] = $1; names[NR] = $2; count[$1]++; list[$1] = (list[$1] == "" ? "" : list[$1] ", ") $2 }
+    END {
+      for (i = 1; i <= NR; i++) {
+        key = keys[i]
+        if (count[key] > 1) {
+          if (!(key in warned)) { warned[key] = 1; print "DUP " list[key] }
+        } else {
+          print "OK " key " " names[i]
+        }
+      }
+    }')
+
+  [ "${#args[@]}" -gt 0 ] || return 0
+  jq -n -c --args '$ARGS.positional as $p | [range(0; $p | length; 2) as $i | {key: $p[$i], value: env[$p[$i + 1]]}] | from_entries' "${args[@]}"
+}
+
 upsert_variable() {
   local path="$1" value="$2" description="$3" status
   status="$(variable_create_body "${path}" "${value}" "${description}" | api_post "/w/${WORKSPACE}/variables/create")"
@@ -660,6 +736,9 @@ upsert_variable "f/factory/wmill_token" "${PERSISTENT_TOKEN}" \
   "Workspace-scoped Windmill API token (180-day expiry) used by self_update to sync push / migrate from the worker."
 upsert_variable "f/factory/discord_webhook_url" "${DISCORD_WEBHOOK_URL}" \
   "Discord incoming webhook URL used for pipeline notifications."
+github_read_tokens_json="$(read_token_map_json)"
+upsert_variable "f/factory/github_read_tokens" "${github_read_tokens_json}" \
+  "Per-owner read-only GitHub PATs as a JSON map (lowercase owner login to token), built from GITHUB_READ_TOKEN_<OWNER> and read by collect_github on the periodic worker."
 
 # --- 手順8: 古いfactory-bootstrapのトークンを入れ替える ---------------------
 # `/users/tokens/list`と`/users/tokens/delete`はアカウント全体の操作
@@ -746,7 +825,7 @@ fi
 
 # --- 手順12: インスタンス固有のdeployed_sha変数(無ければ作る) -------------
 # syncの対象外(`wmill.yaml`の`excludes`のこのパスのコメントを参照)。
-# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の4つの秘密は
+# 秘密でないこの変数には`self_update`が実行時に書き込む。手順7の5つの秘密は
 # 実行し直すたびに上書きしてよいが、これは一度だけ作り、後の実行で空に
 # 戻してはならない。空に戻すと`self_update`が毎回再デプロイが要ると判断し、
 # ホストで進行中の`mise run deploy`と競合する。

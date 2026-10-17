@@ -7,6 +7,7 @@ import { Glob } from "bun";
 
 export const GITHUB_TOKEN = "f/factory/github_token";
 export const DISCORD_WEBHOOK_URL = "f/factory/discord_webhook_url";
+export const GITHUB_READ_TOKENS = "f/factory/github_read_tokens";
 
 export const transpiler = new Bun.Transpiler({ loader: "ts" });
 

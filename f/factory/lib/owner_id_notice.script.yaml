@@ -1,0 +1,9 @@
+summary: '[LIB] owner_idの照合のnotice'
+description: 内部ライブラリです。直接実行するものではありません。オーナーの数値IDが食い違ったときと、見つからないときのnoticeの種類と本文を定めます。
+lock: '!inline f/factory/lib/owner_id_notice.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

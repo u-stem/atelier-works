@@ -20,18 +20,23 @@ export const PERIODIC_WORKER_TAG = "periodic";
 /**
  * 予定時刻からこの秒数以上、実行されずに待っているジョブがあれば、workerが受けていないと見なす。
  * このworkerは1件ずつしか動かさないので、先に動くジョブの後ろで待つ間は、workerが受けていても待たされる。
- * その待ちを誤って知らせないよう、tag `periodic`を付けたscriptのtimeoutの最大値に余裕を足した秒数以上にする。
- * 待たされる上限は、前に並ぶ他のscriptのtimeoutの合計である。合計がこの値を超えるのは、
- * 前に並ぶscriptがそろってtimeoutまで動き続けたときだけで、そのときは枠が塞がっているのも事実である。
- * そこで最大値を基準にし、scriptを足すときは、そのtimeoutを既存の最大値以下に保つ。
+ * その待ちを誤って知らせないよう、各scriptについて、他のscriptのtimeoutの合計に余裕を足した秒数以上にする。
  * 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、この関係を固定する。
+ * 分で本文に出すので、60の倍数にする。
  */
-export const PERIODIC_JOB_WAIT_SECONDS = 900;
+export const PERIODIC_JOB_WAIT_SECONDS = 1320;
+
+/**
+ * 待ちの通知の本文の、しきい値より前の固定の部分。
+ * 通知を解決するときの先頭一致に使う。しきい値を変えても、変える前に残した未解決の通知を解決するため、
+ * しきい値を含まない部分だけにする。
+ */
+export const PERIODIC_WORKER_NOTICE_PREFIX = "tag periodicのジョブが";
 
 /** 確認が終わるまで待つ上限。確認が止まっても自己更新の反映を遅らせないための値。 */
 export const PERIODIC_WORKER_CHECK_TIMEOUT_MS = 10_000;
 
-const MISSING_CAUSE = `tag periodicのジョブが${PERIODIC_JOB_WAIT_SECONDS / 60}分以上待たされています。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、ジョブを受けていません。tag periodicを付けた定期ジョブが動かず、queueに溜まります`;
+const MISSING_CAUSE = `${PERIODIC_WORKER_NOTICE_PREFIX}${PERIODIC_JOB_WAIT_SECONDS / 60}分以上待たされています。定期ジョブ用のworkerが居ない、枠が塞がっている、またはtagの設定がずれていて、ジョブを受けていません。tag periodicを付けた定期ジョブが動かず、queueに溜まります`;
 const MISSING_ACTION =
   "docker compose ps windmill_worker_periodicでコンテナの状態を確かめ、無ければmise run upで起動する。動いていれば、mise run doctorのカスタムtagが許可されているかを確かめ、NGならmise run instance:tagsを実行する。許可されていれば、Windmillの画面でtag periodicの実行中のジョブと、ワーカーグループperiodicのtagを確かめる。実行中のジョブが長く動いているなら、そのscriptのtimeoutを確かめる";
 
@@ -143,7 +148,7 @@ async function resolveRecovered(deps: PeriodicWorkerCheckDeps): Promise<void> {
   try {
     await deps.resolveNotices(
       PERIODIC_WORKER_MISSING_NOTICE.kind,
-      PERIODIC_WORKER_MISSING_NOTICE.message,
+      PERIODIC_WORKER_NOTICE_PREFIX,
     );
   } catch (err) {
     deps.log.warn("could not resolve the periodic worker problem", {

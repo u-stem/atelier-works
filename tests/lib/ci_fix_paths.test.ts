@@ -308,6 +308,16 @@ describe("protected paths", () => {
     "f/factory/lib/auto_retry_reasons.ts",
     "f/factory/lib/auto_retry_reasons.script.yaml",
     "f/factory/lib/auto_retry_reasons.script.lock",
+    "f/factory/lib/gh_graphql.ts",
+    "f/factory/lib/gh_graphql.script.yaml",
+    "f/factory/lib/gh_collect.ts",
+    "f/factory/lib/gh_collect.script.yaml",
+    "f/factory/lib/gh_collect_support.ts",
+    "f/factory/lib/gh_collect_support.script.lock",
+    "f/factory/collect_github.ts",
+    "f/factory/collect_github.script.yaml",
+    "f/factory/collect_github.schedule.yaml",
+    "f/factory/github_read_tokens.variable.yaml",
   ])("rejects %s even when the pull request changed it", (path) => {
     expect(codeOf([change(path)], [path])).toBe("protected_path");
   });
@@ -604,6 +614,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
   "f/factory/lib/console_support.ts":
     "通知の重要度と対象の定数。通知の種類を足す変更が日常的に触れる。競合の通知の種類を読むだけで、判断には使わない",
+  "f/factory/lib/owner_id_notice.ts":
+    "owner_idの照合のnoticeの種類と本文を組み立てるだけで、通信と判定を持たない。poll_support.tsが再エクスポートし、PRのポーリングでも使う。CI回が変えても影響はnoticeの文面と解決の照合に限られ、レビューが受け皿になる",
 };
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
@@ -653,6 +665,10 @@ describe("dependencies of the denied safety files", () => {
   test("no accepted dependency is denied", () => {
     const denied = Object.keys(ACCEPTED_DEPENDENCIES).filter(isDeniedPath);
     expect(denied).toEqual([]);
+  });
+
+  test("owner_id_notice.ts is not denied, so the collection can read it", () => {
+    expect(isDeniedPath("f/factory/lib/owner_id_notice.ts")).toBe(false);
   });
 
   test("the scan finds the denied files", async () => {
