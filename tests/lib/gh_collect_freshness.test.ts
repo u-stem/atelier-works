@@ -32,7 +32,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const NOW = Date.parse("2026-10-17T03:00:00.000Z");
 /** 所有者が2人までの通知の閾値。 */
-const THRESHOLD = 30 * MIN;
+const THRESHOLD = 25 * MIN;
 
 function ago(ms: number): Date {
   return new Date(NOW - ms);
@@ -74,10 +74,10 @@ function judge(target: GhCollectFreshnessRow, watchStartAgoMs: number | null) {
 }
 
 describe("staleNotifyThresholdMs", () => {
-  test("threshold is 30 minutes up to two owners", () => {
+  test("threshold is 25 minutes up to two owners", () => {
     expect([staleNotifyThresholdMs(1), staleNotifyThresholdMs(2)]).toEqual([
-      30 * MIN,
-      30 * MIN,
+      25 * MIN,
+      25 * MIN,
     ]);
   });
 
@@ -87,6 +87,16 @@ describe("staleNotifyThresholdMs", () => {
       45 * MIN,
       105 * MIN,
     ]);
+  });
+
+  test("not_running threshold is 16 minutes", () => {
+    expect(GH_COLLECT_NOT_RUNNING_AFTER_MS).toBe(16 * MIN);
+  });
+
+  test("not_running threshold is shorter than the notify threshold", () => {
+    expect(GH_COLLECT_NOT_RUNNING_AFTER_MS).toBeLessThan(
+      staleNotifyThresholdMs(1),
+    );
   });
 
   test("not_running threshold is the periodic wait plus one cycle", () => {
@@ -246,13 +256,13 @@ describe("judgeOwnerFreshness", () => {
 });
 
 describe("collectCause", () => {
-  test("cause is not_running when the latest finish is older than 27 minutes", () => {
-    const target = row({ latest: latestRun("unauthorized", 28 * MIN) });
+  test("cause is not_running when the latest finish is older than 16 minutes", () => {
+    const target = row({ latest: latestRun("unauthorized", 17 * MIN) });
     expect(collectCause(target, NOW)).toBe("not_running");
   });
 
-  test("cause stays the latest error_code during a 22 minute periodic wait", () => {
-    const target = row({ latest: latestRun("unauthorized", 22 * MIN) });
+  test("cause stays the latest error_code during an 11 minute periodic wait", () => {
+    const target = row({ latest: latestRun("unauthorized", 11 * MIN) });
     expect(collectCause(target, NOW)).toBe("unauthorized");
   });
 
