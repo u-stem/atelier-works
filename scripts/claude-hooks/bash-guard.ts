@@ -41,6 +41,7 @@ import {
   ASSIGNMENT,
   baseName,
   CURRENT_BRANCH_SUBSTITUTIONS,
+  MISE_VALUE_OPTIONS,
   type MiseExec,
   parseCommandLine,
   type SimpleCommand,
@@ -121,10 +122,28 @@ const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
 const DANGEROUS_CONFIG_KEY =
   /^(core\.hookspath|alias\..+|remote\..+\.push|push\.default|include\..*|includeif\..*)$/;
 
-/** `mise set`が、書き込む`KEY=VALUE`を持たずに値を一覧するなら真。 */
+/** `mise set`の値を取るオプション。`--stdin`の鍵を探すとき、値の語を鍵と取り違えない。 */
+const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  ...MISE_VALUE_OPTIONS,
+  "--file",
+  "--age-key-file",
+  "--age-recipient",
+  "--age-ssh-recipient",
+]);
+
+/**
+ * `mise set`が、書き込む形を持たずに値を一覧するなら真。
+ * 書き込む形は、`KEY=VALUE`の語を持つか、`--stdin`と鍵の名前を持つかである。
+ * サブコマンドの前のグローバルオプション(`mise -E local set`)は読み飛ばして探す。
+ */
 function listsMiseValues(words: readonly Word[]): boolean {
-  if (words[1]?.text !== "set") return false;
-  return !words.slice(2).some((word) => ASSIGNMENT.test(word.text));
+  const sub = firstOperand(words.slice(1), MISE_VALUE_OPTIONS);
+  if (sub?.text !== "set") return false;
+  if (sub.rest.some((word) => ASSIGNMENT.test(word.text))) return false;
+  const readsStdin = sub.rest.some((word) => word.text === "--stdin");
+  return !(
+    readsStdin && firstOperand(sub.rest, MISE_SET_VALUE_OPTIONS) !== null
+  );
 }
 
 /** `.git/hooks`と`.git/config`のパス。lefthookのフックと設定の置き場所である。 */
@@ -260,7 +279,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor.",
+    "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor. A write needs KEY=VALUE, or one key with --stdin and the value on standard input.",
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:

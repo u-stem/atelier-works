@@ -116,7 +116,7 @@ const TRANSPARENT_OPTIONS: ReadonlyMap<
 ]);
 
 /** `mise exec`の値を取るオプション。 */
-const MISE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+export const MISE_VALUE_OPTIONS: ReadonlySet<string> = new Set([
   "-C",
   "--cd",
   "-j",

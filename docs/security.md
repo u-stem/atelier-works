@@ -1625,9 +1625,11 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 `docker exec`と`docker inspect`は、設定のルールが引数を絞れないので、ここには置かない。
 どちらも、環境変数を出す形だけを次の節のフックが拒否する。
 引数なしの`docker compose config`だけは、設定にも置く。
-`mise set -E`は、値を指定して書き込む形があるので、設定では拒否せず、フックが`KEY=VALUE`の無い呼び出しだけを拒否する。
-秘密値を投入する手順([セットアップ](setup.md))は、値を標準入力から渡す`mise set -E local --stdin KEY`を使う。
-この形は`KEY=VALUE`を持たないので、フックの拒否に当たる。投入は人が行う。
+`mise set -E`は、値を指定して書き込む形があるので、設定では拒否せず、フックが書き込む形の無い呼び出しだけを拒否する。
+書き込む形は、`KEY=VALUE`の語を持つか、`--stdin`と鍵の名前を持つかである。
+`mise -E local set`のように、サブコマンドの前にグローバルオプションを置いても、フックは同じ判定をする。
+秘密値を投入する手順([セットアップ](setup.md))は、値を標準入力から渡す`mise set -E local --stdin KEY`を使う。この形は一覧を出さないので、フックは拒否しない。
+投入は人が行う。
 
 ## Claude Codeのフック
 
@@ -1654,7 +1656,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | フィールドの経路だけの`--format`を持たない`docker inspect`、`Env`か`Config`を含む経路 | コンテナに渡した環境変数が見える |
 | 出力を絞らない`docker compose config`と`docker compose convert` | 変数を展開したcompose定義を出力する |
 | `/proc/<pid>/environ`(`task/<tid>`の下を含む)を引数やリダイレクトに含むコマンド | プロセスの環境変数がそのまま入っている |
-| 書き込む`KEY=VALUE`を持たない`mise set` | `mise.local.toml`の値を一覧する |
+| 書き込む形(`KEY=VALUE`、または`--stdin`と鍵の名前)を持たない`mise set` | `mise.local.toml`の値を一覧する |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
