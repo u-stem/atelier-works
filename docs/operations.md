@@ -1129,7 +1129,9 @@ Claudeが実行するときは、Bashの10分の上限に収めるため、`run_
 `CHECK_IDLE_FORCE=1`を付けると、確認を飛ばす。
 付けるのは人だけで、次のどちらかを確かめたときである。
 Claudeは自己判断で付けない。
-`.claude/settings.json`の`permissions.deny`が、`CHECK_IDLE_FORCE=`を含むBashの実行を拒否する。
+Claudeのbash-guardが`CHECK_IDLE_FORCE`の代入を拒否する。
+誤って付けるのを防ぐもので、すべての回避を塞ぐものではない。
+予備として、`.claude/settings.json`の`permissions.deny`も置く。
 
 - 一覧のジョブが無いことを、Windmillの画面を見て自分で確かめた。作業項目が実装中などのまま残っていても、対応するジョブが無ければ、動いていない。60秒待っても止まる場合の多くは、この残った作業項目である。
   - Windmillの画面を開けないときは、一覧の開始時刻(`started`)と、workerの状態を照らし合わせる。

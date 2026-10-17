@@ -57,8 +57,7 @@
       "Bash(printenv:*)",
       "Bash(env)",
       "Bash(cat mise.local.toml)",
-      "Bash(CHECK_IDLE_FORCE=*)",
-      "Bash(*CHECK_IDLE_FORCE=*)"
+      "Bash(CHECK_IDLE_FORCE=*)"
     ]
   },
   "hooks": {

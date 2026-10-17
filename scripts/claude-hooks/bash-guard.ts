@@ -102,6 +102,12 @@ const HOOK_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "pull",
 ]);
 
+/**
+ * `mise run up`と`mise run deploy`の、実行中の仕事の確認を飛ばす環境変数。
+ * 人が自分の端末で付けるものなので、値によらず、名前の代入をすべて拒否する。
+ */
+const CHECK_IDLE_FORCE_ENV = "CHECK_IDLE_FORCE";
+
 /** lefthookのバイナリと設定を差し替える環境変数。インストール済みのフックはこれらを読む。 */
 const LEFTHOOK_REPLACING_ENV: ReadonlySet<string> = new Set([
   "LEFTHOOK_BIN",
@@ -261,6 +267,8 @@ export const REASONS = {
     "Disabling lefthook with LEFTHOOK=0 (or false, off, no) is not allowed. Fix the failing check instead.",
   lefthookExclude:
     "LEFTHOOK_EXCLUDE may only list wmill-metadata and wmill-metadata-check, and only when the local Windmill cannot start.",
+  checkIdleForce:
+    "CHECK_IDLE_FORCE skips the running-work check before mise run up and mise run deploy recreate the worker. A person sets it in their own terminal, only after confirming that nothing needs to be kept. Wait for the running work to finish and run the command again.",
   lefthookUninstall:
     "lefthook uninstall removes the git hooks. Fix the failing check instead.",
   gitInternals:
@@ -520,6 +528,7 @@ function checkEnvironment(assignments: readonly Word[]): Decision {
     const value = word.text.slice(equals + 1);
     if (GIT_CONFIG_ENV.test(name)) return deny(REASONS.gitConfigEnv);
     if (LEFTHOOK_REPLACING_ENV.has(name)) return deny(REASONS.lefthookReplace);
+    if (name === CHECK_IDLE_FORCE_ENV) return deny(REASONS.checkIdleForce);
     if (
       name === "LEFTHOOK" &&
       (word.dynamic || FALSY_LEFTHOOK_VALUES.has(value.toLowerCase()))

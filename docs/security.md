@@ -1641,6 +1641,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | `xargs`の引数で渡す`git push`と`git commit` | 標準入力から来る引数は、実行するまで分からない |
 | `--no-verify`、`git commit -n`、`core.hooksPath`の設定、`LEFTHOOK`を`0`、`false`、`off`、`no`にすること | lefthookの検査を飛ばすと、壊れた変更や秘密値がpushされる |
 | `LEFTHOOK_EXCLUDE`に`wmill-metadata`と`wmill-metadata-check`以外を書くこと | AGENTS.mdが飛ばしてよいとするのは、この2つだけである |
+| `CHECK_IDLE_FORCE`の代入(前置き、`env`、`export`、`declare`、引用符とエスケープを外した後の形、値が動的な場合を含む) | `mise run up`と`mise run deploy`の、実行中の仕事の確認を飛ばせる。付けるのは人が自分の端末で、確かめた後だけである |
 | `LEFTHOOK_BIN`と`LEFTHOOK_CONFIG`の設定 | インストール済みのフックが読む、lefthookのバイナリと設定を差し替えられる |
 | `lefthook uninstall`、`.git/hooks`と`.git/config`への書き込み | gitのフックを外せる |
 | `git -c alias.*`、`remote.*.push`・`push.default`・`include.*`・`includeIf.*`の設定、`GIT_CONFIG_COUNT`・`GIT_CONFIG_GLOBAL`・`GIT_CONFIG_SYSTEM`などの環境変数 | `push`や`core.hooksPath`を別の名前や設定の裏から差し込める |
@@ -1674,6 +1675,10 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 `bash -`は標準入力から読む形として扱う。
 `time`、`command`、`exec`、`env`、`xargs`、`timeout`などの前置きは外してから判定する。
 `bash`のほかに、`fish`、`ash`、`mksh`、`tcsh`、`csh`、`busybox sh`も同じように扱う。
+
+`CHECK_IDLE_FORCE`の拒否は、誤って付けるのを防ぐもので、すべての回避を塞ぐものではない。
+残るリスクは、変数名の組み立て、スクリプトファイルを経由した代入、miseの設定ファイルへの書き込み、`docker compose up`の直接実行である。
+予備として、`.claude/settings.json`の`permissions.deny`にも、行頭の代入を置く。
 
 秘密値のファイルの判定は、ファイルを読む引数とリダイレクトの先にだけ働く。
 検索パターン(`rg mise.local.toml docs`の`mise.local.toml`)と、`sed`や`awk`の式の中の名前は拒否しない。
