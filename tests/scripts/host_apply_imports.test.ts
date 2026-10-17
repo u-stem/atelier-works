@@ -206,3 +206,96 @@ describe("the bun code that the host scripts start", () => {
     ).toEqual([]);
   });
 });
+
+/** 承認の道具のファイル。ネットワーク、外部の子プロセス、秘密値の読み取りを持たないことを固定する。 */
+const APPROVAL_MODULES = [
+  "approve.ts",
+  "approved_io.ts",
+  "approved_store.ts",
+  "code_origin.ts",
+].map((name) => join(HOST_APPLY_DIR, name));
+
+const FORBIDDEN_BUILTINS =
+  /^(?:node:)?(?:net|http|https|http2|tls|dns|dgram|child_process)(?:\/.*)?$/;
+
+/** ソースに現れる、ネットワーク、外部の子プロセス、`mise.local`の読み取りの形。 */
+function forbiddenForms(source: string): string[] {
+  const found: string[] = [];
+  if (/\bfetch\s*\(/.test(source)) found.push("fetch(");
+  for (const word of [
+    "WebSocket",
+    "Bun.connect",
+    "Bun.serve",
+    "Bun.listen",
+    "Bun.udpSocket",
+    "Bun.$",
+  ]) {
+    if (source.includes(word)) found.push(word);
+  }
+  for (const specifier of specifiers(source)) {
+    if (FORBIDDEN_BUILTINS.test(specifier)) found.push(`import ${specifier}`);
+  }
+  for (const match of source.matchAll(/\bspawn\w*\s*\(\s*([^\n]{0,40})/g)) {
+    if (!/^\[\s*["']\/usr\/bin\/git["']/.test(match[1] ?? "")) {
+      found.push(`spawn(${match[1] ?? ""}`);
+    }
+  }
+  if (source.includes("mise.local")) found.push("mise.local");
+  return found;
+}
+
+describe("the call checker for the approval modules", () => {
+  test.each([
+    'const r = await fetch("https://x");',
+    "const s = new WebSocket(url);",
+    "Bun.connect({ hostname: h });",
+    "Bun.serve({ fetch });",
+    "Bun.listen({ port: 1 });",
+    "Bun.udpSocket({});",
+    "await Bun.$`ls`;",
+    'import net from "node:net";',
+    'import { request } from "https";',
+    'import { exec } from "node:child_process";',
+    'import tls from "node:tls";',
+    'import dns from "node:dns";',
+    'import dgram from "node:dgram";',
+    'import http from "node:http";',
+    'Bun.spawn(["docker", "ps"]);',
+    "Bun.spawn(cmd);",
+    "spawnSync(bin, args);",
+    'const f = ".../mise.local.toml";',
+  ])("flags %s", (source) => {
+    expect(forbiddenForms(source)).not.toEqual([]);
+  });
+
+  test.each([
+    'Bun.spawn(["/usr/bin/git", ...args]);',
+    'import { createHash } from "node:crypto";',
+    'import { readFileSync } from "node:fs";',
+    "const refetch = prefetch;",
+    "const mise = 1;",
+  ])("accepts %s", (source) => {
+    expect(forbiddenForms(source)).toEqual([]);
+  });
+});
+
+describe("the approval modules", () => {
+  test("exist, so that the scan below is not empty", () => {
+    const names = readdirSync(HOST_APPLY_DIR);
+    expect(
+      APPROVAL_MODULES.filter((file) =>
+        names.includes(file.slice(HOST_APPLY_DIR.length + 1)),
+      ),
+    ).toEqual(APPROVAL_MODULES);
+  });
+
+  test("have no network call, no outside process and no mise.local", () => {
+    expect(
+      APPROVAL_MODULES.flatMap((file) =>
+        forbiddenForms(readFileSync(file, "utf8")).map(
+          (form) => `${file}: ${form}`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+});
