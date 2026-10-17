@@ -1,5 +1,5 @@
-summary: ''
-description: ''
+summary: '[LIB] defaultのworkerの停止の検知'
+description: 内部ライブラリです。直接実行するものではありません。defaultのworkerが止まっていないかをqueueから判定し、止まっていれば通知を残してDiscordにも知らせます。
 lock: '!inline f/factory/lib/default_worker.script.lock'
 kind: script
 schema:

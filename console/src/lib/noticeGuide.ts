@@ -307,6 +307,16 @@ const NOTICE_GUIDES: ReadonlyMap<string, NoticeGuide> = new Map([
     ),
   ],
   [
+    "default_worker_missing",
+    guide(
+      "defaultのworkerのqueueに、予定時刻から10分以上実行されずに待つジョブがあり、defaultで動いているジョブがありません。defaultのworkerが居ないか、ジョブを受けられない状態です。",
+      "本文の「次の操作」に従い、コンテナの状態、mise run upでの起動、Windmillの画面のWorkers画面の順に確かめてください。",
+      {
+        note: "長いジョブが枠を塞いでいるだけのときは出ません。defaultのworkerがジョブを受けると、定期ジョブ用のworkerで動く確認が自動で解決します。",
+      },
+    ),
+  ],
+  [
     "worker_sample_failed",
     guide(
       "defaultのworkerの負荷を、10分以上続けて完全には記録できませんでした。枠の占有かメモリのどちらかが欠けた行ができています。",

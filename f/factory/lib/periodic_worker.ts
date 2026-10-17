@@ -21,8 +21,9 @@ export const PERIODIC_WORKER_TAG = "periodic";
  * 予定時刻からこの秒数以上、実行されずに待っているジョブがあれば、workerが受けていないと見なす。
  * このworkerは1件ずつしか動かさないので、先に動くジョブの後ろで待つ間は、workerが受けていても待たされる。
  * その待ちを誤って知らせないよう、tag `periodic`を付けたscriptのtimeoutの最大値に余裕を足した秒数以上にする。
- * 待たされる最悪は、他のscriptのtimeoutの合計である。今の2本では最大値と一致する。
- * 3本目以降を足すときは、合計に余裕を足した秒数以上にする。
+ * 待たされる上限は、前に並ぶ他のscriptのtimeoutの合計である。合計がこの値を超えるのは、
+ * 前に並ぶscriptがそろってtimeoutまで動き続けたときだけで、そのときは枠が塞がっているのも事実である。
+ * そこで最大値を基準にし、scriptを足すときは、そのtimeoutを既存の最大値以下に保つ。
  * 契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、この関係を固定する。
  */
 export const PERIODIC_JOB_WAIT_SECONDS = 900;

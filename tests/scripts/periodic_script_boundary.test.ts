@@ -31,6 +31,8 @@ import {
 // - 読んでよいsecret変数は、discord_webhook_urlだけである。claudeのトークンやwmillのトークンには届かせない。
 // - timeoutの最大値に余裕を足した秒数が、待ちの検知のしきい値を超えない。
 //   このworkerの枠は1つなので、長く動くjobの後ろで待つ定期ジョブを、workerの不在と誤って知らせないためである。
+// - defaultのworkerの停止を検知するscript(default_worker_watch)も、この一覧に入る。
+//   defaultのworkerの中では、そのworkerが止まると動かないためである。
 // - importでたどれるソースに、ファイル、サブプロセス、claudeへの依存が無い。
 // - 走査でたどれない形(Console用workerの境界テストと同じ)が無い。
 //
@@ -64,10 +66,12 @@ const MAY_READ_SECRET = [DISCORD_WEBHOOK_URL];
  * 待ちの検知のしきい値と、最長のtimeoutの間に残す秒数。
  * scriptの起動と、queueから拾うまでの遅れを見込む。
  *
- * このworkerの枠は1つなので、あるscriptが待たされる最悪は、他のscriptのtimeoutの合計である。
+ * このworkerの枠は1つなので、あるscriptが待たされる上限は、前に並ぶ他のscriptのtimeoutの合計である。
  * 下のテストは、最長のtimeoutに余裕を足した値を使う。
- * 今の2本は、片方の最悪がもう一方のtimeoutだけなので、最長の値と一致する。
- * 3本目以降を足すときは、式を「他のscriptのtimeoutの合計 + 余裕」に変える。
+ * 合計がしきい値を超えるのは、前に並ぶscriptがそろってtimeoutまで動き続けたときだけである。
+ * そのときは枠が塞がっているのも事実で、通知の本文もその可能性を挙げている。
+ * 合計を基準にすると、3本では余裕を足してしきい値(15分)を超えるので、最大値を基準にしたままにする。
+ * そのため、scriptを足すときは、そのtimeoutを既存の最大値以下に保つ。
  */
 const WAIT_MARGIN_SECONDS = 300;
 
