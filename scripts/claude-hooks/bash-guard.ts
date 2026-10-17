@@ -153,7 +153,10 @@ const MISE_SET_NAMES: ReadonlySet<string> = new Set(["set", "ev", "env-vars"]);
  * `--stdin`を持ち、オペランドが展開を含まない鍵の名前1つだけの形である。
  * 書き込む形のオプションは、許可リストにあるものだけにする。未知のオプションは、
  * 値を取ってオペランドの数を変えるおそれがあるので、一覧を出す形として扱う。
- * `--`を持つ形は、鍵の名前と区別できないので書き込む形とみなさない。
+ * 展開やglobを含むオプションとその値は、実行時に語が増えて隠しオプションが現れうるので、
+ * 書き込む形とみなさない。`--`を持つ形も、鍵の名前と区別できないので同じである。
+ * オペランドにサブコマンド名(`set`、`ev`、`env-vars`)があるときは、
+ * 前のオプションの値を取り違えたおそれがあるので、同じく書き込む形とみなさない。
  */
 function listsMiseValues(words: readonly Word[]): boolean {
   const args = words.slice(1);
@@ -171,15 +174,19 @@ function listsMiseValues(words: readonly Word[]): boolean {
     const word = rest[index];
     if (word === undefined) continue;
     if (!word.text.startsWith("-")) {
+      if (MISE_SET_NAMES.has(word.text)) return true;
       operands.push(word);
       continue;
     }
+    if (word.dynamic || word.glob) return true;
     const [name = ""] = word.text.split("=", 1);
     if (name === "--stdin" && word.text === name) {
       readsStdin = true;
     } else if (MISE_SET_FLAGS.has(word.text)) {
       continue;
     } else if (MISE_SET_VALUE_OPTIONS.has(word.text)) {
+      const value = rest[index + 1];
+      if (value?.dynamic || value?.glob) return true;
       index += 1;
     } else if (word.text.includes("=") && MISE_SET_VALUE_OPTIONS.has(name)) {
       continue;
@@ -332,7 +339,7 @@ export const REASONS = {
   gitHomeEnv:
     "Setting HOME or XDG_CONFIG_HOME for a git command that runs hooks (commit, push, merge, rebase, and the like) makes git read another config, which can turn the hooks off. Run the git command without changing HOME.",
   miseSetList:
-    "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor. A write needs KEY=VALUE, or one key with --stdin and the value on standard input.",
+    "mise set without KEY=VALUE lists the values of mise.local.toml, including secrets. To check that the secrets are set, run mise run doctor. A write needs KEY=VALUE, or one literal key with --stdin when the value is piped in.",
   gitConfigEnv:
     "GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, and GIT_CONFIG_PARAMETERS can override core.hooksPath and aliases. Set the option with a normal git command instead.",
   lefthookOff:
