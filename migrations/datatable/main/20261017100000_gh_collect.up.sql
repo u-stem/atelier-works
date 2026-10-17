@@ -17,6 +17,8 @@
 --   実行の始めにfinished_atが空の行を全員分書き、終わりに更新する。
 --   終わりの更新が失敗した行は、finished_atが空のまま残る。
 --   最新の実行は、所有者ごとにfinished_atのある最新の行である。
+--   ledは、その周回で最初に要求を送った所有者の行だけが真になる。結果は問わない。
+--   所有者を回す順は、ledが真で終えた最新の行のstarted_atが古い順にする。
 --   verifiedは「照合の失敗が無い」こと。id_checkedは「設定のIDと一致した」ことで、
 --   設定にIDが無いときはfalse、照合に至らなかったときはNULLになる。
 --
@@ -80,11 +82,13 @@ CREATE TABLE factory.gh_collect_runs (
     remaining integer,
     error_code text,
     next_allowed_at timestamptz,
+    led boolean NOT NULL DEFAULT false,
     CONSTRAINT gh_collect_runs_lowercase_check CHECK (owner = lower(owner)),
     CONSTRAINT gh_collect_runs_ok_check CHECK (NOT ok OR error_code IS NULL),
     CONSTRAINT gh_collect_runs_error_code_check
         CHECK (error_code IS NULL OR error_code IN ('no_token', 'token_config_invalid', 'db_error', 'owner_mismatch', 'deadline', 'unauthorized', 'forbidden', 'rate_limited', 'secondary_limit', 'http_5xx', 'timeout', 'graphql_error', 'parse_error')),
-    CONSTRAINT gh_collect_runs_requests_check CHECK (requests >= 0)
+    CONSTRAINT gh_collect_runs_requests_check CHECK (requests >= 0),
+    CONSTRAINT gh_collect_runs_led_check CHECK (NOT led OR requests >= 1)
 );
 
 COMMENT ON TABLE factory.gh_collect_runs IS
@@ -101,6 +105,8 @@ COMMENT ON COLUMN factory.gh_collect_runs.remaining IS
     '最後の応答のrateLimitのremaining。';
 COMMENT ON COLUMN factory.gh_collect_runs.next_allowed_at IS
     'レート制限などで、この時刻まで通信しない。1時間以内に切り詰めて書く。';
+COMMENT ON COLUMN factory.gh_collect_runs.led IS
+    'その周回で最初に要求を送った所有者の行だけが真。結果は問わない。所有者を回す順に使う。';
 
 -- 所有者ごとの最新の実行と、直近の成功を引く。掃除が残す行の判定にも使う。
 CREATE INDEX gh_collect_runs_owner_finished_idx ON factory.gh_collect_runs (owner, finished_at DESC) WHERE finished_at IS NOT NULL;

@@ -97,11 +97,14 @@ export type GhCollectResult = {
   readonly owners: readonly GhCollectOwnerResult[];
 };
 
+/** 所有者が集め終えた結果。`led`は、周回の中の順で決まるので、`finish`が付ける。 */
+type CollectedOutcome = Omit<GhCollectRunOutcome, "led">;
+
 /** 通信に至らなかった失敗の行の内容。照合も記録の置き換えも無いので、`verified`は偽、`id_checked`は`NULL`。 */
 function failedOutcome(
   errorCode: GhCollectErrorCode,
-  detail: Partial<GhCollectRunOutcome> = {},
-): GhCollectRunOutcome {
+  detail: Partial<CollectedOutcome> = {},
+): CollectedOutcome {
   return {
     ok: false,
     owner_id: null,
@@ -117,7 +120,7 @@ function failedOutcome(
 }
 
 type OwnerCollected = {
-  readonly outcome: GhCollectRunOutcome;
+  readonly outcome: CollectedOutcome;
   readonly repos: number;
 };
 
@@ -126,7 +129,8 @@ type OwnerCollected = {
  * `gh_collect_enabled`が偽なら、トークンを読まず、行も書かずに終わる。
  * 実行の行は、トークンを読む前に全員分を1つの文で書く。書けなければ例外を投げて、`on_failure`に任せる。
  * そのほかの失敗は例外にせず、所有者ごとの行の`error_code`に残す。
- * 所有者は順番を使った時刻が古い順に回す。実行全体の締め切りを過ぎそうなら、新しい要求を始めない。
+ * 所有者は、先頭を担当してから長い順に回す。この周回で最初に要求を送った所有者の行に、結果を問わず`led`を付ける。
+ * 実行全体の締め切りを過ぎそうなら、新しい要求を始めない。
  */
 export async function runGhCollect(
   deps: GhCollectDeps,
@@ -152,11 +156,17 @@ export async function runGhCollect(
   const runIds = new Map(runs.map((run) => [run.owner.toLowerCase(), run.id]));
 
   const results: GhCollectOwnerResult[] = [];
+  // 最初に要求を送った所有者は1人だけで、その行に`led`を付ける。
+  let ledTaken = false;
   const finish = async (
     owner: FactoryOwner,
     collected: OwnerCollected,
   ): Promise<void> => {
-    const { outcome } = collected;
+    const led = !ledTaken && collected.outcome.requests >= 1;
+    if (led) {
+      ledTaken = true;
+    }
+    const outcome: GhCollectRunOutcome = { ...collected.outcome, led };
     results.push({
       owner: owner.name,
       ok: outcome.ok,

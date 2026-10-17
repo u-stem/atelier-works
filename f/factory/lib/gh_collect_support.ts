@@ -107,18 +107,32 @@ export function lookupToken(
 }
 
 /**
- * 順番を使った時刻が古い所有者から並べる。使った時刻は、最後の成功の時刻と、
- * 要求を送ったのに`deadline`で終えた実行の開始時刻の遅いほうである。
- * どちらも無い所有者(状態の無い所有者を含む)は先にする。
- * 締め切りに収まらない所有者は、`deadline`の後に後ろへ回り、後ろの所有者が取り残されない。
- * 要求を送れずに`deadline`で終えた所有者は印が付かないので、後ろへ回らない。
- * 同じ古さの所有者は、設定の順を保つ。
+ * 先頭を担当してから長い所有者の順に並べる。キーは、`led`の実行の`started_at`の最新である。
+ * 先頭を担当したことの無い所有者(状態の無い所有者を含む)は先にする。同じキーは設定の順を保つ。
+ * 結果(成功、失敗、`deadline`)は見ない。先頭を担当した所有者は、結果を問わず後ろへ回り、
+ * 所有者ごとに、所有者の数の周回に1回は実行の予算のすべてを持つ。
+ * 締め切りに収まらない所有者は、先頭を担当しても失敗するが、ほかの所有者を取り残さない。
  */
 export function orderOwners<T extends { readonly name: string }>(
   owners: readonly T[],
-  _states: readonly GhCollectOwnerState[],
+  states: readonly GhCollectOwnerState[],
 ): T[] {
-  return [...owners];
+  const lastLed = new Map<string, number>();
+  for (const state of states) {
+    if (state.last_led_at !== null) {
+      lastLed.set(state.owner.toLowerCase(), state.last_led_at.getTime());
+    }
+  }
+  const key = (owner: T): number =>
+    lastLed.get(owner.name.toLowerCase()) ?? Number.NEGATIVE_INFINITY;
+  return [...owners].sort((a, b) => {
+    const left = key(a);
+    const right = key(b);
+    if (left === right) {
+      return 0;
+    }
+    return left < right ? -1 : 1;
+  });
 }
 
 /** 前回の失敗から引き継ぐ内容。 */

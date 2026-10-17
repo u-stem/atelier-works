@@ -1242,6 +1242,8 @@ tag`periodic`を付けたのは、`notify_daily_summary`と`auto_retry_pr_review
 - `repo_allowlist`が空のとき、見えないリポジトリを`not_visible`として検出できない。
   反映後に、人が件数を確かめる([収集の運用](operations.md#収集の運用))。
 - loginに`_`を含む所有者(EMUのアカウント)は集めない。
+- 先頭が`.`のリポジトリ名(`.github`など)は集めない。
+  GitHubの名前の述語は、シェルとパスに渡す名前の守りと共通なので、収集のために緩めると、その守りも緩む。
 - 締め切りやGitHubの失敗が続くと、リポジトリの状態が前回のまま凍る。
   `gone`の行は消えない。
 

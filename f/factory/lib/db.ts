@@ -6356,6 +6356,7 @@ export type GhCollectRun = {
   readonly remaining: number | null;
   readonly error_code: GhCollectErrorCode | null;
   readonly next_allowed_at: Date | null;
+  readonly led: boolean;
 };
 
 /** `factory.gh_repos`の列の正本。並びは、行を読む文のSELECT句と同じにする。 */
@@ -6390,6 +6391,7 @@ export const GH_COLLECT_RUNS_COLUMNS = [
   "remaining",
   "error_code",
   "next_allowed_at",
+  "led",
 ] as const satisfies readonly (keyof GhCollectRun)[];
 
 /**
@@ -6496,6 +6498,7 @@ function toGhCollectRun(row: GhCollectRunSqlRow): GhCollectRun {
     remaining: parseNullableNumber(row.remaining, "remaining"),
     error_code: parseNullableErrorCode(row.error_code),
     next_allowed_at: parseNullableDate(row.next_allowed_at, "next_allowed_at"),
+    led: parseBoolean(row.led, "led"),
   };
 }
 
@@ -6523,7 +6526,7 @@ export async function listRecentGhCollectRuns(
   const name = requireGitHubName(owner, "owner").toLowerCase();
   const count = requirePositiveInteger(limit, "limit");
   const rows = await sql`
-    SELECT id, started_at, finished_at, ok, owner, owner_id, verified, id_checked, cost, requests, remaining, error_code, next_allowed_at
+    SELECT id, started_at, finished_at, ok, owner, owner_id, verified, id_checked, cost, requests, remaining, error_code, next_allowed_at, led
     FROM factory.gh_collect_runs
     WHERE owner = ${name}
     ORDER BY started_at DESC, id DESC
@@ -6566,7 +6569,7 @@ export async function insertGhCollectRuns(
 
 /**
  * 実行の行の終わりを書く。`finished_at`が空の行だけを更新し、更新したら`true`を返す。
- * 成功の行に`error_code`は付けられない。
+ * 成功の行に`error_code`は付けられない。要求が1回も無い行は`led`にできない(表の検査で拒否する)。
  * 範囲外の値は、DBに触れる前に、値を文に入れずに例外にする。
  */
 export async function finishGhCollectRun(
@@ -6602,7 +6605,8 @@ export async function finishGhCollectRun(
         requests = ${requests}::integer,
         remaining = ${remaining}::integer,
         error_code = ${outcome.error_code},
-        next_allowed_at = ${outcome.next_allowed_at === null ? null : outcome.next_allowed_at.toISOString()}::timestamptz
+        next_allowed_at = ${outcome.next_allowed_at === null ? null : outcome.next_allowed_at.toISOString()}::timestamptz,
+        led = ${outcome.led}::boolean
     WHERE id = ${id}::bigint AND finished_at IS NULL
     RETURNING id
   `.fetch();
@@ -6610,9 +6614,9 @@ export async function finishGhCollectRun(
 }
 
 /**
- * 所有者ごとの、`finished_at`のある最新の実行の結果と、`ok`が真の最新の`finished_at`を返す。
- * 要求を1回以上送って`deadline`で終えた最新の実行の`started_at`も返す。所有者の並びに使う。
- * 実行中の行(`finished_at`が空)は数えない。実行の無い所有者は、`latest`と`last_success_at`と`last_deadline_at`が`null`の行になる。
+ * 所有者ごとの、`finished_at`のある最新の実行の結果と、`led`が真で`finished_at`のある最新の実行の`started_at`を返す。
+ * 後者は所有者の並びに使う。結果(成功、失敗、`deadline`)には依存しない。
+ * 実行中の行(`finished_at`が空)は数えない。実行の無い所有者は、`latest`と`last_led_at`が`null`の行になる。
  */
 export async function listGhCollectOwnerStates(
   owners: readonly string[],
@@ -6629,14 +6633,9 @@ export async function listGhCollectOwnerStates(
   const rows = await sql`
     SELECT o.owner, l.finished_at, l.ok, l.error_code, l.next_allowed_at,
       (
-        SELECT max(s.finished_at) FROM factory.gh_collect_runs s
-        WHERE s.owner = o.owner AND s.ok AND s.finished_at IS NOT NULL
-      ) AS last_success_at,
-      (
-        SELECT max(d.started_at) FROM factory.gh_collect_runs d
-        WHERE d.owner = o.owner AND d.error_code = 'deadline'
-          AND d.requests >= 1 AND d.finished_at IS NOT NULL
-      ) AS last_deadline_at
+        SELECT max(t.started_at) FROM factory.gh_collect_runs t
+        WHERE t.owner = o.owner AND t.led AND t.finished_at IS NOT NULL
+      ) AS last_led_at
     FROM unnest(${names}::text[]) AS o(owner)
     LEFT JOIN LATERAL (
       SELECT f.finished_at, f.ok, f.error_code, f.next_allowed_at
@@ -6660,11 +6659,7 @@ export async function listGhCollectOwnerStates(
               "next_allowed_at",
             ),
           },
-    last_success_at: parseNullableDate(row.last_success_at, "last_success_at"),
-    last_deadline_at: parseNullableDate(
-      row.last_deadline_at,
-      "last_deadline_at",
-    ),
+    last_led_at: parseNullableDate(row.last_led_at, "last_led_at"),
   }));
 }
 

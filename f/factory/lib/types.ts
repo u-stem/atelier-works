@@ -971,7 +971,7 @@ export type GhRepoGone = {
   readonly reason: "not_listed" | "not_visible";
 };
 
-/** 所有者ごとの、収集の最新の実行と最後の成功。 */
+/** 所有者ごとの、収集の最新の実行と、最後に先頭を担当した実行。 */
 export type GhCollectOwnerState = {
   readonly owner: string;
   /** `finished_at`のある最新の行の結果。行が無ければ`null`。 */
@@ -981,13 +981,8 @@ export type GhCollectOwnerState = {
     readonly error_code: GhCollectErrorCode | null;
     readonly next_allowed_at: Date | null;
   } | null;
-  /** `ok`が真の最新の`finished_at`。無ければ`null`。 */
-  readonly last_success_at: Date | null;
-  /**
-   * 段1の要求を1回以上送ったのに`deadline`で終えた最新の実行の`started_at`。無ければ`null`。
-   * 要求を1回も送れずに`deadline`で終えた実行は数えない。
-   */
-  readonly last_deadline_at: Date | null;
+  /** `led`が真で`finished_at`のある最新の実行の`started_at`。無ければ`null`。 */
+  readonly last_led_at: Date | null;
 };
 
 /** 収集の実行1行(所有者ごと)の終わりに書く内容。 */
@@ -1001,6 +996,8 @@ export type GhCollectRunOutcome = {
   readonly remaining: number | null;
   readonly error_code: GhCollectErrorCode | null;
   readonly next_allowed_at: Date | null;
+  /** その周回で最初に要求を送った所有者の行だけ真。結果は問わない。要求が1回も無い行は偽。 */
+  readonly led: boolean;
 };
 
 // ---------------------------------------------------------------------------
