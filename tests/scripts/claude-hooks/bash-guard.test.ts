@@ -1088,6 +1088,16 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise set --stdin K*",
     "mise set -E A=b",
     "mise set --file A=b",
+    "mise set --profile A=b",
+    "mise set -P A=b",
+    "mise set --output A=b",
+    "mise set --log-level A=b",
+    "mise set --stdin -P local",
+    "mise set --stdin --log-level info",
+    "mise ev -E local",
+    "mise env-vars --env local",
+    "mise -q ev",
+    "mise x -- mise ev",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
@@ -1098,6 +1108,8 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise -E local set KEY=value",
     "mise set -E local --stdin KEY",
     "mise -E local set --stdin KEY",
+    "mise set --env=local --stdin KEY",
+    "mise set -g --stdin KEY",
     'IFS= read -rs -p "KEY: " v && printf \'%s\' "$v" | mise set -E local --stdin KEY',
     "mise run check",
   ])("allows %s", async (command) => {
