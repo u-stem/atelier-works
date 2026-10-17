@@ -1117,10 +1117,8 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise -q toml",
     "mise -E local x -- env",
     "mise -C . exec -- printenv",
-    "mise --log-level info x -- env",
     "mise {-q,set}",
     "mise -q {set,}",
-    "mise set A=$X",
     "echo set | xargs mise",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
@@ -1137,11 +1135,25 @@ describe("bash-guard denies mise set without a value to write", () => {
     'IFS= read -rs -p "KEY: " v && printf \'%s\' "$v" | mise set -E local --stdin KEY',
     "mise run check",
     "mise -E local x -- bun test",
+    "mise set A=$X",
+    "mise set A={x,y}",
+    "mise ev KEY=v",
+    "mise env-vars KEY=v",
+    "mise set KEY=v --age-encrypt",
+    "mise set --file=a.toml A=b",
+    "mise set --stdin KEY -E local",
     "mise set 'JSON={\"a\":1}' --stdin",
     `mise set KEY="${OPEN}v}"`,
   ])("allows %s", async (command) => {
     expect(await decide(command)).toBe("allow");
   });
+
+  test.each(["mise settings set x y", "mise run set", "mise run lint env"])(
+    "denies %s because it has a subcommand-like word",
+    async (command) => {
+      expect(await decide(command)).toBe("deny");
+    },
+  );
 
   test("the reason says a person injects secrets", async () => {
     expect(await denyReason("mise set")).toContain("person");
