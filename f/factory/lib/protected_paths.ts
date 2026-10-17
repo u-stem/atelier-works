@@ -332,23 +332,71 @@ export const IMPLEMENT_PROTECTED_BASENAME_PATTERNS: readonly RegExp[] = [
   /^composer\.(lock|json)$/,
 ];
 
+// 無視される文字(ゼロ幅文字、異体字セレクタなど)。ファイルシステムや表示で消える文字を挟んだ別名を潰す。
+const IGNORABLE_CHARACTERS = /\p{Default_Ignorable_Code_Point}/gu;
+
+/**
+ * パスを、大文字小文字とUnicodeの別名を区別しない形にそろえる。
+ * ホストのファイルシステム(macOSのAPFSの既定)は、大文字小文字を区別せず、
+ * 互換等価な文字(長いs、ケルビン記号、全角文字)や分解形も同じ名前に潰しうる。
+ * NFKCで正規化し、大文字にしてから小文字に戻して(ßのような1文字が複数文字に変わる畳み込みも含めて)から、
+ * 正規化を掛け直す。
+ */
+function foldPath(path: string): string {
+  return path
+    .replace(IGNORABLE_CHARACTERS, "")
+    .normalize("NFKC")
+    .toUpperCase()
+    .toLowerCase()
+    .normalize("NFKC");
+}
+
+const foldedListCache = new WeakMap<readonly string[], readonly string[]>();
+
+function foldedList(list: readonly string[]): readonly string[] {
+  const cached = foldedListCache.get(list);
+  if (cached !== undefined) return cached;
+  const folded = list.map(foldPath);
+  foldedListCache.set(list, folded);
+  return folded;
+}
+
+const insensitivePatternCache = new WeakMap<RegExp, RegExp>();
+
+// 畳み込んだ名前に当てるので、大文字を含む正規表現も大文字小文字を区別しない形にする。
+function insensitivePattern(pattern: RegExp): RegExp {
+  const cached = insensitivePatternCache.get(pattern);
+  if (cached !== undefined) return cached;
+  const flags = pattern.flags.includes("i")
+    ? pattern.flags
+    : `${pattern.flags}i`;
+  const insensitive = new RegExp(pattern.source, flags);
+  insensitivePatternCache.set(pattern, insensitive);
+  return insensitive;
+}
+
 function matchesPathLists(
   path: string,
   prefixes: readonly string[],
+  exactPaths: readonly string[],
   basenamePatterns: readonly RegExp[],
 ): boolean {
-  const normalized = path.replace(/^\.\//, "");
-  for (const prefix of prefixes) {
+  const normalized = foldPath(path).replace(/^\.\//, "");
+  if (foldedList(exactPaths).includes(normalized)) return true;
+  for (const prefix of foldedList(prefixes)) {
     if (normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)) {
       return true;
     }
   }
   const basename = normalized.split("/").pop() ?? normalized;
-  return basenamePatterns.some((pattern) => pattern.test(basename));
+  return basenamePatterns.some((pattern) =>
+    insensitivePattern(pattern).test(basename),
+  );
 }
 
 /**
  * `path`がdocs/security.md「PR修正の安全策」の禁止パスに当たるかを返す。
+ * 照合は、大文字小文字とUnicodeの別名を区別しない(`foldPath`)。
  * `prefixes`のディレクトリは、リポジトリのルートからの相対パスの前方一致で判定する
  * (ディレクトリ名そのものも一致とみなす)。
  * `FORBIDDEN_EXACT_PATHS`とは完全一致で、`FORBIDDEN_BASENAME_PATTERNS`は
@@ -359,9 +407,12 @@ export function matchesForbiddenPath(
   path: string,
   prefixes: readonly string[] = FORBIDDEN_PATH_PREFIXES,
 ): boolean {
-  const normalized = path.replace(/^\.\//, "");
-  if (FORBIDDEN_EXACT_PATHS.includes(normalized)) return true;
-  return matchesPathLists(path, prefixes, FORBIDDEN_BASENAME_PATTERNS);
+  return matchesPathLists(
+    path,
+    prefixes,
+    FORBIDDEN_EXACT_PATHS,
+    FORBIDDEN_BASENAME_PATTERNS,
+  );
 }
 
 /**
@@ -371,11 +422,10 @@ export function matchesForbiddenPath(
  * `IMPLEMENT_PROTECTED_EXACT_PATHS`とは完全一致で判定する。
  */
 export function matchesImplementProtectedPath(path: string): boolean {
-  const normalized = path.replace(/^\.\//, "");
-  if (IMPLEMENT_PROTECTED_EXACT_PATHS.includes(normalized)) return true;
   return matchesPathLists(
     path,
     IMPLEMENT_PROTECTED_PATH_PREFIXES,
+    IMPLEMENT_PROTECTED_EXACT_PATHS,
     IMPLEMENT_PROTECTED_BASENAME_PATTERNS,
   );
 }
