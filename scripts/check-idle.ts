@@ -429,6 +429,19 @@ export function classifyReadFailure(
   return "unverifiable";
 }
 
+/**
+ * `docker`を起動できなかった例外を分ける。
+ * 実行ファイルが無い(`ENOENT`)ときだけ、Dockerを使わない環境として、届かなかったものとする。
+ * プロセスやファイルの数、メモリの不足などの起動の失敗は、docker自体はあるので、確かめられなかったものとして扱う。
+ */
+export function classifySpawnError(
+  error: unknown,
+): "unreachable" | "unverifiable" {
+  return error instanceof Error && "code" in error && error.code === "ENOENT"
+    ? "unreachable"
+    : "unverifiable";
+}
+
 function readDatabase<T>(
   db: string,
   sql: string,
@@ -482,7 +495,7 @@ function readDatabase<T>(
   } catch (error) {
     return {
       ok: false,
-      kind: "unreachable",
+      kind: classifySpawnError(error),
       reason: error instanceof Error ? shorten(error.message) : "unknown error",
     };
   }
@@ -667,11 +680,4 @@ function main(): number {
 
 if (import.meta.main) {
   process.exitCode = main();
-}
-
-// スタブ。実装は次のコミットで書く。
-export function classifySpawnError(
-  _error: unknown,
-): "unreachable" | "unverifiable" {
-  return "unreachable";
 }
