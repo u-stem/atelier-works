@@ -7313,13 +7313,29 @@ check(
 const GH_DETAIL_SHA = "0123456789abcdef0123456789abcdef01234567";
 const GH_DETAIL_OWNER = "qdbghd";
 
-/** 文がDBに拒否されたら真を返す。 */
-function ghStatementRejected(statement: string): boolean {
+/** 文がDBに受理されたら真を返す。 */
+function ghStatementAccepted(statement: string): boolean {
+  try {
+    execPsql(target, statement);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 文が指定した制約に拒否されたら真を返す。
+ * 別の理由(型の不一致、別の制約)で拒否されたときは偽にする。
+ */
+function ghStatementRejectedBy(statement: string, constraint: string): boolean {
   try {
     execPsql(target, statement);
     return false;
-  } catch {
-    return true;
+  } catch (error) {
+    return (
+      error instanceof Error &&
+      error.message.includes(`constraint "${constraint}"`)
+    );
   }
 }
 
@@ -7347,37 +7363,134 @@ check(
 );
 check(
   "gh_pull_requests: a repeated (owner, repo, number) is refused",
-  ghStatementRejected(ghPrInsert(1)),
+  ghStatementRejectedBy(
+    ghPrInsert(1),
+    "gh_pull_requests_owner_repo_number_key",
+  ),
 );
 check(
   "gh_pull_requests: a head_sha that is not 40 lowercase hex digits is refused",
-  ghStatementRejected(ghPrInsert(2, { sha: GH_DETAIL_SHA.toUpperCase() })),
+  ghStatementRejectedBy(
+    ghPrInsert(2, { sha: GH_DETAIL_SHA.toUpperCase() }),
+    "gh_pull_requests_head_sha_check",
+  ),
 );
 check(
   "gh_pull_requests: an author_login without an author_type is refused",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     ghPrInsert(3, { columns: "author_login", values: "'someone'" }),
+    "gh_pull_requests_author_pair_check",
   ),
 );
 check(
   "gh_pull_requests: a non-positive id in an id array is refused",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     ghPrInsert(4, { columns: "assignee_ids", values: "ARRAY[5, 0]::bigint[]" }),
+    "gh_pull_requests_assignee_ids_check",
   ),
 );
 check(
   "gh_pull_requests: a mergeable value other than the settled two is refused",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     ghPrInsert(5, { columns: "mergeable", values: "'UNKNOWN'" }),
+    "gh_pull_requests_mergeable_check",
   ),
 );
 check(
   "gh_pull_requests: a head_ref longer than 255 bytes is refused",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     ghPrInsert(6, {
       columns: "head_ref",
       values: `'${"a".repeat(256)}'`,
     }),
+    "gh_pull_requests_head_ref_check",
+  ),
+);
+check(
+  "gh_pull_requests: a null element in assignee_ids is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(7, {
+      columns: "assignee_ids",
+      values: "ARRAY[5, NULL]::bigint[]",
+    }),
+    "gh_pull_requests_assignee_ids_check",
+  ),
+);
+check(
+  "gh_pull_requests: a null element in review_requested_user_ids is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(8, {
+      columns: "review_requested_user_ids",
+      values: "ARRAY[5, NULL]::bigint[]",
+    }),
+    "gh_pull_requests_review_requested_user_ids_check",
+  ),
+);
+check(
+  "gh_pull_requests: positive id arrays are accepted",
+  ghStatementAccepted(
+    ghPrInsert(9, {
+      columns: "assignee_ids, review_requested_user_ids",
+      values: "ARRAY[5, 6]::bigint[], ARRAY[7]::bigint[]",
+    }),
+  ),
+);
+// 255バイトの境界は、文字数ではなくバイト数で決まる(「あ」は3バイト)。
+check(
+  "gh_pull_requests: a head_ref of exactly 255 bytes is accepted",
+  ghStatementAccepted(
+    ghPrInsert(10, {
+      columns: "head_ref",
+      values: "repeat('あ', 85)",
+    }),
+  ),
+);
+check(
+  "gh_pull_requests: a head_ref of 258 bytes is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(11, {
+      columns: "head_ref",
+      values: "repeat('あ', 86)",
+    }),
+    "gh_pull_requests_head_ref_check",
+  ),
+);
+check(
+  "gh_pull_requests: a base_ref of exactly 255 bytes is accepted",
+  ghStatementAccepted(
+    ghPrInsert(12, {
+      columns: "base_ref",
+      values: "repeat('あ', 85)",
+    }),
+  ),
+);
+check(
+  "gh_pull_requests: a base_ref of 258 bytes is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(13, {
+      columns: "base_ref",
+      values: "repeat('あ', 86)",
+    }),
+    "gh_pull_requests_base_ref_check",
+  ),
+);
+check(
+  "gh_pull_requests: an author_login of 39 characters is accepted",
+  ghStatementAccepted(
+    ghPrInsert(14, {
+      columns: "author_login, author_type",
+      values: `'${"a".repeat(39)}', 'User'`,
+    }),
+  ),
+);
+check(
+  "gh_pull_requests: an author_login of 40 characters is refused",
+  ghStatementRejectedBy(
+    ghPrInsert(15, {
+      columns: "author_login, author_type",
+      values: `'${"a".repeat(40)}', 'User'`,
+    }),
+    "gh_pull_requests_author_login_check",
   ),
 );
 execPsql(
@@ -7395,8 +7508,9 @@ check(
 );
 check(
   "gh_issues: the state closed is refused because a vanished issue is unlisted",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     `INSERT INTO factory.gh_issues (owner, repo, repo_id, number, state, created_at, updated_at) VALUES ('${GH_DETAIL_OWNER}', 'alpha', 11, 2, 'closed', now(), now())`,
+    "gh_issues_state_check",
   ),
 );
 const [ghReposMarked] = await sql`
@@ -7421,26 +7535,29 @@ check(
 );
 check(
   "gh_collect_runs: a failed run may carry the stage detail",
-  !ghStatementRejected(
+  ghStatementAccepted(
     `INSERT INTO factory.gh_collect_runs (owner, ok, error_code, stage) VALUES ('${GH_DETAIL_OWNER}', false, 'graphql_error', 'detail')`,
   ),
 );
 check(
   "gh_collect_runs: a successful run with a stage is refused",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     `INSERT INTO factory.gh_collect_runs (owner, ok, stage) VALUES ('${GH_DETAIL_OWNER}', true, 'detail')`,
+    "gh_collect_runs_ok_stage_check",
   ),
 );
 check(
   "gh_collect_runs: a stage other than list and detail is refused",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     `INSERT INTO factory.gh_collect_runs (owner, ok, error_code, stage) VALUES ('${GH_DETAIL_OWNER}', false, 'graphql_error', 'other')`,
+    "gh_collect_runs_stage_check",
   ),
 );
 check(
   "gh_collect_runs: a negative detail count is refused",
-  ghStatementRejected(
+  ghStatementRejectedBy(
     `INSERT INTO factory.gh_collect_runs (owner, detail_done) VALUES ('${GH_DETAIL_OWNER}', -1)`,
+    "gh_collect_runs_detail_counts_check",
   ),
 );
 
