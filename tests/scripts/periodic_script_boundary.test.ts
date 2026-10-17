@@ -454,14 +454,14 @@ describe("periodic scripts", () => {
     expect(Object.keys(ALLOWED).sort()).toEqual([...PERIODIC_SCRIPTS].sort());
   });
 
-  test.each(PERIODIC_SCRIPTS)(
+  test.each([...PERIODIC_SCRIPTS])(
     "%s reads no secret variable but its allowed ones",
     async (path) => {
       expect(await secretsOutside([path], ALLOWED[path] ?? [])).toEqual([]);
     },
   );
 
-  test.each(PERIODIC_SCRIPTS)(
+  test.each([...PERIODIC_SCRIPTS])(
     "%s reads every secret variable it is allowed to",
     (path) => {
       expect(

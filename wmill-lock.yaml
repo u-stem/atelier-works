@@ -12,7 +12,7 @@ locks:
   f/factory/auto_retry_stale_image: ecd33f885e1731f2cd91349764550c30c93d7753fa1051f38aa2881fc2ba3671
   f/factory/cleanup_db: 407dedd71489b22811c899b64e9407e0e2bd528ae4f627899aa91e77a1bba2cd
   f/factory/cleanup_workspaces: 85d101350d34b99659c2b68fc582ef02f70476941c75b0bf5ba3b3fd462e8a2b
-  f/factory/collect_github: ec01407fc31f2744b77435dbbaa0bf59d34af0f96712c35e817899b5f294c427
+  f/factory/collect_github: 66d8271a60bd9cba54559064948e6ab8b40a51a9ae02e8bcb24578e48fbd248f
   f/factory/console_fetch_watch: bc9989c956e804ed6c7e42b789b08f92ee8800ea4937d524d1b5f99619eb8c82
   f/factory/dependabot__flow+__flow_hash: 44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a
   f/factory/drawio_viewer_bump: 2f3ddde70a8b9e866ab902bd2bc0e1c17e69c6dfc05c367d36e90d456d648f8b
@@ -28,7 +28,7 @@ locks:
   f/factory/lib/check_sandbox: 9579c901bc49a4a238e7e22be924d911cf1c17b2e6b1a78b594045b387672b7b
   f/factory/lib/check_sandbox_reasons: 1c162edbcb7aff4ae5b1a282fceca8b4072543c845054a50f3af07f1fffc11e2
   f/factory/lib/ci_fix_classify: eb35e7112fa3b72e97c4b37137f7bcc4d6942b52a60736d4b5a959a436b11092
-  f/factory/lib/ci_fix_paths: 1bdc364ecda1d49fd97d9d05262119b528d2f2cb926207de64c05b7dad2147e7
+  f/factory/lib/ci_fix_paths: ccb656287c60ecf37ad15604f747c6a8365266455a61e921e36e626fbece87db
   f/factory/lib/ci_fix_prompt: c96988f34a27420e9493ab7ad0f904b49a39c17b11036f5a44f9de42a2885a47
   f/factory/lib/ci_fix_round: 51fc396fe5d08f3d32004e3e9c4579161d9694f60918e965d3a56b1a3901f4cf
   f/factory/lib/ci_log_support: 82bfb98e03c1afb71b08c3b95d72fd95d8016f853373268b5c3fbbdd416d8a9e
