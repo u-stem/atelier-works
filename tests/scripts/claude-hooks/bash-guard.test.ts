@@ -1134,6 +1134,8 @@ describe("bash-guard denies mise set without a value to write", () => {
     'read -rs -p "KEY: " v && mise set -E local KEY="$v"',
     "IFS= read -rs 'v?KEY: ' && printf '%s' \"$v\" | mise set -E local --stdin KEY; unset v",
     "IFS= read -rs -p 'KEY: ' v && printf '%s' \"$v\" | mise set -E local --stdin KEY; unset v",
+    "mise -q x -- mise set KEY=v",
+    "mise -q x -- env FOO=1 mise set A=b",
     "mise set -g --stdin KEY",
     "mise set --global KEY=value",
     "mise set --age-encrypt --age-recipient age1x KEY=value",
