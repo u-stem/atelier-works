@@ -203,6 +203,32 @@ describe("parseClaudeJson", () => {
     });
   });
 
+  test("reads a modelUsage entry in the shape claude 2.1.302 returns", () => {
+    const result = parseClaudeJson(
+      claudeJsonStdout({
+        modelUsage: {
+          "claude-haiku-5-5": {
+            inputTokens: 8,
+            outputTokens: 5,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0.0001,
+            contextWindow: 200000,
+            maxOutputTokens: 32000,
+            thinkingTokens: 0,
+            canonicalModel: "claude-haiku-5-5",
+            provider: "firstParty",
+            costBasis: "list",
+          },
+        },
+      }),
+    );
+    expect(result.modelUsage.map((entry) => entry.model)).toEqual([
+      "claude-haiku-5-5",
+    ]);
+  });
+
   test("maps modelUsage to one entry per model", () => {
     const result = parseClaudeJson(
       claudeJsonStdout({
@@ -217,7 +243,7 @@ describe("parseClaudeJson", () => {
             contextWindow: 200000,
             maxOutputTokens: 32000,
           },
-          "claude-haiku-5": {
+          "claude-haiku-5-5": {
             inputTokens: 3,
             outputTokens: 4,
             cacheReadInputTokens: 0,
@@ -237,7 +263,7 @@ describe("parseClaudeJson", () => {
         cost_usd: 0.01,
       },
       {
-        model: "claude-haiku-5",
+        model: "claude-haiku-5-5",
         input_tokens: 3,
         output_tokens: 4,
         cache_read_tokens: 0,
@@ -820,7 +846,7 @@ describe("runClaude", () => {
       {
         stdout: claudeJsonStdout({
           modelUsage: {
-            "claude-haiku-5": {
+            "claude-haiku-5-5": {
               inputTokens: 3,
               outputTokens: 4,
               cacheReadInputTokens: 0,
@@ -836,7 +862,7 @@ describe("runClaude", () => {
     ]);
     const result = await runClaude(baseOptions(fake.run));
     expect(result.agentRun.model_usage.map((entry) => entry.model)).toEqual([
-      "claude-haiku-5",
+      "claude-haiku-5-5",
     ]);
   });
 

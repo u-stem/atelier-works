@@ -2242,10 +2242,16 @@ ORDER BY cost_usd DESC;
 ```
 
 `model_usage`の`model`は、`modelUsage`のキーをそのまま保存する。
-`--model`に渡した値との表記の違い(日付付きのID、`[1m]`の有無など)は、実機の出力で確かめていない。
-テストのキーは仮の値である。
-表記が違うと、`v_agent_usage_daily`と`v_agent_model_usage_daily`で同じモデルが別の行になる。
-反映後に、次のクエリで`model_usage`のキーを確かめる。
+claude 2.1.302の`claude -p --output-format json`で、`--model haiku`(エイリアス)を渡した実行を確かめた。
+`modelUsage`のキーは、エイリアスではなく、解決後の完全なモデルID(`claude-haiku-5-5`)だった。
+値の項目名は、`inputTokens`、`outputTokens`、`cacheReadInputTokens`、`cacheCreationInputTokens`、`costUSD`である。
+この5つを保存する。
+保存しない項目は、`webSearchRequests`、`contextWindow`、`maxOutputTokens`、`thinkingTokens`、`canonicalModel`ほかである。
+既定の設定は完全なモデルIDなので、`--model`に渡す値とキーは一致する。
+設定にエイリアスや`[1m]`などの接尾辞付きの値を書くと、同じモデルが別の行になりうる。
+内訳のない実行は渡した値で数え、内訳のある実行はキーで数えるためである。
+接尾辞付きの値のキーは確かめていない。
+`model_usage`のキーは、次のクエリで確かめる。
 
 ```sql
 SELECT DISTINCT m.model
