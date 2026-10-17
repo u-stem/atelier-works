@@ -12,7 +12,10 @@ import {
   type RunClaudeResult,
   recordClaudeRuns,
 } from "./claude.ts";
-import { IMPLEMENT_LEASE_LOST_REASON } from "./implement_launch_support.ts";
+import {
+  IMPLEMENT_FLOW_PATH,
+  IMPLEMENT_LEASE_LOST_REASON,
+} from "./implement_launch_support.ts";
 import {
   classifyProtectedChanges,
   decideImplementRoundExit,
@@ -50,7 +53,8 @@ import {
   WorktreeGitPointerModifiedError,
 } from "./workspace.ts";
 
-export const IMPLEMENT_FLOW_PATH = "f/factory/implement";
+// パスは`implement_launch_support.ts`にある。呼び出し側が`implement_loop.ts`から読めるよう再エクスポートする。
+export { IMPLEMENT_FLOW_PATH };
 export const IMPLEMENT_SKILL_NAME = "factory-implementation";
 
 // ---------------------------------------------------------------------------

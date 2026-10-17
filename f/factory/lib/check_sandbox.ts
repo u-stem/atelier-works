@@ -25,6 +25,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { CHECK_IMAGE_STALE_REASON } from "./check_sandbox_reasons.ts";
 import {
   escapeReasonSeparator,
   type Logger,
@@ -33,6 +34,9 @@ import {
 } from "./log.ts";
 import { isRecord, isString } from "./types.ts";
 import { type CommandRunner, isCappedOutput, runCommand } from "./workspace.ts";
+
+// 値は`check_sandbox_reasons.ts`にある。呼び出し側が`check_sandbox.ts`から読めるよう再エクスポートする。
+export { CHECK_IMAGE_STALE_REASON };
 
 /** 枠の先頭のuid。`FACTORY_CHECK_UID`が無いときの値で、`infra/worker/Dockerfile`の既定と同じ。 */
 export const DEFAULT_CHECK_UID = 10001;
@@ -1033,10 +1037,6 @@ export class UnreadableSlotRecordError extends Error {
     this.name = "UnreadableSlotRecordError";
   }
 }
-
-/** イメージの前提を満たさないときの理由の先頭。運用者が取る操作(`mise run up`)を含める。 */
-export const CHECK_IMAGE_STALE_REASON =
-  "worker image is stale: run mise run up";
 
 /** 稼働中のworkerが検査の前提を満たさないときの理由の先頭。運用者が取る操作を含める。 */
 export const CHECK_RUNTIME_UNSAFE_REASON =

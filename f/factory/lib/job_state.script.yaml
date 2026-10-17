@@ -1,0 +1,9 @@
+summary: '[LIB] Windmillのジョブの状態の読み替え'
+description: 内部ライブラリです。直接実行するものではありません。ジョブの取得の応答と例外を、実行中、完了、見つからない、不明のいずれかに読み替えます。
+lock: '!inline f/factory/lib/job_state.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties: {}
+  required: []

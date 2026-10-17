@@ -789,6 +789,15 @@ export type FailureRecord = {
 export const PULL_REQUEST_ORIGINS = ["factory", "human", "unknown"] as const;
 export type PullRequestOrigin = (typeof PULL_REQUEST_ORIGINS)[number];
 
+/**
+ * ジョブごとの一時ディレクトリを掃除するまでの経過秒(`job_tmp.ts`の掃除が読む)。
+ * ジョブの終了時の削除が走らなかったものだけが残る。取り消されたジョブや強制終了されたworkerが対象である。
+ * 動いているジョブのものを消さないよう、`claude_timeout_sec`と`implement_timeout_sec`の既定値より十分長くする。
+ * `config.ts`は、この2つの設定がこの期限を超えるものを拒否する。
+ * 設定を読むだけのscriptが、ファイル操作の`job_tmp.ts`をimportでたどらないよう、ここに置く。
+ */
+export const JOB_TMP_MAX_AGE_SEC = 3 * 24 * 60 * 60;
+
 /** 反映に記録するPRの題名の長さの上限(文字数)。 */
 export const MAX_PULL_REQUEST_TITLE_LENGTH = 200;
 

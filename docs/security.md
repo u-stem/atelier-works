@@ -1038,7 +1038,7 @@ Console用workerと同じ型で、絞り方は次のとおりである。
 信頼できない入力を扱うジョブを動かさない理由は、このworkerが読める秘密にある。
 DBには、defaultのworkerと同じ管理者の接続で届く。
 Windmillのsecret変数は、管理者の`DATABASE_URL`か`wmill.getVariable()`で読める。
-定期ジョブが使う`github_token`も読める。
+通知に使う`discord_webhook_url`も読める。
 Console用workerと同じ前提で、マウントの制限が守るのはファイルであり、トークンそのものは守らない。
 信頼できない入力を扱うジョブが、このworkerで任意のコードを動かせると、これらの秘密に届く。
 そのため、tag`periodic`を付けるのは、コードを実行せず、Claudeに文章を渡さない定期ジョブだけである。
@@ -1051,9 +1051,11 @@ superadminでない主体は、許可されたtagしか使えない。
 次のことは、この境界では守れない。
 
 - DBには届く。`DATABASE_URL`はdefaultのworkerと同じ管理者の接続だからである。
-- `f/factory/claude_oauth_token`と`f/factory/github_token`を、secret変数として読める。
+- `f/factory/claude_oauth_token`、`f/factory/github_token`、`f/factory/discord_webhook_url`を、secret変数として読める。
   どのscriptが読むかを制限する仕組みは無い。
-- このworkerで動かすのは、上の基準で選んだ定期ジョブの想定だが、これを強制する仕組みは無い。
+- このworkerで動かすのは、上の基準で選んだ定期ジョブの想定である。
+  リポジトリに入る変更のうち、テストが走査できる形は、契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が止める。
+  走査できない形と、Windmillの画面でtag`periodic`を付ける操作は止められない。
   ワークスペースでscriptを編集できる者は、任意のscriptにtag`periodic`を付けられる。
 - 許可はすべてのワークスペースに及ぶ。ワークスペースで絞らない。
 - scriptを編集できる者は、tagを付けずにdefaultのworkerで動かせば、`factory_state`のボリューム全体を読み書きできる。
@@ -1083,6 +1085,75 @@ superadminでない主体は、許可されたtagしか使えない。
 見る箇所は、ファイルのパスと`fs`の使用、`child_process`のimport、道具や検査の枠を確かめる呼び出し、cgroupのパスである。
 同じ手順で、コードを実行しないことと、Claudeに文章を渡さないことも確かめる。
 1つでも依存するなら、tagを付けない。
+
+読んでよいsecret変数は、`discord_webhook_url`だけである。
+`claude_oauth_token`、`github_token`、`wmill_token`は、このworkerに届かせない。
+対象のscriptが読まない許可は、残さない。
+`discord_webhook_url`を許可するのは、通知を送る定期ジョブを、このworkerで動かすために、通知の送り先が要るためである。
+このworkerは、固定のレビュー済みのscriptだけを動かす。
+漏れたときの影響は、通知の偽装と、webhookの削除や改名による通知の停止に限られる。
+webhookのURLを持つ者は、トークンだけで改名と削除ができる。
+補足として、どのworkerのジョブも`getVariable`で読める状態はもとからで、このworkerで読める範囲は広がらない。
+別のsecret変数を許すかは、この理由とは別に、読む必要と漏れたときの影響で決める。
+これを超えて広げるときは、契約テストの許可と、この節の選定の結果を同じ変更で直す。
+
+契約テスト(`tests/scripts/periodic_script_boundary.test.ts`)が、tag`periodic`を持つscriptについて次を固定する。
+走査の方法と、たどれない形は、Console用workerの契約テストと同じである。
+
+- `f/`の下のYAMLのうち、tag`periodic`へ振り分けるものが、テストの一覧のscriptの定義と一致する。
+  scriptの定義の`tag`だけでなく、スケジュールの`tag`と、フローのモジュールの`tag`と`tag_override`も、入れ子の中まで調べる。
+  読めないYAMLがあれば、ファイル名を添えてテストが落ちる。
+  足すときは、一覧とこの節の選定の結果を同じ変更で直す。
+- どのscriptも、スケジュールが呼ぶscriptで、`timeout`を持つ。
+- `timeout`の最大値に300秒の余裕を足した値が、待ちの検知のしきい値(`PERIODIC_JOB_WAIT_SECONDS`)を超えない。
+  このworkerの枠は1つなので、長く動くジョブの後ろで待つジョブを、workerの不在と誤って知らせないためである。
+  待たされる最悪は、他のscriptのtimeoutの合計である。今の2本では、最大値と一致する。
+  3本目以降を足すときは、式を「他のscriptのtimeoutの合計 + 余裕」に変える。
+- importでたどれるソースが読むsecret変数は、`discord_webhook_url`だけである。
+- importでたどれるソースに、ファイル、サブプロセス、`claude.ts`への依存が無い。
+  `node:fs`、`node:child_process`、`bun`モジュールのimportと、`Bun`の使い方を調べる。
+  `Bun.sleep`のような無害なメンバー以外は、`Bun.spawn`や`Bun.file`に加えて、分割代入、別名への代入、添字アクセスも当たる。
+  `globalThis`、`process.getBuiltinModule`、`process.binding`も当たる。
+
+`node:module`、`node:worker_threads`、`node:vm`のimportも、迂回に使えるので数える。
+`f/`の下のTypeScriptが、`JobService.run*`でジョブを起動したり、tagの文字列を渡したりしていないことも、テストが確かめる。
+現在、該当する呼び出しは0件である。
+
+テストが見ないものは、コードのレビューで見る。
+
+- 式で組み立てたtag、フローの入力で渡すtag。
+- Windmillの画面で付けたtag。
+- 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
+- 第三者パッケージ(`execa`、`fs-extra`、`zx`など)の中身。
+- resourceの中身で解決されるsecret。`getResource`が返す値の中の`$var:`は、走査が見ない。
+
+tag`periodic`を新しく付けるPRでは、そのscriptが読むresourceの中身を確かめる。
+`getResource`の引数のresourceごとに、値に`$var:`で始まる参照が無いことを、Windmillで確かめる。
+参照があれば、参照先のsecret変数が`discord_webhook_url`だけであることまで確かめる。
+テストが固定するのはsecret変数の名前の読み取りだけなので、この確認は人かレビューが行う。
+
+### 選定の結果
+
+`f/factory/**`の定期実行のscriptを1つずつ読んだ結果は、次のとおりである。
+tag`periodic`を付けたのは、`notify_daily_summary`と`auto_retry_pr_review`である。
+どちらもresource`f/factory/factory_config`だけを読む。
+ローカルのインスタンスでは、その値に`$var:`と`$res:`の参照が無いことを確かめた。
+本番相当のインスタンスのresourceは、リポジトリから確かめられない。人がWindmillの画面で見て確かめる。
+
+| script | 依存と読むsecret | 結論 |
+| --- | --- | --- |
+| `audit_kickoff`、`console_fetch_watch` | tag`console`でConsole用workerが動かす | 対象外 |
+| `poll_dependabot`、`drawio_viewer_bump` | 保護パスで、`gh`と`github_token`を使う | 対象外 |
+| `poll_issues`、`poll_prs`、`watch_pr_ci`、`watch_pr_conflicts`、`watch_main_ci` | `gh`、`git`、`github_token`を使う。`watch_pr_ci`は検査用イメージの確認も行う | defaultに残す |
+| `cleanup_workspaces`、`self_update` | `factory_workspaces`、self clone、`git`、`gh`を使う。`self_update`は`wmill_token`も読む | defaultに残す |
+| `cleanup_db` | `factory_state`の`requirements`ディレクトリを消す | defaultに残す |
+| `sample_worker_load` | cgroupのファイルを読む | defaultに残す |
+| `notify_daily_summary` | DB、Windmillの状態、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
+| `auto_retry_pr_review` | DB、WindmillのAPI、Discordだけを使う。読むsecretは`discord_webhook_url`だけである | `periodic`を付ける |
+
+`github_token`を読む定期ジョブは、`gh`の道具に依存するため、tag`periodic`を付けられるものが無い。
+この2つのscriptは、ファイル、サブプロセス、`claude`、`gh`のモジュールをimportでたどらないよう、使う定数と型を小さなモジュールに分けている。
+たどるようになれば、契約テストが落ちる。
 
 ## ホストの実行役の境界
 

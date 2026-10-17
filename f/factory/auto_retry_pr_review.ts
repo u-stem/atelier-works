@@ -23,8 +23,8 @@ import {
   updateStatusIfLeaseHolder,
 } from "./lib/db.ts";
 import { notifyBestEffort } from "./lib/discord.ts";
+import { readJobState } from "./lib/job_state.ts";
 import { type Logger, logger } from "./lib/log.ts";
-import { readJobState } from "./lib/poll_support.ts";
 import {
   notifyStalledTransientReviews,
   retryTransientPrReviews,

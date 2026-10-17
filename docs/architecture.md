@@ -21,7 +21,11 @@ Claudeを動かすworker(`windmill_worker`)はカスタムイメージで動く�
 このworkerはdefaultワーカーグループの1コンテナで、同時に動かすジョブは1つである。
 nativeでないworkerは、コンテナにつき1つしか動かない(Windmillの制限)。
 `NUM_WORKERS`を2以上にしても、Windmillが1に戻す。
-そのため、Claudeのジョブが動く間、定期のジョブは待つ。
+そのため、Claudeのジョブが動く間、defaultのworkerで動く定期のジョブは待つ。
+定期ジョブ用のworker(下記)で動かすscriptを選ぶ基準と、選定の結果は[セキュリティ](security.md#tagを付けるscriptの選び方)にある。
+現在、tag`periodic`で動くのは、`notify_daily_summary`と`auto_retry_pr_review`である。
+ほかの定期ジョブは、defaultのworkerで動き、Claudeのジョブの間は待つ。
+ただし、tag`console`を付けた`audit_kickoff`と`console_fetch_watch`は、Console用のworkerで動く。
 メモリの上限はコンテナ全体で4096Mである。
 
 Consoleの問い合わせと操作の受付専用のworkerが、別のコンテナ(`windmill_worker_console`)で動く。
@@ -39,8 +43,10 @@ Claudeの長いジョブがdefaultワーカーグループの枠を埋めても�
 定期ジョブを、Claudeの長いジョブの待ちから切り離すためである。
 このworkerはワーカーグループ`periodic`に属し、tag`periodic`のジョブだけを受ける。
 どのscriptをこのworkerで動かすかは、scriptの`tag`で決める。
-tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブだけである。
+tag`periodic`を付けるのは、ファイル、独自イメージの道具、cgroupのどれにも依存しない定期ジョブである。
+読むsecret変数は、`github_token`と`discord_webhook_url`だけに限る。
 依存するジョブは、defaultのworkerで動かす。
+tag`periodic`のジョブが15分以上待つと、`self_update`が検知して通知する([運用](operations.md#定期ジョブ用のworkerの検知を確かめる))。
 上流のWindmillイメージで動き、nativeでないworkerなので、同時に動かすジョブは1つである。
 1件のジョブが止まっている間は、ほかのジョブが待つため、このworkerで動かすscriptには`timeout`を付ける。
 メモリの上限は1024Mである。
@@ -416,6 +422,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/workspace` | script | [LIB] git worktreeと作業領域 |
 | `f/factory/lib/github` | script | [LIB] GitHub APIラッパー |
 | `f/factory/lib/pr_review_retry` | script | [LIB] GitHubの一時的な失敗で止まったPRレビューの再開 |
+| `f/factory/lib/github_errors` | script | [LIB] GitHubの呼び出しの失敗の型 |
 | `f/factory/lib/claude` | script | [LIB] headless Claude実行 |
 | `f/factory/lib/claim_support` | script | [LIB] Issue取得の後処理 |
 | `f/factory/lib/main_ci_support` | script | [LIB] mainのCIの判定の純粋ロジック |
@@ -428,6 +435,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_conflict_watch` | script | [LIB] PRの競合の監視の流れ |
 | `f/factory/steps/pr_workflow_support` | script | [LIB] PRワークフロー共通処理 |
 | `f/factory/lib/job_ids` | script | [LIB] WindmillのジョブIDの検査 |
+| `f/factory/lib/job_state` | script | [LIB] Windmillのジョブの状態の読み替え |
 | `f/factory/lib/worker_load_support` | script | [LIB] workerの負荷の記録の部品 |
 | `f/factory/lib/process_lock` | script | [LIB] worktree単位のプロセス排他 |
 | `f/factory/lib/auto_retry` | script | [LIB] イメージが古くて止まった作業項目の再開 |
@@ -453,6 +461,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/pr_ci_fix_claim` | script | [LIB] 失敗した行を直してよいかの判断 |
 | `f/factory/lib/pr_ci_notify` | script | [LIB] 失敗の通知を出す時機の判断 |
 | `f/factory/lib/pr_ci_fix_recovery` | script | [LIB] 失敗を直した行の回復 |
+| `f/factory/lib/periodic_worker` | script | [LIB] 定期ジョブ用workerの停止の検知 |
 | `f/factory/lib/implement_finish_support` | script | [LIB] 実装フローの完了処理の判定 |
 | `f/factory/lib/implement_loop` | script | [LIB] 実装フローの検証ループ |
 | `f/factory/lib/implement_support` | script | [LIB] 実装フローの純粋関数群 |
@@ -466,6 +475,7 @@ WindmillのUIはsummaryの順に並ぶので、summaryの先頭に種別のタ�
 | `f/factory/lib/summary_support` | script | [LIB] 日次サマリの集計 |
 | `f/factory/lib/check_runner` | script | [LIB] 検査コマンドの実行 |
 | `f/factory/lib/check_sandbox` | script | [LIB] 検査コマンドの実行ユーザーの切り替え |
+| `f/factory/lib/check_sandbox_reasons` | script | [LIB] 検査の前提が古いときの理由 |
 | `f/factory/lib/audit_support` | script | [LIB] 監査の期間計算と起動判定 |
 | `f/factory/lib/audit_evidence` | script | [LIB] 監査の証跡収集 |
 | `f/factory/lib/audit_doc` | script | [LIB] 監査レポートの検査 |
@@ -611,12 +621,12 @@ PRを取り出せなくても、反映の成功は変えない。その反映の
 CIの失敗を直す回は再開しない。
 反映した時点でそうなっていれば、通知を出さない。
 
-ジョブ全体には上限(`timeout`)を3000秒で置く。
+ジョブ全体には上限(`timeout`)を3100秒で置く。
 この上限はWindmillが外から打ち切る最後の砦で、通常は内側の上限で先に終わる。
 子プロセスは別のプロセスグループで起動し、その上限はworkerの中のタイマーなので、子の実行中に外から打ち切られると子が残りうるためである([セキュリティ](security.md)の「自己更新の打ち切り」)。
 変数の取得と更新、stateの読み書き、データベースの記録は個別の上限が無いので、1回30秒で区切り、超えたら例外にする。
 Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)と送信2回に余裕を足した120秒で区切る。
-最後のConsole用のworkerの確認では、例外を投げずに警告だけを残す。
+最後のConsole用のworkerと定期ジョブ用のworkerの確認では、例外を投げずに警告だけを残す。
 更新のうち、`wmill_token`の取得を含め、それ以降の失敗と時間切れは、更新の失敗として`deployments`に記録する。
 失敗の行には、ログに出す失敗の文と同じ伏せ字処理を通した理由を、2000字までに切り詰めて`deployments.error`に入れる。
 `error`の列を足すmigrationがまだ当たっていないときは、理由を持たない行として記録し直す。
@@ -631,9 +641,9 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 これらはジョブの失敗(`job_failed`と`schedule_failing`)になるだけである。
 
 ジョブの`timeout`はインスタンスの上限を超えられないが、セルフホストの上限は環境変数`TIMEOUT`で、未設定なら7日である。
-`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3000秒は切り詰められない。
+`job_default_timeout`は21600秒以上にする決まりなので([実装フローの仕様](internals/implement.md)の「Windmillのtimeoutで打ち切られたとき」)、3100秒は切り詰められない。
 
-3000秒は、全部が最悪のときの長さ2936.2秒に余裕を足した値である。
+3100秒は、全部が最悪のときの長さ3036.2秒に余裕を足した値である。
 コマンドの上限には、停止の上乗せ13秒を足す。
 時間切れ後のSIGKILLまでの猶予が5秒、終了後のプロセスグループの停止が最大6秒、出力の読み取り待ちが2秒である。
 
@@ -643,9 +653,10 @@ Discordへの通知は、送信を30秒で中断し、429の待ち(最大30秒)�
 | git | 11 | 60秒 | 13秒 | 803秒 |
 | ホストの印を確かめるローカルのgit | 9 | 10秒 | 13秒 | 207秒 |
 | `wmill sync push`、`wmill datatable migrate up` | 2 | 300秒 | 13秒 | 626秒 |
-| 区切った呼び出し | 25 | 30秒 | なし | 750秒 |
+| 区切った呼び出し | 28 | 30秒 | なし | 840秒 |
 | Discordへの通知 | 2 | 120秒 | なし | 240秒 |
 | Console用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
+| 定期ジョブ用のworkerの確認 | 1 | 10秒 | なし | 10秒 |
 
 gitの11回は、cloneの更新で5回、HEADとブランチの確認で2回、変更パスの列挙で1回、反映に含まれるPRの列挙で1回、`mise.toml`の比較で最大2回である。
 PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒)で区切る。`withCallTimeout`で区切るのはWindmillのSDKとDBの呼び出しである。
@@ -654,15 +665,19 @@ PRの列挙の`git log`も、ほかのgitと同じく`runCommand`の上限(60秒
 どちらも、通知の解決で上限の3件まで、この回の通知の判断で1回である。
 ローカルのgitは、オブジェクトを参照するだけで、ネットワークとワークツリーに触れないので、上限を10秒にする。
 `mise.toml`の比較は時間切れでも失敗として続くので、最大回数まで走りうる。
-区切った呼び出しの25回は、設定の取得が1回、リポジトリIDの照合が3回、更新が8回、最後の確認が4回、ホスト側の作業の通知が9回に分かれる。
+区切った呼び出しの28回は、次のように分かれる。
+設定の取得が1回、リポジトリIDの照合が3回、更新が8回である。
+Console用のworkerの確認が4回、定期ジョブ用のworkerの確認が3回、ホスト側の作業の通知が9回である。
 リポジトリIDの照合の3回は、IDの取得、失敗の記録、noticeの挿入である。
 更新の8回は、3つの変数の取得と、`deployed_sha`の読み取りが失敗したときの存在の確認である。
 残りは、`deployed_sha`の更新、更新が時間切れになったときの読み直し、成功の記録、失敗の記録である。
 成功の記録と失敗の記録は一方しか通らないが、呼び出しの箇所を数えるので、両方を数える。
 時間切れの後に中断されず残る処理は、この合計に含めない。
-最後の確認では、stateの読みと書き、noticeの挿入、通知先の取得を区切る。
+Console用のworkerの確認では、stateの読みと書き、noticeの挿入、通知先の取得を区切る。
+定期ジョブ用のworkerの確認では、noticeの挿入、noticeの解決、通知先の取得を区切る。
 ホスト側の作業の通知の9回は、印の読み取り、未解決の通知の一覧、通知の解決(上限の3件まで)、noticeの挿入、通知先の取得、止まった作業項目の再開の候補の確認、再開の起動である。
 Discordへの通知の2回は、ホスト側の作業の通知と、最後の確認の通知である。
+Console用と定期ジョブ用のworkerの確認の中で送る通知は、確認ごとの上限の10秒に収まる。
 値を変えるときは、`tests/scripts/self_update_timeout.test.ts`が次の2点を確かめる。
 
 - `timeout`が、`self_update.ts`の見積もり以上であること。
@@ -677,10 +692,10 @@ Discordへの通知の2回は、ホスト側の作業の通知と、最後の確
 
 ジョブの上限で打ち切られた回の扱いは次のとおりである。
 
-- 最後に行うConsole用のworkerの確認が走らず、`deployments`にも記録が残らない。
-- 打ち切られるまでの最大約47分、実行が終わらない。
-  2分ごとの次の約23回は多重実行の防止で飛ばされる。
-  この間は、自己更新の反映とConsole用のworkerの確認が止まる。
+- 最後に行うConsole用のworkerと定期ジョブ用のworkerの確認が走らず、`deployments`にも記録が残らない。
+- 打ち切られるまでの最大約52分、実行が終わらない。
+  2分ごとの次の約25回は多重実行の防止で飛ばされる。
+  この間は、自己更新の反映と、Console用と定期ジョブ用のworkerの確認が止まる。
 - `on_error_schedule`が時間切れでも呼ばれるなら、打ち切りのたびにDiscordの`job_failed`で即時に気づける。
   これが主な経路になる想定だが、呼ばれるかは実機で未確認である([運用](operations.md)の「自己更新の打ち切りを確かめる」)。
 - `schedule_failing`は補助の経路になる想定だが、こちらも実機で未確認である。
