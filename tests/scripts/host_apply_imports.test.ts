@@ -144,8 +144,7 @@ describe("the executor runs on its own once copied", () => {
       [
         "bun",
         "--no-env-file",
-        "--config",
-        join(stateDir, "empty.toml"),
+        `--config=${join(stateDir, "empty.toml")}`,
         join(bin, "host-apply.ts"),
         "plan",
         "--repo",

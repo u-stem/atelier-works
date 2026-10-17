@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ChangedFile } from "../../scripts/host_apply/approval.ts";
 import {
   buildPlan,
@@ -327,7 +327,7 @@ describe("buildPlan: static checks", () => {
 
 describe("buildPlan only reads", () => {
   test("uses nothing but the four read operations", async () => {
-    const fake = fakeGit(chainOf({ "scripts/doctor.sh": "x\n" }));
+    const fake = fakeGit(chainOf({ "docs/a.md": "x\n" }));
     await buildPlan(fake.git, {
       applied: A,
       target: B,
@@ -335,7 +335,7 @@ describe("buildPlan only reads", () => {
       root: "/staging",
     });
     expect([...new Set(fake.calls)].sort()).toEqual(
-      ["changedFiles", "commitExists", "isAncestor"].sort(),
+      ["changedFiles", "commitExists", "isAncestor", "readBlob"].sort(),
     );
   });
 });
@@ -389,7 +389,7 @@ describe("plan against a real repository", () => {
   function run(repo: FixtureRepo, args: string[]) {
     const result = Bun.spawnSync(
       ["bun", join(REPO_ROOT, "scripts/host-apply.ts"), "plan", ...args],
-      { env: fixtureGitEnv(repo.dir) },
+      { env: fixtureGitEnv(dirname(repo.dir)) },
     );
     return {
       code: result.exitCode,
@@ -477,7 +477,7 @@ describe("plan against a real repository", () => {
     const { repo } = setup();
     const result = Bun.spawnSync(
       ["bun", join(REPO_ROOT, "scripts/host-apply.ts"), "converge"],
-      { env: fixtureGitEnv(repo.dir) },
+      { env: fixtureGitEnv(dirname(repo.dir)) },
     );
     expect(result.exitCode).toBe(2);
   });

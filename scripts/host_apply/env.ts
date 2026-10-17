@@ -62,6 +62,9 @@ export function buildChildEnv(
   if (profile === "git") {
     env.GIT_TERMINAL_PROMPT = "0";
     env.GIT_CONFIG_NOSYSTEM = "1";
+    // replace refで、shaが指す内容を差し替えられないようにする。読み取りでロックを取らない。
+    env.GIT_NO_REPLACE_OBJECTS = "1";
+    env.GIT_OPTIONAL_LOCKS = "0";
   }
   return env;
 }
