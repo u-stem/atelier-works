@@ -12,7 +12,6 @@ import {
   type GhRepo,
   type GhRepoGone,
   type GhRepoUpsert,
-  isBranchName,
   isGitHubName,
   isRecord,
 } from "./types.ts";
@@ -242,7 +241,6 @@ export type RepoNode = {
   readonly repo_id: number;
   readonly name: string;
   readonly archived: boolean;
-  readonly default_branch: string | null;
   readonly open_pr_count: number;
   readonly labeled_issue_count: number;
 };
@@ -300,16 +298,6 @@ function parseRepoNode(
   if (typeof raw.isArchived !== "boolean") {
     return discard("archived");
   }
-  let defaultBranch: string | null = null;
-  if (raw.defaultBranchRef !== null && raw.defaultBranchRef !== undefined) {
-    if (
-      !isRecord(raw.defaultBranchRef) ||
-      !isBranchName(raw.defaultBranchRef.name)
-    ) {
-      return discard("default_branch");
-    }
-    defaultBranch = raw.defaultBranchRef.name;
-  }
   const openPrCount = totalCount(raw.pullRequests);
   if (openPrCount === null) {
     return discard("open_pr_count");
@@ -323,7 +311,6 @@ function parseRepoNode(
       repo_id: raw.databaseId,
       name,
       archived: raw.isArchived,
-      default_branch: defaultBranch,
       open_pr_count: openPrCount,
       labeled_issue_count: labeledIssueCount,
     },
@@ -436,6 +423,7 @@ export function checkOwnerId(
  * 一覧のリポジトリを、書き込む内容にする。
  * `isRepoAllowed`が偽のリポジトリは`allowed=false`で記録し、件数は書かない。
  * 名前は小文字にそろえる。
+ * 既定ブランチは取らないので、`default_branch`は常に`null`にする。
  */
 export function selectTargets(
   config: Pick<FactoryConfig, "owners" | "repo_allowlist" | "factory_repo">,
@@ -448,7 +436,7 @@ export function selectTargets(
       repo: node.name.toLowerCase(),
       repo_id: node.repo_id,
       allowed,
-      default_branch: node.default_branch,
+      default_branch: null,
       archived: node.archived,
       open_pr_count: allowed ? node.open_pr_count : null,
       labeled_issue_count: allowed ? node.labeled_issue_count : null,

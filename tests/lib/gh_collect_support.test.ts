@@ -495,7 +495,6 @@ const NODE = {
   databaseId: 11,
   name: "widgets",
   isArchived: false,
-  defaultBranchRef: { name: "main" },
   pullRequests: { totalCount: 3 },
   issues: { totalCount: 1 },
 };
@@ -535,7 +534,6 @@ describe("parseOwnerReposPage", () => {
         repo_id: 11,
         name: "widgets",
         archived: false,
-        default_branch: "main",
         open_pr_count: 3,
         labeled_issue_count: 1,
       },
@@ -549,13 +547,18 @@ describe("parseOwnerReposPage", () => {
     ).toEqual([true, "Y3Vyc29y"]);
   });
 
-  test("reads a repository without a default branch", () => {
+  test("reads a repository without defaultBranchRef", () => {
+    const result = parseOwnerReposPage(page([NODE]));
+    expect(result.kind === "ok" ? result.repos.length : null).toBe(1);
+  });
+
+  test("ignores defaultBranchRef when the response carries it", () => {
     const result = parseOwnerReposPage(
-      page([{ ...NODE, defaultBranchRef: null }]),
+      page([{ ...NODE, defaultBranchRef: { name: "main" } }]),
     );
     expect(
-      result.kind === "ok" ? result.repos[0]?.default_branch : "x",
-    ).toBeNull();
+      result.kind === "ok" ? Object.keys(result.repos[0] ?? {}) : null,
+    ).not.toContain("default_branch");
   });
 
   test("reads a missing owner as null", () => {
@@ -623,10 +626,10 @@ describe("parseOwnerReposPage validates stored strings", () => {
     ]);
   });
 
-  test("discards a repository whose default branch is not a branch name", () => {
+  test("does not inspect defaultBranchRef", () => {
     expect(
       discardedOf({ ...NODE, defaultBranchRef: { name: "--force" } }),
-    ).toEqual([{ column: "default_branch", repo: "widgets" }]);
+    ).toEqual([]);
   });
 
   test("discards a repository whose id is not a positive integer", () => {
@@ -686,7 +689,6 @@ describe("selectTargets selects only allowed targets", () => {
     repo_id: 1,
     name,
     archived: false,
-    default_branch: "main",
     open_pr_count: 2,
     labeled_issue_count: 1,
     ...overrides,
@@ -747,10 +749,10 @@ describe("selectTargets selects only allowed targets", () => {
     ).toBe(true);
   });
 
-  test("writes the default branch as it is", () => {
-    expect(selectTargets(config, "acme", [node("w")])[0]?.default_branch).toBe(
-      "main",
-    );
+  test("writes the default branch as null", () => {
+    expect(
+      selectTargets(config, "acme", [node("w")])[0]?.default_branch,
+    ).toBeNull();
   });
 });
 

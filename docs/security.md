@@ -829,6 +829,7 @@ fine-grained PATはResource ownerを1つしか選べないので、所有者(個
 
 できれば、すべての読み取りトークンを`GITHUB_TOKEN`と同じアカウントで作る。
 トークンの持ち主が違うと、後の変更でPRの作者や担当を比べるときに、意味がずれるためである。
+Contentsを付けないのは、Metadata、Pull requests、IssuesのRead-onlyだけで、収集の問い合わせが読む項目に足りるためである。
 権限名とGraphQLの項目の対応は、反映後の実ジョブで確かめる。
 
 値は`mise run bootstrap`が、環境変数から所有者のlogin(小文字)をキーにしたJSONの対応表に組み、Windmillのsecret変数`github_read_tokens`に入れる。

@@ -153,6 +153,25 @@ describe("graphqlRequest passes values as variables", () => {
     );
   });
 
+  test("selects exactly the repository fields a read-only token can read", () => {
+    // 読み取りトークン(Metadata/Pull requests/Issuesのread-only)で読める項目だけを問い合わせる。
+    // 項目を足すときは、権限との対応を確かめる。
+    const nodes = /\bnodes \{([^}]*(?:\{[^}]*\}[^}]*)*)\n {6}\}/.exec(
+      OWNER_REPOS_QUERY,
+    );
+    const fields = (nodes?.[1] ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "");
+    expect(fields).toEqual([
+      "databaseId",
+      "name",
+      "isArchived",
+      "pullRequests(states: OPEN) { totalCount }",
+      "issues(states: OPEN, labels: [$label]) { totalCount }",
+    ]);
+  });
+
   test("asks for the cost of the request", () => {
     expect(OWNER_REPOS_QUERY).toContain("rateLimit { cost remaining resetAt }");
   });
