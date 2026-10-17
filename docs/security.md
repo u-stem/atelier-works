@@ -1140,7 +1140,7 @@ symlink(mode 120000)かsubmodule(160000)が1つでもあれば、目標を拒否
 | 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、`scripts/host-install.sh` |
 | mise設定 | `mise.toml`、`mise.*.toml`、`.mise.toml`、`mise/`、`.mise/`、`.config/mise/`、`.tool-versions` |
 | 実行環境の設定 | `package.json`、`bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.nvmrc`、`.node-version`などの`.*-version` |
-| 必須チェックの定義 | `.github/workflows/ci.yml` |
+| 必須チェックの定義 | `.github/workflows/ci.yml`、`scripts/ci-scope.ts` |
 
 `package.json`、`bunfig.toml`、`.npmrc`は、リポジトリのルートのものだけを対象にする。
 mise設定の名前、`.env`系、`.nvmrc`、`.*-version`は、ディレクトリを問わず対象にする。
@@ -1153,11 +1153,14 @@ mise設定の名前、`.env`系、`.nvmrc`、`.*-version`は、ディレクト�
 `./`で始め、`run`を付けない形は、必ずファイルを実行する。
 miseは、`devEngines`、`packageManager`、`.nvmrc`、`.*-version`を、設定で有効にしたツールについてだけ、バージョンの指定として読む。
 既定では、どのツールについても読まない。読む設定になっても、これらの変更は承認を通る。
-`bun.lock`はコードを動かす欄を持たないので、対象にしない。
+`bun.lock`は対象にしない。
+実行役は`bun install`を実行せず、ホストで実行するファイルは依存をimportしないためである。
 
 `ci.yml`は、必須チェックを出すworkflowである。
 書き換えて、ジョブを`if: false`で`skipped`にすると、必須チェックを通せる。
-チェックの結果からはその迂回を見分けられないので、`ci.yml`の変更を人に見せる。
+`scripts/ci-scope.ts`は、`scope`ジョブの出力で、どのジョブを動かすかを決める。
+出力を変えても、同じように必須チェックを`skipped`にできる。
+チェックの結果からはその迂回を見分けられないので、この2つの変更を人に見せる。
 
 差を取る基準は、適用済みのコミットと承認済みのコミットのうち新しい方である。
 承認済みのコミットが、適用済みの子孫で、目標の祖先であるときだけ使う。
@@ -1174,6 +1177,9 @@ dependabotの更新のたびに、人の承認を求めないためである。
 版の文字列は、`1.2.3`、`^1.2.3`、`~1.2`、`>=1.2.3`、`1.2.3-rc.1`の形に限る。
 URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、取得元や中身を変えうるので、承認が要る。
 ほかのキーの変更と、新規作成、読めない内容も、承認が要る。
+免除は、`dependencies`、`devDependencies`、`overrides`の既存の名前の、版の文字列だけに効く。
+新しい名前を足す変更は、承認が要る。名前を消す変更は、承認を求めない。
+`peerDependencies`、`optionalDependencies`、`resolutions`の変更は、承認が要る。
 免除は、小文字の`package.json`だけに効く。
 
 #### miseの値だけの変更
@@ -1215,8 +1221,12 @@ URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、�
 - 許可リストにないサービス名とキー。
 - 特権とケーパビリティの拡張: `privileged`、`cap_add`、`devices`、`userns_mode`、`cgroup`、`sysctls`、`volumes_from`、`include`、`extends`。
 - ホストやほかのコンテナとの名前空間の共有。`pid`、`ipc`、`uts`、`network_mode`が`host`、`container:`、`service:`で始まる値である。`network_mode: none`は許す。
-- `security_opt`の`unconfined`と`label=disable`。
+- `security_opt`の、`no-new-privileges:true`(`=true`でもよい)以外。
+  `seccomp=`、`apparmor=`、`label=`、`systempaths=`は、権限を変えうるので、許可リストに無い値はすべて拒否する。
 - `127.0.0.1`以外に公開するポート。変数は、取り出した値で展開して評価する。
+  展開するのは、検査が知っている名前の参照だけである。知っている名前は、`mise.toml`の15個のキーである。
+  本番の子プロセスには`HOME`なども入るので、ほかの名前の参照は、`${HOME-.}`のように既定値があっても拒否する。
+- 展開した後の絶対パス。`env_file`、`secrets`と`configs`のファイル、`build.context`、`dockerfile`も、bind mountと同じく拒否する。
 - チェックアウトの外を指す`env_file`、`secrets`、`configs`、`build.context`、`build.additional_contexts`、`dockerfile`。リモートのbuild contextも含む。
 - チェックアウトの外のbind mount、絶対パスのbind mountの元、書き込める状態のbind mount。
   絶対パスは、チェックアウトの中を指していても拒否する。ステージングのパスは実行のたびに変わるためである。
@@ -1224,7 +1234,8 @@ URL、gitやfileの指定、`npm:`の別名、`latest`、`*`への変更は、�
 - `deploy.resources.reservations`の`cpus`と`memory`以外。`devices`はホストのデバイスを割り当てるので拒否する。
 - `local`以外のdriverのボリューム、`bridge`以外のdriverのネットワーク、`driver_opts`と`external`を持つもの。
 - `pid`、`ipc`、`uts`、`network_mode`、`security_opt`の値に含まれる変数。展開すると拒否リストを回避できるため、展開せずに拒否する。
-- 短い形のvolumeの、`ro`の無いもの、`rw`と一緒に書いたもの、知らないオプション、4つ以上の項目。読み取り専用とみなすのは、`ro`があり、`rw`が無いときだけである。
+- 短い形のvolumeの、知らないオプションと4つ以上の項目。
+- 短い形のbindのうち、`ro`の無いもの(`infra/Caddyfile`を除く)と、`rw`と一緒に書いたもの。読み取り専用とみなすのは、`ro`があり、`rw`が無いときだけである。
 - サービスの`networks`のうち、名前の一覧と、`aliases`と`ipv4_address`だけを持つ対応表以外。`driver_opts`などを経由した設定を防ぐ。
 - `docker.sock`の文字列。パースの前に、生のテキストで探す。コメントも対象にする。
 
@@ -1269,8 +1280,8 @@ Discordのwebhookには`allowed_mentions`を空にして送り、本文からの
 別のworkflowやappが、同じ名前のcheck-runを作っても数えない。
 mainは承認0件でマージでき、管理者は失敗したチェックを無視してマージできる。
 実行役が自分で確かめれば、失敗したチェックを無視して入った変更は、ホストへ届く前に止まる。
-`ci.yml`を書き換えて必須チェックを`skipped`にする変更は、結果からは見分けられない。
-`ci.yml`の変更は、前述のとおり承認の対象にして、人に見せる。
+`ci.yml`か`scripts/ci-scope.ts`を書き換えて必須チェックを`skipped`にする変更は、結果からは見分けられない。
+この2つの変更は、前述のとおり承認の対象にして、人に見せる。
 
 | 結果 | 判定 |
 | --- | --- |
@@ -1315,6 +1326,16 @@ PR修正の自動修正がこれらを書き換えるのを止め、実装のPR�
   省くと、overrideファイルを自動で読む場所が変わる。
 - 反映に使うチェックアウトのgitには、`GIT_CONFIG_GLOBAL=/dev/null`と`GIT_CONFIG_NOSYSTEM=1`を付ける。
   利用者とシステムのgit設定を読ませないためである。`plan`のgitは`GIT_CONFIG_NOSYSTEM=1`を付けるが、`HOME`を渡すので、利用者の設定を読みうる。
+- `bun.lock`は承認の対象ではないので、取得元の欄を承認なしで書き換えられる。
+  `bun install --frozen-lockfile`を呼ぶ前に、`bun.lock`の取得元を検査するか、承認の対象にする。
+- 反映に使うチェックアウトの`git worktree add`と`git checkout`にも、同じ設定を付ける。
+  付けるのは、`-c core.hooksPath=/dev/null`、`GIT_CONFIG_GLOBAL=/dev/null`、`GIT_CONFIG_NOSYSTEM=1`である。
+  lefthookのpost-checkoutが動かないようにするためである。
+- `tree_forbidden`の通知は、原因のパスと次の操作を載せる。日本語のファイル名を足すと止まるためである。
+- 設定ファイルの読み取りの違い。
+  - `Bun.TOML.parse`は、重複したキーとテーブルをエラーにする。`__proto__`は通常のキーとして残り、`Object.prototype`は汚れない。
+  - `Bun.YAML.parse`は、重複したキーを最後の値で上書きし、エラーにしない。`__proto__`は通常のキーとして残る。
+  - composeの解釈とYAMLの重複キーの扱いが違うかは、`docker compose config`と突き合わせて確かめる。
 - パスの検査は、文字列で行い、symlinkを辿らない。目標のtreeにsymlinkがあれば拒否するが、実行役が使うチェックアウトに後から置かれたsymlinkは見ない。
 - miseの値の免除は、形式だけを見る。`GTR_COMMIT`の指す内容は確かめない。
 - `plan`はCIを確認しない。`would_converge`は、CIの通過を含まない判定である。
