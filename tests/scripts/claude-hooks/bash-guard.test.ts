@@ -1106,6 +1106,7 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise -q x -- mise set",
     "mise -E local x -- mise set",
     "mise -q exec -- mise ev",
+    "mise -E -- x -- mise set",
     "mise -q x -- nice mise set",
     "mise -q x -- timeout 5 mise set",
     "mise -q x -- env mise set",
