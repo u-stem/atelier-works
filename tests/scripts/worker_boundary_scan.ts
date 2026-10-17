@@ -207,70 +207,156 @@ export const relative = (file: string) => file.replace(`${process.cwd()}/`, "");
  * 解析したYAMLの中に、キー`tag`か`tag_override`の値が`tag`であるものがあるか。
  * scriptの定義、スケジュール、フローのモジュールが、ジョブの振り分け先を決める形をたどる。
  */
-export function mentionsTag(_value: unknown, _tag: string): boolean {
-  return false;
+export function mentionsTag(value: unknown, tag: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => mentionsTag(item, tag));
+  }
+  if (typeof value !== "object" || value === null) return false;
+  return Object.entries(value).some(
+    ([key, child]) =>
+      ((key === "tag" || key === "tag_override") && child === tag) ||
+      mentionsTag(child, tag),
+  );
 }
 
-/** `f/`の下のYAMLのうち、`mentionsTag`が真になるファイルのパス。 */
-export async function filesWithTag(_tag: string): Promise<string[]> {
-  return [];
+/** `f/`の下のYAMLのうち、`mentionsTag`が真になるファイルのパス。読めないYAMLがあれば、ファイル名を添えて例外にする。 */
+export async function filesWithTag(tag: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const file of await scan("f/**/*.yaml")) {
+    let parsed: unknown;
+    try {
+      parsed = Bun.YAML.parse(await Bun.file(file).text());
+    } catch (error) {
+      throw new Error(`${file}: cannot parse the YAML (${String(error)})`);
+    }
+    if (mentionsTag(parsed, tag)) found.push(file);
+  }
+  return found;
 }
 
-const FILE_OR_PROCESS_MODULE = /^(?:node:)?(?:child_process|fs|fs\/promises)$/;
-const BUN_TOOL_CALL = /\bBun\s*\.\s*(?:spawn|spawnSync|file|write|\$)/g;
+const FILE_OR_PROCESS_MODULE =
+  /^(?:node:)?(?:child_process|fs|fs\/promises)$|^bun(?::|$)/;
+const BUN_NAME = /\bBun\b/g;
+const BUN_MEMBER = /^\s*\.\s*([\w$]+)/;
+const GLOBAL_LOOKUP =
+  /\bglobalThis\b|\bgetBuiltinModule\b|\bprocess\s*\.\s*binding\b/g;
+
+/** ファイルにもサブプロセスにも届かない`Bun`のメンバー。 */
+const HARMLESS_BUN_MEMBERS: ReadonlySet<string> = new Set([
+  "sleep",
+  "env",
+  "version",
+  "revision",
+  "hash",
+  "nanoseconds",
+  "deepEquals",
+  "escapeHTML",
+  "randomUUIDv7",
+  "CryptoHasher",
+  "password",
+  "stringWidth",
+  "YAML",
+]);
 
 /**
  * 上流のイメージのworkerに無いものへ届く、import・呼び出し。
- * ファイル(`node:fs`)、サブプロセス(`node:child_process`、`Bun.spawn`)、Claude(`claude.ts`)を数える。
- * Bunのファイル関数(`Bun.file`、`Bun.write`)も、ファイルへの依存として数える。
- * 見つけたものを、理由の文字列で返す。
+ * 次を数え、見つけたものを理由の文字列で返す。
+ * - ファイル(`node:fs`)、サブプロセス(`node:child_process`)、`bun`モジュールのimport(名前付き、既定とも)。
+ * - Claude(`claude.ts`)のimport。
+ * - `Bun`の使い方。無害なメンバー(`Bun.sleep`など)の呼び出し以外は、すべて数える。
+ *   `Bun.spawn`と`Bun.file`だけでなく、分割代入、別名への代入、添字アクセスも当たる。
+ * - `globalThis`、`process.getBuiltinModule`、`process.binding`。これらを経由すると、名前を伏せて同じものに届くため。
+ * 見ないもの: 文字列で組み立てた参照、`eval`と`Function`、注入された関数の中身。
+ * 文字列の中の言及は数えない。
  */
 export function toolDependencies(source: string): string[] {
   const found: string[] = [];
   for (const entry of transpiler.scanImports(source)) {
-    if (FILE_OR_PROCESS_MODULE.test(entry.path)) {
-      found.push(`import of ${entry.path}`);
-    } else if (/(?:^|\/)claude\.ts$/.test(entry.path)) {
+    if (
+      FILE_OR_PROCESS_MODULE.test(entry.path) ||
+      /(?:^|\/)claude\.ts$/.test(entry.path)
+    ) {
       found.push(`import of ${entry.path}`);
     }
   }
-  for (const match of codeOf(source).matchAll(BUN_TOOL_CALL)) {
+  const skeleton = codeSkeleton(codeOf(source));
+  for (const match of skeleton.matchAll(BUN_NAME)) {
+    const member = BUN_MEMBER.exec(skeleton.slice(match.index + 3))?.[1];
+    if (member === undefined || !HARMLESS_BUN_MEMBERS.has(member)) {
+      found.push(`use of Bun${member === undefined ? "" : `.${member}`}`);
+    }
+  }
+  for (const match of skeleton.matchAll(GLOBAL_LOOKUP)) {
     found.push(`use of ${match[0]}`);
   }
   return found;
 }
 
 /** `script.yaml`の本文が、入力の既定値で変数かresourceを参照しているか。 */
-export function hasInputReference(_yamlText: string): boolean {
-  return false;
+export function hasInputReference(yamlText: string): boolean {
+  return /\$(?:var|res):/.test(yamlText);
+}
+
+/** `entries`がimportでたどれるファイルのうち、`predicate`が真になる本文のものを、重複なく並べる。 */
+function reachedFilesWhere(
+  entries: readonly string[],
+  predicate: (file: string, source: string) => boolean,
+): string[] {
+  const found = new Set<string>();
+  for (const entry of entries) {
+    for (const [file, source] of sourcesReachableFrom(entry)) {
+      if (predicate(relative(file), source)) found.add(relative(file));
+    }
+  }
+  return [...found].sort();
 }
 
 /** `entries`のうち、importでたどれるソースに、走査でたどれないimportの形があるファイル。 */
 export function filesWithUnfollowableImports(
-  _entries: readonly string[],
+  entries: readonly string[],
 ): string[] {
-  return [];
+  return reachedFilesWhere(
+    entries,
+    (_file, source) => unfollowableImports(source).length > 0,
+  );
 }
 
 /** `entries`のうち、`allowed`に無い、引数が文字列リテラルでない変数の読み取りがあるファイル。 */
 export function filesWithNonLiteralReads(
-  _entries: readonly string[],
-  _allowed: Readonly<Record<string, string>>,
+  entries: readonly string[],
+  allowed: Readonly<Record<string, string>>,
 ): string[] {
-  return [];
+  return reachedFilesWhere(
+    entries,
+    (file, source) =>
+      nonLiteralVariableReads(source).length > 0 && !(file in allowed),
+  );
 }
 
 /** `entries`のうち、importでたどれるソースに、道具への依存があるファイル。 */
 export function filesWithToolDependencies(
-  _entries: readonly string[],
+  entries: readonly string[],
 ): string[] {
-  return [];
+  return reachedFilesWhere(
+    entries,
+    (_file, source) => toolDependencies(source).length > 0,
+  );
 }
 
 /** `entries`がimportでたどれるソースに現れるsecret変数のうち、`allowed`に無いもの。 */
 export async function secretsOutside(
-  _entries: readonly string[],
-  _allowed: readonly string[],
+  entries: readonly string[],
+  allowed: readonly string[],
 ): Promise<string[]> {
-  return [];
+  const found = new Set<string>();
+  const secrets = await secretVariablePaths();
+  for (const entry of entries) {
+    const codes = [...sourcesReachableFrom(entry).values()].map(codeOf);
+    for (const secret of secrets) {
+      if (!allowed.includes(secret) && codes.some((c) => c.includes(secret))) {
+        found.add(secret);
+      }
+    }
+  }
+  return [...found].sort();
 }
