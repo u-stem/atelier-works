@@ -4,6 +4,7 @@ import { Glob } from "bun";
 // Console用workerは`tag: console`のjobだけを受ける。Consoleが呼ぶscriptにだけ付け、
 // 1件が止まってもConsole用workerの1枠を塞ぎ続けないよう`timeout`(秒)を付ける。
 // 他のscriptに付けると、defaultのworkerが受けない仕事がqueueに溜まる。
+// tag `periodic`は定期ジョブ用workerのtagで、付けてよいscriptは`periodic_script_boundary.test.ts`が固定する。
 
 const CONSOLE_SCRIPTS: Readonly<Record<string, number>> = {
   "f/factory/steps/console_query": 60,
@@ -54,11 +55,14 @@ describe("console scripts", () => {
     expect(others).toEqual([]);
   });
 
-  test("no other script has a tag at all", async () => {
+  test("no other script has a tag but periodic", async () => {
     const others: string[] = [];
     for (const path of await allScriptYamlPaths()) {
       if (path in CONSOLE_SCRIPTS) continue;
-      if (/^tag:/m.test(await scriptYaml(path))) others.push(path);
+      const yaml = await scriptYaml(path);
+      if (/^tag:/m.test(yaml) && !/^tag: periodic$/m.test(yaml)) {
+        others.push(path);
+      }
     }
     expect(others).toEqual([]);
   });
