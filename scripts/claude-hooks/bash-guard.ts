@@ -133,16 +133,41 @@ const MISE_SET_VALUE_OPTIONS: ReadonlySet<string> = new Set([
 
 /**
  * `mise set`が、書き込む形を持たずに値を一覧するなら真。
- * 書き込む形は、`KEY=VALUE`の語を持つか、`--stdin`と鍵の名前を持つかである。
- * サブコマンドの前のグローバルオプション(`mise -E local set`)は読み飛ばして探す。
+ * サブコマンドの前に置けるグローバルオプションは、値を取るものが隠れているため列挙しない。
+ * `--`より前の語に`set`があれば、`mise set`の呼び出しとして判定する。
+ * 書き込む形は2つある。オペランドがすべて`KEY=VALUE`である形と、
+ * `--stdin`を持ち、オペランドが展開を含まない鍵の名前1つだけの形である。
+ * `--`を持つ形は、鍵の名前と区別できないので書き込む形とみなさない。
  */
 function listsMiseValues(words: readonly Word[]): boolean {
-  const sub = firstOperand(words.slice(1), MISE_VALUE_OPTIONS);
-  if (sub?.text !== "set") return false;
-  if (sub.rest.some((word) => ASSIGNMENT.test(word.text))) return false;
-  const readsStdin = sub.rest.some((word) => word.text === "--stdin");
+  const args = words.slice(1);
+  const dashDash = args.findIndex((word) => word.text === "--");
+  const beforeDashDash = dashDash === -1 ? args : args.slice(0, dashDash);
+  const setAt = beforeDashDash.findIndex((word) => word.text === "set");
+  if (setAt === -1) return false;
+  if (dashDash !== -1) return true;
+  const operands: Word[] = [];
+  let readsStdin = false;
+  const rest = beforeDashDash.slice(setAt + 1);
+  for (let index = 0; index < rest.length; index += 1) {
+    const word = rest[index];
+    if (word === undefined) continue;
+    if (word.text.startsWith("-")) {
+      if (word.text === "--stdin") readsStdin = true;
+      else if (MISE_SET_VALUE_OPTIONS.has(word.text)) index += 1;
+    } else {
+      operands.push(word);
+    }
+  }
+  if (operands.length === 0) return true;
+  if (operands.every((word) => ASSIGNMENT.test(word.text))) return false;
+  const [key] = operands;
   return !(
-    readsStdin && firstOperand(sub.rest, MISE_SET_VALUE_OPTIONS) !== null
+    readsStdin &&
+    operands.length === 1 &&
+    key !== undefined &&
+    !key.dynamic &&
+    !key.glob
   );
 }
 

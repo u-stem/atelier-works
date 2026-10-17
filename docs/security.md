@@ -1626,8 +1626,9 @@ dependabotの更新を自動でマージする前は、関門と影響調査が�
 どちらも、環境変数を出す形だけを次の節のフックが拒否する。
 引数なしの`docker compose config`だけは、設定にも置く。
 `mise set -E`は、値を指定して書き込む形があるので、設定では拒否せず、フックが書き込む形の無い呼び出しだけを拒否する。
-書き込む形は、`KEY=VALUE`の語を持つか、`--stdin`と鍵の名前を持つかである。
-`mise -E local set`のように、サブコマンドの前にグローバルオプションを置いても、フックは同じ判定をする。
+書き込む形は、オペランドがすべて`KEY=VALUE`の形か、`--stdin`と、展開を含まない鍵の名前1つの形である。
+`mise -E local set`のように、サブコマンドの前にグローバルオプションを置いても、`--`より前に`set`があれば同じ判定をする。
+値を取る隠しオプションを列挙しないためである。`mise run set`のように、`set`という語を持つ別の呼び出しも拒否することがある。
 秘密値を投入する手順([セットアップ](setup.md))は、値を標準入力から渡す`mise set -E local --stdin KEY`を使う。この形は一覧を出さないので、フックは拒否しない。
 投入は人が行う。
 
@@ -1656,7 +1657,7 @@ FactoryのheadlessなClaudeの実行は`.claude/`を読まないので、この�
 | フィールドの経路だけの`--format`を持たない`docker inspect`、`Env`か`Config`を含む経路 | コンテナに渡した環境変数が見える |
 | 出力を絞らない`docker compose config`と`docker compose convert` | 変数を展開したcompose定義を出力する |
 | `/proc/<pid>/environ`(`task/<tid>`の下を含む)を引数やリダイレクトに含むコマンド | プロセスの環境変数がそのまま入っている |
-| 書き込む形(`KEY=VALUE`、または`--stdin`と鍵の名前)を持たない`mise set` | `mise.local.toml`の値を一覧する |
+| 書き込む形(`KEY=VALUE`、または`--stdin`と鍵の名前1つ)を持たない`mise set` | `mise.local.toml`の値を一覧する |
 | 秘密値のファイル(`mise.local.toml`とその別名、`.wmill/`の`remotes.ndjson`、`.env`系)を名前で指すコマンド | `Read`の拒否はBashに効かず、`cat`や`grep`で読むと値が会話の記録に残る |
 | リポジトリの根、`infra`、`.wmill`を起点にした再帰的な`grep`、`-u`や`--no-ignore`を付けた`rg`、`git grep --no-index` | gitignore済みの秘密値のファイルまで読む |
 
@@ -1808,6 +1809,8 @@ bunかnodeの起動そのものが止まったときだけ、タイムアウト�
 - `docker run ... env`のように、新しく起動するコンテナで環境変数を出す操作
 - `gh auth token`のように、認証情報を表示するコマンドと、`~/.ssh`やgh CLIの設定ファイルの読み取り
 - `mise exec`経由で秘密値を読む方法の一部(ベストエフォートの規則である)
+- サブコマンドの前にグローバルオプションを置いた`mise env`と`mise exec`(`mise -E local env`、`mise -C . exec -- printenv`)。`mise set`だけが、この置き方を判定する
+- プログラム名を実行時に決める形(`m=mise; $m set`)
 - サブシェルの中の`cd`の範囲(外側にも効くものとして扱う)
 - 前置きではない`HOME`と`XDG_CONFIG_HOME`の設定(`export HOME=...`の後のgit、`sh -c`の中のgit)
 - 書き方を変えた`/proc/<pid>/environ`(`dd if=/proc/self/environ`、`/proc/self/./environ`、`//proc/...`、`/proc`の再帰的な検索)
