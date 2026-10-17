@@ -111,6 +111,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * ホストの実行役が実行するファイルも守る。実行役の入口(`scripts/host-apply.ts`、まだ存在しない`scripts/host-apply.sh`)、
  * 導入と診断と初期化のスクリプト(`host-install.sh`、`check-docker-version.sh`、`doctor.sh`、`bootstrap.sh`、
  * `custom-tags.ts`、`record-host-applied.sh`)は、ホストのユーザーの権限で、秘密値を渡して動く。
+ * `check-idle.ts`(`mise run up`と`mise run deploy`が呼ぶ、実行中の仕事の確認)とそのテストも、同じく守る。
  * `infra/docker-compose.yml`は実行役が静的に検査して反映する定義で、`tests/infra/docker_compose.test.ts`は
  * その定義の境界を固定する。実行役のテスト(`tests/scripts/host_apply_*.test.ts`)と、それが使う
  * 一時リポジトリの補助(`tests/fixtures/host_apply_repo.ts`)も、実行役の判定を固定するので守る。
@@ -211,6 +212,8 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "scripts/bootstrap.sh",
   "scripts/custom-tags.ts",
   "scripts/record-host-applied.sh",
+  "scripts/check-idle.ts",
+  "tests/scripts/check-idle.test.ts",
   "infra/docker-compose.yml",
   "tests/infra/docker_compose.test.ts",
   "tests/fixtures/host_apply_repo.ts",

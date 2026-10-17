@@ -1304,7 +1304,7 @@ symlink(mode 120000)かsubmodule(160000)が1つでもあれば、目標を拒否
 
 | 種類 | ファイル |
 | --- | --- |
-| 実行役が動かす道具 | `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/check-docker-version.sh`、`scripts/custom-tags.ts`、`scripts/record-host-applied.sh` |
+| 実行役が動かす道具 | `scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/check-docker-version.sh`、`scripts/custom-tags.ts`、`scripts/record-host-applied.sh`、`scripts/check-idle.ts` |
 | 実行役の実装 | `scripts/host-apply.*`、`scripts/host_apply/`、`scripts/host-install.sh` |
 | mise設定 | `mise.toml`、`mise.*.toml`、`.mise.toml`、`mise/`、`.mise/`、`.config/mise/`、`.tool-versions` |
 | 実行環境の設定 | `package.json`、`bunfig.toml`、`.npmrc`、`.env`、`.env.*`、`.nvmrc`、`.node-version`などの`.*-version` |
@@ -1489,6 +1489,7 @@ PR修正の自動修正がこれらを書き換えるのを止め、実装のPR�
 実装フローは、保護パスに触れたラウンドで検査コマンドを実行しない([保護パスの記録](internals/implement.md#保護パスの記録))。
 そのため、次のファイルを変えるIssueの実装ループは、検査を省いてPRに進む。
 対象は、`scripts/doctor.sh`、`scripts/bootstrap.sh`、`scripts/custom-tags.ts`、実行役のテストである。
+`scripts/check-idle.ts`と`tests/scripts/check-idle.test.ts`も対象に含む。
 その変更は、PR本文の「確認して欲しい点」に載る。
 
 ### 残るリスク
