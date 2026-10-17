@@ -1120,6 +1120,17 @@ describe("bash-guard denies mise set without a value to write", () => {
     "mise {-q,set}",
     "mise -q {set,}",
     "echo set | xargs mise",
+    "mise -P x ev",
+    "mise -P x e",
+    "mise -P exec ev",
+    "mise --profile x config get env",
+    "mise --output x ev",
+    "mise -s x e",
+    "mise hook-env -s bash",
+    "mise -q hook-env",
+    "mise en",
+    "echo ev | xargs mise -P x",
+    "echo printenv | xargs mise exec --",
   ])("denies %s", async (command) => {
     expect(await decide(command)).toBe("deny");
   });
