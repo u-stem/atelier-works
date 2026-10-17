@@ -2854,6 +2854,12 @@ PRの取得とステップのlockは止めない。`windmill-client`を含み、
 
 固定を強制し、配信物を作って検査するスクリプトも止める。
 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も止める。一覧は`f/factory/lib/protected_paths.ts`の`FORBIDDEN_EXACT_PATHS`にある。
+scriptの定義の`lock`が自分の`.script.lock`を指す契約テストも止める。
+対象は`tests/lib/script_yaml_lock_contract.test.ts`である。
+`wmill sync push`は、`lock: '!inline <パス>'`のパスを読み、中身をlockとして保存する。
+パスに制限はなく、絶対パスや`..`も書ける。
+保護の外の定義を書き換えて参照先を変えると、workerやホストの任意のファイルがlockとしてワークスペースに載りうる。
+このテストが全定義の参照先を固定し、テスト自体を保護することで、その書き換えをマージの前に止める。
 CIがどのジョブを動かすかを決める`scripts/ci-scope.ts`も止める。書き換えられると、検査のジョブを飛ばされるためである。
 CIが出すメタデータのパッチを取得して検査する`f/factory/lib/metadata_patch_*.ts`の6つも止める。
 6つは、manifest、zip、yaml、verify、imports、downloadである。

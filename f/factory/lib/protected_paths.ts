@@ -74,6 +74,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * `infra/Caddyfile`には、Consoleのscriptの許可と、draw.ioの図を隔離するCSPがある。
  * `infra/`全体は、pr_fixでは止めない。
  * 図を隔離して描くiframeの検査(`tests/lib/drawio_frame_isolation.test.ts`)も守る。
+ * scriptの定義の`lock`の契約テスト(`tests/lib/script_yaml_lock_contract.test.ts`)も守る。
+ * `wmill sync push`は`lock: '!inline <パス>'`のパスを制限なしに読んでlockとして保存する。
+ * このテストが、すべての定義の参照先を自分の`.script.lock`に固定している。
+ * 書き換えられると、保護の外の定義から、workerやホストの任意のファイルをlockに載せられる。
  * このテストは、`DrawioFrame.tsx`のsandboxとiframeの受け口のメッセージを固定値と照合する。
  * 書き換えられると、図を描くiframeにsandboxを外したり別のページを読ませたりしても、検査を通る。
  * sandboxは、HTTPのCSP(`infra/Caddyfile`)も後ろ盾になる。
@@ -147,6 +151,7 @@ export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
   "console/vite.config.ts",
   "infra/Caddyfile",
   "tests/lib/drawio_frame_isolation.test.ts",
+  "tests/lib/script_yaml_lock_contract.test.ts",
   "f/factory/lib/dependabot_support.ts",
   "f/factory/lib/dependabot_support.script.yaml",
   "f/factory/lib/dependabot_support.script.lock",
