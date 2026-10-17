@@ -1217,7 +1217,7 @@ describe("writeGhRepoDetail", () => {
     const { sql, calls } = createFakeSqlClient([[{ updated: 1 }]]);
     await writeGhRepoDetail(DETAIL_WRITE, sql);
     expect(calls[0]?.text).toMatch(
-      /WHERE owner = {2}\? AND repo = {2}\? AND repo_id = {2}\? ::bigint AND allowed AND NOT gone/,
+      /WHERE owner = {2}\? {2}AND repo = {2}\? {2}AND repo_id = {2}\? ::bigint AND allowed AND NOT gone/,
     );
   });
 
@@ -1364,13 +1364,13 @@ describe("markGhRepoDetailIncomplete", () => {
   test("a truncated mark sets truncated and clears detail_failed", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await markGhRepoDetailIncomplete("Acme", "Widgets", 2002, "truncated", sql);
-    expect(calls[0]?.values).toEqual(["acme", "widgets", 2002, true, false]);
+    expect(calls[0]?.values).toEqual([true, false, "acme", "widgets", 2002]);
   });
 
   test("a failed mark sets detail_failed and clears truncated", async () => {
     const { sql, calls } = createFakeSqlClient([[]]);
     await markGhRepoDetailIncomplete("acme", "widgets", 2002, "failed", sql);
-    expect(calls[0]?.values).toEqual(["acme", "widgets", 2002, false, true]);
+    expect(calls[0]?.values).toEqual([false, true, "acme", "widgets", 2002]);
   });
 
   test("advances the attempt time and never the collection time", async () => {

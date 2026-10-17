@@ -17,6 +17,7 @@ import {
   ownerNotFoundMessage,
 } from "../../f/factory/lib/owner_id_notice.ts";
 import type {
+  GhCollectErrorCode,
   GhCollectOwnerState,
   GhCollectRunOutcome,
   GhIssue,
@@ -2590,7 +2591,7 @@ describe("runGhCollect stage 2 failures", () => {
     });
   });
 
-  const STOPS: [string, GraphqlResponse, string][] = [
+  const STOPS: [string, GraphqlResponse, GhCollectErrorCode][] = [
     ["401", httpFailure({ status: 401 }), "unauthorized"],
     ["403", httpFailure({ status: 403 }), "forbidden"],
     [

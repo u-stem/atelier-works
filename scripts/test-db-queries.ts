@@ -6983,6 +6983,11 @@ const ghSuccess = await finishGhCollectRun(
     error_code: null,
     next_allowed_at: null,
     led: true,
+    stage: null,
+    detail_targets: 0,
+    detail_requests: 0,
+    detail_done: 0,
+    detail_incomplete: 0,
   },
   sql,
 );
@@ -6999,6 +7004,11 @@ const ghSecondFinish = await finishGhCollectRun(
     error_code: "deadline",
     next_allowed_at: null,
     led: false,
+    stage: "list",
+    detail_targets: 0,
+    detail_requests: 0,
+    detail_done: 0,
+    detail_incomplete: 0,
   },
   sql,
 );
@@ -7031,8 +7041,46 @@ await finishGhCollectRun(
     error_code: "rate_limited",
     next_allowed_at: ghUntil,
     led: false,
+    stage: null,
+    detail_targets: 0,
+    detail_requests: 0,
+    detail_done: 0,
+    detail_incomplete: 0,
   },
   sql,
+);
+const GH_OWNER_RT = "qdbghrt";
+const [ghRunE] = await insertGhCollectRuns([GH_OWNER_RT], sql);
+await finishGhCollectRun(
+  ghRunE?.id ?? 0,
+  {
+    ok: false,
+    owner_id: 4242,
+    verified: true,
+    id_checked: true,
+    cost: 20,
+    requests: 1,
+    remaining: 4000,
+    error_code: "graphql_error",
+    next_allowed_at: null,
+    led: true,
+    stage: "detail",
+    detail_targets: 4,
+    detail_requests: 2,
+    detail_done: 3,
+    detail_incomplete: 1,
+  },
+  sql,
+);
+const [ghFinishedE] = await listRecentGhCollectRuns(GH_OWNER_RT, 1, sql);
+check(
+  "gh_collect_runs: a failed run keeps the stage it failed in and the detail counts",
+  ghFinishedE?.stage === "detail" &&
+    ghFinishedE.detail_targets === 4 &&
+    ghFinishedE.detail_requests === 2 &&
+    ghFinishedE.detail_done === 3 &&
+    ghFinishedE.detail_incomplete === 1,
+  ghFinishedE,
 );
 const ghStates = await listGhCollectOwnerStates([GH_OWNER, GH_OWNER_B], sql);
 const ghStateA = ghStates.find((row) => row.owner === GH_OWNER);

@@ -813,6 +813,10 @@ describe("planGone", () => {
     gone: false,
     gone_reason: null,
     listed_at: new Date(NOW),
+    last_collected_at: null,
+    last_attempted_at: null,
+    truncated: false,
+    detail_failed: false,
     ...overrides,
   });
 
