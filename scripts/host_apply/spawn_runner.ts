@@ -72,7 +72,7 @@ export function createKillGroup(
   };
 }
 
-const realDeps: RunnerDeps = {
+const realDeps: RunnerDeps = Object.freeze({
   spawn: (cmd, opts) => Bun.spawn(cmd, opts),
   killGroup: createKillGroup((pid, signal) => process.kill(pid, signal)),
   setTimer: (fn, ms) => {
@@ -80,13 +80,12 @@ const realDeps: RunnerDeps = {
     return () => clearTimeout(handle);
   },
   acceptUnchecked: false,
-};
+});
 
 /** テストが、既定のグループの停止を直接確かめるための参照。起動の部品は外に出さない。 */
 export const defaultKillGroup: (pid: number) => void = Object.freeze(
   realDeps.killGroup,
 );
-export const defaultRunnerDeps: RunnerDeps = realDeps;
 
 type ReadMode =
   | { readonly kind: "kill"; readonly limit: number }

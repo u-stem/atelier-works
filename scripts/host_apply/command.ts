@@ -273,16 +273,11 @@ function snapshot(input: CommandSpecInput): Fields & {
 function build(input: CommandSpecInput, checked: boolean): IssuedSpec {
   const spec = snapshot(input);
   // 種類は実行時の入力なので、継承したプロパティ(`constructor`など)を表から引かない。
-  const known = COMMAND_KINDS.includes(spec.kind);
-  const rule =
-    known && Object.hasOwn(KIND_RULES, spec.kind)
-      ? KIND_RULES[spec.kind]
-      : undefined;
+  const rule = Object.hasOwn(KIND_RULES, spec.kind)
+    ? KIND_RULES[spec.kind]
+    : undefined;
   if (rule === undefined) invalid("kind cannot be created");
-  if (
-    !Object.hasOwn(COMMAND_TIMEOUT_MS, spec.kind) ||
-    spec.timeoutMs !== COMMAND_TIMEOUT_MS[spec.kind]
-  ) {
+  if (spec.timeoutMs !== COMMAND_TIMEOUT_MS[spec.kind]) {
     invalid("timeout differs from the table", spec.kind);
   }
   const requested = spec.maxStdoutBytes ?? rule.ceilingBytes;
