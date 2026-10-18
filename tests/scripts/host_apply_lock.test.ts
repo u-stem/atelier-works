@@ -1574,7 +1574,7 @@ describe.skipIf(!REAL)("with the kernel lock (darwin)", () => {
         "setInterval(() => {}, 1000);",
       ].join("\n"),
     );
-    const child = Bun.spawn(["bun", script], {
+    const child = Bun.spawn([process.execPath, script], {
       stdout: "pipe",
       stderr: "ignore",
     });

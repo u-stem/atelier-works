@@ -1880,6 +1880,14 @@ describe("the lock module", () => {
     ]);
   });
 
+  test("reaches node:fs through one static import and no dynamic one", () => {
+    expect(
+      specifiers(readFileSync(LOCK_FILE, "utf8")).filter(
+        (specifier) => specifier === "node:fs" || specifier === "<dynamic>",
+      ),
+    ).toEqual(["node:fs"]);
+  });
+
   test("the scanner reads the named imports and skips type names", () => {
     expect(
       namesImportedFrom(
