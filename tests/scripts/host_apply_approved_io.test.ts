@@ -171,10 +171,13 @@ describe("readApproved", () => {
     const script = `import { readApproved } from ${JSON.stringify(
       join(import.meta.dir, "../../scripts/host_apply/approved_io.ts"),
     )}; console.log(readApproved(${JSON.stringify(dir)}).kind);`;
-    const result = Bun.spawnSync(["bun", "--no-env-file", "-e", script], {
-      timeout: 3000,
-      killSignal: "SIGKILL",
-    });
+    const result = Bun.spawnSync(
+      [process.execPath, "--no-env-file", "-e", script],
+      {
+        timeout: 3000,
+        killSignal: "SIGKILL",
+      },
+    );
     expect(result.stdout.toString().trim()).toBe("invalid");
   });
 

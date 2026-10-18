@@ -25,6 +25,7 @@ import {
   suspiciousTreePaths,
 } from "../../scripts/host_apply/plan.ts";
 import { createPlanGit } from "../../scripts/host_apply/plan_git.ts";
+import { formatFailure } from "../../scripts/host-apply.ts";
 import {
   createFixtureRepo,
   type FixtureRepo,
@@ -1069,6 +1070,24 @@ describe("plan against a real repository", () => {
     const before = snapshot();
     run(repo, ["--repo", repo.dir, "--applied", applied, "--target", doctor]);
     expect(snapshot()).toEqual(before);
+  });
+});
+
+describe("formatFailure", () => {
+  test("writes a control character of the message as an escape", () => {
+    expect(formatFailure(new Error("bad \u001b[2J path"))).toBe(
+      "host-apply: bad \\u001b[2J path",
+    );
+  });
+
+  test("keeps a plain message as it is", () => {
+    expect(formatFailure(new Error("commit not found"))).toBe(
+      "host-apply: commit not found",
+    );
+  });
+
+  test("names a value that is not an Error", () => {
+    expect(formatFailure("oops")).toBe("host-apply: unknown error");
   });
 });
 

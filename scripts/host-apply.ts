@@ -134,6 +134,10 @@ function loadApproval(
   return { approved: null };
 }
 
+export function formatFailure(error: unknown): string {
+  return "host-apply: unknown error";
+}
+
 async function runPlan(rest: readonly string[]): Promise<number> {
   const parsed = parsePlanArgs(rest);
   if (!parsed.ok) {
