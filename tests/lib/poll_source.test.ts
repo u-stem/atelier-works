@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import type { Issue, IssueSearchItem } from "../../f/factory/lib/github.ts";
 import type { Logger } from "../../f/factory/lib/log.ts";
 import {
+  classifyPollPrRow,
   confirmTableIssue,
   discoverIssues,
   issueKey,
@@ -15,6 +16,7 @@ import type {
   GhIssue,
   GhOwnerOpenIssueSnapshot,
   GhOwnerRepoFreshnessRow,
+  GhPullRequest,
 } from "../../f/factory/lib/types.ts";
 
 const MINUTE_MS = 60_000;
@@ -759,5 +761,139 @@ describe("the round does not stop when the table cannot be used", () => {
       { owners: [ACME, BETA] },
     );
     expect(table).toEqual(search);
+  });
+});
+
+const VIEWER_ID = 5001;
+const OTHER_ID = 7777;
+
+/** 検索のどの条件にも当たらない、開いたPRの行。 */
+function prRow(overrides: Partial<GhPullRequest> = {}): GhPullRequest {
+  return {
+    id: 1,
+    owner: "acme",
+    repo: "widgets",
+    repo_id: REPO_ID,
+    number: 3,
+    state: "open",
+    head_sha: "a".repeat(40),
+    head_ref: "feature",
+    base_ref: "main",
+    is_draft: false,
+    is_cross_repository: false,
+    auto_merge_enabled: false,
+    author_login: "alice",
+    author_type: "User",
+    author_id: 1001,
+    mergeable: null,
+    has_review_label: false,
+    has_fix_label: false,
+    review_requested_user_ids: [],
+    assignee_ids: [],
+    team_review_requested: false,
+    created_at: new Date("2026-10-10T00:00:00.000Z"),
+    updated_at: new Date("2026-10-11T00:00:00.000Z"),
+    written_at: new Date("2026-10-11T00:00:00.000Z"),
+    usable: true,
+    ...overrides,
+  };
+}
+
+describe("classifyPollPrRow", () => {
+  test("is a target when the review label is on", () => {
+    expect(
+      classifyPollPrRow(prRow({ has_review_label: true }), VIEWER_ID),
+    ).toBe("target");
+  });
+
+  test("is a target when the fix label is on", () => {
+    expect(classifyPollPrRow(prRow({ has_fix_label: true }), VIEWER_ID)).toBe(
+      "target",
+    );
+  });
+
+  test("is a target when the viewer is a requested reviewer", () => {
+    expect(
+      classifyPollPrRow(
+        prRow({ review_requested_user_ids: [OTHER_ID, VIEWER_ID] }),
+        VIEWER_ID,
+      ),
+    ).toBe("target");
+  });
+
+  test("is a target when the viewer is an assignee", () => {
+    expect(
+      classifyPollPrRow(prRow({ assignee_ids: [VIEWER_ID] }), VIEWER_ID),
+    ).toBe("target");
+  });
+
+  test("is none when only other people are requested and assigned", () => {
+    expect(
+      classifyPollPrRow(
+        prRow({
+          review_requested_user_ids: [OTHER_ID],
+          assignee_ids: [OTHER_ID],
+        }),
+        VIEWER_ID,
+      ),
+    ).toBe("none");
+  });
+
+  test("is team when a team review is requested and nothing else matches", () => {
+    expect(
+      classifyPollPrRow(prRow({ team_review_requested: true }), VIEWER_ID),
+    ).toBe("team");
+  });
+
+  test("is team when it is unknown whether a team review is requested", () => {
+    expect(
+      classifyPollPrRow(prRow({ team_review_requested: null }), VIEWER_ID),
+    ).toBe("team");
+  });
+
+  test("is a target when a team review is requested but a label is on", () => {
+    expect(
+      classifyPollPrRow(
+        prRow({ team_review_requested: true, has_review_label: true }),
+        VIEWER_ID,
+      ),
+    ).toBe("target");
+  });
+
+  test("is maybe when it is unknown whether the review label is on", () => {
+    expect(
+      classifyPollPrRow(prRow({ has_review_label: null }), VIEWER_ID),
+    ).toBe("maybe");
+  });
+
+  test("is maybe when the assignees are unknown", () => {
+    expect(classifyPollPrRow(prRow({ assignee_ids: null }), VIEWER_ID)).toBe(
+      "maybe",
+    );
+  });
+
+  test("classifies a draft pull request from a fork like any other", () => {
+    expect(
+      classifyPollPrRow(
+        prRow({
+          is_draft: true,
+          is_cross_repository: true,
+          has_fix_label: true,
+        }),
+        VIEWER_ID,
+      ),
+    ).toBe("target");
+  });
+
+  test("is team when the requested reviewers are unknown even if the team flag is false", () => {
+    expect(
+      classifyPollPrRow(
+        prRow({
+          team_review_requested: false,
+          review_requested_user_ids: null,
+        }),
+        VIEWER_ID,
+      ),
+    ).toBe("team");
   });
 });

@@ -14,6 +14,7 @@ import {
   type FactoryOwner,
   type GhIssue,
   type GhOwnerOpenIssueSnapshot,
+  type GhPullRequest,
   type GhSource,
   hasLabel,
 } from "./types.ts";
@@ -246,4 +247,14 @@ export async function discoverIssues(
       table_dropped: tableDropped,
     },
   };
+}
+
+export type PollPrRowClass = "target" | "maybe" | "team" | "none";
+
+/** 表の行が、検索の4本のどれかに当たるか。`viewerId`はPATのアカウントの数値ID。 */
+export function classifyPollPrRow(
+  _row: GhPullRequest,
+  _viewerId: number,
+): PollPrRowClass {
+  return "none";
 }
