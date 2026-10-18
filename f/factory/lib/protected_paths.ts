@@ -83,6 +83,10 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * `wmill sync push`は`lock: '!inline <パス>'`のパスを制限なしに読んでlockとして保存する。
  * このテストが、すべての定義の参照先を自分の`.script.lock`に固定している。
  * 書き換えられると、保護の外の定義から、workerやホストの任意のファイルをlockに載せられる。
+ * `wmill.yaml`も守る。`codebases`の`customBundler`は、`wmill sync push`が反映時にシェルで実行する。
+ * `assets`の`from`は、`wmill sync push`が任意のパスのファイルを読んでワークスペースに載せる。
+ * 書き換えられると、反映するworkerやホストで任意のコマンドが走り、任意のファイルが外へ出る。
+ * `wmill-lock.yaml`は、依存の変更のたびに書き換わるので守らない。
  * dependabotのセキュリティ更新PRを自動でマージするフローも守る。マージの判定(`lib/dependabot_support.ts`)、
  * 影響調査のプロンプト(`lib/dependabot_prompt.ts`)、npm registryの取得(`lib/dependabot_registry.ts`)、
  * ゲート入力の組み立て(`lib/dependabot_collect.ts`)、フローの支援関数(`lib/dependabot_flow_support.ts`)、
@@ -134,6 +138,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * これらを書き換えてdependabotのフローの判断を変える変更は、PRのレビューで差分を確かめて止める。
  */
 export const FORBIDDEN_EXACT_PATHS: readonly string[] = [
+  "wmill.yaml",
   "console/index.html",
   "console/drawio-viewer.json",
   "f/factory/drawio_viewer_bump.ts",
