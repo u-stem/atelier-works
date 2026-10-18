@@ -7,7 +7,7 @@ import type { PullRequest } from "./github.ts";
 import { isAllowedLabeler, type LabelerPolicy } from "./poll_support.ts";
 import type { PrCiNotifyPolicy } from "./pr_ci_notify.ts";
 import type { PullRequestRef } from "./pr_ci_support.ts";
-import { parseImplementBranchWorkItemId } from "./types.ts";
+import { type GhPullRequest, parseImplementBranchWorkItemId } from "./types.ts";
 
 /** PRを区別する鍵。リポジトリ名は小文字にする。追跡対象のPRの集合の照合に使う。 */
 export function pullRequestKey(ref: PullRequestRef): string {
@@ -77,6 +77,24 @@ export function isHumanPrCandidate(input: {
   }
   if (parseImplementBranchWorkItemId(pr.headRef) !== null) return false;
   return !trackedPrKeys.has(pullRequestKey(ref));
+}
+
+/** 収集の表の行から作る、人のPRの候補。 */
+export type HumanPrCandidate = {
+  readonly owner: string;
+  readonly repo: string;
+  readonly number: number;
+  readonly updatedAtMs: number;
+  /** 作者の分からない行。並びで末尾に回す。 */
+  readonly authorUnknown: boolean;
+};
+
+/** 仮実装。常に空を返す。 */
+export function humanPrCandidatesFromRows(
+  _rows: readonly GhPullRequest[],
+  _authors: readonly string[],
+): HumanPrCandidate[] {
+  return [];
 }
 
 /**
