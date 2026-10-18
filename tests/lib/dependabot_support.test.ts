@@ -2000,6 +2000,14 @@ describe("evaluateGateGroup", () => {
     );
   });
 
+  test("evaluates with the common facts even when a target carries extra fields", () => {
+    const withExtra = { ...leftPadFacts(), authorLogin: "mallory" };
+
+    expect(
+      evaluateGateGroup(groupCommon(), [withExtra, otherFacts()], true),
+    ).toEqual({ ok: true });
+  });
+
   test("needs a human when there is no target", () => {
     expect(verdictOfResult(evaluateGateGroup(groupCommon(), [], true))).toBe(
       "needs_human",
