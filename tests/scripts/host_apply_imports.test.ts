@@ -258,6 +258,7 @@ const APPROVAL_MODULES = [
   "state.ts",
   "state_io.ts",
   "held_lock.ts",
+  "lock.ts",
 ].map((name) => join(HOST_APPLY_DIR, name));
 
 const FORBIDDEN_BUILTINS =
@@ -370,6 +371,7 @@ describe("the state store modules", () => {
     "state.ts",
     "state_io.ts",
     "held_lock.ts",
+    "lock.ts",
   ].map((name) => join(HOST_APPLY_DIR, name));
 
   test("import only built-ins and scripts/host_apply/", () => {
@@ -431,6 +433,7 @@ describe("the importers of secure_file", () => {
   const ALLOWED_IMPORTERS = [
     "scripts/host_apply/approved_io.ts",
     "scripts/host_apply/drain_store.ts",
+    "scripts/host_apply/lock.ts",
     "scripts/host_apply/state_io.ts",
   ];
 
@@ -582,7 +585,7 @@ describe("the re-exports and the names of secure_file", () => {
     ).toBe(true);
   });
 
-  test.each(["approved_io.ts", "drain_store.ts", "state_io.ts"])(
+  test.each(["approved_io.ts", "drain_store.ts", "state_io.ts", "lock.ts"])(
     "%s exports none of the names of secure_file",
     async (name) => {
       const own = Object.keys(await import(join(HOST_APPLY_DIR, name)));
@@ -634,9 +637,9 @@ function importsHeldLockValue(file: string, source: string): boolean {
 }
 
 describe("the value importers of held_lock", () => {
-  // フェンスを作れるモジュールの閉じた一覧。ロックの実装を足すときに、この一覧を直す。
+  // フェンスを作れるモジュールの閉じた一覧。増やすときは、この一覧を直して人のレビューを通す。
   // 型としての読み込み(`import type`)は数えない。
-  const ALLOWED_IMPORTERS: string[] = [];
+  const ALLOWED_IMPORTERS: string[] = ["scripts/host_apply/lock.ts"];
 
   test("are exactly the allowed modules", () => {
     expect(
@@ -1798,5 +1801,152 @@ describe("the specifications that every table builds", () => {
     expect(
       [...new Set((await specs()).map((spec) => spec.kind))].sort(),
     ).toEqual([...CREATABLE_KINDS].sort());
+  });
+});
+
+/** 指定子のimportで取り込んでいる名前(`import type`と`type`つきの名前は数えない)。 */
+function namesImportedFrom(source: string, specifier: string): string[] {
+  const names: string[] = [];
+  const statement =
+    /(?:^|\n)\s*import\s+(type\s+)?([^;]*?)\bfrom\s*["']([^"']+)["']/g;
+  for (const match of source.matchAll(statement)) {
+    if (match[3] !== specifier || match[1] !== undefined) continue;
+    const clause = (match[2] ?? "").trim();
+    if (!clause.startsWith("{")) {
+      names.push("<non-named>");
+      continue;
+    }
+    for (const part of clause.slice(1, clause.lastIndexOf("}")).split(",")) {
+      const text = part.trim();
+      if (text === "" || text.startsWith("type ")) continue;
+      names.push((text.split(/\s+as\s+/)[0] ?? "").trim());
+    }
+  }
+  return names.sort();
+}
+
+/** 文字列とテンプレートの本文に、ファイル名`lock`の要素があるか。パスの区切りで分けて数える。 */
+function namesLockFile(source: string): boolean {
+  return scanSource(source).strings.some((text) =>
+    text.split("/").some((part) => part === "lock"),
+  );
+}
+
+describe("the lock module", () => {
+  const LOCK_FILE = join(HOST_APPLY_DIR, "lock.ts");
+
+  test("is imported by no module under scripts/ because nothing is wired", () => {
+    expect(
+      relativeNames(
+        scriptFiles().filter((file) =>
+          importsModule(file, readFileSync(file, "utf8"), "lock.ts"),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  test("exports exactly the production and test entries", async () => {
+    const exported = await import("../../scripts/host_apply/lock.ts");
+    expect(Object.keys(exported).sort()).toEqual([
+      "acquireLock",
+      "acquireLockForTest",
+      "resetOwnerRecord",
+      "resetOwnerRecordForTest",
+    ]);
+  });
+
+  test("takes only the directory checks from secure_file", () => {
+    expect(
+      valueImports(
+        LOCK_FILE,
+        readFileSync(LOCK_FILE, "utf8"),
+        "secure_file.ts",
+      ),
+    ).toEqual(["inspectStateDir", "normalizeStateDir"]);
+  });
+
+  test("takes a fixed set of names from node:fs", () => {
+    expect(
+      namesImportedFrom(readFileSync(LOCK_FILE, "utf8"), "node:fs"),
+    ).toEqual([
+      "closeSync",
+      "constants",
+      "fstatSync",
+      "ftruncateSync",
+      "lstatSync",
+      "openSync",
+      "readSync",
+      "writeSync",
+    ]);
+  });
+
+  test("reaches node:fs through one static import and no dynamic one", () => {
+    expect(
+      specifiers(readFileSync(LOCK_FILE, "utf8")).filter(
+        (specifier) => specifier === "node:fs" || specifier === "<dynamic>",
+      ),
+    ).toEqual(["node:fs"]);
+  });
+
+  test("the scanner reads the named imports and skips type names", () => {
+    expect(
+      namesImportedFrom(
+        'import { type BigIntStats, closeSync as c } from "node:fs";',
+        "node:fs",
+      ),
+    ).toEqual(["closeSync"]);
+  });
+
+  test("the kernel entries of the test hooks are named only in lock.ts", () => {
+    expect(
+      relativeNames(
+        scriptFiles().filter((file) =>
+          /\b(?:acquireLockForTest|resetOwnerRecordForTest|openLocked|closeLocked|afterOpen)\b/.test(
+            stripComments(readFileSync(file, "utf8")),
+          ),
+        ),
+      ),
+    ).toEqual(["scripts/host_apply/lock.ts"]);
+  });
+
+  test("the lock file name is written only in lock.ts", () => {
+    expect(
+      relativeNames(
+        sourceFiles().filter((file) =>
+          namesLockFile(readFileSync(file, "utf8")),
+        ),
+      ),
+    ).toEqual(["scripts/host_apply/lock.ts"]);
+  });
+
+  test.each([
+    ["a quoted name", 'join(dir, "lock")'],
+    ["a path in a string", 'const p = "state/lock";'],
+    ["a name in a template literal", "const p = `${dir}/lock`;"],
+  ])("the file name scanner finds %s", (_name, source) => {
+    expect(namesLockFile(source)).toBe(true);
+  });
+
+  test("the file name scanner ignores an identifier", () => {
+    expect(namesLockFile("const lock = acquire();")).toBe(false);
+  });
+});
+
+describe("the importers of node:fs", () => {
+  // ファイルを直接読み書きできるモジュールの閉じた一覧。増やすときは、このテストを直して人のレビューを通す。
+  test("are exactly the allowed modules", () => {
+    expect(
+      relativeNames(
+        sourceFiles().filter((file) =>
+          specifiers(withoutTypeImports(readFileSync(file, "utf8"))).includes(
+            "node:fs",
+          ),
+        ),
+      ),
+    ).toEqual([
+      "scripts/host_apply/code_origin.ts",
+      "scripts/host_apply/lock.ts",
+      "scripts/host_apply/secure_file.ts",
+    ]);
   });
 });

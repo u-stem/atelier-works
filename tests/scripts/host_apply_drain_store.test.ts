@@ -19,6 +19,9 @@ import {
   serializeDrainRecord,
   writeDrain,
 } from "../../scripts/host_apply/drain_store.ts";
+import { HeldLock } from "../../scripts/host_apply/held_lock.ts";
+
+const held = new HeldLock(() => {});
 
 const ID = "0123456789abcdef".repeat(4);
 const OTHER_ID = "fedcba9876543210".repeat(4);
@@ -218,19 +221,50 @@ describe("serializeDrainRecord", () => {
 describe("writeDrain", () => {
   test("keeps drain.json for an empty record", () => {
     const dir = privateDir();
-    writeDrain(dir, { schema: 1, entries: {} }, uid);
+    writeDrain(dir, { schema: 1, entries: {} }, held, uid);
     expect(existsSync(join(dir, "drain.json"))).toBe(true);
   });
 
   test("writes drain.json with mode 0600", () => {
     const dir = privateDir();
-    writeDrain(dir, RECORD, uid);
+    writeDrain(dir, RECORD, held, uid);
     expect(statSync(join(dir, "drain.json")).mode & 0o777).toBe(0o600);
   });
 
   test("does not create a missing directory", () => {
     const dir = join(tempRoot(), "missing");
-    expect(() => writeDrain(dir, RECORD, uid)).toThrow();
+    expect(() => writeDrain(dir, RECORD, held, uid)).toThrow();
+  });
+
+  test("asks the lock about the directory it writes to", () => {
+    const dir = privateDir();
+    const seen: string[] = [];
+    const lock = new HeldLock((target) => {
+      seen.push(target);
+    });
+    writeDrain(dir, RECORD, lock, uid);
+    expect(seen).toEqual([dir]);
+  });
+
+  test("does not write when the lock is lost", () => {
+    const dir = privateDir();
+    const lock = new HeldLock(() => {
+      throw new Error("lock lost");
+    });
+    expect(() => writeDrain(dir, RECORD, lock, uid)).toThrow("lock lost");
+  });
+
+  test("leaves no drain.json when the lock is lost", () => {
+    const dir = privateDir();
+    const lock = new HeldLock(() => {
+      throw new Error("lock lost");
+    });
+    try {
+      writeDrain(dir, RECORD, lock, uid);
+    } catch {
+      // 例外は前のテストで確かめる。
+    }
+    expect(existsSync(join(dir, "drain.json"))).toBe(false);
   });
 });
 
@@ -247,13 +281,13 @@ describe("readDrain", () => {
 
   test("reads back a written record", () => {
     const dir = privateDir();
-    writeDrain(dir, RECORD, uid);
+    writeDrain(dir, RECORD, held, uid);
     expect(readDrain(dir, uid)).toEqual({ kind: "found", record: RECORD });
   });
 
   test("returns an empty record as found", () => {
     const dir = privateDir();
-    writeDrain(dir, { schema: 1, entries: {} }, uid);
+    writeDrain(dir, { schema: 1, entries: {} }, held, uid);
     expect(readDrain(dir, uid)).toEqual({
       kind: "found",
       record: { schema: 1, entries: {} },
@@ -262,7 +296,7 @@ describe("readDrain", () => {
 
   test("reads a started_at with nanoseconds back as it was written", () => {
     const dir = privateDir();
-    writeDrain(dir, RECORD, uid);
+    writeDrain(dir, RECORD, held, uid);
     const result = readDrain(dir, uid);
     expect(
       result.kind === "found" &&

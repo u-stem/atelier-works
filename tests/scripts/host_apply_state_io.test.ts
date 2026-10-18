@@ -249,14 +249,14 @@ describe("createState", () => {
 
   test("accepts an empty drain record that already exists", async () => {
     const dir = privateDir();
-    writeDrain(dir, EMPTY_DRAIN, uid);
+    writeDrain(dir, EMPTY_DRAIN, held, uid);
     await created(dir);
     expect(readOk(dir).applied_sha).toBe(SHA);
   });
 
   test("can start again from a directory that holds only drain.json", async () => {
     const dir = privateDir();
-    writeDrain(dir, EMPTY_DRAIN, uid);
+    writeDrain(dir, EMPTY_DRAIN, held, uid);
     expect(await created(dir)).toEqual(newState(SHA, APPLIED));
   });
 
@@ -310,6 +310,7 @@ describe("createState", () => {
           },
         },
       },
+      held,
       uid,
     );
     await expect(created(dir)).rejects.toThrow("drain file");
@@ -648,6 +649,17 @@ describe("writeState", () => {
     expect(readOk(dir).attempts).toBe(0);
   });
 
+  test("asks the lock about the directory it writes to", async () => {
+    const dir = privateDir();
+    const state = await created(dir);
+    const seen: string[] = [];
+    const lock = new HeldLock((target) => {
+      seen.push(target);
+    });
+    writeState(dir, { ...state, attempts: 1 }, lock, uid);
+    expect(seen).toEqual([dir]);
+  });
+
   test("checks the lock last, just before the write", async () => {
     const dir = privateDir();
     const state = await created(dir);
@@ -869,6 +881,7 @@ describe("reinit", () => {
           },
         },
       },
+      held,
       uid,
     );
     await expect(reinit(dir, reinitInput, held, uid)).rejects.toThrow(
@@ -926,7 +939,7 @@ describe("reinit", () => {
 
   test("fails without a state file", async () => {
     const dir = privateDir();
-    writeDrain(dir, EMPTY_DRAIN, uid);
+    writeDrain(dir, EMPTY_DRAIN, held, uid);
     await expect(reinit(dir, reinitInput, held, uid)).rejects.toThrow(
       "does not exist",
     );
@@ -956,5 +969,59 @@ describe("reinit", () => {
       ),
     );
     expect(readOk(dir).applied_sha).toBe(SHA);
+  });
+});
+
+describe("the fence receives the state directory", () => {
+  function recordingLock(): { lock: HeldLock; seen: string[] } {
+    const seen: string[] = [];
+    return {
+      lock: new HeldLock((target) => {
+        seen.push(target);
+      }),
+      seen,
+    };
+  }
+
+  test("createState passes it for the state file and the drain file", async () => {
+    const dir = privateDir();
+    const { lock, seen } = recordingLock();
+    await createState(dir, INPUT, lock, uid);
+    expect([...new Set(seen)]).toEqual([dir]);
+  });
+
+  test("commitApplied passes it", async () => {
+    const dir = privateDir();
+    await inPost(dir);
+    const { lock, seen } = recordingLock();
+    await commitApplied(
+      dir,
+      {
+        images: { [WORKER]: { image_id: IMAGE_B, build_key: "k2" } },
+        outcome: "converged",
+        now: AT,
+        stackMatches: matches,
+      },
+      lock,
+      uid,
+    );
+    expect(seen).toEqual([dir]);
+  });
+
+  test("reinit passes it", async () => {
+    const dir = privateDir();
+    await created(dir);
+    const { lock, seen } = recordingLock();
+    await reinit(
+      dir,
+      {
+        applied_sha: NEXT,
+        applied_images: { [WORKER]: { image_id: IMAGE_B, build_key: "k2" } },
+        stackMatches: matches,
+      },
+      lock,
+      uid,
+    );
+    expect(seen).toEqual([dir]);
   });
 });

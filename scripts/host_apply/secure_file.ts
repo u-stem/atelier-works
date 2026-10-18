@@ -107,7 +107,7 @@ function assertName(name: string): asserts name is SecureFileName {
  * `lstat`は、パスの末尾が`/`や`/.`だとsymlinkを辿るので、`link/`のままでは検査をすり抜けるため。
  * `..`は字句で畳むと、途中のsymlinkを辿るカーネルの解決と違う場所を指すので、受けない。
  */
-function normalizeDir(dir: string): string | null {
+export function normalizeStateDir(dir: string): string | null {
   if (!isAbsolute(dir)) return null;
   if (dir.split("/").includes("..")) return null;
   return resolve(dir);
@@ -118,7 +118,7 @@ export function inspectStateDir(
   rawDir: string,
   uid: number,
 ): InspectStateDirResult {
-  const dir = normalizeDir(rawDir);
+  const dir = normalizeStateDir(rawDir);
   if (dir === null) {
     return {
       kind: "invalid",
