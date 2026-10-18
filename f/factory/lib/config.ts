@@ -3,7 +3,6 @@
 // 項目を後から足しても、
 // それより前に作った既存のリモートのリソースが検証を通るようにするため。
 
-import { parseGitHubRepoUrl } from "./github.ts";
 import {
   type FactoryConfig,
   type FactoryOwner,
@@ -17,6 +16,7 @@ import {
   isStringArray,
   JOB_TMP_MAX_AGE_SEC,
   type LabelerAssociation,
+  parseGitHubRepoUrl,
   type ReviewPostMode,
 } from "./types.ts";
 

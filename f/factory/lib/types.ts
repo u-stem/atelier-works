@@ -109,6 +109,33 @@ export function assertGitHubName(name: string): void {
   }
 }
 
+export type GitHubRepoRef = { readonly owner: string; readonly repo: string };
+
+const GITHUB_REPO_URL_PATTERN =
+  /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/*$/i;
+
+/**
+ * `factory_config.factory_repo`(httpsのclone URL)をownerとrepoに分ける。
+ * `https://github.com`の形だけを受け付ける。`lib/config.ts`の`isRepoAllowed`が
+ * 正規化に使うのと同じ形で、正規化の仕方(ホスト名の大文字小文字を問わない、
+ * 末尾の`.git`は省略可、末尾のスラッシュはいくつでもよい)もそろえている。
+ * URLに認証情報が埋め込まれていることがある
+ * (`https://user:token@github.com/...`)ため、エラーメッセージに元のURLは入れない。
+ */
+export function parseGitHubRepoUrl(url: string): GitHubRepoRef {
+  const match = GITHUB_REPO_URL_PATTERN.exec(url.trim());
+  const owner = match?.[1];
+  const repo = match?.[2];
+  if (owner === undefined || repo === undefined) {
+    throw new Error(
+      "github: factory_repo is not a GitHub repository URL (expected https://github.com/<owner>/<repo>)",
+    );
+  }
+  assertGitHubName(owner);
+  assertGitHubName(repo);
+  return { owner, repo };
+}
+
 /**
  * gitのコミットSHA(短縮形か完全形)。
  * GitHubは常に小文字で返すため、小文字の16進数だけを許す。
