@@ -103,9 +103,9 @@ export function forbiddenTreePaths(entries: readonly TreeEntry[]): string[] {
  *   大文字小文字を畳む照合やUnicode正規化で、ASCIIのファイルと同じ名前になりうる。
  * - ASCIIの小文字にそろえると、ディレクトリを含めて衝突するパス。大文字小文字を区別しないファイルシステムで同じファイルになる。
  * - composeが自動で読むoverrideファイル。定義を後から上書きできる。
- * - `.env`系のファイル(ディレクトリを問わない)。composeが補間に読み、中身は承認の対象にならない。
-   これは1つのパスが2つのファイルを指す問題ではなく、取り出した木に置かせない規則。
  * 前提は、1つのパスが1つのファイルを指すこと。
+ * 別の規則として、`.env`系のファイル(ディレクトリを問わない)も返す。
+ * composeが補間に読み、中身は承認の対象にならないため、取り出した木に置かせない。
  */
 export function suspiciousTreePaths(entries: readonly TreeEntry[]): string[] {
   const bad = new Set<string>();

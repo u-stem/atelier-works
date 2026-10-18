@@ -69,16 +69,21 @@ export type TableLimits = {
   readonly maxNodes: number;
   /** 走査した文字列とキーの合計のバイト数。 */
   readonly maxBytes: number;
+  /** 参照の統合と判定で触れた参照の延べ数。別名の掛け算を抑える。 */
+  readonly maxRefs: number;
 };
 
 const DEFAULT_LIMITS: TableLimits = {
   maxDepth: 64,
   maxNodes: 100_000,
   maxBytes: 8 * 1024 * 1024,
+  maxRefs: 1_000_000,
 };
 
 const SUBJECT_LIMIT = 120;
 const TOP = "(top)";
+/** 値の正規化に使う文字数の上限。別名で膨らむ値を、鍵の材料にしない。 */
+const CANONICAL_LIMIT = 256 * 1024;
 
 /** 承認でも通さない形。`detail`はエスケープした固定の文を持つ。 */
 class Rejection extends Error {
@@ -99,59 +104,87 @@ type Ref = {
   readonly inKey: boolean;
 };
 
+type RefSet = Map<string, Ref>;
+
 const REFERENCE = /\$\{?([A-Za-z_][A-Za-z0-9_]*)/g;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function refKey(ref: Ref): string {
+  return `${ref.name}\0${ref.inKey ? 1 : 0}\0${ref.scalar}`;
+}
 
 /** 文書の走査。同じノードの結果は1回だけ求めて、別名で共有された先でも使い回す。 */
 class Scanner {
   private nodes = 0;
   private bytes = 0;
-  private readonly memo = new Map<object, readonly Ref[]>();
+  private work = 0;
+  private readonly memo = new Map<object, RefSet>();
   private readonly active = new Set<object>();
 
   constructor(private readonly limits: TableLimits) {}
 
   /** コンテナ(配列かマップ)を1つ数える。深さと個数の上限を超えたら拒否する。 */
   touch(depth: number): void {
-    if (depth > this.limits.maxDepth)
+    if (depth > this.limits.maxDepth) {
       reject("the compose file is nested too deep");
+    }
     this.nodes += 1;
     if (this.nodes > this.limits.maxNodes) {
       reject("the compose file has too many nodes");
     }
   }
 
-  private count(text: string): void {
+  count(text: string): void {
     this.bytes += Buffer.byteLength(text, "utf8");
     if (this.bytes > this.limits.maxBytes) {
       reject("the compose file has too much text");
     }
   }
 
-  refsOfString(text: string, inKey: boolean): Ref[] {
+  /** 触れる参照の数を延べで数え、上限を超えたら拒否する。 */
+  private spend(amount: number): void {
+    this.work += amount;
+    if (this.work > this.limits.maxRefs) {
+      reject("the compose file has too many references");
+    }
+  }
+
+  /** 結果を読む側が、延べの数を払って中身を取り出す。 */
+  take(refs: RefSet): IterableIterator<Ref> {
+    this.spend(refs.size);
+    return refs.values();
+  }
+
+  private merge(into: RefSet, from: RefSet): void {
+    this.spend(from.size);
+    for (const [key, ref] of from) into.set(key, ref);
+  }
+
+  refsOfString(text: string, inKey: boolean): RefSet {
     this.count(text);
-    const refs: Ref[] = [];
+    const refs: RefSet = new Map();
     for (const match of text.matchAll(REFERENCE)) {
-      refs.push({ name: match[1] ?? "", scalar: text, inKey });
+      const ref = { name: match[1] ?? "", scalar: text, inKey };
+      refs.set(refKey(ref), ref);
     }
     return refs;
   }
 
-  refsOf(value: unknown, depth: number): readonly Ref[] {
+  refsOf(value: unknown, depth: number): RefSet {
     if (typeof value === "string") return this.refsOfString(value, false);
-    if (typeof value !== "object" || value === null) return [];
+    if (typeof value !== "object" || value === null) return new Map();
     const known = this.memo.get(value);
     if (known !== undefined) return known;
     if (this.active.has(value)) reject("the compose file refers to itself");
     this.touch(depth);
     this.active.add(value);
-    const refs: Ref[] = [];
+    const refs: RefSet = new Map();
     if (Array.isArray(value)) {
-      for (const item of value) refs.push(...this.refsOf(item, depth + 1));
+      for (const item of value) this.merge(refs, this.refsOf(item, depth + 1));
     } else {
       for (const [key, item] of Object.entries(value)) {
-        refs.push(...this.refsOfString(key, true));
-        refs.push(...this.refsOf(item, depth + 1));
+        this.merge(refs, this.refsOfString(key, true));
+        this.merge(refs, this.refsOf(item, depth + 1));
       }
     }
     this.active.delete(value);
@@ -160,61 +193,58 @@ class Scanner {
   }
 
   /** `environment`の参照。名前の側と値の側を分け、値なしで環境から取る書き方も拾う。 */
-  environmentRefs(value: unknown, depth: number): readonly Ref[] {
+  environmentRefs(value: unknown, depth: number): RefSet {
     if (typeof value !== "object" || value === null) {
       return this.refsOf(value, depth);
     }
     this.touch(depth);
-    const refs: Ref[] = [];
+    const refs: RefSet = new Map();
+    const addAll = (from: RefSet, scalar: (ref: Ref) => string) => {
+      this.spend(from.size);
+      for (const ref of from.values()) {
+        const next = { ...ref, scalar: scalar(ref) };
+        refs.set(refKey(next), next);
+      }
+    };
     if (Array.isArray(value)) {
       for (const item of value) {
         if (typeof item !== "string") {
-          refs.push(...this.refsOf(item, depth + 1));
+          this.merge(refs, this.refsOf(item, depth + 1));
           continue;
         }
         const at = item.indexOf("=");
         const left = at === -1 ? item : item.slice(0, at);
-        refs.push(
-          ...this.refsOfString(left, true).map((ref) => ({
-            ...ref,
-            scalar: item,
-          })),
-        );
-        if (at === -1) refs.push(...passThrough(left, this));
-        else {
-          refs.push(
-            ...this.refsOfString(item.slice(at + 1), false).map((ref) => ({
-              ...ref,
-              scalar: item,
-            })),
-          );
-        }
+        addAll(this.refsOfString(left, true), () => item);
+        if (at === -1) this.merge(refs, passThrough(left, this));
+        else addAll(this.refsOfString(item.slice(at + 1), false), () => item);
       }
       return refs;
     }
     for (const [key, item] of Object.entries(value)) {
-      refs.push(...this.refsOfString(key, true));
-      if (item === null) refs.push(...passThrough(key, this));
-      else refs.push(...this.refsOf(item, depth + 1));
+      this.merge(refs, this.refsOfString(key, true));
+      if (item === null) this.merge(refs, passThrough(key, this));
+      else {
+        addAll(this.refsOf(item, depth + 1), (ref) => `${key}=${ref.scalar}`);
+      }
     }
     return refs;
   }
 
   /** `build.args`の、値なしで環境から取る書き方。 */
-  buildArgRefs(build: unknown, depth: number): readonly Ref[] {
-    if (!isRecord(build) || build.args === undefined) return [];
+  buildArgRefs(build: unknown, depth: number): RefSet {
+    const refs: RefSet = new Map();
+    if (!isRecord(build) || build.args === undefined) return refs;
     const args = build.args;
     this.touch(depth);
-    const refs: Ref[] = [];
     if (Array.isArray(args)) {
       for (const item of args) {
         if (typeof item === "string" && !item.includes("=")) {
-          refs.push(...passThrough(item, this));
+          this.merge(refs, passThrough(item, this));
         }
       }
     } else if (isRecord(args)) {
       for (const [key, item] of Object.entries(args)) {
-        if (item === null) refs.push(...passThrough(key, this));
+        if (item === null) this.merge(refs, passThrough(key, this));
       }
     }
     return refs;
@@ -222,15 +252,39 @@ class Scanner {
 }
 
 /**
- * 値なしの書き方(`NAME`だけ、または`NAME: null`)は、環境の同名の変数を渡す。
+ * 値なしの書き方(`NAME`だけ、または`NAME: null`)は、環境の同名の変数を値として渡す。
  * 前後の空白は除いて名前とみなす。名前の内側に空白があれば拒否する。
  */
-function passThrough(raw: string, scanner: Scanner): Ref[] {
+function passThrough(raw: string, scanner: Scanner): RefSet {
+  const refs: RefSet = new Map();
   const name = raw.trim();
   if (/\s/.test(name)) reject("an environment entry has a space in its name");
-  if (!ENV_NAME.test(name)) return [];
-  scanner.refsOfString(name, true);
-  return [{ name, scalar: name, inKey: true }];
+  if (!ENV_NAME.test(name)) return refs;
+  scanner.count(name);
+  const ref = { name, scalar: name, inKey: false };
+  refs.set(refKey(ref), ref);
+  return refs;
+}
+
+/** 値を、キーを並べた文字列にする。上限を超える値は拒否する(別名で膨らむ値の鍵を作らない)。 */
+function canonical(value: unknown): string {
+  let left = CANONICAL_LIMIT;
+  const walk = (node: unknown): string => {
+    left -= 1;
+    if (left < 0) reject("a value is too large to be compared");
+    if (Array.isArray(node)) return `[${node.map(walk).join(",")}]`;
+    if (isRecord(node)) {
+      return `{${Object.keys(node)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${walk(node[key])}`)
+        .join(",")}}`;
+    }
+    const text = JSON.stringify(node) ?? "null";
+    left -= text.length;
+    if (left < 0) reject("a value is too large to be compared");
+    return text;
+  };
+  return walk(value);
 }
 
 function digest(parts: readonly string[]): string {
@@ -279,18 +333,20 @@ function imageViolations(
   const out: ComposeViolation[] = [];
   const hasImage = Object.hasOwn(node, "image");
   const image = node.image;
+  const nonString = () =>
+    violation(
+      "image",
+      service,
+      "image",
+      "(not a string)",
+      `non-string:${canonical(image)}`,
+    );
   if (expected === null) {
     if (hasImage) {
       out.push(
         typeof image === "string"
           ? violation("image", service, "image", image, image)
-          : violation(
-              "image",
-              service,
-              "image",
-              "(not a string)",
-              "non-string",
-            ),
+          : nonString(),
       );
     }
     if (!Object.hasOwn(node, "build")) {
@@ -301,9 +357,7 @@ function imageViolations(
   if (!hasImage || image === undefined) {
     out.push(violation("image", service, "image", "(none)", "none"));
   } else if (typeof image !== "string") {
-    out.push(
-      violation("image", service, "image", "(not a string)", "non-string"),
-    );
+    out.push(nonString());
   } else if (!imageMatches(expected, image)) {
     if (image.includes("$")) {
       reject(`the image of ${service} has a variable outside the tag`);
@@ -311,7 +365,15 @@ function imageViolations(
     out.push(violation("image", service, "image", image, image));
   }
   if (Object.hasOwn(node, "build")) {
-    out.push(violation("image", service, "build", "build", "build"));
+    out.push(
+      violation(
+        "image",
+        service,
+        "build",
+        "build",
+        `build:${canonical(node.build)}`,
+      ),
+    );
   }
   return out;
 }
@@ -326,14 +388,15 @@ function judge(
   const allowed = Object.hasOwn(COMPOSE_SECRET_TABLE, ref.name)
     ? COMPOSE_SECRET_TABLE[ref.name]
     : undefined;
+  const material = `${ref.name}\0${ref.scalar}`;
   if (allowed !== undefined) {
     if (allowed.includes(service) && field === "environment" && !ref.inKey) {
       return null;
     }
-    return violation("secret", service, field, ref.name, ref.scalar);
+    return violation("secret", service, field, ref.name, material);
   }
   if (ref.name === "HOME" || ref.name === "PATH") {
-    return violation("secret", service, field, ref.name, ref.scalar);
+    return violation("secret", service, field, ref.name, material);
   }
   return reject(`variable ${ref.name.slice(0, 64)} is not allowed`);
 }
@@ -362,8 +425,11 @@ function scan(parsed: unknown, limits: TableLimits): ComposeViolation[] {
   if (!isRecord(services)) reject("services is not a map");
   scanner.touch(1);
   const found = new Map<string, ComposeViolation>();
-  const add = (item: ComposeViolation | null) => {
-    if (item !== null) found.set(item.id, item);
+  const judgeAll = (refs: RefSet, service: string, field: string) => {
+    for (const ref of scanner.take(refs)) {
+      const item = judge(ref, service, field);
+      if (item !== null) found.set(item.id, item);
+    }
   };
   for (const [name, node] of Object.entries(services)) {
     if (!COMPOSE_SERVICE_ALLOWLIST.includes(name)) {
@@ -371,23 +437,25 @@ function scan(parsed: unknown, limits: TableLimits): ComposeViolation[] {
     }
     if (!isRecord(node)) reject(`service ${name} is not a map`);
     scanner.touch(2);
-    for (const item of imageViolations(name, node)) add(item);
+    for (const item of imageViolations(name, node)) found.set(item.id, item);
     for (const [field, value] of Object.entries(node)) {
-      const refs =
+      judgeAll(scanner.refsOfString(field, true), name, field);
+      judgeAll(
         field === "environment"
           ? scanner.environmentRefs(value, 3)
-          : scanner.refsOf(value, 3);
-      for (const ref of refs) add(judge(ref, name, field));
+          : scanner.refsOf(value, 3),
+        name,
+        field,
+      );
       if (field === "build") {
-        for (const ref of scanner.buildArgRefs(value, 4)) {
-          add(judge(ref, name, field));
-        }
+        judgeAll(scanner.buildArgRefs(value, 4), name, field);
       }
     }
   }
   for (const [key, value] of Object.entries(parsed)) {
     if (key === "services") continue;
-    for (const ref of scanner.refsOf(value, 1)) add(judge(ref, TOP, key));
+    judgeAll(scanner.refsOfString(key, true), TOP, key);
+    judgeAll(scanner.refsOf(value, 1), TOP, key);
   }
   return sorted(found);
 }
