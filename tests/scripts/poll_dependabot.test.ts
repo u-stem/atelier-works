@@ -1019,6 +1019,24 @@ describe("processDependabotPr collect results", () => {
     );
   });
 
+  test("hands a group over the limit to a person with the collect reason", async () => {
+    const { outcome } = await run({
+      collect: { kind: "needs_human", reason: "too many packages changed: 4" },
+    });
+
+    expect(noteOf(outcome)).toBe(
+      dependabotReason("collect", "too many packages changed: 4"),
+    );
+  });
+
+  test("records the work item of a group over the limit", async () => {
+    const { h } = await run({
+      collect: { kind: "needs_human", reason: "too many packages changed: 4" },
+    });
+
+    expect(h.inserted).toHaveLength(1);
+  });
+
   test("waits without a work item while the collection waits", async () => {
     const { h } = await run({
       collect: { kind: "wait", reason: "GitHub is temporarily unavailable" },
