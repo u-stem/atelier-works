@@ -308,13 +308,59 @@ export type TablePrCheck =
   | { readonly kind: "mismatch" }
   | { readonly kind: "unknown_reviewers" };
 
-/** 表の候補を、RESTの応答で確かめる。 */
+/**
+ * 表のPRの候補を、`getPr`と`getIssue`の応答で確かめ、候補の項目を作る。
+ * 上から当てて、最初に当たったものを採る。
+ * 1. 応答のリポジトリか番号が表の行と違うなら`mismatch`。名前の付け替えか移管の途中である。
+ * 2. 閉じていれば`drop`(`closed`)。
+ * 3. レビューか修正のラベル、またはPATのアカウントのassigneeがあれば`ok`。
+ * 4. 依頼先を読めなければ`unknown_reviewers`。決められないまま外すと、依頼で起きるはずのレビューが黙って止まる。
+ * 5. PATのアカウントへの依頼があれば`ok`。
+ * 6. それ以外は`drop`(`not_target`)。
+ * チームへの依頼はRESTでも一員かを決められないので、`not_target`になる。
+ * 項目のownerとrepoは応答の綴りにする。検索の経路と同じ綴りで作業項目を作るためである。
+ */
 export function confirmTablePr(
-  _row: GhPullRequest,
-  _pr: PullRequest,
-  _asIssue: Issue,
-  _viewer: Viewer,
-  _labels: { readonly reviewLabel: string; readonly fixLabel: string },
+  row: GhPullRequest,
+  pr: PullRequest,
+  asIssue: Issue,
+  viewer: Viewer,
+  labels: { readonly reviewLabel: string; readonly fixLabel: string },
 ): TablePrCheck {
-  return { kind: "drop", reason: "not_target" };
+  const repository = asIssue.repository;
+  if (
+    repository === null ||
+    repository.owner.toLowerCase() !== row.owner.toLowerCase() ||
+    repository.repo.toLowerCase() !== row.repo.toLowerCase() ||
+    asIssue.number !== row.number ||
+    pr.number !== row.number
+  ) {
+    return { kind: "mismatch" };
+  }
+  if (pr.state !== "open") {
+    return { kind: "drop", reason: "closed" };
+  }
+  const viewerLogin = viewer.login.toLowerCase();
+  const matched =
+    hasLabel(asIssue.labels, labels.reviewLabel) ||
+    hasLabel(asIssue.labels, labels.fixLabel) ||
+    asIssue.assignees.some((login) => login.toLowerCase() === viewerLogin);
+  if (!matched) {
+    if (pr.requestedReviewerIds === null) {
+      return { kind: "unknown_reviewers" };
+    }
+    if (!pr.requestedReviewerIds.includes(viewer.id)) {
+      return { kind: "drop", reason: "not_target" };
+    }
+  }
+  return {
+    kind: "ok",
+    item: {
+      owner: repository.owner,
+      repo: repository.repo,
+      number: row.number,
+      title: pr.title,
+      htmlUrl: `https://github.com/${repository.owner}/${repository.repo}/pull/${String(row.number)}`,
+    },
+  };
 }
