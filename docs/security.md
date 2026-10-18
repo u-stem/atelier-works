@@ -3961,7 +3961,7 @@ GitHubでは、ラベルを付けるのにtriage以上の権限が要る。
 確かめるのは、PRが開いていることと、ラベル、PATのアカウントへの依頼、assigneeのどれかに今も当たることである。
 閉じたPRと、どれにも当たらなくなったPRは外す。
 assigneeや依頼を外された後の古い行から、対象でないPRのレビューを始めないためである。
-作者の確認、forkの確認、付与者の確認は、見つけた元によらず、`buildPrCandidate`がRESTの値で行う。
+作者の確認、forkの確認、付与者の確認は、見つけた元によらず、`buildPrCandidate`がRESTで読んだ値を`decidePrActions`と`confirmLabeler`が判定する。
 チームへのレビューの依頼が付いたPRのある所有者は、表ではPATのアカウントに宛てた依頼かを決められないので、検索に戻す。
 
 `labeled`イベントは`author_association`を持たない。
