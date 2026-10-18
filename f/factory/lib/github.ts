@@ -3841,6 +3841,28 @@ export async function getBranchRuleCount(
   return parsed.length;
 }
 
+/**
+ * `GET repos/{owner}/{repo}/rules/branches/{branch}`が返す、ブランチに効くルールを、解釈せずに返す。
+ * 複数ページにまたがるときは続きも読む。応答が配列でなければ`GitHubResponseError`を投げる。
+ * 必須checkの取り出しと検証は、呼び出し側(`dependabot_support.ts`の`requiredChecksFromRules`)が行う。
+ */
+export async function listBranchRules(
+  client: GhClient,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<unknown[]> {
+  validateOwnerRepo(owner, repo);
+  return paginateGhApi<unknown>(
+    client,
+    `repos/${owner}/${repo}/rules/branches/${encodeURIComponent(branch)}?per_page=100`,
+    (parsed, context) => {
+      if (!Array.isArray(parsed)) throw unexpectedShape(context);
+      return parsed;
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // レビュースレッド(GraphQL)。再レビューで指摘が0件のとき、
 // `pr_review_post.ts`はPR上でまだ解決していないFactory自身の`pr_review`の
