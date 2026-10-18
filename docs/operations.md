@@ -2368,13 +2368,13 @@ dependabotが開いた依存の更新PRを、Factoryが評価して自動でマ�
 次の順に進める。
 
 1. `dependabot_enabled`を`true`、`dependabot_merge_enabled`を`false`にして試運転を続ける。
-2. `dependabot_group_enabled`を`true`にする。
-3. グループのPRが来たら、作業項目が`dependabot dry run: merge allowed`まで進むことを確かめる。
+2. グループのPRが作られる設定になっているかを、リポジトリの設定の「グループのセキュリティ更新」で確かめる。
+3. `dependabot_group_enabled`を`true`にする。
+4. グループのPRが来たら、作業項目が`dependabot dry run: merge allowed`まで進むことを確かめる。
    人に回った理由と、影響調査の所見も読み、判断が妥当かを確かめる。
    妥当なら、フラグを`true`のままにする。
 
 `dependabot_merge_enabled`が`false`の間は、`dependabot_group_enabled`を`true`にしても何もマージしない。
-グループのPRは、リポジトリの設定の「グループのセキュリティ更新」を有効にしたときにだけ作られる。
 問題があれば、`dependabot_group_enabled`を`false`に戻す。
 マージの直前にもこの項目を読み直すので、動いているフローも人に回る。
 
