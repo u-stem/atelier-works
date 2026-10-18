@@ -3774,9 +3774,20 @@ shaは40桁の小文字の16進で指定する。ブランチ名やタグ名は�
 1. ホストのメインのチェックアウトで、`git fetch origin`を実行して`origin/main`を更新する。
    リンクされたworktreeでは動かない。
    `HEAD`が`origin/main`に含まれ、実行するファイルが`HEAD`と同じでなければ、`approve`は止まる。
-2. 適用済みのshaを確かめる。
-   値は、`scripts/record-host-applied.sh`が共有ボリュームに書く印である。
-   `docker compose -f infra/docker-compose.yml exec -T windmill_worker cat /var/lib/factory/host_applied_sha`で読める。
+2. 適用済みのshaを、ホストのcheckoutの履歴で確かめる。
+   `git reflog`で、最後に`mise run up`か`mise run deploy`を実行したときの`HEAD`を探す。
+   実行の直前に`git pull`していれば、その`git pull`で`HEAD`が動いた行が手がかりになる。
+   reflogは`HEAD`の動きだけを記録し、`mise run up`の実行は記録しない。
+   実行した時点は、端末のシェルの履歴などで特定する。
+   `scripts/record-host-applied.sh`が共有ボリュームに書く印は、`--applied`の値には使わない。
+   workerのジョブが書き換えられるためである。
+   印は照合にだけ使う。次のコマンドで読み、reflogで確かめた値と食い違えば、承認を始めずに原因を調べる。
+
+   ```bash
+   docker compose -f infra/docker-compose.yml exec -T windmill_worker cat /var/lib/factory/host_applied_sha | LC_ALL=C grep -xE '[0-9a-f]{40}'
+   ```
+
+   `grep`は、40桁の小文字の16進の行だけを通す。印に端末の制御文字が入っていても、端末に出さないためである。
 3. リポジトリのトップで、承認するコミットを指定して実行する。
    `<sha>`は7〜40桁の小文字の16進で、ブランチ名は受け付けない。
    `./`で始めるのは、`bun run`が同名の`package.json`のscriptを先に実行するのを避けるためである。
