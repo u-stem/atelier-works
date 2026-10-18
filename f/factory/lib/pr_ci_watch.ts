@@ -31,6 +31,12 @@ import type {
 } from "./db.ts";
 import type { NotifyBestEffortResult, NotifyEvent } from "./discord.ts";
 import {
+  judgeGhOwnerCoverage,
+  judgeGhOwnerRepos,
+  judgeGhRepoFreshness,
+  usableGhPullRequests,
+} from "./gh_collect_read.ts";
+import {
   GitHubHttpError,
   GitHubRateLimitError,
   type OpenAuthoredPrSearchItem,
@@ -46,7 +52,7 @@ import {
 } from "./github.ts";
 import type { Logger } from "./log.ts";
 import { shortSha, type WorkflowRun } from "./main_ci_support.ts";
-import { requiredRepos } from "./poll_source.ts";
+import { requiredRepos, usableTableRows } from "./poll_source.ts";
 import { type LabelerPolicy, labelerPolicyFor } from "./poll_support.ts";
 import {
   classifyHeadFailure,
@@ -60,7 +66,9 @@ import {
   type FixItemState,
 } from "./pr_ci_fix_recovery.ts";
 import {
+  type HumanPrCandidate,
   humanPrAuthors,
+  humanPrCandidatesFromRows,
   isAllowedPrAuthor,
   isHumanPrCandidate,
   notifyPolicyFor,
@@ -1011,6 +1019,159 @@ function humanScopeLabel(scope: OpenAuthoredPrsScope): string {
   return scope.kind === "repo" ? `${scope.owner}/${scope.repo}` : scope.owner;
 }
 
+/** 検索を続けてよいか。rate limitか時間の予算で閉じたら、以降の検索を飛ばす。 */
+type HumanSearchState = { open: boolean };
+
+/** 表から範囲を読んだ結果。使えなければ、検索に戻す理由を持つ。 */
+type HumanTableRead =
+  | { readonly kind: "rows"; readonly candidates: HumanPrCandidate[] }
+  | { readonly kind: "stale"; readonly reason: string };
+
+/**
+ * 範囲を表で探す。オーナーはリポジトリごとの判定を、リポジトリの範囲はその1つの判定を当てる。
+ * 読めなかった範囲は、失敗として記録して検索に戻す。鮮度の不足は失敗にしない。
+ * 収集の停止は鮮度の監視が知らせ、戻した回数と理由は結果に出る。
+ */
+async function readHumanTable(
+  context: Context,
+  human: PrCiHumanDiscoveryDeps,
+  scope: OpenAuthoredPrsScope,
+  authors: readonly string[],
+): Promise<HumanTableRead> {
+  const { deps } = context;
+  if (scope.kind === "owner") {
+    let snapshot: GhOwnerOpenPrSnapshot;
+    try {
+      snapshot = await human.readOwnerPrs(scope.owner);
+    } catch (err) {
+      await recordFailureOf(context, `read_gh_owner_prs:${scope.owner}`, err);
+      return { kind: "stale", reason: "read_failed" };
+    }
+    const judged = judgeGhOwnerRepos(scope.owner, snapshot, human.staleAfterMs);
+    const coverage = judgeGhOwnerCoverage(
+      scope.owner,
+      judged,
+      deps.isRepoAllowed,
+      human.requiredReposOf(scope.owner),
+    );
+    if (coverage.kind === "stale") {
+      return { kind: "stale", reason: coverage.reason };
+    }
+    const rows = usableTableRows(scope.owner, judged, deps.isRepoAllowed);
+    return {
+      kind: "rows",
+      candidates: humanPrCandidatesFromRows(rows, authors),
+    };
+  }
+  let snapshot: GhRepoOpenPrSnapshot;
+  try {
+    snapshot = await human.readRepoPrs(scope.owner, scope.repo);
+  } catch (err) {
+    await recordFailureOf(
+      context,
+      `read_gh_repo_prs:${scope.owner}/${scope.repo}`,
+      err,
+    );
+    return { kind: "stale", reason: "read_failed" };
+  }
+  const freshness = judgeGhRepoFreshness(
+    snapshot.repo,
+    snapshot.prs,
+    snapshot.db_now,
+    human.staleAfterMs,
+  );
+  if (freshness.kind === "stale") {
+    return { kind: "stale", reason: freshness.reason };
+  }
+  const repoId = snapshot.repo?.repo_id ?? null;
+  const rows =
+    repoId === null
+      ? []
+      : usableGhPullRequests(scope.owner, scope.repo, repoId, snapshot.prs);
+  return {
+    kind: "rows",
+    candidates: humanPrCandidatesFromRows(rows, authors),
+  };
+}
+
+/**
+ * 範囲を作者ごとに検索し、見つかったPRを候補にする。検索を1回でも呼んだかも返す。
+ * rate limitの検索は数えて閉じる。範囲がオーナーで一部の作者だけが拒まれた(422)ときは、
+ * 改名や削除とみなして、その作者を飛ばし、警告のログに残す。
+ * 範囲がリポジトリのときと、範囲の全員が拒まれたときは、失敗として記録する。
+ */
+async function searchHumanScope(
+  context: Context,
+  human: PrCiHumanDiscoveryDeps,
+  scope: OpenAuthoredPrsScope,
+  authors: readonly string[],
+  search: HumanSearchState,
+  outOfTime: () => boolean,
+): Promise<{ attempted: boolean; candidates: HumanPrCandidate[] }> {
+  const { deps } = context;
+  const candidates: HumanPrCandidate[] = [];
+  const rejected: { author: string; error: GitHubHttpError }[] = [];
+  let attempted = false;
+  for (const author of authors) {
+    if (!search.open) break;
+    if (outOfTime()) {
+      deps.log.warn("pr ci human search stopped by the time budget");
+      search.open = false;
+      break;
+    }
+    attempted = true;
+    try {
+      for (const item of await human.search(scope, author)) {
+        candidates.push({
+          owner: item.owner,
+          repo: item.repo,
+          number: item.number,
+          updatedAtMs: item.updatedAtMs,
+          authorUnknown: false,
+        });
+      }
+    } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        deps.log.warn("pr ci human search stopped by the rate limit", {
+          error: errorMessage(err),
+        });
+        context.counters.human_search_rate_limited += 1;
+        search.open = false;
+        break;
+      }
+      if (
+        scope.kind === "owner" &&
+        err instanceof GitHubHttpError &&
+        err.status === 422
+      ) {
+        rejected.push({ author, error: err });
+        continue;
+      }
+      await recordFailureOf(
+        context,
+        `search_human_prs:${humanScopeLabel(scope)}:${author}`,
+        err,
+      );
+    }
+  }
+  const firstRejected = rejected[0];
+  if (firstRejected === undefined) return { attempted, candidates };
+  if (rejected.length === authors.length) {
+    // 範囲の全員が拒まれたのは、作者の改名や削除ではなく、範囲の側の問題かもしれない。
+    await recordFailureOf(
+      context,
+      `search_human_prs:${humanScopeLabel(scope)}`,
+      firstRejected.error,
+    );
+  } else {
+    deps.log.warn("pr ci human search skipped authors that GitHub rejected", {
+      scope: humanScopeLabel(scope),
+      authors: rejected.map((entry) => entry.author),
+    });
+  }
+  return { attempted, candidates };
+}
+
 /**
  * 許可された人が作ったPRを検索し、見つかったPRの今のheadを記録する。
  * 行の`work_item_id`はNULLにする。追跡対象のFactoryのPRと、Factoryの実装ブランチの形のブランチは記録しない。
@@ -1038,59 +1199,58 @@ async function discoverHuman(context: Context): Promise<void> {
     overBudget(context) ||
     deps.now().getTime() - startedAt >= HUMAN_DISCOVERY_BUDGET_MS;
 
-  const found: OpenAuthoredPrSearchItem[] = [];
+  const found: HumanPrCandidate[] = [];
   const authors = humanPrAuthors(human.policy);
-  let searching = true;
+  const search: HumanSearchState = { open: true };
+  const countFallback = (reason: string): void => {
+    const reasons = context.counters.human_fallback_reasons;
+    reasons[reason] = (reasons[reason] ?? 0) + 1;
+  };
+  let stoppedByTime = false;
   for (const scope of human.scopes) {
-    const rejected: { author: string; error: GitHubHttpError }[] = [];
-    for (const author of authors) {
-      if (!searching) break;
-      if (outOfTime()) {
-        deps.log.warn("pr ci human search stopped by the time budget");
-        searching = false;
-        break;
-      }
-      try {
-        found.push(...(await human.search(scope, author)));
-      } catch (err) {
-        if (err instanceof GitHubRateLimitError) {
-          deps.log.warn("pr ci human search stopped by the rate limit", {
-            error: errorMessage(err),
-          });
-          context.counters.human_search_rate_limited += 1;
-          searching = false;
-          break;
-        }
-        if (
-          scope.kind === "owner" &&
-          err instanceof GitHubHttpError &&
-          err.status === 422
-        ) {
-          rejected.push({ author, error: err });
-          continue;
-        }
-        await recordFailureOf(
-          context,
-          `search_human_prs:${humanScopeLabel(scope)}:${author}`,
-          err,
-        );
-      }
-    }
-    const firstRejected = rejected[0];
-    if (firstRejected === undefined) continue;
-    if (rejected.length === authors.length) {
-      // 範囲の全員が拒まれたのは、作者の改名や削除ではなく、範囲の側の問題かもしれない。
-      await recordFailureOf(
-        context,
-        `search_human_prs:${humanScopeLabel(scope)}`,
-        firstRejected.error,
+    if (human.source !== "db") {
+      found.push(
+        ...(
+          await searchHumanScope(
+            context,
+            human,
+            scope,
+            authors,
+            search,
+            outOfTime,
+          )
+        ).candidates,
       );
-    } else {
-      deps.log.warn("pr ci human search skipped authors that GitHub rejected", {
-        scope: humanScopeLabel(scope),
-        authors: rejected.map((entry) => entry.author),
-      });
+      continue;
     }
+    if (outOfTime()) {
+      if (!stoppedByTime) {
+        deps.log.warn("pr ci human discovery stopped by the time budget");
+        stoppedByTime = true;
+      }
+      countFallback("out_of_time");
+      continue;
+    }
+    const table = await readHumanTable(context, human, scope, authors);
+    if (table.kind === "rows") {
+      found.push(...table.candidates);
+      continue;
+    }
+    if (!search.open) {
+      countFallback("search_rate_limited");
+      continue;
+    }
+    countFallback(table.reason);
+    const searched = await searchHumanScope(
+      context,
+      human,
+      scope,
+      authors,
+      search,
+      outOfTime,
+    );
+    if (searched.attempted) context.counters.human_fallback_searches += 1;
+    found.push(...searched.candidates);
   }
   found.sort((a, b) => b.updatedAtMs - a.updatedAtMs);
 
