@@ -1977,7 +1977,7 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 `tests/scripts/host_apply_imports.test.ts`が、次を固定する。
 
 - 子プロセスを起動する字句(`Bun.spawn`、`Bun.spawnSync`、`child_process`、`Bun.$`)は、`spawn_runner.ts`にだけある。
-- 実行口を取り込むのは、入口だけである。
+- 実行口を取り込むのは、入口だけである。入口が取る値は`createRunner`だけで、起動の部品は外に出さない。
 - 指定を発行できるのは、`run_git.ts`、`run_fetch.ts`、`host_probe.ts`だけである。各モジュールが`command.ts`から取る名前も、一覧に閉じる。
 - 検査を飛ばす入口は、本番のモジュールが取り込まず、`acceptUnchecked`を真にするコードも無い。
 - 承認の道具は、実行口と指定のモジュールを取り込まない。
