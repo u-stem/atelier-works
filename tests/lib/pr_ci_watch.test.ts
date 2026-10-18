@@ -6396,7 +6396,7 @@ describe("the candidates from the table of the collection", () => {
     });
   });
 
-  describe("a candidate that GitHub says is not found", () => {
+  describe("a candidate that the write token cannot read", () => {
     function missingSetup(): Setup {
       return dbSetup(
         ownerTable([ghPrRow(40)]),
@@ -6461,15 +6461,42 @@ describe("the candidates from the table of the collection", () => {
       ]);
     });
 
-    test("still treats a 403 of a table candidate as a permission error", async () => {
+    test("does not add the notice when GitHub says forbidden for a table candidate", async () => {
       const h = harness(
         dbSetup(
           ownerTable([ghPrRow(40)]),
           {},
-          {
-            prs: { [HUMAN_KEY]: deniedError(403) },
-          },
+          { prs: { [HUMAN_KEY]: deniedError(403) } },
         ),
+      );
+      await runPrCiWatch(h.deps);
+      expect(h.notices).toEqual([]);
+    });
+
+    test("logs a table candidate that GitHub says is forbidden", async () => {
+      const h = harness(
+        dbSetup(
+          ownerTable([ghPrRow(40)]),
+          {},
+          { prs: { [HUMAN_KEY]: deniedError(403) } },
+        ),
+      );
+      await runPrCiWatch(h.deps);
+      expect(
+        h.logs.find(
+          (line) =>
+            line.message ===
+            "pr ci skipped a table candidate that could not be read",
+        )?.fields,
+      ).toEqual({ repo: "acme/widgets", pr: 40 });
+    });
+
+    test("still adds the notice when GitHub says forbidden for a candidate of the search", async () => {
+      const h = harness(
+        humanSetup({
+          human: { found: { alice: [hit(40)] } },
+          prs: { [HUMAN_KEY]: deniedError(403) },
+        }),
       );
       await runPrCiWatch(h.deps);
       expect(h.notices.map((notice) => notice.kind)).toEqual([
