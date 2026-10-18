@@ -692,6 +692,9 @@ function stripComments(source: string): string {
     .replace(/(^|\s)\/\/.*$/gm, "$1");
 }
 
+/** テンプレートリテラルの置換の開き。例の中に書くと、リンターが文字列の中の書き損じと誤認するため、分けて書く。 */
+const INTERP = "$" + "{";
+
 const ENTRY_NAME = "host-apply.ts";
 const RUNNER_NAME = "spawn_runner.ts";
 
@@ -806,6 +809,46 @@ describe("the lexical checker", () => {
       "a(); // b\nBun.spawn(y); // c",
       "x.ts",
     ],
+    [
+      "a Bun call after a string that holds two slashes",
+      'const s = " //"; Bun.spawn(["x"]);',
+      "x.ts",
+    ],
+    [
+      "a Bun call between strings that hold comment marks",
+      'const a = "/*"; Bun.spawn(x); const b = "*/";',
+      "x.ts",
+    ],
+    [
+      "a Bun call after a template that holds two slashes",
+      "const t = `a // b`; Bun.spawn(x);",
+      "x.ts",
+    ],
+    [
+      "a Bun call in a template interpolation",
+      ["const t = `", INTERP, "Bun.spawn(x)}`;"].join(""),
+      "x.ts",
+    ],
+    [
+      "a Bun call in a nested template interpolation",
+      ["const t = `a", INTERP, "`b", INTERP, "Bun.spawn(x)}`}`;"].join(""),
+      "x.ts",
+    ],
+    [
+      "a Bun call after a string with an escaped quote",
+      'const s = "a\\" //"; Bun.spawn(x);',
+      "x.ts",
+    ],
+    ["a unicode escape in an identifier", "Bun.sp\\u0061wn(x);", "x.ts"],
+    ["a unicode escape in a member name", "const p = pro\\u0063ess;", "x.ts"],
+    ["global", "global.process.env;", "x.ts"],
+    ["self", "self.Bun.spawn(x);", "x.ts"],
+    [
+      "a constructor member",
+      "x.constructor.constructor('return 1')();",
+      "x.ts",
+    ],
+    ["a computed constructor member", 'x["constructor"]("y");', "x.ts"],
   ])("flags %s", (_name, source, name) => {
     expect(lexicalViolations(source, name)).not.toEqual([]);
   });
@@ -835,6 +878,20 @@ describe("the lexical checker", () => {
     ["a type named Worker", 'type Worker = "windmill_worker";', "x.ts"],
     ["a name that contains a keyword", "const refetch = processStart;", "x.ts"],
     ["a url in a string", 'const u = "https://github.com/x/y";', "x.ts"],
+    ["an escaped brace in a string", 'const e = "\\\\u{" + h;', "x.ts"],
+    ["a unicode escape in a comment", "// pro\\u0063ess\n", "x.ts"],
+    ["a constructor method of a class", "class A { constructor() {} }", "x.ts"],
+    [
+      "a name in a string that holds a comment mark",
+      'const s = "// Bun.spawn"; run(s);',
+      "x.ts",
+    ],
+    [
+      "a name in a template text",
+      ["const t = `Bun.spawn ", INTERP, "a}`;"].join(""),
+      "x.ts",
+    ],
+    ["a variable named like self", "const myself = 1;", "x.ts"],
   ])("accepts %s", (_name, source, name) => {
     expect(lexicalViolations(source, name)).toEqual([]);
   });
