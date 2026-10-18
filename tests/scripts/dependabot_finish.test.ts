@@ -2250,6 +2250,7 @@ describe("runDependabotFinish checks the repository owner before it writes", () 
         fixLabel: FIX_LABEL,
         enabled: true,
         mergeEnabled: true,
+        repoPolicy: "primary",
       }),
     ).rejects.toBeInstanceOf(GitHubHttpError);
   });
