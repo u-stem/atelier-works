@@ -109,7 +109,7 @@ locks:
   f/factory/lib/pr_conflict_fix_holds: 09bdde2b438524330e34a19bc5337aa961bc9ab1bc774afbb24b3eb62fb83981
   f/factory/lib/pr_conflict_fix_recovery: adaa381f1013323d9fcd27019329d849d7ba525da75bf7a1a0ca3bd5acca74d9
   f/factory/lib/pr_conflict_support: ed43026581af4725569fe81138f9f36d6a95747a11658ff9e54abe1aa92e4c54
-  f/factory/lib/pr_conflict_watch: c212920acfad54668ca1bddd6a7d2c6a2311077022f10e9d31cdaf6877670c29
+  f/factory/lib/pr_conflict_watch: f5cdcdef3350d85a937cef5326013a0efffbd7d3085c56342174a7a4cea8e7ae
   f/factory/lib/pr_fix_launch: 683afe25d8014199f9e5fb1008a9581b7a0588dab1797e6be6526c485557751b
   f/factory/lib/pr_review_retry: ffa95180ff2167b7a3a96bcd8d4e1da50747c61b6e193ba361e7ad2ad771c789
   f/factory/lib/process_lock: fc58b11fe8b523e05bf1f27d2dd05dc9403b339e74b277e681c8c8a1cceb7eaa
