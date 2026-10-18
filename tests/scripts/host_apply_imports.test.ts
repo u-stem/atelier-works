@@ -685,102 +685,237 @@ describe("the value importers of held_lock", () => {
   });
 });
 
+/** 走査の結果。 */
+type Scan = {
+  /** コメントを除いたソース。文字列と正規表現の中身は残す。 */
+  readonly code: string;
+  /** コメントを除き、文字列と正規表現の中身を空にしたソース。テンプレートの置換の中のコードは残す。 */
+  readonly bare: string;
+  /** 文字列とテンプレートの本文。正規表現は含めない。 */
+  readonly strings: readonly string[];
+  /** 読み違えた箇所。あれば、以降の検査を信用できないので違反として報告する。 */
+  readonly problems: readonly string[];
+};
+
+/** 直前がこの語なら、続く`/`は正規表現の始まりとみなす。 */
+const REGEX_KEYWORDS = [
+  "return",
+  "typeof",
+  "case",
+  "do",
+  "else",
+  "in",
+  "of",
+  "new",
+  "void",
+  "delete",
+  "throw",
+  "yield",
+  "await",
+  "instanceof",
+];
+
+/** 直前がこの記号なら、続く`/`は正規表現の始まりとみなす。 */
+const REGEX_PREVIOUS = "(,=:[!&|?{};";
+
 /**
- * コメントを除く。説明文の中の名前を数えず、行末のコメントに隠れた名前も見逃さないため。
- * 文字列とテンプレートは字句として読み分ける。文字列の中の`//`や`/*`をコメントの始まりと誤認すると、
- * 後ろの本物のコードを隠せるため。`maskStrings`が真なら、文字列の中身を空にする。
- * テンプレートの置換の中のコードは、どちらでも残す。
- * 正規表現リテラルは読み分けない。中に引用符を含む正規表現を書くと、読み違える。
+ * ソースを字句に分けて走査する。コメントを除き、文字列、テンプレート、正規表現リテラルを読み分ける。
+ * 文字列の中の`//`や`/*`をコメントの始まりと誤認すると、後ろの本物のコードを隠せるため。
+ * 正規表現か除算かは、`/`の直前のトークンで決めるヒューリスティックである。
+ * 読み違えたとき(閉じない文字列、テンプレート、コメント、正規表現)は、`problems`に記録して先へ進む。
  */
-function scanCode(source: string, maskStrings: boolean): string {
-  let out = "";
+function scanSource(source: string): Scan {
+  let code = "";
+  let bare = "";
+  const strings: string[] = [];
+  const problems: string[] = [];
   let i = 0;
   const n = source.length;
 
   const readString = (quote: string): void => {
-    out += quote;
     i += 1;
+    let body = "";
     while (i < n) {
       const c = source[i] ?? "";
       if (c === "\\") {
-        if (!maskStrings) out += c + (source[i + 1] ?? "");
+        body += c + (source[i + 1] ?? "");
         i += 2;
       } else if (c === quote) {
-        out += quote;
         i += 1;
+        strings.push(body);
+        code += quote + body + quote;
+        bare += quote + quote;
         return;
       } else if (c === "\n") {
-        return;
+        break;
       } else {
-        if (!maskStrings) out += c;
+        body += c;
         i += 1;
       }
     }
+    problems.push("a string is not closed");
+    strings.push(body);
+    code += quote + body;
+    bare += quote;
   };
 
   const readTemplate = (): void => {
-    out += "`";
     i += 1;
+    code += "`";
+    bare += "`";
+    let text = "";
     while (i < n) {
       const c = source[i] ?? "";
       if (c === "\\") {
-        if (!maskStrings) out += c + (source[i + 1] ?? "");
+        text += c + (source[i + 1] ?? "");
         i += 2;
       } else if (c === "`") {
-        out += "`";
         i += 1;
+        strings.push(text);
+        code += `${text}\``;
+        bare += "`";
         return;
       } else if (c === "$" && source[i + 1] === "{") {
-        out += INTERP;
+        strings.push(text);
+        code += text + INTERP;
+        bare += INTERP;
+        text = "";
         i += 2;
         readCode(true);
-        out += "}";
+        code += "}";
+        bare += "}";
       } else {
-        if (!maskStrings) out += c;
+        text += c;
         i += 1;
       }
     }
+    problems.push("a template is not closed");
+    strings.push(text);
+    code += text;
+  };
+
+  const readRegex = (): void => {
+    i += 1;
+    let inClass = false;
+    let body = "";
+    while (i < n) {
+      const c = source[i] ?? "";
+      if (c === "\n") break;
+      if (c === "\\") {
+        body += c + (source[i + 1] ?? "");
+        i += 2;
+        continue;
+      }
+      if (c === "[") inClass = true;
+      else if (c === "]") inClass = false;
+      else if (c === "/" && !inClass) {
+        i += 1;
+        let flags = "";
+        while (/[a-z]/i.test(source[i] ?? "")) {
+          flags += source[i];
+          i += 1;
+        }
+        code += `/${body}/${flags}`;
+        bare += "/ /";
+        return;
+      }
+      body += c;
+      i += 1;
+    }
+    problems.push("a regular expression is not closed");
+    code += `/${body}`;
+    bare += "/";
   };
 
   const readCode = (inInterpolation: boolean): void => {
     let depth = 0;
+    let previous: "none" | "symbol" | "word" | "value" = "none";
+    let previousText = "";
+    let word = "";
+    let lineStart = true;
     while (i < n) {
       const c = source[i] ?? "";
       const next = source[i + 1];
-      if (c === "/" && next === "/") {
+      if (c === "\n") {
+        code += c;
+        bare += c;
+        i += 1;
+        lineStart = true;
+        word = "";
+      } else if (/\s/.test(c)) {
+        code += c;
+        bare += c;
+        i += 1;
+        word = "";
+      } else if (c === "/" && next === "/") {
         while (i < n && source[i] !== "\n") i += 1;
       } else if (c === "/" && next === "*") {
         const end = source.indexOf("*/", i + 2);
-        i = end < 0 ? n : end + 2;
-        out += " ";
+        if (end < 0) {
+          problems.push("a block comment is not closed");
+          i = n;
+        } else {
+          i = end + 2;
+        }
+        code += " ";
+        bare += " ";
       } else if (c === "'" || c === '"') {
         readString(c);
+        previous = "value";
+        lineStart = false;
+        word = "";
       } else if (c === "`") {
         readTemplate();
+        previous = "value";
+        lineStart = false;
+        word = "";
+      } else if (
+        c === "/" &&
+        (previous === "none" ||
+          lineStart ||
+          (previous === "symbol" && REGEX_PREVIOUS.includes(previousText)) ||
+          (previous === "word" && REGEX_KEYWORDS.includes(previousText)))
+      ) {
+        readRegex();
+        previous = "value";
+        lineStart = false;
+        word = "";
       } else if (inInterpolation && c === "}" && depth === 0) {
         i += 1;
         return;
       } else {
         if (inInterpolation && c === "{") depth += 1;
         if (inInterpolation && c === "}") depth -= 1;
-        out += c;
+        code += c;
+        bare += c;
         i += 1;
+        lineStart = false;
+        if (/[A-Za-z0-9_$]/.test(c)) {
+          word += c;
+          previous = "word";
+          previousText = word;
+        } else {
+          word = "";
+          previous = "symbol";
+          previousText = c;
+        }
       }
     }
+    if (inInterpolation) problems.push("an interpolation is not closed");
   };
 
   readCode(false);
-  return out;
+  return { code, bare, strings, problems };
 }
 
 /** コメントを除く。文字列の中身は残す。 */
 function stripComments(source: string): string {
-  return scanCode(source, false);
+  return scanSource(source).code;
 }
 
-/** コメントを除き、文字列の中身も空にする。文字列の外にある字句だけを調べるときに使う。 */
+/** コメントを除き、文字列と正規表現の中身も空にする。文字列の外にある字句だけを調べるときに使う。 */
 function codeOutsideStrings(source: string): string {
-  return scanCode(source, true);
+  return scanSource(source).bare;
 }
 
 /** テンプレートリテラルの置換の開き。例の中に書くと、リンターが文字列の中の書き損じと誤認するため、分けて書く。 */
@@ -807,10 +942,13 @@ const PROCESS_MEMBERS = [
  * `name`はファイル名で、`spawn_runner.ts`と入口だけが許される形がある。
  */
 function lexicalViolations(source: string, name: string): string[] {
+  const scan = scanSource(source);
   // 文字列を残した版はimportの指定子を読むために、空にした版は字句の形を調べるために使う。
-  const code = stripComments(source);
-  const bare = codeOutsideStrings(source);
-  const found: string[] = [];
+  const code = scan.code;
+  const bare = scan.bare;
+  const found: string[] = scan.problems.map(
+    (problem) => `unreadable: ${problem}`,
+  );
   for (const match of bare.matchAll(/\bBun\b/g)) {
     const rest = bare.slice((match.index ?? 0) + 3);
     const allowed =
@@ -829,28 +967,43 @@ function lexicalViolations(source: string, name: string): string[] {
       found.push(`import ${specifier}`);
     }
   }
+  // 語そのものを禁止する。呼び出しの形に限ると、`const e = eval; e(x)`や`(eval)(x)`をすり抜ける。
   const patterns: [string, RegExp][] = [
-    ["eval(", /\beval\s*\(/],
-    ["Function(", /\bFunction\s*\(/],
-    ["new Worker(", /\bnew\s+Worker\s*\(/],
+    ["eval", /\beval\b/],
+    ["Function", /\bFunction\b/],
+    ["require", /\brequire\b/],
     ["process.dlopen", /\bprocess\s*\.\s*dlopen\b/],
     ["process.binding", /\bprocess\s*\.\s*binding\b/],
     ["process[", /\bprocess\s*\[/],
     ["globalThis", /\bglobalThis\b/],
     ["createRequire", /\bcreateRequire\b/],
-    ["require(", /\brequire\s*\(/],
-    ["import.meta.env", /\bimport\.meta\.env\b/],
+    ["import.meta", /\bimport\s*\.\s*meta\b(?!\s*\.\s*(?:dir|main)\b)/],
     ["bare process", /\bprocess\b(?!\s*\.)/],
     ["global", /\bglobal\b/],
     ["self", /\bself\b/],
     [".constructor", /\.\s*constructor\b/],
-    // 識別子のユニコードエスケープは、字句の検査をすり抜ける名前を作れる。文字列の中の`\u`は数えない。
+    ["a constructor key", /\bconstructor\s*:/],
+    // 識別子のユニコードエスケープは、字句の検査をすり抜ける名前を作れる。文字列と正規表現の中の`\u`は数えない。
     ["\\u outside a string", /\\u/],
   ];
   for (const [label, pattern] of patterns) {
     if (pattern.test(bare)) found.push(label);
   }
-  if (/\[\s*["'`]\s*constructor/.test(code)) found.push('["constructor"]');
+  // `Worker`は型の位置だけを許す(`drain_store.ts`の型名)。`new Worker(`や値としての参照は拒否する。
+  for (const match of bare.matchAll(/\bWorker\b/g)) {
+    const before = bare.slice(0, match.index ?? 0);
+    if (!/(?:\btype\s+|\bis\s+|\breadonly\s+|[<:]\s*)$/.test(before)) {
+      found.push("Worker");
+    }
+  }
+  // `constructor`は、メソッドの定義(後ろが`(`で、前が行頭、空白、`{`、`,`、`;`、`}`)だけを許す。
+  for (const match of bare.matchAll(/\bconstructor\b/g)) {
+    const index = match.index ?? 0;
+    const before = bare.slice(0, index);
+    const after = bare.slice(index + "constructor".length);
+    const definition = /^\s*\(/.test(after) && /(?:^|[\s{,;}])$/.test(before);
+    if (!definition) found.push("constructor");
+  }
   for (const match of bare.matchAll(/\bprocess\s*\.\s*(\w+)/g)) {
     const member = match[1] ?? "";
     const allowed =
@@ -858,6 +1011,21 @@ function lexicalViolations(source: string, name: string): string[] {
       (member === "env" && name === ENTRY_NAME) ||
       ((member === "kill" || member === "pid") && name === RUNNER_NAME);
     if (!allowed) found.push(`process.${member}`);
+  }
+  // 文字列の中身。モジュール名や起動の形を文字列で組み立てて、間接的に呼ぶ経路を塞ぐ。
+  for (const text of scan.strings) {
+    if (text === "bun" || text.startsWith("bun:")) found.push(`string ${text}`);
+    if (text.startsWith("node:") && !NODE_BUILTINS.includes(text)) {
+      found.push(`string ${text}`);
+    }
+    if (/\bBun\s*\.\s*(?:spawn|spawnSync|\$)|child_process/.test(text)) {
+      found.push("a string names a form that starts a process");
+    }
+    if (text === "constructor") found.push('"constructor"');
+    // 奇数個の円記号に続く`u`と`x`は、文字を作るエスケープになる。偶数個は円記号そのものを表す。
+    if (/(?<!\\)(?:\\\\)*\\[ux]/.test(text)) {
+      found.push("an escape in a string");
+    }
   }
   return found;
 }
