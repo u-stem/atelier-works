@@ -259,6 +259,7 @@ const APPROVAL_MODULES = [
   "state_io.ts",
   "held_lock.ts",
   "lock.ts",
+  "compose_tables.ts",
 ].map((name) => join(HOST_APPLY_DIR, name));
 
 const FORBIDDEN_BUILTINS =
@@ -1948,5 +1949,19 @@ describe("the importers of node:fs", () => {
       "scripts/host_apply/lock.ts",
       "scripts/host_apply/secure_file.ts",
     ]);
+  });
+});
+
+describe("the compose tables module", () => {
+  test("is imported only by the plan", () => {
+    expect(
+      relativeNames(
+        sourceFiles().filter((file) =>
+          specifiers(readFileSync(file, "utf8")).some((specifier) =>
+            /(?:^|\/)compose_tables(?:\.ts)?$/.test(specifier),
+          ),
+        ),
+      ),
+    ).toEqual(["scripts/host_apply/plan.ts"]);
   });
 });
