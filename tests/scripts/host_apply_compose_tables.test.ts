@@ -192,10 +192,31 @@ describe("images", () => {
     ]);
   });
 
-  test("a build service with a variable in the image is a violation", () => {
+  test("a build service with a variable in the image is rejected", () => {
     expect(
       found({ windmill_worker: { ...WORKER, image: "evil:${WM_VERSION}" } }),
-    ).toEqual(["image:windmill_worker:image:evil:${WM_VERSION}"]);
+    ).toBe("rejected");
+  });
+
+  test("a build service with a variable in the image is rejected as a form", () => {
+    expect(found({ db: { image: "postgres:aaa${WM_VERSION}%" } })).toBe(
+      "rejected",
+    );
+  });
+
+  test("the rejection of an image names the form that is not allowed", () => {
+    const result = checkComposeTablesText(
+      textOf({ db: { image: "postgres:aaa${WM_VERSION}%" } }),
+    );
+    expect(result.ok ? "" : result.detail).toContain("allowed form");
+  });
+
+  test("a build service build with a variable in the image is rejected", () => {
+    expect(
+      found({
+        windmill_worker: { ...WORKER, image: "127.0.0.1:${WM_HTTP_PORT}/x" },
+      }),
+    ).toBe("rejected");
   });
 
   test("a build service without build is a violation", () => {
@@ -494,6 +515,18 @@ describe("ids of violations", () => {
     violationsOf(textOf(services)).map((item) => item.id);
   const caddy = { image: "ghcr.io/windmill-labs/caddy-l4:1" };
 
+  test("a missing image and the image none have different ids", () => {
+    expect(idsOf({ db: {} }).join()).not.toBe(
+      idsOf({ db: { image: "none" } }).join(),
+    );
+  });
+
+  test("an image that is not a string and a string that looks like it differ", () => {
+    expect(idsOf({ db: { image: ["x"] } }).join()).not.toBe(
+      idsOf({ db: { image: 'non-string:["x"]' } }).join(),
+    );
+  });
+
   test("two names in one scalar make two violations", () => {
     expect(
       found({ caddy: { ...caddy, labels: { a: "${DB_PASSWORD}${HOME}" } } }),
@@ -544,6 +577,44 @@ describe("shared nodes, limits and cycles", () => {
       "secret:caddy:labels:DB_PASSWORD",
       "secret:windmill_extra:labels:DB_PASSWORD",
     ]);
+  });
+
+  test("a cycle in the image is rejected", () => {
+    expect(foundText("services:\n  db:\n    image: &i [*i]\n")).toBe(
+      "rejected",
+    );
+  });
+
+  test("a cycle in an extension field of the build is rejected", () => {
+    expect(
+      foundText(
+        "services:\n  windmill_server:\n    image: ghcr.io/windmill-labs/windmill\n    build:\n      context: .\n      x-a: &b [*b]\n",
+      ),
+    ).toBe("rejected");
+  });
+
+  test("a cycle through the build itself is rejected", () => {
+    expect(
+      foundText(
+        "services:\n  windmill_server:\n    image: ghcr.io/windmill-labs/windmill\n    build: &b\n      context: .\n      args: [*b]\n",
+      ),
+    ).toBe("rejected");
+  });
+
+  test("a shared image value with a very long key is rejected quickly", () => {
+    const key = "k".repeat(100_000);
+    const text = `services:\n  db:\n    image: [&m {${key}: 1}, ${Array.from({ length: 2000 }, () => "*m").join(", ")}]\n`;
+    const started = Date.now();
+    const result = checkComposeTablesText(text);
+    expect([result.ok, Date.now() - started < 5000]).toEqual([false, true]);
+  });
+
+  test("a scalar with many references finishes quickly", () => {
+    const names = Array.from({ length: 12_000 }, (_, i) => `$H${i}`).join("");
+    const text = `services:\n  db:\n    image: postgres:18\n    labels: ["${names}"]\n`;
+    const started = Date.now();
+    checkComposeTablesText(text);
+    expect(Date.now() - started < 5000).toBe(true);
   });
 
   test("a cycle through an alias is rejected", () => {
