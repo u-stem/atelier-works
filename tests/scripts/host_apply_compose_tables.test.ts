@@ -47,7 +47,7 @@ function foundText(text: string): string[] | "rejected" {
   return result.ok ? result.violations.map(summarize) : "rejected";
 }
 
-function violationsOf(text: string): ComposeViolation[] {
+function violationsOf(text: string): readonly ComposeViolation[] {
   const result = checkComposeTablesText(text);
   return result.ok ? result.violations : [];
 }
@@ -98,7 +98,11 @@ describe("the real infra/docker-compose.yml", () => {
   });
 
   test("refers only to names that the executor knows", () => {
-    const names = [...REAL_COMPOSE.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)]
+    const names = [
+      ...REAL_COMPOSE.replace(/^\s*#.*$/gm, "").matchAll(
+        /\$\{?([A-Za-z_][A-Za-z0-9_]*)/g,
+      ),
+    ]
       .map((match) => match[1] ?? "")
       .filter((name) => !COMPOSE_ENV_NAMES.includes(name));
     expect(names).toEqual([]);
@@ -446,17 +450,17 @@ describe("shared nodes, limits and cycles", () => {
   const CADDY = "image: ghcr.io/windmill-labs/caddy-l4:1";
 
   test("a node shared by a table service and another service is counted for both", () => {
-    const text = `x-e: &e [X=\${DB_PASSWORD}]\nservices:\n  db:\n    image: postgres:18\n    environment: *e\n  caddy:\n    ${CADDY}\n    environment: *e\n`;
+    const text = `services:\n  db:\n    image: postgres:18\n    environment: &e ["X=\${DB_PASSWORD}"]\n  caddy:\n    ${CADDY}\n    environment: *e\n`;
     expect(foundText(text)).toEqual(["secret:caddy:environment:DB_PASSWORD"]);
   });
 
   test("a list shared by labels and environment is counted for both fields", () => {
-    const text = `x-e: &e [X=\${DB_PASSWORD}]\nservices:\n  db:\n    image: postgres:18\n    labels: *e\n    environment: *e\n`;
+    const text = `services:\n  db:\n    image: postgres:18\n    labels: &e ["X=\${DB_PASSWORD}"]\n    environment: *e\n`;
     expect(foundText(text)).toEqual(["secret:db:labels:DB_PASSWORD"]);
   });
 
   test("the same node in two services is counted in each", () => {
-    const text = `x-e: &e {a: "\${DB_PASSWORD}"}\nservices:\n  caddy:\n    ${CADDY}\n    labels: *e\n  windmill_extra:\n    image: ghcr.io/windmill-labs/windmill-extra:1\n    labels: *e\n`;
+    const text = `services:\n  caddy:\n    ${CADDY}\n    labels: &e {a: "\${DB_PASSWORD}"}\n  windmill_extra:\n    image: ghcr.io/windmill-labs/windmill-extra:1\n    labels: *e\n`;
     expect(foundText(text)).toEqual([
       "secret:caddy:labels:DB_PASSWORD",
       "secret:windmill_extra:labels:DB_PASSWORD",

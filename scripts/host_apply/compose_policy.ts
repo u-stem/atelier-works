@@ -45,7 +45,6 @@ const SERVICE_KEYS: ReadonlySet<string> = new Set([
   "expose",
   "ports",
   "environment",
-  "env_file",
   "depends_on",
   "volumes",
   "logging",
@@ -226,8 +225,25 @@ function requireInside(
 ): string {
   const path = resolveLocal(value, context, base);
   if (!isInside(context.root, path)) forbid(`${what} leaves the checkout`);
+  for (const element of relative(context.root, path).split("/")) {
+    if (/[^\x20-\x7e]/.test(element)) {
+      forbid(`${what} has a path element that is not ASCII`);
+    }
+    if (SECRET_FILE_ELEMENT.some((pattern) => pattern.test(element))) {
+      forbid(`${what} points at a file that holds secrets`);
+    }
+  }
   return path;
 }
+
+/**
+ * ホストの秘密値を置くファイルの名前。大文字小文字を区別しない(APFSは区別しないため)。
+ * `prod`の木には、このファイルへのリンクが置かれる。
+ */
+const SECRET_FILE_ELEMENT: readonly RegExp[] = [
+  /^mise\.local(?:\.|$)/i,
+  /\.local\.toml$/i,
+];
 
 const REMOTE_PATTERN = /^(?:[a-z][a-z0-9+.-]*:|git@|github\.com\/)/i;
 
@@ -285,19 +301,6 @@ function checkPorts(value: unknown, context: ComposeContext): void {
       }
     } else {
       forbid("a port has an unexpected form");
-    }
-  }
-}
-
-function checkEnvFile(value: unknown, context: ComposeContext): void {
-  const entries = Array.isArray(value) ? value : [value];
-  for (const entry of entries) {
-    if (typeof entry === "string") {
-      requireInside(entry, context, "env_file");
-    } else if (isRecord(entry) && typeof entry.path === "string") {
-      requireInside(entry.path, context, "env_file");
-    } else {
-      forbid("env_file has an unexpected form");
     }
   }
 }
@@ -557,7 +560,6 @@ function checkService(
     checkSecurityOpt(service.security_opt);
   }
   if (service.ports !== undefined) checkPorts(service.ports, context);
-  if (service.env_file !== undefined) checkEnvFile(service.env_file, context);
   if (service.build !== undefined) checkBuild(service.build, context);
   if (service.volumes !== undefined) checkVolumes(service.volumes, context);
   if (service.secrets !== undefined) {
@@ -663,6 +665,22 @@ export function checkCompose(
 }
 
 /**
+ * パースの前に、生のテキストで探す拒否の形。理由の文を返す。無ければ`null`。
+ * - YAMLのタグ(`!`)。`!!binary`は、BunとcomposeがYAMLの値を別の文字列として読ませるため、検査を迂回できる。
+ *   コメントの中でも拒否する。コメントの範囲は、改行の解釈の違いで変わるため。
+ * - マージキー(`<<`)。キーが重なったときの優先順位が、Bunとcomposeでずれうる。
+ * - `\r`とUnicodeの改行(U+0085、U+2028、U+2029)。YAMLの実装で、行の区切りが違う。
+ */
+export function rawTextViolation(text: string): string | null {
+  if (/[\r\u0085\u2028\u2029]/.test(text)) {
+    return "the compose file has a line break other than a line feed";
+  }
+  if (text.includes("!")) return "the compose file has a YAML tag";
+  if (text.includes("<<")) return "the compose file has a merge key";
+  return null;
+}
+
+/**
  * composeのテキストを検査する。実行役が使う入口。
  * 大きさの上限を超えるテキストは、パースせずに拒否する。
  * `docker.sock`の文字列は、パースの前に生のテキストで探す。コメントや拡張キーに書かれていても拒否する。
@@ -678,6 +696,10 @@ export function checkComposeText(
       kind: "compose_forbidden",
       detail: "the compose file is over the size limit",
     };
+  }
+  const rawDetail = rawTextViolation(text);
+  if (rawDetail !== null) {
+    return { ok: false, kind: "compose_forbidden", detail: rawDetail };
   }
   if (text.includes("docker.sock")) {
     return {
