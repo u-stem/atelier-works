@@ -89,6 +89,7 @@ import {
 import { postSupersededComments } from "./lib/supersede_support.ts";
 import type {
   FactoryConfig,
+  GhSource,
   LabelerAssociation,
   WorkItem,
 } from "./lib/types.ts";
@@ -1352,6 +1353,19 @@ async function expirePendingApprovals(
   }
 
   return count;
+}
+
+/**
+ * 設定`gh_source_poll_issues`と収集の設定から、この回の読み取り元を決める。
+ */
+export function resolveIssueSource(
+  _config: Pick<
+    FactoryConfig,
+    "gh_source_poll_issues" | "gh_collect_enabled" | "gh_collect_detail_enabled"
+  >,
+  _log: Logger,
+): GhSource {
+  return "search";
 }
 
 // ---------------------------------------------------------------------------
