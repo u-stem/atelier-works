@@ -15,9 +15,11 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { processStart } from "../../scripts/host_apply/host_probe.ts";
 import {
   type AcquireResult,
   acquireLock,
@@ -28,6 +30,10 @@ import {
   resetOwnerRecord,
   resetOwnerRecordForTest,
 } from "../../scripts/host_apply/lock.ts";
+import {
+  createRunner,
+  defaultKillGroup,
+} from "../../scripts/host_apply/spawn_runner.ts";
 
 const uid = process.getuid?.() ?? 0;
 const REAL = process.platform === "darwin";
@@ -67,7 +73,7 @@ function errno(code: string): Error {
 
 /** プロセスの中だけで排他を模す偽の`openLocked`。CIのLinuxでも同じ振る舞いを検証するために使う。 */
 function fakeIo(
-  extra: { afterOpen?: (path: string) => void } = {},
+  extra: NonNullable<LockIo["hooks"]> = {},
 ): LockIo & { openFds: () => number } {
   const held = new Map<number, string>();
   return {
@@ -93,6 +99,19 @@ function fakeIo(
     hooks: extra,
     openFds: () => held.size,
   };
+}
+
+/** 書き込みを後から失敗させたり短くしたりできる偽のio。 */
+function switchableIo() {
+  const control: { mode: "ok" | "throw" | "short" } = { mode: "ok" };
+  const io = fakeIo({
+    write: (fd, body) => {
+      if (control.mode === "throw") throw errno("EIO");
+      if (control.mode === "short") return 10;
+      return writeSync(fd, body, 0, body.length, 0);
+    },
+  });
+  return { io, control };
 }
 
 type Group = { pgid: number; from: string; to: string };
@@ -948,12 +967,177 @@ describe("release", () => {
   });
 
   test("closes the descriptor even when the record cannot be written", async () => {
-    const dir = privateDir();
-    const io = fakeIo();
-    const handle = await held(dir, deps(), io);
-    rmSync(join(dir, "lock"));
+    const { io, control } = switchableIo();
+    const handle = await held(privateDir(), deps(), io);
+    control.mode = "throw";
     handle.release();
     expect(io.openFds()).toBe(0);
+  });
+
+  test("does not throw when the record cannot be written", async () => {
+    const { io, control } = switchableIo();
+    const handle = await held(privateDir(), deps(), io);
+    control.mode = "throw";
+    expect(() => handle.release()).not.toThrow();
+  });
+});
+
+describe("failures that the fake kernel lock can inject", () => {
+  test("is blocked as io when the first record cannot be written", async () => {
+    const { io, control } = switchableIo();
+    control.mode = "throw";
+    const result = await take(privateDir(), deps(), io);
+    expect(result).toEqual({
+      kind: "blocked",
+      cause: "io",
+      reason: "lock owner record cannot be written",
+    });
+  });
+
+  test("closes the descriptor when the first record cannot be written", async () => {
+    const { io, control } = switchableIo();
+    control.mode = "throw";
+    await take(privateDir(), deps(), io);
+    expect(io.openFds()).toBe(0);
+  });
+
+  test("is blocked as io for a short write", async () => {
+    const { io, control } = switchableIo();
+    control.mode = "short";
+    const result = await take(privateDir(), deps(), io);
+    expect(result.kind === "blocked" && result.cause).toBe("io");
+  });
+
+  test("trackGroup throws when the record cannot be written", async () => {
+    const { io, control } = switchableIo();
+    const handle = await held(privateDir(), deps(), io);
+    control.mode = "throw";
+    expect(() => handle.trackGroup(300, EARLY)).toThrow();
+  });
+
+  test("trackGroup leaves the record as it was when the write fails", async () => {
+    const dir = privateDir();
+    const { io, control } = switchableIo();
+    const handle = await held(dir, deps(), io);
+    const before = readFileSync(join(dir, "lock"), "utf8");
+    control.mode = "throw";
+    try {
+      handle.trackGroup(300, EARLY);
+    } catch {
+      // 例外は別のテストで確かめる。
+    }
+    expect(readFileSync(join(dir, "lock"), "utf8")).toBe(before);
+  });
+
+  test("trackGroup does not remember a group whose write failed", async () => {
+    const { io, control } = switchableIo();
+    const handle = await held(privateDir(), deps(), io);
+    control.mode = "throw";
+    try {
+      handle.trackGroup(300, EARLY);
+    } catch {
+      // 例外は別のテストで確かめる。
+    }
+    expect(handle.untrackGroup(300)).toBe(true);
+  });
+
+  test("untrackGroup returns false when the write fails", async () => {
+    const { io, control } = switchableIo();
+    const handle = await held(privateDir(), deps(), io);
+    handle.trackGroup(300, EARLY);
+    control.mode = "throw";
+    expect(handle.untrackGroup(300)).toBe(false);
+  });
+
+  test("untrackGroup keeps the group in memory when the write fails", async () => {
+    const dir = privateDir();
+    const { io, control } = switchableIo();
+    const handle = await held(dir, deps(), io);
+    handle.trackGroup(300, EARLY);
+    control.mode = "throw";
+    handle.untrackGroup(300);
+    control.mode = "ok";
+    handle.untrackGroup(300);
+    expect(readRecord(dir).groups).toEqual([]);
+  });
+
+  test("is blocked as unsafe when the owner of the lock file is another user", async () => {
+    const dir = privateDir();
+    emptyLock(dir);
+    const io = fakeIo({ fileUid: () => uid + 1 });
+    const result = await take(dir, deps(), io);
+    expect(result).toEqual({
+      kind: "blocked",
+      cause: "unsafe",
+      reason: "lock file is not a safe regular file",
+    });
+  });
+
+  test("is blocked as unsafe when only the state directory differs", async () => {
+    const dir = privateDir();
+    emptyLock(dir);
+    const io = fakeIo({
+      afterOpen: () => {
+        renameSync(dir, `${dir}.moved`);
+        mkdirSync(dir, { mode: 0o700 });
+        chmodSync(dir, 0o700);
+        renameSync(join(`${dir}.moved`, "lock"), join(dir, "lock"));
+      },
+    });
+    const result = await take(dir, deps(), io);
+    expect(result).toEqual({
+      kind: "blocked",
+      cause: "unsafe",
+      reason: "state directory changed while taking the lock",
+    });
+  });
+
+  test("is blocked as unsafe when the lock file is replaced while orphans are checked", async () => {
+    const dir = privateDir();
+    seed(dir, rec([group(5)]));
+    const result = await take(
+      dir,
+      deps({
+        groupExists: () => true,
+        processStart: async () => {
+          renameSync(join(dir, "lock"), join(dir, "lock.moved"));
+          writeFileSync(join(dir, "lock"), "", { mode: 0o600 });
+          return "2026-10-18T12:00:00Z";
+        },
+      }),
+    );
+    expect(result.kind === "blocked" && result.cause).toBe("unsafe");
+  });
+
+  test("is blocked as io for a pid that is not a positive integer", async () => {
+    const result = await take(privateDir(), deps({ pid: 0 }));
+    expect(result.kind === "blocked" && result.cause).toBe("io");
+  });
+
+  test("a file of only spaces is not a record", async () => {
+    const dir = privateDir();
+    writeFileSync(join(dir, "lock"), " ".repeat(RECORD_SIZE), { mode: 0o600 });
+    const result = await take(dir);
+    expect(result.kind === "blocked" && result.cause).toBe("owner_unreadable");
+  });
+
+  test("resetOwnerRecord writes nothing when the lock file is replaced while orphans are checked", async () => {
+    const dir = privateDir();
+    seed(dir, rec([group(5)]));
+    const result = await resetOwnerRecordForTest(
+      dir,
+      deps({
+        groupExists: () => true,
+        processStart: async () => {
+          renameSync(join(dir, "lock"), join(dir, "lock.moved"));
+          writeFileSync(join(dir, "lock"), "", { mode: 0o600 });
+          return "2026-10-18T12:00:00Z";
+        },
+      }),
+      fakeIo(),
+      {},
+    );
+    expect(result.kind === "blocked" && result.cause).toBe("unsafe");
   });
 });
 
@@ -1009,6 +1193,16 @@ describe("the fence", () => {
     renameSync(dir, `${dir}.moved`);
     mkdirSync(dir, { mode: 0o700 });
     chmodSync(dir, 0o700);
+    expect(() => handle.lock.assertHeld(dir)).toThrow();
+  });
+
+  test("throws when only the state directory was replaced", async () => {
+    const dir = privateDir();
+    const handle = await held(dir);
+    renameSync(dir, `${dir}.moved`);
+    mkdirSync(dir, { mode: 0o700 });
+    chmodSync(dir, 0o700);
+    renameSync(join(`${dir}.moved`, "lock"), join(dir, "lock"));
     expect(() => handle.lock.assertHeld(dir)).toThrow();
   });
 
@@ -1283,6 +1477,89 @@ describe.skipIf(!REAL)("with the kernel lock (darwin)", () => {
     process.kill(-child.pid, "SIGKILL");
     await child.exited;
     expect(second.kind).toBe("held");
+  });
+
+  describe("with a real process group", () => {
+    const groups: number[] = [];
+    afterEach(() => {
+      for (const pgid of groups.splice(0)) {
+        try {
+          defaultKillGroup(pgid);
+        } catch {
+          // すでに終わっている。
+        }
+      }
+    });
+
+    const run = createRunner();
+    const stamp = () => `${new Date().toISOString().slice(0, 19)}Z`;
+    const real = (): LockDeps =>
+      deps({
+        now: stamp,
+        groupExists: (pgid) => {
+          try {
+            process.kill(-pgid, 0);
+            return true;
+          } catch (error) {
+            return !(
+              typeof error === "object" &&
+              error !== null &&
+              "code" in error &&
+              error.code === "ESRCH"
+            );
+          }
+        },
+        processStart: (pgid) => processStart(run, pgid),
+      });
+
+    function startChild(): { pgid: number; before: string; to: string } {
+      const before = stamp();
+      const child = Bun.spawn(["/bin/sleep", "30"], {
+        detached: true,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      groups.push(child.pid);
+      return { pgid: child.pid, before, to: stamp() };
+    }
+
+    test("the start time of a detached child falls inside the recorded interval", async () => {
+      const child = startChild();
+      const start = await processStart(run, child.pgid);
+      const at = Math.floor(Date.parse(start ?? "") / 1000);
+      expect(
+        at >= Math.floor(Date.parse(child.before) / 1000) - 1 &&
+          at <= Math.floor(Date.parse(child.to) / 1000) + 1,
+      ).toBe(true);
+    });
+
+    test("a live recorded group stops the next acquisition", async () => {
+      const dir = privateDir();
+      const child = startChild();
+      seed(dir, rec([group(child.pgid, child.before, child.to)]));
+      const result = await acquireLock(dir, real(), { create: true });
+      expect(result).toEqual({ kind: "orphan_alive", pgids: [child.pgid] });
+    });
+
+    test("the group is gone after the child is killed and reaped", () => {
+      const child = startChild();
+      defaultKillGroup(child.pgid);
+      return Bun.sleep(300).then(() => {
+        expect(() => process.kill(-child.pgid, 0)).toThrow("ESRCH");
+      });
+    });
+
+    test("the next acquisition succeeds after the recorded group is gone", async () => {
+      const dir = privateDir();
+      const child = startChild();
+      seed(dir, rec([group(child.pgid, child.before, child.to)]));
+      defaultKillGroup(child.pgid);
+      await Bun.sleep(300);
+      const result = await acquireLock(dir, real(), { create: true });
+      if (result.kind === "held") opened.push(result.handle);
+      expect(result.kind).toBe("held");
+    });
   });
 
   test("a holder killed with SIGKILL releases the lock", async () => {
