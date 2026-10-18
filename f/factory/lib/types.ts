@@ -1686,6 +1686,12 @@ export type FactoryConfig = {
    * 偽の間は、マージできると判断したPRもマージせず、人に回す(試運転)。
    */
   dependabot_merge_enabled: boolean;
+  /**
+   * 1つのPRで複数のパッケージ(最大3つ)が同時に更新されるグループの更新を、自動処理の対象にするか。既定は`false`。
+   * 偽の間は、2つ以上のパッケージが変わるPRを人に回す。
+   * 真でも、各パッケージは単独の更新と同じ検査を通る。
+   */
+  dependabot_group_enabled: boolean;
   /** 更新先の版が公開されてから、マージしてよくなるまでの日数。正の整数。 */
   dependabot_min_published_days: number;
   /**

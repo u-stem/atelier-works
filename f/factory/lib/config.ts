@@ -92,6 +92,7 @@ type DefaultableField =
   | "implement_max_diff_lines"
   | "dependabot_enabled"
   | "dependabot_merge_enabled"
+  | "dependabot_group_enabled"
   | "dependabot_min_published_days"
   | "pr_ci_watch_enabled"
   | "pr_ci_watch_human_prs"
@@ -167,6 +168,8 @@ const DEFAULTS: Pick<FactoryConfig, DefaultableField> = {
   dependabot_enabled: false,
   // マージは、結果を人が確かめてから別に有効にする。無効の間は、マージ可の判定も人に回す。
   dependabot_merge_enabled: false,
+  // 複数パッケージの同時更新は、試運転でマージ可の判定まで進むことを確かめてから、リモートのリソースで有効にする。
+  dependabot_group_enabled: false,
   dependabot_min_published_days: 7,
   // PRのCI監視は観測と通知だけで、PRにもリポジトリにも書き込まないので、既定で有効にする。
   pr_ci_watch_enabled: true,
@@ -979,6 +982,11 @@ export function parseFactoryConfig(raw: unknown): FactoryConfig {
       raw,
       "dependabot_merge_enabled",
       DEFAULTS.dependabot_merge_enabled,
+    ),
+    dependabot_group_enabled: booleanField(
+      raw,
+      "dependabot_group_enabled",
+      DEFAULTS.dependabot_group_enabled,
     ),
     dependabot_min_published_days: positiveIntegerField(
       raw,

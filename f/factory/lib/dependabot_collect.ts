@@ -1,5 +1,5 @@
 // dependabotのセキュリティ更新PR1件について、GitHubとnpm registryから事実を集め、
-// ゲート(`evaluateGate`)の入力を組み立てる。
+// ゲート(`evaluateGateGroup`)の入力を組み立てる。
 // ここは事実を集めるだけで、作者、fork、種別などの判定はゲートが行う。
 // 更新の対象と種別は、PRのタイトル、本文、ブランチ名に頼らず、ロックファイルの差分から導く。
 // 取得はすべて、最初に読んだheadとbaseのshaに固定する。最後にPRとbaseのshaを読み直し、
@@ -20,8 +20,11 @@ import {
   classifyUpdate,
   detail,
   entryIdentity,
+  type GateCommon,
   type GateInput,
+  type GateTargetFacts,
   lockfilePackages,
+  MAX_GROUP_TARGETS,
   REQUIRED_CHECKS,
   type UpdateKind,
 } from "./dependabot_support.ts";
@@ -44,14 +47,20 @@ import type { FactoryConfig } from "./types.ts";
 
 // ---- 更新の対象の導出 ----
 
+/** 更新の対象1つ。`from`と`to`は、トップレベルのエントリの更新前と更新後の版。 */
+export type DerivedTarget = {
+  name: string;
+  from: string;
+  to: string;
+  /** この名前の変わった全エントリの種別のうち、最も重いもの。 */
+  update: UpdateKind;
+};
+
 export type DeriveResult =
   | {
       kind: "ok";
-      /** 更新の対象のパッケージ名と、更新後の版。 */
-      target: { name: string; to: string };
-      /** 更新前の版。 */
-      from: string;
-      update: UpdateKind;
+      /** 1個以上。名前の辞書順。 */
+      targets: DerivedTarget[];
     }
   | { kind: "needs_human"; reason: string };
 
@@ -83,6 +92,8 @@ type LockfileChange = {
   after: Record<string, unknown>;
   /** 変わったエントリの持ち主のパッケージ名ごとの、最も重い更新の種別。 */
   kinds: Map<string, UpdateKind>;
+  /** 更新前と更新後でパッケージ名が違うエントリの、最初のキー。無ければ`null`。 */
+  renamedKey: string | null;
 };
 
 function heavier(a: UpdateKind, b: UpdateKind): UpdateKind {
@@ -104,6 +115,7 @@ function readLockfileChange(file: {
     return `lockfile could not be read: ${detail(file.path)}`;
   }
   const kinds = new Map<string, UpdateKind>();
+  let renamedKey: string | null = null;
   for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
     const hadBefore = Object.hasOwn(before, key);
     const hasAfter = Object.hasOwn(after, key);
@@ -119,6 +131,9 @@ function readLockfileChange(file: {
     if ((hadBefore && was === null) || (hasAfter && now === null)) {
       return `a package entry is malformed: ${detail(key)}`;
     }
+    if (was !== null && now !== null && was.name !== now.name) {
+      renamedKey ??= key;
+    }
     // 追加と削除は版の上がり方を決められないので、unknownにする。
     const kind =
       was !== null && now !== null
@@ -133,7 +148,7 @@ function readLockfileChange(file: {
       );
     }
   }
-  return { path: file.path, before, after, kinds };
+  return { path: file.path, before, after, kinds, renamedKey };
 }
 
 /** ロックファイルのトップレベルのエントリ`packages[name]`の版。無いか、読めないときは`null`。 */
@@ -147,15 +162,25 @@ function topLevelVersion(
 }
 
 /**
- * PRで変わったマニフェストとロックファイルから、更新の対象を導く。
- * ロックファイルの前後でエントリが変わったパッケージの名前を集め、ちょうど1つのときだけ対象にする。
- * 0個、2個以上(グループ更新)、版を決められないとき、ロックファイルを読めないときは止める。
- * `to`と`from`は、トップレベルのエントリ(`packages[name]`)の更新後と更新前の版で、
- * ロックファイルが複数あるときは、すべてで一致することを求める。
- * `update`は、変わった全エントリの種別のうち最も重いものである。
+ * PRで変わったロックファイルから、更新の対象を導く。
+ * ロックファイルの前後でエントリが変わったパッケージの名前を集め、名前の辞書順に対象にする。
+ * 次の順で確かめ、満たさなければ止める。順序は、フラグが偽のときの理由を、
+ * グループを扱う前と同じに保つために固定する。
+ * 1. 0個は止める。
+ * 2. 2個以上で`allowGroups`が偽なら、エントリの中身を見ずに止める。
+ * 3. `MAX_GROUP_TARGETS`を超えるなら止める。
+ * 4. 更新前と更新後でパッケージ名が違うエントリがあれば止める。
+ *    名前の差し替えで、検査する対象と違うパッケージの取得物を入れられるため。
+ * 5. 各パッケージについて、トップレベルのエントリ(`packages[name]`)の版を求める。
+ *    ロックファイルが複数あるときは、すべてで一致することを求める。
+ * 読めないロックファイルがあるときも止める。
+ * 対象ごとの`update`は、その名前の変わった全エントリの種別のうち最も重いものである。
  * マニフェストの中身は読まない。マニフェストの検査はゲートが行う。
  */
-export function deriveTarget(files: GateInput["files"]): DeriveResult {
+export function deriveTargets(
+  files: GateInput["files"],
+  allowGroups: boolean,
+): DeriveResult {
   const changes: LockfileChange[] = [];
   for (const file of files) {
     if (!LOCKFILE_PATHS.includes(file.path)) continue;
@@ -164,57 +189,61 @@ export function deriveTarget(files: GateInput["files"]): DeriveResult {
     changes.push(change);
   }
 
-  const names = new Set<string>();
+  const nameSet = new Set<string>();
   for (const change of changes) {
-    for (const name of change.kinds.keys()) names.add(name);
+    for (const name of change.kinds.keys()) nameSet.add(name);
   }
-  if (names.size === 0) return humanStop("no package changed in the lockfiles");
-  const [name] = names;
-  if (names.size > 1 || name === undefined) {
-    const listed = [...names].slice(0, MAX_LISTED_NAMES).join(", ");
+  const names = [...nameSet].sort();
+  if (names.length === 0) {
+    return humanStop("no package changed in the lockfiles");
+  }
+  if (names.length > 1 && !allowGroups) {
+    const listed = names.slice(0, MAX_LISTED_NAMES).join(", ");
     return humanStop(`more than one package changed: ${detail(listed)}`);
   }
-
-  let versions: { from: string; to: string } | null = null;
-  let update: UpdateKind = "patch";
-  for (const change of changes) {
-    const kind = change.kinds.get(name);
-    if (kind === undefined) continue;
-    const from = topLevelVersion(change.before, name);
-    const to = topLevelVersion(change.after, name);
-    if (from === null || to === null) {
-      return humanStop(
-        `the target has no top-level entry in ${detail(change.path)}: ${detail(name)}`,
-      );
-    }
-    // 入れ子のコピーだけが変わると、トップレベルの版が更新後の版を表さない。
-    if (from === to) {
-      return humanStop(
-        `the top-level entry of the target did not change: ${detail(name)}`,
-      );
-    }
-    if (versions !== null && (versions.from !== from || versions.to !== to)) {
-      return humanStop("the lockfiles resolve the target differently");
-    }
-    versions = { from, to };
-    update = heavier(update, kind);
+  if (names.length > MAX_GROUP_TARGETS) {
+    return humanStop(`too many packages changed: ${names.length}`);
   }
-  if (versions === null)
-    return humanStop("no package changed in the lockfiles");
-  return {
-    kind: "ok",
-    target: { name, to: versions.to },
-    from: versions.from,
-    update,
-  };
-}
+  for (const change of changes) {
+    if (change.renamedKey !== null) {
+      return humanStop(
+        `a package entry changed its name: ${detail(change.renamedKey)}`,
+      );
+    }
+  }
 
-// スタブ。実装のコミットで置き換える。
-export function deriveTargets(
-  _files: GateInput["files"],
-  _allowGroups: boolean,
-): DeriveResult {
-  return humanStop("");
+  const targets: DerivedTarget[] = [];
+  for (const name of names) {
+    let versions: { from: string; to: string } | null = null;
+    let update: UpdateKind = "patch";
+    for (const change of changes) {
+      const kind = change.kinds.get(name);
+      if (kind === undefined) continue;
+      const from = topLevelVersion(change.before, name);
+      const to = topLevelVersion(change.after, name);
+      if (from === null || to === null) {
+        return humanStop(
+          `the target has no top-level entry in ${detail(change.path)}: ${detail(name)}`,
+        );
+      }
+      // 入れ子のコピーだけが変わると、トップレベルの版が更新後の版を表さない。
+      if (from === to) {
+        return humanStop(
+          `the top-level entry of the target did not change: ${detail(name)}`,
+        );
+      }
+      if (versions !== null && (versions.from !== from || versions.to !== to)) {
+        return humanStop("the lockfiles resolve the target differently");
+      }
+      versions = { from, to };
+      update = heavier(update, kind);
+    }
+    if (versions === null) {
+      return humanStop("no package changed in the lockfiles");
+    }
+    targets.push({ name, from: versions.from, to: versions.to, update });
+  }
+  return { kind: "ok", targets };
 }
 
 // ---- 事実の収集 ----
@@ -256,12 +285,36 @@ export type CollectDeps = {
   minPublishedDays: number;
   /** PRのbaseに期待するブランチ名。これと違うPRは人に回す。 */
   expectedBaseRef: string;
+  /** 複数のパッケージが同時に更新されるPR(グループの更新)を対象にするか。 */
+  allowGroups: boolean;
+};
+
+/** 影響調査に渡す、パッケージごとの事実。`targets`と同じ順で並ぶ。 */
+export type CollectedPackage = {
+  name: string;
+  /** 更新前の版。 */
+  from: string;
+  /** registryから読んだ、更新の前後の公開者などの要約。 */
+  registryMetadata: string;
+  /**
+   * 更新前の版と更新後の版のリポジトリのURL。制御文字を除いた値を、正規化せずに渡す。
+   * 読めなかったときは`null`で、`unverifiedInputs`が"registry metadata"を含む。
+   */
+  repositoryBefore: string | null;
+  repositoryAfter: string | null;
+  /** 取得できなかった入力。registryの要約に欠けた項目があれば"registry metadata"を含む。 */
+  unverifiedInputs: UnverifiedInputName[];
 };
 
 export type CollectResult =
   | {
       kind: "ready";
-      input: GateInput;
+      /** 対象に依らないPRの事実。`update`は、全対象のうち最も重い種別。 */
+      common: GateCommon;
+      /** 対象ごとの事実。名前の辞書順で、1個以上`MAX_GROUP_TARGETS`個以下。 */
+      targets: GateTargetFacts[];
+      /** `targets`と同じ順の、影響調査に渡す事実。 */
+      packages: CollectedPackage[];
       /** 事実を固定したheadのsha。 */
       headSha: string;
       /** PRのbaseのブランチ名。`expectedBaseRef`と一致する。 */
@@ -270,18 +323,6 @@ export type CollectResult =
       baseSha: string;
       /** `files[].before`を読んだmerge-baseのsha。 */
       mergeBaseSha: string;
-      /** 更新前の版。影響調査に渡す。 */
-      from: string;
-      /** registryから読んだ、更新の前後の公開者などの要約。影響調査に渡す。 */
-      registryMetadata: string;
-      /**
-       * 更新前の版と更新後の版のリポジトリのURL。制御文字を除いた値を、正規化せずに渡す。
-       * 読めなかったときは`null`で、`unverifiedInputs`が"registry metadata"を含む。
-       */
-      repositoryBefore: string | null;
-      repositoryAfter: string | null;
-      /** 取得できなかった入力。registryの要約に欠けた項目があれば"registry metadata"を含む。 */
-      unverifiedInputs: UnverifiedInputName[];
     }
   | { kind: "wait"; reason: string }
   | { kind: "needs_human"; reason: string }
@@ -297,7 +338,10 @@ export type CollectResult =
  */
 export function buildCollectDeps(args: {
   client: GhClient;
-  config: Pick<FactoryConfig, "dependabot_min_published_days">;
+  config: Pick<
+    FactoryConfig,
+    "dependabot_min_published_days" | "dependabot_group_enabled"
+  >;
   fetchImpl: FetchLike;
   now: () => number;
 }): CollectDeps {
@@ -317,6 +361,7 @@ export function buildCollectDeps(args: {
     now,
     minPublishedDays: config.dependabot_min_published_days,
     expectedBaseRef: "main",
+    allowGroups: config.dependabot_group_enabled,
   };
 }
 
@@ -415,13 +460,10 @@ async function readRegistryFacts(
 
 type Gathered = {
   kind: "gathered";
-  input: Omit<GateInput, "mergeable">;
+  common: Omit<GateCommon, "mergeable">;
+  targets: GateTargetFacts[];
+  packages: CollectedPackage[];
   mergeBaseSha: string;
-  from: string;
-  registryMetadata: string;
-  repositoryBefore: string | null;
-  repositoryAfter: string | null;
-  unverifiedInputs: UnverifiedInputName[];
 };
 
 /** パスの重複を除く。最初に現れた順を保つ。 */
@@ -467,36 +509,17 @@ async function gather(
       });
     }
 
-    const derived = deriveTarget(files);
+    const derived = deriveTargets(files, deps.allowGroups);
     if (derived.kind === "needs_human") return derived;
-    const { target, from, update } = derived;
 
-    const facts = await readRegistryFacts(deps, target.name, from, target.to);
-    const checks = await deps.listPrChecks(pr.owner, pr.repo, headSha);
-
-    return {
-      kind: "gathered",
-      mergeBaseSha,
-      from,
-      registryMetadata: facts.registryMetadata,
-      repositoryBefore: facts.repositoryBefore,
-      repositoryAfter: facts.repositoryAfter,
-      unverifiedInputs: facts.missing.length === 0 ? [] : ["registry metadata"],
-      input: {
-        authorLogin: first.authorLogin,
-        authorType: first.authorType ?? "",
-        headRepoFullName: first.headRepoFullName ?? "",
-        baseRepoFullName: first.baseRepoFullName,
-        commits: comparison.commits,
-        checks,
-        requiredChecks: REQUIRED_CHECKS,
-        update,
-        changedPaths,
-        files,
-        target,
+    // 対象ごとに順に読む。同時に読むと、registryへの負荷が対象の数だけ重なる。
+    const targets: GateTargetFacts[] = [];
+    const packages: CollectedPackage[] = [];
+    for (const { name, from, to } of derived.targets) {
+      const facts = await readRegistryFacts(deps, name, from, to);
+      targets.push({
+        target: { name, to },
         publishedAtIso: facts.publishedAtIso,
-        nowMs: deps.now(),
-        minPublishedDays: deps.minPublishedDays,
         installScripts: facts.installScripts,
         registry:
           facts.integrity === null
@@ -506,6 +529,40 @@ async function gather(
                 version: facts.version,
                 integrity: facts.integrity,
               },
+      });
+      packages.push({
+        name,
+        from,
+        registryMetadata: facts.registryMetadata,
+        repositoryBefore: facts.repositoryBefore,
+        repositoryAfter: facts.repositoryAfter,
+        unverifiedInputs:
+          facts.missing.length === 0 ? [] : ["registry metadata"],
+      });
+    }
+    const checks = await deps.listPrChecks(pr.owner, pr.repo, headSha);
+
+    return {
+      kind: "gathered",
+      mergeBaseSha,
+      targets,
+      packages,
+      common: {
+        authorLogin: first.authorLogin,
+        authorType: first.authorType ?? "",
+        headRepoFullName: first.headRepoFullName ?? "",
+        baseRepoFullName: first.baseRepoFullName,
+        commits: comparison.commits,
+        checks,
+        requiredChecks: REQUIRED_CHECKS,
+        update: derived.targets.reduce<UpdateKind>(
+          (heaviest, target) => heavier(heaviest, target.update),
+          "patch",
+        ),
+        changedPaths,
+        files,
+        nowMs: deps.now(),
+        minPublishedDays: deps.minPublishedDays,
       },
     };
   } catch (error) {
@@ -567,16 +624,13 @@ async function collect(
   return {
     kind: "ready",
     // 計算が遅れることのある値なので、最後に読み直した値を使う。真偽に丸めない。
-    input: { ...gathered.input, mergeable: last.mergeable },
+    common: { ...gathered.common, mergeable: last.mergeable },
+    targets: gathered.targets,
+    packages: gathered.packages,
     headSha: first.headSha,
     baseRef: first.baseRef,
     baseSha,
     mergeBaseSha: gathered.mergeBaseSha,
-    from: gathered.from,
-    registryMetadata: gathered.registryMetadata,
-    repositoryBefore: gathered.repositoryBefore,
-    repositoryAfter: gathered.repositoryAfter,
-    unverifiedInputs: gathered.unverifiedInputs,
   };
 }
 

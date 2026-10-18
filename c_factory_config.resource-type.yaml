@@ -49,6 +49,7 @@ schema:
     - implement_max_diff_lines
     - dependabot_enabled
     - dependabot_merge_enabled
+    - dependabot_group_enabled
     - dependabot_min_published_days
     - pr_ci_watch_enabled
     - pr_ci_watch_human_prs
@@ -138,6 +139,11 @@ schema:
       type: boolean
       description: >-
         dependabotの更新PRを、条件を満たしたときに自動でマージするかどうかです。falseの間は、マージできると判断したPRもマージせず、人の対応待ちにします。dependabot_enabledを有効にして試運転の結果を確かめてから、有効にします。
+      default: false
+    dependabot_group_enabled:
+      type: boolean
+      description: >-
+        dependabotの更新PRのうち、複数のパッケージを同時に更新するグループのPRを、自動処理の対象にするかどうかです。falseの間は、2つ以上のパッケージが変わるPRを人の対応待ちにします。対象は最大3つで、各パッケージは単独の更新と同じ検査を通ります。dependabot_enabledを有効にし、dependabot_merge_enabledをfalseにした試運転で、グループのPRがマージ可の判定まで進むことを確かめてから、有効にします。
       default: false
     dependabot_min_published_days:
       type: integer
