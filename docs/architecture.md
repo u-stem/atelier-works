@@ -248,9 +248,9 @@ Data Tablesはスキーマ`factory`に置く。migrationは追加だけにし、
 | `main_ci_runs` | 既定ブランチのコミットごとのCIの判定結果。作業項目とは独立した読み取り専用の記録で、判定を待つ行と判定済みの行を持つ |
 | `pr_ci_checks` | FactoryのPRのheadごとのCIの判定結果。設定`pr_ci_watch_human_prs`が`true`のときは、許可された人が作ったPRの行も持つ。作業項目とは独立した記録で、判定を待つ行と判定済みの行を持つ。作業項目のIDは、外部キーを持たず値だけで参照する。人のPRの行は、作業項目のIDが空である。CIの失敗を直す作業項目の結果待ちの状態(`fixing`)と、直す作業項目へのIDなどの列を持つ。直す作業項目の起動は`watch_pr_ci`が行う([PRのCI監視の内部仕様](internals/pr-ci.md)) |
 | `pr_conflict_checks` | FactoryのPRのマージの競合の記録。PRごとに1行で、競合を見つけたPRだけが行を持つ。競合を見たときのheadのコミットと、PRの何回目の競合か(`episode`)と、今の競合で通知した時刻を持つ。競合を直す側の列として、直している作業項目のID、今の競合の回で起動した回数、起動の保留理由、今の競合の回が始まった時刻を持つ。作業項目とは外部キーを持たず、IDの値だけで結ぶ。競合から離れた行はDBの掃除が消す([PRのCI監視の内部仕様](internals/pr-ci.md#競合の検知)) |
-| `gh_repos` | GitHubの所有者のリポジトリごとの状態。所有者、リポジトリ、数値ID、許可の有無、既定のブランチ(取らないので空)、archive済みか、開いているPRとトリガーラベル付きのIssueの件数、一覧から消えたか(`gone`)とその理由を持つ。詳細を最後に取り終えた時刻(`last_collected_at`)と着手した時刻、打ち切りと失敗の印も持つ。一覧を取り終えた所有者だけを書き直し、消えた行は残す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`が、それぞれの設定(`gh_source_dependabot`、`gh_source_pr_conflict_watch`、`gh_source_poll_issues`、`gh_source_poll_prs`)が`db`のときに、鮮度の判定に読む([GitHubの収集](internals/github-collect.md)) |
+| `gh_repos` | GitHubの所有者のリポジトリごとの状態。所有者、リポジトリ、数値ID、許可の有無、既定のブランチ(取らないので空)、archive済みか、開いているPRとトリガーラベル付きのIssueの件数、一覧から消えたか(`gone`)とその理由を持つ。詳細を最後に取り終えた時刻(`last_collected_at`)と着手した時刻、打ち切りと失敗の印も持つ。一覧を取り終えた所有者だけを書き直し、消えた行は残す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`、`watch_pr_ci`が、それぞれの設定(`gh_source_dependabot`、`gh_source_pr_conflict_watch`、`gh_source_poll_issues`、`gh_source_poll_prs`、`gh_source_pr_ci_watch`)が`db`のときに、鮮度の判定に読む([GitHubの収集](internals/github-collect.md)) |
 | `gh_collect_runs` | `collect_github`の実行の記録。所有者ごとに1行で、始めに空の行を書き、終わりに更新する。成否、失敗の種類とその段、照合の結果、GraphQLの費用と要求数、詳細を取った件数、通信を控える時刻を持つ。保持期間を過ぎた行はDBの掃除が消す([GitHubの収集](internals/github-collect.md)) |
-| `gh_pull_requests` | GitHubの開いているPRの記録。リポジトリの番号ごとに1行で、headのコミットとブランチ名、作者、ドラフトかとforkか、競合の有無、ラベルの有無、レビュー依頼とassigneeの数値IDを持つ。題と本文は持たない。行を使ってよいかを`usable`で表す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`、`watch_pr_conflicts`、`poll_prs`が、それぞれの設定(`gh_source_dependabot`、`gh_source_pr_conflict_watch`、`gh_source_poll_prs`)が`db`のときに、候補の列挙に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
+| `gh_pull_requests` | GitHubの開いているPRの記録。リポジトリの番号ごとに1行で、headのコミットとブランチ名、作者、ドラフトかとforkか、競合の有無、ラベルの有無、レビュー依頼とassigneeの数値IDを持つ。題と本文は持たない。行を使ってよいかを`usable`で表す。作業項目とは独立した記録で、外部キーを持たない。`poll_dependabot`、`watch_pr_conflicts`、`poll_prs`、`watch_pr_ci`が、それぞれの設定(`gh_source_dependabot`、`gh_source_pr_conflict_watch`、`gh_source_poll_prs`、`gh_source_pr_ci_watch`)が`db`のときに、候補の列挙に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
 | `gh_issues` | GitHubのトリガーラベル付きの開いているIssueの記録。リポジトリの番号ごとに1行で、作者と作成と更新の時刻を持つ。題と本文は持たない。作業項目とは独立した記録で、外部キーを持たない。`poll_issues`が、設定`gh_source_poll_issues`が`db`のときに、候補のIssueの発見に読む([GitHubの収集](internals/github-collect.md#詳細の表)) |
 | `worker_samples` | defaultのworkerの負荷の2分ごとの記録。枠を使うジョブの数とscriptごとの内訳、待つジョブの数と最長の待ち、予定時刻と開始の遅れ、コンテナのメモリを1行に並べる。読めなかった値は空のまま残す。作業項目とは独立した読み取り専用の記録で、保持期間を過ぎた行はDBの掃除が消す |
 
@@ -830,7 +830,7 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 設定`gh_collect_enabled`(既定は`false`)が偽の間は、トークンを読まず、何も書かない。
 実行の記録は`gh_collect_runs`に残す。
 一覧を取り終えて所有者のIDの照合が通った周回だけが、その所有者の記録を置き換える。
-記録を読むのは、`self_update`、`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`の5つである。
+記録を読むのは、`self_update`、`poll_dependabot`、`watch_pr_conflicts`、`poll_issues`、`poll_prs`、`watch_pr_ci`の6つである。
 `self_update`は、収集が続けて成功しているかを確かめて、止まっていれば通知する。
 `poll_dependabot`は、設定`gh_source_dependabot`(既定は`search`)が`db`のときだけ、候補のPRを表から読み、記録が古いリポジトリは検索に戻す。
 `watch_pr_conflicts`は、設定`gh_source_pr_conflict_watch`(既定は`search`)が`db`のときだけ、リポジトリの発見とPRの列挙を表から読む。
@@ -841,6 +841,9 @@ tag`periodic`のworkerで動き、所有者ごとの読み取り専用のトー�
 `poll_prs`は、設定`gh_source_poll_prs`(既定は`search`)が`db`のときだけ、ラベル、レビューの依頼、assigneeのPRを表から見つける。
 記録が古い所有者、設定で明示したリポジトリを表で使えない所有者、チームへのレビューの依頼が付いたPRのある所有者は、検索に戻す。
 表の候補は、`getPr`と`getIssue`で開いていることと今も対象であることを確かめてから使う。
+`watch_pr_ci`は、設定`gh_source_pr_ci_watch`(既定は`search`)が`db`のときだけ、許可された人のPRの候補を表から見つける。
+記録が古い範囲と、設定で明示したリポジトリを表で使えない所有者は、その範囲だけ検索に戻す。
+表の候補は、PRを読み直して作者、fork、ブランチを確かめてから記録する。
 トークンの作り方と扱いは[セキュリティ](security.md#収集用の読み取りトークン)に、運用は[運用](operations.md#収集の運用)に、記録の意味と限界は[GitHubの収集](internals/github-collect.md)に書く。
 
 ## 工程5の監査
