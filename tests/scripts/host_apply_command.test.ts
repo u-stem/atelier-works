@@ -141,6 +141,31 @@ describe("the kinds that can be created", () => {
   });
 });
 
+describe("a kind named like a property of Object", () => {
+  const NAMES = ["constructor", "__proto__", "toString", "hasOwnProperty"];
+
+  // 型の上は種類の名前しか受けないので、実行時の入力を模して合成する。
+  function withKind(name: string): CommandSpecInput {
+    return Object.assign({}, shape(), { kind: name });
+  }
+
+  test.each(NAMES)("%s is refused by issueSpec", (name) => {
+    expect(() => issueSpec(withKind(name))).toThrow("kind cannot be created");
+  });
+
+  test.each(NAMES)("%s is refused by issueSpecUnchecked", (name) => {
+    expect(() => issueSpecUnchecked(withKind(name))).toThrow(
+      "kind cannot be created",
+    );
+  });
+
+  test("an unknown kind is refused", () => {
+    expect(() => issueSpec(withKind("docker_exec"))).toThrow(
+      "kind cannot be created",
+    );
+  });
+});
+
 describe("the output limits", () => {
   test.each([
     ["git_read", 64 * 1024 * 1024, "kill"],

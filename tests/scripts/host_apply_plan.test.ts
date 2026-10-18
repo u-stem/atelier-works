@@ -1351,6 +1351,25 @@ describe("the runner that the entry point gives to plan and approve", () => {
     await expect(run(showBlobArgs(SHA, "a"))).rejects.toThrow("too large");
   });
 
+  const DROPPED: CommandResult = {
+    kind: "done",
+    code: 0,
+    stdout: "cut",
+    stderr: "",
+    stdoutDropped: true,
+    stderrDropped: false,
+  };
+
+  test("createGitRunner fails when output was dropped", async () => {
+    const run = createGitRunner(recording(DROPPED).run, "/srv/repo");
+    await expect(run(showBlobArgs(SHA, "a"))).rejects.toThrow("cut short");
+  });
+
+  test("createLimitedRunner fails when output was dropped", async () => {
+    const run = createLimitedRunner(recording(DROPPED).run, "/srv/repo");
+    await expect(run(showBlobArgs(SHA, "a"), 99)).rejects.toThrow("cut short");
+  });
+
   test("createLimitedRunner passes the limit to the command", async () => {
     const inner = recording(done(""));
     await createLimitedRunner(inner.run, "/srv/repo")(

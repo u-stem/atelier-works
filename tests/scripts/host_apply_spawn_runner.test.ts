@@ -74,6 +74,10 @@ function makeStream() {
     close() {
       controller?.close();
     },
+    /** 読み取りを失敗させる。 */
+    fail() {
+      controller?.error(new Error("stream failed"));
+    },
   };
 }
 
@@ -433,6 +437,51 @@ describe("a command that is ended by a signal", () => {
     const result = h.run(gitRead());
     h.fake.kill("SIGSEGV");
     await expect(result).rejects.toMatchObject({ reason: "signal" });
+  });
+});
+
+describe("a read of the output that fails", () => {
+  test("is reported as read when it is the standard output", async () => {
+    const h = makeHarness();
+    const result = h.run(gitRead());
+    h.fake.out.push("partial");
+    h.fake.out.fail();
+    await expect(result).rejects.toMatchObject({ reason: "read" });
+  });
+
+  test("kills the process group, since the output is lost", async () => {
+    const h = makeHarness();
+    const result = h.run(gitRead());
+    h.fake.out.fail();
+    await result.catch(() => {});
+    expect(h.killed).toEqual([PID]);
+  });
+
+  test("is reported as read even after the command has exited", async () => {
+    const h = makeHarness();
+    const result = h.run(gitRead());
+    h.fake.exitOnly(0);
+    h.fake.err.close();
+    h.fake.out.fail();
+    await expect(result).rejects.toMatchObject({ reason: "read" });
+  });
+
+  test("cancels the timer", async () => {
+    const h = makeHarness();
+    const result = h.run(gitRead());
+    h.fake.out.fail();
+    await result.catch(() => {});
+    expect(h.timers.map((timer) => timer.cancelled)).toEqual([true]);
+  });
+
+  test("is only information when it is the standard error", async () => {
+    const h = makeHarness();
+    const result = h.run(gitRead());
+    h.fake.out.push("body");
+    h.fake.out.close();
+    h.fake.err.fail();
+    h.fake.exitOnly(0);
+    expect(await result).toMatchObject({ kind: "done", stdout: "body" });
   });
 });
 
