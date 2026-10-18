@@ -1089,8 +1089,12 @@ describe("where processes can be started", () => {
  * `command.ts`から取り込んでいる値の名前。型だけの名前は数えない。
  * 名前空間のimport、`export *`、`export {…} from`、動的import、副作用のimportは、名前の代わりに印を返す。
  */
-function commandImports(file: string, source: string): string[] {
-  const wanted = moduleKey(join(HOST_APPLY_DIR, "command.ts"));
+function valueImports(
+  file: string,
+  source: string,
+  moduleName: string,
+): string[] {
+  const wanted = moduleKey(join(HOST_APPLY_DIR, moduleName));
   const points = (specifier: string): boolean =>
     (specifier.startsWith("./") || specifier.startsWith("../")) &&
     moduleKey(resolve(dirname(file), specifier)) === wanted;
@@ -1140,7 +1144,11 @@ describe("what the modules take from command.ts", () => {
   test("are exactly the allowed names of the allowed modules", () => {
     const actual: Record<string, string[]> = {};
     for (const file of scriptFiles()) {
-      const names = commandImports(file, readFileSync(file, "utf8"));
+      const names = valueImports(
+        file,
+        readFileSync(file, "utf8"),
+        "command.ts",
+      );
       if (names.length > 0) actual[file.slice(REPO_ROOT.length + 1)] = names;
     }
     expect(actual).toEqual(ALLOWED);
@@ -1171,9 +1179,71 @@ describe("what the modules take from command.ts", () => {
     ["a side effect import", 'import "./command.ts";', ["<side effect>"]],
     ["another module", 'import { a } from "./stable.ts";', []],
   ])("the scanner reads %s", (_name, source, expected) => {
-    expect(commandImports(join(HOST_APPLY_DIR, "x.ts"), source)).toEqual(
-      expected,
+    expect(
+      valueImports(join(HOST_APPLY_DIR, "x.ts"), source, "command.ts"),
+    ).toEqual(expected);
+  });
+});
+
+describe("what the modules take from spawn_runner.ts", () => {
+  // 実行口を作れる値は、入口が取る`createRunner`だけにする。
+  // 既定の部品(`Bun.spawn`を包む関数)を取れると、発行の登録簿と種類の表を迂回して起動できる。
+  const ALLOWED: Record<string, string[]> = {
+    "scripts/host-apply.ts": ["createRunner"],
+  };
+
+  test("are exactly the allowed names of the allowed modules", () => {
+    const actual: Record<string, string[]> = {};
+    for (const file of scriptFiles()) {
+      const names = valueImports(file, readFileSync(file, "utf8"), RUNNER_NAME);
+      if (names.length > 0) actual[file.slice(REPO_ROOT.length + 1)] = names;
+    }
+    expect(actual).toEqual(ALLOWED);
+  });
+
+  test("an import of the default parts is not among the allowed names", () => {
+    const names = valueImports(
+      join(REPO_ROOT, "scripts/host-apply.ts"),
+      'import { createRunner, defaultRunnerDeps } from "./host_apply/spawn_runner.ts";',
+      RUNNER_NAME,
     );
+    expect(names).not.toEqual(ALLOWED["scripts/host-apply.ts"]);
+  });
+
+  test("a type import of the runner dependencies is not counted", () => {
+    expect(
+      valueImports(
+        join(REPO_ROOT, "scripts/host-apply.ts"),
+        'import { createRunner, type RunnerDeps } from "./host_apply/spawn_runner.ts";',
+        RUNNER_NAME,
+      ),
+    ).toEqual(["createRunner"]);
+  });
+
+  test("a namespace import is flagged", () => {
+    expect(
+      valueImports(
+        join(REPO_ROOT, "scripts/host-apply.ts"),
+        'import * as r from "./host_apply/spawn_runner.ts";',
+        RUNNER_NAME,
+      ),
+    ).toEqual(["<namespace>"]);
+  });
+
+  test("the module exports no object that holds the real spawn", async () => {
+    const exported = await import("../../scripts/host_apply/spawn_runner.ts");
+    expect(Object.keys(exported).sort()).toEqual([
+      "createKillGroup",
+      "createRunner",
+      "defaultKillGroup",
+    ]);
+  });
+
+  test("the default killGroup is frozen", async () => {
+    const { defaultKillGroup } = await import(
+      "../../scripts/host_apply/spawn_runner.ts"
+    );
+    expect(Object.isFrozen(defaultKillGroup)).toBe(true);
   });
 });
 

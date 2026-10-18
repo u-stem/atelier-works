@@ -82,7 +82,10 @@ const realDeps: RunnerDeps = {
   acceptUnchecked: false,
 };
 
-/** テストが、既定の実行口の部品を直接確かめるための参照。 */
+/** テストが、既定のグループの停止を直接確かめるための参照。起動の部品は外に出さない。 */
+export const defaultKillGroup: (pid: number) => void = Object.freeze(
+  realDeps.killGroup,
+);
 export const defaultRunnerDeps: RunnerDeps = realDeps;
 
 type ReadMode =

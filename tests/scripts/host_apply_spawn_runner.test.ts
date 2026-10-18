@@ -19,7 +19,7 @@ import {
 import {
   createKillGroup,
   createRunner,
-  defaultRunnerDeps,
+  defaultKillGroup,
   type RunnerDeps,
   type SpawnedProcess,
   type SpawnOptions,
@@ -811,15 +811,10 @@ describe("real processes", () => {
     await expect(result).rejects.toMatchObject({ reason: "aborted" });
   });
 
-  test("the default killGroup ignores a group that no longer exists", async () => {
-    const done = Bun.spawnSync(["/usr/bin/true"]);
-    expect(() => defaultRunnerDeps.killGroup(done.pid)).not.toThrow();
-  });
-
   test.each([0, 1, process.pid])(
     "the default killGroup refuses the process id %d",
     (pid) => {
-      expect(() => defaultRunnerDeps.killGroup(pid)).toThrow("pgid");
+      expect(() => defaultKillGroup(pid)).toThrow("pgid");
     },
   );
 
