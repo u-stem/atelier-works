@@ -83,6 +83,16 @@ describe("serializeApprovedRecord", () => {
     );
   });
 
+  test("refuses a record whose text would be over 64 KiB", () => {
+    const files = Array.from({ length: 1500 }, (_, i) => ({
+      path: `scripts/host_apply/generated/file${i}.ts`,
+      status: "A" as const,
+    }));
+    expect(() => serializeApprovedRecord({ ...valid(), files })).toThrow(
+      "too large",
+    );
+  });
+
   test("ends with a newline", () => {
     expect(serializeApprovedRecord(valid()).endsWith("\n")).toBe(true);
   });

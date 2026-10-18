@@ -126,6 +126,20 @@ describe("writeApproved", () => {
     expect(readFileSync(outside, "utf8")).toBe("keep");
   });
 
+  test("writes nothing for a record whose text would be over 64 KiB", () => {
+    const dir = privateDir();
+    const files = Array.from({ length: 1500 }, (_, i) => ({
+      path: `scripts/host_apply/generated/file${i}.ts`,
+      status: "A" as const,
+    }));
+    try {
+      writeApproved(dir, { ...RECORD, files }, uid);
+    } catch {
+      // 書かれないことだけを確かめる
+    }
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   test("refuses a record that is not valid", () => {
     const dir = privateDir();
     const broken = { ...RECORD, sha: "short" };

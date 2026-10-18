@@ -47,6 +47,14 @@ function runIn(dir: string) {
   };
 }
 
+/** 実行するファイルが`HEAD`と違うときの拒否。 */
+function differs(path: string) {
+  return {
+    ok: false,
+    reason: `an executed file differs from HEAD: ${path}`,
+  };
+}
+
 function check(dir: string, cwd: string = dir) {
   return checkCodeOrigin({ run: runIn(dir), repoRoot: dir, cwd });
 }
@@ -111,50 +119,56 @@ describe("checkCodeOrigin", () => {
   test("rejects a changed entry point", async () => {
     const { repo } = setup();
     writeFileSync(join(repo.dir, "scripts/host-apply.ts"), "export {}; // x\n");
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("scripts/host-apply.ts"));
   });
 
   test("rejects a changed module", async () => {
     const { repo } = setup();
     writeFileSync(join(repo.dir, "scripts/host_apply/a.ts"), "evil\n");
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("scripts/host_apply/a.ts"));
   });
 
   test("rejects a changed module in a subdirectory", async () => {
     const { repo } = setup();
     writeFileSync(join(repo.dir, "scripts/host_apply/deep/b.ts"), "evil\n");
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(
+      differs("scripts/host_apply/deep/b.ts"),
+    );
   });
 
   test("rejects a changed bunfig.toml", async () => {
     const { repo } = setup();
     writeFileSync(join(repo.dir, "bunfig.toml"), 'preload = ["./x.ts"]\n');
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("bunfig.toml"));
   });
 
   test("rejects a changed package.json", async () => {
     const { repo } = setup();
     writeFileSync(join(repo.dir, "package.json"), '{"scripts":{}}\n');
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("package.json"));
   });
 
   test("rejects a change that is hidden with skip-worktree", async () => {
     const { repo } = setup();
     repo.git(["update-index", "--skip-worktree", "scripts/host_apply/a.ts"]);
     writeFileSync(join(repo.dir, "scripts/host_apply/a.ts"), "evil\n");
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("scripts/host_apply/a.ts"));
   });
 
   test("rejects a file under scripts/host_apply/ that is not tracked", async () => {
     const { repo } = setup();
     writeFileSync(join(repo.dir, "scripts/host_apply/extra.ts"), "evil\n");
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(
+      differs("scripts/host_apply/extra.ts"),
+    );
   });
 
   test("rejects an untracked file that .gitignore hides", async () => {
     const { repo } = setup({ ...FILES, ".gitignore": "ignored.ts\n" });
     writeFileSync(join(repo.dir, "scripts/host_apply/ignored.ts"), "evil\n");
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(
+      differs("scripts/host_apply/ignored.ts"),
+    );
   });
 
   test("rejects a bunfig.toml that HEAD does not have", async () => {
@@ -164,13 +178,13 @@ describe("checkCodeOrigin", () => {
       "package.json": "{}\n",
     });
     writeFileSync(join(repo.dir, "bunfig.toml"), 'preload = ["./x.ts"]\n');
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("bunfig.toml"));
   });
 
   test("rejects a module that was deleted from the work tree", async () => {
     const { repo } = setup();
     rmSync(join(repo.dir, "scripts/host_apply/a.ts"));
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("scripts/host_apply/a.ts"));
   });
 
   test("rejects a module that was replaced by a symlink", async () => {
@@ -185,7 +199,17 @@ describe("checkCodeOrigin", () => {
       join(repo.dir, "elsewhere/a.ts"),
       join(repo.dir, "scripts/host_apply/a.ts"),
     );
-    expect((await check(repo.dir)).ok).toBe(false);
+    expect(await check(repo.dir)).toEqual(differs("scripts/host_apply/a.ts"));
+  });
+
+  test("rejects a symlink that HEAD has under scripts/host_apply/", async () => {
+    const { repo } = setup();
+    repo.setOriginMain(repo.symlink("scripts/host_apply/link.ts", "a.ts"));
+    expect(await check(repo.dir)).toEqual({
+      ok: false,
+      reason:
+        "HEAD has an executed path that is not a regular file: scripts/host_apply/link.ts",
+    });
   });
 
   test("rejects a HEAD that origin/main does not contain", async () => {

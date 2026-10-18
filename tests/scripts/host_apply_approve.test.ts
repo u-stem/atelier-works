@@ -512,6 +512,8 @@ describe("runApprove", () => {
     execArgv?: string[];
     isTerminal?: boolean;
     originOk?: boolean;
+    /** 出どころの検査が例外を投げる。 */
+    originThrows?: boolean;
     git?: (real: ApproveGit) => ApproveGit;
     stored?: ReadApprovedResult;
     /** 確認の入力。`undefined`なら表示された文言を打つ。 */
@@ -533,10 +535,12 @@ describe("runApprove", () => {
       env: options.env ?? {},
       execArgv: options.execArgv ?? ["--no-env-file"],
       isTerminal: () => options.isTerminal ?? true,
-      checkOrigin: async () =>
-        options.originOk === false
+      checkOrigin: async () => {
+        if (options.originThrows) throw new Error("cannot read \u001b[2J");
+        return options.originOk === false
           ? { ok: false, reason: "the code is not at origin/main" }
-          : { ok: true },
+          : { ok: true };
+      },
       git: options.git ? options.git(real) : real,
       readRecord: () => options.stored ?? { kind: "absent" },
       writeRecord: (record) => {
@@ -827,6 +831,33 @@ describe("runApprove", () => {
           git: (real) => ({ ...real, originMainTip: async () => null }),
         }),
       ).toEqual(REFUSED);
+    });
+
+    test("refuses when the origin check throws", async () => {
+      expect(await outcome(scenario(), { originThrows: true })).toEqual(
+        REFUSED,
+      );
+    });
+
+    test("escapes the message of an origin check that throws", async () => {
+      const { errors } = await approve(scenario(), { originThrows: true });
+      expect(errors.join("\n")).toContain("cannot read \\x1b[2J");
+    });
+
+    test("refuses a record that would be over 64 KiB, before asking", async () => {
+      const files: Record<string, string> = {};
+      for (let i = 0; i < 1200; i++) {
+        files[
+          `scripts/host_apply/generated/file${String(i).padStart(4, "0")}.ts`
+        ] = "export {};\n";
+      }
+      const s = scenario(files);
+      const { code, printed, written } = await approve(s);
+      expect({
+        code,
+        wrote: written.length,
+        asked: printed.some((line) => line.includes('"approve ')),
+      }).toEqual({ code: EXIT_REFUSED, wrote: 0, asked: false });
     });
 
     test("exits 1 when the record cannot be written", async () => {
