@@ -41,6 +41,9 @@ function findLockViolations(definitionPath: string, content: string): string[] {
     return ["definition is not a mapping"];
   }
   const violations: string[] = [];
+  if (/^%/m.test(content)) {
+    violations.push("YAML directives are not allowed");
+  }
   if (parsed.lock !== expectedLock(definitionPath)) {
     violations.push(`lock must be exactly "${expectedLock(definitionPath)}"`);
   }
@@ -61,12 +64,44 @@ function findLockViolations(definitionPath: string, content: string): string[] {
   return violations;
 }
 
+/** 解釈した後の値に、`!inline`で始まる文字列があるか。エスケープや行の継続も解く。 */
+function hasInlineValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trimStart().startsWith("!inline");
+  }
+  if (Array.isArray(value)) {
+    return value.some(hasInlineValue);
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).some(
+      ([key, child]) => hasInlineValue(key) || hasInlineValue(child),
+    );
+  }
+  return false;
+}
+
 /**
  * script定義ではないデータファイル(flow、resource、appなど)の`!inline`を拒む。
  * このリポジトリには、そのような参照がない。
+ * 文字列の検索に加えて、解釈した後の値も調べる。`"\x21inline ..."`のような
+ * エスケープで、文字列に現れない`!inline`を作れるためである。
+ * `%TAG`と`%YAML`の指示子は、タグの別名で`!inline`を作れるので拒む。
  */
-function findInlineInDataFile(content: string): string[] {
-  return content.includes("!inline") ? ["!inline is not allowed here"] : [];
+function findInlineInDataFile(path: string, content: string): string[] {
+  const violations: string[] = [];
+  if (content.includes("!inline")) {
+    violations.push("!inline is not allowed here");
+  }
+  if (/^%/m.test(content)) {
+    violations.push("YAML directives are not allowed");
+  }
+  if (path.endsWith(".json")) {
+    return violations;
+  }
+  if (hasInlineValue(Bun.YAML.parse(content))) {
+    violations.push("a value resolves to !inline");
+  }
+  return violations;
 }
 
 const PATH = "f/factory/example.script.yaml";
@@ -137,11 +172,43 @@ describe("findLockViolations", () => {
 describe("findInlineInDataFile", () => {
   test("rejects an inline reference in a flow", () => {
     const content = "lock: '!inline ../../../proc/self/cmdline'\n";
-    expect(findInlineInDataFile(content)).toHaveLength(1);
+    expect(
+      findInlineInDataFile("f/factory/x.yaml", content).length,
+    ).toBeGreaterThan(0);
   });
 
   test("accepts a file without an inline reference", () => {
-    expect(findInlineInDataFile("summary: x\n")).toEqual([]);
+    expect(findInlineInDataFile("f/factory/x.yaml", "summary: x\n")).toEqual(
+      [],
+    );
+  });
+});
+
+describe("findInlineInDataFile escapes", () => {
+  test("rejects a hex escape that spells !inline", () => {
+    const content = 'value:\n  content: "\\x21inline mise.local.toml"\n';
+    expect(
+      findInlineInDataFile("f/factory/x.resource.yaml", content).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("rejects a line continuation that spells !inline", () => {
+    const content = 'content: "!\\\n  inline mise.local.toml"\n';
+    expect(
+      findInlineInDataFile("f/factory/x.resource.yaml", content).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("rejects a TAG directive", () => {
+    const content = "%TAG !w! !in\n---\ncontent: !w!line x\n";
+    expect(
+      findInlineInDataFile("f/factory/x.resource.yaml", content).length,
+    ).toBeGreaterThan(0);
+  });
+
+  test("rejects a TAG directive in a script definition", () => {
+    const content = `%TAG !w! !in\n---\n${VALID}`;
+    expect(findLockViolations(PATH, content).length).toBeGreaterThan(0);
   });
 });
 
@@ -154,6 +221,28 @@ describe("script definition lines", () => {
   test("rejects the tag form of the lock value", () => {
     const content = "lock: !inline f/factory/example.script.lock\n";
     expect(findLockViolations(PATH, content).length).toBeGreaterThan(0);
+  });
+});
+
+describe("the tracked tree", () => {
+  const ROOT = new URL("../../", import.meta.url).pathname;
+  const listed = Bun.spawnSync(["git", "-C", ROOT, "ls-files", "-s"]);
+  const modes = listed.stdout
+    .toString()
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => ({ mode: line.slice(0, 6), path: line.split("\t")[1] }));
+
+  test("lists the tracked files", () => {
+    expect(modes.length).toBeGreaterThan(100);
+  });
+
+  // wmillは`f/`の外でも、`dependencies/`、`migrations/`、ルート直下のファイルを
+  // 同期し、symlinkを辿って読む。追跡するツリー全体で拒む。
+  test("has no symlink or submodule", () => {
+    expect(
+      modes.filter(({ mode }) => mode === "120000" || mode === "160000"),
+    ).toEqual([]);
   });
 });
 
@@ -191,8 +280,8 @@ describe("the f directory", () => {
       .filter((path) => !/\.script\.(yaml|json)$/.test(path))
       .filter(
         (path) =>
-          findInlineInDataFile(readFileSync(`${ROOT}${path}`, "utf8")).length >
-          0,
+          findInlineInDataFile(path, readFileSync(`${ROOT}${path}`, "utf8"))
+            .length > 0,
       );
     expect(violations).toEqual([]);
   });
@@ -204,7 +293,13 @@ describe("every script definition in the repository", () => {
   const definitions = [
     ...new Glob("**/*.script.{yaml,json}").scanSync({ cwd: ROOT, dot: true }),
   ]
-    .filter((path) => !IGNORED.test(path) && !path.includes("/node_modules/"))
+    // `f/`の下は、`node_modules`という名前のフォルダも例外にしない。
+    // wmillは名前で除外せず、強制追加された定義も読むため。
+    .filter(
+      (path) =>
+        !IGNORED.test(path) &&
+        (path.startsWith("f/") || !path.includes("/node_modules/")),
+    )
     .sort();
 
   test("finds the definitions to check", () => {
