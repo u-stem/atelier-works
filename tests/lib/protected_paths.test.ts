@@ -852,6 +852,7 @@ describe("files that the host executor runs", () => {
     "run_git",
     "run_fetch",
     "host_probe",
+    "compose_tables",
   ].map((name) => `tests/scripts/host_apply_${name}.test.ts`);
 
   test.each([...EXACT, ...UNDER_PREFIX, ...BASENAMES, ...HOST_TESTS])(
