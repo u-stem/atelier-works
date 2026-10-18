@@ -12,7 +12,7 @@ export function isSha40(value: string): boolean {
  * `protocol.allow=never`は、部分cloneの遅延取得などの通信を止める。
  * `--no-pager`はサブコマンドの前に置く。後ろでは`diff`の未知のオプションとして拒否される。
  */
-export const GIT_FIXED_PREFIX: readonly string[] = [
+export const GIT_FIXED_PREFIX: readonly string[] = Object.freeze([
   "--no-pager",
   "-c",
   "core.hooksPath=/dev/null",
@@ -26,7 +26,7 @@ export const GIT_FIXED_PREFIX: readonly string[] = [
   "diff.relative=false",
   "-c",
   "protocol.allow=never",
-];
+]);
 
 /** 取得先として認めるURL。GitHubのhttpsで、ユーザー名と末尾の`/`を持たない。末尾の`.git`は可。 */
 export const REMOTE_URL_PATTERN =

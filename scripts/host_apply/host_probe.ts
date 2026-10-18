@@ -10,11 +10,8 @@ import {
   type IssuedSpec,
   issueSpec,
 } from "./command.ts";
-import { COMMAND_TIMEOUT_MS } from "./constants.ts";
+import { COMMAND_TIMEOUT_MS, MAX_PROCESS_ID } from "./constants.ts";
 import { PS_BIN, SYSCTL_BIN } from "./exec_paths.ts";
-
-/** プロセスIDの上限。`issueSpec`の検査と同じ値。 */
-const MAX_PID = 2 ** 22;
 
 const MONTHS: readonly string[] = [
   "Jan",
@@ -99,8 +96,8 @@ export async function processStart(
   run: CommandRunner,
   pid: number,
 ): Promise<string | null> {
-  if (!Number.isInteger(pid) || pid < 1 || pid > MAX_PID) {
-    throw new Error(`pid must be an integer from 1 to ${MAX_PID}`);
+  if (!Number.isInteger(pid) || pid < 1 || pid > MAX_PROCESS_ID) {
+    throw new Error(`pid must be an integer from 1 to ${MAX_PROCESS_ID}`);
   }
   const result = requireDone(
     await run(probeSpec(PS_BIN, ["-o", "lstart=", "-p", String(pid)])),

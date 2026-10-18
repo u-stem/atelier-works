@@ -22,16 +22,16 @@ const FULL_REF = /^refs\/[A-Za-z0-9._/-]+$/;
 const SHA_COLON_PATH = /^([0-9a-f]{40}):([\s\S]*)$/;
 
 /** `config`で取得先を読む引数。`git_fetch`の第2の形。 */
-export const REMOTE_URL_ARGS: readonly string[] = [
+export const REMOTE_URL_ARGS: readonly string[] = Object.freeze([
   ...GIT_FIXED_PREFIX,
   "config",
   "--local",
   "--get-all",
   "remote.origin.url",
-];
+]);
 
 /** サブコマンドごとの、許すフラグ。ここに無いフラグは通さない。 */
-export const ALLOWED_GIT_FLAGS: Readonly<Record<string, readonly string[]>> = {
+const RAW_GIT_FLAGS: Readonly<Record<string, readonly string[]>> = {
   show: [],
   diff: [
     "--name-status",
@@ -57,11 +57,21 @@ export const ALLOWED_GIT_FLAGS: Readonly<Record<string, readonly string[]>> = {
   "show-ref": ["--verify"],
 };
 
-const REV_PARSE_QUERIES: readonly string[] = [
+export const ALLOWED_GIT_FLAGS: Readonly<Record<string, readonly string[]>> =
+  Object.freeze(
+    Object.fromEntries(
+      Object.entries(RAW_GIT_FLAGS).map(([name, flags]) => [
+        name,
+        Object.freeze([...flags]),
+      ]),
+    ),
+  );
+
+const REV_PARSE_QUERIES: readonly string[] = Object.freeze([
   "--git-dir",
   "--git-common-dir",
   "--show-toplevel",
-];
+]);
 
 /**
  * リポジトリのルートからの相対パスとして安全か。

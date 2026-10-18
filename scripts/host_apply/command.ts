@@ -9,6 +9,7 @@ import {
   COMMAND_KINDS,
   COMMAND_TIMEOUT_MS,
   type CommandKind,
+  MAX_PROCESS_ID,
 } from "./constants.ts";
 import { GIT_BIN, PS_BIN, SYSCTL_BIN } from "./exec_paths.ts";
 import {
@@ -132,7 +133,6 @@ export const HOST_PROBE_ENV: Readonly<Record<string, string>> = Object.freeze({
 });
 
 const PROBE_PID = /^[1-9][0-9]{0,6}$/;
-const MAX_PID = 2 ** 22;
 
 type Fields = Omit<IssuedFields, "maxStdoutBytes" | "overflow">;
 
@@ -150,7 +150,7 @@ function checkHostProbe(spec: Fields): string | null {
       third === "-p" &&
       pid !== undefined &&
       PROBE_PID.test(pid) &&
-      Number(pid) <= MAX_PID;
+      Number(pid) <= MAX_PROCESS_ID;
     return valid ? null : "host_probe takes -o lstart= -p <pid>";
   }
   const valid =
