@@ -650,6 +650,117 @@ FactoryのGitHubユーザーが、そのリポジトリのpush権限を持つcol
 
 読み取り元だけを戻すときは、`gh_source_poll_issues`を`search`にする。
 
+### PRの発見の元を表に切り替える
+
+設定`gh_source_poll_prs`を`db`にすると、`poll_prs`はラベル、レビューの依頼、assigneeのPRを、検索でなく収集の表から見つける。
+検索の回数が減り、検索のレート制限に当たりにくくなる。
+既定の`search`のままなら、発見は変わらない。
+付与者の確認、作者の確認、取得、作業項目の登録、通知、追跡中のPRの見つけ直しは、どちらの元でも同じである。
+
+| 項目 | 既定値 | 内容 |
+| --- | --- | --- |
+| `gh_source_poll_prs` | `search` | ラベル、レビューの依頼、assigneeのPRを見つける元。`search`は検索、`db`は収集の表 |
+
+収集の設定`gh_collect_enabled`と`gh_collect_detail_enabled`の片方でも偽の間は、収集の記録が進まないので、`db`にしても周回全体が検索になる。
+そのとき、`poll_prs`のログに警告が残る。
+`gh_source_poll_prs`に書ける値は、`search`と`db`の2つだけである。
+列挙の外の値を書くと、設定を読むscriptがすべて止まる。
+
+表を使えない所有者は、その周回だけ検索に戻る。
+戻る理由は7つである。
+6つは`no_record`、`unusable`、`not_collected`、`in_future`、`too_old`、`read_failed`で、意味は[Issueの発見の元を表に切り替える](#issueの発見の元を表に切り替える)と同じである。
+残る1つは次のとおりである。
+
+- `team_review`: 検索に戻す対象の行がある。チームへのレビューの依頼が付いた行か、依頼先を読めない依頼の行である。
+
+表ではPATのアカウントが属するチームへの依頼かを決められず、検索の依頼の条件は、そのチームへの依頼も返すためである。
+そのPRがラベルかPATのアカウントへの依頼かassigneeで既に対象になる行は、数えない。
+戻した所有者は、4本の検索をすべて送り、表の候補は確かめずに捨てる。
+戻したときの検索の回数は、周回全体が検索のときを超えない。
+
+表の候補は、`getPr`と`getIssue`で読み直し、開いていて、ラベルかPATのアカウントへの依頼かassigneeに当たるものだけを使う。
+閉じたPRと、どれにも当たらなくなったPRは、失敗にせず外す。
+`requested_reviewers`を読めないときは、外さずに失敗として記録する。
+候補にした後は、検索の経路と同じく、`buildPrCandidate`がもう一度`getPr`と`getIssue`を読む。表の候補ごとにRESTの読み取りが2回増える。
+
+表に切り替えると、次の5つが変わる。
+
+- ラベルを付けてから着手までが、普段は4〜9分ほどになる。次の収集が終わるまで表に載らないためである。取り直しが止まれば、閾値を過ぎた時点で所有者は検索に戻る。
+- archive済みのリポジトリは、表で探さない。読み取り専用で、ラベルを外すことも作業項目の起動もできない。
+- `repo_allowlist`が空の構成では、`gh_repos`に行の無いリポジトリのPRを、表では見つけない。所有者のfork、直近の一覧より後に作られたリポジトリ、読み取りトークンに見えないリポジトリが当たる。
+- チームへのレビューの依頼が付いたPRのある所有者は、毎周回検索に戻る。CODEOWNERSでチームへの依頼が自動で付く組織では、ほぼ常に戻り、検索は減らない。
+- 処理の順が、検索の関連度の順から、リポジトリと番号の順に変わる。
+
+1. [詳細の収集を有効にする](#詳細の収集を有効にする)を済ませ、対象のリポジトリの記録が進んでいることを確かめる。
+   `gh_repos`の`allowed`、`archived`、`gone`、`age`の見方は、[候補の元を表に切り替える](#候補の元を表に切り替える)の手順1と同じである。
+   `repo_allowlist`が空でないことも確かめる。空だと、上の3つ目の変化が当たる。
+2. 所有者ごとに、表の開いたPRの行が、検索の4本のどれに当たるかを数える。
+   PATのアカウントの数値IDは、`gh api user --jq .id`で読む。
+   閾値は、`owners`の所有者がn人のとき`max(15分, (n+1)×5分)`で、`interval`に書く。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "WITH open_rows AS (SELECT p.*, (p.has_review_label IS TRUE OR p.has_fix_label IS TRUE OR <PATの数値ID> = ANY(p.review_requested_user_ids) IS TRUE OR <PATの数値ID> = ANY(p.assignee_ids) IS TRUE) AS is_target FROM factory.gh_pull_requests p JOIN factory.gh_repos r ON r.owner = p.owner AND r.repo = p.repo AND r.repo_id = p.repo_id WHERE p.owner = '<owner>' AND p.state = 'open' AND p.usable AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes') SELECT count(*) FILTER (WHERE is_target) AS target, count(*) FILTER (WHERE NOT is_target AND (team_review_requested IS NOT FALSE OR review_requested_user_ids IS NULL)) AS team, count(*) FILTER (WHERE NOT is_target AND team_review_requested IS FALSE AND review_requested_user_ids IS NOT NULL AND (has_review_label IS NULL OR has_fix_label IS NULL OR assignee_ids IS NULL)) AS maybe FROM open_rows"
+   ```
+
+   `team`が1以上の所有者は、`db`にしても検索に戻るので、次の突き合わせの対象にしない。
+   個人のアカウントの所有者で`team`が1以上なら、原因を調べる。
+   そのPRの`gh api repos/<owner>/<repo>/pulls/<番号>`で、`requested_reviewers`と`requested_teams`を見る。
+   依頼先の利用者を読めない、削除された、収集の項目のエラーが原因になりうる。
+   `maybe`は、`getPr`と`getIssue`で確かめる行の数である。
+3. `team`が0の所有者について、表の対象の行と、検索の結果を照らし合わせる。
+   表の側は、次のSQLで集める。
+
+   ```bash
+   mise exec -- docker compose -f infra/docker-compose.yml exec db psql -U postgres -d datatable_db -At -c "SELECT p.repo || '#' || p.number FROM factory.gh_pull_requests p JOIN factory.gh_repos r ON r.owner = p.owner AND r.repo = p.repo AND r.repo_id = p.repo_id WHERE p.owner = '<owner>' AND p.state = 'open' AND p.usable AND (p.has_review_label IS TRUE OR p.has_fix_label IS TRUE OR <PATの数値ID> = ANY(p.review_requested_user_ids) IS TRUE OR <PATの数値ID> = ANY(p.assignee_ids) IS TRUE) AND r.allowed AND NOT r.gone AND NOT r.archived AND now() - r.last_collected_at <= interval '15 minutes' ORDER BY 1"
+   ```
+
+   検索の側は、今の4本を1回ずつ送り、和集合を取る。
+
+   ```bash
+   for q in 'review-requested:<PATのアカウント>' 'assignee:<PATのアカウント>' 'label:"<review_label>"' 'label:"<fix_label>"'; do gh api -X GET search/issues -f q="is:pr state:open user:<owner> $q" -f per_page=100 --jq '.items[] | (.repository_url | sub(".*/repos/[^/]*/"; "") | ascii_downcase) + "#" + (.number | tostring)'; done | sort -u
+   ```
+
+   検索の範囲は、所有者が組織なら`org:<owner>`にする。
+   2つの出力をファイルに保存し、`cmp -s`で比べて、`same`と`different`のどちらになったかだけを見る。
+   トリガーラベルは取得のときに外れるので、ラベルで対象になるPRは、ふだん0件か数件しかない。
+   両方が空で`same`でも、表の経路が実際のラベルや依頼を見つけることの確かめにはならない。
+   手順5で、自然に付いた依頼とラベルの着手までの遅れを記録して補う。
+   `different`なら、収集の周回の遅れ(5分以内)か、上の変化で説明できるかを確かめ、数分後に読み直す。
+   `repo_allowlist`が空の構成では、検索が返すリポジトリのうち`gh_repos`に行の無いものの数も数える。1以上なら、`db`にしない。
+4. `gh_source_poll_prs`を`db`に切り替える。
+   `gh_source_poll_issues`の確認が済んでから行う。
+   書き換えの前に、リソースの値を取得して控えを取る。
+   取得した出力の`value`の`gh_source_poll_prs`だけを`db`に直して反映し、もう一度取得して、控えとの差がその項目だけであることを確かめる。
+   手順は[収集を有効にする](#収集を有効にする)の手順4と同じである。
+   戻すときは、控えの値で同じ手順を行い、`gh_source_poll_prs`を`search`にする。
+5. 続く3回の`poll_prs`の結果を、WindmillのRunsで確かめる。
+   `pr_source`が`db`、`fallback_searches`が0であることを見る。
+   `team_review`か明示したリポジトリの理由で戻る所有者があれば、その数だけ`fallback_searches`が出る。
+   `table_candidates`は、手順2の`target`と`maybe`の合計と近いはずである。
+   `table_dropped`は、0か、古い行で説明できる値になる。
+   失敗の記録に、段`read_gh_owner_prs:<owner>`(`flow_path`が`f/factory/poll_prs`のもの)と`confirm_table_pr:<owner>/<repo>#<番号>`が続かないことを見る。
+   `confirm_table_pr:`が依頼先を読めない理由で出たときは、`getPr`の応答の形を調べる。
+6. 表の経路で最初に作られた`pr_review`か`pr_fix`の作業項目で、`owner`と`repo`がGitHubの正規の綴りと大小文字まで一致することを確かめる。
+   一致しなければ、`search`に戻す。
+   綴りは`gh api repos/<owner>/<repo> --jq .full_name`で読む。
+7. 1日の間、`poll_prs`の失敗の記録に403と429が無いことを確かめる。
+   自然にレビューの依頼、assignee、ラベルが付いたら、付けた時刻から作業項目の作成までの遅れを記録する。
+
+`fallback_searches`が1以上なら、`fallback_reasons`の語で原因を読む。
+`team_review`以外の語の対処は、[Issueの発見の元を表に切り替える](#issueの発見の元を表に切り替える)の表と同じである。ただし、失敗の記録の段は`read_gh_owner_prs:<owner>`である。
+
+| `fallback_reasons`の語 | 対処 |
+| --- | --- |
+| `team_review` | チームへのレビューの依頼が付いたPRがある。依頼を外すか、検索が減らないことを受け入れる |
+
+定期ジョブ用のworkerの待ちや一時的な収集の失敗で説明でき、確認の期間を延ばして0に戻るなら、そのままにする。
+説明できないなら、`gh_source_poll_prs`を`search`に戻す。
+
+`review_label`か`fix_label`を変えるときは、手順3をやり直す。
+収集が各リポジトリを取り直すまで、表のラベルの真偽は古い名前で答えるためである。
+
+読み取り元だけを戻すときは、`gh_source_poll_prs`を`search`にする。
+
 ## 要件定義を承認・却下する
 
 要件定義の生成が終わると、Discordに承認待ちの通知が届く。
@@ -1649,6 +1760,7 @@ PATのアカウントが運用者本人のアカウントなら、運用者のPR
 
 検索のrate limitは、認証したトークンで1分に30本である。
 `poll_prs`はオーナーごとに4本、`poll_issues`もオーナーごとに1本検索し、同じトークンで共有する。
+`poll_prs`は、設定`gh_source_poll_prs`が`db`のときは、表を使えるオーナーを検索しないので、普段は0本になる。チームへのレビューの依頼が付いたPRのあるオーナーは検索に戻る([PRの発見の元を表に切り替える](#prの発見の元を表に切り替える))。
 `poll_issues`は、設定`gh_source_poll_issues`が`db`のときは、表を使えるオーナーを検索しないので、普段は0本になる([Issueの発見の元を表に切り替える](#issueの発見の元を表に切り替える))。
 `watch_pr_conflicts`もオーナーごとに1本検索する。設定`gh_source_pr_conflict_watch`が`db`のときは、表を使えるオーナーを検索しないので、普段は0本になる。
 `watch_pr_ci`の本数が増えるほど、ほかのポーリングの検索が拒まれやすくなる。

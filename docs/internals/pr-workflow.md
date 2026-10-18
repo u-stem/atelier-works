@@ -39,6 +39,16 @@ PRに投稿するのは、PRレビューの指摘と総評、PR修正の返信�
 | PR修正 | PRに`factory:fix`ラベルが付いた |
 | PR修正のCI回 | `watch_pr_ci`が、失敗したheadの行を直すと判断した。条件は[PRのCI監視の仕様](pr-ci.md)の「起動」に書く |
 
+### PRの発見
+
+`poll_prs`は、ラベル、レビューの依頼、assigneeのPRを、設定`gh_source_poll_prs`の元から見つける。
+`search`では、所有者ごとに検索の4本(PATのアカウントへの依頼、assignee、レビューのラベル、修正のラベル)を送る。
+`db`では、収集が書いた表から候補を絞り、`getPr`と`getIssue`で開いていることと今も対象であることを確かめてから候補にする。
+確かめた後の判定は、どちらの元でも同じ`decidePrActions`が行う。
+
+チームへのレビューの依頼が付いたPRのある所有者は、表ではPATのアカウントに宛てた依頼かを決められないので、検索に戻す。
+表の読み方と戻す条件は[GitHubの収集の仕様](github-collect.md#所有者の単位の読み取り)に書く。
+
 トリガーのラベルは、着手(claim)したときに消費して外す。レビューの依頼とassigneeの経路には、消費するラベルが無い。ラベル名は`factory_config`の`review_label`と`fix_label`で決める。
 
 ブランチ名が`factory/drawio-viewer-`で始まるPR(draw.ioのビューアの固定を上げるPR)には、`factory:fix`ラベルが付いていてもPR修正を始めない。
