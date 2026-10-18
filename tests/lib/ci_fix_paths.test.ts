@@ -621,6 +621,8 @@ const ACCEPTED_DEPENDENCIES: Readonly<Record<string, string>> = {
     "文書の文章の検査。文書の規則を直す変更が日常的に触れる",
   "f/factory/lib/console_support.ts":
     "通知の重要度と対象の定数。通知の種類を足す変更が日常的に触れる。競合の通知の種類を読むだけで、判断には使わない",
+  "f/factory/lib/poll_source.ts":
+    "poll_issuesとpoll_prsの発見の共有モジュール。watch_pr_ciは明示リポジトリの名前と表の行の絞り込みだけを使う。発見の挙動を直す変更が日常的に触れ、記録するheadは読み直した値で決まるので、CI回が変えてもレビューが受け皿になる",
   "f/factory/lib/owner_id_notice.ts":
     "owner_idの照合のnoticeの種類と本文を組み立てるだけで、通信と判定を持たない。poll_support.tsが再エクスポートし、PRのポーリングでも使う。CI回が変えても影響はnoticeの文面と解決の照合に限られ、レビューが受け皿になる",
 };
