@@ -85,7 +85,7 @@ export const FORBIDDEN_PATH_PREFIXES: readonly string[] = [
  * 書き換えられると、保護の外の定義から、workerやホストの任意のファイルをlockに載せられる。
  * `wmill.yaml`も守る。`codebases`の`customBundler`は、`wmill sync push`が反映時にシェルで実行する。
  * `assets`の`from`は、`wmill sync push`が任意のパスのファイルを読んでワークスペースに載せる。
- * 書き換えられると、反映するworkerやホストで任意のコマンドが走り、任意のファイルが外へ出る。
+ * 書き換えられると、反映するworkerやホストで任意のコマンドが走り、任意のファイルがワークスペースに載る。
  * `wmill-lock.yaml`は、依存の変更のたびに書き換わるので守らない。
  * dependabotのセキュリティ更新PRを自動でマージするフローも守る。マージの判定(`lib/dependabot_support.ts`)、
  * 影響調査のプロンプト(`lib/dependabot_prompt.ts`)、npm registryの取得(`lib/dependabot_registry.ts`)、
