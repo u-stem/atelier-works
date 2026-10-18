@@ -40,6 +40,7 @@ import {
   assertBranchName,
   assertGitHubName,
   hasLabel,
+  isGitHubName,
   isRecord,
 } from "./types.ts";
 import {
@@ -1132,6 +1133,22 @@ function isIssuePayload(value: unknown): value is IssuePayload {
   return true;
 }
 
+/**
+ * `repository_url`から、GitHubが返した綴りのowner、repoを読む。
+ * 形が違うか、名前の形でないときは、例外にせず`null`にする。
+ */
+function repositoryOf(
+  repositoryUrl: unknown,
+): { readonly owner: string; readonly repo: string } | null {
+  if (typeof repositoryUrl !== "string") return null;
+  const match = repositoryUrl.match(/\/repos\/([^/]+)\/([^/]+)$/);
+  const owner = match?.[1];
+  const repo = match?.[2];
+  if (owner === undefined || repo === undefined) return null;
+  if (!isGitHubName(owner) || !isGitHubName(repo)) return null;
+  return { owner, repo };
+}
+
 export async function getIssue(
   client: GhClient,
   owner: string,
@@ -1177,7 +1194,7 @@ export async function getIssue(
     ),
     labels,
     assignees,
-    repository: null,
+    repository: repositoryOf(Reflect.get(parsed, "repository_url")),
   };
 }
 
