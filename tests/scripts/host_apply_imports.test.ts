@@ -693,6 +693,8 @@ type Scan = {
   readonly bare: string;
   /** 文字列とテンプレートの本文。正規表現は含めない。 */
   readonly strings: readonly string[];
+  /** 正規表現リテラルと読んだ本文。割り算を読み違えたとき、本物のコードがここに入る。 */
+  readonly regexes: readonly string[];
   /** 読み違えた箇所。あれば、以降の検査を信用できないので違反として報告する。 */
   readonly problems: readonly string[];
 };
@@ -715,19 +717,25 @@ const REGEX_KEYWORDS = [
   "instanceof",
 ];
 
-/** 直前がこの記号なら、続く`/`は正規表現の始まりとみなす。 */
-const REGEX_PREVIOUS = "(,=:[!&|?{};";
+/** 括弧の直後に正規表現が書ける、括弧の前の語。 */
+const REGEX_AFTER_PAREN = ["if", "while", "for", "with"];
 
 /**
  * ソースを字句に分けて走査する。コメントを除き、文字列、テンプレート、正規表現リテラルを読み分ける。
  * 文字列の中の`//`や`/*`をコメントの始まりと誤認すると、後ろの本物のコードを隠せるため。
  * 正規表現か除算かは、`/`の直前のトークンで決めるヒューリスティックである。
- * 読み違えたとき(閉じない文字列、テンプレート、コメント、正規表現)は、`problems`に記録して先へ進む。
+ * 迷う位置(記号の直後、`}`、括弧の後など)は正規表現に倒す。
+ * 割り算を正規表現と読み違えても、本文を`regexes`に残して語の検査にかけるので、コードは隠れない。
+ * 逆に正規表現を割り算と読むと、後ろの文字列が読み違えられて隠れうるので、割り算と読むのは
+ * 直前が値(数値や名前、文字列、`]`、キーワードの括弧でない`)`)のときだけにする。
+ * `.`の後ろの語は、`return`や`of`でも名前として扱う。
+ * 閉じない文字列、テンプレート、コメント、正規表現は、`problems`に記録して先へ進む。
  */
 function scanSource(source: string): Scan {
   let code = "";
   let bare = "";
   const strings: string[] = [];
+  const regexes: string[] = [];
   const problems: string[] = [];
   let i = 0;
   const n = source.length;
@@ -815,6 +823,7 @@ function scanSource(source: string): Scan {
           flags += source[i];
           i += 1;
         }
+        regexes.push(body);
         code += `/${body}/${flags}`;
         bare += "/ /";
         return;
@@ -823,6 +832,7 @@ function scanSource(source: string): Scan {
       i += 1;
     }
     problems.push("a regular expression is not closed");
+    regexes.push(body);
     code += `/${body}`;
     bare += "/";
   };
@@ -832,7 +842,20 @@ function scanSource(source: string): Scan {
     let previous: "none" | "symbol" | "word" | "value" = "none";
     let previousText = "";
     let word = "";
-    let lineStart = true;
+    let wordAfterDot = false;
+    let closedKeywordParen = false;
+    const parens: boolean[] = [];
+    // 直前のトークンから、`/`を正規表現の始まりと読むかを決める。
+    const startsRegex = (): boolean => {
+      if (previous === "none") return true;
+      if (previous === "word") {
+        return !wordAfterDot && REGEX_KEYWORDS.includes(previousText);
+      }
+      if (previous === "value") return false;
+      if (previousText === "]") return false;
+      if (previousText === ")") return closedKeywordParen;
+      return true;
+    };
     while (i < n) {
       const c = source[i] ?? "";
       const next = source[i + 1];
@@ -840,7 +863,6 @@ function scanSource(source: string): Scan {
         code += c;
         bare += c;
         i += 1;
-        lineStart = true;
         word = "";
       } else if (/\s/.test(c)) {
         code += c;
@@ -862,23 +884,14 @@ function scanSource(source: string): Scan {
       } else if (c === "'" || c === '"') {
         readString(c);
         previous = "value";
-        lineStart = false;
         word = "";
       } else if (c === "`") {
         readTemplate();
         previous = "value";
-        lineStart = false;
         word = "";
-      } else if (
-        c === "/" &&
-        (previous === "none" ||
-          lineStart ||
-          (previous === "symbol" && REGEX_PREVIOUS.includes(previousText)) ||
-          (previous === "word" && REGEX_KEYWORDS.includes(previousText)))
-      ) {
+      } else if (c === "/" && startsRegex()) {
         readRegex();
         previous = "value";
-        lineStart = false;
         word = "";
       } else if (inInterpolation && c === "}" && depth === 0) {
         i += 1;
@@ -886,11 +899,21 @@ function scanSource(source: string): Scan {
       } else {
         if (inInterpolation && c === "{") depth += 1;
         if (inInterpolation && c === "}") depth -= 1;
+        if (c === "(") {
+          parens.push(
+            previous === "word" &&
+              !wordAfterDot &&
+              REGEX_AFTER_PAREN.includes(previousText),
+          );
+        }
+        if (c === ")") closedKeywordParen = parens.pop() ?? false;
         code += c;
         bare += c;
         i += 1;
-        lineStart = false;
         if (/[A-Za-z0-9_$]/.test(c)) {
+          if (word === "") {
+            wordAfterDot = previous === "symbol" && previousText === ".";
+          }
           word += c;
           previous = "word";
           previousText = word;
@@ -905,7 +928,7 @@ function scanSource(source: string): Scan {
   };
 
   readCode(false);
-  return { code, bare, strings, problems };
+  return { code, bare, strings, regexes, problems };
 }
 
 /** コメントを除く。文字列の中身は残す。 */
@@ -939,8 +962,10 @@ const PROCESS_MEMBERS = [
 function lexicalViolations(source: string, name: string): string[] {
   const scan = scanSource(source);
   // 文字列を残した版はimportの指定子を読むために、空にした版は字句の形を調べるために使う。
-  const code = scan.code;
-  const bare = scan.bare;
+  // 正規表現リテラルの本文も加える。割り算を正規表現と読み違えたとき、本物のコードがそこに入るため。
+  const hidden = scan.regexes.join("\n");
+  const code = `${scan.code}\n${hidden}`;
+  const bare = `${scan.bare}\n${hidden}`;
   const found: string[] = scan.problems.map(
     (problem) => `unreadable: ${problem}`,
   );
@@ -982,7 +1007,9 @@ function lexicalViolations(source: string, name: string): string[] {
     ["\\u outside a string", /\\u/],
   ];
   for (const [label, pattern] of patterns) {
-    if (pattern.test(bare)) found.push(label);
+    // ユニコードエスケープは、正規表現の中では普通の書き方なので、本文を足さない版で調べる。
+    const target = label === "\\u outside a string" ? scan.bare : bare;
+    if (pattern.test(target)) found.push(label);
   }
   // `Worker`は型の位置だけを許す(`drain_store.ts`の型名)。`new Worker(`や値としての参照は拒否する。
   for (const match of bare.matchAll(/\bWorker\b/g)) {
@@ -1020,6 +1047,15 @@ function lexicalViolations(source: string, name: string): string[] {
     // 奇数個の円記号に続く`u`と`x`は、文字を作るエスケープになる。偶数個は円記号そのものを表す。
     if (/(?<!\\)(?:\\\\)*\\[ux]/.test(text)) {
       found.push("an escape in a string");
+    }
+  }
+  for (const text of scan.regexes) {
+    if (
+      /child_process|\bbun:|\bnode:(?!crypto\b|fs\b|path\b|readline\b)/.test(
+        text,
+      )
+    ) {
+      found.push("a regular expression names a module");
     }
   }
   return found;
