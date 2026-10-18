@@ -1914,11 +1914,17 @@ docker、compose、ホストのスクリプト、`launchctl`は、許可表に�
 3. 検査したURLを位置引数で渡して取得する。`origin`の名前では渡さない。照合したURLと取得するURLを食い違わせないためである。
 
 取得の引数は、`protocol.allow`を`never`にしたうえで、`protocol.https.allow`を`always`にして、httpsだけを許す。
-リダイレクト、サブモジュール、フック、fsmonitor、認証ヘルパー、askpass、プロキシ、自動の保守は無効にする。
+リダイレクト、サブモジュール、フック、fsmonitor、認証ヘルパー、askpass、自動の保守は無効にする。
+通信の検証は有効にし、プロキシは外す。
+リポジトリの設定のURL別の指定は、合う範囲が狭いほど優先され、広い指定に勝つ。
+そのため、この2つはホスト、所有者、渡したURLそのものの3段階で上書きする。
+この3段階の間に入る指定や、通信先と検証を変える他のキーは、止まらない(残るリスクを参照)。
 `git_fetch`の指定が通すのは、この引数との完全一致と、`remote.origin.url`の読み取りの2つの形だけである。
 
-環境は、読み取りのgitの環境に、`GIT_DIR`と、あれば認証の1組を足したものに限る。
-取得の環境は`GIT_ALLOW_PROTOCOL`をhttpsにする。`remote.origin.url`の読み取りは、読み取りの環境のまま空にする。
+環境は、読み取りのgitの環境を土台にする。
+足してよいのは、`GIT_DIR`と、あれば認証の1組だけである。
+`GIT_ALLOW_PROTOCOL`の値はhttpsにする。
+`remote.origin.url`の読み取りは、`GIT_DIR`だけを足し、`GIT_ALLOW_PROTOCOL`を空のままにする。
 `GIT_DIR`は、作業ディレクトリと等しい絶対パスにする。
 トークンは環境の`GIT_CONFIG_*`に入れ、引数には載せない。プロセスの一覧に出さないためである。
 トークンは、GitHubへの基本認証のヘッダーの形に限る。
@@ -1999,8 +2005,8 @@ composeのプラグインのような孫まで止めるためである。
 - `setsid`で別のグループに移った孫は、止められない。
 - `Bun.spawn`の`detached`の挙動は、Bunの版に依る。実際のプロセスのテストが検知する。
 - `GIT_NO_LAZY_FETCH`は、ホストのgitの版に依る。古いgitは無視する。
-- リポジトリの設定の`http.*`は、取得の環境では止まらない。
-  `http.sslCAInfo`、`http.curloptResolve`、`fetch.bundleURI`などは、取得の通信先や検証を変えうる。
+- リポジトリの設定の`http.*`のうち、検証とプロキシのURL別の指定だけを引数で上書きする。
+  `http.sslCAInfo`、`http.curloptResolve`、`fetch.bundleURI`などは、取得の通信先や検証を変えうるが、止まらない。
   `url.<base>.insteadOf`と`include`を見ないことと同じく、置き場の0700に頼る。
 - `git fetch`が`GIT_DIR`と作業ディレクトリの組で動くことは、実機で確かめていない。
 

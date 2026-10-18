@@ -9,7 +9,8 @@ export function isSha40(value: string): boolean {
  * 読み取りのgitの引数の前置き。`plan`と`approve`が同じものを使う。
  * フック、fsmonitor、パスの引用、属性ファイルを無効にし、`diff.relative`を偽にして、
  * 下位のディレクトリで実行しても変更を見落とさないようにする。
- * `protocol.allow=never`は、部分cloneの遅延取得などの通信を止める。
+ * 部分cloneの遅延取得などの通信は、環境の`GIT_ALLOW_PROTOCOL`(空)と`GIT_NO_LAZY_FETCH`で止める。
+ * 前置きの`protocol.allow=never`は補助である。
  * `--no-pager`はサブコマンドの前に置く。後ろでは`diff`の未知のオプションとして拒否される。
  */
 export const GIT_FIXED_PREFIX: readonly string[] = Object.freeze([
@@ -36,10 +37,13 @@ export const REMOTE_URL_PATTERN =
  * 取得先のURLを直接指定して、`origin/main`を取得するgitの引数。
  * 名前でなくURLを渡すのは、照合したURLと取得するURLを食い違わせないため。
  * 取得した内容に実行を誘導されないよう、リダイレクト、サブモジュール、フック、fsmonitor、
- * 認証ヘルパー、askpass、プロキシ、自動の保守を無効にし、プロトコルをhttpsだけにする。
+ * 認証ヘルパー、askpass、自動の保守を無効にし、検証を有効にしてプロキシを外し、プロトコルをhttpsだけにする。
  */
 export function fetchArgs(url: string): string[] {
   if (!REMOTE_URL_PATTERN.test(url)) throw new Error("url is not allowed");
+  // URL別の設定は、合う範囲が狭いほど優先され、広い`-c`に勝つ。ホスト、所有者、URLそのものの3段階で上書きする。
+  const owner = url.split("/")[3] ?? "";
+  const scopes = ["https://github.com/", `https://github.com/${owner}/`, url];
   return [
     "-c",
     "http.followRedirects=false",
@@ -65,6 +69,12 @@ export function fetchArgs(url: string): string[] {
     "http.sslVerify=true",
     "-c",
     "http.proxy=",
+    ...scopes.flatMap((scope) => [
+      "-c",
+      `http.${scope}.sslVerify=true`,
+      "-c",
+      `http.${scope}.proxy=`,
+    ]),
     "-c",
     "gc.auto=0",
     "-c",
