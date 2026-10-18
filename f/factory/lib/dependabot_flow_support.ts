@@ -743,6 +743,25 @@ export function buildChangelogExcerpt(
   return takeBytes(section.join("\n"), maxBytes);
 }
 
+export function excerptChangelog(
+  _text: string,
+  _fromVersion: string,
+  _toVersion: string,
+  _maxBytes: number = DEFAULT_CHANGELOG_MAX_BYTES,
+): { text: string; truncated: boolean } {
+  return { text: "", truncated: false };
+}
+
+export function hasTruncationMark(_text: string): boolean {
+  return false;
+}
+
+export const MAX_PROMPT_CHARS = 400_000;
+
+export function checkPromptSize(_input: unknown): CheckResult {
+  return OK;
+}
+
 /**
  * 変更履歴が`version`の見出しを持つかを返す。見出しの判定は`buildChangelogExcerpt`と同じ。
  * 「See GitHub Releases」だけのように更新先の版の記述が無い変更履歴は、確かめた入力にしない。
