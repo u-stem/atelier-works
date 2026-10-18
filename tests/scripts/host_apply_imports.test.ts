@@ -11,6 +11,31 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
+  type CommandRunner,
+  CREATABLE_KINDS,
+  type IssuedSpec,
+} from "../../scripts/host_apply/command.ts";
+import { COMMAND_TIMEOUT_MS } from "../../scripts/host_apply/constants.ts";
+import {
+  commitExistsArgs,
+  diffNameStatusArgs,
+  diffPatchArgs,
+  isAncestorArgs,
+  lsTreePathArgs,
+  lsTreeRecursiveArgs,
+  ORIGIN_MAIN_REF,
+  resolveHeadArgs,
+  revParseQueryArgs,
+  showBlobArgs,
+  showRefArgs,
+} from "../../scripts/host_apply/git.ts";
+import { bootId, processStart } from "../../scripts/host_apply/host_probe.ts";
+import {
+  fetchOrigin,
+  remoteUrlSpec,
+} from "../../scripts/host_apply/run_fetch.ts";
+import { gitReadSpec } from "../../scripts/host_apply/run_git.ts";
+import {
   createFixtureRepo,
   type FixtureRepo,
   fixtureGitEnv,
@@ -36,10 +61,18 @@ function specifiers(source: string): string[] {
   return found;
 }
 
-/** 許可する指定子か。NodeとBunの組み込みと、`scripts/host_apply/`の中だけ。 */
+/**
+ * 実行役が使うNodeの組み込み。足すときは、このテストを直して人のレビューを通す。
+ * `child_process`、`net`、`worker_threads`などは、ここに無いので使えない。
+ */
+const NODE_BUILTINS = ["node:crypto", "node:fs", "node:path", "node:readline"];
+
+/**
+ * 許可する指定子か。上の一覧のNodeの組み込みと、`scripts/host_apply/`の中だけ。
+ * `bun`と`bun:*`は許さない。`import { $ } from "bun"`や`bun:ffi`は、外部コマンドの実行口を迂回できるため。
+ */
 function isAllowed(file: string, specifier: string): boolean {
-  if (specifier.startsWith("node:")) return true;
-  if (specifier === "bun" || specifier.startsWith("bun:")) return true;
+  if (specifier.startsWith("node:")) return NODE_BUILTINS.includes(specifier);
   if (!specifier.startsWith("./") && !specifier.startsWith("../")) return false;
   const target = resolve(dirname(file), specifier);
   return target.startsWith(`${HOST_APPLY_DIR}/`);
@@ -82,6 +115,12 @@ describe("the import checker", () => {
     'const r = require("left-pad");',
     'import "../../f/side.ts";',
     "const m = await import(name);",
+    'import { $ } from "bun";',
+    'import { spawn as s } from "bun";',
+    'import { dlopen } from "bun:ffi";',
+    'import { exec } from "node:child_process";',
+    'import { Worker } from "node:worker_threads";',
+    'import net from "node:net";',
   ])("flags %s", (source) => {
     expect(
       specifiers(source).filter((specifier) => !isAllowed(file, specifier)),
@@ -92,8 +131,9 @@ describe("the import checker", () => {
     'import { a } from "node:path";',
     'import { b } from "./ci.ts";',
     'import type { C } from "./target.ts";',
-    'import { spawn } from "bun";',
-    'import { t } from "bun:test";',
+    'import { createHash } from "node:crypto";',
+    'import { readFileSync } from "node:fs";',
+    'import { createInterface } from "node:readline";',
     'import {\n  a,\n  b,\n} from "./constants.ts";',
   ])("accepts %s", (source) => {
     expect(
@@ -642,5 +682,507 @@ describe("the value importers of held_lock", () => {
         'import type { HeldLock } from "./held_lock.ts";',
       ),
     ).toBe(false);
+  });
+});
+
+/** コメントを除く。説明文の中の名前を数えず、行末のコメントに隠れた名前も見逃さないため。 */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|\s)\/\/.*$/gm, "$1");
+}
+
+const ENTRY_NAME = "host-apply.ts";
+const RUNNER_NAME = "spawn_runner.ts";
+
+/** `process.`の後ろに書けるメンバー。ここに無いものは、環境、モジュールの読み込み、ネイティブの読み込みに通じる。 */
+const PROCESS_MEMBERS = [
+  "cwd",
+  "stdout",
+  "stderr",
+  "stdin",
+  "exit",
+  "argv",
+  "execArgv",
+  "getuid",
+];
+
+/**
+ * 実行役のソースに書けない字句の形。外部コマンドの実行口を迂回する経路と、環境変数、
+ * 動的なコードの読み込みを塞ぐ。許す形を列挙し、列挙に無い形はすべて違反にする。
+ * `name`はファイル名で、`spawn_runner.ts`と入口だけが許される形がある。
+ */
+function lexicalViolations(source: string, name: string): string[] {
+  const code = stripComments(source);
+  const found: string[] = [];
+  for (const match of code.matchAll(/\bBun\b/g)) {
+    const rest = code.slice((match.index ?? 0) + 3);
+    const allowed =
+      /^\.(?:YAML|TOML)\b/.test(rest) ||
+      (name === RUNNER_NAME && /^\.spawn\s*\(/.test(rest));
+    if (!allowed) found.push(`Bun${rest.slice(0, 8).split("\n")[0] ?? ""}`);
+  }
+  for (const specifier of specifiers(code)) {
+    if (specifier === "<dynamic>") found.push("import(<expression>)");
+    else if (specifier === "bun" || specifier.startsWith("bun:")) {
+      found.push(`import ${specifier}`);
+    } else if (
+      specifier.startsWith("node:") &&
+      !NODE_BUILTINS.includes(specifier)
+    ) {
+      found.push(`import ${specifier}`);
+    }
+  }
+  const patterns: [string, RegExp][] = [
+    ["eval(", /\beval\s*\(/],
+    ["Function(", /\bFunction\s*\(/],
+    ["new Worker(", /\bnew\s+Worker\s*\(/],
+    ["process.dlopen", /\bprocess\s*\.\s*dlopen\b/],
+    ["process.binding", /\bprocess\s*\.\s*binding\b/],
+    ["process[", /\bprocess\s*\[/],
+    ["globalThis", /\bglobalThis\b/],
+    ["createRequire", /\bcreateRequire\b/],
+    ["require(", /\brequire\s*\(/],
+    ["import.meta.env", /\bimport\.meta\.env\b/],
+    ["bare process", /\bprocess\b(?!\s*\.)/],
+  ];
+  for (const [label, pattern] of patterns) {
+    if (pattern.test(code)) found.push(label);
+  }
+  for (const match of code.matchAll(/\bprocess\s*\.\s*(\w+)/g)) {
+    const member = match[1] ?? "";
+    const allowed =
+      PROCESS_MEMBERS.includes(member) ||
+      (member === "env" && name === ENTRY_NAME) ||
+      ((member === "kill" || member === "pid") && name === RUNNER_NAME);
+    if (!allowed) found.push(`process.${member}`);
+  }
+  return found;
+}
+
+describe("the lexical checker", () => {
+  test.each([
+    ["Bun.spawn outside the runner", 'Bun.spawn(["x"]);', "x.ts"],
+    ["Bun.spawnSync", 'Bun.spawnSync(["x"]);', "x.ts"],
+    ["Bun.$", "await Bun.$`ls`;", "x.ts"],
+    ["a computed Bun member", 'Bun["spawn"](["x"]);', "x.ts"],
+    ["a destructured Bun", "const { spawn } = Bun;", "x.ts"],
+    ["globalThis", "globalThis.Bun.spawn(x);", "x.ts"],
+    ["Bun.env", "const v = Bun.env.HOME;", "x.ts"],
+    ["Bun.file", 'Bun.file("x");', "x.ts"],
+    ["a named import from bun", 'import { $ } from "bun";', "x.ts"],
+    ["a renamed import from bun", 'import { spawn as s } from "bun";', "x.ts"],
+    ["bun:ffi", 'import { dlopen } from "bun:ffi";', "x.ts"],
+    ["bun:test", 'import { test } from "bun:test";', "x.ts"],
+    ["child_process", 'import { exec } from "node:child_process";', "x.ts"],
+    ["worker_threads", 'import { Worker } from "node:worker_threads";', "x.ts"],
+    ["node:vm", 'import vm from "node:vm";', "x.ts"],
+    ["a dynamic import of an expression", "await import(name);", "x.ts"],
+    ["eval", 'eval("1");', "x.ts"],
+    ["Function", 'new Function("return 1");', "x.ts"],
+    ["new Worker", 'new Worker("x.js");', "x.ts"],
+    ["process.dlopen", "process.dlopen(module, path);", "x.ts"],
+    ["process.binding", 'process.binding("fs");', "x.ts"],
+    ["a computed process member", 'process["env"].HOME;', "x.ts"],
+    ["import.meta.env", "const v = import.meta.env.HOME;", "x.ts"],
+    ["createRequire", "createRequire(import.meta.url);", "x.ts"],
+    ["require", 'require("fs");', "x.ts"],
+    [
+      "process.env outside the entry point",
+      "const v = process.env.HOME;",
+      "x.ts",
+    ],
+    ["process.kill outside the runner", "process.kill(1, 9);", "x.ts"],
+    ["process.pid outside the runner", "const p = process.pid;", "x.ts"],
+    ["process.chdir", 'process.chdir("/");', "x.ts"],
+    ["a bare process", "const p = process;", "x.ts"],
+    [
+      "a Bun call after a comment on the same line",
+      "const a = 1; // x\nBun.spawn(y);",
+      "x.ts",
+    ],
+    [
+      "a Bun call after code on a comment line",
+      "a(); // b\nBun.spawn(y); // c",
+      "x.ts",
+    ],
+  ])("flags %s", (_name, source, name) => {
+    expect(lexicalViolations(source, name)).not.toEqual([]);
+  });
+
+  test.each([
+    ["Bun.YAML", "const v = Bun.YAML.parse(text);", "x.ts"],
+    ["Bun.TOML", "const v = Bun.TOML.parse(text);", "x.ts"],
+    ["Bun.spawn in the runner", "Bun.spawn(cmd, opts);", RUNNER_NAME],
+    ["a built-in listed", 'import { createHash } from "node:crypto";', "x.ts"],
+    ["a literal dynamic import", 'await import("./a.ts");', "x.ts"],
+    ["process.cwd", "const c = process.cwd();", "x.ts"],
+    ["process.stdout", "process.stdout.write(s);", "x.ts"],
+    ["process.getuid", "const u = process.getuid?.() ?? -1;", "x.ts"],
+    [
+      "process.env in the entry point",
+      "const v = process.env.HOME;",
+      ENTRY_NAME,
+    ],
+    ["process.kill in the runner", "process.kill(-pid, 9);", RUNNER_NAME],
+    ["a name in a line comment", "// Bun.spawn is not used here\n", "x.ts"],
+    ["a name in a block comment", "/** eval( and globalThis */\n", "x.ts"],
+    [
+      "a name after code on the same line",
+      "const a = 1; // process.env\n",
+      "x.ts",
+    ],
+    ["a type named Worker", 'type Worker = "windmill_worker";', "x.ts"],
+    ["a name that contains a keyword", "const refetch = processStart;", "x.ts"],
+    ["a url in a string", 'const u = "https://github.com/x/y";', "x.ts"],
+  ])("accepts %s", (_name, source, name) => {
+    expect(lexicalViolations(source, name)).toEqual([]);
+  });
+});
+
+describe("the lexical forms of the executor sources", () => {
+  test("none is outside the allowed forms", () => {
+    expect(
+      sourceFiles().flatMap((file) =>
+        lexicalViolations(
+          readFileSync(file, "utf8"),
+          file.slice(file.lastIndexOf("/") + 1),
+        ).map((form) => `${file}: ${form}`),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the words sync push are not named in code", () => {
+    expect(
+      sourceFiles().filter((file) =>
+        stripComments(readFileSync(file, "utf8")).includes("sync push"),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("where processes can be started", () => {
+  const SPAWN_FORMS = [
+    /\bBun\s*\.\s*spawn(?:Sync)?\b/,
+    /\bchild_process\b/,
+    /\bBun\s*\.\s*\$/,
+  ];
+
+  test("only spawn_runner.ts names a form that starts a process", () => {
+    expect(
+      relativeNames(
+        sourceFiles().filter((file) => {
+          const code = stripComments(readFileSync(file, "utf8"));
+          return SPAWN_FORMS.some((form) => form.test(code));
+        }),
+      ),
+    ).toEqual(["scripts/host_apply/spawn_runner.ts"]);
+  });
+
+  test("only the entry point imports spawn_runner", () => {
+    expect(
+      relativeNames(
+        scriptFiles().filter((file) =>
+          importsModule(file, readFileSync(file, "utf8"), RUNNER_NAME),
+        ),
+      ),
+    ).toEqual(["scripts/host-apply.ts"]);
+  });
+
+  test("only the entry point imports run_git", () => {
+    expect(
+      relativeNames(
+        scriptFiles().filter((file) =>
+          importsModule(file, readFileSync(file, "utf8"), "run_git.ts"),
+        ),
+      ),
+    ).toEqual(["scripts/host-apply.ts"]);
+  });
+
+  // 取得の経路。入口は取得を持たない。取得を使う実行役の本体を足すときに、この一覧を直す。
+  test.each(["run_fetch.ts", "host_probe.ts"])(
+    "no module imports %s yet",
+    (name) => {
+      expect(
+        relativeNames(
+          scriptFiles().filter((file) =>
+            importsModule(file, readFileSync(file, "utf8"), name),
+          ),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  test.each([
+    "command.ts",
+    "run_git.ts",
+    "run_fetch.ts",
+    "host_probe.ts",
+    "spawn_runner.ts",
+    "exec_paths.ts",
+  ])("no approval module imports %s", (name) => {
+    expect(
+      APPROVAL_MODULES.filter((file) =>
+        importsModule(file, readFileSync(file, "utf8"), name),
+      ).map((file) => file.slice(HOST_APPLY_DIR.length + 1)),
+    ).toEqual([]);
+  });
+});
+
+/**
+ * `command.ts`から取り込んでいる値の名前。型だけの名前は数えない。
+ * 名前空間のimport、`export *`、`export {…} from`、動的import、副作用のimportは、名前の代わりに印を返す。
+ */
+function commandImports(file: string, source: string): string[] {
+  const wanted = moduleKey(join(HOST_APPLY_DIR, "command.ts"));
+  const points = (specifier: string): boolean =>
+    (specifier.startsWith("./") || specifier.startsWith("../")) &&
+    moduleKey(resolve(dirname(file), specifier)) === wanted;
+  const names: string[] = [];
+  const statement =
+    /(?:^|\n)\s*(import|export)\s+(type\s+)?([^;]*?)\bfrom\s*["']([^"']+)["']/g;
+  for (const match of source.matchAll(statement)) {
+    if (!points(match[4] ?? "") || match[2] !== undefined) continue;
+    const clause = (match[3] ?? "").trim();
+    if (match[1] === "export") {
+      names.push(clause.startsWith("*") ? "<export *>" : "<re-export>");
+    } else if (clause.startsWith("*")) names.push("<namespace>");
+    else if (!clause.startsWith("{")) names.push("<default>");
+    else {
+      const inner = clause.slice(1, clause.lastIndexOf("}"));
+      for (const part of inner.split(",")) {
+        const text = part.trim();
+        if (text === "" || text.startsWith("type ")) continue;
+        names.push((text.split(/\s+as\s+/)[0] ?? "").trim());
+      }
+    }
+  }
+  for (const match of source.matchAll(
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+  )) {
+    if (points(match[1] ?? "")) names.push("<dynamic>");
+  }
+  for (const match of source.matchAll(
+    /(?:^|\n)\s*import\s*["']([^"']+)["']/g,
+  )) {
+    if (points(match[1] ?? "")) names.push("<side effect>");
+  }
+  return names.sort();
+}
+
+describe("what the modules take from command.ts", () => {
+  // 外部コマンドの指定を発行できるのは、run_git・run_fetch・host_probeだけ。
+  // issueSpecUncheckedは、どの本番のモジュールも取り込まない。増やすときは、このテストを直して人のレビューを通す。
+  const ALLOWED: Record<string, string[]> = {
+    "scripts/host-apply.ts": ["CommandError"],
+    "scripts/host_apply/spawn_runner.ts": ["CommandError", "isIssued"],
+    "scripts/host_apply/run_git.ts": ["issueSpec"],
+    "scripts/host_apply/run_fetch.ts": ["issueSpec"],
+    "scripts/host_apply/host_probe.ts": ["HOST_PROBE_ENV", "issueSpec"],
+  };
+
+  test("are exactly the allowed names of the allowed modules", () => {
+    const actual: Record<string, string[]> = {};
+    for (const file of scriptFiles()) {
+      const names = commandImports(file, readFileSync(file, "utf8"));
+      if (names.length > 0) actual[file.slice(REPO_ROOT.length + 1)] = names;
+    }
+    expect(actual).toEqual(ALLOWED);
+  });
+
+  test.each([
+    ["a name", 'import { issueSpec } from "./command.ts";', ["issueSpec"]],
+    [
+      "a renamed name",
+      'import { issueSpec as i } from "./command";',
+      ["issueSpec"],
+    ],
+    [
+      "a type-only name",
+      'import { type CommandRunner } from "./command.ts";',
+      [],
+    ],
+    ["a type import", 'import type { CommandRunner } from "./command.ts";', []],
+    ["a namespace", 'import * as c from "./command.ts";', ["<namespace>"]],
+    ["a default import", 'import c from "./command.ts";', ["<default>"]],
+    ["an export star", 'export * from "./command.ts";', ["<export *>"]],
+    [
+      "a re-export",
+      'export { issueSpec } from "./command.ts";',
+      ["<re-export>"],
+    ],
+    ["a dynamic import", 'await import("./command.ts");', ["<dynamic>"]],
+    ["a side effect import", 'import "./command.ts";', ["<side effect>"]],
+    ["another module", 'import { a } from "./stable.ts";', []],
+  ])("the scanner reads %s", (_name, source, expected) => {
+    expect(commandImports(join(HOST_APPLY_DIR, "x.ts"), source)).toEqual(
+      expected,
+    );
+  });
+});
+
+describe("the unchecked entry of the runner", () => {
+  test("no executor source turns acceptUnchecked on", () => {
+    expect(
+      scriptFiles().filter((file) =>
+        /\bacceptUnchecked\s*[:=]\s*true\b/.test(
+          stripComments(readFileSync(file, "utf8")),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the entry point does not name acceptUnchecked", () => {
+    expect(
+      stripComments(readFileSync(ENTRY, "utf8")).includes("acceptUnchecked"),
+    ).toBe(false);
+  });
+
+  test("no executor source takes issueSpecUnchecked", () => {
+    expect(
+      scriptFiles()
+        .filter((file) =>
+          stripComments(readFileSync(file, "utf8")).includes(
+            "issueSpecUnchecked",
+          ),
+        )
+        .map((file) => file.slice(REPO_ROOT.length + 1)),
+    ).toEqual(["scripts/host_apply/command.ts"]);
+  });
+});
+
+describe("the modules of the external commands", () => {
+  const COMMAND_MODULES = [
+    "command.ts",
+    "exec_paths.ts",
+    "git_grammar.ts",
+    "run_git.ts",
+    "run_fetch.ts",
+    "host_probe.ts",
+  ].map((name) => join(HOST_APPLY_DIR, name));
+
+  test("import only built-ins and scripts/host_apply/", () => {
+    expect(violations(COMMAND_MODULES)).toEqual([]);
+  });
+
+  test("read no environment variable", () => {
+    expect(
+      COMMAND_MODULES.flatMap((file) =>
+        envReads(stripComments(readFileSync(file, "utf8"))).map(
+          (form) => `${file}: ${form}`,
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  test("call no network and read no mise.local", () => {
+    expect(
+      [...COMMAND_MODULES, join(HOST_APPLY_DIR, RUNNER_NAME)].flatMap((file) =>
+        forbiddenForms(stripComments(readFileSync(file, "utf8")))
+          .filter((form) => !form.startsWith("spawn("))
+          .map((form) => `${file}: ${form}`),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the runner reads no environment variable", () => {
+    expect(
+      envReads(
+        stripComments(readFileSync(join(HOST_APPLY_DIR, RUNNER_NAME), "utf8")),
+      ),
+    ).toEqual([]);
+  });
+
+  test("the pure modules start no process", () => {
+    expect(
+      ["state.ts", "git.ts", "state_io.ts", "drain_store.ts", "secure_file.ts"]
+        .map((name) => join(HOST_APPLY_DIR, name))
+        .filter((file) =>
+          /\bspawn\w*\s*\(|Bun\s*\.\s*\$|child_process/.test(
+            stripComments(readFileSync(file, "utf8")),
+          ),
+        ),
+    ).toEqual([]);
+  });
+});
+
+describe("the specifications that every table builds", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const URL = "https://github.com/example/repo.git";
+  const FORBIDDEN_ENV = /^(?:DOCKER_|COMPOSE_|LD_|DYLD_)|^GIT_EXEC_PATH$/;
+
+  async function specs(): Promise<IssuedSpec[]> {
+    const built: IssuedSpec[] = [
+      gitReadSpec(showBlobArgs(SHA, "a"), { cwd: "/r" }),
+      gitReadSpec(diffNameStatusArgs(SHA, SHA), { cwd: "/r" }),
+      gitReadSpec(isAncestorArgs(SHA, SHA), { cwd: "/r" }),
+      gitReadSpec(commitExistsArgs(SHA), { cwd: "/r" }),
+      gitReadSpec(lsTreeRecursiveArgs(SHA), { cwd: "/r" }),
+      gitReadSpec(lsTreePathArgs(SHA, "a"), { cwd: "/r" }),
+      gitReadSpec(diffPatchArgs(SHA, SHA, ["a"]), { cwd: "/r" }),
+      gitReadSpec(resolveHeadArgs(), { cwd: "/r" }),
+      gitReadSpec(revParseQueryArgs("git-dir"), { cwd: "/r" }),
+      gitReadSpec(showRefArgs(ORIGIN_MAIN_REF), { cwd: "/r" }),
+      remoteUrlSpec("/r.git"),
+    ];
+    const recorder: CommandRunner = async (spec) => {
+      built.push(spec);
+      return {
+        kind: "done",
+        code: 0,
+        stdout: `${URL}\n`,
+        stderr: "",
+        stdoutDropped: false,
+        stderrDropped: false,
+      };
+    };
+    await fetchOrigin(recorder, {
+      repoGit: "/r.git",
+      recordedUrl: URL,
+      token: "tok",
+    });
+    await processStart(recorder, 1).catch(() => {});
+    await bootId(recorder).catch(() => {});
+    return built;
+  }
+
+  test("run an absolute executable", async () => {
+    expect((await specs()).filter((spec) => !spec.bin.startsWith("/"))).toEqual(
+      [],
+    );
+  });
+
+  test("run in an absolute directory", async () => {
+    expect((await specs()).filter((spec) => !spec.cwd.startsWith("/"))).toEqual(
+      [],
+    );
+  });
+
+  test("pass no environment variable of docker, compose or the loader", async () => {
+    expect(
+      (await specs()).flatMap((spec) =>
+        Object.keys(spec.env).filter((key) => FORBIDDEN_ENV.test(key)),
+      ),
+    ).toEqual([]);
+  });
+
+  test("take the timeout of the table", async () => {
+    expect(
+      (await specs()).filter(
+        (spec) => spec.timeoutMs !== COMMAND_TIMEOUT_MS[spec.kind],
+      ),
+    ).toEqual([]);
+  });
+
+  test("only create kinds that the table lists as creatable", async () => {
+    expect(
+      (await specs()).filter((spec) => !CREATABLE_KINDS.includes(spec.kind)),
+    ).toEqual([]);
+  });
+
+  test("cover every creatable kind", async () => {
+    expect(
+      [...new Set((await specs()).map((spec) => spec.kind))].sort(),
+    ).toEqual([...CREATABLE_KINDS].sort());
   });
 });

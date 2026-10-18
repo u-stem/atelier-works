@@ -845,6 +845,13 @@ describe("files that the host executor runs", () => {
     "approve_cli",
     "secure_file",
     "drain_store",
+    "state_io",
+    "command",
+    "git_grammar",
+    "spawn_runner",
+    "run_git",
+    "run_fetch",
+    "host_probe",
   ].map((name) => `tests/scripts/host_apply_${name}.test.ts`);
 
   test.each([...EXACT, ...UNDER_PREFIX, ...BASENAMES, ...HOST_TESTS])(
